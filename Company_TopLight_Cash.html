@@ -24,6 +24,8 @@
   var __headers = [];
   var __boxes = [];
   var __editingId = '';
+  var __activeBoxFilter = '';
+  var __allLoaded = false;
 
   function companyCall(moduleAction, data) {
     return API.call('company_action', {
@@ -60,10 +62,45 @@
         __options = r.options || {};
         __headers = r.headers || [];
         __boxes = r.boxes || [];
+        __allLoaded = false;
         renderCash(); try{schedulePrefetch();}catch(e){};
       })
       .catch(function (e) { showError(e); })
       .finally(function () { UI.hideSpinner(); });
+  }
+
+  /* Box-card filter: click a KPI card to filter the list below to that box.
+   * The list initially holds only the 10 most recent rows, so activating a
+   * filter first loads ALL rows (get_cash_headers supports loadAll:true). */
+  function ensureAllLoaded(cb) {
+    if (__allLoaded) { cb(); return; }
+    UI.showSpinner(['جاري تحميل كل حركات الصندوق...']);
+    companyCall('get_cash_headers', { loadAll: true })
+      .then(function (r) {
+        __options = r.options || {};
+        __headers = r.headers || [];
+        __boxes = r.boxes || [];
+        __allLoaded = true;
+        cb();
+      })
+      .catch(function (e) { UIC.toast(e.message || 'خطأ', 'error'); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function filterByBox(box) {
+    box = String(box || '');
+    if (__activeBoxFilter === box) {
+      __activeBoxFilter = '';
+      renderCash();
+      return;
+    }
+    __activeBoxFilter = box;
+    ensureAllLoaded(function () { renderCash(); });
+  }
+
+  function clearBoxFilter() {
+    __activeBoxFilter = '';
+    renderCash();
   }
 
   function renderCash() {
@@ -74,12 +111,30 @@
 
     var boxesHtml = '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:16px;">' +
       __boxes.map(function (b) {
-        return '<div class="stat-card" style="cursor:pointer;" onclick="openForm(\'\', \'' + FMT.escape(b.box) + '\', false)">' +
+        var active = __activeBoxFilter !== '' && String(__activeBoxFilter) === String(b.box);
+        return '<div class="stat-card" title="اضغط لعرض حركات هذا الصندوق" style="cursor:pointer;' + (active ? 'border:2px solid var(--color-primary);' : '') + '" onclick="filterByBox(\'' + FMT.escape(b.box) + '\')">' +
           '<div class="stat-body"><div class="stat-value num">' + FMT.number(b.balance) + '</div>' +
           '<div class="stat-label">' + FMT.escape(b.box_name || '-') + '</div></div></div>';
       }).join('') + '</div>';
 
-    var rows = __headers.map(function (h) {
+    var listHeaders = __headers;
+    if (__activeBoxFilter !== '') {
+      listHeaders = __headers.filter(function (h) { return String(h.related_box) === String(__activeBoxFilter); });
+    }
+
+    var filterBar = '';
+    if (__activeBoxFilter !== '') {
+      var activeBox = null;
+      for (var bi = 0; bi < __boxes.length; bi++) {
+        if (String(__boxes[bi].box) === String(__activeBoxFilter)) { activeBox = __boxes[bi]; break; }
+      }
+      var activeName = activeBox ? (activeBox.box_name || activeBox.box) : __activeBoxFilter;
+      filterBar = '<div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;padding:8px 12px;background:var(--bg-subtle);border:1px solid var(--border-color);border-radius:8px;">' +
+        '<span>الصندوق: <strong>' + FMT.escape(activeName) + '</strong> — عدد الحركات: <strong>' + listHeaders.length + '</strong></span>' +
+        '<button class="btn btn-outline" onclick="clearBoxFilter()">عرض الكل</button></div>';
+    }
+
+    var rows = listHeaders.map(function (h) {
       var approved = String(h.approved) === 'true';
       var opts = '<option value="">إجراءات...</option>';
       if (approved) {
@@ -109,9 +164,10 @@
 
     content.innerHTML =
       boxesHtml +
+      filterBar +
       '<div style="display:flex;justify-content:flex-end;margin-bottom:12px;gap:8px;">' +
       '<button class="btn btn-outline" onclick="openReport()">تقرير النقدية</button>' +
-      '<button class="btn btn-primary" onclick="openForm(\'\', \'\', false)">+ إضافة حركة</button>' +
+      '<button class="btn btn-primary" onclick="openForm(\'\', __activeBoxFilter, false)">+ إضافة حركة</button>' +
       '<button class="btn btn-outline" onclick="openTransfer()">تحويل</button></div>' +
       UIC.dataTable('cash-table', {
         title: 'حركة النقدية والمصاريف',
@@ -128,7 +184,7 @@
           { key: 'actions', label: 'إجراءات' }
         ],
         rows: rows,
-        emptyText: 'لا توجد حركات'
+        emptyText: (__activeBoxFilter !== '' ? 'لا توجد حركات لهذا الصندوق' : 'لا توجد حركات')
       });
     UIC.initTableSort('cash-table');
   }
@@ -217,14 +273,15 @@
   }
 
   function onMethodChange() {
-    var method = getVal('transaction_method');
-    if (method === 'فودافون كاش') {
-      var td = document.getElementById('total_discount');
-      if (td) td.value = num(getVal('transaction_amount')) / 100;
-    }
+    /* Pure AppSheet replication: no auto-adjustments here — recalc() mirrors
+     * the sheet formulas exactly (see recalc comments below). */
     recalc();
   }
 
+  /* AppSheet formula replication (matches setCashFormulas_ server-side):
+   * net_amount     = IF(method="فودافون كاش", amount*rate, (amount-discount)*rate)
+   * total          = net_amount + taxes*rate
+   * balance_amount = IF(type="Credit", total*-1, total) */
   function recalc() {
     var amount = num(getVal('transaction_amount'));
     var discount = num(getVal('total_discount'));
