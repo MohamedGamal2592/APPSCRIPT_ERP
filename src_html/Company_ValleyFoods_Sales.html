@@ -1,0 +1,470 @@
+﻿<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Valley Foods — المبيعات</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_ValleyFoods_Nav'); ?>
+  <?!= getCompanyThemeCSS_('9940659bd83035d7') ?>
+</head>
+<body>
+  <div id="vf-root"></div>
+
+  <script>
+    var params = new URLSearchParams(window.location.search);
+    var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+    var scriptUrl = window.scriptUrl || '/';
+    var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+    var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('9940659bd83035d7') ?>';
+    var COMPANY_PAGES = <?!= companyPages ?>;
+    var CURRENT_ACTION = '<?!= currentAction ?>';
+    var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+    var CAN_WRITE = IS_SUPER_ADMIN || !!(USER_PAGES && USER_PAGES[CURRENT_ACTION] && USER_PAGES[CURRENT_ACTION].indexOf('write') !== -1);
+
+    function companyCall(moduleAction, data) {
+      return API.call('company_action', {
+        target_system: '9940659bd83035d7',
+        module_action: moduleAction,
+        data: data || {}
+      }, SESSION_TOKEN);
+    }
+    function esc(v) {
+      var s = (v === undefined || v === null) ? '' : String(v);
+      if (typeof FMT !== 'undefined' && FMT.escape) return FMT.escape(s);
+      return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+    function num0(v) { var n = Number(v); return isNaN(n) ? 0 : n; }
+    function todayStr() { return new Date().toISOString().slice(0, 10); }
+    function fmtDate(v) {
+      if (!v) return '-';
+      var d = (v instanceof Date) ? v : new Date(v);
+      if (isNaN(d.getTime())) return String(v);
+      var p = function (n) { return n < 10 ? '0' + n : '' + n; };
+      return p(d.getDate()) + '/' + p(d.getMonth() + 1) + '/' + d.getFullYear();
+    }
+  </script>
+
+  <script>
+  (function () {
+    var INVOICES = [], PARTIES = [], PRODUCTS = [], ENUMS = {};
+
+    function renderApp() {
+      UIC.appShell('vf-root', {
+        companyLogoUrl: COMPANY_LOGO_URL,
+        companyLogoHref: scriptUrl + '?action=vf_dashboard&sessionToken=' + SESSION_TOKEN,
+        companyLogoTitle: 'Valley Foods',
+        breadcrumb: 'Valley Foods / الادارة المالية / المبيعات',
+        contentId: 'vf-sales-content',
+        menuGroups: (window.VALLEYFOODS_MENU || [])
+      });
+      document.getElementById('vf-sales-content').innerHTML =
+        '<div class="vf-card"><div class="vf-card-header"><h3>فواتير المبيعات</h3>' +
+          (CAN_WRITE ? '<button class="btn btn-primary" onclick="SALES_PAGE.openAdd()">+ إضافة فاتورة</button>' : '') +
+        '</div><div class="vf-card-body">' +
+          '<div id="sales-table"><p class="vf-text-muted">جاري التحميل...</p></div>' +
+        '</div></div>';
+      load();
+    }
+
+    function load() {
+      UI.showSpinner();
+      var container = document.getElementById('sales-table');
+      if (container) {
+        UIC.PagedTable({
+          container: container,
+          headers: ['رقم الفاتورة', 'العميل', 'التاريخ',
+            { label: 'الصافي', numeric: true }, { label: 'الضريبة', numeric: true }, { label: 'الإجمالي', numeric: true },
+            'الاعتماد', ''],
+          pageSize: 100,
+          emptyText: 'لا توجد فواتير',
+          onRendered: function (tid) { try { UIC.initTableSort(tid); } catch (e) {} },
+          fetcher: function (offset, limit) {
+            return companyCall('get_valley_sales_page', { offset: offset, limit: limit });
+          },
+          onFirst: function (r) {
+            PARTIES = r.parties || [];
+            PRODUCTS = r.products || [];
+            ENUMS = r.enums || {};
+          },
+          mapRow: function (inv) {
+            var isApproved = inv.approval_status === 'Approved';
+            var actions = IS_SUPER_ADMIN ? UIC.actionBtns([
+              { label: isApproved ? 'إرجاع لقيد الانتظار' : 'اعتماد', onclick: 'SALES_PAGE.approve(\'' + esc(inv.invoice_unique_id) + '\')' },
+              isApproved ? null : { label: 'تعديل', onclick: 'SALES_PAGE.openEdit(\'' + esc(inv.invoice_unique_id) + '\')' },
+              isApproved ? null : { label: 'حذف', color: '#dc2626', onclick: 'SALES_PAGE.remove(\'' + esc(inv.invoice_unique_id) + '\')' }
+            ].filter(Boolean)) : '';
+            return [
+              '<b>' + esc(inv['رقم الفاتورة'] || '-') + '</b>',
+              esc(partyLabel(inv['اسم العميل'])),
+              fmtDate(inv['تاريخ الفاتورة']),
+              '<span class="num" data-num="' + num0(inv['المبلغ الصافي']) + '">' + num0(inv['المبلغ الصافي']).toLocaleString('en-US', { minimumFractionDigits: 2 }) + '</span>',
+              '<span class="num" data-num="' + num0(inv['قيمة الضريبة']) + '">' + num0(inv['قيمة الضريبة']).toLocaleString('en-US', { minimumFractionDigits: 2 }) + '</span>',
+              '<span class="num" style="font-weight:700;color:#0e623b;" data-num="' + num0(inv['إجمالي']) + '">' + num0(inv['إجمالي']).toLocaleString('en-US', { minimumFractionDigits: 2 }) + '</span>',
+              UIC.statusPill(isApproved ? 'معتمد' : 'قيد الانتظار', isApproved ? 'success' : 'neutral'),
+              actions
+            ];
+          }
+        });
+      }
+      UI.hideSpinner();
+    }
+
+    function partyLabel(idRef) {
+      var f = PARTIES.filter(function (o) { return String(o.value) === String(idRef); })[0];
+      return f ? f.label : (idRef || '-');
+    }
+
+    /* ---------- ODOO-STYLE ENTRY MODAL ---------- */
+    var DRAFT_LINES = [];
+    var EDIT_UID = '';
+
+    function openAdd() { DRAFT_LINES = []; openInvoiceModal(null); }
+
+    function openEdit(uid) {
+      UI.showSpinner();
+      Promise.all([
+        companyCall('get_valley_sales_bootstrap'),
+        companyCall('get_valley_invoice_full', { invoice_unique_id: uid })
+      ])
+        .then(function (res) {
+          PARTIES = res[0].parties || [];
+          PRODUCTS = res[0].products || [];
+          ENUMS = res[0].enums || {};
+          var inv = res[1].invoice;
+          DRAFT_LINES = res[1].lines.map(function (l) {
+            return {
+              unique_id: l.unique_id,
+              product_id: String(l.product_id),
+              details: l.product_details || '',
+              tax: Number(l.product_tax || 0),
+              qty: Number(l.product_qty || 0),
+              price: Number(l.product_price || 0)
+            };
+          });
+          openInvoiceModal(inv);
+        })
+        .catch(function (e) { UIC.toast((e && e.message) || 'خطأ في تحميل الفاتورة', 'error'); })
+        .finally(function () { UI.hideSpinner(); });
+    }
+
+    function partyFieldHtml(selected) {
+      return UIC.combo({ key: 'f-party', label: 'العميل', required: true, options: PARTIES, value: selected ? String(selected['اسم العميل'] || '') : '', placeholder: 'اكتب للبحث…' });
+    }
+    function comboEnum(key, label, list, selected) {
+      return UIC.combo({ key: key, label: label, required: true, options: (list || []).map(function (o) { return { value: o.value, label: o.label }; }), value: selected != null ? selected : '', placeholder: 'اكتب للبحث…' });
+    }
+
+    function lineRowHtml(i, ln) {
+      ln = ln || { product_id: '', details: '', tax: 0, qty: '', price: '', allocations: [] };
+      var prodOpts = PRODUCTS.map(function (p) { return { value: String(p.value), label: p.label }; });
+      var rowTotal = num0(ln.qty) * num0(ln.price) * (1 + num0(ln.tax));
+      return '<tr id="line-' + i + '" data-idx="' + i + '">' +
+        '<td>' + UIC.combo({ key: 'ln-prod-' + i, label: '', required: true, options: prodOpts, value: ln.product_id ? String(ln.product_id) : '', placeholder: 'ابحث عن منتج…' }) + '</td>' +
+        '<td><input id="ln-details-' + i + '" class="input" type="text" value="' + esc(ln.details) + '" placeholder="اختياري"></td>' +
+        '<td><input id="ln-qty-' + i + '" class="input" type="number" min="0.01" step="0.01" value="' + (ln.qty || '') + '" oninput="SALES_PAGE.recalc()"></td>' +
+        '<td><input id="ln-price-' + i + '" class="input" type="number" min="0" step="0.01" value="' + (ln.price !== '' ? ln.price : '') + '" oninput="SALES_PAGE.recalc()"></td>' +
+        '<td>' + UIC.combo({ key: 'ln-tax-' + i, label: '', required: true, options: (ENUMS.line_tax || []).map(function (t) { return { value: t, label: (t * 100) + '%' }; }), value: String(ln.tax), placeholder: '%' }) + '</td>' +
+        '<td class="num" style="font-weight:700;direction:ltr;" id="ln-total-' + i + '">' + rowTotal.toLocaleString('en-US', { minimumFractionDigits: 2 }) + '</td>' +
+        '<td><button class="btn btn-outline" style="padding:3px 10px;color:#dc2626;" onclick="SALES_PAGE.removeLine(' + i + ')">✕</button></td>' +
+      '</tr>' +
+      /* P2: batch-allocation strip (hidden until product chosen) */
+      '<tr id="alloc-row-' + i + '" style="display:none;"><td colspan="7" style="background:#f8fafc;padding:8px 14px;">' +
+        '<div style="font-size:12px;font-weight:700;color:#166534;margin-bottom:6px;">📦 تخصيص الدفعات <span class="num" style="color:#94a3b8;font-weight:400;">(يجب أن يساوي الكمية)</span> — <span id="alloc-sum-' + i + '">0</span> / <span id="alloc-need-' + i + '">' + (ln.qty || 0) + '</span></div>' +
+        '<div id="alloc-strip-' + i + '" style="color:#94a3b8;font-size:12px;">اختر المنتج أولاً لعرض الدفعات المتاحة…</div>' +
+      '</td></tr>';
+    }
+
+    function openInvoiceModal(inv) {
+      var isEdit = !!inv;
+      EDIT_UID = isEdit ? String(inv.invoice_unique_id) : '';
+      /* Party auto-fill strip: tax id / address / phone from the party record */
+      var autofill =
+        '<div class="form-field"><label class="form-label">بيانات العميل (تُجلب تلقائياً)</label>' +
+        '<div id="party-chips" class="input" readonly style="background:#f3f4f6;color:#6b7280;min-height:38px;display:flex;align-items:center;">—</div></div>';
+      var body = '<form id="sales-form">' +
+        '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-bottom:14px;">' +
+          partyFieldHtml(inv) + autofill +
+          UIC.field({ key: 'f-date', label: 'تاريخ الفاتورة', type: 'date', required: true, value: inv ? fmtDate(inv['تاريخ الفاتورة']).split('/').reverse().join('-') : todayStr() }) +
+          checkboxField('f-tax-system', 'خاضع للنظام الضريبي', inv ? String(inv.tax_system).toLowerCase() === 'true' : true) +
+        '</div>' +
+        '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-bottom:14px;">' +
+          comboEnum('f-class-tax', 'نوع الضريبة', ENUMS.class_tax, inv ? Number(inv['نوع الضريبة (سلع عامة 1/سلع جدول 2)']) : null) +
+          comboEnum('f-class-schedule', 'نوع سلع الجدول', ENUMS.class_schedule, inv ? Number(inv['نوع سلع الجدول (لايوجد 0/جدول أولا 1/جدول ثانيا 2)']) : null) +
+          comboEnum('f-class-statement', 'نوع البيان', ENUMS.class_statement, inv ? Number(inv['نوع البيان (سلعة 3/خدمة 4/تسويات 5)']) : null) +
+          comboEnum('f-class-goods', 'نوع السلعة', ENUMS.class_goods, inv ? Number(inv['نوع السلعة (محلي 1/صادرات 2/آلات ومعدات 5/أجزاء آلات 6/إعفاءات 7)']) : null) +
+        '</div>' +
+        '<div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;padding:12px;">' +
+          '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">' +
+            '<b style="color:#166534;">بنود الفاتورة</b>' +
+            '<button type="button" class="btn btn-outline" onclick="SALES_PAGE.addLine()">+ إضافة بند</button>' +
+          '</div>' +
+          '<div style="overflow-x:auto;"><table class="table" id="lines-table">' +
+            '<thead><tr><th style="min-width:220px;">المنتج</th><th>تفاصيل</th><th>الكمية</th><th>السعر</th><th>الضريبة</th><th>الإجمالي</th><th></th></tr></thead>' +
+            '<tbody id="lines-body"></tbody>' +
+          '</table></div>' +
+          '<div id="lines-footer" style="display:flex;justify-content:flex-end;gap:16px;padding:10px;background:#f0fdf4;border-radius:8px;margin-top:8px;font-weight:800;"></div>' +
+        '</div>' +
+      '</form>';
+
+      /* wide modal */
+      UIC.openModal('sales-modal', {
+        title: isEdit ? 'تعديل فاتورة: ' + (inv['رقم الفاتورة'] || '') : 'فاتورة مبيعات جديدة — الرقم يُعتمد تلقائياً',
+        body: body,
+        footer: false
+      });
+
+      var modal = document.getElementById('sales-modal');
+      if (modal) { var box = modal.querySelector('.modal'); if (box) box.style.maxWidth = '1200px'; }
+
+      /* footer action bar inside modal */
+      var foot = document.createElement('div');
+      foot.style.cssText = 'display:flex;justify-content:flex-end;gap:10px;padding:14px 20px;border-top:1px solid #e5e7eb;';
+      foot.innerHTML =
+        '<button class="btn btn-outline" onclick="UIC.closeModal(\'sales-modal\')">إلغاء</button>' +
+        (isEdit ? '<button class="btn btn-primary" onclick="UI.submitOnce(this, SALES_PAGE.save)">💾 حفظ التعديلات</button>'
+                : '<button class="btn btn-primary" onclick="UI.submitOnce(this, SALES_PAGE.save)">💾 إنشاء الفاتورة</button>');
+      modal.querySelector('.modal').appendChild(foot);
+
+      drawLines();
+      attachPartyAutoFill(inv);
+      SALES_PAGE.recalc();
+    }
+
+    function attachPartyAutoFill(inv) {
+      var combo = document.getElementById('f-party');
+      var chips = document.getElementById('party-chips');
+      if (!combo || !chips) return;
+      var update = function () {
+        var val = getComboVal('f-party');
+        var p = PARTIES.filter(function (o) { return String(o.value) === String(val); })[0];
+        if (!p) { chips.textContent = '—'; return; }
+        chips.innerHTML = 'الرقم الضريبي: <b>' + esc(p.tax_id || '-') + '</b> &nbsp;·&nbsp; العنوان: <b>' + esc(p.address || '-') + '</b> &nbsp;·&nbsp; الهاتف: <b>' + esc(p.phone || '-') + '</b>';
+      };
+      if (inv) update(); /* pre-fill for edit */
+      document.getElementById('f-party_display').addEventListener('input', update);
+    }
+
+    function checkboxField(key, label, checked) {
+      return '<label style="display:flex;align-items:center;gap:8px;margin-top:22px;font-size:14px;">' +
+        '<input type="checkbox" id="' + key + '"' + (checked ? ' checked' : '') + '> ' + label + '</label>';
+    }
+
+    function drawLines() {
+      var tb = document.getElementById('lines-body');
+      if (!tb) return;
+      tb.innerHTML = DRAFT_LINES.map(function (_, i) { return lineRowHtml(i, DRAFT_LINES[i]); }).join('') ||
+        '<tr><td colspan="7" style="text-align:center;color:#94a3b8;">لا توجد بنود — اضغط «+ إضافة بند»</td></tr>';
+      /* re-fetch batches for every line that already has a product */
+      for (var i = 0; i < DRAFT_LINES.length; i++) {
+        var pc = document.getElementById('ln-prod-' + i);
+        if (pc) pc.addEventListener('change', function () {
+          var idx = parseInt(this.id.split('-').pop(), 10);
+          onProductChange(idx);
+        });
+        if (DRAFT_LINES[i].product_id) loadBatches(i, DRAFT_LINES[i].product_id, DRAFT_LINES[i].allocations);
+      }
+      recalc();
+    }
+
+    function collectLines() {
+      var out = [];
+      for (var i = 0; i < DRAFT_LINES.length; i++) {
+        var pidEl = document.getElementById('ln-prod-' + i);
+        var qtyEl = document.getElementById('ln-qty-' + i);
+        if (!pidEl || !qtyEl) continue;
+        out.push({
+          unique_id: DRAFT_LINES[i].unique_id || '',
+          product_id: pidEl.value || '',
+          details: (document.getElementById('ln-details-' + i) || {}).value || '',
+          qty: qtyEl.value,
+          price: (document.getElementById('ln-price-' + i) || {}).value || '',
+          tax: getComboVal('ln-tax-' + i),
+          allocations: collectAllocations(i)
+        });
+      }
+      return out;
+    }
+
+    function getComboVal(key) {
+      var el = document.getElementById(key);
+      return el ? el.value : '';
+    }
+
+    function recalc() {
+      var net = 0, taxV = 0;
+      for (var i = 0; i < DRAFT_LINES.length; i++) {
+        var qty = num0((document.getElementById('ln-qty-' + i) || {}).value);
+        var price = num0((document.getElementById('ln-price-' + i) || {}).value);
+        var tax = num0(getComboVal('ln-tax-' + i));
+        var lineNet = qty * price;
+        var lt = lineNet * tax;
+        net += lineNet; taxV += lt;
+        var cell = document.getElementById('ln-total-' + i);
+        if (cell) cell.textContent = (lineNet + lt).toLocaleString('en-US', { minimumFractionDigits: 2 });
+      }
+      for (var a = 0; a < DRAFT_LINES.length; a++) {
+        var sumEl = document.getElementById('alloc-sum-' + a);
+        if (!sumEl) continue;
+        var s2 = 0;
+        for (var j2 = 0; ; j2++) {
+          var qEl = document.getElementById('alloc-q-' + a + '-' + j2);
+          if (!qEl) break;
+          s2 += parseFloat(qEl.value) || 0;
+        }
+        sumEl.textContent = fmtNum2(s2);
+        sumEl.style.color = (Math.abs(s2 - num0((document.getElementById('ln-qty-' + a)||{}).value)) > 0.0001 && s2 >= 0) ? '#dc2626' : '#059669';
+      }
+      var total = net + taxV;
+      document.getElementById('lines-footer').innerHTML =
+        '<span>الصافي: <span style="direction:ltr;">' + net.toLocaleString('en-US', { minimumFractionDigits: 2 }) + '</span></span>' +
+        '<span>الضريبة: <span style="direction:ltr;">' + taxV.toLocaleString('en-US', { minimumFractionDigits: 2 }) + '</span></span>' +
+        '<span style="color:#166534;">الإجمالي: <span style="direction:ltr;font-size:17px;">' + total.toLocaleString('en-US', { minimumFractionDigits: 2 }) + ' ج.م</span></span>';
+    }
+
+    function addLine() {
+      DRAFT_LINES.push({ product_id: '', details: '', tax: 0, qty: '', price: '' });
+      drawLines();
+    }
+
+    function removeLine(i) {
+      DRAFT_LINES.splice(i, 1);
+      drawLines();
+    }
+
+    function getVal_(id) { var el = document.getElementById(id); return el ? el.value : ''; }
+    function readCheckbox(id) { var el = document.getElementById(id); return !!(el && el.checked); }
+
+    function save() {
+      if (!UIC.validateForm('sales-form')) return;
+      var lines = collectLines();
+      var payload = {
+        invoice_unique_id: EDIT_UID || '',
+        party: getComboVal('f-party'),
+        date: getVal_('f-date'),
+        tax_system: readCheckbox('f-tax-system'),
+        class_tax: getComboVal('f-class-tax'),
+        class_schedule: getComboVal('f-class-schedule'),
+        class_statement: getComboVal('f-class-statement'),
+        class_goods: getComboVal('f-class-goods'),
+        lines: lines
+      };
+      if (!payload.party) { UIC.toast('اختر العميل', 'error'); return; }
+      UI.showSpinner();
+      companyCall('save_valley_invoice', payload)
+        .then(function (r) {
+          UIC.closeModal('sales-modal');
+          UIC.toast((r && r.message) || 'تم الحفظ', 'success');
+          load();
+        })
+        .catch(function (e) { UIC.toast((e && e.message) || 'فشل الحفظ', 'error'); })
+        .finally(function () { UI.hideSpinner(); });
+    }
+
+    function approve(uid) {
+      UI.showSpinner();
+      companyCall('approve_valley_invoice', { invoice_unique_id: uid })
+        .then(function (r) { UIC.toast((r && r.message) || 'تم', 'success'); load(); })
+        .catch(function (e) { UIC.toast((e && e.message) || 'فشل', 'error'); })
+        .finally(function () { UI.hideSpinner(); });
+    }
+
+    function removeInv(uid) {
+      if (!confirm('سيتم حذف الفاتورة وجميع بنودها نهائياً. متابعة؟')) return;
+      UI.showSpinner();
+      companyCall('delete_valley_invoice', { invoice_unique_id: uid })
+        .then(function (r) { UIC.toast((r && r.message) || 'تم الحذف', 'success'); load(); })
+        .catch(function (e) { UIC.toast((e && e.message) || 'فشل الحذف', 'error'); })
+        .finally(function () { UI.hideSpinner(); });
+    }
+
+    /* ---------- P2: BATCH ALLOCATION ---------- */
+    var BATCH_CACHE = {};   /* key: pid|exclude → batches array */
+
+    function onProductChange(i) {
+      var el = document.getElementById('ln-prod-' + i);
+      var pid = el ? el.value : '';
+      DRAFT_LINES[i].product_id = pid;
+      DRAFT_LINES[i].allocations = [];
+      if (!pid) {
+        document.getElementById('alloc-row-' + i).style.display = 'none';
+        recalc();
+        return;
+      }
+      loadBatches(i, pid, null);
+    }
+
+    function loadBatches(i, pid, prefill) {
+      var strip = document.getElementById('alloc-strip-' + i);
+      var rowEl = document.getElementById('alloc-row-' + i);
+      if (!strip || !rowEl) return;
+      rowEl.style.display = '';
+      var key = pid + '|' + (EDIT_UID || '');
+      strip.innerHTML = 'جاري تحميل الدفعات...';
+      var build = function () {
+        renderAllocStrip(i, pid, prefill || []);
+      };
+      if (BATCH_CACHE[key]) { setTimeout(build, 0); }
+      else {
+        companyCall('get_valley_product_batches', { product_id: pid, exclude_invoice_unique_id: EDIT_UID })
+          .then(function (r) {
+            BATCH_CACHE[key] = r.batches || [];
+            build();
+          })
+          .catch(function (e) { strip.innerHTML = '<span style="color:red;">' + esc(e.message || 'خطأ') + '</span>'; });
+      }
+    }
+
+    function renderAllocStrip(i, pid, prefill) {
+      var key = pid + '|' + (EDIT_UID || '');
+      var batches = BATCH_CACHE[key] || [];
+      var strip = document.getElementById('alloc-strip-' + i);
+      if (!strip) return;
+      if (!batches.length) {
+        strip.innerHTML = '<span style="color:#d97706;">لا توجد دفعات متاحة لهذا المنتج.</span>';
+        return;
+      }
+      var alloc = {};
+      (prefill || []).forEach(function (a) { alloc[a.batch_uid] = a.qty; });
+      DRAFT_LINES[i].allocations = (prefill || []).map(function (a) { return { batch_uid: a.batch_uid, lot: a.lot || '', qty: Number(a.qty || 0) }; });
+
+      var html = '<table class="table" style="margin:0;"><thead><tr><th>الدفعة</th><th>المتاح</th><th style="width:140px;">الكمية من الدفعة</th></tr></thead><tbody>';
+      batches.forEach(function (b, bi) {
+        var preQ = alloc[b.batch_uid] || 0;
+        html += '<tr>' +
+          '<td><b>' + esc(b.lot) + '</b> <span style="color:#94a3b8;font-size:11px;">(' + esc(b.unit || '-') + ')</span></td>' +
+          '<td class="num" data-num="' + b.available + '">' + fmtNum2(b.available) + '</td>' +
+          '<td><input id="alloc-q-' + i + '-' + bi + '" class="input" type="number" min="0" step="0.01" max="' + b.available + '" value="' + (preQ || '') + '" data-buid="' + esc(b.batch_uid) + '" data-lot="' + esc(b.lot) + '" oninput="SALES_PAGE.recalc()" style="max-width:130px;direction:ltr;"></td>' +
+        '</tr>';
+      });
+      html += '</tbody></table>';
+      strip.innerHTML = html;
+    }
+
+    function collectAllocations(i) {
+      var out = [];
+      for (var j = 0; ; j++) {
+        var el = document.getElementById('alloc-q-' + i + '-' + j);
+        if (!el) break;
+        var q = parseFloat(el.value) || 0;
+        if (q > 0) out.push({ batch_uid: el.getAttribute('data-buid'), lot: el.getAttribute('data-lot') || '', qty: q });
+      }
+      return out;
+    }
+
+    function fmtNum2(n) { return Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 }); }
+
+    window.SALES_PAGE = {
+      openAdd: openAdd, openEdit: openEdit, save: save, approve: approve, remove: removeInv,
+      addLine: addLine, removeLine: removeLine, recalc: recalc
+    };
+
+    document.addEventListener('DOMContentLoaded', renderApp);
+  })();
+  </script>
+</body>
+</html>
+
+

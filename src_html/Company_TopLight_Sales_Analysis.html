@@ -1,0 +1,195 @@
+﻿<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Top Light — تحليل المبيعات</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= getCompanyThemeCSS_('8df5c89a117fe9a5') ?>
+  <style>
+    @media print {
+      .topbar, .breadcrumb, .no-print { display: none !important; }
+      body { background: #ffffff !important; }
+    }
+    .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 16px; }
+    .kpi { background: var(--bg-surface); border: 2px solid #111111; border-radius: 8px; padding: 14px; }
+    .kpi-label { font-size: 12px; color: var(--text-muted); margin-bottom: 6px; }
+    .kpi-value { font-size: 20px; font-weight: 700; color: #111111; }
+    .inv-link { color: #0369a1; cursor: pointer; text-decoration: underline; }
+  </style>
+</head>
+<body>
+<div id="tl-root" dir="rtl"></div>
+<script>
+  var params = new URLSearchParams(window.location.search);
+  var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+  var scriptUrl = window.scriptUrl || '/';
+  var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('8df5c89a117fe9a5') ?>';
+  var COMPANY_PAGES = <?!= companyPages ?>;
+  var CURRENT_ACTION = '<?!= currentAction ?>';
+  var __options = { customer_options: [], product_options: [] };
+
+  function companyCall(moduleAction, data) {
+    return API.call('company_action', {
+      target_system: '8df5c89a117fe9a5',
+      module_action: moduleAction,
+      data: data || {}
+    }, SESSION_TOKEN);
+  }
+
+  function load() {
+    UIC.appShell('tl-root', {
+      companyLogoUrl: COMPANY_LOGO_URL,
+      companyLogoHref: scriptUrl + '?action=tl_dashboard&sessionToken=' + SESSION_TOKEN,
+      companyLogoTitle: 'القمة لايت',
+      breadcrumb: 'القمة لايت / تحليل المبيعات',
+      contentId: 'tl-content'
+    });
+    fetchData();
+  }
+
+  function filterPayload() {
+    return {
+      date_from: document.getElementById('f_from') ? document.getElementById('f_from').value : '',
+      date_to: document.getElementById('f_to') ? document.getElementById('f_to').value : '',
+      customer_id: document.getElementById('f_customer') ? document.getElementById('f_customer').value : '',
+      product_id: document.getElementById('f_product') ? document.getElementById('f_product').value : ''
+    };
+  }
+
+  var __filtersBuilt = false;
+
+  function fetchData() {
+    UI.showSpinner();
+    companyCall('get_sales_analysis', filterPayload())
+      .then(function (r) {
+        __options.customer_options = r.customer_options || [];
+        __options.product_options = r.product_options || [];
+        var content = document.getElementById('tl-content');
+        if (!__filtersBuilt) {
+          content.innerHTML = renderFilters() + '<div id="results"></div>';
+          __filtersBuilt = true;
+        }
+        renderResults(r.rows || [], r.totals || {});
+      })
+      .catch(function (e) { showError(e); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function renderFilters() {
+    return '<div class="no-print" style="display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;margin-bottom:16px;padding:12px;background:var(--bg-surface);border:2px solid #111111;border-radius:8px;">' +
+      '<div class="form-field" style="margin:0;"><label class="form-label" for="f_from">من تاريخ</label><input id="f_from" class="input" type="date" onchange="fetchData()"></div>' +
+      '<div class="form-field" style="margin:0;"><label class="form-label" for="f_to">إلى تاريخ</label><input id="f_to" class="input" type="date" onchange="fetchData()"></div>' +
+      '<div class="form-field" style="margin:0;"><label class="form-label" for="f_customer">العميل</label>' +
+      '<select id="f_customer" class="input" onchange="fetchData()"><option value="">الكل</option>' + (__options.customer_options || []).map(function (c) { return '<option value="' + FMT.escape(c.value) + '">' + FMT.escape(c.label) + '</option>'; }).join('') + '</select></div>' +
+      '<div class="form-field" style="margin:0;"><label class="form-label" for="f_product">المنتج</label>' +
+      '<select id="f_product" class="input" onchange="fetchData()"><option value="">الكل</option>' + (__options.product_options || []).map(function (p) { return '<option value="' + FMT.escape(p.value) + '">' + FMT.escape(p.label) + '</option>'; }).join('') + '</select></div>' +
+      '<button class="btn btn-outline" onclick="window.print()">طباعة</button>' +
+      '</div>';
+  }
+
+  function renderResults(rows, totals) {
+    var el = document.getElementById('results');
+    if (!el) return;
+
+    var kpis =
+      '<div class="kpis">' +
+      kpi('المبيعات قبل الخصم والمرتجع', totals.net_amount) +
+      kpi('إجمالي الخصومات', totals.discount) +
+      kpi('إجمالي المرتجعات', totals.net_return) +
+      kpi('إجمالي الضرائب', totals.tax) +
+      kpi('صافي قيمة المبيعات المتبقية', totals.net_collection) +
+      '</div>';
+
+    var tableRows = rows.map(function (r) {
+      return {
+        code: '<span class="inv-link" onclick="showInvoice(\'' + FMT.escape(r.invoice_unique_id) + '\')">' + FMT.escape(r.code || '-') + '</span>',
+        date: fmtDate(r.date),
+        customer_name: r.customer_name || '-',
+        net_return: r.net_return || 0,
+        net_amount: r.net_amount || 0,
+        discount: r.discount || 0,
+        tax: r.tax || 0,
+        net_collection: r.net_collection || 0
+      };
+    });
+
+    var totalHtml = '<div style="margin-top:12px;padding:10px 14px;background:#fef08a;border:2px solid #111111;border-radius:8px;display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;">' +
+      '<div><strong>الإجمالي المالي المجمع</strong></div>' +
+      '<div>صافي المرتجع: <strong class="num">' + FMT.number(totals.net_return) + '</strong></div>' +
+      '<div>المبلغ الصافي: <strong class="num">' + FMT.number(totals.net_amount) + '</strong></div>' +
+      '<div>الخصومات: <strong class="num">' + FMT.number(totals.discount) + '</strong></div>' +
+      '<div>الضرائب: <strong class="num">' + FMT.number(totals.tax) + '</strong></div>' +
+      '<div>صافي التحصيل: <strong class="num">' + FMT.number(totals.net_collection) + '</strong></div>' +
+      '</div>';
+
+    var tableHtml = UIC.dataTable('sales-analysis-dt', {
+      title: 'تحليل المبيعات',
+      headers: [
+        { key: 'code', label: 'كود السند' },
+        { key: 'date', label: 'تاريخ الحركة' },
+        { key: 'customer_name', label: 'اسم العميل' },
+        { key: 'net_return', label: 'صافي المرتجع', money: true },
+        { key: 'net_amount', label: 'المبلغ الصافي', money: true },
+        { key: 'discount', label: 'الخصومات', money: true },
+        { key: 'tax', label: 'الضرائب', money: true },
+        { key: 'net_collection', label: 'صافي التحصيل الفعلي', money: true }
+      ],
+      rows: tableRows,
+      emptyText: 'لا توجد بيانات'
+    });
+
+    el.innerHTML = kpis + tableHtml + totalHtml;
+    UIC.initTableSort('sales-analysis-dt');
+  }
+
+  function kpi(label, value) {
+    return '<div class="kpi"><div class="kpi-label">' + FMT.escape(label) + '</div><div class="kpi-value num">' + FMT.number(value) + '</div></div>';
+  }
+
+  function showInvoice(uid) {
+    UI.showSpinner('جاري تحميل الفاتورة...');
+    companyCall('get_sales_print', { sales_code: uid })
+      .then(function (r) {
+        var h = r.header;
+        var lines = (r.lines || []).map(function (l) {
+          return '<tr><td>' + FMT.escape(l.product_name || '-') + '</td><td class="num">' + FMT.number(l.product_qty) + '</td><td class="num">' + FMT.number(l.product_price) + '</td><td class="num">' + FMT.number(l.product_total_value) + '</td></tr>';
+        }).join('');
+        var body =
+          '<div class="invoice-meta" style="margin-bottom:12px;">' +
+          '<div><strong>رقم الفاتورة:</strong> ' + FMT.escape(h['رقم الفاتورة'] || '-') + '</div>' +
+          '<div><strong>العميل:</strong> ' + FMT.escape(h.customer_name || '-') + '</div>' +
+          '<div><strong>المبلغ الصافي:</strong> <span class="num">' + FMT.number(h['المبلغ الصافي']) + '</span></div>' +
+          '<div><strong>قيمة الخصم:</strong> <span class="num">' + FMT.number(h['قيمة الخصم']) + '</span></div>' +
+          '<div><strong>قيمة الضريبة:</strong> <span class="num">' + FMT.number(h['قيمة الضريبة']) + '</span></div>' +
+          '<div><strong>الإجمالي:</strong> <span class="num">' + FMT.number(h['إجمالي']) + '</span></div>' +
+          '</div>' +
+          '<table class="table" style="min-width:400px;"><thead><tr><th>المنتج</th><th>الكمية</th><th>السعر</th><th>الإجمالي</th></tr></thead><tbody>' + lines + '</tbody></table>';
+        UIC.openModal('invoice-modal', { title: 'فاتورة بيع', body: body, footer: false });
+      })
+      .catch(function (e) { UIC.toast(e.message || 'خطأ', 'error'); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function fmtDate(v) {
+    if (!v) return '-';
+    var d = new Date(v);
+    if (isNaN(d.getTime())) return String(v).slice(0, 10);
+    return d.toLocaleDateString('en-GB');
+  }
+
+  function showError(e) {
+    var content = document.getElementById('tl-content');
+    if (content) content.innerHTML = '<div class="empty-state"><span>' + FMT.escape(e.message || 'خطأ') + '</span></div>';
+  }
+
+
+  load();
+</script>
+</body>
+</html>
+
+
+

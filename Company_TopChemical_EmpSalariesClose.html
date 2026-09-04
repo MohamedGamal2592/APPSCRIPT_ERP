@@ -1,0 +1,141 @@
+﻿<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>غلق المرتبات الشهرية</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_TopChemical_Nav'); ?>
+  <?!= getCompanyThemeCSS_('3fe1b5cb67b7223e') ?>
+</head>
+<body>
+<div id="tc-root" dir="rtl"></div>
+<script>
+  var params = new URLSearchParams(window.location.search);
+  var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+  var scriptUrl = window.scriptUrl || '/';
+  var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+  var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('3fe1b5cb67b7223e') ?>';
+  var COMPANY_PAGES = <?!= companyPages ?>;
+  var CURRENT_ACTION = '<?!= currentAction ?>';
+  var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+  var CAN_WRITE = UIC.canAdd_(); var CAN_FULL = UIC.canFull_();
+
+  function companyCall(moduleAction, data) {
+    return API.call('company_action', {
+      target_system: '3fe1b5cb67b7223e',
+      module_action: moduleAction,
+      data: data || {}
+    }, SESSION_TOKEN);
+  }
+
+  function esc(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  function fmtDate(v) {
+    if (v == null || v === '') return '';
+    var d = (v instanceof Date) ? v : new Date(v);
+    if (isNaN(d.getTime())) return String(v);
+    var p = function (n) { return ('0' + n).slice(-2); };
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+  }
+
+  function monthName(m) {
+    var names = ['يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو', 'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر'];
+    return names[Number(m) - 1] || m;
+  }
+
+  function load() {
+    var contentId = 'close-content';
+    UIC.appShell('tc-root', {
+      companyLogoUrl: COMPANY_LOGO_URL,
+      companyLogoHref: scriptUrl + '?action=tc_dashboard&sessionToken=' + SESSION_TOKEN,
+      companyLogoTitle: 'توب كيميكال',
+      breadcrumb: 'توب كيميكال / شئون العاملين / غلق المرتبات الشهرية',
+      contentId: contentId,
+      menuGroups: (window.TOPCHEMICAL_MENU || [])
+    });
+    fetchMonths();
+  }
+
+  function fetchMonths() {
+    UI.showSpinner();
+    companyCall('get_payroll_months')
+      .then(function (r) {
+        window.__open = r.open || [];
+        window.__closed = r.closed || [];
+        renderMonths();
+      })
+      .catch(function (e) { showError(e); })
+      .finally(function () { UI.hideSpinner(); try{schedulePrefetch();}catch(e){} });
+  }
+
+  function renderMonths() {
+    var body = document.getElementById('close-content');
+    var openRows = window.__open.map(function (m) {
+      return {
+        month: monthName(m.month) + ' ' + m.year,
+        actions: UIC.actionBtns(CAN_WRITE ? [{ label: 'غلق الشهر', onclick: 'closeMonth(' + m.year + ',' + m.month + ')' }] : [])
+      };
+    });
+    var closedRows = window.__closed.map(function (c) {
+      return {
+        month: monthName(c.month) + ' ' + c.year,
+        amount: c.amount,
+        created_at: fmtDate(c.created_at),
+        user: esc(c.user || '-')
+      };
+    });
+    body.innerHTML =
+      '<div style="margin-bottom:16px;">' +
+      UIC.dataTable('open-table', {
+        title: 'أشهر مفتوحة',
+        headers: [
+          { key: 'month', label: 'الشهر' },
+          { key: 'actions', label: 'إجراءات' }
+        ],
+        rows: openRows,
+        emptyText: 'لا توجد أشهر مفتوحة'
+      }) + '</div>' +
+      '<div>' +
+      UIC.dataTable('closed-table', {
+        title: 'أشهر مغلقة',
+        headers: [
+          { key: 'month', label: 'الشهر' },
+          { key: 'amount', label: 'الإجمالي', numeric: true },
+          { key: 'created_at', label: 'تاريخ الغلق' },
+          { key: 'user', label: 'بواسطة' }
+        ],
+        rows: closedRows,
+        emptyText: 'لا توجد أشهر مغلقة'
+      }) + '</div>';
+    UIC.initTableSort('open-table');
+    UIC.initTableSort('closed-table');
+  }
+
+  function closeMonth(year, month) {
+    if (!window.confirm('غلق مرتبات ' + monthName(month) + ' ' + year + '؟ سيتم احتساب الإجمالي من المرتبات المسجلة.')) return;
+    UI.showSpinner('جاري الغلق...');
+    companyCall('close_payroll_month', { year: year, month: month })
+      .then(function (r) {
+        UIC.toast((r && r.message) || 'تم الغلق', 'success');
+        fetchMonths();
+      })
+      .catch(function (e) { UIC.toast((e && e.message) || 'خطأ', 'error'); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function showError(e) {
+    var body = document.getElementById('close-content');
+    if (body) body.innerHTML = '<div class="empty-state"><span>' + esc(e.message || 'خطأ') + '</span></div>';
+  }
+
+  load();
+</script>
+</body>
+</html>
+

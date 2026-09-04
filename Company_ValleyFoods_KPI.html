@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Valley Foods — المؤشرات</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= getCompanyThemeCSS_('9940659bd83035d7') ?>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <style>
+    .chart-card { background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: 8px; padding: 16px; }
+    .chart-card h3 { margin: 0 0 12px; font-size: 15px; color: var(--text-main); }
+    .chart-wrap { position: relative; height: 300px; }
+    .kpi-row { display: grid; grid-template-columns: repeat(auto-fit,minmax(180px,1fr)); gap: 16px; margin-bottom: 20px; }
+  </style>
+</head>
+<body>
+<div id="vf-kpi-root" dir="rtl"></div>
+<script>
+  var params = new URLSearchParams(window.location.search);
+  var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+  var scriptUrl = window.scriptUrl || '/';
+  var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('9940659bd83035d7') ?>';
+  var COMPANY_PAGES = <?!= companyPages ?>;
+  var CURRENT_ACTION = '<?!= currentAction ?>';
+  var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+  function companyCall(moduleAction, data) {
+    return API.call('company_action', { target_system: '9940659bd83035d7', module_action: moduleAction, data: data || {} }, SESSION_TOKEN);
+  }
+  function load() {
+    var contentId = 'vf-kpi-content';
+    UIC.appShell('vf-kpi-root', {
+      companyLogoUrl: COMPANY_LOGO_URL,
+      companyLogoHref: (window.UIC && UIC.baseUrl ? UIC.baseUrl() : scriptUrl) + '?action=vf_dashboard&sessionToken=' + ((window.UIC && UIC.token) ? UIC.token() : SESSION_TOKEN),
+      companyLogoTitle: 'فالي فودز',
+      breadcrumb: 'فالي فودز / المؤشرات',
+      contentId: contentId,
+      menuGroups: (window.VALLEYFOODS_MENU || [])
+    });
+    UI.showSpinner('جاري تحميل المؤشرات...');
+    companyCall('get_kpi_data')
+      .then(function(r){
+        var inner = document.getElementById(contentId);
+        if (!r.kpi_authorized || (!r.kpi && !r.kpis)) {
+          inner.innerHTML =
+            '<div style="background:var(--bg-surface);border:1px solid var(--border-color);border-radius:var(--radius-lg);padding:36px 24px;text-align:center;max-width:600px;margin:24px auto;box-shadow:var(--shadow-sm);">' +
+            '<div style="font-size:36px;margin-bottom:12px;">🏢</div>' +
+            '<h2 style="margin:0 0 10px;font-size:20px;color:var(--text-main);">مرحباً بك في النظام</h2>' +
+            '<p style="margin:0;color:var(--text-muted);font-size:14px;line-height:1.7;">استخدم القائمة العلوية للتنقل بين الصفحات المصرح لك بالوصول إليها.</p>' +
+            '</div>';
+          return;
+        }
+        var k = r.kpi || r.kpis || {};
+        // Fallback to placeholder if no real aggregation yet
+        var totalNet = k.totalNet || k.sales_ytd || 0;
+        var totalSales = k.totalSales || k.sales_mtd || 0;
+        inner.innerHTML =
+          '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:16px;margin-bottom:20px;">' +
+          UIC.statCard({ label: 'إجمالي الصافي', value: FMT.number(totalNet), icon: '&#128200;', tone: 'success' }) +
+          UIC.statCard({ label: 'إجمالي المبيعات', value: FMT.number(totalSales), icon: '&#128200;' }) +
+          '</div>' +
+          '<div style="background:var(--bg-surface);border:1px solid var(--border-color);border-radius:var(--radius-lg);padding:24px;text-align:center;color:var(--text-muted);">سيتم عرض الرسوم البيانية هنا بعد تفعيل التجميع</div>';
+      })
+      .catch(function(e){
+        var inner=document.getElementById(contentId);
+        if(inner) inner.innerHTML='<div class="empty-state"><span>'+FMT.escape(e.message||'خطأ')+'</span></div>';
+      })
+      .finally(function(){ UI.hideSpinner(); try{schedulePrefetch();}catch(e){} });
+  }
+  load();
+</script>
+</body>
+</html>

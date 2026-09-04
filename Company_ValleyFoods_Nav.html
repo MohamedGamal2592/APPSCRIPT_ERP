@@ -1,0 +1,39 @@
+<script>
+/**
+ * Company_ValleyFoods_Nav.html
+ * Single source of truth for the Valley Foods header dropdown groups.
+ * The dashboard currently builds its menuGroups inline, but this global
+ * mirrors the same structure for reuse / consistency.
+ */
+window.VALLEYFOODS_MENU = [
+  { label: 'الادارة المالية', items: [
+    { label: 'المنتجات', action: 'vf_products' },
+    { label: 'العملاء والموردون', action: 'vf_parties' },
+    { label: 'حركة النقدية والبنوك', action: 'vf_cash' },
+    { label: 'المبيعات', action: 'vf_sales' },
+    { label: 'مرتجعات المبيعات', action: 'vf_sales_returns' },
+    { label: 'المشتريات', action: 'vf_purchasing' }
+  ] },
+  { label: 'الموارد البشرية', items: [
+    { label: 'قائمة الموظفين', action: 'vf_hr_employees' },
+    { label: 'الغياب والخصومات', action: 'vf_hr_deductions' },
+    { label: 'العقود', action: 'vf_hr_contracts' },
+    { label: 'تخصيص الإجازات', action: 'vf_hr_vacation_alloc' },
+    { label: 'الإجازات', action: 'vf_hr_vacations' },
+    { label: 'العمل الإضافي', action: 'vf_hr_overtime' },
+    { label: 'الرواتب الشهرية', action: 'vf_hr_monthly_salaries' },
+    { label: 'الحضور والانصراف', action: 'vf_hr_attendance' },
+    { label: '— إعدادات العمل الإضافي', action: 'vf_hr_settings_overtime' },
+    { label: '— إعدادات الخصومات', action: 'vf_hr_settings_deduction' },
+    { label: '— إعدادات الإجازات', action: 'vf_hr_settings_vacations' },
+    { label: '— إعدادات الورديات', action: 'vf_hr_settings_shifts' }
+  ] },
+  { label: 'الانتاج', items: [
+    { label: 'وصفات التصنيع (BOM)', action: 'vf_mfg_recipes' },
+    { label: 'أوامر التصنيع', action: 'vf_mfg_orders' },
+    { label: 'خطوط الإنتاج', action: 'vf_workcenters' },
+    { label: 'الأصول والماكينات', action: 'vf_asset_technical' },
+    { label: 'أصول خطوط الإنتاج', action: 'vf_work_center_assets' }
+  ] }
+];
+</script>

@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <base target="_top">
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Dashboard</title>
+    <?!= include('CSS'); ?>
+    <style>
+      /* Premium Icon Wrappers for the WOW factor */
+      .icon-wrapper {
+        width: 72px; height: 72px; border-radius: 20px;
+        display: inline-flex; align-items: center; justify-content: center;
+        margin-bottom: 1.5rem; transition: all 0.3s ease;
+      }
+      .dashboard-card:hover .icon-wrapper {
+        transform: scale(1.1) rotate(-5deg);
+      }
+      .bg-soft-primary { background-color: rgba(79, 70, 229, 0.1); color: var(--bs-primary); }
+      .bg-soft-success { background-color: rgba(16, 185, 129, 0.1); color: var(--bs-success); }
+      .bg-soft-warning { background-color: rgba(245, 158, 11, 0.1); color: var(--bs-warning); }
+      .bg-soft-info { background-color: rgba(14, 165, 233, 0.1); color: var(--bs-info); }
+      .bg-soft-danger { background-color: rgba(244, 63, 94, 0.1); color: var(--bs-danger); }
+      
+      .dashboard-card h5 { font-weight: 700; letter-spacing: -0.02rem; }
+      .display-text { font-weight: 800; letter-spacing: -0.03rem; }
+    </style>
+  </head>
+  <body>
+
+    <!-- Navbar -->
+    <nav class="navbar navbar-expand-lg navbar-dark bg-primary shadow-sm">
+      <div class="container">
+        <a class="navbar-brand" href="<?= scriptUrl ?>?action=dashboard">
+          <i class="bi bi-mortarboard-fill"></i> Assessment Platform
+        </a>
+        <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+          <span class="navbar-toggler-icon"></span>
+        </button>
+        <div class="collapse navbar-collapse" id="navbarNav">
+          <ul class="navbar-nav ms-auto align-items-center">
+            <li class="nav-item">
+              <span class="nav-link text-white fw-semibold">Welcome back, <span id="userName" class="text-warning">User</span> 👋</span>
+            </li>
+            <li class="nav-item ms-2">
+              <a href="<?= scriptUrl ?>?action=login" class="btn btn-outline-light btn-sm">
+                <i class="bi bi-box-arrow-right"></i> Logout / خروج
+              </a>
+            </li>
+          </ul>
+        </div>
+      </div>
+    </nav>
+
+    <!-- Main Content -->
+    <div class="container mt-5 mb-6">
+      
+      <!-- Friendly Hero Header -->
+      <div class="text-center mb-5">
+        <h2 class="display-text text-primary">Control Panel <span class="text-muted fs-4 fw-normal">لوحة التحكم</span></h2>
+        <p class="text-muted fs-5">Choose what you want to do today. / اختر الإجراء اللي عايز تعمله دلوقتي.</p>
+      </div>
+
+      <div class="row g-4 justify-content-center">
+        
+        <!-- 1. Team Members -->
+        <div class="col-md-4 col-sm-6">
+          <div class="card h-100 dashboard-card text-center border-0">
+            <div class="card-body p-4">
+              <div class="icon-wrapper bg-soft-primary">
+                <i class="bi bi-people-fill" style="font-size: 2.2rem;"></i>
+              </div>
+              <h5 class="card-title">Team Members <br><span class="text-muted fs-6 fw-normal">فريق العمل</span></h5>
+              <p class="card-text text-muted small">Add your team, define their roles, and set their access levels.</p>
+              <a href="<?= scriptUrl ?>?action=adding_users" class="btn btn-primary w-100 mt-2">
+                <i class="bi bi-gear-fill"></i> Manage Users
+              </a>
+            </div>
+          </div>
+        </div>
+
+        <!-- 2. Assessments Bank -->
+        <div class="col-md-4 col-sm-6">
+          <div class="card h-100 dashboard-card text-center border-0">
+            <div class="card-body p-4">
+              <div class="icon-wrapper bg-soft-success">
+                <i class="bi bi-card-checklist" style="font-size: 2.2rem;"></i>
+              </div>
+              <h5 class="card-title">Assessments Bank <br><span class="text-muted fs-6 fw-normal">مركز التحليلات والتقييمات</span></h5>
+              <p class="card-text text-muted small">Create new technical or psychometric tests, or view existing ones.</p>
+              <div class="d-grid gap-2 mt-2">
+                <a href="<?= scriptUrl ?>?action=view_assessments" class="btn btn-success">
+                  <i class="bi bi-list-ul"></i> View All
+                </a>
+                <a href="<?= scriptUrl ?>?action=create_assessment" class="btn btn-outline-success">
+                  <i class="bi bi-plus-circle-fill"></i> Create New
+                </a>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 3. Client Links (Batches) -->
+        <div class="col-md-4 col-sm-6">
+          <div class="card h-100 dashboard-card text-center border-0">
+            <div class="card-body p-4">
+              <div class="icon-wrapper bg-soft-warning">
+                <i class="bi bi-diagram-3-fill" style="font-size: 2.2rem;"></i>
+              </div>
+              <h5 class="card-title">Client Assigned Assessment<br><span class="text-muted fs-6 fw-normal">التحليلات والتقييمات الخاصة بالعملاء</span></h5>
+              <p class="card-text text-muted small">Generate secure batch links for companies to take the tests.</p>
+              <div class="d-grid gap-2 mt-2">
+                <a href="<?= scriptUrl ?>?action=view_batches" class="btn btn-warning">
+                  <i class="bi bi-list-ul"></i> View Batches
+                </a>
+                <a href="<?= scriptUrl ?>?action=create_batch" class="btn btn-outline-warning">
+                  <i class="bi bi-plus-circle-fill"></i> Generate Link
+                </a>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 4. Results & Reports -->
+        <div class="col-md-4 col-sm-6">
+          <div class="card h-100 dashboard-card text-center border-0">
+            <div class="card-body p-4">
+              <div class="icon-wrapper bg-soft-info">
+                <i class="bi bi-clipboard-data-fill" style="font-size: 2.2rem;"></i>
+              </div>
+              <h5 class="card-title">Results & Reports <br><span class="text-muted fs-6 fw-normal">متابعة النتائج والاجابات</span></h5>
+              <p class="card-text text-muted small">Check candidate scores, export reports, and print detailed answers.</p>
+              <a href="<?= scriptUrl ?>?action=review_results" class="btn btn-info text-white w-100 mt-2">
+                <i class="bi bi-graph-up-arrow"></i> View Results
+              </a>
+            </div>
+          </div>
+        </div>
+
+        <!-- 5. Access & Roles -->
+        <div class="col-md-4 col-sm-6">
+          <div class="card h-100 dashboard-card text-center border-0">
+            <div class="card-body p-4">
+              <div class="icon-wrapper bg-soft-danger">
+                <i class="bi bi-shield-fill-check" style="font-size: 2.2rem;"></i>
+              </div>
+              <h5 class="card-title">Access & Roles <br><span class="text-muted fs-6 fw-normal">صلاحيات الدخول</span></h5>
+              <p class="card-text text-muted small">Control who can see and edit what across the platform.</p>
+              <a href="<?= scriptUrl ?>?action=permissions" class="btn btn-danger w-100 mt-2">
+                <i class="bi bi-toggles"></i> Manage Permissions
+              </a>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    
+    <script>
+      const scriptUrl = '<?= scriptUrl ?>';
+      const token = localStorage.getItem('sessionToken');
+      const userName = localStorage.getItem('userName');
+      
+      // SECURITY UPDATE: Check for token as the primary auth gate
+      if (token && userName) {
+        document.getElementById('userName').innerText = userName;
+      } else {
+        // Clear any stale data and redirect to login
+        localStorage.removeItem('sessionToken');
+        localStorage.removeItem('userName');
+        window.location.href = scriptUrl + '?action=login';
+      }
+    </script>
+  </body>
+</html>

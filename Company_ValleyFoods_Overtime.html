@@ -1,0 +1,428 @@
+﻿<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Valley Foods — العمل الإضافي</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_ValleyFoods_Nav'); ?>
+  <?!= getCompanyThemeCSS_('9940659bd83035d7') ?>
+</head>
+<body>
+  <div id="vf-root"></div>
+
+  <script>
+    var params = new URLSearchParams(window.location.search);
+    var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+    var scriptUrl = window.scriptUrl || '/';
+    var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+    var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('9940659bd83035d7') ?>';
+    var COMPANY_PAGES = <?!= companyPages ?>;
+    var CURRENT_ACTION = '<?!= currentAction ?>';
+    var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+    var CAN_WRITE = UIC.canAdd_(); var CAN_FULL = UIC.canFull_();
+
+    function companyCall(moduleAction, data) {
+      return API.call('company_action', {
+        target_system: '9940659bd83035d7',
+        module_action: moduleAction,
+        data: data || {}
+      }, SESSION_TOKEN);
+    }
+
+    function esc(v) {
+      var s = (v === undefined || v === null) ? '' : String(v);
+      if (typeof FMT !== 'undefined' && FMT.escape) return FMT.escape(s);
+      return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+    function todayStr() { return new Date().toISOString().slice(0, 10); }
+    function fmtDate(v) {
+      if (!v) return '';
+      var d = (v instanceof Date) ? v : new Date(v);
+      if (isNaN(d.getTime())) return String(v);
+      var pad = function (n) { return n < 10 ? '0' + n : '' + n; };
+      return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+    }
+  </script>
+
+  <script>
+  (function () {
+    var OT_TABLE_ID = 'ot-table';
+    var empOptions = [];
+    var roleOptions = [];
+
+    UIC.appShell('vf-root', {
+      companyLogoUrl: COMPANY_LOGO_URL,
+      companyLogoHref: scriptUrl + '?action=vf_dashboard&sessionToken=' + SESSION_TOKEN,
+      companyLogoTitle: 'Valley Foods',
+      breadcrumb: 'Valley Foods / شؤون الموظفين / العمل الإضافي',
+      contentId: 'vf-ot-content',
+      menuGroups: (window.VALLEYFOODS_MENU || [])
+    });
+
+    var content = document.getElementById('vf-ot-content');
+    if (!content) return;
+
+    function renderToolbar() {
+      var html = '<div id="ot-toolbar" style="margin-bottom:12px;display:flex;gap:8px;align-items:center;">';
+      if (CAN_WRITE) {
+        html += '<button id="ot-add-btn" class="btn btn-primary" onclick="OT_PAGE.openAddModal()">إضافة عمل إضافي</button>';
+      }
+      html += '<input id="ot-search" type="text" class="form-control" placeholder="بحث..." style="max-width:260px;margin-right:auto;" oninput="OT_PAGE.filter(this.value)">';
+      html += '</div>';
+      html += '<div id="ot-table-wrap"></div>';
+      content.innerHTML = html;
+    }
+
+    function buildTable(rows) {
+      var cols = [
+        { key: 'emp_id', label: 'الكود' },
+        { key: 'name_ar', label: 'الاسم' },
+        { key: 'date', label: 'التاريخ' },
+        { key: 'start_time', label: 'من' },
+        { key: 'end_time', label: 'إلى' },
+        { key: 'overtime_hours', label: 'الساعات' },
+        { key: 'overtime_name', label: 'النوع' },
+        { key: 'amount', label: 'المبلغ' },
+        { key: 'details', label: 'التفاصيل' },
+        { key: 'overtime_attachement', label: 'المرفق' }
+      ];
+
+      function viewAttachment(ref){
+        window.open(scriptUrl + '?download=attachment&page=vf_hr_overtime&ref=' + encodeURIComponent(ref) + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN), '_blank');
+      }
+      window._vfViewAttachment = viewAttachment;
+
+      var headers = cols.map(function (c) { return c.label; });
+      headers.push('إجراءات / Actions');
+      var tableRows = rows.map(function (r) {
+        var rowCells = cols.map(function (c) {
+          var val = r[c.key];
+          if (c.key === 'date') return fmtDate(val);
+          if (c.key === 'amount') return (val != null) ? Number(val).toFixed(2) : '-';
+          if (c.key === 'overtime_attachement') return val ? esc(String(val).split('/').pop()) : '-';
+          return val != null ? val : '';
+        });
+        var hasAtt = !!r.overtime_attachement;
+        var actions = UIC.actionDropdown([
+          { label: '👁️ عرض / View', onclick: "OT_PAGE.viewOvertimeById('" + esc(r.unique_id||r.emp_id+'_'+r.date).replace(/\'/g, "\\\'") + "')" },
+          hasAtt ? { label: '📎 عرض المرفق / View Attachment', onclick: "OT_PAGE.viewAttachment('" + esc(r.overtime_attachement).replace(/\'/g, "\\\'") + "')" } : null,
+          { label: '🖨️ طباعة / Print', onclick: "OT_PAGE.printRow('" + esc(r.unique_id||'').replace(/\'/g, "\\\'") + "')" },
+          IS_SUPER_ADMIN ? { label: '✏️ تعديل / Edit', onclick: "OT_PAGE.openAddModal({emp_id:'" + esc(r.emp_id).replace(/\'/g, "\\\'") + "'})" } : null,
+          IS_SUPER_ADMIN ? { label: '🗑️ حذف / Delete', color: '#dc2626', onclick: "OT_PAGE.deleteRow('" + esc(r.unique_id).replace(/\'/g, "\\\'") + "')" } : null
+        ].filter(Boolean));
+        rowCells.push(actions);
+        return rowCells;
+      });
+
+      document.getElementById('ot-table-wrap').innerHTML = UIC.dataTable(OT_TABLE_ID, {
+        headers: headers,
+        rows: tableRows
+      });
+
+      UIC.initTableSort(OT_TABLE_ID);
+
+      setTimeout(function () {
+        var trs = document.querySelectorAll('#' + OT_TABLE_ID + ' tbody tr');
+        trs.forEach(function (tr, i) {
+          tr.style.cursor = 'pointer';
+          tr.addEventListener('click', function () { OT_PAGE.viewOvertime(rows[i]); });
+        });
+      }, 100);
+    }
+
+    function filterRows(q) {
+      q = (q || '').toLowerCase();
+      if (!q) return OT_PAGE._allRows || [];
+      return (OT_PAGE._allRows || []).filter(function (r) {
+        return (r.emp_id || '').toLowerCase().indexOf(q) !== -1 ||
+               (r.name_ar || '').toLowerCase().indexOf(q) !== -1 ||
+               (r.overtime_name || '').toLowerCase().indexOf(q) !== -1 ||
+               (r.details || '').toLowerCase().indexOf(q) !== -1;
+      });
+    }
+
+    function renderBody() {
+      var body = '<form id="ot-form">';
+      body += '<div id="ot-f-emp-wrap"></div>';
+      body += '<div id="ot-f-date-wrap"></div>';
+      body += '<div id="ot-f-type-wrap"></div>';
+      body += '<div id="ot-f-time-wrap" style="display:flex;gap:12px;"><div id="ot-f-start-wrap" style="flex:1;"></div><div id="ot-f-end-wrap" style="flex:1;"></div></div>';
+      body += '<div id="ot-f-amount-wrap"></div>';
+      body += '<div id="ot-f-details-wrap"></div>';
+      body += '<div id="ot-f-file-wrap"></div>';
+      body += '</form>';
+      return body;
+    }
+
+    // — TC-style helper — shared upload like RegistrationPapers.html:46 —
+    function uploadSelectedFile(formEl, meta){
+      var input = formEl.querySelector('input[type=file]');
+      if (!input || !input.files || !input.files[0]) return Promise.resolve('');
+      var file = input.files[0];
+      return new Promise(function(resolve, reject){
+        var reader = new FileReader();
+        reader.onerror = function(){ reject(new Error('خطأ في قراءة الملف')); };
+        reader.onload = function(){
+          var b64 = String(reader.result||'').split(',')[1]||'';
+          companyCall('add_upload_file', { sheet: meta.sheet, filename: file.name, base64: b64 })
+            .then(function(res){ if(res && res.status==='success') resolve(res.reference); else reject(new Error((res&&res.message)||'خطأ في رفع الملف')); })
+            .catch(function(err){ reject(new Error((err&&err.message)||'خطأ في رفع الملف')); });
+        };
+        reader.readAsDataURL(file);
+      });
+    }
+
+    // — Form uses DIRECT keys like TopChemical (emp_id, date, overtime_type, start_time, end_time, amount, details) so UIC.collectForm maps 1:1 to backend —
+    // Searchable employee: UIC.combo filters by label (code — name_ar) client-side, stores value=emp_id
+    function buildModalFields(prefill) {
+      var data = prefill || {};
+
+      // searchable employee — placeholder emphasizes search + stores emp_id
+      document.getElementById('ot-f-emp-wrap').innerHTML = UIC.combo({
+        key: 'emp_id',
+        label: 'الموظف (ابحث بالاسم أو الكود)',
+        required: true,
+        placeholder: 'اكتب للبحث…',
+        options: empOptions.map(function (o) {
+          return { value: o.value, label: o.label };
+        }),
+        value: data.emp_id || ''
+      });
+
+      document.getElementById('ot-f-date-wrap').innerHTML = UIC.field({
+        key: 'date',
+        label: 'التاريخ',
+        type: 'date',
+        required: true,
+        value: data.date || todayStr()
+      });
+
+      var typeOptions = roleOptions.map(function (o) {
+        return { value: o.value, label: o.label, moneyRelated: o.moneyRelated, vacationDays: o.vacationDays, rate: o.rate };
+      });
+
+      document.getElementById('ot-f-type-wrap').innerHTML = UIC.combo({
+        key: 'overtime_type',
+        label: 'نوع العمل الإضافي',
+        required: true,
+        placeholder: 'اختر النوع',
+        options: typeOptions,
+        value: data.overtime_type || ''
+      });
+
+      document.getElementById('ot-f-start-wrap').innerHTML = UIC.field({
+        key: 'start_time',
+        label: 'من',
+        type: 'time',
+        required: true,
+        value: data.start_time || '17:00'
+      });
+
+      document.getElementById('ot-f-end-wrap').innerHTML = UIC.field({
+        key: 'end_time',
+        label: 'إلى',
+        type: 'time',
+        required: true,
+        value: data.end_time || '18:00'
+      });
+
+      var selectedType = null;
+      if (data.overtime_type) {
+        selectedType = roleOptions.find(function (o) { return o.value === data.overtime_type; }) || null;
+      }
+
+      var isMoney = selectedType && selectedType.moneyRelated;
+      document.getElementById('ot-f-amount-wrap').innerHTML = UIC.field({
+        key: 'amount',
+        label: 'المبلغ',
+        type: 'number',
+        required: !!isMoney,
+        value: data.amount || '',
+        disabled: !isMoney
+      });
+
+      document.getElementById('ot-f-details-wrap').innerHTML = UIC.field({
+        key: 'details',
+        label: 'التفاصيل',
+        type: 'textarea',
+        required: true,
+        value: data.details || ''
+      });
+
+      document.getElementById('ot-f-file-wrap').innerHTML = UIC.fileField({
+        key: 'file',
+        label: 'المرفق (مطلوب)',
+        accept: '.pdf,.doc,.docx,.png,.jpg,.jpeg'
+      });
+
+      var timeWrap = document.getElementById('ot-f-time-wrap');
+      var amountWrap = document.getElementById('ot-f-amount-wrap');
+      var startInputInit = document.getElementById('start_time');
+      var endInputInit = document.getElementById('end_time');
+      var amountInputInit = document.getElementById('amount');
+      if (isMoney) {
+        if (timeWrap) timeWrap.style.display = 'none';
+        if (amountWrap) amountWrap.style.display = '';
+        if (startInputInit) { startInputInit.value = ''; startInputInit.removeAttribute('required'); }
+        if (endInputInit) { endInputInit.value = ''; endInputInit.removeAttribute('required'); }
+        if (amountInputInit) { amountInputInit.setAttribute('required', 'required'); amountInputInit.disabled = false; }
+      } else {
+        if (timeWrap) timeWrap.style.display = '';
+        if (amountWrap) amountWrap.style.display = 'none';
+        if (amountInputInit) { amountInputInit.value = ''; amountInputInit.removeAttribute('required'); amountInputInit.disabled = true; }
+      }
+
+      var typeCombo = document.querySelector('[data-field-key="overtime_type"]');
+      if (typeCombo) {
+        typeCombo.addEventListener('change', function () {
+          var val = typeCombo.value;
+          var match = roleOptions.find(function (o) { return o.value === val; });
+          var isM = match && match.moneyRelated;
+          var tw = document.getElementById('ot-f-time-wrap');
+          var aw = document.getElementById('ot-f-amount-wrap');
+          var startInput = document.getElementById('start_time');
+          var endInput = document.getElementById('end_time');
+          var amountInput = document.getElementById('amount');
+          if (isM) {
+            if (tw) tw.style.display = 'none';
+            if (aw) aw.style.display = '';
+            if (startInput) { startInput.value = ''; startInput.removeAttribute('required'); }
+            if (endInput) { endInput.value = ''; endInput.removeAttribute('required'); }
+            if (amountInput) { amountInput.setAttribute('required', 'required'); amountInput.disabled = false; }
+          } else {
+            if (tw) tw.style.display = '';
+            if (aw) aw.style.display = 'none';
+            if (startInput) startInput.setAttribute('required', 'required');
+            if (endInput) endInput.setAttribute('required', 'required');
+            if (amountInput) { amountInput.removeAttribute('required'); amountInput.value = ''; amountInput.disabled = true; }
+          }
+        });
+      }
+    }
+
+    function openModal(prefill) {
+      var modalId = 'ot-modal';
+      UIC.openModal(modalId, {
+        title: 'إضافة عمل إضافي',
+        body: renderBody(),
+        onSave: 'OT_PAGE.saveOvertime()'
+      });
+      buildModalFields(prefill);
+    }
+
+    function saveOvertime() {
+      // TC-style: validate, then TC-like amount guard, then shared upload helper
+      var formId = 'ot-form';
+      if (!UIC.validateForm(formId)) return;
+      var data = UIC.collectForm(formId);
+      // keep conditional: money types require amount (mirrors backend 1461)
+      var selType = data.overtime_type;
+      var match = null;
+      for(var i=0;i<roleOptions.length;i++){ if(String(roleOptions[i].value)===String(selType)){ match=roleOptions[i]; break; } }
+      var isMoney = match && match.moneyRelated;
+      if (isMoney) {
+        data.start_time = '';
+        data.end_time = '';
+      } else {
+        data.amount = '';
+      }
+      if (isMoney && !(Number(data.amount) > 0)) {
+        UIC.toast('المبلغ مطلوب لهذا النوع', 'error');
+        return;
+      }
+      if (!isMoney && (!data.start_time || !data.end_time)) {
+        UIC.toast('وقت البداية والنهاية مطلوب', 'error');
+        return;
+      }
+      // normalize amount numeric (TC does Number()||0)
+      if (data.amount) data.amount = parseFloat(data.amount) || 0;
+
+      UI.showSpinner('جاري الحفظ…');
+      var formEl = document.getElementById('ot-form');
+      uploadSelectedFile(formEl, { sheet: 'valley_emp_overtime' })
+        .then(function(ref){
+          if (ref) data.overtime_attachement = ref;
+          return companyCall('add_overtime', data);
+        }).then(function(res){
+          if (res && res.error) { UIC.toast('خطأ: ' + res.error, 'error'); return; }
+          UIC.toast((res && res.message) || 'تم الحفظ بنجاح', 'success');
+          UIC.closeModal('ot-modal');
+          if (res && res.record) {
+            var RECENT_LIMIT = 10;
+            if (!OT_PAGE._allRows) OT_PAGE._allRows = [];
+            var idxOT = OT_PAGE._allRows.findIndex(function(x){ return String(x.unique_id)===String(res.record.unique_id); });
+            if (idxOT!==-1) OT_PAGE._allRows[idxOT]=res.record; else OT_PAGE._allRows.unshift(res.record);
+            if (OT_PAGE._allRows.length>RECENT_LIMIT) OT_PAGE._allRows.pop();
+            buildTable(OT_PAGE._allRows);
+          } else { loadData(); }
+        }).catch(function(e){
+          UIC.toast((e && e.message) ? e.message : 'حدث خطأ', 'error');
+        }).finally(function(){ UI.hideSpinner(); });
+    }
+
+    function loadData() {
+      UI.showSpinner();
+      companyCall('get_overtime_data')
+        .then(function (res) {
+          OT_PAGE._allRows = res.rows || [];
+          empOptions = res.employee_options || [];
+          roleOptions = res.role_options || [];
+          renderToolbar();
+          buildTable( try{schedulePrefetch();}catch(e){}OT_PAGE._allRows);
+        })
+        .catch(function (e) {
+          content.innerHTML = '<div style="padding:20px;color:red;">حدث خطأ في تحميل البيانات: ' + esc(e.message || e) + '</div>';
+        })
+        .finally(function () {
+          UI.hideSpinner();
+        });
+    }
+
+    function viewOvertime(row) {
+      var attBtn = row.overtime_attachement
+        ? '<button class="btn btn-outline" style="padding:6px 12px;" onclick="OT_PAGE.viewAttachment(\'' + esc(row.overtime_attachement).replace(/\'/g, "\\\'") + '\')">📎 عرض — ' + esc(String(row.overtime_attachement).split("/").pop()) + '</button>'
+        : 'لا يوجد';
+      var body = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 16px;font-size:14px;">' +
+        '<div><b>الموظف:</b> ' + esc(row.name_ar) + ' (#' + esc(row.emp_id) + ')</div>' +
+        '<div><b>التاريخ:</b> ' + fmtDate(row.date) + '</div>' +
+        '<div><b>النوع:</b> ' + esc(row.overtime_name || row.overtime_type) + '</div>' +
+        '<div><b>من:</b> ' + esc(row.start_time || '-') + ' — <b>إلى:</b> ' + esc(row.end_time || '-') + '</div>' +
+        '<div><b>الساعات:</b> ' + (row.overtime_hours || '-') + '</div>' +
+        '<div><b>المبلغ:</b> ' + (row.amount || '-') + '</div>' +
+        '<div style="grid-column:1/-1;"><b>التفاصيل:</b> ' + esc(row.details || '-') + '</div>' +
+        '<div style="grid-column:1/-1;display:flex;align-items:center;gap:10px;"><b>المرفق:</b> ' + attBtn + '</div>' +
+        '<div><b>المسؤول:</b> ' + esc(row.user || '-') + '</div>' +
+        '<div><b>أنشأ:</b> ' + esc(row.created_at || '-') + '</div>' +
+        '</div>';
+      UIC.openModal('ot-view-modal', { title: 'تفاصيل العمل الإضافي', body: body });
+    }
+
+    window.OT_PAGE = {
+      _allRows: [],
+      openAddModal: function () { openModal(); },
+      saveOvertime: saveOvertime,
+      viewOvertime: viewOvertime,
+      viewOvertimeById: function(uid){
+        var row = (OT_PAGE._allRows||[]).find(function(x){ return String(x.unique_id)===String(uid) || String(x.emp_id+'_'+x.date)===String(uid); });
+        if(row) viewOvertime(row);
+      },
+      deleteRow: function(uid){
+        if(!UIC.canFull_()){ UIC.toast('غير مصرح / Not authorized','error'); return; }
+        if(!confirm('هل تريد حذف هذا السجل؟ / Delete this record?')) return;
+        UI.showSpinner(); companyCall('delete_overtime', { unique_id: uid }).then(function(r){ UIC.toast(r.message||'تم الحذف / Deleted','success'); loadData(); }).catch(function(e){ UIC.toast(e.message||'خطأ','error'); }).finally(function(){ UI.hideSpinner(); });
+      },
+      printRow: function(uid){ window.print(); },
+      viewAttachment: function(ref){ window.open(scriptUrl + '?download=attachment&page=vf_hr_overtime&ref=' + encodeURIComponent(ref) + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN), '_blank'); },
+      filter: function (q) { buildTable(filterRows(q)); }
+    };
+
+    loadData();
+  })();
+  </script>
+</body>
+</html>
+
+

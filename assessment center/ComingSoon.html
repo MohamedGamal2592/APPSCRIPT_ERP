@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <base target="_top">
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Coming Soon</title>
+    <?!= include('CSS'); ?>
+  </head>
+  <body>
+
+    <!-- Navbar -->
+    <nav class="navbar navbar-expand-lg navbar-dark bg-primary shadow-sm">
+      <div class="container">
+        <a class="navbar-brand" href="<?= scriptUrl ?>?action=dashboard">
+          <i class="bi bi-mortarboard-fill"></i> Assessment Platform
+        </a>
+        <div class="collapse navbar-collapse" id="navbarNav">
+          <ul class="navbar-nav ms-auto">
+            <li class="nav-item">
+              <a href="<?= scriptUrl ?>?action=dashboard" class="btn btn-outline-light btn-sm">
+                <i class="bi bi-arrow-left"></i> Back to Dashboard
+              </a>
+            </li>
+          </ul>
+        </div>
+      </div>
+    </nav>
+
+    <!-- Main Content -->
+    <div class="container mt-5 text-center">
+      <i class="bi bi-hourglass-split text-primary" style="font-size: 4rem;"></i>
+      <h2 class="mt-3 text-primary"><?= pageTitle ?></h2>
+      <p class="text-muted">This page is currently under construction and will be available soon.</p>
+      <p class="text-muted">هذه الصفحة قيد الإنشاء وستكون متاحة قريبًا.</p>
+      
+      <a href="<?= scriptUrl ?>?action=dashboard" class="btn btn-primary mt-3">
+        <i class="bi bi-house-door"></i> Return to Dashboard
+      </a>
+    </div>
+
+  </body>
+</html>

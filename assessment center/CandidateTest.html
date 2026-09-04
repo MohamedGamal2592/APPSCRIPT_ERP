@@ -1,0 +1,598 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <base target="_top">
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Assessment Test</title>
+    <?!= include('CSS'); ?>
+    <style>
+      /* Page-specific styles only — colors, fonts, buttons, cards, and
+         forms all come from the shared CSS.html design system now.
+         Everything below is unique to the test-taking flow: the
+         question crossfade, the choice-card states, and the timer. */
+      .test-container { max-width: 750px; margin: 40px auto; padding: 0 15px; }
+
+      /* ==========================================
+         QUESTION TRANSITIONS
+         Slower, deliberate crossfade — and a hard
+         lock so rapid clicking can't skip the
+         animation mid-flight.
+         ========================================== */
+      .question-box {
+        display: none;
+        opacity: 0;
+        transform: translateY(14px);
+      }
+      .question-box.active {
+        display: block;
+        animation: fadeInUp 0.62s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+      }
+      .question-box.leaving {
+        display: block;
+        animation: fadeOutDown 0.28s ease forwards;
+      }
+      @keyframes fadeInUp {
+        from { opacity: 0; transform: translateY(14px); }
+        to   { opacity: 1; transform: translateY(0); }
+      }
+      @keyframes fadeOutDown {
+        from { opacity: 1; transform: translateY(0); }
+        to   { opacity: 0; transform: translateY(-8px); }
+      }
+
+      /* ==========================================
+         CHOICE CARDS — higher-contrast states
+         ========================================== */
+      .option-card {
+        display: flex; align-items: center; gap: 16px;
+        padding: 18px 20px; border: 2px solid var(--bs-border-color);
+        border-radius: 12px; cursor: pointer; transition: border-color 0.15s ease, background-color 0.15s ease, box-shadow 0.15s ease;
+        background-color: #ffffff; font-weight: 500; color: var(--bs-body-color);
+        margin-bottom: 12px; position: relative;
+      }
+      .option-card:hover {
+        border-color: var(--bs-primary-tint-border);
+        background-color: var(--bs-primary-tint);
+      }
+      .option-card:focus-within {
+        outline: 3px solid var(--bs-primary-tint-border);
+        outline-offset: 1px;
+      }
+      .option-card input { display: none; }
+
+      .radio-dot {
+        width: 22px; height: 22px; border-radius: 50%;
+        border: 2px solid #9fb2b6; flex-shrink: 0; background: #ffffff;
+        transition: border-color 0.15s ease;
+        position: relative;
+      }
+      .option-card input:checked ~ .radio-dot {
+        border-color: var(--bs-primary);
+      }
+      .option-card input:checked ~ .radio-dot::after {
+        content: ''; position: absolute; top: 50%; left: 50%;
+        transform: translate(-50%, -50%) scale(1);
+        width: 12px; height: 12px; border-radius: 50%;
+        background-color: var(--bs-primary);
+        animation: popIn 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+      }
+      .option-card input:checked ~ .option-text {
+        color: var(--bs-primary-hover); font-weight: 700;
+      }
+      .option-card:has(input:checked) {
+        border-color: var(--bs-primary);
+        background-color: var(--bs-primary-tint);
+        box-shadow: 0 2px 8px rgba(var(--bs-primary-rgb), 0.15);
+      }
+      @keyframes popIn { 0% { transform: translate(-50%, -50%) scale(0); } 100% { transform: translate(-50%, -50%) scale(1); } }
+
+      /* Most/Least matrix radios: recolor default bootstrap blue check to brand */
+      .most-radio:checked, .least-radio:checked {
+        background-color: var(--bs-primary);
+        border-color: var(--bs-primary);
+      }
+
+      /* ==========================================
+         MOST/LEAST TABLE — header band + larger,
+         higher-contrast choice circles
+         ========================================== */
+      .most-least-table thead th {
+        background-color: var(--bs-primary-hover);
+        color: #ffffff;
+        font-weight: 800;
+        font-size: 0.95rem;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        padding: 16px 10px;
+        border: none;
+        text-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+      }
+      .most-least-table thead th small {
+        display: inline-block;
+        margin-top: 4px;
+        color: #ffffff;
+        font-weight: 600;
+        font-size: 0.78rem;
+        text-transform: none;
+        letter-spacing: normal;
+        text-shadow: none;
+        opacity: 0.95;
+      }
+      .most-least-table thead tr:first-child th:first-child {
+        border-top-left-radius: 10px;
+      }
+      .most-least-table thead tr:first-child th:last-child {
+        border-top-right-radius: 10px;
+      }
+      .most-least-table tbody tr:hover {
+        background-color: var(--bs-primary-tint);
+      }
+      .most-least-table td {
+        border-color: var(--bs-border-color) !important;
+      }
+
+      /* Custom-drawn radio circle (native input, styled) — bigger target,
+         a visible border at rest, and an unmistakable filled/ringed state
+         when checked. */
+      .most-radio, .least-radio {
+        appearance: none; -webkit-appearance: none;
+        width: 26px; height: 26px;
+        border: 2.5px solid #8fa3a7;
+        border-radius: 50%;
+        background-color: #ffffff;
+        cursor: pointer;
+        margin: 0;
+        position: relative;
+        transition: border-color 0.15s ease, box-shadow 0.15s ease;
+      }
+      .most-radio:hover, .least-radio:hover {
+        border-color: var(--bs-primary);
+      }
+      .most-radio:checked, .least-radio:checked {
+        border-color: var(--bs-primary);
+        box-shadow: 0 0 0 3px var(--bs-primary-tint);
+      }
+      .most-radio:checked::after, .least-radio:checked::after {
+        content: '';
+        position: absolute; top: 50%; left: 50%;
+        transform: translate(-50%, -50%);
+        width: 13px; height: 13px;
+        border-radius: 50%;
+        background-color: var(--bs-primary);
+      }
+
+      /* Timer & Navigation Bar */
+      .timer-bar { position: sticky; top: 15px; z-index: 1000; }
+      .btn:disabled { opacity: 0.5; cursor: not-allowed; box-shadow: none !important; }
+
+      #timerDisplay {
+        background-color: #eef2f1 !important;
+        color: var(--bs-body-color) !important;
+        font-variant-numeric: tabular-nums;
+      }
+      #timerDisplay.time-low {
+        background-color: #f6ebd9 !important;
+        color: var(--bs-warning) !important;
+      }
+      #progressDisplay {
+        background-color: #eef2f1 !important;
+        color: var(--bs-secondary-color) !important;
+      }
+
+      /* Thin progress bar under the header for at-a-glance orientation */
+      .progress-track {
+        height: 4px; background: #eef2f1; border-radius: 2px; overflow: hidden;
+      }
+      .progress-fill {
+        height: 100%; background: var(--bs-primary); transition: width 0.4s ease;
+      }
+
+      .success-icon { color: var(--bs-success) !important; }
+    </style>
+  </head>
+  <body>
+
+    <div class="container test-container">
+
+      <!-- Alert Area -->
+      <div id="alertMsg" class="alert alert-danger d-none" role="alert"></div>
+
+      <!-- SCREEN 1: Welcome & Email Entry -->
+      <div id="welcomeScreen" class="card shadow-sm border-0 rounded-3">
+        <div class="card-body p-5 text-center">
+          <h3 class="text-primary mb-3"><i class="bi bi-mortarboard-fill"></i> Assessment Platform</h3>
+          <p class="text-muted">Please enter your email to begin your assessment.</p>
+          <p class="text-muted small">برجاء إدخال البريد الإلكتروني لبدء التقييم</p>
+
+          <div class="form-floating mb-3 mt-4">
+            <input type="email" class="form-control" id="emailInput" placeholder="name@example.com">
+            <label for="emailInput">Email Address / البريد الإلكتروني</label>
+          </div>
+
+          <button class="btn btn-primary btn-lg w-100" id="startBtn" onclick="startTest()">
+            <i class="bi bi-play-fill"></i> Start Assessment / ابدأ
+          </button>
+        </div>
+      </div>
+
+      <!-- SCREEN 2: The Test -->
+      <div id="testScreen" style="display: none;">
+
+        <!-- Timer -->
+        <div class="card shadow-sm border-0 rounded-3 mb-4 timer-bar">
+          <div class="card-body p-3">
+            <div class="d-flex justify-content-between align-items-center mb-2">
+              <h5 class="mb-0 text-primary" id="assessmentTitle">Assessment</h5>
+              <div class="d-flex gap-2">
+                <span class="badge fs-6" id="timerDisplay">--:--</span>
+                <span class="badge fs-6" id="progressDisplay">Q 1 / X</span>
+              </div>
+            </div>
+            <div class="progress-track">
+              <div class="progress-fill" id="progressFill" style="width: 0%;"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Questions Container -->
+        <div id="questionsContainer"></div>
+
+        <!-- Navigation Buttons -->
+        <div class="d-flex justify-content-between mt-4 mb-5">
+          <button class="btn btn-outline-secondary" id="prevBtn" onclick="changeQuestion(-1)" style="display: none;">
+            <i class="bi bi-arrow-left"></i> Previous
+          </button>
+          <button class="btn btn-primary" id="nextBtn" onclick="changeQuestion(1)" disabled>
+            Next <i class="bi bi-arrow-right"></i>
+          </button>
+          <button class="btn btn-success" id="submitBtn" onclick="submitTest()" style="display: none;" disabled>
+            <i class="bi bi-check-circle-fill"></i> Submit Test
+          </button>
+        </div>
+      </div>
+
+      <!-- SCREEN 3: Completion Page -->
+      <div id="completionScreen" style="display: none;">
+        <div class="card shadow-sm border-0 rounded-3 overflow-hidden">
+          <div class="card-body p-5 text-center">
+            <div class="mb-4">
+              <i class="bi bi-patch-check-fill success-icon" style="font-size: 5rem;"></i>
+            </div>
+            <h2 class="mb-3" style="color: var(--bs-success);">Assessment Submitted!</h2>
+            <p class="lead">Thank you, <strong id="candidateNameDisplay"></strong>.</p>
+            <p class="text-muted">Your responses for the <strong id="assessmentNameDisplay"></strong> assessment have been securely recorded.</p>
+            <hr class="my-4">
+            <p class="text-muted small mb-1">تم تسليم التقييم بنجاح. شكراً لك.</p>
+            <p class="text-muted small">You may now close this browser window. No further action is required.</p>
+            <div class="alert mt-4 d-inline-block" style="background-color: var(--bs-primary-tint); color: var(--bs-primary-hover); border: 1px solid var(--bs-primary-tint-border);" role="alert">
+              <i class="bi bi-info-circle-fill me-2"></i>
+              If you have any questions regarding your results, please contact the HR representative who sent you this link.
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+
+    <script>
+      const scriptUrl = '<?= scriptUrl ?>';
+      const token = '<?= token ?>';
+      let currentAssessment = null;
+      let questions = [];
+      let currentQIndex = 0;
+      let answers = {};
+      let assignmentId = null;
+      let timerInterval = null;
+      let timeLeft = 0;
+
+      // Transition lock: prevents rapid-fire clicking from skipping
+      // the fade animation or double-triggering a question change.
+      let isTransitioning = false;
+      const TRANSITION_MS = 320; // must be >= the fadeOutDown duration above
+
+      function showAlert(msg) {
+        const a = document.getElementById('alertMsg');
+        a.className = 'alert alert-danger';
+        a.innerText = msg;
+        a.style.display = 'block';
+      }
+
+      function startTest() {
+        const email = document.getElementById('emailInput').value.trim();
+        if (!email) return showAlert('Please enter your email.');
+
+        const btn = document.getElementById('startBtn');
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Loading...';
+        btn.disabled = true;
+
+        google.script.run
+          .withSuccessHandler(function(data) {
+            if (data.status === 'success') {
+              assignmentId = data.assignmentId;
+              currentAssessment = data.assessment;
+              questions = data.questions;
+
+              document.getElementById('welcomeScreen').style.display = 'none';
+              document.getElementById('testScreen').style.display = 'block';
+              document.getElementById('assessmentTitle').innerText = currentAssessment.Title;
+
+              renderQuestions();
+              showQuestion(0, false);
+
+              timeLeft = parseInt(currentAssessment.TimeLimitMinutes) * 60;
+              startTimer();
+            } else {
+              showAlert(data.message);
+              btn.innerHTML = '<i class="bi bi-play-fill"></i> Start Assessment / ابدأ';
+              btn.disabled = false;
+            }
+          })
+          .withFailureHandler(function(err) {
+            showAlert(err.message);
+            btn.innerHTML = '<i class="bi bi-play-fill"></i> Start Assessment / ابدأ';
+            btn.disabled = false;
+          })
+          .uiStartTest(token, email);
+      }
+
+      function renderQuestions() {
+        const container = document.getElementById('questionsContainer');
+        container.innerHTML = '';
+
+        questions.forEach((q, index) => {
+          const div = document.createElement('div');
+          div.className = 'card shadow-sm border-0 rounded-3 mb-3 question-box';
+          div.id = 'q_' + index;
+
+          let optionsHTML = '';
+          if (q.QuestionType === 'OpenText') {
+            optionsHTML = `<textarea class="form-control form-control-lg mt-3" rows="4" placeholder="Type your answer here..." oninput="saveAnswer('${q.QuestionID}', this.value)"></textarea>`;
+          } else if (q.QuestionType === 'MostLeast') {
+            if (!q.OptionsArray || q.OptionsArray.length === 0) {
+              optionsHTML = `<div class="alert alert-warning mt-3"><i class="bi bi-exclamation-triangle-fill"></i> No options were provided for this question.</div>`;
+            } else {
+              optionsHTML = `
+                <div class="table-responsive mt-3">
+                  <table class="table table-borderless align-middle most-least-table">
+                    <thead>
+                      <tr class="text-center small">
+                        <th style="width: 60%;"></th>
+                        <th>Most Like Me<br><small>(أكثر شبهاً بي)</small></th>
+                        <th>Least Like Me<br><small>(أقل شبهاً بي)</small></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+              `;
+              q.OptionsArray.forEach(opt => {
+                const safeOptId = opt.replace(/[^a-zA-Z0-9]/g, '');
+                optionsHTML += `
+                  <tr class="border-bottom">
+                    <td class="py-3">${opt}</td>
+                    <td class="text-center py-3">
+                      <div class="form-check d-inline-block">
+                        <input class="form-check-input most-radio" type="radio" name="most_${q.QuestionID}" id="most_${q.QuestionID}_${safeOptId}" value="${opt.replace(/"/g, '&quot;')}" onchange="handleMostLeast('${q.QuestionID}')">
+                        <label class="form-check-label" for="most_${q.QuestionID}_${safeOptId}"></label>
+                      </div>
+                    </td>
+                    <td class="text-center py-3">
+                      <div class="form-check d-inline-block">
+                        <input class="form-check-input least-radio" type="radio" name="least_${q.QuestionID}" id="least_${q.QuestionID}_${safeOptId}" value="${opt.replace(/"/g, '&quot;')}" onchange="handleMostLeast('${q.QuestionID}')">
+                        <label class="form-check-label" for="least_${q.QuestionID}_${safeOptId}"></label>
+                      </div>
+                    </td>
+                  </tr>
+                `;
+              });
+              optionsHTML += `</tbody></table></div>`;
+            }
+          } else {
+            if (!q.OptionsArray || q.OptionsArray.length === 0) {
+              optionsHTML = `<div class="alert alert-warning mt-3"><i class="bi bi-exclamation-triangle-fill"></i> No options were provided for this question.</div>`;
+            } else {
+              optionsHTML = '<div class="mt-3">';
+              q.OptionsArray.forEach(opt => {
+                const safeOptId = opt.replace(/[^a-zA-Z0-9]/g, '');
+                optionsHTML += `
+                  <label class="option-card" for="opt_${q.QuestionID}_${safeOptId}">
+                    <input type="radio" name="q_${q.QuestionID}" id="opt_${q.QuestionID}_${safeOptId}" value="${opt.replace(/"/g, '&quot;')}" onchange="saveAnswer('${q.QuestionID}', this.value)">
+                    <span class="radio-dot"></span>
+                    <span class="option-text">${opt}</span>
+                  </label>
+                `;
+              });
+              optionsHTML += '</div>';
+            }
+          }
+
+          div.innerHTML = `
+            <div class="card-body p-4 p-md-5">
+              <span class="badge bg-primary-soft mb-3 fs-6">Question ${index + 1}</span>
+              <h4 class="card-title mb-4 fw-bold">${q.QuestionText} <span class="text-danger">*</span></h4>
+              ${optionsHTML}
+            </div>
+          `;
+          container.appendChild(div);
+        });
+      }
+
+      // showQuestion now supports a crossfade: the outgoing question
+      // plays a short fade-out, then the incoming question fades in.
+      // While that's happening, isTransitioning blocks further clicks.
+      function showQuestion(index, animate = true) {
+        const doSwap = () => {
+          document.querySelectorAll('.question-box').forEach(el => {
+            el.classList.remove('active', 'leaving');
+          });
+          const nextEl = document.getElementById('q_' + index);
+          if (nextEl) nextEl.classList.add('active');
+
+          document.getElementById('progressDisplay').innerText = `Q ${index + 1} / ${questions.length}`;
+          const pct = ((index + 1) / questions.length) * 100;
+          document.getElementById('progressFill').style.width = pct + '%';
+
+          document.getElementById('prevBtn').style.display = index > 0 ? 'inline-flex' : 'none';
+          document.getElementById('nextBtn').style.display = index < questions.length - 1 ? 'inline-flex' : 'none';
+          document.getElementById('submitBtn').style.display = index === questions.length - 1 ? 'inline-flex' : 'none';
+
+          updateNavButtons();
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+
+          setTimeout(() => { isTransitioning = false; }, TRANSITION_MS);
+        };
+
+        if (!animate) { doSwap(); return; }
+
+        const currentEl = document.querySelector('.question-box.active');
+        if (currentEl) {
+          isTransitioning = true;
+          currentEl.classList.remove('active');
+          currentEl.classList.add('leaving');
+          setTimeout(doSwap, TRANSITION_MS);
+        } else {
+          doSwap();
+        }
+      }
+
+      function changeQuestion(direction) {
+        if (isTransitioning) return; // ignore rapid double-clicks mid-animation
+        const target = currentQIndex + direction;
+        if (target < 0 || target > questions.length - 1) return;
+        currentQIndex = target;
+        showQuestion(currentQIndex);
+      }
+
+      function saveAnswer(questionId, value) {
+        answers[questionId] = value;
+        updateNavButtons();
+      }
+
+      function handleMostLeast(questionId) {
+        const mostSelected = document.querySelector(`input[name="most_${questionId}"]:checked`);
+        const leastSelected = document.querySelector(`input[name="least_${questionId}"]:checked`);
+
+        if (mostSelected && leastSelected && mostSelected.value === leastSelected.value) {
+          alert('You cannot select the same statement for both Most and Least.');
+          leastSelected.checked = false;
+          return;
+        }
+
+        if (mostSelected && leastSelected) {
+          const answerObj = { most: mostSelected.value, least: leastSelected.value };
+          saveAnswer(questionId, JSON.stringify(answerObj));
+        } else {
+          answers[questionId] = '';
+          updateNavButtons();
+        }
+      }
+
+      function updateNavButtons() {
+        const currentQ = questions[currentQIndex];
+        const isAnswered = answers[currentQ.QuestionID] && String(answers[currentQ.QuestionID]).trim() !== '';
+
+        const nextBtn = document.getElementById('nextBtn');
+        const submitBtn = document.getElementById('submitBtn');
+
+        if (!isAnswered) {
+          nextBtn.setAttribute('disabled', 'true');
+          submitBtn.setAttribute('disabled', 'true');
+        } else {
+          nextBtn.removeAttribute('disabled');
+          submitBtn.removeAttribute('disabled');
+        }
+      }
+
+      function startTimer() {
+        if (timerInterval) clearInterval(timerInterval);
+        updateTimerDisplay();
+        timerInterval = setInterval(function() {
+          timeLeft--;
+          updateTimerDisplay();
+          if (timeLeft <= 0) {
+            clearInterval(timerInterval);
+            alert('Time is up! Submitting your test.');
+            submitTest(true);
+          }
+        }, 1000);
+      }
+
+      function updateTimerDisplay() {
+        const mins = Math.floor(timeLeft / 60);
+        const secs = timeLeft % 60;
+        const el = document.getElementById('timerDisplay');
+        el.innerText = `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+        el.classList.toggle('time-low', timeLeft <= 60);
+      }
+
+      function submitTest(isTimeout = false) {
+        if (!isTimeout) {
+          let unanswered = questions.filter(q => !answers[q.QuestionID] || String(answers[q.QuestionID]).trim() === '');
+          if (unanswered.length > 0) {
+            const firstUnansweredIndex = questions.findIndex(q => !answers[q.QuestionID] || String(answers[q.QuestionID]).trim() === '');
+            currentQIndex = firstUnansweredIndex;
+            showQuestion(currentQIndex);
+            alert('You must answer all questions before submitting. Question ' + (firstUnansweredIndex + 1) + ' is unanswered.');
+            return;
+          }
+          if (!confirm('Are you sure you want to submit the test? You cannot change your answers later.')) return;
+        }
+
+        clearInterval(timerInterval);
+
+        let answersArray = [];
+        questions.forEach(q => {
+          answersArray.push({ questionId: q.QuestionID, answer: answers[q.QuestionID] || '' });
+        });
+
+        // SECURITY PATCH P9: Added 'token' to the payload so the backend can verify ownership
+        const payload = {
+          token: token,
+          assignmentId: assignmentId,
+          candidateEmail: document.getElementById('emailInput').value.trim(),
+          answers: answersArray
+        };
+
+        document.getElementById('testScreen').style.display = 'none';
+
+        let loadingDiv = document.getElementById('loadingScreen');
+        if (!loadingDiv) {
+          loadingDiv = document.createElement('div');
+          loadingDiv.id = 'loadingScreen';
+          loadingDiv.className = 'card shadow-sm border-0 rounded-3';
+          loadingDiv.innerHTML = `
+            <div class="card-body p-5 text-center">
+              <div class="spinner-border" style="width: 3rem; height: 3rem; color: var(--bs-primary);" role="status"></div>
+              <h4 class="mt-4 text-primary">Submitting Your Assessment...</h4>
+              <p class="text-muted">Please do not close or refresh this window.</p>
+            </div>
+          `;
+          document.querySelector('.test-container').appendChild(loadingDiv);
+        }
+        loadingDiv.style.display = 'block';
+
+        google.script.run
+          .withSuccessHandler(function(data) {
+            if (data.status === 'success') {
+              loadingDiv.style.display = 'none';
+              document.getElementById('candidateNameDisplay').innerText = payload.candidateEmail;
+              document.getElementById('assessmentNameDisplay').innerText = currentAssessment.Title;
+              document.getElementById('completionScreen').style.display = 'block';
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            } else {
+              loadingDiv.style.display = 'none';
+              alert(data.message);
+              document.getElementById('testScreen').style.display = 'block';
+            }
+          })
+          .withFailureHandler(function(err) {
+            loadingDiv.style.display = 'none';
+            alert(err.message);
+            document.getElementById('testScreen').style.display = 'block';
+          })
+          .uiSubmitTest(payload);
+      }
+    </script>
+  </body>
+</html>

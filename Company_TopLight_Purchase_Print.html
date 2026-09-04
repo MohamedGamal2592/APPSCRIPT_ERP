@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>أمر شراء</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= getCompanyThemeCSS_('8df5c89a117fe9a5') ?>
+  <style>
+    @media print {
+      .no-print { display: none !important; }
+      body { background: #fff !important; }
+      .invoice { border: none !important; }
+    }
+    .invoice { max-width: 900px; margin: 0 auto; padding: 24px; background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: 8px; }
+    .invoice-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; border-bottom: 2px solid var(--brand-primary); padding-bottom: 16px; }
+    .invoice-title { font-size: 22px; font-weight: 700; color: var(--brand-primary); }
+    .invoice-meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px 16px; margin-bottom: 20px; }
+    .meta-item { font-size: 13px; }
+    .meta-item strong { color: var(--text-muted); font-weight: 600; }
+    .inv-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 20px; }
+    .inv-table th, .inv-table td { border: 1px solid var(--border-color); padding: 8px 10px; text-align: right; }
+    .inv-table th { background: var(--bg-subtle); font-weight: 600; }
+    .inv-totals { margin-right: auto; width: 300px; font-size: 14px; }
+    .inv-totals .row { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border-color); }
+    .inv-totals .row.total { font-weight: 700; font-size: 16px; color: var(--brand-primary); border-bottom: none; }
+  </style>
+</head>
+<body>
+<div id="invoice-root" dir="rtl"></div>
+<script>
+  var params = new URLSearchParams(window.location.search);
+  var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+  var purchaseCode = '<?!= purchaseCode ?>';
+  var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('8df5c89a117fe9a5') ?>';
+
+  function companyCall(moduleAction, data) {
+    return API.call('company_action', {
+      target_system: '8df5c89a117fe9a5',
+      module_action: moduleAction,
+      data: data || {}
+    }, SESSION_TOKEN);
+  }
+
+  function load() {
+    UI.showSpinner([
+      'جاري تحميل أمر الشراء...',
+      'جاري استرجاع تكاليف وأصناف الشراء...',
+      'لحظة، جاري إعداد أمر الشراء للطباعة...',
+      'جاري تجهيز البيانات، برجاء الانتظار...'
+    ]);
+    companyCall('get_purchase_print', { purchase_code: purchaseCode })
+      .then(function (r) { renderInvoice(r.header, r.lines); })
+      .catch(function (e) {
+        document.getElementById('invoice-root').innerHTML =
+          '<div class="empty-state"><span>' + FMT.escape(e.message || 'خطأ') + '</span></div>';
+      })
+      .finally(function () { UI.hideSpinner(); try{schedulePrefetch();}catch(e){} });
+  }
+
+  function pickH(obj){
+    var keys = Array.prototype.slice.call(arguments,1);
+    for(var i=0;i<keys.length;i++){ var k=keys[i].toLowerCase().replace(/_/g,' '); for(var kk in obj) if(String(kk).toLowerCase().replace(/_/g,' ').trim()===k){ var v=obj[kk]; if(v!==undefined && v!==null && String(v).trim()!=='') return v; } } return '';
+  }
+  function renderInvoice(h, lines) {
+    var root = document.getElementById('invoice-root');
+    var rows = (lines || []).map(function (l) {
+      return '<tr>' +
+        '<td>' + FMT.escape(l.product_name || '-') + '</td>' +
+        '<td>' + FMT.number(l.qty) + '</td>' +
+        '<td>' + FMT.number(l.unit_price) + '</td>' +
+        '<td>' + FMT.number(l.other_cost) + '</td>' +
+        '<td>' + FMT.number(l.unit_cost) + '</td>' +
+        '<td>' + FMT.number(l.total_cost) + '</td>' +
+        '</tr>';
+    }).join('');
+
+    var html =
+      '<div class="no-print" style="max-width:900px;margin:12px auto;display:flex;justify-content:flex-end;gap:8px;">' +
+      '<button class="btn btn-primary" onclick="window.print()">طباعة</button>' +
+      '<button class="btn btn-outline" onclick="try{window.top.close()}catch(e){window.close()}">إغلاق</button>' +
+      '</div>' +
+      '<div class="invoice">' +
+      '<div class="invoice-head">' +
+      '<img src="' + (COMPANY_LOGO_URL || '') + '" style="height:42px;" alt="">' +
+      '<div class="invoice-title">أمر شراء</div>' +
+      '</div>' +
+      '<div class="invoice-meta">' +
+      metaItem('الكود', pickH(h,'code','Code')) +
+      metaItem('تاريخ الاستلام', (function(v){ var s=pickH(h,'reciept date','receipt date'); return s?String(s).slice(0,10):'-'; })()) +
+      metaItem('الأصناف', pickH(h,'items','Items')) +
+      metaItem('المورد', h.supplier_name || pickH(h,'supplier name')) +
+      metaItem('النوع', pickH(h,'type','Type')) +
+      metaItem('نوع الشحن', pickH(h,'shipping type','shipping_type')) +
+      metaItem('العملة', pickH(h,'currency','Currency')) +
+      metaItem('سعر الصرف', pickH(h,'exchange rate','exchange_rate')) +
+      metaItem('القيمة', FMT.currency(pickH(h,'value','Value'), pickH(h,'currency'))) +
+      metaItem('القيمة بناءً على الفاتورة', FMT.currency(pickH(h,'value based on invoice','value_based_on_invoice'), 'EGP')) +
+      '</div>' +
+      '<table class="inv-table"><thead><tr>' +
+      '<th>المنتج</th><th>الكمية</th><th>سعر الوحدة</th><th>تكاليف أخرى</th><th>تكلفة الوحدة</th><th>الإجمالي</th>' +
+      '</tr></thead><tbody>' + rows + '</tbody></table>' +
+      '<div class="inv-totals">' +
+      '<div class="row total"><span>إجمالي التكاليف</span><span>' + FMT.currency(pickH(h,'total costs','total_costs','Total Costs')||h['total costs'], 'EGP') + '</span></div>' +
+      '</div>' +
+      '</div>';
+
+    root.innerHTML = html;
+  }
+
+  function metaItem(label, value) {
+    return '<div class="meta-item"><strong>' + label + ':</strong> ' + FMT.escape(value == null || value === '' ? '-' : value) + '</div>';
+  }
+
+  load();
+</script>
+</body>
+</html>

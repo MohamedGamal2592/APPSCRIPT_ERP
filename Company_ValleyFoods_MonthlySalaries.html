@@ -1,0 +1,280 @@
+﻿<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Valley Foods — الرواتب الشهرية</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_ValleyFoods_Nav'); ?>
+  <?!= getCompanyThemeCSS_('9940659bd83035d7') ?>
+</head>
+<body>
+  <div id="vf-root"></div>
+
+  <script>
+    var params = new URLSearchParams(window.location.search);
+    var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+    var scriptUrl = window.scriptUrl || '/';
+    var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+    var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('9940659bd83035d7') ?>';
+    var COMPANY_PAGES = <?!= companyPages ?>;
+    var CURRENT_ACTION = '<?!= currentAction ?>';
+    var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+    var CAN_WRITE = UIC.canAdd_(); var CAN_FULL = UIC.canFull_();
+
+    function companyCall(moduleAction, data) {
+      return API.call('company_action', {
+        target_system: '9940659bd83035d7',
+        module_action: moduleAction,
+        data: data || {}
+      }, SESSION_TOKEN);
+    }
+
+    function esc(v) {
+      var s = (v === undefined || v === null) ? '' : String(v);
+      if (typeof FMT !== 'undefined' && FMT.escape) return FMT.escape(s);
+      return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+    function todayStr() { return new Date().toISOString().slice(0, 10); }
+    function fmtDate(v) {
+      if (!v) return '';
+      var d = (v instanceof Date) ? v : new Date(v);
+      if (isNaN(d.getTime())) return String(v);
+      var pad = function (n) { return n < 10 ? '0' + n : '' + n; };
+      return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+    }
+
+    function fmtMoney(v) {
+      return Number(v).toLocaleString('ar-EG', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    }
+
+    var FILTER_MONTH = '';
+    var FILTER_YEAR = '';
+
+    var salariesData = { salaries: [], total: 0, existing_emp_ids: [], months: [], month_options: [], employee_options: [] };
+
+    function renderShell() {
+      UIC.appShell('vf-root', {
+        companyLogoUrl: COMPANY_LOGO_URL,
+        companyLogoHref: scriptUrl + '?action=vf_dashboard&sessionToken=' + SESSION_TOKEN,
+        companyLogoTitle: 'Valley Foods',
+        breadcrumb: 'Valley Foods / شؤون الموظفين / الرواتب الشهرية',
+        contentId: 'vf-msal-content',
+        menuGroups: (window.VALLEYFOODS_MENU || [])
+      });
+    }
+
+    function renderFilterBar() {
+      var html = '<div class="vf-filter-bar" style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;padding:16px;background:#fff;border-radius:8px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.08);">';
+
+      html += '<div class="vf-filter-group">';
+      html += '<label style="display:block;font-size:13px;color:#666;margin-bottom:4px;">السنة</label>';
+      html += '<select id="vf-msal-year" class="vf-select" style="min-width:120px;padding:8px 12px;border:1px solid #ddd;border-radius:6px;">';
+      html += '<option value="">-- اختر السنة --</option>';
+      var years = [];
+      if (salariesData.months && salariesData.months.length) {
+        salariesData.months.forEach(function(m) {
+          if (m.year && years.indexOf(m.year) === -1) years.push(m.year);
+        });
+      }
+      if (!years.length) {
+        var cy = new Date().getFullYear();
+        for (var i = cy; i >= cy - 5; i--) years.push(i);
+      }
+      years.forEach(function(y) {
+        var sel = (FILTER_YEAR == y) ? ' selected' : '';
+        html += '<option value="' + y + '"' + sel + '>' + y + '</option>';
+      });
+      html += '</select></div>';
+
+      html += '<div class="vf-filter-group">';
+      html += '<label style="display:block;font-size:13px;color:#666;margin-bottom:4px;">الشهر</label>';
+      html += '<select id="vf-msal-month" class="vf-select" style="min-width:150px;padding:8px 12px;border:1px solid #ddd;border-radius:6px;">';
+      html += '<option value="">-- اختر الشهر --</option>';
+      if (salariesData.month_options && salariesData.month_options.length) {
+        salariesData.month_options.forEach(function(mo) {
+          var val = mo.value != null ? mo.value : mo;
+          var label = mo.label != null ? mo.label : mo;
+          var sel = (FILTER_MONTH == val) ? ' selected' : '';
+          html += '<option value="' + esc(val) + '"' + sel + '>' + esc(label) + '</option>';
+        });
+      }
+      html += '</select></div>';
+
+      html += '<div class="vf-filter-group" style="align-self:flex-end;">';
+      html += '<button id="vf-msal-view-btn" class="vf-btn vf-btn-primary" style="padding:8px 20px;background:#1a7f37;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:600;">عرض</button>';
+      html += '</div>';
+
+      if (CAN_WRITE) {
+        html += '<div class="vf-filter-group" style="align-self:flex-end;">';
+        html += '<button id="vf-msal-gen-btn" class="vf-btn vf-btn-success" style="padding:8px 20px;background:#0d6efd;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:600;">إنشاء رواتب الشهر</button>';
+        html += '</div>';
+      }
+
+      html += '</div>';
+      return html;
+    }
+
+    function renderTotalBar() {
+      var total = salariesData.total || 0;
+      return '<div class="vf-total-bar" style="display:flex;align-items:center;padding:12px 16px;background:#e8f5e9;border-radius:8px;margin-bottom:16px;font-size:15px;font-weight:600;color:#2e7d32;">' +
+        'إجمالي الصافي: <span style="margin-right:8px;font-size:18px;">' + fmtMoney(total) + ' ج.م</span>' +
+        '</div>';
+    }
+
+    function renderTable() {
+      var headers = ['الكود', 'الاسم', 'الأساسي', 'البدلات', 'الأيام', 'الصافي', 'التقريب', 'الشهر'];
+      var rows = (salariesData.salaries || []).map(function(r) {
+        return [
+          esc(r.emp_id),
+          esc(r.name_ar),
+          fmtMoney(r.basic_salary),
+          fmtMoney(r.allow),
+          esc(r.working_days),
+          fmtMoney(r.net_salary),
+          fmtMoney(r.net_salary_nearest),
+          esc(r.month_name)
+        ];
+      });
+      return UIC.dataTable('vf-msal-table', { headers: headers, rows: rows });
+    }
+
+    function renderContent() {
+      var el = document.getElementById('vf-msal-content');
+      if (!el) return;
+      el.innerHTML = renderFilterBar() + renderTotalBar() + '<div id="vf-msal-table-wrap">' + renderTable() + '</div>';
+      bindEvents();
+    }
+
+    function bindEvents() {
+      var viewBtn = document.getElementById('vf-msal-view-btn');
+      if (viewBtn) {
+        viewBtn.onclick = function() {
+          var yEl = document.getElementById('vf-msal-year');
+          var mEl = document.getElementById('vf-msal-month');
+          FILTER_YEAR = yEl ? yEl.value : '';
+          FILTER_MONTH = mEl ? mEl.value : '';
+          loadData();
+        };
+      }
+
+      var genBtn = document.getElementById('vf-msal-gen-btn');
+      if (genBtn) {
+        genBtn.onclick = function() {
+          openGenerateModal();
+        };
+      }
+    }
+
+    function loadData() {
+      UI.showSpinner();
+      companyCall('get_monthly_salaries_data', { month: FILTER_MONTH, year: FILTER_YEAR }).then(function(res) {
+        if (res) {
+          salariesData.salaries = res.salaries || [];
+          salariesData.total = res.total || 0;
+          salariesData.existing_emp_ids = res.existing_emp_ids || [];
+          salariesData.months = res.months || [];
+          salariesData.month_options = res.month_options || [];
+          salariesData.employee_options = res.employee_options || [];
+        }
+        renderContent(); try{schedulePrefetch();}catch(e){};
+      }).catch(function(err) {
+        console.error('Error loading salaries:', err);
+        UIC.toast('حدث خطأ أثناء تحميل البيانات', 'error');
+        renderContent();
+      }).finally(function() {
+        UI.hideSpinner();
+      });
+    }
+
+    function openGenerateModal() {
+      var body = '<div style="max-height:400px;overflow-y:auto;">';
+
+      body += '<div style="display:flex;gap:16px;margin-bottom:16px;">';
+      body += '<div style="flex:1;">';
+      body += '<label style="display:block;font-size:13px;color:#666;margin-bottom:4px;">السنة</label>';
+      body += '<input type="number" id="vf-msal-gen-year" value="' + (FILTER_YEAR || new Date().getFullYear()) + '" style="width:100%;padding:8px 12px;border:1px solid #ddd;border-radius:6px;" />';
+      body += '</div>';
+      body += '<div style="flex:1;">';
+      body += '<label style="display:block;font-size:13px;color:#666;margin-bottom:4px;">الشهر</label>';
+      body += '<select id="vf-msal-gen-month" style="width:100%;padding:8px 12px;border:1px solid #ddd;border-radius:6px;">';
+      (salariesData.month_options || []).forEach(function(mo) {
+        var val = mo.value != null ? mo.value : mo;
+        var label = mo.label != null ? mo.label : mo;
+        body += '<option value="' + esc(val) + '">' + esc(label) + '</option>';
+      });
+      body += '</select>';
+      body += '</div></div>';
+
+      body += '<div style="display:flex;gap:16px;margin-bottom:16px;">';
+      body += '<div style="flex:1;">';
+      body += '<label style="display:block;font-size:13px;color:#666;margin-bottom:4px;">أيام العمل الافتراضية</label>';
+      body += '<input type="number" id="vf-msal-gen-days" value="30" min="1" max="31" style="width:100%;padding:8px 12px;border:1px solid #ddd;border-radius:6px;" />';
+      body += '</div>';
+      body += '</div>';
+
+      body += '<div style="padding:12px;background:#f8f9fa;border-radius:6px;font-size:13px;color:#555;">';
+      body += 'سيتم إنشاء رواتب لجميع الموظفين النشطين الذين لا يملكون رواتب مسجلة لهذا الشهر.';
+      body += '</div>';
+
+      body += '</div>';
+
+      UIC.openModal('vf-msal-gen-modal', {
+        title: 'إنشاء رواتب الشهر',
+        body: body,
+        onSave: 'saveGenerated()'
+      });
+    }
+
+    function saveGenerated() {
+      var yearEl = document.getElementById('vf-msal-gen-year');
+      var monthEl = document.getElementById('vf-msal-gen-month');
+      var daysEl = document.getElementById('vf-msal-gen-days');
+      var year = yearEl ? parseInt(yearEl.value) : null;
+      var month = monthEl ? parseInt(monthEl.value) : null;
+      var days = daysEl ? parseInt(daysEl.value) : 30;
+
+      if (!year || !month) {
+        UIC.toast('يرجى إدخال السنة والشهر', 'error');
+        return;
+      }
+
+      UI.showSpinner();
+      companyCall('generate_monthly_salaries', { month: month, year: year, working_days: days }).then(function(res) {
+        UIC.closeModal('vf-msal-gen-modal');
+        UIC.toast((res && res.message) || 'تم إنشاء الرواتب بنجاح', 'success');
+        if (res && res.record && res.record.rows) {
+          var RECENT_LIMIT = 15;
+          if (!salariesData.salaries) salariesData.salaries = [];
+          res.record.rows.forEach(function(nr){
+            var idxMS = salariesData.salaries.findIndex(function(x){ return String(x.emp_id)===String(nr.emp_id) && String(x.month)===String(nr.month) && String(x.year)===String(nr.year); });
+            if (idxMS!==-1) salariesData.salaries[idxMS]=Object.assign(salariesData.salaries[idxMS], nr); else salariesData.salaries.unshift(nr);
+          });
+          // cap
+          if (salariesData.salaries.length>RECENT_LIMIT) salariesData.salaries = salariesData.salaries.slice(0, RECENT_LIMIT);
+          // recompute total
+          salariesData.total = salariesData.salaries.reduce(function(s,r){ return s + (Number(r.net_salary)||0); }, 0);
+          renderContent();
+        } else if (res && res.record && res.record.addedCount) {
+          // fallback single
+          loadData();
+        } else { loadData(); }
+      }).catch(function(err) {
+        console.error('Error generating salaries:', err);
+        UIC.toast((err && err.message) ? err.message : 'حدث خطأ أثناء الإنشاء', 'error');
+      }).finally(function() {
+        UI.hideSpinner();
+      });
+    }
+
+    document.addEventListener('DOMContentLoaded', function() {
+      renderShell();
+      loadData();
+    });
+  </script>
+</body>
+</html>
+
+

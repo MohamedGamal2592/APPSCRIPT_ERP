@@ -1,0 +1,98 @@
+﻿<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="description" content="تسجيل الدخول إلى نظام إدارة الموارد">
+  <title>تسجيل الدخول</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('ERP_Flow'); ?>
+  <?!= include('ERP_Modal'); ?>
+</head>
+<body>
+<div dir="rtl" style="position:relative;display:flex;align-items:center;justify-content:center;min-height:100dvh;min-height:calc(var(--vh,1vh)*100);background-image:url('https://drive.google.com/thumbnail?id=1Ug1T9j5vQBeBA_5w52ufDO07IsefW6QH&sz=w2000');background-size:cover;background-position:center;padding:max(16px,env(safe-area-inset-top)) max(16px,env(safe-area-inset-right)) max(16px,env(safe-area-inset-bottom)) max(16px,env(safe-area-inset-left));">
+  <div style="position:absolute;inset:0;background:rgba(255,255,255,0.88);"></div>
+  <div id="login-card" style="position:relative;width:100%;max-width:400px;background:var(--bg-surface);border:1px solid var(--border-color);border-radius:var(--radius-lg);padding:clamp(20px,5vw,32px);box-shadow:var(--shadow-lg);">
+    <h1 style="text-align:center;margin-bottom:16px;font-size:clamp(18px,5vw,24px);">تسجيل الدخول</h1>
+    <div id="login-form">
+      <div class="form-field">
+        <label class="form-label" for="login-email">البريد الإلكتروني</label>
+        <input id="login-email" class="input" type="email" placeholder="you@example.com" inputmode="email" autocomplete="email" autocapitalize="off" enterkeyhint="next">
+      </div>
+      <div class="form-field">
+        <label class="form-label" for="login-password">كلمة المرور</label>
+        <input id="login-password" class="input" type="password" placeholder="********" autocomplete="current-password" enterkeyhint="done">
+      </div>
+      <div class="field-error" id="login-error" style="min-height:20px;"></div>
+      <button class="btn btn-primary" style="width:100%;justify-content:center;" onclick="doLogin()">دخول</button>
+    </div>
+    <div id="welcome-box" style="display:none;text-align:center;padding:8px 0;">
+      <div style="font-size:40px;margin-bottom:12px;">👋</div>
+      <h3 style="margin-bottom:8px;">مرحباً بك</h3>
+      <p id="welcome-message" style="color:var(--text-muted);font-size:14px;margin-bottom:20px;"></p>
+      <button id="go-dashboard" class="btn btn-primary" style="width:100%;justify-content:center;" onclick="goToDashboard()">متابعة إلى لوحة التحكم</button>
+      <button class="btn btn-outline" style="width:100%;justify-content:center;margin-top:10px;" onclick="backToLogin()">تسجيل الخروج</button>
+    </div>
+  </div>
+</div>
+<script>
+  var SESSION_TOKEN = '';
+
+  function getDeviceInfo() {
+    try {
+      var ua = navigator.userAgent || '';
+      var os = 'Unknown', browser = 'Unknown';
+      if (/Windows/i.test(ua)) os = 'Windows'; else if (/Mac/i.test(ua)) os = 'macOS'; else if (/Android/i.test(ua)) os = 'Android'; else if (/iPhone|iPad/i.test(ua)) os = 'iOS'; else if (/Linux/i.test(ua)) os = 'Linux';
+      if (/Edg/i.test(ua)) browser = 'Edge'; else if (/Chrome/i.test(ua)) browser = 'Chrome'; else if (/Firefox/i.test(ua)) browser = 'Firefox'; else if (/Safari/i.test(ua)) browser = 'Safari';
+      var type = /Mobi|Android|iPhone|iPad/i.test(ua) ? 'Mobile' : 'Desktop';
+      var name = (type === 'Mobile' ? 'جوال' : 'حاسوب') + ' • ' + browser + ' • ' + os;
+      return { name: name, type: type, os: os, browser: browser };
+    } catch (e) { return { name: 'Unknown', type: 'Unknown', os: 'Unknown', browser: 'Unknown' }; }
+  }
+
+  function doLogin() {
+    var email = document.getElementById('login-email').value.trim();
+    var password = document.getElementById('login-password').value;
+    var err = document.getElementById('login-error');
+    if (!email || !password) { err.textContent = 'أدخل البريد وكلمة المرور'; return; }
+    try { if (window.ERPFlow) ERPFlow.start('جاري تسجيل الدخول...'); } catch(e){}
+    UI.showSpinner('جاري الدخول...');
+    API.call('login_user', { email: email, password: password, device: getDeviceInfo() })
+      .then(function (r) {
+        if (r.status === 'setup_required') {
+          var _setupUrl = (window.scriptUrl || '/') + '?action=setup&email=' + encodeURIComponent(email);
+          try { window.top.location.href = _setupUrl; } catch (e) { window.location.href = _setupUrl; }
+          return;
+        }
+        API.setSession({ token: r.token, user: r.user });
+        SESSION_TOKEN = r.token;
+        var name = (r.user && r.user.name) ? r.user.name : email;
+        document.getElementById('welcome-message').textContent = 'تم تسجيل دخولك بنجاح، ' + name;
+        document.getElementById('login-form').style.display = 'none';
+        document.getElementById('welcome-box').style.display = 'block';
+      })
+      .catch(function (e) {
+        err.textContent = e.message || 'تعذر الدخول';
+      })
+      .finally(function () { UI.hideSpinner(); try{ if(window.ERPFlow) ERPFlow.finish(); }catch(e){} });
+  }
+
+  function goToDashboard() {
+    var _dashUrl = (window.scriptUrl || '/') + '?action=ERPDashboard&sessionToken=' + encodeURIComponent(SESSION_TOKEN);
+    try { window.top.location.href = _dashUrl; } catch (e) { window.location.href = _dashUrl; }
+  }
+
+  function backToLogin() {
+    API.clearSession();
+    SESSION_TOKEN = '';
+    document.getElementById('welcome-box').style.display = 'none';
+    document.getElementById('login-form').style.display = 'block';
+    document.getElementById('login-email').value = '';
+    document.getElementById('login-password').value = '';
+  }
+</script>
+</body>
+</html>
+

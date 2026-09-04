@@ -1,0 +1,285 @@
+﻿<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>توريدات ومشتريات</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_TopChemical_Nav'); ?>
+  <?!= getCompanyThemeCSS_('3fe1b5cb67b7223e') ?>
+</head>
+<body>
+<div id="tc-root" dir="rtl"></div>
+<script>
+  var params = new URLSearchParams(window.location.search);
+  var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+  var scriptUrl = window.scriptUrl || '/';
+  var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+  var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('3fe1b5cb67b7223e') ?>';
+  var COMPANY_PAGES = <?!= companyPages ?>;
+  var CURRENT_ACTION = '<?!= currentAction ?>';
+  var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+  var CAN_WRITE = IS_SUPER_ADMIN || !!(USER_PAGES && USER_PAGES[CURRENT_ACTION] && USER_PAGES[CURRENT_ACTION].indexOf('write') !== -1);
+
+  function companyCall(moduleAction, data) {
+    return API.call('company_action', {
+      target_system: '3fe1b5cb67b7223e',
+      module_action: moduleAction,
+      data: data || {}
+    }, SESSION_TOKEN);
+  }
+
+  function esc(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  function todayStr() {
+    var d = new Date();
+    var p = function (n) { return ('0' + n).slice(-2); };
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+  }
+
+  function fmtDate(v) {
+    if (v == null || v === '') return '';
+    var d = (v instanceof Date) ? v : new Date(v);
+    if (isNaN(d.getTime())) return String(v);
+    var p = function (n) { return ('0' + n).slice(-2); };
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+  }
+
+  function setSelectOptions(selectId, options, selectedValue) {
+    var sel = document.getElementById(selectId);
+    if (!sel) return;
+    sel.innerHTML = '<option value="">اختر...</option>' + (options || []).map(function (o) {
+      var v = typeof o === 'object' ? o.value : o;
+      var l = typeof o === 'object' ? o.label : o;
+      var s = String(v) === String(selectedValue) ? ' selected' : '';
+      return '<option value="' + esc(v) + '"' + s + '>' + esc(l) + '</option>';
+    }).join('');
+  }
+
+  function load() {
+    var contentId = 'purchasing-content';
+    UIC.appShell('tc-root', {
+      companyLogoUrl: COMPANY_LOGO_URL,
+      companyLogoHref: scriptUrl + '?action=tc_dashboard&sessionToken=' + SESSION_TOKEN,
+      companyLogoTitle: 'توب كيميكال',
+      breadcrumb: 'توب كيميكال / الاستيراد والمشتريات / توريدات ومشتريات',
+      contentId: contentId,
+      menuGroups: (window.TOPCHEMICAL_MENU || [])
+    });
+    fetchPurchases();
+  }
+
+  function fetchPurchases() {
+    UI.showSpinner();
+    companyCall('get_purchase_items')
+      .then(function (r) {
+        window.__purchases = r.purchases || [];
+        window.__vendorOptions = r.vendor_options || [];
+        window.__itemOptions = r.item_options || [];
+        renderPurchases();
+      })
+      .catch(function (e) { showError(e); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function renderPurchases() {
+    var list = window.__purchases;
+    var rows = list.map(function (p) {
+      return {
+        id: p.id,
+        vendor_name: esc(p.vendor_name || '-'),
+        invoice_no: esc(p.invoice_no || '-'),
+        invoice_date: fmtDate(p.invoice_date),
+        item_name: esc(p.item_name || '-'),
+        item_brand: esc(p.item_brand || '-'),
+        qty: p.qty,
+        price: p.price,
+        receipt_date: fmtDate(p.receipt_date),
+        actions: UIC.actionBtns([{ label: 'عرض', onclick: 'openDetail(' + window.__purchases.indexOf(p) + ')' }])
+      };
+    });
+    var headers = [
+      { key: 'id', label: '#', numeric: true },
+      { key: 'vendor_name', label: 'المورد' },
+      { key: 'invoice_no', label: 'رقم الفاتورة' },
+      { key: 'invoice_date', label: 'تاريخ الفاتورة', numeric: true },
+      { key: 'item_name', label: 'الصنف' },
+      { key: 'item_brand', label: 'البراند' },
+      { key: 'qty', label: 'الكمية', numeric: true },
+      { key: 'price', label: 'سعر الوحدة', numeric: true },
+      { key: 'receipt_date', label: 'تاريخ الاستلام', numeric: true },
+      { key: 'actions', label: 'إجراءات' }
+    ];
+    var body = document.getElementById('purchasing-content');
+    body.innerHTML = (CAN_WRITE
+      ? '<div style="display:flex;justify-content:flex-end;margin-bottom:12px;"><button class="btn btn-primary" onclick="openAddModal()">+ إضافة توريد</button></div>'
+      : '') +
+      UIC.dataTable('purchasing-table', {
+        title: 'توريدات ومشتريات',
+        headers: headers,
+        rows: rows,
+        emptyText: 'لا توجد توريدات'
+      });
+    UIC.initTableSort('purchasing-table');
+  }
+
+  function openAddModal() {
+    var body =
+      '<form id="purchase-form">' +
+      '<div class="form-field" data-field="vendor">' +
+        '<label class="form-label" for="vendor">المورد <span class="req">*</span></label>' +
+        '<div style="display:flex;gap:8px;">' +
+          '<select id="vendor" class="input" required style="flex:1;"><option value="">اختر المورد...</option></select>' +
+          '<button type="button" class="btn btn-outline" onclick="openVendorPopup()">+ إضافة مورد</button>' +
+        '</div>' +
+        '<div class="field-error" id="err-vendor"></div>' +
+      '</div>' +
+      '<div class="form-field" data-field="item">' +
+        '<label class="form-label" for="item">الصنف <span class="req">*</span></label>' +
+        '<div style="display:flex;gap:8px;">' +
+          '<select id="item" class="input" required style="flex:1;"><option value="">اختر الصنف...</option></select>' +
+          '<button type="button" class="btn btn-outline" onclick="openItemPopup()">+ إضافة صنف</button>' +
+        '</div>' +
+        '<div class="field-error" id="err-item"></div>' +
+      '</div>' +
+      UIC.field({ key: 'invoice_no', label: 'رقم الفاتورة', required: true, placeholder: 'مثال: INV-1002' }) +
+      UIC.field({ key: 'invoice_date', label: 'تاريخ الفاتورة', type: 'date', value: todayStr(), required: true }) +
+      UIC.field({ key: 'item_brand', label: 'البراند', required: true, placeholder: 'اسم البراند' }) +
+      UIC.field({ key: 'qty', label: 'الكمية', type: 'number', step: '0.01', required: true, placeholder: 'مثال: 50' }) +
+      UIC.field({ key: 'price', label: 'سعر الوحدة', type: 'number', step: '0.01', required: true, placeholder: 'مثال: 125.50' }) +
+      UIC.field({ key: 'receipt_date', label: 'تاريخ الاستلام', type: 'date', value: todayStr(), required: true }) +
+      '</form>';
+    UIC.openModal('purchase-modal', {
+      title: 'إضافة توريد',
+      body: body,
+      onSave: 'savePurchase()'
+    });
+    setSelectOptions('vendor', window.__vendorOptions || []);
+    setSelectOptions('item', window.__itemOptions || []);
+  }
+
+  function savePurchase() {
+    var data = UIC.collectForm('purchase-form');
+    if (!UIC.validateForm('purchase-form')) return;
+    UI.showSpinner('جاري الحفظ...');
+    companyCall('add_purchase_item', data)
+      .then(function (r) {
+        UIC.closeModal('purchase-modal');
+        UIC.toast(r.message || 'تم الحفظ', 'success');
+        fetchPurchases();
+      })
+      .catch(function (e) { UIC.toast(e.message || 'خطأ', 'error'); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function openVendorPopup() {
+    var body =
+      '<form id="vendor-form">' +
+      UIC.field({ key: 'vendor_name_ar', label: 'اسم المورد (بالعربية)', required: true }) +
+      UIC.field({ key: 'vendor_name_en', label: 'اسم المورد (بالإنجليزية)' }) +
+      UIC.field({ key: 'vendor_address', label: 'العنوان' }) +
+      UIC.field({ key: 'vendor_vat', label: 'الرقم الضريبي' }) +
+      UIC.field({ key: 'vendor_1_percent_status', label: 'حالة خصم 1%' }) +
+      UIC.field({ key: 'contact_person', label: 'الشخص المسؤول' }) +
+      UIC.field({ key: 'contact_number', label: 'رقم الهاتف' }) +
+      UIC.field({ key: 'contact_email', label: 'البريد الإلكتروني' }) +
+      UIC.field({ key: 'vat_1_percent_certificate', label: 'شهادة خصم 1%' }) +
+      '</form>';
+    UIC.openModal('vendor-modal', {
+      title: 'إضافة مورد جديد',
+      body: body,
+      onSave: 'saveVendorPopup()'
+    });
+  }
+
+  function saveVendorPopup() {
+    var data = UIC.collectForm('vendor-form');
+    if (!UIC.validateForm('vendor-form')) return;
+    UI.showSpinner('جاري الحفظ...');
+    companyCall('add_vendor', data)
+      .then(function (r) {
+        UIC.closeModal('vendor-modal');
+        window.__vendorOptions = (window.__vendorOptions || []).concat([r.vendor]);
+        setSelectOptions('vendor', window.__vendorOptions, r.vendor.value);
+        UIC.toast(r.message || 'تمت إضافة المورد', 'success');
+      })
+      .catch(function (e) { UIC.toast(e.message || 'خطأ', 'error'); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function openItemPopup() {
+    var body =
+      '<form id="item-form">' +
+      UIC.field({ key: 'item_name_ar', label: 'اسم الصنف (بالعربية)', required: true }) +
+      UIC.field({ key: 'item_name_en', label: 'اسم الصنف (بالإنجليزية)' }) +
+      UIC.field({ key: 'item_technical_details', label: 'المواصفات الفنية' }) +
+      UIC.field({ key: 'category_id', label: 'رقم الفئة' }) +
+      UIC.field({ key: 'unit_type', label: 'الوحدة' }) +
+      '</form>';
+    UIC.openModal('item-modal', {
+      title: 'إضافة صنف جديد',
+      body: body,
+      onSave: 'saveItemPopup()'
+    });
+  }
+
+  function saveItemPopup() {
+    var data = UIC.collectForm('item-form');
+    if (!UIC.validateForm('item-form')) return;
+    UI.showSpinner('جاري الحفظ...');
+    companyCall('add_item', data)
+      .then(function (r) {
+        UIC.closeModal('item-modal');
+        window.__itemOptions = (window.__itemOptions || []).concat([r.item]);
+        setSelectOptions('item', window.__itemOptions, r.item.value);
+        UIC.toast(r.message || 'تمت إضافة الصنف', 'success');
+      })
+      .catch(function (e) { UIC.toast(e.message || 'خطأ', 'error'); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function openDetail(idx) {
+    var p = window.__purchases[idx];
+    if (!p) return;
+    var rows = [
+      ['#', p.id],
+      ['المورد', p.vendor_name || p.vendor || '-'],
+      ['رقم الفاتورة', p.invoice_no || '-'],
+      ['تاريخ الفاتورة', fmtDate(p.invoice_date)],
+      ['الصنف', p.item_name || p.item || '-'],
+      ['البراند', p.item_brand || '-'],
+      ['الكمية', p.qty],
+      ['سعر الوحدة', p.price],
+      ['تاريخ الاستلام', fmtDate(p.receipt_date)],
+      ['أضيف بواسطة', p.user || '-'],
+      ['وقت الإضافة', p.created_at ? fmtDate(p.created_at) : '-']
+    ];
+    var body = rows.map(function (r) {
+      return '<div class="form-field"><label class="form-label">' + esc(r[0]) + '</label>' +
+        '<div style="padding:8px 12px;background:var(--bg-subtle);border-radius:var(--radius-sm);font-size:13px;">' + esc(r[1]) + '</div></div>';
+    }).join('');
+    UIC.openModal('purchase-detail-modal', {
+      title: 'تفاصيل التوريد',
+      body: body,
+      footer: false
+    });
+  }
+
+  function showError(e) {
+    var body = document.getElementById('purchasing-content');
+    if (body) body.innerHTML = '<div class="empty-state"><span>' + esc(e.message || 'خطأ') + '</span></div>';
+  }
+
+
+  load();
+</script>
+</body>
+</html>
+
+
+

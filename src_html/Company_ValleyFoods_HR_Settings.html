@@ -1,0 +1,317 @@
+﻿<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Valley Foods — إعدادات شؤون الموظفين</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_ValleyFoods_Nav'); ?>
+  <?!= getCompanyThemeCSS_('9940659bd83035d7') ?>
+</head>
+<body>
+  <div id="vf-root"></div>
+
+  <script>
+    var params = new URLSearchParams(window.location.search);
+    var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+    var scriptUrl = window.scriptUrl || '/';
+    var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+    var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('9940659bd83035d7') ?>';
+    var COMPANY_PAGES = <?!= companyPages ?>;
+    var CURRENT_ACTION = '<?!= currentAction ?>';
+    var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+    var CAN_WRITE = IS_SUPER_ADMIN || !!(USER_PAGES && USER_PAGES[CURRENT_ACTION] && USER_PAGES[CURRENT_ACTION].indexOf('write') !== -1);
+
+    function companyCall(moduleAction, data) {
+      return API.call('company_action', {
+        target_system: '9940659bd83035d7',
+        module_action: moduleAction,
+        data: data || {}
+      }, SESSION_TOKEN);
+    }
+
+    function esc(v) {
+      var s = (v === undefined || v === null) ? '' : String(v);
+      if (typeof FMT !== 'undefined' && FMT.escape) return FMT.escape(s);
+      return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+  </script>
+
+  <script>
+  (function () {
+    /* Tab config: one authority page id per reference table; the active tab
+       follows the page the user opened (CURRENT_ACTION). */
+    var TABS = {
+      vf_hr_settings_overtime:   { label: 'أنواع العمل الإضافي', get: 'get_overtime_roles_settings',  save: 'save_overtime_role',   toggle: 'toggle_overtime_role',   keyField: 'overtime_rule_unique_id' },
+      vf_hr_settings_deduction:  { label: 'قواعد الخصومات',      get: 'get_deduction_roles_settings', save: 'save_deduction_role',  toggle: 'toggle_deduction_role',  keyField: 'rule_unique_id' },
+      vf_hr_settings_vacations:  { label: 'أنواع الإجازات',      get: 'get_vacations_index_settings', save: 'save_vacation_index',  toggle: 'toggle_vacation_index',  keyField: 'id' },
+      vf_hr_settings_shifts:     { label: 'الورديات',            get: 'get_shift_schedule_settings',  save: 'save_shift_schedule',  toggle: 'toggle_shift_schedule',  keyField: 'shift_unique_id' }
+    };
+    var TAB_ORDER = ['vf_hr_settings_overtime', 'vf_hr_settings_deduction', 'vf_hr_settings_vacations', 'vf_hr_settings_shifts'];
+    var CURRENT_TAB = TABS[CURRENT_ACTION] ? CURRENT_ACTION : TAB_ORDER[0];
+    var CACHE = {};
+
+    function renderApp() {
+      UIC.appShell('vf-root', {
+        companyLogoUrl: COMPANY_LOGO_URL,
+        companyLogoHref: scriptUrl + '?action=vf_dashboard&sessionToken=' + SESSION_TOKEN,
+        companyLogoTitle: 'Valley Foods',
+        breadcrumb: 'Valley Foods / شؤون الموظفين / إعدادات ' + TABS[CURRENT_TAB].label,
+        contentId: 'vf-settings-content',
+        menuGroups: (window.VALLEYFOODS_MENU || [])
+      });
+      renderTabs();
+      loadTab();
+    }
+
+    function renderTabs() {
+      var html = '<div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;">';
+      TAB_ORDER.forEach(function (id) {
+        var active = id === CURRENT_TAB;
+        html += '<a class="btn ' + (active ? 'btn-primary' : 'btn-outline') + '" style="text-decoration:none;" href="' +
+          scriptUrl + '?action=' + id + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN) +
+          '" onclick="event.preventDefault();window.location.href=this.getAttribute(\'href\');">' + esc(TABS[id].label) + '</a>';
+      });
+      html += '</div>';
+      html += '<div class="vf-card"><div class="vf-card-header"><h3>' + esc(TABS[CURRENT_TAB].label) + '</h3>' +
+        (CAN_WRITE ? '<button class="btn btn-primary" onclick="SETTINGS_PAGE.openAdd()">+ إضافة</button>' : '') +
+        '</div><div class="vf-card-body">' +
+        '<div id="settings-warning"></div>' +
+        '<div id="settings-table"><p class="vf-text-muted">جاري التحميل...</p></div>' +
+        '</div></div>';
+      document.getElementById('vf-settings-content').innerHTML = html;
+    }
+
+    function activePill(isActive) {
+      return UIC.statusPill(isActive ? 'مفعل' : 'موقوف', isActive ? 'success' : 'neutral');
+    }
+
+    function rowButtons(tabId, row) {
+      /* POLICY: add = page write access; edit/toggle of existing rows = super admin only
+         (mirrors the server-side enforcement in save_/toggle_ handlers). */
+      if (!IS_SUPER_ADMIN) return '';
+      var keyField = TABS[tabId].keyField;
+      var key = esc(row[keyField]);
+      var isActive = !(row.is_active === false || String(row.is_active).toLowerCase() === 'false');
+      return UIC.actionBtns([
+        { label: 'تعديل', onclick: 'SETTINGS_PAGE.openEdit(\'' + key + '\')' },
+        { label: isActive ? 'إيقاف' : 'تفعيل', onclick: 'SETTINGS_PAGE.toggle(\'' + key + '\')' }
+      ]);
+    }
+
+    function boolCell(v) {
+      var b = v === true || String(v).toLowerCase() === 'true';
+      return UIC.statusPill(b ? 'نعم' : 'لا', b ? 'success' : 'neutral');
+    }
+
+    function buildRows(tabId, rows) {
+      if (tabId === 'vf_hr_settings_overtime') {
+        return rows.map(function (r) {
+          return [esc(r.overtime_type), r.overtime_rate, boolCell(r.money_related), boolCell(r.vacation_days), activePill(r.is_active), rowButtons(tabId, r)];
+        });
+      }
+      if (tabId === 'vf_hr_settings_deduction') {
+        return rows.map(function (r) {
+          return [esc(r.deduction_name), esc(r.deduction_category), r.deduction_value || '-', r.deduction_days || '-', r.deduction_hours || '-', activePill(r.is_active), rowButtons(tabId, r)];
+        });
+      }
+      if (tabId === 'vf_hr_settings_vacations') {
+        return rows.map(function (r) {
+          return [esc(r.id), esc(r.vacation_name_ar), esc(r.vacation_name_en || '-'), boolCell(r.require_allocation), activePill(r.is_active), rowButtons(tabId, r)];
+        });
+      }
+      return rows.map(function (r) {
+        return [esc(r.shift_name), esc(r.shift_type || '-'), esc(r.shift_start_time_display || ''), esc(r.shift_end_time_display || ''), activePill(r.is_active), rowButtons(tabId, r)];
+      });
+    }
+
+    var TABLE_HEADERS = {
+      vf_hr_settings_overtime:   ['الاسم', 'المعدل', 'نقدي؟', 'أيام إجازة؟', 'الحالة', ''],
+      vf_hr_settings_deduction:  ['الاسم', 'التصنيف', 'القيمة', 'الأيام', 'الساعات', 'الحالة', ''],
+      vf_hr_settings_vacations:  ['الكود', 'الاسم العربي', 'الاسم الإنجليزي', 'يتطلب تخصيص؟', 'الحالة', ''],
+      vf_hr_settings_shifts:     ['الاسم', 'النوع', 'من', 'إلى', 'الحالة', '']
+    };
+
+    function renderTable() {
+      var container = document.getElementById('settings-table');
+      var warning = document.getElementById('settings-warning');
+      if (!container) return;
+      var res = CACHE[CURRENT_TAB] || {};
+      if (warning) warning.innerHTML = res.alignment_warning
+        ? '<div style="background:#fffbeb;border:1px solid #fde68a;color:#92400e;border-radius:8px;padding:10px;margin-bottom:12px;font-size:13px;">⚠️ ' + esc(res.alignment_warning) + '</div>'
+        : '';
+      var rows = buildRows(CURRENT_TAB, res.rows || []);
+      container.innerHTML = UIC.dataTable('settings-table-id', { headers: TABLE_HEADERS[CURRENT_TAB], rows: rows });
+    }
+
+    function loadTab() {
+      UI.showSpinner();
+      companyCall(TABS[CURRENT_TAB].get)
+        .then(function (res) {
+          CACHE[CURRENT_TAB] = res || {};
+          renderTable();
+        })
+        .catch(function (e) {
+          UIC.toast((e && e.message) || 'خطأ في تحميل البيانات', 'error');
+          var c = document.getElementById('settings-table');
+          if (c) c.innerHTML = '';
+        })
+        .finally(function () { UI.hideSpinner(); });
+    }
+
+    /* ---------- MODALS ---------- */
+    function checkbox(key, label, checked) {
+      return '<label style="display:flex;align-items:center;gap:8px;margin:10px 0;font-size:14px;">' +
+        '<input type="checkbox" id="' + key + '"' + (checked ? ' checked' : '') + '> ' + label + '</label>';
+    }
+    function readCheckbox(id) {
+      var el = document.getElementById(id);
+      return !!(el && el.checked);
+    }
+
+    function openAdd() {
+      openModal(null);
+    }
+
+    function openEdit(key) {
+      var rows = (CACHE[CURRENT_TAB] || {}).rows || [];
+      var row = null;
+      rows.forEach(function (r) { if (String(r[TABS[CURRENT_TAB].keyField]) === String(key)) row = r; });
+      if (!row) { UIC.toast('لم يتم العثور على السجل', 'error'); return; }
+      openModal(row);
+    }
+
+    function openModal(row) {
+      var isEdit = !!row;
+      var titles = {
+        vf_hr_settings_overtime: 'نوع عمل إضافي',
+        vf_hr_settings_deduction: 'قاعدة خصم',
+        vf_hr_settings_vacations: 'نوع إجازة',
+        vf_hr_settings_shifts: 'وردية'
+      };
+      var body = '';
+
+      if (CURRENT_TAB === 'vf_hr_settings_overtime') {
+        body += '<input type="hidden" id="f-key" value="' + esc(row ? row.overtime_rule_unique_id : '') + '">' +
+          UIC.field({ key: 'f-name', label: 'الاسم', type: 'text', required: true, value: row ? row.overtime_type : '' }) +
+          UIC.field({ key: 'f-rate', label: 'المعدل (مضاعف الساعة)', type: 'number', required: true, min: '0', step: '0.25', value: row ? row.overtime_rate : 1 }) +
+          checkbox('f-money', 'مرتبط بمبلغ ثابت (يُدخل المبلغ يدوياً)', row && (row.money_related === true || String(row.money_related).toLowerCase() === 'true')) +
+          checkbox('f-vacdays', 'يُحتسب كأيام إجازة بدلاً من ساعات', row && (row.vacation_days === true || String(row.vacation_days).toLowerCase() === 'true'));
+      } else if (CURRENT_TAB === 'vf_hr_settings_deduction') {
+        var cats = (CACHE[CURRENT_TAB] || {}).categories || [];
+        var catOpts = cats.map(function (c) { return { value: c, label: c }; });
+        body += '<input type="hidden" id="f-key" value="' + esc(row ? row.rule_unique_id : '') + '">' +
+          UIC.field({ key: 'f-name', label: 'الاسم', type: 'text', required: true, value: row ? row.deduction_name : '' }) +
+          UIC.combo({ key: 'f-category', label: 'التصنيف', required: true, options: catOpts, value: row ? row.deduction_category : '', placeholder: 'اكتب للبحث…' }) +
+          UIC.field({ key: 'f-value', label: 'قيمة الخصم الثابتة (للجزاءات)', type: 'number', min: '0', value: row ? (row.deduction_value || '') : '' }) +
+          UIC.field({ key: 'f-days', label: 'معامل أيام الغياب', type: 'number', min: '0', value: row ? (row.deduction_days || '') : '' }) +
+          UIC.field({ key: 'f-hours', label: 'عدد ساعات التأخير', type: 'number', min: '0', value: row ? (row.deduction_hours || '') : '' });
+      } else if (CURRENT_TAB === 'vf_hr_settings_vacations') {
+        body += UIC.field({
+          key: 'f-id', label: 'الكود', type: 'text', required: true,
+          value: row ? row.id : ((CACHE[CURRENT_TAB] || {}).suggested_next_id || ''),
+          noCorrect: true
+        }) +
+          UIC.field({ key: 'f-ar', label: 'الاسم العربي', type: 'text', required: true, value: row ? row.vacation_name_ar : '' }) +
+          UIC.field({ key: 'f-en', label: 'الاسم الإنجليزي', type: 'text', value: row ? (row.vacation_name_en || '') : '' }) +
+          checkbox('f-alloc', 'يتطلب تخصيص رصيد قبل الاستخدام', row && (row.require_allocation === true || String(row.require_allocation).toLowerCase() === 'true')) +
+          (isEdit ? '<input type="hidden" id="f-editing" value="1">' : '');
+      } else {
+        body += '<input type="hidden" id="f-key" value="' + esc(row ? row.shift_unique_id : '') + '">' +
+          UIC.field({ key: 'f-name', label: 'اسم الوردية', type: 'text', required: true, value: row ? row.shift_name : '' }) +
+          UIC.field({ key: 'f-type', label: 'النوع (اختياري)', type: 'text', value: row ? (row.shift_type || '') : '' }) +
+          UIC.field({ key: 'f-start', label: 'من', type: 'time', required: true, value: row ? (row.shift_start_time_display || '') : '08:00' }) +
+          UIC.field({ key: 'f-end', label: 'إلى', type: 'time', required: true, value: row ? (row.shift_end_time_display || '') : '16:00' });
+      }
+
+      UIC.openModal('hr-settings-modal', {
+        title: (isEdit ? 'تعديل ' : 'إضافة ') + titles[CURRENT_TAB],
+        body: '<form id="hr-settings-form">' + body + '</form>',
+        onSave: 'SETTINGS_PAGE.save()'
+      });
+    }
+
+    function collectPayload() {
+      var p = {};
+      var keyEl = document.getElementById('f-key');
+      if (keyEl && keyEl.value) p[TABS[CURRENT_TAB].keyField] = keyEl.value;
+
+      if (CURRENT_TAB === 'vf_hr_settings_overtime') {
+        p.overtime_type = document.getElementById('f-name').value.trim();
+        p.overtime_rate = document.getElementById('f-rate').value;
+        p.money_related = readCheckbox('f-money');
+        p.vacation_days = readCheckbox('f-vacdays');
+      } else if (CURRENT_TAB === 'vf_hr_settings_deduction') {
+        p.deduction_name = document.getElementById('f-name').value.trim();
+        p.deduction_category = document.getElementById('f-category').value;
+        p.deduction_value = document.getElementById('f-value').value;
+        p.deduction_days = document.getElementById('f-days').value;
+        p.deduction_hours = document.getElementById('f-hours').value;
+      } else if (CURRENT_TAB === 'vf_hr_settings_vacations') {
+        p.id = document.getElementById('f-id').value.trim();
+        p.vacation_name_ar = document.getElementById('f-ar').value.trim();
+        p.vacation_name_en = document.getElementById('f-en').value.trim();
+        p.require_allocation = readCheckbox('f-alloc');
+        var editing = document.getElementById('f-editing');
+        p._editing = !!(editing && editing.value === '1');
+      } else {
+        p.shift_name = document.getElementById('f-name').value.trim();
+        p.shift_type = document.getElementById('f-type').value.trim();
+        p.shift_start_time = document.getElementById('f-start').value;
+        p.shift_end_time = document.getElementById('f-end').value;
+      }
+      return p;
+    }
+
+    function save() {
+      if (!UIC.validateForm('hr-settings-form')) return;
+      var payload = collectPayload();
+      UI.showSpinner();
+      companyCall(TABS[CURRENT_TAB].save, payload)
+        .then(function (r) {
+          UIC.closeModal('hr-settings-modal');
+          UIC.toast((r && r.message) || 'تم الحفظ بنجاح', 'success');
+          loadTab();
+        })
+        .catch(function (e) {
+          UIC.toast((e && e.message) || 'فشل الحفظ', 'error');
+        })
+        .finally(function () { UI.hideSpinner(); });
+    }
+
+    function doToggle(key) {
+      UI.showSpinner();
+      companyCall(TABS[CURRENT_TAB].toggle, { key: key })
+        .then(function (r) {
+          UIC.toast((r && r.message) || 'تم التنفيذ', 'success');
+          loadTab();
+        })
+        .catch(function (e) {
+          UIC.toast((e && e.message) || 'فشل التنفيذ', 'error');
+        })
+        .finally(function () { UI.hideSpinner(); });
+    }
+
+    window.SETTINGS_PAGE = {
+      openAdd: openAdd,
+      openEdit: openEdit,
+      save: save,
+      toggle: function (key) {
+        var rows = (CACHE[CURRENT_TAB] || {}).rows || [];
+        var row = null;
+        rows.forEach(function (r) { if (String(r[TABS[CURRENT_TAB].keyField]) === String(key)) row = r; });
+        var willDeactivate = row && !(row.is_active === false || String(row.is_active).toLowerCase() === 'false');
+        if (willDeactivate && !confirm('إيقاف هذا العنصر يخفيه من القوائم فقط ولا يحذفه — السجلات التاريخية المرتبطة به لن تتأثر. متابعة؟')) return;
+        doToggle(key);
+      }
+    };
+
+    document.addEventListener('DOMContentLoaded', renderApp);
+  })();
+  </script>
+</body>
+</html>
+
+

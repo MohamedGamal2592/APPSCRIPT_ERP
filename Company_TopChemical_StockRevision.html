@@ -1,0 +1,330 @@
+﻿<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>جرد المخزون</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_TopChemical_Nav'); ?>
+  <?!= getCompanyThemeCSS_('3fe1b5cb67b7223e') ?>
+</head>
+<body>
+<div id="tc-root" dir="rtl"></div>
+<script>
+  var params = new URLSearchParams(window.location.search);
+  var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+  var scriptUrl = window.scriptUrl || '/';
+  var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+  var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('3fe1b5cb67b7223e') ?>';
+  var COMPANY_PAGES = <?!= companyPages ?>;
+  var CURRENT_ACTION = '<?!= currentAction ?>';
+  var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+  var CAN_WRITE = UIC.canAdd_(); var CAN_FULL = UIC.canFull_();
+  var WAREHOUSES = ['1', '2', '3', '4', '5', 'شبرا'];
+
+  function companyCall(moduleAction, data) {
+    return API.call('company_action', {
+      target_system: '3fe1b5cb67b7223e',
+      module_action: moduleAction,
+      data: data || {}
+    }, SESSION_TOKEN);
+  }
+
+  function esc(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  function todayStr() {
+    var d = new Date();
+    var p = function (n) { return ('0' + n).slice(-2); };
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+  }
+
+  function fmtDate(v) {
+    if (v == null || v === '') return '';
+    var d = (v instanceof Date) ? v : new Date(v);
+    if (isNaN(d.getTime())) return String(v);
+    var p = function (n) { return ('0' + n).slice(-2); };
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+  }
+
+  function load() {
+    var contentId = 'stock-content';
+    UIC.appShell('tc-root', {
+      companyLogoUrl: COMPANY_LOGO_URL,
+      companyLogoHref: scriptUrl + '?action=tc_dashboard&sessionToken=' + SESSION_TOKEN,
+      companyLogoTitle: 'توب كيميكال',
+      breadcrumb: 'توب كيميكال / الحسابات / جرد المخزون',
+      contentId: contentId,
+      menuGroups: (window.TOPCHEMICAL_MENU || [])
+    });
+    fetchStock();
+  }
+
+  function fetchStock() {
+    UI.showSpinner();
+    companyCall('get_stock_revision')
+      .then(function (r) {
+        window.__stock = r.stock || [];
+        window.__productOptions = r.product_options || [];
+        renderStock();
+      })
+      .catch(function (e) { showError(e); })
+      .finally(function () { UI.hideSpinner(); try{schedulePrefetch();}catch(e){} });
+  }
+
+  function parseDateVal(v) {
+    if (v == null || v === '') return null;
+    var d = (v instanceof Date) ? v : new Date(v);
+    return isNaN(d.getTime()) ? null : d;
+  }
+
+  function fmtPct(v) {
+    if (v == null || v === '') return '-';
+    var n = Number(v);
+    if (isNaN(n)) return esc(v);
+    return (n * 100).toFixed(2) + '%';
+  }
+
+  function getFilteredStock() {
+    var list = window.__stock || [];
+    var fromEl = document.getElementById('filter-from');
+    var toEl = document.getElementById('filter-to');
+    if (!fromEl && !toEl) return list;
+    var from = fromEl ? fromEl.value : '';
+    var to = toEl ? toEl.value : '';
+    if (!from && !to) return list;
+    return list.filter(function (s) {
+      var d = parseDateVal(s.date);
+      if (!d) return false;
+      var ds = fmtDate(d);
+      if (from && ds < from) return false;
+      if (to && ds > to) return false;
+      return true;
+    });
+  }
+
+  function renderStock() {
+    var list = getFilteredStock();
+    var rows = list.map(function (s) {
+      var dateObj = parseDateVal(s.date);
+      var dateNum = dateObj ? dateObj.getFullYear() * 10000 + (dateObj.getMonth() + 1) * 100 + dateObj.getDate() : 0;
+      return {
+        product: esc(s.product_name || ('#' + s.product)),
+        name_ar: esc(s.name_ar || '-'),
+        category: esc(s.category || '-'),
+        unit: esc(s.unit || '-'),
+        date: fmtDate(s.date),
+        date_sort: dateNum,
+        amount: s.amount,
+        warehouse: esc(s.warehouse || '-'),
+        available_amount: s.available_amount,
+        difference: esc(s.difference || '-'),
+        percentage: fmtPct(s.percentage),
+        actions: UIC.actionBtns([
+          { label: 'تعديل', onclick: 'openEdit(' + window.__stock.indexOf(s) + ')' },
+          { label: 'عرض', onclick: 'openDetail(' + window.__stock.indexOf(s) + ')' }
+        ])
+      };
+    });
+    var headers = [
+      { key: 'product', label: 'المنتج' },
+      { key: 'name_ar', label: 'الاسم' },
+      { key: 'category', label: 'الفئة' },
+      { key: 'unit', label: 'الوحدة' },
+      { key: 'date', label: 'التاريخ', numeric: true, sortKey: 'date_sort' },
+      { key: 'amount', label: 'الكمية', numeric: true },
+      { key: 'warehouse', label: 'المخزن', numeric: true },
+      { key: 'available_amount', label: 'رصيد السيستم', numeric: true },
+      { key: 'difference', label: 'الفرق' },
+      { key: 'percentage', label: 'النسبة' },
+      { key: 'actions', label: 'إجراءات' }
+    ];
+    var body = document.getElementById('stock-content');
+    body.innerHTML = (CAN_WRITE
+      ? '<div style="display:flex;justify-content:flex-end;margin-bottom:12px;"><button class="btn btn-primary" onclick="openAddModal()">+ إضافة جرد</button></div>'
+      : '') +
+      '<div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap;">' +
+        '<label style="font-size:13px;">من:</label><input id="filter-from" type="date" class="input" style="width:150px;" value="' + esc((document.getElementById('filter-from') || {}).value || '') + '">' +
+        '<label style="font-size:13px;">إلى:</label><input id="filter-to" type="date" class="input" style="width:150px;" value="' + esc((document.getElementById('filter-to') || {}).value || '') + '">' +
+        '<button class="btn btn-outline" onclick="renderStock()">فلتر</button>' +
+        '<button class="btn btn-outline" onclick="printFiltered()">طباعة</button>' +
+      '</div>' +
+      UIC.dataTable('stock-table', {
+        title: 'جرد المخزون',
+        headers: headers,
+        rows: rows,
+        emptyText: 'لا توجد جرد'
+      });
+    UIC.initTableSort('stock-table');
+  }
+
+  function openAddModal() {
+    var body =
+      '<form id="stock-form">' +
+      UIC.field({ key: 'product', label: 'المنتج', type: 'select', required: true,
+        options: window.__productOptions || [], placeholder: 'اختر المنتج...' }) +
+      UIC.field({ key: 'date', label: 'التاريخ', type: 'date', value: todayStr(), required: true }) +
+      UIC.field({ key: 'amount', label: 'الكمية', type: 'number', step: '0.01', required: true, placeholder: 'مثال: 150.50' }) +
+      UIC.field({ key: 'warehouse', label: 'المخزن', type: 'select', required: true,
+        options: WAREHOUSES, placeholder: 'اختر المخزن...' }) +
+      UIC.field({ key: 'available_amount', label: 'رصيد السيستم', type: 'number', step: '0.01', required: true, placeholder: 'مثال: 160.00' }) +
+      UIC.field({ key: 'notes', label: 'ملاحظات', type: 'textarea' }) +
+      '</form>';
+    UIC.openModal('stock-modal', {
+      title: 'إضافة جرد مخزون',
+      body: body,
+      onSave: 'saveStock()'
+    });
+  }
+
+  function saveStock() {
+    var data = UIC.collectForm('stock-form');
+    if (!UIC.validateForm('stock-form')) return;
+    UI.showSpinner('جاري الحفظ...');
+    companyCall('add_stock_revision', data)
+      .then(function (r) {
+        UIC.closeModal('stock-modal');
+        UIC.toast(r.message || 'تم الحفظ', 'success');
+        if (r && r.record) {
+          window.__stock = window.__stock || [];
+          window.__stock.unshift(r.record);
+          if (window.__stock.length > 10) window.__stock = window.__stock.slice(0,10);
+          renderStock();
+        } else { fetchStock(); }
+      })
+      .catch(function (e) { UIC.toast(e.message || 'خطأ', 'error'); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function openDetail(idx) {
+    var s = window.__stock[idx];
+    if (!s) return;
+    var rows = [
+      ['المنتج', s.product_name || ('#' + s.product)],
+      ['الاسم', s.name_ar || '-'],
+      ['الفئة', s.category || '-'],
+      ['الوحدة', s.unit || '-'],
+      ['التاريخ', fmtDate(s.date)],
+      ['الكمية', s.amount],
+      ['المخزن', s.warehouse || '-'],
+      ['ملاحظات', s.notes || '-'],
+      ['رصيد السيستم', s.available_amount],
+      ['الفرق', s.difference || '-'],
+      ['النسبة', s.percentage || '-'],
+      ['أضيف بواسطة', s.user || '-'],
+      ['وقت الإضافة', s.created_at ? fmtDate(s.created_at) : '-']
+    ];
+    var body = rows.map(function (r) {
+      return '<div class="form-field"><label class="form-label">' + esc(r[0]) + '</label>' +
+        '<div style="padding:8px 12px;background:var(--bg-subtle);border-radius:var(--radius-sm);font-size:13px;">' + esc(r[1]) + '</div></div>';
+    }).join('');
+    UIC.openModal('stock-detail-modal', {
+      title: 'تفاصيل الجرد',
+      body: body,
+      footer: false
+    });
+  }
+
+  function openEdit(idx) {
+    var s = window.__stock[idx];
+    if (!s) return;
+    var body =
+      '<form id="stock-edit-form">' +
+      '<input type="hidden" id="edit_sheetRow" value="' + (s._sheetRow || '') + '">' +
+      '<input type="hidden" id="edit_expectedProduct" value="' + esc(s.product || '') + '">' +
+      UIC.field({ key: 'edit_date', label: 'التاريخ', type: 'date', value: fmtDate(s.date), required: true }) +
+      UIC.field({ key: 'edit_amount', label: 'الكمية', type: 'number', step: '0.01', value: s.amount, required: true }) +
+      UIC.field({ key: 'edit_warehouse', label: 'المخزن', type: 'select', value: s.warehouse, required: true,
+        options: WAREHOUSES, placeholder: 'اختر المخزن...' }) +
+      UIC.field({ key: 'edit_available_amount', label: 'رصيد السيستم', type: 'number', step: '0.01', value: s.available_amount, required: true }) +
+      UIC.field({ key: 'edit_notes', label: 'ملاحظات', type: 'textarea', value: s.notes || '' }) +
+      '</form>';
+    UIC.openModal('stock-edit-modal', {
+      title: 'تعديل جرد المخزون — ' + esc(s.product_name || ''),
+      body: body,
+      onSave: 'saveEdit()'
+    });
+  }
+
+  function saveEdit() {
+    if (!CAN_WRITE) { UIC.toast('غير مصرح', 'error'); return; }
+    var data = UIC.collectForm('stock-edit-form');
+    if (!UIC.validateForm('stock-edit-form')) return;
+    var payload = {
+      _sheetRow: Number(data.edit_sheetRow),
+      _expectedProduct: Number(data.edit_expectedProduct),
+      date: data.edit_date,
+      amount: data.edit_amount,
+      warehouse: data.edit_warehouse,
+      available_amount: data.edit_available_amount,
+      notes: data.edit_notes
+    };
+    UI.showSpinner('جاري الحفظ...');
+    companyCall('update_stock_revision', payload)
+      .then(function (r) {
+        UIC.closeModal('stock-edit-modal');
+        UIC.toast(r.message || 'تم التحديث', 'success');
+        fetchStock();
+      })
+      .catch(function (e) { UIC.toast(e.message || 'خطأ', 'error'); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function printFiltered() {
+    var list = getFilteredStock();
+    var fromEl = document.getElementById('filter-from');
+    var toEl = document.getElementById('filter-to');
+    var from = fromEl ? fromEl.value : '';
+    var to = toEl ? toEl.value : '';
+    var dateLabel = (from && to) ? 'من ' + from + ' إلى ' + to : from ? 'من ' + from : to ? 'إلى ' + to : 'الكل';
+    var w = window.open('', '_blank');
+    if (!w) { UIC.toast('تم حظر النافذة المنبثقة', 'error'); return; }
+    var rowsHtml = list.map(function (s) {
+      return '<tr>' +
+        '<td>' + esc(s.product_name || ('#' + s.product)) + '</td>' +
+        '<td>' + esc(s.name_ar || '-') + '</td>' +
+        '<td>' + esc(s.category || '-') + '</td>' +
+        '<td>' + esc(s.unit || '-') + '</td>' +
+        '<td>' + fmtDate(s.date) + '</td>' +
+        '<td>' + (s.amount || '') + '</td>' +
+        '<td>' + esc(s.warehouse || '-') + '</td>' +
+        '<td>' + (s.available_amount || '') + '</td>' +
+        '<td>' + esc(s.difference || '-') + '</td>' +
+        '<td>' + fmtPct(s.percentage) + '</td>' +
+        '</tr>';
+    }).join('');
+    w.document.open();
+    w.document.write(
+      '<!DOCTYPE html><html lang="ar"><head><meta charset="utf-8"><title>طباعة جرد المخزون</title>' +
+      '<style>body{font-family:Cairo,sans-serif;direction:rtl;padding:20px;}' +
+      'h2{text-align:center;margin-bottom:4px;} .date-info{text-align:center;color:#666;margin-bottom:16px;}' +
+      'table{width:100%;border-collapse:collapse;font-size:12px;} th,td{border:1px solid #ccc;padding:6px 8px;text-align:right;}' +
+      'th{background:#f0f0f0;font-weight:700;} @media print{body{padding:0;}}</style></head><body>' +
+      '<h2>جرد المخزون</h2>' +
+      '<div class="date-info">التاريخ: ' + esc(dateLabel) + ' — العدد: ' + list.length + '</div>' +
+      '<table><thead><tr>' +
+      '<th>المنتج</th><th>الاسم</th><th>الفئة</th><th>الوحدة</th><th>التاريخ</th><th>الكمية</th><th>المخزن</th><th>رصيد السيستم</th><th>الفرق</th><th>النسبة</th>' +
+      '</tr></thead><tbody>' + rowsHtml + '</tbody></table>' +
+      '</body></html>'
+    );
+    w.document.close();
+    w.print();
+  }
+
+  function showError(e) {
+    var body = document.getElementById('stock-content');
+    if (body) body.innerHTML = '<div class="empty-state"><span>' + esc(e.message || 'خطأ') + '</span></div>';
+  }
+
+
+  load();
+</script>
+</body>
+</html>
+
+
+

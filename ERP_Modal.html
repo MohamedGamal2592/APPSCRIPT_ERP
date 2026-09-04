@@ -1,0 +1,68 @@
+<style>
+/* ERP_Modal — modal + toast service (§3.4). RTL, tokens only. */
+.erp-modal-overlay{position:fixed;inset:0;z-index:99990;display:flex;align-items:center;justify-content:center;background:rgba(17,24,39,.45);backdrop-filter:blur(2px);direction:rtl;padding:16px;}
+.erp-modal{background:var(--bg-surface,#fff);border:1px solid var(--border-color,#e5e7eb);border-radius:16px;box-shadow:var(--shadow-lg,0 10px 30px rgba(0,0,0,.12));max-width:560px;width:100%;max-height:90vh;overflow:auto;}
+.erp-modal-header{display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid var(--border-color,#e5e7eb);}
+.erp-modal-header h3{margin:0;font-size:15px;font-weight:800;color:var(--text-main,#111827);}
+.erp-modal-close{width:32px;height:32px;border-radius:999px;border:1px solid var(--border-color,#e5e7eb);background:var(--bg-surface,#fff);cursor:pointer;}
+.erp-modal-body{padding:16px;}
+.erp-modal-footer{display:flex;gap:8px;justify-content:flex-start;padding:12px 16px;border-top:1px solid var(--border-color,#e5e7eb);}
+.erp-toast{position:fixed;bottom:16px;inset-inline-start:50%;transform:translateX(-50%);z-index:99999;padding:10px 16px;border-radius:999px;font-size:13px;font-weight:700;box-shadow:var(--shadow-lg);max-width:90vw;text-align:center;}
+.erp-toast-success{background:var(--success-bg,#f0fdf4);color:var(--success-text,#166534);border:1px solid var(--success-border,#bbf7d0);}
+.erp-toast-error{background:var(--danger-bg,#fef2f2);color:var(--danger-text,#991b1b);border:1px solid var(--danger-border,#fecaca);}
+.erp-toast-info{background:var(--bg-surface,#fff);color:var(--text-main,#111827);border:1px solid var(--border-color,#e5e7eb);}
+</style>
+<div id="erp-modal-root" aria-live="polite"></div>
+<script>
+window.ERPModal = window.ERPModal || (function(){
+  function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+  function openModal(title, bodyHtml, footerHtml){
+    closeModal();
+    const root = document.getElementById('erp-modal-root');
+    if (!root) return;
+    const overlay = document.createElement('div');
+    overlay.className = 'erp-modal-overlay';
+    overlay.id = 'erp-modal-overlay';
+    overlay.innerHTML = '<div class="erp-modal" role="dialog" aria-modal="true"><div class="erp-modal-header"><h3>' + esc(title) + '</h3><button type="button" class="erp-modal-close" aria-label="إغلاق" onclick="ERPModal.close()">×</button></div><div class="erp-modal-body">' + bodyHtml + '</div>' + (footerHtml ? '<div class="erp-modal-footer">' + footerHtml + '</div>' : '') + '</div>';
+    overlay.addEventListener('click', function(e){ if(e.target===overlay) closeModal(); });
+    root.appendChild(overlay);
+    document.body.classList.add('modal-open');
+  }
+  function closeModal(){
+    const o = document.getElementById('erp-modal-overlay');
+    if (o) o.remove();
+    document.body.classList.remove('modal-open');
+  }
+  document.addEventListener('keydown', function(e){ if(e.key==='Escape') closeModal(); });
+
+  function showRecord(row, columns){
+    const rows = (columns||[]).filter(c=>!c.hidden).map(c => '<div style="display:flex;justify-content:space-between;gap:12px;padding:6px 0;border-bottom:1px solid var(--border-color,#e5e7eb)"><span style="color:var(--text-muted);font-size:13px;">' + esc(c.header) + '</span><span style="font-weight:600;font-size:13px;">' + esc(row[c.field]) + '</span></div>').join('');
+    openModal('تفاصيل', '<div>' + rows + '</div>', '<button type="button" class="btn btn-outline" onclick="ERPModal.close()">إغلاق</button>');
+  }
+  function editRecord(row, columns, onSave){
+    const fields = (columns||[]).filter(c=>!c.hidden && c.field !== 'id' && c.field !== 'unique_id').map(c => {
+      const v = row[c.field]!=null?String(row[c.field]):'';
+      return '<div class="form-field"><label class="form-label">' + esc(c.header) + '</label><input id="erp-edit-' + esc(c.field) + '" class="input" value="' + esc(v) + '"></div>';
+    }).join('');
+    const footer = '<button type="button" class="btn btn-outline" onclick="ERPModal.close()">إلغاء</button><button type="button" class="btn btn-primary" id="erp-modal-save">حفظ</button>';
+    openModal('تعديل', '<div id="erp-edit-form">' + fields + '</div>', footer);
+    const saveBtn = document.getElementById('erp-modal-save');
+    if (saveBtn) saveBtn.addEventListener('click', function(){
+      const data = {};
+      (columns||[]).forEach(c => { const el=document.getElementById('erp-edit-' + c.field); if(el) data[c.field]=el.value; });
+      closeModal();
+      if (onSave) onSave(data);
+    });
+  }
+  function toast(msg, type){
+    // delegate to UIC.toast if available so styling stays consistent
+    if (window.UIC && UIC.toast) { UIC.toast(msg, type); return; }
+    const t = document.createElement('div');
+    t.className = 'erp-toast erp-toast-' + (type||'info');
+    t.textContent = msg;
+    document.body.appendChild(t);
+    setTimeout(()=>{ t.style.opacity='0'; t.style.transition='opacity 300ms'; setTimeout(()=>t.remove(),300); },2600);
+  }
+  return { open: openModal, close: closeModal, showRecord: showRecord, editRecord: editRecord, toast: toast };
+})();
+</script>

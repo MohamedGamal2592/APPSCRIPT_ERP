@@ -1,0 +1,249 @@
+﻿<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Valley Foods — مرتجعات المبيعات</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_ValleyFoods_Nav'); ?>
+  <?!= getCompanyThemeCSS_('9940659bd83035d7') ?>
+</head>
+<body>
+  <div id="vf-root"></div>
+
+  <script>
+    var params = new URLSearchParams(window.location.search);
+    var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+    var scriptUrl = window.scriptUrl || '/';
+    var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+    var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('9940659bd83035d7') ?>';
+    var COMPANY_PAGES = <?!= companyPages ?>;
+    var CURRENT_ACTION = '<?!= currentAction ?>';
+    var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+    var CAN_WRITE = UIC.canAdd_(); var CAN_FULL = UIC.canFull_();
+
+    function companyCall(moduleAction, data) {
+      return API.call('company_action', {
+        target_system: '9940659bd83035d7',
+        module_action: moduleAction,
+        data: data || {}
+      }, SESSION_TOKEN);
+    }
+    function esc(v) {
+      var s = (v === undefined || v === null) ? '' : String(v);
+      if (typeof FMT !== 'undefined' && FMT.escape) return FMT.escape(s);
+      return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+    function todayStr() { return new Date().toISOString().slice(0, 10); }
+    function finFmt(n) { return Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+  </script>
+
+  <script>
+  (function () {
+    function renderApp() {
+      UIC.appShell('vf-root', {
+        companyLogoUrl: COMPANY_LOGO_URL,
+        companyLogoHref: scriptUrl + '?action=vf_dashboard&sessionToken=' + SESSION_TOKEN,
+        companyLogoTitle: 'Valley Foods',
+        breadcrumb: 'Valley Foods / الادارة المالية / مرتجعات المبيعات',
+        contentId: 'vf-returns-content',
+        menuGroups: (window.VALLEYFOODS_MENU || [])
+      });
+      document.getElementById('vf-returns-content').innerHTML =
+        '<div class="vf-card"><div class="vf-card-header"><h3>مرتجعات المبيعات</h3>' +
+          (CAN_WRITE ? '<button class="btn btn-primary" onclick="RETURNS_PAGE.openAdd()">+ إضافة مرتجع</button>' : '') +
+        '</div><div class="vf-card-body">' +
+          '<div id="ret-table"><p class="vf-text-muted">جاري التحميل...</p></div>' +
+        '</div></div>';
+      load();
+    }
+
+    function load() {
+      UI.showSpinner();
+      var container = document.getElementById('ret-table');
+      if (container) {
+        UIC.PagedTable({
+          container: container,
+          headers: ['رقم المرتجع', 'الفاتورة', 'العميل', 'التاريخ', 'عدد البنود', { label: 'قيمة المرتجع', numeric: true }],
+          pageSize: 100,
+          searchable: false,
+          onRendered: function (tid) { try { UIC.initTableSort(tid); } catch (e) {} },
+          fetcher: function (offset, limit) {
+            return companyCall('get_valley_returns_list', { offset: offset, limit: limit });
+          },
+          mapRow: function (g) {
+            return [
+              '<b>' + esc(g.id) + '</b>',
+              esc(g.invoice_number),
+              esc(g.client_label),
+              esc(g.date_display),
+              g.lines,
+              '<span class="num" style="font-weight:700;color:#dc2626;" data-num="' + g.total_value + '">' + finFmt(g.total_value) + '</span>'
+            ];
+          }
+        });
+      }
+      UI.hideSpinner(); try{schedulePrefetch();}catch(e){}
+    }
+
+    /* ---------- ADD RETURN MODAL ---------- */
+    function openAdd() {
+      UI.showSpinner();
+      companyCall('get_valley_sales_list')
+        .then(function (r) {
+          var invs = (r.invoices || []).map(function (inv) {
+            return { value: String(inv.invoice_unique_id), label: String(inv['رقم الفاتورة'] || '-') };
+          });
+          /* party labels need the parties list — fetch via bootstrap-lite */
+          return companyCall('get_valley_sales_bootstrap').then(function (bs) {
+            var pmap = {};
+            (bs.parties || []).forEach(function (p) { pmap[String(p.value)] = p.label; });
+            invs.forEach(function (o, i2) {
+              var cid = (r.invoices || [])[i2] ? String(r.invoices[i2]['اسم العميل'] || '') : '';
+              o.label = (r.invoices[i2]['رقم الفاتورة'] || '') + ' — ' + (pmap[cid] || cid);
+            });
+            renderReturnModal(invs);
+          });
+        })
+        .catch(function (e) { UIC.toast((e && e.message) || 'خطأ', 'error'); })
+        .finally(function () { UI.hideSpinner(); });
+    }
+
+    var PARTY_LABELS = {};
+
+    function renderReturnModal(invoiceOptions) {
+      var body =
+        '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-bottom:12px;">' +
+          UIC.combo({ key: 'ret-invoice', label: 'الفاتورة', required: true, options: invoiceOptions, value: '', placeholder: 'ابحث برقم الفاتورة…' }) +
+          UIC.field({ key: 'ret-date', label: 'تاريخ المرتجع', type: 'date', required: true, value: todayStr() }) +
+        '</div>' +
+        '<div id="ret-lines-wrap"><p class="vf-text-muted">اختر الفاتورة لعرض بنودها القابلة للإرجاع.</p></div>' +
+        '<div style="display:flex;justify-content:flex-end;gap:16px;padding:10px;background:#fef2f2;border-radius:8px;margin-top:10px;font-weight:800;">' +
+          '<span>إجمالي قيمة المرتجع:</span>' +
+          '<span id="ret-total" style="color:#dc2626;direction:ltr;">0.00</span>' +
+        '</div>';
+
+      UIC.openModal('return-modal', { title: 'إضافة مرتجع مبيعات', body: body, footer: false });
+      var modal = document.getElementById('return-modal');
+      if (modal) { var box = modal.querySelector('.modal'); if (box) box.style.maxWidth = '1000px'; }
+
+      /* footer buttons */
+      var foot = document.createElement('div');
+      foot.style.cssText = 'display:flex;justify-content:flex-end;gap:10px;padding:14px 20px;border-top:1px solid #e5e7eb;';
+      foot.innerHTML =
+        '<button class="btn btn-outline" onclick="UIC.closeModal(\'return-modal\')">إلغاء</button>' +
+        '<button class="btn btn-primary" onclick="UI.submitOnce(this, RETURNS_PAGE.save)">💾 حفظ المرتجع</button>';
+      modal.querySelector('.modal').appendChild(foot);
+
+      var invCombo = document.getElementById('ret-invoice_display');
+      var invHidden = document.getElementById('ret-invoice');
+      if (invCombo) {
+        invCombo.addEventListener('input', function () { if (!invCombo.value) resetLines(); });
+        /* fire on selection: combo sets hidden value on pick */
+        invHidden.addEventListener('change', loadInvoiceLines);
+      }
+    }
+
+    function resetLines() {
+      var w = document.getElementById('ret-lines-wrap');
+      if (w) w.innerHTML = '<p class="vf-text-muted">اختر الفاتورة لعرض بنودها القابلة للإرجاع.</p>';
+    }
+
+    function loadInvoiceLines() {
+      var uid = getHid_('ret-invoice');
+      if (!uid) { resetLines(); return; }
+      var w = document.getElementById('ret-lines-wrap');
+      if (w) w.innerHTML = '<p class="vf-text-muted">جاري التحميل...</p>';
+      companyCall('get_valley_invoice_for_return', { invoice_unique_id: uid })
+        .then(function (res) {
+          STMT_LINES = res.lines || [];
+          var inv = res.invoice || {};
+          var rowsHtml = STMT_LINES.map(function (l, i) {
+            var disabled = l.returnable <= 0;
+            return '<tr' + (disabled ? ' style="color:#94a3b8;"' : '') + '>' +
+              '<td><b>' + esc(l.product_name) + '</b>' + (l.details ? '<div style="font-size:11px;color:#6b7280;">' + esc(l.details) + '</div>' : '') + '</td>' +
+              '<td class="num" data-num="' + l.price + '">' + finFmt(l.price) + '</td>' +
+              '<td class="num">' + fmtNumP(l.sold_qty) + '</td>' +
+              '<td class="num">' + fmtNumP(l.returned_qty) + '</td>' +
+              '<td><input id="ret-qty-' + i + '" class="input" type="number" min="0" max="' + l.returnable + '" step="0.01" value="" data-line="' + esc(l.line_uid) + '" data-max="' + l.returnable + '" data-price="' + l.price + '"' + (disabled ? ' disabled' : '') + ' oninput="RETURNS_PAGE.recalc()" style="max-width:120px;direction:ltr;"></td>' +
+              '<td class="num" style="font-weight:700;color:#dc2626;" data-num="' + (disabled ? '' : '') + '" id="ret-val-' + i + '">0.00</td>' +
+            '</tr>';
+          }).join('');
+          w.innerHTML =
+            '<div style="background:#f0fdf4;border-left:4px solid #16a34a;padding:10px 14px;margin-bottom:10px;font-size:13px;">' +
+              'فاتورة <b>' + esc((res.invoice || {}).number || '-') + '</b> — العميل: <b>' + esc((res.invoice || {}).client_name || '-') + '</b> · تاريخها: <b>' + esc((res.invoice || {}).date_display || '-') + '</b>' +
+            '</div>' +
+            '<table class="table"><thead><tr><th>المنتج</th><th>سعر البيع الأصلي</th><th>المبيع</th><th>مرتجع سابقاً</th><th style="width:130px;">كمية المرتجع</th><th>القيمة</th></tr></thead><tbody>' +
+            rowsHtml + '</tbody></table>';
+        })
+        .catch(function (e) { w.innerHTML = '<p style="color:red;">' + esc(e.message || 'خطأ') + '</p>'; });
+    }
+
+    var STMT_LINES = [];
+
+    function fmtNumP(n) { return Number(n || 0).toLocaleString('en-US', { maximumFractionDigits: 2 }); }
+    function getHid_(id) { var el = document.getElementById(id); return el ? el.value.trim() : ''; }
+
+    function save() {
+      var invUid = getHid_('ret-invoice');
+      var date = getDt_('ret-date');
+      if (!invUid) { UIC.toast('اختر الفاتورة أولاً', 'error'); return; }
+      if (!date) { UIC.toast('اختر تاريخ المرتجع', 'error'); return; }
+      var items = [];
+      var anyQty = false;
+      for (var i = 0; ; i++) {
+        var qEl = document.getElementById('ret-qty-' + i);
+        if (!qEl) break;
+        var q = parseFloat(qEl.value) || 0;
+        if (q > 0) {
+          anyQty = true;
+          items.push({ line_uid: qEl.getAttribute('data-line'), qty: q });
+        }
+      }
+      if (!anyQty) { UIC.toast('أدخل كمية مرتجعة لبند واحد على الأقل', 'error'); return; }
+      if (!confirm('سيتم تسجيل المرتجع وخصم قيمته من فاتورة رقم ' + invUid.slice(0, 8) + '… متابعة؟')) return;
+      UI.showSpinner();
+      companyCall('save_valley_return', { invoice_unique_id: invUid, date: date, items: items })
+        .then(function (r) {
+          UIC.closeModal('return-modal');
+          UIC.toast((r && r.message) || 'تم تسجيل المرتجع', 'success');
+          load();
+        })
+        .catch(function (e) { UIC.toast((e && e.message) || 'فشل حفظ المرتجع', 'error'); })
+        .finally(function () { UI.hideSpinner(); });
+    }
+
+    function recalc() {
+      var total = 0;
+      for (var i = 0; ; i++) {
+        var qEl = document.getElementById('ret-qty-' + i);
+        if (!qEl) break;
+        var max = parseFloat(qEl.getAttribute('data-max')) || 0;
+        var price = parseFloat(qEl.getAttribute('data-price')) || 0;
+        var q = parseFloat(qEl.value) || 0;
+        if (q > max) { qEl.value = max; q = max; }
+        var val = q * price;
+        total += val;
+        var cell = document.getElementById('ret-val-' + i);
+        if (cell) cell.textContent = finFmt(val);
+      }
+      var t = document.getElementById('ret-total');
+      if (t) t.textContent = finFmt(total);
+    }
+
+    function getDt_(id) { var el = document.getElementById(id); return el ? el.value : ''; }
+    window.RETURNS_PAGE = {
+      openAdd: openAdd,
+      save: save,
+      recalc: recalc
+    };
+
+    document.addEventListener('DOMContentLoaded', renderApp);
+  })();
+  </script>
+</body>
+</html>
+
+

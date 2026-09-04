@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Top Chemical — Dashboard</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_TopChemical_Nav'); ?>
+  <?!= getCompanyThemeCSS_('3fe1b5cb67b7223e') ?>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+  <style>
+    .dash-wrap { padding: 16px 20px 32px; }
+
+    /* KPI cards row */
+    .kpi-row {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 14px;
+      margin-bottom: 24px;
+    }
+    .kpi-card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-lg);
+      padding: 18px 20px;
+      text-align: center;
+      box-shadow: var(--shadow-sm);
+      transition: transform .15s, box-shadow .15s;
+    }
+    .kpi-card:hover { transform: translateY(-2px); box-shadow: var(--shadow-md); }
+    .kpi-label { font-size: 12px; color: var(--text-muted); font-weight: 600; margin-bottom: 6px; }
+    .kpi-value { font-size: 22px; font-weight: 800; color: var(--brand-primary); letter-spacing: -.5px; }
+    .kpi-card.green  .kpi-value { color: #16a34a; }
+    .kpi-card.orange .kpi-value { color: #d97706; }
+    .kpi-card.red    .kpi-value { color: #dc2626; }
+
+    /* Year filter */
+    .dash-toolbar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 18px;
+      flex-wrap: wrap;
+    }
+    .dash-toolbar label { font-size: 13px; font-weight: 700; color: var(--text-main); }
+    .dash-toolbar select { min-height: 36px; padding: 4px 10px; border-radius: var(--radius-md);
+      border: 1px solid var(--border-color); background: var(--bg-surface); color: var(--text-main);
+      font-size: 13px; cursor: pointer; }
+
+    /* Charts grid */
+    .charts-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 18px;
+    }
+    @media (max-width: 900px)  { .charts-grid { grid-template-columns: 1fr; } }
+    @media (min-width: 1300px) { .charts-grid { grid-template-columns: 1fr 1fr 1fr; } }
+
+    .chart-card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-lg);
+      padding: 16px 18px 20px;
+      box-shadow: var(--shadow-sm);
+    }
+    .chart-card.full-width { grid-column: 1 / -1; }
+    .chart-title {
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--text-main);
+      margin: 0 0 14px 0;
+      text-align: center;
+    }
+    .chart-canvas-wrap { position: relative; height: 280px; }
+    @media (max-width: 600px) { .chart-canvas-wrap { height: 220px; } }
+  </style>
+</head>
+<body>
+<div id="tc-root" dir="rtl"></div>
+<script>
+  var params = new URLSearchParams(window.location.search);
+  var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+  var scriptUrl = window.scriptUrl || '/';
+  var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('3fe1b5cb67b7223e') ?>';
+  var COMPANY_PAGES = <?!= companyPages ?>;
+  var CURRENT_ACTION = '<?!= currentAction ?>';
+
+  // Destroy any existing chart before re-drawing
+  var _charts = {};
+  function destroyChart(id) {
+    if (_charts[id]) { try { _charts[id].destroy(); } catch(e){} delete _charts[id]; }
+  }
+
+  function companyCall(moduleAction, data) {
+    return API.call('company_action', {
+      target_system: '3fe1b5cb67b7223e',
+      module_action: moduleAction,
+      data: data || {}
+    }, SESSION_TOKEN);
+  }
+
+  function fmtMoney(n) {
+    if (!n && n !== 0) return '—';
+    return Number(n).toLocaleString('ar-EG', {minimumFractionDigits: 0, maximumFractionDigits: 0}) + ' ج.م';
+  }
+
+  var selectedYear = new Date().getFullYear();
+
+  function load() {
+    UIC.appShell('tc-root', {
+      companyLogoUrl: COMPANY_LOGO_URL,
+      companyLogoHref: scriptUrl + '?action=tc_dashboard&sessionToken=' + SESSION_TOKEN,
+      companyLogoTitle: 'توب كيميكال',
+      breadcrumb: 'توب كيميكال / لوحة التحكم',
+      contentId: 'tc-content',
+      menuGroups: (window.TOPCHEMICAL_MENU || [])
+    });
+    fetchDashboard(selectedYear);
+  }
+
+  function fetchDashboard(year) {
+    var inner = document.getElementById('tc-content');
+    if (!inner) return;
+    UI.showSpinner('جاري تحميل بيانات لوحة التحكم...');
+
+    companyCall('get_dashboard_data', { year: year })
+      .then(function(d) {
+        renderDashboard(d, year);
+      })
+      .catch(function(e) {
+        inner.innerHTML = '<div class="empty-state"><span>خطأ في تحميل البيانات: ' + FMT.escape((e && e.message) || String(e)) + '</span></div>';
+      })
+      .finally(function() { UI.hideSpinner(); try{schedulePrefetch();}catch(e){} });
+  }
+
+  function renderDashboard(d, year) {
+    var inner = document.getElementById('tc-content');
+    if (!inner) return;
+
+    if (!d || d.kpi_authorized === false || !d.kpi) {
+      inner.innerHTML =
+        '<div style="background:var(--bg-surface);border:1px solid var(--border-color);border-radius:var(--radius-lg);padding:36px 24px;text-align:center;max-width:600px;margin:24px auto;box-shadow:var(--shadow-sm);">' +
+        '<div style="font-size:36px;margin-bottom:12px;">🧪</div>' +
+        '<h2 style="margin:0 0 10px;font-size:20px;color:var(--text-main);">مرحباً بك في نظام توب كيميكال</h2>' +
+        '<p style="margin:0;color:var(--text-muted);font-size:14px;line-height:1.7;">استخدم القائمة أعلاه للتنقل بين الأقسام والصفحات المصرح لك بالوصول إليها.</p>' +
+        '</div>';
+      return;
+    }
+
+    var kpi = d.kpi || {};
+    var monthlyInvoices = d.monthlyInvoices || [];
+    var topClients = d.topClients || [];
+    var monthlyCosts = d.monthlyCosts || [];
+
+    var years = [2022, 2023, 2024, 2025, 2026, 2027];
+    var yOpts = years.map(function(y) {
+      return '<option value="' + y + '"' + (y === year ? ' selected' : '') + '>' + y + '</option>';
+    }).join('');
+
+    inner.innerHTML =
+      '<div class="dash-wrap">' +
+        '<div class="dash-toolbar">' +
+          '<label>السنة:</label>' +
+          '<select onchange="selectedYear=Number(this.value);fetchDashboard(selectedYear)">' + yOpts + '</select>' +
+          '<span style="font-size:12px;color:var(--text-muted);margin-right:8px;">عرض بيانات سنة ' + year + '</span>' +
+        '</div>' +
+
+        // KPI row
+        '<div class="kpi-row">' +
+          '<div class="kpi-card">' +
+            '<div class="kpi-label">إجمالي المبيعات الصافية</div>' +
+            '<div class="kpi-value">' + fmtMoney(kpi.totalNet) + '</div>' +
+          '</div>' +
+          '<div class="kpi-card green">' +
+            '<div class="kpi-label">إجمالي المبيعات شامل الضريبة</div>' +
+            '<div class="kpi-value">' + fmtMoney(kpi.totalSales) + '</div>' +
+          '</div>' +
+          '<div class="kpi-card orange">' +
+            '<div class="kpi-label">إجمالي ضريبة المبيعات</div>' +
+            '<div class="kpi-value">' + fmtMoney(kpi.totalTax) + '</div>' +
+          '</div>' +
+          '<div class="kpi-card red">' +
+            '<div class="kpi-label">إجمالي التكاليف النقدية</div>' +
+            '<div class="kpi-value">' + fmtMoney(kpi.totalCosts) + '</div>' +
+          '</div>' +
+        '</div>' +
+
+        // Charts grid
+        '<div class="charts-grid">' +
+          '<div class="chart-card full-width">' +
+            '<p class="chart-title">📊 المبيعات الشهرية (الصافي والإجمالي) — ' + year + '</p>' +
+            '<div class="chart-canvas-wrap"><canvas id="chart-monthly-invoices"></canvas></div>' +
+          '</div>' +
+          '<div class="chart-card">' +
+            '<p class="chart-title">🏆 أعلى العملاء مبيعاً</p>' +
+            '<div class="chart-canvas-wrap"><canvas id="chart-top-clients"></canvas></div>' +
+          '</div>' +
+          '<div class="chart-card">' +
+            '<p class="chart-title">💸 التكاليف الشهرية — ' + year + '</p>' +
+            '<div class="chart-canvas-wrap"><canvas id="chart-monthly-costs"></canvas></div>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+
+    // Give browser a tick to paint, then draw charts
+    setTimeout(function() {
+      drawMonthlyInvoicesChart(monthlyInvoices);
+      drawTopClientsChart(topClients);
+      drawMonthlyCostsChart(monthlyCosts);
+    }, 50);
+  }
+
+  var MONTH_LABELS = ['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];
+
+  function drawMonthlyInvoicesChart(rows) {
+    destroyChart('monthly-invoices');
+    var ctx = document.getElementById('chart-monthly-invoices');
+    if (!ctx) return;
+    _charts['monthly-invoices'] = new Chart(ctx, {
+      type: 'bar',
+      data: {
+        labels: rows.map(function(r) { return r.month; }),
+        datasets: [
+          {
+            label: 'المبلغ الصافي',
+            data: rows.map(function(r) { return r.net || 0; }),
+            backgroundColor: 'rgba(59,130,246,0.75)',
+            borderColor: 'rgb(37,99,235)',
+            borderWidth: 1,
+            borderRadius: 4
+          },
+          {
+            label: 'الإجمالي شامل الضريبة',
+            data: rows.map(function(r) { return r.total || 0; }),
+            backgroundColor: 'rgba(16,185,129,0.55)',
+            borderColor: 'rgb(5,150,105)',
+            borderWidth: 1,
+            borderRadius: 4
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { position: 'top', labels: { font: { family: 'inherit' } } },
+          tooltip: {
+            callbacks: {
+              label: function(ctx) {
+                return ctx.dataset.label + ': ' + Number(ctx.parsed.y).toLocaleString('ar-EG') + ' ج.م';
+              }
+            }
+          }
+        },
+        scales: {
+          x: { ticks: { font: { size: 11 } } },
+          y: {
+            ticks: {
+              callback: function(v) { return Number(v).toLocaleString('ar-EG'); },
+              font: { size: 11 }
+            }
+          }
+        }
+      }
+    });
+  }
+
+  function drawTopClientsChart(rows) {
+    destroyChart('top-clients');
+    var ctx = document.getElementById('chart-top-clients');
+    if (!ctx) return;
+    if (!rows || !rows.length) {
+      ctx.parentElement.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-muted);font-size:13px;">لا توجد بيانات عملاء لهذه السنة</div>';
+      return;
+    }
+    var colors = ['#3b82f6','#10b981','#f59e0b','#ef4444','#8b5cf6','#06b6d4','#f97316','#ec4899'];
+    _charts['top-clients'] = new Chart(ctx, {
+      type: 'doughnut',
+      data: {
+        labels: rows.map(function(r) { return r.name; }),
+        datasets: [{
+          data: rows.map(function(r) { return r.total || 0; }),
+          backgroundColor: colors,
+          borderWidth: 2,
+          borderColor: 'var(--bg-surface)'
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { position: 'right', labels: { font: { size: 11, family: 'inherit' }, boxWidth: 14 } },
+          tooltip: {
+            callbacks: {
+              label: function(ctx) {
+                return ctx.label + ': ' + Number(ctx.parsed).toLocaleString('ar-EG') + ' ج.م';
+              }
+            }
+          }
+        }
+      }
+    });
+  }
+
+  function drawMonthlyCostsChart(rows) {
+    destroyChart('monthly-costs');
+    var ctx = document.getElementById('chart-monthly-costs');
+    if (!ctx) return;
+    _charts['monthly-costs'] = new Chart(ctx, {
+      type: 'bar',
+      data: {
+        labels: rows.map(function(r) { return r.month; }),
+        datasets: [{
+          label: 'التكاليف',
+          data: rows.map(function(r) { return r.costs || 0; }),
+          backgroundColor: 'rgba(239,68,68,0.7)',
+          borderColor: 'rgb(220,38,38)',
+          borderWidth: 1,
+          borderRadius: 4
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { position: 'top', labels: { font: { family: 'inherit' } } },
+          tooltip: {
+            callbacks: {
+              label: function(ctx) {
+                return ctx.dataset.label + ': ' + Number(ctx.parsed.y).toLocaleString('ar-EG') + ' ج.م';
+              }
+            }
+          }
+        },
+        scales: {
+          x: { ticks: { font: { size: 11 } } },
+          y: {
+            ticks: {
+              callback: function(v) { return Number(v).toLocaleString('ar-EG'); },
+              font: { size: 11 }
+            }
+          }
+        }
+      }
+    });
+  }
+
+
+  load();
+</script>
+</body>
+</html>
+
+

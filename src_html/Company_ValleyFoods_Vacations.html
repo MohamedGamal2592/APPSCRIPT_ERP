@@ -1,0 +1,265 @@
+﻿<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Valley Foods — الإجازات</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_ValleyFoods_Nav'); ?>
+  <?!= getCompanyThemeCSS_('9940659bd83035d7') ?>
+</head>
+<body>
+  <div id="vf-root"></div>
+
+  <script>
+    var params = new URLSearchParams(window.location.search);
+    var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+    var scriptUrl = window.scriptUrl || '/';
+    var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+    var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('9940659bd83035d7') ?>';
+    var COMPANY_PAGES = <?!= companyPages ?>;
+    var CURRENT_ACTION = '<?!= currentAction ?>';
+    var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+    var CAN_WRITE = IS_SUPER_ADMIN || !!(USER_PAGES && USER_PAGES[CURRENT_ACTION] && USER_PAGES[CURRENT_ACTION].indexOf('write') !== -1);
+
+    function companyCall(moduleAction, data) {
+      return API.call('company_action', {
+        target_system: '9940659bd83035d7',
+        module_action: moduleAction,
+        data: data || {}
+      }, SESSION_TOKEN);
+    }
+
+    function esc(v) {
+      var s = (v === undefined || v === null) ? '' : String(v);
+      if (typeof FMT !== 'undefined' && FMT.escape) return FMT.escape(s);
+      return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+    function todayStr() { return new Date().toISOString().slice(0, 10); }
+    function fmtDate(v) {
+      if (!v) return '';
+      var d = (v instanceof Date) ? v : new Date(v);
+      if (isNaN(d.getTime())) return String(v);
+      var pad = function (n) { return n < 10 ? '0' + n : '' + n; };
+      return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+    }
+
+    var ROWS = [], EMP_OPTIONS = [], VAC_INDEX_OPTIONS = [], ALLOC_MAP = {};
+    var VAC_INDEX_MAP = {}, REQUIRE_ALLOC_MAP = {};
+
+    function load() {
+      UIC.appShell('vf-root', {
+        companyLogoUrl: COMPANY_LOGO_URL,
+        companyLogoHref: scriptUrl + '?action=vf_dashboard&sessionToken=' + SESSION_TOKEN,
+        companyLogoTitle: 'Valley Foods',
+        breadcrumb: 'Valley Foods / شؤون الموظفين / الإجازات',
+        contentId: 'vf-vac-content',
+        menuGroups: (window.VALLEYFOODS_MENU || [])
+      });
+      fetchData();
+    }
+
+    function fetchData() {
+      UI.showSpinner();
+      companyCall('get_vacations_data')
+        .then(function (r) {
+          ROWS = r.rows || [];
+          EMP_OPTIONS = r.employee_options || [];
+          VAC_INDEX_OPTIONS = r.vacation_index_options || [];
+          ALLOC_MAP = r.allocation_options_map || {};
+          VAC_INDEX_MAP = {};
+          REQUIRE_ALLOC_MAP = {};
+          VAC_INDEX_OPTIONS.forEach(function (o) {
+            VAC_INDEX_MAP[String(o.value)] = o.label;
+            REQUIRE_ALLOC_MAP[String(o.value)] = o.require_allocation === true || o.require_allocation === 'true';
+          });
+          render();
+        })
+        .catch(function (e) {
+          UIC.toast((e && e.message) ? e.message : 'خطأ في تحميل البيانات', 'error');
+        })
+        .finally(function () { UI.hideSpinner(); });
+    }
+
+    function render() {
+      var body = document.getElementById('vf-vac-content');
+      if (!body) return;
+      var html = (CAN_WRITE
+        ? '<div style="display:flex;justify-content:flex-end;margin-bottom:12px;"><button class="btn btn-primary" onclick="openAddModal()">+ إضافة إجازة</button></div>'
+        : '');
+      var rows = ROWS.map(function (r) {
+        var vacName = VAC_INDEX_MAP[String(r.vacation_type)] || r.vacation_type_name || r.vacation_type || '';
+        var halfDay = (r.vacation_half_day == 0.5 || r.vacation_half_day === '0.5' || r.vacation_half_day === true) ? 'نعم' : 'لا';
+        var attachCell = r.attachment
+          ? '<button class="btn btn-outline" style="padding:3px 8px;font-size:11px;" onclick="downloadAttach(\'' + esc(r.attachment) + '\')">تحميل</button>'
+          : '—';
+        return {
+          emp_id: r.emp_id || '',
+          vacation_type: vacName,
+          allocation_id: r.allocation_id || '—',
+          start_date: fmtDate(r.start_date),
+          end_date: fmtDate(r.end_date),
+          duration_days: r.duration_days != null ? r.duration_days : '',
+          half_day: halfDay,
+          vacation_reason: r.vacation_reason || '—',
+          attachment: attachCell
+        };
+      });
+      html += UIC.dataTable('vac-table', {
+        title: 'الإجازات',
+        headers: [
+          { key: 'emp_id', label: 'الكود' },
+          { key: 'vacation_type', label: 'النوع' },
+          { key: 'allocation_id', label: 'التخصيص' },
+          { key: 'start_date', label: 'من' },
+          { key: 'end_date', label: 'إلى' },
+          { key: 'duration_days', label: 'الأيام', numeric: true },
+          { key: 'half_day', label: 'نصف يوم' },
+          { key: 'vacation_reason', label: 'السبب' },
+          { key: 'attachment', label: 'المرفق' }
+        ],
+        rows: rows,
+        emptyText: 'لا توجد إجازات'
+      });
+      body.innerHTML = html;
+      UIC.initTableSort('vac-table');
+    }
+
+    function downloadAttach(ref) {
+      if (!ref) return;
+      window.open(scriptUrl + '?download=doc_file&company=9940659bd83035d7&ref=' +
+        encodeURIComponent(ref) + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN), '_blank');
+    }
+
+    function openAddModal() {
+      var body =
+        '<form id="vf-vac-form">' +
+        UIC.combo({ key: 'emp_id', label: 'الموظف', required: true,
+          options: EMP_OPTIONS, placeholder: 'اختر الموظف...' }) +
+        UIC.combo({ key: 'vacation_type', label: 'نوع الإجازة', required: true,
+          options: VAC_INDEX_OPTIONS, placeholder: 'اختر النوع...' }) +
+        '<div id="alloc-wrapper" style="display:none;">' +
+        UIC.combo({ key: 'allocation_id', label: 'التخصيص', required: false,
+          options: [], placeholder: 'اختر التخصيص...' }) +
+        '</div>' +
+        UIC.field({ key: 'vacation_half_day', label: 'نصف يوم', type: 'checkbox' }) +
+        UIC.field({ key: 'start_date', label: 'من تاريخ', type: 'date', required: true, value: todayStr() }) +
+        UIC.field({ key: 'end_date', label: 'إلى تاريخ', type: 'date', required: true, value: todayStr() }) +
+        UIC.field({ key: 'duration_days', label: 'عدد الأيام (محسوب)', type: 'number', value: '1' }) +
+        UIC.field({ key: 'duration_days_other', label: 'أيام أخرى', type: 'number', value: '0' }) +
+        UIC.field({ key: 'amount_other', label: 'مبلغ إضافي', type: 'number', value: '0' }) +
+        UIC.field({ key: 'vacation_reason', label: 'سبب الإجازة', type: 'textarea', required: true }) +
+        UIC.fileField({ key: 'attachment', label: 'المرفق', accept: '.pdf,.doc,.docx,.png,.jpg,.jpeg' }) +
+        '</form>';
+      UIC.openModal('vf-vac-modal', {
+        title: 'إضافة إجازة',
+        body: body,
+        onSave: 'saveVacation()'
+      });
+      setTimeout(function () {
+        var empSel = document.getElementById('emp_id');
+        var vacSel = document.getElementById('vacation_type');
+        var startEl = document.getElementById('start_date');
+        var endEl = document.getElementById('end_date');
+        var halfChk = document.getElementById('vacation_half_day');
+        var durEl = document.getElementById('duration_days');
+        if (durEl) durEl.disabled = true;
+
+        function updateAllocVisibility() {
+          var empId = empSel ? empSel.value : '';
+          var vacId = vacSel ? vacSel.value : '';
+          var needAlloc = !!REQUIRE_ALLOC_MAP[String(vacId)];
+          var wrap = document.getElementById('alloc-wrapper');
+          if (!wrap) return;
+          if (needAlloc) {
+            var allocs = (ALLOC_MAP[String(empId)] || []).filter(function (a) {
+              return String(a.vacation_type) === String(vacId);
+            });
+            var opts = allocs.map(function (a) { return { value: a.value, label: a.label }; });
+            if (opts.length === 0) opts = [{ value: '', label: 'لا توجد تخصيصات متاحة' }];
+            wrap.innerHTML = UIC.combo({ key: 'allocation_id', label: 'التخصيص', required: true, options: opts, placeholder: '...' });
+            wrap.style.display = '';
+          } else {
+            wrap.style.display = 'none';
+          }
+        }
+
+        function calcDuration() {
+          if (halfChk && halfChk.checked) {
+            if (durEl) durEl.value = '0.5';
+            return;
+          }
+          if (!startEl || !endEl || !durEl) return;
+          var s = new Date(startEl.value);
+          var e = new Date(endEl.value);
+          if (isNaN(s.getTime()) || isNaN(e.getTime())) return;
+          var diff = Math.round((e.getTime() - s.getTime()) / (1000 * 60 * 60 * 24)) + 1;
+          if (diff < 0) diff = 0;
+          durEl.value = String(diff);
+        }
+
+        if (empSel) empSel.onchange = function () { updateAllocVisibility(); };
+        if (vacSel) vacSel.onchange = function () { updateAllocVisibility(); calcDuration(); };
+        if (startEl) startEl.onchange = calcDuration;
+        if (endEl) endEl.onchange = calcDuration;
+        if (halfChk) halfChk.onchange = calcDuration;
+      }, 200);
+    }
+
+    window.saveVacation = function () {
+      if (!UIC.validateForm('vf-vac-form')) return;
+      var d = UIC.collectForm('vf-vac-form');
+      if (!d.emp_id) { UIC.toast('الموظف مطلوب', 'error'); return; }
+      if (!d.vacation_type) { UIC.toast('نوع الإجازة مطلوب', 'error'); return; }
+      if (!d.start_date) { UIC.toast('تاريخ البداية مطلوب', 'error'); return; }
+      if (!d.end_date) { UIC.toast('تاريخ النهاية مطلوب', 'error'); return; }
+      if (!d.vacation_reason || !d.vacation_reason.trim()) { UIC.toast('سبب الإجازة مطلوب', 'error'); return; }
+      d.vacation_half_day = !!d.vacation_half_day;
+      d.duration_days = parseFloat(d.duration_days) || 0;
+
+      var wrap = document.getElementById('alloc-wrapper');
+      var needAlloc = wrap && wrap.style.display !== 'none';
+      if (needAlloc && !d.allocation_id) { UIC.toast('التخصيص مطلوب', 'error'); return; }
+      if (!needAlloc) d.allocation_id = '';
+
+      UI.showSpinner('جاري الحفظ...');
+      var formEl = document.getElementById('vf-vac-form');
+      var fileInput = formEl ? formEl.querySelector('input[type="file"]') : null;
+      var filePromise = (fileInput && fileInput.files && fileInput.files[0])
+        ? new Promise(function (resolve) {
+            var reader = new FileReader();
+            reader.onerror = function () { resolve(''); };
+            reader.onload = function () {
+              var b64 = String(reader.result || '').split(',')[1] || '';
+              companyCall('add_upload_file', { sheet: 'valley_employee_vacations', filename: fileInput.files[0].name, base64: b64 })
+                .then(function (res) { resolve(res && res.reference ? res.reference : ''); })
+                .catch(function () { resolve(''); });
+            };
+            reader.readAsDataURL(fileInput.files[0]);
+          })
+        : Promise.resolve('');
+      filePromise.then(function (ref) {
+        if (ref) d.attachment = ref;
+        return companyCall('add_vacation', d);
+      }).then(function (r) {
+        UIC.closeModal('vf-vac-modal');
+        UIC.toast((r && r.message) || 'تم الحفظ', 'success');
+        if (r && r.record) {
+          var RECENT_LIMIT = 10;
+          var idx3 = ROWS.findIndex(function(x){ return String(x.unique_id)===String(r.record.unique_id); });
+          if (idx3!==-1) ROWS[idx3]=r.record; else ROWS.unshift(r.record);
+          if (ROWS.length>RECENT_LIMIT) ROWS.pop();
+          render();
+        } else { fetchData(); }
+      }).catch(function (e) {
+        UIC.toast((e && e.message) ? e.message : 'خطأ في حفظ الإجازة', 'error');
+      }).finally(function () { UI.hideSpinner(); });
+    };
+
+    document.addEventListener('DOMContentLoaded', load);
+  </script>
+</body>
+</html>
+

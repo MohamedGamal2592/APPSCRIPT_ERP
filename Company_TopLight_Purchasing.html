@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Top Light — المشتريات</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= getCompanyThemeCSS_('8df5c89a117fe9a5') ?>
+</head>
+<body>
+<div id="tl-root" dir="rtl"></div>
+<script>
+  var params = new URLSearchParams(window.location.search);
+  var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+  var scriptUrl = window.scriptUrl || '/';
+  var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+  var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('8df5c89a117fe9a5') ?>';
+  var COMPANY_PAGES = <?!= companyPages ?>;
+  var CURRENT_ACTION = '<?!= currentAction ?>';
+
+  var RECORD_KEYS = {
+    code: 'code', tax_system: 'tax_system', receipt_date: 'reciept date', items: 'items', type: 'type',
+    shipping_type: 'shipping type', supplier_name: 'supplier name', currency: 'currency', exchange_rate: 'exchange rate',
+    value: 'value', cif_insurance_value: 'if shipping via cif, enter the insurance value.',
+    importation_reprice: 'importation re-price', tax_declared_value: 'tax declared value',
+    administrative_expenses: 'administrative expenses', customs_expenses: 'customs expenses',
+    unloading_expenses: 'unloading expenses', bank_commission: 'bank commission',
+    customs_clearance: 'customs clearance and port receipts', additional_fees: 'additional fees',
+    clearance_expenses: 'clearance expenses', other_expenses: 'other expenses', purchase_tax: 'purchase tax',
+    income_tax: 'income tax', internal_cost_adjustment: 'internal cost adjustment',
+    minimum_differences: 'minimum differences', approved_this_month: 'approved this month', associated_bank: 'associated bank'
+  };
+
+  var HEADER_KEYS = ['code','tax_system','receipt_date','items','type','shipping_type','supplier_name','currency','exchange_rate',
+    'value','cif_insurance_value','importation_reprice','tax_declared_value',
+    'administrative_expenses','customs_expenses','unloading_expenses','bank_commission','customs_clearance','additional_fees',
+    'clearance_expenses','other_expenses','purchase_tax','income_tax','internal_cost_adjustment','minimum_differences',
+    'approved_this_month','associated_bank'];
+
+  var __options = {};
+  var __headers = [];
+  var __lines = [];
+  var __editingUid = '';
+  var __canEdit = false;
+
+  function companyCall(moduleAction, data) {
+    return API.call('company_action', {
+      target_system: '8df5c89a117fe9a5',
+      module_action: moduleAction,
+      data: data || {}
+    }, SESSION_TOKEN);
+  }
+
+  function num(v) { var n = Number(v); return isNaN(n) ? 0 : n; }
+  function getVal(id) { var el = document.getElementById(id); return el ? el.value : ''; }
+  function setText(id, t) { var el = document.getElementById(id); if (el) el.textContent = t; }
+
+  function load() {
+    var contentId = 'tl-content';
+    UIC.appShell('tl-root', {
+      companyLogoUrl: COMPANY_LOGO_URL,
+      companyLogoHref: scriptUrl + '?action=tl_dashboard&sessionToken=' + SESSION_TOKEN,
+      companyLogoTitle: 'القمة لايت',
+      breadcrumb: 'القمة لايت / المشتريات',
+      contentId: contentId
+    });
+    renderList();
+  }
+
+  function renderList() {
+    UI.showSpinner([
+      'جاري تحميل عمليات الشراء...',
+      'جاري استرجاع الموردين والتكاليف...',
+      'لحظة، جاري تجهيز جدول المشتريات...'
+    ]);
+    companyCall('get_purchasing_headers')
+      .then(function (r) {
+        __options = r.options || {};
+        __headers = r.headers || [];
+        renderHeadersTable(); try{schedulePrefetch();}catch(e){};
+      })
+      .catch(function (e) { showError(e); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function pick(h) {
+    var keys = Array.prototype.slice.call(arguments, 1);
+    for (var i = 0; i < keys.length; i++) {
+      var k = keys[i].toLowerCase().replace(/_/g,' ');
+      for (var kk in h) if (String(kk).toLowerCase().replace(/_/g,' ').trim() === k) {
+        var v = h[kk]; if (v !== undefined && v !== null && String(v).trim() !== '') return v;
+      }
+    }
+    return '';
+  }
+  function renderHeadersTable() {
+    var content = document.getElementById('tl-content');
+    __headers.sort(function (a, b) {
+      var da = pick(a, 'reciept date','receipt date'), db = pick(b, 'reciept date','receipt date');
+      return new Date(db) - new Date(da);
+    });
+    var rows = __headers.map(function (h) {
+      var uid = FMT.escape(h.unique_id||'');
+      var btns = [
+        { label: '👁️ عرض / View', onclick: "doAction('" + uid + "','view')" },
+        { label: '🖨️ طباعة / Print', onclick: "doAction('" + uid + "','print')" }
+      ];
+      if (String(pick(h,'approval_status')||h.approval_status) !== 'Approved') {
+        btns.push({ label: '✅ اعتماد / Approve', onclick: "doAction('" + uid + "','approve')" });
+        if (UIC.canFull_()) {
+          btns.push({ label: '✏️ تعديل / Edit', onclick: "doAction('" + uid + "','edit')" });
+          btns.push({ label: '🗑️ حذف / Delete', color:'#dc2626', onclick: "doAction('" + uid + "','delete')" });
+        } else {
+          btns.push({ label: '👁️ عرض / View', onclick: "doAction('" + uid + "','view')" });
+        }
+      }
+      var actions = UIC.actionDropdown(btns);
+      return {
+        code: FMT.escape(String(pick(h,'code')||'-')),
+        receipt_date: (function(v){ var s=pick(h,'reciept date','receipt date'); return s ? String(s).slice(0,10) : '-'; })(),
+        items: FMT.escape(String(pick(h,'items')||'-')),
+        type: FMT.escape(String(pick(h,'type')||'-')),
+        currency: FMT.escape(String(pick(h,'currency')||'-')),
+        total_costs: FMT.escape(String(pick(h,'total costs','total_costs')|| (h['total costs']!=null ? String(h['total costs']) : '-'))),
+        approval_status: FMT.escape(String(pick(h,'approval_status')||h.approval_status||'-')),
+        actions: actions
+      };
+    });
+    content.innerHTML = '<div style="display:flex;justify-content:flex-end;margin-bottom:12px;">' +
+      '<button class="btn btn-primary" onclick="openForm(\'\')">+ إضافة عملية شراء</button></div>' +
+      UIC.dataTable('purchasing-table', {
+        title: 'المشتريات',
+        headers: [
+          { key: 'code', label: 'الكود' },
+          { key: 'receipt_date', label: 'تاريخ الاستلام' },
+          { key: 'items', label: 'الأصناف' },
+          { key: 'type', label: 'النوع' },
+          { key: 'currency', label: 'العملة' },
+          { key: 'total_costs', label: 'إجمالي التكاليف' },
+          { key: 'approval_status', label: 'الحالة' },
+          { key: 'actions', label: 'إجراءات / Actions' }
+        ],
+        rows: rows,
+        emptyText: 'لا توجد عمليات شراء'
+      });
+    UIC.initTableSort('purchasing-table');
+  }
+
+  function openForm(uid) {
+    __editingUid = uid || '';
+    var record = null;
+    if (uid) {
+      record = __headers.find(function (h) { return String(h.unique_id) === String(uid); }) || null;
+    }
+    renderForm(record);
+  }
+
+  function headerSections() {
+    var o = __options;
+    return [
+      { title: 'البيانات الأساسية', open: true, fields: [
+        { key: 'code', label: 'الكود (Code) *', type: 'text', required: true },
+        { key: 'tax_system', label: 'النظام الضريبي', type: 'select', options: [{ value: 'true', label: 'نعم' }, { value: 'false', label: 'لا' }], default: 'false' },
+        { key: 'receipt_date', label: 'تاريخ الاستلام *', type: 'date', required: true, default: 'today' },
+        { key: 'items', label: 'الأصناف', type: 'text' },
+        { key: 'type', label: 'النوع', type: 'select', options: ['بيع', 'تصنيع', 'اصول منشأة'] },
+        { key: 'shipping_type', label: 'نوع الشحن', type: 'select', options: ['CIF', 'FOB', 'C&F', 'محلي'] },
+        { key: 'supplier_name', label: 'المورد', type: 'select', options: o.supplier_options || [] },
+        { key: 'currency', label: 'العملة', type: 'select', options: o.currency_options || [], default: 'EGP' },
+        { key: 'exchange_rate', label: 'سعر الصرف', type: 'number', default: 1 },
+        { key: 'value', label: 'القيمة (Value) *', type: 'number', required: true }
+      ]},
+      { title: 'التكاليف والمصاريف', fields: [
+        { key: 'cif_insurance_value', label: 'قيمة التأمين (CIF)', type: 'number' },
+        { key: 'importation_reprice', label: 'إعادة تسعير الاستيراد', type: 'number' },
+        { key: 'tax_declared_value', label: 'القيمة الضريبية المعلنة', type: 'number' },
+        { key: 'administrative_expenses', label: 'مصاريف إدارية', type: 'number' },
+        { key: 'customs_expenses', label: 'مصاريف جمركية', type: 'number' },
+        { key: 'unloading_expenses', label: 'مصاريف تفريغ', type: 'number' },
+        { key: 'bank_commission', label: 'عمولة البنك', type: 'number' },
+        { key: 'customs_clearance', label: 'تخليص جمركي ومينائي', type: 'number' },
+        { key: 'additional_fees', label: 'رسوم إضافية', type: 'number' },
+        { key: 'clearance_expenses', label: 'مصاريف تخليص', type: 'number' },
+        { key: 'other_expenses', label: 'مصاريف أخرى', type: 'number' },
+        { key: 'internal_cost_adjustment', label: 'تسوية التكلفة الداخلية', type: 'number' }
+      ]},
+      { title: 'الضرائب وأخرى', fields: [
+        { key: 'purchase_tax', label: 'ضريبة الشراء', type: 'number' },
+        { key: 'income_tax', label: 'ضريبة الدخل', type: 'number' },
+        { key: 'minimum_differences', label: 'الحد الأدنى للفروقات', type: 'text' },
+        { key: 'approved_this_month', label: 'معتمد هذا الشهر', type: 'text' },
+        { key: 'associated_bank', label: 'البنك المرتبط', type: 'text' }
+      ]}
+    ];
+  }
+
+  function fieldValue(s, record) {
+    var v = record ? record[RECORD_KEYS[s.key]] : null;
+    if (v !== null && v !== undefined && v !== '') return v;
+    if (s.type === 'date' && s.default === 'today') return formatDate(new Date());
+    if (s.default !== undefined && s.default !== null) return s.default;
+    return s.type === 'number' ? 0 : '';
+  }
+
+  function renderField(s, record) {
+    var v = fieldValue(s, record);
+    if (s.type === 'select') {
+      return UIC.field({ key: s.key, label: s.label, type: 'select', options: s.options, value: v });
+    }
+    if (s.type === 'date') {
+      return UIC.field({ key: s.key, label: s.label, type: 'date', value: v, required: !!s.required });
+    }
+    if (s.key === 'value' && (!v || Number(v) === 0)) v = '';
+    return UIC.field({ key: s.key, label: s.label, type: s.type, value: v, required: !!s.required, min: s.type === 'number' ? 0 : undefined, step: s.type === 'number' ? 'any' : undefined });
+  }
+
+  function renderForm(record) {
+    var content = document.getElementById('tl-content');
+    __canEdit = !record || IS_SUPER_ADMIN;
+
+    var sectionsHtml = headerSections().map(function (sec) {
+      var grid = '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:0 16px;">' +
+        sec.fields.map(function (s) { return renderField(s, record); }).join('') + '</div>';
+      return '<details' + (sec.open ? ' open' : '') + ' style="margin-bottom:12px;border:1px solid var(--border-color);border-radius:8px;padding:12px 16px;background:var(--bg-surface);">' +
+        '<summary style="font-weight:700;cursor:pointer;margin-bottom:12px;">' + sec.title + '</summary>' + grid + '</details>';
+    }).join('');
+
+    content.innerHTML =
+      '<div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;">' +
+      '<button class="btn btn-outline" onclick="showList()">← عودة</button>' +
+      '<h2 style="margin:0;">' + (record ? 'تعديل عملية شراء' : 'إضافة عملية شراء') + '</h2></div>' +
+      '<form id="purchasing-form">' +
+      '<div style="display:flex;flex-wrap:wrap;gap:24px;padding:16px;background:var(--bg-surface);border:1px solid var(--border-color);border-radius:8px;margin-bottom:16px;">' +
+      '<div>قيمة بناءً على الفاتورة: <strong id="value_based_on_invoice_display">0</strong></div>' +
+      '<div>إجمالي التكاليف: <strong id="total_costs_display">0</strong></div>' +
+      '<div>مجموع تكاليف الأصناف: <strong id="lines_total_display">0</strong></div>' +
+      '<div>قيمة البيع: <strong id="sales_value_display">0</strong></div>' +
+      '<div>نوع الضريبة: <strong id="tax_type_display">-</strong></div>' +
+      '<div>ضريبة المبيعات: <strong id="sales_tax_display">0</strong></div>' +
+      '<div>الشهر: <strong id="month_display">-</strong></div>' +
+      '<div>السنة: <strong id="year_display">-</strong></div>' +
+      '<div id="reconcile_warning" style="flex-basis:100%;color:var(--danger);font-weight:700;display:none;">⚠ مجموع تكاليف الأصناف لا يساوي إجمالي التكاليف</div>' +
+      '</div>' +
+      sectionsHtml +
+      '</form>' +
+      '<h3 style="margin-top:20px;">الأصناف</h3>' +
+      '<div style="overflow-x:auto;">' +
+      '<table class="table" style="min-width:900px;"><thead><tr>' +
+      '<th>المنتج</th><th>الكمية</th><th>سعر الوحدة</th><th>تكاليف أخرى</th><th>سعر البيع</th><th>نوع الحركة</th><th>الإجمالي</th>' + (__canEdit ? '<th></th>' : '') +
+      '</tr></thead><tbody id="lines-tbody"></tbody></table>' +
+      '</div>' +
+      (__canEdit ? '<div style="margin:12px 0;"><button class="btn btn-outline" onclick="addLine()">+ إضافة صنف</button></div>' : '') +
+      '<div style="margin:16px 0;">' + (__canEdit ? '<button class="btn btn-primary" onclick="savePurchasing()">حفظ</button> ' : '') +
+      '<button class="btn btn-outline" onclick="showList()">إلغاء</button></div>';
+
+    var curEl = document.getElementById('currency');
+    if (curEl) curEl.addEventListener('change', onCurrencyChange);
+
+    attachCalcListeners();
+
+    __lines = [];
+    if (record) {
+      companyCall('get_purchasing_lines', { parent_id: record.unique_id })
+        .then(function (r) {
+          __lines = (r.lines || []).map(function (l) {
+            return { product: l.product, qty: l.qty, unit_price: l.unit_price, other_cost: l.other_cost, sales_value: l.sales_value, movement_type: l.movement_type };
+          });
+          renderLines();
+        })
+        .catch(function (e) { UIC.toast(e.message || 'خطأ', 'error'); });
+    } else {
+      renderLines();
+    }
+  }
+
+  function attachCalcListeners() {
+    ['value','exchange_rate','type','tax_type','receipt_date','administrative_expenses','customs_expenses',
+     'unloading_expenses','bank_commission','customs_clearance','additional_fees','clearance_expenses',
+     'other_expenses','internal_cost_adjustment'].forEach(function (k) {
+      var el = document.getElementById(k);
+      if (el) { el.addEventListener('input', recalc); el.addEventListener('change', recalc); }
+    });
+  }
+
+  function renderLines() {
+    var lines = __lines || [];
+    var opts = __options || {};
+    var html = '';
+    for (var i = 0; i < lines.length; i++) {
+      var l = lines[i];
+      var avail = availableProducts(i);
+      html += '<tr>' +
+        '<td><select id="product_' + i + '" class="input" onchange="updateLineSelect(' + i + ', \'product\', this.value)">' +
+          '<option value="">اختر...</option>' +
+          avail.map(function (p) {
+            return '<option value="' + p.value + '"' + (String(p.value) === String(l.product) ? ' selected' : '') + '>' + FMT.escape(p.label) + '</option>';
+          }).join('') +
+          '</select></td>' +
+        '<td><input class="input" type="number" min="0" step="any" value="' + (l.qty != null ? l.qty : '') + '" oninput="updateLineInput(' + i + ', \'qty\', this.value)"></td>' +
+        '<td><input class="input" type="number" min="0" step="any" value="' + (l.unit_price != null ? l.unit_price : '') + '" oninput="updateLineInput(' + i + ', \'unit_price\', this.value)"></td>' +
+        '<td><input class="input" type="number" min="0" step="any" value="' + (l.other_cost != null ? l.other_cost : '') + '" oninput="updateLineInput(' + i + ', \'other_cost\', this.value)"></td>' +
+        '<td><input class="input" type="number" min="0" step="any" value="' + (l.sales_value != null ? l.sales_value : '') + '" oninput="updateLineInput(' + i + ', \'sales_value\', this.value)"></td>' +
+        '<td><select id="movement_type_' + i + '" class="input" onchange="updateLineSelect(' + i + ', \'movement_type\', this.value)">' +
+          '<option value="">اختر...</option>' +
+          (opts.movement_type_options || []).map(function (o) {
+            return '<option value="' + FMT.escape(o.fifth) + '"' + (String(o.fifth) === String(l.movement_type) ? ' selected' : '') + '>' + FMT.escape(o.code) + '</option>';
+          }).join('') +
+          '</select></td>' +
+        '<td id="total_cost_' + i + '"></td>' +
+        (__canEdit ? '<td><button class="btn btn-outline" style="padding:4px 10px;" onclick="removeLine(' + i + ')">حذف</button></td>' : '') +
+        '</tr>';
+    }
+    var tbody = document.getElementById('lines-tbody');
+    if (tbody) tbody.innerHTML = html;
+    recalc();
+  }
+
+  function availableProducts(excludeIndex) {
+    var chosen = {};
+    (__lines || []).forEach(function (l, i) {
+      if (i !== excludeIndex && l.product) chosen[String(l.product)] = true;
+    });
+    return (__options.product_options || []).filter(function (p) { return !chosen[String(p.value)]; });
+  }
+
+  function addLine() {
+    __lines.push({ product: '', qty: 0, unit_price: 0, other_cost: 0, sales_value: 0, movement_type: '' });
+    renderLines();
+  }
+
+  function removeLine(i) {
+    __lines.splice(i, 1);
+    renderLines();
+  }
+
+  function updateLineInput(i, key, value) {
+    __lines[i][key] = value;
+    recalc();
+  }
+
+  function updateLineSelect(i, key, value) {
+    __lines[i][key] = value;
+    renderLines();
+  }
+
+  function recalc() {
+    var headerRate = num(getVal('exchange_rate'));
+
+    var lineSum = 0;
+    (__lines || []).forEach(function (l, i) {
+      var tc = num(l.qty) * num(l.unit_price) * headerRate + num(l.other_cost);
+      lineSum += tc;
+      setText('total_cost_' + i, FMT.number(tc));
+    });
+    setText('lines_total_display', FMT.number(lineSum));
+
+    var value = num(getVal('value'));
+    var vbi = value * headerRate;
+    setText('value_based_on_invoice_display', FMT.number(vbi));
+
+    var expenses = num(getVal('administrative_expenses')) + num(getVal('customs_expenses')) +
+      num(getVal('unloading_expenses')) + num(getVal('bank_commission')) + num(getVal('customs_clearance')) +
+      num(getVal('additional_fees')) + num(getVal('clearance_expenses')) + num(getVal('other_expenses'));
+    var type = getVal('type');
+    var totalCosts = vbi + expenses + (type === 'بيع' ? 0 : num(getVal('internal_cost_adjustment')) + num(getVal('purchase_tax')));
+    setText('total_costs_display', FMT.number(totalCosts));
+
+    var mismatch = Math.abs(lineSum - totalCosts) > 0.01;
+    var lcEl = document.getElementById('lines_total_display');
+    var tcEl = document.getElementById('total_costs_display');
+    var warnEl = document.getElementById('reconcile_warning');
+    if (lcEl) lcEl.style.color = mismatch ? 'var(--danger)' : '';
+    if (tcEl) tcEl.style.color = mismatch ? 'var(--danger)' : '';
+    if (warnEl) warnEl.style.display = mismatch ? '' : 'none';
+
+    var salesValue = type === 'بيع' ? Math.round((totalCosts * 103 / 100) / 100) * 100 : 0;
+    setText('sales_value_display', FMT.number(salesValue));
+
+    var purchaseTax = num(getVal('purchase_tax'));
+    var denom = num(getVal('importation_reprice')) + num(getVal('customs_expenses'));
+    var taxType = denom > 0 ? (purchaseTax / denom >= 0.08 ? 0.14 : purchaseTax / denom) : '';
+    setText('tax_type_display', taxType === '' ? '-' : taxType);
+    var salesTax = (taxType === '' || num(taxType) > 0.06) ? salesValue * 14 / 100 : 0;
+    setText('sales_tax_display', FMT.number(salesTax));
+
+    var d = new Date(getVal('receipt_date'));
+    if (!isNaN(d.getTime())) {
+      setText('month_display', d.getMonth() + 1);
+      setText('year_display', d.getFullYear());
+    } else {
+      setText('month_display', '-');
+      setText('year_display', '-');
+    }
+  }
+
+  function onCurrencyChange() {
+    var sel = document.getElementById('currency');
+    if (!sel) return;
+    var cur = sel.value;
+    var opts = __options.currency_options || [];
+    for (var i = 0; i < opts.length; i++) {
+      if (String(opts[i].value) === String(cur)) {
+        var rateEl = document.getElementById('exchange_rate');
+        if (rateEl) rateEl.value = opts[i].rate;
+        recalc();
+        break;
+      }
+    }
+  }
+
+  function savePurchasing() {
+    var btn = document.querySelector('#purchasing-form .btn-primary') || document.querySelector('.btn-primary');
+    UI.submitOnce(btn, function () {
+      var data = UIC.collectForm('purchasing-form');
+      if (!UIC.validateForm('purchasing-form')) return Promise.reject();
+      var header = {};
+      HEADER_KEYS.forEach(function (k) { header[k] = data[k] !== undefined ? data[k] : ''; });
+      if (String(header.code || '').trim() === '') { UIC.toast('الكود (Code) مطلوب', 'error'); return Promise.reject(); }
+      if (String(header.value || '').trim() === '') { UIC.toast('قيمة الفاتورة (Value) مطلوبة', 'error'); return Promise.reject(); }
+
+      var rate = num(header.exchange_rate);
+      var lineSum = 0;
+      (__lines || []).forEach(function (l) { lineSum += num(l.qty) * num(l.unit_price) * rate + num(l.other_cost); });
+      var vbi = num(header.value) * rate;
+      var expenses = num(header.administrative_expenses) + num(header.customs_expenses) + num(header.unloading_expenses) +
+        num(header.bank_commission) + num(header.customs_clearance) + num(header.additional_fees) +
+        num(header.clearance_expenses) + num(header.other_expenses);
+      var headerTotal = vbi + expenses + (header.type === 'بيع' ? 0 : num(header.internal_cost_adjustment) + num(header.purchase_tax));
+      if (Math.abs(lineSum - headerTotal) > 0.01) { UIC.toast('مجموع الأصناف لا يساوي إجمالي التكاليف', 'error'); return Promise.reject(); }
+
+      var payload = { header: header, lines: __lines || [] };
+      var isEdit = __editingUid ? true : false;
+      if (isEdit) header.unique_id = __editingUid;
+
+      UI.showSpinner([
+        'جاري الحفظ...',
+        'جاري حساب التكاليف وبنود الشراء...',
+        'لحظة، جاري إنهاء العملية...'
+      ]);
+      return companyCall(isEdit ? 'edit_purchasing' : 'add_purchasing', payload)
+        .then(function (r) {
+          UIC.toast(r.message || 'تم الحفظ', 'success');
+          var rec = r.record || null;
+           if (rec) {
+             var RECENT_LIMIT = 10;
+             var uid = rec.unique_id || r.unique_id || __editingUid;
+             rec.unique_id = uid;
+             if (!rec.supplier_name) {
+               var sOpts = (__options.supplier_options||[]);
+               for(var si=0;si<sOpts.length;si++){ if(String(sOpts[si].value)===String(header.supplier_name)){ rec.supplier_name=sOpts[si].label||''; break; } }
+             }
+             if (isEdit) {
+               var idxP = __headers.findIndex(function(x){ return String(x.unique_id)===String(uid); });
+               if(idxP!==-1) __headers[idxP]=rec; else __headers.push(rec);
+             } else {
+               __headers.unshift(rec);
+               if (__headers.length > RECENT_LIMIT) __headers.pop();
+             }
+             renderHeadersTable();
+          } else {
+            showList();
+          }
+        })
+        .catch(function (e) { UIC.toast(e.message || 'خطأ', 'error'); })
+        .finally(function () { UI.hideSpinner(); });
+    });
+  }
+
+  function printPurchasing(uid) {
+    window.open(scriptUrl + '?action=tl_purchase_print&purchase_code=' + encodeURIComponent(uid) + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN), '_blank');
+  }
+
+  function doAction(uid, action) {
+    if (action === 'print') printPurchasing(uid);
+    else if (action === 'approve') approvePurchasing(uid);
+    else if (action === 'edit' || action === 'view') openForm(uid);
+    else if (action === 'delete') deletePurchasing(uid);
+  }
+
+  function approvePurchasing(uid) {
+    UI.showSpinner(['جاري الاعتماد...', 'لحظة، جاري تحديث حالة العملية...']);
+    companyCall('approve_purchasing', { unique_id: uid })
+      .then(function (r) {
+        UIC.toast(r.message || 'تم الاعتماد', 'success');
+        var item = (__headers || []).find(function (x) { return String(x.unique_id) === String(uid); });
+        if (item) item.approval_status = 'Approved';
+        renderHeadersTable();
+      })
+      .catch(function (e) { UIC.toast(e.message || 'خطأ', 'error'); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function deletePurchasing(uid) {
+    if (!UIC.canFull_()) { UIC.toast('غير مصرح', 'error'); return; }
+    if (!confirm('هل تريد حذف هذه العملية؟')) return;
+    UI.showSpinner(['جاري الحذف...', 'لحظة، جاري تحديث القائمة...']);
+    companyCall('delete_purchasing', { unique_id: uid })
+      .then(function (r) {
+        UIC.toast(r.message || 'تم الحذف', 'success');
+        __headers = (__headers || []).filter(function (x) { return String(x.unique_id) !== String(uid); });
+        renderHeadersTable();
+      })
+      .catch(function (e) { UIC.toast(e.message || 'خطأ', 'error'); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function showList() {
+    renderList();
+  }
+
+  function showError(e) {
+    var content = document.getElementById('tl-content');
+    if (content) content.innerHTML = '<div class="empty-state"><span>' + FMT.escape(e.message || 'خطأ') + '</span></div>';
+  }
+
+  function formatDate(v) {
+    if (!v) return '';
+    var d = new Date(v);
+    if (isNaN(d.getTime())) return String(v).slice(0, 10);
+    return d.toISOString().slice(0, 10);
+  }
+
+
+  load();
+</script>
+</body>
+</html>
+
+
+

@@ -1,0 +1,172 @@
+﻿<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>تسجيل الموظفين</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_TopChemical_Nav'); ?>
+  <?!= getCompanyThemeCSS_('3fe1b5cb67b7223e') ?>
+</head>
+<body>
+<div id="tc-root" dir="rtl"></div>
+<script>
+  var params = new URLSearchParams(window.location.search);
+  var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+  var scriptUrl = window.scriptUrl || '/';
+  var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+  var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('3fe1b5cb67b7223e') ?>';
+  var COMPANY_PAGES = <?!= companyPages ?>;
+  var CURRENT_ACTION = '<?!= currentAction ?>';
+  var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+  var CAN_WRITE = UIC.canAdd_(); var CAN_FULL = UIC.canFull_();
+
+  function companyCall(moduleAction, data) {
+    return API.call('company_action', {
+      target_system: '3fe1b5cb67b7223e',
+      module_action: moduleAction,
+      data: data || {}
+    }, SESSION_TOKEN);
+  }
+
+  function esc(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  function fmtDate(v) {
+    if (v == null || v === '') return '';
+    var d = (v instanceof Date) ? v : new Date(v);
+    if (isNaN(d.getTime())) return String(v);
+    var p = function (n) { return ('0' + n).slice(-2); };
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+  }
+
+  function load() {
+    var contentId = 'employee-content';
+    UIC.appShell('tc-root', {
+      companyLogoUrl: COMPANY_LOGO_URL,
+      companyLogoHref: scriptUrl + '?action=tc_dashboard&sessionToken=' + SESSION_TOKEN,
+      companyLogoTitle: 'توب كيميكال',
+      breadcrumb: 'توب كيميكال / شئون العاملين / تسجيل الموظفين',
+      contentId: contentId,
+      menuGroups: (window.TOPCHEMICAL_MENU || [])
+    });
+    fetchEmployees();
+  }
+
+  function fetchEmployees() {
+    UI.showSpinner();
+    companyCall('get_employees')
+      .then(function (r) {
+        console.log('[tc_employee_reg] _debug_title', JSON.stringify(r._debug_title));
+        console.log('[tc_employee_reg] title_options count', (r.title_options || []).length);
+        window.__employees = r.employees || [];
+        window.__titleOptions = r.title_options || [];
+        window.__categoryOptions = r.category_options || [];
+        renderEmployees try{schedulePrefetch();}catch(e){}();
+      })
+      .catch(function (e) { showError(e); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function renderEmployees() {
+    var list = window.__employees;
+    var rows = list.map(function (e) {
+      return {
+        emp_id: e.emp_id,
+        name_ar: esc(e.name_ar || '-'),
+        title: esc(e.title || '-'),
+        section: esc(e.section || '-'),
+        category: esc(e.category || '-'),
+        insurance: e.insurance ? 'نعم' : 'لا',
+        main_salary: e.main_salary,
+        allow: e.allow,
+        basic_salary: e.basic_salary,
+        status: esc(e.status || '-')
+      };
+    });
+    var headers = [
+      { key: 'emp_id', label: '#', numeric: true },
+      { key: 'name_ar', label: 'الاسم' },
+      { key: 'title', label: 'المسمى الوظيفي' },
+      { key: 'section', label: 'القسم' },
+      { key: 'category', label: 'التصنيف' },
+      { key: 'insurance', label: 'التأمين' },
+      { key: 'main_salary', label: 'الراتب', numeric: true },
+      { key: 'allow', label: 'البدلات', numeric: true },
+      { key: 'basic_salary', label: 'الأساسي', numeric: true },
+      { key: 'status', label: 'الحالة الوظيفية' }
+    ];
+    var body = document.getElementById('employee-content');
+    body.innerHTML = (CAN_WRITE
+      ? '<div style="display:flex;justify-content:flex-end;margin-bottom:12px;"><button class="btn btn-primary" onclick="openAddModal()">+ تسجيل موظف</button></div>'
+      : '') +
+      UIC.dataTable('employee-table', {
+        title: 'الموظفون',
+        headers: headers,
+        rows: rows,
+        emptyText: 'لا يوجد موظفون'
+      });
+    UIC.initTableSort('employee-table');
+  }
+
+  function openAddModal() {
+    var body =
+      '<form id="employee-form">' +
+      UIC.field({ key: 'name_ar', label: 'اسم الموظف', type: 'text', required: true, placeholder: 'الاسم بالكامل' }) +
+      UIC.field({ key: 'national_id', label: 'الرقم القومي', type: 'number', min: '20000000000000', required: true, placeholder: '14 رقم' }) +
+      UIC.field({ key: 'hiring_date', label: 'تاريخ التعيين', type: 'date', required: true }) +
+      UIC.combo({ key: 'title', label: 'المسمى الوظيفي', required: true, options: window.__titleOptions, placeholder: 'اختر أو ابحث عن المسمى الوظيفي...' }) +
+      '<div class="form-field" data-field="section"><label class="form-label">القسم (يُحسب تلقائياً)</label>' +
+      '<div style="padding:8px 12px;background:var(--bg-subtle);border-radius:var(--radius-sm);font-size:13px;" id="section-preview">—</div></div>' +
+      UIC.field({ key: 'category', label: 'التصنيف', type: 'select', required: true, placeholder: 'اختر التصنيف...', options: (window.__categoryOptions || []).map(function (c) { return { value: c.value, label: c.label }; }) }) +
+      '<div class="form-field" data-field="insurance"><label class="form-label">التأمين</label>' +
+      '<label class="input" style="display:flex;align-items:center;gap:8px;"><input type="checkbox" id="insurance" style="width:auto;"> <span>مؤمن عليه</span></label></div>' +
+      '</form>';
+    UIC.openModal('employee-modal', {
+      title: 'تسجيل موظف جديد',
+      body: body,
+      onSave: 'saveEmployee()'
+    });
+    var sel = document.getElementById('title');
+    if (sel) {
+      sel.addEventListener('change', function () {
+        var t = window.__titleOptions.find(function (x) { return String(x.value) === sel.value; });
+        document.getElementById('section-preview').textContent = (t && t.section) ? t.section : '—';
+      });
+    }
+  }
+
+  function saveEmployee() {
+    var formEl = document.getElementById('employee-form');
+    if (!UIC.validateForm('employee-form')) return;
+    var data = UIC.collectForm('employee-form');
+    data.insurance = !!document.getElementById('insurance').checked;
+    UI.showSpinner('جاري الحفظ...');
+    companyCall('add_employee', data)
+      .then(function (r) {
+        UIC.closeModal('employee-modal');
+        UIC.toast((r && r.message) || 'تم الحفظ', 'success');
+        if (r && r.record) {
+          window.__employees = window.__employees || [];
+          window.__employees.unshift(r.record);
+          renderEmployees();
+        } else { fetchEmployees(); }
+      })
+      .catch(function (e) { UIC.toast((e && e.message) || 'خطأ', 'error'); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function showError(e) {
+    var body = document.getElementById('employee-content');
+    if (body) body.innerHTML = '<div class="empty-state"><span>' + esc(e.message || 'خطأ') + '</span></div>';
+  }
+
+  load();
+</script>
+</body>
+</html>
+

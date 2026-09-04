@@ -1,0 +1,45 @@
+<script>
+/**
+ * Company_TopChemical_Nav.html
+ * Single source of truth for the Top Chemical header dropdown groups.
+ * Items that have a real page are { label, action } (navigate via appShell);
+ * plain strings are placeholders (toast "قيد الإنشاء").
+ */
+window.TOPCHEMICAL_MENU = [
+  { label: 'الحسابات', items: [
+    { label: 'عملاء وموردين', action: 'tc_clients_vendors' },
+    { label: 'مديونيات', action: 'tc_debts' },
+    { label: 'الأصناف', action: 'tc_products' },
+    { label: 'باركود الإنتاج', action: 'tc_barcode' },
+    { label: 'تصاريح وتراخيص', action: 'tc_registration_papers' },
+    { label: 'عهد خاصة', action: 'tc_trust' },
+    { label: 'جرد المخزون', action: 'tc_stock_revision' },
+    { label: 'مكتب الجمارك', action: 'tc_customs_office' }
+  ] },
+  { label: 'حسابات الميزانية', items: [
+    { label: 'تصنيع الميزانية', action: 'tc_budget_manufacture' },
+    { label: 'رصيد أصناف الميزانية', action: 'tc_budget_stock_balance' },
+    { label: 'حركة الأصناف (دفتر الجرد)', action: 'tc_budget_stock_movement' },
+    { label: 'الفواتير الضريبية', action: 'tc_budget_invoices' },
+    { label: 'المدخلات - اصول ومخزون', action: 'tc_budget_inputs' },
+    { label: 'عملاء وموردون قانونيون', action: 'tc_budget_parties' },
+    { label: 'شؤون العاملين القانونية', action: 'tc_budget_hr' },
+    { label: 'تحركات صناديق الميزانية', action: 'tc_budget_cash' },
+    { label: 'قائمة الدخل السنوية', action: 'tc_budget_income' }
+  ] },
+  { label: 'الاستيراد والمشتريات', items: [
+    { label: 'توريدات ومشتريات', action: 'tc_purchasing' }, { label: 'متابعة موافقات الاستيراد', action: 'tc_import_follow' }, { label: 'مقاسات الكراتين والعبوات', action: 'tc_carton_sizes' }
+  ] },
+  
+  { label: 'شئون العاملين', items: [
+    { label: 'تسجيل الموظفين', action: 'tc_employee_reg' },
+    { label: 'حالة الموظف', action: 'tc_employee_status' },
+    { label: 'راتب الموظف', action: 'tc_employee_salary' },
+    { label: 'الغياب والخصومات', action: 'tc_emp_deductions' },
+    { label: 'الأذونات والتأخيرات', action: 'tc_emp_permits' },
+    { label: 'العمل الإضافي', action: 'tc_emp_overtime' },
+    { label: 'صرف المرتبات الشهرية', action: 'tc_emp_salaries' },
+    { label: 'غلق المرتبات الشهرية', action: 'tc_emp_salaries_close' }
+  ] }
+];
+</script>

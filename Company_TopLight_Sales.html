@@ -1,0 +1,438 @@
+<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Top Light — المبيعات</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= getCompanyThemeCSS_('8df5c89a117fe9a5') ?>
+</head>
+<body>
+<div id="tl-root" dir="rtl"></div>
+<script>
+  var params = new URLSearchParams(window.location.search);
+  var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+  var scriptUrl = window.scriptUrl || '/';
+  var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+  var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('8df5c89a117fe9a5') ?>';
+  var COMPANY_PAGES = <?!= companyPages ?>;
+  var CURRENT_ACTION = '<?!= currentAction ?>';
+
+  var __options = {};
+  var __headers = [];
+  var __lines = [];
+  var __editingUid = '';
+  var __canEdit = false;
+
+  function companyCall(moduleAction, data) {
+    return API.call('company_action', {
+      target_system: '8df5c89a117fe9a5',
+      module_action: moduleAction,
+      data: data || {}
+    }, SESSION_TOKEN);
+  }
+
+  function num(v) { var n = Number(v); return isNaN(n) ? 0 : n; }
+  function getVal(id) { var el = document.getElementById(id); return el ? el.value : ''; }
+  function setText(id, t) { var el = document.getElementById(id); if (el) el.textContent = t; }
+
+  function load() {
+    var contentId = 'tl-content';
+    UIC.appShell('tl-root', {
+      companyLogoUrl: COMPANY_LOGO_URL,
+      companyLogoHref: scriptUrl + '?action=tl_dashboard&sessionToken=' + SESSION_TOKEN,
+      companyLogoTitle: 'القمة لايت',
+      breadcrumb: 'القمة لايت / المبيعات',
+      contentId: contentId
+    });
+
+    UI.showSpinner([
+      'جاري تحميل فواتير المبيعات...',
+      'جاري استرجاع خيارات العملاء والأصناف...',
+      'لحظة، جاري إعداد جدول الفواتير...'
+    ]);
+    renderList();
+  }
+
+  function renderList() {
+    companyCall('get_sales_headers')
+      .then(function (r) {
+        __options = r.options || {};
+        __headers = r.headers || [];
+        renderHeadersTable(); try{schedulePrefetch();}catch(e){};
+      })
+      .catch(function (e) { showError(e); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function renderHeadersTable() {
+    var content = document.getElementById('tl-content');
+    __headers.sort(function (a, b) {
+      return new Date(b['تاريخ الفاتورة']) - new Date(a['تاريخ الفاتورة']);
+    });
+    var rows = __headers.map(function (h) {
+      var opts = '<option value="">إجراءات...</option>' +
+        '<option value="print">طباعة</option>' +
+        '<option value="release">اذن صرف منتج</option>';
+      if (!h.fully_returned) {
+        opts += '<option value="returns">مرتجعات</option>';
+      }
+      if (String(h.approval_status) !== 'Approved') {
+        opts += '<option value="approve">اعتماد</option>';
+        if (UIC.canFull_()) {
+          opts += '<option value="edit">تعديل</option><option value="delete">حذف</option>';
+        } else {
+          opts += '<option value="view">عرض</option>';
+        }
+      }
+      var actions = '<select class="input" style="padding:6px 8px;width:130px;" onchange="doAction(\'' + FMT.escape(h.invoice_unique_id) + '\', this.value); this.value=\'\';">' + opts + '</select>';
+      return {
+        invoice_number: h['رقم الفاتورة'] || '-',
+        customer_name: h.customer_name || '-',
+        invoice_date: h['تاريخ الفاتورة'] ? String(h['تاريخ الفاتورة']).slice(0, 10) : '-',
+        net: FMT.number(h['المبلغ الصافي']),
+        discount_percent: FMT.percent(h['نسبة الخصم']),
+        discount_amount: FMT.number(h['قيمة الخصم']),
+        total: FMT.number(h['إجمالي']),
+        approval_status: h.approval_status || '-',
+        actions: actions
+      };
+    });
+    content.innerHTML = '<div style="display:flex;justify-content:flex-end;margin-bottom:12px;gap:8px;">' +
+      '<button class="btn btn-outline" onclick="openAnalysis()">تحليل المبيعات</button>' +
+      '<button class="btn btn-primary" onclick="openForm(\'\')">+ إضافة فاتورة بيع</button></div>' +
+      UIC.dataTable('sales-table', {
+        title: 'المبيعات',
+        headers: [
+          { key: 'invoice_number', label: 'رقم الفاتورة' },
+          { key: 'customer_name', label: 'العميل' },
+          { key: 'invoice_date', label: 'تاريخ الفاتورة' },
+          { key: 'net', label: 'المبلغ الصافي', numeric: true },
+          { key: 'discount_percent', label: 'نسبة الخصم', numeric: true },
+          { key: 'discount_amount', label: 'قيمة الخصم', numeric: true },
+          { key: 'total', label: 'الإجمالي', numeric: true },
+          { key: 'approval_status', label: 'الحالة' },
+          { key: 'actions', label: 'إجراءات' }
+        ],
+        rows: rows,
+        emptyText: 'لا توجد فواتير بيع'
+      });
+    UIC.initTableSort('sales-table');
+  }
+
+  function openForm(uid) {
+    __editingUid = uid || '';
+    var record = null;
+    if (uid) {
+      record = __headers.find(function (h) { return String(h.invoice_unique_id) === String(uid); }) || null;
+    }
+    renderForm(record);
+  }
+
+  function renderForm(record) {
+    var content = document.getElementById('tl-content');
+    __canEdit = !record || IS_SUPER_ADMIN;
+
+    var o = __options;
+    var custId = record ? String(record['اسم العميل']) : '';
+    var invoiceDate = record ? formatDate(record['تاريخ الفاتورة']) : formatDate(new Date());
+    var discount = record ? String(record['نسبة الخصم']) : '0';
+    var taxSystem = record ? String(record.tax_system) : 'false';
+
+    content.innerHTML =
+      '<div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;">' +
+      '<button class="btn btn-outline" onclick="showList()">← عودة</button>' +
+      '<h2 style="margin:0;">' + (record ? 'تعديل فاتورة بيع' : 'إضافة فاتورة بيع') + '</h2></div>' +
+      '<form id="sales-form">' +
+      '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:0 16px;padding:16px;background:var(--bg-surface);border:1px solid var(--border-color);border-radius:8px;margin-bottom:16px;">' +
+      UIC.field({ key: 'customer_id', label: 'اسم العميل *', type: 'select', options: o.customer_options || [], value: custId, required: true, placeholder: 'اختر العميل...' }) +
+      UIC.field({ key: 'invoice_date', label: 'تاريخ الفاتورة *', type: 'date', value: invoiceDate, required: true }) +
+      UIC.field({ key: 'discount_percent', label: 'نسبة الخصم', type: 'select', options: o.discount_options || [], value: discount }) +
+      UIC.field({ key: 'tax_system', label: 'النظام الضريبي', type: 'select', options: [{ value: 'false', label: 'لا' }, { value: 'true', label: 'نعم' }], value: taxSystem }) +
+      '</div>' +
+      '<div id="customer_info" style="display:flex;flex-wrap:wrap;gap:16px;padding:10px 16px;background:var(--bg-subtle);border:1px solid var(--border-color);border-radius:8px;margin-bottom:16px;">' +
+      '<span>رقم التسجيل الضريبي: <strong id="c_tax_id">-</strong></span>' +
+      '<span>رقم الموبيل: <strong id="c_telephone">-</strong></span>' +
+      '<span>العنوان: <strong id="c_address">-</strong></span>' +
+      '</div>' +
+      '<div style="display:flex;flex-wrap:wrap;gap:24px;padding:16px;background:var(--bg-surface);border:1px solid var(--border-color);border-radius:8px;margin-bottom:16px;">' +
+      '<div>المبلغ الصافي: <strong id="net_display">0</strong></div>' +
+      '<div>قيمة الخصم: <strong id="discount_display">0</strong></div>' +
+      '<div>قيمة الضريبة: <strong id="tax_display">0</strong></div>' +
+      '<div>الإجمالي: <strong id="total_display">0</strong></div>' +
+      '</div>' +
+      '</form>' +
+      '<h3 style="margin-top:20px;">الأصناف</h3>' +
+      '<div style="overflow-x:auto;">' +
+      '<table class="table" style="min-width:900px;"><thead><tr>' +
+      '<th>المنتج</th><th>الكمية</th><th>السعر</th><th>نسبة الضريبة</th><th>الخصم</th><th>الإجمالي</th>' + (__canEdit ? '<th></th>' : '') +
+      '</tr></thead><tbody id="lines-tbody"></tbody></table>' +
+      '</div>' +
+      (__canEdit ? '<div style="margin:12px 0;"><button class="btn btn-outline" onclick="addLine()">+ إضافة صنف</button></div>' : '') +
+      '<div style="margin:16px 0;">' + (__canEdit ? '<button class="btn btn-primary" onclick="saveSales()">حفظ</button> ' : '') +
+      '<button class="btn btn-outline" onclick="showList()">إلغاء</button></div>';
+
+    var custEl = document.getElementById('customer_id');
+    if (custEl) custEl.addEventListener('change', onCustomerChange);
+    var discEl = document.getElementById('discount_percent');
+    if (discEl) { discEl.addEventListener('change', recalc); discEl.addEventListener('input', recalc); }
+
+    if (custId) onCustomerChange();
+
+    __lines = [];
+    if (record) {
+      companyCall('get_sales_lines', { parent_id: record.invoice_unique_id })
+        .then(function (r) {
+          __lines = (r.lines || []).map(function (l) {
+            return { product_id: l.product_id, product_qty: l.product_qty, product_price: l.product_price, product_tax: l.product_tax, product_discount: l.product_discount };
+          });
+          renderLines();
+        })
+        .catch(function (e) { UIC.toast(e.message || 'خطأ', 'error'); });
+    } else {
+      renderLines();
+    }
+  }
+
+  function onCustomerChange() {
+    var sel = document.getElementById('customer_id');
+    if (!sel) return;
+    var opts = __options.customer_options || [];
+    var found = null;
+    for (var i = 0; i < opts.length; i++) {
+      if (String(opts[i].value) === String(sel.value)) { found = opts[i]; break; }
+    }
+    setText('c_tax_id', found && found.tax_id ? found.tax_id : '-');
+    setText('c_telephone', found && found.telephone ? found.telephone : '-');
+    setText('c_address', found && found.address ? found.address : '-');
+  }
+
+  function renderLines() {
+    var lines = __lines || [];
+    var opts = __options || {};
+    var html = '';
+    for (var i = 0; i < lines.length; i++) {
+      var l = lines[i];
+      html += '<tr>' +
+        '<td><select id="product_id_' + i + '" class="input" onchange="updateLineSelect(' + i + ', \'product_id\', this.value)">' +
+          '<option value="">اختر...</option>' +
+          (opts.product_options || []).map(function (p) {
+            return '<option value="' + FMT.escape(p.value) + '"' + (String(p.value) === String(l.product_id) ? ' selected' : '') + '>' + FMT.escape(p.label) + '</option>';
+          }).join('') +
+          '</select></td>' +
+        '<td><input class="input" type="number" min="0" step="any" value="' + (l.product_qty != null ? l.product_qty : '') + '" oninput="updateLineInput(' + i + ', \'product_qty\', this.value)">' +
+        '<div style="font-size:11px;color:var(--text-muted);">متاح: ' + availableQty(i) + '</div></td>' +
+        '<td><input class="input" type="number" min="0" step="any" value="' + (l.product_price != null ? l.product_price : '') + '" oninput="updateLineInput(' + i + ', \'product_price\', this.value)"></td>' +
+        '<td><select id="product_tax_' + i + '" class="input" onchange="updateLineSelect(' + i + ', \'product_tax\', this.value)">' +
+          (opts.product_tax_options || []).map(function (t) {
+            return '<option value="' + FMT.escape(t.value) + '"' + (String(t.value) === String(l.product_tax) ? ' selected' : '') + '>' + FMT.escape(t.label) + '</option>';
+          }).join('') +
+          '</select></td>' +
+        '<td><input class="input" type="number" min="0" step="any" value="' + (l.product_discount != null ? l.product_discount : '') + '" oninput="updateLineInput(' + i + ', \'product_discount\', this.value)"></td>' +
+        '<td id="line_total_' + i + '"></td>' +
+        (__canEdit ? '<td><button class="btn btn-outline" style="padding:4px 10px;" onclick="removeLine(' + i + ')">حذف</button></td>' : '') +
+        '</tr>';
+    }
+    var tbody = document.getElementById('lines-tbody');
+    if (tbody) tbody.innerHTML = html;
+    recalc();
+  }
+
+  function addLine() {
+    __lines.push({ product_id: '', product_qty: 0, product_price: 0, product_tax: 0, product_discount: 0 });
+    renderLines();
+  }
+
+  function removeLine(i) {
+    __lines.splice(i, 1);
+    renderLines();
+  }
+
+  function updateLineInput(i, key, value) {
+    __lines[i][key] = value;
+    recalc();
+  }
+
+  function findProductOption(value) {
+    var opts = __options.product_options || [];
+    for (var k = 0; k < opts.length; k++) {
+      if (String(opts[k].value) === String(value)) return opts[k];
+    }
+    return null;
+  }
+
+  function availableQty(i) {
+    var opt = findProductOption(__lines[i].product_id);
+    return opt && opt.current_qty != null ? opt.current_qty : 0;
+  }
+
+  function updateLineSelect(i, key, value) {
+    __lines[i][key] = value;
+    if (key === 'product_id') {
+      var opt = findProductOption(value);
+      if (opt) __lines[i].product_price = opt.default_price != null ? opt.default_price : 0;
+    }
+    renderLines();
+  }
+
+  function recalc() {
+    var discountPercent = num(getVal('discount_percent'));
+    var net = 0, lineDiscount = 0, tax = 0;
+    (__lines || []).forEach(function (l, i) {
+      var nv = num(l.product_qty) * num(l.product_price);
+      net += nv;
+      lineDiscount += num(l.product_discount);
+      tax += nv * num(l.product_tax);
+      setText('line_total_' + i, FMT.number(nv - num(l.product_discount) + nv * num(l.product_tax)));
+    });
+    var discountAmount = lineDiscount + net * discountPercent;
+    var total = net - discountAmount + tax;
+    setText('net_display', FMT.number(net));
+    setText('discount_display', FMT.number(discountAmount));
+    setText('tax_display', FMT.number(tax));
+    setText('total_display', FMT.number(total));
+  }
+
+  function validateSalesForm() {
+    var data = UIC.collectForm('sales-form');
+    if (!UIC.validateForm('sales-form')) return false;
+    if (String(data.customer_id || '').trim() === '') { UIC.toast('اسم العميل مطلوب', 'error'); return false; }
+    if (String(data.invoice_date || '').trim() === '') { UIC.toast('تاريخ الفاتورة مطلوب', 'error'); return false; }
+    if (!(__lines || []).length) { UIC.toast('يجب إضافة صنف واحد على الأقل', 'error'); return false; }
+    for (var i = 0; i < __lines.length; i++) {
+      var l = __lines[i];
+      if (String(l.product_id == null ? '' : l.product_id).trim() === '') { UIC.toast('المنتج مطلوب لكل صنف', 'error'); return false; }
+      if (String(l.product_tax == null ? '' : l.product_tax).trim() === '') { UIC.toast('نسبة الضريبة مطلوبة لكل صنف', 'error'); return false; }
+      if (String(l.product_qty == null ? '' : l.product_qty).trim() === '') { UIC.toast('الكمية مطلوبة لكل صنف', 'error'); return false; }
+      if (String(l.product_price == null ? '' : l.product_price).trim() === '') { UIC.toast('السعر مطلوب لكل صنف', 'error'); return false; }
+      if (String(l.product_discount == null ? '' : l.product_discount).trim() === '') { UIC.toast('الخصم مطلوب لكل صنف', 'error'); return false; }
+      if (num(l.product_qty) <= 0) { UIC.toast('الكمية يجب أن تكون أكبر من صفر', 'error'); return false; }
+      if (num(l.product_price) <= 0) { UIC.toast('السعر يجب أن يكون أكبر من صفر', 'error'); return false; }
+      var avail = availableQty(i);
+      if (num(l.product_qty) > avail) { UIC.toast('الكمية تتجاوز الرصيد المتاح (المتاح: ' + avail + ')', 'error'); return false; }
+    }
+    return true;
+  }
+
+  function saveSales() {
+    var btn = document.querySelector('#sales-form .btn-primary') || document.querySelector('.btn-primary');
+    UI.submitOnce(btn, function () {
+      if (!validateSalesForm()) return Promise.reject();
+      var header = UIC.collectForm('sales-form');
+      var payload = { header: header, lines: __lines || [] };
+      var isEdit = __editingUid ? true : false;
+      if (isEdit) header.unique_id = __editingUid;
+
+      UI.showSpinner([
+        'جاري الحفظ...',
+        'جاري تسجيل بنود الفاتورة...',
+        'لحظة، جاري تحديث الحسابات...'
+      ]);
+      return companyCall(isEdit ? 'edit_sales' : 'add_sales', payload)
+        .then(function (r) {
+          UIC.toast(r.message || 'تم الحفظ', 'success');
+           var rec = r.record || null;
+           if (rec) {
+             var RECENT_LIMIT = 10;
+             var uid = rec.invoice_unique_id || r.unique_id || __editingUid;
+             rec.invoice_unique_id = uid;
+             if (rec.customer_name == null) {
+               var optsC = (__options.customer_options||[]);
+               for(var ci=0;ci<optsC.length;ci++){ if(String(optsC[ci].value)===String(header.customer_id)){ rec.customer_name=optsC[ci].label||''; break; } }
+             }
+             if (rec.fully_returned == null) rec.fully_returned = false;
+             if (isEdit) {
+               var idxS = __headers.findIndex(function(x){ return String(x.invoice_unique_id)===String(uid); });
+               if(idxS!==-1) __headers[idxS]=rec; else __headers.push(rec);
+             } else {
+               __headers.unshift(rec);
+               if (__headers.length > RECENT_LIMIT) __headers.pop();
+             }
+             renderHeadersTable();
+          } else {
+            showList();
+          }
+        })
+        .catch(function (e) { UIC.toast(e.message || 'خطأ', 'error'); })
+        .finally(function () { UI.hideSpinner(); });
+    });
+  }
+
+  function printSales(uid) {
+    window.open(scriptUrl + '?action=tl_sales_print&purchase_code=' + encodeURIComponent(uid) + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN), '_blank');
+  }
+
+  function openReturns(uid) {
+    window.open(scriptUrl + '?action=tl_sales_returns&purchase_code=' + encodeURIComponent(uid) + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN), '_blank');
+  }
+
+  function openRelease(uid) {
+    window.open(scriptUrl + '?action=tl_sales_release&purchase_code=' + encodeURIComponent(uid) + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN), '_blank');
+  }
+
+  function openAnalysis() {
+    window.open(scriptUrl + '?action=tl_sales_analysis&sessionToken=' + encodeURIComponent(SESSION_TOKEN), '_blank');
+  }
+
+  function doAction(uid, action) {
+    if (action === 'print') printSales(uid);
+    else if (action === 'release') openRelease(uid);
+    else if (action === 'returns') openReturns(uid);
+    else if (action === 'approve') approveSales(uid);
+    else if (action === 'edit' || action === 'view') openForm(uid);
+    else if (action === 'delete') deleteSales(uid);
+  }
+
+  function approveSales(uid) {
+    UI.showSpinner(['جاري الاعتماد...', 'لحظة، جاري تحديث حالة الفاتورة...']);
+    companyCall('approve_sales', { unique_id: uid })
+      .then(function (r) {
+        UIC.toast(r.message || 'تم الاعتماد', 'success');
+        var item = (__headers || []).find(function (x) { return String(x.invoice_unique_id) === String(uid); });
+        if (item) item.approval_status = 'Approved';
+        renderHeadersTable();
+      })
+      .catch(function (e) { UIC.toast(e.message || 'خطأ', 'error'); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function deleteSales(uid) {
+    if (!UIC.canFull_()) { UIC.toast('غير مصرح', 'error'); return; }
+    if (!confirm('هل تريد حذف هذه الفاتورة؟')) return;
+    UI.showSpinner(['جاري الحذف...', 'لحظة، جاري تحديث القائمة...']);
+    companyCall('delete_sales', { unique_id: uid })
+      .then(function (r) {
+        UIC.toast(r.message || 'تم الحذف', 'success');
+        __headers = (__headers || []).filter(function (x) { return String(x.invoice_unique_id) !== String(uid); });
+        renderHeadersTable();
+      })
+      .catch(function (e) { UIC.toast(e.message || 'خطأ', 'error'); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function showList() {
+    renderList();
+  }
+
+  function showError(e) {
+    var content = document.getElementById('tl-content');
+    if (content) content.innerHTML = '<div class="empty-state"><span>' + FMT.escape(e.message || 'خطأ') + '</span></div>';
+  }
+
+  function formatDate(v) {
+    if (!v) return '';
+    var d = new Date(v);
+    if (isNaN(d.getTime())) return String(v).slice(0, 10);
+    return d.toISOString().slice(0, 10);
+  }
+
+
+  load();
+</script>
+</body>
+</html>
+
+
+

@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <base target="_top">
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Review Results</title>
+    <?!= include('CSS'); ?>
+  </head>
+  <body>
+
+    <!-- Navbar -->
+    <nav class="navbar navbar-expand-lg navbar-dark bg-primary shadow-sm">
+      <div class="container">
+        <a class="navbar-brand" href="<?= scriptUrl ?>?action=dashboard">
+          <i class="bi bi-mortarboard-fill"></i> Assessment Platform
+        </a>
+        <div class="collapse navbar-collapse" id="navbarNav">
+          <ul class="navbar-nav ms-auto">
+            <li class="nav-item">
+              <a href="<?= scriptUrl ?>?action=dashboard" class="btn btn-outline-light btn-sm">
+                <i class="bi bi-arrow-left"></i> Back to Dashboard
+              </a>
+            </li>
+          </ul>
+        </div>
+      </div>
+    </nav>
+
+    <div class="container mt-4 mb-5">
+      <div class="d-flex justify-content-between align-items-center mb-4 flex-wrap gap-2">
+        <h3 class="mb-0 text-primary"><i class="bi bi-file-earmark-spreadsheet"></i> Candidate Summary / ملخص النتائج</h3>
+        <div>
+          <button class="btn btn-success btn-sm" onclick="exportToExcel()"><i class="bi bi-file-earmark-excel"></i> Export Excel</button>
+          <button class="btn btn-danger btn-sm" onclick="exportToPDF()"><i class="bi bi-file-earmark-pdf"></i> Export PDF</button>
+        </div>
+      </div>
+
+      <!-- Filters -->
+      <div class="card shadow-sm border-0 rounded-3 mb-3">
+        <div class="card-body p-3">
+          <div class="row g-2">
+            <div class="col-md-6">
+              <div class="input-group">
+                <span class="input-group-text bg-white border-end-0"><i class="bi bi-search"></i></span>
+                <input type="text" id="searchInput" class="form-control border-start-0" placeholder="Search by Email or Company...">
+              </div>
+            </div>
+            <div class="col-md-3">
+              <select id="companyFilter" class="form-select">
+                <option value="">All Companies</option>
+              </select>
+            </div>
+            <div class="col-md-3">
+              <select id="assessmentFilter" class="form-select">
+                <option value="">All Assessments</option>
+              </select>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Table -->
+      <div class="card shadow-sm border-0 rounded-3">
+        <div class="card-body p-0">
+          <div id="loadingSpinner" class="text-center p-5">
+            <div class="spinner-border text-primary" role="status"></div>
+            <p class="mt-2 text-muted">Generating summary...</p>
+          </div>
+          <div id="tableContainer" style="display: none; overflow-x: auto;">
+            <table class="table table-hover table-sm mb-0 align-middle" id="reportTable">
+              <thead class="table-light">
+                <tr>
+                  <th>Company</th>
+                  <th>Assessment</th>
+                  <th>Candidate Email</th>
+                  <th class="text-center">Score</th>
+                  <th class="text-center">Verdict</th>
+                  <th class="text-center">Status</th>
+                  <th class="text-center">Action</th>
+                </tr>
+              </thead>
+              <tbody id="tableBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Libraries for Excel and PDF Export -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.31/jspdf.plugin.autotable.min.js"></script>
+
+    <script>
+      const scriptUrl = '<?= scriptUrl ?>';
+      const token = localStorage.getItem('sessionToken');
+      if (!token) window.location.href = scriptUrl + '?action=login';
+
+      let allData = [];
+      let filteredData = [];
+      let searchDebounce;
+
+      // Fetch Summarized Data (Passing token for P1 security)
+      google.script.run
+        .withSuccessHandler(function(data) {
+          document.getElementById('loadingSpinner').style.display = 'none';
+          document.getElementById('tableContainer').style.display = 'block';
+          if (data.status === 'success') {
+            allData = data.data;
+            filteredData = allData;
+            populateFilters(allData);
+            renderTable(allData);
+          } else {
+            document.getElementById('tableBody').innerHTML = `<tr><td colspan="7" class="text-center text-danger p-4">Error: ${data.message}</td></tr>`;
+          }
+        })
+        .withFailureHandler(function(err) {
+          document.getElementById('loadingSpinner').style.display = 'none';
+          document.getElementById('tableContainer').style.display = 'block';
+          
+          // SECURITY: If backend says Unauthorized/Forbidden, kick them out!
+          if (err.message.includes('Unauthorized') || err.message.includes('Forbidden') || err.message.includes('Session expired')) {
+            localStorage.removeItem('sessionToken');
+            localStorage.removeItem('userName');
+            window.location.href = scriptUrl + '?action=login';
+            return;
+          }
+          
+          document.getElementById('tableBody').innerHTML = `<tr><td colspan="7" class="text-center text-danger p-4">Server Error: ${err.message}</td></tr>`;
+        })
+        .uiGetCandidateSummary(token);
+
+      // Populate Dropdowns
+      function populateFilters(data) {
+        const companies = [...new Set(data.map(d => d.CompanyName).filter(Boolean))];
+        const assessments = [...new Set(data.map(d => d.AssessmentTitle).filter(Boolean))];
+
+        const cFilter = document.getElementById('companyFilter');
+        companies.forEach(c => cFilter.innerHTML += `<option value="${c}">${c}</option>`);
+
+        const aFilter = document.getElementById('assessmentFilter');
+        assessments.forEach(a => aFilter.innerHTML += `<option value="${a}">${a}</option>`);
+      }
+
+      // Filter Logic
+      function applyFilters() {
+        const search = document.getElementById('searchInput').value.toLowerCase();
+        const company = document.getElementById('companyFilter').value;
+        const assess = document.getElementById('assessmentFilter').value;
+
+        filteredData = allData.filter(row => {
+          const matchSearch = !search || 
+            (row.CandidateEmail || '').toLowerCase().includes(search) || 
+            (row.CompanyName || '').toLowerCase().includes(search);
+          
+          const matchCompany = !company || row.CompanyName === company;
+          const matchAssess = !assess || row.AssessmentTitle === assess;
+
+          return matchSearch && matchCompany && matchAssess;
+        });
+
+        renderTable(filteredData);
+      }
+
+      document.getElementById('searchInput').addEventListener('input', function() {
+        clearTimeout(searchDebounce);
+        searchDebounce = setTimeout(applyFilters, 200);
+      });
+      document.getElementById('companyFilter').addEventListener('change', applyFilters);
+      document.getElementById('assessmentFilter').addEventListener('change', applyFilters);
+
+      // Render Summary Table
+      function renderTable(data) {
+        const tbody = document.getElementById('tableBody');
+        tbody.innerHTML = '';
+        if (data.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted p-4">No data found.</td></tr>';
+          return;
+        }
+        data.forEach(row => {
+          let verdictBadge = '<span class="badge bg-secondary">N/A</span>';
+          if (row.Verdict === 'Pass') verdictBadge = '<span class="badge bg-success">Pass</span>';
+          if (row.Verdict === 'Fail') verdictBadge = '<span class="badge bg-danger">Fail</span>';
+
+          let statusBadge = row.Status === 'Completed' ? '<span class="badge bg-primary">Completed</span>' : '<span class="badge bg-warning text-dark">In Progress</span>';
+
+          tbody.innerHTML += `
+            <tr>
+              <td><strong>${row.CompanyName}</strong></td>
+              <td>${row.AssessmentTitle}</td>
+              <td>${row.CandidateEmail}</td>
+              <td class="text-center"><strong>${row.Percentage}</strong> <small class="text-muted">(${row.CorrectAnswers}/${row.TotalQuestions})</small></td>
+              <td class="text-center">${verdictBadge}</td>
+              <td class="text-center">${statusBadge}</td>
+              <td class="text-center">
+                <button class="btn btn-sm btn-outline-primary" onclick="printDetails('${row.AssignmentID}')">
+                  <i class="bi bi-printer-fill"></i> Print Details
+                </button>
+              </td>
+            </tr>
+          `;
+        });
+      }
+
+      // Print Detailed Report for a specific candidate (Passing token for P1 security)
+      function printDetails(assignmentId) {
+        const printWindow = window.open('', '_blank', 'width=800,height=600');
+        printWindow.document.write('<html><head><title>Loading...</title><link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet"></head><body class="p-5 text-center"><div class="spinner-border text-primary"></div><p>Loading details...</p></body></html>');
+
+        google.script.run
+          .withSuccessHandler(function(data) {
+            if (data.status === 'success') {
+              generateDetailedPrint(printWindow, data.details);
+            } else {
+              printWindow.document.body.innerHTML = '<div class="alert alert-danger m-5">' + data.message + '</div>';
+            }
+          })
+          .withFailureHandler(function(err) {
+            // SECURITY: If backend says Unauthorized/Forbidden, kick them out!
+            if (err.message.includes('Unauthorized') || err.message.includes('Forbidden') || err.message.includes('Session expired')) {
+              localStorage.removeItem('sessionToken');
+              localStorage.removeItem('userName');
+              window.location.href = scriptUrl + '?action=login';
+              return;
+            }
+            printWindow.document.body.innerHTML = '<div class="alert alert-danger m-5">Error: ' + err.message + '</div>';
+          })
+          .uiGetAssignmentDetails(token, assignmentId);
+      }
+
+      function generateDetailedPrint(printWindow, details) {
+        const { assignment, batch, assessment, answers } = details;
+
+        let html = `
+          <html>
+          <head>
+            <title>Report for ${assignment.CandidateEmail}</title>
+            <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+            <style>
+              body { font-family: Arial, sans-serif; padding: 40px; }
+              .question-box { border: 1px solid #eee; padding: 15px; margin-bottom: 15px; border-radius: 5px; }
+              .correct { color: green; font-weight: bold; }
+              .incorrect { color: red; font-weight: bold; }
+              @media print { .no-print { display: none; } .question-box { page-break-inside: avoid; } }
+            </style>
+          </head>
+          <body>
+            <div class="d-flex justify-content-between align-items-center mb-4">
+              <h2>Assessment Report</h2>
+              <button class="btn btn-primary no-print" onclick="window.print()"><i class="bi bi-printer"></i> Print Now</button>
+            </div>
+
+            <div class="card mb-4">
+              <div class="card-body">
+                <h5 class="card-title">${assessment.Title}</h5>
+                <p class="mb-1"><strong>Candidate:</strong> ${assignment.CandidateEmail}</p>
+                <p class="mb-1"><strong>Company:</strong> ${batch.CompanyName || 'N/A'}</p>
+                <p class="mb-1"><strong>Status:</strong> ${assignment.Status}</p>
+                <p class="mb-1"><strong>Started At:</strong> ${assignment.StartedAt || 'N/A'}</p>
+                <p class="mb-1"><strong>Completed At:</strong> ${assignment.CompletedAt || 'N/A'}</p>
+              </div>
+            </div>
+
+            <h4>Answers Breakdown</h4>
+        `;
+
+        answers.forEach((q, index) => {
+          let resultIcon = '';
+          if (q.IsCorrect === true) resultIcon = '<span class="correct">(Correct)</span>';
+          else if (q.IsCorrect === false) resultIcon = '<span class="incorrect">(Incorrect)</span>';
+          
+          html += `<div class="question-box">`;
+          html += `<p><strong>Q${index + 1}.</strong> ${q.QuestionText} <span class="text-muted small">(${q.QuestionType})</span></p>`;
+          
+          if (q.OptionsArray && q.OptionsArray.length > 0) {
+            html += `<ul class="list-group mb-2">`;
+            q.OptionsArray.forEach(opt => {
+              let cls = '';
+              let badge = '';
+              if (opt === q.CandidateAnswer) cls = 'list-group-item-warning';
+              if (q.CorrectAnswer !== null && opt === q.CorrectAnswer) {
+                cls = 'list-group-item-success';
+                badge = '<span class="correct">(Correct)</span>';
+              }
+              html += `<li class="list-group-item ${cls}">${opt} ${badge}</li>`;
+            });
+            html += `</ul>`;
+          }
+
+          let displayAnswer = q.CandidateAnswer;
+          try {
+              let ansObj = JSON.parse(q.CandidateAnswer);
+              if (ansObj.most && ansObj.least) {
+                  displayAnswer = `<br><span class="text-success">Most Like Me:</span> ${ansObj.most}<br><span class="text-danger">Least Like Me:</span> ${ansObj.least}`;
+              }
+          } catch (e) {
+              displayAnswer = q.CandidateAnswer;
+          }
+          html += `<p class="mt-2"><strong>Candidate Answer:</strong> ${displayAnswer} ${resultIcon}</p>`;
+          
+          if (q.CorrectAnswer !== null) {
+            html += `<p><strong>Correct Answer:</strong> ${q.CorrectAnswer}</p>`;
+          }
+          html += `</div>`;
+        });
+
+        html += `</body></html>`;
+        printWindow.document.open();
+        printWindow.document.write(html);
+        printWindow.document.close();
+      }
+
+      // Export Summary to Excel
+      function exportToExcel() {
+        if (filteredData.length === 0) return alert('No data to export.');
+        const exportData = filteredData.map(r => ({
+          "Company": r.CompanyName, "Assessment": r.AssessmentTitle, "Candidate Email": r.CandidateEmail,
+          "Status": r.Status, "Score (%)": r.Percentage, "Correct Answers": r.CorrectAnswers,
+          "Total Questions": r.TotalQuestions, "Verdict": r.Verdict
+        }));
+        const ws = XLSX.utils.json_to_sheet(exportData);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, "Candidate Summary");
+        XLSX.writeFile(wb, "Candidate_Summary_Report.xlsx");
+      }
+
+      // Export Summary to PDF (Using Browser Print for perfect Arabic support)
+      function exportToPDF() {
+        if (filteredData.length === 0) return alert('No data to export.');
+        
+        const printWindow = window.open('', '_blank', 'width=900,height=700');
+        
+        let html = `
+          <html>
+          <head>
+            <title>Candidate Summary Report</title>
+            <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+            <style>
+              body { font-family: Arial, sans-serif; padding: 30px; }
+              h3 { margin-bottom: 20px; }
+              @media print { .no-print { display: none; } }
+            </style>
+          </head>
+          <body>
+            <div class="d-flex justify-content-between align-items-center mb-4">
+              <h3 class="text-primary">Candidate Summary Report</h3>
+              <button class="btn btn-primary no-print" onclick="window.print()">
+                <i class="bi bi-printer"></i> Save as PDF
+              </button>
+            </div>
+            
+            <table class="table table-bordered table-sm align-middle">
+              <thead class="table-light">
+                <tr>
+                  <th>Company</th>
+                  <th>Assessment</th>
+                  <th>Candidate Email</th>
+                  <th class="text-center">Score</th>
+                  <th class="text-center">Verdict</th>
+                  <th class="text-center">Status</th>
+                </tr>
+              </thead>
+              <tbody>
+        `;
+
+        filteredData.forEach(row => {
+          let verdictBadge = row.Verdict;
+          if (row.Verdict === 'Pass') verdictBadge = '<span style="color: green; font-weight: bold;">Pass</span>';
+          if (row.Verdict === 'Fail') verdictBadge = '<span style="color: red; font-weight: bold;">Fail</span>';
+
+          html += `
+            <tr>
+              <td><strong>${row.CompanyName}</strong></td>
+              <td>${row.AssessmentTitle}</td>
+              <td>${row.CandidateEmail}</td>
+              <td class="text-center">${row.Percentage}</td>
+              <td class="text-center">${verdictBadge}</td>
+              <td class="text-center">${row.Status}</td>
+            </tr>
+          `;
+        });
+
+        html += `
+              </tbody>
+            </table>
+          </body>
+          </html>
+        `;
+
+        printWindow.document.open();
+        printWindow.document.write(html);
+        printWindow.document.close();
+        
+        setTimeout(function() {
+          printWindow.focus();
+          printWindow.print();
+        }, 500);
+      }
+    </script>
+  </body>
+</html>

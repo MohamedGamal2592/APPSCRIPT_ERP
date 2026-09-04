@@ -1,0 +1,269 @@
+﻿<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Valley Foods — المنتجات</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_ValleyFoods_Nav'); ?>
+  <?!= getCompanyThemeCSS_('9940659bd83035d7') ?>
+</head>
+<body>
+  <div id="vf-root"></div>
+
+  <script>
+    var params = new URLSearchParams(window.location.search);
+    var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+    var scriptUrl = window.scriptUrl || '/';
+    var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+    var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('9940659bd83035d7') ?>';
+    var COMPANY_PAGES = <?!= companyPages ?>;
+    var CURRENT_ACTION = '<?!= currentAction ?>';
+    var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+    var CAN_WRITE = UIC.canAdd_(); var CAN_FULL = UIC.canFull_();
+
+    function companyCall(moduleAction, data) {
+      return API.call('company_action', {
+        target_system: '9940659bd83035d7',
+        module_action: moduleAction,
+        data: data || {}
+      }, SESSION_TOKEN);
+    }
+    function esc(v) {
+      var s = (v === undefined || v === null) ? '' : String(v);
+      if (typeof FMT !== 'undefined' && FMT.escape) return FMT.escape(s);
+      return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+  </script>
+
+  <script>
+  (function () {
+    var ROWS = [], ENUMS = {}, CATEGORY_OPTIONS = [], ACCOUNT_OPTIONS = [], PARTY_OPTIONS = [], NEXT_ID = 1;
+    var BATCHES_BY_PRODUCT = {};
+
+    function renderApp() {
+      UIC.appShell('vf-root', {
+        companyLogoUrl: COMPANY_LOGO_URL,
+        companyLogoHref: scriptUrl + '?action=vf_dashboard&sessionToken=' + SESSION_TOKEN,
+        companyLogoTitle: 'Valley Foods',
+        breadcrumb: 'Valley Foods / الادارة المالية / المنتجات',
+        contentId: 'vf-products-content',
+        menuGroups: (window.VALLEYFOODS_MENU || [])
+      });
+      document.getElementById('vf-products-content').innerHTML =
+        '<div class="vf-card"><div class="vf-card-header"><h3>المنتجات</h3>' +
+          (CAN_WRITE ? '<button class="btn btn-primary" onclick="PRODUCTS_PAGE.openAdd()">+ إضافة منتج</button>' : '') +
+        '</div><div class="vf-card-body">' +
+          '<div id="pf-warning"></div>' +
+          '<div id="pf-table"><p class="vf-text-muted">جاري التحميل...</p></div>' +
+        '</div></div>';
+      load();
+    }
+
+    function load() {
+      UI.showSpinner();
+      companyCall('get_valley_products')
+        .then(function (res) {
+          ROWS = (res && res.rows) || [];
+          ENUMS = (res && res.enums) || {};
+          CATEGORY_OPTIONS = (res && res.category_options) || [];
+          ACCOUNT_OPTIONS = (res && res.account_options) || [];
+          PARTY_OPTIONS = (res && res.party_options) || [];
+          NEXT_ID = (res && res.next_id) || 1;
+          BATCHES_BY_PRODUCT = (res && res.batches_by_product) || {};
+          renderTable(res);
+        })
+        .catch(function (e) { UIC.toast((e && e.message) || 'خطأ في تحميل البيانات', 'error'); })
+        .finally(function () { UI.hideSpinner(); try{schedulePrefetch();}catch(e){} });
+    }
+
+    function renderTable(res) {
+      var container = document.getElementById('pf-table');
+      if (!container) return;
+      if (res && res.alignment_warning) {
+        document.getElementById('pf-warning').innerHTML =
+          '<div style="background:#fffbeb;border:1px solid #fde68a;color:#92400e;border-radius:8px;padding:10px;margin-bottom:12px;font-size:13px;">⚠️ ' + esc(res.alignment_warning) + '</div>';
+      }
+      var partyMap = {};
+      PARTY_OPTIONS.forEach(function (o) { partyMap[String(o.value)] = o.label; });
+      var catMap = {};
+      CATEGORY_OPTIONS.forEach(function (o) { catMap[String(o.value)] = o.label; });
+      var rows = ROWS.map(function (r) {
+        var partyLabel = partyMap[String(r.client_id)] || r.client_id || '-';
+        var hasStock = r.batch_count > 0;
+        return [
+          '<b data-pid="' + esc(r.id) + '">' + esc(r.id) + '</b>',
+          esc(r.name_ar),
+          esc(r.product_type),
+          esc(r.name_en || '-'),
+          esc(partyLabel),
+          esc(r.unit || r.price_unit || '-'),
+          esc(r.carton != null && r.carton !== '' ? r.carton : '-'),
+          (r.sales_tax != null && r.sales_tax !== '' ? (Number(r.sales_tax) * 100) + '%' : '-'),
+          esc(catMap[String(r.category)] || r.category || '-'),
+          '<span class="num" data-num="' + (r.current_stock_qty || 0) + '">' + fmtNum(r.current_stock_qty) + '</span>',
+          '<span class="num" style="font-weight:700;color:#0e623b;" data-num="' + (r.stock_value || 0) + '">' + fmtNum(r.stock_value, 2) + '</span>',
+          (hasStock
+            ? fmtNum(r.batch_count) + (r.aged_count ? ' <span style="color:#d97706;font-weight:700;">⚠' + r.aged_count + '</span>' : '')
+            : '<span style="color:#94a3b8;">0</span>')
+        ];
+      });
+      container.innerHTML = UIC.dataTable('products-table-id', {
+        headers: ['الكود', 'الاسم', 'النوع', 'الاسم الإنجليزي', 'العميل/المورد', 'الوحدة', 'الكرتونة او التغليف', 'الضريبة', 'التصنيف',
+                  { label: 'الرصيد الحالي', numeric: true }, { label: 'القيمة (ج.م)', numeric: true }, { label: 'الباتشات', numeric: true }],
+        rows: rows,
+        rowClick: function (rec, tr) {
+          var el = tr.querySelector('[data-pid]');
+          if (el) PRODUCTS_PAGE.openBatches(el.getAttribute('data-pid'));
+        }
+      });
+    }
+
+    /* ---------- MODAL ---------- */
+    function openAdd() { openModal(null); }
+
+    function openEdit(id) {
+      var row = null;
+      ROWS.forEach(function (r) { if (String(r.id) === String(id)) row = r; });
+      if (!row) { UIC.toast('لم يتم العثور على المنتج', 'error'); return; }
+      openModal(row);
+    }
+
+    function openModal(row) {
+      var isEdit = !!row;
+      /* Grayed-out non-editable id: preview of the auto-assigned code (add)
+         or the actual record id (edit). Server always decides the final id. */
+      var idValue = row ? row.id : NEXT_ID;
+      /* UIC.field select expects an ARRAY of {value,label} — not HTML */
+      var withEmpty = function (arr) {
+        return [{ value: '', label: '—' }].concat(arr || []);
+      };
+      var TAX_OPTIONS = [
+        { value: 0, label: '0%' },
+        { value: 0.05, label: '5%' },
+        { value: 0.10, label: '10%' },
+        { value: 0.14, label: '14%' }
+      ];
+      /* ALL entry fields are mandatory (mirrors server validation). */
+      var body = '<form id="pf-form">' +
+        '<div class="form-field">' +
+          '<label class="form-label">رقم المنتج (يُعتمد تلقائياً)</label>' +
+          '<input id="f-id-display" class="input" type="text" readonly value="' + esc(idValue) + '" style="background:#f3f4f6;color:#6b7280;cursor:not-allowed;">' +
+        '</div>' +
+        UIC.field({ key: 'f-name-ar', label: 'الاسم العربي', type: 'text', required: true, value: row ? row.name_ar : '', noCorrect: true }) +
+        UIC.combo({ key: 'f-type', label: 'نوع المنتج', required: true, options: (ENUMS.product_type || []).map(function (v) { return { value: v, label: v }; }), value: row ? row.product_type : '', placeholder: 'اكتب للبحث…' }) +
+        UIC.field({ key: 'f-name-en', label: 'الاسم الإنجليزي', type: 'text', required: true, value: row ? (row.name_en || '') : '' }) +
+        UIC.combo({ key: 'f-client', label: 'العميل / المورد', options: PARTY_OPTIONS, value: row ? String(row.client_id || '') : '', placeholder: 'اكتب للبحث…' }) +
+        UIC.field({ key: 'f-gpc', label: 'GPC', type: 'number', required: true, min: '0', value: row ? (row.GPC != null ? row.GPC : '') : '' }) +
+        UIC.combo({ key: 'f-unit', label: 'الوحدة', required: true, options: (ENUMS.unit || []).map(function (v) { return { value: v, label: v }; }), value: row ? (row.unit || row.price_unit) : '', placeholder: 'اكتب للبحث…' }) +
+        UIC.field({ key: 'f-carton', label: 'الكرتونة او التغليف', type: 'number', required: true, min: '0', step: '0.01', value: row ? (row.carton != null ? row.carton : '') : '' }) +
+        UIC.field({ key: 'f-alloc', label: 'نسبة تخصيص التكلفة %', type: 'number', required: true, min: '0', max: '100', step: '0.01', value: row ? (row.cost_allocation_percentage != null ? row.cost_allocation_percentage : '') : '' }) +
+        UIC.field({ key: 'f-conc', label: 'التركيز', type: 'text', required: true, value: row ? (row.concentration || '') : '' }) +
+        UIC.combo({ key: 'f-asset', label: 'كود الأصل', required: true, options: ACCOUNT_OPTIONS, value: row ? String(row.asset_code || '') : '', placeholder: 'اكتب للبحث…' }) +
+        UIC.combo({ key: 'f-category', label: 'التصنيف', required: true, options: CATEGORY_OPTIONS, value: row ? String(row.category || '') : '', placeholder: 'اكتب للبحث…' }) +
+        UIC.combo({ key: 'f-tax', label: 'نسبة ضريبة المبيعات %', required: true, options: TAX_OPTIONS, value: row != null && row.sales_tax !== '' && row.sales_tax != null ? Number(row.sales_tax) : 0, placeholder: 'اكتب للبحث…' }) +
+        UIC.combo({ key: 'f-quality', label: 'رقابة الجودة', required: true, options: withEmpty(ENUMS.quality_controlled), value: row ? String(row.quality_controlled || '') : '', placeholder: 'اكتب للبحث…' }) +
+      '</form>';
+
+      UIC.openModal('product-modal', {
+        title: (isEdit ? 'تعديل منتج: ' : 'إضافة منتج') ,
+        body: body,
+        onSave: 'PRODUCTS_PAGE.save(' + (isEdit ? esc(row.id) : 'null') + ')'
+      });
+    }
+
+    function save(editId) {
+      if (!UIC.validateForm('pf-form')) return;
+      var v = function (id) { var el = document.getElementById(id); return el ? el.value.trim() : ''; };
+      var payload = {
+        id: editId != null ? editId : '',
+        name_ar: v('f-name-ar'),
+        product_type: v('f-type'),
+        name_en: v('f-name-en'),
+        client_id: v('f-client'),
+        GPC: v('f-gpc'),
+        unit: v('f-unit'),
+        carton: v('f-carton'),
+        cost_allocation_percentage: v('f-alloc'),
+        concentration: v('f-conc'),
+        asset_code: v('f-asset'),
+        category: v('f-category'),
+        sales_tax: v('f-tax'),
+        quality_controlled: v('f-quality')
+      };
+      UI.showSpinner();
+      companyCall('save_valley_product', payload)
+        .then(function (r) {
+          UIC.closeModal('product-modal');
+          UIC.toast((r && r.message) || 'تم الحفظ بنجاح', 'success');
+          load();
+        })
+        .catch(function (e) { UIC.toast((e && e.message) || 'فشل الحفظ', 'error'); })
+        .finally(function () { UI.hideSpinner(); });
+    }
+
+    window.PRODUCTS_PAGE = { openAdd: openAdd, openEdit: openEdit, save: save, openBatches: openBatches };
+
+    /* ===================== STOCK SUMMARY + BATCH MODAL =====================
+     * Data logic ported from the legacy stock report (server-side grouping,
+     * chart-range exclusions, 90-day aging). */
+    function fmtNum(n, dec) {
+      return Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: dec || 0, maximumFractionDigits: dec == null ? 2 : dec });
+    }
+
+    function openBatches(pid) {
+      var row = null;
+      ROWS.forEach(function (r) { if (String(r.id) === String(pid)) row = r; });
+      var batches = BATCHES_BY_PRODUCT[String(pid)] || [];
+      var qtySum = 0, valSum = 0, agedN = 0;
+      batches.forEach(function (b) { qtySum += b.qty; valSum += b.value; if (b.aged) agedN++; });
+
+      var inner = '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px;">' +
+        chip('إجمالي الرصيد', fmtNum(qtySum)) +
+        chip('القيمة (ج.م)', fmtNum(valSum, 2)) +
+        chip('عدد الباتشات', fmtNum(batches.length)) +
+        chip('متقادم ⚠', fmtNum(agedN)) +
+      '</div>';
+
+      if (!batches.length) {
+        inner += '<p class="vf-text-muted">لا يوجد رصيد حالي لهذا المنتج.</p>';
+      } else {
+        inner += '<div style="overflow-x:auto;"><table class="table"><thead><tr>' +
+          '<th>كود الحركة (الدفعة)</th><th>التاريخ</th><th>حساب التوجيه</th>' +
+          '<th>الكمية</th><th>تكلفة الوحدة</th><th>القيمة (ج.م)</th>' +
+        '</tr></thead><tbody>';
+        batches.forEach(function (b) {
+          inner += '<tr' + (b.aged ? ' style="background:#fffbeb;"' : '') + '>' +
+            '<td><span style="background:#eef2f6;border:1px solid #cbd5e1;border-radius:4px;padding:2px 8px;font-size:11px;font-weight:700;">' + esc(b.lot) + '</span></td>' +
+            '<td style="font-family:monospace;">' + (b.aged ? '<span style="color:#d97706;" title="باتش متقادم (>90 يوم)">⚠ </span>' : '') + esc(b.date_display) + '</td>' +
+            '<td style="text-align:right;font-size:12px;color:#6b7280;">' + esc(b.chart_name) + '</td>' +
+            '<td class="num" data-num="' + b.qty + '">' + fmtNum(b.qty) + '</td>' +
+            '<td class="num" data-num="' + b.cost + '">' + fmtNum(b.cost, 2) + '</td>' +
+            '<td class="num" data-num="' + b.value + '">' + fmtNum(b.value, 2) + '</td>' +
+          '</tr>';
+        });
+        inner += '</tbody></table></div>';
+      }
+
+      UIC.openModal('product-batches-modal', {
+        title: 'الباتشات — ' + ((row && row.name_ar) || '') + ' (' + pid + ')',
+        body: inner,
+        footer: false
+      });
+    }
+
+    function chip(label, value) {
+      return '<div style="background:#f0fdf4;border:1px solid #a7f0ba;border-radius:8px;padding:8px 16px;min-width:130px;text-align:center;">' +
+        '<div style="font-size:11px;color:#166534;font-weight:700;">' + label + '</div>' +
+        '<div style="font-size:17px;font-weight:800;color:#14532d;">' + value + '</div></div>';
+    }
+
+    document.addEventListener('DOMContentLoaded', renderApp);
+  })();
+  </script>
+</body>
+</html>
+
+

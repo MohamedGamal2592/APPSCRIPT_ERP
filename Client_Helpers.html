@@ -1,0 +1,452 @@
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script>
+
+window.API = window.API || {};
+window.FMT = window.FMT || {};
+window.UI  = window.UI  || {};
+
+/* Code.js include() now evaluates included files as templates and passes
+ * scriptUrl + sessionToken, so these tokens ARE evaluated here. NOTE: the
+ * Apps Script template scriptlet context has no JSON global, so use a plain
+ * force-print scriptlets — both values are strings (URL / token). */
+window.SESSION_TOKEN = '__APP_SESSION_TOKEN__';
+
+/* Surface any uncaught error as a visible banner instead of a silent blank page. */
+window.addEventListener('error', function (e) {
+  try {
+    var b = document.getElementById('app-error-banner');
+    if (!b) {
+      b = document.createElement('div');
+      b.id = 'app-error-banner';
+      b.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:99999;background:#7f1d1d;color:#fff;font:13px/1.5 Segoe UI,Tahoma,Arial;padding:10px 14px;white-space:pre-wrap;direction:ltr;text-align:left;';
+      (document.body || document.documentElement).appendChild(b);
+    }
+    b.textContent = 'JS Error: ' + (e.message || e.error || e) + (e.filename ? ' @ ' + e.filename + ':' + e.lineno : '');
+  } catch (err) {}
+  try { if (window.UIC && UIC.reportError) UIC.reportError((e && e.message) || e, { stack: (e && e.error && e.error.stack) || '' }); } catch (er) {}
+});
+
+window.addEventListener('unhandledrejection', function (e) {
+  try {
+    if (window.UIC && UIC.reportError) UIC.reportError('Unhandled Promise Rejection: ' + ((e && e.reason && (e.reason.message || e.reason)) || e), { stack: (e && e.reason && e.reason.stack) || '' });
+  } catch (er) {}
+});
+
+(function initVhPolyfill() {
+  function setVh() {
+    var vh = window.innerHeight * 0.01;
+    document.documentElement.style.setProperty('--vh', vh + 'px');
+  }
+  setVh();
+  window.addEventListener('resize', setVh, { passive: true });
+  window.addEventListener('orientationchange', function () {
+
+    setTimeout(setVh, 300);
+  });
+})();
+
+(function initKeyboardDetection() {
+  var vv = window.visualViewport;
+  if (!vv) return;
+
+  function onViewportChange() {
+    var keyboardHeight = Math.max(0, window.innerHeight - vv.height);
+    var isOpen = keyboardHeight > 150; // 150px threshold avoids false positives
+    document.documentElement.style.setProperty('--keyboard-height', keyboardHeight + 'px');
+    document.documentElement.classList.toggle('keyboard-open', isOpen);
+  }
+
+  vv.addEventListener('resize', onViewportChange, { passive: true });
+  vv.addEventListener('scroll', onViewportChange, { passive: true });
+})();
+
+(function initInputAutoScroll() {
+  document.addEventListener('focusin', function (e) {
+    var el = e.target;
+    if (!el || !['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName)) return;
+    setTimeout(function () {
+      try {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      } catch (_) {
+        el.scrollIntoView();
+      }
+    }, 350);
+  }, { passive: true });
+})();
+
+API.call = function (action, payload, sessionToken) {
+  return new Promise(function (resolve, reject) {
+    var request = { action: action, payload: payload || {} };
+    if (sessionToken) request.sessionToken = sessionToken;
+
+    google.script.run
+      .withSuccessHandler(function (result) {
+        if (result && result.status === 'error') {
+          /* Redirect targets MUST be absolute: inside the HtmlService sandbox
+           * the executing origin is a *.googleusercontent.com iframe, so a
+           * relative '/' would land on Google Drive's error page. */
+          var _s = window.scriptUrl || '/';
+          if (result.code === 'SESSION_EXPIRED') {
+            if (window.UIC && UIC.navTo) UIC.navTo(null, _s + '?action=session_expired'); else window.location.href = _s + '?action=session_expired';
+          } else if (result.code === 'SYSTEM_DISABLED') {
+            if (window.UIC && UIC.navTo) UIC.navTo(null, _s + '?action=login&shutdown=1'); else window.location.href = _s + '?action=login&shutdown=1';
+          }
+          reject(result);
+        } else {
+          resolve(result);
+        }
+      })
+      .withFailureHandler(function (err) {
+        reject({ status: 'error', message: err && err.message ? err.message : 'خطأ غير متوقع' });
+      })
+      .apiRouter(request);
+  });
+};
+
+API.downloadXlsx = function (base64, filename) {
+  var bin = atob(base64);
+  var bytes = new Uint8Array(bin.length);
+  for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  var blob = new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url;
+  a.download = filename || 'report.xlsx';
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(function () { URL.revokeObjectURL(url); a.remove(); }, 1000);
+};
+
+API.getSession = function () {
+  try {
+    return JSON.parse(localStorage.getItem('erp_session') || 'null');
+  } catch (e) {
+    return null;
+  }
+};
+
+API.setSession = function (s) {
+  localStorage.setItem('erp_session', JSON.stringify(s || null));
+};
+
+API.clearSession = function () {
+  localStorage.removeItem('erp_session');
+};
+
+var _spinnerTimer_ = null;
+
+UI.showSpinner = function (message) {
+  var existing = document.getElementById('app-spinner');
+  if (existing) existing.remove();
+  if (_spinnerTimer_) { clearInterval(_spinnerTimer_); _spinnerTimer_ = null; }
+
+  var messages = Array.isArray(message) ? message : [message || 'جاري التحميل...'];
+  var initialMsg = messages[0] || 'جاري التحميل...';
+
+  var div = document.createElement('div');
+  div.id = 'app-spinner';
+  div.className = 'spinner-overlay';
+  div.innerHTML =
+    '<div class="spinner-box">' +
+      '<div class="spinner"></div>' +
+      '<div class="spinner-msg">' + initialMsg + '</div>' +
+    '</div>';
+  document.body.appendChild(div);
+
+  if (messages.length > 1) {
+    var idx = 0;
+    var msgEl = div.querySelector('.spinner-msg');
+    _spinnerTimer_ = setInterval(function () {
+      idx++;
+      if (idx < messages.length) {
+        if (msgEl) msgEl.textContent = messages[idx];
+      } else {
+        clearInterval(_spinnerTimer_);
+        _spinnerTimer_ = null;
+      }
+    }, 2500);
+  }
+};
+
+UI.hideSpinner = function () {
+  if (_spinnerTimer_) { clearInterval(_spinnerTimer_); _spinnerTimer_ = null; }
+  var el = document.getElementById('app-spinner');
+  if (el) el.remove();
+};
+
+/* Batch 10: guard a submit button against double-clicks / double-submits.
+ * Disables the button until `fn` (which may return a Promise) settles.
+ * Safe no-op if already in flight. Existing loading overlays still apply. */
+UI.submitOnce = function (btn, fn) {
+  if (!btn) { if (fn) fn(); return; }
+  if (btn.dataset && btn.dataset.vfSubmitting === '1') return;
+  if (btn.dataset) btn.dataset.vfSubmitting = '1';
+  var prev = btn.disabled;
+  btn.disabled = true;
+  var done = function () { btn.disabled = prev; if (btn.dataset) btn.dataset.vfSubmitting = ''; };
+  var p = fn ? fn() : undefined;
+  if (p && typeof p.then === 'function') p.then(done, done); else done();
+};
+
+(function initNavSpinner() {
+  document.addEventListener('click', function (e) {
+    var el = e.target;
+    var a = (el && el.closest) ? el.closest('a[href]') : null;
+    if (!a) return;
+    if (a.target && a.target !== '_self' && a.target !== '_top') return;
+    var href = a.getAttribute('href') || '';
+    if (href.indexOf('?action=') === -1) return;
+    try { UI.showSpinner(); } catch (err) {}
+  }, true);
+  window.addEventListener('pageshow', function () {
+    try { UI.hideSpinner(); } catch (err) {}
+  });
+})();
+
+FMT.currency = function (n, suffix) {
+  var num = Number(n) || 0;
+  var s = num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return s + (suffix ? ' ' + suffix : '');
+};
+
+FMT.date = function (d) {
+  if (!d) return '';
+  var dt = new Date(d);
+  if (isNaN(dt.getTime())) return String(d);
+  return dt.toLocaleDateString('en-GB');
+};
+
+FMT.datetime = function (d) {
+  if (!d) return '';
+  var dt = new Date(d);
+  if (isNaN(dt.getTime())) return String(d);
+  return dt.toLocaleString('en-GB');
+};
+
+FMT.number = function (n) {
+  var num = Number(n) || 0;
+  return num.toLocaleString('en-US');
+};
+
+FMT.percent = function (n) {
+  var num = Number(n) || 0;
+  return (num * 100).toLocaleString('en-US', { maximumFractionDigits: 2 }) + '%';
+};
+
+FMT.phone = function (p) {
+  if (!p) return '';
+  return String(p).replace(/[^\d+]/g, '');
+};
+
+FMT.escape = function (v) {
+  if (v === undefined || v === null) return '';
+  return String(v)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+};
+
+(function () {
+  var css = `
+  /* ── Spinner overlay ─────────────────────────────────── */
+  .spinner-overlay { position: fixed; inset: 0; background: rgba(17,24,39,.4); display: flex; align-items: center; justify-content: center; z-index: 1500; }
+  .spinner-box { display: flex; flex-direction: column; align-items: center; gap: 12px; background: var(--bg-surface); padding: 24px 32px; border-radius: var(--radius-md); box-shadow: var(--shadow-lg); max-width: 90vw; }
+  .spinner { width: 32px; height: 32px; border: 3px solid var(--brand-border); border-top-color: var(--brand-primary); border-radius: 50%; animation: erp-spin 0.8s linear infinite; will-change: transform; }
+  .spinner-msg { font-size: 13px; color: var(--text-muted); text-align: center; }
+  @keyframes erp-spin { to { transform: rotate(360deg); } }
+
+  /* ── Mobile input zoom prevention ───────────────────── */
+  /* Chrome on Android zooms the page when an <input> has font-size < 16px.
+     Setting max(16px, 1rem) prevents this without affecting desktop layout. */
+  input, textarea, select {
+    font-size: max(16px, 1rem);
+  }
+
+  /* ── Universal minimum touch targets ────────────────── */
+  /* Every interactive element needs at least 48×48px hit area. */
+  button, [role="button"], select {
+    min-height: var(--tap-min, 48px);
+    cursor: pointer;
+  }
+  /* Anchors used as nav items get a minimum height via padding */
+  a.nav-item {
+    min-height: var(--tap-min, 48px);
+    display: inline-flex;
+    align-items: center;
+  }
+
+  /* ── Active-state feedback (mobile: no hover, use :active) ─ */
+  @media (hover: none) {
+    .btn:active          { opacity: 0.80; transform: scale(0.97); }
+    .nav-item:active     { opacity: 0.75; }
+    .company-tile:active { transform: scale(0.98); }
+    .module-tile:active  { transform: scale(0.98); }
+  }
+
+  /* ── Prevent accidental horizontal scroll on tables ─── */
+  .table-wrap {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-x: contain;
+  }
+  `;
+  var style = document.createElement('style');
+  style.textContent = css;
+  document.head.appendChild(style);
+})();
+
+/* ── Batch 11: session views / saved views / record history helpers ── */
+window.SESSION = window.SESSION || {};
+
+SESSION.getQueryParam = function (name) {
+  var m = new RegExp('[?&]' + name + '=([^&]*)').exec(window.location.search);
+  return m ? decodeURIComponent(m[1]) : '';
+};
+
+SESSION.token = function () {
+  return window.SESSION_TOKEN || SESSION.getQueryParam('sessionToken') || (API.getSession() && API.getSession().token) || '';
+};
+
+SESSION.ensure = function () {
+  var t = SESSION.token();
+  if (t) {
+    var s = API.getSession() || {};
+    s.token = t;
+    API.setSession(s);
+  }
+  return t;
+};
+
+SESSION.openPage = function (action, extra) {
+  var url = (window.scriptUrl || '/') + '?action=' + encodeURIComponent(action) + '&sessionToken=' + encodeURIComponent(SESSION.token());
+  if (extra) url += '&' + extra;
+  if (window.UIC && UIC.navTo) UIC.navTo(null, url); else window.location.href = url;
+};
+
+SESSION.openSessions = function () { SESSION.openPage('user_sessions'); };
+SESSION.openViews = function () { SESSION.openPage('user_views'); };
+
+SESSION.openHistory = function (sheetName, recordId) {
+  if (window.UIC && UIC.HistorySide) { UIC.HistorySide.open(sheetName, recordId); return; }
+  var url = (window.scriptUrl || '/') + '?action=record_history&sheet=' + encodeURIComponent(sheetName) +
+    '&record=' + encodeURIComponent(recordId) + '&sessionToken=' + encodeURIComponent(SESSION.token());
+  window.open(url, '_blank');
+};
+
+SESSION.saveCurrentView = function (pageKey, definition, presetName) {
+  var name = presetName || prompt('اسم العرض المحفوظ:');
+  if (!name) return Promise.reject('cancelled');
+  var device = (function () {
+    try {
+      var ua = navigator.userAgent || '';
+      var type = /Mobi|Android|iPhone|iPad/i.test(ua) ? 'Mobile' : 'Desktop';
+      return type;
+    } catch (e) { return 'Unknown'; }
+  })();
+  return API.call('save_user_view', { page_key: pageKey, name: name, definition: definition || {}, device: device }, SESSION.token())
+    .then(function (r) { UIC.toast('تم حفظ العرض', 'success'); return r; });
+};
+
+SESSION.loadActiveView = function (pageKey) {
+  var viewId = SESSION.getQueryParam('applyView');
+  if (!viewId) return Promise.resolve(null);
+  return API.call('list_user_views', {}, SESSION.token())
+    .then(function (r) {
+      var views = (r && r.views) || [];
+      var v = views.find(function (x) { return String(x.view_id) === String(viewId); });
+      if (!v || !v.layout_json) return null;
+      try { return typeof v.layout_json === 'string' ? JSON.parse(v.layout_json) : v.layout_json; }
+      catch (e) { return null; }
+    })
+    .catch(function () { return null; });
+};
+
+SESSION.logout = function () {
+  var t = SESSION.token();
+  if (t) { try { API.call('logout', {}, t).catch(function () {}); } catch (e) {} }
+  API.clearSession();
+  var _lurl = (window.scriptUrl || '/') + '?action=login';
+  if (window.UIC && UIC.navTo) UIC.navTo(null, _lurl); else window.location.href = _lurl;
+};
+
+SESSION.revokeAll = function () {
+  if (!confirm('تسجيل الخروج من جميع الأجهزة؟')) return;
+  UI.showSpinner('جاري التنفيذ...');
+  API.call('revoke_all_sessions', {}, SESSION.token())
+    .then(function () { API.clearSession(); var _lurl = (window.scriptUrl || '/') + '?action=login'; if (window.UIC && UIC.navTo) UIC.navTo(null, _lurl); else window.location.href = _lurl; })
+    .catch(function (e) { UIC.toast(e.message || 'تعذر التنفيذ', 'error'); UI.hideSpinner(); });
+};
+
+function logout() {
+  API.clearSession();
+  window.location.href = (window.scriptUrl || '/') + '?action=login';
+}
+
+/* ── Part 3: Idle-time prefetch (shared by all companies) ──────────── */
+var __prefetchTimer = null;
+var __prefetchDone = false;
+
+function schedulePrefetch() {
+  if (__prefetchDone) return;
+  clearTimeout(__prefetchTimer);
+  __prefetchTimer = setTimeout(function () {
+    __prefetchDone = true;
+    try {
+      if (typeof companyCall === 'function') {
+        companyCall('prefetch_refs', {}).catch(function () {});
+      } else if (window.API && API.call && SESSION && SESSION.token) {
+        // Fallback if companyCall not in scope — use generic company_action path is not needed; prefetch is company-specific so require companyCall
+      }
+    } catch (e) {}
+  }, 2000);
+}
+
+
+/* Injects a small session bar (sessions / views / logout) into containerId.
+ * Call from any page's header so users can manage devices and saved views. */
+SESSION.renderBar = function (containerId) {
+  var el = document.getElementById(containerId);
+  if (!el) return;
+  var bar = document.createElement('div');
+  bar.className = 'session-bar';
+  bar.innerHTML =
+    '<button class="btn btn-ghost" onclick="SESSION.openSessions()">جلساتي</button>' +
+    '<button class="btn btn-ghost" onclick="SESSION.openViews()">عروضي</button>' +
+    '<button class="btn btn-ghost btn-danger" onclick="SESSION.logout()">تسجيل الخروج</button>';
+  el.appendChild(bar);
+};
+
+/* Auto-inject the session bar into the shared top navigation (.topbar-nav)
+ * rendered by UIC.appShell, so every page that uses it gets device / views /
+ * logout controls without per-page edits. */
+(function initSessionBar() {
+  SESSION.ensure();
+  var css = document.createElement('style');
+  css.textContent =
+    '.session-bar{display:inline-flex;gap:6px;margin-inline-start:auto;align-items:center;flex-wrap:wrap;}' +
+    '.btn-ghost{background:transparent;border:1px solid var(--border-color);border-radius:var(--radius-sm,8px);padding:6px 12px;font-size:13px;color:var(--text-muted);}' +
+    '.btn-danger{color:#c5221f;border-color:#c5221f;}';
+  document.head.appendChild(css);
+  var tries = 0;
+  var iv = setInterval(function () {
+    tries++;
+    var nav = document.querySelector('.topbar-nav');
+    if (nav && !document.getElementById('erp-session-bar')) {
+      var bar = document.createElement('span');
+      bar.id = 'erp-session-bar';
+      bar.className = 'session-bar';
+      bar.innerHTML =
+        '<button class="btn btn-ghost" onclick="SESSION.openSessions()">جلساتي</button>' +
+        '<button class="btn btn-ghost" onclick="SESSION.openViews()">عروضي</button>';
+      nav.appendChild(bar);
+      clearInterval(iv);
+    } else if (tries > 40) {
+      clearInterval(iv);
+    }
+  }, 300);
+})();
+
+</script>
+

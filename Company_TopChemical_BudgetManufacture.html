@@ -1,0 +1,346 @@
+﻿<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>تصنيع الميزانية</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_TopChemical_Nav'); ?>
+  <?!= getCompanyThemeCSS_('3fe1b5cb67b7223e') ?>
+</head>
+<body>
+<div id="tc-root" dir="rtl"></div>
+<script>
+  var params = new URLSearchParams(window.location.search);
+  var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+  var scriptUrl = window.scriptUrl || '/';
+  var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+  var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('3fe1b5cb67b7223e') ?>';
+  var COMPANY_PAGES = <?!= companyPages ?>;
+  var CURRENT_ACTION = '<?!= currentAction ?>';
+  var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+  var CAN_WRITE = UIC.canAdd_(); var CAN_FULL = UIC.canFull_();
+  var ITEMS = [];
+  var REFS = null;
+
+  function companyCall(moduleAction, data) {
+    return API.call('company_action', {
+      target_system: '3fe1b5cb67b7223e',
+      module_action: moduleAction,
+      data: data || {}
+    }, SESSION_TOKEN);
+  }
+
+  function pad(n) { return n < 10 ? '0' + n : String(n); }
+  function todayStr() {
+    var d = new Date();
+    return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+  }
+
+  function load() {
+    UIC.appShell('tc-root', {
+      companyLogoUrl: COMPANY_LOGO_URL,
+      companyLogoHref: scriptUrl + '?action=tc_dashboard&sessionToken=' + SESSION_TOKEN,
+      companyLogoTitle: 'توب كيميكال',
+      breadcrumb: 'توب كيميكال / حسابات الميزانية / تصنيع الميزانية',
+      contentId: 'budget-manufacture-content',
+      menuGroups: (window.TOPCHEMICAL_MENU || [])
+    });
+    fetchAll();
+  }
+
+  function fetchAll() {
+    UI.showSpinner();
+    Promise.all([
+      companyCall('get_legal_manufacture'),
+      companyCall('get_budget_refs')
+    ]).then(function (res) {
+      ITEMS = res[0].items || [];
+      REFS = res[1].refs || {};
+      render(); try{schedulePrefetch();}catch(e){};
+    }).catch(function (e) { showError(e); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function viewAttachment(ref){
+    window.open(scriptUrl + '?download=attachment&page=tc_budget_manufacture&ref=' + encodeURIComponent(ref) + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN), '_blank');
+  }
+  function render() {
+    var list = ITEMS.filter(function (r) { return String(r.transaction_code || '').trim() !== ''; }).slice().sort(function (a, b) {
+      function codeNum(v) {
+        var m = String(v || '').trim().match(/(\d+)/);
+        return m ? Number(m[1]) : 0;
+      }
+      return codeNum(b.transaction_code) - codeNum(a.transaction_code);
+    });
+    var rows = list.map(function (r) {
+      var code = String(r.transaction_code || '').trim();
+      var fileKeys = ['analysis_certificate','sales_permit','technical_permit','registration'];
+      var hasFile = fileKeys.some(function(k){ return r[k]; });
+      var fileCell = fileKeys.map(function(k){
+        var ref = r[k];
+        return ref ? '<button class="btn btn-outline" style="padding:2px 6px;font-size:11px;" onclick="viewAttachment(\'' + FMT.escape(ref).replace(/\'/g, "\\\'") + '\')" title="'+k+'">📎 '+k.split('_')[0]+' / View</button>' : '';
+      }).filter(Boolean).join(' ') || '-';
+      return {
+        transaction_code: FMT.escape(r.transaction_code || '-'),
+        transaction_type: FMT.escape(r.transaction_type || '-'),
+        manufacture_date: FMT.escape(r.manufacture_date || '-'),
+        manufcture_number: FMT.escape(r.manufcture_number || '-'),
+        produced_product: FMT.escape(r.produced_product || '-'),
+        manufactured_qty: Number(r.manufactured_qty) || 0,
+        net_qty: Number(r.net_qty) || 0,
+        profit_percent: FMT.escape(r.profit_percent || '-'),
+        total_cost: Number(r.total_cost) || 0,
+        sales_amount: Number(r.sales_amount) || 0,
+        sales_price: Number(r.sales_price) || 0,
+        file_cell: fileCell,
+        actions: UIC.actionBtns([
+          { label: '👁️ عرض / View', onclick: "viewManufacture('" + FMT.escape(code) + "')" },
+          { label: '🖨️ طباعة / Print', onclick: "printManufacture('" + FMT.escape(code) + "')" },
+          hasFile ? { label: '📎 عرض المرفق / View Attachment', onclick: "viewManufactureFiles('" + FMT.escape(code) + "')" } : null,
+          CAN_WRITE ? { label: '✏️ تعديل / Edit', onclick: "openManufactureModal('" + FMT.escape(code) + "')" } : null,
+          IS_SUPER_ADMIN ? { label: '🗑️ حذف / Delete', color: '#dc2626', onclick: "deleteManufacture('" + FMT.escape(code) + "')" } : null
+        ].filter(Boolean))
+      };
+    });
+    var headers = [
+      { key: 'transaction_code', label: 'كود المعاملة' },
+      { key: 'transaction_type', label: 'النوع' },
+      { key: 'manufacture_date', label: 'التاريخ' },
+      { key: 'manufcture_number', label: 'رقم التشغيلة' },
+      { key: 'produced_product', label: 'المنتج المنتج' },
+      { key: 'manufactured_qty', label: 'الكمية المنتجة', numeric: true },
+      { key: 'net_qty', label: 'صافي الكمية', numeric: true },
+      { key: 'profit_percent', label: 'نسبة الربح' },
+      { key: 'total_cost', label: 'إجمالي التكلفة', money: true },
+      { key: 'sales_amount', label: 'قيمة المبيعات', money: true },
+      { key: 'sales_price', label: 'سعر البيع', money: true },
+      { key: 'file_cell', label: 'المرفقات / Attachments' },
+      { key: 'actions', label: 'إجراءات / Actions' }
+    ];
+    document.getElementById('budget-manufacture-content').innerHTML =
+      (CAN_WRITE ? '<div style="display:flex;justify-content:flex-end;margin-bottom:12px;"><button class="btn btn-primary" onclick="openManufactureModal()">+ إضافة عملية تصنيع</button></div>' : '') +
+      UIC.dataTable('budget-manufacture-table', { title: 'عمليات التصنيع الداخلي', headers: headers, rows: rows, emptyText: 'لا توجد بيانات' });
+    UIC.initTableSort('budget-manufacture-table');
+  }
+
+  function viewManufacture(id){
+    var r = ITEMS.find(function(x){ return String(x.transaction_code)===String(id); });
+    if(!r) return;
+    var files = ['analysis_certificate','sales_permit','technical_permit','registration'].map(function(k){
+      var ref=r[k]; return ref ? '<div style="margin:4px 0;"><b>'+k+':</b> <button class="btn btn-outline" style="padding:4px 8px;" onclick="viewAttachment(\''+FMT.escape(ref).replace(/\'/g, "\\\'")+'\')">📎 عرض — '+FMT.escape(String(ref).split("/").pop())+'</button></div>' : '';
+    }).join('');
+    var body='<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 14px;font-size:13px;"><div><b>الكود:</b> '+FMT.escape(r.transaction_code)+'</div><div><b>النوع:</b> '+FMT.escape(r.transaction_type||'-')+'</div><div><b>المنتج:</b> '+FMT.escape(r.produced_product||'-')+'</div><div><b>الكمية:</b> '+FMT.escape(r.manufactured_qty||'-')+'</div><div style="grid-column:1/-1;"><b>المرفقات:</b><div style="margin-top:6px;">'+(files||'لا يوجد')+'</div></div></div>';
+    UIC.openModal('manf-view-modal', { title: 'عرض السجل / View Record', body: body });
+  }
+  function viewManufactureFiles(id){
+    var r = ITEMS.find(function(x){ return String(x.transaction_code)===String(id); });
+    if(!r) return;
+    var first = r.analysis_certificate||r.sales_permit||r.technical_permit||r.registration;
+    if(first) viewAttachment(first);
+  }
+  function deleteManufacture(id){
+    if(!UIC.canFull_()){ UIC.toast('غير مصرح','error'); return; }
+    if(!confirm('هل تريد حذف؟ / Delete?')) return;
+    UI.showSpinner(); companyCall('delete_legal_manufacture',{transaction_code:id}).then(function(res){ UIC.toast(res.message||'تم الحذف','success'); fetchAll(); }).catch(function(e){ UIC.toast(e.message||'خطأ','error'); }).finally(function(){ UI.hideSpinner(); });
+  }
+  function printManufacture(id) {
+    window.open(scriptUrl + '?download=budget_print&type=manufacture&id=' + encodeURIComponent(id) + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN), '_blank');
+  }
+
+  function productOptions() {
+    return (REFS.products || []).map(function (p) { return p.name_ar; }).filter(Boolean);
+  }
+
+  function itemOptions() {
+    return (REFS.current_products || []).map(function (c) {
+      return { value: String(c.transaction_code || '').trim(), label: String(c.product || '').trim() + ' (' + String(c.transaction_code || '').trim() + ')' };
+    }).filter(function (o) { return o.value; });
+  }
+
+  function profitOptions() {
+    var opts = [];
+    var seen = {};
+    ITEMS.forEach(function (r) {
+      var v = String(r.profit_percent == null ? '' : r.profit_percent).trim();
+      if (v !== '' && !seen[v]) {
+        seen[v] = true;
+        var num = Number(v);
+        var label = (!isNaN(num) && num <= 1) ? Math.round(num * 100) + '%' : v + '%';
+        opts.push({ value: v, label: label });
+      }
+    });
+    return opts;
+  }
+
+  function uploadFieldFile(formEl, key, sheet) {
+    var input = formEl.querySelector('[data-field-name="' + key + '"]');
+    if (!input || !input.files || !input.files[0]) return Promise.resolve('');
+    var file = input.files[0];
+    return new Promise(function (resolve, reject) {
+      var reader = new FileReader();
+      reader.onerror = function () { reject(new Error('خطأ في قراءة الملف')); };
+      reader.onload = function () {
+        var b64 = String(reader.result || '').split(',')[1] || '';
+        companyCall('add_upload_file', { sheet: sheet, field: key, filename: file.name, base64: b64 })
+          .then(function (res) {
+            if (res && res.status === 'success') resolve(res.reference);
+            else reject(new Error((res && res.message) || 'خطأ في رفع الملف'));
+          })
+          .catch(function (err) { reject(new Error((err && err.message) || 'خطأ في رفع الملف')); });
+      };
+      reader.readAsDataURL(file);
+    });
+  }
+
+  function openManufactureModal() {
+    var prodOpts = productOptions().map(function (n) { return { value: n, label: n }; });
+    var items = itemOptions();
+    var slotHtml = '';
+    for (var i = 1; i <= 8; i++) {
+      slotHtml += '<div style="display:flex;gap:8px;align-items:flex-start;">' +
+        '<div style="flex:3;min-width:0;">' + UIC.combo({ key: 'item_' + i, label: 'مادة ' + i, options: items, placeholder: 'اختر المادة...' }) + '</div>' +
+        '<div style="flex:1;min-width:0;">' + UIC.field({ key: 'qty_' + i, label: 'كمية ' + i, type: 'number', step: '0.001', min: '0' }) + '</div>' +
+        '</div>';
+    }
+    var profitOpts = profitOptions();
+    var profitField = profitOpts.length
+      ? UIC.combo({ key: 'profit_percent', label: 'نسبة الربح %', options: profitOpts, placeholder: 'اختر النسبة...' })
+      : UIC.field({ key: 'profit_percent', label: 'نسبة الربح %', type: 'number', step: '0.01' });
+    var body = '<form id="manufacture-form">' +
+      '<h4 style="margin:4px 0 10px;font-size:14px;color:#14532d;">العملية</h4>' +
+      UIC.field({ key: 'manufacture_date', label: 'تاريخ التصنيع', type: 'date', required: true, value: todayStr() }) +
+      UIC.field({ key: 'manufcture_number', label: 'رقم التشغيلة', required: true }) +
+      UIC.field({ key: 'start_date', label: 'تاريخ البدء', type: 'date' }) +
+      UIC.field({ key: 'end_date', label: 'تاريخ الانتهاء', type: 'date' }) +
+      '<h4 style="margin:10px 0;font-size:14px;color:#14532d;">الناتج</h4>' +
+      UIC.combo({ key: 'produced_product', label: 'المنتج المنتج', options: prodOpts, required: true, placeholder: 'اختر المنتج...' }) +
+      UIC.field({ key: 'manufactured_qty', label: 'الكمية المنتجة', type: 'number', step: '0.001', min: '0.001', required: true }) +
+      '<h4 style="margin:10px 0;font-size:14px;color:#14532d;">المكونات (المادة 1 وكميتها إلزاميان)</h4>' + slotHtml +
+      '<h4 style="margin:10px 0;font-size:14px;color:#14532d;">القيم</h4>' +
+      profitField +
+      '<p style="font-size:12px;color:#6b7280;margin:0 0 10px;">سيتم احتساب إجمالي التكلفة، قيمة المبيعات وسعر البيع تلقائياً، وكذلك كود المعاملة وصافي الكمية.</p>' +
+      '<h4 style="margin:10px 0;font-size:14px;color:#14532d;">المرفقات</h4>' +
+      '<label style="font-size:13px;color:#374151;">شهادة التحليل</label>' +
+      '<input id="manf-analysis_certificate" data-field-name="analysis_certificate" class="input" type="file" accept=".jpg,.jpeg,.png,.pdf">' +
+      '<label style="font-size:13px;color:#374151;">تصريح البيع</label>' +
+      '<input id="manf-sales_permit" data-field-name="sales_permit" class="input" type="file" accept=".jpg,.jpeg,.png,.pdf">' +
+      '<label style="font-size:13px;color:#374151;">تصريح فني</label>' +
+      '<input id="manf-technical_permit" data-field-name="technical_permit" class="input" type="file" accept=".jpg,.jpeg,.png,.pdf">' +
+      '<label style="font-size:13px;color:#374151;">صورة التسجيل</label>' +
+      '<input id="manf-registration" data-field-name="registration" class="input" type="file" accept=".jpg,.jpeg,.png,.pdf">' +
+      UIC.field({ key: 'registration_number', label: 'رقم التسجيل', placeholder: 'نص رقمي إن وجد' }) +
+      '</form>';
+    UIC.openModal('manufacture-modal', { title: 'إضافة عملية تصنيع', body: body, onSave: 'saveManufacture()' });
+    var sEl = document.getElementById('start_date');
+    if (sEl) sEl.addEventListener('change', manfEndDate);
+    for (var j = 1; j <= 8; j++) {
+      var itEl = document.getElementById('item_' + j);
+      var qEl = document.getElementById('qty_' + j);
+      if (itEl) itEl.addEventListener('change', manfItemQtyCheck);
+      if (qEl) qEl.addEventListener('input', manfItemQtyCheck);
+    }
+  }
+
+  function currentQtyMap() {
+    var m = {};
+    ((REFS && REFS.current_products) || []).forEach(function (c) {
+      m[String(c.transaction_code || '').trim()] = Number(c.current_qty) || 0;
+    });
+    return m;
+  }
+
+  function manfItemQtyCheck() {
+    var map = currentQtyMap();
+    for (var i = 1; i <= 8; i++) {
+      var itEl = document.getElementById('item_' + i);
+      var qEl = document.getElementById('qty_' + i);
+      var err = document.getElementById('err-qty_' + i);
+      if (!itEl || !qEl || !err) continue;
+      var code = String(itEl.value || '').trim();
+      var qty = Number(qEl.value) || 0;
+      var msg = '';
+      if (qty < 0) {
+        msg = 'الكمية لا يمكن أن تكون أقل من صفر';
+      } else if (code && map[code] !== undefined && qty > map[code]) {
+        msg = 'الكمية (' + qty + ') أكبر من المتاح (' + map[code] + ')';
+      }
+      err.textContent = msg;
+    }
+  }
+
+  function manfEndDate() {
+    var start = document.getElementById('start_date');
+    var end = document.getElementById('end_date');
+    if (!start || !end) return;
+    var v = String(start.value || '').trim();
+    if (!v) return;
+    var d = new Date(v + 'T00:00:00');
+    if (isNaN(d.getTime())) return;
+    d.setFullYear(d.getFullYear() + 3);
+    end.value = d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+  }
+
+  function saveManufacture() {
+    if (!UIC.validateForm('manufacture-form')) return;
+    var map = currentQtyMap();
+    for (var i = 1; i <= 8; i++) {
+      var itEl = document.getElementById('item_' + i);
+      var qEl = document.getElementById('qty_' + i);
+      var code = itEl ? String(itEl.value || '').trim() : '';
+      var qty = qEl ? Number(qEl.value) || 0 : 0;
+      if (qty < 0) { showError({ message: 'كمية مادة ' + i + ' لا يمكن أن تكون أقل من صفر' }); return; }
+      if (code && map[code] !== undefined && qty > map[code]) {
+        showError({ message: 'كمية مادة ' + i + ' (' + qty + ') أكبر من المتاح (' + map[code] + ') للمادة المختارة' });
+        return;
+      }
+    }
+    var formEl = document.getElementById('manufacture-form');
+    var data = UIC.collectForm('manufacture-form');
+    if (!data.end_date) {
+      var base = data.start_date || data.manufacture_date;
+      if (base) {
+        var d = new Date(String(base) + 'T00:00:00');
+        if (!isNaN(d.getTime())) {
+          d.setFullYear(d.getFullYear() + 3);
+          data.end_date = d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+        }
+      }
+    }
+    var keys = ['analysis_certificate', 'sales_permit', 'technical_permit', 'registration'];
+    UI.showSpinner('جاري رفع الملفات والحفظ...');
+    var chain = Promise.resolve();
+    keys.forEach(function (k) {
+      chain = chain.then(function () {
+        return uploadFieldFile(formEl, k, 'legal_manufacture').then(function (ref) {
+          if (ref) data[k] = ref;
+        });
+      });
+    });
+    chain.then(function () {
+      return companyCall('add_legal_manufacture', data);
+    })
+      .then(function (r) {
+        UIC.closeModal('manufacture-modal'); UIC.toast(r.message || 'تمت الإضافة', 'success');
+        if (r && r.record) {
+          ITEMS = ITEMS || [];
+          ITEMS.unshift(r.record);
+          if (ITEMS.length > 10) ITEMS = ITEMS.slice(0,10);
+          render();
+        } else { fetchAll(); }
+      })
+      .catch(function (e) { showError(e); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function showError(e) {
+    UIC.toast((e && e.message) || 'خطأ غير متوقع', 'error');
+  }
+
+  load();
+</script>
+</body>
+</html>
+

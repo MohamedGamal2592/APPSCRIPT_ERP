@@ -1,0 +1,211 @@
+﻿<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>العمل الإضافي</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_TopChemical_Nav'); ?>
+  <?!= getCompanyThemeCSS_('3fe1b5cb67b7223e') ?>
+</head>
+<body>
+<div id="tc-root" dir="rtl"></div>
+<script>
+  var params = new URLSearchParams(window.location.search);
+  var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+  var scriptUrl = window.scriptUrl || '/';
+  var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+  var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('3fe1b5cb67b7223e') ?>';
+  var COMPANY_PAGES = <?!= companyPages ?>;
+  var CURRENT_ACTION = '<?!= currentAction ?>';
+  var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+  var CAN_WRITE = UIC.canAdd_(); var CAN_FULL = UIC.canFull_();
+
+  function companyCall(moduleAction, data) {
+    return API.call('company_action', {
+      target_system: '3fe1b5cb67b7223e',
+      module_action: moduleAction,
+      data: data || {}
+    }, SESSION_TOKEN);
+  }
+
+  function esc(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  function fmtDate(v) {
+    if (v == null || v === '') return '';
+    var d = (v instanceof Date) ? v : new Date(v);
+    if (isNaN(d.getTime())) return String(v);
+    var p = function (n) { return ('0' + n).slice(-2); };
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+  }
+
+  function fmtTime(v) {
+    if (v == null || v === '') return '';
+    if (v instanceof Date) {
+      var p = function (n) { return ('0' + n).slice(-2); };
+      return p(v.getHours()) + ':' + p(v.getMinutes());
+    }
+    var s = String(v);
+    if (s.indexOf('T') !== -1) { var dt = new Date(s); if (!isNaN(dt.getTime())) return fmtTime(dt); }
+    return s;
+  }
+
+  function todayStr() {
+    var d = new Date();
+    var p = function (n) { return ('0' + n).slice(-2); };
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+  }
+
+  function load() {
+    var contentId = 'ot-content';
+    UIC.appShell('tc-root', {
+      companyLogoUrl: COMPANY_LOGO_URL,
+      companyLogoHref: scriptUrl + '?action=tc_dashboard&sessionToken=' + SESSION_TOKEN,
+      companyLogoTitle: 'توب كيميكال',
+      breadcrumb: 'توب كيميكال / شئون العاملين / العمل الإضافي',
+      contentId: contentId,
+      menuGroups: (window.TOPCHEMICAL_MENU || [])
+    });
+    fetchOvertime();
+  }
+
+  function fetchOvertime() {
+    UI.showSpinner();
+    companyCall('get_emp_overtime')
+      .then(function (r) {
+        window.__rows = r.rows || [];
+        window.__empOptions = r.employee_options || [];
+        window.__otOptions = r.overtime_options || [];
+        renderOvertime();
+      })
+      .catch(function (e) { showError(e); })
+      .finally(function () { UI.hideSpinner(); try{schedulePrefetch();}catch(e){} });
+  }
+
+  function renderOvertime() {
+    var rows = window.__rows.map(function (r) {
+      return {
+        emp_id: r.emp_id,
+        name_ar: esc(r.name_ar || '-'),
+        date: fmtDate(r.date),
+        start_time: fmtTime(r.start_time),
+        end_time: fmtTime(r.end_time),
+        total_time: r.total_time,
+        approved: r.approved ? 'نعم' : 'لا',
+        overtime_type: esc(r.overtime_type || '-'),
+        amount: r.amount,
+        approved_amount: r.approved_amount
+      };
+    });
+    var headers = [
+      { key: 'emp_id', label: 'كود الموظف', numeric: true },
+      { key: 'name_ar', label: 'الاسم' },
+      { key: 'date', label: 'التاريخ' },
+      { key: 'start_time', label: 'من' },
+      { key: 'end_time', label: 'إلى' },
+      { key: 'total_time', label: 'الساعات', numeric: true },
+      { key: 'approved', label: 'معتمد' },
+      { key: 'overtime_type', label: 'النوع' },
+      { key: 'amount', label: 'المبلغ', numeric: true },
+      { key: 'approved_amount', label: 'المعتمد', numeric: true }
+    ];
+    var body = document.getElementById('ot-content');
+    body.innerHTML = (CAN_WRITE
+      ? '<div style="display:flex;justify-content:flex-end;margin-bottom:12px;"><button class="btn btn-primary" onclick="openAddModal()">+ تسجيل عمل إضافي</button></div>'
+      : '') +
+      UIC.dataTable('ot-table', {
+        title: 'العمل الإضافي',
+        headers: headers,
+        rows: rows,
+        emptyText: 'لا توجد سجلات'
+      });
+    UIC.initTableSort('ot-table');
+  }
+
+  function openAddModal() {
+    var body =
+      '<form id="ot-form">' +
+      UIC.field({ key: 'emp_id', label: 'الموظف', type: 'select', required: true,
+        options: window.__empOptions || [], placeholder: 'اختر الموظف...' }) +
+      UIC.field({ key: 'date', label: 'التاريخ', type: 'date', required: true, value: todayStr() }) +
+      UIC.field({ key: 'start_time', label: 'وقت البداية', type: 'time', required: true, value: '17:00' }) +
+      UIC.field({ key: 'end_time', label: 'وقت النهاية', type: 'time', required: true, value: '18:00' }) +
+      UIC.field({ key: 'overtime_type', label: 'النوع', type: 'select', required: true,
+        options: window.__otOptions || [], placeholder: 'اختر النوع...' }) +
+      UIC.field({ key: 'amount', label: 'المبلغ', type: 'number', min: '0', step: '0.01', required: true }) +
+      '<div class="form-field" data-field="approved"><label class="form-label">اعتماد</label>' +
+      '<label class="input" style="display:flex;align-items:center;gap:8px;"><input type="checkbox" id="approved" style="width:auto;" checked> <span>معتمد</span></label></div>' +
+      '<div class="form-field" data-field="details"><label class="form-label" for="details">تفاصيل <span class="req">*</span></label>' +
+      '<textarea id="details" class="input" data-field-name="details" rows="2" placeholder="وصف العمل..." required></textarea>' +
+      '<div class="field-error" id="err-details"></div></div>' +
+      '</form>';
+    UIC.openModal('ot-modal', {
+      title: 'تسجيل عمل إضافي',
+      body: body,
+      onSave: 'saveOvertime()'
+    });
+    var otSel = document.getElementById('overtime_type');
+    if (otSel) otSel.addEventListener('change', onOtTypeChange);
+    onOtTypeChange();
+  }
+
+  function onOtTypeChange() {
+    var sel = document.getElementById('overtime_type');
+    var amount = document.getElementById('amount');
+    if (!sel || !amount) return;
+    if (sel.value === 'عمل اضافي') {
+      amount.value = '0';
+      amount.disabled = true;
+      amount.removeAttribute('required');
+      var err = document.getElementById('err-amount');
+      if (err) err.textContent = '';
+    } else {
+      amount.disabled = false;
+      amount.setAttribute('required', 'required');
+    }
+  }
+
+  function saveOvertime() {
+    if (!UIC.validateForm('ot-form')) return;
+    var sel = document.getElementById('overtime_type');
+    var amount = document.getElementById('amount');
+    if (sel && sel.value !== 'عمل اضافي' && Number(amount.value) <= 0) {
+      var err = document.getElementById('err-amount');
+      if (err) err.textContent = 'المبلغ مطلوب لهذا النوع';
+      var field = amount.closest ? amount.closest('.form-field') : null;
+      if (field) field.classList.add('has-error');
+      return;
+    }
+    var data = UIC.collectForm('ot-form');
+    data.approved = !!document.getElementById('approved').checked;
+    UI.showSpinner('جاري الحفظ...');
+    companyCall('add_emp_overtime', data)
+      .then(function (r) {
+        UIC.closeModal('ot-modal');
+        UIC.toast((r && r.message) || 'تم الحفظ', 'success');
+        if (r && r.record) {
+          window.__rows = window.__rows || [];
+          window.__rows.unshift(r.record);
+          if (window.__rows.length>10) window.__rows=window.__rows.slice(0,10);
+          renderOvertime();
+        } else { fetchOvertime(); }
+      })
+      .catch(function (e) { UIC.toast((e && e.message) || 'خطأ', 'error'); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function showError(e) {
+    var body = document.getElementById('ot-content');
+    if (body) body.innerHTML = '<div class="empty-state"><span>' + esc(e.message || 'خطأ') + '</span></div>';
+  }
+
+  load();
+</script>
+</body>
+</html>
+

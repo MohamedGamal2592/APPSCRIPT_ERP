@@ -1,0 +1,23 @@
+{
+  "scriptId": "1cQVRHYv7PltoPKV7RgkrdvLjVQHtrDLlRiWbY5Nd9P5UrY0SFnPYCCZM",
+  "rootDir": "",
+  "scriptExtensions": [
+    ".js",
+    ".gs"
+  ],
+  "htmlExtensions": [
+    ".html"
+  ],
+  "jsonExtensions": [
+    ".json"
+  ],
+  "filePushOrder": [
+    "00_Config.js",
+    "01_Registry.js",
+    "02_DataAccess.js",
+    "03_Security.js",
+    "05_Admin.js",
+    "Code.js"
+  ],
+  "skipSubdirectories": true
+}

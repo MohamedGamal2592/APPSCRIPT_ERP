@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Top Chemical — المؤشرات</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_TopChemical_Nav'); ?>
+  <?!= getCompanyThemeCSS_('3fe1b5cb67b7223e') ?>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+  <style>
+    .dash-wrap { padding: 16px 20px 32px; }
+    .kpi-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; margin-bottom: 24px; }
+    .kpi-card { background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: var(--radius-lg); padding: 18px 20px; text-align: center; box-shadow: var(--shadow-sm); }
+    .kpi-label { font-size: 12px; color: var(--text-muted); font-weight: 600; margin-bottom: 6px; }
+    .kpi-value { font-size: 22px; font-weight: 800; color: var(--brand-primary); }
+    .charts-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+    @media (max-width: 900px)  { .charts-grid { grid-template-columns: 1fr; } }
+    .chart-card { background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: var(--radius-lg); padding: 16px 18px 20px; box-shadow: var(--shadow-sm); }
+    .chart-title { font-size: 14px; font-weight: 700; color: var(--text-main); margin: 0 0 14px 0; text-align: center; }
+    .chart-canvas-wrap { position: relative; height: 280px; }
+  </style>
+</head>
+<body>
+<div id="tc-kpi-root" dir="rtl"></div>
+<script>
+  var params = new URLSearchParams(window.location.search);
+  var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+  var scriptUrl = window.scriptUrl || '/';
+  var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('3fe1b5cb67b7223e') ?>';
+  var COMPANY_PAGES = <?!= companyPages ?>;
+  var CURRENT_ACTION = '<?!= currentAction ?>';
+  var _charts = {};
+  function destroyChart(id) { if (_charts[id]) { try { _charts[id].destroy(); } catch(e){} delete _charts[id]; } }
+  function companyCall(moduleAction, data) {
+    return API.call('company_action', { target_system: '3fe1b5cb67b7223e', module_action: moduleAction, data: data || {} }, SESSION_TOKEN);
+  }
+  function fmtMoney(n) { if (!n && n!==0) return '—'; return Number(n).toLocaleString('ar-EG') + ' ج.م'; }
+  var selectedYear = new Date().getFullYear();
+  function load() {
+    UIC.appShell('tc-kpi-root', {
+      companyLogoUrl: COMPANY_LOGO_URL,
+      companyLogoHref: (window.UIC && UIC.baseUrl ? UIC.baseUrl() : scriptUrl) + '?action=tc_dashboard&sessionToken=' + ((window.UIC && UIC.token) ? UIC.token() : SESSION_TOKEN),
+      companyLogoTitle: 'توب كيميكال',
+      breadcrumb: 'توب كيميكال / المؤشرات',
+      contentId: 'tc-kpi-content',
+      menuGroups: (window.TOPCHEMICAL_MENU || [])
+    });
+    fetchKPI(selectedYear);
+  }
+  function fetchKPI(year) {
+    var inner = document.getElementById('tc-kpi-content');
+    if (!inner) return;
+    UI.showSpinner('جاري تحميل المؤشرات...');
+    companyCall('get_kpi_data', { year: year })
+      .then(function(d) { renderKPI(d, year); })
+      .catch(function(e) { inner.innerHTML = '<div class="empty-state"><span>خطأ: ' + FMT.escape((e && e.message) || String(e)) + '</span></div>'; })
+      .finally(function() { UI.hideSpinner(); try{schedulePrefetch();}catch(e){} });
+  }
+  function renderKPI(d, year) {
+    var inner = document.getElementById('tc-kpi-content');
+    if (!inner) return;
+    if (!d || d.kpi_authorized === false || !d.kpi) {
+      inner.innerHTML =
+        '<div style="background:var(--bg-surface);border:1px solid var(--border-color);border-radius:var(--radius-lg);padding:36px 24px;text-align:center;max-width:600px;margin:24px auto;box-shadow:var(--shadow-sm);">' +
+        '<div style="font-size:36px;margin-bottom:12px;">🧪</div>' +
+        '<h2 style="margin:0 0 10px;font-size:20px;color:var(--text-main);">مرحباً بك في النظام</h2>' +
+        '<p style="margin:0;color:var(--text-muted);font-size:14px;line-height:1.7;">استخدم القائمة العلوية للتنقل بين الصفحات المصرح لك بالوصول إليها.</p>' +
+        '</div>';
+      return;
+    }
+    var kpi = d.kpi || {};
+    var monthlyInvoices = d.monthlyInvoices || [];
+    var topClients = d.topClients || [];
+    var monthlyCosts = d.monthlyCosts || [];
+    var years = [2022,2023,2024,2025,2026,2027];
+    var yOpts = years.map(function(y){ return '<option value="'+y+'"'+(y===year?' selected':'')+'>'+y+'</option>'; }).join('');
+    inner.innerHTML =
+      '<div class="dash-wrap">' +
+        '<div style="display:flex;align-items:center;gap:10px;margin-bottom:18px;flex-wrap:wrap;"><label style="font-size:13px;font-weight:700;">السنة:</label><select onchange="selectedYear=Number(this.value);fetchKPI(selectedYear)">'+yOpts+'</select><span style="font-size:12px;color:var(--text-muted);">عرض بيانات سنة '+year+'</span></div>' +
+        '<div class="kpi-row">' +
+          '<div class="kpi-card"><div class="kpi-label">إجمالي المبيعات الصافية</div><div class="kpi-value">'+fmtMoney(kpi.totalNet)+'</div></div>' +
+          '<div class="kpi-card"><div class="kpi-label">إجمالي المبيعات شامل الضريبة</div><div class="kpi-value">'+fmtMoney(kpi.totalSales)+'</div></div>' +
+          '<div class="kpi-card"><div class="kpi-label">إجمالي ضريبة المبيعات</div><div class="kpi-value">'+fmtMoney(kpi.totalTax)+'</div></div>' +
+          '<div class="kpi-card"><div class="kpi-label">إجمالي التكاليف النقدية</div><div class="kpi-value">'+fmtMoney(kpi.totalCosts)+'</div></div>' +
+        '</div>' +
+        '<div class="charts-grid">' +
+          '<div class="chart-card" style="grid-column:1/-1;"><p class="chart-title">📊 المبيعات الشهرية — '+year+'</p><div class="chart-canvas-wrap"><canvas id="chart-monthly-invoices"></canvas></div></div>' +
+          '<div class="chart-card"><p class="chart-title">🏆 أعلى العملاء مبيعاً</p><div class="chart-canvas-wrap"><canvas id="chart-top-clients"></canvas></div></div>' +
+          '<div class="chart-card"><p class="chart-title">💸 التكاليف الشهرية — '+year+'</p><div class="chart-canvas-wrap"><canvas id="chart-monthly-costs"></canvas></div></div>' +
+        '</div>' +
+      '</div>';
+    setTimeout(function(){ drawMonthlyInvoicesChart(monthlyInvoices); drawTopClientsChart(topClients); drawMonthlyCostsChart(monthlyCosts); },50);
+  }
+  function drawMonthlyInvoicesChart(rows){ destroyChart('monthly-invoices'); var ctx=document.getElementById('chart-monthly-invoices'); if(!ctx) return; _charts['monthly-invoices']=new Chart(ctx,{type:'bar',data:{labels:rows.map(function(r){return r.month;}),datasets:[{label:'الصافي',data:rows.map(function(r){return r.net||0;}),backgroundColor:'rgba(59,130,246,0.75)',borderColor:'rgb(37,99,235)',borderWidth:1},{label:'الإجمالي',data:rows.map(function(r){return r.total||0;}),backgroundColor:'rgba(16,185,129,0.55)',borderColor:'rgb(5,150,105)',borderWidth:1}]},options:{responsive:true,maintainAspectRatio:false}}); }
+  function drawTopClientsChart(rows){ destroyChart('top-clients'); var ctx=document.getElementById('chart-top-clients'); if(!ctx) return; if(!rows.length){ctx.parentElement.innerHTML='<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-muted);">لا توجد بيانات</div>';return;} var colors=['#3b82f6','#10b981','#f59e0b','#ef4444','#8b5cf6','#06b6d4','#f97316','#ec4899']; _charts['top-clients']=new Chart(ctx,{type:'doughnut',data:{labels:rows.map(function(r){return r.name;}),datasets:[{data:rows.map(function(r){return r.total||0;}),backgroundColor:colors}]},options:{responsive:true,maintainAspectRatio:false}}); }
+  function drawMonthlyCostsChart(rows){ destroyChart('monthly-costs'); var ctx=document.getElementById('chart-monthly-costs'); if(!ctx) return; _charts['monthly-costs']=new Chart(ctx,{type:'bar',data:{labels:rows.map(function(r){return r.month;}),datasets:[{label:'التكاليف',data:rows.map(function(r){return r.costs||0;}),backgroundColor:'rgba(239,68,68,0.7)'}]},options:{responsive:true,maintainAspectRatio:false}}); }
+  load();
+</script>
+</body>
+</html>

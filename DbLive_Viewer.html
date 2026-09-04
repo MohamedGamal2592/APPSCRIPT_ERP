@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>قاعدة البيانات — MySQL Live</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+</head>
+<body>
+<div dir="rtl" class="page-shell">
+  <header class="page-header">
+    <div>
+      <h1 class="page-title">MySQL Live Database</h1>
+      <p class="page-sub">عرض وتعديل البيانات المباشر من قاعدة البيانات</p>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;">
+      <select id="tableSelect" class="form-input" style="min-width:200px;" onchange="loadTable()">
+        <option value="">— اختر جدول —</option>
+      </select>
+      <button class="btn btn-primary" onclick="loadTable()">تحديث</button>
+      <button class="btn btn-success" onclick="openAddModal()">+ إضافة سطر</button>
+      <button class="btn btn-outline" onclick="openAnalysis()">تحليل</button>
+      <button class="btn btn-outline" onclick="goBack()">رجوع</button>
+    </div>
+  </header>
+
+  <div id="statsBar" class="stack" style="display:none;"></div>
+  <div id="tableContainer"></div>
+</div>
+
+<!-- Add/Edit Modal -->
+<div id="crudModal" class="modal-overlay" style="display:none;">
+  <div class="modal-content" style="max-width:600px;max-height:80vh;overflow-y:auto;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+      <h3 id="modalTitle" style="margin:0;"></h3>
+      <button class="btn btn-outline" onclick="closeModal()">إغلاق</button>
+    </div>
+    <form id="crudForm" onsubmit="submitForm(event)"></form>
+  </div>
+</div>
+
+<!-- Analysis Modal -->
+<div id="analysisModal" class="modal-overlay" style="display:none;">
+  <div class="modal-content" style="max-width:700px;max-height:80vh;overflow-y:auto;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+      <h3 style="margin:0;">تحليل الجدول</h3>
+      <button class="btn btn-outline" onclick="closeAnalysis()">إغلاق</button>
+    </div>
+    <div id="analysisContent"></div>
+  </div>
+</div>
+
+<script>
+var TOKEN = getQueryParam('sessionToken') || (API.getSession() && API.getSession().token) || '';
+if (TOKEN) API.setSession({ token: TOKEN, user: (API.getSession() && API.getSession().user) || null });
+
+var CURRENT_TABLE = null;
+var COLUMNS = [];
+var EDIT_ROW = null;
+
+function goBack() {
+  window.location.href = (window.scriptUrl || '/') + '?action=ERPDashboard&sessionToken=' + encodeURIComponent(TOKEN);
+}
+
+function init() {
+  UI.showSpinner('جاري تحميل القائمة...');
+  API.call('db_list_tables', {}, TOKEN)
+    .then(function (r) {
+      UI.hideSpinner();
+      if (r.status !== 'ok') throw new Error(r.message || 'Failed');
+      var sel = document.getElementById('tableSelect');
+      r.tables.forEach(function (t) {
+        var opt = document.createElement('option');
+        opt.value = t;
+        opt.textContent = t;
+        sel.appendChild(opt);
+      });
+    })
+    .catch(function (e) {
+      UI.hideSpinner();
+      UI.alert('خطأ: ' + e.message);
+    });
+}
+
+function loadTable() {
+  var tableName = document.getElementById('tableSelect').value;
+  if (!tableName) return;
+  CURRENT_TABLE = tableName;
+  UI.showSpinner('جاري تحميل البيانات...');
+  API.call('db_get_columns', { table: tableName }, TOKEN)
+    .then(function (r) {
+      if (r.status !== 'ok') throw new Error(r.message);
+      COLUMNS = r.columns;
+      return API.call('db_query', { table: tableName, limit: 500 }, TOKEN);
+    })
+    .then(function (r) {
+      UI.hideSpinner();
+      if (r.status !== 'ok') throw new Error(r.message);
+      renderTable(r);
+    })
+    .catch(function (e) {
+      UI.hideSpinner();
+      UI.alert('خطأ: ' + e.message);
+    });
+}
+
+function renderTable(data) {
+  var container = document.getElementById('tableContainer');
+  var statsBar = document.getElementById('statsBar');
+
+  // Stats
+  statsBar.style.display = 'flex';
+  statsBar.innerHTML = '<div class="stat-card"><div class="stat-val">' + esc(String(data.total)) + '</div><div class="stat-label">إجمالي السجلات</div></div>'
+    + '<div class="stat-card"><div class="stat-val">' + esc(String(data.rows.length)) + '</div><div class="stat-label">عرض حالياً</div></div>'
+    + '<div class="stat-card"><div class="stat-val">' + esc(String(data.columns.length)) + '</div><div class="stat-label">الأعمدة</div></div>';
+
+  // Build headers
+  var headers = data.columns.map(function (c) {
+    return { key: c, label: c };
+  });
+  headers.push({ key: '_actions', label: 'إجراءات' });
+
+  // Build rows
+  var rows = data.rows.map(function (row, idx) {
+    var cells = {};
+    data.columns.forEach(function (c) { cells[c] = row[c]; });
+    cells._actions = UIC.actionBtns([
+      { label: 'تعديل', onclick: 'openEditModal(' + idx + ')', color: '#1976d2' },
+      { label: 'حذف', onclick: 'deleteRow(' + idx + ')', color: '#d32f2f' }
+    ]);
+    return cells;
+  });
+
+  var html = UIC.dataTable({
+    title: CURRENT_TABLE,
+    headers: headers,
+    rows: rows,
+    exportXlsx: true,
+    printable: true,
+    emptyMessage: 'لا توجد بيانات'
+  });
+
+  container.innerHTML = html;
+  window.__dbRows = data.rows;
+}
+
+function openAddModal() {
+  if (!CURRENT_TABLE) { UI.alert('اختر جدولاً أولاً'); return; }
+  EDIT_ROW = null;
+  document.getElementById('modalTitle').textContent = 'إضافة سطر جديد — ' + CURRENT_TABLE;
+  var form = document.getElementById('crudForm');
+  form.innerHTML = '';
+  COLUMNS.forEach(function (col) {
+    var isAuto = col.extra && col.extra.toLowerCase().indexOf('auto_increment') !== -1;
+    var div = document.createElement('div');
+    div.className = 'form-group';
+    div.innerHTML = '<label class="form-label">' + esc(col.name) + ' <small style="color:#999;">(' + esc(col.type) + ')</small></label>'
+      + '<input class="form-input" name="' + esc(col.name) + '" ' + (isAuto ? 'disabled placeholder="auto"' : '') + '>';
+    form.appendChild(div);
+  });
+  form.innerHTML += '<div style="display:flex;gap:8px;margin-top:16px;">'
+    + '<button type="submit" class="btn btn-primary">حفظ</button>'
+    + '<button type="button" class="btn btn-outline" onclick="closeModal()">إلغاء</button>'
+    + '</div>';
+  document.getElementById('crudModal').style.display = 'flex';
+}
+
+function openEditModal(idx) {
+  if (!CURRENT_TABLE) return;
+  EDIT_ROW = window.__dbRows[idx];
+  if (!EDIT_ROW) return;
+  document.getElementById('modalTitle').textContent = 'تعديل — ' + CURRENT_TABLE;
+  var form = document.getElementById('crudForm');
+  form.innerHTML = '';
+  COLUMNS.forEach(function (col) {
+    var val = EDIT_ROW[col.name] != null ? EDIT_ROW[col.name] : '';
+    var isKey = col.key === 'PRI';
+    var div = document.createElement('div');
+    div.className = 'form-group';
+    div.innerHTML = '<label class="form-label">' + esc(col.name) + (isKey ? ' <small style="color:#d32f2f;">(PK)</small>' : '') + '</label>'
+      + '<input class="form-input" name="' + esc(col.name) + '" value="' + esc(String(val)) + '"' + (isKey ? ' readonly style="background:#f5f5f5;"' : '') + '>';
+    form.appendChild(div);
+  });
+  form.innerHTML += '<div style="display:flex;gap:8px;margin-top:16px;">'
+    + '<button type="submit" class="btn btn-primary">تحديث</button>'
+    + '<button type="button" class="btn btn-outline" onclick="closeModal()">إلغاء</button>'
+    + '</div>';
+  document.getElementById('crudModal').style.display = 'flex';
+}
+
+function closeModal() {
+  document.getElementById('crudModal').style.display = 'none';
+}
+
+function submitForm(e) {
+  e.preventDefault();
+  var form = document.getElementById('crudForm');
+  var inputs = form.querySelectorAll('input:not([disabled])');
+  var values = {};
+  var pk = null;
+  inputs.forEach(function (inp) {
+    var val = inp.value.trim();
+    if (inp.readOnly) {
+      // PK column — use for WHERE clause
+      pk = { column: inp.name, value: val };
+    } else if (val !== '') {
+      values[inp.name] = val;
+    }
+  });
+
+  if (!EDIT_ROW && Object.keys(values).length === 0) {
+    UI.alert('أدخل قيمة واحدة على الأقل');
+    return;
+  }
+
+  UI.showSpinner('جاري الحفظ...');
+  var promise;
+  if (EDIT_ROW) {
+    // UPDATE — need PK for WHERE
+    if (!pk) { UI.hideSpinner(); UI.alert('لا يمكن تحديد السطر بدون مفتاح رئيسي'); return; }
+    var where = {};
+    where[pk.column] = pk.value;
+    promise = API.call('db_update', { table: CURRENT_TABLE, where: where, values: values }, TOKEN);
+  } else {
+    // INSERT — include PK if provided
+    if (pk && pk.value) values[pk.column] = pk.value;
+    promise = API.call('db_insert', { table: CURRENT_TABLE, values: values }, TOKEN);
+  }
+
+  promise.then(function (r) {
+    UI.hideSpinner();
+    if (r.status !== 'ok') throw new Error(r.message);
+    closeModal();
+    loadTable();
+  }).catch(function (e) {
+    UI.hideSpinner();
+    UI.alert('خطأ: ' + e.message);
+  });
+}
+
+function deleteRow(idx) {
+  var row = window.__dbRows[idx];
+  if (!row) return;
+  // Find PK columns
+  var pkCols = COLUMNS.filter(function (c) { return c.key === 'PRI'; });
+  if (pkCols.length === 0) { UI.alert('لا يوجد مفتاح رئيسي — لا يمكن الحذف'); return; }
+  if (!confirm('هل أنت متأكد من حذف هذا السطر؟')) return;
+
+  var where = {};
+  pkCols.forEach(function (c) { where[c.name] = row[c.name]; });
+
+  UI.showSpinner('جاري الحذف...');
+  API.call('db_delete', { table: CURRENT_TABLE, where: where }, TOKEN)
+    .then(function (r) {
+      UI.hideSpinner();
+      if (r.status !== 'ok') throw new Error(r.message);
+      loadTable();
+    }).catch(function (e) {
+      UI.hideSpinner();
+      UI.alert('خطأ: ' + e.message);
+    });
+}
+
+function openAnalysis() {
+  if (!CURRENT_TABLE) { UI.alert('اختر جدولاً أولاً'); return; }
+  document.getElementById('analysisModal').style.display = 'flex';
+  document.getElementById('analysisContent').innerHTML = '<p>جاري التحليل...</p>';
+
+  var promises = COLUMNS.map(function (col) {
+    return API.call('db_aggregate', { table: CURRENT_TABLE, column: col.name, func: 'COUNT' }, TOKEN)
+      .then(function (r) {
+        return { column: col.name, type: col.type, count: r.result || 0 };
+      }).catch(function () {
+        return { column: col.name, type: col.type, count: '—' };
+      });
+  });
+
+  Promise.all(promises).then(function (results) {
+    var html = '<table class="table" style="width:100%"><thead><tr><th>العمود</th><th>النوع</th><th>العدد (非 NULL)</th></tr></thead><tbody>';
+    results.forEach(function (r) {
+      html += '<tr><td>' + esc(r.column) + '</td><td><code>' + esc(r.type) + '</code></td><td>' + esc(String(r.count)) + '</td></tr>';
+    });
+    html += '</tbody></table>';
+    document.getElementById('analysisContent').innerHTML = html;
+  });
+}
+
+function closeAnalysis() {
+  document.getElementById('analysisModal').style.display = 'none';
+}
+
+init();
+</script>
+</body>
+</html>

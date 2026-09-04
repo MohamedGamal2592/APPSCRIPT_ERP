@@ -1,0 +1,1658 @@
+<script>
+
+window.UIC = window.UIC || {};
+
+UIC.SYSTEM_LOGO_URL = 'https://drive.google.com/thumbnail?id=1Ug1T9j5vQBeBA_5w52ufDO07IsefW6QH&sz=w200';
+
+UIC.button = function (opts) {
+  const o = opts || {};
+  const type = o.type || 'primary';
+  const cls = 'btn btn-' + type + (o.icon && !o.text ? ' btn-icon-only' : '');
+  const icon = o.icon ? '<span class="btn-icon">' + o.icon + '</span>' : '';
+  const attrs = o.onClick ? ' onclick="' + o.onClick + '"' : '';
+  const disabled = o.disabled ? ' disabled' : '';
+  return '<button class="' + cls + '"' + attrs + disabled + ' title="' + (o.tooltip || '') + '">' + icon + '<span>' + (o.text || '') + '</span></button>';
+};
+
+UIC.actionBtns = function (btns) {
+  // Now delegates to dropdown for list-view pleadability — single unified look
+  return UIC.actionDropdown(btns);
+};
+
+UIC.actionDropdown = function (btns) {
+  if (!btns || !btns.length) return '';
+  var id = 'ad_' + Math.random().toString(36).slice(2, 8);
+  var items = btns.map(function (b) {
+    if (!b) return '';
+    var color = b.color ? 'color:' + b.color + ';' : '';
+    var extra = b.color ? 'border-color:transparent;' : '';
+    return '<button type="button" class="action-dropdown-item" style="display:block;width:100%;text-align:right;padding:8px 10px;font-size:13px;background:transparent;border:0;border-radius:6px;cursor:pointer;' + color + extra + '" onmouseover="this.style.background=\'var(--bg-subtle,#f3f4f6)\'" onmouseout="this.style.background=\'transparent\'" onclick="' + b.onclick.replace(/"/g, '&quot;') + ';try{document.getElementById(\'' + id + '\').classList.remove(\'open\');}catch(e){}">' + UIC.escHtml(b.label) + '</button>';
+  }).join('');
+  return '<div class="action-dropdown" id="' + id + '" style="position:relative;display:inline-block;">' +
+    '<button type="button" class="btn btn-primary" style="padding:6px 14px;font-size:12px;border-radius:999px;" onclick="try{var el=document.getElementById(\'' + id + '\'); el.classList.toggle(\'open\'); event.stopPropagation();}catch(e){}">إجراءات / Actions ▾</button>' +
+    '<div class="action-dropdown-menu" style="display:none;position:absolute;right:0;top:100%;margin-top:6px;z-index:30;min-width:200px;background:var(--bg-surface,#fff);border:1px solid var(--border-color,#e5e7eb);border-radius:12px;box-shadow:0 8px 24px rgba(0,0,0,.14);padding:6px;flex-direction:column;gap:2px;max-height:320px;overflow:auto;">' + items + '</div></div>';
+};
+document.addEventListener('click', function(e){
+  document.querySelectorAll('.action-dropdown.open').forEach(function(el){
+    if(!el.contains(e.target)) el.classList.remove('open');
+  });
+});
+(function(){
+  var st=document.createElement('style');
+  st.textContent='.action-dropdown.open .action-dropdown-menu{display:flex!important;} .action-dropdown-item:hover{background:var(--bg-subtle,#f3f4f6)!important;}';
+  document.head.appendChild(st);
+})();
+
+UIC.statusPill = function (label, tone) {
+  const t = tone || 'neutral';
+  return '<span class="pill pill-' + t + '">' + (label || '') + '</span>';
+};
+
+UIC.pageAuthorized_ = function (action) {
+  const up = window.USER_PAGES;
+  if (!up) return true;
+  return !!(up[action] && up[action].length);
+};
+UIC.canAdd_ = function (page) {
+  const p = page || window.CURRENT_ACTION;
+  const up = window.USER_PAGES;
+  if (!up) return true;
+  if (window.IS_SUPER_ADMIN) return true;
+  const grants = up[p] || [];
+  return grants.includes('write') || grants.includes('full');
+};
+UIC.canFull_ = function (page) {
+  const p = page || window.CURRENT_ACTION;
+  const up = window.USER_PAGES;
+  if (!up) return true;
+  if (window.IS_SUPER_ADMIN) return true;
+  const grants = up[p] || [];
+  return grants.includes('full');
+};
+
+/* Navigation helpers — never depend on fragile globals; fall back to the
+ * current page URL so links (logo, nav, dropdowns) always work. */
+UIC.baseUrl = function () {
+  if (window.scriptUrl) return window.scriptUrl;
+  try { if (window.top && window.top !== window) return window.top.location.origin + window.top.location.pathname; } catch (e) {}
+  return window.location.origin + window.location.pathname;
+};
+UIC.token = function () {
+  try { return window.SESSION_TOKEN || new URLSearchParams(window.location.search).get('sessionToken') || ''; }
+  catch (e) { return ''; }
+};
+
+/* Navigate to an in-app URL. Prefers TOP-frame navigation so the address bar
+ * reflects ?action=… (back/forward + deep-links work); falls back to iframe
+ * navigation if the sandbox blocks top-navigation. `ev` = click event. */
+UIC.navTo = function (ev, href) {
+  try { if (ev && ev.preventDefault) ev.preventDefault(); } catch (e) {}
+  if (!href) return;
+  try { UIC.showPageLoading('جاري التحميل...'); } catch (e) {}
+  try { if (window.top && window.top !== window) { window.top.location.href = href; return; } } catch (e) {}
+  window.location.href = href;
+};
+
+/* ── Full-screen page-loading overlay (seamless navigation) ───────────────── */
+UIC.ensurePageLoading = function () {
+  if (document.getElementById('page-loading')) return;
+  var st = document.createElement('style');
+  st.textContent = '#page-loading{position:fixed;inset:0;z-index:99999;display:none;align-items:center;justify-content:center;background:rgba(255,255,255,.6);direction:rtl;}' +
+    '#page-loading.show{display:flex;}' +
+    '#page-loading .pl-card{background:#fff;border-radius:12px;padding:18px 26px;box-shadow:0 8px 30px rgba(0,0,0,.15);display:flex;flex-direction:column;align-items:center;gap:10px;}' +
+    '#page-loading .pl-spin{width:34px;height:34px;border:4px solid #eee;border-top-color:#4a90d9;border-radius:50%;animation:plspin .8s linear infinite;}' +
+    '@keyframes plspin{to{transform:rotate(360deg);}}' +
+    '#page-loading .pl-msg{font-family:inherit;color:#444;font-size:14px;}';
+  document.head.appendChild(st);
+  var d = document.createElement('div');
+  d.id = 'page-loading';
+  d.innerHTML = '<div class="pl-card"><div class="pl-spin"></div><div class="pl-msg">جاري التحميل...</div></div>';
+  document.body.appendChild(d);
+};
+UIC.showPageLoading = function (msg) {
+  try {
+    UIC.ensurePageLoading();
+    var d = document.getElementById('page-loading');
+    if (msg) { var m = d.querySelector('.pl-msg'); if (m) m.textContent = msg; }
+    d.classList.add('show');
+  } catch (e) {}
+};
+UIC.hidePageLoading = function () {
+  try { var d = document.getElementById('page-loading'); if (d) d.classList.remove('show'); } catch (e) {}
+};
+UIC.withPageLoading = function (promise, msg) {
+  UIC.showPageLoading(msg || 'جاري التحميل...');
+  return Promise.resolve(promise).then(function (r) { UIC.hidePageLoading(); return r; }, function (e) { UIC.hidePageLoading(); throw e; });
+};
+
+/* ── Persistent home logo (far-right) → main dashboard, ONLY on ERP Dashboard ─────── */
+UIC.ensureHomeLogo = function () {
+  // Show FAB only on ERP Dashboard (central hub), not inside company pages which already have topbar company+system logos
+  try {
+    var action = '';
+    try { action = new URLSearchParams(window.location.search).get('action') || ''; } catch(e) {}
+    if (action && action !== 'ERPDashboard' && action !== 'login' && action !== 'setup') return;
+    // Also check global CURRENT_ACTION if available
+    if (typeof CURRENT_ACTION !== 'undefined' && CURRENT_ACTION && CURRENT_ACTION !== 'ERPDashboard') return;
+  } catch(e) {}
+  if (document.getElementById('home-logo-fab')) return;
+  var a = document.createElement('a');
+  a.id = 'home-logo-fab';
+  a.href = UIC.baseUrl() + '?action=ERPDashboard&sessionToken=' + encodeURIComponent(UIC.token());
+  a.title = 'الرئيسية';
+  a.setAttribute('onclick', "UIC.navTo(event, this.getAttribute('href'))");
+  a.innerHTML = '<img src="' + (UIC.SYSTEM_LOGO_URL || '') + '" alt="الرئيسية" loading="lazy" decoding="async">';
+  document.body.appendChild(a);
+  var st = document.createElement('style');
+  st.textContent = '#home-logo-fab{position:fixed;top:10px;right:10px;z-index:9998;width:44px;height:44px;border-radius:50%;background:#fff;box-shadow:0 2px 10px rgba(0,0,0,.2);display:flex;align-items:center;justify-content:center;cursor:pointer;}' +
+    '#home-logo-fab img{width:32px;height:32px;object-fit:contain;}' +
+    '@media(max-width:768px){#home-logo-fab{width:38px;height:38px;}#home-logo-fab img{width:26px;height:26px;}}';
+  document.head.appendChild(st);
+};
+
+(function () {
+  var boot = function () {
+    try {
+      UIC.ensureHomeLogo();
+      UIC.showPageLoading('جاري التحميل...');
+      var hide = function () { try { UIC.hidePageLoading(); } catch (e) {} };
+      window.addEventListener('load', hide);
+      setTimeout(hide, 6000);
+    } catch (e) {}
+  };
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
+  else boot();
+})();
+
+/* Client-side error reporting → server-side ERP_Client_Log sheet. */
+UIC.__errCount = 0;
+UIC.reportError = function (detail, opt) {
+  try {
+    if (UIC.__errCount >= 12) return;
+    UIC.__errCount = (UIC.__errCount || 0) + 1;
+    var payload = {
+      page: location.pathname,
+      message: String(detail || '').slice(0, 2000),
+      stack: (opt && opt.stack ? String(opt.stack).slice(0, 4000) : ''),
+      url: location.href ? location.href.slice(0, 1500) : '',
+      user: ((window.API && API.getSession && API.getSession() && API.getSession().user && API.getSession().user.email) || '')
+    };
+    try { google.script.run.withFailureHandler(function () {}).logClientError_(payload); } catch (e2) {}
+  } catch (e) {}
+};
+
+UIC.AUTO_PAGE_SIZE = 150;
+
+UIC.dataTable = function (containerId, opts) {
+  const o = opts || {};
+  const rawHeaders = o.headers || [];
+  const rows = o.rows || [];
+  const searchable = o.searchable !== false;
+  const id = containerId || 'datatable';
+
+  /* ── Backward compatibility: accept plain-string headers and/or array rows.
+   *     Strings become positional columns ({key:'__col<i>', label:h});
+   *     array rows are matched to columns by index. Object usage unchanged. ── */
+  const hasStringHeaders = rawHeaders.some(h => typeof h === 'string');
+  const headers = hasStringHeaders
+    ? rawHeaders.map((h, i) => (typeof h === 'string' ? { key: '__col' + i, label: h } : h))
+    : rawHeaders;
+
+  if (rows.length === 0) {
+    return '<div class="empty-state"><span>' + (o.emptyText || 'لا توجد بيانات') + '</span></div>';
+  }
+
+  const fmtMoney = function (n) {
+    if (window.FMT && FMT.currency) return FMT.currency(n);
+    const v = Number(n) || 0;
+    const parts = v.toFixed(2).split('.');
+    return parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ',') + '.' + parts[1];
+  };
+
+  /* Auto-window large tables (opt out with autoPage:false; explicit pageSize wins). */
+  const autoSize = (UIC.AUTO_PAGE_SIZE || 0);
+  let pageSize = o.pageSize || 0;
+  if (o.autoPage === false) pageSize = 0;
+  else if (!pageSize && autoSize > 0 && rows.length > autoSize) pageSize = autoSize;
+
+  const thead = '<thead><tr>' + headers.map(h => '<th data-key="' + (h.key || h.label) + '">' + h.label + '</th>').join('') + '</tr></thead>';
+
+  window.__dtStore = window.__dtStore || {};
+  window.__dtStore[id] = { headers: headers, rows: rows, filtered: rows, pageSize: pageSize, fmtMoney: fmtMoney, opts: o, searchTerm: '', dateFrom: '', dateTo: '' };
+
+  /* ── Toolbar: search + date filter + Excel + Print ── */
+  var toolbarParts = [];
+  if (searchable) {
+    toolbarParts.push('<input class="input" type="search" placeholder="بحث..." oninput="UIC.filterPaged(\'' + id + '\', this.value)">');
+  }
+  if (o.dateFilter) {
+    toolbarParts.push('<label style="font-size:13px;">من:</label><input id="' + id + '-from" type="date" class="input" style="width:150px;">');
+    toolbarParts.push('<label style="font-size:13px;">إلى:</label><input id="' + id + '-to" type="date" class="input" style="width:150px;">');
+    toolbarParts.push('<button type="button" class="btn btn-outline" onclick="UIC.applyDateFilter(\'' + id + '\')">فلتر</button>');
+  }
+  if (o.exportXlsx !== false) {
+    toolbarParts.push('<button type="button" class="btn btn-outline" onclick="UIC.exportExcel(\'' + id + '\')">📥 Excel</button>');
+  }
+  if (o.printable !== false) {
+    toolbarParts.push('<button type="button" class="btn btn-outline" onclick="UIC.printTable(\'' + id + '\')">🖨️ طباعة</button>');
+  }
+  var toolbarHtml = toolbarParts.length
+    ? '<div class="table-toolbar" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">' + toolbarParts.join('') + '</div>'
+    : '';
+
+  const viewRows = (pageSize > 0 ? rows.slice(0, pageSize) : rows);
+  // MIT/Harvard chunked: return skeleton, fill tbody chunked via rAF to keep 60fps
+  let moreBtn = '';
+  if (pageSize > 0) {
+    const remaining = rows.length - pageSize;
+    moreBtn = '<div class="table-more" id="' + id + '_more"' + (remaining > 0 ? '' : ' style="display:none;"') + '>' +
+      '<button type="button" class="btn-secondary" onclick="UIC.dataTableMore(\'' + id + '\')">عرض المزيد (' + remaining + ')</button></div>';
+  }
+
+  const clickAttr = o.rowClick ? ' onclick="UIC._dtRowClick(event, \'' + id + '\')"' : '';
+  const html = '<div id="' + id + '" class="table-wrap"' + clickAttr + '>' + toolbarHtml +
+    '<table class="table" data-sortable="true"><caption class="sr-only">' + (o.title || '') + '</caption>' + thead +
+    '<tbody id="' + id + '_tbody"></tbody></table>' + moreBtn + '</div>';
+  // schedule chunked fill (75 rows per frame, 12ms budget) — Harvard windowed
+  setTimeout(function(){ UIC._renderChunked(id, 0); }, 0);
+  return html;
+};
+
+UIC._dtRowHtml = function (r, headers, fmtMoney, idx) {
+  return '<tr' + (idx != null ? ' data-idx="' + idx + '"' : '') + '>' + headers.map((h, i) => {
+    const raw = Array.isArray(r) ? r[i] : r[h.key || h.label];
+    const v = (raw !== undefined && raw !== null) ? raw : '';
+    if (h.money) {
+      const num = Number(v) || 0;
+      return '<td class="num" data-num="' + num + '">' + fmtMoney(num) + '</td>';
+    }
+    const sortAttr = h.sortKey ? ' data-sort="' + esc(String(r[h.sortKey] != null ? r[h.sortKey] : '')) + '"' : '';
+    return '<td' + (h.numeric ? ' class="num"' : '') + sortAttr + '>' + v + '</td>';
+  }).join('') + '</tr>';
+};
+
+// MIT/Harvard: chunked tbody fill — 75 rows / 12ms per frame, DocumentFragment, keeps 60fps
+UIC._renderChunked = function(id, offset){
+  const st = (window.__dtStore || {})[id];
+  const tbody = document.getElementById(id + '_tbody');
+  if (!st || !tbody) return;
+  const CHUNK = 75, BUDGET = 12;
+  const list = st.filtered || st.rows;
+  const view = (st.pageSize > 0 ? list.slice(0, st.pageSize) : list);
+  const total = view.length;
+  let idx = offset || 0;
+  // first chunk clears
+  if(idx===0) tbody.innerHTML = '';
+  function tick(){
+    const start = performance.now();
+    const frag = document.createDocumentFragment();
+    // Use template element for fast parsing (Harvard: createContextualFragment)
+    const tmp = document.createElement('tbody');
+    let html = '';
+    const end = Math.min(idx + CHUNK, total);
+    for(; idx < end; idx++){
+      html += UIC._dtRowHtml(view[idx], st.headers, st.fmtMoney, idx);
+      // flush per CHUNK to respect budget
+      if (performance.now() - start >= BUDGET) break;
+    }
+    if (html) { tmp.innerHTML = html; while(tmp.firstChild) frag.appendChild(tmp.firstChild); tbody.appendChild(frag); }
+    if (idx < total) requestAnimationFrame(tick);
+    else if (st.opts && st.opts.onRendered) { try{ st.opts.onRendered(id); }catch(e){} }
+  }
+  requestAnimationFrame(tick);
+};
+
+UIC._dtRowClick = function (event, id) {
+  try {
+    const tr = event.target.closest('tr');
+    if (!tr) return;
+    const st = (window.__dtStore || {})[id];
+    if (!st || !st.opts || !st.opts.rowClick) return;
+    const ia = tr.getAttribute('data-idx');
+    const list = st.filtered || st.rows;
+    const rec = (ia != null) ? list[Number(ia)] : null;
+    if (rec != null) st.opts.rowClick(rec, tr);
+  } catch (e) {}
+};
+
+UIC._dtRenderBody = function (id) {
+  const st = (window.__dtStore || {})[id];
+  const tbody = document.getElementById(id + '_tbody');
+  if (!st || !tbody) return;
+  // Harvard chunked: delegate to _renderChunked for incremental DOM
+  UIC._renderChunked(id, 0);
+};
+
+UIC.dataTableMore = function (id) {
+  const st = (window.__dtStore || {})[id];
+  if (!st) return;
+  const step = st.opts.pageSize || (UIC.AUTO_PAGE_SIZE || 100);
+  st.pageSize = (st.pageSize || 0) + step;
+  UIC._dtRenderBody(id);
+  const list = st.filtered || st.rows;
+  const more = document.getElementById(id + '_more');
+  if (more) {
+    const remaining = list.length - (st.pageSize || 0);
+    if (remaining <= 0) more.style.display = 'none';
+    else {
+      more.style.display = '';
+      const btn = more.querySelector('button');
+      if (btn) btn.textContent = 'عرض المزيد (' + remaining + ')';
+    }
+  }
+};
+
+UIC.filterPaged = function (id, term) {
+  var st = (window.__dtStore || {})[id];
+  if (!st) return;
+  st.searchTerm = (term || '').trim().toLowerCase();
+  UIC._applyFilters(id);
+};
+
+UIC._applyFilters = function (id) {
+  var st = (window.__dtStore || {})[id];
+  if (!st) return;
+  var q = st.searchTerm || '';
+  var dateFrom = st.dateFrom || '';
+  var dateTo = st.dateTo || '';
+  var dateKey = (st.opts && st.opts.dateKey) || 'date';
+  st.filtered = st.rows.filter(function (r) {
+    if (q) {
+      try { if (JSON.stringify(r == null ? '' : r).toLowerCase().indexOf(q) === -1) return false; } catch (e) { return false; }
+    }
+    if (dateFrom || dateTo) {
+      var rv = r[dateKey];
+      if (!rv) return false;
+      var ds = String(rv).slice(0, 10);
+      if (dateFrom && ds < dateFrom) return false;
+      if (dateTo && ds > dateTo) return false;
+    }
+    return true;
+  });
+  var auto = (UIC.AUTO_PAGE_SIZE || 0);
+  st.pageSize = st.opts.pageSize || ((auto > 0 && st.rows.length > auto) ? auto : 0);
+  UIC._dtRenderBody(id);
+  var list = st.filtered || st.rows;
+  var more = document.getElementById(id + '_more');
+  if (more) {
+    var remaining = list.length - (st.pageSize || 0);
+    if (st.pageSize > 0 && remaining > 0) {
+      more.style.display = '';
+      var btn = more.querySelector('button');
+      if (btn) btn.textContent = 'عرض المزيد (' + remaining + ')';
+    } else { more.style.display = 'none'; }
+  }
+};
+
+UIC.applyDateFilter = function (id) {
+  var st = (window.__dtStore || {})[id];
+  if (!st) return;
+  var fromEl = document.getElementById(id + '-from');
+  var toEl = document.getElementById(id + '-to');
+  st.dateFrom = fromEl ? fromEl.value : '';
+  st.dateTo = toEl ? toEl.value : '';
+  UIC._applyFilters(id);
+};
+
+UIC.exportExcel = function (id) {
+  var st = (window.__dtStore || {})[id];
+  if (!st) return;
+  var rows = st.filtered || st.rows;
+  if (!rows || !rows.length) { UIC.toast('لا توجد بيانات للتصدير', 'error'); return; }
+  if (typeof XLSX === 'undefined') { UIC.toast('جاري تحميل مكتبة Excel...', 'info'); return; }
+  var headers = st.headers.filter(function (h) { return h.key !== 'actions'; });
+  var data = rows.map(function (r) {
+    var obj = {};
+    headers.forEach(function (h) { obj[h.label] = r[h.key] != null ? r[h.key] : ''; });
+    return obj;
+  });
+  var ws = XLSX.utils.json_to_sheet(data);
+  var wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Sheet1');
+  var from = st.dateFrom || '';
+  var to = st.dateTo || '';
+  var title = (st.opts && st.opts.title) || 'report';
+  var filename = title + (from ? '_' + from : '') + (to ? '_to_' + to : '') + '.xlsx';
+  XLSX.writeFile(wb, filename);
+};
+
+UIC.printTable = function (id) {
+  var st = (window.__dtStore || {})[id];
+  if (!st) return;
+  var rows = st.filtered || st.rows;
+  if (!rows || !rows.length) { UIC.toast('لا توجد بيانات للطباعة', 'error'); return; }
+  var headers = st.headers.filter(function (h) { return h.key !== 'actions'; });
+  var from = st.dateFrom || '';
+  var to = st.dateTo || '';
+  var title = (st.opts && st.opts.title) || '';
+  var dateLabel = (from && to) ? 'من ' + from + ' إلى ' + to : from ? 'من ' + from : to ? 'إلى ' + to : 'الكل';
+  var logoUrl = window.COMPANY_LOGO_URL || '';
+  var w = window.open('', '_blank');
+  if (!w) { UIC.toast('تم حظر النافذة المنبثقة', 'error'); return; }
+  var rowsHtml = rows.map(function (r) {
+    return '<tr>' + headers.map(function (h) {
+      var v = r[h.key] != null ? r[h.key] : '';
+      return '<td>' + esc(String(v)) + '</td>';
+    }).join('') + '</tr>';
+  }).join('');
+  var theadHtml = '<tr>' + headers.map(function (h) {
+    return '<th>' + esc(h.label) + '</th>';
+  }).join('') + '</tr>';
+  w.document.open();
+  w.document.write(
+    '<!DOCTYPE html><html lang="ar"><head><meta charset="utf-8"><title>' + esc(title) + '</title>' +
+    '<style>body{font-family:Cairo,sans-serif;direction:rtl;padding:20px;}' +
+    'h2{text-align:center;margin-bottom:4px;} .date-info{text-align:center;color:#666;margin-bottom:16px;}' +
+    '.logo{text-align:center;margin-bottom:8px;} .logo img{max-height:60px;}' +
+    'table{width:100%;border-collapse:collapse;font-size:12px;} th,td{border:1px solid #ccc;padding:6px 8px;text-align:right;}' +
+    'th{background:#f0f0f0;font-weight:700;} @media print{body{padding:0;}}</style></head><body>' +
+    (logoUrl ? '<div class="logo"><img src="' + esc(logoUrl) + '"></div>' : '') +
+    '<h2>' + esc(title) + '</h2>' +
+    '<div class="date-info">التاريخ: ' + esc(dateLabel) + ' — العدد: ' + rows.length + '</div>' +
+    '<table><thead>' + theadHtml + '</thead><tbody>' + rowsHtml + '</tbody></table>' +
+    '</body></html>'
+  );
+  w.document.close();
+  w.print();
+};
+
+UIC.filterTable = function (containerId, term) {
+  UIC._ftTimers = UIC._ftTimers || {};
+  const timers = UIC._ftTimers;
+  if (timers[containerId]) clearTimeout(timers[containerId]);
+  timers[containerId] = setTimeout(function () { UIC.filterPaged(containerId, term); }, 120);
+};
+
+/* ── Client-side reference-enum cache (avoid repeated server round-trips) ─── */
+UIC.cacheOptions = function (key, arr, ttlMs) {
+  try {
+    localStorage.setItem('erp_opt_' + key, JSON.stringify({ t: Date.now(), ttl: ttlMs || 600000, v: arr }));
+  } catch (e) {}
+};
+UIC.getCachedOptions = function (key) {
+  try {
+    const raw = localStorage.getItem('erp_opt_' + key);
+    if (!raw) return null;
+    const p = JSON.parse(raw);
+    if (!p || !p.v) return null;
+    if (p.ttl && (Date.now() - p.t) > p.ttl) return null;
+    return p.v;
+  } catch (e) { return null; }
+};
+
+/* ── Server-paged table: loads one window at a time, "load more" appends ─────
+ * opts: { container, headers, pageSize, searchable, mapRow, fetcher, onFirst }
+ *   mapRow(rawRecord) -> array of cell-HTML strings (UIC.dataTable row format)
+ *   fetcher(offset, limit) -> Promise<{ rows: rawRecords[], total: number }>
+ *   onFirst(firstResponse) -> capture globals (parties/enums) on first load   */
+UIC.PagedTable = function (opts) {
+  try {
+    var container = typeof opts.container === 'string' ? document.getElementById(opts.container) : opts.container;
+    if (!container) return;
+    var hostId = 'pt_' + Math.random().toString(36).slice(2);
+    var PAGE = opts.pageSize || 100;
+    var offset = 0, total = 0, loading = false, done = false;
+    var allRows = [];
+    container.innerHTML =
+      '<div id="' + hostId + '"></div>' +
+      '<div class="pt-foot" style="display:flex;gap:12px;align-items:center;margin-top:10px;">' +
+        '<button type="button" class="btn-secondary" id="' + hostId + '_more" style="display:none;">عرض المزيد</button>' +
+        '<span class="pt-count" id="' + hostId + '_count" style="color:#666;font-size:13px;"></span>' +
+      '</div>';
+    var host = container.querySelector('#' + hostId);
+    var moreBtn = container.querySelector('#' + hostId + '_more');
+    var countEl = container.querySelector('#' + hostId + '_count');
+
+    function render() {
+      host.innerHTML = UIC.dataTable(hostId, {
+        headers: opts.headers,
+        rows: allRows,
+        searchable: opts.searchable !== false,
+        emptyText: opts.emptyText || 'لا توجد بيانات',
+        autoPage: false
+      });
+    }
+    function setCount() {
+      if (!countEl) return;
+      countEl.textContent = 'إجمالي ' + total + (offset > 0 && offset < total ? ' — معروض ' + offset : '');
+    }
+    function loadMore() {
+      if (loading || done) return;
+      loading = true; moreBtn.disabled = true; moreBtn.textContent = 'جاري التحميل...';
+      Promise.resolve(opts.fetcher(offset, PAGE)).then(function (raw) {
+        raw = raw || {};
+        var recs = (opts.getRows ? opts.getRows(raw)
+          : (raw.rows || raw.invoices || raw.returns || raw.orders || raw.sessions || raw.headers || [])) || [];
+        if (offset === 0 && opts.onFirst) { try { opts.onFirst(raw); } catch (e) {} }
+        recs.forEach(function (rec) { try { allRows.push(opts.mapRow(rec)); } catch (e) {} });
+        offset += recs.length;
+        total = (opts.getTotal ? opts.getTotal(raw) : (raw.total != null ? raw.total : offset));
+        done = offset >= total;
+        render();
+        if (opts.onRendered) { try { opts.onRendered(hostId); } catch (e) {} }
+        moreBtn.style.display = done ? 'none' : '';
+        setCount();
+      }).catch(function (e) {
+        UIC.toast('خطأ: ' + (e && e.message ? e.message : e), 'error');
+      }).finally(function () {
+        loading = false; moreBtn.disabled = false; moreBtn.textContent = 'عرض المزيد';
+      });
+    }
+    moreBtn.addEventListener('click', loadMore);
+    setCount();
+    loadMore();
+  } catch (e) {
+    UIC.toast('خطأ في الجدول: ' + (e && e.message ? e.message : e), 'error');
+  }
+};
+
+UIC.initTableSort = function (containerId) {
+  const container = document.getElementById(containerId);
+  if (!container) return;
+  container.querySelectorAll('th').forEach(th => {
+    th.style.cursor = 'pointer';
+    th.addEventListener('click', function () {
+      const key = this.getAttribute('data-key');
+      const tbody = container.querySelector('tbody');
+      const rows = Array.from(tbody.querySelectorAll('tr'));
+      const asc = this.getAttribute('data-asc') !== 'true';
+      rows.sort((a, b) => {
+        const cell = this.parentNode.children, idx = Array.prototype.indexOf.call(cell, this) + 1;
+        const ac = a.querySelector('td:nth-child(' + idx + ')');
+        const bc = b.querySelector('td:nth-child(' + idx + ')');
+        const av = (ac && ac.getAttribute('data-sort') != null) ? ac.getAttribute('data-sort') : (ac && ac.getAttribute('data-num') != null) ? ac.getAttribute('data-num') : (ac ? ac.textContent.trim() : '');
+        const bv = (bc && bc.getAttribute('data-sort') != null) ? bc.getAttribute('data-sort') : (bc && bc.getAttribute('data-num') != null) ? bc.getAttribute('data-num') : (bc ? bc.textContent.trim() : '');
+        const numA = parseFloat(av), numB = parseFloat(bv);
+        if (!isNaN(numA) && !isNaN(numB)) return asc ? numA - numB : numB - numA;
+        return asc ? String(av).localeCompare(String(bv), 'ar') : String(bv).localeCompare(String(av), 'ar');
+      });
+      rows.forEach(r => tbody.appendChild(r));
+      this.setAttribute('data-asc', String(asc));
+    });
+  });
+};
+
+UIC.field = function (o) {
+  const t = o.type || 'text';
+  const required = o.required ? ' required' : '';
+  const value = o.value !== undefined && o.value !== null ? ' value="' + o.value + '"' : '';
+  const placeholder = o.placeholder ? ' placeholder="' + o.placeholder + '"' : '';
+  const listAttr = o.list ? ' list="' + o.list + '"' : '';
+  const minAttr = o.min !== undefined ? ' min="' + o.min + '"' : '';
+  const stepAttr = o.step !== undefined ? ' step="' + o.step + '"' : '';
+
+  /* ── Mobile: smart inputmode + enterkeyhint attributes ── */
+  let inputmode = '';
+  let enterkeyhint = '';
+  let autocomplete = o.autocomplete ? ' autocomplete="' + o.autocomplete + '"' : '';
+  let autocapitalize = '';
+  if (t === 'tel')   { inputmode = ' inputmode="tel"'; enterkeyhint = ' enterkeyhint="done"'; }
+  if (t === 'email') { inputmode = ' inputmode="email"'; enterkeyhint = ' enterkeyhint="done"'; autocapitalize = ' autocapitalize="off"'; if (!autocomplete) autocomplete = ' autocomplete="email"'; }
+  if (t === 'number' || t === 'text' && o.numeric) { inputmode = ' inputmode="decimal"'; enterkeyhint = ' enterkeyhint="done"'; }
+  if (t === 'search') { inputmode = ' inputmode="search"'; enterkeyhint = ' enterkeyhint="search"'; }
+  if (t === 'password') { if (!autocomplete) autocomplete = ' autocomplete="current-password"'; }
+  /* Prevent Android keyboard from autocorrecting code/ID fields */
+  if (o.noCorrect) { autocapitalize = ' autocapitalize="off" autocorrect="off" autocomplete="off"'; }
+
+  let control;
+  if (t === 'select') {
+    if (o.combo === false) {
+      const emptyOpt = o.placeholder ? '<option value="">' + o.placeholder + '</option>' : '';
+      const options = (o.options || []).map(opt => {
+        const v = typeof opt === 'object' ? opt.value : opt;
+        const l = typeof opt === 'object' ? opt.label : opt;
+        const sel = String(v) === String(o.value) ? ' selected' : '';
+        return '<option value="' + v + '"' + sel + '>' + l + '</option>';
+      }).join('');
+      control = '<select id="' + o.key + '" class="input"' + required + '>' + emptyOpt + options + '</select>';
+    } else {
+      return UIC.combo(o);
+    }
+  } else if (t === 'textarea') {
+    control = '<textarea id="' + o.key + '" class="input" rows="' + (o.rows || 3) + '"' + required + inputmode + '>' + (o.value || '') + '</textarea>';
+  } else {
+    control = '<input id="' + o.key + '" class="input" type="' + t + '"' + value + placeholder + required + listAttr + minAttr + stepAttr + inputmode + enterkeyhint + autocomplete + autocapitalize + '>';
+  }
+
+  const errId = 'err-' + o.key;
+  return '<div class="form-field" data-field="' + o.key + '">' +
+    '<label class="form-label" for="' + o.key + '">' + (o.label || '') + (required ? ' <span class="req">*</span>' : '') + '</label>' +
+    control +
+    '<div class="field-error" id="' + errId + '"></div>' +
+    '</div>';
+};
+
+UIC.datalist = function (id, values) {
+  const esc = function (s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  };
+  return '<datalist id="' + id + '">' +
+    (values || []).map(function (v) { return '<option value="' + esc(v) + '"></option>'; }).join('') +
+    '</datalist>';
+};
+
+UIC.combo = function (o) {
+  const key = o.key;
+  const esc = function (s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  };
+  const opts = (o.options || []).map(function (opt) {
+    const v = typeof opt === 'object' ? opt.value : opt;
+    const l = typeof opt === 'object' ? opt.label : opt;
+    return { value: String(v).trim(), label: String(l).trim() };
+  });
+  const byVal = {};
+  const byLabel = {};
+  opts.forEach(function (op) { byVal[op.value] = op; byLabel[op.label] = op; byVal[op.value.toLowerCase()] = op; byLabel[op.label.toLowerCase()] = op; });
+  const req = o.required ? ' required' : '';
+  const ph = o.placeholder ? ' placeholder="' + esc(o.placeholder) + '"' : '';
+  const cur = o.value !== undefined && o.value !== null ? String(o.value).trim() : '';
+  const curLabel = (byVal[cur] && byVal[cur].label) || (byLabel[cur] && byLabel[cur].label) || (byVal[cur.toLowerCase()] && byVal[cur.toLowerCase()].label) || (byLabel[cur.toLowerCase()] && byLabel[cur.toLowerCase()].label) || cur;
+  const optHtml = opts.map(function (op, i) {
+    return '<div class="combo-option" data-value="' + esc(op.value) + '" data-i="' + i + '" onmousedown="event.preventDefault();UIC.comboPick(\'' + key + '\',' + i + ')">' + esc(op.label) + '</div>';
+  }).join('');
+  const allowNew = o.allowNew ? ' data-allownew="1"' : '';
+  window.__comboData = window.__comboData || {};
+  window.__comboData[key] = { opts: opts, allowNew: !!o.allowNew };
+  const inner = '<div class="combo" data-combo="' + key + '">' +
+    '<input id="' + key + '_display" class="input combo-input" autocomplete="off"' + ph + req + ' value="' + esc(curLabel) + '"' +
+    ' onfocus="UIC.comboOpen(\'' + key + '\')" oninput="UIC.comboFilter(\'' + key + '\', this.value)" onblur="UIC.comboBlur(\'' + key + '\')" onkeydown="UIC.comboKey(\'' + key + '\', event)">' +
+    '<input type="hidden" id="' + key + '" value="' + esc(cur) + '"' + allowNew + '>' +
+    '<div class="combo-list" id="' + key + '_list" hidden>' + optHtml + '</div>' +
+    '</div>';
+  if (o.inline) return inner;
+  return '<div class="form-field" data-field="' + key + '">' +
+    '<label class="form-label" for="' + key + '_display">' + (o.label || '') + (o.required ? ' <span class="req">*</span>' : '') + '</label>' +
+    inner +
+    (o.allowNew ? '<input id="' + key + '_custom" class="input" style="margin-top:8px;display:none;" placeholder="أدخل القيمة الجديدة">' : '') +
+    '<div class="field-error" id="err-' + key + '"></div>' +
+    '</div>';
+};
+
+/* Searchable select alias (same component, clearer name for reference enums). */
+UIC.SearchableSelect = UIC.combo;
+
+UIC.comboOpen = function (key) {
+  const list = document.getElementById(key + '_list');
+  if (!list) return;
+  list.hidden = false;
+  UIC.comboFilter(key, document.getElementById(key + '_display').value);
+};
+
+UIC.escHtml = function (s) {
+  return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+};
+UIC.comboHighlight = function (label, q) {
+  var s = UIC.escHtml(label);
+  try {
+    var qEsc = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    var re = new RegExp('(' + qEsc + ')', 'ig');
+    s = s.replace(re, '<mark>$1</mark>');
+  } catch (e) {}
+  return s;
+};
+UIC.comboFilter = function (key, text) {
+  const list = document.getElementById(key + '_list');
+  if (!list) return;
+  const data = (window.__comboData || {})[key];
+  const q = String(text || '').trim().toLowerCase();
+  const opts = (data && data.opts) || [];
+  let visible = 0;
+  opts.forEach(function (op, i) {
+    const el = list.querySelector('[data-i="' + i + '"]');
+    if (!el) return;
+    const match = !q || op.label.toLowerCase().indexOf(q) !== -1 || op.value.toLowerCase().indexOf(q) !== -1;
+    el.style.display = match ? '' : 'none';
+    if (match) {
+      visible++;
+      el.innerHTML = q ? UIC.comboHighlight(op.label, q) : UIC.escHtml(op.label);
+    }
+  });
+  list.style.display = visible ? '' : 'none';
+};
+
+UIC.comboPick = function (key, i) {
+  const data = (window.__comboData || {})[key];
+  if (!data || !data.opts[i]) return;
+  const op = data.opts[i];
+  const disp = document.getElementById(key + '_display');
+  const hidden = document.getElementById(key);
+  if (disp) disp.value = op.label;
+  if (hidden) {
+    const changed = String(hidden.value) !== op.value;
+    hidden.value = op.value;
+    if (changed) hidden.dispatchEvent(new Event('change'));
+  }
+  const cust = document.getElementById(key + '_custom');
+  if (cust) { cust.style.display = 'none'; cust.removeAttribute('required'); cust.value = ''; }
+  const list = document.getElementById(key + '_list');
+  if (list) list.hidden = true;
+};
+
+UIC.comboBlur = function (key) {
+  const disp = document.getElementById(key + '_display');
+  const hidden = document.getElementById(key);
+  const data = (window.__comboData || {})[key];
+  if (!disp || !hidden || !data) return;
+  const text = String(disp.value || '').trim();
+  const textLower = text.toLowerCase();
+  let match = null;
+  data.opts.forEach(function (op) { if (String(op.label).trim().toLowerCase() === textLower || String(op.value).trim().toLowerCase() === textLower) match = op; });
+  if (match) {
+    hidden.value = match.value;
+    const cust = document.getElementById(key + '_custom');
+    if (cust) { cust.style.display = 'none'; cust.removeAttribute('required'); cust.value = ''; }
+  } else if (text) {
+    if (data.allowNew) {
+      const cust = document.getElementById(key + '_custom');
+      hidden.value = '__new__';
+      if (cust) { cust.style.display = ''; cust.value = text; cust.setAttribute('required', 'required'); }
+    } else {
+      disp.value = '';
+      hidden.value = '';
+    }
+  } else {
+    hidden.value = '';
+  }
+  const list = document.getElementById(key + '_list');
+  if (list) list.hidden = true;
+};
+
+UIC.comboKey = function (key, ev) {
+  const list = document.getElementById(key + '_list');
+  if (!list) return;
+  const visibleEls = [].slice.call(list.querySelectorAll('.combo-option')).filter(function (el) { return el.style.display !== 'none'; });
+  if (!visibleEls.length) return;
+  let idx = visibleEls.indexOf(list.querySelector('.combo-option.active'));
+  if (ev.key === 'ArrowDown') {
+    ev.preventDefault();
+    idx = (idx + 1) % visibleEls.length;
+  } else if (ev.key === 'ArrowUp') {
+    ev.preventDefault();
+    idx = (idx - 1 + visibleEls.length) % visibleEls.length;
+  } else if (ev.key === 'Enter') {
+    ev.preventDefault();
+    const el = idx >= 0 ? visibleEls[idx] : visibleEls[0];
+    UIC.comboPick(key, Number(el.getAttribute('data-i')));
+    return;
+  } else if (ev.key === 'Escape') {
+    list.hidden = true;
+    return;
+  } else {
+    return;
+  }
+  visibleEls.forEach(function (el) { el.classList.remove('active'); });
+  visibleEls[idx].classList.add('active');
+  visibleEls[idx].scrollIntoView({ block: 'nearest' });
+};
+
+document.addEventListener('click', function (ev) {
+  document.querySelectorAll('.combo-list').forEach(function (list) {
+    if (list.hidden) return;
+    const host = list.closest('.combo');
+    if (!host) return;
+    if (!ev.target.closest('.combo') || ev.target.closest('.combo') !== host) list.hidden = true;
+  });
+});
+
+UIC.enumSelect = function (o) {
+  return UIC.combo(Object.assign({}, o, { allowNew: true }));
+};
+
+UIC.enumToggle = function (id) {
+  const sel = document.getElementById(id);
+  const custom = document.getElementById(id + '_custom');
+  if (!sel || !custom) return;
+  if (sel.value === '__new__') {
+    custom.style.display = '';
+    custom.setAttribute('required', 'required');
+    custom.focus();
+  } else {
+    custom.style.display = 'none';
+    custom.removeAttribute('required');
+    custom.value = '';
+  }
+};
+
+UIC.fileField = function (o) {
+  const accept = o.accept || '';
+  const required = o.required ? ' required' : '';
+  return '<div class="form-field" data-field="' + o.key + '">' +
+    '<label class="form-label" for="' + o.key + '">' + (o.label || '') + '</label>' +
+    '<input id="' + o.key + '" name="' + (o.name || 'file') + '" class="input" type="file"' +
+    (accept ? ' accept="' + accept + '"' : '') + required + '>' +
+    '<div class="field-error" id="err-' + o.key + '"></div>' +
+    '</div>';
+};
+
+UIC.fileError = function (key, msg) {
+  const err = document.getElementById('err-' + key);
+  if (err) err.textContent = msg || '';
+};
+
+UIC._readForm = function (formId) {
+  const form = document.getElementById(formId);
+  if (!form) return { data: {}, valid: true };
+  const data = {};
+  let valid = true;
+  form.querySelectorAll('.form-field').forEach(function (field) {
+    const err = field.querySelector('.field-error');
+    let fieldError = false;
+    field.querySelectorAll('input, select, textarea').forEach(function (input) {
+      if (input.type === 'file') return;
+      data[input.id] = input.value.trim();
+      if (input.hasAttribute('required') && input.value.trim() === '') fieldError = true;
+    });
+    if (fieldError) {
+      if (err) err.textContent = 'هذا الحقل مطلوب';
+      field.classList.add('has-error');
+      valid = false;
+    } else {
+      if (err) err.textContent = '';
+      field.classList.remove('has-error');
+    }
+  });
+  return { data: data, valid: valid };
+};
+
+UIC.validateForm = function (formId) {
+  return UIC._readForm(formId).valid;
+};
+
+UIC.collectForm = function (formId) {
+  return UIC._readForm(formId).data;
+};
+
+UIC.collectAndValidateForm = function (formId) {
+  const r = UIC._readForm(formId);
+  return { data: r.data, valid: r.valid };
+};
+
+UIC.openModal = function (modalId, opts) {
+  const o = opts || {};
+  const existing = document.getElementById(modalId);
+  if (existing) existing.remove();
+
+  const div = document.createElement('div');
+  div.id = modalId;
+  div.className = 'modal-overlay';
+  div.innerHTML =
+    '<div class="modal" role="dialog" aria-modal="true">' +
+      '<div class="modal-header"><h3>' + (o.title || '') + '</h3>' +
+        '<button class="btn-icon" onclick="UIC.closeModal(\'' + modalId + '\')" aria-label="إغلاق">&times;</button></div>' +
+      '<div class="modal-body">' + (o.body || '') + '</div>' +
+      (o.footer !== false ? '<div class="modal-footer">' + UIC.button({ text: 'إلغاء', type: 'outline', onClick: 'UIC.closeModal(\'' + modalId + '\')' }) + ' ' + UIC.button({ text: 'حفظ', onClick: 'UI.submitOnce(this, function(){' + (o.onSave || '') + '})' }) + '</div>' : '') +
+    '</div>';
+  document.body.appendChild(div);
+  document.body.classList.add('modal-open');
+  return div;
+};
+
+UIC.closeModal = function (modalId) {
+  const el = document.getElementById(modalId);
+  if (el) el.remove();
+  document.body.classList.remove('modal-open');
+};
+
+UIC.toast = function (message, type) {
+  const t = type || 'success';
+  const toast = document.createElement('div');
+  toast.className = 'toast toast-' + t;
+  toast.setAttribute('role', 'status');
+  toast.setAttribute('aria-live', 'polite');
+  toast.textContent = message;
+  document.body.appendChild(toast);
+
+  /* ── Swipe-to-dismiss (horizontal swipe) ── */
+  let startX = 0;
+  toast.addEventListener('touchstart', function (e) {
+    startX = e.touches[0].clientX;
+  }, { passive: true });
+  toast.addEventListener('touchend', function (e) {
+    const dx = e.changedTouches[0].clientX - startX;
+    if (Math.abs(dx) > 80) {
+      toast.style.transition = 'transform 0.2s, opacity 0.2s';
+      toast.style.transform  = 'translateX(' + (dx > 0 ? '120%' : '-120%') + ')';
+      toast.style.opacity    = '0';
+      setTimeout(function () { toast.remove(); }, 200);
+    }
+  }, { passive: true });
+
+  setTimeout(function () {
+    toast.classList.add('toast-out');
+    setTimeout(function () { toast.remove(); }, 300);
+  }, 3000);
+};
+
+UIC.statCard = function (o) {
+  const tone = o.tone || 'default';
+  return '<div class="stat-card stat-' + tone + '">' +
+    '<div class="stat-icon">' + (o.icon || '') + '</div>' +
+    '<div class="stat-body"><div class="stat-value">' + (o.value !== undefined ? o.value : '') + '</div>' +
+    '<div class="stat-label">' + (o.label || '') + '</div></div></div>';
+};
+
+UIC.companyTile = function (o) {
+  const logo = o.logo_url
+    ? '<img src="' + o.logo_url + '" class="tile-logo" alt="' + (o.name_en || '') + '" onerror="this.style.display=\'none\'">'
+    : '<div class="tile-logo tile-logo-fallback">' + (o.name_ar || '').charAt(0) + '</div>';
+  return '<div class="company-tile" onclick="' + (o.onOpen || '') + '" title="' + (o.name_en || '') + '">' +
+    logo +
+    '<div class="tile-name-ar">' + (o.name_ar || '') + '</div>' +
+    '<div class="tile-name-en">' + (o.name_en || '') + '</div>' +
+    '<span class="tile-enter">دخول ←</span></div>';
+};
+
+UIC.moduleTile = function (o) {
+  const isDisabled = !!o.disabled;
+  const cls = 'module-tile' + (isDisabled ? ' module-tile-disabled' : '');
+  const onclick = isDisabled
+    ? 'onclick="UIC.toast(\'' + (o.disabledMessage || 'هذا العنصر غير متاح حالياً') + '\', \'warning\')"'
+    : 'onclick="' + (o.onOpen || '') + '"';
+  const badge = o.badgeText
+    ? '<span class="module-tile-badge">' + o.badgeText + '</span>'
+    : '';
+  return '<div class="' + cls + '" ' + onclick + '>' +
+    badge +
+    '<div class="module-tile-icon">' + (o.icon || '') + '</div>' +
+    '<div class="module-tile-title">' + (o.title || '') + '</div>' +
+    '<div class="module-tile-subtitle">' + (o.subtitle || '') + '</div>' +
+    '</div>';
+};
+
+function buildCompanyNav_(currentAction) {
+  const pages = (window.COMPANY_PAGES || []).filter(function (p) {
+    return UIC.pageAuthorized_(p.action);
+  });
+  const scriptUrl = UIC.baseUrl();
+  const token = UIC.token();
+  return pages.map(function (p) {
+    const isActive = p.action === currentAction;
+    return {
+      label: p.label || p.action,
+      active: isActive,
+      href: isActive ? '#' : scriptUrl + '?action=' + p.action + '&sessionToken=' + token
+    };
+  });
+}
+
+UIC.buildLogoMarkup = function (homeHref, companyLogoUrl, companyLogoHref, companyLogoTitle, lazy) {
+  var lazyAttr = lazy ? ' loading="lazy" decoding="async"' : ' decoding="async"';
+  var main = '<a class="app-logo app-logo-main" href="' + (homeHref || '#') + '" title="الرئيسية" onclick="UIC.navTo(event, this.getAttribute(\'href\'))">' +
+    '<img src="' + (UIC.SYSTEM_LOGO_URL || '') + '" alt="الرئيسية" height="32" width="auto"' + lazyAttr + '></a>';
+  var company = companyLogoUrl
+    ? '<a class="app-logo app-logo-company" href="' + (companyLogoHref || '#') + '" title="' + (companyLogoTitle || '') + '" onclick="UIC.navTo(event, this.getAttribute(\'href\'))">' +
+      '<img src="' + companyLogoUrl + '" alt="" height="40" width="auto"' + lazyAttr + '></a>'
+    : '';
+  return main + company;
+};
+
+UIC.appShell = function (containerId, o) {
+  const opts = o || {};
+  const navItems = opts.nav || buildCompanyNav_(window.CURRENT_ACTION);
+
+  /* Build nav links for BOTH the topbar (desktop) and the mobile drawer */
+  const navLinkHtml = function (extraClass) {
+    return navItems.map(n =>
+      '<a class="nav-item' + (n.active ? ' active' : '') + (extraClass ? ' ' + extraClass : '') + '" href="' + (n.href || '#') + '"' +
+      (n.onclick ? ' onclick="' + n.onclick + '"' :
+        (n.href && n.href !== '#' ? ' onclick="UIC.navTo(event, this.getAttribute(\'href\'))"' : '')) +
+      '>' + (n.label || '') + '</a>'
+    ).join('');
+  };
+
+  const menuGroupsHtml = function (drawerMode) {
+    return (opts.menuGroups || []).map(function (g, gi) {
+      const items = (g.items || []).filter(function (it) {
+        return !(typeof it === 'object' && it.action && !UIC.pageAuthorized_(it.action));
+      }).map(function (it) {
+        const isObj = typeof it === 'object';
+        if (isObj && it.action) {
+          const label = it.label || it.action;
+          const href = UIC.baseUrl() + '?action=' + encodeURIComponent(it.action) + '&sessionToken=' + encodeURIComponent(UIC.token());
+          const active = it.action === window.CURRENT_ACTION ? ' nav-dropdown-item-active' : '';
+          return '<a class="nav-dropdown-item' + active + '" href="' + href + '" onclick="UIC.navTo(event, this.getAttribute(\'href\'))">' + label + '</a>';
+        }
+        return '';
+      }).join('');
+      if (!items) return ''; /* whole group unauthorized — hide its header too */
+      if (drawerMode) {
+        /* In drawer: render as flat section header + items (no dropdown) */
+        return '<div class="drawer-group"><div class="drawer-group-label">' + (g.label || '') + '</div>' + items + '</div>';
+      }
+      return '<div class="nav-dropdown">' +
+        '<button type="button" class="nav-dropdown-toggle" onclick="UIC.toggleDropdown(\'nav-dd-' + gi + '\', event)">' +
+        (g.label || '') + ' <span class="nav-dropdown-caret">&#9662;</span></button>' +
+        '<div class="nav-dropdown-menu" id="nav-dd-' + gi + '">' + items + '</div>' +
+        '</div>';
+    }).join('');
+  };
+
+  const homeHref = UIC.baseUrl() + '?action=ERPDashboard&sessionToken=' + encodeURIComponent(UIC.token());
+  const logoTop = UIC.buildLogoMarkup(homeHref, opts.companyLogoUrl, opts.companyLogoHref, opts.companyLogoTitle, false);
+  const logoDrawer = UIC.buildLogoMarkup(homeHref, opts.companyLogoUrl, opts.companyLogoHref, opts.companyLogoTitle, true);
+
+  const sessUser = (window.API && API.getSession) ? (API.getSession() || {}) : {};
+  const userName = opts.userName || ((sessUser.user && sessUser.user.name) ? sessUser.user.name : '');
+  const userBlock = '<div class="user-block">' +
+    '<span class="user-name">' + userName + '</span>' +
+    '<button class="user-logout" onclick="logout()">خروج</button>' +
+    '</div>';
+
+  /* Hamburger button — visible only on mobile */
+  const hamburger = '<button class="topbar-hamburger" aria-label="القائمة" aria-expanded="false" onclick="UIC.openDrawer()">' +
+    '<span class="hamburger-bar"></span><span class="hamburger-bar"></span><span class="hamburger-bar"></span>' +
+    '</button>';
+
+  /* Mobile slide-out drawer is built inside the try below (it executes nav
+   * builders that could throw on unexpected input). */
+  let html;
+  try {
+    const drawerHtml =
+      '<div class="drawer-overlay" id="uic-drawer-overlay" onclick="UIC.closeDrawer()" aria-hidden="true"></div>' +
+      '<nav class="mobile-drawer" id="uic-drawer" aria-label="القائمة الرئيسية">' +
+        '<div class="drawer-header">' + logoDrawer +
+          '<button class="drawer-close" aria-label="إغلاق القائمة" onclick="UIC.closeDrawer()">&#x2715;</button>' +
+        '</div>' +
+        '<div class="drawer-nav">' +
+          navLinkHtml('drawer-nav-item') +
+          menuGroupsHtml(true) +
+        '</div>' +
+        '<div class="drawer-footer">' + (opts.userHtml || userBlock) + '</div>' +
+      '</nav>';
+    html =
+      '<header class="topbar">' +
+        '<div class="topbar-left">' + hamburger + logoTop + '</div>' +
+        '<nav class="topbar-nav" aria-label="التنقل الرئيسي">' + navLinkHtml() + menuGroupsHtml(false) + '</nav>' +
+        '<div class="topbar-right">' + (opts.userHtml || userBlock) + '</div>' +
+      '</header>' +
+      drawerHtml +
+      (opts.breadcrumb ? '<div class="breadcrumb">' + opts.breadcrumb + '</div>' : '') +
+      '<main class="app-content" id="' + (opts.contentId || 'app-content') + '"></main>';
+  } catch (shellErr) {
+    /* Never blank the page: emit at least the content container so the page's
+     * own render can populate it. Surface the error for diagnosis. */
+    html = '<main class="app-content" id="' + (opts.contentId || 'app-content') + '"></main>';
+    try { console.error('appShell build failed: ' + (shellErr && shellErr.message)); if (window.UIC && UIC.reportError) UIC.reportError('appShell build failed: ' + (shellErr && shellErr.message)); } catch (e) {}
+  }
+
+  const el = document.getElementById(containerId);
+  if (el) el.innerHTML = html;
+
+  /* Initialise drawer swipe-to-close after render */
+  try { UIC._initDrawerSwipe(); } catch (e) {}
+
+  return opts.contentId || 'app-content';
+};
+
+UIC.toggleDropdown = function (id, event) {
+  if (event) { event.preventDefault(); event.stopPropagation(); }
+  const target = document.getElementById(id);
+  if (!target) return;
+  const isOpen = target.classList.contains('open');
+  document.querySelectorAll('.nav-dropdown-menu').forEach(function (m) { m.classList.remove('open'); });
+  document.querySelectorAll('.nav-dropdown-toggle').forEach(function (b) { b.classList.remove('open'); });
+  if (!isOpen) {
+    target.classList.add('open');
+    const btn = target.parentNode ? target.parentNode.querySelector('.nav-dropdown-toggle') : null;
+    if (btn) btn.classList.add('open');
+  }
+};
+
+document.addEventListener('click', function (event) {
+  const dd = event.target && event.target.closest ? event.target.closest('.nav-dropdown') : null;
+  if (!dd) {
+    document.querySelectorAll('.nav-dropdown-menu').forEach(function (m) { m.classList.remove('open'); });
+    document.querySelectorAll('.nav-dropdown-toggle').forEach(function (b) { b.classList.remove('open'); });
+  }
+});
+
+UIC.openDrawer = function () {
+  const drawer  = document.getElementById('uic-drawer');
+  const overlay = document.getElementById('uic-drawer-overlay');
+  const ham     = document.querySelector('.topbar-hamburger');
+  if (!drawer) return;
+  drawer.classList.add('is-open');
+  if (overlay) overlay.classList.add('is-open');
+  if (ham) ham.setAttribute('aria-expanded', 'true');
+  document.body.style.overflow = 'hidden'; // prevent body scroll behind drawer
+};
+
+UIC.closeDrawer = function () {
+  const drawer  = document.getElementById('uic-drawer');
+  const overlay = document.getElementById('uic-drawer-overlay');
+  const ham     = document.querySelector('.topbar-hamburger');
+  if (!drawer) return;
+  drawer.classList.remove('is-open');
+  if (overlay) overlay.classList.remove('is-open');
+  if (ham) ham.setAttribute('aria-expanded', 'false');
+  document.body.style.overflow = '';
+};
+
+UIC._initDrawerSwipe = function () {
+  const drawer = document.getElementById('uic-drawer');
+  if (!drawer) return;
+  let startX = 0;
+  let dragging = false;
+  drawer.addEventListener('touchstart', function (e) {
+    startX = e.touches[0].clientX;
+    dragging = true;
+  }, { passive: true });
+  drawer.addEventListener('touchmove', function (e) {
+    if (!dragging) return;
+    const dx = e.touches[0].clientX - startX;
+    /* Only track swipe in the closing direction (right for RTL drawer = left for LTR) */
+    if (dx < -10) {
+      drawer.style.transform = 'translateX(' + dx + 'px)';
+      drawer.style.transition = 'none';
+    }
+  }, { passive: true });
+  drawer.addEventListener('touchend', function (e) {
+    if (!dragging) return;
+    dragging = false;
+    drawer.style.transform = '';
+    drawer.style.transition = '';
+    const dx = e.changedTouches[0].clientX - startX;
+    if (dx < -60) UIC.closeDrawer();
+  }, { passive: true });
+};
+
+document.addEventListener('keydown', function (e) {
+  if (e.key === 'Escape') UIC.closeDrawer();
+});
+
+(function () {
+  const css = `
+  /* ── Buttons ─────────────────────────────────────────────────────────── */
+  .btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 10px 20px; font-size: 14px; font-weight: 700;
+    border-radius: var(--radius-lg); border: 1px solid transparent;
+    cursor: pointer; font-family: var(--font-sans);
+    transition: all .2s ease; box-shadow: var(--shadow-sm);
+    /* Mobile: minimum tap target height */
+    min-height: var(--tap-min, 48px);
+    white-space: nowrap;
+    /* GPU-promote for smooth transforms */
+    will-change: transform;
+  }
+  .btn:disabled { opacity: .5; cursor: not-allowed; box-shadow: none; }
+  .btn-primary { background: var(--brand-primary); color: var(--btn-text-color); box-shadow: var(--shadow-brand); }
+  .btn-primary:hover { background: var(--brand-primary-hover); transform: translateY(-1px); box-shadow: 0 6px 16px rgba(0,0,0,0.15); }
+  .btn-outline { background: var(--bg-surface); border-color: var(--border-color); color: var(--text-main); font-weight: 600; }
+  .btn-outline:hover { background: var(--bg-subtle); border-color: var(--brand-primary); color: var(--brand-primary); transform: translateY(-1px); }
+  .btn-danger { background: var(--danger); color: #fff; box-shadow: 0 4px 12px rgba(220, 38, 38, 0.2); }
+  .btn-danger:hover { background: #b91c1c; transform: translateY(-1px); }
+  .btn-icon-only { padding: 10px; border-radius: 50%; }
+  /* Mobile: active state instead of hover */
+  @media (hover: none) {
+    .btn-primary:active { background: var(--brand-primary-hover); transform: scale(0.97); }
+    .btn-outline:active { background: var(--bg-subtle); }
+    .btn-danger:active  { background: #b91c1c; transform: scale(0.97); }
+  }
+
+  /* ── Pills ───────────────────────────────────────────────────────────── */
+  .pill { display: inline-flex; align-items: center; padding: 3px 10px; font-size: 11px; font-weight: 600; border-radius: 999px; }
+  .pill-success { background: var(--success-bg); color: var(--success-text); border: 1px solid var(--success-border); }
+  .pill-danger  { background: var(--danger-bg);  color: var(--danger-text);  border: 1px solid var(--danger-border); }
+  .pill-warning { background: var(--warning-bg); color: var(--warning-text); border: 1px solid var(--warning-border); }
+  .pill-neutral { background: var(--bg-subtle);  color: var(--text-muted);   border: 1px solid var(--border-color); }
+
+  /* ── Data Table ──────────────────────────────────────────────────────── */
+  .table-wrap {
+    background: var(--bg-surface); border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    /* Mobile: horizontal scroll instead of overflow:hidden */
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-x: contain;
+  }
+  .table-toolbar { padding: var(--space-3); border-bottom: 1px solid var(--border-color); }
+  .table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .table thead th {
+    padding: 10px 12px; background: var(--bg-subtle); color: var(--text-muted);
+    font-weight: 600; font-size: 11px; text-align: right;
+    border-bottom: 1px solid var(--border-color);
+    /* Prevent headers shrinking too small on mobile */
+    white-space: nowrap;
+  }
+  .table tbody td { padding: 10px 12px; border-bottom: 1px solid var(--border-color); }
+  .table tbody tr:hover { background: var(--brand-subtle-bg); }
+  /* Tall enough rows for finger tapping */
+  .table tbody tr { min-height: var(--tap-sm, 44px); }
+  .empty-state { padding: 48px 16px; text-align: center; color: var(--text-muted); background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: var(--radius-md); }
+
+  /* ── Form Controls ───────────────────────────────────────────────────── */
+  .input {
+    width: 100%; padding: 10px 12px;
+    /* 16px minimum to prevent Android Chrome from zooming on focus */
+    font-size: max(16px, 1rem);
+    font-family: var(--font-sans);
+    border: 1px solid var(--border-color); border-radius: var(--radius-sm);
+    background: var(--bg-surface); color: var(--text-main);
+    /* Expand height for comfortable touch input */
+    min-height: var(--tap-sm, 44px);
+    line-height: 1.4;
+  }
+  .input:focus { outline: none; border-color: var(--brand-primary); box-shadow: 0 0 0 2px var(--brand-subtle-bg); }
+  .form-field { margin-bottom: var(--space-4); }
+  .form-label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px; color: var(--text-main); }
+  .req { color: var(--danger); }
+  .field-error { color: var(--danger); font-size: 12px; min-height: 16px; }
+  .form-field.has-error .input { border-color: var(--danger); }
+
+  /* ── Searchable Combo ────────────────────────────────────────────────── */
+  .combo { position: relative; }
+  .combo-input { width: 100%; }
+  .combo-list {
+    position: absolute; top: 100%; right: 0; left: 0; z-index: 1400;
+    margin-top: 2px; max-height: 240px; overflow-y: auto;
+    background: var(--bg-surface); border: 1px solid var(--border-color);
+    border-radius: 6px; box-shadow: 0 8px 20px rgba(0,0,0,.12);
+    -webkit-overflow-scrolling: touch;
+  }
+  .combo-option {
+    padding: 12px 10px; /* taller for touch */
+    font-size: 13px; cursor: pointer;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .combo-option:hover, .combo-option.active { background: var(--brand-subtle-bg); color: var(--brand-primary); }
+
+  /* ── Modal ───────────────────────────────────────────────────────────── */
+  .modal-open { overflow: hidden; }
+  .modal-overlay {
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,.45);
+    display: flex; align-items: flex-end; justify-content: center;
+    z-index: 1000;
+    /* Safe area padding so overlay doesn't clip on notch devices */
+    padding: max(16px, var(--safe-top)) max(16px, var(--safe-left)) max(0px, var(--safe-bottom)) max(16px, var(--safe-right));
+  }
+  .modal {
+    background: var(--bg-surface);
+    border-radius: var(--radius-lg) var(--radius-lg) 0 0; /* bottom sheet on mobile */
+    width: 100%;
+    max-height: 90dvh;
+    max-height: calc(var(--vh, 1vh) * 90); /* fallback */
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    box-shadow: var(--shadow-lg);
+    /* GPU layer for smooth slide-in */
+    will-change: transform;
+    /* Bottom padding so content clears gesture bar */
+    padding-bottom: var(--safe-bottom);
+  }
+  .modal-header {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: var(--space-4) var(--space-6); border-bottom: 1px solid var(--border-color);
+    /* Sticky so close button is always accessible */
+    position: sticky; top: 0; background: var(--bg-surface); z-index: 1;
+  }
+  .modal-header h3 { font-size: 16px; }
+  .modal-body  { padding: var(--space-6); }
+  .modal-footer {
+    display: flex; justify-content: flex-end; gap: 8px;
+    padding: var(--space-4) var(--space-6); border-top: 1px solid var(--border-color);
+    flex-wrap: wrap; /* allow buttons to wrap on very small screens */
+  }
+  .btn-icon { background: none; border: none; font-size: 20px; cursor: pointer; color: var(--text-muted); padding: 8px; min-height: var(--tap-sm, 44px); min-width: var(--tap-sm, 44px); }
+  /* Larger screens: centre modal */
+  @media (min-width: 640px) {
+    .modal-overlay { align-items: center; }
+    .modal { border-radius: var(--radius-lg); max-width: 560px; padding-bottom: 0; }
+  }
+
+  /* ── Toast ───────────────────────────────────────────────────────────── */
+  .toast {
+    position: fixed; top: max(20px, calc(var(--safe-top) + 12px));
+    left: 50%; transform: translateX(-50%);
+    padding: 12px 24px; border-radius: var(--radius-md); color: #fff;
+    font-size: 14px; font-weight: 600; z-index: 2000;
+    box-shadow: var(--shadow-md);
+    transition: opacity .3s ease, transform .3s ease;
+    max-width: min(90vw, 360px);
+    text-align: center;
+    /* GPU layer */
+    will-change: transform, opacity;
+    cursor: pointer;
+  }
+  .toast-success { background: var(--success); }
+  .toast-error   { background: var(--danger); }
+  .toast-warning { background: var(--warning); }
+  .toast-out { opacity: 0; transform: translateX(-50%) translateY(-8px); }
+
+  /* ── Stat Card ───────────────────────────────────────────────────────── */
+  .stat-card {
+    display: flex; align-items: center; gap: var(--space-4);
+    background: var(--bg-surface); border: 1px solid var(--border-color);
+    border-radius: var(--radius-md); padding: var(--space-4);
+    contain: layout style; /* reduce paint cost */
+  }
+  .stat-icon { font-size: 28px; width: 52px; height: 52px; display: flex; align-items: center; justify-content: center; border-radius: var(--radius-md); background: var(--bg-subtle); flex-shrink: 0; }
+  .stat-success .stat-icon { background: var(--success-bg); }
+  .stat-danger  .stat-icon { background: var(--danger-bg); }
+  .stat-warning .stat-icon { background: var(--warning-bg); }
+  .stat-value { font-size: clamp(18px, 5vw, 24px); font-weight: 700; line-height: 1.2; }
+  .stat-label { font-size: 12px; color: var(--text-muted); }
+
+  /* ── Company Tile ────────────────────────────────────────────────────── */
+  .company-tile {
+    background: var(--bg-surface); border: 1px solid var(--border-color);
+    border-radius: var(--radius-lg); padding: var(--space-6);
+    text-align: center; cursor: pointer; transition: all .15s ease;
+    contain: layout style;
+  }
+  .company-tile:hover { border-color: var(--brand-primary); box-shadow: var(--shadow-brand); transform: translateY(-2px); }
+  @media (hover: none) { .company-tile:active { transform: scale(0.98); border-color: var(--brand-primary); } }
+  .tile-logo { width: 84px; height: 84px; object-fit: contain; border-radius: 50%; background: #fff; padding: 6px; box-shadow: 0 4px 14px rgba(0,0,0,.18); margin: 0 auto var(--space-4); display: flex; align-items: center; justify-content: center; font-size: 28px; font-weight: 700; color: var(--brand-primary); }
+  .tile-logo:hover { box-shadow: 0 6px 18px rgba(0,0,0,.22); transform: translateY(-1px); }
+  .tile-logo-fallback { border: 1px solid var(--border-color); }
+  .tile-name-ar { font-size: 16px; font-weight: 700; margin-bottom: 4px; }
+  .tile-name-en { font-size: 12px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .04em; margin-bottom: var(--space-4); }
+  .tile-enter   { font-size: 12px; font-weight: 600; color: var(--brand-primary); }
+
+  /* ── Module Tile ─────────────────────────────────────────────────────── */
+  .module-tile {
+    position: relative; background: var(--bg-surface); border: 1px solid var(--border-color);
+    border-radius: var(--radius-lg); padding: var(--space-6);
+    text-align: center; cursor: pointer; transition: all .15s ease;
+    contain: layout style;
+  }
+  .module-tile:hover { border-color: var(--brand-primary); box-shadow: var(--shadow-brand); transform: translateY(-2px); }
+  @media (hover: none) { .module-tile:active { transform: scale(0.98); } }
+  .module-tile-disabled { opacity: .5; cursor: not-allowed; }
+  .module-tile-disabled:hover { border-color: var(--border-color); box-shadow: none; transform: none; }
+  .module-tile-icon { width: 64px; height: 64px; margin: 0 auto var(--space-4); display: flex; align-items: center; justify-content: center; font-size: 32px; border-radius: var(--radius-md); background: var(--brand-subtle-bg); }
+  .module-tile-title    { font-size: 15px; font-weight: 700; margin-bottom: 4px; }
+  .module-tile-subtitle { font-size: 12px; color: var(--text-muted); }
+  .module-tile-badge { position: absolute; top: 8px; right: 8px; background: var(--warning); color: #fff; font-size: 10px; font-weight: 600; padding: 2px 8px; border-radius: 999px; }
+
+  /* ── Topbar ──────────────────────────────────────────────────────────── */
+  .topbar {
+    position: sticky; top: 0; z-index: 1000;
+    display: flex; align-items: center; justify-content: space-between; gap: var(--space-4);
+    background: var(--bg-surface); border-bottom: 1px solid var(--border-color);
+    padding: 0 var(--space-4);
+    height: var(--topbar-h, 56px);
+    /* Allow dropdown menus to expand outside the header */
+    overflow: visible;
+  }
+  .topbar-left  { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .topbar-right { display: flex; align-items: center; flex-shrink: 0; }
+  .user-block { display: flex; flex-direction: column; align-items: center; gap: 4px; line-height: 1.2; padding: 4px 10px; background: var(--bg-subtle); border-radius: var(--radius-lg); border: 1px solid var(--border-color); }
+  .user-name   { font-size: 13px; color: var(--text-main); font-weight: 700; white-space: nowrap; max-width: 140px; overflow: hidden; text-overflow: ellipsis; }
+  .user-logout { padding: 4px 12px; font-size: 12px; font-weight: 700; border-radius: 20px; transition: all 0.2s; background: var(--danger-bg); color: var(--danger-text); border: 1px solid var(--danger-border); cursor: pointer; }
+  .user-logout:hover { background: var(--danger); color: #fff; }
+  .app-logo { display: inline-flex; align-items: center; flex-shrink: 0; }
+  .app-logo img { height: 32px; width: 32px; display: block; object-fit: contain; border-radius: 50%; background: #fff; padding: 3px; box-shadow: 0 2px 8px rgba(0,0,0,.14); }
+  .app-logo-company img { height: 40px; width: 40px; }
+
+  /* ── Desktop topbar nav (hidden on mobile) ───────────────────────────── */
+  .topbar-nav {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex: 1;
+    overflow: visible;
+  }
+  .nav-item { padding: 8px 12px; font-size: 13px; font-weight: 600; color: var(--text-muted); text-decoration: none; border-radius: var(--radius-sm); white-space: nowrap; display: inline-flex; align-items: center; min-height: var(--tap-sm, 44px); transition: color 0.15s, background-color 0.15s; }
+  .nav-item:hover, .nav-item.active { color: var(--brand-primary); background: var(--brand-subtle-bg); }
+
+  /* ── Hamburger button (mobile only) ─────────────────────────────────── */
+  .topbar-hamburger {
+    display: none; /* hidden on desktop */
+    flex-direction: column; justify-content: center; align-items: center; gap: 5px;
+    width: var(--tap-min, 48px); height: var(--tap-min, 48px);
+    background: none; border: none; cursor: pointer; padding: 8px; border-radius: var(--radius-sm);
+    flex-shrink: 0;
+  }
+  .hamburger-bar { display: block; width: 22px; height: 2px; background: var(--text-main); border-radius: 2px; transition: all 0.2s; }
+
+  /* ── Dropdowns ───────────────────────────────────────────────────────── */
+  .nav-dropdown         { position: relative; display: inline-block; }
+  .nav-dropdown-toggle  { display: inline-flex; align-items: center; gap: 6px; padding: 8px 12px; font-size: 13px; font-weight: 600; font-family: var(--font-sans); color: var(--text-muted); background: none; border: none; border-radius: var(--radius-sm); cursor: pointer; min-height: var(--tap-sm, 44px); white-space: nowrap; transition: color 0.15s, background-color 0.15s; }
+  .nav-dropdown-toggle:hover, .nav-dropdown-toggle.open { color: var(--brand-primary); background: var(--brand-subtle-bg); }
+  .nav-dropdown-caret   { font-size: 10px; transition: transform 0.2s; }
+  .nav-dropdown-toggle.open .nav-dropdown-caret { transform: rotate(180deg); }
+  .nav-dropdown-menu    {
+    display: none;
+    position: absolute;
+    top: calc(100% + 4px);
+    right: 0;
+    min-width: 230px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.15), 0 2px 6px rgba(0, 0, 0, 0.08);
+    z-index: 2500;
+    padding: 8px;
+    max-height: 75dvh;
+    max-height: calc(var(--vh, 1vh) * 75);
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .nav-dropdown-menu.open { display: block; }
+  .nav-dropdown-item { display: flex; align-items: center; padding: 10px 12px; font-size: 13px; color: var(--text-main); text-decoration: none; border-radius: var(--radius-sm); cursor: pointer; white-space: nowrap; min-height: 40px; transition: background-color 0.15s, color 0.15s; }
+  .nav-dropdown-item:hover { background: var(--brand-subtle-bg); color: var(--brand-primary); }
+  .nav-dropdown-item-active { background: var(--brand-subtle-bg); color: var(--brand-primary); font-weight: 700; }
+
+  /* ── Breadcrumb & content area ───────────────────────────────────────── */
+  .breadcrumb { padding: var(--space-3) var(--space-4); font-size: 13px; color: var(--text-muted); overflow-x: auto; white-space: nowrap; }
+  .app-content { width: 100%; max-width: 1200px; margin: 0 auto; padding: var(--space-4); box-sizing: border-box; }
+
+  /* ── Mobile Drawer ───────────────────────────────────────────────────── */
+  .drawer-overlay {
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.5);
+    z-index: 800;
+    opacity: 0; pointer-events: none;
+    transition: opacity 0.25s;
+    /* GPU layer */
+    will-change: opacity;
+  }
+  .drawer-overlay.is-open { opacity: 1; pointer-events: auto; }
+
+  .mobile-drawer {
+    position: fixed;
+    top: 0; bottom: 0;
+    /* RTL: drawer slides from right; LTR: from left */
+    right: 0;
+    width: min(80vw, 320px);
+    background: var(--bg-surface);
+    /* Start off-screen to the right */
+    transform: translateX(100%);
+    transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    z-index: 900;
+    display: flex; flex-direction: column;
+    overflow-y: auto; -webkit-overflow-scrolling: touch;
+    /* Pad for safe areas (notch/gesture bar) */
+    padding-top: var(--safe-top);
+    padding-bottom: var(--safe-bottom);
+    will-change: transform;
+    box-shadow: var(--shadow-lg);
+  }
+  [dir="ltr"] .mobile-drawer { right: auto; left: 0; transform: translateX(-100%); }
+  .mobile-drawer.is-open { transform: translateX(0); }
+
+  .drawer-header {
+    display: flex; align-items: center; gap: 8px;
+    padding: 12px var(--space-4); border-bottom: 1px solid var(--border-color);
+    flex-shrink: 0;
+  }
+  .drawer-close {
+    margin-right: auto; background: none; border: none; font-size: 20px;
+    cursor: pointer; color: var(--text-muted); padding: 8px;
+    min-width: var(--tap-min, 48px); min-height: var(--tap-min, 48px);
+    display: flex; align-items: center; justify-content: center;
+  }
+  [dir="ltr"] .drawer-close { margin-right: 0; margin-left: auto; }
+
+  .drawer-nav {
+    flex: 1; overflow-y: auto; padding: var(--space-4) 0;
+    -webkit-overflow-scrolling: touch;
+  }
+  .drawer-nav .nav-item,
+  .drawer-nav-item {
+    display: flex; align-items: center;
+    padding: 14px var(--space-4);
+    min-height: var(--tap-min, 48px);
+    border-radius: 0;
+    font-size: 15px; font-weight: 600;
+    border-bottom: 1px solid var(--border-color);
+  }
+  .drawer-nav .nav-item:last-child { border-bottom: none; }
+  .drawer-group-label {
+    padding: 10px var(--space-4) 4px;
+    font-size: 11px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.06em;
+    color: var(--text-muted);
+  }
+  .drawer-group .nav-dropdown-item {
+    padding: 12px var(--space-6);
+    white-space: normal;
+    min-height: var(--tap-min, 48px);
+  }
+  .drawer-footer {
+    padding: var(--space-4); border-top: 1px solid var(--border-color);
+    flex-shrink: 0;
+  }
+
+  /* ── Responsive breakpoints ──────────────────────────────────────────── */
+  /* Mobile (≤ 767px): show hamburger, hide desktop nav */
+  @media (max-width: 767px) {
+    .topbar-hamburger { display: flex; }
+    .topbar-nav       { display: none; }
+    .topbar-right .user-block { display: none; } /* user is in drawer */
+    .topbar { padding: 0 var(--space-3); }
+    .app-content { padding: var(--space-3); }
+    .breadcrumb  { padding: var(--space-2) var(--space-3); }
+    .modal-footer { flex-direction: column-reverse; }
+    .modal-footer .btn { width: 100%; justify-content: center; }
+    .stat-card { padding: var(--space-3); }
+  }
+  /* Tablet and up (≥ 768px): show desktop nav, hide hamburger & drawer toggle */
+  @media (min-width: 768px) {
+    .topbar-hamburger { display: none !important; }
+    .topbar-right .user-block { display: flex !important; }
+    .topbar { padding: 0 var(--space-6); height: 60px; }
+    .app-content { padding: var(--space-6); }
+  }
+  /* Landscape compact mode: reduce header, hide bottom padding */
+  @media (orientation: landscape) and (max-height: 500px) {
+    .topbar { height: 44px; }
+    .app-logo img { height: 24px; }
+    .app-content { padding-top: var(--space-2); }
+  }
+
+  /* ── Keyboard-open layout adjustments ───────────────────────────────── */
+  .keyboard-open .modal {
+    /* When keyboard is open, shrink modal so it stays above keyboard */
+    max-height: calc(100dvh - var(--keyboard-height, 0px) - 32px);
+    max-height: calc(var(--vh, 1vh) * 100 - var(--keyboard-height, 0px) - 32px);
+  }
+
+  /* ── Screen reader only ──────────────────────────────────────────────── */
+  .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  `;
+  const style = document.createElement('style');
+  style.textContent = css;
+  document.head.appendChild(style);
+})();
+
+/* ── Side audit-history panel (السجل) ─────────────────────────────────────── */
+/* Opens beside the current table: by default shows the LAST record's most
+   recent change; when a record is selected (row click or السجل button) it
+   shows that record's full history. Detailed log lives in ERP_Record_History. */
+UIC.HistorySide = (function () {
+  var panel = null, body = null, titleEl = null;
+
+  function ensure() {
+    if (panel) return;
+    var css = '#history-side{position:fixed;top:0;right:0;height:100%;width:340px;max-width:90vw;background:#fff;' +
+      'box-shadow:-4px 0 20px rgba(0,0,0,.15);z-index:9999;transform:translateX(100%);transition:transform .25s ease;' +
+      'display:flex;flex-direction:column;direction:rtl;font-family:inherit;}' +
+      '#history-side.open{transform:translateX(0);}' +
+      '#history-side .hs-head{padding:12px 14px;border-bottom:1px solid #eee;display:flex;align-items:center;justify-content:space-between;}' +
+      '#history-side .hs-head h3{margin:0;font-size:15px;}' +
+      '#history-side .hs-close{border:none;background:none;font-size:22px;cursor:pointer;line-height:1;}' +
+      '#history-side .hs-body{padding:10px 14px;overflow:auto;flex:1;font-size:13px;}' +
+      '#history-side .hs-card{border:1px solid #eee;border-radius:8px;padding:8px 10px;margin-bottom:8px;background:#fafafa;}' +
+      '#history-side .hs-meta{color:#777;font-size:11px;margin-bottom:4px;}' +
+      '#history-side .hs-change{font-size:12px;}' +
+      '#history-side .hs-change b{color:#333;}' +
+      '#history-side .hs-empty,#history-side .hs-load{color:#999;padding:20px 0;text-align:center;}';
+    var st = document.createElement('style'); st.textContent = css; document.head.appendChild(st);
+    panel = document.createElement('div'); panel.id = 'history-side';
+    panel.innerHTML = '<div class="hs-head"><h3 id="hs-title">السجل</h3>' +
+      '<button class="hs-close" onclick="UIC.HistorySide.close()">×</button></div>' +
+      '<div class="hs-body" id="hs-body"></div>';
+    document.body.appendChild(panel);
+    body = panel.querySelector('#hs-body');
+    titleEl = panel.querySelector('#hs-title');
+    document.addEventListener('click', onDocClick);
+  }
+
+  function onDocClick(e) {
+    var el = e.target.closest('[data-history-id]');
+    if (el) { open(el.getAttribute('data-sheet') || window.SHEET, el.getAttribute('data-history-id')); return; }
+    var row = e.target.closest('tr[data-id]');
+    if (row && window.SHEET && !e.target.closest('button,a,input,select,textarea,[data-no-history]')) {
+      open(window.SHEET, row.getAttribute('data-id'));
+    }
+  }
+
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+    });
+  }
+
+  function render(rows) {
+    if (!rows || !rows.length) { body.innerHTML = '<div class="hs-empty">لا يوجد سجل</div>'; return; }
+    var html = '';
+    rows.forEach(function (r) {
+      var changed = (r.old_value || '') + '  →  ' + (r.new_value || '');
+      html += '<div class="hs-card">' +
+        '<div class="hs-meta">#' + esc(r.record_id || r.record_uid) + ' · ' + esc(r.action) +
+        ' · ' + esc(r.changed_by) + ' · ' + esc(r.changed_at) + '</div>' +
+        '<div class="hs-change"><b>' + esc(r.column_name) + ':</b> ' + esc(changed) + '</div>' +
+        '</div>';
+    });
+    body.innerHTML = html;
+  }
+
+  function fetchAndRender(sheet, recordId, title) {
+    ensure();
+    if (!sheet) return;
+    panel.classList.add('open');
+    titleEl.textContent = title + ' · ' + sheet;
+    body.innerHTML = '<div class="hs-load">جاري التحميل...</div>';
+    API.call('get_record_history', { sheet_name: sheet, record_id: recordId || '' }, SESSION.token())
+      .then(function (r) {
+        var rows = (r && r.history) || [];
+        if (recordId) { render(rows); return; }
+        render(rows.length ? [rows[0]] : []);
+      })
+      .catch(function (e) { body.innerHTML = '<div class="hs-empty">تعذر التحميل: ' + esc(e.message || e) + '</div>'; });
+  }
+
+  function open(sheet, recordId) { fetchAndRender(sheet, recordId, 'السجل'); }
+  function showLatest(sheet) { fetchAndRender(sheet, '', 'آخر سجل'); }
+  function close() { if (panel) panel.classList.remove('open'); }
+
+  return { open: open, showLatest: showLatest, close: close, ensure: ensure };
+})();
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', function () {
+    if (window.SHEET && window.ERP_HISTORY_AUTO !== false) UIC.HistorySide.showLatest(window.SHEET);
+  });
+} else if (window.SHEET && window.ERP_HISTORY_AUTO !== false) {
+  UIC.HistorySide.showLatest(window.SHEET);
+}
+</script>

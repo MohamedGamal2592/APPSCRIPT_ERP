@@ -1,0 +1,762 @@
+﻿<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Valley Foods — أوامر التصنيع</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_ValleyFoods_Nav'); ?>
+  <?!= getCompanyThemeCSS_('9940659bd83035d7') ?>
+</head>
+<body>
+  <div id="vf-root"></div>
+
+  <script>
+    var params = new URLSearchParams(window.location.search);
+    var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+    var scriptUrl = window.scriptUrl || '/';
+    var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+    var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('9940659bd83035d7') ?>';
+    var COMPANY_PAGES = <?!= companyPages ?>;
+    var CURRENT_ACTION = '<?!= currentAction ?>';
+    var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+    var CAN_WRITE = IS_SUPER_ADMIN || !!(USER_PAGES && USER_PAGES[CURRENT_ACTION] && USER_PAGES[CURRENT_ACTION].indexOf('write') !== -1);
+
+    function companyCall(moduleAction, data) {
+      return API.call('company_action', {
+        target_system: '9940659bd83035d7',
+        module_action: moduleAction,
+        data: data || {}
+      }, SESSION_TOKEN);
+    }
+    function esc(v) {
+      var s = (v === undefined || v === null) ? '' : String(v);
+      if (typeof FMT !== 'undefined' && FMT.escape) return FMT.escape(s);
+      return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+    function num0(v) { var n = Number(v); return isNaN(n) ? 0 : n; }
+    function fmt3(v) { return Number(v || 0).toFixed(3); }
+    function todayStr() { return new Date().toISOString().slice(0, 10); }
+    function fmtDate(v) {
+      if (!v) return '-';
+      var d = (v instanceof Date) ? v : new Date(v);
+      if (isNaN(d.getTime())) return String(v);
+      var p = function (n) { return n < 10 ? '0' + n : '' + n; };
+      return p(d.getDate()) + '/' + p(d.getMonth() + 1) + '/' + d.getFullYear();
+    }
+  </script>
+
+  <script>
+  (function () {
+    var ORDERS = [], RECIPE_OPTIONS = [], PRODUCT_OPTIONS = [], ENUMS = {};
+
+    function showLoading(msg) {
+      var el = document.getElementById('vf-loading-overlay');
+      if (!el) {
+        el = document.createElement('div');
+        el.id = 'vf-loading-overlay';
+        el.style.cssText = 'position:fixed;inset:0;z-index:99999;display:none;align-items:center;justify-content:center;background:rgba(255,255,255,0.78);direction:rtl;';
+        el.innerHTML = '<div style="background:#fff;border:1px solid #e3e3e3;border-radius:12px;padding:22px 30px;box-shadow:0 6px 24px rgba(0,0,0,0.12);display:flex;flex-direction:column;align-items:center;gap:12px;">' +
+          '<div style="width:34px;height:34px;border:4px solid #eee;border-top-color:#875A7B;border-radius:50%;animation:vfspin 0.8s linear infinite;"></div>' +
+          '<div id="vf-loading-msg" style="font-family:Tahoma;color:#444;font-size:14px;">جاري التحميل…</div></div>';
+        var st = document.createElement('style'); st.textContent = '@keyframes vfspin{to{transform:rotate(360deg)}}'; document.head.appendChild(st);
+        document.body.appendChild(el);
+      }
+      var m = document.getElementById('vf-loading-msg'); if (m && msg) m.textContent = msg;
+      el.style.display = 'flex';
+    }
+    function hideLoading() { var el = document.getElementById('vf-loading-overlay'); if (el) el.style.display = 'none'; }
+
+    function tabBtn(paneId, label, active) {
+      return '<button type="button" class="btn ' + (active ? 'btn-primary' : 'btn-outline') + '" style="padding:6px 16px;font-size:12px;" onclick="MFG_PAGE.switchTab(\'' + paneId + '\')">' + label + '</button>';
+    }
+    MFG_PAGE_tabSwitch = function (paneId) {
+      ['tab-main-extra', 'tab-cons', 'tab-workops', 'tab-byproducts'].forEach(function (id) {
+        var el = document.getElementById(id);
+        if (el) el.style.display = (id === paneId) ? '' : 'none';
+      });
+    };
+
+    function renderApp() {
+      UIC.appShell('vf-root', {
+        companyLogoUrl: COMPANY_LOGO_URL,
+        companyLogoHref: scriptUrl + '?action=vf_dashboard&sessionToken=' + SESSION_TOKEN,
+        companyLogoTitle: 'Valley Foods',
+        breadcrumb: 'Valley Foods / الانتاج / أوامر التصنيع',
+        contentId: 'vf-mfg-content',
+        menuGroups: (window.VALLEYFOODS_MENU || [])
+      });
+      document.getElementById('vf-mfg-content').innerHTML =
+        '<div class="vf-card"><div class="vf-card-header"><h3>أوامر التصنيع</h3>' +
+          (CAN_WRITE ? '<button class="btn btn-primary" onclick="MFG_PAGE.openNewPage()">اضافة امر تصنيع</button>' : '') +
+        '</div><div class="vf-card-body">' +
+          '<div id="mo-table"><p class="vf-text-muted">جاري التحميل...</p></div>' +
+        '</div></div>';
+      load();
+    }
+
+    function load() {
+      showLoading('جاري تحميل أوامر التصنيع…');
+      var watchdog = setTimeout(function () { hideLoading(); UIC.toast('انتهت مهلة التحميل — تحقق من الاتصال وأعد المحاولة', 'error'); }, 25000);
+      var container = document.getElementById('mo-table');
+      if (container) {
+        UIC.PagedTable({
+          container: container,
+          headers: ['كود الأمر', 'المنتج المنتج', 'نوع العملية', 'الوردية', 'التاريخ',
+                    { label: 'المتوقع', numeric: true }, { label: 'المصنع', numeric: true }, 'الحالة', ''],
+          pageSize: 100,
+          emptyText: 'لا توجد أوامر تصنيع',
+          onRendered: function (tid) { try { UIC.initTableSort(tid); } catch (e) {} },
+          fetcher: function (offset, limit) {
+            return companyCall('get_valley_mfg_orders', { offset: offset, limit: limit });
+          },
+          onFirst: function (r) {
+            RECIPE_OPTIONS = r.recipe_options || [];
+            PRODUCT_OPTIONS = r.product_options || [];
+            ENUMS = r.enums || {};
+            try { clearTimeout(watchdog); hideLoading(); } catch (e) {}
+          },
+          mapRow: function (o) {
+            var isLocked = o.mo_status === 'Locked';
+            var isInProgress = o.mo_status === 'In Progress';
+            var actions = UIC.actionBtns([
+              { label: 'فتح', onclick: 'MFG_PAGE.openDetail(\'' + esc(o.unique_id) + '\')' },
+              (IS_SUPER_ADMIN || CAN_WRITE) && o.mo_status === 'Draft' ? { label: '▶️ بدء', onclick: 'MFG_PAGE.changeStatus(\'' + esc(o.unique_id) + '\',\'start\')' } : null,
+              (IS_SUPER_ADMIN || CAN_WRITE) && isInProgress && IS_SUPER_ADMIN ? { label: '🔒 قفل', color: '#b45309', onclick: 'MFG_PAGE.changeStatus(\'' + esc(o.unique_id) + '\',\'lock\')' } : null,
+              (IS_SUPER_ADMIN || CAN_WRITE) && isLocked && IS_SUPER_ADMIN ? { label: '🔓 فتق القفل', color: '#b45309', onclick: 'MFG_PAGE.changeStatus(\'' + esc(o.unique_id) + '\',\'unlock\')' } : null,
+              IS_SUPER_ADMIN ? { label: 'حذف', color: '#dc2626', onclick: 'MFG_PAGE.remove(\'' + esc(o.unique_id) + '\')' } : null
+            ].filter(Boolean));
+            var statusLabel = isLocked ? 'مقفل' : (isInProgress ? 'قيد التنفيذ' : 'مسودة');
+            return [
+              '<b>' + esc(o.transaction_code || o.id) + '</b>',
+              esc(prodLabel(o.produced_product)),
+              esc(o.operation_type),
+              esc(o.shift),
+              fmtDate(o.manufacture_date),
+              '<span class="num">' + fmt3(o.expected_qty) + '</span>',
+              '<span class="num">' + fmt3(o.manufactured_qty) + '</span>',
+              statusPill(statusLabel, isLocked ? 'success' : 'neutral'),
+              actions
+            ];
+          }
+        });
+      } else { try { clearTimeout(watchdog); hideLoading(); } catch (e) {} }
+    }
+
+    function statusPill(s, c) { return UIC.statusPill(s, c); }
+
+    function prodLabel(idRef) {
+      var f = PRODUCT_OPTIONS.filter(function (o) { return String(o.value) === String(idRef); })[0];
+      return f ? f.label : (idRef || '-');
+    }
+
+    /* ---------- ENTRY MODAL ---------- */
+    function openEdit(uid) {
+      UI.showSpinner();
+      Promise.all([
+        companyCall('get_valley_mfg_orders'),
+        companyCall('get_valley_mfg_order_full', { mo_uid: uid })
+      ])
+        .then(function (res) {
+          ORDERS = res[0].orders || [];
+          var order = res[1].order;
+          openModal(order, res[1].consumption, res[1].outputs);
+        })
+        .catch(function (e) { UIC.toast((e && e.message) || 'خطأ في تحميل الأمر', 'error'); })
+        .finally(function () { UI.hideSpinner(); });
+    }
+
+    function openModal(order, existingConsumption, existingOutputs) {
+      var isEdit = !!order;
+      var body =
+        '<div id="mo-warning"></div>' +
+        '<form id="mfg-form">' +
+          '<input type="hidden" id="f-mo-uid" value="' + esc(isEdit ? order.unique_id : '') + '">' +
+          '<input type="hidden" id="f-status" value="' + esc(isEdit ? (order.mo_status || 'Draft') : 'Draft') + '">' +
+          '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:12px;">' +
+            UIC.combo({ key: 'f-op-type', label: 'نوع العملية', required: true, options: selList_(ENUMS.operation_type), value: isEdit ? order.operation_type : '', placeholder: 'اكتب للبحث…' }) +
+            UIC.combo({ key: 'f-shift', label: 'الوردية', required: true, options: selList_(ENUMS.shift), value: isEdit ? order.shift : '', placeholder: 'اكتب للبحث…' }) +
+            UIC.field({ key: 'f-date', label: 'تاريخ التصنيع', type: 'date', required: true, value: isEdit ? fmtDate(order.manufacture_date).split('/').reverse().join('-') : todayStr() }) +
+            UIC.field({ key: 'f-expected', label: 'الكمية المتوقعة', type: 'number', required: true, min: '0.01', step: '0.01', value: isEdit ? num0(order.expected_qty) : '' }) +
+            UIC.field({ key: 'f-manufactured', label: 'الكمية المصنعة', type: 'number', required: true, min: '0', step: '0.01', value: isEdit ? num0(order.manufactured_qty) : '', onInput: 'MFG_PAGE.onQtyChange()' }) +
+            UIC.field({ key: 'f-actual', label: 'الكمية الفعلية المنتجة', type: 'number', required: true, min: '0', step: '0.01', value: isEdit && order.actual_qty != null ? num0(order.actual_qty) : '' }) +
+          '</div>' +
+          '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-bottom:12px;">' +
+            UIC.combo({ key: 'f-product', label: 'المنتج المنتج', required: true, options: PRODUCT_OPTIONS, value: isEdit ? String(order.produced_product) : '', placeholder: 'اكتب للبحث…' }) +
+            UIC.combo({ key: 'f-recipe', label: 'الوصفة', required: true, options: RECIPE_OPTIONS.filter(function (o) { return o.active !== false; }), value: isEdit ? String(order.recipe_id) : '', placeholder: 'اختر الوصفة…' }) +
+          '</div>' +
+        '</form>' +
+        /* Tab bar (Odoo-style child tables) */
+        '<div style="display:flex;gap:4px;border-bottom:2px solid #16a34a;margin-bottom:0;flex-wrap:wrap;">' +
+          MFG_PAGE.tabBtn('tab-outputs', '📦 المنتجات والمواد', true) +
+          MFG_PAGE.tabBtn('tab-main-extra', '📋 إضافي') +
+          MFG_PAGE.tabBtn('tab-cons', '🧪 استهلاك الخامات') +
+          MFG_PAGE.tabBtn('tab-workops', '⚙️ ورديات التشغيل') +
+          MFG_PAGE.tabBtn('tab-byproducts', '♻️ منتجات ثانوية') +
+        '</div>' +
+        '<div id="tab-outputs" class="mfg-tab-pane">' +
+          '<div style="display:flex;justify-content:space-between;align-items:center;margin:10px 0 8px;">' +
+            '<b style="color:#166534;font-size:13px;">📦 منتجات الناتج + المواد المستهلكة لكل منتج</b>' +
+            (CAN_WRITE ? '<button type="button" class="btn btn-outline" onclick="MFG_PAGE.addOutput()">+ منتج ناتج</button>' : '') +
+          '</div>' +
+          '<div id="outputs-body"></div>' +
+        '</div>' +
+        '<div id="tab-main-extra" class="mfg-tab-pane" style="display:none;">' +
+          '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;padding-top:12px;">' +
+            UIC.field({ key: 'f-internal-batch', label: 'رقم التشغيلة الداخلية', type: 'text', value: isEdit ? (order.manufacture_internal_batch || '') : '' }) +
+            UIC.field({ key: 'f-batch', label: 'رقم التشغيلة (تصنيع)', type: 'text', value: isEdit ? (order.manufacture_batch || '') : '' }) +
+            checkboxField('f-tax-system-mo', 'خاضع للنظام الضريبي', isEdit ? String(order.tax_system || '').toLowerCase() === 'true' : false) +
+          '</div>' +
+          (isEdit ?
+            '<div style="margin-top:14px;padding-top:10px;border-top:1px dashed #e5e7eb;font-size:12.5px;color:#6b7280;">' +
+              'اعتماد الإنتاج: <b>' + esc(order.production_approval || '—') + '</b> · اعتماد الجودة: <b>' + esc(order.quality_approval || '—') + '</b>' +
+            '</div>' : '') +
+        '</div>' +
+        '<div id="tab-cons" class="mfg-tab-pane" style="display:none;">' +
+          '<b style="color:#166534;font-size:13px;display:block;margin-bottom:8px;">استهلاك الخامات من الدفعات</b>' +
+          '<div id="cons-strip" style="color:#94a3b8;font-size:13px;">اختر الوصفة والكمية…</div>' +
+        '</div>' +
+        '<div id="tab-byproducts" class="mfg-tab-pane" style="display:none;">' +
+          '<div style="display:flex;justify-content:flex-end;margin-bottom:8px;">' +
+            '<button type="button" class="btn btn-outline" onclick="MFG_PAGE.addByproduct()">+ منتج ثانوي</button></div>' +
+          '<div id="byproducts-body"><p class="vf-text-muted">احفظ الأمر أولاً ثم أضف المنتجات الثانوية.</p></div>' +
+        '</div>' +
+        '<div id="tab-workops" class="mfg-tab-pane" style="display:none;">' +
+          '<div style="display:flex;justify-content:flex-end;margin-bottom:8px;">' +
+            '<button type="button" class="btn btn-outline" onclick="MFG_PAGE.addWorkOp()">+ عملية تشغيل</button></div>' +
+          '<div id="workops-body"><p class="vf-text-muted">احفظ الأمر أولاً ثم أضف ورديات التشغيل.</p></div>' +
+        '</div>';
+
+      UIC.openModal('mfg-modal', { title: isEdit ? 'تعديل أمر تصنيع' : 'أمر تصنيع جديد', body: body, footer: false });
+      var modal = document.getElementById('mfg-modal');
+      if (modal) { var box = modal.querySelector('.modal'); if (box) box.style.maxWidth = '1200px'; }
+
+      var foot = document.createElement('div');
+      foot.style.cssText = 'display:flex;justify-content:flex-end;gap:10px;padding:14px 20px;border-top:1px solid #e5e7eb;';
+      foot.innerHTML =
+        '<button class="btn btn-outline" onclick="UIC.closeModal(\'mfg-modal\')">إلغاء</button>' +
+        '<button class="btn btn-primary" onclick="UI.submitOnce(this, MFG_PAGE.save)">💾 حفظ</button>';
+      modal.querySelector('.modal').appendChild(foot);
+
+      MFG_OUTPUTS = [];
+      OUTPUT_FOOTERS = {};
+      CONSUMPTION_DRAFT = existingConsumption ? existingConsumption.slice() : [];
+
+      /* load existing outputs with footers */
+      if (isEdit && existingOutputs && existingOutputs.length) {
+        existingOutputs.forEach(function (o) {
+          addOutput({ product_id: o.product_id, qty: o.product_qty, unique_id: o.unique_id, footer_rows: o.footers || [] });
+        });
+      }
+
+      /* wire recipe/qty change hooks */
+      var rec3 = document.getElementById('f-recipe');
+      if (rec3) rec3.addEventListener('change', function () { MFG_PAGE.onRecipeChange(); });
+      var mq3 = document.getElementById('f-manufactured');
+      if (mq3) mq3.addEventListener('input', function () { MFG_PAGE.onQtyChange(); });
+
+      if (isEdit) {
+        if (existingConsumption && existingConsumption.length) renderConsumptionStrip();
+        loadByproductsTab(isEdit ? order.unique_id : '');
+        loadWorkOpsTab(isEdit ? order.unique_id : '');
+      }
+    }
+
+    function switchTab(paneId) {
+      ['tab-main-extra', 'tab-cons', 'tab-workops', 'tab-byproducts', 'tab-outputs'].forEach(function (id) {
+        var el = document.getElementById(id);
+        if (el) el.style.display = (id === paneId) ? '' : 'none';
+      });
+    }
+
+    function selList_(list) { return (list || []).map(function (v) { return { value: v, label: v }; }); }
+    function getV_(id) { var el = document.getElementById(id); return el ? el.value.trim() : ''; }
+    function checkboxField(key, label, checked) {
+      return '<label style="display:flex;align-items:center;gap:8px;margin-top:22px;font-size:14px;">' +
+        '<input type="checkbox" id="' + key + '"' + (checked ? ' checked' : '') + '> ' + label + '</label>';
+    }
+
+    /* ---------- OUTPUTS with footer child table ---------- */
+    var MFG_OUTPUTS = [];
+    var OUTPUT_FOOTERS = {};
+
+    function addOutput(pre) {
+      pre = pre || {};
+      var idx = MFG_OUTPUTS.length;
+      MFG_OUTPUTS.push({ product_id: pre.product_id != null ? String(pre.product_id) : '', qty: pre.qty != null ? pre.qty : '', uid: pre.unique_id || '' });
+      OUTPUT_FOOTERS[idx] = (pre.footer_rows || []).map(function (f) {
+        return { item: String(f.item || '').trim(), qty: f.qty != null ? f.qty : '', unique_id: f.unique_id || '' };
+      });
+      drawOutputs();
+    }
+
+    function removeOutput(i) {
+      MFG_OUTPUTS.splice(i, 1);
+      delete OUTPUT_FOOTERS[i];
+      var newF = {};
+      MFG_OUTPUTS.forEach(function (_, ni) { if (OUTPUT_FOOTERS[i + ni] !== undefined) newF[ni] = OUTPUT_FOOTERS[i + ni]; });
+      OUTPUT_FOOTERS = newF;
+      drawOutputs();
+    }
+
+    function drawOutputs() {
+      var tb = document.getElementById('outputs-body');
+      if (!tb) return;
+      if (!MFG_OUTPUTS.length) { addOutput(null); return; }
+      var html = '';
+      MFG_OUTPUTS.forEach(function (o, i) {
+        var footerRows = OUTPUT_FOOTERS[i] || [];
+        var footerHtml = footerRows.map(function (f, fi) {
+          return '<tr><td>' + UIC.combo({ key: 'ft-item-' + i + '-' + fi, options: PRODUCT_OPTIONS, value: f.item, placeholder: 'ابحث…' }) + '</td>' +
+            '<td><input id="ft-qty-' + i + '-' + fi + '" class="input" type="number" min="0" step="0.01" value="' + (f.qty || '') + '" style="max-width:100px;"></td>' +
+            '<td><button type="button" class="btn btn-outline" style="padding:2px 6px;color:#dc2626;font-size:10px;" onclick="MFG_PAGE.removeFooterRow(' + i + ',' + fi + ')">✕</button></td></tr>';
+        }).join('');
+        html += '<div style="border:1px solid #e5e7eb;border-radius:8px;margin-bottom:8px;overflow:hidden;">' +
+          '<div style="display:grid;grid-template-columns:1fr 120px 40px;gap:8px;padding:10px;background:#f0fdf4;align-items:center;">' +
+            '<div>' + UIC.combo({ key: 'out-prod-' + i, options: PRODUCT_OPTIONS, value: o.product_id, placeholder: 'ابحث عن منتج…' }) + '</div>' +
+            '<div><input id="out-qty-' + i + '" class="input" type="number" min="0.01" step="0.01" value="' + (o.qty || '') + '" placeholder="الكمية" oninput="MFG_PAGE.recalc()"></div>' +
+            '<div><button type="button" class="btn btn-outline" style="padding:3px 8px;color:#dc2626;" onclick="MFG_PAGE.removeOutput(' + i + ')">✕</button></div>' +
+          '</div>' +
+          '<div style="padding:8px 10px;border-top:1px dashed #e5e7eb;background:#fafafa;">' +
+            '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">' +
+              '<span style="font-size:11px;color:#6b7280;">🧪 المواد المستهلكة لهذا المنتج</span>' +
+              (CAN_WRITE ? '<button type="button" class="btn btn-outline" style="padding:1px 6px;font-size:10px;" onclick="MFG_PAGE.addFooterRow(' + i + ')">+ صنف</button>' : '') +
+            '</div>' +
+            (footerRows.length ?
+              '<table class="table" style="margin:0;font-size:12px;"><thead><tr><th>الصنف</th><th style="width:100px;">الكمية</th><th style="width:30px;"></th></tr></thead><tbody>' + footerHtml + '</tbody></table>' :
+              '<div style="text-align:center;color:#94a3b8;font-size:11px;padding:4px;">لا توجد أصناف مسجلة</div>') +
+          '</div>' +
+        '</div>';
+      });
+      tb.innerHTML = html;
+    }
+
+    function addFooterRow(outputIdx) {
+      if (!OUTPUT_FOOTERS[outputIdx]) OUTPUT_FOOTERS[outputIdx] = [];
+      OUTPUT_FOOTERS[outputIdx].push({ item: '', qty: '' });
+      drawOutputs();
+    }
+
+    function removeFooterRow(outputIdx, footerIdx) {
+      if (OUTPUT_FOOTERS[outputIdx]) OUTPUT_FOOTERS[outputIdx].splice(footerIdx, 1);
+      drawOutputs();
+    }
+
+    /* ---------- RECIPE-DRIVEN CONSUMPTION ---------- */
+    var CONSUMPTION_DRAFT = [];   /* [{item_pid, lot, batch_uid, qty}] */
+
+    function onRecipeChange(skipAuto) {
+      var recipeUid = getV_('f-recipe');
+      var qty = num0(getV_('f-manufactured'));
+      if (!recipeUid || qty <= 0) return;
+      if (!skipAuto) {
+        UI.showSpinner();
+        companyCall('get_valley_recipe_consumption', { recipe_uid: recipeUid, qty: qty })
+          .then(function (r) {
+            CONSUMPTION_DRAFT = (r.materials || []).map(function (m) {
+              return { item_pid: m.raw_material_id, raw_name: m.raw_material_name, required: m.required_qty };
+            });
+            renderConsumptionStrip();
+          })
+          .catch(function (e) { UIC.toast((e && e.message) || 'خطأ في جلب الوصفة', 'error'); })
+          .finally(function () { UI.hideSpinner(); });
+      }
+    }
+
+    function onQtyChange() {
+      var recipeUid = getV_('f-recipe');
+      var qty = num0(getV_('f-manufactured'));
+      if (!recipeUid || qty <= 0 || !CONSUMPTION_DRAFT.length) return;
+      /* re-scale existing draft proportionally to the new quantity */
+      companyCall('get_valley_recipe_consumption', { recipe_uid: recipeUid, qty: qty })
+        .then(function (r) {
+          var byPid = {};
+          (r.materials || []).forEach(function (m) { byPid[m.raw_material_id] = m.required_qty; });
+          CONSUMPTION_DRAFT.forEach(function (c) {
+            if (byPid[c.item_pid] != null) c.required = byPid[c.item_pid];
+          });
+          renderConsumptionStrip();
+        })
+        .catch(function () {});
+    }
+
+    function renderConsumptionStrip() {
+      var strip = document.getElementById('cons-strip');
+      if (!strip) return;
+      if (!CONSUMPTION_DRAFT.length) {
+        strip.innerHTML = 'الوصفة لا تحتوي مواد خام.';
+        return;
+      }
+      var html = '';
+      CONSUMPTION_DRAFT.forEach(function (c, i) {
+        html += '<div style="border-bottom:1px dashed #e5e7eb;padding:8px 0;">' +
+          '<div style="font-weight:700;font-size:13px;margin-bottom:6px;">🧪 ' + esc(c.raw_name || c.item_pid) +
+          ' — المطلوب: <span style="direction:ltr;display:inline-block;">' + Number(c.required).toLocaleString('en-US', { maximumFractionDigits: 2 }) + '</span>' +
+          ' <span id="cons-sum-' + i + '" style="font-weight:800;"></span></div>' +
+          '<div id="cons-batches-' + i + '">جاري تحميل الدفعات...</div>' +
+        '</div>';
+        loadBatchesForCons(i, c);
+      });
+    }
+
+    function loadBatchesForCons(i, consItem) {
+      companyCall('get_valley_product_batches', { product_id: consItem.item_pid, exclude_invoice_unique_id: '' })
+        .then(function (r) {
+          var holder = document.getElementById('cons-batches-' + i);
+          if (!holder) return;
+          var batches = (r.batches || []).filter(function (b) { return b.available > 0; });
+          if (!batches.length) { holder.innerHTML = '<span style="color:#d97706;">لا توجد دفعات متاحة لهذه الخامة.</span>'; return; }
+          var html = '<table class="table" style="margin:0;"><thead><tr><th>الدفعة</th><th>المتاح</th><th style="width:140px;">الكمية المستهلكة</th></tr></thead><tbody>';
+          batches.forEach(function (b, bi) {
+            html += '<tr><td><b>' + esc(b.lot) + '</b></td>' +
+              '<td class="num">' + Number(b.available).toLocaleString('en-US', { maximumFractionDigits: 2 }) + '</td>' +
+              '<td><input id="cons-q-' + i + '-' + bi + '" class="input" type="number" min="0" max="' + b.available + '" step="0.01" data-buid="' + esc(b.batch_uid) + '" data-pid="' + esc(consItem.item_pid) + '" data-lot="' + esc(b.lot) + '" value="" oninput="MFG_PAGE.recalcCons()" style="max-width:130px;direction:ltr;"></td></tr>';
+          });
+          html += '</tbody></table>';
+          holder.innerHTML = html;
+        })
+        .catch(function () { holder.innerHTML = '<span style="color:red;">خطأ في تحميل الدفعات</span>'; });
+    }
+
+    function recalcCons() {
+      CONSUMPTION_DRAFT.forEach(function (c, i) {
+        var sumEl = document.getElementById('cons-sum-' + i);
+        if (!sumEl) return;
+        var s2 = 0;
+        for (var j = 0; ; j++) {
+          var qEl = document.getElementById('cons-q-' + i + '-' + j);
+          if (!qEl) break;
+          s2 += parseFloat(qEl.value) || 0;
+        }
+        var needed = Number(c.required) || 0;
+        sumEl.textContent = '(' + Number(s2.toFixed(2)) + ' / ' + Number(needed.toFixed(2)) + ')';
+        sumEl.style.color = Math.abs(s2 - needed) < 0.0001 ? '#059669' : '#dc2626';
+      });
+    }
+
+    function collectConsumption() {
+      var out = [];
+      CONSUMPTION_DRAFT.forEach(function (_, i) {
+        for (var j = 0; ; j++) {
+          var qEl = document.getElementById('cons-q-' + i + '-' + j);
+          if (!qEl) break;
+          var q = parseFloat(qEl.value) || 0;
+          if (q > 0) out.push({
+            batch_uid: qEl.getAttribute('data-buid'),
+            item_pid: qEl.getAttribute('data-pid'),
+            lot: qEl.getAttribute('data-lot'),
+            qty: q
+          });
+        }
+      });
+      return out;
+    }
+
+    function save() {
+      if (!UIC.validateForm('mfg-form')) return;
+      var outputs = MFG_OUTPUTS.map(function (o, i) {
+        var el = document.getElementById('out-prod-' + i);
+        var qEl = document.getElementById('out-qty-' + i);
+        var footers = (OUTPUT_FOOTERS[i] || []).map(function (f, fi) {
+          var fItem = document.getElementById('ft-item-' + i + '-' + fi);
+          var fQty = document.getElementById('ft-qty-' + i + '-' + fi);
+          return { item: fItem ? fItem.value : '', qty: fQty ? fQty.value : '' };
+        }).filter(function (f) { return f.item; });
+        return { product_id: el ? el.value : '', qty: qEl ? qEl.value : '', footers: footers };
+      }).filter(function (o) { return o.product_id && num0(o.qty) > 0; });
+      if (!outputs.length) { UIC.toast('أضف منتج ناتج واحد على الأقل', 'error'); return; }
+
+      var payload = {
+        mo_uid: EDIT_MO_UID(),
+        manufacture_date: getV_('f-date'),
+        operation_type: getCombo_('f-op-type'),
+        shift: getCombo_('f-shift'),
+        produced_product_id: getCombo_('f-product'),
+        expected_qty: getV_('f-expected'),
+        manufactured_qty: getV_('f-manufactured'),
+        actual_qty: getV_('f-actual'),
+        recipe_id: getCombo_('f-recipe'),
+        mo_status: getHid_('f-status'),
+        outputs: outputs,
+        consumption: collectConsumption()
+      };
+      UI.showSpinner();
+      companyCall('save_valley_mfg_order', payload)
+        .then(function (r) {
+          UIC.closeModal('mfg-modal');
+          UIC.toast((r && r.message) || 'تم الحفظ بنجاح', 'success');
+          load();
+        })
+        .catch(function (e) { UIC.toast((e && e.message) || 'فشل الحفظ', 'error'); })
+        .finally(function () { UI.hideSpinner(); });
+    }
+
+    function EDIT_MO_UID() { var el = document.getElementById('f-mo-uid'); return el ? el.value.trim() : ''; }
+    function getCombo_(id) { var el = document.getElementById(id); return el ? el.value : ''; }
+    function getHid_(id) { var el = document.getElementById(id); return el ? el.value.trim() : ''; }
+
+    function openDetail(moUid) {
+      window.open(scriptUrl + '?action=vf_mfg_order&mo=' + encodeURIComponent(moUid) + '&sessionToken=' + SESSION_TOKEN, '_blank');
+    }
+
+    function openNewPage() {
+      window.open(scriptUrl + '?action=vf_mfg_order&new=1&sessionToken=' + SESSION_TOKEN, '_blank');
+    }
+
+    function changeStatus(moUid, kind) {
+      if (kind === 'lock' && !confirm('قفل الأمر سيجعله غير قابل للتعديل إلا بصلاحية مدير النظام. متابعة؟')) return;
+      if (kind === 'unlock' && !confirm('فتح القفل سيعيد الأمر إلى «قيد التنفيذ». متابعة؟')) return;
+      UI.showSpinner();
+      companyCall('change_valley_mfg_status', { mo_uid: moUid, kind: kind })
+        .then(function (r) { UIC.toast((r && r.message) || 'تم', 'success'); load(); })
+        .catch(function (e) { UIC.toast((e && e.message) || 'فشل', 'error'); })
+        .finally(function () { UI.hideSpinner(); });
+    }
+
+    function removeMo(moUid) {
+      if (!confirm('سيتم حذف أمر التصنيع وبنوده واستهلاكاته نهائياً. متابعة؟')) return;
+      UI.showSpinner();
+      companyCall('delete_valley_mfg_order', { mo_uid: moUid })
+        .then(function (r) { UIC.toast((r && r.message) || 'تم الحذف', 'success'); load(); })
+        .catch(function (e) { UIC.toast((e && e.message) || 'فشل الحذف', 'error'); })
+        .finally(function () { UI.hideSpinner(); });
+    }
+
+    function fmtNumP2(n) { return Number(n || 0).toLocaleString('en-US', { maximumFractionDigits: 2 }); }
+
+    /* ---------- BY-PRODUCTS (tab loader) ---------- */
+    function loadByproductsTab(moUid) {
+      var holder = document.getElementById('byproducts-body');
+      if (!holder) return;
+      companyCall('get_valley_mfg_byproducts', { mo_uid: moUid })
+        .then(function (r) {
+          window.__BP_OPTIONS = (r.product_options || []).map(function (o) { return { value: String(o.value), label: o.label }; });
+          var rowsHtml = (r.byproducts || []).map(function (b) {
+            var nm = '';
+            window.__BP_OPTIONS.forEach(function (o) { if (String(o.value) === String(b.item)) nm = o.label; });
+            return '<tr><td>' + esc(nm || b.item) + '</td><td class="num">' + Number(b.qty || 0).toLocaleString('en-US') + '</td><td>' + esc(b.transaction_code || '-') + '</td><td class="num">' + Number(b.total_cost || 0).toLocaleString('en-US') + '</td></tr>';
+          }).join('');
+          var form = CAN_WRITE ? '<form id="bp-form"><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;align-items:flex-end;">' +
+            UIC.combo({ key: 'bp-item', label: 'المنتج الثانوي', required: true, options: window.__BP_OPTIONS, placeholder: 'اكتب للبحث…' }) +
+            UIC.field({ key: 'bp-qty', label: 'الكمية', type: 'number', required: true, min: '0.01', step: '0.01' }) +
+            UIC.field({ key: 'bp-lot', label: 'كود الدفعة', type: 'text' }) +
+            UIC.field({ key: 'bp-cost', label: 'التكلفة', type: 'number', min: '0', step: '0.01' }) +
+            '</div><input type="hidden" id="bp-mo-uid" value="' + esc(moUid) + '"></form>' : '';
+          holder.innerHTML = '<div style="overflow-x:auto;"><table class="table"><thead><tr><th>المنتج</th><th>الكمية</th><th>الدفعة</th><th>التكلفة</th></tr></thead><tbody>' +
+            (rowsHtml || '<tr><td colspan="4" style="text-align:center;color:#94a3b8;">لا يوجد منتجات ثانوية</td></tr>') +
+            '</tbody></table></div>' + form;
+        })
+        .catch(function () { holder.innerHTML = '<p style="color:red;">خطأ في التحميل</p>'; });
+    }
+
+    function addByproduct() {
+      if (!UIC.validateForm('bp-form')) return;
+      UI.showSpinner();
+      companyCall('add_valley_mfg_byproduct', { mo_uid: getHid_('bp-mo-uid'), item: getCombo_('bp-item'), qty: getVal_('bp-qty'), batch_code: getV_('bp-lot'), total_cost: getV_('bp-cost') })
+        .then(function (r) {
+          UIC.toast((r && r.message) || 'تمت الإضافة', 'success');
+          if (r && r.record) {
+            try {
+              var holder = document.getElementById('byproducts-body');
+              if (holder && holder.querySelector('tbody')) {
+                var nm = r.record.product_name || r.record.item;
+                var newRow = '<tr><td>' + nm + '</td><td class="num">' + (r.record.qty||0) + '</td><td>' + (r.record.transaction_code||'-') + '</td><td class="num">' + (r.record.total_cost||0) + '</td></tr>';
+                var tbody = holder.querySelector('tbody');
+                if (tbody) tbody.insertAdjacentHTML('afterbegin', newRow);
+                var rows = tbody.querySelectorAll('tr');
+                if (rows.length>15) rows[rows.length-1].remove();
+                var qEl = document.getElementById('bp-qty'); if(qEl) qEl.value='';
+                return;
+              }
+            } catch(e){}
+            loadByproductsTab(getHid_('bp-mo-uid'));
+          } else { loadByproductsTab(getHid_('bp-mo-uid')); }
+        })
+        .catch(function (e) { UIC.toast((e && e.message) || 'فشل', 'error'); })
+        .finally(function () { UI.hideSpinner(); });
+    }
+
+    /* ---------- WORK OPS (tab loader) ---------- */
+    var _workopTimers = {};
+
+    function loadWorkOpsTab(moUid) {
+      var holder = document.getElementById('workops-body');
+      if (!holder) return;
+      Object.keys(_workopTimers).forEach(function (k) { clearInterval(_workopTimers[k]); delete _workopTimers[k]; });
+      companyCall('get_valley_mfg_workops', { mo_uid: moUid })
+        .then(function (r) {
+          window.__WC_OPTIONS = r.work_center_options || [];
+          var rowsHtml = (r.workops || []).map(function (w) {
+            var pill = UIC.statusPill(w.operation_status, w.operation_status === 'Done' ? 'success' : 'neutral');
+            var buttons = '';
+            if (CAN_WRITE && w.operation_status !== 'Done') {
+              if (w.operation_status === 'Pending') {
+                buttons = '<button class="btn btn-primary" style="padding:2px 8px;font-size:10px;" onclick="MFG_PAGE.startWorkOp(\'' + esc(w.unique_id) + '\')">▶️ بدء</button>';
+              } else if (w.operation_status === 'In Progress') {
+                buttons = '<button class="btn btn-outline" style="padding:2px 8px;font-size:10px;color:#d97706;" onclick="MFG_PAGE.pauseWorkOp(\'' + esc(w.unique_id) + '\')">⏸️ إيقاف مؤقت</button> ' +
+                  '<button class="btn btn-outline" style="padding:2px 8px;font-size:10px;color:#dc2626;" onclick="MFG_PAGE.stopWorkOp(\'' + esc(w.unique_id) + '\')">⏹️ إنهاء</button>';
+              } else if (w.operation_status === 'Paused') {
+                buttons = '<button class="btn btn-primary" style="padding:2px 8px;font-size:10px;" onclick="MFG_PAGE.resumeWorkOp(\'' + esc(w.unique_id) + '\')">▶️ استئناف</button> ' +
+                  '<button class="btn btn-outline" style="padding:2px 8px;font-size:10px;color:#dc2626;" onclick="MFG_PAGE.stopWorkOp(\'' + esc(w.unique_id) + '\')">⏹️ إنهاء</button>';
+              }
+            }
+            var timerCell = '';
+            if (w.operation_status === 'In Progress' && w.start_time) {
+              timerCell = '<span id="timer-' + esc(w.unique_id) + '" class="timer-live" data-start="' + esc(w.start_time) + '" data-pause="' + esc(w.last_pause_time || '') + '" data-pause-dur="' + num0(w.total_pause_duration) + '"></span>';
+            } else if (w.operation_status === 'Paused') {
+              timerCell = '<span style="color:#d97706;font-weight:700;">⏸ موقوف</span>';
+            }
+            var manualBtn = '';
+            if (CAN_WRITE && w.operation_status !== 'Done') {
+              manualBtn = '<button class="btn btn-outline" style="padding:2px 6px;font-size:9px;" onclick="MFG_PAGE.toggleWorkOpManualEdit(\'' + esc(w.unique_id) + '\')">✏️</button>';
+            }
+            return '<tr id="wo-row-' + esc(w.unique_id) + '">' +
+              '<td>' + Number(w.work_center_sequence || 0) + '</td>' +
+              '<td>' + esc(wcLabel_(w.work_center_id)) + '</td>' +
+              '<td>' + pill + '</td>' +
+              '<td class="wo-start-cell" style="direction:ltr;font-size:11px;">' + esc(fmtDateTime_(w.start_time)) + ' ' + manualBtn + '</td>' +
+              '<td class="wo-end-cell" style="direction:ltr;font-size:11px;">' + esc(fmtDateTime_(w.end_time)) + '</td>' +
+              '<td class="num">' + timerCell + (w.actual_hours !== '' && w.actual_hours != null ? ' ' + esc(w.actual_hours) + 'h' : '') + '</td>' +
+              '<td style="font-size:11px;">' + esc(w.notes || '-') + '</td>' +
+              '<td>' + buttons + '</td>' +
+              '</tr>';
+          }).join('');
+          var form = CAN_WRITE ? '<form id="workops-form"><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;align-items:flex-end;background:#f8fafc;border-radius:8px;padding:12px;border:1px solid #e5e7eb;">' +
+            UIC.combo({ key: 'wo-wc', label: 'مركز العمل', required: true, options: window.__WC_OPTIONS, placeholder: 'اكتب للبحث…' }) +
+            UIC.field({ key: 'wo-notes', label: 'ملاحظات', type: 'text' }) +
+            '</div><input type="hidden" id="wo-mo-uid" value="' + esc(moUid) + '"></form>' : '';
+          holder.innerHTML = '<div style="overflow-x:auto;"><table class="table"><thead><tr><th>#</th><th>مركز العمل</th><th>الحالة</th><th>البداية</th><th>النهاية</th><th>الساعات</th><th>ملاحظات</th><th></th></tr></thead><tbody>' +
+            (rowsHtml || '<tr><td colspan="8" style="text-align:center;color:#94a3b8;">لا توجد عمليات تشغيل</td></tr>') +
+            '</tbody></table></div>' + form;
+          startAllTimers();
+        })
+        .catch(function () { holder.innerHTML = '<p style="color:red;">خطأ في التحميل</p>'; });
+    }
+
+    function startAllTimers() {
+      document.querySelectorAll('.timer-live').forEach(function (el) {
+        var uid = el.id.replace('timer-', '');
+        var startStr = el.getAttribute('data-start');
+        var pauseStr = el.getAttribute('data-pause');
+        var pauseDur = parseFloat(el.getAttribute('data-pause-dur')) || 0;
+        if (!startStr) return;
+        function tick() {
+          var now = new Date();
+          var start = new Date(startStr);
+          var elapsed = (now.getTime() - start.getTime()) / 3600000 - pauseDur;
+          if (elapsed < 0) elapsed = 0;
+          var h = Math.floor(elapsed);
+          var m = Math.floor((elapsed - h) * 60);
+          el.textContent = h + 'h ' + m + 'm';
+        }
+        tick();
+        _workopTimers[uid] = setInterval(tick, 30000);
+      });
+    }
+
+    function controlWorkOp_(workopUid, cmd) {
+      UI.showSpinner();
+      companyCall('control_valley_mfg_workop', { workop_uid: workopUid, command: cmd })
+        .then(function (r) { UIC.toast((r && r.message) || 'تم', 'success'); loadWorkOpsTab(getHid_('wo-mo-uid')); })
+        .catch(function (e) { UIC.toast((e && e.message) || 'فشل', 'error'); })
+        .finally(function () { UI.hideSpinner(); });
+    }
+    function startWorkOp(uid) { controlWorkOp_(uid, 'start'); }
+    function pauseWorkOp(uid) { controlWorkOp_(uid, 'pause'); }
+    function resumeWorkOp(uid) { controlWorkOp_(uid, 'resume'); }
+    function stopWorkOp(uid) { if (!confirm('إنهاء العملية؟')) return; controlWorkOp_(uid, 'stop'); }
+
+    function toggleWorkOpManualEdit(uid) {
+      var row = document.getElementById('wo-row-' + uid);
+      if (!row) return;
+      var startCell = row.querySelector('.wo-start-cell');
+      var endCell = row.querySelector('.wo-end-cell');
+      if (!startCell || !endCell) return;
+      if (startCell.querySelector('input')) {
+        var sv = startCell.querySelector('input').value;
+        var ev = endCell.querySelector('input').value;
+        var payload = { workop_uid: uid, mo_uid: getHid_('wo-mo-uid'), operation_status: 'In Progress', start_time: sv, end_time: ev, actual_hours: '', notes: '' };
+        UI.showSpinner();
+        companyCall('save_valley_mfg_workop', payload)
+          .then(function (r) { UIC.toast('تم الحفظ', 'success'); loadWorkOpsTab(getHid_('wo-mo-uid')); })
+          .catch(function (e) { UIC.toast((e && e.message) || 'فشل', 'error'); })
+          .finally(function () { UI.hideSpinner(); });
+      } else {
+        var origStart = startCell.textContent.trim();
+        var origEnd = endCell.textContent.trim();
+        startCell.innerHTML = '<input type="datetime-local" class="input" value="' + toLocalDT_(origStart) + '" style="font-size:11px;">';
+        endCell.innerHTML = '<input type="datetime-local" class="input" value="' + toLocalDT_(origEnd) + '" style="font-size:11px;">';
+      }
+    }
+
+    function toLocalDT_(display) {
+      if (!display || display === '-') return '';
+      var parts = display.match(/(\d{2})\/(\d{2})\/(\d{4})\s+(\d{2}):(\d{2})/);
+      if (!parts) return '';
+      return parts[3] + '-' + parts[2] + '-' + parts[1] + 'T' + parts[4] + ':' + parts[5];
+    }
+
+    function saveWorkOpManual() { toggleWorkOpManualEdit(''); }
+
+    function addWorkOp() {
+      if (!UIC.validateForm('workops-form')) return;
+      UI.showSpinner();
+      companyCall('save_valley_mfg_workop', { mo_uid: getHid_('wo-mo-uid'), work_center_id: getCombo_('wo-wc'), operation_status: 'Pending', notes: getV_('wo-notes') })
+        .then(function (r) { UIC.toast((r && r.message) || 'تم الحفظ', 'success'); loadWorkOpsTab(getHid_('wo-mo-uid')); })
+        .catch(function (e) { UIC.toast((e && e.message) || 'فشل', 'error'); })
+        .finally(function () { UI.hideSpinner(); });
+    }
+
+    function wcLabel_(idRef) {
+      var f = (window.__WC_OPTIONS || []).filter(function (o) { return String(o.value) === String(idRef); })[0];
+      return f ? f.label : (idRef || '-');
+    }
+    function fmtDateTime_(v) {
+      if (!v) return '-';
+      var d = (v instanceof Date) ? v : new Date(v);
+      if (isNaN(d.getTime())) return String(v);
+      var p = function (n) { return n < 10 ? '0' + n : '' + n; };
+      return p(d.getDate()) + '/' + p(d.getMonth() + 1) + '/' + d.getFullYear() + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+    }
+
+    function recalc() {
+      var net = 0, taxV = 0;
+      for (var i = 0; i < MFG_OUTPUTS.length; i++) {
+        var qEl = document.getElementById('out-qty-' + i);
+        var pEl = document.getElementById('out-prod-' + i);
+        if (!qEl || !pEl) continue;
+        var qty = parseFloat(qEl.value) || 0;
+        /* outputs don't have per-row price/tax in MO — just count */
+      }
+      /* placeholder: MO totals are computed server-side on save */
+    }
+
+    window.MFG_PAGE = {
+      tabBtn: tabBtn,
+      openDetail: openDetail, openNewPage: openNewPage, save: save,
+      changeStatus: changeStatus, remove: removeMo,
+      switchTab: function (paneId) {
+        ['tab-main-extra', 'tab-cons', 'tab-workops', 'tab-byproducts', 'tab-outputs'].forEach(function (id) {
+          var el = document.getElementById(id);
+          if (el) el.style.display = (id === paneId) ? '' : 'none';
+        });
+      },
+      addByproduct: addByproduct,
+      addWorkOp: addWorkOp,
+      startWorkOp: startWorkOp, pauseWorkOp: pauseWorkOp, resumeWorkOp: resumeWorkOp, stopWorkOp: stopWorkOp,
+      toggleWorkOpManualEdit: toggleWorkOpManualEdit, saveWorkOpManual: saveWorkOpManual,
+      addOutput: addOutput, removeOutput: removeOutput,
+      addFooterRow: addFooterRow, removeFooterRow: removeFooterRow,
+      onRecipeChange: onRecipeChange, onQtyChange: onQtyChange, onProductChange: function () {},
+      recalc: recalc, recalcCons: recalcCons
+    };
+
+    document.addEventListener('DOMContentLoaded', renderApp);
+  })();
+  </script>
+</body>
+</html>
+
+

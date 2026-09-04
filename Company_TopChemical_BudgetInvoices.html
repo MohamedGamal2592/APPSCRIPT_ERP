@@ -1,0 +1,541 @@
+﻿<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="description" content="الفواتير الضريبية — توب كيميكال">
+  <title>الفواتير الضريبية</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_TopChemical_Nav'); ?>
+  <?!= getCompanyThemeCSS_('3fe1b5cb67b7223e') ?>
+  <style>
+    .filter-bar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+      margin-bottom: 16px;
+      background: var(--bg-surface);
+      padding: 14px 16px;
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-lg);
+      box-shadow: var(--shadow-sm);
+    }
+    .filter-item {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .filter-label {
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--text-muted);
+    }
+  </style>
+</head>
+<body>
+<div id="tc-root" dir="rtl"></div>
+<script>
+  var params = new URLSearchParams(window.location.search);
+  var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+  var scriptUrl = window.scriptUrl || '/';
+  var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+  var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('3fe1b5cb67b7223e') ?>';
+  var COMPANY_PAGES = <?!= companyPages ?>;
+  var CURRENT_ACTION = '<?!= currentAction ?>';
+  var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+  var CAN_WRITE = UIC.canAdd_(); var CAN_FULL = UIC.canFull_();
+  var MONTHS = ['', 'يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو', 'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر'];
+  
+  var FILTER = {
+    month: '',
+    year: '',
+    fromDate: '',
+    toDate: '',
+    search: '',
+    offset: 0,
+    limit: 200
+  };
+  var LAST = { total: 0, years: [], items: [] };
+  var REFS = null;
+
+  function companyCall(moduleAction, data) {
+    return API.call('company_action', {
+      target_system: '3fe1b5cb67b7223e',
+      module_action: moduleAction,
+      data: data || {}
+    }, SESSION_TOKEN);
+  }
+
+  function pad(n) { return n < 10 ? '0' + n : String(n); }
+  function todayStr() {
+    var d = new Date();
+    return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+  }
+
+  function normalizeDate(d) {
+    if (!d) return '';
+    if (d instanceof Date) {
+      return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+    }
+    var s = String(d).trim();
+    if (!s) return '';
+    var mIso = s.match(/^\d{4}[-\/](\d{1,2})[-\/](\d{1,2})$/);
+    if (mIso) {
+      return mIso[1] + '-' + pad(Number(mIso[2])) + '-' + pad(Number(mIso[3]));
+    }
+    var mDm = s.match(/^(\d{1,2})[-\/](\d{1,2})[-\/](\d{4})$/);
+    if (mDm) {
+      return mDm[3] + '-' + pad(Number(mDm[2])) + '-' + pad(Number(mDm[1]));
+    }
+    var dt = new Date(s);
+    if (!isNaN(dt.getTime())) {
+      return dt.getFullYear() + '-' + pad(dt.getMonth() + 1) + '-' + pad(dt.getDate());
+    }
+    return s;
+  }
+
+  function load() {
+    UIC.appShell('tc-root', {
+      companyLogoUrl: COMPANY_LOGO_URL,
+      companyLogoHref: scriptUrl + '?action=tc_dashboard&sessionToken=' + SESSION_TOKEN,
+      companyLogoTitle: 'توب كيميكال',
+      breadcrumb: 'توب كيميكال / حسابات الميزانية / الفواتير الضريبية',
+      contentId: 'budget-invoices-content',
+      menuGroups: (window.TOPCHEMICAL_MENU || [])
+    });
+    UI.showSpinner('جاري تحميل البيانات...');
+    companyCall('get_budget_refs')
+      .then(function (r) {
+        REFS = r.refs || {};
+        // Build hash index for repeated transaction_code lookups (Part 2 fix)
+        try {
+          REFS.current_products_by_code = {};
+          (REFS.current_products || []).forEach(function (c) {
+            REFS.current_products_by_code[String(c.transaction_code)] = c;
+          });
+          REFS.products_by_name = {};
+          (REFS.products || []).forEach(function (p) {
+            REFS.products_by_name[String(p.name_ar)] = p;
+          });
+        } catch(e){}
+        fetchInvoices();
+      })
+      .catch(function (e) {
+        UI.hideSpinner(); try{schedulePrefetch();}catch(e){}
+        showError(e);
+      });
+  }
+
+  function fetchInvoices() {
+    UI.showSpinner('جاري جلب الفواتير...');
+    Promise.all([
+      companyCall('get_legal_invoices', {
+        month: FILTER.month ? Number(FILTER.month) : '',
+        year: FILTER.year ? Number(FILTER.year) : '',
+        from_date: FILTER.fromDate,
+        to_date: FILTER.toDate,
+        search: FILTER.search,
+        offset: FILTER.offset,
+        limit: FILTER.limit
+      }),
+      companyCall('get_legal_cash', {
+        offset: 0,
+        limit: 10000
+      })
+    ])
+      .then(function (results) {
+        var invoicesResult = results[0];
+        var cashResult = results[1];
+        
+        LAST.total = invoicesResult.total || 0;
+        LAST.years = invoicesResult.years || [];
+        LAST.items = invoicesResult.items || [];
+        LAST.cashMovements = (cashResult.items || []).map(function(item) {
+          return String(item.invoice_id || '').trim();
+        });
+        
+        // Auto-select latest year on first load if no year is set and no date range is specified
+        if (!FILTER.year && !FILTER.fromDate && !FILTER.toDate && LAST.years.length) {
+          var maxY = 0;
+          LAST.years.forEach(function (y) {
+            var n = Number(y);
+            if (Number.isInteger(n) && n > maxY) maxY = n;
+          });
+          FILTER.year = maxY || LAST.years[LAST.years.length - 1];
+          FILTER.offset = 0;
+          fetchInvoices();
+          return;
+        }
+        renderInvoices(LAST.items, LAST.total);
+      })
+      .catch(function (e) { showError(e); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function taxClassLabel(v) {
+    if (v === '0.05' || v === 0.05) return '5%';
+    if (v === '0.14' || v === 0.14) return '14%';
+    if (v === '0' || v === 0) return '0%';
+    return String(v == null ? '-' : v);
+  }
+
+  function renderInvoices(items, total) {
+    var mOpts = MONTHS.map(function (m, i) {
+      if (!i) return '<option value="">كل الشهور</option>';
+      return '<option value="' + i + '"' + (String(FILTER.month) === String(i) ? ' selected' : '') + '>' + m + '</option>';
+    }).join('');
+
+    var yOpts = '<option value="">كل السنوات</option>' + LAST.years.map(function (y) {
+      return '<option value="' + y + '"' + (String(FILTER.year) === String(y) ? ' selected' : '') + '>' + y + '</option>';
+    }).join('');
+
+    var rows = items.map(function (r) {
+      var invNo = String(r['رقم الفاتورة'] || '').trim();
+      var hasCollection = LAST.cashMovements && LAST.cashMovements.some(function(invoiceId) {
+        return String(invoiceId).trim() === invNo;
+      });
+      var actionBtns = [
+        { label: '🖨️ طباعة', onclick: 'printInvoice(\'' + FMT.escape(invNo) + '\')' }
+      ];
+      if (!hasCollection) {
+        actionBtns.push({ label: 'تحصيل', onclick: 'makeCollectionFromInvoice(\'' + FMT.escape(invNo) + '\')' });
+      }
+
+      return {
+        inv: FMT.escape(invNo || '-'),
+        date: FMT.escape(normalizeDate(r['تاريخ الفاتورة']) || '-'),
+        customer: FMT.escape(r['اسم العميل'] || '-'),
+        product: FMT.escape(r['إسم المنتج'] || '-'),
+        qty: Number(r['كمية المنتج']) || 0,
+        unit_price: Number(r['سعر الوحدة']) || 0,
+        tax_class: FMT.escape(taxClassLabel(r['فئة الضريبة (14%/5%)'])),
+        tax_value: Number(r['قيمة الضريبة']) || 0,
+        net: Number(r['المبلغ الصافي']) || 0,
+        total: Number(r['إجمالي']) || 0,
+        month: FMT.escape(MONTHS[Number(r['الشهر'])] || r['الشهر'] || '-'),
+        year: FMT.escape(r['العام'] || '-'),
+        actions: UIC.actionBtns(actionBtns)
+      };
+    });
+
+    var headers = [
+      { key: 'inv', label: 'رقم الفاتورة' },
+      { key: 'date', label: 'تاريخ الفاتورة' },
+      { key: 'customer', label: 'العميل' },
+      { key: 'product', label: 'المنتج' },
+      { key: 'qty', label: 'الكمية', numeric: true },
+      { key: 'unit_price', label: 'سعر الوحدة', money: true },
+      { key: 'tax_class', label: 'فئة الضريبة' },
+      { key: 'tax_value', label: 'قيمة الضريبة', money: true },
+      { key: 'net', label: 'الصافي', money: true },
+      { key: 'total', label: 'الإجمالي', money: true },
+      { key: 'month', label: 'الشهر' },
+      { key: 'year', label: 'السنة' },
+      { key: 'actions', label: 'إجراءات' }
+    ];
+
+    var page = Math.floor(FILTER.offset / FILTER.limit) + 1;
+    var pages = Math.max(1, Math.ceil(total / FILTER.limit));
+
+    document.getElementById('budget-invoices-content').innerHTML =
+      '<div class="filter-bar">' +
+        '<div class="filter-item">' +
+          '<label class="filter-label" for="inv-from-date">من تاريخ:</label>' +
+          '<input id="inv-from-date" class="input" type="date" style="width:auto;min-height:36px;" onchange="setFilter(\'fromDate\', this.value)" value="' + escHtml(FILTER.fromDate) + '">' +
+        '</div>' +
+        '<div class="filter-item">' +
+          '<label class="filter-label" for="inv-to-date">إلى تاريخ:</label>' +
+          '<input id="inv-to-date" class="input" type="date" style="width:auto;min-height:36px;" onchange="setFilter(\'toDate\', this.value)" value="' + escHtml(FILTER.toDate) + '">' +
+        '</div>' +
+        '<div class="filter-item">' +
+          '<label class="filter-label" for="inv-month">الشهر:</label>' +
+          '<select id="inv-month" class="input" style="width:auto;min-height:36px;" onchange="setFilter(\'month\', this.value)">' + mOpts + '</select>' +
+        '</div>' +
+        '<div class="filter-item">' +
+          '<label class="filter-label" for="inv-year">السنة:</label>' +
+          '<select id="inv-year" class="input" style="width:auto;min-height:36px;" onchange="setFilter(\'year\', this.value)">' + yOpts + '</select>' +
+        '</div>' +
+        '<div class="filter-item" style="flex:1;min-width:180px;">' +
+          '<label class="filter-label" for="inv-search">بحث:</label>' +
+          '<input id="inv-search" class="input" style="width:100%;min-height:36px;" type="search" placeholder="بحث برقم الفاتورة، العميل، المنتج..." onkeyup="setFilter(\'search\', this.value)" value="' + escHtml(FILTER.search) + '">' +
+        '</div>' +
+        '<div style="display:flex;gap:6px;align-items:flex-end;margin-top:auto;">' +
+          '<button class="btn btn-outline" style="min-height:36px;padding:6px 12px;font-size:13px;" onclick="resetFilters()" title="إعادة تعيين كافة الفلاتر">مسح الفلاتر</button>' +
+          '<button class="btn btn-outline" style="min-height:36px;padding:6px 14px;font-size:13px;background:var(--success-bg);color:var(--success-text);border-color:var(--success-border);" onclick="exportInvoicesToExcel()" title="تصدير الفواتير المفلترة إلى Excel">📊 تصدير Excel</button>' +
+          (CAN_WRITE ? '<button class="btn btn-primary" style="min-height:36px;padding:6px 14px;font-size:13px;" onclick="openInvoiceModal()">+ إضافة فاتورة</button>' : '') +
+        '</div>' +
+      '</div>' +
+      '<div id="invoice-table-area"></div>' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:14px;flex-wrap:wrap;gap:10px;">' +
+        '<div style="font-size:13px;color:var(--text-muted);">' +
+          'إجمالي الفواتير المطابقة: <strong>' + FMT.number(total) + '</strong> فاتورة' +
+        '</div>' +
+        '<div style="display:flex;align-items:center;gap:8px;">' +
+          '<button class="btn btn-outline" style="min-height:36px;padding:4px 12px;" ' + (FILTER.offset === 0 ? 'disabled' : '') + ' onclick="gotoPage(' + (page - 1) + ')">السابق</button>' +
+          '<span style="font-size:13px;color:var(--text-main);font-weight:600;">صفحة ' + page + ' من ' + pages + '</span>' +
+          '<button class="btn btn-outline" style="min-height:36px;padding:4px 12px;" ' + (page >= pages ? 'disabled' : '') + ' onclick="gotoPage(' + (page + 1) + ')">التالي</button>' +
+        '</div>' +
+      '</div>';
+
+    document.getElementById('invoice-table-area').innerHTML =
+      UIC.dataTable('invoice-table', { title: 'الفواتير الضريبية', headers: headers, rows: rows, emptyText: 'لا توجد فواتير مطابقة للفلاتر الحالية' });
+    UIC.initTableSort('invoice-table');
+  }
+
+  function escHtml(s) {
+    return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  function makeCollectionFromInvoice(invoiceId) {
+    if (!invoiceId) return;
+    UI.showSpinner('جاري إنشاء عملية التحصيل...');
+    companyCall('make_collection_from_invoice', { invoice_id: invoiceId })
+      .then(function (r) {
+        UIC.toast(r.message || 'تم إنشاء عملية التحصيل بنجاح', 'success');
+        fetchInvoices();
+      })
+      .catch(function (e) {
+        UIC.toast((e && e.message) || 'فشل إنشاء عملية التحصيل', 'error');
+      })
+      .finally(function () {
+        UI.hideSpinner();
+      });
+  }
+
+  function printInvoice(id) {
+    window.open(scriptUrl + '?download=budget_print&type=invoice&id=' + encodeURIComponent(id) + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN), '_blank');
+  }
+
+  function setFilter(k, v) {
+    FILTER[k] = k === 'search' ? v.trim() : v;
+    FILTER.offset = 0;
+    fetchInvoices();
+  }
+
+  function resetFilters() {
+    FILTER.month = '';
+    FILTER.year = '';
+    FILTER.fromDate = '';
+    FILTER.toDate = '';
+    FILTER.search = '';
+    FILTER.offset = 0;
+    fetchInvoices();
+  }
+
+  function gotoPage(p) {
+    if (p < 1) return;
+    FILTER.offset = (p - 1) * FILTER.limit;
+    fetchInvoices();
+  }
+
+  function exportInvoicesToExcel() {
+    UI.showSpinner('جاري تجهيز وتصدير ملف Excel...');
+    
+    // Fetch ALL filtered records matching active filters (up to 10,000 items)
+    companyCall('get_legal_invoices', {
+      month: FILTER.month ? Number(FILTER.month) : '',
+      year: FILTER.year ? Number(FILTER.year) : '',
+      from_date: FILTER.fromDate,
+      to_date: FILTER.toDate,
+      search: FILTER.search,
+      offset: 0,
+      limit: 10000
+    })
+      .then(function (r) {
+        var items = r.items || [];
+        if (!items.length) {
+          UIC.toast('لا توجد فواتير لتصديرها وفق الفلاتر المحددة', 'warning');
+          return;
+        }
+
+        // Blacklist: Strictly exclude these headers as requested
+        var excludedKeys = ['كود المعاملة المباعة', 'الشهر', 'العام', 'user'];
+        var isExcluded = function (k) {
+          var lk = String(k || '').trim().toLowerCase();
+          return excludedKeys.some(function (ex) {
+            return lk === ex.toLowerCase() || lk.replace(/\s+/g, '') === ex.replace(/\s+/g, '');
+          });
+        };
+
+        // Exact header arrangement specified for VAT compliance
+        var specifiedHeaders = [
+          'ميزان حسابي - 26 - 1',
+          'نوع الضريبة (سلع عامة 1/سلع جدول 2)',
+          'نوع سلع الجدول (لايوجد 0/جدول أولا 1/جدول ثانيا 2)',
+          'رقم الفاتورة',
+          'اسم العميل',
+          'رقم التسجيل الضريبي للعميل',
+          'رقم الملف الضريبي للعميل',
+          'العنوان',
+          'الرقم القومي / رقم جواز السفر',
+          'رقم الموبيل',
+          'تاريخ الفاتورة',
+          'إسم المنتج',
+          'كود المنتج',
+          'نوع البيان (سلعة 3/خدمة 4/تسويات 5)',
+          'نوع السلعة (محلي 1/صادرات 2/آلات ومعدات 5/أجزاء آلات 6/إعفاءات 7 /  سلع الجدول  مراجعة الإرشادات )',
+          'وحدة قياس المنتج',
+          'سعر الوحدة',
+          'فئة الضريبة (14%/5%)',
+          'كمية المنتج',
+          'المبلغ الصافي',
+          'قيمة الضريبة',
+          'إجمالي'
+        ];
+
+        var exportHeaders = specifiedHeaders.slice();
+
+        // Generate CSV content with UTF-8 BOM so Arabic displays perfectly in Excel
+        var csvContent = '\uFEFF';
+        csvContent += exportHeaders.map(function (h) {
+          return '"' + String(h).replace(/"/g, '""') + '"';
+        }).join(',') + '\r\n';
+
+        items.forEach(function (row) {
+          var rowValues = exportHeaders.map(function (h) {
+            var val = row[h];
+            if (val === undefined || val === null) {
+              if (h === 'نوع سلع الجدول (لايوجد 0/جدول أولا 1/جدول ثانيا 2)') {
+                var taxF = row['فئة الضريبة (14%/5%)'];
+                val = (taxF === '0.05' || taxF === 0.05) ? 1 : 0;
+              } else {
+                val = '';
+              }
+            } else if (h === 'فئة الضريبة (14%/5%)') {
+              val = taxClassLabel(val);
+            } else if (h === 'تاريخ الفاتورة') {
+              val = normalizeDate(val);
+            } else if (typeof val === 'number') {
+              val = String(val);
+            } else if (val instanceof Date) {
+              val = normalizeDate(val);
+            } else {
+              val = String(val);
+            }
+            return '"' + val.replace(/"/g, '""') + '"';
+          });
+          csvContent += rowValues.join(',') + '\r\n';
+        });
+
+        var blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        var url = URL.createObjectURL(blob);
+        var link = document.createElement('a');
+        var fileName = 'الفواتير_الضريبية_' + (FILTER.fromDate ? ('من_' + FILTER.fromDate + '_') : '') + (FILTER.toDate ? ('إلى_' + FILTER.toDate + '_') : '') + todayStr() + '.csv';
+        link.setAttribute('href', url);
+        link.setAttribute('download', fileName);
+        document.body.appendChild(link);
+        link.click();
+        setTimeout(function () {
+          URL.revokeObjectURL(url);
+          link.remove();
+        }, 1000);
+        UIC.toast('تم تصدير ' + items.length + ' فاتورة بنجاح إلى ملف Excel', 'success');
+      })
+      .catch(function (e) { showError(e); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function invoiceProductPreview() {
+    var el = document.getElementById('كود المعاملة المباعة');
+    var pv = document.getElementById('inv-product-preview');
+    if (!el || !pv) return;
+    var code = el.value;
+    if (!code) { pv.innerHTML = ''; return; }
+    var cp = (REFS.current_products_by_code && REFS.current_products_by_code[String(code)]) || (REFS.current_products || []).find(function (c) { return String(c.transaction_code) === String(code); });
+    if (!cp) { pv.innerHTML = 'المنتج غير معروف'; return; }
+    var prod = (REFS.products_by_name && REFS.products_by_name[String(cp.product)]) || (REFS.products || []).find(function (p) { return String(p.name_ar) === String(cp.product); });
+    var gpc = prod ? prod.gpc : '';
+    var unit = prod ? prod.unit : '';
+    pv.innerHTML = 'اسم المنتج: <b>' + FMT.escape(cp.product) + '</b>' +
+      (gpc ? ' | كود المنتج: <b>' + FMT.escape(gpc) + '</b>' : '') +
+      (unit ? ' | وحدة القياس: <b>' + FMT.escape(unit) + '</b>' : '') +
+      ' | المتاح: <b>' + FMT.number(cp.current_qty) + '</b>';
+  }
+
+  function invoiceQtyCheck() {
+    var codeEl = document.getElementById('كود المعاملة المباعة');
+    var qtyEl = document.getElementById('كمية المنتج');
+    var warnEl = document.getElementById('inv-qty-warn');
+    if (!codeEl || !qtyEl || !warnEl) return;
+    var code = codeEl.value;
+    var qty = Number(qtyEl.value) || 0;
+    if (!code || !qty) { warnEl.innerHTML = ''; return; }
+    var cp = (REFS.current_products_by_code && REFS.current_products_by_code[String(code)]) || (REFS.current_products || []).find(function (c) { return String(c.transaction_code) === String(code); });
+    if (cp && qty > cp.current_qty) {
+      warnEl.innerHTML = '<span style="color:#b91c1c;font-size:12px;">الكمية أكبر من المتاح (' + FMT.number(cp.current_qty) + ')</span>';
+    } else {
+      warnEl.innerHTML = '';
+    }
+  }
+
+  function openInvoiceModal() {
+    var parties = (REFS && REFS.parties) || [];
+    var partyOpts = parties.map(function (p) { var n = (p.name || '').trim(); return n ? { value: n, label: n } : null; }).filter(Boolean);
+    var codeOpts = ((REFS && REFS.current_products) || []).map(function (c) {
+      return { value: c.transaction_code, label: c.product + ' (' + c.transaction_code + ')' };
+    });
+    var lastInv = '';
+    LAST.items.forEach(function (r) {
+      var v = String(r['رقم الفاتورة'] || '').trim();
+      if (v) lastInv = v;
+    });
+    var body = '<form id="invoice-form">' +
+      '<div id="inv-next-hint" style="font-size:13px;color:#374151;margin:0 0 10px;padding:8px 10px;background:#f0fdf4;border-radius:6px;">' +
+        (lastInv ? 'آخر رقم فاتورة: <b>' + FMT.escape(lastInv) + '</b> — ' : '') + 'سيتم ترقيم الفاتورة الجديدة تلقائياً بالتسلسل للسنة المحددة.</div>' +
+      UIC.combo({ key: 'كود المعاملة المباعة', label: 'كود المعاملة المباعة', required: true, options: codeOpts, placeholder: 'اختر الكود...' }) +
+      '<div id="inv-product-preview" style="font-size:13px;color:#14532d;margin:0 0 10px;"></div>' +
+      UIC.combo({ key: 'اسم العميل', label: 'اسم العميل', required: true, options: partyOpts, placeholder: 'اختر العميل...' }) +
+      UIC.field({ key: 'تاريخ الفاتورة', label: 'تاريخ الفاتورة', type: 'date', required: true, value: todayStr() }) +
+      UIC.field({ key: 'كمية المنتج', label: 'الكمية', type: 'number', step: '0.001', min: '0.001', required: true }) +
+      '<div id="inv-qty-warn" style="margin:0 0 4px;"></div>' +
+      UIC.combo({ key: 'فئة الضريبة (14%/5%)', label: 'فئة الضريبة', required: true, options: [{ value: '0', label: '0%' }, { value: '0.05', label: '5%' }, { value: '0.14', label: '14%' }], placeholder: 'اختر الفئة...' }) +
+      '</form>';
+    UIC.openModal('invoice-modal', { title: 'إضافة فاتورة ضريبية', body: body, onSave: 'saveInvoice()' });
+    var codeEl = document.getElementById('كود المعاملة المباعة');
+    if (codeEl) codeEl.addEventListener('change', invoiceProductPreview);
+    var qtyEl = document.getElementById('كمية المنتج');
+    if (qtyEl) qtyEl.addEventListener('input', invoiceQtyCheck);
+  }
+
+  function saveInvoice() {
+    if (!UIC.validateForm('invoice-form')) return;
+    var data = UIC.collectForm('invoice-form');
+    var code = data['كود المعاملة المباعة'];
+    var cp = (REFS.current_products_by_code && REFS.current_products_by_code[String(code)]) || (REFS.current_products || []).find(function (c) { return String(c.transaction_code) === String(code); });
+    var qty = Number(data['كمية المنتج']) || 0;
+    if (!(qty > 0)) { showError({ message: 'كمية المنتج يجب أن تكون أكبر من صفر' }); return; }
+    if (cp && qty > cp.current_qty) { showError({ message: 'الكمية (' + qty + ') أكبر من المتاح (' + cp.current_qty + ') لهذا الكود' }); return; }
+    var d = new Date(data['تاريخ الفاتورة']);
+    if (isNaN(d.getTime())) { showError({ message: 'تاريخ الفاتورة غير صحيح' }); return; }
+    data['العام'] = d.getFullYear();
+    UI.showSpinner('جاري الحفظ...');
+    companyCall('add_legal_invoice', data)
+      .then(function (r) {
+        UIC.closeModal('invoice-modal');
+        UIC.toast(r.message || 'تمت الإضافة بنجاح', 'success');
+        if (r && r.record) {
+          LAST.items = LAST.items || [];
+          LAST.items.unshift(r.record);
+          LAST.total = (LAST.total||0)+1;
+          renderInvoices(LAST.items, LAST.total);
+        } else {
+          FILTER.offset = 0;
+          fetchInvoices();
+        }
+      })
+      .catch(function (e) { showError(e); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function showError(e) {
+    UIC.toast((e && e.message) || 'خطأ غير متوقع', 'error');
+  }
+
+  load();
+</script>
+</body>
+</html>
+

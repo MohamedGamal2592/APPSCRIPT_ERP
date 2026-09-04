@@ -1,0 +1,127 @@
+﻿<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>رصيد أصناف الميزانية</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_TopChemical_Nav'); ?>
+  <?!= getCompanyThemeCSS_('3fe1b5cb67b7223e') ?>
+</head>
+<body>
+<div id="tc-root" dir="rtl"></div>
+<script>
+  var params = new URLSearchParams(window.location.search);
+  var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+  var scriptUrl = window.scriptUrl || '/';
+  var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+  var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('3fe1b5cb67b7223e') ?>';
+  var COMPANY_PAGES = <?!= companyPages ?>;
+  var CURRENT_ACTION = '<?!= currentAction ?>';
+  var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+  var CAN_WRITE = UIC.canAdd_(); var CAN_FULL = UIC.canFull_();
+  var FILTER = { target: '', search: '', view: 'all' };
+
+  function companyCall(moduleAction, data) {
+    return API.call('company_action', {
+      target_system: '3fe1b5cb67b7223e',
+      module_action: moduleAction,
+      data: data || {}
+    }, SESSION_TOKEN);
+  }
+
+  function load() {
+    UIC.appShell('tc-root', {
+      companyLogoUrl: COMPANY_LOGO_URL,
+      companyLogoHref: scriptUrl + '?action=tc_dashboard&sessionToken=' + SESSION_TOKEN,
+      companyLogoTitle: 'توب كيميكال',
+      breadcrumb: 'توب كيميكال / حسابات الميزانية / رصيد أصناف الميزانية',
+      contentId: 'stock-balance-content',
+      menuGroups: (window.TOPCHEMICAL_MENU || [])
+    });
+    fetchBalance();
+  }
+
+  function fetchBalance() {
+    UI.showSpinner();
+    companyCall('get_legal_current_products')
+      .then(function (r) { renderBalance(r.items || []); })
+      .catch(function (e) { showError(e); })
+      .finally(function () { UI.hideSpinner(); try{schedulePrefetch();}catch(e){} });
+  }
+
+  function renderBalance(list) {
+    window.__balance = list;
+    var targets = [];
+    list.forEach(function (r) { var t = String(r.product_target || '').trim(); if (t && targets.indexOf(t) === -1) targets.push(t); });
+    targets.sort();
+    var targetOpts = targets.map(function (t) {
+      return '<option value="' + FMT.escape(t) + '"' + (FILTER.target === t ? ' selected' : '') + '>' + FMT.escape(t) + '</option>';
+    }).join('');
+
+    var rows = list.filter(function (r) {
+      if (FILTER.target && String(r.product_target || '').trim() !== FILTER.target) return false;
+      if ((FILTER.view === 'blank' || FILTER.view === 'both') && !String(r.product || '').trim()) return false;
+      if ((FILTER.view === 'zero' || FILTER.view === 'both') && !(Number(r.current_qty) || 0)) return false;
+      if (FILTER.search) {
+        var q = FILTER.search.toLowerCase();
+        return String(r.product || '').toLowerCase().indexOf(q) !== -1 ||
+          String(r.transaction_code || '').toLowerCase().indexOf(q) !== -1 ||
+          String(r.code || '').toLowerCase().indexOf(q) !== -1;
+      }
+      return true;
+    }).map(function (r) {
+      return {
+        transaction_code: FMT.escape(r.transaction_code || '-'),
+        product: FMT.escape(r.product || '-'),
+        unit: FMT.escape(r.unit || '-'),
+        current_qty: Number(r.current_qty) || 0,
+        total_cost_sign: Number(r.total_cost_sign) || 0,
+        total_sales_value: Number(r.total_sales_value) || 0,
+        sales_per_qty: Number(r.sales_per_qty) || 0,
+        product_target: FMT.escape(r.product_target || '-')
+      };
+    });
+
+    var headers = [
+      { key: 'transaction_code', label: 'كود المعاملة' },
+      { key: 'product', label: 'الصنف' },
+      { key: 'unit', label: 'الوحدة' },
+      { key: 'current_qty', label: 'الكمية الحالية', numeric: true },
+      { key: 'total_cost_sign', label: 'قيمة التكلفة', money: true },
+      { key: 'total_sales_value', label: 'قيمة المبيعات', money: true },
+      { key: 'sales_per_qty', label: 'سعر البيع/الوحدة', money: true },
+      { key: 'product_target', label: 'التصنيف' }
+    ];
+    document.getElementById('stock-balance-content').innerHTML =
+      '<div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:12px;">' +
+        '<select id="bal-target" class="input" style="width:auto;min-width:170px;" onchange="setTarget(this.value)">' +
+          '<option value="">كل التصنيفات</option>' + targetOpts + '</select>' +
+        '<input id="bal-search" class="input" style="width:auto;min-width:200px;" type="search" placeholder="بحث عن صنف..." onkeyup="setSearch(this.value)">' +
+        '<select id="bal-view" class="input" style="width:auto;min-width:190px;" onchange="setView(this.value)">' +
+          '<option value="all"' + (FILTER.view === 'all' ? ' selected' : '') + '>كل الأصناف</option>' +
+          '<option value="blank"' + (FILTER.view === 'blank' ? ' selected' : '') + '>إخفاء الأصناف الفارغة</option>' +
+          '<option value="zero"' + (FILTER.view === 'zero' ? ' selected' : '') + '>إخفاء الصفرية</option>' +
+          '<option value="both"' + (FILTER.view === 'both' ? ' selected' : '') + '>الاثنان معاً</option>' +
+        '</select>' +
+        '<span style="font-size:13px;color:#374151;">عدد الأصناف المعروضة: <b>' + FMT.number(rows.length) + '</b></span>' +
+      '</div>' +
+      UIC.dataTable('stock-balance-table', { title: 'رصيد أصناف الميزانية', headers: headers, rows: rows, emptyText: 'لا توجد بيانات' });
+    UIC.initTableSort('stock-balance-table');
+  }
+
+  function setTarget(v) { FILTER.target = v; renderBalance(window.__balance || []); }
+  function setSearch(v) { FILTER.search = v.trim(); renderBalance(window.__balance || []); }
+  function setView(v) { FILTER.view = v; renderBalance(window.__balance || []); }
+
+  function showError(e) {
+    UIC.toast((e && e.message) || 'خطأ غير متوقع', 'error');
+  }
+
+  load();
+</script>
+</body>
+</html>
+

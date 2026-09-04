@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <base target="_top">
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Login</title>
+    <?!= include('CSS'); ?>
+    <style>
+      body { background-color: #f4f7f6; }
+      .login-card { max-width: 400px; margin: 80px auto; }
+    </style>
+  </head>
+  <body>
+
+    <div class="container">
+      <div class="card shadow-sm border-0 rounded-3 login-card">
+        <div class="card-body p-4 p-md-5">
+
+          <h3 class="text-center mb-4 text-primary">
+            <i class="bi bi-mortarboard-fill"></i> Assessment Platform
+          </h3>
+
+          <!-- Alert Container -->
+          <div id="alertMsg" class="alert d-none" role="alert"></div>
+
+          <form id="loginForm" onsubmit="handleLogin(event)">
+
+            <div class="form-floating mb-3">
+              <input type="email" class="form-control" id="email" name="email" placeholder="name@example.com" required>
+              <label for="email"><i class="bi bi-envelope"></i> Email Address</label>
+            </div>
+
+            <div class="form-floating mb-3">
+              <input type="password" class="form-control" id="password" name="password" placeholder="Password" required>
+              <label for="password"><i class="bi bi-lock"></i> Password</label>
+            </div>
+
+            <!--
+              IMPORTANT: no "required" here in the markup. A required field
+              inside a d-none container fails native HTML5 validation with
+              "invalid form control ... not focusable" and silently blocks
+              form submission entirely (handleLogin never runs). It is made
+              required via JS only at the moment it's actually shown.
+            -->
+            <div class="form-floating mb-1 d-none" id="newPassContainer">
+              <input type="password" class="form-control" id="newPassword" name="newPassword" placeholder="New Password" minlength="10">
+              <label for="newPassword"><i class="bi bi-key"></i> Set New Password</label>
+            </div>
+            <!-- Security Patch P3: Helper text for minimum length -->
+            <div id="newPassHelp" class="form-text text-muted d-none mb-3">
+              <i class="bi bi-shield-lock"></i> For your security, passwords must be at least 10 characters long.
+            </div>
+
+            <div class="d-grid">
+              <button type="submit" class="btn btn-primary btn-lg" id="loginBtn">
+                <i class="bi bi-box-arrow-in-right"></i> Login
+              </button>
+            </div>
+
+          </form>
+
+          <!--
+            IMPORTANT: This button only appears AFTER a successful login.
+            Clicking it is a real, synchronous user gesture, which is what lets
+            the browser allow window.top navigation out of the sandboxed iframe.
+            An automatic redirect fired from inside an async callback does not
+            count as a user gesture and gets silently blocked.
+          -->
+          <div class="d-grid mt-2 d-none" id="continueContainer">
+            <a class="btn btn-success btn-lg" id="continueBtn" href="#">
+              <i class="bi bi-arrow-right-circle"></i> Continue to Dashboard
+            </a>
+          </div>
+
+        </div>
+      </div>
+    </div>
+
+    <!-- Bootstrap JS Bundle -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+
+    <script>
+      // Fires immediately once the user submits the form. Kept simple/synchronous
+      // on purpose in case we ever want to attach navigation directly to this,
+      // but the actual redirect happens from the real click below, not from here.
+      function handleLogin(event) {
+        event.preventDefault();
+        const email = document.getElementById('email').value;
+        const password = document.getElementById('password').value;
+        const newPassword = document.getElementById('newPassword').value;
+
+        const btn = document.getElementById('loginBtn');
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Processing...';
+        btn.disabled = true;
+
+        const alertMsg = document.getElementById('alertMsg');
+        alertMsg.className = 'alert d-none';
+
+        google.script.run
+          .withSuccessHandler(function(data) {
+            if (data.status === 'success') {
+              // DO NOT auto-navigate here. By this point we're inside an async
+              // callback, not a direct click, so window.top navigation would be
+              // blocked by the sandboxed iframe's activation policy.
+              //
+              // Instead: build the destination URL WITH the token as a query
+              // param (do not depend on localStorage surviving the jump to a
+              // different HtmlService origin), hide the form, and reveal a
+              // real button the user clicks themselves.
+              const dashboardUrl = '<?= scriptUrl ?>?action=dashboard&token=' + encodeURIComponent(data.token);
+
+              document.getElementById('loginForm').classList.add('d-none');
+
+              alertMsg.className = 'alert alert-success d-flex align-items-center';
+              alertMsg.innerHTML = '<i class="bi bi-check-circle-fill me-2"></i> Welcome, ' + data.user.name + '! Click below to continue.';
+
+              const continueBtn = document.getElementById('continueBtn');
+              continueBtn.href = dashboardUrl;
+              // target="_top" on the anchor itself is the most reliable way to
+              // break out of the iframe on a genuine click, on top of the
+              // page-level <base target="_top">.
+              continueBtn.setAttribute('target', '_top');
+
+              document.getElementById('continueContainer').classList.remove('d-none');
+
+              // Optional: still try storing it locally for same-origin cases;
+              // harmless if it doesn't carry over, since the URL param is the
+              // real source of truth on the next page.
+              try {
+                localStorage.setItem('sessionToken', data.token);
+                localStorage.setItem('userName', data.user.name);
+                localStorage.setItem('userPosition', data.user.position);
+              } catch (e) { /* ignore storage errors */ }
+
+            } else if (data.status === 'setup_required') {
+              document.getElementById('newPassContainer').classList.remove('d-none');
+              document.getElementById('newPassHelp').classList.remove('d-none');
+              document.getElementById('newPassword').setAttribute('required', 'true');
+              btn.innerHTML = '<i class="bi bi-key"></i> Set Password & Login';
+
+              alertMsg.className = 'alert alert-info d-flex align-items-center';
+              alertMsg.innerHTML = '<i class="bi bi-info-circle-fill me-2"></i> ' + data.message;
+              btn.disabled = false;
+            } else {
+              alertMsg.className = 'alert alert-danger d-flex align-items-center';
+              alertMsg.innerHTML = '<i class="bi bi-exclamation-triangle-fill me-2"></i> ' + (data.message || 'Login failed.');
+              btn.innerHTML = '<i class="bi bi-box-arrow-in-right"></i> Login';
+              btn.disabled = false;
+            }
+          })
+                  .withFailureHandler(function(err) {
+          document.getElementById('loadingSpinner').style.display = 'none';
+          document.getElementById('tableContainer').style.display = 'block';
+          
+          // SECURITY: If backend says Unauthorized/Forbidden, kick them out!
+          if (err.message.includes('Unauthorized') || err.message.includes('Forbidden') || err.message.includes('Session expired')) {
+            localStorage.removeItem('sessionToken');
+            localStorage.removeItem('userName');
+            window.location.href = scriptUrl + '?action=login';
+            return;
+          }
+          
+          document.getElementById('tableBody').innerHTML = `<tr><td colspan="6" class="text-center text-danger p-4">Server Error: ${err.message}</td></tr>`;
+        })
+          .uiLogin(email, password, newPassword);
+      }
+    </script>
+  </body>
+</html>

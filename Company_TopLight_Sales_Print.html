@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>فاتورة بيع</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= getCompanyThemeCSS_('8df5c89a117fe9a5') ?>
+  <style>
+    @media print {
+      .no-print { display: none !important; }
+      body { background: #fff !important; }
+      .invoice { border: none !important; }
+    }
+    .invoice { max-width: 900px; margin: 0 auto; padding: 24px; background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: 8px; }
+    .invoice-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; border-bottom: 2px solid var(--brand-primary); padding-bottom: 16px; }
+    .invoice-title { font-size: 22px; font-weight: 700; color: var(--brand-primary); }
+    .invoice-meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px 16px; margin-bottom: 20px; }
+    .meta-item { font-size: 13px; }
+    .meta-item strong { color: var(--text-muted); font-weight: 600; }
+    .inv-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 20px; }
+    .inv-table th, .inv-table td { border: 1px solid var(--border-color); padding: 8px 10px; text-align: right; }
+    .inv-table th { background: var(--bg-subtle); font-weight: 600; }
+    .inv-totals { margin-right: auto; width: 320px; font-size: 14px; }
+    .inv-totals .row { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border-color); }
+    .inv-totals .row.total { font-weight: 700; font-size: 16px; color: var(--brand-primary); border-bottom: none; }
+    .bal-row { display: flex; justify-content: space-between; align-items: center; padding: 7px 10px; border-radius: 6px; margin-top: 6px; font-size: 13px; font-weight: 700; }
+    .bal-row.before { background: var(--bg-subtle); border: 1px dashed var(--border-color); }
+    .bal-row.after  { background: var(--brand-primary); color: #fff; border: none; margin-top: 4px; font-size: 14px; }
+    .bal-row.after .bal-val { color: #fff; }
+    .bal-val { font-family: monospace; }
+    .bal-val.debit  { color: var(--danger,#dc2626); }
+    .bal-val.credit { color: var(--success,#16a34a); }
+    .bal-note { font-size: 11px; color: var(--text-muted); margin-top: 4px; text-align: right; }
+  </style>
+</head>
+<body>
+<div id="invoice-root" dir="rtl"></div>
+<script>
+  var params = new URLSearchParams(window.location.search);
+  var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+  var salesCode = '<?!= purchaseCode ?>';
+  var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('8df5c89a117fe9a5') ?>';
+
+  function companyCall(moduleAction, data) {
+    return API.call('company_action', {
+      target_system: '8df5c89a117fe9a5',
+      module_action: moduleAction,
+      data: data || {}
+    }, SESSION_TOKEN);
+  }
+
+  function load() {
+    UI.showSpinner([
+      'جاري تحميل فاتورة البيع...',
+      'جاري استرجاع بيانات الأصناف والرصيد...',
+      'لحظة، جاري إنهاء تحضير الفاتورة للطباعة...',
+      'جاري تجهيز فاتورة كبيرة، برجاء الانتظار...'
+    ]);
+    companyCall('get_sales_print', { sales_code: salesCode })
+      .then(function (r) { renderInvoice(r.header, r.lines, r.returns, r.total_return_value, r.balance_before, r.balance_after); })
+      .catch(function (e) {
+        document.getElementById('invoice-root').innerHTML =
+          '<div class="empty-state"><span>' + FMT.escape(e.message || 'خطأ') + '</span></div>';
+      })
+      .finally(function () { UI.hideSpinner(); try{schedulePrefetch();}catch(e){} });
+  }
+
+  function buildReturnMap(returns) {
+    var map = {};
+    (returns || []).forEach(function (r) {
+      var k = String(r.product_id);
+      if (!map[k]) map[k] = { qty: 0, value: 0 };
+      map[k].qty += Number(r.return_qty) || 0;
+      map[k].value += Number(r.return_value) || 0;
+    });
+    return map;
+  }
+
+  function releaseNumber(invNo) {
+    var m = String(invNo == null ? '' : invNo).trim().match(/^(\d+)-(\d+)$/);
+    if (m) return String(parseInt(m[1] + m[2], 10) + 10000);
+    return invNo == null ? '' : invNo;
+  }
+
+  function renderInvoice(h, lines, returns, totalReturnValue, balanceBefore, balanceAfter) {
+    var root = document.getElementById('invoice-root');
+    var retMap = buildReturnMap(returns);
+    var rows = (lines || []).map(function (l) {
+      var rt = retMap[String(l.product_id)] || { qty: 0, value: 0 };
+      return '<tr>' +
+        '<td>' + FMT.escape(l.product_name || '-') + '</td>' +
+        '<td><span class="num">' + FMT.number(l.product_qty) + '</span></td>' +
+        '<td><span class="num">' + (rt.qty > 0 ? '-' + FMT.number(rt.qty) : '-') + '</span></td>' +
+        '<td><span class="num">' + FMT.number(l.product_price) + '</span></td>' +
+        '<td><span class="num">' + FMT.percent(l.product_tax) + '</span></td>' +
+        '<td><span class="num">' + FMT.number(l.product_discount) + '</span></td>' +
+        '<td><span class="num">' + FMT.number(l.product_total_value) + '</span></td>' +
+        '<td><span class="num">' + (rt.value > 0 ? '-' + FMT.number(rt.value) : '-') + '</span></td>' +
+        '</tr>';
+    }).join('');
+
+    var total = Number(h['إجمالي']) || 0;
+    var retTotal = Number(totalReturnValue) || 0;
+    var returnRows = '';
+    if (retTotal > 0) {
+      returnRows =
+        '<div class="row" style="color:var(--danger);"><span>قيمة المرتجعات</span><span class="num">-' + FMT.number(retTotal) + '</span></div>' +
+        '<div class="row total"><span>الصافي بعد المرتجعات</span><span class="num">' + FMT.number(total - retTotal) + '</span></div>';
+    }
+
+    // صياغة رصيد العميل (موجب = مدين عليه | سالب = دائن لصالحه)
+    function fmtBalance(n) {
+      n = parseFloat(n) || 0;
+      var absStr = FMT.number(Math.abs(n));
+      var cls    = n < 0 ? 'credit' : 'debit';
+      var text   = n < 0 ? '(' + absStr + ') لصالح العميل' : absStr;
+      return '<span class="bal-val ' + cls + '">' + text + '</span>';
+    }
+
+    var balanceRows =
+      '<div class="bal-row before">' +
+      '  <span>الرصيد قبل هذه الفاتورة</span>' + fmtBalance(balanceBefore) +
+      '</div>' +
+      '<div class="bal-row after">' +
+      '  <span>الرصيد بعد هذه الفاتورة</span>' + fmtBalance(balanceAfter) +
+      '</div>' +
+      '<div class="bal-note">▪ موجب = مدين على العميل &nbsp;|لصالح العميل = رصيد دائن بين أقواس</div>';
+
+    var html =
+      '<div class="no-print" style="max-width:900px;margin:12px auto;display:flex;justify-content:flex-end;gap:8px;">' +
+      '<button class="btn btn-primary" onclick="window.print()">طباعة</button>' +
+      '<button class="btn btn-outline" onclick="try{window.top.close()}catch(e){window.close()}">إغلاق</button>' +
+      '</div>' +
+      '<div class="invoice">' +
+      '<div class="invoice-head">' +
+      '<img src="' + (COMPANY_LOGO_URL || '') + '" style="height:42px;" alt="">' +
+      '<div class="invoice-title">فاتورة بيع</div>' +
+      '</div>' +
+      '<div class="invoice-meta">' +
+      metaItem('رقم الفاتورة', releaseNumber(h['رقم الفاتورة'])) +
+      metaItem('تاريخ الفاتورة', h['تاريخ الفاتورة'] ? String(h['تاريخ الفاتورة']).slice(0, 10) : '-') +
+      metaItem('العميل', h.customer_name) +
+      metaItem('رقم التسجيل الضريبي للعميل', h['رقم التسجيل الضريبي للعميل']) +
+      metaItem('رقم الموبايل', h['رقم الموبايل']) +
+      metaItem('العنوان', h['العنوان']) +
+      metaItem('نسبة الخصم', FMT.percent(h['نسبة الخصم'])) +
+      '</div>' +
+      '<table class="inv-table"><thead><tr>' +
+      '<th>المنتج</th><th>الكمية</th><th>كمية المرتجع</th><th>السعر</th><th>الضريبة</th><th>الخصم</th><th>الإجمالي</th><th>قيمة المرتجع</th>' +
+      '</tr></thead><tbody>' + rows + '</tbody></table>' +
+      '<div class="inv-totals">' +
+      '<div class="row"><span>المبلغ الصافي</span><span class="num">' + FMT.number(h['المبلغ الصافي']) + '</span></div>' +
+      '<div class="row"><span>قيمة الخصم</span><span class="num">' + FMT.number(h['قيمة الخصم']) + '</span></div>' +
+      '<div class="row"><span>قيمة الضريبة</span><span class="num">' + FMT.number(h['قيمة الضريبة']) + '</span></div>' +
+      '<div class="row"><span>الإجمالي</span><span class="num">' + FMT.number(h['إجمالي']) + '</span></div>' +
+      returnRows +
+      balanceRows +
+      '</div>' +
+      '</div>';
+
+
+    root.innerHTML = html;
+  }
+
+  function metaItem(label, value) {
+    return '<div class="meta-item"><strong>' + label + ':</strong> ' + FMT.escape(value == null || value === '' ? '-' : value) + '</div>';
+  }
+
+  load();
+</script>
+</body>
+</html>

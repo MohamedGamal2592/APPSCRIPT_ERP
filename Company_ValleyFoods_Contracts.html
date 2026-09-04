@@ -1,0 +1,204 @@
+﻿<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Valley Foods — العقود</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_ValleyFoods_Nav'); ?>
+  <?!= getCompanyThemeCSS_('9940659bd83035d7') ?>
+</head>
+<body>
+  <div id="vf-root"></div>
+
+  <script>
+    var params = new URLSearchParams(window.location.search);
+    var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+    var scriptUrl = window.scriptUrl || '/';
+    var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+    var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('9940659bd83035d7') ?>';
+    var COMPANY_PAGES = <?!= companyPages ?>;
+    var CURRENT_ACTION = '<?!= currentAction ?>';
+    var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+    var CAN_WRITE = UIC.canAdd_(); var CAN_FULL = UIC.canFull_();
+
+    function companyCall(moduleAction, data) {
+      return API.call('company_action', {
+        target_system: '9940659bd83035d7',
+        module_action: moduleAction,
+        data: data || {}
+      }, SESSION_TOKEN);
+    }
+
+    function esc(v) {
+      var s = (v === undefined || v === null) ? '' : String(v);
+      if (typeof FMT !== 'undefined' && FMT.escape) return FMT.escape(s);
+      return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+    function todayStr() { return new Date().toISOString().slice(0, 10); }
+    function fmtDate(v) {
+      if (!v) return '';
+      var d = (v instanceof Date) ? v : new Date(v);
+      if (isNaN(d.getTime())) return String(v);
+      var pad = function (n) { return n < 10 ? '0' + n : '' + n; };
+      return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+    }
+
+    var contractsRows = [];
+    var employeeOptions = [];
+    var contractTypeOptions = [];
+
+    function renderApp() {
+      UIC.appShell('vf-root', {
+        companyLogoUrl: COMPANY_LOGO_URL,
+        companyLogoHref: scriptUrl + '?action=vf_dashboard&sessionToken=' + SESSION_TOKEN,
+        companyLogoTitle: 'Valley Foods',
+        breadcrumb: 'Valley Foods / شؤون الموظفين / العقود',
+        contentId: 'vf-contract-content',
+        menuGroups: (window.VALLEYFOODS_MENU || [])
+      });
+      loadData();
+    }
+
+    function loadData() {
+      UI.showSpinner();
+      companyCall('get_contracts_data')
+        .then(function (res) {
+          contractsRows = res.rows || [];
+          employeeOptions = res.employee_options || [];
+          contractTypeOptions = res.contract_type_options || [];
+          renderTable(); try{schedulePrefetch();}catch(e){};
+        })
+        .catch(function (err) {
+          console.error(err);
+          UIC.toast('حدث خطأ في تحميل البيانات', 'error');
+        })
+        .finally(function () {
+          UI.hideSpinner();
+        });
+    }
+
+    function renderTable() {
+      var el = document.getElementById('vf-contract-content');
+      if (!el) return;
+
+      var html = '';
+      if (CAN_WRITE) {
+        html += '<div style="margin-bottom:12px">';
+        html += '<button class="btn btn-primary" onclick="openAddModal()">إضافة عقد</button>';
+        html += '</div>';
+      }
+      html += '<table id="contracts-table"></table>';
+      el.innerHTML = html;
+
+      var headers = [
+        { key: 'emp_id', label: 'الكود' },
+        { key: 'employee_name', label: 'الاسم' },
+        { key: 'contract_Type', label: 'نوع العقد' },
+        { key: 'contract_start_Date', label: 'تاريخ البداية' },
+        { key: 'contract_end_Date', label: 'تاريخ النهاية' },
+        { key: 'contract_salary', label: 'راتب العقد' },
+        { key: 'contract_insurance_salary', label: 'راتب التأمين' }
+      ];
+
+      var rows = contractsRows.map(function (r) {
+        return [
+          esc(r.emp_id),
+          esc(r.employee_name),
+          esc(r.contract_Type),
+          fmtDate(r.contract_start_Date),
+          fmtDate(r.contract_end_Date),
+          r.contract_salary != null ? esc(r.contract_salary) : '',
+          r.contract_insurance_salary != null ? esc(r.contract_insurance_salary) : ''
+        ];
+      });
+
+      UIC.dataTable('contracts-table', { headers: headers, rows: rows });
+      UIC.initTableSort('contracts-table');
+    }
+
+    function openAddModal() {
+      var html = '<form id="contract-form">';
+      html += UIC.combo({ key: 'emp_id', label: 'الموظف', required: true, options: employeeOptions, placeholder: 'اختر الموظف' });
+      html += UIC.combo({ key: 'contract_Type', label: 'نوع العقد', required: true, options: contractTypeOptions, placeholder: 'اختر نوع العقد...' });
+      html += UIC.field({ key: 'contract_start_Date', label: 'تاريخ البداية', type: 'date', required: true, value: todayStr() });
+      html += UIC.field({ key: 'contract_end_Date', label: 'تاريخ النهاية', type: 'date' });
+      html += UIC.field({ key: 'contract_salary', label: 'راتب العقد', type: 'number', required: true, step: '0.01' });
+      html += UIC.field({ key: 'contract_insurance_salary', label: 'راتب التأمين', type: 'number', required: true, step: '0.01' });
+      html += '</form>';
+
+      UIC.openModal('contract-modal', {
+        title: 'إضافة عقد جديد',
+        body: html,
+        onSave: 'saveContractFromForm()'
+      });
+    }
+
+    function openEditModal(id) {
+      var row = null;
+      for (var i = 0; i < contractsRows.length; i++) {
+        if (contractsRows[i].id == id) {
+          row = contractsRows[i];
+          break;
+        }
+      }
+      if (!row) return;
+
+      var html = '<form id="contract-form">';
+      html += UIC.combo({ key: 'emp_id', label: 'الموظف', required: true, options: employeeOptions, value: row.emp_id, placeholder: 'اختر الموظف' });
+      html += UIC.combo({ key: 'contract_Type', label: 'نوع العقد', required: true, options: contractTypeOptions, value: row.contract_Type, placeholder: 'اختر نوع العقد...' });
+      html += UIC.field({ key: 'contract_start_Date', label: 'تاريخ البداية', type: 'date', required: true, value: row.contract_start_Date });
+      html += UIC.field({ key: 'contract_end_Date', label: 'تاريخ النهاية', type: 'date', value: row.contract_end_Date });
+      html += UIC.field({ key: 'contract_salary', label: 'راتب العقد', type: 'number', required: true, step: '0.01', value: row.contract_salary });
+      html += UIC.field({ key: 'contract_insurance_salary', label: 'راتب التأمين', type: 'number', required: true, step: '0.01', value: row.contract_insurance_salary });
+      html += '</form>';
+
+      UIC.openModal('contract-modal', {
+        title: 'تعديل العقد',
+        body: html,
+        onSave: 'saveContractFromForm(\'' + esc(id) + '\')'
+      });
+    }
+
+    function saveContractFromForm(existingId) {
+      if (!UIC.validateForm('contract-form')) return;
+      var data = UIC.collectForm('contract-form');
+      if (!data.contract_Type || data.contract_Type === '__new__') { UIC.toast('نوع العقد مطلوب', 'error'); return; }
+      if (!data.contract_salary || Number(data.contract_salary) <= 0) { UIC.toast('راتب العقد يجب أن يكون أكبر من صفر', 'error'); return; }
+      if (!data.contract_insurance_salary || Number(data.contract_insurance_salary) <= 0) { UIC.toast('راتب التأمين يجب أن يكون أكبر من صفر', 'error'); return; }
+
+      UI.showSpinner();
+      companyCall('add_contract', existingId ? Object.assign({}, data, { id: existingId }) : data)
+        .then(function (res) {
+          if (res && res.error) {
+            UIC.toast(res.error, 'error');
+            return;
+          }
+          UIC.closeModal('contract-modal');
+          UIC.toast('تم الحفظ بنجاح', 'success');
+          if (res && res.record) {
+            var RECENT_LIMIT = 15;
+            var idxC = contractsRows.findIndex(function(x){ return String(x.unique_id)===String(res.record.unique_id); });
+            if (idxC!==-1) contractsRows[idxC]=Object.assign(contractsRows[idxC], res.record); else contractsRows.unshift(res.record);
+            if (contractsRows.length>RECENT_LIMIT) contractsRows.pop();
+            renderTable();
+          } else { loadData(); }
+        })
+        .catch(function (err) {
+          console.error(err);
+          UIC.toast('حدث خطأ أثناء الحفظ', 'error');
+        })
+        .finally(function () {
+          UI.hideSpinner();
+        });
+    }
+
+    document.addEventListener('DOMContentLoaded', renderApp);
+  </script>
+
+</body>
+</html>
+
+

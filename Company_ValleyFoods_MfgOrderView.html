@@ -1,0 +1,678 @@
+﻿<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Valley Foods — أمر تصنيع</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_ValleyFoods_Nav'); ?>
+  <?!= getCompanyThemeCSS_('9940659bd83035d7') ?>
+  <style>
+    .odoo-wrap{max-width:1100px;margin:0 auto;padding:14px;}
+    .odoo-bar{position:sticky;top:0;z-index:30;background:#fff;border-bottom:1px solid #e5e7eb;box-shadow:0 1px 3px rgba(0,0,0,.06);padding:10px 16px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin:-14px -14px 16px;}
+    .odoo-bar h2{font-size:16px;margin:0;color:#111827;}
+    .odoo-bar .spacer{display:flex;gap:8px;flex-wrap:wrap;align-items:center;}
+    .odoo-card{background:#fff;border:1px solid #eef2f7;border-radius:12px;box-shadow:0 1px 2px rgba(16,24,40,.05);margin-bottom:14px;overflow:hidden;}
+    .odoo-card-h{padding:12px 16px;border-bottom:1px solid #f1f5f9;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;background:linear-gradient(#f8fafc,#fff);}
+    .odoo-card-h h3{margin:0;font-size:15px;color:#0f172a;}
+    .odoo-card-b{padding:16px;}
+    .odoo-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;}
+    .odoo-fld label{display:block;font-size:12px;color:#64748b;margin-bottom:4px;}
+    .odoo-input{width:100%;padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px;background:#fff;color:#0f172a;box-sizing:border-box;}
+    .odoo-input:focus{outline:none;border-color:#16a34a;box-shadow:0 0 0 3px rgba(22,163,74,.12);}
+    .odoo-input:disabled{background:#f1f5f9;color:#94a3b8;}
+    .odoo-nb{display:flex;gap:2px;border-bottom:2px solid #16a34a;margin-bottom:14px;flex-wrap:wrap;}
+    .odoo-tab{padding:9px 16px;cursor:pointer;border:none;background:transparent;color:#475569;font-size:13px;font-weight:600;border-bottom:2px solid transparent;margin-bottom:-2px;}
+    .odoo-tab.active{color:#15803d;border-bottom-color:#15803d;}
+    .odoo-pane{display:none;}
+    .odoo-pane.active{display:block;}
+    .odoo-table{width:100%;border-collapse:collapse;font-size:13px;}
+    .odoo-table th{background:#f1f5f9;color:#334155;text-align:right;padding:8px 10px;border-bottom:1px solid #e2e8f0;white-space:nowrap;}
+    .odoo-table td{padding:7px 10px;border-bottom:1px solid #f1f5f9;vertical-align:middle;}
+    .odoo-ro{color:#94a3b8;font-size:12px;}
+    .odoo-sub{background:#fafafa;border:1px dashed #e2e8f0;border-radius:8px;padding:8px 10px;margin-top:8px;}
+    .btn{cursor:pointer;border:none;border-radius:8px;padding:8px 14px;font-size:13px;font-weight:600;}
+    .btn-primary{background:#16a34a;color:#fff;}
+    .btn-outline{background:#fff;border:1px solid #cbd5e1;color:#334155;}
+    .btn-ghost{background:transparent;border:1px solid transparent;color:#dc2626;}
+    .odoo-pill{display:inline-block;padding:3px 10px;border-radius:999px;font-size:12px;font-weight:700;}
+    .odoo-pill.Draft{background:#f1f5f9;color:#475569;}
+    .odoo-pill.InProgress{background:#fef3c7;color:#92400e;}
+    .odoo-pill.Locked{background:#dcfce7;color:#166534;}
+  </style>
+</head>
+<body>
+  <div id="vf-root"></div>
+
+  <script>
+    var PAGE_PARAMS = <?!= pageParams ?>;
+    var SESSION_TOKEN = (PAGE_PARAMS && PAGE_PARAMS.sessionToken) || (API.getSession() || {}).token || '';
+    var scriptUrl = window.scriptUrl || '/';
+    var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+    var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('9940659bd83035d7') ?>';
+    var COMPANY_PAGES = <?!= companyPages ?>;
+    var CURRENT_ACTION = '<?!= currentAction ?>';
+    var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+    /* Permission is derived from the vf_mfg_orders page (the detail route shares its grants). */
+    var PERM_ACTION = 'vf_mfg_orders';
+    var CAN_WRITE = UIC.canAdd_(); var CAN_FULL = UIC.canFull_();
+
+    function companyCall(moduleAction, data) {
+      return API.call('company_action', {
+        target_system: '9940659bd83035d7',
+        module_action: moduleAction,
+        data: data || {}
+      }, SESSION_TOKEN);
+    }
+    function esc(v) {
+      var s = (v === undefined || v === null) ? '' : String(v);
+      if (typeof FMT !== 'undefined' && FMT.escape) return FMT.escape(s);
+      return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+    function num0(v) { var n = Number(v); return isNaN(n) ? 0 : n; }
+    function todayStr() { return new Date().toISOString().slice(0, 10); }
+    function toInputDate(v) {
+      if (!v) return '';
+      try { var d = (v instanceof Date) ? v : new Date(v); if (isNaN(d)) return ''; return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2); } catch (e) { return ''; }
+    }
+
+    (function () {
+      var UI = (typeof UIC !== 'undefined') ? UIC : { toast: function (m) { alert(m); } };
+      (function () { var ps = document.createElement('style'); ps.textContent = '.odoo-neg{color:#c0392b;font-weight:600;}@media print{.odoo-bar,#vf-loading-overlay,.btn{display:none!important;}.odoo-card{break-inside:avoid;}.odoo-wrap{padding:0!important;}}'; if (document.head) document.head.appendChild(ps); })();
+      var root = function () { return document.getElementById('vf-mo-view') || document.getElementById('vf-root'); };
+
+      var MO_UID = (PAGE_PARAMS && PAGE_PARAMS.mo) ? String(PAGE_PARAMS.mo) : '';
+      var IS_NEW = !MO_UID;
+      var MO_STATUS = 'Draft';
+      var MFG_YIELD_FACTOR = 0.65;
+      var CURRENT_ORDER = {};
+      var RECIPE_OPTIONS = [], PRODUCT_OPTIONS = [], ENUMS = {}, WORKCENTER_OPTIONS = [];
+      var MFG_OUTPUTS = [];      /* [{uid,product_id,qty,cost_unit,total_cost,product_name}] */
+      var OUTPUT_FOOTERS = [];   /* [[{item,item_code,qty,unit_cost,total_cost}]] parallel to MFG_OUTPUTS */
+      var OUTPUT_BATCHES = [];   /* [[batches]] parallel to MFG_OUTPUTS (preloaded) */
+      var MFG_WORKOPS = [];      /* [{uid,work_center_id,operation_status,notes,start_time,last_pause_time,end_time,actual_hours}] */
+      var MFG_BYPRODUCTS = [];   /* [{uid,item,qty,transaction_code,total_cost}] */
+
+      function editable() { return IS_SUPER_ADMIN ? true : (CAN_WRITE && MO_STATUS !== 'Locked'); }
+      function fmt3(v) { return Number(v || 0).toFixed(3); }
+      function fmtMoney(v) { return fmt3(v); }
+      function fmtDateTime(v) { if (!v) return '—'; try { var d = (v instanceof Date) ? v : new Date(v); if (isNaN(d.getTime())) return String(v); var p = function (n) { return n < 10 ? '0' + n : '' + n; }; return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes()); } catch (e) { return String(v); } }
+      function disOpt() { return editable() ? null : { disabled: true }; }
+
+      /* ---------- loading overlay (popup so the user knows it is working) ---------- */
+      function showLoading(msg) {
+        var el = document.getElementById('vf-loading-overlay');
+        if (!el) {
+          el = document.createElement('div');
+          el.id = 'vf-loading-overlay';
+          el.style.cssText = 'position:fixed;inset:0;z-index:99999;display:none;align-items:center;justify-content:center;background:rgba(255,255,255,0.78);direction:rtl;';
+          el.innerHTML =             '<div style="background:#fff;border:1px solid #e3e3e3;border-radius:12px;padding:22px 30px;box-shadow:0 6px 24px rgba(0,0,0,0.12);display:flex;flex-direction:column;align-items:center;gap:12px;">' +
+            '<div style="width:34px;height:34px;border:4px solid #eee;border-top-color:#875A7B;border-radius:50%;animation:vfspin 0.8s linear infinite;"></div>' +
+            '<div id="vf-loading-msg" style="font-family:Tahoma;color:#444;font-size:14px;">جاري التحميل…</div></div>';
+          var st = document.createElement('style'); st.textContent = '@keyframes vfspin{to{transform:rotate(360deg)}}'; document.head.appendChild(st);
+          document.body.appendChild(el);
+        }
+        var m = document.getElementById('vf-loading-msg'); if (m && msg) m.textContent = msg;
+        el.style.display = 'flex';
+      }
+      function hideLoading() { var el = document.getElementById('vf-loading-overlay'); if (el) el.style.display = 'none'; }
+      function getV_(id) { var el = document.getElementById(id); return el ? el.value.trim() : ''; }
+      function getCombo_(id) { var el = document.getElementById(id); return el ? el.value : ''; }
+
+      /* ---------- small html builders ---------- */
+      function selHtml(id, options, value, onChange, placeholder, opts) {
+        opts = opts || {};
+        var ph = placeholder ? '<option value="">' + esc(placeholder) + '</option>' : '';
+        var optsHtml = (options || []).map(function (o) {
+          var v = (o && o.value !== undefined) ? o.value : o;
+          var l = (o && o.label !== undefined) ? o.label : o;
+          return '<option value="' + esc(v) + '"' + (String(v) === String(value) ? ' selected' : '') + '>' + esc(l) + '</option>';
+        }).join('');
+        return '<select id="' + id + '" class="odoo-input"' + (opts.disabled ? ' disabled' : '') + (onChange ? ' onchange="' + onChange + '"' : '') + '>' + ph + optsHtml + '</select>';
+      }
+      function inputHtml(id, value, type, onChange, opts) {
+        opts = opts || {};
+        var attr = '';
+        if (opts.min != null) attr += ' min="' + opts.min + '"';
+        if (opts.step != null) attr += ' step="' + opts.step + '"';
+        if (opts.disabled) attr += ' disabled';
+        return '<input id="' + id + '" class="odoo-input" type="' + (type || 'text') + '" value="' + esc(value) + '"' + (onChange ? ' onchange="' + onChange + '"' : '') + attr + '>';
+      }
+      function statusPill(s) {
+        var cls = s === 'Locked' ? 'Locked' : (s === 'In Progress' ? 'InProgress' : 'Draft');
+        var label = s === 'Locked' ? 'مقفل 🔒' : (s === 'In Progress' ? 'قيد التنفيذ' : 'مسودة');
+        return '<span class="odoo-pill ' + cls + '">' + label + '</span>';
+      }
+
+      /* ---------- load ---------- */
+      function load() {
+        showLoading('جاري تحميل أمر التصنيع…');
+        var watchdog = setTimeout(function () { hideLoading(); if (UI.toast) UI.toast('انتهت مهلة التحميل — تحقق من الاتصال وأعد المحاولة', 'error'); }, 25000);
+        companyCall('get_valley_mfg_order_detail', { mo_uid: IS_NEW ? '' : MO_UID }).then(function (res) {
+          RECIPE_OPTIONS = res.recipe_options || [];
+          PRODUCT_OPTIONS = res.product_options || [];
+          ENUMS = res.enums || {};
+          WORKCENTER_OPTIONS = res.work_center_options || {};
+          if (IS_NEW) {
+            MO_STATUS = 'Draft';
+            MFG_OUTPUTS = []; OUTPUT_FOOTERS = []; OUTPUT_BATCHES = []; MFG_WORKOPS = []; MFG_BYPRODUCTS = [];
+            renderDetail({ transaction_code: '', mo_status: 'Draft', operation_type: '', shift: '', manufacture_date: '', expected_qty: '', manufactured_qty: '', actual_qty: '', produced_product: '', recipe_id: '' }, res);
+          } else {
+            var full = res;
+            MO_STATUS = (res.order && res.order.mo_status) || 'Draft';
+            MFG_OUTPUTS = (full.outputs || []).map(function (o) {
+              return { uid: o.unique_id || '', product_id: String(o.product_id || ''), qty: o.product_qty != null ? o.product_qty : '', cost_unit: o.cost_unit || '', total_cost: o.total_cost || '', product_name: o.product_name || '' };
+            });
+            OUTPUT_FOOTERS = MFG_OUTPUTS.map(function (o) {
+              return (o.footers || []).map(function (f) { return { item: f.item || '', item_code: f.item_code || '', qty: f.qty != null ? f.qty : '', unit_cost: f.unit_cost != null ? f.unit_cost : 0, total_cost: f.total_cost != null ? f.total_cost : 0 }; });
+            });
+            MFG_WORKOPS = (res.workops || []).map(function (w) {
+              return { uid: w.unique_id || '', work_center_id: String(w.work_center_id || ''), operation_status: w.operation_status || 'Pending', notes: w.notes || '', start_time: w.start_time || '', last_pause_time: w.last_pause_time || '', end_time: w.end_time || '', actual_hours: w.actual_hours != null ? w.actual_hours : '' };
+            });
+            MFG_BYPRODUCTS = (res.byproducts || []).map(function (b) {
+              return { uid: b.unique_id || '', item: String(b.item || ''), qty: b.qty || '', transaction_code: b.transaction_code || '', total_cost: b.total_cost || '' };
+            });
+            renderDetail(res.order, res);
+          }
+        }).catch(function (e) { if (UI.toast) UI.toast((e && e.message) || 'خطأ في التحميل', 'error'); })
+          .finally(function () { clearTimeout(watchdog); hideLoading(); });
+      }
+
+      /* ---------- render ---------- */
+      function renderDetail(order, full) {
+        CURRENT_ORDER = order || {};
+        var bar = '<div class="odoo-bar">' +
+          '<div style="display:flex;align-items:center;gap:10px;"><h2>أمر تصنيع ' + esc(order.transaction_code || '#') + '</h2>' + statusPill(MO_STATUS) + '</div>' +
+          '<div class="spacer">' + statusActionsHTML() +
+            (editable() ? '<button class="btn btn-primary" onclick="UI.submitOnce(this, MFGVIEW_PAGE.saveHeader)">💾 حفظ</button>' : '') +
+            '<button class="btn btn-outline" onclick="MFGVIEW_PAGE.printMo()">🖨️ طباعة</button>' +
+            '<button class="btn btn-outline" onclick="MFGVIEW_PAGE.goBack()">← رجوع</button>' +
+          '</div></div>';
+
+        var headerCard = '<div class="odoo-card"><div class="odoo-card-h"><h3>بيانات الأمر</h3></div><div class="odoo-card-b">' +
+          (MO_STATUS === 'Locked' && !IS_SUPER_ADMIN ? '<div class="odoo-ro" style="margin-bottom:10px;color:#b45309;">الأمر مقفل — العرض فقط (يلزم مدير النظام للتعديل).</div>' : '') +
+          '<form id="mo-form"><input type="hidden" id="f-status" value="' + esc(MO_STATUS) + '">' +
+          '<div class="odoo-grid">' +
+            UIC.combo({ key: 'f-op-type', label: 'نوع العملية', required: true, options: selList_(ENUMS.operation_type), value: order.operation_type || '', placeholder: 'اكتب للبحث…' }) +
+            UIC.combo({ key: 'f-shift', label: 'الوردية', required: true, options: selList_(ENUMS.shift), value: order.shift || '', placeholder: 'اكتب للبحث…' }) +
+            UIC.field({ key: 'f-date', label: 'تاريخ التصنيع', type: 'date', required: true, value: toInputDate(order.manufacture_date) }) +
+            UIC.field({ key: 'f-expected', label: 'الكمية المتوقعة (تلقائي = الخام × 0.65)', type: 'number', required: true, min: '0', step: '0.001', value: num0(order.expected_qty), disabled: true }) +
+            UIC.field({ key: 'f-manufactured', label: 'كمية الخام الداخلة', type: 'number', required: true, min: '0', step: '0.001', value: num0(order.manufactured_qty) }) +
+            UIC.field({ key: 'f-batch', label: 'رقم التشغيلة', type: 'text', value: esc(order.manufacture_batch || '') }) +
+            UIC.field({ key: 'f-actual', label: 'الكمية الفعلية المنتجة', type: 'number', min: '0', step: '0.01', value: order.actual_qty != null ? num0(order.actual_qty) : '' }) +
+          '</div>' +
+          '<div class="odoo-grid" style="margin-top:14px;">' +
+            UIC.combo({ key: 'f-product', label: 'المنتج المنتج', required: true, options: PRODUCT_OPTIONS, value: String(order.produced_product || ''), placeholder: 'اكتب للبحث…' }) +
+            UIC.combo({ key: 'f-recipe', label: 'الوصفة', required: false, options: RECIPE_OPTIONS.filter(function (o) { return o.active !== false; }), value: String(order.recipe_id || ''), placeholder: 'اختر الوصفة (اختياري)…' }) +
+          '</div>' +
+          '</form></div></div>';
+
+        var notebook = '<div class="odoo-nb">' +
+          '<button class="odoo-tab active" onclick="MFGVIEW_PAGE.switchTab(\'tab-products\')">📦 الخامات الداخلة</button>' +
+          '<button class="odoo-tab" onclick="MFGVIEW_PAGE.switchTab(\'tab-work\')">⚙️ ورديات التشغيل</button>' +
+          '<button class="odoo-tab" onclick="MFGVIEW_PAGE.switchTab(\'tab-byproduct\')">♻️ المنتجات الثانوية</button>' +
+          '</div>' +
+          '<div id="tab-products" class="odoo-pane active"><div id="outputs-body"></div></div>' +
+          '<div id="tab-work" class="odoo-pane"><div id="workops-body"></div></div>' +
+          '<div id="tab-byproduct" class="odoo-pane"><div id="byproducts-body"></div></div>';
+
+        root().innerHTML = bar + '<div class="odoo-wrap">' + headerCard + renderApprovals(order) + notebook + '</div>';
+
+        drawOutputs();
+        drawWorkOps();
+        drawByproducts();
+
+        var rec = document.getElementById('f-recipe');
+        if (rec && editable()) rec.addEventListener('change', function () { MFGVIEW_PAGE.onRecipeChange(); });
+
+        var mEl = document.getElementById('f-manufactured'); var eEl = document.getElementById('f-expected');
+        if (mEl && eEl) {
+          eEl.disabled = true; eEl.readOnly = true;
+          var recalcExpected = function () { var v = Number(mEl.value) || 0; eEl.value = (v * MFG_YIELD_FACTOR).toFixed(3); };
+          mEl.addEventListener('input', recalcExpected);
+          mEl.addEventListener('change', recalcExpected);
+          recalcExpected();
+        }
+      }
+
+      function renderApprovals(order) {
+        var pa = order.production_approval || ''; var pat = order.production_approval_time || '';
+        var qa = order.quality_approval || ''; var qat = order.quality_approval_time || '';
+        var canApprove = !IS_NEW;
+        return '<div class="odoo-card" style="margin-bottom:12px;"><div class="odoo-card-b" style="padding:10px 12px;">' +
+          '<div class="odoo-ro" style="margin-bottom:6px;">الاعتمادات</div>' +
+          '<div style="display:flex;gap:18px;flex-wrap:wrap;align-items:center;">' +
+            '<div><b>اعتماد الإنتاج:</b> ' + (pa ? esc(pa) + (pat ? ' — ' + fmtDateTime(pat) : '') : '<span class="odoo-ro">بانتظار</span>') + '</div>' +
+            '<div><b>اعتماد الجودة:</b> ' + (qa ? esc(qa) + (qat ? ' — ' + fmtDateTime(qat) : '') : '<span class="odoo-ro">بانتظار</span>') + '</div>' +
+            (canApprove ? '<div style="display:flex;gap:8px;">' +
+              '<button class="btn btn-outline" onclick="MFGVIEW_PAGE.approveMo(\'production\')">اعتماد الإنتاج</button>' +
+              '<button class="btn btn-outline" onclick="MFGVIEW_PAGE.approveMo(\'quality\')">اعتماد الجودة</button></div>' : '') +
+          '</div></div></div>';
+      }
+
+      function approveMo(kind) {
+        if (!MO_UID) { UI.toast && UI.toast('احفظ الأمر أولاً', 'error'); return; }
+        showLoading();
+        companyCall('approve_valley_mfg_order', { mo_uid: MO_UID, kind: kind })
+          .then(function (r) { UI.toast && UI.toast((r && r.message) || 'تم', 'success'); load(); })
+          .catch(function (e) { UI.toast && UI.toast((e && e.message) || 'فشل', 'error'); })
+          .finally(function () { hideLoading(); });
+      }
+
+      function printMo() {
+        var w = window.open('', '_blank');
+        if (!w) { UI.toast && UI.toast('تعذر فتح نافذة الطباعة', 'error'); return; }
+        var order = CURRENT_ORDER || {};
+        var html = '<!DOCTYPE html><html dir="rtl" lang="ar"><head><meta charset="utf-8"><title>أمر تصنيع ' + esc(order.transaction_code || '') + '</title>' +
+          '<style>body{font-family:Tahoma,Arial,sans-serif;padding:22px;color:#222;} h1{font-size:19px;margin:0 0 6px;} h3{font-size:15px;margin:16px 0 6px;border-bottom:1px solid #ccc;padding-bottom:3px;} table{border-collapse:collapse;width:100%;margin:8px 0;} th,td{border:1px solid #999;padding:5px 8px;font-size:12px;text-align:right;} .muted{color:#777;}</style></head><body>';
+        html += '<h1>أمر تصنيع ' + esc(order.transaction_code || '#') + '</h1>';
+        html += '<div class="muted">نوع العملية: ' + esc(order.operation_type || '') + ' | الوردية: ' + esc(order.shift || '') + ' | التاريخ: ' + esc(order.manufacture_date || '') + '</div>';
+        html += '<div>المنتج المنتج: ' + esc(order.produced_product_name || order.produced_product || '') + ' | التصنيف: ' + esc(order.product_category || '') + '</div>';
+        html += '<div>كمية الخام الداخلة: ' + fmt3(order.manufactured_qty) + ' | الكمية المتوقعة: ' + fmt3(order.expected_qty) + ' | الكمية الفعلية: ' + fmt3(order.actual_qty) + '</div>';
+        html += '<div>الوصفة: ' + esc(order.recipe_name || order.recipe_id || '') + ' | رقم التشغيلة: ' + esc(order.manufacture_batch || '') + ' | الحالة: ' + esc(order.mo_status || '') + '</div>';
+        html += '<div class="sec"><h3>الخامات الداخلة والدفعات المستهلكة</h3>';
+        MFG_OUTPUTS.forEach(function (o, i) {
+          html += '<h4>' + esc(o.product_name || o.product_id) + ' — الكمية: ' + fmt3(o.qty) + '</h4>';
+          var frs = OUTPUT_FOOTERS[i] || [];
+          if (frs.length) {
+            html += '<table><thead><tr><th>الدفعة</th><th>الكود</th><th>الكمية</th><th>تكلفة الوحدة</th><th>الإجمالي</th></tr></thead><tbody>';
+            frs.forEach(function (f) {
+              var uc = Number(f.unit_cost) || 0; var q = Number(f.qty) || 0;
+              html += '<tr><td>' + esc(f.item || '') + '</td><td>' + esc(f.item_code || '') + '</td><td>' + fmt3(q) + '</td><td>' + fmt3(uc) + '</td><td>' + fmt3(uc * q) + '</td></tr>';
+            });
+            html += '</tbody></table>';
+          } else { html += '<div class="muted">لا توجد دفعات</div>'; }
+        });
+        html += '</div>';
+        html += '<div class="sec"><h3>مراكز التشغيل</h3><table><thead><tr><th>التسلسل</th><th>مركز التشغيل</th><th>البداية</th><th>النهاية</th><th>الساعات الفعلية</th><th>تكلفة المركز</th><th>الإجمالي</th></tr></thead><tbody>';
+        MFG_WORKOPS.forEach(function (wop) {
+          html += '<tr><td>' + esc(wop.work_center_sequence || '') + '</td><td>' + esc(wop.work_center_name || wop.work_center_id || '') + '</td><td>' + (wop.start_time ? fmtDateTime(wop.start_time) : '') + '</td><td>' + (wop.end_time ? fmtDateTime(wop.end_time) : '') + '</td><td>' + fmt3(wop.actual_hours) + '</td><td>' + fmt3(wop.work_center_cost) + '</td><td>' + fmt3(wop.total_cost) + '</td></tr>';
+        });
+        html += '</tbody></table></div>';
+        if (MFG_BYPRODUCTS && MFG_BYPRODUCTS.length) {
+          html += '<div class="sec"><h3>المنتجات المرافقة</h3><table><thead><tr><th>الصنف</th><th>الكمية</th><th>التكلفة</th></tr></thead><tbody>';
+          MFG_BYPRODUCTS.forEach(function (b) { html += '<tr><td>' + esc(b.item || '') + '</td><td>' + fmt3(b.qty) + '</td><td>' + fmt3(b.total_cost) + '</td></tr>'; });
+          html += '</tbody></table></div>';
+        }
+        html += '<div class="sec"><h3>الإجماليات والاعتمادات</h3>';
+        html += '<div>تكلفة المخزون: ' + fmt3(order.total_inventory_cost) + ' | تكلفة أخرى: ' + fmt3(order.total_other_cost) + ' | تكلفة الدفعة: ' + fmt3(order.total_batch_cost) + ' | قيمة المرافق: ' + fmt3(order.by_product_nrv_value) + '</div>';
+        html += '<div>اعتماد الإنتاج: ' + (pa || '—') + (pat ? ' (' + fmtDateTime(pat) + ')' : '') + '</div>';
+        html += '<div>اعتماد الجودة: ' + (qa || '—') + (qat ? ' (' + fmtDateTime(qat) + ')' : '') + '</div>';
+        html += '</div>';
+        html += '</body></html>';
+        w.document.open(); w.document.write(html); w.document.close();
+        w.focus();
+        setTimeout(function () { try { w.print(); } catch (e) {} }, 350);
+      }
+
+      function selList_(list) { return (list || []).map(function (v) { return { value: v, label: v }; }); }
+
+      function statusActionsHTML() {
+        if (IS_NEW) return '';
+        var s = MO_STATUS, btns = '';
+        if (!editable() && s !== 'Locked') return '';
+        if (s === 'Draft') btns += '<button class="btn btn-primary" onclick="MFGVIEW_PAGE.changeStatus(\'start\')">▶️ بدء الإنتاج</button>';
+        if (s === 'In Progress' && IS_SUPER_ADMIN) btns += '<button class="btn btn-outline" style="color:#b45309;" onclick="MFGVIEW_PAGE.changeStatus(\'lock\')">🔒 قفل</button>';
+        if (s === 'Locked' && IS_SUPER_ADMIN) btns += '<button class="btn btn-outline" style="color:#b45309;" onclick="MFGVIEW_PAGE.changeStatus(\'unlock\')">🔓 فتح القفل</button>';
+        return btns;
+      }
+      function changeStatus(kind) {
+        if (kind === 'lock' && !confirm('قفل الأمر سيجعله غير قابل للتعديل إلا بصلاحية مدير النظام. متابعة؟')) return;
+        if (kind === 'unlock' && !confirm('فتح القفل سيعيد الأمر إلى «قيد التنفيذ». متابعة؟')) return;
+        showLoading();
+        companyCall('change_valley_mfg_status', { mo_uid: MO_UID, kind: kind })
+          .then(function (r) { UI.toast && UI.toast((r && r.message) || 'تم', 'success'); load(); })
+          .catch(function (e) { UI.toast && UI.toast((e && e.message) || 'فشل', 'error'); })
+          .finally(function () { hideLoading(); });
+      }
+      function goBack() { window.location.href = scriptUrl + '?action=vf_mfg_orders&sessionToken=' + SESSION_TOKEN; }
+      function switchTab(id) {
+        ['tab-products', 'tab-work', 'tab-byproduct'].forEach(function (t) {
+          var p = document.getElementById(t); if (p) p.classList.toggle('active', t === id);
+          var b = document.querySelector('.odoo-tab[onclick*="' + id + '"]'); if (b) b.classList.toggle('active', t === id);
+        });
+      }
+
+      /* ---------- OUTPUTS (valley_manufacture_header_products) ---------- */
+      function addOutput() {
+        MFG_OUTPUTS.push({ uid: '', product_id: '', qty: '', cost_unit: '', total_cost: '', product_name: '' });
+        OUTPUT_FOOTERS.push([]); OUTPUT_BATCHES.push([]);
+        drawOutputs();
+      }
+      function removeOutput(i) {
+        MFG_OUTPUTS.splice(i, 1); OUTPUT_FOOTERS.splice(i, 1); OUTPUT_BATCHES.splice(i, 1); drawOutputs();
+      }
+      function setOutputProduct(i, v) {
+        MFG_OUTPUTS[i].product_id = v;
+        var nm = ''; (PRODUCT_OPTIONS || []).forEach(function (p) { if (String(p.value) === String(v)) nm = p.label; });
+        MFG_OUTPUTS[i].product_name = nm;
+        if (v) {
+          companyCall('get_valley_product_batches', { product_id: v }).then(function (r) { OUTPUT_BATCHES[i] = r.batches || []; autoAllocFifo_(i); drawOutputs(); })
+            .catch(function () { OUTPUT_BATCHES[i] = []; drawOutputs(); });
+        } else { OUTPUT_BATCHES[i] = []; OUTPUT_FOOTERS[i] = []; drawOutputs(); }
+      }
+      function setOutputQty(i, v) { MFG_OUTPUTS[i].qty = v; autoAllocFifo_(i); }
+      /* Allocate the output quantity across available batches FIFO (oldest-first). */
+      function autoAllocFifo_(i) {
+        var o = MFG_OUTPUTS[i]; if (!o) return;
+        var qty = Number(o.qty) || 0;
+        var batches = OUTPUT_BATCHES[i] || [];
+        if (qty <= 0 || !batches.length) { OUTPUT_FOOTERS[i] = []; return; }
+        var remaining = qty, footers = [];
+        for (var b = 0; b < batches.length && remaining > 0.0001; b++) {
+          var avail = Number(batches[b].available) || 0;
+          if (avail <= 0) continue;
+          var take = avail >= remaining ? remaining : avail;
+          footers.push({ item: String(batches[b].batch_uid || ''), item_code: String(batches[b].lot || ''), qty: Math.round(take * 1000) / 1000, unit_cost: Number(batches[b].unit_cost) || 0 });
+          remaining = Math.round((remaining - take) * 1000) / 1000;
+        }
+        OUTPUT_FOOTERS[i] = footers;
+      }
+      function addFooterRow(i) { if (!OUTPUT_FOOTERS[i]) OUTPUT_FOOTERS[i] = []; OUTPUT_FOOTERS[i].push({ item: '', item_code: '', qty: '' }); drawOutputs(); }
+      function removeFooterRow(i, fi) { OUTPUT_FOOTERS[i].splice(fi, 1); drawOutputs(); }
+      function setFooterItem(i, fi, el) {
+        OUTPUT_FOOTERS[i][fi].item = el.value;
+        var opt = el.selectedOptions && el.selectedOptions[0];
+        OUTPUT_FOOTERS[i][fi].item_code = opt ? opt.getAttribute('data-code') : '';
+        OUTPUT_FOOTERS[i][fi].unit_cost = opt ? (Number(opt.getAttribute('data-unitcost')) || 0) : 0;
+      }
+      function setFooterQty(i, fi, v) { OUTPUT_FOOTERS[i][fi].qty = v; }
+
+      function drawOutputs() {
+        var tb = document.getElementById('outputs-body'); if (!tb) return;
+        var mfgQty = Number(getV_('f-manufactured')) || 0;
+        var recipe = getCombo_('f-recipe');
+        if (!MFG_OUTPUTS.length) {
+          if (!mfgQty) {
+            tb.innerHTML = '<div class="odoo-card"><div class="odoo-card-b" style="padding:14px;color:#666;">🧪 أدخل «كمية الخام الداخلة» أولاً لعرض المواد المستهلكة وتخصيص الدفعات.</div></div>'
+              + (editable() ? '<button class="btn btn-outline" onclick="MFGVIEW_PAGE.addOutput()">+ خامة داخلة</button>' : '');
+            return;
+          }
+          addOutput(); return;
+        }
+        var html = MFG_OUTPUTS.map(function (o, i) {
+          var footers = OUTPUT_FOOTERS[i] || [];
+          var outTotal = footers.reduce(function (s, f) { return s + (Number(f.unit_cost) || 0) * (Number(f.qty) || 0); }, 0);
+          var batches = OUTPUT_BATCHES[i] || [];
+          var footerRows = footers.map(function (f, fi) {
+            var lineTotal = (Number(f.unit_cost) || 0) * (Number(f.qty) || 0);
+            var b = null; for (var bi = 0; bi < batches.length; bi++) { if (String(batches[bi].batch_uid) === String(f.item)) { b = batches[bi]; break; } }
+            var avail = b ? (Number(b.available) || 0) : 0;
+            var alloc = Number(f.qty) || 0;
+            var remain = avail - alloc;
+            var remCls = remain < -0.0001 ? 'odoo-neg' : 'odoo-ro';
+            return '<tr style="background:#f3faf3;">' +
+              '<td>' + selHtml('ft-item-' + i + '-' + fi, [], f.item, 'MFGVIEW_PAGE.setFooterItem(' + i + ',' + fi + ',this)', '— اختر دفعة —', disOpt()) + '</td>' +
+              '<td class="odoo-ro">' + fmt3(avail) + '</td>' +
+              '<td>' + inputHtml('ft-qty-' + i + '-' + fi, f.qty, 'number', 'MFGVIEW_PAGE.setFooterQty(' + i + ',' + fi + ',this.value)', { min: '0', step: '0.001', disabled: !editable() }) + '</td>' +
+              '<td class="' + remCls + '">' + fmt3(remain) + '</td>' +
+              '<td class="odoo-ro">' + fmtMoney(lineTotal) + '</td>' +
+              (editable() ? '<td><button class="btn btn-ghost" style="padding:2px 6px;font-size:11px;" onclick="MFGVIEW_PAGE.removeFooterRow(' + i + ',' + fi + ')">✕</button></td>' : '<td></td>') +
+              '</tr>';
+          }).join('');
+          var footerTable = footers.length
+            ? '<table class="odoo-table"><thead><tr><th>الدفعة (transaction_code)</th><th style="width:110px;">المتاح</th><th style="width:120px;">المخصص</th><th style="width:110px;">المتبقي</th><th style="width:130px;">إجمالي التكلفة</th><th style="width:30px;"></th></tr></thead><tbody>' + footerRows + '</tbody></table>'
+            : '<div class="odoo-ro" style="padding:4px;">لا توجد دفعات مسجلة — استخدم «جرّب الوصفة» أو أضف دفعة يدوياً</div>';
+          var prodCell = editable()
+            ? UIC.combo({ key: 'out-prod-' + i, label: '', required: true, options: PRODUCT_OPTIONS, value: o.product_id, placeholder: 'ابحث عن منتج…' })
+            : (esc(o.product_name || o.product_id) || '<span class="odoo-ro">—</span>');
+          return '<div class="odoo-card" style="margin-bottom:10px;"><div class="odoo-card-b" style="padding:10px 12px;">' +
+            '<div class="odoo-grid" style="grid-template-columns:1fr 150px 40px;">' +
+              '<div class="odoo-fld"><label>الخامة الداخلة</label>' + prodCell + '</div>' +
+              '<div class="odoo-fld"><label>الكمية</label>' + inputHtml('out-qty-' + i, o.qty, 'number', 'MFGVIEW_PAGE.setOutputQty(' + i + ',this.value)', { min: '0.001', step: '0.001', disabled: !editable() }) + '</div>' +
+              (editable() ? '<div style="display:flex;align-items:flex-end;"><button class="btn btn-ghost" style="padding:6px 8px;" onclick="MFGVIEW_PAGE.removeOutput(' + i + ')">✕</button></div>' : '<div></div>') +
+            '</div>' +
+            '<div class="odoo-sub">' +
+              '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;"><span class="odoo-ro">🧪 المواد المستهلكة (الدفعات)</span>' + (editable() ? '<button class="btn btn-outline" style="padding:2px 8px;font-size:11px;" onclick="MFGVIEW_PAGE.addFooterRow(' + i + ')">+ دفعة</button>' : '') + '</div>' +
+              footerTable +
+            '</div>' +
+            (o.product_name || outTotal ? '<div class="odoo-ro" style="margin-top:6px;">' + (o.product_name ? 'الصنف: ' + esc(o.product_name) : '') + (outTotal ? ' • إجمالي الاستهلاك: ' + fmtMoney(outTotal) : '') + '</div>' : '') +
+            '</div></div>';
+        }).join('');
+        tb.innerHTML = html               + (editable() ? '<button class="btn btn-outline" onclick="MFGVIEW_PAGE.addOutput()">+ خامة داخلة</button>' : '');
+        MFG_OUTPUTS.forEach(function (o, i) {
+          if (editable()) { var el = document.getElementById('out-prod-' + i); if (el) el.addEventListener('change', function () { MFGVIEW_PAGE.setOutputProduct(i, el.value); }); }
+          (OUTPUT_FOOTERS[i] || []).forEach(function (f, fi) { populateFooterItem(i, fi, o.product_id, f.item); });
+        });
+      }
+
+      function populateFooterItem(i, fi, productId, selUid) {
+        var sel = document.getElementById('ft-item-' + i + '-' + fi);
+        if (!sel) return;
+        if (!productId) { sel.innerHTML = '<option value="">— اختر منتج الناتج أولاً —</option>'; sel.disabled = !editable(); return; }
+        function fill(list) {
+          var opts = list.filter(function (b) { return Number(b.available) > 0 || b.batch_uid === selUid; });
+          var html = '<option value="">— اختر دفعة —</option>';
+          opts.forEach(function (b) {
+            var code = b.lot || b.batch_uid;
+            html += '<option value="' + esc(b.batch_uid) + '" data-code="' + esc(code) + '" data-unitcost="' + esc(b.unit_cost) + '"' + (b.batch_uid === selUid ? ' selected' : '') + '>' + esc(code) + ' (متاح: ' + Number(b.available).toLocaleString('en-US') + ')</option>';
+          });
+          sel.innerHTML = html;
+          sel.disabled = !editable();
+        }
+        var pre = OUTPUT_BATCHES[i];
+        if (pre) { fill(pre); }
+        else { companyCall('get_valley_product_batches', { product_id: productId }).then(function (r) { OUTPUT_BATCHES[i] = r.batches || []; fill(OUTPUT_BATCHES[i]); }).catch(function () { sel.innerHTML = '<option value="">خطأ في تحميل الدفعات</option>'; }); }
+      }
+
+      /* ---------- WORK OPS (valley_manufacture_work_center) ---------- */
+      var WO_STATUSES = ['Pending', 'In Progress', 'Paused', 'Done'];
+      function addWorkOp() {
+        MFG_WORKOPS.push({ uid: '', work_center_id: '', operation_status: 'Pending', notes: '', start_time: '', end_time: '', last_pause_time: '', total_pause_duration: 0, actual_hours: '' });
+        drawWorkOps();
+      }
+      function removeWorkOp(i) { MFG_WORKOPS.splice(i, 1); drawWorkOps(); }
+      function setWorkOp(i, field, val) { MFG_WORKOPS[i][field] = val; }
+      function clockWorkOp(i, command) {
+        var w = MFG_WORKOPS[i];
+        if (!w) return;
+        if (w.uid) {
+          showLoading();
+          companyCall('control_valley_mfg_workop', { workop_uid: w.uid, command: command, start_time: w.start_time, end_time: w.end_time })
+            .then(function (r) {
+              var up = r && r.workop;
+              if (up) {
+                MFG_WORKOPS[i].operation_status = up.operation_status || MFG_WORKOPS[i].operation_status;
+                MFG_WORKOPS[i].start_time = up.start_time || MFG_WORKOPS[i].start_time;
+                MFG_WORKOPS[i].end_time = up.end_time || MFG_WORKOPS[i].end_time;
+                MFG_WORKOPS[i].last_pause_time = up.last_pause_time || '';
+                MFG_WORKOPS[i].total_pause_duration = up.total_pause_duration != null ? up.total_pause_duration : MFG_WORKOPS[i].total_pause_duration;
+                MFG_WORKOPS[i].actual_hours = up.actual_hours != null ? up.actual_hours : MFG_WORKOPS[i].actual_hours;
+              }
+              UI.toast && UI.toast((r && r.message) || 'تم', 'success');
+              drawWorkOps();
+            })
+            .catch(function (e) { UI.toast && UI.toast((e && e.message) || 'فشل', 'error'); })
+            .finally(function () { hideLoading(); });
+        } else {
+          /* unsaved op — apply locally; persists when the MO is saved */
+          if (command === 'start') { w.operation_status = 'In Progress'; if (!w.start_time) w.start_time = new Date(); }
+          else if (command === 'pause') { w.operation_status = 'Paused'; w.last_pause_time = new Date(); }
+          else if (command === 'resume') { w.operation_status = 'In Progress'; w.last_pause_time = ''; }
+          else if (command === 'stop') {
+            w.operation_status = 'Done';
+            if (!w.end_time) w.end_time = new Date();
+            var st = w.start_time ? new Date(w.start_time) : null;
+            var et = w.end_time ? new Date(w.end_time) : null;
+            if (st && et && !isNaN(st.getTime()) && !isNaN(et.getTime())) {
+              var ms = et.getTime() - st.getTime();
+              var pause = Number(w.total_pause_duration) || 0;
+              w.actual_hours = Math.round((ms / 3600000 - pause) * 100) / 100;
+            }
+          }
+          drawWorkOps();
+        }
+      }
+      function drawWorkOps() {
+        var tb = document.getElementById('workops-body'); if (!tb) return;
+        function statusLabel(s) { return s === 'Done' ? 'منتهية' : (s === 'Paused' ? 'متوقف مؤقتاً' : (s === 'In Progress' ? 'قيد التشغيل' : 'بانتظار')); }
+        function dt(v) { return fmtDateTime(v); }
+        function rowBtns(i, w, canClock) {
+          if (!canClock) return '';
+          var st = w.operation_status;
+          if (st === 'Pending') return '<button class="btn btn-primary" style="padding:3px 10px;font-size:11px;" onclick="MFGVIEW_PAGE.clockWorkOp(' + i + ',\'start\')">▶ بدء</button>';
+          if (st === 'In Progress') return '<button class="btn btn-outline" style="padding:3px 10px;font-size:11px;" onclick="MFGVIEW_PAGE.clockWorkOp(' + i + ',\'pause\')">⏸ إيقاف مؤقت</button> <button class="btn btn-outline" style="padding:3px 10px;font-size:11px;" onclick="MFGVIEW_PAGE.clockWorkOp(' + i + ',\'stop\')">⏹ إنهاء</button>';
+          if (st === 'Paused') return '<button class="btn btn-outline" style="padding:3px 10px;font-size:11px;" onclick="MFGVIEW_PAGE.clockWorkOp(' + i + ',\'resume\')">▶ استئناف</button> <button class="btn btn-outline" style="padding:3px 10px;font-size:11px;" onclick="MFGVIEW_PAGE.clockWorkOp(' + i + ',\'stop\')">⏹ إنهاء</button>';
+          return '';
+        }
+        function toDtInput(v) { if (!v) return ''; var d = (v instanceof Date) ? v : new Date(v); if (isNaN(d.getTime())) return ''; var p = function (n) { return n < 10 ? '0' + n : '' + n; }; return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + 'T' + p(d.getHours()) + ':' + p(d.getMinutes()); }
+        var rows = MFG_WORKOPS.map(function (w, i) {
+          var canClock = editable() || IS_SUPER_ADMIN;
+          var timing = '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:4px;">' +
+              inputHtml('wo-start-' + i, toDtInput(w.start_time), 'datetime-local', 'MFGVIEW_PAGE.setWorkOp(' + i + ',\'start_time\',this.value)', { disabled: !editable() }) +
+              inputHtml('wo-end-' + i, toDtInput(w.end_time), 'datetime-local', 'MFGVIEW_PAGE.setWorkOp(' + i + ',\'end_time\',this.value)', { disabled: !editable() }) +
+            '</div>' + rowBtns(i, w, canClock);
+          return '<tr>' +
+            '<td>' + selHtml('wo-wc-' + i, WORKCENTER_OPTIONS, w.work_center_id, 'MFGVIEW_PAGE.setWorkOp(' + i + ',\'work_center_id\',this.value)', 'اختر مركز العمل', disOpt()) + '</td>' +
+            '<td><span class="odoo-pill ' + (w.operation_status === 'Done' ? 'Done' : (w.operation_status === 'Paused' ? 'Paused' : (w.operation_status === 'In Progress' ? 'InProgress' : 'Draft'))) + '">' + statusLabel(w.operation_status) + '</span></td>' +
+            '<td>' + inputHtml('wo-notes-' + i, w.notes, 'text', 'MFGVIEW_PAGE.setWorkOp(' + i + ',\'notes\',this.value)', disOpt()) + '</td>' +
+            '<td style="min-width:240px;">' + timing + '</td>' +
+            '<td class="odoo-ro">' + fmt3(w.actual_hours) + '<div style="font-size:10px;color:#888;">توقف: ' + fmt3(w.total_pause_duration) + '</div></td>' +
+            (editable() ? '<td><button class="btn btn-ghost" style="padding:2px 6px;font-size:11px;" onclick="MFGVIEW_PAGE.removeWorkOp(' + i + ')">✕</button></td>' : '<td></td>') +
+            '</tr>';
+        }).join('');
+        var addBtn = editable() ? '<button class="btn btn-outline" style="margin-top:8px;" onclick="MFGVIEW_PAGE.addWorkOp()">+ عملية تشغيل</button>' : '';
+        tb.innerHTML = (MFG_WORKOPS.length
+          ? '<table class="odoo-table"><thead><tr><th>مركز العمل</th><th>الحالة</th><th>ملاحظات</th><th>بدء / إنهاء (توقيت يدوي)</th><th>الساعات الفعلية</th><th></th></tr></thead><tbody>' + rows + '</tbody></table>'
+          : '<div class="odoo-ro">لا توجد ورديات تشغيل</div>') + addBtn;
+      }
+
+      /* ---------- BY-PRODUCTS (valley_manufacture_by_product) ---------- */
+      function addByproduct() {
+        MFG_BYPRODUCTS.push({ uid: '', item: '', qty: '', transaction_code: '', total_cost: '' });
+        drawByproducts();
+      }
+      function removeByproduct(i) { MFG_BYPRODUCTS.splice(i, 1); drawByproducts(); }
+      function setByproduct(i, field, val) { MFG_BYPRODUCTS[i][field] = val; }
+      function drawByproducts() {
+        var tb = document.getElementById('byproducts-body'); if (!tb) return;
+        var rows = MFG_BYPRODUCTS.map(function (b, i) {
+          return '<tr>' +
+            '<td>' + selHtml('bp-item-' + i, PRODUCT_OPTIONS, b.item, 'MFGVIEW_PAGE.setByproduct(' + i + ',\'item\',this.value)', 'اختر منتج ثانوي', disOpt()) + '</td>' +
+            '<td>' + inputHtml('bp-qty-' + i, b.qty, 'number', 'MFGVIEW_PAGE.setByproduct(' + i + ',\'qty\',this.value)', { min: '0', step: '0.01', disabled: !editable() }) + '</td>' +
+            '<td>' + inputHtml('bp-code-' + i, b.transaction_code, 'text', 'MFGVIEW_PAGE.setByproduct(' + i + ',\'transaction_code\',this.value)', disOpt()) + '</td>' +
+            '<td>' + inputHtml('bp-cost-' + i, b.total_cost, 'number', 'MFGVIEW_PAGE.setByproduct(' + i + ',\'total_cost\',this.value)', { min: '0', step: '0.01', disabled: !editable() }) + '</td>' +
+            (editable() ? '<td><button class="btn btn-ghost" style="padding:2px 6px;font-size:11px;" onclick="MFGVIEW_PAGE.removeByproduct(' + i + ')">✕</button></td>' : '<td></td>') +
+            '</tr>';
+        }).join('');
+        var addBtn = editable() ? '<button class="btn btn-outline" style="margin-top:8px;" onclick="MFGVIEW_PAGE.addByproduct()">+ منتج ثانوي</button>' : '';
+        tb.innerHTML = (MFG_BYPRODUCTS.length
+          ? '<table class="odoo-table"><thead><tr><th>المنتج الثانوي</th><th>الكمية</th><th>كود الدفعة</th><th>التكلفة</th><th></th></tr></thead><tbody>' + rows + '</tbody></table>'
+          : '<div class="odoo-ro">لا توجد منتجات ثانوية</div>') + addBtn;
+      }
+
+      /* ---------- RECIPE AUTO-GRASP ---------- */
+      function onRecipeChange() {
+        var recipeUid = getCombo_('f-recipe');
+        var qty = num0(getV_('f-manufactured'));
+        if (!recipeUid || qty <= 0) { UI.toast && UI.toast('اختر الوصفة والكمية المصنعة أولاً', 'error'); return; }
+        showLoading();
+        companyCall('get_valley_recipe_plan', { recipe_uid: recipeUid, qty: qty })
+          .then(function (r) {
+            autofillWorkOps(r.ops || []);
+            return autofillOutputs(r.materials || []);
+          })
+          .then(function () { UI.toast && UI.toast('تم جلب بنود الوصفة — راجعها وعدّلها قبل الحفظ', 'success'); })
+          .catch(function (e) { UI.toast && UI.toast((e && e.message) || 'خطأ في جفت الوصفة', 'error'); })
+          .finally(function () { hideLoading(); });
+      }
+      function autofillWorkOps(ops) {
+        MFG_WORKOPS = (ops || []).map(function (op) {
+          return { uid: '', work_center_id: String(op.work_center_id || ''), operation_status: 'Pending', notes: op.step_name || '', start_time: '', end_time: '', actual_hours: '' };
+        });
+        drawWorkOps();
+      }
+      function autofillOutputs(materials) {
+        (materials || []).forEach(function (m) {
+          var pid = String(m.raw_material_id || '');
+          if (!pid) return;
+          var existing = -1;
+          for (var k = 0; k < MFG_OUTPUTS.length; k++) { if (String(MFG_OUTPUTS[k].product_id) === pid) { existing = k; break; } }
+          if (existing === -1) {
+            MFG_OUTPUTS.push({ uid: '', product_id: pid, qty: m.required_qty, cost_unit: '', total_cost: '', product_name: m.raw_material_name || '' });
+            OUTPUT_FOOTERS.push([]);
+          }
+        });
+        var pending = allocateBatchesAll();
+        return pending.then(function () { drawOutputs(); });
+      }
+      function allocateBatchesAll() {
+        var pids = MFG_OUTPUTS.map(function (o) { return o.product_id; });
+        OUTPUT_FOOTERS = MFG_OUTPUTS.map(function () { return []; });
+        if (!pids.filter(function (p) { return p; }).length) return Promise.resolve();
+        return companyCall('get_valley_product_batches_multi', { product_ids: pids }).then(function (r) {
+          var byProduct = (r && r.batches_by_product) || {};
+          MFG_OUTPUTS.forEach(function (o, i) {
+            var batches = (byProduct[String(o.product_id)] || []).filter(function (b) { return Number(b.available) > 0; });
+            OUTPUT_BATCHES[i] = byProduct[String(o.product_id)] || [];
+            var remaining = num0(o.qty), footers = [];
+            batches.forEach(function (b) {
+              if (remaining <= 0) return;
+              var avail = Number(b.available) || 0;
+              if (avail <= 0) return;
+              var take = Math.min(remaining, avail);
+              var uc = Number(b.unit_cost) || 0;
+              footers.push({ item: b.batch_uid, item_code: b.lot || b.batch_uid, qty: take, unit_cost: uc, total_cost: uc * take });
+              remaining -= take;
+            });
+            OUTPUT_FOOTERS[i] = footers;
+          });
+        });
+      }
+      /* ---------- SAVE (consolidated) ---------- */
+      function saveHeader() {
+        if (UIC.validateForm && !UIC.validateForm('mo-form')) return;
+        var outputs = MFG_OUTPUTS.map(function (o, i) {
+          var pid = o.product_id || (function () { var el = document.getElementById('out-prod-' + i); return el ? el.value : ''; })();
+          var footers = (OUTPUT_FOOTERS[i] || []).filter(function (f) { return f.item; }).map(function (f) { return { item: f.item, item_code: f.item_code, qty: f.qty, unit_cost: f.unit_cost }; });
+          return { product_id: pid, qty: o.qty, footers: footers };
+        }).filter(function (o) { return o.product_id && num0(o.qty) > 0; });
+        if (!outputs.length) { UI.toast && UI.toast('أضف خامة داخلة واحدة على الأقل', 'error'); return; }
+
+        var payload = {
+          mo_uid: MO_UID,
+          manufacture_date: getV_('f-date'),
+          operation_type: getCombo_('f-op-type'),
+          shift: getCombo_('f-shift'),
+          produced_product_id: getCombo_('f-product'),
+          expected_qty: getV_('f-expected'),
+          manufactured_qty: getV_('f-manufactured'),
+          actual_qty: getV_('f-actual'),
+          recipe_id: getCombo_('f-recipe'),
+          mo_status: getV_('f-status'),
+          manufacture_batch: getV_('f-batch'),
+          outputs: outputs,
+          work_ops: MFG_WORKOPS.map(function (w) { return { uid: w.uid, work_center_id: w.work_center_id, operation_status: w.operation_status, notes: w.notes, start_time: w.start_time, last_pause_time: w.last_pause_time, end_time: w.end_time, actual_hours: w.actual_hours, total_pause_duration: w.total_pause_duration }; }),
+          byproducts: MFG_BYPRODUCTS.map(function (b) { return { item: b.item, qty: b.qty, transaction_code: b.transaction_code, total_cost: b.total_cost }; }),
+          consumption: []
+        };
+        showLoading();
+        companyCall('save_valley_mfg_order', payload)
+          .then(function (r) {
+            UI.toast && UI.toast((r && r.message) || 'تم الحفظ بنجاح', 'success');
+            if (IS_NEW && r && r.mo_uid) { MO_UID = r.mo_uid; IS_NEW = false; }
+            load();
+            if (window.confirm('تم حفظ أمر التصنيع. هل تريد إدخال بيانات التشغيل (الخطوات/الدفعات) الآن؟')) { switchTab('workops'); }
+          })
+          .catch(function (e) { UI.toast && UI.toast((e && e.message) || 'فشل الحفظ', 'error'); })
+          .finally(function () { hideLoading(); });
+      }
+
+      window.MFGVIEW_PAGE = {
+        load: load, renderDetail: renderDetail, saveHeader: saveHeader, goBack: goBack,
+        switchTab: switchTab, changeStatus: changeStatus, onRecipeChange: onRecipeChange,
+        addOutput: addOutput, removeOutput: removeOutput, setOutputProduct: setOutputProduct, setOutputQty: setOutputQty,
+        addFooterRow: addFooterRow, removeFooterRow: removeFooterRow, setFooterItem: setFooterItem, setFooterQty: setFooterQty,
+        addWorkOp: addWorkOp, removeWorkOp: removeWorkOp, setWorkOp: setWorkOp, clockWorkOp: clockWorkOp,
+        addByproduct: addByproduct, removeByproduct: removeByproduct, setByproduct: setByproduct,
+        approveMo: approveMo, printMo: printMo
+      };
+      document.addEventListener('DOMContentLoaded', load);
+    })();
+  </script>
+</body>
+</html>
+
+

@@ -1,0 +1,156 @@
+﻿<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Valley Foods — تخصيص الإجازات</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_ValleyFoods_Nav'); ?>
+  <?!= getCompanyThemeCSS_('9940659bd83035d7') ?>
+</head>
+<body>
+  <div id="vf-root" dir="rtl"></div>
+
+  <script>
+    var params = new URLSearchParams(window.location.search);
+    var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+    var scriptUrl = window.scriptUrl || '/';
+    var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+    var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('9940659bd83035d7') ?>';
+    var COMPANY_PAGES = <?!= companyPages ?>;
+    var CURRENT_ACTION = '<?!= currentAction ?>';
+    var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+    var CAN_WRITE = UIC.canAdd_(); var CAN_FULL = UIC.canFull_();
+
+    function companyCall(moduleAction, data) {
+      return API.call('company_action', {
+        target_system: '9940659bd83035d7',
+        module_action: moduleAction,
+        data: data || {}
+      }, SESSION_TOKEN);
+    }
+
+    function esc(v) {
+      var s = (v === undefined || v === null) ? '' : String(v);
+      if (typeof FMT !== 'undefined' && FMT.escape) return FMT.escape(s);
+      return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+    function todayStr() { return new Date().toISOString().slice(0, 10); }
+    function fmtDate(v) {
+      if (!v) return '';
+      var d = (v instanceof Date) ? v : new Date(v);
+      if (isNaN(d.getTime())) return String(v);
+      var pad = function (n) { return n < 10 ? '0' + n : '' + n; };
+      return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+    }
+
+    var ROWS = [];
+    var EMP_OPTIONS = [];
+    var VAC_INDEX_OPTIONS = [];
+    var VAC_INDEX_MAP = {};
+
+    function load() {
+      UIC.appShell('vf-root', {
+        companyLogoUrl: COMPANY_LOGO_URL,
+        companyLogoHref: scriptUrl + '?action=vf_dashboard&sessionToken=' + SESSION_TOKEN,
+        companyLogoTitle: 'Valley Foods',
+        breadcrumb: 'Valley Foods / شؤون الموظفين / تخصيص الإجازات',
+        contentId: 'vf-vacalloc-content',
+        menuGroups: (window.VALLEYFOODS_MENU || [])
+      });
+      fetchData();
+    }
+
+    function fetchData() {
+      UI.showSpinner();
+      companyCall('get_vacation_alloc_data').then(function (res) {
+        ROWS = res.rows || [];
+        EMP_OPTIONS = res.employee_options || [];
+        VAC_INDEX_OPTIONS = res.vacation_index_options || [];
+        VAC_INDEX_MAP = {};
+        VAC_INDEX_OPTIONS.forEach(function (o) { VAC_INDEX_MAP[String(o.value)] = o.label; });
+        render(); try{schedulePrefetch();}catch(e){};
+      }).catch(function (e) {
+        UIC.toast('خطأ: ' + (e && e.message ? e.message : e), 'error');
+      }).finally(function () { UI.hideSpinner(); });
+    }
+
+    function render() {
+      var addBtn = CAN_WRITE
+        ? '<div style="text-align:left;margin-bottom:12px;"><button class="btn btn-primary" onclick="openAddModal()">+ إضافة تخصيص إجازة</button></div>'
+        : '';
+      var headers = [
+        { key: 'emp_id', label: 'الكود' },
+        { key: 'employee_name', label: 'الاسم' },
+        { key: 'vacation_type', label: 'نوع الإجازة' },
+        { key: 'vacation_alloc_start_Date', label: 'من' },
+        { key: 'vacation_alloc_end_Date', label: 'إلى' },
+        { key: 'number_of_days', label: 'الأيام' },
+        { key: 'used_days', label: 'المستخدم' },
+        { key: 'remaining', label: 'متبقي' }
+      ];
+      var rows = ROWS.map(function (r) {
+        var total = Number(r.number_of_days) || 0;
+        var used = Number(r.used_days) || 0;
+        var vacName = VAC_INDEX_MAP[String(r.vacation_type)] || r.vacation_type || '';
+        return {
+          emp_id: esc(r.emp_id),
+          employee_name: esc(r.employee_name),
+          vacation_type: esc(vacName),
+          vacation_alloc_start_Date: esc(fmtDate(r.vacation_alloc_start_Date)),
+          vacation_alloc_end_Date: esc(fmtDate(r.vacation_alloc_end_Date)),
+          number_of_days: total,
+          used_days: used,
+          remaining: total - used
+        };
+      });
+      document.getElementById('vf-vacalloc-content').innerHTML =
+        addBtn +
+        UIC.dataTable('vacalloc-table', { headers: headers, rows: rows, emptyText: 'لا توجد تخصيصات إجازات' });
+      UIC.initTableSort('vacalloc-table');
+    }
+
+    function openAddModal() {
+      var body = '<form id="vacalloc-form">' +
+        UIC.combo({ key: 'emp_id', label: 'الموظف', required: true, options: EMP_OPTIONS }) +
+        UIC.combo({ key: 'vacation_type', label: 'نوع الإجازة', required: true, options: VAC_INDEX_OPTIONS, placeholder: 'اختر نوع الإجازة...' }) +
+        UIC.field({ key: 'vacation_alloc_start_Date', label: 'من', type: 'date', required: true, value: todayStr() }) +
+        UIC.field({ key: 'vacation_alloc_end_Date', label: 'إلى', type: 'date', required: true, value: todayStr() }) +
+        UIC.field({ key: 'number_of_days', label: 'عدد الأيام', type: 'number', required: true, min: '1', step: '1', value: '0' }) +
+      '</form>';
+      UIC.openModal('modal-vacalloc', { title: 'إضافة تخصيص إجازة', body: body, onSave: 'saveAlloc()' });
+    }
+
+    function saveAlloc() {
+      if (!UIC.validateForm('vacalloc-form')) return false;
+      var d = UIC.collectForm('vacalloc-form');
+      if (!d.emp_id) { UIC.toast('الموظف مطلوب', 'error'); return false; }
+      if (!d.vacation_type) { UIC.toast('نوع الإجازة مطلوب', 'error'); return false; }
+      if (!d.vacation_alloc_start_Date) { UIC.toast('تاريخ البداية مطلوب', 'error'); return false; }
+      if (!d.vacation_alloc_end_Date) { UIC.toast('تاريخ النهاية مطلوب', 'error'); return false; }
+      if (!d.number_of_days || Number(d.number_of_days) <= 0) { UIC.toast('عدد الأيام يجب أن يكون أكبر من صفر', 'error'); return false; }
+      companyCall('add_vacation_alloc', d).then(function (r) {
+        if (r && r.status === 'success') {
+          UIC.toast(r.message || 'تم الحفظ', 'success'); UIC.closeModal('modal-vacalloc');
+          if (r.record) {
+            var RECENT_LIMIT = 10;
+            var idx2 = ROWS.findIndex(function(x){ return String(x.unique_id)===String(r.record.unique_id); });
+            if (idx2!==-1) ROWS[idx2]=r.record; else ROWS.unshift(r.record);
+            if (ROWS.length>RECENT_LIMIT) ROWS.pop();
+            render();
+          } else { fetchData(); }
+        } else UIC.toast((r && r.message) || 'تعذر الحفظ', 'error');
+      }).catch(function (e) { UIC.toast((e && e.message) ? e.message : 'خطأ', 'error'); });
+      return true;
+    }
+  </script>
+
+  <script>
+    document.addEventListener('DOMContentLoaded', load);
+  </script>
+</body>
+</html>
+
+

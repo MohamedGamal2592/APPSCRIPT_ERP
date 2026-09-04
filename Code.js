@@ -1,0 +1,922 @@
+/**
+ * Code.js
+ * RESPONSIBILITY: doGet, doPost, ROUTES map, executeCompanyAction_, json_, include.
+ * Routing and dispatch glue ONLY. No business logic. Target: <150 lines.
+ */
+
+/* Globals shared with HTML templates via include() (set per request in doGet). */
+var SCRIPT_URL = '';
+var CURRENT_SESSION_TOKEN = '';
+var CURRENT_USER = null;
+
+function doGet(e) {
+  resetRecordCache_();
+  // System kill switch — checked before anything else, including download
+  // branches and company registration. A disabled system blocks every action…
+  // except: an authenticated SUPER ADMIN gets the recovery screen with a
+  // one-click re-open button (the only app-side lever while shut down).
+  if (!isSystemEnabled_()) {
+    const saToken = String(e.parameter.sessionToken || '').trim();
+    let isSuperAdmin = false;
+    if (saToken) {
+      try {
+        const saAuth = authenticateSystemUser_(saToken);
+        isSuperAdmin = !!(saAuth && saAuth.authorized && saAuth.user && saAuth.user.isSuperAdmin);
+      } catch (err) { isSuperAdmin = false; }
+    }
+    if (isSuperAdmin) return renderSystemShutdownAdminPage_(ScriptApp.getService().getUrl(), saToken);
+    return renderSystemDisabledPage_();
+  }
+  ensureCompaniesRegistered_();
+  const download = String(e.parameter.download || '').trim();
+  if (download === 'print_file') return servePrintFile_(e.parameter);
+  if (download === 'print_barcode') return servePrintBarcode_(e.parameter);
+  if (download === 'attachment' || download === 'doc_file') return serveAttachment_(e.parameter);
+  if (download === 'payroll_report') return servePayrollReport_(e.parameter);
+  if (download === 'budget_print') return serveBudgetPrint_(e.parameter);
+  if (download === 'erp_invoice' || download === 'appsheet_invoice') return serveErpInvoice_(e.parameter);
+  const action = (e.parameter.action || 'login').trim();
+  const scriptUrl = ScriptApp.getService().getUrl();
+  SCRIPT_URL = scriptUrl;
+  CURRENT_SESSION_TOKEN = String(e.parameter.sessionToken || '').trim();
+
+  // Session-expired interstitial: API layer redirects here; the button goes on
+  // to the login page. Shown before any auth/page lookup.
+  if (action === 'session_expired') return renderSessionExpiredPage_(scriptUrl);
+  if ((action === 'login' || action === 'ERPDashboard') && String(e.parameter.expired || '').trim() === '1') {
+    return renderSessionExpiredPage_(scriptUrl);
+  }
+
+  const page = getAllPages_().find(p => p.action === action);
+  if (!page) {
+    // Unknown/deleted action — bounce home instead of a dead-end message.
+    return _frame(HtmlService.createHtmlOutput(_topNavScript(scriptUrl + '?action=ERPDashboard&sessionToken=' + encodeURIComponent(e.parameter.sessionToken || ''))));
+  }
+
+  let authUser = null;
+  if (!page.public) {
+    const token = (e.parameter.sessionToken || '').trim();
+    const auth = token ? authenticateSystemUser_(token) : { authorized: false };
+    if (!auth.authorized) {
+      if (token) return renderSessionExpiredPage_(scriptUrl);
+      return _frame(HtmlService.createHtmlOutput(_topNavScript(scriptUrl + '?action=login')));
+    }
+    authUser = auth.user;
+    try { SessionManager_.touch(e.parameter.sessionToken); } catch (e) {}
+    if (!checkPageAccessForUI_(authUser, action)) {
+      // §5.2 L2 + §5.4: unified screen, no reveal of attempted page. backUrl is first authorized page or ERPDashboard with logout.
+      let backUrl = scriptUrl + '?action=ERPDashboard&sessionToken=' + encodeURIComponent(e.parameter.sessionToken || '');
+      try {
+        const first = getFirstAuthorizedPageForUser_(authUser);
+        if (first) backUrl = scriptUrl + '?action=' + encodeURIComponent(first) + '&sessionToken=' + encodeURIComponent(e.parameter.sessionToken || '');
+      } catch(err){}
+      let blockCompany = '';
+      for (const key in COMPANY_REGISTRY) {
+        const c = COMPANY_REGISTRY[key];
+        if (c.pages && c.pages.some(p => p.action === action)) { blockCompany = key; break; }
+      }
+      // §5.3 zero-authorized: still show unified screen; logout affordance handled inside render.
+      return renderAccessDeniedPage_(page.title || action, backUrl, blockCompany);
+    }
+  }
+
+  const tmpl = HtmlService.createTemplateFromFile(page.template);
+  tmpl.user = authUser;
+  CURRENT_USER = authUser;
+  tmpl.email = (e.parameter.email || '').trim();
+  tmpl.purchaseCode = (e.parameter.purchase_code || '').trim();
+  tmpl.currentAction = action;
+  tmpl.pageParams = JSON.stringify(e.parameter || {});
+  tmpl.companyPages = '[]';
+  for (const key in COMPANY_REGISTRY) {
+    const c = COMPANY_REGISTRY[key];
+    if (c.pages && c.pages.some(p => p.action === action)) {
+      tmpl.companyPages = JSON.stringify(
+        c.pages
+          .filter(p => p.nav !== false && (!authUser || checkPageAccessForUI_(authUser, p.action)))
+          .map(p => ({ action: p.action, label: p.label || p.title }))
+      );
+      break;
+    }
+  }
+  var rendered = tmpl.evaluate().getContent();
+  rendered = rendered.split('__APP_WEB_URL__').join(scriptUrl)
+                   .split('__APP_SESSION_TOKEN__').join(CURRENT_SESSION_TOKEN);
+  var headInjection = '<meta name="app-web-url" content="' + scriptUrl + '">'
+    + '<script>try{window.scriptUrl=document.querySelector(\'meta[name="app-web-url"]\').getAttribute(\'content\')||\'\';}catch(e){}</' + 'script>';
+  rendered = rendered.replace('<head>', '<head>' + headInjection);
+  return _frame(HtmlService.createHtmlOutput(rendered)).setTitle(page.title).addMetaTag('viewport', 'width=device-width, initial-scale=1');
+}
+
+/** Friendly access-denied page — unified §5.4. Never reveals attempted page/action (§5.4). Theme tokens only. */
+function renderAccessDeniedPage_(pageTitle, backUrl, companyUid) {
+  const theme = getCompanyBlockTheme_(companyUid);
+  // pageTitle intentionally NOT rendered — unified message only (ERP_MESSAGES.NOT_AUTHORIZED)
+  const msg = (typeof ERP_MESSAGES !== 'undefined' && ERP_MESSAGES.NOT_AUTHORIZED) ? ERP_MESSAGES.NOT_AUTHORIZED : 'غير مصرح لك بالوصول';
+  const loginUrl = (backUrl && backUrl.indexOf('sessionToken=') !== -1) ? backUrl.split('?')[0] + '?action=login' : backUrl;
+  return _frame(HtmlService.createHtmlOutput(
+    '<!DOCTYPE html><html dir="rtl" lang="ar"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"></head>' +
+    '<body style="margin:0;font-family:Segoe UI,Tahoma,Arial,sans-serif;background:#f3f4f6;display:flex;align-items:center;justify-content:center;min-height:100vh;padding:16px;box-sizing:border-box;">' +
+    '<div style="background:#fff;border-radius:16px;box-shadow:0 10px 30px rgba(0,0,0,.08);max-width:420px;width:100%;overflow:hidden;text-align:center;">' +
+      '<div style="background:linear-gradient(135deg,' + theme.from + ' 0%,' + theme.to + ' 100%);padding:28px 20px;color:#fff;">' +
+        '<div style="width:64px;height:64px;margin:0 auto 12px;background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.3);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:30px;">&#128274;</div>' +
+        '<h2 style="margin:0;font-size:19px;">' + msg + '</h2>' +
+      '</div>' +
+      '<div style="padding:24px 20px;">' +
+        '<p style="margin:0 0 20px;color:#6b7280;font-size:13px;line-height:1.7;">ليس لديك صلاحية للوصول إلى هذه الصفحة. إذا كنت تحتاج صلاحية، تواصل مع مدير النظام لإضافتها لدورك من شاشة «صلاحيات الأدوار».</p>' +
+         '<a href="' + backUrl + '" onclick="window.top.location.href=this.getAttribute(\'href\');return false;"' +
+        ' style="display:inline-block;padding:11px 28px;background:' + theme.to + ';color:#fff;border-radius:8px;text-decoration:none;font-weight:700;font-size:14px;margin:4px;">' +
+        '&#127968;&nbsp; العودة إلى الرئيسية</a>' +
+        ' <a href="' + loginUrl + '" onclick="try{localStorage.removeItem(\'erp_session\');}catch(e){}; window.top.location.href=this.getAttribute(\'href\');return false;"' +
+        ' style="display:inline-block;padding:11px 22px;background:#fff;color:' + theme.to + ';border:1px solid ' + theme.to + ';border-radius:8px;text-decoration:none;font-weight:700;font-size:13px;margin:4px;">تسجيل خروج</a>' +
+      '</div>' +
+    '</div>' +
+    '</body></html>'
+  )).setTitle(msg);
+}
+
+/** Session-expired interstitial — button continues to the login page. */
+function renderSessionExpiredPage_(scriptUrl) {
+  const loginUrl = scriptUrl + '?action=login';
+  return _frame(HtmlService.createHtmlOutput(
+    '<!DOCTYPE html><html dir="rtl" lang="ar"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"></head>' +
+    '<body style="margin:0;font-family:Segoe UI,Tahoma,Arial,sans-serif;background:#f3f4f6;display:flex;align-items:center;justify-content:center;min-height:100vh;padding:16px;box-sizing:border-box;">' +
+    '<div style="background:#fff;border-radius:16px;box-shadow:0 10px 30px rgba(0,0,0,.08);max-width:420px;width:100%;overflow:hidden;text-align:center;">' +
+      '<div style="background:linear-gradient(135deg,#92400e 0%,#d97706 100%);padding:28px 20px;color:#fff;">' +
+        '<div style="width:64px;height:64px;margin:0 auto 12px;background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.3);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:30px;">&#8987;</div>' +
+        '<h2 style="margin:0;font-size:19px;">انتهت صلاحية الجلسة</h2>' +
+      '</div>' +
+      '<div style="padding:24px 20px;">' +
+        '<p style="margin:0 0 8px;color:#374151;font-size:14px;">انتهت مدة تسجيل الدخول الخاصة بك لأسباب أمنية.</p>' +
+        '<p style="margin:0 0 20px;color:#6b7280;font-size:12.5px;line-height:1.7;">اضغط الزر بالأسفل لتسجيل الدخول من جديد ومتابعة العمل.</p>' +
+         '<a href="' + loginUrl + '" onclick="window.top.location.href=this.getAttribute(\'href\');return false;"' +
+        ' style="display:inline-block;padding:11px 32px;background:#d97706;color:#fff;border-radius:8px;text-decoration:none;font-weight:700;font-size:14px;">' +
+        '&#128273;&nbsp; تسجيل الدخول</a>' +
+      '</div>' +
+    '</div>' +
+    '</body></html>'
+  )).setTitle('انتهت صلاحية الجلسة');
+}
+
+/** Kill-switch block page (non-admin view) — same card language as the access-denied page. */
+function renderSystemDisabledPage_() {
+  var url = '';
+  try { url = ScriptApp.getService().getUrl(); } catch (e) {}
+  return _frame(HtmlService.createHtmlOutput(
+    '<!DOCTYPE html><html dir="rtl" lang="ar"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"></head>' +
+    '<body style="margin:0;font-family:Segoe UI,Tahoma,Arial,sans-serif;background:#f3f4f6;display:flex;align-items:center;justify-content:center;min-height:100vh;padding:16px;box-sizing:border-box;">' +
+    '<div style="background:#fff;border-radius:16px;box-shadow:0 10px 30px rgba(0,0,0,.08);max-width:420px;width:100%;overflow:hidden;text-align:center;">' +
+      '<div style="background:linear-gradient(135deg,#7f1d1d 0%,#dc2626 100%);padding:28px 20px;color:#fff;">' +
+        '<div style="width:64px;height:64px;margin:0 auto 12px;background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.3);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:30px;">&#9888;</div>' +
+        '<h2 style="margin:0;font-size:19px;">عطل في السيستم</h2>' +
+      '</div>' +
+      '<div style="padding:24px 20px;">' +
+        '<p style="margin:0 0 8px;color:#374151;font-size:14px;">النظام متوقف مؤقتاً للصيانة.</p>' +
+        '<p style="margin:0 0 20px;color:#6b7280;font-size:12.5px;line-height:1.7;">يرجى المحاولة مرة أخرى لاحقاً. إذا كان الاستمرار مستعجلاً تواصل مع مدير النظام.</p>' +
+        (url
+          ? '<a href="' + url + '?action=login" onclick="window.top.location.href=this.getAttribute(\'href\');return false;"' +
+            ' style="display:inline-block;padding:11px 32px;background:#16a34a;color:#fff;border-radius:8px;text-decoration:none;font-weight:700;font-size:14px;">' +
+            '&#8635;&nbsp; إعادة المحاولة</a>'
+          : '') +
+      '</div>' +
+    '</div>' +
+    '</body></html>'
+  ).setTitle('عطل في السيستم'));
+}
+
+/**
+ * Super-admin shutdown recovery page — shown ONLY to authenticated super
+ * admins while the kill switch is engaged. Offers a one-click re-open via
+ * toggle_kill_switch (the sole action permitted through the router while the
+ * system is disabled).
+ */
+function renderSystemShutdownAdminPage_(scriptUrl, sessionToken) {
+  var safeToken = String(sessionToken || '');
+  return _frame(HtmlService.createHtmlOutput(
+    '<!DOCTYPE html><html dir="rtl" lang="ar"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"></head>' +
+    '<body style="margin:0;font-family:Segoe UI,Tahoma,Arial,sans-serif;background:#f3f4f6;display:flex;align-items:center;justify-content:center;min-height:100vh;padding:16px;box-sizing:border-box;">' +
+    '<div style="background:#fff;border-radius:16px;box-shadow:0 10px 30px rgba(0,0,0,.08);max-width:420px;width:100%;overflow:hidden;text-align:center;">' +
+      '<div style="background:linear-gradient(135deg,#7f1d1d 0%,#dc2626 100%);padding:28px 20px;color:#fff;">' +
+        '<div style="width:64px;height:64px;margin:0 auto 12px;background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.3);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:30px;">&#9888;</div>' +
+        '<h2 style="margin:0;font-size:19px;">النظام متوقف حالياً</h2>' +
+      '</div>' +
+      '<div style="padding:24px 20px;">' +
+        '<p style="margin:0 0 8px;color:#374151;font-size:14px;">تم إيقاف النظام من لوحة الإدارة.</p>' +
+        '<p id="shut-msg" style="margin:0 0 20px;color:#6b7280;font-size:12.5px;line-height:1.7;">بصفتك مدير النظام يمكنك إعادة تشغيله فوراً بالزر بالأسفل، أو بتعديل خلية B2 في جدول ERP_system_work.</p>' +
+        '<button id="shut-btn" onclick="reopenSystem()"' +
+        ' style="display:inline-block;padding:11px 32px;background:#16a34a;color:#fff;border:0;border-radius:8px;font-weight:700;font-size:14px;cursor:pointer;">' +
+        '&#8635;&nbsp; إعادة تشغيل النظام</button>' +
+      '</div>' +
+    '</div>' +
+    '<script>' +
+    'function reopenSystem(){' +
+    '  var b=document.getElementById("shut-btn");var m=document.getElementById("shut-msg");' +
+    '  b.disabled=true;b.style.opacity=".6";m.textContent="جاري إعادة التشغيل...";' +
+    '  google.script.run' +
+    '    .withSuccessHandler(function(r){window.top.location.href=' + JSON.stringify(scriptUrl + '?action=ERPDashboard&sessionToken=' + safeToken) + ';})' +
+    '    .withFailureHandler(function(e){b.disabled=false;b.style.opacity="";m.textContent=(e&&e.message)?e.message:"فشل التشغيل، حاول مجدداً.";})' +
+    '    .apiRouter({action:"toggle_kill_switch",payload:{on:true},sessionToken:' + JSON.stringify(safeToken) + '});' +
+    '}' +
+    '</script>' +
+    '</body></html>'
+  ).setTitle('إيقاف النظام'));
+}
+
+const ROUTES = {
+  'login_user': { handler: handleLoginWithDevice_, requireAuth: false },
+  'setup_password': { handler: handleSetupWithDevice_, requireAuth: false },
+  'ping': { handler: handlePing_, requireAuth: true },
+  'get_dashboard_data': { handler: getDashboardData_, requireAuth: true },
+  'company_action': { handler: executeCompanyAction_, requireAuth: true },
+  'admin_list_companies': { handler: adminListCompanies_, requireAuth: true },
+  'admin_save_company': { handler: adminSaveCompany_, requireAuth: true },
+  'admin_list_users': { handler: adminListUsers_, requireAuth: true },
+  'admin_save_user': { handler: adminSaveUser_, requireAuth: true },
+  'admin_list_matrix': { handler: adminListMatrix_, requireAuth: true },
+  'admin_save_matrix': { handler: adminSaveMatrix_, requireAuth: true },
+  'admin_list_pages': { handler: adminListPages_, requireAuth: true },
+  'admin_save_pages': { handler: adminSavePages_, requireAuth: true },
+  'admin_list_currency': { handler: adminListCurrency_, requireAuth: true },
+  'admin_save_currency': { handler: adminSaveCurrency_, requireAuth: true },
+  'admin_delete_currency': { handler: adminDeleteCurrency_, requireAuth: true },
+  'admin_list_invoices': { handler: adminListInvoices_, requireAuth: true },
+  'admin_save_invoice': { handler: adminSaveInvoice_, requireAuth: true },
+  'admin_delete_invoice': { handler: adminDeleteInvoice_, requireAuth: true },
+  'toggle_kill_switch': { handler: toggleKillSwitch_, requireAuth: true },
+  'list_user_views': { handler: list_user_views, requireAuth: true },
+  'save_user_view': { handler: save_user_view, requireAuth: true },
+  'get_record_history': { handler: get_record_history, requireAuth: true },
+  'list_my_sessions': { handler: list_my_sessions, requireAuth: true },
+  'revoke_session': { handler: revoke_session, requireAuth: true },
+  'revoke_all_sessions': { handler: revoke_all_sessions, requireAuth: true },
+  'logout': { handler: logout, requireAuth: true },
+  'get_erp_session_meta': { handler: get_erp_session_meta, requireAuth: true },
+  'cleanup_sessions': { handler: cleanupOldSessions_, requireAuth: true },
+  'install_triggers': { handler: installTriggers_, requireAuth: true },
+  'daily_csv_backup': { handler: dailyCsvBackup, requireAuth: true },
+  'log_client_error': { handler: logClientError_, requireAuth: false },
+
+  // ─── MySQL Live Module (DbLive_Connector.js) ──────────
+  'db_list_tables': { handler: dbListTables_, requireAuth: true },
+  'db_get_columns': { handler: dbGetColumns_, requireAuth: true },
+  'db_query':       { handler: dbQuery_,       requireAuth: true },
+  'db_insert':      { handler: dbInsert_,      requireAuth: true },
+  'db_update':      { handler: dbUpdate_,      requireAuth: true },
+  'db_delete':      { handler: dbDelete_,      requireAuth: true },
+  'db_aggregate':   { handler: dbAggregate_,   requireAuth: true }
+};
+
+function apiRouter(request) {
+  return apiRouter_(request);
+}
+
+function isReadAction_(action) {
+  return action === 'ping' || action.indexOf('get_') === 0 || action.indexOf('admin_list_') === 0;
+}
+
+function apiRouter_(request) {
+  // Batch 1: request-scoped memoization for getAllRecords_() — start every
+  // invocation with a fresh cache; only let read actions benefit from it so a
+  // mutating action can never read a stale memoized sheet.
+  resetRecordCache_();
+  if (!isReadAction_(request.action)) disableRecordCache_();
+  ensureCompaniesRegistered_();
+  let startTime = new Date();
+  let result;
+  let status = 'SUCCESS';
+  let errorMessage = '';
+  let authUser = null;
+  
+  try {
+    const route = ROUTES[request.action];
+    if (!route) throw new Error('Invalid action: ' + request.action);
+
+    if (route.requireAuth) {
+      const auth = authenticateSystemUser_(request.sessionToken);
+      if (!auth.authorized) {
+        status = 'FAILED';
+        errorMessage = 'SESSION_EXPIRED';
+        return { status: 'error', code: 'SESSION_EXPIRED' };
+      }
+      authUser = auth.user;
+      try { SessionManager_.touch(request.sessionToken); } catch (e) {}
+    }
+
+    // System kill switch — blocks EVERY action for EVERYONE once engaged,
+    // with exactly one exception: an authenticated SUPER ADMIN calling
+    // toggle_kill_switch (the recovery lever). Auth therefore runs BEFORE
+    // this check so the exception can be identified.
+    if (!isSystemEnabled_() &&
+        !(request.action === 'toggle_kill_switch' && authUser && authUser.isSuperAdmin)) {
+      status = 'FAILED';
+      errorMessage = 'SYSTEM_DISABLED';
+      return { status: 'error', code: 'SYSTEM_DISABLED', message: 'عطل في السيستم' };
+    }
+
+    result = jsonSafe_(route.handler(request.payload, request.sessionToken, authUser));
+    
+    // Log successful operation
+    logSystemAction_(request, authUser, result, status, errorMessage, startTime);
+    
+    return result;
+  } catch (err) {
+    status = 'FAILED';
+    errorMessage = err.message;
+    
+    // Log failed operation
+    logSystemAction_(request, authUser, null, status, errorMessage, startTime);
+    
+    return { status: 'error', message: err.message };
+  }
+}
+
+function doPost(e) {
+  let body;
+  try {
+    body = JSON.parse(e.postData.contents);
+  } catch (err) {
+    return json_({ status: 'error', message: err.message });
+  }
+  return json_(apiRouter_(body));
+}
+
+function executeCompanyAction_(payload, sessionToken, authUser) {
+  const company = COMPANY_REGISTRY[payload.target_system];
+  if (!company) throw new Error('Unknown company: ' + payload.target_system);
+  if (!authUser.isSuperAdmin && authUser.company !== payload.target_system) {
+    throw new Error('Access Denied.');
+  }
+  // Page-level authorization is derived SERVER-SIDE from the company's own
+  // action->page map — never from a client-supplied page_id. Unified:
+  // view=any grant, add=write/full, edit/delete family=full only.
+  const pageId = company.pageForAction ? company.pageForAction(payload.module_action) : null;
+  if (pageId) {
+    const m = String(payload.module_action || '');
+    let required = payload.access_type || 'read';
+    // infer from verb if caller didn't specify typed access
+    if (!payload.access_type) {
+      if (/^add_/.test(m)) required = 'write';
+      else if (COMPANY_SA_ONLY_RE.test(m)) required = 'full';
+      else required = 'read';
+    }
+    checkPageAccess_(authUser, payload.target_system, pageId, required);
+  }
+  if (!canCompanyAction_(authUser, payload.module_action, pageId)) {
+    throw new Error(ERP_MESSAGES.NOT_AUTHORIZED);
+  }
+  const dbId = authUser.isSuperAdmin ? getCompanySpreadsheetId_(payload.target_system) : getCompanySpreadsheetId_(authUser.company);
+  return company.dispatch(payload, authUser, dbId);
+}
+
+/**
+ * Unified company action authorization — merged layer.
+ * view/add  -> handled via checkPageAccess_ (write/full hierarchy)
+ * edit_/delete_/remove_/update_/toggle_/close_/make_ family -> Full Access only
+ * Super Admin bypasses all. Mirrored in UI via IS_SUPER_ADMIN / Full Access check.
+ */
+var COMPANY_SA_ONLY_RE = /^(edit_|delete_|remove_|update_|toggle_|close_|make_)/;
+function canCompanyAction_(authUser, moduleAction, pageId) {
+  if (!authUser) return false;
+  if (authUser.isSuperAdmin) return true;
+  const m = String(moduleAction || '');
+  const isEditDelete = COMPANY_SA_ONLY_RE.test(m);
+  if (!isEditDelete) return true; // add/read already gated via checkPageAccess_
+  // edit/delete family requires Full Access on that page
+  if (!pageId) return false;
+  return unifiedCheck_(authUser, authUser.company, pageId, 'full');
+}
+
+/**
+ * System kill-switch toggle. Super-admin only.
+ * Storage contract: sheet 'ERP_system_work', B1 header «on_off», B2 = 1/0
+ * (1 = system works, 0 = system closed). C2/D2 hold audit stamps.
+ * payload.on === undefined → read-only current state.
+ * payload.on = true|false  → write B2 (1/0) + C2/D2 and explicitly call
+ *                            bumpVersion_('ERP_system_work') — invariant:
+ *                            programmatic writes don't fire onEdit.
+ * NOTE: once B2 = 0 the apiRouter gate blocks EVERY action, including this
+ * one. Recovery when closed is always via editing B2 directly in the sheet
+ * (onEdit then re-enables within seconds).
+ */
+function toggleKillSwitch_(payload, sessionToken, authUser) {
+  requireSuperAdmin_(authUser);
+  const sheet = ensureSystemWorkSheet_();
+
+  // Read-only mode
+  if (!payload || payload.on === undefined || payload.on === null) {
+    const flag = readSystemWorkFlag_(sheet);
+    return { status: 'success', enabled: flag !== 0 }; // fail-open when unreadable
+  }
+
+  const newValue = !!payload.on;
+  sheet.getRange('B2').setValue(newValue ? 1 : 0);
+  sheet.getRange('C2').setValue(new Date());
+  sheet.getRange('D2').setValue((authUser && authUser.email) || '');
+  // Explicit invalidation — onEdit does NOT fire for script writes.
+  bumpVersion_('ERP_system_work');
+  return { status: 'success', message: newValue ? 'تم تشغيل النظام' : 'تم إيقاف النظام', enabled: newValue };
+}
+
+// DEV-ONLY test route. Removed before deploy (Phase 7).
+function handlePing_(payload, sessionToken, authUser) {
+  return { status: 'success', user: authUser ? authUser.email : null };
+}
+
+function json_(obj) {
+  return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
+}
+
+/**
+ * Recursively sanitize a value for google.script.run serialization: Date -> ISO
+ * string, undefined -> null. google.script.run does NOT reliably serialize Date
+ * objects (returns null to the client), while doPost's JSON.stringify converts
+ * them to ISO strings — which is why API tests pass but the UI fails.
+ */
+function jsonSafe_(value) {
+  if (value === null || value === undefined) return value;
+  if (value instanceof Date) return value.toISOString();
+  if (Array.isArray(value)) return value.map(jsonSafe_);
+  if (typeof value === 'object') {
+    const out = {};
+    Object.keys(value).forEach(k => { out[k] = jsonSafe_(value[k]); });
+    return out;
+  }
+  return value;
+}
+
+function include(filename) {
+  const t = HtmlService.createTemplateFromFile(filename);
+  var rendered = t.evaluate().getContent();
+  rendered = rendered.split('__APP_WEB_URL__').join(SCRIPT_URL)
+                   .split('__APP_SESSION_TOKEN__').join(CURRENT_SESSION_TOKEN);
+  return rendered;
+}
+
+/* Defense mechanism: append client-side JS errors to ERP_Client_Log so issues
+ * surfaced in the browser can be diagnosed later. Called via google.script.run. */
+function logClientError_(payload) {
+  try {
+    payload = payload || {};
+    const ss = getSpreadsheet_(CONFIG.AUTH_SPREADSHEET_ID);
+    let sh = ss.getSheetByName('ERP_Client_Log');
+    if (!sh) { sh = ss.insertSheet('ERP_Client_Log'); sh.appendRow(['ts', 'page', 'message', 'stack', 'url', 'user_email']); }
+    sh.appendRow([
+      new Date().toISOString(),
+      String(payload.page || ''),
+      String(payload.message || '').slice(0, 2000),
+      String(payload.stack || '').slice(0, 4000),
+      String(payload.url || '').slice(0, 1500),
+      String(payload.user || '').slice(0, 200)
+    ]);
+    return { status: 'success' };
+  } catch (e) {
+    return { status: 'error', message: e.message };
+  }
+}
+
+/**
+ * Stream a product's print_file from Drive as a browser download. The server
+ * runs as the deployer (owner), so no public sharing is required — mirrors
+ * AppSheet pulling the file from the owner's Drive.
+ * Params: download=print_file, id=<product id>, company=<uid> (optional),
+ * sessionToken=<valid token>.
+ */
+function servePrintFile_(params) {
+  const token = String(params.sessionToken || '').trim();
+  const auth = token ? authenticateSystemUser_(token) : { authorized: false };
+  if (!auth.authorized) {
+    return _frame(HtmlService.createHtmlOutput(
+      _topNavScript(ScriptApp.getService().getUrl() + '?action=login')
+    )).setTitle('تسجيل الدخول');
+  }
+  const company = String(params.company || '').trim() || '3fe1b5cb67b7223e';
+  const id = Number(params.id);
+  if (!Number.isInteger(id)) return ContentService.createTextOutput('Invalid id');
+
+  let product = null;
+  try {
+    const dbId = getCompanySpreadsheetId_(company);
+    product = getAllRecords_(dbId, 'products').find(function (r) { return Number(r.id) === id; });
+  } catch (e) {}
+  if (!product || !product.print_file) return ContentService.createTextOutput('Not found');
+
+  const fileName = String(product.print_file).trim().split('/').pop();
+  if (!fileName) return ContentService.createTextOutput('Not found');
+
+  const file = resolveDriveFile_(fileName);
+  if (!file) return ContentService.createTextOutput('File not found in Drive: ' + fileName);
+
+  return dataUriDownloadHtml_(fileName, file.getBlob());
+}
+
+/**
+ * System audit log helpers
+ */
+function classifyAction_(action) {
+  if (!action) return 'UNKNOWN';
+  const actionStr = String(action).toLowerCase();
+  
+  // No log actions
+  if (actionStr.startsWith('get_') || actionStr === 'ping' || 
+      actionStr === 'login_user' || actionStr === 'setup_password') {
+    return 'NO_LOG';
+  }
+  
+  // Admin list actions
+  if (actionStr.startsWith('admin_list_')) {
+    return 'NO_LOG';
+  }
+  
+  // Action classification
+  if (actionStr.startsWith('add_')) return 'ADD';
+  if (actionStr.startsWith('edit_') || actionStr.startsWith('update_') || 
+      actionStr.startsWith('approve_') || actionStr.startsWith('toggle_')) {
+    return 'EDIT';
+  }
+  if (actionStr.startsWith('delete_') || actionStr.startsWith('remove_')) {
+    return 'DELETE';
+  }
+  if (actionStr.startsWith('admin_delete_')) {
+    return 'DELETE';
+  }
+  if (actionStr.startsWith('admin_save_')) {
+    // For admin_save_, check if it's creating new or updating existing
+    return 'ADMIN_SAVE'; // We'll handle this specifically in the log function
+  }
+  
+  return 'UNKNOWN';
+}
+
+function extractRecordId_(action, result) {
+  // Try to extract assigned ID from result
+  if (result && result.data && result.data.assignedId) {
+    return result.data.assignedId;
+  }
+  if (result && result.data && result.data.id) {
+    return result.data.id;
+  }
+  return null;
+}
+
+function getCompanyName_(companyId) {
+  if (!companyId) return '';
+  try {
+    const companies = getAllRecords_(CONFIG.AUTH_SPREADSHEET_ID, 'ERP_Companies');
+    const company = companies.find(c => String(c.company_unique_id) === companyId);
+    return company ? company.company_name_ar : '';
+  } catch (e) {
+    return '';
+  }
+}
+
+/** Canonical SystemLog header order — add new columns to the END only, never insert in the middle. */
+const SYSTEM_LOG_HEADERS = [
+  'LogID', 'Timestamp', 'CompanyID', 'CompanyName', 'Action',
+  'SourceAction', 'RecordID', 'UserEmail', 'ChangedFields',
+  'Status', 'ErrorMessage', 'Table', 'Page'
+];
+
+function ensureSystemLogSheet_() {
+  try {
+    const ss = getSpreadsheet_(CONFIG.AUTH_SPREADSHEET_ID);
+    let sheet = ss.getSheetByName('SystemLog');
+    if (!sheet) {
+      sheet = ss.insertSheet('SystemLog');
+      sheet.appendRow(SYSTEM_LOG_HEADERS);
+      return sheet;
+    }
+    // Sheet already exists live — migrate in place. Only ADD missing headers
+    // at the end; never touch existing columns or historical rows.
+    const existing = getHeaders_(sheet).map(function (h) { return String(h).trim(); });
+    const missing = SYSTEM_LOG_HEADERS.filter(function (h) { return existing.indexOf(h) === -1; });
+    if (missing.length) {
+      sheet.getRange(1, existing.length + 1, 1, missing.length).setValues([missing]);
+      delete _headerCache_[sheet.getParent().getId() + '_' + sheet.getSheetId()]; // bust getHeaders_ cache
+    }
+    return sheet;
+  } catch (e) {
+    throw new Error('Failed to create/access SystemLog sheet: ' + e.message);
+  }
+}
+
+/** Looks up the page for a module_action via each company's optional pageForAction(). */
+function resolveLogPage_(companyID, moduleAction) {
+  const company = COMPANY_REGISTRY[companyID];
+  if (company && typeof company.pageForAction === 'function') {
+    return company.pageForAction(moduleAction) || '';
+  }
+  return '';
+}
+
+/** Looks up the sheet/table touched by a module_action via each company's optional tableForAction(). */
+function resolveLogTable_(companyID, moduleAction) {
+  const company = COMPANY_REGISTRY[companyID];
+  if (company && typeof company.tableForAction === 'function') {
+    return company.tableForAction(moduleAction) || '';
+  }
+  return '';
+}
+
+function logSystemAction_(request, authUser, result, status, errorMessage, startTime) {
+  const payload = request.payload || {};
+  // company_action calls carry the real action in payload.module_action;
+  // direct admin_* routes carry it as the top-level request.action.
+  const sourceAction = payload.module_action || request.action;
+  const classified = classifyAction_(sourceAction);
+
+  if (classified === 'NO_LOG') return;
+
+  const companyID = payload.target_system || '';
+  const companyName = getCompanyName_(companyID);
+  const recordID = extractRecordId_(sourceAction, result);
+  const userEmail = authUser ? authUser.email : '';
+  const changedFields = result && result.data ? JSON.stringify(result.data) : '';
+  const tableName = resolveLogTable_(companyID, sourceAction);
+  // Prefer an explicit page_id from the payload if the client ever sends one;
+  // otherwise fall back to the per-company action->page map.
+  const pageName = payload.page_id || resolveLogPage_(companyID, sourceAction);
+
+  let finalAction = classified;
+  if (finalAction === 'ADMIN_SAVE') {
+    finalAction = String(sourceAction).indexOf('save') !== -1 ? 'EDIT' : 'ADD';
+  }
+
+  const values = {
+    logid: Utilities.getUuid(),
+    timestamp: startTime,
+    companyid: companyID,
+    companyname: companyName,
+    action: finalAction,
+    sourceaction: sourceAction,
+    recordid: recordID,
+    useremail: userEmail,
+    changedfields: changedFields,
+    status: status,
+    errormessage: errorMessage,
+    table: tableName,
+    page: pageName
+  };
+
+  const logEntry = SYSTEM_LOG_HEADERS.map(function (h) {
+    const v = values[String(h).toLowerCase()];
+    return v === undefined || v === null ? '' : v;
+  });
+
+  try {
+    const sheet = ensureSystemLogSheet_();
+    appendRowWithRetry_(sheet, logEntry);
+  } catch (e) {
+    console.error('Failed to log system action: ' + e.message);
+  }
+}
+
+/** Find a Drive file by exact name; cache filename -> file id for 30 min. */
+function resolveDriveFile_(fileName) {
+  const cache = CacheService.getScriptCache();
+  const key = 'printfile_' + fileName;
+  try {
+    const cachedId = cache.get(key);
+    if (cachedId) {
+      const cached = DriveApp.getFileById(cachedId);
+      if (cached) return cached;
+    }
+  } catch (e) {}
+  const it = DriveApp.getFilesByName(fileName);
+  if (it.hasNext()) {
+    const file = it.next();
+    try { cache.put(key, file.getId(), 1800); } catch (e) {}
+    return file;
+  }
+  return null;
+}
+
+/**
+ * Print a production barcode as PDF via the browser print dialog. Renders the
+ * Code128 image (high DPI) + the raw data string, then auto-prints.
+ * Params: download=print_barcode, id=<barcode id>, sessionToken=<valid token>.
+ */
+function servePrintBarcode_(params) {
+  const token = String(params.sessionToken || '').trim();
+  const auth = token ? authenticateSystemUser_(token) : { authorized: false };
+  if (!auth.authorized) {
+    return _frame(HtmlService.createHtmlOutput(
+      _topNavScript(ScriptApp.getService().getUrl() + '?action=login')
+    )).setTitle('تسجيل الدخول');
+  }
+  const company = String(params.company || '').trim() || '3fe1b5cb67b7223e';
+  const id = Number(params.id);
+  if (!Number.isInteger(id)) return ContentService.createTextOutput('Invalid id');
+
+  let row = null;
+  try {
+    const dbId = getCompanySpreadsheetId_(company);
+    row = getAllRecords_(dbId, 'top_chemical_barcode_generator').find(function (r) { return Number(r.id) === id; });
+  } catch (e) {}
+  if (!row) return ContentService.createTextOutput('Not found');
+
+  let data = '';
+  const m = String(row.display_barcode || '').match(/data=([^&]+)/);
+  if (m) { try { data = decodeURIComponent(m[1]); } catch (e) { data = m[1]; } }
+  if (!data) data = barcodeDataFromRecord_(row);
+
+  const imgUrl = 'https://barcode.tec-it.com/barcode.ashx?data=' +
+    encodeURIComponent(data) + '&code=Code128&dpi=300';
+  const esc = function (s) {
+    return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  };
+  const cell =
+    '<td style="width:33.33%;height:40mm;border:0.5px dashed #999;text-align:center;vertical-align:middle;padding:0.5mm;">' +
+    '<img src="' + esc(imgUrl) + '" alt="باركود" style="max-width:92%;max-height:27mm;height:auto;">' +
+    '<div style="margin-top:0.5mm;font-size:8.5pt;font-weight:700;letter-spacing:0.5px;word-break:break-all;line-height:1.2;">' + esc(data) + '</div>' +
+    '</td>';
+  let rowsHtml = '';
+  for (let r = 0; r < 6; r++) { rowsHtml += '<tr>' + cell + cell + cell + '</tr>'; }
+  const html =
+    '<!DOCTYPE html><html lang="ar"><head><meta charset="utf-8"><title>باركود الإنتاج #' + id + '</title>' +
+    '<style>' +
+    '@page{size:A4 portrait;margin:3mm;}' +
+    'html,body{margin:0;padding:0;font-family:sans-serif;}' +
+    'table.labels{width:100%;height:240mm;table-layout:fixed;border-collapse:collapse;}' +
+    'tr{page-break-inside:avoid;}' +
+    '</style></head>' +
+    '<body><table class="labels">' + rowsHtml + '</table>' +
+    '<script>window.onload=function(){setTimeout(function(){window.print();},300);};</script>' +
+    '</body></html>';
+  return _frame(HtmlService.createHtmlOutput(html)).setTitle('باركود الإنتاج #' + id);
+}
+
+/** Recomputed barcode data from a stored row (fallback when display_barcode missing). */
+function barcodeDataFromRecord_(rec) {
+  const pad = function (n) { return ('0' + n).slice(-2); };
+  let d = null;
+  const raw = rec.production_date;
+  if (raw instanceof Date) { d = raw; } else {
+    const s = String(raw || '').match(/^(\d{4})-(\d{2})-(\d{2})/);
+    d = s ? new Date(Number(s[1]), Number(s[2]) - 1, Number(s[3])) : (raw ? new Date(raw) : null);
+  }
+  if (!d || isNaN(d.getTime())) d = new Date();
+  const sysId = String(rec.system_id == null ? '' : rec.system_id).trim();
+  return String(rec.id) + pad(d.getFullYear() % 100) + String(rec.emp_id) +
+    pad(d.getMonth() + 1) + String(rec.production_id) + pad(d.getDate()) + sysId;
+}
+
+/**
+ * Generic attachment viewer (image/pdf preview + download). Used by
+ * tc_registration_papers (document_file) and vf_hr_overtime (overtime_attachement)
+ * and any future folder/file reference. Auth + resolve same as legacy doc_file.
+ * Params: download=attachment (or legacy doc_file), ref=<folder/file>, sessionToken
+ */
+function serveAttachment_(params) {
+  const token = String(params.sessionToken || '').trim();
+  const auth = token ? authenticateSystemUser_(token) : { authorized: false };
+  if (!auth.authorized) {
+    return _frame(HtmlService.createHtmlOutput(
+      _topNavScript(ScriptApp.getService().getUrl() + '?action=login')
+    )).setTitle('تسجيل الدخول');
+  }
+  // Page-level read gate per registry — viewing requires read on originating page
+  try {
+    const pageParam = String(params.page || '').trim();
+    const targetSystem = String(params.company || params.target_system || '').trim();
+    let requiredPage = pageParam;
+    // Infer page from ref folder when not supplied
+    if (!requiredPage && params.ref) {
+      const refLower = String(params.ref).toLowerCase();
+      if (refLower.indexOf('valley_emp_overtime') !== -1) requiredPage = 'vf_hr_overtime';
+      else if (refLower.indexOf('valley_emp_deductions') !== -1) requiredPage = 'vf_hr_deductions';
+      else if (refLower.indexOf('valley_employee_vacations') !== -1) requiredPage = 'vf_hr_vacations';
+      else if (refLower.indexOf('registration_papers') !== -1) requiredPage = 'tc_registration_papers';
+      else if (refLower.indexOf('legal_') !== -1) requiredPage = '';
+    }
+    if (requiredPage) {
+      const compForCheck = targetSystem || (auth.user && auth.user.company) || '';
+      // Use UI gate: any grant (read) suffices to view; checkPageAccess_ with 'read'
+      if (compForCheck && COMPANY_REGISTRY[compForCheck]) {
+        try { checkPageAccess_(auth.user, compForCheck, requiredPage, 'read'); } catch (permErr) {
+          return _frame(HtmlService.createHtmlOutput(
+            '<!DOCTYPE html><html dir="rtl" lang="ar"><head><meta charset="utf-8"></head><body style="display:flex;align-items:center;justify-content:center;min-height:100vh;background:#f3f4f6;font-family:sans-serif;"><div style="background:#fff;padding:24px;border-radius:12px;box-shadow:0 4px 16px rgba(0,0,0,.1);text-align:center;max-width:400px;"><h3 style="color:#dc2626;">غير مصرح</h3><p style="color:#6b7280;">ليس لديك صلاحية عرض هذا المرفق.</p></div></body></html>'
+          )).setTitle('غير مصرح');
+        }
+      } else {
+        // Fallback to UI-level check when company not determinable
+        if (!checkPageAccessForUI_(auth.user, requiredPage)) {
+          return _frame(HtmlService.createHtmlOutput(
+            '<!DOCTYPE html><html dir="rtl" lang="ar"><head><meta charset="utf-8"></head><body style="display:flex;align-items:center;justify-content:center;min-height:100vh;background:#f3f4f6;font-family:sans-serif;"><div style="background:#fff;padding:24px;border-radius:12px;box-shadow:0 4px 16px rgba(0,0,0,.1);text-align:center;max-width:400px;"><h3 style="color:#dc2626;">غير مصرح</h3><p style="color:#6b7280;">ليس لديك صلاحية عرض هذا المرفق.</p></div></body></html>'
+          )).setTitle('غير مصرح');
+        }
+      }
+    }
+  } catch (e) { /* fail-open to download if check errors — auth already verified */ }
+  const ref = String(params.ref || params.file || '').trim();
+  if (!ref) return ContentService.createTextOutput('Not found');
+  const fileName = ref.split('/').pop();
+  if (!fileName) return ContentService.createTextOutput('Not found');
+  const file = resolveDriveFile_(fileName);
+  if (!file) return ContentService.createTextOutput('File not found in Drive: ' + fileName);
+  const blob = file.getBlob();
+  const ct = String(blob.getContentType() || '').toLowerCase();
+  if (ct.indexOf('image/') === 0 || ct === 'application/pdf') {
+    return attachmentPreviewHtml_(fileName, blob);
+  }
+  return dataUriDownloadHtml_(fileName, blob);
+}
+function serveDocFile_(params) { return serveAttachment_(params); }
+
+/** Preview page for image/pdf: inline view + download button. */
+function attachmentPreviewHtml_(fileName, blob) {
+  const b64 = Utilities.base64Encode(blob.getBytes());
+  const contentType = blob.getContentType() || 'application/octet-stream';
+  const safeName = fileName.replace(/["'<>\\/]/g, '_');
+  const esc = function(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); };
+  const isImage = contentType.toLowerCase().indexOf('image/') === 0;
+  const viewer = isImage
+    ? '<img src="data:' + contentType + ';base64,' + b64 + '" alt="' + esc(fileName) + '" style="max-width:100%;max-height:82vh;border:1px solid #e5e7eb;border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.12)">'
+    : '<iframe src="data:' + contentType + ';base64,' + b64 + '" style="width:100%;height:82vh;border:1px solid #e5e7eb;border-radius:8px" title="' + esc(fileName) + '"></iframe>';
+  return _frame(HtmlService.createHtmlOutput(
+    '<!DOCTYPE html><html dir="rtl" lang="ar"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>' + esc(fileName) + '</title></head>' +
+    '<body style="margin:0;font-family:sans-serif;background:#f3f4f6;">' +
+    '<div style="position:sticky;top:0;z-index:2;background:#fff;border-bottom:1px solid #e5e7eb;padding:12px 16px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;">' +
+      '<span style="flex:1;font-weight:700;font-size:14px;word-break:break-all;">' + esc(fileName) + '</span>' +
+      '<a id="dl" href="data:' + contentType + ';base64,' + b64 + '" download="' + safeName + '" style="padding:8px 16px;background:#16a34a;color:#fff;border-radius:8px;text-decoration:none;font-weight:700;font-size:13px;">⬇ تحميل</a>' +
+    '</div>' +
+    '<div style="padding:16px;display:flex;justify-content:center;align-items:flex-start;min-height:60vh;">' + viewer + '</div>' +
+    '</body></html>'
+  )).setTitle(fileName);
+}
+
+/** Shared data-URI download page for Drive files. */
+function dataUriDownloadHtml_(fileName, blob) {
+  const b64 = Utilities.base64Encode(blob.getBytes());
+  const contentType = blob.getContentType() || 'application/octet-stream';
+  const safeName = fileName.replace(/["'<>\\/]/g, '_');
+  return _frame(HtmlService.createHtmlOutput(
+    '<!DOCTYPE html><html dir="rtl" lang="ar"><head><meta charset="utf-8"><title>تحميل الملف</title></head>' +
+    '<body style="font-family:sans-serif;text-align:center;padding:24px;">' +
+    '<h3>جاري تحميل الملف...</h3>' +
+    '<p style="color:#555;">إذا لم يبدأ التحميل تلقائياً، <a id="dl" href="#" style="color:#16a34a;font-weight:bold;">اضغط هنا للتحميل</a></p>' +
+    '<script>' +
+    'var a=document.createElement("a");' +
+    'a.href="data:' + contentType + ';base64,' + b64 + '";' +
+    'a.download="' + safeName + '";' +
+    'document.body.appendChild(a);a.click();' +
+    'document.getElementById("dl").href=a.href;' +
+    '</script></body></html>'
+  )).setTitle(fileName);
+}
+
+/* Batch 11 — Phase 6: prune expired sessions from the AUTH ERP_Sessions sheet. */
+function cleanupOldSessions_(payload, sessionToken, authUser) {
+  if (!(authUser && authUser.isSuperAdmin)) throw new Error('صلاحية غير كافية');
+  var removed = 0;
+  try {
+    var rows = getAllRecords_(CONFIG.AUTH_SPREADSHEET_ID, 'ERP_Sessions');
+    var now = Date.now();
+    var sheet = getSheet_('ERP_Sessions', CONFIG.AUTH_SPREADSHEET_ID);
+    rows.forEach(function (r) {
+      var exp = r.expires_at ? new Date(r.expires_at) : null;
+      if (exp && !isNaN(exp.getTime()) && now > exp.getTime()) {
+        var key = (r.record_uid || r.token_hash);
+        if (key) { deleteRowsByCriteria_(sheet, 'token_hash', r.token_hash); removed++; }
+      }
+    });
+  } catch (e) {
+    return { status: 'error', message: e.message };
+  }
+  return { status: 'success', data: { removed: removed } };
+}
+
+/* Batch 11 — Phase 6: install a daily time-driven trigger that prunes expired
+ * sessions. Safe to call repeatedly (removes any prior instance first). */
+function installTriggers_(payload, sessionToken, authUser) {
+  if (!(authUser && authUser.isSuperAdmin)) throw new Error('صلاحية غير كافية');
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    var h = t.getHandlerFunction();
+    if (h === 'cleanupOldSessions_' || h === 'dailyCsvBackup') {
+      try { ScriptApp.deleteTrigger(t); } catch (e) {}
+    }
+  });
+  ScriptApp.newTrigger('cleanupOldSessions_').timeBased().everyDays(1).atHour(3).create();
+  try {
+    ScriptApp.newTrigger('dailyCsvBackup').timeBased().everyDays(1).atHour(7).create();
+  } catch (e) {}
+  return { status: 'success', message: 'تم تثبيت المؤقتات اليومية' };
+}
+
+/* Migration batch functions (batch0_preflight, batch1_createSystemSheets, …)
+ * live in 06_Migration.js and can be invoked from the Apps Script editor or
+ * via clasp. The temporary unauthenticated run_migration web route was removed
+ * after migrations completed. */
+
+
+function _frame(html) {
+  return html.setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+}
+
+/** Safe top-frame navigation script. Tries window.top.location (so the address
+ *  bar reflects ?action=...); falls back to the iframe if the sandbox blocks it. */
+function _topNavScript(url) {
+  return '<script>try{window.top.location.href=' + JSON.stringify(url) + '}catch(e){window.location.href=' + JSON.stringify(url) + '}</' + 'script>';
+}
+
+/* v@496 sync marker — forces clasp to re-upload Code.js after a transient
+ * server-side corruption reported a stale SyntaxError. */

@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <base target="_top">
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Admin Panel - Add User</title>
+    <?!= include('CSS'); ?>
+  </head>
+  <body>
+
+    <!-- Navbar -->
+    <nav class="navbar navbar-expand-lg navbar-dark bg-primary shadow-sm">
+      <div class="container">
+        <a class="navbar-brand" href="<?= scriptUrl ?>?action=dashboard">
+          <i class="bi bi-mortarboard-fill"></i> Assessment Platform
+        </a>
+        <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+          <span class="navbar-toggler-icon"></span>
+        </button>
+        <div class="collapse navbar-collapse" id="navbarNav">
+          <ul class="navbar-nav ms-auto align-items-center">
+            <li class="nav-item">
+              <a href="<?= scriptUrl ?>?action=dashboard" class="btn btn-outline-light btn-sm">
+                <i class="bi bi-arrow-left"></i> Back to Dashboard
+              </a>
+            </li>
+            <li class="nav-item ms-2">
+              <a href="<?= scriptUrl ?>?action=login" class="btn btn-danger btn-sm">
+                <i class="bi bi-box-arrow-right"></i> Logout
+              </a>
+            </li>
+          </ul>
+        </div>
+      </div>
+    </nav>
+
+    <!-- Main Content -->
+    <div class="container mt-4">
+      <div class="row justify-content-center">
+        <div class="col-md-8 col-lg-6">
+          
+          <!-- Alert Container (For Success/Error Messages) -->
+          <div id="alertContainer" style="display: none;"></div>
+
+          <!-- Card -->
+          <div class="card shadow-sm border-0 rounded-3">
+            <div class="card-header bg-white border-0 pt-4">
+              <h4 class="text-center text-primary mb-0">
+                <i class="bi bi-person-plus-fill"></i> Add New System User
+              </h4>
+              <p class="text-center text-muted mb-0">إضافة مستخدم جديد للنظام</p>
+            </div>
+            
+            <div class="card-body p-4">
+              <form id="addUserForm" onsubmit="handleAddUser(event)">
+                
+                <div class="row g-3">
+                  <div class="col-md-6">
+                    <div class="form-floating mb-3">
+                      <input type="text" class="form-control" id="name" placeholder="Name" required>
+                      <label for="name"><i class="bi bi-person"></i> Name / الاسم</label>
+                    </div>
+                  </div>
+                  <div class="col-md-6">
+                    <div class="form-floating mb-3">
+                      <input type="email" class="form-control" id="email" placeholder="Email" required>
+                      <label for="email"><i class="bi bi-envelope"></i> Email / البريد</label>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="row g-3">
+                  <div class="col-md-6">
+                    <div class="form-floating mb-3">
+                      <input type="text" class="form-control" id="phone" placeholder="Phone">
+                      <label for="phone"><i class="bi bi-phone"></i> Phone / الهاتف</label>
+                    </div>
+                  </div>
+                  <div class="col-md-6">
+                    <div class="form-floating mb-3">
+                      <input type="text" class="form-control" id="department" placeholder="Department">
+                      <label for="department"><i class="bi bi-building"></i> Department / القسم</label>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="row g-3">
+                  <!-- Updated to match CONFIG.ALLOWED_POSITIONS exactly -->
+                  <div class="col-md-6">
+                    <div class="form-floating mb-3">
+                      <select class="form-select" id="position" required>
+                        <option value="Super Admin">Super Admin</option>
+                        <option value="Admin">Admin</option>
+                        <option value="Reviewer">Reviewer</option>
+                        <option value="Staff">Staff</option>
+                      </select>
+                      <label for="position"><i class="bi bi-briefcase"></i> Position / المنصب</label>
+                    </div>
+                  </div>
+                  <div class="col-md-6">
+                    <div class="form-floating mb-3">
+                      <select class="form-select" id="type" required>
+                        <option value="Admin">Admin</option>
+                        <option value="HR">HR</option>
+                        <option value="Staff">Staff</option>
+                      </select>
+                      <label for="type"><i class="bi bi-person-badge"></i> Type / النوع</label>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Replaced Temporary Password input with an info alert -->
+                <div class="alert alert-info d-flex align-items-center mb-4" role="alert">
+                  <i class="bi bi-info-circle-fill me-2"></i>
+                  <div>
+                    The user will be asked to set their own secure password upon their first login. <br>
+                    <small>(سيُطلب من المستخدم تعيين كلمة مرور الخاصة به عند تسجيل الدخول لأول مرة)</small>
+                  </div>
+                </div>
+
+                <div class="d-grid">
+                  <button type="submit" class="btn btn-primary btn-lg" id="submitBtn">
+                    <i class="bi bi-check-circle-fill"></i> Add User / إضافة مستخدم
+                  </button>
+                </div>
+
+              </form>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+
+    <!-- Bootstrap JS Bundle -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+
+    <script>
+      function handleAddUser(event) {
+        event.preventDefault();
+        const token = localStorage.getItem('sessionToken');
+        
+        // If no token, redirect to login
+        if (!token) {
+          window.location.href = '<?= scriptUrl ?>?action=login';
+          return;
+        }
+
+        // Removed the Password field from the payload as the backend ignores it 
+        // and forces the user to set it on first login (Security Patch P3).
+        const userData = {
+          Name: document.getElementById('name').value,
+          Email: document.getElementById('email').value,
+          Phone: document.getElementById('phone').value,
+          Department: document.getElementById('department').value,
+          Position: document.getElementById('position').value,
+          Type: document.getElementById('type').value
+        };
+
+        const btn = document.getElementById('submitBtn');
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Adding...';
+        btn.disabled = true;
+
+        google.script.run
+          .withSuccessHandler(function(data) {
+            const alertContainer = document.getElementById('alertContainer');
+            let alertClass = data.status === 'success' ? 'alert-success' : 'alert-danger';
+            
+            alertContainer.className = 'alert ' + alertClass + ' d-flex align-items-center';
+            alertContainer.innerHTML = '<i class="bi ' + (data.status === 'success' ? 'bi-check-circle-fill' : 'bi-exclamation-triangle-fill') + ' me-2"></i> ' + data.message;
+            alertContainer.style.display = 'block';
+
+            if (data.status === 'success') {
+              document.getElementById('addUserForm').reset();
+            }
+            
+            btn.innerHTML = '<i class="bi bi-check-circle-fill"></i> Add User / إضافة مستخدم';
+            btn.disabled = false;
+          })
+                  .withFailureHandler(function(err) {
+          document.getElementById('loadingSpinner').style.display = 'none';
+          document.getElementById('tableContainer').style.display = 'block';
+          
+          // SECURITY: If backend says Unauthorized/Forbidden, kick them out!
+          if (err.message.includes('Unauthorized') || err.message.includes('Forbidden') || err.message.includes('Session expired')) {
+            localStorage.removeItem('sessionToken');
+            localStorage.removeItem('userName');
+            window.location.href = scriptUrl + '?action=login';
+            return;
+          }
+          
+          document.getElementById('tableBody').innerHTML = `<tr><td colspan="6" class="text-center text-danger p-4">Server Error: ${err.message}</td></tr>`;
+        })
+          .uiAddUser(token, userData);
+      }
+    </script>
+  </body>
+</html>

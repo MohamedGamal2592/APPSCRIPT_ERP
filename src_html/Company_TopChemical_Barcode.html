@@ -1,0 +1,166 @@
+﻿<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>باركود الإنتاج</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_TopChemical_Nav'); ?>
+  <?!= getCompanyThemeCSS_('3fe1b5cb67b7223e') ?>
+</head>
+<body>
+<div id="tc-root" dir="rtl"></div>
+<script>
+  var params = new URLSearchParams(window.location.search);
+  var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+  var scriptUrl = window.scriptUrl || '/';
+  var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+  var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('3fe1b5cb67b7223e') ?>';
+  var COMPANY_PAGES = <?!= companyPages ?>;
+  var CURRENT_ACTION = '<?!= currentAction ?>';
+  var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+  var CAN_WRITE = IS_SUPER_ADMIN || !!(USER_PAGES && USER_PAGES[CURRENT_ACTION] && USER_PAGES[CURRENT_ACTION].indexOf('write') !== -1);
+
+  function companyCall(moduleAction, data) {
+    return API.call('company_action', {
+      target_system: '3fe1b5cb67b7223e',
+      module_action: moduleAction,
+      data: data || {}
+    }, SESSION_TOKEN);
+  }
+
+  function pad(n) { return ('0' + n).slice(-2); }
+  function fmtDate(v) {
+    if (!v) return '';
+    var d = new Date(v);
+    if (isNaN(d.getTime())) return String(v);
+    return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+  }
+  function todayStr() {
+    var d = new Date();
+    return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+  }
+
+  function load() {
+    var contentId = 'barcode-content';
+    UIC.appShell('tc-root', {
+      companyLogoUrl: COMPANY_LOGO_URL,
+      companyLogoHref: scriptUrl + '?action=tc_dashboard&sessionToken=' + SESSION_TOKEN,
+      companyLogoTitle: 'توب كيميكال',
+      breadcrumb: 'توب كيميكال / الإنتاج / باركود الإنتاج',
+      contentId: contentId,
+      menuGroups: (window.TOPCHEMICAL_MENU || [])
+    });
+    fetchBarcodes();
+  }
+
+  function fetchBarcodes() {
+    UI.showSpinner();
+    companyCall('get_barcode')
+      .then(function (r) {
+        window.__productOptions = r.product_options || [];
+        window.__empOptions = r.emp_options || [];
+        renderBarcodes(r.barcodes || []);
+      })
+      .catch(function (e) { showError(e); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function renderBarcodes(list) {
+    window.__barcodes = list;
+    var rows = list.map(function (b) {
+      var barLink = b.display_barcode
+        ? '<a href="' + FMT.escape(b.display_barcode) + '" target="_blank" style="color:#16a34a;font-weight:600;">عرض الباركود</a>'
+        : '-';
+      return {
+        id: b.id,
+        production_date: fmtDate(b.production_date),
+        product: (b.product_name || '') + ' <span class="text-muted">(#' + b.product_id + ')</span>',
+        emp: (b.emp_name || '') + ' <span class="text-muted">(#' + b.emp_id + ')</span>',
+        system_id: b.system_id,
+        production_id: b.production_id,
+        print_unique_id: b.print_unique_id,
+        display_barcode: barLink,
+        actions: UIC.actionBtns([{ label: 'طباعة', onclick: 'printBarcode(\'' + FMT.escape(b.id) + '\')' }]),
+        user: b.user || '-',
+        created_at: fmtDate(b.created_at)
+      };
+    });
+    var headers = [
+      { key: 'id', label: '#' },
+      { key: 'production_date', label: 'تاريخ الإنتاج' },
+      { key: 'product', label: 'المنتج' },
+      { key: 'emp', label: 'الموظف' },
+      { key: 'system_id', label: 'نظام ID' },
+      { key: 'production_id', label: 'Production ID' },
+      { key: 'print_unique_id', label: 'معرف الطباعة' },
+      { key: 'display_barcode', label: 'الباركود' },
+      { key: 'actions', label: 'إجراءات' },
+      { key: 'user', label: 'المستخدم' },
+      { key: 'created_at', label: 'تاريخ الإنشاء' }
+    ];
+    var body = document.getElementById('barcode-content');
+    body.innerHTML = (CAN_WRITE
+      ? '<div style="display:flex;justify-content:flex-end;margin-bottom:12px;"><button class="btn btn-primary" onclick="openBarcodeModal()">+ إضافة باركود</button></div>'
+      : '') +
+      UIC.dataTable('barcode-table', {
+        title: 'باركود الإنتاج',
+        headers: headers,
+        rows: rows,
+        emptyText: 'لا توجد سجلات'
+      });
+    UIC.initTableSort('barcode-table');
+  }
+
+  function printBarcode(id) {
+    window.open(scriptUrl + '?download=print_barcode&id=' + encodeURIComponent(id) + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN), '_blank');
+  }
+
+  function openBarcodeModal() {
+    var body =
+      '<form id="barcode-form">' +
+      UIC.enumSelect({ key: 'product_id', label: 'المنتج', options: window.__productOptions || [], required: true, placeholder: 'اختر المنتج...' }) +
+      UIC.enumSelect({ key: 'emp_id', label: 'الموظف', options: window.__empOptions || [], required: true, placeholder: 'اختر الموظف...' }) +
+      UIC.field({ key: 'system_id', label: 'نظام ID', type: 'number', required: true, placeholder: 'رقم صحيح' }) +
+      UIC.field({ key: 'production_id', label: 'Production ID', type: 'number', required: true, placeholder: 'رقم صحيح' }) +
+      UIC.field({ key: 'production_date', label: 'تاريخ الإنتاج', type: 'date', value: todayStr(), required: true }) +
+      '</form>';
+    UIC.openModal('barcode-modal', {
+      title: 'إضافة باركود إنتاج',
+      body: body,
+      onSave: 'saveBarcode()'
+    });
+  }
+
+  function saveBarcode() {
+    if (!CAN_WRITE) { UIC.toast('غير مصرح', 'error'); return; }
+    var data = UIC.collectForm('barcode-form');
+    if (!UIC.validateForm('barcode-form')) return;
+    if (data.product_id === '__new__') { UIC.toast('اختر منتجاً موجوداً', 'error'); return; }
+    if (data.emp_id === '__new__') { UIC.toast('اختر موظفاً موجوداً', 'error'); return; }
+    UI.showSpinner('جاري الحفظ...');
+    companyCall('add_barcode', data)
+      .then(function (r) {
+        UIC.closeModal('barcode-modal');
+        UIC.toast(r.message || 'تم الحفظ', 'success');
+        fetchBarcodes();
+      })
+      .catch(function (e) { UIC.toast(e.message || 'خطأ', 'error'); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function showError(e) {
+    var body = document.getElementById('barcode-content');
+    if (body) body.innerHTML = '<div class="empty-state"><span>' + FMT.escape(e.message || 'خطأ') + '</span></div>';
+  }
+
+
+  load();
+</script>
+</body>
+</html>
+
+
+

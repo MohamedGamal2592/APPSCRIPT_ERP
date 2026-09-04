@@ -1,0 +1,234 @@
+﻿<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>مديونيات</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_TopChemical_Nav'); ?>
+  <?!= getCompanyThemeCSS_('3fe1b5cb67b7223e') ?>
+  <style>
+    .group-header { cursor: pointer; }
+    .group-header:hover td { background: var(--brand-subtle-bg); }
+    .tx-row td { background: var(--bg-subtle); padding: 12px; }
+    .subtotal td { font-weight: 700; background: var(--bg-subtle); }
+    .grand-total td { font-weight: 800; background: var(--brand-subtle-bg); }
+  </style>
+</head>
+<body>
+<div id="tc-root" dir="rtl"></div>
+<script>
+  var params = new URLSearchParams(window.location.search);
+  var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+  var scriptUrl = window.scriptUrl || '/';
+  var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('3fe1b5cb67b7223e') ?>';
+  var COMPANY_PAGES = <?!= companyPages ?>;
+  var CURRENT_ACTION = '<?!= currentAction ?>';
+  var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+  var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+  var CAN_WRITE = UIC.canAdd_(); var CAN_FULL = UIC.canFull_();
+
+  function companyCall(moduleAction, data) {
+    return API.call('company_action', {
+      target_system: '3fe1b5cb67b7223e',
+      module_action: moduleAction,
+      data: data || {}
+    }, SESSION_TOKEN);
+  }
+
+  function load() {
+    var contentId = 'debts-content';
+    UIC.appShell('tc-root', {
+      companyLogoUrl: COMPANY_LOGO_URL,
+      companyLogoHref: scriptUrl + '?action=tc_dashboard&sessionToken=' + SESSION_TOKEN,
+      companyLogoTitle: 'توب كيميكال',
+      breadcrumb: 'توب كيميكال / الحسابات / مديونيات',
+      contentId: contentId,
+      menuGroups: (window.TOPCHEMICAL_MENU || [])
+    });
+    fetchDebts();
+  }
+
+  function fetchDebts() {
+    UI.showSpinner();
+    companyCall('get_ar_ap')
+      .then(function (r) { renderDebts(r); })
+      .catch(function (e) { showError(e); })
+      .finally(function () { UI.hideSpinner(); try{schedulePrefetch();}catch(e){} });
+  }
+
+  function renderDebts(r) {
+    window.__arap = r;
+    var summary = r.summary || [];
+
+    var grandDebit = 0, grandCredit = 0;
+    summary.forEach(function (g) { grandDebit += g.debit; grandCredit += g.credit; });
+    var grandNet = grandDebit - grandCredit;
+
+    var rows = summary.map(function (g, i) {
+      return '<tr class="group-header" onclick="toggleDebt(' + i + ')">' +
+        '<td><strong>' + FMT.escape(g.client_name) + '</strong></td>' +
+        '<td class="num">' + FMT.number(g.debit) + '</td>' +
+        '<td class="num">' + FMT.number(g.credit) + '</td>' +
+        '<td class="num">' + FMT.number(g.net) + '</td>' +
+        '<td>' + UIC.actionBtns(
+          (CAN_WRITE ? [{ label: 'إضافة حركة', onclick: 'event.stopPropagation();openDebtModal(\'' + FMT.escape(g.client_id) + '\')' }] : []).concat([
+            { label: 'التفاصيل', onclick: 'event.stopPropagation();toggleDebt(' + i + ')' }
+          ])
+        ) + '</td>' +
+        '</tr>' +
+        '<tr class="tx-row" id="tx-' + i + '" style="display:none;" data-cid="' + FMT.escape(g.client_id) + '"><td colspan="6"><div class="tx-loading" style="text-align:center;padding:12px;color:#666;">جاري تحميل التفاصيل...</div></td></tr>';
+    }).join('');
+
+    var body = document.getElementById('debts-content');
+    body.innerHTML =
+      (CAN_WRITE
+        ? '<div style="display:flex;justify-content:flex-end;margin-bottom:12px;"><button class="btn btn-primary" onclick="openDebtModal(\'\')">+ إضافة حركة</button></div>'
+        : '') +
+      '<div class="table-wrap">' +
+      '<table class="table">' +
+      '<thead><tr><th>العميل</th><th>مدين</th><th>دائن</th><th>الصافي</th><th>إجراءات</th><th></th></tr></thead>' +
+      '<tbody>' + rows +
+      '<tr class="grand-total"><td>الإجمالي</td>' +
+      '<td class="num">' + FMT.number(grandDebit) + '</td>' +
+      '<td class="num">' + FMT.number(grandCredit) + '</td>' +
+      '<td class="num">' + FMT.number(grandNet) + '</td><td colspan="2"></td></tr>' +
+      '</tbody></table></div>';
+  }
+
+  function toggleDebt(i) {
+    var el = document.getElementById('tx-' + i);
+    if (!el) return;
+    if (el.style.display === 'none' || el.style.display === '') {
+      loadClientTxs(el, i);
+    } else {
+      el.style.display = 'none';
+    }
+  }
+
+  function loadClientTxs(el, i) {
+    var cid = el.getAttribute('data-cid');
+    var loaded = el.getAttribute('data-loaded');
+    if (loaded === '1') {
+      el.style.display = 'table-row';
+      return;
+    }
+    el.style.display = 'table-row';
+    companyCall('get_ar_ap_client', { client_id: cid })
+      .then(function (r) {
+        var txs = r.transactions || [];
+        var debit = 0, credit = 0;
+        txs.forEach(function (t) { if (t.transaction_type === 'مدين') debit += t.amount; else credit += t.amount; });
+        var txsHtml = txs.map(function (t) {
+          return '<tr>' +
+            '<td>' + FMT.date(t.date) + '</td>' +
+            '<td>' + t.transaction_type + '</td>' +
+            '<td class="num">' + FMT.number(t.amount) + '</td>' +
+            '<td>' + FMT.escape(t.currency || '') + '</td>' +
+            '<td>' + FMT.escape(t.reason || '-') + '</td>' +
+            '<td>' + (t.invoice_id === '' || t.invoice_id == null ? '-' : t.invoice_id) + '</td>' +
+            '</tr>';
+        }).join('');
+        el.innerHTML = '<td colspan="6"><table class="table">' +
+          '<thead><tr><th>التاريخ</th><th>النوع</th><th>المبلغ</th><th>العملة</th><th>السبب</th><th>رقم الفاتورة</th></tr></thead>' +
+          '<tbody>' +
+          '<tr class="subtotal"><td colspan="2">إجمالي مدين</td><td class="num">' + FMT.number(debit) + '</td><td colspan="3"></td></tr>' +
+          '<tr class="subtotal"><td colspan="2">إجمالي دائن</td><td class="num">' + FMT.number(credit) + '</td><td colspan="3"></td></tr>' +
+          txsHtml +
+          '</tbody></table></td>';
+        el.setAttribute('data-loaded', '1');
+      })
+      .catch(function (e) {
+        el.innerHTML = '<td colspan="6"><div style="text-align:center;padding:12px;color:#c0392b;">' + FMT.escape(e.message || 'خطأ') + '</div></td>';
+      });
+  }
+
+  function openDebtModal(clientId) {
+    var r = window.__arap || {};
+    var clients = r.clients || [];
+    var reasons = r.reasons || [];
+    var currencies = r.currencies || [];
+    var today = new Date().toISOString().slice(0, 10);
+    var body =
+      '<form id="debt-form">' +
+      '<div class="form-field"><label class="form-label">اسم العميل <span class="req">*</span></label>' +
+      '<select id="client" class="input" required>' +
+      '<option value="">اختر العميل...</option>' +
+      clients.map(function (c) { return '<option value="' + c.value + '">' + FMT.escape(c.label) + '</option>'; }).join('') +
+      '</select><div class="field-error" id="err-client"></div></div>' +
+      '<div class="form-field"><label class="form-label">اسم العميل (تلقائي)</label>' +
+      '<input id="name_ar_display" class="input" disabled placeholder="يظهر تلقائياً عند اختيار العميل"></div>' +
+      UIC.field({ key: 'date', label: 'التاريخ', type: 'date', value: today, required: true }) +
+      UIC.field({ key: 'amount', label: 'المبلغ', type: 'number', step: '0.01', required: true }) +
+      UIC.field({ key: 'currency', label: 'العملة', type: 'select', value: 'EGP', required: true,
+        options: currencies, placeholder: 'اختر العملة...' }) +
+      UIC.field({ key: 'transaction_type', label: 'نوع الحركة', type: 'select', required: true,
+        options: [{ value: 'مدين', label: 'مدين' }, { value: 'دائن', label: 'دائن' }], placeholder: 'اختر النوع...' }) +
+      UIC.enumSelect({ key: 'reason', label: 'السبب', options: reasons, required: true, placeholder: 'اختر السبب...' }) +
+      UIC.field({ key: 'invoice_id', label: 'رقم الفاتورة', type: 'number' }) +
+      '</form>';
+    UIC.openModal('debt-modal', {
+      title: 'إضافة حركة مديونية',
+      body: body,
+      onSave: 'saveDebt()'
+    });
+    var clientSel = document.getElementById('client');
+    if (clientSel) {
+      clientSel.addEventListener('change', fillClientName);
+      if (clientId !== '') clientSel.value = String(clientId);
+      fillClientName();
+    }
+  }
+
+  function fillClientName() {
+    var sel = document.getElementById('client');
+    var disp = document.getElementById('name_ar_display');
+    if (!sel || !disp) return;
+    var opt = sel.options[sel.selectedIndex];
+    disp.value = (opt && opt.text && opt.text !== 'اختر العميل...') ? opt.text : '';
+  }
+
+  function saveDebt() {
+    if (!CAN_WRITE) { UIC.toast('غير مصرح', 'error'); return; }
+    var data = UIC.collectForm('debt-form');
+    if (!UIC.validateForm('debt-form')) return;
+    if (data.reason === '__new__') { data.reason = data.reason_custom || ''; }
+    delete data.reason_custom;
+    UI.showSpinner('جاري الحفظ...');
+    companyCall('add_ar_ap', data)
+      .then(function (r) {
+        UIC.closeModal('debt-modal');
+        UIC.toast(r.message || 'تم الحفظ', 'success');
+        if (r && r.record) {
+          // update summary locally: find client or add
+          var rec = r.record;
+          var summary = (window.__arap && window.__arap.summary) || [];
+          var found = summary.find(function(g){ return String(g.client_id)===String(rec.client); });
+          if (found) {
+            if (rec.transaction_type==='مدين') found.debit+=rec.amount; else found.credit+=rec.amount;
+            found.net = found.debit - found.credit;
+          } else {
+            summary.push({ client_id: rec.client, client_name: rec.client_name, debit: rec.transaction_type==='مدين'?rec.amount:0, credit: rec.transaction_type==='دائن'?rec.amount:0, net: rec.transaction_type==='مدين'?rec.amount:-rec.amount });
+          }
+          if (window.__arap) window.__arap.summary = summary;
+          renderDebts(window.__arap);
+        } else { fetchDebts(); }
+      })
+      .catch(function (e) { UIC.toast(e.message || 'خطأ', 'error'); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function showError(e) {
+    var body = document.getElementById('debts-content');
+    if (body) body.innerHTML = '<div class="empty-state"><span>' + FMT.escape(e.message || 'خطأ') + '</span></div>';
+  }
+
+
+  load();
+</script>
+</body>
+</html>
+
+

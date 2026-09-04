@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Top Light — المؤشرات</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= getCompanyThemeCSS_('8df5c89a117fe9a5') ?>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <style>
+    .chart-card { background: var(--bg-surface); border: 2px solid #111111; border-radius: 8px; padding: 16px; }
+    .chart-card h3 { margin: 0 0 12px; font-size: 15px; color: #111111; }
+    .chart-wrap { position: relative; height: 300px; }
+  </style>
+</head>
+<body>
+<div id="tl-kpi-root" dir="rtl"></div>
+<script>
+  var params = new URLSearchParams(window.location.search);
+  var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+  var scriptUrl = window.scriptUrl || '/';
+  var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('8df5c89a117fe9a5') ?>';
+  var COMPANY_PAGES = <?!= companyPages ?>;
+  var CURRENT_ACTION = '<?!= currentAction ?>';
+  var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+
+  function companyCall(moduleAction, data) {
+    return API.call('company_action', {
+      target_system: '8df5c89a117fe9a5',
+      module_action: moduleAction,
+      data: data || {}
+    }, SESSION_TOKEN);
+  }
+
+  function load() {
+    var root = document.getElementById('tl-kpi-root');
+    var contentId = 'tl-kpi-content';
+    UIC.appShell('tl-kpi-root', {
+      companyLogoUrl: COMPANY_LOGO_URL,
+      companyLogoHref: (window.UIC && UIC.baseUrl ? UIC.baseUrl() : scriptUrl) + '?action=tl_dashboard&sessionToken=' + ((window.UIC && UIC.token) ? UIC.token() : SESSION_TOKEN),
+      companyLogoTitle: 'القمة لايت',
+      breadcrumb: 'القمة لايت / المؤشرات',
+      contentId: contentId
+    });
+
+    UI.showSpinner([
+      'جاري تحميل المؤشرات...',
+      'جاري حساب المبيعات والأرصدة...',
+      'لحظة، جاري عرض الرسوم البيانية...'
+    ]);
+    companyCall('get_kpi_data')
+      .then(function (r) {
+        var inner = document.getElementById(contentId);
+        // Read -> welcome, Write -> charts
+        if (!r.kpi_authorized || !r.kpis) {
+          inner.innerHTML =
+            '<div style="background:var(--bg-surface);border:1px solid var(--border-color);border-radius:var(--radius-lg);padding:36px 24px;text-align:center;max-width:600px;margin:24px auto;box-shadow:var(--shadow-sm);">' +
+            '<div style="font-size:36px;margin-bottom:12px;">🏢</div>' +
+            '<h2 style="margin:0 0 10px;font-size:20px;color:var(--text-main);">مرحباً بك في النظام</h2>' +
+            '<p style="margin:0;color:var(--text-muted);font-size:14px;line-height:1.7;">استخدم القائمة العلوية للتنقل بين الصفحات المصرح لك بالوصول إليها.</p>' +
+            '</div>';
+          return;
+        }
+        var k = r.kpis;
+        inner.innerHTML =
+          '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:16px;margin-bottom:20px;">' +
+          UIC.statCard({ label: 'مبيعات منذ بداية العام', value: FMT.number(k.sales_ytd), icon: '&#128200;', tone: 'success' }) +
+          UIC.statCard({ label: 'مبيعات هذا الشهر', value: FMT.number(k.sales_mtd), icon: '&#128200;' }) +
+          UIC.statCard({ label: 'رصيد البنك', value: FMT.number(k.bank_balance), icon: '&#127970;', tone: 'warning' }) +
+          UIC.statCard({ label: 'رصيد الصناديق', value: FMT.number(k.box_balance), icon: '&#128230;' }) +
+          '</div>' +
+          '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:20px;">' +
+          '<div class="chart-card"><h3>المبيعات الشهرية</h3><div class="chart-wrap"><canvas id="salesChart"></canvas></div></div>' +
+          '<div class="chart-card"><h3>المبيعات حسب العميل</h3><div class="chart-wrap"><canvas id="customerChart"></canvas></div></div>' +
+          '</div>';
+        renderCharts(k);
+      })
+      .catch(function (e) {
+        var inner = document.getElementById(contentId);
+        if (inner) inner.innerHTML = '<div class="empty-state"><span>' + FMT.escape(e.message || 'خطأ') + '</span></div>';
+      })
+      .finally(function () { UI.hideSpinner(); try{schedulePrefetch();}catch(e){} });
+  }
+
+  function renderCharts(k) {
+    if (typeof Chart === 'undefined') return;
+    Chart.defaults.color = '#111111';
+    Chart.defaults.borderColor = '#111111';
+
+    var monthly = k.monthly_sales || [];
+    var salesCtx = document.getElementById('salesChart');
+    if (salesCtx) {
+      new Chart(salesCtx, {
+        type: 'bar',
+        data: {
+          labels: monthly.map(function (m) { return m.label; }),
+          datasets: [{
+            label: 'المبيعات',
+            data: monthly.map(function (m) { return m.value; }),
+            backgroundColor: '#fbbf24',
+            borderColor: '#111111',
+            borderWidth: 2,
+            borderRadius: 4
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: { legend: { display: false } },
+          scales: {
+            y: { beginAtZero: true, grid: { color: '#e5e7eb' } },
+            x: { grid: { display: false } }
+          }
+        }
+      });
+    }
+
+    var pie = k.pie_data || [];
+    var palette = ['#fbbf24', '#111111', '#b45309', '#16a34a', '#0369a1', '#c2410c', '#fef08a', '#6b7280', '#b91c1c'];
+    var pieCtx = document.getElementById('customerChart');
+    if (pieCtx) {
+      new Chart(pieCtx, {
+        type: 'doughnut',
+        data: {
+          labels: pie.map(function (p) { return p.label; }),
+          datasets: [{
+            data: pie.map(function (p) { return p.value; }),
+            backgroundColor: palette,
+            borderColor: '#111111',
+            borderWidth: 2
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          cutout: '55%',
+          plugins: {
+            legend: { position: 'right', rtl: true, labels: { font: { size: 11 } } }
+          }
+        }
+      });
+    }
+  }
+
+  load();
+</script>
+</body>
+</html>

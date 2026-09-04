@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="description" content="الجلسات النشطة">
+  <title>جلساتي النشطة</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+</head>
+<body>
+<div dir="rtl" class="page-shell">
+  <header class="page-header">
+    <div>
+      <h1 class="page-title">جلساتي النشطة</h1>
+      <p class="page-sub">الأجهزة التي سجلت الدخول بحسابك. يمكنك إنهاء أي جلسة عن بُعد.</p>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;">
+      <button class="btn btn-outline" onclick="goBack()">رجوع</button>
+      <button class="btn btn-danger" onclick="revokeAll()">تسجيل الخروج من كل الأجهزة</button>
+    </div>
+  </header>
+
+  <div id="list" class="stack"></div>
+  <div id="empty" class="empty-state" style="display:none;">لا توجد جلسات.</div>
+</div>
+
+<script>
+  var TOKEN = getQueryParam('sessionToken') || (API.getSession() && API.getSession().token) || '';
+  if (TOKEN) API.setSession({ token: TOKEN, user: (API.getSession() && API.getSession().user) || null });
+
+  function goBack() {
+    window.location.href = (window.scriptUrl || '/') + '?action=ERPDashboard&sessionToken=' + encodeURIComponent(TOKEN);
+  }
+
+  function init() {
+    UI.showSpinner('جاري التحميل...');
+    API.call('list_my_sessions', {}, TOKEN)
+      .then(function (r) {
+        var sessions = (r && r.sessions) || [];
+        var current = '';
+        var box = document.getElementById('list');
+        box.innerHTML = '';
+        if (!sessions.length) { document.getElementById('empty').style.display = 'block'; return; }
+        sessions.forEach(function (s) {
+          var dev = s.device || {};
+          var isCurrent = !!s.is_current;
+          var card = document.createElement('div');
+          card.className = 'card' + (isCurrent ? ' card-active' : '');
+          card.innerHTML =
+            '<div class="card-row">' +
+              '<div class="card-main">' +
+                '<div class="card-title">' + FMT.escape(dev.name || 'جهاز غير معروف') +
+                  (isCurrent ? ' <span class="badge badge-ok">هذه الجلسة</span>' : '') + '</div>' +
+                '<div class="card-sub">' + FMT.escape((dev.os || '') + ' • ' + (dev.browser || '') + ' • ' + (dev.type || '')) + '</div>' +
+                '<div class="card-sub">عنوان IP: ' + FMT.escape(s.ip || '—') + '</div>' +
+                '<div class="card-sub">بدأت: ' + FMT.datetime(s.created_at) + '</div>' +
+                '<div class="card-sub">آخر نشاط: ' + FMT.datetime(s.last_active) + '</div>' +
+              '</div>' +
+              '<div class="card-actions">' +
+                (isCurrent ? '' : '<button class="btn btn-outline btn-danger" onclick="revoke(\'' + FMT.escape(s.token_hash) + '\')">إنهاء الجلسة</button>') +
+              '</div>' +
+            '</div>';
+          box.appendChild(card);
+        });
+      })
+      .catch(function (e) { UIC.toast(e.message || 'تعذر التحميل', 'error'); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function revoke(tokenHash) {
+    if (!confirm('إنهاء هذه الجلسة؟')) return;
+    UI.showSpinner('جاري التنفيذ...');
+    API.call('revoke_session', { token_hash: tokenHash }, TOKEN)
+      .then(function () { UIC.toast('تم إنهاء الجلسة', 'success'); init(); })
+      .catch(function (e) { UIC.toast(e.message || 'تعذر التنفيذ', 'error'); UI.hideSpinner(); });
+  }
+
+  function revokeAll() {
+    if (!confirm('تسجيل الخروج من جميع الأجهزة؟ سيتطلب الأمر إعادة تسجيل الدخول.')) return;
+    UI.showSpinner('جاري التنفيذ...');
+    API.call('revoke_all_sessions', {}, TOKEN)
+      .then(function () { API.clearSession(); window.location.href = (window.scriptUrl || '/') + '?action=login'; })
+      .catch(function (e) { UIC.toast(e.message || 'تعذر التنفيذ', 'error'); UI.hideSpinner(); });
+  }
+
+  function getQueryParam(name) {
+    var m = new RegExp('[?&]' + name + '=([^&]*)').exec(window.location.search);
+    return m ? decodeURIComponent(m[1]) : '';
+  }
+
+  init();
+</script>
+<style>
+  .page-shell { max-width: 760px; margin: 0 auto; padding: 16px; }
+  .page-header { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom:16px; }
+  .page-title { font-size: 20px; margin:0 0 4px; }
+  .page-sub { color: var(--text-muted); font-size: 13px; margin:0; }
+  .stack { display:flex; flex-direction:column; gap:12px; }
+  .card { background: var(--bg-surface); border:1px solid var(--border-color); border-radius: var(--radius-md); padding:14px; }
+  .card-active { border-color: var(--brand-primary); }
+  .card-row { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+  .card-title { font-weight:600; font-size:15px; }
+  .card-sub { color: var(--text-muted); font-size:12px; margin-top:2px; }
+  .badge { font-size:11px; padding:2px 8px; border-radius:999px; margin-inline-start:6px; }
+  .badge-ok { background: var(--brand-soft); color: var(--brand-primary); }
+  .empty-state { text-align:center; color: var(--text-muted); padding:40px 0; }
+  .btn-danger { color: var(--danger, #d33); border-color: var(--danger, #d33); }
+</style>
+</body>
+</html>

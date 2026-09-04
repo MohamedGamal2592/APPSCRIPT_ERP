@@ -1,0 +1,390 @@
+﻿<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Valley Foods — حركة النقدية والبنوك</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_ValleyFoods_Nav'); ?>
+  <?!= getCompanyThemeCSS_('9940659bd83035d7') ?>
+</head>
+<body>
+  <div id="vf-root"></div>
+
+  <script>
+    var params = new URLSearchParams(window.location.search);
+    var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+    var scriptUrl = window.scriptUrl || '/';
+    var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+    var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('9940659bd83035d7') ?>';
+    var COMPANY_PAGES = <?!= companyPages ?>;
+    var CURRENT_ACTION = '<?!= currentAction ?>';
+    var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+    var CAN_WRITE = UIC.canAdd_(); var CAN_FULL = UIC.canFull_();
+
+    function companyCall(moduleAction, data) {
+      return API.call('company_action', {
+        target_system: '9940659bd83035d7',
+        module_action: moduleAction,
+        data: data || {}
+      }, SESSION_TOKEN);
+    }
+    function esc(v) {
+      var s = (v === undefined || v === null) ? '' : String(v);
+      if (typeof FMT !== 'undefined' && FMT.escape) return FMT.escape(s);
+      return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+    function num0(v) { var n = Number(v); return isNaN(n) ? 0 : n; }
+    function todayStr() { return new Date().toISOString().slice(0, 10); }
+    function fmtDate(v) {
+      if (!v) return '-';
+      var d = (v instanceof Date) ? v : new Date(v);
+      if (isNaN(d.getTime())) return String(v);
+      var p = function (n) { return n < 10 ? '0' + n : '' + n; };
+      return p(d.getDate()) + '/' + p(d.getMonth() + 1) + '/' + d.getFullYear();
+    }
+  </script>
+
+  <script>
+  (function () {
+    var HEADERS = [], BOXES = [], OPTIONS = {}, ITEM_SUGGESTIONS = [], NEXT_ID = 1;
+    var BOX_FILTER = '';
+
+    function renderApp() {
+      UIC.appShell('vf-root', {
+        companyLogoUrl: COMPANY_LOGO_URL,
+        companyLogoHref: scriptUrl + '?action=vf_dashboard&sessionToken=' + SESSION_TOKEN,
+        companyLogoTitle: 'Valley Foods',
+        breadcrumb: 'Valley Foods / الادارة المالية / حركة النقدية والبنوك',
+        contentId: 'vf-cash-content',
+        menuGroups: (window.VALLEYFOODS_MENU || [])
+      });
+      load();
+    }
+
+    function load() {
+      UI.showSpinner();
+      companyCall('get_valley_cash')
+        .then(function (r) {
+          HEADERS = r.headers || [];
+          BOXES = r.boxes || [];
+          OPTIONS = r.enums || {};
+          ITEM_SUGGESTIONS = r.item_suggestions || [];
+          NEXT_ID = r.next_id || 1;
+          window.__cashPartyOptions = r.party_options || [];
+          window.__cashBoxOptions = r.box_options || [];
+          window.__cashChartOptions = r.chart_options || [];
+          SESSION.loadActiveView('vf_cash').then(function (def) {
+            if (def && def.box !== undefined) BOX_FILTER = def.box;
+            renderList(); try{schedulePrefetch();}catch(e){};
+          }).catch(function () { renderList(); });
+        })
+        .catch(function (e) {
+          var c = document.getElementById('vf-cash-content');
+          if (c) c.innerHTML = '<div style="padding:20px;color:red;">خطأ: ' + esc(e.message || e) + '</div>';
+        })
+        .finally(function () { UI.hideSpinner(); });
+    }
+
+    function partyLabel(idRef) {
+      var found = window.__cashPartyOptions.filter(function (o) { return String(o.value) === String(idRef); })[0];
+      return found ? found.label : (idRef || '-');
+    }
+
+    function saveView() {
+      SESSION.saveCurrentView('vf_cash', { box: BOX_FILTER || '' })
+        .then(function () { UIC.toast('تم حفظ العرض', 'success'); })
+        .catch(function (e) { if (e !== 'cancelled') UIC.toast((e && e.message) || 'تعذر الحفظ', 'error'); });
+    }
+
+    /* ---------- BOX BALANCE CARDS ---------- */
+    function boxCardsHtml() {
+      return '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:16px;">' +
+        BOXES.map(function (b) {
+          var active = BOX_FILTER === b.box;
+          return '<div class="stat-card" style="cursor:pointer;' + (active ? 'outline:2px solid #16a34a;' : '') + '" onclick="CASH_PAGE.setBoxFilter(\'' + esc(b.box) + '\')">' +
+            '<div class="stat-body">' +
+              '<div style="font-size:12px;color:#6b7280;font-weight:700;">' + esc(b.name) + '</div>' +
+              '<div style="font-size:20px;font-weight:800;direction:ltr;' + (b.balance < 0 ? 'color:#dc2626;' : 'color:#0e623b;') + '">' +
+                Number(b.balance).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + '</div>' +
+            '</div></div>';
+        }).join('') +
+      '</div>';
+    }
+
+    /* ---------- LIST ---------- */
+    function renderList() {
+      var content = document.getElementById('vf-cash-content');
+      var filtered = BOX_FILTER
+        ? HEADERS.filter(function (h) { return String(h.related_box) === BOX_FILTER; })
+        : HEADERS;
+
+      var rows = filtered.map(function (h) {
+        var isApproved = h.approved_bool;
+        var actions = UIC.actionBtns([
+          { label: 'السجل', onclick: 'SESSION.openHistory(\'valley_cash_bank_movement\',\'' + esc(h.transaction_id) + '\')' },
+          IS_SUPER_ADMIN ? { label: isApproved ? 'إلغاء اعتماد' : 'اعتماد', onclick: 'CASH_PAGE.approve(' + esc(h.transaction_id) + ')' } : null,
+          IS_SUPER_ADMIN ? { label: 'تعديل', onclick: 'CASH_PAGE.openEdit(' + esc(h.transaction_id) + ')' } : null,
+          IS_SUPER_ADMIN ? { label: 'حذف', color: '#dc2626', onclick: 'CASH_PAGE.remove(' + esc(h.transaction_id) + ')' } : null
+        ].filter(Boolean));
+        return [
+          '<b>' + esc(h.transaction_id) + '</b>',
+          fmtDate(h.transaction_date),
+          esc(h.party_name || h.name_vendor || h.name || '-'),
+          esc(h.transaction_details || '-'),
+          esc(h.transaction_type),
+          esc(h.transaction_method || '-'),
+          '<span class="num" data-num="' + num0(h.transaction_amount) + '">' + num0(h.transaction_amount).toLocaleString('en-US') + '</span>',
+          esc(h.box_name || h.related_box || '-'),
+          '<span class="num" style="font-weight:700;' + (num0(h.balance_amount) < 0 ? 'color:#dc2626;' : 'color:#0e623b;') + '" data-num="' + num0(h.balance_amount) + '">' + num0(h.balance_amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + '</span>',
+          UIC.statusPill(isApproved ? 'معتمد' : 'غير معتمد', isApproved ? 'success' : 'neutral'),
+          actions
+        ];
+      });
+
+      content.innerHTML =
+        boxCardsHtml() +
+        '<div style="display:flex;justify-content:flex-end;gap:8px;margin-bottom:12px;flex-wrap:wrap;">' +
+          (BOX_FILTER ? '<button class="btn btn-outline" onclick="CASH_PAGE.setBoxFilter(\'\')">✕ إلغاء فلتر الصندوق</button>' : '') +
+          '<button class="btn btn-outline" onclick="UI.submitOnce(this, CASH_PAGE.saveView)">💾 حفظ العرض</button>' +
+          (CAN_WRITE
+            ? '<button class="btn btn-primary" onclick="CASH_PAGE.openForm(\'\')">+ إضافة حركة</button>' +
+              '<button class="btn btn-outline" onclick="CASH_PAGE.openTransfer()">تحويل بين الصناديق</button>'
+            : '') +
+        '</div>' +
+        UIC.dataTable('cash-table-id', {
+          headers: ['رقم', 'التاريخ', 'الطرف', 'البيان', 'النوع', 'طريقة الدفع',
+                    { label: 'المبلغ', numeric: true }, 'الصندوق', { label: 'الرصيد', numeric: true },
+                    'الاعتماد', ''],
+          rows: rows,
+          emptyText: BOX_FILTER ? 'لا توجد حركات في هذا الصندوق' : 'لا توجد حركات'
+        });
+      UIC.initTableSort('cash-table-id');
+    }
+
+    /* ---------- ADD / EDIT MODAL ---------- */
+    function openForm(id) {
+      var record = null;
+      if (id) HEADERS.forEach(function (h) { if (Number(h.transaction_id) === Number(id)) record = h; });
+      renderForm(record);
+    }
+
+    function selOpts(list, selected) {
+      return (list || []).map(function (v) { return { value: v, label: v }; }).filter(Boolean);
+    }
+    function refOpts(list) {
+      return [{ value: '', label: '—' }].concat(list || []);
+    }
+
+    function renderForm(record) {
+      var isEdit = !!record;
+      var datalistId = 'items-datalist';
+      var body = '<form id="cash-form">' +
+        '<div class="form-field">' +
+          '<label class="form-label">رقم الحركة (يُعتمد تلقائياً)</label>' +
+          '<input id="f-tid-display" class="input" type="text" readonly value="' + esc(record ? record.transaction_id : NEXT_ID) + '" style="background:#f3f4f6;color:#6b7280;cursor:not-allowed;">' +
+        '</div>' +
+        UIC.field({ key: 'f-date', label: 'تاريخ الحركة', type: 'date', required: true, value: record ? (record.date_edit || todayStr()) : todayStr() }) +
+        UIC.combo({ key: 'f-type', label: 'نوع الحركة', required: true, options: selOpts(OPTIONS.transaction_type), value: record ? record.transaction_type : '', placeholder: 'اكتب للبحث…' }) +
+        UIC.combo({ key: 'f-method', label: 'طريقة الدفع', required: true, options: selOpts(OPTIONS.transaction_method), value: record ? (record.transaction_method || '') : '', placeholder: 'اكتب للبحث…' }) +
+        UIC.combo({ key: 'f-party', label: 'العميل / المورد', options: window.__cashPartyOptions || [], value: record ? String(record.name || '') : '', placeholder: 'اكتب للبحث…' }) +
+        UIC.field({ key: 'f-vendor', label: 'اسم المورد (إن لم يكن مسجلاً)', type: 'text', value: record ? (record.name_vendor || '') : '' }) +
+        UIC.field({ key: 'f-details', label: 'البيان', type: 'textarea', required: true, value: record ? (record.transaction_details || '') : '' }) +
+        UIC.field({ key: 'f-amount', label: 'المبلغ', type: 'number', required: true, min: '0.01', step: '0.01', value: record ? (record.transaction_amount != null ? record.transaction_amount : '') : '' }) +
+        UIC.field({ key: 'f-discount', label: 'الخصم', type: 'number', min: '0', step: '0.01', value: record ? (record.total_discount != null ? record.total_discount : '') : '' }) +
+        '<div class="form-field">' +
+          '<label class="form-label">القيم المحتسبة تلقائياً (للعرض فقط)</label>' +
+          '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;">' +
+            grayedField('f-net-display', 'net_amount') +
+            grayedField('f-total-display', 'total') +
+            grayedField('f-balance-display', 'balance_amount') +
+            grayedField('f-boxbal-display', 'box_balance Σ') +
+          '</div>' +
+        '</div>' +
+        UIC.field({ key: 'f-taxes', label: 'الضرائب', type: 'number', min: '0', step: '0.01', value: record ? (record.taxes != null ? record.taxes : '') : '' }) +
+        '' +
+        UIC.combo({ key: 'f-box', label: 'الصندوق / الحساب البنكي', required: true, options: window.__cashBoxOptions || [], value: record ? String(record.related_box || '') : '', placeholder: 'اكتب للبحث…' }) +
+        UIC.combo({ key: 'f-chart', label: 'كود الدليل المحاسبي', options: window.__cashChartOptions || [], value: record ? String(record.chart_code || '') : '', placeholder: 'اكتب للبحث…' }) +
+        UIC.field({ key: 'f-items', label: 'أصناف المشتريات (اختياري — اكتب قيماً جديدة لإضافتها)', type: 'text', list: datalistId, value: record ? (record.transaction_purchasing_items || '') : '' }) +
+        '{{DATALIST}}' +
+        checkboxField('f-tax-system', 'خاضع للنظام الضريبي', record && (record.tax_system === true || String(record.tax_system).toLowerCase() === 'yes')) +
+      '</form>';
+
+      var dl = '<datalist id="' + datalistId + '">' +
+        ITEM_SUGGESTIONS.map(function (v) { return '<option value="' + esc(v) + '"></option>'; }).join('') +
+      '</datalist>';
+
+      UIC.openModal('cash-modal', {
+        title: isEdit ? 'تعديل حركة رقم ' + record.transaction_id : 'إضافة حركة',
+        body: body.replace('{{DATALIST}}', dl),
+        onSave: 'CASH_PAGE.save(' + (isEdit ? esc(record.transaction_id) : 'null') + ')'
+      });
+
+      /* Pin the box to the active card filter when adding from a box card
+         (UIC.combo: hidden input keeps the value, display input gets locked) */
+      if (!isEdit && BOX_FILTER) {
+        var hidBox = document.getElementById('f-box');
+        var dispBox = document.getElementById('f-box_display');
+        if (hidBox) hidBox.value = BOX_FILTER;
+        if (dispBox) {
+          var lbl = '';
+          (window.__cashBoxOptions || []).forEach(function (o) { if (String(o.value) === String(BOX_FILTER)) lbl = o.label; });
+          dispBox.value = lbl || BOX_FILTER;
+          dispBox.disabled = true;
+          dispBox.style.background = '#f3f4f6';
+          dispBox.style.color = '#6b7280';
+          dispBox.style.cursor = 'not-allowed';
+        }
+      }
+      ['f-type_display', 'f-method_display'].forEach(function (did2) {
+        var el2 = document.getElementById(did2);
+        if (el2) el2.addEventListener('input', updateCalcPreview);
+      });
+
+      ['f-amount', 'f-discount', 'f-taxes', 'f-type', 'f-box'].forEach(function (fid) {
+        var el = document.getElementById(fid);
+        if (el) el.addEventListener('input', updateCalcPreview);
+        if (el) el.addEventListener('change', updateCalcPreview);
+      });
+      updateCalcPreview();
+    }
+
+    function getVal_(id) { var el = document.getElementById(id); return el ? el.value : ''; }
+    function checkboxField(key, label, checked) {
+      return '<label style="display:flex;align-items:center;gap:8px;margin:10px 0;font-size:14px;">' +
+        '<input type="checkbox" id="' + key + '"' + (checked ? ' checked' : '') + '> ' + label + '</label>';
+    }
+    function grayedField(id, label) {
+      return '<div><div style="font-size:10px;color:#6b7280;margin-bottom:3px;">' + esc(label) + '</div>' +
+        '<input id="' + id + '" class="input" type="text" readonly value="0.00" style="background:#f3f4f6;color:#6b7280;cursor:not-allowed;direction:ltr;text-align:left;font-family:monospace;"></div>';
+    }
+
+    /* Live grayed previews mirroring the sheet formulas:
+     * net = amount - discount | total = net + taxes
+     * balance = total ×-1 for Credit/Credit Note else total
+     * box_balance Σ = selected box's current Σ balance + this movement's balance */
+    function updateCalcPreview() {
+      var amt = num0(getVal_('f-amount'));
+      var disc = num0(getVal_('f-discount'));
+      var taxes = num0(getVal_('f-taxes'));
+      var type = getVal_('f-type');
+      var boxKey = getVal_('f-box');
+      var net = amt - disc;
+      var total = net + taxes;
+      var balance = (type === 'Credit' || type === 'Credit Note') ? total * -1 : total;
+      var setV = function (id, v) { var el = document.getElementById(id); if (el) el.value = Number(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); };
+      setV('f-net-display', net);
+      setV('f-total-display', total);
+      setV('f-balance-display', balance);
+      var boxCur = 0;
+      BOXES.forEach(function (b) { if (String(b.box) === String(boxKey)) boxCur = num0(b.balance); });
+      setV('f-boxbal-display', boxCur + balance);
+    }
+
+    function save(editId) {
+      if (!UIC.validateForm('cash-form')) return;
+      var payload = {
+        transaction_id: editId != null ? editId : '',
+        transaction_date: getVal_('f-date'),
+        transaction_type: getVal_('f-type'),
+        transaction_method: getVal_('f-method'),
+        name: getVal_('f-party'),
+        name_vendor: getVal_('f-vendor').trim(),
+        transaction_details: getVal_('f-details').trim(),
+        transaction_amount: getVal_('f-amount'),
+        total_discount: getVal_('f-discount'),
+        taxes: getVal_('f-taxes'),
+        related_box: getVal_('f-box'),
+        chart_code: getVal_('f-chart'),
+        chart_name: '',
+        transaction_purchasing_items: getVal_('f-items').trim(),
+        tax_system: readCheckbox('f-tax-system')
+      };
+      UI.showSpinner();
+      companyCall('save_valley_cash', payload)
+        .then(function (r) {
+          UIC.closeModal('cash-modal');
+          UIC.toast((r && r.message) || 'تم الحفظ بنجاح', 'success');
+          load();
+        })
+        .catch(function (e) { UIC.toast((e && e.message) || 'فشل الحفظ', 'error'); })
+        .finally(function () { UI.hideSpinner(); });
+    }
+
+    function readCheckbox(id) {
+      var el = document.getElementById(id);
+      return !!(el && el.checked);
+    }
+
+    /* ---------- TRANSFER ---------- */
+    function openTransfer() {
+      var body = '<form id="transfer-form">' +
+        UIC.field({ key: 'tf-from', label: 'من صندوق / حساب', type: 'select', required: true, options: refOpts(window.__cashBoxOptions), placeholder: 'اختر' }) +
+        UIC.field({ key: 'tf-to', label: 'إلى صندوق / حساب', type: 'select', required: true, options: refOpts(window.__cashBoxOptions), placeholder: 'اختر' }) +
+        UIC.field({ key: 'tf-date', label: 'تاريخ التحويل', type: 'date', required: true, value: todayStr() }) +
+        UIC.field({ key: 'tf-amount', label: 'المبلغ', type: 'number', required: true, min: '0.01', step: '0.01' }) +
+        UIC.field({ key: 'tf-details', label: 'ملاحظات', type: 'text' }) +
+      '</form>';
+      UIC.openModal('transfer-modal', { title: 'تحويل بين الصناديق', body: body, onSave: 'CASH_PAGE.saveTransfer()' });
+    }
+
+    function saveTransfer() {
+      if (!UIC.validateForm('transfer-form')) return;
+      var fromBox = getVal_('tf-from'), toBox = getVal_('tf-to');
+      if (!fromBox || !toBox) { UIC.toast('اختر الصندوقين', 'error'); return; }
+      if (fromBox === toBox) { UIC.toast('لا يمكن التحويل إلى نفس الصندوق', 'error'); return; }
+      UI.showSpinner();
+      companyCall('transfer_valley_cash', {
+        from_box: fromBox,
+        to_box: toBox,
+        transaction_date: getVal_('tf-date'),
+        amount: getVal_('tf-amount'),
+        details: getVal_('tf-details').trim()
+      })
+        .then(function (r) {
+          UIC.closeModal('transfer-modal');
+          UIC.toast((r && r.message) || 'تم التحويل', 'success');
+          load();
+        })
+        .catch(function (e) { UIC.toast((e && e.message) || 'فشل التحويل', 'error'); })
+        .finally(function () { UI.hideSpinner(); });
+    }
+
+    /* ---------- APPROVE / DELETE ---------- */
+    function approve(tid) {
+      UI.showSpinner();
+      companyCall('approve_valley_cash', { transaction_id: tid })
+        .then(function (r) { UIC.toast((r && r.message) || 'تم', 'success'); load(); })
+        .catch(function (e) { UIC.toast((e && e.message) || 'فشل', 'error'); })
+        .finally(function () { UI.hideSpinner(); });
+    }
+
+    function remove(tid) {
+      if (!confirm('حذف هذه الحركة نهائياً؟ لا يمكن التراجع.')) return;
+      UI.showSpinner();
+      companyCall('delete_valley_cash', { transaction_id: tid })
+        .then(function (r) { UIC.toast((r && r.message) || 'تم الحذف', 'success'); load(); })
+        .catch(function (e) { UIC.toast((e && e.message) || 'فشل الحذف', 'error'); })
+        .finally(function () { UI.hideSpinner(); });
+    }
+
+    window.CASH_PAGE = {
+      openForm: openForm,
+      openEdit: openForm,
+      save: save,
+      openTransfer: openTransfer,
+      saveTransfer: saveTransfer,
+      approve: approve,
+      remove: remove,
+      setBoxFilter: function (box) { BOX_FILTER = box; renderList(); }
+    };
+
+    document.addEventListener('DOMContentLoaded', renderApp);
+  })();
+  </script>
+</body>
+</html>
+
+

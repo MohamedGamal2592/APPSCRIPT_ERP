@@ -1,0 +1,155 @@
+﻿<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>عملاء وموردين</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_TopChemical_Nav'); ?>
+  <?!= getCompanyThemeCSS_('3fe1b5cb67b7223e') ?>
+</head>
+<body>
+<div id="tc-root" dir="rtl"></div>
+<script>
+  var params = new URLSearchParams(window.location.search);
+  var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+  var scriptUrl = window.scriptUrl || '/';
+  var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+  var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('3fe1b5cb67b7223e') ?>';
+  var COMPANY_PAGES = <?!= companyPages ?>;
+  var CURRENT_ACTION = '<?!= currentAction ?>';
+  var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+  var CAN_WRITE = UIC.canAdd_(); var CAN_FULL = UIC.canFull_();
+
+  function companyCall(moduleAction, data) {
+    return API.call('company_action', {
+      target_system: '3fe1b5cb67b7223e',
+      module_action: moduleAction,
+      data: data || {}
+    }, SESSION_TOKEN);
+  }
+
+  function load() {
+    var contentId = 'clients-content';
+    UIC.appShell('tc-root', {
+      companyLogoUrl: COMPANY_LOGO_URL,
+      companyLogoHref: scriptUrl + '?action=tc_dashboard&sessionToken=' + SESSION_TOKEN,
+      companyLogoTitle: 'توب كيميكال',
+      breadcrumb: 'توب كيميكال / الحسابات / عملاء وموردين',
+      contentId: contentId,
+      menuGroups: (window.TOPCHEMICAL_MENU || [])
+    });
+    fetchClients();
+  }
+
+  function fetchClients() {
+    UI.showSpinner();
+    companyCall('get_clients_vendors')
+      .then(function (r) { renderClients(r.clients || []); })
+      .catch(function (e) { showError(e); })
+      .finally(function () { UI.hideSpinner(); try{schedulePrefetch();}catch(e){} });
+  }
+
+  function renderClients(list) {
+    window.__clients = list;
+    var rows = list.map(function (c) {
+      var maps = c.google_maps
+        ? '<a href="' + FMT.escape(c.google_maps) + '" target="_blank" rel="noopener">خريطة</a>'
+        : '-';
+      return {
+        id: c.id,
+        name_ar: c.name_ar || '-',
+        cell_phone: c.cell_phone || '-',
+        address: c.address || '-',
+        google_maps: maps,
+        notes: c.notes || '-',
+        tax_id: c.tax_id || '-',
+        actions: UIC.actionBtns(UIC.canFull_() ? [{ label: 'تعديل', onclick: "openClientModal('" + FMT.escape(c.id) + "')" }] : [])
+      };
+    });
+    var headers = [
+      { key: 'id', label: '#' },
+      { key: 'name_ar', label: 'الاسم' },
+      { key: 'cell_phone', label: 'الموبايل' },
+      { key: 'address', label: 'العنوان' },
+      { key: 'google_maps', label: 'الموقع' },
+      { key: 'notes', label: 'ملاحظات' },
+      { key: 'tax_id', label: 'الرقم الضريبي' },
+      { key: 'actions', label: 'إجراءات' }
+    ];
+    var body = document.getElementById('clients-content');
+    body.innerHTML = (CAN_WRITE
+      ? '<div style="display:flex;justify-content:flex-end;margin-bottom:12px;"><button class="btn btn-primary" onclick="openClientModal(\'\')">+ إضافة عميل / مورد</button></div>'
+      : '') +
+      UIC.dataTable('clients-table', {
+        title: 'العملاء والموردون',
+        headers: headers,
+        rows: rows,
+        emptyText: 'لا توجد بيانات'
+      });
+    UIC.initTableSort('clients-table');
+  }
+
+  function openClientModal(id) {
+    var c = (window.__clients || []).find(function (x) { return String(x.id) === String(id); });
+    var body =
+      '<form id="client-form">' +
+      UIC.field({ key: 'id', label: '#', type: 'number', value: c ? c.id : '', required: true, placeholder: 'رقم صحيح' }) +
+      UIC.field({ key: 'name_ar', label: 'الاسم', value: c ? c.name_ar : '', required: true }) +
+      UIC.field({ key: 'cell_phone', label: 'الموبايل', value: c ? c.cell_phone : '' }) +
+      UIC.field({ key: 'address', label: 'العنوان', value: c ? c.address : '' }) +
+      UIC.field({ key: 'google_maps', label: 'رابط الموقع (Google Maps)', value: c ? c.google_maps : '' }) +
+      UIC.field({ key: 'notes', label: 'ملاحظات', type: 'textarea', value: c ? c.notes : '' }) +
+      UIC.field({ key: 'tax_id', label: 'الرقم الضريبي', type: 'number', value: c ? c.tax_id : '' }) +
+      '</form>';
+    UIC.openModal('client-modal', {
+      title: c ? 'تعديل عميل / مورد' : 'إضافة عميل / مورد',
+      body: body,
+      onSave: 'saveClient(\'' + (c ? c.id : '') + '\')'
+    });
+    if (c) {
+      var idField = document.getElementById('id');
+      if (idField) idField.setAttribute('disabled', 'disabled');
+    }
+  }
+
+  function saveClient(id) {
+    if (!id && !CAN_WRITE) { UIC.toast('غير مصرح', 'error'); return; }
+    if (id && !IS_SUPER_ADMIN) { UIC.toast('غير مصرح', 'error'); return; }
+    var data = UIC.collectForm('client-form');
+    if (!UIC.validateForm('client-form')) return;
+    if (id) data.id = id;
+    UI.showSpinner('جاري الحفظ...');
+    companyCall(id ? 'edit_client_vendor' : 'add_client_vendor', data)
+      .then(function (r) {
+        UIC.closeModal('client-modal');
+        UIC.toast(r.message || 'تم الحفظ', 'success');
+        if (r && r.record) {
+          window.__clients = window.__clients || [];
+          if (id) {
+            var idx = window.__clients.findIndex(function(c){ return String(c.id)===String(id); });
+            if (idx!==-1) window.__clients[idx]=r.record; else window.__clients.push(r.record);
+          } else {
+            window.__clients.unshift(r.record);
+          }
+          renderClients(window.__clients);
+        } else { fetchClients(); }
+      })
+      .catch(function (e) { UIC.toast(e.message || 'خطأ', 'error'); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function showError(e) {
+    var body = document.getElementById('clients-content');
+    if (body) body.innerHTML = '<div class="empty-state"><span>' + FMT.escape(e.message || 'خطأ') + '</span></div>';
+  }
+
+
+  load();
+</script>
+</body>
+</html>
+
+

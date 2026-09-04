@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>الاصناف المطلوب شرائها</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= getCompanyThemeCSS_('8df5c89a117fe9a5') ?>
+  <style>
+    @media print {
+      .no-print { display: none !important; }
+      body { background: #ffffff !important; }
+    }
+    .need-red td { background: #fee2e2 !important; color: #b91c1c !important; font-weight: 700; }
+  </style>
+</head>
+<body>
+<div id="needs-root" dir="rtl"></div>
+<script>
+  var params = new URLSearchParams(window.location.search);
+  var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+  var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('8df5c89a117fe9a5') ?>';
+
+  function companyCall(moduleAction, data) {
+    return API.call('company_action', {
+      target_system: '8df5c89a117fe9a5',
+      module_action: moduleAction,
+      data: data || {}
+    }, SESSION_TOKEN);
+  }
+
+  function load() {
+    UI.showSpinner('جاري تحميل الأصناف...');
+    companyCall('get_purchase_needs')
+      .then(function (r) { render(r.rows || []); })
+      .catch(function (e) {
+        document.getElementById('needs-root').innerHTML =
+          '<div class="empty-state"><span>' + FMT.escape(e.message || 'خطأ') + '</span></div>';
+      })
+      .finally(function () { UI.hideSpinner(); try{schedulePrefetch();}catch(e){} });
+  }
+
+  function render(rows) {
+    var root = document.getElementById('needs-root');
+    var needCount = rows.filter(function (r) { return r.needs_purchase; }).length;
+
+    var tbody = rows.map(function (r) {
+      var cls = r.needs_purchase ? ' class="need-red"' : '';
+      return '<tr' + cls + '>' +
+        '<td>' + FMT.escape(r.product_name || '-') + '</td>' +
+        '<td class="num">' + FMT.number(r.current_qty) + '</td>' +
+        '<td class="num">' + FMT.number(r.last_purchase_qty) + '</td>' +
+        '<td class="num">' + FMT.number(r.ratio) + '</td>' +
+        '<td>' + (r.needs_purchase ? 'مطلوب شراؤه' : 'متوفر') + '</td>' +
+        '</tr>';
+    }).join('');
+
+    var html =
+      '<div class="no-print" style="max-width:1000px;margin:12px auto;display:flex;justify-content:space-between;align-items:center;gap:8px;">' +
+      '<h2 style="margin:0;">الاصناف المطلوب شرائها</h2>' +
+      '<div style="display:flex;gap:8px;">' +
+      '<button class="btn btn-primary" onclick="window.print()">طباعة</button>' +
+      '<button class="btn btn-outline" onclick="try{window.top.close()}catch(e){window.close()}">إغلاق</button>' +
+      '</div></div>' +
+      '<div style="max-width:1000px;margin:0 auto;">' +
+      '<div style="margin-bottom:12px;padding:10px 14px;background:#fee2e2;border:2px solid #b91c1c;border-radius:8px;color:#b91c1c;font-weight:700;">' +
+      'عدد الأصناف المطلوب شراؤها: ' + needCount + '</div>' +
+      '<div class="table-wrap" style="border:2px solid #111111;">' +
+      '<table class="table"><thead><tr>' +
+      '<th>المنتج</th><th>الرصيد الحالي</th><th>آخر كمية شراء</th><th>النسبة</th><th>الحالة</th>' +
+      '</tr></thead><tbody>' + tbody + '</tbody></table>' +
+      '</div></div>';
+
+    root.innerHTML = html;
+  }
+
+  load();
+</script>
+</body>
+</html>

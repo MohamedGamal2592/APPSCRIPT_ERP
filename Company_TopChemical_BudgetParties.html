@@ -1,0 +1,130 @@
+﻿<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>عملاء وموردون قانونيون</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_TopChemical_Nav'); ?>
+  <?!= getCompanyThemeCSS_('3fe1b5cb67b7223e') ?>
+</head>
+<body>
+<div id="tc-root" dir="rtl"></div>
+<script>
+  var params = new URLSearchParams(window.location.search);
+  var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+  var scriptUrl = window.scriptUrl || '/';
+  var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+  var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('3fe1b5cb67b7223e') ?>';
+  var COMPANY_PAGES = <?!= companyPages ?>;
+  var CURRENT_ACTION = '<?!= currentAction ?>';
+  var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+  var CAN_WRITE = UIC.canAdd_(); var CAN_FULL = UIC.canFull_();
+
+  function companyCall(moduleAction, data) {
+    return API.call('company_action', {
+      target_system: '3fe1b5cb67b7223e',
+      module_action: moduleAction,
+      data: data || {}
+    }, SESSION_TOKEN);
+  }
+
+  function load() {
+    UIC.appShell('tc-root', {
+      companyLogoUrl: COMPANY_LOGO_URL,
+      companyLogoHref: scriptUrl + '?action=tc_dashboard&sessionToken=' + SESSION_TOKEN,
+      companyLogoTitle: 'توب كيميكال',
+      breadcrumb: 'توب كيميكال / حسابات الميزانية / عملاء وموردون قانونيون',
+      contentId: 'budget-parties-content',
+      menuGroups: (window.TOPCHEMICAL_MENU || [])
+    });
+    fetchParties();
+  }
+
+  function openPartyModal() {
+    var maxId = 0;
+    (window.__parties || []).forEach(function (p) { var n = Number(p.id); if (Number.isInteger(n) && n > maxId) maxId = n; });
+    var types = [];
+    var seen = {};
+    (window.__parties || []).forEach(function (p) {
+      var t = String(p.type || '').trim();
+      if (t && !seen[t]) { seen[t] = true; types.push(t); }
+    });
+    ['عميل', 'مورد', 'عميل ومورد'].forEach(function (t) { if (!seen[t]) { seen[t] = true; types.push(t); } });
+    var body = '<form id="party-form">' +
+      UIC.field({ key: 'id', label: '#', type: 'number', min: 1, required: true, value: maxId + 1, placeholder: 'رقم صحيح موجب' }) +
+      UIC.field({ key: 'name', label: 'الاسم', required: true }) +
+      UIC.combo({ key: 'type', label: 'النوع', options: types, required: true, allowNew: true, placeholder: 'اختر النوع...' }) +
+      UIC.field({ key: 'registration_number', label: 'رقم التسجيل' }) +
+      UIC.field({ key: 'tax_id', label: 'الرقم الضريبي', required: true }) +
+      UIC.field({ key: 'name_en', label: 'الاسم (EN)' }) +
+      '</form>';
+    UIC.openModal('party-modal', { title: 'إضافة عميل / مورد قانوني', body: body, onSave: 'saveParty()' });
+    var idEl = document.getElementById('id');
+    if (idEl) idEl.setAttribute('disabled', 'disabled');
+  }
+
+  function fetchParties() {
+    UI.showSpinner();
+    companyCall('get_legal_parties')
+      .then(function (r) { renderParties(r.parties || []); })
+      .catch(function (e) { showError(e); })
+      .finally(function () { UI.hideSpinner(); try{schedulePrefetch();}catch(e){} });
+  }
+
+  function renderParties(list) {
+    window.__parties = list;
+    var rows = list.map(function (p) {
+      return {
+        id: FMT.escape(p.id),
+        name: FMT.escape(p.name || '-'),
+        type: FMT.escape(p.type || '-'),
+        registration_number: FMT.escape(p.registration_number || '-'),
+        tax_id: FMT.escape(p.tax_id || '-'),
+        name_en: FMT.escape(p.name_en || '-')
+      };
+    });
+    var headers = [
+      { key: 'id', label: '#' },
+      { key: 'name', label: 'الاسم' },
+      { key: 'type', label: 'النوع' },
+      { key: 'registration_number', label: 'رقم التسجيل' },
+      { key: 'tax_id', label: 'الرقم الضريبي' },
+      { key: 'name_en', label: 'الاسم (EN)' }
+    ];
+    document.getElementById('budget-parties-content').innerHTML =
+      (CAN_WRITE ? '<div style="display:flex;justify-content:flex-end;margin-bottom:12px;"><button class="btn btn-primary" onclick="openPartyModal()">+ إضافة طرف</button></div>' : '') +
+      UIC.dataTable('budget-parties-table', { title: 'العملاء والموردون القانونيون', headers: headers, rows: rows, emptyText: 'لا توجد بيانات' });
+    UIC.initTableSort('budget-parties-table');
+  }
+
+  function saveParty() {
+    if (!UIC.validateForm('party-form')) return;
+    var data = UIC.collectForm('party-form');
+    var sel = document.getElementById('type');
+    if (sel && sel.value === '__new__') data['type'] = document.getElementById('type_custom').value;
+    UI.showSpinner('جاري الحفظ...');
+    companyCall('add_legal_party', data)
+      .then(function (r) {
+        UIC.closeModal('party-modal'); UIC.toast(r.message || 'تمت الإضافة', 'success');
+        if (r && r.record) {
+          window.__parties = window.__parties || [];
+          window.__parties.push(r.record);
+          renderParties(window.__parties);
+        } else { fetchParties(); }
+      })
+      .catch(function (e) { showError(e); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function showError(e) {
+    UIC.toast((e && e.message) || 'خطأ غير متوقع', 'error');
+  }
+
+  load();
+</script>
+</body>
+</html>
+

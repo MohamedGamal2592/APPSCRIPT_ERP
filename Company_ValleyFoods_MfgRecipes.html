@@ -1,0 +1,251 @@
+﻿<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Valley Foods — وصفات التصنيع (BOM)</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_ValleyFoods_Nav'); ?>
+  <?!= getCompanyThemeCSS_('9940659bd83035d7') ?>
+</head>
+<body>
+  <div id="vf-root"></div>
+
+  <script>
+    var params = new URLSearchParams(window.location.search);
+    var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+    var scriptUrl = window.scriptUrl || '/';
+    var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+    var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('9940659bd83035d7') ?>';
+    var COMPANY_PAGES = <?!= companyPages ?>;
+    var CURRENT_ACTION = '<?!= currentAction ?>';
+    var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+    var CAN_WRITE = UIC.canAdd_(); var CAN_FULL = UIC.canFull_();
+
+    function companyCall(moduleAction, data) {
+      return API.call('company_action', {
+        target_system: '9940659bd83035d7',
+        module_action: moduleAction,
+        data: data || {}
+      }, SESSION_TOKEN);
+    }
+    function esc(v) {
+      var s = (v === undefined || v === null) ? '' : String(v);
+      if (typeof FMT !== 'undefined' && FMT.escape) return FMT.escape(s);
+      return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+    function num0(v) { var n = Number(v); return isNaN(n) ? 0 : n; }
+  </script>
+
+  <script>
+  (function () {
+    var RECIPES = [], STEPS_BY = {}, PRODUCT_OPTIONS = [], WC_OPTIONS = [];
+
+    function renderApp() {
+      UIC.appShell('vf-root', {
+        companyLogoUrl: COMPANY_LOGO_URL,
+        companyLogoHref: scriptUrl + '?action=vf_dashboard&sessionToken=' + SESSION_TOKEN,
+        companyLogoTitle: 'Valley Foods',
+        breadcrumb: 'Valley Foods / الانتاج / وصفات التصنيع',
+        contentId: 'vf-recipes-content',
+        menuGroups: (window.VALLEYFOODS_MENU || [])
+      });
+      document.getElementById('vf-recipes-content').innerHTML =
+        '<div class="vf-card"><div class="vf-card-header"><h3>وصفات التصنيع (BOM)</h3>' +
+          (CAN_WRITE ? '<button class="btn btn-primary" onclick="RECIPES_PAGE.openAdd()">+ إضافة وصفة</button>' : '') +
+        '</div><div class="vf-card-body">' +
+          '<div id="rc-table"><p class="vf-text-muted">جاري التحميل...</p></div>' +
+        '</div></div>';
+      load();
+    }
+
+    function load() {
+      UI.showSpinner();
+      companyCall('get_valley_mfg_recipes')
+        .then(function (r) {
+          RECIPES = r.recipes || [];
+          STEPS_BY = r.steps_by_recipe || {};
+          PRODUCT_OPTIONS = r.product_options || [];
+          WC_OPTIONS = r.work_center_options || [];
+          renderTable(); try{schedulePrefetch();}catch(e){};
+        })
+        .catch(function (e) { UIC.toast((e && e.message) || 'خطأ في تحميل البيانات', 'error'); })
+        .finally(function () { UI.hideSpinner(); });
+    }
+
+    function prodLabel(idRef) {
+      var f = PRODUCT_OPTIONS.filter(function (o) { return String(o.value) === String(idRef); })[0];
+      return f ? f.label : (idRef || '-');
+    }
+
+    function renderTable() {
+      var container = document.getElementById('rc-table');
+      if (!container) return;
+      var rows = RECIPES.map(function (r) {
+        var steps = STEPS_BY[String(r.unique_id)] || [];
+        var actions = IS_SUPER_ADMIN ? UIC.actionBtns([{ label: 'تعديل', onclick: 'RECIPES_PAGE.openEdit(\'' + esc(r.unique_id) + '\')' }]) : '';
+        return [
+          '<b>' + esc(r.recipe_code || r.id) + '</b>',
+          esc(r.recipe_name),
+          esc(prodLabel(r.produced_product_id)),
+          esc(r.yield_qty) + ' ' + esc(r.yield_uom || ''),
+          steps.length,
+          UIC.statusPill(!(r.is_active === false || String(r.is_active).toLowerCase() === 'false') ? 'مفعلة' : 'موقوف', !(r.is_active === false || String(r.is_active).toLowerCase() === 'false') ? 'success' : 'neutral'),
+          actions
+        ];
+      });
+      container.innerHTML = UIC.dataTable('recipes-table-id', {
+        headers: ['كود الوصفة', 'الاسم', 'المنتج المنتج', 'كمية الإنتاج', 'عدد الخطوات', 'الحالة', ''],
+        rows: rows
+      });
+      UIC.initTableSort('recipes-table-id');
+    }
+
+    /* ---------- MODAL ---------- */
+    var DRAFT_STEPS = [];
+
+    function openAdd() { DRAFT_STEPS = []; openModal(null); }
+
+    function openEdit(uid) {
+      var row = null;
+      RECIPES.forEach(function (r) { if (String(r.unique_id) === String(uid)) row = r; });
+      if (!row) { UIC.toast('لم يتم العثور على الوصفة', 'error'); return; }
+      DRAFT_STEPS = (STEPS_BY[uid] || []).map(function (s, i2) {
+        return { step_name: s.step_name, work_center_id: '', raw_material_id: '', raw_label: s.raw_material, required_qty: s.required_qty, loss_percentage: s.loss_percentage };
+      });
+      openModal(row);
+    }
+
+    function openModal(row) {
+      var isEdit = !!row;
+      var body = '<form id="recipe-form">' +
+        '<input type="hidden" id="f-uid" value="' + esc(row ? row.unique_id : '') + '">' +
+        '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:12px;">' +
+          UIC.field({ key: 'f-name', label: 'اسم الوصفة', type: 'text', required: true, value: row ? row.recipe_name : '', noCorrect: true }) +
+          UIC.combo({ key: 'f-product', label: 'المنتج المنتج', required: true, options: PRODUCT_OPTIONS, value: row ? String(row.produced_product_id) : '', placeholder: 'اكتب للبحث…' }) +
+          UIC.field({ key: 'f-yield', label: 'كمية الإنتاج المتوقعة', type: 'number', required: true, min: '0.01', step: '0.01', value: row ? (row.yield_qty != null ? row.yield_qty : '') : '' }) +
+          checkboxField('f-active', 'الوصفة مفعلة', row ? !(row.is_active === false || String(row.is_active).toLowerCase() === 'false') : true) +
+        '</div>' +
+        UIC.field({ key: 'f-notes', label: 'ملاحظات', type: 'textarea', value: row ? (row.notes || '') : '' }) +
+        '<div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;padding:12px;margin-top:6px;">' +
+          '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">' +
+            '<b style="color:#166534;">خطوات الاستهلاك (المواد الخام)</b>' +
+            '<button type="button" class="btn btn-outline" onclick="RECIPES_PAGE.addStep()">+ إضافة خطوة</button>' +
+          '</div>' +
+          '<div style="overflow-x:auto;"><table class="table"><thead><tr>' +
+            '<th>اسم الخطوة</th><th>مركز العمل</th><th style="min-width:200px;">الخامة</th><th>الكمية المطلوبة</th><th>هدر %</th><th></th>' +
+          '</tr></thead><tbody id="steps-body"></tbody></table></div>' +
+        '</div>' +
+      '</form>';
+
+      UIC.openModal('recipe-modal', {
+        title: isEdit ? 'تعديل وصفة: ' + (row.recipe_name || '') : 'وصفة تصنيع جديدة',
+        body: body,
+        footer: false
+      });
+      var modal = document.getElementById('recipe-modal');
+      if (modal) { var box = modal.querySelector('.modal'); if (box) box.style.maxWidth = '1150px'; }
+      drawSteps();
+    }
+
+    function checkboxField(key, label, checked) {
+      return '<label style="display:flex;align-items:center;gap:8px;margin-top:22px;font-size:14px;">' +
+        '<input type="checkbox" id="' + key + '"' + (checked ? ' checked' : '') + '> ' + label + '</label>';
+    }
+
+    function drawSteps() {
+      var tb = document.getElementById('steps-body');
+      if (!tb) return;
+      tb.innerHTML = DRAFT_STEPS.map(function (s, i) {
+        var wcOpts = [{ value: '', label: '—' }].concat(WC_OPTIONS);
+        var rmOpts = [{ value: '', label: '—' }].concat(PRODUCT_OPTIONS);
+        var wcSel = String(s.work_center_id || '');
+        var rmSel = String(s.raw_material_id || '');
+        return '<tr>' +
+          '<td><input id="st-name-' + i + '" class="input" type="text" value="' + esc(s.step_name || ('خطوة ' + (i + 1))) + '"></td>' +
+          '<td><select id="st-wc-' + i + '" class="input">' + wcOpts.map(function (o) { return '<option value="' + esc(o.value) + '"' + (String(o.value) === wcSel ? ' selected' : '') + '>' + esc(o.label) + '</option>'; }).join('') + '</select></td>' +
+          '<td>' + UIC.combo({ key: 'st-rm-' + i, options: rmOpts, value: rmSel || (s.raw_label || ''), placeholder: 'ابحث عن الخامة…' }) + '</td>' +
+          '<td><input id="st-qty-' + i + '" class="input" type="number" min="0" step="0.01" value="' + (s.required_qty || '') + '" oninput="RECIPES_PAGE.recalc()"></td>' +
+          '<td><input id="st-loss-' + i + '" class="input" type="number" min="0" max="100" step="0.01" value="' + (s.loss_percentage || '') + '" oninput="RECIPES_PAGE.recalc()"></td>' +
+          '<td><button type="button" class="btn btn-outline" style="padding:3px 10px;color:#dc2626;" onclick="RECIPES_PAGE.removeStep(' + i + ')">✕</button></td>' +
+        '</tr>';
+      }).join('');
+    }
+
+    window.RECIPES_PAGE = {
+      openAdd: openAdd,
+      openEdit: openEdit,
+      addStep: function () {
+        collectDraft();
+        DRAFT_STEPS.push({});
+        drawSteps();
+      },
+      removeStep: function (i) {
+        collectDraft();
+        DRAFT_STEPS.splice(i, 1);
+        drawSteps();
+      },
+      recalc: function () {},
+      save: save
+    };
+
+    function collectDraft() {
+      for (var i = 0; i < DRAFT_STEPS.length; i++) {
+        var g = function (fid) { var el = document.getElementById(fid); return el ? el.value.trim() : ''; };
+        var rmComboVal = (function () { var el = document.getElementById('st-rm-' + i); return el ? el.value : ''; })();
+        DRAFT_STEPS[i] = {
+          step_name: g('st-name-' + i),
+          work_center_id: g('st-wc-' + i),
+          raw_material_id: rmComboVal,
+          raw_label: '',
+          required_qty: g('st-qty-' + i),
+          loss_percentage: g('st-loss-' + i)
+        };
+      }
+    }
+
+    function save() {
+      collectDraft();
+      if (!UIC.validateForm('recipe-form')) return;
+      var payload = {
+        unique_id: (document.getElementById('f-uid') || {}).value || '',
+        recipe_name: getV_('f-name'),
+        produced_product_id: getCombo_('f-product'),
+        yield_qty: getV_('f-yield'),
+        is_active: readChk_('f-active'),
+        notes: getV_('f-notes'),
+        steps: DRAFT_STEPS.map(function (s, i) {
+          return {
+            step_name: s.step_name || ('خطوة ' + (i + 1)),
+            work_center_id: s.work_center_id,
+            raw_material_id: s.raw_material_id,
+            required_qty: s.required_qty,
+            loss_percentage: s.loss_percentage
+          };
+        })
+      };
+      if (!payload.produced_product_id) { UIC.toast('اختر المنتج المنتج', 'error'); return; }
+      UI.showSpinner();
+      companyCall('save_valley_mfg_recipe', payload)
+        .then(function (r) {
+          UIC.closeModal('recipe-modal');
+          UIC.toast((r && r.message) || 'تم الحفظ بنجاح', 'success');
+          load();
+        })
+        .catch(function (e) { UIC.toast((e && e.message) || 'فشل الحفظ', 'error'); })
+        .finally(function () { UI.hideSpinner(); });
+    }
+
+    function getV_(id) { var el = document.getElementById(id); return el ? el.value.trim() : ''; }
+    function getCombo_(id) { var el = document.getElementById(id); return el ? el.value : ''; }
+    function readChk_(id) { var el = document.getElementById(id); return !!(el && el.checked); }
+
+    document.addEventListener('DOMContentLoaded', renderApp);
+  })();
+  </script>
+</body>
+</html>
+
+

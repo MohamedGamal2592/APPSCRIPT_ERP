@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <base target="_top">
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Create Batch Assignment</title>
+    <?!= include('CSS'); ?>
+  </head>
+  <body>
+
+    <!-- Navbar -->
+    <nav class="navbar navbar-expand-lg navbar-dark bg-primary shadow-sm">
+      <div class="container">
+        <a class="navbar-brand" href="<?= scriptUrl ?>?action=dashboard">
+          <i class="bi bi-mortarboard-fill"></i> Assessment Platform
+        </a>
+        <div class="collapse navbar-collapse" id="navbarNav">
+          <ul class="navbar-nav ms-auto">
+            <li class="nav-item">
+              <a href="<?= scriptUrl ?>?action=dashboard" class="btn btn-outline-light btn-sm">
+                <i class="bi bi-arrow-left"></i> Back to Dashboard
+              </a>
+            </li>
+          </ul>
+        </div>
+      </div>
+    </nav>
+
+    <div class="container mt-4 mb-5">
+      <div class="row justify-content-center">
+        <div class="col-md-8 col-lg-6">
+          
+          <div id="alertContainer" class="mb-3" style="display: none;"></div>
+
+          <div class="card shadow-sm border-0 rounded-3">
+            <div class="card-header bg-white border-0 pt-4">
+              <h4 class="text-center text-primary mb-0">
+                <i class="bi bi-link-45deg-fill"></i> Create Batch Assignment
+              </h4>
+              <p class="text-center text-muted mb-0">إنشاء رابط دفعة تقييم</p>
+            </div>
+            
+            <div class="card-body p-4">
+              <form id="batchForm" onsubmit="handleCreateBatch(event)">
+                
+                <!-- Company Name Autocomplete Field -->
+                <div class="mb-3">
+                  <label class="form-label fw-bold">Company Name / اسم الشركة</label>
+                  <input type="text" class="form-control form-control-lg" id="companyName" list="companyList" placeholder="Type or select a company" required>
+                  <datalist id="companyList"></datalist>
+                </div>
+
+                <div class="mb-3">
+                  <label class="form-label fw-bold">Select Assessment / اختر التقييم</label>
+                  <select class="form-select form-select-lg" id="assessmentSelect" required disabled>
+                    <option value="">Loading assessments...</option>
+                  </select>
+                </div>
+
+                <div class="mb-4">
+                  <label class="form-label fw-bold">Number of Candidates / عدد المتقدمين</label>
+                  <input type="number" class="form-control form-control-lg" id="maxCandidates" min="1" value="1" required>
+                  <small class="text-muted">This link will allow exactly this many people to take the test.</small>
+                </div>
+
+                <div class="d-grid">
+                  <button type="submit" class="btn btn-primary btn-lg" id="createBtn">
+                    <i class="bi bi-magic"></i> Generate Link / إنشاء الرابط
+                  </button>
+                </div>
+
+              </form>
+            </div>
+          </div>
+
+          <!-- Link Display Area (Hidden initially) -->
+          <div id="linkContainer" class="card shadow-sm border-0 rounded-3 mt-4" style="display: none;">
+            <div class="card-body p-4 text-center bg-light">
+              <h5 class="text-success mb-3"><i class="bi bi-check-circle-fill"></i> Link Generated Successfully!</h5>
+              <p class="text-muted">Send this link to the candidates. They will be asked to enter their email before starting.</p>
+              <div class="input-group mb-3">
+                <input type="text" id="generatedLink" class="form-control" readonly>
+                <button class="btn btn-outline-primary" onclick="copyLink()"><i class="bi bi-clipboard"></i> Copy</button>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    
+    <script>
+      const scriptUrl = '<?= scriptUrl ?>';
+      const token = localStorage.getItem('sessionToken');
+      if (!token) window.location.href = scriptUrl + '?action=login';
+
+      // 1. Fetch Active Assessments on Load (Passing token for P1 security)
+      google.script.run
+        .withSuccessHandler(function(data) {
+          const select = document.getElementById('assessmentSelect');
+          if (data.status === 'success' && data.data.length > 0) {
+            select.innerHTML = '';
+            data.data.forEach(a => {
+              select.innerHTML += `<option value="${a.id}" data-title="${a.title}">${a.title}</option>`;
+            });
+            select.disabled = false;
+          } else {
+            select.innerHTML = '<option value="">No active assessments found</option>';
+          }
+        })
+        .uiGetActiveAssessments(token);
+
+      // 2. Fetch Existing Companies for Autocomplete on Load (Passing token for P1 security)
+      google.script.run
+        .withSuccessHandler(function(data) {
+          if (data.status === 'success') {
+            const datalist = document.getElementById('companyList');
+            datalist.innerHTML = '';
+            data.data.forEach(c => {
+              datalist.innerHTML += `<option value="${c}">`;
+            });
+          }
+        })
+        .uiGetExistingCompanies(token);
+
+      // 3. Handle Form Submit
+      function handleCreateBatch(event) {
+        event.preventDefault();
+        const companyName = document.getElementById('companyName').value.trim();
+        const select = document.getElementById('assessmentSelect');
+        const assessmentId = select.value;
+        const assessmentTitle = select.options[select.selectedIndex].dataset.title;
+        const maxCandidates = document.getElementById('maxCandidates').value;
+
+        if (!companyName) return alert('Please enter a Company Name.');
+        if (!assessmentId) return alert('Please select an assessment.');
+
+        const btn = document.getElementById('createBtn');
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Generating...';
+        btn.disabled = true;
+
+        google.script.run
+          .withSuccessHandler(function(data) {
+            const alertContainer = document.getElementById('alertContainer');
+            if (data.status === 'success') {
+              document.getElementById('linkContainer').style.display = 'block';
+              document.getElementById('generatedLink').value = data.link;
+              alertContainer.className = 'alert alert-success d-flex align-items-center';
+              alertContainer.innerHTML = '<i class="bi bi-check-circle-fill me-2"></i> ' + data.message;
+              alertContainer.style.display = 'block';
+              
+              // Add the new company to the datalist if it's completely new
+              const datalist = document.getElementById('companyList');
+              const exists = Array.from(datalist.options).some(opt => opt.value === companyName);
+              if (!exists) {
+                datalist.innerHTML += `<option value="${companyName}">`;
+              }
+            } else {
+              alertContainer.className = 'alert alert-danger d-flex align-items-center';
+              alertContainer.innerHTML = '<i class="bi bi-exclamation-triangle-fill me-2"></i> ' + data.message;
+              alertContainer.style.display = 'block';
+            }
+            btn.innerHTML = '<i class="bi bi-magic"></i> Generate Link / إنشاء الرابط';
+            btn.disabled = false;
+          })
+                  .withFailureHandler(function(err) {
+          document.getElementById('loadingSpinner').style.display = 'none';
+          document.getElementById('tableContainer').style.display = 'block';
+          
+          // SECURITY: If backend says Unauthorized/Forbidden, kick them out!
+          if (err.message.includes('Unauthorized') || err.message.includes('Forbidden') || err.message.includes('Session expired')) {
+            localStorage.removeItem('sessionToken');
+            localStorage.removeItem('userName');
+            window.location.href = scriptUrl + '?action=login';
+            return;
+          }
+          
+          document.getElementById('tableBody').innerHTML = `<tr><td colspan="6" class="text-center text-danger p-4">Server Error: ${err.message}</td></tr>`;
+        })
+          .uiCreateBatch(token, companyName, assessmentId, assessmentTitle, maxCandidates);
+      }
+
+      // 4. Copy Link Function
+      function copyLink() {
+        const linkInput = document.getElementById('generatedLink');
+        linkInput.select();
+        linkInput.setSelectionRange(0, 99999); // For mobile
+        navigator.clipboard.writeText(linkInput.value);
+        alert('Link copied to clipboard!');
+      }
+    </script>
+  </body>
+</html>

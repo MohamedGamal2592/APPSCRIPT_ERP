@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="description" content="سجل التعديلات على السجل">
+  <title>سجل التعديلات</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+</head>
+<body>
+<div dir="rtl" class="page-shell">
+  <header class="page-header">
+    <div>
+      <h1 class="page-title">سجل التعديلات</h1>
+      <p class="page-sub" id="subtitle">تفاصيل من أنشأ وسجّل التعديلات على هذا السجل.</p>
+    </div>
+    <button class="btn btn-outline" onclick="goBack()">رجوع</button>
+  </header>
+
+  <div id="list" class="stack"></div>
+  <div id="empty" class="empty-state" style="display:none;">لا يوجد سجل تعديلات لهذا السجل.</div>
+</div>
+
+<script>
+  var TOKEN = getQueryParam('sessionToken') || (API.getSession() && API.getSession().token) || '';
+  var SHEET = getQueryParam('sheet') || '';
+  var RECORD = getQueryParam('record') || '';
+  if (TOKEN) API.setSession({ token: TOKEN, user: (API.getSession() && API.getSession().user) || null });
+
+  function goBack() { window.close && window.close(); history.back && history.back(); }
+
+  function init() {
+    if (!SHEET || !RECORD) { UIC.toast('بيانات غير مكتملة', 'error'); return; }
+    document.getElementById('subtitle').textContent = 'الجدول: ' + SHEET + ' • السجل رقم: ' + RECORD;
+    UI.showSpinner('جاري التحميل...');
+    API.call('get_record_history', { sheet_name: SHEET, record_id: RECORD }, TOKEN)
+      .then(function (r) {
+        var rows = (r && r.history) || [];
+        var box = document.getElementById('list');
+        box.innerHTML = '';
+        if (!rows.length) { document.getElementById('empty').style.display = 'block'; return; }
+        rows.forEach(function (c) {
+          var item = document.createElement('div');
+          item.className = 'hist';
+          var actionLabel = { 'create': 'إنشاء', 'update': 'تعديل', 'approve': 'اعتماد', 'delete': 'حذف' }[c.action] || c.action;
+          var changed = c.column_name ? ('<div class="hist-field"><b>' + FMT.escape(c.column_name) + '</b></div>' +
+              '<div class="hist-vals"><span class="old">' + FMT.escape(c.old_value) + '</span> → <span class="new">' + FMT.escape(c.new_value) + '</span></div>')
+            : (c.note ? '<div class="hist-note">' + FMT.escape(c.note) + '</div>' : '');
+          item.innerHTML =
+            '<div class="hist-head">' +
+              '<span class="hist-action action-' + FMT.escape(c.action) + '">' + actionLabel + '</span>' +
+              '<span class="hist-user">' + FMT.escape(c.changed_by) + '</span>' +
+              '<span class="hist-time">' + FMT.datetime(c.changed_at) + '</span>' +
+            '</div>' + changed;
+          box.appendChild(item);
+        });
+      })
+      .catch(function (e) { UIC.toast(e.message || 'تعذر التحميل', 'error'); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function getQueryParam(name) {
+    var m = new RegExp('[?&]' + name + '=([^&]*)').exec(window.location.search);
+    return m ? decodeURIComponent(m[1]) : '';
+  }
+
+  init();
+</script>
+<style>
+  .page-shell { max-width: 820px; margin: 0 auto; padding: 16px; }
+  .page-header { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom:16px; }
+  .page-title { font-size: 20px; margin:0 0 4px; }
+  .page-sub { color: var(--text-muted); font-size: 13px; margin:0; }
+  .stack { display:flex; flex-direction:column; gap:10px; }
+  .hist { background: var(--bg-surface); border:1px solid var(--border-color); border-radius: var(--radius-md); padding:12px 14px; }
+  .hist-head { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:6px; }
+  .hist-action { font-size:12px; font-weight:700; padding:2px 8px; border-radius:999px; }
+  .action-create { background: #e6f4ea; color:#137333; }
+  .action-update { background:#e8f0fe; color:#1a73e8; }
+  .action-approve { background:#fef7e0; color:#b06000; }
+  .action-delete { background:#fce8e6; color:#c5221f; }
+  .hist-user { font-size:13px; font-weight:600; }
+  .hist-time { color: var(--text-muted); font-size:12px; margin-inline-start:auto; }
+  .hist-field { font-size:13px; margin-bottom:2px; }
+  .hist-vals { font-size:13px; }
+  .hist-vals .old { color:#c5221f; text-decoration:line-through; }
+  .hist-vals .new { color:#137333; }
+  .hist-note { color: var(--text-muted); font-size:13px; }
+  .empty-state { text-align:center; color: var(--text-muted); padding:40px 0; }
+</style>
+</body>
+</html>

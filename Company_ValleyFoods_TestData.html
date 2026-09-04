@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html dir="rtl" lang="ar">
+<head>
+  <meta charset="utf-8">
+  <title>بيانات تجريبية</title>
+  <script>
+    var PAGE_ID = 'vf_test_data';
+  </script>
+  <?!= HtmlService.createHtmlOutputFromFile('Client_Helpers').getContent(); ?>
+  <link rel="stylesheet" href="https://ssl.gstatic.com/docs/script/css/add-ons1.css">
+  <style>
+    body { font-family: Arial, sans-serif; direction: rtl; padding: 20px; max-width: 900px; margin: 0 auto; }
+    .btn-group { display: flex; gap: 16px; margin: 20px 0; }
+    .btn { padding: 12px 24px; border: none; border-radius: 6px; cursor: pointer; font-size: 15px; font-weight: bold; }
+    .btn-green { background: #0d6efd; color: #fff; }
+    .btn-green:hover { background: #0b5ed7; }
+    .btn-red { background: #dc3545; color: #fff; }
+    .btn-red:hover { background: #bb2d3b; }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .status { margin-top: 20px; padding: 16px; border-radius: 6px; background: #f8f9fa; border: 1px solid #dee2e6; display: none; }
+    .status.show { display: block; }
+    .status h3 { margin: 0 0 10px 0; }
+    .status ul { margin: 5px 0; padding-right: 20px; }
+    .status li { margin: 3px 0; font-size: 13px; }
+    .ok { color: #198754; }
+    .err { color: #dc3545; }
+    .info { color: #0d6efd; }
+  </style>
+  <script>
+    function esc(v) {
+      var s = (v === undefined || v === null) ? '' : String(v);
+      if (typeof FMT !== 'undefined' && FMT.escape) return FMT.escape(s);
+      return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+  </script>
+</head>
+<body>
+  <h2>اختبار النظام — بيانات تجريبية</h2>
+  <p>اضغط <b>إنشاء</b> لإدخال سجلات تجريبية في كل صفحة، ثم تحقق من ظهورها. اضغط <b>حذف</b> لإزالة كل ما تم إضافته.</p>
+
+  <div class="btn-group">
+    <button class="btn btn-green" id="btnGenerate" onclick="doGenerate()">إنشاء بيانات تجريبية</button>
+    <button class="btn btn-red" id="btnRemove" onclick="doRemove()">حذف كل البيانات التجريبية</button>
+  </div>
+
+  <div id="statusBox" class="status">
+    <h3 id="statusTitle"></h3>
+    <div id="statusContent"></div>
+  </div>
+
+  <script>
+    function doGenerate() {
+      var btn = document.getElementById('btnGenerate');
+      btn.disabled = true; btn.textContent = 'جارٍ الإنشاء...';
+      var box = document.getElementById('statusBox');
+      var title = document.getElementById('statusTitle');
+      var content = document.getElementById('statusContent');
+      box.className = 'status show';
+      title.textContent = 'جارٍ الإنشاء...';
+      content.innerHTML = '';
+
+      companyCall('generate_test_data').then(function (r) {
+        title.textContent = r.ok ? 'تم الإنشاء بنجاح' : 'خطأ في الإنشاء';
+        title.className = r.ok ? 'ok' : 'err';
+        if (r.ok && r.results) {
+          var html = '<ul>';
+          r.results.forEach(function (item) {
+            var cls = item.ok ? 'ok' : 'err';
+            var icon = item.ok ? '&#10003;' : '&#10007;';
+            html += '<li class="' + cls + '">' + icon + ' ' + esc(item.page) + ' — ' + esc(item.message) + '</li>';
+          });
+          html += '</ul>';
+          content.innerHTML = html;
+        }
+        if (r.errors && r.errors.length) {
+          r.errors.forEach(function (e) {
+            content.innerHTML += '<p class="err">' + esc(e) + '</p>';
+          });
+        }
+      }).catch(function (e) {
+        title.textContent = 'خطأ: ' + esc(e && e.message || e);
+        title.className = 'err';
+      }).finally(function () {
+        btn.disabled = false;
+        btn.textContent = 'إنشاء بيانات تجريبية';
+      });
+    }
+
+    function doRemove() {
+      var btn = document.getElementById('btnRemove');
+      btn.disabled = true; btn.textContent = 'جارٍ الحذف...';
+      var box = document.getElementById('statusBox');
+      var title = document.getElementById('statusTitle');
+      var content = document.getElementById('statusContent');
+      box.className = 'status show';
+      title.textContent = 'جارٍ الحذف...';
+      content.innerHTML = '';
+
+      companyCall('remove_test_data').then(function (r) {
+        title.textContent = r.ok ? 'تم الحذف بنجاح' : 'خطأ في الحذف';
+        title.className = r.ok ? 'ok' : 'err';
+        if (r.ok && r.results) {
+          var html = '<ul>';
+          r.results.forEach(function (item) {
+            var cls = item.ok ? 'ok' : 'err';
+            var icon = item.ok ? '&#10003;' : '&#10007;';
+            html += '<li class="' + cls + '">' + icon + ' ' + esc(item.sheet) + ' — حُذف ' + esc(String(item.deleted)) + ' سجل(ات)</li>';
+          });
+          html += '</ul>';
+          content.innerHTML = html;
+        }
+        if (r.errors && r.errors.length) {
+          r.errors.forEach(function (e) {
+            content.innerHTML += '<p class="err">' + esc(e) + '</p>';
+          });
+        }
+      }).catch(function (e) {
+        title.textContent = 'خطأ: ' + esc(e && e.message || e);
+        title.className = 'err';
+      }).finally(function () {
+        btn.disabled = false;
+        btn.textContent = 'حذف كل البيانات التجريبية';
+      });
+    }
+
+    document.addEventListener('DOMContentLoaded', function () {
+      doRemove();
+    });
+  </script>
+</body>
+</html>

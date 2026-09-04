@@ -1,0 +1,420 @@
+﻿<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>صرف المرتبات الشهرية</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_TopChemical_Nav'); ?>
+  <?!= getCompanyThemeCSS_('3fe1b5cb67b7223e') ?>
+</head>
+<body>
+<div id="tc-root" dir="rtl"></div>
+<script>
+  var params = new URLSearchParams(window.location.search);
+  var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+  var scriptUrl = window.scriptUrl || '/';
+  var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+  var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_("3fe1b5cb67b7223e") ?>';
+  var COMPANY_PAGES = <?!= companyPages ?>;
+  var CURRENT_ACTION = '<?!= currentAction ?>';
+  var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+  var CAN_WRITE = UIC.canAdd_(); var CAN_FULL = UIC.canFull_();
+  var FILTER_MONTH = '';
+  var FILTER_YEAR = '';
+
+  function companyCall(a, d) {
+    return API.call('company_action', { target_system: '3fe1b5cb67b7223e', module_action: a, data: d || {} }, SESSION_TOKEN);
+  }
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  function load() {
+    UIC.appShell('tc-root', {
+      companyLogoUrl: COMPANY_LOGO_URL,
+      companyLogoHref: scriptUrl + '?action=tc_dashboard&sessionToken=' + SESSION_TOKEN,
+      companyLogoTitle: 'توب كيميكال',
+      breadcrumb: 'توب كيميكال / شئون العاملين / صرف المرتبات الشهرية',
+      contentId: 'sal-content',
+      menuGroups: (window.TOPCHEMICAL_MENU || [])
+    });
+    fetchSalaries();
+  }
+
+  function fetchSalaries(month, year) {
+    UI.showSpinner(['جاري تحميل المرتبات...', 'جاري استرجاع بيانات الشهر...', 'لحظة، جاري إعداد الجدول...']);
+    var data = {};
+    if (month) data.month = Number(month);
+    if (year) data.year = Number(year);
+    companyCall('get_emp_salaries', data)
+      .then(function (r) {
+        window.__salaries        = r.salaries || [];
+        window.__total           = r.total || 0;
+        window.__existingIds     = r.existing_emp_ids || [];
+        window.__months          = r.months || [];
+        window.__monthOptions   = r.month_options || [];
+        window.__empOptions      = r.employee_options || [];
+        window.__closedMonths    = r.closed_months || {};
+        window.__activeEmployees = r.active_employees || [];
+        renderFilterBar();
+        renderSalaries();
+      })
+      .catch(function (e) { showError(e); })
+      .finally(function () { UI.hideSpinner(); try{schedulePrefetch();}catch(e){} });
+  }
+
+  function renderFilterBar() {
+    var yr = [];
+    window.__months.forEach(function (m) { if (yr.indexOf(String(m.year)) === -1) yr.push(String(m.year)); });
+    yr = yr.sort(function (a, b) { return Number(b) - Number(a); });
+    var ySel = '<option value="">كل السنوات</option>';
+    yr.forEach(function (y) { ySel += '<option value="' + y + '"' + (String(FILTER_YEAR) === y ? ' selected' : '') + '>' + y + '</option>'; });
+    var mSel = '<option value="">كل الأشهر</option>';
+    window.__monthOptions.forEach(function (m) { mSel += '<option value="' + m.value + '"' + (String(FILTER_MONTH) === String(m.value) ? ' selected' : '') + '>' + esc(m.label) + '</option>'; });
+    var html =
+      '<div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;margin-bottom:12px;">' +
+      '<div class="form-field" style="min-width:140px;"><label class="form-label">السنة</label><select id="sal-year" class="input">' + ySel + '</select></div>' +
+      '<div class="form-field" style="min-width:140px;"><label class="form-label">الشهر</label><select id="sal-month" class="input">' + mSel + '</select></div>' +
+      '<button class="btn btn-outline" onclick="applyFilter()">عرض</button>' +
+      (CAN_WRITE ? '<button class="btn btn-primary" onclick="openGenerate()">+ توليد شهر</button>' : '') +
+      '<button class="btn btn-outline" onclick="printPayrollReport(\'cards\')">🖨️ كشف الكروت</button>' +
+      '<button class="btn btn-outline" onclick="printPayrollReport(\'sections\')">🖨️ كشف الأقسام</button>' +
+      '</div>';
+    document.getElementById('sal-content').innerHTML = html + '<div id="sal-table-wrap"></div>';
+  }
+
+  function applyFilter() {
+    FILTER_YEAR = document.getElementById('sal-year').value;
+    FILTER_MONTH = document.getElementById('sal-month').value;
+    fetchSalaries(FILTER_MONTH, FILTER_YEAR);
+  }
+
+  function rowKey(r) { return 'emp' + r.emp_id + '_' + r.month + '_' + r.year; }
+
+  function renderSalaries() {
+    var wrap = document.getElementById('sal-table-wrap');
+    if (!wrap) return;
+    var cols = CAN_WRITE ? 12 : 11;
+    var totalBar = window.__total ? '<div style="text-align:left;margin-bottom:8px;font-size:14px;color:var(--text-muted);">إجمالي الصافي: <b>' + FMT.currency(window.__total) + '</b></div>' : '';
+    var thead = '<thead><tr><th>الكود</th><th>الاسم</th><th>الراتب</th><th>البدلات</th><th>التصنيف</th><th>أيام</th><th>خصم غياب</th><th>إضافي</th><th>صافي</th><th>تقريب</th><th>إيصال</th>' + (CAN_WRITE ? '<th>إجراءات</th>' : '') + '</tr></thead>';
+    var tbody = '<tbody>';
+    if (!window.__salaries.length) {
+      tbody += '<tr><td colspan="' + cols + '" style="text-align:center;padding:32px;color:var(--text-muted);">لا توجد مرتبات لهذا الشهر</td></tr>';
+    } else {
+      window.__salaries.forEach(function (r) {
+        var key = rowKey(r); window['__sal_' + key] = r;
+        var isClosed = !!(window.__closedMonths && window.__closedMonths[r.year + '-' + r.month]);
+        var badge = r.receipt ? '<span style="color:var(--success,#22c55e);font-weight:600;">✔ نعم</span>' : '<span style="color:var(--text-muted);">لا</span>';
+        var act = '';
+        if (CAN_WRITE) {
+          act = '<td style="white-space:nowrap;">';
+          if (isClosed) {
+            act += '<span style="display:inline-block;padding:2px 8px;font-size:11px;background:var(--bg-subtle,#e2e8f0);color:var(--text-muted);border-radius:4px;" title="الشهر مغلق">🔒 مغلق</span>';
+          } else {
+            // Normal system users with CAN_WRITE are allowed to edit working_days, year, month
+            act += '<button class="btn btn-outline" style="padding:2px 8px;font-size:12px;margin-left:4px;" onclick="openEditSalary(\'' + key + '\')" title="تعديل أيام العمل والتواريخ">✏️ تعديل</button>';
+            if (UIC.canFull_()) {
+              act += '<button class="btn" style="padding:2px 8px;font-size:12px;background:var(--danger,#ef4444);color:#fff;margin-left:4px;" onclick="confirmDeleteSalary(\'' + key + '\')" title="حذف">🗑</button>';
+            }
+            if (!r.receipt) {
+              act += '<button class="btn btn-outline" style="padding:2px 8px;font-size:12px;color:var(--success,#22c55e);" onclick="markReceipt(\'' + key + '\')" title="تسجيل استلام">✔ استلم</button>';
+            }
+          }
+          act += '</td>';
+        }
+        tbody += '<tr id="sal-row-' + key + '"><td>' + esc(r.emp_id) + '</td><td>' + esc(r.name_ar || '-') + '</td><td>' + FMT.number(r.basic_salary) + '</td><td>' + FMT.number(r.allow) + '</td><td>' + esc(r.section || '-') + '</td><td>' + esc(r.working_days) + '</td><td>' + esc(r.deduction_day) + '</td><td>' + esc(r.overtime_days) + '</td><td>' + FMT.number(r.net_salary) + '</td><td>' + FMT.number(r.net_salary_nearest) + '</td><td id="receipt-' + key + '">' + badge + '</td>' + act + '</tr>';
+      });
+    }
+    tbody += '</tbody>';
+    wrap.innerHTML = totalBar + '<div style="overflow-x:auto;"><table id="sal-table" class="table" style="min-width:900px;">' + thead + tbody + '</table></div>';
+    if (window.UIC && UIC.initTableSort) UIC.initTableSort('sal-table');
+  }
+
+  /* ────────── Edit salary modal ────────── */
+  function openEditSalary(key) {
+    var r = window['__sal_' + key];
+    if (!r) return;
+    var isClosed = !!(window.__closedMonths && window.__closedMonths[r.year + '-' + r.month]);
+    if (isClosed) {
+      UIC.toast('لا يمكن تعديل راتب شهر مغلق', 'error');
+      return;
+    }
+    var mOpts = '';
+    (window.__monthOptions || []).forEach(function (mo) {
+      mOpts += '<option value="' + mo.value + '"' + (Number(mo.value) === Number(r.month) ? ' selected' : '') + '>' + esc(mo.label) + '</option>';
+    });
+
+    UIC.openModal('edit-sal-modal', {
+      title: 'تعديل راتب الموظف: ' + esc(r.name_ar || ('#' + r.emp_id)),
+      body:
+        '<form id="edit-sal-form">' +
+        '<p style="font-size:12px;color:var(--text-muted);margin-bottom:12px;">مسموح فقط بتعديل أيام العمل والشهر والسنة (باقي الأعمدة معادلات حية محميّة).</p>' +
+        '<div class="form-field" style="margin-bottom:10px;"><label class="form-label">أيام العمل <span class="req">*</span></label>' +
+        '<input id="es_wd" class="input" type="number" min="0" max="31" step="0.5" value="' + esc(r.working_days) + '" required></div>' +
+        '<div style="display:flex;gap:10px;">' +
+        '<div class="form-field" style="flex:1;"><label class="form-label">الشهر <span class="req">*</span></label>' +
+        '<select id="es_month" class="input">' + mOpts + '</select></div>' +
+        '<div class="form-field" style="flex:1;"><label class="form-label">السنة <span class="req">*</span></label>' +
+        '<input id="es_year" class="input" type="number" min="2000" max="2100" value="' + esc(r.year) + '" required></div>' +
+        '</div>' +
+        '</form>',
+      onSave: 'saveEditSalary(\'' + key + '\')'
+    });
+  }
+
+  function saveEditSalary(key) {
+    var r = window['__sal_' + key];
+    if (!r) return;
+    var wd = document.getElementById('es_wd').value;
+    var m  = document.getElementById('es_month').value;
+    var y  = document.getElementById('es_year').value;
+    if (!wd || !m || !y) { UIC.toast('جميع الحقول مطلوبة', 'error'); return; }
+
+    UI.showSpinner('جاري الحفظ...');
+    companyCall('edit_emp_salary', {
+      emp_id: r.emp_id,
+      old_month: r.month,
+      old_year: r.year,
+      month: Number(m),
+      year: Number(y),
+      working_days: Number(wd)
+    })
+      .then(function (res) {
+        UIC.closeModal('edit-sal-modal');
+        UIC.toast(res.message || 'تم التعديل بنجاح', 'success');
+        fetchSalaries(FILTER_MONTH, FILTER_YEAR);
+      })
+      .catch(function (e) { UIC.toast(e.message || 'خطأ في التعديل', 'error'); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function confirmDeleteSalary(key) {
+    var r = window['__sal_' + key];
+    if (!r) return;
+    var isClosed = !!(window.__closedMonths && window.__closedMonths[r.year + '-' + r.month]);
+    if (isClosed) { UIC.toast('لا يمكن حذف راتب شهر مغلق', 'error'); return; }
+    UIC.openModal('del-sal-modal', {
+      title: 'تأكيد الحذف',
+      body: '<p>هل تريد حذف راتب <b>' + esc(r.name_ar || r.emp_id) + '</b> لشهر <b>' + esc(r.month_name || r.month) + ' ' + r.year + '</b>؟</p>',
+      onSave: 'doDeleteSalary(\'' + key + '\')',
+      saveLabel: 'حذف'
+    });
+  }
+
+  function doDeleteSalary(key) {
+    var r = window['__sal_' + key];
+    if (!r) return;
+    UI.showSpinner('جاري الحذف...');
+    companyCall('delete_emp_salary', { emp_id: r.emp_id, month: r.month, year: r.year })
+      .then(function (res) {
+        UIC.closeModal('del-sal-modal');
+        UIC.toast(res.message || 'تم الحذف', 'success');
+        var row = document.getElementById('sal-row-' + key);
+        if (row) row.remove();
+        window.__salaries = (window.__salaries || []).filter(function (s) {
+          return !(Number(s.emp_id) === Number(r.emp_id) && Number(s.month) === Number(r.month) && Number(s.year) === Number(r.year));
+        });
+      })
+      .catch(function (e) { UIC.toast(e.message || 'خطأ', 'error'); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function markReceipt(key) {
+    var r = window['__sal_' + key];
+    if (!r) return;
+    UI.showSpinner('جاري تسجيل الاستلام...');
+    companyCall('update_emp_salary_receipt', { emp_id: r.emp_id, month: r.month, year: r.year })
+      .then(function (res) {
+        UIC.toast(res.message || 'تم تسجيل الاستلام', 'success');
+        r.receipt = true;
+        var cell = document.getElementById('receipt-' + key);
+        if (cell) cell.innerHTML = '<span style="color:var(--success,#22c55e);font-weight:600;">✔ نعم</span>';
+        var row = document.getElementById('sal-row-' + key);
+        if (row) {
+          var btn = row.querySelector('button[onclick*="markReceipt"]');
+          if (btn) btn.remove();
+        }
+      })
+      .catch(function (e) { UIC.toast(e.message || 'خطأ', 'error'); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  /* ────────── Month Generation ("توليد شهر") Feature ────────── */
+  function openGenerate() {
+    var m = document.getElementById('sal-month') ? document.getElementById('sal-month').value : FILTER_MONTH;
+    var y = document.getElementById('sal-year')  ? document.getElementById('sal-year').value  : FILTER_YEAR;
+    if (!m) m = (new Date()).getMonth() + 1;
+    if (!y) y = (new Date()).getFullYear();
+
+    var mSel = '';
+    (window.__monthOptions || []).forEach(function (mo) {
+      mSel += '<option value="' + mo.value + '"' + (String(mo.value) === String(m) ? ' selected' : '') + '>' + esc(mo.label) + '</option>';
+    });
+
+    var modalBody =
+      '<form id="generate-form">' +
+      '<div style="display:flex;gap:12px;margin-bottom:12px;">' +
+      '<div class="form-field" style="flex:1;"><label class="form-label">الشهر المطلوب <span class="req">*</span></label>' +
+      '<select id="gen-month" class="input" onchange="updateGeneratePreview()">' + mSel + '</select></div>' +
+      '<div class="form-field" style="flex:1;"><label class="form-label">السنة المطلوبة <span class="req">*</span></label>' +
+      '<input id="gen-year" class="input" type="number" min="2000" max="2100" value="' + esc(y) + '" onchange="updateGeneratePreview()" onkeyup="updateGeneratePreview()"></div>' +
+      '</div>' +
+      '<div id="gen-notification-box"></div>' +
+      '<div id="gen-list-box" style="max-height:320px;overflow:auto;border:1px solid var(--border-subtle);border-radius:var(--radius-sm);padding:4px 10px;"></div>' +
+      '</form>';
+
+    UIC.openModal('generate-modal', {
+      title: 'توليد مرتبات شهر جديد',
+      body: modalBody,
+      onSave: 'saveGenerate()'
+    });
+
+    updateGeneratePreview();
+  }
+
+  function updateGeneratePreview() {
+    var mEl = document.getElementById('gen-month');
+    var yEl = document.getElementById('gen-year');
+    var notifBox = document.getElementById('gen-notification-box');
+    var listBox  = document.getElementById('gen-list-box');
+    if (!mEl || !yEl || !notifBox || !listBox) return;
+
+    var m = Number(mEl.value);
+    var y = Number(yEl.value);
+    if (!m || !y) {
+      notifBox.innerHTML = '<div style="padding:10px;background:#fee2e2;color:#991b1b;border-radius:6px;">الرجاء اختيار الشهر والسنة</div>';
+      listBox.innerHTML = '';
+      return;
+    }
+
+    var isClosed = !!(window.__closedMonths && window.__closedMonths[y + '-' + m]);
+    if (isClosed) {
+      notifBox.innerHTML =
+        '<div style="padding:12px;background:#fef2f2;color:#991b1b;border:1px solid #fca5a5;border-radius:6px;font-weight:bold;margin-bottom:10px;">' +
+        '🛑 هذا الشهر مغلق مسبقاً في جدول (emp_salaries_close) ولا يمكن توليد مرتبات جديدة له.' +
+        '</div>';
+      listBox.innerHTML = '';
+      return;
+    }
+
+    // Check existing salaries for target month & year
+    var existingMap = {};
+    (window.__salaries || []).forEach(function (s) {
+      if (Number(s.month) === m && Number(s.year) === y) {
+        existingMap[Number(s.emp_id)] = true;
+      }
+    });
+
+    // Check 1: Missing Employees with status "يعمل بالشركة"
+    var activeList = window.__activeEmployees || [];
+    var missing = activeList.filter(function (e) { return !existingMap[e.emp_id]; });
+
+    if (!missing.length) {
+      // "All exist" (الكل موجود)
+      notifBox.innerHTML =
+        '<div style="padding:14px;background:#f0fdf4;color:#166534;border:1px solid #86efac;border-radius:6px;text-align:center;margin-bottom:10px;">' +
+        '<div style="font-size:18px;font-weight:bold;margin-bottom:4px;">✅ All exist (الكل موجود)</div>' +
+        '<div>جميع الموظفين على قيد العمل (يعمل بالشركة) مسجلون مسبقاً في مرتبات شهر ' + m + '/' + y + '.</div>' +
+        '</div>';
+      listBox.innerHTML = '';
+      return;
+    }
+
+    // List missing employees with Check 2 calculation
+    notifBox.innerHTML =
+      '<div style="padding:10px 14px;background:#fefce8;color:#854d0e;border:1px solid #fef08a;border-radius:6px;margin-bottom:10px;">' +
+      '<b>📋 يوجدعدد (' + missing.length + ') موظف غير مسجلين في هذا الشهر.</b>' +
+      '<div style="font-size:12px;margin-top:2px;">قم بمراجعة أيام العمل المقترحة ثم اضغط حفظ للتوليد.</div>' +
+      '</div>';
+
+    var listHtml = missing.map(function (e) {
+      var defaultWd = 30;
+      var newHireBadge = '';
+
+      // Check 2: Pro-rated Working Days for New Hires whose hiring_date falls within generated month/year
+      if (e.hiring_month === m && e.hiring_year === y && e.hiring_day >= 1 && e.hiring_day <= 31) {
+        var hiringStartDay = e.hiring_day;
+        defaultWd = 30 - hiringStartDay + 1;
+        if (defaultWd < 0) defaultWd = 0;
+        newHireBadge =
+          '<span style="display:inline-block;margin-right:8px;padding:2px 8px;border-radius:12px;background:#fef08a;color:#854d0e;font-size:11px;font-weight:bold;">' +
+          '✨ موظف جديد (تعيين: ' + esc(e.hiring_date) + ') ➔ الأيام المقترحة: ' + defaultWd + ' يوم (30 - ' + hiringStartDay + ' + 1)' +
+          '</span>';
+      }
+
+      return '<div style="display:flex;gap:10px;align-items:center;padding:8px 6px;border-bottom:1px solid var(--border-subtle);">' +
+        '<div style="flex:1;">' +
+        '<b>' + esc(e.name_ar) + '</b> <span style="font-size:12px;color:var(--text-muted);">#' + e.emp_id + '</span>' +
+        newHireBadge +
+        '</div>' +
+        '<input type="number" class="input" style="width:80px;" min="0" max="31" step="0.5" data-emp="' + e.emp_id + '" value="' + defaultWd + '">' +
+        '<span style="font-size:12px;color:var(--text-muted);">يوم</span>' +
+        '</div>';
+    }).join('');
+
+    listBox.innerHTML = listHtml;
+  }
+
+  function saveGenerate() {
+    var mEl = document.getElementById('gen-month');
+    var yEl = document.getElementById('gen-year');
+    if (!mEl || !yEl) return;
+    var month = mEl.value;
+    var year  = yEl.value;
+    if (!month || !year) { UIC.toast('الشهر والسنة مطلوبان', 'error'); return; }
+
+    var isClosed = !!(window.__closedMonths && window.__closedMonths[year + '-' + month]);
+    if (isClosed) { UIC.toast('الشهر مغلق مسبقاً', 'error'); return; }
+
+    var entries = [];
+    document.querySelectorAll('#generate-form input[data-emp]').forEach(function (inp) {
+      var wd = inp.value.trim();
+      if (wd !== '') entries.push({ emp_id: Number(inp.getAttribute('data-emp')), working_days: Number(wd) });
+    });
+    if (!entries.length) { UIC.toast('لا يوجد موظفون للتوليد', 'error'); return; }
+
+    UI.showSpinner('جاري توليد المرتبات...');
+    companyCall('add_emp_salaries', { month: Number(month), year: Number(year), entries: entries })
+      .then(function (r) {
+        UIC.closeModal('generate-modal');
+        UIC.toast((r && r.message) || 'تم التوليد بنجاح', 'success');
+        if (r && (r.records||r.record)) {
+          var recs = r.records || (r.record?[r.record]:[]);
+          window.__salaries = window.__salaries || [];
+          recs.forEach(function(rec){ window.__salaries.push(rec); });
+          if (window.__salaries.length>10) { /* keep display limit but retain totals from server */ }
+          // if current filter matches generated month/year, re-render; else fetch
+          if (String(FILTER_MONTH)===String(month) && String(FILTER_YEAR)===String(year)) {
+            renderSalaries();
+          } else {
+            FILTER_MONTH = month; FILTER_YEAR = year;
+            fetchSalaries(month, year);
+          }
+        } else {
+          FILTER_MONTH = month; FILTER_YEAR = year;
+          fetchSalaries(month, year);
+        }
+      })
+      .catch(function (e) { UIC.toast((e && e.message) || 'خطأ في التوليد', 'error'); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function printPayrollReport(type) {
+    var m = document.getElementById('sal-month') ? document.getElementById('sal-month').value : FILTER_MONTH;
+    var y = document.getElementById('sal-year')  ? document.getElementById('sal-year').value  : FILTER_YEAR;
+    if (!m || !y) { UIC.toast('اختر الشهر والسنة أولاً لعرض التقرير', 'error'); return; }
+    window.open(scriptUrl + '?download=payroll_report&type=' + type + '&month=' + encodeURIComponent(m) + '&year=' + encodeURIComponent(y) + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN));
+  }
+
+  function showError(e) {
+    var body = document.getElementById('sal-content');
+    if (body) body.innerHTML = '<div class="empty-state"><span>' + esc(e.message || 'خطأ') + '</span></div>';
+  }
+
+  load();
+</script>
+</body>
+</html>

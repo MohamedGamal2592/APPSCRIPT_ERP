@@ -1,0 +1,136 @@
+﻿<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>قائمة الدخل السنوية</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_TopChemical_Nav'); ?>
+  <?!= getCompanyThemeCSS_('3fe1b5cb67b7223e') ?>
+</head>
+<body>
+<div id="tc-root" dir="rtl"></div>
+<script>
+  var params = new URLSearchParams(window.location.search);
+  var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+  var scriptUrl = window.scriptUrl || '/';
+  var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+  var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('3fe1b5cb67b7223e') ?>';
+  var COMPANY_PAGES = <?!= companyPages ?>;
+  var CURRENT_ACTION = '<?!= currentAction ?>';
+  var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+  var CAN_WRITE = UIC.canAdd_(); var CAN_FULL = UIC.canFull_();
+  var YEAR = '';
+  var REFS = null;
+  var ALL = [];
+
+  function companyCall(moduleAction, data) {
+    return API.call('company_action', {
+      target_system: '3fe1b5cb67b7223e',
+      module_action: moduleAction,
+      data: data || {}
+    }, SESSION_TOKEN);
+  }
+
+  function load() {
+    UIC.appShell('tc-root', {
+      companyLogoUrl: COMPANY_LOGO_URL,
+      companyLogoHref: scriptUrl + '?action=tc_dashboard&sessionToken=' + SESSION_TOKEN,
+      companyLogoTitle: 'توب كيميكال',
+      breadcrumb: 'توب كيميكال / حسابات الميزانية / قائمة الدخل السنوية',
+      contentId: 'budget-income-content',
+      menuGroups: (window.TOPCHEMICAL_MENU || [])
+    });
+    fetchIncome();
+  }
+
+  function fetchIncome() {
+    UI.showSpinner();
+    Promise.all([
+      companyCall('get_budget_refs'),
+      companyCall('get_income_statement', {})
+    ])
+      .then(function (res) {
+        REFS = (res[0].refs) || {};
+        ALL = res[1].items || [];
+        render(); try{schedulePrefetch();}catch(e){};
+      })
+      .catch(function (e) { showError(e); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function fin(n) {
+    var num = Number(n) || 0;
+    var neg = num < 0;
+    var abs = Math.abs(num);
+    var parts = abs.toFixed(2).split('.');
+    parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    return (neg ? '(' : '') + parts.join('.') + (neg ? ')' : '');
+  }
+
+  function render() {
+    var years = [];
+    ALL.forEach(function (r) {
+      var y = String(r['العام'] || '').trim();
+      if (y && years.indexOf(y) === -1) years.push(y);
+    });
+    years.sort();
+    var yOpts = '<option value="">كل السنوات</option>' + years.map(function (y) {
+      return '<option value="' + y + '"' + (YEAR === y ? ' selected' : '') + '>' + y + '</option>';
+    }).join('');
+    var sel = YEAR ? ALL.filter(function (r) { return String(r['العام'] || '').trim() === YEAR; }) : ALL;
+    var sections = (REFS.income_sections || []).map(function (s, idx) {
+      var rows = sel.filter(function (r) { return String(r['نوع البند'] || '').trim() === s.label; })
+        .sort(function (a, b) { return (Number(a['مسلسل']) || 0) - (Number(b['مسلسل']) || 0); });
+      var sum = rows.reduce(function (acc, r) { return acc + (Number(r['القيمة']) || 0); }, 0);
+      return { label: s.label, order: s.order || idx + 1, rows: rows, sum: sum };
+    }).filter(function (s) { return s.rows.length; });
+    var grand = sel.reduce(function (acc, r) { return acc + (Number(r['القيمة']) || 0); }, 0);
+
+    var html = '';
+    sections.forEach(function (s, idx) {
+      html += '<div class="inc-section">' +
+        '<div class="inc-sec-head"><span>' + (idx + 1) + ' - ' + FMT.escape(s.label) + '</span>' +
+        '<span class="inc-sec-total">' + fin(s.sum) + '</span></div>';
+      html += '<table class="inc-table"><thead><tr><th>م</th><th>البند</th><th>كود المستوى الرابع</th><th>القيمة</th></tr></thead><tbody>';
+      s.rows.forEach(function (r) {
+        html += '<tr><td>' + FMT.escape(r['مسلسل'] || '-') + '</td>' +
+          '<td>' + FMT.escape(r['البند'] || '-') + '</td>' +
+          '<td>' + FMT.escape(r['كود المستوى الرابع'] || '-') + '</td>' +
+          '<td class="num">' + fin(r['القيمة']) + '</td></tr>';
+      });
+      html += '</tbody></table></div>';
+    });
+    html += '<div class="inc-grand">إجمالي القائمة: <b>' + fin(grand) + '</b></div>';
+
+    document.getElementById('budget-income-content').innerHTML =
+      '<div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:12px;">' +
+        '<select id="inc-year" class="input" style="width:auto;" onchange="setYear(this.value)">' + yOpts + '</select>' +
+        '<span style="font-size:13px;color:#374151;">عدد البنود: ' + FMT.number(sel.length) + '</span>' +
+      '</div>' +
+      '<div id="inc-statement">' + html + '</div>';
+  }
+
+  function setYear(v) { YEAR = v; render(); }
+
+  function showError(e) {
+    UIC.toast((e && e.message) || 'خطأ غير متوقع', 'error');
+  }
+
+  load();
+</script>
+<style>
+  .inc-section { margin-bottom: 18px; border: 1px solid #d1d5db; border-radius: 8px; overflow: hidden; }
+  .inc-sec-head { display: flex; justify-content: space-between; align-items: center; padding: 8px 14px; background: #f3f4f6; border-bottom: 1px solid #d1d5db; font-weight: 700; font-size: 14px; color: #111827; }
+  .inc-sec-total { font-weight: 800; color: #111827; }
+  .inc-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .inc-table th, .inc-table td { border: 1px solid #e5e7eb; padding: 6px 10px; text-align: right; }
+  .inc-table th { background: #f9fafb; }
+  .inc-table td.num { text-align: left; font-variant-numeric: tabular-nums; }
+  .inc-grand { margin-top: 6px; padding: 10px 14px; background: #374151; color: #fff; border-radius: 8px; font-size: 15px; font-weight: 700; }
+</style>
+</body>
+</html>
+

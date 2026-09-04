@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>حركة المنتج</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= getCompanyThemeCSS_('8df5c89a117fe9a5') ?>
+  <style>
+    @media print {
+      .no-print { display: none !important; }
+      body { background: #ffffff !important; }
+    }
+  </style>
+</head>
+<body>
+<div id="mov-root" dir="rtl"></div>
+<script>
+  var params = new URLSearchParams(window.location.search);
+  var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+  var productId = '<?!= purchaseCode ?>';
+  var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('8df5c89a117fe9a5') ?>';
+
+  function companyCall(moduleAction, data) {
+    return API.call('company_action', {
+      target_system: '8df5c89a117fe9a5',
+      module_action: moduleAction,
+      data: data || {}
+    }, SESSION_TOKEN);
+  }
+
+  function typeLabel_(t) {
+    if (t === 'purchase') return 'شراء (وارد)';
+    if (t === 'sales') return 'بيع (صادر)';
+    if (t === 'return') return 'مرتجع (وارد)';
+    return t;
+  }
+
+  function filterPayload() {
+    return {
+      product_id: productId,
+      date_from: document.getElementById('f_from') ? document.getElementById('f_from').value : '',
+      date_to: document.getElementById('f_to') ? document.getElementById('f_to').value : ''
+    };
+  }
+
+  function hasDateFilter() {
+    var f = document.getElementById('f_from'), t = document.getElementById('f_to');
+    return (f && f.value) || (t && t.value);
+  }
+
+  function load() {
+    UI.showSpinner('جاري تحميل حركة المنتج...');
+    companyCall('get_product_movement', filterPayload())
+      .then(function (r) { render(r); })
+      .catch(function (e) {
+        document.getElementById('mov-root').innerHTML =
+          '<div class="empty-state"><span>' + FMT.escape(e.message || 'خطأ') + '</span></div>';
+      })
+      .finally(function () { UI.hideSpinner(); try{schedulePrefetch();}catch(e){} });
+  }
+
+  function render(r) {
+    var root = document.getElementById('mov-root');
+
+    var filterBar =
+      '<div class="no-print" style="display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;margin-bottom:12px;padding:12px;background:var(--bg-surface);border:2px solid #111111;border-radius:8px;">' +
+      '<div class="form-field" style="margin:0;"><label class="form-label" for="f_from">من تاريخ</label><input id="f_from" class="input" type="date" onchange="load()"></div>' +
+      '<div class="form-field" style="margin:0;"><label class="form-label" for="f_to">إلى تاريخ</label><input id="f_to" class="input" type="date" onchange="load()"></div>' +
+      '</div>';
+
+    var openingHtml = '';
+    if (hasDateFilter()) {
+      openingHtml = '<div style="margin-bottom:12px;padding:10px 14px;background:#fef08a;border:2px solid #111111;border-radius:8px;">' +
+        'الرصيد الافتتاحي (قبل التاريخ المحدد): <strong class="num">' + FMT.number(r.opening_balance) + '</strong></div>';
+    }
+
+    var tableRows = (r.rows || []).map(function (m) {
+      return {
+        date: fmtDate(m.date),
+        type: typeLabel_(m.type),
+        reference: m.reference || '-',
+        customer: m.customer || '-',
+        qty_in: m.qty_in > 0 ? FMT.number(m.qty_in) : '',
+        qty_out: m.qty_out > 0 ? FMT.number(m.qty_out) : '',
+        running: FMT.number(m.running)
+      };
+    });
+
+    var html =
+      '<div class="no-print" style="max-width:1100px;margin:12px auto;display:flex;justify-content:space-between;align-items:center;gap:8px;">' +
+      '<h2 style="margin:0;">حركة المنتج: ' + FMT.escape((r.product && r.product.name) || '') + '</h2>' +
+      '<div style="display:flex;gap:8px;">' +
+      '<button class="btn btn-primary" onclick="window.print()">طباعة</button>' +
+      '<button class="btn btn-outline" onclick="try{window.top.close()}catch(e){window.close()}">إغلاق</button>' +
+      '</div></div>' +
+      '<div style="max-width:1100px;margin:0 auto;">' +
+      filterBar + openingHtml +
+      '<div style="margin-bottom:12px;padding:10px 14px;background:var(--bg-surface);border:2px solid #111111;border-radius:8px;">' +
+      'الرصيد الحالي: <strong class="num">' + FMT.number(r.balance) + '</strong></div>' +
+      UIC.dataTable('mov-table', {
+        title: 'حركة المنتج',
+        headers: [
+          { key: 'date', label: 'التاريخ' },
+          { key: 'type', label: 'النوع' },
+          { key: 'reference', label: 'المرجع' },
+          { key: 'customer', label: 'العميل' },
+          { key: 'qty_in', label: 'وارد' },
+          { key: 'qty_out', label: 'صادر' },
+          { key: 'running', label: 'الرصيد' }
+        ],
+        rows: tableRows,
+        emptyText: 'لا توجد حركات'
+      }) +
+      '</div>';
+
+    root.innerHTML = html;
+    UIC.initTableSort('mov-table');
+  }
+
+  function fmtDate(v) {
+    if (!v) return '-';
+    var d = new Date(v);
+    if (isNaN(d.getTime())) return String(v).slice(0, 10);
+    return d.toLocaleDateString('en-GB');
+  }
+
+  load();
+</script>
+</body>
+</html>

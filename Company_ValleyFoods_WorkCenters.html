@@ -1,0 +1,150 @@
+﻿<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Valley Foods — خطوط الإنتاج</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_ValleyFoods_Nav'); ?>
+  <?!= getCompanyThemeCSS_('9940659bd83035d7') ?>
+</head>
+<body>
+  <div id="vf-root"></div>
+
+  <script>
+    var params = new URLSearchParams(window.location.search);
+    var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+    var scriptUrl = window.scriptUrl || '/';
+    var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+    var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('9940659bd83035d7') ?>';
+    var COMPANY_PAGES = <?!= companyPages ?>;
+    var CURRENT_ACTION = '<?!= currentAction ?>';
+    var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+    var CAN_WRITE = UIC.canAdd_(); var CAN_FULL = UIC.canFull_();
+
+    function companyCall(moduleAction, data) {
+      return API.call('company_action', {
+        target_system: '9940659bd83035d7',
+        module_action: moduleAction,
+        data: data || {}
+      }, SESSION_TOKEN);
+    }
+    function esc(v) {
+      var s = (v === undefined || v === null) ? '' : String(v);
+      if (typeof FMT !== 'undefined' && FMT.escape) return FMT.escape(s);
+      return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+    function num0(v) { var n = Number(v); return isNaN(n) ? 0 : n; }
+  </script>
+
+  <script>
+  (function () {
+    var RECORDS = [];
+
+    function renderApp() {
+      UIC.appShell('vf-root', {
+        companyLogoUrl: COMPANY_LOGO_URL,
+        companyLogoHref: scriptUrl + '?action=vf_dashboard&sessionToken=' + SESSION_TOKEN,
+        companyLogoTitle: 'Valley Foods',
+        breadcrumb: 'Valley Foods / الانتاج / خطوط الإنتاج',
+        contentId: 'vf-wc-content',
+        menuGroups: (window.VALLEYFOODS_MENU || [])
+      });
+      document.getElementById('vf-wc-content').innerHTML =
+        '<div class="vf-card"><div class="vf-card-header"><h3>خطوط الإنتاج (Work Centers)</h3>' +
+          (CAN_WRITE ? '<button class="btn btn-primary" onclick="WC_PAGE.openAdd()">+ إضافة خط إنتاج</button>' : '') +
+        '</div><div class="vf-card-body">' +
+          '<div id="wc-table"><p class="vf-text-muted">جاري التحميل...</p></div>' +
+        '</div></div>';
+      load();
+    }
+
+    function load() {
+      UI.showSpinner();
+      companyCall('get_valley_work_centers')
+        .then(function (r) { RECORDS = r.records || []; renderTable(); try{schedulePrefetch();}catch(e){}; })
+        .catch(function (e) { UIC.toast((e && e.message) || 'خطأ', 'error'); })
+        .finally(function () { UI.hideSpinner(); });
+    }
+
+    function renderTable() {
+      var c = document.getElementById('wc-table');
+      if (!c) return;
+      var rows = RECORDS.map(function (r) {
+        var active = !(r.is_active === false || String(r.is_active).toLowerCase() === 'false');
+        var actions = IS_SUPER_ADMIN ? UIC.actionBtns([{ label: 'تعديل', onclick: 'WC_PAGE.openEdit(\'' + esc(r.unique_id) + '\')' }]) : '';
+        return [esc(r.code || r.id), esc(r.name_en), esc(r.name_ar), esc(r.work_center_type || '-'), num0(r.work_center_cost_per_hour), num0(r.capacity_per_hour_kg), esc(r.location || '-'), UIC.statusPill(active ? 'مفعل' : 'متوقف', active ? 'success' : 'neutral'), actions];
+      });
+      c.innerHTML = UIC.dataTable('wc-tbl', {
+        headers: ['الكود', 'الاسم (EN)', 'الاسم (AR)', 'النوع', 'تكلفة/ساعة', 'السعة (كغ/ساعة)', 'الموقع', 'الحالة', ''],
+        rows: rows, emptyText: 'لا توجد خطوط إنتاج'
+      });
+      UIC.initTableSort('wc-tbl');
+    }
+
+    function openAdd() { openModal(null); }
+    function openEdit(uid) {
+      var row = null;
+      RECORDS.forEach(function (r) { if (String(r.unique_id) === uid) row = r; });
+      openModal(row);
+    }
+
+    function openModal(row) {
+      var isEdit = !!row;
+      var body = '<form id="wc-form">' +
+        '<input type="hidden" id="f-uid" value="' + esc(row ? row.unique_id : '') + '">' +
+        '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;">' +
+          UIC.field({ key: 'f-name-en', label: 'الاسم بالإنجليزية', type: 'text', required: true, value: row ? (row.name_en || '') : '' }) +
+          UIC.field({ key: 'f-name-ar', label: 'الاسم بالعربية', type: 'text', value: row ? (row.name_ar || '') : '' }) +
+          UIC.field({ key: 'f-type', label: 'نوع خط الإنتاج', type: 'text', value: row ? (row.work_center_type || '') : '' }) +
+          UIC.field({ key: 'f-cost', label: 'تكلفة الساعة (ر.س)', type: 'number', min: '0', step: '0.01', value: row ? num0(row.work_center_cost_per_hour) : 0 }) +
+          UIC.field({ key: 'f-capacity', label: 'السعة (كغ/ساعة)', type: 'number', min: '0', step: '0.01', value: row ? num0(row.capacity_per_hour_kg) : 0 }) +
+          UIC.field({ key: 'f-location', label: 'الموقع', type: 'text', value: row ? (row.location || '') : '' }) +
+        '</div>' +
+        UIC.field({ key: 'f-desc', label: 'الوصف', type: 'textarea', value: row ? (row.description || '') : '' }) +
+        UIC.field({ key: 'f-notes', label: 'ملاحظات', type: 'textarea', value: row ? (row.notes || '') : '' }) +
+        '<label style="display:flex;align-items:center;gap:8px;margin-top:12px;">' +
+          '<input type="checkbox" id="f-active"' + (!row || !(row.is_active === false || String(row.is_active).toLowerCase() === 'false') ? ' checked' : '') + '> مفعل</label>' +
+      '</form>';
+      UIC.openModal('wc-modal', { title: isEdit ? 'تعديل خط إنتاج' : 'إضافة خط إنتاج جديد', body: body });
+      var m = document.getElementById('wc-modal');
+      if (m) { var b = m.querySelector('.modal'); if (b) b.style.maxWidth = '700px'; }
+      var foot = document.createElement('div');
+      foot.style.cssText = 'display:flex;justify-content:flex-end;gap:10px;padding:14px 20px;border-top:1px solid #e5e7eb;';
+      foot.innerHTML = '<button class="btn btn-outline" onclick="UIC.closeModal(\'wc-modal\')">إلغاء</button>' +
+        '<button class="btn btn-primary" onclick="UI.submitOnce(this, WC_PAGE.save)">💾 حفظ</button>';
+      m.querySelector('.modal').appendChild(foot);
+    }
+
+    function save() {
+      if (!UIC.validateForm('wc-form')) return;
+      var uid = (document.getElementById('f-uid') || {}).value || '';
+      var payload = {
+        unique_id: uid,
+        name_en: (document.getElementById('f-name-en') || {}).value || '',
+        name_ar: (document.getElementById('f-name-ar') || {}).value || '',
+        work_center_type: (document.getElementById('f-type') || {}).value || '',
+        work_center_cost_per_hour: (document.getElementById('f-cost') || {}).value || 0,
+        capacity_per_hour_kg: (document.getElementById('f-capacity') || {}).value || 0,
+        location: (document.getElementById('f-location') || {}).value || '',
+        description: (document.getElementById('f-desc') || {}).value || '',
+        notes: (document.getElementById('f-notes') || {}).value || '',
+        is_active: (document.getElementById('f-active') || {}).checked
+      };
+      UI.showSpinner();
+      companyCall('save_valley_work_center', payload)
+        .then(function (r) { UIC.closeModal('wc-modal'); UIC.toast((r && r.message) || 'تم الحفظ', 'success'); load(); })
+        .catch(function (e) { UIC.toast((e && e.message) || 'فشل', 'error'); })
+        .finally(function () { UI.hideSpinner(); });
+    }
+
+    window.WC_PAGE = { openAdd: openAdd, openEdit: openEdit, save: save };
+    document.addEventListener('DOMContentLoaded', renderApp);
+  })();
+  </script>
+</body>
+</html>
+
+

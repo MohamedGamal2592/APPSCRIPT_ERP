@@ -1,0 +1,188 @@
+﻿<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>الأصناف</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_TopChemical_Nav'); ?>
+  <?!= getCompanyThemeCSS_('3fe1b5cb67b7223e') ?>
+</head>
+<body>
+<div id="tc-root" dir="rtl"></div>
+<script>
+  var params = new URLSearchParams(window.location.search);
+  var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+  var scriptUrl = window.scriptUrl || '/';
+  var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+  var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('3fe1b5cb67b7223e') ?>';
+  var COMPANY_PAGES = <?!= companyPages ?>;
+  var CURRENT_ACTION = '<?!= currentAction ?>';
+  var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+  var CAN_WRITE = IS_SUPER_ADMIN || !!(USER_PAGES && USER_PAGES[CURRENT_ACTION] && USER_PAGES[CURRENT_ACTION].indexOf('write') !== -1);
+
+  function companyCall(moduleAction, data) {
+    return API.call('company_action', {
+      target_system: '3fe1b5cb67b7223e',
+      module_action: moduleAction,
+      data: data || {}
+    }, SESSION_TOKEN);
+  }
+
+  function load() {
+    var contentId = 'products-content';
+    UIC.appShell('tc-root', {
+      companyLogoUrl: COMPANY_LOGO_URL,
+      companyLogoHref: scriptUrl + '?action=tc_dashboard&sessionToken=' + SESSION_TOKEN,
+      companyLogoTitle: 'توب كيميكال',
+      breadcrumb: 'توب كيميكال / الحسابات / الأصناف',
+      contentId: contentId,
+      menuGroups: (window.TOPCHEMICAL_MENU || [])
+    });
+    fetchProducts();
+  }
+
+  function fetchProducts() {
+    UI.showSpinner();
+    companyCall('get_products')
+      .then(function (r) {
+        window.__unitOptions = r.unit_options || [];
+        window.__categoryOptions = r.category_options || [];
+        renderProducts(r.products || []);
+      })
+      .catch(function (e) { showError(e); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function renderProducts(list) {
+    window.__products = list;
+    var rows = list.map(function (p) {
+      var printLink = p.print_file
+        ? '<button class="btn btn-outline" style="padding:4px 10px;" onclick="downloadPrint(\'' + FMT.escape(p.id) + '\')">تحميل</button>'
+        : '-';
+      return {
+        id: p.id,
+        code: p.code,
+        name_ar: p.name_ar || '-',
+        unit: p.unit || '-',
+        category: p.category || '-',
+        number_of_cartons_bags: p.number_of_cartons_bags,
+        print_file: printLink,
+        actions: UIC.actionBtns(IS_SUPER_ADMIN ? [{ label: 'تعديل', onclick: "openProductModal('" + FMT.escape(p.id) + "')" }] : [])
+      };
+    });
+    var headers = [
+      { key: 'id', label: '#' },
+      { key: 'code', label: 'الكود' },
+      { key: 'name_ar', label: 'الاسم' },
+      { key: 'unit', label: 'الوحدة' },
+      { key: 'category', label: 'الفئة' },
+      { key: 'number_of_cartons_bags', label: 'عدد الكراتين/الشنط' },
+      { key: 'print_file', label: 'ملف الطباعة' },
+      { key: 'actions', label: 'إجراءات' }
+    ];
+    var body = document.getElementById('products-content');
+    body.innerHTML = (CAN_WRITE
+      ? '<div style="display:flex;justify-content:flex-end;margin-bottom:12px;"><button class="btn btn-primary" onclick="openProductModal(\'\')">+ إضافة صنف</button></div>'
+      : '') +
+      UIC.dataTable('products-table', {
+        title: 'الأصناف',
+        headers: headers,
+        rows: rows,
+        emptyText: 'لا توجد أصناف'
+      });
+    UIC.initTableSort('products-table');
+  }
+
+  function downloadPrint(id) {
+    window.open(scriptUrl + '?download=print_file&id=' + encodeURIComponent(id) + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN), '_blank');
+  }
+
+  function uploadSelectedFile(formEl, meta) {
+    var input = formEl.querySelector('input[type=file]');
+    if (!input || !input.files || !input.files[0]) return Promise.resolve('');
+    var file = input.files[0];
+    return new Promise(function (resolve, reject) {
+      var reader = new FileReader();
+      reader.onerror = function () { reject(new Error('خطأ في قراءة الملف')); };
+      reader.onload = function () {
+        var b64 = String(reader.result || '').split(',')[1] || '';
+        var payload = { sheet: meta.sheet, filename: file.name, base64: b64 };
+        if (meta.id) payload.id = meta.id;
+        if (meta.name) payload.name = meta.name;
+        companyCall('add_upload_file', payload)
+          .then(function (res) {
+            if (res && res.status === 'success') resolve(res.reference);
+            else reject(new Error((res && res.message) || 'خطأ في رفع الملف'));
+          })
+          .catch(function (err) {
+            reject(new Error((err && err.message) || 'خطأ في رفع الملف'));
+          });
+      };
+      reader.readAsDataURL(file);
+    });
+  }
+
+  function openProductModal(id) {
+    var p = (window.__products || []).find(function (x) { return String(x.id) === String(id); });
+    var body =
+      '<form id="product-form">' +
+      UIC.field({ key: 'id', label: '#', type: 'number', value: p ? p.id : '', required: true, placeholder: 'رقم صحيح' }) +
+      UIC.field({ key: 'code', label: 'الكود', type: 'number', value: p ? p.code : '', required: true, placeholder: 'رقم صحيح' }) +
+      UIC.field({ key: 'name_ar', label: 'الاسم', value: p ? p.name_ar : '', required: true }) +
+      UIC.enumSelect({ key: 'unit', label: 'الوحدة', value: p ? p.unit : '', options: window.__unitOptions || [], required: true }) +
+      UIC.field({ key: 'category', label: 'الفئة', type: 'select', required: true,
+        options: window.__categoryOptions || [], placeholder: 'اختر الفئة...', value: p ? p.category : '' }) +
+      UIC.field({ key: 'number_of_cartons_bags', label: 'عدد الكراتين/الشنط', type: 'number', value: p ? p.number_of_cartons_bags : '', required: true }) +
+      (p && p.print_file ? '<div class="form-field"><label class="form-label">ملف الطباعة الحالي</label><input class="input" value="' + FMT.escape(p.print_file) + '" disabled></div>' : '') +
+      UIC.fileField({ key: 'file', label: 'ملف الطباعة (pdf, word, png, jpg)', accept: '.pdf,.doc,.docx,.png,.jpg,.jpeg' }) +
+      '</form>';
+    UIC.openModal('product-modal', {
+      title: p ? 'تعديل صنف' : 'إضافة صنف',
+      body: body,
+      onSave: 'saveProduct(\'' + (p ? p.id : '') + '\')'
+    });
+    if (p) {
+      var idField = document.getElementById('id');
+      if (idField) idField.setAttribute('disabled', 'disabled');
+    }
+  }
+
+  function saveProduct(id) {
+    if (!id && !CAN_WRITE) { UIC.toast('غير مصرح', 'error'); return; }
+    if (id && !IS_SUPER_ADMIN) { UIC.toast('غير مصرح', 'error'); return; }
+    var data = UIC.collectForm('product-form');
+    if (!UIC.validateForm('product-form')) return;
+    if (data.unit === '__new__') { data.unit = data.unit_custom || ''; }
+    delete data.unit_custom;
+    if (id) data.id = id;
+    UI.showSpinner('جاري الحفظ...');
+    var formEl = document.getElementById('product-form');
+    uploadSelectedFile(formEl, { sheet: 'products', id: id || data.id })
+      .then(function (ref) {
+        if (ref) data.print_file = ref;
+        return companyCall(id ? 'edit_product' : 'add_product', data);
+      })
+      .then(function (r) {
+        UIC.closeModal('product-modal');
+        UIC.toast(r.message || 'تم الحفظ', 'success');
+        fetchProducts();
+      })
+      .catch(function (e) { UIC.toast(e.message || 'خطأ', 'error'); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function showError(e) {
+    var body = document.getElementById('products-content');
+    if (body) body.innerHTML = '<div class="empty-state"><span>' + FMT.escape(e.message || 'خطأ') + '</span></div>';
+  }
+
+
+  load();
+</script>
+</body>
+</html>
+
+

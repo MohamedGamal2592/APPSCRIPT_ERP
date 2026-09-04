@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <base target="_top">
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Permissions Assignment</title>
+    <?!= include('CSS'); ?>
+  </head>
+  <body>
+
+    <!-- Navbar -->
+    <nav class="navbar navbar-expand-lg navbar-dark bg-primary shadow-sm">
+      <div class="container">
+        <a class="navbar-brand" href="<?= scriptUrl ?>?action=dashboard">
+          <i class="bi bi-mortarboard-fill"></i> Assessment Platform
+        </a>
+        <div class="collapse navbar-collapse" id="navbarNav">
+          <ul class="navbar-nav ms-auto align-items-center">
+            <li class="nav-item">
+              <a href="<?= scriptUrl ?>?action=dashboard" class="btn btn-outline-light btn-sm">
+                <i class="bi bi-arrow-left"></i> Back to Dashboard
+              </a>
+            </li>
+          </ul>
+        </div>
+      </div>
+    </nav>
+
+    <!-- Main Content -->
+    <div class="container mt-4">
+      <div class="row justify-content-center">
+        <div class="col-md-10 col-lg-8">
+          
+          <div id="alertContainer" style="display: none;"></div>
+
+          <div class="card shadow-sm border-0 rounded-3">
+            <div class="card-header bg-white border-0 pt-4">
+              <h4 class="text-center text-primary mb-0">
+                <i class="bi bi-shield-lock-fill"></i> Permission Assignment
+              </h4>
+              <p class="text-center text-muted mb-0">تعيين الصلاحيات</p>
+            </div>
+            
+            <div class="card-body p-4">
+              
+              <div class="mb-4">
+                <label class="form-label fw-bold">Select Position / اختر المنصب</label>
+                <select class="form-select form-select-lg" id="positionSelect" onchange="loadPermissions()">
+                  <option value="">-- Select a Position --</option>
+                  <!-- Updated to match CONFIG.ALLOWED_POSITIONS exactly -->
+                  <option value="Super Admin">Super Admin</option>
+                  <option value="Admin">Admin</option>
+                  <option value="Reviewer">Reviewer</option>
+                  <option value="Staff">Staff</option>
+                </select>
+              </div>
+
+              <div id="permissionsGrid" style="display: none;">
+                <hr>
+                <h5 class="mb-3">Page Access Levels</h5>
+                <div id="pagesContainer" class="d-flex flex-column gap-3"></div>
+                
+                <div class="d-grid mt-4">
+                  <button class="btn btn-primary btn-lg" onclick="savePermissions()">
+                    <i class="bi bi-save-fill"></i> Save Permissions / حفظ الصلاحيات
+                  </button>
+                </div>
+              </div>
+
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    
+    <script>
+      let systemPages = [];
+      const scriptUrl = '<?= scriptUrl ?>';
+      const token = localStorage.getItem('sessionToken');
+
+      if (!token) {
+        window.location.href = scriptUrl + '?action=login';
+      }
+
+      // 1. Fetch the dynamic list of pages from code.gs on load (Passing token for P1 security)
+      google.script.run.withSuccessHandler(function(pages) {
+        systemPages = pages;
+      }).uiGetSystemPages(token);
+
+      // 2. When a position is selected, build the grid and fetch existing permissions
+      function loadPermissions() {
+        const position = document.getElementById('positionSelect').value;
+        const grid = document.getElementById('permissionsGrid');
+        const container = document.getElementById('pagesContainer');
+        
+        if (!position) {
+          grid.style.display = 'none';
+          return;
+        }
+
+        container.innerHTML = ''; // Clear previous
+        grid.style.display = 'block';
+
+        // Dynamically generate rows for each page
+        systemPages.forEach(page => {
+          const div = document.createElement('div');
+          div.className = 'd-flex justify-content-between align-items-center border-bottom pb-2';
+          div.innerHTML = `
+            <label class="form-label mb-0">${page.name}</label>
+            <select class="form-select w-auto" id="perm_${page.action}">
+              <option value="Full">Full Access</option>
+              <option value="Read">Read Only</option>
+              <option value="None">No Access</option>
+            </select>
+          `;
+          container.appendChild(div);
+        });
+
+        // Fetch existing permissions for this position (Passing token for P1 security)
+        google.script.run.withSuccessHandler(function(existingPerms) {
+          // Loop through existing permissions and set the dropdown values
+          Object.keys(existingPerms).forEach(pageAction => {
+            const select = document.getElementById('perm_' + pageAction);
+            if (select) {
+              select.value = existingPerms[pageAction];
+            }
+          });
+        }).uiGetPermissions(token, position);
+      }
+
+      // 3. Save the permissions
+      function savePermissions() {
+        const position = document.getElementById('positionSelect').value;
+        if (!position) return alert('Please select a position first.');
+
+        let permissionsObj = {};
+        systemPages.forEach(page => {
+          const select = document.getElementById('perm_' + page.action);
+          permissionsObj[page.action] = select.value;
+        });
+
+        const btn = event.target;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Saving...';
+        btn.disabled = true;
+
+        google.script.run
+          .withSuccessHandler(function(data) {
+            const alertContainer = document.getElementById('alertContainer');
+            let alertClass = data.status === 'success' ? 'alert-success' : 'alert-danger';
+            alertContainer.className = 'alert ' + alertClass + ' d-flex align-items-center';
+            alertContainer.innerHTML = '<i class="bi bi-check-circle-fill me-2"></i> ' + data.message;
+            alertContainer.style.display = 'block';
+            
+            btn.innerHTML = '<i class="bi bi-save-fill"></i> Save Permissions / حفظ الصلاحيات';
+            btn.disabled = false;
+          })
+                  .withFailureHandler(function(err) {
+          document.getElementById('loadingSpinner').style.display = 'none';
+          document.getElementById('tableContainer').style.display = 'block';
+          
+          // SECURITY: If backend says Unauthorized/Forbidden, kick them out!
+          if (err.message.includes('Unauthorized') || err.message.includes('Forbidden') || err.message.includes('Session expired')) {
+            localStorage.removeItem('sessionToken');
+            localStorage.removeItem('userName');
+            window.location.href = scriptUrl + '?action=login';
+            return;
+          }
+          
+          document.getElementById('tableBody').innerHTML = `<tr><td colspan="6" class="text-center text-danger p-4">Server Error: ${err.message}</td></tr>`;
+        })
+          .uiSavePermissions(token, position, permissionsObj);
+      }
+    </script>
+  </body>
+</html>

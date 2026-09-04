@@ -1,0 +1,228 @@
+﻿<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>تصاريح وتراخيص</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_TopChemical_Nav'); ?>
+  <?!= getCompanyThemeCSS_('3fe1b5cb67b7223e') ?>
+</head>
+<body>
+<div id="tc-root" dir="rtl"></div>
+<script>
+  var params = new URLSearchParams(window.location.search);
+  var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+  var scriptUrl = window.scriptUrl || '/';
+  var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+  var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('3fe1b5cb67b7223e') ?>';
+  var COMPANY_PAGES = <?!= companyPages ?>;
+  var CURRENT_ACTION = '<?!= currentAction ?>';
+  var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+  var CAN_WRITE = UIC.canAdd_(); var CAN_FULL = UIC.canFull_();
+
+  function companyCall(moduleAction, data) {
+    return API.call('company_action', {
+      target_system: '3fe1b5cb67b7223e',
+      module_action: moduleAction,
+      data: data || {}
+    }, SESSION_TOKEN);
+  }
+
+  function pad(n) { return ('0' + n).slice(-2); }
+  function fmtDate(v) {
+    if (!v) return '';
+    var d = new Date(v);
+    if (isNaN(d.getTime())) return String(v);
+    return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+  }
+  function todayStr() {
+    var d = new Date();
+    return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+  }
+
+  function uploadSelectedFile(formEl, meta) {
+    var input = formEl.querySelector('input[type=file]');
+    if (!input || !input.files || !input.files[0]) return Promise.resolve('');
+    var file = input.files[0];
+    return new Promise(function (resolve, reject) {
+      var reader = new FileReader();
+      reader.onerror = function () { reject(new Error('خطأ في قراءة الملف')); };
+      reader.onload = function () {
+        var b64 = String(reader.result || '').split(',')[1] || '';
+        var payload = { sheet: meta.sheet, filename: file.name, base64: b64 };
+        if (meta.id) payload.id = meta.id;
+        if (meta.name) payload.name = meta.name;
+        companyCall('add_upload_file', payload)
+          .then(function (res) {
+            if (res && res.status === 'success') resolve(res.reference);
+            else reject(new Error((res && res.message) || 'خطأ في رفع الملف'));
+          })
+          .catch(function (err) {
+            reject(new Error((err && err.message) || 'خطأ في رفع الملف'));
+          });
+      };
+      reader.readAsDataURL(file);
+    });
+  }
+
+  function load() {
+    var contentId = 'papers-content';
+    UIC.appShell('tc-root', {
+      companyLogoUrl: COMPANY_LOGO_URL,
+      companyLogoHref: scriptUrl + '?action=tc_dashboard&sessionToken=' + SESSION_TOKEN,
+      companyLogoTitle: 'توب كيميكال',
+      breadcrumb: 'توب كيميكال / الترخيص / تصاريح وتراخيص',
+      contentId: contentId,
+      menuGroups: (window.TOPCHEMICAL_MENU || [])
+    });
+    fetchPapers();
+  }
+
+  function fetchPapers() {
+    UI.showSpinner();
+    companyCall('get_registration_papers')
+      .then(function (r) {
+        window.__docTypes = r.document_types || [];
+        window.__productOptions = r.product_options || [];
+        renderPapers(r.papers || []);
+      })
+      .catch(function (e) { showError(e); })
+      .finally(function () { UI.hideSpinner(); try{schedulePrefetch();}catch(e){} });
+  }
+
+  function viewPaper(idx){
+    var p = (window.__papers||[])[idx]; if(!p) return;
+    var attBtn = p.document_file ? '<button class="btn btn-outline" style="padding:6px 12px;" onclick="viewAttachment(\'' + FMT.escape(p.document_file).replace(/\'/g, "\\\'") + '\')">📎 عرض — ' + FMT.escape(String(p.document_file).split("/").pop()) + '</button>' : 'لا يوجد';
+    var body = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 16px;font-size:14px;">' +
+      '<div><b>العربي:</b> ' + FMT.escape(p.document_name_ar||'-') + '</div><div><b>EN:</b> ' + FMT.escape(p.document_name_en||'-') + '</div>' +
+      '<div><b>المنتج:</b> ' + FMT.escape(p.product_name|| (p.product_id? "#"+p.product_id : "-")) + '</div><div><b>الرقم:</b> ' + FMT.escape(p.document_number||'-') + '</div>' +
+      '<div><b>النوع:</b> ' + FMT.escape(p.document_type||'-') + '</div><div><b>من:</b> ' + fmtDate(p.document_start_date) + ' <b>إلى:</b> ' + fmtDate(p.document_end_date) + '</div>' +
+      '<div style="grid-column:1/-1;display:flex;gap:10px;align-items:center;"><b>المرفق:</b> ' + attBtn + '</div></div>';
+    UIC.openModal('paper-view-modal', { title: 'عرض السجل / View Record', body: body });
+  }
+  function printPaper(idx){ window.print(); }
+  function deletePaper(idx){
+    if(!UIC.canFull_()){ UIC.toast('غير مصرح','error'); return; }
+    if(!confirm('هل تريد حذف؟ / Delete?')) return;
+    var p=(window.__papers||[])[idx]; if(!p) return;
+    UI.showSpinner(); companyCall('delete_registration_paper',{document_number: p.document_number}).then(function(r){ UIC.toast(r.message||'تم الحذف','success'); fetchPapers(); }).catch(function(e){ UIC.toast(e.message||'خطأ','error'); }).finally(function(){ UI.hideSpinner(); });
+  }
+  function renderPapers(list) {
+    window.__papers = list;
+    var rows = list.map(function (p, idx) {
+      var fileCell = p.document_file
+        ? '<button class="btn btn-outline" style="padding:4px 10px;" onclick="viewAttachment(\'' + FMT.escape(p.document_file).replace(/\'/g, "\\\'") + '\')">📎 عرض / View</button>'
+        : '-';
+      var hasAtt = !!p.document_file;
+      return {
+        document_name_ar: p.document_name_ar || '-',
+        document_name_en: p.document_name_en || '-',
+        product: p.product_name || (p.product_id ? '#' + p.product_id : '-'),
+        document_number: p.document_number,
+        document_type: p.document_type || '-',
+        document_start_date: fmtDate(p.document_start_date),
+        document_end_date: fmtDate(p.document_end_date),
+        document_file: fileCell,
+        actions: UIC.actionBtns([
+          { label: '👁️ عرض / View', onclick: "viewPaper(" + idx + ")" },
+          hasAtt ? { label: '📎 عرض المرفق / View Attachment', onclick: "viewAttachment('" + FMT.escape(p.document_file).replace(/\'/g, "\\\'") + "')" } : null,
+          { label: '🖨️ طباعة / Print', onclick: "printPaper(" + idx + ")" },
+          CAN_WRITE ? { label: '✏️ تعديل / Edit', onclick: "viewPaper(" + idx + ")" } : null,
+          IS_SUPER_ADMIN ? { label: '🗑️ حذف / Delete', color: '#dc2626', onclick: "deletePaper(" + idx + ")" } : null
+        ].filter(Boolean))
+      };
+    });
+    var headers = [
+      { key: 'document_name_ar', label: 'اسم المستند (عربي)' },
+      { key: 'document_name_en', label: 'اسم المستند (إنجليزي)' },
+      { key: 'product', label: 'المنتج' },
+      { key: 'document_number', label: 'رقم المستند' },
+      { key: 'document_type', label: 'النوع' },
+      { key: 'document_start_date', label: 'تاريخ البداية' },
+      { key: 'document_end_date', label: 'تاريخ النهاية' },
+      { key: 'document_file', label: 'الملف' },
+      { key: 'actions', label: 'إجراءات / Actions' }
+    ];
+    var body = document.getElementById('papers-content');
+    body.innerHTML = (CAN_WRITE
+      ? '<div style="display:flex;justify-content:flex-end;margin-bottom:12px;"><button class="btn btn-primary" onclick="openPaperModal()">+ إضافة مستند</button></div>'
+      : '') +
+      UIC.dataTable('papers-table', {
+        title: 'تصاريح وتراخيص',
+        headers: headers,
+        rows: rows,
+        emptyText: 'لا توجد مستندات'
+      });
+    UIC.initTableSort('papers-table');
+  }
+
+  function viewAttachment(ref) {
+    window.open(scriptUrl + '?download=attachment&page=tc_registration_papers&ref=' +
+      encodeURIComponent(ref) + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN), '_blank');
+  }
+  function downloadDoc(ref) { return viewAttachment(ref); }
+
+  function openPaperModal() {
+    var body =
+      '<form id="paper-form">' +
+      UIC.field({ key: 'document_name_ar', label: 'اسم المستند بالعربية', required: true }) +
+      UIC.field({ key: 'document_name_en', label: 'اسم المستند بالإنجليزية' }) +
+      UIC.enumSelect({ key: 'product', label: 'المنتج (اختياري)', options: window.__productOptions || [], placeholder: 'اختر المنتج...' }) +
+      UIC.field({ key: 'document_number', label: 'رقم المستند', type: 'number', required: true, placeholder: 'رقم صحيح' }) +
+      UIC.enumSelect({ key: 'document_type', label: 'نوع المستند', options: window.__docTypes || [], required: true, placeholder: 'اختر النوع...' }) +
+      UIC.field({ key: 'document_start_date', label: 'تاريخ البداية', type: 'date', value: todayStr(), required: true }) +
+      UIC.field({ key: 'document_end_date', label: 'تاريخ النهاية', type: 'date', value: todayStr(), required: true }) +
+      UIC.fileField({ key: 'file', label: 'ملف المستند (pdf, word, png, jpg)', accept: '.pdf,.doc,.docx,.png,.jpg,.jpeg' }) +
+      '</form>';
+    UIC.openModal('paper-modal', {
+      title: 'إضافة مستند / تصريح',
+      body: body,
+      onSave: 'savePaper()'
+    });
+  }
+
+  function savePaper() {
+    if (!CAN_WRITE) { UIC.toast('غير مصرح', 'error'); return; }
+    var data = UIC.collectForm('paper-form');
+    if (!UIC.validateForm('paper-form')) return;
+    if (data.document_type === '__new__') { data.document_type = data.document_type_custom || ''; }
+    delete data.document_type_custom;
+    if (data.product === '__new__') { UIC.toast('اختر منتجاً موجوداً', 'error'); return; }
+    delete data.product_custom;
+    UI.showSpinner('جاري الحفظ...');
+    var formEl = document.getElementById('paper-form');
+    uploadSelectedFile(formEl, { sheet: 'registration_papers', name: data.document_name_ar })
+      .then(function (ref) {
+        if (ref) data.document_file = ref;
+        return companyCall('add_registration_paper', data);
+      })
+      .then(function (r) {
+        UIC.closeModal('paper-modal');
+        UIC.toast(r.message || 'تم الحفظ', 'success');
+        if (r && r.record) {
+          window.__papers = window.__papers || [];
+          window.__papers.unshift(r.record);
+          if (window.__papers.length>10) window.__papers=window.__papers.slice(0,10);
+          renderPapers(window.__papers);
+        } else { fetchPapers(); }
+      })
+      .catch(function (e) { UIC.toast(e.message || 'خطأ', 'error'); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function showError(e) {
+    var body = document.getElementById('papers-content');
+    if (body) body.innerHTML = '<div class="empty-state"><span>' + FMT.escape(e.message || 'خطأ') + '</span></div>';
+  }
+
+
+  load();
+</script>
+</body>
+</html>
+
+
+

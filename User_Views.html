@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="description" content="العروض المحفوظة">
+  <title>العروض المحفوظة</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+</head>
+<body>
+<div dir="rtl" class="page-shell">
+  <header class="page-header">
+    <div>
+      <h1 class="page-title">العروض المحفوظة</h1>
+      <p class="page-sub">عروض الجداول والفلاتر التي حفظتها لكل صفحة.</p>
+    </div>
+    <button class="btn btn-outline" onclick="goBack()">رجوع</button>
+  </header>
+
+  <div id="list" class="stack"></div>
+  <div id="empty" class="empty-state" style="display:none;">لا توجد عروض محفوظة.</div>
+</div>
+
+<script>
+  var TOKEN = getQueryParam('sessionToken') || (API.getSession() && API.getSession().token) || '';
+  if (TOKEN) API.setSession({ token: TOKEN, user: (API.getSession() && API.getSession().user) || null });
+
+  function goBack() {
+    window.location.href = (window.scriptUrl || '/') + '?action=ERPDashboard&sessionToken=' + encodeURIComponent(TOKEN);
+  }
+
+  function init() {
+    UI.showSpinner('جاري التحميل...');
+    API.call('list_user_views', {}, TOKEN)
+      .then(function (r) {
+        var views = (r && r.views) || [];
+        var box = document.getElementById('list');
+        box.innerHTML = '';
+        if (!views.length) { document.getElementById('empty').style.display = 'block'; return; }
+        views.forEach(function (v) {
+          var card = document.createElement('div');
+          card.className = 'card';
+          card.innerHTML =
+            '<div class="card-row">' +
+              '<div class="card-main">' +
+                '<div class="card-title">' + FMT.escape(v.name) + '</div>' +
+                '<div class="card-sub">الصفحة: ' + FMT.escape(v.page_action) + '</div>' +
+                '<div class="card-sub">حُفظت: ' + FMT.datetime(v.created_at) + '</div>' +
+              '</div>' +
+              '<div class="card-actions">' +
+                '<button class="btn btn-primary" onclick="applyView(\'' + FMT.escape(v.view_id) + '\',\'' + FMT.escape(v.page_key) + '\')">تحميل</button> ' +
+                '<button class="btn btn-outline btn-danger" onclick="delView(\'' + FMT.escape(v.view_id) + '\')">حذف</button>' +
+              '</div>' +
+            '</div>';
+          box.appendChild(card);
+        });
+      })
+      .catch(function (e) { UIC.toast(e.message || 'تعذر التحميل', 'error'); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function applyView(viewId, pageKey) {
+    var target = pageKey || 'ERPDashboard';
+    window.location.href = (window.scriptUrl || '/') + '?action=' + encodeURIComponent(target) +
+      '&sessionToken=' + encodeURIComponent(TOKEN) + '&applyView=' + encodeURIComponent(viewId);
+  }
+
+  function delView(viewId) {
+    if (!confirm('حذف هذا العرض؟')) return;
+    UI.showSpinner('جاري التنفيذ...');
+    API.call('save_user_view', { view_id: viewId, _delete: true }, TOKEN)
+      .then(function () { UIC.toast('تم الحذف', 'success'); init(); })
+      .catch(function (e) { UIC.toast(e.message || 'تعذر التنفيذ', 'error'); UI.hideSpinner(); });
+  }
+
+  function getQueryParam(name) {
+    var m = new RegExp('[?&]' + name + '=([^&]*)').exec(window.location.search);
+    return m ? decodeURIComponent(m[1]) : '';
+  }
+
+  init();
+</script>
+<style>
+  .page-shell { max-width: 760px; margin: 0 auto; padding: 16px; }
+  .page-header { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom:16px; }
+  .page-title { font-size: 20px; margin:0 0 4px; }
+  .page-sub { color: var(--text-muted); font-size: 13px; margin:0; }
+  .stack { display:flex; flex-direction:column; gap:12px; }
+  .card { background: var(--bg-surface); border:1px solid var(--border-color); border-radius: var(--radius-md); padding:14px; }
+  .card-row { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+  .card-title { font-weight:600; font-size:15px; }
+  .card-sub { color: var(--text-muted); font-size:12px; margin-top:2px; }
+  .empty-state { text-align:center; color: var(--text-muted); padding:40px 0; }
+  .btn-danger { color: var(--danger, #d33); border-color: var(--danger, #d33); }
+</style>
+</body>
+</html>

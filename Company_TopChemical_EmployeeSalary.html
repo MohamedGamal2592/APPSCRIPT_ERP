@@ -1,0 +1,151 @@
+﻿<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>راتب الموظف</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_TopChemical_Nav'); ?>
+  <?!= getCompanyThemeCSS_('3fe1b5cb67b7223e') ?>
+</head>
+<body>
+<div id="tc-root" dir="rtl"></div>
+<script>
+  var params = new URLSearchParams(window.location.search);
+  var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+  var scriptUrl = window.scriptUrl || '/';
+  var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+  var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('3fe1b5cb67b7223e') ?>';
+  var COMPANY_PAGES = <?!= companyPages ?>;
+  var CURRENT_ACTION = '<?!= currentAction ?>';
+  var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+  var CAN_WRITE = UIC.canAdd_(); var CAN_FULL = UIC.canFull_();
+
+  function companyCall(moduleAction, data) {
+    return API.call('company_action', {
+      target_system: '3fe1b5cb67b7223e',
+      module_action: moduleAction,
+      data: data || {}
+    }, SESSION_TOKEN);
+  }
+
+  function esc(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  function fmtDate(v) {
+    if (v == null || v === '') return '';
+    var d = (v instanceof Date) ? v : new Date(v);
+    if (isNaN(d.getTime())) return String(v);
+    var p = function (n) { return ('0' + n).slice(-2); };
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+  }
+
+  function load() {
+    var contentId = 'salary-content';
+    UIC.appShell('tc-root', {
+      companyLogoUrl: COMPANY_LOGO_URL,
+      companyLogoHref: scriptUrl + '?action=tc_dashboard&sessionToken=' + SESSION_TOKEN,
+      companyLogoTitle: 'توب كيميكال',
+      breadcrumb: 'توب كيميكال / شئون العاملين / راتب الموظف',
+      contentId: contentId,
+      menuGroups: (window.TOPCHEMICAL_MENU || [])
+    });
+    fetchSalaries();
+  }
+
+  function fetchSalaries() {
+    UI.showSpinner();
+    companyCall('get_employee_salary')
+      .then(function (r) {
+        window.__rows = r.rows || [];
+        window.__empOptions = r.employee_options || [];
+        renderSalaries();
+      })
+      .catch(function (e) { showError(e); })
+      .finally(function () { UI.hideSpinner(); try{schedulePrefetch();}catch(e){} });
+  }
+
+  function renderSalaries() {
+    var rows = window.__rows.map(function (r) {
+      return {
+        id: r.id,
+        salary_date: fmtDate(r.salary_date),
+        emp_id: r.emp_id,
+        name_ar: esc(r.name_ar || '-'),
+        main_salary: r.main_salary,
+        allow: r.allow,
+        basic_salary: r.basic_salary
+      };
+    });
+    var headers = [
+      { key: 'id', label: '#', numeric: true },
+      { key: 'salary_date', label: 'تاريخ الراتب' },
+      { key: 'emp_id', label: 'كود الموظف', numeric: true },
+      { key: 'name_ar', label: 'الاسم' },
+      { key: 'main_salary', label: 'الراتب الأساسي', numeric: true },
+      { key: 'allow', label: 'البدلات', numeric: true },
+      { key: 'basic_salary', label: 'الأساسي', numeric: true }
+    ];
+    var body = document.getElementById('salary-content');
+    body.innerHTML = (CAN_WRITE
+      ? '<div style="display:flex;justify-content:flex-end;margin-bottom:12px;"><button class="btn btn-primary" onclick="openAddModal()">+ تسجيل راتب</button></div>'
+      : '') +
+      UIC.dataTable('salary-table', {
+        title: 'رواتب الموظفين',
+        headers: headers,
+        rows: rows,
+        emptyText: 'لا توجد رواتب'
+      });
+    UIC.initTableSort('salary-table');
+  }
+
+  function openAddModal() {
+    var body =
+      '<form id="salary-form">' +
+      UIC.field({ key: 'emp_id', label: 'الموظف', type: 'select', required: true,
+        options: window.__empOptions || [], placeholder: 'اختر الموظف...' }) +
+      UIC.field({ key: 'salary_date', label: 'تاريخ الراتب', type: 'date', required: true }) +
+      UIC.field({ key: 'main_salary', label: 'الراتب الأساسي', type: 'number', min: '0', step: '0.01', required: true }) +
+      UIC.field({ key: 'allow', label: 'البدلات', type: 'number', min: '0', step: '0.01', required: true }) +
+      UIC.field({ key: 'basic_salary', label: 'الأساسي', type: 'number', min: '0', step: '0.01', required: true }) +
+      '</form>';
+    UIC.openModal('salary-modal', {
+      title: 'تسجيل راتب موظف',
+      body: body,
+      onSave: 'saveSalary()'
+    });
+  }
+
+  function saveSalary() {
+    if (!UIC.validateForm('salary-form')) return;
+    var data = UIC.collectForm('salary-form');
+    UI.showSpinner('جاري الحفظ...');
+    companyCall('add_employee_salary', data)
+      .then(function (r) {
+        UIC.closeModal('salary-modal');
+        UIC.toast((r && r.message) || 'تم الحفظ', 'success');
+        if (r && r.record) {
+          window.__rows = window.__rows || [];
+          window.__rows.unshift(r.record);
+          if (window.__rows.length>10) window.__rows=window.__rows.slice(0,10);
+          renderSalaries();
+        } else { fetchSalaries(); }
+      })
+      .catch(function (e) { UIC.toast((e && e.message) || 'خطأ', 'error'); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function showError(e) {
+    var body = document.getElementById('salary-content');
+    if (body) body.innerHTML = '<div class="empty-state"><span>' + esc(e.message || 'خطأ') + '</span></div>';
+  }
+
+  load();
+</script>
+</body>
+</html>
+

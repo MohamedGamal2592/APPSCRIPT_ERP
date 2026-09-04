@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Top Light — المنتجات</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('ERP_Flow'); ?>
+  <?!= include('ERP_DataTable'); ?>
+  <?!= include('ERP_DataTable_JS'); ?>
+  <?!= include('ERP_Modal'); ?>
+  <?!= getCompanyThemeCSS_('8df5c89a117fe9a5') ?>
+</head>
+<body>
+<div id="tl-root" dir="rtl"></div>
+<script>
+  var params = new URLSearchParams(window.location.search);
+  var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+  var scriptUrl = window.scriptUrl || '/';
+  var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+  var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('8df5c89a117fe9a5') ?>';
+  var COMPANY_PAGES = <?!= companyPages ?>;
+  var CURRENT_ACTION = '<?!= currentAction ?>';
+  var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+  var CAN_WRITE = UIC.canAdd_(); var CAN_FULL = UIC.canFull_();
+
+  function companyCall(moduleAction, data) {
+    return API.call('company_action', {
+      target_system: '8df5c89a117fe9a5',
+      module_action: moduleAction,
+      data: data || {}
+    }, SESSION_TOKEN);
+  }
+
+  function load() {
+    var contentId = 'products-content';
+    UIC.appShell('tl-root', {
+      companyLogoUrl: COMPANY_LOGO_URL,
+      companyLogoHref: scriptUrl + '?action=tl_dashboard&sessionToken=' + SESSION_TOKEN,
+      companyLogoTitle: 'القمة لايت',
+      breadcrumb: 'القمة لايت / المنتجات',
+      contentId: contentId
+    });
+    fetchProducts();
+  }
+
+  function fetchProducts() {
+    UI.showSpinner([
+      'جاري تحميل قائمة المنتجات...',
+      'جاري استرجاع الأرصدة والمخزون والتكاليف...',
+      'لحظة، جاري عرض الجدول...'
+    ]);
+    companyCall('get_products')
+      .then(function (r) {
+        window.__categoryOptions = r.category_options || [];
+        window.__assetCodeOptions = r.asset_code_options || [];
+        window.__unitOptions = r.unit_options || [];
+        try{ schedulePrefetch(); }catch(e){}
+        renderProducts(r.products || []);
+      })
+      .catch(function (e) { showError(e); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function renderProducts(list) {
+    window.__products = list;
+    var rows = list.map(function (p) {
+      return {
+        id: p.id,
+        name_ar: p.name_ar,
+        name_en: p.name_en || '-',
+        category: p.category_name || '-',
+        unit: p.unit || '-',
+        carton: p.carton || '-',
+        current_qty: FMT.number(p.current_qty),
+        total_cost_sign: FMT.currency(p.total_cost_sign),
+        actions: UIC.actionBtns([
+          { label: 'حركة', onclick: "openMovement('" + FMT.escape(p.id) + "')" }
+        ].concat(UIC.canFull_() ? [{ label: 'تعديل', onclick: "openProductModal('" + FMT.escape(p.id) + "')" }] : []))
+      };
+    });
+    var headers = [
+      { key: 'id', label: 'المعرف' },
+      { key: 'name_ar', label: 'الاسم العربي' },
+      { key: 'name_en', label: 'الاسم الإنجليزي' },
+      { key: 'category', label: 'الفئة' },
+      { key: 'unit', label: 'الوحدة' },
+      { key: 'carton', label: 'الكرتونة' },
+      { key: 'current_qty', label: 'الرصيد الحالي', numeric: true },
+      { key: 'total_cost_sign', label: 'قيمة الكمية المتاحة', numeric: true },
+      { key: 'actions', label: 'إجراءات' }
+    ];
+    var body = document.getElementById('products-content');
+    body.innerHTML = '<div style="display:flex;justify-content:flex-end;margin-bottom:12px;gap:8px;">' +
+      '<button class="btn btn-outline" onclick="openPurchaseNeeds()">الاصناف المطلوب شرائها</button>' +
+      '<button class="btn btn-primary" onclick="openProductModal(\'\')">+ إضافة منتج</button></div>' +
+      UIC.dataTable('products-table', {
+        title: 'المنتجات',
+        headers: headers,
+        rows: rows,
+        emptyText: 'لا توجد منتجات'
+      });
+    UIC.initTableSort('products-table');
+  }
+
+  function openMovement(id) {
+    var base = (window.UIC && UIC.baseUrl) ? UIC.baseUrl() : (window.scriptUrl || scriptUrl);
+    var tok = (window.UIC && UIC.token) ? UIC.token() : SESSION_TOKEN;
+    window.open(base + '?action=tl_product_movement&purchase_code=' + encodeURIComponent(id) + '&sessionToken=' + encodeURIComponent(tok), '_blank');
+  }
+
+  function openPurchaseNeeds() {
+    var base = (window.UIC && UIC.baseUrl) ? UIC.baseUrl() : (window.scriptUrl || scriptUrl);
+    var tok = (window.UIC && UIC.token) ? UIC.token() : SESSION_TOKEN;
+    window.open(base + '?action=tl_purchase_needs&sessionToken=' + encodeURIComponent(tok), '_blank');
+  }
+
+  function openProductModal(id) {
+    var p = (window.__products || []).find(function (x) { return String(x.id) === String(id); });
+    var categoryOptions = (window.__categoryOptions || []).map(function (c) {
+      return { value: c.id, label: c.name_ar };
+    });
+    var assetCodeOptions = (window.__assetCodeOptions || []).map(function (o) {
+      return { value: o.fifth, label: o.code };
+    });
+    var body =
+      '<form id="product-form">' +
+      UIC.field({ key: 'name_ar', label: 'الاسم العربي', value: p ? p.name_ar : '', required: true }) +
+      UIC.field({ key: 'name_en', label: 'الاسم الإنجليزي', value: p ? p.name_en : '' }) +
+      UIC.enumSelect({ key: 'unit', label: 'الوحدة', value: p ? p.unit : '', options: window.__unitOptions || [], required: true }) +
+      UIC.field({ key: 'carton', label: 'الكرتونة', value: p ? p.carton : '', required: true }) +
+      UIC.field({ key: 'asset_code', label: 'كود الأصل', type: 'select', required: true,
+        options: assetCodeOptions, placeholder: 'اختر كود الأصل...', value: p ? p.asset_code : '' }) +
+      UIC.enumSelect({ key: 'category', label: 'الفئة', value: p ? p.category : '', options: categoryOptions, required: true, placeholder: 'اختر الفئة...' }) +
+      UIC.field({ key: 'sales_tax', label: 'ضريبة المبيعات', type: 'select', required: true,
+        options: [{ value: '0.14', label: '14%' }, { value: '0.10', label: '10%' }, { value: '0.05', label: '5%' }],
+        value: p ? String(p.sales_tax) : '0.14' }) +
+      '</form>';
+    UIC.openModal('product-modal', {
+      title: p ? 'تعديل منتج' : 'إضافة منتج',
+      body: body,
+      onSave: 'saveProduct(\'' + (p ? p.id : '') + '\')'
+    });
+  }
+
+  function saveProduct(id) {
+    var btn = document.querySelector('#product-modal .btn-primary');
+    UI.submitOnce(btn, function () {
+      var data = UIC.collectForm('product-form');
+      if (!UIC.validateForm('product-form')) return Promise.reject();
+      ['unit'].forEach(function (k) {
+        if (data[k] === '__new__') data[k] = data[k + '_custom'] || '';
+        delete data[k + '_custom'];
+      });
+      if (data.category === '__new__') {
+        data.category_new = data.category_custom || '';
+        delete data.category;
+        delete data.category_custom;
+      } else {
+        delete data.category_custom;
+      }
+      if (id) data.id = id;
+      UI.showSpinner(['جاري الحفظ...', 'لحظة، جاري تحديث قائمة المنتجات والمخزون...']);
+      return companyCall(id ? 'edit_product' : 'add_product', data)
+        .then(function (r) {
+          UIC.closeModal('product-modal');
+          UIC.toast(r.message || 'تم الحفظ', 'success');
+          var rec = r.record || null;
+          if (rec) {
+            if (!window.__products) window.__products = [];
+            if (id) {
+              var idx = window.__products.findIndex(function(x){ return String(x.id)===String(id); });
+              if(idx!==-1) window.__products[idx]=rec; else window.__products.push(rec);
+            } else {
+              var newId = rec.id || r.assignedId || r.unique_id;
+              rec.id = newId;
+              window.__products.unshift(rec);
+            }
+            renderProducts(window.__products);
+          } else {
+            fetchProducts();
+          }
+        })
+        .catch(function (e) { UIC.toast(e.message || 'خطأ', 'error'); })
+        .finally(function () { UI.hideSpinner(); });
+    });
+  }
+
+  function showError(e) {
+    var body = document.getElementById('products-content');
+    if (body) body.innerHTML = '<div class="empty-state"><span>' + FMT.escape(e.message || 'خطأ') + '</span></div>';
+  }
+
+
+  load();
+</script>
+</body>
+</html>
+
+

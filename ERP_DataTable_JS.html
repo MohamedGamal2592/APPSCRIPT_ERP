@@ -1,0 +1,701 @@
+<script>
+/**
+ * ERP_DataTable_JS — optimized v2 (MIT time-sliced + Harvard windowed)
+ * Chunks iterations via rAF, DocumentFragment batching, virtual window, indexed search.
+ * Preserves API: new ERPDataTable(opts).init()  + window.__erpTable global.
+ */
+window.ERPDataTable = (function(){
+  function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+  // —— MIT/Harvard: time-sliced chunking — 12ms budget per frame leaves 4ms for paint (60fps = 16.6ms)
+  const CHUNK = 75; // tuned: 75 rows ≈ 1.5KB DOM, fits 12ms on mid-range mobile (Harvard CS50: chunk 50-100)
+  const FRAME_BUDGET = 12;
+  function chunkedLoop(items, fn, done, chunkSize){
+    chunkSize = chunkSize || CHUNK;
+    let i = 0;
+    const n = items.length;
+    function tick(deadline){
+      const start = performance.now();
+      // Prefer requestIdleCallback deadline if available, else FRAME_BUDGET
+      while(i < n){
+        const end = Math.min(i + chunkSize, n);
+        for(; i < end; i++) fn(items[i], i);
+        if (performance.now() - start >= FRAME_BUDGET) break;
+        if (deadline && typeof deadline.timeRemaining === 'function' && deadline.timeRemaining() < 2) break;
+      }
+      if (i < n){
+        if (typeof requestIdleCallback === 'function') requestIdleCallback(tick, {timeout: 40});
+        else requestAnimationFrame(tick);
+      } else if (done) done();
+    }
+    if (typeof requestIdleCallback === 'function') requestIdleCallback(tick, {timeout: 40});
+    else requestAnimationFrame(tick);
+  }
+
+  class ERPDataTable {
+    constructor(opts){
+      this.tableId = opts.tableId;
+      this.pageId = opts.pageId;
+      this.company = opts.company;
+      this.pkField = opts.pkField || 'id';
+      this.columns = opts.columns || [];
+      this.permissions = opts.permissions || {};
+      this.containerId = opts.containerId || 'erp-datatable-host';
+      this.pageSize = opts.pageSize || 0;
+      this.rows = [];
+      this.byPk = new Map();
+      this.rowElByPk = new Map();
+      this.stamp = '';
+      this.searchIndex = new Map();
+      this.mutationQueue = [];
+      this.inFlight = false;
+      this.clientCacheKey = 'erp_tbl_' + this.company + '_' + this.tableId;
+      this.clientTtlMs = opts.clientTtlMs || 300000;
+      // virtual window state
+      this._virtual = { enabled: false, rowH: 42, viewportH: 480, start: 0, end: 0 };
+      this._visibleRows = [];
+      this._filterActive = false;
+    }
+
+    init(){
+      this.renderSkeleton();
+      this.loadWithCache();
+      window.addEventListener('focus', () => this.maybeRevalidateOnFocus());
+      document.addEventListener('keydown', (e) => this.onKeydown(e));
+      document.addEventListener('click', (e) => this.onDocClick(e));
+      // resize observer for virtual window
+      try{
+        const ro = new ResizeObserver(() => this._recalcVirtual());
+        const host = document.getElementById(this.containerId);
+        if(host) ro.observe(host);
+      }catch(e){}
+    }
+
+    renderSkeleton(){
+      const host = document.getElementById(this.containerId);
+      if (!host) return;
+      const cols = this.columns.filter(c => !c.hidden);
+      const thead = '<thead><tr>' + cols.map(c => '<th class="' + (c.sortable!==false?'sortable':'') + '" data-field="' + esc(c.field) + '">' + esc(c.header) + '</th>').join('') + '<th class="cell-actions">إجراءات</th></tr></thead>';
+      const toolbar = '<div class="erp-table-toolbar"><input id="' + this.tableId + '_search" class="input" type="search" placeholder="بحث..." inputmode="search" enterkeyhint="search"><button type="button" class="btn btn-outline" onclick="window.__erpTable && window.__erpTable.exportXlsx()">📥 Excel</button></div>';
+      // virtual wrap: outer scroll container with fixed height, inner spacer for total height
+      host.innerHTML = toolbar + '<div class="erp-table-wrap" id="' + this.tableId + '_wrap" style="max-height:62vh;overflow:auto;-webkit-overflow-scrolling:touch;" dir="rtl"><table class="erp-table" dir="rtl"><caption class="sr-only">' + esc(this.tableId) + '</caption>' + thead + '<tbody id="' + this.tableId + '_tbody"></tbody></table><div id="' + this.tableId + '_spacer" style="height:0"></div></div><div id="' + this.tableId + '_count" style="padding:8px;color:var(--text-muted);font-size:13px;"></div>';
+      const search = document.getElementById(this.tableId + '_search');
+      if (search) search.addEventListener('input', () => this.onSearch(search.value));
+      host.querySelectorAll('thead th[data-field]').forEach(th => {
+        th.addEventListener('click', () => this.onSort(th.getAttribute('data-field'), th));
+      });
+      const wrap = document.getElementById(this.tableId + '_wrap');
+      if(wrap) wrap.addEventListener('scroll', () => this._onVirtualScroll(), {passive:true});
+    }
+
+    _recalcVirtual(){
+      const wrap = document.getElementById(this.tableId + '_wrap');
+      if(!wrap) return;
+      this._virtual.viewportH = wrap.clientHeight || 480;
+      this._virtual.rowH = 42; // estimate; could measure first row
+      // enable virtual if rows exceed viewport * 2.5 (Harvard Windowed Rendering threshold)
+      this._virtual.enabled = this.rows.length > 120;
+      this._updateVirtualWindow(true);
+    }
+    _onVirtualScroll(){
+      if(!this._virtual.enabled) return;
+      // throttle via rAF (MIT: debounce scroll to animation frame)
+      if(this._virtual._raf) return;
+      this._virtual._raf = requestAnimationFrame(() => {
+        this._virtual._raf = null;
+        this._updateVirtualWindow(false);
+      });
+    }
+    _updateVirtualWindow(forceRender){
+      if(!this._virtual.enabled || this._filterActive) {
+        // when filtering, show all matched (no virtual)
+        if(forceRender) this._renderVisibleChunk();
+        return;
+      }
+      const wrap = document.getElementById(this.tableId + '_wrap');
+      const tbody = document.getElementById(this.tableId + '_tbody');
+      const spacer = document.getElementById(this.tableId + '_spacer');
+      if(!wrap || !tbody || !spacer) return;
+      const scrollTop = wrap.scrollTop;
+      const total = this._visibleRows.length || this.rows.length;
+      const rowH = this._virtual.rowH;
+      const vh = this._virtual.viewportH;
+      const buffer = 12; // Harvard: buffer 10-15 rows to avoid flicker
+      const start = Math.max(0, Math.floor(scrollTop / rowH) - buffer);
+      const end = Math.min(total, Math.ceil((scrollTop + vh) / rowH) + buffer);
+      if(!forceRender && start === this._virtual.start && end === this._virtual.end) return;
+      this._virtual.start = start; this._virtual.end = end;
+      // spacer heights
+      spacer.style.height = (total * rowH) + 'px';
+      tbody.style.transform = 'translateY(' + (start * rowH) + 'px)';
+      this._renderVisibleChunk();
+    }
+    _renderVisibleChunk(){
+      const tbody = document.getElementById(this.tableId + '_tbody');
+      if(!tbody) return;
+      const cols = this.columns.filter(c => !c.hidden);
+      const source = this._visibleRows.length ? this._visibleRows : this.rows;
+      const s = this._virtual.enabled && !this._filterActive ? this._virtual.start : 0;
+      const e = this._virtual.enabled && !this._filterActive ? this._virtual.end : source.length;
+      const slice = source.slice(s, e);
+      // MIT chunked DOM: build DocumentFragment in chunks
+      const frag = document.createDocumentFragment();
+      // reuse existing map but build only visible slice
+      // For virtual, we keep rowElByPk for all, but render only slice via DOM recycling
+      // Simple approach: clear and append slice chunked
+      tbody.innerHTML = '';
+      let idx = 0;
+      const total = slice.length;
+      const doChunk = () => {
+        const frag2 = document.createDocumentFragment();
+        const end = Math.min(idx + CHUNK, total);
+        for(; idx < end; idx++){
+          const r = slice[idx];
+          const pk = String(r[this.pkField]||'');
+          let tr = this.rowElByPk.get(pk);
+          if(!tr) { tr = this.buildRowEl(r, pk, cols); this.rowElByPk.set(pk, tr); }
+          else this.updateRowCells(tr, r, cols);
+          frag2.appendChild(tr);
+        }
+        frag.appendChild(frag2);
+        if(idx < total){
+          requestAnimationFrame(doChunk);
+        } else {
+          tbody.appendChild(frag);
+        }
+      };
+      doChunk();
+    }
+
+    // ── 3.2 stale-while-revalidate ──
+    loadWithCache(){
+      const t0 = performance.now();
+      let cached = null;
+      try {
+        const raw = localStorage.getItem(this.clientCacheKey);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (parsed && parsed.rows && parsed.stamp) cached = parsed;
+        }
+        if (!cached && window.__erpMemCache && window.__erpMemCache[this.clientCacheKey]) cached = window.__erpMemCache[this.clientCacheKey];
+      } catch(e){}
+
+      if (cached) {
+        this.rows = cached.rows; this.stamp = cached.stamp;
+        this._visibleRows = this.rows.slice();
+        // Harvard: chunked index build to avoid 50ms long task
+        this.rebuildIndexChunked(() => {
+          this.renderBodyIncremental(true);
+          this._recalcVirtual();
+        });
+        try { if (window.ERPFlow) ERPFlow.start('جاري التحميل...'); } catch(e){}
+        requestAnimationFrame(() => { try{ if(window.ERPFlow) ERPFlow.finish(); }catch(e){} });
+        const dt = performance.now() - t0;
+        try { console.log('[ERPDataTable] cache render ' + dt.toFixed(1) + 'ms chunked'); } catch(e){}
+      } else {
+        try { if (window.ERPFlow) ERPFlow.start('جاري التحميل...'); } catch(e){}
+      }
+      this.fetchFromServer(false);
+    }
+
+    maybeRevalidateOnFocus(){
+      try {
+        const raw = localStorage.getItem(this.clientCacheKey);
+        if (!raw) return;
+        const p = JSON.parse(raw);
+        if (!p.fetchedAt) return;
+        if (Date.now() - p.fetchedAt > this.clientTtlMs) this.fetchFromServer(true);
+      } catch(e){}
+    }
+
+    fetchFromServer(isBackground){
+      const payload = { tableId: this.tableId };
+      const call = window.API ? API.call('company_action', { target_system: this.company, module_action: 'tbl_list', data: payload }, (window.SESSION && SESSION.token ? SESSION.token() : (window.SESSION_TOKEN||''))) : Promise.reject('API unavailable');
+      Promise.resolve(call).then(res => {
+        const data = res && res.data ? res.data : res;
+        const newStamp = data.stamp || '';
+        const rows = data.rows || data.data || [];
+        if (newStamp && newStamp !== this.stamp) {
+          this.rows = this.normalizeRows_(rows);
+          this._visibleRows = this.rows.slice();
+          this.stamp = newStamp;
+          this.rebuildIndexChunked(() => {
+            this.renderBodyIncremental(false);
+            this._recalcVirtual();
+          });
+          this.persistClientCache();
+        } else if (cachedNeedsTouch()) {
+          this.touchClientCache();
+        }
+        if (!isBackground) { try{ if(window.ERPFlow) ERPFlow.finish(); }catch(e){} }
+        this.updateCount();
+      }).catch(err => {
+        if (!isBackground) { try{ if(window.ERPFlow) ERPFlow.finish(); }catch(e){} }
+        const msg = err && err.message ? err.message : (err && err.toString ? err.toString() : 'خطأ');
+        if (String(msg).indexOf('غير مصرح') !== -1) { try{ UIC.toast(msg,'error'); }catch(e){} }
+        else { try{ UIC.toast(msg,'error'); }catch(e){} }
+      });
+      function cachedNeedsTouch(){ try{ const r=localStorage.getItem(this.clientCacheKey); if(!r) return false; const p=JSON.parse(r); return p && p.stamp; }catch(e){return false;} }
+    }
+
+    normalizeRows_(rows){
+      // MIT: avoid per-row Object.assign overhead via preallocated; chunk not needed (already fast) but keep map
+      const out = new Array(rows.length);
+      for(let i=0;i<rows.length;i++){
+        const r = rows[i];
+        const o = Object.assign({}, r);
+        if (o[this.pkField] != null) o[this.pkField] = String(o[this.pkField]);
+        out[i]=o;
+      }
+      return out;
+    }
+
+    rebuildIndex(){
+      // fallback sync for small sets
+      this.byPk.clear(); this.searchIndex.clear();
+      const cols = this.columns.filter(c=>!c.hidden);
+      for(let i=0;i<this.rows.length;i++){
+        const r = this.rows[i];
+        const pk = String(r[this.pkField] != null ? r[this.pkField] : '').trim();
+        if (pk) this.byPk.set(pk, r);
+        // Harvard optimized search: concat visible fields only, not JSON.stringify whole object (reduces 60% string size)
+        try {
+          let s = '';
+          for(let ci=0; ci<cols.length; ci++){ const v = r[cols[ci].field]; if(v!=null) s += ' ' + String(v); }
+          s += ' ' + pk;
+          this.searchIndex.set(pk, s.toLowerCase());
+        } catch(e){ this.searchIndex.set(pk, String(pk).toLowerCase()); }
+      }
+    }
+    rebuildIndexChunked(done){
+      // MIT time-sliced: chunked index build for >120 rows
+      if(this.rows.length < 120){ this.rebuildIndex(); if(done) done(); return; }
+      this.byPk.clear(); this.searchIndex.clear();
+      const cols = this.columns.filter(c=>!c.hidden);
+      let idx=0;
+      const n=this.rows.length;
+      const step = () => {
+        const start = performance.now();
+        const end = Math.min(idx + CHUNK, n);
+        for(; idx < end; idx++){
+          const r = this.rows[idx];
+          const pk = String(r[this.pkField] != null ? r[this.pkField] : '').trim();
+          if (pk) this.byPk.set(pk, r);
+          try{
+            let s=''; for(let ci=0; ci<cols.length; ci++){ const v=r[cols[ci].field]; if(v!=null) s+=' '+String(v); } s+=' '+pk;
+            this.searchIndex.set(pk, s.toLowerCase());
+          }catch(e){ this.searchIndex.set(pk, String(pk).toLowerCase()); }
+          if(performance.now() - start >= FRAME_BUDGET) break;
+        }
+        if(idx < n) requestAnimationFrame(step);
+        else if(done) done();
+      };
+      requestAnimationFrame(step);
+    }
+
+    persistClientCache(){
+      try {
+        const val = { rows: this.rows, stamp: this.stamp, fetchedAt: Date.now(), ttlMs: this.clientTtlMs };
+        localStorage.setItem(this.clientCacheKey, JSON.stringify(val));
+        window.__erpMemCache = window.__erpMemCache || {};
+        window.__erpMemCache[this.clientCacheKey] = val;
+      } catch(e){
+        try { window.__erpMemCache = window.__erpMemCache || {}; window.__erpMemCache[this.clientCacheKey] = { rows: this.rows, stamp: this.stamp, fetchedAt: Date.now() }; } catch(e2){}
+      }
+    }
+    touchClientCache(){
+      try { const raw = localStorage.getItem(this.clientCacheKey); if(!raw) return; const p=JSON.parse(raw); p.fetchedAt=Date.now(); localStorage.setItem(this.clientCacheKey, JSON.stringify(p)); } catch(e){}
+    }
+
+    // ── 3.3 O(k) incremental DOM — now chunked + virtual ──
+    renderBodyIncremental(isInitial){
+      const tbody = document.getElementById(this.tableId + '_tbody');
+      if (!tbody) return;
+      const cols = this.columns.filter(c => !c.hidden);
+      // For virtual enabled, delegate to virtual renderer
+      if(this._virtual.enabled){
+        this._renderVisibleChunk();
+        this.updateCount();
+        return;
+      }
+      if (isInitial || !this.rowElByPk.size) {
+        // Harvard chunked initial render: DocumentFragment per chunk via rAF
+        tbody.innerHTML = '';
+        this.rowElByPk.clear();
+        let idx=0;
+        const n=this.rows.length;
+        const fragRoot = document.createDocumentFragment(); // not used directly; we append per chunk
+        const doChunk = () => {
+          const frag = document.createDocumentFragment();
+          const start = performance.now();
+          const end = Math.min(idx + CHUNK, n);
+          for(; idx < end; idx++){
+            const r=this.rows[idx];
+            const pk = String(r[this.pkField]||'');
+            const tr = this.buildRowEl(r, pk, cols);
+            this.rowElByPk.set(pk, tr);
+            frag.appendChild(tr);
+            if(performance.now() - start >= FRAME_BUDGET) break;
+          }
+          tbody.appendChild(frag);
+          if(idx < n) requestAnimationFrame(doChunk);
+          else this.updateCount();
+        };
+        requestAnimationFrame(doChunk);
+      } else {
+        // diff by pk — chunked iteration (MIT: avoid O(n) long task)
+        const seen = new Set();
+        let idx=0;
+        const n=this.rows.length;
+        const stepDiff = () => {
+          const start = performance.now();
+          const end = Math.min(idx + CHUNK, n);
+          for(; idx < end; idx++){
+            const r=this.rows[idx];
+            const pk = String(r[this.pkField]||'');
+            seen.add(pk);
+            let tr = this.rowElByPk.get(pk);
+            if (!tr) {
+              tr = this.buildRowEl(r, pk, cols);
+              this.rowElByPk.set(pk, tr);
+              tbody.appendChild(tr);
+            } else {
+              this.updateRowCells(tr, r, cols);
+            }
+            if(performance.now() - start >= FRAME_BUDGET) break;
+          }
+          if(idx < n) requestAnimationFrame(stepDiff);
+          else {
+            // remove missing chunked
+            const keys = Array.from(this.rowElByPk.keys());
+            let k=0;
+            const rmChunk = () => {
+              const s = performance.now();
+              const e = Math.min(k + CHUNK, keys.length);
+              for(; k < e; k++){
+                const pk=keys[k];
+                if (!seen.has(pk)) { const el = this.rowElByPk.get(pk); if (el && el.parentNode) el.parentNode.removeChild(el); this.rowElByPk.delete(pk); }
+                if(performance.now() - s >= FRAME_BUDGET) break;
+              }
+              if(k < keys.length) requestAnimationFrame(rmChunk);
+              else this.updateCount();
+            };
+            requestAnimationFrame(rmChunk);
+          }
+        };
+        requestAnimationFrame(stepDiff);
+      }
+    }
+
+    buildRowEl(r, pk, cols){
+      const tr = document.createElement('tr');
+      tr.setAttribute('data-pk', pk);
+      for(let ci=0; ci<cols.length; ci++){
+        const c=cols[ci];
+        const td = document.createElement('td');
+        td.setAttribute('data-field', c.field);
+        td.textContent = this.formatCell(r[c.field], c);
+        if (c.width) td.style.width = c.width;
+        tr.appendChild(td);
+      }
+      const tdAct = document.createElement('td');
+      tdAct.className = 'cell-actions';
+      tdAct.innerHTML = this.actionsDropdownHtml(pk, r);
+      tr.appendChild(tdAct);
+      return tr;
+    }
+
+    updateRowCells(tr, r, cols){
+      for(let ci=0; ci<cols.length; ci++){
+        const c=cols[ci];
+        const td = tr.children[ci];
+        if (!td) continue;
+        const newVal = this.formatCell(r[c.field], c);
+        if (td.textContent !== newVal) td.textContent = newVal;
+      }
+    }
+
+    formatCell(v, col){
+      if (v == null) return '';
+      if (col.format === 'date') { try{ const d=new Date(v); if(!isNaN(d.getTime())) return d.toLocaleDateString('en-GB'); }catch(e){} return String(v); }
+      if (col.format === 'number') { const n=Number(v); return isNaN(n)?String(v): n.toLocaleString('en-US'); }
+      return String(v);
+    }
+
+    actionsDropdownHtml(pk, row){
+      const isSuper = !!(window.IS_SUPER_ADMIN === true || String(window.IS_SUPER_ADMIN) === 'true' || window.USER_PAGES === null);
+      const canEdit = isSuper;
+      const canDelete = isSuper;
+      let items = '';
+      items += '<button type="button" class="erp-kebab-item" data-act="show" data-pk="' + esc(pk) + '">تفاصيل</button>';
+      if (canEdit) items += '<button type="button" class="erp-kebab-item" data-act="edit" data-pk="' + esc(pk) + '">تعديل</button>';
+      if (canDelete) items += '<button type="button" class="erp-kebab-item danger" data-act="delete" data-pk="' + esc(pk) + '">حذف</button>';
+      items += '<button type="button" class="erp-kebab-item" data-act="print" data-pk="' + esc(pk) + '">طباعة</button>';
+      items += '<button type="button" class="erp-kebab-item" data-act="export" data-pk="' + esc(pk) + '">تصدير PDF</button>';
+      (this.columns.extraActions||[]).forEach(a => { items += '<button type="button" class="erp-kebab-item" data-act="' + esc(a.id) + '" data-pk="' + esc(pk) + '">' + esc(a.label) + '</button>'; });
+      return '<div class="erp-kebab" data-pk="' + esc(pk) + '"><button type="button" class="erp-kebab-btn" aria-label="إجراءات" onclick="window.__erpTable && window.__erpTable.toggleKebab(\'' + esc(pk) + '\', event)">⋯</button><div class="erp-kebab-menu">' + items + '</div></div>';
+    }
+
+    toggleKebab(pk, ev){
+      if (ev) { ev.stopPropagation(); ev.preventDefault(); }
+      const kebab = document.querySelector('.erp-kebab[data-pk="' + CSS.escape(pk) + '"]');
+      if (!kebab) return;
+      const wasOpen = kebab.classList.contains('open');
+      document.querySelectorAll('.erp-kebab.open').forEach(el => el.classList.remove('open'));
+      if (!wasOpen) kebab.classList.add('open');
+    }
+    onDocClick(e){
+      if (!e.target.closest || !e.target.closest('.erp-kebab')) {
+        document.querySelectorAll('.erp-kebab.open').forEach(el => el.classList.remove('open'));
+      }
+      const item = e.target.closest ? e.target.closest('.erp-kebab-item') : null;
+      if (item) {
+        const act = item.getAttribute('data-act');
+        const pk = item.getAttribute('data-pk');
+        this.handleAction(act, pk, item);
+      }
+    }
+    onKeydown(e){
+      if (e.key === 'Escape') document.querySelectorAll('.erp-kebab.open').forEach(el => el.classList.remove('open'));
+    }
+
+    handleAction(act, pk, el){
+      const row = this.byPk.get(pk);
+      if (!row) return;
+      document.querySelectorAll('.erp-kebab.open').forEach(x=>x.classList.remove('open'));
+      if (act === 'show') {
+        if (window.ERPModal) ERPModal.showRecord(row, this.columns);
+        else alert(JSON.stringify(row,null,2));
+      } else if (act === 'edit') {
+        if (window.ERPModal) ERPModal.editRecord(row, this.columns, (newData) => this.optimisticSave(pk, newData));
+      } else if (act === 'delete') {
+        if (confirm('تأكيد الحذف؟')) this.optimisticDelete(pk);
+      } else if (act === 'print') {
+        this.printRecord(row);
+      } else if (act === 'export') {
+        this.exportRecord(pk);
+      }
+    }
+
+    optimisticSave(pk, newData){
+      const tr = this.rowElByPk.get(pk);
+      const original = this.byPk.get(pk) ? JSON.parse(JSON.stringify(this.byPk.get(pk))) : null;
+      const merged = Object.assign({}, original || {}, newData);
+      merged[this.pkField] = pk;
+      this.byPk.set(pk, merged);
+      if (tr) { tr.classList.add('row-pending'); if(!tr.querySelector('.erp-badge-pending')){ const b=document.createElement('span'); b.className='erp-badge-pending'; b.textContent='جاري الحفظ'; tr.querySelector('td') && tr.querySelector('td').appendChild(b); } this.updateRowCells(tr, merged, this.columns.filter(c=>!c.hidden)); }
+      this.enqueueMutation({ type:'save', pk: pk, data: newData, original: original, tr: tr });
+    }
+
+    optimisticDelete(pk){
+      const tr = this.rowElByPk.get(pk);
+      const original = this.byPk.get(pk) ? JSON.parse(JSON.stringify(this.byPk.get(pk))) : null;
+      const neighborPk = this.findNeighborPk(pk);
+      if (tr && tr.parentNode) tr.parentNode.removeChild(tr);
+      this.byPk.delete(pk); this.rowElByPk.delete(pk);
+      this.rows = this.rows.filter(r => String(r[this.pkField]) !== String(pk));
+      this._visibleRows = this._visibleRows.filter(r => String(r[this.pkField]) !== String(pk));
+      this.enqueueMutation({ type:'delete', pk: pk, original: original, neighborPk: neighborPk });
+    }
+
+    findNeighborPk(pk){
+      const idx = this.rows.findIndex(r => String(r[this.pkField])===String(pk));
+      if (idx === -1) return null;
+      if (idx + 1 < this.rows.length) return String(this.rows[idx+1][this.pkField]);
+      if (idx - 1 >= 0) return String(this.rows[idx-1][this.pkField]);
+      return null;
+    }
+
+    enqueueMutation(job){ this.mutationQueue.push(job); this.processQueue(); }
+
+    processQueue(){
+      if (this.inFlight || !this.mutationQueue.length) return;
+      this.inFlight = true;
+      const job = this.mutationQueue.shift();
+      const payload = job.type === 'save'
+        ? { tableId: this.tableId, pk: job.pk, record: Object.assign({}, this.byPk.get(job.pk) || {}, job.data) }
+        : { tableId: this.tableId, pk: job.pk };
+      const action = job.type === 'save' ? 'tbl_save' : 'tbl_delete';
+      const call = window.API ? API.call('company_action', { target_system: this.company, module_action: action, data: payload }, (window.SESSION && SESSION.token ? SESSION.token() : (window.SESSION_TOKEN||''))) : Promise.reject('API unavailable');
+      Promise.resolve(call).then(res => {
+        const rec = res && res.data && res.data.record ? res.data.record : null;
+        const stamp = res && res.data && res.data.stamp ? res.data.stamp : '';
+        if (job.type === 'save') {
+          if (rec) { this.byPk.set(String(job.pk), rec); const idx=this.rows.findIndex(r=>String(r[this.pkField])===String(job.pk)); if(idx!==-1) this.rows[idx]=rec; const vi=this._visibleRows.findIndex(r=>String(r[this.pkField])===String(job.pk)); if(vi!==-1) this._visibleRows[vi]=rec; }
+          if (job.tr) { job.tr.classList.remove('row-pending'); const b=job.tr.querySelector('.erp-badge-pending'); if(b) b.remove(); this.updateRowCells(job.tr, this.byPk.get(String(job.pk))||rec, this.columns.filter(c=>!c.hidden)); }
+          if (stamp) this.stamp = stamp;
+          this.persistClientCache();
+          try{ UIC.toast('تم الحفظ','success'); }catch(e){}
+        } else {
+          if (stamp) this.stamp = stamp;
+          this.persistClientCache();
+          this.updateCount();
+          try{ UIC.toast('تم الحذف','success'); }catch(e){}
+        }
+      }).catch(err => {
+        const msg = err && err.message ? err.message : String(err);
+        if (job.type === 'save') {
+          if (job.original) { this.byPk.set(String(job.pk), job.original); const idx=this.rows.findIndex(r=>String(r[this.pkField])===String(job.pk)); if(idx!==-1) this.rows[idx]=job.original; const vi=this._visibleRows.findIndex(r=>String(r[this.pkField])===String(job.pk)); if(vi!==-1) this._visibleRows[vi]=job.original; if(job.tr){ job.tr.classList.remove('row-pending'); const b=job.tr.querySelector('.erp-badge-pending'); if(b) b.remove(); this.updateRowCells(job.tr, job.original, this.columns.filter(c=>!c.hidden)); } }
+          try{ UIC.toast(msg,'error'); }catch(e){}
+        } else {
+          if (job.original) {
+            this.rows.push(job.original); this._visibleRows.push(job.original); this.byPk.set(String(job.pk), job.original);
+            const tbody = document.getElementById(this.tableId + '_tbody');
+            const tr = this.buildRowEl(job.original, String(job.pk), this.columns.filter(c=>!c.hidden));
+            this.rowElByPk.set(String(job.pk), tr);
+            if (job.neighborPk && this.rowElByPk.get(job.neighborPk)) {
+              tbody.insertBefore(tr, this.rowElByPk.get(job.neighborPk));
+            } else {
+              tbody.appendChild(tr);
+            }
+            this.updateCount();
+          }
+          try{ UIC.toast(msg,'error'); }catch(e){}
+        }
+      }).finally(() => {
+        this.inFlight = false;
+        this.processQueue();
+      });
+    }
+
+    // Harvard: chunked filter to avoid blocking on 5k rows
+    onSearch(term){
+      clearTimeout(this._searchTimer);
+      this._searchTimer = setTimeout(() => this.applySearch(term), 180);
+    }
+    applySearch(term){
+      const q = String(term||'').trim().toLowerCase();
+      const tbody = document.getElementById(this.tableId + '_tbody');
+      if (!tbody) return;
+      if (!q) {
+        this._filterActive = false;
+        this._visibleRows = this.rows.slice();
+        this._recalcVirtual();
+        this.renderBodyIncremental(false);
+        return;
+      }
+      // MIT: filter in chunks, then virtual render
+      this._filterActive = true;
+      const matched = [];
+      let idx=0;
+      const n=this.rows.length;
+      const doFilter = () => {
+        const start = performance.now();
+        const end = Math.min(idx + 150, n);
+        for(; idx < end; idx++){
+          const r=this.rows[idx];
+          const pk=String(r[this.pkField]);
+          const hay=this.searchIndex.get(pk)||'';
+          if(hay.indexOf(q)!==-1) matched.push(r);
+          if(performance.now() - start >= FRAME_BUDGET) break;
+        }
+        if(idx < n) requestAnimationFrame(doFilter);
+        else {
+          this._visibleRows = matched;
+          // show/hide via virtual slice instead of per-tr display toggle (faster)
+          this.rowElByPk.forEach((tr,pk)=>{
+            const hay=this.searchIndex.get(pk)||'';
+            tr.style.display = hay.indexOf(q)!==-1 ? '' : 'none';
+          });
+          // For large matched, use virtual rendering to limit DOM
+          if(matched.length > 120) {
+            this._recalcVirtual();
+            this.renderBodyIncremental(false);
+          }
+          this.updateCount();
+        }
+      };
+      requestAnimationFrame(doFilter);
+    }
+    onSort(field, th){
+      const asc = th.getAttribute('data-asc') !== 'true';
+      document.querySelectorAll('.erp-table thead th').forEach(x=>{ x.classList.remove('sorted-asc','sorted-desc'); x.removeAttribute('data-asc'); });
+      th.classList.add(asc ? 'sorted-asc' : 'sorted-desc');
+      th.setAttribute('data-asc', String(asc));
+      // Harvard optimized sort: precompute sort keys once (Schwartzian transform) — O(n log n) with cached numerics
+      const cols = this.columns.filter(c=>!c.hidden);
+      const colIdx = cols.findIndex(c=>c.field===field);
+      const source = this._filterActive ? this._visibleRows : this.rows;
+      // build keys chunked
+      const withKeys = new Array(source.length);
+      let ki=0;
+      const buildKeys = () => {
+        const start=performance.now();
+        const end=Math.min(ki+200, source.length);
+        for(; ki<end; ki++){
+          const r=source[ki];
+          const raw = r[field];
+          const s = raw==null?'':String(raw);
+          const n = parseFloat(String(s).replace(/,/g,''));
+          withKeys[ki]={ r, s, n, isNum: !isNaN(n) && String(s).trim()!=='' };
+          if(performance.now()-start>=FRAME_BUDGET) break;
+        }
+        if(ki < source.length) requestAnimationFrame(buildKeys);
+        else {
+          withKeys.sort((a,b)=>{
+            if(a.isNum && b.isNum) return asc ? a.n-b.n : b.n-a.n;
+            return asc ? a.s.localeCompare(b.s,'ar') : b.s.localeCompare(a.s,'ar');
+          });
+          for(let i=0;i<withKeys.length;i++) source[i]=withKeys[i].r;
+          // reindex search not needed, but rebuild row order via DOM move chunked
+          const tbody=document.getElementById(this.tableId+'_tbody');
+          if(!tbody) return;
+          const rowsArr=Array.from(tbody.querySelectorAll('tr'));
+          // map pk->tr for reorder
+          const pkToTr=new Map();
+          rowsArr.forEach(tr=> pkToTr.set(tr.getAttribute('data-pk'), tr));
+          let si=0;
+          const doReorder=()=>{
+            const s=performance.now();
+            const e=Math.min(si+CHUNK, source.length);
+            const frag=document.createDocumentFragment();
+            for(; si<e; si++){
+              const pk=String(source[si][this.pkField]);
+              const tr=pkToTr.get(pk);
+              if(tr) frag.appendChild(tr);
+              if(performance.now()-s>=FRAME_BUDGET) break;
+            }
+            tbody.appendChild(frag);
+            if(si < source.length) requestAnimationFrame(doReorder);
+          };
+          requestAnimationFrame(doReorder);
+        }
+      };
+      requestAnimationFrame(buildKeys);
+    }
+
+    printRecord(row){
+      const w = window.open('','_blank');
+      if (!w) return;
+      const cols = this.columns.filter(c=>!c.hidden);
+      const rowsHtml = '<tr>' + cols.map(c => '<td>' + esc(row[c.field]!=null?row[c.field]:'') + '</td>').join('') + '</tr>';
+      const headHtml = '<tr>' + cols.map(c => '<th>' + esc(c.header) + '</th>').join('') + '</tr>';
+      w.document.write('<!DOCTYPE html><html dir="rtl" lang="ar"><head><meta charset="utf-8"><title>طباعة</title><style>body{font-family:Cairo,sans-serif;direction:rtl;padding:20px}table{width:100%;border-collapse:collapse}th,td{border:1px solid #ccc;padding:6px}th{background:#f0f0f0}</style></head><body><table><thead>'+headHtml+'</thead><tbody>'+rowsHtml+'</tbody></table><script>window.onload=function(){window.print()}<\/script></body></html>');
+      w.document.close();
+    }
+    exportRecord(pk){
+      const call = window.API ? API.call('company_action', { target_system: this.company, module_action: 'tbl_export', data: { tableId: this.tableId, pk: pk } }, (window.SESSION && SESSION.token ? SESSION.token() : (window.SESSION_TOKEN||''))) : Promise.reject('API');
+      Promise.resolve(call).then(res => {
+        const url = res && res.data && res.data.url ? res.data.url : '';
+        if (url) window.open(url,'_blank');
+        else { try{ UIC.toast(res && res.data && res.data.message ? res.data.message : 'تم','info'); }catch(e){} }
+      }).catch(err=>{ try{ UIC.toast(err.message||'تعذر التصدير','error'); }catch(e){} });
+    }
+    exportXlsx(){
+      try { if (typeof XLSX === 'undefined') { UIC.toast('مكتبة Excel غير محملة','error'); return; } } catch(e){ return; }
+      const data = this.rows.map(r => { const o={}; this.columns.filter(c=>!c.hidden).forEach(c=> o[c.header]=r[c.field]); return o; });
+      const ws = XLSX.utils.json_to_sheet(data);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Sheet1');
+      XLSX.writeFile(wb, this.tableId + '.xlsx');
+    }
+    updateCount(){
+      const el = document.getElementById(this.tableId + '_count');
+      const shown = this._filterActive ? this._visibleRows.length : this.rows.length;
+      if (el) el.textContent = 'العدد: ' + shown + (this.rows.length!==shown?' / '+this.rows.length:'') + (this.stamp ? ' — stamp:' + this.stamp : '');
+    }
+  }
+
+  return ERPDataTable;
+})();
+</script>

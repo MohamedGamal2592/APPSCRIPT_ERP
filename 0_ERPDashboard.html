@@ -1,0 +1,106 @@
+﻿<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="description" content="لوحة التحكم الرئيسية — اختيار النظام">
+  <title>لوحة التحكم الرئيسية</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+</head>
+<body>
+<div id="dash-shell" dir="rtl"></div>
+<script>
+  // Read sessionToken from URL (set by login redirect) and stash it.
+  var params = new URLSearchParams(window.location.search);
+  var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+  // scriptUrl is resolved at click-time via UIC.baseUrl() to avoid stale '/'' when headInjection hasn't run yet.
+
+  function loadDashboard() {
+    var content = document.getElementById('dash-content');
+    UI.showSpinner();
+    API.call('get_dashboard_data', {}, SESSION_TOKEN)
+      .then(function (r) {
+        var user = r.user;
+        var companies = r.companies || [];
+        renderDashboard(user, companies);
+      })
+      .catch(function (e) {
+        if (e.code === 'SESSION_EXPIRED') {
+          var baseLogin = (window.UIC && UIC.baseUrl) ? UIC.baseUrl() : (window.scriptUrl || '/');
+          var loginHref = baseLogin + '?action=login';
+          if (window.UIC && UIC.navTo) UIC.navTo(null, loginHref); else window.location.href = loginHref;
+          return;
+        }
+        content.innerHTML = '<div class="empty-state"><span>' + FMT.escape(e.message || 'تعذر تحميل البيانات') + '</span></div>';
+      })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function renderDashboard(user, companies) {
+    var content = document.getElementById('dash-content');
+
+    var nav = [];
+    var isManager = !!(user.isSuperAdmin || String(user.role || '').toLowerCase() === 'admin');
+    if (isManager) {
+      // Build href lazily at click via UIC.navTo; use current baseUrl/token at render as fallback
+      var baseForNav = (window.UIC && UIC.baseUrl) ? UIC.baseUrl() : (window.scriptUrl || '/');
+      var tokForNav = (window.UIC && UIC.token) ? UIC.token() : SESSION_TOKEN;
+      nav.push({ label: 'لوحة التحكم', active: true, href: '#' });
+      nav.push({ label: 'إدارة النظام', href: baseForNav + '?action=ERP_Management&sessionToken=' + encodeURIComponent(tokForNav) });
+    }
+
+    var shellContent = 'dash-inner';
+    UIC.appShell('dash-shell', {
+      nav: nav,
+      userName: user.name || user.email,
+      breadcrumb: 'الرئيسية / لوحة التحكم',
+      contentId: shellContent
+    });
+
+    var inner = document.getElementById(shellContent);
+    var welcome = '<h2 style="margin-bottom:8px;">مرحباً، ' + FMT.escape(user.name || user.email) + '</h2>' +
+      '<p style="color:var(--text-muted);font-size:14px;margin-bottom:24px;">اختر النظام الذي تريد العمل عليه.</p>';
+
+    var tiles = companies.map(function (c) {
+      return UIC.companyTile({
+        unique_id: c.unique_id,
+        name_ar: c.name_ar,
+        name_en: c.name_en,
+        logo_url: c.logo_url,
+        onOpen: c.is_ready ? 'openCompany(\'' + FMT.escape(c.main_page) + '\')' : 'showUnderConstruction()'
+      });
+    }).join('');
+
+    var empty = '<div class="empty-state"><span>لا توجد أنظمة متاحة حالياً. يرجى مراجعة الإدارة.</span></div>';
+
+    inner.innerHTML = welcome +
+      '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,220px),1fr));gap:clamp(12px,3vw,16px);">' +
+      (companies.length ? tiles : empty) +
+      '</div>';
+  }
+
+
+  function openCompany(pageUrl) {
+    if (!pageUrl) return;
+    UI.showSpinner('جاري فتح النظام...');
+    var base = (window.UIC && UIC.baseUrl) ? UIC.baseUrl() : (window.scriptUrl || '/');
+    var tok = (window.UIC && UIC.token) ? UIC.token() : SESSION_TOKEN;
+    var href = base + '?action=' + encodeURIComponent(pageUrl) + '&sessionToken=' + encodeURIComponent(tok);
+    // Use top-frame navigation so address bar reflects new action (ERPDashboard -> tl_dashboard etc.) and Code.js L2 gate fires
+    if (window.UIC && UIC.navTo) { UIC.navTo(null, href); return; }
+    try { if (window.top && window.top !== window) { window.top.location.href = href; return; } } catch(e){}
+    window.location.href = href;
+  }
+
+  function showUnderConstruction() {
+    UIC.toast('هذا النظام قيد الإنشاء حاليًا', 'warning');
+  }
+
+  loadDashboard();
+</script>
+</body>
+</html>
+
+

@@ -1,0 +1,173 @@
+﻿<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Valley Foods — الأصول والماكينات</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_ValleyFoods_Nav'); ?>
+  <?!= getCompanyThemeCSS_('9940659bd83035d7') ?>
+</head>
+<body>
+  <div id="vf-root"></div>
+
+  <script>
+    var params = new URLSearchParams(window.location.search);
+    var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+    var scriptUrl = window.scriptUrl || '/';
+    var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+    var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('9940659bd83035d7') ?>';
+    var COMPANY_PAGES = <?!= companyPages ?>;
+    var CURRENT_ACTION = '<?!= currentAction ?>';
+    var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+    var CAN_WRITE = IS_SUPER_ADMIN || !!(USER_PAGES && USER_PAGES[CURRENT_ACTION] && USER_PAGES[CURRENT_ACTION].indexOf('write') !== -1);
+
+    function companyCall(moduleAction, data) {
+      return API.call('company_action', {
+        target_system: '9940659bd83035d7',
+        module_action: moduleAction,
+        data: data || {}
+      }, SESSION_TOKEN);
+    }
+    function esc(v) {
+      var s = (v === undefined || v === null) ? '' : String(v);
+      if (typeof FMT !== 'undefined' && FMT.escape) return FMT.escape(s);
+      return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+    function num0(v) { var n = Number(v); return isNaN(n) ? 0 : n; }
+  </script>
+
+  <script>
+  (function () {
+    var RECORDS = [], PRODUCT_OPTIONS = [];
+
+    function renderApp() {
+      UIC.appShell('vf-root', {
+        companyLogoUrl: COMPANY_LOGO_URL,
+        companyLogoHref: scriptUrl + '?action=vf_dashboard&sessionToken=' + SESSION_TOKEN,
+        companyLogoTitle: 'Valley Foods',
+        breadcrumb: 'Valley Foods / الانتاج / الأصول والماكينات',
+        contentId: 'vf-tech-content',
+        menuGroups: (window.VALLEYFOODS_MENU || [])
+      });
+      document.getElementById('vf-tech-content').innerHTML =
+        '<div class="vf-card"><div class="vf-card-header"><h3>الأصول والماكينات (Asset Technical)</h3>' +
+          (CAN_WRITE ? '<button class="btn btn-primary" onclick="TECH_PAGE.openAdd()">+ إضافة أصل</button>' : '') +
+        '</div><div class="vf-card-body">' +
+          '<div id="tech-table"><p class="vf-text-muted">جاري التحميل...</p></div>' +
+        '</div></div>';
+      load();
+    }
+
+    function load() {
+      UI.showSpinner();
+      companyCall('get_valley_asset_technicals')
+        .then(function (r) { RECORDS = r.records || []; PRODUCT_OPTIONS = r.product_options || []; renderTable(); })
+        .catch(function (e) { UIC.toast((e && e.message) || 'خطأ', 'error'); })
+        .finally(function () { UI.hideSpinner(); });
+    }
+
+    function prodLabel(idRef) {
+      var f = PRODUCT_OPTIONS.filter(function (o) { return String(o.value) === String(idRef); })[0];
+      return f ? f.label : (idRef || '-');
+    }
+
+    function renderTable() {
+      var c = document.getElementById('tech-table');
+      if (!c) return;
+      var rows = RECORDS.map(function (r) {
+        var actions = IS_SUPER_ADMIN ? UIC.actionBtns([{ label: 'تعديل', onclick: 'TECH_PAGE.openEdit(\'' + esc(r.unique_id) + '\')' }]) : '';
+        return [esc(r.asset_name), prodLabel(r.product_id), num0(r.purchase_value), esc(r.depreciation_method || '-'), num0(r.useful_life_years), num0(r.capacity_kg_per_hour), num0(r.kw_consumption), esc(r.status || '-'), actions];
+      });
+      c.innerHTML = UIC.dataTable('tech-tbl', {
+        headers: ['اسم الأصل', 'المنتج المرتبط', 'قيمة الشراء', 'طريقة الإهلاك', 'العمر (سنوات)', 'السعة (كغ/ساعة)', 'استهلاك الطاقة (كيلوواط)', 'الحالة', ''],
+        rows: rows, emptyText: 'لا توجد أصول مسجلة'
+      });
+      UIC.initTableSort('tech-tbl');
+    }
+
+    function openAdd() { openModal(null); }
+    function openEdit(uid) {
+      var row = null;
+      RECORDS.forEach(function (r) { if (String(r.unique_id) === uid) row = r; });
+      openModal(row);
+    }
+
+    function openModal(row) {
+      var isEdit = !!row;
+      var body = '<form id="tech-form">' +
+        '<input type="hidden" id="f-uid" value="' + esc(row ? row.unique_id : '') + '">' +
+        '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;">' +
+          UIC.field({ key: 'f-name', label: 'اسم الأصل / الماكينة', type: 'text', required: true, value: row ? (row.asset_name || '') : '' }) +
+          UIC.combo({ key: 'f-product', label: 'المنتج المرتبط', options: PRODUCT_OPTIONS, value: row ? String(row.product_id || '') : '', placeholder: 'اكتب للبحث…' }) +
+          UIC.field({ key: 'f-purchase-val', label: 'قيمة الشراء', type: 'number', min: '0', step: '0.01', value: row ? num0(row.purchase_value) : 0 }) +
+          UIC.field({ key: 'f-depr-method', label: 'طريقة الإهلاك', type: 'text', value: row ? (row.depreciation_method || '') : '' }) +
+          UIC.field({ key: 'f-salvage', label: 'القيمة المتبقية', type: 'number', min: '0', step: '0.01', value: row ? num0(row.salvage_value) : 0 }) +
+          UIC.field({ key: 'f-life-years', label: 'العمر الإفتراضي (سنوات)', type: 'number', min: '0', step: '1', value: row ? num0(row.useful_life_years) : 0 }) +
+          UIC.field({ key: 'f-annual-hrs', label: 'ساعات التشغيل السنوية', type: 'number', min: '0', step: '1', value: row ? num0(row.annual_operating_hours) : 0 }) +
+          UIC.field({ key: 'f-total-hrs', label: 'ساعات التشغيل الإجمالية', type: 'number', min: '0', step: '1', value: row ? num0(row.total_life_hours) : 0 }) +
+          UIC.field({ key: 'f-total-kg', label: 'الإنتاج الإجمالي (كغ)', type: 'number', min: '0', step: '1', value: row ? num0(row.total_life_kg) : 0 }) +
+          UIC.field({ key: 'f-depr-hr', label: 'الإهلاك / ساعة', type: 'number', min: '0', step: '0.01', value: row ? num0(row.depreciation_per_hour) : 0 }) +
+          UIC.field({ key: 'f-kw', label: 'استهلاك الطاقة (كيلوواط)', type: 'number', min: '0', step: '0.01', value: row ? num0(row.kw_consumption) : 0 }) +
+          UIC.field({ key: 'f-water', label: 'استهلاك المياه', type: 'number', min: '0', step: '0.01', value: row ? num0(row.water_consumption) : 0 }) +
+          UIC.field({ key: 'f-test', label: 'طريقة الاختبار', type: 'text', value: row ? (row.testing_method || '') : '' }) +
+          UIC.field({ key: 'f-batch-std', label: 'حجم التشغيلة القياسي', type: 'number', min: '0', step: '0.01', value: row ? num0(row.batch_size_standard) : 0 }) +
+          UIC.field({ key: 'f-cap-kg', label: 'السعة (كغ/ساعة)', type: 'number', min: '0', step: '0.01', value: row ? num0(row.capacity_kg_per_hour) : 0 }) +
+          UIC.field({ key: 'f-yield', label: 'نسبة العائد (%)', type: 'number', min: '0', step: '0.01', value: row ? num0(row.yield_percentage) : 0 }) +
+          UIC.field({ key: 'f-status', label: 'الحالة', type: 'text', value: row ? (row.status || '') : '' }) +
+        '</div>' +
+        UIC.field({ key: 'f-notes', label: 'ملاحظات', type: 'textarea', value: row ? (row.notes || '') : '' }) +
+      '</form>';
+      UIC.openModal('tech-modal', { title: isEdit ? 'تعديل الأصل' : 'إضافة أصل جديد', body: body });
+      var m = document.getElementById('tech-modal');
+      if (m) { var b = m.querySelector('.modal'); if (b) b.style.maxWidth = '900px'; }
+      var foot = document.createElement('div');
+      foot.style.cssText = 'display:flex;justify-content:flex-end;gap:10px;padding:14px 20px;border-top:1px solid #e5e7eb;';
+      foot.innerHTML = '<button class="btn btn-outline" onclick="UIC.closeModal(\'tech-modal\')">إلغاء</button>' +
+        '<button class="btn btn-primary" onclick="UI.submitOnce(this, TECH_PAGE.save)">💾 حفظ</button>';
+      m.querySelector('.modal').appendChild(foot);
+    }
+
+    function getV(id) { var el = document.getElementById(id); return el ? el.value.trim() : ''; }
+    function getCombo(id) { var el = document.getElementById(id); return el ? el.value : ''; }
+
+    function save() {
+      if (!UIC.validateForm('tech-form')) return;
+      var payload = {
+        unique_id: getV('f-uid'),
+        asset_name: getV('f-name'),
+        product_id: getCombo('f-product'),
+        purchase_value: getV('f-purchase-val'),
+        depreciation_method: getV('f-depr-method'),
+        salvage_value: getV('f-salvage'),
+        useful_life_years: getV('f-life-years'),
+        annual_operating_hours: getV('f-annual-hrs'),
+        total_life_hours: getV('f-total-hrs'),
+        total_life_kg: getV('f-total-kg'),
+        depreciation_per_hour: getV('f-depr-hr'),
+        kw_consumption: getV('f-kw'),
+        water_consumption: getV('f-water'),
+        testing_method: getV('f-test'),
+        batch_size_standard: getV('f-batch-std'),
+        capacity_kg_per_hour: getV('f-cap-kg'),
+        yield_percentage: getV('f-yield'),
+        status: getV('f-status'),
+        notes: getV('f-notes')
+      };
+      UI.showSpinner();
+      companyCall('save_valley_asset_technical', payload)
+        .then(function (r) { UIC.closeModal('tech-modal'); UIC.toast((r && r.message) || 'تم الحفظ', 'success'); load(); })
+        .catch(function (e) { UIC.toast((e && e.message) || 'فشل', 'error'); })
+        .finally(function () { UI.hideSpinner(); });
+    }
+
+    window.TECH_PAGE = { openAdd: openAdd, openEdit: openEdit, save: save };
+    document.addEventListener('DOMContentLoaded', renderApp);
+  })();
+  </script>
+</body>
+</html>
+
+

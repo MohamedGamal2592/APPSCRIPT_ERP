@@ -1,0 +1,165 @@
+﻿<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Valley Foods — أصول خطوط الإنتاج</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_ValleyFoods_Nav'); ?>
+  <?!= getCompanyThemeCSS_('9940659bd83035d7') ?>
+</head>
+<body>
+  <div id="vf-root"></div>
+
+  <script>
+    var params = new URLSearchParams(window.location.search);
+    var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+    var scriptUrl = window.scriptUrl || '/';
+    var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+    var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('9940659bd83035d7') ?>';
+    var COMPANY_PAGES = <?!= companyPages ?>;
+    var CURRENT_ACTION = '<?!= currentAction ?>';
+    var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+    var CAN_WRITE = UIC.canAdd_(); var CAN_FULL = UIC.canFull_();
+
+    function companyCall(moduleAction, data) {
+      return API.call('company_action', {
+        target_system: '9940659bd83035d7',
+        module_action: moduleAction,
+        data: data || {}
+      }, SESSION_TOKEN);
+    }
+    function esc(v) {
+      var s = (v === undefined || v === null) ? '' : String(v);
+      if (typeof FMT !== 'undefined' && FMT.escape) return FMT.escape(s);
+      return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+    function num0(v) { var n = Number(v); return isNaN(n) ? 0 : n; }
+  </script>
+
+  <script>
+  (function () {
+    var RECORDS = [], WC_OPTIONS = [], ASSET_OPTIONS = [];
+
+    function renderApp() {
+      UIC.appShell('vf-root', {
+        companyLogoUrl: COMPANY_LOGO_URL,
+        companyLogoHref: scriptUrl + '?action=vf_dashboard&sessionToken=' + SESSION_TOKEN,
+        companyLogoTitle: 'Valley Foods',
+        breadcrumb: 'Valley Foods / الانتاج / أصول خطوط الإنتاج',
+        contentId: 'vf-wca-content',
+        menuGroups: (window.VALLEYFOODS_MENU || [])
+      });
+      document.getElementById('vf-wca-content').innerHTML =
+        '<div class="vf-card"><div class="vf-card-header"><h3>أصول خطوط الإنتاج (Work Center Assets)</h3>' +
+          (CAN_WRITE ? '<button class="btn btn-primary" onclick="WCA_PAGE.openAdd()">+ إضافة أصل</button>' : '') +
+        '</div><div class="vf-card-body">' +
+          '<div id="wca-table"><p class="vf-text-muted">جاري التحميل...</p></div>' +
+        '</div></div>';
+      load();
+    }
+
+    function load() {
+      UI.showSpinner();
+      Promise.all([
+        companyCall('get_valley_work_center_assets'),
+        companyCall('get_valley_asset_technicals')
+      ])
+        .then(function (res) {
+          RECORDS = res[0].records || [];
+          WC_OPTIONS = res[0].work_center_options || [];
+          ASSET_OPTIONS = (res[1].records || []).map(function (r) { return { value: r.unique_id, label: r.asset_name || ('#' + r.id) }; });
+          renderTable(); try{schedulePrefetch();}catch(e){};
+        })
+        .catch(function (e) { UIC.toast((e && e.message) || 'خطأ', 'error'); })
+        .finally(function () { UI.hideSpinner(); });
+    }
+
+    function wcLabel(idRef) {
+      var f = WC_OPTIONS.filter(function (o) { return String(o.value) === String(idRef); })[0];
+      return f ? f.label : (idRef || '-');
+    }
+    function assetLabel(idRef) {
+      var f = ASSET_OPTIONS.filter(function (o) { return String(o.value) === String(idRef); })[0];
+      return f ? f.label : (idRef || '-');
+    }
+
+    function renderTable() {
+      var c = document.getElementById('wca-table');
+      if (!c) return;
+      var rows = RECORDS.map(function (r) {
+        var active = !(r.is_active === false || String(r.is_active).toLowerCase() === 'false');
+        var actions = IS_SUPER_ADMIN ? UIC.actionBtns([{ label: 'تعديل', onclick: 'WCA_PAGE.openEdit(\'' + esc(r.unique_id) + '\')' }]) : '';
+        return [esc(r.code || r.id), wcLabel(r.valley_work_centers_id), assetLabel(r.valley_asset_technical), esc(r.description || '-'), num0(r.capacity_per_hour_kg), UIC.statusPill(active ? 'مفعل' : 'متوقف', active ? 'success' : 'neutral'), actions];
+      });
+      c.innerHTML = UIC.dataTable('wca-tbl', {
+        headers: ['الكود', 'خط الإنتاج', 'الأصل / الماكينة', 'الوصف', 'السعة (كغ/ساعة)', 'الحالة', ''],
+        rows: rows, emptyText: 'لا توجد أصول مسجلة'
+      });
+      UIC.initTableSort('wca-tbl');
+    }
+
+    function openAdd() { openModal(null); }
+    function openEdit(uid) {
+      var row = null;
+      RECORDS.forEach(function (r) { if (String(r.unique_id) === uid) row = r; });
+      openModal(row);
+    }
+
+    function openModal(row) {
+      var isEdit = !!row;
+      var body = '<form id="wca-form">' +
+        '<input type="hidden" id="f-uid" value="' + esc(row ? row.unique_id : '') + '">' +
+        '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;">' +
+          UIC.combo({ key: 'f-wc', label: 'خط الإنتاج', required: true, options: WC_OPTIONS, value: row ? String(row.valley_work_centers_id || '') : '', placeholder: 'اكتب للبحث…' }) +
+          UIC.combo({ key: 'f-asset', label: 'الأصل / الماكينة', required: true, options: ASSET_OPTIONS, value: row ? String(row.valley_asset_technical || '') : '', placeholder: 'اكتب للبحث…' }) +
+          UIC.field({ key: 'f-code', label: 'الكود / السيريال', type: 'text', value: row ? (row.code || '') : '' }) +
+          UIC.field({ key: 'f-capacity', label: 'السعة (كغ/ساعة)', type: 'number', min: '0', step: '0.01', value: row ? num0(row.capacity_per_hour_kg) : 0 }) +
+        '</div>' +
+        UIC.field({ key: 'f-desc', label: 'دور الماكينة في خط الإنتاج', type: 'textarea', value: row ? (row.description || '') : '' }) +
+        UIC.field({ key: 'f-notes', label: 'ملاحظات', type: 'textarea', value: row ? (row.notes || '') : '' }) +
+        '<label style="display:flex;align-items:center;gap:8px;margin-top:12px;">' +
+          '<input type="checkbox" id="f-active"' + (!row || !(row.is_active === false || String(row.is_active).toLowerCase() === 'false') ? ' checked' : '') + '> مفعل</label>' +
+      '</form>';
+      UIC.openModal('wca-modal', { title: isEdit ? 'تعديل الأصل' : 'إضافة أصل جديد', body: body });
+      var m = document.getElementById('wca-modal');
+      if (m) { var b = m.querySelector('.modal'); if (b) b.style.maxWidth = '700px'; }
+      var foot = document.createElement('div');
+      foot.style.cssText = 'display:flex;justify-content:flex-end;gap:10px;padding:14px 20px;border-top:1px solid #e5e7eb;';
+      foot.innerHTML = '<button class="btn btn-outline" onclick="UIC.closeModal(\'wca-modal\')">إلغاء</button>' +
+        '<button class="btn btn-primary" onclick="UI.submitOnce(this, WCA_PAGE.save)">💾 حفظ</button>';
+      m.querySelector('.modal').appendChild(foot);
+    }
+
+    function getCombo(id) { var el = document.getElementById(id); return el ? el.value : ''; }
+    function getV(id) { var el = document.getElementById(id); return el ? el.value.trim() : ''; }
+
+    function save() {
+      if (!UIC.validateForm('wca-form')) return;
+      var payload = {
+        unique_id: getV('f-uid'),
+        valley_work_centers_id: getCombo('f-wc'),
+        valley_asset_technical: getCombo('f-asset'),
+        code: getV('f-code'),
+        capacity_per_hour_kg: getV('f-capacity'),
+        description: getV('f-desc'),
+        notes: getV('f-notes'),
+        is_active: (document.getElementById('f-active') || {}).checked
+      };
+      UI.showSpinner();
+      companyCall('save_valley_work_center_asset', payload)
+        .then(function (r) { UIC.closeModal('wca-modal'); UIC.toast((r && r.message) || 'تم الحفظ', 'success'); load(); })
+        .catch(function (e) { UIC.toast((e && e.message) || 'فشل', 'error'); })
+        .finally(function () { UI.hideSpinner(); });
+    }
+
+    window.WCA_PAGE = { openAdd: openAdd, openEdit: openEdit, save: save };
+    document.addEventListener('DOMContentLoaded', renderApp);
+  })();
+  </script>
+</body>
+</html>
+
+

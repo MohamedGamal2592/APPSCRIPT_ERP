@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>عرض سعر</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= getCompanyThemeCSS_('8df5c89a117fe9a5') ?>
+  <style>
+    @media print {
+      .no-print { display: none !important; }
+      .invoice { border: 2px solid #111111; }
+    }
+    .invoice { max-width: 900px; margin: 0 auto; padding: 24px; background: var(--bg-surface); border: 2px solid var(--border-color); border-radius: 8px; }
+    .invoice-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; border-bottom: 2px solid #111111; padding-bottom: 16px; }
+    .invoice-title { font-size: 22px; font-weight: 700; color: #111111; }
+    .invoice-meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px 16px; margin-bottom: 20px; }
+    .meta-item { font-size: 13px; }
+    .meta-item strong { color: var(--text-muted); font-weight: 600; }
+    .inv-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 20px; }
+    .inv-table th, .inv-table td { border: 1px solid #111111; padding: 8px 10px; text-align: right; }
+    .inv-table th { background: #111111; color: #fbbf24; font-weight: 600; }
+    .inv-totals { margin-right: auto; width: 300px; font-size: 14px; }
+    .inv-totals .row { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #111111; }
+    .inv-totals .row.total { font-weight: 700; font-size: 16px; color: #111111; border-bottom: none; }
+  </style>
+</head>
+<body>
+<div id="invoice-root" dir="rtl"></div>
+<script>
+  var params = new URLSearchParams(window.location.search);
+  var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+  var offerCode = '<?!= purchaseCode ?>';
+  var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('8df5c89a117fe9a5') ?>';
+
+  function companyCall(moduleAction, data) {
+    return API.call('company_action', {
+      target_system: '8df5c89a117fe9a5',
+      module_action: moduleAction,
+      data: data || {}
+    }, SESSION_TOKEN);
+  }
+
+  function load() {
+    UI.showSpinner([
+      'جاري تحميل عرض السعر...',
+      'جاري استرجاع البنود والمواصفات...',
+      'لحظة، جاري إعداد المستند للطباعة...',
+      'جاري تجهيز البيانات، برجاء الانتظار...'
+    ]);
+    companyCall('get_sales_offer_print', { offer_code: offerCode })
+      .then(function (r) { renderInvoice(r.header, r.lines); })
+      .catch(function (e) {
+        document.getElementById('invoice-root').innerHTML =
+          '<div class="empty-state"><span>' + FMT.escape(e.message || 'خطأ') + '</span></div>';
+      })
+      .finally(function () { UI.hideSpinner(); try{schedulePrefetch();}catch(e){} });
+  }
+
+  function renderInvoice(h, lines) {
+    var root = document.getElementById('invoice-root');
+    var rows = (lines || []).map(function (l) {
+      return '<tr>' +
+        '<td>' + FMT.escape(l.product_name || '-') + '</td>' +
+        '<td><span class="num">' + FMT.number(l.product_qty) + '</span></td>' +
+        '<td><span class="num">' + FMT.number(l.product_price) + '</span></td>' +
+        '<td><span class="num">' + FMT.percent(l.product_tax) + '</span></td>' +
+        '<td><span class="num">' + FMT.number(l.product_discount) + '</span></td>' +
+        '<td><span class="num">' + FMT.number(l.product_total_value) + '</span></td>' +
+        '</tr>';
+    }).join('');
+
+    var html =
+      '<div class="no-print" style="max-width:900px;margin:12px auto;display:flex;justify-content:flex-end;gap:8px;">' +
+      '<button class="btn btn-primary" onclick="window.print()">طباعة</button>' +
+      '<button class="btn btn-outline" onclick="try{window.top.close()}catch(e){window.close()}">إغلاق</button>' +
+      '</div>' +
+      '<div class="invoice">' +
+      '<div class="invoice-head">' +
+      '<img src="' + (COMPANY_LOGO_URL || '') + '" style="height:42px;" alt="">' +
+      '<div class="invoice-title">عرض سعر</div>' +
+      '</div>' +
+      '<div class="invoice-meta">' +
+      metaItem('رقم العرض', h['رقم الفاتورة']) +
+      metaItem('تاريخ العرض', h['تاريخ الفاتورة'] ? String(h['تاريخ الفاتورة']).slice(0, 10) : '-') +
+      metaItem('العميل', h.customer_name) +
+      metaItem('رقم التسجيل الضريبي للعميل', h['رقم التسجيل الضريبي للعميل']) +
+      metaItem('رقم الموبيل', h['رقم الموبيل']) +
+      metaItem('العنوان', h['العنوان']) +
+      metaItem('نسبة الخصم', FMT.percent(h['نسبة الخصم'])) +
+      '</div>' +
+      '<table class="inv-table"><thead><tr>' +
+      '<th>المنتج</th><th>الكمية</th><th>السعر</th><th>الضريبة</th><th>الخصم</th><th>الإجمالي</th>' +
+      '</tr></thead><tbody>' + rows + '</tbody></table>' +
+      '<div class="inv-totals">' +
+      '<div class="row"><span>المبلغ الصافي</span><span class="num">' + FMT.number(h['المبلغ الصافي']) + '</span></div>' +
+      '<div class="row"><span>قيمة الخصم</span><span class="num">' + FMT.number(h['قيمة الخصم']) + '</span></div>' +
+      '<div class="row"><span>قيمة الضريبة</span><span class="num">' + FMT.number(h['قيمة الضريبة']) + '</span></div>' +
+      '<div class="row total"><span>الإجمالي</span><span class="num">' + FMT.number(h['إجمالي']) + '</span></div>' +
+      '</div>' +
+      '</div>';
+
+    root.innerHTML = html;
+  }
+
+  function metaItem(label, value) {
+    return '<div class="meta-item"><strong>' + label + ':</strong> ' + FMT.escape(value == null || value === '' ? '-' : value) + '</div>';
+  }
+
+  load();
+</script>
+</body>
+</html>

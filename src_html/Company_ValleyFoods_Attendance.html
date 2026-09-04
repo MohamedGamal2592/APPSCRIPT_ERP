@@ -1,0 +1,668 @@
+﻿<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Valley Foods — الحضور والانصراف</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_ValleyFoods_Nav'); ?>
+  <?!= getCompanyThemeCSS_('9940659bd83035d7') ?>
+</head>
+<body>
+  <div id="vf-root"></div>
+
+  <script>
+    var params = new URLSearchParams(window.location.search);
+    var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+    var scriptUrl = window.scriptUrl || '/';
+    var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+    var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('9940659bd83035d7') ?>';
+    var COMPANY_PAGES = <?!= companyPages ?>;
+    var CURRENT_ACTION = '<?!= currentAction ?>';
+    var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+    var CAN_WRITE = IS_SUPER_ADMIN || !!(USER_PAGES && USER_PAGES[CURRENT_ACTION] && USER_PAGES[CURRENT_ACTION].indexOf('write') !== -1);
+
+    function companyCall(moduleAction, data) {
+      return API.call('company_action', {
+        target_system: '9940659bd83035d7',
+        module_action: moduleAction,
+        data: data || {}
+      }, SESSION_TOKEN);
+    }
+
+    function esc(v) {
+      var s = (v === undefined || v === null) ? '' : String(v);
+      if (typeof FMT !== 'undefined' && FMT.escape) return FMT.escape(s);
+      return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+    function todayStr() { return new Date().toISOString().slice(0, 10); }
+  </script>
+
+  <style>
+    .vf-att-dashboard { display: grid; gap: 16px; }
+    .vf-analysis-box { border: 2px solid #e5e7eb; border-radius: 8px; padding: 14px; background: #f9fafb; }
+    .vf-analysis-box.confident { border-color: #10b981; background: #f0fdf4; }
+    .vf-analysis-box.ambiguous { border-color: #f59e0b; background: #fffbeb; }
+    .vf-analysis-title { font-weight: 900; font-size: 14px; margin-bottom: 6px; }
+    .vf-analysis-sub { font-size: 12px; color: #4b5563; margin-bottom: 8px; }
+    .vf-badge { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 10px; font-weight: bold; }
+    .vf-badge.ok { background: #dcfce7; color: #166534; }
+    .vf-badge.warn { background: #fef3c7; color: #92400e; }
+    .vf-sample-list { font-size: 11px; direction: ltr; text-align: left; background: #fff; border: 1px solid #e5e7eb; border-radius: 6px; padding: 8px; max-height: 90px; overflow-y: auto; margin-bottom: 10px; font-family: monospace; }
+    .vf-radio-row { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; font-size: 13px; font-weight: bold; }
+  </style>
+
+  <script>
+  (function () {
+    var SESSIONS = [];
+    var REPORT_DATA = null;
+    var csvText = null;
+    var analysisResult = null;
+
+    /* ================= SHELL ================= */
+    function renderApp() {
+      UIC.appShell('vf-root', {
+        companyLogoUrl: COMPANY_LOGO_URL,
+        companyLogoHref: scriptUrl + '?action=vf_dashboard&sessionToken=' + SESSION_TOKEN,
+        companyLogoTitle: 'Valley Foods',
+        breadcrumb: 'Valley Foods / الحضور والانصراف',
+        contentId: 'vf-att-content',
+        menuGroups: (window.VALLEYFOODS_MENU || [])
+      });
+      document.getElementById('vf-att-content').innerHTML = renderContent();
+      bindEvents();
+      loadSessions();
+    }
+
+    function card(title, bodyHtml, actionsHtml) {
+      return '<div class="vf-card vf-att-card">' +
+        '<div class="vf-card-header"><h3>' + title + '</h3>' + (actionsHtml || '') + '</div>' +
+        '<div class="vf-card-body">' + bodyHtml + '</div></div>';
+    }
+
+    function renderContent() {
+      /* All interactions first, the sessions list last */
+      return '<div class="vf-att-dashboard">' +
+        (CAN_WRITE ? renderUploadSection() : '') +
+        (CAN_WRITE ? renderManualSection() : '') +
+        renderForgetSection() +
+        renderReportSection() +
+        renderSessionsSection() +
+      '</div>';
+    }
+
+    /* ================= SESSIONS ================= */
+    function renderSessionsSection() {
+      return card('جلسات الحضور',
+        '<div id="vf-sessions-table"><p class="vf-text-muted">جاري التحميل...</p></div>',
+        CAN_WRITE ? '<button id="vf-new-session-btn" class="btn btn-primary">+ جلسة جديدة</button>' : '');
+    }
+
+    function statusPill(status) {
+      if (status === 'synced') return UIC.statusPill('تمت المزامنة', 'success');
+      if (status === 'pending') return UIC.statusPill('قيد الانتظار', 'neutral');
+      return UIC.statusPill(esc(status || '-'), 'neutral');
+    }
+
+    function renderSessionsTable() {
+      var container = document.getElementById('vf-sessions-table');
+      if (!container) return;
+      if (!SESSIONS.length) {
+        container.innerHTML = '<p class="vf-text-muted">لا توجد جلسات — أنشئ جلسة جديدة أو ارفع كشف بصمة لفتح جلسة تلقائياً.</p>';
+        return;
+      }
+      var headers = ['التاريخ', 'الحالة', 'المستخدم', { key: 'actions', label: 'إجراءات' }];
+      var rows = SESSIONS.map(function (s) {
+        return [
+          '<b>' + esc(s.session_date_display) + '</b>',
+          statusPill(s.session_status),
+          esc(s.user),
+          UIC.actionBtns([
+            { label: 'عرض البصمات', onclick: 'ATT_PAGE.openSessionDetail(\'' + esc(s.session_id) + '\', \'' + esc(s.session_date_display) + '\')' }
+          ])
+        ];
+      });
+      container.innerHTML = UIC.dataTable('vf-sessions-table-id', { headers: headers, rows: rows, pageSize: 100 });
+    }
+
+    function loadSessions() {
+      companyCall('get_attendance_sessions')
+        .then(function (resp) {
+          SESSIONS = (resp && resp.sessions) || [];
+          renderSessionsTable();
+          populateSessionSelect();
+        })
+        .catch(function () {});
+    }
+
+    function populateSessionSelect() {
+      var sel = document.getElementById('vf-manual-session-select');
+      if (!sel) return;
+      var html = '<option value="">اختر جلسة</option>';
+      SESSIONS.forEach(function (s) {
+        html += '<option value="' + esc(s.session_id) + '">' + esc(s.session_date_display) + ' - ' + esc(s.user) + '</option>';
+      });
+      sel.innerHTML = html;
+    }
+
+    /* ---- Session detail (modal popup) ---- */
+    function openSessionDetail(sessionId, dateDisplay) {
+      UIC.openModal('vf-session-modal', {
+        title: 'بصمات جلسة ' + (dateDisplay || ''),
+        body: '<div id="vf-session-detail" style="min-height:120px;text-align:center;color:#888;">جاري التحميل...</div>',
+        footer: false
+      });
+      companyCall('get_attendance_data', { session_id: sessionId })
+        .then(function (resp) {
+          var target = document.getElementById('vf-session-detail');
+          if (!target) return;
+          var rows = (resp && resp.rows) || [];
+          if (!rows.length) {
+            target.innerHTML = '<p class="vf-text-muted">لا توجد بصمات مسجلة في هذه الجلسة.</p>';
+            return;
+          }
+          var headers = ['الكود', 'الاسم', 'التاريخ والوقت'];
+          var tableRows = rows.map(function (r) {
+            return [esc(r.emp_id), esc(r.employee_name), esc(r.attendance_time_display)];
+          });
+          target.innerHTML = '<div style="text-align:right;margin-bottom:6px;">عدد السجلات: <b>' + rows.length + '</b></div>' +
+            UIC.dataTable('vf-session-detail-table', { headers: headers, rows: tableRows, emptyText: 'لا توجد سجلات' });
+        })
+        .catch(function () {
+          var target = document.getElementById('vf-session-detail');
+          if (target) target.innerHTML = '<p style="color:red;">حدث خطأ أثناء تحميل البيانات</p>';
+        });
+    }
+
+    /* ---- New session ---- */
+    function showNewSessionModal() {
+      UIC.openModal('vf-new-session-modal', {
+        title: 'جلسة جديدة',
+        body: '<form id="vf-session-form">' +
+          UIC.field({ key: 'vf-session-date', label: 'التاريخ', type: 'date', required: true, value: todayStr() }) +
+          '</form>',
+        onSave: 'ATT_PAGE.saveNewSession()'
+      });
+    }
+
+    function saveNewSession() {
+      if (!UIC.validateForm('vf-session-form')) return;
+      var date = document.getElementById('vf-session-date').value;
+      if (!date) { UIC.toast('التاريخ مطلوب', 'error'); return; }
+      UI.showSpinner();
+      companyCall('add_attendance_session', { session_date: date })
+        .then(function (resp) {
+          UIC.closeModal('vf-new-session-modal');
+          UIC.toast((resp && resp.message) || 'تم إنشاء الجلسة', 'success');
+          if (resp && resp.record) {
+            var RECENT_LIMIT = 10;
+            var idxS = SESSIONS.findIndex(function(x){ return String(x.session_id)===String(resp.record.session_id); });
+            if (idxS!==-1) SESSIONS[idxS]=resp.record; else SESSIONS.unshift(resp.record);
+            if (SESSIONS.length>RECENT_LIMIT) SESSIONS.pop();
+            renderSessionsTable(); populateSessionSelect();
+          } else { loadSessions(); }
+        })
+        .catch(function (e) {
+          UIC.toast((e && e.message) || 'فشل إنشاء الجلسة', 'error');
+        })
+        .finally(function () { UI.hideSpinner(); });
+    }
+
+    /* ================= UPLOAD WIZARD ================= */
+    function renderUploadSection() {
+      return card('رفع كشف البصمة',
+        '<div class="vf-form-group">' +
+          '<label>ملف CSV (تصدير جهاز البصمة)</label>' +
+          '<input type="file" id="vf-csv-input" accept=".csv" class="vf-input">' +
+        '</div>' +
+        '<button id="vf-analyze-btn" class="btn btn-primary" disabled>🔍 فحص صيغة التاريخ</button>' +
+        '<div id="vf-analysis-panel" style="display:none;margin-top:14px;"></div>' +
+        '<div id="vf-upload-result" style="display:none;margin-top:14px;"></div>');
+    }
+
+    function resetUploadFlow() {
+      csvText = null;
+      analysisResult = null;
+      var input = document.getElementById('vf-csv-input');
+      var analyzeBtn = document.getElementById('vf-analyze-btn');
+      var panel = document.getElementById('vf-analysis-panel');
+      var result = document.getElementById('vf-upload-result');
+      if (input) input.value = '';
+      if (analyzeBtn) { analyzeBtn.disabled = true; analyzeBtn.style.display = ''; }
+      if (panel) { panel.style.display = 'none'; panel.innerHTML = ''; }
+      if (result) { result.style.display = 'none'; result.innerHTML = ''; }
+    }
+
+    function handleFileSelect(e) {
+      var file = e.target.files[0];
+      var analyzeBtn = document.getElementById('vf-analyze-btn');
+      if (analyzeBtn) analyzeBtn.disabled = !file;
+      csvText = null;
+      analysisResult = null;
+      var panel = document.getElementById('vf-analysis-panel');
+      if (panel) { panel.style.display = 'none'; panel.innerHTML = ''; }
+      var result = document.getElementById('vf-upload-result');
+      if (result) { result.style.display = 'none'; result.innerHTML = ''; }
+      if (!file) return;
+      var reader = new FileReader();
+      reader.onload = function (ev) { csvText = ev.target.result; };
+      reader.readAsText(file);
+    }
+
+    function analyzeCsv() {
+      if (!csvText) { UIC.toast('اختر ملفاً أولاً', 'error'); return; }
+      var analyzeBtn = document.getElementById('vf-analyze-btn');
+      if (analyzeBtn) analyzeBtn.disabled = true;
+      UI.showSpinner();
+      companyCall('analyze_attendance_csv', { csv_content: csvText })
+        .then(function (res) {
+          analysisResult = res;
+          renderAnalysisPanel(res);
+        })
+        .catch(function (e) {
+          UIC.toast((e && e.message) || 'خطأ في الفحص', 'error');
+        })
+        .finally(function () {
+          UI.hideSpinner();
+          if (analyzeBtn) analyzeBtn.disabled = false;
+        });
+    }
+
+    function renderAnalysisPanel(res) {
+      var panel = document.getElementById('vf-analysis-panel');
+      if (!panel) return;
+      if (!res || !res.totalDates) {
+        panel.innerHTML = '<div class="vf-analysis-box ambiguous">' +
+          '<div class="vf-analysis-title">⚠️ لم يتم العثور على أي تواريخ صالحة</div>' +
+          '<div class="vf-analysis-sub">تأكد أن الملف بنفس شكل تصدير جهاز البصمة المعتاد.</div></div>';
+        panel.style.display = 'block';
+        return;
+      }
+
+      var boxClass = res.detectedFormat === 'ambiguous' ? 'ambiguous' : 'confident';
+      var badgeClass = res.detectedFormat === 'ambiguous' ? 'warn' : 'ok';
+      var badgeText = res.detectedFormat === 'ambiguous' ? 'يحتاج اختيارك' : 'تم الكشف تلقائياً';
+
+      var html = '<div class="vf-analysis-box ' + boxClass + '">';
+      html += '<div class="vf-analysis-title">نتيجة فحص ' + res.totalDates + ' تاريخ <span class="vf-badge ' + badgeClass + '">' + badgeText + '</span></div>';
+
+      if (res.detectedFormat !== 'ambiguous') {
+        html += '<div class="vf-analysis-sub">الصيغة المرجحة: <b>' + (res.detectedFormat === 'DMY' ? 'يوم/شهر/سنة' : 'شهر/يوم/سنة') + '</b> بناءً على ' + res.evidenceCount + ' تاريخ يثبت الصيغة بشكل قاطع (رقم أكبر من 12).</div>';
+      } else {
+        html += '<div class="vf-analysis-sub">كل الأرقام في هذا الملف ≤ 12، لذلك يستحيل التفريق تلقائياً بين اليوم والشهر. برجاء اختيار الصيغة الصحيحة بمراجعة العينة:</div>';
+      }
+
+      html += '<div class="vf-sample-list">' + (res.sampleDates || []).map(esc).join('<br>') + '</div>';
+      html += '<div class="vf-radio-row"><input type="radio" name="vf-fmt" id="vf-fmt-dmy" value="DMY"' + (res.detectedFormat !== 'MDY' ? ' checked' : '') + '> <label for="vf-fmt-dmy">يوم/شهر/سنة (DD/MM/YYYY) - الشائع في مصر</label></div>';
+      html += '<div class="vf-radio-row"><input type="radio" name="vf-fmt" id="vf-fmt-mdy" value="MDY"' + (res.detectedFormat === 'MDY' ? ' checked' : '') + '> <label for="vf-fmt-mdy">شهر/يوم/سنة (MM/DD/YYYY) - صيغة أمريكية</label></div>';
+
+      if (res.conflictCount > 0) {
+        html += '<div class="vf-analysis-sub" style="color:#dc2626;margin-top:8px;">⚠️ تنبيه: ' + res.conflictCount + ' تاريخ يحمل دليلاً متعارضاً (قد يكون الملف مخلوطاً من صيغتين). أي صف غير منطقي مع الصيغة المختارة سيُنقل لجدول المراجعة بدلاً من تسجيله خطأً.</div>';
+      }
+
+      html += '<div style="margin-top:12px;"><button class="btn btn-primary" onclick="ATT_PAGE.confirmUpload()">✅ تأكيد ورفع الملف</button> ' +
+              '<button class="btn btn-outline" onclick="ATT_PAGE.resetUpload()">↩️ اختيار ملف آخر</button></div>';
+      html += '</div>';
+      panel.innerHTML = html;
+      panel.style.display = 'block';
+    }
+
+    function sortDateKeys(keys, undatedKey) {
+      var normal = [], special = [];
+      keys.forEach(function (k) {
+        if (k === undatedKey || k.indexOf('(') !== -1) special.push(k);
+        else normal.push(k);
+      });
+      normal.sort(function (a, b) {
+        var pa = a.split('/'), pb = b.split('/');
+        return new Date(pa[2], pa[1] - 1, pa[0]) - new Date(pb[2], pb[1] - 1, pb[0]);
+      });
+      return normal.concat(special);
+    }
+
+    function renderUploadResult(res) {
+      var container = document.getElementById('vf-upload-result');
+      if (!container) return;
+
+      var totalSeen = (res.successCount || 0) + (res.skippedCount || 0) + (res.flaggedCount || 0);
+      var html = '<div class="vf-analysis-box confident">';
+      if (!totalSeen) {
+        html += '<div style="color:#dc2626;font-weight:900;">⚠️ لم يتم العثور على أي بصمات قابلة للقراءة في هذا الملف</div>';
+      } else {
+        html += '<div style="font-weight:900;font-size:15px;color:#166534;">نتيجة الرفع</div>';
+        html += '<div style="margin-top:8px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:10px;line-height:1.9;">';
+        html += '<div>📥 <b style="color:#16a34a;">' + res.successCount + '</b> بصمة اتسجلت لأول مرة</div>';
+        html += '<div>♻️ <b style="color:#2563eb;">' + res.skippedCount + '</b> بصمة مكررة (تم تجاهلها)</div>';
+        if (res.flaggedCount > 0) html += '<div>🚩 <b style="color:#f59e0b;">' + res.flaggedCount + '</b> صف محتاج مراجعة (جدول valley_attendance_needs_review)</div>';
+        if (res.newSessionsCount > 0) html += '<div>🗓️ <b style="color:#7c3aed;">' + res.newSessionsCount + '</b> يوم/جلسة جديدة اتفتحت</div>';
+        html += '</div>';
+
+        var stats = res.dateStats || {};
+        var keys = Object.keys(stats);
+        if (keys.length) {
+          var ordered = sortDateKeys(keys, res.undatedKey);
+          html += '<div style="margin-top:12px;font-weight:900;">📋 تفصيل كل تاريخ:</div>';
+          html += '<table class="table" style="margin-top:6px;"><thead><tr><th>التاريخ</th><th>✅ جديد</th><th>♻️ مكرر</th><th>🚩 مراجعة</th></tr></thead><tbody>';
+          ordered.forEach(function (dk) {
+            var st = stats[dk];
+            html += '<tr><td><b>' + esc(dk) + '</b></td>' +
+              '<td style="color:#16a34a;">' + (st.imported || '-') + '</td>' +
+              '<td style="color:#2563eb;">' + (st.duplicate || '-') + '</td>' +
+              '<td style="color:#f59e0b;">' + (st.flagged || '-') + '</td></tr>';
+          });
+          html += '</tbody></table>';
+        }
+      }
+      html += '<div style="margin-top:12px;"><button class="btn btn-outline" onclick="ATT_PAGE.resetUpload()">↩️ رفع ملف آخر</button></div>';
+      html += '</div>';
+
+      container.innerHTML = html;
+      container.style.display = 'block';
+      var panel = document.getElementById('vf-analysis-panel');
+      if (panel) { panel.style.display = 'none'; panel.innerHTML = ''; }
+      var analyzeBtn = document.getElementById('vf-analyze-btn');
+      if (analyzeBtn) analyzeBtn.style.display = 'none';
+      loadSessions();
+    }
+
+    function confirmUpload() {
+      var fmtEl = document.querySelector('input[name="vf-fmt"]:checked');
+      if (!fmtEl) { UIC.toast('اختر صيغة التاريخ أولاً', 'error'); return; }
+      if (!csvText) { UIC.toast('لا يوجد ملف محدد', 'error'); return; }
+      UI.showSpinner();
+      companyCall('upload_attendance_csv', { csv_content: csvText, format: fmtEl.value })
+        .then(function (res) {
+          renderUploadResult(res || {});
+          UIC.toast((res && res.message) || 'تم الرفع', (res && res.flaggedCount) ? 'warning' : 'success');
+        })
+        .catch(function (e) {
+          UIC.toast((e && e.message) || 'حدث خطأ أثناء الاستيراد', 'error');
+        })
+        .finally(function () { UI.hideSpinner(); });
+    }
+
+    /* ================= MANUAL ENTRY ================= */
+    function renderManualSection() {
+      return card('تسجيل حضور يدوي',
+        '<div class="vf-form-group">' +
+          '<label>الجلسة</label>' +
+          '<select id="vf-manual-session-select" class="vf-input"><option value="">اختر جلسة</option></select>' +
+        '</div>',
+        '<button id="vf-manual-add-btn" class="btn btn-primary">إضافة يدوية</button>');
+    }
+
+    function showManualEntryModal() {
+      var sessionSelect = document.getElementById('vf-manual-session-select');
+      var sessionId = sessionSelect ? sessionSelect.value : '';
+      if (!sessionId) { UIC.toast('اختر جلسة أولاً', 'error'); return; }
+
+      UIC.openModal('vf-manual-entry-modal', {
+        title: 'إضافة حضور يدوي',
+        body: '<form id="vf-manual-form">' +
+          '<input type="hidden" id="vf-manual-session-id" value="' + esc(sessionId) + '">' +
+          '<div id="vf-manual-emp-wrap">' + UIC.combo({ key: 'vf-manual-emp-id', label: 'الموظف', required: true, options: [], placeholder: 'جاري تحميل الموظفين...' }) + '</div>' +
+          UIC.field({ key: 'vf-manual-datetime', label: 'تاريخ ووقت الحضور', type: 'datetime-local', required: true }) +
+          '<div class="vf-form-row">' +
+            '<div class="vf-form-group">' + UIC.field({ key: 'vf-manual-time-in', label: 'وقت الدخول', type: 'time' }) + '</div>' +
+            '<div class="vf-form-group">' + UIC.field({ key: 'vf-manual-time-out', label: 'وقت الخروج', type: 'time' }) + '</div>' +
+          '</div>' +
+          '<div class="vf-form-row">' +
+            '<div class="vf-form-group">' + UIC.field({ key: 'vf-manual-excuse-in', label: 'عذر الدخول', type: 'text' }) + '</div>' +
+            '<div class="vf-form-group">' + UIC.field({ key: 'vf-manual-excuse-out', label: 'عذر الخروج', type: 'text' }) + '</div>' +
+          '</div>' +
+        '</form>',
+        onSave: 'ATT_PAGE.saveManualEntry()'
+      });
+
+      companyCall('get_attendance_data', {})
+        .then(function (resp) {
+          var opts = (resp && resp.employee_options) || [];
+          var wrap = document.getElementById('vf-manual-emp-wrap');
+          if (!wrap) return;
+          wrap.innerHTML = UIC.combo({
+            key: 'vf-manual-emp-id',
+            label: 'الموظف',
+            required: true,
+            options: opts,
+            placeholder: 'اختر موظفاً...'
+          });
+        })
+        .catch(function () { UIC.toast('تعذر تحميل قائمة الموظفين', 'error'); });
+    }
+
+    function saveManualEntry() {
+      if (!UIC.validateForm('vf-manual-form')) return;
+      var empHidden = document.getElementById('vf-manual-emp-id');
+      var data = {
+        session_id: document.getElementById('vf-manual-session-id').value,
+        emp_id: empHidden ? empHidden.value : '',
+        attendance_date_time: document.getElementById('vf-manual-datetime').value,
+        time_in: document.getElementById('vf-manual-time-in').value,
+        time_out: document.getElementById('vf-manual-time-out').value,
+        excuse_in: document.getElementById('vf-manual-excuse-in').value,
+        excuse_out: document.getElementById('vf-manual-excuse-out').value
+      };
+      if (!data.emp_id) { UIC.toast('الموظف مطلوب', 'error'); return; }
+      if (!data.attendance_date_time) { UIC.toast('تاريخ ووقت الحضور مطلوب', 'error'); return; }
+      UI.showSpinner();
+      companyCall('add_manual_attendance', data)
+        .then(function (resp) {
+          UIC.closeModal('vf-manual-entry-modal');
+          UIC.toast((resp && resp.message) || 'تمت الإضافة بنجاح', 'success');
+          if (resp && resp.record) {
+            try { if (typeof ROWS !== 'undefined' && Array.isArray(ROWS)) { var RECENT_LIMIT=10; var idxM=ROWS.findIndex(function(x){return String(x.unique_id)===String(resp.record.unique_id);}); if(idxM!==-1) ROWS[idxM]=resp.record; else ROWS.unshift(resp.record); if(ROWS.length>RECENT_LIMIT) ROWS.pop(); } } catch(e){}
+          }
+        })
+        .catch(function (e) {
+          UIC.toast((e && e.message) || 'فشل الحفظ', 'error');
+        })
+        .finally(function () { UI.hideSpinner(); });
+    }
+
+    /* ================= REPORT ================= */
+    function renderReportSection() {
+      return card('تقرير الغياب التفاعلي',
+        '<div class="vf-form-row">' +
+          '<div class="vf-form-group"><label>من تاريخ</label><input type="date" id="vf-report-start" class="vf-input" value="' + esc(todayStr()) + '"></div>' +
+          '<div class="vf-form-group"><label>إلى تاريخ</label><input type="date" id="vf-report-end" class="vf-input" value="' + esc(todayStr()) + '"></div>' +
+          '<div class="vf-form-group"><button id="vf-show-report-btn" class="btn btn-primary">عرض التقرير</button></div>' +
+        '</div>' +
+        '<div id="vf-report-table"></div>');
+    }
+
+    function loadReport() {
+      var start = document.getElementById('vf-report-start').value;
+      var end = document.getElementById('vf-report-end').value;
+      if (!start || !end) { UIC.toast('اختر التاريخ', 'error'); return; }
+      UI.showSpinner();
+      companyCall('get_attendance_report', { start_date: start, end_date: end })
+        .then(function (resp) {
+          REPORT_DATA = (resp && resp.report) || [];
+          renderReportTable();
+        })
+        .catch(function () { UIC.toast('حدث خطأ أثناء تحميل التقرير', 'error'); })
+        .finally(function () { UI.hideSpinner(); });
+    }
+
+    function renderReportTable() {
+      var container = document.getElementById('vf-report-table');
+      if (!container) return;
+      if (!REPORT_DATA.length) {
+        container.innerHTML = '<p class="vf-text-muted">لا توجد بيانات في هذه الفترة</p>';
+        return;
+      }
+      var headers = ['الكود', 'الاسم', 'الإجمالي', 'الحضور', 'الغياب', 'التأخير'];
+      var rows = REPORT_DATA.map(function (r) {
+        return [esc(r.emp_id), esc(r.name_ar), r.total, r.present, r.absent, r.late];
+      });
+      container.innerHTML = UIC.dataTable('vf-report-table-id', { headers: headers, rows: rows, pageSize: 100 });
+    }
+
+    /* ================= FORGET FORM (print) ================= */
+    function renderForgetSection() {
+      return card('نموذج نسيان البصمة',
+        'نموذج ثنائي اللغة (عربي/إنجليزي) لاعتماد إدخال حضور يدوي عند نسيان البصمة — يُفتح في نافذة مستقلة جاهزة للطباعة A4.',
+        '<button id="vf-print-forget-btn" class="btn btn-outline">🖨️ طباعة النموذج</button>');
+    }
+
+    function buildForgetFormHtml() {
+      var now = new Date();
+      var pad = function (n) { return n < 10 ? '0' + n : '' + n; };
+      var formattedDate = now.getFullYear() + '-' + pad(now.getMonth() + 1) + '-' + pad(now.getDate()) + ' ' + pad(now.getHours()) + ':' + pad(now.getMinutes());
+      var formId = 'ATT-' + now.getFullYear() + pad(now.getMonth() + 1) + pad(now.getDate()) + '-' + ('00' + Math.floor(Math.random() * 1000)).slice(-3);
+      var logoImg = COMPANY_LOGO_URL
+        ? '<img src="' + esc(COMPANY_LOGO_URL) + '" class="logo-img" onerror="this.style.display=\'none\'">'
+        : '';
+
+      var dayRow = function (withPlaceholders) {
+        return '<tr>' +
+          '<td><input type="text"' + (withPlaceholders ? ' placeholder="مثال: الأحد 2026/07/12"' : '') + '></td>' +
+          '<td><label><input type="checkbox"> دخول / In</label> <label><input type="checkbox"> خروج / Out</label></td>' +
+          '<td><input type="text"' + (withPlaceholders ? ' placeholder="08:00 ص"' : '') + '></td>' +
+          '<td><input type="text"' + (withPlaceholders ? ' placeholder="05:00 م"' : '') + '></td>' +
+          '<td><input type="text"></td>' +
+        '</tr>';
+      };
+      var dayRows = dayRow(true);
+      for (var i = 0; i < 4; i++) dayRows += dayRow(false);
+
+      return '<!DOCTYPE html><html lang="ar"><head><meta charset="UTF-8">' +
+      '<title>Valley Employee Attendance Forget Form</title>' +
+      '<style>' +
+      '*{margin:0;padding:0;box-sizing:border-box;font-family:"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif}' +
+      ':root{--green-main:#0f6227;--green-dark:#054719;--green-light:#defbe6;--green-border:#a7f0ba;--gray-bg:#f4f4f4;--gray-border:#e0e0e0;--gray-text:#525252;--highlight:#f1f8f3}' +
+      '@page{size:A4 portrait;margin:0}' +
+      'body{width:210mm;min-height:297mm;margin:20px auto;padding:10mm;background:#fff;color:#1a1a1a}' +
+      '.action-bar{background:#f8f9fa;padding:15px;border:1px solid var(--gray-border);border-radius:8px;margin-bottom:25px;display:flex;justify-content:space-between;align-items:center;box-shadow:0 2px 4px rgba(0,0,0,.05)}' +
+      '.print-btn{background:var(--green-main);color:#fff;border:none;padding:10px 24px;font-size:15px;font-weight:bold;border-radius:5px;cursor:pointer;display:flex;align-items:center;gap:8px}' +
+      '.print-btn:hover{background:var(--green-dark)}' +
+      '.page-container{border:2px solid var(--green-border);border-radius:6px;background:#fff;box-shadow:0 1px 6px rgba(0,0,0,.08)}' +
+      '.form-header{background:linear-gradient(135deg,var(--green-dark) 0%,var(--green-main) 100%);padding:15px 20px;border-radius:4px 4px 0 0;display:flex;align-items:center;justify-content:space-between;color:#fff}' +
+      '.logo-area{display:flex;align-items:center;gap:15px}' +
+      '.logo-img{width:64px;height:auto;max-height:58px;object-fit:contain;background:#fff;border-radius:6px;padding:4px}' +
+      '.title-block h1{font-size:18px;font-weight:600;margin:0}' +
+      '.form-badge{background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.3);padding:6px 14px;border-radius:20px;font-size:12px;font-weight:bold;text-align:center}' +
+      '.meta-row{background:var(--gray-bg);padding:8px 20px;display:flex;justify-content:space-between;border-bottom:1px solid var(--gray-border);font-size:11px;color:var(--gray-text);direction:rtl}' +
+      '.form-content{padding:20px}' +
+      '.section-title{font-size:13px;font-weight:bold;color:var(--green-dark);border-bottom:2px solid var(--green-border);padding-bottom:4px;margin:18px 0 12px;display:flex;justify-content:space-between}' +
+      '.section-title:first-child{margin-top:0}' +
+      '.grid-2col{display:grid;grid-template-columns:1fr 1fr;gap:12px 20px;direction:rtl}' +
+      '.field-group{display:flex;flex-direction:column}' +
+      '.field-label{font-size:11px;font-weight:bold;color:var(--gray-text);margin-bottom:4px;display:flex;justify-content:space-between}' +
+      '.field-value{border-bottom:1.5px dashed var(--gray-border);padding:6px;min-height:32px;font-size:13px;background:var(--highlight);border-radius:2px}' +
+      '.field-value.large{min-height:60px;border:1px solid var(--gray-border);background:#fff}' +
+      '.ot-table{width:100%;border-collapse:collapse;margin-top:8px;font-size:12px;direction:rtl}' +
+      '.ot-table th,.ot-table td{border:1px solid var(--green-border);padding:8px 5px;text-align:center}' +
+      '.ot-table th{background-color:var(--green-light);color:var(--green-dark);font-weight:bold;font-size:11px}' +
+      '.ot-table td input[type=text]{width:100%;border:none;background:transparent;text-align:center;font-size:12px;outline:none}' +
+      '.ot-table td label{font-size:11px;display:inline-flex;align-items:center;gap:4px;cursor:pointer;margin:0 4px}' +
+      '.approval-section{margin-top:20px;border:1px solid var(--gray-border);border-radius:6px;overflow:hidden}' +
+      '.approval-header{background:var(--green-light);padding:8px 15px;font-weight:bold;color:var(--green-dark);font-size:12px;border-bottom:1px solid var(--green-border);display:flex;justify-content:space-between;direction:rtl}' +
+      '.approval-grid{display:grid;grid-template-columns:1fr 1fr 1fr}' +
+      '.approval-card{padding:12px;border-right:1px solid var(--gray-border);display:flex;flex-direction:column;align-items:center;text-align:center}' +
+      '.approval-card:last-child{border-right:none}' +
+      '.approver-role{font-size:11px;font-weight:bold;color:var(--green-main);background:var(--green-light);padding:3px 10px;border-radius:10px;margin-bottom:15px}' +
+      '.sign-line{width:85%;border-bottom:1.5px solid var(--gray-text);margin:10px 0 5px;height:20px}' +
+      '.sign-label{font-size:10px;color:var(--gray-text)}' +
+      '.form-footer{padding:10px 20px;background:var(--gray-bg);border-top:1px solid var(--gray-border);font-size:10px;color:var(--gray-text);display:flex;justify-content:space-between;direction:rtl}' +
+      '@media print{.action-bar{display:none!important}body{margin:0;padding:10mm;width:100%;min-height:auto;-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}.page-container{box-shadow:none;border:1px solid #000}}' +
+      '</style></head><body>' +
+
+      '<div class="action-bar">' +
+        '<div style="font-size:14px;color:#555;">ℹ️ يمكنك ملء البيانات أو طباعة النموذج فارغاً مباشرة للتوقيع اليدوي.</div>' +
+        '<button class="print-btn" onclick="window.print()">🖨️ طباعة النموذج / Print Form</button>' +
+      '</div>' +
+
+      '<div class="page-container">' +
+        '<div class="form-header">' +
+          '<div class="logo-area">' + logoImg +
+            '<div class="title-block"><h1>نموذج طلب اعتماد حضور (نسيان بصمة)</h1></div>' +
+          '</div>' +
+          '<div class="form-badge">طلب إدخال يدوي <br> Manual Entry Request</div>' +
+        '</div>' +
+        '<div class="meta-row">' +
+          '<span>📅 تاريخ الإنشاء / Generated: ' + formattedDate + '</span>' +
+          '<span>📋 رقم النموذج / Form ID: ' + formId + '</span>' +
+        '</div>' +
+        '<div class="form-content">' +
+          '<div class="section-title"><span>① بيانات الموظف</span><span>① Employee Details</span></div>' +
+          '<div class="grid-2col">' +
+            '<div class="field-group"><label class="field-label"><span>اسم الموظف</span><span>Employee Name</span></label><div class="field-value"></div></div>' +
+            '<div class="field-group"><label class="field-label"><span>الرقم الوظيفي</span><span>Employee ID</span></label><div class="field-value"></div></div>' +
+            '<div class="field-group"><label class="field-label"><span>القسم</span><span>Department</span></label><div class="field-value"></div></div>' +
+            '<div class="field-group"><label class="field-label"><span>المسمى الوظيفي</span><span>Job Title</span></label><div class="field-value"></div></div>' +
+          '</div>' +
+          '<div class="section-title"><span>② تفاصيل الحضور المفقود (أيام متعددة)</span><span>② Missing Attendance Details (Multi-Day)</span></div>' +
+          '<table class="ot-table"><thead><tr>' +
+            '<th style="width:20%;">اليوم والتاريخ <br> Day & Date</th>' +
+            '<th style="width:22%;">نوع البصمة المنسية <br> Missed Check Type</th>' +
+            '<th style="width:19%;">وقت الحضور المفترض <br> Expected Check-in</th>' +
+            '<th style="width:19%;">وقت الانصراف المفترض <br> Expected Check-out</th>' +
+            '<th style="width:20%;">ملاحظات <br> Notes</th>' +
+          '</tr></thead><tbody>' + dayRows + '</tbody></table>' +
+          '<div class="section-title"><span>③ مبررات نسيان البصمة والإثبات</span><span>③ Justification & Proof of Presence</span></div>' +
+          '<div class="field-group" style="direction:rtl;margin-bottom:12px;"><label class="field-label"><span>السبب التفصيلي لنسيان تسجيل البصمة</span><span>Detailed Reason for Missing Fingerprint</span></label><div class="field-value large"></div></div>' +
+          '<div class="field-group" style="direction:rtl;"><label class="field-label"><span>الأدلة أو الشهود على تواجد الموظف (في حال وجوده)</span><span>Evidence or Witnesses (If applicable)</span></label><div class="field-value large"></div></div>' +
+          '<div class="approval-section">' +
+            '<div class="approval-header"><span>④ الاعتمادات (مطلوب توقيع يدوي لتعديل سجل الحضور)</span><span>④ Approvals (Manual Signature Required)</span></div>' +
+            '<div class="approval-grid">' +
+              '<div class="approval-card"><span class="approver-role">المدير المباشر <br> Direct Manager</span><div class="sign-line"></div><span class="sign-label">التوقيع / Signature</span><div class="sign-line"></div><span class="sign-label">الاسم / Printed Name</span><div style="margin-top:10px;font-size:11px;">التاريخ / Date: _________</div></div>' +
+              '<div class="approval-card"><span class="approver-role">موظف الموارد البشرية <br> HR Officer</span><div class="sign-line"></div><span class="sign-label">التوقيع / Signature</span><div class="sign-line"></div><span class="sign-label">الاسم / Printed Name</span><div style="margin-top:10px;font-size:11px;">التاريخ / Date: _________</div></div>' +
+              '<div class="approval-card"><span class="approver-role">مدير الإدارة (اختياري) <br> Dept. Head (Optional)</span><div class="sign-line"></div><span class="sign-label">التوقيع / Signature</span><div class="sign-line"></div><span class="sign-label">الاسم / Printed Name</span><div style="margin-top:10px;font-size:11px;">التاريخ / Date: _________</div></div>' +
+            '</div>' +
+          '</div>' +
+        '</div>' +
+        '<div class="form-footer">' +
+          '<span>شركة فالي فودز للحاصلات الزراعية - نموذج نسيان بصمة حضور - إصدار 2026</span>' +
+          '<span style="direction:ltr;">Uncontrolled document when printed</span>' +
+          '<span>نسخة إدارة الموارد البشرية</span>' +
+        '</div>' +
+      '</div></body></html>';
+    }
+
+    function printForgetForm() {
+      var win = window.open('', '_blank', 'width=800,height=600');
+      if (!win) { UIC.toast('يرجى السماح بالنوافذ المنبثقة', 'error'); return; }
+      win.document.open();
+      win.document.write(buildForgetFormHtml());
+      win.document.close();
+    }
+
+    /* ================= BINDINGS / INIT ================= */
+    function bindEvents() {
+      var newSessionBtn = document.getElementById('vf-new-session-btn');
+      if (newSessionBtn) newSessionBtn.addEventListener('click', showNewSessionModal);
+
+      var csvInput = document.getElementById('vf-csv-input');
+      if (csvInput) csvInput.addEventListener('change', handleFileSelect);
+
+      var analyzeBtn = document.getElementById('vf-analyze-btn');
+      if (analyzeBtn) analyzeBtn.addEventListener('click', analyzeCsv);
+
+      var manualAddBtn = document.getElementById('vf-manual-add-btn');
+      if (manualAddBtn) manualAddBtn.addEventListener('click', showManualEntryModal);
+
+      var printBtn = document.getElementById('vf-print-forget-btn');
+      if (printBtn) printBtn.addEventListener('click', printForgetForm);
+
+      var reportBtn = document.getElementById('vf-show-report-btn');
+      if (reportBtn) reportBtn.addEventListener('click', loadReport);
+    }
+
+    document.addEventListener('DOMContentLoaded', renderApp);
+
+    window.ATT_PAGE = {
+      openSessionDetail: openSessionDetail,
+      saveNewSession: saveNewSession,
+      confirmUpload: confirmUpload,
+      resetUpload: resetUploadFlow,
+      saveManualEntry: saveManualEntry
+    };
+  })();
+  </script>
+</body>
+</html>
+
+

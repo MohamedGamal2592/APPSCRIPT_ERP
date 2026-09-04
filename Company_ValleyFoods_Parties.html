@@ -1,0 +1,428 @@
+﻿<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Valley Foods — العملاء والموردون</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_ValleyFoods_Nav'); ?>
+  <?!= getCompanyThemeCSS_('9940659bd83035d7') ?>
+</head>
+<body>
+  <div id="vf-root"></div>
+
+  <script>
+    var params = new URLSearchParams(window.location.search);
+    var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+    var scriptUrl = window.scriptUrl || '/';
+    var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+    var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('9940659bd83035d7') ?>';
+    var COMPANY_PAGES = <?!= companyPages ?>;
+    var CURRENT_ACTION = '<?!= currentAction ?>';
+    var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+    var CAN_WRITE = UIC.canAdd_(); var CAN_FULL = UIC.canFull_();
+
+    function companyCall(moduleAction, data) {
+      return API.call('company_action', {
+        target_system: '9940659bd83035d7',
+        module_action: moduleAction,
+        data: data || {}
+      }, SESSION_TOKEN);
+    }
+    function esc(v) {
+      var s = (v === undefined || v === null) ? '' : String(v);
+      if (typeof FMT !== 'undefined' && FMT.escape) return FMT.escape(s);
+      return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+  </script>
+
+  <script>
+  (function () {
+    var ROWS = [], ENUMS = {}, NEXT_ID = 1;
+
+    function renderApp() {
+      UIC.appShell('vf-root', {
+        companyLogoUrl: COMPANY_LOGO_URL,
+        companyLogoHref: scriptUrl + '?action=vf_dashboard&sessionToken=' + SESSION_TOKEN,
+        companyLogoTitle: 'Valley Foods',
+        breadcrumb: 'Valley Foods / الادارة المالية / العملاء والموردون',
+        contentId: 'vf-parties-content',
+        menuGroups: (window.VALLEYFOODS_MENU || [])
+      });
+      document.getElementById('vf-parties-content').innerHTML =
+        '<div class="vf-card"><div class="vf-card-header"><h3>العملاء والموردون</h3>' +
+          (CAN_WRITE ? '<button class="btn btn-primary" onclick="PARTIES_PAGE.openAdd()">+ إضافة سجل</button>' : '') +
+        '</div><div class="vf-card-body">' +
+          '<div id="pt-table"><p class="vf-text-muted">جاري التحميل...</p></div>' +
+        '</div></div>';
+      load();
+    }
+
+    function load() {
+      UI.showSpinner();
+      companyCall('get_valley_parties')
+        .then(function (res) {
+          ROWS = (res && res.rows) || [];
+          ENUMS = (res && res.enums) || {};
+          NEXT_ID = (res && res.next_id) || 1;
+          renderTable(); try{schedulePrefetch();}catch(e){};
+        })
+        .catch(function (e) { UIC.toast((e && e.message) || 'خطأ في تحميل البيانات', 'error'); })
+        .finally(function () { UI.hideSpinner(); });
+    }
+
+    function renderTable() {
+      var container = document.getElementById('pt-table');
+      if (!container) return;
+      var rows = ROWS.map(function (r) {
+        var level = r['المستوى الاساسي'] || ((r.name || '') + (r.name_en ? ' - ' + r.name_en : ''));
+        return [
+          '<b>' + esc(r.id) + '</b>',
+          esc(r.name),
+          esc(r.customer_direction),
+          esc(r.type || '-'),
+          esc(r.telephone || '-'),
+          esc(r.country || '-'),
+          esc(level),
+          UIC.actionBtns([{ label: '📄 كشف حساب', onclick: 'PARTIES_PAGE.openStatement(\'' + esc(r.id) + '\')' }])
+        ];
+      });
+      container.innerHTML = UIC.dataTable('parties-table-id', {
+        headers: ['الكود', 'الاسم', 'الاتجاه', 'نوع التعامل', 'التليفون', 'الدولة', 'المستوى الأساسي', ''],
+        rows: rows, pageSize: 100
+      });
+    }
+
+    /* ---------- MODAL ---------- */
+    function openAdd() { openModal(null); }
+
+    function openEdit(id) {
+      var row = null;
+      ROWS.forEach(function (r) { if (String(r.id) === String(id)) row = r; });
+      if (!row) { UIC.toast('لم يتم العثور على السجل', 'error'); return; }
+      openModal(row);
+    }
+
+    function openModal(row) {
+      var isEdit = !!row;
+      /* Grayed-out non-editable id: preview of the auto-assigned code (add)
+         or the actual record id (edit). Server always decides the final id. */
+      var idValue = row ? row.id : NEXT_ID;
+      var body = '<form id="pt-form">' +
+        '<div class="form-field">' +
+          '<label class="form-label">الرقم (يُعتمد تلقائياً)</label>' +
+          '<input id="f-id-display" class="input" type="text" readonly value="' + esc(idValue) + '" style="background:#f3f4f6;color:#6b7280;cursor:not-allowed;">' +
+        '</div>' +
+        UIC.field({ key: 'f-name', label: 'الاسم', type: 'text', required: true, value: row ? row.name : '', noCorrect: true }) +
+        UIC.combo({ key: 'f-direction', label: 'الاتجاه', required: true, options: (ENUMS.customer_direction || []).map(function (v) { return { value: v, label: v }; }), value: row ? row.customer_direction : '', placeholder: 'اكتب للبحث…' }) +
+        UIC.combo({ key: 'f-type', label: 'نوع التعامل', required: true, options: (ENUMS.type || []).map(function (v) { return { value: v, label: v }; }), value: row ? String(row.type || '') : '', placeholder: 'اكتب للبحث…' }) +
+        UIC.field({ key: 'f-reg', label: 'رقم السجل التجاري', type: 'number', required: true, min: '0', value: row ? (row.registration_number != null ? row.registration_number : '') : '' }) +
+        UIC.field({ key: 'f-tax', label: 'الرقم الضريبي', type: 'number', required: true, min: '0', value: row ? (row.tax_id != null ? row.tax_id : '') : '' }) +
+        UIC.field({ key: 'f-name-en', label: 'الاسم الإنجليزي', type: 'text', required: true, value: row ? (row.name_en || '') : '' }) +
+        UIC.field({ key: 'f-country', label: 'الدولة', type: 'text', required: true, value: row ? (row.country || '') : '' }) +
+        UIC.field({ key: 'f-region', label: 'المنطقة', type: 'text', required: true, value: row ? (row.region || '') : '' }) +
+        UIC.field({ key: 'f-phone', label: 'التليفون', type: 'tel', required: true, value: row ? (row.telephone || '') : '' }) +
+        UIC.field({ key: 'f-address', label: 'العنوان', type: 'textarea', required: true, value: row ? (row.address || '') : '' }) +
+      '</form>';
+
+      UIC.openModal('party-modal', {
+        title: isEdit ? 'تعديل سجل' : 'إضافة عميل / مورد',
+        body: body,
+        onSave: 'PARTIES_PAGE.save(' + (isEdit ? esc(row.id) : 'null') + ')'
+      });
+    }
+
+    function save(editId) {
+      if (!UIC.validateForm('pt-form')) return;
+      var v = function (id) { var el = document.getElementById(id); return el ? el.value.trim() : ''; };
+      var payload = {
+        id: editId != null ? editId : '',
+        name: v('f-name'),
+        customer_direction: v('f-direction'),
+        type: v('f-type'),
+        registration_number: v('f-reg'),
+        tax_id: v('f-tax'),
+        name_en: v('f-name-en'),
+        country: v('f-country'),
+        region: v('f-region'),
+        telephone: v('f-phone'),
+        address: v('f-address')
+      };
+      UI.showSpinner();
+      companyCall('save_valley_party', payload)
+        .then(function (r) {
+          UIC.closeModal('party-modal');
+          UIC.toast((r && r.message) || 'تم الحفظ بنجاح', 'success');
+          load();
+        })
+        .catch(function (e) { UIC.toast((e && e.message) || 'فشل الحفظ', 'error'); })
+        .finally(function () { UI.hideSpinner(); });
+    }
+
+    /* ===================== PARTY STATEMENT (كشف حساب) =====================
+     * Financial semantics ported verbatim from the legacy Client Statement
+     * Engine: debit = sales/payments, credit = purchases/collections/returns,
+     * chronological running balance, opening-balance row on date filters, and
+     * editable stock valuation deducted from the net balance. */
+    var STMT = null;
+
+    function finFmt(n) {
+      n = Number(n) || 0;
+      var abs = Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      return n < 0 ? '(' + abs + ')' : abs;
+    }
+    function chip(label, value, extraStyle) {
+      return '<div style="background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:8px;min-width:120px;text-align:center;">' +
+        '<div style="font-size:11px;color:#6b7280;margin-bottom:4px;font-weight:600;">' + label + '</div>' +
+        '<div style="font-size:15px;font-weight:700;direction:ltr;' + (extraStyle || '') + '">' + value + '</div></div>';
+    }
+
+    function openStatement(pid) {
+      UI.showSpinner();
+      companyCall('get_valley_party_statement', { id: pid })
+        .then(function (res) {
+          STMT = res;
+          renderStatementModal();
+        })
+        .catch(function (e) { UIC.toast((e && e.message) || 'خطأ في تحميل الكشف', 'error'); })
+        .finally(function () { UI.hideSpinner(); });
+    }
+
+    function renderStatementModal() {
+      var p = STMT.party;
+      var body =
+        '<div style="background:#f0fdf4;border:1px solid #a7f0ba;border-left:4px solid #16a34a;border-radius:8px;padding:14px 18px;margin-bottom:14px;display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;">' +
+          '<div><h3 style="margin:0;color:#166534;font-size:18px;">' + esc(p.name) + '</h3>' +
+          '<div style="font-size:12px;color:#6b7280;margin-top:6px;">العنوان: <b>' + esc(p.address || '-') + '</b> · الرقم الضريبي: <b>' + esc(p.tax_id || '-') + '</b> · الهاتف: <b>' + esc(p.phone || '-') + '</b></div></div>' +
+          '<div style="text-align:left;color:#9ca3af;font-size:11px;">Valley Foods ERP<br>IFRS Compliant Ledger</div>' +
+        '</div>' +
+        '<div id="st-filter" style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:12px;background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;padding:12px;">' +
+          UIC.field({ key: 'st-from', label: 'من تاريخ', type: 'date' }) +
+          UIC.field({ key: 'st-to', label: 'إلى تاريخ', type: 'date' }) +
+          UIC.combo({ key: 'st-type', label: 'نوع الحركة', options: [
+            { value: 'all', label: 'عرض كل المعاملات' },
+            { value: 'sales', label: 'مبيعات صادرة' },
+            { value: 'returns', label: 'مرتجعات مبيعات' },
+            { value: 'purchases', label: 'مشتريات وتوريدات' },
+            { value: 'collections', label: 'مقبوضات نقدية' },
+            { value: 'payments', label: 'مدفوعات صادرة' }
+          ], value: 'all' }) +
+          '<button class="btn btn-primary" onclick="PARTIES_PAGE.applyFilter()">⚡ تنفيذ</button>' +
+          '<button class="btn btn-outline" onclick="PARTIES_PAGE.printStatement()">🖨️ طباعة / PDF</button>' +
+        '</div>' +
+        '<div id="st-kpis" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px;margin-bottom:10px;"></div>' +
+        '<div id="st-net" style="margin-bottom:14px;"></div>' +
+        '<div id="st-ledger"></div>' +
+        '<div id="st-stock"></div>' +
+        '<span id="st-range-badge" style="display:none;"></span>';
+
+      /* wide modal */
+      UIC.openModal('party-statement-modal', { title: '📄 كشف حساب مالي تفصيلي', body: body, footer: false });
+      var modal = document.getElementById('party-statement-modal');
+      if (modal) {
+        var box = modal.querySelector('.modal');
+        if (box) box.style.maxWidth = '1150px';
+      }
+      applyFilter();
+    }
+
+    function applyFilter() {
+      var fromV = document.getElementById('st-from').value;
+      var toV = document.getElementById('st-to').value;
+      var typeSel = document.getElementById('st-type').value;
+      var fromMs = fromV ? new Date(fromV + 'T00:00:00').getTime() : null;
+      var toMs = toV ? new Date(toV + 'T23:59:59').getTime() : null;
+
+      var kSales = 0, kReturns = 0, kCollections = 0, kPayments = 0, kPurchases = 0;
+      var opening = 0;
+      var visible = [];
+      var txs = STMT.transactions;
+
+      txs.forEach(function (t) {
+        var tMs = t.date_iso ? new Date(t.date_iso).getTime() : 0;
+        var sign = (t.type === 'collections' || t.type === 'purchases' || t.type === 'returns') ? 1 : -1;
+        if (fromMs !== null && tMs && tMs < fromMs) { opening += t.value * sign; return; }
+        if (toMs !== null && tMs && tMs > toMs) return;
+        if (typeSel !== 'all' && t.type !== typeSel) return;
+        visible.push(t);
+        if (t.type === 'sales') kSales += t.value;
+        else if (t.type === 'returns') kReturns += t.value;
+        else if (t.type === 'collections') kCollections += t.value;
+        else if (t.type === 'payments') kPayments += t.value;
+        else if (t.type === 'purchases') kPurchases += t.value;
+      });
+
+      document.getElementById('st-kpis').innerHTML =
+        chip('رصيد أول المدة', finFmt(opening), 'color:#0284c7;') +
+        chip('إجمالي المبيعات (مدين)', finFmt(kSales), 'color:#dc2626;') +
+        chip('المرتجعات (دائن)', finFmt(kReturns), 'color:#2563eb;') +
+        chip('التحصيلات (دائن)', finFmt(kCollections), 'color:#059669;') +
+        chip('المدفوعات له (مدين)', finFmt(kPayments), 'color:#b45309;') +
+        chip('المشتريات (دائن)', finFmt(kPurchases), 'color:#7c3aed;');
+
+      var running = opening;
+      var html = '<table class="table"><thead><tr>' +
+        '<th>التاريخ</th><th>رقم المستند</th><th>البيان</th>' +
+        '<th>مدين</th><th>دائن</th><th>الرصيد التراكمي</th></tr></thead><tbody>';
+
+      if (fromV) {
+        html += '<tr style="font-style:italic;background:#f1f5f9;"><td>' + esc(fromV) + '</td><td>-</td>' +
+          '<td style="color:#0284c7;">الرصيد الافتتاحي المنقول</td><td>-</td><td>-</td>' +
+          '<td class="num" data-num="' + opening + '">' + finFmt(opening) + '</td></tr>';
+      }
+
+      visible.forEach(function (t) {
+        var sign = (t.type === 'collections' || t.type === 'purchases' || t.type === 'returns') ? 1 : -1;
+        running += t.value * sign;
+        var debit = (t.type === 'sales' || t.type === 'payments') ? finFmt(t.value) : '-';
+        var credit = (t.type !== 'sales' && t.type !== 'payments') ? finFmt(t.value) : '-';
+        var subHtml = (t.sub_rows || []).map(function (s) {
+          var det = s.details ? '<div style="font-size:11px;color:#6b7280;background:#eef2ff;padding:2px 8px;border-radius:4px;display:inline-block;">📝 ' + esc(s.details) + '</div>' : '';
+          return '<tr style="background:#fafafa;"><td></td><td style="color:#9ca3af;">↳ ' + esc(s.doc_id) + '</td>' +
+            '<td style="text-align:right;"><b>' + esc(s.name) + '</b> ' + det +
+            ' <span style="font-size:11px;color:#6b7280;">الكمية: <b>' + finFmt(s.qty) + '</b> | السعر: <b>' + finFmt(s.price) + '</b></span></td>' +
+            '<td colspan="3"></td></tr>';
+        }).join('');
+        html += '<tr><td>' + esc(t.date_display) + '</td><td style="direction:ltr;">' + esc(t.doc_id) + '</td>' +
+          '<td style="text-align:right;font-weight:700;">' + esc(t.desc_ar) + '</td>' +
+          '<td class="num" style="' + (debit !== '-' ? 'color:#dc2626;' : '') + '" data-num="' + (debit !== '-' ? t.value : '') + '">' + debit + '</td>' +
+          '<td class="num" style="' + (credit !== '-' ? 'color:#059669;' : '') + '" data-num="' + (credit !== '-' ? t.value : '') + '">' + credit + '</td>' +
+          '<td class="num" style="font-weight:800;background:#f8fafc;" data-num="' + running + '">' + finFmt(running) + '</td></tr>' + subHtml;
+      });
+
+      if (!visible.length && !fromV) html += '<tr><td colspan="6" style="text-align:center;padding:30px;">لا توجد حركات مسجلة لهذا الحساب.</td></tr>';
+      html += '</tbody></table>';
+      document.getElementById('st-ledger').innerHTML = html;
+
+      var dirBadge = running > 0 ? 'لصالح الشركة (مدين) 🔺' : (running < 0 ? 'لصالح العميل (دائن) 🔻' : 'متوازن 🤝');
+      var dirColor = running > 0 ? '#16a34a' : (running < 0 ? '#dc2626' : '#6b7280');
+      document.getElementById('st-net').innerHTML =
+        '<div style="background:linear-gradient(135deg,#0e623b,#059669);border-radius:8px;padding:16px 22px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">' +
+          '<div><div style="color:#d1fae5;font-size:13px;font-weight:700;">صافي رصيد الحساب الموحد</div>' +
+          '<div style="background:#fff;border-radius:20px;padding:5px 14px;display:inline-block;margin-top:6px;font-weight:700;font-size:13px;color:' + dirColor + ';">' + dirBadge + '</div></div>' +
+          '<div style="font-size:26px;font-weight:800;color:#fff;direction:ltr;">' + finFmt(running) + '</div>' +
+        '</div>';
+
+      renderStockSection();
+    }
+
+    function stockTotal() {
+      var total = 0;
+      (STMT.stock_rows || []).forEach(function (_, i) {
+        var el = document.getElementById('stock-price-' + i);
+        var qty = STMT.stock_rows[i].qty;
+        total += qty * (el ? (parseFloat(el.value) || 0) : STMT.stock_rows[i].latest_price);
+      });
+      return total;
+    }
+
+    function renderStockSection() {
+      var container = document.getElementById('st-stock');
+      var rows = STMT.stock_rows || [];
+      if (!rows.length) { container.innerHTML = ''; return; }
+
+      var rowsHtml = rows.map(function (r, i) {
+        return '<tr><td style="text-align:right;">' + esc(r.name) + '</td>' +
+          '<td class="num" data-num="' + r.qty + '">' + finFmt(r.qty) + '</td>' +
+          '<td><input id="stock-price-' + i + '" class="input" type="number" step="0.01" min="0" value="' + Number(r.latest_price).toFixed(2) + '" oninput="PARTIES_PAGE.recalcStock()" style="max-width:140px;direction:ltr;"></td>' +
+          '<td class="num" id="stock-line-' + i + '" style="font-weight:700;color:#059669;" data-num="' + (r.qty * r.latest_price) + '">' + finFmt(r.qty * r.latest_price) + '</td></tr>';
+      }).join('');
+
+      container.innerHTML =
+        '<h3 style="color:#166534;margin:20px 0 8px;border-right:4px solid #16a34a;padding-right:10px;">📦 تقييم المخزون المتاح بالعنابر</h3>' +
+        '<p style="font-size:12px;color:#6b7280;margin:-4px 0 10px;">يمكن تعديل سعر التقييم لكل صنف — يُعاد احتساب الإجمالي وخصمه من الصافي تلقائياً.</p>' +
+        '<table class="table"><thead><tr><th>الصنف</th><th>الكمية الحالية</th><th>سعر التقييم ✏️</th><th>إجمالي القيمة</th></tr></thead><tbody>' +
+        rowsHtml + '</tbody></table>' +
+        '<div style="display:flex;justify-content:space-between;align-items:center;background:#f0fdf4;border-radius:8px;padding:12px 16px;margin-top:10px;flex-wrap:wrap;gap:8px;">' +
+          '<button class="btn btn-outline" onclick="PARTIES_PAGE.resetStockPrices()">🔄 إعادة تعيين الأسعار</button>' +
+          '<div><span style="font-weight:700;color:#166534;">إجمالي قيمة المخزون:</span> ' +
+          '<span id="stock-total" style="font-size:19px;font-weight:800;color:#059669;direction:ltr;">' + finFmt(stockTotal()) + '</span></div>' +
+        '</div>' +
+        '<div id="adjusted-box" style="margin-top:10px;"></div>';
+
+      updateAdjusted();
+    }
+
+    function recalcStock() {
+      var total = stockTotal();
+      var st = document.getElementById('stock-total');
+      if (st) st.textContent = finFmt(total);
+      (STMT.stock_rows || []).forEach(function (r, i) {
+        var el = document.getElementById('stock-price-' + i);
+        var line = document.getElementById('stock-line-' + i);
+        if (line && el) { var v = r.qty * (parseFloat(el.value) || 0); line.textContent = finFmt(v); line.setAttribute('data-num', v); }
+      });
+      updateAdjusted();
+    }
+
+    function resetStockPrices() {
+      (STMT.stock_rows || []).forEach(function (r, i) {
+        var el = document.getElementById('stock-price-' + i);
+        if (el) el.value = Number(r.latest_price).toFixed(2);
+      });
+      recalcStock();
+    }
+
+    function readChipNum(id) {
+      var el = document.getElementById(id);
+      if (!el) return 0;
+      /* net balance lives inside gradient div — read from its last child span */
+      var spans = el.querySelectorAll('div[style*="font-size:26px"]');
+      if (spans.length) return parseFloat((spans[spans.length - 1].textContent || '').replace(/,/g, '')) || 0;
+      return parseFloat(el.textContent.replace(/[(),]/g, '')) || 0;
+    }
+
+    function updateAdjusted() {
+      var net = readNetBalance();
+      var stock = stockTotal();
+      var adjusted = net - stock;
+      var badge = adjusted > 0 ? 'لصالح الشركة (مدين) 🔺' : (adjusted < 0 ? 'لصالح العميل (دائن) 🔻' : 'متوازن 🤝');
+      var color = adjusted > 0 ? '#dc2626' : (adjusted < 0 ? '#0e623b' : '#6b7280');
+      document.getElementById('adjusted-box').innerHTML =
+        '<div style="background:linear-gradient(135deg,#fffbeb,#fef3c7);border:2px solid #b45309;border-radius:8px;padding:14px 20px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">' +
+          '<div><div style="color:#92400e;font-size:13px;font-weight:700;">⚖️ الرصيد المستحق بعد خصم المخزون</div>' +
+          '<div style="background:#fff;border-radius:20px;padding:4px 12px;display:inline-block;margin-top:5px;font-weight:700;font-size:12px;color:' + color + ';">' + badge + '</div></div>' +
+          '<div style="font-size:23px;font-weight:800;color:#b45309;direction:ltr;">' + finFmt(adjusted) + '</div>' +
+        '</div>';
+    }
+
+    function readNetBalance() {
+      var netBox = document.getElementById('st-net');
+      if (!netBox) return 0;
+      var m = netBox.innerHTML.match(/font-size:26px[^>]*>([-\d,.]+)</);
+      if (!m) return 0;
+      var neg = false;
+      return parseFloat(m[1].replace(/,/g, '')) || 0;
+    }
+
+    function printStatement() {
+      var ledger = document.getElementById('st-ledger');
+      var p = STMT.party;
+      var win = window.open('', '_blank');
+      if (!win) { UIC.toast('يرجى السماح بالنوافذ المنبثقة', 'error'); return; }
+      win.document.open();
+      win.document.write(
+        '<!DOCTYPE html><html dir="rtl" lang="ar"><head><meta charset="UTF-8"><title>كشف حساب - ' + p.name + '</title>' +
+        '<style>body{font-family:Segoe UI,Tahoma,sans-serif;margin:20px;color:#1f2937;}h2{text-align:center;color:#094d2c;border-bottom:3px solid #0e623b;padding-bottom:10px;}meta{}</style></head><body>' +
+        '<h2>📊 كشف حساب مالي تفصيلي — ' + esc(p.name) + '</h2>' +
+        '<p style="text-align:center;color:#555;">الرقم الضريبي: ' + esc(p.tax_id || '-') + ' · العنوان: ' + esc(p.address || '-') + ' · الهاتف: ' + esc(p.phone || '-') + '</p>' +
+        (ledger ? ledger.outerHTML : '') +
+        document.getElementById('st-kpis').outerHTML +
+        document.getElementById('st-net').outerHTML +
+        '</body></html>'
+      );
+      win.document.close();
+      setTimeout(function () { win.focus(); win.print(); }, 500);
+    }
+
+    window.PARTIES_PAGE = { openAdd: openAdd, openEdit: openEdit, save: save, openStatement: openStatement, applyFilter: applyFilter, printStatement: printStatement, recalcStock: recalcStock, resetStockPrices: resetStockPrices };
+
+    document.addEventListener('DOMContentLoaded', renderApp);
+  })();
+  </script>
+</body>
+</html>
+
+

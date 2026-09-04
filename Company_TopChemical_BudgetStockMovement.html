@@ -1,0 +1,174 @@
+﻿<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>حركة الأصناف (دفتر الجرد)</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_TopChemical_Nav'); ?>
+  <?!= getCompanyThemeCSS_('3fe1b5cb67b7223e') ?>
+</head>
+<body>
+<div id="tc-root" dir="rtl"></div>
+<script>
+  var params = new URLSearchParams(window.location.search);
+  var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+  var scriptUrl = window.scriptUrl || '/';
+  var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+  var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('3fe1b5cb67b7223e') ?>';
+  var COMPANY_PAGES = <?!= companyPages ?>;
+  var CURRENT_ACTION = '<?!= currentAction ?>';
+  var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+  var CAN_WRITE = UIC.canAdd_(); var CAN_FULL = UIC.canFull_();
+  var MONTHS = ['', 'يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو', 'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر'];
+  var FILTER = { month: '', year: '', type: '', product: '', search: '', offset: 0, limit: 200 };
+  var LAST = { total: 0, items: [] };
+  var REFS = null;
+
+  function companyCall(moduleAction, data) {
+    return API.call('company_action', {
+      target_system: '3fe1b5cb67b7223e',
+      module_action: moduleAction,
+      data: data || {}
+    }, SESSION_TOKEN);
+  }
+
+  function load() {
+    UIC.appShell('tc-root', {
+      companyLogoUrl: COMPANY_LOGO_URL,
+      companyLogoHref: scriptUrl + '?action=tc_dashboard&sessionToken=' + SESSION_TOKEN,
+      companyLogoTitle: 'توب كيميكال',
+      breadcrumb: 'توب كيميكال / حسابات الميزانية / حركة الأصناف',
+      contentId: 'stock-movement-content',
+      menuGroups: (window.TOPCHEMICAL_MENU || [])
+    });
+    UI.showSpinner('جاري تحميل البيانات...');
+    companyCall('get_budget_refs')
+      .then(function (r) { REFS = r.refs || {}; fetchMovement(); })
+      .catch(function (e) { UI.hideSpinner(); try{schedulePrefetch();}catch(e){} showError(e); });
+  }
+
+  function fetchMovement() {
+    UI.showSpinner();
+    var year = new Date().getFullYear();
+    companyCall('get_legal_products_movement', {
+      month: FILTER.month ? Number(FILTER.month) : '',
+      year: FILTER.year ? Number(FILTER.year) : year,
+      type: FILTER.type,
+      product: FILTER.product,
+      search: FILTER.search,
+      offset: FILTER.offset,
+      limit: FILTER.limit
+    })
+      .then(function (r) {
+        LAST.total = r.total || 0;
+        LAST.items = r.items || [];
+        renderMovement(r.items || [], r.total || 0);
+      })
+      .catch(function (e) { showError(e); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function renderMovement(items, total) {
+    var typeOpts = ['اصول غير متداولة', 'رصيد افتتاحي', 'مشتريات', 'التصنيع الداخلي', 'مبيعات', 'تسوية'].map(function (t) {
+      return '<option value="' + t + '"' + (FILTER.type === t ? ' selected' : '') + '>' + t + '</option>';
+    }).join('');
+    var mOpts = MONTHS.map(function (m, i) {
+      if (!i) return '<option value="">كل الشهور</option>';
+      return '<option value="' + i + '"' + (String(FILTER.month) === String(i) ? ' selected' : '') + '>' + m + '</option>';
+    }).join('');
+    var yOpts = [2022, 2023, 2024, 2025, 2026].map(function (y) {
+      return '<option value="' + y + '"' + (String(FILTER.year) === String(y) ? ' selected' : '') + '>' + y + '</option>';
+    }).join('');
+    var productOpts = ((REFS && REFS.current_products) || []).map(function (c) {
+      var val = String(c.product || '').trim();
+      if (!val) return '';
+      return '<option value="' + FMT.escape(val) + '"' + (FILTER.product === val ? ' selected' : '') + '>' + FMT.escape(val) + '</option>';
+    }).join('');
+
+    var rows = items.map(function (r) {
+      var prod = String(r.product || '').trim();
+      return {
+        transaction_code: FMT.escape(r.transaction_code || '-'),
+        product: FMT.escape(r.product || '-'),
+        transaction_name: FMT.escape(r.transaction_name || '-'),
+        transaction_type: FMT.escape(r.transaction_type || '-'),
+        transaction_date: FMT.escape(r.transaction_date || '-'),
+        qty: Number(r.qty) || 0,
+        total_sales_value: Number(r.total_sales_value) || 0,
+        cost_per_qty: Number(r.cost_per_qty) || 0,
+        sales_per_qty: Number(r.sales_per_qty) || 0,
+        total_cost_sign: Number(r.total_cost_sign) || 0,
+        tax_type: FMT.escape(r.tax_type || '-'),
+        month: FMT.escape(MONTHS[Number(r.month)] || r.month || '-'),
+        year: FMT.escape(r.year || '-'),
+        actions: UIC.actionBtns([{ label: 'طباعة', onclick: 'printMovement(\'' + FMT.escape(prod) + '\')' }])
+      };
+    });
+    var headers = [
+      { key: 'transaction_code', label: 'كود المعاملة' },
+      { key: 'product', label: 'الصنف' },
+      { key: 'transaction_name', label: 'المعاملة' },
+      { key: 'transaction_type', label: 'النوع' },
+      { key: 'transaction_date', label: 'التاريخ' },
+      { key: 'qty', label: 'الكمية', numeric: true },
+      { key: 'total_sales_value', label: 'قيمة المبيعات', money: true },
+      { key: 'cost_per_qty', label: 'تكلفة/الوحدة', money: true },
+      { key: 'sales_per_qty', label: 'بيع/الوحدة', money: true },
+      { key: 'total_cost_sign', label: 'إجمالي التكلفة', money: true },
+      { key: 'tax_type', label: 'الضريبة' },
+      { key: 'month', label: 'الشهر' },
+      { key: 'year', label: 'السنة' },
+      { key: 'actions', label: 'إجراءات' }
+    ];
+    var page = Math.floor(FILTER.offset / FILTER.limit) + 1;
+    var pages = Math.max(1, Math.ceil(total / FILTER.limit));
+    document.getElementById('stock-movement-content').innerHTML =
+      '<div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:12px;">' +
+        '<select id="mv-month" class="input" style="width:auto;" onchange="setFilter(\'month\', this.value)">' + mOpts + '</select>' +
+        '<select id="mv-year" class="input" style="width:auto;" onchange="setFilter(\'year\', this.value)">' + yOpts + '</select>' +
+        '<select id="mv-type" class="input" style="width:auto;min-width:150px;" onchange="setFilter(\'type\', this.value)">' +
+          '<option value="">كل الأنواع</option>' + typeOpts + '</select>' +
+        '<select id="mv-product" class="input" style="width:auto;min-width:200px;" onchange="setFilter(\'product\', this.value)">' +
+          '<option value="">كل المنتجات</option>' + productOpts + '</select>' +
+        '<input id="mv-search" class="input" style="width:auto;min-width:200px;" type="search" placeholder="بحث عن صنف/كود..." onkeyup="setFilter(\'search\', this.value)">' +
+      '</div>' +
+      '<div id="movement-table-area"></div>' +
+      '<div style="display:flex;align-items:center;gap:10px;margin-top:10px;">' +
+        '<button class="btn btn-outline" ' + (FILTER.offset === 0 ? 'disabled' : '') + ' onclick="gotoPage(' + (page - 1) + ')">السابق</button>' +
+        '<span style="font-size:13px;color:#374151;">صفحة ' + page + ' من ' + pages + ' (' + FMT.number(total) + ' حركة)</span>' +
+        '<button class="btn btn-outline" ' + (page >= pages ? 'disabled' : '') + ' onclick="gotoPage(' + (page + 1) + ')">التالي</button>' +
+      '</div>';
+    document.getElementById('movement-table-area').innerHTML =
+      UIC.dataTable('stock-movement-table', { title: 'حركة الأصناف (دفتر الجرد)', headers: headers, rows: rows, emptyText: 'لا توجد حركة' });
+    UIC.initTableSort('stock-movement-table');
+  }
+
+  function printMovement(product) {
+    if (!product) return;
+    window.open(scriptUrl + '?download=budget_print&type=movement&id=' + encodeURIComponent(product) + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN), '_blank');
+  }
+
+  function setFilter(k, v) {
+    FILTER[k] = k === 'search' ? v.trim() : v;
+    FILTER.offset = 0;
+    fetchMovement();
+  }
+
+  function gotoPage(p) {
+    if (p < 1) return;
+    FILTER.offset = (p - 1) * FILTER.limit;
+    fetchMovement();
+  }
+
+  function showError(e) {
+    UIC.toast((e && e.message) || 'خطأ غير متوقع', 'error');
+  }
+
+  load();
+</script>
+</body>
+</html>
+

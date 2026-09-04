@@ -1,0 +1,204 @@
+﻿<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Top Light — العملاء والموردون</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= getCompanyThemeCSS_('8df5c89a117fe9a5') ?>
+  <style>
+    @page { size: A4; }
+    @media print {
+      .topbar, .breadcrumb, .no-print { display: none !important; }
+      .table-toolbar { display: none !important; }
+      #parties-table table th:last-child,
+      #parties-table table td:last-child { display: none !important; }
+      body { background: #ffffff !important; }
+    }
+  </style>
+</head>
+<body>
+<div id="tl-root" dir="rtl"></div>
+<script>
+  var params = new URLSearchParams(window.location.search);
+  var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+  var scriptUrl = window.scriptUrl || '/';
+  var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+  var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('8df5c89a117fe9a5') ?>';
+  var COMPANY_PAGES = <?!= companyPages ?>;
+  var CURRENT_ACTION = '<?!= currentAction ?>';
+  var DIRECTION_FILTER = '';
+
+  function companyCall(moduleAction, data) {
+    return API.call('company_action', {
+      target_system: '8df5c89a117fe9a5',
+      module_action: moduleAction,
+      data: data || {}
+    }, SESSION_TOKEN);
+  }
+
+  function load() {
+    var contentId = 'parties-content';
+    UIC.appShell('tl-root', {
+      companyLogoUrl: COMPANY_LOGO_URL,
+      companyLogoHref: scriptUrl + '?action=tl_dashboard&sessionToken=' + SESSION_TOKEN,
+      companyLogoTitle: 'القمة لايت',
+      breadcrumb: 'القمة لايت / العملاء والموردون',
+      contentId: contentId
+    });
+    fetchParties();
+  }
+
+  function fetchParties() {
+    UI.showSpinner();
+    companyCall('get_parties', { direction: DIRECTION_FILTER })
+      .then(function (r) {
+        window.__typeOptions = r.type_options || [];
+        window.__countryOptions = r.country_options || [];
+        window.__regionOptions = r.region_options || [];
+        renderParties(r.parties || []);
+      })
+      .catch(function (e) { showError(e); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function renderParties(list) {
+    window.__parties = list;
+    var rows = list.map(function (p) {
+      var dir = String(p.customer_direction).toLowerCase();
+      var isCustomer = dir === 'customer' || dir === 'عميل' || dir === 'client';
+      return {
+        name: p.name,
+        direction: UIC.statusPill(isCustomer ? 'عميل' : 'مورد', isCustomer ? 'success' : 'warning'),
+        type: p.type || '-',
+        country: p.country || '-',
+        region: p.region || '-',
+        tax_id: p.tax_id || '-',
+        telephone: p.telephone || '-',
+        address: p.address || '-',
+        balance: FMT.number(p.balance),
+        actions: UIC.actionBtns([
+          { label: 'كشف حساب', onclick: "openStatement('" + FMT.escape(p.id) + "')" }
+        ].concat(IS_SUPER_ADMIN ? [{ label: 'تعديل', onclick: "openPartyModal('" + FMT.escape(p.id) + "')" }] : []))
+      };
+    });
+    var headers = [
+      { key: 'name', label: 'الاسم' },
+      { key: 'direction', label: 'النوع' },
+      { key: 'type', label: 'الصنف' },
+      { key: 'country', label: 'الدولة' },
+      { key: 'region', label: 'المنطقة' },
+      { key: 'tax_id', label: 'الرقم الضريبي' },
+      { key: 'telephone', label: 'الهاتف' },
+      { key: 'address', label: 'العنوان' },
+      { key: 'balance', label: 'الرصيد', numeric: true },
+      { key: 'actions', label: 'إجراءات' }
+    ];
+    var body = document.getElementById('parties-content');
+    body.innerHTML =
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px;" class="no-print">' +
+      '<div style="display:flex;gap:8px;">' +
+      '<button class="btn ' + (DIRECTION_FILTER === '' ? 'btn-primary' : 'btn-outline') + '" onclick="setFilter(\'\')">الكل</button>' +
+      '<button class="btn ' + (DIRECTION_FILTER === 'customer' ? 'btn-primary' : 'btn-outline') + '" onclick="setFilter(\'customer\')">العملاء</button>' +
+      '<button class="btn ' + (DIRECTION_FILTER === 'vendor' ? 'btn-primary' : 'btn-outline') + '" onclick="setFilter(\'vendor\')">الموردون</button>' +
+      '</div>' +
+      '<div style="display:flex;gap:8px;">' +
+      '<button class="btn btn-outline" onclick="window.print()">طباعة</button>' +
+      '<button class="btn btn-outline" onclick="exportCustomers()">تصدير Excel</button>' +
+      '<button class="btn btn-primary" onclick="openPartyModal(\'\')">+ إضافة</button>' +
+      '</div>' +
+      '</div>' +
+      UIC.dataTable('parties-table', {
+        title: 'العملاء والموردون',
+        headers: headers,
+        rows: rows,
+        emptyText: 'لا توجد بيانات'
+      });
+    UIC.initTableSort('parties-table');
+  }
+
+  function setFilter(direction) {
+    DIRECTION_FILTER = direction;
+    fetchParties();
+  }
+
+  function openStatement(id) {
+    window.open(scriptUrl + '?action=tl_customer_statement&purchase_code=' + encodeURIComponent(id) + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN), '_blank');
+  }
+
+  function exportCustomers() {
+    var list = window.__parties || [];
+    var headers = ['الاسم', 'النوع', 'الهاتف', 'العنوان', 'الرصيد'];
+    var rows = list.map(function (p) {
+      var isCustomer = String(p.customer_direction).toLowerCase() === 'customer' || String(p.customer_direction).toLowerCase() === 'عميل' || String(p.customer_direction).toLowerCase() === 'client';
+      return {
+        'الاسم': p.name || '',
+        'النوع': isCustomer ? 'عميل' : 'مورد',
+        'الهاتف': p.telephone || '',
+        'العنوان': p.address || '',
+        'الرصيد': p.balance || 0
+      };
+    });
+    UI.showSpinner('جاري التصدير...');
+    companyCall('get_xlsx_export', { headers: headers, rows: rows, filename: 'العملاء.xlsx' })
+      .then(function (r) { API.downloadXlsx(r.base64, r.filename); })
+      .catch(function (e) { UIC.toast(e.message || 'خطأ', 'error'); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function openPartyModal(id) {
+    var p = (window.__parties || []).find(function (x) { return String(x.id) === String(id); });
+    var body =
+      '<form id="party-form">' +
+      UIC.field({ key: 'name', label: 'الاسم', value: p ? p.name : '', required: true }) +
+      UIC.field({ key: 'customer_direction', label: 'النوع', type: 'select', required: true,
+        options: [{ value: 'customer', label: 'عميل' }, { value: 'vendor', label: 'مورد' }],
+        value: p ? (p.customer_direction || 'customer') : 'customer' }) +
+      UIC.enumSelect({ key: 'type', label: 'الصنف', value: p ? p.type : '', options: window.__typeOptions || [], required: true }) +
+      UIC.enumSelect({ key: 'country', label: 'الدولة', value: p ? p.country : '', options: window.__countryOptions || [], required: true }) +
+      UIC.enumSelect({ key: 'region', label: 'المنطقة', value: p ? p.region : '', options: window.__regionOptions || [], required: true }) +
+      UIC.field({ key: 'telephone', label: 'الهاتف', value: p ? p.telephone : '', required: true }) +
+      UIC.field({ key: 'address', label: 'العنوان', value: p ? p.address : '', required: true }) +
+      UIC.field({ key: 'registration_number', label: 'رقم التسجيل', value: p ? p.registration_number : '' }) +
+      UIC.field({ key: 'tax_id', label: 'الرقم الضريبي', value: p ? p.tax_id : '' }) +
+      '</form>';
+    UIC.openModal('party-modal', {
+      title: p ? 'تعديل' : 'إضافة',
+      body: body,
+      onSave: 'saveParty(\'' + (p ? p.id : '') + '\')'
+    });
+  }
+
+  function saveParty(id) {
+    var data = UIC.collectForm('party-form');
+    if (!UIC.validateForm('party-form')) return;
+    ['type', 'country', 'region'].forEach(function (k) {
+      if (data[k] === '__new__') data[k] = data[k + '_custom'] || '';
+      delete data[k + '_custom'];
+    });
+    if (id) data.id = id;
+    UI.showSpinner('جاري الحفظ...');
+    companyCall(id ? 'edit_party' : 'add_party', data)
+      .then(function (r) {
+        UIC.closeModal('party-modal');
+        UIC.toast(r.message || 'تم الحفظ', 'success');
+        fetchParties();
+      })
+      .catch(function (e) { UIC.toast(e.message || 'خطأ', 'error'); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function showError(e) {
+    var body = document.getElementById('parties-content');
+    if (body) body.innerHTML = '<div class="empty-state"><span>' + FMT.escape(e.message || 'خطأ') + '</span></div>';
+  }
+
+
+  load();
+</script>
+</body>
+</html>
+
+

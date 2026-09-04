@@ -1,0 +1,866 @@
+﻿<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="description" content="إدارة النظام وإعدادات الشركات والمستخدمين">
+  <title>إدارة النظام</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+</head>
+<body>
+<div id="admin-root" dir="rtl" class="app-content" style="max-width:1200px;margin:0 auto;padding:var(--space-4);"></div>
+<script>
+  var params = new URLSearchParams(window.location.search);
+  var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+  var scriptUrl = window.scriptUrl || '/';
+  var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+
+  var CURRENT_TAB = 'companies';
+
+  function initAdmin() {
+    if (!SESSION_TOKEN) { window.location.href = scriptUrl + '?action=login'; return; }
+    renderHub();
+  }
+
+  function renderHub() {
+    var homeHref = scriptUrl + '?action=ERPDashboard&sessionToken=' + SESSION_TOKEN;
+    var logo = UIC.buildLogoMarkup(homeHref, null, null, null, false);
+    var html =
+      '<div style="display:flex;align-items:center;gap:12px;margin-bottom:8px;">' + logo + '<h2 style="margin:0;font-size:clamp(18px,4vw,24px);">إدارة النظام</h2></div>' +
+      '<p style="color:var(--text-muted);font-size:14px;margin-bottom:24px;">اختر القسم الذي تريد الإدارة عليه.</p>' +
+       '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,200px),1fr));gap:16px;margin-bottom:32px;">' +
+        UIC.moduleTile({ icon: '&#127970;', title: 'الشركات', subtitle: 'إدارة شركات النظام', onOpen: 'loadTab(\'companies\')' }) +
+        UIC.moduleTile({ icon: '&#128101;', title: 'المستخدمون', subtitle: 'إدارة حسابات المستخدمين', onOpen: 'loadTab(\'users\')' }) +
+        UIC.moduleTile({ icon: '&#128272;', title: 'صلاحيات الأدوار', subtitle: 'ضبط صلاحيات الوصول', onOpen: 'loadTab(\'matrix\')' }) +
+        UIC.moduleTile({ icon: '&#128196;', title: 'صفحات النظام', subtitle: 'إدارة صفحات النظام', onOpen: 'loadTab(\'pages\')' }) +
+        UIC.moduleTile({ icon: '&#128176;', title: 'العملات', subtitle: 'إدارة أسعار الصرف', onOpen: 'loadTab(\'currency\')' }) +
+        UIC.moduleTile({ icon: '&#128179;', title: 'فواتير الاشتراكات', subtitle: 'إصدار وطباعة فواتير النظام (ERP Invoices)', onOpen: 'loadTab(\'invoices\')' }) +
+        (IS_SUPER_ADMIN ? UIC.moduleTile({ icon: '&#9888;', title: 'مفتاح إيقاف النظام', subtitle: 'إيقاف/تشغيل النظام بالكامل', onOpen: 'loadTab(\'killswitch\')' }) : '') +
+       '</div>' +
+      '<div id="admin-tab-area" style="display:none;">' +
+      renderTabsHtml() +
+      '<div class="empty-state" id="tab-body" style="display:none;"></div>' +
+      '</div>';
+    document.getElementById('admin-root').innerHTML = html;
+  }
+
+  function renderTabsHtml() {
+    var tabs = [
+      { id: 'companies', label: 'الشركات' },
+      { id: 'users', label: 'المستخدمون' },
+      { id: 'matrix', label: 'صلاحيات الأدوار' },
+      { id: 'pages', label: 'صفحات النظام' },
+      { id: 'currency', label: 'العملات' },
+      { id: 'invoices', label: 'فواتير الاشتراكات' }
+    ];
+    if (IS_SUPER_ADMIN) tabs.push({ id: 'killswitch', label: 'مفتاح إيقاف النظام' });
+    return '<div style="display:flex;gap:8px;margin-bottom:24px;flex-wrap:wrap;">' +
+      '<button class="btn btn-outline" onclick="renderHub()">← العودة</button>' +
+      tabs.map(function (t) {
+        return '<button class="btn ' + (CURRENT_TAB === t.id ? 'btn-primary' : 'btn-outline') + '" onclick="loadTab(\'' + t.id + '\')">' + t.label + '</button>';
+      }).join('') + '</div>';
+  }
+
+  function loadTab(tab) {
+    CURRENT_TAB = tab;
+    var area = document.getElementById('admin-tab-area');
+    area.style.display = '';
+    var tabsContainer = area.querySelector('div');
+    if (tabsContainer) tabsContainer.outerHTML = renderTabsHtml();
+    var body = document.getElementById('tab-body');
+    body.style.display = '';
+    if (tab === 'companies') loadCompanies();
+    else if (tab === 'users') loadUsers();
+    else if (tab === 'matrix') loadMatrix();
+    else if (tab === 'pages') loadPages();
+    else if (tab === 'currency') loadCurrency();
+    else if (tab === 'invoices') loadInvoices();
+    else if (tab === 'killswitch') loadKillSwitch();
+  }
+
+  /* ---------- COMPANIES ---------- */
+  function loadCompanies() {
+    UI.showSpinner();
+    API.call('admin_list_companies', {}, SESSION_TOKEN)
+      .then(function (r) {
+        renderCompanies(r.companies || []);
+      })
+      .catch(function (e) { showError(e); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function renderCompanies(list) {
+    window.__companies = list;
+    var rows = list.map(function (c) {
+      return {
+        id: c.company_unique_id,
+        name_ar: c.company_name_ar,
+        name_en: c.company_name_en,
+        enabled: UIC.statusPill(String(c.enabled).toLowerCase() === 'true' ? 'مفعّل' : 'معطّل', String(c.enabled).toLowerCase() === 'true' ? 'success' : 'neutral'),
+        main_page: c.company_main_page || '-',
+        actions: UIC.actionBtns([{ label: 'تعديل', onclick: 'editCompany(\'' + FMT.escape(c.company_unique_id) + '\')' }])
+      };
+    });
+    var body = document.getElementById('tab-body');
+    body.innerHTML = '<div style="display:flex;justify-content:flex-end;margin-bottom:12px;">' +
+      '<button class="btn btn-primary" onclick="editCompany(\'\')">+ إضافة شركة</button></div>' +
+      UIC.dataTable('companies-table', {
+        title: 'الشركات',
+        headers: [
+          { key: 'id', label: 'المعرف' },
+          { key: 'name_ar', label: 'الاسم العربي' },
+          { key: 'name_en', label: 'الاسم الإنجليزي' },
+          { key: 'enabled', label: 'الحالة' },
+          { key: 'main_page', label: 'الصفحة الرئيسية' },
+          { key: 'actions', label: 'إجراءات' }
+        ],
+        rows: rows,
+        emptyText: 'لا توجد شركات'
+      });
+    UIC.initTableSort('companies-table');
+  }
+
+  function editCompany(uid) {
+    var existing = null;
+    if (uid) {
+      existing = (window.__companies || []).find(function (c) { return c.company_unique_id === uid; });
+    }
+    openCompanyModal(existing);
+  }
+
+  function openCompanyModal(company) {
+    var c = company || {};
+    window.__editingCompanyUid = c.company_unique_id || '';
+    var formId = 'company-form';
+    var body =
+      '<form id="' + formId + '">' +
+      UIC.field({ key: 'company_name_ar', label: 'الاسم العربي', value: c.company_name_ar, required: true }) +
+      UIC.field({ key: 'company_name_en', label: 'الاسم الإنجليزي', value: c.company_name_en }) +
+      UIC.field({ key: 'company_sheet_link', label: 'رابط جدول البيانات', value: c.company_sheet_link }) +
+      UIC.field({ key: 'company_colors', label: 'الألوان (مثال: yellow, black)', value: c.company_colors }) +
+      UIC.field({ key: 'company_logo', label: 'معرّف الشعار', value: c.company_logo }) +
+      UIC.field({ key: 'company_main_page', label: 'الصفحة الرئيسية', value: c.company_main_page }) +
+      '<div class="form-field"><label class="form-label">مفعّل</label><select id="enabled" class="input">' +
+      '<option value="TRUE" ' + (String(c.enabled).toLowerCase() === 'true' ? 'selected' : '') + '>مفعّل</option>' +
+      '<option value="FALSE" ' + (String(c.enabled).toLowerCase() !== 'true' ? 'selected' : '') + '>معطّل</option>' +
+      '</select></div>' +
+      '</form>';
+    UIC.openModal('company-modal', {
+      title: c.company_unique_id ? 'تعديل شركة' : 'إضافة شركة',
+      body: body,
+      onSave: 'saveCompany()'
+    });
+  }
+
+  function saveCompany() {
+    var data = UIC.collectForm('company-form');
+    data.enabled = document.getElementById('enabled').value;
+    if (window.__editingCompanyUid) data.company_unique_id = window.__editingCompanyUid;
+    if (!UIC.validateForm('company-form')) return;
+    UI.showSpinner('جاري الحفظ...');
+    API.call('admin_save_company', data, SESSION_TOKEN)
+      .then(function (r) {
+        UIC.closeModal('company-modal');
+        UIC.toast(r.message || 'تم الحفظ', 'success');
+        loadCompanies();
+      })
+      .catch(function (e) { UIC.toast(e.message || 'خطأ', 'error'); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  /* ---------- USERS ---------- */
+  function loadUsers() {
+    UI.showSpinner();
+    API.call('admin_list_users', {}, SESSION_TOKEN)
+      .then(function (r) {
+        window.__roleOptions = r.role_options || [];
+        window.__companyOptions = r.company_options || [];
+        renderUsers(r.users || []);
+      })
+      .catch(function (e) { showError(e); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function renderUsers(list) {
+    window.__users = list;
+    var rows = list.map(function (u) {
+      var active = String(u.status).toLowerCase() === 'active';
+      return {
+        name: u.name,
+        email: u.email,
+        role: u.role,
+        company: u.company || '-',
+        status: UIC.statusPill(active ? 'نشط' : 'معطّل', active ? 'success' : 'danger'),
+        actions: UIC.actionBtns([{ label: 'تعديل', onclick: 'openUserModal(\'' + FMT.escape(u.email) + '\')' }])
+      };
+    });
+    var body = document.getElementById('tab-body');
+    body.innerHTML = '<div style="display:flex;justify-content:flex-end;margin-bottom:12px;">' +
+      '<button class="btn btn-primary" onclick="openUserModal(\'\')">+ إضافة مستخدم</button></div>' +
+      UIC.dataTable('users-table', {
+        title: 'المستخدمون',
+        headers: [
+          { key: 'name', label: 'الاسم' },
+          { key: 'email', label: 'البريد الإلكتروني' },
+          { key: 'role', label: 'الدور' },
+          { key: 'company', label: 'الشركة' },
+          { key: 'status', label: 'الحالة' },
+          { key: 'actions', label: 'إجراءات' }
+        ],
+        rows: rows,
+        emptyText: 'لا يوجد مستخدمون'
+      });
+    UIC.initTableSort('users-table');
+  }
+
+  function openUserModal(email) {
+    var u = (window.__users || []).find(function (x) { return x.email === email; });
+    var companyOptions = (window.__companyOptions || []).map(function (c) {
+      return { value: c.value, label: c.label };
+    });
+    var formId = 'user-form';
+    var body =
+      '<form id="' + formId + '">' +
+      UIC.field({ key: 'name', label: 'الاسم', value: u ? u.name : '', required: true }) +
+      UIC.field({ key: 'email', label: 'البريد الإلكتروني', value: u ? u.email : '', required: true }) +
+      UIC.enumSelect({ key: 'role', label: 'الدور', value: u ? u.role : '', options: window.__roleOptions || [], required: true, placeholder: 'اختر الدور...' }) +
+      UIC.field({ key: 'company', label: 'الشركة', type: 'select', required: true, options: companyOptions, placeholder: 'اختر الشركة...', value: u ? u.company : '' }) +
+      '<div class="form-field"><label class="form-label">الحالة</label><select id="user-status" class="input">' +
+      '<option value="Active" ' + (u && String(u.status).toLowerCase() === 'active' ? 'selected' : '') + '>نشط</option>' +
+      '<option value="InActive" ' + (u && String(u.status).toLowerCase() !== 'active' ? 'selected' : '') + '>معطّل</option>' +
+      '</select></div>' +
+      (u ? UIC.field({ key: 'resetPassword', label: 'كلمة مرور جديدة (اختياري)', type: 'password', placeholder: 'اتركه فارغاً لعدم التغيير' }) : '') +
+      '</form>' +
+      (!u ? '<p style="font-size:12px;color:var(--text-muted);">المستخدم الجديد يبدأ بدون كلمة مرور وسيقوم بتعيينها عند أول تسجيل دخول.</p>' : '');
+    UIC.openModal('user-modal', {
+      title: u ? 'تعديل مستخدم' : 'إضافة مستخدم',
+      body: body,
+      onSave: 'saveUser()'
+    });
+  }
+  function saveUser() {
+    var data = UIC.collectForm('user-form');
+    data.status = document.getElementById('user-status').value;
+    if (!UIC.validateForm('user-form')) return;
+    // Recover company if hidden blanked but display holds valid label (combo blur edge)
+    if ((!data.company || data.company === '') && data.company_display) {
+      var dispLower = String(data.company_display).trim().toLowerCase();
+      var found = (window.__companyOptions || []).find(function (c) {
+        return String(c.label || '').trim().toLowerCase() === dispLower || String(c.value || '').trim().toLowerCase() === dispLower;
+      });
+      if (found) data.company = String(found.value).trim();
+    }
+    data.company = String(data.company || '').trim();
+    delete data.company_display;
+    delete data.company_custom;
+    ['role'].forEach(function (k) {
+      if (data[k] === '__new__') data[k] = data[k + '_custom'] || '';
+      delete data[k + '_custom'];
+    });
+    UI.showSpinner('جاري الحفظ...');
+    API.call('admin_save_user', data, SESSION_TOKEN)
+      .then(function (r) {
+        UIC.closeModal('user-modal');
+        UIC.toast(r.message || 'تم الحفظ', 'success');
+        loadUsers();
+      })
+      .catch(function (e) { UIC.toast(e.message || 'خطأ', 'error'); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  /* ---------- ROLES MATRIX ---------- */
+  function loadMatrix() {
+    UI.showSpinner();
+    API.call('admin_list_matrix', {}, SESSION_TOKEN)
+      .then(function (r) {
+        window.__matrixData = r.matrix || [];
+        window.__matrixPages = r.pages || [];
+        window.__matrixRoles = r.roles || [];
+        window.__matrixCompanies = r.company_options || [];
+        window.__selRole = '';
+        window.__selCompany = '';
+        renderMatrix();
+      })
+      .catch(function (e) { showError(e); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function renderMatrix() {
+    var roleOpts = '<option value="">اختر الدور...</option>' + (window.__matrixRoles || []).map(function (r) { return '<option value="' + FMT.escape(r) + '">' + FMT.escape(r) + '</option>'; }).join('');
+    var companyOpts = '<option value="">كل الشركات</option>' + (window.__matrixCompanies || []).map(function (c) { return '<option value="' + FMT.escape(c.value) + '">' + FMT.escape(c.label) + '</option>'; }).join('');
+    var body = document.getElementById('tab-body');
+    body.innerHTML =
+      '<div style="display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;margin-bottom:16px;">' +
+      '<div class="form-field" style="margin:0;"><label class="form-label">الدور</label>' +
+      '<select id="mx-role" class="input" onchange="onMatrixRoleChange(this.value)">' + roleOpts + '</select></div>' +
+      '<div class="form-field" style="margin:0;"><label class="form-label">الشركة (فلتر الصفحات)</label>' +
+      '<select id="mx-company" class="input" onchange="onMatrixCompanyChange(this.value)">' + companyOpts + '</select></div>' +
+      '</div>' +
+      '<div id="mx-grid"></div>';
+    renderMatrixGrid();
+  }
+
+  function onMatrixRoleChange(v) { window.__selRole = v; renderMatrixGrid(); }
+  function onMatrixCompanyChange(v) { window.__selCompany = v; renderMatrixGrid(); }
+
+  function renderMatrixGrid() {
+    var grid = document.getElementById('mx-grid');
+    if (!grid) return;
+    var role = window.__selRole || '';
+    if (!role) { grid.innerHTML = '<div class="empty-state"><span>اختر دوراً لعرض الصفحات</span></div>'; return; }
+    var company = window.__selCompany || '';
+
+    var existing = {};
+    (window.__matrixData || []).forEach(function (m) {
+      if (String(m.role).toLowerCase() === role.toLowerCase()) existing[String(m.page_id)] = m;
+    });
+
+    var pages = (window.__matrixPages || []).filter(function (p) {
+      if (!company) return true;
+      return String(p.page_company || '') === String(company);
+    });
+    if (!pages.length) { grid.innerHTML = '<div class="empty-state"><span>لا توجد صفحات لهذه الشركة</span></div>'; return; }
+
+    var rows = pages.map(function (p) {
+      var m = existing[String(p.page_id)] || {};
+      var acc = m.access_type || 'Read';
+      var st = m.status || 'Active';
+      return '<tr>' +
+        '<td>' + FMT.escape(p.page_id) + '</td>' +
+        '<td>' + FMT.escape(p.page_name || p.page_id) + '</td>' +
+        '<td>' + FMT.escape(p.page_module || '-') + '</td>' +
+        '<td><select class="input" data-page="' + FMT.escape(p.page_id) + '" data-field="access_type">' +
+        '<option value="Read"' + (acc === 'Read' ? ' selected' : '') + '>Read</option>' +
+        '<option value="Write"' + (acc === 'Write' ? ' selected' : '') + '>Write</option>' +
+        '</select></td>' +
+        '<td><select class="input" data-page="' + FMT.escape(p.page_id) + '" data-field="status">' +
+        '<option value="Active"' + (st === 'Active' ? ' selected' : '') + '>Active</option>' +
+        '<option value="InActive"' + (st === 'InActive' ? ' selected' : '') + '>InActive</option>' +
+        '</select></td>' +
+        '</tr>';
+    }).join('');
+
+    grid.innerHTML =
+      '<div style="margin-bottom:8px;"><button class="btn btn-primary" onclick="UI.submitOnce(this, saveMatrix)">حفظ الصلاحيات</button></div>' +
+      '<div class="table-wrap"><table class="table"><thead><tr>' +
+      '<th>الصفحة</th><th>الاسم</th><th>الوحدة</th><th>نوع الوصول</th><th>الحالة</th>' +
+      '</tr></thead><tbody>' + rows + '</tbody></table></div>';
+  }
+
+  function saveMatrix() {
+    var role = window.__selRole || '';
+    if (!role) { UIC.toast('اختر الدور', 'error'); return; }
+    var map = {};
+    document.querySelectorAll('#mx-grid select[data-page]').forEach(function (sel) {
+      var page = sel.getAttribute('data-page');
+      var field = sel.getAttribute('data-field');
+      if (!map[page]) map[page] = { page_id: page, access_type: 'Read', status: 'Active' };
+      map[page][field] = sel.value;
+    });
+    var assignments = Object.keys(map).map(function (k) { return map[k]; });
+    if (!assignments.length) { UIC.toast('لا توجد صفحات', 'error'); return; }
+    UI.showSpinner('جاري الحفظ...');
+    API.call('admin_save_matrix', { role: role, assignments: assignments }, SESSION_TOKEN)
+      .then(function (r) { UIC.toast(r.message || 'تم الحفظ', 'success'); loadMatrix(); })
+      .catch(function (e) { UIC.toast(e.message || 'خطأ', 'error'); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  /* ---------- SYSTEM PAGES ---------- */
+  function loadPages() {
+    UI.showSpinner();
+    API.call('admin_list_pages', {}, SESSION_TOKEN)
+      .then(function (r) {
+        window.__systemPages = r.system_pages || [];
+        window.__allPages = r.all_pages || [];
+        window.__pageCompanies = r.company_options || [];
+        window.__pageModules = r.module_options || [];
+        renderPages();
+      })
+      .catch(function (e) { showError(e); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function renderPages() {
+    var list = window.__systemPages || [];
+    var rows = list.map(function (p) {
+      return {
+        page_id: p.page_id,
+        page_name: p.page_name || '-',
+        page_module: p.page_module || '-',
+        page_company: pageCompanyLabel(p.page_company)
+      };
+    });
+    var body = document.getElementById('tab-body');
+    body.innerHTML = '<div style="display:flex;justify-content:flex-end;margin-bottom:12px;">' +
+      '<button class="btn btn-primary" onclick="openPagesMatrix()">عرض جميع الصفحات</button></div>' +
+      UIC.dataTable('pages-table', {
+        title: 'صفحات النظام',
+        headers: [
+          { key: 'page_id', label: 'معرف الصفحة' },
+          { key: 'page_name', label: 'اسم الصفحة' },
+          { key: 'page_module', label: 'الوحدة' },
+          { key: 'page_company', label: 'الشركة' }
+        ],
+        rows: rows,
+        emptyText: 'لا توجد صفحات مسجلة'
+      });
+    UIC.initTableSort('pages-table');
+  }
+
+  function pageCompanyLabel(uid) {
+    var found = (window.__pageCompanies || []).find(function (c) { return String(c.value) === String(uid); });
+    return found ? found.label : (uid || '-');
+  }
+
+  function cssId(s) { return String(s).replace(/[^a-zA-Z0-9_]/g, '_'); }
+
+  function buildSelect(id, options, selected) {
+    var html = '<select id="' + id + '" class="input">';
+    options.forEach(function (o) {
+      var v = (o && o.value !== undefined) ? o.value : o;
+      var l = (o && o.label !== undefined) ? o.label : o;
+      html += '<option value="' + FMT.escape(v) + '"' + (String(v) === String(selected || '') ? ' selected' : '') + '>' + FMT.escape(l) + '</option>';
+    });
+    html += '</select>';
+    return html;
+  }
+
+  function openPagesMatrix() {
+    var allPages = window.__allPages || [];
+    var sysMap = {};
+    (window.__systemPages || []).forEach(function (s) { sysMap[String(s.page_id)] = s; });
+
+    var moduleOpts = (window.__pageModules || []).map(function (m) { return { value: m, label: m }; });
+    var companyOpts = [{ value: '', label: '-' }].concat((window.__pageCompanies || []).map(function (c) { return { value: c.value, label: c.label }; }));
+
+    var rows = allPages.map(function (p) {
+      var s = sysMap[String(p.page_id)] || {};
+      var id = cssId(p.page_id);
+      var name = s.page_name || p.title || p.label || p.page_id;
+      return '<tr>' +
+        '<td>' + FMT.escape(p.page_id) + '</td>' +
+        '<td><input id="pn_' + id + '" class="input" value="' + FMT.escape(name) + '"></td>' +
+        '<td>' + buildSelect('pm_' + id, moduleOpts, s.page_module) + '</td>' +
+        '<td>' + buildSelect('pc_' + id, companyOpts, s.page_company) + '</td>' +
+        '</tr>';
+    }).join('');
+
+    var body = '<div style="overflow-x:auto;max-height:65vh;overflow-y:auto;">' +
+      '<table class="table" style="min-width:700px;"><thead><tr>' +
+      '<th>معرف الصفحة</th><th>اسم الصفحة</th><th>الوحدة</th><th>الشركة</th>' +
+      '</tr></thead><tbody>' + rows + '</tbody></table></div>';
+
+    UIC.openModal('pages-matrix-modal', { title: 'جميع صفحات النظام', body: body, onSave: 'savePagesMatrix()' });
+  }
+
+  function savePagesMatrix() {
+    var pages = (window.__allPages || []).map(function (p) {
+      var id = cssId(p.page_id);
+      return {
+        page_id: p.page_id,
+        page_name: document.getElementById('pn_' + id) ? document.getElementById('pn_' + id).value : '',
+        page_module: document.getElementById('pm_' + id) ? document.getElementById('pm_' + id).value : '',
+        page_company: document.getElementById('pc_' + id) ? document.getElementById('pc_' + id).value : ''
+      };
+    });
+    UI.showSpinner('جاري الحفظ...');
+    API.call('admin_save_pages', { pages: pages }, SESSION_TOKEN)
+      .then(function (r) { UIC.closeModal('pages-matrix-modal'); UIC.toast(r.message || 'تم الحفظ', 'success'); loadPages(); })
+      .catch(function (e) { UIC.toast(e.message || 'خطأ', 'error'); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  /* ---------- CURRENCY ---------- */
+  var CURRENCY_CODES = ['EGP','USD','EUR','GBP','SAR','AED','KWD','QAR','BHD','OMR','JOD','CNY','JPY','INR','TRY','CAD','AUD','CHF'];
+
+  function loadCurrency() {
+    UI.showSpinner();
+    API.call('admin_list_currency', {}, SESSION_TOKEN)
+      .then(function (r) {
+        window.__currencies = r.currencies || [];
+        renderCurrency();
+      })
+      .catch(function (e) { showError(e); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function renderCurrency() {
+    var list = window.__currencies || [];
+    var rows = list.map(function (c) {
+      return {
+        id: c.id,
+        currency: c.currency,
+        rate: FMT.number(c.rate),
+        actions: UIC.actionBtns([{ label: 'حذف', onclick: 'deleteCurrency(' + c.id + ')' }])
+      };
+    });
+    var body = document.getElementById('tab-body');
+    body.innerHTML = '<div style="display:flex;justify-content:flex-end;margin-bottom:12px;">' +
+      '<button class="btn btn-primary" onclick="openCurrencyModal(\'\')">+ إضافة عملة</button></div>' +
+      UIC.dataTable('currency-table', {
+        title: 'العملات',
+        headers: [
+          { key: 'id', label: 'المعرف', numeric: true },
+          { key: 'currency', label: 'العملة' },
+          { key: 'rate', label: 'السعر (EGP)', numeric: true },
+          { key: 'actions', label: 'إجراءات' }
+        ],
+        rows: rows,
+        emptyText: 'لا توجد عملات'
+      });
+    UIC.initTableSort('currency-table');
+  }
+
+  function openCurrencyModal() {
+    var opts = CURRENCY_CODES.map(function (c) { return '<option value="' + c + '">' + c + '</option>'; }).join('');
+    var body = '<form id="currency-form">' +
+      '<div class="form-field"><label class="form-label" for="cur">العملة</label>' +
+      '<select id="cur" class="input">' + opts + '</select></div>' +
+      '<p style="font-size:12px;color:var(--text-muted);">يتم حساب السعر تلقائياً من Google Finance.</p>' +
+      '</form>';
+    UIC.openModal('currency-modal', { title: 'إضافة عملة', body: body, onSave: 'saveCurrency()' });
+  }
+
+  function saveCurrency() {
+    var currency = document.getElementById('cur') ? document.getElementById('cur').value : '';
+    if (!currency) { UIC.toast('اختر العملة', 'error'); return; }
+    UI.showSpinner('جاري الحفظ...');
+    API.call('admin_save_currency', { currency: currency }, SESSION_TOKEN)
+      .then(function (r) { UIC.closeModal('currency-modal'); UIC.toast(r.message || 'تم الحفظ', 'success'); loadCurrency(); })
+      .catch(function (e) { UIC.toast(e.message || 'خطأ', 'error'); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function deleteCurrency(id) {
+    if (!confirm('هل تريد حذف هذه العملة؟')) return;
+    UI.showSpinner('جاري الحذف...');
+    API.call('admin_delete_currency', { id: Number(id) }, SESSION_TOKEN)
+      .then(function (r) { UIC.toast(r.message || 'تم الحذف', 'success'); loadCurrency(); })
+      .catch(function (e) { UIC.toast(e.message || 'خطأ', 'error'); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  /* ---------- SYSTEM INVOICES ---------- */
+  function loadInvoices() {
+    UI.showSpinner('جاري جلب فواتير الاشتراكات...');
+    API.call('admin_list_invoices', {}, SESSION_TOKEN)
+      .then(function (r) {
+        window.__invoices = r.invoices || [];
+        window.__invoiceCompanies = r.company_options || [];
+        renderInvoices(window.__invoices, window.__invoiceCompanies);
+      })
+      .catch(function (e) { showError(e); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function renderInvoices(list, companies) {
+    var compMap = {};
+    (companies || []).forEach(function (c) {
+      compMap[c.value] = c.name_en || c.name_ar || c.value;
+    });
+
+    var rows = list.map(function (inv) {
+      var uid = String(inv.unique_id || '').trim();
+      var noOfUsers = Number(inv.no_of_user) || 0;
+      var costPerUserUsd = Number(inv.cost_per_user_usd) || 0;
+      var maintCostUsd = Number(inv.maintenance_cost_usd) || 0;
+      var totalUsd = (noOfUsers * costPerUserUsd) + maintCostUsd;
+
+      var printBtn = { label: '🖨️ طباعة', onclick: 'printInvoiceDoc(\'' + FMT.escape(uid) + '\')' };
+      var editBtn = { label: '✏️ تعديل', onclick: 'openInvoiceModal(\'' + FMT.escape(uid) + '\')' };
+      var delBtn = { label: '🗑️', onclick: 'deleteInvoiceDoc(\'' + FMT.escape(uid) + '\')', color: '#dc2626' };
+
+      return {
+        id: inv.id || '-',
+        invoice_number: '<strong>' + FMT.escape(inv.invoice_number || '-') + '</strong>',
+        invoice_date: FMT.escape(formatDateShort(inv.invoice_date)),
+        company: FMT.escape(compMap[inv.company] || inv.company || '-'),
+        no_of_user: noOfUsers,
+        cost_usd: '$' + costPerUserUsd.toFixed(2),
+        rate: (Number(inv.current_exchange_rate) || 0).toFixed(2) + ' ج.م',
+        cost_egp: (Number(inv.cost_per_user_egp) || 0).toFixed(2) + ' ج.م',
+        maint_usd: '$' + maintCostUsd.toFixed(2),
+        maint_egp: (Number(inv.maintenance_cost_per_user_egp) || 0).toFixed(2) + ' ج.م',
+        total_usd: '<strong style="color:var(--brand-primary);">' + '$' + totalUsd.toFixed(2) + '</strong>',
+        actions: UIC.actionBtns([printBtn, editBtn, delBtn])
+      };
+    });
+
+    var body = document.getElementById('tab-body');
+    body.innerHTML =
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:10px;">' +
+        '<div style="font-size:13px;color:var(--text-muted);">إجمالي الفواتير الصادرة: <strong>' + list.length + '</strong></div>' +
+        '<button class="btn btn-primary" onclick="openInvoiceModal(\'\')">+ إصدار فاتورة جديدة</button>' +
+      '</div>' +
+      UIC.dataTable('invoices-table', {
+        title: 'فواتير اشتراكات النظام (ERP System Invoices)',
+        headers: [
+          { key: 'id', label: '#', numeric: true },
+          { key: 'invoice_number', label: 'رقم الفاتورة' },
+          { key: 'invoice_date', label: 'التاريخ' },
+          { key: 'company', label: 'الشركة (Bill To)' },
+          { key: 'no_of_user', label: 'المستخدمين', numeric: true },
+          { key: 'cost_usd', label: 'تكلفة المستخدم ($)', numeric: true },
+          { key: 'rate', label: 'سعر الصرف', numeric: true },
+          { key: 'cost_egp', label: 'تكلفة المستخدم (ج.م)', numeric: true },
+          { key: 'maint_usd', label: 'الصيانة ($)', numeric: true },
+          { key: 'maint_egp', label: 'الصيانة (ج.م)', numeric: true },
+          { key: 'total_usd', label: 'الإجمالي ($)', numeric: true },
+          { key: 'actions', label: 'إجراءات' }
+        ],
+        rows: rows,
+        emptyText: 'لا توجد فواتير صادرة حتى الآن'
+      });
+
+    UIC.initTableSort('invoices-table');
+  }
+
+  function openInvoiceModal(uniqueId) {
+    var inv = null;
+    if (uniqueId) {
+      inv = (window.__invoices || []).find(function (i) { return String(i.unique_id) === String(uniqueId); });
+    }
+
+    var isEdit = !!inv;
+    var title = isEdit ? ('تعديل الفاتورة: ' + (inv.invoice_number || '')) : 'إصدار فاتورة اشتراك جديدة';
+
+    var todayStr = new Date().toISOString().split('T')[0];
+    var invoiceNumber = inv ? (inv.invoice_number || '') : ('INV-' + new Date().getFullYear() + '-' + String(Math.floor(Math.random() * 900) + 100));
+    var invoiceDate = inv ? formatDateShort(inv.invoice_date) : todayStr;
+    var selectedCompany = inv ? (inv.company || '') : '';
+    var noOfUsers = inv ? (inv.no_of_user != null ? inv.no_of_user : 1) : 1;
+    var costPerUserUsd = inv ? (inv.cost_per_user_usd != null ? inv.cost_per_user_usd : 10) : 10;
+    var currentExchangeRate = inv ? (inv.current_exchange_rate != null ? inv.current_exchange_rate : 50) : 50;
+    var maintenanceCostUsd = inv ? (inv.maintenance_cost_usd != null ? inv.maintenance_cost_usd : 14) : 14;
+
+    var compOptions = (window.__invoiceCompanies || []).map(function (c) {
+      var isSel = String(c.value) === String(selectedCompany) ? ' selected' : '';
+      return '<option value="' + FMT.escape(c.value) + '"' + isSel + '>' + FMT.escape(c.name_en ? (c.name_en + ' (' + c.name_ar + ')') : c.name_ar) + '</option>';
+    }).join('');
+
+    var modalHtml =
+      '<form id="erp-invoice-form" onsubmit="event.preventDefault();">' +
+        '<input type="hidden" id="inv-uid" value="' + (isEdit ? FMT.escape(uniqueId) : '') + '">' +
+        
+        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">' +
+          '<div class="form-field">' +
+            '<label class="form-label" for="inv-num">رقم الفاتورة (Invoice Number) *</label>' +
+            '<input type="text" id="inv-num" class="input" value="' + FMT.escape(invoiceNumber) + '" required placeholder="مثال: INV-2026-001">' +
+          '</div>' +
+          '<div class="form-field">' +
+            '<label class="form-label" for="inv-date">تاريخ الفاتورة (Date) *</label>' +
+            '<input type="date" id="inv-date" class="input" value="' + FMT.escape(invoiceDate) + '" required>' +
+          '</div>' +
+        '</div>' +
+
+        '<div class="form-field">' +
+          '<label class="form-label" for="inv-company">الشركة (Company - Bill to) *</label>' +
+          '<select id="inv-company" class="input" required>' +
+            '<option value="">-- اختر الشركة --</option>' +
+            compOptions +
+          '</select>' +
+        '</div>' +
+
+        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">' +
+          '<div class="form-field">' +
+            '<label class="form-label" for="inv-users">عدد المستخدمين (No. of Users) *</label>' +
+            '<input type="number" id="inv-users" class="input" min="1" step="1" value="' + noOfUsers + '" required oninput="calcInvoiceModal()">' +
+          '</div>' +
+          '<div class="form-field">' +
+            '<label class="form-label" for="inv-rate">سعر الصرف (EGP Exchange Rate) *</label>' +
+            '<input type="number" id="inv-rate" class="input" min="0.01" step="0.01" value="' + currentExchangeRate + '" required oninput="calcInvoiceModal()">' +
+          '</div>' +
+        '</div>' +
+
+        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">' +
+          '<div class="form-field">' +
+            '<label class="form-label" for="inv-cost-usd">تكلفة المستخدم ($ USD) *</label>' +
+            '<input type="number" id="inv-cost-usd" class="input" min="0" step="0.01" value="' + costPerUserUsd + '" required oninput="calcInvoiceModal()">' +
+          '</div>' +
+          '<div class="form-field">' +
+            '<label class="form-label" for="inv-maint-usd">تكلفة الصيانة ($ USD) *</label>' +
+            '<input type="number" id="inv-maint-usd" class="input" min="0" step="0.01" value="' + maintenanceCostUsd + '" required oninput="calcInvoiceModal()">' +
+          '</div>' +
+        '</div>' +
+
+        // Live calculation summary box
+        '<div style="background:var(--bg-muted);border:1px solid var(--border-color);border-radius:var(--radius-md);padding:14px;margin-top:12px;">' +
+          '<div style="font-weight:700;font-size:13px;margin-bottom:8px;color:var(--text-main);">📊 الحسابات التلقائية المعتمدة:</div>' +
+          '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:12.5px;">' +
+            '<div>تكلفة المستخدم بالجنيه (+4%): <strong id="calc-cost-egp">0.00 ج.م</strong></div>' +
+            '<div>تكلفة الصيانة بالجنيه: <strong id="calc-maint-egp">0.00 ج.م</strong></div>' +
+            '<div>إجمالي الترخيص بالدولار: <strong id="calc-license-subtotal">$0.00</strong></div>' +
+            '<div>الإجمالي العام بالدولار: <strong id="calc-total-usd" style="color:var(--brand-primary);">$0.00</strong></div>' +
+          '</div>' +
+        '</div>' +
+      '</form>';
+
+    UIC.openModal('erp-invoice-modal', {
+      title: title,
+      body: modalHtml,
+      onSave: 'saveInvoiceDoc()'
+    });
+
+    // Run initial calculation
+    setTimeout(calcInvoiceModal, 50);
+  }
+
+  function calcInvoiceModal() {
+    var users = parseInt(document.getElementById('inv-users') ? document.getElementById('inv-users').value : 0, 10) || 0;
+    var rate = parseFloat(document.getElementById('inv-rate') ? document.getElementById('inv-rate').value : 0) || 0;
+    var costUsd = parseFloat(document.getElementById('inv-cost-usd') ? document.getElementById('inv-cost-usd').value : 0) || 0;
+    var maintUsd = parseFloat(document.getElementById('inv-maint-usd') ? document.getElementById('inv-maint-usd').value : 0) || 0;
+
+    // Formulas:
+    // cost_per_user_egp = cost_per_user_usd * current_exchange_rate * 1.04
+    // maintenance_cost_per_user_egp = maintenance_cost_usd * current_exchange_rate
+    var costEgp = costUsd * rate * 1.04;
+    var maintEgp = maintUsd * rate;
+    var licenseSubtotal = users * costUsd;
+    var totalUsd = licenseSubtotal + maintUsd;
+
+    var elCostEgp = document.getElementById('calc-cost-egp');
+    var elMaintEgp = document.getElementById('calc-maint-egp');
+    var elLicenseSub = document.getElementById('calc-license-subtotal');
+    var elTotalUsd = document.getElementById('calc-total-usd');
+
+    if (elCostEgp) elCostEgp.textContent = costEgp.toFixed(2) + ' ج.م';
+    if (elMaintEgp) elMaintEgp.textContent = maintEgp.toFixed(2) + ' ج.م';
+    if (elLicenseSub) elLicenseSub.textContent = '$' + licenseSubtotal.toFixed(2);
+    if (elTotalUsd) elTotalUsd.textContent = '$' + totalUsd.toFixed(2);
+  }
+
+  function saveInvoiceDoc() {
+    var uid = document.getElementById('inv-uid') ? document.getElementById('inv-uid').value.trim() : '';
+    var invNum = document.getElementById('inv-num') ? document.getElementById('inv-num').value.trim() : '';
+    var invDate = document.getElementById('inv-date') ? document.getElementById('inv-date').value.trim() : '';
+    var company = document.getElementById('inv-company') ? document.getElementById('inv-company').value.trim() : '';
+    var users = document.getElementById('inv-users') ? parseInt(document.getElementById('inv-users').value, 10) : 0;
+    var rate = document.getElementById('inv-rate') ? parseFloat(document.getElementById('inv-rate').value) : 0;
+    var costUsd = document.getElementById('inv-cost-usd') ? parseFloat(document.getElementById('inv-cost-usd').value) : 0;
+    var maintUsd = document.getElementById('inv-maint-usd') ? parseFloat(document.getElementById('inv-maint-usd').value) : 0;
+
+    if (!invNum) { UIC.toast('رقم الفاتورة مطلوب', 'error'); return; }
+    if (!invDate) { UIC.toast('تاريخ الفاتورة مطلوب', 'error'); return; }
+    if (!company) { UIC.toast('اختر الشركة', 'error'); return; }
+    if (isNaN(users) || users < 1) { UIC.toast('عدد المستخدمين يجب أن يكون 1 على الأقل', 'error'); return; }
+    if (isNaN(rate) || rate <= 0) { UIC.toast('سعر الصرف غير صحيح', 'error'); return; }
+    if (isNaN(costUsd) || costUsd < 0) { UIC.toast('تكلفة المستخدم غير صحيحة', 'error'); return; }
+    if (isNaN(maintUsd) || maintUsd < 0) { UIC.toast('تكلفة الصيانة غير صحيحة', 'error'); return; }
+
+    UI.showSpinner('جاري حفظ الفاتورة...');
+    API.call('admin_save_invoice', {
+      unique_id: uid,
+      invoice_number: invNum,
+      invoice_date: invDate,
+      company: company,
+      no_of_user: users,
+      cost_per_user_usd: costUsd,
+      current_exchange_rate: rate,
+      maintenance_cost_usd: maintUsd
+    }, SESSION_TOKEN)
+      .then(function (r) {
+        UIC.closeModal('erp-invoice-modal');
+        UIC.toast(r.message || 'تم حفظ الفاتورة بنجاح', 'success');
+        loadInvoices();
+      })
+      .catch(function (e) {
+        UIC.toast((e && e.message) || 'فشل حفظ الفاتورة', 'error');
+      })
+      .finally(function () {
+        UI.hideSpinner();
+      });
+  }
+
+  function deleteInvoiceDoc(uniqueId) {
+    if (!uniqueId) return;
+    if (!confirm('هل أنت متأكد من رغبتك في حذف هذه الفاتورة؟')) return;
+
+    UI.showSpinner('جاري حذف الفاتورة...');
+    API.call('admin_delete_invoice', { unique_id: uniqueId }, SESSION_TOKEN)
+      .then(function (r) {
+        UIC.toast(r.message || 'تم الحذف بنجاح', 'success');
+        loadInvoices();
+      })
+      .catch(function (e) {
+        UIC.toast((e && e.message) || 'فشل حذف الفاتورة', 'error');
+      })
+      .finally(function () {
+        UI.hideSpinner();
+      });
+  }
+
+  function printInvoiceDoc(uniqueId) {
+    if (!uniqueId) return;
+    window.open(scriptUrl + '?download=erp_invoice&unique_id=' + encodeURIComponent(uniqueId) + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN), '_blank');
+  }
+
+  function formatDateShort(val) {
+    if (!val) return '';
+    if (val instanceof Date && !isNaN(val.getTime())) {
+      var y = val.getFullYear();
+      var m = String(val.getMonth() + 1).padStart(2, '0');
+      var d = String(val.getDate()).padStart(2, '0');
+      return y + '-' + m + '-' + d;
+    }
+    var s = String(val).trim();
+    if (s.indexOf('T') !== -1) s = s.split('T')[0];
+    return s;
+  }
+
+  /* ---------- KILL SWITCH (super admin only) ---------- */
+  function loadKillSwitch() {
+    UI.showSpinner();
+    API.call('toggle_kill_switch', {}, SESSION_TOKEN)
+      .then(function (r) {
+        renderKillSwitch(!!r.enabled);
+      })
+      .catch(function (e) { showError(e); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function renderKillSwitch(enabled) {
+    var body = document.getElementById('tab-body');
+    if (!body) return;
+    var pill = UIC.statusPill(enabled ? 'النظام يعمل' : 'النظام متوقف', enabled ? 'success' : 'neutral');
+    body.innerHTML =
+      '<div style="max-width:520px;margin:0 auto;text-align:center;padding:24px;border:1px solid var(--border,#e5e7eb);border-radius:12px;">' +
+        '<h3 style="margin-top:0;">مفتاح إيقاف النظام</h3>' +
+        '<p style="color:var(--text-muted,#666);font-size:13px;">إيقاف النظام يمنع جميع الصفحات وكل العمليات فوراً لكل المستخدمين — بما في ذلك مدير النظام — ويظهر لهم رسالة «عطل في السيستم». لإعادة التشغيل بعد الإيقاف: عدّل قيمة الخلية B2 في جدول <b>ERP_system_work</b> مباشرة من Google Sheets (1 = يعمل، 0 = متوقف).</p>' +
+        '<div style="margin:16px 0;">الحالة الحالية: ' + pill + '</div>' +
+        '<button class="btn ' + (enabled ? 'btn-outline' : 'btn-primary') + '" id="killswitch-btn" onclick="toggleKillSwitch(' + (!enabled) + ')">' +
+          (enabled ? '⛔ إيقاف النظام' : '✅ تشغيل النظام') +
+        '</button>' +
+      '</div>';
+  }
+
+  function toggleKillSwitch(on) {
+    if (!on && !confirm('سيتم إيقاف النظام بالكامل لجميع المستخدمين فوراً. متأكد؟')) return;
+    UI.showSpinner();
+    var btn = document.getElementById('killswitch-btn');
+    if (btn) btn.disabled = true;
+    API.call('toggle_kill_switch', { on: on }, SESSION_TOKEN)
+      .then(function (r) {
+        UIC.toast((r && r.message) || 'تم التنفيذ', 'success');
+        renderKillSwitch(!!r.enabled);
+      })
+      .catch(function (e) {
+        showError(e);
+        loadKillSwitch();
+      })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function showError(e) {
+    var body = document.getElementById('tab-body');
+    if (body) body.innerHTML = '<div class="empty-state"><span>' + FMT.escape(e.message || 'خطأ') + '</span></div>';
+  }
+
+  initAdmin();
+</script>
+</body>
+</html>
+

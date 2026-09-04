@@ -1,0 +1,366 @@
+﻿<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Top Light — حركة النقدية</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= getCompanyThemeCSS_('8df5c89a117fe9a5') ?>
+</head>
+<body>
+<div id="tl-root" dir="rtl"></div>
+<script>
+  var params = new URLSearchParams(window.location.search);
+  var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+  var scriptUrl = window.scriptUrl || '/';
+  var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+  var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('8df5c89a117fe9a5') ?>';
+  var COMPANY_PAGES = <?!= companyPages ?>;
+  var CURRENT_ACTION = '<?!= currentAction ?>';
+
+  var __options = {};
+  var __headers = [];
+  var __boxes = [];
+  var __editingId = '';
+
+  function companyCall(moduleAction, data) {
+    return API.call('company_action', {
+      target_system: '8df5c89a117fe9a5',
+      module_action: moduleAction,
+      data: data || {}
+    }, SESSION_TOKEN);
+  }
+
+  function num(v) { var n = Number(v); return isNaN(n) ? 0 : n; }
+  function getVal(id) { var el = document.getElementById(id); return el ? el.value : ''; }
+  function setText(id, t) { var el = document.getElementById(id); if (el) el.textContent = t; }
+
+  function load() {
+    var contentId = 'tl-content';
+    UIC.appShell('tl-root', {
+      companyLogoUrl: COMPANY_LOGO_URL,
+      companyLogoHref: scriptUrl + '?action=tl_dashboard&sessionToken=' + SESSION_TOKEN,
+      companyLogoTitle: 'القمة لايت',
+      breadcrumb: 'القمة لايت / حركة النقدية',
+      contentId: contentId
+    });
+    renderList();
+  }
+
+  function renderList() {
+    UI.showSpinner();
+    companyCall('get_cash_headers')
+      .then(function (r) {
+        __options = r.options || {};
+        __headers = r.headers || [];
+        __boxes = r.boxes || [];
+        renderCash();
+      })
+      .catch(function (e) { showError(e); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function renderCash() {
+    UI.hideSpinner();
+    var content = document.getElementById('tl-content');
+
+    __headers.sort(function (a, b) { return Number(b.transaction_id) - Number(a.transaction_id); });
+
+    var boxesHtml = '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:16px;">' +
+      __boxes.map(function (b) {
+        return '<div class="stat-card" style="cursor:pointer;" onclick="openForm(\'\', \'' + FMT.escape(b.box) + '\', false)">' +
+          '<div class="stat-body"><div class="stat-value num">' + FMT.number(b.balance) + '</div>' +
+          '<div class="stat-label">' + FMT.escape(b.box_name || '-') + '</div></div></div>';
+      }).join('') + '</div>';
+
+    var rows = __headers.map(function (h) {
+      var approved = String(h.approved) === 'true';
+      var opts = '<option value="">إجراءات...</option>';
+      if (approved) {
+        opts += '<option value="view">عرض</option>';
+      } else {
+        opts += '<option value="approve">اعتماد</option>';
+        if (IS_SUPER_ADMIN) {
+          opts += '<option value="edit">تعديل</option><option value="delete">حذف</option>';
+        } else {
+          opts += '<option value="view">عرض</option>';
+        }
+      }
+      var actions = '<select class="input" style="padding:6px 8px;width:130px;" onchange="doAction(\'' + h.transaction_id + '\', this.value); this.value=\'\';">' + opts + '</select>';
+      return {
+        transaction_id: h.transaction_id,
+        transaction_date: h.transaction_date ? String(h.transaction_date).slice(0, 10) : '-',
+        customer_name: h.customer_name || h.name_vendor || '-',
+        transaction_details: h.transaction_details || '-',
+        transaction_type: h.transaction_type || '-',
+        transaction_amount: FMT.number(h.transaction_amount),
+        box_name: h.box_name || '-',
+        box_balance: FMT.number(h.box_balance),
+        approved: approved ? 'معتمد' : 'قيد الانتظار',
+        actions: actions
+      };
+    });
+
+    content.innerHTML =
+      boxesHtml +
+      '<div style="display:flex;justify-content:flex-end;margin-bottom:12px;gap:8px;">' +
+      '<button class="btn btn-outline" onclick="openReport()">تقرير النقدية</button>' +
+      '<button class="btn btn-primary" onclick="openForm(\'\', \'\', false)">+ إضافة حركة</button>' +
+      '<button class="btn btn-outline" onclick="openTransfer()">تحويل</button></div>' +
+      UIC.dataTable('cash-table', {
+        title: 'حركة النقدية والمصاريف',
+        headers: [
+          { key: 'transaction_id', label: 'رقم', numeric: true },
+          { key: 'transaction_date', label: 'التاريخ' },
+          { key: 'customer_name', label: 'الطرف' },
+          { key: 'transaction_details', label: 'البيان' },
+          { key: 'transaction_type', label: 'النوع' },
+          { key: 'transaction_amount', label: 'المبلغ', numeric: true },
+          { key: 'box_name', label: 'الصندوق' },
+          { key: 'box_balance', label: 'الرصيد', numeric: true },
+          { key: 'approved', label: 'الحالة' },
+          { key: 'actions', label: 'إجراءات' }
+        ],
+        rows: rows,
+        emptyText: 'لا توجد حركات'
+      });
+    UIC.initTableSort('cash-table');
+  }
+
+  function openForm(id, presetBox, readOnly) {
+    __editingId = id || '';
+    var record = null;
+    if (id) {
+      record = __headers.find(function (h) { return Number(h.transaction_id) === Number(id); }) || null;
+    }
+    renderForm(record, presetBox, readOnly);
+  }
+
+  function renderForm(record, presetBox, readOnly) {
+    var content = document.getElementById('tl-content');
+    var o = __options;
+    var curOpts = o.currency_options || [];
+    var defCurrency = record ? record.currency : (curOpts[0] ? curOpts[0].value : 'EGP');
+    var defRate = record ? record.exchange_rate : (curOpts[0] ? (curOpts[0].rate || 1) : 1);
+
+    var f = function (key, label, type, opts, value, required, placeholder) {
+      return UIC.field({ key: key, label: label, type: type || 'text', options: opts, value: value, required: required, placeholder: placeholder, min: type === 'number' ? 0 : undefined, step: type === 'number' ? 'any' : undefined });
+    };
+
+    var title = readOnly ? 'عرض حركة' : (record ? 'تعديل حركة' : 'إضافة حركة');
+    var relatedBoxVal = record ? record.related_box : (presetBox || '');
+
+    content.innerHTML =
+      '<div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;">' +
+      '<button class="btn btn-outline" onclick="renderCash()">← عودة</button>' +
+      '<h2 style="margin:0;">' + title + '</h2></div>' +
+      '<form id="cash-form">' +
+      '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:0 16px;padding:16px;background:var(--bg-surface);border:2px solid var(--border-color);border-radius:8px;">' +
+      f('name', 'الطرف *', 'select', o.customer_options || [], record ? record.name : '', true, 'اختر الطرف...') +
+      f('related_box', 'الصندوق *', 'select', o.box_options || [], relatedBoxVal, true, 'اختر الصندوق...') +
+      f('chart_code', 'كود الحساب *', 'select', o.chart_options || [], record ? record.chart_code : '', true, 'اختر كود الحساب...') +
+      f('transaction_details', 'البيان *', 'text', null, record ? record.transaction_details : '', true) +
+      f('transaction_date', 'التاريخ', 'date', null, record ? formatDate(record.transaction_date) : formatDate(new Date()), false) +
+      f('transaction_amount', 'المبلغ *', 'number', null, record ? record.transaction_amount : '', true) +
+      f('total_discount', 'الخصم', 'number', null, record ? record.total_discount : 0, false) +
+      f('taxes', 'الضرائب', 'number', null, record ? record.taxes : 0, false) +
+      f('transaction_type', 'النوع *', 'select', o.type_options || [], record ? record.transaction_type : '', true, 'اختر النوع...') +
+      f('transaction_method', 'طريقة الدفع *', 'select', (o.method_options || []).map(function (m) { return { value: m, label: m }; }), record ? record.transaction_method : '', true, 'اختر الطريقة...') +
+      f('currency', 'العملة *', 'select', curOpts, defCurrency, true, 'اختر العملة...') +
+      f('exchange_rate', 'سعر الصرف', 'number', null, defRate, false) +
+      f('invoice_id', 'رقم الفاتورة (اختياري)', 'text', null, record ? record.invoice_id : '', false) +
+      f('transaction_purchasing_items', 'الأصناف (CSV)', 'text', null, record ? record.transaction_purchasing_items : '', false) +
+      f('tax_system', 'النظام الضريبي', 'select', [{ value: 'false', label: 'لا' }, { value: 'true', label: 'نعم' }], record ? String(record.tax_system) : 'false', false) +
+      '</div>' +
+      '<div style="display:flex;flex-wrap:wrap;gap:20px;padding:12px 16px;background:var(--bg-subtle);border:2px solid var(--border-color);border-radius:8px;margin-top:12px;">' +
+      '<div>الصافي: <strong id="net_display">0</strong></div>' +
+      '<div>الإجمالي: <strong id="total_display">0</strong></div>' +
+      '<div>الرصيد: <strong id="balance_display">0</strong></div>' +
+      '</div>' +
+      '</form>' +
+      '<div style="margin:16px 0;">' + (readOnly ? '' : '<button class="btn btn-primary" onclick="UI.submitOnce(this, saveCash)">حفظ</button> ') +
+      '<button class="btn btn-outline" onclick="renderCash()">' + (readOnly ? 'عودة' : 'إلغاء') + '</button></div>';
+
+    if (readOnly) {
+      content.querySelectorAll('#cash-form input, #cash-form select, #cash-form textarea').forEach(function (el) { el.disabled = true; });
+    }
+
+    var curEl = document.getElementById('currency');
+    if (curEl && !readOnly) curEl.addEventListener('change', onCurrencyChange);
+    ['transaction_amount', 'total_discount', 'taxes', 'transaction_type', 'exchange_rate'].forEach(function (k) {
+      var el = document.getElementById(k);
+      if (el) { el.addEventListener('input', recalc); el.addEventListener('change', recalc); }
+    });
+    var methodEl = document.getElementById('transaction_method');
+    if (methodEl && !readOnly) { methodEl.addEventListener('input', recalc); methodEl.addEventListener('change', onMethodChange); }
+    recalc();
+  }
+
+  function onCurrencyChange() {
+    var sel = document.getElementById('currency');
+    if (!sel) return;
+    var opts = __options.currency_options || [];
+    for (var i = 0; i < opts.length; i++) {
+      if (String(opts[i].value) === String(sel.value)) {
+        var rateEl = document.getElementById('exchange_rate');
+        if (rateEl) rateEl.value = opts[i].rate;
+        recalc();
+        break;
+      }
+    }
+  }
+
+  function onMethodChange() {
+    var method = getVal('transaction_method');
+    if (method === 'فودافون كاش') {
+      var td = document.getElementById('total_discount');
+      if (td) td.value = num(getVal('transaction_amount')) / 100;
+    }
+    recalc();
+  }
+
+  function recalc() {
+    var amount = num(getVal('transaction_amount'));
+    var discount = num(getVal('total_discount'));
+    var taxes = num(getVal('taxes'));
+    var rate = num(getVal('exchange_rate'));
+    var method = getVal('transaction_method');
+    var type = getVal('transaction_type');
+    var base = (method === 'فودافون كاش') ? amount * rate : (amount - discount) * rate;
+    var net = base;
+    var total = base + taxes * rate;
+    var balance = (type === 'Credit') ? -total : total;
+    setText('net_display', FMT.number(net));
+    setText('total_display', FMT.number(total));
+    setText('balance_display', FMT.number(balance));
+  }
+
+  function saveCash() {
+    var data = UIC.collectForm('cash-form');
+    if (!UIC.validateForm('cash-form')) return;
+
+    var rec = {
+      name: data.name,
+      related_box: data.related_box,
+      chart_code: data.chart_code,
+      transaction_details: data.transaction_details,
+      transaction_date: data.transaction_date,
+      transaction_amount: data.transaction_amount,
+      total_discount: data.total_discount,
+      taxes: data.taxes,
+      transaction_type: data.transaction_type,
+      transaction_method: data.transaction_method,
+      currency: data.currency,
+      exchange_rate: data.exchange_rate,
+      invoice_id: data.invoice_id,
+      transaction_purchasing_items: data.transaction_purchasing_items,
+      tax_system: data.tax_system
+    };
+    if (String(rec.name || '').trim() === '') { UIC.toast('الطرف مطلوب', 'error'); return; }
+    if (String(rec.related_box || '').trim() === '') { UIC.toast('الصندوق مطلوب', 'error'); return; }
+    if (String(rec.chart_code || '').trim() === '') { UIC.toast('كود الحساب مطلوب', 'error'); return; }
+    if (String(rec.transaction_details || '').trim() === '') { UIC.toast('البيان مطلوب', 'error'); return; }
+    if (num(rec.transaction_amount) <= 0) { UIC.toast('المبلغ يجب أن يكون أكبر من صفر', 'error'); return; }
+    if (String(rec.transaction_method || '').trim() === '') { UIC.toast('طريقة الدفع مطلوبة', 'error'); return; }
+    if (String(rec.currency || '').trim() === '') { UIC.toast('العملة مطلوبة', 'error'); return; }
+    if (String(rec.transaction_type || '').trim() === '') { UIC.toast('نوع الحركة مطلوب', 'error'); return; }
+
+    var payload = { record: rec };
+    var isEdit = __editingId ? true : false;
+    if (isEdit) rec.transaction_id = Number(__editingId);
+
+    UI.showSpinner('جاري الحفظ...');
+    companyCall(isEdit ? 'edit_cash' : 'add_cash', payload)
+      .then(function (r) { UIC.toast(r.message || 'تم الحفظ', 'success'); renderCash(); })
+      .catch(function (e) { UI.hideSpinner(); UIC.toast(e.message || 'خطأ', 'error'); });
+  }
+
+  function openReport() {
+    window.open(scriptUrl + '?action=tl_cash_report&sessionToken=' + encodeURIComponent(SESSION_TOKEN), '_blank');
+  }
+
+  function openTransfer() {
+    var o = __options;    var boxOpts = (o.box_options || []).map(function (b) {
+      return '<option value="' + FMT.escape(b.value) + '">' + FMT.escape(b.label) + '</option>';
+    }).join('');
+    var body = '<form id="transfer-form">' +
+      '<div class="form-field"><label class="form-label" for="tf_from">من صندوق *</label>' +
+      '<select id="tf_from" class="input"><option value="">اختر...</option>' + boxOpts + '</select></div>' +
+      '<div class="form-field"><label class="form-label" for="tf_to">إلى صندوق *</label>' +
+      '<select id="tf_to" class="input"><option value="">اختر...</option>' + boxOpts + '</select></div>' +
+      '<div class="form-field"><label class="form-label" for="tf_amount">المبلغ *</label>' +
+      '<input id="tf_amount" class="input" type="number" min="0" step="any"></div>' +
+      '<div class="form-field"><label class="form-label" for="tf_date">التاريخ</label>' +
+      '<input id="tf_date" class="input" type="date" value="' + formatDate(new Date()) + '"></div>' +
+      '<div class="form-field"><label class="form-label" for="tf_details"> البيان</label>' +
+      '<textarea id="tf_details" class="input" rows="2" placeholder="تفاصيل التحويل..."></textarea></div>' +
+      '</form>';
+    UIC.openModal('transfer-modal', { title: 'تحويل بين الصناديق', body: body, onSave: 'saveTransfer()' });
+  }
+
+  function saveTransfer() {
+    var from = getVal('tf_from');
+    var to = getVal('tf_to');
+    var amount = num(getVal('tf_amount'));
+    var date = getVal('tf_date');
+    var details = (getVal('tf_details') || '').trim();
+    if (!from) { UIC.toast('اختر الصندوق المصدر', 'error'); return; }
+    if (!to) { UIC.toast('اختر الصندوق الهدف', 'error'); return; }
+    if (from === to) { UIC.toast('يجب اختيار صندوقين مختلفين', 'error'); return; }
+    if (amount <= 0) { UIC.toast('المبلغ يجب أن يكون أكبر من صفر', 'error'); return; }
+
+    UI.showSpinner('جاري التحويل...');
+    companyCall('add_transfer', { from_box: from, to_box: to, amount: amount, transfer_date: date, details: details })
+      .then(function (r) {
+        UIC.toast(r.message || 'تم التحويل', 'success');
+        UIC.closeModal('transfer-modal');
+        renderCash();
+      })
+      .catch(function (e) { UI.hideSpinner(); UIC.toast(e.message || 'خطأ', 'error'); });
+  }
+
+  function doAction(id, action) {
+    if (action === 'approve') approveCash(id);
+    else if (action === 'edit') openForm(id, '', false);
+    else if (action === 'view') openForm(id, '', true);
+    else if (action === 'delete') deleteCash(id);
+  }
+
+  function approveCash(id) {
+    UI.showSpinner('جاري الاعتماد...');
+    companyCall('approve_cash', { unique_id: Number(id) })
+      .then(function (r) { UIC.toast(r.message || 'تم الاعتماد', 'success'); renderCash(); })
+      .catch(function (e) { UI.hideSpinner(); UIC.toast(e.message || 'خطأ', 'error'); });
+  }
+
+  function deleteCash(id) {
+    if (!IS_SUPER_ADMIN) { UIC.toast('غير مصرح', 'error'); return; }
+    if (!confirm('هل تريد حذف هذه الحركة؟')) return;
+    UI.showSpinner('جاري الحذف...');
+    companyCall('delete_cash', { unique_id: Number(id) })
+      .then(function (r) { UIC.toast(r.message || 'تم الحذف', 'success'); renderCash(); })
+      .catch(function (e) { UI.hideSpinner(); UIC.toast(e.message || 'خطأ', 'error'); });
+  }
+
+  function showError(e) {
+    var content = document.getElementById('tl-content');
+    if (content) content.innerHTML = '<div class="empty-state"><span>' + FMT.escape(e.message || 'خطأ') + '</span></div>';
+  }
+
+  function formatDate(v) {
+    if (!v) return '';
+    var d = new Date(v);
+    if (isNaN(d.getTime())) return String(v).slice(0, 10);
+    return d.toISOString().slice(0, 10);
+  }
+
+
+  load();
+</script>
+</body>
+</html>
+
+
+

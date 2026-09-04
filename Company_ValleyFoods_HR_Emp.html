@@ -1,0 +1,415 @@
+﻿<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Valley Foods — الموارد البشرية (موظفين)</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_ValleyFoods_Nav'); ?>
+  <?!= getCompanyThemeCSS_('9940659bd83035d7') ?>
+</head>
+<body>
+  <div id="vf-emp-root"></div>
+
+  <script>
+    var params = new URLSearchParams(window.location.search);
+    var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+    var scriptUrl = window.scriptUrl || '/';
+    var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+    var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('9940659bd83035d7') ?>';
+    var COMPANY_PAGES = <?!= companyPages ?>;
+    var CURRENT_ACTION = '<?!= currentAction ?>';
+    var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+    var CAN_WRITE = UIC.canAdd_(); var CAN_FULL = UIC.canFull_();
+
+    function companyCall(moduleAction, data) {
+      return API.call('company_action', {
+        target_system: '9940659bd83035d7',
+        module_action: moduleAction,
+        data: data || {}
+      }, SESSION_TOKEN);
+    }
+
+    // ---- enums ----
+    var EMPLOYEE_TYPES = ['موظف بصمة', 'موظف بدون بصمة', 'عمالة يومية'];
+    var EMP_STATUS_TYPES = ['يعمل بالشركة', 'استقالة', 'انقطاع عن العمل', 'انهاء تعاقد', 'بلوغ سن التقاعد', 'الوفاة', 'معاه عجز'];
+    var GENDERS = ['ذكر', 'انثى'];
+    var CATEGORIES = ['المصنع', 'الميكروباص'];
+
+    // ---- state ----
+    var TAB = (function () {
+      var map = { vf_hr_status: 'status', vf_hr_shifts: 'shift', vf_hr_salary: 'salary' };
+      return map[CURRENT_ACTION] || 'employees';
+    })();
+    var EMPLOYEES = [], STATUSES = [], ASSIGNMENTS = [], SALARIES = [];
+    var TITLE_OPTIONS = [], TITLE_SECTION_MAP = {};
+    var NEXT_EMP_IDS = {};
+    var ACTIVE_EMP_OPTIONS = [], SHIFT_OPTIONS = [];
+    var EMP_MAP = {}, SHIFT_MAP = {};
+
+    function esc(v) {
+      var s = (v === undefined || v === null) ? '' : String(v);
+      if (typeof FMT !== 'undefined' && FMT.escape) return FMT.escape(s);
+      return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+    function todayStr() { return new Date().toISOString().slice(0, 10); }
+    function fmtDate(v) {
+      if (!v) return '';
+      var d = (v instanceof Date) ? v : new Date(v);
+      if (isNaN(d.getTime())) return String(v);
+      var pad = function (n) { return n < 10 ? '0' + n : '' + n; };
+      return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+    }
+    function rebuildMaps() {
+      EMP_MAP = {}; ACTIVE_EMP_OPTIONS.forEach(function (o) { EMP_MAP[o.value] = o.label; });
+      SHIFT_MAP = {}; SHIFT_OPTIONS.forEach(function (o) { SHIFT_MAP[o.value] = o.label; });
+    }
+
+    function load() {
+      UIC.appShell('vf-emp-root', {
+        companyLogoUrl: COMPANY_LOGO_URL,
+        companyLogoHref: scriptUrl + '?action=vf_dashboard&sessionToken=' + SESSION_TOKEN,
+        companyLogoTitle: 'Valley Foods',
+        breadcrumb: 'Valley Foods / الموارد البشرية / موظفين',
+        contentId: 'vf-emp-content',
+        menuGroups: (window.VALLEYFOODS_MENU || [])
+      });
+      fetchAll();
+    }
+
+    function fetchAll() {
+      UI.showSpinner();
+      companyCall('get_valley_hr_page', {})
+        .then(function (er) {
+          EMPLOYEES = er.employees || [];
+          TITLE_OPTIONS = er.titleOptions || [];
+          TITLE_SECTION_MAP = er.titleSectionMap || {};
+          NEXT_EMP_IDS = er.next_emp_ids || {};
+          STATUSES = er.statuses || [];
+          ACTIVE_EMP_OPTIONS = er.employeeOptions || [];
+          ASSIGNMENTS = er.assignments || [];
+          SHIFT_OPTIONS = er.shiftOptions || [];
+          SALARIES = er.salaries || [];
+          rebuildMaps();
+          render(); try{schedulePrefetch();}catch(e){};
+        }).catch(function (e) {
+          UIC.toast('خطأ: ' + (e && e.message ? e.message : e), 'error');
+        }).finally(function () { UI.hideSpinner(); });
+    }
+
+    function render() {
+      var tabs =
+        '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">' +
+          tabBtn('employees', 'قائمة الموظفين') +
+          tabBtn('status', 'حالة الموظفين') +
+          tabBtn('shift', 'تحديد الورديات') +
+          tabBtn('salary', 'راتب الموظف') +
+        '</div>';
+      document.getElementById('vf-emp-content').innerHTML = tabs + '<div id="vf-emp-tab"></div>';
+      if (TAB === 'employees') renderEmployees();
+      else if (TAB === 'status') renderStatus();
+      else if (TAB === 'shift') renderShift();
+      else renderSalary();
+    }
+
+    function tabBtn(t, label) {
+      return '<button class="btn ' + (TAB === t ? 'btn-primary' : 'btn-outline') + '" onclick="switchTab(\'' + t + '\')">' + label + '</button>';
+    }
+    function switchTab(t) { TAB = t; render(); }
+
+    function addBtn(onClick, label) {
+      if (!CAN_WRITE) return '';
+      return '<div style="text-align:left;margin-bottom:12px;"><button class="btn btn-primary" onclick="' + onClick + '">' + label + '</button></div>';
+    }
+
+    // ===================== 1) EMPLOYEES =====================
+    function renderEmployees() {
+      var headers = [
+        { key: 'emp_id', label: 'الكود' },
+        { key: 'employee_type', label: 'النوع' },
+        { key: 'name_ar', label: 'الاسم' },
+        { key: 'national_id', label: 'الرقم القومي' },
+        { key: 'hiring_date', label: 'تاريخ التعيين' },
+        { key: 'title', label: 'المسمى' },
+        { key: 'section', label: 'القسم' },
+        { key: 'category', label: 'الفئة' },
+        { key: 'insurance', label: 'التأمين' },
+        { key: 'gender', label: 'النوع' },
+        { key: 'schedule_id', label: 'رقم الاتفاقية' },
+        { key: 'الحالة الوظيفية', label: 'الحالة الوظيفية' },
+        { key: 'البطاقة صادرة من', label: 'البطاقة صادرة من' },
+        { key: 'العنوان بالبطاقة', label: 'العنوان بالبطاقة' }
+      ];
+      var rows = EMPLOYEES.map(function (r) {
+        return {
+          emp_id: esc(r.emp_id),
+          employee_type: esc(r.employee_type),
+          name_ar: esc(r.name_ar),
+          national_id: esc(r.national_id),
+          hiring_date: esc(fmtDate(r.hiring_date)),
+          title: esc(r.title),
+          section: esc(r.section),
+          category: esc(r.category),
+          insurance: r.insurance ? 'نعم' : 'لا',
+          gender: esc(r.gender),
+          schedule_id: esc(r.schedule_id),
+          'الحالة الوظيفية': esc(r['الحالة الوظيفية']),
+          'البطاقة صادرة من': esc(r['البطاقة صادرة من']),
+          'العنوان بالبطاقة': esc(r['العنوان بالبطاقة'])
+        };
+      });
+      document.getElementById('vf-emp-tab').innerHTML =
+        addBtn('openEmployeeModal()', '+ إضافة موظف') +
+        UIC.dataTable('emp-table', { headers: headers, rows: rows, pageSize: 100, emptyText: 'لا يوجد موظفين' });
+      UIC.initTableSort('emp-table');
+    }
+
+    function openEmployeeModal() {
+      var typeOpts = EMPLOYEE_TYPES.map(function (t) { return { value: t, label: t }; });
+      var catOpts = CATEGORIES.map(function (c) { return { value: c, label: c }; });
+      var genOpts = GENDERS.map(function (g) { return { value: g, label: g }; });
+      var body = '<form id="emp-form">' +
+        UIC.field({ key: 'employee_type', label: 'نوع الموظف', type: 'select', required: true, options: typeOpts, placeholder: 'اختر النوع' }) +
+        '<div id="emp-step2" style="display:none;">' +
+          '<div class="form-field">' +
+            '<label class="form-label">رقم الموظف (يُعتمد تلقائياً حسب النوع)</label>' +
+            '<input id="emp-id-preview" class="input" type="text" readonly value="' + esc(NEXT_EMP_IDS[EMPLOYEE_TYPES[0]] || '') + '" style="background:#f3f4f6;color:#6b7280;cursor:not-allowed;">' +
+          '</div>' +
+          UIC.field({ key: 'name_ar', label: 'الاسم', required: true }) +
+          UIC.field({ key: 'national_id', label: 'الرقم القومي (14 رقم)', required: true, noCorrect: true }) +
+          UIC.field({ key: 'hiring_date', label: 'تاريخ التعيين', type: 'date', required: true, value: todayStr() }) +
+          UIC.combo({ key: 'title', label: 'المسمى الوظيفي', required: true, options: TITLE_OPTIONS }) +
+          UIC.field({ key: 'section', label: 'القسم (يُجلب تلقائياً)', required: false }) +
+          UIC.field({ key: 'category', label: 'الفئة', type: 'select', required: true, options: catOpts, value: 'المصنع' }) +
+          UIC.field({ key: 'insurance', label: 'التأمين', type: 'select', required: true, options: [{ value: 'false', label: 'لا' }, { value: 'true', label: 'نعم' }], value: 'false' }) +
+          UIC.field({ key: 'gender', label: 'النوع', type: 'select', required: true, options: genOpts }) +
+          UIC.field({ key: 'schedule_id', label: 'رقم الاتفاقية (ساعات العمل المتفق عليها)', type: 'number', required: true, min: 0 }) +
+          UIC.field({ key: 'البطاقة صادرة من', label: 'البطاقة صادرة من', required: true }) +
+          UIC.field({ key: 'العنوان بالبطاقة', label: 'العنوان بالبطاقة', required: true }) +
+        '</div>' +
+      '</form>';
+      UIC.openModal('modal-emp', { title: 'إضافة موظف', body: body, onSave: 'saveEmployee()' });
+
+      // Step 1 -> Step 2 reveal
+      var et = document.getElementById('employee_type');
+      if (et) et.addEventListener('change', function () {
+        document.getElementById('emp-step2').style.display = this.value ? '' : 'none';
+        var preview = document.getElementById('emp-id-preview');
+        if (preview) {
+          preview.value = NEXT_EMP_IDS[this.value] || '';
+          if (this.value) { preview.style.background = '#f3f4f6'; preview.style.color = '#6b7280'; }
+        }
+      });
+      // title -> auto-populate section
+      var tEl = document.getElementById('title');
+      if (tEl) tEl.addEventListener('change', function () {
+        var sec = document.getElementById('section');
+        if (sec) sec.value = TITLE_SECTION_MAP[this.value] || '';
+      });
+    }
+
+    function saveEmployee() {
+      var etEl = document.getElementById('employee_type');
+      if (!etEl || !etEl.value) { UIC.toast('اختر نوع الموظف أولاً', 'error'); return false; }
+      if (!UIC.validateForm('emp-form')) return false;
+      var d = UIC.collectForm('emp-form');
+      if (!/^\d{14}$/.test(d.national_id || '')) { UIC.toast('الرقم القومي يجب أن يكون 14 رقماً', 'error'); return false; }
+      companyCall('add_employee', d).then(function (r) {
+        if (r && r.status === 'success') { UIC.toast(r.message || 'تم الحفظ', 'success'); UIC.closeModal('modal-emp');
+          if (r.record) {
+            var RECENT_LIMIT = 15;
+            var idxE = EMPLOYEES.findIndex(function(x){ return String(x.emp_id)===String(r.record.emp_id); });
+            if (idxE!==-1) EMPLOYEES[idxE]=Object.assign(EMPLOYEES[idxE], r.record); else EMPLOYEES.unshift(r.record);
+            if (EMPLOYEES.length>RECENT_LIMIT) EMPLOYEES.pop();
+            // update next ids
+            if (NEXT_EMP_IDS && r.record.employee_type) NEXT_EMP_IDS[r.record.employee_type] = Number(r.record.emp_id)+1;
+            renderEmployees();
+          } else { fetchAll(); }
+        } else UIC.toast('تعذر الحفظ', 'error');
+      }).catch(function (e) { UIC.toast('خطأ: ' + (e && e.message ? e.message : e), 'error'); });
+      return true;
+    }
+
+    // ===================== 2) STATUS =====================
+    function renderStatus() {
+      var headers = [
+        { key: 'employee_code', label: 'كود الموظف' },
+        { key: 'employee_name', label: 'اسم الموظف' },
+        { key: 'status_type', label: 'نوع الحالة' },
+        { key: 'status_date', label: 'تاريخ الحالة' },
+        { key: 'user', label: 'المستخدم' },
+        { key: 'created_at', label: 'تاريخ الإنشاء' }
+      ];
+      var rows = STATUSES.map(function (r) {
+        return {
+          employee_code: esc(r.employee_code),
+          employee_name: esc(r.employee_name || EMP_MAP[r.employee_code] || ''),
+          status_type: esc(r.status_type),
+          status_date: esc(fmtDate(r.status_date)),
+          user: esc(r.user),
+          created_at: esc(fmtDate(r.created_at))
+        };
+      });
+      document.getElementById('vf-emp-tab').innerHTML =
+        addBtn('openStatusModal()', '+ إضافة حالة') +
+        UIC.dataTable('status-table', { headers: headers, rows: rows, pageSize: 100, emptyText: 'لا توجد حالات' });
+      UIC.initTableSort('status-table');
+    }
+
+    function openStatusModal() {
+      var body = '<form id="status-form">' +
+        UIC.combo({ key: 'emp_id', label: 'الموظف', required: true, options: ACTIVE_EMP_OPTIONS }) +
+        UIC.field({ key: 'status_type', label: 'نوع الحالة', type: 'select', required: true, options: EMP_STATUS_TYPES.map(function (t) { return { value: t, label: t }; }), placeholder: 'اختر الحالة' }) +
+        UIC.field({ key: 'status_date', label: 'تاريخ الحالة', type: 'date', required: true, value: todayStr() }) +
+      '</form>';
+      UIC.openModal('modal-status', { title: 'إضافة حالة موظف', body: body, onSave: 'saveStatus()' });
+    }
+
+    function saveStatus() {
+      if (!UIC.validateForm('status-form')) return false;
+      var d = UIC.collectForm('status-form');
+      if (!d.emp_id) { UIC.toast('الموظف مطلوب', 'error'); return false; }
+      companyCall('add_emp_status', d).then(function (r) {
+        if (r && r.status === 'success') { UIC.toast(r.message || 'تم الحفظ', 'success'); UIC.closeModal('modal-status');
+          if (r.record) {
+            var RECENT_LIMIT = 10;
+            var idxST = STATUSES.findIndex(function(x){ return String(x.unique_id)===String(r.record.unique_id); });
+            if (idxST!==-1) STATUSES[idxST]=r.record; else STATUSES.unshift(r.record);
+            if (STATUSES.length>RECENT_LIMIT) STATUSES.pop();
+            // also update employee status map if needed
+            renderStatus();
+          } else { fetchAll(); }
+        } else UIC.toast('تعذر الحفظ', 'error');
+      }).catch(function (e) { UIC.toast('خطأ: ' + (e && e.message ? e.message : e), 'error'); });
+      return true;
+    }
+
+    // ===================== 3) SHIFT ASSIGNMENT =====================
+    function renderShift() {
+      var headers = [
+        { key: 'emp_id', label: 'الموظف' },
+        { key: 'shift_id', label: 'الوردية' },
+        { key: 'shift_start_date', label: 'تاريخ البداية' },
+        { key: 'shift_end_date', label: 'تاريخ النهاية' },
+        { key: 'notes', label: 'ملاحظات' },
+        { key: 'user', label: 'المستخدم' }
+      ];
+      var rows = ASSIGNMENTS.map(function (r) {
+        return {
+          emp_id: esc(EMP_MAP[r.emp_id] || r.emp_id),
+          shift_id: esc(SHIFT_MAP[r.shift_id] || r.shift_id),
+          shift_start_date: esc(fmtDate(r.shift_start_date)),
+          shift_end_date: esc(fmtDate(r.shift_end_date)),
+          notes: esc(r.notes),
+          user: esc(r.user)
+        };
+      });
+      document.getElementById('vf-emp-tab').innerHTML =
+        addBtn('openShiftModal()', '+ إضافة تعيين وردية') +
+        UIC.dataTable('shift-table', { headers: headers, rows: rows, pageSize: 100, emptyText: 'لا توجد تعيينات ورديات' });
+      UIC.initTableSort('shift-table');
+    }
+
+    function openShiftModal() {
+      var body = '<form id="shift-form">' +
+        UIC.combo({ key: 'emp_id', label: 'الموظف', required: true, options: ACTIVE_EMP_OPTIONS }) +
+        UIC.combo({ key: 'shift_id', label: 'الوردية', required: true, options: SHIFT_OPTIONS }) +
+        UIC.field({ key: 'shift_start_date', label: 'تاريخ بداية الوردية', type: 'date', required: true, value: todayStr() }) +
+        UIC.field({ key: 'shift_end_date', label: 'تاريخ نهاية الوردية', type: 'date', required: true, value: todayStr() }) +
+        UIC.field({ key: 'notes', label: 'ملاحظات', type: 'textarea', required: false }) +
+      '</form>';
+      UIC.openModal('modal-shift', { title: 'إضافة تعيين وردية', body: body, onSave: 'saveShift()' });
+    }
+
+    function saveShift() {
+      if (!UIC.validateForm('shift-form')) return false;
+      var d = UIC.collectForm('shift-form');
+      if (!d.emp_id) { UIC.toast('الموظف مطلوب', 'error'); return false; }
+      if (!d.shift_id) { UIC.toast('الوردية مطلوبة', 'error'); return false; }
+      companyCall('add_shift_assignment', d).then(function (r) {
+        if (r && r.status === 'success') { UIC.toast(r.message || 'تم الحفظ', 'success'); UIC.closeModal('modal-shift');
+          if (r.record) {
+            var RECENT_LIMIT = 10;
+            var idxSH = ASSIGNMENTS.findIndex(function(x){ return String(x.shift_assignment_id)===String(r.record.shift_assignment_id); });
+            if (idxSH!==-1) ASSIGNMENTS[idxSH]=r.record; else ASSIGNMENTS.unshift(r.record);
+            if (ASSIGNMENTS.length>RECENT_LIMIT) ASSIGNMENTS.pop();
+            renderShift();
+          } else { fetchAll(); }
+        } else UIC.toast('تعذر الحفظ', 'error');
+      }).catch(function (e) { UIC.toast('خطأ: ' + (e && e.message ? e.message : e), 'error'); });
+      return true;
+    }
+
+    // ===================== 4) SALARY =====================
+    function renderSalary() {
+      var headers = [
+        { key: 'emp_id', label: 'الموظف' },
+        { key: 'name_ar', label: 'اسم الموظف' },
+        { key: 'salary_date', label: 'تاريخ الراتب' },
+        { key: 'main_salary', label: 'الراتب الأساسي', money: true },
+        { key: 'allow', label: 'البدلات', money: true },
+        { key: 'basic_salary', label: 'الراتب الأساسي (basic)', money: true },
+        { key: 'insurance_salary', label: 'راتب التأمين', money: true },
+        { key: 'insurance_allow', label: 'بدل التأمين', money: true },
+        { key: 'user', label: 'المستخدم' }
+      ];
+      var rows = SALARIES.map(function (r) {
+        return {
+          emp_id: esc(EMP_MAP[r.emp_id] || r.emp_id),
+          name_ar: esc(r.name_ar || EMP_MAP[r.emp_id] || ''),
+          salary_date: esc(fmtDate(r.salary_date)),
+          main_salary: Number(r.main_salary) || 0,
+          allow: Number(r.allow) || 0,
+          basic_salary: Number(r.basic_salary) || 0,
+          insurance_salary: Number(r.insurance_salary) || 0,
+          insurance_allow: Number(r.insurance_allow) || 0,
+          user: esc(r.user)
+        };
+      });
+      document.getElementById('vf-emp-tab').innerHTML =
+        addBtn('openSalaryModal()', '+ إضافة راتب') +
+        UIC.dataTable('salary-table', { headers: headers, rows: rows, pageSize: 100, emptyText: 'لا توجد رواتب' });
+      UIC.initTableSort('salary-table');
+    }
+
+    function openSalaryModal() {
+      var body = '<form id="salary-form">' +
+        UIC.combo({ key: 'emp_id', label: 'الموظف', required: true, options: ACTIVE_EMP_OPTIONS }) +
+        UIC.field({ key: 'salary_date', label: 'تاريخ الراتب', type: 'date', required: true, value: todayStr() }) +
+        UIC.field({ key: 'main_salary', label: 'الراتب الأساسي', type: 'number', required: true, min: 0, step: 0.01 }) +
+        UIC.field({ key: 'allow', label: 'البدلات', type: 'number', required: true, min: 0, step: 0.01 }) +
+        UIC.field({ key: 'basic_salary', label: 'الراتب الأساسي (basic)', type: 'number', required: true, min: 0, step: 0.01 }) +
+        UIC.field({ key: 'insurance_salary', label: 'راتب التأمين', type: 'number', required: true, min: 0, step: 0.01 }) +
+        UIC.field({ key: 'insurance_allow', label: 'بدل التأمين', type: 'number', required: true, min: 0, step: 0.01 }) +
+      '</form>';
+      UIC.openModal('modal-salary', { title: 'إضافة راتب موظف', body: body, onSave: 'saveSalary()' });
+    }
+
+    function saveSalary() {
+      if (!UIC.validateForm('salary-form')) return false;
+      var d = UIC.collectForm('salary-form');
+      if (!d.emp_id) { UIC.toast('الموظف مطلوب', 'error'); return false; }
+      companyCall('add_employee_salary', d).then(function (r) {
+        if (r && r.status === 'success') { UIC.toast(r.message || 'تم الحفظ', 'success'); UIC.closeModal('modal-salary');
+          if (r.record) {
+            var RECENT_LIMIT = 10;
+            var idxSA = SALARIES.findIndex(function(x){ return String(x.unique_id)===String(r.record.unique_id); });
+            if (idxSA!==-1) SALARIES[idxSA]=r.record; else SALARIES.unshift(r.record);
+            if (SALARIES.length>RECENT_LIMIT) SALARIES.pop();
+            renderSalary();
+          } else { fetchAll(); }
+        } else UIC.toast('تعذر الحفظ', 'error');
+      }).catch(function (e) { UIC.toast('خطأ: ' + (e && e.message ? e.message : e), 'error'); });
+      return true;
+    }
+  </script>
+
+  <script>
+    document.addEventListener('DOMContentLoaded', load);
+  </script>
+</body>
+</html>
+
+

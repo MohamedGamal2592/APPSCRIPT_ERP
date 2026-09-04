@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <base target="_top">
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Create Assessment</title>
+    <?!= include('CSS'); ?>
+    <style>
+      .question-card { cursor: move; }
+      .drag-handle { cursor: grab; }
+      .options-container { background: #f8f9fa; padding: 15px; border-radius: 8px; margin-top: 10px; border: 1px dashed #ced4da; }
+      .optList .opt-item { background: #fff; padding: 8px 12px; border-radius: 6px; border: 1px solid #e2e8f0; }
+    </style>
+  </head>
+  <body>
+
+    <!-- Navbar -->
+    <nav class="navbar navbar-expand-lg navbar-dark bg-primary shadow-sm">
+      <div class="container">
+        <a class="navbar-brand" href="<?= scriptUrl ?>?action=dashboard">
+          <i class="bi bi-mortarboard-fill"></i> Assessment Platform
+        </a>
+        <div class="collapse navbar-collapse" id="navbarNav">
+          <ul class="navbar-nav ms-auto">
+            <li class="nav-item">
+              <a href="<?= scriptUrl ?>?action=dashboard" class="btn btn-outline-light btn-sm">
+                <i class="bi bi-arrow-left"></i> Back to Dashboard
+              </a>
+            </li>
+          </ul>
+        </div>
+      </div>
+    </nav>
+
+    <div class="container mt-4 mb-5">
+      <div id="alertContainer" class="mb-3" style="display: none;"></div>
+
+      <!-- Assessment Details Card -->
+      <div class="card shadow-sm border-0 rounded-3 mb-4">
+        <div class="card-header bg-white border-0 pt-4">
+          <h4 class="text-primary mb-0"><i class="bi bi-file-earmark-plus-fill"></i> Create New Assessment</h4>
+          <p class="text-muted mb-0">إنشاء تقييم جديد</p>
+        </div>
+        <div class="card-body p-4">
+          <div class="row g-3">
+            <div class="col-md-8">
+              <div class="form-floating">
+                <input type="text" class="form-control" id="title" placeholder="Title" required>
+                <label for="title">Assessment Title / عنوان التقييم</label>
+              </div>
+            </div>
+            <div class="col-md-4">
+              <div class="form-floating">
+                <select class="form-select" id="category" required>
+                  <option value="">Select Category...</option>
+                  <option value="Technical">Technical</option>
+                  <option value="Psychometric">Psychometric</option>
+                </select>
+                <label for="category">Category / الفئة</label>
+              </div>
+            </div>
+            <div class="col-12">
+              <div class="form-floating">
+                <textarea class="form-control" id="description" placeholder="Description" style="height: 100px"></textarea>
+                <label for="description">Description / الوصف</label>
+              </div>
+            </div>
+            <div class="col-md-4">
+              <div class="form-floating">
+                <input type="number" class="form-control" id="timeLimit" placeholder="Minutes" min="1" required>
+                <label for="timeLimit">Time Limit (Mins) / الوقت</label>
+              </div>
+            </div>
+            <div class="col-md-4">
+              <div class="form-floating">
+                <input type="number" class="form-control" id="passScore" placeholder="Pass Score" min="0" max="100">
+                <label for="passScore">Pass Score (%) / درجة النجاح</label>
+              </div>
+            </div>
+            <div class="col-md-4 d-flex align-items-center">
+              <div class="form-check form-switch mt-3">
+                <input class="form-check-input" type="checkbox" id="isActive" checked>
+                <label class="form-check-label" for="isActive">Active / مفعّل</label>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Questions Builder Card -->
+      <div class="card shadow-sm border-0 rounded-3 mb-4">
+        <div class="card-header bg-white border-0 d-flex justify-content-between align-items-center">
+          <h4 class="text-success mb-0"><i class="bi bi-list-ol"></i> Questions Builder</h4>
+          <button class="btn btn-success btn-sm" onclick="addQuestion()"><i class="bi bi-plus-circle"></i> Add Question</button>
+        </div>
+        <div class="card-body">
+          <p class="text-muted small">Drag questions using the handle to reorder them. / اسحب الأسئلة لإعادة ترتيبها.</p>
+          <div id="questionsContainer" class="d-flex flex-column gap-3"></div>
+        </div>
+      </div>
+
+      <!-- Submit Button -->
+      <div class="d-grid">
+        <button class="btn btn-primary btn-lg" id="saveBtn" onclick="saveAssessment()">
+          <i class="bi bi-save-fill"></i> Save Assessment & Questions / حفظ
+        </button>
+      </div>
+
+    </div>
+
+    <!-- SortableJS for Drag and Drop -->
+    <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    
+    <script>
+      const scriptUrl = '<?= scriptUrl ?>';
+      const token = localStorage.getItem('sessionToken');
+      if (!token) window.location.href = scriptUrl + '?action=login';
+
+      let questionCounter = 0;
+
+      // Initialize Sortable
+      Sortable.create(questionsContainer, {
+        handle: '.drag-handle',
+        animation: 150,
+        ghostClass: 'bg-light'
+      });
+
+      function addQuestion() {
+        questionCounter++;
+        const container = document.getElementById('questionsContainer');
+        const div = document.createElement('div');
+        div.className = 'card border-0 shadow-sm question-card';
+        div.id = 'q_' + questionCounter;
+        
+        div.innerHTML = `
+          <div class="card-body">
+            <div class="d-flex justify-content-between align-items-center mb-3">
+              <span class="badge bg-secondary drag-handle fs-6 py-2 px-3"><i class="bi bi-grip-vertical"></i> Drag</span>
+              <button class="btn btn-sm btn-outline-danger" onclick="this.closest('.question-card').remove()"><i class="bi bi-trash"></i></button>
+            </div>
+            
+            <div class="mb-3">
+              <textarea class="form-control" placeholder="Enter question text / أدخل نص السؤال" required></textarea>
+            </div>
+            
+            <div class="row g-2 mb-3">
+              <div class="col-md-4">
+                <select class="form-select form-select-sm qType" onchange="toggleOptions(this)">
+                  <option value="MCQ">MCQ (Single Answer)</option>
+                  <option value="Likert">Likert Scale (1-5)</option>
+                  <option value="MostLeast">Most Like Me / Least Like Me</option>
+                  <option value="OpenText">Open Text</option>
+                </select>
+              </div>
+              <div class="col-md-4">
+                <input type="text" class="form-control form-control-sm qTrait" placeholder="Trait (e.g. Leadership) / السمة">
+              </div>
+              <div class="col-md-4">
+                <input type="number" class="form-control form-control-sm qWeight" placeholder="Weight / الوزن" value="1">
+              </div>
+            </div>
+
+            <div class="options-container qOptionsUI">
+              <label class="text-muted small fw-bold d-block mb-2">Statements / Options (Type below and press Enter or click Add)</label>
+              <div class="input-group mb-3">
+                <input type="text" class="form-control optInput" placeholder="Type a statement here..." onkeydown="if(event.key === 'Enter'){event.preventDefault(); addOption(this);}">
+                <button class="btn btn-outline-primary" type="button" onclick="addOption(this)"><i class="bi bi-plus-lg"></i> Add</button>
+              </div>
+              <div class="optList d-flex flex-column gap-2 mb-3"></div>
+              
+              <div class="correct-answer-wrapper">
+                <label class="text-muted small fw-bold d-block mb-1">Correct Answer (Optional)</label>
+                <input type="text" class="form-control form-control-sm qCorrectAns" placeholder="Exact text of correct option">
+              </div>
+            </div>
+          </div>
+        `;
+        container.appendChild(div);
+      }
+
+      function toggleOptions(selectElem) {
+        const card = selectElem.closest('.question-card');
+        const ui = card.querySelector('.qOptionsUI');
+        const correctAnsWrapper = card.querySelector('.correct-answer-wrapper');
+        const type = selectElem.value;
+        
+        if (type === 'OpenText') {
+          ui.style.display = 'none';
+        } else {
+          ui.style.display = 'block';
+          
+          // Hide Correct Answer for Psychometric types
+          if (type === 'MostLeast' || type === 'Likert') {
+            correctAnsWrapper.style.display = 'none';
+          } else {
+            correctAnsWrapper.style.display = 'block';
+          }
+
+          // Pre-fill standard options for Likert
+          if (type === 'Likert') {
+            const optList = card.querySelector('.optList');
+            optList.innerHTML = '';
+            let defaults = ['1', '2', '3', '4', '5'];
+            defaults.forEach(opt => {
+              addOption(card.querySelector('.optInput'), opt);
+            });
+          }
+          
+          // Clear options if switching to MostLeast
+          if (type === 'MostLeast') {
+            const optList = card.querySelector('.optList');
+            optList.innerHTML = '';
+            card.querySelector('.optInput').placeholder = "Enter statement (e.g., I am a team player)";
+          } else if (type === 'MCQ') {
+            card.querySelector('.optInput').placeholder = "Type an option here...";
+          }
+        }
+      }
+
+      function addOption(btnOrInput, presetText) {
+        const card = btnOrInput.closest('.question-card');
+        const input = card.querySelector('.optInput');
+        const val = presetText || input.value.trim();
+        if (!val) return;
+        
+        const list = card.querySelector('.optList');
+        const optDiv = document.createElement('div');
+        optDiv.className = 'opt-item d-flex justify-content-between align-items-center';
+        optDiv.innerHTML = `<span class="small text-dark">${val}</span><button class="btn btn-sm btn-outline-danger py-0 px-2" onclick="this.parentElement.remove()"><i class="bi bi-x"></i></button>`;
+        list.appendChild(optDiv);
+        
+        input.value = '';
+        input.focus(); // Keep focus for fast entry
+      }
+
+      function saveAssessment() {
+        // Gather Assessment Data
+        const assessment = {
+          Title: document.getElementById('title').value.trim(),
+          Category: document.getElementById('category').value,
+          Description: document.getElementById('description').value,
+          TimeLimitMinutes: parseInt(document.getElementById('timeLimit').value) || 0,
+          PassScore: parseInt(document.getElementById('passScore').value) || 0,
+          IsActive: document.getElementById('isActive').checked
+        };
+
+        // Gather Questions Data
+        const questions = [];
+        const questionCards = document.querySelectorAll('.question-card');
+        
+        questionCards.forEach(card => {
+          const type = card.querySelector('.qType').value;
+          let options = [];
+          
+          if (type !== 'OpenText') {
+            card.querySelectorAll('.optList .opt-item span').forEach(span => {
+              options.push(span.innerText);
+            });
+          }
+
+          questions.push({
+            QuestionText: card.querySelector('textarea').value,
+            QuestionType: type,
+            Options: options,
+            CorrectAnswer: card.querySelector('.qCorrectAns').value,
+            Weight: parseInt(card.querySelector('.qWeight').value) || 1,
+            Trait: card.querySelector('.qTrait').value
+          });
+        });
+
+        // ==========================================
+        // MANDATORY FIELDS VALIDATION
+        // ==========================================
+        
+        // 1. Title is mandatory
+        if (!assessment.Title) return showAlert('error', 'Assessment Title is mandatory. Please enter a title.');
+        
+        // 2. Category is mandatory
+        if (!assessment.Category) return showAlert('error', 'Category is mandatory. Please select a category.');
+        
+        // 3. Time Limit is mandatory (must be > 0)
+        if (!assessment.TimeLimitMinutes || assessment.TimeLimitMinutes <= 0) {
+          return showAlert('error', 'Time Limit is mandatory. Please enter a valid number of minutes (greater than 0).');
+        }
+        
+        // 4. At least one question is mandatory
+        if (questions.length === 0) return showAlert('error', 'Please add at least one question.');
+
+        // 5. Ensure MCQ and MostLeast questions have text and options
+        for (let i = 0; i < questions.length; i++) {
+          let q = questions[i];
+          if (!q.QuestionText.trim()) return showAlert('error', 'Question ' + (i + 1) + ' is missing text.');
+          if (q.QuestionType !== 'OpenText' && q.Options.length === 0) {
+            return showAlert('error', 'Question ' + (i + 1) + ' requires at least one option/statement. Please type it and click Add.');
+          }
+        }
+
+        const btn = document.getElementById('saveBtn');
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Saving...';
+        btn.disabled = true;
+
+        google.script.run
+          .withSuccessHandler(function(data) {
+            showAlert(data.status === 'success' ? 'success' : 'error', data.message);
+            if (data.status === 'success') {
+              // Redirect to View Assessments table after 2 seconds
+              setTimeout(() => window.location.href = scriptUrl + '?action=view_assessments', 2000);
+            }
+            btn.innerHTML = '<i class="bi bi-save-fill"></i> Save Assessment & Questions / حفظ';
+            btn.disabled = false;
+          })
+                  .withFailureHandler(function(err) {
+          document.getElementById('loadingSpinner').style.display = 'none';
+          document.getElementById('tableContainer').style.display = 'block';
+          
+          // SECURITY: If backend says Unauthorized/Forbidden, kick them out!
+          if (err.message.includes('Unauthorized') || err.message.includes('Forbidden') || err.message.includes('Session expired')) {
+            localStorage.removeItem('sessionToken');
+            localStorage.removeItem('userName');
+            window.location.href = scriptUrl + '?action=login';
+            return;
+          }
+          
+          document.getElementById('tableBody').innerHTML = `<tr><td colspan="6" class="text-center text-danger p-4">Server Error: ${err.message}</td></tr>`;
+        })
+          .uiSaveAssessment(token, assessment, questions);
+      }
+
+      function showAlert(type, msg) {
+        const c = document.getElementById('alertContainer');
+        c.className = 'alert alert-' + (type === 'success' ? 'success' : 'danger') + ' d-flex align-items-center';
+        c.innerHTML = '<i class="bi ' + (type === 'success' ? 'bi-check-circle-fill' : 'bi-exclamation-triangle-fill') + ' me-2"></i> ' + msg;
+        c.style.display = 'block';
+        
+        // Scroll to top so user sees the alert
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      }
+    </script>
+  </body>
+</html>

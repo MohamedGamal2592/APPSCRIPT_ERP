@@ -1,0 +1,274 @@
+﻿<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>مقاسات الكراتين والعبوات</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_TopChemical_Nav'); ?>
+  <?!= getCompanyThemeCSS_('3fe1b5cb67b7223e') ?>
+</head>
+<body>
+<div id="tc-root" dir="rtl"></div>
+<script>
+  var params = new URLSearchParams(window.location.search);
+  var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+  var scriptUrl = window.scriptUrl || '/';
+  var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+  var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('3fe1b5cb67b7223e') ?>';
+  var COMPANY_PAGES = <?!= companyPages ?>;
+  var CURRENT_ACTION = '<?!= currentAction ?>';
+  var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+  var CAN_WRITE = UIC.canAdd_(); var CAN_FULL = UIC.canFull_();
+  var NEW_TYPE_OPTION = '__new__';
+
+  function companyCall(moduleAction, data) {
+    return API.call('company_action', {
+      target_system: '3fe1b5cb67b7223e',
+      module_action: moduleAction,
+      data: data || {}
+    }, SESSION_TOKEN);
+  }
+
+  function esc(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  function fmtDate(v) {
+    if (v == null || v === '') return '';
+    var d = (v instanceof Date) ? v : new Date(v);
+    if (isNaN(d.getTime())) return String(v);
+    var p = function (n) { return ('0' + n).slice(-2); };
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+  }
+
+  function load() {
+    var contentId = 'carton-content';
+    UIC.appShell('tc-root', {
+      companyLogoUrl: COMPANY_LOGO_URL,
+      companyLogoHref: scriptUrl + '?action=tc_dashboard&sessionToken=' + SESSION_TOKEN,
+      companyLogoTitle: 'توب كيميكال',
+      breadcrumb: 'توب كيميكال / الاستيراد والمشتريات / مقاسات الكراتين والعبوات',
+      contentId: contentId,
+      menuGroups: (window.TOPCHEMICAL_MENU || [])
+    });
+    fetchSizes();
+  }
+
+  function fetchSizes() {
+    UI.showSpinner();
+    companyCall('get_carton_sizes')
+      .then(function (r) {
+        window.__sizes = r.sizes || [];
+        window.__productOptions = r.product_options || [];
+        window.__vendorOptions = r.vendor_options || [];
+        window.__typeOptions = r.type_options || [];
+        renderSizes();
+      })
+      .catch(function (e) { showError(e); })
+      .finally(function () { UI.hideSpinner(); try{schedulePrefetch();}catch(e){} });
+  }
+
+  function renderSizes() {
+    var list = window.__sizes;
+    var rows = list.map(function (s) {
+      return {
+        id: s.id,
+        product: esc(s.product_name || ('#' + s.product)),
+        vendor: esc(s.vendor_name || ('#' + s.common_vendor)),
+        type: esc(s.type || '-'),
+        length: s.length,
+        width: s.width,
+        height: s.height,
+        other_details: esc(s.other_details || '-'),
+        document: fileLinkCell(s.document),
+        actions: UIC.actionBtns([{ label: 'عرض', onclick: 'openDetail(' + window.__sizes.indexOf(s) + ')' }])
+      };
+    });
+    var headers = [
+      { key: 'id', label: '#', numeric: true },
+      { key: 'product', label: 'المنتج' },
+      { key: 'vendor', label: 'المورد المشترك' },
+      { key: 'type', label: 'النوع' },
+      { key: 'length', label: 'الطول', numeric: true },
+      { key: 'width', label: 'العرض', numeric: true },
+      { key: 'height', label: 'الارتفاع', numeric: true },
+      { key: 'other_details', label: 'تفاصيل أخرى' },
+      { key: 'document', label: 'المستند' },
+      { key: 'actions', label: 'إجراءات' }
+    ];
+    var body = document.getElementById('carton-content');
+    body.innerHTML = (CAN_WRITE
+      ? '<div style="display:flex;justify-content:flex-end;margin-bottom:12px;"><button class="btn btn-primary" onclick="openAddModal()">+ إضافة مقاس</button></div>'
+      : '') +
+      UIC.dataTable('carton-table', {
+        title: 'مقاسات الكراتين والعبوات',
+        headers: headers,
+        rows: rows,
+        emptyText: 'لا توجد مقاسات'
+      });
+    UIC.initTableSort('carton-table');
+  }
+
+  function typeFieldHTML() {
+    var opts = (window.__typeOptions || []).map(function (t) {
+      return '<option value="' + esc(t.value) + '">' + esc(t.label) + '</option>';
+    }).join('');
+    return '<div class="form-field" data-field="type"><label class="form-label" for="size-type">النوع <span class="req">*</span></label>' +
+      '<select id="size-type" class="input" data-field-name="type">' +
+      '<option value="">اختر النوع...</option>' + opts +
+      '<option value="' + NEW_TYPE_OPTION + '">+ إضافة نوع جديد</option>' +
+      '</select>' +
+      '<div class="field-error" id="err-type"></div></div>' +
+      '<div class="form-field" data-field="new_type" id="new-type-row" style="display:none;">' +
+      '<label class="form-label" for="size-new-type">النوع الجديد <span class="req">*</span></label>' +
+      '<input id="size-new-type" class="input" type="text" placeholder="اكتب النوع الجديد...">' +
+      '</div>';
+  }
+
+  function openAddModal() {
+    var body =
+      '<form id="carton-size-form">' +
+      UIC.field({ key: 'product', label: 'المنتج', type: 'select', required: true,
+        options: window.__productOptions || [], placeholder: 'اختر المنتج...' }) +
+      UIC.field({ key: 'common_vendor', label: 'المورد المشترك', type: 'select', required: true,
+        options: window.__vendorOptions || [], placeholder: 'اختر المورد...' }) +
+      typeFieldHTML() +
+      UIC.field({ key: 'length', label: 'الطول', type: 'number', step: '0.01', min: '0', required: true, placeholder: 'مثال: 40.5' }) +
+      UIC.field({ key: 'width', label: 'العرض', type: 'number', step: '0.01', min: '0', required: true, placeholder: 'مثال: 30' }) +
+      UIC.field({ key: 'height', label: 'الارتفاع', type: 'number', step: '0.01', min: '0', required: true, placeholder: 'مثال: 20' }) +
+      '<div class="form-field" data-field="other_details"><label class="form-label" for="size-other-details">تفاصيل أخرى <span class="req">*</span></label>' +
+      '<textarea id="size-other-details" class="input" data-field-name="other_details" rows="3" placeholder="تفاصيل إضافية..."></textarea>' +
+      '<div class="field-error" id="err-other_details"></div></div>' +
+      '<div class="form-field" data-field="document"><label class="form-label" for="size-document">المستند (pdf, word, صورة)</label>' +
+      '<input id="size-document" data-field-name="document" class="input" type="file" accept=".pdf,.doc,.docx,.png,.jpg,.jpeg">' +
+      '<div class="field-error" id="err-document"></div></div>' +
+      '</form>';
+    UIC.openModal('carton-modal', {
+      title: 'إضافة مقاس كرتون/عبوة',
+      body: body,
+      onSave: 'saveCartonSize()'
+    });
+    var sel = document.getElementById('size-type');
+    if (sel) {
+      sel.addEventListener('change', function () {
+        document.getElementById('new-type-row').style.display = (sel.value === NEW_TYPE_OPTION) ? '' : 'none';
+      });
+    }
+  }
+
+  function saveCartonSize() {
+    var formEl = document.getElementById('carton-size-form');
+    var data = UIC.collectForm('carton-size-form');
+    if (data.type === NEW_TYPE_OPTION) {
+      var newType = (document.getElementById('size-new-type') || {}).value || '';
+      newType = String(newType).trim();
+      if (!newType) { UIC.toast('اكتب النوع الجديد', 'error'); return; }
+      data.type = newType;
+    }
+    if (!UIC.validateForm('carton-size-form')) return;
+    if (String(data.type).trim() === '') { UIC.toast('النوع مطلوب', 'error'); return; }
+    UI.showSpinner('جاري الحفظ...');
+    companyCall('add_carton_size', data)
+      .then(function (r) {
+        var id = (r && r.data) ? r.data.assignedId : null;
+        return uploadDocument(formEl, id).then(function (docRef) {
+          if (docRef) {
+            if (r && r.record) r.record.document = docRef;
+            return companyCall('add_carton_size_files', { id: id, document: docRef }).then(function () { return r; });
+          }
+          return r;
+        });
+      })
+      .then(function (r) {
+        UIC.closeModal('carton-modal');
+        UIC.toast((r && r.message) || 'تم الحفظ', 'success');
+        if (r && r.record) {
+          window.__sizes = window.__sizes || [];
+          window.__sizes.unshift(r.record);
+          if (window.__sizes.length>10) window.__sizes=window.__sizes.slice(0,10);
+          renderSizes();
+        } else { fetchSizes(); }
+      })
+      .catch(function (e) { UIC.toast((e && e.message) || 'خطأ', 'error'); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function uploadDocument(formEl, id) {
+    var input = formEl.querySelector('input[data-field-name="document"]');
+    if (!input || !input.files || !input.files[0]) return Promise.resolve(null);
+    return new Promise(function (resolve, reject) {
+      var reader = new FileReader();
+      reader.onerror = function () { reject(new Error('خطأ في قراءة الملف')); };
+      reader.onload = function () {
+        var b64 = String(reader.result || '').split(',')[1] || '';
+        companyCall('add_upload_file', {
+          sheet: 'purchasing_support_data',
+          field: 'document',
+          id: id,
+          filename: input.files[0].name,
+          base64: b64
+        }).then(function (res) {
+          if (res && res.status === 'success') resolve(res.reference);
+          else reject(new Error((res && res.message) || 'خطأ في رفع الملف'));
+        }).catch(function (e) {
+          reject(new Error((e && e.message) || 'خطأ في رفع الملف'));
+        });
+      };
+      reader.readAsDataURL(input.files[0]);
+    });
+  }
+
+  function downloadRef(ref) {
+    if (!ref) return;
+    window.open(scriptUrl + '?download=doc_file&company=3fe1b5cb67b7223e&ref=' +
+      encodeURIComponent(ref) + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN), '_blank');
+  }
+
+  function fileLinkCell(ref) {
+    return ref
+      ? '<button class="btn btn-outline" style="padding:4px 10px;" onclick="downloadRef(\'' + esc(ref) + '\')">تحميل</button>'
+      : '-';
+  }
+
+  function openDetail(idx) {
+    var s = window.__sizes[idx];
+    if (!s) return;
+    var rows = [
+      ['#', s.id],
+      ['المنتج', s.product_name || ('#' + s.product)],
+      ['المورد المشترك', s.vendor_name || ('#' + s.common_vendor)],
+      ['النوع', s.type || '-'],
+      ['الطول', s.length],
+      ['العرض', s.width],
+      ['الارتفاع', s.height],
+      ['تفاصيل أخرى', s.other_details || '-'],
+      ['المستند', fileLinkCell(s.document)],
+      ['أضيف بواسطة', s.user || '-'],
+      ['وقت الإضافة', s.created_at ? fmtDate(s.created_at) : '-']
+    ];
+    var body = rows.map(function (r) {
+      return '<div class="form-field"><label class="form-label">' + esc(r[0]) + '</label>' +
+        '<div style="padding:8px 12px;background:var(--bg-subtle);border-radius:var(--radius-sm);font-size:13px;">' + r[1] + '</div></div>';
+    }).join('');
+    UIC.openModal('carton-detail-modal', {
+      title: 'تفاصيل المقاس #' + s.id,
+      body: body,
+      footer: false
+    });
+  }
+
+  function showError(e) {
+    var body = document.getElementById('carton-content');
+    if (body) body.innerHTML = '<div class="empty-state"><span>' + esc(e.message || 'خطأ') + '</span></div>';
+  }
+
+  load();
+</script>
+</body>
+</html>
+
+

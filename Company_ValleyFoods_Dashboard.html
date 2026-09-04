@@ -1,0 +1,73 @@
+﻿<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Valley Foods — Dashboard</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_ValleyFoods_Nav'); ?>
+  <?!= getCompanyThemeCSS_('9940659bd83035d7') ?>
+  <style>
+    .vf-dash-wrap { padding: 16px 20px 32px; }
+    .vf-welcome {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-lg);
+      padding: 28px 32px;
+      box-shadow: var(--shadow-sm);
+      text-align: center;
+    }
+    .vf-welcome h1 { margin: 0 0 8px; font-size: 22px; color: var(--brand-primary); }
+    .vf-welcome p { margin: 0; color: var(--text-muted); font-size: 13px; }
+  </style>
+</head>
+<body>
+<div id="vf-root" dir="rtl"></div>
+<script>
+  var params = new URLSearchParams(window.location.search);
+  var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+  var scriptUrl = window.scriptUrl || '/';
+  var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('9940659bd83035d7') ?>';
+  var COMPANY_PAGES = <?!= companyPages ?>;
+  var CURRENT_ACTION = '<?!= currentAction ?>';
+
+  function companyCall(moduleAction, data) {
+    return API.call('company_action', {
+      target_system: '9940659bd83035d7',
+      module_action: moduleAction,
+      data: data || {}
+    }, SESSION_TOKEN);
+  }
+
+  function load() {
+    UIC.appShell('vf-root', {
+      companyLogoUrl: COMPANY_LOGO_URL,
+      companyLogoHref: scriptUrl + '?action=vf_dashboard&sessionToken=' + SESSION_TOKEN,
+      companyLogoTitle: 'فالي فودز',
+      breadcrumb: 'فالي فودز / لوحة التحكم',
+      contentId: 'vf-content',
+      menuGroups: (window.VALLEYFOODS_MENU || [])
+    });
+
+    var inner = document.getElementById('vf-content');
+    if (inner) {
+      inner.innerHTML =
+        '<div class="vf-dash-wrap">' +
+          '<div class="vf-welcome">' +
+            '<h1>مرحباً بك في نظام فالي فودز للمنتجات الزراعية</h1>' +
+            '<p>لوحة التحكم — الهيكل الأساسي. استخدم القائمة أعلاه للوصول إلى الصفحات.</p>' +
+          '</div>' +
+        '</div>';
+    }
+  }
+
+
+  load();
+</script>
+</body>
+</html>
+
+
+

@@ -1,0 +1,178 @@
+﻿<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Top Light — تقرير النقدية</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= getCompanyThemeCSS_('8df5c89a117fe9a5') ?>
+  <style>
+    @media print {
+      .topbar, .breadcrumb, .no-print { display: none !important; }
+      body { background: #ffffff !important; }
+    }
+  </style>
+</head>
+<body>
+<div id="tl-root" dir="rtl"></div>
+<script>
+  var params = new URLSearchParams(window.location.search);
+  var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+  var scriptUrl = window.scriptUrl || '/';
+  var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('8df5c89a117fe9a5') ?>';
+  var COMPANY_PAGES = <?!= companyPages ?>;
+  var CURRENT_ACTION = '<?!= currentAction ?>';
+  var __boxOptions = [];
+  var __typeOptions = [];
+  var __rows = [];
+  var __search = '';
+
+  function companyCall(moduleAction, data) {
+    return API.call('company_action', {
+      target_system: '8df5c89a117fe9a5',
+      module_action: moduleAction,
+      data: data || {}
+    }, SESSION_TOKEN);
+  }
+
+  function load() {
+    UIC.appShell('tl-root', {
+      companyLogoUrl: COMPANY_LOGO_URL,
+      companyLogoHref: scriptUrl + '?action=tl_dashboard&sessionToken=' + SESSION_TOKEN,
+      companyLogoTitle: 'القمة لايت',
+      breadcrumb: 'القمة لايت / تقرير النقدية',
+      contentId: 'tl-content'
+    });
+    fetchData();
+  }
+
+  function filterPayload() {
+    return {
+      date_from: document.getElementById('f_from') ? document.getElementById('f_from').value : '',
+      date_to: document.getElementById('f_to') ? document.getElementById('f_to').value : '',
+      box: document.getElementById('f_box') ? document.getElementById('f_box').value : '',
+      type: document.getElementById('f_type') ? document.getElementById('f_type').value : ''
+    };
+  }
+
+  var __filtersBuilt = false;
+
+  function fetchData() {
+    UI.showSpinner();
+    companyCall('get_cash_report', filterPayload())
+      .then(function (r) {
+        __boxOptions = r.box_options || [];
+        __typeOptions = r.type_options || [];
+        __rows = r.rows || [];
+        var content = document.getElementById('tl-content');
+        if (!__filtersBuilt) {
+          content.innerHTML = renderFilters() + '<div id="results"></div>';
+          __filtersBuilt = true;
+        }
+        renderResults();
+      })
+      .catch(function (e) { showError(e); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function onSearch() {
+    var el = document.getElementById('f_search');
+    __search = el ? el.value : '';
+    renderResults();
+  }
+
+  function renderFilters() {
+    return '<div class="no-print" style="display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;margin-bottom:16px;padding:12px;background:var(--bg-surface);border:2px solid #111111;border-radius:8px;">' +
+      '<div class="form-field" style="margin:0;"><label class="form-label" for="f_from">من تاريخ</label><input id="f_from" class="input" type="date" onchange="fetchData()"></div>' +
+      '<div class="form-field" style="margin:0;"><label class="form-label" for="f_to">إلى تاريخ</label><input id="f_to" class="input" type="date" onchange="fetchData()"></div>' +
+      '<div class="form-field" style="margin:0;"><label class="form-label" for="f_box">الصندوق</label>' +
+      '<select id="f_box" class="input" onchange="fetchData()"><option value="">الكل</option>' + (__boxOptions || []).map(function (b) { return '<option value="' + FMT.escape(b.value) + '">' + FMT.escape(b.label) + '</option>'; }).join('') + '</select></div>' +
+      '<div class="form-field" style="margin:0;"><label class="form-label" for="f_type">النوع</label>' +
+      '<select id="f_type" class="input" onchange="fetchData()"><option value="">الكل</option>' + (__typeOptions || []).map(function (t) { return '<option value="' + FMT.escape(t.value) + '">' + FMT.escape(t.label) + '</option>'; }).join('') + '</select></div>' +
+      '<div class="form-field" style="margin:0;flex:1;min-width:200px;"><label class="form-label" for="f_search">بحث (رقم / الطرف / البيان)</label>' +
+      '<input id="f_search" class="input" type="text" placeholder="اكتب للبحث..." oninput="onSearch()"></div>' +
+      '<button class="btn btn-outline" onclick="window.print()">طباعة</button>' +
+      '</div>';
+  }
+
+  function renderResults() {
+    var el = document.getElementById('results');
+    if (!el) return;
+
+    var rows = (__rows || []).map(function (r) {
+      return {
+        transaction_id: r.transaction_id || '',
+        date: fmtDate(r.date),
+        party: r.party || '-',
+        details: r.details || '-',
+        account: r.account || '-',
+        type: r.type || '-',
+        total: r.total || 0,
+        balance: r.balance || 0,
+        approved: r.approved ? 'معتمد' : 'قيد الانتظار'
+      };
+    });
+
+    var totalDebit = 0, totalCredit = 0, net = 0;
+    (__rows || []).forEach(function (r) {
+      var t = numVal(r.total);
+      if (r.type === 'Credit') { totalCredit += t; net -= t; }
+      else { totalDebit += t; net += t; }
+    });
+
+    var kpis = '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:16px;">' +
+      kpiCard('إجمالي مدين', totalDebit) +
+      kpiCard('إجمالي دائن', totalCredit) +
+      kpiCard('صافي الحركة', net) +
+      '</div>';
+
+    var tableHtml = UIC.dataTable('cash-report-dt', {
+      title: 'تقرير النقدية',
+      headers: [
+        { key: 'transaction_id', label: 'رقم الحركة', numeric: true },
+        { key: 'date', label: 'التاريخ' },
+        { key: 'party', label: 'الجهة المرتبطة' },
+        { key: 'details', label: 'البيان' },
+        { key: 'account', label: 'تبويب الحساب' },
+        { key: 'type', label: 'النوع' },
+        { key: 'total', label: 'المبلغ', money: true },
+        { key: 'balance', label: 'الرصيد', money: true },
+        { key: 'approved', label: 'الحالة' }
+      ],
+      rows: rows,
+      emptyText: 'لا توجد حركات'
+    });
+
+    el.innerHTML = kpis + tableHtml;
+    UIC.initTableSort('cash-report-dt');
+  }
+
+  function kpiCard(label, value) {
+    return '<div class="stat-card"><div class="stat-body"><div class="stat-value num">' + FMT.number(value) + '</div>' +
+      '<div class="stat-label">' + FMT.escape(label) + '</div></div></div>';
+  }
+
+  function numVal(v) { var n = Number(v); return isNaN(n) ? 0 : n; }
+
+  function fmtDate(v) {
+    if (!v) return '-';
+    var d = new Date(v);
+    if (isNaN(d.getTime())) return String(v).slice(0, 10);
+    return d.toLocaleDateString('en-GB');
+  }
+
+  function showError(e) {
+    var content = document.getElementById('tl-content');
+    if (content) content.innerHTML = '<div class="empty-state"><span>' + FMT.escape(e.message || 'خطأ') + '</span></div>';
+  }
+
+
+  load();
+</script>
+</body>
+</html>
+
+
+

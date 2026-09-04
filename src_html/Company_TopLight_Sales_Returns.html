@@ -1,0 +1,179 @@
+﻿<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>مرتجعات المبيعات</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= getCompanyThemeCSS_('8df5c89a117fe9a5') ?>
+</head>
+<body>
+<div id="returns-root" dir="rtl"></div>
+<script>
+  var params = new URLSearchParams(window.location.search);
+  var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+  var scriptUrl = window.scriptUrl || '/';
+  var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+  var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('8df5c89a117fe9a5') ?>';
+  var invoiceId = '<?!= purchaseCode ?>';
+
+  var __data = { invoice: null, products: [], returns: [] };
+
+  function companyCall(moduleAction, data) {
+    return API.call('company_action', {
+      target_system: '8df5c89a117fe9a5',
+      module_action: moduleAction,
+      data: data || {}
+    }, SESSION_TOKEN);
+  }
+
+  function num(v) { var n = Number(v); return isNaN(n) ? 0 : n; }
+  function getVal(id) { var el = document.getElementById(id); return el ? el.value : ''; }
+
+  function load() {
+    UI.showSpinner('جاري تحميل المرتجعات...');
+    companyCall('get_sales_returns', { invoice_id: invoiceId })
+      .then(function (r) { __data = r; render(); })
+      .catch(function (e) {
+        document.getElementById('returns-root').innerHTML =
+          '<div class="empty-state"><span>' + FMT.escape(e.message || 'خطأ') + '</span></div>';
+      })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function render() {
+    var root = document.getElementById('returns-root');
+    var inv = __data.invoice || {};
+
+    var availProducts = (__data.products || []).filter(function (p) { return p.available_qty > 0; });
+
+    var returnsRows = (__data.returns || []).map(function (r) {
+      var delBtns = IS_SUPER_ADMIN ? [{ label: 'حذف', onclick: "deleteReturn('" + FMT.escape(r.unique_id) + "')" }] : [];
+      return {
+        product_name: r.product_name || '-',
+        return_qty: FMT.number(r.return_qty),
+        return_price: FMT.number(r.return_price),
+        return_discount: FMT.number(r.return_discount),
+        return_value: FMT.number(r.return_value),
+        return_date: r.return_date ? String(r.return_date).slice(0, 10) : '-',
+        actions: UIC.actionBtns(delBtns)
+      };
+    });
+
+    var addForm = '';
+    if (availProducts.length) {
+      var prodOptions = availProducts.map(function (p) {
+        return '<option value="' + FMT.escape(p.product_id) + '">' + FMT.escape(p.product_name) + '</option>';
+      }).join('');
+      addForm =
+        '<div style="background:var(--bg-surface);border:1px solid var(--border-color);border-radius:8px;padding:16px;margin-bottom:16px;">' +
+        '<h3 style="margin:0 0 12px;">إضافة مرتجع</h3>' +
+        '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:0 16px;">' +
+        '<div class="form-field"><label class="form-label" for="ret_product">المنتج *</label>' +
+        '<select id="ret_product" class="input" onchange="onProductChange()"><option value="">اختر...</option>' + prodOptions + '</select></div>' +
+        '<div class="form-field"><label class="form-label" for="ret_qty">كمية المرتجع *</label>' +
+        '<input id="ret_qty" class="input" type="number" min="1" step="any" oninput="onProductChange()"></div>' +
+        '<div class="form-field"><label class="form-label" for="ret_date">تاريخ المرتجع *</label>' +
+        '<input id="ret_date" class="input" type="date" value="' + formatDate(new Date()) + '"></div>' +
+        '</div>' +
+        '<div id="ret_avail" style="font-size:12px;color:var(--text-muted);margin-top:8px;">المتاح: 0</div>' +
+        '<div style="margin-top:12px;"><button class="btn btn-primary" onclick="UI.submitOnce(this, addReturn)">حفظ المرتجع</button></div>' +
+        '</div>';
+    }
+
+    var html =
+      '<div style="max-width:960px;margin:12px auto;padding:0 16px;">' +
+      '<div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;">' +
+      '<img src="' + (COMPANY_LOGO_URL || '') + '" style="height:34px;" alt="">' +
+      '<h2 style="margin:0;flex:1;">مرتجعات المبيعات</h2>' +
+      '<button class="btn btn-outline" onclick="try{window.top.close()}catch(e){window.close()}">إغلاق</button>' +
+      '</div>' +
+      '<div style="display:flex;flex-wrap:wrap;gap:16px;padding:14px 16px;background:var(--bg-subtle);border:1px solid var(--border-color);border-radius:8px;margin-bottom:16px;">' +
+      '<span>رقم الفاتورة: <strong>' + FMT.escape(inv.invoice_number || '-') + '</strong></span>' +
+      '<span>العميل: <strong>' + FMT.escape(inv.customer_name || '-') + '</strong></span>' +
+      '<span>تاريخ الفاتورة: <strong>' + (inv.invoice_date ? String(inv.invoice_date).slice(0, 10) : '-') + '</strong></span>' +
+      '<span>المبلغ الصافي: <strong>' + FMT.number(inv.net) + '</strong></span>' +
+      '<span>قيمة الخصم: <strong>' + FMT.number(inv.discount_value) + '</strong></span>' +
+      '</div>' +
+      addForm +
+      UIC.dataTable('returns-table', {
+        title: 'المرتجعات المسجلة',
+        headers: [
+          { key: 'product_name', label: 'المنتج' },
+          { key: 'return_qty', label: 'الكمية', numeric: true },
+          { key: 'return_price', label: 'السعر', numeric: true },
+          { key: 'return_discount', label: 'الخصم', numeric: true },
+          { key: 'return_value', label: 'القيمة', numeric: true },
+          { key: 'return_date', label: 'التاريخ' },
+          { key: 'actions', label: 'إجراءات' }
+        ],
+        rows: returnsRows,
+        emptyText: 'لا توجد مرتجعات مسجلة'
+      }) +
+      '</div>';
+
+    root.innerHTML = html;
+    UIC.initTableSort('returns-table');
+  }
+
+  function onProductChange() {
+    var pid = getVal('ret_product');
+    var qty = num(getVal('ret_qty'));
+    var avail = availableQty(pid);
+    var el = document.getElementById('ret_avail');
+    if (el) el.textContent = 'المتاح: ' + avail;
+    if (qty > avail && avail > 0) {
+      if (el) { el.style.color = 'var(--danger)'; el.textContent = 'المتاح: ' + avail + ' — الكمية تتجاوز المتاح'; }
+    } else if (el) {
+      el.style.color = '';
+    }
+  }
+
+  function availableQty(pid) {
+    var p = (__data.products || []).find(function (x) { return String(x.product_id) === String(pid); });
+    return p ? p.available_qty : 0;
+  }
+
+  function addReturn() {
+    var product_id = getVal('ret_product');
+    var return_qty = num(getVal('ret_qty'));
+    var return_date = getVal('ret_date');
+    if (!product_id) { UIC.toast('اختر المنتج', 'error'); return; }
+    if (String(return_date).trim() === '') { UIC.toast('تاريخ المرتجع مطلوب', 'error'); return; }
+    if (return_qty <= 0) { UIC.toast('كمية المرتجع يجب أن تكون أكبر من صفر', 'error'); return; }
+    var avail = availableQty(product_id);
+    if (return_qty > avail) { UIC.toast('الكمية تتجاوز المتاح (المتاح: ' + avail + ')', 'error'); return; }
+
+    UI.showSpinner('جاري الحفظ...');
+    companyCall('add_sales_return', { invoice_id: invoiceId, product_id: product_id, return_qty: return_qty, return_date: return_date })
+      .then(function (r) {
+        UIC.toast(r.message || 'تم الحفظ', 'success');
+        load();
+      })
+      .catch(function (e) { UI.hideSpinner(); UIC.toast(e.message || 'خطأ', 'error'); });
+  }
+
+  function deleteReturn(uid) {
+    if (!IS_SUPER_ADMIN) { UIC.toast('غير مصرح', 'error'); return; }
+    if (!confirm('هل تريد حذف هذا المرتجع؟')) return;
+    UI.showSpinner('جاري الحذف...');
+    companyCall('delete_sales_return', { unique_id: uid })
+      .then(function (r) { UIC.toast(r.message || 'تم الحذف', 'success'); load(); })
+      .catch(function (e) { UI.hideSpinner(); UIC.toast(e.message || 'خطأ', 'error'); });
+  }
+
+  function formatDate(v) {
+    if (!v) return '';
+    var d = new Date(v);
+    if (isNaN(d.getTime())) return String(v).slice(0, 10);
+    return d.toISOString().slice(0, 10);
+  }
+
+  load();
+</script>
+</body>
+</html>
+
+

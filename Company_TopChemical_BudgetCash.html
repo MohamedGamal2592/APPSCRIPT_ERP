@@ -1,0 +1,337 @@
+﻿<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>تحركات صناديق الميزانية</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_TopChemical_Nav'); ?>
+  <?!= getCompanyThemeCSS_('3fe1b5cb67b7223e') ?>
+</head>
+<body>
+<div id="tc-root" dir="rtl"></div>
+<script>
+  var params = new URLSearchParams(window.location.search);
+  var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+  var scriptUrl = window.scriptUrl || '/';
+  var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+  var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('3fe1b5cb67b7223e') ?>';
+  var COMPANY_PAGES = <?!= companyPages ?>;
+  var CURRENT_ACTION = '<?!= currentAction ?>';
+  var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+  var CAN_WRITE = UIC.canAdd_(); var CAN_FULL = UIC.canFull_();
+  var FILTER = { type: '', method: '', box: '', offset: 0, limit: 200 };
+  var LAST = { total: 0, summary: { debit: 0, credit: 0, count: 0 }, boxes: [] };
+  var REFS = null;
+
+  function companyCall(moduleAction, data) {
+    return API.call('company_action', {
+      target_system: '3fe1b5cb67b7223e',
+      module_action: moduleAction,
+      data: data || {}
+    }, SESSION_TOKEN);
+  }
+
+  function pad(n) { return n < 10 ? '0' + n : String(n); }
+  function todayStr() {
+    var d = new Date();
+    return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+  }
+
+  function load() {
+    UIC.appShell('tc-root', {
+      companyLogoUrl: COMPANY_LOGO_URL,
+      companyLogoHref: scriptUrl + '?action=tc_dashboard&sessionToken=' + SESSION_TOKEN,
+      companyLogoTitle: 'توب كيميكال',
+      breadcrumb: 'توب كيميكال / حسابات الميزانية / تحركات صناديق الميزانية',
+      contentId: 'budget-cash-content',
+      menuGroups: (window.TOPCHEMICAL_MENU || [])
+    });
+    UI.showSpinner('جاري تحميل البيانات...');
+    companyCall('get_budget_refs')
+      .then(function (r) { REFS = r.refs || {}; return fetchCash(); })
+      .catch(function (e) { UI.hideSpinner(); try{schedulePrefetch();}catch(e){} showError(e); });
+  }
+
+  function fetchCash() {
+    UI.showSpinner();
+    return companyCall('get_legal_cash', {
+      transaction_type: FILTER.type,
+      transaction_method: FILTER.method,
+      related_box: FILTER.box,
+      offset: FILTER.offset,
+      limit: FILTER.limit
+    })
+      .then(function (r) {
+        LAST.total = r.total || 0;
+        LAST.summary = r.summary || { debit: 0, credit: 0, count: 0 };
+        LAST.boxes = r.boxes || [];
+        renderCash(r.items || [], r.total || 0, LAST.summary);
+      })
+      .catch(function (e) { showError(e); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function boxLabel(box) {
+    var name = '';
+    ((REFS && REFS.boxes) || []).forEach(function (b) {
+      if (String(b.level5) === String(box)) name = b.name5;
+    });
+    return name ? name + ' (' + box + ')' : String(box);
+  }
+
+  function renderCash(items, total, summary) {
+    var boxKeys = [];
+    var seen = {};
+    LAST.boxes.forEach(function (b) { if (!seen[b.box]) { seen[b.box] = true; boxKeys.push(b.box); } });
+    (REFS && REFS.boxes || []).forEach(function (b) { if (!seen[b.level5]) { seen[b.level5] = true; boxKeys.push(b.level5); } });
+    boxKeys.sort();
+
+    var boxCards = LAST.boxes.map(function (b) {
+      var bx = String(b.box).replace(/'/g, '');
+      return '<div class="box-card" title="إضافة حركة لهذا الصندوق" onclick="openCashModal(\'' + bx + '\')">' +
+        UIC.statCard({ label: boxLabel(b.box), value: FMT.currency(b.balance), icon: '🗂️', tone: 'default' }) +
+        '</div>';
+    }).join('') || '';
+
+    var headers = [
+      { key: 'transaction_id', label: '#' },
+      { key: 'name', label: 'الاسم' },
+      { key: 'details', label: 'التفاصيل' },
+      { key: 'date', label: 'التاريخ' },
+      { key: 'amount', label: 'المبلغ', money: true },
+      { key: 'net', label: 'الصافي', money: true },
+      { key: 'taxes', label: 'الضرائب', money: true },
+      { key: 'total', label: 'الإجمالي', money: true },
+      { key: 'type', label: 'النوع' },
+      { key: 'balance', label: 'الرصيد', money: true },
+      { key: 'method', label: 'الطريقة' },
+      { key: 'chart_main', label: 'التصنيف' },
+      { key: 'approved', label: 'اعتماد' },
+      { key: 'actions', label: 'إجراءات' }
+    ];
+    var grouped = '';
+    LAST.boxes.forEach(function (b) {
+      var boxItems = items.filter(function (r) { return String(r.related_box || '').trim() === String(b.box); });
+      if (!boxItems.length) return;
+      var rows = boxItems.map(function (r) {
+        return {
+          transaction_id: FMT.escape(r.transaction_id || '-'),
+          name: FMT.escape(r.name || '-'),
+          details: FMT.escape(r.transaction_details || '-'),
+          date: FMT.escape(r.transaction_date || '-'),
+          amount: Number(r.transaction_amount) || 0,
+          net: Number(r.net_amount) || 0,
+          taxes: Number(r.taxes) || 0,
+          total: Number(r.total) || 0,
+          type: FMT.escape(r.transaction_type || '-'),
+          balance: Number(r.balance_amount) || 0,
+          method: FMT.escape(r.transaction_method || '-'),
+          chart_main: FMT.escape(r.chart_account_main || '-'),
+          approved: FMT.escape(r.approved || '-'),
+          actions: UIC.actionBtns([
+            { label: String(r.approved || '').trim().toUpperCase() === 'TRUE' ? 'إلغاء' : 'اعتماد', onclick: "toggleApproved('" + (r.transaction_id || '') + "')" },
+            { label: 'طباعة', onclick: "printCash('" + (r.transaction_id || '') + "')", color: '' }
+          ])
+        };
+      });
+      grouped += '<div class="box-section">' +
+        '<div class="box-head"><span>الصندوق: ' + FMT.escape(boxLabel(b.box)) + '</span>' +
+        '<span class="box-bal">الرصيد: ' + FMT.currency(b.balance) + ' (' + FMT.number(boxItems.length) + ' حركة)</span></div>' +
+        UIC.dataTable('cash-table-' + String(b.box).replace(/\W/g, '_'), { headers: headers, rows: rows, emptyText: 'لا توجد حركات' }) +
+        '</div>';
+      UIC.initTableSort('cash-table-' + String(b.box).replace(/\W/g, '_'));
+    });
+    if (!grouped) {
+      grouped = '<div class="empty-state"><span>لا توجد حركات</span></div>';
+    }
+
+    var page = Math.floor(FILTER.offset / FILTER.limit) + 1;
+    var pages = Math.max(1, Math.ceil(total / FILTER.limit));
+    var stats =
+      '<div style="display:flex;flex-wrap:wrap;gap:12px;margin-bottom:12px;">' +
+        UIC.statCard({ label: 'عدد الحركات', value: FMT.number(summary.count), icon: '📒', tone: 'default' }) +
+        UIC.statCard({ label: 'مدين (Debit)', value: FMT.currency(summary.debit), icon: '➖', tone: 'danger' }) +
+        UIC.statCard({ label: 'دائن (Credit)', value: FMT.currency(summary.credit), icon: '➕', tone: 'success' }) +
+      '</div>';
+    document.getElementById('budget-cash-content').innerHTML =
+      stats +
+      (boxCards ? '<div style="display:flex;flex-wrap:wrap;gap:12px;margin-bottom:12px;">' + boxCards + '</div>' : '') +
+      '<div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:12px;">' +
+        '<select id="cash-type" class="input" style="max-width:170px;">' +
+        '<option value="">كل الأنواع</option>' + ['Debit', 'Credit', 'Credit Note', 'Debit Note'].map(function (t) { return '<option' + (FILTER.type === t ? ' selected' : '') + '>' + t + '</option>'; }).join('') +
+      '</select>' +
+      '<select id="cash-method" class="input" style="max-width:170px;">' +
+        '<option value="">كل الطرق</option>' + ['Cash', 'Bank_transfer', 'Instapay', 'Bank_deposit', 'Check'].map(function (t) { return '<option' + (FILTER.method === t ? ' selected' : '') + '>' + t + '</option>'; }).join('') +
+      '</select>' +
+      '<select id="cash-box" class="input" style="max-width:210px;">' +
+        '<option value="">كل الصناديق</option>' + boxKeys.map(function (b) { return '<option value="' + FMT.escape(b) + '"' + (FILTER.box === b ? ' selected' : '') + '>' + FMT.escape(boxLabel(b)) + '</option>'; }).join('') +
+      '</select>' +
+        (CAN_WRITE ? '<button class="btn btn-primary" onclick="openCashModal()">+ إضافة حركة</button>' : '') +
+      '</div>' +
+      '<div id="cash-table-area">' + grouped + '</div>' +
+      '<div style="display:flex;align-items:center;gap:10px;margin-top:10px;">' +
+        '<button class="btn btn-outline" ' + (FILTER.offset === 0 ? 'disabled' : '') + ' onclick="gotoPage(' + (page - 1) + ')">السابق</button>' +
+        '<span style="font-size:13px;color:#374151;">صفحة ' + page + ' من ' + pages + ' (' + FMT.number(total) + ' حركة)</span>' +
+        '<button class="btn btn-outline" ' + (page >= pages ? 'disabled' : '') + ' onclick="gotoPage(' + (page + 1) + ')">التالي</button>' +
+      '</div>';
+    var ctEl = document.getElementById('cash-type');
+    if (ctEl) ctEl.addEventListener('change', function () { setFilter('type', this.value); });
+    var cmEl = document.getElementById('cash-method');
+    if (cmEl) cmEl.addEventListener('change', function () { setFilter('method', this.value); });
+    var cbEl = document.getElementById('cash-box');
+    if (cbEl) cbEl.addEventListener('change', function () { setFilter('box', this.value); });
+  }
+
+  function setFilter(k, v) {
+    FILTER[k] = v;
+    FILTER.offset = 0;
+    fetchCash();
+  }
+
+  function gotoPage(p) {
+    if (p < 1) return;
+    FILTER.offset = (p - 1) * FILTER.limit;
+    fetchCash();
+  }
+
+  function openCashModal(preBox) {
+    var parties = (REFS && REFS.parties) || [];
+    var boxes = (REFS && REFS.boxes) || [];
+    var charts = (REFS && REFS.charts) || [];
+    var boxOptions = boxes.map(function (b) {
+      return { value: b.level5, label: (b.name5 ? b.name5 + ' (' + b.level5 + ')' : b.level5) };
+    });
+    var chartOptions = charts.map(function (c) {
+      return { value: c.code, label: c.name ? c.code + ' - ' + c.name : c.code };
+    });
+    var partyOpts = parties.map(function (p) { var n = (p.name || '').trim(); return n ? { value: n, label: n } : null; }).filter(Boolean);
+    var now = new Date();
+    var dateVal = now.getFullYear() + '-' + pad(now.getMonth() + 1) + '-' + pad(now.getDate()) + 'T' + pad(now.getHours()) + ':' + pad(now.getMinutes());
+    var body = '<form id="cash-form">' +
+      '<h4 style="margin:4px 0 10px;font-size:14px;color:#14532d;">بيانات الحركة</h4>' +
+      UIC.combo({ key: 'name', label: 'الاسم', required: true, options: partyOpts, placeholder: 'اختر العميل/المورد...' }) +
+      UIC.field({ key: 'transaction_details', label: 'التفاصيل', required: true }) +
+      UIC.field({ key: 'transaction_date', label: 'التاريخ والوقت', type: 'datetime-local', required: true, value: dateVal }) +
+      '<div style="display:flex;gap:8px;align-items:flex-start;">' +
+        '<div style="flex:1;">' + UIC.field({ key: 'transaction_amount', label: 'المبلغ', type: 'number', step: '0.01', min: '0', required: true }) + '</div>' +
+        '<div style="flex:1;">' + UIC.field({ key: 'total_discount', label: 'الخصم', type: 'number', step: '0.01', min: '0' }) + '</div>' +
+        '<div style="flex:1;">' + UIC.field({ key: 'taxes', label: 'الضرائب', type: 'number', step: '0.01', min: '0' }) + '</div>' +
+      '</div>' +
+      '<div id="cash-calc" style="font-size:13px;color:#14532d;margin:6px 0 10px;">الصافي: <b id="cash-net">0.00</b> — الإجمالي: <b id="cash-total">0.00</b></div>' +
+      UIC.combo({ key: 'transaction_type', label: 'النوع', required: true, options: ['Debit', 'Credit', 'Credit Note', 'Debit Note'], placeholder: 'اختر النوع...' }) +
+      UIC.combo({ key: 'related_box', label: 'الصندوق', required: true, options: boxOptions, placeholder: 'اختر الصندوق...' }) +
+      '<div id="cash-box-balance" style="font-size:13px;color:#374151;margin:0 0 10px;"></div>' +
+      UIC.combo({ key: 'transaction_method', label: 'طريقة الدفع', options: ['Cash', 'Bank_transfer', 'Instapay', 'Bank_deposit', 'Check'], placeholder: 'اختر الطريقة...' }) +
+      UIC.combo({ key: 'chart_code', label: 'كود الحساب', options: chartOptions, placeholder: 'اختر كود الحساب...' }) +
+      UIC.combo({ key: 'approved', label: 'اعتماد', options: [{ value: 'TRUE', label: 'TRUE' }, { value: 'FALSE', label: 'FALSE' }], value: 'TRUE', placeholder: 'اختر...' }) +
+      '</form>';
+    UIC.openModal('cash-modal', { title: 'إضافة حركة صندوق / بنك', body: body, onSave: 'saveCash()' });
+    if (preBox) setComboValue('related_box', String(preBox));
+    var amtEl = document.getElementById('transaction_amount');
+    var discEl = document.getElementById('total_discount');
+    var taxEl = document.getElementById('taxes');
+    if (amtEl) amtEl.addEventListener('input', cashCalc);
+    if (discEl) discEl.addEventListener('input', cashCalc);
+    if (taxEl) taxEl.addEventListener('input', cashCalc);
+    var boxEl = document.getElementById('related_box');
+    if (boxEl) boxEl.addEventListener('change', cashBoxBalance);
+    cashCalc();
+    cashBoxBalance();
+  }
+
+  function setComboValue(key, value) {
+    var data = (window.__comboData || {})[key];
+    var hidden = document.getElementById(key);
+    var disp = document.getElementById(key + '_display');
+    if (!data || !hidden || !disp) return;
+    var op = null;
+    data.opts.forEach(function (x) { if (String(x.value) === String(value)) op = x; });
+    if (!op) return;
+    hidden.value = op.value;
+    disp.value = op.label;
+    hidden.dispatchEvent(new Event('change'));
+  }
+
+  function cashCalc() {
+    var amt = Number(document.getElementById('transaction_amount').value) || 0;
+    var disc = Number(document.getElementById('total_discount').value) || 0;
+    var tax = Number(document.getElementById('taxes').value) || 0;
+    var net = amt - disc;
+    var total = net + tax;
+    document.getElementById('cash-net').textContent = FMT.currency(net);
+    document.getElementById('cash-total').textContent = FMT.currency(total);
+  }
+
+  function cashBoxBalance() {
+    var box = document.getElementById('related_box').value;
+    var div = document.getElementById('cash-box-balance');
+    if (!div) return;
+    if (!box) { div.textContent = ''; return; }
+    var b = (LAST.boxes || []).find(function (x) { return String(x.box) === String(box); });
+    div.textContent = b
+      ? 'رصيد الصندوق الحالي: ' + FMT.currency(b.balance) + ' (' + FMT.number(b.count) + ' حركة)'
+      : 'لا توجد حركات سابقة لهذا الصندوق';
+  }
+
+  function saveCash() {
+    if (!UIC.validateForm('cash-form')) return;
+    var data = UIC.collectForm('cash-form');
+    var amt = Number(data.transaction_amount) || 0;
+    var disc = Number(data.total_discount) || 0;
+    var tax = Number(data.taxes) || 0;
+    data.net_amount = amt - disc;
+    data.total = data.net_amount + tax;
+    data.approved = data.approved === 'TRUE' ? true : false;
+    UI.showSpinner('جاري الحفظ...');
+    companyCall('add_legal_cash', data)
+      .then(function (r) {
+        UIC.closeModal('cash-modal'); UIC.toast(r.message || 'تمت الإضافة', 'success');
+        if (r && r.record) {
+          LAST.items = LAST.items || [];
+          LAST.items.unshift(r.record);
+          // keep sort desc by transaction_id
+          LAST.items.sort(function(a,b){ return (Number(b.transaction_id)||0)-(Number(a.transaction_id)||0); });
+          if (LAST.items.length>200) LAST.items=LAST.items.slice(0,200);
+          // summary already computed from FULL on server, but we increment locally
+          if (LAST.summary) { LAST.summary.count++; if (String(r.record.transaction_type).indexOf('Debit')!==-1) LAST.summary.debit+=r.record.transaction_amount; else if(String(r.record.transaction_type).indexOf('Credit')!==-1) LAST.summary.credit+=r.record.transaction_amount; }
+          renderCash(LAST.items, LAST.total+1, LAST.summary);
+        } else { fetchCash(); }
+      })
+      .catch(function (e) { showError(e); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function toggleApproved(id) {
+    if (!id) return;
+    UI.showSpinner('جاري التحديث...');
+    companyCall('toggle_legal_cash_approved', { transaction_id: id })
+      .then(function (r) { UIC.toast(r.message || 'تم التحديث', 'success'); fetchCash(); })
+      .catch(function (e) { showError(e); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function printCash(id) {
+    if (!id) return;
+    var u = scriptUrl + '?download=budget_print&type=cash&id=' + encodeURIComponent(id) + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN);
+    window.open(u, '_blank');
+  }
+
+  function showError(e) {
+    UIC.toast((e && e.message) || 'خطأ غير متوقع', 'error');
+  }
+
+  load();
+</script>
+<style>
+  .box-section { margin-bottom: 18px; border: 1px solid #d1d5db; border-radius: 8px; overflow: hidden; }
+  .box-card { cursor: pointer; transition: transform .15s ease, box-shadow .15s ease; }
+  .box-card:hover { transform: translateY(-2px); box-shadow: 0 6px 16px rgba(0,0,0,0.12); }
+  .box-head { display: flex; justify-content: space-between; align-items: center; padding: 8px 14px; background: #f0fdf4; border-bottom: 1px solid #d1d5db; font-weight: 700; font-size: 14px; color: #14532d; }
+  .box-bal { font-weight: 800; color: #0a7d32; }
+</style>
+</body>
+</html>
+

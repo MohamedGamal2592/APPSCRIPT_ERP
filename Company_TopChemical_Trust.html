@@ -1,0 +1,243 @@
+﻿<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>عهد خاصة</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_TopChemical_Nav'); ?>
+  <?!= getCompanyThemeCSS_('3fe1b5cb67b7223e') ?>
+  <style>
+    .trust-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; margin-bottom: 20px; }
+    .trust-card { background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: var(--radius-md); padding: 16px; cursor: pointer; transition: all .15s ease; }
+    .trust-card:hover, .trust-card.active { border-color: var(--brand-primary); box-shadow: var(--shadow-brand); }
+    .trust-card .t-name { font-weight: 700; font-size: 14px; margin-bottom: 8px; }
+    .trust-totals { display: flex; gap: 14px; font-size: 12px; color: var(--text-muted); flex-wrap: wrap; }
+    .trust-totals b { color: var(--text-main); }
+  </style>
+</head>
+<body>
+<div id="tc-root" dir="rtl"></div>
+<script>
+  var params = new URLSearchParams(window.location.search);
+  var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+  var scriptUrl = window.scriptUrl || '/';
+  var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+  var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('3fe1b5cb67b7223e') ?>';
+  var COMPANY_PAGES = <?!= companyPages ?>;
+  var CURRENT_ACTION = '<?!= currentAction ?>';
+  var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+  var CAN_WRITE = UIC.canAdd_(); var CAN_FULL = UIC.canFull_();
+
+  var SELECTED_ACCOUNT = '';
+
+  function companyCall(moduleAction, data) {
+    return API.call('company_action', {
+      target_system: '3fe1b5cb67b7223e',
+      module_action: moduleAction,
+      data: data || {}
+    }, SESSION_TOKEN);
+  }
+
+  function pad(n) { return ('0' + n).slice(-2); }
+  function fmtDate(v) {
+    if (!v) return '';
+    var d = new Date(v);
+    if (isNaN(d.getTime())) return String(v);
+    return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+  }
+  function todayStr() {
+    var d = new Date();
+    return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+  }
+  function fmtNum(v) {
+    var n = Number(v) || 0;
+    return n.toLocaleString('en-US', { maximumFractionDigits: 2 });
+  }
+
+  function load() {
+    var contentId = 'trust-content';
+    UIC.appShell('tc-root', {
+      companyLogoUrl: COMPANY_LOGO_URL,
+      companyLogoHref: scriptUrl + '?action=tc_dashboard&sessionToken=' + SESSION_TOKEN,
+      companyLogoTitle: 'توب كيميكال',
+      breadcrumb: 'توب كيميكال / الحسابات / عهد خاصة',
+      contentId: contentId,
+      menuGroups: (window.TOPCHEMICAL_MENU || [])
+    });
+    fetchAccounts();
+  }
+
+  function fetchAccounts() {
+    UI.showSpinner();
+    companyCall('get_trust_accounts')
+      .then(function (r) {
+        window.__accountOptions = r.account_options || [];
+        renderAccounts(r.accounts || []);
+      })
+      .catch(function (e) { showError(e); })
+      .finally(function () { UI.hideSpinner(); try{schedulePrefetch();}catch(e){} });
+  }
+
+  function renderAccounts(accounts) {
+    window.__accounts = accounts;
+    var body = document.getElementById('trust-content');
+    var addBtn = CAN_WRITE
+      ? '<div style="display:flex;justify-content:flex-end;margin-bottom:12px;"><button class="btn btn-primary" onclick="openMovementModal(\'\')">+ إضافة حركة</button></div>'
+      : '';
+    if (!accounts.length) {
+      body.innerHTML = addBtn + '<div class="empty-state"><span>لا توجد عهد بعد</span></div>';
+      return;
+    }
+    var cards = accounts.map(function (a) {
+      var active = a.account === SELECTED_ACCOUNT ? ' active' : '';
+      var netColor = a.net >= 0 ? 'var(--success-text)' : 'var(--danger-text)';
+      return '<div class="trust-card' + active + '" onclick="selectAccount(\'' + FMT.escape(a.account) + '\')">' +
+        '<div class="t-name">' + FMT.escape(a.account) + '</div>' +
+        '<div class="trust-totals">' +
+        '<span>عهدة: <b>' + fmtNum(a.in_total) + '</b></span>' +
+        '<span>مصروف: <b>' + fmtNum(a.out_total) + '</b></span>' +
+        '<span>الرصيد: <b style="color:' + netColor + ';">' + fmtNum(a.net) + '</b></span>' +
+        '<span>حركات: <b>' + a.count + '</b></span>' +
+        '</div></div>';
+    }).join('');
+    body.innerHTML = addBtn +
+      '<div class="trust-grid">' + cards + '</div>' +
+      '<div id="movement-panel"></div>';
+    if (SELECTED_ACCOUNT) selectAccount(SELECTED_ACCOUNT);
+  }
+
+  function selectAccount(account) {
+    SELECTED_ACCOUNT = account;
+    var cards = document.querySelectorAll('.trust-card');
+    cards.forEach(function (c) {
+      c.classList.toggle('active', c.textContent.indexOf(account) !== -1);
+    });
+    UI.showSpinner();
+    companyCall('get_trust_movements', { account: account })
+      .then(function (r) {
+        renderMovements(r.movements || [], r.account);
+      })
+      .catch(function (e) { UIC.toast(e.message || 'خطأ', 'error'); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function renderMovements(movements, account) {
+    var panel = document.getElementById('movement-panel');
+    if (!panel) return;
+    var addBtn = CAN_WRITE
+      ? '<button class="btn btn-primary" style="padding:6px 14px;" onclick="openMovementModal(\'' + FMT.escape(account) + '\')">+ إضافة حركة لهذا الحساب</button>'
+      : '';
+    var rows = movements.map(function (m) {
+      return {
+        id: m.id,
+        date: fmtDate(m.date),
+        movement_type: m.movement_type === 'عهدة'
+          ? '<span class="pill pill-success">عهدة</span>'
+          : '<span class="pill pill-danger">مصروف</span>',
+        reason: m.reason || '-',
+        value: fmtNum(m.value),
+        details: m.details || '-',
+        user: m.user || '-'
+      };
+    });
+    var headers = [
+      { key: 'id', label: '#' },
+      { key: 'date', label: 'التاريخ' },
+      { key: 'movement_type', label: 'النوع' },
+      { key: 'reason', label: 'السبب' },
+      { key: 'value', label: 'القيمة' },
+      { key: 'details', label: 'التفاصيل' },
+      { key: 'user', label: 'المستخدم' }
+    ];
+    panel.innerHTML =
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">' +
+      '<h3 style="margin:0;">حساب: ' + FMT.escape(account) + '</h3>' + addBtn +
+      '</div>' +
+      UIC.dataTable('movements-table', {
+        title: 'حركات الحساب',
+        headers: headers,
+        rows: rows,
+        emptyText: 'لا توجد حركات لهذا الحساب'
+      });
+    UIC.initTableSort('movements-table');
+  }
+
+  function openMovementModal(account) {
+    var body =
+      '<form id="movement-form">' +
+      UIC.enumSelect({ key: 'account', label: 'الحساب', value: account, options: window.__accountOptions || [], required: true, placeholder: 'اختر الحساب...' }) +
+      UIC.field({ key: 'movement_type', label: 'نوع الحركة', type: 'select', required: true, options: ['عهدة', 'مصروف'] }) +
+      UIC.field({ key: 'reason', label: 'السبب', required: true }) +
+      UIC.field({ key: 'value', label: 'القيمة', type: 'number', step: 'any', min: 0, required: true, placeholder: '0.00' }) +
+      UIC.field({ key: 'details', label: 'التفاصيل', type: 'textarea' }) +
+      UIC.field({ key: 'date', label: 'التاريخ', type: 'date', value: todayStr() }) +
+      '</form>';
+    UIC.openModal('movement-modal', {
+      title: 'إضافة حركة عهدة',
+      body: body,
+      onSave: 'saveMovement()'
+    });
+  }
+
+  function saveMovement() {
+    if (!CAN_WRITE) { UIC.toast('غير مصرح', 'error'); return; }
+    var data = UIC.collectForm('movement-form');
+    if (!UIC.validateForm('movement-form')) return;
+    if (data.account === '__new__') { data.account = data.account_custom || ''; }
+    delete data.account_custom;
+    if (!data.account) { UIC.toast('الحساب مطلوب', 'error'); return; }
+    UI.showSpinner('جاري الحفظ...');
+    companyCall('add_trust_movement', data)
+      .then(function (r) {
+        UIC.closeModal('movement-modal');
+        UIC.toast(r.message || 'تم الحفظ', 'success');
+        if (r && r.record) {
+          // patch movements panel if same account is selected
+          if (SELECTED_ACCOUNT === r.record.account) {
+            // fetchAccounts aggregates are still needed for totals, but we can also try local patch
+            // update accounts totals locally
+            var acc = (window.__accounts||[]).find(function(a){ return a.account===r.record.account; });
+            if (acc) {
+              if (r.record.movement_type === 'عهدة') acc.in_total += r.record.value; else acc.out_total += r.record.value;
+              acc.net = acc.in_total - acc.out_total;
+              acc.count++;
+            } else {
+              // new account
+              window.__accounts = window.__accounts || [];
+              window.__accounts.push({ account: r.record.account, in_total: r.record.movement_type==='عهدة'?r.record.value:0, out_total: r.record.movement_type==='مصروف'?r.record.value:0, net: r.record.movement_type==='عهدة'?r.record.value:-r.record.value, count:1 });
+            }
+            renderAccounts(window.__accounts);
+            // also patch movement list without full fetch if already loaded
+            companyCall('get_trust_movements', { account: r.record.account, limit: 10 }).then(function(res){
+              renderMovements(res.movements||[], res.account);
+            }).catch(function(){ refreshWithAccount(data.account); });
+          } else {
+            refreshWithAccount(data.account);
+          }
+        } else { refreshWithAccount(data.account); }
+      })
+      .catch(function (e) { UIC.toast(e.message || 'خطأ', 'error'); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function refreshWithAccount(account) {
+    SELECTED_ACCOUNT = account;
+    fetchAccounts();
+  }
+
+  function showError(e) {
+    var body = document.getElementById('trust-content');
+    if (body) body.innerHTML = '<div class="empty-state"><span>' + FMT.escape(e.message || 'خطأ') + '</span></div>';
+  }
+
+
+  load();
+</script>
+</body>
+</html>
+
+
+

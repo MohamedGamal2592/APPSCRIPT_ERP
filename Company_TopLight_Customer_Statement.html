@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>كشف حساب عميل</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= getCompanyThemeCSS_('8df5c89a117fe9a5') ?>
+  <style>
+    @media print {
+      .no-print { display: none !important; }
+      .stmt { border: 2px solid #111111; }
+    }
+    .stmt { max-width: 1200px; margin: 0 auto; padding: 20px; background: var(--bg-surface); border: 2px solid var(--border-color); border-radius: 8px; }
+    .stmt-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 18px; border-bottom: 2px solid #111111; padding-bottom: 12px; }
+    .stmt-title { font-size: 20px; font-weight: 700; color: #111111; }
+    .stmt-meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 6px 16px; margin-bottom: 16px; }
+    .meta-item { font-size: 13px; }
+    .meta-item strong { color: var(--text-muted); font-weight: 600; }
+    .inv-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    .inv-table th, .inv-table td { border: 1px solid #111111; padding: 5px 8px; text-align: right; white-space: nowrap; }
+    .inv-table th { background: #111111; color: #fbbf24; font-weight: 600; }
+    .inv-table td { background: #ffffff; color: #111111; }
+    .mov-row:hover { background: var(--brand-subtle-bg); }
+    .sub td { background: #fef08a; color: #111111; }
+    .sum td { background: #ffffff; font-weight: 700; }
+  </style>
+</head>
+<body>
+<div id="stmt-root" dir="rtl"></div>
+<script>
+  var params = new URLSearchParams(window.location.search);
+  var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+  var scriptUrl = window.scriptUrl || '/';
+  var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('8df5c89a117fe9a5') ?>';
+  var customerId = '<?!= purchaseCode ?>';
+
+  function companyCall(moduleAction, data) {
+    return API.call('company_action', {
+      target_system: '8df5c89a117fe9a5',
+      module_action: moduleAction,
+      data: data || {}
+    }, SESSION_TOKEN);
+  }
+
+  function typeLabel_(t) {
+    if (t === 'sales') return 'مبيعات';
+    if (t === 'return') return 'مرتجع';
+    if (t === 'collection') return 'تحصيل';
+    if (t === 'payment') return 'مدفوعات';
+    if (t === 'purchase') return 'شراء';
+    return t;
+  }
+
+  function fmtDate(v) {
+    if (!v) return '-';
+    var d = new Date(v);
+    if (isNaN(d.getTime())) return String(v).slice(0, 10);
+    return d.toISOString().slice(0, 10);
+  }
+
+  var __filters = { from: '', to: '' };
+  var __filtersBuilt = false;
+
+  function load() {
+    UI.showSpinner([
+      'جاري تحميل كشف الحساب...',
+      'جاري تجميع حركات الفواتير والتحصيلات...',
+      'لحظة، جاري حساب الأرصدة التراكمية...',
+      'جاري إنهاء تجهيز كشف الحساب...'
+    ]);
+    companyCall('get_customer_statement', { customer_id: customerId, date_from: __filters.from, date_to: __filters.to })
+      .then(function (r) {
+        var root = document.getElementById('stmt-root');
+        if (!__filtersBuilt) {
+          root.innerHTML = renderFilters() + '<div id="stmt-results"></div>';
+          __filtersBuilt = true;
+        }
+        renderStatement(r);
+      })
+      .catch(function (e) {
+        document.getElementById('stmt-root').innerHTML =
+          '<div class="empty-state"><span>' + FMT.escape(e.message || 'خطأ') + '</span></div>';
+      })
+      .finally(function () { UI.hideSpinner(); try{schedulePrefetch();}catch(e){} });
+  }
+
+  function renderFilters() {
+    return '<div class="no-print" style="max-width:1200px;margin:12px auto;display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;">' +
+      '<div class="form-field" style="margin:0;"><label class="form-label" for="f_from">من تاريخ</label><input id="f_from" class="input" type="date" value="' + __filters.from + '" onchange="onFilter(\'from\', this.value)"></div>' +
+      '<div class="form-field" style="margin:0;"><label class="form-label" for="f_to">إلى تاريخ</label><input id="f_to" class="input" type="date" value="' + __filters.to + '" onchange="onFilter(\'to\', this.value)"></div>' +
+      '</div>';
+  }
+
+  function onFilter(k, v) { __filters[k] = v; load(); }
+
+  function toggleGroup(i) {
+    var els = document.querySelectorAll('.g-' + i);
+    for (var k = 0; k < els.length; k++) {
+      els[k].style.display = els[k].style.display === 'none' ? '' : 'none';
+    }
+  }
+
+  function td(v) { return '<td>' + v + '</td>'; }
+  function tdN(v) { return '<td class="num">' + FMT.number(v) + '</td>'; }
+  function dash() { return '<td>-</td>'; }
+
+  function renderStatement(r) {
+    var root = document.getElementById('stmt-results');
+    if (!root) return;
+    var cust = r.customer || {};
+
+    var body = '';
+    (r.movements || []).forEach(function (m, i) {
+      if (m.type === 'sales') body += salesRows(m, i);
+      else if (m.type === 'return') body += returnRows(m, i);
+      else if (m.type === 'collection') body += cashRows(m, 'collection');
+      else if (m.type === 'payment') body += cashRows(m, 'payment');
+      else if (m.type === 'purchase') body += purchaseRow(m);
+    });
+
+    var openingHtml = (__filters.from || __filters.to)
+      ? metaItem('الرصيد الافتتاحي', '<span class="num">' + FMT.number(r.opening_balance) + '</span>')
+      : '';
+
+    var html =
+      '<div class="no-print" style="max-width:1200px;margin:12px auto;display:flex;justify-content:flex-end;gap:8px;">' +
+      '<button class="btn btn-primary" onclick="window.print()">طباعة</button>' +
+      '<button class="btn btn-outline" onclick="try{window.top.close()}catch(e){window.close()}">إغلاق</button>' +
+      '</div>' +
+      '<div class="stmt">' +
+      '<div class="stmt-head">' +
+      '<img src="' + (COMPANY_LOGO_URL || '') + '" style="height:42px;" alt="">' +
+      '<div class="stmt-title">كشف حساب عميل</div>' +
+      '</div>' +
+      '<div class="stmt-meta">' +
+      metaItem('الاسم', cust.name) +
+      metaItem('النوع', (String(cust.customer_direction).toLowerCase() === 'vendor' ? 'مورد' : 'عميل')) +
+      metaItem('الهاتف', cust.telephone) +
+      metaItem('العنوان', cust.address) +
+      openingHtml +
+      metaItem('الرصيد الحالي', '<span class="num">' + FMT.number(r.balance) + '</span>') +
+      '</div>' +
+      '<table class="inv-table"><thead><tr>' +
+      '<th>التاريخ</th><th>النوع</th><th>الكود</th><th>البيان / الصنف</th><th>الكمية</th><th>السعر</th><th>الخصم</th><th>مسحوبات</th><th>العملة</th><th>سعر الصرف</th><th>له</th><th>عليه</th><th>الرصيد</th>' +
+      '</tr></thead><tbody>' + body + '</tbody></table>' +
+      '</div>';
+
+    root.innerHTML = html;
+  }
+
+  function salesRows(m, i) {
+    var rows = '<tr class="mov-row" onclick="toggleGroup(' + i + ')" style="cursor:pointer;">' +
+      td(fmtDate(m.date)) + td('مبيعات') + td(FMT.escape(m.reference || '-')) +
+      td('▶ فاتورة مبيعات (' + (m.item_count || m.lines.length) + ' صنف)') +
+      dash() + dash() + dash() + dash() +
+      td(FMT.escape(m.currency || 'EGP')) + tdN(m.rate != null ? m.rate : 1) +
+      td('') + tdN(m.total) + tdN(m.running_balance) + '</tr>';
+
+    (m.lines || []).forEach(function (l) {
+      rows += '<tr class="sub g-' + i + '" style="display:none;">' +
+        td('') + td('') + td('') + td(FMT.escape(l.product_name || '-')) +
+        tdN(l.qty) + tdN(l.price) + tdN(l.discount) +
+        td('') + td('') + td('') +
+        td('') + tdN(l.net_value) + td('') + '</tr>';
+    });
+
+    rows += '<tr class="sum g-' + i + '" style="display:none;">' +
+      td('') + td('') + td('') +
+      td('رقم: ' + FMT.escape(m.reference || '') + ' الصافي: ' + FMT.number(m.net) + ' خصم: -' + FMT.number(m.discount) + ' الإجمالي: ' + FMT.number(m.total) + ' ج.م') +
+      td('') + td('') + td('') + td('') + td('') + td('') +
+      td('') + tdN(m.total) + td('') + '</tr>';
+
+    return rows;
+  }
+
+  function returnRows(m, i) {
+    var rows = '<tr class="mov-row" onclick="toggleGroup(' + i + ')" style="cursor:pointer;">' +
+      td(fmtDate(m.date)) + td('مرتجع') + td(FMT.escape(m.reference || '-')) +
+      td('▶ مرتجع فاتورة #' + FMT.escape(m.invoice_number || m.reference || '') + ' (' + (m.item_count || m.lines.length) + ' صنف)') +
+      dash() + dash() + dash() + dash() +
+      td(FMT.escape(m.currency || 'EGP')) + tdN(m.rate != null ? m.rate : 1) +
+      tdN(m.total) + td('') + tdN(m.running_balance) + '</tr>';
+
+    (m.lines || []).forEach(function (l) {
+      rows += '<tr class="sub g-' + i + '" style="display:none;">' +
+        td('') + td('') + td('') + td(FMT.escape(l.product_name || '-')) +
+        tdN(l.qty) + tdN(l.gross) + tdN(l.discount) +
+        td('') + td('') + td('') +
+        tdN(l.net) + td('') + td('') + '</tr>';
+    });
+
+    rows += '<tr class="sum g-' + i + '" style="display:none;">' +
+      td('') + td('') + td('') +
+      td('مرتجع #: ' + FMT.escape(m.invoice_number || m.reference || '') + ' الكمية: ' + FMT.number(m.total_qty) + ' الإجمالي: ' + FMT.number(m.total) + ' ج.م') +
+      td('') + td('') + td('') + td('') + td('') + td('') +
+      tdN(m.total) + td('') + td('') + '</tr>';
+
+    return rows;
+  }
+
+  function cashRows(m, label) {
+    var desc = m.description || '';
+    if (m.method) desc = desc ? (desc + ' ' + m.method) : m.method;
+    var creditCell = label === 'collection' ? tdN(m.credit) : td('');
+    var debitCell = label === 'payment' ? tdN(m.debit) : td('');
+    return '<tr class="mov-row">' +
+      td(fmtDate(m.date)) + td(label === 'collection' ? 'تحصيل' : 'مدفوعات') + td(FMT.escape(m.reference || '-')) +
+      td(FMT.escape(desc || '-')) +
+      dash() + dash() + dash() + tdN(m.withdrawal) +
+      td(FMT.escape(m.currency || 'EGP')) + tdN(m.rate != null ? m.rate : 1) +
+      creditCell + debitCell + tdN(m.running_balance) + '</tr>';
+  }
+
+  function purchaseRow(m) {
+    return '<tr class="mov-row">' +
+      td(fmtDate(m.date)) + td('شراء') + td(FMT.escape(m.reference || '-')) +
+      td(FMT.escape(m.description || '-')) +
+      dash() + dash() + dash() + dash() +
+      td(FMT.escape(m.currency || 'EGP')) + tdN(m.rate != null ? m.rate : 1) +
+      tdN(m.credit) + td('') + tdN(m.running_balance) + '</tr>';
+  }
+
+  function metaItem(label, value) {
+    return '<div class="meta-item"><strong>' + label + ':</strong> ' + (value == null || value === '' ? '-' : value) + '</div>';
+  }
+
+  load();
+</script>
+</body>
+</html>
+
+
