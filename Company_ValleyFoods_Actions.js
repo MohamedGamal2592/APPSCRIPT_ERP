@@ -118,6 +118,7 @@ const ValleyFoods = (function () {
 
     // المشتريات — valley_purchasing_costing (header) + valley_product_purchasing (lines)
     'get_valley_purchasing_costing': { page: 'vf_purchasing', access: 'read' },
+    'get_valley_purchasing_options': { page: 'vf_purchasing', access: 'read' },
     'get_valley_purchasing_lines': { page: 'vf_purchasing', access: 'read' },
     'save_valley_purchasing_costing': { page: 'vf_purchasing', access: 'write' },
     'delete_valley_purchasing_costing': { page: 'vf_purchasing', access: 'full' },
@@ -3072,28 +3073,70 @@ const ValleyFoodsHRModules = (function () {
     'Internal cost adjustment', 'Purchase Tax', 'Income Tax', 'Minimum differences',
     'Value Based on Invoice', 'Total costs', 'Sales Value', 'sales tax amount'];
 
+  /**
+   * Phase 2, step 2.4 — this was the worst of the four list endpoints in the
+   * investigation: three uncached full sheet reads and no pagination at all.
+   *
+   * Now:
+   *  - supplier and product option lists go through getRefsCached_, the shared
+   *    per-company cache every other company already uses for exactly these two
+   *    sheets, so repeat renders inside the TTL cost no reads;
+   *  - product_options is split out to get_valley_purchasing_options and only
+   *    fetched when the form opens. supplier_options STAYS in the list response
+   *    because renderHeadersTable() needs it to show supplier names;
+   *  - rows are sorted by id descending server-side and limited, matching the
+   *    sibling endpoints in TopLight. Pass loadAll:true for the full set.
+   *
+   * The client sorts by id descending again after receiving these, so the
+   * server-side sort only decides WHICH rows the limit keeps, not their order.
+   */
   function getValleyPurchasingCosting_(data, user, dbId) {
+    var limit = Number(data && data.limit) || 10;
     settingsEnsureSheet_(dbId, PURCHASING_COSTING_SHEET, PURCHASING_COSTING_HEADERS);
     settingsEnsureSheet_(dbId, PURCHASING_LINE_SHEET, PURCHASING_LINE_HEADERS);
     var rows = getAllRecords_(dbId, PURCHASING_COSTING_SHEET);
-    var supplierOpts = [];
-    try {
-      supplierOpts = getAllRecords_(dbId, FIN_PARTIES_SHEET).map(function (p) {
-        return { value: p.id, label: String(p.name || p.id) };
-      }).filter(function (o) { return String(o.value).trim() !== ''; });
-    } catch (e) {}
-    var productOpts = [];
-    try {
-      productOpts = getAllRecords_(dbId, FIN_PRODUCTS_SHEET).map(function (p) {
-        return { value: p.id, label: String(p.name_ar || p.id) };
-      }).filter(function (o) { return String(o.value).trim() !== ''; });
-    } catch (e) {}
-    return {
+    rows.sort(function (a, b) { return (Number(b.id) || 0) - (Number(a.id) || 0); });
+    if (!data || !data.loadAll) rows = rows.slice(0, limit);
+    var out = {
       status: 'success',
       headers: rows,
       options: {
-        supplier_options: supplierOpts,
-        product_options: productOpts,
+        supplier_options: valleyPurchasingSupplierOptions_(dbId),
+        currency_options: PURCHASING_CURRENCIES,
+        movement_type_options: PURCHASING_MOVEMENT_TYPES
+      }
+    };
+    if (data && data.withOptions) out.options.product_options = valleyPurchasingProductOptions_(dbId);
+    return out;
+  }
+
+  function valleyPurchasingSupplierOptions_(dbId) {
+    try {
+      return getRefsCached_(dbId, 'purchasing_supplier_options', FIN_REF_TTL_G, function () {
+        return getAllRecords_(dbId, FIN_PARTIES_SHEET).map(function (p) {
+          return { value: p.id, label: String(p.name || p.id) };
+        }).filter(function (o) { return String(o.value).trim() !== ''; });
+      }) || [];
+    } catch (e) { return []; }
+  }
+
+  function valleyPurchasingProductOptions_(dbId) {
+    try {
+      return getRefsCached_(dbId, 'purchasing_product_options', FIN_REF_TTL_G, function () {
+        return getAllRecords_(dbId, FIN_PRODUCTS_SHEET).map(function (p) {
+          return { value: p.id, label: String(p.name_ar || p.id) };
+        }).filter(function (o) { return String(o.value).trim() !== ''; });
+      }) || [];
+    } catch (e) { return []; }
+  }
+
+  /** Phase 2.1 — the form's product dropdown, fetched when the form opens. */
+  function getValleyPurchasingOptions_(data, user, dbId) {
+    return {
+      status: 'success',
+      options: {
+        supplier_options: valleyPurchasingSupplierOptions_(dbId),
+        product_options: valleyPurchasingProductOptions_(dbId),
         currency_options: PURCHASING_CURRENCIES,
         movement_type_options: PURCHASING_MOVEMENT_TYPES
       }
@@ -3270,6 +3313,7 @@ const ValleyFoodsHRModules = (function () {
   }
 
   ValleyFoods.register('get_valley_purchasing_costing', getValleyPurchasingCosting_);
+  ValleyFoods.register('get_valley_purchasing_options', getValleyPurchasingOptions_);
   ValleyFoods.register('get_valley_purchasing_lines', getValleyPurchasingLines_);
   ValleyFoods.register('save_valley_purchasing_costing', saveValleyPurchasingCosting_);
   ValleyFoods.register('delete_valley_purchasing_costing', deleteValleyPurchasingCosting_);

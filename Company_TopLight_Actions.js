@@ -63,6 +63,7 @@ const TopLight = (function () {
     'edit_party':              { page: 'tl_customers', access: 'full' },
 
     'get_purchasing_headers':  { page: 'tl_purchasing', access: 'read' },
+    'get_purchasing_options':  { page: 'tl_purchasing', access: 'read' },
     'get_purchasing_lines':    { page: 'tl_purchasing', access: 'read' },
     'add_purchasing':          { page: 'tl_purchasing', access: 'write' },
     'edit_purchasing':         { page: 'tl_purchasing', access: 'full' },
@@ -71,6 +72,7 @@ const TopLight = (function () {
     'get_purchase_print':      { page: 'tl_purchase_print', access: 'read' },
 
     'get_sales_headers':       { page: 'tl_sales', access: 'read' },
+    'get_sales_options':       { page: 'tl_sales', access: 'read' },
     'get_sales_lines':         { page: 'tl_sales', access: 'read' },
     'add_sales':               { page: 'tl_sales', access: 'write' },
     'edit_sales':              { page: 'tl_sales', access: 'full' },
@@ -121,7 +123,8 @@ const TopLight = (function () {
 
     'get_parties': CUSTOMERS_SHEET, 'add_party': CUSTOMERS_SHEET, 'edit_party': CUSTOMERS_SHEET,
 
-    'get_purchasing_headers': PURCHASING_SHEET, 'add_purchasing': PURCHASING_SHEET,
+    'get_purchasing_headers': PURCHASING_SHEET, 'get_purchasing_options': PURCHASING_SHEET,
+    'add_purchasing': PURCHASING_SHEET,
     'edit_purchasing': PURCHASING_SHEET, 'delete_purchasing': PURCHASING_SHEET,
     'approve_purchasing': PURCHASING_SHEET, 'get_purchase_print': PURCHASING_SHEET,
     'get_purchasing_lines': PURCHASING_LINES_SHEET,
@@ -129,6 +132,7 @@ const TopLight = (function () {
     'get_sales_headers': SALES_SHEET, 'add_sales': SALES_SHEET, 'edit_sales': SALES_SHEET,
     'delete_sales': SALES_SHEET, 'approve_sales': SALES_SHEET, 'get_sales_print': SALES_SHEET,
     'get_sales_costing': SALES_SHEET,
+    'get_sales_options': SALES_SHEET,
     'get_sales_lines': SALES_LINES_SHEET,
 
     'get_sales_returns': SALES_RETURNS_SHEET, 'add_sales_return': SALES_RETURNS_SHEET,
@@ -589,24 +593,73 @@ const TopLight = (function () {
   // =========================================
   // Purchasing — costing header + product lines (master-detail)
   // =========================================
+  /**
+   * Phase 2, step 2.5 — hoist the per-row alias key-scan.
+   *
+   * The `pick()` closure below used to be rebuilt for every row and, for every
+   * alias it was given, walked every key of the record with a lowercase+replace
+   * on both sides: O(rows x fields x columns) string operations to read 8 fields.
+   *
+   * All records from getAllRecords_ share one key set (they are built from the
+   * same header array), so the normalised-name -> actual-key mapping is resolved
+   * ONCE here and reused for every row.
+   *
+   * Equivalence detail: the original scanned *all* keys matching an alias and
+   * returned the first whose value was non-blank, so two headers normalising to
+   * the same name (e.g. 'reciept date' and 'reciept_date') fall through from a
+   * blank one to the next. The map therefore holds an ARRAY of actual keys per
+   * normalised name, in key-enumeration (column) order, and the resolver walks it
+   * the same way.
+   */
+  function makeAliasPicker_(sampleRow) {
+    const byNorm = {};
+    for (var kk in sampleRow) {
+      var n = String(kk).toLowerCase().replace(/_/g, ' ');
+      if (!byNorm[n]) byNorm[n] = [];
+      byNorm[n].push(kk);
+    }
+    return function (obj) {
+      var keys = Array.prototype.slice.call(arguments, 1);
+      for (var i = 0; i < keys.length; i++) {
+        var actuals = byNorm[String(keys[i]).toLowerCase().replace(/_/g, ' ')];
+        if (!actuals) continue;
+        for (var j = 0; j < actuals.length; j++) {
+          var v = obj[actuals[j]];
+          if (v !== undefined && v !== null && String(v).trim() !== '') return v;
+        }
+      }
+      return '';
+    };
+  }
+
   function getPurchasingHeaders_(data, user, dbId) {
     var limit = Number(data && data.limit) || 10;
     const rows = getAllRecords_(dbId, PURCHASING_SHEET);
     const vendorNames = {};
     getRefsCached_(dbId, 'parties', 120, function () { return getAllRecords_(dbId, CUSTOMERS_SHEET); }).forEach(v => { vendorNames[String(v.id)] = v.name; });
-    var headers = rows.map(r => {
+    const pick = rows.length ? makeAliasPicker_(rows[0]) : function () { return ''; };
+
+    // Phase 2.2 — decorate/sort/slice, then map only the visible rows.
+    // The old code sorted the MAPPED records on rec['reciept date'] (the picked
+    // value) falling back to the raw 'receipt date' / 'reciept_date' / unique_id
+    // keys, and called parseDate_ inside the comparator. The same key is computed
+    // once per row here, so ordering is identical and parseDate_ runs O(n) times
+    // instead of O(n log n).
+    const decorated = rows.map(function (r) {
+      const picked = pick(r, 'reciept date', 'receipt date', 'reciept_date', 'receipt_date');
+      const sortRaw = picked || r['receipt date'] || r['reciept_date'] || r.unique_id;
+      const d = parseDate_(sortRaw);
+      return { row: r, picked: picked, t: d instanceof Date ? d.getTime() : 0, uid: String(r.unique_id || '') };
+    });
+    decorated.sort(function (a, b) {
+      if (b.t !== a.t) return b.t - a.t;
+      return b.uid.localeCompare(a.uid);
+    });
+    const visible = (!data || !data.loadAll) ? decorated.slice(0, limit) : decorated;
+
+    var headers = visible.map(d => {
+      const r = d.row;
       const rec = Object.assign({}, r);
-      // Normalize aliased keys (reciept typo vs receipt, supplier name variants, Code, Items as text)
-      const pick = function (obj) {
-        var keys = Array.prototype.slice.call(arguments, 1);
-        for (var i = 0; i < keys.length; i++) {
-          var k = keys[i];
-          for (var kk in obj) if (String(kk).toLowerCase().replace(/_/g,' ') === String(k).toLowerCase().replace(/_/g,' ')) {
-            var v = obj[kk]; if (v !== undefined && v !== null && String(v).trim() !== '') return v;
-          }
-        }
-        return '';
-      };
       rec.code = pick(r, 'code', 'Code');
       rec['reciept date'] = pick(r, 'reciept date', 'receipt date', 'reciept_date', 'receipt_date');
       // Items is single text cell — show as is
@@ -623,16 +676,16 @@ const TopLight = (function () {
       rec.supplier_name = vendorNames[String(r['supplier name'])] || vendorNames[String(r['supplier_name'])] || String(r['supplier name']||r['supplier_name']||'') || '';
       return rec;
     });
-    headers.sort(function(a,b){
-      var da = parseDate_(a['reciept date'] || a['receipt date'] || a['reciept_date'] || a.unique_id);
-      var db = parseDate_(b['reciept date'] || b['receipt date'] || b['reciept_date'] || b.unique_id);
-      var ta = da instanceof Date ? da.getTime() : 0;
-      var tb = db instanceof Date ? db.getTime() : 0;
-      if (tb !== ta) return tb - ta;
-      return String(b.unique_id||'').localeCompare(String(a.unique_id||''));
-    });
-    if (!data || !data.loadAll) headers = headers.slice(0, limit);
-    return { status: 'success', headers: headers, options: purchasingOptions_(dbId) };
+    // Phase 2.1 — options moved to get_purchasing_options, fetched when the form
+    // opens. Pass withOptions:true for the old combined response.
+    const out = { status: 'success', headers: headers };
+    if (data && data.withOptions) out.options = purchasingOptions_(dbId);
+    return out;
+  }
+
+  /** Phase 2.1 — the form's dropdown data, fetched when the form actually opens. */
+  function getPurchasingOptions_(data, user, dbId) {
+    return { status: 'success', options: purchasingOptions_(dbId) };
   }
 
   function getPurchasingLines_(data, user, dbId) {
@@ -831,7 +884,8 @@ const TopLight = (function () {
   }
 
   function supplierOptions_(dbId) {
-    const raw = getRefsCached_(dbId, 'parties', 120, function () {
+    // Phase 2.6 — version-stamped, 600s (was 120s).
+    const raw = tlRefs_(dbId, 'parties', function () {
       return getAllRecords_(dbId, CUSTOMERS_SHEET);
     });
     return (raw || []).map(v => ({
@@ -841,7 +895,8 @@ const TopLight = (function () {
   }
 
   function productOptions_(dbId) {
-    const raw = getRefsCached_(dbId, 'products', 120, function () {
+    // Phase 2.6 — version-stamped, 600s (was 120s).
+    const raw = tlRefs_(dbId, 'products', function () {
       return getAllRecords_(dbId, PRODUCTS_SHEET);
     });
     return (raw || []).map(p => ({
@@ -1072,6 +1127,23 @@ const TopLight = (function () {
   // =========================================
   // Sales — invoices header + product lines (master-detail)
   // =========================================
+  /**
+   * Phase 2, steps 2.1-2.3.
+   *
+   * 2.1 The form's dropdown data (customer/product options) used to be built on
+   *     every list render via salesOptions_(), which pulls three more full sheet
+   *     reads — top_light_current_products, top_light_product_purchasing and
+   *     top_light_products — for a form the user may never open. Options now come
+   *     from the separate get_sales_options action when the form is opened.
+   *     Pass withOptions:true to get the old combined response.
+   *     Reads on the common list path: 7 -> 4.
+   * 2.2 Sorting happens on the raw rows and only the visible slice is mapped.
+   *     The sort keys ('تاريخ الفاتورة', 'رقم الفاتورة', invoice_unique_id) are
+   *     all present before mapping and untouched by it, so ordering is identical;
+   *     previously every invoice ever was expanded into a derived object and
+   *     ~99% were then discarded by the slice.
+   * 2.3 fully_returned therefore gets computed for the returned slice only.
+   */
   function getSalesHeaders_(data, user, dbId) {
     var limit = Number(data && data.limit) || 10;
     const rows = getAllRecords_(dbId, SALES_SHEET);
@@ -1094,15 +1166,7 @@ const TopLight = (function () {
     const soldMap = stockMaps.soldMap || {};
     const returnedMap = stockMaps.returnedMap || {};
 
-    var headers = rows.map(r => {
-      const rec = Object.assign({}, r);
-      rec.customer_name = custNames[String(r['اسم العميل'])] || '';
-      const key = String(r.invoice_unique_id);
-      const sold = soldMap[key] || 0;
-      rec.fully_returned = sold > 0 && (returnedMap[key] || 0) >= sold;
-      return rec;
-    });
-    headers.sort(function(a,b){
+    rows.sort(function(a,b){
       var da = parseDate_(a['تاريخ الفاتورة']);
       var db = parseDate_(b['تاريخ الفاتورة']);
       var ta = da instanceof Date ? da.getTime() : 0;
@@ -1113,8 +1177,23 @@ const TopLight = (function () {
       if (nb !== na) return nb - na;
       return String(b.invoice_unique_id||'').localeCompare(String(a.invoice_unique_id||''));
     });
-    if (!data || !data.loadAll) headers = headers.slice(0, limit);
-    return { status: 'success', headers: headers, options: salesOptions_(dbId) };
+    const visible = (!data || !data.loadAll) ? rows.slice(0, limit) : rows;
+    var headers = visible.map(r => {
+      const rec = Object.assign({}, r);
+      rec.customer_name = custNames[String(r['اسم العميل'])] || '';
+      const key = String(r.invoice_unique_id);
+      const sold = soldMap[key] || 0;
+      rec.fully_returned = sold > 0 && (returnedMap[key] || 0) >= sold;
+      return rec;
+    });
+    const out = { status: 'success', headers: headers };
+    if (data && data.withOptions) out.options = salesOptions_(dbId);
+    return out;
+  }
+
+  /** Phase 2.1 — the form's dropdown data, fetched when the form actually opens. */
+  function getSalesOptions_(data, user, dbId) {
+    return { status: 'success', options: salesOptions_(dbId) };
   }
 
   function getSalesLines_(data, user, dbId) {
@@ -1607,7 +1686,8 @@ const TopLight = (function () {
   }
 
   function customerSalesOptions_(dbId) {
-    const raw = getRefsCached_(dbId, 'parties', 120, function () {
+    // Phase 2.6 — version-stamped, 600s (was 120s).
+    const raw = tlRefs_(dbId, 'parties', function () {
       return getAllRecords_(dbId, CUSTOMERS_SHEET);
     });
     return (raw || []).map(c => ({
@@ -1630,7 +1710,51 @@ const TopLight = (function () {
     return result;
   }
 
+  /**
+   * Phase 2, step 2.6 — version-stamped reference cache for the Sales & Purchase
+   * FORM option builders only.
+   *
+   * Why a stamp rather than just a longer TTL: the stamp is part of every derived
+   * cache key, so one bump orphans every entry at once and no individual key can
+   * be forgotten. bustTopLightCaches_ bumps it, and an audit of this file found
+   * exactly four mutation sites for the two reference sheets — add_product,
+   * edit_product, add_party, edit_party — all four of which already call
+   * bustTopLightCaches_. Coverage for app-driven changes is therefore complete.
+   *
+   * TTL is 600s, not hours. The one path a stamp cannot cover is somebody editing
+   * top_light_products or top_light_customer_vendor by hand in the spreadsheet;
+   * that used to surface within 120s and now surfaces within 600s. Going to the
+   * 1-6h the investigation floated would stretch that to hours, which is not a
+   * trade worth making for a dropdown.
+   */
+  const TL_REF_TTL = 600;
+
+  function tlRefsVersion_(dbId) {
+    try {
+      const cache = CacheService.getScriptCache();
+      const k = 'tl_refs_ver_' + dbId;
+      let v = cache.get(k);
+      if (!v) { v = String(new Date().getTime()); cache.put(k, v, 21600); }
+      return v;
+    } catch (e) { return '0'; }
+  }
+
+  function bumpTlRefsVersion_(dbId) {
+    try { CacheService.getScriptCache().put('tl_refs_ver_' + dbId, String(new Date().getTime()), 21600); } catch (e) {}
+  }
+
+  /** Version-stamped wrapper around getRefsCached_. */
+  function tlRefs_(dbId, kind, builder) {
+    return getRefsCached_(dbId, kind + '_v' + tlRefsVersion_(dbId), TL_REF_TTL, builder);
+  }
+
+  /** Version-stamped wrapper around cachedMap_. */
+  function tlCachedMap_(dbId, baseKey, buildFn) {
+    return cachedMap_(baseKey + '_v' + tlRefsVersion_(dbId), TL_REF_TTL, buildFn);
+  }
+
   function bustTopLightCaches_(dbId, type) {
+    bumpTlRefsVersion_(dbId);
     try {
       const cache = CacheService.getScriptCache();
       const keys = ['tl_dashboard_kpis_' + dbId];
@@ -1645,7 +1769,8 @@ const TopLight = (function () {
 
   // Available stock per product: top_light_current_products.unique_id -> current_qty.
   function currentQtyMap_(dbId) {
-    return cachedMap_('tl_qty_map_' + dbId, 90, function () {
+    // Phase 2.6 — version-stamped, 600s (was 90s).
+    return tlCachedMap_(dbId, 'tl_qty_map_' + dbId, function () {
       const map = {};
       getAllRecords_(dbId, CURRENT_PRODUCTS_SHEET).forEach(s => {
         map[String(s.unique_id)] = num0_(s.current_qty);
@@ -1657,7 +1782,9 @@ const TopLight = (function () {
   // Latest purchase unit sale price per product: for each top_light_product_purchasing
   // row, keep the max receipt_date per product and its sales_value.
   function latestSalesPriceMap_(dbId) {
-    return cachedMap_('tl_price_map_' + dbId, 90, function () {
+    // Phase 2.6 — version-stamped, 600s (was 90s). This one scanned the ENTIRE
+    // purchasing-lines table to derive one price per product, every 90 seconds.
+    return tlCachedMap_(dbId, 'tl_price_map_' + dbId, function () {
       const latest = {};
       getAllRecords_(dbId, PURCHASING_LINES_SHEET).forEach(r => {
         const pid = String((r.product == null) ? '' : r.product).trim();
@@ -1677,7 +1804,8 @@ const TopLight = (function () {
   function salesProductOptions_(dbId) {
     const qtyMap = currentQtyMap_(dbId);
     const priceMap = latestSalesPriceMap_(dbId);
-    const raw = getRefsCached_(dbId, 'products', 120, function () {
+    // Phase 2.6 — version-stamped, 600s (was 120s).
+    const raw = tlRefs_(dbId, 'products', function () {
       return getAllRecords_(dbId, PRODUCTS_SHEET);
     });
     return (raw || []).map(p => {
@@ -3196,6 +3324,7 @@ const TopLight = (function () {
   register('add_party', addParty_);
   register('edit_party', editParty_);
   register('get_purchasing_headers', getPurchasingHeaders_);
+  register('get_purchasing_options', getPurchasingOptions_);
   register('get_purchasing_lines', getPurchasingLines_);
   register('get_purchase_print', getPurchasePrint_);
   register('add_purchasing', addPurchasing_);
@@ -3203,6 +3332,7 @@ const TopLight = (function () {
   register('delete_purchasing', deletePurchasing_);
   register('approve_purchasing', approvePurchasing_);
   register('get_sales_headers', getSalesHeaders_);
+  register('get_sales_options', getSalesOptions_);
   register('get_sales_lines', getSalesLines_);
   register('get_sales_print', getSalesPrint_);
   register('get_sales_costing', getSalesCosting_);

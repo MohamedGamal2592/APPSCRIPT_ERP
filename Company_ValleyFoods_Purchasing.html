@@ -92,16 +92,51 @@
       renderList();
     }
 
-    function renderList() {
+    /* Phase 2.4: the endpoint now returns the 10 most recent rows by default,
+     * matching the equivalent TopLight screens. __loadedAll tracks whether the
+     * user has asked for the full set via the "عرض الكل" button, so the limit
+     * never puts data out of reach. */
+    var __loadedAll = false;
+
+    function renderList(loadAll) {
+      // Called with no argument after a save/delete — keep whichever view the
+      // user is currently in rather than silently dropping back to 10 rows.
+      __loadedAll = arguments.length ? !!loadAll : __loadedAll;
       UI.showSpinner();
-      companyCall('get_valley_purchasing_costing')
+      companyCall('get_valley_purchasing_costing', __loadedAll ? { loadAll: true } : {})
         .then(function (r) {
-          __options = (r && r.options) || {};
+          /* supplier_options still arrives with the list (the table shows
+           * supplier names); product_options is fetched by ensureOptions() when
+           * the form opens. Merge rather than replace, so options already loaded
+           * for the form survive a list refresh. */
+          var incoming = (r && r.options) || {};
+          Object.keys(incoming).forEach(function (k) { __options[k] = incoming[k]; });
           __headers = (r && r.headers) || [];
           renderHeadersTable(); try{schedulePrefetch();}catch(e){};
         })
         .catch(function (e) { showError(e); })
         .finally(function () { UI.hideSpinner(); });
+    }
+
+    function showAllPurchasing() { renderList(true); }
+
+    /* Phase 2.1: product options are fetched on first form open, not on every
+     * list render. */
+    var __optionsPromise = null;
+
+    function ensureOptions() {
+      if (__optionsPromise) return __optionsPromise;
+      __optionsPromise = companyCall('get_valley_purchasing_options')
+        .then(function (r) {
+          var incoming = (r && r.options) || {};
+          Object.keys(incoming).forEach(function (k) { __options[k] = incoming[k]; });
+          return __options;
+        })
+        .catch(function (e) {
+          __optionsPromise = null;   // let the next open retry
+          throw e;
+        });
+      return __optionsPromise;
     }
 
   function renderHeadersTable() {
@@ -138,6 +173,7 @@
       };
     });
     content.innerHTML = '<div class="vf-card"><div class="vf-card-header"><h3>المشتريات</h3>' +
+      (__loadedAll ? '' : '<button class="btn btn-outline" onclick="showAllPurchasing()">عرض الكل</button> ') +
       (CAN_WRITE ? '<button class="btn btn-primary" onclick="openForm(\'\', false)">+ إضافة عملية شراء</button>' : '') +
       '</div><div class="vf-card-body">' +
       UIC.dataTable('purchasing-table', {
@@ -166,7 +202,11 @@
       if (code) {
         record = __headers.find(function (h) { return String(h.Code) === String(code); }) || null;
       }
-      renderForm(record);
+      UI.showSpinner('جاري استرجاع الأصناف والموردين...');
+      ensureOptions()
+        .then(function () { renderForm(record); })
+        .catch(function (e) { showError(e); })
+        .finally(function () { UI.hideSpinner(); });
     }
 
     function headerSections() {
@@ -481,11 +521,19 @@
       else if (action === 'print') openPrint(code);
     }
 
+    /* Phase 2.7: same reasoning as approvePurchasing — three fields, one row,
+     * no cascade (qualityApproveValleyPurchasingCosting_). */
     function qualityApprovePurchasing(code) {
       UI.showSpinner('جاري اعتماد الجودة...');
       companyCall('quality_approve_valley_purchasing_costing', { code: code })
-        .then(function (r) { UIC.toast(r.message || 'تم اعتماد الجودة', 'success'); showList(); })
-        .catch(function (e) { UI.hideSpinner(); UIC.toast((e && e.message) || 'خطأ', 'error'); });
+        .then(function (r) {
+          UIC.toast(r.message || 'تم اعتماد الجودة', 'success');
+          var item = (__headers || []).find(function (h) { return String(h.Code) === String(code); });
+          if (item) { item.quality_approval_status = 'Approved'; renderHeadersTable(); }
+          else showList();
+        })
+        .catch(function (e) { UIC.toast((e && e.message) || 'خطأ', 'error'); })
+        .finally(function () { UI.hideSpinner(); });
     }
 
     function openPrint(code) {
@@ -551,11 +599,23 @@
         '</body></html>';
     }
 
+    /* Phase 2.7: approve_valley_purchasing_costing writes exactly three fields
+     * (approval_status / approval / approval_time) on one row via
+     * updateRowByCriteria_ and cascades to nothing — verified in
+     * Company_ValleyFoods_Actions.js approveValleyPurchasingCosting_. So the row
+     * is patched in place instead of re-fetching the whole list. Save and delete
+     * deliberately keep their full reload; see the Phase 2 report. */
     function approvePurchasing(code) {
       UI.showSpinner('جاري الاعتماد...');
       companyCall('approve_valley_purchasing_costing', { code: code })
-        .then(function (r) { UIC.toast(r.message || 'تم الاعتماد', 'success'); showList(); })
-        .catch(function (e) { UI.hideSpinner(); UIC.toast((e && e.message) || 'خطأ', 'error'); });
+        .then(function (r) {
+          UIC.toast(r.message || 'تم الاعتماد', 'success');
+          var item = (__headers || []).find(function (h) { return String(h.Code) === String(code); });
+          if (item) { item.approval_status = 'Approved'; renderHeadersTable(); }
+          else showList();
+        })
+        .catch(function (e) { UIC.toast((e && e.message) || 'خطأ', 'error'); })
+        .finally(function () { UI.hideSpinner(); });
     }
 
     function deletePurchasing(code) {

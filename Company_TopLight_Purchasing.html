@@ -77,7 +77,9 @@
     ]);
     companyCall('get_purchasing_headers')
       .then(function (r) {
-        __options = r.options || {};
+        /* Phase 2.1: options no longer ride along with the list — see
+         * ensureOptions(). Still honoured if a response happens to carry them. */
+        if (r.options) __options = r.options;
         __headers = r.headers || [];
         renderHeadersTable(); try{schedulePrefetch();}catch(e){};
       })
@@ -148,13 +150,33 @@
     UIC.initTableSort('purchasing-table');
   }
 
+  /* Phase 2.1: the dropdown data used to ride along with every list render,
+   * costing extra full sheet reads on the server for a form that may never
+   * open. It is now fetched once, on first open, and reused after that. */
+  var __optionsPromise = null;
+
+  function ensureOptions() {
+    if (__optionsPromise) return __optionsPromise;
+    __optionsPromise = companyCall('get_purchasing_options')
+      .then(function (r) { __options = r.options || {}; return __options; })
+      .catch(function (e) {
+        __optionsPromise = null;   // let the next open retry
+        throw e;
+      });
+    return __optionsPromise;
+  }
+
   function openForm(uid) {
     __editingUid = uid || '';
     var record = null;
     if (uid) {
       record = __headers.find(function (h) { return String(h.unique_id) === String(uid); }) || null;
     }
-    renderForm(record);
+    UI.showSpinner(['جاري استرجاع الموردين والأصناف...']);
+    ensureOptions()
+      .then(function () { renderForm(record); })
+      .catch(function (e) { showError(e); })
+      .finally(function () { UI.hideSpinner(); });
   }
 
   function headerSections() {
