@@ -30,10 +30,21 @@ let _recordCacheDisabled_ = false;
 // are paid at most once per sheet per request.
 const _ensuredSheets_ = {};
 
+// Phase 0b instrumentation: how many real Sheets value-reads this execution paid
+// for. Counted at the data-layer read sites only, so it undercounts any company
+// code that calls getDataRange().getValues() directly — it is a floor, not a
+// total. Reported in the SystemLog SheetReads column.
+let _sheetsReadCount_ = 0;
+
+function countSheetRead_() { _sheetsReadCount_++; }
+
+function getSheetsReadCount_() { return _sheetsReadCount_; }
+
 function resetRecordCache_() {
   for (const k in _recordCache_) delete _recordCache_[k];
   for (const k in _ensuredSheets_) delete _ensuredSheets_[k];
   _recordCacheDisabled_ = false;
+  _sheetsReadCount_ = 0;
 }
 
 function disableRecordCache_() {
@@ -70,6 +81,7 @@ function getHeaders_(sheet) {
   const key = sheet.getParent().getId() + '_' + sheet.getSheetId();
   if (!_headerCache_[key]) {
     const lastCol = sheet.getLastColumn();
+    countSheetRead_();
     _headerCache_[key] = lastCol > 0 ? sheet.getRange(1, 1, 1, lastCol).getValues()[0] : [];
   }
   return _headerCache_[key];
@@ -145,6 +157,7 @@ function getNextIdUnderLock_(dbId, tableName, idColumnName = 'id') {
     sheet.appendRow(['sheet_name', 'next_id']);
   }
   const headers = getHeaders_(sheet);
+  countSheetRead_();
   const data = sheet.getDataRange().getValues();
   const nameIdx = headers.findIndex(h => String(h).trim().toLowerCase() === 'sheet_name');
   const nextIdx = headers.findIndex(h => String(h).trim().toLowerCase() === 'next_id');
@@ -157,6 +170,7 @@ function getNextIdUnderLock_(dbId, tableName, idColumnName = 'id') {
     const tHeaders = getHeaders_(tableSheet);
     const idIdx = tHeaders.findIndex(h => String(h).trim().toLowerCase() === idColumnName.toLowerCase());
     if (idIdx !== -1) {
+      countSheetRead_();
       const tData = tableSheet.getDataRange().getValues();
       for (let i = 1; i < tData.length; i++) {
         const v = Number(tData[i][idIdx]);
@@ -197,6 +211,7 @@ function getNextId_(dbId, tableName, idColumnName = 'id') {
 function peekNextId_(dbId, tableName) {
   const sheet = getSheet_('ID_Counter', dbId);
   const headers = getHeaders_(sheet);
+  countSheetRead_();
   const data = sheet.getDataRange().getValues();
   const nameIdx = headers.findIndex(h => String(h).trim().toLowerCase() === 'sheet_name');
   const nextIdx = headers.findIndex(h => String(h).trim().toLowerCase() === 'next_id');
@@ -224,6 +239,7 @@ function getNextIdBatch_(dbId, tableName, count, idColumnName = 'id') {
       sheet.appendRow(['sheet_name', 'next_id']);
     }
     const headers = getHeaders_(sheet);
+    countSheetRead_();
     const data = sheet.getDataRange().getValues();
     const nameIdx = headers.findIndex(h => String(h).trim().toLowerCase() === 'sheet_name');
     const nextIdx = headers.findIndex(h => String(h).trim().toLowerCase() === 'next_id');
@@ -238,6 +254,7 @@ function getNextIdBatch_(dbId, tableName, count, idColumnName = 'id') {
       const tHeaders = getHeaders_(tableSheet);
       const idIdx = tHeaders.findIndex(h => String(h).trim().toLowerCase() === idColumnName.toLowerCase());
       if (idIdx !== -1) {
+        countSheetRead_();
         const tData = tableSheet.getDataRange().getValues();
         for (let i = 1; i < tData.length; i++) {
           const v = Number(tData[i][idIdx]);
@@ -278,10 +295,12 @@ function getAllRecords_(dbId, sheetName) {
     const key = dbId + '|' + sheetName;
     const cached = _recordCache_[key];
     if (cached) return buildRecordsFromRaw_(cached.data, cached.headers);
+    countSheetRead_();
     const data = sheet.getDataRange().getValues();
     _recordCache_[key] = { data: data, headers: headers };
     return buildRecordsFromRaw_(data, headers);
   }
+  countSheetRead_();
   const data = sheet.getDataRange().getValues();
   return buildRecordsFromRaw_(data, headers);
 }
@@ -326,6 +345,7 @@ function addRecord_(dbId, sheetName, dataMap, requiredFields) {
  */
 function updateRowByCriteria_(sheet, criteriaHeader, criteriaValue, updatesObject) {
   const headers = getHeaders_(sheet);
+  countSheetRead_();
   const data = sheet.getDataRange().getValues();
   const critIdx = headers.findIndex(h => String(h).trim().toLowerCase() === String(criteriaHeader).trim().toLowerCase());
   if (critIdx === -1) throw new Error('Criteria header "' + criteriaHeader + '" not found.');
@@ -350,6 +370,7 @@ function updateRowByCriteria_(sheet, criteriaHeader, criteriaValue, updatesObjec
  */
 function deleteRowsByCriteria_(sheet, criteriaHeader, criteriaValue) {
   const headers = getHeaders_(sheet);
+  countSheetRead_();
   const data = sheet.getDataRange().getValues();
   const critIdx = headers.findIndex(h => String(h).trim().toLowerCase() === String(criteriaHeader).trim().toLowerCase());
   if (critIdx === -1) return 0;

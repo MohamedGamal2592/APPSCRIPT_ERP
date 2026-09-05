@@ -106,7 +106,10 @@ function doGet(e) {
   try { userNamesJson = JSON.stringify(userNameMap_()).replace(/</g, '\\u003c'); } catch (eUN) {}
   var headInjection = '<meta name="app-web-url" content="' + scriptUrl + '">'
     + '<script>try{window.scriptUrl=document.querySelector(\'meta[name="app-web-url"]\').getAttribute(\'content\')||\'\';}catch(e){}</' + 'script>'
-    + '<script>window.USER_NAMES=' + userNamesJson + ';</' + 'script>';
+    + '<script>window.USER_NAMES=' + userNamesJson + ';</' + 'script>'
+    // Phase 0b: tells the client whether a measurement window is open, so page
+    // timings cost nothing at all while it is closed.
+    + '<script>window.PERF_LOG=' + (perfLogReadsEnabled_() ? 'true' : 'false') + ';</' + 'script>';
   rendered = rendered.replace('<head>', '<head>' + headInjection);
   return _frame(HtmlService.createHtmlOutput(rendered)).setTitle(page.title).addMetaTag('viewport', 'width=device-width, initial-scale=1');
 }
@@ -258,6 +261,7 @@ const ROUTES = {
   'install_triggers': { handler: installTriggers_, requireAuth: true },
   'daily_csv_backup': { handler: dailyCsvBackup, requireAuth: true },
   'log_client_error': { handler: logClientError_, requireAuth: false },
+  'log_client_perf': { handler: logClientPerf_, requireAuth: false },
 
   // ─── MySQL Live Module (DbLive_Connector.js) ──────────
   'db_list_tables': { handler: dbListTables_, requireAuth: true },
@@ -512,6 +516,34 @@ function servePrintFile_(params) {
   return dataUriDownloadHtml_(fileName, file.getBlob());
 }
 
+/* Phase 0b — client-side timing. Sibling of logClientError_ so page timings do
+ * not pollute the error log. Only writes when Script Property PERF_LOG_READS is
+ * on; the client is told via window.PERF_LOG (injected in doGet) so a disabled
+ * measurement window costs no round trip at all. */
+function logClientPerf_(payload) {
+  try {
+    if (!perfLogReadsEnabled_()) return { status: 'success', skipped: true };
+    payload = payload || {};
+    const ss = getSpreadsheet_(CONFIG.AUTH_SPREADSHEET_ID);
+    let sh = ss.getSheetByName('ERP_Client_Perf');
+    if (!sh) {
+      sh = ss.insertSheet('ERP_Client_Perf');
+      sh.appendRow(['ts', 'page', 'metric', 'ms', 'url', 'user_email']);
+    }
+    sh.appendRow([
+      new Date().toISOString(),
+      String(payload.page || '').slice(0, 200),
+      String(payload.metric || '').slice(0, 60),
+      Number(payload.ms) || 0,
+      String(payload.url || '').slice(0, 1500),
+      String(payload.user || '').slice(0, 200)
+    ]);
+    return { status: 'success' };
+  } catch (e) {
+    return { status: 'error', message: e.message };
+  }
+}
+
 /**
  * System audit log helpers
  */
@@ -576,8 +608,35 @@ function getCompanyName_(companyId) {
 const SYSTEM_LOG_HEADERS = [
   'LogID', 'Timestamp', 'CompanyID', 'CompanyName', 'Action',
   'SourceAction', 'RecordID', 'UserEmail', 'ChangedFields',
-  'Status', 'ErrorMessage', 'Table', 'Page'
+  'Status', 'ErrorMessage', 'Table', 'Page',
+  // Phase 0b instrumentation — appended at the END, per this list's own
+  // documented convention. ensureSystemLogSheet_ migrates a live sheet in place
+  // by adding only missing headers, so existing rows and columns are untouched.
+  'ElapsedMs', 'SheetReads'
 ];
+
+/**
+ * Phase 0b: read actions (get_*, admin_list_*, ping) are classified NO_LOG, so
+ * the slowest requests in the system are the ones we cannot see. Setting Script
+ * Property PERF_LOG_READS=1 logs them too, for a measurement window.
+ *
+ * Deliberately OFF by default and property-gated rather than always-on: logging
+ * a read appends a SystemLog row, i.e. adds a WRITE to every read, and SystemLog
+ * already grows unbounded (F-13). It is a measuring instrument, not a setting to
+ * leave on. Memoised per execution.
+ */
+let _perfLogReads_ = null;
+
+function perfLogReadsEnabled_() {
+  if (_perfLogReads_ === null) {
+    _perfLogReads_ = false;
+    try {
+      const v = PropertiesService.getScriptProperties().getProperty('PERF_LOG_READS');
+      _perfLogReads_ = (v === '1' || String(v).toLowerCase() === 'true');
+    } catch (e) {}
+  }
+  return _perfLogReads_;
+}
 
 function ensureSystemLogSheet_() {
   try {
@@ -625,15 +684,26 @@ function logSystemAction_(request, authUser, result, status, errorMessage, start
   // company_action calls carry the real action in payload.module_action;
   // direct admin_* routes carry it as the top-level request.action.
   const sourceAction = payload.module_action || request.action;
-  const classified = classifyAction_(sourceAction);
+  let classified = classifyAction_(sourceAction);
 
-  if (classified === 'NO_LOG') return;
+  if (classified === 'NO_LOG') {
+    // Phase 0b: optionally log reads so they can be ranked. Never log the
+    // credential-bearing actions, regardless of the flag.
+    const src = String(sourceAction).toLowerCase();
+    const isCredentialAction = (src === 'login_user' || src === 'setup_password');
+    if (!perfLogReadsEnabled_() || isCredentialAction) return;
+    classified = 'READ';
+  }
 
   const companyID = payload.target_system || '';
   const companyName = getCompanyName_(companyID);
   const recordID = extractRecordId_(sourceAction, result);
   const userEmail = authUser ? authUser.email : '';
-  const changedFields = result && result.data ? JSON.stringify(result.data) : '';
+  // A read's result.data is the whole list — serialising it would balloon
+  // SystemLog by megabytes per measurement window, so reads log a size instead.
+  const changedFields = classified === 'READ'
+    ? '(read)'
+    : (result && result.data ? JSON.stringify(result.data) : '');
   const tableName = resolveLogTable_(companyID, sourceAction);
   // Prefer an explicit page_id from the payload if the client ever sends one;
   // otherwise fall back to the per-company action->page map.
@@ -657,7 +727,10 @@ function logSystemAction_(request, authUser, result, status, errorMessage, start
     status: status,
     errormessage: errorMessage,
     table: tableName,
-    page: pageName
+    page: pageName,
+    // Phase 0b instrumentation.
+    elapsedms: startTime ? (new Date().getTime() - startTime.getTime()) : '',
+    sheetreads: (typeof getSheetsReadCount_ === 'function') ? getSheetsReadCount_() : ''
   };
 
   const logEntry = SYSTEM_LOG_HEADERS.map(function (h) {

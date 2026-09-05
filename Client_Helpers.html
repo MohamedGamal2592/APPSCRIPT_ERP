@@ -384,6 +384,47 @@ function logout() {
   window.location.href = (window.scriptUrl || '/') + '?action=login';
 }
 
+/* ── Phase 0b: client-side timing ──────────────────────────────────────
+ * Inert unless window.PERF_LOG is true (server injects it in doGet from the
+ * PERF_LOG_READS script property), so a closed measurement window costs zero
+ * round trips. Reports two metrics: page_ready (navigation start -> DOM ready)
+ * and first_data_render, which pages report themselves via PERF.mark().        */
+window.PERF = window.PERF || {};
+
+PERF.enabled = function () { return window.PERF_LOG === true; };
+
+PERF.send = function (metric, ms) {
+  if (!PERF.enabled()) return;
+  try {
+    google.script.run.apiRouter({
+      action: 'log_client_perf',
+      payload: {
+        page: (window.CURRENT_ACTION || document.title || '').toString().slice(0, 200),
+        metric: metric,
+        ms: Math.round(ms),
+        url: location.href,
+        user: (API.getSession() && API.getSession().email) || ''
+      }
+    });
+  } catch (e) {}
+};
+
+/* Pages call PERF.mark('first_data_render') once their first table body is
+ * painted. Fires at most once per metric per page. */
+PERF._marked = {};
+PERF.mark = function (metric) {
+  if (!PERF.enabled() || PERF._marked[metric]) return;
+  PERF._marked[metric] = true;
+  var t = 0;
+  try { t = performance.now(); } catch (e) {}
+  PERF.send(metric, t);
+};
+
+if (PERF.enabled()) {
+  document.addEventListener('DOMContentLoaded', function () { PERF.mark('page_ready'); });
+  window.addEventListener('load', function () { PERF.mark('page_load'); });
+}
+
 /* ── Part 3: Idle-time prefetch (shared by all companies) ──────────── */
 var __prefetchTimer = null;
 var __prefetchDone = false;
