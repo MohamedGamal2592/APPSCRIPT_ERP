@@ -14,9 +14,35 @@
 /* Global cross-module reference micro-cache (Batch 2). Defined at file top
  * level so it is reachable from every IIFE namespace (HREmp, HRModules, Finance).
  * 60s TTL; save handlers bust the touched kinds instantly. */
-var FIN_REF_TTL_G = 60;
+/* Phase 7.2 (F-15) — 60s -> 600s, behind a version stamp.
+ *
+ * A stamp rather than a bare longer TTL: it is part of every derived cache key,
+ * so one bump orphans every entry at once and no individual kind can be
+ * forgotten. 600s and not the 1-6h F-15 floated, because the stamp cannot cover
+ * somebody editing a reference sheet by hand in the spreadsheet; that used to
+ * surface within 60s and now surfaces within 600s.
+ *
+ * Defined at file top level, like vfRefsCached_ itself, so ValleyFoods,
+ * ValleyFoodsHREmp and ValleyFoodsHRModules can all reach it. */
+var FIN_REF_TTL_G = 600;
+var VF_REF_STAMP_TTL_G = 21600;
+
+function vfRefsVersion_(dbId) {
+  try {
+    var cache = CacheService.getScriptCache();
+    var k = 'vf_refs_ver_' + dbId;
+    var v = cache.get(k);
+    if (!v) { v = String(new Date().getTime()); cache.put(k, v, VF_REF_STAMP_TTL_G); }
+    return v;
+  } catch (e) { return '0'; }
+}
+
+function bumpVfRefsVersion_(dbId) {
+  try { CacheService.getScriptCache().put('vf_refs_ver_' + dbId, String(new Date().getTime()), VF_REF_STAMP_TTL_G); } catch (e) {}
+}
+
 function vfRefsCached_(dbId, kind, builder) {
-  return getRefsCached_(dbId, kind, FIN_REF_TTL_G, builder);
+  return getRefsCached_(dbId, kind + '_v' + vfRefsVersion_(dbId), FIN_REF_TTL_G, builder);
 }
 
 const ValleyFoods = (function () {
@@ -2778,6 +2804,10 @@ const ValleyFoodsHRModules = (function () {
   // vfRefsCached_() and FIN_REF_TTL are defined globally (file top level) so
   // every module (HREmp, HRModules, Finance) can call them across IIFE scopes.
   function vfBustRefs_(dbId, kinds) {
+    /* Phase 7.2 — the stamp bump is what actually invalidates now; one bump
+     * orphans every derived key at once. The per-kind removals below are kept
+     * so entries written before this change (unstamped keys) are cleared too. */
+    bumpVfRefsVersion_(dbId);
     try {
       (kinds || []).forEach(function (k) {
         try { invalidateRefsCache_(dbId, k); } catch (e0) {}
@@ -2791,12 +2821,38 @@ const ValleyFoodsHRModules = (function () {
     vfBustRefs_(dbId, ['parties', 'parties_raw', 'products', 'products_options', 'products_raw', 'recipes_products', 'categories', 'boxes', 'chart', 'chart_asset', 'chart_cash', 'chart_of_accounts']);
   }
 
+  /**
+   * Phase 7.2 — run the handler, THEN bust.
+   *
+   * Every save handler in this module already busts, but at the TOP of the
+   * function, before its own write: 13 of the 15 bust sites had all their
+   * mutations after the bust. That leaves a window — bust at t0, write at
+   * t0+300ms, and any concurrent request in between re-caches PRE-write data for
+   * the full TTL. At 60s that was survivable; at 600s it would not be, so the
+   * TTL could not be raised without closing it.
+   *
+   * The original pre-bust is deliberately left in place: busting twice costs
+   * nothing, and the pre-bust is also what keeps the handler's own validation
+   * reads fresh. This only adds the missing bust after the write, on every
+   * normal return path, without touching any handler body.
+   *
+   * If the handler throws, no post-bust runs — same as today, and the pre-bust
+   * has already fired.
+   */
+  function withRefBust_(fn, kinds) {
+    return function (data, user, dbId) {
+      var out = fn(data, user, dbId);
+      try { if (kinds) vfBustRefs_(dbId, kinds); else finBustRefs_(dbId); } catch (e) {}
+      return out;
+    };
+  }
+
   function getValleyProducts_(data, user, dbId) {
     settingsEnsureSheet_(dbId, FIN_PRODUCTS_SHEET, FIN_PRODUCTS_HEADERS);
     var rows = getAllRecords_(dbId, FIN_PRODUCTS_SHEET);
     var catOpts = [];
     try {
-      catOpts = finRefsCached_(dbId, 'categories', function () {
+      catOpts = finRefsCached_(dbId, 'vf_categories_opts', function () {
         return getAllRecords_(dbId, FIN_CATEGORIES_SHEET).map(function (r) {
           return { value: r.id != null ? r.id : '', label: String(r.name || r.name_ar || r.id || '') };
         }).filter(function (o) { return String(o.value).trim() !== ''; });
@@ -2806,7 +2862,7 @@ const ValleyFoodsHRModules = (function () {
     try {
       /* كود الأصل refs valley_chart_of_accounts: label = «كود المستوى»,
        * stored value = «المستوى الخامس», restricted to 114100..115100. */
-      accountOpts = finRefsCached_(dbId, 'chart_of_accounts', function () {
+      accountOpts = finRefsCached_(dbId, 'vf_chart_asset_opts', function () {
         return getAllRecords_(dbId, FIN_CHART_SHEET).map(function (r) {
           var lvl5 = Number(r['المستوى الخامس']);
           var code = r['كود المستوى'];
@@ -2868,7 +2924,7 @@ const ValleyFoodsHRModules = (function () {
     } catch (e) { /* stock join is best-effort; list still loads */ }
 
     /* Aggregate stock totals onto each product row. */
-    var partyOpts = finRefsCached_(dbId, 'parties', function () {
+    var partyOpts = finRefsCached_(dbId, 'vf_parties_opts', function () {
       return getAllRecords_(dbId, FIN_PARTIES_SHEET).map(function (r) {
         return { value: r.id, label: String(r.name || r.id) };
       }).filter(function (o) { return String(o.value).trim() !== ''; });
@@ -3112,7 +3168,7 @@ const ValleyFoodsHRModules = (function () {
 
   function valleyPurchasingSupplierOptions_(dbId) {
     try {
-      return getRefsCached_(dbId, 'purchasing_supplier_options', FIN_REF_TTL_G, function () {
+      return vfRefsCached_(dbId, 'vf_purchasing_supplier_opts', function () {
         return getAllRecords_(dbId, FIN_PARTIES_SHEET).map(function (p) {
           return { value: p.id, label: String(p.name || p.id) };
         }).filter(function (o) { return String(o.value).trim() !== ''; });
@@ -3122,7 +3178,7 @@ const ValleyFoodsHRModules = (function () {
 
   function valleyPurchasingProductOptions_(dbId) {
     try {
-      return getRefsCached_(dbId, 'purchasing_product_options', FIN_REF_TTL_G, function () {
+      return vfRefsCached_(dbId, 'vf_purchasing_product_opts', function () {
         return getAllRecords_(dbId, FIN_PRODUCTS_SHEET).map(function (p) {
           return { value: p.id, label: String(p.name_ar || p.id) };
         }).filter(function (o) { return String(o.value).trim() !== ''; });
@@ -3622,7 +3678,7 @@ const ValleyFoodsHRModules = (function () {
     }).filter(function (o) { return o.value; });
     return {
       recipe_options: recipeOptions,
-      product_options: finRefsCached_(dbId, 'products', function () {
+      product_options: finRefsCached_(dbId, 'vf_products_opts_sorted', function () {
         return getAllRecords_(dbId, FIN_PRODUCTS_SHEET).map(function (p) {
           return { value: p.id, label: String(p.name_ar || ('#' + p.id)) };
         }).filter(function (o) { return String(o.value).trim() !== ''; })
@@ -3702,7 +3758,7 @@ const ValleyFoodsHRModules = (function () {
       orders: mfgPage.rows,
       total: mfgPage.total,
       recipe_options: recipeOptions,
-      product_options: finRefsCached_(dbId, 'products', function () {
+      product_options: finRefsCached_(dbId, 'vf_products_opts_sorted', function () {
         return getAllRecords_(dbId, FIN_PRODUCTS_SHEET).map(function (p) {
           return { value: p.id, label: String(p.name_ar || ('#' + p.id)) };
         }).filter(function (o) { return String(o.value).trim() !== ''; })
@@ -4557,7 +4613,7 @@ const ValleyFoodsHRModules = (function () {
     var total = rows.length;
     rows = rows.slice().reverse();
     if (!data || !data.loadAll) rows = rows.slice(0, limit);
-    var productOpts = finRefsCached_(dbId, 'products', function () {
+    var productOpts = finRefsCached_(dbId, 'vf_products_opts_plain', function () {
       return getAllRecords_(dbId, FIN_PRODUCTS_SHEET).map(function (p) {
         return { value: p.id, label: String(p.name_ar || ('#' + p.id)) };
       });
@@ -5284,7 +5340,7 @@ const ValleyFoodsHRModules = (function () {
     var boxMapRaw = finBoxMap_(dbId);
     var boxMap = boxMapRaw;
     try {
-      boxMap = finRefsCached_(dbId, 'boxes', function () {
+      boxMap = finRefsCached_(dbId, 'vf_boxes_map', function () {
         var m = finBoxMap_(dbId);
         return { byKey: m.byKey, altKeys: m.altKeys };
       });
@@ -5342,7 +5398,7 @@ const ValleyFoodsHRModules = (function () {
     });
 
     /* Slim payload: only fields the page displays/edits + edit-date value. */
-    var partyOpts = finRefsCached_(dbId, 'parties', function () {
+    var partyOpts = finRefsCached_(dbId, 'vf_parties_opts', function () {
       return getAllRecords_(dbId, FIN_PARTIES_SHEET).map(function (p) {
         return { value: p.id, label: String(p.name || p.id) };
       }).filter(function (o) { return String(o.value).trim() !== ''; });
@@ -5641,7 +5697,7 @@ const ValleyFoodsHRModules = (function () {
   }
 
   function getValleySalesBootstrap_(data, user, dbId) {
-    var partyOpts = finRefsCached_(dbId, 'parties', function () {
+    var partyOpts = finRefsCached_(dbId, 'vf_parties_sales_opts', function () {
       return getAllRecords_(dbId, FIN_PARTIES_SHEET).map(function (p) {
         return {
           value: p.id,
@@ -6304,7 +6360,7 @@ const ValleyFoodsHRModules = (function () {
         };
       });
     } catch (e) {}
-    var partyOpts = finRefsCached_(dbId, 'parties', function () {
+    var partyOpts = finRefsCached_(dbId, 'vf_parties_opts', function () {
       return getAllRecords_(dbId, FIN_PARTIES_SHEET).map(function (p) {
         return { value: p.id, label: String(p.name || p.id) };
       }).filter(function (o) { return String(o.value).trim() !== ''; });
@@ -6751,33 +6807,33 @@ const ValleyFoodsHRModules = (function () {
     ValleyFoods.register('add_upload_file',            addUploadFile_);
 
     ValleyFoods.register('get_overtime_roles_settings', getOvertimeRolesSettings_);
-    ValleyFoods.register('save_overtime_role',          saveOvertimeRole_);
-    ValleyFoods.register('toggle_overtime_role',        toggleOvertimeRole_);
+    ValleyFoods.register('save_overtime_role', withRefBust_(saveOvertimeRole_, ['overtime_roles']));
+    ValleyFoods.register('toggle_overtime_role', withRefBust_(toggleOvertimeRole_, ['overtime_roles']));
 
     ValleyFoods.register('get_deduction_roles_settings', getDeductionRolesSettings_);
-    ValleyFoods.register('save_deduction_role',          saveDeductionRole_);
-    ValleyFoods.register('toggle_deduction_role',        toggleDeductionRole_);
+    ValleyFoods.register('save_deduction_role', withRefBust_(saveDeductionRole_, ['deduction_roles']));
+    ValleyFoods.register('toggle_deduction_role', withRefBust_(toggleDeductionRole_, ['deduction_roles']));
 
     ValleyFoods.register('get_vacations_index_settings', getVacationsIndexSettings_);
-    ValleyFoods.register('save_vacation_index',          saveVacationIndex_);
-    ValleyFoods.register('toggle_vacation_index',        toggleVacationIndex_);
+    ValleyFoods.register('save_vacation_index', withRefBust_(saveVacationIndex_, ['vacations_index']));
+    ValleyFoods.register('toggle_vacation_index', withRefBust_(toggleVacationIndex_, ['vacations_index']));
 
     ValleyFoods.register('get_shift_schedule_settings',  getShiftScheduleSettings_);
-    ValleyFoods.register('save_shift_schedule',          saveShiftSchedule_);
-    ValleyFoods.register('toggle_shift_schedule',        toggleShiftSchedule_);
+    ValleyFoods.register('save_shift_schedule', withRefBust_(saveShiftSchedule_, ['shift_schedule']));
+    ValleyFoods.register('toggle_shift_schedule', withRefBust_(toggleShiftSchedule_, ['shift_schedule']));
 
     // ===================== FINANCE MASTER DATA =====================
     ValleyFoods.register('get_valley_products',   getValleyProducts_);
-    ValleyFoods.register('save_valley_product',   saveValleyProduct_);
+    ValleyFoods.register('save_valley_product', withRefBust_(saveValleyProduct_));
     ValleyFoods.register('get_valley_parties',    getValleyParties_);
-    ValleyFoods.register('save_valley_party',     saveValleyParty_);
+    ValleyFoods.register('save_valley_party', withRefBust_(saveValleyParty_));
     ValleyFoods.register('get_valley_party_statement', getValleyPartyStatement_);
 
     ValleyFoods.register('get_valley_cash',    getValleyCash_);
-    ValleyFoods.register('save_valley_cash',   saveValleyCash_);
+    ValleyFoods.register('save_valley_cash', withRefBust_(saveValleyCash_));
     ValleyFoods.register('approve_valley_cash', approveValleyCash_);
     ValleyFoods.register('delete_valley_cash', deleteValleyCash_);
-    ValleyFoods.register('transfer_valley_cash', transferValleyCash_);
+    ValleyFoods.register('transfer_valley_cash', withRefBust_(transferValleyCash_));
 
     // ===================== MANUFACTURE — RECIPES (BOM) =====================
     ValleyFoods.register('get_valley_mfg_recipes', getValleyMfgRecipes_);
@@ -6819,18 +6875,25 @@ const ValleyFoodsHRModules = (function () {
 
   // ===================== WORK CENTERS / ASSETS =====================
   ValleyFoods.register('get_valley_work_centers',     getValleyWorkCenters_);
-  ValleyFoods.register('save_valley_work_center',     saveValleyWorkCenter_);
+  ValleyFoods.register('save_valley_work_center', withRefBust_(saveValleyWorkCenter_, ['work_centers']));
   ValleyFoods.register('get_valley_asset_technicals',  getValleyAssetTechnicals_);
-  ValleyFoods.register('save_valley_asset_technical',  saveValleyAssetTechnical_);
+  ValleyFoods.register('save_valley_asset_technical', withRefBust_(saveValleyAssetTechnical_, ['asset_technicals']));
   ValleyFoods.register('get_valley_work_center_assets', getValleyWorkCenterAssets_);
   ValleyFoods.register('save_valley_work_center_asset', saveValleyWorkCenterAsset_);
 
   function prefetchRefs_(data, user, dbId) {
-    try { getRefsCached_(dbId, 'categories', FIN_REF_TTL_G, function(){ return getAllRecords_(dbId, FIN_CATEGORIES_SHEET); }); } catch(e){}
-    try { getRefsCached_(dbId, 'chart_of_accounts', FIN_REF_TTL_G, function(){ return getAllRecords_(dbId, FIN_CHART_SHEET); }); } catch(e){}
-    try { getRefsCached_(dbId, 'parties', FIN_REF_TTL_G, function(){ return getAllRecords_(dbId, FIN_PARTIES_SHEET); }); } catch(e){}
-    try { getRefsCached_(dbId, 'products', FIN_REF_TTL_G, function(){ return getAllRecords_(dbId, FIN_PRODUCTS_SHEET); }); } catch(e){}
-    try { getRefsCached_(dbId, 'boxes', FIN_REF_TTL_G, function(){ try{ return getAllRecords_(dbId, 'valley_box_account_codes'); }catch(e){ return []; } }); } catch(e){}
+    /* Phase 7.2 — this used to warm five kinds as RAW record arrays under the
+     * very keys the shaped readers use, on an idle timer, from pages across the
+     * app. After it ran, the products page's category dropdown, the asset-code
+     * dropdown (which silently lost its 114100-115100 filter), the box map
+     * (byKey -> undefined) and every party name all read the wrong shape.
+     *
+     * It now warms only through the two named accessors that exist, in the shape
+     * their reader consumes. The three it can no longer warm correctly are
+     * dropped rather than guessed: warming a shape nothing consumes is a full
+     * sheet read for nothing. */
+    try { valleyPurchasingSupplierOptions_(dbId); } catch(e){}
+    try { valleyPurchasingProductOptions_(dbId); } catch(e){}
     return { status: 'success' };
   }
   ValleyFoods.register('prefetch_refs', prefetchRefs_);
