@@ -290,9 +290,133 @@ const TopChemical = (function () {
   function uid8_() { return Utilities.getUuid().replace(/-/g, '').slice(0, 8); }
   function pad2_(n) { return ('0' + Number(n)).slice(-2); }
 
+  /**
+   * Phase 7.2 (F-15) — version-stamped reference cache, ported from the TopLight
+   * pattern Phase 2.6 established. TTL 600s, up from the uniform 120s.
+   *
+   * Audit that justifies it — every mutation site for every sheet cached here:
+   *   clients_vendors        add_client_vendor, edit_client_vendor   both bust
+   *   products               add_product, edit_product               both bust
+   *   legal_customer_vendor  add_legal_party                         busts
+   *   product_categories     none - no add/edit/delete action exists
+   *   legal_products         none
+   *   chart_of_accounts      none
+   * App-driven coverage is therefore complete: every mutation path that exists
+   * bumps the stamp, and three of the six sheets have no app mutation path at
+   * all. As on TopLight the TTL stays at 600s rather than the 1-6h F-15 floated,
+   * because a stamp cannot cover somebody editing a sheet by hand.
+   *
+   * FIXED HERE, and the reason the TTL could not simply be raised: the cache
+   * keys collided. getRefsCached_'s key is refs_<dbId>_<kind>, and TopChemical
+   * reused three kinds across different sheets AND different value shapes -
+   * 'parties' alone meant four different things (a {map,options} object over
+   * clients_vendors, a raw record array over clients_vendors, a [{value,label}]
+   * list over legal_customer_vendor, and a raw array over legal_customer_vendor),
+   * all sharing one key. Whichever ran first inside the TTL won and the rest
+   * silently read the wrong shape. Worst case was routine, not rare:
+   * prefetch_refs warmed all of them as raw arrays on an idle timer, after which
+   * add_product's category check ran indexOf over an array of objects, always
+   * missed, and rejected a valid category with
+   * "الفئة غير موجودة في جدول الفئات".
+   * Every (sheet, shape) now has its own kind, and each one is reached through
+   * exactly one named accessor below so the collision cannot come back.
+   */
+  const TC_REF_TTL = 600;
+
+  function tcRefsVersion_(dbId) {
+    try {
+      const cache = CacheService.getScriptCache();
+      const k = 'tc_refs_ver_' + dbId;
+      let v = cache.get(k);
+      if (!v) { v = String(new Date().getTime()); cache.put(k, v, 21600); }
+      return v;
+    } catch (e) { return '0'; }
+  }
+
+  function bumpTcRefsVersion_(dbId) {
+    try { CacheService.getScriptCache().put('tc_refs_ver_' + dbId, String(new Date().getTime()), 21600); } catch (e) {}
+  }
+
+  /** Version-stamped wrapper around getRefsCached_. */
+  function tcRefs_(dbId, kind, builder) {
+    return getRefsCached_(dbId, kind + '_v' + tcRefsVersion_(dbId), TC_REF_TTL, builder);
+  }
+
+  /**
+   * One bump orphans every derived key at once, so no individual kind can be
+   * forgotten. Call after any mutation of a sheet cached above.
+   */
+  function bustTcRefs_(dbId) {
+    bumpTcRefsVersion_(dbId);
+  }
+
+  // --- one accessor per (sheet, shape); builder bodies moved verbatim ---
+
+  function tcProductsRaw_(dbId) {
+    return tcRefs_(dbId, 'tc_products_raw', function(){ return getAllRecords_(dbId, PRODUCTS_SHEET); });
+  }
+
+  function tcClientsRaw_(dbId) {
+    return tcRefs_(dbId, 'tc_clients_raw', function(){ return getAllRecords_(dbId, CLIENTS_SHEET); });
+  }
+
+  function tcLegalPartiesRaw_(dbId) {
+    return tcRefs_(dbId, 'tc_legal_parties_raw', function(){ return getAllRecords_(dbId, LEGAL_PARTIES_SHEET); });
+  }
+
+  function tcLegalProductsRaw_(dbId) {
+    return tcRefs_(dbId, 'tc_legal_products_raw', function(){ return getAllRecords_(dbId, LEGAL_PRODUCTS_SHEET); });
+  }
+
+  /** Category names as plain strings — what add_product/edit_product validate against. */
+  function tcCategoryNames_(dbId) {
+    return tcRefs_(dbId, 'tc_categories_names', function(){
+      return getAllRecords_(dbId, CATEGORIES_SHEET).map(function (c) {
+        return String(c['الاسم بالعربى'] || '').trim();
+      });
+    });
+  }
+
+  /** Category [{value,label}] — what the products page's dropdown renders. */
+  function tcCategoryOptions_(dbId) {
+    return tcRefs_(dbId, 'tc_categories_opts', function(){
+      return getAllRecords_(dbId, CATEGORIES_SHEET)
+        .map(function (c) {
+          const name = String(c['الاسم بالعربى'] || '').trim();
+          return { value: name, label: name };
+        })
+        .filter(function (c) { return c.value; });
+    });
+  }
+
+  /** clients_vendors as [{value:Number,label}] — the AR/AP screen's shape. */
+  function tcClientOptions_(dbId) {
+    return tcRefs_(dbId, 'tc_clients_opts', function(){
+      return getAllRecords_(dbId, CLIENTS_SHEET)
+        .map(function (c) {
+          return { value: Number(c.id), label: String(c.name_ar || '').trim() || ('#' + c.id) };
+        })
+        .filter(function (c) { return !isNaN(c.value); })
+        .sort(function (a, b) { return String(a.label).localeCompare(String(b.label), 'ar'); });
+    });
+  }
+
+  /** chart_of_accounts as [{code,name}] — the budget forms' shape. */
+  function tcChartOptions_(dbId) {
+    return tcRefs_(dbId, 'tc_chart_opts', function(){
+      return getAllRecords_(dbId, LEGAL_CHART_SHEET).map(function (r) {
+        return {
+          code: String(r['كود المستوى'] == null ? '' : r['كود المستوى']).trim(),
+          name: String(r['اسم الحساب الرئيسي'] == null ? '' : r['اسم الحساب الرئيسي']).trim() ||
+            String(r['اسم المستوى الخامس'] == null ? '' : r['اسم المستوى الخامس']).trim()
+        };
+      }).filter(function (c) { return c.code; });
+    });
+  }
+
   /** Products: id -> name_ar map + [{value,label}] options for ref selects. */
   function productRefs_(dbId) {
-    return getRefsCached_(dbId, 'products', 120, function(){
+    return tcRefs_(dbId, 'tc_products_refs', function(){
       const map = {};
       const rows = getAllRecords_(dbId, PRODUCTS_SHEET);
       rows.forEach(function (p) {
@@ -310,7 +434,7 @@ const TopChemical = (function () {
 
   /** clients_vendors: id -> name_ar map + [{value,label}] options for ref selects. */
   function clientVendorRefs_(dbId) {
-    return getRefsCached_(dbId, 'parties', 120, function(){
+    return tcRefs_(dbId, 'tc_clients_refs', function(){
       const map = {};
       const rows = getAllRecords_(dbId, CLIENTS_SHEET);
       rows.forEach(function (v) {
@@ -673,7 +797,7 @@ const TopChemical = (function () {
   // عملاء وموردين (clients_vendors)
   // =========================================
   function getClientsVendors_(data, user, dbId) {
-    const rows = getRefsCached_(dbId, 'parties', 120, function(){ return getAllRecords_(dbId, CLIENTS_SHEET); });
+    const rows = tcClientsRaw_(dbId);
     return { status: 'success', clients: rows };
   }
 
@@ -682,7 +806,7 @@ const TopChemical = (function () {
     if (!Number.isInteger(id) || id <= 0) throw new Error('المعرف مطلوب (رقم صحيح موجب)');
     const nameAr = String(data.name_ar || '').trim();
     if (!nameAr) throw new Error('الاسم مطلوب');
-    const exists = getRefsCached_(dbId, 'parties', 120, function(){ return getAllRecords_(dbId, CLIENTS_SHEET); }).some(function(c){ return Number(c.id) === id; });
+    const exists = tcClientsRaw_(dbId).some(function(c){ return Number(c.id) === id; });
     if (exists) throw new Error('المعرف مستخدم بالفعل: ' + id);
     var rec = {
       id: id,
@@ -695,7 +819,7 @@ const TopChemical = (function () {
     };
     var res = appendRow_(dbId, CLIENTS_SHEET, rec);
     try { logHistory_(dbId, CLIENTS_SHEET, rec.record_uid || ('create_'+CLIENTS_SHEET+'_'+id), String(id), (user&&user.email)||'', 'create', rec, null); } catch(e){}
-    try { invalidateRefsCache_(dbId, 'parties'); } catch(e){}
+    try { bustTcRefs_(dbId); } catch(e){}
     res.record = rec;
     res.data = { assignedId: id };
     return res;
@@ -721,9 +845,9 @@ const TopChemical = (function () {
     var savedRecord = { id: id };
     Object.keys(updates).forEach(function(k){ savedRecord[k]=updates[k]; });
     // fill missing from existing
-    try { var existing = getRefsCached_(dbId, 'parties', 120, function(){ return getAllRecords_(dbId, CLIENTS_SHEET); }).find(function(c){ return Number(c.id)===id; }); if(existing){ Object.keys(existing).forEach(function(k){ if(savedRecord[k]===undefined) savedRecord[k]=existing[k]; }); } } catch(e){}
+    try { var existing = tcClientsRaw_(dbId).find(function(c){ return Number(c.id)===id; }); if(existing){ Object.keys(existing).forEach(function(k){ if(savedRecord[k]===undefined) savedRecord[k]=existing[k]; }); } } catch(e){}
     try { var _uidCV = _oldClientVendor && _oldClientVendor.record_uid ? _oldClientVendor.record_uid : 'create_'+CLIENTS_SHEET+'_'+id; var _newCV = {}; if(_oldClientVendor) Object.keys(_oldClientVendor).forEach(function(k){ _newCV[k]=_oldClientVendor[k]; }); Object.keys(updates).forEach(function(k){ _newCV[k]=updates[k]; }); if(!Object.keys(_newCV).length) _newCV = savedRecord; logHistory_(dbId, CLIENTS_SHEET, _uidCV, String(id), (user&&user.email)||'', 'update', _newCV, _oldClientVendor); } catch(e){}
-    try { invalidateRefsCache_(dbId, 'parties'); } catch(e){}
+    try { bustTcRefs_(dbId); } catch(e){}
     return { status: 'success', message: 'تم تحديث العميل', record: savedRecord, data: { assignedId: id } };
   }
 
@@ -731,14 +855,7 @@ const TopChemical = (function () {
   // مديونيات (AR_AP)
   // =========================================
   function getArAp_(data, user, dbId) {
-    const clients = getRefsCached_(dbId, 'parties', 120, function(){
-      return getAllRecords_(dbId, CLIENTS_SHEET)
-        .map(function (c) {
-          return { value: Number(c.id), label: String(c.name_ar || '').trim() || ('#' + c.id) };
-        })
-        .filter(function (c) { return !isNaN(c.value); })
-        .sort(function (a, b) { return String(a.label).localeCompare(String(b.label), 'ar'); });
-    });
+    const clients = tcClientOptions_(dbId);
 
     const clientMap = {};
     clients.forEach(function (c) { clientMap[String(c.value)] = c.label; });
@@ -777,7 +894,7 @@ const TopChemical = (function () {
     const clientId = Number(data.client_id);
     if (!Number.isInteger(clientId) || clientId <= 0) throw new Error('client_id مطلوب');
     const clientMap = {};
-    getRefsCached_(dbId, 'parties', 120, function(){ return getAllRecords_(dbId, CLIENTS_SHEET); }).forEach(function (c) {
+    tcClientsRaw_(dbId).forEach(function (c) {
       clientMap[String(Number(c.id))] = String(c.name_ar || '').trim();
     });
     var rows = getAllRecords_(dbId, ARAP_SHEET)
@@ -823,7 +940,7 @@ const TopChemical = (function () {
     const invoiceId = (data.invoice_id === undefined || data.invoice_id === null || String(data.invoice_id).trim() === '')
       ? '' : String(data.invoice_id).trim();
 
-    const clientExists = getRefsCached_(dbId, 'parties', 120, function(){ return getAllRecords_(dbId, CLIENTS_SHEET); }).some(function(c){ return Number(c.id) === client; });
+    const clientExists = tcClientsRaw_(dbId).some(function(c){ return Number(c.id) === client; });
     if (!clientExists) throw new Error('العميل غير موجود');
 
     return executeWithLock_(function () {
@@ -874,18 +991,11 @@ const TopChemical = (function () {
   // الأصناف (products)
   // =========================================
   function getProducts_(data, user, dbId) {
-    const rows = getRefsCached_(dbId, 'products', 120, function(){ return getAllRecords_(dbId, PRODUCTS_SHEET); });
+    const rows = tcProductsRaw_(dbId);
     const unitSet = {};
     rows.forEach(function (r) { const u = String(r.unit || '').trim(); if (u) unitSet[u] = true; });
     const unitOptions = Object.keys(unitSet).sort();
-    const categoryOptions = getRefsCached_(dbId, 'categories', 120, function(){
-      return getAllRecords_(dbId, CATEGORIES_SHEET)
-        .map(function (c) {
-          const name = String(c['الاسم بالعربى'] || '').trim();
-          return { value: name, label: name };
-        })
-        .filter(function (c) { return c.value; });
-    });
+    const categoryOptions = tcCategoryOptions_(dbId);
     return { status: 'success', products: rows, unit_options: unitOptions, category_options: categoryOptions };
   }
 
@@ -907,14 +1017,10 @@ const TopChemical = (function () {
     const cartons = Number(cartonsRaw);
     if (!Number.isInteger(cartons)) throw new Error('عدد الكراتين/الشنط يجب أن يكون رقماً صحيحاً');
 
-    const cats = getRefsCached_(dbId, 'categories', 120, function(){
-      return getAllRecords_(dbId, CATEGORIES_SHEET).map(function (c) {
-        return String(c['الاسم بالعربى'] || '').trim();
-      });
-    });
+    const cats = tcCategoryNames_(dbId);
     if (cats.indexOf(category) === -1) throw new Error('الفئة غير موجودة في جدول الفئات');
 
-    const exists = getRefsCached_(dbId, 'products', 120, function(){ return getAllRecords_(dbId, PRODUCTS_SHEET); }).some(function(p){ return Number(p.id) === id; });
+    const exists = tcProductsRaw_(dbId).some(function(p){ return Number(p.id) === id; });
     if (exists) throw new Error('المعرف مستخدم بالفعل: ' + id);
 
     var recP = {
@@ -928,8 +1034,7 @@ const TopChemical = (function () {
     };
     var resP = appendRow_(dbId, PRODUCTS_SHEET, recP);
     try { logHistory_(dbId, PRODUCTS_SHEET, recP.record_uid || ('create_'+PRODUCTS_SHEET+'_'+id), String(id), (user&&user.email)||'', 'create', recP, null); } catch(e){}
-    try { invalidateRefsCache_(dbId, 'products'); } catch(e){}
-    try { invalidateRefsCache_(dbId, 'categories'); } catch(e){}
+    try { bustTcRefs_(dbId); } catch(e){}
     resP.record = recP;
     resP.data = { assignedId: id };
     return resP;
@@ -959,11 +1064,7 @@ const TopChemical = (function () {
     if (data.category !== undefined) {
       const category = String(data.category || '').trim();
       if (!category) throw new Error('الفئة مطلوبة');
-      const cats = getRefsCached_(dbId, 'categories', 120, function(){
-        return getAllRecords_(dbId, CATEGORIES_SHEET).map(function (c) {
-          return String(c['الاسم بالعربى'] || '').trim();
-        });
-      });
+      const cats = tcCategoryNames_(dbId);
       if (cats.indexOf(category) === -1) throw new Error('الفئة غير موجودة في جدول الفئات');
       updates['category'] = category;
     }
@@ -979,11 +1080,10 @@ const TopChemical = (function () {
     const sheet = getSheet_(PRODUCTS_SHEET, dbId);
     if (!updateRowByCriteria_(sheet, 'id', id, updates)) throw new Error('المنتج غير موجود');
     try { var _uidProd = _oldProd && _oldProd.record_uid ? _oldProd.record_uid : 'create_'+PRODUCTS_SHEET+'_'+id; var _newProd = {}; if(_oldProd) Object.keys(_oldProd).forEach(function(k){ _newProd[k]=_oldProd[k]; }); Object.keys(updates).forEach(function(k){ _newProd[k]=updates[k]; }); logHistory_(dbId, PRODUCTS_SHEET, _uidProd, String(id), (user&&user.email)||'', 'update', _newProd, _oldProd); } catch(e){}
-    try { invalidateRefsCache_(dbId, 'products'); } catch(e){}
-    try { invalidateRefsCache_(dbId, 'categories'); } catch(e){}
+    try { bustTcRefs_(dbId); } catch(e){}
     var savedRecProd = { id: id };
     Object.keys(updates).forEach(function(k){ savedRecProd[k]=updates[k]; });
-    try { var exP = getRefsCached_(dbId, 'products', 120, function(){ return getAllRecords_(dbId, PRODUCTS_SHEET); }).find(function(p){ return Number(p.id)===id; }); if(exP){ Object.keys(exP).forEach(function(k){ if(savedRecProd[k]===undefined) savedRecProd[k]=exP[k]; }); } } catch(e){}
+    try { var exP = tcProductsRaw_(dbId).find(function(p){ return Number(p.id)===id; }); if(exP){ Object.keys(exP).forEach(function(k){ if(savedRecProd[k]===undefined) savedRecProd[k]=exP[k]; }); } } catch(e){}
     return { status: 'success', message: 'تم تحديث المنتج', record: savedRecProd, data: { assignedId: id } };
   }
 
@@ -1380,7 +1480,7 @@ const TopChemical = (function () {
     };
     // fill category/unit from products sheet if available
     try {
-      var prodRow = getRefsCached_(dbId, 'products', 120, function(){ return getAllRecords_(dbId, PRODUCTS_SHEET); }).find(function(p){ return Number(p.id)===product; });
+      var prodRow = tcProductsRaw_(dbId).find(function(p){ return Number(p.id)===product; });
       if (prodRow) { savedRecord.name_ar = String(prodRow.name_ar||'').trim(); savedRecord.category = String(prodRow.category||'').trim(); savedRecord.unit = String(prodRow.unit||'').trim(); }
     } catch(e){}
     try { var _mapStock = { product: product, date: date, amount: amount, warehouse: warehouse, notes: notes, available_amount: avail, user: (user && user.email) || '', created_at: new Date() }; logHistory_(dbId, STOCK_SHEET, 'create_'+STOCK_SHEET+'_'+rowNum, String(rowNum), (user&&user.email)||'', 'create', _mapStock, null); } catch(e){}
@@ -1803,7 +1903,7 @@ const TopChemical = (function () {
   // <id>.<field>.<HHMMSS>.<ext>. approval_expiry_date = approval_date + 180.
   // =========================================
   function customerVendorOptions_(dbId) {
-    return getRefsCached_(dbId, 'parties', 120, function(){
+    return tcRefs_(dbId, 'tc_legal_parties_opts', function(){
       return getAllRecords_(dbId, CUSTOMER_VENDOR_SHEET).map(function (v) {
         const name = String(v.name || '').trim();
         return name ? { value: name, label: name } : null;
@@ -2966,8 +3066,8 @@ const TopChemical = (function () {
 
   /** Combined reference data for the budget forms (one call per page). */
   function getBudgetRefs_(data, user, dbId) {
-    const parties = getRefsCached_(dbId, 'parties', 120, function(){ return getAllRecords_(dbId, LEGAL_PARTIES_SHEET); });
-    const products = getRefsCached_(dbId, 'products', 120, function(){ return getAllRecords_(dbId, LEGAL_PRODUCTS_SHEET); });
+    const parties = tcLegalPartiesRaw_(dbId);
+    const products = tcLegalProductsRaw_(dbId);
     const current = getAllRecords_(dbId, LEGAL_CURRENT_SHEET);
     const costing = getAllRecords_(dbId, LEGAL_COSTING_SHEET);
     const income = getAllRecords_(dbId, LEGAL_INCOME_SHEET);
@@ -2992,15 +3092,7 @@ const TopChemical = (function () {
             name4: String(r['اسم المستوى الرابع'] == null ? '' : r['اسم المستوى الرابع']).trim()
           };
         }).filter(function (b) { return b.level5; }),
-        charts: getRefsCached_(dbId, 'chart_of_accounts', 120, function(){
-          return getAllRecords_(dbId, LEGAL_CHART_SHEET).map(function (r) {
-            return {
-              code: String(r['كود المستوى'] == null ? '' : r['كود المستوى']).trim(),
-              name: String(r['اسم الحساب الرئيسي'] == null ? '' : r['اسم الحساب الرئيسي']).trim() ||
-                String(r['اسم المستوى الخامس'] == null ? '' : r['اسم المستوى الخامس']).trim()
-            };
-          }).filter(function (c) { return c.code; });
-        }),
+        charts: tcChartOptions_(dbId),
         parties: parties.map(function (p) { return { id: p.id, name: p.name, tax_id: p.tax_id }; }),
         party_types: distinctValues_(parties, 'type'),
         products: products.map(function (p) {
@@ -3022,11 +3114,11 @@ const TopChemical = (function () {
   }
 
   function getLegalProducts_(data, user, dbId) {
-    return { status: 'success', products: getRefsCached_(dbId, 'products', 120, function(){ return getAllRecords_(dbId, LEGAL_PRODUCTS_SHEET); }) };
+    return { status: 'success', products: tcLegalProductsRaw_(dbId) };
   }
 
   function getLegalParties_(data, user, dbId) {
-    return { status: 'success', parties: getRefsCached_(dbId, 'parties', 120, function(){ return getAllRecords_(dbId, LEGAL_PARTIES_SHEET); }) };
+    return { status: 'success', parties: tcLegalPartiesRaw_(dbId) };
   }
 
   function addLegalParty_(data, user, dbId) {
@@ -3035,14 +3127,14 @@ const TopChemical = (function () {
     const name = String(data.name || '').trim();
     if (!name) throw new Error('الاسم مطلوب');
     if (!String(data.tax_id || '').trim()) throw new Error('الرقم الضريبي مطلوب');
-    const exists = getRefsCached_(dbId, 'parties', 120, function(){ return getAllRecords_(dbId, LEGAL_PARTIES_SHEET); }).some(function (p) { return Number(p.id) === id; });
+    const exists = tcLegalPartiesRaw_(dbId).some(function (p) { return Number(p.id) === id; });
     if (exists) throw new Error('المعرف مستخدم بالفعل: ' + id);
     const rec = {};
     Object.keys(data).forEach(function (k) { rec[k.trim().toLowerCase()] = data[k]; });
     rec['id'] = id; rec['name'] = name;
     var resLP = appendRow_(dbId, LEGAL_PARTIES_SHEET, rec);
     try { logHistory_(dbId, LEGAL_PARTIES_SHEET, rec.record_uid || ('create_'+LEGAL_PARTIES_SHEET+'_'+id), String(id), (user&&user.email)||'', 'create', rec, null); } catch(e){}
-    try { invalidateRefsCache_(dbId, 'parties'); } catch(e){}
+    try { bustTcRefs_(dbId); } catch(e){}
     var savedLP = {}; Object.keys(rec).forEach(function(k){ savedLP[k]=rec[k]; });
     resLP.record = savedLP;
     resLP.data = { assignedId: id };
@@ -4017,7 +4109,7 @@ const valueMap = {};
 
     const lines = getAllRecords_(dbId, LEGAL_PURCHASING_SHEET);
     const costings = getAllRecords_(dbId, LEGAL_COSTING_SHEET);
-    const parties = getRefsCached_(dbId, 'parties', 120, function(){ return getAllRecords_(dbId, CUSTOMER_VENDOR_SHEET); });
+    const parties = tcLegalPartiesRaw_(dbId);
 
     // Index parent costing records by certificate number
     const costingMap = {};
@@ -4313,12 +4405,15 @@ const valueMap = {};
   register('make_collection_from_invoice', makeCollectionFromInvoice_);
 
   function prefetchRefs_(data, user, dbId) {
-    try { getRefsCached_(dbId, 'categories', 120, function(){ return getAllRecords_(dbId, CATEGORIES_SHEET); }); } catch(e){}
-    try { getRefsCached_(dbId, 'chart_of_accounts', 120, function(){ return getAllRecords_(dbId, LEGAL_CHART_SHEET); }); } catch(e){}
-    try { getRefsCached_(dbId, 'parties', 120, function(){ return getAllRecords_(dbId, CLIENTS_SHEET); }); } catch(e){}
-    try { getRefsCached_(dbId, 'products', 120, function(){ return getAllRecords_(dbId, PRODUCTS_SHEET); }); } catch(e){}
-    try { getRefsCached_(dbId, 'legal_parties', 120, function(){ return getAllRecords_(dbId, LEGAL_PARTIES_SHEET); }); } catch(e){}
-    try { getRefsCached_(dbId, 'legal_products', 120, function(){ return getAllRecords_(dbId, LEGAL_PRODUCTS_SHEET); }); } catch(e){}
+    // Phase 7.2 — one warm per reference sheet, each in a shape a reader
+    // actually consumes. It used to warm all six as RAW record arrays under the
+    // same keys the shaped readers use, so an idle prefetch poisoned them.
+    try { tcCategoryOptions_(dbId); } catch(e){}
+    try { tcChartOptions_(dbId); } catch(e){}
+    try { tcClientsRaw_(dbId); } catch(e){}
+    try { tcProductsRaw_(dbId); } catch(e){}
+    try { tcLegalPartiesRaw_(dbId); } catch(e){}
+    try { tcLegalProductsRaw_(dbId); } catch(e){}
     return { status: 'success' };
   }
   register('prefetch_refs', prefetchRefs_);
