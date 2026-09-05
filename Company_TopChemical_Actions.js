@@ -84,6 +84,7 @@ const TopChemical = (function () {
     'get_customs_office': { page: 'tc_customs_office', access: 'read' },
     'add_customs_office': { page: 'tc_customs_office', access: 'write' },
     'get_purchase_items': { page: 'tc_purchasing', access: 'read' },
+    'get_purchase_options': { page: 'tc_purchasing', access: 'read' },
     'add_purchase_item': { page: 'tc_purchasing', access: 'write' },
     'add_vendor': { page: 'tc_purchasing', access: 'write' },
     'add_item': { page: 'tc_purchasing', access: 'write' },
@@ -202,6 +203,7 @@ const TopChemical = (function () {
     'get_stock_revision': STOCK_SHEET,
     'add_stock_revision': STOCK_SHEET,
     'get_purchase_items': PURCHASE_SHEET,
+    'get_purchase_options': PURCHASE_SHEET,
     'add_purchase_item': PURCHASE_SHEET,
     'add_vendor': VENDORS_SHEET,
     'add_item': ITEMS_SHEET,
@@ -1597,21 +1599,68 @@ const TopChemical = (function () {
     return { map: map, options: options };
   }
 
+  /**
+   * Phase 7.1 — the id -> name maps are what the LIST needs; the sorted option
+   * lists are what the FORM needs. vendorRefs_/itemRefs_ build both together, and
+   * the Arabic-collated localeCompare sort over every vendor and every item is
+   * the expensive half of that. These are the map half, extracted verbatim
+   * (same trim, same '#'+id fallback, same last-one-wins on a duplicate id), so
+   * a caller that only reads `.map` can skip the sort entirely.
+   */
+  function vendorNameMap_(dbId) {
+    const map = {};
+    getAllRecords_(dbId, VENDORS_SHEET).forEach(function (v) {
+      const vid = String(v.vendor_id || '').trim();
+      if (!vid) return;
+      map[vid] = String(v.vendor_name_ar || '').trim() || ('#' + vid);
+    });
+    return map;
+  }
+
+  function itemNameMap_(dbId) {
+    const map = {};
+    getAllRecords_(dbId, ITEMS_SHEET).forEach(function (it) {
+      const iid = String(it.item_id || '').trim();
+      if (!iid) return;
+      map[iid] = String(it.item_name_ar || '').trim() || ('#' + iid);
+    });
+    return map;
+  }
+
+  /**
+   * Phase 7.1 — this endpoint had the same shape Phase 2 fixed on the TopLight
+   * screens, and was missed there: it expanded EVERY purchase row ever into a
+   * derived object, reversed the whole array, and only then sliced to 10.
+   *
+   * Order is now computed on an index array first, so `reverse().slice(0, limit)`
+   * keeps its exact semantics (including a negative or fractional limit) while
+   * only the visible rows are mapped. The form's option lists moved to
+   * get_purchase_options, fetched when the form opens; pass withOptions:true for
+   * the old combined response.
+   */
   function getPurchaseItems_(data, user, dbId) {
-    const vendors = vendorRefs_(dbId);
-    const items = itemRefs_(dbId);
-    var rows = getAllRecords_(dbId, PURCHASE_SHEET).map(function (r) {
+    const vendorNames = vendorNameMap_(dbId);
+    const itemNames = itemNameMap_(dbId);
+    const raw = getAllRecords_(dbId, PURCHASE_SHEET);
+    var limit = Number(data && data.limit) || 10;
+
+    var order = [];
+    for (var i = raw.length - 1; i >= 0; i--) order.push(i);
+    if (!data || !data.loadAll) order = order.slice(0, limit);
+
+    var rows = order.map(function (idx) {
+      const r = raw[idx];
       const vid = String(r.vendor || '').trim();
       const iid = String(r.item || '').trim();
       return {
         unique_id: r.unique_id,
         id: r.id,
         vendor: vid,
-        vendor_name: vendors.map[vid] || '',
+        vendor_name: vendorNames[vid] || '',
         invoice_no: r.invoice_no,
         invoice_date: r.invoice_date,
         item: iid,
-        item_name: items.map[iid] || '',
+        item_name: itemNames[iid] || '',
         item_brand: r.item_brand,
         qty: r.qty,
         price: r.price,
@@ -1619,24 +1668,31 @@ const TopChemical = (function () {
         user: r.user,
         created_at: r.created_at
       };
-    }).reverse();
-    var limit = Number(data && data.limit) || 10;
-    if (!data || !data.loadAll) rows = rows.slice(0, limit);
+    });
+    const out = { status: 'success', purchases: rows };
+    if (data && data.withOptions) {
+      out.vendor_options = vendorRefs_(dbId).options;
+      out.item_options = itemRefs_(dbId).options;
+    }
+    return out;
+  }
+
+  /** Phase 7.1 — the form's dropdown data, fetched when the form actually opens. */
+  function getPurchaseOptions_(data, user, dbId) {
     return {
       status: 'success',
-      purchases: rows,
-      vendor_options: vendors.options,
-      item_options: items.options
+      vendor_options: vendorRefs_(dbId).options,
+      item_options: itemRefs_(dbId).options
     };
   }
 
   function addPurchaseItem_(data, user, dbId) {
     const vendor = String(data.vendor || '').trim();
     if (!vendor) throw new Error('المورد مطلوب');
-    if (!vendorRefs_(dbId).map[vendor]) throw new Error('المورد غير موجود');
+    if (!vendorNameMap_(dbId)[vendor]) throw new Error('المورد غير موجود');
     const item = String(data.item || '').trim();
     if (!item) throw new Error('الصنف مطلوب');
-    if (!itemRefs_(dbId).map[item]) throw new Error('الصنف غير موجود');
+    if (!itemNameMap_(dbId)[item]) throw new Error('الصنف غير موجود');
     const invoiceNo = String(data.invoice_no || '').trim();
     if (!invoiceNo) throw new Error('رقم الفاتورة مطلوب');
     const brand = String(data.item_brand || '').trim();
@@ -1677,8 +1733,8 @@ const TopChemical = (function () {
       const rowNum = sheet.getLastRow() + 1;
       sheet.appendRow(rowValues);
       try { logHistory_(dbId, PURCHASE_SHEET, rec.record_uid || ('create_'+PURCHASE_SHEET+'_'+id), String(id), (user&&user.email)||'', 'create', rec, null); } catch(e){}
-      var vendorsMap = vendorRefs_(dbId).map;
-      var itemsMap = itemRefs_(dbId).map;
+      var vendorsMap = vendorNameMap_(dbId);
+      var itemsMap = itemNameMap_(dbId);
       var savedRecord = {
         unique_id: rec.unique_id,
         id: rec.id,
@@ -4200,6 +4256,7 @@ const valueMap = {};
   register('get_customs_office', getCustomsOffice_);
   register('add_customs_office', addCustomsOffice_);
   register('get_purchase_items', getPurchaseItems_);
+  register('get_purchase_options', getPurchaseOptions_);
   register('add_purchase_item', addPurchaseItem_);
   register('add_vendor', addVendor_);
   register('add_item', addItem_);

@@ -79,12 +79,34 @@
     companyCall('get_purchase_items')
       .then(function (r) {
         window.__purchases = r.purchases || [];
-        window.__vendorOptions = r.vendor_options || [];
-        window.__itemOptions = r.item_options || [];
+        /* Phase 7.1: the vendor/item dropdown lists no longer ride along with
+         * the list render — see ensureOptions(). Still honoured if a response
+         * happens to carry them (withOptions:true). */
+        if (r.vendor_options) window.__vendorOptions = r.vendor_options;
+        if (r.item_options) window.__itemOptions = r.item_options;
         renderPurchases(); try{schedulePrefetch();}catch(e){};
       })
       .catch(function (e) { showError(e); })
       .finally(function () { UI.hideSpinner(); });
+  }
+
+  /* Phase 7.1: the option lists used to be rebuilt and Arabic-sorted on every
+   * list render, for a form that may never open. Fetched once, on first open,
+   * and reused after that. */
+  var __optionsPromise = null;
+
+  function ensureOptions() {
+    if (__optionsPromise) return __optionsPromise;
+    __optionsPromise = companyCall('get_purchase_options')
+      .then(function (r) {
+        window.__vendorOptions = r.vendor_options || [];
+        window.__itemOptions = r.item_options || [];
+      })
+      .catch(function (e) {
+        __optionsPromise = null;   // let the next open retry
+        throw e;
+      });
+    return __optionsPromise;
   }
 
   function renderPurchases() {
@@ -129,6 +151,14 @@
   }
 
   function openAddModal() {
+    UI.showSpinner('جاري استرجاع خيارات الموردين والأصناف...');
+    ensureOptions()
+      .then(function () { renderAddModal(); })
+      .catch(function (e) { UIC.toast(e.message || 'خطأ', 'error'); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function renderAddModal() {
     var body =
       '<form id="purchase-form">' +
       '<div class="form-field" data-field="vendor">' +
