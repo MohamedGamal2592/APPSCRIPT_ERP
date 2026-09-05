@@ -45,11 +45,13 @@ function resetRecordCache_() {
   for (const k in _ensuredSheets_) delete _ensuredSheets_[k];
   _recordCacheDisabled_ = false;
   _sheetsReadCount_ = 0;
+  for (const k in _pkIndexCache_) delete _pkIndexCache_[k];
 }
 
 function disableRecordCache_() {
   _recordCacheDisabled_ = true;
   for (const k in _recordCache_) delete _recordCache_[k];
+  for (const k in _pkIndexCache_) delete _pkIndexCache_[k];
 }
 
 /**
@@ -442,15 +444,131 @@ function deleteRowsByCriteria_(sheet, criteriaHeader, criteriaValue) {
  *   actual (expensive) Sheets read when there's a cache miss.
  */
 function getRefsCached_(dbId, kind, ttlSeconds, builder) {
-  const cache = CacheService.getScriptCache();
   const key = 'refs_' + String(dbId) + '_' + String(kind);
   try {
-    const cached = cache.get(key);
-    if (cached) return JSON.parse(cached);
+    const cached = getChunkedCache_(key);
+    if (cached !== null) return cached;
   } catch (e) { /* fall through to rebuild */ }
   const value = builder();
-  try { cache.put(key, JSON.stringify(value), ttlSeconds); } catch (e2) { /* cache write failures are non-fatal */ }
+  try { putChunkedCache_(key, value, ttlSeconds); } catch (e2) { /* cache write failures are non-fatal */ }
   return value;
+}
+
+// ==========================================
+// Chunked CacheService (Phase 6 — harvested from 04_TableEngine.js)
+// ==========================================
+/**
+ * CacheService rejects any single value over ~100 KB. getRefsCached_ used to do
+ * a plain cache.put inside a try/catch, so for a large reference list — a big
+ * products or parties table — the put threw, was swallowed, and the cache
+ * SILENTLY NEVER WORKED: every call rebuilt from a full sheet read. The bigger
+ * the company, the less the cache helped.
+ *
+ * 04_TableEngine.js had a correct chunked implementation (manifest + numbered
+ * chunk keys) that nothing could reach, because that whole engine was dead code
+ * (F-17). It is harvested here, generalised, before the engine is deleted.
+ *
+ * Layout: '<key>__m' holds {n, ts}; '<key>__c0..cN' hold the JSON slices.
+ * Any missing chunk is treated as a total miss, so a partial eviction can never
+ * produce a truncated value.
+ */
+function chunkedCacheKeys_(key) {
+  const safe = String(key).replace(/[^a-zA-Z0-9_]/g, '_').slice(0, 200);
+  return { manifest: safe + '__m', prefix: safe + '__c' };
+}
+
+function putChunkedCache_(key, value, ttlSeconds) {
+  try {
+    const keys = chunkedCacheKeys_(key);
+    const cache = CacheService.getScriptCache();
+    const payload = JSON.stringify(value);
+    const chunkSize = CONFIG.TABLE_CACHE_CHUNK_SIZE || 90000;
+    const maxChunks = CONFIG.TABLE_CACHE_MAX_CHUNKS || 50;
+    if (payload.length > maxChunks * chunkSize) return false;   // too big to cache; not an error
+    const chunks = [];
+    for (let i = 0; i < payload.length; i += chunkSize) chunks.push(payload.slice(i, i + chunkSize));
+    removeChunkedCache_(key);   // drop older chunks so a shrinking value leaves no tail
+    const put = {};
+    chunks.forEach(function (c, i) { put[keys.prefix + i] = c; });
+    put[keys.manifest] = JSON.stringify({ n: chunks.length, ts: new Date().getTime() });
+    cache.putAll(put, ttlSeconds);
+    return true;
+  } catch (e) { return false; }
+}
+
+/** @return the cached value, or null on any miss. */
+function getChunkedCache_(key) {
+  try {
+    const keys = chunkedCacheKeys_(key);
+    const cache = CacheService.getScriptCache();
+    const manifestRaw = cache.get(keys.manifest);
+    if (!manifestRaw) return null;
+    const manifest = JSON.parse(manifestRaw);
+    if (!manifest || !manifest.n) return null;
+    const chunkKeys = [];
+    for (let i = 0; i < manifest.n; i++) chunkKeys.push(keys.prefix + i);
+    const map = cache.getAll(chunkKeys);
+    let payload = '';
+    for (let i = 0; i < manifest.n; i++) {
+      const ck = keys.prefix + i;
+      if (map[ck] === undefined || map[ck] === null) return null;   // any miss → full rebuild
+      payload += map[ck];
+    }
+    return JSON.parse(payload);
+  } catch (e) { return null; }
+}
+
+function removeChunkedCache_(key) {
+  try {
+    const keys = chunkedCacheKeys_(key);
+    const all = [keys.manifest];
+    const maxChunks = CONFIG.TABLE_CACHE_MAX_CHUNKS || 50;
+    for (let i = 0; i < maxChunks; i++) all.push(keys.prefix + i);
+    CacheService.getScriptCache().removeAll(all);
+  } catch (e) {}
+}
+
+// ==========================================
+// O(1) primary-key lookup (Phase 6 — harvested from 04_TableEngine.js)
+// ==========================================
+/**
+ * Returns { rows, byPk, pks, headers } for a sheet, with byPk a Map giving O(1)
+ * lookup by primary key. Callers that repeatedly do
+ * rows.find(r => String(r.id) === String(x)) inside a loop are O(n*m); this
+ * makes them O(n+m).
+ *
+ * Built on getAllRecords_, so it shares the request memo and is counted by the
+ * Phase 0b SheetReads instrumentation — unlike the TableEngine original, which
+ * kept a second parallel read path and its own cache.
+ *
+ * Both the raw and lowercased key are registered, matching the original.
+ */
+const _pkIndexCache_ = {};
+
+function getRecordsByPk_(dbId, sheetName, pkColumn) {
+  const pkLc = String(pkColumn || 'id').trim().toLowerCase();
+  const key = dbId + '|' + sheetName + '|' + pkLc;
+  if (_pkIndexCache_[key]) return _pkIndexCache_[key];
+
+  const rows = getAllRecords_(dbId, sheetName);
+  const headers = getHeaders_(getSheet_(sheetName, dbId)).map(function (h) { return String(h).trim(); });
+  let pkHeader = null;
+  headers.forEach(function (h) { if (h.toLowerCase() === pkLc) pkHeader = h; });
+
+  const byPk = new Map();
+  const pks = [];
+  rows.forEach(function (r) {
+    const raw = pkHeader !== null && r[pkHeader] !== undefined ? r[pkHeader] : r[pkLc];
+    const pk = String(raw == null ? '' : raw).trim();
+    if (!pk) return;
+    byPk.set(pk, r);
+    byPk.set(pk.toLowerCase(), r);
+    pks.push(pk);
+  });
+
+  const entry = { rows: rows, byPk: byPk, pks: pks, headers: headers, pkHeader: pkHeader || pkColumn };
+  _pkIndexCache_[key] = entry;
+  return entry;
 }
 
 /**
@@ -459,7 +577,11 @@ function getRefsCached_(dbId, kind, ttlSeconds, builder) {
  * caches, immediately after the mutation succeeds.
  */
 function invalidateRefsCache_(dbId, kind) {
-  try { CacheService.getScriptCache().remove('refs_' + String(dbId) + '_' + kind); } catch (e) {}
+  const key = 'refs_' + String(dbId) + '_' + kind;
+  // Remove both forms: the chunked entry written today, and the single-key entry
+  // any still-live cache may hold from before Phase 6.
+  try { removeChunkedCache_(key); } catch (e) {}
+  try { CacheService.getScriptCache().remove(key); } catch (e) {}
 }
 
 /**
