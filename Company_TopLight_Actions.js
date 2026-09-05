@@ -808,8 +808,11 @@ const TopLight = (function () {
     var _editPurchOld = null; try { _editPurchOld = getAllRecords_(dbId, PURCHASING_SHEET).find(function(r){ return String(r.unique_id)===String(uid); }) || null; } catch(e){}
     deleteLines_(dbId, uid);
     const rowValues = buildHeaderValues_(headers, uid, header, user);
+    // Phase 3 (F-04): formulas merged into the same setValues that writes the
+    // values, instead of a second pass of up to 8 setFormula calls. The target
+    // row already exists and is located by unique_id, so no lock is needed here.
+    applyHeaderFormulas_(rowValues, headers, rowNum);
     sheet.getRange(rowNum, 1, 1, rowValues.length).setValues([rowValues]);
-    setHeaderFormulas_(sheet, headers, rowNum);
     writeLines_(dbId, uid, header, lines, user);
     try { var _uid = (_editPurchOld && _editPurchOld.record_uid) ? String(_editPurchOld.record_uid) : 'update_top_light_purchasing_costing_' + uid; logHistory_(dbId, PURCHASING_SHEET, _uid, String(uid), (user&&user.email)||'', 'update', header, _editPurchOld); } catch(e){}
     bustTopLightCaches_(dbId, 'purchasing');
@@ -996,14 +999,25 @@ const TopLight = (function () {
     return rowValues;
   }
 
-  function setHeaderFormulas_(sheet, headers, rowNum) {
+  /**
+   * Phase 3 (F-04). The formula strings for one purchasing-costing header row,
+   * as { columnIndex: formula }. Extracted VERBATIM from setHeaderFormulas_ so
+   * the same strings can be written as part of the row's own setValues() instead
+   * of as up to eight separate setFormula() round trips.
+   *
+   * setValues() treats a string beginning with '=' as a formula, exactly as
+   * appendRow() and setFormula() do, so the cells end up as formulas with
+   * identical text.
+   */
+  function headerFormulaMap_(headers, rowNum) {
     const idx = {};
     headers.forEach((h, i) => { idx[String(h).trim().toLowerCase()] = i; });
     const L = (name) => colLetter_(idx[name]);
+    const out = {};
 
     if (idx['value based on invoice'] !== undefined) {
-      sheet.getRange(rowNum, idx['value based on invoice'] + 1).setFormula(
-        '=' + L('value') + rowNum + '*' + L('exchange rate') + rowNum);
+      out[idx['value based on invoice']] =
+        '=' + L('value') + rowNum + '*' + L('exchange rate') + rowNum;
     }
     if (idx['total costs'] !== undefined) {
       const sumCols = ['value based on invoice', 'administrative expenses', 'customs expenses',
@@ -1011,42 +1025,70 @@ const TopLight = (function () {
         'additional fees', 'clearance expenses', 'other expenses'];
       const sum = sumCols.map(c => L(c) + rowNum).join('+');
       const sumWithAdj = sum + '+' + L('internal cost adjustment') + rowNum + '+' + L('purchase tax') + rowNum;
-      sheet.getRange(rowNum, idx['total costs'] + 1).setFormula(
-        '=IF(' + L('type') + rowNum + '="بيع",' + sum + ',' + sumWithAdj + ')');
+      out[idx['total costs']] =
+        '=IF(' + L('type') + rowNum + '="بيع",' + sum + ',' + sumWithAdj + ')';
     }
     if (idx['month'] !== undefined) {
-      sheet.getRange(rowNum, idx['month'] + 1).setFormula('=MONTH(' + L('reciept date') + rowNum + ')');
+      out[idx['month']] = '=MONTH(' + L('reciept date') + rowNum + ')';
     }
     if (idx['year'] !== undefined) {
-      sheet.getRange(rowNum, idx['year'] + 1).setFormula('=YEAR(' + L('reciept date') + rowNum + ')');
+      out[idx['year']] = '=YEAR(' + L('reciept date') + rowNum + ')';
     }
     if (idx['cif insurance rate'] !== undefined) {
-      sheet.getRange(rowNum, idx['cif insurance rate'] + 1).setFormula(
-        '=IF(' + L('shipping type') + rowNum + '="CIF", (' + L('if shipping via cif, enter the insurance value.') + rowNum + '-' + L('value') + rowNum + ')/' + L('value') + rowNum + ', "")');
+      out[idx['cif insurance rate']] =
+        '=IF(' + L('shipping type') + rowNum + '="CIF", (' + L('if shipping via cif, enter the insurance value.') + rowNum + '-' + L('value') + rowNum + ')/' + L('value') + rowNum + ', "")';
     }
     if (idx['tax type'] !== undefined) {
       const ratio = L('purchase tax') + rowNum + '/(' + L('importation re-price') + rowNum + '+' + L('customs expenses') + rowNum + ')';
-      sheet.getRange(rowNum, idx['tax type'] + 1).setFormula(
-        '=IFERROR(IF(' + ratio + ' >= 0.08, 0.14, ' + ratio + '), "")');
+      out[idx['tax type']] =
+        '=IFERROR(IF(' + ratio + ' >= 0.08, 0.14, ' + ratio + '), "")';
     }
     if (idx['sales value'] !== undefined) {
-      sheet.getRange(rowNum, idx['sales value'] + 1).setFormula(
-        '=IF(' + L('type') + rowNum + '="بيع", ROUND(' + L('total costs') + rowNum + '*103/100,-2), 0)');
+      out[idx['sales value']] =
+        '=IF(' + L('type') + rowNum + '="بيع", ROUND(' + L('total costs') + rowNum + '*103/100,-2), 0)';
     }
     if (idx['sales tax amount'] !== undefined) {
-      sheet.getRange(rowNum, idx['sales tax amount'] + 1).setFormula(
-        '=IFERROR(IF(' + L('tax type') + rowNum + '>0.06, ' + L('sales value') + rowNum + '*14/100, 0), "")');
+      out[idx['sales tax amount']] =
+        '=IFERROR(IF(' + L('tax type') + rowNum + '>0.06, ' + L('sales value') + rowNum + '*14/100, 0), "")';
     }
+    return out;
   }
 
+  /** Merges the header formulas for rowNum into an already-built value row. */
+  function applyHeaderFormulas_(rowValues, headers, rowNum) {
+    const fmap = headerFormulaMap_(headers, rowNum);
+    Object.keys(fmap).forEach(function (c) { rowValues[Number(c)] = fmap[c]; });
+    return rowValues;
+  }
+
+  /** Kept for compatibility — no longer on the write path. */
+  function setHeaderFormulas_(sheet, headers, rowNum) {
+    const fmap = headerFormulaMap_(headers, rowNum);
+    Object.keys(fmap).forEach(function (c) {
+      sheet.getRange(rowNum, Number(c) + 1).setFormula(fmap[c]);
+    });
+  }
+
+  /**
+   * Phase 3 (F-04): was appendRow + up to 8 setFormula = 9 round trips; now one
+   * setValues.
+   *
+   * Taken under the script lock: a precomputed target range is NOT safe against a
+   * concurrent append the way appendRow is, so without it two simultaneous saves
+   * could compute the same start row and one would overwrite the other.
+   * addRecord_ and getNextId_ already serialise on this same lock.
+   */
   function writeHeaderRow_(dbId, uid, header, user) {
     const sheet = getSheet_(PURCHASING_SHEET, dbId);
     const headers = getHeaders_(sheet);
     const rowValues = buildHeaderValues_(headers, uid, header, user);
-    sheet.appendRow(rowValues);
-    const newRow = sheet.getLastRow();
-    setHeaderFormulas_(sheet, headers, newRow);
-    return newRow;
+    return executeWithLock_(function () {
+      const newRow = sheet.getLastRow() + 1;
+      if (newRow > sheet.getMaxRows()) sheet.insertRowsAfter(sheet.getMaxRows(), newRow - sheet.getMaxRows());
+      applyHeaderFormulas_(rowValues, headers, newRow);
+      sheet.getRange(newRow, 1, 1, rowValues.length).setValues([rowValues]);
+      return newRow;
+    });
   }
 
   function writeLines_(dbId, headerUid, header, lines, user) {
@@ -1065,7 +1107,7 @@ const TopLight = (function () {
 
     const baseId = getNextIdBatch_(dbId, PURCHASING_LINES_SHEET, lines.length, 'id');
 
-    (lines || []).forEach((line, i) => {
+    const valueRows = (lines || []).map((line, i) => {
       const rowValues = headers.map(() => '');
       const set = (name, val) => { if (idx[name] !== undefined) rowValues[idx[name]] = val; };
       set('unique_id', uid16_());
@@ -1085,31 +1127,52 @@ const TopLight = (function () {
       set('movement_place', movementPlace);
       set('product_category', prodCat[String(line.product)] || '');
       set('user', user ? user.email : '');
-      sheet.appendRow(rowValues);
+      return rowValues;
+    });
 
-      const r = sheet.getLastRow();
-      if (idx['total_cost'] !== undefined) {
-        sheet.getRange(r, idx['total_cost'] + 1).setFormula(
-          '=' + L('qty') + r + '*' + L('unit_price') + r + '*' + L('exchange_rate') + r + '+' + L('other_cost') + r);
-      }
-      if (idx['unit_cost'] !== undefined) {
-        sheet.getRange(r, idx['unit_cost'] + 1).setFormula('=' + L('total_cost') + r + '/' + L('qty') + r);
-      }
-      if (idx['movement_code'] !== undefined) {
-        sheet.getRange(r, idx['movement_code'] + 1).setFormula(
-          '=CONCATENATE(' + L('movement_type') + r + ',"-",' + L('id') + r + ',"-",VLOOKUP(' + L('product') + r + ',top_light_products!$A:$D,2,0),"-",TEXT(' + L('receipt_date') + r + ',"DD/MM/YYYY"))');
-      }
-      if (idx['sales_value_amount'] !== undefined) {
-        sheet.getRange(r, idx['sales_value_amount'] + 1).setFormula(
-          '=' + L('sales_value') + r + '*' + L('qty') + r);
-      }
-      if (idx['sales_qty'] !== undefined) {
-        sheet.getRange(r, idx['sales_qty'] + 1).setFormula('=' + L('qty') + r);
-      }
-      if (idx['cost_currency'] !== undefined) {
-        sheet.getRange(r, idx['cost_currency'] + 1).setFormula(
-          '=' + L('qty') + r + '*' + L('unit_price') + r + '+' + L('other_cost') + r + '/' + L('exchange_rate') + r);
-      }
+    if (!valueRows.length) return;
+
+    // Phase 3 (F-04): this was appendRow + up to 6 setFormula PER LINE, i.e. ~70
+    // Sheets round trips for a 10-line document. Now one setValues for the whole
+    // block. setValues treats a leading '=' as a formula, exactly as appendRow
+    // and setFormula do, so the cells are formulas with identical text.
+    //
+    // Under the script lock for the same reason as writeHeaderRow_: a
+    // precomputed target range is not safe against a concurrent append.
+    executeWithLock_(function () {
+      const startRow = sheet.getLastRow() + 1;
+      const lastNeeded = startRow + valueRows.length - 1;
+      if (lastNeeded > sheet.getMaxRows()) sheet.insertRowsAfter(sheet.getMaxRows(), lastNeeded - sheet.getMaxRows());
+
+      valueRows.forEach(function (rowValues, i) {
+        // Identical row numbers to the old loop: appendRow put line i at
+        // getLastRow()+1+i, which is exactly startRow+i.
+        const r = startRow + i;
+        if (idx['total_cost'] !== undefined) {
+          rowValues[idx['total_cost']] =
+            '=' + L('qty') + r + '*' + L('unit_price') + r + '*' + L('exchange_rate') + r + '+' + L('other_cost') + r;
+        }
+        if (idx['unit_cost'] !== undefined) {
+          rowValues[idx['unit_cost']] = '=' + L('total_cost') + r + '/' + L('qty') + r;
+        }
+        if (idx['movement_code'] !== undefined) {
+          rowValues[idx['movement_code']] =
+            '=CONCATENATE(' + L('movement_type') + r + ',"-",' + L('id') + r + ',"-",VLOOKUP(' + L('product') + r + ',top_light_products!$A:$D,2,0),"-",TEXT(' + L('receipt_date') + r + ',"DD/MM/YYYY"))';
+        }
+        if (idx['sales_value_amount'] !== undefined) {
+          rowValues[idx['sales_value_amount']] =
+            '=' + L('sales_value') + r + '*' + L('qty') + r;
+        }
+        if (idx['sales_qty'] !== undefined) {
+          rowValues[idx['sales_qty']] = '=' + L('qty') + r;
+        }
+        if (idx['cost_currency'] !== undefined) {
+          rowValues[idx['cost_currency']] =
+            '=' + L('qty') + r + '*' + L('unit_price') + r + '+' + L('other_cost') + r + '/' + L('exchange_rate') + r;
+        }
+      });
+
+      sheet.getRange(startRow, 1, valueRows.length, headers.length).setValues(valueRows);
     });
   }
 
@@ -1442,8 +1505,10 @@ const TopLight = (function () {
 
     deleteSalesLines_(dbId, uid);
     const rowValues = buildSalesHeaderValues_(headers, uid, header, user);
+    // Phase 3 (F-04): formulas merged into the same setValues. The row already
+    // exists and is located by unique_id, so no lock is needed here.
+    applySalesHeaderFormulas_(rowValues, headers, rowNum);
     sheet.getRange(rowNum, 1, 1, rowValues.length).setValues([rowValues]);
-    setSalesHeaderFormulas_(sheet, headers, rowNum);
     writeSalesLines_(dbId, uid, header, lines, user);
     try { var _uid = (_editSalesOld && _editSalesOld.record_uid) ? String(_editSalesOld.record_uid) : 'update_top_light_sales_invoices_' + uid; logHistory_(dbId, SALES_SHEET, _uid, String(uid), (user&&user.email)||'', 'update', header, _editSalesOld); } catch(e){}
     bustTopLightCaches_(dbId, 'sales');
@@ -1924,34 +1989,57 @@ const TopLight = (function () {
     return rowValues;
   }
 
-  function setSalesHeaderFormulas_(sheet, headers, rowNum) {
+  /** Phase 3 (F-04). Sales header formulas as { columnIndex: formula }, taken
+   *  verbatim from setSalesHeaderFormulas_. */
+  function salesHeaderFormulaMap_(headers, rowNum) {
     const jIdx = salesColIndex_(headers, 'نوع سلع الجدول');
     const tIdx = salesColIndex_(headers, 'تاريخ الفاتورة');
     const rIdx = salesColIndex_(headers, 'قيمة الضريبة');
     const oIdx = salesColIndex_(headers, 'المبلغ الصافي');
     const mIdx = salesColIndex_(headers, 'الشهر');
     const yIdx = salesColIndex_(headers, 'العام');
+    const out = {};
 
     if (jIdx !== -1 && rIdx !== -1 && oIdx !== -1) {
-      sheet.getRange(rowNum, jIdx + 1).setFormula(
-        '=IFERROR(IF(' + colLetter_(rIdx) + rowNum + '/' + colLetter_(oIdx) + rowNum + '=0.05,1,0),"")');
+      out[jIdx] = '=IFERROR(IF(' + colLetter_(rIdx) + rowNum + '/' + colLetter_(oIdx) + rowNum + '=0.05,1,0),"")';
     }
     if (mIdx !== -1 && tIdx !== -1) {
-      sheet.getRange(rowNum, mIdx + 1).setFormula('=MONTH(' + colLetter_(tIdx) + rowNum + ')');
+      out[mIdx] = '=MONTH(' + colLetter_(tIdx) + rowNum + ')';
     }
     if (yIdx !== -1 && tIdx !== -1) {
-      sheet.getRange(rowNum, yIdx + 1).setFormula('=YEAR(' + colLetter_(tIdx) + rowNum + ')');
+      out[yIdx] = '=YEAR(' + colLetter_(tIdx) + rowNum + ')';
     }
+    return out;
   }
 
+  /** Merges the sales header formulas for rowNum into an already-built row. */
+  function applySalesHeaderFormulas_(rowValues, headers, rowNum) {
+    const fmap = salesHeaderFormulaMap_(headers, rowNum);
+    Object.keys(fmap).forEach(function (c) { rowValues[Number(c)] = fmap[c]; });
+    return rowValues;
+  }
+
+  /** Kept for compatibility — no longer on the write path. */
+  function setSalesHeaderFormulas_(sheet, headers, rowNum) {
+    const fmap = salesHeaderFormulaMap_(headers, rowNum);
+    Object.keys(fmap).forEach(function (c) {
+      sheet.getRange(rowNum, Number(c) + 1).setFormula(fmap[c]);
+    });
+  }
+
+  /** Phase 3 (F-04): appendRow + up to 3 setFormula -> one setValues, under the
+   *  script lock (a precomputed range is not append-safe). */
   function writeSalesHeaderRow_(dbId, uid, header, user) {
     const sheet = getSheet_(SALES_SHEET, dbId);
     const headers = getHeaders_(sheet);
     const rowValues = buildSalesHeaderValues_(headers, uid, header, user);
-    sheet.appendRow(rowValues);
-    const newRow = sheet.getLastRow();
-    setSalesHeaderFormulas_(sheet, headers, newRow);
-    return newRow;
+    return executeWithLock_(function () {
+      const newRow = sheet.getLastRow() + 1;
+      if (newRow > sheet.getMaxRows()) sheet.insertRowsAfter(sheet.getMaxRows(), newRow - sheet.getMaxRows());
+      applySalesHeaderFormulas_(rowValues, headers, newRow);
+      sheet.getRange(newRow, 1, 1, rowValues.length).setValues([rowValues]);
+      return newRow;
+    });
   }
 
   function writeSalesLines_(dbId, headerUid, header, lines, user) {
@@ -1964,7 +2052,7 @@ const TopLight = (function () {
     const baseId = getNextIdBatch_(dbId, SALES_LINES_SHEET, lines.length, 'id');
 
     const clientId = numOrKeep_(header.customer_id);
-    (lines || []).forEach((line, i) => {
+    const valueRows = (lines || []).map((line, i) => {
       const rowValues = headers.map(() => '');
       const set = (name, val) => { if (idx[name] !== undefined) rowValues[idx[name]] = val; };
       set('unique_id', uid16_());
@@ -1978,21 +2066,35 @@ const TopLight = (function () {
       set('product_discount', num0_(line.product_discount));
       set('user', user ? user.email : '');
       set('created_at', new Date());
-      sheet.appendRow(rowValues);
+      return rowValues;
+    });
 
-      const r = sheet.getLastRow();
-      if (idx['product_net_value'] !== undefined) {
-        sheet.getRange(r, idx['product_net_value'] + 1).setFormula(
-          '=' + L('product_qty') + r + '*' + L('product_price') + r);
-      }
-      if (idx['product_tax_value'] !== undefined) {
-        sheet.getRange(r, idx['product_tax_value'] + 1).setFormula(
-          '=' + L('product_net_value') + r + '*' + L('product_tax') + r);
-      }
-      if (idx['product_total_value'] !== undefined) {
-        sheet.getRange(r, idx['product_total_value'] + 1).setFormula(
-          '=' + L('product_net_value') + r + '-' + L('product_discount') + r + '+' + L('product_tax_value') + r);
-      }
+    if (!valueRows.length) return;
+
+    // Phase 3 (F-04): was appendRow + up to 3 setFormula per line. Now one
+    // setValues for the whole block, under the script lock.
+    executeWithLock_(function () {
+      const startRow = sheet.getLastRow() + 1;
+      const lastNeeded = startRow + valueRows.length - 1;
+      if (lastNeeded > sheet.getMaxRows()) sheet.insertRowsAfter(sheet.getMaxRows(), lastNeeded - sheet.getMaxRows());
+
+      valueRows.forEach(function (rowValues, i) {
+        const r = startRow + i;   // identical to the old appendRow row numbers
+        if (idx['product_net_value'] !== undefined) {
+          rowValues[idx['product_net_value']] =
+            '=' + L('product_qty') + r + '*' + L('product_price') + r;
+        }
+        if (idx['product_tax_value'] !== undefined) {
+          rowValues[idx['product_tax_value']] =
+            '=' + L('product_net_value') + r + '*' + L('product_tax') + r;
+        }
+        if (idx['product_total_value'] !== undefined) {
+          rowValues[idx['product_total_value']] =
+            '=' + L('product_net_value') + r + '-' + L('product_discount') + r + '+' + L('product_tax_value') + r;
+        }
+      });
+
+      sheet.getRange(startRow, 1, valueRows.length, headers.length).setValues(valueRows);
     });
   }
 
@@ -2071,8 +2173,7 @@ const TopLight = (function () {
     const headers = getHeaders_(sheet);
     const nextId = getNextId_(dbId, CASH_SHEET, 'transaction_id');
     const rowValues = buildCashValues_(headers, nextId, rec, user);
-    sheet.appendRow(rowValues);
-    setCashFormulas_(sheet, headers, sheet.getLastRow());
+    appendCashRow_(sheet, headers, rowValues);   // Phase 3 (F-04): 8 round trips -> 1
     try { var _uid = 'create_top_light_cash_bank_movement_' + nextId; logHistory_(dbId, CASH_SHEET, _uid, String(nextId), (user&&user.email)||'', 'create', rec, null); } catch(e){}
     bustTopLightCaches_(dbId, 'cash');
     return { status: 'success', message: 'تمت إضافة الحركة', data: { assignedId: nextId } };
@@ -2094,8 +2195,10 @@ const TopLight = (function () {
     }
     if (rowNum === -1) throw new Error('الحركة غير موجودة');
     const rowValues = buildCashValues_(headers, id, rec, user);
+    // Phase 3 (F-04): formulas merged into the same setValues. The row already
+    // exists and is located by transaction_id, so no lock is needed here.
+    applyCashFormulas_(rowValues, headers, rowNum);
     sheet.getRange(rowNum, 1, 1, rowValues.length).setValues([rowValues]);
-    setCashFormulas_(sheet, headers, rowNum);
     try { var _uid = (_editCashOld && _editCashOld.record_uid) ? String(_editCashOld.record_uid) : 'update_top_light_cash_bank_movement_' + id; logHistory_(dbId, CASH_SHEET, _uid, String(id), (user&&user.email)||'', 'update', rec, _editCashOld); } catch(e){}
     bustTopLightCaches_(dbId, 'cash');
     return { status: 'success', message: 'تم تحديث الحركة' };
@@ -2340,47 +2443,80 @@ const TopLight = (function () {
     set('created_at', new Date());
     set('temp_target_box', rec.temp_target_box);
 
-    sheet.appendRow(rowValues);
-    setCashFormulas_(sheet, headers, sheet.getLastRow());
+    appendCashRow_(sheet, headers, rowValues);   // Phase 3 (F-04): 8 round trips -> 1
   }
 
-  function setCashFormulas_(sheet, headers, rowNum) {
+  /** Phase 3 (F-04). Cash-movement formulas as { columnIndex: formula }, taken
+   *  verbatim from setCashFormulas_. */
+  function cashFormulaMap_(headers, rowNum) {
     const idx = {};
     headers.forEach((h, i) => { idx[String(h).trim().toLowerCase()] = i; });
     const col = (name) => (idx[name] !== undefined ? colLetter_(idx[name]) : undefined);
     const M = col('transaction_type'), S = col('transaction_method'), H = col('transaction_amount'),
           I = col('total_discount'), K = col('taxes'), AA = col('exchange_rate'),
           N = col('net_amount'), B = col('balance_amount'), P = col('related_box');
+    const out = {};
 
     if (idx['name_vendor'] !== undefined && idx['name'] !== undefined) {
-      sheet.getRange(rowNum, idx['name_vendor'] + 1).setFormula(
-        '=IFERROR(VLOOKUP(' + col('name') + rowNum + ',top_light_customer_vendor!A:B,2,0),"")');
+      out[idx['name_vendor']] =
+        '=IFERROR(VLOOKUP(' + col('name') + rowNum + ',top_light_customer_vendor!A:B,2,0),"")';
     }
     if (N !== undefined && H !== undefined && I !== undefined && S !== undefined && AA !== undefined) {
-      sheet.getRange(rowNum, idx['net_amount'] + 1).setFormula(
-        '=IF(' + S + rowNum + '="فودافون كاش",' + H + rowNum + '*' + AA + rowNum + ',(' + H + rowNum + '-' + I + rowNum + ')*' + AA + rowNum + ')');
+      out[idx['net_amount']] =
+        '=IF(' + S + rowNum + '="فودافون كاش",' + H + rowNum + '*' + AA + rowNum + ',(' + H + rowNum + '-' + I + rowNum + ')*' + AA + rowNum + ')';
     }
     if (idx['total'] !== undefined && H !== undefined && I !== undefined && K !== undefined && AA !== undefined) {
-      sheet.getRange(rowNum, idx['total'] + 1).setFormula(
-        '=((' + H + rowNum + '-' + I + rowNum + ')*' + AA + rowNum + ')+(' + K + rowNum + '*' + AA + rowNum + ')');
+      out[idx['total']] =
+        '=((' + H + rowNum + '-' + I + rowNum + ')*' + AA + rowNum + ')+(' + K + rowNum + '*' + AA + rowNum + ')';
     }
     if (B !== undefined && M !== undefined && H !== undefined && I !== undefined && K !== undefined && AA !== undefined) {
       const totExpr = '(((' + H + rowNum + '-' + I + rowNum + ')*' + AA + rowNum + ')+(' + K + rowNum + '*' + AA + rowNum + '))';
-      sheet.getRange(rowNum, idx['balance_amount'] + 1).setFormula(
-        '=IF(' + M + rowNum + '="Credit",-1*' + totExpr + ',' + totExpr + ')');
+      out[idx['balance_amount']] =
+        '=IF(' + M + rowNum + '="Credit",-1*' + totExpr + ',' + totExpr + ')';
     }
     if (B !== undefined && P !== undefined) {
-      sheet.getRange(rowNum, idx['box_balance'] + 1).setFormula(
-        '=SUMIFS($' + B + '$2:' + B + rowNum + ',$' + P + '$2:' + P + rowNum + ',' + P + rowNum + ')');
+      out[idx['box_balance']] =
+        '=SUMIFS($' + B + '$2:' + B + rowNum + ',$' + P + '$2:' + P + rowNum + ',' + P + rowNum + ')';
     }
     if (idx['chart_name'] !== undefined && idx['chart_code'] !== undefined) {
-      sheet.getRange(rowNum, idx['chart_name'] + 1).setFormula(
-        '=IFERROR(VLOOKUP(' + col('chart_code') + rowNum + ',top_light_chart_of_accounts!I:N,6,0),"")');
+      out[idx['chart_name']] =
+        '=IFERROR(VLOOKUP(' + col('chart_code') + rowNum + ',top_light_chart_of_accounts!I:N,6,0),"")';
     }
     if (idx['chart_account_main'] !== undefined && idx['chart_code'] !== undefined) {
-      sheet.getRange(rowNum, idx['chart_account_main'] + 1).setFormula(
-        '=IFERROR(VLOOKUP(' + col('chart_code') + rowNum + ',top_light_chart_of_accounts!I:O,7,0),"")');
+      out[idx['chart_account_main']] =
+        '=IFERROR(VLOOKUP(' + col('chart_code') + rowNum + ',top_light_chart_of_accounts!I:O,7,0),"")';
     }
+    return out;
+  }
+
+  /** Merges the cash formulas for rowNum into an already-built value row. */
+  function applyCashFormulas_(rowValues, headers, rowNum) {
+    const fmap = cashFormulaMap_(headers, rowNum);
+    Object.keys(fmap).forEach(function (c) { rowValues[Number(c)] = fmap[c]; });
+    return rowValues;
+  }
+
+  /** Kept for compatibility — no longer on the write path. */
+  function setCashFormulas_(sheet, headers, rowNum) {
+    const fmap = cashFormulaMap_(headers, rowNum);
+    Object.keys(fmap).forEach(function (c) {
+      sheet.getRange(rowNum, Number(c) + 1).setFormula(fmap[c]);
+    });
+  }
+
+  /**
+   * Phase 3 (F-04). Appends one cash row with its formulas in a single
+   * setValues, under the script lock (a precomputed range is not append-safe).
+   * Returns the row number written.
+   */
+  function appendCashRow_(sheet, headers, rowValues) {
+    return executeWithLock_(function () {
+      const newRow = sheet.getLastRow() + 1;
+      if (newRow > sheet.getMaxRows()) sheet.insertRowsAfter(sheet.getMaxRows(), newRow - sheet.getMaxRows());
+      applyCashFormulas_(rowValues, headers, newRow);
+      sheet.getRange(newRow, 1, 1, rowValues.length).setValues([rowValues]);
+      return newRow;
+    });
   }
 
   // =========================================
@@ -2729,8 +2865,9 @@ const TopLight = (function () {
     var _editOfferOld = null; try { _editOfferOld = getAllRecords_(dbId, OFFER_SHEET).find(function(r){ return String(r.invoice_unique_id)===String(uid); }) || null; } catch(e){}
     deleteOfferLines_(dbId, uid);
     const rowValues = buildOfferHeaderValues_(headers, uid, header, user);
+    // Phase 3 (F-04): formulas merged into the same setValues.
+    applySalesHeaderFormulas_(rowValues, headers, rowNum);
     sheet.getRange(rowNum, 1, 1, rowValues.length).setValues([rowValues]);
-    setSalesHeaderFormulas_(sheet, headers, rowNum);
     writeOfferLines_(dbId, uid, lines, user);
     try { var _uid = (_editOfferOld && _editOfferOld.record_uid) ? String(_editOfferOld.record_uid) : 'update_top_light_sales_offer_' + uid; logHistory_(dbId, OFFER_SHEET, _uid, String(uid), (user&&user.email)||'', 'update', header, _editOfferOld); } catch(e){}
 
@@ -2817,14 +2954,18 @@ const TopLight = (function () {
     return rowValues;
   }
 
+  /** Phase 3 (F-04): appendRow + setFormula pass -> one setValues, under lock. */
   function writeOfferHeaderRow_(dbId, uid, header, user) {
     const sheet = getSheet_(OFFER_SHEET, dbId);
     const headers = getHeaders_(sheet);
     const rowValues = buildOfferHeaderValues_(headers, uid, header, user);
-    sheet.appendRow(rowValues);
-    const newRow = sheet.getLastRow();
-    setSalesHeaderFormulas_(sheet, headers, newRow);
-    return newRow;
+    return executeWithLock_(function () {
+      const newRow = sheet.getLastRow() + 1;
+      if (newRow > sheet.getMaxRows()) sheet.insertRowsAfter(sheet.getMaxRows(), newRow - sheet.getMaxRows());
+      applySalesHeaderFormulas_(rowValues, headers, newRow);
+      sheet.getRange(newRow, 1, 1, rowValues.length).setValues([rowValues]);
+      return newRow;
+    });
   }
 
   function writeOfferLines_(dbId, headerUid, lines, user) {
@@ -2836,7 +2977,7 @@ const TopLight = (function () {
 
     const baseId = getNextIdBatch_(dbId, OFFER_LINES_SHEET, lines.length, 'id');
 
-    (lines || []).forEach((line, i) => {
+    const valueRows = (lines || []).map((line, i) => {
       const rowValues = headers.map(() => '');
       const set = (name, val) => { if (idx[name] !== undefined) rowValues[idx[name]] = val; };
       set('unique_id', uid16_());
@@ -2849,18 +2990,31 @@ const TopLight = (function () {
       set('product_discount', num0_(line.product_discount));
       set('user', user ? user.email : '');
       set('created_at', new Date());
-      sheet.appendRow(rowValues);
+      return rowValues;
+    });
 
-      const r = sheet.getLastRow();
-      if (idx['product_net_value'] !== undefined) {
-        sheet.getRange(r, idx['product_net_value'] + 1).setFormula('=' + L('product_qty') + r + '*' + L('product_price') + r);
-      }
-      if (idx['product_tax_value'] !== undefined) {
-        sheet.getRange(r, idx['product_tax_value'] + 1).setFormula('=' + L('product_net_value') + r + '*' + L('product_tax') + r);
-      }
-      if (idx['product_total_value'] !== undefined) {
-        sheet.getRange(r, idx['product_total_value'] + 1).setFormula('=' + L('product_net_value') + r + '-' + L('product_discount') + r + '+' + L('product_tax_value') + r);
-      }
+    if (!valueRows.length) return;
+
+    // Phase 3 (F-04): one setValues for the whole block, under the script lock.
+    executeWithLock_(function () {
+      const startRow = sheet.getLastRow() + 1;
+      const lastNeeded = startRow + valueRows.length - 1;
+      if (lastNeeded > sheet.getMaxRows()) sheet.insertRowsAfter(sheet.getMaxRows(), lastNeeded - sheet.getMaxRows());
+
+      valueRows.forEach(function (rowValues, i) {
+        const r = startRow + i;   // identical to the old appendRow row numbers
+        if (idx['product_net_value'] !== undefined) {
+          rowValues[idx['product_net_value']] = '=' + L('product_qty') + r + '*' + L('product_price') + r;
+        }
+        if (idx['product_tax_value'] !== undefined) {
+          rowValues[idx['product_tax_value']] = '=' + L('product_net_value') + r + '*' + L('product_tax') + r;
+        }
+        if (idx['product_total_value'] !== undefined) {
+          rowValues[idx['product_total_value']] = '=' + L('product_net_value') + r + '-' + L('product_discount') + r + '+' + L('product_tax_value') + r;
+        }
+      });
+
+      sheet.getRange(startRow, 1, valueRows.length, headers.length).setValues(valueRows);
     });
   }
 

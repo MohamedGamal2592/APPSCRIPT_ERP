@@ -16,6 +16,11 @@ const CONFIG = {
   CACHE_LOGO_SECONDS: 21600,
   CACHE_GENERAL_SECONDS: 600,
   CACHE_KILLSWITCH_SECONDS: 15,
+  // F-07: how often a session's last_activity is written back to ERP_Sessions.
+  // Each write is a full read + full-row write of the shared AUTH spreadsheet,
+  // per active user, so at 30s it was a hot spot under concurrent load.
+  // last_activity is a soft "last seen" field; 5-minute staleness is harmless.
+  SESSION_TOUCH_THROTTLE_SECONDS: 300,
   LOGIN_LOCKOUT_MAX_ATTEMPTS: 5,
   LOGIN_LOCKOUT_TTL_SECONDS: 900,
   // TableEngine cache (spec §2.2 Tier B)

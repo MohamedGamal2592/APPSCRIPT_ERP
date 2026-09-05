@@ -239,13 +239,24 @@ var SessionManager_ = (function () {
     } catch (e) { return { valid: false }; }
   }
 
+  /**
+   * F-07. Writing last_activity costs a full getDataRange().getValues() plus a
+   * setValues on ERP_Sessions — on the shared AUTH spreadsheet, once per active
+   * user, contending with every other user's session validation. The throttle
+   * moved from a hardcoded 30s to CONFIG.SESSION_TOUCH_THROTTLE_SECONDS (300s),
+   * cutting those writes roughly 10x.
+   *
+   * Only the freshness of a "last seen" timestamp changes. Session lifetime,
+   * expiry and revocation are unaffected: validate() checks expires_at, which is
+   * set at login and never derived from last_activity.
+   */
   function touch(token) {
     if (!token) return;
     const hash = hashToken_(token);
     const cache = CacheService.getScriptCache();
     try {
       if (cache.get('touch_' + hash)) return;
-      cache.put('touch_' + hash, '1', 30);
+      cache.put('touch_' + hash, '1', CONFIG.SESSION_TOUCH_THROTTLE_SECONDS);
     } catch (e) {}
     try {
       updateRowByCriteria_(getSessionsSheet_(), 'token_hash', hash, { last_activity: new Date() });
