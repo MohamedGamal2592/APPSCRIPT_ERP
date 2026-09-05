@@ -181,7 +181,10 @@ UIC.reportError = function (detail, opt) {
   } catch (e) {}
 };
 
-UIC.AUTO_PAGE_SIZE = 150;
+/* [PERF-11] Uniform page size: every data list paginates at 50 rows per page
+ * with navigation rendered BELOW the table. Kept under the legacy AUTO_PAGE_SIZE
+ * name so any external readers keep working. */
+UIC.AUTO_PAGE_SIZE = 50;
 
 UIC.dataTable = function (containerId, opts) {
   const o = opts || {};
@@ -209,21 +212,23 @@ UIC.dataTable = function (containerId, opts) {
     return parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ',') + '.' + parts[1];
   };
 
-  /* Auto-window large tables (opt out with autoPage:false; explicit pageSize wins). */
-  const autoSize = (UIC.AUTO_PAGE_SIZE || 0);
-  let pageSize = o.pageSize || 0;
-  if (o.autoPage === false) pageSize = 0;
-  else if (!pageSize && autoSize > 0 && rows.length > autoSize) pageSize = autoSize;
+  /* [PERF-11] Uniform 50-row pager (opt out with autoPage:false).
+   * Explicit o.pageSize values above 50 are clamped to 50 so every list
+   * paginates identically; smaller explicit values are honored as-is. */
+  let pageSize = 0;
+  if (o.autoPage !== false && rows.length > 50) {
+    pageSize = Math.min(o.pageSize || 50, 50);
+  }
 
   const thead = '<thead><tr>' + headers.map(h => '<th data-key="' + (h.key || h.label) + '">' + h.label + '</th>').join('') + '</tr></thead>';
 
   window.__dtStore = window.__dtStore || {};
-  window.__dtStore[id] = { headers: headers, rows: rows, filtered: rows, pageSize: pageSize, fmtMoney: fmtMoney, opts: o, searchTerm: '', dateFrom: '', dateTo: '' };
+  window.__dtStore[id] = { headers: headers, rows: rows, filtered: rows, pageSize: pageSize, page: 1, pageRows: null, fmtMoney: fmtMoney, opts: o, searchTerm: '', dateFrom: '', dateTo: '' };
 
   /* ── Toolbar: search + date filter + Excel + Print ── */
   var toolbarParts = [];
   if (searchable) {
-    toolbarParts.push('<input class="input" type="search" placeholder="بحث..." oninput="UIC.filterPaged(\'' + id + '\', this.value)">');
+    toolbarParts.push('<input class="input" type="search" placeholder="بحث..." oninput="UIC._dtSearchInput(\'' + id + '\', this.value)">');
   }
   if (o.dateFilter) {
     toolbarParts.push('<label style="font-size:13px;">من:</label><input id="' + id + '-from" type="date" class="input" style="width:150px;">');
@@ -240,19 +245,16 @@ UIC.dataTable = function (containerId, opts) {
     ? '<div class="table-toolbar" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">' + toolbarParts.join('') + '</div>'
     : '';
 
-  const viewRows = (pageSize > 0 ? rows.slice(0, pageSize) : rows);
   // MIT/Harvard chunked: return skeleton, fill tbody chunked via rAF to keep 60fps
-  let moreBtn = '';
-  if (pageSize > 0) {
-    const remaining = rows.length - pageSize;
-    moreBtn = '<div class="table-more" id="' + id + '_more"' + (remaining > 0 ? '' : ' style="display:none;"') + '>' +
-      '<button type="button" class="btn-secondary" onclick="UIC.dataTableMore(\'' + id + '\')">عرض المزيد (' + remaining + ')</button></div>';
-  }
+  // [PERF-11] pager navigation renders BELOW the table (replaces "show more").
+  var pagerHtml = (pageSize > 0)
+    ? '<div class="dt-pager" id="' + id + '_pager">' + UIC._dtPagerHtml(id) + '</div>'
+    : '';
 
   const clickAttr = o.rowClick ? ' onclick="UIC._dtRowClick(event, \'' + id + '\')"' : '';
   const html = '<div id="' + id + '" class="table-wrap"' + clickAttr + '>' + toolbarHtml +
     '<table class="table" data-sortable="true"><caption class="sr-only">' + (o.title || '') + '</caption>' + thead +
-    '<tbody id="' + id + '_tbody"></tbody></table>' + moreBtn + '</div>';
+    '<tbody id="' + id + '_tbody"></tbody></table>' + pagerHtml + '</div>';
   // schedule chunked fill (75 rows per frame, 12ms budget) — Harvard windowed
   setTimeout(function(){ UIC._renderChunked(id, 0); }, 0);
   return html;
@@ -278,7 +280,11 @@ UIC._renderChunked = function(id, offset){
   if (!st || !tbody) return;
   const CHUNK = 75, BUDGET = 12;
   const list = st.filtered || st.rows;
-  const view = (st.pageSize > 0 ? list.slice(0, st.pageSize) : list);
+  // [PERF-11] render the current page slice only (≤ pageSize DOM rows).
+  const ps = st.pageSize || 0;
+  const pg = Math.max(1, st.page || 1);
+  const view = (ps > 0 ? list.slice((pg - 1) * ps, pg * ps) : list);
+  st.pageRows = view;
   const total = view.length;
   let idx = offset || 0;
   // first chunk clears
@@ -309,7 +315,8 @@ UIC._dtRowClick = function (event, id) {
     const st = (window.__dtStore || {})[id];
     if (!st || !st.opts || !st.opts.rowClick) return;
     const ia = tr.getAttribute('data-idx');
-    const list = st.filtered || st.rows;
+    // data-idx is relative to the rendered page slice ([PERF-11] pager).
+    const list = st.pageRows || st.filtered || st.rows;
     const rec = (ia != null) ? list[Number(ia)] : null;
     if (rec != null) st.opts.rowClick(rec, tr);
   } catch (e) {}
@@ -323,23 +330,95 @@ UIC._dtRenderBody = function (id) {
   UIC._renderChunked(id, 0);
 };
 
+// Backward-compat shim: the "show more" button was replaced by the [PERF-11]
+// pager; legacy callers now advance one page. No live pages call this directly.
 UIC.dataTableMore = function (id) {
   const st = (window.__dtStore || {})[id];
   if (!st) return;
-  const step = st.opts.pageSize || (UIC.AUTO_PAGE_SIZE || 100);
-  st.pageSize = (st.pageSize || 0) + step;
-  UIC._dtRenderBody(id);
+  UIC.dtGoto(id, (st.page || 1) + 1);
+};
+
+/* [PERF-11] pager engine — 50-row pages, navigation BELOW the table.
+ * Pipeline: search → filter → sort → slice. Page flips re-slice only (<2ms),
+ * never re-running search/filter/sort. Operates purely on data already loaded. */
+UIC._dtTotalPages = function (id) {
+  const st = (window.__dtStore || {})[id];
+  if (!st || !(st.pageSize > 0)) return 1;
   const list = st.filtered || st.rows;
-  const more = document.getElementById(id + '_more');
-  if (more) {
-    const remaining = list.length - (st.pageSize || 0);
-    if (remaining <= 0) more.style.display = 'none';
-    else {
-      more.style.display = '';
-      const btn = more.querySelector('button');
-      if (btn) btn.textContent = 'عرض المزيد (' + remaining + ')';
+  return Math.max(1, Math.ceil(list.length / st.pageSize));
+};
+
+UIC.dtGoto = function (id, page) {
+  const st = (window.__dtStore || {})[id];
+  if (!st || !(st.pageSize > 0)) return;
+  const totalPages = UIC._dtTotalPages(id);
+  st.page = Math.min(Math.max(1, Number(page) || 1), totalPages);
+  UIC._dtRenderBody(id);
+  UIC._dtRefreshPager(id);
+};
+
+UIC._dtPagerHtml = function (id) {
+  const st = (window.__dtStore || {})[id];
+  if (!st || !(st.pageSize > 0)) return '';
+  const list = st.filtered || st.rows;
+  const total = list.length;
+  const ps = st.pageSize;
+  const totalPages = Math.max(1, Math.ceil(total / ps));
+  if (totalPages <= 1) return '';
+  const pg = Math.min(Math.max(1, st.page || 1), totalPages);
+  st.page = pg;
+  const from = total === 0 ? 0 : (pg - 1) * ps + 1;
+  const to = Math.min(pg * ps, total);
+  // Windowed numbers: up to 7 (1 … window … last), RTL-friendly order.
+  var pages = [];
+  var push = function (p) { if (pages.indexOf(p) === -1) pages.push(p); };
+  if (totalPages <= 7) {
+    for (var i = 1; i <= totalPages; i++) push(i);
+  } else {
+    push(1);
+    if (pg > 3) pages.push('…');
+    for (var k = Math.max(2, pg - 1); k <= Math.min(totalPages - 1, pg + 1); k++) push(k);
+    if (pg < totalPages - 2) pages.push('…');
+    push(totalPages);
+  }
+  var btn = function (label, target, disabled, primary) {
+    return '<button type="button" class="btn ' + (primary ? 'btn-primary' : 'btn-outline') + '"' +
+      ' style="padding:4px 10px;min-width:0;"' +
+      (disabled ? ' disabled' : ' onclick="UIC.dtGoto(\'' + id + '\',' + target + ')"') + '>' + label + '</button>';
+  };
+  var nums = pages.map(function (p) {
+    return (p === '…') ? '<span style="padding:0 4px;color:var(--text-muted);">…</span>' : btn(p, p, false, p === pg);
+  }).join('');
+  return '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;justify-content:center;padding:10px 4px 2px;">' +
+    btn('الأولى', 1, pg === 1) + btn('السابق', pg - 1, pg === 1) + nums +
+    btn('التالي', pg + 1, pg === totalPages) + btn('الأخيرة', totalPages, pg === totalPages) +
+    '<span style="font-size:13px;color:var(--text-muted);margin-inline-start:8px;">عرض ' + from + ' – ' + to + ' من ' + total + ' سجل</span></div>';
+};
+
+UIC._dtRefreshPager = function (id) {
+  const st = (window.__dtStore || {})[id];
+  if (!st) return;
+  var el = document.getElementById(id + '_pager');
+  if (!el && st.pageSize > 0) {
+    // Pager div was absent (table built with ≤50 rows, then grew): append below table.
+    var wrap = document.getElementById(id);
+    if (wrap) {
+      el = document.createElement('div');
+      el.className = 'dt-pager';
+      el.id = id + '_pager';
+      wrap.appendChild(el);
     }
   }
+  if (el) el.innerHTML = UIC._dtPagerHtml(id);
+};
+
+/* [PERF-11] 150ms debounced search input (replaces raw per-keystroke filtering).
+ * UIC.filterPaged stays immediate for programmatic callers. */
+UIC._dtSearchInput = function (id, term) {
+  var st = (window.__dtStore || {})[id];
+  if (!st) return;
+  try { clearTimeout(st._searchTimer); } catch (e) {}
+  st._searchTimer = setTimeout(function () { UIC.filterPaged(id, term); }, 150);
 };
 
 UIC.filterPaged = function (id, term) {
@@ -369,19 +448,12 @@ UIC._applyFilters = function (id) {
     }
     return true;
   });
-  var auto = (UIC.AUTO_PAGE_SIZE || 0);
-  st.pageSize = st.opts.pageSize || ((auto > 0 && st.rows.length > auto) ? auto : 0);
+  // [PERF-11] Global search already ran above across ALL loaded records
+  // (st.rows); reset to page 1 and re-slice. Pager follows the filtered list.
+  st.page = 1;
+  st.pageSize = (st.opts.autoPage === false) ? 0 : ((st.filtered.length > 50) ? 50 : 0);
   UIC._dtRenderBody(id);
-  var list = st.filtered || st.rows;
-  var more = document.getElementById(id + '_more');
-  if (more) {
-    var remaining = list.length - (st.pageSize || 0);
-    if (st.pageSize > 0 && remaining > 0) {
-      more.style.display = '';
-      var btn = more.querySelector('button');
-      if (btn) btn.textContent = 'عرض المزيد (' + remaining + ')';
-    } else { more.style.display = 'none'; }
-  }
+  UIC._dtRefreshPager(id);
 };
 
 UIC.applyDateFilter = function (id) {
@@ -485,6 +557,19 @@ UIC.getCachedOptions = function (key) {
  *   mapRow(rawRecord) -> array of cell-HTML strings (UIC.dataTable row format)
  *   fetcher(offset, limit) -> Promise<{ rows: rawRecords[], total: number }>
  *   onFirst(firstResponse) -> capture globals (parties/enums) on first load   */
+/* Skeleton placeholder: shimmering table + spinner shown while the first fetch is in flight. */
+UIC.tableSkeleton = function (headers, rowCount) {
+  var cols = (headers || []).map(function (h) { return (h && typeof h === 'object') ? (h.label || '') : String(h == null ? '' : h); });
+  var n = rowCount || 8;
+  var ths = cols.map(function (c) { return '<th>' + c + '</th>'; }).join('');
+  var rows = '';
+  for (var i = 0; i < n; i++) {
+    rows += '<tr>' + cols.map(function () { return '<td><div class="pt-sk-bar"></div></td>'; }).join('') + '</tr>';
+  }
+  return '<div class="pt-loading"><div class="pt-spin"></div><span>جاري تحميل البيانات…</span></div>' +
+    '<table class="pt-sk-table"><thead><tr>' + ths + '</tr></thead><tbody>' + rows + '</tbody></table>';
+};
+
 UIC.PagedTable = function (opts) {
   try {
     var container = typeof opts.container === 'string' ? document.getElementById(opts.container) : opts.container;
@@ -502,6 +587,7 @@ UIC.PagedTable = function (opts) {
     var host = container.querySelector('#' + hostId);
     var moreBtn = container.querySelector('#' + hostId + '_more');
     var countEl = container.querySelector('#' + hostId + '_count');
+    host.innerHTML = UIC.tableSkeleton(opts.headers, 8);
 
     function render() {
       host.innerHTML = UIC.dataTable(hostId, {
@@ -533,6 +619,7 @@ UIC.PagedTable = function (opts) {
         moreBtn.style.display = done ? 'none' : '';
         setCount();
       }).catch(function (e) {
+        if (offset === 0 && host) host.innerHTML = '<div class="empty-state"><span>تعذر تحميل البيانات — أعد المحاولة</span></div>';
         UIC.toast('خطأ: ' + (e && e.message ? e.message : e), 'error');
       }).finally(function () {
         loading = false; moreBtn.disabled = false; moreBtn.textContent = 'عرض المزيد';
@@ -549,24 +636,54 @@ UIC.PagedTable = function (opts) {
 UIC.initTableSort = function (containerId) {
   const container = document.getElementById(containerId);
   if (!container) return;
+  const st = (window.__dtStore || {})[containerId];
   container.querySelectorAll('th').forEach(th => {
     th.style.cursor = 'pointer';
     th.addEventListener('click', function () {
       const key = this.getAttribute('data-key');
-      const tbody = container.querySelector('tbody');
-      const rows = Array.from(tbody.querySelectorAll('tr'));
       const asc = this.getAttribute('data-asc') !== 'true';
-      rows.sort((a, b) => {
-        const cell = this.parentNode.children, idx = Array.prototype.indexOf.call(cell, this) + 1;
-        const ac = a.querySelector('td:nth-child(' + idx + ')');
-        const bc = b.querySelector('td:nth-child(' + idx + ')');
-        const av = (ac && ac.getAttribute('data-sort') != null) ? ac.getAttribute('data-sort') : (ac && ac.getAttribute('data-num') != null) ? ac.getAttribute('data-num') : (ac ? ac.textContent.trim() : '');
-        const bv = (bc && bc.getAttribute('data-sort') != null) ? bc.getAttribute('data-sort') : (bc && bc.getAttribute('data-num') != null) ? bc.getAttribute('data-num') : (bc ? bc.textContent.trim() : '');
-        const numA = parseFloat(av), numB = parseFloat(bv);
-        if (!isNaN(numA) && !isNaN(numB)) return asc ? numA - numB : numB - numA;
-        return asc ? String(av).localeCompare(String(bv), 'ar') : String(bv).localeCompare(String(av), 'ar');
-      });
-      rows.forEach(r => tbody.appendChild(r));
+      container.querySelectorAll('th').forEach(function (x) { if (x !== th) x.removeAttribute('data-asc'); });
+      const list = st ? (st.filtered || st.rows) : null;
+      if (st && key && list && list.length) {
+        /* [PERF-11] Sort the FULL filtered dataset (not just the visible page):
+         * O(n) key extraction with sortKey-awareness, parse-free comparator,
+         * then reset to page 1 and re-slice. */
+        const hIdx = st.headers.findIndex(function (h) { return (h.key || h.label) === key; });
+        const sortKey = (hIdx !== -1 && st.headers[hIdx].sortKey) ? st.headers[hIdx].sortKey : null;
+        const decorated = list.map(function (r) {
+          let raw;
+          if (Array.isArray(r)) raw = r[hIdx];
+          else if (sortKey) raw = r[sortKey];
+          else raw = r[key];
+          const s = (raw == null) ? '' : String(raw);
+          const n = parseFloat(s.replace(/,/g, ''));
+          return { r: r, s: s, n: n, isNum: !isNaN(n) && s.trim() !== '' };
+        });
+        decorated.sort(function (a, b) {
+          if (a.isNum && b.isNum) return asc ? a.n - b.n : b.n - a.n;
+          return asc ? a.s.localeCompare(b.s, 'ar') : b.s.localeCompare(a.s, 'ar');
+        });
+        for (let i = 0; i < decorated.length; i++) list[i] = decorated[i].r;
+        st.page = 1;
+        UIC._dtRenderBody(containerId);
+        UIC._dtRefreshPager(containerId);
+      } else {
+        /* Fallback (tables not built by UIC.dataTable): legacy DOM-row sort. */
+        const tbody = container.querySelector('tbody');
+        const rows = Array.from(tbody.querySelectorAll('tr'));
+        const self = this;
+        rows.sort((a, b) => {
+          const cell = self.parentNode.children, idx = Array.prototype.indexOf.call(cell, self) + 1;
+          const ac = a.querySelector('td:nth-child(' + idx + ')');
+          const bc = b.querySelector('td:nth-child(' + idx + ')');
+          const av = (ac && ac.getAttribute('data-sort') != null) ? ac.getAttribute('data-sort') : (ac && ac.getAttribute('data-num') != null) ? ac.getAttribute('data-num') : (ac ? ac.textContent.trim() : '');
+          const bv = (bc && bc.getAttribute('data-sort') != null) ? bc.getAttribute('data-sort') : (bc && bc.getAttribute('data-num') != null) ? bc.getAttribute('data-num') : (bc ? bc.textContent.trim() : '');
+          const numA = parseFloat(av), numB = parseFloat(bv);
+          if (!isNaN(numA) && !isNaN(numB)) return asc ? numA - numB : numB - numA;
+          return asc ? String(av).localeCompare(String(bv), 'ar') : String(bv).localeCompare(String(av), 'ar');
+        });
+        rows.forEach(r => tbody.appendChild(r));
+      }
       this.setAttribute('data-asc', String(asc));
     });
   });
@@ -1039,9 +1156,38 @@ UIC.appShell = function (containerId, o) {
 
   const sessUser = (window.API && API.getSession) ? (API.getSession() || {}) : {};
   const userName = opts.userName || ((sessUser.user && sessUser.user.name) ? sessUser.user.name : '');
+  const userEmail = (sessUser.user && sessUser.user.email) ? sessUser.user.email : '';
+  const escH = function (s) {
+    return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+    });
+  };
   const userBlock = '<div class="user-block">' +
-    '<span class="user-name">' + userName + '</span>' +
+    '<span class="user-name">' + escH(userName) + '</span>' +
     '<button class="user-logout" onclick="logout()">خروج</button>' +
+    '</div>';
+  /* User-profile dropdown (topbar): avatar + name button; menu holds the
+   * identity header, جلساتي / عروضي links and logout. Reuses .nav-dropdown
+   * mechanics (single-open + outside-click close via UIC.toggleDropdown). */
+  const avatarLetter = escH((userName || userEmail || '?').trim().charAt(0));
+  const userProfileBlock =
+    '<div class="nav-dropdown user-profile">' +
+      '<button type="button" class="nav-dropdown-toggle user-profile-toggle" onclick="UIC.toggleDropdown(\'nav-user-menu\', event)" aria-label="حسابي" aria-haspopup="true">' +
+        '<span class="user-avatar">' + avatarLetter + '</span>' +
+        '<span class="user-name">' + escH(userName || userEmail) + '</span>' +
+        ' <span class="nav-dropdown-caret">&#9662;</span>' +
+      '</button>' +
+      '<div class="nav-dropdown-menu user-profile-menu" id="nav-user-menu">' +
+        '<div class="user-profile-head">' +
+          '<span class="user-avatar user-avatar-lg">' + avatarLetter + '</span>' +
+          '<div class="user-profile-id"><div class="user-profile-name">' + escH(userName || userEmail) + '</div>' +
+          (userEmail ? '<div class="user-profile-email">' + escH(userEmail) + '</div>' : '') + '</div>' +
+        '</div>' +
+        '<a class="nav-dropdown-item" href="#" onclick="SESSION.openSessions();return false;">👤 جلساتي</a>' +
+        '<a class="nav-dropdown-item" href="#" onclick="SESSION.openViews();return false;">🎨 عروضي</a>' +
+        '<div class="user-profile-divider"></div>' +
+        '<a class="nav-dropdown-item user-profile-logout" href="#" onclick="logout();return false;">🚪 تسجيل الخروج</a>' +
+      '</div>' +
     '</div>';
 
   /* Hamburger button — visible only on mobile */
@@ -1069,7 +1215,7 @@ UIC.appShell = function (containerId, o) {
       '<header class="topbar">' +
         '<div class="topbar-left">' + hamburger + logoTop + '</div>' +
         '<nav class="topbar-nav" aria-label="التنقل الرئيسي">' + navLinkHtml() + menuGroupsHtml(false) + '</nav>' +
-        '<div class="topbar-right">' + (opts.userHtml || userBlock) + '</div>' +
+        '<div class="topbar-right">' + (opts.userHtml || userProfileBlock) + '</div>' +
       '</header>' +
       drawerHtml +
       (opts.breadcrumb ? '<div class="breadcrumb">' + opts.breadcrumb + '</div>' : '') +
@@ -1226,6 +1372,14 @@ document.addEventListener('keydown', function (e) {
   /* Tall enough rows for finger tapping */
   .table tbody tr { min-height: var(--tap-sm, 44px); }
   .empty-state { padding: 48px 16px; text-align: center; color: var(--text-muted); background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: var(--radius-md); }
+  .pt-loading { display:flex; align-items:center; gap:10px; padding:14px 4px; color:var(--text-muted); font-size:13px; }
+  .pt-spin { width:22px; height:22px; flex:0 0 auto; border:3px solid var(--border-color,#e2e8f0); border-top-color:var(--brand-primary,#16a34a); border-radius:50%; animation:ptspin .8s linear infinite; }
+  @keyframes ptspin { to { transform: rotate(360deg); } }
+  .pt-sk-table { width:100%; border-collapse:collapse; }
+  .pt-sk-table thead th { padding:10px 12px; background:var(--bg-subtle); color:var(--text-muted); font-weight:600; font-size:11px; text-align:right; border-bottom:1px solid var(--border-color); white-space:nowrap; }
+  .pt-sk-table tbody td { padding:10px 12px; border-bottom:1px solid var(--border-color); }
+  .pt-sk-bar { height:12px; border-radius:6px; background:linear-gradient(90deg,var(--bg-subtle,#eef2f7) 25%,var(--border-color,#e2e8f0) 37%,var(--bg-subtle,#eef2f7) 63%); background-size:400% 100%; animation:ptshimmer 1.2s ease infinite; }
+  @keyframes ptshimmer { 0% { background-position:100% 0; } 100% { background-position:-100% 0; } }
 
   /* ── Form Controls ───────────────────────────────────────────────────── */
   .input {
@@ -1388,6 +1542,46 @@ document.addEventListener('keydown', function (e) {
   .user-name   { font-size: 13px; color: var(--text-main); font-weight: 700; white-space: nowrap; max-width: 140px; overflow: hidden; text-overflow: ellipsis; }
   .user-logout { padding: 4px 12px; font-size: 12px; font-weight: 700; border-radius: 20px; transition: all 0.2s; background: var(--danger-bg); color: var(--danger-text); border: 1px solid var(--danger-border); cursor: pointer; }
   .user-logout:hover { background: var(--danger); color: #fff; }
+
+  /* ── User profile dropdown ─────────────────────────────────────────── */
+  .user-profile .user-profile-toggle { gap: 8px; }
+  .user-avatar {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 32px; height: 32px; border-radius: 50%; flex-shrink: 0;
+    background: var(--brand-primary); color: #fff;
+    font-weight: 800; font-size: 15px; line-height: 1;
+  }
+  .user-avatar-lg { width: 46px; height: 46px; font-size: 21px; }
+  .user-profile .user-name { max-width: 110px; }
+  .user-profile-menu { min-width: 250px; }
+  .user-profile-head {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 12px 12px; margin-bottom: 4px;
+    border-bottom: 1px solid var(--border-color);
+  }
+  .user-profile-id { min-width: 0; }
+  .user-profile-name {
+    font-size: 14px; font-weight: 800; color: var(--text-main);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 180px;
+  }
+  .user-profile-email {
+    font-size: 12px; color: var(--text-muted); direction: ltr; text-align: end;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 180px;
+  }
+  .user-profile-divider { height: 1px; background: var(--border-color); margin: 4px 0; }
+  .user-profile-logout { color: var(--danger-text); font-weight: 700; }
+  .user-profile-logout:hover { background: var(--danger-bg); color: var(--danger-text); }
+
+  /* ── Mobile drawer nav contrast ──────────────────────────────────────
+   * Drawer links used muted text on surface — too faint on phones. Force
+   * full-contrast ink, bolder weights, and a solid active treatment. */
+  .drawer-nav .nav-item,
+  .drawer-nav-item { color: var(--text-main); font-weight: 700; }
+  .drawer-nav .nav-item.active,
+  .drawer-nav-item.active { background: var(--brand-primary); color: #fff; }
+  .drawer-group-label { color: var(--text-main); font-size: 12px; font-weight: 800; }
+  .drawer-group .nav-dropdown-item { color: var(--text-main); font-weight: 600; }
+  .drawer-group .nav-dropdown-item-active { background: var(--brand-primary); color: #fff; }
   .app-logo { display: inline-flex; align-items: center; flex-shrink: 0; }
   .app-logo img { height: 32px; width: 32px; display: block; object-fit: contain; border-radius: 50%; background: #fff; padding: 3px; box-shadow: 0 2px 8px rgba(0,0,0,.14); }
   .app-logo-company img { height: 40px; width: 40px; }
@@ -1528,6 +1722,9 @@ document.addEventListener('keydown', function (e) {
     .topbar-hamburger { display: flex; }
     .topbar-nav       { display: none; }
     .topbar-right .user-block { display: none; } /* user is in drawer */
+    /* Profile stays reachable on mobile (avatar-only button): it is the only
+     * access to جلساتي / عروضي / logout now that nav buttons are gone. */
+    .topbar-right .user-profile .user-name { display: none; }
     .topbar { padding: 0 var(--space-3); }
     .app-content { padding: var(--space-3); }
     .breadcrumb  { padding: var(--space-2) var(--space-3); }
@@ -1538,7 +1735,7 @@ document.addEventListener('keydown', function (e) {
   /* Tablet and up (≥ 768px): show desktop nav, hide hamburger & drawer toggle */
   @media (min-width: 768px) {
     .topbar-hamburger { display: none !important; }
-    .topbar-right .user-block { display: flex !important; }
+    .topbar-right .user-block, .topbar-right .user-profile { display: flex !important; }
     .topbar { padding: 0 var(--space-6); height: 60px; }
     .app-content { padding: var(--space-6); }
   }
@@ -1619,7 +1816,7 @@ UIC.HistorySide = (function () {
       var changed = (r.old_value || '') + '  →  ' + (r.new_value || '');
       html += '<div class="hs-card">' +
         '<div class="hs-meta">#' + esc(r.record_id || r.record_uid) + ' · ' + esc(r.action) +
-        ' · ' + esc(r.changed_by) + ' · ' + esc(r.changed_at) + '</div>' +
+        ' · ' + esc(typeof uname_ === 'function' ? uname_(r.changed_by) : r.changed_by) + ' · ' + esc(r.changed_at) + '</div>' +
         '<div class="hs-change"><b>' + esc(r.column_name) + ':</b> ' + esc(changed) + '</div>' +
         '</div>';
     });

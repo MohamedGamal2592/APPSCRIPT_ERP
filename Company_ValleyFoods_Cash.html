@@ -131,13 +131,15 @@
         ].filter(Boolean));
         return [
           '<b>' + esc(h.transaction_id) + '</b>',
-          fmtDate(h.transaction_date),
+          '<span data-sort="' + esc(h.date_edit || '') + '">' + esc(h.date_display || '-') + '</span>',
           esc(h.party_name || h.name_vendor || h.name || '-'),
           esc(h.transaction_details || '-'),
           esc(h.transaction_type),
           esc(h.transaction_method || '-'),
           '<span class="num" data-num="' + num0(h.transaction_amount) + '">' + num0(h.transaction_amount).toLocaleString('en-US') + '</span>',
           esc(h.box_name || h.related_box || '-'),
+          esc(h.chart_code || h.chart_name || '-'),
+          esc(uname_(h.user) || '-'),
           '<span class="num" style="font-weight:700;' + (num0(h.balance_amount) < 0 ? 'color:#dc2626;' : 'color:#0e623b;') + '" data-num="' + num0(h.balance_amount) + '">' + num0(h.balance_amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + '</span>',
           UIC.statusPill(isApproved ? 'معتمد' : 'غير معتمد', isApproved ? 'success' : 'neutral'),
           actions
@@ -156,8 +158,8 @@
         '</div>' +
         UIC.dataTable('cash-table-id', {
           headers: ['رقم', 'التاريخ', 'الطرف', 'البيان', 'النوع', 'طريقة الدفع',
-                    { label: 'المبلغ', numeric: true }, 'الصندوق', { label: 'الرصيد', numeric: true },
-                    'الاعتماد', ''],
+                    { label: 'المبلغ', numeric: true }, 'الصندوق', 'كود الحساب', 'المستخدم',
+                    { label: 'الرصيد', numeric: true }, 'الاعتماد', ''],
           rows: rows,
           emptyText: BOX_FILTER ? 'لا توجد حركات في هذا الصندوق' : 'لا توجد حركات'
         });

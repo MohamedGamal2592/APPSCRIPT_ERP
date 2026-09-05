@@ -87,7 +87,7 @@
         month: monthName(c.month) + ' ' + c.year,
         amount: c.amount,
         created_at: fmtDate(c.created_at),
-        user: esc(c.user || '-')
+        user: esc(uname_(c.user) || '-')
       };
     });
     body.innerHTML =

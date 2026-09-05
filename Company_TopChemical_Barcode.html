@@ -84,7 +84,7 @@
         print_unique_id: b.print_unique_id,
         display_barcode: barLink,
         actions: UIC.actionBtns([{ label: 'طباعة', onclick: 'printBarcode(\'' + FMT.escape(b.id) + '\')' }]),
-        user: b.user || '-',
+        user: uname_(b.user) || '-',
         created_at: fmtDate(b.created_at)
       };
     });

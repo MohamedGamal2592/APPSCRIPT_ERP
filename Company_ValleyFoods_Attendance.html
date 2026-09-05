@@ -118,7 +118,7 @@
         return [
           '<b>' + esc(s.session_date_display) + '</b>',
           statusPill(s.session_status),
-          esc(s.user),
+          esc(uname_(s.user)),
           UIC.actionBtns([
             { label: 'عرض البصمات', onclick: 'ATT_PAGE.openSessionDetail(\'' + esc(s.session_id) + '\', \'' + esc(s.session_date_display) + '\')' }
           ])
@@ -142,7 +142,7 @@
       if (!sel) return;
       var html = '<option value="">اختر جلسة</option>';
       SESSIONS.forEach(function (s) {
-        html += '<option value="' + esc(s.session_id) + '">' + esc(s.session_date_display) + ' - ' + esc(s.user) + '</option>';
+        html += '<option value="' + esc(s.session_id) + '">' + esc(s.session_date_display) + ' - ' + esc(uname_(s.user)) + '</option>';
       });
       sel.innerHTML = html;
     }

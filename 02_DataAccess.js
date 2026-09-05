@@ -75,6 +75,25 @@ function getHeaders_(sheet) {
   return _headerCache_[key];
 }
 
+/**
+ * Writes a sheet formula into the cell at (rowNumber, headerName).
+ * GLOBAL scope (not inside any IIFE) so every company namespace
+ * (ValleyFoods, TopLight, TopChemical, HR modules) can call it.
+ */
+function writeFormula_(dbId, sheetName, rowNumber, headerName, formula) {
+  const sheet = getSheet_(sheetName, dbId);
+  const headers = getHeaders_(sheet);
+  const idx = headers.findIndex(function (h) { return String(h).trim().toLowerCase() === headerName.toLowerCase(); });
+  if (idx !== -1) {
+    var cell = sheet.getRange(rowNumber, idx + 1);
+    if (typeof cell.setFormula === 'function') {
+      cell.setFormula(formula);
+    } else {
+      cell.setValue(formula);
+    }
+  }
+}
+
 // Reentrant-safe script lock: a nested executeWithLock_ (e.g. an audit helper
 // called from inside a company action that already holds the lock) runs its fn
 // directly instead of re-acquiring, while still blocking other executions.
@@ -380,7 +399,25 @@ function getRefsCached_(dbId, kind, ttlSeconds, builder) {
  * caches, immediately after the mutation succeeds.
  */
 function invalidateRefsCache_(dbId, kind) {
-  try { CacheService.getScriptCache().remove('refs_' + String(dbId) + '_' + String(kind)); } catch (e) {}
+  try { CacheService.getScriptCache().remove('refs_' + String(dbId) + '_' + kind); } catch (e) {}
+}
+
+/**
+ * email(lowercased) -> display name from ERP_Users. Cached 5 minutes.
+ * Used to show user names instead of raw emails in tables/history.
+ */
+function userNameMap_() {
+  try {
+    return getRefsCached_(CONFIG.AUTH_SPREADSHEET_ID, 'user_names', 300, function () {
+      var map = {};
+      getAllRecords_(CONFIG.AUTH_SPREADSHEET_ID, 'ERP_Users').forEach(function (u) {
+        var em = String(u.email || '').trim().toLowerCase();
+        var nm = String(u.name || '').trim();
+        if (em && nm) map[em] = nm;
+      });
+      return map;
+    }) || {};
+  } catch (e) { return {}; }
 }
 
 // ==========================================
@@ -451,14 +488,39 @@ function logHistory_(dbId, sheetName, recordUid, recordId, user, action, newValu
       column_name: col,
       old_value: safeStr_(oVal),
       new_value: safeStr_(nVal),
-      changed_by: user || '',
+      changed_by: (user && String(user).trim() !== '') ? user : 'System',
       changed_at: new Date(),
       created_at: new Date()
     });
   });
+  if (!rows.length) return;
+  // FAST PATH (batched): identical cell values to N sequential addRecord_ calls,
+  // but ONE lock + ONE counter allocation + ONE setValues instead of N locks +
+  // N counter R/W + N appends. This is the dominant save-time cost on edits
+  // (one history row per changed column).
+  var required = ['sheet_name', 'record_uid', 'action', 'column_name'];
   rows.forEach(function (hr) {
-    addRecord_(CONFIG.AUTH_SPREADSHEET_ID, 'ERP_Record_History', hr,
-      ['sheet_name', 'record_uid', 'action', 'column_name', 'changed_by']);
+    var missing = required.filter(function (k) { return hr[k] === undefined || hr[k] === null || String(hr[k]).trim() === ''; });
+    if (missing.length) throw new Error('Missing required fields: ' + missing.join(', '));
+  });
+  executeWithLock_(function () {
+    var histHeaders = getHeaders_(histSheet);
+    var lower = histHeaders.map(function (h) { return String(h).trim().toLowerCase(); });
+    var startId = null;
+    if (lower.indexOf('id') !== -1) {
+      // Replicates addRecord_'s per-row id assignment with a single allocation
+      // (getNextIdBatch_ is lock-reentrant, so nesting here is safe).
+      startId = getNextIdBatch_(CONFIG.AUTH_SPREADSHEET_ID, 'ERP_Record_History', rows.length);
+    }
+    var matrix = rows.map(function (hr, i) {
+      return histHeaders.map(function (h) {
+        var key = String(h).trim().toLowerCase();
+        if (key === 'id' && startId !== null) return startId + i;
+        var v = hr[key];
+        return v !== undefined && v !== null ? v : '';
+      });
+    });
+    histSheet.getRange(histSheet.getLastRow() + 1, 1, matrix.length, histHeaders.length).setValues(matrix);
   });
 }
 
@@ -508,7 +570,8 @@ function saveRecordWithAudit_(sheetDbId, sheetName, existingRowId, dataMap, acti
     });
     const res = addRecord_(dbId, sheetName, merged, requiredFields);
     if (res.status !== 'success') return res;
-    logHistory_(dbId, sheetName, uid, null, currentUser, action || 'create', merged, null);
+    try { logHistory_(dbId, sheetName, uid, null, currentUser, action || 'create', merged, null); }
+    catch (eHist) { try { Logger.log('AUDIT-SKIPPED create ' + sheetName + ': ' + (eHist && eHist.message)); } catch (eLg) {} }
     return res;
   }
   let old = oldRowByUid ? (oldRowByUid[String(existingRowId)] || null) : null;

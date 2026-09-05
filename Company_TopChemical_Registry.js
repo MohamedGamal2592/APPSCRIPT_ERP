@@ -19,6 +19,7 @@ function registerTopChemical_() {
     pages: [
       { action: 'tc_dashboard', template: 'Company_TopChemical_Dashboard', title: 'Top Chemical — Dashboard', label: 'لوحة التحكم' },
       { action: 'tc_kpi', template: 'Company_TopChemical_KPI', title: 'Top Chemical — المؤشرات', label: 'المؤشرات' },
+      { action: 'tc_main_review', template: 'Company_TopChemical_MainReview', title: 'مراجعة مديونيات النظام الرئيسي', label: 'مراجعة مديونيات النظام الرئيسي', nav: false },
       { action: 'tc_clients_vendors', template: 'Company_TopChemical_Clients', title: 'عملاء وموردين', nav: false },
       { action: 'tc_debts', template: 'Company_TopChemical_Debts', title: 'مديونيات', nav: false },
       { action: 'tc_products', template: 'Company_TopChemical_Products', title: 'الأصناف', nav: false },

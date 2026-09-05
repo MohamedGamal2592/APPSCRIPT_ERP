@@ -335,7 +335,7 @@
       ['صورة الموافقة 1', fileLinkCell(f.approval_1)],
       ['صورة الموافقة 2', fileLinkCell(f.approval_2)],
       ['صورة الموافقة 3', fileLinkCell(f.approval_3)],
-      ['أضيف بواسطة', f.user || '-'],
+      ['أضيف بواسطة', uname_(f.user) || '-'],
       ['وقت الإضافة', f.created_at ? fmtDate(f.created_at) : '-']
     ];
     var body = rows.map(function (r) {

@@ -12,6 +12,7 @@
     @media print {
       .no-print { display: none !important; }
       .stmt { border: 2px solid #111111; }
+      .stmt-kpi { border: 1px solid #111111 !important; break-inside: avoid; }
     }
     .stmt { max-width: 1200px; margin: 0 auto; padding: 20px; background: var(--bg-surface); border: 2px solid var(--border-color); border-radius: 8px; }
     .stmt-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 18px; border-bottom: 2px solid #111111; padding-bottom: 12px; }
@@ -19,6 +20,19 @@
     .stmt-meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 6px 16px; margin-bottom: 16px; }
     .meta-item { font-size: 13px; }
     .meta-item strong { color: var(--text-muted); font-weight: 600; }
+    .stmt-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; margin-bottom: 16px; }
+    .stmt-kpi { background: #ffffff; border: 1.5px solid #111111; border-radius: 6px; padding: 10px 14px; text-align: right; box-shadow: 0 1px 2px rgba(0,0,0,0.04); }
+    .stmt-kpi-label { font-size: 11px; font-weight: 600; color: #64748b; margin-bottom: 4px; }
+    .stmt-kpi-val { font-size: 17px; font-weight: 700; color: #111111; }
+    .stmt-kpi.highlight-sales { border-top: 3px solid #2563eb; }
+    .stmt-kpi.highlight-return { border-top: 3px solid #dc2626; }
+    .stmt-kpi.highlight-collection { border-top: 3px solid #16a34a; }
+    .stmt-kpi.highlight-payment { border-top: 3px solid #ca8a04; }
+    .stmt-kpi.highlight-balance { border-top: 3px solid #7c3aed; background: #faf5ff; }
+    .bal-badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 700; margin-right: 6px; }
+    .bal-badge-company { background: #fee2e2; color: #991b1b; border: 1px solid #f87171; }
+    .bal-badge-customer { background: #dcfce7; color: #166534; border: 1px solid #86efac; }
+    .bal-badge-zero { background: #f1f5f9; color: #475569; border: 1px solid #cbd5e1; }
     .inv-table { width: 100%; border-collapse: collapse; font-size: 12px; }
     .inv-table th, .inv-table td { border: 1px solid #111111; padding: 5px 8px; text-align: right; white-space: nowrap; }
     .inv-table th { background: #111111; color: #fbbf24; font-weight: 600; }
@@ -107,19 +121,68 @@
   function tdN(v) { return '<td class="num">' + FMT.number(v) + '</td>'; }
   function dash() { return '<td>-</td>'; }
 
+  function kpiBox(label, value, extraClass) {
+    return '<div class="stmt-kpi ' + (extraClass || '') + '">' +
+      '<div class="stmt-kpi-label">' + FMT.escape(label) + '</div>' +
+      '<div class="stmt-kpi-val num">' + FMT.number(value) + '</div>' +
+      '</div>';
+  }
+
   function renderStatement(r) {
     var root = document.getElementById('stmt-results');
     if (!root) return;
     var cust = r.customer || {};
 
+    var sumSales = 0;
+    var sumReturns = 0;
+    var sumCollections = 0;
+    var sumPayments = 0;
+    var sumPurchases = 0;
+
     var body = '';
     (r.movements || []).forEach(function (m, i) {
-      if (m.type === 'sales') body += salesRows(m, i);
-      else if (m.type === 'return') body += returnRows(m, i);
-      else if (m.type === 'collection') body += cashRows(m, 'collection');
-      else if (m.type === 'payment') body += cashRows(m, 'payment');
-      else if (m.type === 'purchase') body += purchaseRow(m);
+      if (m.type === 'sales') {
+        sumSales += Number(m.total != null ? m.total : (m.net || m.amount || 0));
+        body += salesRows(m, i);
+      } else if (m.type === 'return') {
+        sumReturns += Math.abs(Number(m.total != null ? m.total : (m.amount || 0)));
+        body += returnRows(m, i);
+      } else if (m.type === 'collection') {
+        sumCollections += Math.abs(Number(m.withdrawal != null ? m.withdrawal : (m.credit || m.amount || 0)));
+        body += cashRows(m, 'collection');
+      } else if (m.type === 'payment') {
+        sumPayments += Math.abs(Number(m.withdrawal != null ? m.withdrawal : (m.debit || m.amount || 0)));
+        body += cashRows(m, 'payment');
+      } else if (m.type === 'purchase') {
+        sumPurchases += Math.abs(Number(m.credit != null ? m.credit : (m.amount || 0)));
+        body += purchaseRow(m);
+      }
     });
+
+    var isVendor = String(cust.customer_direction).toLowerCase() === 'vendor';
+    var bal = Number(r.balance || 0);
+    var balText = '';
+    var balClass = '';
+
+    if (bal > 0) {
+      balText = 'لصالح الشركة (عليه)';
+      balClass = 'bal-badge-company';
+    } else if (bal < 0) {
+      balText = isVendor ? 'لصالح المورد (له)' : 'لصالح العميل (له)';
+      balClass = 'bal-badge-customer';
+    } else {
+      balText = 'متزن (رصيد صفري)';
+      balClass = 'bal-badge-zero';
+    }
+
+    var kpiHtml = '<div class="stmt-kpis">' +
+      kpiBox('إجمالي المبيعات', sumSales, 'highlight-sales') +
+      kpiBox('إجمالي المرتجعات', sumReturns, 'highlight-return') +
+      kpiBox('إجمالي التحصيلات', sumCollections, 'highlight-collection') +
+      kpiBox('إجمالي المدفوعات', sumPayments, 'highlight-payment') +
+      (sumPurchases > 0 ? kpiBox('إجمالي المشتريات', sumPurchases, '') : '') +
+      kpiBox('الرصيد الحالي (' + (bal > 0 ? 'للشركة' : (bal < 0 ? (isVendor ? 'للمورد' : 'للعميل') : 'متزن')) + ')', Math.abs(bal), 'highlight-balance') +
+      '</div>';
 
     var openingHtml = (__filters.from || __filters.to)
       ? metaItem('الرصيد الافتتاحي', '<span class="num">' + FMT.number(r.opening_balance) + '</span>')
@@ -133,16 +196,17 @@
       '<div class="stmt">' +
       '<div class="stmt-head">' +
       '<img src="' + (COMPANY_LOGO_URL || '') + '" style="height:42px;" alt="">' +
-      '<div class="stmt-title">كشف حساب عميل</div>' +
+      '<div class="stmt-title">كشف حساب ' + (isVendor ? 'مورد' : 'عميل') + '</div>' +
       '</div>' +
       '<div class="stmt-meta">' +
       metaItem('الاسم', cust.name) +
-      metaItem('النوع', (String(cust.customer_direction).toLowerCase() === 'vendor' ? 'مورد' : 'عميل')) +
+      metaItem('النوع', (isVendor ? 'مورد' : 'عميل')) +
       metaItem('الهاتف', cust.telephone) +
       metaItem('العنوان', cust.address) +
       openingHtml +
-      metaItem('الرصيد الحالي', '<span class="num">' + FMT.number(r.balance) + '</span>') +
+      metaItem('الرصيد الحالي', '<span class="num">' + FMT.number(r.balance) + '</span> <span class="bal-badge ' + balClass + '">' + balText + '</span>') +
       '</div>' +
+      kpiHtml +
       '<table class="inv-table"><thead><tr>' +
       '<th>التاريخ</th><th>النوع</th><th>الكود</th><th>البيان / الصنف</th><th>الكمية</th><th>السعر</th><th>الخصم</th><th>مسحوبات</th><th>العملة</th><th>سعر الصرف</th><th>له</th><th>عليه</th><th>الرصيد</th>' +
       '</tr></thead><tbody>' + body + '</tbody></table>' +

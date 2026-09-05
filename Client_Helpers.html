@@ -418,9 +418,9 @@ SESSION.renderBar = function (containerId) {
   el.appendChild(bar);
 };
 
-/* Auto-inject the session bar into the shared top navigation (.topbar-nav)
- * rendered by UIC.appShell, so every page that uses it gets device / views /
- * logout controls without per-page edits. */
+/* Session-bar styles for explicit SESSION.renderBar(containerId) callers.
+ * NOTE: جلساتي / عروضي / logout now live in the topbar user-profile dropdown
+ * (UIC.appShell), so nothing is auto-injected into .topbar-nav anymore. */
 (function initSessionBar() {
   SESSION.ensure();
   var css = document.createElement('style');
@@ -429,24 +429,18 @@ SESSION.renderBar = function (containerId) {
     '.btn-ghost{background:transparent;border:1px solid var(--border-color);border-radius:var(--radius-sm,8px);padding:6px 12px;font-size:13px;color:var(--text-muted);}' +
     '.btn-danger{color:#c5221f;border-color:#c5221f;}';
   document.head.appendChild(css);
-  var tries = 0;
-  var iv = setInterval(function () {
-    tries++;
-    var nav = document.querySelector('.topbar-nav');
-    if (nav && !document.getElementById('erp-session-bar')) {
-      var bar = document.createElement('span');
-      bar.id = 'erp-session-bar';
-      bar.className = 'session-bar';
-      bar.innerHTML =
-        '<button class="btn btn-ghost" onclick="SESSION.openSessions()">جلساتي</button>' +
-        '<button class="btn btn-ghost" onclick="SESSION.openViews()">عروضي</button>';
-      nav.appendChild(bar);
-      clearInterval(iv);
-    } else if (tries > 40) {
-      clearInterval(iv);
-    }
-  }, 300);
 })();
+
+/* Email -> user display name (ERP_Users.name). window.USER_NAMES is injected
+ * server-side on every page render. Falls back to the raw value. */
+function uname_(email) {
+  var e = String(email == null ? '' : email).trim();
+  if (!e) return e;
+  try {
+    var map = window.USER_NAMES || {};
+    return map[e.toLowerCase()] || map[e] || e;
+  } catch (err) { return e; }
+}
 
 </script>
 

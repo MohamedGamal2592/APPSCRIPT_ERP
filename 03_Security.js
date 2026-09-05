@@ -788,6 +788,36 @@ function topLightThemeCss_() {
     '.topbar .nav-item:hover, .topbar .nav-item.active { color: #111111; background: #fbbf24; }\n' +
     '.num { font-family: var(--font-mono); direction: ltr; text-align: left; font-variant-numeric: tabular-nums; }\n' +
     '.invoice { background: #ffffff; }\n' +
+    '/* TopLight dropdowns: curved black fill, yellow ink + black-on-yellow hover — always apparent */\n' +
+    '.nav-dropdown-menu, .erp-kebab-menu {\n' +
+    '  background: #111111;\n' +
+    '  border: 2px solid #fbbf24;\n' +
+    '  border-radius: 16px;\n' +
+    '  box-shadow: 0 12px 28px rgba(0,0,0,.45);\n' +
+    '}\n' +
+    '.nav-dropdown-toggle { color: #fbbf24; }\n' +
+    '.nav-dropdown-toggle:hover, .nav-dropdown-toggle.open { color: #111111; background: #fbbf24; }\n' +
+    '/* Profile toggle must read without hovering: pill button + yellow name (the .user-name\n' +
+    '   rule would otherwise paint it near-black on the black topbar) */\n' +
+    '.topbar .user-profile-toggle { border: 1px solid #fbbf24; border-radius: 999px; padding: 4px 12px; background: #111111; }\n' +
+    '.topbar .user-profile-toggle .user-name { color: #fbbf24; }\n' +
+    '.topbar .user-profile-toggle .nav-dropdown-caret { color: #fbbf24; }\n' +
+    '.topbar .user-profile-toggle:hover, .topbar .user-profile-toggle.open { background: #fbbf24; }\n' +
+    '.topbar .user-profile-toggle:hover .user-name, .topbar .user-profile-toggle.open .user-name,\n' +
+    '.topbar .user-profile-toggle:hover .nav-dropdown-caret, .topbar .user-profile-toggle.open .nav-dropdown-caret { color: #111111; }\n' +
+    '.nav-dropdown-item, .erp-kebab-item { color: #fbbf24; font-weight: 700; border-radius: 10px; }\n' +
+    '.nav-dropdown-item:hover, .erp-kebab-item:hover { background: #fbbf24; color: #111111; }\n' +
+    '.nav-dropdown-item-active { background: #fbbf24; color: #111111; font-weight: 800; }\n' +
+    '.erp-kebab-item.danger { color: #fbbf24; }\n' +
+    '.user-avatar { background: #fbbf24; color: #111111; }\n' +
+    '.user-profile-name { color: #fbbf24; }\n' +
+    '.user-profile-email { color: #fde68a; }\n' +
+    '.user-profile-divider { background: #fbbf24; opacity: .4; }\n' +
+    '.user-profile-logout { color: #fbbf24; }\n' +
+    '.user-profile-logout:hover { background: #fbbf24; color: #111111; }\n' +
+    '/* Mobile hamburger: black bars are invisible on the black topbar — yellow instead */\n' +
+    '.topbar-hamburger { border: 1px solid #fbbf24; }\n' +
+    '.topbar-hamburger .hamburger-bar { background: #fbbf24; }\n' +
     '@media print {\n' +
     '  * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }\n' +
     '}\n' +

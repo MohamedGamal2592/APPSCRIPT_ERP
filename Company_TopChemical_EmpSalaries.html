@@ -24,6 +24,9 @@
   var CAN_WRITE = UIC.canAdd_(); var CAN_FULL = UIC.canFull_();
   var FILTER_MONTH = '';
   var FILTER_YEAR = '';
+  /* [PERF-11] client pager state: 50 rows per page, nav below the table. */
+  var SAL_PAGE = 1;
+  var SAL_PAGE_SIZE = 50;
 
   function companyCall(a, d) {
     return API.call('company_action', { target_system: '3fe1b5cb67b7223e', module_action: a, data: d || {} }, SESSION_TOKEN);
@@ -59,6 +62,7 @@
         window.__empOptions      = r.employee_options || [];
         window.__closedMonths    = r.closed_months || {};
         window.__activeEmployees = r.active_employees || [];
+        SAL_PAGE = 1;
         renderFilterBar();
         renderSalaries();
       })
@@ -100,11 +104,17 @@
     var cols = CAN_WRITE ? 12 : 11;
     var totalBar = window.__total ? '<div style="text-align:left;margin-bottom:8px;font-size:14px;color:var(--text-muted);">إجمالي الصافي: <b>' + FMT.currency(window.__total) + '</b></div>' : '';
     var thead = '<thead><tr><th>الكود</th><th>الاسم</th><th>الراتب</th><th>البدلات</th><th>التصنيف</th><th>أيام</th><th>خصم غياب</th><th>إضافي</th><th>صافي</th><th>تقريب</th><th>إيصال</th>' + (CAN_WRITE ? '<th>إجراءات</th>' : '') + '</tr></thead>';
+    /* [PERF-11] page slice: render current 50-row window only. */
+    var all = window.__salaries || [];
+    var totalPages = Math.max(1, Math.ceil(all.length / SAL_PAGE_SIZE));
+    if (SAL_PAGE > totalPages) SAL_PAGE = totalPages;
+    if (SAL_PAGE < 1) SAL_PAGE = 1;
+    var pageRows = all.slice((SAL_PAGE - 1) * SAL_PAGE_SIZE, SAL_PAGE * SAL_PAGE_SIZE);
     var tbody = '<tbody>';
-    if (!window.__salaries.length) {
+    if (!all.length) {
       tbody += '<tr><td colspan="' + cols + '" style="text-align:center;padding:32px;color:var(--text-muted);">لا توجد مرتبات لهذا الشهر</td></tr>';
     } else {
-      window.__salaries.forEach(function (r) {
+      pageRows.forEach(function (r) {
         var key = rowKey(r); window['__sal_' + key] = r;
         var isClosed = !!(window.__closedMonths && window.__closedMonths[r.year + '-' + r.month]);
         var badge = r.receipt ? '<span style="color:var(--success,#22c55e);font-weight:600;">✔ نعم</span>' : '<span style="color:var(--text-muted);">لا</span>';
@@ -129,8 +139,94 @@
       });
     }
     tbody += '</tbody>';
-    wrap.innerHTML = totalBar + '<div style="overflow-x:auto;"><table id="sal-table" class="table" style="min-width:900px;">' + thead + tbody + '</table></div>';
-    if (window.UIC && UIC.initTableSort) UIC.initTableSort('sal-table');
+    wrap.innerHTML = totalBar + '<div style="overflow-x:auto;"><table id="sal-table" class="table" style="min-width:900px;">' + thead + tbody + '</table></div>' + salPagerHtml(all.length, totalPages);
+    salInitSort();
+  }
+
+  /* [PERF-11] pager bar below the table + full-dataset sort (search → sort → slice). */
+  function salGoto(p) {
+    var totalPages = Math.max(1, Math.ceil(((window.__salaries || []).length) / SAL_PAGE_SIZE));
+    SAL_PAGE = Math.min(Math.max(1, Number(p) || 1), totalPages);
+    renderSalaries();
+  }
+
+  function salPagerHtml(total, totalPages) {
+    if (totalPages <= 1) {
+      return '<div style="padding:8px 4px;font-size:13px;color:var(--text-muted);">العدد: ' + total + '</div>';
+    }
+    var pg = SAL_PAGE;
+    var btn = function (label, target, disabled, primary) {
+      return '<button type="button" class="btn ' + (primary ? 'btn-primary' : 'btn-outline') + '"' +
+        ' style="padding:4px 10px;min-width:0;"' +
+        (disabled ? ' disabled' : ' onclick="salGoto(' + target + ')"') + '>' + label + '</button>';
+    };
+    var pages = [];
+    var push = function (p) { if (pages.indexOf(p) === -1) pages.push(p); };
+    if (totalPages <= 7) {
+      for (var i = 1; i <= totalPages; i++) push(i);
+    } else {
+      push(1);
+      if (pg > 3) pages.push('…');
+      for (var k = Math.max(2, pg - 1); k <= Math.min(totalPages - 1, pg + 1); k++) push(k);
+      if (pg < totalPages - 2) pages.push('…');
+      push(totalPages);
+    }
+    var nums = pages.map(function (p) {
+      return (p === '…') ? '<span style="padding:0 4px;color:var(--text-muted);">…</span>' : btn(p, p, false, p === pg);
+    }).join('');
+    var from = (pg - 1) * SAL_PAGE_SIZE + 1;
+    var to = Math.min(pg * SAL_PAGE_SIZE, total);
+    return '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;justify-content:center;padding:10px 4px 2px;">' +
+      btn('الأولى', 1, pg === 1) + btn('السابق', pg - 1, pg === 1) + nums +
+      btn('التالي', pg + 1, pg === totalPages) + btn('الأخيرة', totalPages, pg === totalPages) +
+      '<span style="font-size:13px;color:var(--text-muted);margin-inline-start:8px;">عرض ' + from + ' – ' + to + ' من ' + total + ' سجل</span></div>';
+  }
+
+  /* Sort the FULL salary dataset (not just the visible page), then re-slice page 1. */
+  function salCellValue(r, ci) {
+    switch (ci) {
+      case 0: return r.emp_id;
+      case 1: return r.name_ar || '';
+      case 2: return r.basic_salary;
+      case 3: return r.allow;
+      case 4: return r.section || '';
+      case 5: return r.working_days;
+      case 6: return r.deduction_day;
+      case 7: return r.overtime_days;
+      case 8: return r.net_salary;
+      case 9: return r.net_salary_nearest;
+      case 10: return r.receipt ? 'نعم' : 'لا';
+      default: return '';
+    }
+  }
+
+  function salInitSort() {
+    var tbl = document.getElementById('sal-table');
+    if (!tbl) return;
+    tbl.querySelectorAll('thead th').forEach(function (th, ci) {
+      th.style.cursor = 'pointer';
+      th.title = 'اضغط للترتيب';
+      th.addEventListener('click', function () {
+        var asc = th.getAttribute('data-asc') !== 'true';
+        tbl.querySelectorAll('thead th').forEach(function (x) { if (x !== th) x.removeAttribute('data-asc'); });
+        var list = window.__salaries || [];
+        var decorated = list.map(function (r) {
+          var v = salCellValue(r, ci);
+          var s = (v == null) ? '' : String(v);
+          var n = parseFloat(s.replace(/,/g, ''));
+          return { r: r, s: s, n: n, isNum: !isNaN(n) && s.trim() !== '' };
+        });
+        decorated.sort(function (a, b) {
+          if (a.isNum && b.isNum) return asc ? a.n - b.n : b.n - a.n;
+          return asc ? a.s.localeCompare(b.s, 'ar') : b.s.localeCompare(a.s, 'ar');
+        });
+        for (var i = 0; i < decorated.length; i++) list[i] = decorated[i].r;
+        SAL_PAGE = 1;
+        renderSalaries();
+        var nt = document.querySelector('#sal-table thead th:nth-child(' + (ci + 1) + ')');
+        if (nt) nt.setAttribute('data-asc', String(asc));
+      });
+    });
   }
 
   /* ────────── Edit salary modal ────────── */
@@ -212,11 +308,10 @@
       .then(function (res) {
         UIC.closeModal('del-sal-modal');
         UIC.toast(res.message || 'تم الحذف', 'success');
-        var row = document.getElementById('sal-row-' + key);
-        if (row) row.remove();
         window.__salaries = (window.__salaries || []).filter(function (s) {
           return !(Number(s.emp_id) === Number(r.emp_id) && Number(s.month) === Number(r.month) && Number(s.year) === Number(r.year));
         });
+        renderSalaries(); /* re-slice current page so pager counts stay correct */
       })
       .catch(function (e) { UIC.toast(e.message || 'خطأ', 'error'); })
       .finally(function () { UI.hideSpinner(); });

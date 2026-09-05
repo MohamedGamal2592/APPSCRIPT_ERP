@@ -60,6 +60,7 @@
     companyCall('get_sales_headers')
       .then(function (r) {
         __options = r.options || {};
+        __options.next_invoice_number = r.next_invoice_number || '';
         __headers = r.headers || [];
         renderHeadersTable(); try{schedulePrefetch();}catch(e){};
       })
@@ -75,6 +76,7 @@
     var rows = __headers.map(function (h) {
       var opts = '<option value="">إجراءات...</option>' +
         '<option value="print">طباعة</option>' +
+        '<option value="costing">تحليل التكلفة</option>' +
         '<option value="release">اذن صرف منتج</option>';
       if (!h.fully_returned) {
         opts += '<option value="returns">مرتجعات</option>';
@@ -100,8 +102,9 @@
         actions: actions
       };
     });
-    content.innerHTML = '<div style="display:flex;justify-content:flex-end;margin-bottom:12px;gap:8px;">' +
+    content.innerHTML = '<div style="display:flex;justify-content:flex-end;margin-bottom:12px;gap:8px;flex-wrap:wrap;">' +
       '<button class="btn btn-outline" onclick="openAnalysis()">تحليل المبيعات</button>' +
+      '<button class="btn btn-outline" onclick="openCostingAnalysis()">تحليل تكلفة المبيعات الاجمالية</button>' +
       '<button class="btn btn-primary" onclick="openForm(\'\')">+ إضافة فاتورة بيع</button></div>' +
       UIC.dataTable('sales-table', {
         title: 'المبيعات',
@@ -140,6 +143,9 @@
     var invoiceDate = record ? formatDate(record['تاريخ الفاتورة']) : formatDate(new Date());
     var discount = record ? String(record['نسبة الخصم']) : '0';
     var taxSystem = record ? String(record.tax_system) : 'false';
+    // Display-only number: actual on edit, expected next on add. Disabled so
+    // collectForm skips it; add_sales assigns the authoritative number anyway.
+    var invPreview = record ? String(record['رقم الفاتورة'] || '-') : String(o.next_invoice_number || '');
 
     content.innerHTML =
       '<div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;">' +
@@ -147,6 +153,8 @@
       '<h2 style="margin:0;">' + (record ? 'تعديل فاتورة بيع' : 'إضافة فاتورة بيع') + '</h2></div>' +
       '<form id="sales-form">' +
       '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:0 16px;padding:16px;background:var(--bg-surface);border:1px solid var(--border-color);border-radius:8px;margin-bottom:16px;">' +
+      '<div class="form-field"><label class="form-label">رقم الفاتورة المتوقع</label>' +
+      '<input class="input" value="' + FMT.escape(invPreview) + '" disabled style="background:var(--bg-subtle);color:var(--text-muted);"></div>' +
       UIC.field({ key: 'customer_id', label: 'اسم العميل *', type: 'select', options: o.customer_options || [], value: custId, required: true, placeholder: 'اختر العميل...' }) +
       UIC.field({ key: 'invoice_date', label: 'تاريخ الفاتورة *', type: 'date', value: invoiceDate, required: true }) +
       UIC.field({ key: 'discount_percent', label: 'نسبة الخصم', type: 'select', options: o.discount_options || [], value: discount }) +
@@ -216,15 +224,10 @@
     for (var i = 0; i < lines.length; i++) {
       var l = lines[i];
       html += '<tr>' +
-        '<td><select id="product_id_' + i + '" class="input" onchange="updateLineSelect(' + i + ', \'product_id\', this.value)">' +
-          '<option value="">اختر...</option>' +
-          (opts.product_options || []).map(function (p) {
-            return '<option value="' + FMT.escape(p.value) + '"' + (String(p.value) === String(l.product_id) ? ' selected' : '') + '>' + FMT.escape(p.label) + '</option>';
-          }).join('') +
-          '</select></td>' +
+        '<td>' + UIC.combo({ key: 'product_id_' + i, options: opts.product_options || [], value: l.product_id != null ? l.product_id : '', placeholder: 'ابحث باسم الصنف...', inline: true }) + '</td>' +
         '<td><input class="input" type="number" min="0" step="any" value="' + (l.product_qty != null ? l.product_qty : '') + '" oninput="updateLineInput(' + i + ', \'product_qty\', this.value)">' +
-        '<div style="font-size:11px;color:var(--text-muted);">متاح: ' + availableQty(i) + '</div></td>' +
-        '<td><input class="input" type="number" min="0" step="any" value="' + (l.product_price != null ? l.product_price : '') + '" oninput="updateLineInput(' + i + ', \'product_price\', this.value)"></td>' +
+        '<div id="avail_' + i + '" style="font-size:11px;color:var(--text-muted);">متاح: ' + availableQty(i) + '</div></td>' +
+        '<td><input id="product_price_' + i + '" class="input" type="number" min="0" step="any" value="' + (l.product_price != null ? l.product_price : '') + '" oninput="updateLineInput(' + i + ', \'product_price\', this.value)"></td>' +
         '<td><select id="product_tax_' + i + '" class="input" onchange="updateLineSelect(' + i + ', \'product_tax\', this.value)">' +
           (opts.product_tax_options || []).map(function (t) {
             return '<option value="' + FMT.escape(t.value) + '"' + (String(t.value) === String(l.product_tax) ? ' selected' : '') + '>' + FMT.escape(t.label) + '</option>';
@@ -237,6 +240,14 @@
     }
     var tbody = document.getElementById('lines-tbody');
     if (tbody) tbody.innerHTML = html;
+    // Wire combo hidden inputs: UIC.comboPick dispatches change; blur-only
+    // matches do not, so saveSales() also syncs hidden values into __lines.
+    for (var ci = 0; ci < lines.length; ci++) {
+      (function (idx) {
+        var h = document.getElementById('product_id_' + idx);
+        if (h) h.addEventListener('change', function () { updateLineSelect(idx, 'product_id', h.value); });
+      })(ci);
+    }
     recalc();
   }
 
@@ -269,10 +280,21 @@
   }
 
   function updateLineSelect(i, key, value) {
+    // Keep any typed-but-unconfirmed combo pick before touching the row.
+    var _h = document.getElementById('product_id_' + i);
+    if (_h && key !== 'product_id') __lines[i].product_id = _h.value;
     __lines[i][key] = value;
     if (key === 'product_id') {
+      // In-place update only: never re-render here or the open combo (and
+      // mobile focus) is destroyed while the user is picking a product.
       var opt = findProductOption(value);
       if (opt) __lines[i].product_price = opt.default_price != null ? opt.default_price : 0;
+      var priceEl = document.getElementById('product_price_' + i);
+      if (priceEl) priceEl.value = __lines[i].product_price;
+      var avEl = document.getElementById('avail_' + i);
+      if (avEl) avEl.textContent = 'متاح: ' + availableQty(i);
+      recalc();
+      return;
     }
     renderLines();
   }
@@ -319,6 +341,12 @@
   function saveSales() {
     var btn = document.querySelector('#sales-form .btn-primary') || document.querySelector('.btn-primary');
     UI.submitOnce(btn, function () {
+      // Sync combo hidden inputs into __lines: a typed exact-match confirmed
+      // by blur (no change event) would otherwise be lost on save.
+      (__lines || []).forEach(function (l, i) {
+        var h = document.getElementById('product_id_' + i);
+        if (h) l.product_id = h.value;
+      });
       if (!validateSalesForm()) return Promise.reject();
       var header = UIC.collectForm('sales-form');
       var payload = { header: header, lines: __lines || [] };
@@ -376,8 +404,17 @@
     window.open(scriptUrl + '?action=tl_sales_analysis&sessionToken=' + encodeURIComponent(SESSION_TOKEN), '_blank');
   }
 
+  function openCostingAnalysis() {
+    window.open(scriptUrl + '?action=tl_sales_costing_analysis&sessionToken=' + encodeURIComponent(SESSION_TOKEN), '_blank');
+  }
+
+  function openCosting(uid) {
+    window.open(scriptUrl + '?action=tl_sales_costing_print&purchase_code=' + encodeURIComponent(uid) + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN), '_blank');
+  }
+
   function doAction(uid, action) {
     if (action === 'print') printSales(uid);
+    else if (action === 'costing') openCosting(uid);
     else if (action === 'release') openRelease(uid);
     else if (action === 'returns') openReturns(uid);
     else if (action === 'approve') approveSales(uid);

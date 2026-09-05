@@ -9,6 +9,24 @@
   <?!= include('Client_Helpers'); ?>
   <?!= include('Company_ValleyFoods_Nav'); ?>
   <?!= getCompanyThemeCSS_('9940659bd83035d7') ?>
+  <style>
+    #product-modal .modal { width: min(94vw, 920px); max-width: 920px; }
+    #product-modal .modal-body { max-height: 78vh; overflow-y: auto; }
+    #product-modal .modal-body #pf-form { display: grid; grid-template-columns: 1fr 1fr; gap: 0 14px; align-items: start; }
+    @media (max-width: 640px) { #product-modal .modal-body #pf-form { grid-template-columns: 1fr; } }
+    /* Batches modal: wide, scrollable, non-wrapping table */
+    #product-batches-modal .modal { width: 90vw; max-width: min(92vw, 1100px); min-width: 700px; overflow-x: visible; }
+    #product-batches-modal .modal-body { max-height: 85vh; overflow-y: auto; }
+    #product-batches-modal table.table { width: 100%; table-layout: auto; }
+    #product-batches-modal table.table th, #product-batches-modal table.table td { white-space: nowrap; }
+    #product-batches-modal table.table th:nth-child(1), #product-batches-modal table.table td:nth-child(1) { min-width: 180px; }
+    #product-batches-modal table.table th:nth-child(2), #product-batches-modal table.table td:nth-child(2) { min-width: 110px; }
+    #product-batches-modal table.table th:nth-child(3), #product-batches-modal table.table td:nth-child(3) { min-width: 130px; }
+    #product-batches-modal table.table th:nth-child(4), #product-batches-modal table.table td:nth-child(4) { min-width: 80px; }
+    #product-batches-modal table.table th:nth-child(5), #product-batches-modal table.table td:nth-child(5) { min-width: 100px; }
+    #product-batches-modal table.table th:nth-child(6), #product-batches-modal table.table td:nth-child(6) { min-width: 100px; }
+    @media (max-width: 720px) { #product-batches-modal .modal { min-width: 0; width: 94vw; } }
+  </style>
 </head>
 <body>
   <div id="vf-root"></div>
@@ -57,7 +75,7 @@
           (CAN_WRITE ? '<button class="btn btn-primary" onclick="PRODUCTS_PAGE.openAdd()">+ إضافة منتج</button>' : '') +
         '</div><div class="vf-card-body">' +
           '<div id="pf-warning"></div>' +
-          '<div id="pf-table"><p class="vf-text-muted">جاري التحميل...</p></div>' +
+          '<div id="pf-table">' + UIC.tableSkeleton(['الكود', 'الاسم', 'النوع', 'الاسم الإنجليزي', 'العميل/المورد', 'الوحدة', 'الكرتونة او التغليف', 'الضريبة', 'التصنيف', 'الرصيد الحالي', 'القيمة (ج.م)', 'الباتشات']) + '</div>' +
         '</div></div>';
       load();
     }
@@ -101,7 +119,7 @@
           esc(partyLabel),
           esc(r.unit || r.price_unit || '-'),
           esc(r.carton != null && r.carton !== '' ? r.carton : '-'),
-          (r.sales_tax != null && r.sales_tax !== '' ? (Number(r.sales_tax) * 100) + '%' : '-'),
+          (r.sales_tax != null && r.sales_tax !== '' ? (Number(r.sales_tax) * 100).toFixed(2) + '%' : '-'),
           esc(catMap[String(r.category)] || r.category || '-'),
           '<span class="num" data-num="' + (r.current_stock_qty || 0) + '">' + fmtNum(r.current_stock_qty) + '</span>',
           '<span class="num" style="font-weight:700;color:#0e623b;" data-num="' + (r.stock_value || 0) + '">' + fmtNum(r.stock_value, 2) + '</span>',
@@ -220,7 +238,7 @@
       var qtySum = 0, valSum = 0, agedN = 0;
       batches.forEach(function (b) { qtySum += b.qty; valSum += b.value; if (b.aged) agedN++; });
 
-      var inner = '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px;">' +
+      var inner = '<div style="display:flex;flex-wrap:wrap;gap:12px;margin-bottom:14px;">' +
         chip('إجمالي الرصيد', fmtNum(qtySum)) +
         chip('القيمة (ج.م)', fmtNum(valSum, 2)) +
         chip('عدد الباتشات', fmtNum(batches.length)) +
@@ -230,7 +248,7 @@
       if (!batches.length) {
         inner += '<p class="vf-text-muted">لا يوجد رصيد حالي لهذا المنتج.</p>';
       } else {
-        inner += '<div style="overflow-x:auto;"><table class="table"><thead><tr>' +
+        inner += '<div style="overflow-x:auto;display:block;"><table class="table"><thead><tr>' +
           '<th>كود الحركة (الدفعة)</th><th>التاريخ</th><th>حساب التوجيه</th>' +
           '<th>الكمية</th><th>تكلفة الوحدة</th><th>القيمة (ج.م)</th>' +
         '</tr></thead><tbody>';
@@ -255,7 +273,7 @@
     }
 
     function chip(label, value) {
-      return '<div style="background:#f0fdf4;border:1px solid #a7f0ba;border-radius:8px;padding:8px 16px;min-width:130px;text-align:center;">' +
+      return '<div style="background:#f0fdf4;border:1px solid #a7f0ba;border-radius:8px;padding:8px 16px;flex:1 1 150px;text-align:center;">' +
         '<div style="font-size:11px;color:#166534;font-weight:700;">' + label + '</div>' +
         '<div style="font-size:17px;font-weight:800;color:#14532d;">' + value + '</div></div>';
     }

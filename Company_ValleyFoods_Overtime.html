@@ -371,7 +371,8 @@
           empOptions = res.employee_options || [];
           roleOptions = res.role_options || [];
           renderToolbar();
-          buildTable( try{schedulePrefetch();}catch(e){}OT_PAGE._allRows);
+          try { schedulePrefetch(); } catch (e) {}
+          buildTable(OT_PAGE._allRows);
         })
         .catch(function (e) {
           content.innerHTML = '<div style="padding:20px;color:red;">حدث خطأ في تحميل البيانات: ' + esc(e.message || e) + '</div>';
@@ -394,7 +395,7 @@
         '<div><b>المبلغ:</b> ' + (row.amount || '-') + '</div>' +
         '<div style="grid-column:1/-1;"><b>التفاصيل:</b> ' + esc(row.details || '-') + '</div>' +
         '<div style="grid-column:1/-1;display:flex;align-items:center;gap:10px;"><b>المرفق:</b> ' + attBtn + '</div>' +
-        '<div><b>المسؤول:</b> ' + esc(row.user || '-') + '</div>' +
+        '<div><b>المسؤول:</b> ' + esc(uname_(row.user) || '-') + '</div>' +
         '<div><b>أنشأ:</b> ' + esc(row.created_at || '-') + '</div>' +
         '</div>';
       UIC.openModal('ot-view-modal', { title: 'تفاصيل العمل الإضافي', body: body });

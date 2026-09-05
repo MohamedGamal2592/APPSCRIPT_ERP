@@ -77,6 +77,7 @@ const TopLight = (function () {
     'delete_sales':            { page: 'tl_sales', access: 'full' },
     'approve_sales':           { page: 'tl_sales', access: 'write' },
     'get_sales_print':         { page: 'tl_sales_print', access: 'read' },
+    'get_sales_costing':      { page: 'tl_sales_costing_print', access: 'read' },
 
     'get_sales_returns':       { page: 'tl_sales_returns', access: 'read' },
     'add_sales_return':        { page: 'tl_sales_returns', access: 'write' },
@@ -91,6 +92,7 @@ const TopLight = (function () {
     'get_sales_offer_print':   { page: 'tl_sales_offer_print', access: 'read' },
 
     'get_sales_analysis':      { page: 'tl_sales_analysis', access: 'read' },
+    'get_sales_costing_analysis': { page: 'tl_sales_costing_analysis', access: 'read' },
 
     'get_cash_headers':        { page: 'tl_cash', access: 'read' },
     'add_cash':                { page: 'tl_cash', access: 'write' },
@@ -126,6 +128,7 @@ const TopLight = (function () {
 
     'get_sales_headers': SALES_SHEET, 'add_sales': SALES_SHEET, 'edit_sales': SALES_SHEET,
     'delete_sales': SALES_SHEET, 'approve_sales': SALES_SHEET, 'get_sales_print': SALES_SHEET,
+    'get_sales_costing': SALES_SHEET,
     'get_sales_lines': SALES_LINES_SHEET,
 
     'get_sales_returns': SALES_RETURNS_SHEET, 'add_sales_return': SALES_RETURNS_SHEET,
@@ -137,6 +140,7 @@ const TopLight = (function () {
     'get_sales_offer_lines': OFFER_LINES_SHEET,
 
     'get_sales_analysis': SALES_SHEET,
+    'get_sales_costing_analysis': SALES_SHEET,
 
     'get_cash_headers': CASH_SHEET, 'add_cash': CASH_SHEET, 'edit_cash': CASH_SHEET,
     'delete_cash': CASH_SHEET, 'approve_cash': CASH_SHEET, 'add_transfer': CASH_SHEET,
@@ -827,15 +831,23 @@ const TopLight = (function () {
   }
 
   function supplierOptions_(dbId) {
-    return getRefsCached_(dbId, 'parties', 120, function () {
-      return getAllRecords_(dbId, CUSTOMERS_SHEET).map(v => ({ value: v.id, label: v.name }));
+    const raw = getRefsCached_(dbId, 'parties', 120, function () {
+      return getAllRecords_(dbId, CUSTOMERS_SHEET);
     });
+    return (raw || []).map(v => ({
+      value: v.id != null ? v.id : (v.value != null ? v.value : ''),
+      label: v.name || v.label || String(v.id != null ? v.id : (v.value || ''))
+    }));
   }
 
   function productOptions_(dbId) {
-    return getRefsCached_(dbId, 'products', 120, function () {
-      return getAllRecords_(dbId, PRODUCTS_SHEET).map(p => ({ value: p.id, label: p.name_ar }));
+    const raw = getRefsCached_(dbId, 'products', 120, function () {
+      return getAllRecords_(dbId, PRODUCTS_SHEET);
     });
+    return (raw || []).map(p => ({
+      value: p.id != null ? p.id : (p.value != null ? p.value : ''),
+      label: p.name_ar || p.label || String(p.id != null ? p.id : (p.value || ''))
+    }));
   }
 
   function currencyOptions_() {
@@ -1184,6 +1196,105 @@ const TopLight = (function () {
     return { status: 'success', header: header, lines: lines, returns: returns, total_return_value: total_return_value, balance_before: balance_before, balance_after: balance_after };
   }
 
+  // =========================================
+  // Sales costing & profitability (print)
+  // Locked rules: netInvoice = إجمالي − returnsValue (discount already
+  // inside إجمالي); netCost excludes returned items' cost; unitCost =
+  // total_cost_sign / current_qty (0 when qty is 0); profit = net − cost;
+  // margin = profit / net (0 when net <= 0); net <= 0.05 zeroes everything.
+  // =========================================
+  function getSalesCosting_(data, user, dbId) {
+    const uid = String((data && (data.sales_code || data.invoice_id)) || '').trim();
+    if (!uid) throw new Error('معرف الفاتورة مطلوب');
+    const invoice = getAllRecords_(dbId, SALES_SHEET).find(r => String(r.invoice_unique_id) === uid);
+    if (!invoice) throw new Error('الفاتورة غير موجودة');
+
+    const prodNames = {};
+    getRefsCached_(dbId, 'products', 120, function () { return getAllRecords_(dbId, PRODUCTS_SHEET); }).forEach(p => { prodNames[String(p.id)] = p.name_ar; });
+    const costMap = {};
+    getAllRecords_(dbId, CURRENT_PRODUCTS_SHEET).forEach(s => {
+      const q = num0_(s.current_qty);
+      costMap[String(s.unique_id)] = q > 0 ? num0_(s.total_cost_sign) / q : 0;
+    });
+    const custNames = {};
+    getRefsCached_(dbId, 'parties', 120, function () { return getAllRecords_(dbId, CUSTOMERS_SHEET); }).forEach(c => { custNames[String(c.id)] = c.name; });
+
+    const items = [];
+    let totalInvoiceCostOriginal = 0;
+    getAllRecords_(dbId, SALES_LINES_SHEET)
+      .filter(r => String(r.top_lightsales_header_id) === uid)
+      .forEach(l => {
+        const pid = String(l.product_id);
+        const qty = num0_(l.product_qty);
+        const unitCost = costMap[pid] != null ? costMap[pid] : 0;
+        const itemTotalCost = qty * unitCost;
+        totalInvoiceCostOriginal += itemTotalCost;
+        items.push({
+          productName: prodNames[pid] || ('#' + pid),
+          qty: qty,
+          unitCost: unitCost,
+          price: num0_(l.product_price),
+          totalCost: itemTotalCost,
+          totalValue: num0_(l.product_total_value),
+          isReturn: false
+        });
+      });
+
+    const returns = [];
+    let totalReturnsValue = 0;
+    let totalReturnsCostCalculated = 0;
+    getAllRecords_(dbId, SALES_RETURNS_SHEET)
+      .filter(r => String(r.top_lightsales_invoices_id) === uid)
+      .forEach(r => {
+        const pid = String(r.top_lightsales_products_id);
+        const rQty = num0_(r.top_lightreturn_qty);
+        const unitCost = costMap[pid] != null ? costMap[pid] : 0;
+        const returnItemCost = rQty * unitCost;
+        const netReturnValue = num0_(r.top_lightreturn_value) - num0_(r.top_lightreturn_discount);
+        totalReturnsValue += netReturnValue;
+        totalReturnsCostCalculated += returnItemCost;
+        returns.push({
+          productName: '[مرتجع] ' + (prodNames[pid] || ('#' + pid)),
+          qty: -rQty,
+          unitCost: unitCost,
+          price: num0_(r.top_lightreturn_price),
+          totalCost: -returnItemCost,
+          totalValue: -netReturnValue,
+          isReturn: true
+        });
+      });
+
+    let netInvoice = num0_(invoice['إجمالي']) - totalReturnsValue;
+    let netCost = Math.max(0, totalInvoiceCostOriginal - totalReturnsCostCalculated);
+    let profit = netInvoice - netCost;
+    let margin = 0;
+    if (netInvoice <= 0.05) {
+      netInvoice = 0; netCost = 0; profit = 0; margin = 0;
+    } else {
+      margin = (profit / netInvoice) * 100;
+    }
+
+    return {
+      status: 'success',
+      meta: {
+        invoice_number: invoice['رقم الفاتورة'],
+        customer_name: custNames[String(invoice['اسم العميل'])] || '',
+        invoice_date: invoice['تاريخ الفاتورة'],
+        discount_value: num0_(invoice['قيمة الخصم']),
+        approval_status: invoice.approval_status || 'Pending'
+      },
+      items: items,
+      returns: returns,
+      totals: {
+        netInvoice: netInvoice,
+        discountValue: num0_(invoice['قيمة الخصم']),
+        netCost: netCost,
+        profit: profit,
+        margin: margin
+      }
+    };
+  }
+
   function addSales_(data, user, dbId) {
     const header = data && data.header ? data.header : {};
     const lines = (data && data.lines) ? data.lines : [];
@@ -1496,15 +1607,16 @@ const TopLight = (function () {
   }
 
   function customerSalesOptions_(dbId) {
-    return getRefsCached_(dbId, 'parties', 120, function () {
-      return getAllRecords_(dbId, CUSTOMERS_SHEET).map(c => ({
-        value: c.id,
-        label: c.name,
-        tax_id: c.tax_id || '',
-        telephone: c.telephone || '',
-        address: c.address || ''
-      }));
+    const raw = getRefsCached_(dbId, 'parties', 120, function () {
+      return getAllRecords_(dbId, CUSTOMERS_SHEET);
     });
+    return (raw || []).map(c => ({
+      value: c.id != null ? c.id : (c.value != null ? c.value : ''),
+      label: c.name || c.label || String(c.id != null ? c.id : (c.value || '')),
+      tax_id: c.tax_id || '',
+      telephone: c.telephone || '',
+      address: c.address || ''
+    }));
   }
 
   // Cache an object derived from a heavy sheet read (TTL seconds, script cache).
@@ -1565,13 +1677,17 @@ const TopLight = (function () {
   function salesProductOptions_(dbId) {
     const qtyMap = currentQtyMap_(dbId);
     const priceMap = latestSalesPriceMap_(dbId);
-    return getRefsCached_(dbId, 'products', 120, function () {
-      return getAllRecords_(dbId, PRODUCTS_SHEET).map(p => ({
-        value: p.id,
-        label: p.name_ar,
-        current_qty: qtyMap[String(p.id)] != null ? qtyMap[String(p.id)] : 0,
-        default_price: priceMap[String(p.id)] != null ? priceMap[String(p.id)] : 0
-      }));
+    const raw = getRefsCached_(dbId, 'products', 120, function () {
+      return getAllRecords_(dbId, PRODUCTS_SHEET);
+    });
+    return (raw || []).map(p => {
+      const pid = p.id != null ? p.id : p.value;
+      return {
+        value: pid,
+        label: p.name_ar || p.label || String(pid || ''),
+        current_qty: qtyMap[String(pid)] != null ? qtyMap[String(pid)] : 0,
+        default_price: priceMap[String(pid)] != null ? priceMap[String(pid)] : 0
+      };
     });
   }
 
@@ -1767,7 +1883,7 @@ const TopLight = (function () {
   // Cash / bank movement — transactions + box balances + transfer
   // =========================================
   function getCashHeaders_(data, user, dbId) {
-    var limit = Number(data && data.limit) || 10;
+    var limit = Number(data && data.limit) || 2000;
     const rows = getAllRecords_(dbId, CASH_SHEET);
     const boxNames = boxNameMap_(dbId);
     const boxes = boxBalanceSummary_(dbId, boxNames);
@@ -1780,11 +1896,42 @@ const TopLight = (function () {
       return rec;
     });
     headers.sort(function(a,b){ return Number(b.transaction_id) - Number(a.transaction_id); });
-    if (!data || !data.loadAll) headers = headers.slice(0, limit);
+
+    let totalDebit = 0;
+    let totalCredit = 0;
+    let totalCount = 0;
+    const KPI_EXCLUDED_BOXES = ['111103'];
+    rows.forEach(r => {
+      const bx = String((r.related_box == null) ? '' : r.related_box).trim();
+      if (KPI_EXCLUDED_BOXES.indexOf(bx) !== -1) return;
+      const t = num0_(r.total != null && r.total !== '' ? r.total : r.transaction_amount);
+      if (isCreditType_(r.transaction_type)) {
+        totalCredit += t;
+      } else {
+        totalDebit += t;
+      }
+      totalCount++;
+    });
+    // Net is derived as debit − credit from signed types, never by summing
+    // the balance_amount column (its stored sign is unreliable).
+    const totalBalance = totalDebit - totalCredit;
+    const summary = {
+      total_debit: totalDebit,
+      total_credit: totalCredit,
+      total_balance: totalBalance,
+      total_count: totalCount
+    };
+
+    if (data && data.limit) {
+      headers = headers.slice(0, limit);
+    } else if (!data || !data.loadAll) {
+      if (headers.length > 2000) headers = headers.slice(0, 2000);
+    }
     return {
       status: 'success',
       headers: headers,
       boxes: boxes,
+      summary: summary,
       options: cashOptions_(dbId)
     };
   }
@@ -1976,12 +2123,21 @@ const TopLight = (function () {
     };
   }
 
+  // Credit-type normalization: 'Credit' any case, Arabic 'دائن', or 'c'.
+  // Anything else (incl. empty) counts as Debit — matches the sheet formula
+  // =IF(type="Credit",−total,total) intent while tolerating legacy values.
+  function isCreditType_(v) {
+    const s = String(v == null ? '' : v).trim().toLowerCase();
+    return s === 'credit' || s === 'c' || s.indexOf('دائن') !== -1;
+  }
+
   function boxBalanceSummary_(dbId, boxNames) {
     const map = {};
     getAllRecords_(dbId, CASH_SHEET).forEach(r => {
       const box = String((r.related_box == null) ? '' : r.related_box).trim();
       if (!box) return;
-      map[box] = (map[box] || 0) + num0_(r.balance_amount);
+      const t = num0_(r.total != null && r.total !== '' ? r.total : r.transaction_amount);
+      map[box] = (map[box] || 0) + (isCreditType_(r.transaction_type) ? -t : t);
     });
     return Object.keys(map).map(box => ({
       box: box,
@@ -2076,14 +2232,14 @@ const TopLight = (function () {
       sheet.getRange(rowNum, idx['net_amount'] + 1).setFormula(
         '=IF(' + S + rowNum + '="فودافون كاش",' + H + rowNum + '*' + AA + rowNum + ',(' + H + rowNum + '-' + I + rowNum + ')*' + AA + rowNum + ')');
     }
-    if (idx['total'] !== undefined && N !== undefined && K !== undefined && AA !== undefined) {
+    if (idx['total'] !== undefined && H !== undefined && I !== undefined && K !== undefined && AA !== undefined) {
       sheet.getRange(rowNum, idx['total'] + 1).setFormula(
-        '=' + N + rowNum + '+' + K + rowNum + '*' + AA + rowNum);
+        '=((' + H + rowNum + '-' + I + rowNum + ')*' + AA + rowNum + ')+(' + K + rowNum + '*' + AA + rowNum + ')');
     }
-    if (B !== undefined && M !== undefined && S !== undefined && H !== undefined && I !== undefined && K !== undefined && AA !== undefined) {
-      const inner = 'IF(' + S + rowNum + '="فودافون كاش",' + H + rowNum + '*' + AA + rowNum + ',(' + H + rowNum + '-' + I + rowNum + ')*' + AA + rowNum + ')+' + K + rowNum + '*' + AA + rowNum;
+    if (B !== undefined && M !== undefined && H !== undefined && I !== undefined && K !== undefined && AA !== undefined) {
+      const totExpr = '(((' + H + rowNum + '-' + I + rowNum + ')*' + AA + rowNum + ')+(' + K + rowNum + '*' + AA + rowNum + '))';
       sheet.getRange(rowNum, idx['balance_amount'] + 1).setFormula(
-        '=IF(' + M + rowNum + '="Credit",(' + inner + ')*-1,' + inner + ')');
+        '=IF(' + M + rowNum + '="Credit",-1*' + totExpr + ',' + totExpr + ')');
     }
     if (B !== undefined && P !== undefined) {
       sheet.getRange(rowNum, idx['box_balance'] + 1).setFormula(
@@ -2206,7 +2362,11 @@ const TopLight = (function () {
       const customer = String((r.name == null) ? '' : r.name).trim();
       if (!customer) return;
       const rate = num0_(r.exchange_rate) || 1;
-      const base = num0_(r.transaction_amount) * rate - num0_(r.total_discount) * rate + num0_(r.taxes) * rate;
+      const method = String((r.transaction_method == null) ? '' : r.transaction_method).trim();
+      const isVodafone = method === 'فودافون كاش';
+      const base = isVodafone
+        ? num0_(r.transaction_amount) * rate
+        : (r.total != null && r.total !== '' ? num0_(r.total) : ((num0_(r.transaction_amount) - num0_(r.total_discount) + num0_(r.taxes)) * rate));
       const isDebit = String((r.transaction_type == null) ? '' : r.transaction_type).trim() === 'Debit';
       movements.push({
         customer: customer,
@@ -2669,6 +2829,97 @@ const TopLight = (function () {
   }
 
   // =========================================
+  // Sales costing analysis (universal report)
+  // Same locked per-invoice math as getSalesCosting_, applied to every
+  // invoice in the period. Single-pass aggregation (one scan per sheet) —
+  // never per-invoice scans — to stay within execution limits.
+  // =========================================
+  function getSalesCostingAnalysis_(data, user, dbId) {
+    const dateFrom = parseDate_(data && data.date_from);
+    const dateTo = parseDate_(data && data.date_to);
+
+    const costMap = {};
+    getAllRecords_(dbId, CURRENT_PRODUCTS_SHEET).forEach(s => {
+      const q = num0_(s.current_qty);
+      costMap[String(s.unique_id)] = q > 0 ? num0_(s.total_cost_sign) / q : 0;
+    });
+    const custNames = {};
+    getRefsCached_(dbId, 'parties', 120, function () { return getAllRecords_(dbId, CUSTOMERS_SHEET); }).forEach(c => { custNames[String(c.id)] = c.name; });
+
+    const lineAgg = {};
+    getAllRecords_(dbId, SALES_LINES_SHEET).forEach(l => {
+      const inv = String(l.top_lightsales_header_id);
+      const pid = String(l.product_id);
+      const unitCost = costMap[pid] != null ? costMap[pid] : 0;
+      if (!lineAgg[inv]) lineAgg[inv] = { costOrig: 0 };
+      lineAgg[inv].costOrig += num0_(l.product_qty) * unitCost;
+    });
+
+    const retAgg = {};
+    getAllRecords_(dbId, SALES_RETURNS_SHEET).forEach(r => {
+      const inv = String(r.top_lightsales_invoices_id);
+      const pid = String(r.top_lightsales_products_id);
+      const unitCost = costMap[pid] != null ? costMap[pid] : 0;
+      if (!retAgg[inv]) retAgg[inv] = { retValue: 0, retCost: 0 };
+      retAgg[inv].retValue += num0_(r.top_lightreturn_value) - num0_(r.top_lightreturn_discount);
+      retAgg[inv].retCost += num0_(r.top_lightreturn_qty) * unitCost;
+    });
+
+    const rows = getAllRecords_(dbId, SALES_SHEET)
+      .filter(inv => {
+        if (dateFrom || dateTo) {
+          const d = parseDate_(inv['تاريخ الفاتورة']);
+          const t = d instanceof Date ? d.getTime() : 0;
+          if (dateFrom && t && t < dateFrom.getTime()) return false;
+          if (dateTo && t && t > dateTo.getTime()) return false;
+        }
+        return true;
+      })
+      .map(inv => {
+        const uid = String(inv.invoice_unique_id);
+        const la = lineAgg[uid] || { costOrig: 0 };
+        const ra = retAgg[uid] || { retValue: 0, retCost: 0 };
+        let net = num0_(inv['إجمالي']) - ra.retValue;
+        let cost = Math.max(0, la.costOrig - ra.retCost);
+        let profit = net - cost;
+        let margin = 0;
+        if (net <= 0.05) {
+          net = 0; cost = 0; profit = 0; margin = 0;
+        } else {
+          margin = (profit / net) * 100;
+        }
+        return {
+          code: inv['رقم الفاتورة'] || '',
+          invoice_unique_id: uid,
+          date: parseDate_(inv['تاريخ الفاتورة']),
+          customer_name: custNames[String(inv['اسم العميل'])] || '',
+          net: net,
+          cost: cost,
+          profit: profit,
+          margin: margin,
+          discount: num0_(inv['قيمة الخصم']),
+          ret: ra.retValue
+        };
+      });
+    rows.sort(function (a, b) {
+      const na = parseInt(String(a.code).split('-')[0], 10) || 0;
+      const nb = parseInt(String(b.code).split('-')[0], 10) || 0;
+      return na - nb;
+    });
+    const totals = rows.reduce(function (t, r) {
+      t.net += r.net;
+      t.cost += r.cost;
+      t.profit += r.profit;
+      t.discount += r.discount;
+      t.returns += r.ret;
+      t.count += 1;
+      return t;
+    }, { net: 0, cost: 0, profit: 0, discount: 0, returns: 0, count: 0 });
+    totals.margin = totals.net > 0.05 ? (totals.profit / totals.net) * 100 : 0;
+    return { status: 'success', rows: rows, totals: totals };
+  }
+
+  // =========================================
   // Cash movement report
   // =========================================
   function companyArabicName_() {
@@ -2954,6 +3205,7 @@ const TopLight = (function () {
   register('get_sales_headers', getSalesHeaders_);
   register('get_sales_lines', getSalesLines_);
   register('get_sales_print', getSalesPrint_);
+  register('get_sales_costing', getSalesCosting_);
   register('add_sales', addSales_);
   register('edit_sales', editSales_);
   register('delete_sales', deleteSales_);
@@ -2976,6 +3228,7 @@ const TopLight = (function () {
   register('delete_sales_offer', deleteSalesOffer_);
   register('approve_sales_offer', approveSalesOffer_);
   register('get_sales_analysis', getSalesAnalysis_);
+  register('get_sales_costing_analysis', getSalesCostingAnalysis_);
   register('get_cash_report', getCashReport_);
   register('get_xlsx_export', getXlsxExport_);
   register('get_purchase_needs', getPurchaseNeeds_);

@@ -200,7 +200,7 @@
         transaction_details: r.transaction_details || '',
         claim_assignment: fileLink(r.claim_assignment),
         shipment_clearance: fileLink(r.shipment_clearance),
-        user_email: r.user_email || '',
+        user_email: uname_(r.user_email) || '',
         created_at: r.created_at || ''
       };
     });

@@ -140,7 +140,7 @@
         reason: m.reason || '-',
         value: fmtNum(m.value),
         details: m.details || '-',
-        user: m.user || '-'
+        user: uname_(m.user) || '-'
       };
     });
     var headers = [

@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Top Light — تحليل تكلفة المبيعات الاجمالية</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= getCompanyThemeCSS_('8df5c89a117fe9a5') ?>
+  <style>
+    @media print {
+      .topbar, .breadcrumb, .no-print { display: none !important; }
+      body { background: #ffffff !important; }
+    }
+    .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 16px; }
+    .kpi { background: var(--bg-surface); border: 2px solid #111111; border-radius: 8px; padding: 14px; }
+    .kpi-label { font-size: 12px; color: var(--text-muted); margin-bottom: 6px; }
+    .kpi-value { font-size: 20px; font-weight: 700; color: #111111; }
+    .inv-link { color: #0369a1; cursor: pointer; text-decoration: underline; }
+  </style>
+</head>
+<body>
+<div id="tl-root" dir="rtl"></div>
+<script>
+  var params = new URLSearchParams(window.location.search);
+  var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+  var scriptUrl = window.scriptUrl || '/';
+  var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('8df5c89a117fe9a5') ?>';
+  var COMPANY_PAGES = <?!= companyPages ?>;
+  var CURRENT_ACTION = '<?!= currentAction ?>';
+
+  function companyCall(moduleAction, data) {
+    return API.call('company_action', {
+      target_system: '8df5c89a117fe9a5',
+      module_action: moduleAction,
+      data: data || {}
+    }, SESSION_TOKEN);
+  }
+
+  function load() {
+    UIC.appShell('tl-root', {
+      companyLogoUrl: COMPANY_LOGO_URL,
+      companyLogoHref: scriptUrl + '?action=tl_dashboard&sessionToken=' + SESSION_TOKEN,
+      companyLogoTitle: 'القمة لايت',
+      breadcrumb: 'القمة لايت / تحليل تكلفة المبيعات الاجمالية',
+      contentId: 'tl-content'
+    });
+    fetchData();
+  }
+
+  function filterPayload() {
+    return {
+      date_from: document.getElementById('f_from') ? document.getElementById('f_from').value : '',
+      date_to: document.getElementById('f_to') ? document.getElementById('f_to').value : ''
+    };
+  }
+
+  var __filtersBuilt = false;
+
+  function fetchData() {
+    UI.showSpinner([
+      'جاري تحليل تكلفة المبيعات...',
+      'جاري حساب التكلفة والربحية لكل فاتورة...',
+      'لحظة، جاري إعداد التقرير الإجمالي...'
+    ]);
+    companyCall('get_sales_costing_analysis', filterPayload())
+      .then(function (r) {
+        var content = document.getElementById('tl-content');
+        if (!__filtersBuilt) {
+          content.innerHTML = renderFilters() + '<div id="results"></div>';
+          __filtersBuilt = true;
+        }
+        renderResults(r.rows || [], r.totals || {});
+      })
+      .catch(function (e) { showError(e); })
+      .finally(function () { UI.hideSpinner(); try{schedulePrefetch();}catch(e){} });
+  }
+
+  function renderFilters() {
+    return '<div class="no-print" style="display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;margin-bottom:16px;padding:12px;background:var(--bg-surface);border:2px solid #111111;border-radius:8px;">' +
+      '<div class="form-field" style="margin:0;"><label class="form-label" for="f_from">من تاريخ</label><input id="f_from" class="input" type="date" onchange="fetchData()"></div>' +
+      '<div class="form-field" style="margin:0;"><label class="form-label" for="f_to">إلى تاريخ</label><input id="f_to" class="input" type="date" onchange="fetchData()"></div>' +
+      '<button class="btn btn-outline" onclick="window.print()">طباعة</button>' +
+      '</div>';
+  }
+
+  function renderResults(rows, totals) {
+    var el = document.getElementById('results');
+    if (!el) return;
+
+    var profitColor = Number(totals.profit) >= 0 ? '#16a34a' : '#dc2626';
+    var kpis =
+      '<div class="kpis">' +
+      kpi('صافي الإيراد (بعد الخصم والارتجاع)', totals.net) +
+      kpi('الخصومات (عرض)', totals.discount) +
+      kpi('إجمالي التكلفة', totals.cost) +
+      '<div class="kpi"><div class="kpi-label">صافي الربح</div><div class="kpi-value num" style="color:' + profitColor + ';">' + FMT.number(totals.profit) + '</div></div>' +
+      '<div class="kpi"><div class="kpi-label">هامش الربح (ربح ÷ صافي إيراد)</div><div class="kpi-value num">' + fmtPct(totals.margin) + '</div></div>' +
+      kpi('عدد الفواتير', totals.count) +
+      '</div>';
+
+    var tableRows = rows.map(function (r) {
+      var pc = Number(r.profit) >= 0 ? '#16a34a' : '#dc2626';
+      return {
+        code: '<span class="inv-link" onclick="openCostingPrint(\'' + FMT.escape(r.invoice_unique_id) + '\')">' + FMT.escape(r.code || '-') + '</span>',
+        date: fmtDate(r.date),
+        customer_name: r.customer_name || '-',
+        net: r.net || 0,
+        cost: r.cost || 0,
+        profit: '<span style="color:' + pc + ';font-weight:700;">' + FMT.number(r.profit) + '</span>',
+        margin: fmtPct(r.margin),
+        discount: r.discount || 0
+      };
+    });
+
+    var totalHtml = '<div style="margin-top:12px;padding:10px 14px;background:#fef08a;border:2px solid #111111;border-radius:8px;display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;">' +
+      '<div><strong>الإجمالي المجمع</strong></div>' +
+      '<div>صافي الإيراد (بعد الخصم والارتجاع): <strong class="num">' + FMT.number(totals.net) + '</strong></div>' +
+      '<div>التكلفة: <strong class="num">' + FMT.number(totals.cost) + '</strong></div>' +
+      '<div>الربح: <strong class="num">' + FMT.number(totals.profit) + '</strong></div>' +
+      '<div>هامش الربح (ربح ÷ صافي إيراد): <strong class="num">' + fmtPct(totals.margin) + '</strong></div>' +
+      '<div>المرتجعات: <strong class="num">' + FMT.number(totals.returns) + '</strong></div>' +
+      '<div>الفواتير: <strong class="num">' + FMT.number(totals.count) + '</strong></div>' +
+      '</div>';
+
+    var tableHtml = UIC.dataTable('sales-costing-dt', {
+      title: 'تحليل تكلفة المبيعات الاجمالية',
+      headers: [
+        { key: 'code', label: 'كود السند' },
+        { key: 'date', label: 'تاريخ الحركة' },
+        { key: 'customer_name', label: 'اسم العميل' },
+        { key: 'net', label: 'الصافي (بعد الارتجاع)', money: true },
+        { key: 'cost', label: 'التكلفة', money: true },
+        { key: 'profit', label: 'الربح' },
+        { key: 'margin', label: 'الهامش %' },
+        { key: 'discount', label: 'الخصم (عرض)', money: true }
+      ],
+      rows: tableRows,
+      emptyText: 'لا توجد بيانات'
+    });
+
+    el.innerHTML = kpis + tableHtml + totalHtml;
+    UIC.initTableSort('sales-costing-dt');
+  }
+
+  function openCostingPrint(uid) {
+    window.open(scriptUrl + '?action=tl_sales_costing_print&purchase_code=' + encodeURIComponent(uid) + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN), '_blank');
+  }
+
+  function kpi(label, value) {
+    return '<div class="kpi"><div class="kpi-label">' + FMT.escape(label) + '</div><div class="kpi-value num">' + FMT.number(value) + '</div></div>';
+  }
+
+  function fmtPct(v) {
+    var n = Number(v);
+    if (isNaN(n)) n = 0;
+    return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' %';
+  }
+
+  function fmtDate(v) {
+    if (!v) return '-';
+    var d = new Date(v);
+    if (isNaN(d.getTime())) return String(v).slice(0, 10);
+    return d.toLocaleDateString('en-GB');
+  }
+
+  function showError(e) {
+    var content = document.getElementById('tl-content');
+    if (content) content.innerHTML = '<div class="empty-state"><span>' + FMT.escape(e.message || 'خطأ') + '</span></div>';
+  }
+
+
+  load();
+</script>
+</body>
+</html>

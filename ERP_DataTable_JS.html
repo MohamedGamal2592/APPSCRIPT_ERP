@@ -41,7 +41,10 @@ window.ERPDataTable = (function(){
       this.columns = opts.columns || [];
       this.permissions = opts.permissions || {};
       this.containerId = opts.containerId || 'erp-datatable-host';
-      this.pageSize = opts.pageSize || 0;
+      // [PERF-11] Uniform 50-row pager (opt out with pager:false). Virtual window
+      // is disabled while paging — at most one page of DOM rows ever exists.
+      this.pageSize = (opts.pager === false) ? 0 : Math.min(opts.pageSize || 50, 50);
+      this.page = 1;
       this.rows = [];
       this.byPk = new Map();
       this.rowElByPk = new Map();
@@ -78,7 +81,8 @@ window.ERPDataTable = (function(){
       const thead = '<thead><tr>' + cols.map(c => '<th class="' + (c.sortable!==false?'sortable':'') + '" data-field="' + esc(c.field) + '">' + esc(c.header) + '</th>').join('') + '<th class="cell-actions">إجراءات</th></tr></thead>';
       const toolbar = '<div class="erp-table-toolbar"><input id="' + this.tableId + '_search" class="input" type="search" placeholder="بحث..." inputmode="search" enterkeyhint="search"><button type="button" class="btn btn-outline" onclick="window.__erpTable && window.__erpTable.exportXlsx()">📥 Excel</button></div>';
       // virtual wrap: outer scroll container with fixed height, inner spacer for total height
-      host.innerHTML = toolbar + '<div class="erp-table-wrap" id="' + this.tableId + '_wrap" style="max-height:62vh;overflow:auto;-webkit-overflow-scrolling:touch;" dir="rtl"><table class="erp-table" dir="rtl"><caption class="sr-only">' + esc(this.tableId) + '</caption>' + thead + '<tbody id="' + this.tableId + '_tbody"></tbody></table><div id="' + this.tableId + '_spacer" style="height:0"></div></div><div id="' + this.tableId + '_count" style="padding:8px;color:var(--text-muted);font-size:13px;"></div>';
+      host.innerHTML = toolbar + '<div class="erp-table-wrap" id="' + this.tableId + '_wrap" style="max-height:62vh;overflow:auto;-webkit-overflow-scrolling:touch;" dir="rtl"><table class="erp-table" dir="rtl"><caption class="sr-only">' + esc(this.tableId) + '</caption>' + thead + '<tbody id="' + this.tableId + '_tbody"></tbody></table><div id="' + this.tableId + '_spacer" style="height:0"></div></div><div id="' + this.tableId + '_pager" class="erp-pager"></div><div id="' + this.tableId + '_count" style="padding:8px;color:var(--text-muted);font-size:13px;"></div>';
+      this.renderPager();
       const search = document.getElementById(this.tableId + '_search');
       if (search) search.addEventListener('input', () => this.onSearch(search.value));
       host.querySelectorAll('thead th[data-field]').forEach(th => {
@@ -94,7 +98,8 @@ window.ERPDataTable = (function(){
       this._virtual.viewportH = wrap.clientHeight || 480;
       this._virtual.rowH = 42; // estimate; could measure first row
       // enable virtual if rows exceed viewport * 2.5 (Harvard Windowed Rendering threshold)
-      this._virtual.enabled = this.rows.length > 120;
+      // [PERF-11] virtual is off while the pager is active (≤50 DOM rows by construction)
+      this._virtual.enabled = this.rows.length > 120 && !(this.pageSize > 0);
       this._updateVirtualWindow(true);
     }
     _onVirtualScroll(){
@@ -130,14 +135,63 @@ window.ERPDataTable = (function(){
       tbody.style.transform = 'translateY(' + (start * rowH) + 'px)';
       this._renderVisibleChunk();
     }
+    // [PERF-11] pager slice: page flips re-slice only (<2ms), no re-search/re-sort
+    getPageSlice(source){
+      if (!(this.pageSize > 0)) return source;
+      const totalPages = Math.max(1, Math.ceil(source.length / this.pageSize));
+      this.page = Math.min(Math.max(1, this.page || 1), totalPages);
+      return source.slice((this.page - 1) * this.pageSize, this.page * this.pageSize);
+    }
+    gotoPage(p){
+      if (!(this.pageSize > 0)) return;
+      const source = this._filterActive ? this._visibleRows : this.rows;
+      const totalPages = Math.max(1, Math.ceil(source.length / this.pageSize));
+      this.page = Math.min(Math.max(1, Number(p) || 1), totalPages);
+      this._renderVisibleChunk();
+      this.renderPager();
+      this.updateCount();
+    }
+    renderPager(){
+      const el = document.getElementById(this.tableId + '_pager');
+      if (!el) return;
+      if (!(this.pageSize > 0)) { el.innerHTML = ''; return; }
+      const source = this._filterActive ? this._visibleRows : this.rows;
+      const total = source.length;
+      const ps = this.pageSize;
+      const totalPages = Math.max(1, Math.ceil(total / ps));
+      if (totalPages <= 1) { el.innerHTML = ''; return; }
+      const pg = Math.min(Math.max(1, this.page || 1), totalPages);
+      this.page = pg;
+      const go = 'window.__erpTable && window.__erpTable.gotoPage';
+      const btn = (label, target, disabled, primary) =>
+        '<button type="button" class="btn ' + (primary ? 'btn-primary' : 'btn-outline') + '" style="padding:4px 10px;min-width:0;"' +
+        (disabled ? ' disabled' : ' onclick="' + go + '(' + target + ')"') + '>' + label + '</button>';
+      const pages = [];
+      const push = (p) => { if (pages.indexOf(p) === -1) pages.push(p); };
+      if (totalPages <= 7) { for (let i = 1; i <= totalPages; i++) push(i); }
+      else {
+        push(1);
+        if (pg > 3) pages.push('…');
+        for (let k = Math.max(2, pg - 1); k <= Math.min(totalPages - 1, pg + 1); k++) push(k);
+        if (pg < totalPages - 2) pages.push('…');
+        push(totalPages);
+      }
+      const nums = pages.map(p => (p === '…')
+        ? '<span style="padding:0 4px;color:var(--text-muted);">…</span>'
+        : btn(p, p, false, p === pg)).join('');
+      el.innerHTML = '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;justify-content:center;padding:10px 4px 2px;">' +
+        btn('الأولى', 1, pg === 1) + btn('السابق', pg - 1, pg === 1) + nums +
+        btn('التالي', pg + 1, pg === totalPages) + btn('الأخيرة', totalPages, pg === totalPages) + '</div>';
+    }
     _renderVisibleChunk(){
       const tbody = document.getElementById(this.tableId + '_tbody');
       if(!tbody) return;
       const cols = this.columns.filter(c => !c.hidden);
       const source = this._visibleRows.length ? this._visibleRows : this.rows;
+      const paged = this.getPageSlice(source);
       const s = this._virtual.enabled && !this._filterActive ? this._virtual.start : 0;
-      const e = this._virtual.enabled && !this._filterActive ? this._virtual.end : source.length;
-      const slice = source.slice(s, e);
+      const e = this._virtual.enabled && !this._filterActive ? this._virtual.end : paged.length;
+      const slice = paged.slice(s, e);
       // MIT chunked DOM: build DocumentFragment in chunks
       const frag = document.createDocumentFragment();
       // reuse existing map but build only visible slice
@@ -312,6 +366,13 @@ window.ERPDataTable = (function(){
       const tbody = document.getElementById(this.tableId + '_tbody');
       if (!tbody) return;
       const cols = this.columns.filter(c => !c.hidden);
+      // [PERF-11] pager path: one page of DOM rows via _renderVisibleChunk
+      if (this.pageSize > 0) {
+        this._renderVisibleChunk();
+        this.renderPager();
+        this.updateCount();
+        return;
+      }
       // For virtual enabled, delegate to virtual renderer
       if(this._virtual.enabled){
         this._renderVisibleChunk();
@@ -561,7 +622,8 @@ window.ERPDataTable = (function(){
     // Harvard: chunked filter to avoid blocking on 5k rows
     onSearch(term){
       clearTimeout(this._searchTimer);
-      this._searchTimer = setTimeout(() => this.applySearch(term), 180);
+      // [PERF-11] 150ms debounce — search is O(1) per keystroke on the precomputed index
+      this._searchTimer = setTimeout(() => this.applySearch(term), 150);
     }
     applySearch(term){
       const q = String(term||'').trim().toLowerCase();
@@ -570,8 +632,10 @@ window.ERPDataTable = (function(){
       if (!q) {
         this._filterActive = false;
         this._visibleRows = this.rows.slice();
+        this.page = 1;
         this._recalcVirtual();
         this.renderBodyIncremental(false);
+        this.renderPager();
         return;
       }
       // MIT: filter in chunks, then virtual render
@@ -592,15 +656,22 @@ window.ERPDataTable = (function(){
         if(idx < n) requestAnimationFrame(doFilter);
         else {
           this._visibleRows = matched;
-          // show/hide via virtual slice instead of per-tr display toggle (faster)
-          this.rowElByPk.forEach((tr,pk)=>{
-            const hay=this.searchIndex.get(pk)||'';
-            tr.style.display = hay.indexOf(q)!==-1 ? '' : 'none';
-          });
-          // For large matched, use virtual rendering to limit DOM
-          if(matched.length > 120) {
-            this._recalcVirtual();
-            this.renderBodyIncremental(false);
+          this.page = 1;
+          // [PERF-11] pager path re-slices page 1; legacy path keeps toggle+virtual
+          if (this.pageSize > 0) {
+            this._renderVisibleChunk();
+            this.renderPager();
+          } else {
+            // show/hide via virtual slice instead of per-tr display toggle (faster)
+            this.rowElByPk.forEach((tr,pk)=>{
+              const hay=this.searchIndex.get(pk)||'';
+              tr.style.display = hay.indexOf(q)!==-1 ? '' : 'none';
+            });
+            // For large matched, use virtual rendering to limit DOM
+            if(matched.length > 120) {
+              this._recalcVirtual();
+              this.renderBodyIncremental(false);
+            }
           }
           this.updateCount();
         }
@@ -637,6 +708,14 @@ window.ERPDataTable = (function(){
             return asc ? a.s.localeCompare(b.s,'ar') : b.s.localeCompare(a.s,'ar');
           });
           for(let i=0;i<withKeys.length;i++) source[i]=withKeys[i].r;
+          // [PERF-11] pager path: reset to page 1 and re-slice (skip full-DOM reorder)
+          if (this.pageSize > 0) {
+            this.page = 1;
+            this._renderVisibleChunk();
+            this.renderPager();
+            this.updateCount();
+            return;
+          }
           // reindex search not needed, but rebuild row order via DOM move chunked
           const tbody=document.getElementById(this.tableId+'_tbody');
           if(!tbody) return;
@@ -691,8 +770,21 @@ window.ERPDataTable = (function(){
     }
     updateCount(){
       const el = document.getElementById(this.tableId + '_count');
-      const shown = this._filterActive ? this._visibleRows.length : this.rows.length;
-      if (el) el.textContent = 'العدد: ' + shown + (this.rows.length!==shown?' / '+this.rows.length:'') + (this.stamp ? ' — stamp:' + this.stamp : '');
+      const source = this._filterActive ? this._visibleRows : this.rows;
+      const shown = source.length;
+      if (el) {
+        // [PERF-11] "عرض X – Y من N سجل" range readout for the pager
+        if (this.pageSize > 0 && shown > this.pageSize) {
+          const totalPages = Math.max(1, Math.ceil(shown / this.pageSize));
+          const pg = Math.min(Math.max(1, this.page || 1), totalPages);
+          const from = (pg - 1) * this.pageSize + 1;
+          const to = Math.min(pg * this.pageSize, shown);
+          el.textContent = 'عرض ' + from + ' – ' + to + ' من ' + shown + ' سجل' + (this.rows.length!==shown?' (إجمالي ' + this.rows.length + ')':'');
+        } else {
+          el.textContent = 'العدد: ' + shown + (this.rows.length!==shown?' / '+this.rows.length:'') + (this.stamp ? ' — stamp:' + this.stamp : '');
+        }
+      }
+      this.renderPager();
     }
   }
 

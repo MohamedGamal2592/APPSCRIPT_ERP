@@ -215,7 +215,7 @@
       ['رصيد السيستم', s.available_amount],
       ['الفرق', s.difference || '-'],
       ['النسبة', s.percentage || '-'],
-      ['أضيف بواسطة', s.user || '-'],
+      ['أضيف بواسطة', uname_(s.user) || '-'],
       ['وقت الإضافة', s.created_at ? fmtDate(s.created_at) : '-']
     ];
     var body = rows.map(function (r) {

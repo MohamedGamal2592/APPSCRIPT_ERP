@@ -248,7 +248,7 @@
           employee_name: esc(r.employee_name || EMP_MAP[r.employee_code] || ''),
           status_type: esc(r.status_type),
           status_date: esc(fmtDate(r.status_date)),
-          user: esc(r.user),
+          user: esc(uname_(r.user)),
           created_at: esc(fmtDate(r.created_at))
         };
       });
@@ -303,7 +303,7 @@
           shift_start_date: esc(fmtDate(r.shift_start_date)),
           shift_end_date: esc(fmtDate(r.shift_end_date)),
           notes: esc(r.notes),
-          user: esc(r.user)
+          user: esc(uname_(r.user))
         };
       });
       document.getElementById('vf-emp-tab').innerHTML =
@@ -365,7 +365,7 @@
           basic_salary: Number(r.basic_salary) || 0,
           insurance_salary: Number(r.insurance_salary) || 0,
           insurance_allow: Number(r.insurance_allow) || 0,
-          user: esc(r.user)
+          user: esc(uname_(r.user))
         };
       });
       document.getElementById('vf-emp-tab').innerHTML =

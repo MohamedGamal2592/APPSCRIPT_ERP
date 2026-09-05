@@ -51,7 +51,7 @@
           item.innerHTML =
             '<div class="hist-head">' +
               '<span class="hist-action action-' + FMT.escape(c.action) + '">' + actionLabel + '</span>' +
-              '<span class="hist-user">' + FMT.escape(c.changed_by) + '</span>' +
+              '<span class="hist-user">' + FMT.escape(typeof uname_ === 'function' ? uname_(c.changed_by) : c.changed_by) + '</span>' +
               '<span class="hist-time">' + FMT.datetime(c.changed_at) + '</span>' +
             '</div>' + changed;
           box.appendChild(item);

@@ -139,7 +139,9 @@ const TopChemical = (function () {
     'add_legal_salary': { page: 'tc_budget_hr', access: 'write' },
     'get_income_statement': { page: 'tc_budget_income', access: 'read' },
     'get_kpi_data': { page: 'tc_kpi', access: 'read' },
-    'prefetch_refs': { page: 'tc_dashboard', access: 'read' }
+    'prefetch_refs': { page: 'tc_dashboard', access: 'read' },
+    'get_main_review': { page: 'tc_main_review', access: 'read' },
+    'revise_main_review': { page: 'tc_main_review', access: 'write' }
   };
 
   /** page for a module_action, reused for both access-control and logging. */
@@ -232,7 +234,9 @@ const TopChemical = (function () {
     'add_upload_file': '',
     'export_vat_purchasing_xlsx': LEGAL_PURCHASING_SHEET,
     'get_budget_refs': LEGAL_CHART_SHEET,
-    'prefetch_refs': PRODUCTS_SHEET
+    'prefetch_refs': PRODUCTS_SHEET,
+    'get_main_review': 'mysql:clients_AR',
+    'revise_main_review': 'mysql:clients_AR'
   };
 
   function tableForAction_(action) {
@@ -4261,6 +4265,20 @@ const valueMap = {};
     return { status: 'success' };
   }
   register('prefetch_refs', prefetchRefs_);
+
+  // ─── Main-system debts review (live MySQL view clients_AR) ──
+  // Thin wrappers: authority enforced by guard_() via PAGE_ACCESS above.
+  function getMainReview_(data, user, dbId) {
+    return dbClientsArList_(data || {}, user);
+  }
+  function reviseMainReview_(data, user, dbId) {
+    data = data || {};
+    var id = String(data.client_balance_sheet_id === undefined || data.client_balance_sheet_id === null ? '' : data.client_balance_sheet_id).trim();
+    if (!id) throw new Error('client_balance_sheet_id is required');
+    return dbClientsArRevise_({ client_balance_sheet_id: id }, user);
+  }
+  register('get_main_review', getMainReview_);
+  register('revise_main_review', reviseMainReview_);
 
   return { dispatch_: dispatch_, pageForAction_: pageForAction_, tableForAction_: tableForAction_ };
 })();

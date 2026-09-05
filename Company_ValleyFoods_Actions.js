@@ -461,12 +461,7 @@ const ValleyFoodsHREmp = (function () {
     return pad(d.getHours()) + ':' + pad(d.getMinutes());
   }
 
-  function writeFormula_(dbId, sheetName, rowNumber, headerName, formula) {
-    const sheet = getSheet_(sheetName, dbId);
-    const headers = getHeaders_(sheet);
-    const idx = headers.findIndex(function (h) { return String(h).trim().toLowerCase() === headerName.toLowerCase(); });
-    if (idx !== -1) sheet.getRange(rowNumber, idx + 1).setValue(formula);
-  }
+  /* writeFormula_ lives at GLOBAL scope in 02_DataAccess.js (shared by all IIFE namespaces). */
 
   /** Map of emp_code -> { status_type, date } keeping the latest status record. */
   function getLatestStatusMap_(dbId, statusesArg) {
@@ -3694,10 +3689,11 @@ const ValleyFoodsHRModules = (function () {
       if (String(s.valley_product_recipe_id || '').trim() !== recipeUid) return;
       if (s.is_active === false || String(s.is_active).toLowerCase() === 'false') return;
       var lossPct = Number(s.loss_percentage || 0) / 100;
+      var raw = (Number(s.required_qty || 0) * ratio) * (1 + lossPct);
       materials.push({
         raw_material_id: String(s.raw_material_id || ''),
         raw_material_name: String(s.raw_material_name || ''),
-        required_qty: (Number(s.required_qty || 0) * ratio) * (1 + lossPct),
+        required_qty: Math.ceil(raw / 10) * 10,
         work_center_name: String(s.work_center_name || '')
       });
     });
@@ -3715,6 +3711,16 @@ const ValleyFoodsHRModules = (function () {
       return (h() + h()).toLowerCase();
     }
 
+    /* Sheet-computed columns of valley_manufacture_by_product
+       (B=id, C=header uid, D=code, E=mfg date, G=item).
+       created_at is intentionally left as a full datetime value. */
+    function writeByproductFormulas_(dbId, r) {
+      writeFormula_(dbId, MFG_BYPRODUCT_SHEET, r, 'code', '=VLOOKUP(C' + r + ',valley_manufacture_header!A:E,5,0)');
+      writeFormula_(dbId, MFG_BYPRODUCT_SHEET, r, 'transaction_code', '=CONCATENATE(VLOOKUP(G' + r + ',valley_products!$A:$B,2,0),"-",D' + r + ',"-",G' + r + ',"-",TEXT(E' + r + ',"DD/MM/YYYY"))');
+      writeFormula_(dbId, MFG_BYPRODUCT_SHEET, r, 'total_cost', '=IF((VLOOKUP(G' + r + ',valley_products!$A:$I,9,0)*(VLOOKUP(C' + r + ',valley_manufacture_header!$A:$Y,10,0)+VLOOKUP(C' + r + ',valley_manufacture_header!$A:$Y,9,0)) / (SUMIFS(valley_manufacture_header!I:I,valley_manufacture_header!A:A,C' + r + ')+SUMIFS(valley_manufacture_header!J:J,valley_manufacture_header!A:A,C' + r + '))) > 0.25, (VLOOKUP(G' + r + ',valley_products!$A:$I,9,0)*(VLOOKUP(C' + r + ',valley_manufacture_header!$A:$Y,10,0)+VLOOKUP(C' + r + ',valley_manufacture_header!$A:$Y,9,0))) / 2, (VLOOKUP(G' + r + ',valley_products!$A:$I,9,0)*(VLOOKUP(C' + r + ',valley_manufacture_header!$A:$Y,10,0)+VLOOKUP(C' + r + ',valley_manufacture_header!$A:$Y,9,0))))');
+      writeFormula_(dbId, MFG_BYPRODUCT_SHEET, r, 'manufacture_internal_batch', '=CONCATENATE(TEXT(E' + r + ',"YYMMDD"),B' + r + ',G' + r + ',D' + r + ')');
+    }
+
     function saveValleyMfgOrder_(data, user, dbId) {
 
     var d = data || {};
@@ -3727,6 +3733,7 @@ const ValleyFoodsHRModules = (function () {
     if (!d.manufacture_date) throw new Error('تاريخ التصنيع مطلوب');
     var moDate = parseDate_(d.manufacture_date);
     if (!moDate) throw new Error('تاريخ التصنيع غير صالح');
+    moDate = new Date(moDate.getFullYear(), moDate.getMonth(), moDate.getDate()); /* date-only, strip time component */
     var opType = String(d.operation_type || '').trim();
     if (MFG_OP_TYPES.indexOf(opType) === -1) throw new Error('نوع العملية مطلوب');
     var shift = String(d.shift || '').trim();
@@ -3740,10 +3747,84 @@ const ValleyFoodsHRModules = (function () {
     if (!isFinite(expectedQty) || expectedQty <= 0) throw new Error('كمية الخام الداخلة يجب أن تكون أكبر من صفر (الكمية المتوقعة = الخام × 0.65)');
     var recipeUid = String(d.recipe_id || '').trim();
     var outputs = Array.isArray(d.outputs) ? d.outputs.filter(function (o) { return o && String(o.product_id || '').trim(); }) : [];
+    try { Logger.log('MFGTRACE payload: outputs_raw=' + (Array.isArray(d.outputs) ? d.outputs.length : 'NA') + ' outputs_kept=' + outputs.length + ' consumption_raw=' + (Array.isArray(d.consumption) ? d.consumption.length : 'NA') + ' work_ops=' + (Array.isArray(d.work_ops) ? d.work_ops.length : 'NA') + ' byproducts=' + (Array.isArray(d.byproducts) ? d.byproducts.length : 'NA') + ' mo_uid=' + String(d.mo_uid || '')); } catch (eLg) {}
     if (!outputs.length) throw new Error('أضف منتج ناتج واحد على الأقل');
       var consumption = Array.isArray(d.consumption) ? d.consumption.filter(function (cm) { return cm && String(cm.batch_uid || '').trim() && Number(cm.qty || 0) > 0; }) : [];
       var hasFooters = outputs.some(function (o) { return Array.isArray(o.footers) && o.footers.some(function (f) { return String(f.item || '').trim(); }); });
       if (!consumption.length && !hasFooters) throw new Error('خصص استهلاك الخامات من الدفعات أولاً');
+
+    /* Defensive: requested batch qty may not exceed the balance in valley_current_products.
+       Runs BEFORE anything is written, so a violation aborts cleanly with no orphan header. */
+    (function assertFooterBalances_() {
+      var needByBatch = {};
+      function need_(buid, q) {
+        buid = String(buid || '').trim(); q = Number(q) || 0;
+        if (buid && q > 0) needByBatch[buid] = Math.round(((needByBatch[buid] || 0) + q) * 1000) / 1000;
+      }
+      var nameMap = {};
+      try { getAllRecords_(dbId, FIN_PRODUCTS_SHEET).forEach(function (p) { nameMap[String(p.id)] = String(p.name_ar || p.id); }); } catch (eNm) {}
+      outputs.forEach(function (o) {
+        var opid = String(o.product_id || '').trim();
+        var payQty = Math.round((Number(o.qty) || 0) * 1000) / 1000;
+        var rows = (Array.isArray(o.footers) ? o.footers : []).filter(function (f) { return f && String(f.item || '').trim(); })
+          .map(function (f) { return { batch: String(f.item).trim(), qty: Math.round((Number(f.qty) || 0) * 1000) / 1000 }; });
+        var paySum = Math.round(rows.reduce(function (t, r) { return t + r.qty; }, 0) * 1000) / 1000;
+        if (Math.abs(paySum - payQty) > 0.01) {
+          throw new Error('مجموع الدفعات للصنف (' + (nameMap[opid] || opid || '?') + ') يجب أن يساوي كمية البند. مجموع الدفعات: ' + paySum + '، الكمية: ' + payQty);
+        }
+        /* normalize the ceil-to-10 parent rounding into the largest footer so stored sums match product_qty */
+        var storedQty = Math.ceil((Number(o.qty) || 0) / 10) * 10;
+        var delta = Math.round((storedQty - paySum) * 1000) / 1000;
+        if (Math.abs(delta) > 0.0000001 && rows.length) {
+          var mi = 0, mq = -Infinity;
+          rows.forEach(function (r, ix) { if (r.qty > mq) { mq = r.qty; mi = ix; } });
+          rows[mi].qty = Math.round((rows[mi].qty + delta) * 1000) / 1000;
+        }
+        rows.forEach(function (r) { need_(r.batch, r.qty); });
+      });
+      (Array.isArray(consumption) ? consumption : []).forEach(function (cm) { need_(cm.batch_uid, cm.qty); });
+      var batchIds = Object.keys(needByBatch);
+      if (!batchIds.length) return;
+      var balanceByBatch = {};
+      try {
+        getAllRecords_(dbId, 'valley_current_products').forEach(function (r) {
+          var u = String(r.unique_id || '').trim();
+          if (u && balanceByBatch[u] === undefined) balanceByBatch[u] = Number(r.current_qty) || 0;
+        });
+      } catch (eBal) {}
+      /* qty already consumed by OTHER manufacturing orders (own rows are rewritten on edit) */
+      var ownOutUids = {};
+      try {
+        if (editing && d.mo_uid) {
+          var myUid = String(d.mo_uid).trim();
+          getAllRecords_(dbId, MFG_ORDER_PRODUCTS_SHEET).forEach(function (o) {
+            if (String(o.valley_manufacture_header_id || '').trim() === myUid) ownOutUids[String(o.unique_id)] = true;
+          });
+        }
+      } catch (eOwn) {}
+      var usedByBatch = {};
+      try {
+        getAllRecords_(dbId, MFG_CONSUMPTION_SHEET).forEach(function (cm) {
+          if (ownOutUids[String(cm.valley_manufacture_header_product_id || '').trim()]) return;
+          var buid = String(cm.item || '').trim();
+          if (needByBatch[buid]) usedByBatch[buid] = Math.round(((usedByBatch[buid] || 0) + (Number(cm.qty) || 0)) * 1000) / 1000;
+        });
+      } catch (eUsed) {}
+      batchIds.forEach(function (buid) {
+        var avail = Math.round(((balanceByBatch[buid] || 0) - (usedByBatch[buid] || 0)) * 1000) / 1000;
+        if (needByBatch[buid] - avail > 0.001) {
+          var label = buid;
+          try {
+            outputs.forEach(function (o) {
+              (o.footers || []).forEach(function (f) {
+                if (String(f.item || '').trim() === buid && f.item_code) label = String(f.item_code);
+              });
+            });
+          } catch (eLbl) {}
+          throw new Error('الكمية المطلوبة من الدفعة (' + label + ') تتجاوز المتاح. المطلوب: ' + needByBatch[buid] + '، المتاح: ' + avail);
+        }
+      });
+    })();
 
     settingsEnsureSheet_(dbId, MFG_ORDER_SHEET, MFG_ORDER_HEADERS);
     settingsEnsureSheet_(dbId, MFG_ORDER_PRODUCTS_SHEET, MFG_OUTPUT_HEADERS);
@@ -3764,8 +3845,8 @@ const ValleyFoodsHRModules = (function () {
         for (var r0 = 1; r0 < moDataAll.length; r0++) {
           if (String(moDataAll[r0][uidIdx]).trim() === moUid) {
             moNumberId = Number(moDataAll[r0][idIdx]);
-            /* M4: Locked orders are immutable — unlock first */
-            if (stIdxG !== -1 && String(moDataAll[r0][stIdxG]).trim() === 'Locked' && !isSuperAdmin) {
+            /* M4: Locked orders are immutable for everyone — unlock first (lines sync only when not Locked) */
+            if (stIdxG !== -1 && String(moDataAll[r0][stIdxG]).trim() === 'Locked') {
               throw new Error('أمر التصنيع مقفل — قم بفتح القفل أولاً');
             }
             break;
@@ -3776,6 +3857,7 @@ const ValleyFoodsHRModules = (function () {
         moUid = uid16Hex_();
         moNumberId = getNextIdUnderLock_(dbId, MFG_ORDER_SHEET, 'id'); /* M5 canonical */
       }
+      try { Logger.log('MFGTRACE resolved: moUid=' + moUid + ' editing=' + editing + ' dbId=' + String(dbId).slice(0, 8) + '…'); } catch (eLg2) {}
 
       var catId = mfgProductCategory_(dbId, producedPid);
       var map = {};
@@ -3789,6 +3871,7 @@ const ValleyFoodsHRModules = (function () {
       map['actual_qty'] = d.actual_qty !== '' && d.actual_qty != null ? Number(d.actual_qty) : 0;
       map['expected_qty'] = expectedQty;
       map['recipe_id'] = recipeUid;
+      map['product_category'] = catId;
       map['transaction_type'] = 'التصنيع الداخلي';
       map['manufacture_batch'] = d.manufacture_batch !== undefined ? d.manufacture_batch : '';
       map['mo_status'] = editing ? String(d.mo_status || 'Draft') : 'Draft';
@@ -3813,7 +3896,7 @@ const ValleyFoodsHRModules = (function () {
             sheetMo.getRange(rr + 1, 1, 1, rowVals.length).setValues([rowVals]);
             var newObj = Object.assign({}, oldObj, map);
             var oldUid = oldObj.record_uid || ('upd_' + MFG_ORDER_SHEET + '_' + moUid);
-            logHistory_(dbId, MFG_ORDER_SHEET, oldUid, moUid, (user && user.email) || '', 'update', newObj, oldObj);
+            try { logHistory_(dbId, MFG_ORDER_SHEET, oldUid, moUid, (user && user.email) || '', 'update', newObj, oldObj); } catch (eHist) {}
             newRow = rr + 1;
             break;
           }
@@ -3826,6 +3909,10 @@ const ValleyFoodsHRModules = (function () {
 
       /* derived columns are SHEET FORMULAS (auto-adjust to the row) */
       var fx = newRow;
+      try {
+        var mdIdx = moHeaders.findIndex(function (h) { return String(h).trim() === 'manufacture_date'; });
+        if (fx && mdIdx !== -1) sheetMo.getRange(fx, mdIdx + 1).setNumberFormat('yyyy-MM-dd');
+      } catch (eFmt) {}
       writeFormula_(dbId, MFG_ORDER_SHEET, fx, 'transaction_code', '=CONCATENATE(VLOOKUP(M' + fx + ',valley_products!$A:$B,2,0),"-",E' + fx + ',"-",M' + fx + ',"-",TEXT(L' + fx + ',"DD/MM/YYYY"))');
       writeFormula_(dbId, MFG_ORDER_SHEET, fx, 'code', '=CONCATENATE("VM -", ROW()-1)');
       writeFormula_(dbId, MFG_ORDER_SHEET, fx, 'by_product_nrv_value', '=SUMIFS(valley_manufacture_by_product!I:I, valley_manufacture_by_product!C:C, A' + fx + ')');
@@ -3854,14 +3941,14 @@ const ValleyFoodsHRModules = (function () {
       var outputUidMap = {};
       var outStart = sheetOut.getLastRow() + 1;
       var outRows = outputs.map(function (o, oi) {
-        var outUid = Utilities.getUuid();
+        var outUid = uid16Hex_();
         outputUidMap[oi] = outUid;
         var m6 = {};
         m6['unique_id'] = outUid;
         m6['valley_manufacture_header_id'] = moUid;
         m6['product_id'] = String(o.product_id).trim();
         m6['product_name'] = prodNameMap[String(o.product_id)] || '';
-        m6['product_qty'] = Number(o.qty) || 0;
+        m6['product_qty'] = Math.ceil((Number(o.qty) || 0) / 10) * 10;
         m6['cost_unit'] = o.cost_unit != null ? o.cost_unit : '';
         m6['total_cost'] = o.total_cost != null ? o.total_cost : '';
         m6['user'] = (user && user.email) || '';
@@ -3871,6 +3958,7 @@ const ValleyFoodsHRModules = (function () {
           return m6[k] !== undefined ? m6[k] : '';
         });
       });
+      try { Logger.log('MFGTRACE outputs: rows=' + outRows.length + ' tab=' + sheetOut.getName() + ' startRow=' + outStart + ' cols=' + outHeaders.length); } catch (eLg3) {}
       if (outRows.length) {
         sheetOut.getRange(outStart, 1, outRows.length, outHeaders.length).setValues(outRows);
         for (var oi2 = 0; oi2 < outRows.length; oi2++) {
@@ -3890,15 +3978,24 @@ const ValleyFoodsHRModules = (function () {
       /* 1) Per-product footer rows (from outputs[].footers) */
       outputs.forEach(function (o, oi) {
         var outUid = outputUidMap[oi];
-        var footers = Array.isArray(o.footers) ? o.footers : [];
-        footers.forEach(function (f) {
-          if (!f || !String(f.item || '').trim()) return;
+        var footers = (Array.isArray(o.footers) ? o.footers : []).filter(function (f) { return f && String(f.item || '').trim(); });
+        var storedQty = Math.ceil((Number(o.qty) || 0) / 10) * 10;
+        var sumF = Math.round(footers.reduce(function (t, f) { return t + (Number(f.qty) || 0); }, 0) * 1000) / 1000;
+        var delta = Math.round((storedQty - sumF) * 1000) / 1000;
+        var deltaIx = -1;
+        if (Math.abs(delta) > 0.0000001 && footers.length) {
+          var mq = -Infinity;
+          footers.forEach(function (f, ix) { var q = Number(f.qty) || 0; if (q > mq) { mq = q; deltaIx = ix; } });
+        }
+        footers.forEach(function (f, fix) {
           var m7 = {};
-          m7['unique_id'] = Utilities.getUuid();
+          m7['unique_id'] = uid16Hex_();
           m7['valley_manufacture_header_product_id'] = outUid || moUid;
           m7['item'] = String(f.item || '').trim();
           m7['item_code'] = String(f.item_code || '');
-          m7['qty'] = Number(f.qty) || 0;
+          var fq = Math.round((Number(f.qty) || 0) * 1000) / 1000;
+          if (fix === deltaIx) fq = Math.round((fq + delta) * 1000) / 1000;
+          m7['qty'] = fq;
           m7['cost_unit'] = (f.unit_cost != null && String(f.unit_cost).trim() !== '') ? Number(f.unit_cost) : '';
           m7['created_at'] = new Date();
           m7['user'] = (user && user.email) || '';
@@ -3914,11 +4011,11 @@ const ValleyFoodsHRModules = (function () {
         var firstOutputUid = outputUidMap[0] || moUid;
         consRows = consumption.map(function (cm) {
           var m7 = {};
-          m7['unique_id'] = Utilities.getUuid();
+          m7['unique_id'] = uid16Hex_();
           m7['valley_manufacture_header_product_id'] = firstOutputUid;
           m7['item'] = String(cm.item_pid || '').trim();
           m7['item_code'] = String(cm.lot || '');
-          m7['qty'] = Number(cm.qty) || 0;
+          m7['qty'] = Math.round((Number(cm.qty) || 0) * 1000) / 1000;
           m7['created_at'] = new Date();
           m7['user'] = (user && user.email) || '';
           return consHeaders.map(function (h) {
@@ -3928,6 +4025,7 @@ const ValleyFoodsHRModules = (function () {
         });
       }
 
+      try { Logger.log('MFGTRACE consumption: rows=' + consRows.length + ' tab=' + sheetCons.getName() + ' consumption_in=' + consumption.length); } catch (eLg4) {}
       if (consRows.length) {
         var consStart2 = sheetCons.getLastRow() + 1;
         sheetCons.getRange(consStart2, 1, consRows.length, consHeaders.length).setValues(consRows);
@@ -3978,7 +4076,7 @@ const ValleyFoodsHRModules = (function () {
           updateRowByCriteria_(sheetWC, 'unique_id', editingUid, m);
           keepWcUids.push(editingUid);
         } else {
-          m['unique_id'] = Utilities.getUuid();
+          m['unique_id'] = uid16Hex_();
           m['id'] = getNextIdUnderLock_(dbId, WC_SHEET, 'id');
           m['valley_manufacture_header_id'] = moUid;
           m['user'] = (user && user.email) || '';
@@ -3991,6 +4089,7 @@ const ValleyFoodsHRModules = (function () {
       existingWC.forEach(function (r) {
         if (keepWcUids.indexOf(String(r.unique_id)) === -1) deleteRowsByCriteria_(sheetWC, 'unique_id', String(r.unique_id));
       });
+      try { Logger.log('MFGTRACE workops: in=' + (Array.isArray(d.work_ops) ? d.work_ops.length : 0) + ' kept=' + keepWcUids.length + ' tab=' + sheetWC.getName()); } catch (eLg5) {}
 
       /* work-center cost columns are SHEET FORMULAS */
       var wcAll = sheetWC.getDataRange().getValues();
@@ -4001,6 +4100,7 @@ const ValleyFoodsHRModules = (function () {
           if (String(wcAll[wr][wcUidIdx]).trim() === String(uid).trim()) {
             var rN = wr + 1;
             writeFormula_(dbId, WC_SHEET, rN, 'work_center_cost', '=VLOOKUP(E' + rN + ', valley_work_centers!$A:$I, 8, 0)');
+            writeFormula_(dbId, WC_SHEET, rN, 'actual_hours', '=(H' + rN + '-G' + rN + ')*24');
             writeFormula_(dbId, WC_SHEET, rN, 'total_cost', '=K' + rN + '*J' + rN);
             break;
           }
@@ -4016,7 +4116,7 @@ const ValleyFoodsHRModules = (function () {
       deleteRowsByCriteria_(sheetBP, 'valley_manufacture_header_id', moUid);
       var bpRows = (Array.isArray(d.byproducts) ? d.byproducts : []).map(function (b) {
         var m = {};
-        m['unique_id'] = Utilities.getUuid();
+        m['unique_id'] = uid16Hex_();
         m['id'] = getNextIdUnderLock_(dbId, BP_SHEET, 'id');
         m['valley_manufacture_header_id'] = moUid;
         m['item'] = String(b.item || '').trim();
@@ -4031,6 +4131,7 @@ const ValleyFoodsHRModules = (function () {
       if (bpRows.length) {
         var bpStart = sheetBP.getLastRow() + 1;
         sheetBP.getRange(bpStart, 1, bpRows.length, bpHeaders.length).setValues(bpRows);
+        for (var bi = 0; bi < bpRows.length; bi++) writeByproductFormulas_(dbId, bpStart + bi);
       }
     });
 
@@ -4091,7 +4192,7 @@ const ValleyFoodsHRModules = (function () {
           ? { production_approval: (user && user.email) || '', production_approval_time: new Date() }
           : { quality_approval: (user && user.email) || '', quality_approval_time: new Date() });
         var oldUid = oldObj.record_uid || ('upd_' + MFG_ORDER_SHEET + '_' + moUid);
-        logHistory_(dbId, MFG_ORDER_SHEET, oldUid, moUid, (user && user.email) || '', 'approve', newObj, oldObj);
+        try { logHistory_(dbId, MFG_ORDER_SHEET, oldUid, moUid, (user && user.email) || '', 'approve', newObj, oldObj); } catch (eHist) {}
         return { status: 'success', message: kind === 'production' ? 'تم اعتماد الإنتاج' : 'تم اعتماد الجودة' };
       }
     }
@@ -4141,8 +4242,17 @@ const ValleyFoodsHRModules = (function () {
       if (cur !== 'Draft') throw new Error('يمكن البدء فقط من حالة مسودة');
       next = 'In Progress';
     } else if (kind === 'lock') {
-      requireSuperAdmin_(user);
+      var canLock = !!(user && (user.isSuperAdmin || unifiedCheck_(user, '9940659bd83035d7', 'vf_mfg_orders', 'write')));
+      if (!canLock) throw new Error('القفل يتطلب صلاحية الكتابة على أوامر التصنيع');
       if (cur !== 'In Progress') throw new Error('يمكن القفل فقط من حالة قيد التنفيذ');
+      var fullLock = getValleyMfgOrderFull_({ mo_uid: moUid }, user, dbId);
+      (fullLock.outputs || []).forEach(function (o) {
+        var pq = Math.round((Number(o.product_qty) || 0) * 1000) / 1000;
+        var ps = Math.round(((o.footers || []).reduce(function (t, f) { return t + (Number(f.qty) || 0); }, 0)) * 1000) / 1000;
+        if (Math.abs(ps - pq) > 0.01) {
+          throw new Error('لا يمكن القفل: مجموع دفعات الصنف (' + (o.product_name || o.product_id) + ') لا يساوي كمية البند. المجموع: ' + ps + '، الكمية: ' + pq);
+        }
+      });
       next = 'Locked';
     } else { /* unlock */
       requireSuperAdmin_(user);
@@ -4188,10 +4298,11 @@ const ValleyFoodsHRModules = (function () {
       });
       if (s.raw_material_id) {
         var lossPct = Number(s.loss_percentage || 0) / 100;
+        var raw = (Number(s.required_qty || 0) * ratio) * (1 + lossPct);
         materials.push({
           raw_material_id: String(s.raw_material_id || ''),
           raw_material_name: String(s.raw_material_name || ''),
-          required_qty: (Number(s.required_qty || 0) * ratio) * (1 + lossPct)
+          required_qty: Math.ceil(raw / 10) * 10
         });
       }
     });
@@ -4429,7 +4540,7 @@ const ValleyFoodsHRModules = (function () {
       var headers = getHeaders_(sheet);
       var dataAll = sheet.getDataRange().getValues();
       var m8 = {};
-      m8['unique_id'] = Utilities.getUuid();
+      m8['unique_id'] = uid16Hex_();
       m8['id'] = getNextIdUnderLock_(dbId, MFG_BYPRODUCT_SHEET, 'id'); /* M5 */
       m8['valley_manufacture_header_id'] = moUid;
       m8['item'] = Number(pid) || pid;
@@ -4443,6 +4554,7 @@ const ValleyFoodsHRModules = (function () {
         return m8[k] !== undefined ? m8[k] : '';
       });
       sheet.appendRow(values);
+      writeByproductFormulas_(dbId, sheet.getLastRow());
       var _prodNameBP = '';
       try { getAllRecords_(dbId, FIN_PRODUCTS_SHEET).forEach(function(pp){ if (String(pp.id)===String(pid)) _prodNameBP = String(pp.name_ar || pp.id); }); } catch(e){}
       _savedBP = {
@@ -4593,16 +4705,20 @@ const ValleyFoodsHRModules = (function () {
       map['last_pause_time'] = '';
       map['total_pause_duration'] = Math.round(pauseDur * 100) / 100;
     } else if (cmd === 'stop') {
-      if (curStatus !== 'In Progress' && curStatus !== 'Paused') throw new Error('يمكن الإيقاف فقط من حالة In Progress أو Paused');
+      var manualStart = parseDt_(d.start_time);
+      var manualEnd = parseDt_(d.end_time);
+      var manualDone = (curStatus === 'Pending' && manualStart && manualEnd);
+      if (curStatus !== 'In Progress' && curStatus !== 'Paused' && !manualDone) throw new Error('يمكن الإيقاف فقط من حالة In Progress أو Paused');
       map['operation_status'] = 'Done';
-      var endTime = parseDt_(d.end_time) || now;
+      var endTime = manualEnd || parseDt_(d.end_time) || now;
       map['end_time'] = endTime;
+      if (manualDone) map['start_time'] = manualStart;
       if (curStatus === 'Paused' && lastPause) {
         var pauseMsStop = endTime.getTime() - new Date(lastPause).getTime();
         pauseDur += pauseMsStop / 3600000;
         map['total_pause_duration'] = Math.round(pauseDur * 100) / 100;
       }
-      var startTime = parseDt_(found.row.start_time);
+      var startTime = manualDone ? manualStart : parseDt_(found.row.start_time);
       if (startTime && !isNaN(startTime.getTime())) {
         var totalMs = endTime.getTime() - startTime.getTime();
         var totalHours = (totalMs / 3600000) - pauseDur;
@@ -5206,6 +5322,7 @@ const ValleyFoodsHRModules = (function () {
         box_name: boxNames[finResolveBoxKey_(boxMap, r.related_box)] || '',
         chart_code: r.chart_code != null ? r.chart_code : '',
         chart_name: r.chart_name || '',
+        user: r.user || '',
         tax_system_bool: !(r.tax_system === false || String(r.tax_system).toLowerCase() === 'no' || r.tax_system === ''),
         approved_bool: !(r.approved === false || String(r.approved).toLowerCase() === 'no' || r.approved === '')
       };

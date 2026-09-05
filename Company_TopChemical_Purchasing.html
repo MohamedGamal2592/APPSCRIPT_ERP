@@ -262,7 +262,7 @@
       ['الكمية', p.qty],
       ['سعر الوحدة', p.price],
       ['تاريخ الاستلام', fmtDate(p.receipt_date)],
-      ['أضيف بواسطة', p.user || '-'],
+      ['أضيف بواسطة', uname_(p.user) || '-'],
       ['وقت الإضافة', p.created_at ? fmtDate(p.created_at) : '-']
     ];
     var body = rows.map(function (r) {

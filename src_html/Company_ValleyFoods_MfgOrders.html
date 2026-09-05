@@ -124,8 +124,8 @@
             var actions = UIC.actionBtns([
               { label: 'فتح', onclick: 'MFG_PAGE.openDetail(\'' + esc(o.unique_id) + '\')' },
               (IS_SUPER_ADMIN || CAN_WRITE) && o.mo_status === 'Draft' ? { label: '▶️ بدء', onclick: 'MFG_PAGE.changeStatus(\'' + esc(o.unique_id) + '\',\'start\')' } : null,
-              (IS_SUPER_ADMIN || CAN_WRITE) && isInProgress && IS_SUPER_ADMIN ? { label: '🔒 قفل', color: '#b45309', onclick: 'MFG_PAGE.changeStatus(\'' + esc(o.unique_id) + '\',\'lock\')' } : null,
-              (IS_SUPER_ADMIN || CAN_WRITE) && isLocked && IS_SUPER_ADMIN ? { label: '🔓 فتق القفل', color: '#b45309', onclick: 'MFG_PAGE.changeStatus(\'' + esc(o.unique_id) + '\',\'unlock\')' } : null,
+              (IS_SUPER_ADMIN || CAN_WRITE) && isInProgress ? { label: '🏁 إنهاء', color: '#b45309', onclick: 'MFG_PAGE.changeStatus(\'' + esc(o.unique_id) + '\',\'lock\')' } : null,
+              (IS_SUPER_ADMIN || CAN_WRITE) && isLocked && IS_SUPER_ADMIN ? { label: '🔓 فتح القفل', color: '#b45309', onclick: 'MFG_PAGE.changeStatus(\'' + esc(o.unique_id) + '\',\'unlock\')' } : null,
               IS_SUPER_ADMIN ? { label: 'حذف', color: '#dc2626', onclick: 'MFG_PAGE.remove(\'' + esc(o.unique_id) + '\')' } : null
             ].filter(Boolean));
             var statusLabel = isLocked ? 'مقفل' : (isInProgress ? 'قيد التنفيذ' : 'مسودة');

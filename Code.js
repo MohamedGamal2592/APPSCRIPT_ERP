@@ -102,8 +102,11 @@ function doGet(e) {
   var rendered = tmpl.evaluate().getContent();
   rendered = rendered.split('__APP_WEB_URL__').join(scriptUrl)
                    .split('__APP_SESSION_TOKEN__').join(CURRENT_SESSION_TOKEN);
+  var userNamesJson = '{}';
+  try { userNamesJson = JSON.stringify(userNameMap_()).replace(/</g, '\\u003c'); } catch (eUN) {}
   var headInjection = '<meta name="app-web-url" content="' + scriptUrl + '">'
-    + '<script>try{window.scriptUrl=document.querySelector(\'meta[name="app-web-url"]\').getAttribute(\'content\')||\'\';}catch(e){}</' + 'script>';
+    + '<script>try{window.scriptUrl=document.querySelector(\'meta[name="app-web-url"]\').getAttribute(\'content\')||\'\';}catch(e){}</' + 'script>'
+    + '<script>window.USER_NAMES=' + userNamesJson + ';</' + 'script>';
   rendered = rendered.replace('<head>', '<head>' + headInjection);
   return _frame(HtmlService.createHtmlOutput(rendered)).setTitle(page.title).addMetaTag('viewport', 'width=device-width, initial-scale=1');
 }

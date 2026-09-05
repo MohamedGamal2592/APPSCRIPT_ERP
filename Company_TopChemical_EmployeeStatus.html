@@ -68,7 +68,8 @@
         window.__rows = r.rows || [];
         window.__empOptions = r.employee_options || [];
         window.__statusOptions = r.status_options || [];
-        renderStatus try{schedulePrefetch();}catch(e){}();
+        renderStatus();
+        try { schedulePrefetch(); } catch (e) {}
       })
       .catch(function (e) { showError(e); })
       .finally(function () { UI.hideSpinner(); });

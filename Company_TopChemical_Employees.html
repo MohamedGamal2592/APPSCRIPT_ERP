@@ -66,7 +66,8 @@
         window.__employees = r.employees || [];
         window.__titleOptions = r.title_options || [];
         window.__categoryOptions = r.category_options || [];
-        renderEmployees try{schedulePrefetch();}catch(e){}();
+        renderEmployees();
+        try { schedulePrefetch(); } catch (e) {}
       })
       .catch(function (e) { showError(e); })
       .finally(function () { UI.hideSpinner(); });

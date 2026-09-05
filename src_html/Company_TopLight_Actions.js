@@ -1156,9 +1156,10 @@ const TopLight = (function () {
   }
 
   function customerSalesOptions_(dbId) {
-    return getAllRecords_(dbId, CUSTOMERS_SHEET).map(c => ({
-      value: c.id,
-      label: c.name,
+    const raw = getAllRecords_(dbId, CUSTOMERS_SHEET);
+    return (raw || []).map(c => ({
+      value: c.id != null ? c.id : (c.value != null ? c.value : ''),
+      label: c.name || c.label || String(c.id != null ? c.id : (c.value || '')),
       tax_id: c.tax_id || '',
       telephone: c.telephone || '',
       address: c.address || ''
@@ -1418,10 +1419,36 @@ const TopLight = (function () {
       rec.customer_name = custNames[String(r.name)] || '';
       return rec;
     });
+    let totalDebit = 0;
+    let totalCredit = 0;
+    let totalBalance = 0;
+    let totalCount = 0;
+    const KPI_EXCLUDED_BOXES = ['111103'];
+    rows.forEach(r => {
+      const bx = String((r.related_box == null) ? '' : r.related_box).trim();
+      if (KPI_EXCLUDED_BOXES.indexOf(bx) !== -1) return;
+      const t = num0_(r.total != null && r.total !== '' ? r.total : r.transaction_amount);
+      const b = num0_(r.balance_amount);
+      if (String(r.transaction_type).trim() === 'Credit') {
+        totalCredit += t;
+      } else {
+        totalDebit += t;
+      }
+      totalBalance += b;
+      totalCount++;
+    });
+    const summary = {
+      total_debit: totalDebit,
+      total_credit: totalCredit,
+      total_balance: totalBalance,
+      total_count: totalCount
+    };
+
     return {
       status: 'success',
       headers: headers,
       boxes: boxBalanceSummary_(dbId, boxNames),
+      summary: summary,
       options: cashOptions_(dbId)
     };
   }
@@ -1674,14 +1701,14 @@ const TopLight = (function () {
       sheet.getRange(rowNum, idx['net_amount'] + 1).setFormula(
         '=IF(' + S + rowNum + '="فودافون كاش",' + H + rowNum + '*' + AA + rowNum + ',(' + H + rowNum + '-' + I + rowNum + ')*' + AA + rowNum + ')');
     }
-    if (idx['total'] !== undefined && N !== undefined && K !== undefined && AA !== undefined) {
+    if (idx['total'] !== undefined && H !== undefined && I !== undefined && K !== undefined && AA !== undefined) {
       sheet.getRange(rowNum, idx['total'] + 1).setFormula(
-        '=' + N + rowNum + '+' + K + rowNum + '*' + AA + rowNum);
+        '=((' + H + rowNum + '-' + I + rowNum + ')*' + AA + rowNum + ')+(' + K + rowNum + '*' + AA + rowNum + ')');
     }
-    if (B !== undefined && M !== undefined && S !== undefined && H !== undefined && I !== undefined && K !== undefined && AA !== undefined) {
-      const inner = 'IF(' + S + rowNum + '="فودافون كاش",' + H + rowNum + '*' + AA + rowNum + ',(' + H + rowNum + '-' + I + rowNum + ')*' + AA + rowNum + ')+' + K + rowNum + '*' + AA + rowNum;
+    if (B !== undefined && M !== undefined && H !== undefined && I !== undefined && K !== undefined && AA !== undefined) {
+      const totExpr = '(((' + H + rowNum + '-' + I + rowNum + ')*' + AA + rowNum + ')+(' + K + rowNum + '*' + AA + rowNum + '))';
       sheet.getRange(rowNum, idx['balance_amount'] + 1).setFormula(
-        '=IF(' + M + rowNum + '="Credit",(' + inner + ')*-1,' + inner + ')');
+        '=IF(' + M + rowNum + '="Credit",-1*' + totExpr + ',' + totExpr + ')');
     }
     if (B !== undefined && P !== undefined) {
       sheet.getRange(rowNum, idx['box_balance'] + 1).setFormula(
@@ -1802,7 +1829,11 @@ const TopLight = (function () {
       const customer = String((r.name == null) ? '' : r.name).trim();
       if (!customer) return;
       const rate = num0_(r.exchange_rate) || 1;
-      const base = num0_(r.transaction_amount) * rate - num0_(r.total_discount) * rate + num0_(r.taxes) * rate;
+      const method = String((r.transaction_method == null) ? '' : r.transaction_method).trim();
+      const isVodafone = method === 'فودافون كاش';
+      const base = isVodafone
+        ? num0_(r.transaction_amount) * rate
+        : (r.total != null && r.total !== '' ? num0_(r.total) : ((num0_(r.transaction_amount) - num0_(r.total_discount) + num0_(r.taxes)) * rate));
       const isDebit = String((r.transaction_type == null) ? '' : r.transaction_type).trim() === 'Debit';
       movements.push({
         customer: customer,
