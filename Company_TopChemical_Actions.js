@@ -960,14 +960,23 @@ const TopChemical = (function () {
         if (key === 'invoice_id') return invoiceId;
         return '';
       });
+      // Phase 8 (F-04): appendRow + setFormula -> one setValues. The formula
+      // string, the column it lands in and the guard around it are unchanged —
+      // only the destination moves from the sheet to the row being written.
+      // setValues treats a leading '=' as a formula exactly as appendRow and
+      // setFormula do. Already inside executeWithLock_, so the precomputed
+      // target row is safe against a concurrent append and is the same row
+      // appendRow would have used; ensureGridRows_ grows the grid the way
+      // appendRow did implicitly.
       const rowNum = sheet.getLastRow() + 1;
-      sheet.appendRow(rowValues);
       const nameIdx = headers.findIndex(h => String(h).trim().toLowerCase() === 'name_ar');
       const clientIdx = headers.findIndex(h => String(h).trim().toLowerCase() === 'client');
       if (nameIdx !== -1 && clientIdx !== -1) {
-        sheet.getRange(rowNum, nameIdx + 1).setFormula(
-          '=VLOOKUP(' + colLetter_(clientIdx) + rowNum + ',clients_vendors!A:B,2,0)');
+        rowValues[nameIdx] =
+          '=VLOOKUP(' + colLetter_(clientIdx) + rowNum + ',clients_vendors!A:B,2,0)';
       }
+      ensureGridRows_(sheet, rowNum);
+      sheet.getRange(rowNum, 1, 1, rowValues.length).setValues([rowValues]);
       var cMap = clientVendorRefs_(dbId).map;
       var savedRecord = {
         id: id,
@@ -1443,22 +1452,37 @@ const TopChemical = (function () {
       if (key === 'created_at') return new Date();
       return ''; // formula columns start blank
     });
-    const rowNum = sheet.getLastRow() + 1;
-    sheet.appendRow(rowValues);
-
-    headers.forEach(function (h, i) {
-      const key = String(h).trim().toLowerCase();
-      let f = '';
-      if (key === 'name_ar') f = '=VLOOKUP(A' + rowNum + ',products!A:C,3,0)';
-      if (key === 'category') f = '=INDEX(products!E:E,MATCH(A' + rowNum + ',products!A:A,0))';
-      if (key === 'unit') f = '=INDEX(products!D:D,MATCH(A' + rowNum + ',products!A:A,0))';
-      if (key === 'difference') {
-        f = '=IF(ISBLANK(I' + rowNum + '),"",IF(I' + rowNum + '-F' + rowNum + '=0,"مظبوط",IF(I' + rowNum + '>F' + rowNum + ',ROUND(I' + rowNum + '-F' + rowNum + ',2) & "  عجز",ROUND(I' + rowNum + '-F' + rowNum + ',2) & "  زيادة")))';
-      }
-      if (key === 'percentage') {
-        f = '=iferror(IF(ISBLANK(I' + rowNum + '),"",IF(1-((F' + rowNum + '-I' + rowNum + ')/I' + rowNum + ')>1,F' + rowNum + '/I' + rowNum + ',1-((F' + rowNum + '-I' + rowNum + ')/I' + rowNum + '))),"")';
-      }
-      if (f) sheet.getRange(rowNum, i + 1).setFormula(f);
+    // Phase 8 (F-04): appendRow + up to 5 setFormula -> one setValues. The loop
+    // below is the original, unchanged in its conditions, its formula strings
+    // and the column each one targets; the only difference is that it writes
+    // into rowValues instead of issuing a setFormula per column.
+    //
+    // Unlike the other two converted sites in this file, this handler holds no
+    // lock, and a precomputed target range — unlike appendRow — is not safe
+    // against a concurrent append: two saves could otherwise compute the same
+    // row and one would silently overwrite the other. The write therefore runs
+    // inside executeWithLock_ (reentrant, so nesting is harmless), with the row
+    // number computed inside it. ensureGridRows_ grows the grid the way
+    // appendRow did implicitly.
+    let rowNum;
+    executeWithLock_(function () {
+      rowNum = sheet.getLastRow() + 1;
+      headers.forEach(function (h, i) {
+        const key = String(h).trim().toLowerCase();
+        let f = '';
+        if (key === 'name_ar') f = '=VLOOKUP(A' + rowNum + ',products!A:C,3,0)';
+        if (key === 'category') f = '=INDEX(products!E:E,MATCH(A' + rowNum + ',products!A:A,0))';
+        if (key === 'unit') f = '=INDEX(products!D:D,MATCH(A' + rowNum + ',products!A:A,0))';
+        if (key === 'difference') {
+          f = '=IF(ISBLANK(I' + rowNum + '),"",IF(I' + rowNum + '-F' + rowNum + '=0,"مظبوط",IF(I' + rowNum + '>F' + rowNum + ',ROUND(I' + rowNum + '-F' + rowNum + ',2) & "  عجز",ROUND(I' + rowNum + '-F' + rowNum + ',2) & "  زيادة")))';
+        }
+        if (key === 'percentage') {
+          f = '=iferror(IF(ISBLANK(I' + rowNum + '),"",IF(1-((F' + rowNum + '-I' + rowNum + ')/I' + rowNum + ')>1,F' + rowNum + '/I' + rowNum + ',1-((F' + rowNum + '-I' + rowNum + ')/I' + rowNum + '))),"")';
+        }
+        if (f) rowValues[i] = f;
+      });
+      ensureGridRows_(sheet, rowNum);
+      sheet.getRange(rowNum, 1, 1, rowValues.length).setValues([rowValues]);
     });
     var prodMap = productRefs_(dbId).map;
     var savedRecord = {
@@ -2002,8 +2026,11 @@ const TopChemical = (function () {
         const key = String(h).trim().toLowerCase();
         return rec[key] !== undefined ? rec[key] : '';
       });
+      // Phase 8 (F-04): appendRow + setFormula -> one setValues. Same loop, same
+      // condition, same formula string, same target column — only the
+      // destination changes. Already inside executeWithLock_, so the precomputed
+      // row is safe and identical to appendRow's.
       const rowNum = sheet.getLastRow() + 1;
-      sheet.appendRow(rowValues);
       headers.forEach(function (h, i) {
         const key = String(h).trim().toLowerCase();
         if (key === 'approval_expiry_date') {
@@ -2011,9 +2038,11 @@ const TopChemical = (function () {
             return String(hh).trim().toLowerCase() === 'approval_date';
           });
           const ref = colLetter_(dateIdx === -1 ? i : dateIdx) + rowNum;
-          sheet.getRange(rowNum, i + 1).setFormula('=IF(ISBLANK(' + ref + '),"",' + ref + '+180)');
+          rowValues[i] = '=IF(ISBLANK(' + ref + '),"",' + ref + '+180)';
         }
       });
+      ensureGridRows_(sheet, rowNum);
+      sheet.getRange(rowNum, 1, 1, rowValues.length).setValues([rowValues]);
       try { logHistory_(dbId, IMPORT_FOLLOW_SHEET, rec.record_uid || ('create_'+IMPORT_FOLLOW_SHEET+'_'+id), String(id), (user&&user.email)||'', 'create', rec, null); } catch(e){}
       var pMapImp = productRefs_(dbId).map;
       var savedRecord = {

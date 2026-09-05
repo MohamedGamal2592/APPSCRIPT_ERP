@@ -162,7 +162,12 @@ function writeFormula_(dbId, sheetName, rowNumber, headerName, formula) {
  */
 function applyRowFormulas_(rowValues, headers, formulaMap) {
   const idx = {};
-  headers.forEach(function (h, i) { idx[String(h).trim().toLowerCase()] = i; });
+  // First match wins, exactly as writeFormula_'s findIndex does, so a sheet with
+  // two columns trimming to the same header name behaves identically.
+  headers.forEach(function (h, i) {
+    const k = String(h).trim().toLowerCase();
+    if (idx[k] === undefined) idx[k] = i;
+  });
   Object.keys(formulaMap).forEach(function (name) {
     const i = idx[String(name).trim().toLowerCase()];
     if (i !== undefined) rowValues[i] = formulaMap[name];
@@ -182,7 +187,12 @@ function applyRowFormulas_(rowValues, headers, formulaMap) {
  */
 function writeRowFormulas_(sheet, headers, rowNum, formulaMap) {
   const idx = {};
-  headers.forEach(function (h, i) { idx[String(h).trim().toLowerCase()] = i; });
+  // First match wins, exactly as writeFormula_'s findIndex does, so a sheet with
+  // two columns trimming to the same header name behaves identically.
+  headers.forEach(function (h, i) {
+    const k = String(h).trim().toLowerCase();
+    if (idx[k] === undefined) idx[k] = i;
+  });
   const cols = [];
   Object.keys(formulaMap).forEach(function (name) {
     const i = idx[String(name).trim().toLowerCase()];
