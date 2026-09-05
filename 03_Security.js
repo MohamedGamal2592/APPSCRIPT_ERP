@@ -455,11 +455,16 @@ function ensureSystemWorkSheet_() {
     let sheet = ss.getSheetByName('ERP_system_work');
     if (!sheet) {
       sheet = ss.insertSheet('ERP_system_work');
+      noteMutation_();
       // Row 1: labels; B2 holds the flag, seeded to 1 (system working).
       sheet.getRange('B1').setValue('on_off');
+      noteMutation_();
       sheet.getRange('C1').setValue('updated_at');
+      noteMutation_();
       sheet.getRange('D1').setValue('updated_by');
+      noteMutation_();
       sheet.getRange('B2').setValue(1);
+      noteMutation_();
       sheet.getRange('A1').activate();
       return sheet;
     }

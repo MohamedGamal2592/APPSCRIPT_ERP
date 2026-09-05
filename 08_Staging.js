@@ -71,6 +71,7 @@ function stagingCreateEnvironment() {
         }
       }
       if (changed) compSheet.getRange(1, 1, values.length, values[0].length).setValues(values);
+      noteMutation_();
     }
   }
 
@@ -78,6 +79,7 @@ function stagingCreateEnvironment() {
   var sessSheet = stagingSs.getSheetByName('ERP_Sessions');
   if (sessSheet && sessSheet.getLastRow() > 1) {
     sessSheet.getRange(2, 1, sessSheet.getLastRow() - 1, sessSheet.getLastColumn()).clearContent();
+    noteMutation_();
   }
 
   return {

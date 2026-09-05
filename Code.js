@@ -283,12 +283,46 @@ function isReadAction_(action) {
   return action === 'ping' || action.indexOf('get_') === 0 || action.indexOf('admin_list_') === 0;
 }
 
+/**
+ * Phase 9. Whether this request can write anything.
+ *
+ * The reason F-01's "the memo is disabled for writes" description understated
+ * the problem: every company page calls the single route 'company_action', so
+ * testing request.action alone classified EVERY company request — reads included
+ * — as a write. The real action for those lives in payload.module_action, and
+ * that is what is tested here.
+ *
+ * Used only to arm the memo's shape guard, so a misclassification costs
+ * performance, never correctness: a read wrongly called a write just pays the
+ * guard, and a write wrongly called a read still has noteMutation_ underneath it.
+ */
+function requestMayWrite_(request) {
+  let a = String((request && request.action) || '');
+  if (a === 'company_action') {
+    a = String((request.payload && request.payload.module_action) || '');
+  }
+  return !isReadAction_(a);
+}
+
 function apiRouter_(request) {
-  // Batch 1: request-scoped memoization for getAllRecords_() — start every
-  // invocation with a fresh cache; only let read actions benefit from it so a
-  // mutating action can never read a stale memoized sheet.
+  // Request-scoped memoization for getAllRecords_() — start every invocation
+  // with a fresh cache.
+  //
+  // Phase 9 (F-01): the unconditional disableRecordCache_() for non-read actions
+  // is GONE. It was doing far more than its comment claimed. isReadAction_ tests
+  // the ROUTER action, and every company page calls the single route
+  // 'company_action' — which never starts with 'get_'. So the memo was switched
+  // off for every company request in the application, reads included, not just
+  // for writes. get_sales_headers, get_valley_purchasing_costing and every other
+  // list endpoint have been paying full re-reads for repeated access to the same
+  // sheet within one request.
+  //
+  // The memo now starts enabled and the first mutation disables it for the rest
+  // of the request (noteMutation_ in 02_DataAccess.js). A read action never
+  // mutates, so it keeps the memo throughout; a write action behaves exactly as
+  // today from its first write onward.
   resetRecordCache_();
-  if (!isReadAction_(request.action)) disableRecordCache_();
+  setMemoGuard_(requestMayWrite_(request));
   ensureCompaniesRegistered_();
   let startTime = new Date();
   let result;
@@ -322,6 +356,12 @@ function apiRouter_(request) {
       return { status: 'error', code: 'SYSTEM_DISABLED', message: 'عطل في السيستم' };
     }
 
+    // Phase 9: re-arm the memo immediately before the handler. The preamble
+    // above authenticates and may touch the session row, and that write would
+    // otherwise disable the memo for the whole request through noteMutation_ —
+    // costing the handler its memo because of a write it does not care about.
+    // Safe: the memo is empty here, so nothing in it can predate those writes.
+    rearmRecordCache_();
     result = jsonSafe_(route.handler(request.payload, request.sessionToken, authUser));
     
     // Log successful operation
@@ -419,8 +459,11 @@ function toggleKillSwitch_(payload, sessionToken, authUser) {
 
   const newValue = !!payload.on;
   sheet.getRange('B2').setValue(newValue ? 1 : 0);
+  noteMutation_();
   sheet.getRange('C2').setValue(new Date());
+  noteMutation_();
   sheet.getRange('D2').setValue((authUser && authUser.email) || '');
+  noteMutation_();
   // Explicit invalidation — onEdit does NOT fire for script writes.
   bumpVersion_('ERP_system_work');
   return { status: 'success', message: newValue ? 'تم تشغيل النظام' : 'تم إيقاف النظام', enabled: newValue };
@@ -485,7 +528,7 @@ function logClientError_(payload) {
     payload = payload || {};
     const ss = getSpreadsheet_(CONFIG.AUTH_SPREADSHEET_ID);
     let sh = ss.getSheetByName('ERP_Client_Log');
-    if (!sh) { sh = ss.insertSheet('ERP_Client_Log'); sh.appendRow(['ts', 'page', 'message', 'stack', 'url', 'user_email']); }
+    if (!sh) { sh = ss.insertSheet('ERP_Client_Log'); sh.appendRow(['ts', 'page', 'message', 'stack', 'url', 'user_email']); noteMutation_(); }
     sh.appendRow([
       new Date().toISOString(),
       String(payload.page || ''),
@@ -494,6 +537,7 @@ function logClientError_(payload) {
       String(payload.url || '').slice(0, 1500),
       String(payload.user || '').slice(0, 200)
     ]);
+    noteMutation_();
     return { status: 'success' };
   } catch (e) {
     return { status: 'error', message: e.message };
@@ -547,7 +591,9 @@ function logClientPerf_(payload) {
     let sh = ss.getSheetByName('ERP_Client_Perf');
     if (!sh) {
       sh = ss.insertSheet('ERP_Client_Perf');
+      noteMutation_();
       sh.appendRow(['ts', 'page', 'metric', 'ms', 'url', 'user_email']);
+      noteMutation_();
     }
     sh.appendRow([
       new Date().toISOString(),
@@ -557,6 +603,7 @@ function logClientPerf_(payload) {
       String(payload.url || '').slice(0, 1500),
       String(payload.user || '').slice(0, 200)
     ]);
+    noteMutation_();
     return { status: 'success' };
   } catch (e) {
     return { status: 'error', message: e.message };
@@ -680,7 +727,9 @@ function ensureSystemLogSheet_() {
     let sheet = ss.getSheetByName('SystemLog');
     if (!sheet) {
       sheet = ss.insertSheet('SystemLog');
+      noteMutation_();
       sheet.appendRow(SYSTEM_LOG_HEADERS);
+      noteMutation_();
       return sheet;
     }
     // Sheet already exists live — migrate in place. Only ADD missing headers
@@ -689,6 +738,7 @@ function ensureSystemLogSheet_() {
     const missing = SYSTEM_LOG_HEADERS.filter(function (h) { return existing.indexOf(h) === -1; });
     if (missing.length) {
       sheet.getRange(1, existing.length + 1, 1, missing.length).setValues([missing]);
+      noteMutation_();
       delete _headerCache_[sheet.getParent().getId() + '_' + sheet.getSheetId()]; // bust getHeaders_ cache
     }
     return sheet;
@@ -1000,6 +1050,7 @@ function cleanupOldSessions_(payload, sessionToken, authUser) {
         var exp = (raw instanceof Date) ? raw : new Date(raw);
         if (!isNaN(exp.getTime()) && now > exp.getTime()) {
           sheet.deleteRow(i + 1);
+          noteMutation_();
           removed++;
         }
       }

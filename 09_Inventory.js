@@ -177,7 +177,9 @@ function inventoryWriteReport_(report) {
   var ss = getSpreadsheet_(CONFIG.AUTH_SPREADSHEET_ID);
   var old = ss.getSheetByName('ERP_Perf_Inventory');
   if (old) ss.deleteSheet(old);
+  noteMutation_();
   var sh = ss.insertSheet('ERP_Perf_Inventory');
+  noteMutation_();
 
   var rows = [['SECTION', 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']];
   rows.push(['generated', report.generatedAt, '', '', '', '', '', '', '']);
@@ -203,6 +205,7 @@ function inventoryWriteReport_(report) {
   });
 
   sh.getRange(1, 1, rows.length, 9).setValues(rows);
+  noteMutation_();
   sh.setFrozenRows(1);
   return sh.getName();
 }

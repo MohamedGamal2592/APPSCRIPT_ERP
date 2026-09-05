@@ -144,5 +144,6 @@ function restoreCsvToScratchSpreadsheet(csvFileName) {
   });
   var ss = SpreadsheetApp.create('RESTORE_TEST_' + csvFileName.replace(/\.csv$/i, ''));
   ss.getSheets()[0].getRange(1, 1, padded.length, width).setValues(padded);
+  noteMutation_();
   return { ok: true, rows: padded.length, cols: width, url: ss.getUrl() };
 }

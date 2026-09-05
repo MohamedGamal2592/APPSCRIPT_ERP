@@ -197,6 +197,7 @@ function adminSaveMatrix_(payload, sessionToken, authUser) {
       set('user', authUser ? authUser.email : '');
       set('created_at', new Date());
       sheet.appendRow(rowValues);
+      noteMutation_();
       existingMap[key] = sheet.getLastRow();
       added++;
     } else {
@@ -277,6 +278,7 @@ function adminSavePages_(payload, sessionToken, authUser) {
       set('page_module', module);
       set('page_company', company);
       sheet.appendRow(rowValues);
+      noteMutation_();
       existingMap[pageId.toLowerCase()] = sheet.getLastRow();
       added++;
     } else {
@@ -322,6 +324,7 @@ function setRateFormula_(sheet, headers, rowNum) {
   const B = colLetter(currencyIdx);
   sheet.getRange(rowNum, rateIdx + 1).setFormula(
     '=IF(' + B + rowNum + '="EGP", 1, GOOGLEFINANCE("CURRENCY:" & ' + B + rowNum + ' & "EGP"))');
+  noteMutation_();
 }
 
 function adminSaveCurrency_(payload, sessionToken, authUser) {
@@ -344,6 +347,7 @@ function adminSaveCurrency_(payload, sessionToken, authUser) {
 
   if (existingRowNum !== -1) {
     sheet.getRange(existingRowNum, currencyIdx + 1).setValue(currency);
+    noteMutation_();
     setRateFormula_(sheet, headers, existingRowNum);
     return { status: 'success', message: 'تم تحديث العملة' };
   }
@@ -356,6 +360,7 @@ function adminSaveCurrency_(payload, sessionToken, authUser) {
   set('user', authUser ? authUser.email : '');
   set('created_at', new Date());
   sheet.appendRow(rowValues);
+  noteMutation_();
   setRateFormula_(sheet, headers, sheet.getLastRow());
   return { status: 'success', message: 'تمت إضافة العملة' };
 }
@@ -369,7 +374,7 @@ function adminDeleteCurrency_(payload, sessionToken, authUser) {
   const idIdx = headers.findIndex(h => String(h).trim().toLowerCase() === 'id');
   const data = sheet.getDataRange().getValues();
   for (let i = data.length - 1; i >= 1; i--) {
-    if (Number(data[i][idIdx]) === id) { sheet.deleteRow(i + 1); break; }
+    if (Number(data[i][idIdx]) === id) { sheet.deleteRow(i + 1); noteMutation_(); break; }
   }
   return { status: 'success', message: 'تم حذف العملة' };
 }
@@ -400,7 +405,9 @@ function getOrCreateErpInvoicesSheet_() {
   let sheet = ss.getSheetByName(ERP_INVOICES_SHEET);
   if (!sheet) {
     sheet = ss.insertSheet(ERP_INVOICES_SHEET);
+    noteMutation_();
     sheet.appendRow(ERP_INVOICES_HEADERS);
+    noteMutation_();
   }
   return sheet;
 }
@@ -515,6 +522,7 @@ function adminSaveInvoice_(payload, sessionToken, authUser) {
   set('updated_at', new Date());
 
   sheet.appendRow(rowValues);
+  noteMutation_();
   return { status: 'success', message: 'تم إصدار الفاتورة بنجاح', unique_id: uid, id: nextId };
 }
 
@@ -529,6 +537,7 @@ function adminDeleteInvoice_(payload, sessionToken, authUser) {
   for (let i = data.length - 1; i >= 1; i--) {
     if (String(data[i][uiIdx]).trim() === uid) {
       sheet.deleteRow(i + 1);
+      noteMutation_();
       break;
     }
   }
@@ -874,6 +883,7 @@ function save_user_view(payload, sessionToken, authUser) {
     }
     if (found === -1) throw new Error('العرض غير موجود');
     sheet.deleteRow(found);
+    noteMutation_();
     return { status: 'success', message: 'تم حذف العرض' };
   }
 
@@ -896,6 +906,7 @@ function save_user_view(payload, sessionToken, authUser) {
         const newRow = data[i].slice();
         newRow[idx('is_default')] = false;
         sheet.getRange(i + 1, 1, 1, newRow.length).setValues([newRow]);
+        noteMutation_();
       }
     }
   }
@@ -907,6 +918,7 @@ function save_user_view(payload, sessionToken, authUser) {
     newRow[idx('is_default')] = isDefault;
     newRow[idx('updated_at')] = now;
     sheet.getRange(existingRowNum, 1, 1, newRow.length).setValues([newRow]);
+    noteMutation_();
     return { status: 'success', message: 'تم تحديث العرض', view_name: viewName };
   }
   const rowValues = headers.map(function () { return ''; });
@@ -920,6 +932,7 @@ function save_user_view(payload, sessionToken, authUser) {
   set('created_at', now);
   set('updated_at', now);
   sheet.appendRow(rowValues);
+  noteMutation_();
   return { status: 'success', message: 'تم حفظ العرض', view_name: viewName };
 }
 

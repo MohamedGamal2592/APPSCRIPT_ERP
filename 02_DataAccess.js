@@ -55,6 +55,61 @@ function disableRecordCache_() {
 }
 
 /**
+ * Phase 9 (F-01, conservative variant). Clear and RE-ENABLE the memo, without
+ * touching the Phase 0b read counter or the ensured-sheets memo.
+ *
+ * apiRouter_ calls this once more immediately before the handler runs. The
+ * preamble before it authenticates and may TOUCH the session row, and that write
+ * would otherwise reach noteMutation_ and cost the handler its memo because of a
+ * write the handler does not care about. Re-arming instead of leaving it
+ * disabled is safe: the memo is empty at that point, so nothing in it can
+ * predate the preamble's writes.
+ */
+function rearmRecordCache_() {
+  for (const k in _recordCache_) delete _recordCache_[k];
+  for (const k in _pkIndexCache_) delete _pkIndexCache_[k];
+  _recordCacheDisabled_ = false;
+}
+
+/**
+ * Phase 9 (F-01, conservative variant) — the whole of it, in one function.
+ *
+ * The memo used to be switched OFF for the entire request as soon as the router
+ * saw a non-read action, so a save handler that legitimately reads six sheets
+ * paid six full getDataRange().getValues() with zero reuse. The concern behind
+ * that was real: a memo taken BEFORE a write must never be served AFTER it.
+ *
+ * The cure is narrower than the disease. The memo now starts ENABLED, and the
+ * FIRST mutation of the request turns it off — clearing it — for the remainder
+ * of that request. So:
+ *   - reads before any write are memoised and reused;
+ *   - the instant anything is written, the memo is emptied and stays off,
+ *     exactly as today;
+ *   - therefore no read can ever be served from a memo taken before a write it
+ *     did not see. The memo is either younger than every write so far, or gone.
+ *
+ * Over-calling this is always SAFE — it only ever costs a cache, never
+ * correctness — which is why it is called liberally, including at sites that may
+ * not strictly need it.
+ */
+function noteMutation_() {
+  if (_recordCacheDisabled_) return;   // already off for this request
+  disableRecordCache_();
+}
+
+/**
+ * Phase 9, defence in depth — see the guard in getAllRecords_.
+ *
+ * Set by apiRouter_ for any request whose effective action is not a read. On a
+ * pure read request nothing writes at all, so the guard would be paying two
+ * metadata round trips per memo hit to protect against a write that cannot
+ * happen; it stays off there and the read path is exactly as fast as before.
+ */
+let _guardMemoHits_ = false;
+
+function setMemoGuard_(on) { _guardMemoHits_ = !!on; }
+
+/**
  * F-02.1: the empty-row test used to be Object.values(record).some(v =>
  * String(v).trim() !== ''), i.e. a second full pass over every cell, allocating
  * an array and coercing every value to a string — after already having built the
@@ -141,8 +196,10 @@ function writeFormula_(dbId, sheetName, rowNumber, headerName, formula) {
     var cell = sheet.getRange(rowNumber, idx + 1);
     if (typeof cell.setFormula === 'function') {
       cell.setFormula(formula);
+      noteMutation_();
     } else {
       cell.setValue(formula);
+      noteMutation_();
     }
   }
 }
@@ -207,6 +264,7 @@ function writeRowFormulas_(sheet, headers, rowNum, formulaMap) {
     if (cur && cur.i === run[run.length - 1].i + 1) { run.push(cur); continue; }
     sheet.getRange(rowNum, run[0].i + 1, 1, run.length)
       .setValues([run.map(function (c) { return c.f; })]);
+      noteMutation_();
     if (cur) run = [cur];
   }
 }
@@ -219,6 +277,7 @@ function writeRowFormulas_(sheet, headers, rowNum, formulaMap) {
 function ensureGridRows_(sheet, lastNeeded) {
   const max = sheet.getMaxRows();
   if (lastNeeded > max) sheet.insertRowsAfter(max, lastNeeded - max);
+  noteMutation_();
 }
 
 // Reentrant-safe script lock: a nested executeWithLock_ (e.g. an audit helper
@@ -247,6 +306,7 @@ function appendRowWithRetry_(sheet, values, maxRetries = 3, delayMs = 1000) {
   while (attempt <= maxRetries) {
     try {
       sheet.appendRow(values);
+      noteMutation_();
       return true;
     } catch (e) {
       attempt++;
@@ -269,7 +329,9 @@ function getNextIdUnderLock_(dbId, tableName, idColumnName = 'id') {
   let sheet = ss.getSheetByName('ID_Counter');
   if (!sheet) {
     sheet = ss.insertSheet('ID_Counter');
+    noteMutation_();
     sheet.appendRow(['sheet_name', 'next_id']);
+    noteMutation_();
   }
   const headers = getHeaders_(sheet);
   countSheetRead_();
@@ -299,13 +361,16 @@ function getNextIdUnderLock_(dbId, tableName, idColumnName = 'id') {
       const current = Number(data[i][nextIdx]);
       if (current <= tableMax) {
         sheet.getRange(i + 1, nextIdx + 1).setValue(safeNext + 1);
+        noteMutation_();
         return safeNext;
       }
       sheet.getRange(i + 1, nextIdx + 1).setValue(current + 1);
+      noteMutation_();
       return current;
     }
   }
   sheet.appendRow([tableName, safeNext + 1]);
+  noteMutation_();
   return safeNext;
 }
 
@@ -351,7 +416,9 @@ function getNextIdBatch_(dbId, tableName, count, idColumnName = 'id') {
     let sheet = ss.getSheetByName('ID_Counter');
     if (!sheet) {
       sheet = ss.insertSheet('ID_Counter');
+      noteMutation_();
       sheet.appendRow(['sheet_name', 'next_id']);
+      noteMutation_();
     }
     const headers = getHeaders_(sheet);
     countSheetRead_();
@@ -387,12 +454,14 @@ function getNextIdBatch_(dbId, tableName, count, idColumnName = 'id') {
     for (let i = 1; i < data.length; i++) {
       if (String(data[i][nameIdx]).toLowerCase() === tableName.toLowerCase()) {
         sheet.getRange(i + 1, nextIdx + 1).setValue(nextCounter);
+        noteMutation_();
         found = true;
         break;
       }
     }
     if (!found) {
       sheet.appendRow([tableName, nextCounter]);
+      noteMutation_();
     }
     
     return startId;
@@ -409,7 +478,29 @@ function getAllRecords_(dbId, sheetName) {
   if (!_recordCacheDisabled_) {
     const key = dbId + '|' + sheetName;
     const cached = _recordCache_[key];
-    if (cached) return buildRecordsFromRaw_(cached.data, cached.headers);
+    if (cached) {
+      // Phase 9, defence in depth. The conservative variant is only as good as
+      // noteMutation_'s coverage of the 183 direct write sites, and a missed one
+      // would show up as a stale read INSIDE a save handler — silent, and
+      // expensive. So on a request that CAN write, a memo entry is reused only
+      // if the sheet still has the same shape.
+      //
+      // getLastRow/getLastColumn are metadata calls, not a values read, so this
+      // costs a small fraction of a rebuild, and it independently catches an
+      // append or a delete that reached the sheet without going through
+      // noteMutation_. It does NOT catch an in-place update of an existing cell;
+      // that case rests on coverage alone.
+      //
+      // On a read request the guard is off (setMemoGuard_), because nothing can
+      // write, so the read path pays nothing for it.
+      if (!_guardMemoHits_) return buildRecordsFromRaw_(cached.data, cached.headers);
+      const cRows = cached.data.length;
+      const cCols = cRows ? cached.data[0].length : 0;
+      if (sheet.getLastRow() === cRows && sheet.getLastColumn() === cCols) {
+        return buildRecordsFromRaw_(cached.data, cached.headers);
+      }
+      delete _recordCache_[key];
+    }
     countSheetRead_();
     const data = sheet.getDataRange().getValues();
     _recordCache_[key] = { data: data, headers: headers };
@@ -440,6 +531,7 @@ function addRecord_(dbId, sheetName, dataMap, requiredFields) {
     });
     const newRowNumber = sheet.getLastRow() + 1;
     sheet.appendRow(rowValues);
+    noteMutation_();
 
     const savedRecord = {};
     headers.forEach((h, colIdx) => {
@@ -473,6 +565,7 @@ function updateRowByCriteria_(sheet, criteriaHeader, criteriaValue, updatesObjec
         return updateKey !== undefined ? updatesObject[updateKey] : originalVal;
       });
       sheet.getRange(i + 1, 1, 1, newRow.length).setValues([newRow]);
+      noteMutation_();
       return true;
     }
   }
@@ -493,6 +586,7 @@ function deleteRowsByCriteria_(sheet, criteriaHeader, criteriaValue) {
   for (let i = data.length - 1; i >= 1; i--) {
     if (String(data[i][critIdx]).trim() === String(criteriaValue).trim()) {
       sheet.deleteRow(i + 1);
+      noteMutation_();
       deleted++;
     }
   }
@@ -777,6 +871,7 @@ function logHistory_(dbId, sheetName, recordUid, recordId, user, action, newValu
       });
     });
     histSheet.getRange(histSheet.getLastRow() + 1, 1, matrix.length, histHeaders.length).setValues(matrix);
+    noteMutation_();
   });
 }
 

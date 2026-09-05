@@ -490,6 +490,7 @@ const TopChemical = (function () {
       return dataMap[key] !== undefined ? dataMap[key] : '';
     });
     sheet.appendRow(rowValues);
+    noteMutation_();
     return { status: 'success', message: 'تمت الإضافة', rowNumber: sheet.getLastRow() };
   }
 
@@ -635,6 +636,7 @@ const TopChemical = (function () {
     });
     const rowNumber = sheet.getLastRow() + 1;
     sheet.getRange(rowNumber, 1, 1, rowValues.length).setValues([rowValues]);
+    noteMutation_();
     return rowNumber;
   }
 
@@ -977,6 +979,7 @@ const TopChemical = (function () {
       }
       ensureGridRows_(sheet, rowNum);
       sheet.getRange(rowNum, 1, 1, rowValues.length).setValues([rowValues]);
+      noteMutation_();
       var cMap = clientVendorRefs_(dbId).map;
       var savedRecord = {
         id: id,
@@ -1173,6 +1176,7 @@ const TopChemical = (function () {
       });
       const rowNum = sheet.getLastRow() + 1;
       sheet.appendRow(rowValues);
+      noteMutation_();
       try { logHistory_(dbId, BARCODE_SHEET, rec.record_uid || ('create_'+BARCODE_SHEET+'_'+id), String(id), (user&&user.email)||'', 'create', rec, null); } catch(e){}
       var pMap = productRefs_(dbId).map;
       var eMap = employeeRefs_(dbId).map;
@@ -1376,6 +1380,7 @@ const TopChemical = (function () {
       });
       const rowNum = sheet.getLastRow() + 1;
       sheet.appendRow(rowValues);
+      noteMutation_();
       try { logHistory_(dbId, TRUST_SHEET, rec.record_uid || ('create_'+TRUST_SHEET+'_'+id), String(id), (user&&user.email)||'', 'create', rec, null); } catch(e){}
       var savedRecord = {
         id: rec.id,
@@ -1483,6 +1488,7 @@ const TopChemical = (function () {
       });
       ensureGridRows_(sheet, rowNum);
       sheet.getRange(rowNum, 1, 1, rowValues.length).setValues([rowValues]);
+      noteMutation_();
     });
     var prodMap = productRefs_(dbId).map;
     var savedRecord = {
@@ -1555,6 +1561,7 @@ const TopChemical = (function () {
       const col = hMap[key];
       if (col != null) {
         sheet.getRange(sheetRow, col + 1).setValue(updates[key]);
+        noteMutation_();
       }
     });
     try { var _uidStock = _oldStock && _oldStock.record_uid ? _oldStock.record_uid : 'create_'+STOCK_SHEET+'_'+sheetRow; var _newStock = {}; if(_oldStock) Object.keys(_oldStock).forEach(function(k){ _newStock[k]=_oldStock[k]; }); Object.keys(updates).forEach(function(k){ _newStock[k]=updates[k]; }); logHistory_(dbId, STOCK_SHEET, _uidStock, String(sheetRow), (user&&user.email)||'', 'update', _newStock, _oldStock); } catch(e){}
@@ -1579,7 +1586,9 @@ const TopChemical = (function () {
     let sheet = ss.getSheetByName(CUSTOMS_OFFICE_SHEET);
     if (sheet) return sheet;
     sheet = ss.insertSheet(CUSTOMS_OFFICE_SHEET);
+    noteMutation_();
     sheet.appendRow(CUSTOMS_HEADERS);
+    noteMutation_();
     sheet.setFrozenRows(1);
     return sheet;
   }
@@ -1676,6 +1685,7 @@ const TopChemical = (function () {
         new Date()
       ];
       sheet.appendRow(rowValues);
+      noteMutation_();
       const rowNumber = sheet.getLastRow();
       var savedRecord = {
         id: rowNumber - 1,
@@ -1856,6 +1866,7 @@ const TopChemical = (function () {
       });
       const rowNum = sheet.getLastRow() + 1;
       sheet.appendRow(rowValues);
+      noteMutation_();
       try { logHistory_(dbId, PURCHASE_SHEET, rec.record_uid || ('create_'+PURCHASE_SHEET+'_'+id), String(id), (user&&user.email)||'', 'create', rec, null); } catch(e){}
       var vendorsMap = vendorNameMap_(dbId);
       var itemsMap = itemNameMap_(dbId);
@@ -2043,6 +2054,7 @@ const TopChemical = (function () {
       });
       ensureGridRows_(sheet, rowNum);
       sheet.getRange(rowNum, 1, 1, rowValues.length).setValues([rowValues]);
+      noteMutation_();
       try { logHistory_(dbId, IMPORT_FOLLOW_SHEET, rec.record_uid || ('create_'+IMPORT_FOLLOW_SHEET+'_'+id), String(id), (user&&user.email)||'', 'create', rec, null); } catch(e){}
       var pMapImp = productRefs_(dbId).map;
       var savedRecord = {
@@ -2106,6 +2118,7 @@ const TopChemical = (function () {
         if (!next) throw new Error('السجل في الحالة النهائية');
         var _oldImpSt = null; try { _oldImpSt = getAllRecords_(dbId, IMPORT_FOLLOW_SHEET).find(function(r){ return String(r.id)===String(id); }) || null; } catch(e2){}
         sheet.getRange(i + 1, statusIdx + 1).setValue(next);
+        noteMutation_();
         try { var _uidImpSt = _oldImpSt && _oldImpSt.record_uid ? _oldImpSt.record_uid : 'create_'+IMPORT_FOLLOW_SHEET+'_'+id; var _newImpSt = {}; if(_oldImpSt) Object.keys(_oldImpSt).forEach(function(k){ _newImpSt[k]=_oldImpSt[k]; }); _newImpSt['status']=next; logHistory_(dbId, IMPORT_FOLLOW_SHEET, _uidImpSt, String(id), (user&&user.email)||'', 'update', _newImpSt, _oldImpSt); } catch(e){}
         // Phase 7.3 — this object used to carry `status` TWICE: 'success' and
         // then the new status, so the later key won and the response's `status`
@@ -2207,6 +2220,7 @@ const TopChemical = (function () {
         return rec[key] !== undefined ? rec[key] : '';
       });
       sheet.appendRow(rowValues);
+      noteMutation_();
       try { logHistory_(dbId, CARTON_SIZES_SHEET, rec.record_uid || ('create_'+CARTON_SIZES_SHEET+'_'+id), String(id), (user&&user.email)||'', 'create', rec, null); } catch(e){}
       var pMapC = productRefs_(dbId).map;
       var vMapC = clientVendorRefs_(dbId).map;
@@ -2848,6 +2862,7 @@ const TopChemical = (function () {
         });
       });
       sheet.getRange(startRow, 1, rows.length, rows[0].length).setValues(rows);
+      noteMutation_();
       try { newEntries.forEach(function(e){ var _eid = Number(e.emp_id); var _mapSal2 = { emp_id: _eid, month: month, year: year, working_days: Number(e.working_days) }; logHistory_(dbId, EMP_SALARIES_SHEET, 'create_'+EMP_SALARIES_SHEET+'_'+_eid+'_'+month+'_'+year, String(_eid), (user&&user.email)||'', 'create', _mapSal2, null); }); } catch(e){}
       var msg = 'تم توليد المرتبات (' + rows.length + ' موظف)';
       if (skippedCount) msg += ' — تم تخطي ' + skippedCount + ' موظف مسجل مسبقاً';
@@ -2895,8 +2910,11 @@ const TopChemical = (function () {
 
       var _oldSal = null; try { _oldSal = getAllRecords_(dbId, EMP_SALARIES_SHEET).find(function(r){ return Number(r.emp_id)===Number(empId) && Number(r.month)===Number(oldMonth) && Number(r.year)===Number(oldYear); })||null; } catch(e2){}
       if (wdIdx !== -1) sheet.getRange(rowNum, wdIdx + 1).setValue(workingDays);
+      noteMutation_();
       if (monthIdx !== -1) sheet.getRange(rowNum, monthIdx + 1).setValue(newMonth);
+      noteMutation_();
       if (yearIdx !== -1) sheet.getRange(rowNum, yearIdx + 1).setValue(newYear);
+      noteMutation_();
       try { var _uidSal = _oldSal && _oldSal.record_uid ? _oldSal.record_uid : 'create_'+EMP_SALARIES_SHEET+'_'+empId+'_'+oldMonth+'_'+oldYear; var _newSal = {}; if(_oldSal) Object.keys(_oldSal).forEach(function(k){ _newSal[k]=_oldSal[k]; }); _newSal.working_days=workingDays; _newSal.month=newMonth; _newSal.year=newYear; logHistory_(dbId, EMP_SALARIES_SHEET, _uidSal, String(empId), (user&&user.email)||'', 'update', _newSal, _oldSal); } catch(e){}
 
       return { status: 'success', message: 'تم تعديل بيانات الراتب بنجاح' };
@@ -2932,6 +2950,7 @@ const TopChemical = (function () {
       var _oldDel = null; try { _oldDel = getAllRecords_(dbId, EMP_SALARIES_SHEET).find(function(r){ return Number(r.emp_id)===Number(empId) && Number(r.month)===Number(month) && Number(r.year)===Number(year); })||null; } catch(e2){}
       try { var _uidDel = _oldDel && _oldDel.record_uid ? _oldDel.record_uid : 'create_'+EMP_SALARIES_SHEET+'_'+empId+'_'+month+'_'+year; logHistory_(dbId, EMP_SALARIES_SHEET, _uidDel, String(empId), (user&&user.email)||'', 'delete', null, _oldDel); } catch(e){}
       sheet.deleteRow(rowNum);
+      noteMutation_();
       return { status: 'success', message: 'تم حذف سجل الراتب' };
     });
   }
@@ -2961,6 +2980,7 @@ const TopChemical = (function () {
       if (rowNum === -1) throw new Error('السجل غير موجود');
       var _oldRec = null; try { _oldRec = getAllRecords_(dbId, EMP_SALARIES_SHEET).find(function(r){ return Number(r.emp_id)===Number(empId) && Number(r.month)===Number(month) && Number(r.year)===Number(year); })||null; } catch(e2){}
       sheet.getRange(rowNum, receiptIdx + 1).setValue(true);
+      noteMutation_();
       try { var _uidRec = _oldRec && _oldRec.record_uid ? _oldRec.record_uid : 'create_'+EMP_SALARIES_SHEET+'_'+empId+'_'+month+'_'+year; var _newRec = {}; if(_oldRec) Object.keys(_oldRec).forEach(function(k){ _newRec[k]=_oldRec[k]; }); _newRec.receipt=true; logHistory_(dbId, EMP_SALARIES_SHEET, _uidRec, String(empId), (user&&user.email)||'', 'update', _newRec, _oldRec); } catch(e){}
       return { status: 'success', message: 'تم تسجيل استلام الراتب' };
     });
@@ -3014,6 +3034,7 @@ const TopChemical = (function () {
         return rec[key] !== undefined ? rec[key] : '';
       });
       sheet.appendRow(rowValues);
+      noteMutation_();
       try { logHistory_(dbId, EMP_SALARIES_CLOSE_SHEET, rec.record_uid || ('create_'+EMP_SALARIES_CLOSE_SHEET+'_'+id), String(id), (user&&user.email)||'', 'create', rec, null); } catch(e){}
       return { status: 'success', message: 'تم غلق المرتبات', data: { id: id, amount: total } };
     });
@@ -3054,6 +3075,7 @@ const TopChemical = (function () {
       return valueMap[key] !== undefined ? valueMap[key] : '';
     });
     sheet.getRange(rowNumber, 1, 1, rowValues.length).setValues([rowValues]);
+    noteMutation_();
     SpreadsheetApp.flush();
     return rowNumber;
   }
@@ -3065,6 +3087,7 @@ const TopChemical = (function () {
     const key = String(header).toLowerCase();
     if (headers.indexOf(key) !== -1) return;
     sheet.getRange(1, headers.length + 1).setValue(header);
+    noteMutation_();
     SpreadsheetApp.flush();
   }
 
@@ -3461,6 +3484,7 @@ const TopChemical = (function () {
       const key = String(h).trim().toLowerCase();
       if (formulaKeys.indexOf(key) === -1 && updates[key] !== undefined) {
         sheet.getRange(rowIndex + 1, col + 1).setValue(updates[key]);
+        noteMutation_();
       }
     });
     SpreadsheetApp.flush();
@@ -4255,6 +4279,7 @@ const valueMap = {};
         .setHorizontalAlignment('center')
         .setVerticalAlignment('middle')
         .setWrap(true);
+      noteMutation_();
       sheet1.setRowHeight(1, 34);
 
       // Data rows start at row 2
@@ -4307,6 +4332,7 @@ const valueMap = {};
       if (dataRows.length > 0) {
         const dataRange = sheet1.getRange(startRow, 1, dataRows.length, 21);
         dataRange.setValues(dataRows);
+        noteMutation_();
 
         // Zebra striping
         for (let i = 0; i < dataRows.length; i++) {

@@ -114,14 +114,18 @@ function archiveSheetRows_(ssId, sheetName, dateColumn, cutoff, dryRun) {
       var target = ss.getSheetByName(tabName);
       if (!target) {
         target = ss.insertSheet(tabName);
+        noteMutation_();
         target.getRange(1, 1, 1, colCount).setValues([headers]);
+        noteMutation_();
         target.setFrozenRows(1);
       }
       var rows = byYear[y];
       var startRow = target.getLastRow() + 1;
       var needed = startRow + rows.length - 1;
       if (needed > target.getMaxRows()) target.insertRowsAfter(target.getMaxRows(), needed - target.getMaxRows());
+      noteMutation_();
       target.getRange(startRow, 1, rows.length, colCount).setValues(rows);
+      noteMutation_();
       SpreadsheetApp.flush();
       // Verify before removing anything from the live tab.
       if (target.getLastRow() < needed) {
@@ -132,8 +136,10 @@ function archiveSheetRows_(ssId, sheetName, dateColumn, cutoff, dryRun) {
     // Rewrite the live body with the survivors, then clear the tail.
     var lastRow = sheet.getLastRow();
     if (keep.length) sheet.getRange(2, 1, keep.length, colCount).setValues(keep);
+    noteMutation_();
     var firstStale = 2 + keep.length;
     if (lastRow >= firstStale) sheet.getRange(firstStale, 1, lastRow - firstStale + 1, colCount).clearContent();
+    noteMutation_();
     SpreadsheetApp.flush();
   });
 
