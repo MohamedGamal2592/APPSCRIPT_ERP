@@ -264,7 +264,7 @@ function writeRowFormulas_(sheet, headers, rowNum, formulaMap) {
     if (cur && cur.i === run[run.length - 1].i + 1) { run.push(cur); continue; }
     sheet.getRange(rowNum, run[0].i + 1, 1, run.length)
       .setValues([run.map(function (c) { return c.f; })]);
-      noteMutation_();
+    noteMutation_();
     if (cur) run = [cur];
   }
 }
