@@ -1180,8 +1180,8 @@ const ValleyFoodsHRModules = (function () {
       row['number_of_days'] = days;
       row['penalty_value'] = otherVal;
       row['penalty_type_days'] = '=if(VLOOKUP(D' + rowNumber + ',valley_employee_deduction_roles!A:C,3,0) = "جزاءات",F' + rowNumber + ',0)';
-      row['abscence_type_days'] = '=if(VLOOKUP(D' + rowNumber + ',valley_employee_deduction_roles!A:C,3,0) = "غياب",F' + rowNumber + ' * VLOOKUP(D' + rowNumber + ',valley_employee_deduction_roles!A:H,8,0),0)';
-      row['delay_type_minutes'] = '=if(VLOOKUP(D' + rowNumber + ',valley_employee_deduction_roles!A:C,3,0) = "حضور وانصراف",60* VLOOKUP(D' + rowNumber + ',valley_employee_deduction_roles!A:H,7,0),0)';
+      row['abscence_type_days'] = '=if(VLOOKUP(D' + rowNumber + ',valley_employee_deduction_roles!A:C,3,0) = "غياب",F' + rowNumber + ' * INDEX(valley_employee_deduction_roles!H:H,MATCH(D' + rowNumber + ',valley_employee_deduction_roles!A:A,0)),0)';
+      row['delay_type_minutes'] = '=if(VLOOKUP(D' + rowNumber + ',valley_employee_deduction_roles!A:C,3,0) = "حضور وانصراف",60* INDEX(valley_employee_deduction_roles!G:G,MATCH(D' + rowNumber + ',valley_employee_deduction_roles!A:A,0)),0)';
       row['details'] = details;
       row['deduction_attachement'] = attachment;
       row['month'] = '=MONTH(E' + rowNumber + ')';
@@ -1719,12 +1719,12 @@ const ValleyFoodsHRModules = (function () {
       var rec = {
         emp_id: empId,
         name_ar: '=VLOOKUP(A' + r + ',valley_employee_info!A:B,2,0)',
-        basic_salary: '=VLOOKUP(A' + r + ',valley_employee_salary_updated!A:F,6,0)',
-        allow: '=VLOOKUP(A' + r + ',valley_employee_salary_updated!A:F,5,0)',
-        title: '=VLOOKUP(A' + r + ',valley_employee_info!A:K,5,0)',
-        section: '=VLOOKUP(A' + r + ',valley_employee_info!A:K,6,0)',
+        basic_salary: '=INDEX(valley_employee_salary_updated!F:F,MATCH(A' + r + ',valley_employee_salary_updated!A:A,0))',
+        allow: '=INDEX(valley_employee_salary_updated!E:E,MATCH(A' + r + ',valley_employee_salary_updated!A:A,0))',
+        title: '=INDEX(valley_employee_info!E:E,MATCH(A' + r + ',valley_employee_info!A:A,0))',
+        section: '=INDEX(valley_employee_info!F:F,MATCH(A' + r + ',valley_employee_info!A:A,0))',
         working_days: Number(e.working_days) || 30,
-        working_hours: '=VLOOKUP(A' + r + ',valley_employee_info!A:J,10,0)',
+        working_hours: '=INDEX(valley_employee_info!J:J,MATCH(A' + r + ',valley_employee_info!A:A,0))',
         working_days_value: '=(C' + r + '+D' + r + ')/30*G' + r,
         overtime_days: '=SUMIFS(valley_emp_overtime!H:H,valley_emp_overtime!B:B,A' + r + ',valley_emp_overtime!D:D,">="&DATE(Z' + r + ',AA' + r + ',1),valley_emp_overtime!D:D,"<="&EOMONTH(DATE(Z' + r + ',AA' + r + ',1),0))',
         overtime_days_value: '=C' + r + '/30/H' + r + '*J' + r,
@@ -3759,9 +3759,9 @@ const ValleyFoodsHRModules = (function () {
        (B=id, C=header uid, D=code, E=mfg date, G=item).
        created_at is intentionally left as a full datetime value. */
     function writeByproductFormulas_(dbId, r) {
-      writeFormula_(dbId, MFG_BYPRODUCT_SHEET, r, 'code', '=VLOOKUP(C' + r + ',valley_manufacture_header!A:E,5,0)');
+      writeFormula_(dbId, MFG_BYPRODUCT_SHEET, r, 'code', '=INDEX(valley_manufacture_header!E:E,MATCH(C' + r + ',valley_manufacture_header!A:A,0))');
       writeFormula_(dbId, MFG_BYPRODUCT_SHEET, r, 'transaction_code', '=CONCATENATE(VLOOKUP(G' + r + ',valley_products!$A:$B,2,0),"-",D' + r + ',"-",G' + r + ',"-",TEXT(E' + r + ',"DD/MM/YYYY"))');
-      writeFormula_(dbId, MFG_BYPRODUCT_SHEET, r, 'total_cost', '=IF((VLOOKUP(G' + r + ',valley_products!$A:$I,9,0)*(VLOOKUP(C' + r + ',valley_manufacture_header!$A:$Y,10,0)+VLOOKUP(C' + r + ',valley_manufacture_header!$A:$Y,9,0)) / (SUMIFS(valley_manufacture_header!I:I,valley_manufacture_header!A:A,C' + r + ')+SUMIFS(valley_manufacture_header!J:J,valley_manufacture_header!A:A,C' + r + '))) > 0.25, (VLOOKUP(G' + r + ',valley_products!$A:$I,9,0)*(VLOOKUP(C' + r + ',valley_manufacture_header!$A:$Y,10,0)+VLOOKUP(C' + r + ',valley_manufacture_header!$A:$Y,9,0))) / 2, (VLOOKUP(G' + r + ',valley_products!$A:$I,9,0)*(VLOOKUP(C' + r + ',valley_manufacture_header!$A:$Y,10,0)+VLOOKUP(C' + r + ',valley_manufacture_header!$A:$Y,9,0))))');
+      writeFormula_(dbId, MFG_BYPRODUCT_SHEET, r, 'total_cost', '=IF((INDEX(valley_products!$I:$I,MATCH(G' + r + ',valley_products!$A:$A,0))*(INDEX(valley_manufacture_header!$J:$J,MATCH(C' + r + ',valley_manufacture_header!$A:$A,0))+INDEX(valley_manufacture_header!$I:$I,MATCH(C' + r + ',valley_manufacture_header!$A:$A,0))) / (SUMIFS(valley_manufacture_header!I:I,valley_manufacture_header!A:A,C' + r + ')+SUMIFS(valley_manufacture_header!J:J,valley_manufacture_header!A:A,C' + r + '))) > 0.25, (INDEX(valley_products!$I:$I,MATCH(G' + r + ',valley_products!$A:$A,0))*(INDEX(valley_manufacture_header!$J:$J,MATCH(C' + r + ',valley_manufacture_header!$A:$A,0))+INDEX(valley_manufacture_header!$I:$I,MATCH(C' + r + ',valley_manufacture_header!$A:$A,0)))) / 2, (INDEX(valley_products!$I:$I,MATCH(G' + r + ',valley_products!$A:$A,0))*(INDEX(valley_manufacture_header!$J:$J,MATCH(C' + r + ',valley_manufacture_header!$A:$A,0))+INDEX(valley_manufacture_header!$I:$I,MATCH(C' + r + ',valley_manufacture_header!$A:$A,0)))))');
       writeFormula_(dbId, MFG_BYPRODUCT_SHEET, r, 'manufacture_internal_batch', '=CONCATENATE(TEXT(E' + r + ',"YYMMDD"),B' + r + ',G' + r + ',D' + r + ')');
     }
 
@@ -3962,8 +3962,8 @@ const ValleyFoodsHRModules = (function () {
       writeFormula_(dbId, MFG_ORDER_SHEET, fx, 'by_product_nrv_value', '=SUMIFS(valley_manufacture_by_product!I:I, valley_manufacture_by_product!C:C, A' + fx + ')');
       writeFormula_(dbId, MFG_ORDER_SHEET, fx, 'total_inventory_cost', '=SUMIFS(valley_manufacture_header_products!$H:$H, valley_manufacture_header_products!$C:$C, A' + fx + ')');
       writeFormula_(dbId, MFG_ORDER_SHEET, fx, 'total_other_cost', '=SUMIFS(valley_manufacture_work_center!L:L, valley_manufacture_work_center!C:C, A' + fx + ')');
-      writeFormula_(dbId, MFG_ORDER_SHEET, fx, 'total_batch_cost', '=IF(J' + fx + '+I' + fx + '-H' + fx + '<0, VLOOKUP(M' + fx + ',valley_products!$A:$I,9,0)*(J' + fx + '+I' + fx + '), J' + fx + '+I' + fx + '-H' + fx + ')');
-      writeFormula_(dbId, MFG_ORDER_SHEET, fx, 'product_category', '=IFERROR(VLOOKUP(M' + fx + ', valley_products!$A:$N, 14, 0), "")');
+      writeFormula_(dbId, MFG_ORDER_SHEET, fx, 'total_batch_cost', '=IF(J' + fx + '+I' + fx + '-H' + fx + '<0, INDEX(valley_products!$I:$I,MATCH(M' + fx + ',valley_products!$A:$A,0))*(J' + fx + '+I' + fx + '), J' + fx + '+I' + fx + '-H' + fx + ')');
+      writeFormula_(dbId, MFG_ORDER_SHEET, fx, 'product_category', '=IFERROR(INDEX(valley_products!$N:$N,MATCH(M' + fx + ',valley_products!$A:$A,0)), "")');
       writeFormula_(dbId, MFG_ORDER_SHEET, fx, 'manufacture_internal_batch', '=CONCATENATE(TEXT(L' + fx + ',"YYMMDD"),B' + fx + ',M' + fx + ',E' + fx + ')');
 
       /* gather this MO's existing output UIDs BEFORE deleting outputs (needed to scope footer deletion) */
@@ -4075,7 +4075,7 @@ const ValleyFoodsHRModules = (function () {
         sheetCons.getRange(consStart2, 1, consRows.length, consHeaders.length).setValues(consRows);
         for (var ci = 0; ci < consRows.length; ci++) {
           var cRow = consStart2 + ci;
-          writeFormula_(dbId, MFG_CONSUMPTION_SHEET, cRow, 'item_code', '=IFERROR(VLOOKUP(D' + cRow + ', valley_product_purchasing!A:C,3,0), IFERROR(VLOOKUP(D' + cRow + ', valley_manufacture_header!A:C,3,0), IFERROR(VLOOKUP(D' + cRow + ', valley_manufacture_by_product!A:F,6,0),"")))');
+          writeFormula_(dbId, MFG_CONSUMPTION_SHEET, cRow, 'item_code', '=IFERROR(VLOOKUP(D' + cRow + ', valley_product_purchasing!A:C,3,0), IFERROR(VLOOKUP(D' + cRow + ', valley_manufacture_header!A:C,3,0), IFERROR(INDEX(valley_manufacture_by_product!F:F,MATCH(D' + cRow + ',valley_manufacture_by_product!A:A,0)),"")))');
           writeFormula_(dbId, MFG_CONSUMPTION_SHEET, cRow, 'total_cost', '=G' + cRow + '*F' + cRow);
         }
       }
@@ -4143,7 +4143,7 @@ const ValleyFoodsHRModules = (function () {
         for (var wr = 1; wr < wcAll.length; wr++) {
           if (String(wcAll[wr][wcUidIdx]).trim() === String(uid).trim()) {
             var rN = wr + 1;
-            writeFormula_(dbId, WC_SHEET, rN, 'work_center_cost', '=VLOOKUP(E' + rN + ', valley_work_centers!$A:$I, 8, 0)');
+            writeFormula_(dbId, WC_SHEET, rN, 'work_center_cost', '=INDEX(valley_work_centers!$H:$H,MATCH(E' + rN + ',valley_work_centers!$A:$A,0))');
             writeFormula_(dbId, WC_SHEET, rN, 'actual_hours', '=(H' + rN + '-G' + rN + ')*24');
             writeFormula_(dbId, WC_SHEET, rN, 'total_cost', '=K' + rN + '*J' + rN);
             break;

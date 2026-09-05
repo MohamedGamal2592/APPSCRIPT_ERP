@@ -1157,7 +1157,7 @@ const TopLight = (function () {
         }
         if (idx['movement_code'] !== undefined) {
           rowValues[idx['movement_code']] =
-            '=CONCATENATE(' + L('movement_type') + r + ',"-",' + L('id') + r + ',"-",VLOOKUP(' + L('product') + r + ',top_light_products!$A:$D,2,0),"-",TEXT(' + L('receipt_date') + r + ',"DD/MM/YYYY"))';
+            '=CONCATENATE(' + L('movement_type') + r + ',"-",' + L('id') + r + ',"-",INDEX(top_light_products!$B:$B,MATCH(' + L('product') + r + ',top_light_products!$A:$A,0)),"-",TEXT(' + L('receipt_date') + r + ',"DD/MM/YYYY"))';
         }
         if (idx['sales_value_amount'] !== undefined) {
           rowValues[idx['sales_value_amount']] =
@@ -2480,11 +2480,11 @@ const TopLight = (function () {
     }
     if (idx['chart_name'] !== undefined && idx['chart_code'] !== undefined) {
       out[idx['chart_name']] =
-        '=IFERROR(VLOOKUP(' + col('chart_code') + rowNum + ',top_light_chart_of_accounts!I:N,6,0),"")';
+        '=IFERROR(INDEX(top_light_chart_of_accounts!N:N,MATCH(' + col('chart_code') + rowNum + ',top_light_chart_of_accounts!I:I,0)),"")';
     }
     if (idx['chart_account_main'] !== undefined && idx['chart_code'] !== undefined) {
       out[idx['chart_account_main']] =
-        '=IFERROR(VLOOKUP(' + col('chart_code') + rowNum + ',top_light_chart_of_accounts!I:O,7,0),"")';
+        '=IFERROR(INDEX(top_light_chart_of_accounts!O:O,MATCH(' + col('chart_code') + rowNum + ',top_light_chart_of_accounts!I:I,0)),"")';
     }
     return out;
   }

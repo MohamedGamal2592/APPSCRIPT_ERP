@@ -1348,8 +1348,8 @@ const TopChemical = (function () {
       const key = String(h).trim().toLowerCase();
       let f = '';
       if (key === 'name_ar') f = '=VLOOKUP(A' + rowNum + ',products!A:C,3,0)';
-      if (key === 'category') f = '=VLOOKUP(A' + rowNum + ',products!A:E,5,0)';
-      if (key === 'unit') f = '=VLOOKUP(A' + rowNum + ',products!A:D,4,0)';
+      if (key === 'category') f = '=INDEX(products!E:E,MATCH(A' + rowNum + ',products!A:A,0))';
+      if (key === 'unit') f = '=INDEX(products!D:D,MATCH(A' + rowNum + ',products!A:A,0))';
       if (key === 'difference') {
         f = '=IF(ISBLANK(I' + rowNum + '),"",IF(I' + rowNum + '-F' + rowNum + '=0,"مظبوط",IF(I' + rowNum + '>F' + rowNum + ',ROUND(I' + rowNum + '-F' + rowNum + ',2) & "  عجز",ROUND(I' + rowNum + '-F' + rowNum + ',2) & "  زيادة")))';
       }
@@ -2105,16 +2105,16 @@ const TopChemical = (function () {
       appendHrRow_(dbId, EMPLOYEE_SHEET, {
         emp_id: empId,
         name_ar: nameAr,
-        main_salary: '=VLOOKUP(A' + rowNumber + ',employee_salary_updated!A:F,4,0)',
-        allow: '=VLOOKUP(A' + rowNumber + ',employee_salary_updated!A:F,5,0)',
+        main_salary: '=INDEX(employee_salary_updated!D:D,MATCH(A' + rowNumber + ',employee_salary_updated!A:A,0))',
+        allow: '=INDEX(employee_salary_updated!E:E,MATCH(A' + rowNumber + ',employee_salary_updated!A:A,0))',
         national_id: nationalId,
         hiring_date: hiringDate,
         title: title,
-        section: '=VLOOKUP(G' + rowNumber + ',title_index!B:H,7,0)',
+        section: '=INDEX(title_index!H:H,MATCH(G' + rowNumber + ',title_index!B:B,0))',
         category: category,
         insurance: insurance,
         'الحالة الوظيفية': '=VLOOKUP(A' + rowNumber + ',employee_status_updated!$A:$C,3,0)',
-        basic_salary: '=VLOOKUP(A' + rowNumber + ',employee_salary_updated!A:F,6,0)',
+        basic_salary: '=INDEX(employee_salary_updated!F:F,MATCH(A' + rowNumber + ',employee_salary_updated!A:A,0))',
         emp_id_1: '=A' + rowNumber
       });
       var sec = '';
@@ -2262,7 +2262,7 @@ const TopChemical = (function () {
         id: id,
         salary_date: salaryDate,
         emp_id: empId,
-        name_ar: '=VLOOKUP(C' + rowNumber + ',employee_info!A:M,2,0)',
+        name_ar: '=INDEX(employee_info!B:B,MATCH(C' + rowNumber + ',employee_info!A:A,0))',
         main_salary: mainSalary,
         allow: allow,
         basic_salary: basicSalary,
@@ -2629,7 +2629,7 @@ const TopChemical = (function () {
           name_ar: '=VLOOKUP(A' + r + ',employee_info!A:B,2,0)',
           basic_salary: '=DGET(employee_salary!$A:$J,employee_salary!$E$1 , {employee_salary!$B$1,employee_salary!$C$1 ;MAXIFS(employee_salary!B:B,employee_salary!B:B,"<=" & V' + r + ',employee_salary!C:C,A' + r + '),A' + r + '})',
           allow: '=DGET(employee_salary!$A:$J,employee_salary!$F$1 , {employee_salary!$B$1,employee_salary!$C$1 ;MAXIFS(employee_salary!$B:$B,employee_salary!$B:$B,"<=" & V' + r + ',employee_salary!$C:$C,A' + r + '),A' + r + '})',
-          section: '=VLOOKUP($A' + r + ',employee_info!$A:$L,9,0)',
+          section: '=INDEX(employee_info!$I:$I,MATCH($A' + r + ',employee_info!$A:$A,0))',
           working_days: wd,
           working_days_value: '=(C' + r + '+D' + r + ')/30*F' + r,
           deduction_day: '=if(SUMIFS(emp_deductions!$E:$E,emp_deductions!A:A,A' + r + ',emp_deductions!I:I,U' + r + ',emp_deductions!J:J,T' + r + ',emp_deductions!C:C,"غياب")-1 <0,0,SUMIFS(emp_deductions!$E:$E,emp_deductions!A:A,A' + r + ',emp_deductions!I:I,U' + r + ',emp_deductions!J:J,T' + r + ',emp_deductions!C:C,"غياب")-1)',
@@ -2642,7 +2642,7 @@ const TopChemical = (function () {
           net_salary: '=G' + r + '+L' + r + '+M' + r + '-N' + r + '-K' + r + '-J' + r,
           net_salary_nearest: '=IF(CEILING(O' + r + ',5)<0,0,CEILING(O' + r + ',5))',
           month_name: '=VLOOKUP(U' + r + ',data_validation_hr!$A$1:$C$13,3,0)',
-          internal_section: '=VLOOKUP(A' + r + ',employee_info!$A:$L,8,0)',
+          internal_section: '=INDEX(employee_info!$H:$H,MATCH(A' + r + ',employee_info!$A:$A,0))',
           section_type: '=VLOOKUP(R' + r + ',dept_section_index!$B:$D,2,0)',
           year: year,
           month: month,
@@ -3443,10 +3443,10 @@ const TopChemical = (function () {
     valueMap['نوع السلعة (محلي 1/صادرات 2/آلات ومعدات 5/أجزاء آلات 6/إعفاءات 7 /  سلع الجدول  مراجعة الإرشادات )'] = 14;
     valueMap['user'] = (user && user.email) || '';
     const formulaMap = {
-      'رقم التسجيل الضريبي للعميل': '=IFERROR(VLOOKUP(F{r},legal_customer_vendor!B:E,4,0),"")',
+      'رقم التسجيل الضريبي للعميل': '=IFERROR(INDEX(legal_customer_vendor!E:E,MATCH(F{r},legal_customer_vendor!B:B,0)),"")',
       'إسم المنتج': '=IFERROR(VLOOKUP(A{r},legal_current_products!$A:$B,2,0),"")',
-      'كود المنتج': '=IFERROR(VLOOKUP(M{r},legal_products!B:G,4,0),"")',
-      'وحدة قياس المنتج': '=IFERROR(VLOOKUP(M{r},legal_products!B:F,5,0),"")',
+      'كود المنتج': '=IFERROR(INDEX(legal_products!E:E,MATCH(M{r},legal_products!B:B,0)),"")',
+      'وحدة قياس المنتج': '=IFERROR(INDEX(legal_products!F:F,MATCH(M{r},legal_products!B:B,0)),"")',
       'سعر الوحدة': '=ROUND(IFERROR(SUMIFS(legal_product_purchasing!$K:$K,legal_product_purchasing!$A:$A,A{r})/SUMIFS(legal_product_purchasing!$G:$G,legal_product_purchasing!A:A,A{r}),SUMIFS(legal_products_movement!$N:$N,legal_products_movement!A:A,A{r},legal_products_movement!$C:$C,"انتاج")),2)',
       'نوع سلع الجدول (لايوجد 0/جدول أولا 1/جدول ثانيا 2)': '=IF(S{r}=0.05,1,0)',
       'المبلغ الصافي': '=T{r}*R{r}',
