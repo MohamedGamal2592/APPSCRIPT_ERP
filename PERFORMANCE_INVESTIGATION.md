@@ -55,7 +55,7 @@ Q8 (`src_html/`), Q9 (deploy/rollback). None of them block the early phases.
 | Shared client | [UI_Components.html](UI_Components.html) (93 KB), [Client_Helpers.html](Client_Helpers.html), [ERP_DataTable_JS.html](ERP_DataTable_JS.html), [CSS_Tokens.html](CSS_Tokens.html) | full/partial |
 | Pages | 100+ `Company_*.html` | sampled + pattern-scanned |
 | Deployment | [.clasp.json](.clasp.json), [appsscript.json](appsscript.json) | full |
-| Prior work | [Backup/PERFORMANCE_OPTIMIZATION_STRATEGY.md](Backup/PERFORMANCE_OPTIMIZATION_STRATEGY.md), `Erp performance agent prompt.md` | full |
+| Prior work | [Backup/PERFORMANCE_OPTIMIZATION_STRATEGY.md](Backup/PERFORMANCE_OPTIMIZATION_STRATEGY.md), [Backup/Erp performance agent prompt.md](Backup/Erp%20performance%20agent%20prompt.md) | full |
 
 **Already done in a previous pass** (so *not* re-proposed here): client-side 50-row
 pagination, chunked `requestAnimationFrame` tbody rendering, `getRefsCached_` reference cache,
