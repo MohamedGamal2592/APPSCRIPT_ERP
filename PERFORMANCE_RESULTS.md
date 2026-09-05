@@ -13,6 +13,12 @@
 
 ## 0. Read this part first
 
+> **This document now covers two runs.** §0–§8 are the first run (Phases 0–6). A second run took it
+> further and is written up in **[Continuation run (Phases 7–10)](#continuation-run-phases-710)** at
+> the end — start there for what is newest, including a gap in the first run's Phase 2 that the first
+> run did not report, and the fact that **F-01 has since been done**. Item 2 below is left as it was
+> written, because it was true at the time and the record should show what was and was not known.
+
 Three things matter more than the rest of this document.
 
 **1. Nothing here has been executed or tested against a real spreadsheet.** There is no staging
@@ -372,6 +378,11 @@ test: save a record in staging, confirm the production sheet is untouched.
 | 4 | Open a `total_cost` cell on a newly created byproduct row: it should read `INDEX(...MATCH(...))` and produce the same number as an older `VLOOKUP` row for equivalent inputs. |
 | 5 | Run `archiveOldRecordsDryRun()` **first** and read the report. Only then `archiveOldRecords()`. Then open the record-history panel and confirm recent history still shows. |
 | 6 | Open `Company_TopLight_Products` — it should look and behave identically (the removed includes were never instantiated). Confirm dropdowns across pages still populate (reference caching changed shape). |
+| 7.1 | **TopChemical → توريدات ومشتريات.** The list shows the 10 most recent, newest first — same 10, same order as before. Click "+ إضافة توريد": there is now a brief spinner ("جاري استرجاع خيارات الموردين والأصناف…") the **first** time only, then the المورد and الصنف dropdowns must be populated. Open it a second time — no spinner, options still there. Save a supply and confirm the new row appears at the top. |
+| 7.2 | **The one to test with two browsers.** TopChemical: edit a product's category, then immediately open the products page in another session — the change must be visible, not up to 10 minutes stale. Same for a client/vendor. Then check the two dropdowns that were silently broken before: the products page's التصنيف list must show real categories (not `[object Object]`), and adding a product with a valid category must **not** be rejected with "الفئة غير موجودة في جدول الفئات". ValleyFoods: save a party, then open the sales form and confirm the party's tax_id, address and phone still autofill; check the asset-code dropdown on the products form still offers only the 114100–115100 range. |
+| 7.3 | **TopChemical → متابعة الاستيراد.** Advance a record's status. The badge and the row's action buttons must change immediately, with no list re-fetch, and must match what a page refresh shows. |
+| 8 | **The critical one, with Phase 3.** In staging, save a ValleyFoods manufacturing order with several outputs, several consumption lines and at least one by-product. Then open the sheets and confirm the computed columns are **still formulas, not values**: `valley_manufacture_by_product.total_cost` and `.transaction_code`, `valley_manufacture_header_products.cost_unit`/`.total_cost`, `valley_manufacture_work_center.total_cost`, and the MO header's `total_batch_cost`. Each formula must reference **its own row number**. Then edit the order and re-check — the row numbers must still be right. Do the same for TopChemical: add an AR/AP movement (`name_ar` must be a VLOOKUP), a stock revision (five formula columns), and an import-follow record (`approval_expiry_date`). |
+| 9 | **The change with the least margin for error.** Save a ValleyFoods sales invoice (the densest handler: 6 `getAllRecords_` before its first write) and check every number it wrote — totals, tax, stock. Then save a second one immediately and check again. Then do a read-modify-write on the same screen twice in a row. If anything is wrong, revert `15f9c80` first, before anything else. Also confirm list pages are *faster*, not just unchanged — this phase turns the request memo on for the entire company read path, which never had it. |
 
 ### Step 4 — create the version
 Only after the above. Apps Script editor → Deploy → Manage deployments → edit the live deployment →
@@ -387,6 +398,14 @@ Seconds, no code changes. This is the primary path.
 
 **Per phase, in code** — each phase is one commit and they are independent in reverse order:
 ```bash
+git revert 14ca5ab   # Phase 10 — docs only, nothing deployable
+git revert 15f9c80   # Phase 9  — request memo (revert this FIRST if numbers look wrong)
+git revert 6bf0e1b   # Phase 8b — TopChemical batched formula writes
+git revert 71fbc0d   # Phase 8a — ValleyFoods batched formula writes
+git revert 7ef4636   # Phase 7.3 — import-follow local row patch
+git revert d0cb2ad   # Phase 7.2b — ValleyFoods reference cache
+git revert 9053cb5   # Phase 7.2a — TopChemical reference cache
+git revert a8c239f   # Phase 7.1 — TopChemical get_purchase_items
 git revert c53d99a   # Phase 6 — hygiene
 git revert 2eb1716   # Phase 5 — retention
 git revert 454ae31   # Phase 4 — formulas
@@ -399,6 +418,12 @@ clasp push
 ```
 Phase 1's items are independent of each other, so a single item can be reverted by hand rather than
 the whole commit.
+
+**Two ordering constraints in the list above.** Phase 8a added `applyRowFormulas_`,
+`writeRowFormulas_` and `ensureGridRows_` to `02_DataAccess.js` and Phase 8b **calls** them, so 8b
+must be reverted before 8a or the TopChemical write paths will throw. Everything else is independent
+in reverse order. Phase 9 can be reverted on its own at any time — it only adds `noteMutation_()`
+calls and changes two lines in `apiRouter_`; nothing else depends on it.
 
 **Total abandonment:** `master` is untouched. `git checkout master && clasp push`.
 
@@ -500,3 +525,310 @@ This needs a conversation, not a commit.
    including `writeByproductFormulas_`, which issues four `writeFormula_` calls per row and each of
    those does its own `getSheet_` + `getHeaders_` + `setFormula`. That is the same F-04 pattern and
    the same fix, and it is the largest remaining performance work in the codebase.
+
+---
+
+# Continuation run (Phases 7–10)
+
+**Date:** 2026-09-06 · **Branch:** same `perf/optimization-run`, eight further commits
+**Still nothing deployed.** `clasp push` has still never been run, no deployment created or promoted.
+
+## C0. Read this part first
+
+**1. One thing the previous run got wrong by omission, and should have said.** Phase 2 was scoped
+around the four endpoints named in investigation §15.2. It converted three and never mentioned the
+fourth. **TopChemical `get_purchase_items` was silently missed** — its only commit was the baseline,
+and the Phase 2 report reads as though the phase was complete. It is done now (7.1), but the gap
+existed and this document should show it.
+
+**2. F-01 was bigger than the investigation described, and that is now fixed.** `apiRouter_` tested
+`isReadAction_(request.action)`, and **every company page in the application calls the single route
+`company_action`**, which never starts with `get_`. So the request memo was switched off for every
+company request — reads included — not only for writes. Every list endpoint in the app has been
+paying full re-reads for repeated access to the same sheet within one request, for the life of the
+app. F-01 called this a write-path problem. It was an every-path problem.
+
+**3. Two live bugs were found and fixed while doing the caching work, and neither was a performance
+bug.** Both TopChemical and ValleyFoods reused one `getRefsCached_` cache key for several different
+value *shapes*. In TopChemical, `prefetch_refs` warmed those keys with raw record arrays on an idle
+timer, after which `add_product` rejected a valid category with **"الفئة غير موجودة في جدول
+الفئات"** — a save blocked outright — and every client/vendor name rendered blank. In ValleyFoods the
+sales form silently lost a party's tax_id, address and phone, and the asset-code dropdown silently
+lost its 114100–115100 filter. Details in C1. **These had to be fixed before any TTL could be
+raised**, which is the only reason they were found.
+
+**4. Still nothing has been run against a real spreadsheet.** Same limitation as the first run. The
+verification below is differential testing and static analysis under `node` — real and reproducible,
+and not a substitute for executing against Google Sheets. Phase 9 in particular deserves the scrutiny
+in §5 step 3.
+
+---
+
+## C1. What changed, per phase
+
+| Phase | Commit | Summary |
+|---|---|---|
+| 7.1 | `a8c239f` | TopChemical `get_purchase_items` — slice before mapping, options split out |
+| 7.2a | `9053cb5` | TopChemical reference cache → version-stamped, 600s, after fixing a key collision |
+| 7.2b | `d0cb2ad` | ValleyFoods reference cache → version-stamped, 600s, after closing two invalidation gaps |
+| 7.3 | `7ef4636` | F-21 — one provable conversion, and the reasoned decision for the other 37 |
+| 8a | `71fbc0d` | F-04 on ValleyFoods — 19 of 22 `writeFormula_` calls merged into the row writes |
+| 8b | `6bf0e1b` | F-04 on TopChemical — all 3 `setFormula` calls merged into their row writes |
+| 9 | `15f9c80` | F-01 conservative variant — the memo survives until the first write |
+| 10 | `14ca5ab` | Spent prompts retired to `Backup/`; `NEXT_STEPS_OWNER.md` |
+
+### Phase 7.1 — the endpoint the previous run missed
+
+`getPurchaseItems_` mapped **every** purchase row ever into a 15-field derived object, `.reverse()`d
+the whole array, and only then sliced to 10. The order is now computed on an index array first, so
+`reverse().slice(0, limit)` keeps its exact semantics while only the visible rows are mapped.
+
+`vendorNameMap_` / `itemNameMap_` were extracted as the *map* half of `vendorRefs_` / `itemRefs_`.
+The list needs the id → name map; it does not need the Arabic-collated `localeCompare` sort over
+every vendor and every item, which is the expensive half and was being paid on every list render for
+a form that may never open. `addPurchaseItem_` only ever read `.map`, so the sorts came off the save
+path too.
+
+New action `get_purchase_options`; the old combined response survives behind `withOptions:true`. The
+page memoises it on first form open. **Checked first that the list view renders neither option list**
+— it uses the server-resolved `vendor_name` / `item_name` — so unlike ValleyFoods purchasing, where
+`supplier_options` had to stay, nothing had to be kept on the list path.
+
+### Phase 7.2 — F-15 on the other two companies, and the bug that was in the way
+
+Both companies now use the TopLight pattern: a version stamp folded into every derived cache key,
+bumped by the buster, TTL 600s. **600s and not the 1–6 h F-15 floated, for the same reason as
+TopLight:** a stamp cannot cover somebody editing a reference sheet by hand in the spreadsheet.
+
+**The audits, which are the part that mattered.**
+
+*TopChemical* — every mutation site for every cached sheet:
+
+| Sheet | Mutation actions | Busts? |
+|---|---|---|
+| `clients_vendors` | `add_client_vendor`, `edit_client_vendor` | both |
+| `products` | `add_product`, `edit_product` | both |
+| `legal_customer_vendor` | `add_legal_party` | yes |
+| `product_categories` | **none exist** | n/a — hand-edited only |
+| `legal_products` | **none exist** | n/a |
+| `chart_of_accounts` | **none exist** | n/a |
+
+No delete action exists for any of them, and no other `.js` file writes to any of these sheets
+(checked by literal sheet-name grep across all 19). Coverage complete.
+
+*ValleyFoods* — nominally complete, but **two gaps made it not actually complete**, and both had to
+be closed before 60s could become 600s:
+
+1. **Every bust fired BEFORE its own write.** Scripted the position of each mutation relative to each
+   bust: **13 of the 15 bust sites had all their mutations after the bust.** So: bust at t0, write at
+   t0+300 ms, and any concurrent request landing in between re-caches *pre-write* data for the whole
+   TTL. At 60s that was survivable; at 600s a product or party edit could stay invisible for ten
+   minutes. Fixed additively — `withRefBust_` wraps the 14 registrations so the bust also runs after
+   the handler returns, on every return path, without touching a single handler body. The original
+   pre-busts are kept.
+2. **`purchasing_supplier_options` and `purchasing_product_options` were never busted at all.** They
+   called `getRefsCached_` directly and are not in `finBustRefs_`'s kind list, so only the TTL ever
+   expired them. They now go through the stamp — bust coverage they never had.
+
+**The key collision, in both companies.** `getRefsCached_` keys on `refs_<dbId>_<kind>`, and the same
+`kind` string was reused across different sheets *and* different value shapes. TopChemical's
+`'parties'` alone meant four different things sharing one key; `'products'` three; `'categories'`
+three. ValleyFoods' `'parties'` meant four, `'products'` three. Whichever ran first inside the TTL
+won and every other reader silently got the wrong shape. `prefetch_refs` — an idle-timer call made
+from pages across the app — warmed all of them as raw record arrays, so this was routine, not rare.
+Every `(sheet, shape)` pair now has its own kind, reached through exactly one named accessor so it
+cannot come back, and both `prefetch_refs` implementations warm only shapes a reader actually
+consumes. ValleyFoods' prefetch dropped from five sheet reads to two for the same reason: the other
+three could no longer be warmed correctly, and warming a shape nothing consumes is a full sheet read
+for nothing.
+
+### Phase 7.3 — F-21, and why only one conversion
+
+Scanned every page: **70 sites** issue a write then a list reload. **32 already patch locally** and
+only fall back to a reload. Of the remaining 38, exactly **one** passed the rule
+(*convert only saves that provably touch one row with no cascade*): TopChemical
+`update_import_follow_status`, which writes one cell on one row, cascades to nothing, and is an
+update rather than an add or delete so the 10-row limit is unaffected.
+
+The other 37 are listed with their reasons in commit `7ef4636`. The three groupings that matter:
+
+- **Cash, and anything touching stock or balances,** kept its full reload, as the rule requires.
+- **Genuine cascades** — write counts taken from the handlers: `save_valley_mfg_order` writes 10 rows
+  across 4 sheets, `save_valley_invoice` 8 including `valley_sales_product_stock`, and so on.
+- **Handlers that return no record.** `save_valley_product`, `save_valley_party`,
+  `save_valley_work_center`, `save_valley_work_center_asset` and `save_valley_asset_technical` all
+  return `{status, message}` only. A local patch is impossible without widening the server contract —
+  and widening it would be *wrong* here, because those list endpoints decorate every row with
+  sheet-side aggregates the handler does not have (`getValleyProducts_` aggregates stock totals and
+  batches onto each product row). A patched row would show a correct name and a missing number, which
+  is exactly the failure the rule exists to prevent.
+
+The most interesting near-miss: `addEmployee_` (TopChemical) looks like a clean single-row add, but
+the row it appends contains **formulas** (`main_salary`, `allow`, `section`, `basic_salary`,
+`الحالة الوظيفية`) and the handler returns placeholder zeros for them. A local patch would show `0`
+for salary and allowance until the next real load. Kept the reload.
+
+### Phase 8 — F-04 on the remaining two modules
+
+The technique is Phase 3's, copied faithfully: formula strings extracted **verbatim** into
+`*FormulaMap_` helpers, merged into the value row, one `setValues`.
+
+**ValleyFoods (19 of 22 `writeFormula_` calls).** Merged into the block write, so the formulas now
+cost *zero* extra round trips: outputs (2 per row), consumption (2 per row), by-products (4 per row —
+the site §8 named as the largest remaining work in the codebase; a 4-by-product order goes from 17
+round trips to 1), and `addValleyMfgByproduct_`. Batched where the row was already written and could
+not be merged into: the MO header (8 calls → 1 helper call issuing 5 range writes and *zero*
+`getSheet_`/`getHeaders_`), and work centres (3 → 1, because those three columns are adjacent).
+
+**TopChemical (all 3 `setFormula` calls).** The file now contains zero `setFormula` calls.
+
+**Three new shared helpers** live in `02_DataAccess.js` beside `writeFormula_`:
+`applyRowFormulas_`, `writeRowFormulas_`, `ensureGridRows_`.
+
+**Concurrency, deliberately changed.** The ValleyFoods outputs, consumption and by-product blocks
+already wrote to a **precomputed** `getLastRow()+1` range with no lock, so two concurrent saves could
+compute the same start row and one would silently overwrite the other. Each now recomputes its start
+row inside `executeWithLock_` and grows the grid with `ensureGridRows_`. Same for TopChemical's
+`addStockRevision_`, which held no lock. Row numbers are unchanged. `saveValleyMfgOrder_` as a whole
+still has no outer lock — pre-existing, out of scope, and the reason each block takes its own.
+
+One deviation from the brief, stated plainly: it asks for the original `set*Formulas_` function to be
+kept as a thin wrapper over the extracted map. That was done for `writeByproductFormulas_`, which is
+such a function. The three TopChemical sites have no such function — their formulas are decided
+inline inside the handler from `headers.forEach` — so there was nothing to keep as a wrapper, and the
+loops were left in place with only their destination changed.
+
+### Phase 9 — F-01, the conservative variant
+
+The memo starts **enabled**; the **first** mutation of the request turns it off — clearing it — for
+the remainder of that request. A read action never mutates, so it keeps the memo throughout. A write
+action reuses the reads taken before its first write, then behaves exactly as today.
+
+`apiRouter_` also re-arms the memo immediately before the handler, because the auth preamble may
+touch the session row and that write would otherwise cost the handler its memo over something it does
+not care about.
+
+**Coverage.** 183 direct Sheets write sites across the 11 server files. **All 183** call
+`noteMutation_` immediately after the write — 168 placed by script, 14 by hand (multi-line
+statements, chained calls, six `if (…) { deleteRow; break; }` one-liners where the call belongs
+*inside* the braces, and one `Range.sort()` that reorders rows and the write pattern does not match).
+Verified by a **separate** script from the one that did the insertion, which also asserts no memoised
+read sits between any write and its invalidation.
+
+**Defence in depth, and its limit.** On a request that *can* write, a memo hit is reused only if the
+sheet still has the same shape (`getLastRow`/`getLastColumn` — metadata calls, not a values read).
+That independently catches an append or delete that reached the sheet without going through
+`noteMutation_`. It does **not** catch an in-place update; that rests on coverage alone. The guard is
+armed by `setMemoGuard_(requestMayWrite_(request))`, and `requestMayWrite_` finally looks at
+`payload.module_action` for `company_action`, so a pure read request does not arm it and the read
+path pays nothing.
+
+---
+
+## C2. What was verified, and how
+
+Nothing in this run was accepted on inspection alone where a test was possible.
+
+| Change | Verification | Result |
+|---|---|---|
+| 7.1 reordering rewrite | differential test vs the original `map`/`reverse`/`slice`, random row counts 0–300, duplicate and blank ids, every awkward `limit` `slice` accepts (negative, fractional, string, NaN, Infinity, absent), plus `loadAll` | 40,000 cases, **0 mismatches** |
+| 7.1 `vendorNameMap_` | differential test vs `vendorRefs_().map` over duplicate, blank, whitespace, numeric and null ids | 40,000 cases, **0 mismatches** |
+| 7.2a extracted builders | each compared character-for-character against the inline original it replaced, by script, against `git HEAD` | 4/4 **identical** |
+| 7.2b bust placement | scripted position of every mutation relative to every bust | 13 of 15 sites found broken, all fixed |
+| 8a formula text | both sides sliced from their own source, evaluated under `node` at 7 different row numbers, strings compared | 19 formulas × 7 rows = **133 comparisons, 0 mismatches** |
+| 8b formula text | old and new formula-producing code both run under `node` with the same headers and row number, `{column: formula}` maps compared, captured output inspected to prove the test is not vacuous | 3 sites × 4 rows = **12 comparisons, 0 mismatches** |
+| `writeRowFormulas_` / `applyRowFormulas_` | tested against the semantics of the `writeFormula_` calls they replace, over random header layouts including 95,847 duplicate-header instances | 30,000 layouts, **0 mismatches** |
+| 9 memo design | the real `disableRecordCache_`/`rearmRecordCache_`/`noteMutation_` eval'd out of the file, run against a fake spreadsheet over randomised read/write interleavings, asserting every read equals an uncached read | 180,389 reads, **0 stale** |
+| 9 coverage | independent script over all 183 write sites | **0 problems** |
+| every phase | `node --check` on all 19 `.js` files and the inline `<script>` of all 92 pages | pass |
+
+The Phase 9 model was also run with the invariant deliberately broken, to *measure* what the design
+rests on rather than assert it:
+
+| Scenario | Reads | Stale |
+|---|---|---|
+| full coverage (what ships) | 180,389 | **0** |
+| a missed site, appends/deletes | 179,700 | 3,499 |
+| a missed site, in-place updates | 179,739 | 36,793 |
+
+Read that as: the design is correct **given coverage**; the shape guard turns most of a missed
+append/delete into a correct-but-slower read; and a missed in-place update is protected by nothing
+except coverage. That is the residual risk of Phase 9, stated plainly. It is why the coverage check
+is a different script from the one that did the insertion.
+
+One check was **tried and abandoned as unsound**: a whole-file "the multiset of formula string
+literals is unchanged" invariant. A single apostrophe anywhere re-phases a naive quote tokeniser, so
+it reported dozens of false differences in code neither commit touched. The site-scoped differential
+tests above replaced it. Recorded because a check that looks rigorous and is not is worse than no
+check at all.
+
+---
+
+## C3. What was skipped, and why
+
+| Item | Status |
+|---|---|
+| **Phase 4.1/4.2** — bounding whole-column ranges | Untouched, as instructed. Still blocked on `inventorySpreadsheets()`. This is now the largest remaining win. |
+| **Phase 3.4 / F-05** — bulk-rewrite deletes | Not attempted. The previous run's reasoning still holds and was not re-litigated. |
+| **F-03, F-20, F-11, `SystemLog.ChangedFields`, `src_html/`** | Left alone, as instructed. `src_html/` not touched or deleted, only reported. |
+| **Phase 4.4** | Still a proposal in §7. Hard stop. |
+| **3 of 22 ValleyFoods `writeFormula_` calls** (`:666`, `:730`, `:880`) | Each is a **single** formula written after `saveRecordWithAudit_` has already appended the row. Batching one formula saves nothing — the helper would issue the same single range write and still need the sheet and headers. Left as `writeFormula_`. |
+| **The remaining 18 ValleyFoods `appendRow` calls** | Not F-04 sites. They are single-row appends that already carry their formula strings in the same `appendRow` — the optimal pattern already. The "19 appendRow" figure in the brief counts them all; only one was convertible, and it was converted. |
+| **ValleyFoods work-centre append loop** | `sheetWC.appendRow(vals)` inside a `forEach` is a genuine N-appends-in-a-loop site, but it is a *mixed* update/append loop with a per-row `getNextIdUnderLock_` between iterations. Converting it would change the interleaving of appends and updates, and I could not verify the result identical by reading. Skipped and recorded rather than guessed. |
+| **37 of 38 F-21 candidates** | Kept their full reload. Reasons per site in `7ef4636` and summarised above. |
+| **Five unregistered delete actions** | Found, not fixed — writing five business-table delete handlers is not a performance change. Listed in `NEXT_STEPS_OWNER.md`. |
+| **`get_import_follow`** | Has the *identical* map-everything-then-reverse-then-slice shape 7.1 fixed, in the same file. Not converted: Phase 7.1 was scoped to the four endpoints in investigation §15.2 and this is not one of them. It is a one-line follow-up using a transformation already proved here. |
+
+---
+
+## C4. Every assumption this run made
+
+1. **`setValues` treats a leading `=` as a formula.** Inherited from Phase 3 and load-bearing for all
+   of Phase 8. It is now better supported than an assumption: `writeBudgetRow_`
+   (`Company_TopChemical_Actions.js`), which **predates this whole effort**, already writes values and
+   formula strings together through one `setValues`, with a comment saying so. So this is not merely
+   standard Apps Script behaviour — it is already load-bearing in production code you wrote. Still
+   worth confirming on the first Phase 8 save.
+2. **600s is the right reference-cache TTL for TopChemical and ValleyFoods.** Same reasoning and same
+   number TopLight got in Phase 2.6. A hand edit to a reference sheet now surfaces within 600s
+   instead of 120s (TopChemical) or 60s (ValleyFoods).
+3. **Over-calling `noteMutation_` is free.** It only ever drops a cache. This is why the Phase 9
+   sweep errs towards inserting, and why imprecise placement is safe.
+4. **`getLastRow()`/`getLastColumn()` are much cheaper than `getDataRange().getValues()`.** The Phase
+   9 shape guard rests on this. It is scoped to write-capable requests so the read path pays nothing,
+   but if measurement shows it hurts, it is one line to remove in `getAllRecords_`.
+5. **`executeWithLock_` is reentrant-safe,** so the locks added in Phase 8 can nest under
+   `getNextIdUnderLock_`. Verified by reading it — that is what `_scriptLockHeld_` is for.
+6. **Cache-key changes are free.** Every kind renamed in Phase 7.2 starts cold after deployment. The
+   old entries linger until their TTL and are never read again.
+7. **`ValleyFoodsHRModules`'s export object is unused outside the file.** Verified by grep. The
+   `withRefBust_` wrappers are applied at registration, so anything calling those functions through
+   the export would bypass the post-write bust — as `generateTestData_` does, which is a seeder and
+   still gets the pre-bust.
+8. **`prefetch_refs` is best-effort.** Warming fewer sheets (ValleyFoods, 5 → 2) is acceptable
+   because the three dropped could no longer be warmed in a shape any reader consumes.
+
+---
+
+## C5. Other things you should know
+
+1. **`03_Security.js` contains two literal NUL bytes**, at lines 649 and 652. They are deliberate —
+   `getCompanyLogoUrl_` uses a NUL character as a "cached empty string" sentinel, written as a raw
+   byte rather than an escape sequence. It works, and it makes `grep` treat the file as binary. It is
+   fragile: any editor or transfer that strips NULs would break the logo cache silently. Worth
+   converting to an escape sequence one day; not changed here.
+2. **`isReadAction_` finally does something correct.** It was only ever used to decide the memo, on
+   the router action, which made it wrong for every company request. It now backs `requestMayWrite_`,
+   which looks at `payload.module_action`.
+3. **TopLight Purchasing, Sales and Sales_Offer patch their delete locally while their list is capped
+   at 10**, so a delete leaves 9 rows and the 11th does not appear until the next navigation.
+   Pre-existing — the limit predates Phase 2 — and cosmetic rather than wrong numbers, so it was left
+   alone. But it is the exact case the F-21 rule warns about, and it is your call whether those three
+   should go back to a full reload.
+4. **`UI_UX_INVESTIGATION.md` appeared in the working tree during this run** and is not this run's
+   work. It was briefly swept into the Phase 7.3 commit by an over-broad `git add`; that commit was
+   amended and the file left **untracked** so you decide what to do with it.
+5. **`saveValleyMfgOrder_` still has no outer lock.** It writes 10 rows across 4 sheets with no
+   transaction of any kind. Phase 8 gave each of its block writes its own lock, which fixes the
+   overwrite race, but two concurrent saves of the *same* manufacturing order can still interleave.
+   Pre-existing and out of scope; worth knowing.
