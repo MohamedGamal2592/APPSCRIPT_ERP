@@ -900,7 +900,10 @@ function installTriggers_(payload, sessionToken, authUser) {
   });
   ScriptApp.newTrigger('cleanupOldSessions_').timeBased().everyDays(1).atHour(3).create();
   try {
-    ScriptApp.newTrigger('dailyCsvBackup').timeBased().everyDays(1).atHour(7).create();
+    // 01:00 local, deliberately outside working hours: dailyCsvBackup reads every
+    // sheet of every company spreadsheet in full and is visible to users if it
+    // runs mid-day. (Was 07:00, which is inside the working day in Cairo.)
+    ScriptApp.newTrigger('dailyCsvBackup').timeBased().everyDays(1).atHour(1).create();
   } catch (e) {}
   return { status: 'success', message: 'تم تثبيت المؤقتات اليومية' };
 }

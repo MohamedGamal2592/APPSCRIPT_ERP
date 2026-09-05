@@ -24,6 +24,39 @@ const CONFIG = {
   TABLE_CACHE_CHUNK_SIZE: 90000
 };
 
+/**
+ * Staging switch (Phase 0, Step 2). AUTH_SPREADSHEET_ID is the ONLY hardcoded
+ * spreadsheet id in the project — every company database is resolved at runtime
+ * from ERP_Companies.company_sheet_link — so redirecting this one value points
+ * the whole system at a copied dataset.
+ *
+ * Resolution order: Script Property 'AUTH_SPREADSHEET_ID', else the literal
+ * above. Production therefore needs NO property set: the fallback is the live
+ * id, and staging sets the property. That way identical source can be pushed to
+ * both projects and a staging id can never be committed into production code.
+ *
+ * The lookup is memoised per execution, so it costs at most one PropertiesService
+ * call per request and only when the id is first used.
+ */
+(function () {
+  var literalAuthId = CONFIG.AUTH_SPREADSHEET_ID;
+  var resolved = null;
+  Object.defineProperty(CONFIG, 'AUTH_SPREADSHEET_ID', {
+    enumerable: true,
+    configurable: true,
+    get: function () {
+      if (resolved === null) {
+        resolved = literalAuthId;
+        try {
+          var override = PropertiesService.getScriptProperties().getProperty('AUTH_SPREADSHEET_ID');
+          if (override && String(override).trim()) resolved = String(override).trim();
+        } catch (e) { /* properties unavailable — keep the literal */ }
+      }
+      return resolved;
+    }
+  });
+})();
+
 let COMPANY_REGISTRY = {};
 
 /**

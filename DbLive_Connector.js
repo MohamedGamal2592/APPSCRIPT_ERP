@@ -11,14 +11,34 @@ const DBLIVE_CONFIG = {
   port: 3306,
   database: 'topchemicalpest',
   maxRows: 500,
+  // These are Script Property KEY NAMES, not values. `user` and `pass` used to
+  // hold a literal username and a password-shaped string, so every lookup asked
+  // for a property named 'appscript_user' / 'YourStrongPassword123!' while every
+  // error message said MYSQL_USER / MYSQL_PASSWORD. Corrected to the documented
+  // key names; legacyProps below keeps any existing install working.
   props: {
     host: 'MYSQL_HOST',
     port: 'MYSQL_PORT',
     database: 'MYSQL_DATABASE',
+    user: 'MYSQL_USER',
+    pass: 'MYSQL_PASSWORD'
+  },
+  legacyProps: {
     user: 'appscript_user',
     pass: 'YourStrongPassword123!'
   }
 };
+
+/**
+ * Reads a Script Property by its canonical key, falling back to the legacy key
+ * the old (incorrect) props map used, so an install that already stored its
+ * credentials under the legacy names keeps working.
+ */
+function dbLiveProp_(props, canonicalKey, legacyKey) {
+  var v = props.getProperty(canonicalKey);
+  if ((v === null || v === '') && legacyKey) v = props.getProperty(legacyKey);
+  return v;
+}
 
 /**
  * One-time setup: run from editor to store connection DEFAULTS.
@@ -36,8 +56,8 @@ function setupMySqlCredentials() {
   if (!current[DBLIVE_CONFIG.props.database]) toSet[DBLIVE_CONFIG.props.database] = DBLIVE_CONFIG.database;
   if (Object.keys(toSet).length > 0) props.setProperties(toSet);
   var missing = [];
-  if (!props.getProperty(DBLIVE_CONFIG.props.user)) missing.push('MYSQL_USER');
-  if (!props.getProperty(DBLIVE_CONFIG.props.pass)) missing.push('MYSQL_PASSWORD');
+  if (!dbLiveProp_(props, DBLIVE_CONFIG.props.user, DBLIVE_CONFIG.legacyProps.user)) missing.push('MYSQL_USER');
+  if (!dbLiveProp_(props, DBLIVE_CONFIG.props.pass, DBLIVE_CONFIG.legacyProps.pass)) missing.push('MYSQL_PASSWORD');
   if (missing.length > 0) {
     Logger.log('MySQL defaults saved. STILL MISSING — add manually in Project Settings → Script properties: ' + missing.join(', '));
   } else {
@@ -56,8 +76,8 @@ function dbGetConnection_() {
   const host = props.getProperty(DBLIVE_CONFIG.props.host) || DBLIVE_CONFIG.host;
   const port = props.getProperty(DBLIVE_CONFIG.props.port) || DBLIVE_CONFIG.port;
   const db = props.getProperty(DBLIVE_CONFIG.props.database) || DBLIVE_CONFIG.database;
-  const user = (props.getProperty(DBLIVE_CONFIG.props.user) || '').trim();
-  const pass = props.getProperty(DBLIVE_CONFIG.props.pass) || '';
+  const user = (dbLiveProp_(props, DBLIVE_CONFIG.props.user, DBLIVE_CONFIG.legacyProps.user) || '').trim();
+  const pass = dbLiveProp_(props, DBLIVE_CONFIG.props.pass, DBLIVE_CONFIG.legacyProps.pass) || '';
   var missingCreds = [];
   if (!user) missingCreds.push('MYSQL_USER');
   if (!pass) missingCreds.push('MYSQL_PASSWORD');
