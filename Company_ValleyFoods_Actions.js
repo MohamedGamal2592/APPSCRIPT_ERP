@@ -3814,11 +3814,78 @@ const ValleyFoodsHRModules = (function () {
     /* Sheet-computed columns of valley_manufacture_by_product
        (B=id, C=header uid, D=code, E=mfg date, G=item).
        created_at is intentionally left as a full datetime value. */
+  /**
+   * Phase 8 (F-04). The sheet-computed columns of valley_manufacture_by_product,
+   * as { headerName: formula }. Extracted VERBATIM from writeByproductFormulas_
+   * so the same strings can be merged into the row's own setValues instead of
+   * costing four writeFormula_ round trips (each of which paid its own
+   * getSheet_ + getHeaders_ + setFormula) per by-product row.
+   */
+  function byproductFormulaMap_(r) {
+    return {
+      'code': '=INDEX(valley_manufacture_header!E:E,MATCH(C' + r + ',valley_manufacture_header!A:A,0))',
+      'transaction_code': '=CONCATENATE(VLOOKUP(G' + r + ',valley_products!$A:$B,2,0),"-",D' + r + ',"-",G' + r + ',"-",TEXT(E' + r + ',"DD/MM/YYYY"))',
+      'total_cost': '=IF((INDEX(valley_products!$I:$I,MATCH(G' + r + ',valley_products!$A:$A,0))*(INDEX(valley_manufacture_header!$J:$J,MATCH(C' + r + ',valley_manufacture_header!$A:$A,0))+INDEX(valley_manufacture_header!$I:$I,MATCH(C' + r + ',valley_manufacture_header!$A:$A,0))) / (SUMIFS(valley_manufacture_header!I:I,valley_manufacture_header!A:A,C' + r + ')+SUMIFS(valley_manufacture_header!J:J,valley_manufacture_header!A:A,C' + r + '))) > 0.25, (INDEX(valley_products!$I:$I,MATCH(G' + r + ',valley_products!$A:$A,0))*(INDEX(valley_manufacture_header!$J:$J,MATCH(C' + r + ',valley_manufacture_header!$A:$A,0))+INDEX(valley_manufacture_header!$I:$I,MATCH(C' + r + ',valley_manufacture_header!$A:$A,0)))) / 2, (INDEX(valley_products!$I:$I,MATCH(G' + r + ',valley_products!$A:$A,0))*(INDEX(valley_manufacture_header!$J:$J,MATCH(C' + r + ',valley_manufacture_header!$A:$A,0))+INDEX(valley_manufacture_header!$I:$I,MATCH(C' + r + ',valley_manufacture_header!$A:$A,0)))))',
+      'manufacture_internal_batch': '=CONCATENATE(TEXT(E' + r + ',"YYMMDD"),B' + r + ',G' + r + ',D' + r + ')'
+    };
+  }
+
+  /**
+   * Phase 8 (F-04). The sheet-computed columns of the manufacturing-order
+   * header row, extracted VERBATIM from the eight writeFormula_ calls that
+   * used to follow every save.
+   */
+  function mfgOrderFormulaMap_(fx) {
+    return {
+      'transaction_code': '=CONCATENATE(VLOOKUP(M' + fx + ',valley_products!$A:$B,2,0),"-",E' + fx + ',"-",M' + fx + ',"-",TEXT(L' + fx + ',"DD/MM/YYYY"))',
+      'code': '=CONCATENATE("VM -", ROW()-1)',
+      'by_product_nrv_value': '=SUMIFS(valley_manufacture_by_product!I:I, valley_manufacture_by_product!C:C, A' + fx + ')',
+      'total_inventory_cost': '=SUMIFS(valley_manufacture_header_products!$H:$H, valley_manufacture_header_products!$C:$C, A' + fx + ')',
+      'total_other_cost': '=SUMIFS(valley_manufacture_work_center!L:L, valley_manufacture_work_center!C:C, A' + fx + ')',
+      'total_batch_cost': '=IF(J' + fx + '+I' + fx + '-H' + fx + '<0, INDEX(valley_products!$I:$I,MATCH(M' + fx + ',valley_products!$A:$A,0))*(J' + fx + '+I' + fx + '), J' + fx + '+I' + fx + '-H' + fx + ')',
+      'product_category': '=IFERROR(INDEX(valley_products!$N:$N,MATCH(M' + fx + ',valley_products!$A:$A,0)), "")',
+      'manufacture_internal_batch': '=CONCATENATE(TEXT(L' + fx + ',"YYMMDD"),B' + fx + ',M' + fx + ',E' + fx + ')'
+    };
+  }
+
+  /**
+   * Phase 8 (F-04). The sheet-computed columns of an output row, extracted
+   * VERBATIM from the two writeFormula_ calls that ran per row.
+   */
+  function mfgOutputFormulaMap_(oRow) {
+    return {
+      'cost_unit': '=SUMIFS(valley_manufacture_footer!G:G, valley_manufacture_footer!C:C, A' + oRow + ')',
+      'total_cost': '=SUMIFS(valley_manufacture_footer!H:H, valley_manufacture_footer!C:C, A' + oRow + ')'
+    };
+  }
+
+  /**
+   * Phase 8 (F-04). The sheet-computed columns of a consumption row, extracted
+   * VERBATIM from the two writeFormula_ calls that ran per row.
+   */
+  function mfgConsumptionFormulaMap_(cRow) {
+    return {
+      'item_code': '=IFERROR(VLOOKUP(D' + cRow + ', valley_product_purchasing!A:C,3,0), IFERROR(VLOOKUP(D' + cRow + ', valley_manufacture_header!A:C,3,0), IFERROR(INDEX(valley_manufacture_by_product!F:F,MATCH(D' + cRow + ',valley_manufacture_by_product!A:A,0)),"")))',
+      'total_cost': '=G' + cRow + '*F' + cRow
+    };
+  }
+
+  /**
+   * Phase 8 (F-04). The sheet-computed columns of a work-centre row, extracted
+   * VERBATIM from the three writeFormula_ calls that ran per kept row.
+   * actual_hours, work_center_cost and total_cost are adjacent in WC_HEADERS,
+   * so writeRowFormulas_ collapses all three into one setValues.
+   */
+  function mfgWorkCenterFormulaMap_(rN) {
+    return {
+      'work_center_cost': '=INDEX(valley_work_centers!$H:$H,MATCH(E' + rN + ',valley_work_centers!$A:$A,0))',
+      'actual_hours': '=(H' + rN + '-G' + rN + ')*24',
+      'total_cost': '=K' + rN + '*J' + rN
+    };
+  }
     function writeByproductFormulas_(dbId, r) {
-      writeFormula_(dbId, MFG_BYPRODUCT_SHEET, r, 'code', '=INDEX(valley_manufacture_header!E:E,MATCH(C' + r + ',valley_manufacture_header!A:A,0))');
-      writeFormula_(dbId, MFG_BYPRODUCT_SHEET, r, 'transaction_code', '=CONCATENATE(VLOOKUP(G' + r + ',valley_products!$A:$B,2,0),"-",D' + r + ',"-",G' + r + ',"-",TEXT(E' + r + ',"DD/MM/YYYY"))');
-      writeFormula_(dbId, MFG_BYPRODUCT_SHEET, r, 'total_cost', '=IF((INDEX(valley_products!$I:$I,MATCH(G' + r + ',valley_products!$A:$A,0))*(INDEX(valley_manufacture_header!$J:$J,MATCH(C' + r + ',valley_manufacture_header!$A:$A,0))+INDEX(valley_manufacture_header!$I:$I,MATCH(C' + r + ',valley_manufacture_header!$A:$A,0))) / (SUMIFS(valley_manufacture_header!I:I,valley_manufacture_header!A:A,C' + r + ')+SUMIFS(valley_manufacture_header!J:J,valley_manufacture_header!A:A,C' + r + '))) > 0.25, (INDEX(valley_products!$I:$I,MATCH(G' + r + ',valley_products!$A:$A,0))*(INDEX(valley_manufacture_header!$J:$J,MATCH(C' + r + ',valley_manufacture_header!$A:$A,0))+INDEX(valley_manufacture_header!$I:$I,MATCH(C' + r + ',valley_manufacture_header!$A:$A,0)))) / 2, (INDEX(valley_products!$I:$I,MATCH(G' + r + ',valley_products!$A:$A,0))*(INDEX(valley_manufacture_header!$J:$J,MATCH(C' + r + ',valley_manufacture_header!$A:$A,0))+INDEX(valley_manufacture_header!$I:$I,MATCH(C' + r + ',valley_manufacture_header!$A:$A,0)))))');
-      writeFormula_(dbId, MFG_BYPRODUCT_SHEET, r, 'manufacture_internal_batch', '=CONCATENATE(TEXT(E' + r + ',"YYMMDD"),B' + r + ',G' + r + ',D' + r + ')');
+      var _bpSheet = getSheet_(MFG_BYPRODUCT_SHEET, dbId);
+      writeRowFormulas_(_bpSheet, getHeaders_(_bpSheet), r, byproductFormulaMap_(r));
     }
 
     function saveValleyMfgOrder_(data, user, dbId) {
@@ -4013,14 +4080,11 @@ const ValleyFoodsHRModules = (function () {
         var mdIdx = moHeaders.findIndex(function (h) { return String(h).trim() === 'manufacture_date'; });
         if (fx && mdIdx !== -1) sheetMo.getRange(fx, mdIdx + 1).setNumberFormat('yyyy-MM-dd');
       } catch (eFmt) {}
-      writeFormula_(dbId, MFG_ORDER_SHEET, fx, 'transaction_code', '=CONCATENATE(VLOOKUP(M' + fx + ',valley_products!$A:$B,2,0),"-",E' + fx + ',"-",M' + fx + ',"-",TEXT(L' + fx + ',"DD/MM/YYYY"))');
-      writeFormula_(dbId, MFG_ORDER_SHEET, fx, 'code', '=CONCATENATE("VM -", ROW()-1)');
-      writeFormula_(dbId, MFG_ORDER_SHEET, fx, 'by_product_nrv_value', '=SUMIFS(valley_manufacture_by_product!I:I, valley_manufacture_by_product!C:C, A' + fx + ')');
-      writeFormula_(dbId, MFG_ORDER_SHEET, fx, 'total_inventory_cost', '=SUMIFS(valley_manufacture_header_products!$H:$H, valley_manufacture_header_products!$C:$C, A' + fx + ')');
-      writeFormula_(dbId, MFG_ORDER_SHEET, fx, 'total_other_cost', '=SUMIFS(valley_manufacture_work_center!L:L, valley_manufacture_work_center!C:C, A' + fx + ')');
-      writeFormula_(dbId, MFG_ORDER_SHEET, fx, 'total_batch_cost', '=IF(J' + fx + '+I' + fx + '-H' + fx + '<0, INDEX(valley_products!$I:$I,MATCH(M' + fx + ',valley_products!$A:$A,0))*(J' + fx + '+I' + fx + '), J' + fx + '+I' + fx + '-H' + fx + ')');
-      writeFormula_(dbId, MFG_ORDER_SHEET, fx, 'product_category', '=IFERROR(INDEX(valley_products!$N:$N,MATCH(M' + fx + ',valley_products!$A:$A,0)), "")');
-      writeFormula_(dbId, MFG_ORDER_SHEET, fx, 'manufacture_internal_batch', '=CONCATENATE(TEXT(L' + fx + ',"YYMMDD"),B' + fx + ',M' + fx + ',E' + fx + ')');
+      // Phase 8 (F-04): eight writeFormula_ calls, each paying its own
+      // getSheet_ + getHeaders_ + setFormula, replaced by one pass over the
+      // sheet and headers already in scope. The row exists on both the edit
+      // and the create path, so nothing here needs the lock.
+      writeRowFormulas_(sheetMo, moHeaders, fx, mfgOrderFormulaMap_(fx));
 
       /* gather this MO's existing output UIDs BEFORE deleting outputs (needed to scope footer deletion) */
       var existingOutUids = [];
@@ -4060,12 +4124,26 @@ const ValleyFoodsHRModules = (function () {
       });
       try { Logger.log('MFGTRACE outputs: rows=' + outRows.length + ' tab=' + sheetOut.getName() + ' startRow=' + outStart + ' cols=' + outHeaders.length); } catch (eLg3) {}
       if (outRows.length) {
-        sheetOut.getRange(outStart, 1, outRows.length, outHeaders.length).setValues(outRows);
-        for (var oi2 = 0; oi2 < outRows.length; oi2++) {
-          var oRow = outStart + oi2;
-          writeFormula_(dbId, MFG_ORDER_PRODUCTS_SHEET, oRow, 'cost_unit', '=SUMIFS(valley_manufacture_footer!G:G, valley_manufacture_footer!C:C, A' + oRow + ')');
-          writeFormula_(dbId, MFG_ORDER_PRODUCTS_SHEET, oRow, 'total_cost', '=SUMIFS(valley_manufacture_footer!H:H, valley_manufacture_footer!C:C, A' + oRow + ')');
-        }
+        /* Phase 8 (F-04): was one setValues followed by 2 writeFormula_ PER ROW.
+         * The formulas are merged into the same block write, so a 5-output order
+         * goes from 11 round trips to 1.
+         *
+         * The start row is now recomputed under the script lock. It was already
+         * a precomputed target range rather than appendRow, so two concurrent
+         * saves could compute the same start row and one would silently
+         * overwrite the other; the lock closes that, and ensureGridRows_ grows
+         * the grid the way appendRow used to implicitly. Row numbers are
+         * unchanged: output i still lands at getLastRow()+1+i. (outStart is
+         * reassigned here, after the trace above has already logged its
+         * pre-lock value.) */
+        executeWithLock_(function () {
+          outStart = sheetOut.getLastRow() + 1;
+          ensureGridRows_(sheetOut, outStart + outRows.length - 1);
+          outRows.forEach(function (rv, oi2) {
+            applyRowFormulas_(rv, outHeaders, mfgOutputFormulaMap_(outStart + oi2));
+          });
+          sheetOut.getRange(outStart, 1, outRows.length, outHeaders.length).setValues(outRows);
+        });
       }
 
       /* rewrite raw-material batch consumption — per-product footers + legacy consumption */
@@ -4127,13 +4205,16 @@ const ValleyFoodsHRModules = (function () {
 
       try { Logger.log('MFGTRACE consumption: rows=' + consRows.length + ' tab=' + sheetCons.getName() + ' consumption_in=' + consumption.length); } catch (eLg4) {}
       if (consRows.length) {
-        var consStart2 = sheetCons.getLastRow() + 1;
-        sheetCons.getRange(consStart2, 1, consRows.length, consHeaders.length).setValues(consRows);
-        for (var ci = 0; ci < consRows.length; ci++) {
-          var cRow = consStart2 + ci;
-          writeFormula_(dbId, MFG_CONSUMPTION_SHEET, cRow, 'item_code', '=IFERROR(VLOOKUP(D' + cRow + ', valley_product_purchasing!A:C,3,0), IFERROR(VLOOKUP(D' + cRow + ', valley_manufacture_header!A:C,3,0), IFERROR(INDEX(valley_manufacture_by_product!F:F,MATCH(D' + cRow + ',valley_manufacture_by_product!A:A,0)),"")))');
-          writeFormula_(dbId, MFG_CONSUMPTION_SHEET, cRow, 'total_cost', '=G' + cRow + '*F' + cRow);
-        }
+        /* Phase 8 (F-04): one setValues + 2 writeFormula_ per row -> 1 write.
+         * Locked and grid-grown for the same reason as the outputs block. */
+        executeWithLock_(function () {
+          var consStart2 = sheetCons.getLastRow() + 1;
+          ensureGridRows_(sheetCons, consStart2 + consRows.length - 1);
+          consRows.forEach(function (rv, ci) {
+            applyRowFormulas_(rv, consHeaders, mfgConsumptionFormulaMap_(consStart2 + ci));
+          });
+          sheetCons.getRange(consStart2, 1, consRows.length, consHeaders.length).setValues(consRows);
+        });
       }
 
       /* ---- rewrite work-center rows (valley_manufacture_work_center, inline of header) ---- */
@@ -4199,9 +4280,7 @@ const ValleyFoodsHRModules = (function () {
         for (var wr = 1; wr < wcAll.length; wr++) {
           if (String(wcAll[wr][wcUidIdx]).trim() === String(uid).trim()) {
             var rN = wr + 1;
-            writeFormula_(dbId, WC_SHEET, rN, 'work_center_cost', '=INDEX(valley_work_centers!$H:$H,MATCH(E' + rN + ',valley_work_centers!$A:$A,0))');
-            writeFormula_(dbId, WC_SHEET, rN, 'actual_hours', '=(H' + rN + '-G' + rN + ')*24');
-            writeFormula_(dbId, WC_SHEET, rN, 'total_cost', '=K' + rN + '*J' + rN);
+            writeRowFormulas_(sheetWC, wcHdrs, rN, mfgWorkCenterFormulaMap_(rN));
             break;
           }
         }
@@ -4229,9 +4308,18 @@ const ValleyFoodsHRModules = (function () {
         return bpHeaders.map(function (h) { var k = String(h).trim(); return m[k] !== undefined ? m[k] : ''; });
       });
       if (bpRows.length) {
-        var bpStart = sheetBP.getLastRow() + 1;
-        sheetBP.getRange(bpStart, 1, bpRows.length, bpHeaders.length).setValues(bpRows);
-        for (var bi = 0; bi < bpRows.length; bi++) writeByproductFormulas_(dbId, bpStart + bi);
+        /* Phase 8 (F-04): the worst site in the file — writeByproductFormulas_
+         * issued FOUR writeFormula_ calls per row, each with its own getSheet_ +
+         * getHeaders_ + setFormula. Merged into the block write: a 4-by-product
+         * order goes from 17 round trips to 1. Locked and grid-grown as above. */
+        executeWithLock_(function () {
+          var bpStart = sheetBP.getLastRow() + 1;
+          ensureGridRows_(sheetBP, bpStart + bpRows.length - 1);
+          bpRows.forEach(function (rv, bi) {
+            applyRowFormulas_(rv, bpHeaders, byproductFormulaMap_(bpStart + bi));
+          });
+          sheetBP.getRange(bpStart, 1, bpRows.length, bpHeaders.length).setValues(bpRows);
+        });
       }
     });
 
@@ -4653,8 +4741,13 @@ const ValleyFoodsHRModules = (function () {
         var k = String(h).trim();
         return m8[k] !== undefined ? m8[k] : '';
       });
-      sheet.appendRow(values);
-      writeByproductFormulas_(dbId, sheet.getLastRow());
+      /* Phase 8 (F-04): appendRow + 4 writeFormula_ -> one setValues. Already
+       * inside executeWithLock_, so the precomputed row is safe; the row number
+       * is identical to what appendRow produced (getLastRow()+1). */
+      var _bpRow = sheet.getLastRow() + 1;
+      ensureGridRows_(sheet, _bpRow);
+      applyRowFormulas_(values, headers, byproductFormulaMap_(_bpRow));
+      sheet.getRange(_bpRow, 1, 1, values.length).setValues([values]);
       var _prodNameBP = '';
       try { getAllRecords_(dbId, FIN_PRODUCTS_SHEET).forEach(function(pp){ if (String(pp.id)===String(pid)) _prodNameBP = String(pp.name_ar || pp.id); }); } catch(e){}
       _savedBP = {

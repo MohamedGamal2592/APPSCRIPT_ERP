@@ -147,6 +147,70 @@ function writeFormula_(dbId, sheetName, rowNumber, headerName, formula) {
   }
 }
 
+/**
+ * Phase 8 (F-04). Merge a { headerName: formulaString } map into a row array
+ * that is ABOUT to be written, so the formulas ride along in the same setValues
+ * instead of costing a writeFormula_ round trip each.
+ *
+ * setValues() treats a string beginning with '=' as a formula, exactly as
+ * appendRow() and setFormula() already do throughout this codebase, so the cells
+ * end up as formulas with identical text. This is the same equivalence Phase 3
+ * rests on.
+ *
+ * Mutates and returns rowValues. A header the map names but the sheet does not
+ * have is skipped, matching writeFormula_'s `if (idx !== -1)`.
+ */
+function applyRowFormulas_(rowValues, headers, formulaMap) {
+  const idx = {};
+  headers.forEach(function (h, i) { idx[String(h).trim().toLowerCase()] = i; });
+  Object.keys(formulaMap).forEach(function (name) {
+    const i = idx[String(name).trim().toLowerCase()];
+    if (i !== undefined) rowValues[i] = formulaMap[name];
+  });
+  return rowValues;
+}
+
+/**
+ * Phase 8 (F-04). Write a { headerName: formulaString } map onto a row that has
+ * ALREADY been written and so cannot be merged into.
+ *
+ * Replaces N x writeFormula_, each of which paid its own getSheet_ +
+ * getHeaders_ + setFormula: the sheet and its headers are passed in once, and
+ * columns that happen to be adjacent are written as a single setValues. Only the
+ * named columns are touched — exactly what the individual setFormula calls did —
+ * so nothing else on the row is read or rewritten.
+ */
+function writeRowFormulas_(sheet, headers, rowNum, formulaMap) {
+  const idx = {};
+  headers.forEach(function (h, i) { idx[String(h).trim().toLowerCase()] = i; });
+  const cols = [];
+  Object.keys(formulaMap).forEach(function (name) {
+    const i = idx[String(name).trim().toLowerCase()];
+    if (i !== undefined) cols.push({ i: i, f: formulaMap[name] });
+  });
+  if (!cols.length) return;
+  cols.sort(function (a, b) { return a.i - b.i; });
+
+  let run = [cols[0]];
+  for (let k = 1; k <= cols.length; k++) {
+    const cur = cols[k];
+    if (cur && cur.i === run[run.length - 1].i + 1) { run.push(cur); continue; }
+    sheet.getRange(rowNum, run[0].i + 1, 1, run.length)
+      .setValues([run.map(function (c) { return c.f; })]);
+    if (cur) run = [cur];
+  }
+}
+
+/**
+ * Phase 8 (F-04). Grow the grid so a block ending at `lastNeeded` fits.
+ * appendRow() did this implicitly; a precomputed target range does not, and
+ * setValues() past getMaxRows() throws.
+ */
+function ensureGridRows_(sheet, lastNeeded) {
+  const max = sheet.getMaxRows();
+  if (lastNeeded > max) sheet.insertRowsAfter(max, lastNeeded - max);
+}
+
 // Reentrant-safe script lock: a nested executeWithLock_ (e.g. an audit helper
 // called from inside a company action that already holds the lock) runs its fn
 // directly instead of re-acquiring, while still blocking other executions.
