@@ -761,12 +761,16 @@ window.ERPDataTable = (function(){
       }).catch(err=>{ try{ UIC.toast(err.message||'تعذر التصدير','error'); }catch(e){} });
     }
     exportXlsx(){
-      try { if (typeof XLSX === 'undefined') { UIC.toast('مكتبة Excel غير محملة','error'); return; } } catch(e){ return; }
-      const data = this.rows.map(r => { const o={}; this.columns.filter(c=>!c.hidden).forEach(c=> o[c.header]=r[c.field]); return o; });
-      const ws = XLSX.utils.json_to_sheet(data);
-      const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, ws, 'Sheet1');
-      XLSX.writeFile(wb, this.tableId + '.xlsx');
+      // F-18: the library is lazy-loaded on first export, not on page load.
+      const loader = (window.API && API.ensureXlsx) ? API.ensureXlsx()
+        : (typeof XLSX === 'undefined' ? Promise.reject(new Error('مكتبة Excel غير محملة')) : Promise.resolve());
+      loader.then(() => {
+        const data = this.rows.map(r => { const o={}; this.columns.filter(c=>!c.hidden).forEach(c=> o[c.header]=r[c.field]); return o; });
+        const ws = XLSX.utils.json_to_sheet(data);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, 'Sheet1');
+        XLSX.writeFile(wb, this.tableId + '.xlsx');
+      }).catch(err => { try{ UIC.toast((err && err.message) || 'تعذر التصدير','error'); }catch(e){} });
     }
     updateCount(){
       const el = document.getElementById(this.tableId + '_count');

@@ -1,3 +1,11 @@
+<!-- F-22: resource hints for the only two external origins the app uses —
+     cdnjs.cloudflare.com (xlsx, lazy-loaded on first Excel export) and
+     cdn.jsdelivr.net (Chart.js, on the 5 dashboard/KPI pages). Warms DNS + TLS
+     before either script is requested. CSS_Tokens is included by all 82 pages. -->
+<link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
+<link rel="dns-prefetch" href="https://cdnjs.cloudflare.com">
+<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+<link rel="dns-prefetch" href="https://cdn.jsdelivr.net">
 <style>
 
 :root {

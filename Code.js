@@ -451,9 +451,26 @@ function jsonSafe_(value) {
   return value;
 }
 
+/**
+ * F-09: every shared include is 100% static — UI_Components (95 KB), CSS_Tokens,
+ * Client_Helpers, ERP_DataTable_JS, both *_Nav files, ERP_Modal, ERP_Flow and
+ * ERP_DataTable contain zero <? ?> scriptlets — yet all of it was pushed through
+ * the Apps Script templating engine on every single page load.
+ *
+ * Now: read the file directly and only fall back to template evaluation if the
+ * content actually contains a scriptlet, so an include that later gains one keeps
+ * working with no further change here. Placeholder substitution is unchanged.
+ */
 function include(filename) {
-  const t = HtmlService.createTemplateFromFile(filename);
-  var rendered = t.evaluate().getContent();
+  var rendered;
+  try {
+    var raw = HtmlService.createHtmlOutputFromFile(filename).getContent();
+    rendered = (raw.indexOf('<?') === -1)
+      ? raw
+      : HtmlService.createTemplateFromFile(filename).evaluate().getContent();
+  } catch (e) {
+    rendered = HtmlService.createTemplateFromFile(filename).evaluate().getContent();
+  }
   rendered = rendered.split('__APP_WEB_URL__').join(SCRIPT_URL)
                    .split('__APP_SESSION_TOKEN__').join(CURRENT_SESSION_TOKEN);
   return rendered;
@@ -593,15 +610,32 @@ function extractRecordId_(action, result) {
   return null;
 }
 
+/**
+ * F-10: logSystemAction_ calls this on every logged write, and because writes run
+ * with the request memo disabled (Code.js apiRouter_), it paid a full
+ * ERP_Companies read every time. Version-cached on version_companies, the same
+ * stamp its siblings in 03_Security.js use, so bumpVersion_('ERP_Companies')
+ * invalidates it too.
+ */
 function getCompanyName_(companyId) {
   if (!companyId) return '';
+  const cache = CacheService.getScriptCache();
+  const compVersion = cache.get('version_companies') || '0';
+  const cacheKey = 'company_name_v_' + compVersion + '_' + companyId;
+  try {
+    const cached = cache.get(cacheKey);
+    if (cached !== null && cached !== undefined) return cached === ' ' ? '' : cached;
+  } catch (cacheErr) {}
+  let name = '';
   try {
     const companies = getAllRecords_(CONFIG.AUTH_SPREADSHEET_ID, 'ERP_Companies');
     const company = companies.find(c => String(c.company_unique_id) === companyId);
-    return company ? company.company_name_ar : '';
+    name = company ? String(company.company_name_ar || '') : '';
   } catch (e) {
     return '';
   }
+  try { cache.put(cacheKey, name === '' ? ' ' : name, CONFIG.CACHE_GENERAL_SECONDS); } catch (putErr) {}
+  return name;
 }
 
 /** Canonical SystemLog header order — add new columns to the END only, never insert in the middle. */

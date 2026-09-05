@@ -471,21 +471,26 @@ UIC.exportExcel = function (id) {
   if (!st) return;
   var rows = st.filtered || st.rows;
   if (!rows || !rows.length) { UIC.toast('لا توجد بيانات للتصدير', 'error'); return; }
-  if (typeof XLSX === 'undefined') { UIC.toast('جاري تحميل مكتبة Excel...', 'info'); return; }
-  var headers = st.headers.filter(function (h) { return h.key !== 'actions'; });
-  var data = rows.map(function (r) {
-    var obj = {};
-    headers.forEach(function (h) { obj[h.label] = r[h.key] != null ? r[h.key] : ''; });
-    return obj;
+  // F-18: the library is fetched on first export instead of on every page load.
+  if (typeof XLSX === 'undefined') UIC.toast('جاري تحميل مكتبة Excel...', 'info');
+  API.ensureXlsx().then(function () {
+    var headers = st.headers.filter(function (h) { return h.key !== 'actions'; });
+    var data = rows.map(function (r) {
+      var obj = {};
+      headers.forEach(function (h) { obj[h.label] = r[h.key] != null ? r[h.key] : ''; });
+      return obj;
+    });
+    var ws = XLSX.utils.json_to_sheet(data);
+    var wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Sheet1');
+    var from = st.dateFrom || '';
+    var to = st.dateTo || '';
+    var title = (st.opts && st.opts.title) || 'report';
+    var filename = title + (from ? '_' + from : '') + (to ? '_to_' + to : '') + '.xlsx';
+    XLSX.writeFile(wb, filename);
+  }).catch(function (e) {
+    UIC.toast((e && e.message) || 'تعذر تحميل مكتبة Excel', 'error');
   });
-  var ws = XLSX.utils.json_to_sheet(data);
-  var wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, 'Sheet1');
-  var from = st.dateFrom || '';
-  var to = st.dateTo || '';
-  var title = (st.opts && st.opts.title) || 'report';
-  var filename = title + (from ? '_' + from : '') + (to ? '_to_' + to : '') + '.xlsx';
-  XLSX.writeFile(wb, filename);
 };
 
 UIC.printTable = function (id) {

@@ -52,14 +52,53 @@ function disableRecordCache_() {
   for (const k in _recordCache_) delete _recordCache_[k];
 }
 
+/**
+ * F-02.1: the empty-row test used to be Object.values(record).some(v =>
+ * String(v).trim() !== ''), i.e. a second full pass over every cell, allocating
+ * an array and coercing every value to a string — after already having built the
+ * object. On a 20-column x 10,000-row sheet that is ~200,000 needless string
+ * coercions per call.
+ *
+ * Now the row is tested directly on the raw array before any object is built.
+ * Same predicate, same result — a row counts as non-empty iff at least one cell
+ * is a non-blank string once trimmed — but it short-circuits on the first
+ * non-empty cell and skips object construction entirely for blank rows.
+ *
+ * Trimmed header names are hoisted out of the loop too; they were being
+ * recomputed for every row.
+ */
 function buildRecordsFromRaw_(data, headers) {
   const records = [];
+  if (!data || data.length < 2) return records;
+  const keys = headers.map(h => String(h).trim());
+  const colCount = keys.length;
+  // Headers that trim to the same name (including several blank ones) collapse
+  // onto one object key, and the LAST such column wins. The old emptiness test
+  // ran over Object.values(record), so it only ever saw those surviving columns.
+  // testCols reproduces that exact set, so filtering is unchanged.
+  const lastColForKey = {};
+  for (let c = 0; c < colCount; c++) lastColForKey[keys[c]] = c;
+  const testCols = Object.keys(lastColForKey).map(k => lastColForKey[k]);
   for (let i = 1; i < data.length; i++) {
+    const row = data[i];
+    let hasValue = false;
+    for (let t = 0; t < testCols.length; t++) {
+      const v = row[testCols[t]];
+      // Reproduces String(v).trim() !== '' exactly. Note the two traps:
+      //   undefined -> the old code substituted '' at assignment, so it is EMPTY;
+      //   null      -> String(null) is 'null', so it is NOT empty.
+      // Everything else (0, false, a Date) stringifies non-blank and is not empty.
+      if (v === undefined || v === '') continue;
+      if (typeof v === 'string') { if (v.trim() !== '') { hasValue = true; break; } continue; }
+      hasValue = true;
+      break;
+    }
+    if (!hasValue) continue;
     const record = {};
-    headers.forEach((h, colIdx) => {
-      record[String(h).trim()] = data[i][colIdx] !== undefined ? data[i][colIdx] : '';
-    });
-    if (Object.values(record).some(v => String(v).trim() !== '')) records.push(record);
+    for (let c = 0; c < colCount; c++) {
+      record[keys[c]] = row[c] !== undefined ? row[c] : '';
+    }
+    records.push(record);
   }
   return records;
 }

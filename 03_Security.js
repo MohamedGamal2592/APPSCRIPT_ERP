@@ -618,8 +618,26 @@ function driveDirectImageUrl_(fileId, width) {
 }
 
 // Company logo thumbnail URL (from ERP_Companies.company_logo) for a company page.
+// F-08: this was the one ERP_Companies reader with no cache — a full
+// getDataRange().getValues() on every page render — while both of its siblings
+// (getCompanySpreadsheetId_, getCompanyThemeCSS_) are version-cached. Same
+// version_companies pattern applied here, so bumpVersion_('ERP_Companies')
+// already invalidates it along with the others.
 function getCompanyLogoUrl_(companyName) {
   if (!companyName) return '';
+  const cache = CacheService.getScriptCache();
+  const compVersion = cache.get('version_companies') || '0';
+  const cacheKey = 'company_logo_v_' + compVersion + '_' + companyName;
+  try {
+    const cached = cache.get(cacheKey);
+    if (cached !== null && cached !== undefined) return cached === ' ' ? '' : cached;
+  } catch (cacheErr) {}
+  const url = getCompanyLogoUrlUncached_(companyName);
+  try { cache.put(cacheKey, url === '' ? ' ' : url, CONFIG.CACHE_LOGO_SECONDS); } catch (putErr) {}
+  return url;
+}
+
+function getCompanyLogoUrlUncached_(companyName) {
   try {
     const sheet = getSheet_('ERP_Companies', CONFIG.AUTH_SPREADSHEET_ID);
     const headers = getHeaders_(sheet);
