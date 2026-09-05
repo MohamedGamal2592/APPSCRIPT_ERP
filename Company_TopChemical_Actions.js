@@ -2078,7 +2078,14 @@ const TopChemical = (function () {
         var _oldImpSt = null; try { _oldImpSt = getAllRecords_(dbId, IMPORT_FOLLOW_SHEET).find(function(r){ return String(r.id)===String(id); }) || null; } catch(e2){}
         sheet.getRange(i + 1, statusIdx + 1).setValue(next);
         try { var _uidImpSt = _oldImpSt && _oldImpSt.record_uid ? _oldImpSt.record_uid : 'create_'+IMPORT_FOLLOW_SHEET+'_'+id; var _newImpSt = {}; if(_oldImpSt) Object.keys(_oldImpSt).forEach(function(k){ _newImpSt[k]=_oldImpSt[k]; }); _newImpSt['status']=next; logHistory_(dbId, IMPORT_FOLLOW_SHEET, _uidImpSt, String(id), (user&&user.email)||'', 'update', _newImpSt, _oldImpSt); } catch(e){}
-        return { status: 'success', message: 'تم النقل إلى الحالة: ' + next, status: next };
+        // Phase 7.3 — this object used to carry `status` TWICE: 'success' and
+        // then the new status, so the later key won and the response's `status`
+        // was 'Approve'/'Imported'/'Received'. Nothing read it, and API.call
+        // only rejects on status === 'error', so it never broke — but it is one
+        // renamed status away from a successful save being reported as a
+        // failure. The new status now has its own field, which is also what the
+        // page's local row patch reads.
+        return { status: 'success', message: 'تم النقل إلى الحالة: ' + next, new_status: next };
       }
     }
     throw new Error('السجل غير موجود');

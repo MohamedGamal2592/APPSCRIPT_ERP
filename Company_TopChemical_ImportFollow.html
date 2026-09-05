@@ -105,7 +105,16 @@
     companyCall('update_import_follow_status', { id: id })
       .then(function (r) {
         UIC.toast((r && r.message) || 'تم النقل', 'success');
-        fetchFollows();
+        /* F-21: updateImportFollowStatus_ writes exactly one cell (status) on
+         * one row and cascades to nothing, and this is an update rather than an
+         * add or a delete, so the 10-row list limit is unaffected — the same ten
+         * rows stay visible either way. renderFollows() derives the badge and
+         * the action buttons from f.status alone, so patching that one field
+         * reproduces exactly what a reload would draw. Falls back to the full
+         * fetch if the row or the new status is missing. */
+        var rec = (window.__follows || []).filter(function (f) { return Number(f.id) === Number(id); })[0];
+        if (rec && r && r.new_status) { rec.status = r.new_status; renderFollows(); }
+        else fetchFollows();
       })
       .catch(function (e) { UIC.toast((e && e.message) || 'خطأ', 'error'); })
       .finally(function () { UI.hideSpinner(); });
