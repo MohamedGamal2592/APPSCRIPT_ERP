@@ -259,6 +259,8 @@ const ROUTES = {
   'get_erp_session_meta': { handler: get_erp_session_meta, requireAuth: true },
   'cleanup_sessions': { handler: cleanupOldSessions_, requireAuth: true },
   'install_triggers': { handler: installTriggers_, requireAuth: true },
+  'install_retention_trigger': { handler: installRetentionTrigger_, requireAuth: true },
+  'archive_old_records': { handler: archiveOldRecordsRoute_, requireAuth: true },
   'daily_csv_backup': { handler: dailyCsvBackup, requireAuth: true },
   'log_client_error': { handler: logClientError_, requireAuth: false },
   'log_client_perf': { handler: logClientPerf_, requireAuth: false },
@@ -979,14 +981,27 @@ function cleanupOldSessions_(payload, sessionToken, authUser) {
   if (!(authUser && authUser.isSuperAdmin)) throw new Error('صلاحية غير كافية');
   var removed = 0;
   try {
-    var rows = getAllRecords_(CONFIG.AUTH_SPREADSHEET_ID, 'ERP_Sessions');
-    var now = Date.now();
+    // Phase 5 (F-14). This used to call deleteRowsByCriteria_ once PER expired
+    // session, and each of those does a full getDataRange().getValues() plus a
+    // structural deleteRow — so cleaning N sessions cost N full reads of
+    // ERP_Sessions. Now: one read, then delete the matching rows bottom-up in a
+    // single pass. deleteRow is kept (rather than a bulk body rewrite) because
+    // it is safe against a concurrent login appending a row.
     var sheet = getSheet_('ERP_Sessions', CONFIG.AUTH_SPREADSHEET_ID);
-    rows.forEach(function (r) {
-      var exp = r.expires_at ? new Date(r.expires_at) : null;
-      if (exp && !isNaN(exp.getTime()) && now > exp.getTime()) {
-        var key = (r.record_uid || r.token_hash);
-        if (key) { deleteRowsByCriteria_(sheet, 'token_hash', r.token_hash); removed++; }
+    var headers = getHeaders_(sheet);
+    var expIdx = headers.findIndex(function (h) { return String(h).trim().toLowerCase() === 'expires_at'; });
+    if (expIdx === -1) return { status: 'error', message: 'ERP_Sessions is missing expires_at' };
+    var now = Date.now();
+    executeWithLock_(function () {
+      var data = sheet.getDataRange().getValues();
+      for (var i = data.length - 1; i >= 1; i--) {
+        var raw = data[i][expIdx];
+        if (raw === '' || raw === null || raw === undefined) continue;
+        var exp = (raw instanceof Date) ? raw : new Date(raw);
+        if (!isNaN(exp.getTime()) && now > exp.getTime()) {
+          sheet.deleteRow(i + 1);
+          removed++;
+        }
       }
     });
   } catch (e) {

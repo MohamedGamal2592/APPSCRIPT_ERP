@@ -933,6 +933,13 @@ function get_record_history(payload, sessionToken, authUser) {
   let rows = all.filter(function (h) { return h.sheet_name === sheetName; });
   if (recordId) rows = rows.filter(function (h) { return h.record_id === recordId; });
   else if (recordUid) rows = rows.filter(function (h) { return h.record_uid === recordUid; });
+  // Phase 5 (F-12): rows older than CONFIG.ARCHIVE_RETENTION_MONTHS live in
+  // ERP_Record_History_Archive_<year> tabs. The default path reads only the live
+  // tab — that is the whole point of archiving — so archived history is fetched
+  // only when the caller explicitly asks for it.
+  if (payload && payload.include_archive) {
+    try { rows = rows.concat(readArchivedHistory_(sheetName, recordId, recordUid)); } catch (e) {}
+  }
   const specific = recordId || recordUid;
   rows.sort(function (a, b) {
     return specific ? (new Date(a.changed_at) - new Date(b.changed_at)) : (new Date(b.changed_at) - new Date(a.changed_at));

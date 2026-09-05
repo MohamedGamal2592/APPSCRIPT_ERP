@@ -23,6 +23,15 @@ const CONFIG = {
   SESSION_TOUCH_THROTTLE_SECONDS: 300,
   LOGIN_LOCKOUT_MAX_ATTEMPTS: 5,
   LOGIN_LOCKOUT_TTL_SECONDS: 900,
+  // ── Retention (Phase 5, F-12 / F-13) ──────────────────────────────────────
+  // How many months of ERP_Record_History and SystemLog stay in the LIVE tab.
+  // Older rows move to dated archive tabs in the same spreadsheet — same columns,
+  // nothing is deleted. THIS IS THE ONLY PLACE THE PERIOD IS DEFINED.
+  //
+  // *** 24 IS AN ASSUMPTION, NOT A DECISION. *** The retention period is an
+  // audit/business question (Q2 in the investigation) that was never answered.
+  // Change this one number if 24 months is wrong; nothing else needs editing.
+  ARCHIVE_RETENTION_MONTHS: 24,
   // TableEngine cache (spec §2.2 Tier B)
   TABLE_CACHE_TTL_SECONDS: 600,
   TABLE_CACHE_MAX_CHUNKS: 50,
