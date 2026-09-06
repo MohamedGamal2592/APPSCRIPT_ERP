@@ -53,7 +53,10 @@ const templateless = pages.filter(x => !x.template).map(x => x.action);
 check(templateless.length === 1 && templateless[0] === 'valley_cost_view',
   'valley_cost_view is the only template-less entry',
   'template-less: [' + templateless.join(', ') + ']');
-check(pages.length === 30, 'page count is 29 + 1 = 30', 'got ' + pages.length);
+/* 30 real pages + valley_cost_view. Bumped from 30 when vf_warehouse_movement
+   was registered; this line is a running total, not an assertion about the
+   permission token — the check that matters is the template-less one above. */
+check(pages.length === 31, 'page count is 30 + 1 = 31', 'got ' + pages.length);
 
 console.log('\nS4 — the two guards that make it unroutable\n');
 const CODE = read('Code.js');

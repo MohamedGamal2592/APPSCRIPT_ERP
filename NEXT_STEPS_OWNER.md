@@ -152,6 +152,34 @@ Evidence: `node tools/verify/s5c_sales_audit.js`. Detail: VALLEYFOODS_RESULTS.md
 > my premises is wrong, and it is the one thing here that a two-minute live check settles faster than
 > any amount of reading.
 
+### 8. Grant the new حركة المخزن page — `vf_warehouse_movement` 🟡
+
+**New, from the warehouse-movement run** (branch `feat/vf-warehouse-movement`, 4 commits, not
+pushed). Full detail: [WAREHOUSE_MOVEMENT_RESULTS.md](WAREHOUSE_MOVEMENT_RESULTS.md) §5a.
+
+The page is registered, so it appears in «صفحات النظام» and a **super-admin can open it the moment
+you deploy**. Everyone else sees nothing until you grant it. That grant means adding rows to
+`ERP_Pages_Matrix`, which is a live business table, so the run did not do it — same reasoning, and
+the same two steps, as `valley_cost_view` in §6 above:
+
+| Step | Where | What |
+|---|---|---|
+| 8a | `ERP_Management` → صفحات النظام | `vf_warehouse_movement` now appears in that list. Save it, so the `ERP_System_Pages` row exists. |
+| 8b | `ERP_Management` → صلاحيات الأدوار | Grant `read` to roles that should see the ledger, `write` to roles that should add to it. |
+
+The page is **add + list only** — no edit path and no delete path, deliberately, because a stock
+ledger should stay append-only. `full` grants nothing extra.
+
+> ⚠️ **One thing to check on the first save, before you grant it widely.** The availability
+> figure adds `Σ movmenent_sign` on top of `current_qty`, and I could not verify offline whether
+> the `valley_products_movement` tab that feeds `current_qty` already includes warehouse-movement
+> rows — that tab is spreadsheet-only and has no schema in the legacy dump. If it does, **المتاح is
+> understated**, which refuses a legitimate issue but can never permit an over-issue. Pick a batch
+> that already has a movement row and compare المتاح against the sheet. Reasoning and the fix are in
+> WAREHOUSE_MOVEMENT_RESULTS.md §7.
+
+---
+
 ---
 
 ## Two decisions I need from you
