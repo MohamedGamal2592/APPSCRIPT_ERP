@@ -2504,6 +2504,141 @@ UIC.toast = function (message, type) {
   }, 3000);
 };
 
+/* ── [UI-5.4 / U-29] The workflow statusbar ───────────────────────────────
+ *
+ * A record's position in its workflow was a text pill somewhere on the page, so
+ * "what happens next" was something you had to already know. This shows the
+ * whole sequence with the current stage marked.
+ *
+ * UIC.statusbar(stages, current, opts)
+ *   stages   ['مسودة', 'قيد المراجعة', 'معتمد']  or  [{key, label}]
+ *   current  the key or label of the active stage
+ *   opts.onSelect  'fn("<key>")' — makes stages clickable. Omit it and the bar
+ *                  is purely informational, which is the safe default: a stage
+ *                  that looks clickable and is not is worse than a plain label.
+ */
+UIC.statusbar = function (stages, current, opts) {
+  var o = opts || {};
+  var list = (stages || []).map(function (s) {
+    return (typeof s === 'string') ? { key: s, label: s } : s;
+  });
+  var activeIdx = -1;
+  list.forEach(function (s, i) {
+    if (String(s.key) === String(current) || String(s.label) === String(current)) activeIdx = i;
+  });
+  var items = list.map(function (s, i) {
+    var state = i < activeIdx ? 'done' : (i === activeIdx ? 'current' : 'todo');
+    var clickable = o.onSelect && i !== activeIdx;
+    var attrs = clickable
+      ? ' role="button" tabindex="0" onclick="' + o.onSelect.replace('{key}', UIC.escHtml(String(s.key))) + '"'
+      : '';
+    return '<li class="sb-stage sb-' + state + '"' + attrs +
+      (i === activeIdx ? ' aria-current="step"' : '') + '>' +
+      '<span class="sb-dot" aria-hidden="true">' +
+      (state === 'done' ? UIC.icon('check', { size: 12 }) : '') + '</span>' +
+      '<span class="sb-label">' + UIC.escHtml(String(s.label)) + '</span></li>';
+  }).join('');
+  return '<nav class="statusbar" aria-label="حالة السجل"><ol class="sb-list">' + items + '</ol></nav>';
+};
+
+/* ── [UI-5.5 / U-29] Smart buttons ────────────────────────────────────────
+ *
+ * 37 places opened a related record with window.open() into a new tab, which on
+ * a phone is a lost context and in the Apps Script sandbox is often blocked
+ * outright. A smart button shows the COUNT and navigates in place.
+ *
+ * Per the standing answer: only counts derivable from data the page has ALREADY
+ * LOADED. A button whose count would need a new server endpoint is not built —
+ * it is written up as a proposal instead. `count` is therefore a required
+ * number here; there is no fetching path at all, by design.
+ */
+UIC.smartButtons = function (buttons) {
+  var list = (buttons || []).filter(function (b) { return b && b.count != null; });
+  if (!list.length) return '';
+  return '<div class="smart-buttons">' + list.map(function (b) {
+    var disabled = !b.onClick || Number(b.count) === 0;
+    return '<button type="button" class="smart-btn" ' +
+      (disabled ? 'disabled ' : 'onclick="' + b.onClick + '" ') +
+      'aria-label="' + UIC.escHtml(String(b.label)) + ': ' + UIC.escHtml(String(b.count)) + '">' +
+      (b.icon ? '<span class="smart-btn-icon">' + UIC.icon(b.icon, { size: 18 }) + '</span>' : '') +
+      '<span class="smart-btn-count">' + UIC.escHtml(String(b.count)) + '</span>' +
+      '<span class="smart-btn-label">' + UIC.escHtml(String(b.label)) + '</span>' +
+      '</button>';
+  }).join('') + '</div>';
+};
+
+/* ── [UI-5.6 / U-29] Notebook tabs ────────────────────────────────────────
+ *
+ * Four pages hand-rolled their own tab strip, none with keyboard support and
+ * none with a role. This is one component with the ARIA tab pattern: arrow keys
+ * move between tabs, Home/End jump to the ends, and only the active tab is in
+ * the tab order.
+ */
+UIC.notebook = function (id, tabs, activeKey) {
+  var list = tabs || [];
+  var active = activeKey || (list[0] && list[0].key);
+  var heads = list.map(function (t) {
+    var on = String(t.key) === String(active);
+    return '<button type="button" role="tab" id="' + id + '-tab-' + t.key + '"' +
+      ' aria-selected="' + on + '" aria-controls="' + id + '-panel-' + t.key + '"' +
+      ' tabindex="' + (on ? '0' : '-1') + '" class="nb-tab' + (on ? ' nb-tab-active' : '') + '"' +
+      ' onclick="UIC.notebookSelect(\'' + id + '\', \'' + UIC.escHtml(String(t.key)) + '\')"' +
+      ' onkeydown="UIC._notebookKey(\'' + id + '\', event)">' +
+      (t.icon ? UIC.icon(t.icon, { size: 15 }) : '') +
+      '<span>' + UIC.escHtml(String(t.label)) + '</span>' +
+      (t.badge != null ? '<span class="nb-badge">' + UIC.escHtml(String(t.badge)) + '</span>' : '') +
+      '</button>';
+  }).join('');
+  var panels = list.map(function (t) {
+    var on = String(t.key) === String(active);
+    return '<div role="tabpanel" id="' + id + '-panel-' + t.key + '"' +
+      ' aria-labelledby="' + id + '-tab-' + t.key + '" class="nb-panel"' +
+      (on ? '' : ' hidden') + '>' + (t.content || '') + '</div>';
+  }).join('');
+  window.__notebooks = window.__notebooks || {};
+  window.__notebooks[id] = list.map(function (t) { return String(t.key); });
+  return '<div class="notebook" id="' + id + '">' +
+    '<div class="nb-tabs" role="tablist">' + heads + '</div>' + panels + '</div>';
+};
+
+UIC.notebookSelect = function (id, key) {
+  var keys = (window.__notebooks || {})[id] || [];
+  keys.forEach(function (k) {
+    var tab = document.getElementById(id + '-tab-' + k);
+    var panel = document.getElementById(id + '-panel-' + k);
+    var on = String(k) === String(key);
+    if (tab) {
+      tab.setAttribute('aria-selected', String(on));
+      tab.setAttribute('tabindex', on ? '0' : '-1');
+      tab.classList.toggle('nb-tab-active', on);
+    }
+    if (panel) panel.hidden = !on;
+  });
+};
+
+UIC._notebookKey = function (id, ev) {
+  var keys = (window.__notebooks || {})[id] || [];
+  if (!keys.length) return;
+  var cur = -1;
+  keys.forEach(function (k, i) {
+    var t = document.getElementById(id + '-tab-' + k);
+    if (t && t.getAttribute('aria-selected') === 'true') cur = i;
+  });
+  var next = null;
+  /* RTL: ArrowLeft advances, ArrowRight goes back. */
+  var rtl = (document.documentElement.getAttribute('dir') || '') === 'rtl';
+  if (ev.key === 'ArrowRight') next = rtl ? cur - 1 : cur + 1;
+  else if (ev.key === 'ArrowLeft') next = rtl ? cur + 1 : cur - 1;
+  else if (ev.key === 'Home') next = 0;
+  else if (ev.key === 'End') next = keys.length - 1;
+  else return;
+  ev.preventDefault();
+  next = (next + keys.length) % keys.length;
+  UIC.notebookSelect(id, keys[next]);
+  var el = document.getElementById(id + '-tab-' + keys[next]);
+  if (el && el.focus) el.focus();
+};
+
 UIC.statCard = function (o) {
   const tone = o.tone || 'default';
   return '<div class="stat-card stat-' + tone + '">' +
@@ -3286,6 +3421,63 @@ document.addEventListener('keydown', function (e) {
   .toast-error   { background: var(--danger); }
   .toast-warning { background: var(--warning); }
   .toast-out { opacity: 0; transform: translateX(-50%) translateY(-8px); }
+
+  /* ── [UI-5.4 / U-29] Workflow statusbar ──────────────────────────────── */
+  .statusbar { overflow-x: auto; }
+  .sb-list { display: flex; align-items: center; gap: var(--space-1); list-style: none; margin: 0; padding: 0; }
+  .sb-stage {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 6px var(--space-3); border-radius: 999px;
+    font-size: var(--text-xs); font-weight: 700; white-space: nowrap;
+    background: var(--bg-subtle); color: var(--text-muted);
+    min-height: var(--tap-sm, 44px);
+  }
+  .sb-stage[role="button"] { cursor: pointer; }
+  .sb-stage[role="button"]:hover { background: var(--bg-sunken); color: var(--text-main); }
+  .sb-dot { width: 14px; height: 14px; border-radius: 50%; background: var(--border-strong); display: inline-flex; align-items: center; justify-content: center; color: var(--bg-surface); }
+  .sb-done { background: var(--success-bg); color: var(--success-text); }
+  .sb-done .sb-dot { background: var(--success); }
+  .sb-current { background: var(--brand-primary); color: var(--btn-text-color); }
+  .sb-current .sb-dot { background: var(--btn-text-color); }
+  .sb-todo { opacity: .75; }
+  .sb-label { line-height: 1; }
+
+  /* ── [UI-5.5 / U-29] Smart buttons ───────────────────────────────────── */
+  .smart-buttons { display: flex; gap: var(--space-2); flex-wrap: wrap; }
+  .smart-btn {
+    display: inline-flex; flex-direction: column; align-items: flex-start; gap: 2px;
+    padding: var(--space-2) var(--space-3);
+    background: var(--bg-surface); border: 1px solid var(--border-color);
+    border-radius: var(--radius-md); cursor: pointer; min-height: var(--tap-min, 48px);
+    font-family: var(--font-sans); color: var(--text-main); position: relative;
+  }
+  .smart-btn:hover:not(:disabled) { border-color: var(--brand-primary); box-shadow: var(--shadow-sm); }
+  .smart-btn:disabled { opacity: .55; cursor: default; }
+  .smart-btn-icon { position: absolute; inset-inline-end: var(--space-2); top: var(--space-2); color: var(--text-disabled); }
+  .smart-btn-count { font-size: var(--text-lg); font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; }
+  .smart-btn-label { font-size: var(--text-xs); color: var(--text-muted); }
+
+  /* ── [UI-5.6 / U-29] Notebook tabs ───────────────────────────────────── */
+  .nb-tabs {
+    display: flex; gap: 2px; overflow-x: auto;
+    border-bottom: 1px solid var(--border-color); margin-bottom: var(--space-4);
+  }
+  .nb-tab {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: var(--space-3) var(--space-4); min-height: var(--tap-sm, 44px);
+    background: transparent; border: 0; border-bottom: 2px solid transparent;
+    font-family: var(--font-sans); font-size: var(--text-sm); font-weight: 700;
+    color: var(--text-muted); cursor: pointer; white-space: nowrap;
+  }
+  .nb-tab:hover { color: var(--text-main); background: var(--bg-subtle); }
+  .nb-tab-active { color: var(--brand-primary); border-bottom-color: var(--brand-primary); }
+  .nb-badge {
+    font-size: var(--text-xs); font-weight: 700; border-radius: 999px;
+    background: var(--bg-sunken); color: var(--text-muted); padding: 1px 7px;
+  }
+  .nb-tab-active .nb-badge { background: var(--brand-subtle-bg); color: var(--brand-primary); }
+  .notebook { display: block; }
+  .nb-panel { display: block; }
 
   /* ── Stat Card ───────────────────────────────────────────────────────── */
   .stat-card {
