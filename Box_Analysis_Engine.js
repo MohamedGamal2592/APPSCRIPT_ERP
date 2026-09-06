@@ -856,6 +856,69 @@ var BoxEngine = (function () {
   }
 
   // ═══════════════════════════════════════════════════════════════════════
+  // Date/time arithmetic for the rules — still no Date object
+  // ═══════════════════════════════════════════════════════════════════════
+
+  var CUM_DAYS = [0, 0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
+
+  function isLeap_(y) { return (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0; }
+
+  /** Days since 1970-01-01, as an integer. Pure, and free of any timezone. */
+  function dayNumber(y, m, d) {
+    var days = 365 * (y - 1970);
+    /* Leap days between 1970 and y, exclusive of y itself. */
+    days += Math.floor((y - 1969) / 4) - Math.floor((y - 1901) / 100) + Math.floor((y - 1601) / 400);
+    days += CUM_DAYS[m] + (m > 2 && isLeap_(y) ? 1 : 0);
+    return days + d - 1;
+  }
+
+  /** Whole days from a to b (both 'YYYY-MM-DD'). Negative when b precedes a. */
+  function daysBetween(aIso, bIso) {
+    var a = parseIsoDate(aIso), b = parseIsoDate(bIso);
+    if (!a || !b) return null;
+    return dayNumber(b.y, b.m, b.d) - dayNumber(a.y, a.m, a.d);
+  }
+
+  /** 0 = Sunday … 6 = Saturday. 1970-01-01 was a Thursday (4). */
+  function dayOfWeek(y, m, d) {
+    var n = dayNumber(y, m, d) + 4;
+    return ((n % 7) + 7) % 7;
+  }
+
+  /**
+   * 'YYYY-MM-DD HH:MM:SS' (or with a 'T') → { y, m, d, hh, mm, ss, date }.
+   * Returns null for anything else, rather than guessing — a rule that fires on
+   * a misparsed timestamp is an accusation built on nothing.
+   */
+  function parseDateTime(s) {
+    var m = /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2}))?)?/.exec(String(s || '').trim());
+    if (!m) return null;
+    var d = parseIsoDate(m[1] + '-' + m[2] + '-' + m[3]);
+    if (!d) return null;
+    return {
+      y: d.y, m: d.m, d: d.d,
+      hh: m[4] === undefined ? null : Number(m[4]),
+      mm: m[5] === undefined ? null : Number(m[5]),
+      ss: m[6] === undefined ? 0 : Number(m[6]),
+      date: m[1] + '-' + m[2] + '-' + m[3]
+    };
+  }
+
+  /** Percentile of a numeric array, linear interpolation. Sorts a copy. */
+  function percentile(values, p) {
+    var v = (values || []).filter(function (x) { return typeof x === 'number' && isFinite(x); })
+      .slice().sort(function (a, b) { return a - b; });
+    if (!v.length) return null;
+    if (v.length === 1) return v[0];
+    var idx = (v.length - 1) * p;
+    var lo = Math.floor(idx), hi = Math.ceil(idx);
+    if (lo === hi) return v[lo];
+    return v[lo] + (v[hi] - v[lo]) * (idx - lo);
+  }
+
+  function median(values) { return percentile(values, 0.5); }
+
+  // ═══════════════════════════════════════════════════════════════════════
   // §8.5  The edit path — allowlist and validators
   // ═══════════════════════════════════════════════════════════════════════
 
@@ -1072,6 +1135,524 @@ var BoxEngine = (function () {
     return out;
   }
 
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // §7 Tier 1 — deterministic integrity rules
+  // ═══════════════════════════════════════════════════════════════════════
+  //
+  // The highest-precision findings in the whole feature, and the only tier that
+  // uses no statistics at all. Every one of them is a fact about the row or
+  // about a pair of rows, not an inference about a distribution.
+  //
+  // Every rule returns { rule_id, severity, row_id, evidence[], reason_ar }.
+  // reason_ar is a SENTENCE with the numbers in it, not a rule name: this
+  // output has to survive an accountant asking "why", and "SUM_MISMATCH" is not
+  // an answer to that question. evidence[] carries the rows the reader needs to
+  // see to check the claim themselves.
+  //
+  // Rules that need a population (BACKDATED needs a p95, STRUCTURING needs a
+  // histogram) REFUSE to fire below their minimum n and say so in `notes`.
+  // A finding is aimed at a named employee; "بيانات غير كافية" is the honest
+  // output when there is not enough data, and a weak verdict is not.
+
+  var SEVERITY_AR = { high: 'مرتفع', medium: 'متوسط', low: 'منخفض' };
+
+  var TIER1 = {
+    SUM_EPSILON: 1.00,          /* double(16,2) — below this is rounding */
+    DUP_WINDOW_DAYS: 7,
+    NEAR_DUP_SIMILARITY: 0.85,
+    NEAR_DUP_AMOUNT_PCT: 0.02,
+    BACKDATE_MIN_N: 30,         /* below this a p95 is noise */
+    BACKDATE_MIN_DAYS: 3,       /* never flag a lag this small, whatever p95 says */
+    WORK_START_HOUR: 8,
+    WORK_END_HOUR: 18,
+    WEEKEND_DAYS: [5, 6],       /* Friday, Saturday — the Egyptian week */
+    SEQUENCE_TOLERANCE_DAYS: 30,
+    STRUCTURING_CANDIDATES: [500, 1000, 2000, 5000, 10000, 20000, 50000],
+    STRUCTURING_BAND: 0.10,     /* "just below" = within 10% under the threshold */
+    STRUCTURING_MIN_RATIO: 3,   /* the spike must be this much taller than above */
+    STRUCTURING_MIN_COUNT: 5,   /* and this many rows, or it is not a spike */
+    STRUCTURING_WINDOW_DAYS: 2
+  };
+
+  function flag_(ruleId, severity, rowId, reasonAr, evidence) {
+    return {
+      rule_id: ruleId,
+      severity: severity,
+      severity_ar: SEVERITY_AR[severity] || severity,
+      row_id: rowId === undefined || rowId === null ? null : String(rowId),
+      reason_ar: reasonAr,
+      evidence: evidence || []
+    };
+  }
+
+  function amountOf_(row) {
+    var n = Number(row && row.transaction_amount);
+    return isFinite(n) ? n : null;
+  }
+
+  function fmt2_(n) {
+    return (Math.round(Number(n) * 100) / 100).toFixed(2);
+  }
+
+  /* ── SUM_MISMATCH ───────────────────────────────────────────────────────
+   * Σ parsed item prices against transaction_amount. Free, needs nothing but
+   * the parser, and it is the highest-precision signal in the feature: either
+   * the parse failed or the description does not account for the money, and
+   * both need a human.
+   *
+   * It does NOT fire when the row has no parsed items, and it does NOT fire
+   * when some segment failed to parse — in that case the sum is known to be
+   * incomplete, which is a different (and already reported) finding. Firing
+   * here too would blame the row for the parser's gap. */
+  function ruleSumMismatch(row) {
+    var p = row && row.parse;
+    if (!p || !p.items || !p.items.length) return null;
+    if (p.failed_count > 0) return null;
+    var amount = amountOf_(row);
+    if (amount === null) return null;
+    var diff = round_(p.sum - amount, 2);
+    if (Math.abs(diff) <= TIER1.SUM_EPSILON) return null;
+    return flag_('SUM_MISMATCH', 'high', row.id,
+      'مجموع أسعار البنود ' + fmt2_(p.sum) + ' لا يساوي المبلغ المسجل ' + fmt2_(amount) +
+      ' — الفرق ' + fmt2_(Math.abs(diff)) + ' ' +
+      (diff > 0 ? '(البنود أكبر من المبلغ)' : '(المبلغ أكبر من البنود)'),
+      [{ row_id: String(row.id), items_sum: p.sum, transaction_amount: amount, difference: diff }]);
+  }
+
+  /* ── EXACT_DUP and NEAR_DUP ─────────────────────────────────────────────
+   * Double claiming. Both are pair rules, so both flag BOTH rows — a reader
+   * looking at either one needs to be told about the other. */
+  function ruleDuplicates(rows, opts) {
+    var o = opts || {};
+    var windowDays = o.dup_window_days || TIER1.DUP_WINDOW_DAYS;
+    var simThreshold = o.near_dup_similarity || TIER1.NEAR_DUP_SIMILARITY;
+    var amtPct = o.near_dup_amount_pct || TIER1.NEAR_DUP_AMOUNT_PCT;
+    var out = [];
+
+    var list = (rows || []).filter(function (r) {
+      return r && r.transaction_date && amountOf_(r) !== null;
+    }).map(function (r) {
+      var norm = normAr(r.transaction_details);
+      /* NEAR_DUP compares WHAT WAS BOUGHT, not the raw details string.
+         Comparing the whole string puts the price digits in the token set, so
+         two rows that differ only in price — the exact shape a near-duplicate
+         claim takes — score LOWER than two unrelated rows that happen to share
+         a price. On the first run this cost the intended fixture pair 0.833
+         against a 0.85 threshold and the rule found nothing at all.
+         The amounts are compared separately, just below, so leaving them out of
+         the text similarity is not losing a signal; it is not counting the same
+         one twice. Rows whose details did not parse fall back to the full text,
+         which is the best available. */
+      var items = (r.parse && r.parse.items) || [];
+      var itemText = items.length
+        ? items.map(function (it) { return it.item_norm; }).join(' ')
+        : norm;
+      return {
+        row: r,
+        norm: norm,
+        stems: stemTokens(itemText),
+        amount: amountOf_(r),
+        box: String(r.box_code == null ? '' : r.box_code),
+        person: String(r.responsible_person == null ? '' : r.responsible_person).trim()
+      };
+    });
+
+    for (var i = 0; i < list.length; i++) {
+      for (var j = i + 1; j < list.length; j++) {
+        var a = list[i], b = list[j];
+        var gap = daysBetween(a.row.transaction_date, b.row.transaction_date);
+        if (gap === null || Math.abs(gap) > windowDays) continue;
+        if (!a.norm && !b.norm) continue;
+
+        if (a.norm === b.norm && a.amount === b.amount && a.box === b.box) {
+          var ev = [
+            { row_id: String(a.row.id), transaction_date: a.row.transaction_date, transaction_amount: a.amount, transaction_details: a.row.transaction_details },
+            { row_id: String(b.row.id), transaction_date: b.row.transaction_date, transaction_amount: b.amount, transaction_details: b.row.transaction_details }
+          ];
+          var msg = 'حركة مطابقة تماماً: نفس التفاصيل ونفس المبلغ ' + fmt2_(a.amount) +
+            ' ونفس الخزنة، بفارق ' + Math.abs(gap) + ' يوم — الحركتان رقم ' +
+            a.row.id + ' و' + b.row.id;
+          out.push(flag_('EXACT_DUP', 'high', a.row.id, msg, ev));
+          out.push(flag_('EXACT_DUP', 'high', b.row.id, msg, ev));
+          continue;
+        }
+
+        /* Near duplicate: similar wording AND a similar amount. Either alone is
+           ordinary — the same item bought twice at different prices, or two
+           unrelated purchases that happen to cost the same. */
+        var denom = Math.max(Math.abs(a.amount), Math.abs(b.amount));
+        var amtClose = denom === 0 ? (a.amount === b.amount)
+          : (Math.abs(a.amount - b.amount) / denom) <= amtPct;
+        if (!amtClose) continue;
+        var sim = tokenSetDice(a.stems, b.stems);
+        if (sim < simThreshold) continue;
+        if (a.norm === b.norm && a.amount === b.amount && a.box === b.box) continue;   /* already EXACT */
+
+        var ev2 = [
+          { row_id: String(a.row.id), transaction_date: a.row.transaction_date, transaction_amount: a.amount, transaction_details: a.row.transaction_details },
+          { row_id: String(b.row.id), transaction_date: b.row.transaction_date, transaction_amount: b.amount, transaction_details: b.row.transaction_details }
+        ];
+        var msg2 = 'حركتان متقاربتان جداً: تشابه التفاصيل ' + Math.round(sim * 100) + '%' +
+          ' والمبلغان ' + fmt2_(a.amount) + ' و' + fmt2_(b.amount) +
+          ' بفارق ' + Math.abs(gap) + ' يوم — الحركتان رقم ' + a.row.id + ' و' + b.row.id;
+        out.push(flag_('NEAR_DUP', 'medium', a.row.id, msg2, ev2));
+        out.push(flag_('NEAR_DUP', 'medium', b.row.id, msg2, ev2));
+      }
+    }
+    return out;
+  }
+
+  /* ── BACKDATED ──────────────────────────────────────────────────────────
+   * created_at − transaction_date, against the p95 of THIS population rather
+   * than a number somebody picked. In an office where everything is keyed a
+   * week late, a week late is not evidence of anything.
+   *
+   * Refuses to fire below BACKDATE_MIN_N: a p95 over 12 rows is the second
+   * largest value, which is not a percentile, it is just the second largest
+   * value. */
+  function ruleBackdated(rows, opts) {
+    var o = opts || {};
+    var minN = o.backdate_min_n === undefined ? TIER1.BACKDATE_MIN_N : o.backdate_min_n;
+    var lags = [];
+    var perRow = [];
+
+    (rows || []).forEach(function (r) {
+      if (!r || !r.transaction_date || !r.created_at) return;
+      var c = parseDateTime(r.created_at);
+      if (!c) return;
+      var lag = daysBetween(r.transaction_date, c.date);
+      if (lag === null) return;
+      lags.push(lag);
+      perRow.push({ row: r, lag: lag });
+    });
+
+    if (lags.length < minN) {
+      return {
+        flags: [],
+        note: {
+          rule_id: 'BACKDATED',
+          status: 'insufficient_data',
+          n: lags.length,
+          required: minN,
+          reason_ar: 'بيانات غير كافية لحساب حد التأخير (المطلوب ' + minN +
+            ' حركة على الأقل، والمتاح ' + lags.length + ')'
+        }
+      };
+    }
+
+    var p95 = percentile(lags, 0.95);
+    var threshold = Math.max(p95, TIER1.BACKDATE_MIN_DAYS);
+    var flags = [];
+    perRow.forEach(function (x) {
+      if (x.lag <= threshold) return;
+      flags.push(flag_('BACKDATED', 'medium', x.row.id,
+        'أُدخلت الحركة بعد تاريخها بـ ' + x.lag + ' يوم، وهو أعلى من الحد المحسوب من هذه المجموعة نفسها (' +
+        'الشريحة 95% = ' + fmt2_(p95) + ' يوم من ' + lags.length + ' حركة)',
+        [{ row_id: String(x.row.id), transaction_date: x.row.transaction_date,
+           created_at: x.row.created_at, lag_days: x.lag, p95_days: round_(p95, 2), n: lags.length }]));
+    });
+    return { flags: flags, note: null };
+  }
+
+  /* ── ODD_HOUR ───────────────────────────────────────────────────────────
+   * Keyed outside working hours or at the weekend. Weekend here is Friday and
+   * Saturday.
+   *
+   * PUBLIC HOLIDAYS ARE NOT CHECKED — there is no holiday calendar in this
+   * system, and inventing one would produce confident nonsense twice a year.
+   * The severity is deliberately 'low': working late is not fraud, it is a
+   * detail that matters only next to something else. */
+  function ruleOddHour(row, opts) {
+    var o = opts || {};
+    var startH = o.work_start_hour === undefined ? TIER1.WORK_START_HOUR : o.work_start_hour;
+    var endH = o.work_end_hour === undefined ? TIER1.WORK_END_HOUR : o.work_end_hour;
+    var weekend = o.weekend_days || TIER1.WEEKEND_DAYS;
+    if (!row || !row.created_at) return null;
+    var c = parseDateTime(row.created_at);
+    if (!c || c.hh === null) return null;
+
+    var dow = dayOfWeek(c.y, c.m, c.d);
+    var isWeekend = weekend.indexOf(dow) !== -1;
+    var outOfHours = c.hh < startH || c.hh >= endH;
+    if (!isWeekend && !outOfHours) return null;
+
+    var names = ['الأحد', 'الاثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
+    var parts = [];
+    if (isWeekend) parts.push('يوم ' + names[dow] + ' (عطلة أسبوعية)');
+    if (outOfHours) parts.push('الساعة ' + (c.hh < 10 ? '0' : '') + c.hh + ':' +
+      (c.mm === null ? '00' : (c.mm < 10 ? '0' : '') + c.mm) +
+      ' خارج ساعات العمل ' + startH + ':00–' + endH + ':00');
+    return flag_('ODD_HOUR', 'low', row.id,
+      'أُدخلت الحركة ' + parts.join(' و') + ' (لا تُحتسب الأعياد الرسمية — لا يوجد تقويم إجازات في النظام)',
+      [{ row_id: String(row.id), created_at: row.created_at, day_of_week: dow }]);
+  }
+
+  /* ── EDITED_AFTER_REVIEW ────────────────────────────────────────────────
+   * updated_at > created_at on a row marked reviewed.
+   *
+   * THIS IS WHY THE AUDIT LOG EXISTS. Without it, this rule fires on the
+   * page's own legitimate edits with no way to tell them from an outside
+   * change, and the feature spends its credibility flagging itself. With it,
+   * an edit made through this page is reported at LOW severity naming who made
+   * it, and only an unexplained change is reported at HIGH.
+   *
+   * auditIndex: { movement_id: [applied entries] } — built by the caller,
+   * because reading Drive is I/O and this file does none. */
+  function ruleEditedAfterReview(row, auditIndex) {
+    if (!row) return null;
+    if (String(row.is_revised) !== '1') return null;
+    if (!row.created_at || !row.updated_at) return null;
+    /* 'YYYY-MM-DD HH:MM:SS' compares correctly as a string. */
+    if (!(String(row.updated_at) > String(row.created_at))) return null;
+
+    var entries = (auditIndex || {})[String(row.id)] || [];
+    if (entries.length) {
+      var last = entries[entries.length - 1];
+      var who = (last.user && (last.user.name || last.user.email)) || 'مستخدم غير معروف';
+      var cols = (last.changes || []).map(function (c) {
+        var spec = EDITABLE_COLUMNS[c.column];
+        return spec ? spec.label_ar : c.column;
+      });
+      return flag_('EDITED_AFTER_REVIEW', 'low', row.id,
+        'عُدِّلت الحركة بعد اعتماد مراجعتها — والتعديل مسجَّل في سجل التدقيق بواسطة ' + who +
+        (cols.length ? ' على: ' + cols.join('، ') : '') + ' بتاريخ ' + (last.when || '—'),
+        [{ row_id: String(row.id), created_at: row.created_at, updated_at: row.updated_at,
+           audit: last }]);
+    }
+
+    return flag_('EDITED_AFTER_REVIEW', 'high', row.id,
+      'عُدِّلت الحركة بعد اعتماد مراجعتها ولا يوجد لها أي سجل تدقيق — أي أن التغيير لم يتم من خلال هذه الصفحة',
+      [{ row_id: String(row.id), created_at: row.created_at, updated_at: row.updated_at, audit: null }]);
+  }
+
+  /* ── OUT_OF_SEQUENCE ────────────────────────────────────────────────────
+   * id order contradicting transaction_date order. ids are assigned on insert,
+   * so a much later id carrying a much earlier date is a row entered out of
+   * order.
+   *
+   * Tolerance is 30 days by default and deliberately generous. Petty cash is
+   * routinely keyed a few days late, so a small inversion is normal life; a
+   * tight tolerance here would flag half the table and the rule would be
+   * switched off within a week. It is also only meaningful over a CONTIGUOUS
+   * range of ids — on a filtered page the gaps are the filter's, not the
+   * data's — which is why the caller is told so in `notes`.
+   *
+   * IT FLAGS THE ODD ONE OUT, NOT EVERYTHING AFTER IT. The first version
+   * compared each row against the running maximum date, so a single row dated
+   * three months in the future flagged all twelve rows that followed it — one
+   * anomaly, twelve accusations, and an alerts tab nobody would read twice.
+   * A row is reported only when it is far from BOTH of its id-neighbours in the
+   * same direction, which is what "out of sequence" actually means. The first
+   * and last rows of the set have one neighbour each and are skipped: a
+   * one-sided comparison is exactly the thing that cascaded. */
+  function ruleOutOfSequence(rows, opts) {
+    var o = opts || {};
+    var tol = o.sequence_tolerance_days === undefined ? TIER1.SEQUENCE_TOLERANCE_DAYS : o.sequence_tolerance_days;
+    var list = (rows || []).filter(function (r) {
+      return r && r.transaction_date && r.id !== undefined && r.id !== null && /^\d+$/.test(String(r.id));
+    }).slice().sort(function (a, b) {
+      var x = String(a.id), y = String(b.id);
+      return x.length - y.length || (x < y ? -1 : x > y ? 1 : 0);   /* bigint-safe */
+    });
+
+    var out = [];
+    for (var i = 1; i < list.length - 1; i++) {
+      var prev = list[i - 1], cur = list[i], next = list[i + 1];
+      var backGap = daysBetween(prev.transaction_date, cur.transaction_date);   /* cur − prev */
+      var fwdGap = daysBetween(next.transaction_date, cur.transaction_date);    /* cur − next */
+      if (backGap === null || fwdGap === null) continue;
+
+      var ev = [
+        { row_id: String(prev.id), transaction_date: prev.transaction_date },
+        { row_id: String(cur.id), transaction_date: cur.transaction_date },
+        { row_id: String(next.id), transaction_date: next.transaction_date }
+      ];
+
+      if (backGap < -tol && fwdGap < -tol) {
+        out.push(flag_('OUT_OF_SEQUENCE', 'medium', cur.id,
+          'ترتيب الإدخال يخالف التاريخ: الحركة رقم ' + cur.id + ' مسجَّلة بين الحركتين ' +
+          prev.id + ' و' + next.id + ' لكن تاريخها ' + cur.transaction_date +
+          ' أقدم من كلتيهما بـ ' + Math.abs(backGap) + ' و' + Math.abs(fwdGap) + ' يوم',
+          ev));
+      } else if (backGap > tol && fwdGap > tol) {
+        out.push(flag_('OUT_OF_SEQUENCE', 'medium', cur.id,
+          'ترتيب الإدخال يخالف التاريخ: الحركة رقم ' + cur.id + ' مسجَّلة بين الحركتين ' +
+          prev.id + ' و' + next.id + ' لكن تاريخها ' + cur.transaction_date +
+          ' أحدث من كلتيهما بـ ' + backGap + ' و' + fwdGap + ' يوم',
+          ev));
+      }
+    }
+    return out;
+  }
+
+  /* ── STRUCTURING ────────────────────────────────────────────────────────
+   * Several rows, same account and person, inside a short window, each just
+   * under a round threshold, summing above it.
+   *
+   * The thresholds are DERIVED, not guessed. For each candidate round number T
+   * the amount histogram is checked for a spike immediately below it: the count
+   * in [0.9T, T) against the count in [T, 1.1T). A real approval limit leaves a
+   * pile just under it and a hole just over it. A candidate with no such spike
+   * is not a limit in this organisation and is dropped, so the rule cannot flag
+   * people for being near a number that means nothing here.
+   *
+   * Below STRUCTURING_MIN_COUNT rows in the band there is no histogram to read
+   * and the rule reports insufficient data rather than a weak verdict. */
+  function detectStructuringThresholds(rows, opts) {
+    var o = opts || {};
+    var candidates = o.structuring_candidates || TIER1.STRUCTURING_CANDIDATES;
+    var band = o.structuring_band === undefined ? TIER1.STRUCTURING_BAND : o.structuring_band;
+    var minRatio = o.structuring_min_ratio === undefined ? TIER1.STRUCTURING_MIN_RATIO : o.structuring_min_ratio;
+    var minCount = o.structuring_min_count === undefined ? TIER1.STRUCTURING_MIN_COUNT : o.structuring_min_count;
+
+    var amounts = (rows || []).map(amountOf_).filter(function (a) { return a !== null && a > 0; });
+    var active = [];
+    candidates.forEach(function (T) {
+      var below = 0, above = 0;
+      amounts.forEach(function (a) {
+        if (a >= T * (1 - band) && a < T) below++;
+        else if (a >= T && a < T * (1 + band)) above++;
+      });
+      var ratio = below / Math.max(1, above);
+      if (below >= minCount && ratio >= minRatio) {
+        active.push({ threshold: T, below: below, above: above, ratio: round_(ratio, 2) });
+      }
+    });
+    return { thresholds: active, n_amounts: amounts.length, band: band };
+  }
+
+  function ruleStructuring(rows, opts) {
+    var o = opts || {};
+    var windowDays = o.structuring_window_days === undefined ? TIER1.STRUCTURING_WINDOW_DAYS : o.structuring_window_days;
+    var detected = detectStructuringThresholds(rows, o);
+
+    if (!detected.thresholds.length) {
+      return {
+        flags: [],
+        detected: detected,
+        note: {
+          rule_id: 'STRUCTURING',
+          status: 'no_threshold_detected',
+          n: detected.n_amounts,
+          reason_ar: 'لم يظهر في توزيع المبالغ أي تكدّس أسفل رقم مستدير، فلا يوجد حد اعتماد يُستدل عليه من البيانات — ' +
+            'ولا تُطبَّق هذه القاعدة بحدود مفترضة'
+        }
+      };
+    }
+
+    /* Group by account + person, then slide a window over each group's dates. */
+    var groups = {};
+    (rows || []).forEach(function (r) {
+      if (!r || !r.transaction_date) return;
+      var amt = amountOf_(r);
+      if (amt === null || amt <= 0) return;
+      var key = String(r.chart_of_accounts || '') + ' ' + String(r.responsible_person || '').trim();
+      (groups[key] = groups[key] || []).push(r);
+    });
+
+    var out = [];
+    var seen = {};
+    Object.keys(groups).forEach(function (key) {
+      var g = groups[key].slice().sort(function (a, b) {
+        return a.transaction_date < b.transaction_date ? -1 : a.transaction_date > b.transaction_date ? 1 : 0;
+      });
+      detected.thresholds.forEach(function (t) {
+        var T = t.threshold;
+        var inBand = g.filter(function (r) {
+          var a = amountOf_(r);
+          return a >= T * (1 - detected.band) && a < T;
+        });
+        for (var i = 0; i < inBand.length; i++) {
+          var cluster = [inBand[i]];
+          var sum = amountOf_(inBand[i]);
+          for (var j = i + 1; j < inBand.length; j++) {
+            var gap = daysBetween(inBand[i].transaction_date, inBand[j].transaction_date);
+            if (gap === null || gap > windowDays) break;
+            cluster.push(inBand[j]);
+            sum += amountOf_(inBand[j]);
+          }
+          if (cluster.length < 2 || sum <= T) continue;
+
+          var ids = cluster.map(function (r) { return String(r.id); });
+          var sig = ids.join(',') + '@' + T;
+          if (seen[sig]) continue;
+          seen[sig] = true;
+
+          var ev = cluster.map(function (r) {
+            return { row_id: String(r.id), transaction_date: r.transaction_date,
+                     transaction_amount: amountOf_(r), responsible_person: r.responsible_person,
+                     chart_of_accounts: r.chart_of_accounts };
+          });
+          var msg = cluster.length + ' حركات لنفس المسؤول ونفس الحساب خلال ' +
+            (daysBetween(cluster[0].transaction_date, cluster[cluster.length - 1].transaction_date) || 0) +
+            ' يوم، كل منها أقل بقليل من ' + fmt2_(T) + ' ومجموعها ' + fmt2_(sum) +
+            ' أي أعلى منه. وحد الـ' + fmt2_(T) + ' مستنتج من البيانات نفسها: ' +
+            t.below + ' حركة أسفله مقابل ' + t.above + ' فوقه.';
+          cluster.forEach(function (r) {
+            out.push(flag_('STRUCTURING', 'high', r.id, msg, ev));
+          });
+          i += cluster.length - 1;
+        }
+      });
+    });
+    return { flags: out, detected: detected, note: null };
+  }
+
+  /**
+   * Run every Tier 1 rule over a set of movement rows.
+   *
+   * rows: movement rows, each optionally carrying `parse` from parseDetails.
+   * opts.auditIndex: { movement_id: [applied audit entries] }, built by the
+   *   caller — reading Drive is I/O and this file does none.
+   *
+   * Returns { flags, by_row, notes, structuring }.
+   * `notes` is where a rule says it did NOT run and why. That is not an
+   * implementation detail to hide: "no finding" and "could not look" are
+   * different answers, and only one of them is reassuring.
+   */
+  function runTier1(rows, opts) {
+    var o = opts || {};
+    var list = rows || [];
+    var flags = [];
+    var notes = [];
+
+    list.forEach(function (row) {
+      var f;
+      f = ruleSumMismatch(row); if (f) flags.push(f);
+      f = ruleOddHour(row, o); if (f) flags.push(f);
+      f = ruleEditedAfterReview(row, o.auditIndex); if (f) flags.push(f);
+    });
+
+    flags = flags.concat(ruleDuplicates(list, o));
+    flags = flags.concat(ruleOutOfSequence(list, o));
+
+    var back = ruleBackdated(list, o);
+    flags = flags.concat(back.flags);
+    if (back.note) notes.push(back.note);
+
+    var struct = ruleStructuring(list, o);
+    flags = flags.concat(struct.flags);
+    if (struct.note) notes.push(struct.note);
+
+    if (list.length) {
+      notes.push({
+        rule_id: 'OUT_OF_SEQUENCE',
+        status: 'scope',
+        reason_ar: 'تُقارَن أرقام الحركات داخل المعروض فقط؛ إذا كانت الفلاتر تُخفي حركات بينها فقد ' +
+          'تظهر مخالفات ترتيب ليست في البيانات الأصلية'
+      });
+    }
+
+    var byRow = {};
+    flags.forEach(function (f) {
+      if (f.row_id === null) return;
+      (byRow[f.row_id] = byRow[f.row_id] || []).push(f);
+    });
+
+    return { flags: flags, by_row: byRow, notes: notes, structuring: struct.detected };
+  }
+
   // ═══════════════════════════════════════════════════════════════════════
   // Public surface
   // ═══════════════════════════════════════════════════════════════════════
@@ -1111,6 +1692,27 @@ var BoxEngine = (function () {
     inItemRange: inItemRange,
     crossesItemBoundary: crossesItemBoundary,
     diffChanges: diffChanges,
+
+    /* date/time arithmetic */
+    dayNumber: dayNumber,
+    daysBetween: daysBetween,
+    dayOfWeek: dayOfWeek,
+    parseDateTime: parseDateTime,
+    percentile: percentile,
+    median: median,
+
+    /* §7 Tier 1 — deterministic integrity */
+    TIER1: TIER1,
+    SEVERITY_AR: SEVERITY_AR,
+    ruleSumMismatch: ruleSumMismatch,
+    ruleDuplicates: ruleDuplicates,
+    ruleBackdated: ruleBackdated,
+    ruleOddHour: ruleOddHour,
+    ruleEditedAfterReview: ruleEditedAfterReview,
+    ruleOutOfSequence: ruleOutOfSequence,
+    detectStructuringThresholds: detectStructuringThresholds,
+    ruleStructuring: ruleStructuring,
+    runTier1: runTier1,
 
     /* §6 — period windows */
     daysInMonth: daysInMonth,

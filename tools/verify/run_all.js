@@ -48,7 +48,8 @@ const STEPS = [
   ['box_windows.js', 'B3 — the four account windows and the month-end clamp'],
   ['box_sql.js', 'B3 — SQL discipline: additive, no DDL, closes, binds, credit'],
   ['box_wiring.js', 'B4 — access gate, registration, nav, query budget'],
-  ['box_edit.js', 'B6 — edit path: allowlist, validators, named confirm, audit']
+  ['box_edit.js', 'B6 — edit path: allowlist, validators, named confirm, audit'],
+  ['box_rules.js', 'B7 — rules engine, run against fixtures both ways']
 ];
 
 /* Two programmes share this repo and this runner, so a step's file can be

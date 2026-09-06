@@ -1,0 +1,238 @@
+{
+  "_about": {
+    "purpose": "Movement rows for the Tier 1/2/3 rules in Box_Analysis_Engine.js (BOX_ANALYSIS_PLAN.md §7).",
+    "READ_THIS_FIRST": "EVERY ROW HERE IS SYNTHETIC. Not one of them came from the production table. They were constructed to make a specific rule fire, or — just as important — to make sure it does NOT. They prove the rules do what they say on data whose answer is known; they say nothing about how often any of this occurs in the live table, and nothing about the false-positive rate on real data. That measurement needs DB access and is a blocked-on-owner item in NEXT_STEPS_OWNER.md.",
+    "shape": "Columns match regular_box_movement. `parse` is NOT stored — the test runs the real parser over transaction_details, so a parser change cannot leave a stale rule fixture behind.",
+    "expect": "rule ids that MUST fire for the row, and must_not for ids that must not.",
+    "groups": "Rules INTERACT — a duplicate-pair fixture is also a row in the id/date sequence, and a fixture written to exercise one rule will trip another by accident. So each row carries a `group`, and the checks run the engine once PER GROUP. Within a group the wording and amounts are deliberately made distinct unless the rule under test needs them alike, so a scenario tests one thing. There is also one run over ALL rows, which asserts only that nothing crashes and that every flag produced is explainable.",
+    "note_on_populations": "BACKDATED needs n>=30 and STRUCTURING needs a histogram, so those two are exercised against populations the test GENERATES from a documented recipe rather than listing 60 rows here. The recipe is in tools/verify/box_rules.js and is printed when the check runs."
+  },
+
+  "rows": [
+    {
+      "id": "4213", "group": "sum", "transaction_date": "2026-08-14",
+      "transaction_details": "5 كيلو معجون شروخ ب 700 + طبة حديد ب 25 + نص سلك لحام المونيوم ب 875 + نص كيلو  كيلو سلك لحام زهر ب 925",
+      "transaction_type": "credit", "transaction_amount": "2525.00",
+      "chart_of_accounts": "310500", "responsible_person": "محمود عبد الحميد", "box_code": "1",
+      "client_id": null, "related_id": null, "user_id": "7",
+      "created_at": "2026-08-14 09:12:03", "updated_at": "2026-08-14 09:12:03", "is_revised": "0",
+      "_case": "the items sum exactly to the amount, keyed the same day, in hours, on a Friday? no — 14 Aug 2026 is a Friday, so ODD_HOUR fires for the weekend",
+      "expect": ["ODD_HOUR"],
+      "must_not": ["SUM_MISMATCH", "EXACT_DUP", "NEAR_DUP", "EDITED_AFTER_REVIEW"]
+    },
+    {
+      "id": "4220", "group": "sum", "transaction_date": "2026-08-17",
+      "transaction_details": "5 كيلو معجون شروخ ب 700 + طبة حديد ب 25 + نص سلك لحام المونيوم ب 875 + نص كيلو كيلو سلك لحام زهر ب 925",
+      "transaction_type": "credit", "transaction_amount": "2900.00",
+      "chart_of_accounts": "310500", "responsible_person": "محمود عبد الحميد", "box_code": "1",
+      "client_id": null, "related_id": null, "user_id": "7",
+      "created_at": "2026-08-17 10:05:00", "updated_at": "2026-08-17 10:05:00", "is_revised": "0",
+      "_case": "SUM_MISMATCH — the description accounts for 2525 of a 2900 payment. 375 is unexplained. Also NEAR_DUP against 4213? No: the amounts differ by 13%, above the 2% band.",
+      "expect": ["SUM_MISMATCH"],
+      "must_not": ["EXACT_DUP", "NEAR_DUP"]
+    },
+    {
+      "id": "4230", "group": "sum", "transaction_date": "2026-08-18",
+      "transaction_details": "تم صرف مبلغ نقدي لصالح الورشة بمعرفة الاستاذ محمود",
+      "transaction_type": "credit", "transaction_amount": "1500.00",
+      "chart_of_accounts": "310500", "responsible_person": "محمود عبد الحميد", "box_code": "1",
+      "client_id": null, "related_id": null, "user_id": "7",
+      "created_at": "2026-08-18 11:00:00", "updated_at": "2026-08-18 11:00:00", "is_revised": "0",
+      "_case": "Nothing parses, so there is no sum to compare. SUM_MISMATCH must NOT fire — blaming this row for the parser's gap would be a finding about our software, reported as a finding about a person. The unparsable details are already surfaced separately.",
+      "expect": [],
+      "must_not": ["SUM_MISMATCH"]
+    },
+    {
+      "id": "4240", "group": "sum", "transaction_date": "2026-08-19",
+      "transaction_details": "2 كيلو مسمار ب 90 + شريط لحام",
+      "transaction_type": "credit", "transaction_amount": "300.00",
+      "chart_of_accounts": "310500", "responsible_person": "سيد فتحي", "box_code": "2",
+      "client_id": null, "related_id": null, "user_id": "9",
+      "created_at": "2026-08-19 12:00:00", "updated_at": "2026-08-19 12:00:00", "is_revised": "0",
+      "_case": "One segment parsed (90) and one failed. The sum is KNOWN to be incomplete, so SUM_MISMATCH must not fire even though 90 != 300.",
+      "expect": [],
+      "must_not": ["SUM_MISMATCH"]
+    },
+
+    {
+      "id": "4301", "group": "dup_exact", "transaction_date": "2026-08-20",
+      "transaction_details": "3 كيلو مسمار ب 150",
+      "transaction_type": "credit", "transaction_amount": "150.00",
+      "chart_of_accounts": "310600", "responsible_person": "سيد فتحي", "box_code": "2",
+      "client_id": null, "related_id": null, "user_id": "9",
+      "created_at": "2026-08-20 09:30:00", "updated_at": "2026-08-20 09:30:00", "is_revised": "0",
+      "_case": "EXACT_DUP with 4302 — identical details, identical amount, same box, 2 days apart.",
+      "expect": ["EXACT_DUP"],
+      "must_not": []
+    },
+    {
+      "id": "4302", "group": "dup_exact", "transaction_date": "2026-08-22",
+      "transaction_details": "3 كيلو مسمار ب 150",
+      "transaction_type": "credit", "transaction_amount": "150.00",
+      "chart_of_accounts": "310600", "responsible_person": "سيد فتحي", "box_code": "2",
+      "client_id": null, "related_id": null, "user_id": "9",
+      "created_at": "2026-08-24 09:30:00", "updated_at": "2026-08-24 09:30:00", "is_revised": "0",
+      "_case": "The other half of the EXACT_DUP pair. created_at is a Monday on purpose — every fixture here exercises ONE rule, so an incidental weekend entry does not muddy the assertion. BOTH rows must be flagged — a reader looking at either one needs to be told about the other.",
+      "expect": ["EXACT_DUP"],
+      "must_not": []
+    },
+    {
+      "id": "4303", "group": "dup_exact", "transaction_date": "2026-11-20",
+      "transaction_details": "3 كيلو مسمار ب 150",
+      "transaction_type": "credit", "transaction_amount": "150.00",
+      "chart_of_accounts": "310600", "responsible_person": "سيد فتحي", "box_code": "2",
+      "client_id": null, "related_id": null, "user_id": "9",
+      "created_at": "2026-11-23 09:30:00", "updated_at": "2026-11-23 09:30:00", "is_revised": "0",
+      "_case": "Identical to 4301 in every way EXCEPT the date — three months later. Buying the same nails again in November is not a duplicate claim. The 7-day window is what stops this rule from flagging routine repeat purchases forever.",
+      "expect": [],
+      "must_not": ["EXACT_DUP", "NEAR_DUP"]
+    },
+
+    {
+      "id": "4311", "group": "dup_near", "transaction_date": "2026-08-25",
+      "transaction_details": "4 لتر تنر صناعي ب 200",
+      "transaction_type": "credit", "transaction_amount": "200.00",
+      "chart_of_accounts": "310700", "responsible_person": "عادل رمضان", "box_code": "3",
+      "client_id": null, "related_id": null, "user_id": "11",
+      "created_at": "2026-08-25 09:00:00", "updated_at": "2026-08-25 09:00:00", "is_revised": "0",
+      "_case": "NEAR_DUP with 4312 — wording differs slightly, amount differs by 1%.",
+      "expect": ["NEAR_DUP"],
+      "must_not": ["EXACT_DUP"]
+    },
+    {
+      "id": "4312", "group": "dup_near", "transaction_date": "2026-08-26",
+      "transaction_details": "4 لتر تنر صناعى ب 202",
+      "transaction_type": "credit", "transaction_amount": "202.00",
+      "chart_of_accounts": "310700", "responsible_person": "عادل رمضان", "box_code": "3",
+      "client_id": null, "related_id": null, "user_id": "11",
+      "created_at": "2026-08-26 09:00:00", "updated_at": "2026-08-26 09:00:00", "is_revised": "0",
+      "_case": "The other half. Note the ى/ي spelling difference — after normAr the two texts are identical, but the amounts differ, so this is NEAR and not EXACT.",
+      "expect": ["NEAR_DUP"],
+      "must_not": ["EXACT_DUP"]
+    },
+    {
+      "id": "4313", "group": "dup_near", "transaction_date": "2026-08-27",
+      "transaction_details": "2 كيلو معجون شروخ ب 200",
+      "transaction_type": "credit", "transaction_amount": "200.00",
+      "chart_of_accounts": "310700", "responsible_person": "عادل رمضان", "box_code": "3",
+      "client_id": null, "related_id": null, "user_id": "11",
+      "created_at": "2026-08-27 09:00:00", "updated_at": "2026-08-27 09:00:00", "is_revised": "0",
+      "_case": "SAME AMOUNT as 4311, two days apart, same person and box — but a completely different purchase. Two things costing the same is ordinary. If this fires, the rule is keying on the amount alone and is useless.",
+      "expect": [],
+      "must_not": ["EXACT_DUP", "NEAR_DUP"]
+    },
+
+    {
+      "id": "4401", "group": "odd_hour", "transaction_date": "2026-08-28",
+      "transaction_details": "1 كيلو سلك لحام زهر ب 900",
+      "transaction_type": "credit", "transaction_amount": "900.00",
+      "chart_of_accounts": "310800", "responsible_person": "هالة سعيد", "box_code": "4",
+      "client_id": null, "related_id": null, "user_id": "13",
+      "created_at": "2026-08-28 02:14:00", "updated_at": "2026-08-28 02:14:00", "is_revised": "0",
+      "_case": "ODD_HOUR — keyed at 02:14. 28 Aug 2026 is a Friday, so the weekend clause fires too and both reasons appear in one message.",
+      "expect": ["ODD_HOUR"],
+      "must_not": ["SUM_MISMATCH"]
+    },
+    {
+      "id": "4402", "group": "odd_hour", "transaction_date": "2026-08-31",
+      "transaction_details": "3 كيلو معجون شروخ ب 900",
+      "transaction_type": "credit", "transaction_amount": "900.00",
+      "chart_of_accounts": "310800", "responsible_person": "هالة سعيد", "box_code": "5",
+      "client_id": null, "related_id": null, "user_id": "13",
+      "created_at": "2026-08-31 11:00:00", "updated_at": "2026-08-31 11:00:00", "is_revised": "0",
+      "_case": "31 Aug 2026 is a Monday, keyed at 11:00 — squarely inside working hours. ODD_HOUR must not fire. Different box_code from 4401, so no EXACT_DUP either.",
+      "expect": [],
+      "must_not": ["ODD_HOUR", "EXACT_DUP"]
+    },
+
+    {
+      "id": "4501", "group": "edited", "transaction_date": "2026-07-01",
+      "transaction_details": "2 كيلو مسمار ب 100",
+      "transaction_type": "credit", "transaction_amount": "100.00",
+      "chart_of_accounts": "310900", "responsible_person": "ياسر جمال", "box_code": "6",
+      "client_id": null, "related_id": null, "user_id": "15",
+      "created_at": "2026-07-01 10:00:00", "updated_at": "2026-07-05 16:30:00", "is_revised": "1",
+      "_case": "EDITED_AFTER_REVIEW with NO audit entry — updated_at moved after review and nothing explains it. HIGH severity: the change did not come through this page.",
+      "expect": ["EDITED_AFTER_REVIEW"],
+      "must_not": []
+    },
+    {
+      "id": "4502", "group": "edited", "transaction_date": "2026-07-02",
+      "transaction_details": "4 لتر تنر ب 100",
+      "transaction_type": "credit", "transaction_amount": "100.00",
+      "chart_of_accounts": "310900", "responsible_person": "ياسر جمال", "box_code": "7",
+      "client_id": null, "related_id": null, "user_id": "15",
+      "created_at": "2026-07-02 10:00:00", "updated_at": "2026-07-06 16:30:00", "is_revised": "1",
+      "_case": "The SAME situation as 4501, but the audit log explains it. Still reported — the reader should know the row moved — but at LOW severity, naming who did it. Without this distinction the page flags its own legitimate edits and burns its credibility.",
+      "expect": ["EDITED_AFTER_REVIEW"],
+      "must_not": []
+    },
+    {
+      "id": "4503", "group": "edited", "transaction_date": "2026-07-03",
+      "transaction_details": "1 عدد جردل ب 100",
+      "transaction_type": "credit", "transaction_amount": "100.00",
+      "chart_of_accounts": "310900", "responsible_person": "ياسر جمال", "box_code": "8",
+      "client_id": null, "related_id": null, "user_id": "15",
+      "created_at": "2026-07-06 10:00:00", "updated_at": "2026-07-08 16:30:00", "is_revised": "0",
+      "_case": "updated_at moved, but the row was never marked reviewed. Editing an unreviewed row is normal work, not tampering.",
+      "expect": [],
+      "must_not": ["EDITED_AFTER_REVIEW"]
+    },
+
+    {
+      "id": "5000", "group": "sequence", "transaction_date": "2026-06-01",
+      "transaction_details": "1 كيلو زيت ب 60",
+      "transaction_type": "credit", "transaction_amount": "60.00",
+      "chart_of_accounts": "311000", "responsible_person": "منى صابر", "box_code": "9",
+      "client_id": null, "related_id": null, "user_id": "17",
+      "created_at": "2026-06-01 10:00:00", "updated_at": "2026-06-01 10:00:00", "is_revised": "0",
+      "_case": "The first row of the set: one id-neighbour only, so it is skipped. Its date is also the earliest, which is what a first row should be.",
+      "expect": [],
+      "must_not": ["OUT_OF_SEQUENCE"]
+    },
+    {
+      "id": "5001", "group": "sequence", "transaction_date": "2026-06-10",
+      "transaction_details": "2 لتر بنزين ب 60",
+      "transaction_type": "credit", "transaction_amount": "60.00",
+      "chart_of_accounts": "311000", "responsible_person": "منى صابر", "box_code": "10",
+      "client_id": null, "related_id": null, "user_id": "17",
+      "created_at": "2026-06-11 10:00:00", "updated_at": "2026-06-11 10:00:00", "is_revised": "0",
+      "_case": "id and date both advance. Normal. It is an INTERIOR row, so it is genuinely tested — the first and last rows of a set are skipped by the rule.",
+      "expect": [],
+      "must_not": ["OUT_OF_SEQUENCE"]
+    },
+    {
+      "id": "5002", "group": "sequence", "transaction_date": "2026-02-15",
+      "transaction_details": "3 عدد فرشة ب 60",
+      "transaction_type": "credit", "transaction_amount": "60.00",
+      "chart_of_accounts": "311000", "responsible_person": "منى صابر", "box_code": "11",
+      "client_id": null, "related_id": null, "user_id": "17",
+      "created_at": "2026-06-15 10:00:00", "updated_at": "2026-06-15 10:00:00", "is_revised": "0",
+      "_case": "OUT_OF_SEQUENCE — sits between ids 5001 (10 Jun) and 5003 (20 Jun) but is dated 15 Feb, roughly four months before BOTH of them. The rule flags the odd one out, not every row after it: an earlier version compared each row to the running maximum and turned this single anomaly into twelve accusations.",
+      "expect": ["OUT_OF_SEQUENCE"],
+      "must_not": []
+    },
+    {
+      "id": "5003", "group": "sequence", "transaction_date": "2026-06-20",
+      "transaction_details": "1 كيس اسمنت ب 60",
+      "transaction_type": "credit", "transaction_amount": "60.00",
+      "chart_of_accounts": "311000", "responsible_person": "منى صابر", "box_code": "12",
+      "client_id": null, "related_id": null, "user_id": "17",
+      "created_at": "2026-06-22 10:00:00", "updated_at": "2026-06-22 10:00:00", "is_revised": "0",
+      "_case": "The last row of the set, so it has only one id-neighbour and is skipped — a one-sided comparison is exactly what made the first version cascade. Its date also advances normally.",
+      "expect": [],
+      "must_not": ["OUT_OF_SEQUENCE"]
+    }
+  ],
+
+  "audit_entries": [
+    {
+      "edit_id": "aaaabbbbccccdddd", "phase": "applied", "action": "update_box_movement",
+      "when": "2026-07-06T16:30:00+03:00",
+      "user": { "email": "reviewer@example.com", "name": "أحمد المراجع", "role": "accountant" },
+      "movement_id": "4502",
+      "changes": [{ "column": "transaction_amount", "old": "90.00", "new": "100.00" }],
+      "_case": "The entry that turns row 4502's EDITED_AFTER_REVIEW from an accusation into a note."
+    }
+  ]
+}
