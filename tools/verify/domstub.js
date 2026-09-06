@@ -116,8 +116,16 @@ function makeSandbox(extra) {
       setItem: function (k, v) { this._d[k] = String(v); },
       removeItem: function (k) { delete this._d[k]; }
     },
-    setTimeout: function (fn) { if (typeof fn === 'function') fn(); return 0; },
-    clearTimeout: function () {},
+    /* Timers are QUEUED, not run. Running them inline fired every page's load
+       watchdog immediately and swallowed toasts (UIC.toast removes itself on a
+       timer), which made both invisible to tests. Call sandbox.runTimers() to
+       fire them deliberately. */
+    setTimeout: function (fn, ms) {
+      if (typeof fn !== 'function') return 0;
+      sandbox.__timers.push({ fn: fn, ms: Number(ms) || 0 });
+      return sandbox.__timers.length;
+    },
+    clearTimeout: function (id) { if (id && sandbox.__timers[id - 1]) sandbox.__timers[id - 1] = null; },
     setInterval: function () { return 0; },
     clearInterval: function () {},
     requestAnimationFrame: function (fn) { if (typeof fn === 'function') fn(0); return 0; },
@@ -133,6 +141,20 @@ function makeSandbox(extra) {
     Array: Array, Object: Object, RegExp: RegExp, Error: Error, isNaN: isNaN,
     parseFloat: parseFloat, parseInt: parseInt, encodeURIComponent: encodeURIComponent,
     decodeURIComponent: decodeURIComponent
+  };
+  sandbox.__timers = [];
+  /* Fire queued timers up to `maxMs` (default: all). */
+  sandbox.runTimers = function (maxMs) {
+    const due = sandbox.__timers.filter(t => t && (maxMs === undefined || t.ms <= maxMs));
+    sandbox.__timers = sandbox.__timers.map(t => (t && due.indexOf(t) !== -1) ? null : t);
+    due.forEach(t => { try { t.fn(); } catch (e) {} });
+    return due.length;
+  };
+  /* Toasts: UIC.toast appends a .toast div to <body>. */
+  sandbox.toasts = function () {
+    return sandbox.document.body.children
+      .filter(c => /(^|\s)toast(\s|$)/.test(String(c.className || '')))
+      .map(c => String(c.textContent || ''));
   };
   sandbox.window = sandbox;
   sandbox.self = sandbox;

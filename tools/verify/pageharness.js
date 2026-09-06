@@ -145,8 +145,13 @@ function bootPage(opts) {
   if (o.expose && o.expose.length) {
     const marker = pageSrc.lastIndexOf('})();');
     if (marker === -1) throw new Error('no IIFE close found in ' + o.page + ' to expose from');
+    /* An entry is a bare name, or 'alias=expression' when the thing under test
+       is a variable the page later reassigns and a live getter is needed. */
     const line = '\ntry { window.__EXPORTS = { ' +
-      o.expose.map(n => n + ': ' + n).join(', ') + ' }; } catch (e) {}\n';
+      o.expose.map(n => {
+        const eq = n.indexOf('=');
+        return eq === -1 ? n + ': ' + n : n.slice(0, eq) + ': ' + n.slice(eq + 1);
+      }).join(', ') + ' }; } catch (e) {}\n';
     pageSrc = pageSrc.slice(0, marker) + line + pageSrc.slice(marker);
   }
 

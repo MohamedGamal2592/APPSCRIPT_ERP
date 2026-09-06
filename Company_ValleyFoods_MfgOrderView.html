@@ -396,27 +396,266 @@
             .catch(function () { OUTPUT_BATCHES[i] = []; drawOutputs(); });
         } else { OUTPUT_BATCHES[i] = []; OUTPUT_FOOTERS[i] = []; drawOutputs(); }
       }
+      /* U-44. This used to skip re-allocation entirely once ANY batch had been
+       * allocated by hand, so changing the quantity left quantity and batches
+       * silently out of step until the save threw. Now:
+       *   nothing allocated  -> full FIFO, as before;
+       *   allocated < qty    -> keep every hand-made allocation and fill only
+       *                         the shortfall, oldest-first;
+       *   allocated > qty    -> say so. Silently discarding somebody's own
+       *                         allocation would be worse than telling them,
+       *                         and the per-row indicator (S8) shows where. */
       function setOutputQty(i, v) {
         MFG_OUTPUTS[i].qty = v;
-        if (!(OUTPUT_FOOTERS[i] && OUTPUT_FOOTERS[i].length)) autoAllocFifo_(i);
+        var existing = OUTPUT_FOOTERS[i] || [];
+        if (!existing.length) {
+          autoAllocFifo_(i);
+        } else {
+          var qty = round3(v);
+          var keep = allocatedMap_(i);
+          var sum = 0;
+          Object.keys(keep).forEach(function (k) { sum = round3(sum + keep[k]); });
+          if (round3(sum - qty) > BATCH_TOLERANCE) {
+            UI.toast && UI.toast('الدفعات المخصصة (' + fmt3(sum) + ') أكبر من الكمية الجديدة (' + fmt3(qty) + ') — عدّل الدفعات من «+ دفعة».', 'warning');
+          } else if (round3(qty - sum) > BATCH_TOLERANCE) {
+            OUTPUT_FOOTERS[i] = fifoFill_(OUTPUT_BATCHES[i] || [], qty, keep);
+          }
+        }
         drawOutputs();
       }
+      function round3(v) { return Math.round((Number(v) || 0) * 1000) / 1000; }
+
+      /* THE FIFO. There is one, and this is it — autoAllocFifo_ and the batch
+       * modal both go through here, so oldest-first allocation can never drift
+       * between the two.
+       *
+       * `keep` is an optional { batch_uid: qty } of allocations the user has
+       * already made by hand. Those are honoured in batch order and count
+       * against the requirement; only the SHORTFALL is filled, oldest-first,
+       * from batches not already held. With no `keep` it behaves exactly as the
+       * original autoAllocFifo_ did. */
+      function fifoFill_(batches, qty, keep) {
+        keep = keep || {};
+        var out = [];
+        var remaining = round3(qty);
+        if (remaining <= 0 || !batches || !batches.length) return out;
+
+        /* 1) what the user already allocated, in batch (oldest-first) order */
+        batches.forEach(function (b) {
+          var uid = String(b.batch_uid || '');
+          var held = round3(keep[uid]);
+          if (!uid || held <= 0) return;
+          var row = { item: uid, item_code: String(b.lot || ''), qty: held };
+          if (b.unit_cost != null) row.unit_cost = Number(b.unit_cost) || 0;
+          out.push(row);
+          remaining = round3(remaining - held);
+        });
+
+        /* 2) the shortfall, oldest-first, from batches not already held */
+        for (var i = 0; i < batches.length && remaining > 0.0001; i++) {
+          var bb = batches[i];
+          var uid2 = String(bb.batch_uid || '');
+          if (round3(keep[uid2]) > 0) continue;
+          var avail = Number(bb.available) || 0;
+          if (avail <= 0) continue;
+          var take = avail >= remaining ? remaining : avail;
+          var row2 = { item: uid2, item_code: String(bb.lot || ''), qty: round3(take) };
+          if (bb.unit_cost != null) row2.unit_cost = Number(bb.unit_cost) || 0;
+          out.push(row2);
+          remaining = round3(remaining - take);
+        }
+        return out;
+      }
+
       /* Allocate the output quantity across available batches FIFO (oldest-first). */
       function autoAllocFifo_(i) {
         var o = MFG_OUTPUTS[i]; if (!o) return;
-        var qty = Number(o.qty) || 0;
-        var batches = OUTPUT_BATCHES[i] || [];
-        if (qty <= 0 || !batches.length) { OUTPUT_FOOTERS[i] = []; return; }
-        var remaining = qty, footers = [];
-        for (var b = 0; b < batches.length && remaining > 0.0001; b++) {
-          var avail = Number(batches[b].available) || 0;
-          if (avail <= 0) continue;
-          var take = avail >= remaining ? remaining : avail;
-          footers.push({ item: String(batches[b].batch_uid || ''), item_code: String(batches[b].lot || ''), qty: Math.round(take * 1000) / 1000, unit_cost: Number(batches[b].unit_cost) || 0 });
-          remaining = Math.round((remaining - take) * 1000) / 1000;
-        }
-        OUTPUT_FOOTERS[i] = footers;
+        OUTPUT_FOOTERS[i] = fifoFill_(OUTPUT_BATCHES[i] || [], Number(o.qty) || 0, null);
       }
+
+      /* What is currently allocated for material i, as { batch_uid: qty }. */
+      function allocatedMap_(i) {
+        var m = {};
+        (OUTPUT_FOOTERS[i] || []).forEach(function (f) {
+          var uid = String(f.item || '').trim();
+          if (uid) m[uid] = round3((m[uid] || 0) + (Number(f.qty) || 0));
+        });
+        return m;
+      }
+
+      /* ---------- U-44: the FIFO batch modal ---------- */
+      /* The server's tolerance, mirrored EXACTLY. Company_ValleyFoods_Actions.js
+       * throws 'مجموع الدفعات للصنف … يجب أن يساوي كمية البند' when
+       * Math.abs(paySum - payQty) > 0.01, both rounded to 3 decimals. A looser
+       * client tolerance would accept an allocation the save then rejects. */
+      var BATCH_TOLERANCE = 0.01;
+      var BM = null;   /* { i, qty, rows:[{batch_uid,lot,available,alloc,unit_cost}] } */
+
+      /* Pure: the current arithmetic of the open modal. */
+      function batchModalState_() {
+        if (!BM) return null;
+        var sum = 0;
+        var over = [];
+        BM.rows.forEach(function (r, ix) {
+          var a = round3(r.alloc);
+          sum = round3(sum + a);
+          if (a - (Number(r.available) || 0) > 0.0001) over.push(ix);
+        });
+        var qty = round3(BM.qty);
+        var diff = round3(sum - qty);
+        return {
+          sum: sum, qty: qty, diff: diff,
+          matched: Math.abs(diff) <= BATCH_TOLERANCE,
+          over: over
+        };
+      }
+
+      /* Pure: the running-total line. */
+      function batchSummaryHtml_(st) {
+        if (!st) return '';
+        var head = 'مجموع الدفعات: ' + fmt3(st.sum) + ' من ' + fmt3(st.qty);
+        if (st.matched) {
+          return '<span style="color:var(--success,#0a7a34);font-weight:700;">✔ ' + head + '</span>' +
+            (st.over.length ? '<div class="odoo-neg" style="margin-top:4px;">⚠ تجاوز المتاح في ' + st.over.length +
+              ' دفعة — المتاح المعروض تقديري، والخادم يتحقق منه مقابل أرصدة الدفعات الفعلية عند الحفظ.</div>' : '');
+        }
+        var msg = st.diff < 0
+          ? 'ينقص ' + fmt3(Math.abs(st.diff))
+          : 'يزيد ' + fmt3(st.diff);
+        return '<span class="odoo-neg" style="font-weight:700;">✖ ' + head + ' — ' + msg + '</span>' +
+          (st.over.length ? '<div class="odoo-neg" style="margin-top:4px;">⚠ تجاوز المتاح في ' + st.over.length +
+            ' دفعة — المتاح المعروض تقديري، والخادم يتحقق منه مقابل أرصدة الدفعات الفعلية عند الحفظ.</div>' : '');
+      }
+
+      function batchModalRowsHtml_() {
+        return BM.rows.map(function (r, ix) {
+          var alloc = round3(r.alloc);
+          var remain = round3((Number(r.available) || 0) - alloc);
+          var overCls = remain < -0.0001 ? 'odoo-neg' : 'odoo-ro';
+          var lineTotal = (Number(r.unit_cost) || 0) * alloc;
+          return '<tr>' +
+            '<td>' + esc(r.lot || r.batch_uid) + '</td>' +
+            '<td class="odoo-ro">' + fmt3(r.available) + '</td>' +
+            '<td>' + inputHtml('bm-qty-' + ix, alloc || '', 'number', 'MFGVIEW_PAGE.batchModalSet(' + ix + ',this.value)', { min: '0', step: '0.001' }) + '</td>' +
+            '<td id="bm-remain-' + ix + '" class="' + overCls + '">' + fmt3(remain) + '</td>' +
+            (canCost()
+              ? '<td class="odoo-ro">' + fmtMoney(r.unit_cost) + '</td><td id="bm-line-' + ix + '" class="odoo-ro">' + fmtMoney(lineTotal) + '</td>'
+              : '') +
+            '</tr>';
+        }).join('');
+      }
+
+      function batchModalBodyHtml_() {
+        var st = batchModalState_();
+        return '<div class="odoo-ro" style="margin-bottom:8px;">' +
+            esc(MFG_OUTPUTS[BM.i].product_name || MFG_OUTPUTS[BM.i].product_id || '') +
+            ' — الكمية المطلوبة: <b>' + fmt3(BM.qty) + '</b>' +
+          '</div>' +
+          '<div style="overflow-x:auto;"><table class="odoo-table"><thead><tr>' +
+            '<th>الدفعة (transaction_code)</th>' +
+            '<th style="width:110px;">المتاح</th>' +
+            '<th style="width:120px;">المخصص</th>' +
+            '<th style="width:110px;">المتبقي</th>' +
+            (canCost() ? '<th style="width:120px;">تكلفة الوحدة</th><th style="width:130px;">الإجمالي</th>' : '') +
+          '</tr></thead><tbody>' + batchModalRowsHtml_() + '</tbody></table></div>' +
+          '<div id="bm-summary" style="margin-top:10px;font-size:13px;">' + batchSummaryHtml_(st) + '</div>';
+      }
+
+      function batchModalFooterHtml_() {
+        var st = batchModalState_();
+        return '<button class="btn btn-outline" onclick="MFGVIEW_PAGE.batchModalCancel()">إلغاء</button> ' +
+          '<button id="bm-confirm" class="btn btn-primary" ' + (st && st.matched ? '' : 'disabled ') +
+          'onclick="MFGVIEW_PAGE.batchModalConfirm()">تأكيد</button>';
+      }
+
+      /* Opens on + دفعة. Runs FIFO over the shortfall only, so batches the user
+         already chose are kept — the owner's "if there already chosen batches it
+         continue". */
+      function openBatchModal(i) {
+        var o = MFG_OUTPUTS[i];
+        if (!o) return;
+        var qty = round3(o.qty);
+        if (qty <= 0) { UI.toast && UI.toast('أدخل كمية الخامة أولاً', 'error'); return; }
+        var batches = (OUTPUT_BATCHES[i] || []);
+        if (!batches.length) { UI.toast && UI.toast('لا توجد دفعات متاحة لهذه الخامة', 'error'); return; }
+
+        var keep = allocatedMap_(i);
+        var proposed = fifoFill_(batches, qty, keep);
+        var byUid = {};
+        proposed.forEach(function (p) { byUid[p.item] = round3((byUid[p.item] || 0) + p.qty); });
+
+        /* One row per batch, oldest-first (the server already sorts them that
+           way), plus any already-allocated batch that is no longer offered — a
+           saved row whose batch is now exhausted must stay visible and editable
+           rather than vanish. */
+        var rows = batches.map(function (b) {
+          var uid = String(b.batch_uid || '');
+          return {
+            batch_uid: uid, lot: String(b.lot || uid),
+            available: Number(b.available) || 0,
+            unit_cost: b.unit_cost,
+            alloc: round3(byUid[uid] || 0)
+          };
+        });
+        var seen = {};
+        rows.forEach(function (r) { seen[r.batch_uid] = true; });
+        Object.keys(keep).forEach(function (uid) {
+          if (seen[uid]) return;
+          var f = (OUTPUT_FOOTERS[i] || []).filter(function (x) { return String(x.item) === uid; })[0] || {};
+          rows.push({ batch_uid: uid, lot: String(f.item_code || uid), available: 0, unit_cost: f.unit_cost, alloc: round3(keep[uid]) });
+        });
+
+        BM = { i: i, qty: qty, rows: rows };
+        UIC.openModal('vf-batch-modal', {
+          title: 'تخصيص الدفعات (FIFO — الأقدم أولاً)',
+          size: 'lg',
+          body: batchModalBodyHtml_(),
+          footer: batchModalFooterHtml_()
+        });
+      }
+
+      /* In-place update: the row's remaining, its line total, the running total
+         and the confirm button. The table is NOT re-rendered, so the number
+         being typed into keeps its focus and caret. */
+      function batchModalSet(ix, v) {
+        if (!BM || !BM.rows[ix]) return;
+        BM.rows[ix].alloc = Number(v) || 0;
+        var st = batchModalState_();
+        var alloc = round3(BM.rows[ix].alloc);
+        var remain = round3((Number(BM.rows[ix].available) || 0) - alloc);
+        var rEl = document.getElementById('bm-remain-' + ix);
+        if (rEl) {
+          rEl.textContent = fmt3(remain);
+          rEl.className = remain < -0.0001 ? 'odoo-neg' : 'odoo-ro';
+        }
+        var lEl = document.getElementById('bm-line-' + ix);
+        if (lEl) lEl.textContent = fmtMoney((Number(BM.rows[ix].unit_cost) || 0) * alloc);
+        var sEl = document.getElementById('bm-summary');
+        if (sEl) sEl.innerHTML = batchSummaryHtml_(st);
+        var cEl = document.getElementById('bm-confirm');
+        if (cEl) cEl.disabled = !st.matched;
+      }
+
+      /* Cancel leaves the existing allocation exactly as it was. */
+      function batchModalCancel() { BM = null; UIC.closeModal('vf-batch-modal'); }
+
+      function batchModalConfirm() {
+        if (!BM) return;
+        var st = batchModalState_();
+        if (!st.matched) return;   /* the button is disabled; belt and braces */
+        var i = BM.i;
+        OUTPUT_FOOTERS[i] = BM.rows
+          .filter(function (r) { return round3(r.alloc) > 0; })
+          .map(function (r) {
+            var row = { item: r.batch_uid, item_code: r.lot, qty: round3(r.alloc) };
+            if (r.unit_cost != null) row.unit_cost = Number(r.unit_cost) || 0;
+            return row;
+          });
+        BM = null;
+        UIC.closeModal('vf-batch-modal');
+        drawOutputs();
+      }
+
       function addFooterRow(i) { if (!OUTPUT_FOOTERS[i]) OUTPUT_FOOTERS[i] = []; OUTPUT_FOOTERS[i].push({ item: '', item_code: '', qty: '' }); drawOutputs(); }
       function removeFooterRow(i, fi) { OUTPUT_FOOTERS[i].splice(fi, 1); drawOutputs(); }
       function setFooterItem(i, fi, el) {
@@ -505,7 +744,7 @@
               (editable() ? '<div style="display:flex;align-items:flex-end;"><button class="btn btn-ghost" style="padding:6px 8px;" onclick="MFGVIEW_PAGE.removeOutput(' + i + ')">✕</button></div>' : '<div></div>') +
             '</div>' +
             '<div class="odoo-sub">' +
-              '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;"><span class="odoo-ro">🧪 المواد المستهلكة (الدفعات)</span>' + (editable() ? '<button class="btn btn-outline" style="padding:2px 8px;font-size:11px;" onclick="MFGVIEW_PAGE.addFooterRow(' + i + ')">+ دفعة</button>' : '') + '</div>' +
+              '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;"><span class="odoo-ro">🧪 المواد المستهلكة (الدفعات)</span>' + (editable() ? '<button class="btn btn-outline" style="padding:2px 8px;font-size:11px;" onclick="MFGVIEW_PAGE.openBatchModal(' + i + ')">+ دفعة</button>' : '') + '</div>' +
               footerTable +
             '</div>' +
             (o.product_name || outTotal ? '<div class="odoo-ro" style="margin-top:6px;">' + (o.product_name ? 'الصنف: ' + esc(o.product_name) : '') + (footers.length ? ' • إجمالي الكمية: ' + fmt3(qtyTotal) + (canCost() ? ' • إجمالي التكلفة: ' + fmtMoney(outTotal) : '') : '') + '</div>' : '') +
@@ -807,6 +1046,8 @@
         switchTab: switchTab, changeStatus: changeStatus, onRecipeChange: onRecipeChange,
         addOutput: addOutput, removeOutput: removeOutput, setOutputProduct: setOutputProduct, setOutputQty: setOutputQty,
         addFooterRow: addFooterRow, removeFooterRow: removeFooterRow, setFooterItem: setFooterItem, setFooterQty: setFooterQty,
+        openBatchModal: openBatchModal, batchModalSet: batchModalSet,
+        batchModalConfirm: batchModalConfirm, batchModalCancel: batchModalCancel,
         addWorkOp: addWorkOp, removeWorkOp: removeWorkOp, setWorkOp: setWorkOp, clockWorkOp: clockWorkOp,
         addByproduct: addByproduct, removeByproduct: removeByproduct, setByproduct: setByproduct,
         approveMo: approveMo, printMo: printMo

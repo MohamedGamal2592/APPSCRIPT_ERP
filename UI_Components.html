@@ -1014,7 +1014,13 @@ UIC.openModal = function (modalId, opts) {
       '<div class="modal-header"><h3>' + (o.title || '') + '</h3>' +
         '<button class="btn-icon" onclick="UIC.closeModal(\'' + modalId + '\')" aria-label="إغلاق">&times;</button></div>' +
       '<div class="modal-body">' + (o.body || '') + '</div>' +
-      (o.footer !== false ? '<div class="modal-footer">' + UIC.button({ text: 'إلغاء', type: 'outline', onClick: 'UIC.closeModal(\'' + modalId + '\')' }) + ' ' + UIC.button({ text: 'حفظ', onClick: 'UI.submitOnce(this, function(){' + (o.onSave || '') + '})' }) + '</div>' : '') +
+      (o.footer === false
+        ? ''
+        : typeof o.footer === 'string'
+          /* Custom footer markup. Additive: every caller before this passed
+             either nothing or false, so the default below is untouched. */
+          ? '<div class="modal-footer">' + o.footer + '</div>'
+          : '<div class="modal-footer">' + UIC.button({ text: 'إلغاء', type: 'outline', onClick: 'UIC.closeModal(\'' + modalId + '\')' }) + ' ' + UIC.button({ text: 'حفظ', onClick: 'UI.submitOnce(this, function(){' + (o.onSave || '') + '})' }) + '</div>') +
     '</div>';
   document.body.appendChild(div);
   document.body.classList.add('modal-open');
