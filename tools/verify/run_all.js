@@ -26,6 +26,7 @@ const STEPS = [
   ['s8_material_rows.js', 'S8 — material entry ergonomics'],
   ['s10_purchasing_ux.js', 'Purchasing form/lines UX + tl_sales pagination'],
   ['s11_sales_returns.js', 'tl_sales row menu + مرتجعات opens the returns page'],
+  ['s13_forms_filters.js', 'S13 — forms readability (F1/A1/F2/F4a) + vf_products and vf_parties filters'],
   /* ── UI/UX programme (branch ui/odoo-parity) ── */
   ['ui1_anchor.js', 'UI-1.2 — popups escape the table clip box (U-01)'],
   ['ui1_sort.js', 'UI-1.3 — tri-state sort, load order preserved (U-03)'],

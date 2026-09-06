@@ -359,3 +359,14 @@ review process works, not a technical one. Tell me which you want.
   seasonality rule that went silent on exactly the account that needed it most. All three are fixed
   and described in BOX_ANALYSIS_RESULTS.md. Expect the thresholds to need another pass once they
   meet real data.
+
+---
+
+# Recommended follow-up run — the F4b grid migration
+
+`.form-grid` / `-wide` / `-narrow` now exist in `UI_Components.html` and are proven on two forms
+(the subscription-invoice modal and the ValleyFoods products form). **The remaining 81 inline
+`grid-template-columns` across 43 pages are deliberately NOT migrated** — that is F4b, and it wants
+its own run. See `UI_FORMS_AND_FILTERS_RESULTS.md` §F4b for why, and the classification rule: form
+grids migrate, computed-value strips go to `-narrow`, and KPI/tile rows must be **left alone**, since
+a 240px floor would make the dashboards worse rather than better.
