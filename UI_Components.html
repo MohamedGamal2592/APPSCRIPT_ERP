@@ -1381,8 +1381,30 @@ UIC._applyFilters = function (id) {
   var dateKey = (st.opts && st.opts.dateKey) || 'date';
   /* [UI-1.3 / U-03] Filter from the untouched load order, never from a
      previously sorted result, so clearing a sort really does restore it. */
+  /* [UI-4.3 / U-13] Field-targeted search: "العميل: أحمد" narrows to one column
+     instead of scanning the whole row.
+     GUARDED so ordinary searching is untouched: the text before the colon must
+     resolve to a real column on THIS table. A term like "10:30" or a product
+     code containing a colon therefore still searches the whole row exactly as
+     it does today. */
+  var field = null, fieldVal = '';
+  if (q) {
+    var m = /^([^:]+):\s*(.+)$/.exec(q);
+    if (m) {
+      var want = m[1].trim();
+      var hit = (st.headers || []).filter(function (h) {
+        return String(h.label || '').trim().toLowerCase() === want ||
+               String(h.key || '').trim().toLowerCase() === want;
+      })[0];
+      if (hit) { field = hit.key || hit.label; fieldVal = m[2].trim(); }
+    }
+  }
+
   st.filtered = (st.originalRows || st.rows).filter(function (r) {
-    if (q) {
+    if (q && field) {
+      var cell = (r && !Array.isArray(r)) ? r[field] : null;
+      if (String(cell == null ? '' : cell).toLowerCase().indexOf(fieldVal) === -1) return false;
+    } else if (q) {
       try { if (JSON.stringify(r == null ? '' : r).toLowerCase().indexOf(q) === -1) return false; } catch (e) { return false; }
     }
     if (dateFrom || dateTo) {

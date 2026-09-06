@@ -177,6 +177,42 @@ const UIC = sb.UIC;
     'a long breadcrumb scrolls inside itself rather than widening the page');
 })();
 
+/* ── 9. [UI-4.3 / U-13] Field-targeted search, and its guard ────────────── */
+(function () {
+  const H = [{ key: 'cust', label: 'العميل' }, { key: 'note', label: 'ملاحظة' }];
+  const R = [
+    { cust: 'أحمد', note: 'موعد 10:30' },
+    { cust: 'سارة', note: 'أحمد أوصى' },
+    { cust: 'محمد', note: 'لا شيء' }
+  ];
+  function run(term) {
+    UIC.dataTable('fs', { headers: H, rows: R, autoPage: false });
+    const st = sb.window.__dtStore.fs;
+    st.searchTerm = String(term).toLowerCase();
+    UIC._applyFilters('fs');
+    return st.filtered.map(r => r.cust);
+  }
+  /* The whole-row scan exactly as it stood before this step. */
+  function original(term) {
+    const q = String(term).toLowerCase();
+    return R.filter(function (r) {
+      try { return JSON.stringify(r).toLowerCase().indexOf(q) !== -1; } catch (e) { return false; }
+    }).map(r => r.cust);
+  }
+
+  ok(JSON.stringify(run('العميل: أحمد')) === JSON.stringify(['أحمد']),
+    'a column name before the colon narrows to that column', JSON.stringify(run('العميل: أحمد')));
+  ok(JSON.stringify(run('cust: سارة')) === JSON.stringify(['سارة']),
+    'the column KEY works as well as its label');
+
+  /* Everything that is not a real column must behave exactly as before. */
+  ['أحمد', '10:30', 'xyz: أحمد', 'لا شيء', '', 'موعد', ':', 'a:b:c'].forEach(function (t) {
+    ok(JSON.stringify(run(t)) === JSON.stringify(original(t)),
+      'plain search unchanged for ' + JSON.stringify(t),
+      JSON.stringify(run(t)) + ' vs ' + JSON.stringify(original(t)));
+  });
+})();
+
 console.log('');
 if (failures) { console.log(failures + ' assertion(s) FAILED'); process.exit(1); }
-console.log('UI-4.1 control panel: all assertions pass.');
+console.log('UI-4.1/4.3 control panel and search: all assertions pass.');
