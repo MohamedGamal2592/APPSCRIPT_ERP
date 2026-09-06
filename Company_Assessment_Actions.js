@@ -198,6 +198,150 @@ const AssessmentCenter = (function () {
     return s === 'true' || s === '1';
   }
 
+  // ── §5.1/D-18 — OptionsJSON parser ─────────────────────────────────────────
+  // Accepts a JSON array of plain strings (legacy/MCQ) OR of {text, trait}
+  // objects (MostLeast / Likert-with-trait, D-18) and always normalises to
+  // {text, trait} so every reader (candidate projection, scoring, authoring
+  // form) has one shape to work with. A string option gets trait: ''.
+  function acParseOptions_(rawOptionsJson) {
+    const arr = acJson_(rawOptionsJson, []);
+    if (!Array.isArray(arr)) return [];
+    return arr.map(function (o) {
+      if (o && typeof o === 'object') {
+        return { text: String(o.text === undefined || o.text === null ? '' : o.text), trait: String(o.trait === undefined || o.trait === null ? '' : o.trait) };
+      }
+      return { text: String(o === undefined || o === null ? '' : o), trait: '' };
+    });
+  }
+
+  // ── §5.6/G-09 — the candidate projection ───────────────────────────────────
+  // Strips CorrectAnswer, Weight, Trait, UserID, CreatedAt from every question,
+  // and the per-statement `trait` from every option — the candidate must never
+  // see the answer key, the scoring weights or any trait label.
+  function acPublicAssessment_(assessment, questions) {
+    const safeAssessment = {
+      AssessmentID: assessment.AssessmentID,
+      Title: assessment.Title,
+      Category: assessment.Category,
+      Description: assessment.Description,
+      TimeLimitMinutes: assessment.TimeLimitMinutes
+    };
+    const safeQuestions = (questions || []).slice().sort(function (a, b) {
+      return (parseInt(a.OrderIndex, 10) || 0) - (parseInt(b.OrderIndex, 10) || 0);
+    }).map(function (q) {
+      const opts = acParseOptions_(q.OptionsJSON).map(function (o) { return { text: o.text }; });
+      return {
+        QuestionID: q.QuestionID,
+        OrderIndex: q.OrderIndex,
+        QuestionText: q.QuestionText,
+        QuestionType: q.QuestionType,
+        Options: opts
+      };
+    });
+    return { assessment: safeAssessment, questions: safeQuestions };
+  }
+
+  /**
+   * §5.4 — the scoring engine. A PURE function: no sheet I/O, no lock, no
+   * Date.now(). Given the same four arguments it always returns the same
+   * result, which is what lets the submission handler, the results list and
+   * the result view (Phase 6) all call the very same code, and what makes it
+   * testable under node with fixtures alone (ac2_scoring.js).
+   *
+   * `events` (from the sheet's AuditLog rows for this assignment, or the raw
+   * candidate-submitted event batch) is summarised but never affects the
+   * score — only الأحداث-tab / late-flag display reads it.
+   */
+  function acScore_(assessment, questions, responses, events) {
+    const respByQ = {};
+    (responses || []).forEach(function (r) { respByQ[r.QuestionID] = r; });
+
+    const traits = {}; // trait -> { raw, max }
+    function bumpTrait(trait, raw, tmax) {
+      if (!trait) return;
+      if (!traits[trait]) traits[trait] = { raw: 0, max: 0 };
+      traits[trait].raw += raw;
+      traits[trait].max += tmax;
+    }
+
+    let score = 0, max = 0, anyGradable = false, anyPending = false;
+    const items = [];
+
+    (questions || []).forEach(function (q) {
+      const resp = respByQ[q.QuestionID] || null;
+      const weight = Number(q.Weight) || 0;
+      const type = q.QuestionType;
+      const answer = resp ? resp.Answer : '';
+      let itemScore = null, itemMax = null, counts = false, pending = false;
+
+      if (type === 'MCQ') {
+        counts = true; anyGradable = true;
+        const norm = function (v) { return String(v === undefined || v === null ? '' : v).trim().toLowerCase(); };
+        const hasScore = resp && resp.Score !== undefined && resp.Score !== null && String(resp.Score).trim() !== '';
+        // Legacy blank Score (standalone never wrote one) is re-derived here,
+        // on read, and never written back.
+        const s = hasScore ? (Number(resp.Score) || 0)
+          : ((q.CorrectAnswer && norm(answer) === norm(q.CorrectAnswer)) ? weight : 0);
+        itemScore = s; itemMax = weight;
+        score += s; max += weight;
+      } else if (type === 'Likert') {
+        const v = Number(answer) || 0;
+        bumpTrait(q.Trait, v * weight, weight * 5);
+      } else if (type === 'MostLeast') {
+        const parsed = acJson_(answer, null);
+        const opts = acParseOptions_(q.OptionsJSON);
+        const traitFor = function (text) {
+          const hit = opts.filter(function (o) { return o.text === text; })[0];
+          return (hit && hit.trait) || q.Trait || '';
+        };
+        if (parsed && parsed.most) bumpTrait(traitFor(parsed.most), weight, weight);
+        if (parsed && parsed.least) bumpTrait(traitFor(parsed.least), -weight, weight);
+      } else if (type === 'OpenText') {
+        counts = true; anyGradable = true;
+        const hasScore = resp && resp.Score !== undefined && resp.Score !== null && String(resp.Score).trim() !== '';
+        if (hasScore) {
+          const s = Math.max(0, Math.min(weight, Number(resp.Score) || 0));
+          itemScore = s; itemMax = weight;
+          score += s; max += weight;
+        } else {
+          pending = true; anyPending = true;
+        }
+      }
+
+      items.push({
+        QuestionID: q.QuestionID, QuestionType: type, Answer: answer,
+        Score: itemScore, Max: itemMax, Counts: counts, Pending: pending
+      });
+    });
+
+    const traitProfile = {};
+    Object.keys(traits).forEach(function (t) {
+      const raw = traits[t].raw, tmax = traits[t].max;
+      traitProfile[t] = { raw: raw, max: tmax, pct: tmax ? Math.round((raw / tmax) * 1000) / 10 : 0 };
+    });
+
+    let verdict;
+    if (!anyGradable) verdict = 'N/A';
+    else if (anyPending) verdict = 'Pending';
+    else {
+      const passScore = Number(assessment.PassScore) || 0;
+      // Cross-multiplied rather than (score/max)*100 >= passScore, so a
+      // candidate landing on EXACTLY PassScore is never lost to a rounding
+      // artifact from floating-point division (weights may be halves, D-11).
+      verdict = (max > 0 && (score * 100 + 1e-9) >= (passScore * max)) ? 'Pass' : 'Fail';
+    }
+
+    const ev = events || [];
+    const lateEvent = ev.filter(function (e) { return e && e.type === 'LATE_SUBMISSION'; })[0];
+    const tabSwitchCount = ev.filter(function (e) { return e && e.type === 'TAB_SWITCH'; }).length;
+
+    return {
+      score: score, max: max, verdict: verdict,
+      traits: traitProfile, items: items,
+      events: { lateSubmission: !!lateEvent, tabSwitches: tabSwitchCount }
+    };
+  }
+
   // ── Dashboard (Phase 1.2 — the only two handlers this step ships) ─────────
   function getAcDashboard_(data, user, dbId) {
     const assessments = acRows_(dbId, ASSESSMENTS_SHEET);
@@ -237,12 +381,141 @@ const AssessmentCenter = (function () {
   }
   register('prefetch_refs', prefetchRefs_);
 
+  // ── §6.4/T-3/T-4 — the write path ──────────────────────────────────────────
+  // Never addRecord_ / getNextId_ / saveRecordWithAudit_ against this
+  // spreadsheet (R-16/R-17): a lower-case dataMap key would be silently
+  // shadowed by the old value on update, and the first save would create an
+  // ID_Counter tab in the owner's assessment spreadsheet. ac4_write_contract.js
+  // greps this file for all three names and fails the suite if any appears.
+
+  /**
+   * Header-mapped single insert. `obj`'s keys are matched to the sheet's real
+   * headers case-INsensitively (so a handler may pass PascalCase keys matching
+   * the plan's §2.2 column names, or any other case, and every value still
+   * lands in the right column) — unlike addRecord_, which only ever looks keys
+   * up lower-cased.
+   */
+  function acInsert_(dbId, sheet, obj, user, pkName, lockMs) {
+    return executeWithLock_(function () {
+      const sh = getSheet_(sheet, dbId);
+      const headers = getHeaders_(sh);
+      const lut = {};
+      Object.keys(obj).forEach(function (k) { lut[String(k).trim().toLowerCase()] = obj[k]; });
+      const rowValues = headers.map(function (h) {
+        const v = lut[String(h).trim().toLowerCase()];
+        return v === undefined ? '' : v;
+      });
+      appendRowWithRetry_(sh, rowValues);
+      // logHistory_ looks new/old values up BY THE SHEET'S REAL HEADER SPELLING
+      // (02_DataAccess.js). Handing it the caller's possibly differently-cased
+      // `obj` directly would silently blank every column whose key case
+      // doesn't match — the very same R-16 shadowing trap, one layer further
+      // in. A header-case object built from the row just written sidesteps it.
+      const headerCaseObj = {};
+      headers.forEach(function (h, i) { headerCaseObj[h] = rowValues[i]; });
+      const pk = obj[pkName];
+      try { logHistory_(dbId, sheet, 'rec_' + pk, pk, user, 'create', headerCaseObj, null); } catch (e) {}
+      return { status: 'success', data: { record: headerCaseObj, assignedId: pk } };
+    }, lockMs);
+  }
+
+  /**
+   * Bulk variant — ONE setValues for N rows (the standalone's uiSubmitTest
+   * already does this for Responses; Questions on save follows the same
+   * shape). One executeWithLock_ acquisition for the whole batch, one
+   * logHistory_ call per created row (matching house precedent elsewhere in
+   * this codebase for bulk creates).
+   */
+  function acInsertMany_(dbId, sheet, objs, user, pkName, lockMs) {
+    if (!objs || !objs.length) return { status: 'success', data: { count: 0 } };
+    return executeWithLock_(function () {
+      const sh = getSheet_(sheet, dbId);
+      const headers = getHeaders_(sh);
+      const matrix = objs.map(function (obj) {
+        const lut = {};
+        Object.keys(obj).forEach(function (k) { lut[String(k).trim().toLowerCase()] = obj[k]; });
+        return headers.map(function (h) {
+          const v = lut[String(h).trim().toLowerCase()];
+          return v === undefined ? '' : v;
+        });
+      });
+      const startRow = sh.getLastRow() + 1;
+      sh.getRange(startRow, 1, matrix.length, headers.length).setValues(matrix);
+      noteMutation_();
+      objs.forEach(function (obj, i) {
+        const pk = obj[pkName];
+        // Same header-case rule as acInsert_ — logHistory_ reads by real
+        // header spelling, so it gets the row actually written, not `obj`.
+        const headerCaseObj = {};
+        headers.forEach(function (h, c) { headerCaseObj[h] = matrix[i][c]; });
+        try { logHistory_(dbId, sheet, 'rec_' + pk, pk, user, 'create', headerCaseObj, null); } catch (e) {}
+      });
+      return { status: 'success', data: { count: objs.length } };
+    }, lockMs);
+  }
+
+  /**
+   * Header-case-safe update. `patch` is handed to updateRowByCriteria_ ALONE —
+   * never merged with the old record first — because updateRowByCriteria_
+   * matches each of the CALLER's keys against the sheet's real headers
+   * case-insensitively on every cell independently; merging `old` (header-case
+   * keys, from acRows_) with a differently-cased patch first is exactly the
+   * R-16 shadowing trap (a lower-case patch key would sit next to the
+   * untouched header-case old key, and the update silently no-ops). Passing
+   * the patch alone sidesteps the trap entirely — T-3.
+   */
+  function acUpdate_(dbId, sheet, pkName, pkValue, patch, user, lockMs) {
+    return executeWithLock_(function () {
+      const idx = acByPk_(dbId, sheet, pkName);
+      const old = idx.byPk.get(String(pkValue)) || null;
+      const sh = getSheet_(sheet, dbId);
+      const ok = updateRowByCriteria_(sh, pkName, pkValue, patch);
+      if (!ok) throw new Error('Record not found: ' + pkValue);
+      // Same header-case rule as acInsert_, now on the READ side: build the
+      // "new values" object for logHistory_ by resolving each of the sheet's
+      // real headers against `patch` case-insensitively, rather than
+      // Object.assign(old, patch) — which would leave the header-case `old`
+      // key untouched next to patch's differently-cased one and report the
+      // column as unchanged in ERP_Record_History even though the cell
+      // itself (via updateRowByCriteria_'s own case-insensitive match) was
+      // correctly written.
+      const headers = getHeaders_(sh);
+      const patchLut = {};
+      Object.keys(patch).forEach(function (k) { patchLut[String(k).trim().toLowerCase()] = patch[k]; });
+      const merged = Object.assign({}, old);
+      headers.forEach(function (h) {
+        const v = patchLut[String(h).trim().toLowerCase()];
+        if (v !== undefined) merged[h] = v;
+      });
+      try { logHistory_(dbId, sheet, (old && old.record_uid) || ('update_' + sheet + '_' + pkValue), pkValue, user, 'update', merged, old); } catch (e) {}
+      return { status: 'success', data: { record: merged } };
+    }, lockMs);
+  }
+
   return {
     dispatch_: dispatch_,
     publicDispatch_: publicDispatch_,
     pageForAction_: pageForAction_,
     tableForAction_: tableForAction_,
     register: register,
-    publicRegister: publicRegister
+    publicRegister: publicRegister,
+    // Exposed for the offline verify suite (ac2_scoring.js / ac4_write_contract.js
+    // / ac5_candidate.js) to call directly and for fixture-driven testing —
+    // these are the same functions every handler above uses internally.
+    acScore_: acScore_,
+    acPublicAssessment_: acPublicAssessment_,
+    acParseOptions_: acParseOptions_,
+    acDate_: acDate_,
+    acStamp_: acStamp_,
+    acBool_: acBool_,
+    acJson_: acJson_,
+    acUid_: acUid_,
+    acToken_: acToken_,
+    acValidToken_: acValidToken_,
+    acRows_: acRows_,
+    acByPk_: acByPk_,
+    acInsert_: acInsert_,
+    acInsertMany_: acInsertMany_,
+    acUpdate_: acUpdate_
   };
 })();

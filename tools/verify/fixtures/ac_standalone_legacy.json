@@ -1,0 +1,52 @@
+{
+  "_purpose": "D-19 — rows shaped exactly as the standalone app would have written them, before this merge existed: string dates ('yyyy-MM-dd HH:mm:ss'), boolean IsActive, blank Score, a MostLeast answer stored as a JSON string, and legacy plain-string OptionsJSON (no per-statement trait) relying on the question-level Trait.",
+  "assessment": {
+    "AssessmentID": "legacy0000000001",
+    "Title": "Legacy Psychometric",
+    "Category": "Psychometric",
+    "Description": "",
+    "TimeLimitMinutes": 20,
+    "PassScore": 50,
+    "IsActive": true,
+    "UserID": "staff0",
+    "CreatedAt": "2026-08-01 09:00:00",
+    "UpdatedAt": "2026-08-01 09:00:00"
+  },
+  "questions": [
+    {
+      "QuestionID": "lq1", "AssessmentID": "legacy0000000001", "OrderIndex": 1,
+      "QuestionText": "How do you feel about deadlines?", "QuestionType": "Likert",
+      "OptionsJSON": "[]", "CorrectAnswer": "", "Weight": 3, "Trait": "Conscientiousness"
+    },
+    {
+      "QuestionID": "lq2", "AssessmentID": "legacy0000000001", "OrderIndex": 2,
+      "QuestionText": "Most/least like you", "QuestionType": "MostLeast",
+      "OptionsJSON": "[\"Plans ahead\",\"Improvises\",\"Delegates\"]",
+      "CorrectAnswer": "", "Weight": 4, "Trait": "Conscientiousness"
+    }
+  ],
+  "assignment": {
+    "AssignmentID": "legacyassign0001",
+    "BatchID": "legacybatch00001",
+    "Token": "11111111-1111-1111-1111-11111111111122222222-2222-2222-2222-222222222222",
+    "CandidateEmail": "candidate@example.com",
+    "AssessmentID": "legacy0000000001",
+    "Status": "Completed",
+    "StartedAt": "2026-08-05 08:00:00",
+    "CompletedAt": "2026-08-05 08:15:00",
+    "CreatedAt": "2026-08-05 08:00:00"
+  },
+  "responses": [
+    {
+      "ResponseID": "lr1", "AssignmentID": "legacyassign0001", "QuestionID": "lq1",
+      "Answer": "4", "Score": "", "AnsweredAt": "2026-08-05 08:05:00",
+      "EmailCandidate": "candidate@example.com", "CreatedAt": "2026-08-05 08:05:00"
+    },
+    {
+      "ResponseID": "lr2", "AssignmentID": "legacyassign0001", "QuestionID": "lq2",
+      "Answer": "{\"most\":\"Plans ahead\",\"least\":\"Improvises\"}", "Score": "",
+      "AnsweredAt": "2026-08-05 08:10:00", "EmailCandidate": "candidate@example.com",
+      "CreatedAt": "2026-08-05 08:10:00"
+    }
+  ]
+}
