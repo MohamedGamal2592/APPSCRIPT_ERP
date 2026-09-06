@@ -1,8 +1,8 @@
 # Next steps — everything now waiting on you
 
 **Branches:** `perf/optimization-run` (28 commits, three runs) and `feat/valleyfoods-mfg-cost`
-(13 commits, branched from it) · **Nothing has been deployed.** `clasp push` has never been run by an
-agent, and no deployment has been created or promoted. **41 commits** of unverified change now sit
+(14 commits, branched from it) · **Nothing has been deployed.** `clasp push` has never been run by an
+agent, and no deployment has been created or promoted. **42 commits** of unverified change now sit
 across the two branches — that is the main reason items 1 and 2 below come first.
 
 The ValleyFoods functional work is on its own branch so it can be reverted independently of the
@@ -98,7 +98,7 @@ Afterwards, open the record-history panel and confirm recent history still shows
 
 ### 6. Turn on the cost permission — `valley_cost_view` 🟡
 
-**New, from the ValleyFoods run** (branch `feat/valleyfoods-mfg-cost`, 13 commits, not pushed).
+**New, from the ValleyFoods run** (branch `feat/valleyfoods-mfg-cost`, 14 commits, not pushed).
 Full detail: [VALLEYFOODS_RESULTS.md](VALLEYFOODS_RESULTS.md) §6.
 
 Add `ERP_Pages_Matrix` rows granting `write` on `valley_cost_view` to every role that should see
