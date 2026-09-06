@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>معاينة — تحليل حركة الخزنة العادية (توب كيميكال)</title>
+<style>
+  body { font-family: Cairo, Tahoma, Arial, sans-serif; margin: 0; background: #f5f6f8; color: #1f2937; }
+  .pv-bar { position: sticky; top: 0; z-index: 500; background: #111827; color: #fff; padding: 10px 16px;
+            display: flex; gap: 10px; align-items: center; flex-wrap: wrap; font-size: 13px; }
+  .pv-bar h1 { font-size: 14px; margin: 0 12px 0 0; font-weight: 700; }
+  .pv-bar button { background: #374151; color: #fff; border: 1px solid #4b5563; border-radius: 6px;
+                   padding: 5px 12px; cursor: pointer; font-family: inherit; font-size: 12px; }
+  .pv-bar button.on { background: #059669; border-color: #10b981; }
+  .pv-bar .sep { opacity: .4; }
+  .pv-note { background: #fef3c7; border-bottom: 1px solid #fcd34d; padding: 10px 16px; font-size: 13px; line-height: 1.7; }
+  .pv-err  { background: #fee2e2; border-bottom: 1px solid #fca5a5; padding: 14px 16px; font-size: 13px; line-height: 1.8; }
+  .pv-err code { background: #fff; padding: 2px 6px; border-radius: 4px; border: 1px solid #fca5a5; }
+  .pv-wrap { padding: 0; }
+  .pv-hidden { display: none; }
+</style>
+</head>
+<body>
+
+<div class="pv-bar">
+  <h1>معاينة توب كيميكال — تحليل حركة الخزنة</h1>
+  <button id="pv-write" class="on">صلاحية التعديل: مفعّلة</button>
+  <span class="sep">|</span>
+  <button data-scenario="normal" class="on">بيانات عادية</button>
+  <button data-scenario="mismatch">فروق في المجاميع</button>
+  <button data-scenario="unparsed">تفاصيل لا تُحلَّل</button>
+  <button data-scenario="dupe_labels">كود حساب مكرر الاسم</button>
+  <button data-scenario="empty">لا توجد نتائج</button>
+  <button data-scenario="error">خطأ من الخادم</button>
+  <span class="sep">|</span>
+  <button id="pv-reload">إعادة التحميل</button>
+</div>
+
+<div class="pv-note">
+  صفحة معاينة محلية — <b>لا تتصل بأي خادم ولا بقاعدة بيانات ولا تكتب أي شيء</b>. تُحمّل الملفات
+  <b>الحقيقية</b> <code>CSS_Tokens.html</code> و<code>UI_Components.html</code> و<code>Client_Helpers.html</code>
+  و<code>Company_TopChemical_BoxAnalysis.html</code> من جذر المشروع — وليست نسخاً منها — مع بيانات وهمية بدل
+  استدعاءات الخادم. البيانات الوهمية تشمل السطر الحقيقي الوحيد المعروف من
+  <code>transaction_details</code>. اضغط <b>▸</b> بجوار أي حركة لفتح البنود المستخرجة وشريط الحساب.
+</div>
+
+<div id="pv-error" class="pv-err pv-hidden"></div>
+
+<div class="pv-wrap">
+  <div id="tc-root" dir="rtl"></div>
+</div>
+
+<script>
+/* ────────────────────────────────────────────────────────────────────────────
+ * This preview loads the REAL shared files and the REAL page, never copies, so
+ * it cannot drift from what ships. That means reading four files off disk, and
+ * browsers refuse file:// reads from a file:// page. If you opened this by
+ * double-clicking and see the red banner, serve the repo instead — one command,
+ * no install:
+ *
+ *     cd d:\Work\Script && python -m http.server 8000
+ *     then open  http://localhost:8000/design_preview/tc_box_analysis.html
+ *
+ * The parser and the window arithmetic live in Box_Analysis_Engine.js, which is
+ * a SERVER file — the real page never runs it in a browser either, it receives
+ * `parse` already computed. So the fixtures below carry parse output that was
+ * produced by running the real engine under node, pasted in. They are not a
+ * second implementation of the parser; there is only ever one.
+ * ──────────────────────────────────────────────────────────────────────────── */
+(function () {
+  'use strict';
+
+  var ROOT = '../';
+  var FILES = ['CSS_Tokens.html', 'UI_Components.html', 'Client_Helpers.html',
+               'Company_TopChemical_BoxAnalysis.html'];
+
+  var state = { write: true, scenario: 'normal' };
+
+  /* ── Fixtures ───────────────────────────────────────────────────────────
+   * Row 4213 carries the ONE REAL transaction_details string we have, with the
+   * parse the real engine produces for it (sum 2525, four items). */
+  var REAL_DETAILS = '5 كيلو معجون شروخ ب 700 + طبة حديد ب 25 + نص سلك لحام المونيوم ب 875 + نص كيلو  كيلو سلك لحام زهر ب 925';
+
+  var PARSE_REAL = {
+    items: [
+      { seq: 1, qty: 5,   unit: 'كيلو', item_norm: 'معجون شروخ',        item_key: 'شروخ معجون',       price: 700, unit_price: 140,  confidence: 1 },
+      { seq: 2, qty: null, unit: 'طبه', item_norm: 'حديد',               item_key: 'حديد',             price: 25,  unit_price: null, confidence: 0.75 },
+      { seq: 3, qty: 0.5, unit: null,   item_norm: 'سلك لحام المونيوم', item_key: 'المونيوم سلك لحام', price: 875, unit_price: 1750, confidence: 0.85 },
+      { seq: 4, qty: 0.5, unit: 'كيلو', item_norm: 'سلك لحام زهر',      item_key: 'زهر سلك لحام',      price: 925, unit_price: 1850, confidence: 1 }
+    ],
+    failures: [], sum: 2525, parsed_count: 4, failed_count: 0, segment_count: 4, coverage: 1
+  };
+
+  var PARSE_SIMPLE = {
+    items: [
+      { seq: 1, qty: 2, unit: 'كيلو', item_norm: 'مسمار', item_key: 'مسمار', price: 90,  unit_price: 45, confidence: 0.95 },
+      { seq: 2, qty: 4, unit: 'لتر',  item_norm: 'تنر',   item_key: 'تنر',   price: 160, unit_price: 40, confidence: 0.95 }
+    ],
+    failures: [], sum: 250, parsed_count: 2, failed_count: 0, segment_count: 2, coverage: 1
+  };
+
+  var PARSE_FAILED = {
+    items: [],
+    failures: [{ seq: 1, segment: 'تم صرف مبلغ نقدي لصالح الورشه بمعرفه الاستاذ محمود',
+                 reason: 'NO_PRICE', reason_ar: 'لا يوجد سعر في هذا الجزء' }],
+    sum: 0, parsed_count: 0, failed_count: 1, segment_count: 1, coverage: 0
+  };
+
+  var PARSE_PARTIAL = {
+    items: [{ seq: 1, qty: 2, unit: 'كيلو', item_norm: 'مسمار', item_key: 'مسمار', price: 90, unit_price: 45, confidence: 0.95 }],
+    failures: [{ seq: 2, segment: 'شريط لحام', reason: 'NO_PRICE', reason_ar: 'لا يوجد سعر في هذا الجزء' }],
+    sum: 90, parsed_count: 1, failed_count: 1, segment_count: 2, coverage: 0.5
+  };
+
+  function baseRows() {
+    return [
+      { id: '4213', transaction_date: '2026-08-14', transaction_details: REAL_DETAILS,
+        client_id: null, related_id: null, transaction_type: 'credit', transaction_amount: '2525.00',
+        chart_of_accounts: '310500', responsible_person: 'محمود عبد الحميد', box_code: '1',
+        user_id: '7', created_at: '2026-08-14 09:12:03', updated_at: '2026-08-14 09:12:03',
+        is_revised: '0', parse: PARSE_REAL },
+      { id: '4214', transaction_date: '2026-08-14', transaction_details: '2 كيلو مسمار ب 90 + 4 لتر تنر ب 160',
+        client_id: null, related_id: null, transaction_type: 'credit', transaction_amount: '250.00',
+        chart_of_accounts: '310500', responsible_person: 'محمود عبد الحميد', box_code: '1',
+        user_id: '7', created_at: '2026-08-14 10:41:55', updated_at: '2026-08-14 10:41:55',
+        is_revised: '1', parse: PARSE_SIMPLE },
+      { id: '4215', transaction_date: '2026-08-13', transaction_details: '2 كيلو مسمار ب 90 + 4 لتر تنر ب 160',
+        client_id: null, related_id: null, transaction_type: 'debit', transaction_amount: '250.00',
+        chart_of_accounts: '311200', responsible_person: 'سيد فتحي', box_code: '2',
+        user_id: '9', created_at: '2026-08-13 16:02:10', updated_at: '2026-08-13 16:02:10',
+        is_revised: '0', parse: PARSE_SIMPLE }
+    ];
+  }
+
+  function rowsFor(scenario) {
+    var rows = baseRows();
+    if (scenario === 'mismatch') {
+      /* Σ items 2525, recorded amount 2900 — the description does not account
+         for 375 of the money. */
+      rows[0].transaction_amount = '2900.00';
+      rows[1].transaction_amount = '180.00';
+      return rows;
+    }
+    if (scenario === 'unparsed') {
+      rows[1].transaction_details = 'تم صرف مبلغ نقدي لصالح الورشة بمعرفة الاستاذ محمود';
+      rows[1].parse = PARSE_FAILED;
+      rows[2].transaction_details = '2 كيلو مسمار ب 90 + شريط لحام';
+      rows[2].transaction_amount = '90.00';
+      rows[2].parse = PARSE_PARTIAL;
+      return rows;
+    }
+    return rows;
+  }
+
+  /* The four windows exactly as BoxEngine.accountWindows('2026-09-06') returns
+     them — note last month and last YTD are cut to the 6th, not to the end of
+     the period. */
+  var WINDOWS = {
+    ref: '2026-09-06',
+    mtd:        { from: '2026-09-01', to: '2026-09-06', label_ar: 'الشهر الحالي' },
+    last_month: { from: '2026-08-01', to: '2026-08-06', label_ar: 'الشهر السابق (نفس المدة)' },
+    ytd:        { from: '2026-01-01', to: '2026-09-06', label_ar: 'العام الحالي' },
+    last_ytd:   { from: '2025-01-01', to: '2025-09-06', label_ar: 'العام السابق (نفس المدة)' },
+    span:       { from: '2025-01-01', to: '2026-09-06' }
+  };
+
+  var AGGREGATES = {
+    '310500': { chart_of_accounts: '310500',
+      spend_mtd: 4180.5, spend_last_month: 3100, spend_ytd: 96450.75, spend_last_ytd: 81230.4,
+      collected_mtd: 500, collected_last_month: 0, collected_ytd: 3200, collected_last_ytd: 1800,
+      n_mtd: 6, n_last_month: 4, n_ytd: 143, n_last_ytd: 121 },
+    '311200': { chart_of_accounts: '311200',
+      spend_mtd: 0, spend_last_month: 0, spend_ytd: 12400, spend_last_ytd: 15900,
+      collected_mtd: 250, collected_last_month: 0, collected_ytd: 900, collected_last_ytd: 0,
+      n_mtd: 0, n_last_month: 0, n_ytd: 22, n_last_ytd: 30 }
+  };
+
+  var LABELS = { '310500': 'مصروفات صيانة وورش', '311200': 'مصروفات نظافة وأمن' };
+
+  function analysisResponse(data) {
+    if (state.scenario === 'error') {
+      return Promise.reject(new Error('تعذّر الاتصال بقاعدة البيانات (معاينة: خطأ مُصطنع)'));
+    }
+    var rows = state.scenario === 'empty' ? [] : rowsFor(state.scenario);
+    /* The filters are not re-implemented here — the real filtering is SQL, and
+       a JS imitation of it in a preview would be a second, wrong answer. Only
+       the toggles that change SHAPE are honoured. */
+    return Promise.resolve({
+      status: 'ok',
+      ref_date: WINDOWS.ref,
+      columns: ['id', 'transaction_date', 'transaction_details', 'client_id', 'related_id',
+                'transaction_type', 'transaction_amount', 'chart_of_accounts',
+                'responsible_person', 'box_code', 'user_id', 'created_at', 'updated_at', 'is_revised'],
+      rows: rows,
+      total: rows.length,
+      limit: (data && data.limit) || 50,
+      offset: (data && data.offset) || 0,
+      windows: WINDOWS,
+      aggregates: AGGREGATES,
+      labels: LABELS,
+      label_duplicate_ids: state.scenario === 'dupe_labels' ? ['310500'] : []
+    });
+  }
+
+  /* ── The shared client layer, as the page expects it. Client_Helpers.html is
+   * loaded for real (so FMT.currency / FMT.percent are the real ones), then
+   * API.call and the spinner are overridden here — the real API.call goes
+   * through google.script.run, which does not exist off-platform. ─────────── */
+  function installStubs() {
+    window.SESSION = { token: 'PREVIEW', user: { name: 'معاينة', email: 'preview@local' } };
+    window.scriptUrl = '#';
+    window.API = window.API || {};
+    window.API.getSession = function () { return window.SESSION; };
+    window.API.call = function (action, payload) {
+      var inner = (payload && payload.module_action) || action;
+      var data = (payload && payload.data) || {};
+      if (inner === 'get_box_analysis') return analysisResponse(data);
+      if (inner === 'get_box_item_history') {
+        return Promise.resolve({ status: 'ok', clusters: [], occurrences_by_cluster: {},
+          coverage: { rows_read: 0, rows_with_items: 0, failed_segments: 0, sum_mismatch_rows: 0 } });
+      }
+      if (inner === 'update_box_movement' || inner === 'revise_box_movement') {
+        window.UIC.toast('معاينة فقط — لم يُحفظ شيء. هذه الصفحة لا تكتب أي بيانات.', 'warning');
+        return Promise.resolve({ status: 'ok', affected: 0 });
+      }
+      return Promise.resolve({ status: 'ok' });
+    };
+    window.UI = window.UI || {};
+    window.UI.showSpinner = function () {};
+    window.UI.hideSpinner = function () {};
+    window.UI.submitOnce = function (el, fn) { fn(); };
+    /* The page reads its grant from UIC.canAdd_, which reads these. */
+    window.IS_SUPER_ADMIN = state.write;
+    window.USER_PAGES = state.write ? null : { tc_box_analysis: ['read'] };
+    window.CURRENT_ACTION = 'tc_box_analysis';
+    window.__BOX_PREVIEW = true;      /* stop the page auto-running load() */
+  }
+
+  /* ── Loading the real files ─────────────────────────────────────────────── */
+  function fetchText(name) {
+    return fetch(ROOT + name, { cache: 'no-store' }).then(function (r) {
+      if (!r.ok) throw new Error(name + ' → HTTP ' + r.status);
+      return r.text();
+    });
+  }
+  function scriptBodies(html) {
+    var out = [], re = /<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/gi, m;
+    while ((m = re.exec(html)) !== null) if (m[1].trim()) out.push(m[1]);
+    return out;
+  }
+  function styleBlocks(html) {
+    var out = [], re = /<style(?:\s[^>]*)?>([\s\S]*?)<\/style>/gi, m;
+    while ((m = re.exec(html)) !== null) out.push(m[1]);
+    return out;
+  }
+
+  /* Apps Script scriptlets are resolved server-side; supply values here. */
+  function substituteScriptlets(src) {
+    var values = {
+      COMPANY_LOGO_URL: '',
+      COMPANY_PAGES: '[]',
+      CURRENT_ACTION: 'tc_box_analysis',
+      IS_SUPER_ADMIN: state.write ? 'true' : 'false',
+      USER_PAGES: state.write ? 'null' : '{"tc_box_analysis":["read"]}'
+    };
+    return src.split('\n').map(function (line) {
+      if (line.indexOf('<?') === -1) return line;
+      var decl = line.match(/var\s+([A-Za-z0-9_]+)\s*=/);
+      var name = decl ? decl[1] : null;
+      var val = (name && Object.prototype.hasOwnProperty.call(values, name)) ? values[name] : 'null';
+      var quoted = /'[^']*<\?/.test(line);
+      return line.replace(/<\?[\s\S]*?\?>/g, quoted ? String(val).replace(/^'|'$/g, '') : val);
+    }).join('\n');
+  }
+
+  function run(code, label) {
+    var el = document.createElement('script');
+    el.textContent = code;
+    el.setAttribute('data-from', label);
+    document.body.appendChild(el);
+  }
+
+  function showError(err) {
+    var box = document.getElementById('pv-error');
+    box.className = 'pv-err';
+    box.innerHTML =
+      '<b>تعذّر تحميل الملفات المشتركة الحقيقية.</b><br>' +
+      'المتصفحات تمنع قراءة الملفات المجاورة عند فتح الصفحة بنقرة مزدوجة (<code>file://</code>). ' +
+      'هذه الصفحة تُحمّل الملفات الحقيقية ولا تحتفظ بنسخ منها، لذلك يلزم تشغيل خادم محلي بسيط:<br><br>' +
+      '<code>cd d:\\Work\\Script</code><br>' +
+      '<code>python -m http.server 8000</code><br><br>' +
+      'ثم افتح: <code>http://localhost:8000/design_preview/tc_box_analysis.html</code><br><br>' +
+      '<span style="opacity:.75">التفصيل الفني: ' + String((err && err.message) || err) + '</span>';
+  }
+
+  var pageSource = null;
+
+  /* The page's script is re-run on every render, not just once. Its top level
+     is all `var` and `function`, so re-running is safe — and it has to happen,
+     because CAN_WRITE is captured from UIC.canAdd_() at script-run time. Run it
+     once and the "صلاحية التعديل" toggle would move a variable nothing reads
+     again, which is a preview that lies about the thing it exists to show. */
+  function render() {
+    var root = document.getElementById('tc-root');
+    if (root) root.innerHTML = '';
+    installStubs();
+    scriptBodies(pageSource).forEach(function (js, i) {
+      run(substituteScriptlets(js), 'BoxAnalysis#' + i);
+    });
+    if (window.BOXANALYSIS_PAGE) window.BOXANALYSIS_PAGE.load();
+  }
+
+  function boot() {
+    return Promise.all(FILES.map(fetchText)).then(function (texts) {
+      styleBlocks(texts[0]).forEach(function (css) {
+        var st = document.createElement('style');
+        st.textContent = css;
+        document.head.appendChild(st);
+      });
+      var linkRe = /<link\b[^>]*>/gi, lm;
+      while ((lm = linkRe.exec(texts[0])) !== null) {
+        var holder = document.createElement('div');
+        holder.innerHTML = lm[0];
+        if (holder.firstChild) document.head.appendChild(holder.firstChild);
+      }
+      /* UI_Components then Client_Helpers, the order a real page includes them.
+         Both inject their own CSS from inside their scripts. */
+      scriptBodies(texts[1]).forEach(function (js, i) { run(js, 'UI_Components#' + i); });
+      scriptBodies(texts[2]).forEach(function (js, i) { run(js, 'Client_Helpers#' + i); });
+      /* The page's own <style> block. */
+      styleBlocks(texts[3]).forEach(function (css) {
+        var st = document.createElement('style');
+        st.textContent = css;
+        document.head.appendChild(st);
+      });
+      pageSource = texts[3];
+      render();
+    }).catch(showError);
+  }
+
+  /* ── Controls ───────────────────────────────────────────────────────────── */
+  document.getElementById('pv-write').addEventListener('click', function () {
+    state.write = !state.write;
+    this.className = state.write ? 'on' : '';
+    this.textContent = 'صلاحية التعديل: ' + (state.write ? 'مفعّلة' : 'غير مفعّلة');
+    render();
+  });
+  Array.prototype.forEach.call(document.querySelectorAll('[data-scenario]'), function (b) {
+    b.addEventListener('click', function () {
+      state.scenario = b.getAttribute('data-scenario');
+      Array.prototype.forEach.call(document.querySelectorAll('[data-scenario]'), function (x) { x.className = ''; });
+      b.className = 'on';
+      render();
+    });
+  });
+  document.getElementById('pv-reload').addEventListener('click', render);
+
+  boot();
+})();
+</script>
+</body>
+</html>

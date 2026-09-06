@@ -1,0 +1,509 @@
+<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>تحليل حركة الخزنة العادية</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_TopChemical_Nav'); ?>
+  <?!= getCompanyThemeCSS_('3fe1b5cb67b7223e') ?>
+  <style>
+    .filter-bar { display: flex; gap: 8px; flex-wrap: wrap; align-items: flex-end; margin-bottom: 12px; }
+    .filter-bar .form-field { margin: 0; min-width: 140px; }
+    .filter-bar .check-field { display: flex; align-items: center; gap: 6px; padding-bottom: 8px; }
+    .pager { display: flex; gap: 8px; align-items: center; justify-content: center; margin-top: 12px; flex-wrap: wrap; }
+    .pager .page-info { color: var(--text-muted); font-size: 13px; }
+    .pill { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; }
+    .pill-0 { background: #fef3c7; color: #92400e; }
+    .pill-1 { background: #dcfce7; color: #166534; }
+    .pill-warn { background: #fee2e2; color: #991b1b; }
+    .pill-info { background: #e0e7ff; color: #3730a3; }
+    .num { text-align: left; font-variant-numeric: tabular-nums; }
+
+    .row-toggle { background: none; border: 0; cursor: pointer; font-size: 15px; line-height: 1;
+                  color: var(--text-muted); padding: 2px 6px; }
+    .detail-cell { background: var(--surface-2, #f8fafc); padding: 12px 14px !important; }
+    .detail-grid { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start; }
+    .detail-block { flex: 1 1 320px; min-width: 280px; }
+    .detail-block h4 { margin: 0 0 6px; font-size: 13px; color: var(--text-muted); font-weight: 700; }
+
+    .items-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .items-table th, .items-table td { padding: 4px 8px; border-bottom: 1px solid var(--border, #e5e7eb); }
+    .items-table th { color: var(--text-muted); font-weight: 700; text-align: right; }
+    .items-table tfoot td { font-weight: 700; border-top: 2px solid var(--border, #e5e7eb); border-bottom: 0; }
+
+    .parse-fail { background: #fef2f2; border: 1px solid #fecaca; border-radius: 6px;
+                  padding: 6px 10px; margin-top: 6px; font-size: 12.5px; color: #991b1b; }
+    .sum-bad { color: #991b1b; }
+    .sum-ok  { color: #166534; }
+
+    .win-strip { display: flex; flex-wrap: wrap; gap: 8px; }
+    .win-card { flex: 1 1 130px; min-width: 120px; border: 1px solid var(--border, #e5e7eb);
+                border-radius: 8px; padding: 8px 10px; background: var(--surface, #fff); }
+    .win-card .win-label { font-size: 11.5px; color: var(--text-muted); }
+    .win-card .win-value { font-size: 15px; font-weight: 700; font-variant-numeric: tabular-nums;
+                           direction: ltr; text-align: left; }
+    .win-card .win-sub { font-size: 11.5px; color: var(--text-muted); direction: ltr; text-align: left; }
+    .win-up { color: #b45309; }
+    .win-down { color: var(--text-muted); }
+    .win-note { font-size: 11.5px; color: var(--text-muted); margin-top: 6px; }
+
+    .notice { border-radius: 8px; padding: 8px 12px; margin-bottom: 10px; font-size: 13px; }
+    .notice-warn { background: #fffbeb; border: 1px solid #fde68a; color: #92400e; }
+  </style>
+</head>
+<body>
+<div id="tc-root" dir="rtl"></div>
+<script>
+  var params = new URLSearchParams(window.location.search);
+  var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+  var scriptUrl = window.scriptUrl || '/';
+  var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('3fe1b5cb67b7223e') ?>';
+  var COMPANY_PAGES = <?!= companyPages ?>;
+  var CURRENT_ACTION = '<?!= currentAction ?>';
+  var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+  var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+  var CAN_WRITE = UIC.canAdd_(); var CAN_FULL = UIC.canFull_();
+
+  /* ε for the sum check. transaction_amount is double(16,2), so a difference
+     below one currency unit is rounding, not a discrepancy. Plan §4.3. */
+  var SUM_EPSILON = 1.00;
+
+  var DEFAULT_FILTER = {
+    date_from: '', date_to: '', chart_of_accounts: '', responsible_person: '',
+    box_code: '', is_revised: '', items_only: false, offset: 0, limit: 50
+  };
+  var FILTER = Object.assign({}, DEFAULT_FILTER);
+  var LAST = {
+    total: 0, rows: [], aggregates: {}, labels: {}, windows: null,
+    ref_date: '', label_duplicate_ids: []
+  };
+  /* Accumulated across loads so the account datalist grows as the user browses.
+     It is deliberately NOT the whole chart of accounts: shipping thousands of
+     labels on every page load would dwarf the rows themselves. */
+  var KNOWN_ACCOUNTS = {};
+  var EXPANDED = {};
+
+  function companyCall(moduleAction, data) {
+    return API.call('company_action', {
+      target_system: '3fe1b5cb67b7223e',
+      module_action: moduleAction,
+      data: data || {}
+    }, SESSION_TOKEN);
+  }
+
+  /* The page's root normally comes from the static <body> markup above. It is
+     created here when it is missing so that a harness which builds the DOM
+     from script alone — the deployment smoke test does exactly that — gets a
+     rendered page instead of a null dereference. Costs nothing when the markup
+     is present, which is every real page load. */
+  function ensureRoot() {
+    var el = document.getElementById('tc-root');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'tc-root';
+      el.setAttribute('dir', 'rtl');
+      (document.body || document.documentElement).appendChild(el);
+    }
+    return el;
+  }
+
+  function load() {
+    ensureRoot();
+    UIC.appShell('tc-root', {
+      companyLogoUrl: COMPANY_LOGO_URL,
+      companyLogoHref: scriptUrl + '?action=tc_dashboard&sessionToken=' + SESSION_TOKEN,
+      companyLogoTitle: 'توب كيميكال',
+      breadcrumb: 'توب كيميكال / تحليلات النظام الرئيسي / تحليل حركة الخزنة العادية',
+      contentId: 'box-content',
+      menuGroups: (window.TOPCHEMICAL_MENU || [])
+    });
+    renderFilters();
+    fetchPage();
+  }
+
+  function esc(v) { return FMT.escape(v); }
+  function money(v) { return FMT.currency(v); }
+
+  /** A DOM-safe id fragment. Movement ids are bigint, but never trust that. */
+  function domId(v) { return String(v == null ? '' : v).replace(/[^0-9A-Za-z_-]/g, ''); }
+
+  function acctLabel(code) {
+    var c = String(code == null ? '' : code).trim();
+    if (!c) return '—';
+    var name = LAST.labels[c] || KNOWN_ACCOUNTS[c];
+    return name ? (name + ' (' + c + ')') : c;
+  }
+
+  function renderFilters() {
+    var body = document.getElementById('box-content');
+    if (!body) return;
+    body.innerHTML =
+      '<div id="box-notices"></div>' +
+      '<div class="filter-bar">' +
+        '<div class="form-field"><label class="form-label" for="f-from">من تاريخ</label>' +
+          '<input id="f-from" type="date" class="input" value="' + esc(FILTER.date_from) + '"></div>' +
+        '<div class="form-field"><label class="form-label" for="f-to">إلى تاريخ</label>' +
+          '<input id="f-to" type="date" class="input" value="' + esc(FILTER.date_to) + '"></div>' +
+        '<div class="form-field"><label class="form-label" for="f-acct">كود الحساب</label>' +
+          '<input id="f-acct" class="input" list="box-acct-list" inputmode="numeric" ' +
+          'autocapitalize="off" autocorrect="off" placeholder="مثال 310500" value="' + esc(FILTER.chart_of_accounts) + '">' +
+          '<datalist id="box-acct-list"></datalist></div>' +
+        '<div class="form-field"><label class="form-label" for="f-person">المسؤول</label>' +
+          '<input id="f-person" class="input" placeholder="جزء من الاسم" value="' + esc(FILTER.responsible_person) + '"></div>' +
+        '<div class="form-field"><label class="form-label" for="f-box">كود الخزنة</label>' +
+          '<input id="f-box" class="input" inputmode="numeric" value="' + esc(FILTER.box_code) + '"></div>' +
+        '<div class="form-field"><label class="form-label" for="f-rev">حالة المراجعة</label>' +
+          '<select id="f-rev" class="input">' +
+            '<option value="">الكل</option>' +
+            '<option value="0">غير مراجع</option>' +
+            '<option value="1">مراجع</option>' +
+          '</select></div>' +
+        '<div class="check-field">' +
+          '<input id="f-items" type="checkbox"' + (FILTER.items_only ? ' checked' : '') + '>' +
+          '<label for="f-items">البنود فقط (300000–400000)</label>' +
+        '</div>' +
+        '<button class="btn btn-primary" onclick="applyFilters()">بحث</button>' +
+        '<button class="btn btn-outline" onclick="resetFilters()">تصفير</button>' +
+      '</div>' +
+      '<div id="box-table"></div>' +
+      '<div id="box-pager" class="pager"></div>';
+    var rev = document.getElementById('f-rev');
+    if (rev) rev.value = FILTER.is_revised;
+    renderAccountDatalist();
+  }
+
+  function renderAccountDatalist() {
+    var dl = document.getElementById('box-acct-list');
+    if (!dl) return;
+    var html = '';
+    Object.keys(KNOWN_ACCOUNTS).sort().forEach(function (code) {
+      html += '<option value="' + esc(code) + '">' + esc(KNOWN_ACCOUNTS[code]) + '</option>';
+    });
+    dl.innerHTML = html;
+  }
+
+  function applyFilters() {
+    var from = (document.getElementById('f-from') || {}).value || '';
+    var to = (document.getElementById('f-to') || {}).value || '';
+    if (from && to && from > to) { UIC.toast('تاريخ "من" يجب أن يكون قبل تاريخ "إلى"', 'error'); return; }
+    var acct = ((document.getElementById('f-acct') || {}).value || '').trim();
+    if (acct && !/^\d+$/.test(acct)) { UIC.toast('كود الحساب أرقام فقط', 'error'); return; }
+    var box = ((document.getElementById('f-box') || {}).value || '').trim();
+    if (box && !/^\d+$/.test(box)) { UIC.toast('كود الخزنة أرقام فقط', 'error'); return; }
+
+    FILTER.date_from = from;
+    FILTER.date_to = to;
+    FILTER.chart_of_accounts = acct;
+    FILTER.responsible_person = ((document.getElementById('f-person') || {}).value || '').trim();
+    FILTER.box_code = box;
+    FILTER.is_revised = (document.getElementById('f-rev') || {}).value || '';
+    FILTER.items_only = !!(document.getElementById('f-items') || {}).checked;
+    FILTER.offset = 0;
+    EXPANDED = {};
+    fetchPage();
+  }
+
+  function resetFilters() {
+    FILTER = Object.assign({}, DEFAULT_FILTER);
+    EXPANDED = {};
+    renderFilters();
+    fetchPage();
+  }
+
+  function fetchPage() {
+    UI.showSpinner('جاري تحميل الحركات...');
+    companyCall('get_box_analysis', FILTER)
+      .then(function (r) {
+        LAST.total = r.total || 0;
+        LAST.rows = r.rows || [];
+        LAST.aggregates = r.aggregates || {};
+        LAST.labels = r.labels || {};
+        LAST.windows = r.windows || null;
+        LAST.ref_date = r.ref_date || '';
+        LAST.label_duplicate_ids = r.label_duplicate_ids || [];
+        Object.keys(LAST.labels).forEach(function (c) { KNOWN_ACCOUNTS[c] = LAST.labels[c]; });
+        renderNotices();
+        renderAccountDatalist();
+        renderTable();
+        renderPager();
+      })
+      .catch(function (e) { showError(e); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  /* A duplicated chart_of_accounts_main.id_5 makes a label ambiguous. It is
+     said out loud rather than resolved silently, because the same duplication
+     in a SQL JOIN would have doubled every figure on this page. */
+  function renderNotices() {
+    var el = document.getElementById('box-notices');
+    if (!el) return;
+    var html = '';
+    if (LAST.label_duplicate_ids && LAST.label_duplicate_ids.length) {
+      html += '<div class="notice notice-warn">أكواد حسابات لها أكثر من اسم في دليل الحسابات: ' +
+        esc(LAST.label_duplicate_ids.join('، ')) +
+        ' — الاسم المعروض هو أول اسم مسجل، والأرقام غير متأثرة.</div>';
+    }
+    el.innerHTML = html;
+  }
+
+  function revisePill(v) {
+    return String(v) === '1'
+      ? '<span class="pill pill-1">مراجع</span>'
+      : '<span class="pill pill-0">غير مراجع</span>';
+  }
+
+  function typeLabel(t) {
+    return String(t) === 'debit'
+      ? '<span class="pill pill-info">محصّل</span>'
+      : '<span class="pill pill-0">منصرف</span>';
+  }
+
+  /** Σ parsed prices vs transaction_amount. Null when there is nothing to compare. */
+  function sumCheck(row) {
+    var p = row.parse;
+    if (!p || !p.items || !p.items.length) return null;
+    var amount = Number(row.transaction_amount);
+    if (!isFinite(amount)) return null;
+    var diff = p.sum - amount;
+    return { sum: p.sum, amount: amount, diff: diff, bad: Math.abs(diff) > SUM_EPSILON };
+  }
+
+  function renderTable() {
+    var el = document.getElementById('box-table');
+    if (!el) return;
+    if (!LAST.rows.length) {
+      el.innerHTML = UIC.emptyState({
+        icon: 'inbox',
+        title: 'لا توجد حركات مطابقة للفلاتر',
+        body: 'جرّب توسيع نطاق التاريخ أو إزالة فلتر الحساب أو المسؤول.'
+      });
+      return;
+    }
+    var html = '<div class="table-wrap"><table class="table">' +
+      '<thead><tr>' +
+        '<th style="width:34px;"></th>' +
+        '<th>التاريخ</th><th>التفاصيل</th><th>المبلغ</th><th>النوع</th>' +
+        '<th>الحساب</th><th>المسؤول</th><th>الخزنة</th><th>الحالة</th>' +
+      '</tr></thead><tbody>';
+
+    LAST.rows.forEach(function (row) {
+      var id = domId(row.id);
+      var open = !!EXPANDED[id];
+      var chk = sumCheck(row);
+      var failed = row.parse && row.parse.failed_count > 0;
+
+      html += '<tr id="box-row-' + id + '">' +
+        '<td><button class="row-toggle" onclick="toggleRow(\'' + id + '\')" ' +
+          'aria-expanded="' + open + '" aria-controls="box-detail-' + id + '" ' +
+          'aria-label="تفاصيل الحركة رقم ' + esc(row.id) + '">' + (open ? '▾' : '▸') + '</button></td>' +
+        '<td>' + esc(row.transaction_date || '—') + '</td>' +
+        '<td>' + esc(row.transaction_details || '—') +
+          (failed ? ' <span class="pill pill-warn">تعذر تحليل التفاصيل</span>' : '') +
+          (chk && chk.bad ? ' <span class="pill pill-warn">فرق ' + esc(money(Math.abs(chk.diff))) + '</span>' : '') +
+        '</td>' +
+        '<td class="num">' + esc(money(row.transaction_amount)) + '</td>' +
+        '<td>' + typeLabel(row.transaction_type) + '</td>' +
+        '<td>' + esc(acctLabel(row.chart_of_accounts)) + '</td>' +
+        '<td>' + esc(row.responsible_person || '—') + '</td>' +
+        '<td class="num">' + esc(row.box_code == null ? '—' : row.box_code) + '</td>' +
+        '<td>' + revisePill(row.is_revised) + '</td>' +
+      '</tr>' +
+      '<tr id="box-detail-' + id + '"' + (open ? '' : ' hidden') + '>' +
+        '<td class="detail-cell" colspan="9">' + (open ? detailHtml(row) : '') + '</td>' +
+      '</tr>';
+    });
+
+    html += '</tbody></table></div>';
+    el.innerHTML = html;
+  }
+
+  function toggleRow(id) {
+    var safe = domId(id);
+    EXPANDED[safe] = !EXPANDED[safe];
+    var tr = document.getElementById('box-detail-' + safe);
+    var btn = document.querySelector('#box-row-' + safe + ' .row-toggle');
+    if (!tr) return;
+    if (EXPANDED[safe]) {
+      var row = LAST.rows.find(function (x) { return domId(x.id) === safe; });
+      tr.firstChild.innerHTML = row ? detailHtml(row) : '';
+      tr.hidden = false;
+    } else {
+      tr.hidden = true;
+      tr.firstChild.innerHTML = '';
+    }
+    if (btn) {
+      btn.textContent = EXPANDED[safe] ? '▾' : '▸';
+      btn.setAttribute('aria-expanded', String(!!EXPANDED[safe]));
+    }
+  }
+
+  function detailHtml(row) {
+    return '<div class="detail-grid">' +
+      '<div class="detail-block">' +
+        '<h4>البنود المستخرجة من التفاصيل</h4>' + itemsHtml(row) +
+      '</div>' +
+      '<div class="detail-block">' +
+        '<h4>حركة الحساب ' + esc(acctLabel(row.chart_of_accounts)) + '</h4>' + windowsHtml(row) +
+      '</div>' +
+      /* Seam for B7: per-item price history and the triggered rules render
+         here, beside the evidence they are about. Nothing renders yet, and
+         nothing pretends to. */
+      '<div class="detail-block" id="box-rules-' + domId(row.id) + '"></div>' +
+    '</div>';
+  }
+
+  function itemsHtml(row) {
+    var p = row.parse;
+    if (!p) return '<div class="win-note">لم يتم تحليل التفاصيل.</div>';
+
+    var html = '';
+    if (p.items.length) {
+      html += '<table class="items-table"><thead><tr>' +
+        '<th>الكمية</th><th>الوحدة</th><th>الصنف</th><th>السعر</th><th>سعر الوحدة</th>' +
+        '</tr></thead><tbody>';
+      p.items.forEach(function (it) {
+        html += '<tr>' +
+          '<td class="num">' + (it.qty == null ? '—' : esc(FMT.number(Math.round(it.qty * 10000) / 10000))) + '</td>' +
+          '<td>' + esc(it.unit || '—') + '</td>' +
+          '<td>' + esc(it.item_norm) + '</td>' +
+          '<td class="num">' + esc(money(it.price)) + '</td>' +
+          '<td class="num">' + (it.unit_price == null ? '—' : esc(money(it.unit_price))) + '</td>' +
+        '</tr>';
+      });
+      var chk = sumCheck(row);
+      html += '</tbody>';
+      if (chk) {
+        html += '<tfoot><tr>' +
+          '<td colspan="3">إجمالي البنود مقابل المبلغ المسجل</td>' +
+          '<td class="num ' + (chk.bad ? 'sum-bad' : 'sum-ok') + '">' + esc(money(chk.sum)) + '</td>' +
+          '<td class="num ' + (chk.bad ? 'sum-bad' : 'sum-ok') + '">' + esc(money(chk.amount)) + '</td>' +
+        '</tr>';
+        if (chk.bad) {
+          html += '<tr><td colspan="5" class="sum-bad">' +
+            'الفرق ' + esc(money(Math.abs(chk.diff))) + ' ' +
+            (chk.diff > 0 ? '(البنود أكبر من المبلغ المسجل)' : '(المبلغ المسجل أكبر من البنود)') +
+            '</td></tr>';
+        }
+        html += '</tfoot>';
+      }
+      html += '</table>';
+    }
+
+    /* Failures are shown, never dropped. A row whose details will not parse is
+       one a human needs to see — and a dropped segment would make the sum check
+       above agree with a description that does not account for the money. */
+    if (p.failures && p.failures.length) {
+      p.failures.forEach(function (f) {
+        html += '<div class="parse-fail">تعذر تحليل هذا الجزء: «' + esc(f.segment) + '» — ' + esc(f.reason_ar) + '</div>';
+      });
+    }
+    if (!p.items.length && !(p.failures || []).length) {
+      html += '<div class="win-note">لا توجد تفاصيل مسجلة لهذه الحركة.</div>';
+    }
+    return html;
+  }
+
+  function windowsHtml(row) {
+    var code = String(row.chart_of_accounts == null ? '' : row.chart_of_accounts).trim();
+    var a = LAST.aggregates[code];
+    var w = LAST.windows;
+    if (!a || !w) return '<div class="win-note">لا توجد أرقام مجمّعة لهذا الحساب.</div>';
+
+    function card(labelAr, value, prev, range) {
+      var sub = esc(range.from) + ' → ' + esc(range.to);
+      var d = '';
+      if (prev !== undefined) {
+        if (!prev) {
+          d = '<div class="win-sub">لا يوجد أساس للمقارنة</div>';
+        } else {
+          var pct = (value - prev) / prev;
+          var up = pct >= 0;
+          d = '<div class="win-sub ' + (up ? 'win-up' : 'win-down') + '">' +
+            (up ? '▲' : '▼') + ' ' + esc(FMT.percent(Math.abs(pct))) + '</div>';
+        }
+      }
+      return '<div class="win-card">' +
+        '<div class="win-label">' + esc(labelAr) + '</div>' +
+        '<div class="win-value">' + esc(money(value)) + '</div>' +
+        '<div class="win-sub">' + sub + '</div>' + d +
+      '</div>';
+    }
+
+    var html = '<div class="win-strip">' +
+      card(w.mtd.label_ar, a.spend_mtd, undefined, w.mtd) +
+      card(w.last_month.label_ar, a.spend_last_month, undefined, w.last_month) +
+      card(w.ytd.label_ar, a.spend_ytd, a.spend_last_ytd, w.ytd) +
+      card(w.last_ytd.label_ar, a.spend_last_ytd, undefined, w.last_ytd) +
+    '</div>';
+
+    /* MTD against last month is the comparison people actually make, so it is
+       stated explicitly rather than left for the reader to do in their head —
+       and the two ranges are printed on the cards so it is visible that both
+       cover the same number of days. */
+    if (a.spend_last_month) {
+      var pct = (a.spend_mtd - a.spend_last_month) / a.spend_last_month;
+      html += '<div class="win-note">الشهر الحالي مقابل نفس المدة من الشهر السابق: ' +
+        (pct >= 0 ? '+' : '−') + esc(FMT.percent(Math.abs(pct))) + '</div>';
+    }
+
+    /* Collections are shown beside spend and never inside it. Netting a
+       collection into a spend total lets an inflow mask an outflow. */
+    html += '<div class="win-note">محصّل (منفصل عن المنصرف) — ' +
+      esc(w.mtd.label_ar) + ': ' + esc(money(a.collected_mtd)) + ' · ' +
+      esc(w.ytd.label_ar) + ': ' + esc(money(a.collected_ytd)) + '</div>';
+    html += '<div class="win-note">عدد حركات المنصرف — ' +
+      esc(w.mtd.label_ar) + ': ' + esc(FMT.number(a.n_mtd)) + ' · ' +
+      esc(w.ytd.label_ar) + ': ' + esc(FMT.number(a.n_ytd)) + '</div>';
+    return html;
+  }
+
+  function renderPager() {
+    var el = document.getElementById('box-pager');
+    if (!el) return;
+    var pages = Math.max(1, Math.ceil(LAST.total / FILTER.limit));
+    var cur = Math.floor(FILTER.offset / FILTER.limit) + 1;
+    var from = LAST.total === 0 ? 0 : FILTER.offset + 1;
+    var to = Math.min(FILTER.offset + FILTER.limit, LAST.total);
+    el.innerHTML =
+      '<button class="btn btn-outline" onclick="gotoPage(' + (cur - 1) + ')" ' + (cur <= 1 ? 'disabled' : '') + '>السابق</button>' +
+      '<span class="page-info">صفحة ' + cur + ' من ' + pages + ' — عرض ' + from + ' إلى ' + to + ' من ' + LAST.total + '</span>' +
+      '<button class="btn btn-outline" onclick="gotoPage(' + (cur + 1) + ')" ' + (cur >= pages ? 'disabled' : '') + '>التالي</button>';
+  }
+
+  function gotoPage(p) {
+    var pages = Math.max(1, Math.ceil(LAST.total / FILTER.limit));
+    if (p < 1 || p > pages) return;
+    FILTER.offset = (p - 1) * FILTER.limit;
+    EXPANDED = {};
+    fetchPage();
+  }
+
+  function showError(e) {
+    var el = document.getElementById('box-table');
+    if (el) {
+      el.innerHTML = UIC.emptyState({
+        icon: 'alert',
+        title: 'تعذّر تحميل الحركات',
+        body: (e && e.message) || 'خطأ غير معروف',
+        action: { text: 'إعادة المحاولة', onClick: 'fetchPage()' }
+      });
+    }
+    var pg = document.getElementById('box-pager');
+    if (pg) pg.innerHTML = '';
+  }
+
+  /* Exposed so the offline design preview can drive the page without the
+     server, and so a future tab can re-render without reloading. */
+  window.BOXANALYSIS_PAGE = {
+    load: load,
+    fetchPage: fetchPage,
+    state: function () { return { FILTER: FILTER, LAST: LAST }; }
+  };
+
+  if (!window.__BOX_PREVIEW) load();
+</script>
+</body>
+</html>

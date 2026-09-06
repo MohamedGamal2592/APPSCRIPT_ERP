@@ -163,6 +163,66 @@ loops.forEach(function (body, i) {
 ok(getter.indexOf('BoxEngine.parseDetails') !== -1,
   'parsing happens server-side, where the engine actually lives');
 
+/* ── 8. The template the registry points at actually exists ──────────────
+ * A registry entry naming a template that is not there gives a user who
+ * clicks the nav item a server error, not a page. */
+console.log('the template exists');
+ok(fs.existsSync(path.join(ROOT, TEMPLATE + '.html')), TEMPLATE + '.html is present');
+const PAGE_SRC = fs.existsSync(path.join(ROOT, TEMPLATE + '.html')) ? read(TEMPLATE + '.html') : '';
+ok(/<div id="tc-root" dir="rtl">/.test(PAGE_SRC), 'the page has an RTL root');
+ok(PAGE_SRC.indexOf("UIC.appShell('tc-root'") !== -1, 'the page renders through UIC.appShell');
+ok(PAGE_SRC.indexOf("include('UI_Components')") !== -1, 'the page includes the shared component layer');
+ok(/CAN_WRITE = UIC\.canAdd_\(\)/.test(PAGE_SRC), 'the page reads its write grant from UIC.canAdd_');
+ok(PAGE_SRC.indexOf("companyCall('get_box_analysis'") !== -1, 'the page calls get_box_analysis');
+/* Every dynamic value reaching innerHTML goes through FMT.escape. */
+ok(PAGE_SRC.indexOf('function esc(v) { return FMT.escape(v); }') !== -1,
+  'the page escapes through FMT.escape');
+
+/* ── 9. The offline preview cannot drift away from the real engine ────────
+ * The preview pastes in parse output and claims it came from running the real
+ * engine. That claim decays the moment the parser changes, and a preview that
+ * quietly shows stale output is worse than no preview — the owner would be
+ * signing off on something that is not what ships. So it is re-derived here
+ * and compared. */
+console.log('the design preview matches the real engine');
+const PREVIEW = 'design_preview/tc_box_analysis.html';
+ok(fs.existsSync(path.join(ROOT, PREVIEW)), PREVIEW + ' is present');
+if (fs.existsSync(path.join(ROOT, PREVIEW))) {
+  const PV = read(PREVIEW);
+  const E = require(path.join(ROOT, 'Box_Analysis_Engine.js'));
+
+  ok(PV.indexOf("'CSS_Tokens.html', 'UI_Components.html', 'Client_Helpers.html'") !== -1 &&
+     PV.indexOf("'" + TEMPLATE + ".html'") !== -1,
+    'the preview loads the REAL shared files and the REAL page, not copies');
+
+  const dm = PV.match(/var REAL_DETAILS = '([^']*)';/);
+  ok(!!dm, 'the preview carries the real transaction_details string');
+  const pm = PV.match(/var PARSE_REAL = (\{[\s\S]*?\n  \});/);
+  ok(!!pm, 'the preview carries a PARSE_REAL fixture');
+
+  if (dm && pm) {
+    const fixture = Function('return (' + pm[1] + ');')();
+    const real = E.parseDetails(dm[1]);
+    ok(fixture.sum === real.sum, 'preview PARSE_REAL.sum matches the engine', fixture.sum + ' vs ' + real.sum);
+    ok(fixture.parsed_count === real.parsed_count, 'preview parsed_count matches', fixture.parsed_count + ' vs ' + real.parsed_count);
+    ok(fixture.failed_count === real.failed_count, 'preview failed_count matches', fixture.failed_count + ' vs ' + real.failed_count);
+    ok(fixture.items.length === real.items.length, 'preview item count matches', fixture.items.length + ' vs ' + real.items.length);
+    real.items.forEach(function (it, i) {
+      const f = fixture.items[i] || {};
+      ['qty', 'unit', 'item_norm', 'item_key', 'price', 'unit_price', 'confidence'].forEach(function (k) {
+        const a = f[k] === undefined ? null : f[k];
+        const b = it[k] === undefined ? null : it[k];
+        ok(a === b, 'preview item ' + i + '.' + k + ' matches the engine', JSON.stringify(a) + ' vs ' + JSON.stringify(b));
+      });
+    });
+  }
+
+  /* The preview must never be pushed to Apps Script. */
+  const CLASPIGNORE = read('.claspignore');
+  ok(/^design_preview\/\*\*$/m.test(CLASPIGNORE), 'design_preview/** is in .claspignore');
+  ok(/^tools\/\*\*$/m.test(CLASPIGNORE), 'tools/** is in .claspignore');
+}
+
 console.log(failures === 0
   ? '\nAll wiring checks pass.'
   : '\n' + failures + ' wiring check(s) FAILED.');

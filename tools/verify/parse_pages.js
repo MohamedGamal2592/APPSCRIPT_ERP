@@ -23,7 +23,9 @@ const DEFAULTS = [
   'Company_ValleyFoods_MfgOrders.html',
   'Company_ValleyFoods_Purchasing.html',
   'Company_ValleyFoods_Sales.html',
-  'design_preview/vf_mfg_batch.html'
+  'design_preview/vf_mfg_batch.html',
+  'Company_TopChemical_BoxAnalysis.html',
+  'design_preview/tc_box_analysis.html'
 ];
 
 const files = process.argv.slice(2);
