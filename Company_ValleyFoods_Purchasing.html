@@ -23,6 +23,12 @@
     var CURRENT_ACTION = '<?!= currentAction ?>';
     var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
     var CAN_WRITE = UIC.canAdd_(); var CAN_FULL = UIC.canFull_();
+    /* U-46. Set from the server's can_see_cost on every list load. NOT derived
+       from USER_PAGES: the browser cannot see the fail-open guard, which keeps
+       costs visible to everyone until the owner grants valley_cost_view to a
+       first role. Defaults to true so nothing changes before that. */
+    var CAN_SEE_COST = true;
+    function canCost() { return CAN_SEE_COST !== false; }
 
     function companyCall(moduleAction, data) {
       return API.call('company_action', {
@@ -111,6 +117,7 @@
            * for the form survive a list refresh. */
           var incoming = (r && r.options) || {};
           Object.keys(incoming).forEach(function (k) { __options[k] = incoming[k]; });
+          CAN_SEE_COST = (r && r.can_see_cost !== false);
           __headers = (r && r.headers) || [];
           renderHeadersTable(); try{schedulePrefetch();}catch(e){};
         })
@@ -150,7 +157,9 @@
       ];
       if (String(h.approval_status) !== 'Approved') {
         btns.push({ label: 'اعتماد', onclick: 'doAction(\'' + esc(String(h.Code)) + '\',\'approve\')' });
-        if (CAN_WRITE) {
+        if (CAN_WRITE && canCost()) {
+          /* U-46: without the cost grant the server refuses the save, so the
+             edit form is not offered. Viewing and approving stay available. */
           btns.push({ label: 'تعديل', onclick: 'doAction(\'' + esc(String(h.Code)) + '\',\'edit\')' });
           btns.push({ label: 'حذف', color: 'var(--danger)', onclick: 'doAction(\'' + esc(String(h.Code)) + '\',\'delete\')' });
         } else {
@@ -166,7 +175,7 @@
         supplier_name: supMap[String(h['Supplier Name'])] || h['Supplier Name'] || '-',
         receipt_date: h['Reciept Date'] ? String(h['Reciept Date']).slice(0, 10) : '-',
         items: h.Items || '-',
-        total_costs: FMT.number(h['Total costs']),
+        total_costs: canCost() ? FMT.number(h['Total costs']) : '',
         approval_status: h.approval_status || '-',
         quality_status: h.quality_approval_status || '—',
         actions: actions
@@ -174,7 +183,7 @@
     });
     content.innerHTML = '<div class="vf-card"><div class="vf-card-header"><h3>المشتريات</h3>' +
       (__loadedAll ? '' : '<button class="btn btn-outline" onclick="showAllPurchasing()">عرض الكل</button> ') +
-      (CAN_WRITE ? '<button class="btn btn-primary" onclick="openForm(\'\', false)">+ إضافة عملية شراء</button>' : '') +
+      (CAN_WRITE && canCost() ? '<button class="btn btn-primary" onclick="openForm(\'\', false)">+ إضافة عملية شراء</button>' : '') +
       '</div><div class="vf-card-body">' +
       UIC.dataTable('purchasing-table', {
         title: 'عمليات الشراء',
@@ -183,12 +192,14 @@
           { key: 'Code', label: 'الكود' },
           { key: 'supplier_name', label: 'المورد' },
           { key: 'receipt_date', label: 'تاريخ الاستلام' },
-          { key: 'items', label: 'الأصناف' },
-          { key: 'total_costs', label: 'إجمالي التكاليف', numeric: true },
+          { key: 'items', label: 'الأصناف' }
+        ].concat(canCost()
+          ? [{ key: 'total_costs', label: 'إجمالي التكاليف', numeric: true }]
+          : []).concat([
           { key: 'approval_status', label: 'الحالة' },
           { key: 'quality_status', label: 'حالة الجودة' },
           { key: 'actions', label: 'إجراءات' }
-        ],
+        ]),
         rows: rows,
         emptyText: 'لا توجد عمليات شراء'
       }) + '</div></div>';
@@ -566,8 +577,10 @@
         '<tr><th>تاريخ الاستلام</th><td>' + esc(rec['Reciept Date'] ? String(rec['Reciept Date']).slice(0, 10) : '-') + '</td>' +
         '<th>النوع</th><td>' + esc(rec.Type || '-') + '</td></tr>' +
         '<tr><th>العملة</th><td>' + esc(rec.Currency || '-') + '</td>' +
-        '<th>القيمة (Value)</th><td>' + FMT.number(rec.Value) + '</td></tr>' +
-        '<tr><th>إجمالي التكاليف</th><td>' + FMT.number(rec['Total costs']) + '</td>' +
+        (canCost()
+          ? '<th>القيمة (Value)</th><td>' + FMT.number(rec.Value) + '</td></tr>' +
+            '<tr><th>إجمالي التكاليف</th><td>' + FMT.number(rec['Total costs']) + '</td>'
+          : '<th></th><td></td></tr><tr>') +
         '<th>الأصناف</th><td>' + esc(rec.Items || '-') + '</td></tr>' +
         '<tr><th>حالة الاعتماد المالي</th><td>' + esc(finStatus) + '</td>' +
         '<th>حالة اعتماد الجودة</th><td>' + esc(qStatus) + (qBy ? ' (' + esc(qBy) + (qTime ? ' — ' + esc(qTime) : '') + ')' : '') + '</td></tr>';
@@ -575,13 +588,15 @@
         return '<tr>' +
           '<td>' + esc(prodMap[String(l.product)] || l.product || '-') + '</td>' +
           '<td class="num">' + FMT.number(l.qty) + '</td>' +
-          '<td class="num">' + FMT.number(l.unit_price) + '</td>' +
-          '<td class="num">' + FMT.number(l.other_cost) + '</td>' +
-          '<td class="num">' + FMT.number(l.total_cost) + '</td>' +
+          (canCost()
+            ? '<td class="num">' + FMT.number(l.unit_price) + '</td>' +
+              '<td class="num">' + FMT.number(l.other_cost) + '</td>' +
+              '<td class="num">' + FMT.number(l.total_cost) + '</td>'
+            : '') +
           '<td>' + esc(l.movement_type || '-') + '</td>' +
           '</tr>';
       }).join('');
-      if (!lrows) lrows = '<tr><td colspan="6" style="text-align:center;padding:12px;">لا توجد أصناف</td></tr>';
+      if (!lrows) lrows = '<tr><td colspan="' + (canCost() ? 6 : 3) + '" style="text-align:center;padding:12px;">لا توجد أصناف</td></tr>';
       return '<!DOCTYPE html><html lang="ar" dir="rtl"><head><meta charset="utf-8">' +
         '<title>طباعة عملية شراء — ' + esc(String(rec.Code)) + '</title>' +
         '<style>body{font-family:Tahoma,Arial,sans-serif;padding:24px;color:#111;}' +
@@ -594,7 +609,7 @@
         '<h2>تفاصيل عملية الشراء — ' + esc(String(rec.Code)) + '</h2>' +
         '<table>' + head + '</table>' +
         '<h3>الأصناف</h3>' +
-        '<table><thead><tr><th>المنتج</th><th>الكمية</th><th>سعر الوحدة</th><th>تكاليف أخرى</th><th>الإجمالي</th><th>نوع الحركة</th></tr></thead>' +
+        '<table><thead><tr><th>المنتج</th><th>الكمية</th>' + (canCost() ? '<th>سعر الوحدة</th><th>تكاليف أخرى</th><th>الإجمالي</th>' : '') + '<th>نوع الحركة</th></tr></thead>' +
         '<tbody>' + lrows + '</tbody></table>' +
         '</body></html>';
     }

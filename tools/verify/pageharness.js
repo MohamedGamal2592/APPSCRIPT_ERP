@@ -79,6 +79,24 @@ function bootPage(opts) {
   /* The real shared component library. */
   vm.runInContext(scriptOf('UI_Components.html'), sandbox, { filename: 'UI_Components.html' });
 
+  const tables = [];
+  const realDataTable = sandbox.UIC.dataTable;
+  sandbox.UIC.dataTable = function (containerId, opts) {
+    tables.push({ containerId, opts });
+    const html = realDataTable.call(sandbox.UIC, containerId, opts);
+    const o2 = opts || {};
+    const rows = o2.rows || [];
+    if (!rows.length) return html;
+    const hasStringHeaders = (o2.headers || []).some(h => typeof h === 'string');
+    const headers = hasStringHeaders
+      ? o2.headers.map((h, i) => (typeof h === 'string' ? { key: '__col' + i, label: h } : h))
+      : (o2.headers || []);
+    const fmtMoney = n => (Number(n) || 0).toFixed(2);
+    const body = rows.map((r, i) => sandbox.UIC._dtRowHtml(r, headers, fmtMoney, i)).join('');
+    return html.replace(/(<tbody id="[^"]*">)(<\/tbody>)/, '$1' + body + '$2');
+  };
+  sandbox.__tables = tables;
+
   /* The rest of the shared client layer the pages assume exists. */
   const calls = [];
   sandbox.API = {
@@ -118,8 +136,26 @@ function bootPage(opts) {
     USER_PAGES: o.userPages === undefined ? 'null' : JSON.stringify(o.userPages)
   }, o.scriptlets || {});
 
-  const pageSrc = substituteScriptlets(scriptOf(o.page), scriptletValues);
+  let pageSrc = substituteScriptlets(scriptOf(o.page), scriptletValues);
+
+  /* Most page functions live inside an IIFE and are not reachable from outside.
+     For those, append an export line to the LOADED COPY, just before the IIFE
+     closes. The template on disk is never modified — this is a test hook, and
+     the functions it reaches are the page's real ones. */
+  if (o.expose && o.expose.length) {
+    const marker = pageSrc.lastIndexOf('})();');
+    if (marker === -1) throw new Error('no IIFE close found in ' + o.page + ' to expose from');
+    const line = '\ntry { window.__EXPORTS = { ' +
+      o.expose.map(n => n + ': ' + n).join(', ') + ' }; } catch (e) {}\n';
+    pageSrc = pageSrc.slice(0, marker) + line + pageSrc.slice(marker);
+  }
+
   vm.runInContext(pageSrc, sandbox, { filename: o.page });
+  sandbox.exported = name => {
+    const fns = sandbox.__EXPORTS || {};
+    if (typeof fns[name] !== 'function') throw new Error('not exposed: ' + name);
+    return fns[name];
+  };
 
   /** The HTML a container currently holds. */
   sandbox.html = id => {

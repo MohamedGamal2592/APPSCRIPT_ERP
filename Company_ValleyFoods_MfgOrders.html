@@ -23,6 +23,10 @@
     var CURRENT_ACTION = '<?!= currentAction ?>';
     var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
     var CAN_WRITE = UIC.canAdd_(); var CAN_FULL = UIC.canFull_();
+    /* U-46. Set from the server's can_see_cost, never derived from
+       USER_PAGES — the browser cannot see the fail-open guard. */
+    var CAN_SEE_COST = true;
+    function canCost() { return CAN_SEE_COST !== false; }
 
     function companyCall(moduleAction, data) {
       return API.call('company_action', {
@@ -532,20 +536,21 @@
       if (!holder) return;
       companyCall('get_valley_mfg_byproducts', { mo_uid: moUid })
         .then(function (r) {
+          CAN_SEE_COST = (r && r.can_see_cost !== false);
           window.__BP_OPTIONS = (r.product_options || []).map(function (o) { return { value: String(o.value), label: o.label }; });
           var rowsHtml = (r.byproducts || []).map(function (b) {
             var nm = '';
             window.__BP_OPTIONS.forEach(function (o) { if (String(o.value) === String(b.item)) nm = o.label; });
-            return '<tr><td>' + esc(nm || b.item) + '</td><td class="num">' + Number(b.qty || 0).toLocaleString('en-US') + '</td><td>' + esc(b.transaction_code || '-') + '</td><td class="num">' + Number(b.total_cost || 0).toLocaleString('en-US') + '</td></tr>';
+            return '<tr><td>' + esc(nm || b.item) + '</td><td class="num">' + Number(b.qty || 0).toLocaleString('en-US') + '</td><td>' + esc(b.transaction_code || '-') + '</td>' + (canCost() ? '<td class="num">' + Number(b.total_cost || 0).toLocaleString('en-US') + '</td>' : '') + '</tr>';
           }).join('');
           var form = CAN_WRITE ? '<form id="bp-form"><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;align-items:flex-end;">' +
             UIC.combo({ key: 'bp-item', label: 'المنتج الثانوي', required: true, options: window.__BP_OPTIONS, placeholder: 'اكتب للبحث…' }) +
             UIC.field({ key: 'bp-qty', label: 'الكمية', type: 'number', required: true, min: '0.01', step: '0.01' }) +
             UIC.field({ key: 'bp-lot', label: 'كود الدفعة', type: 'text' }) +
-            UIC.field({ key: 'bp-cost', label: 'التكلفة', type: 'number', min: '0', step: '0.01' }) +
+            (canCost() ? UIC.field({ key: 'bp-cost', label: 'التكلفة', type: 'number', min: '0', step: '0.01' }) : '') +
             '</div><input type="hidden" id="bp-mo-uid" value="' + esc(moUid) + '"></form>' : '';
-          holder.innerHTML = '<div style="overflow-x:auto;"><table class="table"><thead><tr><th>المنتج</th><th>الكمية</th><th>الدفعة</th><th>التكلفة</th></tr></thead><tbody>' +
-            (rowsHtml || '<tr><td colspan="4" style="text-align:center;color:#94a3b8;">لا يوجد منتجات ثانوية</td></tr>') +
+          holder.innerHTML = '<div style="overflow-x:auto;"><table class="table"><thead><tr><th>المنتج</th><th>الكمية</th><th>الدفعة</th>' + (canCost() ? '<th>التكلفة</th>' : '') + '</tr></thead><tbody>' +
+            (rowsHtml || '<tr><td colspan="' + (canCost() ? 4 : 3) + '" style="text-align:center;color:#94a3b8;">لا يوجد منتجات ثانوية</td></tr>') +
             '</tbody></table></div>' + form;
         })
         .catch(function () { holder.innerHTML = '<p style="color:red;">خطأ في التحميل</p>'; });
@@ -554,7 +559,7 @@
     function addByproduct() {
       if (!UIC.validateForm('bp-form')) return;
       UI.showSpinner();
-      companyCall('add_valley_mfg_byproduct', { mo_uid: getHid_('bp-mo-uid'), item: getCombo_('bp-item'), qty: getVal_('bp-qty'), batch_code: getV_('bp-lot'), total_cost: getV_('bp-cost') })
+      companyCall('add_valley_mfg_byproduct', { mo_uid: getHid_('bp-mo-uid'), item: getCombo_('bp-item'), qty: getVal_('bp-qty'), batch_code: getV_('bp-lot'), total_cost: canCost() ? getV_('bp-cost') : '' })
         .then(function (r) {
           UIC.toast((r && r.message) || 'تمت الإضافة', 'success');
           if (r && r.record) {
@@ -569,7 +574,7 @@
                 var holder = document.getElementById('byproducts-body');
                 if (holder && holder.querySelector('tbody')) {
                   var nm = r.record.product_name || r.record.item;
-                  var newRow = '<tr><td>' + nm + '</td><td class="num">' + (r.record.qty||0) + '</td><td>' + (r.record.transaction_code||'-') + '</td><td class="num">' + (r.record.total_cost||0) + '</td></tr>';
+                  var newRow = '<tr><td>' + nm + '</td><td class="num">' + (r.record.qty||0) + '</td><td>' + (r.record.transaction_code||'-') + '</td>' + (canCost() ? '<td class="num">' + (r.record.total_cost||0) + '</td>' : '') + '</tr>';
                   var tbody = holder.querySelector('tbody');
                   if (tbody) tbody.insertAdjacentHTML('afterbegin', newRow);
                   // remove last if exceeds 15
