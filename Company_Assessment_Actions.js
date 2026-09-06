@@ -34,6 +34,12 @@ const AssessmentCenter = (function () {
   const AUDIT_SHEET = 'AuditLog';
   // Users / UsersPermission are dormant after the merge (§4) — not referenced here.
 
+  // D-8 — the five category values; other values still list (raw value shown).
+  const CATEGORY_LABELS_AR = { Technical: 'فني', Psychometric: 'نفسي', Situational: 'مواقف', Language: 'لغة', Competency: 'كفاءة' };
+  function acCategoryLabel_(v) { return CATEGORY_LABELS_AR[v] || String(v === undefined || v === null ? '' : v); }
+
+  const QUESTION_TYPES = ['MCQ', 'Likert', 'MostLeast', 'OpenText'];
+
   // §6.2 — authenticated action catalog. Verb chosen so the router's inference
   // (R-20/T-6) and this guard agree: get_* read, add_* write (incl. grading),
   // toggle_*/update_* full. Never save_*/edit_*/delete_*/remove_* (D-13).
@@ -381,6 +387,161 @@ const AssessmentCenter = (function () {
   }
   register('prefetch_refs', prefetchRefs_);
 
+  // ── §5.1/Phase 3 — authoring ────────────────────────────────────────────────
+  // R-9/G-05: the standalone never let an assessment be edited after creation.
+  // The action catalog (§6.2) keeps that — there is no update_ac_assessment /
+  // edit_ac_assessment verb anywhere, by design (D-13 forbids inventing one).
+  // "نسخة جديدة" (add_ac_assessment_copy) is the ONLY path to a changed
+  // assessment, and it always creates a new row — this is what keeps a past
+  // candidate's score meaningful forever, not a conditional on attempt count.
+  // (The plan's Phase 3.1 line reads as though editing were allowed until the
+  // first attempt; no such verb exists to call, so ac_assessment_form always
+  // opens an existing assessment read-only — recorded as a plan correction.)
+
+  function getAcAssessments_(data, user, dbId) {
+    const assessments = acRows_(dbId, ASSESSMENTS_SHEET);
+    const qCount = {};
+    acRows_(dbId, QUESTIONS_SHEET).forEach(function (q) { qCount[q.AssessmentID] = (qCount[q.AssessmentID] || 0) + 1; });
+    const attemptCount = {};
+    acRows_(dbId, ASSIGNMENTS_SHEET).forEach(function (a) { attemptCount[a.AssessmentID] = (attemptCount[a.AssessmentID] || 0) + 1; });
+    const rows = assessments.map(function (a) {
+      return {
+        AssessmentID: a.AssessmentID, Title: a.Title, Category: a.Category,
+        CategoryLabel: acCategoryLabel_(a.Category),
+        TimeLimitMinutes: a.TimeLimitMinutes, PassScore: a.PassScore, IsActive: acBool_(a.IsActive),
+        QuestionCount: qCount[a.AssessmentID] || 0, AttemptCount: attemptCount[a.AssessmentID] || 0,
+        CreatedAt: a.CreatedAt
+      };
+    });
+    return { status: 'success', rows: rows };
+  }
+  register('get_ac_assessments', getAcAssessments_);
+
+  function getAcAssessment_(data, user, dbId) {
+    const id = String((data && data.id) || '').trim();
+    if (!id) throw new Error('AssessmentID مطلوب.');
+    const assessment = acRows_(dbId, ASSESSMENTS_SHEET).filter(function (a) { return a.AssessmentID === id; })[0];
+    if (!assessment) throw new Error('التقييم غير موجود.');
+    const questions = acRows_(dbId, QUESTIONS_SHEET)
+      .filter(function (q) { return q.AssessmentID === id; })
+      .sort(function (x, y) { return (parseInt(x.OrderIndex, 10) || 0) - (parseInt(y.OrderIndex, 10) || 0); })
+      .map(function (q) { return Object.assign({}, q, { Options: acParseOptions_(q.OptionsJSON) }); });
+    const attempts = acRows_(dbId, ASSIGNMENTS_SHEET).filter(function (a) { return a.AssessmentID === id; }).length;
+    return {
+      status: 'success',
+      assessment: Object.assign({}, assessment, { IsActive: acBool_(assessment.IsActive) }),
+      questions: questions,
+      attempts: attempts
+    };
+  }
+  register('get_ac_assessment', getAcAssessment_);
+
+  // D-18 — the AUTHORING form tracks every question's options as {text,trait}
+  // client-side (one editor UI for all types), but only MostLeast genuinely
+  // uses the per-option trait (MCQ/Likert's "trait" is a question-level field,
+  // never per-option — see acScore_). Normalising here, server-side, means
+  // the wire/sheet shape is right regardless of what the client happens to
+  // send: plain strings for MCQ/Likert, {text,trait} objects for MostLeast.
+  function acOptionsForWire_(questionType, options) {
+    const list = Array.isArray(options) ? options : [];
+    if (questionType === 'MostLeast') {
+      return list.map(function (o) {
+        return { text: String((o && o.text !== undefined) ? o.text : (o || '')), trait: String((o && o.trait) || '') };
+      });
+    }
+    return list.map(function (o) { return String((o && typeof o === 'object' && o.text !== undefined) ? o.text : (o === undefined || o === null ? '' : o)); });
+  }
+
+  function acValidateQuestions_(questionsIn) {
+    questionsIn.forEach(function (q, i) {
+      if (!String(q.QuestionText || '').trim()) throw new Error('نص السؤال رقم ' + (i + 1) + ' مطلوب.');
+      if (QUESTION_TYPES.indexOf(q.QuestionType) === -1) throw new Error('نوع السؤال رقم ' + (i + 1) + ' غير صالح.');
+    });
+  }
+
+  function addAcAssessment_(data, user, dbId) {
+    const d = data || {};
+    const title = String(d.Title || '').trim();
+    const category = String(d.Category || '').trim();
+    const timeLimit = Number(d.TimeLimitMinutes);
+    if (!title) throw new Error('العنوان مطلوب.');
+    if (!category) throw new Error('الفئة مطلوبة.');
+    if (!timeLimit || timeLimit <= 0) throw new Error('مدة التقييم يجب أن تكون أكبر من صفر.');
+    const passScore = Math.max(0, Math.min(100, Number(d.PassScore) || 0));
+    const questionsIn = Array.isArray(d.questions) ? d.questions : [];
+    acValidateQuestions_(questionsIn);
+
+    const userEmail = (user && user.email) || '';
+    const id = acUid_();
+    const now = acStamp_();
+    const header = {
+      AssessmentID: id, Title: title, Category: category,
+      Description: String(d.Description || ''), TimeLimitMinutes: timeLimit,
+      PassScore: passScore, IsActive: acBool_(d.IsActive), UserID: userEmail,
+      CreatedAt: now, UpdatedAt: now
+    };
+
+    return executeWithLock_(function () {
+      acInsert_(dbId, ASSESSMENTS_SHEET, header, userEmail, 'AssessmentID');
+      const qRows = questionsIn.map(function (q, i) {
+        return {
+          QuestionID: acUid_(), AssessmentID: id, OrderIndex: i + 1,
+          QuestionText: String(q.QuestionText || ''), QuestionType: q.QuestionType,
+          OptionsJSON: JSON.stringify(acOptionsForWire_(q.QuestionType, q.Options)),
+          CorrectAnswer: String(q.CorrectAnswer || ''), Weight: Number(q.Weight) || 1,
+          Trait: String(q.Trait || ''), UserID: userEmail, CreatedAt: now
+        };
+      });
+      if (qRows.length) acInsertMany_(dbId, QUESTIONS_SHEET, qRows, userEmail, 'QuestionID');
+      return { status: 'success', data: { assignedId: id }, message: 'تم إنشاء التقييم بنجاح.' };
+    });
+  }
+  register('add_ac_assessment', addAcAssessment_);
+
+  function addAcAssessmentCopy_(data, user, dbId) {
+    const srcId = String((data && data.id) || '').trim();
+    if (!srcId) throw new Error('AssessmentID مطلوب.');
+    const src = acRows_(dbId, ASSESSMENTS_SHEET).filter(function (a) { return a.AssessmentID === srcId; })[0];
+    if (!src) throw new Error('التقييم غير موجود.');
+    const srcQuestions = acRows_(dbId, QUESTIONS_SHEET).filter(function (q) { return q.AssessmentID === srcId; });
+
+    const userEmail = (user && user.email) || '';
+    const id = acUid_();
+    const now = acStamp_();
+    const header = {
+      AssessmentID: id, Title: String(src.Title || '') + ' (v2)', Category: src.Category,
+      Description: src.Description, TimeLimitMinutes: src.TimeLimitMinutes, PassScore: src.PassScore,
+      // A duplicate starts INACTIVE: the owner reviews/activates it deliberately
+      // rather than a "نسخة جديدة" click immediately going live for candidates.
+      IsActive: false, UserID: userEmail, CreatedAt: now, UpdatedAt: now
+    };
+
+    return executeWithLock_(function () {
+      acInsert_(dbId, ASSESSMENTS_SHEET, header, userEmail, 'AssessmentID');
+      const qRows = srcQuestions.map(function (q) {
+        return {
+          QuestionID: acUid_(), AssessmentID: id, OrderIndex: q.OrderIndex, QuestionText: q.QuestionText,
+          QuestionType: q.QuestionType, OptionsJSON: q.OptionsJSON, CorrectAnswer: q.CorrectAnswer,
+          Weight: q.Weight, Trait: q.Trait, UserID: userEmail, CreatedAt: now
+        };
+      });
+      if (qRows.length) acInsertMany_(dbId, QUESTIONS_SHEET, qRows, userEmail, 'QuestionID');
+      return { status: 'success', data: { assignedId: id }, message: 'تم إنشاء نسخة جديدة.' };
+    });
+  }
+  register('add_ac_assessment_copy', addAcAssessmentCopy_);
+
+  function toggleAcAssessmentActive_(data, user, dbId) {
+    const id = String((data && data.id) || '').trim();
+    if (!id) throw new Error('AssessmentID مطلوب.');
+    const current = acRows_(dbId, ASSESSMENTS_SHEET).filter(function (a) { return a.AssessmentID === id; })[0];
+    if (!current) throw new Error('التقييم غير موجود.');
+    const next = !acBool_(current.IsActive);
+    const res = acUpdate_(dbId, ASSESSMENTS_SHEET, 'AssessmentID', id, { IsActive: next, UpdatedAt: acStamp_() }, (user && user.email) || '');
+    return { status: 'success', data: res.data, message: next ? 'تم تفعيل التقييم.' : 'تم إيقاف التقييم.' };
+  }
+  register('toggle_ac_assessment_active', toggleAcAssessmentActive_);
+
   // ── §6.4/T-3/T-4 — the write path ──────────────────────────────────────────
   // Never addRecord_ / getNextId_ / saveRecordWithAudit_ against this
   // spreadsheet (R-16/R-17): a lower-case dataMap key would be silently
@@ -516,6 +677,8 @@ const AssessmentCenter = (function () {
     acByPk_: acByPk_,
     acInsert_: acInsert_,
     acInsertMany_: acInsertMany_,
-    acUpdate_: acUpdate_
+    acUpdate_: acUpdate_,
+    acOptionsForWire_: acOptionsForWire_,
+    acCategoryLabel_: acCategoryLabel_
   };
 })();
