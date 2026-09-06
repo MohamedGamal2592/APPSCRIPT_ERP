@@ -1,5 +1,23 @@
 <script>
 
+/* [UI-1.1 / U-02] Guarantee the document direction on every page.
+ *
+ * Only 24 of the 85 page templates set dir="rtl" on their own <html> element.
+ * The other 61 render left-to-right, so every component that positions itself
+ * against the document direction — modals, toasts, spinners, the drawer, the
+ * combo list, `margin-inline-*` on anything — comes out mirrored. The page
+ * *content* still looked right because the text is Arabic and CSS_Tokens sets
+ * `[dir="rtl"] body { text-align: right }`, which is why this survived so long.
+ *
+ * Client_Helpers is included by 82 of the 85 templates, in <head>, before any
+ * paint, so one assignment fixes all of them. It is idempotent: the 24 pages
+ * that already declare dir="rtl" are unaffected. No page in the tree declares
+ * dir="ltr" (verified), so there is nothing to opt out.
+ *
+ * Expect this to REVEAL small layout bugs that the wrong direction was masking.
+ * Those are listed, not silently fixed — they are budgeted as step 3.7. */
+try { document.documentElement.setAttribute('dir', 'rtl'); } catch (e) {}
+
 window.API = window.API || {};
 window.FMT = window.FMT || {};
 window.UI  = window.UI  || {};
