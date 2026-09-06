@@ -19,6 +19,145 @@ UIC.actionBtns = function (btns) {
   return UIC.actionDropdown(btns);
 };
 
+/* ── [UI-1.2 / U-01] Escaping the table's clip box ────────────────────────
+ *
+ * `.table-wrap` sets `overflow-x: auto` so wide tables scroll instead of the
+ * page. That makes it a clipping box, and any `position: absolute` popup inside
+ * it — a row's action menu, a combo list in a cell — is cut off at its edge. On
+ * the last row of a table the menu is invisible entirely.
+ *
+ * A `position: fixed` element is laid out against the viewport and is NOT
+ * clipped by an ancestor's overflow, so switching the popup to fixed while it is
+ * open solves it WITHOUT reparenting the element into <body>. That matters: the
+ * combo's blur/pick/keyboard handlers and the outside-click handlers all walk
+ * the DOM with `.closest('.combo')`, and moving the node would silently break
+ * every one of them.
+ *
+ * The one catch is that `position: fixed` resolves against the nearest ancestor
+ * that establishes a containing block — an ancestor with `transform`, `filter`,
+ * `contain` or `will-change: transform`. `.modal` carries
+ * `will-change: transform`, so a combo inside a dialog would land in the wrong
+ * place. Rather than enumerate those cases, the helper writes the coordinates,
+ * measures where the element actually landed, and corrects by the difference.
+ * That is exact for every containing block, present or future. */
+UIC._anchored = [];
+
+UIC._anchorFixed = function (el, anchor, opts) {
+  if (!el || !anchor) return;
+  var o = opts || {};
+  var GAP = 4, EDGE = 8;
+  try {
+    /* Remember the inline styles so _unanchor can put them back exactly. */
+    if (el.__uicHome === undefined) el.__uicHome = el.getAttribute('style') || '';
+
+    el.style.position = 'fixed';
+    el.style.margin = '0';
+    /* A combo list must stay exactly as wide as its input; its CSS achieved that
+       with `left:0; right:0`, which no longer applies once it is fixed. */
+    if (o.matchWidth) el.style.width = anchor.getBoundingClientRect().width + 'px';
+
+    var a = anchor.getBoundingClientRect();
+    var m = el.getBoundingClientRect();
+    var vw = window.innerWidth || document.documentElement.clientWidth;
+    var vh = window.innerHeight || document.documentElement.clientHeight;
+
+    /* Vertical: below the anchor, flipping above when there is no room. */
+    var below = vh - a.bottom - GAP;
+    var above = a.top - GAP;
+    var flip = (m.height > below) && (above > below);
+    var top = flip ? (a.top - m.height - GAP) : (a.bottom + GAP);
+    top = Math.max(EDGE, Math.min(top, vh - m.height - EDGE));
+
+    /* Horizontal: RTL is the primary direction, so align the popup's END edge
+       with the anchor's, then clamp into the viewport. */
+    var rtl = (document.documentElement.getAttribute('dir') || '').toLowerCase() === 'rtl';
+    var left = rtl ? (a.right - m.width) : a.left;
+    left = Math.max(EDGE, Math.min(left, vw - m.width - EDGE));
+
+    el.style.left = left + 'px';
+    el.style.top = top + 'px';
+    el.style.right = 'auto';
+    el.style.bottom = 'auto';
+
+    /* Measure, then correct for any containing block that is not the viewport. */
+    var got = el.getBoundingClientRect();
+    var dx = left - got.left, dy = top - got.top;
+    if (dx || dy) {
+      el.style.left = (left + dx) + 'px';
+      el.style.top = (top + dy) + 'px';
+    }
+
+    if (UIC._anchored.indexOf(el) === -1) UIC._anchored.push(el);
+    UIC._anchored.__reanchor = UIC._anchored.__reanchor || {};
+    el.__uicAnchor = anchor;
+    el.__uicOpts = o;
+  } catch (e) {}
+};
+
+UIC._unanchor = function (el) {
+  if (!el) return;
+  try {
+    if (el.__uicHome !== undefined) {
+      if (el.__uicHome) el.setAttribute('style', el.__uicHome);
+      else el.removeAttribute('style');
+      el.__uicHome = undefined;
+    }
+    el.__uicAnchor = null;
+    var i = UIC._anchored.indexOf(el);
+    if (i !== -1) UIC._anchored.splice(i, 1);
+  } catch (e) {}
+};
+
+/* Anything open follows its anchor while the page or a table scrolls. Capture
+ * phase, because the scroll happens on `.table-wrap`, not on the window. */
+(function () {
+  var queued = false;
+  var reflow = function () {
+    if (queued || !UIC._anchored.length) return;
+    queued = true;
+    requestAnimationFrame(function () {
+      queued = false;
+      UIC._anchored.slice().forEach(function (el) {
+        if (!el.__uicAnchor || !el.__uicAnchor.isConnected) return;
+        UIC._anchorFixed(el, el.__uicAnchor, el.__uicOpts);
+      });
+    });
+  };
+  window.addEventListener('scroll', reflow, true);
+  window.addEventListener('resize', reflow);
+})();
+
+/* Row action menu open/close. The menu element stays where it is in the DOM, so
+ * `.action-dropdown.open .action-dropdown-menu { display: flex }` still applies;
+ * only its positioning changes. */
+UIC.openActionMenu = function (id, ev) {
+  try { if (ev && ev.stopPropagation) ev.stopPropagation(); } catch (e) {}
+  var wrap = document.getElementById(id);
+  if (!wrap) return;
+  var menu = wrap.querySelector('.action-dropdown-menu');
+  var btn = wrap.querySelector('button');
+  document.querySelectorAll('.action-dropdown.open').forEach(function (el) {
+    if (el !== wrap) UIC.closeActionMenu(el.id);
+  });
+  wrap.classList.add('open');
+  if (menu && btn) UIC._anchorFixed(menu, btn, {});
+};
+
+UIC.closeActionMenu = function (id) {
+  var wrap = document.getElementById(id);
+  if (!wrap) return;
+  wrap.classList.remove('open');
+  var menu = wrap.querySelector('.action-dropdown-menu');
+  if (menu) UIC._unanchor(menu);
+};
+
+UIC.toggleActionMenu = function (id, ev) {
+  var wrap = document.getElementById(id);
+  if (!wrap) return;
+  if (wrap.classList.contains('open')) UIC.closeActionMenu(id);
+  else UIC.openActionMenu(id, ev);
+};
+
 UIC.actionDropdown = function (btns) {
   if (!btns || !btns.length) return '';
   var id = 'ad_' + Math.random().toString(36).slice(2, 8);
@@ -26,16 +165,24 @@ UIC.actionDropdown = function (btns) {
     if (!b) return '';
     var color = b.color ? 'color:' + b.color + ';' : '';
     var extra = b.color ? 'border-color:transparent;' : '';
-    return '<button type="button" class="action-dropdown-item" style="display:block;width:100%;text-align:right;padding:8px 10px;font-size:13px;background:transparent;border:0;border-radius:6px;cursor:pointer;' + color + extra + '" onmouseover="this.style.background=\'var(--bg-subtle,#f3f4f6)\'" onmouseout="this.style.background=\'transparent\'" onclick="' + b.onclick.replace(/"/g, '&quot;') + ';try{document.getElementById(\'' + id + '\').classList.remove(\'open\');}catch(e){}">' + UIC.escHtml(b.label) + '</button>';
+    return '<button type="button" class="action-dropdown-item" style="display:block;width:100%;text-align:right;padding:8px 10px;font-size:13px;background:transparent;border:0;border-radius:6px;cursor:pointer;' + color + extra + '" onmouseover="this.style.background=\'var(--bg-subtle,#f3f4f6)\'" onmouseout="this.style.background=\'transparent\'" onclick="' + b.onclick.replace(/"/g, '&quot;') + ';try{UIC.closeActionMenu(\'' + id + '\');}catch(e){}">' + UIC.escHtml(b.label) + '</button>';
   }).join('');
+  /* [UI-1.2 / U-01] z-index raised from 30 to 1400 to match .combo-list: once the
+     menu is positioned against the viewport it is no longer stacked inside the
+     table, so it must clear the sticky table header and the topbar. */
   return '<div class="action-dropdown" id="' + id + '" style="position:relative;display:inline-block;">' +
-    '<button type="button" class="btn btn-primary" style="padding:6px 14px;font-size:12px;border-radius:999px;" onclick="try{var el=document.getElementById(\'' + id + '\'); el.classList.toggle(\'open\'); event.stopPropagation();}catch(e){}">إجراءات / Actions ▾</button>' +
-    '<div class="action-dropdown-menu" style="display:none;position:absolute;right:0;top:100%;margin-top:6px;z-index:30;min-width:200px;background:var(--bg-surface,#fff);border:1px solid var(--border-color,#e5e7eb);border-radius:12px;box-shadow:0 8px 24px rgba(0,0,0,.14);padding:6px;flex-direction:column;gap:2px;max-height:320px;overflow:auto;">' + items + '</div></div>';
+    '<button type="button" class="btn btn-primary" style="padding:6px 14px;font-size:12px;border-radius:999px;" onclick="UIC.toggleActionMenu(\'' + id + '\', event)">إجراءات / Actions ▾</button>' +
+    '<div class="action-dropdown-menu" style="display:none;position:absolute;right:0;top:100%;margin-top:6px;z-index:1400;min-width:200px;background:var(--bg-surface,#fff);border:1px solid var(--border-color,#e5e7eb);border-radius:12px;box-shadow:0 8px 24px rgba(0,0,0,.14);padding:6px;flex-direction:column;gap:2px;max-height:320px;overflow:auto;">' + items + '</div></div>';
 };
 document.addEventListener('click', function(e){
   document.querySelectorAll('.action-dropdown.open').forEach(function(el){
-    if(!el.contains(e.target)) el.classList.remove('open');
+    if(!el.contains(e.target)) UIC.closeActionMenu(el.id);
   });
+});
+/* Escape closes an open row menu, matching the drawer and the combo. */
+document.addEventListener('keydown', function (e) {
+  if (e.key !== 'Escape') return;
+  document.querySelectorAll('.action-dropdown.open').forEach(function (el) { UIC.closeActionMenu(el.id); });
 });
 (function(){
   var st=document.createElement('style');
@@ -799,11 +946,28 @@ UIC.combo = function (o) {
 /* Searchable select alias (same component, clearer name for reference enums). */
 UIC.SearchableSelect = UIC.combo;
 
+/* [UI-1.2 / U-01] A combo inside a table cell was clipped by `.table-wrap`, and
+ * one near the bottom of a modal was clipped by the modal's own scroll box.
+ * Anchoring the list to its input against the viewport fixes both. The element
+ * does not move in the DOM, so comboBlur / comboPick / comboKey and the
+ * outside-click handler — all of which use `.closest('.combo')` — are unchanged. */
+UIC._comboAnchor = function (key) {
+  var list = document.getElementById(key + '_list');
+  var input = document.getElementById(key + '_display');
+  if (!list || !input || list.hidden) return;
+  UIC._anchorFixed(list, input, { matchWidth: true });
+};
+UIC._comboUnanchor = function (key) {
+  var list = document.getElementById(key + '_list');
+  if (list) UIC._unanchor(list);
+};
+
 UIC.comboOpen = function (key) {
   const list = document.getElementById(key + '_list');
   if (!list) return;
   list.hidden = false;
   UIC.comboFilter(key, document.getElementById(key + '_display').value);
+  UIC._comboAnchor(key);
 };
 
 UIC.escHtml = function (s) {
@@ -836,6 +1000,9 @@ UIC.comboFilter = function (key, text) {
     }
   });
   list.style.display = visible ? '' : 'none';
+  /* Filtering changes the list's height, so an anchored list must be re-placed
+     or it drifts away from its input as options disappear. */
+  if (list.__uicAnchor) UIC._anchorFixed(list, list.__uicAnchor, list.__uicOpts);
 };
 
 UIC.comboPick = function (key, i) {
@@ -853,7 +1020,7 @@ UIC.comboPick = function (key, i) {
   const cust = document.getElementById(key + '_custom');
   if (cust) { cust.style.display = 'none'; cust.removeAttribute('required'); cust.value = ''; }
   const list = document.getElementById(key + '_list');
-  if (list) list.hidden = true;
+  if (list) { list.hidden = true; UIC._unanchor(list); }
 };
 
 UIC.comboBlur = function (key) {
@@ -882,7 +1049,7 @@ UIC.comboBlur = function (key) {
     hidden.value = '';
   }
   const list = document.getElementById(key + '_list');
-  if (list) list.hidden = true;
+  if (list) { list.hidden = true; UIC._unanchor(list); }
 };
 
 UIC.comboKey = function (key, ev) {
@@ -904,6 +1071,7 @@ UIC.comboKey = function (key, ev) {
     return;
   } else if (ev.key === 'Escape') {
     list.hidden = true;
+    UIC._unanchor(list);
     return;
   } else {
     return;
@@ -918,7 +1086,10 @@ document.addEventListener('click', function (ev) {
     if (list.hidden) return;
     const host = list.closest('.combo');
     if (!host) return;
-    if (!ev.target.closest('.combo') || ev.target.closest('.combo') !== host) list.hidden = true;
+    if (!ev.target.closest('.combo') || ev.target.closest('.combo') !== host) {
+      list.hidden = true;
+      UIC._unanchor(list);
+    }
   });
 });
 

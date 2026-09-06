@@ -24,7 +24,9 @@ const STEPS = [
   ['s6b_list_gate.js', 'S6b — client gating, list pages'],
   ['s7_batch_modal.js', 'S7 — the FIFO batch modal'],
   ['s8_material_rows.js', 'S8 — material entry ergonomics'],
-  ['s10_purchasing_ux.js', 'Purchasing form/lines UX + tl_sales pagination']
+  ['s10_purchasing_ux.js', 'Purchasing form/lines UX + tl_sales pagination'],
+  /* ── UI/UX programme (branch ui/odoo-parity) ── */
+  ['ui1_anchor.js', 'UI-1.2 — popups escape the table clip box (U-01)']
 ];
 
 let failed = 0;
