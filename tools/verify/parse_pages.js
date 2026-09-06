@@ -22,7 +22,8 @@ const DEFAULTS = [
   'Company_ValleyFoods_MfgOrderView.html',
   'Company_ValleyFoods_MfgOrders.html',
   'Company_ValleyFoods_Purchasing.html',
-  'Company_ValleyFoods_Sales.html'
+  'Company_ValleyFoods_Sales.html',
+  'design_preview/vf_mfg_batch.html'
 ];
 
 const files = process.argv.slice(2);
@@ -36,6 +37,7 @@ targets.forEach(function (rel) {
     return;
   }
   const src = fs.readFileSync(abs, 'utf8');
+  const isTemplate = rel.split('\\').join('/').indexOf('design_preview/') === -1;
   const re = /<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/gi;
   let m, n = 0, bad = 0;
   while ((m = re.exec(src)) !== null) {
@@ -43,8 +45,10 @@ targets.forEach(function (rel) {
     /* Apps Script templating: <?= x ?> / <?!= x ?> / <? ... ?> are substituted
        server-side before the browser ever sees the page, so they are not JS.
        Replace each with a harmless literal of the same shape so the surrounding
-       real JavaScript can still be parsed. */
-    const body = m[1].replace(/<\?[\s\S]*?\?>/g, '0');
+       real JavaScript can still be parsed.
+       design_preview/ pages are plain HTML opened from disk, never templates —
+       substituting there would mangle their own '<?' string literals. */
+    const body = isTemplate ? m[1].replace(/<\?[\s\S]*?\?>/g, '0') : m[1];
     if (!body.trim()) continue;
     /* Line number of this block's start, so an error points somewhere real. */
     const line = src.slice(0, m.index).split('\n').length;

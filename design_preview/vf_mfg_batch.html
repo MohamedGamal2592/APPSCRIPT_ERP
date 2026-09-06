@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>معاينة — تخصيص الدفعات ومدخلات الخامات (ValleyFoods)</title>
+<style>
+  body { font-family: Cairo, Tahoma, Arial, sans-serif; margin: 0; background: #f5f6f8; color: #1f2937; }
+  .pv-bar { position: sticky; top: 0; z-index: 500; background: #111827; color: #fff; padding: 10px 16px;
+            display: flex; gap: 14px; align-items: center; flex-wrap: wrap; font-size: 13px; }
+  .pv-bar h1 { font-size: 14px; margin: 0 12px 0 0; font-weight: 700; }
+  .pv-bar button { background: #374151; color: #fff; border: 1px solid #4b5563; border-radius: 6px;
+                   padding: 5px 12px; cursor: pointer; font-family: inherit; font-size: 12px; }
+  .pv-bar button.on { background: #059669; border-color: #10b981; }
+  .pv-bar .sep { opacity: .4; }
+  .pv-note { background: #fef3c7; border-bottom: 1px solid #fcd34d; padding: 10px 16px; font-size: 13px; line-height: 1.7; }
+  .pv-err  { background: #fee2e2; border-bottom: 1px solid #fca5a5; padding: 14px 16px; font-size: 13px; line-height: 1.8; }
+  .pv-err code { background: #fff; padding: 2px 6px; border-radius: 4px; border: 1px solid #fca5a5; }
+  .pv-wrap { padding: 16px; max-width: 1200px; margin: 0 auto; }
+  .pv-hidden { display: none; }
+</style>
+</head>
+<body>
+
+<div class="pv-bar">
+  <h1>معاينة ValleyFoods — الدفعات والخامات</h1>
+  <button id="pv-cost" class="on">صلاحية التكاليف: مفعّلة</button>
+  <span class="sep">|</span>
+  <button data-scenario="empty">خامة فارغة</button>
+  <button data-scenario="qty">خامة بكمية بدون دفعات</button>
+  <button data-scenario="fifo" class="on">مخصصة بالكامل (FIFO)</button>
+  <button data-scenario="partial">دفعة مختارة يدوياً (نقص)</button>
+  <span class="sep">|</span>
+  <button id="pv-reload">إعادة التحميل</button>
+</div>
+
+<div class="pv-note">
+  صفحة معاينة محلية — لا تتصل بأي خادم ولا تكتب أي بيانات. تُحمّل <b>الملفات الحقيقية</b>
+  <code>UI_Components.html</code> و<code>CSS_Tokens.html</code> و<code>Company_ValleyFoods_MfgOrderView.html</code>
+  من جذر المشروع، مع بيانات وهمية بدل استدعاءات الخادم. اضغط <b>+ دفعة</b> لفتح نافذة تخصيص الدفعات.
+</div>
+
+<div id="pv-error" class="pv-err pv-hidden"></div>
+
+<div class="pv-wrap">
+  <div id="vf-mo-view"></div>
+</div>
+
+<script>
+/* ────────────────────────────────────────────────────────────────────────────
+ * This preview loads the REAL shared files and the REAL manufacturing page,
+ * never copies of them, so it cannot drift away from what ships. That means it
+ * has to read three files off disk, and browsers refuse file:// reads from a
+ * file:// page. If you opened this by double-clicking and see the red banner,
+ * serve the repo instead — one command, no install:
+ *
+ *     cd d:\Work\Script && python -m http.server 8000
+ *     then open  http://localhost:8000/design_preview/vf_mfg_batch.html
+ * ──────────────────────────────────────────────────────────────────────────── */
+(function () {
+  'use strict';
+
+  var ROOT = '../';
+  var FILES = ['CSS_Tokens.html', 'UI_Components.html', 'Company_ValleyFoods_MfgOrderView.html'];
+
+  /* ── Fixtures. Batches are oldest-first, as the server returns them. ────── */
+  var BATCHES = [
+    { batch_uid: 'B-001', lot: 'LOT-2026-01-A', current_qty: 500, available: 100, unit_cost: 12.5,  transaction_date: '2026-01-05', unit: 'kg' },
+    { batch_uid: 'B-002', lot: 'LOT-2026-02-B', current_qty: 300, available: 60,  unit_cost: 7.25,  transaction_date: '2026-02-11', unit: 'kg' },
+    { batch_uid: 'B-003', lot: 'LOT-2026-03-C', current_qty: 220, available: 40,  unit_cost: 9.125, transaction_date: '2026-03-02', unit: 'kg' },
+    { batch_uid: 'B-004', lot: 'LOT-2026-04-D', current_qty: 180, available: 75,  unit_cost: 8.0,   transaction_date: '2026-04-19', unit: 'kg' }
+  ];
+
+  var SCENARIOS = {
+    empty:   { product_id: '',    qty: '',  footers: [] },
+    qty:     { product_id: 'P-1', qty: 150, footers: [] },
+    fifo:    { product_id: 'P-1', qty: 150, footers: [
+                 { unique_id: 'F-1', item: 'B-001', item_code: 'LOT-2026-01-A', qty: 100, unit_cost: 12.5 },
+                 { unique_id: 'F-2', item: 'B-002', item_code: 'LOT-2026-02-B', qty: 50,  unit_cost: 7.25 }
+               ] },
+    partial: { product_id: 'P-1', qty: 150, footers: [
+                 { unique_id: 'F-1', item: 'B-004', item_code: 'LOT-2026-04-D', qty: 40, unit_cost: 8.0 }
+               ] }
+  };
+
+  var state = { cost: true, scenario: 'fifo' };
+
+  function strip(o, keys) { keys.forEach(function (k) { delete o[k]; }); return o; }
+
+  /* The server response, shaped exactly as get_valley_mfg_order_detail returns
+     it — including the cost stripping, which is done by DELETING keys. */
+  function detailResponse() {
+    var sc = SCENARIOS[state.scenario];
+    var batches = JSON.parse(JSON.stringify(BATCHES));
+    var footers = JSON.parse(JSON.stringify(sc.footers));
+    var order = {
+      unique_id: 'MO-PREVIEW', transaction_code: 'MO-000123', mo_status: 'Draft',
+      manufacture_date: '2026-09-01', operation_type: 'إنتاج', shift: 'صباحية',
+      produced_product: 'P-9', manufactured_qty: 300, expected_qty: 195, actual_qty: 190,
+      recipe_id: '', manufacture_batch: 'BATCH-09',
+      total_inventory_cost: 1612.5, total_other_cost: 240, total_batch_cost: 1852.5,
+      by_product_nrv_value: 96.25
+    };
+    var outputs = [{
+      unique_id: 'OUT-1', product_id: sc.product_id, product_qty: sc.qty,
+      product_name: sc.product_id ? 'خامة أ (بذور)' : '',
+      cost_unit: 12.35, total_cost: 1852.5, footers: footers, batches: batches
+    }];
+    var workops = [{
+      unique_id: 'WC-1', work_center_sequence: 1, work_center_id: 'WC-A',
+      operation_status: 'Done', start_time: '2026-09-01T08:00:00',
+      end_time: '2026-09-01T12:30:00', actual_hours: 4.5, total_pause_duration: 0,
+      notes: 'تشغيل عادي', work_center_cost: 37.5, total_cost: 168.75
+    }];
+    var byproducts = [{ unique_id: 'BP-1', item: 'P-3', product_name: 'مرافق (نخالة)', qty: 12, transaction_code: 'TC-77', total_cost: 96.25 }];
+
+    if (!state.cost) {
+      strip(order, ['total_inventory_cost', 'total_other_cost', 'total_batch_cost', 'by_product_nrv_value']);
+      outputs.forEach(function (o) {
+        strip(o, ['cost_unit', 'total_cost']);
+        o.footers.forEach(function (f) { strip(f, ['unit_cost', 'total_cost']); });
+        o.batches.forEach(function (b) { strip(b, ['unit_cost']); });
+      });
+      workops.forEach(function (w) { strip(w, ['work_center_cost', 'total_cost']); });
+      byproducts.forEach(function (b) { strip(b, ['total_cost']); });
+    }
+
+    return {
+      status: 'success', is_new: false, can_see_cost: state.cost,
+      recipe_options: [{ value: 'R-1', label: 'وصفة 1', active: true }],
+      product_options: [{ value: 'P-1', label: 'خامة أ (بذور)' }, { value: 'P-2', label: 'خامة ب (زيت)' }, { value: 'P-3', label: 'مرافق (نخالة)' }],
+      work_center_options: [{ value: 'WC-A', label: 'خط التعبئة 1' }, { value: 'WC-B', label: 'خط التعبئة 2' }],
+      enums: { operation_type: ['إنتاج', 'إعادة تشغيل'], shift: ['صباحية', 'مسائية'] },
+      order: order, outputs: outputs, workops: workops, byproducts: byproducts
+    };
+  }
+
+  function batchesResponse() {
+    var b = JSON.parse(JSON.stringify(BATCHES));
+    if (!state.cost) b.forEach(function (x) { delete x.unit_cost; });
+    return { status: 'success', product_id: 'P-1', batches: b };
+  }
+
+  /* ── The shared client layer the page expects. ──────────────────────────── */
+  window.SESSION = { token: 'PREVIEW' };
+  window.scriptUrl = '#';
+  window.API = {
+    getSession: function () { return { token: 'PREVIEW' }; },
+    call: function (action, payload) {
+      var inner = (payload && payload.module_action) || action;
+      return new Promise(function (resolve) {
+        setTimeout(function () {
+          if (inner === 'get_valley_mfg_order_detail') return resolve(detailResponse());
+          if (inner === 'get_valley_product_batches') return resolve(batchesResponse());
+          if (inner === 'get_valley_product_batches_multi') return resolve({ status: 'success', batches_by_product: { 'P-1': batchesResponse().batches } });
+          if (inner === 'save_valley_mfg_order') {
+            window.UIC.toast('معاينة فقط — لم يُحفظ شيء. هذه الصفحة لا تكتب أي بيانات.', 'warning');
+            return resolve({ status: 'success', message: 'معاينة: لم يتم الحفظ' });
+          }
+          resolve({ status: 'success' });
+        }, 60);
+      });
+    }
+  };
+  window.UI = {
+    toast: function (m, t) { if (window.UIC && UIC.toast) UIC.toast(m, t); },
+    showSpinner: function () {}, hideSpinner: function () {},
+    submitOnce: function (el, fn) { fn(); }
+  };
+  window.FMT = {
+    number: function (v) { return (Number(v) || 0).toLocaleString('en-US'); },
+    currency: function (v) { return (Number(v) || 0).toFixed(2); },
+    date: function (v) { return String(v || ''); },
+    escape: function (v) { return String(v == null ? '' : v); }
+  };
+
+  /* ── Load the real files. ───────────────────────────────────────────────── */
+  function fetchText(name) {
+    return fetch(ROOT + name, { cache: 'no-store' }).then(function (r) {
+      if (!r.ok) throw new Error(name + ' → HTTP ' + r.status);
+      return r.text();
+    });
+  }
+
+  function scriptBodies(html) {
+    var out = [], re = /<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/gi, m;
+    while ((m = re.exec(html)) !== null) out.push(m[1]);
+    return out;
+  }
+  function styleBlocks(html) {
+    var out = [], re = /<style(?:\s[^>]*)?>([\s\S]*?)<\/style>/gi, m;
+    while ((m = re.exec(html)) !== null) out.push(m[1]);
+    return out;
+  }
+
+  /* Apps Script scriptlets are resolved server-side; supply values here. */
+  function substituteScriptlets(src) {
+    var values = {
+      PAGE_PARAMS: JSON.stringify({ mo: 'MO-PREVIEW', sessionToken: 'PREVIEW' }),
+      IS_SUPER_ADMIN: 'true',
+      COMPANY_LOGO_URL: '',
+      COMPANY_PAGES: '[]',
+      CURRENT_ACTION: 'vf_mfg_order',
+      USER_PAGES: 'null'
+    };
+    return src.split('\n').map(function (line) {
+      if (line.indexOf('<?') === -1) return line;
+      var decl = line.match(/var\s+([A-Za-z0-9_]+)\s*=/);
+      var name = decl ? decl[1] : null;
+      var val = (name && Object.prototype.hasOwnProperty.call(values, name)) ? values[name] : 'null';
+      var quoted = /'[^']*<\?/.test(line);
+      return line.replace(/<\?[\s\S]*?\?>/g, quoted ? String(val).replace(/^'|'$/g, '') : val);
+    }).join('\n');
+  }
+
+  function run(code, label) {
+    var el = document.createElement('script');
+    el.textContent = code;
+    el.setAttribute('data-from', label);
+    document.body.appendChild(el);
+  }
+
+  function showError(err) {
+    var box = document.getElementById('pv-error');
+    box.className = 'pv-err';
+    box.innerHTML =
+      '<b>تعذّر تحميل الملفات المشتركة الحقيقية.</b><br>' +
+      'المتصفحات تمنع قراءة الملفات المجاورة عند فتح الصفحة بنقرة مزدوجة (<code>file://</code>). ' +
+      'هذه الصفحة تُحمّل <code>UI_Components.html</code> و<code>CSS_Tokens.html</code> ' +
+      'و<code>Company_ValleyFoods_MfgOrderView.html</code> الحقيقية — ولا تحتفظ بنسخ منها — لذلك يلزم تشغيل خادم محلي بسيط:<br><br>' +
+      '<code>cd d:\\Work\\Script</code><br>' +
+      '<code>python -m http.server 8000</code><br><br>' +
+      'ثم افتح: <code>http://localhost:8000/design_preview/vf_mfg_batch.html</code><br><br>' +
+      '<span style="opacity:.75">التفصيل الفني: ' + String(err && err.message || err) + '</span>';
+  }
+
+  var pageSource = null;
+
+  function boot() {
+    return Promise.all(FILES.map(fetchText)).then(function (texts) {
+      /* CSS_Tokens: styles and any <link> it carries. */
+      styleBlocks(texts[0]).forEach(function (css) {
+        var st = document.createElement('style');
+        st.textContent = css;
+        document.head.appendChild(st);
+      });
+      var linkRe = /<link\b[^>]*>/gi, lm;
+      while ((lm = linkRe.exec(texts[0])) !== null) {
+        var holder = document.createElement('div');
+        holder.innerHTML = lm[0];
+        if (holder.firstChild) document.head.appendChild(holder.firstChild);
+      }
+      /* UI_Components: the real component library. Its own CSS is injected by a
+         self-executing block inside that script, so running it is enough. */
+      scriptBodies(texts[1]).forEach(function (js, i) { run(js, 'UI_Components#' + i); });
+      pageSource = texts[2];
+      render();
+    }).catch(showError);
+  }
+
+  var loadedOnce = false;
+  function render() {
+    document.getElementById('vf-mo-view').innerHTML = '';
+    if (!loadedOnce) {
+      scriptBodies(pageSource).forEach(function (js, i) {
+        run(substituteScriptlets(js), 'MfgOrderView#' + i);
+      });
+      loadedOnce = true;
+    }
+    if (window.MFGVIEW_PAGE) window.MFGVIEW_PAGE.load();
+  }
+
+  /* ── Controls ──────────────────────────────────────────────────────────── */
+  document.getElementById('pv-cost').addEventListener('click', function () {
+    state.cost = !state.cost;
+    this.className = state.cost ? 'on' : '';
+    this.textContent = 'صلاحية التكاليف: ' + (state.cost ? 'مفعّلة' : 'غير مفعّلة');
+    render();
+  });
+  Array.prototype.forEach.call(document.querySelectorAll('[data-scenario]'), function (b) {
+    b.addEventListener('click', function () {
+      state.scenario = b.getAttribute('data-scenario');
+      Array.prototype.forEach.call(document.querySelectorAll('[data-scenario]'), function (x) { x.className = ''; });
+      b.className = 'on';
+      render();
+    });
+  });
+  document.getElementById('pv-reload').addEventListener('click', render);
+
+  boot();
+})();
+</script>
+</body>
+</html>
