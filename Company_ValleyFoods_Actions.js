@@ -1168,7 +1168,15 @@ const ValleyFoodsHRModules = (function () {
     roles.forEach(function (r) { roleMap[r.value] = r; });
     var _allRows = getAllRecords_(dbId, EMP_DEDUCTIONS_SHEET);
     var limit = Number(data && data.limit) || 10;
-    var rows = _allRows.slice().reverse().map(function (r) {
+    // Phase 12 — same transformation as 7.1: order is computed on an index array
+    // first, so reverse().slice(0, limit) keeps its exact semantics while only the
+    // visible rows are mapped. The slice stays ON THE INDEX ARRAY, which is what
+    // makes a negative, fractional, string or NaN limit behave identically.
+    var _order = [];
+    for (var _i = _allRows.length - 1; _i >= 0; _i--) _order.push(_i);
+    if (!data || !data.loadAll) _order = _order.slice(0, limit);
+    var rows = _order.map(function (idx) {
+      var r = _allRows[idx];
       var role = roleMap[r.deduction_type] || {};
       return {
         unique_id: r.unique_id, emp_id: r.emp_id, name_ar: r.name_ar,
@@ -1181,7 +1189,6 @@ const ValleyFoodsHRModules = (function () {
       };
     });
     var total = _allRows.length;
-    if (!data || !data.loadAll) rows = rows.slice(0, limit);
     return { status: 'success', rows: rows, total: total, employee_options: getActiveEmployeeOptions_(dbId), role_options: roles };
   }
 
@@ -1597,7 +1604,12 @@ const ValleyFoodsHRModules = (function () {
     roles.forEach(function (r) { roleMap[r.value] = r; });
     var _allOT = getAllRecords_(dbId, EMP_OVERTIME_SHEET);
     var limit = Number(data && data.limit) || 10;
-    var rows = _allOT.slice().reverse().map(function (r) {
+    // Phase 12 — slice before mapping; see getDeductionsData_.
+    var _order = [];
+    for (var _i = _allOT.length - 1; _i >= 0; _i--) _order.push(_i);
+    if (!data || !data.loadAll) _order = _order.slice(0, limit);
+    var rows = _order.map(function (idx) {
+      var r = _allOT[idx];
       var role = roleMap[r.overtime_type] || {};
       return {
         unique_id: r.unique_id, emp_id: r.emp_id, name_ar: r.name_ar,
@@ -1610,7 +1622,6 @@ const ValleyFoodsHRModules = (function () {
       };
     });
     var total = _allOT.length;
-    if (!data || !data.loadAll) rows = rows.slice(0, limit);
     return { status: 'success', rows: rows, total: total, employee_options: getActiveEmployeeOptions_(dbId), role_options: roles };
   }
 
