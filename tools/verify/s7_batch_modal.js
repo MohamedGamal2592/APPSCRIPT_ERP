@@ -302,8 +302,22 @@ function originalFifo(batches, qty) {
   {
     check(VIEW.indexOf("UIC.openModal('vf-batch-modal'") !== -1, 'built on UIC.openModal');
     check(VIEW.indexOf("size: 'lg'") !== -1, "with size: 'lg'");
+    /* STRENGTHENED by the UI/UX run, step 3.4 (U-24).
+     *
+     * This used to assert `overlays > 0` — "the batch modal did not add a
+     * SECOND bespoke overlay; the one that was already here is still the only
+     * one". That was the right guard at the time.
+     *
+     * The page-local overlay has since been removed entirely: showLoading and
+     * hideLoading now delegate to the single shared loading service, so there
+     * is no bespoke overlay on this page at all. The assertion is therefore
+     * inverted to the STRONGER statement rather than deleted. */
     const overlays = (VIEW.match(/vf-loading-overlay/g) || []).length;
-    check(overlays > 0, 'the one pre-existing overlay is still the only bespoke one');
+    check(overlays === 0, 'no bespoke loading overlay is built on this page at all');
+    check(/function showLoading[\s\S]{0,200}UIC\.showPageLoading/.test(VIEW),
+      'showLoading delegates to the one shared loading service');
+    check(/function hideLoading[\s\S]{0,200}UIC\.hidePageLoading/.test(VIEW),
+      'hideLoading delegates to the one shared loading service');
     check(!/vf-batch-modal[\s\S]{0,400}max-width:\s*\d/.test(VIEW), 'no hardcoded width on the modal');
     check(VIEW.indexOf('#875A7B') === -1 || (VIEW.match(/#875A7B/g) || []).length === 1,
       'no second hardcoded-colour spinner was added');

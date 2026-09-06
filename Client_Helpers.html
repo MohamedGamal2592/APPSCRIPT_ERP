@@ -173,45 +173,50 @@ API.clearSession = function () {
   localStorage.removeItem('erp_session');
 };
 
-var _spinnerTimer_ = null;
-
+/* ── [UI-3.4 / U-24] One loading overlay, one notification path ──────────
+ *
+ * UI.showSpinner is called from 80 pages, so the NAME and the SIGNATURE are a
+ * public contract and do not change. The implementation moved: it is now a thin
+ * wrapper over UIC.showPageLoading, which is the single loading service.
+ *
+ * The rotating-message behaviour is preserved — passing an array still cycles
+ * the lines every 2.5 seconds — because several long saves rely on it. That
+ * loop now lives in UIC._loadMessage rather than being duplicated here.
+ *
+ * The overlay's markup and CSS are the ones that used to live in this file:
+ * they were the only ones of the four written against the token layer, so they
+ * became the canonical look rather than the one that was hardest to theme. */
 UI.showSpinner = function (message) {
-  var existing = document.getElementById('app-spinner');
-  if (existing) existing.remove();
-  if (_spinnerTimer_) { clearInterval(_spinnerTimer_); _spinnerTimer_ = null; }
-
-  var messages = Array.isArray(message) ? message : [message || 'جاري التحميل...'];
-  var initialMsg = messages[0] || 'جاري التحميل...';
-
-  var div = document.createElement('div');
-  div.id = 'app-spinner';
-  div.className = 'spinner-overlay';
-  div.innerHTML =
-    '<div class="spinner-box">' +
-      '<div class="spinner"></div>' +
-      '<div class="spinner-msg">' + initialMsg + '</div>' +
-    '</div>';
-  document.body.appendChild(div);
-
-  if (messages.length > 1) {
-    var idx = 0;
-    var msgEl = div.querySelector('.spinner-msg');
-    _spinnerTimer_ = setInterval(function () {
-      idx++;
-      if (idx < messages.length) {
-        if (msgEl) msgEl.textContent = messages[idx];
-      } else {
-        clearInterval(_spinnerTimer_);
-        _spinnerTimer_ = null;
-      }
-    }, 2500);
-  }
+  try { UIC.showPageLoading(message); } catch (e) {}
 };
 
 UI.hideSpinner = function () {
-  if (_spinnerTimer_) { clearInterval(_spinnerTimer_); _spinnerTimer_ = null; }
-  var el = document.getElementById('app-spinner');
-  if (el) el.remove();
+  try { UIC.hidePageLoading(); } catch (e) {}
+};
+
+/* [UI-3.4] UI.toast and UI.alert did not exist, and that was a real defect —
+ * found by tools/ui_check.js check C3 during the Phase 0 baseline and recorded
+ * as N-01 and N-02 in UI_BASELINE.md.
+ *
+ *   N-01  Company_ValleyFoods_MfgOrderView.html calls UI.toast 40 times, every
+ *         call guarded as `UI.toast && UI.toast(...)`. Nothing threw, and every
+ *         success and error message on the manufacturing order page was
+ *         silently discarded. A user saving a manufacturing order got no
+ *         confirmation and no error text at all.
+ *   N-02  DbLive_Viewer.html calls UI.alert 9 times, UNGUARDED, all on error
+ *         paths — so the page threw `UI.alert is not a function` at exactly the
+ *         moment it was trying to report a problem.
+ *
+ * Both are fixed additively: two new names on an existing namespace, delegating
+ * to components that already exist. Nothing is renamed or removed. */
+UI.toast = function (message, type) {
+  try { UIC.toast(message, type); }
+  catch (e) { try { console.warn('toast: ' + message); } catch (e2) {} }
+};
+
+UI.alert = function (message) {
+  try { UIC.toast(message, 'error'); }
+  catch (e) { try { console.warn('alert: ' + message); } catch (e2) {} }
 };
 
 /* Batch 10: guard a submit button against double-clicks / double-submits.
@@ -291,10 +296,10 @@ FMT.escape = function (v) {
 (function () {
   var css = `
   /* ── Spinner overlay ─────────────────────────────────── */
-  .spinner-overlay { position: fixed; inset: 0; background: rgba(17,24,39,.4); display: flex; align-items: center; justify-content: center; z-index: 1500; }
-  .spinner-box { display: flex; flex-direction: column; align-items: center; gap: 12px; background: var(--bg-surface); padding: 24px 32px; border-radius: var(--radius-md); box-shadow: var(--shadow-lg); max-width: 90vw; }
-  .spinner { width: 32px; height: 32px; border: 3px solid var(--brand-border); border-top-color: var(--brand-primary); border-radius: 50%; animation: erp-spin 0.8s linear infinite; will-change: transform; }
-  .spinner-msg { font-size: 13px; color: var(--text-muted); text-align: center; }
+  /* [UI-3.4 / U-24] .spinner-overlay / .spinner-box / .spinner / .spinner-msg
+     moved to UI_Components.html with the implementation, so the one loading
+     service carries its own styles and every page gets them whether or not it
+     includes this file. */
   @keyframes erp-spin { to { transform: rotate(360deg); } }
 
   /* ── Mobile input zoom prevention ───────────────────── */

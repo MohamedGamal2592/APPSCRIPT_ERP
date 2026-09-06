@@ -34,7 +34,8 @@ const STEPS = [
   ['ui2_themes.js', 'UI-2.4/2.5/2.6 — neutral canvas, brand topbar, per company'],
   ['ui2_breakpoints.js', 'UI-2.9b — the five-tier breakpoint scale (U-48)'],
   ['ui2_formatters.js', 'UI-2.8 — formatter consolidation, differential (D-4)'],
-  ['ui3_kebab.js', 'UI-3.3 — the row action kebab (U-20)']
+  ['ui3_kebab.js', 'UI-3.3 — the row action kebab (U-20)'],
+  ['ui3_loading.js', 'UI-3.4 — one loading overlay, UI.toast/UI.alert (U-24)']
 ];
 
 /* Two programmes share this repo and this runner, so a step's file can be

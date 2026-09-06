@@ -60,22 +60,12 @@
   (function () {
     var ORDERS = [], RECIPE_OPTIONS = [], PRODUCT_OPTIONS = [], ENUMS = {};
 
-    function showLoading(msg) {
-      var el = document.getElementById('vf-loading-overlay');
-      if (!el) {
-        el = document.createElement('div');
-        el.id = 'vf-loading-overlay';
-        el.style.cssText = 'position:fixed;inset:0;z-index:99999;display:none;align-items:center;justify-content:center;background:rgba(255,255,255,0.78);direction:rtl;';
-        el.innerHTML = '<div style="background:var(--bg-surface, #fff);border:1px solid #e3e3e3;border-radius:12px;padding:22px 30px;box-shadow:0 6px 24px rgba(0,0,0,0.12);display:flex;flex-direction:column;align-items:center;gap:12px;">' +
-          '<div style="width:34px;height:34px;border:4px solid var(--border-color, #eee);border-top-color:#875A7B;border-radius:50%;animation:vfspin 0.8s linear infinite;"></div>' +
-          '<div id="vf-loading-msg" style="font-family:Tahoma;color:#444;font-size:14px;">جاري التحميل…</div></div>';
-        var st = document.createElement('style'); st.textContent = '@keyframes vfspin{to{transform:rotate(360deg)}}'; document.head.appendChild(st);
-        document.body.appendChild(el);
-      }
-      var m = document.getElementById('vf-loading-msg'); if (m && msg) m.textContent = msg;
-      el.style.display = 'flex';
-    }
-    function hideLoading() { var el = document.getElementById('vf-loading-overlay'); if (el) el.style.display = 'none'; }
+    /* [UI-3.4 / U-24] Delegates to the one shared loading service. This was the
+       second of two page-local overlays in ValleyFoods, both with the same
+       hardcoded #875A7B spinner — a colour belonging to no company here. The
+       local names are kept so this page's call sites are untouched. */
+    function showLoading(msg) { try { UIC.showPageLoading(msg || 'جاري التحميل…'); } catch (e) {} }
+    function hideLoading() { try { UIC.hidePageLoading(true); } catch (e) {} }
 
     function tabBtn(paneId, label, active) {
       return '<button type="button" class="btn ' + (active ? 'btn-primary' : 'btn-outline') + '" style="padding:6px 16px;font-size:12px;" onclick="MFG_PAGE.switchTab(\'' + paneId + '\')">' + label + '</button>';

@@ -366,32 +366,94 @@ UIC.navTo = function (ev, href) {
   window.location.href = href;
 };
 
-/* ── Full-screen page-loading overlay (seamless navigation) ───────────────── */
+/* ── [UI-3.4 / U-24] The ONE loading overlay ──────────────────────────────
+ *
+ * There were four implementations, each with its own look:
+ *   UI.showSpinner      #app-spinner, a token-styled card — the best of them
+ *   UIC.showPageLoading #page-loading, hardcoded #4a90d9 on rgba(255,255,255,.6)
+ *   ERPFlow.start       #erp-flow-overlay, on the 3 pages that include ERP_Flow
+ *   two page-local overlays in ValleyFoods, one with a hardcoded #875A7B spinner
+ *
+ * So the same action showed a different spinner depending on which page you were
+ * on, and on the three ERP_Flow pages TWO overlays fired on a single navigation.
+ *
+ * There is now one element, one markup, one stylesheet, and everything else
+ * delegates. The markup and CSS kept are the ones from UI.showSpinner, because
+ * they were already written against the token layer — the other three were not.
+ *
+ * Ref-counted: nested callers (a page starts a save while a navigation overlay
+ * is already up) do not hide each other's overlay. The count is clamped at zero
+ * so a stray hide, such as the boot watchdog below, can never make it negative
+ * and strand the overlay on screen forever.
+ */
+UIC._loadCount = 0;
+UIC._loadTimer = null;
+
 UIC.ensurePageLoading = function () {
   if (document.getElementById('page-loading')) return;
   var st = document.createElement('style');
-  st.textContent = '#page-loading{position:fixed;inset:0;z-index:99999;display:none;align-items:center;justify-content:center;background:rgba(255,255,255,.6);direction:rtl;}' +
+  st.textContent =
+    '#page-loading{position:fixed;inset:0;z-index:1500;display:none;align-items:center;justify-content:center;background:rgba(17,24,39,.4);}' +
     '#page-loading.show{display:flex;}' +
-    '#page-loading .pl-card{background:#fff;border-radius:12px;padding:18px 26px;box-shadow:0 8px 30px rgba(0,0,0,.15);display:flex;flex-direction:column;align-items:center;gap:10px;}' +
-    '#page-loading .pl-spin{width:34px;height:34px;border:4px solid #eee;border-top-color:#4a90d9;border-radius:50%;animation:plspin .8s linear infinite;}' +
-    '@keyframes plspin{to{transform:rotate(360deg);}}' +
-    '#page-loading .pl-msg{font-family:inherit;color:#444;font-size:14px;}';
+    '.spinner-box{display:flex;flex-direction:column;align-items:center;gap:12px;background:var(--bg-surface,#fff);padding:24px 32px;border-radius:var(--radius-md,8px);box-shadow:var(--shadow-lg,0 10px 30px rgba(0,0,0,.12));max-width:90vw;}' +
+    '.spinner{width:32px;height:32px;border:3px solid var(--brand-border,#e5e7eb);border-top-color:var(--brand-primary,#111827);border-radius:50%;animation:erp-spin .8s linear infinite;will-change:transform;}' +
+    '.spinner-msg{font-size:var(--text-sm,13px);color:var(--text-muted,#5b6572);text-align:center;}' +
+    '@keyframes erp-spin{to{transform:rotate(360deg);}}' +
+    /* Someone who has asked for reduced motion gets a pulse, not a spin. */
+    '@media (prefers-reduced-motion: reduce){.spinner{animation:none;opacity:.6;}}';
   document.head.appendChild(st);
   var d = document.createElement('div');
   d.id = 'page-loading';
-  d.innerHTML = '<div class="pl-card"><div class="pl-spin"></div><div class="pl-msg">جاري التحميل...</div></div>';
+  d.className = 'spinner-overlay';
+  d.setAttribute('role', 'status');
+  d.setAttribute('aria-live', 'polite');
+  d.innerHTML = '<div class="spinner-box"><div class="spinner"></div>' +
+    '<div class="spinner-msg">جاري التحميل...</div></div>';
   document.body.appendChild(d);
 };
+
+/** Set the visible message. `msg` may be a string or an array to cycle through. */
+UIC._loadMessage = function (msg) {
+  var d = document.getElementById('page-loading');
+  if (!d) return;
+  var m = d.querySelector('.spinner-msg');
+  if (!m) return;
+  if (UIC._loadTimer) { clearInterval(UIC._loadTimer); UIC._loadTimer = null; }
+  var list = Array.isArray(msg) ? msg.filter(Boolean) : (msg ? [msg] : []);
+  if (!list.length) return;
+  m.textContent = list[0];
+  /* The rotating-message behaviour came from UI.showSpinner and is preserved:
+     long saves showed a sequence of reassuring lines every 2.5s. */
+  if (list.length > 1) {
+    var i = 0;
+    UIC._loadTimer = setInterval(function () {
+      i++;
+      if (i < list.length) { m.textContent = list[i]; }
+      else { clearInterval(UIC._loadTimer); UIC._loadTimer = null; }
+    }, 2500);
+  }
+};
+
 UIC.showPageLoading = function (msg) {
   try {
     UIC.ensurePageLoading();
+    UIC._loadCount++;
     var d = document.getElementById('page-loading');
-    if (msg) { var m = d.querySelector('.pl-msg'); if (m) m.textContent = msg; }
+    UIC._loadMessage(msg);
     d.classList.add('show');
+    d.setAttribute('aria-busy', 'true');
   } catch (e) {}
 };
-UIC.hidePageLoading = function () {
-  try { var d = document.getElementById('page-loading'); if (d) d.classList.remove('show'); } catch (e) {}
+
+/** hide(true) drops the overlay regardless of the ref count. */
+UIC.hidePageLoading = function (force) {
+  try {
+    UIC._loadCount = force ? 0 : Math.max(0, UIC._loadCount - 1);
+    if (UIC._loadCount > 0) return;
+    if (UIC._loadTimer) { clearInterval(UIC._loadTimer); UIC._loadTimer = null; }
+    var d = document.getElementById('page-loading');
+    if (d) { d.classList.remove('show'); d.setAttribute('aria-busy', 'false'); }
+  } catch (e) {}
 };
 UIC.withPageLoading = function (promise, msg) {
   UIC.showPageLoading(msg || 'جاري التحميل...');
@@ -433,7 +495,12 @@ UIC.ensureHomeLogo = function () {
       UIC.showPageLoading('جاري التحميل...');
       var hide = function () { try { UIC.hidePageLoading(); } catch (e) {} };
       window.addEventListener('load', hide);
-      setTimeout(hide, 6000);
+      /* [UI-3.4] The watchdog FORCES the overlay down. Now that the service is
+         ref-counted, a page that started its own load during boot would
+         otherwise leave the count above zero and strand the overlay on screen
+         with no way for the user to dismiss it. A stuck full-screen overlay is
+         a far worse failure than a spinner that vanishes half a second early. */
+      setTimeout(function () { try { UIC.hidePageLoading(true); } catch (e) {} }, 6000);
     } catch (e) {}
   };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);

@@ -84,7 +84,7 @@
 
     (function () {
       var UI = (typeof UIC !== 'undefined') ? UIC : { toast: function (m) { alert(m); } };
-      (function () { var ps = document.createElement('style'); ps.textContent = '.odoo-neg{color:#c0392b;font-weight:600;}@media print{.odoo-bar,#vf-loading-overlay,.btn{display:none!important;}.odoo-card{break-inside:avoid;}.odoo-wrap{padding:0!important;}}'; if (document.head) document.head.appendChild(ps); })();
+      (function () { var ps = document.createElement('style'); ps.textContent = '.odoo-neg{color:#c0392b;font-weight:600;}@media print{.odoo-bar,#page-loading,.btn{display:none!important;}.odoo-card{break-inside:avoid;}.odoo-wrap{padding:0!important;}}'; if (document.head) document.head.appendChild(ps); })();
       var root = function () { return document.getElementById('vf-mo-view') || document.getElementById('vf-root'); };
 
       var MO_UID = (PAGE_PARAMS && PAGE_PARAMS.mo) ? String(PAGE_PARAMS.mo) : '';
@@ -115,23 +115,14 @@
       function fmtDateTime(v) { if (!v) return '—'; try { var d = (v instanceof Date) ? v : new Date(v); if (isNaN(d.getTime())) return String(v); var p = function (n) { return n < 10 ? '0' + n : '' + n; }; return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes()); } catch (e) { return String(v); } }
       function disOpt() { return editable() ? null : { disabled: true }; }
 
-      /* ---------- loading overlay (popup so the user knows it is working) ---------- */
-      function showLoading(msg) {
-        var el = document.getElementById('vf-loading-overlay');
-        if (!el) {
-          el = document.createElement('div');
-          el.id = 'vf-loading-overlay';
-          el.style.cssText = 'position:fixed;inset:0;z-index:99999;display:none;align-items:center;justify-content:center;background:rgba(255,255,255,0.78);direction:rtl;';
-          el.innerHTML =             '<div style="background:var(--bg-surface, #fff);border:1px solid #e3e3e3;border-radius:12px;padding:22px 30px;box-shadow:0 6px 24px rgba(0,0,0,0.12);display:flex;flex-direction:column;align-items:center;gap:12px;">' +
-            '<div style="width:34px;height:34px;border:4px solid var(--border-color, #eee);border-top-color:#875A7B;border-radius:50%;animation:vfspin 0.8s linear infinite;"></div>' +
-            '<div id="vf-loading-msg" style="font-family:Tahoma;color:#444;font-size:14px;">جاري التحميل…</div></div>';
-          var st = document.createElement('style'); st.textContent = '@keyframes vfspin{to{transform:rotate(360deg)}}'; document.head.appendChild(st);
-          document.body.appendChild(el);
-        }
-        var m = document.getElementById('vf-loading-msg'); if (m && msg) m.textContent = msg;
-        el.style.display = 'flex';
-      }
-      function hideLoading() { var el = document.getElementById('vf-loading-overlay'); if (el) el.style.display = 'none'; }
+      /* ---------- loading overlay ----------
+         [UI-3.4 / U-24] Delegates to the one shared loading service. This page
+         used to build its own full-screen overlay with a hardcoded #875A7B
+         spinner — a colour belonging to no company in this app — which made it
+         the fourth distinct loading look in the product. The local NAMES are
+         kept so the ~10 call sites on this page are untouched. */
+      function showLoading(msg) { try { UIC.showPageLoading(msg || 'جاري التحميل…'); } catch (e) {} }
+      function hideLoading() { try { UIC.hidePageLoading(true); } catch (e) {} }
       function getV_(id) { var el = document.getElementById(id); return el ? el.value.trim() : ''; }
       function getCombo_(id) { var el = document.getElementById(id); return el ? el.value : ''; }
 

@@ -1,63 +1,62 @@
 <style>
-/* ERP_Flow — step-transition loader (§3.8). Theme tokens only, no hardcoded company colors. */
-#erp-flow-overlay{position:fixed;inset:0;z-index:99995;display:none;align-items:center;justify-content:center;background:rgba(255,255,255,.72);backdrop-filter:blur(2px);direction:rtl;opacity:0;transition:opacity 200ms ease;}
-#erp-flow-overlay.show{display:flex;opacity:1;}
-#erp-flow-overlay .erp-flow-card{background:var(--bg-surface,#fff);border:1px solid var(--border-color,#e5e7eb);border-radius:16px;padding:22px 28px;box-shadow:var(--shadow-lg,0 10px 30px rgba(0,0,0,.12));display:flex;flex-direction:column;align-items:center;gap:12px;min-width:220px;max-width:90vw;}
-#erp-flow-overlay .erp-flow-spin{width:36px;height:36px;border:4px solid var(--brand-border,#fecaca);border-top-color:var(--brand-primary,#D62828);border-radius:50%;animation:erpFlowSpin .8s linear infinite;}
-@keyframes erpFlowSpin{to{transform:rotate(360deg);}}
-#erp-flow-overlay .erp-flow-label{font-size:14px;color:var(--text-main,#111827);font-weight:700;text-align:center;}
-#erp-flow-overlay .erp-flow-shimmer{width:120px;height:3px;border-radius:999px;background:linear-gradient(90deg, transparent, var(--brand-primary,#D62828), transparent);background-size:200% 100%;animation:erpFlowShimmer 1.2s ease-in-out infinite;opacity:.7;}
-@keyframes erpFlowShimmer{0%{background-position:-100% 0}100%{background-position:200% 0}}
+/* ERP_Flow — step-transition loader.
+ *
+ * [UI-3.4 / U-24] The overlay this partial used to draw is GONE. It was the
+ * third of four different loading overlays in the app, and on the three pages
+ * that include this file a single navigation fired two of them at once: this
+ * one, from the auto-wired click handler below, and UIC.showPageLoading, from
+ * UIC.navTo. Both now go to the one service in UI_Components.html.
+ *
+ * What remains here is the content ENTRANCE animation, which is this partial's
+ * own idea and belongs to nothing else. */
 .erp-flow-enter{animation:erpFlowEnter 180ms ease-out;}
 @keyframes erpFlowEnter{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+@media (prefers-reduced-motion: reduce){.erp-flow-enter{animation:none;}}
 </style>
-<div id="erp-flow-overlay" role="status" aria-live="polite" aria-busy="false" aria-label="جاري التحميل">
-  <div class="erp-flow-card">
-    <div class="erp-flow-spin" aria-hidden="true"></div>
-    <div class="erp-flow-label">جاري التحميل...</div>
-    <div class="erp-flow-shimmer" aria-hidden="true"></div>
-  </div>
-</div>
 <script>
 window.ERPFlow = window.ERPFlow || (function(){
-  var overlay = null, refCount = 0, startAt = 0, minMs = (typeof ERP_FLOW_MIN_MS !== 'undefined' ? ERP_FLOW_MIN_MS : 600);
+  var refCount = 0, startAt = 0, minMs = (typeof ERP_FLOW_MIN_MS !== 'undefined' ? ERP_FLOW_MIN_MS : 600);
   // allow server to inject numeric via template if needed; fallback to global CONFIG value
   try { if (window.ERP_FLOW_MIN_MS) minMs = window.ERP_FLOW_MIN_MS; } catch(e){}
-  function el(){ if(!overlay) overlay = document.getElementById('erp-flow-overlay'); return overlay; }
+
+  /* [UI-3.4] Delegates to the one loading service. ERPFlow keeps its OWN ref
+     count and its minimum-visible-time rule, because those are its behaviour —
+     it is what stops the overlay flashing on a fast transition — but it no
+     longer owns an overlay of its own. */
   function start(labelAr){
-    var o = el(); if(!o) return;
     refCount++;
     if (refCount === 1) startAt = Date.now();
-    var lab = o.querySelector('.erp-flow-label');
-    if (lab && labelAr) lab.textContent = labelAr;
-    o.classList.add('show');
-    o.setAttribute('aria-busy','true');
-    // content entrance motion lives on #app-content or main — add class if present
+    try { UIC.showPageLoading(labelAr || 'جاري التحميل...'); } catch(e){}
     try { var c = document.getElementById('app-content') || document.querySelector('.app-content'); if (c) c.classList.remove('erp-flow-enter'); } catch(e){}
   }
+
   function finish(){
-    var o = el(); if(!o) return;
     refCount = Math.max(0, refCount - 1);
-    if (refCount !== 0) return; // nested/parallel starts keep overlay until last finish
+    if (refCount !== 0) return; // nested/parallel starts keep the overlay until the last finish
     var elapsed = Date.now() - startAt;
     var wait = Math.max(0, minMs - elapsed);
     setTimeout(function(){
-      o.classList.remove('show');
-      o.setAttribute('aria-busy','false');
+      /* Forced: the auto-wire below can raise the shared service's count for a
+         navigation that then never calls finish(), and a stuck full-screen
+         overlay is worse than a spinner that leaves slightly early. */
+      try { UIC.hidePageLoading(true); } catch(e){}
       try {
         var c = document.getElementById('app-content') || document.querySelector('.app-content');
         if (c) { void c.offsetWidth; c.classList.add('erp-flow-enter'); }
       } catch(e){}
-    }, wait + 200); // +200 fade
+    }, wait + 200);
   }
-  // Auto-wire navigation clicks to show loader (§3.8 Mandatory coverage)
+
+  /* Auto-wire navigation clicks. Kept, because not every in-app link goes
+     through UIC.navTo — page-authored anchors do not — and without this those
+     navigations would show nothing at all. It is now harmless alongside navTo:
+     both raise the same single overlay rather than stacking two. */
   function wireNavLoader(){
     document.addEventListener('click', function(e){
       var a = e.target && e.target.closest ? e.target.closest('a[href*="?action="]') : null;
       if (!a) return;
       var href = a.getAttribute('href')||'';
       if (href.indexOf('?action=') === -1) return;
-      // Don't show for hash-only or same-page anchors
       try { start('جاري التحميل...'); } catch(e){}
     }, true);
   }
