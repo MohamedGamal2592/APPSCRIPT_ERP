@@ -899,6 +899,115 @@ const AssessmentCenter = (function () {
   }
   publicRegister('add_ac_candidate_submission', addAcCandidateSubmission_);
 
+  // ── §5.5/Phase 6 — review ────────────────────────────────────────────────────
+  function getAcResults_(data, user, dbId) {
+    const batchByPk = acByPk_(dbId, BATCHES_SHEET, 'BatchID').byPk;
+    const assessByPk = acByPk_(dbId, ASSESSMENTS_SHEET, 'AssessmentID').byPk;
+    const questionsByAssessment = {};
+    acRows_(dbId, QUESTIONS_SHEET).forEach(function (q) {
+      (questionsByAssessment[q.AssessmentID] = questionsByAssessment[q.AssessmentID] || []).push(q);
+    });
+    const responsesByAssignment = {};
+    acRows_(dbId, RESPONSES_SHEET).forEach(function (r) {
+      (responsesByAssignment[r.AssignmentID] = responsesByAssignment[r.AssignmentID] || []).push(r);
+    });
+
+    const rows = acRows_(dbId, ASSIGNMENTS_SHEET)
+      // An un-started Invited row is not a result yet — nothing to review.
+      .filter(function (a) { return a.Status !== 'Invited'; })
+      .map(function (a) {
+        const batch = batchByPk.get(a.BatchID) || {};
+        const assessment = assessByPk.get(a.AssessmentID) || {};
+        const questions = questionsByAssessment[a.AssessmentID] || [];
+        const responses = responsesByAssignment[a.AssignmentID] || [];
+        const scored = acScore_(assessment, questions, responses, []);
+        return {
+          AssignmentID: a.AssignmentID, CompanyName: batch.CompanyName || 'N/A',
+          AssessmentTitle: assessment.Title || 'N/A', CandidateEmail: a.CandidateEmail,
+          StartedAt: a.StartedAt, Status: a.Status,
+          Score: scored.score, Max: scored.max, Verdict: scored.verdict
+        };
+      });
+    return { status: 'success', rows: rows };
+  }
+  register('get_ac_results', getAcResults_);
+
+  function getAcResult_(data, user, dbId) {
+    const id = String((data && data.id) || '').trim();
+    if (!id) throw new Error('AssignmentID مطلوب.');
+    const assignment = acRows_(dbId, ASSIGNMENTS_SHEET).filter(function (a) { return a.AssignmentID === id; })[0];
+    if (!assignment) throw new Error('المحاولة غير موجودة.');
+    const batch = acRows_(dbId, BATCHES_SHEET).filter(function (b) { return b.BatchID === assignment.BatchID; })[0] || {};
+    const assessment = acRows_(dbId, ASSESSMENTS_SHEET).filter(function (a) { return a.AssessmentID === assignment.AssessmentID; })[0] || {};
+    const questions = acRows_(dbId, QUESTIONS_SHEET)
+      .filter(function (q) { return q.AssessmentID === assignment.AssessmentID; })
+      .sort(function (x, y) { return (parseInt(x.OrderIndex, 10) || 0) - (parseInt(y.OrderIndex, 10) || 0); });
+    const responses = acRows_(dbId, RESPONSES_SHEET).filter(function (r) { return r.AssignmentID === id; });
+    const events = acRows_(dbId, AUDIT_SHEET)
+      .filter(function (r) { return String(r.Details || '').indexOf('AssignmentID=' + id) === 0 || String(r.Details || '').indexOf('AssignmentID=' + id + ';') !== -1; })
+      .map(function (r) { return { Action: r.Action, Timestamp: r.Timestamp, Details: r.Details }; });
+
+    const scored = acScore_(assessment, questions, responses, []);
+    const respByQ = {};
+    responses.forEach(function (r) { respByQ[r.QuestionID] = r; });
+    const answers = questions.map(function (q) {
+      const r = respByQ[q.QuestionID];
+      const item = scored.items.filter(function (it) { return it.QuestionID === q.QuestionID; })[0] || {};
+      return {
+        QuestionID: q.QuestionID, QuestionText: q.QuestionText, QuestionType: q.QuestionType,
+        Options: acParseOptions_(q.OptionsJSON), CorrectAnswer: q.CorrectAnswer, Weight: q.Weight,
+        Answer: r ? r.Answer : '', ResponseID: r ? r.ResponseID : null,
+        Score: item.Score, Max: item.Max, Pending: !!item.Pending
+      };
+    });
+
+    return {
+      status: 'success', assignment: assignment, batch: batch, assessment: assessment,
+      answers: answers, traits: scored.traits, verdict: scored.verdict,
+      score: scored.score, max: scored.max, events: events
+    };
+  }
+  register('get_ac_result', getAcResult_);
+
+  /** {assignment_id, grades:[{response_id, score}]} — clamped [0,Weight]. */
+  function addAcCandidateGrade_(data, user, dbId) {
+    const d = data || {};
+    const assignmentId = String(d.assignment_id || '').trim();
+    const grades = Array.isArray(d.grades) ? d.grades : [];
+    if (!assignmentId) throw new Error('AssignmentID مطلوب.');
+    if (!grades.length) throw new Error('لا توجد درجات لحفظها.');
+
+    const assignment = acRows_(dbId, ASSIGNMENTS_SHEET).filter(function (a) { return a.AssignmentID === assignmentId; })[0];
+    if (!assignment) throw new Error('المحاولة غير موجودة.');
+    const questions = acRows_(dbId, QUESTIONS_SHEET).filter(function (q) { return q.AssessmentID === assignment.AssessmentID; });
+    const qById = {}; questions.forEach(function (q) { qById[q.QuestionID] = q; });
+    const respById = {};
+    acRows_(dbId, RESPONSES_SHEET).filter(function (r) { return r.AssignmentID === assignmentId; })
+      .forEach(function (r) { respById[r.ResponseID] = r; });
+
+    const userEmail = (user && user.email) || '';
+    grades.forEach(function (g) {
+      const resp = respById[g.response_id];
+      if (!resp) throw new Error('إجابة غير موجودة: ' + g.response_id);
+      const q = qById[resp.QuestionID];
+      const weight = Number(q && q.Weight) || 0;
+      const score = Math.max(0, Math.min(weight, Number(g.score) || 0));
+      acUpdate_(dbId, RESPONSES_SHEET, 'ResponseID', g.response_id, { Score: score }, userEmail);
+    });
+
+    // Status -> Reviewed once nothing is left ungraded — recomputed fresh,
+    // never assumed, in case another OpenText item is still pending.
+    const freshResponses = acRows_(dbId, RESPONSES_SHEET).filter(function (r) { return r.AssignmentID === assignmentId; });
+    const assessment = acRows_(dbId, ASSESSMENTS_SHEET).filter(function (a) { return a.AssessmentID === assignment.AssessmentID; })[0];
+    const scored = acScore_(assessment, questions, freshResponses, []);
+    if (scored.verdict !== 'Pending' && assignment.Status !== 'Reviewed') {
+      acUpdate_(dbId, ASSIGNMENTS_SHEET, 'AssignmentID', assignmentId, { Status: 'Reviewed' }, userEmail);
+    }
+
+    return { status: 'success', data: { assignedId: assignmentId }, verdict: scored.verdict, message: 'تم حفظ الدرجات بنجاح.' };
+  }
+  register('add_ac_candidate_grade', addAcCandidateGrade_);
+
   // ── §6.4/T-3/T-4 — the write path ──────────────────────────────────────────
   // Never addRecord_ / getNextId_ / saveRecordWithAudit_ against this
   // spreadsheet (R-16/R-17): a lower-case dataMap key would be silently
