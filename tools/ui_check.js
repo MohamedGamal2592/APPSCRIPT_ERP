@@ -512,6 +512,58 @@ check('C10 every component builds without throwing', function (r) {
   else r.detail.push(metrics.components_checked + ' components build from the preview bundle');
 });
 
+/* ── C11 — hazards specific to CSS written inside a JS template literal ─── */
+/* UI_Components.html builds ~500 lines of the design system inside
+ * `const css = ` … ``. Two things inside that string are silently fatal, and
+ * both have actually happened during this programme:
+ *
+ *   a BACKTICK, even inside a CSS /* comment *​/, ends the template literal —
+ *     the rest of the stylesheet is then parsed as JavaScript;
+ *   a SINGLE-BACKSLASH unicode escape such as a bare \\2195 is read as an OCTAL
+ *     escape, which is a SyntaxError in a template string.
+ *
+ * C2 does catch both, but it reports them as "Unexpected identifier 'right'" at
+ * line 1, which points nowhere useful. This names the actual line and says what
+ * to do, so the next person loses seconds rather than minutes.
+ */
+check('C11 template-literal CSS hazards (backticks, octal escapes)', function (r) {
+  const problems = [];
+  S.htmlFiles().forEach(function (f) {
+    const src = S.read(f);
+    const re = /(?:const|var|let)\s+\w*css\w*\s*=\s*`/gi;
+    let m;
+    while ((m = re.exec(src)) !== null) {
+      const startIdx = m.index + m[0].length;
+      const startLine = src.slice(0, startIdx).split('\n').length;
+      /* Walk to the literal's real end: the first unescaped backtick. Anything
+         before that which looks like a comment-borne backtick is the bug. */
+      let i = startIdx;
+      for (; i < src.length; i++) {
+        if (src[i] === '\\') { i++; continue; }
+        if (src[i] === '`') break;
+      }
+      const body = src.slice(startIdx, i);
+      /* An octal-looking escape: a single backslash followed by digits. */
+      const oct = body.match(/(^|[^\\])\\[0-7]{2,}/g);
+      if (oct) {
+        problems.push(f + ': a single-backslash escape inside the stylesheet — ' +
+          'write \\\\XXXX for a CSS unicode escape, or JS reads it as octal');
+      }
+      /* If the literal ends before the stylesheet plausibly does, a stray
+         backtick closed it early. A real stylesheet is thousands of chars. */
+      const rest = src.slice(i + 1, i + 400);
+      if (/^[\s\S]{0,120}(?:\{|:\s*var\(|;\s*\n\s*\.)/.test(rest) && body.length > 200) {
+        problems.push(f + ':' + startLine + ' — the stylesheet literal appears to END at ' +
+          'line ' + src.slice(0, i).split('\n').length + ' with CSS still following it. ' +
+          'A backtick inside a CSS comment closes the template literal.');
+      }
+    }
+  });
+  metrics.template_css_hazards = problems.length;
+  if (problems.length) { r.status = 'FAIL'; problems.forEach(p => r.detail.push(p)); }
+  else r.detail.push('no stray backticks or octal escapes in template-literal CSS');
+});
+
 /* ── report ─────────────────────────────────────────────────────────────── */
 const failed = results.filter(r => r.status === 'FAIL');
 

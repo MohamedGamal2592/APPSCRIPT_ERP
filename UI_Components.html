@@ -545,7 +545,10 @@ UIC.dataTable = function (containerId, opts) {
     : rawHeaders;
 
   if (rows.length === 0) {
-    return '<div class="empty-state"><span>' + (o.emptyText || 'لا توجد بيانات') + '</span></div>';
+    /* [UI-3.5 / U-22] `emptyText` keeps working exactly as before; a page can
+       now also pass a richer `emptyState` object with an icon, an explanation
+       and a create action. */
+    return UIC.emptyState(o.emptyState || { title: o.emptyText || 'لا توجد بيانات' });
   }
 
   const fmtMoney = function (n) {
@@ -1503,6 +1506,10 @@ UIC.openModal = function (modalId, opts) {
   const div = document.createElement('div');
   div.id = modalId;
   div.className = 'modal-overlay';
+  /* [UI-3.6 / U-40] The bottom-sheet drag handle is a CSS ::before on .modal,
+     not an element. Keeping it out of the markup means every one of the 78
+     existing call sites still renders byte-identically — which
+     tools/verify/s0_modal_size.js asserts — and it costs no DOM node. */
   div.innerHTML =
     '<div class="modal' + sizeClass + '" role="dialog" aria-modal="true">' +
       '<div class="modal-header"><h3>' + (o.title || '') + '</h3>' +
@@ -1518,13 +1525,90 @@ UIC.openModal = function (modalId, opts) {
     '</div>';
   document.body.appendChild(div);
   document.body.classList.add('modal-open');
+  try { UIC._initSheetSwipe(div, modalId); } catch (e) {}
   return div;
+};
+
+/* ── [UI-3.6 / U-40] Swipe a bottom sheet down to dismiss ─────────────────
+ *
+ * Below tablet-p a dialog is a bottom sheet, and a bottom sheet that can only
+ * be closed by finding a small × in its corner is the wrong shape on a phone.
+ * The drawer and toasts already swipe; dialogs did not.
+ *
+ * Two rules keep this from fighting the content:
+ *   - it only engages while the sheet is scrolled to the TOP, so dragging to
+ *     read a long form scrolls it instead of dismissing it;
+ *   - it only engages below the tablet-p tier, because above it the dialog is
+ *     a centred box, not a sheet, and dragging it would mean nothing.
+ * Listeners are passive: the drag follows the finger without blocking scroll,
+ * which is what keeps it smooth on a mid-range Android.
+ */
+UIC._initSheetSwipe = function (overlayEl, modalId) {
+  var sheet = overlayEl && overlayEl.querySelector ? overlayEl.querySelector('.modal') : null;
+  if (!sheet) return;
+  var startY = 0, dy = 0, dragging = false;
+
+  sheet.addEventListener('touchstart', function (e) {
+    /* Centred dialogs (tablet-p and up) are not sheets. */
+    if ((window.innerWidth || 0) >= 600) return;
+    if (sheet.scrollTop > 0) return;            /* let the content scroll */
+    startY = e.touches[0].clientY;
+    dy = 0;
+    dragging = true;
+    sheet.style.transition = 'none';
+  }, { passive: true });
+
+  sheet.addEventListener('touchmove', function (e) {
+    if (!dragging) return;
+    dy = e.touches[0].clientY - startY;
+    if (dy <= 0) return;                        /* only downward */
+    sheet.style.transform = 'translateY(' + dy + 'px)';
+  }, { passive: true });
+
+  sheet.addEventListener('touchend', function () {
+    if (!dragging) return;
+    dragging = false;
+    sheet.style.transition = '';
+    if (dy > 80) {
+      sheet.style.transform = 'translateY(100%)';
+      setTimeout(function () { try { UIC.closeModal(modalId); } catch (e) {} }, 180);
+    } else {
+      sheet.style.transform = '';
+    }
+  }, { passive: true });
 };
 
 UIC.closeModal = function (modalId) {
   const el = document.getElementById(modalId);
   if (el) el.remove();
   document.body.classList.remove('modal-open');
+};
+
+/* ── [UI-3.5 / U-22] Empty states ─────────────────────────────────────────
+ *
+ * An empty list showed a grey box containing one sentence — "لا توجد بيانات" —
+ * which tells the user nothing about WHY it is empty or what to do next. It
+ * reads the same whether the table has no records at all, or a filter matched
+ * nothing, or the user lacks the grant to see anything.
+ *
+ * UIC.emptyState({ icon, title, body, action }) gives it an illustration, an
+ * explanation and a primary action. Every field is optional.
+ *
+ * The old contract is untouched: UIC.dataTable's `emptyText` string still works
+ * and still reads the same, it simply renders inside the better container. A
+ * plain string may also be passed directly.
+ */
+UIC.emptyState = function (opts) {
+  var o = (typeof opts === 'string') ? { title: opts } : (opts || {});
+  var icon = (o.icon === false) ? '' :
+    '<div class="empty-state-icon">' + UIC.icon(o.icon || 'inbox', { size: 40 }) + '</div>';
+  var body = o.body ? '<p class="empty-state-body">' + UIC.escHtml(o.body) + '</p>' : '';
+  /* o.action is a UIC.button options object, so the caller cannot accidentally
+     inject markup here and the button matches every other button in the app. */
+  var action = o.action ? '<div class="empty-state-action">' + UIC.button(o.action) + '</div>' : '';
+  return '<div class="empty-state">' + icon +
+    '<div class="empty-state-title">' + UIC.escHtml(o.title || 'لا توجد بيانات') + '</div>' +
+    body + action + '</div>';
 };
 
 UIC.toast = function (message, type) {
@@ -2008,7 +2092,12 @@ document.addEventListener('keydown', function (e) {
   .table tbody tr:hover { background: var(--brand-subtle-bg); }
   /* Tall enough rows for finger tapping */
   .table tbody tr { min-height: var(--tap-sm, 44px); }
+  /* ── [UI-3.5 / U-22] Empty state ─────────────────────────────────────── */
   .empty-state { padding: 48px 16px; text-align: center; color: var(--text-muted); background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: var(--radius-md); }
+  .empty-state-icon { color: var(--text-disabled); margin-bottom: var(--space-3); }
+  .empty-state-title { font-size: var(--text-base); font-weight: 700; color: var(--text-main); margin-bottom: var(--space-1); }
+  .empty-state-body { font-size: var(--text-sm); color: var(--text-muted); max-width: 46ch; margin: 0 auto var(--space-4); line-height: 1.7; }
+  .empty-state-action { margin-top: var(--space-2); }
   .pt-loading { display:flex; align-items:center; gap:10px; padding:14px 4px; color:var(--text-muted); font-size: var(--text-sm); }
   .pt-spin { width:22px; height:22px; flex:0 0 auto; border:3px solid var(--border-color,#e2e8f0); border-top-color:var(--brand-primary,#16a34a); border-radius:50%; animation:ptspin .8s linear infinite; }
   @keyframes ptspin { to { transform: rotate(360deg); } }
@@ -2077,6 +2166,16 @@ document.addEventListener('keydown', function (e) {
     will-change: transform;
     /* Bottom padding so content clears gesture bar */
     padding-bottom: var(--safe-bottom);
+  }
+  /* [UI-3.6 / U-40] The bottom-sheet grab handle. A ::before rather than an
+     element, so no call site's markup changes and no DOM node is added. It
+     exists only where the dialog IS a sheet — the tablet-p tier hides it. */
+  .modal::before {
+    content: ''; display: block;
+    width: 36px; height: 4px; border-radius: 999px;
+    background: var(--border-strong, #cfd4db);
+    margin: var(--space-2) auto 0;
+    flex-shrink: 0;
   }
   .modal-header {
     display: flex; justify-content: space-between; align-items: center;
@@ -2162,7 +2261,11 @@ document.addEventListener('keydown', function (e) {
   .module-tile-icon { width: 64px; height: 64px; margin: 0 auto var(--space-4); display: flex; align-items: center; justify-content: center; font-size: 32px; border-radius: var(--radius-md); background: var(--brand-subtle-bg); }
   .module-tile-title    { font-size: var(--text-base); font-weight: 700; margin-bottom: var(--space-1); }
   .module-tile-subtitle { font-size: var(--text-xs); color: var(--text-muted); }
-  .module-tile-badge { position: absolute; top: 8px; right: 8px; background: var(--warning); color: #fff; font-size: var(--text-xs); font-weight: 600; padding: 2px 8px; border-radius: 999px; }
+  /* [UI-3.7] Was a physical right:8px. A tile badge belongs in the far corner — top
+     RIGHT while the page rendered LTR. After step 1.1 corrected the direction,
+     a physical right put it in the NEAR corner instead. inset-inline-end is
+     the far corner in both directions. */
+  .module-tile-badge { position: absolute; top: 8px; inset-inline-end: 8px; background: var(--warning); color: #fff; font-size: var(--text-xs); font-weight: 600; padding: 2px 8px; border-radius: 999px; }
 
   /* ── Topbar ──────────────────────────────────────────────────────────── */
   .topbar {
@@ -2255,7 +2358,10 @@ document.addEventListener('keydown', function (e) {
     display: none;
     position: absolute;
     top: calc(100% + 4px);
-    right: 0;
+    /* [UI-3.7] Was a physical right:0. In RTL that is the START edge, which is where a
+       menu should hang from its toggle — so the RTL rendering is unchanged —
+       but it was hanging from the wrong edge in LTR. */
+    inset-inline-start: 0;
     min-width: 230px;
     background: var(--bg-surface);
     border: 1px solid var(--border-color);
@@ -2317,12 +2423,14 @@ document.addEventListener('keydown', function (e) {
     flex-shrink: 0;
   }
   .drawer-close {
-    margin-right: auto; background: none; border: none; font-size: var(--text-xl);
+    /* [UI-3.7] Was margin-right:auto plus a [dir=ltr] rule to undo it.
+       margin-inline-start resolves to the same thing in both directions, so the
+       override below is no longer needed. */
+    margin-inline-start: auto; background: none; border: none; font-size: var(--text-xl);
     cursor: pointer; color: var(--text-muted); padding: var(--space-2);
     min-width: var(--tap-min, 48px); min-height: var(--tap-min, 48px);
     display: flex; align-items: center; justify-content: center;
   }
-  [dir="ltr"] .drawer-close { margin-right: 0; margin-left: auto; }
 
   .drawer-nav {
     flex: 1; overflow-y: auto; padding: var(--space-4) 0;
@@ -2408,6 +2516,9 @@ document.addEventListener('keydown', function (e) {
     .modal.modal-xl { max-width: 1100px; }
     .modal-footer { flex-direction: row; }
     .modal-footer .btn { width: auto; }
+    /* [UI-3.6] Above tablet-p a dialog is a centred box, not a sheet, so the
+       grab handle would be meaningless. */
+    .modal::before { display: none; }
     .stat-card { padding: var(--space-4); }
   }
 

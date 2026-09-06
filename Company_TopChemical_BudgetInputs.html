@@ -356,7 +356,7 @@
         var uploadsHtml = UPLOAD_KEYS.map(function (u) {
           var ref = l[u.key];
           if (!ref) return '';
-          return '<button class="btn btn-outline" style="padding:2px 6px;font-size:11px;margin-left:4px;" onclick="viewAttachment(\'' + escHtml(ref).replace(/\'/g, "\\\'") + '\')" title="' + u.label + '">📎 ' + u.label.split(' ')[0] + ' / View</button>';
+          return '<button class="btn btn-outline" style="padding:2px 6px;font-size:11px;margin-inline-end:4px;" onclick="viewAttachment(\'' + escHtml(ref).replace(/\'/g, "\\\'") + '\')" title="' + u.label + '">📎 ' + u.label.split(' ')[0] + ' / View</button>';
         }).filter(Boolean).join('');
 
         return '<tr>' +
