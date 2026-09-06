@@ -780,19 +780,13 @@ function getCompanyThemeCSS_(companyName) {
 // immediately. Overrides tokens + adds structural + print rules.
 function topLightThemeCss_() {
   return '' +
-    /* [UI-2.2 / D-3] The Cairo <link> tags moved to CSS_Tokens.html, which every
-       page includes, so the font loads once for all three companies instead of
-       only for the two that had a bespoke theme. --font-sans below still names
-       Cairo, so this company renders identically. */
     '<style>\n' +
     ':root {\n' +
-    '  --bg-primary: #fbbf24;\n' +
-    '  --bg-surface: #ffffff;\n' +
-    '  --bg-subtle: #fef08a;\n' +
-    '  --text-main: #111111;\n' +
-    '  --text-muted: #374151;\n' +
-    '  --text-disabled: #4b5563;\n' +
-    '  --border-color: #111111;\n' +
+    /* [UI-2.4 / D-1 / U-10] Canvas, surfaces, borders and ink are NO LONGER
+       overridden here. They come from CSS_Tokens.html, so all three companies
+       share one neutral canvas and one hairline border, and TopLight is
+       identified by its topbar and its buttons rather than by painting the
+       whole page amber. What stays below is brand and semantics only. */
     '  --font-sans: \'Cairo\', sans-serif;\n' +
     '  --font-mono: \'Consolas\', \'Courier New\', monospace;\n' +
     '  --success: #16a34a;\n' +
@@ -816,31 +810,21 @@ function topLightThemeCss_() {
     '  --btn-text-color: #fbbf24;\n' +
     '  --shadow-brand: 0 4px 14px rgba(17, 17, 17, 0.25);\n' +
     '}\n' +
-    'body { background-color: #fbbf24; }\n' +
-    '.table thead th { background: #111111; color: #fbbf24; border-bottom: 2px solid #111111; }\n' +
-    '.table tbody td { background: #ffffff; color: #111111; }\n' +
-    '.table-wrap, .empty-state, .stat-card, .modal, .company-tile, .module-tile, .invoice {\n' +
-    '  border: 2px solid #111111;\n' +
-    '}\n' +
-    '.topbar { background: #111111; border-bottom: 2px solid #111111; }\n' +
+    /* The brand topbar: black with amber ink. This, the primary button and the
+       row-hover tint are where the brand lives now. */
+    '.topbar { background: #111111; border-bottom: 1px solid #111111; }\n' +
     '.topbar .nav-item { color: #fbbf24; }\n' +
     '.topbar .nav-item:hover, .topbar .nav-item.active { color: #111111; background: #fbbf24; }\n' +
-    /* [UI-1.4 / U-04] .num moved to the shared stylesheet in UI_Components.html.
-       It was defined here and in topChemicalThemeCss_ but nowhere else, so
-       ValleyFoods — which takes the generic theme path — never got it. The
-       shared rule carries the identical declarations and resolves --font-mono
-       to the same stack this file still defines above, so nothing changes for
-       this company. */
-    '.invoice { background: #ffffff; }\n' +
-    '/* TopLight dropdowns: curved black fill, yellow ink + black-on-yellow hover — always apparent */\n' +
-    '.nav-dropdown-menu, .erp-kebab-menu {\n' +
+    '/* TopLight dropdowns: curved black fill, yellow ink + black-on-yellow hover — always apparent.\n' +
+    '   Scoped to .topbar so a dropdown rendered in page content keeps the neutral surface. */\n' +
+    '.topbar .nav-dropdown-menu {\n' +
     '  background: #111111;\n' +
-    '  border: 2px solid #fbbf24;\n' +
+    '  border: 1px solid #fbbf24;\n' +
     '  border-radius: 16px;\n' +
     '  box-shadow: 0 12px 28px rgba(0,0,0,.45);\n' +
     '}\n' +
-    '.nav-dropdown-toggle { color: #fbbf24; }\n' +
-    '.nav-dropdown-toggle:hover, .nav-dropdown-toggle.open { color: #111111; background: #fbbf24; }\n' +
+    '.topbar .nav-dropdown-toggle { color: #fbbf24; }\n' +
+    '.topbar .nav-dropdown-toggle:hover, .topbar .nav-dropdown-toggle.open { color: #111111; background: #fbbf24; }\n' +
     '/* Profile toggle must read without hovering: pill button + yellow name (the .user-name\n' +
     '   rule would otherwise paint it near-black on the black topbar) */\n' +
     '.topbar .user-profile-toggle { border: 1px solid #fbbf24; border-radius: 999px; padding: 4px 12px; background: #111111; }\n' +
@@ -849,24 +833,26 @@ function topLightThemeCss_() {
     '.topbar .user-profile-toggle:hover, .topbar .user-profile-toggle.open { background: #fbbf24; }\n' +
     '.topbar .user-profile-toggle:hover .user-name, .topbar .user-profile-toggle.open .user-name,\n' +
     '.topbar .user-profile-toggle:hover .nav-dropdown-caret, .topbar .user-profile-toggle.open .nav-dropdown-caret { color: #111111; }\n' +
-    '.nav-dropdown-item, .erp-kebab-item { color: #fbbf24; font-weight: 700; border-radius: 10px; }\n' +
-    '.nav-dropdown-item:hover, .erp-kebab-item:hover { background: #fbbf24; color: #111111; }\n' +
-    '.nav-dropdown-item-active { background: #fbbf24; color: #111111; font-weight: 800; }\n' +
-    '.erp-kebab-item.danger { color: #fbbf24; }\n' +
-    '.user-avatar { background: #fbbf24; color: #111111; }\n' +
-    '.user-profile-name { color: #fbbf24; }\n' +
-    '.user-profile-email { color: #fde68a; }\n' +
-    '.user-profile-divider { background: #fbbf24; opacity: .4; }\n' +
-    '.user-profile-logout { color: #fbbf24; }\n' +
-    '.user-profile-logout:hover { background: #fbbf24; color: #111111; }\n' +
+    '.topbar .nav-dropdown-item { color: #fbbf24; font-weight: 700; border-radius: 10px; }\n' +
+    '.topbar .nav-dropdown-item:hover { background: #fbbf24; color: #111111; }\n' +
+    '.topbar .nav-dropdown-item-active { background: #fbbf24; color: #111111; font-weight: 800; }\n' +
+    '.topbar .user-avatar { background: #fbbf24; color: #111111; }\n' +
+    '.topbar .user-profile-name { color: #fbbf24; }\n' +
+    '.topbar .user-profile-email { color: #fde68a; }\n' +
+    '.topbar .user-profile-divider { background: #fbbf24; opacity: .4; }\n' +
+    '.topbar .user-profile-logout { color: #fbbf24; }\n' +
+    '.topbar .user-profile-logout:hover { background: #fbbf24; color: #111111; }\n' +
     '/* Mobile hamburger: black bars are invisible on the black topbar — yellow instead */\n' +
     '.topbar-hamburger { border: 1px solid #fbbf24; }\n' +
     '.topbar-hamburger .hamburger-bar { background: #fbbf24; }\n' +
+    /* Documents keep a visible frame, but a hairline one rather than 2px black. */
+    '.invoice { background: #ffffff; border: 1px solid var(--border-color); }\n' +
     '@media print {\n' +
     '  * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }\n' +
     '}\n' +
     '</style>\n';
 }
+
 
 // Bespoke Top Chemical theme (company uid 3fe1b5cb67b7223e) — green/white.
 // Uncached so edits apply immediately. Overrides tokens + adds structural +
