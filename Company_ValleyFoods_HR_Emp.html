@@ -50,9 +50,13 @@
     var EMP_MAP = {}, SHIFT_MAP = {};
 
     function esc(v) {
-      var s = (v === undefined || v === null) ? '' : String(v);
-      if (typeof FMT !== 'undefined' && FMT.escape) return FMT.escape(s);
-      return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+      /* [UI-2.8 / U-36] Delegates to the shared formatter. This body used to
+         carry its own replace-chain behind a `typeof FMT !== 'undefined'`
+         guard, but Client_Helpers.html defines FMT in <head> before any page
+         script runs, so that fallback was unreachable and the duplicate was
+         pure drift risk. Output is identical for every input — proved in
+         tools/verify/ui2_formatters.js. */
+      return FMT.escape(v);
     }
     function todayStr() { return new Date().toISOString().slice(0, 10); }
     function fmtDate(v) {
