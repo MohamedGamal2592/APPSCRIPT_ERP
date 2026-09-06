@@ -4273,6 +4273,23 @@ const ValleyFoodsHRModules = (function () {
       } catch (e) {}
 
       var keepWcUids = [];
+      /* Phase 13 (F-04): the appends in this mixed update/append loop are collected
+       * and written as one setValues instead of one appendRow per new work centre.
+       * Phase 8 skipped this because getNextIdUnderLock_ runs between iterations and
+       * deferring the appends changes what it reads. It does — and it does not change
+       * what it RETURNS. That function returns `current` (the ID_Counter value) when
+       * current > tableMax, and tableMax + 1 otherwise, then sets the counter to
+       * returned + 1. Every return is therefore >= tableMax + 1, so from the second
+       * call onward the counter is strictly greater than the table max whether or not
+       * the previous row has landed, and both orderings take the same branch and yield
+       * the same id. The update branch never writes the id column, so an interleaved
+       * update cannot move tableMax either.
+       * Row numbers are unchanged for the same reason the Phase 8 blocks are: only
+       * appends change the row count during this loop (the deletes run after it), so
+       * the batch starts at the same getLastRow() + 1 and lands in the same order.
+       * Locked and grid-grown because a precomputed start row, unlike appendRow, is
+       * not safe against a concurrent append. */
+      var wcNewRows = [];
       (Array.isArray(d.work_ops) ? d.work_ops : []).forEach(function (w, wi) {
         var editingUid = String(w.uid || '').trim();
         var old = editingUid ? existingWCByUid[editingUid] : null;
@@ -4298,11 +4315,18 @@ const ValleyFoodsHRModules = (function () {
           m['user'] = (user && user.email) || '';
           m['created_at'] = new Date();
           var vals = wcHeaders.map(function (h) { var k = String(h).trim(); return m[k] !== undefined ? m[k] : ''; });
-          sheetWC.appendRow(vals);
-          noteMutation_();
+          wcNewRows.push(vals);
           keepWcUids.push(m['unique_id']);
         }
       });
+      if (wcNewRows.length) {
+        executeWithLock_(function () {
+          var wcStart = sheetWC.getLastRow() + 1;
+          ensureGridRows_(sheetWC, wcStart + wcNewRows.length - 1);
+          sheetWC.getRange(wcStart, 1, wcNewRows.length, wcHeaders.length).setValues(wcNewRows);
+          noteMutation_();
+        });
+      }
       existingWC.forEach(function (r) {
         if (keepWcUids.indexOf(String(r.unique_id)) === -1) deleteRowsByCriteria_(sheetWC, 'unique_id', String(r.unique_id));
       });

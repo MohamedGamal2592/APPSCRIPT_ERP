@@ -646,10 +646,10 @@ function getCompanyLogoUrl_(companyName) {
   const cacheKey = 'company_logo_v_' + compVersion + '_' + companyName;
   try {
     const cached = cache.get(cacheKey);
-    if (cached !== null && cached !== undefined) return cached === ' ' ? '' : cached;
+    if (cached !== null && cached !== undefined) return cached === '\u0000' ? '' : cached;
   } catch (cacheErr) {}
   const url = getCompanyLogoUrlUncached_(companyName);
-  try { cache.put(cacheKey, url === '' ? ' ' : url, CONFIG.CACHE_LOGO_SECONDS); } catch (putErr) {}
+  try { cache.put(cacheKey, url === '' ? '\u0000' : url, CONFIG.CACHE_LOGO_SECONDS); } catch (putErr) {}
   return url;
 }
 
