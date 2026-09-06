@@ -276,27 +276,39 @@ check('C5  CSS classes used by pages are defined somewhere (U-08)', function (r)
 
 /* ── C6 — token discipline: hardcoded colours vs var(--token) (U-07) ────── */
 check('C6  token discipline — hardcoded colours vs tokens (U-07)', function (r) {
-  let hex = 0, rgba = 0, tokens = 0;
+  let hex = 0, rgba = 0, tokens = 0, bare = 0;
   const perFile = {};
   S.htmlFiles().forEach(function (f) {
     const src = S.read(f);
     const h = (src.match(/#[0-9a-fA-F]{3,8}\b/g) || []).length;
     const g = (src.match(/\brgba?\s*\(/g) || []).length;
     const t = (src.match(/var\(\s*--/g) || []).length;
-    hex += h; rgba += g; tokens += t;
-    if (h + g) perFile[f] = h + g;
+    /* BARE literals are the ones that actually matter. The Phase 2.7 sweep
+       keeps a fallback inside every var() — `var(--border-color, #e5e7eb)` —
+       because pages that build a print window with document.write have no token
+       layer to resolve against. So the raw hex count barely moves even when
+       hundreds of colours have been tokenised. Stripping the fallbacks first is
+       what makes this metric measure the thing it claims to. */
+    const stripped = src.replace(/var\(\s*--[a-z0-9-]+\s*,\s*[^)]*\)/gi, 'var(--x)');
+    const b = (stripped.match(/#[0-9a-fA-F]{3,8}\b/g) || []).length +
+              (stripped.match(/\brgba?\s*\(/g) || []).length;
+    hex += h; rgba += g; tokens += t; bare += b;
+    if (b) perFile[f] = b;
   });
+  metrics.color_bare = bare;
   metrics.color_hex = hex;
   metrics.color_rgba = rgba;
   metrics.token_uses = tokens;
   const literals = hex + rgba;
   metrics.color_literals = literals;
   metrics.token_ratio = Number((tokens / (tokens + literals || 1)).toFixed(4));
+  metrics.bare_ratio = Number((tokens / (tokens + bare || 1)).toFixed(4));
   const worst = Object.keys(perFile).sort((a, b) => perFile[b] - perFile[a]).slice(0, 8);
-  r.detail.push('colour literals: ' + literals + ' (' + hex + ' hex, ' + rgba + ' rgb/rgba)');
+  r.detail.push('colour literals, all occurrences: ' + literals + ' (' + hex + ' hex, ' + rgba + ' rgb/rgba)');
+  r.detail.push('colour literals NOT inside a var() fallback: ' + bare + '   <- the real number');
   r.detail.push('var(--token) uses: ' + tokens);
-  r.detail.push('token share: ' + (metrics.token_ratio * 100).toFixed(1) + '%');
-  r.detail.push('heaviest files: ' + worst.map(f => f + '(' + perFile[f] + ')').join(', '));
+  r.detail.push('token share (vs bare literals): ' + (metrics.bare_ratio * 100).toFixed(1) + '%');
+  r.detail.push('heaviest files, by bare literals: ' + worst.map(f => f + '(' + perFile[f] + ')').join(', '));
   /* Informational until Phase 2 moves it; never fails the build. */
   r.status = 'INFO';
 });
