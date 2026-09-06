@@ -56,6 +56,7 @@ function registerValleyFoods_() {
       { action: 'vf_sales', template: 'Company_ValleyFoods_Sales', title: 'المبيعات', label: 'المبيعات', nav: false },
       { action: 'vf_sales_returns', template: 'Company_ValleyFoods_SalesReturns', title: 'مرتجعات المبيعات', label: 'مرتجعات المبيعات', nav: false },
       { action: 'vf_purchasing', template: 'Company_ValleyFoods_Purchasing', title: 'تكلفة المشتريات', label: 'المشتريات', nav: false },
+      { action: 'vf_warehouse_movement', template: 'Company_ValleyFoods_WarehouseMovement', title: 'حركة المخزن', label: 'حركة المخزن', nav: false },
       { action: 'vf_mfg_recipes', template: 'Company_ValleyFoods_MfgRecipes', title: 'وصفات التصنيع (BOM)', label: 'وصفات التصنيع', nav: false },
       { action: 'vf_mfg_orders', template: 'Company_ValleyFoods_MfgOrders', title: 'أوامر التصنيع', label: 'أوامر التصنيع', nav: false },
       { action: 'vf_mfg_order', template: 'Company_ValleyFoods_MfgOrderView', title: 'أمر تصنيع', label: 'أمر تصنيع', nav: false },
