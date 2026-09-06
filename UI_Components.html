@@ -460,32 +460,85 @@ UIC.withPageLoading = function (promise, msg) {
   return Promise.resolve(promise).then(function (r) { UIC.hidePageLoading(); return r; }, function (e) { UIC.hidePageLoading(); throw e; });
 };
 
-/* ── Persistent home logo (far-right) → main dashboard, ONLY on ERP Dashboard ─────── */
+/* ── [UI-3.8 / U-42] The persistent home button ──────────────────────────
+ *
+ * OWNER-REQUESTED, explicitly: the system logo floats above the page on EVERY
+ * page, one click back to the main dashboard.
+ *
+ * The component already existed and was gated off — it rendered only on
+ * ERPDashboard, login and setup, which is to say only on the three pages you
+ * would never need it from. Removing the gate is most of this step. The rest is
+ * fixing the two things that would otherwise have shipped it broken.
+ *
+ * 1. POSITION. It was `top: 10px; right: 10px`. This app is RTL, so
+ *    `.topbar-left` — the hamburger plus BOTH logos — renders on the RIGHT, and
+ *    a top-right FAB lands directly on top of it on all 82 shell pages. It now
+ *    sits at the BOTTOM, inline-end (bottom-left in RTL), clearing the safe
+ *    area. The owner can move it back with one rule, but it then needs an
+ *    offset for the 56px topbar and it will still overlap the company logo on
+ *    the pages whose topbar is densest.
+ *
+ * 2. STACKING. It was `z-index: 9998`, which is ABOVE the modal overlay (1000),
+ *    the drawer (900) and the loading overlay (1500) — so it floated over open
+ *    dialogs. It is now 1100: above page content, the sticky topbar (1000) and
+ *    the breadcrumb; below toasts (2000), dialogs, the drawer and loading. It
+ *    is also hidden outright whenever a dialog or the drawer is open, because a
+ *    home link sitting over a half-finished Save dialog is a way to lose work,
+ *    not a convenience.
+ *
+ * Also: a real aria-label (it had only title and alt), a visible focus ring, a
+ * 44px minimum target, colours from the Phase 2 tokens rather than a hardcoded
+ * #fff and rgba(0,0,0,.2), and it does not print.
+ */
 UIC.ensureHomeLogo = function () {
-  // Show FAB only on ERP Dashboard (central hub), not inside company pages which already have topbar company+system logos
-  try {
-    var action = '';
-    try { action = new URLSearchParams(window.location.search).get('action') || ''; } catch(e) {}
-    if (action && action !== 'ERPDashboard' && action !== 'login' && action !== 'setup') return;
-    // Also check global CURRENT_ACTION if available
-    if (typeof CURRENT_ACTION !== 'undefined' && CURRENT_ACTION && CURRENT_ACTION !== 'ERPDashboard') return;
-  } catch(e) {}
   if (document.getElementById('home-logo-fab')) return;
   var a = document.createElement('a');
   a.id = 'home-logo-fab';
   a.href = UIC.baseUrl() + '?action=ERPDashboard&sessionToken=' + encodeURIComponent(UIC.token());
   a.title = 'الرئيسية';
+  /* It had title and alt but no aria-label, so a screen reader announced the
+     image's alt text inside a link with no name of its own. */
+  a.setAttribute('aria-label', 'الرئيسية');
   a.setAttribute('onclick', "UIC.navTo(event, this.getAttribute('href'))");
-  a.innerHTML = '<img src="' + (UIC.SYSTEM_LOGO_URL || '') + '" alt="الرئيسية" loading="lazy" decoding="async">';
+  a.innerHTML = '<img src="' + (UIC.SYSTEM_LOGO_URL || '') + '" alt="" loading="lazy" decoding="async">';
   document.body.appendChild(a);
+
   var st = document.createElement('style');
-  st.textContent = '#home-logo-fab{position:fixed;top:10px;right:10px;z-index:9998;width:38px;height:38px;border-radius:50%;background:#fff;box-shadow:0 2px 10px rgba(0,0,0,.2);display:flex;align-items:center;justify-content:center;cursor:pointer;}' +
-    '#home-logo-fab img{width:26px;height:26px;object-fit:contain;}' +
-    /* [UI-2.9b / U-48] Was `@media (max-width: 768px)`, while the shell switched
-       at 767/768 — so at exactly 768px the two disagreed. Now mobile-first on
-       the tier scale: the small size is the base and it grows at tablet-p. */
-    '@media (min-width: 600px){#home-logo-fab{width:44px;height:44px;}#home-logo-fab img{width:32px;height:32px;}}';
+  st.textContent =
+    '#home-logo-fab{' +
+      'position:fixed;' +
+      /* Bottom, inline-end. In RTL that is bottom-LEFT, well clear of
+         .topbar-left and of the row action kebabs on the right of every table. */
+      'bottom:max(16px, var(--safe-bottom, 0px));' +
+      'inset-inline-end:max(16px, var(--safe-right, 0px));' +
+      'z-index:1100;' +
+      'width:var(--tap-sm, 44px);height:var(--tap-sm, 44px);' +
+      'border-radius:50%;' +
+      'background:var(--bg-surface, #fff);' +
+      'border:1px solid var(--border-color, #e2e5ea);' +
+      'box-shadow:var(--shadow-md, 0 4px 12px rgba(0,0,0,.08));' +
+      'display:flex;align-items:center;justify-content:center;cursor:pointer;' +
+      'transition:transform .15s ease, box-shadow .15s ease;' +
+    '}' +
+    '#home-logo-fab img{width:28px;height:28px;object-fit:contain;pointer-events:none;}' +
+    '#home-logo-fab:hover{box-shadow:var(--shadow-lg, 0 10px 30px rgba(0,0,0,.12));transform:translateY(-1px);}' +
+    '#home-logo-fab:focus-visible{outline:2px solid var(--brand-primary);outline-offset:2px;}' +
+    /* Yields to anything modal. .modal-open is set by BOTH UIC.openModal and
+       ERPModal.open, so this covers every dialog in the app. */
+    'body.modal-open #home-logo-fab{display:none;}' +
+    /* The drawer sets body overflow hidden rather than a class, so match the
+       drawer's own open state. */
+    'body.drawer-open #home-logo-fab{display:none;}' +
+    '@media print{#home-logo-fab{display:none;}}' +
+    /* Slightly larger where there is room. Mobile-first, on the tier scale. */
+    '@media (min-width: 600px){#home-logo-fab{width:48px;height:48px;}#home-logo-fab img{width:32px;height:32px;}}';
   document.head.appendChild(st);
+};
+
+/* The drawer is not a sibling of the FAB in every page's DOM order, so the CSS
+ * sibling rule above cannot be relied on alone. Toggle a body class too. */
+UIC._syncHomeFabForDrawer = function (open) {
+  try { document.body.classList.toggle('drawer-open', !!open); } catch (e) {}
 };
 
 (function () {
@@ -1859,6 +1912,7 @@ UIC.openDrawer = function () {
   const ham     = document.querySelector('.topbar-hamburger');
   if (!drawer) return;
   drawer.classList.add('is-open');
+  UIC._syncHomeFabForDrawer(true);
   if (overlay) overlay.classList.add('is-open');
   if (ham) ham.setAttribute('aria-expanded', 'true');
   document.body.style.overflow = 'hidden'; // prevent body scroll behind drawer
@@ -1870,6 +1924,7 @@ UIC.closeDrawer = function () {
   const ham     = document.querySelector('.topbar-hamburger');
   if (!drawer) return;
   drawer.classList.remove('is-open');
+  UIC._syncHomeFabForDrawer(false);
   if (overlay) overlay.classList.remove('is-open');
   if (ham) ham.setAttribute('aria-expanded', 'false');
   document.body.style.overflow = '';
