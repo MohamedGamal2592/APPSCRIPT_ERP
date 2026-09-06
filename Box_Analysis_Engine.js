@@ -1653,6 +1653,400 @@ var BoxEngine = (function () {
     return { flags: flags, by_row: byRow, notes: notes, structuring: struct.detected };
   }
 
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // §7 Tier 2 — price anomalies, per item cluster
+  // ═══════════════════════════════════════════════════════════════════════
+  //
+  // MEDIAN AND MAD, NEVER MEAN AND σ. This is not a style preference. These
+  // samples are small — a dozen purchases of one item is a good sample here —
+  // and the contamination is exactly what we are hunting. A mean is dragged
+  // toward the very rows it is supposed to expose: one inflated purchase raises
+  // the average, which raises the threshold, which makes that purchase look
+  // less unusual than it is. The median does not move, and the MAD does not
+  // move, so an outlier stays an outlier no matter how large it is.
+  //
+  // Every rule here refuses to run below a minimum n and says so. A price
+  // finding names an employee; "بيانات غير كافية" is the honest output when
+  // there is not enough history, and a weak verdict is not.
+
+  var TIER2 = {
+    MIN_N: 6,                  /* below this, a median and a MAD say nothing */
+    Z_THRESHOLD: 3.5,          /* modified z-score, the conventional cut */
+    MAD_SCALE: 0.6745,         /* 0.6745 = Φ⁻¹(0.75); makes MAD comparable to σ */
+    MEANAD_SCALE: 1.253314,    /* used only when MAD is exactly 0 */
+    PEER_MIN_N: 3,             /* per side */
+    PEER_RATIO: 1.25,          /* 25% above the peer median */
+    RATCHET_MIN_N: 5,
+    RATCHET_TAU: 0.6,          /* Mann–Kendall τ for the person */
+    RATCHET_PEER_TAU: 0.3,     /* …while everyone else is flatter than this */
+    NEW_ITEM_MIN_ACCOUNT_N: 10,
+    NEW_ITEM_PERCENTILE: 0.9
+  };
+
+  /** Median absolute deviation. */
+  function mad(values) {
+    var m = median(values);
+    if (m === null) return null;
+    return median(values.map(function (x) { return Math.abs(x - m); }));
+  }
+
+  /**
+   * Robust dispersion summary. `scale` is what the modified z-score divides by:
+   * the MAD normally, and — only when the MAD is exactly zero, which happens
+   * whenever more than half the sample is one identical price — the mean
+   * absolute deviation instead. Without that fallback, a single different price
+   * against a pile of identical ones divides by zero and every rule downstream
+   * reports Infinity.
+   */
+  function robustStats(values) {
+    var v = (values || []).filter(function (x) { return typeof x === 'number' && isFinite(x); });
+    if (!v.length) return null;
+    var m = median(v);
+    var d = mad(v);
+    var scale = d, scaleKind = 'mad';
+    if (!d) {
+      var meanAd = v.reduce(function (a, x) { return a + Math.abs(x - m); }, 0) / v.length;
+      scale = meanAd * TIER2.MEANAD_SCALE;
+      scaleKind = meanAd ? 'meanad' : 'none';
+    }
+    return {
+      n: v.length,
+      median: round_(m, 4),
+      mad: d === null ? null : round_(d, 4),
+      scale: scale ? round_(scale, 6) : 0,
+      scale_kind: scaleKind,
+      min: round_(Math.min.apply(null, v), 4),
+      max: round_(Math.max.apply(null, v), 4),
+      p25: round_(percentile(v, 0.25), 4),
+      p75: round_(percentile(v, 0.75), 4)
+    };
+  }
+
+  /** Modified z-score. Null when there is no dispersion to measure against. */
+  function modifiedZ(x, stats) {
+    if (!stats || !stats.scale) return null;
+    return round_(TIER2.MAD_SCALE * (x - stats.median) / stats.scale, 3);
+  }
+
+  /**
+   * Mann–Kendall τ over a series already in time order. +1 is monotone
+   * increasing, −1 monotone decreasing, 0 no trend. Rank-based, so one wild
+   * value cannot manufacture a trend the way a least-squares slope can.
+   */
+  function mannKendallTau(series) {
+    var v = (series || []).filter(function (x) { return typeof x === 'number' && isFinite(x); });
+    var n = v.length;
+    if (n < 3) return null;
+    var s = 0;
+    for (var i = 0; i < n - 1; i++) {
+      for (var j = i + 1; j < n; j++) {
+        s += (v[j] > v[i]) ? 1 : (v[j] < v[i]) ? -1 : 0;
+      }
+    }
+    return round_(s / (n * (n - 1) / 2), 4);
+  }
+
+  /**
+   * Per-cluster price statistics. This is both what Tier 2 reasons over and
+   * what tab 3 renders, so the number a reviewer reads and the number the rule
+   * fired on are the same number by construction.
+   *
+   * occurrences: [{ movement_id, transaction_date, item_norm, unit, qty,
+   *                 price, unit_price, responsible_person, chart_of_accounts }]
+   * byNorm: { item_norm: cluster_id } from clusterItems.
+   */
+  function clusterPriceStats(occurrences, byNorm) {
+    var buckets = {};
+    (occurrences || []).forEach(function (o) {
+      if (!o || o.unit_price === null || o.unit_price === undefined) return;
+      var cid = (byNorm || {})[o.item_norm];
+      if (cid === undefined) cid = o.item_norm;
+      var b = buckets[cid] = buckets[cid] || { cluster_id: cid, occurrences: [], labels: {} };
+      b.occurrences.push(o);
+      b.labels[o.item_norm] = (b.labels[o.item_norm] || 0) + 1;
+    });
+
+    var out = {};
+    Object.keys(buckets).forEach(function (cid) {
+      var b = buckets[cid];
+      var prices = b.occurrences.map(function (o) { return Number(o.unit_price); });
+      var qtys = b.occurrences.map(function (o) { return Number(o.qty); })
+        .filter(function (q) { return isFinite(q); });
+      var label = Object.keys(b.labels).sort(function (x, y) { return b.labels[y] - b.labels[x]; })[0];
+
+      var byPerson = {};
+      b.occurrences.forEach(function (o) {
+        var p = String(o.responsible_person || '').trim() || '(غير محدد)';
+        (byPerson[p] = byPerson[p] || []).push(Number(o.unit_price));
+      });
+      var people = {};
+      Object.keys(byPerson).forEach(function (p) {
+        people[p] = { n: byPerson[p].length, median: round_(median(byPerson[p]), 4) };
+      });
+
+      out[cid] = {
+        cluster_id: cid,
+        label: label,
+        n: b.occurrences.length,
+        price: robustStats(prices),
+        qty: robustStats(qtys),
+        by_person: people,
+        occurrences: b.occurrences
+      };
+    });
+    return out;
+  }
+
+  /* ── PRICE_OUTLIER ──────────────────────────────────────────────────────
+   * Modified z-score on unit_price within the item's own cluster. */
+  function rulePriceOutlier(stats, opts) {
+    var o = opts || {};
+    var minN = o.tier2_min_n === undefined ? TIER2.MIN_N : o.tier2_min_n;
+    var zCut = o.tier2_z === undefined ? TIER2.Z_THRESHOLD : o.tier2_z;
+    var flags = [], notes = [];
+
+    Object.keys(stats).forEach(function (cid) {
+      var c = stats[cid];
+      if (c.n < minN) {
+        notes.push({ rule_id: 'PRICE_OUTLIER', status: 'insufficient_data', cluster_id: cid,
+          n: c.n, required: minN,
+          reason_ar: 'بيانات غير كافية لتحليل سعر «' + c.label + '» (المتاح ' + c.n +
+            ' عملية شراء، والمطلوب ' + minN + ')' });
+        return;
+      }
+      if (!c.price || !c.price.scale) {
+        notes.push({ rule_id: 'PRICE_OUTLIER', status: 'no_dispersion', cluster_id: cid, n: c.n,
+          reason_ar: 'كل عمليات شراء «' + c.label + '» بنفس سعر الوحدة، فلا يوجد تشتت يُقاس عليه' });
+        return;
+      }
+      c.occurrences.forEach(function (occ) {
+        var z = modifiedZ(Number(occ.unit_price), c.price);
+        if (z === null || Math.abs(z) <= zCut) return;
+        flags.push(flag_('PRICE_OUTLIER', Math.abs(z) > zCut * 2 ? 'high' : 'medium', occ.movement_id,
+          'سعر وحدة «' + c.label + '» في هذه الحركة ' + fmt2_(occ.unit_price) +
+          '، والوسيط التاريخي ' + fmt2_(c.price.median) + ' من ' + c.n + ' عملية شراء' +
+          ' (المدى ' + fmt2_(c.price.min) + '–' + fmt2_(c.price.max) + ')' +
+          ' — درجة انحراف ' + z + ' مقياس مقاوم للقيم الشاذة (الوسيط والانحراف المطلق الوسيط، لا المتوسط)',
+          [{ row_id: String(occ.movement_id), transaction_date: occ.transaction_date,
+             item: occ.item_norm, unit_price: occ.unit_price,
+             cluster_median: c.price.median, cluster_n: c.n, modified_z: z,
+             responsible_person: occ.responsible_person }]));
+      });
+    });
+    return { flags: flags, notes: notes };
+  }
+
+  /* ── PEER_GAP ───────────────────────────────────────────────────────────
+   * The same item, the same period: this person's median unit price against
+   * everyone else's. The single strongest petty-cash signal, because it holds
+   * the item constant and varies only who bought it. */
+  function rulePeerGap(stats, opts) {
+    var o = opts || {};
+    var minSide = o.peer_min_n === undefined ? TIER2.PEER_MIN_N : o.peer_min_n;
+    var ratioCut = o.peer_ratio === undefined ? TIER2.PEER_RATIO : o.peer_ratio;
+    var flags = [], notes = [];
+
+    Object.keys(stats).forEach(function (cid) {
+      var c = stats[cid];
+      var people = Object.keys(c.by_person);
+      if (people.length < 2) return;
+
+      people.forEach(function (person) {
+        var mine = [], theirs = [];
+        c.occurrences.forEach(function (occ) {
+          var p = String(occ.responsible_person || '').trim() || '(غير محدد)';
+          (p === person ? mine : theirs).push(Number(occ.unit_price));
+        });
+        if (mine.length < minSide || theirs.length < minSide) return;
+        var myMed = median(mine), theirMed = median(theirs);
+        if (!theirMed) return;
+        var ratio = myMed / theirMed;
+        if (ratio < ratioCut) return;
+
+        var rows = c.occurrences.filter(function (occ) {
+          return (String(occ.responsible_person || '').trim() || '(غير محدد)') === person;
+        });
+        var msg = 'يشتري ' + person + ' صنف «' + c.label + '» بوسيط سعر وحدة ' + fmt2_(myMed) +
+          ' مقابل ' + fmt2_(theirMed) + ' لباقي المسؤولين — أي أعلى بنسبة ' +
+          Math.round((ratio - 1) * 100) + '% (' + mine.length + ' عملية مقابل ' + theirs.length + ')';
+        rows.forEach(function (occ) {
+          flags.push(flag_('PEER_GAP', ratio >= ratioCut * 1.6 ? 'high' : 'medium', occ.movement_id, msg,
+            rows.map(function (r) {
+              return { row_id: String(r.movement_id), transaction_date: r.transaction_date,
+                       item: r.item_norm, unit_price: r.unit_price, responsible_person: person };
+            }).concat([{ row_id: null, peer_median: round_(theirMed, 4), peer_n: theirs.length }])));
+        });
+      });
+    });
+    return { flags: flags, notes: notes };
+  }
+
+  /* ── PRICE_RATCHET ──────────────────────────────────────────────────────
+   * One person's unit price for an item climbing monotonically while everyone
+   * else's stays flat. Mann–Kendall rather than a regression slope: it is
+   * rank-based, so a single large purchase cannot manufacture a trend. */
+  function rulePriceRatchet(stats, opts) {
+    var o = opts || {};
+    var minN = o.ratchet_min_n === undefined ? TIER2.RATCHET_MIN_N : o.ratchet_min_n;
+    var tauCut = o.ratchet_tau === undefined ? TIER2.RATCHET_TAU : o.ratchet_tau;
+    var peerTauCut = o.ratchet_peer_tau === undefined ? TIER2.RATCHET_PEER_TAU : o.ratchet_peer_tau;
+    var flags = [], notes = [];
+
+    Object.keys(stats).forEach(function (cid) {
+      var c = stats[cid];
+      var people = Object.keys(c.by_person);
+      people.forEach(function (person) {
+        var mine = [], theirs = [];
+        c.occurrences.slice().sort(function (a, b) {
+          return a.transaction_date < b.transaction_date ? -1 : a.transaction_date > b.transaction_date ? 1 : 0;
+        }).forEach(function (occ) {
+          var p = String(occ.responsible_person || '').trim() || '(غير محدد)';
+          (p === person ? mine : theirs).push(occ);
+        });
+        if (mine.length < minN) return;
+
+        var myTau = mannKendallTau(mine.map(function (x) { return Number(x.unit_price); }));
+        if (myTau === null || myTau < tauCut) return;
+        var theirTau = theirs.length >= 3
+          ? mannKendallTau(theirs.map(function (x) { return Number(x.unit_price); }))
+          : null;
+        if (theirTau !== null && theirTau >= peerTauCut) return;   /* everyone is rising — a market move */
+
+        var first = Number(mine[0].unit_price), last = Number(mine[mine.length - 1].unit_price);
+        if (!(last > first)) return;
+
+        var msg = 'سعر وحدة «' + c.label + '» لدى ' + person + ' في ارتفاع مطّرد: من ' +
+          fmt2_(first) + ' في ' + mine[0].transaction_date + ' إلى ' + fmt2_(last) + ' في ' +
+          mine[mine.length - 1].transaction_date + ' عبر ' + mine.length + ' عملية (معامل اتجاه ' +
+          myTau + ')' +
+          (theirTau === null
+            ? ' — ولا توجد بيانات كافية لباقي المسؤولين للمقارنة'
+            : '، بينما اتجاه باقي المسؤولين ' + theirTau + ' أي شبه ثابت');
+        mine.forEach(function (occ) {
+          flags.push(flag_('PRICE_RATCHET', 'medium', occ.movement_id, msg,
+            mine.map(function (r) {
+              return { row_id: String(r.movement_id), transaction_date: r.transaction_date,
+                       item: r.item_norm, unit_price: r.unit_price, responsible_person: person };
+            })));
+        });
+      });
+    });
+    return { flags: flags, notes: notes };
+  }
+
+  /* ── NEW_ITEM_HIGH_VALUE ────────────────────────────────────────────────
+   * An item bought exactly once, at a price high for its account. Cheap to
+   * check and it is where a fabricated purchase tends to land: something that
+   * has no history to be compared against. */
+  function ruleNewItemHighValue(stats, occurrences, opts) {
+    var o = opts || {};
+    var minAcctN = o.new_item_min_account_n === undefined ? TIER2.NEW_ITEM_MIN_ACCOUNT_N : o.new_item_min_account_n;
+    var pct = o.new_item_percentile === undefined ? TIER2.NEW_ITEM_PERCENTILE : o.new_item_percentile;
+    var flags = [], notes = [];
+
+    var byAccount = {};
+    (occurrences || []).forEach(function (occ) {
+      var a = String(occ.chart_of_accounts || '').trim();
+      if (!a) return;
+      (byAccount[a] = byAccount[a] || []).push(Number(occ.price));
+    });
+
+    Object.keys(stats).forEach(function (cid) {
+      var c = stats[cid];
+      if (c.n !== 1) return;
+      var occ = c.occurrences[0];
+      var acct = String(occ.chart_of_accounts || '').trim();
+      var pop = byAccount[acct] || [];
+      if (pop.length < minAcctN) {
+        notes.push({ rule_id: 'NEW_ITEM_HIGH_VALUE', status: 'insufficient_data', cluster_id: cid,
+          n: pop.length, required: minAcctN,
+          reason_ar: 'بيانات غير كافية لحساب المعتاد لحساب ' + acct + ' (المتاح ' + pop.length +
+            ' بند، والمطلوب ' + minAcctN + ')' });
+        return;
+      }
+      var cut = percentile(pop, pct);
+      if (!(Number(occ.price) > cut)) return;
+      flags.push(flag_('NEW_ITEM_HIGH_VALUE', 'medium', occ.movement_id,
+        'صنف «' + c.label + '» لم يُشترَ من قبل في هذه الفترة، وسعره ' + fmt2_(occ.price) +
+        ' أعلى من ' + Math.round(pct * 100) + '% من بنود حساب ' + acct +
+        ' (الحد ' + fmt2_(cut) + ' من ' + pop.length + ' بند)',
+        [{ row_id: String(occ.movement_id), transaction_date: occ.transaction_date,
+           item: occ.item_norm, price: occ.price, account_cut: round_(cut, 2),
+           account_n: pop.length, responsible_person: occ.responsible_person }]));
+    });
+    return { flags: flags, notes: notes };
+  }
+
+  /* ── QUANTITY_ANOMALY ───────────────────────────────────────────────────
+   * The unit price is entirely normal and the QUANTITY is not. Worth its own
+   * rule because a price check alone cannot see it: buying ten times the usual
+   * amount at the usual price passes every price rule in this tier. */
+  function ruleQuantityAnomaly(stats, opts) {
+    var o = opts || {};
+    var minN = o.tier2_min_n === undefined ? TIER2.MIN_N : o.tier2_min_n;
+    var zCut = o.tier2_z === undefined ? TIER2.Z_THRESHOLD : o.tier2_z;
+    var flags = [];
+
+    Object.keys(stats).forEach(function (cid) {
+      var c = stats[cid];
+      if (c.n < minN || !c.qty || !c.qty.scale) return;
+      c.occurrences.forEach(function (occ) {
+        var q = Number(occ.qty);
+        if (!isFinite(q)) return;
+        var qz = modifiedZ(q, c.qty);
+        if (qz === null || qz <= zCut) return;               /* only unusually LARGE quantities */
+        var pz = c.price && c.price.scale ? modifiedZ(Number(occ.unit_price), c.price) : null;
+        if (pz !== null && Math.abs(pz) > zCut) return;       /* the price rule already has this row */
+        flags.push(flag_('QUANTITY_ANOMALY', 'medium', occ.movement_id,
+          'كمية «' + c.label + '» في هذه الحركة ' + fmt2_(q) + ' مقابل وسيط ' +
+          fmt2_(c.qty.median) + ' من ' + c.n + ' عملية شراء، مع أن سعر الوحدة طبيعي — ' +
+          'درجة انحراف الكمية ' + qz,
+          [{ row_id: String(occ.movement_id), transaction_date: occ.transaction_date,
+             item: occ.item_norm, qty: q, qty_median: c.qty.median, modified_z: qz,
+             unit_price: occ.unit_price, responsible_person: occ.responsible_person }]));
+      });
+    });
+    return { flags: flags, notes: [] };
+  }
+
+  /**
+   * Run Tier 2 over parsed item occurrences.
+   *
+   * occurrences: as produced by getBoxItemHistory_.
+   * opts.byNorm: item_norm → cluster_id, from clusterItems. When absent, each
+   *   distinct text is its own cluster, which is strictly worse and is the
+   *   caller's choice to make knowingly.
+   *
+   * Returns { flags, by_row, notes, stats }.
+   */
+  function runTier2(occurrences, opts) {
+    var o = opts || {};
+    var byNorm = o.byNorm || null;
+    if (!byNorm) {
+      var clustered = clusterItems(occurrences || [], { aliases: o.aliases || null });
+      byNorm = clustered.byNorm;
+    }
+    var stats = clusterPriceStats(occurrences, byNorm);
+
+    var flags = [], notes = [];
+    [rulePriceOutlier(stats, o),
+     rulePeerGap(stats, o),
+     rulePriceRatchet(stats, o),
+     ruleNewItemHighValue(stats, occurrences, o),
+     ruleQuantityAnomaly(stats, o)].forEach(function (r) {
+      flags = flags.concat(r.flags);
+      notes = notes.concat(r.notes || []);
+    });
+
+    var byRow = {};
+    flags.forEach(function (f) {
+      if (f.row_id === null) return;
+      (byRow[f.row_id] = byRow[f.row_id] || []).push(f);
+    });
+    return { flags: flags, by_row: byRow, notes: notes, stats: stats };
+  }
+
   // ═══════════════════════════════════════════════════════════════════════
   // Public surface
   // ═══════════════════════════════════════════════════════════════════════
@@ -1713,6 +2107,20 @@ var BoxEngine = (function () {
     detectStructuringThresholds: detectStructuringThresholds,
     ruleStructuring: ruleStructuring,
     runTier1: runTier1,
+
+    /* §7 Tier 2 — price anomalies, median/MAD */
+    TIER2: TIER2,
+    mad: mad,
+    robustStats: robustStats,
+    modifiedZ: modifiedZ,
+    mannKendallTau: mannKendallTau,
+    clusterPriceStats: clusterPriceStats,
+    rulePriceOutlier: rulePriceOutlier,
+    rulePeerGap: rulePeerGap,
+    rulePriceRatchet: rulePriceRatchet,
+    ruleNewItemHighValue: ruleNewItemHighValue,
+    ruleQuantityAnomaly: ruleQuantityAnomaly,
+    runTier2: runTier2,
 
     /* §6 — period windows */
     daysInMonth: daysInMonth,
