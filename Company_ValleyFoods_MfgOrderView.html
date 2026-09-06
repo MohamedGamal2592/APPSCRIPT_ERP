@@ -92,7 +92,7 @@
       var MFG_OUTPUTS = [];      /* [{uid,product_id,qty,cost_unit,total_cost,product_name}] */
       var OUTPUT_FOOTERS = [];   /* [[{item,item_code,qty,unit_cost,total_cost}]] parallel to MFG_OUTPUTS */
       var OUTPUT_BATCHES = [];   /* [[batches]] parallel to MFG_OUTPUTS (preloaded) */
-      var MFG_WORKOPS = [];      /* [{uid,work_center_id,operation_status,notes,start_time,last_pause_time,end_time,actual_hours}] */
+      var MFG_WORKOPS = [];      /* [{uid,work_center_id,operation_status,notes,start_time,last_pause_time,end_time,actual_hours,work_center_cost,total_cost}] */
       var MFG_BYPRODUCTS = [];   /* [{uid,item,qty,transaction_code,total_cost}] */
 
       function editable() { return IS_SUPER_ADMIN ? true : (CAN_WRITE && MO_STATUS !== 'Locked'); }
@@ -170,7 +170,11 @@
             });
             OUTPUT_BATCHES = (full.outputs || []).map(function (o) { return o.batches || []; });
             MFG_WORKOPS = (res.workops || []).map(function (w) {
-              return { uid: w.unique_id || '', work_center_id: String(w.work_center_id || ''), operation_status: w.operation_status || 'Pending', notes: w.notes || '', start_time: w.start_time || '', last_pause_time: w.last_pause_time || '', end_time: w.end_time || '', actual_hours: w.actual_hours != null ? w.actual_hours : '' };
+              /* U-45: work_center_cost / total_cost are sheet-computed and now
+                 arrive from the server. They may be absent when the user has no
+                 cost grant, so keep them undefined rather than defaulting to 0 —
+                 the table tells the two cases apart. */
+              return { uid: w.unique_id || '', work_center_id: String(w.work_center_id || ''), operation_status: w.operation_status || 'Pending', notes: w.notes || '', start_time: w.start_time || '', last_pause_time: w.last_pause_time || '', end_time: w.end_time || '', actual_hours: w.actual_hours != null ? w.actual_hours : '', work_center_cost: w.work_center_cost, total_cost: w.total_cost };
             });
             MFG_BYPRODUCTS = (res.byproducts || []).map(function (b) {
               return { uid: b.unique_id || '', item: String(b.item || ''), qty: b.qty || '', transaction_code: b.transaction_code || '', total_cost: b.total_cost || '' };
@@ -572,6 +576,15 @@
           drawWorkOps();
         }
       }
+      /* U-45. The two sheet-computed cost columns of the work-ops table.
+         Kept as small helpers so the cost gate (S6) has one place to switch. */
+      function wcCostHeaders() { return '<th style="width:120px;">تكلفة المركز</th><th style="width:120px;">الإجمالي</th>'; }
+      function wcCostCells(w) {
+        var unsaved = !w.uid;
+        var wcc = unsaved ? '—' : fmtMoney(w.work_center_cost);
+        var tot = unsaved ? '—' : fmtMoney(w.total_cost);
+        return '<td class="odoo-ro">' + wcc + '</td><td class="odoo-ro">' + tot + '</td>';
+      }
       function drawWorkOps() {
         var tb = document.getElementById('workops-body'); if (!tb) return;
         function statusLabel(s) { return s === 'Done' ? 'منتهية' : (s === 'Paused' ? 'متوقف مؤقتاً' : (s === 'In Progress' ? 'قيد التشغيل' : 'بانتظار')); }
@@ -599,12 +612,15 @@
             '<td>' + inputHtml('wo-notes-' + i, w.notes, 'text', 'MFGVIEW_PAGE.setWorkOp(' + i + ',\'notes\',this.value)', disOpt()) + '</td>' +
             '<td style="min-width:240px;">' + timing + '</td>' +
             '<td class="odoo-ro">' + fmt3(w.actual_hours) + '<div style="font-size:10px;color:#888;">توقف: ' + fmt3(w.total_pause_duration) + '</div></td>' +
+            /* U-45: read-only, sheet-computed. An unsaved row has no cost yet —
+               the formulas run on save — so it shows a dash, not a false zero. */
+            wcCostCells(w) +
             (editable() ? '<td><button class="btn btn-ghost" style="padding:2px 6px;font-size:11px;" onclick="MFGVIEW_PAGE.removeWorkOp(' + i + ')">✕</button></td>' : '<td></td>') +
             '</tr>';
         }).join('');
         var addBtn = editable() ? '<button class="btn btn-outline" style="margin-top:8px;" onclick="MFGVIEW_PAGE.addWorkOp()">+ عملية تشغيل</button>' : '';
         tb.innerHTML = (MFG_WORKOPS.length
-          ? '<table class="odoo-table"><thead><tr><th>مركز العمل</th><th>الحالة</th><th>ملاحظات</th><th>بدء / إنهاء (توقيت يدوي)</th><th>الساعات الفعلية</th><th></th></tr></thead><tbody>' + rows + '</tbody></table>'
+          ? '<table class="odoo-table"><thead><tr><th>مركز العمل</th><th>الحالة</th><th>ملاحظات</th><th>بدء / إنهاء (توقيت يدوي)</th><th>الساعات الفعلية</th>' + wcCostHeaders() + '<th></th></tr></thead><tbody>' + rows + '</tbody></table>'
           : '<div class="odoo-ro">لا توجد ورديات تشغيل</div>') + addBtn;
       }
 
