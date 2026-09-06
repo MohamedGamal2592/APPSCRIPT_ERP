@@ -2598,6 +2598,104 @@ var BoxEngine = (function () {
     return { flags: flags, by_entity: byEntity, notes: notes };
   }
 
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // §7 Scoring — risk ranking
+  // ═══════════════════════════════════════════════════════════════════════
+  //
+  // A row's risk is a SATURATING combination of the severities that fired, not
+  // a sum. Two reasons why:
+  //
+  //   - A sum is unbounded, so a row with nine low-severity notes outranks a
+  //     row with one confirmed integrity failure. That is backwards, and it is
+  //     what an unbounded score does every time.
+  //   - Saturation matches how the finding is actually used. The second
+  //     duplicate-detection flag on a row does not double the case for looking
+  //     at it; the first one already earned the look.
+  //
+  // The combination is 1 − Π(1 − wᵢ), the probability that at least one of a
+  // set of independent signals fires. The independence assumption is not
+  // literally true — SUM_MISMATCH and NEAR_DUP correlate — so the number is a
+  // RANKING, not a probability, and nothing here presents it as one.
+  //
+  // THE SCORE IS NEVER SHOWN ALONE. riskScore returns the flags that produced
+  // it, and the page renders them. A bare number with nothing behind it does
+  // not survive an accountant asking "why", which is the only conversation
+  // this output exists to have.
+
+  var RISK = {
+    WEIGHT: { high: 0.70, medium: 0.35, low: 0.12 },
+    /* Bucket cuts on the 0–100 scale. 'high' is reachable by ONE high-severity
+       flag (70) so a single confirmed integrity failure ranks as high on its
+       own — it should not need corroboration from two weak notes. */
+    BUCKET_HIGH: 70,
+    BUCKET_MEDIUM: 35
+  };
+
+  var RISK_LEVEL_AR = { high: 'مرتفع', medium: 'متوسط', low: 'منخفض', none: 'لا يوجد' };
+
+  /**
+   * Combine a row's flags into a ranking score.
+   * Returns { score 0–100, level, level_ar, counts, flags } — always with the
+   * flags, so the caller cannot render the number without its reasons.
+   */
+  function riskScore(flags) {
+    var list = (flags || []).filter(function (f) { return f && f.severity; });
+    if (!list.length) {
+      return { score: 0, level: 'none', level_ar: RISK_LEVEL_AR.none,
+               counts: { high: 0, medium: 0, low: 0 }, flags: [] };
+    }
+    var counts = { high: 0, medium: 0, low: 0 };
+    var product = 1;
+    list.forEach(function (f) {
+      var w = RISK.WEIGHT[f.severity];
+      if (w === undefined) return;
+      counts[f.severity]++;
+      product *= (1 - w);
+    });
+    var score = Math.round((1 - product) * 100);
+    var level = score >= RISK.BUCKET_HIGH ? 'high'
+      : score >= RISK.BUCKET_MEDIUM ? 'medium'
+      : score > 0 ? 'low' : 'none';
+
+    /* Most severe first, so the reason a reader sees first is the reason the
+       row is ranked where it is. */
+    var order = { high: 0, medium: 1, low: 2 };
+    var sorted = list.slice().sort(function (a, b) {
+      return (order[a.severity] - order[b.severity]) ||
+             (a.rule_id < b.rule_id ? -1 : a.rule_id > b.rule_id ? 1 : 0);
+    });
+
+    return {
+      score: score,
+      level: level,
+      level_ar: RISK_LEVEL_AR[level],
+      counts: counts,
+      flags: sorted
+    };
+  }
+
+  /**
+   * Rank rows by risk. Rows with no flags are returned too, at score 0 — the
+   * alerts tab filters them out, but the caller needs every row scored so the
+   * movements tab can badge them without a second pass.
+   */
+  function rankRows(rows, byRow) {
+    var out = (rows || []).map(function (r) {
+      var risk = riskScore((byRow || {})[String(r.id)] || []);
+      return { row: r, risk: risk };
+    });
+    out.sort(function (a, b) {
+      if (b.risk.score !== a.risk.score) return b.risk.score - a.risk.score;
+      /* Stable, and newest-first within a score, which is the order a reviewer
+         works in. */
+      var da = String(a.row.transaction_date || ''), db = String(b.row.transaction_date || '');
+      if (da !== db) return da < db ? 1 : -1;
+      return String(b.row.id).localeCompare(String(a.row.id));
+    });
+    return out;
+  }
+
   // ═══════════════════════════════════════════════════════════════════════
   // Public surface
   // ═══════════════════════════════════════════════════════════════════════
@@ -2687,6 +2785,12 @@ var BoxEngine = (function () {
     ruleAccountMixDrift: ruleAccountMixDrift,
     ruleSeasonality: ruleSeasonality,
     runTier3: runTier3,
+
+    /* §7 — risk ranking */
+    RISK: RISK,
+    RISK_LEVEL_AR: RISK_LEVEL_AR,
+    riskScore: riskScore,
+    rankRows: rankRows,
 
     /* §6 — period windows */
     daysInMonth: daysInMonth,

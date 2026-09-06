@@ -61,6 +61,27 @@
        additive, so the shared rule is left exactly as it is. */
     .uic-confirm-detail { white-space: pre-line; }
 
+    .risk-high { background: #fee2e2; color: #991b1b; }
+    .risk-med  { background: #ffedd5; color: #9a3412; }
+    .risk-low  { background: #e0f2fe; color: #075985; }
+    .risk-n { font-size: 11px; color: var(--text-muted); }
+
+    .flag { border-inline-start: 3px solid #d1d5db; padding: 6px 10px; margin: 6px 0;
+            background: var(--surface, #fff); border-radius: 0 6px 6px 0; }
+    .flag-high { border-inline-start-color: #dc2626; }
+    .flag-med  { border-inline-start-color: #ea580c; }
+    .flag-low  { border-inline-start-color: #0284c7; }
+    .flag-head { font-size: 11.5px; color: var(--text-muted); margin-bottom: 3px; }
+    .flag-head code { font-size: 11px; }
+    .flag-why { font-size: 13px; line-height: 1.7; }
+    .flag-ev { font-size: 11.5px; color: var(--text-muted); margin-top: 3px; }
+
+    .sec-title { font-size: 14px; margin: 18px 0 6px; }
+    .note-list { font-size: 12.5px; color: var(--text-muted); line-height: 1.9;
+                 margin: 0; padding-inline-start: 18px; }
+    .notice:not(.notice-warn) { background: var(--surface-2, #f8fafc);
+                                border: 1px solid var(--border, #e5e7eb); color: var(--text-muted); }
+
     .edit-hint { font-size: 12px; color: var(--text-muted); margin: -4px 0 10px; }
     .edit-locked { font-size: 12.5px; color: var(--text-muted); border-top: 1px dashed var(--border, #e5e7eb);
                    margin-top: 10px; padding-top: 8px; line-height: 1.9; }
@@ -152,8 +173,10 @@
   function renderFilters() {
     var body = document.getElementById('box-content');
     if (!body) return;
-    body.innerHTML =
-      '<div id="box-notices"></div>' +
+    /* The movements panel keeps exactly the markup it had; the other two are
+       added beside it rather than around it, so tab 1 renders and behaves the
+       same as it did before tabs existed. */
+    var movesPanel =
       '<div class="filter-bar">' +
         '<div class="form-field"><label class="form-label" for="f-from">من تاريخ</label>' +
           '<input id="f-from" type="date" class="input" value="' + esc(FILTER.date_from) + '"></div>' +
@@ -182,9 +205,19 @@
       '</div>' +
       '<div id="box-table"></div>' +
       '<div id="box-pager" class="pager"></div>';
+
+    body.innerHTML =
+      '<div id="box-notices"></div>' +
+      UIC.notebook('box-tabs', [
+        { key: 'moves', label: 'الحركات', content: movesPanel },
+        { key: 'alerts', label: 'التنبيهات', content: alertsPanelHtml() },
+        { key: 'items', label: 'تحليل البنود', content: itemsPanelHtml() }
+      ], 'moves');
+
     var rev = document.getElementById('f-rev');
     if (rev) rev.value = FILTER.is_revised;
     renderAccountDatalist();
+    wireTabs();
   }
 
   function renderAccountDatalist() {
@@ -312,7 +345,7 @@
         '<th style="width:34px;"></th>' +
         '<th>التاريخ</th><th>التفاصيل</th><th>المبلغ</th><th>النوع</th>' +
         '<th>الحساب</th><th>المسؤول</th><th>الخزنة</th><th>الحالة</th>' +
-        '<th>إجراء</th>' +
+        '<th>الخطورة</th><th>إجراء</th>' +
       '</tr></thead><tbody>';
 
     LAST.rows.forEach(function (row) {
@@ -336,10 +369,11 @@
         '<td>' + esc(row.responsible_person || '—') + '</td>' +
         '<td class="num">' + esc(row.box_code == null ? '—' : row.box_code) + '</td>' +
         '<td>' + revisePill(row.is_revised) + '</td>' +
+        '<td>' + riskBadge(row.risk) + '</td>' +
         '<td>' + rowActions(row) + '</td>' +
       '</tr>' +
       '<tr id="box-detail-' + id + '"' + (open ? '' : ' hidden') + '>' +
-        '<td class="detail-cell" colspan="10">' + (open ? detailHtml(row) : '') + '</td>' +
+        '<td class="detail-cell" colspan="11">' + (open ? detailHtml(row) : '') + '</td>' +
       '</tr>';
     });
 
@@ -375,10 +409,11 @@
       '<div class="detail-block">' +
         '<h4>حركة الحساب ' + esc(acctLabel(row.chart_of_accounts)) + '</h4>' + windowsHtml(row) +
       '</div>' +
-      /* Seam for B7: per-item price history and the triggered rules render
-         here, beside the evidence they are about. Nothing renders yet, and
-         nothing pretends to. */
-      '<div class="detail-block" id="box-rules-' + domId(row.id) + '"></div>' +
+      /* The triggered rules render beside the evidence they are about, never as
+         a bare score somewhere else on the page. */
+      '<div class="detail-block" id="box-rules-' + domId(row.id) + '">' +
+        '<h4>الملاحظات على هذه الحركة</h4>' + flagsHtml(row.risk) +
+      '</div>' +
     '</div>';
   }
 
@@ -760,6 +795,345 @@
     });
   }
 
+
+  /* ── Tabs 2 and 3 (plan §8) ───────────────────────────────────────────────
+   *
+   * Each tab costs its OWN query and is loaded on first activation, never with
+   * the page. The movements tab holds the three-query budget; the alerts tab
+   * needs a population rather than a page (Benford alone is gated at 300
+   * amounts) and the item tab needs the parsed history. Loading all three up
+   * front would triple the cost of opening the screen for a user who only
+   * wanted to look at yesterday's movements.
+   */
+  var TABS_LOADED = { alerts: false, items: false };
+  var ALERTS = { months: 12, data: null };
+  var ITEMS = { months: 24, data: null };
+
+  function riskBadge(risk) {
+    if (!risk || !risk.score) return '<span style="color:#9ca3af;">—</span>';
+    var cls = risk.level === 'high' ? 'risk-high' : risk.level === 'medium' ? 'risk-med' : 'risk-low';
+    /* The number never appears without its count of reasons beside it. */
+    var n = risk.flags.length;
+    return '<span class="pill ' + cls + '" title="' + esc(risk.flags.map(function (f) { return f.reason_ar; }).join(' | ')) + '">' +
+      esc(risk.level_ar) + ' · ' + risk.score + '</span>' +
+      ' <span class="risk-n">' + n + '</span>';
+  }
+
+  /** The triggered rules for a row, as Arabic sentences with their evidence. */
+  function flagsHtml(risk) {
+    if (!risk || !risk.flags || !risk.flags.length) {
+      return '<div class="win-note">لا توجد ملاحظات على هذه الحركة.</div>';
+    }
+    var html = '';
+    risk.flags.forEach(function (f) {
+      var cls = f.severity === 'high' ? 'flag-high' : f.severity === 'medium' ? 'flag-med' : 'flag-low';
+      html += '<div class="flag ' + cls + '">' +
+        '<div class="flag-head"><span class="pill ' +
+          (f.severity === 'high' ? 'risk-high' : f.severity === 'medium' ? 'risk-med' : 'risk-low') +
+          '">' + esc(f.severity_ar) + '</span> <code>' + esc(f.rule_id) + '</code></div>' +
+        '<div class="flag-why">' + esc(f.reason_ar) + '</div>';
+      var rows = (f.evidence || []).filter(function (e) { return e && e.row_id; });
+      if (rows.length) {
+        html += '<div class="flag-ev">الحركات المرتبطة: ' +
+          rows.map(function (e) { return esc(e.row_id); }).join('، ') + '</div>';
+      }
+      html += '</div>';
+    });
+    return html;
+  }
+
+  /* ── Tab 2 — التنبيهات ──────────────────────────────────────────────────── */
+
+  function alertsPanelHtml() {
+    return '<div class="filter-bar">' +
+        '<div class="form-field"><label class="form-label" for="a-months">الفترة (بالأشهر)</label>' +
+          '<input id="a-months" type="number" min="1" max="60" class="input" value="' + ALERTS.months + '"></div>' +
+        '<button class="btn btn-primary" onclick="fetchAlerts()">تحليل</button>' +
+      '</div>' +
+      '<div id="alerts-notices"></div>' +
+      '<div id="alerts-body"><div class="win-note">اضغط «تحليل» لفحص الفترة المحددة.</div></div>';
+  }
+
+  function fetchAlerts() {
+    var m = Number((document.getElementById('a-months') || {}).value) || 12;
+    ALERTS.months = Math.min(Math.max(m, 1), 60);
+    UI.showSpinner('جاري تحليل الفترة...');
+    companyCall('get_box_alerts', {
+      ref_date: LAST.ref_date, months: ALERTS.months,
+      chart_of_accounts: FILTER.chart_of_accounts,
+      responsible_person: FILTER.responsible_person
+    })
+      .then(function (r) { ALERTS.data = r; renderAlerts(); })
+      .catch(function (e) {
+        var el = document.getElementById('alerts-body');
+        if (el) el.innerHTML = UIC.emptyState({ icon: 'alert', title: 'تعذّر التحليل',
+          body: (e && e.message) || 'خطأ غير معروف' });
+      })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function renderAlerts() {
+    var r = ALERTS.data || {};
+    var notices = document.getElementById('alerts-notices');
+    if (notices) {
+      var n = '';
+      /* A partial analysis says so. Reporting fewer findings because the window
+         was cut, without saying the window was cut, reads as "all clear". */
+      if (r.truncated) n += '<div class="notice notice-warn">' + esc(r.truncated_message_ar) + '</div>';
+      if (r.timed_out) n += '<div class="notice notice-warn">' + esc(r.timed_out_message_ar) + '</div>';
+      notices.innerHTML = n;
+    }
+
+    var el = document.getElementById('alerts-body');
+    if (!el) return;
+    var alerts = r.alerts || [];
+    var html = '<div class="win-note">تم فحص ' + esc(FMT.number(r.rows_scanned || 0)) +
+      ' حركة من ' + esc(r.from || '') + ' إلى ' + esc(r.to || '') + '.</div>';
+
+    if (!alerts.length) {
+      html += UIC.emptyState({ icon: 'inbox', title: 'لا توجد تنبيهات في هذه الفترة',
+        body: 'لم تُطابق أي حركة قواعد الفحص. راجع الملاحظات أدناه لمعرفة القواعد التي لم تعمل ولماذا.' });
+    } else {
+      html += '<div class="table-wrap"><table class="table"><thead><tr>' +
+        '<th>الخطورة</th><th>#</th><th>التاريخ</th><th>التفاصيل</th><th>المبلغ</th>' +
+        '<th>الحساب</th><th>المسؤول</th><th>الأسباب</th>' +
+        '</tr></thead><tbody>';
+      alerts.forEach(function (a) {
+        html += '<tr>' +
+          '<td>' + riskBadge(a.risk) + '</td>' +
+          '<td class="num">' + esc(a.id) + '</td>' +
+          '<td>' + esc(a.transaction_date || '—') + '</td>' +
+          '<td>' + esc(a.transaction_details || '—') + '</td>' +
+          '<td class="num">' + esc(money(a.transaction_amount)) + '</td>' +
+          '<td>' + esc(acctLabel(a.chart_of_accounts)) + '</td>' +
+          '<td>' + esc(a.responsible_person || '—') + '</td>' +
+          '<td>' + flagsHtml(a.risk) + '</td>' +
+        '</tr>';
+      });
+      html += '</tbody></table></div>';
+    }
+
+    /* Entity-level findings render SEPARATELY from row alerts, because
+       "this person's amounts do not follow Benford" is not a claim about any
+       one movement and must not be shown as one. */
+    var ent = r.entity_findings || [];
+    if (ent.length) {
+      html += '<h3 class="sec-title">ملاحظات على مستوى المسؤولين والحسابات</h3>';
+      ent.forEach(function (f) {
+        html += '<div class="flag ' + (f.severity === 'high' ? 'flag-high' : f.severity === 'medium' ? 'flag-med' : 'flag-low') + '">' +
+          '<div class="flag-head"><span class="pill risk-med">' + esc(f.severity_ar) + '</span> ' +
+          '<code>' + esc(f.rule_id) + '</code> · ' + esc(f.entity_kind || '') + ' ' + esc(f.entity || '') + '</div>' +
+          '<div class="flag-why">' + esc(f.reason_ar) + '</div></div>';
+      });
+    }
+
+    /* The rules that did NOT run, and why. "No finding" and "could not look"
+       are different answers, and only one of them is reassuring. */
+    var notes = r.notes || [];
+    if (notes.length) {
+      html += '<h3 class="sec-title">قواعد لم تُطبَّق</h3><ul class="note-list">';
+      notes.slice(0, 40).forEach(function (n) {
+        html += '<li><code>' + esc(n.rule_id) + '</code> — ' + esc(n.reason_ar) + '</li>';
+      });
+      if (notes.length > 40) html += '<li>… و' + (notes.length - 40) + ' ملاحظة أخرى</li>';
+      html += '</ul>';
+    }
+    el.innerHTML = html;
+  }
+
+  /* ── Tab 3 — تحليل البنود ───────────────────────────────────────────────── */
+
+  function itemsPanelHtml() {
+    return '<div class="filter-bar">' +
+        '<div class="form-field"><label class="form-label" for="i-months">الفترة (بالأشهر)</label>' +
+          '<input id="i-months" type="number" min="1" max="60" class="input" value="' + ITEMS.months + '"></div>' +
+        '<button class="btn btn-primary" onclick="fetchItems()">تحليل البنود</button>' +
+      '</div>' +
+      '<div id="items-notices"></div>' +
+      '<div id="items-body"><div class="win-note">اضغط «تحليل البنود» لبناء فهرس الأصناف للفترة المحددة.</div></div>';
+  }
+
+  function fetchItems() {
+    var m = Number((document.getElementById('i-months') || {}).value) || 24;
+    ITEMS.months = Math.min(Math.max(m, 1), 60);
+    UI.showSpinner('جاري تحليل البنود...');
+    companyCall('get_box_item_history', {
+      ref_date: LAST.ref_date, months: ITEMS.months,
+      chart_of_accounts: FILTER.chart_of_accounts
+    })
+      .then(function (r) { ITEMS.data = r; renderItems(); })
+      .catch(function (e) {
+        var el = document.getElementById('items-body');
+        if (el) el.innerHTML = UIC.emptyState({ icon: 'alert', title: 'تعذّر تحليل البنود',
+          body: (e && e.message) || 'خطأ غير معروف' });
+      })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function renderItems() {
+    var r = ITEMS.data || {};
+    var notices = document.getElementById('items-notices');
+    if (notices) {
+      var n = '';
+      if (r.truncated) {
+        n += '<div class="notice notice-warn">تم تحليل أحدث ' +
+          esc(FMT.number(r.row_count || 0)) + ' حركة فقط ضمن الفترة — النتائج لا تغطي الفترة كاملة.</div>';
+      }
+      var cov = r.coverage || {};
+      if (cov.rows_read) {
+        /* This is a REAL measurement against production text, unlike the
+           fixture figure in the verification suite. It is the number the owner
+           was asked to report. */
+        n += '<div class="notice">تغطية التحليل: ' + esc(FMT.number(cov.rows_with_items)) + ' من ' +
+          esc(FMT.number(cov.rows_read)) + ' حركة أمكن استخراج بنودها (' +
+          Math.round(100 * cov.rows_with_items / cov.rows_read) + '%) · ' +
+          esc(FMT.number(cov.failed_segments)) + ' جزء تعذّر تحليله · ' +
+          esc(FMT.number(cov.sum_mismatch_rows)) + ' حركة مجموع بنودها لا يطابق المبلغ.</div>';
+      }
+      notices.innerHTML = n;
+    }
+
+    var el = document.getElementById('items-body');
+    if (!el) return;
+    var clusters = r.clusters || [];
+    if (!clusters.length) {
+      el.innerHTML = UIC.emptyState({ icon: 'inbox', title: 'لا توجد بنود في هذه الفترة',
+        body: 'تحليل البنود يعمل على الحسابات في نطاق 300000–400000 وعلى حركات المنصرف فقط.' });
+      return;
+    }
+
+    var stats = r.stats || {};
+    var byRow = r.item_flags_by_row || {};
+    var html = '<div class="win-note">' + esc(FMT.number(clusters.length)) +
+      ' مجموعة صنف من ' + esc(FMT.number(r.row_count || 0)) + ' حركة · حد التطابق ' +
+      esc(String(r.threshold)) + '</div>';
+
+    if (r.aliases && (r.aliases.merge.length || r.aliases.split.length)) {
+      html += '<div class="win-note">تصحيحات يدوية مسجَّلة: ' + r.aliases.merge.length +
+        ' دمج و' + r.aliases.split.length + ' فصل' +
+        (r.aliases.updated_by ? ' — آخر تعديل بواسطة ' + esc(r.aliases.updated_by) : '') + '</div>';
+    }
+
+    html += '<div class="table-wrap"><table class="table"><thead><tr>' +
+      '<th>الصنف</th><th>عدد الشراء</th><th>وسيط سعر الوحدة</th><th>الأدنى</th><th>الأعلى</th>' +
+      '<th>التسميات المدمجة</th><th>تصحيح</th>' +
+      '</tr></thead><tbody>';
+
+    clusters.forEach(function (c) {
+      var st = stats[c.cluster_id];
+      var price = st && st.price ? st.price : null;
+      var flagged = (r.occurrences_by_cluster[c.cluster_id] || []).filter(function (o) {
+        return (byRow[String(o.movement_id)] || []).length;
+      }).length;
+      html += '<tr>' +
+        '<td>' + esc(c.label) + (flagged ? ' <span class="pill pill-warn">' + flagged + ' ملاحظة</span>' : '') + '</td>' +
+        '<td class="num">' + esc(FMT.number(c.occurrence_count)) + '</td>' +
+        '<td class="num">' + (price ? esc(money(price.median)) : '—') + '</td>' +
+        '<td class="num">' + (price ? esc(money(price.min)) : '—') + '</td>' +
+        '<td class="num">' + (price ? esc(money(price.max)) : '—') + '</td>' +
+        '<td>' + (c.members.length > 1
+            ? esc(c.members.slice(1).join('  |  '))
+            : '<span style="color:#9ca3af;">—</span>') + '</td>' +
+        '<td>' + (CAN_WRITE
+            ? UIC.actionBtns([{ label: 'دمج/فصل', onclick: "openAliasDialog('" + esc(c.cluster_id).replace(/'/g, '') + "')" }])
+            : '<span style="color:#9ca3af;">—</span>') + '</td>' +
+      '</tr>';
+    });
+    html += '</tbody></table></div>';
+    el.innerHTML = html;
+  }
+
+  /**
+   * The merge/split control of plan §5.3.
+   *
+   * The matcher will be wrong sometimes, and without a way to correct it
+   * permanently the reviewer argues with the algorithm every week and stops
+   * trusting the page. The correction is stored server-side and survives every
+   * rebuild — it is not a display toggle.
+   */
+  function openAliasDialog(clusterId) {
+    if (!CAN_WRITE) { UIC.toast('غير مصرح', 'error'); return; }
+    var r = ITEMS.data || {};
+    var cluster = (r.clusters || []).filter(function (c) { return c.cluster_id === clusterId; })[0];
+    if (!cluster) { UIC.toast('المجموعة غير موجودة', 'error'); return; }
+    var options = (r.clusters || []).filter(function (c) { return c.cluster_id !== clusterId; })
+      .slice(0, 300)
+      .map(function (c) { return { value: c.label, label: c.label + ' (' + c.occurrence_count + ')' }; });
+
+    var body = '<form id="box-alias-form">' +
+      '<div class="edit-hint">الصنف الحالي: <b>' + esc(cluster.label) + '</b></div>' +
+      UIC.field({ key: 'al_op', label: 'نوع التصحيح', type: 'select', combo: false,
+                  options: [{ value: 'merge', label: 'دمج مع صنف آخر (نفس المشتَرى)' },
+                            { value: 'split', label: 'فصل عن صنف آخر (مشتَرى مختلف)' }] }) +
+      UIC.field({ key: 'al_other', label: 'الصنف الآخر', type: 'select', combo: false,
+                  options: options, placeholder: 'اختر صنفاً' }) +
+      (cluster.members.length > 1
+        ? '<div class="edit-locked">التسميات المدمجة حالياً في هذه المجموعة: ' +
+          esc(cluster.members.join('  |  ')) + '</div>'
+        : '') +
+      '</form>';
+
+    UIC.openModal('box-alias-modal', {
+      title: 'تصحيح تجميع الأصناف',
+      size: 'md',
+      body: body,
+      onSave: "saveAlias('" + esc(cluster.label).replace(/'/g, '') + "')"
+    });
+  }
+
+  function saveAlias(label) {
+    var f = UIC._readForm('box-alias-form');
+    var op = f.data.al_op;
+    var other = f.data.al_other;
+    if (!other) { UIC.toast('اختر الصنف الآخر', 'error'); return; }
+    if (other === label) { UIC.toast('لا يمكن ربط الصنف بنفسه', 'error'); return; }
+
+    UIC.confirm({
+      title: op === 'merge' ? 'تأكيد الدمج' : 'تأكيد الفصل',
+      message: op === 'merge'
+        ? 'سيتم اعتبار الصنفين نفس المشتَرى في كل التحليلات القادمة.'
+        : 'سيتم منع دمج الصنفين نهائياً في كل التحليلات القادمة.',
+      record: label + '  ⇄  ' + other,
+      detail: (op === 'merge' ? 'دمج' : 'فصل') + ': ' + label + ' ⇄ ' + other +
+        '\nيُسجَّل التصحيح باسمك في سجل التدقيق ويبقى بعد كل إعادة بناء للفهرس.',
+      confirmText: op === 'merge' ? 'تأكيد الدمج' : 'تأكيد الفصل',
+      cancelText: 'إلغاء'
+    }).then(function (okd) {
+      if (!okd) return;
+      UI.showSpinner('جاري حفظ التصحيح...');
+      companyCall('save_box_item_alias', { op: op, a: label, b: other })
+        .then(function (res) {
+          if (res && res.audit_error) {
+            UIC.alert({ title: 'تم الحفظ — لكن سجل التدقيق لم يكتمل', danger: true,
+              message: 'حُفظ التصحيح، ولكن تعذّر كتابة سطر التأكيد في سجل التدقيق.',
+              detail: 'أبلغ المسؤول: ' + res.audit_error });
+          } else {
+            UIC.toast('تم حفظ التصحيح', 'success');
+          }
+          UIC.closeModal('box-alias-modal');
+          fetchItems();
+        })
+        .catch(function (e) { UIC.toast((e && e.message) || 'تعذّر الحفظ', 'error'); })
+        .finally(function () { UI.hideSpinner(); });
+    });
+  }
+
+  /* Tabs are lazily loaded on first activation. UIC.notebook wires its own
+     onclick to UIC.notebookSelect, so this listens on the tablist rather than
+     replacing that behaviour — the tab keeps working exactly as every other
+     notebook in the app does. */
+  function wireTabs() {
+    var tabs = document.querySelector('#box-tabs .nb-tabs');
+    if (!tabs) return;
+    tabs.addEventListener('click', function (ev) {
+      var btn = ev.target && ev.target.closest ? ev.target.closest('.nb-tab') : null;
+      if (!btn) return;
+      var key = String(btn.id || '').replace('box-tabs-tab-', '');
+      if (key === 'alerts' && !TABS_LOADED.alerts) { TABS_LOADED.alerts = true; fetchAlerts(); }
+      if (key === 'items' && !TABS_LOADED.items) { TABS_LOADED.items = true; fetchItems(); }
+    });
+  }
+
   function renderPager() {
     var el = document.getElementById('box-pager');
     if (!el) return;
@@ -801,6 +1175,8 @@
     load: load,
     fetchPage: fetchPage,
     openEdit: openEdit,
+    fetchAlerts: fetchAlerts,
+    fetchItems: fetchItems,
     EDIT_FIELDS: EDIT_FIELDS,
     state: function () { return { FILTER: FILTER, LAST: LAST }; }
   };

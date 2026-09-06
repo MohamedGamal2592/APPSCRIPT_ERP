@@ -851,7 +851,105 @@ console.log('\nevery Tier 3 finding is entity-shaped and explainable');
   });
 })();
 
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * Risk ranking
+ * ═══════════════════════════════════════════════════════════════════════════ */
+console.log('\n── Risk ranking ────────────────────────────────────────────────────');
+
+function fk(sev, id) {
+  return { rule_id: id || 'R', severity: sev, severity_ar: 'x',
+           reason_ar: 'سبب مفصل يحتوي أرقاماً 123', evidence: [{ row_id: '1' }] };
+}
+
+console.log('\nthe score saturates');
+ok(E.riskScore([]).score === 0 && E.riskScore([]).level === 'none', 'no flags → 0 / none');
+ok(E.riskScore([fk('low')]).score === 12, 'one low = 12', E.riskScore([fk('low')]).score);
+ok(E.riskScore([fk('medium')]).score === 35, 'one medium = 35');
+ok(E.riskScore([fk('high')]).score === 70, 'one high = 70');
+ok(E.riskScore([fk('high')]).level === 'high',
+  'ONE high-severity flag is enough to rank high — a confirmed integrity failure ' +
+  'should not need corroboration from two weak notes');
+ok(E.riskScore([fk('high', 'A'), fk('high', 'B')]).score === 91, 'two highs = 91, not 140');
+ok(E.riskScore([fk('high', 'A'), fk('high', 'B')]).score < 100, 'the score is bounded');
+
+/* The property a sum would get wrong. There are exactly three low-severity
+   rules in the engine, so three is the realistic ceiling for one row; a sum
+   would have put a row with three notes above a row with a confirmed
+   integrity failure. */
+(function () {
+  const threeLows = [fk('low', 'A'), fk('low', 'B'), fk('low', 'C')];
+  ok(E.riskScore(threeLows).score < E.riskScore([fk('high')]).score,
+    'three low notes rank BELOW one high-severity finding',
+    E.riskScore(threeLows).score + ' vs ' + E.riskScore([fk('high')]).score);
+  const lowRules = ['ODD_HOUR', 'EDITED_AFTER_REVIEW (explained)', 'SEASONALITY'];
+  console.log('  the engine has ' + lowRules.length + ' low-severity rules (' + lowRules.join(', ') + '),');
+  console.log('  so ' + lowRules.length + ' is the realistic ceiling for one row: ' +
+    E.riskScore(threeLows).score + ' vs 70 for a single high.');
+  /* Stated honestly rather than overclaimed: saturation makes it HARD for low
+     notes to outrank a high, not impossible. Ten would. */
+  const tenLows = [];
+  for (let i = 0; i < 10; i++) tenLows.push(fk('low', 'L' + i));
+  ok(E.riskScore(tenLows).score > 70,
+    'ten lows WOULD outrank one high (' + E.riskScore(tenLows).score +
+    ') — saturation makes this hard, not impossible, and there are only 3 such rules');
+})();
+
+console.log('\nthe score never travels without its reasons');
+(function () {
+  const r = E.riskScore([fk('high', 'A'), fk('low', 'B'), fk('medium', 'C')]);
+  ok(r.flags.length === 3, 'riskScore returns the flags that produced it', r.flags.length);
+  ok(r.flags[0].severity === 'high' && r.flags[2].severity === 'low',
+    'most severe first, so the first reason a reader sees is why the row ranks where it does',
+    r.flags.map(function (f) { return f.severity; }).join(','));
+  ok(r.counts.high === 1 && r.counts.medium === 1 && r.counts.low === 1, 'and a count per severity');
+  ok(!!r.level_ar, 'and an Arabic level label');
+})();
+
+console.log('\nranking order');
+(function () {
+  const rows = [
+    { id: '1', transaction_date: '2026-01-01' },
+    { id: '2', transaction_date: '2026-01-02' },
+    { id: '3', transaction_date: '2026-01-03' }
+  ];
+  const byRow = { '1': [fk('high')], '2': [], '3': [fk('medium')] };
+  const ranked = E.rankRows(rows, byRow);
+  ok(ranked.map(function (x) { return x.row.id; }).join(',') === '1,3,2',
+    'highest risk first, then medium, then the unflagged row',
+    ranked.map(function (x) { return x.row.id; }).join(','));
+  ok(ranked[2].risk.score === 0, 'unflagged rows are still SCORED, so the movements tab can badge them');
+})();
+
+(function () {
+  /* Equal scores fall back to newest first, which is the order a reviewer
+     actually works in. */
+  const rows = [
+    { id: '10', transaction_date: '2026-01-01' },
+    { id: '11', transaction_date: '2026-03-01' },
+    { id: '12', transaction_date: '2026-02-01' }
+  ];
+  const byRow = { '10': [fk('high')], '11': [fk('high')], '12': [fk('high')] };
+  const ranked = E.rankRows(rows, byRow);
+  ok(ranked.map(function (x) { return x.row.id; }).join(',') === '11,12,10',
+    'ties break newest-first', ranked.map(function (x) { return x.row.id; }).join(','));
+})();
+
+console.log('\nbucket boundaries');
+[[0, 'none'], [12, 'low'], [34, 'low'], [35, 'medium'], [69, 'medium'], [70, 'high'], [91, 'high']]
+  .forEach(function (c) {
+    /* Build a flag set that lands on the wanted score where one exists, and
+       otherwise assert the boundary constants directly. */
+    if (c[0] === 0) { ok(E.riskScore([]).level === 'none', 'score 0 → none'); return; }
+    if (c[0] === 12) { ok(E.riskScore([fk('low')]).level === 'low', 'score 12 → low'); return; }
+    if (c[0] === 35) { ok(E.riskScore([fk('medium')]).level === 'medium', 'score 35 → medium (inclusive)'); return; }
+    if (c[0] === 70) { ok(E.riskScore([fk('high')]).level === 'high', 'score 70 → high (inclusive)'); return; }
+  });
+ok(E.RISK.BUCKET_HIGH === 70 && E.RISK.BUCKET_MEDIUM === 35,
+  'the bucket cuts are named constants, not magic numbers in a comparison');
+
+
 console.log(failures === 0
-  ? '\nAll rule checks pass (Tiers 1, 2 and 3).'
+  ? '\nAll rule checks pass (Tiers 1, 2, 3 and risk ranking).'
   : '\n' + failures + ' rule check(s) FAILED.');
 process.exit(failures === 0 ? 0 : 1);

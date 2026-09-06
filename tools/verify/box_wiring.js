@@ -37,8 +37,13 @@ const SECURITY = read('03_Security.js');
 
 const PAGE = 'tc_box_analysis';
 const TEMPLATE = 'Company_TopChemical_BoxAnalysis';
-const READERS = ['get_box_analysis', 'get_box_item_history'];
-const WRITERS = ['update_box_movement', 'revise_box_movement'];
+/* get_box_alerts and save_box_item_alias are ADDITIONS to the four actions the
+   plan's wiring step names. The alerts tab needs a wider population than the
+   50-row page load (Benford alone is gated at 300 amounts), and the merge/split
+   control of plan §5.3 has to persist a correction somewhere. Both are listed
+   in PAGE_ACCESS like the rest, which is what puts them inside the guard. */
+const READERS = ['get_box_analysis', 'get_box_item_history', 'get_box_alerts'];
+const WRITERS = ['update_box_movement', 'revise_box_movement', 'save_box_item_alias'];
 const ALL = READERS.concat(WRITERS);
 
 let failures = 0;
@@ -69,9 +74,15 @@ ok(/const req = PAGE_ACCESS\[action\];\s*\n\s*if \(!req\) return;/.test(ACTIONS)
 console.log('registration');
 ALL.forEach(function (a) {
   ok(new RegExp("register\\('" + a + "',").test(ACTIONS), a + ' is registered');
+});
+/* The five that touch the table say so; the alias store is a Drive file and
+   records that honestly rather than naming a table that does not exist. */
+ALL.filter(function (a) { return a !== 'save_box_item_alias'; }).forEach(function (a) {
   ok(ACTIONS.indexOf("'" + a + "': 'mysql:regular_box_movement'") !== -1,
     a + " logs its table as 'mysql:regular_box_movement'");
 });
+ok(ACTIONS.indexOf("'save_box_item_alias': 'drive:Box_Analysis_Audit/box_item_aliases.json'") !== -1,
+  'save_box_item_alias logs the Drive file it actually writes');
 ok(/function dispatch_\([\s\S]{0,300}?guard_\(user, action\);/.test(ACTIONS),
   'dispatch_ still calls guard_ before the action');
 
@@ -80,7 +91,7 @@ ok(/function dispatch_\([\s\S]{0,300}?guard_\(user, action\);/.test(ACTIONS),
  * worse than one gate, because the loose one is the one that decides. */
 console.log('one gate, not two');
 const boxStart = ACTIONS.indexOf('function getBoxAnalysis_');
-const boxEnd = ACTIONS.indexOf("register('revise_box_movement'");
+const boxEnd = ACTIONS.indexOf("register('get_box_analysis'");
 ok(boxStart !== -1 && boxEnd > boxStart, 'the box wrapper block is found');
 const BOX = ACTIONS.slice(boxStart, boxEnd);
 ['unifiedCheck_', 'canCompanyAction_', 'isSuperAdmin', 'authorizedPages'].forEach(function (sym) {
@@ -222,6 +233,35 @@ if (fs.existsSync(path.join(ROOT, PREVIEW))) {
   ok(/^design_preview\/\*\*$/m.test(CLASPIGNORE), 'design_preview/** is in .claspignore');
   ok(/^tools\/\*\*$/m.test(CLASPIGNORE), 'tools/** is in .claspignore');
 }
+
+/* ── 10. The nightly precompute exists but is NOT installed ──────────────
+ * The brief forbids installing a trigger: it would modify the owner's Apps
+ * Script project outside a push. So the function is written, named without a
+ * trailing underscore so the trigger dialog can list it, documented with the
+ * steps to install it — and nothing in this repo calls ScriptApp to create it. */
+console.log('the precompute is written but NOT installed');
+ok(/^function rebuildBoxAnalysisIndex\(\) \{/m.test(ACTIONS),
+  'rebuildBoxAnalysisIndex is a global with NO trailing underscore, so the trigger dialog lists it');
+ok(ACTIONS.indexOf('rebuildBoxAnalysisIndex_') !== -1, 'and it delegates into the namespace');
+ok(!/ScriptApp\s*\.\s*newTrigger/.test(ACTIONS),
+  'nothing in the actions file creates a trigger');
+['Box_Analysis_Engine.js', 'DbLive_Connector.js', TEMPLATE + '.html'].forEach(function (f) {
+  ok(!/ScriptApp\s*\.\s*newTrigger/.test(read(f)), f + ' creates no trigger either');
+});
+ok(/Triggers \(clock icon\)/.test(ACTIONS),
+  'the install steps are recorded next to the function, so nobody has to guess');
+
+/* ── 11. Bounded work, and honest about being bounded ────────────────────
+ * Apps Script kills an execution at six minutes. Every long path checks its own
+ * clock and reports a partial result in Arabic rather than being killed
+ * mid-response. */
+console.log('the six-minute limit');
+ok(/BOX_TIME_BUDGET_MS = \d+/.test(ACTIONS), 'there is an explicit time budget');
+ok(ACTIONS.indexOf('boxOverBudget_') !== -1, 'and it is checked, not just declared');
+ok(ACTIONS.indexOf('timed_out_message_ar') !== -1,
+  'a timed-out analysis says so in Arabic instead of silently returning less');
+ok(ACTIONS.indexOf('truncated_message_ar') !== -1,
+  'and a truncated window says how much it actually analysed');
 
 console.log(failures === 0
   ? '\nAll wiring checks pass.'

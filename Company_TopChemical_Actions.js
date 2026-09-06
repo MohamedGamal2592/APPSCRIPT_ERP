@@ -151,7 +151,9 @@ const TopChemical = (function () {
     'get_box_analysis': { page: 'tc_box_analysis', access: 'read' },
     'get_box_item_history': { page: 'tc_box_analysis', access: 'read' },
     'update_box_movement': { page: 'tc_box_analysis', access: 'write' },
-    'revise_box_movement': { page: 'tc_box_analysis', access: 'write' }
+    'revise_box_movement': { page: 'tc_box_analysis', access: 'write' },
+    'get_box_alerts': { page: 'tc_box_analysis', access: 'read' },
+    'save_box_item_alias': { page: 'tc_box_analysis', access: 'write' }
   };
 
   /** page for a module_action, reused for both access-control and logging. */
@@ -251,7 +253,12 @@ const TopChemical = (function () {
     'get_box_analysis': 'mysql:regular_box_movement',
     'get_box_item_history': 'mysql:regular_box_movement',
     'update_box_movement': 'mysql:regular_box_movement',
-    'revise_box_movement': 'mysql:regular_box_movement'
+    'revise_box_movement': 'mysql:regular_box_movement',
+    'get_box_alerts': 'mysql:regular_box_movement',
+    // The alias overrides are a Drive JSON file, not a table — there is no
+    // DDL available, and this records that honestly rather than naming a
+    // table that does not exist.
+    'save_box_item_alias': 'drive:Box_Analysis_Audit/box_item_aliases.json'
   };
 
   function tableForAction_(action) {
@@ -4646,11 +4653,29 @@ const valueMap = {};
       Logger.log('getBoxAnalysis_ labels unavailable: ' + e.message);
     }
 
+    /* Tier 1 over the visible page. It needs no extra query — the audit index
+       is a Drive read, not a round trip — so the three-query budget holds.
+       Tier 2 needs the parsed item history and Tier 3 needs a population, so
+       both live on their own tabs with their own single query rather than
+       being smuggled into the page load. */
+    let flags = { flags: [], by_row: {}, notes: [], structuring: null };
+    try {
+      flags = BoxEngine.runTier1(page.rows, { auditIndex: boxAuditIndex_(12) });
+    } catch (e) {
+      /* A rules failure must not blank the movements. The list is the page's
+         job; the flags are its opinion. */
+      Logger.log('getBoxAnalysis_ Tier 1 failed: ' + e.message);
+    }
+    page.rows.forEach(function (row) {
+      row.risk = BoxEngine.riskScore(flags.by_row[String(row.id)] || []);
+    });
+
     return {
       status: 'ok',
       ref_date: refDate,
       columns: page.columns,
       rows: page.rows,
+      rule_notes: flags.notes,
       total: page.total,
       limit: page.limit,
       offset: page.offset,
@@ -4708,11 +4733,34 @@ const valueMap = {};
       });
     });
 
-    const clustered = BoxEngine.clusterItems(occurrences, { aliases: data.aliases || null });
+    /* The reviewer's corrections always win over the score, so they are loaded
+       here rather than trusted from the client. */
+    const aliases = boxLoadAliases_();
+    const clustered = BoxEngine.clusterItems(occurrences, { aliases: aliases });
     const byCluster = {};
     occurrences.forEach(function (o) {
       const cid = clustered.byNorm[o.item_norm];
       (byCluster[cid] = byCluster[cid] || []).push(o);
+    });
+
+    /* Tier 2 runs on exactly the occurrences that were just clustered, so the
+       statistics a reviewer reads in tab 3 and the ones the rules fired on are
+       the same objects. */
+    let t2 = { flags: [], by_row: {}, notes: [], stats: {} };
+    try {
+      t2 = BoxEngine.runTier2(occurrences, { byNorm: clustered.byNorm });
+    } catch (e) {
+      Logger.log('getBoxItemHistory_ Tier 2 failed: ' + e.message);
+    }
+
+    /* Occurrence arrays are dropped from the stats sent to the client: they are
+       the bulk of the payload and the page already has them in
+       occurrences_by_cluster. */
+    const slimStats = {};
+    Object.keys(t2.stats).forEach(function (cid) {
+      const c = t2.stats[cid];
+      slimStats[cid] = { cluster_id: c.cluster_id, label: c.label, n: c.n,
+                         price: c.price, qty: c.qty, by_person: c.by_person };
     });
 
     return {
@@ -4735,7 +4783,13 @@ const valueMap = {};
       },
       clusters: clustered.clusters,
       occurrences_by_cluster: byCluster,
-      threshold: clustered.threshold
+      threshold: clustered.threshold,
+      aliases: { merge: aliases.merge, split: aliases.split,
+                 updated_at: aliases.updated_at, updated_by: aliases.updated_by },
+      stats: slimStats,
+      item_flags: t2.flags,
+      item_flags_by_row: t2.by_row,
+      rule_notes: t2.notes
     };
   }
 
@@ -4972,13 +5026,323 @@ const valueMap = {};
     return { status: 'ok', id: id, is_revised: 1, edit_id: editId, audit_error: auditError };
   }
 
+
+  // ─── The alias / override store (plan §5.3) ─────────────────────────────
+  //
+  // The matcher WILL be wrong sometimes. Without a way to correct it
+  // permanently the reviewer ends up arguing with the algorithm every week and
+  // stops trusting the whole page — which costs more than the wrong merge did.
+  //
+  // Same mechanism as the audit trail, for the same reason: no DDL. One JSON
+  // file in the Box_Analysis_Audit Drive folder. Registered in
+  // NEXT_STEPS_OWNER.md as promotable to a table alongside the audit log.
+
+  const BOX_ALIAS_FILE = 'box_item_aliases.json';
+
+  function boxAliasFileHandle_() {
+    const folder = boxAuditFolder_();
+    const it = folder.getFilesByName(BOX_ALIAS_FILE);
+    if (it.hasNext()) return it.next();
+    return folder.createFile(BOX_ALIAS_FILE,
+      JSON.stringify({ merge: [], split: [], updated_at: null, updated_by: null }, null, 2),
+      MimeType.PLAIN_TEXT);
+  }
+
+  /**
+   * { merge: [[a,b],…], split: [[a,b],…] }. Never throws: a missing or corrupt
+   * override file must degrade the clustering, not take the page down with it.
+   */
+  function boxLoadAliases_() {
+    try {
+      const raw = boxAliasFileHandle_().getBlob().getDataAsString('UTF-8');
+      const j = JSON.parse(raw);
+      return {
+        merge: Array.isArray(j.merge) ? j.merge : [],
+        split: Array.isArray(j.split) ? j.split : [],
+        updated_at: j.updated_at || null,
+        updated_by: j.updated_by || null
+      };
+    } catch (e) {
+      Logger.log('boxLoadAliases_ unavailable: ' + e.message);
+      return { merge: [], split: [], updated_at: null, updated_by: null, error: e.message };
+    }
+  }
+
+  /**
+   * Record one reviewer correction. data: { op: 'merge'|'split', a, b }.
+   *
+   * Audited on the same path as a row edit — it changes what the analysis
+   * says, so it is exactly the kind of change that has to be attributable.
+   * Serialized through the same lock, because this is read-modify-write too.
+   */
+  function saveBoxItemAlias_(data, user, dbId) {
+    data = data || {};
+    const op = String(data.op || '').trim();
+    if (op !== 'merge' && op !== 'split') throw new Error('نوع التصحيح يجب أن يكون دمج أو فصل');
+    const a = BoxEngine.normAr(data.a);
+    const b = BoxEngine.normAr(data.b);
+    if (!a || !b) throw new Error('يجب تحديد صنفين');
+    if (a === b) throw new Error('لا يمكن ربط الصنف بنفسه');
+
+    const actor = boxAuditActor_(user);
+    const editId = boxEditId_();
+
+    boxAuditAppend_([{
+      edit_id: editId, phase: 'intent', action: 'save_box_item_alias',
+      when: boxNowIso_(), user: actor, movement_id: null,
+      alias: { op: op, a: a, b: b }
+    }]);
+
+    const result = executeWithLock_(function () {
+      const file = boxAliasFileHandle_();
+      let j;
+      try { j = JSON.parse(file.getBlob().getDataAsString('UTF-8')); }
+      catch (e) { j = { merge: [], split: [] }; }
+      j.merge = Array.isArray(j.merge) ? j.merge : [];
+      j.split = Array.isArray(j.split) ? j.split : [];
+      /* A pair can be a merge or a split, never both — recording the reviewer's
+         latest instruction means removing the opposite one. */
+      const other = op === 'merge' ? 'split' : 'merge';
+      const same = function (p) {
+        return (p[0] === a && p[1] === b) || (p[0] === b && p[1] === a);
+      };
+      j[other] = j[other].filter(function (p) { return !same(p); });
+      if (!j[op].some(same)) j[op].push([a, b]);
+      j.updated_at = boxNowIso_();
+      j.updated_by = actor.email || actor.name || '';
+      file.setContent(JSON.stringify(j, null, 2));
+      return { merge: j.merge.length, split: j.split.length };
+    }, 20000);
+
+    let auditError = '';
+    try {
+      boxAuditAppend_([{
+        edit_id: editId, phase: 'applied', action: 'save_box_item_alias',
+        when: boxNowIso_(), user: actor, movement_id: null,
+        alias: { op: op, a: a, b: b }, totals: result
+      }]);
+    } catch (e) {
+      auditError = e.message || String(e);
+      Logger.log('saveBoxItemAlias_ audit(applied) FAILED: ' + auditError);
+    }
+    return { status: 'ok', op: op, a: a, b: b, totals: result, audit_error: auditError };
+  }
+
+  // ─── The audit index the rules engine reads ─────────────────────────────
+
+  /**
+   * { movement_id: [applied audit entries, oldest first] }.
+   *
+   * This is what lets EDITED_AFTER_REVIEW tell an edit made through this page
+   * from a change made somewhere else. Reading Drive is I/O, so it happens
+   * here and the engine stays pure.
+   */
+  function boxAuditIndex_(months) {
+    const idx = {};
+    boxAuditRead_(months || 6).forEach(function (e) {
+      if (!e || e.phase !== 'applied' || !e.movement_id) return;
+      (idx[String(e.movement_id)] = idx[String(e.movement_id)] || []).push(e);
+    });
+    Object.keys(idx).forEach(function (k) {
+      idx[k].sort(function (a, b) { return String(a.when) < String(b.when) ? -1 : 1; });
+    });
+    return idx;
+  }
+
+  // ─── The alerts tab ─────────────────────────────────────────────────────
+
+  /* Apps Script kills an execution at six minutes. Every long-running path here
+     checks its own clock against this budget and returns what it has WITH a
+     clear Arabic message, rather than being killed mid-response and showing the
+     user a blank page or a raw timeout. */
+  const BOX_TIME_BUDGET_MS = 240000;   /* 4 minutes, leaving headroom */
+
+  function boxOverBudget_(startedAt) {
+    return (Date.now() - startedAt) > BOX_TIME_BUDGET_MS;
+  }
+
+  /**
+   * Tab 2 — every flagged row across a bounded window, ranked by risk.
+   *
+   * ONE query (dbBoxAnalysisScan_) plus the Drive audit read. Tier 1 runs on
+   * every row; Tier 3 runs on the same population, which is what it needs —
+   * Benford alone is gated at 300 amounts, and the 50-row page load could never
+   * satisfy that. Tier 2 is not run here: it needs the parsed item history,
+   * which is its own query and belongs to tab 3.
+   *
+   * data: { ref_date, months, chart_of_accounts, responsible_person, limit }
+   */
+  function getBoxAlerts_(data, user, dbId) {
+    data = data || {};
+    const startedAt = Date.now();
+    const refDate = boxRefDate_(data.ref_date);
+
+    const scan = dbBoxAnalysisScan_({
+      ref_date: refDate, months: data.months, limit: data.limit,
+      chart_of_accounts: data.chart_of_accounts,
+      responsible_person: data.responsible_person
+    }, user);
+
+    scan.rows.forEach(function (row) { row.parse = BoxEngine.parseDetails(row.transaction_details); });
+
+    const auditIndex = boxAuditIndex_(12);
+    const t1 = BoxEngine.runTier1(scan.rows, { auditIndex: auditIndex });
+
+    let t3 = { flags: [], by_entity: {}, notes: [] };
+    if (!boxOverBudget_(startedAt)) {
+      t3 = BoxEngine.runTier3(scan.rows, { current_month: refDate.slice(0, 7) });
+    }
+
+    const ranked = BoxEngine.rankRows(scan.rows, t1.by_row)
+      .filter(function (x) { return x.risk.score > 0; });
+
+    return {
+      status: 'ok',
+      ref_date: refDate,
+      from: scan.from, to: scan.to, months: scan.months,
+      rows_scanned: scan.rows.length,
+      /* Said out loud rather than implied: the page reports what it analysed. */
+      truncated: scan.truncated,
+      truncated_message_ar: scan.truncated
+        ? 'تم تحليل أحدث ' + scan.rows.length + ' حركة فقط ضمن الفترة المحددة — وسّع أو ضيّق الفلاتر لتغطية باقي الفترة'
+        : '',
+      timed_out: boxOverBudget_(startedAt),
+      timed_out_message_ar: boxOverBudget_(startedAt)
+        ? 'انتهت المهلة المتاحة للتحليل قبل إتمام القواعد السلوكية — النتائج المعروضة ناقصة، جرّب فترة أقصر'
+        : '',
+      alerts: ranked.map(function (x) {
+        return {
+          id: x.row.id,
+          transaction_date: x.row.transaction_date,
+          transaction_details: x.row.transaction_details,
+          transaction_amount: x.row.transaction_amount,
+          transaction_type: x.row.transaction_type,
+          chart_of_accounts: x.row.chart_of_accounts,
+          responsible_person: x.row.responsible_person,
+          box_code: x.row.box_code,
+          is_revised: x.row.is_revised,
+          risk: x.risk
+        };
+      }),
+      entity_findings: t3.flags,
+      notes: t1.notes.concat(t3.notes),
+      structuring: t1.structuring
+    };
+  }
+
+  // ─── The nightly precompute (NOT INSTALLED) ─────────────────────────────
+
+  /**
+   * Rebuild the item index and cache it as a Drive JSON blob.
+   *
+   * THIS IS NOT INSTALLED AS A TRIGGER, deliberately: installing one would
+   * modify the owner's Apps Script project outside a push, which this work is
+   * not permitted to do. To install it later:
+   *
+   *     Apps Script editor → Triggers (clock icon) → Add Trigger
+   *       Function: rebuildBoxAnalysisIndex
+   *       Event source: Time-driven → Day timer → 2am–3am
+   *
+   * Until then nothing runs it, and the page computes on demand for the window
+   * it is showing — which is why every on-demand path above is bounded and
+   * checks its own clock.
+   *
+   * The blob is keyed by MAX(updated_at), so any insert or edit invalidates it
+   * without anyone having to guess a TTL.
+   */
+  function rebuildBoxAnalysisIndex_(opts) {
+    const o = opts || {};
+    const startedAt = Date.now();
+    const refDate = boxRefDate_(o.ref_date);
+    const stamp = dbBoxMaxUpdatedAt_({}, null);
+
+    const hist = dbBoxItemHistory_({ ref_date: refDate, months: o.months || 24,
+                                     limit: o.limit || 20000 }, null);
+    const occurrences = [];
+    hist.rows.forEach(function (row) {
+      const p = BoxEngine.parseDetails(row.transaction_details);
+      p.items.forEach(function (it) {
+        occurrences.push({
+          movement_id: row.id, transaction_date: row.transaction_date,
+          chart_of_accounts: row.chart_of_accounts, responsible_person: row.responsible_person,
+          box_code: row.box_code, item_norm: it.item_norm, unit: it.unit,
+          qty: it.qty, price: it.price, unit_price: it.unit_price, confidence: it.confidence
+        });
+      });
+    });
+
+    const aliases = boxLoadAliases_();
+    const clustered = BoxEngine.clusterItems(occurrences, { aliases: aliases });
+    const stats = BoxEngine.clusterPriceStats(occurrences, clustered.byNorm);
+
+    /* The occurrence lists are dropped from the stored blob: they are the bulk
+       of it and the page re-reads them from the database anyway. */
+    const slim = {};
+    Object.keys(stats).forEach(function (cid) {
+      const c = stats[cid];
+      slim[cid] = { cluster_id: c.cluster_id, label: c.label, n: c.n,
+                    price: c.price, qty: c.qty, by_person: c.by_person };
+    });
+
+    const payload = {
+      built_at: boxNowIso_(),
+      built_ms: Date.now() - startedAt,
+      key: stamp.max_updated_at,
+      row_count: stamp.count,
+      ref_date: refDate,
+      window: { from: hist.from, to: hist.to, months: hist.months },
+      truncated: hist.truncated,
+      occurrence_count: occurrences.length,
+      clusters: clustered.clusters,
+      stats: slim
+    };
+
+    const folder = boxAuditFolder_();
+    const name = 'box_item_index.json';
+    const it = folder.getFilesByName(name);
+    if (it.hasNext()) it.next().setContent(JSON.stringify(payload));
+    else folder.createFile(name, JSON.stringify(payload), MimeType.PLAIN_TEXT);
+    return { status: 'ok', clusters: clustered.clusters.length,
+             occurrences: occurrences.length, key: payload.key, ms: payload.built_ms };
+  }
+
   register('get_box_analysis', getBoxAnalysis_);
   register('get_box_item_history', getBoxItemHistory_);
+  register('get_box_alerts', getBoxAlerts_);
   register('update_box_movement', updateBoxMovement_);
   register('revise_box_movement', reviseBoxMovement_);
+  register('save_box_item_alias', saveBoxItemAlias_);
 
-  return { dispatch_: dispatch_, pageForAction_: pageForAction_, tableForAction_: tableForAction_ };
+  return {
+    dispatch_: dispatch_,
+    pageForAction_: pageForAction_,
+    tableForAction_: tableForAction_,
+    /* Exposed only so the global trigger entry point below can reach it. */
+    rebuildBoxAnalysisIndex_: rebuildBoxAnalysisIndex_
+  };
 })();
+
+/**
+ * Nightly precompute entry point for تحليل حركة الخزنة العادية.
+ *
+ * NO TRIGGER IS INSTALLED. This work is not permitted to modify the owner's
+ * Apps Script project outside a push, and installing a trigger would do exactly
+ * that. To install it after review:
+ *
+ *     Apps Script editor → Triggers (clock icon) → Add Trigger
+ *       Function:      rebuildBoxAnalysisIndex
+ *       Event source:  Time-driven → Day timer → 2am to 3am
+ *
+ * The name has NO trailing underscore on purpose: a trailing underscore makes a
+ * function private to the project, and the trigger dialog will not list it.
+ *
+ * Until it is installed nothing calls this, and the page computes on demand for
+ * the window it is showing — which is why every on-demand path is bounded and
+ * checks its own clock against the six-minute execution limit.
+ */
+function rebuildBoxAnalysisIndex() {
+  return TopChemical.rebuildBoxAnalysisIndex_({});
+}
 
 // =========================================
 // PRINT REPORTS — صرف المرتبات الشهرية

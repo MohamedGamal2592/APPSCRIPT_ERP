@@ -31,6 +31,7 @@
   <button data-scenario="unparsed">تفاصيل لا تُحلَّل</button>
   <button data-scenario="dupe_labels">كود حساب مكرر الاسم</button>
   <button data-scenario="audit_fail">فشل سجل التدقيق بعد الحفظ</button>
+  <button data-scenario="truncated">تحليل ناقص (نافذة مقطوعة)</button>
   <button data-scenario="empty">لا توجد نتائج</button>
   <button data-scenario="error">خطأ من الخادم</button>
   <span class="sep">|</span>
@@ -44,6 +45,7 @@
   استدعاءات الخادم. البيانات الوهمية تشمل السطر الحقيقي الوحيد المعروف من
   <code>transaction_details</code>. اضغط <b>▸</b> بجوار أي حركة لفتح البنود المستخرجة وشريط الحساب،
   و<b>تعديل</b> لفتح النموذج ونافذة التأكيد التي تذكر ما تغيّر بالضبط.
+  تبويبا <b>التنبيهات</b> و<b>تحليل البنود</b> يعملان أيضاً، بما فيهما نافذة الدمج/الفصل.
 </div>
 
 <div id="pv-error" class="pv-err pv-hidden"></div>
@@ -134,13 +136,39 @@
     ];
   }
 
+  /* Flags and risk exactly as BoxEngine.runTier1 + riskScore produce them —
+     the server computes these, the page only renders them. The Arabic reason
+     strings are copied verbatim from the engine's own output (printed by
+     `node tools/verify/box_rules.js --show`), not paraphrased. */
+  function flag(rule, sev, sevAr, reason, ids) {
+    return { rule_id: rule, severity: sev, severity_ar: sevAr, row_id: ids[0],
+             reason_ar: reason, evidence: ids.map(function (i) { return { row_id: i }; }) };
+  }
+  function risk(score, level, levelAr, flags) {
+    var counts = { high: 0, medium: 0, low: 0 };
+    flags.forEach(function (f) { counts[f.severity]++; });
+    return { score: score, level: level, level_ar: levelAr, counts: counts, flags: flags };
+  }
+
   function rowsFor(scenario) {
     var rows = baseRows();
+    /* Row 4213 was keyed on a Friday, which is the weekend here. */
+    rows[0].risk = risk(12, 'low', 'منخفض', [flag('ODD_HOUR', 'low', 'منخفض',
+      'أُدخلت الحركة يوم الجمعة (عطلة أسبوعية) (لا تُحتسب الأعياد الرسمية — لا يوجد تقويم إجازات في النظام)',
+      ['4213'])]);
+    rows[1].risk = risk(0, 'none', 'لا يوجد', []);
+    rows[2].risk = risk(0, 'none', 'لا يوجد', []);
     if (scenario === 'mismatch') {
       /* Σ items 2525, recorded amount 2900 — the description does not account
          for 375 of the money. */
       rows[0].transaction_amount = '2900.00';
+      rows[0].risk = risk(70, 'high', 'مرتفع', [flag('SUM_MISMATCH', 'high', 'مرتفع',
+        'مجموع أسعار البنود 2525.00 لا يساوي المبلغ المسجل 2900.00 — الفرق 375.00 (المبلغ أكبر من البنود)',
+        ['4213'])]);
       rows[1].transaction_amount = '180.00';
+      rows[1].risk = risk(70, 'high', 'مرتفع', [flag('SUM_MISMATCH', 'high', 'مرتفع',
+        'مجموع أسعار البنود 250.00 لا يساوي المبلغ المسجل 180.00 — الفرق 70.00 (البنود أكبر من المبلغ)',
+        ['4214'])]);
       return rows;
     }
     if (scenario === 'unparsed') {
@@ -204,6 +232,83 @@
     });
   }
 
+  /* Tab 2. Includes an entity-level Benford finding, which must render in its
+     own section rather than as a row badge, and a `notes` list of rules that
+     did NOT run — "no finding" and "could not look" are different answers. */
+  function alertsResponse() {
+    var rows = rowsFor(state.scenario === 'error' ? 'normal' : state.scenario);
+    var alerts = rows.filter(function (r) { return r.risk && r.risk.score > 0; })
+      .map(function (r) {
+        return { id: r.id, transaction_date: r.transaction_date,
+                 transaction_details: r.transaction_details,
+                 transaction_amount: r.transaction_amount, transaction_type: r.transaction_type,
+                 chart_of_accounts: r.chart_of_accounts, responsible_person: r.responsible_person,
+                 box_code: r.box_code, is_revised: r.is_revised, risk: r.risk };
+      });
+    return {
+      status: 'ok', ref_date: WINDOWS.ref, from: '2025-09-06', to: WINDOWS.ref, months: 12,
+      rows_scanned: 1840,
+      truncated: state.scenario === 'truncated',
+      truncated_message_ar: 'تم تحليل أحدث 1840 حركة فقط ضمن الفترة المحددة — وسّع أو ضيّق الفلاتر لتغطية باقي الفترة',
+      timed_out: false, timed_out_message_ar: '',
+      alerts: alerts,
+      entity_findings: [{
+        rule_id: 'ROUND_NUMBER_BIAS', severity: 'medium', severity_ar: 'متوسط', row_id: null,
+        entity: 'محمود عبد الحميد', entity_kind: 'المسؤول',
+        reason_ar: '83% من مبالغ المسؤول محمود عبد الحميد من مضاعفات 100 (33 من 40)، مقابل 21% في باقي البيانات — انحراف 9.47 وحدة معيارية. المبالغ المقدَّرة تتكدّس على الأرقام المستديرة، والمقيسة لا تفعل',
+        evidence: [{ row_id: '4213' }]
+      }],
+      notes: [
+        { rule_id: 'BENFORD', status: 'insufficient_data',
+          reason_ar: 'المسؤول سيد فتحي: بيانات غير كافية لتحليل بنفورد (المتاح 41 مبلغاً، والمطلوب 300 على الأقل) — لا يصدر أي حكم دون ذلك' },
+        { rule_id: 'STRUCTURING', status: 'no_threshold_detected',
+          reason_ar: 'لم يظهر في توزيع المبالغ أي تكدّس أسفل رقم مستدير، فلا يوجد حد اعتماد يُستدل عليه من البيانات — ولا تُطبَّق هذه القاعدة بحدود مفترضة' }
+      ],
+      structuring: { thresholds: [], n_amounts: 1840, band: 0.1 }
+    };
+  }
+
+  /* Tab 3. The coverage line is the REAL parser measurement the owner was
+     asked to report — against production text, unlike the fixture figure. */
+  function itemsResponse() {
+    return {
+      status: 'ok', ref_date: WINDOWS.ref, from: '2024-09-01', to: WINDOWS.ref, months: 24,
+      truncated: false, row_count: 1840, threshold: 0.58,
+      coverage: { rows_read: 1840, rows_with_items: 1602, failed_segments: 311, sum_mismatch_rows: 47 },
+      aliases: { merge: [['معجون شروخ', 'معجون شروق']], split: [], updated_at: '2026-09-01T10:00:00+03:00', updated_by: 'reviewer@example.com' },
+      clusters: [
+        { cluster_id: 'زهر سلك لحام', label: 'سلك لحام زهر', members: ['سلك لحام زهر', 'السلك اللحام الزهر'], member_count: 2, occurrence_count: 34 },
+        { cluster_id: 'شروخ معجون', label: 'معجون شروخ', members: ['معجون شروخ', 'معجون شروق'], member_count: 2, occurrence_count: 28 },
+        { cluster_id: 'المونيوم سلك لحام', label: 'سلك لحام المونيوم', members: ['سلك لحام المونيوم'], member_count: 1, occurrence_count: 11 },
+        { cluster_id: 'حديد', label: 'حديد', members: ['حديد'], member_count: 1, occurrence_count: 9 }
+      ],
+      stats: {
+        'زهر سلك لحام': { cluster_id: 'زهر سلك لحام', label: 'سلك لحام زهر', n: 34,
+          price: { n: 34, median: 1850, mad: 40, scale: 40, scale_kind: 'mad', min: 1780, max: 3200, p25: 1820, p75: 1890 },
+          qty: { n: 34, median: 0.5, mad: 0, scale: 0, scale_kind: 'none', min: 0.5, max: 2, p25: 0.5, p75: 1 },
+          by_person: { 'محمود عبد الحميد': { n: 20, median: 1900 }, 'سيد فتحي': { n: 14, median: 1820 } } },
+        'شروخ معجون': { cluster_id: 'شروخ معجون', label: 'معجون شروخ', n: 28,
+          price: { n: 28, median: 140, mad: 2, scale: 2, scale_kind: 'mad', min: 132, max: 900, p25: 138, p75: 142 },
+          qty: { n: 28, median: 5, mad: 1, scale: 1, scale_kind: 'mad', min: 2, max: 10, p25: 4, p75: 6 },
+          by_person: { 'محمود عبد الحميد': { n: 28, median: 140 } } },
+        'المونيوم سلك لحام': { cluster_id: 'المونيوم سلك لحام', label: 'سلك لحام المونيوم', n: 11,
+          price: { n: 11, median: 1750, mad: 30, scale: 30, scale_kind: 'mad', min: 1700, max: 1810, p25: 1730, p75: 1770 },
+          qty: null, by_person: { 'محمود عبد الحميد': { n: 11, median: 1750 } } },
+        'حديد': { cluster_id: 'حديد', label: 'حديد', n: 9, price: null, qty: null, by_person: {} }
+      },
+      occurrences_by_cluster: {
+        'شروخ معجون': [{ movement_id: '4213' }, { movement_id: '4299' }],
+        'زهر سلك لحام': [{ movement_id: '4213' }]
+      },
+      item_flags: [],
+      item_flags_by_row: { '4299': [{ rule_id: 'PRICE_OUTLIER', severity: 'high' }] },
+      rule_notes: [
+        { rule_id: 'PRICE_OUTLIER', status: 'insufficient_data', cluster_id: 'حديد',
+          reason_ar: 'بيانات غير كافية لتحليل سعر «حديد» (المتاح 9 عمليات شراء، والمطلوب 6)' }
+      ]
+    };
+  }
+
   /* ── The shared client layer, as the page expects it. Client_Helpers.html is
    * loaded for real (so FMT.currency / FMT.percent are the real ones), then
    * API.call and the spinner are overridden here — the real API.call goes
@@ -217,9 +322,12 @@
       var inner = (payload && payload.module_action) || action;
       var data = (payload && payload.data) || {};
       if (inner === 'get_box_analysis') return analysisResponse(data);
-      if (inner === 'get_box_item_history') {
-        return Promise.resolve({ status: 'ok', clusters: [], occurrences_by_cluster: {},
-          coverage: { rows_read: 0, rows_with_items: 0, failed_segments: 0, sum_mismatch_rows: 0 } });
+      if (inner === 'get_box_item_history') return Promise.resolve(itemsResponse());
+      if (inner === 'get_box_alerts') return Promise.resolve(alertsResponse());
+      if (inner === 'save_box_item_alias') {
+        window.UIC.toast('معاينة فقط — لم يُحفظ أي تصحيح.', 'warning');
+        return Promise.resolve({ status: 'ok', op: data.op, a: data.a, b: data.b,
+          totals: { merge: 1, split: 0 }, audit_error: '' });
       }
       if (inner === 'update_box_movement' || inner === 'revise_box_movement') {
         /* NOTHING IS WRITTEN. The point of exercising this path offline is the

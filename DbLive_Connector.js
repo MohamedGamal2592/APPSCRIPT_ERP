@@ -1078,3 +1078,97 @@ function dbBoxRevise_(data, user) {
     if (conn) conn.close();
   }
 }
+
+// ─── Wider reads for the alerts tab and the precomputed index ───────────────
+//
+// dbBoxList_ is the PAGE's read and is clamped to 200 rows, which is right for
+// something a human scrolls. The behavioural rules in Tier 3 need a population
+// rather than a page — Benford alone is gated at 300 amounts — so they get
+// their own bounded scan rather than a raised clamp on the page query.
+
+var DB_BOX_SCAN_MAX = 8000;
+
+/**
+ * A bounded scan for the rules engine.
+ *
+ * data: { ref_date, months, limit, chart_of_accounts, responsible_person }
+ *
+ * ALL transaction types come back, unlike dbBoxItemHistory_: Tier 1 reasons
+ * about duplicates, sequence and edit timestamps, which apply to a collection
+ * exactly as much as to a payment. The rules that are about SPEND filter to
+ * credit themselves, close to where that decision matters.
+ *
+ * `truncated` says the window was cut, so the page can report what it actually
+ * analysed instead of implying it saw everything.
+ */
+function dbBoxAnalysisScan_(data, user) {
+  data = data || {};
+  var ref = dbBoxValidateDate_(data.ref_date);
+  if (!ref) throw new Error('ref_date is required (YYYY-MM-DD)');
+  var months = Math.min(Math.max(Number(data.months) || 12, 1), 60);
+  var limit = Math.min(Math.max(Number(data.limit) || 3000, 1), DB_BOX_SCAN_MAX);
+  var fromIso = BoxEngine.monthsBefore(ref, months);
+
+  var conditions = ['`transaction_date` BETWEEN ? AND ?'];
+  var params = [fromIso, ref];
+
+  var acct = dbBoxValidateAccount_(data.chart_of_accounts);
+  if (acct) { conditions.push('`chart_of_accounts` = ?'); params.push(acct); }
+  var person = String(data.responsible_person === undefined || data.responsible_person === null ? '' : data.responsible_person).trim();
+  if (person) { conditions.push('`responsible_person` LIKE ?'); params.push('%' + person + '%'); }
+
+  var cols = DB_BOX_COLUMNS.map(dbSanitizeIdentifier_).join(', ');
+  var conn, stmt, rs;
+  try {
+    conn = dbGetConnection_();
+    stmt = conn.prepareStatement(
+      'SELECT ' + cols + ' FROM ' + DB_BOX_TABLE +
+      ' WHERE ' + conditions.join(' AND ') +
+      ' ORDER BY `transaction_date` DESC, `id` DESC' +
+      ' LIMIT ' + limit);
+    dbBindParams_(stmt, params);
+    rs = stmt.executeQuery();
+    var rows = [];
+    while (rs.next()) rows.push(dbBoxReadRow_(rs));
+    return {
+      status: 'ok', rows: rows, from: fromIso, to: ref, months: months,
+      limit: limit, truncated: rows.length >= limit
+    };
+  } catch (err) {
+    Logger.log('dbBoxAnalysisScan_ error: ' + err.message);
+    throw err;
+  } finally {
+    if (rs) rs.close();
+    if (stmt) stmt.close();
+    if (conn) conn.close();
+  }
+}
+
+/**
+ * MAX(updated_at) over the table — the cache key for the precomputed item
+ * index. Any insert or edit moves it, so a stale index can never be served as
+ * a fresh one, and nothing has to guess at a TTL.
+ */
+function dbBoxMaxUpdatedAt_(data, user) {
+  var conn, stmt, rs;
+  try {
+    conn = dbGetConnection_();
+    stmt = conn.prepareStatement(
+      'SELECT MAX(`updated_at`) AS mx, COUNT(*) AS cnt FROM ' + DB_BOX_TABLE);
+    rs = stmt.executeQuery();
+    if (!rs.next()) return { status: 'ok', max_updated_at: null, count: 0 };
+    var mx = rs.getObject(1);
+    return {
+      status: 'ok',
+      max_updated_at: mx !== null ? String(mx) : null,
+      count: Number(rs.getObject(2)) || 0
+    };
+  } catch (err) {
+    Logger.log('dbBoxMaxUpdatedAt_ error: ' + err.message);
+    throw err;
+  } finally {
+    if (rs) rs.close();
+    if (stmt) stmt.close();
+    if (conn) conn.close();
+  }
+}
