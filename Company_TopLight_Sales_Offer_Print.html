@@ -15,7 +15,7 @@
     }
     .invoice { max-width: 900px; margin: 0 auto; padding: 24px; background: var(--bg-surface); border: 2px solid var(--border-color); border-radius: 8px; }
     .invoice-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; border-bottom: 2px solid #111111; padding-bottom: 16px; }
-    .invoice-title { font-size: 22px; font-weight: 700; color: #111111; }
+    .invoice-title { font-size: 22px; font-weight: 700; color: var(--text-main, #111111); }
     .invoice-meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px 16px; margin-bottom: 20px; }
     .meta-item { font-size: 13px; }
     .meta-item strong { color: var(--text-muted); font-weight: 600; }
@@ -24,7 +24,7 @@
     .inv-table th { background: #111111; color: #fbbf24; font-weight: 600; }
     .inv-totals { margin-right: auto; width: 300px; font-size: 14px; }
     .inv-totals .row { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #111111; }
-    .inv-totals .row.total { font-weight: 700; font-size: 16px; color: #111111; border-bottom: none; }
+    .inv-totals .row.total { font-weight: 700; font-size: 16px; color: var(--text-main, #111111); border-bottom: none; }
   </style>
 </head>
 <body>

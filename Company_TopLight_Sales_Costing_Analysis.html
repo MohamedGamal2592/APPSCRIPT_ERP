@@ -11,12 +11,12 @@
   <style>
     @media print {
       .topbar, .breadcrumb, .no-print { display: none !important; }
-      body { background: #ffffff !important; }
+      body { background: var(--bg-surface, #ffffff) !important; }
     }
     .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 16px; }
     .kpi { background: var(--bg-surface); border: 2px solid #111111; border-radius: 8px; padding: 14px; }
     .kpi-label { font-size: 12px; color: var(--text-muted); margin-bottom: 6px; }
-    .kpi-value { font-size: 20px; font-weight: 700; color: #111111; }
+    .kpi-value { font-size: 20px; font-weight: 700; color: var(--text-main, #111111); }
     .inv-link { color: #0369a1; cursor: pointer; text-decoration: underline; }
   </style>
 </head>

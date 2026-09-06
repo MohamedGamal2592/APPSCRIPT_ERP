@@ -11,7 +11,7 @@
   <style>
     @media print {
       .no-print { display: none !important; }
-      body { background: #fff !important; }
+      body { background: var(--bg-surface, #fff) !important; }
       .invoice { border: none !important; }
     }
     .invoice { max-width: 900px; margin: 0 auto; padding: 24px; background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: 8px; }
@@ -31,7 +31,7 @@
     .bal-row.after  { background: var(--brand-primary); color: #fff; border: none; margin-top: 4px; font-size: 14px; }
     .bal-row.after .bal-val { color: #fff; }
     .bal-val { font-family: monospace; }
-    .bal-val.debit  { color: var(--danger,#dc2626); }
+    .bal-val.debit  { color: var(--danger,var(--danger, #dc2626)); }
     .bal-val.credit { color: var(--success,#16a34a); }
     .bal-note { font-size: 11px; color: var(--text-muted); margin-top: 4px; text-align: right; }
   </style>

@@ -20,12 +20,12 @@
     body { font-family: 'Cairo', sans-serif; }
     @media print {
       .no-print { display: none !important; }
-      body { background: #fff !important; }
+      body { background: var(--bg-surface, #fff) !important; }
       .cost-doc { border: none !important; border-radius: 0 !important; }
     }
     @page { size: A4 portrait; margin: 15mm 10mm; }
     .cost-doc {
-      max-width: 900px; margin: 0 auto; padding: 30px; background: #ffffff;
+      max-width: 900px; margin: 0 auto; padding: 30px; background: var(--bg-surface, #ffffff);
       border: 3px solid #111111; border-radius: 12px;
       -webkit-print-color-adjust: exact; print-color-adjust: exact;
     }
@@ -35,7 +35,7 @@
       padding: 10px 28px; font-family: 'Cairo', sans-serif; font-weight: 700;
       font-size: 14px; cursor: pointer; margin-bottom: 16px;
     }
-    .cost-title { text-align: center; margin: 0 0 4px; font-size: 22px; font-weight: 800; color: #111111; }
+    .cost-title { text-align: center; margin: 0 0 4px; font-size: 22px; font-weight: 800; color: var(--text-main, #111111); }
     .cost-subtitle { text-align: center; margin: 0 0 20px; font-size: 13px; font-weight: 600; color: #374151; }
     .meta-grid {
       display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px 16px;
@@ -43,31 +43,31 @@
       padding: 14px 16px; margin-bottom: 20px; font-size: 13px;
     }
     .meta-grid .lbl { font-weight: 600; color: #374151; }
-    .meta-grid .val { font-weight: 800; color: #111111; }
+    .meta-grid .val { font-weight: 800; color: var(--text-main, #111111); }
     .cost-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 20px; }
     .cost-table th, .cost-table td { border: 1px solid #111111; padding: 8px 10px; text-align: right; }
     .cost-table thead th { background: #111111; color: #fbbf24; font-weight: 700; }
     .cost-table td.c-name { font-weight: 700; }
-    .cost-table td.c-cost { color: #6b7280; font-variant-numeric: tabular-nums; }
-    .cost-table td.c-sale { font-weight: 800; color: #111111; background: #fffbeb; font-variant-numeric: tabular-nums; }
+    .cost-table td.c-cost { color: var(--text-muted, #6b7280); font-variant-numeric: tabular-nums; }
+    .cost-table td.c-sale { font-weight: 800; color: var(--text-main, #111111); background: var(--warning-bg, #fffbeb); font-variant-numeric: tabular-nums; }
     .cost-table td.num { font-variant-numeric: tabular-nums; }
     .cost-table tr.ret-row { background: #fee2e2; }
-    .cost-table tr.ret-row td.c-name { color: #b91c1c; font-weight: 800; }
+    .cost-table tr.ret-row td.c-name { color: var(--danger-text, #b91c1c); font-weight: 800; }
     .cards-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
     .acard { border-radius: 10px; padding: 14px 16px; border: 2px solid #111111; }
     .acard.span2 { grid-column: span 2; }
     .acard .clbl { font-size: 13px; font-weight: 600; margin-bottom: 6px; }
     .acard .cval { font-size: 20px; font-weight: 800; font-variant-numeric: tabular-nums; }
     .acard.c-rev { background: #fef08a; }
-    .acard.c-disc { background: #fef2f2; border-color: #ef4444; }
-    .acard.c-disc .cval { color: #ef4444; }
-    .acard.c-cost { background: #fff7ed; border-color: #c2410c; }
+    .acard.c-disc { background: var(--danger-bg, #fef2f2); border-color: var(--danger, #ef4444); }
+    .acard.c-disc .cval { color: var(--danger, #ef4444); }
+    .acard.c-cost { background: var(--warning-bg, #fff7ed); border-color: #c2410c; }
     .acard.c-cost .cval { color: #c2410c; }
-    .acard.c-profit-pos { background: #f0fdf4; border-color: #16a34a; }
+    .acard.c-profit-pos { background: var(--success-bg, #f0fdf4); border-color: #16a34a; }
     .acard.c-profit-pos .cval { color: #16a34a; }
-    .acard.c-profit-neg { background: #fef2f2; border-color: #ef4444; }
-    .acard.c-profit-neg .cval { color: #ef4444; }
-    .acard.c-margin { background: #f8fafc; }
+    .acard.c-profit-neg { background: var(--danger-bg, #fef2f2); border-color: var(--danger, #ef4444); }
+    .acard.c-profit-neg .cval { color: var(--danger, #ef4444); }
+    .acard.c-margin { background: var(--bg-subtle, #f8fafc); }
     /* [UI-2.9b / U-48] Was a max-width:640 block, which is on no tier. The
        narrow layout is now the base and the wide one is restored at tablet-p,
        so the same two layouts survive, expressed additively. */
@@ -154,7 +154,7 @@
           '<div><span class="lbl">إسم العميل: </span><span class="val">' + FMT.escape(m.customer_name || '-') + '</span></div>' +
           '<div><span class="lbl">تاريخ الحركة: </span><span class="val">' + FMT.escape(fmtDate(m.invoice_date)) + '</span></div>' +
           '<div><span class="lbl">طبيعة المستند الفني: </span><span class="val" style="color:#0369a1;">بيان ربحية وتكلفة الفاتورة</span></div>' +
-          '<div><span class="lbl">إجمالي الخصم الممنوح للفاتورة: </span><span class="val" style="color:#b91c1c;">' + fmtEGP(m.discount_value) + '</span></div>' +
+          '<div><span class="lbl">إجمالي الخصم الممنوح للفاتورة: </span><span class="val" style="color:var(--danger-text, #b91c1c);">' + fmtEGP(m.discount_value) + '</span></div>' +
           '<div><span class="lbl">حالة اعتماد المستند: </span><span class="val">' + FMT.escape(m.approval_status || '-') + '</span></div>' +
         '</div>' +
         '<div style="overflow-x:auto;"><table class="cost-table" style="min-width:760px;">' +

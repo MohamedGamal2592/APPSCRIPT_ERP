@@ -11,9 +11,9 @@
   <style>
     @media print {
       .no-print { display: none !important; }
-      body { background: #ffffff !important; }
+      body { background: var(--bg-surface, #ffffff) !important; }
     }
-    .need-red td { background: #fee2e2 !important; color: #b91c1c !important; font-weight: 700; }
+    .need-red td { background: #fee2e2 !important; color: var(--danger-text, #b91c1c) !important; font-weight: 700; }
   </style>
 </head>
 <body>
@@ -65,7 +65,7 @@
       '<button class="btn btn-outline" onclick="try{window.top.close()}catch(e){window.close()}">إغلاق</button>' +
       '</div></div>' +
       '<div style="max-width:1000px;margin:0 auto;">' +
-      '<div style="margin-bottom:12px;padding:10px 14px;background:#fee2e2;border:2px solid #b91c1c;border-radius:8px;color:#b91c1c;font-weight:700;">' +
+      '<div style="margin-bottom:12px;padding:10px 14px;background:#fee2e2;border:2px solid var(--danger-text, #b91c1c);border-radius:8px;color:#b91c1c;font-weight:700;">' +
       'عدد الأصناف المطلوب شراؤها: ' + needCount + '</div>' +
       '<div class="table-wrap" style="border:2px solid #111111;">' +
       '<table class="table"><thead><tr>' +

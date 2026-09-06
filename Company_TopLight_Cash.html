@@ -110,7 +110,7 @@
           return '<div class="stat-card" title="اضغط لعرض حركات هذا الصندوق" style="cursor:pointer;' + (active ? 'border:2px solid var(--color-primary);background:var(--bg-subtle);' : '') + '" onclick="CASH_PAGE.setBoxFilter(\'' + esc(b.box) + '\')">' +
             '<div class="stat-body">' +
               '<div class="stat-label" style="font-weight:600;">' + esc(b.box_name || b.name || '-') + '</div>' +
-              '<div class="stat-value num" style="font-size:1.25rem;' + (num0(b.balance) < 0 ? 'color:var(--color-danger, #dc2626);' : 'color:#0e623b;') + '">' +
+              '<div class="stat-value num" style="font-size:1.25rem;' + (num0(b.balance) < 0 ? 'color:var(--color-danger, var(--danger, #dc2626));' : 'color:#0e623b;') + '">' +
                 Number(b.balance).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + '</div>' +
             '</div></div>';
         }).join('') +
@@ -146,7 +146,7 @@
           esc(h.transaction_method || '-'),
           '<span class="num" data-num="' + amtNum + '">' + FMT.number(amtNum) + '</span>',
           esc(h.box_name || '-'),
-          '<span class="num" style="font-weight:700;' + (balNum < 0 ? 'color:var(--color-danger,#dc2626);' : 'color:#0e623b;') + '" data-num="' + balNum + '">' + FMT.number(balNum) + '</span>',
+          '<span class="num" style="font-weight:700;' + (balNum < 0 ? 'color:var(--color-danger,var(--danger, #dc2626));' : 'color:#0e623b;') + '" data-num="' + balNum + '">' + FMT.number(balNum) + '</span>',
           UIC.statusPill(approved ? 'معتمد' : 'قيد الانتظار', approved ? 'success' : 'neutral'),
           actions
         ];
@@ -321,8 +321,8 @@
         '<input type="checkbox" id="' + key + '"' + (checked ? ' checked' : '') + (disabled ? ' disabled' : '') + '> ' + label + '</label>';
     }
     function grayedField(id, label) {
-      return '<div><div style="font-size:10px;color:#6b7280;margin-bottom:3px;">' + esc(label) + '</div>' +
-        '<input id="' + id + '" class="input" type="text" readonly value="0.00" style="background:#f3f4f6;color:#6b7280;cursor:not-allowed;direction:ltr;text-align:left;font-family:monospace;font-weight:700;"></div>';
+      return '<div><div style="font-size:10px;color:var(--text-muted, #6b7280);margin-bottom:3px;">' + esc(label) + '</div>' +
+        '<input id="' + id + '" class="input" type="text" readonly value="0.00" style="background:var(--bg-subtle, #f3f4f6);color:var(--text-muted, #6b7280);cursor:not-allowed;direction:ltr;text-align:left;font-family:monospace;font-weight:700;"></div>';
     }
 
     function applyVodafoneDiscount(fromMethodChange) {
