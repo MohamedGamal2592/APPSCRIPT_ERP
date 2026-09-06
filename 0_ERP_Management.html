@@ -344,7 +344,7 @@
 
     grid.innerHTML =
       '<div style="margin-bottom:8px;"><button class="btn btn-primary" onclick="UI.submitOnce(this, saveMatrix)">حفظ الصلاحيات</button></div>' +
-      '<div class="table-wrap"><table class="table"><thead><tr>' +
+      '<div class="table-wrap"><table class="table" style="min-width:820px;"><thead><tr>' +
       '<th>الصفحة</th><th>الاسم</th><th>الوحدة</th><th>نوع الوصول</th><th>الحالة</th>' +
       '</tr></thead><tbody>' + rows + '</tbody></table></div>';
   }
@@ -449,11 +449,11 @@
     }).join('');
 
     var body = '<div style="overflow-x:auto;max-height:65vh;overflow-y:auto;">' +
-      '<table class="table" style="min-width:700px;"><thead><tr>' +
+      '<table class="table" style="min-width:820px;"><thead><tr>' +
       '<th>معرف الصفحة</th><th>اسم الصفحة</th><th>الوحدة</th><th>الشركة</th>' +
       '</tr></thead><tbody>' + rows + '</tbody></table></div>';
 
-    UIC.openModal('pages-matrix-modal', { title: 'جميع صفحات النظام', body: body, onSave: 'savePagesMatrix()' });
+    UIC.openModal('pages-matrix-modal', { title: 'جميع صفحات النظام', size: 'xl', body: body, onSave: 'savePagesMatrix()' });
   }
 
   function savePagesMatrix() {
