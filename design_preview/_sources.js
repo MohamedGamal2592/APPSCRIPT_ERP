@@ -6,9 +6,9 @@
  * tools/ui_check.js check C9 fails while this file is out of date, so the
  * design preview can never quietly show something the source no longer says.
  */
-window.__PREVIEW_FINGERPRINT__ = 'c8123c17310eb74c';
+window.__PREVIEW_FINGERPRINT__ = '54a3d2e824d1d520';
 window.__PREVIEW_SOURCES__ = {
- "generated": "2026-09-06T14:21:55.332Z",
+ "generated": "2026-09-06T14:24:03.665Z",
  "watched": [
   "CSS_Tokens.html",
   "UI_Components.html",
@@ -32,7 +32,7 @@ window.__PREVIEW_SOURCES__ = {
   },
   "ValleyFoods": {
    "links": "",
-   "css": "\n:root {\n  --brand-primary: #16A34A;\n  --brand-primary-hover: #15803D;\n  --brand-subtle-bg: #F0FDF4;\n  --brand-border: #BBF7D0;\n  --btn-text-color: #FFFFFF;\n  --bg-primary: #F9FAFB;\n  --bg-surface: #FFFFFF;\n  --bg-subtle: #F3F4F6;\n  --text-main: #111827;\n  --text-muted: #6B7280;\n  --border-color: #E5E7EB;\n}\n"
+   "css": "\n:root {\n  --brand-primary: #16A34A;\n  --brand-primary-hover: #15803D;\n  --brand-subtle-bg: #F0FDF4;\n  --brand-border: #BBF7D0;\n  --btn-text-color: #FFFFFF;\n}\n.topbar { background: var(--brand-primary); border-bottom: 1px solid var(--brand-primary); }\n.topbar .nav-item, .topbar .nav-dropdown-toggle { color: var(--btn-text-color); }\n.topbar .nav-item:hover, .topbar .nav-item.active,\n.topbar .nav-dropdown-toggle:hover, .topbar .nav-dropdown-toggle.open { color: var(--brand-primary); background: var(--btn-text-color); }\n.topbar .user-profile-toggle { border: 1px solid var(--btn-text-color); border-radius: 999px; padding: 4px 12px; }\n.topbar .user-profile-toggle .user-name, .topbar .user-profile-toggle .nav-dropdown-caret { color: var(--btn-text-color); }\n.topbar .user-profile-toggle:hover, .topbar .user-profile-toggle.open { background: var(--btn-text-color); }\n.topbar .user-profile-toggle:hover .user-name, .topbar .user-profile-toggle.open .user-name,\n.topbar .user-profile-toggle:hover .nav-dropdown-caret, .topbar .user-profile-toggle.open .nav-dropdown-caret { color: var(--brand-primary); }\n.topbar .user-avatar { background: var(--btn-text-color); color: var(--brand-primary); }\n.topbar-hamburger { border: 1px solid var(--btn-text-color); }\n.topbar-hamburger .hamburger-bar { background: var(--btn-text-color); }\n.invoice { background: #ffffff; border: 1px solid var(--border-color); }\n"
   }
  }
 };

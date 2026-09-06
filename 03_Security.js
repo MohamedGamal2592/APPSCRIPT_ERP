@@ -766,12 +766,49 @@ function getCompanyThemeCSS_(companyName) {
   css += '  --brand-subtle-bg: ' + pc.sb + ';\n';
   css += '  --brand-border: ' + pc.b + ';\n';
   css += '  --btn-text-color: ' + pc.t + ';\n';
+  /* [UI-2.6 / D-1 / D-2 / U-10] The light branch no longer overrides the canvas,
+     surfaces, borders or ink. It used to re-state the OLD values of those tokens
+     (#F9FAFB / #F3F4F6 / #6B7280 / #E5E7EB), which would have silently undone
+     the whole of Phase 2.1 for every company on this generic path — including
+     ValleyFoods. They now come from CSS_Tokens.html like everyone else.
+
+     The dark branch is left intact. It is a data-driven option a company can
+     select through `company_colors`, it is not the coloured-canvas problem D-2
+     is about, and a proper dark mode is Phase 8. Since no data may be read or
+     written by this programme there is no way to know whether a company is
+     configured this way, so it is not touched. */
   if (bgColor === 'black') {
-    css += '  --bg-primary: #0F172A;\n  --bg-surface: #1E293B;\n  --bg-subtle: #334155;\n  --text-main: #F8FAFC;\n  --text-muted: #94A3B8;\n  --border-color: #334155;\n';
-  } else {
-    css += '  --bg-primary: #F9FAFB;\n  --bg-surface: #FFFFFF;\n  --bg-subtle: #F3F4F6;\n  --text-main: #111827;\n  --text-muted: #6B7280;\n  --border-color: #E5E7EB;\n';
+    css += '  --bg-primary: #0F172A;\n  --bg-canvas: #0F172A;\n  --bg-surface: #1E293B;\n  --bg-subtle: #334155;\n  --text-main: #F8FAFC;\n  --text-muted: #94A3B8;\n  --border-color: #334155;\n';
   }
-  css += '}\n</style>\n';
+  css += '}\n';
+
+  /* [UI-2.6] The brand topbar, which this path never had.
+     ValleyFoods takes this path, so its topbar rendered in --bg-surface: a
+     white bar with grey links, indistinguishable from the page. The two bespoke
+     companies each hand-wrote a topbar; this gives every other company the same
+     treatment, expressed in TOKENS so it adapts to whichever colour the company
+     is configured with rather than hardcoding green. A company on 'white' or
+     'yellow' gets dark ink automatically, because --btn-text-color already
+     carries the readable ink for its primary colour. */
+  if (bgColor !== 'black') {
+    css += '.topbar { background: var(--brand-primary); border-bottom: 1px solid var(--brand-primary); }\n';
+    css += '.topbar .nav-item, .topbar .nav-dropdown-toggle { color: var(--btn-text-color); }\n';
+    css += '.topbar .nav-item:hover, .topbar .nav-item.active,\n';
+    css += '.topbar .nav-dropdown-toggle:hover, .topbar .nav-dropdown-toggle.open { color: var(--brand-primary); background: var(--btn-text-color); }\n';
+    /* The shared .user-name rule is --text-main, which is near-invisible on a
+       saturated topbar. Same reason TopLight and TopChemical carry this. */
+    css += '.topbar .user-profile-toggle { border: 1px solid var(--btn-text-color); border-radius: 999px; padding: 4px 12px; }\n';
+    css += '.topbar .user-profile-toggle .user-name, .topbar .user-profile-toggle .nav-dropdown-caret { color: var(--btn-text-color); }\n';
+    css += '.topbar .user-profile-toggle:hover, .topbar .user-profile-toggle.open { background: var(--btn-text-color); }\n';
+    css += '.topbar .user-profile-toggle:hover .user-name, .topbar .user-profile-toggle.open .user-name,\n';
+    css += '.topbar .user-profile-toggle:hover .nav-dropdown-caret, .topbar .user-profile-toggle.open .nav-dropdown-caret { color: var(--brand-primary); }\n';
+    css += '.topbar .user-avatar { background: var(--btn-text-color); color: var(--brand-primary); }\n';
+    /* Hamburger bars default to --text-main and would vanish on the topbar. */
+    css += '.topbar-hamburger { border: 1px solid var(--btn-text-color); }\n';
+    css += '.topbar-hamburger .hamburger-bar { background: var(--btn-text-color); }\n';
+    css += '.invoice { background: #ffffff; border: 1px solid var(--border-color); }\n';
+  }
+  css += '</style>\n';
   try { cache.put(cacheKey, css, CONFIG.CACHE_THEME_SECONDS); } catch (putErr) {}
   return css;
 }
