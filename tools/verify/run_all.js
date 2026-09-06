@@ -27,7 +27,8 @@ const STEPS = [
   ['s10_purchasing_ux.js', 'Purchasing form/lines UX + tl_sales pagination'],
   /* ── UI/UX programme (branch ui/odoo-parity) ── */
   ['ui1_anchor.js', 'UI-1.2 — popups escape the table clip box (U-01)'],
-  ['ui1_sort.js', 'UI-1.3 — tri-state sort, load order preserved (U-03)']
+  ['ui1_sort.js', 'UI-1.3 — tri-state sort, load order preserved (U-03)'],
+  ['ui1_num.js', 'UI-1.4 — .num shared across all three companies (U-04)']
 ];
 
 let failed = 0;

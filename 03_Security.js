@@ -824,7 +824,12 @@ function topLightThemeCss_() {
     '.topbar { background: #111111; border-bottom: 2px solid #111111; }\n' +
     '.topbar .nav-item { color: #fbbf24; }\n' +
     '.topbar .nav-item:hover, .topbar .nav-item.active { color: #111111; background: #fbbf24; }\n' +
-    '.num { font-family: var(--font-mono); direction: ltr; text-align: left; font-variant-numeric: tabular-nums; }\n' +
+    /* [UI-1.4 / U-04] .num moved to the shared stylesheet in UI_Components.html.
+       It was defined here and in topChemicalThemeCss_ but nowhere else, so
+       ValleyFoods — which takes the generic theme path — never got it. The
+       shared rule carries the identical declarations and resolves --font-mono
+       to the same stack this file still defines above, so nothing changes for
+       this company. */
     '.invoice { background: #ffffff; }\n' +
     '/* TopLight dropdowns: curved black fill, yellow ink + black-on-yellow hover — always apparent */\n' +
     '.nav-dropdown-menu, .erp-kebab-menu {\n' +
@@ -915,7 +920,12 @@ function topChemicalThemeCss_() {
     '.topbar .nav-dropdown-toggle:hover, .topbar .nav-dropdown-toggle.open { color: #15803d; background: #ffffff; }\n' +
     '.topbar .nav-dropdown-menu { background: #ffffff; border: 2px solid #16a34a; }\n' +
     '.topbar .nav-dropdown-item:hover { background: #dcfce7; color: #15803d; }\n' +
-    '.num { font-family: var(--font-mono); direction: ltr; text-align: left; font-variant-numeric: tabular-nums; }\n' +
+    /* [UI-1.4 / U-04] .num moved to the shared stylesheet in UI_Components.html.
+       It was defined here and in topChemicalThemeCss_ but nowhere else, so
+       ValleyFoods — which takes the generic theme path — never got it. The
+       shared rule carries the identical declarations and resolves --font-mono
+       to the same stack this file still defines above, so nothing changes for
+       this company. */
     '.invoice { background: #ffffff; }\n' +
     '.btn-primary { background: #15803d; box-shadow: 0 4px 14px rgba(20, 83, 45, 0.3); }\n' +
     '.btn-primary:hover { background: #14532d; box-shadow: 0 6px 16px rgba(20, 83, 45, 0.35); }\n' +

@@ -1707,6 +1707,21 @@ document.addEventListener('keydown', function (e) {
   .table thead th.sorted-asc, .table thead th.sorted-desc { color: var(--text-main); }
 
   .table tbody td { padding: 10px 12px; border-bottom: 1px solid var(--border-color); }
+
+  /* [UI-1.4 / U-04] Numeric cells, in the SHARED layer.
+     UIC._dtRowHtml puts class="num" on every money and numeric cell, but the
+     rule that styles it existed only inside the two bespoke company themes.
+     ValleyFoods therefore rendered its numbers in the body font, right-aligned
+     and non-tabular, so columns of figures did not line up.
+     The declarations are exactly those the two themes already carried, and
+     --font-mono resolves to the same stack they define, so TopLight and
+     TopChemical render identically to before; only ValleyFoods changes. */
+  .num {
+    font-family: var(--font-mono, 'Consolas', 'Courier New', monospace);
+    direction: ltr;
+    text-align: left;
+    font-variant-numeric: tabular-nums;
+  }
   .table tbody tr:hover { background: var(--brand-subtle-bg); }
   /* Tall enough rows for finger tapping */
   .table tbody tr { min-height: var(--tap-sm, 44px); }
