@@ -624,14 +624,23 @@ UIC.dataTable = function (containerId, opts) {
      actions column is opted out automatically, since sorting by a block of
      buttons is meaningless. */
   const isSortable = h => h.sortable !== false && (h.key || h.label) !== 'actions';
-  const thead = '<thead><tr>' + headers.map(function (h) {
-    const key = h.key || h.label;
-    return '<th data-key="' + key + '"' +
-      (isSortable(h) ? ' data-sortable="true" aria-sort="none"' : '') + '>' +
-      '<span class="th-label">' + h.label + '</span>' +
-      (isSortable(h) ? '<span class="th-sort" aria-hidden="true"></span>' : '') +
-      '</th>';
-  }).join('') + '</tr></thead>';
+  /* thead is rebuilt whenever the visible column set changes (UI-4.5), so it is
+     a function of the store rather than a one-off string. */
+  const theadFor = function (st) {
+    const cols = UIC._dtVisibleHeaders(st);
+    const selTh = st.selectable
+      ? '<th class="dt-sel"><input type="checkbox" class="dt-sel-all" aria-label="تحديد الكل" ' +
+        'onclick="UIC._dtToggleAll(\'' + st.id + '\', this)"></th>'
+      : '';
+    return '<thead><tr>' + selTh + cols.map(function (h) {
+      const key = h.key || h.label;
+      return '<th data-key="' + key + '"' +
+        (isSortable(h) ? ' data-sortable="true" aria-sort="none"' : '') + '>' +
+        '<span class="th-label">' + h.label + '</span>' +
+        (isSortable(h) ? '<span class="th-sort" aria-hidden="true"></span>' : '') +
+        '</th>';
+    }).join('') + '</tr></thead>';
+  };
 
   window.__dtStore = window.__dtStore || {};
   /* [UI-1.3 / U-03] `originalRows` is the load order, and nothing ever reorders
@@ -641,6 +650,7 @@ UIC.dataTable = function (containerId, opts) {
      server sent, with no way back. The pipeline is now
      search -> filter -> sort -> slice, re-derived from originalRows each time. */
   window.__dtStore[id] = {
+    id: id,
     headers: headers,
     originalRows: rows.slice(),
     rows: rows,
@@ -648,8 +658,15 @@ UIC.dataTable = function (containerId, opts) {
     pageSize: pageSize, page: 1, pageRows: null,
     fmtMoney: fmtMoney, opts: o,
     searchTerm: '', dateFrom: '', dateTo: '',
-    sortKey: null, sortDir: null
+    sortKey: null, sortDir: null,
+    /* [UI-4.5 / U-19] Hidden columns, remembered per page + table. */
+    hidden: {},
+    /* [UI-4.6 / U-17] Selection, keyed by row identity so it survives sorting,
+       filtering and paging. */
+    selectable: o.selectable === true,
+    selected: {}
   };
+  UIC._dtLoadColumnPrefs(id);
 
   /* ── Toolbar: search + date filter + Excel + Print ── */
   var toolbarParts = [];
@@ -678,25 +695,59 @@ UIC.dataTable = function (containerId, opts) {
     : '';
 
   const clickAttr = o.rowClick ? ' onclick="UIC._dtRowClick(event, \'' + id + '\')"' : '';
-  const html = '<div id="' + id + '" class="table-wrap"' + clickAttr + '>' + toolbarHtml +
-    '<table class="table" data-sortable="true"><caption class="sr-only">' + (o.title || '') + '</caption>' + thead +
+  const st0 = window.__dtStore[id];
+  /* [UI-4.6] The batch bar lives above the table and is empty until something
+     is selected, so it costs one div and no layout shift when it appears. */
+  const batchHtml = st0.selectable ? '<div class="dt-batch" id="' + id + '_batch" hidden></div>' : '';
+  const html = '<div id="' + id + '" class="table-wrap"' + clickAttr + '>' + toolbarHtml + batchHtml +
+    '<table class="table" data-sortable="true" id="' + id + '_table"><caption class="sr-only">' + (o.title || '') + '</caption>' +
+    theadFor(st0) +
     '<tbody id="' + id + '_tbody"></tbody></table>' + pagerHtml + '</div>';
   // schedule chunked fill (75 rows per frame, 12ms budget) — Harvard windowed
   setTimeout(function(){ UIC._renderChunked(id, 0); }, 0);
   return html;
 };
 
-UIC._dtRowHtml = function (r, headers, fmtMoney, idx) {
-  return '<tr' + (idx != null ? ' data-idx="' + idx + '"' : '') + '>' + headers.map((h, i) => {
+UIC._dtRowHtml = function (r, headers, fmtMoney, idx, st) {
+  /* [UI-4.6 / U-17] The selection checkbox, when the table opted in. */
+  var sel = '';
+  if (st && st.selectable) {
+    var key = UIC._dtRowKey(st, r, idx);
+    var on = st.selected && st.selected[key] ? ' checked' : '';
+    sel = '<td class="dt-sel"><input type="checkbox" class="dt-sel-box" aria-label="تحديد السجل"' +
+      ' data-key="' + UIC.escHtml(String(key)) + '"' + on +
+      ' onclick="event.stopPropagation();UIC._dtToggleRow(\'' + st.id + '\', this)"></td>';
+  }
+  return '<tr' + (idx != null ? ' data-idx="' + idx + '"' : '') + '>' + sel + headers.map((h, i) => {
     const raw = Array.isArray(r) ? r[i] : r[h.key || h.label];
     const v = (raw !== undefined && raw !== null) ? raw : '';
+    /* [UI-4.8 / U-39] data-label carries the column name so the phone card
+       layout can print it beside the value. It is an ATTRIBUTE, not an element,
+       so the DOM node count per row is unchanged — which is the number the
+       performance programme owns. */
+    const label = h.label ? ' data-label="' + UIC.escHtml(String(h.label)) + '"' : '';
     if (h.money) {
       const num = Number(v) || 0;
-      return '<td class="num" data-num="' + num + '">' + fmtMoney(num) + '</td>';
+      return '<td class="num"' + label + ' data-num="' + num + '">' + fmtMoney(num) + '</td>';
     }
     const sortAttr = h.sortKey ? ' data-sort="' + esc(String(r[h.sortKey] != null ? r[h.sortKey] : '')) + '"' : '';
-    return '<td' + (h.numeric ? ' class="num"' : '') + sortAttr + '>' + v + '</td>';
+    return '<td' + (h.numeric ? ' class="num"' : '') + label + sortAttr + '>' + v + '</td>';
   }).join('') + '</tr>';
+};
+
+/* A stable identity for a row, so a selection survives sorting, filtering and
+ * paging. Falls back to the index only when the table has no id-ish column —
+ * in which case the selection is per-page, which is stated rather than hidden. */
+UIC._dtRowKey = function (st, r, idx) {
+  var f = st && st.opts && st.opts.rowKey;
+  if (f) { try { return typeof f === 'function' ? f(r) : r[f]; } catch (e) {} }
+  if (r && typeof r === 'object' && !Array.isArray(r)) {
+    var candidates = ['id', 'uid', 'unique_id', 'record_uid', 'invoice_unique_id', 'code'];
+    for (var i = 0; i < candidates.length; i++) {
+      if (r[candidates[i]] != null && r[candidates[i]] !== '') return r[candidates[i]];
+    }
+  }
+  return '#' + idx;
 };
 
 // MIT/Harvard: chunked tbody fill — 75 rows / 12ms per frame, DocumentFragment, keeps 60fps
@@ -723,16 +774,195 @@ UIC._renderChunked = function(id, offset){
     let html = '';
     const end = Math.min(idx + CHUNK, total);
     for(; idx < end; idx++){
-      html += UIC._dtRowHtml(view[idx], st.headers, st.fmtMoney, idx);
+      html += UIC._dtRowHtml(view[idx], UIC._dtVisibleHeaders(st), st.fmtMoney, idx, st);
       // flush per CHUNK to respect budget
       if (performance.now() - start >= BUDGET) break;
     }
     if (html) { tmp.innerHTML = html; while(tmp.firstChild) frag.appendChild(tmp.firstChild); tbody.appendChild(frag); }
     if (idx < total) requestAnimationFrame(tick);
-    else if (st.opts && st.opts.onRendered) { try{ st.opts.onRendered(id); }catch(e){} }
+    else {
+      try { UIC._dtRefreshBatchBar(id); } catch (e) {}
+      if (st.opts && st.opts.onRendered) { try{ st.opts.onRendered(id); }catch(e){} }
+    }
   }
   requestAnimationFrame(tick);
 };
+
+/* ── [UI-4.5 / U-19] Optional columns, remembered per page ────────────────
+ *
+ * A list showed every column its author chose, in that order, for everyone. A
+ * user who never looks at three of them scrolled past them on every screen.
+ *
+ * Visibility rides on localStorage, keyed by page action + table id. NO SCHEMA
+ * CHANGE and no server round-trip: this is a per-device preference, which is
+ * what localStorage is for, and hard constraint 1 forbids the alternative.
+ */
+UIC._dtColKey = function (id) {
+  var action = '';
+  try { action = window.CURRENT_ACTION || new URLSearchParams(window.location.search).get('action') || ''; } catch (e) {}
+  return 'erp_cols_' + action + '_' + id;
+};
+
+UIC._dtLoadColumnPrefs = function (id) {
+  var st = (window.__dtStore || {})[id];
+  if (!st) return;
+  try {
+    var raw = localStorage.getItem(UIC._dtColKey(id));
+    if (!raw) return;
+    var saved = JSON.parse(raw);
+    if (saved && typeof saved === 'object') st.hidden = saved;
+  } catch (e) { /* a corrupt or unavailable store just means no preference */ }
+};
+
+UIC._dtSaveColumnPrefs = function (id) {
+  var st = (window.__dtStore || {})[id];
+  if (!st) return;
+  try { localStorage.setItem(UIC._dtColKey(id), JSON.stringify(st.hidden || {})); } catch (e) {}
+};
+
+/** The headers actually rendered, in order. */
+UIC._dtVisibleHeaders = function (st) {
+  if (!st) return [];
+  if (!st.hidden) return st.headers;
+  return st.headers.filter(function (h) { return !st.hidden[h.key || h.label]; });
+};
+
+UIC.dtToggleColumn = function (id, key, visible) {
+  var st = (window.__dtStore || {})[id];
+  if (!st) return;
+  st.hidden = st.hidden || {};
+  if (visible) delete st.hidden[key]; else st.hidden[key] = true;
+  /* Never let the user hide every column — an empty table with no headers is
+     indistinguishable from a broken page. */
+  if (!UIC._dtVisibleHeaders(st).length) { delete st.hidden[key]; return; }
+  UIC._dtSaveColumnPrefs(id);
+  UIC._dtRebuildHead(id);
+  UIC._dtRenderBody(id);
+};
+
+UIC._dtRebuildHead = function (id) {
+  var st = (window.__dtStore || {})[id];
+  var table = document.getElementById(id + '_table');
+  if (!st || !table) return;
+  var old = table.querySelector('thead');
+  if (!old) return;
+  var cols = UIC._dtVisibleHeaders(st);
+  var selTh = st.selectable
+    ? '<th class="dt-sel"><input type="checkbox" class="dt-sel-all" aria-label="تحديد الكل" onclick="UIC._dtToggleAll(\'' + id + '\', this)"></th>'
+    : '';
+  old.innerHTML = '<tr>' + selTh + cols.map(function (h) {
+    var key = h.key || h.label;
+    var sortable = h.sortable !== false && key !== 'actions';
+    return '<th data-key="' + key + '"' + (sortable ? ' data-sortable="true" aria-sort="none"' : '') + '>' +
+      '<span class="th-label">' + h.label + '</span>' +
+      (sortable ? '<span class="th-sort" aria-hidden="true"></span>' : '') + '</th>';
+  }).join('') + '</tr>';
+  try { UIC.initTableSort(id); } catch (e) {}
+  UIC._dtSyncSortIndicators(id);
+};
+
+/** Markup for the "الأعمدة" dropdown. A page drops this into controlPanel.tools. */
+UIC.columnsMenu = function (id) {
+  var st = (window.__dtStore || {})[id];
+  if (!st) return '';
+  var ddId = 'cols-' + id;
+  var items = st.headers.map(function (h) {
+    var key = h.key || h.label;
+    var shown = !(st.hidden && st.hidden[key]);
+    return '<label class="dt-col-item"><input type="checkbox"' + (shown ? ' checked' : '') +
+      ' onchange="UIC.dtToggleColumn(\'' + id + '\', \'' + UIC.escHtml(String(key)) + '\', this.checked)"> ' +
+      '<span>' + UIC.escHtml(String(h.label || key)) + '</span></label>';
+  }).join('');
+  return '<div class="nav-dropdown" id="' + ddId + '-wrap">' +
+    '<button type="button" class="btn btn-outline nav-dropdown-toggle" aria-haspopup="true" aria-expanded="false" ' +
+    'onclick="UIC.toggleDropdown(\'' + ddId + '\', event)">' + UIC.icon('settings', { size: 15 }) +
+    '<span>الأعمدة</span></button>' +
+    '<div class="nav-dropdown-menu dt-col-menu" id="' + ddId + '">' + items + '</div></div>';
+};
+
+/* ── [UI-4.6 / U-17] Multi-select and the batch bar ───────────────────────
+ *
+ * READ-ONLY ACTIONS ONLY, per standing answer D-5. A selection can be exported
+ * or printed; there is no approve-many and no delete-many. The mechanics are
+ * built so a write action could be added later, but none ships here: batch
+ * writes touch the save paths the performance run identified as the sharpest
+ * edge in the codebase, and they deserve their own phase and their own testing.
+ */
+UIC._dtSelectedRows = function (id) {
+  var st = (window.__dtStore || {})[id];
+  if (!st) return [];
+  var out = [];
+  (st.originalRows || []).forEach(function (r, i) {
+    if (st.selected[UIC._dtRowKey(st, r, i)]) out.push(r);
+  });
+  return out;
+};
+
+UIC._dtToggleRow = function (id, box) {
+  var st = (window.__dtStore || {})[id];
+  if (!st || !box) return;
+  var key = box.getAttribute('data-key');
+  if (box.checked) st.selected[key] = true; else delete st.selected[key];
+  UIC._dtRefreshBatchBar(id);
+};
+
+UIC._dtToggleAll = function (id, box) {
+  var st = (window.__dtStore || {})[id];
+  if (!st) return;
+  /* Select-all applies to what is currently FILTERED, not to every loaded row.
+     Selecting rows the user cannot see is how people delete the wrong things. */
+  var list = st.filtered || st.rows || [];
+  list.forEach(function (r) {
+    var i = (st.originalRows || []).indexOf(r);
+    var key = UIC._dtRowKey(st, r, i);
+    if (box.checked) st.selected[key] = true; else delete st.selected[key];
+  });
+  UIC._dtRenderBody(id);
+  UIC._dtRefreshBatchBar(id);
+};
+
+UIC.dtClearSelection = function (id) {
+  var st = (window.__dtStore || {})[id];
+  if (!st) return;
+  st.selected = {};
+  UIC._dtRenderBody(id);
+  UIC._dtRefreshBatchBar(id);
+  var all = document.querySelector('#' + id + ' .dt-sel-all');
+  if (all) all.checked = false;
+};
+
+UIC._dtRefreshBatchBar = function (id) {
+  var st = (window.__dtStore || {})[id];
+  var bar = document.getElementById(id + '_batch');
+  if (!st || !bar) return;
+  var n = Object.keys(st.selected || {}).length;
+  if (!n) { bar.hidden = true; bar.innerHTML = ''; return; }
+  bar.hidden = false;
+  bar.innerHTML =
+    '<span class="dt-batch-count" role="status">' + n + ' محدد</span>' +
+    '<button type="button" class="btn btn-outline" onclick="UIC.dtExportSelection(\'' + id + '\')">' +
+      UIC.icon('download', { size: 15 }) + '<span>تصدير المحدد</span></button>' +
+    '<button type="button" class="btn btn-outline" onclick="UIC.dtPrintSelection(\'' + id + '\')">' +
+      UIC.icon('print', { size: 15 }) + '<span>طباعة المحدد</span></button>' +
+    '<button type="button" class="btn btn-outline" onclick="UIC.dtClearSelection(\'' + id + '\')">' +
+      UIC.icon('close', { size: 15 }) + '<span>إلغاء التحديد</span></button>';
+};
+
+/* Export and print reuse the existing implementations by narrowing the table's
+ * filtered set for the duration of the call, so there is exactly one exporter
+ * and one printer in the codebase rather than three. */
+UIC._dtWithSelection = function (id, fn) {
+  var st = (window.__dtStore || {})[id];
+  if (!st) return;
+  var rows = UIC._dtSelectedRows(id);
+  if (!rows.length) { UIC.toast('لم يتم تحديد أي سجل', 'warning'); return; }
+  var saved = st.filtered;
+  st.filtered = rows;
+  try { fn(); } finally { st.filtered = saved; }
+};
+
+UIC.dtExportSelection = function (id) { UIC._dtWithSelection(id, function () { UIC.exportExcel(id); }); };
+UIC.dtPrintSelection = function (id) { UIC._dtWithSelection(id, function () { UIC.printTable(id); }); };
 
 UIC._dtRowClick = function (event, id) {
   try {
@@ -2266,6 +2496,29 @@ document.addEventListener('keydown', function (e) {
   .table tbody tr:hover { background: var(--brand-subtle-bg); }
   /* Tall enough rows for finger tapping */
   .table tbody tr { min-height: var(--tap-sm, 44px); }
+  /* ── [UI-4.6 / U-17] Selection and the batch bar ─────────────────────── */
+  .table .dt-sel { width: var(--tap-sm, 44px); text-align: center; }
+  .dt-sel-box, .dt-sel-all { width: 18px; height: 18px; cursor: pointer; accent-color: var(--brand-primary); }
+  .dt-batch {
+    display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap;
+    padding: var(--space-2) var(--space-3);
+    background: var(--brand-subtle-bg);
+    border-bottom: 1px solid var(--border-color);
+    position: sticky; top: 0; z-index: 3;
+  }
+  .dt-batch-count { font-size: var(--text-sm); font-weight: 700; color: var(--brand-primary); }
+  .dt-batch .btn { padding: 6px 12px; min-height: var(--tap-sm, 44px); }
+
+  /* ── [UI-4.5 / U-19] Optional columns ────────────────────────────────── */
+  .dt-col-menu { max-height: 60dvh; overflow-y: auto; }
+  .dt-col-item {
+    display: flex; align-items: center; gap: var(--space-2);
+    padding: var(--space-2) 10px; border-radius: var(--radius-sm);
+    font-size: var(--text-sm); cursor: pointer; min-height: var(--tap-sm, 44px);
+  }
+  .dt-col-item:hover { background: var(--bg-subtle); }
+  .dt-col-item input { accent-color: var(--brand-primary); width: 16px; height: 16px; }
+
   /* ── [UI-3.5 / U-22] Empty state ─────────────────────────────────────── */
   .empty-state { padding: 48px 16px; text-align: center; color: var(--text-muted); background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: var(--radius-md); }
   .empty-state-icon { color: var(--text-disabled); margin-bottom: var(--space-3); }
@@ -2730,8 +2983,62 @@ document.addEventListener('keydown', function (e) {
   .modal-footer .btn { width: 100%; justify-content: center; }
   .stat-card { padding: var(--space-3); }
 
+  /* ── [UI-4.8 / U-39] Phone: a table becomes a stack of cards ───────────
+   * A data table on a 390px phone is a horizontal scroll box you have to drag
+   * sideways to read one record. Below tablet-p each row becomes a card and
+   * each cell a label/value line, using the data-label attribute _dtRowHtml
+   * already emits.
+   *
+   * This is CSS only. It adds no elements and no JavaScript, so the DOM cost
+   * per row is unchanged and there is no second render path that could drift
+   * from the desktop one. The base (phone) styles come first because the whole
+   * stylesheet is mobile-first; the tablet-p block below restores the table. */
+  .table-wrap { max-height: none; }          /* the card list scrolls with the page */
+  .table, .table tbody, .table tr, .table td { display: block; width: 100%; }
+  .table thead { display: none; }            /* the labels move into the cells */
+  .table tbody tr {
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    margin-bottom: var(--space-2);
+    padding: var(--space-2);
+    background: var(--bg-surface);
+  }
+  .table tbody td {
+    display: flex; align-items: baseline; justify-content: space-between;
+    gap: var(--space-3);
+    border: 0; border-bottom: 1px solid var(--border-color);
+    padding: 8px 4px;
+    text-align: start;
+  }
+  .table tbody td:last-child { border-bottom: 0; }
+  .table tbody td[data-label]::before {
+    content: attr(data-label);
+    font-size: var(--text-xs); font-weight: 700; color: var(--text-muted);
+    flex: 0 0 auto; max-width: 45%;
+  }
+  /* A numeric cell keeps its LTR direction but sits at the row's end. */
+  .table tbody td.num { direction: ltr; justify-content: space-between; }
+  .table tbody td.num::before { direction: rtl; }
+  .table .dt-sel { justify-content: flex-start; }
+  .table .dt-sel::before { content: none; }
+
   /* ── tablet-p (>= 600px) — the drawer deliberately STAYS ── */
   @media (min-width: 600px) {
+    /* [UI-4.8] Back to a real table from tablet-p up. */
+    .table-wrap { max-height: 70dvh; }
+    .table { display: table; }
+    .table thead { display: table-header-group; }
+    .table tbody { display: table-row-group; }
+    .table tr { display: table-row; }
+    .table td { display: table-cell; }
+    .table tbody tr { border: 0; border-radius: 0; margin: 0; padding: 0; background: transparent; }
+    .table tbody td {
+      display: table-cell; border: 0; border-bottom: 1px solid var(--border-color);
+      padding: 10px 12px; text-align: right;
+    }
+    .table tbody td[data-label]::before { content: none; }
+    .table tbody td.num { text-align: left; }
+    .table .dt-sel { display: table-cell; text-align: center; }
     /* Enough width for the user's name beside the avatar. */
     .topbar-right .user-profile .user-name { display: inline; }
     /* Dialogs stop being bottom sheets and centre. */
