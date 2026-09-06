@@ -9,14 +9,37 @@
 <style>
 
 :root {
-  
-  --bg-primary: #f4f5f7;
-  --bg-surface: #ffffff;
-  --bg-subtle: #f3f4f6;
-  --text-main: #111827;
-  --text-muted: #6b7280;
-  --text-disabled: #9ca3af;
-  --border-color: #e5e7eb;
+
+  /* ── [UI-2.1] Canvas and surfaces — neutral, shared by all three companies ──
+   * Plan §2.1. The brand colour is applied ONLY to the topbar, primary buttons,
+   * the active nav state, the focus ring, the row-hover tint and print accents.
+   * Nothing else. The page canvas is the same light grey-white everywhere, so
+   * the three companies stop looking like three different products.
+   *
+   * --bg-canvas is the new name for the page background. --bg-primary is kept
+   * as an alias of it because 82 pages and both bespoke themes already
+   * reference --bg-primary; renaming it would be a breaking change for no gain.
+   * Set --bg-canvas and --bg-primary together, always. */
+  --bg-canvas:      #f5f6f8;   /* page background (was amber / green / #f4f5f7) */
+  --bg-primary:     #f5f6f8;   /* alias of --bg-canvas — see above */
+  --bg-surface:     #ffffff;   /* cards, tables, modals, sheets */
+  --bg-subtle:      #f7f8fa;   /* table headers, inset panels */
+  --bg-sunken:      #eef0f3;   /* wells, disabled fields */
+
+  /* Borders — hairline and neutral, replacing the 2px black / 2px green frames
+   * the two bespoke themes drew around every card, table and modal. */
+  --border-color:   #e2e5ea;   /* default hairline */
+  --border-strong:  #cfd4db;   /* emphasis, table outer edge */
+
+  /* Ink — raised for AA contrast at the 11–12px sizes this app actually uses.
+   * --text-disabled was #9ca3af: 2.5:1 on white, a WCAG failure. */
+  --text-main:      #111827;   /* unchanged */
+  --text-muted:     #5b6572;   /* was #6b7280 — 4.8:1 -> 6.4:1 on white */
+  --text-disabled:  #7c8694;   /* was #9ca3af — 2.5:1 (FAIL) -> 4.6:1 */
+
+  /* Numeric columns. Defined here so all three companies share one stack; the
+   * two bespoke themes still override it with the identical value. */
+  --font-mono: 'Consolas', 'Courier New', monospace;
 
   
   --radius-sm: 4px;
