@@ -827,9 +827,9 @@
     if (!body) return;
     var pill = UIC.statusPill(enabled ? 'النظام يعمل' : 'النظام متوقف', enabled ? 'success' : 'neutral');
     body.innerHTML =
-      '<div style="max-width:520px;margin:0 auto;text-align:center;padding:24px;border:1px solid var(--border,#e5e7eb);border-radius:12px;">' +
+      '<div style="max-width:520px;margin:0 auto;text-align:center;padding:24px;border:1px solid var(--border,var(--border-color, #e5e7eb));border-radius:12px;">' +
         '<h3 style="margin-top:0;">مفتاح إيقاف النظام</h3>' +
-        '<p style="color:var(--text-muted,#666);font-size:13px;">إيقاف النظام يمنع جميع الصفحات وكل العمليات فوراً لكل المستخدمين — بما في ذلك مدير النظام — ويظهر لهم رسالة «عطل في السيستم». لإعادة التشغيل بعد الإيقاف: عدّل قيمة الخلية B2 في جدول <b>ERP_system_work</b> مباشرة من Google Sheets (1 = يعمل، 0 = متوقف).</p>' +
+        '<p style="color:var(--text-muted,var(--text-muted, #666));font-size:13px;">إيقاف النظام يمنع جميع الصفحات وكل العمليات فوراً لكل المستخدمين — بما في ذلك مدير النظام — ويظهر لهم رسالة «عطل في السيستم». لإعادة التشغيل بعد الإيقاف: عدّل قيمة الخلية B2 في جدول <b>ERP_system_work</b> مباشرة من Google Sheets (1 = يعمل، 0 = متوقف).</p>' +
         '<div style="margin:16px 0;">الحالة الحالية: ' + pill + '</div>' +
         '<button class="btn ' + (enabled ? 'btn-outline' : 'btn-primary') + '" id="killswitch-btn" onclick="toggleKillSwitch(' + (!enabled) + ')">' +
           (enabled ? '⛔ إيقاف النظام' : '✅ تشغيل النظام') +
