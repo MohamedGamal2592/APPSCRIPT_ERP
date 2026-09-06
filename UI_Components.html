@@ -1632,7 +1632,7 @@ document.addEventListener('keydown', function (e) {
   /* ── Buttons ─────────────────────────────────────────────────────────── */
   .btn {
     display: inline-flex; align-items: center; gap: 6px;
-    padding: 10px 20px; font-size: 14px; font-weight: 700;
+    padding: 10px 20px; font-size: var(--text-sm); font-weight: 700;
     border-radius: var(--radius-lg); border: 1px solid transparent;
     cursor: pointer; font-family: var(--font-sans);
     transition: all .2s ease; box-shadow: var(--shadow-sm);
@@ -1658,7 +1658,7 @@ document.addEventListener('keydown', function (e) {
   }
 
   /* ── Pills ───────────────────────────────────────────────────────────── */
-  .pill { display: inline-flex; align-items: center; padding: 3px 10px; font-size: 11px; font-weight: 600; border-radius: 999px; }
+  .pill { display: inline-flex; align-items: center; padding: 3px 10px; font-size: var(--text-xs); font-weight: 600; border-radius: 999px; }
   .pill-success { background: var(--success-bg); color: var(--success-text); border: 1px solid var(--success-border); }
   .pill-danger  { background: var(--danger-bg);  color: var(--danger-text);  border: 1px solid var(--danger-border); }
   .pill-warning { background: var(--warning-bg); color: var(--warning-text); border: 1px solid var(--warning-border); }
@@ -1683,10 +1683,10 @@ document.addEventListener('keydown', function (e) {
     max-height: 70dvh;
   }
   .table-toolbar { padding: var(--space-3); border-bottom: 1px solid var(--border-color); }
-  .table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .table { width: 100%; border-collapse: collapse; font-size: var(--text-sm); }
   .table thead th {
     padding: 10px 12px; background: var(--bg-subtle); color: var(--text-muted);
-    font-weight: 600; font-size: 11px; text-align: right;
+    font-weight: 600; font-size: var(--text-xs); text-align: right;
     border-bottom: 1px solid var(--border-color);
     /* Prevent headers shrinking too small on mobile */
     white-space: nowrap;
@@ -1732,8 +1732,8 @@ document.addEventListener('keydown', function (e) {
   .table thead th[data-sortable="true"] { user-select: none; }
   .table thead th .th-label { vertical-align: middle; }
   .table thead th .th-sort {
-    display: inline-block; width: 1em; margin-inline-start: 4px;
-    font-size: 10px; line-height: 1; opacity: .45; vertical-align: middle;
+    display: inline-block; width: 1em; margin-inline-start: var(--space-1);
+    font-size: var(--text-xs); line-height: 1; opacity: .45; vertical-align: middle;
   }
   /* NB: this stylesheet lives in a JS template literal, so every CSS unicode
      escape must have its backslash doubled. A single-backslash escape here is
@@ -1768,11 +1768,11 @@ document.addEventListener('keydown', function (e) {
   /* Tall enough rows for finger tapping */
   .table tbody tr { min-height: var(--tap-sm, 44px); }
   .empty-state { padding: 48px 16px; text-align: center; color: var(--text-muted); background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: var(--radius-md); }
-  .pt-loading { display:flex; align-items:center; gap:10px; padding:14px 4px; color:var(--text-muted); font-size:13px; }
+  .pt-loading { display:flex; align-items:center; gap:10px; padding:14px 4px; color:var(--text-muted); font-size: var(--text-sm); }
   .pt-spin { width:22px; height:22px; flex:0 0 auto; border:3px solid var(--border-color,#e2e8f0); border-top-color:var(--brand-primary,#16a34a); border-radius:50%; animation:ptspin .8s linear infinite; }
   @keyframes ptspin { to { transform: rotate(360deg); } }
   .pt-sk-table { width:100%; border-collapse:collapse; }
-  .pt-sk-table thead th { padding:10px 12px; background:var(--bg-subtle); color:var(--text-muted); font-weight:600; font-size:11px; text-align:right; border-bottom:1px solid var(--border-color); white-space:nowrap; }
+  .pt-sk-table thead th { padding:10px 12px; background:var(--bg-subtle); color:var(--text-muted); font-weight:600; font-size: var(--text-xs); text-align:right; border-bottom:1px solid var(--border-color); white-space:nowrap; }
   .pt-sk-table tbody td { padding:10px 12px; border-bottom:1px solid var(--border-color); }
   .pt-sk-bar { height:12px; border-radius:6px; background:linear-gradient(90deg,var(--bg-subtle,#eef2f7) 25%,var(--border-color,#e2e8f0) 37%,var(--bg-subtle,#eef2f7) 63%); background-size:400% 100%; animation:ptshimmer 1.2s ease infinite; }
   @keyframes ptshimmer { 0% { background-position:100% 0; } 100% { background-position:-100% 0; } }
@@ -1791,9 +1791,9 @@ document.addEventListener('keydown', function (e) {
   }
   .input:focus { outline: none; border-color: var(--brand-primary); box-shadow: 0 0 0 2px var(--brand-subtle-bg); }
   .form-field { margin-bottom: var(--space-4); }
-  .form-label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px; color: var(--text-main); }
+  .form-label { display: block; font-size: var(--text-sm); font-weight: 600; margin-bottom: 6px; color: var(--text-main); }
   .req { color: var(--danger); }
-  .field-error { color: var(--danger); font-size: 12px; min-height: 16px; }
+  .field-error { color: var(--danger); font-size: var(--text-xs); min-height: 16px; }
   .form-field.has-error .input { border-color: var(--danger); }
 
   /* ── Searchable Combo ────────────────────────────────────────────────── */
@@ -1808,7 +1808,7 @@ document.addEventListener('keydown', function (e) {
   }
   .combo-option {
     padding: 12px 10px; /* taller for touch */
-    font-size: 13px; cursor: pointer;
+    font-size: var(--text-sm); cursor: pointer;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
   .combo-option:hover, .combo-option.active { background: var(--brand-subtle-bg); color: var(--brand-primary); }
@@ -1843,14 +1843,14 @@ document.addEventListener('keydown', function (e) {
     /* Sticky so close button is always accessible */
     position: sticky; top: 0; background: var(--bg-surface); z-index: 1;
   }
-  .modal-header h3 { font-size: 16px; }
+  .modal-header h3 { font-size: var(--text-base); }
   .modal-body  { padding: var(--space-6); }
   .modal-footer {
-    display: flex; justify-content: flex-end; gap: 8px;
+    display: flex; justify-content: flex-end; gap: var(--space-2);
     padding: var(--space-4) var(--space-6); border-top: 1px solid var(--border-color);
     flex-wrap: wrap; /* allow buttons to wrap on very small screens */
   }
-  .btn-icon { background: none; border: none; font-size: 20px; cursor: pointer; color: var(--text-muted); padding: 8px; min-height: var(--tap-sm, 44px); min-width: var(--tap-sm, 44px); }
+  .btn-icon { background: none; border: none; font-size: var(--text-xl); cursor: pointer; color: var(--text-muted); padding: var(--space-2); min-height: var(--tap-sm, 44px); min-width: var(--tap-sm, 44px); }
   /* Larger screens: centre modal */
   @media (min-width: 640px) {
     .modal-overlay { align-items: center; }
@@ -1867,8 +1867,8 @@ document.addEventListener('keydown', function (e) {
   .toast {
     position: fixed; top: max(20px, calc(var(--safe-top) + 12px));
     left: 50%; transform: translateX(-50%);
-    padding: 12px 24px; border-radius: var(--radius-md); color: #fff;
-    font-size: 14px; font-weight: 600; z-index: 2000;
+    padding: var(--space-3) var(--space-6); border-radius: var(--radius-md); color: #fff;
+    font-size: var(--text-sm); font-weight: 600; z-index: 2000;
     box-shadow: var(--shadow-md);
     transition: opacity .3s ease, transform .3s ease;
     max-width: min(90vw, 360px);
@@ -1893,8 +1893,8 @@ document.addEventListener('keydown', function (e) {
   .stat-success .stat-icon { background: var(--success-bg); }
   .stat-danger  .stat-icon { background: var(--danger-bg); }
   .stat-warning .stat-icon { background: var(--warning-bg); }
-  .stat-value { font-size: clamp(18px, 5vw, 24px); font-weight: 700; line-height: 1.2; }
-  .stat-label { font-size: 12px; color: var(--text-muted); }
+  .stat-value { font-size: var(--text-2xl); font-weight: 700; line-height: 1.2; }
+  .stat-label { font-size: var(--text-xs); color: var(--text-muted); }
 
   /* ── Company Tile ────────────────────────────────────────────────────── */
   .company-tile {
@@ -1908,9 +1908,9 @@ document.addEventListener('keydown', function (e) {
   .tile-logo { width: 84px; height: 84px; object-fit: contain; border-radius: 50%; background: #fff; padding: 6px; box-shadow: 0 4px 14px rgba(0,0,0,.18); margin: 0 auto var(--space-4); display: flex; align-items: center; justify-content: center; font-size: 28px; font-weight: 700; color: var(--brand-primary); }
   .tile-logo:hover { box-shadow: 0 6px 18px rgba(0,0,0,.22); transform: translateY(-1px); }
   .tile-logo-fallback { border: 1px solid var(--border-color); }
-  .tile-name-ar { font-size: 16px; font-weight: 700; margin-bottom: 4px; }
-  .tile-name-en { font-size: 12px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .04em; margin-bottom: var(--space-4); }
-  .tile-enter   { font-size: 12px; font-weight: 600; color: var(--brand-primary); }
+  .tile-name-ar { font-size: var(--text-base); font-weight: 700; margin-bottom: var(--space-1); }
+  .tile-name-en { font-size: var(--text-xs); color: var(--text-muted); text-transform: uppercase; letter-spacing: .04em; margin-bottom: var(--space-4); }
+  .tile-enter   { font-size: var(--text-xs); font-weight: 600; color: var(--brand-primary); }
 
   /* ── Module Tile ─────────────────────────────────────────────────────── */
   .module-tile {
@@ -1924,9 +1924,9 @@ document.addEventListener('keydown', function (e) {
   .module-tile-disabled { opacity: .5; cursor: not-allowed; }
   .module-tile-disabled:hover { border-color: var(--border-color); box-shadow: none; transform: none; }
   .module-tile-icon { width: 64px; height: 64px; margin: 0 auto var(--space-4); display: flex; align-items: center; justify-content: center; font-size: 32px; border-radius: var(--radius-md); background: var(--brand-subtle-bg); }
-  .module-tile-title    { font-size: 15px; font-weight: 700; margin-bottom: 4px; }
-  .module-tile-subtitle { font-size: 12px; color: var(--text-muted); }
-  .module-tile-badge { position: absolute; top: 8px; right: 8px; background: var(--warning); color: #fff; font-size: 10px; font-weight: 600; padding: 2px 8px; border-radius: 999px; }
+  .module-tile-title    { font-size: var(--text-base); font-weight: 700; margin-bottom: var(--space-1); }
+  .module-tile-subtitle { font-size: var(--text-xs); color: var(--text-muted); }
+  .module-tile-badge { position: absolute; top: 8px; right: 8px; background: var(--warning); color: #fff; font-size: var(--text-xs); font-weight: 600; padding: 2px 8px; border-radius: 999px; }
 
   /* ── Topbar ──────────────────────────────────────────────────────────── */
   .topbar {
@@ -1938,39 +1938,39 @@ document.addEventListener('keydown', function (e) {
     /* Allow dropdown menus to expand outside the header */
     overflow: visible;
   }
-  .topbar-left  { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .topbar-left  { display: flex; align-items: center; gap: var(--space-2); min-width: 0; }
   .topbar-right { display: flex; align-items: center; flex-shrink: 0; }
-  .user-block { display: flex; flex-direction: column; align-items: center; gap: 4px; line-height: 1.2; padding: 4px 10px; background: var(--bg-subtle); border-radius: var(--radius-lg); border: 1px solid var(--border-color); }
-  .user-name   { font-size: 13px; color: var(--text-main); font-weight: 700; white-space: nowrap; max-width: 140px; overflow: hidden; text-overflow: ellipsis; }
-  .user-logout { padding: 4px 12px; font-size: 12px; font-weight: 700; border-radius: 20px; transition: all 0.2s; background: var(--danger-bg); color: var(--danger-text); border: 1px solid var(--danger-border); cursor: pointer; }
+  .user-block { display: flex; flex-direction: column; align-items: center; gap: var(--space-1); line-height: 1.2; padding: 4px 10px; background: var(--bg-subtle); border-radius: var(--radius-lg); border: 1px solid var(--border-color); }
+  .user-name   { font-size: var(--text-sm); color: var(--text-main); font-weight: 700; white-space: nowrap; max-width: 140px; overflow: hidden; text-overflow: ellipsis; }
+  .user-logout { padding: 4px 12px; font-size: var(--text-xs); font-weight: 700; border-radius: 20px; transition: all 0.2s; background: var(--danger-bg); color: var(--danger-text); border: 1px solid var(--danger-border); cursor: pointer; }
   .user-logout:hover { background: var(--danger); color: #fff; }
 
   /* ── User profile dropdown ─────────────────────────────────────────── */
-  .user-profile .user-profile-toggle { gap: 8px; }
+  .user-profile .user-profile-toggle { gap: var(--space-2); }
   .user-avatar {
     display: inline-flex; align-items: center; justify-content: center;
     width: 32px; height: 32px; border-radius: 50%; flex-shrink: 0;
     background: var(--brand-primary); color: #fff;
-    font-weight: 800; font-size: 15px; line-height: 1;
+    font-weight: 800; font-size: var(--text-base); line-height: 1;
   }
-  .user-avatar-lg { width: 46px; height: 46px; font-size: 21px; }
+  .user-avatar-lg { width: 46px; height: 46px; font-size: var(--text-xl); }
   .user-profile .user-name { max-width: 110px; }
   .user-profile-menu { min-width: 250px; }
   .user-profile-head {
     display: flex; align-items: center; gap: 10px;
-    padding: 10px 12px 12px; margin-bottom: 4px;
+    padding: 10px 12px 12px; margin-bottom: var(--space-1);
     border-bottom: 1px solid var(--border-color);
   }
   .user-profile-id { min-width: 0; }
   .user-profile-name {
-    font-size: 14px; font-weight: 800; color: var(--text-main);
+    font-size: var(--text-sm); font-weight: 800; color: var(--text-main);
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 180px;
   }
   .user-profile-email {
-    font-size: 12px; color: var(--text-muted); direction: ltr; text-align: end;
+    font-size: var(--text-xs); color: var(--text-muted); direction: ltr; text-align: end;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 180px;
   }
-  .user-profile-divider { height: 1px; background: var(--border-color); margin: 4px 0; }
+  .user-profile-divider { height: 1px; background: var(--border-color); margin: var(--space-1) 0; }
   .user-profile-logout { color: var(--danger-text); font-weight: 700; }
   .user-profile-logout:hover { background: var(--danger-bg); color: var(--danger-text); }
 
@@ -1981,7 +1981,7 @@ document.addEventListener('keydown', function (e) {
   .drawer-nav-item { color: var(--text-main); font-weight: 700; }
   .drawer-nav .nav-item.active,
   .drawer-nav-item.active { background: var(--brand-primary); color: #fff; }
-  .drawer-group-label { color: var(--text-main); font-size: 12px; font-weight: 800; }
+  .drawer-group-label { color: var(--text-main); font-size: var(--text-xs); font-weight: 800; }
   .drawer-group .nav-dropdown-item { color: var(--text-main); font-weight: 600; }
   .drawer-group .nav-dropdown-item-active { background: var(--brand-primary); color: #fff; }
   .app-logo { display: inline-flex; align-items: center; flex-shrink: 0; }
@@ -1996,7 +1996,7 @@ document.addEventListener('keydown', function (e) {
     flex: 1;
     overflow: visible;
   }
-  .nav-item { padding: 8px 12px; font-size: 13px; font-weight: 600; color: var(--text-muted); text-decoration: none; border-radius: var(--radius-sm); white-space: nowrap; display: inline-flex; align-items: center; min-height: var(--tap-sm, 44px); transition: color 0.15s, background-color 0.15s; }
+  .nav-item { padding: var(--space-2) var(--space-3); font-size: var(--text-sm); font-weight: 600; color: var(--text-muted); text-decoration: none; border-radius: var(--radius-sm); white-space: nowrap; display: inline-flex; align-items: center; min-height: var(--tap-sm, 44px); transition: color 0.15s, background-color 0.15s; }
   .nav-item:hover, .nav-item.active { color: var(--brand-primary); background: var(--brand-subtle-bg); }
 
   /* ── Hamburger button (mobile only) ─────────────────────────────────── */
@@ -2004,16 +2004,16 @@ document.addEventListener('keydown', function (e) {
     display: none; /* hidden on desktop */
     flex-direction: column; justify-content: center; align-items: center; gap: 5px;
     width: var(--tap-min, 48px); height: var(--tap-min, 48px);
-    background: none; border: none; cursor: pointer; padding: 8px; border-radius: var(--radius-sm);
+    background: none; border: none; cursor: pointer; padding: var(--space-2); border-radius: var(--radius-sm);
     flex-shrink: 0;
   }
   .hamburger-bar { display: block; width: 22px; height: 2px; background: var(--text-main); border-radius: 2px; transition: all 0.2s; }
 
   /* ── Dropdowns ───────────────────────────────────────────────────────── */
   .nav-dropdown         { position: relative; display: inline-block; }
-  .nav-dropdown-toggle  { display: inline-flex; align-items: center; gap: 6px; padding: 8px 12px; font-size: 13px; font-weight: 600; font-family: var(--font-sans); color: var(--text-muted); background: none; border: none; border-radius: var(--radius-sm); cursor: pointer; min-height: var(--tap-sm, 44px); white-space: nowrap; transition: color 0.15s, background-color 0.15s; }
+  .nav-dropdown-toggle  { display: inline-flex; align-items: center; gap: 6px; padding: var(--space-2) var(--space-3); font-size: var(--text-sm); font-weight: 600; font-family: var(--font-sans); color: var(--text-muted); background: none; border: none; border-radius: var(--radius-sm); cursor: pointer; min-height: var(--tap-sm, 44px); white-space: nowrap; transition: color 0.15s, background-color 0.15s; }
   .nav-dropdown-toggle:hover, .nav-dropdown-toggle.open { color: var(--brand-primary); background: var(--brand-subtle-bg); }
-  .nav-dropdown-caret   { font-size: 10px; transition: transform 0.2s; }
+  .nav-dropdown-caret   { font-size: var(--text-xs); transition: transform 0.2s; }
   .nav-dropdown-toggle.open .nav-dropdown-caret { transform: rotate(180deg); }
   .nav-dropdown-menu    {
     display: none;
@@ -2026,19 +2026,19 @@ document.addEventListener('keydown', function (e) {
     border-radius: var(--radius-md);
     box-shadow: 0 10px 25px rgba(0, 0, 0, 0.15), 0 2px 6px rgba(0, 0, 0, 0.08);
     z-index: 2500;
-    padding: 8px;
+    padding: var(--space-2);
     max-height: 75dvh;
     max-height: calc(var(--vh, 1vh) * 75);
     overflow-y: auto;
     -webkit-overflow-scrolling: touch;
   }
   .nav-dropdown-menu.open { display: block; }
-  .nav-dropdown-item { display: flex; align-items: center; padding: 10px 12px; font-size: 13px; color: var(--text-main); text-decoration: none; border-radius: var(--radius-sm); cursor: pointer; white-space: nowrap; min-height: 40px; transition: background-color 0.15s, color 0.15s; }
+  .nav-dropdown-item { display: flex; align-items: center; padding: 10px 12px; font-size: var(--text-sm); color: var(--text-main); text-decoration: none; border-radius: var(--radius-sm); cursor: pointer; white-space: nowrap; min-height: 40px; transition: background-color 0.15s, color 0.15s; }
   .nav-dropdown-item:hover { background: var(--brand-subtle-bg); color: var(--brand-primary); }
   .nav-dropdown-item-active { background: var(--brand-subtle-bg); color: var(--brand-primary); font-weight: 700; }
 
   /* ── Breadcrumb & content area ───────────────────────────────────────── */
-  .breadcrumb { padding: var(--space-3) var(--space-4); font-size: 13px; color: var(--text-muted); overflow-x: auto; white-space: nowrap; }
+  .breadcrumb { padding: var(--space-3) var(--space-4); font-size: var(--text-sm); color: var(--text-muted); overflow-x: auto; white-space: nowrap; }
   .app-content { width: 100%; max-width: 1200px; margin: 0 auto; padding: var(--space-4); box-sizing: border-box; }
 
   /* ── Mobile Drawer ───────────────────────────────────────────────────── */
@@ -2076,13 +2076,13 @@ document.addEventListener('keydown', function (e) {
   .mobile-drawer.is-open { transform: translateX(0); }
 
   .drawer-header {
-    display: flex; align-items: center; gap: 8px;
+    display: flex; align-items: center; gap: var(--space-2);
     padding: 12px var(--space-4); border-bottom: 1px solid var(--border-color);
     flex-shrink: 0;
   }
   .drawer-close {
-    margin-right: auto; background: none; border: none; font-size: 20px;
-    cursor: pointer; color: var(--text-muted); padding: 8px;
+    margin-right: auto; background: none; border: none; font-size: var(--text-xl);
+    cursor: pointer; color: var(--text-muted); padding: var(--space-2);
     min-width: var(--tap-min, 48px); min-height: var(--tap-min, 48px);
     display: flex; align-items: center; justify-content: center;
   }
@@ -2098,13 +2098,13 @@ document.addEventListener('keydown', function (e) {
     padding: 14px var(--space-4);
     min-height: var(--tap-min, 48px);
     border-radius: 0;
-    font-size: 15px; font-weight: 600;
+    font-size: var(--text-base); font-weight: 600;
     border-bottom: 1px solid var(--border-color);
   }
   .drawer-nav .nav-item:last-child { border-bottom: none; }
   .drawer-group-label {
     padding: 10px var(--space-4) 4px;
-    font-size: 11px; font-weight: 700;
+    font-size: var(--text-xs); font-weight: 700;
     text-transform: uppercase; letter-spacing: 0.06em;
     color: var(--text-muted);
   }
