@@ -859,19 +859,11 @@ function topLightThemeCss_() {
 // print rules.
 function topChemicalThemeCss_() {
   return '' +
-    /* [UI-2.2 / D-3] The Cairo <link> tags moved to CSS_Tokens.html, which every
-       page includes, so the font loads once for all three companies instead of
-       only for the two that had a bespoke theme. --font-sans below still names
-       Cairo, so this company renders identically. */
     '<style>\n' +
     ':root {\n' +
-    '  --bg-primary: #16a34a;\n' +
-    '  --bg-surface: #ffffff;\n' +
-    '  --bg-subtle: #dcfce7;\n' +
-    '  --text-main: #111827;\n' +
-    '  --text-muted: #374151;\n' +
-    '  --text-disabled: #4b5563;\n' +
-    '  --border-color: #16a34a;\n' +
+    /* [UI-2.5 / D-1 / U-10] Same treatment as TopLight: canvas, surfaces,
+       borders and ink now come from CSS_Tokens.html. The page stops being
+       painted green; the brand lives in the topbar and the buttons. */
     '  --font-sans: \'Cairo\', sans-serif;\n' +
     '  --font-mono: \'Consolas\', \'Courier New\', monospace;\n' +
     '  --success: #16a34a;\n' +
@@ -895,34 +887,32 @@ function topChemicalThemeCss_() {
     '  --btn-text-color: #ffffff;\n' +
     '  --shadow-brand: 0 4px 14px rgba(22, 163, 74, 0.25);\n' +
     '}\n' +
-    'body { background-color: #16a34a; }\n' +
-    '.table thead th { background: #15803d; color: #ffffff; border-bottom: 2px solid #14532d; }\n' +
-    '.table tbody td { background: #ffffff; color: #111827; }\n' +
-    '.table-wrap, .empty-state, .stat-card, .modal, .company-tile, .module-tile, .invoice {\n' +
-    '  border: 2px solid #16a34a;\n' +
-    '}\n' +
-    '.topbar { background: #15803d; border-bottom: 2px solid #14532d; }\n' +
+    /* The brand topbar: green with white ink. */
+    '.topbar { background: #15803d; border-bottom: 1px solid #14532d; }\n' +
     '.topbar .nav-item { color: #ffffff; }\n' +
     '.topbar .nav-item:hover, .topbar .nav-item.active { color: #15803d; background: #ffffff; }\n' +
     '.topbar .nav-dropdown-toggle { color: #ffffff; }\n' +
     '.topbar .nav-dropdown-toggle:hover, .topbar .nav-dropdown-toggle.open { color: #15803d; background: #ffffff; }\n' +
-    '.topbar .nav-dropdown-menu { background: #ffffff; border: 2px solid #16a34a; }\n' +
+    '.topbar .nav-dropdown-menu { background: #ffffff; border: 1px solid var(--border-color); }\n' +
     '.topbar .nav-dropdown-item:hover { background: #dcfce7; color: #15803d; }\n' +
-    /* [UI-1.4 / U-04] .num moved to the shared stylesheet in UI_Components.html.
-       It was defined here and in topChemicalThemeCss_ but nowhere else, so
-       ValleyFoods — which takes the generic theme path — never got it. The
-       shared rule carries the identical declarations and resolves --font-mono
-       to the same stack this file still defines above, so nothing changes for
-       this company. */
-    '.invoice { background: #ffffff; }\n' +
+    '/* Profile toggle must read without hovering: the shared .user-name rule\n' +
+    '   would otherwise paint it near-black on the green topbar. */\n' +
+    '.topbar .user-profile-toggle { border: 1px solid #ffffff; border-radius: 999px; padding: 4px 12px; }\n' +
+    '.topbar .user-profile-toggle .user-name { color: #ffffff; }\n' +
+    '.topbar .user-profile-toggle .nav-dropdown-caret { color: #ffffff; }\n' +
+    '.topbar .user-profile-toggle:hover, .topbar .user-profile-toggle.open { background: #ffffff; }\n' +
+    '.topbar .user-profile-toggle:hover .user-name, .topbar .user-profile-toggle.open .user-name,\n' +
+    '.topbar .user-profile-toggle:hover .nav-dropdown-caret, .topbar .user-profile-toggle.open .nav-dropdown-caret { color: #15803d; }\n' +
+    '.topbar .user-avatar { background: #ffffff; color: #15803d; }\n' +
+    '/* Mobile hamburger: dark bars are invisible on the green topbar. */\n' +
+    '.topbar-hamburger { border: 1px solid #ffffff; }\n' +
+    '.topbar-hamburger .hamburger-bar { background: #ffffff; }\n' +
+    /* Buttons keep the darker green they already used. */
     '.btn-primary { background: #15803d; box-shadow: 0 4px 14px rgba(20, 83, 45, 0.3); }\n' +
     '.btn-primary:hover { background: #14532d; box-shadow: 0 6px 16px rgba(20, 83, 45, 0.35); }\n' +
-    '.btn-outline { border-color: #15803d; }\n' +
-    '.btn-outline:hover { background: #dcfce7; border-color: #14532d; color: #14532d; }\n' +
-    '.user-block { background: #ffffff; border: 2px solid #16a34a; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18); }\n' +
-    '.user-name { font-size: 15px; font-weight: 800; color: #14532d; }\n' +
-    '.user-logout { background: #b91c1c; color: #ffffff; border: 1px solid #b91c1c; }\n' +
-    '.user-logout:hover { background: #991b1b; border-color: #991b1b; color: #ffffff; }\n' +
+    '.btn-outline:hover { background: #dcfce7; border-color: #15803d; color: #14532d; }\n' +
+    /* Documents keep a visible frame, but a hairline one rather than 2px green. */
+    '.invoice { background: #ffffff; border: 1px solid var(--border-color); }\n' +
     '@media print {\n' +
     '  * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }\n' +
     '}\n' +
