@@ -1105,7 +1105,18 @@ const TopChemical = (function () {
   function getBarcode_(data, user, dbId) {
     const products = productRefs_(dbId);
     const employees = employeeRefs_(dbId);
-    var rows = getAllRecords_(dbId, BARCODE_SHEET).map(function (r) {
+    // Phase 12 — slice before mapping. The sort key is `id`, which the map copies
+    // straight off the raw row, so the same comparator applied to raw[i].id over an
+    // index array gives the same permutation: Array.prototype.sort is stable and the
+    // index array starts in the same order the mapped array did.
+    var raw = getAllRecords_(dbId, BARCODE_SHEET);
+    var order = [];
+    for (var i = 0; i < raw.length; i++) order.push(i);
+    order.sort(function (a, b) { return Number(raw[b].id) - Number(raw[a].id); });
+    var limit = Number(data && data.limit) || 10;
+    if (!data || !data.loadAll) order = order.slice(0, limit);
+    var rows = order.map(function (idx) {
+      var r = raw[idx];
       return {
         id: r.id,
         unique_id: r.unique_id,
@@ -1122,9 +1133,7 @@ const TopChemical = (function () {
         user: r.user,
         created_at: r.created_at
       };
-    }).sort(function (a, b) { return Number(b.id) - Number(a.id); });
-    var limit = Number(data && data.limit) || 10;
-    if (!data || !data.loadAll) rows = rows.slice(0, limit);
+    });
     return { status: 'success', barcodes: rows, product_options: products.options, emp_options: employees.options };
   }
 
@@ -1211,7 +1220,13 @@ const TopChemical = (function () {
       const t = String(r.document_type || '').trim();
       if (t) typeSet[t] = true;
     });
-    var papers = rows.map(function (r) {
+    // Phase 12 — slice before mapping; see getImportFollow_.
+    var order = [];
+    for (var i = rows.length - 1; i >= 0; i--) order.push(i);
+    var limit = Number(data && data.limit) || 10;
+    if (!data || !data.loadAll) order = order.slice(0, limit);
+    var papers = order.map(function (idx) {
+        var r = rows[idx];
         return {
           document_name_ar: r.document_name_ar,
           document_name_en: r.document_name_en,
@@ -1223,9 +1238,7 @@ const TopChemical = (function () {
           document_end_date: r.document_end_date,
           document_file: r.document_file
         };
-      }).reverse();
-    var limit = Number(data && data.limit) || 10;
-    if (!data || !data.loadAll) papers = papers.slice(0, limit);
+      });
     return {
       status: 'success',
       papers: papers,
@@ -1602,16 +1615,31 @@ const TopChemical = (function () {
     ensureCustomsOfficeSheet_(dbId);
     const rows = getAllRecords_(dbId, CUSTOMS_OFFICE_SHEET);
 
+    // Phase 12 — slice before mapping. The two running totals were accumulated
+    // INSIDE the map over every row and are reported from the full set (the old
+    // comment below says so), so they move to their own pass in the same 0..n-1
+    // order — same additions in the same sequence, so the same float result. `id`
+    // was the map index, which ran before the reverse, so it is the index into the
+    // unreversed array: idx + 1.
     let egpTotal = 0;
     let usdTotal = 0;
-    var transactions = rows.map(function (r, i) {
+    rows.forEach(function (r) {
       const egp = Number(r['المبلغ']) || 0;
       const usd = Number(r['المبلغ_دولار']) || 0;
       const sgn = String(r['نوع المعاملة']).trim() === 'مدين' ? -1 : 1;
       egpTotal += egp * sgn;
       usdTotal += usd * sgn;
+    });
+    var order = [];
+    for (var i = rows.length - 1; i >= 0; i--) order.push(i);
+    var limit = Number(data && data.limit) || 10;
+    if (!data || !data.loadAll) order = order.slice(0, limit);
+    var transactions = order.map(function (idx) {
+      const r = rows[idx];
+      const egp = Number(r['المبلغ']) || 0;
+      const usd = Number(r['المبلغ_دولار']) || 0;
       return {
-        id: i + 1,
+        id: idx + 1,
         user_email: r['user'],
         transaction_date: r['التاريخ'],
         transaction_type: r['نوع المعاملة'],
@@ -1623,10 +1651,8 @@ const TopChemical = (function () {
         shipment_clearance: r['تخليص الشحنة'],
         created_at: r['created_at']
       };
-    }).reverse();
+    });
     // summary computed from FULL before slice
-    var limit = Number(data && data.limit) || 10;
-    if (!data || !data.loadAll) transactions = transactions.slice(0, limit);
     return {
       status: 'success',
       transactions: transactions,
@@ -1948,7 +1974,17 @@ const TopChemical = (function () {
 
   function getImportFollow_(data, user, dbId) {
     const products = productRefs_(dbId);
-    var rows = getAllRecords_(dbId, IMPORT_FOLLOW_SHEET).map(function (r) {
+    // Phase 12 — same transformation as 7.1: order is computed on an index array
+    // first, so reverse().slice(0, limit) keeps its exact semantics while only the
+    // visible rows are mapped. Keeping the slice on the index array is the point:
+    // a counted loop would not reproduce a negative, fractional, string or NaN limit.
+    var raw = getAllRecords_(dbId, IMPORT_FOLLOW_SHEET);
+    var order = [];
+    for (var i = raw.length - 1; i >= 0; i--) order.push(i);
+    var limit = Number(data && data.limit) || 10;
+    if (!data || !data.loadAll) order = order.slice(0, limit);
+    var rows = order.map(function (idx) {
+      var r = raw[idx];
       return {
         id: r.id,
         vendor: r.vendor,
@@ -1973,9 +2009,7 @@ const TopChemical = (function () {
         user: r.user,
         created_at: r.created_at
       };
-    }).reverse();
-    var limit = Number(data && data.limit) || 10;
-    if (!data || !data.loadAll) rows = rows.slice(0, limit);
+    });
     return { status: 'success', follows: rows, vendor_options: customerVendorOptions_(dbId), product_options: products.options };
   }
 
@@ -2144,10 +2178,22 @@ const TopChemical = (function () {
   function getCartonSizes_(data, user, dbId) {
     const products = productRefs_(dbId);
     const vendors = clientVendorRefs_(dbId);
+    // Phase 12 — slice before mapping. typeSet was accumulated INSIDE the map, over
+    // every row, and type_options is built from it — so it moves to its own pass in
+    // the same 0..n-1 order. Object key insertion order is therefore identical, and
+    // Array.prototype.sort is stable, so type_options is unchanged.
+    var raw = getAllRecords_(dbId, CARTON_SIZES_SHEET);
     const typeSet = {};
-    var rows = getAllRecords_(dbId, CARTON_SIZES_SHEET).map(function (r) {
+    raw.forEach(function (r) {
       const t = String(r.type || '').trim();
       if (t) typeSet[t] = true;
+    });
+    var order = [];
+    for (var i = raw.length - 1; i >= 0; i--) order.push(i);
+    var limit = Number(data && data.limit) || 10;
+    if (!data || !data.loadAll) order = order.slice(0, limit);
+    var rows = order.map(function (idx) {
+      var r = raw[idx];
       return {
         id: r.id,
         product: r.product,
@@ -2163,9 +2209,7 @@ const TopChemical = (function () {
         user: r.user,
         created_at: r.created_at
       };
-    }).reverse();
-    var limit = Number(data && data.limit) || 10;
-    if (!data || !data.loadAll) rows = rows.slice(0, limit);
+    });
     const typeOptions = Object.keys(typeSet).map(function (t) {
       return { value: t, label: t };
     }).sort(function (a, b) { return String(a.label).localeCompare(String(b.label), 'ar'); });
