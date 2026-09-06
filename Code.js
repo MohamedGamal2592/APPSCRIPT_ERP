@@ -501,10 +501,14 @@ function jsonSafe_(value) {
 }
 
 /**
- * F-09: every shared include is 100% static — UI_Components (95 KB), CSS_Tokens,
- * Client_Helpers, ERP_DataTable_JS, both *_Nav files, ERP_Modal, ERP_Flow and
- * ERP_DataTable contain zero <? ?> scriptlets — yet all of it was pushed through
- * the Apps Script templating engine on every single page load.
+ * F-09: every shared include is 100% static — UI_Components, CSS_Tokens,
+ * Client_Helpers, both *_Nav files, ERP_Modal and ERP_Flow contain zero
+ * <? ?> scriptlets — yet all of it was pushed through the Apps Script
+ * templating engine on every single page load.
+ *
+ * [UI-10.2 / U-35] ERP_DataTable and ERP_DataTable_JS were named here too.
+ * They were included by ZERO pages and were deleted in step 10.1, so naming
+ * them here was telling the next reader that 42 KB of dead code was live.
  *
  * Now: read the file directly and only fall back to template evaluation if the
  * content actually contains a scriptlet, so an include that later gains one keeps
