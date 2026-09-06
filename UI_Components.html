@@ -3654,6 +3654,25 @@ document.addEventListener('keydown', function (e) {
   }
   .input:focus { outline: none; border-color: var(--brand-primary); box-shadow: 0 0 0 2px var(--brand-subtle-bg); }
   .form-field { margin-bottom: var(--space-4); }
+
+  /* [F4a] The house form grid.
+     Before this there was no shared form-grid class at all — 83 inline
+     grid-template-columns across 43 pages, with minimums from 110px to 320px
+     and 16 hard 1fr-1fr splits carrying no minimum whatsoever. A hard
+     1fr 1fr inside the 512px body of a default modal holds two ~236px
+     columns on a phone rather than collapsing, which is what clips long
+     Arabic names.
+     One column by default; from tablet-p up, as many columns as fit above
+     the floor. 240px, not the previously most-common 220px: at 220px inside
+     a 512px body the two resulting columns leave ~226px of text after
+     .input's 10px 12px padding — the exact margin where long Arabic party
+     names begin to clip. */
+  .form-grid { display: grid; gap: 0 var(--space-4); grid-template-columns: 1fr; align-items: start; }
+  .form-grid-wide { display: grid; gap: 0 var(--space-4); grid-template-columns: 1fr; align-items: start; }
+  .form-grid-narrow { display: grid; gap: 0 var(--space-4); grid-template-columns: 1fr; align-items: start; }
+  /* The responsive halves of these three live in the single canonical
+     tablet-p tier below, not in a second @media block here: the house
+     convention is one block per breakpoint tier. */
   .form-label { display: block; font-size: var(--text-sm); font-weight: 600; margin-bottom: 6px; color: var(--text-main); }
   .req { color: var(--danger); }
   .field-error { color: var(--danger); font-size: var(--text-xs); min-height: 16px; }
@@ -4230,6 +4249,13 @@ document.addEventListener('keydown', function (e) {
 
   /* ── tablet-p (>= 600px) — the drawer deliberately STAYS ── */
   @media (min-width: 600px) {
+    /* [F4a] The form grid gains its columns here. One column below tablet-p. */
+    .form-grid { grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+    /* For forms whose fields hold long Arabic names. */
+    .form-grid-wide { grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
+    /* An honest home for the read-only computed-total strips that legitimately
+       want to be dense. */
+    .form-grid-narrow { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
     /* [UI-4.8] Back to a real table from tablet-p up. */
     .table-wrap { max-height: 70dvh; }
     .table { display: table; }

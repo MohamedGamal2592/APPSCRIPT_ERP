@@ -645,7 +645,7 @@
       '<form id="erp-invoice-form" onsubmit="event.preventDefault();">' +
         '<input type="hidden" id="inv-uid" value="' + (isEdit ? FMT.escape(uniqueId) : '') + '">' +
         
-        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">' +
+        '<div class="form-grid">' +
           '<div class="form-field">' +
             '<label class="form-label" for="inv-num">رقم الفاتورة (Invoice Number) *</label>' +
             '<input type="text" id="inv-num" class="input" value="' + FMT.escape(invoiceNumber) + '" required placeholder="مثال: INV-2026-001">' +
@@ -664,7 +664,7 @@
           '</select>' +
         '</div>' +
 
-        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">' +
+        '<div class="form-grid">' +
           '<div class="form-field">' +
             '<label class="form-label" for="inv-users">عدد المستخدمين (No. of Users) *</label>' +
             '<input type="number" id="inv-users" class="input" min="1" step="1" value="' + noOfUsers + '" required oninput="calcInvoiceModal()">' +
@@ -675,7 +675,7 @@
           '</div>' +
         '</div>' +
 
-        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">' +
+        '<div class="form-grid">' +
           '<div class="form-field">' +
             '<label class="form-label" for="inv-cost-usd">تكلفة المستخدم ($ USD) *</label>' +
             '<input type="number" id="inv-cost-usd" class="input" min="0" step="0.01" value="' + costPerUserUsd + '" required oninput="calcInvoiceModal()">' +
@@ -699,6 +699,7 @@
       '</form>';
 
     UIC.openModal('erp-invoice-modal', {
+      size: 'lg',
       title: title,
       body: modalHtml,
       onSave: 'saveInvoiceDoc()'

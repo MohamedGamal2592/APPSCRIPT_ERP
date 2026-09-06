@@ -13,9 +13,13 @@
     #product-modal .modal { width: min(94vw, 920px); max-width: 920px; }
     #product-modal .modal-body { max-height: 78vh; overflow-y: auto; }
     /* [UI-2.9b / U-48] Single-column form on a phone, two columns from
-       tablet-p. Was an off-scale max-width:640. */
-    #product-modal .modal-body #pf-form { display: grid; grid-template-columns: 1fr; gap: 0 14px; align-items: start; }
-    @media (min-width: 600px) { #product-modal .modal-body #pf-form { grid-template-columns: 1fr 1fr; } }
+       tablet-p. Was an off-scale max-width:640.
+       [F4a] Superseded by the shared .form-grid class on the <form> itself.
+       The id selector had to go, not just the class be added:
+       #product-modal .modal-body #pf-form outranks .form-grid and would pin the
+       hard 1fr 1fr in place. .form-grid keeps the same one-column phone
+       behaviour but replaces the fixed two columns with a 240px floor, so a
+       13-field form reflows instead of holding two narrow columns. */
     /* Batches modal: wide, scrollable, non-wrapping table */
     /* [UI-2.9b / U-48] The 700px min-width is applied from tablet-l up, not
        unconditionally. A 768px tablet in portrait cannot show a 700px-wide
@@ -175,7 +179,7 @@
         { value: 0.14, label: '14%' }
       ];
       /* ALL entry fields are mandatory (mirrors server validation). */
-      var body = '<form id="pf-form">' +
+      var body = '<form id="pf-form" class="form-grid">' +
         '<div class="form-field">' +
           '<label class="form-label">رقم المنتج (يُعتمد تلقائياً)</label>' +
           '<input id="f-id-display" class="input" type="text" readonly value="' + esc(idValue) + '" style="background:var(--bg-subtle, #f3f4f6);color:var(--text-muted, #6b7280);cursor:not-allowed;">' +
