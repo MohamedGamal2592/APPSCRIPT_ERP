@@ -151,7 +151,10 @@ async function render(canSeeCost) {
   check(outNo.indexOf('إجمالي التكلفة') === -1, 'without: that column is gone');
   check(outNo.indexOf('المتاح') !== -1 && outNo.indexOf('المخصص') !== -1 && outNo.indexOf('المتبقي') !== -1,
     'without: available / allocated / remaining all still there');
-  check(outNo.indexOf('إجمالي الكمية') !== -1, 'without: the quantity total still shown');
+  /* S8 replaced the old "إجمالي الكمية" summary with the per-row indicator. */
+  check(outNo.indexOf('الكمية: ') !== -1 && outNo.indexOf('الدفعات: ') !== -1,
+    'without: the row summary still shows quantity and batch count');
+  check(outNo.indexOf('إجمالي التكلفة') === -1, 'without: but not the cost total');
   check(countTh(outWith) - countTh(outNo) === 1, 'exactly one column disappears from the batch table');
 
   console.log('\nS6 — by-products table\n');

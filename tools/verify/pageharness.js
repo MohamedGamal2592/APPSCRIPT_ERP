@@ -71,7 +71,10 @@ function bootPage(opts) {
   const ids = ['vf-mo-view', 'vf-root', 'mo-kpi-body', 'outputs-body', 'workops-body',
     'byproducts-body', 'vf-loading-overlay'].concat(o.containers || []);
   ids.forEach(id => {
-    const el = makeElement('div');
+    /* Created through the document, not makeElement directly, so the element
+       shares the document's id registry and ids written into its innerHTML
+       become addressable — which is what makes in-place updates observable. */
+    const el = sandbox.document.createElement('div');
     el.id = id;
     sandbox.document.body.appendChild(el);
   });

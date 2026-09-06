@@ -13,12 +13,12 @@
 
 const vm = require('vm');
 
-function makeElement(tag) {
+/* Registry shared by a document, so ids written into innerHTML stay findable. */
+function makeElement(tag, registry) {
   const el = {
     tagName: String(tag || 'div').toUpperCase(),
     id: '',
     className: '',
-    innerHTML: '',
     textContent: '',
     value: '',
     checked: false,
@@ -57,20 +57,57 @@ function makeElement(tag) {
     getBoundingClientRect: function () { return { top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0 }; },
     contains: function () { return false; }
   };
+
+  /* innerHTML is a real string, but assigning it also registers every id the
+     markup declares. A browser builds nodes; this builds just enough of one —
+     an addressable element per id — so code that renders a block and then
+     updates one cell inside it by id behaves as it does in a browser. Without
+     this, every in-place update would silently no-op under test and a broken
+     one would look identical to a working one. */
+  let _html = '';
+  Object.defineProperty(el, 'innerHTML', {
+    enumerable: true,
+    get: function () { return _html; },
+    set: function (v) {
+      _html = String(v == null ? '' : v);
+      if (registry) registerIds(_html, registry);
+    }
+  });
+  el.insertAdjacentHTML = function (position, html) {
+    const h = String(html == null ? '' : html);
+    if (position === 'afterbegin') _html = h + _html;
+    else _html = _html + h;          /* beforeend, and anything else */
+    if (registry) registerIds(h, registry);
+  };
   return el;
+}
+
+/** Register an addressable element for every id="..." in a markup string. */
+function registerIds(html, registry) {
+  const re = /\sid="([^"]+)"/g;
+  let m;
+  while ((m = re.exec(html)) !== null) {
+    const id = m[1];
+    if (registry[id]) continue;      /* first writer wins, as in a document */
+    const child = makeElement('div', registry);
+    child.id = id;
+    /* disabled is an attribute in the markup; reflect it so a test can read it */
+    child.disabled = new RegExp('\\sid="' + id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '"[^>]*\\sdisabled').test(html);
+    registry[id] = child;
+  }
 }
 
 function makeDocument() {
   const byId = {};
   const doc = {
     _byId: byId,
-    body: makeElement('body'),
-    documentElement: makeElement('html'),
-    head: makeElement('head'),
+    body: makeElement('body', byId),
+    documentElement: makeElement('html', byId),
+    head: makeElement('head', byId),
     readyState: 'complete',
-    createElement: makeElement,
-    createTextNode: function (t) { const e = makeElement('#text'); e.textContent = t; return e; },
-    createDocumentFragment: function () { return makeElement('#fragment'); },
+    createElement: function (tag) { return makeElement(tag, byId); },
+    createTextNode: function (t) { const e = makeElement('#text', byId); e.textContent = t; return e; },
+    createDocumentFragment: function () { return makeElement('#fragment', byId); },
     getElementById: function (id) { return byId[id] || null; },
     getElementsByClassName: function () { return []; },
     getElementsByTagName: function () { return []; },
@@ -94,6 +131,10 @@ function makeDocument() {
     const i = this.children.indexOf(c);
     if (i >= 0) this.children.splice(i, 1);
     if (c.id) delete byId[c.id];
+    /* Drop ids that lived inside it, so a closed modal stops being findable. */
+    const re = /\sid="([^"]+)"/g;
+    let m;
+    while ((m = re.exec(String(c.innerHTML || ''))) !== null) delete byId[m[1]];
     return c;
   };
   return doc;

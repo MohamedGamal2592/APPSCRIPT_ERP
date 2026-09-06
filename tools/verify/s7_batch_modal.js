@@ -237,7 +237,10 @@ function originalFifo(batches, qty) {
     check(f[0].item === 'B-001' && f[0].qty === 90, 'first is B-001 x 90');
     check(f[1].item === 'B-002' && f[1].qty === 60, 'second is B-002 x 60');
     check(f.every(r => r.qty > 0), 'zero rows are not written');
-    check(s6.html('outputs-body').indexOf('LOT-A') !== -1, 'the materials table was re-rendered');
+    /* S8: confirm re-renders that material's row, not the whole materials area. */
+    const row0 = s6.document.getElementById('out-row-0');
+    check(row0 && String(row0.innerHTML).indexOf('LOT-A') !== -1,
+      "the material's own row was re-rendered with the new allocation");
   }
 
   console.log('\nS7 — a mismatched confirm cannot be forced through\n');
