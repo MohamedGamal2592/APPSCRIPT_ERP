@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>التقييم</title>
+  <script>
+    // T-1/T-5 — set BEFORE the UI_Components include: UIC.ensureHomeLogo()'s
+    // very first check is this flag, so a candidate with no session never
+    // sees a way into the ERP. UIC.appShell is never called on this page.
+    window.UIC_PUBLIC_PAGE = true;
+  </script>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= getCompanyThemeCSS_('32fafd256ccb7a1c') ?>
+  <style>
+    body { background: var(--bg-canvas); }
+    .ac-public-wrap { max-width: 760px; margin: 0 auto; padding: 16px 16px 48px; }
+    .ac-public-head { display: flex; align-items: center; gap: 12px; padding: 16px 0 20px; }
+    .ac-public-head img { width: 40px; height: 40px; object-fit: contain; }
+    .ac-public-head h1 { font-size: var(--text-lg); margin: 0; color: var(--text-main); }
+    .ac-card {
+      background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: var(--radius-lg);
+      padding: 24px; box-shadow: var(--shadow-sm);
+    }
+    .ac-meta-row { display: flex; gap: 16px; flex-wrap: wrap; margin: 12px 0 18px; color: var(--text-muted); font-size: var(--text-sm); }
+    .ac-consent { display: flex; align-items: flex-start; gap: 8px; margin: 16px 0; font-size: var(--text-sm); }
+    .ac-progress-track { height: 6px; background: var(--bg-canvas); border: 1px solid var(--border-color); border-radius: 3px; overflow: hidden; margin-bottom: 16px; }
+    .ac-progress-fill { height: 100%; background: var(--brand-primary); transition: width .3s ease; }
+    .ac-topbar { position: sticky; top: 0; z-index: 5; display: flex; justify-content: space-between; align-items: center; background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: var(--radius-md); padding: 10px 14px; margin-bottom: 14px; }
+    .ac-timer { font-variant-numeric: tabular-nums; font-weight: 700; padding: 4px 10px; border-radius: var(--radius-sm); background: var(--bg-canvas); }
+    .ac-timer-low { color: var(--danger, #dc2626); }
+    .ac-qtext { font-size: var(--text-base); font-weight: 700; margin: 0 0 16px; color: var(--text-main); }
+    .ac-option-card {
+      display: flex; align-items: center; gap: 12px; padding: 14px 16px; border: 2px solid var(--border-color);
+      border-radius: var(--radius-md); cursor: pointer; margin-bottom: 10px; background: var(--bg-surface);
+    }
+    .ac-option-card:has(input:checked) { border-color: var(--brand-primary); background: var(--bg-canvas); }
+    .ac-option-card input { accent-color: var(--brand-primary); width: 18px; height: 18px; flex-shrink: 0; }
+    .ac-nav-row { display: flex; justify-content: space-between; gap: 10px; margin-top: 18px; }
+    .ac-unanswered-item { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--border-color); }
+    .ac-done-icon { font-size: 48px; text-align: center; margin-bottom: 8px; }
+  </style>
+</head>
+<body>
+  <div class="ac-public-wrap" id="ac-root" dir="rtl"></div>
+
+  <script>
+    var TOKEN = (new URLSearchParams(window.location.search)).get('token') || '';
+    var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('32fafd256ccb7a1c') ?>';
+    var TYPE_LABELS = { MCQ: 'اختيار من متعدد', Likert: 'تقييم', MostLeast: 'الأكثر والأقل', OpenText: 'نص مفتوح' };
+    var LATE_GRACE_SECONDS = 60;
+
+    function publicCall(moduleAction, data) {
+      return API.call('company_public_action', {
+        target_system: '32fafd256ccb7a1c',
+        module_action: moduleAction,
+        data: data || {}
+      });
+    }
+    function esc(v) { return FMT.escape(v); }
+
+    var state = {
+      screen: 'loading', assessment: null, questions: [], answers: {}, currentIndex: 0,
+      assignmentId: null, email: '', remainingSeconds: 0, timerHandle: null, events: [], submitting: false
+    };
+
+    function draftKey() { return 'ac_draft_' + TOKEN + '_' + state.email; }
+    function saveDraft() {
+      try { localStorage.setItem(draftKey(), JSON.stringify({ answers: state.answers, currentIndex: state.currentIndex })); } catch (e) {}
+    }
+    function loadDraft() {
+      try {
+        var raw = localStorage.getItem(draftKey());
+        if (!raw) return;
+        var d = JSON.parse(raw);
+        state.answers = (d && d.answers) || {};
+        state.currentIndex = (d && d.currentIndex) || 0;
+      } catch (e) {}
+    }
+    function clearDraft() { try { localStorage.removeItem(draftKey()); } catch (e) {} }
+
+    function recordEvent(type) { state.events.push({ type: type, at: new Date().toISOString() }); }
+    document.addEventListener('visibilitychange', function () { if (document.hidden && state.screen === 'test') recordEvent('TAB_SWITCH'); });
+    window.addEventListener('blur', function () { if (state.screen === 'test') recordEvent('TAB_SWITCH'); });
+    window.addEventListener('beforeunload', function (e) {
+      // A plain beforeunload guard (not UIC.trackDirty, which snapshots a
+      // <form>'s inputs — this page has no single form for a dynamic
+      // one-question-at-a-time view). Equivalent protection for the stated
+      // purpose: warn before leaving mid-test.
+      if (state.screen === 'test') { e.preventDefault(); e.returnValue = ''; }
+    });
+
+    function root() { return document.getElementById('ac-root'); }
+
+    function headHtml() {
+      return '<div class="ac-public-head">' +
+        (COMPANY_LOGO_URL ? '<img src="' + esc(COMPANY_LOGO_URL) + '" alt="">' : '') +
+        '<h1>' + esc((state.assessment && state.assessment.Title) || 'التقييم') + '</h1></div>';
+    }
+
+    function loadWelcome() {
+      if (!TOKEN) { renderError('رابط التقييم غير مكتمل.'); return; }
+      publicCall('get_ac_candidate_assessment', { token: TOKEN })
+        .then(function (res) {
+          state.assessment = res.assessment; state.questions = res.questions || [];
+          state.screen = 'welcome';
+          renderWelcome();
+        })
+        .catch(function (err) { renderError((err && err.message) || 'تعذر تحميل التقييم.'); });
+    }
+
+    function renderError(message) {
+      root().innerHTML = headHtml() + '<div class="ac-card" style="text-align:center;">' +
+        '<p>' + esc(message) + '</p></div>';
+    }
+
+    function renderWelcome() {
+      var a = state.assessment;
+      root().innerHTML = headHtml() +
+        '<div class="ac-card">' +
+        '<div class="ac-meta-row">' +
+          '<span>' + esc(a.TimeLimitMinutes) + ' دقيقة</span>' +
+          '<span>' + state.questions.length + ' سؤال</span>' +
+        '</div>' +
+        (a.Description ? '<p dir="auto">' + esc(a.Description) + '</p>' : '') +
+        '<div class="form-field"><label class="form-label">البريد الإلكتروني</label>' +
+        '<input class="input" type="email" id="ac-email" placeholder="name@example.com"></div>' +
+        '<label class="ac-consent"><input type="checkbox" id="ac-consent"> ' +
+        '<span>أقر بأنني سأجيب بنفسي دون مساعدة</span></label>' +
+        '<button type="button" class="btn btn-primary" id="ac-start-btn" onclick="startTest()" style="width:100%;">ابدأ التقييم</button>' +
+        '</div>';
+    }
+
+    function startTest() {
+      var email = (document.getElementById('ac-email').value || '').trim();
+      var consent = !!(document.getElementById('ac-consent') || {}).checked;
+      if (!email || email.indexOf('@') === -1) { UIC.toast('برجاء إدخال بريد إلكتروني صحيح', 'error'); return; }
+      if (!consent) { UIC.toast('برجاء تأكيد الإقرار قبل البدء', 'error'); return; }
+
+      var btn = document.getElementById('ac-start-btn');
+      UI.submitOnce(btn, function () {
+        return publicCall('add_ac_candidate_attempt', { token: TOKEN, email: email })
+          .then(function (res) {
+            state.email = email.toLowerCase();
+            state.assignmentId = res.assignmentId;
+            state.assessment = res.assessment; state.questions = res.questions || [];
+            state.currentIndex = 0; state.answers = {};
+            loadDraft();
+            state.screen = 'test';
+            renderTestScreen();
+            startTimer(res.remaining_seconds || 0);
+          })
+          .catch(function (err) { UIC.toast((err && err.message) || 'تعذر بدء التقييم', 'error'); });
+      });
+    }
+
+    function startTimer(seconds) {
+      state.remainingSeconds = seconds;
+      if (state.timerHandle) clearInterval(state.timerHandle);
+      updateTimerDisplay();
+      state.timerHandle = setInterval(function () {
+        state.remainingSeconds--;
+        updateTimerDisplay();
+        if (state.remainingSeconds <= 0) {
+          clearInterval(state.timerHandle);
+          submitTest(true);
+        }
+      }, 1000);
+    }
+
+    function updateTimerDisplay() {
+      var el = document.getElementById('ac-timer');
+      if (!el) return;
+      var s = Math.max(0, state.remainingSeconds);
+      var mm = Math.floor(s / 60), ss = s % 60;
+      el.textContent = (mm < 10 ? '0' : '') + mm + ':' + (ss < 10 ? '0' : '') + ss;
+      el.classList.toggle('ac-timer-low', s <= 60);
+    }
+
+    function isAnswered(q) {
+      var a = state.answers[q.QuestionID];
+      if (a === undefined || a === null || a === '') return false;
+      if (q.QuestionType === 'MostLeast') {
+        try { var p = JSON.parse(a); return !!(p && p.most && p.least); } catch (e) { return false; }
+      }
+      return String(a).trim() !== '';
+    }
+
+    function answeredCount() { return state.questions.filter(isAnswered).length; }
+
+    function renderTestScreen() {
+      if (state.currentIndex >= state.questions.length) { renderReview(); return; }
+      var q = state.questions[state.currentIndex];
+      var pct = state.questions.length ? Math.round((answeredCount() / state.questions.length) * 100) : 0;
+
+      var body = '<div class="ac-topbar">' +
+        '<span>سؤال ' + (state.currentIndex + 1) + ' / ' + state.questions.length + '</span>' +
+        '<span class="ac-timer" id="ac-timer">--:--</span></div>' +
+        '<div class="ac-progress-track"><div class="ac-progress-fill" style="width:' + pct + '%;"></div></div>' +
+        '<div class="ac-card">' +
+        '<p class="ac-qtext" dir="auto">' + esc(q.QuestionText) + '</p>' +
+        questionBody(q) +
+        '<div class="ac-nav-row">' +
+        '<button type="button" class="btn btn-secondary" onclick="prevQuestion()"' + (state.currentIndex === 0 ? ' disabled' : '') + '>السابق</button>' +
+        '<button type="button" class="btn btn-primary" onclick="nextQuestion()">التالي</button>' +
+        '</div></div>';
+
+      root().innerHTML = body;
+      updateTimerDisplay();
+    }
+
+    function questionBody(q) {
+      if (q.QuestionType === 'OpenText') {
+        var val = state.answers[q.QuestionID] || '';
+        return '<textarea class="input" rows="6" dir="auto" oninput="setAnswer(\'' + q.QuestionID + '\', this.value)">' + esc(val) + '</textarea>';
+      }
+      if (q.QuestionType === 'MostLeast') {
+        return mostLeastBody(q);
+      }
+      // MCQ and Likert render identically: a list of option cards.
+      var current = state.answers[q.QuestionID] || '';
+      return '<div>' + (q.Options || []).map(function (o, oi) {
+        var checked = String(current) === String(o.text) ? ' checked' : '';
+        var id = 'opt_' + q.QuestionID + '_' + oi;
+        return '<label class="ac-option-card" for="' + id + '">' +
+          '<input type="radio" name="q_' + q.QuestionID + '" id="' + id + '" value="' + esc(o.text) + '"' + checked +
+          ' onchange="setAnswer(\'' + q.QuestionID + '\', this.value)">' +
+          '<span dir="auto">' + esc(o.text) + '</span></label>';
+      }).join('') + '</div>';
+    }
+
+    function mostLeastBody(q) {
+      var cur = {};
+      try { cur = JSON.parse(state.answers[q.QuestionID] || '{}'); } catch (e) { cur = {}; }
+      var rows = (q.Options || []).map(function (o, oi) {
+        var mostChecked = cur.most === o.text ? ' checked' : '';
+        var leastChecked = cur.least === o.text ? ' checked' : '';
+        return '<tr>' +
+          '<td dir="auto">' + esc(o.text) + '</td>' +
+          '<td style="text-align:center;"><input type="radio" name="most_' + q.QuestionID + '" value="' + esc(o.text) + '"' + mostChecked +
+          ' onchange="setMostLeast(\'' + q.QuestionID + '\',\'most\', this.value)"></td>' +
+          '<td style="text-align:center;"><input type="radio" name="least_' + q.QuestionID + '" value="' + esc(o.text) + '"' + leastChecked +
+          ' onchange="setMostLeast(\'' + q.QuestionID + '\',\'least\', this.value)"></td>' +
+          '</tr>';
+      }).join('');
+      return '<div class="table-wrap"><table class="table"><thead><tr><th></th><th>الأكثر شبهاً بي</th><th>الأقل شبهاً بي</th></tr></thead>' +
+        '<tbody>' + rows + '</tbody></table></div>';
+    }
+
+    function setAnswer(qid, value) {
+      state.answers[qid] = value;
+      saveDraft();
+    }
+
+    function setMostLeast(qid, kind, value) {
+      var cur = {};
+      try { cur = JSON.parse(state.answers[qid] || '{}'); } catch (e) { cur = {}; }
+      var other = kind === 'most' ? cur.least : cur.most;
+      if (other === value) {
+        UIC.toast('لا يمكن اختيار نفس العبارة للأكثر والأقل', 'warning');
+        renderTestScreen(); // rebuild so the rejected radio's checked state resets
+        return;
+      }
+      cur[kind] = value;
+      state.answers[qid] = JSON.stringify(cur);
+      saveDraft();
+      renderTestScreen();
+    }
+
+    function nextQuestion() { if (state.currentIndex < state.questions.length) { state.currentIndex++; renderTestScreen(); } }
+    function prevQuestion() { if (state.currentIndex > 0) { state.currentIndex--; renderTestScreen(); } }
+    function jumpTo(i) { state.currentIndex = i; renderTestScreen(); }
+
+    function renderReview() {
+      var unanswered = state.questions.map(function (q, i) { return { q: q, i: i }; }).filter(function (x) { return !isAnswered(x.q); });
+      var body = '<div class="ac-topbar"><span>مراجعة قبل الإرسال</span><span class="ac-timer" id="ac-timer">--:--</span></div>' +
+        '<div class="ac-card">';
+      if (unanswered.length) {
+        body += '<p>لديك ' + unanswered.length + ' سؤال/أسئلة بدون إجابة:</p>';
+        body += unanswered.map(function (x) {
+          return '<div class="ac-unanswered-item"><span dir="auto">' + esc((x.q.QuestionText || '').slice(0, 60)) + '</span>' +
+            '<button type="button" class="btn btn-outline" onclick="jumpTo(' + x.i + ')">الذهاب</button></div>';
+        }).join('');
+      } else {
+        body += '<p>تمت الإجابة على جميع الأسئلة. يمكنك المراجعة أو الإرسال الآن.</p>';
+      }
+      body += '<div class="ac-nav-row">' +
+        '<button type="button" class="btn btn-secondary" onclick="prevQuestion()">رجوع للأسئلة</button>' +
+        '<button type="button" class="btn btn-primary" id="ac-submit-btn" onclick="confirmSubmit()">إرسال التقييم</button>' +
+        '</div></div>';
+      root().innerHTML = body;
+      updateTimerDisplay();
+    }
+
+    function confirmSubmit() {
+      UIC.confirm({ title: 'إرسال التقييم', message: 'هل أنت متأكد من إرسال إجاباتك؟ لن تتمكن من التعديل بعد الإرسال.', confirmText: 'إرسال' })
+        .then(function (ok) { if (ok) submitTest(false); });
+    }
+
+    function submitTest(isTimeout) {
+      if (state.submitting) return;
+      state.submitting = true;
+      if (state.timerHandle) clearInterval(state.timerHandle);
+
+      var answers = state.questions.map(function (q) {
+        return { questionId: q.QuestionID, answer: state.answers[q.QuestionID] || '' };
+      });
+      var btn = document.getElementById('ac-submit-btn');
+
+      var doSubmit = function () {
+        return publicCall('add_ac_candidate_submission', {
+          token: TOKEN, email: state.email, assignmentId: state.assignmentId,
+          answers: answers, events: state.events
+        }).then(function () {
+          clearDraft();
+          state.screen = 'done';
+          renderDone();
+        }).catch(function (err) {
+          state.submitting = false;
+          UIC.toast((err && err.message) || 'تعذر إرسال التقييم، حاول مرة أخرى.', 'error');
+        });
+      };
+
+      if (isTimeout || !btn) { doSubmit(); }
+      else UI.submitOnce(btn, doSubmit);
+    }
+
+    function renderDone() {
+      root().innerHTML = headHtml() + '<div class="ac-card" style="text-align:center;">' +
+        '<div class="ac-done-icon">✅</div>' +
+        '<h2>تم إرسال التقييم بنجاح</h2>' +
+        '<p>شكراً لك. يمكنك الآن إغلاق هذه الصفحة.</p>' +
+        '</div>';
+    }
+
+    document.addEventListener('DOMContentLoaded', loadWelcome);
+  </script>
+</body>
+</html>
