@@ -16,6 +16,7 @@ function ensureCompaniesRegistered_() {
   registerTopLight_();
   registerTopChemical_();
   registerValleyFoods_();
+  registerAssessmentCenter_();
 }
 
 function registerCompany_(key, config) {
