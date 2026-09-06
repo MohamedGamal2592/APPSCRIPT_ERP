@@ -542,6 +542,161 @@ const AssessmentCenter = (function () {
   }
   register('toggle_ac_assessment_active', toggleAcAssessmentActive_);
 
+  // ── §5.2/Phase 4 — distribution (batches) ──────────────────────────────────
+  const BATCH_EXPIRY_DEFAULT_DAYS = 10;
+  const BATCH_EXPIRY_MAX_DAYS = 90; // D-9
+  const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+  // Computed on read (never stored) so the list always shows the ERP link,
+  // even for a batch the standalone created (§5.2).
+  function acCandidateLink_(token) {
+    return ScriptApp.getService().getUrl() + '?action=ac_take&token=' + token;
+  }
+
+  function getAcBatches_(data, user, dbId) {
+    const assessMap = {};
+    acRows_(dbId, ASSESSMENTS_SHEET).forEach(function (a) { assessMap[a.AssessmentID] = a; });
+    const assignments = acRows_(dbId, ASSIGNMENTS_SHEET);
+    const rows = acRows_(dbId, BATCHES_SHEET).map(function (b) {
+      const assessment = assessMap[b.AssessmentID];
+      // Denormalised AssessmentTitle back-filled on read for a blank/'N/A'
+      // value (G-13) — kept, exactly as the standalone already did.
+      const title = (b.AssessmentTitle && b.AssessmentTitle !== 'N/A') ? b.AssessmentTitle : ((assessment && assessment.Title) || 'N/A');
+      const hasInvites = assignments.some(function (a) { return a.BatchID === b.BatchID && a.Status === 'Invited'; });
+      return {
+        BatchID: b.BatchID, Token: b.Token, CompanyName: b.CompanyName,
+        AssessmentID: b.AssessmentID, AssessmentTitle: title,
+        MaxCandidates: Number(b.MaxCandidates) || 0, UsedSlots: Number(b.UsedSlots) || 0,
+        IsActive: acBool_(b.IsActive), CreatedAt: b.CreatedAt, ExpiresAt: b.ExpiresAt,
+        Link: acCandidateLink_(b.Token), HasInvites: hasInvites
+      };
+    });
+    return { status: 'success', rows: rows };
+  }
+  register('get_ac_batches', getAcBatches_);
+
+  function getAcBatch_(data, user, dbId) {
+    const id = String((data && data.id) || '').trim();
+    if (!id) throw new Error('BatchID مطلوب.');
+    const batch = acRows_(dbId, BATCHES_SHEET).filter(function (b) { return b.BatchID === id; })[0];
+    if (!batch) throw new Error('الدفعة غير موجودة.');
+    const assignments = acRows_(dbId, ASSIGNMENTS_SHEET).filter(function (a) { return a.BatchID === id; });
+    return {
+      status: 'success',
+      batch: Object.assign({}, batch, { IsActive: acBool_(batch.IsActive), Link: acCandidateLink_(batch.Token) }),
+      assignments: assignments
+    };
+  }
+  register('get_ac_batch', getAcBatch_);
+
+  function addAcBatch_(data, user, dbId) {
+    const d = data || {};
+    const companyName = String(d.CompanyName || '').trim();
+    const assessmentId = String(d.AssessmentID || '').trim();
+    const maxCandidates = parseInt(d.MaxCandidates, 10);
+    if (!companyName) throw new Error('اسم الجهة مطلوب.');
+    if (!assessmentId) throw new Error('التقييم مطلوب.');
+    if (!maxCandidates || maxCandidates <= 0) throw new Error('عدد المقاعد يجب أن يكون أكبر من صفر.');
+    const assessment = acRows_(dbId, ASSESSMENTS_SHEET).filter(function (a) { return a.AssessmentID === assessmentId; })[0];
+    if (!assessment) throw new Error('التقييم غير موجود.');
+    if (!acBool_(assessment.IsActive)) throw new Error('لا يمكن إنشاء دفعة على تقييم غير نشط.');
+
+    // Default 10, min 1, max 90 — enforced server-side regardless of what the
+    // client sends (D-9).
+    let expiryDays = parseInt(d.ExpiryDays, 10);
+    if (!expiryDays || expiryDays < 1) expiryDays = BATCH_EXPIRY_DEFAULT_DAYS;
+    if (expiryDays > BATCH_EXPIRY_MAX_DAYS) expiryDays = BATCH_EXPIRY_MAX_DAYS;
+
+    const userEmail = (user && user.email) || '';
+    const id = acUid_();
+    const token = acToken_();
+    const now = new Date();
+    const expires = new Date(now.getTime() + expiryDays * 86400000);
+    const header = {
+      BatchID: id, Token: token, CompanyName: companyName, AssessmentID: assessmentId,
+      AssessmentTitle: assessment.Title, MaxCandidates: maxCandidates, UsedSlots: 0,
+      AssignedBy: userEmail, CreatedAt: acStamp_(),
+      ExpiresAt: Utilities.formatDate(expires, Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm:ss'),
+      IsActive: true
+    };
+    const res = acInsert_(dbId, BATCHES_SHEET, header, userEmail, 'BatchID');
+    return { status: 'success', data: res.data, message: 'تم إنشاء الدفعة بنجاح.', link: acCandidateLink_(token) };
+  }
+  register('add_ac_batch', addAcBatch_);
+
+  // Invited rows are plain Assignments rows with Status='Invited' — no column
+  // added, a new value in an existing one (§5.2). The rule this enables (only
+  // an invited email may start) lives in Phase 5's add_ac_candidate_attempt_.
+  function addAcBatchInvites_(data, user, dbId) {
+    const d = data || {};
+    const batchId = String(d.id || d.BatchID || '').trim();
+    if (!batchId) throw new Error('BatchID مطلوب.');
+    const batch = acRows_(dbId, BATCHES_SHEET).filter(function (b) { return b.BatchID === batchId; })[0];
+    if (!batch) throw new Error('الدفعة غير موجودة.');
+
+    const rawEmails = Array.isArray(d.emails) ? d.emails : String(d.emails || '').split(/[\n,]/);
+    const seen = {}; const clean = []; const invalid = [];
+    rawEmails.forEach(function (e) {
+      const v = String(e || '').trim().toLowerCase();
+      if (!v) return;
+      if (!EMAIL_RE.test(v)) { invalid.push(v); return; }
+      if (seen[v]) return; // dedupe within the submitted list
+      seen[v] = true; clean.push(v);
+    });
+    if (invalid.length) throw new Error('بريد إلكتروني غير صالح: ' + invalid.join(', '));
+    if (!clean.length) throw new Error('لا توجد عناوين بريد صالحة.');
+
+    // Dedupe against emails already invited/assigned in this batch.
+    const existingEmails = {};
+    acRows_(dbId, ASSIGNMENTS_SHEET).filter(function (a) { return a.BatchID === batchId; })
+      .forEach(function (a) { existingEmails[String(a.CandidateEmail || '').trim().toLowerCase()] = true; });
+    const toInsert = clean.filter(function (e) { return !existingEmails[e]; });
+
+    const userEmail = (user && user.email) || '';
+    const now = acStamp_();
+    const rows = toInsert.map(function (email) {
+      return {
+        AssignmentID: acUid_(), BatchID: batchId, Token: batch.Token, CandidateEmail: email,
+        AssessmentID: batch.AssessmentID, Status: 'Invited', StartedAt: '', CompletedAt: '', CreatedAt: now
+      };
+    });
+    if (rows.length) acInsertMany_(dbId, ASSIGNMENTS_SHEET, rows, userEmail, 'AssignmentID');
+    return { status: 'success', data: { count: rows.length, skipped: clean.length - rows.length }, message: 'تمت إضافة ' + rows.length + ' دعوة.' };
+  }
+  register('add_ac_batch_invites', addAcBatchInvites_);
+
+  // Full access, per T-6 — and it NEVER touches UsedSlots: that column is
+  // maintained only by the candidate admission path (Phase 5).
+  function toggleAcBatchActive_(data, user, dbId) {
+    const id = String((data && data.id) || '').trim();
+    if (!id) throw new Error('BatchID مطلوب.');
+    const batch = acRows_(dbId, BATCHES_SHEET).filter(function (b) { return b.BatchID === id; })[0];
+    if (!batch) throw new Error('الدفعة غير موجودة.');
+    const next = !acBool_(batch.IsActive);
+    const res = acUpdate_(dbId, BATCHES_SHEET, 'BatchID', id, { IsActive: next }, (user && user.email) || '');
+    return { status: 'success', data: res.data, message: next ? 'تم تفعيل الدفعة.' : 'تم إيقاف الدفعة.' };
+  }
+  register('toggle_ac_batch_active', toggleAcBatchActive_);
+
+  function updateAcBatchExpiry_(data, user, dbId) {
+    const d = data || {};
+    const id = String(d.id || '').trim();
+    if (!id) throw new Error('BatchID مطلوب.');
+    const batch = acRows_(dbId, BATCHES_SHEET).filter(function (b) { return b.BatchID === id; })[0];
+    if (!batch) throw new Error('الدفعة غير موجودة.');
+
+    const requested = acDate_(d.ExpiresAt);
+    if (!requested) throw new Error('تاريخ الانتهاء غير صالح.');
+    // Extension caps at 90 days from TODAY (D-9), not from the batch's
+    // original creation date.
+    const cap = new Date(); cap.setDate(cap.getDate() + BATCH_EXPIRY_MAX_DAYS);
+    const finalDate = requested > cap ? cap : requested;
+    const stamped = Utilities.formatDate(finalDate, Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm:ss');
+    const res = acUpdate_(dbId, BATCHES_SHEET, 'BatchID', id, { ExpiresAt: stamped }, (user && user.email) || '');
+    return { status: 'success', data: res.data, message: 'تم تحديث تاريخ الانتهاء.', capped: finalDate.getTime() !== requested.getTime() };
+  }
+  register('update_ac_batch_expiry', updateAcBatchExpiry_);
+
   // ── §6.4/T-3/T-4 — the write path ──────────────────────────────────────────
   // Never addRecord_ / getNextId_ / saveRecordWithAudit_ against this
   // spreadsheet (R-16/R-17): a lower-case dataMap key would be silently
@@ -679,6 +834,7 @@ const AssessmentCenter = (function () {
     acInsertMany_: acInsertMany_,
     acUpdate_: acUpdate_,
     acOptionsForWire_: acOptionsForWire_,
-    acCategoryLabel_: acCategoryLabel_
+    acCategoryLabel_: acCategoryLabel_,
+    acCandidateLink_: acCandidateLink_
   };
 })();

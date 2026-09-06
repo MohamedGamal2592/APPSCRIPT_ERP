@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>مركز التقييم — دفعات التقييم</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_Assessment_Nav'); ?>
+  <?!= getCompanyThemeCSS_('32fafd256ccb7a1c') ?>
+  <style>
+    .ac-usage-bar { position: relative; width: 100px; height: 8px; border-radius: 4px; background: var(--bg-canvas); border: 1px solid var(--border-color); overflow: hidden; }
+    .ac-usage-fill { position: absolute; inset-inline-start: 0; top: 0; bottom: 0; background: var(--brand-primary); }
+    .ac-usage-full .ac-usage-fill { background: var(--danger, #dc2626); }
+    .ac-usage-label { font-size: var(--text-xs); color: var(--text-muted); margin-top: 2px; }
+    .ac-expired { color: var(--danger, #dc2626); font-weight: 700; }
+  </style>
+</head>
+<body>
+  <div id="ac-root"></div>
+
+  <script>
+    var params = new URLSearchParams(window.location.search);
+    var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+    var scriptUrl = window.scriptUrl || '/';
+    var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+    var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('32fafd256ccb7a1c') ?>';
+    var COMPANY_PAGES = <?!= companyPages ?>;
+    var CURRENT_ACTION = '<?!= currentAction ?>';
+    var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+    var CAN_WRITE = UIC.canAdd_(); var CAN_FULL = UIC.canFull_();
+
+    function companyCall(moduleAction, data) {
+      return API.call('company_action', {
+        target_system: '32fafd256ccb7a1c',
+        module_action: moduleAction,
+        data: data || {}
+      }, SESSION_TOKEN);
+    }
+    function esc(v) { return FMT.escape(v); }
+
+    var batchRows = [];
+    var activeAssessments = [];
+
+    function renderApp() {
+      UIC.appShell('ac-root', {
+        companyLogoUrl: COMPANY_LOGO_URL,
+        companyLogoHref: scriptUrl + '?action=ac_dashboard&sessionToken=' + SESSION_TOKEN,
+        companyLogoTitle: 'مركز التقييم',
+        contentId: 'ac-batches-content',
+        menuGroups: (window.ASSESSMENT_MENU || []),
+        controlPanel: {
+          breadcrumb: 'مركز التقييم / دفعات التقييم',
+          search: { table: 'ac-batches-table', placeholder: 'ابحث في الدفعات...' },
+          actions: [CAN_WRITE ? { text: 'إنشاء دفعة', onClick: 'openCreateModal()' } : null].filter(Boolean)
+        }
+      });
+      loadData();
+    }
+
+    function loadData() {
+      UI.showSpinner();
+      Promise.all([companyCall('get_ac_batches'), companyCall('get_ac_assessments')])
+        .then(function (results) {
+          batchRows = results[0].rows || [];
+          activeAssessments = (results[1].rows || []).filter(function (a) { return a.IsActive; });
+          renderTable();
+        })
+        .catch(function (err) {
+          console.error(err);
+          UIC.toast('حدث خطأ في تحميل البيانات', 'error');
+        })
+        .finally(function () { UI.hideSpinner(); });
+    }
+
+    function existingCompanyNames() {
+      var seen = {}; var out = [];
+      batchRows.forEach(function (b) { var n = b.CompanyName; if (n && !seen[n]) { seen[n] = true; out.push(n); } });
+      return out;
+    }
+
+    function expiryDisplay(r) {
+      var exp = r.ExpiresAt ? new Date(r.ExpiresAt) : null;
+      if (!exp || isNaN(exp.getTime())) return '—';
+      var now = new Date();
+      var days = Math.ceil((exp.getTime() - now.getTime()) / 86400000);
+      if (days < 0) return '<span class="ac-expired">منتهية منذ ' + Math.abs(days) + ' يوم</span>';
+      if (days === 0) return '<span class="ac-expired">تنتهي اليوم</span>';
+      return 'تنتهي خلال ' + days + ' يوم';
+    }
+
+    function usageBar(r) {
+      var pct = r.MaxCandidates > 0 ? Math.min(100, Math.round((r.UsedSlots / r.MaxCandidates) * 100)) : 0;
+      var full = r.UsedSlots >= r.MaxCandidates && r.MaxCandidates > 0;
+      return '<div class="ac-usage-bar' + (full ? ' ac-usage-full' : '') + '"><div class="ac-usage-fill" style="width:' + pct + '%;"></div></div>' +
+        '<div class="ac-usage-label">' + r.UsedSlots + ' / ' + r.MaxCandidates + '</div>';
+    }
+
+    function rowActions(r) {
+      var btns = [
+        { label: 'نسخ الرابط', onclick: "copyLink('" + esc(r.Link) + "')" },
+        { label: 'المرشحون', onclick: "openCandidatesModal('" + esc(r.BatchID) + "')" }
+      ];
+      if (CAN_WRITE) btns.push({ label: 'قائمة الدعوات', onclick: "openInvitesModal('" + esc(r.BatchID) + "')" });
+      if (CAN_FULL) {
+        btns.push({ label: 'تمديد', onclick: "openExtendModal('" + esc(r.BatchID) + "','" + esc(r.ExpiresAt) + "')" });
+        btns.push({ label: r.IsActive ? 'إيقاف' : 'تفعيل', onclick: "toggleActive('" + esc(r.BatchID) + "')" });
+      }
+      return UIC.actionDropdown(btns);
+    }
+
+    function renderTable() {
+      var el = document.getElementById('ac-batches-content');
+      if (!el) return;
+
+      var headers = [
+        { key: 'CompanyName', label: 'الجهة' },
+        { key: 'AssessmentTitle', label: 'التقييم' },
+        { key: 'Usage', label: 'الإشغال' },
+        { key: 'Expiry', label: 'الانتهاء' },
+        { key: 'StatusLabel', label: 'الحالة' },
+        { key: 'InvitesLabel', label: 'الدعوات' },
+        { key: 'actions', label: '', sortable: false }
+      ];
+      var rows = batchRows.map(function (r) {
+        return {
+          CompanyName: esc(r.CompanyName),
+          AssessmentTitle: esc(r.AssessmentTitle),
+          Usage: usageBar(r),
+          Expiry: expiryDisplay(r),
+          StatusLabel: UIC.statusPill(r.IsActive ? 'نشطة' : 'موقوفة', r.IsActive ? 'success' : 'neutral'),
+          InvitesLabel: r.HasInvites ? UIC.statusPill('مغلقة (دعوات)', 'warning') : UIC.statusPill('مفتوحة', 'neutral'),
+          actions: rowActions(r)
+        };
+      });
+
+      el.innerHTML = UIC.dataTable('ac-batches-table', {
+        headers: headers,
+        rows: rows,
+        emptyState: {
+          icon: 'tag', title: 'لا توجد دفعات',
+          body: 'أنشئ أول دفعة توزيع لتقييم نشط.',
+          action: CAN_WRITE ? { text: 'إنشاء دفعة', onClick: 'openCreateModal()' } : null
+        }
+      });
+    }
+
+    function copyLink(link) {
+      var doCopy = function () {
+        if (navigator.clipboard && navigator.clipboard.writeText) return navigator.clipboard.writeText(link);
+        return Promise.reject(new Error('clipboard unavailable'));
+      };
+      doCopy().then(function () { UIC.toast('تم نسخ الرابط', 'success'); })
+        .catch(function () { UIC.toast(link, 'info'); });
+    }
+
+    /* ── create ────────────────────────────────────────────────────────────── */
+    function openCreateModal() {
+      var html = '<form id="ac-batch-form">';
+      html += UIC.field({ key: 'CompanyName', label: 'اسم الجهة', required: true, list: 'ac-company-list' });
+      html += UIC.datalist('ac-company-list', existingCompanyNames());
+      html += UIC.combo({
+        key: 'AssessmentID', label: 'التقييم', required: true, placeholder: 'اختر تقييماً نشطاً',
+        options: activeAssessments.map(function (a) { return { value: a.AssessmentID, label: a.Title }; })
+      });
+      html += UIC.field({ key: 'MaxCandidates', label: 'عدد المقاعد', type: 'number', required: true, min: 1, value: 10 });
+      html += UIC.field({ key: 'ExpiryDays', label: 'مدة الصلاحية (أيام)', type: 'number', required: true, min: 1, value: 10 });
+      html += '</form>';
+      UIC.openModal('ac-batch-modal', { title: 'إنشاء دفعة', body: html, onSave: 'saveBatch()' });
+    }
+
+    function saveBatch() {
+      if (!UIC.validateForm('ac-batch-form')) return;
+      var data = UIC.collectForm('ac-batch-form');
+      if (!activeAssessments.length) { UIC.toast('لا توجد تقييمات نشطة لإنشاء دفعة عليها', 'error'); return; }
+      UI.showSpinner();
+      companyCall('add_ac_batch', data)
+        .then(function (res) {
+          UIC.closeModal('ac-batch-modal');
+          UIC.toast('تم إنشاء الدفعة بنجاح', 'success');
+          loadData();
+        })
+        .catch(function (err) { UIC.toast(err.message || 'تعذر إنشاء الدفعة', 'error'); })
+        .finally(function () { UI.hideSpinner(); });
+    }
+
+    /* ── invites ───────────────────────────────────────────────────────────── */
+    function openInvitesModal(batchId) {
+      var html = '<form id="ac-invites-form">' +
+        '<div class="form-field"><label class="form-label">عناوين البريد الإلكتروني (سطر لكل عنوان)</label>' +
+        '<textarea class="input" id="ac-invites-emails" rows="8" placeholder="name1@example.com&#10;name2@example.com"></textarea></div>' +
+        '</form>';
+      UIC.openModal('ac-invites-modal', { title: 'قائمة الدعوات', size: 'lg', body: html, onSave: "saveInvites('" + esc(batchId) + "')" });
+    }
+
+    function saveInvites(batchId) {
+      var raw = (document.getElementById('ac-invites-emails') || {}).value || '';
+      var emails = raw.split(/\r?\n/).map(function (s) { return s.trim(); }).filter(Boolean);
+      if (!emails.length) { UIC.toast('أدخل عنوان بريد واحد على الأقل', 'error'); return; }
+      UI.showSpinner();
+      companyCall('add_ac_batch_invites', { id: batchId, emails: emails })
+        .then(function (res) {
+          UIC.closeModal('ac-invites-modal');
+          UIC.toast((res && res.message) || 'تم الحفظ', 'success');
+          loadData();
+        })
+        .catch(function (err) { UIC.toast(err.message || 'تعذر الحفظ', 'error'); })
+        .finally(function () { UI.hideSpinner(); });
+    }
+
+    /* ── extend ────────────────────────────────────────────────────────────── */
+    function openExtendModal(batchId, currentExpiresAt) {
+      var current = currentExpiresAt ? new Date(currentExpiresAt) : new Date();
+      var iso = isNaN(current.getTime()) ? '' : current.toISOString().slice(0, 10);
+      var html = '<form id="ac-extend-form">' + UIC.field({ key: 'ExpiresAt', label: 'تاريخ الانتهاء الجديد', type: 'date', required: true, value: iso }) + '</form>';
+      UIC.openModal('ac-extend-modal', { title: 'تمديد صلاحية الدفعة', body: html, onSave: "saveExtend('" + esc(batchId) + "')" });
+    }
+
+    function saveExtend(batchId) {
+      if (!UIC.validateForm('ac-extend-form')) return;
+      var data = UIC.collectForm('ac-extend-form');
+      UI.showSpinner();
+      companyCall('update_ac_batch_expiry', { id: batchId, ExpiresAt: data.ExpiresAt })
+        .then(function (res) {
+          UIC.closeModal('ac-extend-modal');
+          UIC.toast(res && res.capped ? 'تم التمديد (بحد أقصى 90 يوماً من اليوم)' : 'تم تحديث تاريخ الانتهاء', 'success');
+          loadData();
+        })
+        .catch(function (err) { UIC.toast(err.message || 'تعذر التنفيذ', 'error'); })
+        .finally(function () { UI.hideSpinner(); });
+    }
+
+    function toggleActive(batchId) {
+      UI.showSpinner();
+      companyCall('toggle_ac_batch_active', { id: batchId })
+        .then(function (res) { UIC.toast((res && res.message) || 'تم التحديث', 'success'); loadData(); })
+        .catch(function (err) { UIC.toast(err.message || 'تعذر التنفيذ', 'error'); })
+        .finally(function () { UI.hideSpinner(); });
+    }
+
+    /* ── candidates (read-only) ───────────────────────────────────────────── */
+    function openCandidatesModal(batchId) {
+      UI.showSpinner();
+      companyCall('get_ac_batch', { id: batchId })
+        .then(function (res) {
+          var assignments = res.assignments || [];
+          var headers = [
+            { key: 'CandidateEmail', label: 'البريد الإلكتروني' },
+            { key: 'Status', label: 'الحالة' },
+            { key: 'StartedAt', label: 'بدأ في' },
+            { key: 'CompletedAt', label: 'انتهى في' }
+          ];
+          var rows = assignments.map(function (a) {
+            return [esc(a.CandidateEmail), esc(a.Status), esc(a.StartedAt || '—'), esc(a.CompletedAt || '—')];
+          });
+          var body = '<div id="ac-candidates-table-wrap"></div>';
+          UIC.openModal('ac-candidates-modal', { title: 'المرشحون في هذه الدفعة', size: 'xl', body: body, footer: false });
+          document.getElementById('ac-candidates-table-wrap').innerHTML = UIC.dataTable('ac-candidates-table', {
+            headers: headers, rows: rows, searchable: false, printable: false,
+            emptyState: { title: 'لا يوجد مرشحون بعد' }
+          });
+        })
+        .catch(function (err) { UIC.toast(err.message || 'تعذر تحميل المرشحين', 'error'); })
+        .finally(function () { UI.hideSpinner(); });
+    }
+
+    document.addEventListener('DOMContentLoaded', renderApp);
+  </script>
+</body>
+</html>

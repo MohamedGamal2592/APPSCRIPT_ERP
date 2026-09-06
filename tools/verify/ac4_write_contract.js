@@ -240,7 +240,150 @@ const bulkHistory = historyCalls.slice(-2);
 ok(bulkHistory.every(function (c) { return c.action === 'create' && Object.prototype.hasOwnProperty.call(c.newValues, 'AssessmentID'); }),
   'both bulk-created rows logged history under header-case keys');
 
-/* ── 3. No ID_Counter access, ever ─────────────────────────────────────────── */
+/* ── 3. Phase 4 — batches (this file "also covers batches" per the file list) */
+console.log('\nbatches — link building, expiry default/max, invites, toggle (§5.2)\n');
+
+function makeAppsScriptStubs() {
+  let uuidSeq = 0;
+  function p2(n) { return (n < 10 ? '0' : '') + n; }
+  return {
+    Utilities: {
+      getUuid: function () { uuidSeq++; return 'uuid' + uuidSeq + '-aaaa-bbbb-cccc-000000000000'; },
+      formatDate: function (date) {
+        return date.getFullYear() + '-' + p2(date.getMonth() + 1) + '-' + p2(date.getDate()) + ' ' +
+          p2(date.getHours()) + ':' + p2(date.getMinutes()) + ':' + p2(date.getSeconds());
+      }
+    },
+    Session: { getScriptTimeZone: function () { return 'Africa/Cairo'; } },
+    ScriptApp: { getService: function () { return { getUrl: function () { return 'https://script.google.com/macros/s/FAKE/exec'; } }; } }
+  };
+}
+
+function buildBatchSandbox() {
+  const store = {};
+  store['Assessments'] = makeStubSheet(['AssessmentID', 'Title', 'Category', 'Description', 'TimeLimitMinutes', 'PassScore', 'IsActive', 'UserID', 'CreatedAt', 'UpdatedAt'], 'Assessments');
+  store['AssessmentBatches'] = makeStubSheet(['BatchID', 'Token', 'CompanyName', 'AssessmentID', 'AssessmentTitle', 'MaxCandidates', 'UsedSlots', 'AssignedBy', 'CreatedAt', 'ExpiresAt', 'IsActive'], 'AssessmentBatches');
+  store['Assignments'] = makeStubSheet(['AssignmentID', 'BatchID', 'Token', 'CandidateEmail', 'AssessmentID', 'Status', 'StartedAt', 'CompletedAt', 'CreatedAt'], 'Assignments');
+  // seed one active assessment directly onto the stub's backing rows
+  store['Assessments'].appendRow(['AID-ACTIVE', 'Active Assessment', 'Technical', '', 30, 60, true, 'staff1', '2026-09-01 10:00:00', '2026-09-01 10:00:00']);
+
+  function getSheet_(sheetName) { sheetsAccessed.push(sheetName); if (!store[sheetName]) throw new Error('Stub has no sheet: ' + sheetName); return store[sheetName]; }
+  function getHeaders_(sheet) { return sheet._headers.slice(); }
+  function appendRowWithRetry_(sheet, values) { sheet.appendRow(values); }
+  function noteMutation_() {}
+  function executeWithLock_(fn) { return fn(); }
+  function updateRowByCriteria_(sheet, criteriaHeader, criteriaValue, updatesObject) {
+    const headers = getHeaders_(sheet);
+    const data = sheet.getDataRange().getValues();
+    const critIdx = headers.findIndex(function (h) { return String(h).trim().toLowerCase() === String(criteriaHeader).trim().toLowerCase(); });
+    for (let i = 1; i < data.length; i++) {
+      if (String(data[i][critIdx]).trim().toLowerCase() === String(criteriaValue).trim().toLowerCase()) {
+        const newRow = data[i].map(function (originalVal, colIdx) {
+          const header = headers[colIdx];
+          const updateKey = Object.keys(updatesObject).find(function (k) { return k.trim().toLowerCase() === String(header).trim().toLowerCase(); });
+          return updateKey !== undefined ? updatesObject[updateKey] : originalVal;
+        });
+        sheet.getRange(i + 1, 1, 1, newRow.length).setValues([newRow]);
+        return true;
+      }
+    }
+    return false;
+  }
+  function buildRecordsFromRaw_(data, hdrs) {
+    const keys = hdrs.map(function (h) { return String(h).trim(); });
+    const records = [];
+    for (let i = 1; i < data.length; i++) { const row = data[i]; const record = {}; for (let c = 0; c < keys.length; c++) record[keys[c]] = row[c] !== undefined ? row[c] : ''; records.push(record); }
+    return records;
+  }
+  function getAllRecords_(dbId, sheetName) { const sheet = getSheet_(sheetName, dbId); return buildRecordsFromRaw_(sheet.getDataRange().getValues(), getHeaders_(sheet)); }
+  function getRecordsByPk_(dbId, sheetName, pkColumn) {
+    const rows = getAllRecords_(dbId, sheetName);
+    const pkLc = String(pkColumn || 'id').trim().toLowerCase();
+    const hdrs = getHeaders_(getSheet_(sheetName, dbId)).map(function (h) { return String(h).trim(); });
+    let pkHeader = null; hdrs.forEach(function (h) { if (h.toLowerCase() === pkLc) pkHeader = h; });
+    const byPk = new Map();
+    rows.forEach(function (r) { const raw = pkHeader !== null ? r[pkHeader] : r[pkLc]; const pk = String(raw == null ? '' : raw).trim(); if (!pk) return; byPk.set(pk, r); byPk.set(pk.toLowerCase(), r); });
+    return { rows: rows, byPk: byPk, headers: hdrs, pkHeader: pkHeader || pkColumn };
+  }
+  function logHistory_(dbId, sheetName, recordUid, recordId, user, action, newValues, oldValues) {
+    historyCalls.push({ dbId: dbId, sheetName: sheetName, recordUid: recordUid, recordId: recordId, user: user, action: action, newValues: newValues, oldValues: oldValues });
+  }
+
+  const sandbox = Object.assign(
+    { getSheet_, getHeaders_, appendRowWithRetry_, noteMutation_, executeWithLock_, updateRowByCriteria_, getAllRecords_, getRecordsByPk_, logHistory_ },
+    makeAppsScriptStubs()
+  );
+  vm.createContext(sandbox);
+  return { sandbox: sandbox, store: store };
+}
+
+const batchBuilt = buildBatchSandbox();
+vm.runInContext(src, batchBuilt.sandbox, { filename: ACTIONS_FILE });
+const AC2 = vm.runInContext('AssessmentCenter', batchBuilt.sandbox);
+
+/* Link building. */
+ok(AC2.acCandidateLink_('TOK123') === 'https://script.google.com/macros/s/FAKE/exec?action=ac_take&token=TOK123',
+  'the candidate link is built from ScriptApp\'s URL + ac_take + the token');
+
+/* Expiry default (10) and max (90), enforced server-side regardless of client
+   input. add_ac_batch is not exposed on the namespace object directly (only the
+   generic dispatch_ is) — call it via dispatch_ with a super-admin user so
+   guard_ is a no-op, exactly as executeCompanyAction_ would for that role. */
+const SUPER = { isSuperAdmin: true, email: 'admin@example.com' };
+function callAction(sandboxAC, action, data) {
+  return sandboxAC.dispatch_({ module_action: action, data: data }, SUPER, 'DB1');
+}
+
+const created1 = callAction(AC2, 'add_ac_batch', { CompanyName: 'Acme', AssessmentID: 'AID-ACTIVE', MaxCandidates: 5 });
+ok(created1.status === 'success', 'add_ac_batch succeeds for an active assessment');
+const batchRow1 = batchBuilt.store['AssessmentBatches']._rows[0];
+const batchHeaders = batchBuilt.store['AssessmentBatches']._headers;
+function cell(row, name) { return row[batchHeaders.indexOf(name)]; }
+const created1Expiry = new Date(cell(batchRow1, 'ExpiresAt').replace(' ', 'T'));
+const created1Created = new Date(cell(batchRow1, 'CreatedAt').replace(' ', 'T'));
+const defaultDays = Math.round((created1Expiry - created1Created) / 86400000);
+ok(defaultDays === 10, 'no ExpiryDays given -> defaults to 10 days', defaultDays);
+
+const created2 = callAction(AC2, 'add_ac_batch', { CompanyName: 'Acme2', AssessmentID: 'AID-ACTIVE', MaxCandidates: 5, ExpiryDays: 9999 });
+ok(created2.status === 'success', 'add_ac_batch succeeds even with an absurd ExpiryDays');
+const batchRow2 = batchBuilt.store['AssessmentBatches']._rows[1];
+const created2Expiry = new Date(cell(batchRow2, 'ExpiresAt').replace(' ', 'T'));
+const created2Created = new Date(cell(batchRow2, 'CreatedAt').replace(' ', 'T'));
+const cappedDays = Math.round((created2Expiry - created2Created) / 86400000);
+ok(cappedDays === 90, 'ExpiryDays:9999 is clamped server-side to the 90-day max (D-9)', cappedDays);
+
+/* Invites: reject malformed, dedupe. */
+const batch1Id = cell(batchRow1, 'BatchID');
+let threwOnBadEmail = false;
+try { callAction(AC2, 'add_ac_batch_invites', { id: batch1Id, emails: ['not-an-email'] }); } catch (e) { threwOnBadEmail = true; }
+ok(threwOnBadEmail, 'a malformed email is rejected, nothing inserted');
+
+const inviteRes = callAction(AC2, 'add_ac_batch_invites', { id: batch1Id, emails: ['a@example.com', 'A@Example.com', 'b@example.com'] });
+ok(inviteRes.status === 'success' && inviteRes.data.count === 2, 'duplicate emails (case-insensitive) collapse to one insert each', inviteRes.data);
+const assignmentsAfterInvite = batchBuilt.store['Assignments']._rows.length;
+ok(assignmentsAfterInvite === 2, 'exactly two Invited rows were appended', assignmentsAfterInvite);
+const inviteRes2 = callAction(AC2, 'add_ac_batch_invites', { id: batch1Id, emails: ['a@example.com'] });
+ok(inviteRes2.data.count === 0 && inviteRes2.data.skipped === 1, 're-inviting an already-invited email inserts nothing new');
+
+/* Toggle never touches UsedSlots. */
+const usedSlotsBefore = cell(batchBuilt.store['AssessmentBatches']._rows[0], 'UsedSlots');
+callAction(AC2, 'toggle_ac_batch_active', { id: batch1Id });
+const rowAfterToggle = batchBuilt.store['AssessmentBatches']._rows[0];
+ok(cell(rowAfterToggle, 'UsedSlots') === usedSlotsBefore, 'toggling active/inactive leaves UsedSlots exactly as it was', { before: usedSlotsBefore, after: cell(rowAfterToggle, 'UsedSlots') });
+ok(cell(rowAfterToggle, 'IsActive') === false, 'IsActive actually flipped');
+
+/* A batch created by the STANDALONE (D-19: string dates, boolean IsActive)
+   lists correctly through get_ac_batches. */
+const legacyRow = ['BATCH-LEGACY', 'legacy-token-72chars-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'LegacyCo', 'AID-ACTIVE', 'N/A', 20, 3, 'legacyuser', '2026-08-01 09:00:00', '2026-08-05 09:00:00', true];
+batchBuilt.store['AssessmentBatches'].appendRow(legacyRow);
+const listed = callAction(AC2, 'get_ac_batches', {});
+const legacyListed = listed.rows.filter(function (r) { return r.BatchID === 'BATCH-LEGACY'; })[0];
+ok(!!legacyListed, 'the legacy-shaped batch row lists at all');
+ok(legacyListed && legacyListed.AssessmentTitle === 'Active Assessment', 'a blank/"N/A" AssessmentTitle is back-filled from Assessments on read (G-13)');
+ok(legacyListed && legacyListed.IsActive === true, 'boolean IsActive round-trips correctly');
+ok(legacyListed && legacyListed.Link.indexOf('token=' + legacyRow[1]) !== -1, 'the ERP link is computed for a standalone-created batch too');
+
+/* ── 4. No ID_Counter access, ever ─────────────────────────────────────────── */
 console.log('\nno ID_Counter access anywhere in this test run\n');
 ok(sheetsAccessed.indexOf('ID_Counter') === -1, 'getSheet_ was never asked for "ID_Counter"', sheetsAccessed);
 
