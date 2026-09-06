@@ -3515,6 +3515,16 @@ document.addEventListener('keydown', function (e) {
     .table td { display: table-cell; text-align: right; border: 1px solid var(--border-color); }
     .table tbody td[data-label]::before { content: none; }
     .table tbody tr { border: 0; margin: 0; padding: 0; }
+    /* [iPhone run] .inv-table — the invoice line table — must never print as
+       cards either. Its card rules sit further down this stylesheet, after
+       this block, so at equal specificity they would win here; the type
+       selector out-ranks them without touching any property a page sets. */
+    table.inv-table { display: table; }
+    table.inv-table thead { display: table-header-group; }
+    table.inv-table tbody { display: table-row-group; width: auto; }
+    table.inv-table tr { display: table-row; width: auto; border: 0; border-radius: 0; margin: 0; padding: 0; background: transparent; }
+    table.inv-table td { display: table-cell; width: auto; align-items: normal; justify-content: normal; gap: normal; }
+    table.inv-table td[data-label]::before { content: none; }
 
     /* [7.2] The print palette. The two bespoke themes carried a blanket
        universal print-color-adjust:exact rule, which forces the browser to
@@ -4286,6 +4296,49 @@ document.addEventListener('keydown', function (e) {
   .table .dt-sel { justify-content: flex-start; }
   .table .dt-sel::before { content: none; }
 
+  /* ── [iPhone run] The invoice line table becomes a stack of cards too ───
+   * .inv-table is the line-item table of the five TopLight print pages (فاتورة
+   * بيع, أمر شراء, عرض سعر, اذن صرف منتج, كشف حساب). On a phone the body clips
+   * horizontal overflow, so the right-hand columns — الإجمالي, قيمة المرتجع,
+   * الرصيد — were simply unreachable. Same three-state shape as .table above:
+   * cards below tablet-p, a real table from tablet-p up, and always a table on
+   * paper (see the shared @media print block, further up).
+   *
+   * Two things keep this invisible from 600px up and on paper:
+   *   1. Every VISUAL declaration (border colour, padding, font-size,
+   *      backgrounds) stays on the page, inside @media print, (min-width:
+   *      600px), exactly as it was written. The rules here are layout only,
+   *      and the tier/print restores reset each property they touch to its
+   *      initial value.
+   *   2. The card cell rules are wrapped in :where(), so they carry no
+   *      specificity of their own: a page's own .inv-table td always out-ranks
+   *      them. The last-cell rule needs that too: written plainly,
+   *      .inv-table td:last-child would beat a page's border on the desktop. */
+  .inv-table, .inv-table tbody, .inv-table tr { display: block; width: 100%; }
+  .inv-table thead { display: none; }        /* the labels move into the cells */
+  .inv-table tr {
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    margin-bottom: var(--space-2);
+    padding: var(--space-2);
+    background: var(--bg-surface);
+  }
+  .inv-table :where(td) {
+    display: flex; align-items: baseline; justify-content: space-between;
+    gap: var(--space-3); width: 100%;
+    border: 0; border-bottom: 1px solid var(--border-color);
+    padding: 8px 4px;
+    text-align: start;
+  }
+  .inv-table :where(td:last-child) { border-bottom: 0; }
+  .inv-table td[data-label]::before {
+    content: attr(data-label);
+    font-size: var(--text-xs); font-weight: 700; color: var(--text-muted);
+    flex: 0 0 auto; max-width: 45%;
+  }
+  /* A numeric cell keeps its LTR direction (.num); its label stays Arabic. */
+  .inv-table td.num::before { direction: rtl; }
+
   /* ── tablet-p (>= 600px) — the drawer deliberately STAYS ── */
   @media (min-width: 600px) {
     /* [F4a] The form grid gains its columns here. One column below tablet-p. */
@@ -4310,6 +4363,15 @@ document.addEventListener('keydown', function (e) {
     .table tbody td[data-label]::before { content: none; }
     .table tbody td.num { text-align: left; }
     .table .dt-sel { display: table-cell; text-align: center; }
+    /* [iPhone run] .inv-table back to a real table — layout only. Every
+       property here returns to its initial value; the page's own declarations
+       (border, padding, font-size, backgrounds) take over from here. */
+    .inv-table { display: table; }
+    .inv-table thead { display: table-header-group; }
+    .inv-table tbody { display: table-row-group; width: auto; }
+    .inv-table tr { display: table-row; width: auto; border: 0; border-radius: 0; margin: 0; padding: 0; background: transparent; }
+    .inv-table td { display: table-cell; width: auto; align-items: normal; justify-content: normal; gap: normal; }
+    .inv-table td[data-label]::before { content: none; }
     /* Enough width for the user's name beside the avatar. */
     .topbar-right .user-profile .user-name { display: inline; }
     /* Dialogs stop being bottom sheets and centre. */

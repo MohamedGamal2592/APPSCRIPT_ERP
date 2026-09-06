@@ -19,10 +19,16 @@
     .invoice-meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px 16px; margin-bottom: 20px; }
     .meta-item { font-size: 13px; }
     .meta-item strong { color: var(--text-muted); font-weight: 600; }
-    .inv-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 20px; }
-    .inv-table th, .inv-table td { border: 1px solid #111111; padding: 8px 10px; text-align: right; }
-    .inv-table th { background: #111111; color: #fbbf24; font-weight: 600; }
-    .inv-totals { margin-right: auto; width: 300px; font-size: 14px; }
+    /* [iPhone run] The line table's own look, from tablet-p up and on paper —
+       exactly the declarations that applied before. Below 600px the shared
+       .inv-table rules (UI_Components) lay the rows out as cards instead. */
+    @media print, (min-width: 600px) {
+      .inv-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 20px; }
+      .inv-table th, .inv-table td { border: 1px solid #111111; padding: 8px 10px; text-align: right; }
+      .inv-table th { background: #111111; color: #fbbf24; font-weight: 600; }
+    }
+    /* width: min() — the same fixed block on a desktop, the full width on a phone. */
+    .inv-totals { margin-right: auto; width: min(300px, 100%); font-size: 14px; }
     .inv-totals .row { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #111111; }
     .inv-totals .row.total { font-weight: 700; font-size: 16px; color: var(--text-main, #111111); border-bottom: none; }
   </style>
@@ -65,17 +71,30 @@
       .finally(function () { UI.hideSpinner(); try{schedulePrefetch();}catch(e){} });
   }
 
+  /* [iPhone run] Every <td> carries its column label (data-label) so the phone
+     card layout — the shared .inv-table rules — has something to show; from
+     600px up and on paper the attribute is invisible. The header row is built
+     from the same list, so the two can never disagree. */
+  var COLS = ['المنتج', 'الكمية', 'السعر', 'الضريبة', 'الخصم', 'الإجمالي'];
+  function row_(cells) {
+    return '<tr>' + cells.map(function (c, i) {
+      return '<td data-label="' + FMT.escape(COLS[i]) + '">' + c + '</td>';
+    }).join('') + '</tr>';
+  }
+  function head_() {
+    return '<thead><tr>' + COLS.map(function (c) { return '<th>' + c + '</th>'; }).join('') + '</tr></thead>';
+  }
   function renderInvoice(h, lines) {
     var root = document.getElementById('invoice-root');
     var rows = (lines || []).map(function (l) {
-      return '<tr>' +
-        '<td>' + FMT.escape(l.product_name || '-') + '</td>' +
-        '<td><span class="num">' + FMT.number(l.product_qty) + '</span></td>' +
-        '<td><span class="num">' + FMT.number(l.product_price) + '</span></td>' +
-        '<td><span class="num">' + FMT.percent(l.product_tax) + '</span></td>' +
-        '<td><span class="num">' + FMT.number(l.product_discount) + '</span></td>' +
-        '<td><span class="num">' + FMT.number(l.product_total_value) + '</span></td>' +
-        '</tr>';
+      return row_([
+        FMT.escape(l.product_name || '-'),
+        '<span class="num">' + FMT.number(l.product_qty) + '</span>',
+        '<span class="num">' + FMT.number(l.product_price) + '</span>',
+        '<span class="num">' + FMT.percent(l.product_tax) + '</span>',
+        '<span class="num">' + FMT.number(l.product_discount) + '</span>',
+        '<span class="num">' + FMT.number(l.product_total_value) + '</span>'
+      ]);
     }).join('');
 
     var html =
@@ -97,9 +116,7 @@
       metaItem('العنوان', h['العنوان']) +
       metaItem('نسبة الخصم', FMT.percent(h['نسبة الخصم'])) +
       '</div>' +
-      '<table class="inv-table"><thead><tr>' +
-      '<th>المنتج</th><th>الكمية</th><th>السعر</th><th>الضريبة</th><th>الخصم</th><th>الإجمالي</th>' +
-      '</tr></thead><tbody>' + rows + '</tbody></table>' +
+      '<table class="inv-table">' + head_() + '<tbody>' + rows + '</tbody></table>' +
       '<div class="inv-totals">' +
       '<div class="row"><span>المبلغ الصافي</span><span class="num">' + FMT.number(h['المبلغ الصافي']) + '</span></div>' +
       '<div class="row"><span>قيمة الخصم</span><span class="num">' + FMT.number(h['قيمة الخصم']) + '</span></div>' +

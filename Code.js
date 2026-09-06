@@ -238,6 +238,11 @@ const ROUTES = {
   'ping': { handler: handlePing_, requireAuth: true },
   'get_dashboard_data': { handler: getDashboardData_, requireAuth: true },
   'company_action': { handler: executeCompanyAction_, requireAuth: true },
+  // T-2 — the ONLY unauthenticated door into a company namespace. A company
+  // registers no `publicDispatch` unless it opts in (only AssessmentCenter
+  // does, for its candidate-facing pages), so this route is inert for every
+  // other company (asserted by ac1_wiring.js).
+  'company_public_action': { handler: executeCompanyPublicAction_, requireAuth: false },
   'admin_list_companies': { handler: adminListCompanies_, requireAuth: true },
   'admin_save_company': { handler: adminSaveCompany_, requireAuth: true },
   'admin_list_users': { handler: adminListUsers_, requireAuth: true },
@@ -419,6 +424,27 @@ function executeCompanyAction_(payload, sessionToken, authUser) {
   }
   const dbId = authUser.isSuperAdmin ? getCompanySpreadsheetId_(payload.target_system) : getCompanySpreadsheetId_(authUser.company);
   return company.dispatch(payload, authUser, dbId);
+}
+
+/**
+ * T-2 — the only unauthenticated door into a company namespace. `authUser` is
+ * always null here (the route is requireAuth:false, so apiRouter_ never
+ * authenticates), which is why SystemLog.UserEmail comes back empty for every
+ * candidate-side action — expected, per plan §5.6.
+ *
+ * No page-access check runs here on purpose: a company opts into this surface
+ * by registering `publicDispatch`, and it alone decides what that surface
+ * exposes (its own PUBLIC_ACTIONS allowlist, never its authenticated `actions`
+ * map). The kill switch still runs first in apiRouter_, so a disabled system
+ * blocks candidates too — the same message they would get from any other
+ * route (R2/T-2).
+ */
+function executeCompanyPublicAction_(payload, sessionToken, authUser) {
+  const company = COMPANY_REGISTRY[payload && payload.target_system];
+  if (!company || typeof company.publicDispatch !== 'function') {
+    throw new Error('Unknown company: ' + (payload && payload.target_system));
+  }
+  return company.publicDispatch(payload, getCompanySpreadsheetId_(payload.target_system));
 }
 
 /**

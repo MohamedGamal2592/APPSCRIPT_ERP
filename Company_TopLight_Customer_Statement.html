@@ -33,10 +33,15 @@
     .bal-badge-company { background: #fee2e2; color: var(--danger-text, #991b1b); border: 1px solid #f87171; }
     .bal-badge-customer { background: #dcfce7; color: #166534; border: 1px solid #86efac; }
     .bal-badge-zero { background: #f1f5f9; color: #475569; border: 1px solid #cbd5e1; }
-    .inv-table { width: 100%; border-collapse: collapse; font-size: 12px; }
-    .inv-table th, .inv-table td { border: 1px solid #111111; padding: 5px 8px; text-align: right; white-space: nowrap; }
-    .inv-table th { background: #111111; color: #fbbf24; font-weight: 600; }
-    .inv-table td { background: var(--bg-surface, #ffffff); color: var(--text-main, #111111); }
+    /* [iPhone run] The line table's own look, from tablet-p up and on paper —
+       exactly the declarations that applied before. Below 600px the shared
+       .inv-table rules (UI_Components) lay the rows out as cards instead. */
+    @media print, (min-width: 600px) {
+      .inv-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+      .inv-table th, .inv-table td { border: 1px solid #111111; padding: 5px 8px; text-align: right; white-space: nowrap; }
+      .inv-table th { background: #111111; color: #fbbf24; font-weight: 600; }
+      .inv-table td { background: var(--bg-surface, #ffffff); color: var(--text-main, #111111); }
+    }
     .mov-row:hover { background: var(--brand-subtle-bg); }
     .sub td { background: #fef08a; color: var(--text-main, #111111); }
     .sum td { background: var(--bg-surface, #ffffff); font-weight: 700; }
@@ -123,9 +128,23 @@
     }
   }
 
-  function td(v) { return '<td>' + v + '</td>'; }
-  function tdN(v) { return '<td class="num">' + FMT.number(v) + '</td>'; }
-  function dash() { return '<td>-</td>'; }
+  /* [iPhone run] Every <td> carries its column label (data-label) so the phone
+     card layout — the shared .inv-table rules — has something to show; from
+     600px up and on paper the attribute is invisible. The header row is built
+     from the same list, so the two can never disagree. */
+  var COLS = ['التاريخ', 'النوع', 'الكود', 'البيان / الصنف', 'الكمية', 'السعر', 'الخصم', 'مسحوبات', 'العملة', 'سعر الصرف', 'له', 'عليه', 'الرصيد'];
+  /* A cell is { html, num }; row_ turns the 13 of a row into a <tr>. */
+  function td(v) { return { html: v }; }
+  function tdN(v) { return { html: FMT.number(v), num: true }; }
+  function dash() { return { html: '-' }; }
+  function row_(attrs, cells) {
+    return '<tr' + (attrs || '') + '>' + cells.map(function (c, i) {
+      return '<td' + (c.num ? ' class="num"' : '') + ' data-label="' + FMT.escape(COLS[i]) + '">' + c.html + '</td>';
+    }).join('') + '</tr>';
+  }
+  function head_() {
+    return '<thead><tr>' + COLS.map(function (c) { return '<th>' + c + '</th>'; }).join('') + '</tr></thead>';
+  }
 
   function kpiBox(label, value, extraClass) {
     return '<div class="stmt-kpi ' + (extraClass || '') + '">' +
@@ -213,60 +232,64 @@
       metaItem('الرصيد الحالي', '<span class="num">' + FMT.number(r.balance) + '</span> <span class="bal-badge ' + balClass + '">' + balText + '</span>') +
       '</div>' +
       kpiHtml +
-      '<table class="inv-table"><thead><tr>' +
-      '<th>التاريخ</th><th>النوع</th><th>الكود</th><th>البيان / الصنف</th><th>الكمية</th><th>السعر</th><th>الخصم</th><th>مسحوبات</th><th>العملة</th><th>سعر الصرف</th><th>له</th><th>عليه</th><th>الرصيد</th>' +
-      '</tr></thead><tbody>' + body + '</tbody></table>' +
+      '<table class="inv-table">' + head_() + '<tbody>' + body + '</tbody></table>' +
       '</div>';
 
     root.innerHTML = html;
   }
 
   function salesRows(m, i) {
-    var rows = '<tr class="mov-row" onclick="toggleGroup(' + i + ')" style="cursor:pointer;">' +
-      td(fmtDate(m.date)) + td('مبيعات') + td(FMT.escape(m.reference || '-')) +
-      td('▶ فاتورة مبيعات (' + (m.item_count || m.lines.length) + ' صنف)') +
-      dash() + dash() + dash() + dash() +
-      td(FMT.escape(m.currency || 'EGP')) + tdN(m.rate != null ? m.rate : 1) +
-      td('') + tdN(m.total) + tdN(m.running_balance) + '</tr>';
+    var rows = row_(' class="mov-row" onclick="toggleGroup(' + i + ')" style="cursor:pointer;"', [
+      td(fmtDate(m.date)), td('مبيعات'), td(FMT.escape(m.reference || '-')),
+      td('▶ فاتورة مبيعات (' + (m.item_count || m.lines.length) + ' صنف)'),
+      dash(), dash(), dash(), dash(),
+      td(FMT.escape(m.currency || 'EGP')), tdN(m.rate != null ? m.rate : 1),
+      td(''), tdN(m.total), tdN(m.running_balance)
+    ]);
 
     (m.lines || []).forEach(function (l) {
-      rows += '<tr class="sub g-' + i + '" style="display:none;">' +
-        td('') + td('') + td('') + td(FMT.escape(l.product_name || '-')) +
-        tdN(l.qty) + tdN(l.price) + tdN(l.discount) +
-        td('') + td('') + td('') +
-        td('') + tdN(l.net_value) + td('') + '</tr>';
+      rows += row_(' class="sub g-' + i + '" style="display:none;"', [
+        td(''), td(''), td(''), td(FMT.escape(l.product_name || '-')),
+        tdN(l.qty), tdN(l.price), tdN(l.discount),
+        td(''), td(''), td(''),
+        td(''), tdN(l.net_value), td('')
+      ]);
     });
 
-    rows += '<tr class="sum g-' + i + '" style="display:none;">' +
-      td('') + td('') + td('') +
-      td('رقم: ' + FMT.escape(m.reference || '') + ' الصافي: ' + FMT.number(m.net) + ' خصم: -' + FMT.number(m.discount) + ' الإجمالي: ' + FMT.number(m.total) + ' ج.م') +
-      td('') + td('') + td('') + td('') + td('') + td('') +
-      td('') + tdN(m.total) + td('') + '</tr>';
+    rows += row_(' class="sum g-' + i + '" style="display:none;"', [
+      td(''), td(''), td(''),
+      td('رقم: ' + FMT.escape(m.reference || '') + ' الصافي: ' + FMT.number(m.net) + ' خصم: -' + FMT.number(m.discount) + ' الإجمالي: ' + FMT.number(m.total) + ' ج.م'),
+      td(''), td(''), td(''), td(''), td(''), td(''),
+      td(''), tdN(m.total), td('')
+    ]);
 
     return rows;
   }
 
   function returnRows(m, i) {
-    var rows = '<tr class="mov-row" onclick="toggleGroup(' + i + ')" style="cursor:pointer;">' +
-      td(fmtDate(m.date)) + td('مرتجع') + td(FMT.escape(m.reference || '-')) +
-      td('▶ مرتجع فاتورة #' + FMT.escape(m.invoice_number || m.reference || '') + ' (' + (m.item_count || m.lines.length) + ' صنف)') +
-      dash() + dash() + dash() + dash() +
-      td(FMT.escape(m.currency || 'EGP')) + tdN(m.rate != null ? m.rate : 1) +
-      tdN(m.total) + td('') + tdN(m.running_balance) + '</tr>';
+    var rows = row_(' class="mov-row" onclick="toggleGroup(' + i + ')" style="cursor:pointer;"', [
+      td(fmtDate(m.date)), td('مرتجع'), td(FMT.escape(m.reference || '-')),
+      td('▶ مرتجع فاتورة #' + FMT.escape(m.invoice_number || m.reference || '') + ' (' + (m.item_count || m.lines.length) + ' صنف)'),
+      dash(), dash(), dash(), dash(),
+      td(FMT.escape(m.currency || 'EGP')), tdN(m.rate != null ? m.rate : 1),
+      tdN(m.total), td(''), tdN(m.running_balance)
+    ]);
 
     (m.lines || []).forEach(function (l) {
-      rows += '<tr class="sub g-' + i + '" style="display:none;">' +
-        td('') + td('') + td('') + td(FMT.escape(l.product_name || '-')) +
-        tdN(l.qty) + tdN(l.gross) + tdN(l.discount) +
-        td('') + td('') + td('') +
-        tdN(l.net) + td('') + td('') + '</tr>';
+      rows += row_(' class="sub g-' + i + '" style="display:none;"', [
+        td(''), td(''), td(''), td(FMT.escape(l.product_name || '-')),
+        tdN(l.qty), tdN(l.gross), tdN(l.discount),
+        td(''), td(''), td(''),
+        tdN(l.net), td(''), td('')
+      ]);
     });
 
-    rows += '<tr class="sum g-' + i + '" style="display:none;">' +
-      td('') + td('') + td('') +
-      td('مرتجع #: ' + FMT.escape(m.invoice_number || m.reference || '') + ' الكمية: ' + FMT.number(m.total_qty) + ' الإجمالي: ' + FMT.number(m.total) + ' ج.م') +
-      td('') + td('') + td('') + td('') + td('') + td('') +
-      tdN(m.total) + td('') + td('') + '</tr>';
+    rows += row_(' class="sum g-' + i + '" style="display:none;"', [
+      td(''), td(''), td(''),
+      td('مرتجع #: ' + FMT.escape(m.invoice_number || m.reference || '') + ' الكمية: ' + FMT.number(m.total_qty) + ' الإجمالي: ' + FMT.number(m.total) + ' ج.م'),
+      td(''), td(''), td(''), td(''), td(''), td(''),
+      tdN(m.total), td(''), td('')
+    ]);
 
     return rows;
   }
@@ -276,21 +299,23 @@
     if (m.method) desc = desc ? (desc + ' ' + m.method) : m.method;
     var creditCell = label === 'collection' ? tdN(m.credit) : td('');
     var debitCell = label === 'payment' ? tdN(m.debit) : td('');
-    return '<tr class="mov-row">' +
-      td(fmtDate(m.date)) + td(label === 'collection' ? 'تحصيل' : 'مدفوعات') + td(FMT.escape(m.reference || '-')) +
-      td(FMT.escape(desc || '-')) +
-      dash() + dash() + dash() + tdN(m.withdrawal) +
-      td(FMT.escape(m.currency || 'EGP')) + tdN(m.rate != null ? m.rate : 1) +
-      creditCell + debitCell + tdN(m.running_balance) + '</tr>';
+    return row_(' class="mov-row"', [
+      td(fmtDate(m.date)), td(label === 'collection' ? 'تحصيل' : 'مدفوعات'), td(FMT.escape(m.reference || '-')),
+      td(FMT.escape(desc || '-')),
+      dash(), dash(), dash(), tdN(m.withdrawal),
+      td(FMT.escape(m.currency || 'EGP')), tdN(m.rate != null ? m.rate : 1),
+      creditCell, debitCell, tdN(m.running_balance)
+    ]);
   }
 
   function purchaseRow(m) {
-    return '<tr class="mov-row">' +
-      td(fmtDate(m.date)) + td('شراء') + td(FMT.escape(m.reference || '-')) +
-      td(FMT.escape(m.description || '-')) +
-      dash() + dash() + dash() + dash() +
-      td(FMT.escape(m.currency || 'EGP')) + tdN(m.rate != null ? m.rate : 1) +
-      tdN(m.credit) + td('') + tdN(m.running_balance) + '</tr>';
+    return row_(' class="mov-row"', [
+      td(fmtDate(m.date)), td('شراء'), td(FMT.escape(m.reference || '-')),
+      td(FMT.escape(m.description || '-')),
+      dash(), dash(), dash(), dash(),
+      td(FMT.escape(m.currency || 'EGP')), tdN(m.rate != null ? m.rate : 1),
+      tdN(m.credit), td(''), tdN(m.running_balance)
+    ]);
   }
 
   function metaItem(label, value) {

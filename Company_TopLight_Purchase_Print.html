@@ -20,10 +20,16 @@
     .invoice-meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px 16px; margin-bottom: 20px; }
     .meta-item { font-size: 13px; }
     .meta-item strong { color: var(--text-muted); font-weight: 600; }
-    .inv-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 20px; }
-    .inv-table th, .inv-table td { border: 1px solid var(--border-color); padding: 8px 10px; text-align: right; }
-    .inv-table th { background: var(--bg-subtle); font-weight: 600; }
-    .inv-totals { margin-right: auto; width: 300px; font-size: 14px; }
+    /* [iPhone run] The line table's own look, from tablet-p up and on paper —
+       exactly the declarations that applied before. Below 600px the shared
+       .inv-table rules (UI_Components) lay the rows out as cards instead. */
+    @media print, (min-width: 600px) {
+      .inv-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 20px; }
+      .inv-table th, .inv-table td { border: 1px solid var(--border-color); padding: 8px 10px; text-align: right; }
+      .inv-table th { background: var(--bg-subtle); font-weight: 600; }
+    }
+    /* width: min() — the same fixed block on a desktop, the full width on a phone. */
+    .inv-totals { margin-right: auto; width: min(300px, 100%); font-size: 14px; }
     .inv-totals .row { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border-color); }
     .inv-totals .row.total { font-weight: 700; font-size: 16px; color: var(--brand-primary); border-bottom: none; }
   </style>
@@ -70,17 +76,30 @@
     var keys = Array.prototype.slice.call(arguments,1);
     for(var i=0;i<keys.length;i++){ var k=keys[i].toLowerCase().replace(/_/g,' '); for(var kk in obj) if(String(kk).toLowerCase().replace(/_/g,' ').trim()===k){ var v=obj[kk]; if(v!==undefined && v!==null && String(v).trim()!=='') return v; } } return '';
   }
+  /* [iPhone run] Every <td> carries its column label (data-label) so the phone
+     card layout — the shared .inv-table rules — has something to show; from
+     600px up and on paper the attribute is invisible. The header row is built
+     from the same list, so the two can never disagree. */
+  var COLS = ['المنتج', 'الكمية', 'سعر الوحدة', 'تكاليف أخرى', 'تكلفة الوحدة', 'الإجمالي'];
+  function row_(cells) {
+    return '<tr>' + cells.map(function (c, i) {
+      return '<td data-label="' + FMT.escape(COLS[i]) + '">' + c + '</td>';
+    }).join('') + '</tr>';
+  }
+  function head_() {
+    return '<thead><tr>' + COLS.map(function (c) { return '<th>' + c + '</th>'; }).join('') + '</tr></thead>';
+  }
   function renderInvoice(h, lines) {
     var root = document.getElementById('invoice-root');
     var rows = (lines || []).map(function (l) {
-      return '<tr>' +
-        '<td>' + FMT.escape(l.product_name || '-') + '</td>' +
-        '<td>' + FMT.number(l.qty) + '</td>' +
-        '<td>' + FMT.number(l.unit_price) + '</td>' +
-        '<td>' + FMT.number(l.other_cost) + '</td>' +
-        '<td>' + FMT.number(l.unit_cost) + '</td>' +
-        '<td>' + FMT.number(l.total_cost) + '</td>' +
-        '</tr>';
+      return row_([
+        FMT.escape(l.product_name || '-'),
+        FMT.number(l.qty),
+        FMT.number(l.unit_price),
+        FMT.number(l.other_cost),
+        FMT.number(l.unit_cost),
+        FMT.number(l.total_cost)
+      ]);
     }).join('');
 
     var html =
@@ -105,9 +124,7 @@
       metaItem('القيمة', FMT.currency(pickH(h,'value','Value'), pickH(h,'currency'))) +
       metaItem('القيمة بناءً على الفاتورة', FMT.currency(pickH(h,'value based on invoice','value_based_on_invoice'), 'EGP')) +
       '</div>' +
-      '<table class="inv-table"><thead><tr>' +
-      '<th>المنتج</th><th>الكمية</th><th>سعر الوحدة</th><th>تكاليف أخرى</th><th>تكلفة الوحدة</th><th>الإجمالي</th>' +
-      '</tr></thead><tbody>' + rows + '</tbody></table>' +
+      '<table class="inv-table">' + head_() + '<tbody>' + rows + '</tbody></table>' +
       '<div class="inv-totals">' +
       '<div class="row total"><span>إجمالي التكاليف</span><span>' + FMT.currency(pickH(h,'total costs','total_costs','Total Costs')||h['total costs'], 'EGP') + '</span></div>' +
       '</div>' +

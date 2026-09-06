@@ -19,10 +19,15 @@
     .invoice-meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px 16px; margin-bottom: 20px; }
     .meta-item { font-size: 13px; }
     .meta-item strong { color: var(--text-muted); font-weight: 600; }
-    .inv-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 20px; }
-    .inv-table th, .inv-table td { border: 1px solid #111111; padding: 8px 12px; text-align: right; }
-    .inv-table th { background: #111111; color: #fbbf24; font-weight: 600; }
-    .inv-table td { background: var(--bg-surface, #ffffff); color: var(--text-main, #111111); }
+    /* [iPhone run] The line table's own look, from tablet-p up and on paper —
+       exactly the declarations that applied before. Below 600px the shared
+       .inv-table rules (UI_Components) lay the rows out as cards instead. */
+    @media print, (min-width: 600px) {
+      .inv-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 20px; }
+      .inv-table th, .inv-table td { border: 1px solid #111111; padding: 8px 12px; text-align: right; }
+      .inv-table th { background: #111111; color: #fbbf24; font-weight: 600; }
+      .inv-table td { background: var(--bg-surface, #ffffff); color: var(--text-main, #111111); }
+    }
   </style>
 </head>
 <body>
@@ -68,13 +73,26 @@
       .finally(function () { UI.hideSpinner(); try{schedulePrefetch();}catch(e){} });
   }
 
+  /* [iPhone run] Every <td> carries its column label (data-label) so the phone
+     card layout — the shared .inv-table rules — has something to show; from
+     600px up and on paper the attribute is invisible. The header row is built
+     from the same list, so the two can never disagree. */
+  var COLS = ['المنتج', 'الكمية'];
+  function row_(cells) {
+    return '<tr>' + cells.map(function (c, i) {
+      return '<td data-label="' + FMT.escape(COLS[i]) + '">' + c + '</td>';
+    }).join('') + '</tr>';
+  }
+  function head_() {
+    return '<thead><tr>' + COLS.map(function (c) { return '<th>' + c + '</th>'; }).join('') + '</tr></thead>';
+  }
   function render(h, lines) {
     var root = document.getElementById('release-root');
     var rows = (lines || []).map(function (l) {
-      return '<tr>' +
-        '<td>' + FMT.escape(l.product_name || '-') + '</td>' +
-        '<td><span class="num">' + FMT.number(l.product_qty) + '</span></td>' +
-        '</tr>';
+      return row_([
+        FMT.escape(l.product_name || '-'),
+        '<span class="num">' + FMT.number(l.product_qty) + '</span>'
+      ]);
     }).join('');
 
     var html =
@@ -93,9 +111,7 @@
       metaItem('العميل', h.customer_name) +
       metaItem('العنوان', h['العنوان']) +
       '</div>' +
-      '<table class="inv-table"><thead><tr>' +
-      '<th>المنتج</th><th>الكمية</th>' +
-      '</tr></thead><tbody>' + rows + '</tbody></table>' +
+      '<table class="inv-table">' + head_() + '<tbody>' + rows + '</tbody></table>' +
       '</div>';
 
     root.innerHTML = html;

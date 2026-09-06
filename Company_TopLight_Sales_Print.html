@@ -20,10 +20,16 @@
     .invoice-meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px 16px; margin-bottom: 20px; }
     .meta-item { font-size: 13px; }
     .meta-item strong { color: var(--text-muted); font-weight: 600; }
-    .inv-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 20px; }
-    .inv-table th, .inv-table td { border: 1px solid var(--border-color); padding: 8px 10px; text-align: right; }
-    .inv-table th { background: var(--bg-subtle); font-weight: 600; }
-    .inv-totals { margin-right: auto; width: 320px; font-size: 14px; }
+    /* [iPhone run] The line table's own look, from tablet-p up and on paper —
+       exactly the declarations that applied before. Below 600px the shared
+       .inv-table rules (UI_Components) lay the rows out as cards instead. */
+    @media print, (min-width: 600px) {
+      .inv-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 20px; }
+      .inv-table th, .inv-table td { border: 1px solid var(--border-color); padding: 8px 10px; text-align: right; }
+      .inv-table th { background: var(--bg-subtle); font-weight: 600; }
+    }
+    /* width: min() — the same fixed block on a desktop, the full width on a phone. */
+    .inv-totals { margin-right: auto; width: min(320px, 100%); font-size: 14px; }
     .inv-totals .row { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border-color); }
     .inv-totals .row.total { font-weight: 700; font-size: 16px; color: var(--brand-primary); border-bottom: none; }
     .bal-row { display: flex; justify-content: space-between; align-items: center; padding: 7px 10px; border-radius: 6px; margin-top: 6px; font-size: 13px; font-weight: 700; }
@@ -91,21 +97,34 @@
     return invNo == null ? '' : invNo;
   }
 
+  /* [iPhone run] Every <td> carries its column label (data-label) so the phone
+     card layout — the shared .inv-table rules — has something to show; from
+     600px up and on paper the attribute is invisible. The header row is built
+     from the same list, so the two can never disagree. */
+  var COLS = ['المنتج', 'الكمية', 'كمية المرتجع', 'السعر', 'الضريبة', 'الخصم', 'الإجمالي', 'قيمة المرتجع'];
+  function row_(cells) {
+    return '<tr>' + cells.map(function (c, i) {
+      return '<td data-label="' + FMT.escape(COLS[i]) + '">' + c + '</td>';
+    }).join('') + '</tr>';
+  }
+  function head_() {
+    return '<thead><tr>' + COLS.map(function (c) { return '<th>' + c + '</th>'; }).join('') + '</tr></thead>';
+  }
   function renderInvoice(h, lines, returns, totalReturnValue, balanceBefore, balanceAfter) {
     var root = document.getElementById('invoice-root');
     var retMap = buildReturnMap(returns);
     var rows = (lines || []).map(function (l) {
       var rt = retMap[String(l.product_id)] || { qty: 0, value: 0 };
-      return '<tr>' +
-        '<td>' + FMT.escape(l.product_name || '-') + '</td>' +
-        '<td><span class="num">' + FMT.number(l.product_qty) + '</span></td>' +
-        '<td><span class="num">' + (rt.qty > 0 ? '-' + FMT.number(rt.qty) : '-') + '</span></td>' +
-        '<td><span class="num">' + FMT.number(l.product_price) + '</span></td>' +
-        '<td><span class="num">' + FMT.percent(l.product_tax) + '</span></td>' +
-        '<td><span class="num">' + FMT.number(l.product_discount) + '</span></td>' +
-        '<td><span class="num">' + FMT.number(l.product_total_value) + '</span></td>' +
-        '<td><span class="num">' + (rt.value > 0 ? '-' + FMT.number(rt.value) : '-') + '</span></td>' +
-        '</tr>';
+      return row_([
+        FMT.escape(l.product_name || '-'),
+        '<span class="num">' + FMT.number(l.product_qty) + '</span>',
+        '<span class="num">' + (rt.qty > 0 ? '-' + FMT.number(rt.qty) : '-') + '</span>',
+        '<span class="num">' + FMT.number(l.product_price) + '</span>',
+        '<span class="num">' + FMT.percent(l.product_tax) + '</span>',
+        '<span class="num">' + FMT.number(l.product_discount) + '</span>',
+        '<span class="num">' + FMT.number(l.product_total_value) + '</span>',
+        '<span class="num">' + (rt.value > 0 ? '-' + FMT.number(rt.value) : '-') + '</span>'
+      ]);
     }).join('');
 
     var total = Number(h['إجمالي']) || 0;
@@ -154,9 +173,7 @@
       metaItem('العنوان', h['العنوان']) +
       metaItem('نسبة الخصم', FMT.percent(h['نسبة الخصم'])) +
       '</div>' +
-      '<table class="inv-table"><thead><tr>' +
-      '<th>المنتج</th><th>الكمية</th><th>كمية المرتجع</th><th>السعر</th><th>الضريبة</th><th>الخصم</th><th>الإجمالي</th><th>قيمة المرتجع</th>' +
-      '</tr></thead><tbody>' + rows + '</tbody></table>' +
+      '<table class="inv-table">' + head_() + '<tbody>' + rows + '</tbody></table>' +
       '<div class="inv-totals">' +
       '<div class="row"><span>المبلغ الصافي</span><span class="num">' + FMT.number(h['المبلغ الصافي']) + '</span></div>' +
       '<div class="row"><span>قيمة الخصم</span><span class="num">' + FMT.number(h['قيمة الخصم']) + '</span></div>' +
