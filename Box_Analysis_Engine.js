@@ -1195,6 +1195,49 @@ var BoxEngine = (function () {
     return (Math.round(Number(n) * 100) / 100).toFixed(2);
   }
 
+  /**
+   * Arabic numeral–noun agreement.
+   *
+   * Arabic does not pluralise the way English does, and getting it wrong is
+   * visible in every sentence this engine produces. "4 عملية" is simply
+   * incorrect; it has to be "4 عمليات". The rule that matters here:
+   *   1        → singular            عملية
+   *   2        → dual                عمليتان
+   *   3 – 10   → plural              عمليات
+   *   11 +     → singular (accusative) عملية
+   * so plural and singular ALTERNATE as the number grows, which is exactly the
+   * case a naive `n === 1 ? x : xs` gets wrong at 11 and again at 101.
+   *
+   * A findings page that an accountant is meant to act on cannot be written in
+   * broken Arabic; the reader stops trusting the arithmetic too.
+   */
+  var AR_NOUNS = {
+    op:       { one: 'عملية', two: 'عمليتان', few: 'عمليات', many: 'عملية' },
+    purchase: { one: 'عملية شراء', two: 'عمليتا شراء', few: 'عمليات شراء', many: 'عملية شراء' },
+    movement: { one: 'حركة', two: 'حركتان', few: 'حركات', many: 'حركة' },
+    day:      { one: 'يوم', two: 'يومان', few: 'أيام', many: 'يوماً' },
+    workday:  { one: 'يوم عمل', two: 'يوما عمل', few: 'أيام عمل', many: 'يوم عمل' },
+    month:    { one: 'شهر', two: 'شهران', few: 'أشهر', many: 'شهراً' },
+    item:     { one: 'بند', two: 'بندان', few: 'بنود', many: 'بنداً' },
+    amount:   { one: 'مبلغ', two: 'مبلغان', few: 'مبالغ', many: 'مبلغاً' }
+  };
+
+  function arCount(n, kind) {
+    var forms = AR_NOUNS[kind];
+    if (!forms) return String(n);
+    var v = Math.abs(Number(n));
+    /* Agreement follows the last two digits: 111 behaves like 11, not like 1. */
+    var mod100 = v % 100;
+    var word;
+    if (v === 1) word = forms.one;
+    else if (v === 2) word = forms.two;
+    else if (mod100 >= 3 && mod100 <= 10) word = forms.few;
+    else if (mod100 === 1 || mod100 === 2 || mod100 === 0 || mod100 > 10) word = forms.many;
+    else word = forms.many;
+    /* 1 and 2 carry the count in the noun itself, so the digit is redundant. */
+    return (v === 1 || v === 2) ? word : (n + ' ' + word);
+  }
+
   /* ── SUM_MISMATCH ───────────────────────────────────────────────────────
    * Σ parsed item prices against transaction_amount. Free, needs nothing but
    * the parser, and it is the highest-precision signal in the feature: either
@@ -1271,7 +1314,7 @@ var BoxEngine = (function () {
             { row_id: String(b.row.id), transaction_date: b.row.transaction_date, transaction_amount: b.amount, transaction_details: b.row.transaction_details }
           ];
           var msg = 'حركة مطابقة تماماً: نفس التفاصيل ونفس المبلغ ' + fmt2_(a.amount) +
-            ' ونفس الخزنة، بفارق ' + Math.abs(gap) + ' يوم — الحركتان رقم ' +
+            ' ونفس الخزنة، بفارق ' + arCount(Math.abs(gap), 'day') + ' — الحركتان رقم ' +
             a.row.id + ' و' + b.row.id;
           out.push(flag_('EXACT_DUP', 'high', a.row.id, msg, ev));
           out.push(flag_('EXACT_DUP', 'high', b.row.id, msg, ev));
@@ -1295,7 +1338,7 @@ var BoxEngine = (function () {
         ];
         var msg2 = 'حركتان متقاربتان جداً: تشابه التفاصيل ' + Math.round(sim * 100) + '%' +
           ' والمبلغان ' + fmt2_(a.amount) + ' و' + fmt2_(b.amount) +
-          ' بفارق ' + Math.abs(gap) + ' يوم — الحركتان رقم ' + a.row.id + ' و' + b.row.id;
+          ' بفارق ' + arCount(Math.abs(gap), 'day') + ' — الحركتان رقم ' + a.row.id + ' و' + b.row.id;
         out.push(flag_('NEAR_DUP', 'medium', a.row.id, msg2, ev2));
         out.push(flag_('NEAR_DUP', 'medium', b.row.id, msg2, ev2));
       }
@@ -1335,8 +1378,8 @@ var BoxEngine = (function () {
           status: 'insufficient_data',
           n: lags.length,
           required: minN,
-          reason_ar: 'بيانات غير كافية لحساب حد التأخير (المطلوب ' + minN +
-            ' حركة على الأقل، والمتاح ' + lags.length + ')'
+          reason_ar: 'بيانات غير كافية لحساب حد التأخير (المطلوب ' + arCount(minN, 'movement') +
+            ' على الأقل، والمتاح ' + lags.length + ')'
         }
       };
     }
@@ -1347,8 +1390,8 @@ var BoxEngine = (function () {
     perRow.forEach(function (x) {
       if (x.lag <= threshold) return;
       flags.push(flag_('BACKDATED', 'medium', x.row.id,
-        'أُدخلت الحركة بعد تاريخها بـ ' + x.lag + ' يوم، وهو أعلى من الحد المحسوب من هذه المجموعة نفسها (' +
-        'الشريحة 95% = ' + fmt2_(p95) + ' يوم من ' + lags.length + ' حركة)',
+        'أُدخلت الحركة بعد تاريخها بـ ' + arCount(x.lag, 'day') + '، وهو أعلى من الحد المحسوب من هذه المجموعة نفسها (' +
+        'الشريحة 95% = ' + fmt2_(p95) + ' يوم من ' + arCount(lags.length, 'movement') + ')',
         [{ row_id: String(x.row.id), transaction_date: x.row.transaction_date,
            created_at: x.row.created_at, lag_days: x.lag, p95_days: round_(p95, 2), n: lags.length }]));
     });
@@ -1473,13 +1516,13 @@ var BoxEngine = (function () {
         out.push(flag_('OUT_OF_SEQUENCE', 'medium', cur.id,
           'ترتيب الإدخال يخالف التاريخ: الحركة رقم ' + cur.id + ' مسجَّلة بين الحركتين ' +
           prev.id + ' و' + next.id + ' لكن تاريخها ' + cur.transaction_date +
-          ' أقدم من كلتيهما بـ ' + Math.abs(backGap) + ' و' + Math.abs(fwdGap) + ' يوم',
+          ' أقدم من كلتيهما بـ ' + Math.abs(backGap) + ' و' + arCount(Math.abs(fwdGap), 'day') + '',
           ev));
       } else if (backGap > tol && fwdGap > tol) {
         out.push(flag_('OUT_OF_SEQUENCE', 'medium', cur.id,
           'ترتيب الإدخال يخالف التاريخ: الحركة رقم ' + cur.id + ' مسجَّلة بين الحركتين ' +
           prev.id + ' و' + next.id + ' لكن تاريخها ' + cur.transaction_date +
-          ' أحدث من كلتيهما بـ ' + backGap + ' و' + fwdGap + ' يوم',
+          ' أحدث من كلتيهما بـ ' + backGap + ' و' + arCount(fwdGap, 'day') + '',
           ev));
       }
     }
@@ -1584,11 +1627,11 @@ var BoxEngine = (function () {
                      transaction_amount: amountOf_(r), responsible_person: r.responsible_person,
                      chart_of_accounts: r.chart_of_accounts };
           });
-          var msg = cluster.length + ' حركات لنفس المسؤول ونفس الحساب خلال ' +
-            (daysBetween(cluster[0].transaction_date, cluster[cluster.length - 1].transaction_date) || 0) +
-            ' يوم، كل منها أقل بقليل من ' + fmt2_(T) + ' ومجموعها ' + fmt2_(sum) +
+          var msg = arCount(cluster.length, 'movement') + ' لنفس المسؤول ونفس الحساب خلال ' +
+            arCount(daysBetween(cluster[0].transaction_date, cluster[cluster.length - 1].transaction_date) || 0, 'day') +
+            '، كل منها أقل بقليل من ' + fmt2_(T) + ' ومجموعها ' + fmt2_(sum) +
             ' أي أعلى منه. وحد الـ' + fmt2_(T) + ' مستنتج من البيانات نفسها: ' +
-            t.below + ' حركة أسفله مقابل ' + t.above + ' فوقه.';
+            arCount(t.below, 'movement') + ' أسفله مقابل ' + t.above + ' فوقه.';
           cluster.forEach(function (r) {
             out.push(flag_('STRUCTURING', 'high', r.id, msg, ev));
           });
@@ -1811,8 +1854,8 @@ var BoxEngine = (function () {
       if (c.n < minN) {
         notes.push({ rule_id: 'PRICE_OUTLIER', status: 'insufficient_data', cluster_id: cid,
           n: c.n, required: minN,
-          reason_ar: 'بيانات غير كافية لتحليل سعر «' + c.label + '» (المتاح ' + c.n +
-            ' عملية شراء، والمطلوب ' + minN + ')' });
+          reason_ar: 'بيانات غير كافية لتحليل سعر «' + c.label + '» (المتاح ' + arCount(c.n, 'purchase') +
+            '، والمطلوب ' + minN + ')' });
         return;
       }
       if (!c.price || !c.price.scale) {
@@ -1825,7 +1868,7 @@ var BoxEngine = (function () {
         if (z === null || Math.abs(z) <= zCut) return;
         flags.push(flag_('PRICE_OUTLIER', Math.abs(z) > zCut * 2 ? 'high' : 'medium', occ.movement_id,
           'سعر وحدة «' + c.label + '» في هذه الحركة ' + fmt2_(occ.unit_price) +
-          '، والوسيط التاريخي ' + fmt2_(c.price.median) + ' من ' + c.n + ' عملية شراء' +
+          '، والوسيط التاريخي ' + fmt2_(c.price.median) + ' من ' + arCount(c.n, 'purchase') +
           ' (المدى ' + fmt2_(c.price.min) + '–' + fmt2_(c.price.max) + ')' +
           ' — درجة انحراف ' + z + ' مقياس مقاوم للقيم الشاذة (الوسيط والانحراف المطلق الوسيط، لا المتوسط)',
           [{ row_id: String(occ.movement_id), transaction_date: occ.transaction_date,
@@ -1869,7 +1912,7 @@ var BoxEngine = (function () {
         });
         var msg = 'يشتري ' + person + ' صنف «' + c.label + '» بوسيط سعر وحدة ' + fmt2_(myMed) +
           ' مقابل ' + fmt2_(theirMed) + ' لباقي المسؤولين — أي أعلى بنسبة ' +
-          Math.round((ratio - 1) * 100) + '% (' + mine.length + ' عملية مقابل ' + theirs.length + ')';
+          Math.round((ratio - 1) * 100) + '% (' + arCount(mine.length, 'op') + ' مقابل ' + theirs.length + ')';
         rows.forEach(function (occ) {
           flags.push(flag_('PEER_GAP', ratio >= ratioCut * 1.6 ? 'high' : 'medium', occ.movement_id, msg,
             rows.map(function (r) {
@@ -1918,7 +1961,7 @@ var BoxEngine = (function () {
 
         var msg = 'سعر وحدة «' + c.label + '» لدى ' + person + ' في ارتفاع مطّرد: من ' +
           fmt2_(first) + ' في ' + mine[0].transaction_date + ' إلى ' + fmt2_(last) + ' في ' +
-          mine[mine.length - 1].transaction_date + ' عبر ' + mine.length + ' عملية (معامل اتجاه ' +
+          mine[mine.length - 1].transaction_date + ' عبر ' + arCount(mine.length, 'op') + ' (معامل اتجاه ' +
           myTau + ')' +
           (theirTau === null
             ? ' — ولا توجد بيانات كافية لباقي المسؤولين للمقارنة'
@@ -1961,8 +2004,8 @@ var BoxEngine = (function () {
       if (pop.length < minAcctN) {
         notes.push({ rule_id: 'NEW_ITEM_HIGH_VALUE', status: 'insufficient_data', cluster_id: cid,
           n: pop.length, required: minAcctN,
-          reason_ar: 'بيانات غير كافية لحساب المعتاد لحساب ' + acct + ' (المتاح ' + pop.length +
-            ' بند، والمطلوب ' + minAcctN + ')' });
+          reason_ar: 'بيانات غير كافية لحساب المعتاد لحساب ' + acct + ' (المتاح ' + arCount(pop.length, 'item') +
+            '، والمطلوب ' + minAcctN + ')' });
         return;
       }
       var cut = percentile(pop, pct);
@@ -1970,7 +2013,7 @@ var BoxEngine = (function () {
       flags.push(flag_('NEW_ITEM_HIGH_VALUE', 'medium', occ.movement_id,
         'صنف «' + c.label + '» لم يُشترَ من قبل في هذه الفترة، وسعره ' + fmt2_(occ.price) +
         ' أعلى من ' + Math.round(pct * 100) + '% من بنود حساب ' + acct +
-        ' (الحد ' + fmt2_(cut) + ' من ' + pop.length + ' بند)',
+        ' (الحد ' + fmt2_(cut) + ' من ' + arCount(pop.length, 'item') + ')',
         [{ row_id: String(occ.movement_id), transaction_date: occ.transaction_date,
            item: occ.item_norm, price: occ.price, account_cut: round_(cut, 2),
            account_n: pop.length, responsible_person: occ.responsible_person }]));
@@ -2000,7 +2043,7 @@ var BoxEngine = (function () {
         if (pz !== null && Math.abs(pz) > zCut) return;       /* the price rule already has this row */
         flags.push(flag_('QUANTITY_ANOMALY', 'medium', occ.movement_id,
           'كمية «' + c.label + '» في هذه الحركة ' + fmt2_(q) + ' مقابل وسيط ' +
-          fmt2_(c.qty.median) + ' من ' + c.n + ' عملية شراء، مع أن سعر الوحدة طبيعي — ' +
+          fmt2_(c.qty.median) + ' من ' + arCount(c.n, 'purchase') + '، مع أن سعر الوحدة طبيعي — ' +
           'درجة انحراف الكمية ' + qz,
           [{ row_id: String(occ.movement_id), transaction_date: occ.transaction_date,
              item: occ.item_norm, qty: q, qty_median: c.qty.median, modified_z: qz,
@@ -2045,6 +2088,514 @@ var BoxEngine = (function () {
       (byRow[f.row_id] = byRow[f.row_id] || []).push(f);
     });
     return { flags: flags, by_row: byRow, notes: notes, stats: stats };
+  }
+
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // §7 Tier 3 — distributional and behavioural, per entity
+  // ═══════════════════════════════════════════════════════════════════════
+  //
+  // These rules describe a PERSON or an ACCOUNT, not a row, so their findings
+  // carry an `entity` and their `row_id` is null. That distinction matters on
+  // screen: "this movement is wrong" and "this person's spending has changed
+  // shape" are different claims and must not render as the same badge.
+  //
+  // Every one of them is gated on a minimum n, and Benford's is gated hard at
+  // 300. That gate is a CORRECTNESS REQUIREMENT, not a statistical nicety. A
+  // Benford verdict on forty rows is noise, and this page attaches it to a
+  // named employee. Below the gate the page must show "بيانات غير كافية" and
+  // nothing else — there is no such thing as a weak accusation.
+
+  var TIER3 = {
+    BENFORD_MIN_N: 300,
+    BENFORD_MAD_MARGINAL: 0.012,   /* Nigrini's conformity bands, first digit */
+    BENFORD_MAD_NONCONFORM: 0.015,
+    ROUND_MIN_N: 30,
+    ROUND_Z: 3,
+    ROUND_DIVISORS: [100, 50],
+    VELOCITY_MIN_DAYS: 20,
+    VELOCITY_MIN_COUNT: 5,
+    VELOCITY_P: 0.001,
+    DRIFT_MIN_N: 30,               /* per side */
+    DRIFT_PSI: 0.25,               /* the conventional "significant shift" cut */
+    SEASON_MIN_MONTHS: 6,
+    SEASON_Z: 3.5
+  };
+
+  function firstDigit_(v) {
+    var s = String(Math.abs(Number(v))).replace(/[^0-9]/g, '').replace(/^0+/, '');
+    return s.length ? Number(s.charAt(0)) : null;
+  }
+
+  function secondDigit_(v) {
+    var s = String(Math.abs(Number(v))).replace(/[^0-9]/g, '').replace(/^0+/, '');
+    return s.length >= 2 ? Number(s.charAt(1)) : null;
+  }
+
+  /**
+   * Benford's law on the leading digit.
+   *
+   * Returns { status, n, observed, expected, chi2, mad, verdict_ar } — or
+   * status 'insufficient_data' below the gate, with NO verdict of any kind.
+   * Returning a weak verdict here and letting the caller decide whether to
+   * show it would be the same mistake one layer up: the gate has to be where
+   * the number is computed.
+   */
+  function benfordFirstDigit(values, opts) {
+    var o = opts || {};
+    var minN = o.benford_min_n === undefined ? TIER3.BENFORD_MIN_N : o.benford_min_n;
+    var digits = (values || []).map(firstDigit_).filter(function (d) { return d >= 1 && d <= 9; });
+    var n = digits.length;
+    if (n < minN) {
+      return {
+        status: 'insufficient_data', n: n, required: minN,
+        reason_ar: 'بيانات غير كافية لتحليل بنفورد (المتاح ' + arCount(n, 'amount') + '، والمطلوب ' + minN +
+          ' على الأقل) — لا يصدر أي حكم دون ذلك'
+      };
+    }
+    var observed = [0, 0, 0, 0, 0, 0, 0, 0, 0];
+    digits.forEach(function (d) { observed[d - 1]++; });
+    var chi2 = 0, madSum = 0, expected = [];
+    for (var d = 1; d <= 9; d++) {
+      var p = Math.log(1 + 1 / d) / Math.LN10;
+      var e = p * n;
+      expected.push(round_(p, 6));
+      chi2 += ((observed[d - 1] - e) * (observed[d - 1] - e)) / e;
+      madSum += Math.abs(observed[d - 1] / n - p);
+    }
+    var madVal = madSum / 9;
+    var verdict = madVal < 0.006 ? 'مطابقة وثيقة'
+      : madVal < TIER3.BENFORD_MAD_MARGINAL ? 'مطابقة مقبولة'
+      : madVal < TIER3.BENFORD_MAD_NONCONFORM ? 'مطابقة حدية'
+      : 'عدم مطابقة';
+    return {
+      status: 'ok', n: n, observed: observed, expected: expected,
+      chi2: round_(chi2, 3), df: 8, mad: round_(madVal, 5),
+      conforms: madVal < TIER3.BENFORD_MAD_NONCONFORM,
+      verdict_ar: verdict
+    };
+  }
+
+  /** Benford on the SECOND digit (0–9). Same gate, same refusal. */
+  function benfordSecondDigit(values, opts) {
+    var o = opts || {};
+    var minN = o.benford_min_n === undefined ? TIER3.BENFORD_MIN_N : o.benford_min_n;
+    var digits = (values || []).map(secondDigit_).filter(function (d) { return d !== null && d >= 0 && d <= 9; });
+    var n = digits.length;
+    if (n < minN) {
+      return { status: 'insufficient_data', n: n, required: minN,
+        reason_ar: 'بيانات غير كافية لتحليل بنفورد للرقم الثاني (المتاح ' + n + '، والمطلوب ' + minN + ')' };
+    }
+    var observed = [], expected = [], d, k;
+    for (d = 0; d <= 9; d++) observed.push(0);
+    digits.forEach(function (x) { observed[x]++; });
+    var chi2 = 0, madSum = 0;
+    for (d = 0; d <= 9; d++) {
+      var p = 0;
+      for (k = 1; k <= 9; k++) p += Math.log(1 + 1 / (10 * k + d)) / Math.LN10;
+      expected.push(round_(p, 6));
+      var e = p * n;
+      chi2 += ((observed[d] - e) * (observed[d] - e)) / e;
+      madSum += Math.abs(observed[d] / n - p);
+    }
+    var madVal = madSum / 10;
+    return { status: 'ok', n: n, observed: observed, expected: expected,
+      chi2: round_(chi2, 3), df: 9, mad: round_(madVal, 5),
+      conforms: madVal < TIER3.BENFORD_MAD_NONCONFORM };
+  }
+
+  /**
+   * Benford per entity. Entities are built by the caller's grouping key so the
+   * same function serves "per person" and "per account".
+   */
+  function ruleBenford(rows, opts) {
+    var o = opts || {};
+    var keyFn = o.entity_key || function (r) { return String(r.responsible_person || '').trim(); };
+    var kind = o.entity_kind || 'المسؤول';
+    var groups = {};
+    (rows || []).forEach(function (r) {
+      var amt = amountOf_(r);
+      if (amt === null || amt <= 0) return;
+      var k = keyFn(r);
+      if (!k) return;
+      (groups[k] = groups[k] || []).push(r);
+    });
+
+    var flags = [], notes = [];
+    Object.keys(groups).forEach(function (k) {
+      var rowsFor = groups[k];
+      var amounts = rowsFor.map(amountOf_);
+      var b = benfordFirstDigit(amounts, o);
+      if (b.status !== 'ok') {
+        notes.push({ rule_id: 'BENFORD', status: 'insufficient_data', entity: k, entity_kind: kind,
+          n: b.n, required: b.required, reason_ar: kind + ' ' + k + ': ' + b.reason_ar });
+        return;
+      }
+      if (b.conforms) return;
+      var f = flag_('BENFORD', 'medium', null,
+        'توزيع الرقم الأول لمبالغ ' + kind + ' ' + k + ' لا يطابق قانون بنفورد على ' + arCount(b.n, 'amount') +
+        ' (متوسط الانحراف المطلق ' + b.mad + '، كاي-تربيع ' + b.chi2 + ' بدرجات حرية 8) — ' +
+        b.verdict_ar + '. هذا مؤشر إحصائي على مستوى المجموعة، وليس اتهاماً لأي حركة بعينها؛ ' +
+        'يُستخدَم لترتيب أولوية المراجعة فقط',
+        rowsFor.slice(0, 20).map(function (r) {
+          return { row_id: String(r.id), transaction_date: r.transaction_date,
+                   transaction_amount: amountOf_(r) };
+        }));
+      f.entity = k;
+      f.entity_kind = kind;
+      f.detail = b;
+      flags.push(f);
+    });
+    return { flags: flags, notes: notes };
+  }
+
+  /**
+   * ROUND_NUMBER_BIAS — a person producing far more round amounts than the
+   * population does. Estimated amounts cluster on round numbers; measured ones
+   * do not.
+   *
+   * The baseline is THIS POPULATION's own rate, not a textbook figure: in an
+   * organisation that mostly buys in round quantities, round totals are normal
+   * and a fixed expectation would flag everyone.
+   */
+  function ruleRoundNumberBias(rows, opts) {
+    var o = opts || {};
+    var minN = o.round_min_n === undefined ? TIER3.ROUND_MIN_N : o.round_min_n;
+    var zCut = o.round_z === undefined ? TIER3.ROUND_Z : o.round_z;
+    var divisors = o.round_divisors || TIER3.ROUND_DIVISORS;
+    var keyFn = o.entity_key || function (r) { return String(r.responsible_person || '').trim(); };
+    var kind = o.entity_kind || 'المسؤول';
+
+    var all = (rows || []).filter(function (r) { return amountOf_(r) !== null && amountOf_(r) > 0; });
+    if (!all.length) return { flags: [], notes: [] };
+
+    var flags = [], notes = [];
+    divisors.forEach(function (div) {
+      var isRound = function (r) { return Math.abs(amountOf_(r) % div) < 1e-9; };
+      var p0 = all.filter(isRound).length / all.length;
+      if (p0 <= 0 || p0 >= 1) return;
+
+      var groups = {};
+      all.forEach(function (r) {
+        var k = keyFn(r);
+        if (!k) return;
+        (groups[k] = groups[k] || []).push(r);
+      });
+      Object.keys(groups).forEach(function (k) {
+        var g = groups[k];
+        if (g.length < minN) {
+          notes.push({ rule_id: 'ROUND_NUMBER_BIAS', status: 'insufficient_data', entity: k,
+            entity_kind: kind, n: g.length, required: minN,
+            reason_ar: kind + ' ' + k + ': بيانات غير كافية لاختبار الأرقام المستديرة (المتاح ' +
+              g.length + '، والمطلوب ' + minN + ')' });
+          return;
+        }
+        var hits = g.filter(isRound).length;
+        var pHat = hits / g.length;
+        var se = Math.sqrt(p0 * (1 - p0) / g.length);
+        if (!se) return;
+        var z = (pHat - p0) / se;
+        if (z < zCut) return;
+        var f = flag_('ROUND_NUMBER_BIAS', 'medium', null,
+          Math.round(pHat * 100) + '% من مبالغ ' + kind + ' ' + k + ' من مضاعفات ' + div +
+          ' (' + hits + ' من ' + g.length + ')، مقابل ' + Math.round(p0 * 100) +
+          '% في باقي البيانات — انحراف ' + round_(z, 2) + ' وحدة معيارية. ' +
+          'المبالغ المقدَّرة تتكدّس على الأرقام المستديرة، والمقيسة لا تفعل',
+          g.filter(isRound).slice(0, 20).map(function (r) {
+            return { row_id: String(r.id), transaction_date: r.transaction_date,
+                     transaction_amount: amountOf_(r) };
+          }));
+        f.entity = k;
+        f.entity_kind = kind;
+        f.detail = { divisor: div, rate: round_(pHat, 4), baseline: round_(p0, 4), z: round_(z, 3), n: g.length };
+        flags.push(f);
+      });
+    });
+    return { flags: flags, notes: notes };
+  }
+
+  /** Poisson upper tail P(X >= k) for mean lambda. k is small here. */
+  function poissonTail(k, lambda) {
+    if (lambda <= 0) return k > 0 ? 0 : 1;
+    var cum = 0, term = Math.exp(-lambda);
+    for (var i = 0; i < k; i++) {
+      cum += term;
+      term = term * lambda / (i + 1);
+    }
+    var tail = 1 - cum;
+    return tail < 0 ? 0 : tail;
+  }
+
+  /**
+   * VELOCITY_BURST — a person filing far more movements in one day than they
+   * normally do. Compared against THEIR OWN baseline, never against the busiest
+   * person in the office: a storekeeper who files twenty a day every day is
+   * doing their job, and a rule that cannot tell them apart from someone who
+   * suddenly files twenty after months of two is not measuring anything.
+   */
+  function ruleVelocityBurst(rows, opts) {
+    var o = opts || {};
+    var minDays = o.velocity_min_days === undefined ? TIER3.VELOCITY_MIN_DAYS : o.velocity_min_days;
+    var minCount = o.velocity_min_count === undefined ? TIER3.VELOCITY_MIN_COUNT : o.velocity_min_count;
+    var pCut = o.velocity_p === undefined ? TIER3.VELOCITY_P : o.velocity_p;
+    var keyFn = o.entity_key || function (r) { return String(r.responsible_person || '').trim(); };
+    var kind = o.entity_kind || 'المسؤول';
+
+    var groups = {};
+    (rows || []).forEach(function (r) {
+      if (!r || !r.transaction_date) return;
+      var k = keyFn(r);
+      if (!k) return;
+      (groups[k] = groups[k] || []).push(r);
+    });
+
+    var flags = [], notes = [];
+    Object.keys(groups).forEach(function (k) {
+      var byDay = {};
+      groups[k].forEach(function (r) { (byDay[r.transaction_date] = byDay[r.transaction_date] || []).push(r); });
+      var days = Object.keys(byDay);
+      if (days.length < minDays) {
+        notes.push({ rule_id: 'VELOCITY_BURST', status: 'insufficient_data', entity: k, entity_kind: kind,
+          n: days.length, required: minDays,
+          reason_ar: kind + ' ' + k + ': بيانات غير كافية لحساب المعدل اليومي المعتاد (المتاح ' +
+            arCount(days.length, 'workday') + '، والمطلوب ' + minDays + ')' });
+        return;
+      }
+      var counts = days.map(function (d) { return byDay[d].length; });
+      var lambda = median(counts);
+      if (!lambda || lambda <= 0) lambda = counts.reduce(function (a, b) { return a + b; }, 0) / counts.length;
+      if (!lambda || lambda <= 0) return;
+
+      days.forEach(function (d) {
+        var kCount = byDay[d].length;
+        if (kCount < minCount) return;
+        var p = poissonTail(kCount, lambda);
+        if (p >= pCut) return;
+        var f = flag_('VELOCITY_BURST', 'medium', null,
+          'سجّل ' + kind + ' ' + k + ' عدد ' + arCount(kCount, 'movement') + ' في يوم ' + d +
+          '، والمعتاد له ' + round_(lambda, 2) + ' حركة في اليوم عبر ' + arCount(days.length, 'workday') +
+          ' — احتمال ذلك بالصدفة أقل من ' + (p < 0.0001 ? '0.01%' : round_(p * 100, 3) + '%'),
+          byDay[d].slice(0, 20).map(function (r) {
+            return { row_id: String(r.id), transaction_date: r.transaction_date,
+                     transaction_amount: amountOf_(r) };
+          }));
+        f.entity = k;
+        f.entity_kind = kind;
+        f.detail = { day: d, count: kCount, baseline: round_(lambda, 3), p: p, active_days: days.length };
+        flags.push(f);
+      });
+    });
+    return { flags: flags, notes: notes };
+  }
+
+  /**
+   * ACCOUNT_MIX_DRIFT — the shape of a person's spending across accounts,
+   * compared with their OWN earlier history. Population Stability Index; > 0.25
+   * is the conventional "significant shift".
+   *
+   * This is what catches miscoding used to hide spend: the totals can look
+   * entirely normal while the mix moves.
+   */
+  function populationStabilityIndex(recent, baseline) {
+    var keys = {};
+    Object.keys(recent).forEach(function (k) { keys[k] = true; });
+    Object.keys(baseline).forEach(function (k) { keys[k] = true; });
+    var rTot = 0, bTot = 0;
+    Object.keys(recent).forEach(function (k) { rTot += recent[k]; });
+    Object.keys(baseline).forEach(function (k) { bTot += baseline[k]; });
+    if (!rTot || !bTot) return null;
+    var psi = 0, parts = [];
+    Object.keys(keys).forEach(function (k) {
+      /* A small floor keeps a category that is absent on one side from making
+         the index infinite; without it one new account code dominates. */
+      var a = Math.max((recent[k] || 0) / rTot, 0.0001);
+      var b = Math.max((baseline[k] || 0) / bTot, 0.0001);
+      var part = (a - b) * Math.log(a / b);
+      psi += part;
+      parts.push({ key: k, recent: round_(a, 4), baseline: round_(b, 4), contribution: round_(part, 4) });
+    });
+    parts.sort(function (x, y) { return y.contribution - x.contribution; });
+    return { psi: round_(psi, 4), parts: parts };
+  }
+
+  function ruleAccountMixDrift(rows, opts) {
+    var o = opts || {};
+    var minN = o.drift_min_n === undefined ? TIER3.DRIFT_MIN_N : o.drift_min_n;
+    var psiCut = o.drift_psi === undefined ? TIER3.DRIFT_PSI : o.drift_psi;
+    var splitDate = o.drift_split_date || null;
+    var keyFn = o.entity_key || function (r) { return String(r.responsible_person || '').trim(); };
+    var kind = o.entity_kind || 'المسؤول';
+
+    var groups = {};
+    (rows || []).forEach(function (r) {
+      if (!r || !r.transaction_date || !r.chart_of_accounts) return;
+      var k = keyFn(r);
+      if (!k) return;
+      (groups[k] = groups[k] || []).push(r);
+    });
+
+    var flags = [], notes = [];
+    Object.keys(groups).forEach(function (k) {
+      var g = groups[k].slice().sort(function (a, b) {
+        return a.transaction_date < b.transaction_date ? -1 : a.transaction_date > b.transaction_date ? 1 : 0;
+      });
+      var recent = {}, baseline = {}, nR = 0, nB = 0;
+      if (splitDate) {
+        g.forEach(function (r) {
+          var t = r.transaction_date >= splitDate ? recent : baseline;
+          t[r.chart_of_accounts] = (t[r.chart_of_accounts] || 0) + 1;
+          if (t === recent) nR++; else nB++;
+        });
+      } else {
+        /* No split given: the most recent third against the rest. */
+        var cut = Math.floor(g.length * 2 / 3);
+        g.forEach(function (r, i) {
+          var t = i >= cut ? recent : baseline;
+          t[r.chart_of_accounts] = (t[r.chart_of_accounts] || 0) + 1;
+          if (t === recent) nR++; else nB++;
+        });
+      }
+      if (nR < minN || nB < minN) {
+        notes.push({ rule_id: 'ACCOUNT_MIX_DRIFT', status: 'insufficient_data', entity: k, entity_kind: kind,
+          n: Math.min(nR, nB), required: minN,
+          reason_ar: kind + ' ' + k + ': بيانات غير كافية لمقارنة توزيع الحسابات (' + nB +
+            ' سابقة و' + nR + ' حديثة، والمطلوب ' + minN + ' لكل جانب)' });
+        return;
+      }
+      var psi = populationStabilityIndex(recent, baseline);
+      if (!psi || psi.psi < psiCut) return;
+      var top = psi.parts.slice(0, 3).map(function (p) {
+        return 'حساب ' + p.key + ' من ' + Math.round(p.baseline * 100) + '% إلى ' + Math.round(p.recent * 100) + '%';
+      });
+      var f = flag_('ACCOUNT_MIX_DRIFT', 'medium', null,
+        'تغيّر توزيع مصروفات ' + kind + ' ' + k + ' بين الحسابات مقارنةً بسجله السابق ' +
+        '(مؤشر الاستقرار ' + psi.psi + '، والحد المعتاد ' + psiCut + ') — أبرز التحولات: ' +
+        top.join('، ') + '. الإجماليات قد تبدو طبيعية بينما يتغيّر التوزيع، وهو ما يُخفي المصروف بإعادة تصنيفه',
+        g.slice(-20).map(function (r) {
+          return { row_id: String(r.id), transaction_date: r.transaction_date,
+                   chart_of_accounts: r.chart_of_accounts, transaction_amount: amountOf_(r) };
+        }));
+      f.entity = k;
+      f.entity_kind = kind;
+      f.detail = { psi: psi.psi, parts: psi.parts.slice(0, 6), n_recent: nR, n_baseline: nB };
+      flags.push(f);
+    });
+    return { flags: flags, notes: notes };
+  }
+
+  /**
+   * SEASONALITY — this month's spend for an account against its own trailing
+   * monthly distribution, on the median/MAD scale for the same reason Tier 2
+   * uses it. Needs at least SEASON_MIN_MONTHS complete prior months.
+   *
+   * The current (partial) month is EXCLUDED from its own baseline, and it is
+   * compared only when the caller supplies a completed-month figure — a partial
+   * month measured against complete ones is the same mistake the four windows
+   * were built to avoid.
+   */
+  function ruleSeasonality(rows, opts) {
+    var o = opts || {};
+    var minMonths = o.season_min_months === undefined ? TIER3.SEASON_MIN_MONTHS : o.season_min_months;
+    var zCut = o.season_z === undefined ? TIER3.SEASON_Z : o.season_z;
+    var currentMonth = o.current_month || null;    /* 'YYYY-MM'; required */
+    var flags = [], notes = [];
+    if (!currentMonth) {
+      notes.push({ rule_id: 'SEASONALITY', status: 'not_run',
+        reason_ar: 'لم يُحدَّد الشهر الحالي، فلا تُشغَّل مقارنة الموسمية' });
+      return { flags: flags, notes: notes };
+    }
+
+    var byAccount = {};
+    (rows || []).forEach(function (r) {
+      var amt = amountOf_(r);
+      if (amt === null || !r.transaction_date || !r.chart_of_accounts) return;
+      if (String(r.transaction_type) === 'debit') return;      /* spend only */
+      var mon = String(r.transaction_date).slice(0, 7);
+      var a = String(r.chart_of_accounts);
+      var m = byAccount[a] = byAccount[a] || {};
+      m[mon] = (m[mon] || 0) + amt;
+    });
+
+    Object.keys(byAccount).forEach(function (acct) {
+      var months = byAccount[acct];
+      var prior = Object.keys(months).filter(function (m) { return m < currentMonth; }).sort();
+      if (prior.length < minMonths) {
+        notes.push({ rule_id: 'SEASONALITY', status: 'insufficient_data', entity: acct,
+          entity_kind: 'الحساب', n: prior.length, required: minMonths,
+          reason_ar: 'حساب ' + acct + ': بيانات غير كافية لمقارنة الموسمية (المتاح ' +
+            arCount(prior.length, 'month') + ' مكتملة، والمطلوب ' + minMonths + ')' });
+        return;
+      }
+      if (months[currentMonth] === undefined) return;
+      var hist = prior.map(function (m) { return months[m]; });
+      var st = robustStats(hist);
+      var cur = months[currentMonth];
+      var z = modifiedZ(cur, st);
+
+      /* A history with NO dispersion at all — the same figure every month —
+         makes every scale zero and the z-score undefined. That is not "no
+         signal": it is the strongest possible baseline. An account that spent
+         exactly the same for a year and then nine times that is precisely what
+         this rule is for, and the first version of it returned silence there.
+         So the departure is expressed as a direct ratio instead, and only a
+         large one counts — with no variance there is no noise floor to
+         calibrate against. `basis` reports which comparison was used. */
+      var reason = null, detail = null;
+      if (z !== null && Math.abs(z) > zCut) {
+        reason = 'مصروف حساب ' + acct + ' في شهر ' + currentMonth + ' بلغ ' + fmt2_(cur) +
+          ' مقابل وسيط ' + fmt2_(st.median) + ' عبر ' + arCount(prior.length, 'month') + ' سابقة (المدى ' +
+          fmt2_(st.min) + '–' + fmt2_(st.max) + ') — درجة انحراف ' + z +
+          (z > 0 ? ' بالزيادة' : ' بالنقصان');
+        detail = { month: currentMonth, value: round_(cur, 2), median: st.median,
+                   n_months: prior.length, modified_z: z, basis: 'modified_z' };
+      } else if (z === null && st.scale === 0 && st.median > 0 &&
+                 Math.abs(cur - st.median) / st.median >= (o.season_flat_ratio || 0.5)) {
+        var mult = round_(cur / st.median, 2);
+        reason = 'مصروف حساب ' + acct + ' في شهر ' + currentMonth + ' بلغ ' + fmt2_(cur) +
+          ' بينما كان ثابتاً عند ' + fmt2_(st.median) + ' في كل شهر من الـ' + prior.length +
+          ' شهراً السابقة دون أي تغيّر — أي ' + mult + ' ضعف' +
+          (cur > st.median ? ' بالزيادة' : ' بالنقصان') +
+          '. لا يوجد تشتت تاريخي تُحسب عليه درجة انحراف، فالمقارنة هنا نسبة مباشرة';
+        detail = { month: currentMonth, value: round_(cur, 2), median: st.median,
+                   n_months: prior.length, ratio: mult, basis: 'flat_history_ratio' };
+      }
+      if (!reason) return;
+
+      var f = flag_('SEASONALITY', 'low', null, reason, []);
+      f.entity = acct;
+      f.entity_kind = 'الحساب';
+      f.detail = detail;
+      flags.push(f);
+    });
+    return { flags: flags, notes: notes };
+  }
+
+  /**
+   * Run Tier 3. Findings are ENTITY-level: `row_id` is null, `entity` and
+   * `entity_kind` say who or what the finding is about, and `evidence` carries
+   * a sample of the contributing rows so a reader can start somewhere.
+   *
+   * opts.current_month ('YYYY-MM') enables SEASONALITY; without it that rule
+   * reports not_run rather than guessing which month is current.
+   */
+  function runTier3(rows, opts) {
+    var o = opts || {};
+    var flags = [], notes = [];
+    [ruleBenford(rows, o),
+     ruleRoundNumberBias(rows, o),
+     ruleVelocityBurst(rows, o),
+     ruleAccountMixDrift(rows, o),
+     ruleSeasonality(rows, o)].forEach(function (r) {
+      flags = flags.concat(r.flags);
+      notes = notes.concat(r.notes || []);
+    });
+
+    var byEntity = {};
+    flags.forEach(function (f) {
+      var k = (f.entity_kind || '') + ':' + (f.entity || '');
+      (byEntity[k] = byEntity[k] || []).push(f);
+    });
+    return { flags: flags, by_entity: byEntity, notes: notes };
   }
 
   // ═══════════════════════════════════════════════════════════════════════
@@ -2095,6 +2646,8 @@ var BoxEngine = (function () {
     percentile: percentile,
     median: median,
 
+    arCount: arCount,
+
     /* §7 Tier 1 — deterministic integrity */
     TIER1: TIER1,
     SEVERITY_AR: SEVERITY_AR,
@@ -2121,6 +2674,19 @@ var BoxEngine = (function () {
     ruleNewItemHighValue: ruleNewItemHighValue,
     ruleQuantityAnomaly: ruleQuantityAnomaly,
     runTier2: runTier2,
+
+    /* §7 Tier 3 — distributional / behavioural, per entity */
+    TIER3: TIER3,
+    benfordFirstDigit: benfordFirstDigit,
+    benfordSecondDigit: benfordSecondDigit,
+    poissonTail: poissonTail,
+    populationStabilityIndex: populationStabilityIndex,
+    ruleBenford: ruleBenford,
+    ruleRoundNumberBias: ruleRoundNumberBias,
+    ruleVelocityBurst: ruleVelocityBurst,
+    ruleAccountMixDrift: ruleAccountMixDrift,
+    ruleSeasonality: ruleSeasonality,
+    runTier3: runTier3,
 
     /* §6 — period windows */
     daysInMonth: daysInMonth,

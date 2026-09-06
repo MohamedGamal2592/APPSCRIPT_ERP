@@ -54,6 +54,33 @@ const auditIndex = {};
   (auditIndex[String(e.movement_id)] = auditIndex[String(e.movement_id)] || []).push(e);
 });
 
+/* ── Arabic numeral–noun agreement ───────────────────────────────────────
+ * Every sentence this engine produces counts something, and Arabic agreement
+ * ALTERNATES: plural for 3–10, singular again from 11. A naive
+ * `n === 1 ? x : xs` is right at 1 and 5 and wrong at 11, which is most of the
+ * numbers a real page shows. Broken Arabic in a findings page costs the
+ * arithmetic its credibility too, so it is asserted rather than eyeballed. */
+console.log('Arabic numeral agreement');
+[
+  [1, 'op', 'عملية'], [2, 'op', 'عمليتان'], [3, 'op', '3 عمليات'], [10, 'op', '10 عمليات'],
+  [11, 'op', '11 عملية'], [41, 'op', '41 عملية'], [100, 'op', '100 عملية'], [111, 'op', '111 عملية'],
+  [1, 'day', 'يوم'], [2, 'day', 'يومان'], [3, 'day', '3 أيام'], [12, 'day', '12 يوماً'],
+  [1, 'movement', 'حركة'], [5, 'movement', '5 حركات'], [19, 'movement', '19 حركة'],
+  [12, 'month', '12 شهراً'], [3, 'month', '3 أشهر'],
+  [13, 'item', '13 بنداً'], [4, 'item', '4 بنود'],
+  [350, 'amount', '350 مبلغاً']
+].forEach(function (c) {
+  ok(E.arCount(c[0], c[1]) === c[2], 'arCount(' + c[0] + ', ' + c[1] + ') = "' + c[2] + '"',
+    '"' + E.arCount(c[0], c[1]) + '"');
+});
+/* 1 and 2 carry the count in the noun, so the digit would be redundant. */
+ok(E.arCount(1, 'op').indexOf('1') === -1, 'the digit is dropped for 1 — "عملية", not "1 عملية"');
+ok(E.arCount(2, 'op').indexOf('2') === -1, 'and for 2');
+
+/* No finding may contain a bare "N عملية" pattern with N in 3..10, which is
+   the exact mistake this helper exists to prevent. */
+console.log('');
+
 console.log('Tier 1 — ' + ROWS.length + ' synthetic rows in ' +
   Object.keys(FIX.rows.reduce(function (a, r) { a[r.group] = 1; return a; }, {})).length + ' scenario groups');
 
@@ -539,7 +566,292 @@ console.log('\nevery Tier 2 flag is explainable');
     'clusterPriceStats exposes the same median the rule used', r.stats[cid].price.median);
 })();
 
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * Tier 3 — distributional and behavioural, per entity
+ *
+ * These findings describe a PERSON or an ACCOUNT, not a movement, so they are
+ * checked for that shape too: row_id must be null and entity must be set. On
+ * screen "this movement is wrong" and "this person's spending changed shape"
+ * cannot render as the same badge.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+console.log('\n── Tier 3 — distributional and behavioural ──────────────────────────');
+
+/* A small deterministic PRNG, so a failure here is reproducible rather than
+   something that happens one run in twenty. */
+function makeRnd(seed) {
+  let s = seed;
+  return function () { s = (s * 1103515245 + 12345) % 2147483648; return s / 2147483648; };
+}
+
+function mrow(id, date, amount, person, account, type) {
+  return {
+    id: String(id), transaction_date: date, transaction_details: '1 كيلو زيت ب ' + amount,
+    transaction_amount: String(amount), transaction_type: type || 'credit',
+    chart_of_accounts: account || '310500', responsible_person: person, box_code: '1',
+    created_at: date + ' 10:00:00', updated_at: date + ' 10:00:00', is_revised: '0'
+  };
+}
+function dseq(i) {
+  const d = new Date(Date.UTC(2026, 0, 1 + i));
+  return d.toISOString().slice(0, 10);
+}
+
+/* ── THE BENFORD GATE ────────────────────────────────────────────────────
+ * n >= 300, and the boundary is tested exactly. A Benford verdict on forty
+ * rows is noise attached to a named employee, so this gate is a correctness
+ * requirement rather than a statistical nicety. */
+console.log('\nBenford — the n >= 300 gate');
+(function () {
+  const rnd = makeRnd(7);
+  /* Deliberately NON-conforming amounts: every one starts with 5 or 6. If the
+     gate leaked, this is exactly the sample that would produce a verdict. */
+  const skewed = [];
+  for (let i = 0; i < 400; i++) skewed.push(500 + Math.floor(rnd() * 200));
+
+  ok(E.benfordFirstDigit(skewed.slice(0, 299)).status === 'insufficient_data',
+    '299 amounts → insufficient_data, no verdict of any kind');
+  ok(E.benfordFirstDigit(skewed.slice(0, 300)).status === 'ok',
+    '300 amounts → the test runs; the boundary is exactly 300');
+
+  const below = E.benfordFirstDigit(skewed.slice(0, 299));
+  ok(below.verdict_ar === undefined && below.conforms === undefined && below.chi2 === undefined,
+    'below the gate NOTHING is returned that could be read as a verdict',
+    JSON.stringify(below));
+  ok(/غير كافية/.test(below.reason_ar), 'and the refusal is in Arabic', below.reason_ar);
+
+  const above = E.benfordFirstDigit(skewed.slice(0, 300));
+  ok(above.conforms === false, 'the skewed sample is correctly judged non-conforming', above.mad);
+  ok(above.n === 300 && above.df === 8, 'n and degrees of freedom are reported', above.n + '/' + above.df);
+})();
+
+console.log('\nBenford — conforming data is not flagged');
+(function () {
+  const rnd = makeRnd(11);
+  /* Log-uniform over three decades is the textbook Benford-conforming sample. */
+  const natural = [];
+  for (let i = 0; i < 1000; i++) natural.push(Math.round(Math.pow(10, 1 + 3 * rnd())));
+  const b = E.benfordFirstDigit(natural);
+  ok(b.status === 'ok' && b.conforms === true,
+    'log-uniform amounts conform (MAD ' + b.mad + ', χ² ' + b.chi2 + ')');
+  console.log('  log-uniform n=1000 → MAD ' + b.mad + ', χ² ' + b.chi2 + ' → ' + b.verdict_ar);
+  const rows = natural.map(function (a, i) { return mrow(11000 + i, dseq(i % 300), a, 'طبيعي'); });
+  const r = E.runTier3(rows, {});
+  ok(r.flags.filter(function (f) { return f.rule_id === 'BENFORD'; }).length === 0,
+    'and produce no BENFORD flag');
+})();
+
+console.log('\nBenford — a non-conforming entity IS flagged, as a group-level signal');
+(function () {
+  const rnd = makeRnd(13);
+  const rows = [];
+  for (let i = 0; i < 350; i++) rows.push(mrow(12000 + i, dseq(i % 300), 500 + Math.floor(rnd() * 200), 'مشبوه'));
+  const r = E.runTier3(rows, {});
+  const bf = r.flags.filter(function (f) { return f.rule_id === 'BENFORD'; });
+  ok(bf.length === 1, 'the entity is flagged once, not once per row', bf.length);
+  ok(bf[0].row_id === null, 'row_id is null — this is not a claim about any one movement');
+  ok(bf[0].entity === 'مشبوه' && !!bf[0].entity_kind, 'the entity is named', bf[0].entity);
+  ok(/ليس اتهاماً/.test(bf[0].reason_ar),
+    'and the reason says in so many words that it is not an accusation about a single row',
+    bf[0].reason_ar);
+  ok(/ترتيب أولوية المراجعة/.test(bf[0].reason_ar),
+    'and that it is for ordering review, which is the only defensible use of it');
+  if (SHOW) console.log('    ' + bf[0].reason_ar);
+})();
+
+/* Below the gate, a whole run must produce a note and no flag. */
+console.log('\nBenford — below the gate the PAGE gets a note, not a weak verdict');
+(function () {
+  const rnd = makeRnd(17);
+  const rows = [];
+  for (let i = 0; i < 40; i++) rows.push(mrow(13000 + i, dseq(i), 500 + Math.floor(rnd() * 200), 'قليل'));
+  const r = E.runTier3(rows, {});
+  ok(r.flags.filter(function (f) { return f.rule_id === 'BENFORD'; }).length === 0,
+    '40 rows of blatantly skewed amounts produce NO Benford flag');
+  const n = r.notes.filter(function (x) { return x.rule_id === 'BENFORD'; })[0];
+  ok(!!n && n.status === 'insufficient_data', 'and a note instead');
+  ok(n && /بيانات غير كافية/.test(n.reason_ar), 'reading بيانات غير كافية', n && n.reason_ar);
+})();
+
+/* ── ROUND_NUMBER_BIAS ──────────────────────────────────────────────────── */
+console.log('\nROUND_NUMBER_BIAS');
+console.log('  recipe: 200 population rows ~8% round-100, plus مقدِّر with 40 rows at 85% round');
+(function () {
+  const rnd = makeRnd(23);
+  const rows = [];
+  for (let i = 0; i < 200; i++) {
+    const round = rnd() < 0.08;
+    rows.push(mrow(14000 + i, dseq(i % 120), round ? 300 : 137 + Math.floor(rnd() * 500), 'عادي ' + (i % 5)));
+  }
+  for (let i = 0; i < 40; i++) {
+    const round = i % 20 !== 0 && i % 7 !== 0;
+    rows.push(mrow(14500 + i, dseq(i % 120), round ? (i % 5 + 1) * 100 : 233 + i, 'مقدِّر'));
+  }
+  const r = E.runTier3(rows, {});
+  const rb = r.flags.filter(function (f) { return f.rule_id === 'ROUND_NUMBER_BIAS' && f.entity === 'مقدِّر'; });
+  ok(rb.length >= 1, 'مقدِّر is flagged', rb.length);
+  ok(rb.length && rb[0].row_id === null && rb[0].entity === 'مقدِّر', 'as an entity-level finding');
+  ok(rb.length && /مقابل/.test(rb[0].reason_ar) && /%/.test(rb[0].reason_ar),
+    'and the reason compares their rate against the population rate', rb.length && rb[0].reason_ar);
+  const others = r.flags.filter(function (f) {
+    return f.rule_id === 'ROUND_NUMBER_BIAS' && f.entity !== 'مقدِّر';
+  });
+  ok(others.length === 0, 'and nobody matching the population rate is', others.map(function (f) { return f.entity; }).join(','));
+  if (SHOW && rb.length) console.log('    ' + rb[0].reason_ar);
+})();
+
+/* ── VELOCITY_BURST ─────────────────────────────────────────────────────── */
+console.log('\nVELOCITY_BURST');
+console.log('  recipe: مشغول files 1–2 movements a day for 30 days, then 15 in one day');
+(function () {
+  const rows = [];
+  let id = 15000;
+  for (let d = 0; d < 30; d++) {
+    const n = 1 + (d % 2);
+    for (let i = 0; i < n; i++) rows.push(mrow(id++, dseq(d), 100 + i, 'مشغول'));
+  }
+  for (let i = 0; i < 15; i++) rows.push(mrow(id++, dseq(40), 100 + i, 'مشغول'));
+  const r = E.runTier3(rows, {});
+  const vb = r.flags.filter(function (f) { return f.rule_id === 'VELOCITY_BURST'; });
+  ok(vb.length === 1, 'the one burst day is flagged, not the thirty ordinary ones', vb.length);
+  ok(vb[0].detail.count === 15 && vb[0].detail.baseline <= 2,
+    'against THEIR OWN baseline, not the busiest person in the office',
+    JSON.stringify(vb[0].detail));
+  ok(/المعتاد له/.test(vb[0].reason_ar), 'and the reason says so', vb[0].reason_ar);
+  if (SHOW) console.log('    ' + vb[0].reason_ar);
+})();
+
+(function () {
+  /* Someone who files 15 a day EVERY day is doing their job. */
+  const rows = [];
+  let id = 16000;
+  for (let d = 0; d < 30; d++) {
+    for (let i = 0; i < 15; i++) rows.push(mrow(id++, dseq(d), 100 + i, 'أمين المخزن'));
+  }
+  const r = E.runTier3(rows, {});
+  ok(r.flags.filter(function (f) { return f.rule_id === 'VELOCITY_BURST'; }).length === 0,
+    'a consistently busy storekeeper is never flagged — the baseline is their own');
+})();
+
+/* ── ACCOUNT_MIX_DRIFT ──────────────────────────────────────────────────── */
+console.log('\nACCOUNT_MIX_DRIFT');
+console.log('  recipe: مُحوِّل spends 90% on 310500 for 60 rows, then 90% on 310900 for 40');
+(function () {
+  const rows = [];
+  let id = 17000;
+  for (let i = 0; i < 60; i++) {
+    rows.push(mrow(id++, dseq(i), 100, 'مُحوِّل', i % 10 === 0 ? '310900' : '310500'));
+  }
+  for (let i = 0; i < 40; i++) {
+    rows.push(mrow(id++, dseq(60 + i), 100, 'مُحوِّل', i % 10 === 0 ? '310500' : '310900'));
+  }
+  const r = E.runTier3(rows, { drift_split_date: dseq(60) });
+  const dr = r.flags.filter(function (f) { return f.rule_id === 'ACCOUNT_MIX_DRIFT'; });
+  ok(dr.length === 1, 'the drift is flagged once, at entity level', dr.length);
+  ok(dr[0].detail.psi > 0.25, 'PSI is above the conventional 0.25 cut', dr[0].detail.psi);
+  ok(/الإجماليات قد تبدو طبيعية/.test(dr[0].reason_ar),
+    'and the reason names what this catches: totals that look fine while the mix moves');
+  if (SHOW) console.log('    ' + dr[0].reason_ar);
+})();
+
+(function () {
+  const rows = [];
+  let id = 18000;
+  for (let i = 0; i < 100; i++) {
+    rows.push(mrow(id++, dseq(i), 100, 'ثابت', i % 10 === 0 ? '310900' : '310500'));
+  }
+  const r = E.runTier3(rows, { drift_split_date: dseq(60) });
+  ok(r.flags.filter(function (f) { return f.rule_id === 'ACCOUNT_MIX_DRIFT'; }).length === 0,
+    'a stable account mix is not flagged');
+})();
+
+/* ── SEASONALITY ────────────────────────────────────────────────────────── */
+console.log('\nSEASONALITY');
+console.log('  recipe: account 312000 spends 900-1150/month for 12 months, then 9000');
+(function () {
+  const rnd = makeRnd(31);
+  const rows = [];
+  let id = 19000;
+  for (let m = 1; m <= 12; m++) {
+    const mm = (m < 10 ? '0' : '') + m;
+    /* Real months are never identical, and a recipe that makes them identical
+       tests the wrong branch — the first version of this check did exactly
+       that, and that is how the flat-history gap below was found. */
+    const base = 225 + Math.floor(rnd() * 60);
+    for (let i = 0; i < 4; i++) {
+      rows.push(mrow(id++, '2025-' + mm + '-0' + (i + 1), base + i * 3, 'أي شخص', '312000'));
+    }
+  }
+  for (let i = 0; i < 4; i++) rows.push(mrow(id++, '2026-01-0' + (i + 1), 2250, 'أي شخص', '312000'));
+
+  const r = E.runTier3(rows, { current_month: '2026-01' });
+  const sf = r.flags.filter(function (f) { return f.rule_id === 'SEASONALITY'; });
+  ok(sf.length === 1, 'the spike month is flagged', sf.length);
+  ok(sf.length && sf[0].detail.basis === 'modified_z',
+    'on the modified-z basis', sf.length && sf[0].detail.basis);
+  ok(sf[0].entity === '312000' && sf[0].entity_kind === 'الحساب', 'against the account', sf[0].entity);
+  ok(/بالزيادة/.test(sf[0].reason_ar), 'and says which direction', sf[0].reason_ar);
+  if (SHOW) console.log('    ' + sf[0].reason_ar);
+
+  const r2 = E.runTier3(rows, {});
+  ok(r2.flags.filter(function (f) { return f.rule_id === 'SEASONALITY'; }).length === 0,
+    'without a current month the rule does not guess which one it is');
+  ok(r2.notes.some(function (n) { return n.rule_id === 'SEASONALITY' && n.status === 'not_run'; }),
+    'and says it did not run');
+})();
+
+/* A perfectly flat history is the STRONGEST baseline, not an absent one. The
+   first version of this rule produced nothing here: MAD and the
+   mean-absolute-deviation fallback are both zero, the z-score is undefined,
+   and an account that spent exactly the same for a year and then nine times
+   that returned silence. It now falls back to a direct ratio and reports which
+   basis it used. */
+console.log('  recipe: account 313000 spends EXACTLY 1000 for 12 months, then 9000');
+(function () {
+  const rows = [];
+  let id = 19500;
+  for (let m = 1; m <= 12; m++) {
+    const mm = (m < 10 ? '0' : '') + m;
+    for (let i = 0; i < 4; i++) rows.push(mrow(id++, '2025-' + mm + '-0' + (i + 1), 250, 'شخص ثابت', '313000'));
+  }
+  for (let i = 0; i < 4; i++) rows.push(mrow(id++, '2026-01-0' + (i + 1), 2250, 'شخص ثابت', '313000'));
+  const r = E.runTier3(rows, { current_month: '2026-01' });
+  const sf = r.flags.filter(function (f) { return f.rule_id === 'SEASONALITY'; });
+  ok(sf.length === 1, 'a flat history followed by a 9x month IS flagged', sf.length);
+  ok(sf.length && sf[0].detail.basis === 'flat_history_ratio',
+    'on the ratio basis, and it says which', sf.length && sf[0].detail.basis);
+  ok(sf.length && sf[0].reason_ar.indexOf('لا يوجد تشتت تاريخي') !== -1,
+    'and the reason explains why no z-score was used', sf.length && sf[0].reason_ar);
+  if (SHOW && sf.length) console.log('    ' + sf[0].reason_ar);
+
+  /* A flat history followed by an ordinary month is still silence. */
+  const rows2 = rows.slice(0, 48);
+  for (let i = 0; i < 4; i++) rows2.push(mrow(29000 + i, '2026-01-0' + (i + 1), 255, 'شخص ثابت', '313000'));
+  const r2b = E.runTier3(rows2, { current_month: '2026-01' });
+  ok(r2b.flags.filter(function (f) { return f.rule_id === 'SEASONALITY'; }).length === 0,
+    'a 2% departure from a flat history is not a finding');
+})();
+
+/* ── Every Tier 3 finding has the entity shape and is explainable ────────── */
+console.log('\nevery Tier 3 finding is entity-shaped and explainable');
+(function () {
+  const rnd = makeRnd(29);
+  const rows = [];
+  for (let i = 0; i < 350; i++) rows.push(mrow(20000 + i, dseq(i % 300), 500 + Math.floor(rnd() * 200), 'مشبوه'));
+  const r = E.runTier3(rows, { current_month: '2026-06' });
+  ok(r.flags.length > 0, 'there are findings to check', r.flags.length);
+  r.flags.forEach(function (f) {
+    ok(f.row_id === null, f.rule_id + ' is entity-level, so row_id is null', f.row_id);
+    ok(!!f.entity, f.rule_id + ' names its entity');
+    ok(!!f.entity_kind, f.rule_id + ' says what kind of entity');
+    ok(/[؀-ۿ]/.test(f.reason_ar) && f.reason_ar.length > 30,
+      f.rule_id + ' reason is an Arabic sentence', f.reason_ar);
+    ok(/\d/.test(f.reason_ar), f.rule_id + ' reason carries its numbers', f.reason_ar);
+    ok(!!f.detail, f.rule_id + ' carries the computed detail for the reader to check');
+  });
+})();
+
 console.log(failures === 0
-  ? '\nAll rule checks pass (Tier 1 + Tier 2).'
+  ? '\nAll rule checks pass (Tiers 1, 2 and 3).'
   : '\n' + failures + ' rule check(s) FAILED.');
 process.exit(failures === 0 ? 0 : 1);
