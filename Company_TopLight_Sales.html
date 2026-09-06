@@ -88,22 +88,33 @@
       return new Date(b['تاريخ الفاتورة']) - new Date(a['تاريخ الفاتورة']);
     });
     var rows = __headers.map(function (h) {
-      var opts = '<option value="">إجراءات...</option>' +
-        '<option value="print">طباعة</option>' +
-        '<option value="costing">تحليل التكلفة</option>' +
-        '<option value="release">اذن صرف منتج</option>';
-      if (!h.fully_returned) {
-        opts += '<option value="returns">مرتجعات</option>';
-      }
+      /* The actions cell is the shared row menu every other list uses (المشتريات
+         on both TopLight and ValleyFoods), not a bare <select>. Two reasons:
+         parity — one look for row actions across the app — and, for the items
+         that open another page, a menu entry is a real <button>, so the click
+         that reaches window.open carries a user gesture. A <select> change event
+         does not reliably, which is why مرتجعات could take the selection and
+         then open nothing at all. */
+      var uid = FMT.escape(String(h.invoice_unique_id || ''));
+      var item = function (label, action, color) {
+        return { label: label, color: color, onclick: "doAction('" + uid + "','" + action + "')" };
+      };
+      var btns = [
+        item('طباعة', 'print'),
+        item('تحليل التكلفة', 'costing'),
+        item('اذن صرف منتج', 'release')
+      ];
+      if (!h.fully_returned) btns.push(item('مرتجعات', 'returns'));
       if (String(h.approval_status) !== 'Approved') {
-        opts += '<option value="approve">اعتماد</option>';
+        btns.push(item('اعتماد', 'approve'));
         if (UIC.canFull_()) {
-          opts += '<option value="edit">تعديل</option><option value="delete">حذف</option>';
+          btns.push(item('تعديل', 'edit'));
+          btns.push(item('حذف', 'delete', 'var(--danger)'));
         } else {
-          opts += '<option value="view">عرض</option>';
+          btns.push(item('عرض', 'view'));
         }
       }
-      var actions = '<select class="input" style="padding:6px 8px;width:130px;" onchange="doAction(\'' + FMT.escape(h.invoice_unique_id) + '\', this.value); this.value=\'\';">' + opts + '</select>';
+      var actions = UIC.actionBtns(btns);
       return {
         invoice_number: h['رقم الفاتورة'] || '-',
         customer_name: h.customer_name || '-',
@@ -432,29 +443,34 @@
     });
   }
 
-  function printSales(uid) {
-    window.open(scriptUrl + '?action=tl_sales_print&purchase_code=' + encodeURIComponent(uid) + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN), '_blank');
+  /* Every one of these opens another screen of the app in a new tab. The tab is
+     what the sandbox may refuse: window.open returns null when a popup blocker
+     (or the Apps Script iframe) turns it down, and until now the action ended
+     there — the user picked مرتجعات and nothing happened, with no error to go on.
+     Falling back to navigating this frame means the page always opens; the user
+     comes back with the returns screen's own إغلاق button. */
+  function openSalesPage_(action, uid) {
+    var url = scriptUrl + '?action=' + encodeURIComponent(action) +
+      (uid ? '&purchase_code=' + encodeURIComponent(uid) : '') +
+      '&sessionToken=' + encodeURIComponent(SESSION_TOKEN);
+    var w = null;
+    try { w = window.open(url, '_blank'); } catch (e) { w = null; }
+    if (w) { try { w.focus(); } catch (e) {} return; }
+    if (window.UIC && UIC.navTo) UIC.navTo(null, url);
+    else window.location.href = url;
   }
 
-  function openReturns(uid) {
-    window.open(scriptUrl + '?action=tl_sales_returns&purchase_code=' + encodeURIComponent(uid) + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN), '_blank');
-  }
+  function printSales(uid) { openSalesPage_('tl_sales_print', uid); }
 
-  function openRelease(uid) {
-    window.open(scriptUrl + '?action=tl_sales_release&purchase_code=' + encodeURIComponent(uid) + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN), '_blank');
-  }
+  function openReturns(uid) { openSalesPage_('tl_sales_returns', uid); }
 
-  function openAnalysis() {
-    window.open(scriptUrl + '?action=tl_sales_analysis&sessionToken=' + encodeURIComponent(SESSION_TOKEN), '_blank');
-  }
+  function openRelease(uid) { openSalesPage_('tl_sales_release', uid); }
 
-  function openCostingAnalysis() {
-    window.open(scriptUrl + '?action=tl_sales_costing_analysis&sessionToken=' + encodeURIComponent(SESSION_TOKEN), '_blank');
-  }
+  function openAnalysis() { openSalesPage_('tl_sales_analysis'); }
 
-  function openCosting(uid) {
-    window.open(scriptUrl + '?action=tl_sales_costing_print&purchase_code=' + encodeURIComponent(uid) + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN), '_blank');
-  }
+  function openCostingAnalysis() { openSalesPage_('tl_sales_costing_analysis'); }
+
+  function openCosting(uid) { openSalesPage_('tl_sales_costing_print', uid); }
 
   function doAction(uid, action) {
     if (action === 'print') printSales(uid);

@@ -92,7 +92,7 @@
       '<div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;">' +
       '<img src="' + (COMPANY_LOGO_URL || '') + '" style="height:34px;" alt="">' +
       '<h2 style="margin:0;flex:1;">مرتجعات المبيعات</h2>' +
-      '<button class="btn btn-outline" onclick="try{window.top.close()}catch(e){window.close()}">إغلاق</button>' +
+      '<button class="btn btn-outline" onclick="closeReturns()">إغلاق</button>' +
       '</div>' +
       '<div style="display:flex;flex-wrap:wrap;gap:16px;padding:14px 16px;background:var(--bg-subtle);border:1px solid var(--border-color);border-radius:8px;margin-bottom:16px;">' +
       '<span>رقم الفاتورة: <strong>' + FMT.escape(inv.invoice_number || '-') + '</strong></span>' +
@@ -180,6 +180,23 @@
       .then(function (r) { UIC.toast(r.message || 'تم الحذف', 'success'); load(); })
       .catch(function (e) { UIC.toast(e.message || 'خطأ', 'error'); })
       .finally(function () { UI.hideSpinner(); });
+  }
+
+  /* Reached either as a new tab — the row menu on المبيعات opens one — or by
+     navigating in place, when the sandbox refused that tab. Closing only ends
+     the first case, and from inside the Apps Script iframe window.top.close()
+     is a cross-origin call that throws anyway, so the button used to do nothing
+     at all. If the window is still here a moment later, go back to المبيعات
+     rather than leave the user on a screen with a dead button. */
+  function closeReturns() {
+    var url = (window.scriptUrl || scriptUrl || '/') +
+      '?action=tl_sales&sessionToken=' + encodeURIComponent(SESSION_TOKEN);
+    try { window.top.close(); } catch (e) { try { window.close(); } catch (e2) {} }
+    setTimeout(function () {
+      if (window.closed) return;
+      if (window.UIC && UIC.navTo) UIC.navTo(null, url);
+      else { try { window.top.location.href = url; } catch (e) { window.location.href = url; } }
+    }, 200);
   }
 
   function formatDate(v) {
