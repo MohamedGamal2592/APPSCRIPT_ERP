@@ -1,0 +1,28 @@
+{
+  "recorded": "2026-09-06T13:41:28.446Z",
+  "metrics": {
+    "js_files": 19,
+    "html_files": 92,
+    "script_blocks": 110,
+    "symbol_refs": 3107,
+    "symbols_undefined": 2,
+    "symbols_undefined_gate": 2,
+    "distinct_ids": 583,
+    "classes_used": 336,
+    "classes_defined": 465,
+    "classes_orphan": 38,
+    "color_hex": 743,
+    "color_rgba": 51,
+    "token_uses": 708,
+    "color_literals": 794,
+    "token_ratio": 0.4714,
+    "media_queries": 11,
+    "media_conforming": 0,
+    "media_maxwidth": 8,
+    "media_offbrand": 11,
+    "media_offbrand_gate": 11,
+    "dom_nodes_per_row": 7,
+    "dom_row_bytes": 169,
+    "components_checked": 19
+  }
+}

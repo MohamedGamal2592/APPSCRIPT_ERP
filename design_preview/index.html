@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>معاينة التصميم — ERP</title>
+<!--
+  THE DESIGN PREVIEW HARNESS.
+
+  Open this file by double-clicking it. No server, no build, no network.
+
+  What it is for: this programme redesigns a production app that nobody can
+  open in a browser until the owner pushes. Without this page, a wrong colour,
+  a mirrored modal or a tablet layout that collapses would be invisible to
+  everyone until after the push. This is the only visual verification the
+  programme gets.
+
+  What it shows: the REAL CSS_Tokens.html, the REAL UI_Components.html, the
+  REAL Client_Helpers.html and the REAL theme CSS that 03_Security.js emits —
+  extracted, never retyped, by `node tools/build_preview.js` into _sources.js.
+  `node tools/ui_check.js` FAILS while that bundle is out of date, so this page
+  cannot quietly show something the source no longer says.
+
+  Each tier is a real iframe at a real device width. That matters: a CSS media
+  query responds to the viewport, so scaling a div would prove nothing. The
+  frames are visually scaled to fit the screen, but each one still reports its
+  own true width to the stylesheet inside it.
+-->
+<style>
+  :root {
+    --ui: #0f172a; --ui-2: #1e293b; --ui-line: #334155;
+    --ui-ink: #e2e8f0; --ui-dim: #94a3b8; --ui-go: #10b981;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #0b1120; color: var(--ui-ink);
+         font: 13px/1.6 'Segoe UI', Tahoma, Arial, sans-serif; }
+
+  header.pv { position: sticky; top: 0; z-index: 50; background: var(--ui);
+              border-bottom: 1px solid var(--ui-line); padding: 10px 16px; }
+  .pv-title { font-size: 15px; font-weight: 700; margin: 0 0 8px; display: flex;
+              align-items: center; gap: 10px; flex-wrap: wrap; }
+  .pv-fp { font: 400 11px/1 ui-monospace, Consolas, monospace; color: var(--ui-dim);
+           background: var(--ui-2); border: 1px solid var(--ui-line);
+           border-radius: 999px; padding: 4px 10px; }
+  .pv-controls { display: flex; gap: 18px; flex-wrap: wrap; align-items: flex-start; }
+  .pv-group { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .pv-label { font-size: 11px; color: var(--ui-dim); text-transform: uppercase;
+              letter-spacing: .08em; margin-inline-end: 4px; }
+  .pv-btn { background: var(--ui-2); color: var(--ui-ink); border: 1px solid var(--ui-line);
+            border-radius: 6px; padding: 5px 11px; cursor: pointer; font: inherit;
+            font-size: 12px; min-height: 32px; }
+  .pv-btn:hover { border-color: var(--ui-dim); }
+  .pv-btn.on { background: var(--ui-go); border-color: var(--ui-go); color: #04211a; font-weight: 700; }
+
+  .pv-strip { display: flex; gap: 14px; align-items: flex-start; padding: 16px;
+              overflow-x: auto; }
+  .pv-tier { flex: 0 0 auto; }
+  .pv-cap { display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px; }
+  .pv-cap b { font-size: 12px; }
+  .pv-cap span { font: 400 11px/1 ui-monospace, Consolas, monospace; color: var(--ui-dim); }
+  .pv-viewport { position: relative; background: #fff; border: 1px solid var(--ui-line);
+                 border-radius: 8px; overflow: hidden; }
+  .pv-viewport iframe { border: 0; display: block; transform-origin: top left; background: #fff; }
+
+  .pv-help { padding: 0 16px 24px; max-width: 900px; color: var(--ui-dim); font-size: 12px; }
+  .pv-help h2 { color: var(--ui-ink); font-size: 13px; margin: 18px 0 6px; }
+  .pv-help code { background: var(--ui-2); border: 1px solid var(--ui-line);
+                  border-radius: 4px; padding: 1px 5px; font-size: 11px; color: var(--ui-ink); }
+  .pv-help ul { margin: 4px 0; padding-inline-start: 20px; }
+  .pv-miss { background: #7f1d1d; color: #fff; padding: 14px 16px; margin: 16px;
+             border-radius: 8px; line-height: 1.7; }
+  .pv-miss code { background: rgba(0,0,0,.35); padding: 2px 6px; border-radius: 4px; }
+</style>
+</head>
+<body>
+
+<header class="pv">
+  <h1 class="pv-title">
+    معاينة التصميم — مكتبة المكوّنات
+    <span class="pv-fp" id="pv-fp">…</span>
+  </h1>
+  <div class="pv-controls">
+    <div class="pv-group">
+      <span class="pv-label">الشركة</span>
+      <button class="pv-btn on" data-theme="TopLight">TopLight</button>
+      <button class="pv-btn" data-theme="TopChemical">TopChemical</button>
+      <button class="pv-btn" data-theme="ValleyFoods">ValleyFoods</button>
+    </div>
+    <div class="pv-group">
+      <span class="pv-label">الاتجاه</span>
+      <button class="pv-btn on" data-dir="rtl">RTL</button>
+      <button class="pv-btn" data-dir="ltr">LTR</button>
+    </div>
+    <div class="pv-group">
+      <span class="pv-label">العرض</span>
+      <button class="pv-btn on" data-view="all">كل المقاسات</button>
+      <button class="pv-btn" data-view="390">390</button>
+      <button class="pv-btn" data-view="768">768</button>
+      <button class="pv-btn" data-view="1024">1024</button>
+      <button class="pv-btn" data-view="1440">1440</button>
+      <button class="pv-btn" data-view="2560">2560</button>
+    </div>
+    <div class="pv-group">
+      <span class="pv-label">القسم</span>
+      <select class="pv-btn" id="pv-section">
+        <option value="">الكل</option>
+        <option value="shell">appShell</option>
+        <option value="buttons">Buttons</option>
+        <option value="pills">Pills</option>
+        <option value="table">Data table</option>
+        <option value="forms">Forms</option>
+        <option value="modal">Modal</option>
+        <option value="toast">Toast</option>
+        <option value="spinner">Spinners</option>
+        <option value="stats">Stat cards</option>
+        <option value="tiles">Tiles</option>
+      </select>
+    </div>
+    <div class="pv-group">
+      <button class="pv-btn" id="pv-reload">إعادة التحميل</button>
+    </div>
+  </div>
+</header>
+
+<div id="pv-body"></div>
+
+<div class="pv-help">
+  <h2>ما الذي تنظر إليه</h2>
+  <p>ستة إطارات، كل واحد بعرض جهاز حقيقي. استعلامات <code>@media</code> داخل كل إطار
+     ترى عرضه هو، لا عرض الشاشة — لذلك ما تراه هنا هو ما سيراه المستخدم على ذلك الجهاز.</p>
+  <ul>
+    <li><b>390 × 844</b> — هاتف، طولي (<code>phone</code>)</li>
+    <li><b>844 × 390</b> — هاتف، عرضي — يُفعّل قاعدة الارتفاع المنخفض</li>
+    <li><b>768 × 1024</b> — تابلت طولي (<code>tablet-p</code>)</li>
+    <li><b>1024 × 768</b> — تابلت عرضي (<code>tablet-l</code>)</li>
+    <li><b>1440 × 900</b> — ويندوز سطح المكتب (<code>desktop</code>)</li>
+    <li><b>2560 × 1440</b> — شاشة عريضة (<code>wide</code>)</li>
+  </ul>
+  <h2>إذا ظهرت رسالة خطأ حمراء</h2>
+  <p>الحزمة <code>_sources.js</code> ناقصة أو قديمة. شغّل: <code>node tools/build_preview.js</code></p>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  /* Six frames: the five tiers of plan §0.4, plus both tablet orientations and
+     phone landscape, because a tier checked in one orientation is not checked. */
+  var TIERS = [
+    { w: 390,  h: 844,  tier: 'phone',    label: 'هاتف — طولي' },
+    { w: 844,  h: 390,  tier: 'phone',    label: 'هاتف — عرضي' },
+    { w: 768,  h: 1024, tier: 'tablet-p', label: 'تابلت — طولي' },
+    { w: 1024, h: 768,  tier: 'tablet-l', label: 'تابلت — عرضي' },
+    { w: 1440, h: 900,  tier: 'desktop',  label: 'سطح المكتب' },
+    { w: 2560, h: 1440, tier: 'wide',     label: 'شاشة عريضة' }
+  ];
+
+  var state = { theme: 'TopLight', dir: 'rtl', view: 'all', section: '' };
+  var body = document.getElementById('pv-body');
+
+  function frameSrc(t) {
+    return 'gallery.html?theme=' + encodeURIComponent(state.theme) +
+           '&dir=' + encodeURIComponent(state.dir) +
+           (state.section ? '&section=' + encodeURIComponent(state.section) : '') +
+           '&_=' + Date.now();
+  }
+
+  function render() {
+    var shown = TIERS.filter(function (t) {
+      return state.view === 'all' || String(t.w) === state.view;
+    });
+    /* Scale each frame so the whole strip fits the screen without the frames
+       lying about their width. One frame gets more room than six. */
+    var avail = Math.max(320, window.innerWidth - 32 - (shown.length - 1) * 14);
+    var totalW = shown.reduce(function (n, t) { return n + t.w; }, 0);
+    var k = Math.min(1, avail / totalW);
+    if (shown.length === 1) k = Math.min(1, avail / shown[0].w);
+
+    body.innerHTML = '<div class="pv-strip">' + shown.map(function (t, i) {
+      var sw = Math.round(t.w * k), sh = Math.round(t.h * k);
+      return '<div class="pv-tier">' +
+        '<div class="pv-cap"><b>' + t.label + '</b>' +
+          '<span>' + t.w + '×' + t.h + ' · ' + t.tier +
+          (k < 1 ? ' · ' + Math.round(k * 100) + '%' : '') + '</span></div>' +
+        '<div class="pv-viewport" style="width:' + sw + 'px;height:' + sh + 'px;">' +
+          '<iframe title="' + t.label + '" src="' + frameSrc(t) + '" ' +
+            'style="width:' + t.w + 'px;height:' + t.h + 'px;transform:scale(' + k + ');"></iframe>' +
+        '</div></div>';
+    }).join('') + '</div>';
+  }
+
+  /* Fingerprint badge — proves which build of the sources you are looking at. */
+  var s = document.createElement('script');
+  s.src = '_sources.js';
+  s.onload = function () {
+    var fp = window.__PREVIEW_FINGERPRINT__;
+    var gen = (window.__PREVIEW_SOURCES__ || {}).generated || '';
+    document.getElementById('pv-fp').textContent =
+      'sources ' + fp + (gen ? ' · ' + gen.slice(0, 16).replace('T', ' ') : '');
+    render();
+  };
+  s.onerror = function () {
+    document.getElementById('pv-fp').textContent = 'missing';
+    body.innerHTML = '<div class="pv-miss">' +
+      '<b>لم يتم العثور على <code>_sources.js</code>.</b><br>' +
+      'هذه الحزمة تحتوي على الملفات الحقيقية التي تعرضها هذه الصفحة. أنشئها بالأمر:' +
+      '<br><br><code>node tools/build_preview.js</code></div>';
+  };
+  document.head.appendChild(s);
+
+  /* Controls */
+  document.addEventListener('click', function (e) {
+    var b = e.target.closest ? e.target.closest('.pv-btn') : null;
+    if (!b) return;
+    ['theme', 'dir', 'view'].forEach(function (k) {
+      var v = b.getAttribute('data-' + k);
+      if (v == null) return;
+      state[k] = v;
+      var group = b.parentNode;
+      [].slice.call(group.querySelectorAll('.pv-btn')).forEach(function (x) { x.classList.remove('on'); });
+      b.classList.add('on');
+      render();
+    });
+    if (b.id === 'pv-reload') render();
+  });
+  document.getElementById('pv-section').addEventListener('change', function () {
+    state.section = this.value;
+    render();
+  });
+
+  var t;
+  window.addEventListener('resize', function () { clearTimeout(t); t = setTimeout(render, 150); });
+})();
+</script>
+</body>
+</html>
