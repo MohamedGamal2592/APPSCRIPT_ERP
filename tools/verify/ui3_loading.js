@@ -80,9 +80,20 @@ ok(typeof UI.alert === 'function',
   const before = sb.toasts().length;
   UI.toast('تم الحفظ', 'success');
   ok(sb.toasts().length === before + 1, 'UI.toast actually raises a toast');
+  /* UPDATED by step 5.2: UI.alert raised a toast when it was introduced in 3.4;
+     it now delegates to the styled UIC.alert, which is a dialog the user must
+     acknowledge. That is the faithful replacement for the native alert() those
+     9 DbLive_Viewer call sites were written against — all of them error
+     reports, where a toast that vanishes after three seconds can be missed
+     entirely. So the assertion moves from "raises a toast" to "raises a
+     dialog", which is the stronger of the two. */
+  const bodyBefore = sb.document.body.children.length;
   UI.alert('حدث خطأ');
-  ok(sb.toasts().length === before + 2, 'UI.alert actually raises one too');
-  ok(sb.toasts().indexOf('حدث خطأ') !== -1, 'and it carries the message', JSON.stringify(sb.toasts()));
+  ok(sb.document.body.children.length === bodyBefore + 1,
+    'UI.alert raises a dialog the user must acknowledge');
+  const dlg = sb.document.body.children[sb.document.body.children.length - 1];
+  ok(String(dlg.innerHTML).indexOf('حدث خطأ') !== -1,
+    'and it carries the message', String(dlg.innerHTML).slice(0, 120));
 })();
 
 /* ── 4. Show / hide, and the ref counting ───────────────────────────────── */

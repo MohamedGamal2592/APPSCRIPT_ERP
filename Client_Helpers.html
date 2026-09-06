@@ -214,9 +214,17 @@ UI.toast = function (message, type) {
   catch (e) { try { console.warn('toast: ' + message); } catch (e2) {} }
 };
 
+/* [UI-5.2] Delegates to the styled UIC.alert rather than to a toast. Native
+ * alert() required an acknowledgement, and the 9 DbLive_Viewer call sites are
+ * all error reports — a toast that vanishes after three seconds can be missed
+ * entirely, which is the failure the original code was trying to avoid.
+ * Returns the promise so a caller can chain if it ever wants to. */
 UI.alert = function (message) {
-  try { UIC.toast(message, 'error'); }
-  catch (e) { try { console.warn('alert: ' + message); } catch (e2) {} }
+  try { return UIC.alert(message); }
+  catch (e) {
+    try { console.warn('alert: ' + message); } catch (e2) {}
+    return Promise.resolve(true);
+  }
 };
 
 /* Batch 10: guard a submit button against double-clicks / double-submits.

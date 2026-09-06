@@ -2204,6 +2204,276 @@ UIC.emptyState = function (opts) {
     body + action + '</div>';
 };
 
+/* ── [UI-5.2 / U-28] Styled confirm and alert ─────────────────────────────
+ *
+ * The app used 34 native confirm() and 10 native alert() calls. A native dialog
+ * is drawn by the BROWSER: it cannot carry the app's typeface, it is not RTL,
+ * it names the origin ("googleusercontent.com says…") rather than the app, and
+ * — worst for a destructive action — it says "Are you sure?" without naming
+ * WHAT is about to be deleted.
+ *
+ * UIC.confirm returns a Promise<boolean>, because a styled dialog cannot block
+ * the way confirm() does. That is the one real cost of the change and it is why
+ * call sites have to be restructured rather than swapped.
+ */
+UIC.confirm = function (opts) {
+  var o = (typeof opts === 'string') ? { message: opts } : (opts || {});
+  var danger = o.danger !== false && (o.danger === true || /حذف|delete/i.test(o.confirmText || ''));
+  return new Promise(function (resolve) {
+    var id = 'uic-confirm-' + Math.random().toString(36).slice(2, 8);
+    var settled = false;
+    var done = function (v) {
+      if (settled) return;
+      settled = true;
+      try { UIC.closeModal(id); } catch (e) {}
+      resolve(v);
+    };
+    UIC._confirmResolvers = UIC._confirmResolvers || {};
+    UIC._confirmResolvers[id] = done;
+
+    var body =
+      (o.message ? '<p class="uic-confirm-msg">' + UIC.escHtml(o.message) + '</p>' : '') +
+      /* Naming the record is the point: "Delete?" and
+         "Delete invoice INV-2026-0043?" are not the same question. */
+      (o.record ? '<p class="uic-confirm-record">' + UIC.escHtml(o.record) + '</p>' : '') +
+      (o.detail ? '<p class="uic-confirm-detail">' + UIC.escHtml(o.detail) + '</p>' : '');
+
+    /* cancelText: null means acknowledge-only — that is how UIC.alert is built
+       on top of this, and it must not render a Cancel the user could read as a
+       meaningful choice. */
+    var cancelBtn = (o.cancelText === null) ? '' :
+      UIC.button({ text: o.cancelText || 'إلغاء', type: 'outline',
+        onClick: "UIC._confirmAnswer('" + id + "', false)" }) + ' ';
+    var footer = cancelBtn +
+      UIC.button({ text: o.confirmText || 'تأكيد', type: danger ? 'danger' : 'primary',
+        onClick: "UIC._confirmAnswer('" + id + "', true)" });
+
+    UIC.openModal(id, {
+      title: o.title || (danger ? 'تأكيد الحذف' : 'تأكيد'),
+      size: 'sm',
+      body: body,
+      footer: footer
+    });
+    /* Closing by the × or by Escape is a "no", never a silent hang. */
+    var overlay = document.getElementById(id);
+    if (overlay) {
+      overlay.addEventListener('click', function (e) { if (e.target === overlay) done(false); });
+    }
+  });
+};
+
+UIC._confirmAnswer = function (id, value) {
+  var f = (UIC._confirmResolvers || {})[id];
+  if (f) { delete UIC._confirmResolvers[id]; f(value); }
+};
+
+/* A styled replacement for alert(). Resolves when acknowledged. */
+UIC.alert = function (opts) {
+  var o = (typeof opts === 'string') ? { message: opts } : (opts || {});
+  return UIC.confirm({
+    title: o.title || 'تنبيه',
+    message: o.message,
+    detail: o.detail,
+    danger: o.danger === true,
+    confirmText: o.confirmText || 'حسناً',
+    cancelText: null
+  });
+};
+
+/* ── [UI-5.1 / U-26] Unsaved-changes protection ───────────────────────────
+ *
+ * There was none, anywhere. A half-finished multi-line invoice was lost
+ * silently to a mis-click on a nav link or a browser Back — the single most
+ * expensive small defect in the investigation, because the work lost is
+ * proportional to how much the user had done.
+ *
+ * UIC.trackDirty(formId) snapshots a form and watches it. Two guards then
+ * apply: the browser's own beforeunload for a tab close or a Back, and an
+ * in-app interception of UIC.navTo for a nav click, where a styled dialog can
+ * actually name what is about to be discarded.
+ */
+UIC._dirty = { forms: {}, wired: false };
+
+UIC.trackDirty = function (formId, opts) {
+  var el = typeof formId === 'string' ? document.getElementById(formId) : formId;
+  if (!el) return;
+  var key = (el.id || formId);
+  UIC._dirty.forms[key] = {
+    el: el,
+    snapshot: UIC._formSignature(el),
+    label: (opts && opts.label) || ''
+  };
+  UIC._wireDirtyGuard();
+};
+
+UIC.clearDirty = function (formId) {
+  var key = (typeof formId === 'string') ? formId : (formId && formId.id);
+  if (key && UIC._dirty.forms[key]) {
+    /* Re-snapshot rather than delete: after a save the form is clean but still
+       on screen, and the user may start editing again. */
+    UIC._dirty.forms[key].snapshot = UIC._formSignature(UIC._dirty.forms[key].el);
+  }
+};
+
+UIC.untrackDirty = function (formId) {
+  var key = (typeof formId === 'string') ? formId : (formId && formId.id);
+  if (key) delete UIC._dirty.forms[key];
+};
+
+UIC._formSignature = function (el) {
+  if (!el || !el.querySelectorAll) return '';
+  var parts = [];
+  try {
+    [].slice.call(el.querySelectorAll('input, select, textarea')).forEach(function (f) {
+      if (f.type === 'file') return;
+      parts.push((f.id || f.name || '') + '=' + (f.type === 'checkbox' || f.type === 'radio' ? f.checked : f.value));
+    });
+  } catch (e) {}
+  return parts.join('');
+};
+
+/** Which tracked forms currently differ from their snapshot. */
+UIC.dirtyForms = function () {
+  var out = [];
+  Object.keys(UIC._dirty.forms).forEach(function (k) {
+    var f = UIC._dirty.forms[k];
+    if (!f || !f.el) return;
+    if (UIC._formSignature(f.el) !== f.snapshot) out.push(f);
+  });
+  return out;
+};
+
+UIC.isDirty = function () { return UIC.dirtyForms().length > 0; };
+
+UIC._wireDirtyGuard = function () {
+  if (UIC._dirty.wired) return;
+  UIC._dirty.wired = true;
+
+  /* The browser guard. It cannot be styled and its wording is the browser's,
+     but it is the ONLY thing that catches a tab close or a Back. */
+  window.addEventListener('beforeunload', function (e) {
+    if (!UIC.isDirty()) return;
+    if (UIC._dirty.bypass) return;
+    e.preventDefault();
+    e.returnValue = '';
+    return '';
+  });
+
+  /* The in-app guard. Every nav link in the shell routes through UIC.navTo, so
+     wrapping it once covers the topbar, the drawer, the dropdowns, the
+     breadcrumb and the home button. */
+  if (!UIC._navToOriginal) {
+    UIC._navToOriginal = UIC.navTo;
+    UIC.navTo = function (ev, href) {
+      if (!UIC.isDirty()) return UIC._navToOriginal(ev, href);
+      try { if (ev && ev.preventDefault) ev.preventDefault(); } catch (e) {}
+      var dirty = UIC.dirtyForms();
+      var names = dirty.map(function (f) { return f.label; }).filter(Boolean).join('، ');
+      UIC.confirm({
+        title: 'تغييرات غير محفوظة',
+        message: 'لديك تغييرات لم يتم حفظها. هل تريد الخروج وتجاهلها؟',
+        record: names || '',
+        confirmText: 'تجاهل التغييرات',
+        cancelText: 'البقاء في الصفحة',
+        danger: true
+      }).then(function (go) {
+        if (!go) return;
+        UIC._dirty.bypass = true;          /* do not also raise the browser one */
+        UIC._navToOriginal(ev, href);
+      });
+    };
+  }
+};
+
+/* ── [UI-5.3 / U-27] Field validation ─────────────────────────────────────
+ *
+ * Validation was required-fields-only, and it reported failures in a toast that
+ * disappeared after three seconds — so on a long form the user was told
+ * something was wrong but not which field, and the message was gone before they
+ * finished scrolling.
+ *
+ * Errors are anchored to the field. UIC.field already renders a
+ * `.field-error` element beside every input; this fills it.
+ */
+UIC.validators = {
+  required: function (v) { return String(v == null ? '' : v).trim() !== '' || 'هذا الحقل مطلوب'; },
+  number:   function (v) { return v === '' || !isNaN(parseFloat(v)) || 'أدخل رقماً صحيحاً'; },
+  positive: function (v) { return v === '' || parseFloat(v) > 0 || 'يجب أن يكون أكبر من صفر'; },
+  min:      function (v, arg) { return v === '' || parseFloat(v) >= arg || ('أقل قيمة مسموحة ' + arg); },
+  max:      function (v, arg) { return v === '' || parseFloat(v) <= arg || ('أكبر قيمة مسموحة ' + arg); },
+  email:    function (v) { return v === '' || /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v) || 'بريد إلكتروني غير صحيح'; },
+  pattern:  function (v, arg) { return v === '' || new RegExp(arg).test(v) || 'صيغة غير صحيحة'; }
+};
+
+UIC.setFieldError = function (key, message) {
+  var err = document.getElementById('err-' + key);
+  if (err) err.textContent = message || '';
+  var field = document.querySelector('[data-field="' + key + '"]');
+  if (field) {
+    if (message) field.classList.add('has-error'); else field.classList.remove('has-error');
+  }
+  var input = document.getElementById(key);
+  if (input) {
+    if (message) {
+      input.setAttribute('aria-invalid', 'true');
+      input.setAttribute('aria-describedby', 'err-' + key);
+    } else {
+      input.removeAttribute('aria-invalid');
+      input.removeAttribute('aria-describedby');
+    }
+  }
+};
+
+/**
+ * UIC.validate(rules, values) -> { valid, errors }
+ *   rules: { fieldKey: [ 'required', ['min', 0], fn ] }
+ * A rule returns true, or the message to show. Cross-field rules get the whole
+ * value object as a second argument.
+ */
+UIC.validate = function (rules, values) {
+  var errors = {};
+  var vals = values || {};
+  Object.keys(rules || {}).forEach(function (key) {
+    var list = rules[key];
+    if (!Array.isArray(list)) list = [list];
+    for (var i = 0; i < list.length; i++) {
+      var rule = list[i], fn, arg;
+      if (typeof rule === 'function') { fn = rule; }
+      else if (Array.isArray(rule)) { fn = UIC.validators[rule[0]]; arg = rule[1]; }
+      else { fn = UIC.validators[rule]; }
+      if (!fn) continue;
+      var r = fn(vals[key], arg, vals);
+      if (r !== true) { errors[key] = (typeof r === 'string') ? r : 'قيمة غير صحيحة'; break; }
+    }
+  });
+  return { valid: Object.keys(errors).length === 0, errors: errors };
+};
+
+/** Validate, paint the errors onto the fields, and focus the first bad one. */
+UIC.validateAndShow = function (rules, values) {
+  var res = UIC.validate(rules, values);
+  Object.keys(rules || {}).forEach(function (k) { UIC.setFieldError(k, res.errors[k] || ''); });
+  if (!res.valid) {
+    var first = Object.keys(res.errors)[0];
+    var el = document.getElementById(first);
+    if (el && el.focus) { try { el.focus(); } catch (e) {} }
+    if (el && el.scrollIntoView) { try { el.scrollIntoView({ block: 'center' }); } catch (e) {} }
+  }
+  return res;
+};
+
+/** Error anchored to a LINE in a line-item table, not to the form as a whole. */
+UIC.setLineError = function (rowEl, message) {
+  if (!rowEl) return;
+  if (message) {
+    rowEl.classList.add('line-error');
+    rowEl.setAttribute('data-line-error', message);
+  } else {
+    rowEl.classList.remove('line-error');
+    rowEl.removeAttribute('data-line-error');
+  }
+};
+
 UIC.toast = function (message, type) {
   const t = type || 'success';
   const toast = document.createElement('div');
@@ -2905,6 +3175,26 @@ document.addEventListener('keydown', function (e) {
   .req { color: var(--danger); }
   .field-error { color: var(--danger); font-size: var(--text-xs); min-height: 16px; }
   .form-field.has-error .input { border-color: var(--danger); }
+
+  /* ── [UI-5.2 / U-28] Styled confirm ──────────────────────────────────── */
+  .uic-confirm-msg { font-size: var(--text-base); color: var(--text-main); line-height: 1.7; }
+  .uic-confirm-record {
+    margin-top: var(--space-3); padding: var(--space-2) var(--space-3);
+    background: var(--bg-sunken); border-radius: var(--radius-sm);
+    font-weight: 700; color: var(--text-main); font-size: var(--text-sm);
+    word-break: break-word;
+  }
+  .uic-confirm-detail { margin-top: var(--space-2); font-size: var(--text-sm); color: var(--text-muted); line-height: 1.7; }
+
+  /* ── [UI-5.3 / U-27] Line-level validation ───────────────────────────── */
+  .line-error > td { background: var(--danger-bg); }
+  .line-error > td:first-child { box-shadow: inset 3px 0 0 var(--danger); }
+  [dir="rtl"] .line-error > td:first-child { box-shadow: inset -3px 0 0 var(--danger); }
+  .line-error::after {
+    content: attr(data-line-error);
+    display: block; padding: 4px var(--space-3);
+    color: var(--danger-text); font-size: var(--text-xs); font-weight: 600;
+  }
 
   /* ── Searchable Combo ────────────────────────────────────────────────── */
   .combo { position: relative; }

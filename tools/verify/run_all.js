@@ -39,7 +39,8 @@ const STEPS = [
   ['ui3_homefab.js', 'UI-3.8 — the persistent home button (U-42)'],
   ['ui4_controlpanel.js', 'UI-4.1 — the control panel (U-13)'],
   ['ui4_listview.js', 'UI-4.5/4.6/4.8 — columns, selection, phone cards'],
-  ['ui4_grouping.js', 'UI-4.4/4.7 — group-by, aggregates, skeleton loads']
+  ['ui4_grouping.js', 'UI-4.4/4.7 — group-by, aggregates, skeleton loads'],
+  ['ui5_forms.js', 'UI-5.1/5.2/5.3 — dirty guard, styled confirm, validation']
 ];
 
 /* Two programmes share this repo and this runner, so a step's file can be
