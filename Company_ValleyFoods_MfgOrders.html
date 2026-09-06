@@ -543,7 +543,7 @@
             UIC.field({ key: 'bp-lot', label: 'كود الدفعة', type: 'text' }) +
             (canCost() ? UIC.field({ key: 'bp-cost', label: 'التكلفة', type: 'number', min: '0', step: '0.01' }) : '') +
             '</div><input type="hidden" id="bp-mo-uid" value="' + esc(moUid) + '"></form>' : '';
-          holder.innerHTML = '<div style="overflow-x:auto;"><table class="table"><thead><tr><th>المنتج</th><th>الكمية</th><th>الدفعة</th>' + (canCost() ? '<th>التكلفة</th>' : '') + '</tr></thead><tbody>' +
+          holder.innerHTML = '<div style="overflow-x:auto;"><table class="table" style="min-width:560px;"><thead><tr><th>المنتج</th><th>الكمية</th><th>الدفعة</th>' + (canCost() ? '<th>التكلفة</th>' : '') + '</tr></thead><tbody>' +
             (rowsHtml || '<tr><td colspan="' + (canCost() ? 4 : 3) + '" style="text-align:center;color:#94a3b8;">لا يوجد منتجات ثانوية</td></tr>') +
             '</tbody></table></div>' + form;
         })
@@ -636,7 +636,7 @@
             UIC.combo({ key: 'wo-wc', label: 'مركز العمل', required: true, options: window.__WC_OPTIONS, placeholder: 'اكتب للبحث…' }) +
             UIC.field({ key: 'wo-notes', label: 'ملاحظات', type: 'text' }) +
             '</div><input type="hidden" id="wo-mo-uid" value="' + esc(moUid) + '"></form>' : '';
-          holder.innerHTML = '<div style="overflow-x:auto;"><table class="table"><thead><tr><th>#</th><th>مركز العمل</th><th>الحالة</th><th>البداية</th><th>النهاية</th><th>الساعات</th><th>ملاحظات</th><th></th></tr></thead><tbody>' +
+          holder.innerHTML = '<div style="overflow-x:auto;"><table class="table" style="min-width:900px;"><thead><tr><th>#</th><th>مركز العمل</th><th>الحالة</th><th>البداية</th><th>النهاية</th><th>الساعات</th><th>ملاحظات</th><th></th></tr></thead><tbody>' +
             (rowsHtml || '<tr><td colspan="8" style="text-align:center;color:#94a3b8;">لا توجد عمليات تشغيل</td></tr>') +
             '</tbody></table></div>' + form;
           startAllTimers();
