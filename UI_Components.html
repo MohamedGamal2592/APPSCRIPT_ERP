@@ -1842,7 +1842,7 @@ UIC.combo = function (o) {
   const cur = o.value !== undefined && o.value !== null ? String(o.value).trim() : '';
   const curLabel = (byVal[cur] && byVal[cur].label) || (byLabel[cur] && byLabel[cur].label) || (byVal[cur.toLowerCase()] && byVal[cur.toLowerCase()].label) || (byLabel[cur.toLowerCase()] && byLabel[cur.toLowerCase()].label) || cur;
   const optHtml = opts.map(function (op, i) {
-    return '<div class="combo-option" role="option" aria-selected="false" id="' + key + '_opt' + i + '" data-value="' + esc(op.value) + '" data-i="' + i + '" onmousedown="event.preventDefault();UIC.comboPick(\'' + key + '\',' + i + ')">' + esc(op.label) + '</div>';
+    return '<div class="combo-option" role="option" aria-selected="false" id="' + key + '_opt' + i + '" data-value="' + esc(op.value) + '" data-i="' + i + '" title="' + esc(op.label) + '" onmousedown="event.preventDefault();UIC.comboPick(\'' + key + '\',' + i + ')">' + esc(op.label) + '</div>';
   }).join('');
   const allowNew = o.allowNew ? ' data-allownew="1"' : '';
   window.__comboData = window.__comboData || {};
@@ -1851,7 +1851,7 @@ UIC.combo = function (o) {
      reader announces it as a plain text box: no indication that a list exists,
      that it is open, or which option is highlighted. */
   const inner = '<div class="combo" data-combo="' + key + '">' +
-    '<input id="' + key + '_display" class="input combo-input" autocomplete="off"' + ph + req + ' value="' + esc(curLabel) + '"' +
+    '<input id="' + key + '_display" class="input combo-input" autocomplete="off"' + ph + req + ' value="' + esc(curLabel) + '" title="' + esc(curLabel) + '"' +
     ' role="combobox" aria-expanded="false" aria-autocomplete="list"' +
     ' aria-controls="' + key + '_list" aria-haspopup="listbox"' +
     ' onfocus="UIC.comboOpen(\'' + key + '\')" oninput="UIC.comboFilter(\'' + key + '\', this.value)" onblur="UIC.comboBlur(\'' + key + '\')" onkeydown="UIC.comboKey(\'' + key + '\', event)">' +
@@ -1946,7 +1946,7 @@ UIC.comboPick = function (key, i) {
   const op = data.opts[i];
   const disp = document.getElementById(key + '_display');
   const hidden = document.getElementById(key);
-  if (disp) disp.value = op.label;
+  if (disp) { disp.value = op.label; disp.title = op.label; }
   if (hidden) {
     const changed = String(hidden.value) !== op.value;
     hidden.value = op.value;
@@ -1984,6 +1984,10 @@ UIC.comboBlur = function (key) {
   } else {
     hidden.value = '';
   }
+  /* [F2] The tooltip must never outlive the value it describes: comboBlur can
+     clear or rewrite disp.value, which would otherwise leave the previous
+     selection's title hovering over an empty or different field. */
+  disp.title = disp.value;
   const list = document.getElementById(key + '_list');
   if (list) { list.hidden = true; UIC._unanchor(list); }
   UIC._comboAria(key, false);
