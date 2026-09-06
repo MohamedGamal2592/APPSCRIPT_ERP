@@ -2973,6 +2973,9 @@ UIC.appShell = function (containerId, o) {
         '</div>' +
         '<a class="nav-dropdown-item" href="#" onclick="SESSION.openSessions();return false;">' + UIC.icon('user') + '<span>جلساتي</span></a>' +
         '<a class="nav-dropdown-item" href="#" onclick="SESSION.openViews();return false;">' + UIC.icon('settings') + '<span>عروضي</span></a>' +
+        /* [UI-8.3 / U-41] Preferences, reachable from the one menu that is on
+           every page. */
+        '<a class="nav-dropdown-item" href="#" onclick="UIC.openPreferences();return false;">' + UIC.icon('eye') + '<span>التفضيلات</span></a>' +
         '<div class="user-profile-divider"></div>' +
         '<a class="nav-dropdown-item user-profile-logout" href="#" onclick="logout();return false;">' + UIC.icon('logout') + '<span>تسجيل الخروج</span></a>' +
       '</div>' +
@@ -3034,6 +3037,80 @@ UIC.appShell = function (containerId, o) {
   try { UIC._initDrawerSwipe(); } catch (e) {}
 
   return opts.contentId || 'app-content';
+};
+
+/* ── [UI-8.3 / U-41] User preferences ─────────────────────────────────────
+ *
+ * There were none at all — no theme choice, no density, nothing remembered.
+ *
+ * Everything here lives in localStorage. NO SCHEMA CHANGE: hard constraint 1
+ * forbids adding a column, and these are per-device display choices anyway —
+ * someone using the app on a phone in the warehouse and on a desktop in the
+ * office genuinely may want different densities.
+ *
+ * Applied as early as possible, before first paint where the browser allows it,
+ * so a dark-mode user does not get a white flash on every navigation.
+ */
+UIC.PREFS_KEY = 'erp_prefs';
+
+UIC.getPrefs = function () {
+  try {
+    var raw = localStorage.getItem(UIC.PREFS_KEY);
+    return raw ? (JSON.parse(raw) || {}) : {};
+  } catch (e) { return {}; }
+};
+
+UIC.setPref = function (key, value) {
+  var p = UIC.getPrefs();
+  if (value == null || value === '') delete p[key]; else p[key] = value;
+  try { localStorage.setItem(UIC.PREFS_KEY, JSON.stringify(p)); } catch (e) {}
+  UIC.applyPrefs();
+  return p;
+};
+
+UIC.applyPrefs = function () {
+  var p = UIC.getPrefs();
+  var root = document.documentElement;
+  if (!root) return;
+  /* Absent means "follow the operating system", which is why the attribute is
+     REMOVED rather than set to a third value: the CSS guard is written around
+     the attribute being missing. */
+  if (p.theme === 'dark' || p.theme === 'light') root.setAttribute('data-theme', p.theme);
+  else root.removeAttribute('data-theme');
+  if (p.density === 'compact') root.setAttribute('data-density', 'compact');
+  else root.removeAttribute('data-density');
+};
+
+/* Run immediately, not on DOMContentLoaded: this file is included in <head>,
+   so setting the attribute here happens before the body is painted. */
+try { UIC.applyPrefs(); } catch (e) {}
+
+UIC.openPreferences = function () {
+  var p = UIC.getPrefs();
+  var radio = function (name, value, label, current) {
+    var id = 'pref-' + name + '-' + value;
+    return '<label class="pref-choice" for="' + id + '">' +
+      '<input type="radio" id="' + id + '" name="pref-' + name + '" value="' + value + '"' +
+      (String(current || '') === value || (!current && value === 'system') || (!current && value === 'comfortable') ? ' checked' : '') +
+      ' onchange="UIC.setPref(\'' + name + '\', this.value === \'system\' || this.value === \'comfortable\' ? null : this.value)">' +
+      '<span>' + label + '</span></label>';
+  };
+  UIC.openModal('uic-prefs', {
+    title: 'التفضيلات',
+    size: 'sm',
+    footer: UIC.button({ text: 'تم', onClick: "UIC.closeModal('uic-prefs')" }),
+    body:
+      '<div class="pref-group"><div class="pref-label">المظهر</div>' +
+        radio('theme', 'system', 'حسب النظام', p.theme) +
+        radio('theme', 'light', 'فاتح', p.theme) +
+        radio('theme', 'dark', 'داكن', p.theme) +
+      '</div>' +
+      '<div class="pref-group"><div class="pref-label">كثافة العرض</div>' +
+        radio('density', 'comfortable', 'مريح', p.density) +
+        radio('density', 'compact', 'مضغوط', p.density) +
+      '</div>' +
+      '<p class="pref-note">تُحفظ هذه التفضيلات على هذا الجهاز فقط.</p>'
+  });
 };
 
 UIC.toggleDropdown = function (id, event) {
@@ -3828,6 +3905,18 @@ document.addEventListener('keydown', function (e) {
   .nav-dropdown-item { display: flex; align-items: center; padding: 10px 12px; font-size: var(--text-sm); color: var(--text-main); text-decoration: none; border-radius: var(--radius-sm); cursor: pointer; white-space: nowrap; min-height: 40px; transition: background-color 0.15s, color 0.15s; }
   .nav-dropdown-item:hover { background: var(--brand-subtle-bg); color: var(--brand-primary); }
   .nav-dropdown-item-active { background: var(--brand-subtle-bg); color: var(--brand-primary); font-weight: 700; }
+
+  /* ── [UI-8.3 / U-41] Preferences panel ───────────────────────────────── */
+  .pref-group { margin-bottom: var(--space-4); }
+  .pref-label { font-size: var(--text-xs); font-weight: 800; color: var(--text-muted); margin-bottom: var(--space-2); text-transform: uppercase; letter-spacing: .06em; }
+  .pref-choice {
+    display: flex; align-items: center; gap: var(--space-2);
+    padding: var(--space-2) 10px; border-radius: var(--radius-sm);
+    font-size: var(--text-sm); cursor: pointer; min-height: var(--tap-sm, 44px);
+  }
+  .pref-choice:hover { background: var(--bg-subtle); }
+  .pref-choice input { accent-color: var(--brand-primary); width: 16px; height: 16px; }
+  .pref-note { font-size: var(--text-xs); color: var(--text-muted); margin-top: var(--space-2); }
 
   /* ── [UI-6.5 / U-33] Skip link ───────────────────────────────────────── */
   .skip-link {

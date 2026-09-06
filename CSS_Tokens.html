@@ -174,6 +174,95 @@
   --transition-med:  0.25s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
+/* ── [UI-8.1 / U-12] Dark mode ───────────────────────────────────────────
+ *
+ * This is only possible because of Phase 2: until steps 2.4–2.6 the three
+ * company themes each re-stated the canvas and ink tokens further down the
+ * cascade, so any dark values set here were immediately overwritten. Now the
+ * themes carry brand and semantics only, and these tokens are the single place
+ * the canvas is decided.
+ *
+ * Three states, in this order, deliberately:
+ *   1. the light palette above, on bare :root — the default;
+ *   2. the OS preference, guarded so an explicit light choice still wins;
+ *   3. an explicit [data-theme] choice, which wins in both directions.
+ * Only the tokens change. No component has a dark variant of its own, which is
+ * what keeps this from becoming a second design system to maintain.
+ */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg-canvas:      #12151a;
+    --bg-primary:     #12151a;
+    --bg-surface:     #1a1e25;
+    --bg-subtle:      #222731;
+    --bg-sunken:      #0d1014;
+    --border-color:   #2c323c;
+    --border-strong:  #3a4150;
+    --text-main:      #e8eaed;
+    --text-muted:     #a4adba;
+    --text-disabled:  #78818f;
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.5);
+    --shadow-lg: 0 10px 30px rgba(0, 0, 0, 0.6);
+    /* Status backgrounds have to come down with everything else, or a success
+       pill is a bright green rectangle glowing on a dark page. */
+    --success-bg: #10261a;  --success-border: #1e4632;  --success-text: #6ee7a8;
+    --warning-bg: #2a2011;  --warning-border: #4d3d1c;  --warning-text: #f5c265;
+    --danger-bg:  #2a1416;  --danger-border:  #4d2226;  --danger-text:  #f19396;
+    --pending-bg: #2a2011;  --pending-border: #4d3d1c;  --pending-text: #f5c265;
+  }
+}
+
+:root[data-theme="dark"] {
+  --bg-canvas:      #12151a;
+  --bg-primary:     #12151a;
+  --bg-surface:     #1a1e25;
+  --bg-subtle:      #222731;
+  --bg-sunken:      #0d1014;
+  --border-color:   #2c323c;
+  --border-strong:  #3a4150;
+  --text-main:      #e8eaed;
+  --text-muted:     #a4adba;
+  --text-disabled:  #78818f;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.5);
+  --shadow-lg: 0 10px 30px rgba(0, 0, 0, 0.6);
+  --success-bg: #10261a;  --success-border: #1e4632;  --success-text: #6ee7a8;
+  --warning-bg: #2a2011;  --warning-border: #4d3d1c;  --warning-text: #f5c265;
+  --danger-bg:  #2a1416;  --danger-border:  #4d2226;  --danger-text:  #f19396;
+  --pending-bg: #2a2011;  --pending-border: #4d3d1c;  --pending-text: #f5c265;
+}
+
+/* ── [UI-8.2 / U-41] Density ─────────────────────────────────────────────
+ * Compact drives the SPACING SCALE, not a pile of per-component overrides, so
+ * every component that already uses var(--space-*) tightens together and
+ * nothing has to opt in. Tap targets are deliberately NOT reduced: a denser
+ * table on a touchscreen still has to be tappable. */
+:root[data-density="compact"] {
+  --space-1: 2px;
+  --space-2: 6px;
+  --space-3: 8px;
+  --space-4: 12px;
+  --space-6: 16px;
+  --space-8: 24px;
+  --space-xs: 0.25rem;
+  --space-sm: 0.5rem;
+  --space-md: 0.75rem;
+  --space-lg: 1rem;
+}
+:root[data-density="compact"] .table tbody td { padding-block: 5px; }
+:root[data-density="compact"] .table thead th { padding-block: 6px; }
+
+/* Printing is always light: dark tokens on paper waste toner and read badly. */
+@media print {
+  :root, :root[data-theme="dark"] {
+    --bg-canvas: #ffffff; --bg-primary: #ffffff; --bg-surface: #ffffff;
+    --bg-subtle: #ffffff; --bg-sunken: #ffffff;
+    --text-main: #000000; --text-muted: #333333; --text-disabled: #666666;
+    --border-color: #999999; --border-strong: #666666;
+  }
+}
+
 *,
 *::before,
 *::after {
