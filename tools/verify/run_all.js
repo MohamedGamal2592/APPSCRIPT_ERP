@@ -43,7 +43,8 @@ const STEPS = [
   ['ui5_forms.js', 'UI-5.1/5.2/5.3 — dirty guard, styled confirm, validation'],
   ['ui_smoke_pages.js', 'deployment smoke — every page template boots'],
   /* ── Box analysis (branch feat/tc-box-analysis) ── */
-  ['box_parser.js', 'B1 — transaction_details parser, over the fixture corpus']
+  ['box_parser.js', 'B1 — transaction_details parser, over the fixture corpus'],
+  ['box_matcher.js', 'B2 — item matcher: stemming, blocking, scores, clusters']
 ];
 
 /* Two programmes share this repo and this runner, so a step's file can be

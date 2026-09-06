@@ -363,6 +363,422 @@ var BoxEngine = (function () {
   }
 
   // ═══════════════════════════════════════════════════════════════════════
+  // §5  Item identity — the matcher
+  // ═══════════════════════════════════════════════════════════════════════
+
+  /* Tuning lives here, in one object, because a threshold nobody can see is a
+     threshold nobody can tune. The verify run prints the score of every fixture
+     pair against these numbers; change one and the run tells you what moved. */
+  var MATCH = {
+    /* Weights sum to 1. Dice carries the most because whole shared tokens are
+       the strongest evidence in this vocabulary; the trigram cosine is second
+       because it is what separates a typo from a genuinely different product. */
+    W_DICE: 0.40,
+    W_LEV: 0.20,
+    W_TRIGRAM: 0.30,
+    W_UNIT: 0.10,
+    /* Chosen against tools/verify/fixtures/box_details.json — see the measured
+       score table printed by `node tools/verify/box_matcher.js --show`. It sits
+       between the hardest true pair (a one-character typo) and the hardest
+       false pair (سلك لحام زهر vs سلك لحام المونيوم, two of three tokens
+       shared, different metals, different prices). */
+    THRESHOLD: 0.58,
+    /* Blocking guards. A token appearing in more posting-list entries than this
+       is too common to block on — that is the IDF floor of plan §5.1, expressed
+       as the thing it actually controls. */
+    MAX_POSTING: 200,
+    RARE_STEMS: 2,
+    RARE_TRIGRAMS: 4,
+    MAX_CANDIDATES: 400,
+    /* Suffix stripping only when at least this much stem survives. Without it
+       "زيتون" stems to "زيت" and olives merge with oil, and "معجون" stems to
+       "معج". Both are real words in this vocabulary. */
+    MIN_STEM: 4
+  };
+
+  var RE_AL_PREFIX = /^ال/;
+  var SUFFIXES = ['ات', 'ين', 'ون', 'ه'];
+
+  /**
+   * Light Arabic stemming (plan §5.2): strip the definite article and a small
+   * set of suffixes. Deliberately not a real morphological stemmer — this
+   * vocabulary is workshop consumables, and an aggressive stemmer conflates
+   * more than it merges.
+   */
+  function stemAr(token) {
+    var t = String(token || '');
+    if (!t) return '';
+    if (RE_AL_PREFIX.test(t) && t.length - 2 >= 3) t = t.slice(2);
+    for (var i = 0; i < SUFFIXES.length; i++) {
+      var s = SUFFIXES[i];
+      if (t.length > s.length && t.slice(-s.length) === s && t.length - s.length >= MATCH.MIN_STEM) {
+        t = t.slice(0, t.length - s.length);
+        break;
+      }
+    }
+    return t;
+  }
+
+  function stemTokens(itemNorm) {
+    var seen = {}, out = [];
+    tokens_(itemNorm).forEach(function (t) {
+      var s = stemAr(t);
+      if (!s || Object.prototype.hasOwnProperty.call(seen, s)) return;
+      seen[s] = true;
+      out.push(s);
+    });
+    return out;
+  }
+
+  /** Order-invariant identity AFTER stemming — the second exact-match block. */
+  function stemKey(itemNorm) {
+    return stemTokens(itemNorm).slice().sort().join(' ');
+  }
+
+  function tokenSetDice(aTokens, bTokens) {
+    if (!aTokens.length || !bTokens.length) return 0;
+    var set = {}, i;
+    for (i = 0; i < aTokens.length; i++) set[aTokens[i]] = true;
+    var shared = 0;
+    for (i = 0; i < bTokens.length; i++) {
+      if (Object.prototype.hasOwnProperty.call(set, bTokens[i])) shared++;
+    }
+    return (2 * shared) / (aTokens.length + bTokens.length);
+  }
+
+  /** Levenshtein distance, two-row DP. Strings here are short item names. */
+  function levenshtein(a, b) {
+    a = String(a || ''); b = String(b || '');
+    if (a === b) return 0;
+    if (!a.length) return b.length;
+    if (!b.length) return a.length;
+    var prev = [], cur = [], i, j;
+    for (j = 0; j <= b.length; j++) prev[j] = j;
+    for (i = 1; i <= a.length; i++) {
+      cur[0] = i;
+      for (j = 1; j <= b.length; j++) {
+        var cost = a.charAt(i - 1) === b.charAt(j - 1) ? 0 : 1;
+        cur[j] = Math.min(cur[j - 1] + 1, prev[j] + 1, prev[j - 1] + cost);
+      }
+      for (j = 0; j <= b.length; j++) prev[j] = cur[j];
+    }
+    return prev[b.length];
+  }
+
+  function normLevenshtein(a, b) {
+    var m = Math.max(String(a || '').length, String(b || '').length);
+    return m === 0 ? 0 : levenshtein(a, b) / m;
+  }
+
+  /** Character 3-grams with a boundary pad, as a {gram: count} bag. */
+  function trigramBag(s) {
+    var t = '  ' + String(s || '') + '  ';
+    var m = {};
+    for (var i = 0; i + 3 <= t.length; i++) {
+      var g = t.substr(i, 3);
+      m[g] = (m[g] || 0) + 1;
+    }
+    return m;
+  }
+
+  /**
+   * Cosine between two trigram bags, each component weighted by the gram's IDF.
+   *
+   * The IDF weighting is the part that earns its keep. "سلك" and "لحام" appear
+   * in most welding-wire rows, so their grams carry almost no weight; the grams
+   * that distinguish زهر from المونيوم carry nearly all of it. Unweighted, two
+   * different welding wires look nearly identical.
+   */
+  function idfTrigramCosine(bagA, bagB, idfOf) {
+    var dot = 0, na = 0, nb = 0, g, w;
+    for (g in bagA) {
+      if (!Object.prototype.hasOwnProperty.call(bagA, g)) continue;
+      w = idfOf(g);
+      na += (bagA[g] * w) * (bagA[g] * w);
+      if (Object.prototype.hasOwnProperty.call(bagB, g)) dot += (bagA[g] * w) * (bagB[g] * w);
+    }
+    for (g in bagB) {
+      if (!Object.prototype.hasOwnProperty.call(bagB, g)) continue;
+      w = idfOf(g);
+      nb += (bagB[g] * w) * (bagB[g] * w);
+    }
+    if (na === 0 || nb === 0) return 0;
+    return dot / (Math.sqrt(na) * Math.sqrt(nb));
+  }
+
+  /* Units grouped by physical dimension. Two items measured in different
+     dimensions are not the same purchase however similar the words look. */
+  var UNIT_FAMILY_RAW = {
+    'كيلو': 'mass', 'كجم': 'mass', 'كج': 'mass', 'جرام': 'mass', 'جم': 'mass', 'طن': 'mass',
+    'لتر': 'volume', 'مللي': 'volume', 'جالون': 'volume', 'برميل': 'volume',
+    'صفيحة': 'volume', 'جردل': 'volume',
+    'متر': 'length', 'سم': 'length', 'مم': 'length', 'لفة': 'length', 'رول': 'length', 'شريط': 'length',
+    'طبة': 'count', 'علبة': 'count', 'عبوة': 'count', 'زجاجة': 'count', 'شكارة': 'count',
+    'كيس': 'count', 'باكو': 'count', 'بوكس': 'count', 'كرتونة': 'count', 'كرتون': 'count',
+    'شنطة': 'count', 'صندوق': 'count', 'قطعة': 'count', 'عدد': 'count', 'حتة': 'count',
+    'لوح': 'count', 'صاج': 'count', 'اسطوانة': 'count', 'دستة': 'count', 'درزن': 'count'
+  };
+
+  var UNIT_FAMILY = (function () {
+    var m = {};
+    for (var k in UNIT_FAMILY_RAW) {
+      if (Object.prototype.hasOwnProperty.call(UNIT_FAMILY_RAW, k)) m[normAr(k)] = UNIT_FAMILY_RAW[k];
+    }
+    return m;
+  })();
+
+  /**
+   * 1.0 same unit · 0.8 same dimension · 0.5 at least one unknown · 0 different
+   * dimension.
+   *
+   * An unknown unit scores 0.5, not 1.0, on purpose: "we do not know" is not
+   * evidence of compatibility, and roughly half this corpus carries no unit at
+   * all. Scoring it as agreement would hand every unitless pair a free 0.1.
+   */
+  function unitCompatible(unitA, unitB) {
+    var a = unitA ? normAr(unitA) : '';
+    var b = unitB ? normAr(unitB) : '';
+    if (!a || !b) return 0.5;
+    if (a === b) return 1;
+    var fa = UNIT_FAMILY[a], fb = UNIT_FAMILY[b];
+    if (fa && fb && fa === fb) return 0.8;
+    if (!fa || !fb) return 0.5;
+    return 0;
+  }
+
+  /**
+   * Build the blocking + IDF index over a set of DISTINCT normalized item
+   * texts. Distinct texts, not occurrences: a thousand rows buying "معجون شروخ"
+   * are one node here, which is what keeps this inside the execution limit.
+   */
+  function buildMatchIndex(records) {
+    var nodes = [], byNorm = {};
+    (records || []).forEach(function (r) {
+      var norm = typeof r === 'string' ? r : (r && r.item_norm) || '';
+      var unit = (typeof r === 'string') ? null : (r && r.unit) || null;
+      if (!norm) return;
+      if (Object.prototype.hasOwnProperty.call(byNorm, norm)) {
+        var ex = nodes[byNorm[norm]];
+        ex.count++;
+        if (unit) ex.units[unit] = (ex.units[unit] || 0) + 1;
+        return;
+      }
+      var stems = stemTokens(norm);
+      byNorm[norm] = nodes.length;
+      var n = {
+        i: nodes.length,
+        norm: norm,
+        tokens: tokens_(norm),
+        stems: stems,
+        key: itemKey(norm),
+        stem_key: stems.slice().sort().join(' '),
+        tri: trigramBag(norm),
+        units: {},
+        count: 1
+      };
+      if (unit) n.units[unit] = 1;
+      nodes.push(n);
+    });
+
+    var N = nodes.length;
+    var stemDf = {}, triDf = {}, byKey = {}, byStemKey = {}, postings = {}, triPostings = {};
+
+    nodes.forEach(function (n) {
+      var seen = {};
+      n.stems.forEach(function (s) {
+        if (seen[s]) return;
+        seen[s] = true;
+        stemDf[s] = (stemDf[s] || 0) + 1;
+        (postings[s] = postings[s] || []).push(n.i);
+      });
+      var seenG = {};
+      for (var g in n.tri) {
+        if (!Object.prototype.hasOwnProperty.call(n.tri, g) || seenG[g]) continue;
+        seenG[g] = true;
+        triDf[g] = (triDf[g] || 0) + 1;
+        (triPostings[g] = triPostings[g] || []).push(n.i);
+      }
+      (byKey[n.key] = byKey[n.key] || []).push(n.i);
+      (byStemKey[n.stem_key] = byStemKey[n.stem_key] || []).push(n.i);
+    });
+
+    function idfStem(t) { return Math.log(1 + N / (1 + (stemDf[t] || 0))); }
+    function idfTri(g) { return Math.log(1 + N / (1 + (triDf[g] || 0))); }
+
+    /* The unit a text is most often bought in — used for unitCompatible when
+       scoring two texts rather than two individual occurrences. */
+    nodes.forEach(function (n) {
+      var best = null, bestN = 0;
+      for (var u in n.units) {
+        if (Object.prototype.hasOwnProperty.call(n.units, u) && n.units[u] > bestN) { best = u; bestN = n.units[u]; }
+      }
+      n.unit = best;
+    });
+
+    return {
+      N: N, nodes: nodes, byNorm: byNorm,
+      byKey: byKey, byStemKey: byStemKey,
+      postings: postings, triPostings: triPostings,
+      stemDf: stemDf, triDf: triDf,
+      idfStem: idfStem, idfTri: idfTri
+    };
+  }
+
+  /**
+   * Score two index nodes. Returns the total AND every component, because a
+   * merge an accountant disagrees with has to be explainable — "0.71" is not an
+   * answer to "why did you put these together".
+   */
+  function matchScore(a, b, idx) {
+    var dice = tokenSetDice(a.stems, b.stems);
+    var lev = 1 - normLevenshtein(a.stems.slice().sort().join(' '), b.stems.slice().sort().join(' '));
+    var tri = idx ? idfTrigramCosine(a.tri, b.tri, idx.idfTri) : 0;
+    var unit = unitCompatible(a.unit, b.unit);
+    var score = MATCH.W_DICE * dice + MATCH.W_LEV * lev + MATCH.W_TRIGRAM * tri + MATCH.W_UNIT * unit;
+    return {
+      score: round_(score, 4),
+      dice: round_(dice, 4),
+      lev: round_(lev, 4),
+      trigram: round_(tri, 4),
+      unit: round_(unit, 4)
+    };
+  }
+
+  /**
+   * Candidate generation for one node (plan §5.1), cheapest block first:
+   *   1. identical item_key      — flipped word order, free
+   *   2. identical stem_key      — definite articles and plurals, free
+   *   3. rarest shared stems     — the IDF-weighted inverted index
+   *   4. rarest shared trigrams  — typos that share no whole token
+   * A posting list longer than MATCH.MAX_POSTING is skipped: a token that
+   * common cannot discriminate, and walking it would dominate the run.
+   */
+  function matchCandidates(node, idx) {
+    var out = {}, i;
+    function add(list) {
+      if (!list || list.length > MATCH.MAX_POSTING) return;
+      for (var k = 0; k < list.length; k++) if (list[k] !== node.i) out[list[k]] = true;
+    }
+    add(idx.byKey[node.key]);
+    add(idx.byStemKey[node.stem_key]);
+
+    var stems = node.stems.slice().sort(function (x, y) { return idx.idfStem(y) - idx.idfStem(x); });
+    for (i = 0; i < Math.min(stems.length, MATCH.RARE_STEMS); i++) add(idx.postings[stems[i]]);
+
+    var grams = Object.keys(node.tri).sort(function (x, y) { return idx.idfTri(y) - idx.idfTri(x); });
+    for (i = 0; i < Math.min(grams.length, MATCH.RARE_TRIGRAMS); i++) add(idx.triPostings[grams[i]]);
+
+    var ids = Object.keys(out).map(Number);
+    return ids.length > MATCH.MAX_CANDIDATES ? ids.slice(0, MATCH.MAX_CANDIDATES) : ids;
+  }
+
+  function makeDsu_(n) {
+    var p = [];
+    for (var i = 0; i < n; i++) p.push(i);
+    function find(x) { while (p[x] !== x) { p[x] = p[p[x]]; x = p[x]; } return x; }
+    function union(a, b) { a = find(a); b = find(b); if (a === b) return false; p[b] = a; return true; }
+    return { find: find, union: union };
+  }
+
+  /**
+   * Cluster item texts into one group per real-world purchase.
+   *
+   * opts.aliases carries the human overrides from §5.3 — the reviewer's
+   * corrections, which always win over the score:
+   *   { merge: [[normA, normB], ...], split: [[normA, normB], ...] }
+   *
+   * A split is enforced by refusing any union that would put a forbidden pair
+   * in one component. That makes the result depend on the order unions are
+   * attempted, so pairs are processed in a fixed sorted order and the outcome
+   * is deterministic for a given input. It is not a general constrained
+   * clustering, and it does not pretend to be: it is "the reviewer said these
+   * two are different, so never merge them".
+   */
+  function clusterItems(records, opts) {
+    var o = opts || {};
+    var threshold = o.threshold === undefined ? MATCH.THRESHOLD : o.threshold;
+    var idx = o.index || buildMatchIndex(records);
+    var dsu = makeDsu_(idx.N);
+
+    var forbidden = [];
+    ((o.aliases && o.aliases.split) || []).forEach(function (pair) {
+      var a = idx.byNorm[normAr(pair[0])], b = idx.byNorm[normAr(pair[1])];
+      if (a !== undefined && b !== undefined) forbidden.push([a, b]);
+    });
+
+    function wouldViolate(a, b) {
+      var ra = dsu.find(a), rb = dsu.find(b);
+      for (var i = 0; i < forbidden.length; i++) {
+        var fa = dsu.find(forbidden[i][0]), fb = dsu.find(forbidden[i][1]);
+        if ((fa === ra && fb === rb) || (fa === rb && fb === ra)) return true;
+      }
+      return false;
+    }
+    function tryUnion(a, b) {
+      if (dsu.find(a) === dsu.find(b)) return false;
+      if (wouldViolate(a, b)) return false;
+      return dsu.union(a, b);
+    }
+
+    /* Reviewer merges first: they are facts, not evidence. */
+    ((o.aliases && o.aliases.merge) || []).forEach(function (pair) {
+      var a = idx.byNorm[normAr(pair[0])], b = idx.byNorm[normAr(pair[1])];
+      if (a !== undefined && b !== undefined) tryUnion(a, b);
+    });
+
+    /* Score every candidate pair once, then union in descending score order so
+       the strongest evidence is applied first and the result does not depend on
+       node ordering. */
+    var pairs = [], seenPair = {};
+    idx.nodes.forEach(function (n) {
+      matchCandidates(n, idx).forEach(function (j) {
+        var lo = Math.min(n.i, j), hi = Math.max(n.i, j);
+        var pk = lo + ':' + hi;
+        if (seenPair[pk]) return;
+        seenPair[pk] = true;
+        var s = matchScore(idx.nodes[lo], idx.nodes[hi], idx);
+        if (s.score >= threshold) pairs.push({ a: lo, b: hi, s: s.score });
+      });
+    });
+    pairs.sort(function (x, y) { return y.s - x.s || x.a - y.a || x.b - y.b; });
+    pairs.forEach(function (p) { tryUnion(p.a, p.b); });
+
+    var groups = {};
+    idx.nodes.forEach(function (n) {
+      var r = dsu.find(n.i);
+      (groups[r] = groups[r] || []).push(n);
+    });
+
+    var clusters = Object.keys(groups).map(function (r) {
+      var members = groups[r].slice().sort(function (x, y) { return y.count - x.count || (x.norm < y.norm ? -1 : 1); });
+      var total = 0;
+      members.forEach(function (m) { total += m.count; });
+      /* cluster_id is the lexicographically smallest MEMBER TEXT, not the
+         representative's item_key. item_key is order-invariant, so a reviewer
+         who splits "معجون شروخ" from "شروخ معجون" would get two clusters
+         carrying the SAME id — and every downstream lookup keyed by cluster id
+         would quietly merge them back, undoing the correction. Membership sets
+         are disjoint, so the smallest member text is unique by construction,
+         and it does not move when purchase counts shift. */
+      var ids = members.map(function (m) { return m.norm; }).sort();
+      return {
+        cluster_id: ids[0],
+        label: members[0].norm,              /* the most-used member — what a reviewer reads */
+        members: members.map(function (m) { return m.norm; }),
+        member_count: members.length,
+        occurrence_count: total
+      };
+    }).sort(function (x, y) { return y.occurrence_count - x.occurrence_count; });
+
+    var byNormCluster = {};
+    clusters.forEach(function (c) {
+      c.members.forEach(function (m) { byNormCluster[m] = c.cluster_id; });
+    });
+
+    return { clusters: clusters, byNorm: byNormCluster, index: idx, threshold: threshold };
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
   // Public surface
   // ═══════════════════════════════════════════════════════════════════════
 
@@ -375,6 +791,22 @@ var BoxEngine = (function () {
     itemKey: itemKey,
     scoreParse: scoreParse,
     parseDetails: parseDetails,
+
+    /* §5 — the matcher */
+    stemAr: stemAr,
+    stemTokens: stemTokens,
+    stemKey: stemKey,
+    tokenSetDice: tokenSetDice,
+    levenshtein: levenshtein,
+    normLevenshtein: normLevenshtein,
+    trigramBag: trigramBag,
+    idfTrigramCosine: idfTrigramCosine,
+    unitCompatible: unitCompatible,
+    buildMatchIndex: buildMatchIndex,
+    matchScore: matchScore,
+    matchCandidates: matchCandidates,
+    clusterItems: clusterItems,
+    MATCH: MATCH,
     /* Exposed for the verify harness and for the alias/override UI, which needs
        to show a reviewer which tokens the engine recognises as units. */
     _QUANTITY_WORDS: QUANTITY_WORDS,
