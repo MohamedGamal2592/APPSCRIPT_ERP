@@ -128,8 +128,9 @@
     fetchParties();
   }
 
+  /* Opens in a new tab as before; when the tab is refused, UIC.openTab navigates this frame there instead. */
   function openStatement(id) {
-    window.open(scriptUrl + '?action=tl_customer_statement&purchase_code=' + encodeURIComponent(id) + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN), '_blank');
+    UIC.openTab(scriptUrl + '?action=tl_customer_statement&purchase_code=' + encodeURIComponent(id) + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN));
   }
 
   function exportCustomers() {

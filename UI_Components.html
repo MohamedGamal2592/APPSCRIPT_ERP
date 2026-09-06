@@ -366,6 +366,45 @@ UIC.navTo = function (ev, href) {
   window.location.href = href;
 };
 
+/* ── Opening a page in a new tab, and leaving it again ────────────────────
+ *
+ * Both helpers exist for one reason: the path that already works on Android
+ * Chrome and on Windows must run unchanged, and only when that path has
+ * demonstrably failed does anything different happen. Neither looks at the
+ * user agent; both are feature-detected on what the browser actually did.
+ *
+ * UIC.openTab(url)
+ *   Opens url in a new tab, with the same window.open(url, '_blank') every
+ *   caller used to make directly. When the tab is refused — iOS Safari blocks
+ *   pop-ups by default, and the Apps Script sandbox can refuse one too —
+ *   window.open returns null and the action used to end there, silently. Then,
+ *   and only then, this frame navigates to url instead. Mirrors openSalesPage_
+ *   on المبيعات, which shipped first and is left exactly as it is. */
+UIC.openTab = function (url) {
+  if (!url) return;
+  var w = null;
+  try { w = window.open(url, '_blank'); } catch (e) { w = null; }
+  if (w) { try { w.focus(); } catch (e) {} return; }
+  UIC.navTo(null, url);
+};
+
+/* UIC.closeOrBack(backUrl)
+ *   For a page reached either as a tab (a list opened one) or in place (the
+ *   sandbox refused the tab and UIC.openTab navigated here). Tries to close
+ *   exactly as the inline إغلاق buttons did. Closing only ends the first case,
+ *   and from inside the Apps Script iframe window.top.close() is a cross-origin
+ *   call that throws on every platform, so that button did nothing at all. If
+ *   the window is provably still here 200ms later, go to backUrl — the list
+ *   this page was opened from — rather than leave a dead button. Mirrors
+ *   closeReturns on المرتجعات, which is left exactly as it is. */
+UIC.closeOrBack = function (backUrl) {
+  try { window.top.close(); } catch (e) { try { window.close(); } catch (e2) {} }
+  setTimeout(function () {
+    if (window.closed) return;
+    if (backUrl) UIC.navTo(null, backUrl);
+  }, 200);
+};
+
 /* ── [UI-3.4 / U-24] The ONE loading overlay ──────────────────────────────
  *
  * There were four implementations, each with its own look:

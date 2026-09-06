@@ -21,6 +21,12 @@
 <script>
   var params = new URLSearchParams(window.location.search);
   var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+
+  /* إغلاق goes back to the list this page was opened from when there is no
+     tab to close — see UIC.closeOrBack. */
+  function backUrl_() {
+    return UIC.baseUrl() + '?action=tl_products&sessionToken=' + encodeURIComponent(SESSION_TOKEN);
+  }
   var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('8df5c89a117fe9a5') ?>';
 
   function companyCall(moduleAction, data) {
@@ -62,7 +68,7 @@
       '<h2 style="margin:0;">الاصناف المطلوب شرائها</h2>' +
       '<div style="display:flex;gap:8px;">' +
       '<button class="btn btn-primary" onclick="window.print()">طباعة</button>' +
-      '<button class="btn btn-outline" onclick="try{window.top.close()}catch(e){window.close()}">إغلاق</button>' +
+      '<button class="btn btn-outline" onclick="UIC.closeOrBack(backUrl_())">إغلاق</button>' +
       '</div></div>' +
       '<div style="max-width:1000px;margin:0 auto;">' +
       '<div style="margin-bottom:12px;padding:10px 14px;background:#fee2e2;border:2px solid var(--danger-text, #b91c1c);border-radius:8px;color:#b91c1c;font-weight:700;">' +

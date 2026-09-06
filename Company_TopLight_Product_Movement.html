@@ -20,6 +20,12 @@
 <script>
   var params = new URLSearchParams(window.location.search);
   var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+
+  /* إغلاق goes back to the list this page was opened from when there is no
+     tab to close — see UIC.closeOrBack. */
+  function backUrl_() {
+    return UIC.baseUrl() + '?action=tl_products&sessionToken=' + encodeURIComponent(SESSION_TOKEN);
+  }
   var productId = '<?!= purchaseCode ?>';
   var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('8df5c89a117fe9a5') ?>';
 
@@ -94,7 +100,7 @@
       '<h2 style="margin:0;">حركة المنتج: ' + FMT.escape((r.product && r.product.name) || '') + '</h2>' +
       '<div style="display:flex;gap:8px;">' +
       '<button class="btn btn-primary" onclick="window.print()">طباعة</button>' +
-      '<button class="btn btn-outline" onclick="try{window.top.close()}catch(e){window.close()}">إغلاق</button>' +
+      '<button class="btn btn-outline" onclick="UIC.closeOrBack(backUrl_())">إغلاق</button>' +
       '</div></div>' +
       '<div style="max-width:1100px;margin:0 auto;">' +
       filterBar + openingHtml +

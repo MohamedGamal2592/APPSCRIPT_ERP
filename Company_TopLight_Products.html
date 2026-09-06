@@ -103,16 +103,18 @@
     UIC.initTableSort('products-table');
   }
 
+  /* Opens in a new tab as before; when the tab is refused, UIC.openTab navigates this frame there instead. */
   function openMovement(id) {
     var base = (window.UIC && UIC.baseUrl) ? UIC.baseUrl() : (window.scriptUrl || scriptUrl);
     var tok = (window.UIC && UIC.token) ? UIC.token() : SESSION_TOKEN;
-    window.open(base + '?action=tl_product_movement&purchase_code=' + encodeURIComponent(id) + '&sessionToken=' + encodeURIComponent(tok), '_blank');
+    UIC.openTab(base + '?action=tl_product_movement&purchase_code=' + encodeURIComponent(id) + '&sessionToken=' + encodeURIComponent(tok));
   }
 
+  /* Opens in a new tab as before; when the tab is refused, UIC.openTab navigates this frame there instead. */
   function openPurchaseNeeds() {
     var base = (window.UIC && UIC.baseUrl) ? UIC.baseUrl() : (window.scriptUrl || scriptUrl);
     var tok = (window.UIC && UIC.token) ? UIC.token() : SESSION_TOKEN;
-    window.open(base + '?action=tl_purchase_needs&sessionToken=' + encodeURIComponent(tok), '_blank');
+    UIC.openTab(base + '?action=tl_purchase_needs&sessionToken=' + encodeURIComponent(tok));
   }
 
   function openProductModal(id) {

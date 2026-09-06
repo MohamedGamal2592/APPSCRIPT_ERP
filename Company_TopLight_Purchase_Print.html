@@ -33,6 +33,12 @@
 <script>
   var params = new URLSearchParams(window.location.search);
   var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+
+  /* إغلاق goes back to the list this page was opened from when there is no
+     tab to close — see UIC.closeOrBack. */
+  function backUrl_() {
+    return UIC.baseUrl() + '?action=tl_purchasing&sessionToken=' + encodeURIComponent(SESSION_TOKEN);
+  }
   var purchaseCode = '<?!= purchaseCode ?>';
   var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('8df5c89a117fe9a5') ?>';
 
@@ -80,7 +86,7 @@
     var html =
       '<div class="no-print" style="max-width:900px;margin:12px auto;display:flex;justify-content:flex-end;gap:8px;">' +
       '<button class="btn btn-primary" onclick="window.print()">طباعة</button>' +
-      '<button class="btn btn-outline" onclick="try{window.top.close()}catch(e){window.close()}">إغلاق</button>' +
+      '<button class="btn btn-outline" onclick="UIC.closeOrBack(backUrl_())">إغلاق</button>' +
       '</div>' +
       '<div class="invoice">' +
       '<div class="invoice-head">' +

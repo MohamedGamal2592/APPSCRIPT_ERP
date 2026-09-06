@@ -144,8 +144,9 @@
     UIC.initTableSort('sales-costing-dt');
   }
 
+  /* Opens in a new tab as before; when the tab is refused, UIC.openTab navigates this frame there instead. */
   function openCostingPrint(uid) {
-    window.open(scriptUrl + '?action=tl_sales_costing_print&purchase_code=' + encodeURIComponent(uid) + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN), '_blank');
+    UIC.openTab(scriptUrl + '?action=tl_sales_costing_print&purchase_code=' + encodeURIComponent(uid) + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN));
   }
 
   function kpi(label, value) {
