@@ -142,6 +142,11 @@ const ValleyFoods = (function () {
     'delete_valley_cash': { page: 'vf_cash', access: 'full' },
     'transfer_valley_cash': { page: 'vf_cash', access: 'write' },
 
+    // المالية — حركة المخزن (إضافة وعرض فقط)
+    'get_valley_warehouse_movements': { page: 'vf_warehouse_movement', access: 'read' },
+    'get_valley_warehouse_move_options': { page: 'vf_warehouse_movement', access: 'read' },
+    'save_valley_warehouse_movement': { page: 'vf_warehouse_movement', access: 'write' },
+
     // المشتريات — valley_purchasing_costing (header) + valley_product_purchasing (lines)
     'get_valley_purchasing_costing': { page: 'vf_purchasing', access: 'read' },
     'get_valley_purchasing_options': { page: 'vf_purchasing', access: 'read' },
@@ -246,6 +251,10 @@ const ValleyFoods = (function () {
     'get_valley_cash': 'valley_cash_bank_movement',
     'save_valley_cash': 'valley_cash_bank_movement',
     'transfer_valley_cash': 'valley_cash_bank_movement',
+
+    'get_valley_warehouse_movements': 'valley_warehouse_movement',
+    'get_valley_warehouse_move_options': 'valley_warehouse_movement',
+    'save_valley_warehouse_movement': 'valley_warehouse_movement',
 
     'get_valley_sales_bootstrap': 'valley_sales_invoices',
     'get_valley_product_batches': 'valley_current_products',
@@ -3240,6 +3249,8 @@ const ValleyFoodsHRModules = (function () {
     mfg_bp:      ['total_cost'],
     /* batch options from valley_current_products */
     batch:       ['unit_cost'],
+    /* valley_warehouse_movement rows and the batch options its form offers */
+    warehouse_move: ['amount', 'unit_cost'],
     /* valley_product_purchasing lines */
     pur_line:    ['unit_price', 'other_cost', 'total_cost', 'unit_cost', 'purchase_unit_cost',
                   'cost_currency', 'sales_value', 'sales_value_amount'],
@@ -6064,6 +6075,380 @@ const ValleyFoodsHRModules = (function () {
     return { status: 'success', message: 'تم تنفيذ التحويل بين الصندوقين' };
   }
 
+  /* ================= حركة المخزن — valley_warehouse_movement =================
+   * A table that ALREADY EXISTS in production, inherited from the legacy
+   * AppSheet app, with exactly 17 physical columns. Nothing here may change its
+   * shape.
+   *
+   * settingsEnsureSheet_ is deliberately NOT used on this sheet. It appends any
+   * canonical header it believes is missing, so a single typo in the list below
+   * — `movement_sign` for the production misspelling `movmenent_sign`, say —
+   * would silently add an 18th column to a live table. whAssertHeaders_ reads
+   * and asserts instead, and never writes.
+   *
+   * Add + list only, on purpose: a stock ledger stays append-only. A `منصرف`
+   * is cancelled by a matching `وارد داخلي / مرتجع للمخزن`, not by an edit. */
+  const WH_MOVE_SHEET   = 'valley_warehouse_movement';
+  /* Physical order, verified against appsheet_old_project.html
+     § table_valley_warehouse_movement_Schema. `movmenent_sign` is misspelled in
+     production and MUST stay misspelled. `user_name` and `product_current` are
+     legacy VIRTUAL columns — they are not on the sheet and are never written. */
+  const WH_MOVE_HEADERS = ['unique_id','id','warehouse','vendor','item','item_code','unit','qty',
+                           'amount','movement_type','movmenent_sign','movement_date','asset_target',
+                           'responsible_person','notes','user','created_at'];
+  const WH_WAREHOUSE    = 'مخزن مصنع فالي فودز';
+  const WH_MOVE_TYPES   = ['منصرف', 'وارد داخلي / مرتجع للمخزن'];
+  const WH_IN_TYPE      = 'وارد داخلي / مرتجع للمخزن';
+
+  /* Positional: F=item_code and K=movmenent_sign are written as formulas, so a
+     reordered sheet must fail loudly rather than write a formula into the wrong
+     column. Never appends — this is a production table. */
+  function whAssertHeaders_(sheet) {
+    var actual = getHeaders_(sheet).map(function (h) { return String(h).trim(); });
+    for (var i = 0; i < WH_MOVE_HEADERS.length; i++) {
+      if (String(actual[i] || '').toLowerCase() !== WH_MOVE_HEADERS[i].toLowerCase()) {
+        throw new Error('تغيّر ترتيب أعمدة جدول حركة المخزن: العمود رقم ' + (i + 1) +
+          ' يجب أن يكون «' + WH_MOVE_HEADERS[i] + '» وهو حاليًا «' + (actual[i] || 'فارغ') +
+          '». تم إيقاف العملية حفاظًا على سلامة البيانات.');
+      }
+    }
+    return actual;
+  }
+
+  /* The two sheet-computed columns, in the same style as
+     mfgConsumptionFormulaMap_. Recovered from the legacy R1C1 definitions:
+       item_code  (F): RC[-1] -> E, C[-5]:C[-3] -> A:C, C[-5]:C -> A:F
+       movmenent_sign (K): RC[-1] -> J (movement_type), RC[-3] -> H (qty)
+     The sign formula compares the FULL enum string. A version comparing only
+     "وارد" makes EVERY row negative and looks right in review. */
+  function whMoveFormulaMap_(r) {
+    return {
+      'item_code': '=IFERROR(VLOOKUP(E' + r + ',valley_product_purchasing!A:C,3,0),IFERROR(VLOOKUP(E' + r + ',valley_manufacture_header!A:C,3,0),IFERROR(VLOOKUP(E' + r + ',valley_manufacture_by_product!A:F,6,0),"")))',
+      'movmenent_sign': '=IF(J' + r + '="وارد داخلي / مرتجع للمخزن",H' + r + ',H' + r + '*-1)'
+    };
+  }
+
+  /* Batch availability for the WHOLE warehouse — the arithmetic of
+     getValleyProductBatches_, generalised off a single product and extended
+     with the two terms the legacy virtual `appsheet_current_qty` also carried:
+     manufacturing consumption, and this table's own signed movements.
+
+       available = current_qty − Σ sales allocations + Σ sales-return restores
+                                − Σ manufacturing consumption + Σ movmenent_sign
+
+     Never strips unit_cost: this is the server's own costing input, and the
+     cost gate applies to what leaves the server, not to what it computes with. */
+  function whBatchAvailability_(dbId) {
+    var batches = {};
+    try {
+      getAllRecords_(dbId, 'valley_current_products').forEach(function (r) {
+        var uid = String(r.unique_id || '').trim();
+        if (!uid) return;
+        batches[uid] = {
+          batch_uid: uid,
+          lot: String(r.transaction_code || '-'),
+          product_id: String(r.product_id == null ? '' : r.product_id).trim(),
+          product_name: String(r.product || '').trim(),
+          current_qty: Number(r.current_qty) || 0,
+          unit_cost: Number(r.unit_cost) || 0,
+          unit: String(r.unit || ''),
+          transaction_date: r.transaction_date || '',
+          used: 0, restored: 0, consumed: 0, moved: 0
+        };
+      });
+    } catch (e) {}
+
+    /* sales allocations off the batch */
+    var allocToBatch = {};
+    try {
+      getAllRecords_(dbId, 'valley_sales_product_stock').forEach(function (a) {
+        var buid = String(a.product_unique_id || '').trim();
+        allocToBatch[String(a.unique_id || '').trim()] = buid;
+        if (batches[buid]) batches[buid].used += Number(a.product_qty || 0);
+      });
+    } catch (e) {}
+
+    /* sales returns restore onto the ORIGINAL allocation's batch */
+    try {
+      getAllRecords_(dbId, 'valley_sales_returns_stock').forEach(function (rs) {
+        var b = batches[allocToBatch[String(rs.product_unique_id || '').trim()]];
+        if (b) b.restored += Number(rs.product_qty || 0);
+      });
+    } catch (e) {}
+
+    /* manufacturing consumption (valley_manufacture_footer.item -> batch uid) */
+    try {
+      getAllRecords_(dbId, MFG_CONSUMPTION_SHEET).forEach(function (c) {
+        var b = batches[String(c.item || '').trim()];
+        if (b) b.consumed += Number(c.qty || 0);
+      });
+    } catch (e) {}
+
+    /* this table's own movements. movmenent_sign is already signed — منصرف is
+       negative — so it is ADDED, exactly as the legacy virtual column did.
+       A row whose sheet formula has not evaluated yet falls back to the enum. */
+    try {
+      getAllRecords_(dbId, WH_MOVE_SHEET).forEach(function (m) {
+        var b = batches[String(m.item || '').trim()];
+        if (!b) return;
+        var s = Number(m.movmenent_sign);
+        if (m.movmenent_sign !== '' && m.movmenent_sign != null && !isNaN(s)) { b.moved += s; return; }
+        var q = Number(m.qty) || 0;
+        b.moved += (String(m.movement_type || '').trim() === WH_IN_TYPE) ? q : -q;
+      });
+    } catch (e) {}
+
+    Object.keys(batches).forEach(function (k) {
+      var b = batches[k];
+      b.available = Math.max(0, b.current_qty - b.used + b.restored - b.consumed + b.moved);
+    });
+    return batches;
+  }
+
+  /* unit of a batch, falling back to valley_products.unit via product_id */
+  function whBatchUnit_(dbId, batch) {
+    var unit = String((batch && batch.unit) || '').trim();
+    if (unit || !batch || !batch.product_id) return unit;
+    try {
+      var p = getAllRecords_(dbId, FIN_PRODUCTS_SHEET).find(function (x) {
+        return String(x.id == null ? '' : x.id).trim() === batch.product_id;
+      });
+      if (p) unit = String(p.unit || '').trim();
+    } catch (e) {}
+    return unit;
+  }
+
+  function whVendorNames_(dbId) {
+    var m = {};
+    try {
+      getAllRecords_(dbId, FIN_PARTIES_SHEET).forEach(function (p) {
+        var k = String(p.id == null ? '' : p.id).trim();
+        if (k) m[k] = String(p.name || k);
+      });
+    } catch (e) {}
+    return m;
+  }
+
+  function whEmployeeNames_(dbId) {
+    var m = {};
+    try {
+      getAllRecords_(dbId, EMP_INFO_SHEET).forEach(function (e) {
+        var k = String(e.emp_id == null ? '' : e.emp_id).trim();
+        if (k) m[k] = String(e.name || e.name_ar || k);
+      });
+    } catch (e) {}
+    return m;
+  }
+
+  /* ---------- list ---------- */
+  function getValleyWarehouseMovements_(data, user, dbId) {
+    var sheet = getSheet_(WH_MOVE_SHEET, dbId);
+    whAssertHeaders_(sheet);
+
+    var vendorNames = whVendorNames_(dbId);
+    var empNames = whEmployeeNames_(dbId);
+    var batchInfo = {};
+    try {
+      getAllRecords_(dbId, 'valley_current_products').forEach(function (r) {
+        var uid = String(r.unique_id || '').trim();
+        if (uid) batchInfo[uid] = { lot: String(r.transaction_code || ''), product: String(r.product || '') };
+      });
+    } catch (e) {}
+
+    var rows = getAllRecords_(dbId, WH_MOVE_SHEET).map(function (r) {
+      var buid = String(r.item || '').trim();
+      var bi = batchInfo[buid] || null;
+      var vkey = String(r.vendor == null ? '' : r.vendor).trim();
+      var rkey = String(r.responsible_person == null ? '' : r.responsible_person).trim();
+      return {
+        id: r.id,
+        unique_id: String(r.unique_id || ''),
+        movement_date: r.movement_date || '',
+        item: buid,
+        /* legacy rows may carry a batch that no longer exists; show the raw uid */
+        item_label: bi ? ((bi.lot || buid) + (bi.product ? ' — ' + bi.product : '')) : buid,
+        item_code: String(r.item_code || ''),
+        vendor: vkey,
+        /* an unknown ref resolves to itself rather than to an empty cell */
+        vendor_name: vkey ? (vendorNames[vkey] || vkey) : '',
+        unit: String(r.unit || ''),
+        qty: Number(r.qty) || 0,
+        amount: Number(r.amount) || 0,
+        movement_type: String(r.movement_type || ''),
+        movmenent_sign: Number(r.movmenent_sign) || 0,
+        responsible_person: rkey,
+        /* legacy rows stored a dept section here, not an emp_id — fall back to
+           the stored value so those rows still read correctly */
+        responsible_name: rkey ? (empNames[rkey] || rkey) : '',
+        notes: String(r.notes || ''),
+        user: String(r.user || '')
+      };
+    });
+
+    /* newest first, id as the tie-break */
+    rows.sort(function (a, b) {
+      var da = a.movement_date ? new Date(a.movement_date).getTime() : 0;
+      var db = b.movement_date ? new Date(b.movement_date).getTime() : 0;
+      if (db !== da) return db - da;
+      return (Number(b.id) || 0) - (Number(a.id) || 0);
+    });
+
+    var paged = vfPage_(rows, data, 'movement_date');
+    var canCost = vfCanSeeCost_(user);
+    /* Server-enforced: the keys are DELETED from the payload, not hidden in CSS. */
+    if (!canCost) vfStripCostAll_(paged.rows, VF_COST_KEYS.warehouse_move);
+    return {
+      status: 'success',
+      rows: paged.rows,
+      total: paged.total,
+      can_see_cost: canCost,
+      warehouse: WH_WAREHOUSE,
+      movement_types: WH_MOVE_TYPES,
+      in_type: WH_IN_TYPE
+    };
+  }
+
+  /* ---------- form bootstrap: vendors + employees + available batches ---------- */
+  function getValleyWarehouseMoveOptions_(data, user, dbId) {
+    var vendorNames = whVendorNames_(dbId);
+    var vendors = Object.keys(vendorNames).map(function (k) {
+      return { value: k, label: vendorNames[k] };
+    }).sort(function (a, b) { return String(a.label).localeCompare(String(b.label), 'ar'); });
+
+    var empNames = whEmployeeNames_(dbId);
+    var employees = Object.keys(empNames).map(function (k) {
+      return { value: k, label: empNames[k] };
+    }).sort(function (a, b) { return String(a.label).localeCompare(String(b.label), 'ar'); });
+
+    var avail = whBatchAvailability_(dbId);
+    var batches = Object.keys(avail).map(function (k) { return avail[k]; })
+      .filter(function (b) { return b.available > 0; })
+      .map(function (b) {
+        var unit = String(b.unit || '').trim();
+        var label = (b.lot || b.batch_uid) +
+          (b.product_name ? ' — ' + b.product_name : '') +
+          ' — ' + b.available + (unit ? ' ' + unit : '');
+        return {
+          value: b.batch_uid,
+          label: label,
+          batch_uid: b.batch_uid,
+          lot: b.lot,
+          product_id: b.product_id,
+          product_name: b.product_name,
+          unit: unit,
+          unit_cost: b.unit_cost,
+          available: b.available
+        };
+      })
+      .sort(function (a, b) { return String(a.label).localeCompare(String(b.label), 'ar'); });
+
+    var canCost = vfCanSeeCost_(user);
+    if (!canCost) vfStripCostAll_(batches, VF_COST_KEYS.warehouse_move);
+
+    return {
+      status: 'success',
+      vendors: vendors,
+      employees: employees,
+      batches: batches,
+      movement_types: WH_MOVE_TYPES,
+      in_type: WH_IN_TYPE,
+      can_see_cost: canCost
+    };
+  }
+
+  /* ---------- save (create only) ---------- */
+  function saveValleyWarehouseMovement_(data, user, dbId) {
+    var d = data || {};
+
+    /* 1 — date */
+    var dateVal = parseDate_(d.movement_date);
+    if (!dateVal) throw new Error('تاريخ الحركة مطلوب وبصيغة صحيحة');
+
+    /* 2 — movement type */
+    var type = String(d.movement_type || '').trim();
+    if (WH_MOVE_TYPES.indexOf(type) === -1) {
+      throw new Error('نوع الحركة غير صحيح — القيم المسموحة: ' + WH_MOVE_TYPES.join(' / '));
+    }
+
+    /* 3 — the batch exists. Availability is recomputed here, from the sheet. */
+    var batchUid = String(d.item || '').trim();
+    if (!batchUid) throw new Error('الدفعة (الصنف) مطلوبة');
+    var batch = whBatchAvailability_(dbId)[batchUid];
+    if (!batch) throw new Error('الدفعة المختارة غير موجودة في رصيد المخزن');
+
+    /* 4 — quantity */
+    var qty = Number(d.qty);
+    if (d.qty === '' || d.qty == null || isNaN(qty) || qty <= 0) {
+      throw new Error('الكمية مطلوبة ويجب أن تكون أكبر من صفر');
+    }
+
+    /* 5 — responsible person */
+    var resp = String(d.responsible_person || '').trim();
+    if (!resp) throw new Error('المسؤول عن الحركة مطلوب');
+    if (!whEmployeeNames_(dbId)[resp]) {
+      throw new Error('المسؤول المختار غير موجود في بيانات الموظفين');
+    }
+
+    /* 6 — over-issue. AUTHORITATIVE and server-side: `available` is the figure
+           whBatchAvailability_ just computed off the sheet. Anything the client
+           sent as available/amount/unit_cost is ignored entirely. */
+    if (type !== WH_IN_TYPE) {
+      var available = Number(batch.available) || 0;
+      if (qty > available) {
+        throw new Error('الكمية المطلوب صرفها (' + qty + ') أكبر من المتاح في الدفعة (' +
+          available + (batch.unit ? ' ' + batch.unit : '') + ')');
+      }
+    }
+
+    /* vendor is optional; when supplied it must resolve */
+    var vendor = String(d.vendor == null ? '' : d.vendor).trim();
+    if (vendor && !whVendorNames_(dbId)[vendor]) {
+      throw new Error('المورد المختار غير موجود');
+    }
+
+    var sheet = getSheet_(WH_MOVE_SHEET, dbId);
+    var headers = whAssertHeaders_(sheet);
+
+    /* amount is a server-computed snapshot, stored as a static value — never a
+       formula, never a number the client sent. */
+    var amount = Math.round((Number(batch.unit_cost) || 0) * qty * 100) / 100;
+
+    var map = {};
+    map['unique_id'] = uid16Hex_();
+    map['warehouse'] = WH_WAREHOUSE;          /* constant, never rendered or edited */
+    map['vendor'] = vendor;
+    map['item'] = batchUid;
+    map['unit'] = whBatchUnit_(dbId, batch);
+    map['qty'] = qty;
+    map['amount'] = amount;
+    map['movement_type'] = type;
+    map['movement_date'] = dateVal;
+    map['asset_target'] = '';                 /* always blank, never rendered */
+    map['responsible_person'] = resp;
+    map['notes'] = String(d.notes || '').trim();
+    map['user'] = (user && user.email) || '';
+    map['created_at'] = new Date();
+    /* `id` is assigned by addRecord_ under the lock; `item_code` and
+       `movmenent_sign` are sheet formulas written immediately below. */
+
+    var res = saveRecordWithAudit_(dbId, WH_MOVE_SHEET, null, map, 'create',
+      (user && user.email) || '', null, null, null, 'id');
+    if (!res || res.status !== 'success') {
+      throw new Error((res && res.message) || 'تعذّر حفظ حركة المخزن');
+    }
+    var rowNum = res.data.newRowNumber;
+    /* F and K are not adjacent, so this is two setValues — still cheaper than
+       two writeFormula_ round trips, each of which repeats getSheet_+getHeaders_. */
+    writeRowFormulas_(sheet, headers, rowNum, whMoveFormulaMap_(rowNum));
+
+    return {
+      status: 'success',
+      message: 'تم تسجيل حركة المخزن (رقم ' + res.data.assignedId + ')',
+      id: res.data.assignedId,
+      row: rowNum
+    };
+  }
+
   /* ---------- SALES INVOICES (valley_sales_invoices + lines) ----------
    * Schema recovered verbatim from the AppSheet legacy design.
    * Numbering: (count same-year same-tax_system) + 1 & "-" & year, under lock.
@@ -7257,6 +7642,10 @@ const ValleyFoodsHRModules = (function () {
     ValleyFoods.register('save_valley_cash', withRefBust_(saveValleyCash_));
     ValleyFoods.register('approve_valley_cash', approveValleyCash_);
     ValleyFoods.register('delete_valley_cash', deleteValleyCash_);
+
+    ValleyFoods.register('get_valley_warehouse_movements',    getValleyWarehouseMovements_);
+    ValleyFoods.register('get_valley_warehouse_move_options', getValleyWarehouseMoveOptions_);
+    ValleyFoods.register('save_valley_warehouse_movement',    saveValleyWarehouseMovement_);
     ValleyFoods.register('transfer_valley_cash', withRefBust_(transferValleyCash_));
 
     // ===================== MANUFACTURE — RECIPES (BOM) =====================
