@@ -6,6 +6,17 @@
 <link rel="dns-prefetch" href="https://cdnjs.cloudflare.com">
 <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
 <link rel="dns-prefetch" href="https://cdn.jsdelivr.net">
+<!-- [UI-2.2 / D-3 / U-11] The one Arabic typeface, loaded once for all 85 pages.
+     It lived inside topLightThemeCss_ and topChemicalThemeCss_, so ValleyFoods
+     — which takes the generic theme path — never loaded it and fell back to
+     Tahoma. Moving it here unifies the three companies on Cairo and makes the
+     load happen once instead of per-theme. display=swap so Arabic text paints
+     immediately in the fallback rather than being invisible while the webfont
+     downloads. Net payload effect: neutral — two page sets stop requesting it
+     from their theme, one page set starts. -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800&display=swap">
 <style>
 
 :root {
@@ -60,7 +71,11 @@
   --space-8: 32px;
 
   
-  --font-sans: 'Segoe UI', Tahoma, sans-serif;
+  /* [UI-2.2 / D-3] Cairo for all three companies. The two bespoke themes set
+   * the same value, so they are unchanged; ValleyFoods stops falling back to
+   * Tahoma. Segoe UI and Tahoma remain in the stack as the swap face and for
+   * the Latin text that appears alongside the Arabic. */
+  --font-sans: 'Cairo', 'Segoe UI', Tahoma, sans-serif;
 
   
   --success: #16a34a;

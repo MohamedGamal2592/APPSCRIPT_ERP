@@ -780,9 +780,10 @@ function getCompanyThemeCSS_(companyName) {
 // immediately. Overrides tokens + adds structural + print rules.
 function topLightThemeCss_() {
   return '' +
-    '<link rel="preconnect" href="https://fonts.googleapis.com">' +
-    '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>' +
-    '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800&display=swap">' +
+    /* [UI-2.2 / D-3] The Cairo <link> tags moved to CSS_Tokens.html, which every
+       page includes, so the font loads once for all three companies instead of
+       only for the two that had a bespoke theme. --font-sans below still names
+       Cairo, so this company renders identically. */
     '<style>\n' +
     ':root {\n' +
     '  --bg-primary: #fbbf24;\n' +
@@ -872,9 +873,10 @@ function topLightThemeCss_() {
 // print rules.
 function topChemicalThemeCss_() {
   return '' +
-    '<link rel="preconnect" href="https://fonts.googleapis.com">' +
-    '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>' +
-    '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800&display=swap">' +
+    /* [UI-2.2 / D-3] The Cairo <link> tags moved to CSS_Tokens.html, which every
+       page includes, so the font loads once for all three companies instead of
+       only for the two that had a bespoke theme. --font-sans below still names
+       Cairo, so this company renders identically. */
     '<style>\n' +
     ':root {\n' +
     '  --bg-primary: #16a34a;\n' +
