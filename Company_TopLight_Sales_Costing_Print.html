@@ -25,7 +25,7 @@
     }
     @page { size: A4 portrait; margin: 15mm 10mm; }
     .cost-doc {
-      max-width: 900px; margin: 0 auto; padding: 30px; background: var(--bg-surface, #ffffff);
+      max-width: 900px; margin: 0 auto; padding: 16px; background: var(--bg-surface, #ffffff);
       border: 3px solid #111111; border-radius: 12px;
       -webkit-print-color-adjust: exact; print-color-adjust: exact;
     }
@@ -34,11 +34,14 @@
       background: #111111; color: #fbbf24; border: none; border-radius: 8px;
       padding: 10px 28px; font-family: 'Cairo', sans-serif; font-weight: 700;
       font-size: 14px; cursor: pointer; margin-bottom: 16px;
+      /* [iPhone run] A 44px tap target. The button computes to about 40px
+         today, so this only ever grows it — nothing else moves. */
+      min-height: 44px;
     }
     .cost-title { text-align: center; margin: 0 0 4px; font-size: 22px; font-weight: 800; color: var(--text-main, #111111); }
     .cost-subtitle { text-align: center; margin: 0 0 20px; font-size: 13px; font-weight: 600; color: #374151; }
     .meta-grid {
-      display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px 16px;
+      display: grid; grid-template-columns: 1fr; gap: 10px 16px;
       background: #fef08a; border: 2px solid #111111; border-radius: 8px;
       padding: 14px 16px; margin-bottom: 20px; font-size: 13px;
     }
@@ -53,9 +56,9 @@
     .cost-table td.num { font-variant-numeric: tabular-nums; }
     .cost-table tr.ret-row { background: #fee2e2; }
     .cost-table tr.ret-row td.c-name { color: var(--danger-text, #b91c1c); font-weight: 800; }
-    .cards-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .cards-grid { display: grid; grid-template-columns: 1fr; gap: 12px; }
     .acard { border-radius: 10px; padding: 14px 16px; border: 2px solid #111111; }
-    .acard.span2 { grid-column: span 2; }
+    .acard.span2 { grid-column: auto; }
     .acard .clbl { font-size: 13px; font-weight: 600; margin-bottom: 6px; }
     .acard .cval { font-size: 20px; font-weight: 800; font-variant-numeric: tabular-nums; }
     .acard.c-rev { background: #fef08a; }
@@ -68,7 +71,12 @@
     .acard.c-profit-neg { background: var(--danger-bg, #fef2f2); border-color: var(--danger, #ef4444); }
     .acard.c-profit-neg .cval { color: var(--danger, #ef4444); }
     .acard.c-margin { background: var(--bg-subtle, #f8fafc); }
-    /* [UI-2.9b / U-48] Was a max-width:640 block, which is on no tier. The
+    /* [iPhone run] The base above is now genuinely narrow — one column, 16px
+       padding — so this block no longer restates its own base. It carries the
+       desktop values it always carried, unchanged, and from 600px up the page
+       renders exactly as it did before this run.
+
+       [UI-2.9b / U-48] Was a max-width:640 block, which is on no tier. The
        narrow layout is now the base and the wide one is restored at tablet-p,
        so the same two layouts survive, expressed additively. */
     @media (min-width: 600px) {
