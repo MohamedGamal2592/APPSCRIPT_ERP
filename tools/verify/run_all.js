@@ -46,7 +46,8 @@ const STEPS = [
   ['box_parser.js', 'B1 — transaction_details parser, over the fixture corpus'],
   ['box_matcher.js', 'B2 — item matcher: stemming, blocking, scores, clusters'],
   ['box_windows.js', 'B3 — the four account windows and the month-end clamp'],
-  ['box_sql.js', 'B3 — SQL discipline: additive, no DDL, closes, binds, credit']
+  ['box_sql.js', 'B3 — SQL discipline: additive, no DDL, closes, binds, credit'],
+  ['box_wiring.js', 'B4 — access gate, registration, nav, query budget']
 ];
 
 /* Two programmes share this repo and this runner, so a step's file can be

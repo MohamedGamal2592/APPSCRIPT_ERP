@@ -142,7 +142,16 @@ const TopChemical = (function () {
     'get_kpi_data': { page: 'tc_kpi', access: 'read' },
     'prefetch_refs': { page: 'tc_dashboard', access: 'read' },
     'get_main_review': { page: 'tc_main_review', access: 'read' },
-    'revise_main_review': { page: 'tc_main_review', access: 'write' }
+    'revise_main_review': { page: 'tc_main_review', access: 'write' },
+    // تحليل حركة الخزنة العادية — live MySQL regular_box_movement.
+    // Listing an action here is what makes it FAIL CLOSED: guard_ returns
+    // early for anything it does not find, so an unlisted action is open to
+    // any authenticated user of the company. This page exposes fraud analysis
+    // and an edit form over financial rows, so all four are listed.
+    'get_box_analysis': { page: 'tc_box_analysis', access: 'read' },
+    'get_box_item_history': { page: 'tc_box_analysis', access: 'read' },
+    'update_box_movement': { page: 'tc_box_analysis', access: 'write' },
+    'revise_box_movement': { page: 'tc_box_analysis', access: 'write' }
   };
 
   /** page for a module_action, reused for both access-control and logging. */
@@ -238,7 +247,11 @@ const TopChemical = (function () {
     'get_budget_refs': LEGAL_CHART_SHEET,
     'prefetch_refs': PRODUCTS_SHEET,
     'get_main_review': 'mysql:clients_AR',
-    'revise_main_review': 'mysql:clients_AR'
+    'revise_main_review': 'mysql:clients_AR',
+    'get_box_analysis': 'mysql:regular_box_movement',
+    'get_box_item_history': 'mysql:regular_box_movement',
+    'update_box_movement': 'mysql:regular_box_movement',
+    'revise_box_movement': 'mysql:regular_box_movement'
   };
 
   function tableForAction_(action) {
@@ -4537,6 +4550,209 @@ const valueMap = {};
   }
   register('get_main_review', getMainReview_);
   register('revise_main_review', reviseMainReview_);
+
+  // ─── تحليل حركة الخزنة العادية (live MySQL regular_box_movement) ──
+  //
+  // Thin wrappers: authority is enforced by guard_() via PAGE_ACCESS above,
+  // exactly as get_main_review does it. There is no second permission
+  // mechanism here and there must not be one.
+  //
+  // The parsing, matching and rules all run SERVER-SIDE, in Box_Analysis_Engine.js.
+  // That is not an optimisation — the engine is a server .js file, and the only
+  // way the page could run it in the browser would be to keep a second copy of
+  // it inside an HTML include. Two copies of a parser diverge, and the one that
+  // matters is whichever the reviewer is not looking at.
+
+  const BOX_CACHE_SCOPE = 'mysql_topchemical';
+  const BOX_LABEL_TTL = 21600;            /* 6h, per plan §10 */
+
+  /**
+   * chart_of_accounts_main labels, cached.
+   *
+   * Through getRefsCached_, which chunks — CacheService rejects a single value
+   * over ~100 KB, and a full chart of accounts can exceed that. A plain
+   * cache.put would throw, be swallowed, and the cache would silently never
+   * work: every page load would re-read the whole account tree.
+   */
+  function boxAccountLabels_(user) {
+    return getRefsCached_(BOX_CACHE_SCOPE, 'box_account_labels_v1', BOX_LABEL_TTL, function () {
+      const r = dbChartAccountLabels_({}, user);
+      return { labels: r.labels, duplicate_ids: r.duplicate_ids, count: r.count, truncated: r.truncated };
+    });
+  }
+
+  function boxTodayIso_() {
+    return Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd');
+  }
+
+  function boxRefDate_(v) {
+    const s = String(v === undefined || v === null ? '' : v).trim();
+    return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : boxTodayIso_();
+  }
+
+  /**
+   * The page's read call. THREE queries, maximum, and never one inside a loop:
+   *
+   *   1. dbBoxList_                the movement page
+   *   2. dbBoxAccountAggregates_   the four windows, grouped, for the accounts
+   *                                actually on this page
+   *   3. dbChartAccountLabels_     cached for 6h, so most loads issue two
+   *
+   * JDBC round trips are the entire cost of this page. A per-row history query
+   * would turn one page load into fifty.
+   */
+  function getBoxAnalysis_(data, user, dbId) {
+    data = data || {};
+    const refDate = boxRefDate_(data.ref_date);
+
+    /* 1 — the page of movements. */
+    const page = dbBoxList_(data, user);
+
+    /* Parse in memory. Pure, no I/O, and the failures come back attached to
+       their row rather than being dropped — a row whose details will not parse
+       is one a human needs to see, not one to hide. */
+    const accounts = [];
+    const seenAcct = {};
+    page.rows.forEach(function (row) {
+      row.parse = BoxEngine.parseDetails(row.transaction_details);
+      const a = String(row.chart_of_accounts || '').trim();
+      if (a && !seenAcct[a]) { seenAcct[a] = true; accounts.push(a); }
+    });
+
+    /* 2 — the four windows, for exactly the accounts on this page. */
+    let windows = BoxEngine.accountWindows(refDate);
+    const aggregates = {};
+    if (accounts.length) {
+      const agg = dbBoxAccountAggregates_({ ref_date: refDate, accounts: accounts }, user);
+      windows = agg.windows;
+      agg.rows.forEach(function (r) { aggregates[String(r.chart_of_accounts)] = r; });
+    }
+
+    /* 3 — labels, cached. Only the accounts on this page are sent down: the
+       full map can be thousands of entries, and shipping it on every page load
+       would dwarf the rows themselves. */
+    const labels = {};
+    const dupes = [];
+    try {
+      const lbl = boxAccountLabels_(user);
+      accounts.forEach(function (a) {
+        if (Object.prototype.hasOwnProperty.call(lbl.labels, a)) labels[a] = lbl.labels[a];
+        if ((lbl.duplicate_ids || []).indexOf(a) !== -1) dupes.push(a);
+      });
+    } catch (e) {
+      /* A missing or unreadable chart_of_accounts_main must not blank the whole
+         page — the movements and their figures are still correct without their
+         Arabic names. The page shows the bare code and says why. */
+      Logger.log('getBoxAnalysis_ labels unavailable: ' + e.message);
+    }
+
+    return {
+      status: 'ok',
+      ref_date: refDate,
+      columns: page.columns,
+      rows: page.rows,
+      total: page.total,
+      limit: page.limit,
+      offset: page.offset,
+      windows: windows,
+      aggregates: aggregates,
+      labels: labels,
+      /* A duplicated id_5 makes a label ambiguous. It is surfaced rather than
+         resolved silently, because the same duplication in a SQL JOIN would
+         have doubled every figure on this page (plan §12 q.4). */
+      label_duplicate_ids: dupes
+    };
+  }
+
+  /**
+   * Item price history: one bounded read, parsed and clustered in memory.
+   *
+   * data: { ref_date, months, chart_of_accounts, limit, aliases }
+   * Returns the clusters and, per cluster, every observed purchase with its
+   * unit price, date and buyer. The statistics that turn those into findings
+   * are Tier 2 of the rules engine.
+   */
+  function getBoxItemHistory_(data, user, dbId) {
+    data = data || {};
+    const refDate = boxRefDate_(data.ref_date);
+    const hist = dbBoxItemHistory_({
+      ref_date: refDate,
+      months: data.months,
+      limit: data.limit,
+      chart_of_accounts: data.chart_of_accounts
+    }, user);
+
+    const occurrences = [];
+    let parsedRows = 0, failedSegments = 0, mismatchRows = 0;
+    hist.rows.forEach(function (row) {
+      const p = BoxEngine.parseDetails(row.transaction_details);
+      if (p.parsed_count > 0) parsedRows++;
+      failedSegments += p.failed_count;
+      const amount = Number(row.transaction_amount);
+      if (p.parsed_count > 0 && p.failed_count === 0 && isFinite(amount) &&
+          Math.abs(p.sum - amount) > 1) mismatchRows++;
+      p.items.forEach(function (it) {
+        occurrences.push({
+          movement_id: row.id,
+          transaction_date: row.transaction_date,
+          chart_of_accounts: row.chart_of_accounts,
+          responsible_person: row.responsible_person,
+          box_code: row.box_code,
+          item_norm: it.item_norm,
+          unit: it.unit,
+          qty: it.qty,
+          price: it.price,
+          unit_price: it.unit_price,
+          confidence: it.confidence
+        });
+      });
+    });
+
+    const clustered = BoxEngine.clusterItems(occurrences, { aliases: data.aliases || null });
+    const byCluster = {};
+    occurrences.forEach(function (o) {
+      const cid = clustered.byNorm[o.item_norm];
+      (byCluster[cid] = byCluster[cid] || []).push(o);
+    });
+
+    return {
+      status: 'ok',
+      ref_date: refDate,
+      from: hist.from,
+      to: hist.to,
+      months: hist.months,
+      /* The page must say so rather than analysing a silent subset. */
+      truncated: hist.truncated,
+      row_count: hist.rows.length,
+      /* Parse coverage over the rows actually read. This is a REAL measurement
+         against production text, unlike the fixture figure — it is the number
+         NEXT_STEPS_OWNER.md asks the owner to report. */
+      coverage: {
+        rows_read: hist.rows.length,
+        rows_with_items: parsedRows,
+        failed_segments: failedSegments,
+        sum_mismatch_rows: mismatchRows
+      },
+      clusters: clustered.clusters,
+      occurrences_by_cluster: byCluster,
+      threshold: clustered.threshold
+    };
+  }
+
+  /** One row, one column set, confirmed by the user. Connector detail in B6. */
+  function updateBoxMovement_(data, user, dbId) {
+    return dbBoxUpdate_(data || {}, user);
+  }
+
+  /** The one-click review flip, mirroring revise_main_review. */
+  function reviseBoxMovement_(data, user, dbId) {
+    return dbBoxRevise_(data || {}, user);
+  }
+
+  register('get_box_analysis', getBoxAnalysis_);
+  register('get_box_item_history', getBoxItemHistory_);
+  register('update_box_movement', updateBoxMovement_);
+  register('revise_box_movement', reviseBoxMovement_);
 
   return { dispatch_: dispatch_, pageForAction_: pageForAction_, tableForAction_: tableForAction_ };
 })();

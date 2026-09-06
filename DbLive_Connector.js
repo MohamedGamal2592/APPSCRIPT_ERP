@@ -767,6 +767,29 @@ function dbBoxAccountAggregates_(data, user) {
   params.push(w.span.from, w.span.to);
   if (acct) { whereSql += ' AND `chart_of_accounts` = ?'; params.push(acct); }
 
+  /* The page needs figures for exactly the accounts on the visible page —
+     rarely more than a dozen. Restricting to them keeps the GROUP BY off the
+     whole account tree and, more importantly, means the answer cannot depend on
+     the ORDER BY / LIMIT below: without it, an account on the page that is not
+     in the top N by YTD spend would come back with no figures at all and the
+     strip would read zero for a perfectly ordinary account.
+     The placeholders are generated from the validated list's LENGTH; the values
+     themselves bind. */
+  var list = [];
+  if (data.accounts && data.accounts.length) {
+    for (var ai = 0; ai < data.accounts.length; ai++) {
+      var one = dbBoxValidateAccount_(data.accounts[ai]);
+      if (one && list.indexOf(one) === -1) list.push(one);
+    }
+    if (list.length > 500) list = list.slice(0, 500);
+  }
+  if (list.length) {
+    var marks = [];
+    for (var mi = 0; mi < list.length; mi++) marks.push('?');
+    whereSql += ' AND `chart_of_accounts` IN (' + marks.join(', ') + ')';
+    for (var pi = 0; pi < list.length; pi++) params.push(list[pi]);
+  }
+
   var conn, stmt, rs;
   try {
     conn = dbGetConnection_();
