@@ -216,10 +216,13 @@ const HEADERS = [
     ],
     rows: [{ a: 1, b: 2, actions: '' }]
   });
-  ok(/<th data-key="a" data-sortable="true" aria-sort="none">/.test(html),
+  /* scope="col" was added by step 6.3; the assertions move with it. */
+  ok(/<th scope="col" data-key="a" data-sortable="true" aria-sort="none">/.test(html),
     'a sortable column advertises data-sortable and aria-sort="none"');
-  ok(/<th data-key="b">/.test(html) && !/data-key="b" data-sortable/.test(html),
+  ok(/<th scope="col" data-key="b">/.test(html) && !/data-key="b" data-sortable/.test(html),
     'sortable:false opts a column out entirely');
+  ok(/<th scope="col"/.test(html),
+    'and every header carries scope="col" (U-31/6.3)');
   ok(!/data-key="actions" data-sortable/.test(html),
     'the actions column is opted out automatically');
   ok((html.match(/class="th-sort"/g) || []).length === 1,

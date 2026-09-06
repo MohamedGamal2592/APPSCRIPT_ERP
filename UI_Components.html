@@ -634,7 +634,7 @@ UIC.dataTable = function (containerId, opts) {
       : '';
     return '<thead><tr>' + selTh + cols.map(function (h) {
       const key = h.key || h.label;
-      return '<th data-key="' + key + '"' +
+      return '<th scope="col" data-key="' + key + '"' +
         (isSortable(h) ? ' data-sortable="true" aria-sort="none"' : '') + '>' +
         '<span class="th-label">' + h.label + '</span>' +
         (isSortable(h) ? '<span class="th-sort" aria-hidden="true"></span>' : '') +
@@ -1141,7 +1141,7 @@ UIC._dtRebuildHead = function (id) {
   old.innerHTML = '<tr>' + selTh + cols.map(function (h) {
     var key = h.key || h.label;
     var sortable = h.sortable !== false && key !== 'actions';
-    return '<th data-key="' + key + '"' + (sortable ? ' data-sortable="true" aria-sort="none"' : '') + '>' +
+    return '<th scope="col" data-key="' + key + '"' + (sortable ? ' data-sortable="true" aria-sort="none"' : '') + '>' +
       '<span class="th-label">' + h.label + '</span>' +
       (sortable ? '<span class="th-sort" aria-hidden="true"></span>' : '') + '</th>';
   }).join('') + '</tr>';
@@ -1842,16 +1842,21 @@ UIC.combo = function (o) {
   const cur = o.value !== undefined && o.value !== null ? String(o.value).trim() : '';
   const curLabel = (byVal[cur] && byVal[cur].label) || (byLabel[cur] && byLabel[cur].label) || (byVal[cur.toLowerCase()] && byVal[cur.toLowerCase()].label) || (byLabel[cur.toLowerCase()] && byLabel[cur.toLowerCase()].label) || cur;
   const optHtml = opts.map(function (op, i) {
-    return '<div class="combo-option" data-value="' + esc(op.value) + '" data-i="' + i + '" onmousedown="event.preventDefault();UIC.comboPick(\'' + key + '\',' + i + ')">' + esc(op.label) + '</div>';
+    return '<div class="combo-option" role="option" aria-selected="false" id="' + key + '_opt' + i + '" data-value="' + esc(op.value) + '" data-i="' + i + '" onmousedown="event.preventDefault();UIC.comboPick(\'' + key + '\',' + i + ')">' + esc(op.label) + '</div>';
   }).join('');
   const allowNew = o.allowNew ? ' data-allownew="1"' : '';
   window.__comboData = window.__comboData || {};
   window.__comboData[key] = { opts: opts, allowNew: !!o.allowNew };
+  /* [UI-6.2 / U-31] The combo is a real ARIA combobox. Without this a screen
+     reader announces it as a plain text box: no indication that a list exists,
+     that it is open, or which option is highlighted. */
   const inner = '<div class="combo" data-combo="' + key + '">' +
     '<input id="' + key + '_display" class="input combo-input" autocomplete="off"' + ph + req + ' value="' + esc(curLabel) + '"' +
+    ' role="combobox" aria-expanded="false" aria-autocomplete="list"' +
+    ' aria-controls="' + key + '_list" aria-haspopup="listbox"' +
     ' onfocus="UIC.comboOpen(\'' + key + '\')" oninput="UIC.comboFilter(\'' + key + '\', this.value)" onblur="UIC.comboBlur(\'' + key + '\')" onkeydown="UIC.comboKey(\'' + key + '\', event)">' +
     '<input type="hidden" id="' + key + '" value="' + esc(cur) + '"' + allowNew + '>' +
-    '<div class="combo-list" id="' + key + '_list" hidden>' + optHtml + '</div>' +
+    '<div class="combo-list" id="' + key + '_list" role="listbox" hidden>' + optHtml + '</div>' +
     '</div>';
   if (o.inline) return inner;
   return '<div class="form-field" data-field="' + key + '">' +
@@ -1870,6 +1875,16 @@ UIC.SearchableSelect = UIC.combo;
  * Anchoring the list to its input against the viewport fixes both. The element
  * does not move in the DOM, so comboBlur / comboPick / comboKey and the
  * outside-click handler — all of which use `.closest('.combo')` — are unchanged. */
+/* [UI-6.2 / U-31] One place that owns the combobox's ARIA state, so open,
+ * close, filter and keyboard navigation cannot drift out of sync with it. */
+UIC._comboAria = function (key, expanded, activeId) {
+  var input = document.getElementById(key + '_display');
+  if (!input) return;
+  input.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+  if (activeId) input.setAttribute('aria-activedescendant', activeId);
+  else input.removeAttribute('aria-activedescendant');
+};
+
 UIC._comboAnchor = function (key) {
   var list = document.getElementById(key + '_list');
   var input = document.getElementById(key + '_display');
@@ -1885,6 +1900,7 @@ UIC.comboOpen = function (key) {
   const list = document.getElementById(key + '_list');
   if (!list) return;
   list.hidden = false;
+  UIC._comboAria(key, true);
   UIC.comboFilter(key, document.getElementById(key + '_display').value);
   UIC._comboAnchor(key);
 };
@@ -1940,6 +1956,7 @@ UIC.comboPick = function (key, i) {
   if (cust) { cust.style.display = 'none'; cust.removeAttribute('required'); cust.value = ''; }
   const list = document.getElementById(key + '_list');
   if (list) { list.hidden = true; UIC._unanchor(list); }
+  UIC._comboAria(key, false);
 };
 
 UIC.comboBlur = function (key) {
@@ -1969,6 +1986,7 @@ UIC.comboBlur = function (key) {
   }
   const list = document.getElementById(key + '_list');
   if (list) { list.hidden = true; UIC._unanchor(list); }
+  UIC._comboAria(key, false);
 };
 
 UIC.comboKey = function (key, ev) {
@@ -1991,12 +2009,20 @@ UIC.comboKey = function (key, ev) {
   } else if (ev.key === 'Escape') {
     list.hidden = true;
     UIC._unanchor(list);
+    UIC._comboAria(key, false);
     return;
   } else {
     return;
   }
-  visibleEls.forEach(function (el) { el.classList.remove('active'); });
+  visibleEls.forEach(function (el) {
+    el.classList.remove('active');
+    el.setAttribute('aria-selected', 'false');
+  });
   visibleEls[idx].classList.add('active');
+  visibleEls[idx].setAttribute('aria-selected', 'true');
+  /* aria-activedescendant is what tells a screen reader WHICH option is
+     highlighted while focus stays in the text box. */
+  UIC._comboAria(key, true, visibleEls[idx].id);
   visibleEls[idx].scrollIntoView({ block: 'nearest' });
 };
 
@@ -2119,7 +2145,52 @@ UIC.openModal = function (modalId, opts) {
   document.body.appendChild(div);
   document.body.classList.add('modal-open');
   try { UIC._initSheetSwipe(div, modalId); } catch (e) {}
+  try { UIC._trapFocus(div, modalId); } catch (e) {}
   return div;
+};
+
+/* ── [UI-6.1 / U-31] Focus trap, focus restore, Escape ────────────────────
+ *
+ * A dialog opened and focus stayed behind it, so a keyboard user tabbed through
+ * the page UNDERNEATH — invisible, and able to change fields they could not
+ * see. Escape did nothing, and on close focus was lost to <body>, so the next
+ * Tab started from the top of the page rather than from the control the user
+ * had just been on.
+ */
+UIC._FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), ' +
+  'select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+UIC._trapFocus = function (overlay, modalId) {
+  if (!overlay || !overlay.querySelectorAll) return;
+  UIC._focusReturn = UIC._focusReturn || {};
+  /* Remember where focus was, so it can go back exactly there on close. */
+  try { UIC._focusReturn[modalId] = document.activeElement; } catch (e) {}
+
+  var focusables = function () {
+    try { return [].slice.call(overlay.querySelectorAll(UIC._FOCUSABLE)); } catch (e) { return []; }
+  };
+
+  /* Focus the first meaningful control, not the close button: on a form dialog
+     that is the first field, which is where the user wants to be. */
+  setTimeout(function () {
+    var els = focusables();
+    var first = els.filter(function (e) { return !/btn-icon/.test(String(e.className || '')); })[0] || els[0];
+    if (first && first.focus) { try { first.focus(); } catch (e) {} }
+  }, 0);
+
+  overlay.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') {
+      e.stopPropagation();
+      UIC.closeModal(modalId);
+      return;
+    }
+    if (e.key !== 'Tab') return;
+    var els = focusables();
+    if (!els.length) return;
+    var first = els[0], last = els[els.length - 1];
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); if (last.focus) last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); if (first.focus) first.focus(); }
+  });
 };
 
 /* ── [UI-3.6 / U-40] Swipe a bottom sheet down to dismiss ─────────────────
@@ -2174,7 +2245,18 @@ UIC._initSheetSwipe = function (overlayEl, modalId) {
 UIC.closeModal = function (modalId) {
   const el = document.getElementById(modalId);
   if (el) el.remove();
-  document.body.classList.remove('modal-open');
+  /* Only drop the body class when no dialog remains: a confirm opened ON TOP of
+     a form dialog must not unlock the page behind both when it closes. */
+  if (!document.querySelector('.modal-overlay')) {
+    document.body.classList.remove('modal-open');
+  }
+  /* [UI-6.1 / U-31] Put focus back where it was, so the next Tab continues from
+     the control the user was on rather than from the top of the page. */
+  try {
+    var back = (UIC._focusReturn || {})[modalId];
+    if (back && back.focus && back.isConnected !== false) back.focus();
+    if (UIC._focusReturn) delete UIC._focusReturn[modalId];
+  } catch (e) {}
 };
 
 /* ── [UI-3.5 / U-22] Empty states ─────────────────────────────────────────
@@ -2903,6 +2985,12 @@ UIC.appShell = function (containerId, o) {
 
   /* Mobile slide-out drawer is built inside the try below (it executes nav
    * builders that could throw on unexpected input). */
+  /* [UI-6.5 / U-33] A skip link, first in the tab order. Without it a keyboard
+   * user tabs through the hamburger, both logos, every nav item and every
+   * dropdown before reaching the page content — on every single navigation. */
+  const skipLink = '<a class="skip-link" href="#' + (opts.contentId || 'app-content') + '">' +
+    'تخطي إلى المحتوى</a>';
+
   let html;
   try {
     const drawerHtml =
@@ -2917,7 +3005,7 @@ UIC.appShell = function (containerId, o) {
         '</div>' +
         '<div class="drawer-footer">' + (opts.userHtml || userBlock) + '</div>' +
       '</nav>';
-    html =
+    html = skipLink +
       '<header class="topbar">' +
         '<div class="topbar-left">' + hamburger + logoTop + '</div>' +
         '<nav class="topbar-nav" aria-label="التنقل الرئيسي">' + navLinkHtml() + menuGroupsHtml(false) + '</nav>' +
@@ -3024,6 +3112,36 @@ UIC._initDrawerSwipe = function () {
 
 document.addEventListener('keydown', function (e) {
   if (e.key === 'Escape') UIC.closeDrawer();
+});
+
+/* ── [UI-6.5 / U-33] Application keyboard shortcuts ───────────────────────
+ *
+ * Alt+S saves, Alt+N creates. Alt is used rather than Ctrl because Ctrl+S and
+ * Ctrl+N belong to the browser, and a shortcut that fights the browser is a
+ * shortcut people learn not to press.
+ *
+ * Both are OPT-IN per page: a page registers what they should do. A shortcut
+ * wired by guessing at the first button on the page would eventually press the
+ * wrong one, and on a save path that is unacceptable.
+ */
+UIC.shortcuts = { save: null, create: null };
+
+UIC.registerShortcuts = function (map) {
+  UIC.shortcuts.save = (map && map.save) || null;
+  UIC.shortcuts.create = (map && map.create) || null;
+};
+
+document.addEventListener('keydown', function (e) {
+  if (!e.altKey || e.ctrlKey || e.metaKey) return;
+  var k = String(e.key || '').toLowerCase();
+  var fn = null;
+  if (k === 's') fn = UIC.shortcuts.save;
+  else if (k === 'n') fn = UIC.shortcuts.create;
+  if (typeof fn !== 'function') return;
+  /* Never fire while a dialog is open: the dialog owns the keyboard. */
+  if (document.body.classList.contains('modal-open')) return;
+  e.preventDefault();
+  try { fn(); } catch (err) {}
 });
 
 (function () {
@@ -3640,6 +3758,17 @@ document.addEventListener('keydown', function (e) {
   .nav-dropdown-item { display: flex; align-items: center; padding: 10px 12px; font-size: var(--text-sm); color: var(--text-main); text-decoration: none; border-radius: var(--radius-sm); cursor: pointer; white-space: nowrap; min-height: 40px; transition: background-color 0.15s, color 0.15s; }
   .nav-dropdown-item:hover { background: var(--brand-subtle-bg); color: var(--brand-primary); }
   .nav-dropdown-item-active { background: var(--brand-subtle-bg); color: var(--brand-primary); font-weight: 700; }
+
+  /* ── [UI-6.5 / U-33] Skip link ───────────────────────────────────────── */
+  .skip-link {
+    position: absolute; inset-inline-start: -9999px; top: 0; z-index: 3000;
+    background: var(--brand-primary); color: var(--btn-text-color);
+    padding: var(--space-3) var(--space-4); border-radius: 0 0 var(--radius-md) 0;
+    font-weight: 700; font-size: var(--text-sm); text-decoration: none;
+  }
+  /* Off-screen until focused, then it takes its place — the standard pattern:
+     invisible to everyone except the keyboard user who needs it. */
+  .skip-link:focus { inset-inline-start: 0; }
 
   /* ── [UI-4.1 / U-13] Control panel ───────────────────────────────────── */
   .control-panel {

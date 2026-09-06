@@ -49,23 +49,30 @@ const UIC = sb.UIC;
   UIC.appShell('h1', SHELL_OPTS);
   const now = sb.document.getElementById('h1').innerHTML;
 
-  /* The same call against the tree as it stood before Phase 4. */
-  let before = null;
-  try {
-    const old = boot(execSync('git show 90adbc8:UI_Components.html', { encoding: 'utf8', maxBuffer: 1e8 }));
-    old.document.body.appendChild(Object.assign(old.document.createElement('div'), { id: 'h1' }));
-    old.UIC.appShell('h1', SHELL_OPTS);
-    before = old.document.getElementById('h1').innerHTML;
-  } catch (e) {
-    console.log('  SKIP  cannot read the pre-Phase-4 tree (' + e.message + ')');
-  }
-  if (before !== null) {
-    ok(now === before,
-      'a page that passes no controlPanel gets BYTE-IDENTICAL shell markup',
-      'lengths ' + before.length + ' vs ' + now.length);
-  }
+  /* The invariant is that OPTING IN is the only thing that changes the shell.
+   *
+   * This was first written as a byte-comparison against the pre-Phase-4 tree
+   * read out of git. That was the right check at the time, but it decays: any
+   * later, unrelated, intended change to appShell breaks it — Phase 6.5's skip
+   * link did exactly that. Comparing the two CURRENT calls instead tests the
+   * property that actually matters and keeps testing it as the shell evolves. */
+  sb.document.body.appendChild(Object.assign(sb.document.createElement('div'), { id: 'h1b' }));
+  UIC.appShell('h1b', Object.assign({}, SHELL_OPTS, {
+    controlPanel: { title: 'عنوان' }
+  }));
+  const withCp = sb.document.getElementById('h1b').innerHTML;
+
+  /* Strip the part that is meant to differ; everything else must match. */
+  const strip = s => s
+    .replace(/<div class="control-panel">[\s\S]*?<main /, '<main ')
+    .replace(/<div class="breadcrumb">[\s\S]*?<\/div><main /, '<main ');
+  ok(strip(now) === strip(withCp),
+    'opting in changes ONLY the breadcrumb strip / control panel — the topbar, ' +
+    'drawer, skip link and content container are identical either way',
+    'lengths ' + strip(now).length + ' vs ' + strip(withCp).length);
+
   ok(now.indexOf('<div class="breadcrumb">') !== -1,
-    'and still gets the plain breadcrumb strip');
+    'a page that passes no controlPanel still gets the plain breadcrumb strip');
   ok(now.indexOf('control-panel') === -1, 'and no control panel');
 })();
 
