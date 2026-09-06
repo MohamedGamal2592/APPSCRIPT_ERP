@@ -301,9 +301,9 @@
     w.document.write(
       '<!DOCTYPE html><html lang="ar"><head><meta charset="utf-8"><title>طباعة جرد المخزون</title>' +
       '<style>body{font-family:Cairo,sans-serif;direction:rtl;padding:20px;}' +
-      'h2{text-align:center;margin-bottom:4px;} .date-info{text-align:center;color:#666;margin-bottom:16px;}' +
+      'h2{text-align:center;margin-bottom:4px;} .date-info{text-align:center;color:var(--text-muted, #666);margin-bottom:16px;}' +
       'table{width:100%;border-collapse:collapse;font-size:12px;} th,td{border:1px solid #ccc;padding:6px 8px;text-align:right;}' +
-      'th{background:#f0f0f0;font-weight:700;} @media print{body{padding:0;}}</style></head><body>' +
+      'th{background:var(--bg-subtle, #f0f0f0);font-weight:700;} @media print{body{padding:0;}}</style></head><body>' +
       '<h2>جرد المخزون</h2>' +
       '<div class="date-info">التاريخ: ' + esc(dateLabel) + ' — العدد: ' + list.length + '</div>' +
       '<table><thead><tr>' +

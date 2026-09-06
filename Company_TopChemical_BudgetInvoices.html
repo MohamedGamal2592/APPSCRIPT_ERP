@@ -465,7 +465,7 @@
     if (!code || !qty) { warnEl.innerHTML = ''; return; }
     var cp = (REFS.current_products_by_code && REFS.current_products_by_code[String(code)]) || (REFS.current_products || []).find(function (c) { return String(c.transaction_code) === String(code); });
     if (cp && qty > cp.current_qty) {
-      warnEl.innerHTML = '<span style="color:#b91c1c;font-size:12px;">الكمية أكبر من المتاح (' + FMT.number(cp.current_qty) + ')</span>';
+      warnEl.innerHTML = '<span style="color:var(--danger-text, #b91c1c);font-size:12px;">الكمية أكبر من المتاح (' + FMT.number(cp.current_qty) + ')</span>';
     } else {
       warnEl.innerHTML = '';
     }
@@ -483,7 +483,7 @@
       if (v) lastInv = v;
     });
     var body = '<form id="invoice-form">' +
-      '<div id="inv-next-hint" style="font-size:13px;color:#374151;margin:0 0 10px;padding:8px 10px;background:#f0fdf4;border-radius:6px;">' +
+      '<div id="inv-next-hint" style="font-size:13px;color:#374151;margin:0 0 10px;padding:8px 10px;background:var(--success-bg, #f0fdf4);border-radius:6px;">' +
         (lastInv ? 'آخر رقم فاتورة: <b>' + FMT.escape(lastInv) + '</b> — ' : '') + 'سيتم ترقيم الفاتورة الجديدة تلقائياً بالتسلسل للسنة المحددة.</div>' +
       UIC.combo({ key: 'كود المعاملة المباعة', label: 'كود المعاملة المباعة', required: true, options: codeOpts, placeholder: 'اختر الكود...' }) +
       '<div id="inv-product-preview" style="font-size:13px;color:#14532d;margin:0 0 10px;"></div>' +

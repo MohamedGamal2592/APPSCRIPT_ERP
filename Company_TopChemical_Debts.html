@@ -79,7 +79,7 @@
           ])
         ) + '</td>' +
         '</tr>' +
-        '<tr class="tx-row" id="tx-' + i + '" style="display:none;" data-cid="' + FMT.escape(g.client_id) + '"><td colspan="6"><div class="tx-loading" style="text-align:center;padding:12px;color:#666;">جاري تحميل التفاصيل...</div></td></tr>';
+        '<tr class="tx-row" id="tx-' + i + '" style="display:none;" data-cid="' + FMT.escape(g.client_id) + '"><td colspan="6"><div class="tx-loading" style="text-align:center;padding:12px;color:var(--text-muted, #666);">جاري تحميل التفاصيل...</div></td></tr>';
     }).join('');
 
     var body = document.getElementById('debts-content');

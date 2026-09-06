@@ -127,7 +127,7 @@
             // Normal system users with CAN_WRITE are allowed to edit working_days, year, month
             act += '<button class="btn btn-outline" style="padding:2px 8px;font-size:12px;margin-left:4px;" onclick="openEditSalary(\'' + key + '\')" title="تعديل أيام العمل والتواريخ">✏️ تعديل</button>';
             if (UIC.canFull_()) {
-              act += '<button class="btn" style="padding:2px 8px;font-size:12px;background:var(--danger,#ef4444);color:#fff;margin-left:4px;" onclick="confirmDeleteSalary(\'' + key + '\')" title="حذف">🗑</button>';
+              act += '<button class="btn" style="padding:2px 8px;font-size:12px;background:var(--danger,var(--danger, #ef4444));color:#fff;margin-left:4px;" onclick="confirmDeleteSalary(\'' + key + '\')" title="حذف">🗑</button>';
             }
             if (!r.receipt) {
               act += '<button class="btn btn-outline" style="padding:2px 8px;font-size:12px;color:var(--success,#22c55e);" onclick="markReceipt(\'' + key + '\')" title="تسجيل استلام">✔ استلم</button>';
@@ -380,7 +380,7 @@
     var m = Number(mEl.value);
     var y = Number(yEl.value);
     if (!m || !y) {
-      notifBox.innerHTML = '<div style="padding:10px;background:#fee2e2;color:#991b1b;border-radius:6px;">الرجاء اختيار الشهر والسنة</div>';
+      notifBox.innerHTML = '<div style="padding:10px;background:#fee2e2;color:var(--danger-text, #991b1b);border-radius:6px;">الرجاء اختيار الشهر والسنة</div>';
       listBox.innerHTML = '';
       return;
     }
@@ -388,7 +388,7 @@
     var isClosed = !!(window.__closedMonths && window.__closedMonths[y + '-' + m]);
     if (isClosed) {
       notifBox.innerHTML =
-        '<div style="padding:12px;background:#fef2f2;color:#991b1b;border:1px solid #fca5a5;border-radius:6px;font-weight:bold;margin-bottom:10px;">' +
+        '<div style="padding:12px;background:var(--danger-bg, #fef2f2);color:var(--danger-text, #991b1b);border:1px solid #fca5a5;border-radius:6px;font-weight:bold;margin-bottom:10px;">' +
         '🛑 هذا الشهر مغلق مسبقاً في جدول (emp_salaries_close) ولا يمكن توليد مرتبات جديدة له.' +
         '</div>';
       listBox.innerHTML = '';
@@ -410,7 +410,7 @@
     if (!missing.length) {
       // "All exist" (الكل موجود)
       notifBox.innerHTML =
-        '<div style="padding:14px;background:#f0fdf4;color:#166534;border:1px solid #86efac;border-radius:6px;text-align:center;margin-bottom:10px;">' +
+        '<div style="padding:14px;background:var(--success-bg, #f0fdf4);color:#166534;border:1px solid #86efac;border-radius:6px;text-align:center;margin-bottom:10px;">' +
         '<div style="font-size:18px;font-weight:bold;margin-bottom:4px;">✅ All exist (الكل موجود)</div>' +
         '<div>جميع الموظفين على قيد العمل (يعمل بالشركة) مسجلون مسبقاً في مرتبات شهر ' + m + '/' + y + '.</div>' +
         '</div>';
