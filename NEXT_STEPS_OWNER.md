@@ -223,3 +223,139 @@ The three to watch hardest, because they touch how data is written and read:
 
 **Fastest rollback, any phase:** Manage deployments → point the deployment back at the previous
 version. Seconds, no code changes. Note the current version number before you deploy anything.
+
+---
+
+# تحليل حركة الخزنة العادية — blocked on you
+
+Branch `feat/tc-box-analysis`, **not pushed**. Full write-up in
+[BOX_ANALYSIS_RESULTS.md](BOX_ANALYSIS_RESULTS.md); the verification checklist is at the bottom of
+that file.
+
+Everything below needs either database access or a decision that is not mine to make. Nothing here
+is optional housekeeping — items 1 and 2 in particular decide whether the page is usable and whether
+its numbers are right.
+
+## 1. Grant the page — **the page is invisible until you do this**
+
+`ERP_Management` → صلاحيات الأدوار → grant `tc_box_analysis` to the roles that should have it.
+`read` to view, `write` to edit rows and to record item merge/split corrections.
+
+**The page fails closed on purpose.** Until a role is granted, nobody but a super admin sees it —
+not the nav item, not the URL. This is deliberately the opposite of the ValleyFoods
+`valley_cost_view` guard, which fails open by hiding costs on a page everyone can still reach. This
+page exposes fraud analysis about named employees *and* an edit form over financial rows, so the
+absence of a grant has to mean the absence of the page.
+
+## 2. Four measurements nobody could take without the database
+
+Run these and tell me the answers. The fourth one is the one that can make the page lie.
+
+```sql
+-- a. How big is the table?
+SELECT COUNT(*) FROM regular_box_movement;
+
+-- b. How much of it is in the item-analysis range?
+SELECT COUNT(*) FROM regular_box_movement
+ WHERE chart_of_accounts REGEXP '^[0-9]+$'
+   AND CAST(chart_of_accounts AS UNSIGNED) BETWEEN 300000 AND 400000;
+
+-- c. Are those codes uniformly 6 digits?
+SELECT CHAR_LENGTH(TRIM(chart_of_accounts)) AS width, COUNT(*) AS n
+  FROM regular_box_movement
+ WHERE chart_of_accounts REGEXP '^[0-9]+$'
+   AND CAST(chart_of_accounts AS UNSIGNED) BETWEEN 300000 AND 400000
+ GROUP BY width ORDER BY n DESC;
+
+-- d. THE ONE THAT MATTERS MOST. Is id_5 unique?
+SELECT id_5, COUNT(*) AS n FROM chart_of_accounts_main
+ GROUP BY id_5 HAVING n > 1 ORDER BY n DESC LIMIT 20;
+```
+
+**Why (d) matters most.** A duplicated `id_5` in a SQL join would fan out the aggregate rows and
+**double every account total on the page** — a wrong number that looks entirely plausible and that
+nobody would catch by eye. Because I could not confirm uniqueness, the page does **not** join:
+account labels are looked up from a JavaScript map instead, which cannot fan anything out. A
+duplicate can only make a *label* ambiguous, and the page prints a banner naming the affected codes.
+So the page is safe either way — but if (d) returns rows, the chart of accounts itself has a problem
+worth fixing.
+
+**Why (a) and (b) matter.** Under roughly 20,000 rows in the range, the current design (all matching
+in Apps Script, plan Option A) is comfortable inside the six-minute limit. Materially above that and
+the item index needs to move into a derived table.
+
+**Why (c) matters.** The range predicate uses `CAST(...)`, which is **not sargable** — it cannot use
+an index. If the codes are uniformly 6 digits, the plain string range `>= '300000' AND < '400000'`
+is exactly equivalent and *can* use a prefix index. I did not assume it.
+
+## 3. Report the real parser coverage — **the number I could not produce**
+
+Open the page → **تحليل البنود** tab → set the period to one month → **تحليل البنود**. The banner
+reports:
+
+- how many movements were read,
+- how many had items extracted (**parse coverage**),
+- how many segments could not be parsed,
+- how many rows whose item prices do not sum to `transaction_amount` (**sum-mismatch rate**).
+
+**Write both percentages down and send them to me.**
+
+This matters because of what the verification suite can and cannot say. Exactly **one** production
+`transaction_details` string exists in this repo — the sample in the plan. Every other test fixture
+is invented. The suite reports 89.7% coverage over that invented corpus, and that figure measures
+the corpus, not your data. A parser tuned to strings somebody imagined proves nothing about what
+your staff actually type.
+
+Both numbers are findings in their own right, not just calibration:
+
+- **Low parse coverage** means the parser needs another pass, and the item price rules are running on
+  a subset without saying so.
+- **A high sum-mismatch rate** is either a parser problem or a real bookkeeping one — and telling
+  those two apart needs you to open a handful of the flagged rows and look.
+
+Do the same for one month in each of the last three quarters if you can; phrasing drifts over time
+and a single month can flatter or defame the parser.
+
+## 4. Two decisions about the audit trail
+
+**(a) Should it move to a real table?** There is no DDL available, so today the trail is
+append-only NDJSON — one file per month in the Drive folder `Box_Analysis_Audit/`, written under a
+script lock. It works and it is honest, but a Drive file has no transactions, no constraints and no
+query engine, and appending is a read-modify-write that gets slower as the file grows (it rolls to a
+new part past 5 MB). The item merge/split overrides live in the same folder as a single JSON file,
+for the same reason.
+
+If DDL becomes available, promoting both to tables is a mechanical change and I would recommend it.
+
+**(b) Should editing a money column require a reason note?** Recommended for `transaction_amount`,
+`chart_of_accounts` and `transaction_date` — those are exactly the edits somebody will later want
+explained, and the audit entry currently records *what* changed and *who* changed it but not *why*.
+It is a small change: one required field in the form and one more key in the audit entry.
+
+## 5. May an already-reviewed row be edited at all?
+
+Right now: **yes**. The form allows it, and the `EDITED_AFTER_REVIEW` rule reports it at low
+severity naming who made the edit, because the audit log explains it. An edit to a reviewed row that
+the log *cannot* explain is reported at high severity.
+
+The alternative is to refuse the edit until the row is un-reviewed first, which makes the review flag
+mean something stronger. I have not chosen for you — this is a control decision about how your
+review process works, not a technical one. Tell me which you want.
+
+## Also worth knowing
+
+- **No trigger was installed.** The nightly precompute is written
+  (`rebuildBoxAnalysisIndex`, a global with no trailing underscore so the trigger dialog will list
+  it) and the install steps sit in a comment right above it: Apps Script editor → Triggers → Add
+  Trigger → Day timer → 2am–3am. Until you install it, the page computes on demand for the window it
+  is showing; every such path is bounded and gives up with a clear Arabic message rather than being
+  killed at six minutes.
+- **Nothing was pushed and no data was read.** Every SQL statement in this branch ships unrun — I had
+  no MySQL client and the credentials are only in Script Properties. They were verified by reading
+  them against the schema and by a static check that asserts the invariants (no DDL, no `DELETE`,
+  every `UPDATE` carrying `WHERE id = ?`, every connection closed).
+- **Three real bugs were found by running the rules** rather than inspecting them — a duplicate rule
+  that could never fire, a sequence rule that turned one anomaly into twelve accusations, and a
+  seasonality rule that went silent on exactly the account that needed it most. All three are fixed
+  and described in BOX_ANALYSIS_RESULTS.md. Expect the thresholds to need another pass once they
+  meet real data.
