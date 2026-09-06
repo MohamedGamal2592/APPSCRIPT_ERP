@@ -8,7 +8,7 @@
  */
 window.__PREVIEW_FINGERPRINT__ = '53db1fa483c5c2a5';
 window.__PREVIEW_SOURCES__ = {
- "generated": "2026-09-06T17:24:00.745Z",
+ "generated": "2026-09-06T17:30:46.787Z",
  "watched": [
   "CSS_Tokens.html",
   "UI_Components.html",
