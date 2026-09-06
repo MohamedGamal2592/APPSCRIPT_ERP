@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>مركز التقييم — نتيجة مرشح</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_Assessment_Nav'); ?>
+  <?!= getCompanyThemeCSS_('32fafd256ccb7a1c') ?>
+  <style>
+    .ac-rv-wrap { padding: 16px 20px 48px; max-width: 900px; margin: 0 auto; }
+    .ac-score-card { background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: var(--radius-lg); padding: 20px; margin: 16px 0; text-align: center; }
+    .ac-score-value { font-size: var(--text-2xl); font-weight: 800; color: var(--text-main); }
+    .ac-answer-card { border: 1px solid var(--border-color); border-radius: var(--radius-md); padding: 14px 16px; margin-bottom: 12px; }
+    .ac-answer-correct { border-inline-start: 4px solid var(--success, #16a34a); }
+    .ac-answer-wrong { border-inline-start: 4px solid var(--danger, #dc2626); }
+    .ac-answer-pending { border-inline-start: 4px solid var(--warning, #d97706); }
+    .ac-opt-line { padding: 4px 0; }
+    .ac-opt-line.ac-is-answer { font-weight: 700; }
+    .ac-opt-line.ac-is-correct { color: var(--success, #16a34a); }
+    .ac-events-item { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border-color); font-size: var(--text-sm); }
+    .ac-trait-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+    .ac-trait-name { width: 140px; font-size: var(--text-sm); }
+    .ac-trait-bar-track { flex: 1; height: 10px; background: var(--bg-canvas); border: 1px solid var(--border-color); border-radius: 5px; overflow: hidden; }
+    .ac-trait-bar-fill { height: 100%; background: var(--brand-primary); }
+    @media print { .ac-rv-noprint { display: none !important; } .ac-answer-card { break-inside: avoid; } }
+  </style>
+</head>
+<body>
+  <div id="ac-root"></div>
+
+  <script>
+    var params = new URLSearchParams(window.location.search);
+    var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+    var scriptUrl = window.scriptUrl || '/';
+    var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+    var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('32fafd256ccb7a1c') ?>';
+    var COMPANY_PAGES = <?!= companyPages ?>;
+    var CURRENT_ACTION = '<?!= currentAction ?>';
+    var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+    var CAN_WRITE = UIC.canAdd_(); var CAN_FULL = UIC.canFull_();
+
+    function companyCall(moduleAction, data) {
+      return API.call('company_action', {
+        target_system: '32fafd256ccb7a1c',
+        module_action: moduleAction,
+        data: data || {}
+      }, SESSION_TOKEN);
+    }
+    function esc(v) { return FMT.escape(v); }
+    function resultsUrl() { return scriptUrl + '?action=ac_results&sessionToken=' + encodeURIComponent(SESSION_TOKEN); }
+
+    var VERDICT_LABELS = { Pass: 'نجح', Fail: 'لم ينجح', Pending: 'بانتظار التصحيح', 'N/A': '—' };
+    var TYPE_LABELS = { MCQ: 'اختيار من متعدد', Likert: 'تقييم', MostLeast: 'الأكثر والأقل', OpenText: 'نص مفتوح' };
+    var STAGES = [
+      { key: 'Invited', label: 'مدعو' }, { key: 'In Progress', label: 'قيد التنفيذ' },
+      { key: 'Completed', label: 'مكتمل' }, { key: 'Reviewed', label: 'تمت المراجعة' }
+    ];
+
+    var state = null;
+    var ASSIGNMENT_ID = params.get('assignment') || '';
+
+    function renderApp() {
+      UIC.appShell('ac-root', {
+        companyLogoUrl: COMPANY_LOGO_URL,
+        companyLogoHref: scriptUrl + '?action=ac_dashboard&sessionToken=' + SESSION_TOKEN,
+        companyLogoTitle: 'مركز التقييم',
+        breadcrumb: 'مركز التقييم / النتائج / نتيجة مرشح',
+        contentId: 'ac-rv-content',
+        menuGroups: (window.ASSESSMENT_MENU || [])
+      });
+      load();
+    }
+
+    function load() {
+      if (!ASSIGNMENT_ID) { UIC.toast('لا يوجد معرف محاولة', 'error'); return; }
+      UI.showSpinner();
+      companyCall('get_ac_result', { id: ASSIGNMENT_ID })
+        .then(function (res) {
+          state = res;
+          renderPage();
+          if (params.get('autoprint') === '1') setTimeout(function () { window.print(); }, 500);
+        })
+        .catch(function (err) { UIC.toast(err.message || 'تعذر تحميل النتيجة', 'error'); })
+        .finally(function () { UI.hideSpinner(); });
+    }
+
+    function renderPage() {
+      var el = document.getElementById('ac-rv-content');
+      if (!el) return;
+      var a = state.assignment, b = state.batch, as = state.assessment;
+
+      var smart = UIC.smartButtons([
+        { label: 'الدفعة', count: 1, onClick: "UIC.navTo(event, scriptUrl + '?action=ac_batches&sessionToken=' + encodeURIComponent(SESSION_TOKEN))" },
+        { label: 'التقييم', count: 1, onClick: "UIC.navTo(event, scriptUrl + '?action=ac_assessment_form&id=' + encodeURIComponent('" + esc(as.AssessmentID) + "') + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN))" }
+      ]);
+
+      var html = '<div class="ac-rv-wrap">' +
+        '<div class="ac-rv-noprint"><h2>' + esc(a.CandidateEmail) + '</h2>' +
+        '<p>' + esc(as.Title) + ' — ' + esc(b.CompanyName || '') + '</p>' +
+        UIC.statusbar(STAGES, a.Status) + smart +
+        '<div style="margin:10px 0;"><button type="button" class="btn btn-outline" onclick="window.print()">طباعة</button></div>' +
+        '</div>' +
+        '<div class="ac-score-card">' +
+        '<div class="ac-score-value">' + (state.max > 0 ? (state.score + ' / ' + state.max) : '—') + '</div>' +
+        '<div>' + UIC.statusPill(VERDICT_LABELS[state.verdict] || state.verdict, state.verdict === 'Pass' ? 'success' : state.verdict === 'Fail' ? 'danger' : state.verdict === 'Pending' ? 'warning' : 'neutral') + '</div>' +
+        '</div>' +
+        UIC.notebook('ac-rv', [
+          { key: 'answers', label: 'الإجابات', content: answersPanel() },
+          { key: 'traits', label: 'السمات', content: traitsPanel() },
+          { key: 'events', label: 'الأحداث', content: eventsPanel() }
+        ], 'answers') +
+        '</div>';
+
+      el.innerHTML = html;
+      drawTraitChart();
+    }
+
+    function answersPanel() {
+      var anyPending = state.answers.some(function (x) { return x.Pending; });
+      var body = state.answers.map(function (q, i) { return answerCard(q, i); }).join('');
+      var saveBtn = (CAN_WRITE && anyPending)
+        ? '<button type="button" class="btn btn-primary" id="ac-save-grades-btn" onclick="saveGrades()">حفظ الدرجات</button>' : '';
+      return '<div>' + body + saveBtn + '</div>';
+    }
+
+    function answerCard(q, i) {
+      var cls = 'ac-answer-card';
+      if (q.QuestionType === 'MCQ') cls += (q.Answer === q.CorrectAnswer ? ' ac-answer-correct' : ' ac-answer-wrong');
+      else if (q.QuestionType === 'OpenText' && q.Pending) cls += ' ac-answer-pending';
+
+      var body = '<div class="' + cls + '"><p style="font-weight:700;" dir="auto">' + (i + 1) + '. ' + esc(q.QuestionText) +
+        ' <span style="font-weight:400;color:var(--text-muted);">(' + (TYPE_LABELS[q.QuestionType] || q.QuestionType) + ')</span></p>';
+
+      if (q.QuestionType === 'MCQ' || q.QuestionType === 'Likert') {
+        body += (q.Options || []).map(function (o) {
+          var isAnswer = String(o.text) === String(q.Answer);
+          var isCorrect = q.QuestionType === 'MCQ' && String(o.text) === String(q.CorrectAnswer);
+          var line = 'ac-opt-line' + (isAnswer ? ' ac-is-answer' : '') + (isCorrect ? ' ac-is-correct' : '');
+          return '<div class="' + line + '" dir="auto">' + (isAnswer ? '● ' : '○ ') + esc(o.text) +
+            (isCorrect ? ' (الإجابة الصحيحة)' : '') + '</div>';
+        }).join('');
+      } else if (q.QuestionType === 'MostLeast') {
+        var parsed = {}; try { parsed = JSON.parse(q.Answer || '{}'); } catch (e) {}
+        body += '<div>الأكثر: ' + esc(parsed.most || '—') + '</div><div>الأقل: ' + esc(parsed.least || '—') + '</div>';
+      } else if (q.QuestionType === 'OpenText') {
+        body += '<div class="ac-view-text" dir="auto" style="white-space:pre-wrap;">' + esc(q.Answer || '—') + '</div>';
+        if (CAN_WRITE) {
+          body += '<div class="form-field" style="max-width:160px;"><label class="form-label">الدرجة (من ' + esc(q.Weight) + ')</label>' +
+            '<input class="input" type="number" min="0" max="' + esc(q.Weight) + '" step="0.5" id="ac-grade-' + esc(q.ResponseID) + '" value="' + (q.Score === null ? '' : esc(q.Score)) + '"></div>';
+        } else {
+          body += '<div>الدرجة: ' + (q.Score === null ? 'بانتظار التصحيح' : (q.Score + ' / ' + q.Weight)) + '</div>';
+        }
+      }
+      body += '</div>';
+      return body;
+    }
+
+    function saveGrades() {
+      var grades = [];
+      state.answers.forEach(function (q) {
+        if (q.QuestionType !== 'OpenText') return;
+        var el = document.getElementById('ac-grade-' + q.ResponseID);
+        if (!el || el.value === '') return;
+        grades.push({ response_id: q.ResponseID, score: Number(el.value) });
+      });
+      if (!grades.length) { UIC.toast('أدخل درجة واحدة على الأقل', 'error'); return; }
+      var btn = document.getElementById('ac-save-grades-btn');
+      UI.submitOnce(btn, function () {
+        return companyCall('add_ac_candidate_grade', { assignment_id: ASSIGNMENT_ID, grades: grades })
+          .then(function (res) {
+            UIC.toast((res && res.message) || 'تم الحفظ', 'success');
+            load();
+          })
+          .catch(function (err) { UIC.toast(err.message || 'تعذر حفظ الدرجات', 'error'); });
+      });
+    }
+
+    function traitsPanel() {
+      var keys = Object.keys(state.traits || {});
+      if (!keys.length) return '<p>لا توجد سمات لهذا التقييم.</p>';
+      var rows = keys.map(function (t) {
+        var info = state.traits[t];
+        var pct = Math.max(-100, Math.min(100, info.pct));
+        var width = Math.abs(pct);
+        return '<div class="ac-trait-row"><span class="ac-trait-name">' + esc(t) + '</span>' +
+          '<div class="ac-trait-bar-track"><div class="ac-trait-bar-fill" style="width:' + width + '%;"></div></div>' +
+          '<span>' + pct + '%</span></div>';
+      }).join('');
+      return '<div>' + rows + '<div style="height:220px;margin-top:16px;"><canvas id="ac-trait-chart"></canvas></div></div>';
+    }
+
+    function drawTraitChart() {
+      var keys = Object.keys(state.traits || {});
+      if (!keys.length) return;
+      API.ensureChart().then(function () {
+        var ctx = document.getElementById('ac-trait-chart');
+        if (!ctx || typeof Chart === 'undefined') return;
+        new Chart(ctx, {
+          type: 'bar',
+          data: { labels: keys, datasets: [{ label: 'السمات %', data: keys.map(function (k) { return state.traits[k].pct; }) }] },
+          options: { indexAxis: 'y', responsive: true, maintainAspectRatio: false }
+        });
+      }).catch(function () {});
+    }
+
+    function eventsPanel() {
+      if (!state.events || !state.events.length) return '<p>لا توجد أحداث مسجلة.</p>';
+      return '<div>' + state.events.map(function (e) {
+        return '<div class="ac-events-item"><span>' + esc(e.Action) + '</span><span>' + esc(e.Details) + '</span></div>';
+      }).join('') + '</div>';
+    }
+
+    document.addEventListener('DOMContentLoaded', renderApp);
+  </script>
+</body>
+</html>
