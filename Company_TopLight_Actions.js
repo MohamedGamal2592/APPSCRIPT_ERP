@@ -180,8 +180,12 @@ const TopLight = (function () {
   }
 
   // Category ref: top_light_categories -> [{id, name_ar}].
+  // Phase 11 — its own kind. This is a projected AND filtered shape; the four raw
+  // consumers go through categoryRefs_. Sharing one key meant whichever ran first
+  // inside the TTL won, and prefetch_refs warmed it raw, which silently dropped
+  // this filter and let a blank-id category into the dropdown.
   function categoryOptions_(dbId) {
-    return getRefsCached_(dbId, 'categories', 120, function () {
+    return tlRefs_(dbId, 'categories_opts', function () {
       return getAllRecords_(dbId, CATEGORIES_SHEET)
         .map(c => ({ id: c.id, name_ar: c.name_ar }))
         .filter(c => c.id !== undefined && c.id !== null && String(c.id).trim() !== '');
@@ -191,9 +195,7 @@ const TopLight = (function () {
   // Asset code ref: chart_of_accounts, filter المستوى الخامس in [114100, 115100].
   // label = كود المستوى (composite text), value = المستوى الخامس (numeric code).
   function assetCodeOptions_(dbId) {
-    const rows = getRefsCached_(dbId, 'chart_of_accounts', 120, function () {
-      return getAllRecords_(dbId, CHART_SHEET);
-    });
+    const rows = chartRefs_(dbId);
     const out = [];
     rows.forEach(r => {
       const fifth = Number(r['المستوى الخامس']);
@@ -210,9 +212,7 @@ const TopLight = (function () {
   // Movement type ref: chart_of_accounts, filter المستوى الخامس in [114100, 121800].
   // label = كود المستوى (composite text), value = المستوى الخامس (numeric code).
   function movementTypeOptions_(dbId) {
-    const rows = getRefsCached_(dbId, 'chart_of_accounts', 120, function () {
-      return getAllRecords_(dbId, CHART_SHEET);
-    });
+    const rows = chartRefs_(dbId);
     const out = [];
     rows.forEach(r => {
       const fifth = Number(r['المستوى الخامس']);
@@ -245,7 +245,11 @@ const TopLight = (function () {
     });
     sheet.appendRow(rowValues);
     noteMutation_();
-    invalidateRefsCache_(dbId, 'categories');
+    // Phase 11 — this was invalidateRefsCache_(dbId, 'categories'), which dropped
+    // the unstamped key. Now that both category shapes live behind the version
+    // stamp, that key is never written and dropping it would invalidate nothing:
+    // this was the one mutation site in the file outside bustTopLightCaches_.
+    bumpTlRefsVersion_(dbId);
     return newId;
   }
 
@@ -292,7 +296,7 @@ const TopLight = (function () {
       });
 
       const custNames = {};
-      getRefsCached_(dbId, 'parties', 120, function () { return getAllRecords_(dbId, CUSTOMERS_SHEET); }).forEach(c => { custNames[String(c.id)] = c.name; });
+      partyRefs_(dbId).forEach(c => { custNames[String(c.id)] = c.name; });
 
       const monthNames = ['يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو', 'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر'];
       const monthly = Array(12).fill(0);
@@ -358,7 +362,7 @@ const TopLight = (function () {
   function getProducts_(data, user, dbId) {
     const rows = getAllRecords_(dbId, PRODUCTS_SHEET);
     const catNames = {};
-    getRefsCached_(dbId, 'categories', 120, function () { return getAllRecords_(dbId, CATEGORIES_SHEET); }).forEach(c => { catNames[String(c.id)] = c.name_ar; });
+    categoryRefs_(dbId).forEach(c => { catNames[String(c.id)] = c.name_ar; });
     const stockMap = {};
     getAllRecords_(dbId, CURRENT_PRODUCTS_SHEET).forEach(s => {
       stockMap[String(s.unique_id)] = { qty: num0_(s.current_qty), cost: num0_(s.total_cost_sign) };
@@ -412,7 +416,7 @@ const TopLight = (function () {
     bustTopLightCaches_(dbId, 'products');
     invalidateRefsCache_(dbId, 'products');
     var catNames = {};
-    try{ getRefsCached_(dbId, 'categories', 120, function () { return getAllRecords_(dbId, CATEGORIES_SHEET); }).forEach(function(c){ catNames[String(c.id)] = c.name_ar; }); }catch(e){}
+    try{ categoryRefs_(dbId).forEach(function(c){ catNames[String(c.id)] = c.name_ar; }); }catch(e){}
     var savedRecord = {
       id: id,
       name_ar: nameAr,
@@ -453,7 +457,7 @@ const TopLight = (function () {
     bustTopLightCaches_(dbId, 'products');
     invalidateRefsCache_(dbId, 'products');
     var catNames2 = {};
-    try{ getRefsCached_(dbId, 'categories', 120, function () { return getAllRecords_(dbId, CATEGORIES_SHEET); }).forEach(function(c){ catNames2[String(c.id)] = c.name_ar; }); }catch(e){}
+    try{ categoryRefs_(dbId).forEach(function(c){ catNames2[String(c.id)] = c.name_ar; }); }catch(e){}
     var stockMap2 = {};
     try{ getAllRecords_(dbId, CURRENT_PRODUCTS_SHEET).forEach(function(s){ stockMap2[String(s.unique_id)] = { qty: num0_(s.current_qty), cost: num0_(s.total_cost_sign)}; }); }catch(e){}
     var st = stockMap2[String(id)] || { qty: 0, cost: 0 };
@@ -637,7 +641,7 @@ const TopLight = (function () {
     var limit = Number(data && data.limit) || 10;
     const rows = getAllRecords_(dbId, PURCHASING_SHEET);
     const vendorNames = {};
-    getRefsCached_(dbId, 'parties', 120, function () { return getAllRecords_(dbId, CUSTOMERS_SHEET); }).forEach(v => { vendorNames[String(v.id)] = v.name; });
+    partyRefs_(dbId).forEach(v => { vendorNames[String(v.id)] = v.name; });
     const pick = rows.length ? makeAliasPicker_(rows[0]) : function () { return ''; };
 
     // Phase 2.2 — decorate/sort/slice, then map only the visible rows.
@@ -692,7 +696,7 @@ const TopLight = (function () {
   function getPurchasingLines_(data, user, dbId) {
     const parentId = String((data && data.parent_id) || '');
     const prodNames = {};
-    getRefsCached_(dbId, 'products', 120, function () { return getAllRecords_(dbId, PRODUCTS_SHEET); }).forEach(p => { prodNames[String(p.id)] = p.name_ar; });
+    productRefs_(dbId).forEach(p => { prodNames[String(p.id)] = p.name_ar; });
     const lines = getAllRecords_(dbId, PURCHASING_LINES_SHEET)
       .filter(r => String(r['top_light_purchasing_costing_id']) === parentId)
       .map(r => ({
@@ -718,7 +722,7 @@ const TopLight = (function () {
     if (!uid) throw new Error('معرف العملية مطلوب');
 
     const vendorNames = {};
-    getRefsCached_(dbId, 'parties', 120, function () { return getAllRecords_(dbId, CUSTOMERS_SHEET); }).forEach(v => { vendorNames[String(v.id)] = v.name; });
+    partyRefs_(dbId).forEach(v => { vendorNames[String(v.id)] = v.name; });
     const rec = getAllRecords_(dbId, PURCHASING_SHEET).find(function(r){ return String(r.unique_id).trim().toLowerCase() === uid.toLowerCase(); });
     if (!rec) throw new Error('العملية غير موجودة');
     const header = Object.assign({}, rec);
@@ -736,7 +740,7 @@ const TopLight = (function () {
     header.supplier_name = vendorNames[String(rec['supplier name'])] || vendorNames[String(rec['supplier_name'])] || String(rec['supplier name']||rec['supplier_name']||'') || '';
 
     const prodNames = {};
-    getRefsCached_(dbId, 'products', 120, function () { return getAllRecords_(dbId, PRODUCTS_SHEET); }).forEach(p => { prodNames[String(p.id)] = p.name_ar; });
+    productRefs_(dbId).forEach(p => { prodNames[String(p.id)] = p.name_ar; });
     const lines = getAllRecords_(dbId, PURCHASING_LINES_SHEET)
       .filter(r => String(r['top_light_purchasing_costing_id']) === uid)
       .map(r => ({
@@ -762,7 +766,7 @@ const TopLight = (function () {
     try { var _uid = 'create_top_light_purchasing_costing_' + uid; logHistory_(dbId, PURCHASING_SHEET, _uid, String(uid), (user&&user.email)||'', 'create', header, null); } catch(e){}
     bustTopLightCaches_(dbId, 'purchasing');
     var vNames = {};
-    try{ getRefsCached_(dbId, 'parties', 120, function () { return getAllRecords_(dbId, CUSTOMERS_SHEET); }).forEach(function(v){ vNames[String(v.id)] = v.name; }); }catch(e){}
+    try{ partyRefs_(dbId).forEach(function(v){ vNames[String(v.id)] = v.name; }); }catch(e){}
     var ratePU = num0_(header.exchange_rate) || 1;
     var vbiPU = num0_(header.value) * ratePU;
     var expPU = num0_(header.administrative_expenses)+num0_(header.customs_expenses)+num0_(header.unloading_expenses)+num0_(header.bank_commission)+num0_(header.customs_clearance)+num0_(header.additional_fees)+num0_(header.clearance_expenses)+num0_(header.other_expenses);
@@ -819,7 +823,7 @@ const TopLight = (function () {
     try { var _uid = (_editPurchOld && _editPurchOld.record_uid) ? String(_editPurchOld.record_uid) : 'update_top_light_purchasing_costing_' + uid; logHistory_(dbId, PURCHASING_SHEET, _uid, String(uid), (user&&user.email)||'', 'update', header, _editPurchOld); } catch(e){}
     bustTopLightCaches_(dbId, 'purchasing');
     var vNamesE = {};
-    try{ getRefsCached_(dbId, 'parties', 120, function () { return getAllRecords_(dbId, CUSTOMERS_SHEET); }).forEach(function(v){ vNamesE[String(v.id)] = v.name; }); }catch(e){}
+    try{ partyRefs_(dbId).forEach(function(v){ vNamesE[String(v.id)] = v.name; }); }catch(e){}
     var ratePUE = num0_(header.exchange_rate) || 1;
     var vbiPUE = num0_(header.value) * ratePUE;
     var expPUE = num0_(header.administrative_expenses)+num0_(header.customs_expenses)+num0_(header.unloading_expenses)+num0_(header.bank_commission)+num0_(header.customs_clearance)+num0_(header.additional_fees)+num0_(header.clearance_expenses)+num0_(header.other_expenses);
@@ -890,9 +894,7 @@ const TopLight = (function () {
 
   function supplierOptions_(dbId) {
     // Phase 2.6 — version-stamped, 600s (was 120s).
-    const raw = tlRefs_(dbId, 'parties', function () {
-      return getAllRecords_(dbId, CUSTOMERS_SHEET);
-    });
+    const raw = partyRefs_(dbId);
     return (raw || []).map(v => ({
       value: v.id != null ? v.id : (v.value != null ? v.value : ''),
       label: v.name || v.label || String(v.id != null ? v.id : (v.value || ''))
@@ -901,9 +903,7 @@ const TopLight = (function () {
 
   function productOptions_(dbId) {
     // Phase 2.6 — version-stamped, 600s (was 120s).
-    const raw = tlRefs_(dbId, 'products', function () {
-      return getAllRecords_(dbId, PRODUCTS_SHEET);
-    });
+    const raw = productRefs_(dbId);
     return (raw || []).map(p => ({
       value: p.id != null ? p.id : (p.value != null ? p.value : ''),
       label: p.name_ar || p.label || String(p.id != null ? p.id : (p.value || ''))
@@ -1104,7 +1104,7 @@ const TopLight = (function () {
     const L = (name) => colLetter_(idx[name]);
 
     const prodCat = {};
-    getRefsCached_(dbId, 'products', 120, function () { return getAllRecords_(dbId, PRODUCTS_SHEET); }).forEach(p => { prodCat[String(p.id)] = p.category; });
+    productRefs_(dbId).forEach(p => { prodCat[String(p.id)] = p.category; });
 
     const ship = String((header.shipping_type == null) ? '' : header.shipping_type).trim();
     const movementPlace = (['CIF', 'FOB', 'C&F'].indexOf(ship) !== -1) ? 'مستورد' : (ship === 'محلي' ? 'محلي' : '');
@@ -1219,7 +1219,7 @@ const TopLight = (function () {
     var limit = Number(data && data.limit) || 10;
     const rows = getAllRecords_(dbId, SALES_SHEET);
     const custNames = {};
-    getRefsCached_(dbId, 'parties', 120, function () { return getAllRecords_(dbId, CUSTOMERS_SHEET); }).forEach(c => { custNames[String(c.id)] = c.name; });
+    partyRefs_(dbId).forEach(c => { custNames[String(c.id)] = c.name; });
 
     const stockMaps = cachedMap_('tl_sales_stock_' + dbId, 90, function () {
       const soldMap = {};
@@ -1270,7 +1270,7 @@ const TopLight = (function () {
   function getSalesLines_(data, user, dbId) {
     const parentId = String((data && data.parent_id) || '');
     const prodNames = {};
-    getRefsCached_(dbId, 'products', 120, function () { return getAllRecords_(dbId, PRODUCTS_SHEET); }).forEach(p => { prodNames[String(p.id)] = p.name_ar; });
+    productRefs_(dbId).forEach(p => { prodNames[String(p.id)] = p.name_ar; });
     const lines = getAllRecords_(dbId, SALES_LINES_SHEET)
       .filter(r => String(r['top_lightsales_header_id']) === parentId)
       .map(r => ({
@@ -1294,14 +1294,14 @@ const TopLight = (function () {
     if (!uid) throw new Error('معرف الفاتورة مطلوب');
 
     const custNames = {};
-    getRefsCached_(dbId, 'parties', 120, function () { return getAllRecords_(dbId, CUSTOMERS_SHEET); }).forEach(c => { custNames[String(c.id)] = c.name; });
+    partyRefs_(dbId).forEach(c => { custNames[String(c.id)] = c.name; });
     const rec = getAllRecords_(dbId, SALES_SHEET).find(r => String(r.invoice_unique_id) === uid);
     if (!rec) throw new Error('الفاتورة غير موجودة');
     const header = Object.assign({}, rec);
     header.customer_name = custNames[String(rec['اسم العميل'])] || '';
 
     const prodNames = {};
-    getRefsCached_(dbId, 'products', 120, function () { return getAllRecords_(dbId, PRODUCTS_SHEET); }).forEach(p => { prodNames[String(p.id)] = p.name_ar; });
+    productRefs_(dbId).forEach(p => { prodNames[String(p.id)] = p.name_ar; });
     const lines = getAllRecords_(dbId, SALES_LINES_SHEET)
       .filter(r => String(r['top_lightsales_header_id']) === uid)
       .map(r => ({
@@ -1360,14 +1360,14 @@ const TopLight = (function () {
     if (!invoice) throw new Error('الفاتورة غير موجودة');
 
     const prodNames = {};
-    getRefsCached_(dbId, 'products', 120, function () { return getAllRecords_(dbId, PRODUCTS_SHEET); }).forEach(p => { prodNames[String(p.id)] = p.name_ar; });
+    productRefs_(dbId).forEach(p => { prodNames[String(p.id)] = p.name_ar; });
     const costMap = {};
     getAllRecords_(dbId, CURRENT_PRODUCTS_SHEET).forEach(s => {
       const q = num0_(s.current_qty);
       costMap[String(s.unique_id)] = q > 0 ? num0_(s.total_cost_sign) / q : 0;
     });
     const custNames = {};
-    getRefsCached_(dbId, 'parties', 120, function () { return getAllRecords_(dbId, CUSTOMERS_SHEET); }).forEach(c => { custNames[String(c.id)] = c.name; });
+    partyRefs_(dbId).forEach(c => { custNames[String(c.id)] = c.name; });
 
     const items = [];
     let totalInvoiceCostOriginal = 0;
@@ -1460,7 +1460,7 @@ const TopLight = (function () {
     try { var _uid = 'create_top_light_sales_invoices_' + uid; logHistory_(dbId, SALES_SHEET, _uid, String(uid), (user&&user.email)||'', 'create', header, null); } catch(e){}
     bustTopLightCaches_(dbId, 'sales');
     var custNamesSales = {};
-    try{ getRefsCached_(dbId, 'parties', 120, function () { return getAllRecords_(dbId, CUSTOMERS_SHEET); }).forEach(function(c){ custNamesSales[String(c.id)] = c.name; }); }catch(e){}
+    try{ partyRefs_(dbId).forEach(function(c){ custNamesSales[String(c.id)] = c.name; }); }catch(e){}
     var savedSales = {
       invoice_unique_id: uid,
       'رقم الفاتورة': header.invoice_number,
@@ -1522,7 +1522,7 @@ const TopLight = (function () {
     try { var _uid = (_editSalesOld && _editSalesOld.record_uid) ? String(_editSalesOld.record_uid) : 'update_top_light_sales_invoices_' + uid; logHistory_(dbId, SALES_SHEET, _uid, String(uid), (user&&user.email)||'', 'update', header, _editSalesOld); } catch(e){}
     bustTopLightCaches_(dbId, 'sales');
     var custNamesSalesE = {};
-    try{ getRefsCached_(dbId, 'parties', 120, function () { return getAllRecords_(dbId, CUSTOMERS_SHEET); }).forEach(function(c){ custNamesSalesE[String(c.id)] = c.name; }); }catch(e){}
+    try{ partyRefs_(dbId).forEach(function(c){ custNamesSalesE[String(c.id)] = c.name; }); }catch(e){}
     var approvalExisting = (headers.findIndex(function(h){ return String(h).trim().toLowerCase()==='approval_status';})!==-1) ? String(dataArr[rowNum-1][headers.findIndex(function(h){ return String(h).trim().toLowerCase()==='approval_status';})]||'Pending') : 'Pending';
     var savedSalesE = {
       invoice_unique_id: uid,
@@ -1587,12 +1587,12 @@ const TopLight = (function () {
     if (!invoiceId) throw new Error('معرف الفاتورة مطلوب');
 
     const custNames = {};
-    getRefsCached_(dbId, 'parties', 120, function () { return getAllRecords_(dbId, CUSTOMERS_SHEET); }).forEach(c => { custNames[String(c.id)] = c.name; });
+    partyRefs_(dbId).forEach(c => { custNames[String(c.id)] = c.name; });
     const invoice = getAllRecords_(dbId, SALES_SHEET).find(r => String(r.invoice_unique_id) === invoiceId);
     if (!invoice) throw new Error('الفاتورة غير موجودة');
 
     const prodNames = {};
-    getRefsCached_(dbId, 'products', 120, function () { return getAllRecords_(dbId, PRODUCTS_SHEET); }).forEach(p => { prodNames[String(p.id)] = p.name_ar; });
+    productRefs_(dbId).forEach(p => { prodNames[String(p.id)] = p.name_ar; });
 
     const lines = getAllRecords_(dbId, SALES_LINES_SHEET)
       .filter(r => String(r.top_lightsales_header_id) === invoiceId);
@@ -1707,7 +1707,7 @@ const TopLight = (function () {
     try { var _uid = 'create_top_light_sales_returns_' + newUidRet; logHistory_(dbId, SALES_RETURNS_SHEET, _uid, String(newUidRet), (user&&user.email)||'', 'create', _retNewVals, null); } catch(e){}
     bustTopLightCaches_(dbId, 'sales');
     var prodNamesRet = {};
-    try{ getRefsCached_(dbId, 'products', 120, function () { return getAllRecords_(dbId, PRODUCTS_SHEET); }).forEach(function(p){ prodNamesRet[String(p.id)] = p.name_ar; }); }catch(e){}
+    try{ productRefs_(dbId).forEach(function(p){ prodNamesRet[String(p.id)] = p.name_ar; }); }catch(e){}
     var savedRet = {
       unique_id: newUidRet,
       id: nextId,
@@ -1762,9 +1762,7 @@ const TopLight = (function () {
 
   function customerSalesOptions_(dbId) {
     // Phase 2.6 — version-stamped, 600s (was 120s).
-    const raw = tlRefs_(dbId, 'parties', function () {
-      return getAllRecords_(dbId, CUSTOMERS_SHEET);
-    });
+    const raw = partyRefs_(dbId);
     return (raw || []).map(c => ({
       value: c.id != null ? c.id : (c.value != null ? c.value : ''),
       label: c.name || c.label || String(c.id != null ? c.id : (c.value || '')),
@@ -1828,6 +1826,45 @@ const TopLight = (function () {
     return cachedMap_(baseKey + '_v' + tlRefsVersion_(dbId), TL_REF_TTL, buildFn);
   }
 
+  // =========================================
+  // Reference accessors — Phase 11 (F-15, finishing what Phase 2.6 started).
+  //
+  // Phase 2.6 built tlRefs_ and the tl_refs_ver_<dbId> stamp but applied them only
+  // to the Sales & Purchase form option builders. The other 51 reference reads in
+  // this file still called getRefsCached_ directly at a 120s TTL, outside the
+  // stamp — so bustTopLightCaches_ bumped a stamp those entries were not keyed on,
+  // and a product or party edit did not invalidate them. They now all come through
+  // here.
+  //
+  // ONE accessor per (sheet, shape). getRefsCached_ keys on refs_<dbId>_<kind>, so
+  // two different value shapes under one kind is a live bug waiting for whichever
+  // caller warms the key first — that is exactly what Phase 7.2 found in
+  // TopChemical and ValleyFoods. 'categories' was already carrying two shapes here:
+  // categoryOptions_ caches a projected+filtered [{id, name_ar}], four other sites
+  // cache the raw records. It is benign only because those four read nothing but
+  // .id and .name_ar. Split into 'categories_opts' and 'categories_raw' anyway.
+  //
+  // TTL is TL_REF_TTL (600s), matching TopChemical and ValleyFoods. Not hours: a
+  // stamp cannot cover somebody editing a reference sheet by hand in the
+  // spreadsheet, and top_light_chart_of_accounts and top_light_box_account_codes
+  // have no app-driven mutator at all — they are hand-edited only.
+  // =========================================
+  function partyRefs_(dbId) {
+    return tlRefs_(dbId, 'parties', function () { return getAllRecords_(dbId, CUSTOMERS_SHEET); });
+  }
+  function productRefs_(dbId) {
+    return tlRefs_(dbId, 'products', function () { return getAllRecords_(dbId, PRODUCTS_SHEET); });
+  }
+  function categoryRefs_(dbId) {
+    return tlRefs_(dbId, 'categories_raw', function () { return getAllRecords_(dbId, CATEGORIES_SHEET); });
+  }
+  function chartRefs_(dbId) {
+    return tlRefs_(dbId, 'chart_of_accounts', function () { return getAllRecords_(dbId, CHART_SHEET); });
+  }
+  function boxRefs_(dbId) {
+    return tlRefs_(dbId, 'boxes', function () { return getAllRecords_(dbId, BOX_SHEET); });
+  }
+
   function bustTopLightCaches_(dbId, type) {
     bumpTlRefsVersion_(dbId);
     try {
@@ -1880,9 +1917,7 @@ const TopLight = (function () {
     const qtyMap = currentQtyMap_(dbId);
     const priceMap = latestSalesPriceMap_(dbId);
     // Phase 2.6 — version-stamped, 600s (was 120s).
-    const raw = tlRefs_(dbId, 'products', function () {
-      return getAllRecords_(dbId, PRODUCTS_SHEET);
-    });
+    const raw = productRefs_(dbId);
     return (raw || []).map(p => {
       const pid = p.id != null ? p.id : p.value;
       return {
@@ -1911,7 +1946,7 @@ const TopLight = (function () {
   }
 
   function lookupCustomerField_(dbId, customerId, field) {
-    const rec = getRefsCached_(dbId, 'parties', 120, function () { return getAllRecords_(dbId, CUSTOMERS_SHEET); }).find(c => String(c.id) === String(customerId));
+    const rec = partyRefs_(dbId).find(c => String(c.id) === String(customerId));
     return rec ? (rec[field] != null ? rec[field] : '') : '';
   }
 
@@ -2134,7 +2169,7 @@ const TopLight = (function () {
     const boxNames = boxNameMap_(dbId);
     const boxes = boxBalanceSummary_(dbId, boxNames);
     const custNames = {};
-    getRefsCached_(dbId, 'parties', 120, function () { return getAllRecords_(dbId, CUSTOMERS_SHEET); }).forEach(c => { custNames[String(c.id)] = c.name; });
+    partyRefs_(dbId).forEach(c => { custNames[String(c.id)] = c.name; });
     var headers = rows.map(r => {
       const rec = Object.assign({}, r);
       rec.box_name = boxNames[String(r.related_box)] || '';
@@ -2330,9 +2365,7 @@ const TopLight = (function () {
 
   // --- cash helpers ---
   function boxNameMap_(dbId) {
-    const rows = getRefsCached_(dbId, 'boxes', 120, function () {
-      return getAllRecords_(dbId, BOX_SHEET);
-    });
+    const rows = boxRefs_(dbId);
     const map = {};
     rows.forEach(b => {
       map[String(b['المستوى الخامس'])] = b['اسم المستوى الخامس'] || '';
@@ -2341,9 +2374,7 @@ const TopLight = (function () {
   }
 
   function boxOptions_(dbId) {
-    const rows = getRefsCached_(dbId, 'boxes', 120, function () {
-      return getAllRecords_(dbId, BOX_SHEET);
-    });
+    const rows = boxRefs_(dbId);
     return rows.map(b => ({
       value: b['المستوى الخامس'],
       label: b['اسم المستوى الخامس'] || ''
@@ -2351,9 +2382,7 @@ const TopLight = (function () {
   }
 
   function chartOptions_(dbId) {
-    const rows = getRefsCached_(dbId, 'chart_of_accounts', 120, function () {
-      return getAllRecords_(dbId, CHART_SHEET);
-    });
+    const rows = chartRefs_(dbId);
     return rows.map(r => ({
       value: r['المستوى الخامس'],
       label: r['كود المستوى'] || ''
@@ -2544,7 +2573,7 @@ const TopLight = (function () {
   // =========================================
   function customerRawMovements_(dbId) {
     const prodNames = {};
-    getRefsCached_(dbId, 'products', 120, function () { return getAllRecords_(dbId, PRODUCTS_SHEET); }).forEach(p => { prodNames[String(p.id)] = p.name_ar; });
+    productRefs_(dbId).forEach(p => { prodNames[String(p.id)] = p.name_ar; });
     const movements = [];
 
     // Sales (debit +)
@@ -2729,7 +2758,7 @@ const TopLight = (function () {
     if (!customerId) throw new Error('كود العميل مطلوب');
     const dateFrom = parseDate_(data && data.date_from);
     const dateTo = parseDate_(data && data.date_to);
-    const cust = getRefsCached_(dbId, 'parties', 120, function () { return getAllRecords_(dbId, CUSTOMERS_SHEET); }).find(c => String(c.id) === customerId);
+    const cust = partyRefs_(dbId).find(c => String(c.id) === customerId);
     if (!cust) throw new Error('العميل غير موجود');
     const stmt = customerMovements_(dbId, customerId, dateFrom, dateTo);
     return {
@@ -2754,7 +2783,7 @@ const TopLight = (function () {
     var limit = Number(data && data.limit) || 10;
     const rows = getAllRecords_(dbId, OFFER_SHEET);
     const custNames = {};
-    getRefsCached_(dbId, 'parties', 120, function () { return getAllRecords_(dbId, CUSTOMERS_SHEET); }).forEach(c => { custNames[String(c.id)] = c.name; });
+    partyRefs_(dbId).forEach(c => { custNames[String(c.id)] = c.name; });
     var headers = rows.map(r => {
       const rec = Object.assign({}, r);
       rec.customer_name = custNames[String(r['اسم العميل'])] || '';
@@ -2778,7 +2807,7 @@ const TopLight = (function () {
   function getSalesOfferLines_(data, user, dbId) {
     const parentId = String((data && data.parent_id) || '');
     const prodNames = {};
-    getRefsCached_(dbId, 'products', 120, function () { return getAllRecords_(dbId, PRODUCTS_SHEET); }).forEach(p => { prodNames[String(p.id)] = p.name_ar; });
+    productRefs_(dbId).forEach(p => { prodNames[String(p.id)] = p.name_ar; });
     const lines = getAllRecords_(dbId, OFFER_LINES_SHEET)
       .filter(r => String(r['top_lightsales_offer_id']) === parentId)
       .map(r => ({
@@ -2801,13 +2830,13 @@ const TopLight = (function () {
     const uid = String((data && data.offer_code) || '').trim();
     if (!uid) throw new Error('معرف العرض مطلوب');
     const custNames = {};
-    getRefsCached_(dbId, 'parties', 120, function () { return getAllRecords_(dbId, CUSTOMERS_SHEET); }).forEach(c => { custNames[String(c.id)] = c.name; });
+    partyRefs_(dbId).forEach(c => { custNames[String(c.id)] = c.name; });
     const rec = getAllRecords_(dbId, OFFER_SHEET).find(r => String(r.invoice_unique_id) === uid);
     if (!rec) throw new Error('العرض غير موجود');
     const header = Object.assign({}, rec);
     header.customer_name = custNames[String(rec['اسم العميل'])] || '';
     const prodNames = {};
-    getRefsCached_(dbId, 'products', 120, function () { return getAllRecords_(dbId, PRODUCTS_SHEET); }).forEach(p => { prodNames[String(p.id)] = p.name_ar; });
+    productRefs_(dbId).forEach(p => { prodNames[String(p.id)] = p.name_ar; });
     const lines = getAllRecords_(dbId, OFFER_LINES_SHEET)
       .filter(r => String(r['top_lightsales_offer_id']) === uid)
       .map(r => ({
@@ -2838,7 +2867,7 @@ const TopLight = (function () {
     writeOfferLines_(dbId, uid, lines, user);
     try { var _uid = 'create_top_light_sales_offer_' + uid; logHistory_(dbId, OFFER_SHEET, _uid, String(uid), (user&&user.email)||'', 'create', header, null); } catch(e){}
     var custNamesOffer = {};
-    try{ getRefsCached_(dbId, 'parties', 120, function () { return getAllRecords_(dbId, CUSTOMERS_SHEET); }).forEach(function(c){ custNamesOffer[String(c.id)] = c.name; }); }catch(e){}
+    try{ partyRefs_(dbId).forEach(function(c){ custNamesOffer[String(c.id)] = c.name; }); }catch(e){}
     var savedOffer = {
       invoice_unique_id: uid,
       'رقم الفاتورة': header.invoice_number,
@@ -2893,7 +2922,7 @@ const TopLight = (function () {
     try { var _uid = (_editOfferOld && _editOfferOld.record_uid) ? String(_editOfferOld.record_uid) : 'update_top_light_sales_offer_' + uid; logHistory_(dbId, OFFER_SHEET, _uid, String(uid), (user&&user.email)||'', 'update', header, _editOfferOld); } catch(e){}
 
     var custNamesOfferE = {};
-    try{ getRefsCached_(dbId, 'parties', 120, function () { return getAllRecords_(dbId, CUSTOMERS_SHEET); }).forEach(function(c){ custNamesOfferE[String(c.id)] = c.name; }); }catch(e){}
+    try{ partyRefs_(dbId).forEach(function(c){ custNamesOfferE[String(c.id)] = c.name; }); }catch(e){}
     var savedOfferE = {
       invoice_unique_id: uid,
       'رقم الفاتورة': header.invoice_number,
@@ -3065,7 +3094,7 @@ const TopLight = (function () {
     const productId = String((data && data.product_id) || '').trim();
 
     const custNames = {};
-    getRefsCached_(dbId, 'parties', 120, function () { return getAllRecords_(dbId, CUSTOMERS_SHEET); }).forEach(c => { custNames[String(c.id)] = c.name; });
+    partyRefs_(dbId).forEach(c => { custNames[String(c.id)] = c.name; });
     const retNet = {};
     getAllRecords_(dbId, SALES_RETURNS_SHEET).forEach(r => {
       const inv = String(r.top_lightsales_invoices_id);
@@ -3132,7 +3161,7 @@ const TopLight = (function () {
       rows: rows,
       totals: totals,
       customer_options: customerSalesOptions_(dbId),
-      product_options: getRefsCached_(dbId, 'products', 120, function () { return getAllRecords_(dbId, PRODUCTS_SHEET); }).map(p => ({ value: p.id, label: p.name_ar }))
+      product_options: productRefs_(dbId).map(p => ({ value: p.id, label: p.name_ar }))
     };
   }
 
@@ -3152,7 +3181,7 @@ const TopLight = (function () {
       costMap[String(s.unique_id)] = q > 0 ? num0_(s.total_cost_sign) / q : 0;
     });
     const custNames = {};
-    getRefsCached_(dbId, 'parties', 120, function () { return getAllRecords_(dbId, CUSTOMERS_SHEET); }).forEach(c => { custNames[String(c.id)] = c.name; });
+    partyRefs_(dbId).forEach(c => { custNames[String(c.id)] = c.name; });
 
     const lineAgg = {};
     getAllRecords_(dbId, SALES_LINES_SHEET).forEach(l => {
@@ -3249,11 +3278,11 @@ const TopLight = (function () {
     const typeId = String((data && data.type) || '').trim();
 
     const boxMap = {};
-    getRefsCached_(dbId, 'boxes', 120, function () { return getAllRecords_(dbId, BOX_SHEET); }).forEach(b => {
+    boxRefs_(dbId).forEach(b => {
       boxMap[String(b['المستوى الخامس'])] = [b['اسم المستوى الرابع'], b['المستوى الخامس'], b['اسم المستوى الخامس']].join('-');
     });
     const custNames = {};
-    getRefsCached_(dbId, 'parties', 120, function () { return getAllRecords_(dbId, CUSTOMERS_SHEET); }).forEach(c => { custNames[String(c.id)] = c.name; });
+    partyRefs_(dbId).forEach(c => { custNames[String(c.id)] = c.name; });
     const companyName = companyArabicName_();
     const rows = getAllRecords_(dbId, CASH_SHEET)
       .filter(r => {
@@ -3366,7 +3395,7 @@ const TopLight = (function () {
     });
 
     const prodNames = {};
-    getRefsCached_(dbId, 'products', 120, function () { return getAllRecords_(dbId, PRODUCTS_SHEET); }).forEach(p => { prodNames[String(p.id)] = p.name_ar; });
+    productRefs_(dbId).forEach(p => { prodNames[String(p.id)] = p.name_ar; });
     const rows = [];
     Object.keys(latest).forEach(pid => {
       const lastQty = latest[pid].qty;
@@ -3395,9 +3424,9 @@ const TopLight = (function () {
     const dateFrom = parseDate_(data && data.date_from);
     const dateTo = parseDate_(data && data.date_to);
     const prodNames = {};
-    getRefsCached_(dbId, 'products', 120, function () { return getAllRecords_(dbId, PRODUCTS_SHEET); }).forEach(p => { prodNames[String(p.id)] = p.name_ar; });
+    productRefs_(dbId).forEach(p => { prodNames[String(p.id)] = p.name_ar; });
     const custNames = {};
-    getRefsCached_(dbId, 'parties', 120, function () { return getAllRecords_(dbId, CUSTOMERS_SHEET); }).forEach(c => { custNames[String(c.id)] = c.name; });
+    partyRefs_(dbId).forEach(c => { custNames[String(c.id)] = c.name; });
 
     const invMap = {};
     getAllRecords_(dbId, SALES_SHEET).forEach(inv => {
@@ -3544,12 +3573,19 @@ const TopLight = (function () {
   register('get_purchase_needs', getPurchaseNeeds_);
   register('get_product_movement', getProductMovement_);
 
+  // Phase 11 — warms through the accessors, so it warms the stamped keys readers
+  // actually read. It used to warm the unstamped 120s keys, which after this phase
+  // nothing reads at all; and it warmed 'categories' with the RAW shape, silently
+  // overwriting the projected shape categoryOptions_ expects. Both category shapes
+  // are warmed now — the second getAllRecords_ costs no sheet read, because the
+  // Phase 9 request memo serves it.
   function prefetchRefs_(data, user, dbId) {
-    try { getRefsCached_(dbId, 'categories', 120, function(){ return getAllRecords_(dbId, CATEGORIES_SHEET); }); } catch(e){}
-    try { getRefsCached_(dbId, 'chart_of_accounts', 120, function(){ return getAllRecords_(dbId, CHART_SHEET); }); } catch(e){}
-    try { getRefsCached_(dbId, 'parties', 120, function(){ return getAllRecords_(dbId, CUSTOMERS_SHEET); }); } catch(e){}
-    try { getRefsCached_(dbId, 'products', 120, function(){ return getAllRecords_(dbId, PRODUCTS_SHEET); }); } catch(e){}
-    try { getRefsCached_(dbId, 'boxes', 120, function(){ return getAllRecords_(dbId, BOX_SHEET); }); } catch(e){}
+    try { categoryRefs_(dbId); } catch(e){}
+    try { categoryOptions_(dbId); } catch(e){}
+    try { chartRefs_(dbId); } catch(e){}
+    try { partyRefs_(dbId); } catch(e){}
+    try { productRefs_(dbId); } catch(e){}
+    try { boxRefs_(dbId); } catch(e){}
     return { status: 'success' };
   }
   register('prefetch_refs', prefetchRefs_);
