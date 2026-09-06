@@ -764,6 +764,19 @@ UIC._renderChunked = function(id, offset){
   st.pageRows = view;
   const total = view.length;
   let idx = offset || 0;
+  /* [UI-4.4] Group bookkeeping. The index is built ONCE per render, in O(n),
+     so the per-row work inside the chunk loop stays a single comparison and the
+     renderer's complexity is unchanged. */
+  let lastGroup = null;
+  const groupIndex = {};
+  if (st.groupKey) {
+    view.forEach(function (r) {
+      if (!r || Array.isArray(r)) return;
+      var gv = r[st.groupKey];
+      var gid = String(gv == null || gv === '' ? '—' : gv);
+      (groupIndex[gid] = groupIndex[gid] || []).push(r);
+    });
+  }
   // first chunk clears
   if(idx===0) tbody.innerHTML = '';
   function tick(){
@@ -774,6 +787,18 @@ UIC._renderChunked = function(id, offset){
     let html = '';
     const end = Math.min(idx + CHUNK, total);
     for(; idx < end; idx++){
+      /* [UI-4.4 / U-18] Emit a group header whenever the group value changes.
+         This stays inside the same chunk loop and the same 12ms budget: it is
+         one comparison per row, not a second pass over the data. */
+      if (st.groupKey) {
+        var gv = view[idx] && !Array.isArray(view[idx]) ? view[idx][st.groupKey] : null;
+        var gid = String(gv == null || gv === '' ? '—' : gv);
+        if (gid !== lastGroup) {
+          lastGroup = gid;
+          html += UIC._dtGroupRowHtml(st, gid, gid, groupIndex[gid] || []);
+        }
+        if (st.collapsed && st.collapsed[gid]) continue;
+      }
       html += UIC._dtRowHtml(view[idx], UIC._dtVisibleHeaders(st), st.fmtMoney, idx, st);
       // flush per CHUNK to respect budget
       if (performance.now() - start >= BUDGET) break;
@@ -782,10 +807,160 @@ UIC._renderChunked = function(id, offset){
     if (idx < total) requestAnimationFrame(tick);
     else {
       try { UIC._dtRefreshBatchBar(id); } catch (e) {}
+      try { UIC._dtRefreshFooter(id); } catch (e) {}
       if (st.opts && st.opts.onRendered) { try{ st.opts.onRendered(id); }catch(e){} }
     }
   }
   requestAnimationFrame(tick);
+};
+
+/* ── [UI-4.4 / U-18] Group by, with subtotals and a column footer ─────────
+ *
+ * A list could be sorted but not grouped, so "what did each customer buy this
+ * month" meant exporting to Excel and building a pivot. Grouping runs entirely
+ * on rows already loaded client-side — st.filtered — so it adds ZERO server
+ * calls, which is the constraint the performance programme cares about.
+ *
+ * Choosing a group also sorts by that key, because a group is only meaningful
+ * when its rows are contiguous. That is stated here rather than being a
+ * surprise: picking a group changes the sort.
+ */
+UIC.dtGroupBy = function (id, key) {
+  var st = (window.__dtStore || {})[id];
+  if (!st) return;
+  st.groupKey = key || null;
+  st.collapsed = {};
+  if (key) { st.sortKey = key; st.sortDir = 'asc'; }
+  UIC._applyFilters(id);
+  UIC._dtSyncSortIndicators(id);
+};
+
+UIC.dtToggleGroup = function (id, groupId) {
+  var st = (window.__dtStore || {})[id];
+  if (!st) return;
+  st.collapsed = st.collapsed || {};
+  if (st.collapsed[groupId]) delete st.collapsed[groupId]; else st.collapsed[groupId] = true;
+  UIC._dtRenderBody(id);
+};
+
+/** Sum the money/numeric columns over a set of rows. */
+UIC._dtAggregate = function (st, list) {
+  var cols = UIC._dtVisibleHeaders(st).filter(function (h) { return h.money || h.numeric; });
+  var sums = {};
+  cols.forEach(function (h) { sums[h.key || h.label] = 0; });
+  (list || []).forEach(function (r) {
+    cols.forEach(function (h) {
+      var k = h.key || h.label;
+      var v = Array.isArray(r) ? null : r[k];
+      var n = parseFloat(String(v == null ? '' : v).replace(/,/g, ''));
+      if (!isNaN(n)) sums[k] += n;
+    });
+  });
+  return { cols: cols, sums: sums };
+};
+
+/** A group header row: label, count, and the subtotal of each numeric column. */
+UIC._dtGroupRowHtml = function (st, groupId, label, list) {
+  var cols = UIC._dtVisibleHeaders(st);
+  var agg = UIC._dtAggregate(st, list);
+  var collapsed = !!(st.collapsed && st.collapsed[groupId]);
+  var span = (st.selectable ? 1 : 0) + cols.length;
+  var cells = cols.map(function (h, i) {
+    var k = h.key || h.label;
+    if (i === 0) {
+      return '<td class="dt-group-lead">' +
+        '<button type="button" class="dt-group-toggle" aria-expanded="' + (!collapsed) + '" ' +
+        'onclick="event.stopPropagation();UIC.dtToggleGroup(\'' + st.id + '\', \'' + UIC.escHtml(groupId) + '\')">' +
+        (collapsed ? UIC.icon('chevron-left', { size: 14 }) : UIC.icon('chevron-down', { size: 14 })) +
+        '</button>' +
+        '<span class="dt-group-label">' + UIC.escHtml(label || '—') + '</span>' +
+        '<span class="dt-group-count">' + list.length + '</span></td>';
+    }
+    if (agg.sums.hasOwnProperty(k)) {
+      return '<td class="num dt-group-sum">' + st.fmtMoney(agg.sums[k]) + '</td>';
+    }
+    return '<td></td>';
+  }).join('');
+  return '<tr class="dt-group" data-group="' + UIC.escHtml(groupId) + '" data-span="' + span + '">' +
+    (st.selectable ? '<td class="dt-sel"></td>' : '') + cells + '</tr>';
+};
+
+/** The table footer: the same aggregates across the whole filtered set. */
+UIC._dtRefreshFooter = function (id) {
+  var st = (window.__dtStore || {})[id];
+  var table = document.getElementById(id + '_table');
+  if (!st || !table) return;
+  if (!(st.opts && st.opts.totals)) return;
+  var cols = UIC._dtVisibleHeaders(st);
+  var agg = UIC._dtAggregate(st, st.filtered);
+  var cells = cols.map(function (h, i) {
+    var k = h.key || h.label;
+    if (i === 0) return '<td class="dt-total-lead">الإجمالي (' + (st.filtered || []).length + ')</td>';
+    return agg.sums.hasOwnProperty(k)
+      ? '<td class="num">' + st.fmtMoney(agg.sums[k]) + '</td>'
+      : '<td></td>';
+  }).join('');
+  var foot = table.querySelector('tfoot');
+  if (!foot) {
+    foot = document.createElement('tfoot');
+    table.appendChild(foot);
+  }
+  foot.innerHTML = '<tr class="dt-total">' + (st.selectable ? '<td class="dt-sel"></td>' : '') + cells + '</tr>';
+};
+
+/** Markup for the "تجميع" dropdown. A page drops this into controlPanel.tools. */
+UIC.groupMenu = function (id, keys) {
+  var st = (window.__dtStore || {})[id];
+  if (!st) return '';
+  var ddId = 'grp-' + id;
+  var choices = (keys && keys.length ? keys : st.headers.map(function (h) { return h.key || h.label; }))
+    .filter(function (k) { return k !== 'actions'; });
+  var label = function (k) {
+    var h = st.headers.filter(function (x) { return (x.key || x.label) === k; })[0];
+    return (h && h.label) || k;
+  };
+  var items = '<button type="button" class="nav-dropdown-item" onclick="UIC.dtGroupBy(\'' + id + '\', null)">بدون تجميع</button>' +
+    choices.map(function (k) {
+      return '<button type="button" class="nav-dropdown-item" onclick="UIC.dtGroupBy(\'' + id + '\', \'' +
+        UIC.escHtml(String(k)) + '\')">' + UIC.escHtml(String(label(k))) + '</button>';
+    }).join('');
+  return '<div class="nav-dropdown" id="' + ddId + '-wrap">' +
+    '<button type="button" class="btn btn-outline nav-dropdown-toggle" aria-haspopup="true" aria-expanded="false" ' +
+    'onclick="UIC.toggleDropdown(\'' + ddId + '\', event)">' + UIC.icon('filter', { size: 15 }) +
+    '<span>تجميع</span></button>' +
+    '<div class="nav-dropdown-menu" id="' + ddId + '">' + items + '</div></div>';
+};
+
+/* ── [UI-4.7 / U-23] Skeleton loading for lists ───────────────────────────
+ *
+ * A list load put a full-screen blocking overlay over the page on 80 of 85
+ * pages, so fetching a list looked exactly like saving a record — and the user
+ * could not tell whether they were allowed to keep working.
+ *
+ * The rule this establishes: SKELETON for reading, INLINE PROGRESS for
+ * refreshing, and the blocking overlay reserved for writes, where blocking is
+ * the point.
+ */
+UIC.listSkeleton = function (containerId, headers, rowCount) {
+  var el = typeof containerId === 'string' ? document.getElementById(containerId) : containerId;
+  if (!el) return;
+  el.innerHTML = '<div class="table-wrap">' + UIC.tableSkeleton(headers, rowCount || 8) + '</div>';
+};
+
+UIC.listProgress = function (containerId, on) {
+  var el = typeof containerId === 'string' ? document.getElementById(containerId) : containerId;
+  if (!el) return;
+  var bar = el.querySelector ? el.querySelector('.dt-progress') : null;
+  if (on) {
+    if (bar) return;
+    bar = document.createElement('div');
+    bar.className = 'dt-progress';
+    bar.setAttribute('role', 'progressbar');
+    bar.setAttribute('aria-label', 'جاري التحديث');
+    if (el.firstChild) el.insertBefore(bar, el.firstChild); else el.appendChild(bar);
+  } else if (bar && bar.remove) {
+    bar.remove();
+  }
 };
 
 /* ── [UI-4.5 / U-19] Optional columns, remembered per page ────────────────
@@ -2496,6 +2671,47 @@ document.addEventListener('keydown', function (e) {
   .table tbody tr:hover { background: var(--brand-subtle-bg); }
   /* Tall enough rows for finger tapping */
   .table tbody tr { min-height: var(--tap-sm, 44px); }
+  /* ── [UI-4.4 / U-18] Group rows, subtotals and the column footer ─────── */
+  .table tbody tr.dt-group td {
+    background: var(--bg-subtle);
+    font-weight: 700; color: var(--text-main);
+    border-top: 1px solid var(--border-strong);
+    position: sticky; top: 32px; z-index: 1;
+  }
+  .dt-group-lead { display: flex; align-items: center; gap: var(--space-2); }
+  .dt-group-toggle {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 24px; height: 24px; min-width: 24px;
+    border: 0; background: transparent; color: var(--text-muted);
+    cursor: pointer; border-radius: var(--radius-sm); padding: 0;
+  }
+  .dt-group-toggle:hover { background: var(--bg-sunken); color: var(--text-main); }
+  .dt-group-label { font-weight: 800; }
+  .dt-group-count {
+    font-size: var(--text-xs); font-weight: 700;
+    background: var(--brand-subtle-bg); color: var(--brand-primary);
+    border-radius: 999px; padding: 1px 8px;
+  }
+  .dt-group-sum { font-weight: 700; }
+  .dt-total-lead { font-weight: 800; white-space: nowrap; }
+  .table tfoot .dt-total td {
+    background: var(--bg-subtle);
+    border-top: 2px solid var(--border-strong);
+    font-weight: 800; color: var(--text-main);
+    position: sticky; bottom: 0;
+  }
+
+  /* [UI-4.7 / U-23] Inline refresh progress — reading never blocks the page. */
+  .dt-progress {
+    height: 3px; width: 100%; overflow: hidden;
+    background: var(--bg-sunken);
+    background-image: linear-gradient(90deg, transparent, var(--brand-primary), transparent);
+    background-size: 40% 100%; background-repeat: no-repeat;
+    animation: dt-progress-slide 1.1s ease-in-out infinite;
+  }
+  @keyframes dt-progress-slide { 0% { background-position: 120% 0; } 100% { background-position: -40% 0; } }
+  @media (prefers-reduced-motion: reduce) { .dt-progress { animation: none; opacity: .5; } }
+
   /* ── [UI-4.6 / U-17] Selection and the batch bar ─────────────────────── */
   .table .dt-sel { width: var(--tap-sm, 44px); text-align: center; }
   .dt-sel-box, .dt-sel-all { width: 18px; height: 18px; cursor: pointer; accent-color: var(--brand-primary); }
