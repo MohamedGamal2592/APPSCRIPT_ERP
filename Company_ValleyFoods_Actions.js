@@ -3315,6 +3315,10 @@ const ValleyFoodsHRModules = (function () {
     var rows = getAllRecords_(dbId, PURCHASING_COSTING_SHEET);
     rows.sort(function (a, b) { return (Number(b.id) || 0) - (Number(a.id) || 0); });
     if (!data || !data.loadAll) rows = rows.slice(0, limit);
+    /* U-46. Whole sheet rows, so every landed-cost column rides along. Code,
+       supplier, dates, type, currency, month/year and the approval columns stay,
+       which is what the list needs to stay navigable and approvable. */
+    if (!vfCanSeeCost_(user)) vfStripCostAll_(rows, VF_COST_KEYS.pur_header);
     var out = {
       status: 'success',
       headers: rows,
@@ -3367,6 +3371,12 @@ const ValleyFoodsHRModules = (function () {
     var rows = getAllRecords_(dbId, PURCHASING_LINE_SHEET).filter(function (r) {
       return String(r.code) === code;
     });
+    /* U-46. product, vendor, qty, lot, dates, currency and movement type stay;
+       the per-line money columns go. See the save guard in
+       saveValleyPurchasingCosting_ — this endpoint feeds the edit form as well
+       as the read-only view, and a cost-blind client must not be able to write
+       the blanks it was given back over the stored figures. */
+    if (!vfCanSeeCost_(user)) vfStripCostAll_(rows, VF_COST_KEYS.pur_line);
     return { status: 'success', lines: rows };
   }
 
@@ -3376,6 +3386,29 @@ const ValleyFoodsHRModules = (function () {
     var lines = d.lines || [];
     var code = String(hdr.Code != null ? hdr.Code : '').trim();
     if (!code) throw new Error('الكود (Code) مطلوب');
+
+    /* U-46 + U-47's lesson, applied to purchasing.
+     *
+     * This handler writes every header column straight from the payload
+     * (record[col] = hdr[col], blank when absent) and rewrites the whole line
+     * set from scratch. Once the read strips the cost columns, a caller without
+     * the grant holds none of them — so an ordinary save would write blanks
+     * over the entire landed-cost document. That is precisely the silent wipe
+     * U-47 described, at document scale.
+     *
+     * Manufacturing could be fixed by resolving cost server-side, because the
+     * authority is valley_current_products. Purchasing has no such authority:
+     * these figures are typed in by a person. And the lines are deleted and
+     * re-created with fresh unique_ids on every save, so there is no stable
+     * identity to preserve the stored costs against either.
+     *
+     * So the only safe answer is to refuse the write rather than corrupt it.
+     * Note this changes nothing until the owner grants valley_cost_view to a
+     * first role — until then the fail-open guard makes vfCanSeeCost_ true for
+     * everyone. Recorded in VALLEYFOODS_RESULTS.md and NEXT_STEPS_OWNER.md. */
+    if (!vfCanSeeCost_(user)) {
+      throw new Error('لا تملك صلاحية عرض أو تعديل التكاليف (valley_cost_view) — لا يمكن حفظ عملية شراء.');
+    }
     var originalCode = String(d.originalCode != null ? d.originalCode : '').trim();
 
     settingsEnsureSheet_(dbId, PURCHASING_COSTING_SHEET, PURCHASING_COSTING_HEADERS);

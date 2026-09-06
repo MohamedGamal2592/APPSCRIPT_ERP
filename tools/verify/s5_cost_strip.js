@@ -323,6 +323,45 @@ console.log('\nS5 — differential: sales\n');
     'batch allocations are returned without cost');
 }
 
+console.log('\nS5 — the purchasing save guard (the wipe it prevents)\n');
+{
+  /* Reproduce saveValleyPurchasingCosting_'s header builder over the payload a
+     cost-blind client would hold, and show what it would have written. */
+  const PURCHASING_COSTING_HEADERS = Object.keys(PUR_HEADER_FIXTURE);
+  const SKIP = ['id', 'unique_id', 'user', 'user_name', 'approval_status', 'approval', 'approval_time',
+    'quality_approval_status', 'quality_approval', 'quality_approval_time',
+    'Related valley_product_purchasings', 'code_identification'];
+
+  const strippedPayload = GATE.vfStripCost_(clone(PUR_HEADER_FIXTURE), K.pur_header);
+  const wouldWrite = {};
+  PURCHASING_COSTING_HEADERS.forEach(col => {
+    if (SKIP.indexOf(col) !== -1) return;
+    const v = strippedPayload[col];
+    wouldWrite[col] = (v === undefined || v === null) ? '' : v;
+  });
+  const blanked = K.pur_header.filter(c => wouldWrite[c] === '' && PUR_HEADER_FIXTURE[c] !== '');
+  check(blanked.length === K.pur_header.length,
+    'without a guard, an unguarded save would blank all ' + blanked.length + ' cost columns',
+    'e.g. Total costs ' + PUR_HEADER_FIXTURE['Total costs'] + " -> '" + wouldWrite['Total costs'] + "'");
+
+  check(SRC.indexOf("throw new Error('لا تملك صلاحية عرض أو تعديل التكاليف (valley_cost_view) — لا يمكن حفظ عملية شراء.');") !== -1,
+    'saveValleyPurchasingCosting_ refuses the write instead');
+  /* The guard must sit before any write. */
+  const saveAt = SRC.indexOf('function saveValleyPurchasingCosting_');
+  const guardAt = SRC.indexOf('لا يمكن حفظ عملية شراء', saveAt);
+  const firstWriteAt = Math.min(
+    ...['updateRowByCriteria_', 'addRecord_', 'deleteRowsByCriteria_']
+      .map(w => { const i = SRC.indexOf(w, saveAt); return i === -1 ? Infinity : i; }));
+  check(guardAt > saveAt && guardAt < firstWriteAt,
+    'the guard runs BEFORE the first write in that handler');
+
+  /* Approval must stay open to cost-blind users — it touches only 3 columns. */
+  const approveAt = SRC.indexOf('function approveValleyPurchasingCosting_');
+  const approveEnd = SRC.indexOf('function qualityApproveValleyPurchasingCosting_', approveAt);
+  check(SRC.slice(approveAt, approveEnd).indexOf('vfCanSeeCost_') === -1,
+    'approveValleyPurchasingCosting_ is NOT gated (it writes only approval columns)');
+}
+
 /* ── 3. The call sites are actually wired up ─────────────────────────────── */
 console.log('\nS5 — every converted endpoint calls the gate\n');
 [
@@ -331,7 +370,9 @@ console.log('\nS5 — every converted endpoint calls the gate\n');
   ['getValleyMfgByproducts_', 'vfStripCostAll_(rows, VF_COST_KEYS.mfg_bp)'],
   ['addValleyMfgByproduct_', 'vfStripCost_(_savedBP, VF_COST_KEYS.mfg_bp)'],
   ['getValleyProductBatches_ (computed)', 'vfStripCostAll_(list, VF_COST_KEYS.batch)'],
-  ['getValleyProductBatches_ (cache hit)', 'vfStripCostAll_(_cached.batches, VF_COST_KEYS.batch)']
+  ['getValleyProductBatches_ (cache hit)', 'vfStripCostAll_(_cached.batches, VF_COST_KEYS.batch)'],
+  ['getValleyPurchasingCosting_', 'vfStripCostAll_(rows, VF_COST_KEYS.pur_header)'],
+  ['getValleyPurchasingLines_', 'vfStripCostAll_(rows, VF_COST_KEYS.pur_line)']
 ].forEach(p => check(SRC.indexOf(p[1]) !== -1, p[0] + ' wired'));
 
 console.log('\n' + (failed === 0
