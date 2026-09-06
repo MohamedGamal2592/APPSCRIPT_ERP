@@ -4187,6 +4187,23 @@ const ValleyFoodsHRModules = (function () {
       var consHeaders = getHeaders_(sheetCons);
       var consRows = [];
 
+      /* U-47. The authoritative unit cost of a batch, keyed by batch uid, read
+       * from valley_current_products — the SAME source and the same lookup the
+       * read path uses in getValleyMfgOrderFull_. The client's `unit_cost` is
+       * ignored entirely: it was never the client's to set, and once the cost
+       * columns are stripped from the read for users without valley_cost_view
+       * (S5) a client payload no longer carries one at all.
+       *
+       * Every footer batch is guaranteed to be present here: assertFooterBalances_
+       * above throws for any batch uid it cannot find a balance for. */
+      var footerBatchCost = {};
+      try {
+        getAllRecords_(dbId, 'valley_current_products').forEach(function (r) {
+          var u = String(r.unique_id || '').trim();
+          if (u && footerBatchCost[u] === undefined) footerBatchCost[u] = Number(r.unit_cost) || 0;
+        });
+      } catch (eFbc) {}
+
       /* 1) Per-product footer rows (from outputs[].footers) */
       outputs.forEach(function (o, oi) {
         var outUid = outputUidMap[oi];
@@ -4208,7 +4225,8 @@ const ValleyFoodsHRModules = (function () {
           var fq = Math.round((Number(f.qty) || 0) * 1000) / 1000;
           if (fix === deltaIx) fq = Math.round((fq + delta) * 1000) / 1000;
           m7['qty'] = fq;
-          m7['cost_unit'] = (f.unit_cost != null && String(f.unit_cost).trim() !== '') ? Number(f.unit_cost) : '';
+          /* U-47: server-resolved, never f.unit_cost. */
+          m7['cost_unit'] = footerBatchCost[m7['item']] || 0;
           m7['created_at'] = new Date();
           m7['user'] = (user && user.email) || '';
           consRows.push(consHeaders.map(function (h) {
