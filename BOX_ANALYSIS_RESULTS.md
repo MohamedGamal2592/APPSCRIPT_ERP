@@ -1,7 +1,7 @@
 # Box Analysis — what was built, what was not, and what to check
 
 Branch `feat/tc-box-analysis`, off `43ec072` (`ui/odoo-parity`). **Not pushed.**
-Eleven commits, `8,813` insertions across 18 files, `6` deletions — all six of
+Twelve commits, `9,930` insertions across 21 files, `6` deletions — all six of
 those are lines I replaced in `tools/verify/run_all.js` and `parse_pages.js` to
 register new checks.
 
