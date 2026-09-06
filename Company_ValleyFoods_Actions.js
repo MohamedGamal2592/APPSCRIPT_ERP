@@ -3123,6 +3123,136 @@ const ValleyFoodsHRModules = (function () {
     return { status: 'success', message: 'تمت إضافة المنتج (رقم ' + res.data.assignedId + ')', id: res.data.assignedId };
   }
 
+  /* ═══ U-46: cost visibility (valley_cost_view) ═══════════════════════════
+   * Hiding costs is a SERVER-side boundary, not a UI convenience: the fields
+   * are removed from the response and never reach the browser.
+   *
+   * Two rules the call sites must honour:
+   *   1. OMIT the key. Never send zero. A zero is indistinguishable from a
+   *      genuine zero cost and renders as a figure; an absent key lets the
+   *      client tell "not permitted" from "costs nothing".
+   *   2. Strip nothing the workflow needs. Quantities, batch_uid, lot,
+   *      availability, dates and statuses all stay, so a user without the
+   *      grant can still allocate batches and save a manufacturing order.
+   *      That is safe because U-47 (S1) made the save resolve cost_unit
+   *      server-side and stop reading the client's unit_cost.
+   *
+   * These live in the ValleyFoodsHRModules IIFE alongside purchasing, sales
+   * and manufacturing, so all three modules share one gate. */
+  var VF_COST_PAGE_ID = 'valley_cost_view';
+
+  /**
+   * THE FAIL-OPEN GUARD, and it is mandatory.
+   *
+   * valley_cost_view is registered in code (S4) but no role holds it until the
+   * owner adds the ERP_Pages_Matrix rows by hand — an agent may not write
+   * business data. Without this guard, the moment this ships costs would
+   * disappear for everyone, including the owner.
+   *
+   * So: if NO role anywhere in the matrix holds ANY active grant on
+   * valley_cost_view, the permission is not in use yet and every user is
+   * treated as authorised — exactly today's behaviour. The gate becomes real
+   * the instant the owner grants it to the first role.
+   *
+   * Cached under the same version_matrix stamp getRoleAuthorityMatrix_ uses, so
+   * granting the permission (which calls bumpVersion_('ERP_Pages_Matrix'))
+   * invalidates this immediately rather than after the TTL.
+   *
+   * A matrix that cannot be read also fails open, which is the safe direction:
+   * it leaves behaviour as it is today rather than blanking every cost figure
+   * in the company on a transient read error.
+   */
+  function vfCostGrantUnused_() {
+    var cache = null, key = null;
+    try {
+      cache = CacheService.getScriptCache();
+      key = 'vf_cost_grant_unused_v' + (cache.get('version_matrix') || '0');
+      var hit = cache.get(key);
+      if (hit !== null && hit !== undefined) return hit === '1';
+    } catch (eCache) {}
+
+    var unused = true;
+    try {
+      var sheet = getSheet_('ERP_Pages_Matrix', CONFIG.AUTH_SPREADSHEET_ID);
+      var headers = getHeaders_(sheet);
+      var values = sheet.getDataRange().getValues();
+      var pageIdx = headers.findIndex(function (h) { return String(h).trim().toLowerCase() === 'page_id'; });
+      var statusIdx = headers.findIndex(function (h) { return String(h).trim().toLowerCase() === 'status'; });
+      if (pageIdx !== -1) {
+        for (var i = 1; i < values.length; i++) {
+          if (String(values[i][pageIdx]).trim() !== VF_COST_PAGE_ID) continue;
+          if (statusIdx !== -1 && String(values[i][statusIdx]).trim().toLowerCase() !== 'active') continue;
+          unused = false;
+          break;
+        }
+      }
+    } catch (eSheet) {
+      unused = true;
+    }
+
+    /* Logged on the computed path only, so it appears once per cache window
+       rather than on every request — visible without flooding the log. */
+    if (unused) {
+      try {
+        Logger.log('[VF_COST] fail-open: no role holds an active grant on ' + VF_COST_PAGE_ID +
+          ' — cost fields stay visible to everyone. Grant it in ERP_Management > صلاحيات الأدوار to activate the permission.');
+      } catch (eLog) {}
+    }
+    try { if (cache && key) cache.put(key, unused ? '1' : '0', 300); } catch (ePut) {}
+    return unused;
+  }
+
+  /** True when this user may see cost figures in purchasing, sales and manufacturing. */
+  function vfCanSeeCost_(user) {
+    if (user && user.isSuperAdmin) return true;
+    var grants = (user && user.authorizedPages && user.authorizedPages[VF_COST_PAGE_ID]) || null;
+    if (grants && grants.length &&
+        (grants.indexOf('write') !== -1 || grants.indexOf('full') !== -1)) return true;
+    return vfCostGrantUnused_();
+  }
+
+  /** Remove keys from one object. Deletes — never zeroes. */
+  function vfStripCost_(obj, keys) {
+    if (!obj) return obj;
+    for (var i = 0; i < keys.length; i++) delete obj[keys[i]];
+    return obj;
+  }
+
+  /** Remove keys from every object in a list. */
+  function vfStripCostAll_(list, keys) {
+    if (!list) return list;
+    for (var i = 0; i < list.length; i++) vfStripCost_(list[i], keys);
+    return list;
+  }
+
+  /* The cost-bearing keys of each ValleyFoods response shape, verified against
+     the code rather than assumed. */
+  var VF_COST_KEYS = {
+    /* valley_manufacture_header */
+    mfg_order:   ['total_inventory_cost', 'total_other_cost', 'total_batch_cost', 'by_product_nrv_value'],
+    /* valley_manufacture_header_products (outputs) */
+    mfg_output:  ['cost_unit', 'total_cost'],
+    /* consumption footers, projected in getValleyMfgOrderFull_ */
+    mfg_footer:  ['unit_cost', 'total_cost'],
+    /* valley_manufacture_work_center */
+    mfg_workop:  ['work_center_cost', 'total_cost'],
+    /* valley_manufacture_by_product */
+    mfg_bp:      ['total_cost'],
+    /* batch options from valley_current_products */
+    batch:       ['unit_cost'],
+    /* valley_product_purchasing lines */
+    pur_line:    ['unit_price', 'other_cost', 'total_cost', 'unit_cost', 'purchase_unit_cost',
+                  'cost_currency', 'sales_value', 'sales_value_amount'],
+    /* valley_purchasing_costing header — the landed-cost columns */
+    pur_header:  ['If shipping via CIF, enter the insurance value.', 'CIF insurance rate', 'Value',
+                  'Value Based on Invoice', 'Importation Re-Price', 'Tax Declared Value',
+                  'Administrative Expenses', 'Customs Expenses', 'Unloading expenses',
+                  'bank commission', 'Customs clearance and port receipts', 'Additional fees',
+                  'Clearance Expenses', 'Other Expenses', 'Purchase Tax', 'Income Tax',
+                  'Internal cost adjustment', 'Total costs', 'Sales Value', 'sales tax amount',
+                  'Minimum differences']
+  };
+
   /* ===== المشتريات: valley_purchasing_costing (header) + valley_product_purchasing (lines) =====
    * Relationship: costing.Code is the unique, non-repeatable key; product_purchasing.code
    * is the FK joining lines to their header (one costing -> many lines). */
@@ -4747,6 +4877,15 @@ const ValleyFoodsHRModules = (function () {
       getAllRecords_(dbId, FIN_PRODUCTS_SHEET).forEach(function (p) { prodNames[String(p.id)] = String(p.name_ar || ''); });
     } catch (e) {}
     legacyConsumption.forEach(function (cm) { cm.raw_name = prodNames[cm.item_pid] || cm.item_pid; });
+    /* U-46. `order` and `outputs` are whole sheet rows, so their cost columns
+       ride along implicitly; the footers are projected above with unit_cost and
+       total_cost. Quantities, batch uids and lots are untouched, so batch
+       allocation and save still work without the grant. */
+    if (!vfCanSeeCost_(user)) {
+      vfStripCost_(order, VF_COST_KEYS.mfg_order);
+      vfStripCostAll_(outputs, VF_COST_KEYS.mfg_output);
+      outputs.forEach(function (o) { vfStripCostAll_(o.footers, VF_COST_KEYS.mfg_footer); });
+    }
     return {
       status: 'success',
       order: order,
@@ -4792,6 +4931,10 @@ const ValleyFoodsHRModules = (function () {
         return { value: p.id, label: String(p.name_ar || ('#' + p.id)) };
       });
     });
+    /* U-46. Quantity and transaction_code stay; only the cost is removed.
+       Safe on the save side: valley_manufacture_by_product.total_cost is a
+       sheet formula, so the client's value is overwritten regardless. */
+    if (!vfCanSeeCost_(user)) vfStripCostAll_(rows, VF_COST_KEYS.mfg_bp);
     return { status: 'success', byproducts: rows, total: total, product_options: productOpts };
   }
 
@@ -4845,6 +4988,8 @@ const ValleyFoodsHRModules = (function () {
       };
       try{ logHistory_(dbId, MFG_BYPRODUCT_SHEET, m8.record_uid || ('create_'+MFG_BYPRODUCT_SHEET+'_'+m8['unique_id']), m8['unique_id'], (user&&user.email)||'', 'create', m8, null) }catch(e){}
     });
+    /* U-46. The echoed record carries the by-product's total_cost. */
+    if (!vfCanSeeCost_(user)) vfStripCost_(_savedBP, VF_COST_KEYS.mfg_bp);
     return { status: 'success', message: 'تمت إضافة المنتج الثانوي', data: { unique_id: _savedBP.unique_id }, record: _savedBP };
   }
 
@@ -4883,6 +5028,8 @@ const ValleyFoodsHRModules = (function () {
     } catch (e) {}
     rows.sort(function (a, b) { return numSafe_(a.work_center_sequence) - numSafe_(b.work_center_sequence); });
     function numSafe_(v) { var n = Number(v); return isNaN(n) ? 9999 : n; }
+    /* U-46. The two fields S2 added are exactly the two that get stripped. */
+    if (!vfCanSeeCost_(user)) vfStripCostAll_(rows, VF_COST_KEYS.mfg_workop);
     return { status: 'success', workops: rows, work_center_options: mfgWorkCenterOptions_(dbId), statuses: MFG_WC_OP_STATUSES };
   }
 
@@ -5966,7 +6113,15 @@ const ValleyFoodsHRModules = (function () {
     var _bCacheKey = 'vfbatch_' + String(dbId) + '_' + pid + '_' + (excludeInv || 'x');
     try {
       var _bc = CacheService.getScriptCache().get(_bCacheKey);
-      if (_bc) return JSON.parse(_bc);
+      /* U-46. Stripped AFTER the cache read, never before: this cache is keyed
+         by product, not by user, so a stripped payload must never be what gets
+         stored. (Nothing writes this key today — the put was already absent —
+         but the gate has to hold if one is ever added.) */
+      if (_bc) {
+        var _cached = JSON.parse(_bc);
+        if (!vfCanSeeCost_(user)) vfStripCostAll_(_cached.batches, VF_COST_KEYS.batch);
+        return _cached;
+      }
     } catch (e0) {}
 
     var batches = {};
@@ -6029,6 +6184,10 @@ const ValleyFoodsHRModules = (function () {
       return da - db;
     });
 
+    /* U-46. batch_uid, lot, current_qty, available, transaction_date and unit
+       all stay — FIFO allocation and the batch modal need every one of them.
+       Only unit_cost goes. */
+    if (!vfCanSeeCost_(user)) vfStripCostAll_(list, VF_COST_KEYS.batch);
     return { status: 'success', product_id: pid, batches: list };
   }
 
