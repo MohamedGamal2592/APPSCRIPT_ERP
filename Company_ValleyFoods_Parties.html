@@ -77,6 +77,8 @@
         .finally(function () { UI.hideSpinner(); });
     }
 
+    var BALANCES;
+
     function renderTable() {
       var container = document.getElementById('pt-table');
       if (!container) return;
@@ -90,13 +92,57 @@
           esc(r.telephone || '-'),
           esc(r.country || '-'),
           esc(level),
+          /* [P2] Placeholder until get_valley_party_balances resolves. data-num
+             starts at 0 so the existing numeric sort has something valid to work
+             with even if the call never returns. */
+          '<span class="num" data-bal="' + esc(r.id) + '" data-num="0">…</span>',
           UIC.actionBtns([{ label: '📄 كشف حساب', onclick: 'PARTIES_PAGE.openStatement(\'' + esc(r.id) + '\')' }])
         ];
       });
       container.innerHTML = UIC.dataTable('parties-table-id', {
-        headers: ['الكود', 'الاسم', 'الاتجاه', 'نوع التعامل', 'التليفون', 'الدولة', 'المستوى الأساسي', ''],
-        rows: rows, pageSize: 100
+        headers: ['الكود', 'الاسم', 'الاتجاه', 'نوع التعامل', 'التليفون', 'الدولة', 'المستوى الأساسي',
+                  { label: 'الرصيد الحالي', numeric: true }, ''],
+        rows: rows, pageSize: 100,
+        /* [P2] UIC.dataTable rebuilds the tbody from the stored row HTML on every
+           sort, search and page change, which would restore the … placeholder.
+           onRendered is the component's existing post-render hook (:811), so the
+           balances are repainted after each of those without touching UIC. */
+        onRendered: function () { paintBalances(); }
       });
+      loadBalances();
+    }
+
+    /* [P2] Loaded lazily, AFTER the table paints, so first paint stays exactly
+       as fast as it is today (decision D-H: getValleyParties_ reads one sheet;
+       this reads four more and must not block it). The list stays fully usable
+       if this call fails. */
+    var BALANCES_TRIED = false;
+    function loadBalances() {
+      if (BALANCES_TRIED) { paintBalances(); return; }
+      BALANCES_TRIED = true;
+      companyCall('get_valley_party_balances')
+        .then(function (res) {
+          BALANCES = (res && res.balances) || {};
+          paintBalances();
+        })
+        .catch(function (e) {
+          BALANCES = null;
+          paintBalances();
+          UIC.toast((e && e.message) || 'تعذر تحميل الأرصدة', 'error');
+        });
+    }
+
+    function paintBalances() {
+      if (BALANCES === undefined) return;
+      var cells = document.querySelectorAll('[data-bal]');
+      for (var i = 0; i < cells.length; i++) {
+        if (BALANCES === null) { cells[i].textContent = '—'; cells[i].setAttribute('data-num', '0'); continue; }
+        var v = Number(BALANCES[cells[i].getAttribute('data-bal')] || 0);
+        /* Reuses the page's own finFmt so the column formats identically to the
+           statement, parenthesised negatives included. */
+        cells[i].textContent = finFmt(v);
+        cells[i].setAttribute('data-num', String(v));
+      }
     }
 
     /* ---------- MODAL ---------- */

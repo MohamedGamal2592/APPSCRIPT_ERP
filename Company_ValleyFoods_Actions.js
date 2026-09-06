@@ -134,6 +134,7 @@ const ValleyFoods = (function () {
     'get_valley_parties': { page: 'vf_parties', access: 'read' },
     'save_valley_party': { page: 'vf_parties', access: 'write' },
     'get_valley_party_statement': { page: 'vf_parties', access: 'read' },
+    'get_valley_party_balances': { page: 'vf_parties', access: 'read' },
 
     // المالية — حركة النقدية والبنوك
     'get_valley_cash': { page: 'vf_cash', access: 'read' },
@@ -242,6 +243,7 @@ const ValleyFoods = (function () {
     'get_valley_parties': 'valley_legal_customer_vendor',
     'save_valley_party': 'valley_legal_customer_vendor',
     'get_valley_party_statement': 'valley_legal_customer_vendor',
+    'get_valley_party_balances': 'valley_legal_customer_vendor',
 
     'get_valley_cash': 'valley_cash_bank_movement',
     'save_valley_cash': 'valley_cash_bank_movement',
@@ -3839,6 +3841,68 @@ const ValleyFoodsHRModules = (function () {
     return { status: 'success', party: party, transactions: transactions, stock_rows: stockRows };
   }
 
+  /* [P2] All-parties ledger balance, for the الرصيد الحالي column on vf_parties.
+   *
+   * balance(party) = (purchases + collections + returns) - (sales + payments)
+   *
+   * This is the same figure the كشف حساب shows as صافي رصيد الحساب الموحد with
+   * no date filter and نوع الحركة = عرض كل المعاملات. The sign map is the one
+   * the client applies in Company_ValleyFoods_Parties.html applyFilter():
+   * +1 for collections / purchases / returns, -1 for sales / payments.
+   *
+   * ⚠ Each source sheet joins on a DIFFERENT field. Using the wrong one
+   * produces a plausible number that silently disagrees with the statement:
+   *   valley_sales_invoices      -> 'اسم العميل'                    (sales,       -1)
+   *   valley_product_purchasing  -> 'vendor'                        (purchases,   +1)
+   *   valley_cash_bank_movement  -> 'name'          debit ? collections +1 : payments -1
+   *   valley_sales_returns       -> 'valley_sales_invoices_client'  (returns,     +1)
+   * Despite its name, 'اسم العميل' holds the party ID, not the party name —
+   * getValleyPartyStatement_ compares it to the id, and so does this.
+   *
+   * This is the LEDGER balance. The statement's adjusted-box figure subtracts a
+   * stock valuation computed from user-editable price inputs on the client and
+   * therefore has no stable server-side value; it must not be used for a list
+   * column.
+   *
+   * Separate from getValleyParties_ on purpose (decision D-H): that handler
+   * reads ONE sheet, and folding four more into it would make every parties
+   * page load pay ~5x the I/O before first paint and would change an existing
+   * response shape. Reads the four sheets once each, not once per party.
+   * No caching (D-I): busting it would require editing four existing save
+   * handlers, which the no-contract-breakage rule forbids. */
+  function getValleyPartyBalances_(data, user, dbId) {
+    var balances = {};
+    function add_(key, delta) {
+      var k = String(key == null ? '' : key).trim();
+      if (!k) return;
+      balances[k] = (balances[k] || 0) + delta;
+    }
+
+    /* [أ] Sales invoices — debit, -1 */
+    safeRows_(dbId, 'valley_sales_invoices').forEach(function (s) {
+      add_(s['اسم العميل'], -1 * (Number(s['إجمالي']) || 0));
+    });
+
+    /* [ب] Purchases — credit, +1 */
+    safeRows_(dbId, 'valley_product_purchasing').forEach(function (p) {
+      add_(p.vendor, +1 * ((Number(p.qty) || 0) * (Number(p.unit_price) || 0)));
+    });
+
+    /* [ج] Cash/bank — collections (debit, +1) or payments (-1) */
+    safeRows_(dbId, 'valley_cash_bank_movement').forEach(function (cb) {
+      var total = Math.abs(Number(cb.total) || 0);
+      var isDebit = String(cb.transaction_type || '').trim().toLowerCase() === 'debit';
+      add_(cb.name, (isDebit ? 1 : -1) * total);
+    });
+
+    /* [د] Sales returns — credit, +1 */
+    safeRows_(dbId, 'valley_sales_returns').forEach(function (r) {
+      add_(r.valley_sales_invoices_client, +1 * Math.abs(Number(r.valley_return_value) || 0));
+    });
+
+    return { status: 'success', balances: balances };
+  }
+
   /* ---------- MANUFACTURE — PRODUCTION ORDERS ----------
    * valley_manufacture_header + header_products (outputs) +
    * valley_manufacture_footer (raw-material batch consumption).
@@ -7252,6 +7316,7 @@ const ValleyFoodsHRModules = (function () {
     ValleyFoods.register('get_valley_parties',    getValleyParties_);
     ValleyFoods.register('save_valley_party', withRefBust_(saveValleyParty_));
     ValleyFoods.register('get_valley_party_statement', getValleyPartyStatement_);
+    ValleyFoods.register('get_valley_party_balances', getValleyPartyBalances_);
 
     ValleyFoods.register('get_valley_cash',    getValleyCash_);
     ValleyFoods.register('save_valley_cash', withRefBust_(saveValleyCash_));
