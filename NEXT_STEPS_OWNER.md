@@ -1,8 +1,13 @@
 # Next steps — everything now waiting on you
 
-**Branch:** `perf/optimization-run` · **Nothing has been deployed.** `clasp push` has never been run
-by an agent, and no deployment has been created or promoted. **28 commits** of unverified change now
-sit on this branch across three runs — that is the main reason items 1 and 2 below come first.
+**Branches:** `perf/optimization-run` (28 commits, three runs) and `feat/valleyfoods-mfg-cost`
+(13 commits, branched from it) · **Nothing has been deployed.** `clasp push` has never been run by an
+agent, and no deployment has been created or promoted. **41 commits** of unverified change now sit
+across the two branches — that is the main reason items 1 and 2 below come first.
+
+The ValleyFoods functional work is on its own branch so it can be reverted independently of the
+performance programme. Its report is [VALLEYFOODS_RESULTS.md](VALLEYFOODS_RESULTS.md); the two items
+it adds for you are **6** and **7** below.
 
 This is the register of what is blocked on your Google account or your decision, in priority order.
 It does not duplicate the runbooks — each item links to the document that has the detail.
@@ -90,6 +95,62 @@ to the archive first, flushed and verified, and only then removed from the live 
 case is a row in both places, never a row in neither.
 
 Afterwards, open the record-history panel and confirm recent history still shows.
+
+### 6. Turn on the cost permission — `valley_cost_view` 🟡
+
+**New, from the ValleyFoods run** (branch `feat/valleyfoods-mfg-cost`, 13 commits, not pushed).
+Full detail: [VALLEYFOODS_RESULTS.md](VALLEYFOODS_RESULTS.md) §6.
+
+Add `ERP_Pages_Matrix` rows granting `write` on `valley_cost_view` to every role that should see
+costs, via `ERP_Management` → صلاحيات الأدوار. Until then the fail-open guard leaves costs visible to
+everyone — which is today's behaviour, so **nothing breaks** — but the permission is not yet doing
+anything.
+
+It is two steps, because the role screen lists pages from the `ERP_System_Pages` sheet rather than
+from the registry:
+
+| Step | Where | What |
+|---|---|---|
+| 6a | `ERP_Management` → صفحات النظام | `valley_cost_view` now appears in that list. Save it, so the `ERP_System_Pages` row exists. |
+| 6b | `ERP_Management` → صلاحيات الأدوار | Grant `write` on it to each role that should see costs. |
+
+**Verify by granting it to one role**, then signing in as a user in a role *without* it and confirming
+the cost columns are gone **and absent from the network response** — devtools → Network → the
+`company_action` call: the JSON should have no `unit_cost` / `total_cost` / `work_center_cost` keys at
+all, not zeros. Checking the screen alone is not enough; the whole point is that the values never
+reach the browser.
+
+> ⚠️ **One behaviour change to weigh before you grant it.** After the first grant, roles *without*
+> the permission can still view, print and approve purchasing documents but can no longer **edit**
+> them. `saveValleyPurchasingCosting_` writes every column from the payload, so a cost-blind client
+> saving would have blanked the whole landed-cost document; the save refuses instead. There is no
+> authority to resolve those figures from — a person types them — and the lines are re-created with
+> fresh ids on every save, so preserving them was not possible either. Reasoning in
+> VALLEYFOODS_RESULTS.md §S5b. Say the word if you would rather purchasing costs stayed un-stripped.
+
+### 7. Decide what to do about U-48 — the ValleyFoods sales invoice save 🔴
+
+**Found while auditing sales for the cost permission. Pre-existing since the initial commit — not from
+the performance programme and not from this run.**
+
+`saveValleyInvoice_` reads an identifier `outputs` that is declared nowhere in the project. Reading an
+undeclared identifier throws `ReferenceError`, and the reference sits **before** the handler takes its
+write lock — so the sales invoice save throws before writing anything. The block it sits in is dead
+costing computation copied from the manufacturing handler: the values it computes are never read, and
+no sales sheet has a column to hold them.
+
+It was **reported, not fixed**: it is outside the steps you asked for, and the choice is yours —
+
+- **delete the dead block** (the save starts working; nothing is lost, because nothing consumed those
+  values), or
+- **implement invoice-level costing properly**, which needs new columns, and columns are a schema
+  change.
+
+Evidence: `node tools/verify/s5c_sales_audit.js`. Detail: VALLEYFOODS_RESULTS.md §5.
+
+> **If sales invoices are in fact saving fine in production today, tell me** — that would mean one of
+> my premises is wrong, and it is the one thing here that a two-minute live check settles faster than
+> any amount of reading.
 
 ---
 
