@@ -995,16 +995,22 @@ UIC.collectAndValidateForm = function (formId) {
   return { data: r.data, valid: r.valid };
 };
 
+/* Dialog widths. 'md' (560px) is the default and deliberately emits NO class, so
+   markup for every caller that passes no size stays byte-identical to before. */
+UIC.MODAL_SIZES = { sm: ' modal-sm', md: '', lg: ' modal-lg', xl: ' modal-xl' };
+
 UIC.openModal = function (modalId, opts) {
   const o = opts || {};
   const existing = document.getElementById(modalId);
   if (existing) existing.remove();
 
+  const sizeClass = UIC.MODAL_SIZES[o.size] || '';
+
   const div = document.createElement('div');
   div.id = modalId;
   div.className = 'modal-overlay';
   div.innerHTML =
-    '<div class="modal" role="dialog" aria-modal="true">' +
+    '<div class="modal' + sizeClass + '" role="dialog" aria-modal="true">' +
       '<div class="modal-header"><h3>' + (o.title || '') + '</h3>' +
         '<button class="btn-icon" onclick="UIC.closeModal(\'' + modalId + '\')" aria-label="إغلاق">&times;</button></div>' +
       '<div class="modal-body">' + (o.body || '') + '</div>' +
@@ -1464,6 +1470,12 @@ document.addEventListener('keydown', function (e) {
   @media (min-width: 640px) {
     .modal-overlay { align-items: center; }
     .modal { border-radius: var(--radius-lg); max-width: 560px; padding-bottom: 0; }
+    /* Optional widths via UIC.openModal({ size: 'sm'|'md'|'lg'|'xl' }).
+       'md' is the default above and emits no class, so untouched callers keep 560px.
+       Mobile (< 640px) stays a full-width bottom sheet for every size. */
+    .modal.modal-sm { max-width: 420px; }
+    .modal.modal-lg { max-width: 880px; }
+    .modal.modal-xl { max-width: 1100px; }
   }
 
   /* ── Toast ───────────────────────────────────────────────────────────── */
