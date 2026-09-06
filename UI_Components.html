@@ -931,6 +931,119 @@ UIC.groupMenu = function (id, keys) {
     '<div class="nav-dropdown-menu" id="' + ddId + '">' + items + '</div></div>';
 };
 
+/* ── [UI-4.9 / U-16] Saved views, wired into a Favourites menu ────────────
+ *
+ * SESSION.saveCurrentView and SESSION.loadActiveView already existed and were
+ * reachable from exactly two pages, so almost nobody knew the feature was
+ * there. This surfaces them on any list that opts in.
+ *
+ * NO SCHEMA CHANGE: a view rides on the EXISTING ERP_User_Views.layout_json
+ * column through the existing save_user_view / list_user_views endpoints. This
+ * programme adds no column and writes no data of its own — the only write is
+ * the one a real user causes by choosing "save this view".
+ */
+UIC.dtViewState = function (id) {
+  var st = (window.__dtStore || {})[id];
+  if (!st) return {};
+  return {
+    v: 1,
+    search: st.searchTerm || '',
+    dateFrom: st.dateFrom || '',
+    dateTo: st.dateTo || '',
+    sortKey: st.sortKey || null,
+    sortDir: st.sortDir || null,
+    groupKey: st.groupKey || null,
+    hidden: st.hidden || {}
+  };
+};
+
+UIC.dtApplyViewState = function (id, state) {
+  var st = (window.__dtStore || {})[id];
+  if (!st || !state) return;
+  st.searchTerm = state.search || '';
+  st.dateFrom = state.dateFrom || '';
+  st.dateTo = state.dateTo || '';
+  st.sortKey = state.sortKey || null;
+  st.sortDir = state.sortDir || null;
+  st.groupKey = state.groupKey || null;
+  st.hidden = state.hidden || {};
+  UIC._dtSaveColumnPrefs(id);
+  UIC._dtRebuildHead(id);
+  UIC._applyFilters(id);
+  UIC._dtSyncSortIndicators(id);
+};
+
+/** Ask for a name in a styled dialog, then hand off to the existing endpoint. */
+UIC.dtSaveView = function (id, pageKey) {
+  var inputId = 'view-name-' + id;
+  UIC.openModal('save-view-modal', {
+    title: 'حفظ العرض الحالي',
+    size: 'sm',
+    body: UIC.field({ key: inputId, label: 'اسم العرض', required: true, placeholder: 'مثال: فواتير هذا الشهر' }),
+    onSave: "UIC._dtSaveViewConfirm('" + id + "','" + UIC.escHtml(String(pageKey || '')) + "','" + inputId + "')"
+  });
+};
+
+UIC._dtSaveViewConfirm = function (id, pageKey, inputId) {
+  var el = document.getElementById(inputId);
+  var name = el ? String(el.value || '').trim() : '';
+  if (!name) { UIC.toast('أدخل اسماً للعرض', 'warning'); return; }
+  UIC.closeModal('save-view-modal');
+  /* The existing helper, unmodified. Passing presetName means it does not fall
+     back to the native prompt() it uses when called without one. */
+  SESSION.saveCurrentView(pageKey, UIC.dtViewState(id), name);
+};
+
+UIC.favouritesMenu = function (id, pageKey) {
+  var ddId = 'fav-' + id;
+  return '<div class="nav-dropdown" id="' + ddId + '-wrap">' +
+    '<button type="button" class="btn btn-outline nav-dropdown-toggle" aria-haspopup="true" aria-expanded="false" ' +
+    'onclick="UIC._dtOpenFavourites(\'' + id + '\', \'' + UIC.escHtml(String(pageKey || '')) + '\', event)">' +
+    UIC.icon('tag', { size: 15 }) + '<span>المفضلة</span></button>' +
+    '<div class="nav-dropdown-menu" id="' + ddId + '">' +
+      '<button type="button" class="nav-dropdown-item" onclick="UIC.dtSaveView(\'' + id + '\', \'' +
+      UIC.escHtml(String(pageKey || '')) + '\')">' + UIC.icon('save', { size: 14 }) +
+      '<span>حفظ العرض الحالي</span></button>' +
+      '<div class="user-profile-divider"></div>' +
+      '<div id="' + ddId + '-list"><div class="dt-fav-empty">…</div></div>' +
+    '</div></div>';
+};
+
+UIC._dtOpenFavourites = function (id, pageKey, ev) {
+  UIC.toggleDropdown('fav-' + id, ev);
+  var box = document.getElementById('fav-' + id + '-list');
+  if (!box) return;
+  box.innerHTML = '<div class="dt-fav-empty">جاري التحميل…</div>';
+  API.call('list_user_views', {}, SESSION.token()).then(function (r) {
+    var views = ((r && r.views) || []).filter(function (v) {
+      return !pageKey || String(v.page_key) === String(pageKey);
+    });
+    if (!views.length) {
+      box.innerHTML = '<div class="dt-fav-empty">لا توجد عروض محفوظة</div>';
+      return;
+    }
+    box.innerHTML = views.map(function (v) {
+      return '<button type="button" class="nav-dropdown-item" ' +
+        'onclick="UIC._dtApplySavedView(\'' + id + '\', ' + JSON.stringify(String(v.view_id)) + ')">' +
+        UIC.escHtml(String(v.name || v.view_id)) + '</button>';
+    }).join('');
+    UIC._dtFavCache = UIC._dtFavCache || {};
+    views.forEach(function (v) { UIC._dtFavCache[String(v.view_id)] = v; });
+  }).catch(function () {
+    box.innerHTML = '<div class="dt-fav-empty">تعذر تحميل العروض</div>';
+  });
+};
+
+UIC._dtApplySavedView = function (id, viewId) {
+  var v = (UIC._dtFavCache || {})[String(viewId)];
+  if (!v) return;
+  var def = v.layout_json;
+  try { if (typeof def === 'string') def = JSON.parse(def); } catch (e) { def = null; }
+  if (!def) { UIC.toast('تعذر قراءة العرض المحفوظ', 'error'); return; }
+  UIC.dtApplyViewState(id, def);
+  UIC.toast('تم تطبيق العرض: ' + (v.name || ''), 'success');
+};
+
 /* ── [UI-4.7 / U-23] Skeleton loading for lists ───────────────────────────
  *
  * A list load put a full-screen blocking overlay over the page on 80 of 85
@@ -2734,6 +2847,8 @@ document.addEventListener('keydown', function (e) {
   }
   .dt-col-item:hover { background: var(--bg-subtle); }
   .dt-col-item input { accent-color: var(--brand-primary); width: 16px; height: 16px; }
+  /* [UI-4.9 / U-16] Saved views */
+  .dt-fav-empty { padding: var(--space-3) 10px; font-size: var(--text-xs); color: var(--text-muted); text-align: center; }
 
   /* ── [UI-3.5 / U-22] Empty state ─────────────────────────────────────── */
   .empty-state { padding: 48px 16px; text-align: center; color: var(--text-muted); background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: var(--radius-md); }
