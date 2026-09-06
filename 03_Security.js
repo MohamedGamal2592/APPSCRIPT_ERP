@@ -884,9 +884,11 @@ function topLightThemeCss_() {
     '.topbar-hamburger .hamburger-bar { background: #fbbf24; }\n' +
     /* Documents keep a visible frame, but a hairline one rather than 2px black. */
     '.invoice { background: #ffffff; border: 1px solid var(--border-color); }\n' +
-    '@media print {\n' +
-    '  * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }\n' +
-    '}\n' +
+    /* [UI-7.2 / U-34] The blanket universal print-color-adjust:exact rule is
+       gone. It forced the browser to render EVERY background, so this
+       company's table header printed as a solid bar and a multi-page report
+       cost a cartridge of toner. UI_Components.html now applies print colour
+       deliberately, to the document header rule and the totals row only. */
     '</style>\n';
 }
 
@@ -950,8 +952,10 @@ function topChemicalThemeCss_() {
     '.btn-outline:hover { background: #dcfce7; border-color: #15803d; color: #14532d; }\n' +
     /* Documents keep a visible frame, but a hairline one rather than 2px green. */
     '.invoice { background: #ffffff; border: 1px solid var(--border-color); }\n' +
-    '@media print {\n' +
-    '  * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }\n' +
-    '}\n' +
+    /* [UI-7.2 / U-34] The blanket universal print-color-adjust:exact rule is
+       gone. It forced the browser to render EVERY background, so this
+       company's table header printed as a solid bar and a multi-page report
+       cost a cartridge of toner. UI_Components.html now applies print colour
+       deliberately, to the document header rule and the totals row only. */
     '</style>\n';
 }

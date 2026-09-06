@@ -3279,12 +3279,82 @@ document.addEventListener('keydown', function (e) {
     border-top: 1px solid var(--border-color);
   }
 
-  /* [UI-1.5] Printing must never be clipped to 70dvh. Full print treatment is
-     Phase 7; this is the minimum that keeps today's output correct. */
+  /* ── [UI-7.1 / 7.2 / U-34] Print ─────────────────────────────────────────
+   *
+   * 22 pages each reimplemented their own invoice CSS and print output was
+   * uncontrolled: no @page size or margins, so the browser's defaults decided
+   * them; column headers appeared once and then vanished, so page 2 of a long
+   * invoice was a wall of unlabelled numbers; and totals or signature blocks
+   * split across a page break.
+   *
+   * These rules live in the SHARED stylesheet rather than in a new partial the
+   * 16 print pages would each have to include — every page already loads
+   * UI_Components, so all of them get correct print behaviour with no page edit
+   * and no chance of one being missed.
+   */
   @media print {
-    .table-wrap { max-height: none; overflow: visible; }
+    /* A4 with real margins, instead of whatever the browser chose. */
+    @page { size: A4; margin: 14mm 10mm; }
+
+    /* Nothing that is chrome belongs on paper. */
+    .topbar, .mobile-drawer, .drawer-overlay, .breadcrumb, .control-panel,
+    .table-toolbar, .dt-pager, .dt-batch, .dt-progress, .toast,
+    #home-logo-fab, #page-loading, .skip-link, .no-print,
+    .action-dropdown, .erp-kebab, .smart-buttons, .nb-tabs {
+      display: none !important;
+    }
+
+    /* The table scroll box is a screen idea; on paper it must simply flow. */
+    .table-wrap { max-height: none; overflow: visible; border: 0; }
+    .app-content { max-width: none; padding: 0; }
+
+    /* THE HEADER REPEATS. This one line is most of the value: without it, page
+       two of a two-page invoice has no column labels at all. */
+    .table thead { display: table-header-group; }
+    .table tfoot { display: table-footer-group; }
     .table thead th { position: static; }
-    .dt-pager { display: none; }
+
+    /* Do not break a row, a totals block or a signature across pages. */
+    .table tbody tr, .dt-total, .stat-card, .invoice-totals,
+    .inv-totals, .signature, .sig-block { break-inside: avoid; page-break-inside: avoid; }
+
+    /* The phone card layout must never reach paper: below tablet-p the base
+       rules turn the table into blocks, and a print stylesheet inherits the
+       BASE, not the tier. Without this, printing from a narrow window produced
+       a column of cards instead of a table. */
+    .table { display: table; }
+    .table thead { display: table-header-group; }
+    .table tbody { display: table-row-group; }
+    .table tr { display: table-row; }
+    .table td { display: table-cell; text-align: right; border: 1px solid var(--border-color); }
+    .table tbody td[data-label]::before { content: none; }
+    .table tbody tr { border: 0; margin: 0; padding: 0; }
+
+    /* [7.2] The print palette. The two bespoke themes carried a blanket
+       universal print-color-adjust:exact rule, which forces the browser to
+       render EVERY background — so a TopLight header row printed as a black bar
+       and a TopChemical one as solid green, using a cartridge of toner per
+       report. Colour is now applied deliberately and only where it carries
+       meaning: the document's header rule and the totals row. */
+    body { background: #fff !important; }
+    .table thead th {
+      background: #fff !important; color: #000 !important;
+      border-bottom: 2px solid var(--brand-primary);
+      -webkit-print-color-adjust: exact; print-color-adjust: exact;
+    }
+    .table tfoot .dt-total td, .dt-total td {
+      background: #fff !important; color: #000 !important;
+      border-top: 2px solid var(--brand-primary);
+      -webkit-print-color-adjust: exact; print-color-adjust: exact;
+    }
+    .table tbody tr:hover { background: transparent !important; }
+    .pill { border: 1px solid #999 !important; background: #fff !important; color: #000 !important; }
+
+    /* A link's target is invisible on paper, so print it. Skipped for in-app
+       links, whose ?action= URLs are noise to a reader. */
+    a[href^="http"]:not([href*="?action="])::after {
+      content: ' (' attr(href) ')'; font-size: 10px; color: #555;
+    }
   }
   /* [UI-1.3 / U-03] Sort affordance. The chevron is a glyph rather than an
      image so it inherits the header colour under all three company themes.
