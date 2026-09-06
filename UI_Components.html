@@ -2721,6 +2721,72 @@ UIC._notebookKey = function (id, ev) {
   if (el && el.focus) el.focus();
 };
 
+/* ── [UI-9.2 / U-37] Chart defaults, read from the theme ──────────────────
+ *
+ * Every chart in the app hardcoded #111111 for its text and carried its own
+ * 9-colour palette, so charts did not follow the company theme and — after
+ * Phase 8 — would have been black-on-black in dark mode.
+ *
+ * UIC.applyChartDefaults reads the ACTUAL computed token values, so it is
+ * correct under all three companies, both themes, and any company colour added
+ * later, with no per-chart configuration.
+ *
+ * The categorical palette is NOT taken from the theme: a series colour has to
+ * stay distinguishable from its neighbours, which a single brand hue cannot do.
+ * It is a fixed, ordered set chosen to stay separable in both light and dark.
+ */
+UIC.cssVar = function (name, fallback) {
+  try {
+    var v = getComputedStyle(document.documentElement).getPropertyValue(name);
+    v = String(v || '').trim();
+    return v || fallback;
+  } catch (e) { return fallback; }
+};
+
+UIC.CHART_PALETTE = [
+  '#2563eb', '#16a34a', '#d97706', '#dc2626', '#7c3aed',
+  '#0891b2', '#c2410c', '#4d7c0f', '#be185d', '#475569'
+];
+
+UIC.applyChartDefaults = function () {
+  if (typeof Chart === 'undefined') return false;
+  try {
+    var ink    = UIC.cssVar('--text-main', '#111827');
+    var muted  = UIC.cssVar('--text-muted', '#5b6572');
+    var border = UIC.cssVar('--border-color', '#e2e5ea');
+    var surface = UIC.cssVar('--bg-surface', '#ffffff');
+    var font   = UIC.cssVar('--font-sans', "'Cairo', sans-serif");
+
+    Chart.defaults.color = muted;
+    Chart.defaults.borderColor = border;
+    Chart.defaults.font.family = font;
+    Chart.defaults.font.size = 12;
+    Chart.defaults.plugins.legend.labels.color = ink;
+    Chart.defaults.plugins.tooltip.backgroundColor = ink;
+    Chart.defaults.plugins.tooltip.titleColor = surface;
+    Chart.defaults.plugins.tooltip.bodyColor = surface;
+    /* RTL: the legend and tooltips read right to left like everything else. */
+    Chart.defaults.plugins.legend.rtl = true;
+    Chart.defaults.plugins.tooltip.rtl = true;
+    Chart.defaults.plugins.legend.textDirection = 'rtl';
+    /* A chart that animates on every render is noise in a dashboard someone
+       refreshes all day, and it is a real problem for anyone motion-sensitive. */
+    try {
+      if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+        Chart.defaults.animation = false;
+      }
+    } catch (e) {}
+    return true;
+  } catch (e) { return false; }
+};
+
+/** Colour n series from the categorical palette, wrapping if there are more. */
+UIC.chartColors = function (n) {
+  var out = [];
+  for (var i = 0; i < (n || 0); i++) out.push(UIC.CHART_PALETTE[i % UIC.CHART_PALETTE.length]);
+  return out;
+};
+
 UIC.statCard = function (o) {
   const tone = o.tone || 'default';
   return '<div class="stat-card stat-' + tone + '">' +

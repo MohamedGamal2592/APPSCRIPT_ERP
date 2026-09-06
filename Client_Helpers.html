@@ -143,6 +143,39 @@ API.ensureXlsx = function () {
   return API._xlsxPromise;
 };
 
+/* ── [UI-9.3 / U-37] Chart.js, fetched on demand ──────────────────────────
+ *
+ * Chart.js is a blocking <script> in the <head> of 5 dashboard and KPI pages,
+ * so every visit to one of them waits for ~200 KB before the page can render —
+ * including the visits where the user is only reading the KPI tiles.
+ *
+ * This is the same shape as API.ensureXlsx directly above, deliberately: one
+ * lazy-loader pattern in this codebase rather than two. Concurrent callers
+ * share one request, and a failure clears the promise so a later attempt can
+ * retry rather than being stuck with a rejected one forever.
+ */
+API._chartPromise = null;
+
+API.ensureChart = function () {
+  if (typeof Chart !== 'undefined') return Promise.resolve();
+  if (API._chartPromise) return API._chartPromise;
+  API._chartPromise = new Promise(function (resolve, reject) {
+    var s = document.createElement('script');
+    s.src = 'https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js';
+    s.async = true;
+    s.onload = function () {
+      try { if (window.UIC && UIC.applyChartDefaults) UIC.applyChartDefaults(); } catch (e) {}
+      resolve();
+    };
+    s.onerror = function () {
+      API._chartPromise = null;   // let a later call retry
+      reject(new Error('تعذر تحميل مكتبة الرسوم البيانية'));
+    };
+    document.head.appendChild(s);
+  });
+  return API._chartPromise;
+};
+
 API.downloadXlsx = function (base64, filename) {
   var bin = atob(base64);
   var bytes = new Uint8Array(bin.length);

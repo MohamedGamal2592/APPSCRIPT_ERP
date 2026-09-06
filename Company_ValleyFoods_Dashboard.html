@@ -10,6 +10,19 @@
   <?!= include('Company_ValleyFoods_Nav'); ?>
   <?!= getCompanyThemeCSS_('9940659bd83035d7') ?>
   <style>
+    .vf-dash-wrap { display: flex; flex-direction: column; gap: var(--space-6); }
+    .vf-dash-title { font-size: var(--text-2xl); font-weight: 800; color: var(--text-main); margin: 0; }
+    .vf-dash-sub { font-size: var(--text-base); font-weight: 800; color: var(--text-muted); margin: 0; }
+    /* Mobile-first: one KPI per row, two from tablet-p, four from tablet-l. */
+    .vf-kpi-row { display: grid; grid-template-columns: 1fr; gap: var(--space-3); }
+    .vf-module-grid { display: grid; grid-template-columns: 1fr; gap: var(--space-3); }
+    @media (min-width: 600px) {
+      .vf-kpi-row { grid-template-columns: 1fr 1fr; }
+      .vf-module-grid { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
+    }
+    @media (min-width: 900px) {
+      .vf-kpi-row { grid-template-columns: repeat(4, 1fr); }
+    }
     .vf-dash-wrap { padding: 16px 20px 32px; }
     .vf-welcome {
       background: var(--bg-surface);
@@ -52,17 +65,116 @@
     });
 
     var inner = document.getElementById('vf-content');
-    if (inner) {
-      inner.innerHTML =
-        '<div class="vf-dash-wrap">' +
-          '<div class="vf-welcome">' +
-            '<h1>مرحباً بك في نظام فالي فودز للمنتجات الزراعية</h1>' +
-            '<p>لوحة التحكم — الهيكل الأساسي. استخدم القائمة أعلاه للوصول إلى الصفحات.</p>' +
-          '</div>' +
-        '</div>';
-    }
+    if (!inner) return;
+
+    /* [UI-9.1 / U-37] The dashboard was a welcome card with no numbers on it:
+       "لوحة التحكم — الهيكل الأساسي". It is now the shape the other two
+       companies have — KPI tiles, then the module tiles.
+
+       STANDING ANSWER APPLIED: built only from endpoints that ALREADY EXIST.
+       ValleyFoods has no KPI or summary endpoint, so the counts are derived
+       client-side from list endpoints the app already calls elsewhere. No new
+       metric is invented and no new server function is added.
+
+       The honest cost of that, stated rather than hidden: those endpoints
+       return full lists, so this page loads rows in order to count them. That
+       is why the tiles load LAZILY and INDEPENDENTLY — the page renders
+       immediately, each tile fills in when its own call returns, and one slow
+       or failing endpoint neither blocks the others nor blanks the page. A
+       proper KPI endpoint would be cheaper; it is written up as
+       blocked-on-owner rather than added here. */
+    inner.innerHTML =
+      '<div class="vf-dash-wrap">' +
+        '<h1 class="vf-dash-title">فالي فودز</h1>' +
+        '<div class="vf-kpi-row" id="vf-kpis">' +
+          kpiTile('mfg', 'أوامر التصنيع', 'factory') +
+          kpiTile('sales', 'فواتير المبيعات', 'cart') +
+          kpiTile('products', 'الأصناف', 'box') +
+          kpiTile('parties', 'العملاء والموردون', 'users') +
+        '</div>' +
+        '<h2 class="vf-dash-sub">الوحدات</h2>' +
+        '<div class="vf-module-grid">' + moduleTiles() + '</div>' +
+      '</div>';
+
+    loadKpis();
   }
 
+  /* A tile renders immediately with a placeholder, then fills in. */
+  function kpiTile(key, label, icon) {
+    return '<div class="stat-card" id="vf-kpi-' + key + '">' +
+      '<div class="stat-icon">' + UIC.icon(icon, { size: 24 }) + '</div>' +
+      '<div class="stat-body">' +
+        '<div class="stat-value" id="vf-kpi-' + key + '-v">—</div>' +
+        '<div class="stat-label">' + label + '</div>' +
+      '</div></div>';
+  }
+
+  function setKpi(key, value) {
+    var el = document.getElementById('vf-kpi-' + key + '-v');
+    if (el) el.textContent = (value == null) ? '—' : String(value);
+  }
+
+  /* Each tile is independent: one failing endpoint must not blank the others,
+     and must not blank the page. A tile that cannot load keeps its dash. */
+  function countFrom(action, pick, key) {
+    companyCall(action, {})
+      .then(function (r) {
+        var list = pick(r || {});
+        setKpi(key, Array.isArray(list) ? list.length : null);
+      })
+      .catch(function () { setKpi(key, null); });
+  }
+
+  function loadKpis() {
+    countFrom('get_valley_mfg_orders', function (r) { return r.orders || r.rows; }, 'mfg');
+    countFrom('get_valley_sales_list', function (r) { return r.invoices || r.rows || r.headers; }, 'sales');
+    countFrom('get_valley_products', function (r) { return r.products || r.rows; }, 'products');
+    countFrom('get_valley_parties', function (r) { return r.parties || r.rows; }, 'parties');
+  }
+
+  /* The module tiles come from COMPANY_PAGES, which the server already sends
+     and which is already filtered to what this user may open — so the grid
+     cannot offer a page the user would be refused. */
+  function moduleTiles() {
+    var pages = (window.COMPANY_PAGES || []).filter(function (p) {
+      return p && p.action && p.action !== CURRENT_ACTION && UIC.pageAuthorized_(p.action);
+    });
+    if (!pages.length) {
+      return UIC.emptyState({
+        icon: 'lock',
+        title: 'لا توجد صفحات متاحة',
+        body: 'لم يتم منح حسابك صلاحية على أي صفحة في فالي فودز. راجع مدير النظام.'
+      });
+    }
+    return pages.map(function (p) {
+      var href = scriptUrl + '?action=' + encodeURIComponent(p.action) + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN);
+      return UIC.moduleTile({
+        icon: UIC.icon(iconFor(p.action), { size: 26 }),
+        title: p.label || p.action,
+        subtitle: '',
+        onOpen: "UIC.navTo(event, '" + href + "')"
+      });
+    }).join('');
+  }
+
+  /* A rough mapping from page id to icon. An unknown page gets a neutral file
+     icon rather than nothing, so a new page added later still looks right. */
+  function iconFor(action) {
+    var a = String(action || '');
+    if (a.indexOf('mfg') !== -1) return 'factory';
+    if (a.indexOf('purchas') !== -1) return 'cart';
+    if (a.indexOf('sales') !== -1 || a.indexOf('return') !== -1) return 'tag';
+    if (a.indexOf('product') !== -1) return 'box';
+    if (a.indexOf('part') !== -1) return 'users';
+    if (a.indexOf('cash') !== -1) return 'cash';
+    if (a.indexOf('hr') !== -1 || a.indexOf('emp') !== -1 || a.indexOf('salar') !== -1
+        || a.indexOf('vacation') !== -1 || a.indexOf('attend') !== -1 || a.indexOf('overtime') !== -1
+        || a.indexOf('deduction') !== -1) return 'user';
+    if (a.indexOf('work_center') !== -1 || a.indexOf('asset') !== -1) return 'settings';
+    if (a.indexOf('kpi') !== -1) return 'chart';
+    if (a.indexOf('contract') !== -1) return 'file';
+    return 'file';
+  }
 
   load();
 </script>
