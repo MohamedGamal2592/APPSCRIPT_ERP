@@ -697,6 +697,208 @@ const AssessmentCenter = (function () {
   }
   register('update_ac_batch_expiry', updateAcBatchExpiry_);
 
+  // ── §5.3/Phase 5 — the candidate experience (PUBLIC) ────────────────────────
+  const LATE_GRACE_SECONDS = 60; // D-10
+
+  function acAssessmentByBatch_(dbId, batch) {
+    const assessment = acRows_(dbId, ASSESSMENTS_SHEET).filter(function (a) { return a.AssessmentID === batch.AssessmentID; })[0];
+    if (!assessment) throw new Error('التقييم غير موجود.');
+    return assessment;
+  }
+
+  function acLoadBatchByToken_(dbId, token) {
+    const batch = acRows_(dbId, BATCHES_SHEET).filter(function (b) { return b.Token === token; })[0];
+    if (!batch) throw new Error('رابط التقييم غير صالح.');
+    if (!acBool_(batch.IsActive)) throw new Error('هذا التقييم غير نشط حالياً.');
+    const expires = acDate_(batch.ExpiresAt);
+    if (expires && expires < new Date()) throw new Error('انتهت صلاحية رابط التقييم.');
+    return batch;
+  }
+
+  function getAcCandidateAssessment_(data, dbId) {
+    const token = String((data && data.token) || '').trim();
+    const batch = acLoadBatchByToken_(dbId, token);
+    const assessment = acAssessmentByBatch_(dbId, batch);
+    const questions = acRows_(dbId, QUESTIONS_SHEET).filter(function (q) { return q.AssessmentID === batch.AssessmentID; });
+    const projection = acPublicAssessment_(assessment, questions);
+
+    const email = String((data && data.email) || '').trim().toLowerCase();
+    let remainingSeconds = null, assignmentId = null, existingStatus = null;
+    if (email) {
+      const existing = acRows_(dbId, ASSIGNMENTS_SHEET).filter(function (a) {
+        return a.Token === token && String(a.CandidateEmail || '').trim().toLowerCase() === email;
+      })[0];
+      if (existing) {
+        existingStatus = existing.Status;
+        if (existing.Status === 'In Progress') {
+          const started = acDate_(existing.StartedAt);
+          const limitSec = (Number(assessment.TimeLimitMinutes) || 0) * 60;
+          const elapsed = started ? Math.floor((new Date() - started) / 1000) : 0;
+          remainingSeconds = Math.max(0, limitSec - elapsed);
+          assignmentId = existing.AssignmentID;
+        }
+      }
+    }
+
+    return {
+      status: 'success', assessment: projection.assessment, questions: projection.questions,
+      remaining_seconds: remainingSeconds, assignmentId: assignmentId, existingStatus: existingStatus
+    };
+  }
+  publicRegister('get_ac_candidate_assessment', getAcCandidateAssessment_);
+
+  function bumpUsedSlots_(dbId, batch) {
+    const current = Number(batch.UsedSlots) || 0;
+    acUpdate_(dbId, BATCHES_SHEET, 'BatchID', batch.BatchID, { UsedSlots: current + 1 }, 'system');
+  }
+
+  /**
+   * §5.3/G-03/T-8 — admission. Locked at 15s (candidate writes cluster at a
+   * batch deadline). The slot check re-reads UsedSlots fresh EVERY call, and
+   * the read-check-write all happen inside the one lock acquisition, which is
+   * what makes two near-simultaneous admissions against one remaining slot
+   * admit exactly one rather than both racing past the same stale count.
+   */
+  function addAcCandidateAttempt_(data, dbId) {
+    const token = String((data && data.token) || '').trim();
+    const email = String((data && data.email) || '').trim().toLowerCase();
+    if (!email) throw new Error('البريد الإلكتروني مطلوب.');
+
+    return executeWithLock_(function () {
+      const batch = acLoadBatchByToken_(dbId, token);
+      const assessment = acAssessmentByBatch_(dbId, batch);
+      const batchAssignments = acRows_(dbId, ASSIGNMENTS_SHEET).filter(function (a) { return a.BatchID === batch.BatchID; });
+      const hasInvites = batchAssignments.some(function (a) { return a.Status === 'Invited'; });
+      const mine = batchAssignments.filter(function (a) { return String(a.CandidateEmail || '').trim().toLowerCase() === email; })[0];
+
+      if (hasInvites && !mine) throw new Error('هذه الدفعة مغلقة بدعوات محددة، وبريدك الإلكتروني غير مدرج ضمنها.');
+      if (mine && mine.Status === 'Completed') throw new Error('لقد أكملت هذا التقييم بالفعل.');
+
+      let assignmentId, startedAt;
+      if (mine && mine.Status === 'In Progress') {
+        assignmentId = mine.AssignmentID;
+        startedAt = acDate_(mine.StartedAt) || new Date();
+      } else if (mine && mine.Status === 'Invited') {
+        // Consume the invite -> In Progress, starts the clock now. Already
+        // has a slot reserved conceptually, but UsedSlots only ever counts
+        // ACTUAL admissions, so it is bumped here too, on first start.
+        assignmentId = mine.AssignmentID;
+        startedAt = new Date();
+        acUpdate_(dbId, ASSIGNMENTS_SHEET, 'AssignmentID', assignmentId, { Status: 'In Progress', StartedAt: acStamp_() }, 'candidate:' + email);
+        bumpUsedSlots_(dbId, batch);
+      } else {
+        const used = Number(batch.UsedSlots) || 0;
+        const max = Number(batch.MaxCandidates) || 0;
+        if (used >= max) throw new Error('اكتمل عدد المقاعد المتاحة لهذا التقييم.');
+        assignmentId = acUid_();
+        startedAt = new Date();
+        const row = {
+          AssignmentID: assignmentId, BatchID: batch.BatchID, Token: token, CandidateEmail: email,
+          AssessmentID: batch.AssessmentID, Status: 'In Progress', StartedAt: acStamp_(), CompletedAt: '', CreatedAt: acStamp_()
+        };
+        acInsert_(dbId, ASSIGNMENTS_SHEET, row, 'candidate:' + email, 'AssignmentID');
+        bumpUsedSlots_(dbId, batch);
+      }
+
+      const limitSec = (Number(assessment.TimeLimitMinutes) || 0) * 60;
+      const elapsed = Math.floor((new Date() - startedAt) / 1000);
+      const remainingSeconds = Math.max(0, limitSec - elapsed);
+      const questions = acRows_(dbId, QUESTIONS_SHEET).filter(function (q) { return q.AssessmentID === batch.AssessmentID; });
+      const projection = acPublicAssessment_(assessment, questions);
+
+      return {
+        status: 'success', data: { assignedId: assignmentId },
+        assignmentId: assignmentId, remaining_seconds: remainingSeconds,
+        assessment: projection.assessment, questions: projection.questions
+      };
+    }, 15000);
+  }
+  publicRegister('add_ac_candidate_attempt', addAcCandidateAttempt_);
+
+  /**
+   * §5.3/D-10 — submission. Ownership re-checked (assignment+token+email),
+   * single-submit, a 60s grace past TimeLimitMinutes is ACCEPTED and flagged
+   * (never refused), auto-grades filled into Responses.Score, and every
+   * candidate-side event lands in the sheet's own AuditLog tab in the SAME
+   * request — not a second round trip.
+   */
+  function addAcCandidateSubmission_(data, dbId) {
+    const token = String((data && data.token) || '').trim();
+    const email = String((data && data.email) || '').trim().toLowerCase();
+    const assignmentId = String((data && data.assignmentId) || '').trim();
+    const answers = Array.isArray(data && data.answers) ? data.answers : [];
+    const events = Array.isArray(data && data.events) ? data.events : [];
+    if (!email || !assignmentId) throw new Error('بيانات التسليم غير مكتملة.');
+
+    return executeWithLock_(function () {
+      const assignment = acRows_(dbId, ASSIGNMENTS_SHEET).filter(function (a) {
+        return a.AssignmentID === assignmentId && a.Token === token && String(a.CandidateEmail || '').trim().toLowerCase() === email;
+      })[0];
+      if (!assignment) throw new Error('محاولة غير صالحة — تحقق من الرابط والبريد الإلكتروني.');
+      if (assignment.Status === 'Completed') throw new Error('تم إرسال هذا التقييم بالفعل.');
+
+      const assessment = acRows_(dbId, ASSESSMENTS_SHEET).filter(function (a) { return a.AssessmentID === assignment.AssessmentID; })[0];
+      const questions = acRows_(dbId, QUESTIONS_SHEET).filter(function (q) { return q.AssessmentID === assignment.AssessmentID; });
+      const qById = {};
+      questions.forEach(function (q) { qById[q.QuestionID] = q; });
+
+      const started = acDate_(assignment.StartedAt);
+      const now = new Date();
+      const limitSec = (Number(assessment && assessment.TimeLimitMinutes) || 0) * 60;
+      const elapsedSec = started ? Math.floor((now - started) / 1000) : 0;
+      const lateSeconds = elapsedSec - limitSec;
+      const isLate = lateSeconds > LATE_GRACE_SECONDS;
+
+      const stamp = acStamp_();
+      const respRows = answers.map(function (a) {
+        const q = qById[a.questionId];
+        let score = '';
+        if (q && q.QuestionType === 'MCQ') {
+          const norm = function (v) { return String(v == null ? '' : v).trim().toLowerCase(); };
+          score = (q.CorrectAnswer && norm(a.answer) === norm(q.CorrectAnswer)) ? (Number(q.Weight) || 0) : 0;
+        }
+        return {
+          ResponseID: acUid_(), AssignmentID: assignmentId, QuestionID: a.questionId,
+          Answer: (a.answer === undefined || a.answer === null) ? '' : a.answer,
+          Score: score, AnsweredAt: stamp, EmailCandidate: email, CreatedAt: stamp
+        };
+      });
+      if (respRows.length) acInsertMany_(dbId, RESPONSES_SHEET, respRows, 'candidate:' + email, 'ResponseID');
+
+      acUpdate_(dbId, ASSIGNMENTS_SHEET, 'AssignmentID', assignmentId, { Status: 'Completed', CompletedAt: stamp }, 'candidate:' + email);
+
+      // Candidate-side events -> the sheet's OWN AuditLog tab (§5.6) — no
+      // ERP_Record_History entry for these (acAppendRows_, not acInsertMany_):
+      // this is a free-form event log, not a business record with a PK.
+      const auditRows = [];
+      const eventsByType = {};
+      events.forEach(function (e) {
+        if (!e || !e.type) return;
+        const t = String(e.type);
+        if (!eventsByType[t]) eventsByType[t] = { count: 0, first: e.at, last: e.at };
+        eventsByType[t].count++;
+        eventsByType[t].last = e.at;
+      });
+      Object.keys(eventsByType).forEach(function (t) {
+        const info = eventsByType[t];
+        auditRows.push({
+          Timestamp: new Date(), ActorEmail: email, Action: t,
+          Details: 'AssignmentID=' + assignmentId + '; count=' + info.count + '; first=' + info.first + '; last=' + info.last
+        });
+      });
+      if (isLate) {
+        auditRows.push({
+          Timestamp: new Date(), ActorEmail: email, Action: 'LATE_SUBMISSION',
+          Details: 'AssignmentID=' + assignmentId + '; late_seconds=' + lateSeconds
+        });
+      }
+      if (auditRows.length) acAppendRows_(dbId, AUDIT_SHEET, auditRows);
+
+      return { status: 'success', data: { assignedId: assignmentId }, late: isLate };
+    }, 15000);
+  }
+  publicRegister('add_ac_candidate_submission', addAcCandidateSubmission_);
+
   // ── §6.4/T-3/T-4 — the write path ──────────────────────────────────────────
   // Never addRecord_ / getNextId_ / saveRecordWithAudit_ against this
   // spreadsheet (R-16/R-17): a lower-case dataMap key would be silently
@@ -767,6 +969,31 @@ const AssessmentCenter = (function () {
         try { logHistory_(dbId, sheet, 'rec_' + pk, pk, user, 'create', headerCaseObj, null); } catch (e) {}
       });
       return { status: 'success', data: { count: objs.length } };
+    }, lockMs);
+  }
+
+  /**
+   * Header-mapped bulk append with NO history logging — for AuditLog only
+   * (§5.6): a free-form candidate-event log with no primary key, not a
+   * business record ERP_Record_History should carry a "create" entry for.
+   * Same case-insensitive header mapping as acInsertMany_, minus logHistory_.
+   */
+  function acAppendRows_(dbId, sheet, objs, lockMs) {
+    if (!objs || !objs.length) return;
+    return executeWithLock_(function () {
+      const sh = getSheet_(sheet, dbId);
+      const headers = getHeaders_(sh);
+      const matrix = objs.map(function (obj) {
+        const lut = {};
+        Object.keys(obj).forEach(function (k) { lut[String(k).trim().toLowerCase()] = obj[k]; });
+        return headers.map(function (h) {
+          const v = lut[String(h).trim().toLowerCase()];
+          return v === undefined ? '' : v;
+        });
+      });
+      const startRow = sh.getLastRow() + 1;
+      sh.getRange(startRow, 1, matrix.length, headers.length).setValues(matrix);
+      noteMutation_();
     }, lockMs);
   }
 
