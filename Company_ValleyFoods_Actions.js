@@ -4865,6 +4865,15 @@ const ValleyFoodsHRModules = (function () {
             start_time: r.start_time || '',
             end_time: r.end_time || '',
             actual_hours: r.actual_hours != null ? r.actual_hours : '',
+            /* U-45. Both columns exist in valley_manufacture_work_center and are
+             * populated by sheet formulas (work_center_cost by an INDEX/MATCH on
+             * valley_work_centers, total_cost by =K*J), but the projection omitted
+             * them — so the print template's fmt3(undefined) rendered 0.000 on
+             * every manufacturing order. Coerced to a number so a formula that
+             * errors (#N/A on a deleted work centre) still reads 0 rather than
+             * printing NaN, which is what it does today. */
+            work_center_cost: Number(r.work_center_cost) || 0,
+            total_cost: Number(r.total_cost) || 0,
             last_pause_time: r.last_pause_time || '',
             total_pause_duration: r.total_pause_duration != null ? r.total_pause_duration : 0,
             notes: r.notes || ''
