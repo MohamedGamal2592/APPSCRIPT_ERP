@@ -13,10 +13,13 @@
 
 ## 0. Read this part first
 
-> **This document now covers two runs.** §0–§8 are the first run (Phases 0–6). A second run took it
-> further and is written up in **[Continuation run (Phases 7–10)](#continuation-run-phases-710)** at
-> the end — start there for what is newest, including a gap in the first run's Phase 2 that the first
-> run did not report, and the fact that **F-01 has since been done**. Item 2 below is left as it was
+> **This document now covers three runs.** §0–§8 are the first run (Phases 0–6);
+> **[Continuation run (Phases 7–10)](#continuation-run-phases-710)** is the second;
+> **[Continuation run (Phases 11–14)](#continuation-run-phases-1114)** is the third and newest.
+> **Read the third one first**, then the second. Each reports a gap the run before it left
+> unmentioned: the second found that Phase 2 silently skipped `get_purchase_items`, and the third
+> found that Phase 2.6 stamped only the TopLight form option builders and left 51 reference reads
+> outside the stamp. **F-01 was done in the second run.** Item 2 below is left exactly as it was
 > written, because it was true at the time and the record should show what was and was not known.
 
 Three things matter more than the rest of this document.
@@ -383,6 +386,9 @@ test: save a record in staging, confirm the production sheet is untouched.
 | 7.3 | **TopChemical → متابعة الاستيراد.** Advance a record's status. The badge and the row's action buttons must change immediately, with no list re-fetch, and must match what a page refresh shows. |
 | 8 | **The critical one, with Phase 3.** In staging, save a ValleyFoods manufacturing order with several outputs, several consumption lines and at least one by-product. Then open the sheets and confirm the computed columns are **still formulas, not values**: `valley_manufacture_by_product.total_cost` and `.transaction_code`, `valley_manufacture_header_products.cost_unit`/`.total_cost`, `valley_manufacture_work_center.total_cost`, and the MO header's `total_batch_cost`. Each formula must reference **its own row number**. Then edit the order and re-check — the row numbers must still be right. Do the same for TopChemical: add an AR/AP movement (`name_ar` must be a VLOOKUP), a stock revision (five formula columns), and an import-follow record (`approval_expiry_date`). |
 | 9 | **The change with the least margin for error.** Save a ValleyFoods sales invoice (the densest handler: 6 `getAllRecords_` before its first write) and check every number it wrote — totals, tax, stock. Then save a second one immediately and check again. Then do a read-modify-write on the same screen twice in a row. If anything is wrong, revert `15f9c80` first, before anything else. Also confirm list pages are *faster*, not just unchanged — this phase turns the request memo on for the entire company read path, which never had it. |
+| 11 | **TopLight, and best tested with two browsers.** Edit a product's name or category, then immediately open TopLight Products in another session — the change must be visible, not up to 10 minutes stale. Same for a customer/vendor name on the Sales and Purchasing lists. Then the one that was already subtly wrong: on the Products page, add a product and pick التصنيف from the dropdown — the list must show real category names with **no blank entry at the top**, and the save must succeed. Add a *new* category inline (the "add new" box) and confirm it appears in the dropdown immediately on the next page load, not after 10 minutes. Finally check the cash screens: the box (الخزنة) and account-code dropdowns must still populate. |
+| 12 | **Every converted list must show the same rows in the same order as before.** TopChemical: متابعة الاستيراد, أوراق التسجيل, مقاسات الكرتون, مكتب الجمارك, الباركود. On مكتب الجمارك the two totals at the top are computed from **all** rows, not the visible ten — check that they did not change. On مقاسات الكرتون the النوع filter dropdown must still offer every type in the sheet, not just the types on the visible ten. On الباركود confirm the newest record is first. ValleyFoods: الخصومات and الأعمال الإضافية — same ten, same order, and the `total` count still reflects the whole sheet. TopLight: عروض الأسعار and الحركة النقدية — same ten, same order; on الحركة النقدية the debit/credit/balance summary at the top must be unchanged, and the box filter must still work. |
+| 13 | **Save a ValleyFoods manufacturing order that adds two or more NEW work centres in one go** (this is the change — several appends in one save). Then open `valley_manufacture_work_center` and confirm: the new rows are contiguous at the bottom, in the order they appear on the form; their `id` values are consecutive with no gap and no repeat; and `work_center_cost` / `total_cost` are still **formulas** referencing their own row. Then edit the same order, remove one work centre and add another, and re-check. Separately: open any page and confirm the **company logo still renders** — that is the `\u0000` sentinel change in `03_Security.js`. If a logo goes missing, revert `30261ca`. |
 
 ### Step 4 — create the version
 Only after the above. Apps Script editor → Deploy → Manage deployments → edit the live deployment →
@@ -398,6 +404,11 @@ Seconds, no code changes. This is the primary path.
 
 **Per phase, in code** — each phase is one commit and they are independent in reverse order:
 ```bash
+git revert 30261ca   # Phase 13b — work-centre batched append + the NUL-escape fix
+git revert 3192ee7   # Phase 12c — TopLight sales-offer / cash: slice before mapping
+git revert fdca7ff   # Phase 12b — ValleyFoods deductions / overtime: slice before mapping
+git revert 25d3052   # Phase 12a — TopChemical, 5 endpoints: slice before mapping
+git revert 6e1d85f   # Phase 11  — TopLight reference cache behind the version stamp
 git revert 14ca5ab   # Phase 10 — docs only, nothing deployable
 git revert 15f9c80   # Phase 9  — request memo (revert this FIRST if numbers look wrong)
 git revert 6bf0e1b   # Phase 8b — TopChemical batched formula writes
@@ -419,7 +430,13 @@ clasp push
 Phase 1's items are independent of each other, so a single item can be reverted by hand rather than
 the whole commit.
 
-**Two ordering constraints in the list above.** Phase 8a added `applyRowFormulas_`,
+**Three ordering constraints in the list above.** Phase 13b's work-centre batch calls
+`ensureGridRows_`, which Phase 8a added to `02_DataAccess.js`, so 13b must be reverted before 8a.
+Phase 12's five TopChemical / two ValleyFoods / two TopLight endpoint rewrites are independent of
+each other and of everything else — any one of the three can be reverted alone. Phase 11 is
+independent too, but reverting it puts TopLight's 51 reference reads back on the unstamped 120s
+key, which is the pre-existing behaviour, not a broken one. And:
+Phase 8a added `applyRowFormulas_`,
 `writeRowFormulas_` and `ensureGridRows_` to `02_DataAccess.js` and Phase 8b **calls** them, so 8b
 must be reverted before 8a or the TopChemical write paths will throw. Everything else is independent
 in reverse order. Phase 9 can be reverted on its own at any time — it only adds `noteMutation_()`
@@ -813,7 +830,7 @@ check at all.
 ## C5. Other things you should know
 
 1. **`03_Security.js` contains two literal NUL bytes**, at lines 649 and 652. They are deliberate —
-   `getCompanyLogoUrl_` uses a NUL character as a "cached empty string" sentinel, written as a raw
+   `getCompanyLogoUrl_` uses a NUL character as a "cached empty string"`\u0000` sentinel, written as a raw
    byte rather than an escape sequence. It works, and it makes `grep` treat the file as binary. It is
    fragile: any editor or transfer that strips NULs would break the logo cache silently. Worth
    converting to an escape sequence one day; not changed here.
@@ -832,3 +849,335 @@ check at all.
    transaction of any kind. Phase 8 gave each of its block writes its own lock, which fixes the
    overwrite race, but two concurrent saves of the *same* manufacturing order can still interleave.
    Pre-existing and out of scope; worth knowing.
+
+
+---
+
+# Continuation run (Phases 11–14)
+
+**Date:** 2026-09-06 · **Branch:** same `perf/optimization-run`, five further commits
+**Still nothing deployed.** `clasp push` has still never been run, no deployment created or promoted.
+
+## D0. Read this part first
+
+**1. The gap this run found, which neither previous report mentions.** Phase 2.6 built `tlRefs_`,
+`tlCachedMap_` and the `tl_refs_ver_<dbId>` stamp for TopLight — and then applied them to **four call
+sites**, the Sales & Purchase form option builders. The other **51** reference reads in
+`Company_TopLight_Actions.js` went on calling `getRefsCached_` directly at a 120s TTL, outside the
+stamp. So `bustTopLightCaches_` was bumping a version those 51 entries were not keyed on, and a
+product or party edit did not invalidate them at all — they simply aged out. The first run's Phase 2.6
+write-up reads as though the module was done. It was not. Measured on a model of the real code: of
+the 47 sites whose sheets have an app-driven mutator, **43 still served stale data five seconds after
+an edit**. The four that did not are exactly the four Phase 2.6 converted. That is fixed in Phase 11,
+and this paragraph exists because the same omission happened twice now — first run to second, second
+run to third — and the pattern is worth naming: *a phase that converts "the sites that matter" and
+does not count the ones it left behind will read as complete.*
+
+**2. A second, smaller live defect, found by checking the shapes rather than assuming.**
+TopLight's `'categories'` cache key carried two different value shapes: `categoryOptions_` stored a
+projected **and filtered** `[{id, name_ar}]`, four other sites stored raw records. The previous run
+flagged this as a latent hazard. It was slightly worse than latent: `prefetch_refs` — an idle-timer
+call made from pages across the app — warmed the key with the **raw** shape, and the raw shape has no
+filter, so whenever prefetch won the race a blank-`id` category was already reaching the
+التصنيف dropdown on the Products page as an empty option. Split into `categories_opts` and
+`categories_raw`.
+
+**3. Phase 4.1/4.2 is still blocked, and was not guessed at.** The one question this run was allowed
+to ask — has `inventorySpreadsheets()` been run — was answered *"don't know yet"*. Without the real row
+counts there is no basis for choosing a bound, and a bound set too low does not fail loudly: `VLOOKUP`
+silently misses rows and `SUMIFS` silently undercounts, on costing and payroll data. It stays
+blocked. It is still the largest single win left in the whole investigation, and it is still ten
+minutes' work once the inventory has run. See `NEXT_STEPS_OWNER.md` item 4.
+
+**4. Still nothing has been run against a real spreadsheet.** Same limitation as both previous runs.
+Everything below is differential testing and static analysis under `node` — real and reproducible, and
+not a substitute for executing against Google Sheets. There are now **28 commits** on this branch,
+not one of which has been executed against a spreadsheet.
+
+---
+
+## D1. What changed, per phase
+
+| Phase | Commit | Summary |
+|---|---|---|
+| 11 | `6e1d85f` | F-15 on TopLight — the 51 reference reads Phase 2.6 left outside the version stamp |
+| 12a | `25d3052` | TopChemical — slice before mapping at 5 more endpoints |
+| 12b | `fdca7ff` | ValleyFoods — slice before mapping at `getDeductionsData_`, `getOvertimeData_` |
+| 12c | `3192ee7` | TopLight — slice before mapping at `get_sales_offer_headers`, `get_cash_headers` |
+| 13b | `30261ca` | ValleyFoods work-centre batched append; the two NUL bytes in `03_Security.js` |
+| 14 | this commit | This section, the §5 and §6 updates, `NEXT_STEPS_OWNER.md` |
+
+### Phase 11 — finishing F-15 on TopLight
+
+**The audit came first**, and it is the part that mattered. Every mutation site for every sheet
+reached through `getRefsCached_`, found by literal sheet-name grep across all 19 `.js` files:
+
+| Sheet | Mutating actions | Busts? |
+|---|---|---|
+| `top_light_products` | `add_product`, `edit_product` | both, **after** the write |
+| `top_light_customer_vendor` | `add_party`, `edit_party` | both, **after** the write |
+| `top_light_categories` | `createCategory_` (inline add, reached from `add_product`/`edit_product` via `resolveCategoryId_`) | `invalidateRefsCache_` only — **see below** |
+| `top_light_chart_of_accounts` | **none exist** | n/a — hand-edited only |
+| `top_light_box_account_codes` | **none exist** | n/a — hand-edited only |
+
+No delete action exists for any of the five. No other `.js` file writes to them — the only references
+outside `Company_TopLight_Actions.js` are two rows in the `tables:` catalog of
+`Company_TopLight_Registry.js`, inert since `04_TableEngine.js` was deleted in Phase 6. `05_Admin.js`'s
+one `sheet_name`-driven route is `get_record_history`, read-only. The IIFE exports only
+`dispatch_`/`pageForAction_`/`tableForAction_`, so there is no bypass of the kind
+`ValleyFoodsHRModules` had.
+
+**`createCategory_` is a mutation site the brief did not name**, and it was the one outside
+`bustTopLightCaches_`. It called `invalidateRefsCache_(dbId, 'categories')`, which drops the
+*unstamped* key. Once both category shapes moved behind the stamp that call would have invalidated
+nothing. It is now `bumpTlRefsVersion_(dbId)`. **Without that, this phase would have introduced a real
+invalidation gap** — which is the argument for auditing the mutators before touching the readers, not
+after.
+
+**Bust placement, scripted rather than read by eye.** This is what caught ValleyFoods out in 7.2b,
+where 13 of 15 busts fired *before* their own write. TopLight is clean: all 18 functions in the file
+that both write and bust have every write before every bust — writes-after-bust = 0 at every site.
+Nothing had to be added. Worth recording as a difference between the two modules rather than an
+assumption carried across.
+
+**The shape audit**, run on all five kinds rather than only the one the brief flagged:
+`parties` (23 sites), `products` (15), `chart_of_accounts` (4) and `boxes` (4) each carry exactly one
+shape. `categories` carried two — D0 item 2.
+
+**The conversion.** Five named accessors beside `tlRefs_` — `partyRefs_`, `productRefs_`,
+`categoryRefs_`, `chartRefs_`, `boxRefs_` — one per `(sheet, shape)`, plus `categoryOptions_` keeping
+the projected shape under its own kind. All 51 sites route through them, so the collision cannot come
+back. TTL 600s, matching TopChemical and ValleyFoods. **Zero direct `getRefsCached_` calls remain in
+the file.** The four sites Phase 2.6 converted fold into the same accessors, since their builders were
+already the canonical raw ones. `tlCachedMap_` untouched, as instructed.
+
+`prefetch_refs` now warms through the accessors — the stamped keys readers actually read, rather than
+the unstamped 120s keys nothing reads any more — and warms **both** category shapes instead of
+clobbering one with the other. The second `getAllRecords_` on `top_light_categories` costs no sheet
+read, because the Phase 9 request memo serves it.
+
+**One thing deliberately left alone, stated so it does not mislead:** the four
+`invalidateRefsCache_(dbId, 'products'/'parties')` calls in `addProduct_`, `editProduct_`, `addParty_`
+and `editParty_` are now **no-ops** — they drop a key nothing writes. They sit one line after the
+`bustTopLightCaches_` that does the real work. Left in place to keep the diff to the caching change
+itself. Also noted, not changed: `bustTopLightCaches_` removes `tl_cat_opts_<dbId>`, a key nothing has
+ever written.
+
+### Phase 12 — the 7.1 transformation, everywhere it actually applies
+
+Found by grepping `slice(0, limit)` — **34 sites across the three company files** — and walking back
+from each one, rather than working from the brief's estimate of "roughly fifteen". The real count of
+sites with the map-everything-then-slice shape is **nine**. The brief's number was too high; most of
+the 34 already slice raw records and enrich afterwards, which is the right shape already.
+
+**Converted, nine endpoints:**
+
+| File | Endpoints | Shape |
+|---|---|---|
+| TopChemical | `getImportFollow_`, `getRegistrationPapers_` | pure map → reverse → slice |
+| TopChemical | `getCartonSizes_` | map → reverse → slice, with a `typeSet` accumulated **inside** the map that `type_options` is built from |
+| TopChemical | `getCustomsOffice_` | map → reverse → slice, with **two running totals** accumulated inside the map and reported from the full set, and an `id` taken from the map index |
+| TopChemical | `getBarcode_` | map → sort by raw `id` → slice |
+| ValleyFoods | `getDeductionsData_`, `getOvertimeData_` | pure map → reverse → slice |
+| TopLight | `getSalesOfferHeaders_`, `getCashHeaders_` | `Object.assign({}, r)` for every row → sort on raw keys → slice |
+
+Every conversion **keeps the slice on the index array**. That is the point of the transformation, not
+an incidental detail: it is what makes a negative, fractional, string or `NaN` `limit` behave
+identically. A counted loop does not, and the mutation tests below show exactly that.
+
+The accumulators are the interesting part. Where a total or a key-set was being built *inside* the
+map over every row, it moves to its own pass in the same `0..n-1` order — same additions in the same
+sequence, so the same floating-point result; same object-key insertion order, so the same
+`Object.keys` order, and `Array.prototype.sort` is stable, so the same option list. Where a sort key
+was copied straight off the raw row, the same comparator applied to an index array yields the same
+permutation, for the same stability reason.
+
+**Options were not split out anywhere in this phase, and that is a decision, not an omission.** The
+spec asks to check whether each endpoint also builds form option lists the list view never renders.
+The check says no, for two reasons. First, every option list on the converted endpoints comes from
+`productRefs_` / `clientVendorRefs_` / `customerVendorOptions_` / `salesOptions_` / the
+`getActiveEmployeeOptions_` family — all of which have been behind a version-stamped 600s cache since
+Phase 7.2, and now Phase 11. The list path pays a cache lookup, not the three uncached full sheet
+reads that made the 2.1 and 7.1 splits worth their risk. Second, the one endpoint where it looked
+worthwhile — `get_sales_offer_headers`, which returns `salesOptions_` unconditionally where
+`get_sales_headers` gates the same payload behind `withOptions:true` — turns out to read
+`__options.customer_options` on the **save** path, at `Company_TopLight_Sales_Offer.html:336`, to
+resolve `customer_name` for the local row patch. That is exactly the ValleyFoods `supplier_options`
+situation the spec warns about, and moving it would have changed a save path for no read saved.
+
+**Skipped, with reasons** — the full list is in `D3`.
+
+### Phase 13 — branch b, because 13a is still gated
+
+`inventorySpreadsheets()` has not been confirmed run, so 4.1/4.2 stays untouched. Branch b was two
+items.
+
+**The ValleyFoods work-centre append loop.** Phase 8 skipped this and said why: it is a *mixed*
+update/append loop with a per-row `getNextIdUnderLock_` between iterations, so deferring the appends
+changes what that function reads. It does. **It does not change what it returns**, and that is
+provable rather than hopeful:
+
+> `getNextIdUnderLock_` returns `current` (the `ID_Counter` value for the table) when
+> `current > tableMax`, and `tableMax + 1` otherwise, then sets the counter to `returned + 1`. Every
+> return is therefore `>= tableMax + 1`. So at call *k* ≥ 2 the counter holds `r(k-1) + 1`, and:
+> deferred, `tableMax` is still `M0` and `r(k-1) + 1 >= M0 + 2 > M0`; immediate, `tableMax` is
+> `r(k-1)` and `r(k-1) + 1 > r(k-1)`. Both take the healthy branch and both return `r(k-1) + 1`.
+> Call 1 is identical because the state is. The update branch never writes the `id` column, so an
+> interleaved update cannot move `tableMax`; and the appended rows carry fresh `uid16Hex_`
+> `unique_id`s that can never match an `editingUid`, so an interleaved update never targets one.
+
+Row numbers hold for the same reason the Phase 8 blocks do: only appends change the row count during
+this loop — the deletes run after it — so the batch starts at the same `getLastRow() + 1` and lands in
+the same order. Locked and grid-grown, because a precomputed start row, unlike `appendRow`, is not
+safe against a concurrent append. The post-loop `writeRowFormulas_` pass is untouched.
+
+**The NUL bytes in `03_Security.js`.** `getCompanyLogoUrl_` used a raw NUL byte as its "cached empty
+string" sentinel. It worked, and it made `grep` treat the whole file as binary; any editor or transfer
+that strips NULs would have broken the logo cache silently. Both are now the escape sequence for the
+same character. Byte-level edit that first asserted there were exactly two and that each was a lone
+character inside a single-quoted literal. **The file now contains zero NUL bytes** and `grep` reads it
+as text. The diff is two lines, two characters.
+
+---
+
+## D2. What was verified, and how
+
+Nothing in this run was accepted on inspection where a test was possible. In every case the old code
+was sliced out of `git show HEAD:<file>` and the new code out of the working tree, and both were run
+under `node` against identical inputs. **No formula, expression or comparator was ever retyped** —
+each side is compiled from its own source text, so drift is impossible by construction.
+
+| Change | Verification | Result |
+|---|---|---|
+| 11 — accessor value equivalence | each of the 5 accessors vs the exact inline `getRefsCached_` expression it replaced; 6 row counts (0, 1, 2, 7, 40, 300) × 40 rounds of randomised records with blank, null, whitespace, numeric and Arabic cells | 55 sites × 40 rounds = **2,200 cases, 0 mismatches** |
+| 11 — one shape per cache key | run against **both** versions, so the check is shown to fail on the real defect | OLD: **1 collision** (`refs_<db>_categories` carries `id\|name_ar` *and* `id\|name_ar\|name_eng`). NEW: **0 collisions** across all 6 keys |
+| 11 — invalidation reach | warm the cache, write to the sheet, bump the stamp, read 5s later; 47 stamp-eligible sites | OLD **43 of 47 still STALE**; NEW **0 of 47** |
+| 12a — TopChemical, 5 endpoints | whole response object compared: 9 row counts × 4 randomisations × 22 `limit` values × 5 `loadAll` values × 5 endpoints. `limit` includes `-1, -3, -100, 2.7, -2.7, '5', '  7 ', 'abc', NaN, ±Infinity, null, true, false, 1e9`; ids include blank, null, numeric-string, duplicate and non-numeric | **20,700 cases, 0 mismatches** |
+| 12b — ValleyFoods, 2 endpoints | same design, 23 `limit` values | **8,280 cases, 0 mismatches** |
+| 12c — TopLight, 2 endpoints | same design, 25 `limit` values incl. 2000/2001 for the cash cap, plus the `data === undefined` path; the real `parseDate_` sliced from the file and asserted byte-identical to HEAD | **9,002 cases, 0 mismatches** |
+| 13b — work-centre loop | both loop bodies sliced from their own source and run against an identical fake spreadsheet, with the **real** `getNextIdUnderLock_` and `ensureGridRows_` from `02_DataAccess.js`. 0–5 existing rows × 0–7 `work_ops` × **4 `ID_Counter` states** × 6 randomisations. Compared: the full sheet cell-for-cell, the id sequence, the `ID_Counter` contents after the run, and the returned `keepWcUids` | **1,152 cases, 0 mismatches** |
+| 13b — NUL removal | byte count before and after; the escape's `charCodeAt(0)` checked to be 0 | 2 → **0 NUL bytes**, same character |
+| every phase | `node --check` on all 19 `.js` files and the inline `<script>` of all 92 pages | 110 blocks, **pass** |
+
+The four `ID_Counter` states in the 13b test are the ones that decide the branch: counter ahead of the
+table max (healthy), counter exactly at max + 1, counter **behind** the table max (stale), and **no
+counter row for the table at all**.
+
+### Every test was shown to fail on a real defect
+
+The previous run recorded a check that looked rigorous and was not. So each of these was mutated and
+re-run, and the mutants are the mistakes a careless version of the change would actually make:
+
+| Test | Mutation | Caught? |
+|---|---|---|
+| 11 key-shape | none needed — the check reports the collision that exists in `HEAD` today | yes, by construction |
+| 12a | replace the index slice in `getBarcode_` with a counted loop | **300 mismatches**, first at `limit -1` |
+| 12a | build `getCartonSizes_`'s `typeSet` from only the visible rows | **2,300 mismatches** |
+| 12c | `Math.max(0, limit)` on the cash cap — a plausible-looking tidy-up | **380 mismatches**, first at `limit -1` |
+| 13b | start row `getLastRow()` instead of `getLastRow() + 1` | **882 mismatches** |
+| 13b | appended rows written in reverse order | **608 mismatches** |
+| 13b | one id taken and reused for every new row | **881 mismatches** |
+
+And the captured output was printed and inspected at least once per test, so none of them is passing
+vacuously on empty data:
+
+- `getCustomsOffice_`, 6 rows, `limit -2` → ids `[6,5,4,3]` with the summary computed from all six,
+  identical both sides.
+- `getBarcode_` over raw ids `[4,7,"abc",17,"3",2]` → `[17,7,4,"abc"]` both sides — the stable-sort
+  permutation with a `NaN`-producing comparator.
+- `getCashHeaders_` over `transaction_id`s `[null,7,14,"","",0,"zz"]` → `[14,7,null,"","",0,"zz"]` both
+  sides, with `box_name` `["بنك","خزنة","خزنة"]` and `customer_name` `["عميل ١","عميل ٢","عميل ١"]` non-empty,
+  proving the enrichment the map exists for is exercised.
+- 13b, stale counter, 2 existing rows (ids 19, 20), 4 `work_ops` of which 3 are edits → both versions
+  produce ids `[19,20,21]`, counter `22`, uids `[OLDUID0, OLDUID1, NEWUID0001]`, and the op sequence
+  goes `[update, update, update, appendRow]` → `[update, update, update, setValues(1)]`.
+
+### Two test artifacts that were mistaken for defects, and what they cost
+
+Both are recorded because in each case the first reading of the numbers was wrong, and the honest
+version of "0 mismatches" includes how the earlier non-zero ones were resolved.
+
+1. **The Phase 11 invalidation test initially reported 30 of 55 sites stale under the new code.** The
+   cause was the test, not the code: `bumpTlRefsVersion_` stamps with `new Date().getTime()`, and the
+   model's virtual clock was not driving `Date`, so two bumps inside the same millisecond produced the
+   same stamp. Once `Date` was frozen to the virtual clock the figure went to 0. *The underlying
+   sub-millisecond stamp collision is real in production too* — an entry written and the stamp bumped
+   inside one millisecond, with a full sheet read in between — and is not reachable in Apps Script.
+2. **The Phase 13b test initially reported 13 of 1,152 mismatches.** Every one was a `created_at` /
+   `start_time` / `end_time` a millisecond apart between the two runs. `new Date()` again. Freezing it
+   inside the compiled block — which needed `Date` passed in as a parameter, because `new Function`
+   compiles in global scope and does not see a module-level shadow — took it to 0.
+
+---
+
+## D3. What was skipped, and why
+
+| Item | Status |
+|---|---|
+| **Phase 4.1/4.2** — bounding whole-column ranges | Still blocked. The gating question was answered *"don't know yet"*. Not guessed. Still the largest remaining win. |
+| **`getStockRevision_`** (TopChemical) | The "map" **is** the record build, including the `Object.values(record)` empty-row test with its duplicate-header collapse — the F-02.1 semantics. Which rows survive cannot be known without building them, so there is nothing to defer. |
+| **`getEmployeeSalary_`, `getEmpDeductions_`, `getEmpPermits_`, `getEmpOvertime_`** (TopChemical) | `.slice(-300)` runs **before** the map, so at most 300 derived objects are built. The sheet read is unchanged; the win is ~290 small allocations. Not worth more unverified change on a branch with nothing deployed. |
+| **`getEmployeeStatus_`** (TopChemical) | The `.filter()` predicate reads `employee_code`/`status_type`, which the map produces. The map cannot be deferred behind its own filter. |
+| **`getArAp_`, `getArApClient_`, `getEmpSalaries_`** (TopChemical) | The map runs over aggregated groups or a `.slice(-300)` — already bounded. |
+| **`getTrustMovements_`** (TopChemical) | Filtered to one account before the map, and the sort key is `String(r.date).localeCompare(...)` — a pre-existing oddity on `Date` objects that I did not want to reproduce blind for a marginal win. |
+| **`getLegalManufacture_`** (TopChemical) | No per-row map at all. |
+| **`getEmpStatusData_`, `getShiftAssignmentData_`, `getSalaryData_`, `getVacationAllocData_`, `getMonthlySalariesData_`, `getValleyPurchasingCosting_`** (ValleyFoods) | No per-row derived map — they slice raw records and enrich afterwards, which is already the right shape. |
+| **`getVacationsData_`** (ValleyFoods) | Its "map" assigns `vacation_type_name` onto the raw record **in place** and returns the same object. There is no derived object to defer, only one property write per row. |
+| **`getValleyMfgByproducts_`** (ValleyFoods) | Rows are already filtered to a single manufacturing order before the slice. |
+| **Splitting form options into `get_*_options` actions** | Checked at every converted endpoint and declined at all of them, for the two reasons in D1 Phase 12. |
+| **Phase 3.4 / F-05, Phase 4.4, F-03, F-20, F-11, `SystemLog.ChangedFields`, `src_html/`** | Untouched, as instructed. `src_html/` not touched or deleted. |
+| **The five unregistered delete actions** | Hard stop. Still listed in `NEXT_STEPS_OWNER.md`. |
+| **`saveValleyMfgOrder_`'s missing outer lock** | Still absent. Pre-existing; Phase 13b's work-centre batch takes its own lock, as the Phase 8 blocks do, but the four-sheet transaction is a redesign, not an optimisation. |
+
+---
+
+## D4. Every assumption this run made
+
+1. **600s is the right reference-cache TTL for TopLight's other 51 sites.** Same number and same
+   reasoning the other two companies got in 7.2. Note what it means for the two sheets with **no
+   app-driven mutator at all** — `top_light_chart_of_accounts` and `top_light_box_account_codes`, which
+   are hand-edited only: a hand edit to either now surfaces within 600s instead of 120s. That is the
+   same trade Phase 7.2a accepted for TopChemical's `product_categories`, `legal_products` and
+   `chart_of_accounts`, and it is the reason the TTL is 600s and not the 1–6 h F-15 floated.
+2. **Cache-key changes are free.** Every kind renamed in Phase 11 starts cold after deployment; the
+   old unstamped entries linger until their TTL and are never read again. Inherited from 7.2.
+3. **`Array.prototype.sort` is stable**, which the ES2019 spec requires and V8 implements. Phase 12's
+   index-array sorts rest on it. It is also exercised directly by the differential tests, including on
+   comparators that return `NaN`.
+4. **Floating-point addition in the same order gives the same result.** Phase 12's accumulator moves
+   (`getCustomsOffice_`'s two totals, `getCartonSizes_`'s `typeSet`) rest on the pass running over the
+   same rows in the same `0..n-1` sequence. Verified by whole-object comparison rather than argued.
+5. **`getNextIdUnderLock_`'s algorithm is as read.** The Phase 13b proof depends on its exact branch
+   structure. It was sliced into the test from `02_DataAccess.js` rather than modelled, so the test
+   exercises the real function — but if that function is ever changed, the proof needs redoing.
+6. **`executeWithLock_` is reentrant-safe**, so the lock added around the work-centre batch can nest.
+   Inherited from Phase 8 and unchanged.
+7. **The Phase 9 request memo serves the second `getAllRecords_` on the same sheet within a request.**
+   This is why warming both category shapes in `prefetch_refs` costs one sheet read, not two.
+8. **Over-calling `noteMutation_` is free, under-calling is not.** The work-centre batch calls it once
+   after the single `setValues` where the old code called it once per `appendRow`. One call after the
+   write is correct; the count does not matter.
+
+---
+
+## D5. Other things you should know
+
+1. **Three untracked `UI_UX_*.md` files are now in the working tree**: `UI_UX_INVESTIGATION.md` (which
+   appeared during the second run), plus `UI_UX_EXECUTION_PLAN.md` and `UI_UX_RUN_PROMPT.md`, which
+   appeared **during this run**. None of them is this workstream's work and none has been committed,
+   edited or deleted. Something else is writing into this repository — worth knowing before you assume
+   a clean `git status` means nothing happened.
+2. **The brief's "52 direct `getRefsCached_` calls" was 51.** Its own per-kind counts (23 + 15 + 5 + 4
+   + 4) sum to 51; the 52nd occurrence is the call inside `tlRefs_` itself. Its "roughly fifteen more
+   endpoints" for Phase 12 was nine. Both figures are corrected above; neither changed what was done.
+3. **The brief said the branch had 23 commits.** It had 22 when this run started. Cosmetic.
+4. **`03_Security.js` can now be grepped.** It was being treated as a binary file by every text tool,
+   which is worth remembering if you have ever searched this repository and quietly got no results
+   from that file.
+5. **TopLight Purchasing, Sales and Sales_Offer still patch their delete locally while their list is
+   capped at 10**, so a delete leaves 9 rows. Pre-existing, reported by the previous run, unchanged —
+   and Phase 12c touched `get_sales_offer_headers`'s ordering without changing that behaviour.
+6. **The 28 unverified commits are the real risk now, not any single change.** Each phase is
+   independently revertable and §6 lists the order, but nothing on this branch has met a real
+   spreadsheet. The §5 step-3 table is written to be usable by someone clicking through the UI; it is
+   the only testing this work will get before it meets production data.

@@ -1,7 +1,8 @@
 # Next steps — everything now waiting on you
 
 **Branch:** `perf/optimization-run` · **Nothing has been deployed.** `clasp push` has never been run
-by an agent, and no deployment has been created or promoted.
+by an agent, and no deployment has been created or promoted. **28 commits** of unverified change now
+sit on this branch across three runs — that is the main reason items 1 and 2 below come first.
 
 This is the register of what is blocked on your Google account or your decision, in priority order.
 It does not duplicate the runbooks — each item links to the document that has the detail.
@@ -67,6 +68,15 @@ payroll data — which is why nobody has guessed one.
 
 Send me the output and I will do 4.1/4.2 against it.
 
+> **Asked and still open.** The third run asked directly whether this had been run; the answer was
+> *"don't know yet"*, so Phase 4.1/4.2 was **not** attempted — no bound was guessed. Everything else
+> that was not blocked on you has now been done, which makes this the single largest item left in the
+> entire investigation and the only one that needs nothing from me but these numbers.
+>
+> If you are not sure whether it ran: open each company spreadsheet and look for a tab called
+> `ERP_Perf_Inventory`. If it is there, paste it. If it is not, the function has not run — and it
+> cannot, until `clasp push` has happened (item 1).
+
 ### 5. Archive old records — dry run first
 
 ```
@@ -115,6 +125,24 @@ If you would rather it keep showing everything, say so — it is one line, havin
 
 ---
 
+## Done since this file was last written (third run, Phases 11–14)
+
+Nothing here needs anything from you — it is listed so the register stays honest about what has and
+has not moved. Full detail in [PERFORMANCE_RESULTS.md](PERFORMANCE_RESULTS.md), section **D**.
+
+| | |
+|---|---|
+| **TopLight reference caching finished.** Phase 2.6 stamped only four call sites and left **51** reading an unstamped 120s cache, so a product or party edit did not invalidate them at all. Measured on a model of the real code: 43 of 47 eligible sites still served stale data 5s after an edit; now 0. | Commit `6e1d85f`. Test it with two browsers — §5 step 3, row 11. |
+| **A live dropdown defect fixed on the way.** `prefetch_refs` was warming the TopLight `categories` cache with the wrong value shape, which dropped a filter and let a blank category into the التصنيف list on the Products page. | Same commit. |
+| **Nine more list endpoints stopped building a derived object for every row before throwing 99% of them away.** Five in TopChemical, two in ValleyFoods, two in TopLight. | Commits `25d3052`, `fdca7ff`, `3192ee7`. §5 step 3, row 12. |
+| **The ValleyFoods work-centre append loop is batched.** Phase 8 skipped this twice for a good reason; the reason turned out to be provably not a problem, and the proof is in D1. Several new work centres in one save now cost one write instead of one each. | Commit `30261ca`. §5 step 3, row 13 — **check the ids are consecutive**. |
+| **`03_Security.js` no longer contains NUL bytes.** It was being treated as a binary file by every text tool, and any transfer that stripped them would have broken the company-logo cache silently. | Same commit. Just confirm a logo still renders. |
+
+**Still not done, and still yours:** everything in the numbered list above, plus every decision below
+it. Nothing in the register has been removed.
+
+---
+
 ## Deploy order, once 1 and 2 are done
 
 Deploy **one phase at a time** and verify before continuing — do not deploy all of it at once. The
@@ -128,6 +156,9 @@ The three to watch hardest, because they touch how data is written and read:
   `movement_code` cell and check the formula bar.
 - **Phase 9** — save a multi-sheet document (ValleyFoods sales invoice is the densest) and confirm
   the numbers it wrote are right. This is the change with the least margin for error.
+- **Phase 13b** — save a manufacturing order that adds **two or more new work centres at once**, then
+  check `valley_manufacture_work_center`: the new rows contiguous and in form order, their `id`s
+  consecutive with no gap and no repeat, and `work_center_cost` / `total_cost` still formulas.
 
 **Fastest rollback, any phase:** Manage deployments → point the deployment back at the previous
 version. Seconds, no code changes. Note the current version number before you deploy anything.
