@@ -1,0 +1,135 @@
+/**
+ * Boot a real ValleyFoods page template under node.
+ *
+ * Loads the REAL UI_Components.html script and the REAL page template into one
+ * sandbox on top of domstub.js, substitutes the Apps Script <?!= ?> scriptlets
+ * with test values, and routes companyCall/API.call to a fixture function the
+ * caller supplies. The page's own render functions then run for real, so a test
+ * can assert on the markup they actually produce rather than on the source text.
+ *
+ * It is not a browser: layout, CSS and event dispatch do not exist, and
+ * innerHTML does not build a node tree. What it does give is the exact HTML
+ * string each draw function writes, which is what the cost gating, the batch
+ * modal and the material rows are made of.
+ */
+'use strict';
+
+const fs = require('fs');
+const path = require('path');
+const vm = require('vm');
+const { makeSandbox, makeElement } = require('./domstub');
+
+const ROOT = path.resolve(__dirname, '..', '..');
+
+/**
+ * Replace Apps Script scriptlets with test values.
+ * `values` maps a variable name to the literal JS text to substitute.
+ */
+function substituteScriptlets(src, values) {
+  const lines = src.split('\n');
+  return lines.map(line => {
+    if (line.indexOf('<?') === -1) return line;
+    const decl = line.match(/var\s+([A-Za-z0-9_]+)\s*=/);
+    const name = decl ? decl[1] : null;
+    const replacement = (name && Object.prototype.hasOwnProperty.call(values, name))
+      ? values[name]
+      : 'null';
+    /* If the scriptlet sits inside quotes ('<?!= x ?>'), the quotes stay and the
+       substitution must be bare text, so strip an outer quoted literal down. */
+    return line.replace(/<\?[\s\S]*?\?>/g, () => {
+      const quoted = new RegExp("'[^']*<\\?");
+      return quoted.test(line) ? String(replacement).replace(/^'|'$/g, '') : replacement;
+    });
+  }).join('\n');
+}
+
+/** All inline <script> bodies of a template, concatenated. */
+function scriptOf(file) {
+  const src = fs.readFileSync(path.join(ROOT, file), 'utf8');
+  const re = /<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/gi;
+  const out = [];
+  let m;
+  while ((m = re.exec(src)) !== null) out.push(m[1]);
+  return out.join('\n');
+}
+
+/**
+ * @param {object} opts
+ *   page          template filename, e.g. 'Company_ValleyFoods_MfgOrderView.html'
+ *   call          function(action, data) -> Promise, the companyCall router
+ *   containers    element ids to pre-register so draw functions can find them
+ *   scriptlets    variable-name -> literal text substitutions
+ *   isSuperAdmin  convenience for the IS_SUPER_ADMIN scriptlet
+ *   userPages     convenience for the USER_PAGES scriptlet
+ */
+function bootPage(opts) {
+  const o = opts || {};
+  const sandbox = makeSandbox();
+
+  /* Containers the page's draw functions write into. innerHTML is captured, so
+     a test can read exactly what was rendered. */
+  const ids = ['vf-mo-view', 'vf-root', 'mo-kpi-body', 'outputs-body', 'workops-body',
+    'byproducts-body', 'vf-loading-overlay'].concat(o.containers || []);
+  ids.forEach(id => {
+    const el = makeElement('div');
+    el.id = id;
+    sandbox.document.body.appendChild(el);
+  });
+
+  /* The real shared component library. */
+  vm.runInContext(scriptOf('UI_Components.html'), sandbox, { filename: 'UI_Components.html' });
+
+  /* The rest of the shared client layer the pages assume exists. */
+  const calls = [];
+  sandbox.API = {
+    getSession: () => ({ token: 'TEST-TOKEN' }),
+    call: (action, payload) => {
+      calls.push({ action, payload });
+      const inner = (payload && payload.module_action) || action;
+      const data = (payload && payload.data) || payload;
+      try {
+        return Promise.resolve(o.call ? o.call(inner, data) : { status: 'success' });
+      } catch (e) {
+        return Promise.reject(e);
+      }
+    }
+  };
+  sandbox.UI = {
+    toast: (m, t) => { (sandbox.__toasts = sandbox.__toasts || []).push([m, t]); },
+    showSpinner: () => {}, hideSpinner: () => {},
+    submitOnce: (el, fn) => fn()
+  };
+  sandbox.FMT = {
+    number: v => (Number(v) || 0).toLocaleString('en-US'),
+    currency: v => (Number(v) || 0).toFixed(2),
+    date: v => String(v || ''),
+    escape: v => String(v == null ? '' : v)
+  };
+  sandbox.SESSION = { token: 'TEST-TOKEN' };
+  sandbox.scriptUrl = 'https://example.invalid/exec';
+  sandbox.__calls = calls;
+
+  const scriptletValues = Object.assign({
+    PAGE_PARAMS: JSON.stringify(o.pageParams || { mo: 'MO-1', sessionToken: 'TEST-TOKEN' }),
+    IS_SUPER_ADMIN: o.isSuperAdmin ? 'true' : 'false',
+    COMPANY_LOGO_URL: "''",
+    COMPANY_PAGES: '[]',
+    CURRENT_ACTION: "'vf_mfg_order'",
+    USER_PAGES: o.userPages === undefined ? 'null' : JSON.stringify(o.userPages)
+  }, o.scriptlets || {});
+
+  const pageSrc = substituteScriptlets(scriptOf(o.page), scriptletValues);
+  vm.runInContext(pageSrc, sandbox, { filename: o.page });
+
+  /** The HTML a container currently holds. */
+  sandbox.html = id => {
+    const el = sandbox.document.getElementById(id);
+    return el ? String(el.innerHTML || '') : '';
+  };
+  return sandbox;
+}
+
+/** Let queued promise callbacks run. */
+const flush = () => new Promise(r => setImmediate(r));
+
+module.exports = { bootPage, scriptOf, substituteScriptlets, flush };

@@ -95,6 +95,16 @@
       var MFG_WORKOPS = [];      /* [{uid,work_center_id,operation_status,notes,start_time,last_pause_time,end_time,actual_hours,work_center_cost,total_cost}] */
       var MFG_BYPRODUCTS = [];   /* [{uid,item,qty,transaction_code,total_cost}] */
 
+      /* U-46. Whether this user may see cost figures. Set from the server's
+         can_see_cost on every load, and deliberately NOT re-derived from
+         USER_PAGES here: the browser cannot see the fail-open guard (which
+         keeps costs visible until the owner grants valley_cost_view to a first
+         role), so deriving it locally would hide figures the server had
+         deliberately sent. Defaults to true, so a response that carries no flag
+         behaves exactly as today. */
+      var CAN_SEE_COST = true;
+      function canCost() { return CAN_SEE_COST !== false; }
+
       function editable() { return IS_SUPER_ADMIN ? true : (CAN_WRITE && MO_STATUS !== 'Locked'); }
       function fmt3(v) { return Number(v || 0).toFixed(3); }
       function fmtMoney(v) { return fmt3(v); }
@@ -151,6 +161,7 @@
         showLoading('جاري تحميل أمر التصنيع…');
         var watchdog = setTimeout(function () { hideLoading(); if (UI.toast) UI.toast('انتهت مهلة التحميل — تحقق من الاتصال وأعد المحاولة', 'error'); }, 25000);
         companyCall('get_valley_mfg_order_detail', { mo_uid: IS_NEW ? '' : MO_UID }).then(function (res) {
+          CAN_SEE_COST = (res.can_see_cost !== false);
           RECIPE_OPTIONS = res.recipe_options || [];
           PRODUCT_OPTIONS = res.product_options || [];
           ENUMS = res.enums || {};
@@ -257,12 +268,15 @@
         var batch = IS_NEW ? inv : (num0(ord.total_batch_cost) || (inv + other));
         var actual = num0(getV_('f-actual')) || num0(ord.actual_qty);
         var unit = actual > 0 ? batch / actual : 0;
+        /* U-46. The quantity tile stays; the four cost tiles go. */
         host.innerHTML = '<div style="display:flex;gap:18px;flex-wrap:wrap;align-items:center;font-size:13px;">' +
-          '<div>🧪 تكلفة الخامات: <b>' + fmtMoney(inv) + '</b></div>' +
-          '<div>⚙️ تكلفة التشغيل: <b>' + (IS_NEW ? 'تُحسب بعد الحفظ' : fmtMoney(other)) + '</b></div>' +
-          '<div>📦 تكلفة الدفعة: <b>' + fmtMoney(batch) + '</b></div>' +
+          (canCost()
+            ? '<div>🧪 تكلفة الخامات: <b>' + fmtMoney(inv) + '</b></div>' +
+              '<div>⚙️ تكلفة التشغيل: <b>' + (IS_NEW ? 'تُحسب بعد الحفظ' : fmtMoney(other)) + '</b></div>' +
+              '<div>📦 تكلفة الدفعة: <b>' + fmtMoney(batch) + '</b></div>'
+            : '') +
           '<div>⚖️ الكمية الفعلية: <b>' + fmt3(actual) + '</b></div>' +
-          '<div>💰 تكلفة الوحدة: <b>' + (actual > 0 ? fmtMoney(unit) : '—') + '</b></div>' +
+          (canCost() ? '<div>💰 تكلفة الوحدة: <b>' + (actual > 0 ? fmtMoney(unit) : '—') + '</b></div>' : '') +
           '</div>';
       }
 
@@ -306,27 +320,27 @@
           html += '<h4>' + esc(o.product_name || o.product_id) + ' — الكمية: ' + fmt3(o.qty) + '</h4>';
           var frs = OUTPUT_FOOTERS[i] || [];
           if (frs.length) {
-            html += '<table><thead><tr><th>الدفعة</th><th>الكود</th><th>الكمية</th><th>تكلفة الوحدة</th><th>الإجمالي</th></tr></thead><tbody>';
+            html += '<table><thead><tr><th>الدفعة</th><th>الكود</th><th>الكمية</th>' + (canCost() ? '<th>تكلفة الوحدة</th><th>الإجمالي</th>' : '') + '</tr></thead><tbody>';
             frs.forEach(function (f) {
               var uc = Number(f.unit_cost) || 0; var q = Number(f.qty) || 0;
-              html += '<tr><td>' + esc(f.item || '') + '</td><td>' + esc(f.item_code || '') + '</td><td>' + fmt3(q) + '</td><td>' + fmt3(uc) + '</td><td>' + fmt3(uc * q) + '</td></tr>';
+              html += '<tr><td>' + esc(f.item || '') + '</td><td>' + esc(f.item_code || '') + '</td><td>' + fmt3(q) + '</td>' + (canCost() ? '<td>' + fmt3(uc) + '</td><td>' + fmt3(uc * q) + '</td>' : '') + '</tr>';
             });
             html += '</tbody></table>';
           } else { html += '<div class="muted">لا توجد دفعات</div>'; }
         });
         html += '</div>';
-        html += '<div class="sec"><h3>مراكز التشغيل</h3><table><thead><tr><th>التسلسل</th><th>مركز التشغيل</th><th>البداية</th><th>النهاية</th><th>الساعات الفعلية</th><th>تكلفة المركز</th><th>الإجمالي</th></tr></thead><tbody>';
+        html += '<div class="sec"><h3>مراكز التشغيل</h3><table><thead><tr><th>التسلسل</th><th>مركز التشغيل</th><th>البداية</th><th>النهاية</th><th>الساعات الفعلية</th>' + (canCost() ? '<th>تكلفة المركز</th><th>الإجمالي</th>' : '') + '</tr></thead><tbody>';
         MFG_WORKOPS.forEach(function (wop) {
-          html += '<tr><td>' + esc(wop.work_center_sequence || '') + '</td><td>' + esc(wop.work_center_name || wop.work_center_id || '') + '</td><td>' + (wop.start_time ? fmtDateTime(wop.start_time) : '') + '</td><td>' + (wop.end_time ? fmtDateTime(wop.end_time) : '') + '</td><td>' + fmt3(wop.actual_hours) + '</td><td>' + fmt3(wop.work_center_cost) + '</td><td>' + fmt3(wop.total_cost) + '</td></tr>';
+          html += '<tr><td>' + esc(wop.work_center_sequence || '') + '</td><td>' + esc(wop.work_center_name || wop.work_center_id || '') + '</td><td>' + (wop.start_time ? fmtDateTime(wop.start_time) : '') + '</td><td>' + (wop.end_time ? fmtDateTime(wop.end_time) : '') + '</td><td>' + fmt3(wop.actual_hours) + '</td>' + (canCost() ? '<td>' + fmt3(wop.work_center_cost) + '</td><td>' + fmt3(wop.total_cost) + '</td>' : '') + '</tr>';
         });
         html += '</tbody></table></div>';
         if (MFG_BYPRODUCTS && MFG_BYPRODUCTS.length) {
-          html += '<div class="sec"><h3>المنتجات المرافقة</h3><table><thead><tr><th>الصنف</th><th>الكمية</th><th>التكلفة</th></tr></thead><tbody>';
-          MFG_BYPRODUCTS.forEach(function (b) { html += '<tr><td>' + esc(b.item || '') + '</td><td>' + fmt3(b.qty) + '</td><td>' + fmt3(b.total_cost) + '</td></tr>'; });
+          html += '<div class="sec"><h3>المنتجات المرافقة</h3><table><thead><tr><th>الصنف</th><th>الكمية</th>' + (canCost() ? '<th>التكلفة</th>' : '') + '</tr></thead><tbody>';
+          MFG_BYPRODUCTS.forEach(function (b) { html += '<tr><td>' + esc(b.item || '') + '</td><td>' + fmt3(b.qty) + '</td>' + (canCost() ? '<td>' + fmt3(b.total_cost) + '</td>' : '') + '</tr>'; });
           html += '</tbody></table></div>';
         }
         html += '<div class="sec"><h3>الإجماليات والاعتمادات</h3>';
-        html += '<div>تكلفة المخزون: ' + fmt3(order.total_inventory_cost) + ' | تكلفة أخرى: ' + fmt3(order.total_other_cost) + ' | تكلفة الدفعة: ' + fmt3(order.total_batch_cost) + ' | قيمة المرافق: ' + fmt3(order.by_product_nrv_value) + '</div>';
+        if (canCost()) html += '<div>تكلفة المخزون: ' + fmt3(order.total_inventory_cost) + ' | تكلفة أخرى: ' + fmt3(order.total_other_cost) + ' | تكلفة الدفعة: ' + fmt3(order.total_batch_cost) + ' | قيمة المرافق: ' + fmt3(order.by_product_nrv_value) + '</div>';
         html += '<div>اعتماد الإنتاج: ' + (uname_(order.production_approval) || '—') + (order.production_approval_time ? ' (' + fmtDateTime(order.production_approval_time) + ')' : '') + '</div>';
         html += '<div>اعتماد الجودة: ' + (uname_(order.quality_approval) || '—') + (order.quality_approval_time ? ' (' + fmtDateTime(order.quality_approval_time) + ')' : '') + '</div>';
         html += '</div>';
@@ -431,7 +445,10 @@
           tr.cells[3].textContent = fmt3(remain);
           tr.cells[3].className = remain < -0.0001 ? 'odoo-neg' : 'odoo-ro';
         }
-        tr.cells[4].textContent = fmtMoney((Number(f.unit_cost) || 0) * alloc);
+        /* U-46. Cell 4 is the line-total column, which is not rendered without
+           the cost grant — writing to it blind would overwrite the delete
+           button's cell. */
+        if (canCost() && tr.cells[4]) tr.cells[4].textContent = fmtMoney((Number(f.unit_cost) || 0) * alloc);
         renderKpi();
       }
 
@@ -471,12 +488,12 @@
               '<td class="odoo-ro">' + availCell + '</td>' +
               '<td>' + inputHtml('ft-qty-' + i + '-' + fi, f.qty, 'number', 'MFGVIEW_PAGE.setFooterQty(' + i + ',' + fi + ',this.value)', { min: '0', step: '0.001', disabled: !editable() }) + '</td>' +
               '<td class="' + remainCellCls + '">' + remainCell + '</td>' +
-              '<td class="odoo-ro">' + fmtMoney(lineTotal) + '</td>' +
+              (canCost() ? '<td class="odoo-ro">' + fmtMoney(lineTotal) + '</td>' : '') +
               (editable() ? '<td><button class="btn btn-ghost" style="padding:2px 6px;font-size:11px;" onclick="MFGVIEW_PAGE.removeFooterRow(' + i + ',' + fi + ')">✕</button></td>' : '<td></td>') +
               '</tr>';
           }).join('');
           var footerTable = footers.length
-            ? '<table class="odoo-table"><thead><tr><th>الدفعة (transaction_code)</th><th style="width:110px;">المتاح</th><th style="width:120px;">المخصص</th><th style="width:110px;">المتبقي</th><th style="width:130px;">إجمالي التكلفة</th><th style="width:30px;"></th></tr></thead><tbody>' + footerRows + '</tbody></table>'
+            ? '<table class="odoo-table"><thead><tr><th>الدفعة (transaction_code)</th><th style="width:110px;">المتاح</th><th style="width:120px;">المخصص</th><th style="width:110px;">المتبقي</th>' + (canCost() ? '<th style="width:130px;">إجمالي التكلفة</th>' : '') + '<th style="width:30px;"></th></tr></thead><tbody>' + footerRows + '</tbody></table>'
             : '<div class="odoo-ro" style="padding:4px;">لا توجد دفعات مسجلة — استخدم «جرّب الوصفة» أو أضف دفعة يدوياً</div>';
           var prodCell = editable()
             ? UIC.combo({ key: 'out-prod-' + i, label: '', required: true, options: PRODUCT_OPTIONS, value: o.product_id, placeholder: 'ابحث عن منتج…' })
@@ -491,7 +508,7 @@
               '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;"><span class="odoo-ro">🧪 المواد المستهلكة (الدفعات)</span>' + (editable() ? '<button class="btn btn-outline" style="padding:2px 8px;font-size:11px;" onclick="MFGVIEW_PAGE.addFooterRow(' + i + ')">+ دفعة</button>' : '') + '</div>' +
               footerTable +
             '</div>' +
-            (o.product_name || outTotal ? '<div class="odoo-ro" style="margin-top:6px;">' + (o.product_name ? 'الصنف: ' + esc(o.product_name) : '') + (footers.length ? ' • إجمالي الكمية: ' + fmt3(qtyTotal) + ' • إجمالي التكلفة: ' + fmtMoney(outTotal) : '') + '</div>' : '') +
+            (o.product_name || outTotal ? '<div class="odoo-ro" style="margin-top:6px;">' + (o.product_name ? 'الصنف: ' + esc(o.product_name) : '') + (footers.length ? ' • إجمالي الكمية: ' + fmt3(qtyTotal) + (canCost() ? ' • إجمالي التكلفة: ' + fmtMoney(outTotal) : '') : '') + '</div>' : '') +
             '</div></div>';
         }).join('');
         tb.innerHTML = html               + (editable() ? '<button class="btn btn-outline" onclick="MFGVIEW_PAGE.addOutput()">+ خامة داخلة</button>' : '');
@@ -578,8 +595,12 @@
       }
       /* U-45. The two sheet-computed cost columns of the work-ops table.
          Kept as small helpers so the cost gate (S6) has one place to switch. */
-      function wcCostHeaders() { return '<th style="width:120px;">تكلفة المركز</th><th style="width:120px;">الإجمالي</th>'; }
+      function wcCostHeaders() {
+        if (!canCost()) return '';
+        return '<th style="width:120px;">تكلفة المركز</th><th style="width:120px;">الإجمالي</th>';
+      }
       function wcCostCells(w) {
+        if (!canCost()) return '';
         var unsaved = !w.uid;
         var wcc = unsaved ? '—' : fmtMoney(w.work_center_cost);
         var tot = unsaved ? '—' : fmtMoney(w.total_cost);
@@ -641,13 +662,15 @@
             '<td>' + bpCell + '</td>' +
             '<td>' + inputHtml('bp-qty-' + i, b.qty, 'number', 'MFGVIEW_PAGE.setByproduct(' + i + ',\'qty\',this.value)', { min: '0', step: '0.01', disabled: !editable() }) + '</td>' +
             '<td>' + inputHtml('bp-code-' + i, b.transaction_code, 'text', 'MFGVIEW_PAGE.setByproduct(' + i + ',\'transaction_code\',this.value)', disOpt()) + '</td>' +
-            '<td>' + inputHtml('bp-cost-' + i, b.total_cost, 'number', 'MFGVIEW_PAGE.setByproduct(' + i + ',\'total_cost\',this.value)', { min: '0', step: '0.01', disabled: !editable() }) + '</td>' +
+            /* U-46. valley_manufacture_by_product.total_cost is a sheet formula,
+               so hiding this input changes nothing about what gets written. */
+            (canCost() ? '<td>' + inputHtml('bp-cost-' + i, b.total_cost, 'number', 'MFGVIEW_PAGE.setByproduct(' + i + ',\'total_cost\',this.value)', { min: '0', step: '0.01', disabled: !editable() }) + '</td>' : '') +
             (editable() ? '<td><button class="btn btn-ghost" style="padding:2px 6px;font-size:11px;" onclick="MFGVIEW_PAGE.removeByproduct(' + i + ')">✕</button></td>' : '<td></td>') +
             '</tr>';
         }).join('');
         var addBtn = editable() ? '<button class="btn btn-outline" style="margin-top:8px;" onclick="MFGVIEW_PAGE.addByproduct()">+ منتج ثانوي</button>' : '';
         tb.innerHTML = (MFG_BYPRODUCTS.length
-          ? '<table class="odoo-table"><thead><tr><th>المنتج الثانوي</th><th>الكمية</th><th>كود الدفعة</th><th>التكلفة</th><th></th></tr></thead><tbody>' + rows + '</tbody></table>'
+          ? '<table class="odoo-table"><thead><tr><th>المنتج الثانوي</th><th>الكمية</th><th>كود الدفعة</th>' + (canCost() ? '<th>التكلفة</th>' : '') + '<th></th></tr></thead><tbody>' + rows + '</tbody></table>'
           : '<div class="odoo-ro">لا توجد منتجات ثانوية</div>') + addBtn;
         if (editable()) {
           MFG_BYPRODUCTS.forEach(function (bb, bi) {
@@ -723,7 +746,11 @@
         if (UIC.validateForm && !UIC.validateForm('mo-form')) return;
         var outputs = MFG_OUTPUTS.map(function (o, i) {
           var pid = o.product_id || (function () { var el = document.getElementById('out-prod-' + i); return el ? el.value : ''; })();
-          var footers = (OUTPUT_FOOTERS[i] || []).filter(function (f) { return f.item; }).map(function (f) { return { item: f.item, item_code: f.item_code, qty: f.qty, unit_cost: f.unit_cost }; });
+          /* U-47/U-46: unit_cost is deliberately NOT sent. The server resolves
+             it from valley_current_products and ignores the payload's value, so
+             a client without the cost grant (which has no unit_cost to send)
+             saves exactly as correctly as one with it. */
+          var footers = (OUTPUT_FOOTERS[i] || []).filter(function (f) { return f.item; }).map(function (f) { return { item: f.item, item_code: f.item_code, qty: f.qty }; });
           return { product_id: pid, qty: o.qty, footers: footers };
         }).filter(function (o) { return o.product_id && num0(o.qty) > 0; });
         if (!outputs.length) { UI.toast && UI.toast('أضف خامة داخلة واحدة على الأقل', 'error'); return; }

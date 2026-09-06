@@ -3318,10 +3318,12 @@ const ValleyFoodsHRModules = (function () {
     /* U-46. Whole sheet rows, so every landed-cost column rides along. Code,
        supplier, dates, type, currency, month/year and the approval columns stay,
        which is what the list needs to stay navigable and approvable. */
-    if (!vfCanSeeCost_(user)) vfStripCostAll_(rows, VF_COST_KEYS.pur_header);
+    var _purCost = vfCanSeeCost_(user);
+    if (!_purCost) vfStripCostAll_(rows, VF_COST_KEYS.pur_header);
     var out = {
       status: 'success',
       headers: rows,
+      can_see_cost: _purCost,
       options: {
         supplier_options: valleyPurchasingSupplierOptions_(dbId),
         currency_options: PURCHASING_CURRENCIES,
@@ -3376,8 +3378,9 @@ const ValleyFoodsHRModules = (function () {
        saveValleyPurchasingCosting_ — this endpoint feeds the edit form as well
        as the read-only view, and a cost-blind client must not be able to write
        the blanks it was given back over the stored figures. */
-    if (!vfCanSeeCost_(user)) vfStripCostAll_(rows, VF_COST_KEYS.pur_line);
-    return { status: 'success', lines: rows };
+    var _plCost = vfCanSeeCost_(user);
+    if (!_plCost) vfStripCostAll_(rows, VF_COST_KEYS.pur_line);
+    return { status: 'success', lines: rows, can_see_cost: _plCost };
   }
 
   function saveValleyPurchasingCosting_(data, user, dbId) {
@@ -3891,7 +3894,7 @@ const ValleyFoodsHRModules = (function () {
     var opts = getValleyOptionSets_(dbId);
     var moUid = String((data && data.mo_uid) || '').trim();
     if (!moUid) {
-      return { status: 'success', is_new: true, recipe_options: opts.recipe_options, product_options: opts.product_options, work_center_options: opts.work_center_options, enums: opts.enums };
+      return { status: 'success', is_new: true, recipe_options: opts.recipe_options, product_options: opts.product_options, work_center_options: opts.work_center_options, enums: opts.enums, can_see_cost: vfCanSeeCost_(user) };
     }
     var full = getValleyMfgOrderFull_(data, user, dbId);
     var ops = getValleyMfgWorkOps_({ mo_uid: moUid }, user, dbId);
@@ -3904,7 +3907,10 @@ const ValleyFoodsHRModules = (function () {
     return {
       status: 'success', is_new: false,
       recipe_options: opts.recipe_options, product_options: opts.product_options, work_center_options: opts.work_center_options, enums: opts.enums,
-      order: full.order, outputs: outputs, workops: ops.workops || [], byproducts: bps.byproducts || []
+      order: full.order, outputs: outputs, workops: ops.workops || [], byproducts: bps.byproducts || [],
+      /* U-46. One flag for the whole page; every composed part above was
+         stripped by its own endpoint through the same gate. */
+      can_see_cost: vfCanSeeCost_(user)
     };
   }
 
@@ -3960,7 +3966,12 @@ const ValleyFoodsHRModules = (function () {
           .sort(function (a, b) { return a.label.localeCompare(b.label, 'ar'); });
       }),
       work_center_options: mfgWorkCenterOptions_(dbId),
-      enums: { operation_type: MFG_OP_TYPES, shift: MFG_SHIFTS }
+      enums: { operation_type: MFG_OP_TYPES, shift: MFG_SHIFTS },
+      /* U-46. The client gate. It must NOT be re-derived in the browser from
+         authorizedPages: the browser cannot see the fail-open guard and would
+         hide costs the server had deliberately sent. This flag is the server's
+         own answer, so the page and the payload always agree. */
+      can_see_cost: vfCanSeeCost_(user)
     };
   }
 
@@ -4967,8 +4978,9 @@ const ValleyFoodsHRModules = (function () {
     /* U-46. Quantity and transaction_code stay; only the cost is removed.
        Safe on the save side: valley_manufacture_by_product.total_cost is a
        sheet formula, so the client's value is overwritten regardless. */
-    if (!vfCanSeeCost_(user)) vfStripCostAll_(rows, VF_COST_KEYS.mfg_bp);
-    return { status: 'success', byproducts: rows, total: total, product_options: productOpts };
+    var _bpCost = vfCanSeeCost_(user);
+    if (!_bpCost) vfStripCostAll_(rows, VF_COST_KEYS.mfg_bp);
+    return { status: 'success', byproducts: rows, total: total, product_options: productOpts, can_see_cost: _bpCost };
   }
 
   function addValleyMfgByproduct_(data, user, dbId) {
@@ -5062,8 +5074,9 @@ const ValleyFoodsHRModules = (function () {
     rows.sort(function (a, b) { return numSafe_(a.work_center_sequence) - numSafe_(b.work_center_sequence); });
     function numSafe_(v) { var n = Number(v); return isNaN(n) ? 9999 : n; }
     /* U-46. The two fields S2 added are exactly the two that get stripped. */
-    if (!vfCanSeeCost_(user)) vfStripCostAll_(rows, VF_COST_KEYS.mfg_workop);
-    return { status: 'success', workops: rows, work_center_options: mfgWorkCenterOptions_(dbId), statuses: MFG_WC_OP_STATUSES };
+    var _wcCost = vfCanSeeCost_(user);
+    if (!_wcCost) vfStripCostAll_(rows, VF_COST_KEYS.mfg_workop);
+    return { status: 'success', workops: rows, work_center_options: mfgWorkCenterOptions_(dbId), statuses: MFG_WC_OP_STATUSES, can_see_cost: _wcCost };
   }
 
   function saveValleyMfgWorkOp_(data, user, dbId) {
