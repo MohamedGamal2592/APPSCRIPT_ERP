@@ -80,7 +80,7 @@
               esc(g.client_label),
               esc(g.date_display),
               g.lines,
-              '<span class="num" style="font-weight:700;color:#dc2626;" data-num="' + g.total_value + '">' + finFmt(g.total_value) + '</span>'
+              '<span class="num" style="font-weight:700;color:var(--danger, #dc2626);" data-num="' + g.total_value + '">' + finFmt(g.total_value) + '</span>'
             ];
           }
         });
@@ -120,9 +120,9 @@
           UIC.field({ key: 'ret-date', label: 'تاريخ المرتجع', type: 'date', required: true, value: todayStr() }) +
         '</div>' +
         '<div id="ret-lines-wrap"><p class="vf-text-muted">اختر الفاتورة لعرض بنودها القابلة للإرجاع.</p></div>' +
-        '<div style="display:flex;justify-content:flex-end;gap:16px;padding:10px;background:#fef2f2;border-radius:8px;margin-top:10px;font-weight:800;">' +
+        '<div style="display:flex;justify-content:flex-end;gap:16px;padding:10px;background:var(--danger-bg, #fef2f2);border-radius:8px;margin-top:10px;font-weight:800;">' +
           '<span>إجمالي قيمة المرتجع:</span>' +
-          '<span id="ret-total" style="color:#dc2626;direction:ltr;">0.00</span>' +
+          '<span id="ret-total" style="color:var(--danger, #dc2626);direction:ltr;">0.00</span>' +
         '</div>';
 
       UIC.openModal('return-modal', { title: 'إضافة مرتجع مبيعات', body: body, footer: false });
@@ -131,7 +131,7 @@
 
       /* footer buttons */
       var foot = document.createElement('div');
-      foot.style.cssText = 'display:flex;justify-content:flex-end;gap:10px;padding:14px 20px;border-top:1px solid #e5e7eb;';
+      foot.style.cssText = 'display:flex;justify-content:flex-end;gap:10px;padding:14px 20px;border-top:1px solid var(--border-color, #e5e7eb);';
       foot.innerHTML =
         '<button class="btn btn-outline" onclick="UIC.closeModal(\'return-modal\')">إلغاء</button>' +
         '<button class="btn btn-primary" onclick="UI.submitOnce(this, RETURNS_PAGE.save)">💾 حفظ المرتجع</button>';
@@ -163,16 +163,16 @@
           var rowsHtml = STMT_LINES.map(function (l, i) {
             var disabled = l.returnable <= 0;
             return '<tr' + (disabled ? ' style="color:#94a3b8;"' : '') + '>' +
-              '<td><b>' + esc(l.product_name) + '</b>' + (l.details ? '<div style="font-size:11px;color:#6b7280;">' + esc(l.details) + '</div>' : '') + '</td>' +
+              '<td><b>' + esc(l.product_name) + '</b>' + (l.details ? '<div style="font-size:11px;color:var(--text-muted, #6b7280);">' + esc(l.details) + '</div>' : '') + '</td>' +
               '<td class="num" data-num="' + l.price + '">' + finFmt(l.price) + '</td>' +
               '<td class="num">' + fmtNumP(l.sold_qty) + '</td>' +
               '<td class="num">' + fmtNumP(l.returned_qty) + '</td>' +
               '<td><input id="ret-qty-' + i + '" class="input" type="number" min="0" max="' + l.returnable + '" step="0.01" value="" data-line="' + esc(l.line_uid) + '" data-max="' + l.returnable + '" data-price="' + l.price + '"' + (disabled ? ' disabled' : '') + ' oninput="RETURNS_PAGE.recalc()" style="max-width:120px;direction:ltr;"></td>' +
-              '<td class="num" style="font-weight:700;color:#dc2626;" data-num="' + (disabled ? '' : '') + '" id="ret-val-' + i + '">0.00</td>' +
+              '<td class="num" style="font-weight:700;color:var(--danger, #dc2626);" data-num="' + (disabled ? '' : '') + '" id="ret-val-' + i + '">0.00</td>' +
             '</tr>';
           }).join('');
           w.innerHTML =
-            '<div style="background:#f0fdf4;border-left:4px solid #16a34a;padding:10px 14px;margin-bottom:10px;font-size:13px;">' +
+            '<div style="background:var(--success-bg, #f0fdf4);border-left:4px solid #16a34a;padding:10px 14px;margin-bottom:10px;font-size:13px;">' +
               'فاتورة <b>' + esc((res.invoice || {}).number || '-') + '</b> — العميل: <b>' + esc((res.invoice || {}).client_name || '-') + '</b> · تاريخها: <b>' + esc((res.invoice || {}).date_display || '-') + '</b>' +
             '</div>' +
             '<table class="table"><thead><tr><th>المنتج</th><th>سعر البيع الأصلي</th><th>المبيع</th><th>مرتجع سابقاً</th><th style="width:130px;">كمية المرتجع</th><th>القيمة</th></tr></thead><tbody>' +

@@ -106,8 +106,8 @@
           var active = BOX_FILTER === b.box;
           return '<div class="stat-card" style="cursor:pointer;' + (active ? 'outline:2px solid #16a34a;' : '') + '" onclick="CASH_PAGE.setBoxFilter(\'' + esc(b.box) + '\')">' +
             '<div class="stat-body">' +
-              '<div style="font-size:12px;color:#6b7280;font-weight:700;">' + esc(b.name) + '</div>' +
-              '<div style="font-size:20px;font-weight:800;direction:ltr;' + (b.balance < 0 ? 'color:#dc2626;' : 'color:#0e623b;') + '">' +
+              '<div style="font-size:12px;color:var(--text-muted, #6b7280);font-weight:700;">' + esc(b.name) + '</div>' +
+              '<div style="font-size:20px;font-weight:800;direction:ltr;' + (b.balance < 0 ? 'color:var(--danger, #dc2626);' : 'color:#0e623b;') + '">' +
                 Number(b.balance).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + '</div>' +
             '</div></div>';
         }).join('') +
@@ -140,7 +140,7 @@
           esc(h.box_name || h.related_box || '-'),
           esc(h.chart_code || h.chart_name || '-'),
           esc(uname_(h.user) || '-'),
-          '<span class="num" style="font-weight:700;' + (num0(h.balance_amount) < 0 ? 'color:#dc2626;' : 'color:#0e623b;') + '" data-num="' + num0(h.balance_amount) + '">' + num0(h.balance_amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + '</span>',
+          '<span class="num" style="font-weight:700;' + (num0(h.balance_amount) < 0 ? 'color:var(--danger, #dc2626);' : 'color:#0e623b;') + '" data-num="' + num0(h.balance_amount) + '">' + num0(h.balance_amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + '</span>',
           UIC.statusPill(isApproved ? 'معتمد' : 'غير معتمد', isApproved ? 'success' : 'neutral'),
           actions
         ];
@@ -186,7 +186,7 @@
       var body = '<form id="cash-form">' +
         '<div class="form-field">' +
           '<label class="form-label">رقم الحركة (يُعتمد تلقائياً)</label>' +
-          '<input id="f-tid-display" class="input" type="text" readonly value="' + esc(record ? record.transaction_id : NEXT_ID) + '" style="background:#f3f4f6;color:#6b7280;cursor:not-allowed;">' +
+          '<input id="f-tid-display" class="input" type="text" readonly value="' + esc(record ? record.transaction_id : NEXT_ID) + '" style="background:var(--bg-subtle, #f3f4f6);color:var(--text-muted, #6b7280);cursor:not-allowed;">' +
         '</div>' +
         UIC.field({ key: 'f-date', label: 'تاريخ الحركة', type: 'date', required: true, value: record ? (record.date_edit || todayStr()) : todayStr() }) +
         UIC.combo({ key: 'f-type', label: 'نوع الحركة', required: true, options: selOpts(OPTIONS.transaction_type), value: record ? record.transaction_type : '', placeholder: 'اكتب للبحث…' }) +
@@ -259,8 +259,8 @@
         '<input type="checkbox" id="' + key + '"' + (checked ? ' checked' : '') + '> ' + label + '</label>';
     }
     function grayedField(id, label) {
-      return '<div><div style="font-size:10px;color:#6b7280;margin-bottom:3px;">' + esc(label) + '</div>' +
-        '<input id="' + id + '" class="input" type="text" readonly value="0.00" style="background:#f3f4f6;color:#6b7280;cursor:not-allowed;direction:ltr;text-align:left;font-family:monospace;"></div>';
+      return '<div><div style="font-size:10px;color:var(--text-muted, #6b7280);margin-bottom:3px;">' + esc(label) + '</div>' +
+        '<input id="' + id + '" class="input" type="text" readonly value="0.00" style="background:var(--bg-subtle, #f3f4f6);color:var(--text-muted, #6b7280);cursor:not-allowed;direction:ltr;text-align:left;font-family:monospace;"></div>';
     }
 
     /* Live grayed previews mirroring the sheet formulas:

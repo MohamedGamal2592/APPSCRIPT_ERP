@@ -62,8 +62,8 @@
         el = document.createElement('div');
         el.id = 'vf-loading-overlay';
         el.style.cssText = 'position:fixed;inset:0;z-index:99999;display:none;align-items:center;justify-content:center;background:rgba(255,255,255,0.78);direction:rtl;';
-        el.innerHTML = '<div style="background:#fff;border:1px solid #e3e3e3;border-radius:12px;padding:22px 30px;box-shadow:0 6px 24px rgba(0,0,0,0.12);display:flex;flex-direction:column;align-items:center;gap:12px;">' +
-          '<div style="width:34px;height:34px;border:4px solid #eee;border-top-color:#875A7B;border-radius:50%;animation:vfspin 0.8s linear infinite;"></div>' +
+        el.innerHTML = '<div style="background:var(--bg-surface, #fff);border:1px solid #e3e3e3;border-radius:12px;padding:22px 30px;box-shadow:0 6px 24px rgba(0,0,0,0.12);display:flex;flex-direction:column;align-items:center;gap:12px;">' +
+          '<div style="width:34px;height:34px;border:4px solid var(--border-color, #eee);border-top-color:#875A7B;border-radius:50%;animation:vfspin 0.8s linear infinite;"></div>' +
           '<div id="vf-loading-msg" style="font-family:Tahoma;color:#444;font-size:14px;">جاري التحميل…</div></div>';
         var st = document.createElement('style'); st.textContent = '@keyframes vfspin{to{transform:rotate(360deg)}}'; document.head.appendChild(st);
         document.body.appendChild(el);
@@ -214,7 +214,7 @@
             checkboxField('f-tax-system-mo', 'خاضع للنظام الضريبي', isEdit ? String(order.tax_system || '').toLowerCase() === 'true' : false) +
           '</div>' +
           (isEdit ?
-            '<div style="margin-top:14px;padding-top:10px;border-top:1px dashed #e5e7eb;font-size:12.5px;color:#6b7280;">' +
+            '<div style="margin-top:14px;padding-top:10px;border-top:1px dashed var(--border-color, #e5e7eb);font-size:12.5px;color:var(--text-muted, #6b7280);">' +
               'اعتماد الإنتاج: <b>' + esc(order.production_approval || '—') + '</b> · اعتماد الجودة: <b>' + esc(order.quality_approval || '—') + '</b>' +
             '</div>' : '') +
         '</div>' +
@@ -238,7 +238,7 @@
       if (modal) { var box = modal.querySelector('.modal'); if (box) box.style.maxWidth = '1200px'; }
 
       var foot = document.createElement('div');
-      foot.style.cssText = 'display:flex;justify-content:flex-end;gap:10px;padding:14px 20px;border-top:1px solid #e5e7eb;';
+      foot.style.cssText = 'display:flex;justify-content:flex-end;gap:10px;padding:14px 20px;border-top:1px solid var(--border-color, #e5e7eb);';
       foot.innerHTML =
         '<button class="btn btn-outline" onclick="UIC.closeModal(\'mfg-modal\')">إلغاء</button>' +
         '<button class="btn btn-primary" onclick="UI.submitOnce(this, MFG_PAGE.save)">💾 حفظ</button>';
@@ -315,17 +315,17 @@
         var footerHtml = footerRows.map(function (f, fi) {
           return '<tr><td>' + UIC.combo({ key: 'ft-item-' + i + '-' + fi, options: PRODUCT_OPTIONS, value: f.item, placeholder: 'ابحث…' }) + '</td>' +
             '<td><input id="ft-qty-' + i + '-' + fi + '" class="input" type="number" min="0" step="0.01" value="' + (f.qty || '') + '" style="max-width:100px;"></td>' +
-            '<td><button type="button" class="btn btn-outline" style="padding:2px 6px;color:#dc2626;font-size:10px;" onclick="MFG_PAGE.removeFooterRow(' + i + ',' + fi + ')">✕</button></td></tr>';
+            '<td><button type="button" class="btn btn-outline" style="padding:2px 6px;color:var(--danger, #dc2626);font-size:10px;" onclick="MFG_PAGE.removeFooterRow(' + i + ',' + fi + ')">✕</button></td></tr>';
         }).join('');
-        html += '<div style="border:1px solid #e5e7eb;border-radius:8px;margin-bottom:8px;overflow:hidden;">' +
-          '<div style="display:grid;grid-template-columns:1fr 120px 40px;gap:8px;padding:10px;background:#f0fdf4;align-items:center;">' +
+        html += '<div style="border:1px solid var(--border-color, #e5e7eb);border-radius:8px;margin-bottom:8px;overflow:hidden;">' +
+          '<div style="display:grid;grid-template-columns:1fr 120px 40px;gap:8px;padding:10px;background:var(--success-bg, #f0fdf4);align-items:center;">' +
             '<div>' + UIC.combo({ key: 'out-prod-' + i, options: PRODUCT_OPTIONS, value: o.product_id, placeholder: 'ابحث عن منتج…' }) + '</div>' +
             '<div><input id="out-qty-' + i + '" class="input" type="number" min="0.01" step="0.01" value="' + (o.qty || '') + '" placeholder="الكمية" oninput="MFG_PAGE.recalc()"></div>' +
-            '<div><button type="button" class="btn btn-outline" style="padding:3px 8px;color:#dc2626;" onclick="MFG_PAGE.removeOutput(' + i + ')">✕</button></div>' +
+            '<div><button type="button" class="btn btn-outline" style="padding:3px 8px;color:var(--danger, #dc2626);" onclick="MFG_PAGE.removeOutput(' + i + ')">✕</button></div>' +
           '</div>' +
-          '<div style="padding:8px 10px;border-top:1px dashed #e5e7eb;background:#fafafa;">' +
+          '<div style="padding:8px 10px;border-top:1px dashed var(--border-color, #e5e7eb);background:var(--bg-subtle, #fafafa);">' +
             '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">' +
-              '<span style="font-size:11px;color:#6b7280;">🧪 المواد المستهلكة لهذا المنتج</span>' +
+              '<span style="font-size:11px;color:var(--text-muted, #6b7280);">🧪 المواد المستهلكة لهذا المنتج</span>' +
               (CAN_WRITE ? '<button type="button" class="btn btn-outline" style="padding:1px 6px;font-size:10px;" onclick="MFG_PAGE.addFooterRow(' + i + ')">+ صنف</button>' : '') +
             '</div>' +
             (footerRows.length ?
@@ -395,7 +395,7 @@
       }
       var html = '';
       CONSUMPTION_DRAFT.forEach(function (c, i) {
-        html += '<div style="border-bottom:1px dashed #e5e7eb;padding:8px 0;">' +
+        html += '<div style="border-bottom:1px dashed var(--border-color, #e5e7eb);padding:8px 0;">' +
           '<div style="font-weight:700;font-size:13px;margin-bottom:6px;">🧪 ' + esc(c.raw_name || c.item_pid) +
           ' — المطلوب: <span style="direction:ltr;display:inline-block;">' + Number(c.required).toLocaleString('en-US', { maximumFractionDigits: 2 }) + '</span>' +
           ' <span id="cons-sum-' + i + '" style="font-weight:800;"></span></div>' +
@@ -611,10 +611,10 @@
                 buttons = '<button class="btn btn-primary" style="padding:2px 8px;font-size:10px;" onclick="MFG_PAGE.startWorkOp(\'' + esc(w.unique_id) + '\')">▶️ بدء</button>';
               } else if (w.operation_status === 'In Progress') {
                 buttons = '<button class="btn btn-outline" style="padding:2px 8px;font-size:10px;color:#d97706;" onclick="MFG_PAGE.pauseWorkOp(\'' + esc(w.unique_id) + '\')">⏸️ إيقاف مؤقت</button> ' +
-                  '<button class="btn btn-outline" style="padding:2px 8px;font-size:10px;color:#dc2626;" onclick="MFG_PAGE.stopWorkOp(\'' + esc(w.unique_id) + '\')">⏹️ إنهاء</button>';
+                  '<button class="btn btn-outline" style="padding:2px 8px;font-size:10px;color:var(--danger, #dc2626);" onclick="MFG_PAGE.stopWorkOp(\'' + esc(w.unique_id) + '\')">⏹️ إنهاء</button>';
               } else if (w.operation_status === 'Paused') {
                 buttons = '<button class="btn btn-primary" style="padding:2px 8px;font-size:10px;" onclick="MFG_PAGE.resumeWorkOp(\'' + esc(w.unique_id) + '\')">▶️ استئناف</button> ' +
-                  '<button class="btn btn-outline" style="padding:2px 8px;font-size:10px;color:#dc2626;" onclick="MFG_PAGE.stopWorkOp(\'' + esc(w.unique_id) + '\')">⏹️ إنهاء</button>';
+                  '<button class="btn btn-outline" style="padding:2px 8px;font-size:10px;color:var(--danger, #dc2626);" onclick="MFG_PAGE.stopWorkOp(\'' + esc(w.unique_id) + '\')">⏹️ إنهاء</button>';
               }
             }
             var timerCell = '';
@@ -638,7 +638,7 @@
               '<td>' + buttons + '</td>' +
               '</tr>';
           }).join('');
-          var form = CAN_WRITE ? '<form id="workops-form"><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;align-items:flex-end;background:#f8fafc;border-radius:8px;padding:12px;border:1px solid #e5e7eb;">' +
+          var form = CAN_WRITE ? '<form id="workops-form"><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;align-items:flex-end;background:var(--bg-subtle, #f8fafc);border-radius:8px;padding:12px;border:1px solid var(--border-color, #e5e7eb);">' +
             UIC.combo({ key: 'wo-wc', label: 'مركز العمل', required: true, options: window.__WC_OPTIONS, placeholder: 'اكتب للبحث…' }) +
             UIC.field({ key: 'wo-notes', label: 'ملاحظات', type: 'text' }) +
             '</div><input type="hidden" id="wo-mo-uid" value="' + esc(moUid) + '"></form>' : '';

@@ -173,10 +173,10 @@
         '<td><input id="ln-price-' + i + '" class="input" type="number" min="0" step="0.01" value="' + (ln.price !== '' ? ln.price : '') + '" oninput="SALES_PAGE.recalc()"></td>' +
         '<td>' + UIC.combo({ key: 'ln-tax-' + i, label: '', required: true, options: (ENUMS.line_tax || []).map(function (t) { return { value: t, label: (t * 100) + '%' }; }), value: String(ln.tax), placeholder: '%' }) + '</td>' +
         '<td class="num" style="font-weight:700;direction:ltr;" id="ln-total-' + i + '">' + rowTotal.toLocaleString('en-US', { minimumFractionDigits: 2 }) + '</td>' +
-        '<td><button class="btn btn-outline" style="padding:3px 10px;color:#dc2626;" onclick="SALES_PAGE.removeLine(' + i + ')">✕</button></td>' +
+        '<td><button class="btn btn-outline" style="padding:3px 10px;color:var(--danger, #dc2626);" onclick="SALES_PAGE.removeLine(' + i + ')">✕</button></td>' +
       '</tr>' +
       /* P2: batch-allocation strip (hidden until product chosen) */
-      '<tr id="alloc-row-' + i + '" style="display:none;"><td colspan="7" style="background:#f8fafc;padding:8px 14px;">' +
+      '<tr id="alloc-row-' + i + '" style="display:none;"><td colspan="7" style="background:var(--bg-subtle, #f8fafc);padding:8px 14px;">' +
         '<div style="font-size:12px;font-weight:700;color:#166534;margin-bottom:6px;">📦 تخصيص الدفعات <span class="num" style="color:#94a3b8;font-weight:400;">(يجب أن يساوي الكمية)</span> — <span id="alloc-sum-' + i + '">0</span> / <span id="alloc-need-' + i + '">' + (ln.qty || 0) + '</span></div>' +
         '<div id="alloc-strip-' + i + '" style="color:#94a3b8;font-size:12px;">اختر المنتج أولاً لعرض الدفعات المتاحة…</div>' +
       '</td></tr>';
@@ -188,7 +188,7 @@
       /* Party auto-fill strip: tax id / address / phone from the party record */
       var autofill =
         '<div class="form-field"><label class="form-label">بيانات العميل (تُجلب تلقائياً)</label>' +
-        '<div id="party-chips" class="input" readonly style="background:#f3f4f6;color:#6b7280;min-height:38px;display:flex;align-items:center;">—</div></div>';
+        '<div id="party-chips" class="input" readonly style="background:var(--bg-subtle, #f3f4f6);color:var(--text-muted, #6b7280);min-height:38px;display:flex;align-items:center;">—</div></div>';
       var body = '<form id="sales-form">' +
         '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-bottom:14px;">' +
           partyFieldHtml(inv) + autofill +
@@ -201,7 +201,7 @@
           comboEnum('f-class-statement', 'نوع البيان', ENUMS.class_statement, inv ? Number(inv['نوع البيان (سلعة 3/خدمة 4/تسويات 5)']) : null) +
           comboEnum('f-class-goods', 'نوع السلعة', ENUMS.class_goods, inv ? Number(inv['نوع السلعة (محلي 1/صادرات 2/آلات ومعدات 5/أجزاء آلات 6/إعفاءات 7)']) : null) +
         '</div>' +
-        '<div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;padding:12px;">' +
+        '<div style="background:var(--bg-subtle, #f8fafc);border:1px solid var(--border-color, #e5e7eb);border-radius:8px;padding:12px;">' +
           '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">' +
             '<b style="color:#166534;">بنود الفاتورة</b>' +
             '<div style="display:flex;gap:8px;">' +
@@ -213,7 +213,7 @@
             '<thead><tr><th style="min-width:220px;">المنتج</th><th>تفاصيل</th><th>الكمية</th><th>السعر</th><th>الضريبة</th><th>الإجمالي</th><th></th></tr></thead>' +
             '<tbody id="lines-body"></tbody>' +
           '</table></div>' +
-          '<div id="lines-footer" style="display:flex;justify-content:flex-end;gap:16px;padding:10px;background:#f0fdf4;border-radius:8px;margin-top:8px;font-weight:800;"></div>' +
+          '<div id="lines-footer" style="display:flex;justify-content:flex-end;gap:16px;padding:10px;background:var(--success-bg, #f0fdf4);border-radius:8px;margin-top:8px;font-weight:800;"></div>' +
         '</div>' +
       '</form>';
 
@@ -229,7 +229,7 @@
 
       /* footer action bar inside modal */
       var foot = document.createElement('div');
-      foot.style.cssText = 'display:flex;justify-content:flex-end;gap:10px;padding:14px 20px;border-top:1px solid #e5e7eb;';
+      foot.style.cssText = 'display:flex;justify-content:flex-end;gap:10px;padding:14px 20px;border-top:1px solid var(--border-color, #e5e7eb);';
       foot.innerHTML =
         '<button class="btn btn-outline" onclick="UIC.closeModal(\'sales-modal\')">إلغاء</button>' +
         (isEdit ? '<button class="btn btn-primary" onclick="UI.submitOnce(this, SALES_PAGE.save)">💾 حفظ التعديلات</button>'
@@ -340,13 +340,13 @@
           var totalAvail = batches.reduce(function(s,b){ return s + (Number(b.available)||0); }, 0);
           if (need > totalAvail + 0.0001) {
             shortEl.style.display = '';
-            shortEl.innerHTML = '<span style="color:#dc2626;font-weight:700;">⚠ الكمية المطلوبة غير متوفرة — المتاح ' + fmtNum2(totalAvail) + '، العجز ' + fmtNum2(need - totalAvail) + '</span>';
+            shortEl.innerHTML = '<span style="color:var(--danger, #dc2626);font-weight:700;">⚠ الكمية المطلوبة غير متوفرة — المتاح ' + fmtNum2(totalAvail) + '، العجز ' + fmtNum2(need - totalAvail) + '</span>';
           } else if (mismatch && s2 > 0) {
             shortEl.style.display = '';
-            shortEl.innerHTML = '<span style="color:#dc2626;">⚠ مجموع التخصيص (' + fmtNum2(s2) + ') لا يساوي الكمية (' + fmtNum2(need) + ')</span>';
+            shortEl.innerHTML = '<span style="color:var(--danger, #dc2626);">⚠ مجموع التخصيص (' + fmtNum2(s2) + ') لا يساوي الكمية (' + fmtNum2(need) + ')</span>';
           } else if (dupBatch.dup) {
             shortEl.style.display = '';
-            shortEl.innerHTML = '<span style="color:#dc2626;">⚠ الدفعة مكررة: ' + esc(dupBatch.lot) + ' في أكثر من بند</span>';
+            shortEl.innerHTML = '<span style="color:var(--danger, #dc2626);">⚠ الدفعة مكررة: ' + esc(dupBatch.lot) + ' في أكثر من بند</span>';
           } else {
             shortEl.style.display = 'none'; shortEl.innerHTML = '';
           }
@@ -357,8 +357,8 @@
       }
       // footer duplicate warnings
       var footerDup = '';
-      if (dupProd.dup) footerDup += '<span style="color:#dc2626;margin-left:12px;">⚠ منتج مكرر — يمنع الحفظ</span>';
-      if (dupBatch.dup) footerDup += '<span style="color:#dc2626;">⚠ دفعة مكررة — يمنع الحفظ</span>';
+      if (dupProd.dup) footerDup += '<span style="color:var(--danger, #dc2626);margin-left:12px;">⚠ منتج مكرر — يمنع الحفظ</span>';
+      if (dupBatch.dup) footerDup += '<span style="color:var(--danger, #dc2626);">⚠ دفعة مكررة — يمنع الحفظ</span>';
       var total = net + taxV;
       document.getElementById('lines-footer').innerHTML =
         footerDup +

@@ -723,10 +723,10 @@
       if (!lrows) lrows = '<tr><td colspan="' + (canCost() ? 6 : 3) + '" style="text-align:center;padding:12px;">لا توجد أصناف</td></tr>';
       return '<!DOCTYPE html><html lang="ar" dir="rtl"><head><meta charset="utf-8">' +
         '<title>طباعة عملية شراء — ' + esc(String(rec.Code)) + '</title>' +
-        '<style>body{font-family:Tahoma,Arial,sans-serif;padding:24px;color:#111;}' +
+        '<style>body{font-family:Tahoma,Arial,sans-serif;padding:24px;color:var(--text-main, #111);}' +
         'h2{margin:0 0 12px;}table{border-collapse:collapse;width:100%;margin-bottom:18px;}' +
         'th,td{border:1px solid #999;padding:6px 10px;text-align:right;}' +
-        'th{background:#f0f0f0;white-space:nowrap;}td.num{text-align:left;direction:ltr;}' +
+        'th{background:var(--bg-subtle, #f0f0f0);white-space:nowrap;}td.num{text-align:left;direction:ltr;}' +
         '.btn{margin-bottom:16px;padding:8px 18px;background:#1976d2;color:#fff;border:none;border-radius:6px;cursor:pointer;}' +
         '@media print{.no-print{display:none;}}</style></head><body>' +
         '<button class="btn no-print" onclick="window.print()">طباعة هذه الصفحة</button>' +

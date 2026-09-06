@@ -113,7 +113,7 @@
       var body = '<form id="pt-form">' +
         '<div class="form-field">' +
           '<label class="form-label">الرقم (يُعتمد تلقائياً)</label>' +
-          '<input id="f-id-display" class="input" type="text" readonly value="' + esc(idValue) + '" style="background:#f3f4f6;color:#6b7280;cursor:not-allowed;">' +
+          '<input id="f-id-display" class="input" type="text" readonly value="' + esc(idValue) + '" style="background:var(--bg-subtle, #f3f4f6);color:var(--text-muted, #6b7280);cursor:not-allowed;">' +
         '</div>' +
         UIC.field({ key: 'f-name', label: 'الاسم', type: 'text', required: true, value: row ? row.name : '', noCorrect: true }) +
         UIC.combo({ key: 'f-direction', label: 'الاتجاه', required: true, options: (ENUMS.customer_direction || []).map(function (v) { return { value: v, label: v }; }), value: row ? row.customer_direction : '', placeholder: 'اكتب للبحث…' }) +
@@ -174,8 +174,8 @@
       return n < 0 ? '(' + abs + ')' : abs;
     }
     function chip(label, value, extraStyle) {
-      return '<div style="background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:8px;min-width:120px;text-align:center;">' +
-        '<div style="font-size:11px;color:#6b7280;margin-bottom:4px;font-weight:600;">' + label + '</div>' +
+      return '<div style="background:var(--bg-surface, #fff);border:1px solid var(--border-color, #e5e7eb);border-radius:8px;padding:8px;min-width:120px;text-align:center;">' +
+        '<div style="font-size:11px;color:var(--text-muted, #6b7280);margin-bottom:4px;font-weight:600;">' + label + '</div>' +
         '<div style="font-size:15px;font-weight:700;direction:ltr;' + (extraStyle || '') + '">' + value + '</div></div>';
     }
 
@@ -193,12 +193,12 @@
     function renderStatementModal() {
       var p = STMT.party;
       var body =
-        '<div style="background:#f0fdf4;border:1px solid #a7f0ba;border-left:4px solid #16a34a;border-radius:8px;padding:14px 18px;margin-bottom:14px;display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;">' +
+        '<div style="background:var(--success-bg, #f0fdf4);border:1px solid #a7f0ba;border-left:4px solid #16a34a;border-radius:8px;padding:14px 18px;margin-bottom:14px;display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;">' +
           '<div><h3 style="margin:0;color:#166534;font-size:18px;">' + esc(p.name) + '</h3>' +
-          '<div style="font-size:12px;color:#6b7280;margin-top:6px;">العنوان: <b>' + esc(p.address || '-') + '</b> · الرقم الضريبي: <b>' + esc(p.tax_id || '-') + '</b> · الهاتف: <b>' + esc(p.phone || '-') + '</b></div></div>' +
+          '<div style="font-size:12px;color:var(--text-muted, #6b7280);margin-top:6px;">العنوان: <b>' + esc(p.address || '-') + '</b> · الرقم الضريبي: <b>' + esc(p.tax_id || '-') + '</b> · الهاتف: <b>' + esc(p.phone || '-') + '</b></div></div>' +
           '<div style="text-align:left;color:#9ca3af;font-size:11px;">Valley Foods ERP<br>IFRS Compliant Ledger</div>' +
         '</div>' +
-        '<div id="st-filter" style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:12px;background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;padding:12px;">' +
+        '<div id="st-filter" style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:12px;background:var(--bg-subtle, #f8fafc);border:1px solid var(--border-color, #e5e7eb);border-radius:8px;padding:12px;">' +
           UIC.field({ key: 'st-from', label: 'من تاريخ', type: 'date' }) +
           UIC.field({ key: 'st-to', label: 'إلى تاريخ', type: 'date' }) +
           UIC.combo({ key: 'st-type', label: 'نوع الحركة', options: [
@@ -256,7 +256,7 @@
 
       document.getElementById('st-kpis').innerHTML =
         chip('رصيد أول المدة', finFmt(opening), 'color:#0284c7;') +
-        chip('إجمالي المبيعات (مدين)', finFmt(kSales), 'color:#dc2626;') +
+        chip('إجمالي المبيعات (مدين)', finFmt(kSales), 'color:var(--danger, #dc2626);') +
         chip('المرتجعات (دائن)', finFmt(kReturns), 'color:#2563eb;') +
         chip('التحصيلات (دائن)', finFmt(kCollections), 'color:#059669;') +
         chip('المدفوعات له (مدين)', finFmt(kPayments), 'color:#b45309;') +
@@ -279,17 +279,17 @@
         var debit = (t.type === 'sales' || t.type === 'payments') ? finFmt(t.value) : '-';
         var credit = (t.type !== 'sales' && t.type !== 'payments') ? finFmt(t.value) : '-';
         var subHtml = (t.sub_rows || []).map(function (s) {
-          var det = s.details ? '<div style="font-size:11px;color:#6b7280;background:#eef2ff;padding:2px 8px;border-radius:4px;display:inline-block;">📝 ' + esc(s.details) + '</div>' : '';
-          return '<tr style="background:#fafafa;"><td></td><td style="color:#9ca3af;">↳ ' + esc(s.doc_id) + '</td>' +
+          var det = s.details ? '<div style="font-size:11px;color:var(--text-muted, #6b7280);background:#eef2ff;padding:2px 8px;border-radius:4px;display:inline-block;">📝 ' + esc(s.details) + '</div>' : '';
+          return '<tr style="background:var(--bg-subtle, #fafafa);"><td></td><td style="color:#9ca3af;">↳ ' + esc(s.doc_id) + '</td>' +
             '<td style="text-align:right;"><b>' + esc(s.name) + '</b> ' + det +
-            ' <span style="font-size:11px;color:#6b7280;">الكمية: <b>' + finFmt(s.qty) + '</b> | السعر: <b>' + finFmt(s.price) + '</b></span></td>' +
+            ' <span style="font-size:11px;color:var(--text-muted, #6b7280);">الكمية: <b>' + finFmt(s.qty) + '</b> | السعر: <b>' + finFmt(s.price) + '</b></span></td>' +
             '<td colspan="3"></td></tr>';
         }).join('');
         html += '<tr><td>' + esc(t.date_display) + '</td><td style="direction:ltr;">' + esc(t.doc_id) + '</td>' +
           '<td style="text-align:right;font-weight:700;">' + esc(t.desc_ar) + '</td>' +
-          '<td class="num" style="' + (debit !== '-' ? 'color:#dc2626;' : '') + '" data-num="' + (debit !== '-' ? t.value : '') + '">' + debit + '</td>' +
+          '<td class="num" style="' + (debit !== '-' ? 'color:var(--danger, #dc2626);' : '') + '" data-num="' + (debit !== '-' ? t.value : '') + '">' + debit + '</td>' +
           '<td class="num" style="' + (credit !== '-' ? 'color:#059669;' : '') + '" data-num="' + (credit !== '-' ? t.value : '') + '">' + credit + '</td>' +
-          '<td class="num" style="font-weight:800;background:#f8fafc;" data-num="' + running + '">' + finFmt(running) + '</td></tr>' + subHtml;
+          '<td class="num" style="font-weight:800;background:var(--bg-subtle, #f8fafc);" data-num="' + running + '">' + finFmt(running) + '</td></tr>' + subHtml;
       });
 
       if (!visible.length && !fromV) html += '<tr><td colspan="6" style="text-align:center;padding:30px;">لا توجد حركات مسجلة لهذا الحساب.</td></tr>';
@@ -301,7 +301,7 @@
       document.getElementById('st-net').innerHTML =
         '<div style="background:linear-gradient(135deg,#0e623b,#059669);border-radius:8px;padding:16px 22px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">' +
           '<div><div style="color:#d1fae5;font-size:13px;font-weight:700;">صافي رصيد الحساب الموحد</div>' +
-          '<div style="background:#fff;border-radius:20px;padding:5px 14px;display:inline-block;margin-top:6px;font-weight:700;font-size:13px;color:' + dirColor + ';">' + dirBadge + '</div></div>' +
+          '<div style="background:var(--bg-surface, #fff);border-radius:20px;padding:5px 14px;display:inline-block;margin-top:6px;font-weight:700;font-size:13px;color:' + dirColor + ';">' + dirBadge + '</div></div>' +
           '<div style="font-size:26px;font-weight:800;color:#fff;direction:ltr;">' + finFmt(running) + '</div>' +
         '</div>';
 
@@ -332,10 +332,10 @@
 
       container.innerHTML =
         '<h3 style="color:#166534;margin:20px 0 8px;border-right:4px solid #16a34a;padding-right:10px;">📦 تقييم المخزون المتاح بالعنابر</h3>' +
-        '<p style="font-size:12px;color:#6b7280;margin:-4px 0 10px;">يمكن تعديل سعر التقييم لكل صنف — يُعاد احتساب الإجمالي وخصمه من الصافي تلقائياً.</p>' +
+        '<p style="font-size:12px;color:var(--text-muted, #6b7280);margin:-4px 0 10px;">يمكن تعديل سعر التقييم لكل صنف — يُعاد احتساب الإجمالي وخصمه من الصافي تلقائياً.</p>' +
         '<table class="table"><thead><tr><th>الصنف</th><th>الكمية الحالية</th><th>سعر التقييم ✏️</th><th>إجمالي القيمة</th></tr></thead><tbody>' +
         rowsHtml + '</tbody></table>' +
-        '<div style="display:flex;justify-content:space-between;align-items:center;background:#f0fdf4;border-radius:8px;padding:12px 16px;margin-top:10px;flex-wrap:wrap;gap:8px;">' +
+        '<div style="display:flex;justify-content:space-between;align-items:center;background:var(--success-bg, #f0fdf4);border-radius:8px;padding:12px 16px;margin-top:10px;flex-wrap:wrap;gap:8px;">' +
           '<button class="btn btn-outline" onclick="PARTIES_PAGE.resetStockPrices()">🔄 إعادة تعيين الأسعار</button>' +
           '<div><span style="font-weight:700;color:#166534;">إجمالي قيمة المخزون:</span> ' +
           '<span id="stock-total" style="font-size:19px;font-weight:800;color:#059669;direction:ltr;">' + finFmt(stockTotal()) + '</span></div>' +
@@ -381,9 +381,9 @@
       var badge = adjusted > 0 ? 'لصالح الشركة (مدين) 🔺' : (adjusted < 0 ? 'لصالح العميل (دائن) 🔻' : 'متوازن 🤝');
       var color = adjusted > 0 ? '#dc2626' : (adjusted < 0 ? '#0e623b' : '#6b7280');
       document.getElementById('adjusted-box').innerHTML =
-        '<div style="background:linear-gradient(135deg,#fffbeb,#fef3c7);border:2px solid #b45309;border-radius:8px;padding:14px 20px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">' +
+        '<div style="background:linear-gradient(135deg,var(--warning-bg, #fffbeb),#fef3c7);border:2px solid #b45309;border-radius:8px;padding:14px 20px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">' +
           '<div><div style="color:#92400e;font-size:13px;font-weight:700;">⚖️ الرصيد المستحق بعد خصم المخزون</div>' +
-          '<div style="background:#fff;border-radius:20px;padding:4px 12px;display:inline-block;margin-top:5px;font-weight:700;font-size:12px;color:' + color + ';">' + badge + '</div></div>' +
+          '<div style="background:var(--bg-surface, #fff);border-radius:20px;padding:4px 12px;display:inline-block;margin-top:5px;font-weight:700;font-size:12px;color:' + color + ';">' + badge + '</div></div>' +
           '<div style="font-size:23px;font-weight:800;color:#b45309;direction:ltr;">' + finFmt(adjusted) + '</div>' +
         '</div>';
     }
@@ -405,7 +405,7 @@
       win.document.open();
       win.document.write(
         '<!DOCTYPE html><html dir="rtl" lang="ar"><head><meta charset="UTF-8"><title>كشف حساب - ' + p.name + '</title>' +
-        '<style>body{font-family:Segoe UI,Tahoma,sans-serif;margin:20px;color:#1f2937;}h2{text-align:center;color:#094d2c;border-bottom:3px solid #0e623b;padding-bottom:10px;}meta{}</style></head><body>' +
+        '<style>body{font-family:Segoe UI,Tahoma,sans-serif;margin:20px;color:var(--text-main, #1f2937);}h2{text-align:center;color:#094d2c;border-bottom:3px solid #0e623b;padding-bottom:10px;}meta{}</style></head><body>' +
         '<h2>📊 كشف حساب مالي تفصيلي — ' + esc(p.name) + '</h2>' +
         '<p style="text-align:center;color:#555;">الرقم الضريبي: ' + esc(p.tax_id || '-') + ' · العنوان: ' + esc(p.address || '-') + ' · الهاتف: ' + esc(p.phone || '-') + '</p>' +
         (ledger ? ledger.outerHTML : '') +

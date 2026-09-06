@@ -124,7 +124,7 @@
       var m = document.getElementById('tech-modal');
       if (m) { var b = m.querySelector('.modal'); if (b) b.style.maxWidth = '900px'; }
       var foot = document.createElement('div');
-      foot.style.cssText = 'display:flex;justify-content:flex-end;gap:10px;padding:14px 20px;border-top:1px solid #e5e7eb;';
+      foot.style.cssText = 'display:flex;justify-content:flex-end;gap:10px;padding:14px 20px;border-top:1px solid var(--border-color, #e5e7eb);';
       foot.innerHTML = '<button class="btn btn-outline" onclick="UIC.closeModal(\'tech-modal\')">إلغاء</button>' +
         '<button class="btn btn-primary" onclick="UI.submitOnce(this, TECH_PAGE.save)">💾 حفظ</button>';
       m.querySelector('.modal').appendChild(foot);

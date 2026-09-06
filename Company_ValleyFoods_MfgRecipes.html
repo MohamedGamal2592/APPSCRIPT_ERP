@@ -129,7 +129,7 @@
           checkboxField('f-active', 'الوصفة مفعلة', row ? !(row.is_active === false || String(row.is_active).toLowerCase() === 'false') : true) +
         '</div>' +
         UIC.field({ key: 'f-notes', label: 'ملاحظات', type: 'textarea', value: row ? (row.notes || '') : '' }) +
-        '<div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;padding:12px;margin-top:6px;">' +
+        '<div style="background:var(--bg-subtle, #f8fafc);border:1px solid var(--border-color, #e5e7eb);border-radius:8px;padding:12px;margin-top:6px;">' +
           '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">' +
             '<b style="color:#166534;">خطوات الاستهلاك (المواد الخام)</b>' +
             '<button type="button" class="btn btn-outline" onclick="RECIPES_PAGE.addStep()">+ إضافة خطوة</button>' +
@@ -169,7 +169,7 @@
           '<td>' + UIC.combo({ key: 'st-rm-' + i, options: rmOpts, value: rmSel || (s.raw_label || ''), placeholder: 'ابحث عن الخامة…' }) + '</td>' +
           '<td><input id="st-qty-' + i + '" class="input" type="number" min="0" step="0.01" value="' + (s.required_qty || '') + '" oninput="RECIPES_PAGE.recalc()"></td>' +
           '<td><input id="st-loss-' + i + '" class="input" type="number" min="0" max="100" step="0.01" value="' + (s.loss_percentage || '') + '" oninput="RECIPES_PAGE.recalc()"></td>' +
-          '<td><button type="button" class="btn btn-outline" style="padding:3px 10px;color:#dc2626;" onclick="RECIPES_PAGE.removeStep(' + i + ')">✕</button></td>' +
+          '<td><button type="button" class="btn btn-outline" style="padding:3px 10px;color:var(--danger, #dc2626);" onclick="RECIPES_PAGE.removeStep(' + i + ')">✕</button></td>' +
         '</tr>';
       }).join('');
     }
