@@ -1672,6 +1672,15 @@ document.addEventListener('keydown', function (e) {
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
     overscroll-behavior-x: contain;
+
+    /* [UI-1.5 / U-05] The table scrolls inside its own box, so the header can
+       stick. This is REQUIRED for the sticky header, not decoration — see the
+       note on the header rule below. max-height never stretches a short
+       table, so a three-row list is still three rows tall. */
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
+    max-height: calc(var(--vh, 1vh) * 70);
+    max-height: 70dvh;
   }
   .table-toolbar { padding: var(--space-3); border-bottom: 1px solid var(--border-color); }
   .table { width: 100%; border-collapse: collapse; font-size: 13px; }
@@ -1681,6 +1690,39 @@ document.addEventListener('keydown', function (e) {
     border-bottom: 1px solid var(--border-color);
     /* Prevent headers shrinking too small on mobile */
     white-space: nowrap;
+
+    /* [UI-1.5 / U-05] Column headers stay visible while a long table scrolls.
+       Two things make this work, and it is a no-op without both:
+       1. A sticky element sticks within its nearest SCROLLPORT. .table-wrap
+          sets overflow-x: auto, and per the overflow spec that computes
+          overflow-y from visible to auto - so .table-wrap is already the
+          scrollport, and a bare top:0 would have nothing to stick to because
+          the box was exactly as tall as its content. Giving it a max-height is
+          what creates the scroll range.
+       2. The background must be opaque or the rows scroll through the header.
+          the --bg-subtle above already provides it.
+       z-index 2 sits above the rows and below the sticky topbar (1000), so the
+       header slides under the topbar rather than over it. */
+    position: sticky;
+    top: 0;
+    z-index: 2;
+  }
+
+  /* [UI-1.5] The pager lives inside the scroll box, so it is pinned to the
+     bottom rather than stranded below 50 rows of data. .dt-pager was emitted
+     by UIC.dataTable but defined by no stylesheet until now (U-08). */
+  .dt-pager {
+    position: sticky; bottom: 0; z-index: 2;
+    background: var(--bg-surface);
+    border-top: 1px solid var(--border-color);
+  }
+
+  /* [UI-1.5] Printing must never be clipped to 70dvh. Full print treatment is
+     Phase 7; this is the minimum that keeps today's output correct. */
+  @media print {
+    .table-wrap { max-height: none; overflow: visible; }
+    .table thead th { position: static; }
+    .dt-pager { display: none; }
   }
   /* [UI-1.3 / U-03] Sort affordance. The chevron is a glyph rather than an
      image so it inherits the header colour under all three company themes.

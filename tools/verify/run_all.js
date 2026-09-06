@@ -28,7 +28,8 @@ const STEPS = [
   /* ── UI/UX programme (branch ui/odoo-parity) ── */
   ['ui1_anchor.js', 'UI-1.2 — popups escape the table clip box (U-01)'],
   ['ui1_sort.js', 'UI-1.3 — tri-state sort, load order preserved (U-03)'],
-  ['ui1_num.js', 'UI-1.4 — .num shared across all three companies (U-04)']
+  ['ui1_num.js', 'UI-1.4 — .num shared across all three companies (U-04)'],
+  ['ui1_sticky.js', 'UI-1.5 — sticky table header and its scroll range (U-05)']
 ];
 
 let failed = 0;
