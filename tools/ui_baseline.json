@@ -1,23 +1,23 @@
 {
-  "recorded": "2026-09-06T14:46:54.450Z",
+  "recorded": "2026-09-06T16:10:27.798Z",
   "metrics": {
     "js_files": 19,
     "html_files": 92,
     "script_blocks": 110,
-    "symbol_refs": 3156,
+    "symbol_refs": 3151,
     "symbols_undefined": 2,
     "symbols_undefined_gate": 2,
     "distinct_ids": 583,
     "classes_used": 338,
-    "classes_defined": 466,
+    "classes_defined": 467,
     "classes_orphan": 37,
-    "color_bare": 540,
-    "color_hex": 750,
+    "color_bare": 539,
+    "color_hex": 748,
     "color_rgba": 51,
-    "token_uses": 970,
-    "color_literals": 801,
-    "token_ratio": 0.5477,
-    "bare_ratio": 0.6424,
+    "token_uses": 984,
+    "color_literals": 799,
+    "token_ratio": 0.5519,
+    "bare_ratio": 0.6461,
     "media_queries": 11,
     "media_conforming": 11,
     "media_maxwidth": 0,
@@ -25,9 +25,8 @@
     "media_offbrand_gate": 0,
     "dom_nodes_per_row": 7,
     "dom_row_bytes": 169,
-    "components_checked": 19,
-    "color_bare_at_phase0": 723,
-    "bare_ratio_at_phase0": 0.4952
-  },
-  "note": "color_bare / bare_ratio were added during Phase 2.7. The *_at_phase0 values were computed retrospectively against commit e324cfc (the untouched tree) so the comparison is honest. Other metrics were recorded live at Phase 0."
+    "dom_nodes_per_action_cell": 6,
+    "dom_action_bytes": 1066,
+    "components_checked": 19
+  }
 }

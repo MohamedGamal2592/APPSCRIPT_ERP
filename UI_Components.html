@@ -243,6 +243,7 @@ UIC.openActionMenu = function (id, ev) {
     if (el !== wrap) UIC.closeActionMenu(el.id);
   });
   wrap.classList.add('open');
+  if (btn) btn.setAttribute('aria-expanded', 'true');
   if (menu && btn) UIC._anchorFixed(menu, btn, {});
 };
 
@@ -250,6 +251,8 @@ UIC.closeActionMenu = function (id) {
   var wrap = document.getElementById(id);
   if (!wrap) return;
   wrap.classList.remove('open');
+  var btn = wrap.querySelector('button');
+  if (btn) btn.setAttribute('aria-expanded', 'false');
   var menu = wrap.querySelector('.action-dropdown-menu');
   if (menu) UIC._unanchor(menu);
 };
@@ -268,14 +271,34 @@ UIC.actionDropdown = function (btns) {
     if (!b) return '';
     var color = b.color ? 'color:' + b.color + ';' : '';
     var extra = b.color ? 'border-color:transparent;' : '';
-    return '<button type="button" class="action-dropdown-item" style="display:block;width:100%;text-align:right;padding:8px 10px;font-size:13px;background:transparent;border:0;border-radius:6px;cursor:pointer;' + color + extra + '" onmouseover="this.style.background=\'var(--bg-subtle,#f3f4f6)\'" onmouseout="this.style.background=\'transparent\'" onclick="' + b.onclick.replace(/"/g, '&quot;') + ';try{UIC.closeActionMenu(\'' + id + '\');}catch(e){}">' + UIC.escHtml(b.label) + '</button>';
+    /* Styling moved to .erp-kebab-item in the stylesheet — an inline style
+       block per item, on every row, was both unthemeable and pure payload. */
+    return '<button type="button" class="action-dropdown-item erp-kebab-item"' +
+      (b.color ? ' style="color:' + b.color + ';"' : '') +
+      ' onclick="' + b.onclick.replace(/"/g, '&quot;') + ';try{UIC.closeActionMenu(\'' + id + '\');}catch(e){}">' +
+      UIC.escHtml(b.label) + '</button>';
   }).join('');
-  /* [UI-1.2 / U-01] z-index raised from 30 to 1400 to match .combo-list: once the
-     menu is positioned against the viewport it is no longer stacked inside the
-     table, so it must clear the sticky table header and the topbar. */
-  return '<div class="action-dropdown" id="' + id + '" style="position:relative;display:inline-block;">' +
-    '<button type="button" class="btn btn-primary" style="padding:6px 14px;font-size:12px;border-radius:999px;" onclick="UIC.toggleActionMenu(\'' + id + '\', event)">إجراءات / Actions ' + UIC.icon('chevron-down', { size: 13 }) + '</button>' +
-    '<div class="action-dropdown-menu" style="display:none;position:absolute;right:0;top:100%;margin-top:6px;z-index:1400;min-width:200px;background:var(--bg-surface,#fff);border:1px solid var(--border-color,#e5e7eb);border-radius:12px;box-shadow:0 8px 24px rgba(0,0,0,.14);padding:6px;flex-direction:column;gap:2px;max-height:320px;overflow:auto;">' + items + '</div></div>';
+  /* [UI-3.3 / U-20] A quiet kebab, not a primary-coloured pill on every row.
+   *
+   * A 50-row list drew 50 filled brand-coloured buttons reading
+   * "إجراءات / Actions", which is the loudest thing on the page and competes
+   * with the data for attention — the opposite of what a row action should do.
+   * The glyph is a text character, NOT UIC.icon, deliberately: this is the one
+   * control that renders once per row, and an inline <svg> here would add two
+   * elements to every row of every list in the app.
+   *
+   * The button is quiet until the row is hovered ON POINTER DEVICES ONLY. On
+   * touch, and for keyboard focus, it is always visible — a hover-only action
+   * with no other path is unusable on the tablets and phones this app has to
+   * support. See the (hover: hover) and (pointer: fine) guard in the stylesheet.
+   *
+   * [UI-1.2 / U-01] z-index 1400 matches .combo-list: once the menu is
+   * positioned against the viewport it is no longer stacked inside the table,
+   * so it must clear the sticky table header and the topbar. */
+  return '<div class="action-dropdown erp-kebab" id="' + id + '">' +
+    '<button type="button" class="erp-kebab-btn" aria-haspopup="true" aria-expanded="false"' +
+    ' aria-label="إجراءات" title="إجراءات" onclick="UIC.toggleActionMenu(\'' + id + '\', event)">⋮</button>' +
+    '<div class="action-dropdown-menu erp-kebab-menu" style="display:none;position:absolute;right:0;top:100%;margin-top:6px;z-index:1400;min-width:200px;background:var(--bg-surface,#fff);border:1px solid var(--border-color,#e5e7eb);border-radius:12px;box-shadow:0 8px 24px rgba(0,0,0,.14);padding:6px;flex-direction:column;gap:2px;max-height:320px;overflow:auto;">' + items + '</div></div>';
 };
 document.addEventListener('click', function(e){
   document.querySelectorAll('.action-dropdown.open').forEach(function(el){
@@ -1762,6 +1785,41 @@ document.addEventListener('keydown', function (e) {
     .btn-outline:active { background: var(--bg-subtle); }
     .btn-danger:active  { background: #b91c1c; transform: scale(0.97); }
   }
+
+  /* ── [UI-3.3 / U-20] Row action kebab ────────────────────────────────
+     Harvested from the dead ERP_DataTable engine (.erp-kebab), per the D-8
+     standing answer: take the patterns, then delete the file in Phase 10. */
+  .erp-kebab { position: relative; display: inline-block; }
+  .erp-kebab-btn {
+    width: var(--tap-sm, 44px); height: var(--tap-sm, 44px);
+    display: inline-flex; align-items: center; justify-content: center;
+    border-radius: 999px; border: 1px solid transparent;
+    background: transparent; color: var(--text-muted);
+    font-size: var(--text-lg); line-height: 1; cursor: pointer;
+    transition: opacity .12s ease, background-color .12s ease, color .12s ease;
+  }
+  .erp-kebab-btn:hover { background: var(--bg-subtle); color: var(--text-main); }
+  .erp-kebab.open .erp-kebab-btn { background: var(--bg-subtle); color: var(--text-main); }
+
+  /* Quiet until the row is hovered — but ONLY where there is a real pointer.
+     A touchscreen has no hover, and a Windows laptop may have both, so this is
+     gated on the input's capability rather than on the screen width. Anything
+     not matching keeps the button permanently visible. Keyboard focus reveals
+     it too, so it is never reachable-but-invisible. */
+  @media (hover: hover) and (pointer: fine) {
+    .table tbody tr .erp-kebab-btn { opacity: .35; }
+    .table tbody tr:hover .erp-kebab-btn,
+    .erp-kebab.open .erp-kebab-btn,
+    .erp-kebab-btn:focus-visible { opacity: 1; }
+  }
+  .erp-kebab-item {
+    display: block; width: 100%; text-align: right;
+    padding: var(--space-2) 10px; font-size: var(--text-sm);
+    background: transparent; border: 0; border-radius: 6px; cursor: pointer;
+    color: var(--text-main); font-family: var(--font-sans);
+    min-height: var(--tap-sm, 44px);
+  }
+  .erp-kebab-item:hover, .erp-kebab-item:focus-visible { background: var(--bg-subtle); }
 
   /* ── [UI-3.1 / U-09] Icons ───────────────────────────────────────────── */
   .uic-icon {

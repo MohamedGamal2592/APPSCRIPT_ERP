@@ -388,12 +388,34 @@ check('C8  DOM nodes per rendered table row', function (r) {
   metrics.dom_nodes_per_row = tags;
   metrics.dom_row_bytes = html.length;
   r.detail.push('6-column row → ' + tags + ' element(s), ' + html.length + ' bytes');
-  r.detail.push('at the 50-row page size that is ' + (tags * 50) + ' elements per rendered page');
+
+  /* The row ACTION cell is the other per-row cost, and it is the one most at
+     risk: it is built by UIC.actionDropdown and rendered once per row, so an
+     icon or a wrapper added there is multiplied by the page size. _dtRowHtml
+     alone would not see it, because pages pass the action cell in as a
+     pre-rendered value. */
+  const act = sb.UIC.actionDropdown([
+    { label: 'تعديل', onclick: 'e()' },
+    { label: 'طباعة', onclick: 'p()' },
+    { label: 'حذف', onclick: 'd()', color: 'var(--danger)' }
+  ]);
+  const actTags = (act.match(/<[a-zA-Z]/g) || []).length;
+  metrics.dom_nodes_per_action_cell = actTags;
+  metrics.dom_action_bytes = act.length;
+  r.detail.push('3-item action cell → ' + actTags + ' element(s), ' + act.length + ' bytes');
+  const perRow = tags + actTags;
+  r.detail.push('at the 50-row page size that is ' + (perRow * 50) +
+    ' elements per rendered page (row + action cell)');
+
   const b = baseline();
-  const prev = b && b.metrics ? b.metrics.dom_nodes_per_row : undefined;
-  if (prev !== undefined && tags > prev) {
+  const m = b && b.metrics ? b.metrics : {};
+  if (m.dom_nodes_per_row !== undefined && tags > m.dom_nodes_per_row) {
     r.status = 'FAIL';
-    r.detail.push('REGRESSION: was ' + prev + ' element(s) per row');
+    r.detail.push('REGRESSION: row was ' + m.dom_nodes_per_row + ' element(s)');
+  }
+  if (m.dom_nodes_per_action_cell !== undefined && actTags > m.dom_nodes_per_action_cell) {
+    r.status = 'FAIL';
+    r.detail.push('REGRESSION: action cell was ' + m.dom_nodes_per_action_cell + ' element(s)');
   }
 });
 

@@ -33,13 +33,25 @@ const STEPS = [
   ['ui1_sticky.js', 'UI-1.5 — sticky table header and its scroll range (U-05)'],
   ['ui2_themes.js', 'UI-2.4/2.5/2.6 — neutral canvas, brand topbar, per company'],
   ['ui2_breakpoints.js', 'UI-2.9b — the five-tier breakpoint scale (U-48)'],
-  ['ui2_formatters.js', 'UI-2.8 — formatter consolidation, differential (D-4)']
+  ['ui2_formatters.js', 'UI-2.8 — formatter consolidation, differential (D-4)'],
+  ['ui3_kebab.js', 'UI-3.3 — the row action kebab (U-20)']
 ];
 
-let failed = 0;
+/* Two programmes share this repo and this runner, so a step's file can be
+ * present in one working tree and not yet committed in another. A missing file
+ * is reported and SKIPPED rather than crashing the whole suite: the alternative
+ * is that one uncommitted file makes every other check unrunnable. */
+const fs = require('fs');
+
+let failed = 0, skipped = 0;
 STEPS.forEach(function (s) {
   const [file, label] = s;
   process.stdout.write('── ' + label + '\n');
+  if (!fs.existsSync(path.join(HERE, file))) {
+    skipped++;
+    console.log('   SKIPPED — ' + file + ' is not present in this working tree\n');
+    return;
+  }
   try {
     execFileSync(process.execPath, [path.join(HERE, file)], { stdio: 'pipe' });
     console.log('   OK\n');
@@ -50,7 +62,8 @@ STEPS.forEach(function (s) {
   }
 });
 
+const ran = STEPS.length - skipped;
 console.log(failed === 0
-  ? 'All ' + STEPS.length + ' checks pass.'
-  : failed + ' of ' + STEPS.length + ' checks FAILED.');
+  ? 'All ' + ran + ' checks pass.' + (skipped ? '  (' + skipped + ' skipped — file not in this tree)' : '')
+  : failed + ' of ' + ran + ' checks FAILED.' + (skipped ? '  (' + skipped + ' skipped)' : ''));
 process.exit(failed === 0 ? 0 : 1);
