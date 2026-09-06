@@ -196,6 +196,7 @@
       '</form>';
 
       UIC.openModal('product-modal', {
+        size: 'lg',
         title: (isEdit ? 'تعديل منتج: ' : 'إضافة منتج') ,
         body: body,
         onSave: 'PRODUCTS_PAGE.save(' + (isEdit ? esc(row.id) : 'null') + ')'

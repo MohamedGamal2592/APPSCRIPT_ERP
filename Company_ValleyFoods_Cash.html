@@ -223,6 +223,7 @@
       '</datalist>';
 
       UIC.openModal('cash-modal', {
+        size: 'lg',
         title: isEdit ? 'تعديل حركة رقم ' + record.transaction_id : 'إضافة حركة',
         body: body.replace('{{DATALIST}}', dl),
         onSave: 'CASH_PAGE.save(' + (isEdit ? esc(record.transaction_id) : 'null') + ')'

@@ -260,6 +260,7 @@
       '</form>';
 
       UIC.openModal('cash-modal', {
+        size: 'lg',
         title: isEdit ? (readOnly ? 'عرض حركة رقم ' + record.transaction_id : 'تعديل حركة رقم ' + record.transaction_id) : 'إضافة حركة نقدية جديدة',
         body: body,
         onSave: (!readOnly && CAN_WRITE) ? ('CASH_PAGE.save(' + (isEdit ? esc(record.transaction_id) : 'null') + ')') : null
