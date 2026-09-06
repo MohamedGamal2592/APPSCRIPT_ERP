@@ -367,10 +367,37 @@ UIC.dataTable = function (containerId, opts) {
     pageSize = Math.min(o.pageSize || 50, 50);
   }
 
-  const thead = '<thead><tr>' + headers.map(h => '<th data-key="' + (h.key || h.label) + '">' + h.label + '</th>').join('') + '</tr></thead>';
+  /* [UI-1.3 / U-03] Sortable columns advertise their state to assistive tech and
+     carry a chevron. `sortable: false` on a header opts a column out — the
+     actions column is opted out automatically, since sorting by a block of
+     buttons is meaningless. */
+  const isSortable = h => h.sortable !== false && (h.key || h.label) !== 'actions';
+  const thead = '<thead><tr>' + headers.map(function (h) {
+    const key = h.key || h.label;
+    return '<th data-key="' + key + '"' +
+      (isSortable(h) ? ' data-sortable="true" aria-sort="none"' : '') + '>' +
+      '<span class="th-label">' + h.label + '</span>' +
+      (isSortable(h) ? '<span class="th-sort" aria-hidden="true"></span>' : '') +
+      '</th>';
+  }).join('') + '</tr></thead>';
 
   window.__dtStore = window.__dtStore || {};
-  window.__dtStore[id] = { headers: headers, rows: rows, filtered: rows, pageSize: pageSize, page: 1, pageRows: null, fmtMoney: fmtMoney, opts: o, searchTerm: '', dateFrom: '', dateTo: '' };
+  /* [UI-1.3 / U-03] `originalRows` is the load order, and nothing ever reorders
+     it. Before this, sorting wrote back into `st.filtered`, which at first
+     render was the SAME array object as `st.rows` AND as the caller's own array
+     — so a single click on a column header permanently destroyed the order the
+     server sent, with no way back. The pipeline is now
+     search -> filter -> sort -> slice, re-derived from originalRows each time. */
+  window.__dtStore[id] = {
+    headers: headers,
+    originalRows: rows.slice(),
+    rows: rows,
+    filtered: rows.slice(),
+    pageSize: pageSize, page: 1, pageRows: null,
+    fmtMoney: fmtMoney, opts: o,
+    searchTerm: '', dateFrom: '', dateTo: '',
+    sortKey: null, sortDir: null
+  };
 
   /* ── Toolbar: search + date filter + Excel + Print ── */
   var toolbarParts = [];
@@ -582,7 +609,9 @@ UIC._applyFilters = function (id) {
   var dateFrom = st.dateFrom || '';
   var dateTo = st.dateTo || '';
   var dateKey = (st.opts && st.opts.dateKey) || 'date';
-  st.filtered = st.rows.filter(function (r) {
+  /* [UI-1.3 / U-03] Filter from the untouched load order, never from a
+     previously sorted result, so clearing a sort really does restore it. */
+  st.filtered = (st.originalRows || st.rows).filter(function (r) {
     if (q) {
       try { if (JSON.stringify(r == null ? '' : r).toLowerCase().indexOf(q) === -1) return false; } catch (e) { return false; }
     }
@@ -597,10 +626,69 @@ UIC._applyFilters = function (id) {
   });
   // [PERF-11] Global search already ran above across ALL loaded records
   // (st.rows); reset to page 1 and re-slice. Pager follows the filtered list.
+  UIC._applySort(id);
   st.page = 1;
   st.pageSize = (st.opts.autoPage === false) ? 0 : ((st.filtered.length > 50) ? 50 : 0);
   UIC._dtRenderBody(id);
   UIC._dtRefreshPager(id);
+};
+
+/* [UI-1.3 / U-03] Sort the current filtered set in place.
+ *
+ * `st.filtered` is always a fresh array produced by `.filter()` or by
+ * `originalRows.slice()`, so reordering it never touches the load order.
+ *
+ * The comparator keeps the O(n) decorate–sort–undecorate shape the performance
+ * run built: each row's sort value is read and parsed ONCE into a decorated
+ * record, the sort compares pre-parsed fields, and the rows are read back out.
+ * Complexity is unchanged; only the third state and the stable tie-break are
+ * new. The tie-break on the original index makes the sort stable, so rows that
+ * compare equal keep their load order instead of shuffling between sorts. */
+UIC._applySort = function (id) {
+  var st = (window.__dtStore || {})[id];
+  if (!st) return;
+  if (!st.sortKey || !st.sortDir) return;          /* third state: load order */
+  var list = st.filtered;
+  if (!list || list.length < 2) return;
+
+  var asc = st.sortDir === 'asc';
+  var hIdx = st.headers.findIndex(function (h) { return (h.key || h.label) === st.sortKey; });
+  if (hIdx === -1) return;
+  var sortKey = st.headers[hIdx].sortKey || null;
+  var key = st.sortKey;
+
+  var decorated = list.map(function (r, i) {
+    var raw;
+    if (Array.isArray(r)) raw = r[hIdx];
+    else if (sortKey) raw = r[sortKey];
+    else raw = r[key];
+    var s = (raw == null) ? '' : String(raw);
+    var n = parseFloat(s.replace(/,/g, ''));
+    return { r: r, s: s, n: n, i: i, isNum: !isNaN(n) && s.trim() !== '' };
+  });
+  decorated.sort(function (a, b) {
+    var c;
+    if (a.isNum && b.isNum) c = a.n - b.n;
+    else c = a.s.localeCompare(b.s, 'ar');
+    if (c !== 0) return asc ? c : -c;
+    return a.i - b.i;                              /* stable */
+  });
+  for (var j = 0; j < decorated.length; j++) list[j] = decorated[j].r;
+};
+
+/* Reflect the sort state onto the header cells: aria-sort for assistive tech,
+ * a class for the chevron. Called after every sort change. */
+UIC._dtSyncSortIndicators = function (id) {
+  var st = (window.__dtStore || {})[id];
+  var container = document.getElementById(id);
+  if (!container) return;
+  container.querySelectorAll('th[data-sortable="true"]').forEach(function (th) {
+    var key = th.getAttribute('data-key');
+    var active = st && st.sortKey === key && st.sortDir;
+    th.setAttribute('aria-sort', active ? (st.sortDir === 'asc' ? 'ascending' : 'descending') : 'none');
+    th.classList.remove('sorted-asc', 'sorted-desc');
+    if (active) th.classList.add(st.sortDir === 'asc' ? 'sorted-asc' : 'sorted-desc');
+  });
 };
 
 UIC.applyDateFilter = function (id) {
@@ -785,60 +873,99 @@ UIC.PagedTable = function (opts) {
   }
 };
 
+/* [UI-1.3 / U-03] Tri-state column sort: ascending -> descending -> load order.
+ *
+ * Before this the sort was binary, had no visible indicator, and wrote its
+ * result back over the only copy of the rows — so there was no way to get the
+ * original order back short of reloading the page. */
+UIC._dtNextSortDir = function (current) {
+  return current === 'asc' ? 'desc' : current === 'desc' ? null : 'asc';
+};
+
 UIC.initTableSort = function (containerId) {
   const container = document.getElementById(containerId);
   if (!container) return;
   const st = (window.__dtStore || {})[containerId];
-  container.querySelectorAll('th').forEach(th => {
+
+  /* Tables built by UIC.dataTable mark the columns that opted in, so a header
+     carrying `sortable: false` — and the actions column — gets no listener, no
+     pointer cursor and no chevron. Tables a page hand-built have no store and
+     no markers, so they keep the legacy behaviour of every header being
+     sortable; 50 pages call this function and some of them pass such a table. */
+  const managed = !!st;
+  const cells = container.querySelectorAll(managed ? 'th[data-sortable="true"]' : 'th');
+
+  cells.forEach(th => {
     th.style.cursor = 'pointer';
-    th.addEventListener('click', function () {
-      const key = this.getAttribute('data-key');
-      const asc = this.getAttribute('data-asc') !== 'true';
-      container.querySelectorAll('th').forEach(function (x) { if (x !== th) x.removeAttribute('data-asc'); });
-      const list = st ? (st.filtered || st.rows) : null;
-      if (st && key && list && list.length) {
-        /* [PERF-11] Sort the FULL filtered dataset (not just the visible page):
-         * O(n) key extraction with sortKey-awareness, parse-free comparator,
-         * then reset to page 1 and re-slice. */
-        const hIdx = st.headers.findIndex(function (h) { return (h.key || h.label) === key; });
-        const sortKey = (hIdx !== -1 && st.headers[hIdx].sortKey) ? st.headers[hIdx].sortKey : null;
-        const decorated = list.map(function (r) {
-          let raw;
-          if (Array.isArray(r)) raw = r[hIdx];
-          else if (sortKey) raw = r[sortKey];
-          else raw = r[key];
-          const s = (raw == null) ? '' : String(raw);
-          const n = parseFloat(s.replace(/,/g, ''));
-          return { r: r, s: s, n: n, isNum: !isNaN(n) && s.trim() !== '' };
-        });
-        decorated.sort(function (a, b) {
-          if (a.isNum && b.isNum) return asc ? a.n - b.n : b.n - a.n;
-          return asc ? a.s.localeCompare(b.s, 'ar') : b.s.localeCompare(a.s, 'ar');
-        });
-        for (let i = 0; i < decorated.length; i++) list[i] = decorated[i].r;
-        st.page = 1;
-        UIC._dtRenderBody(containerId);
-        UIC._dtRefreshPager(containerId);
-      } else {
-        /* Fallback (tables not built by UIC.dataTable): legacy DOM-row sort. */
-        const tbody = container.querySelector('tbody');
-        const rows = Array.from(tbody.querySelectorAll('tr'));
-        const self = this;
-        rows.sort((a, b) => {
-          const cell = self.parentNode.children, idx = Array.prototype.indexOf.call(cell, self) + 1;
-          const ac = a.querySelector('td:nth-child(' + idx + ')');
-          const bc = b.querySelector('td:nth-child(' + idx + ')');
-          const av = (ac && ac.getAttribute('data-sort') != null) ? ac.getAttribute('data-sort') : (ac && ac.getAttribute('data-num') != null) ? ac.getAttribute('data-num') : (ac ? ac.textContent.trim() : '');
-          const bv = (bc && bc.getAttribute('data-sort') != null) ? bc.getAttribute('data-sort') : (bc && bc.getAttribute('data-num') != null) ? bc.getAttribute('data-num') : (bc ? bc.textContent.trim() : '');
-          const numA = parseFloat(av), numB = parseFloat(bv);
-          if (!isNaN(numA) && !isNaN(numB)) return asc ? numA - numB : numB - numA;
-          return asc ? String(av).localeCompare(String(bv), 'ar') : String(bv).localeCompare(String(av), 'ar');
-        });
-        rows.forEach(r => tbody.appendChild(r));
+    /* Reachable by keyboard, not only by mouse (U-33 asks for this everywhere;
+       here it costs two attributes). */
+    th.setAttribute('tabindex', '0');
+
+    const activate = function () {
+      if (managed) {
+        const key = th.getAttribute('data-key');
+        if (!key || !st.filtered) return;
+        /* asc -> desc -> load order */
+        st.sortDir = (st.sortKey === key) ? UIC._dtNextSortDir(st.sortDir) : 'asc';
+        st.sortKey = st.sortDir ? key : null;
+        /* Re-derive from the untouched load order, then re-apply search, date
+           filter and sort. This is what makes the third click genuinely restore
+           the original order. _applyFilters ends by sorting, rendering and
+           refreshing the pager. */
+        UIC._applyFilters(containerId);
+        UIC._dtSyncSortIndicators(containerId);
+        return;
       }
-      this.setAttribute('data-asc', String(asc));
+
+      /* Legacy DOM-row sort, for tables not built by UIC.dataTable. Unchanged
+         except that it now cycles through three states like the managed path. */
+      const prev = th.getAttribute('data-sort-dir');
+      const dir = UIC._dtNextSortDir(prev);
+      container.querySelectorAll('th').forEach(function (x) {
+        if (x !== th) { x.removeAttribute('data-sort-dir'); x.setAttribute('aria-sort', 'none'); }
+      });
+      const tbody = container.querySelector('tbody');
+      if (!tbody) return;
+      const rows = Array.from(tbody.querySelectorAll('tr'));
+      if (!dir) {
+        /* Third state: put the DOM rows back in the order they were first seen. */
+        if (!th.__uicDomOrder) return;
+        th.__uicDomOrder.forEach(r => tbody.appendChild(r));
+        th.removeAttribute('data-sort-dir');
+        th.setAttribute('aria-sort', 'none');
+        th.classList.remove('sorted-asc', 'sorted-desc');
+        return;
+      }
+      if (!th.__uicDomOrder) th.__uicDomOrder = rows.slice();
+      const asc = dir === 'asc';
+      const cellIdx = Array.prototype.indexOf.call(th.parentNode.children, th) + 1;
+      const valueOf = function (tr) {
+        const c = tr.querySelector('td:nth-child(' + cellIdx + ')');
+        if (!c) return '';
+        if (c.getAttribute('data-sort') != null) return c.getAttribute('data-sort');
+        if (c.getAttribute('data-num') != null) return c.getAttribute('data-num');
+        return c.textContent.trim();
+      };
+      rows.sort((a, b) => {
+        const av = valueOf(a), bv = valueOf(b);
+        const numA = parseFloat(av), numB = parseFloat(bv);
+        if (!isNaN(numA) && !isNaN(numB)) return asc ? numA - numB : numB - numA;
+        return asc ? String(av).localeCompare(String(bv), 'ar') : String(bv).localeCompare(String(av), 'ar');
+      });
+      rows.forEach(r => tbody.appendChild(r));
+      th.setAttribute('data-sort-dir', dir);
+      th.setAttribute('aria-sort', asc ? 'ascending' : 'descending');
+      th.classList.remove('sorted-asc', 'sorted-desc');
+      th.classList.add(asc ? 'sorted-asc' : 'sorted-desc');
+    };
+
+    th.addEventListener('click', activate);
+    th.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') { e.preventDefault(); activate(); }
     });
   });
+
+  if (managed) UIC._dtSyncSortIndicators(containerId);
 };
 
 UIC.field = function (o) {
@@ -1555,6 +1682,30 @@ document.addEventListener('keydown', function (e) {
     /* Prevent headers shrinking too small on mobile */
     white-space: nowrap;
   }
+  /* [UI-1.3 / U-03] Sort affordance. The chevron is a glyph rather than an
+     image so it inherits the header colour under all three company themes.
+     A neutral double-arrow shows the column CAN be sorted; it darkens and
+     resolves to one direction once it is. Reserving the width in both states
+     stops the header text jumping as the state cycles. */
+  .table thead th[data-sortable="true"] { user-select: none; }
+  .table thead th .th-label { vertical-align: middle; }
+  .table thead th .th-sort {
+    display: inline-block; width: 1em; margin-inline-start: 4px;
+    font-size: 10px; line-height: 1; opacity: .45; vertical-align: middle;
+  }
+  /* NB: this stylesheet lives in a JS template literal, so every CSS unicode
+     escape must have its backslash doubled. A single-backslash escape here is
+     read by JavaScript as an OCTAL escape, which is a SyntaxError in a template
+     string and would take the whole shared layer down on all 85 pages. */
+  .table thead th .th-sort::before { content: '\\2195'; }              /* ↕ */
+  .table thead th.sorted-asc  .th-sort { opacity: 1; }
+  .table thead th.sorted-desc .th-sort { opacity: 1; }
+  .table thead th.sorted-asc  .th-sort::before { content: '\\25B2'; }  /* ▲ */
+  .table thead th.sorted-desc .th-sort::before { content: '\\25BC'; }  /* ▼ */
+  .table thead th[data-sortable="true"]:hover .th-sort { opacity: .8; }
+  .table thead th[data-sortable="true"]:focus-visible { outline: 2px solid var(--brand-primary); outline-offset: -2px; }
+  .table thead th.sorted-asc, .table thead th.sorted-desc { color: var(--text-main); }
+
   .table tbody td { padding: 10px 12px; border-bottom: 1px solid var(--border-color); }
   .table tbody tr:hover { background: var(--brand-subtle-bg); }
   /* Tall enough rows for finger tapping */
