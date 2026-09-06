@@ -138,7 +138,35 @@
   --space-md: clamp(1rem,    3vw,  1.5rem);
   --space-lg: clamp(1.5rem,  4vw,  2rem);
 
-  
+  /* ── [UI-2.9b / U-48] The breakpoint scale ───────────────────────────────
+   * Five tiers, and only these five. Authored mobile-first with min-width, so
+   * each tier inherits the one below and every rule is additive.
+   *
+   *   phone     <= 599   single column, drawer nav, bottom-sheet dialogs
+   *   tablet-p   600     drawer STAYS — the topbar cannot hold five dropdown
+   *                      groups at 768px; dialogs centre
+   *   tablet-l   900     topbar nav appears, full tables
+   *   desktop   1280     the primary working target
+   *   wide      1920     content unclamps so wide tables use the screen
+   *
+   * IMPORTANT: these tokens cannot be used inside an @media query. A media
+   * query is evaluated before custom properties are resolved, so
+   * `@media (min-width: var(--bp-tablet-l))` is invalid CSS in every browser.
+   * They are the canonical record of the scale, they are readable from
+   * JavaScript via getComputedStyle, and the literals in the stylesheets must
+   * be kept equal to them. tools/ui_check.js check C7 enforces that no width
+   * query uses a value outside this set.
+   *
+   * None of these is a proxy for input type. A Windows desktop can have a
+   * touchscreen and a tablet can have a keyboard, so tap targets stay
+   * 44/48px at every width and pointer affordances are gated on
+   * (hover: hover) / (pointer: fine) instead. */
+  --bp-phone:    599px;
+  --bp-tablet-p: 600px;
+  --bp-tablet-l: 900px;
+  --bp-desktop:  1280px;
+  --bp-wide:     1920px;
+
   --topbar-h: 56px;
 
   

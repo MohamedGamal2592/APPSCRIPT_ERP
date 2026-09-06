@@ -30,7 +30,8 @@ const STEPS = [
   ['ui1_sort.js', 'UI-1.3 — tri-state sort, load order preserved (U-03)'],
   ['ui1_num.js', 'UI-1.4 — .num shared across all three companies (U-04)'],
   ['ui1_sticky.js', 'UI-1.5 — sticky table header and its scroll range (U-05)'],
-  ['ui2_themes.js', 'UI-2.4/2.5/2.6 — neutral canvas, brand topbar, per company']
+  ['ui2_themes.js', 'UI-2.4/2.5/2.6 — neutral canvas, brand topbar, per company'],
+  ['ui2_breakpoints.js', 'UI-2.9b — the five-tier breakpoint scale (U-48)']
 ];
 
 let failed = 0;

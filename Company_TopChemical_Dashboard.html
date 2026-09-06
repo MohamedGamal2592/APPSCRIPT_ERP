@@ -50,13 +50,16 @@
       font-size: 13px; cursor: pointer; }
 
     /* Charts grid */
+    /* [UI-2.9b / U-48] Mobile-first on the five-tier scale: one column is the
+       base, two from tablet-l, three from desktop. Was max-width:900 plus an
+       off-scale min-width:1300. */
     .charts-grid {
       display: grid;
-      grid-template-columns: 1fr 1fr;
+      grid-template-columns: 1fr;
       gap: 18px;
     }
-    @media (max-width: 900px)  { .charts-grid { grid-template-columns: 1fr; } }
-    @media (min-width: 1300px) { .charts-grid { grid-template-columns: 1fr 1fr 1fr; } }
+    @media (min-width: 900px)  { .charts-grid { grid-template-columns: 1fr 1fr; } }
+    @media (min-width: 1280px) { .charts-grid { grid-template-columns: 1fr 1fr 1fr; } }
 
     .chart-card {
       background: var(--bg-surface);
@@ -73,8 +76,9 @@
       margin: 0 0 14px 0;
       text-align: center;
     }
-    .chart-canvas-wrap { position: relative; height: 280px; }
-    @media (max-width: 600px) { .chart-canvas-wrap { height: 220px; } }
+    /* [UI-2.9b] Shorter charts on a phone, full height from tablet-p up. */
+    .chart-canvas-wrap { position: relative; height: 220px; }
+    @media (min-width: 600px) { .chart-canvas-wrap { height: 280px; } }
   </style>
 </head>
 <body>

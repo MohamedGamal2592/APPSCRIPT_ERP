@@ -68,11 +68,14 @@
     .acard.c-profit-neg { background: #fef2f2; border-color: #ef4444; }
     .acard.c-profit-neg .cval { color: #ef4444; }
     .acard.c-margin { background: #f8fafc; }
-    @media (max-width: 640px) {
-      .meta-grid { grid-template-columns: 1fr 1fr; }
-      .cards-grid { grid-template-columns: 1fr; }
-      .acard.span2 { grid-column: span 1; }
-      .cost-doc { padding: 16px; }
+    /* [UI-2.9b / U-48] Was a max-width:640 block, which is on no tier. The
+       narrow layout is now the base and the wide one is restored at tablet-p,
+       so the same two layouts survive, expressed additively. */
+    @media (min-width: 600px) {
+      .meta-grid { grid-template-columns: repeat(3, 1fr); }
+      .cards-grid { grid-template-columns: 1fr 1fr; }
+      .acard.span2 { grid-column: span 2; }
+      .cost-doc { padding: 30px; }
     }
   </style>
 </head>

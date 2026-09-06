@@ -309,8 +309,12 @@ const TIERS = { 600: 'tablet-p', 900: 'tablet-l', 1280: 'desktop', 1920: 'wide' 
 check('C7  breakpoint scale conformance (§0.4 / U-48)', function (r) {
   const offenders = {};
   let total = 0, conforming = 0, maxWidthMain = 0;
+  /* Strip block comments first. A comment explaining which query was RETIRED
+     names the old value, and counting that as a live query would make the check
+     un-passable and, worse, discourage explaining the change. */
+  const strip = s => s.replace(/\/\*[\s\S]*?\*\//g, '');
   S.htmlFiles().forEach(function (f) {
-    const src = S.read(f);
+    const src = strip(S.read(f));
     const re = /@media[^{]*?\(\s*(min|max)-width\s*:\s*(\d+)px/g;
     let m;
     while ((m = re.exec(src)) !== null) {
@@ -323,7 +327,7 @@ check('C7  breakpoint scale conformance (§0.4 / U-48)', function (r) {
     }
   });
   S.jsFiles().forEach(function (f) {
-    const src = S.read(f);
+    const src = strip(S.read(f));
     const re = /@media[^{]*?\(\s*(min|max)-width\s*:\s*(\d+)px/g;
     let m;
     while ((m = re.exec(src)) !== null) {

@@ -291,9 +291,12 @@ UIC.ensureHomeLogo = function () {
   a.innerHTML = '<img src="' + (UIC.SYSTEM_LOGO_URL || '') + '" alt="الرئيسية" loading="lazy" decoding="async">';
   document.body.appendChild(a);
   var st = document.createElement('style');
-  st.textContent = '#home-logo-fab{position:fixed;top:10px;right:10px;z-index:9998;width:44px;height:44px;border-radius:50%;background:#fff;box-shadow:0 2px 10px rgba(0,0,0,.2);display:flex;align-items:center;justify-content:center;cursor:pointer;}' +
-    '#home-logo-fab img{width:32px;height:32px;object-fit:contain;}' +
-    '@media(max-width:768px){#home-logo-fab{width:38px;height:38px;}#home-logo-fab img{width:26px;height:26px;}}';
+  st.textContent = '#home-logo-fab{position:fixed;top:10px;right:10px;z-index:9998;width:38px;height:38px;border-radius:50%;background:#fff;box-shadow:0 2px 10px rgba(0,0,0,.2);display:flex;align-items:center;justify-content:center;cursor:pointer;}' +
+    '#home-logo-fab img{width:26px;height:26px;object-fit:contain;}' +
+    /* [UI-2.9b / U-48] Was `@media (max-width: 768px)`, while the shell switched
+       at 767/768 — so at exactly 768px the two disagreed. Now mobile-first on
+       the tier scale: the small size is the base and it grows at tablet-p. */
+    '@media (min-width: 600px){#home-logo-fab{width:44px;height:44px;}#home-logo-fab img{width:32px;height:32px;}}';
   document.head.appendChild(st);
 };
 
@@ -1851,17 +1854,12 @@ document.addEventListener('keydown', function (e) {
     flex-wrap: wrap; /* allow buttons to wrap on very small screens */
   }
   .btn-icon { background: none; border: none; font-size: var(--text-xl); cursor: pointer; color: var(--text-muted); padding: var(--space-2); min-height: var(--tap-sm, 44px); min-width: var(--tap-sm, 44px); }
-  /* Larger screens: centre modal */
-  @media (min-width: 640px) {
-    .modal-overlay { align-items: center; }
-    .modal { border-radius: var(--radius-lg); max-width: 560px; padding-bottom: 0; }
-    /* Optional widths via UIC.openModal({ size: 'sm'|'md'|'lg'|'xl' }).
-       'md' is the default above and emits no class, so untouched callers keep 560px.
-       Mobile (< 640px) stays a full-width bottom sheet for every size. */
-    .modal.modal-sm { max-width: 420px; }
-    .modal.modal-lg { max-width: 880px; }
-    .modal.modal-xl { max-width: 1100px; }
-  }
+  /* [UI-2.9b] The dialog widths moved into the tablet-p (600px) tier with the
+     rest of the responsive rules, so the whole scale lives in one place and
+     640px — which was on no tier — is retired. Optional widths via
+     UIC.openModal({ size: 'sm'|'md'|'lg'|'xl' }): 'md' is the default and emits
+     no class, so untouched callers keep 560px, and below tablet-p every size is
+     a full-width bottom sheet exactly as before. */
 
   /* ── Toast ───────────────────────────────────────────────────────────── */
   .toast {
@@ -2118,30 +2116,82 @@ document.addEventListener('keydown', function (e) {
     flex-shrink: 0;
   }
 
-  /* ── Responsive breakpoints ──────────────────────────────────────────── */
-  /* Mobile (≤ 767px): show hamburger, hide desktop nav */
-  @media (max-width: 767px) {
-    .topbar-hamburger { display: flex; }
-    .topbar-nav       { display: none; }
-    .topbar-right .user-block { display: none; } /* user is in drawer */
-    /* Profile stays reachable on mobile (avatar-only button): it is the only
-     * access to جلساتي / عروضي / logout now that nav buttons are gone. */
-    .topbar-right .user-profile .user-name { display: none; }
-    .topbar { padding: 0 var(--space-3); }
-    .app-content { padding: var(--space-3); }
-    .breadcrumb  { padding: var(--space-2) var(--space-3); }
-    .modal-footer { flex-direction: column-reverse; }
-    .modal-footer .btn { width: 100%; justify-content: center; }
-    .stat-card { padding: var(--space-3); }
+  /* ── [UI-2.9b / U-48] Responsive tiers ───────────────────────────────────
+   *
+   * Five tiers, authored MOBILE-FIRST with min-width only, so each tier
+   * inherits the one below it and every rule is additive:
+   *
+   *   phone     <= 599    base, no query
+   *   tablet-p   600      drawer STAYS; the topbar cannot hold five dropdown
+   *                       groups at this width
+   *   tablet-l   900      topbar nav appears, drawer retires
+   *   desktop   1280      the primary working target
+   *   wide      1920      content unclamps
+   *
+   * The values are recorded as --bp-* tokens in CSS_Tokens.html. They cannot be
+   * referenced here: a media query is evaluated before custom properties are
+   * resolved, so a query written as min-width: var(--bp-tablet-l) is invalid in
+   * every browser. The tokens are the canonical record and are readable from
+   * JS; these literals must be kept equal to them.
+   *
+   * What changed: there were two tiers, 767 and 768, so a 768px iPad in
+   * portrait got the identical layout to a 2560px monitor — the full topbar
+   * nav crammed into 768px, and .app-content clamped to 1200px on a screen
+   * twice that wide.
+   *
+   * NOTE ON INPUT TYPE: none of these tiers is a proxy for touch. Tap targets
+   * stay 44/48px at every width because a Windows desktop can have a
+   * touchscreen, and pointer affordances are gated on (hover: hover) /
+   * (pointer: fine) instead — see the (hover: none) blocks above. */
+
+  /* ── phone (base, <= 599px) ── */
+  .topbar-hamburger { display: flex; }
+  .topbar-nav       { display: none; }
+  .topbar-right .user-block { display: none; }   /* the user lives in the drawer */
+  /* The avatar-only profile button stays: below tablet-l it is the only route
+   * to جلساتي / عروضي / logout now that the nav buttons are gone. */
+  .topbar-right .user-profile .user-name { display: none; }
+  .topbar      { padding: 0 var(--space-3); }
+  .app-content { padding: var(--space-3); }
+  .breadcrumb  { padding: var(--space-2) var(--space-3); }
+  .modal-footer { flex-direction: column-reverse; }
+  .modal-footer .btn { width: 100%; justify-content: center; }
+  .stat-card { padding: var(--space-3); }
+
+  /* ── tablet-p (>= 600px) — the drawer deliberately STAYS ── */
+  @media (min-width: 600px) {
+    /* Enough width for the user's name beside the avatar. */
+    .topbar-right .user-profile .user-name { display: inline; }
+    /* Dialogs stop being bottom sheets and centre. */
+    .modal-overlay { align-items: center; }
+    .modal { border-radius: var(--radius-lg); max-width: 560px; padding-bottom: 0; }
+    .modal.modal-sm { max-width: 420px; }
+    .modal.modal-lg { max-width: 880px; }
+    .modal.modal-xl { max-width: 1100px; }
+    .modal-footer { flex-direction: row; }
+    .modal-footer .btn { width: auto; }
+    .stat-card { padding: var(--space-4); }
   }
-  /* Tablet and up (≥ 768px): show desktop nav, hide hamburger & drawer toggle */
-  @media (min-width: 768px) {
+
+  /* ── tablet-l (>= 900px) — the topbar nav appears ── */
+  @media (min-width: 900px) {
     .topbar-hamburger { display: none !important; }
+    .topbar-nav       { display: flex; }
     .topbar-right .user-block, .topbar-right .user-profile { display: flex !important; }
-    .topbar { padding: 0 var(--space-6); height: 60px; }
+    .topbar      { padding: 0 var(--space-6); height: 60px; }
     .app-content { padding: var(--space-6); }
   }
-  /* Landscape compact mode: reduce header, hide bottom padding */
+
+  /* ── wide (>= 1920px) — unclamp the content ──
+   * .app-content is capped at 1200px, which leaves a 2560px monitor mostly
+   * empty while the table inside it scrolls sideways. Raised rather than
+   * removed: a fully fluid measure makes text lines uncomfortably long. */
+  @media (min-width: 1920px) {
+    .app-content { max-width: 1600px; }
+  }
+
+  /* Landscape compact: a height query, not a width one, so it is orthogonal to
+   * the tiers and applies within whichever one is active. */
   @media (orientation: landscape) and (max-height: 500px) {
     .topbar { height: 44px; }
     .app-logo img { height: 24px; }

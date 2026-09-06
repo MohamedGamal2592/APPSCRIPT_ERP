@@ -12,10 +12,16 @@
   <style>
     #product-modal .modal { width: min(94vw, 920px); max-width: 920px; }
     #product-modal .modal-body { max-height: 78vh; overflow-y: auto; }
-    #product-modal .modal-body #pf-form { display: grid; grid-template-columns: 1fr 1fr; gap: 0 14px; align-items: start; }
-    @media (max-width: 640px) { #product-modal .modal-body #pf-form { grid-template-columns: 1fr; } }
+    /* [UI-2.9b / U-48] Single-column form on a phone, two columns from
+       tablet-p. Was an off-scale max-width:640. */
+    #product-modal .modal-body #pf-form { display: grid; grid-template-columns: 1fr; gap: 0 14px; align-items: start; }
+    @media (min-width: 600px) { #product-modal .modal-body #pf-form { grid-template-columns: 1fr 1fr; } }
     /* Batches modal: wide, scrollable, non-wrapping table */
-    #product-batches-modal .modal { width: 90vw; max-width: min(92vw, 1100px); min-width: 700px; overflow-x: visible; }
+    /* [UI-2.9b / U-48] The 700px min-width is applied from tablet-l up, not
+       unconditionally. A 768px tablet in portrait cannot show a 700px-wide
+       modal without the page scrolling sideways, which rule 6 of plan §0.4
+       forbids at any width. */
+    #product-batches-modal .modal { width: 94vw; max-width: min(92vw, 1100px); min-width: 0; overflow-x: visible; }
     #product-batches-modal .modal-body { max-height: 85vh; overflow-y: auto; }
     #product-batches-modal table.table { width: 100%; table-layout: auto; }
     #product-batches-modal table.table th, #product-batches-modal table.table td { white-space: nowrap; }
@@ -25,7 +31,7 @@
     #product-batches-modal table.table th:nth-child(4), #product-batches-modal table.table td:nth-child(4) { min-width: 80px; }
     #product-batches-modal table.table th:nth-child(5), #product-batches-modal table.table td:nth-child(5) { min-width: 100px; }
     #product-batches-modal table.table th:nth-child(6), #product-batches-modal table.table td:nth-child(6) { min-width: 100px; }
-    @media (max-width: 720px) { #product-batches-modal .modal { min-width: 0; width: 94vw; } }
+    @media (min-width: 900px) { #product-batches-modal .modal { min-width: 700px; width: 90vw; } }
   </style>
 </head>
 <body>

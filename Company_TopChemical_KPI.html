@@ -16,8 +16,9 @@
     .kpi-card { background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: var(--radius-lg); padding: 18px 20px; text-align: center; box-shadow: var(--shadow-sm); }
     .kpi-label { font-size: 12px; color: var(--text-muted); font-weight: 600; margin-bottom: 6px; }
     .kpi-value { font-size: 22px; font-weight: 800; color: var(--brand-primary); }
-    .charts-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
-    @media (max-width: 900px)  { .charts-grid { grid-template-columns: 1fr; } }
+    /* [UI-2.9b / U-48] One column is the base; two from tablet-l. */
+    .charts-grid { display: grid; grid-template-columns: 1fr; gap: 18px; }
+    @media (min-width: 900px) { .charts-grid { grid-template-columns: 1fr 1fr; } }
     .chart-card { background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: var(--radius-lg); padding: 16px 18px 20px; box-shadow: var(--shadow-sm); }
     .chart-title { font-size: 14px; font-weight: 700; color: var(--text-main); margin: 0 0 14px 0; text-align: center; }
     .chart-canvas-wrap { position: relative; height: 280px; }
