@@ -28,12 +28,28 @@ function loadUIC() {
   return sandbox.UIC;
 }
 
-/* The template exactly as it stood at HEAD 001d077, before S0. */
+/* The template exactly as it stood at HEAD 001d077, before S0.
+ *
+ * UPDATED 2026-09-06 by the UI/UX run, step 3.2 (U-09), and the reason is
+ * recorded here rather than in a commit nobody will re-read:
+ *
+ *   The close button's glyph changed from the `&times;` HTML entity to
+ *   UIC.icon('close'). That is a DELIBERATE, reviewed change — emoji and
+ *   entities are rendered by the operating system, cannot inherit the text
+ *   colour and are sized inconsistently across platforms.
+ *
+ * What this file actually guards is that the `size` option is PURELY ADDITIVE:
+ * a call passing no size must render exactly as a call would with the size
+ * logic removed. That guarantee is untouched, and the reference below is
+ * updated to the intended markup rather than the assertion being weakened or
+ * the test being deleted. If the glyph is ever changed again, this line must be
+ * changed with it — deliberately, and never to make a red test go green.
+ */
 function originalMarkup(UIC, modalId, opts) {
   const o = opts || {};
   return '<div class="modal" role="dialog" aria-modal="true">' +
       '<div class="modal-header"><h3>' + (o.title || '') + '</h3>' +
-        '<button class="btn-icon" onclick="UIC.closeModal(\'' + modalId + '\')" aria-label="إغلاق">&times;</button></div>' +
+        '<button class="btn-icon" onclick="UIC.closeModal(\'' + modalId + '\')" aria-label="إغلاق">' + UIC.icon('close', { size: 18 }) + '</button></div>' +
       '<div class="modal-body">' + (o.body || '') + '</div>' +
       (o.footer !== false ? '<div class="modal-footer">' + UIC.button({ text: 'إلغاء', type: 'outline', onClick: 'UIC.closeModal(\'' + modalId + '\')' }) + ' ' + UIC.button({ text: 'حفظ', onClick: 'UI.submitOnce(this, function(){' + (o.onSave || '') + '})' }) + '</div>' : '') +
     '</div>';
