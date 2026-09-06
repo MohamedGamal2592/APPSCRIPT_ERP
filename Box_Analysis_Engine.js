@@ -779,6 +779,83 @@ var BoxEngine = (function () {
   }
 
   // ═══════════════════════════════════════════════════════════════════════
+  // §6  Account period windows
+  // ═══════════════════════════════════════════════════════════════════════
+
+  /* Deliberately integer arithmetic on a YYYY-MM-DD string, with no Date
+     object anywhere. Apps Script runs in the script's timezone, the database
+     stores a bare DATE, and the browser is in the user's timezone; routing
+     these bounds through a Date is how a movement dated the 1st ends up
+     excluded from its own month. Strings in, strings out, no zone ever
+     consulted. */
+
+  function daysInMonth(y, m) {
+    if (m === 2) return (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0 ? 29 : 28;
+    return [0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][m];
+  }
+
+  function pad2_(n) { return (n < 10 ? '0' : '') + n; }
+  function iso_(y, m, d) { return y + '-' + pad2_(m) + '-' + pad2_(d); }
+
+  function parseIsoDate(s) {
+    var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(s || '').trim());
+    if (!m) return null;
+    var y = Number(m[1]), mo = Number(m[2]), d = Number(m[3]);
+    if (mo < 1 || mo > 12) return null;
+    if (d < 1 || d > daysInMonth(y, mo)) return null;
+    return { y: y, m: mo, d: d };
+  }
+
+  /**
+   * The first day of the month N months before refIso.
+   *
+   * Month arithmetic on a running month-index, not on a Date: subtracting 24
+   * months from September 2026 has to give September 2024 whatever the day of
+   * the month is, and has to cross a year boundary without a timezone getting
+   * an opinion.
+   */
+  function monthsBefore(refIso, n) {
+    var r = parseIsoDate(refIso);
+    if (!r) throw new Error('Invalid reference date (expected YYYY-MM-DD): ' + refIso);
+    var idx = r.y * 12 + (r.m - 1) - Math.max(0, Math.floor(Number(n) || 0));
+    var y = Math.floor(idx / 12);
+    var m = idx - y * 12 + 1;
+    return iso_(y, m, 1);
+  }
+
+  /**
+   * The four spend windows of plan §6, anchored on a reference date D.
+   *
+   * Last month and last year are cut to the SAME DAY-OF-PERIOD as D, never to
+   * the whole period. Comparing 12 days of this month against 31 days of last
+   * month manufactures a decline on the 12th of every month, and someone will
+   * act on it.
+   *
+   * The day is clamped to the target month's length, so 31 March compares
+   * against 1–28 February and never asks the database for 31 February.
+   */
+  function accountWindows(refIso) {
+    var r = parseIsoDate(refIso);
+    if (!r) throw new Error('Invalid reference date (expected YYYY-MM-DD): ' + refIso);
+
+    var pmY = r.m === 1 ? r.y - 1 : r.y;
+    var pmM = r.m === 1 ? 12 : r.m - 1;
+    var lmDay = Math.min(r.d, daysInMonth(pmY, pmM));
+    var lyDay = Math.min(r.d, daysInMonth(r.y - 1, r.m));
+
+    return {
+      ref: iso_(r.y, r.m, r.d),
+      mtd: { from: iso_(r.y, r.m, 1), to: iso_(r.y, r.m, r.d), label_ar: 'الشهر الحالي' },
+      last_month: { from: iso_(pmY, pmM, 1), to: iso_(pmY, pmM, lmDay), label_ar: 'الشهر السابق (نفس المدة)' },
+      ytd: { from: iso_(r.y, 1, 1), to: iso_(r.y, r.m, r.d), label_ar: 'العام الحالي' },
+      last_ytd: { from: iso_(r.y - 1, 1, 1), to: iso_(r.y - 1, r.m, lyDay), label_ar: 'العام السابق (نفس المدة)' },
+      /* The outer bound the aggregate query needs: everything the four windows
+         can touch, and nothing else. */
+      span: { from: iso_(r.y - 1, 1, 1), to: iso_(r.y, r.m, r.d) }
+    };
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
   // Public surface
   // ═══════════════════════════════════════════════════════════════════════
 
@@ -807,6 +884,12 @@ var BoxEngine = (function () {
     matchCandidates: matchCandidates,
     clusterItems: clusterItems,
     MATCH: MATCH,
+
+    /* §6 — period windows */
+    daysInMonth: daysInMonth,
+    parseIsoDate: parseIsoDate,
+    monthsBefore: monthsBefore,
+    accountWindows: accountWindows,
     /* Exposed for the verify harness and for the alias/override UI, which needs
        to show a reviewer which tokens the engine recognises as units. */
     _QUANTITY_WORDS: QUANTITY_WORDS,

@@ -514,3 +514,408 @@ function dbClientsArRevise_(data, user) {
     if (conn) conn.close();
   }
 }
+
+// ─── regular_box_movement analysis (Top Chemical: tc_box_analysis) ──
+//
+// Read path for the box-analysis page. Same discipline as the clients_AR block
+// above: prepared statements, bound parameters, a shared WHERE builder so COUNT
+// and SELECT can never disagree, clamped limits, and one `finally` that closes
+// result set → statement → connection on every path including the error path.
+//
+// Called via TopChemical company actions (get_box_analysis / get_box_item_history
+// / update_box_movement / revise_box_movement) so page-level authority applies;
+// no dbGuard_ here, exactly as the clients_AR functions do it.
+//
+// NOTHING IN THIS FILE HAS EVER BEEN RUN. There is no MySQL client on the
+// machine this was written on and the credentials live only in Script
+// Properties. Every statement below was verified by reading it against the
+// schema in BOX_ANALYSIS_PLAN.md §2, not by executing it. The first execution
+// will be the owner's.
+
+var DB_BOX_TABLE = '`regular_box_movement`';
+
+var DB_BOX_COLUMNS = [
+  'id', 'transaction_date', 'transaction_details', 'client_id', 'related_id',
+  'transaction_type', 'transaction_amount', 'chart_of_accounts',
+  'responsible_person', 'box_code', 'user_id', 'created_at', 'updated_at',
+  'is_revised'
+];
+
+/* The item engine runs only on accounts numerically inside [300000, 400000]
+   (plan §2.1). `chart_of_accounts` is a `text` column holding a number, so the
+   comparison has to cast.
+
+   NOT SARGABLE, ON PURPOSE, FOR NOW: CAST(...) around the column defeats any
+   index, and `text` cannot be indexed without a prefix index anyway. If the
+   codes in this family turn out to be uniformly 6 digits, the plain string
+   range `>= '300000' AND < '400000'` is exactly equivalent and CAN use a prefix
+   index — but that is a measurement nobody has been able to take yet, not an
+   assumption to build on. It is registered in NEXT_STEPS_OWNER.md.
+
+   The REGEXP guard is not decoration: MySQL's CAST of a non-numeric string
+   yields 0 with a warning rather than an error, so without it every row whose
+   account code is blank or non-numeric would silently fall outside the range —
+   which is the right answer here, but by accident. Stating it makes the
+   intent survive the next edit. */
+var DB_BOX_RANGE_SQL =
+  "(`chart_of_accounts` REGEXP '^[0-9]+$' AND CAST(`chart_of_accounts` AS UNSIGNED) BETWEEN 300000 AND 400000)";
+
+function dbBoxValidateDate_(v) {
+  var s = String(v === undefined || v === null ? '' : v).trim();
+  if (!s) return '';
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) throw new Error('صيغة التاريخ غير صحيحة (المتوقع YYYY-MM-DD): ' + s);
+  return s;
+}
+
+function dbBoxValidateAccount_(v) {
+  var s = String(v === undefined || v === null ? '' : v).trim();
+  if (!s) return '';
+  if (!/^\d{1,20}$/.test(s)) throw new Error('كود الحساب يجب أن يكون أرقاماً فقط: ' + s);
+  return s;
+}
+
+function dbBoxValidateType_(v) {
+  var s = String(v === undefined || v === null ? '' : v).trim().toLowerCase();
+  if (!s) return '';
+  if (s !== 'credit' && s !== 'debit') throw new Error("نوع الحركة يجب أن يكون credit أو debit: " + v);
+  return s;
+}
+
+/** Integer or '' (meaning "no filter"). Rejects anything else rather than coercing. */
+function dbBoxValidateInt_(v, label) {
+  var s = String(v === undefined || v === null ? '' : v).trim();
+  if (!s) return '';
+  if (!/^-?\d{1,19}$/.test(s)) throw new Error((label || 'القيمة') + ' يجب أن تكون رقماً صحيحاً: ' + v);
+  return s;
+}
+
+/**
+ * Shared WHERE builder — used by BOTH the COUNT and the SELECT in dbBoxList_,
+ * so the pager total can never describe a different set of rows than the page
+ * shows. Same reason dbClientsArWhere_ exists.
+ *
+ * data: { date_from, date_to, chart_of_accounts, responsible_person, box_code,
+ *         transaction_type, is_revised, items_only }
+ * Returns { sql, params }.
+ *
+ * NULL transaction_date rows never match a set date bound (standard SQL), the
+ * same behaviour the clients_AR list already has.
+ */
+function dbBoxWhere_(data) {
+  var conditions = [];
+  var params = [];
+
+  var from = dbBoxValidateDate_(data.date_from);
+  var to = dbBoxValidateDate_(data.date_to);
+  if (from && to && from > to) throw new Error('تاريخ "من" يجب أن يكون قبل تاريخ "إلى"');
+  if (from) { conditions.push('`transaction_date` >= ?'); params.push(from); }
+  if (to) { conditions.push('`transaction_date` <= ?'); params.push(to); }
+
+  var acct = dbBoxValidateAccount_(data.chart_of_accounts);
+  if (acct) { conditions.push('`chart_of_accounts` = ?'); params.push(acct); }
+
+  /* responsible_person is free `text` and is typed inconsistently (plan §2
+     caveat), so an exact match would find nothing most of the time. LIKE with
+     both wildcards is a scan — acceptable because the date bound above already
+     limits the set, and because this is a filter a human typed, not something
+     the page issues on its own. */
+  var person = String(data.responsible_person === undefined || data.responsible_person === null ? '' : data.responsible_person).trim();
+  if (person) { conditions.push('`responsible_person` LIKE ?'); params.push('%' + person + '%'); }
+
+  var box = dbBoxValidateInt_(data.box_code, 'كود الخزنة');
+  if (box) { conditions.push('`box_code` = ?'); params.push(box); }
+
+  var type = dbBoxValidateType_(data.transaction_type);
+  if (type) { conditions.push('`transaction_type` = ?'); params.push(type); }
+
+  var rev = String(data.is_revised === undefined || data.is_revised === null ? '' : data.is_revised).trim();
+  if (rev === '0' || rev === '1') { conditions.push('`is_revised` = ?'); params.push(Number(rev)); }
+  else if (rev !== '') throw new Error('قيمة حالة المراجعة غير صحيحة (المتوقع 0 أو 1 أو فراغ)');
+
+  if (data.items_only === true || data.items_only === 'true' || data.items_only === 1 || data.items_only === '1') {
+    conditions.push(DB_BOX_RANGE_SQL);
+  }
+
+  return {
+    sql: conditions.length > 0 ? ' WHERE ' + conditions.join(' AND ') : '',
+    params: params
+  };
+}
+
+/** Every column of one result-set row, as strings (or null), in DB_BOX_COLUMNS order. */
+function dbBoxReadRow_(rs) {
+  function s(i) { var v = rs.getObject(i); return v !== null ? String(v) : null; }
+  return {
+    id: s(1),
+    /* DATE comes back as 'YYYY-MM-DD'; slice defends against a driver that
+       appends a time, exactly as dbClientsArList_ does for payment_date. */
+    transaction_date: rs.getObject(2) !== null ? String(rs.getObject(2)).slice(0, 10) : null,
+    transaction_details: s(3),
+    client_id: s(4),
+    related_id: s(5),
+    transaction_type: s(6),
+    transaction_amount: s(7),
+    chart_of_accounts: s(8),
+    responsible_person: s(9),
+    box_code: s(10),
+    user_id: s(11),
+    created_at: s(12),
+    updated_at: s(13),
+    is_revised: rs.getObject(14) !== null ? String(rs.getObject(14)) : '0'
+  };
+}
+
+/**
+ * Paginated list of movements.
+ * data: the dbBoxWhere_ filters, plus { limit, offset }.
+ * Returns { status:'ok', columns, rows, total, limit, offset }.
+ *
+ * Limits clamped exactly as dbClientsArList_ clamps them — nothing unbounded
+ * ever leaves the database. The clamped values are integers produced here, not
+ * client strings, which is why they can be concatenated into the SQL.
+ */
+function dbBoxList_(data, user) {
+  data = data || {};
+  var limit = Math.min(Math.max(Number(data.limit) || 50, 1), 200);
+  var offset = Math.max(Number(data.offset) || 0, 0);
+  var where = dbBoxWhere_(data);
+  var cols = DB_BOX_COLUMNS.map(dbSanitizeIdentifier_).join(', ');
+  var conn, countStmt, countRs, stmt, rs;
+  try {
+    conn = dbGetConnection_();
+    countStmt = conn.prepareStatement('SELECT COUNT(*) AS cnt FROM ' + DB_BOX_TABLE + where.sql);
+    dbBindParams_(countStmt, where.params);
+    countRs = countStmt.executeQuery();
+    var total = countRs.next() ? countRs.getInt('cnt') : 0;
+
+    stmt = conn.prepareStatement(
+      'SELECT ' + cols + ' FROM ' + DB_BOX_TABLE + where.sql +
+      ' ORDER BY `transaction_date` DESC, `id` DESC' +
+      ' LIMIT ' + limit + ' OFFSET ' + offset);
+    dbBindParams_(stmt, where.params);
+    rs = stmt.executeQuery();
+
+    var rows = [];
+    while (rs.next()) rows.push(dbBoxReadRow_(rs));
+    return { status: 'ok', columns: DB_BOX_COLUMNS.slice(), rows: rows, total: total, limit: limit, offset: offset };
+  } catch (err) {
+    Logger.log('dbBoxList_ error: ' + err.message);
+    throw err;
+  } finally {
+    if (rs) rs.close();
+    if (stmt) stmt.close();
+    if (countRs) countRs.close();
+    if (countStmt) countStmt.close();
+    if (conn) conn.close();
+  }
+}
+
+/**
+ * The four spend windows per chart_of_accounts, in ONE round trip (plan §6).
+ *
+ * data: { ref_date 'YYYY-MM-DD', chart_of_accounts (optional), limit }.
+ *
+ * credit = spend (منصرف), debit = collected (محصّل). They are returned in
+ * SEPARATE columns and are never netted: netting lets an inflow mask an
+ * outflow, which is the opposite of what this page is for.
+ *
+ * Last month and last year are cut to the same day-of-period as the reference
+ * date, computed by BoxEngine.accountWindows — a partial month measured against
+ * a complete one manufactures a decline every time.
+ *
+ * The bound parameters go in in the same order the CASE expressions consume
+ * them. That ordering is the one thing here a reader has to check by eye, so
+ * the window list and the SELECT are built from the SAME array below rather
+ * than written out twice.
+ */
+function dbBoxAccountAggregates_(data, user) {
+  data = data || {};
+  var ref = dbBoxValidateDate_(data.ref_date);
+  if (!ref) throw new Error('ref_date is required (YYYY-MM-DD)');
+  var w = BoxEngine.accountWindows(ref);
+  var acct = dbBoxValidateAccount_(data.chart_of_accounts);
+  /* Without a single-account filter this groups the whole table's accounts, so
+     it is capped. With one, the cap is irrelevant — there is one group. */
+  var limit = Math.min(Math.max(Number(data.limit) || 300, 1), 1000);
+
+  var WINDOWS = [
+    { key: 'mtd', w: w.mtd },
+    { key: 'last_month', w: w.last_month },
+    { key: 'ytd', w: w.ytd },
+    { key: 'last_ytd', w: w.last_ytd }
+  ];
+
+  var selects = [];
+  var params = [];
+  WINDOWS.forEach(function (x) {
+    selects.push("SUM(CASE WHEN `transaction_type` = 'credit' AND `transaction_date` BETWEEN ? AND ? THEN `transaction_amount` ELSE 0 END) AS `spend_" + x.key + '`');
+    params.push(x.w.from, x.w.to);
+  });
+  WINDOWS.forEach(function (x) {
+    selects.push("SUM(CASE WHEN `transaction_type` = 'debit' AND `transaction_date` BETWEEN ? AND ? THEN `transaction_amount` ELSE 0 END) AS `collected_" + x.key + '`');
+    params.push(x.w.from, x.w.to);
+  });
+  WINDOWS.forEach(function (x) {
+    selects.push("COUNT(CASE WHEN `transaction_type` = 'credit' AND `transaction_date` BETWEEN ? AND ? THEN 1 END) AS `n_" + x.key + '`');
+    params.push(x.w.from, x.w.to);
+  });
+
+  /* The outer bound is exactly the span the four windows can touch: 1 January
+     of last year through the reference date. Anything outside it contributes 0
+     to every CASE, so reading it would be pure cost. */
+  var whereSql = ' WHERE `transaction_date` BETWEEN ? AND ?';
+  params.push(w.span.from, w.span.to);
+  if (acct) { whereSql += ' AND `chart_of_accounts` = ?'; params.push(acct); }
+
+  var conn, stmt, rs;
+  try {
+    conn = dbGetConnection_();
+    stmt = conn.prepareStatement(
+      'SELECT `chart_of_accounts`, ' + selects.join(', ') +
+      ' FROM ' + DB_BOX_TABLE + whereSql +
+      ' GROUP BY `chart_of_accounts`' +
+      ' ORDER BY `spend_ytd` DESC' +
+      ' LIMIT ' + limit);
+    dbBindParams_(stmt, params);
+    rs = stmt.executeQuery();
+
+    var rows = [];
+    while (rs.next()) {
+      var row = { chart_of_accounts: rs.getObject(1) !== null ? String(rs.getObject(1)) : null };
+      var i = 2;
+      WINDOWS.forEach(function (x) { row['spend_' + x.key] = Number(rs.getObject(i++)) || 0; });
+      WINDOWS.forEach(function (x) { row['collected_' + x.key] = Number(rs.getObject(i++)) || 0; });
+      WINDOWS.forEach(function (x) { row['n_' + x.key] = Number(rs.getObject(i++)) || 0; });
+      rows.push(row);
+    }
+    return { status: 'ok', ref_date: ref, windows: w, rows: rows, limit: limit };
+  } catch (err) {
+    Logger.log('dbBoxAccountAggregates_ error: ' + err.message);
+    throw err;
+  } finally {
+    if (rs) rs.close();
+    if (stmt) stmt.close();
+    if (conn) conn.close();
+  }
+}
+
+/**
+ * Account code → Arabic label, from chart_of_accounts_main.
+ *
+ * DELIBERATELY NOT A JOIN. Whether `chart_of_accounts_main.id_5` is unique per
+ * row has not been confirmed against the data (plan §12 q.4), and a duplicated
+ * id_5 in a SQL join would fan out the aggregate rows and DOUBLE every account
+ * total on the page — a wrong number that looks entirely plausible. Labelling
+ * in JavaScript from a map cannot fan anything out: a duplicate can only make a
+ * label ambiguous, and `duplicate_ids` reports exactly which ones so the page
+ * can say so rather than pick one silently.
+ */
+function dbChartAccountLabels_(data, user) {
+  data = data || {};
+  var limit = Math.min(Math.max(Number(data.limit) || 5000, 1), 20000);
+  var conn, stmt, rs;
+  try {
+    conn = dbGetConnection_();
+    stmt = conn.prepareStatement(
+      'SELECT `id_5`, `account_5_name` FROM `chart_of_accounts_main`' +
+      ' WHERE `id_5` IS NOT NULL LIMIT ' + limit);
+    rs = stmt.executeQuery();
+    var labels = {}, duplicates = {}, n = 0;
+    while (rs.next()) {
+      var id = rs.getObject(1) !== null ? String(rs.getObject(1)).trim() : '';
+      var name = rs.getObject(2) !== null ? String(rs.getObject(2)).trim() : '';
+      if (!id) continue;
+      n++;
+      if (Object.prototype.hasOwnProperty.call(labels, id)) {
+        if (labels[id] !== name) duplicates[id] = true;
+        continue;                       /* first spelling wins, and it is reported */
+      }
+      labels[id] = name;
+    }
+    return {
+      status: 'ok', labels: labels, count: n,
+      duplicate_ids: Object.keys(duplicates),
+      truncated: n >= limit
+    };
+  } catch (err) {
+    Logger.log('dbChartAccountLabels_ error: ' + err.message);
+    throw err;
+  } finally {
+    if (rs) rs.close();
+    if (stmt) stmt.close();
+    if (conn) conn.close();
+  }
+}
+
+/**
+ * The rows the item engine needs: a bounded window of in-range movements, with
+ * only the columns parsing and price analysis actually consume.
+ *
+ * This is the ONE query that feeds the whole item index. It is never issued per
+ * row and never inside a loop — JDBC round trips are the entire cost of this
+ * page, and a per-row history query would turn one page load into fifty.
+ *
+ * Two hard bounds, both because Apps Script kills a script at six minutes:
+ *   months  — how far back to look, default 24, capped at 60
+ *   limit   — a hard row cap, capped at DB_BOX_HISTORY_MAX
+ * `truncated` tells the caller the window was cut, so the page can say
+ * "التحليل على أحدث N حركة" instead of quietly analysing a subset.
+ */
+var DB_BOX_HISTORY_MAX = 20000;
+
+function dbBoxItemHistory_(data, user) {
+  data = data || {};
+  var ref = dbBoxValidateDate_(data.ref_date);
+  if (!ref) throw new Error('ref_date is required (YYYY-MM-DD)');
+  var months = Math.min(Math.max(Number(data.months) || 24, 1), 60);
+  var limit = Math.min(Math.max(Number(data.limit) || 5000, 1), DB_BOX_HISTORY_MAX);
+
+  var fromIso = BoxEngine.monthsBefore(ref, months);
+
+  var params = [fromIso, ref];
+  var whereSql = ' WHERE `transaction_date` BETWEEN ? AND ?' +
+    "  AND `transaction_type` = 'credit'" +      /* spend only; debit is collection */
+    ' AND ' + DB_BOX_RANGE_SQL;                  /* the item engine's scope, plan §2.1 */
+
+  var acct = dbBoxValidateAccount_(data.chart_of_accounts);
+  if (acct) { whereSql += ' AND `chart_of_accounts` = ?'; params.push(acct); }
+
+  var conn, stmt, rs;
+  try {
+    conn = dbGetConnection_();
+    stmt = conn.prepareStatement(
+      'SELECT `id`, `transaction_date`, `transaction_details`, `transaction_amount`,' +
+      ' `chart_of_accounts`, `responsible_person`, `box_code`, `created_at`, `is_revised`' +
+      ' FROM ' + DB_BOX_TABLE + whereSql +
+      ' ORDER BY `transaction_date` DESC, `id` DESC' +
+      ' LIMIT ' + limit);
+    dbBindParams_(stmt, params);
+    rs = stmt.executeQuery();
+
+    var rows = [];
+    while (rs.next()) {
+      rows.push({
+        id: rs.getObject(1) !== null ? String(rs.getObject(1)) : null,
+        transaction_date: rs.getObject(2) !== null ? String(rs.getObject(2)).slice(0, 10) : null,
+        transaction_details: rs.getObject(3) !== null ? String(rs.getObject(3)) : null,
+        transaction_amount: rs.getObject(4) !== null ? String(rs.getObject(4)) : null,
+        chart_of_accounts: rs.getObject(5) !== null ? String(rs.getObject(5)) : null,
+        responsible_person: rs.getObject(6) !== null ? String(rs.getObject(6)) : null,
+        box_code: rs.getObject(7) !== null ? String(rs.getObject(7)) : null,
+        created_at: rs.getObject(8) !== null ? String(rs.getObject(8)) : null,
+        is_revised: rs.getObject(9) !== null ? String(rs.getObject(9)) : '0'
+      });
+    }
+    return {
+      status: 'ok', rows: rows, from: fromIso, to: ref,
+      months: months, limit: limit, truncated: rows.length >= limit
+    };
+  } catch (err) {
+    Logger.log('dbBoxItemHistory_ error: ' + err.message);
+    throw err;
+  } finally {
+    if (rs) rs.close();
+    if (stmt) stmt.close();
+    if (conn) conn.close();
+  }
+}
