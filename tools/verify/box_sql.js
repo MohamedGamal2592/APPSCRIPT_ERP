@@ -81,15 +81,46 @@ ok(!/\bDELETE\s+FROM\b/i.test(BOX), 'the box section issues no DELETE');
  * The single unacceptable outcome named in the brief is an UPDATE reaching
  * production without a WHERE id = ?. Asserted per statement, not per file. */
 console.log('every UPDATE targets one row by primary key');
-const updates = BOX.match(/'UPDATE[\s\S]*?'/g) || [];
-const updateStmts = (BOX.match(/UPDATE\s+`?regular_box_movement`?[\s\S]{0,600}?(?=;|\n\s*\n)/gi) || []);
-ok(true, 'UPDATE statements found: ' + updateStmts.length);
-updateStmts.forEach(function (u, i) {
-  ok(/WHERE\s+`id`\s*=\s*\?/i.test(u),
-    'UPDATE #' + (i + 1) + ' has WHERE `id` = ?',
-    u.replace(/\s+/g, ' ').slice(0, 140));
-  ok(!/WHERE\s+1\s*=\s*1/i.test(u), 'UPDATE #' + (i + 1) + ' has no WHERE 1=1');
+/* The table name is built from the DB_BOX_TABLE constant, not written inline,
+   so this looks for the statement the way the source actually spells it. An
+   earlier version of this check matched on the literal table name, found zero
+   statements, and passed vacuously — which is exactly the failure this whole
+   file exists to prevent, so it is called out rather than quietly fixed. */
+const updateStarts = [];
+let ui = BOX.indexOf("'UPDATE ");
+while (ui !== -1) { updateStarts.push(ui); ui = BOX.indexOf("'UPDATE ", ui + 1); }
+ok(updateStarts.length > 0, 'at least one UPDATE statement is present', 'found ' + updateStarts.length);
+console.log('  (UPDATE statements found: ' + updateStarts.length + ')');
+updateStarts.forEach(function (start, i) {
+  /* The statement is a concatenated expression; take it up to the closing
+     paren of the prepareStatement call that consumes it. */
+  const chunk = BOX.slice(start, start + 700);
+  const stmtText = chunk.slice(0, chunk.indexOf(');') === -1 ? 700 : chunk.indexOf(');'));
+  ok(/WHERE `id` = \?/.test(stmtText),
+    'UPDATE #' + (i + 1) + ' carries WHERE `id` = ?',
+    stmtText.replace(/\s+/g, ' ').slice(0, 160));
+  ok(!/WHERE 1\s*=\s*1/i.test(stmtText), 'UPDATE #' + (i + 1) + ' has no WHERE 1=1');
+  ok(stmtText.indexOf('DB_BOX_TABLE') !== -1,
+    'UPDATE #' + (i + 1) + ' targets regular_box_movement and nothing else',
+    stmtText.replace(/\s+/g, ' ').slice(0, 160));
 });
+
+/* updated_at is server-set on every write path, and is not something a client
+   can supply — the EDITED_AFTER_REVIEW rule reads it. */
+ok(BOX.indexOf('`updated_at` = NOW()') !== -1, 'updated_at is set by the server to NOW()');
+ok(BOX.indexOf("EDITABLE_COLUMNS") === -1 || BOX.indexOf('BoxEngine.validateChanges') !== -1,
+  'the change set goes through BoxEngine.validateChanges (the fixed allowlist)');
+ok(BOX.indexOf('BoxEngine.validateChanges(data.changes)') !== -1,
+  'dbBoxUpdate_ validates the change set BEFORE opening a connection');
+
+/* dbBoxGetOne_ borrows the caller's connection, so it must close its own result
+   set and statement and must NOT close the connection out from under it. */
+const getOne = BOX.slice(BOX.indexOf('function dbBoxGetOne_'), BOX.indexOf('function dbBoxUpdate_'));
+ok(getOne.length > 0, 'dbBoxGetOne_ is present');
+ok(/finally \{[\s\S]*?if \(rs\) rs\.close\(\);[\s\S]*?if \(stmt\) stmt\.close\(\);[\s\S]*?\}/.test(getOne),
+  'dbBoxGetOne_ closes rs and stmt in a finally');
+ok(getOne.indexOf('conn.close()') === -1,
+  'dbBoxGetOne_ does NOT close the connection it was lent');
 
 /* ── 5. Resources close on EVERY path, including the error path ────────────
  * The pattern is `finally { if (rs) rs.close(); if (stmt) stmt.close(); ...

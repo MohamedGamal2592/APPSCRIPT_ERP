@@ -4739,14 +4739,237 @@ const valueMap = {};
     };
   }
 
-  /** One row, one column set, confirmed by the user. Connector detail in B6. */
-  function updateBoxMovement_(data, user, dbId) {
-    return dbBoxUpdate_(data || {}, user);
+
+  // ─── The audit trail (plan §8.5) ────────────────────────────────────────
+  //
+  // WHY THIS IS NOT OPTIONAL. This page hunts for tampering, and one of its
+  // rules (EDITED_AFTER_REVIEW) fires on updated_at > created_at for a reviewed
+  // row. If the page could edit rows without leaving a record, two things break
+  // at once: it becomes a way to quietly alter the evidence it is auditing, and
+  // it starts flagging its OWN legitimate edits as suspicious with no way to
+  // tell them from an outside change. The rules engine reads this log to make
+  // exactly that distinction.
+  //
+  // WHERE IT LIVES. No DDL is available, so this is not a table. It is
+  // append-only NDJSON — one JSON object per line — in a Drive folder,
+  // one file per month. That is a deliberate compromise and it is registered in
+  // NEXT_STEPS_OWNER.md as promotable to a real table the moment DDL exists:
+  // a Drive file has no transactions, no constraints, and no query engine.
+  //
+  // ORDERING. The intent line is written BEFORE the UPDATE, and the applied
+  // line after. If Drive is unavailable, the write never happens — better a
+  // refused edit than an unrecorded one. If the SECOND write fails, the row has
+  // already changed, so the caller gets audit_error back and the page says so
+  // loudly rather than reporting a clean save.
+
+  const BOX_AUDIT_FOLDER = 'Box_Analysis_Audit';
+  const BOX_AUDIT_MAX_BYTES = 5000000;   /* roll to a new part beyond this */
+
+  function boxAuditFolder_() {
+    const it = DriveApp.getFoldersByName(BOX_AUDIT_FOLDER);
+    if (it.hasNext()) return it.next();
+    return DriveApp.createFolder(BOX_AUDIT_FOLDER);
   }
 
-  /** The one-click review flip, mirroring revise_main_review. */
+  function boxAuditMonthKey_(d) {
+    return Utilities.formatDate(d || new Date(), Session.getScriptTimeZone(), 'yyyy-MM');
+  }
+
+  /**
+   * The file to append to for a month, rolling to _p2, _p3 … once a part grows
+   * past BOX_AUDIT_MAX_BYTES. Appending to a Drive file is a read-modify-write,
+   * so an unbounded file would get slower every edit and would eventually
+   * exceed what a single execution can hold in memory.
+   */
+  function boxAuditFile_(folder, monthKey) {
+    let n = 1, file = null;
+    for (;;) {
+      const name = 'box_audit_' + monthKey + (n === 1 ? '' : '_p' + n) + '.ndjson';
+      const it = folder.getFilesByName(name);
+      if (!it.hasNext()) return folder.createFile(name, '', MimeType.PLAIN_TEXT);
+      file = it.next();
+      if (file.getSize() < BOX_AUDIT_MAX_BYTES) return file;
+      n++;
+      if (n > 500) return file;          /* pathological; keep appending rather than loop */
+    }
+  }
+
+  /**
+   * Append one or more entries as NDJSON lines.
+   *
+   * Serialized through executeWithLock_ because Drive gives no append
+   * primitive: this is read-then-write, and two concurrent edits without the
+   * lock would lose one of them — in the audit log, of all places.
+   * Throws on failure. Every caller must treat that as fatal to the edit.
+   */
+  function boxAuditAppend_(entries) {
+    const lines = (entries || []).map(function (e) { return JSON.stringify(e); }).join('\n');
+    if (!lines) return 0;
+    return executeWithLock_(function () {
+      const folder = boxAuditFolder_();
+      const file = boxAuditFile_(folder, boxAuditMonthKey_());
+      const existing = file.getBlob().getDataAsString('UTF-8');
+      const sep = (existing && existing.charAt(existing.length - 1) !== '\n') ? '\n' : '';
+      file.setContent(existing + sep + lines + '\n');
+      return entries.length;
+    }, 20000);
+  }
+
+  /**
+   * Every audit entry from the last `months` months, newest file last.
+   * Used by the rules engine to tell this page's own edits from an outside
+   * change. A malformed line is skipped rather than throwing — a corrupt line
+   * must not make the whole log unreadable and take the rule down with it.
+   */
+  function boxAuditRead_(months) {
+    const want = {};
+    const now = new Date();
+    const back = Math.min(Math.max(Number(months) || 3, 1), 24);
+    for (let i = 0; i < back; i++) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      want[boxAuditMonthKey_(d)] = true;
+    }
+    const out = [];
+    try {
+      const folder = boxAuditFolder_();
+      const files = folder.getFiles();
+      while (files.hasNext()) {
+        const f = files.next();
+        const m = /^box_audit_(\d{4}-\d{2})(?:_p\d+)?\.ndjson$/.exec(f.getName());
+        if (!m || !want[m[1]]) continue;
+        f.getBlob().getDataAsString('UTF-8').split('\n').forEach(function (line) {
+          const s = line.trim();
+          if (!s) return;
+          try { out.push(JSON.parse(s)); } catch (e) { /* skip a corrupt line */ }
+        });
+      }
+    } catch (e) {
+      Logger.log('boxAuditRead_ unavailable: ' + e.message);
+    }
+    return out;
+  }
+
+  function boxAuditActor_(user) {
+    return {
+      email: (user && user.email) || '',
+      name: (user && user.name) || '',
+      role: (user && user.role) || ''
+    };
+  }
+
+  function boxEditId_() {
+    return Utilities.getUuid().replace(/-/g, '').slice(0, 16);
+  }
+
+  function boxNowIso_() {
+    return Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd'T'HH:mm:ssXXX");
+  }
+
+  /**
+   * The ONE write. One row, by primary key, from a user who filled in a form,
+   * clicked Save, and confirmed a dialog that named the change.
+   *
+   * data: { id, changes: { column: value, ... } }
+   *
+   * The audit intent line is written FIRST. If Drive will not take it, the
+   * update never happens — a refused edit is recoverable, an unrecorded one is
+   * not. The allowlist and every per-column rule are enforced again in
+   * dbBoxUpdate_ via BoxEngine.validateChanges: the client's validation is a
+   * courtesy to the user, this one is the rule.
+   */
+  function updateBoxMovement_(data, user, dbId) {
+    data = data || {};
+    const editId = boxEditId_();
+    const actor = boxAuditActor_(user);
+    const when = boxNowIso_();
+    const id = String(data.id === undefined || data.id === null ? '' : data.id).trim();
+    if (!id) throw new Error('رقم الحركة مطلوب');
+
+    /* Validate before writing anything at all, so a rejected edit leaves no
+       intent line behind and the log is not full of attempts that could never
+       have succeeded. Throws with an Arabic message naming the column. */
+    const checked = BoxEngine.validateChanges(data.changes);
+
+    /* 1 — intent. Old values are not known yet (reading them would cost a round
+       trip this function does not need); what this line guarantees is that no
+       row can change without a record of the attempt existing first. */
+    boxAuditAppend_([{
+      edit_id: editId, phase: 'intent', action: 'update_box_movement',
+      when: when, user: actor, movement_id: id,
+      columns: checked.columns,
+      proposed: checked.columns.map(function (c) { return { column: c, new: checked.values[c] }; })
+    }]);
+
+    /* 2 — the write. */
+    const res = dbBoxUpdate_({ id: id, changes: data.changes }, user);
+
+    /* 3 — applied, with the before/after pairs the rules engine reads. Per the
+       plan's shape: when, user, row id, column, old value, new value. */
+    let auditError = '';
+    try {
+      boxAuditAppend_([{
+        edit_id: editId, phase: 'applied', action: 'update_box_movement',
+        when: boxNowIso_(), user: actor, movement_id: id,
+        changes: res.changed.map(function (c) {
+          return { column: c, old: res.before ? res.before[c] : null, new: res.after ? res.after[c] : null };
+        }),
+        updated_at_before: res.before ? res.before.updated_at : null,
+        updated_at_after: res.after ? res.after.updated_at : null,
+        boundary: res.boundary || null
+      }]);
+    } catch (e) {
+      /* The row HAS changed. Saying "saved" and nothing else would leave an
+         edit the audit cannot explain, and B7 would later flag it as an
+         outside change. The page shows this prominently. */
+      auditError = e.message || String(e);
+      Logger.log('updateBoxMovement_ audit(applied) FAILED for id ' + id + ': ' + auditError);
+    }
+
+    return {
+      status: 'ok',
+      id: res.id,
+      changed: res.changed,
+      row: res.after,
+      boundary: res.boundary || null,
+      edit_id: editId,
+      audit_error: auditError
+    };
+  }
+
+  /**
+   * The one-click review flip, mirroring revise_main_review — audited on the
+   * same path, because it moves updated_at and is therefore visible to the
+   * EDITED_AFTER_REVIEW rule just like any other edit.
+   */
   function reviseBoxMovement_(data, user, dbId) {
-    return dbBoxRevise_(data || {}, user);
+    data = data || {};
+    const id = String(data.id === undefined || data.id === null ? '' : data.id).trim();
+    if (!id) throw new Error('رقم الحركة مطلوب');
+    const editId = boxEditId_();
+    const actor = boxAuditActor_(user);
+
+    boxAuditAppend_([{
+      edit_id: editId, phase: 'intent', action: 'revise_box_movement',
+      when: boxNowIso_(), user: actor, movement_id: id,
+      columns: ['is_revised'],
+      proposed: [{ column: 'is_revised', new: 1 }]
+    }]);
+
+    const res = dbBoxRevise_({ id: id }, user);
+
+    let auditError = '';
+    try {
+      boxAuditAppend_([{
+        edit_id: editId, phase: 'applied', action: 'revise_box_movement',
+        when: boxNowIso_(), user: actor, movement_id: id,
+        changes: [{ column: 'is_revised', old: '0', new: '1' }]
+      }]);
+    } catch (e) {
+      auditError = e.message || String(e);
+      Logger.log('reviseBoxMovement_ audit(applied) FAILED for id ' + id + ': ' + auditError);
+    }
+
+    return { status: 'ok', id: id, is_revised: 1, edit_id: editId, audit_error: auditError };
   }
 
   register('get_box_analysis', getBoxAnalysis_);

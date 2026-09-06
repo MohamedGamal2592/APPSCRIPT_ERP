@@ -856,6 +856,223 @@ var BoxEngine = (function () {
   }
 
   // ═══════════════════════════════════════════════════════════════════════
+  // §8.5  The edit path — allowlist and validators
+  // ═══════════════════════════════════════════════════════════════════════
+
+  /**
+   * The columns an edit may touch. A FIXED ALLOWLIST, never a sanitizer over a
+   * client-supplied column name: a sanitizer answers "is this string safe to
+   * put in SQL", and the question that matters is "is this a column a user is
+   * allowed to change at all".
+   *
+   * Absent on purpose, and each for its own reason:
+   *   id          the primary key the update targets
+   *   created_at  THE EVIDENCE. The backdating rules (BACKDATED, ODD_HOUR,
+   *               OUT_OF_SEQUENCE) all run on created_at. A page whose job is
+   *               to find tampering must not offer a field for editing the
+   *               timestamps it audits.
+   *   updated_at  server-set to NOW() on every edit, so EDITED_AFTER_REVIEW
+   *               cannot be defeated by writing an old value into it.
+   *
+   * Types come straight from the schema in plan §2, so the validation is exact
+   * rather than defensive: transaction_details is varchar(255) and MySQL would
+   * truncate or throw, so 256 characters is rejected HERE, with an Arabic
+   * message naming the column, rather than becoming a driver error or, worse,
+   * a silently shortened description.
+   */
+  var EDITABLE_COLUMNS = {
+    transaction_date:    { type: 'date',    label_ar: 'التاريخ' },
+    transaction_details: { type: 'text255', label_ar: 'التفاصيل', max: 255 },
+    transaction_amount:  { type: 'money',   label_ar: 'المبلغ' },
+    transaction_type:    { type: 'enum',    label_ar: 'النوع', values: ['credit', 'debit'],
+                           labels_ar: { credit: 'منصرف', debit: 'محصّل' } },
+    chart_of_accounts:   { type: 'digits',  label_ar: 'كود الحساب' },
+    responsible_person:  { type: 'text',    label_ar: 'المسؤول', max: 65535 },
+    box_code:            { type: 'int',     label_ar: 'كود الخزنة' },
+    client_id:           { type: 'intNull', label_ar: 'كود العميل' },
+    related_id:          { type: 'intNull', label_ar: 'الكود المرتبط' },
+    user_id:             { type: 'intNull', label_ar: 'كود المستخدم', max: 2147483647 },
+    is_revised:          { type: 'bool01',  label_ar: 'حالة المراجعة' }
+  };
+
+  var LOCKED_COLUMNS = {
+    id: 'المفتاح الأساسي لا يمكن تعديله',
+    created_at: 'تاريخ الإنشاء دليل تدقيق ولا يمكن تعديله من هذه الصفحة',
+    updated_at: 'تاريخ آخر تعديل يضبطه الخادم تلقائياً'
+  };
+
+  /* double(16,2): 16 significant digits with 2 after the point, so the largest
+     representable magnitude is 99999999999999.99. */
+  var MONEY_MAX = 99999999999999.99;
+
+  function isEditableColumn(col) {
+    return Object.prototype.hasOwnProperty.call(EDITABLE_COLUMNS, String(col));
+  }
+
+  /**
+   * Validate and coerce ONE column's value. Throws an Arabic Error naming the
+   * column when the value will not do.
+   *
+   * Returns the value in the form the prepared statement should bind: a string
+   * for text and dates, a Number for money and integers, or null for an empty
+   * nullable id. Returning the coerced value rather than a boolean is what
+   * keeps the caller from binding the raw client string by accident.
+   */
+  function validateColumn(col, value) {
+    var name = String(col);
+    if (Object.prototype.hasOwnProperty.call(LOCKED_COLUMNS, name)) {
+      throw new Error(LOCKED_COLUMNS[name]);
+    }
+    if (!isEditableColumn(name)) {
+      throw new Error('عمود غير مسموح بتعديله: ' + name);
+    }
+    var spec = EDITABLE_COLUMNS[name];
+    var raw = (value === undefined || value === null) ? '' : String(value);
+    var s = raw.trim();
+    var L = spec.label_ar;
+
+    switch (spec.type) {
+      case 'date':
+        if (!s) throw new Error(L + ': التاريخ مطلوب');
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) throw new Error(L + ': صيغة التاريخ غير صحيحة (المتوقع YYYY-MM-DD)');
+        /* Shape is not enough — 2026-02-31 has the right shape and is not a
+           day. MySQL would take it as a zero date or reject it depending on
+           sql_mode, and either way the row's date would no longer mean what it
+           says. */
+        if (!parseIsoDate(s)) throw new Error(L + ': تاريخ غير موجود في التقويم');
+        return s;
+
+      case 'text255':
+        if (s.length > spec.max) {
+          throw new Error(L + ': الحد الأقصى ' + spec.max + ' حرفاً، والمُدخل ' + s.length +
+            ' — اختصر النص، فقاعدة البيانات ستقتطعه دون تنبيه');
+        }
+        return s;
+
+      case 'text':
+        if (s.length > spec.max) throw new Error(L + ': الحد الأقصى ' + spec.max + ' حرفاً');
+        return s;
+
+      case 'money': {
+        if (!s) throw new Error(L + ': القيمة مطلوبة');
+        if (!/^-?\d+(\.\d{1,2})?$/.test(s)) {
+          throw new Error(L + ': رقم بحد أقصى منزلتين عشريتين');
+        }
+        var n = Number(s);
+        if (!isFinite(n)) throw new Error(L + ': قيمة رقمية غير صالحة');
+        if (Math.abs(n) > MONEY_MAX) throw new Error(L + ': القيمة أكبر مما يتسع له الحقل');
+        return n;
+      }
+
+      case 'enum':
+        if (spec.values.indexOf(s) === -1) {
+          throw new Error(L + ': القيمة يجب أن تكون ' + spec.values.join(' أو '));
+        }
+        return s;
+
+      case 'digits':
+        if (!s) throw new Error(L + ': القيمة مطلوبة');
+        if (!/^\d{1,20}$/.test(s)) throw new Error(L + ': أرقام فقط');
+        return s;
+
+      case 'int': {
+        if (!s) throw new Error(L + ': القيمة مطلوبة');
+        if (!/^-?\d{1,19}$/.test(s)) throw new Error(L + ': رقم صحيح فقط');
+        return s;                       /* bigint — kept as a string, never through a float */
+      }
+
+      case 'intNull': {
+        if (!s) return null;            /* empty means NULL, which is the schema's default */
+        if (!/^-?\d{1,19}$/.test(s)) throw new Error(L + ': رقم صحيح أو فراغ');
+        if (spec.max !== undefined && Math.abs(Number(s)) > spec.max) {
+          throw new Error(L + ': القيمة خارج المدى المسموح');
+        }
+        return s;
+      }
+
+      case 'bool01':
+        if (s !== '0' && s !== '1') throw new Error(L + ': القيمة يجب أن تكون 0 أو 1');
+        return Number(s);
+    }
+    throw new Error('نوع تحقق غير معروف للعمود: ' + name);
+  }
+
+  /**
+   * Validate a whole change set. Returns { values, columns } with every value
+   * coerced, or throws on the first column that will not validate.
+   * Rejecting an EMPTY change set is deliberate: an update with nothing to set
+   * is a client bug, and letting it through would move updated_at — which the
+   * EDITED_AFTER_REVIEW rule reads — for no reason at all.
+   */
+  function validateChanges(changes) {
+    var out = {}, cols = [];
+    var src = changes || {};
+    for (var col in src) {
+      if (!Object.prototype.hasOwnProperty.call(src, col)) continue;
+      out[col] = validateColumn(col, src[col]);
+      cols.push(col);
+    }
+    if (!cols.length) throw new Error('لا توجد تغييرات');
+    cols.sort();                        /* deterministic SET order and audit order */
+    return { values: out, columns: cols };
+  }
+
+  /** Is this account code inside the item engine's range? (plan §2.1) */
+  function inItemRange(code) {
+    var s = String(code === undefined || code === null ? '' : code).trim();
+    if (!/^\d+$/.test(s)) return false;
+    var n = Number(s);
+    return n >= 300000 && n <= 400000;
+  }
+
+  /**
+   * Does this edit move the row across the 300000–400000 boundary? Worth
+   * saying out loud in the confirmation, because it silently changes WHICH
+   * ANALYSES APPLY to the row — the item parsing and every price rule are
+   * scoped to that range — and nothing else on screen would show it.
+   */
+  function crossesItemBoundary(oldCode, newCode) {
+    var a = inItemRange(oldCode), b = inItemRange(newCode);
+    if (a === b) return null;
+    return {
+      from_in_range: a,
+      to_in_range: b,
+      reason_ar: b
+        ? 'هذا التعديل يُدخل الحركة في نطاق تحليل البنود (300000–400000)، فتصبح خاضعة لتحليل الأسعار'
+        : 'هذا التعديل يُخرج الحركة من نطاق تحليل البنود (300000–400000)، فتتوقف عنها قواعد تحليل الأسعار'
+    };
+  }
+
+  /**
+   * Which columns actually differ, comparing as the form would produce them.
+   * Only changed columns are sent, so an edit that touches one field does not
+   * rewrite ten and does not fill the audit log with lines saying nothing
+   * changed.
+   */
+  function diffChanges(original, edited) {
+    var out = {};
+    var src = edited || {};
+    for (var col in src) {
+      if (!Object.prototype.hasOwnProperty.call(src, col)) continue;
+      if (!isEditableColumn(col)) continue;
+      var before = (original || {})[col];
+      var a = (before === undefined || before === null) ? '' : String(before).trim();
+      var b = (src[col] === undefined || src[col] === null) ? '' : String(src[col]).trim();
+      /* Money compares by value, not by spelling: "725.00" and "725" are the
+         same amount, and an edit that changed neither must not be recorded as
+         one. */
+      if (EDITABLE_COLUMNS[col].type === 'money' && a !== '' && b !== '' &&
+          isFinite(Number(a)) && isFinite(Number(b))) {
+        if (Number(a) === Number(b)) continue;
+      } else if (a === b) {
+        continue;
+      }
+      out[col] = src[col];
+    }
+    return out;
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
   // Public surface
   // ═══════════════════════════════════════════════════════════════════════
 
@@ -884,6 +1101,16 @@ var BoxEngine = (function () {
     matchCandidates: matchCandidates,
     clusterItems: clusterItems,
     MATCH: MATCH,
+
+    /* §8.5 — the edit path */
+    EDITABLE_COLUMNS: EDITABLE_COLUMNS,
+    LOCKED_COLUMNS: LOCKED_COLUMNS,
+    isEditableColumn: isEditableColumn,
+    validateColumn: validateColumn,
+    validateChanges: validateChanges,
+    inItemRange: inItemRange,
+    crossesItemBoundary: crossesItemBoundary,
+    diffChanges: diffChanges,
 
     /* §6 — period windows */
     daysInMonth: daysInMonth,

@@ -52,6 +52,18 @@
 
     .notice { border-radius: 8px; padding: 8px 12px; margin-bottom: 10px; font-size: 13px; }
     .notice-warn { background: #fffbeb; border: 1px solid #fde68a; color: #92400e; }
+
+    /* The confirmation for an edit carries ONE LINE PER CHANGED COLUMN, and
+       UIC.confirm renders `detail` as a single <p>, so newlines would collapse
+       into one run-on sentence and "المبلغ: 725.00 ← 900.00" would stop being
+       readable at a glance. Scoped to this page's stylesheet on purpose:
+       UI_Components is shared by 49 pages and additions to it must be purely
+       additive, so the shared rule is left exactly as it is. */
+    .uic-confirm-detail { white-space: pre-line; }
+
+    .edit-hint { font-size: 12px; color: var(--text-muted); margin: -4px 0 10px; }
+    .edit-locked { font-size: 12.5px; color: var(--text-muted); border-top: 1px dashed var(--border, #e5e7eb);
+                   margin-top: 10px; padding-top: 8px; line-height: 1.9; }
   </style>
 </head>
 <body>
@@ -255,6 +267,19 @@
       : '<span class="pill pill-0">غير مراجع</span>';
   }
 
+  /* Both actions are gated on the write grant. A reader sees the dash, not a
+     button that will refuse them — and the server refuses regardless, since
+     both actions require 'write' in PAGE_ACCESS. */
+  function rowActions(row) {
+    if (!CAN_WRITE) return '<span style="color:#9ca3af;">—</span>';
+    var id = domId(row.id);
+    var btns = [{ label: 'تعديل', onclick: "openEdit('" + id + "')" }];
+    if (String(row.is_revised) !== '1') {
+      btns.push({ label: 'مراجعة', onclick: "confirmRevise('" + id + "')", color: '#16a34a' });
+    }
+    return UIC.actionBtns(btns);
+  }
+
   function typeLabel(t) {
     return String(t) === 'debit'
       ? '<span class="pill pill-info">محصّل</span>'
@@ -287,6 +312,7 @@
         '<th style="width:34px;"></th>' +
         '<th>التاريخ</th><th>التفاصيل</th><th>المبلغ</th><th>النوع</th>' +
         '<th>الحساب</th><th>المسؤول</th><th>الخزنة</th><th>الحالة</th>' +
+        '<th>إجراء</th>' +
       '</tr></thead><tbody>';
 
     LAST.rows.forEach(function (row) {
@@ -310,9 +336,10 @@
         '<td>' + esc(row.responsible_person || '—') + '</td>' +
         '<td class="num">' + esc(row.box_code == null ? '—' : row.box_code) + '</td>' +
         '<td>' + revisePill(row.is_revised) + '</td>' +
+        '<td>' + rowActions(row) + '</td>' +
       '</tr>' +
       '<tr id="box-detail-' + id + '"' + (open ? '' : ' hidden') + '>' +
-        '<td class="detail-cell" colspan="9">' + (open ? detailHtml(row) : '') + '</td>' +
+        '<td class="detail-cell" colspan="10">' + (open ? detailHtml(row) : '') + '</td>' +
       '</tr>';
     });
 
@@ -460,6 +487,279 @@
     return html;
   }
 
+
+  /* ── The edit path (plan §8.5) ─────────────────────────────────────────────
+   *
+   * EDIT_FIELDS mirrors BoxEngine.EDITABLE_COLUMNS. The engine is a SERVER file
+   * and cannot be reached from here, so a form definition on this side is
+   * unavoidable — but two lists that can drift apart is exactly how a column
+   * ends up editable in the form and rejected by the server, or worse, the
+   * other way round. tools/verify/box_edit.js asserts the two sets are equal,
+   * so the duplication cannot rot silently.
+   *
+   * id, created_at and updated_at are ABSENT, each for its own reason, and the
+   * form says so rather than just omitting them: created_at is the evidence the
+   * backdating rules run on, and a page that audits tampering must not offer a
+   * field for editing the timestamps it audits.
+   */
+  var EDIT_FIELDS = [
+    { col: 'transaction_date',    label: 'التاريخ',        type: 'date' },
+    { col: 'transaction_details', label: 'التفاصيل',       type: 'textarea', max: 255 },
+    { col: 'transaction_amount',  label: 'المبلغ',         type: 'money' },
+    { col: 'transaction_type',    label: 'النوع',          type: 'select',
+      options: [{ value: 'credit', label: 'منصرف (credit)' }, { value: 'debit', label: 'محصّل (debit)' }] },
+    { col: 'chart_of_accounts',   label: 'كود الحساب',     type: 'digits' },
+    { col: 'responsible_person',  label: 'المسؤول',        type: 'text' },
+    { col: 'box_code',            label: 'كود الخزنة',     type: 'int' },
+    { col: 'client_id',           label: 'كود العميل',     type: 'intNull' },
+    { col: 'related_id',          label: 'الكود المرتبط',  type: 'intNull' },
+    { col: 'user_id',             label: 'كود المستخدم',   type: 'intNull' },
+    { col: 'is_revised',          label: 'حالة المراجعة',  type: 'select',
+      options: [{ value: '0', label: 'غير مراجع' }, { value: '1', label: 'مراجع' }] }
+  ];
+
+  var EDIT_PREFIX = 'ed_';
+
+  function fieldFor(col) {
+    for (var i = 0; i < EDIT_FIELDS.length; i++) if (EDIT_FIELDS[i].col === col) return EDIT_FIELDS[i];
+    return null;
+  }
+
+  /* A courtesy copy of the server's rules, so the user is told about a bad
+     value before a round trip rather than after one. The SERVER's copy is the
+     rule; this one only ever refuses things the server would also refuse. */
+  function clientValidate(f, raw) {
+    var v = String(raw === undefined || raw === null ? '' : raw).trim();
+    switch (f.type) {
+      case 'date':
+        if (!v) return f.label + ': التاريخ مطلوب';
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) return f.label + ': صيغة التاريخ غير صحيحة';
+        return '';
+      case 'textarea':
+        /* Enforced here as well as on the server because MySQL would truncate
+           a varchar(255) silently — the user would save a description and get
+           back a shorter one with no error at all. */
+        if (v.length > f.max) return f.label + ': الحد الأقصى ' + f.max + ' حرفاً، والمُدخل ' + v.length;
+        return '';
+      case 'money':
+        if (!v) return f.label + ': القيمة مطلوبة';
+        if (!/^-?\d+(\.\d{1,2})?$/.test(v)) return f.label + ': رقم بحد أقصى منزلتين عشريتين';
+        return '';
+      case 'digits':
+        if (!v) return f.label + ': القيمة مطلوبة';
+        if (!/^\d{1,20}$/.test(v)) return f.label + ': أرقام فقط';
+        return '';
+      case 'int':
+        if (!v) return f.label + ': القيمة مطلوبة';
+        if (!/^-?\d{1,19}$/.test(v)) return f.label + ': رقم صحيح فقط';
+        return '';
+      case 'intNull':
+        if (!v) return '';
+        if (!/^-?\d{1,19}$/.test(v)) return f.label + ': رقم صحيح أو فراغ';
+        return '';
+      case 'select':
+        for (var i = 0; i < f.options.length; i++) if (f.options[i].value === v) return '';
+        return f.label + ': قيمة غير مسموحة';
+      default:
+        return '';
+    }
+  }
+
+  function rowById(id) {
+    var safe = domId(id);
+    return LAST.rows.find(function (x) { return domId(x.id) === safe; }) || null;
+  }
+
+  /** How a value reads in the confirmation dialog. */
+  function displayValue(col, v) {
+    var f = fieldFor(col);
+    var s = (v === undefined || v === null) ? '' : String(v);
+    if (!f) return s || '(فارغ)';
+    if (f.type === 'select') {
+      for (var i = 0; i < f.options.length; i++) {
+        if (f.options[i].value === s) return f.options[i].label;
+      }
+    }
+    if (f.type === 'money') return s === '' ? '(فارغ)' : money(s);
+    return s === '' ? '(فارغ)' : s;
+  }
+
+  function openEdit(id) {
+    if (!CAN_WRITE) { UIC.toast('غير مصرح بالتعديل', 'error'); return; }
+    var row = rowById(id);
+    if (!row) { UIC.toast('الحركة غير موجودة في هذه الصفحة', 'error'); return; }
+
+    var body = '<form id="box-edit-form">' +
+      '<div class="edit-hint">التعديل يُطبَّق على قاعدة البيانات مباشرة، صفاً واحداً، بعد تأكيد يذكر ما تغيّر.</div>';
+    EDIT_FIELDS.forEach(function (f) {
+      var cur = row[f.col];
+      var val = (cur === undefined || cur === null) ? '' : String(cur);
+      if (f.type === 'select') {
+        body += UIC.field({ key: EDIT_PREFIX + f.col, label: f.label, type: 'select',
+                            combo: false, options: f.options, value: val });
+      } else if (f.type === 'textarea') {
+        body += UIC.field({ key: EDIT_PREFIX + f.col, label: f.label + ' (بحد أقصى ' + f.max + ' حرفاً)',
+                            type: 'textarea', rows: 3, value: val });
+      } else if (f.type === 'date') {
+        body += UIC.field({ key: EDIT_PREFIX + f.col, label: f.label, type: 'date', value: val });
+      } else {
+        body += UIC.field({ key: EDIT_PREFIX + f.col, label: f.label, type: 'text',
+                            numeric: (f.type !== 'text'), noCorrect: (f.type !== 'text'), value: val });
+      }
+    });
+    body += '<div class="edit-locked">' +
+      'حقول غير قابلة للتعديل: <b>رقم الحركة</b> ' + esc(row.id) + ' · ' +
+      '<b>تاريخ الإنشاء</b> ' + esc(row.created_at || '—') + ' · ' +
+      '<b>آخر تعديل</b> ' + esc(row.updated_at || '—') + '<br>' +
+      'تاريخ الإنشاء دليل تدقيق تعتمد عليه قواعد كشف التلاعب، ولذلك لا يُعدَّل من هنا. ' +
+      'ويضبط الخادم تاريخ آخر تعديل تلقائياً عند كل حفظ.' +
+      '</div></form>';
+
+    UIC.openModal('box-edit-modal', {
+      title: 'تعديل حركة رقم ' + esc(row.id),
+      size: 'lg',
+      body: body,
+      onSave: "saveEdit('" + domId(row.id) + "')"
+    });
+    /* The dirty guard already wired in the shared layer covers navigating away
+       from a half-typed form; nothing new is needed for it. */
+    try { UIC.trackDirty('box-edit-form'); } catch (e) {}
+  }
+
+  /**
+   * Diff → validate → NAME THE CHANGE → confirm → save → re-read.
+   *
+   * UIC.confirm returns a Promise, so this cannot be written as a blocking
+   * `if`. Everything after the question lives inside .then, and a `false`
+   * answer — the Cancel button, Escape, or a click on the overlay — returns
+   * without touching anything.
+   */
+  function saveEdit(id) {
+    if (!CAN_WRITE) { UIC.toast('غير مصرح بالتعديل', 'error'); return; }
+    var row = rowById(id);
+    if (!row) { UIC.toast('الحركة غير موجودة', 'error'); return; }
+
+    var form = UIC._readForm('box-edit-form');
+    var changes = {}, details = [], firstError = '';
+
+    EDIT_FIELDS.forEach(function (f) {
+      var entered = form.data[EDIT_PREFIX + f.col];
+      if (entered === undefined) return;
+      var before = row[f.col];
+      var a = (before === undefined || before === null) ? '' : String(before).trim();
+      var b = String(entered).trim();
+
+      /* Money compares by VALUE, so re-typing 725 over 725.00 is not an edit
+         and does not move updated_at — which the EDITED_AFTER_REVIEW rule
+         reads — for no reason. */
+      if (f.type === 'money' && a !== '' && b !== '' && isFinite(Number(a)) && isFinite(Number(b))) {
+        if (Number(a) === Number(b)) return;
+      } else if (a === b) {
+        return;
+      }
+
+      var err = clientValidate(f, b);
+      if (err) { if (!firstError) firstError = err; UIC.setFieldError(EDIT_PREFIX + f.col, err); return; }
+      UIC.setFieldError(EDIT_PREFIX + f.col, '');
+
+      changes[f.col] = b;
+      /* One line per changed column, old on the right of the arrow because the
+         page is RTL and the arrow points from new back to old the way the user
+         reads it. This is the whole reason UIC.confirm takes a `detail`. */
+      details.push(f.label + ': ' + displayValue(f.col, b) + ' ← ' + displayValue(f.col, a));
+    });
+
+    if (firstError) { UIC.toast(firstError, 'error'); return; }
+    if (!Object.keys(changes).length) { UIC.toast('لا توجد تغييرات', 'warning'); return; }
+
+    /* Crossing 300000–400000 silently changes WHICH ANALYSES APPLY to this row.
+       Nothing else on screen would show that, so the dialog says it. */
+    if (Object.prototype.hasOwnProperty.call(changes, 'chart_of_accounts')) {
+      var wasIn = inRange(row.chart_of_accounts);
+      var willBe = inRange(changes.chart_of_accounts);
+      if (wasIn !== willBe) {
+        details.push(willBe
+          ? '⚠ هذا التعديل يُدخل الحركة في نطاق تحليل البنود (300000–400000)'
+          : '⚠ هذا التعديل يُخرج الحركة من نطاق تحليل البنود (300000–400000)');
+      }
+    }
+
+    UIC.confirm({
+      title: 'تأكيد التعديل',
+      message: 'سيتم حفظ التغييرات التالية مباشرة، وتسجيلها في سجل التدقيق.',
+      /* NAMING the record is the point. "هل أنت متأكد؟" is not a question
+         anyone can answer correctly. */
+      record: 'حركة رقم ' + row.id + ' — ' + (row.transaction_date || ''),
+      detail: details.join('\n'),
+      confirmText: 'تأكيد التعديل',
+      cancelText: 'إلغاء'
+    }).then(function (okd) {
+      if (!okd) return;                       /* Escape and the overlay are a "no". */
+      UI.showSpinner('جاري حفظ التعديل...');
+      companyCall('update_box_movement', { id: row.id, changes: changes })
+        .then(function (r) {
+          if (r && r.audit_error) {
+            /* The row changed but the audit line did not land. Saying "saved"
+               and nothing else would leave an edit the log cannot explain. */
+            UIC.alert({
+              title: 'تم الحفظ — لكن سجل التدقيق لم يكتمل',
+              danger: true,
+              message: 'تم تعديل الحركة رقم ' + row.id + ' فعلياً، ولكن تعذّر كتابة سطر التأكيد في سجل التدقيق.',
+              detail: 'أبلغ المسؤول: ' + r.audit_error
+            });
+          } else {
+            UIC.toast('تم حفظ التعديل', 'success');
+          }
+          if (r && r.boundary && r.boundary.reason_ar) UIC.toast(r.boundary.reason_ar, 'warning');
+          try { UIC.clearDirty('box-edit-form'); } catch (e) {}
+          UIC.closeModal('box-edit-modal');
+          /* Re-read rather than patching the row in place: the server sets
+             updated_at, and the parse and every flag have to be recomputed from
+             what is actually stored now. */
+          fetchPage();
+        })
+        .catch(function (e) { UIC.toast((e && e.message) || 'تعذّر حفظ التعديل', 'error'); })
+        .finally(function () { UI.hideSpinner(); });
+    });
+  }
+
+  function inRange(code) {
+    var s = String(code === undefined || code === null ? '' : code).trim();
+    if (!/^\d+$/.test(s)) return false;
+    var n = Number(s);
+    return n >= 300000 && n <= 400000;
+  }
+
+  function confirmRevise(id) {
+    if (!CAN_WRITE) { UIC.toast('غير مصرح', 'error'); return; }
+    var row = rowById(id);
+    if (!row) return;
+    UIC.confirm({
+      title: 'اعتماد المراجعة',
+      message: 'سيتم وضع علامة "مراجع" على هذه الحركة.',
+      record: 'حركة رقم ' + row.id + ' — ' + (row.transaction_date || ''),
+      detail: 'حالة المراجعة: مراجع ← غير مراجع\nالمبلغ: ' + money(row.transaction_amount),
+      confirmText: 'اعتماد المراجعة',
+      cancelText: 'إلغاء'
+    }).then(function (okd) {
+      if (!okd) return;
+      UI.showSpinner('جاري اعتماد المراجعة...');
+      companyCall('revise_box_movement', { id: row.id })
+        .then(function (r) {
+          if (r && r.audit_error) {
+            UIC.alert({ title: 'تم الاعتماد — لكن سجل التدقيق لم يكتمل', danger: true,
+              message: 'تمت مراجعة الحركة رقم ' + row.id + ' فعلياً، ولكن تعذّر كتابة سطر التأكيد في سجل التدقيق.',
+              detail: 'أبلغ المسؤول: ' + r.audit_error });
+          } else {
+            UIC.toast('تم اعتماد المراجعة', 'success');
+          }
+          fetchPage();
+        })
+        .catch(function (e) { UIC.toast((e && e.message) || 'خطأ', 'error'); })
+        .finally(function () { UI.hideSpinner(); });
+    });
+  }
+
   function renderPager() {
     var el = document.getElementById('box-pager');
     if (!el) return;
@@ -500,6 +800,8 @@
   window.BOXANALYSIS_PAGE = {
     load: load,
     fetchPage: fetchPage,
+    openEdit: openEdit,
+    EDIT_FIELDS: EDIT_FIELDS,
     state: function () { return { FILTER: FILTER, LAST: LAST }; }
   };
 

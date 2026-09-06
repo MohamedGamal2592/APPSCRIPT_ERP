@@ -30,6 +30,7 @@
   <button data-scenario="mismatch">فروق في المجاميع</button>
   <button data-scenario="unparsed">تفاصيل لا تُحلَّل</button>
   <button data-scenario="dupe_labels">كود حساب مكرر الاسم</button>
+  <button data-scenario="audit_fail">فشل سجل التدقيق بعد الحفظ</button>
   <button data-scenario="empty">لا توجد نتائج</button>
   <button data-scenario="error">خطأ من الخادم</button>
   <span class="sep">|</span>
@@ -41,7 +42,8 @@
   <b>الحقيقية</b> <code>CSS_Tokens.html</code> و<code>UI_Components.html</code> و<code>Client_Helpers.html</code>
   و<code>Company_TopChemical_BoxAnalysis.html</code> من جذر المشروع — وليست نسخاً منها — مع بيانات وهمية بدل
   استدعاءات الخادم. البيانات الوهمية تشمل السطر الحقيقي الوحيد المعروف من
-  <code>transaction_details</code>. اضغط <b>▸</b> بجوار أي حركة لفتح البنود المستخرجة وشريط الحساب.
+  <code>transaction_details</code>. اضغط <b>▸</b> بجوار أي حركة لفتح البنود المستخرجة وشريط الحساب،
+  و<b>تعديل</b> لفتح النموذج ونافذة التأكيد التي تذكر ما تغيّر بالضبط.
 </div>
 
 <div id="pv-error" class="pv-err pv-hidden"></div>
@@ -220,8 +222,18 @@
           coverage: { rows_read: 0, rows_with_items: 0, failed_segments: 0, sum_mismatch_rows: 0 } });
       }
       if (inner === 'update_box_movement' || inner === 'revise_box_movement') {
-        window.UIC.toast('معاينة فقط — لم يُحفظ شيء. هذه الصفحة لا تكتب أي بيانات.', 'warning');
-        return Promise.resolve({ status: 'ok', affected: 0 });
+        /* NOTHING IS WRITTEN. The point of exercising this path offline is the
+           dialog and the two outcomes after it, not the save. */
+        window.UIC.toast('معاينة فقط — لم يُحفظ شيء ولم تُمس قاعدة البيانات.', 'warning');
+        if (state.scenario === 'audit_fail') {
+          /* The row changed but the audit line did not land. The page must say
+             so loudly rather than showing a success toast — this is the one
+             outcome that would otherwise leave an edit the log cannot explain. */
+          return Promise.resolve({ status: 'ok', id: data.id, changed: Object.keys(data.changes || {}),
+            row: null, edit_id: 'PREVIEW', audit_error: 'Drive quota exceeded (معاينة: خطأ مُصطنع)' });
+        }
+        return Promise.resolve({ status: 'ok', id: data.id, changed: Object.keys(data.changes || {}),
+          row: null, edit_id: 'PREVIEW', audit_error: '' });
       }
       return Promise.resolve({ status: 'ok' });
     };

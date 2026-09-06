@@ -942,3 +942,139 @@ function dbBoxItemHistory_(data, user) {
     if (conn) conn.close();
   }
 }
+
+// ─── regular_box_movement: the ONE write path ───────────────────────────────
+//
+// This feature has exactly one write: one row, addressed by primary key, from a
+// user who filled in a form, clicked Save, and then confirmed a dialog that
+// named the change. There is no bulk correction here, no backfill, no
+// "normalize the existing data" pass, and no DELETE. If the parser shows four
+// hundred rows with malformed details, that is a number to report, not a job to
+// run.
+//
+// Never executed against anything. Verified by reading, and by the invariants
+// tools/verify/box_sql.js asserts over this text.
+
+/** Reads one row by id. Used for the before/after snapshots the audit needs. */
+function dbBoxGetOne_(conn, id) {
+  var cols = DB_BOX_COLUMNS.map(dbSanitizeIdentifier_).join(', ');
+  var stmt, rs;
+  try {
+    stmt = conn.prepareStatement('SELECT ' + cols + ' FROM ' + DB_BOX_TABLE + ' WHERE `id` = ? LIMIT 1');
+    stmt.setObject(1, id);
+    rs = stmt.executeQuery();
+    return rs.next() ? dbBoxReadRow_(rs) : null;
+  } finally {
+    if (rs) rs.close();
+    if (stmt) stmt.close();
+  }
+}
+
+/**
+ * Update ONE movement row.
+ *
+ * data: { id, changes: { column: value, ... } }
+ * Returns { status:'ok', id, changed:[cols], before:{row}, after:{row},
+ *           boundary:{...}|null }
+ *
+ * The column names in the SET clause come from BoxEngine.EDITABLE_COLUMNS — a
+ * fixed allowlist — and are re-derived here through dbSanitizeIdentifier_ so
+ * that even a bug in the allowlist cannot put arbitrary text into the
+ * statement. Values bind as parameters, every one of them.
+ *
+ * updated_at is set by the SERVER to NOW() and is not in the allowlist, so an
+ * edit cannot write an old timestamp into the column that the
+ * EDITED_AFTER_REVIEW rule reads.
+ *
+ * The caller (updateBoxMovement_) writes the audit trail. It is not done here
+ * because this file talks to MySQL and the audit lives in Drive, and mixing the
+ * two would make this function untestable in exactly the way the rest of the
+ * connector is.
+ */
+function dbBoxUpdate_(data, user) {
+  data = data || {};
+  var id = dbBoxValidateInt_(data.id, 'رقم الحركة');
+  if (!id) throw new Error('رقم الحركة مطلوب');
+
+  /* Allowlist + per-column validation, before a connection is even opened.
+     A change set that will not validate must not cost a round trip. */
+  var checked = BoxEngine.validateChanges(data.changes);
+
+  var setParts = [];
+  var params = [];
+  checked.columns.forEach(function (col) {
+    setParts.push(dbSanitizeIdentifier_(col) + ' = ?');
+    params.push(checked.values[col]);
+  });
+  /* Server-set, always, and last in the SET list so it is impossible to read
+     the statement without seeing it. */
+  setParts.push('`updated_at` = NOW()');
+
+  var conn, stmt;
+  try {
+    conn = dbGetConnection_();
+
+    var before = dbBoxGetOne_(conn, id);
+    if (!before) throw new Error('البند غير موجود');
+
+    stmt = conn.prepareStatement(
+      'UPDATE ' + DB_BOX_TABLE + ' SET ' + setParts.join(', ') + ' WHERE `id` = ?');
+    dbBindParams_(stmt, params);
+    stmt.setObject(params.length + 1, id);
+    var affected = stmt.executeUpdate();
+    if (affected === 0) throw new Error('البند غير موجود');
+
+    var after = dbBoxGetOne_(conn, id);
+    return {
+      status: 'ok',
+      id: id,
+      affected: affected,
+      changed: checked.columns,
+      before: before,
+      after: after,
+      /* Crossing the 300000–400000 boundary changes which analyses apply to
+         this row and nothing else on screen would show it. */
+      boundary: checked.columns.indexOf('chart_of_accounts') !== -1
+        ? BoxEngine.crossesItemBoundary(before.chart_of_accounts, after ? after.chart_of_accounts : null)
+        : null
+    };
+  } catch (err) {
+    Logger.log('dbBoxUpdate_ error: ' + err.message);
+    throw err;
+  } finally {
+    if (stmt) stmt.close();
+    if (conn) conn.close();
+  }
+}
+
+/**
+ * Flip one row's review flag 0 -> 1, mirroring dbClientsArRevise_.
+ *
+ * The `AND is_revised = 0 OR IS NULL` guard makes this idempotent-safe: a
+ * second click reports "already reviewed" rather than silently moving
+ * updated_at, which the EDITED_AFTER_REVIEW rule would then read as a post-hoc
+ * edit of a reviewed row. The rule this page ships would have fired on the
+ * page's own double-click.
+ */
+function dbBoxRevise_(data, user) {
+  data = data || {};
+  var id = dbBoxValidateInt_(data.id, 'رقم الحركة');
+  if (!id) throw new Error('رقم الحركة مطلوب');
+  var conn, stmt;
+  try {
+    conn = dbGetConnection_();
+    stmt = conn.prepareStatement(
+      'UPDATE ' + DB_BOX_TABLE + ' SET `is_revised` = 1, `updated_at` = NOW()' +
+      ' WHERE `id` = ? AND (`is_revised` = 0 OR `is_revised` IS NULL)');
+    stmt.setObject(1, id);
+    var affected = stmt.executeUpdate();
+    if (affected === 0) throw new Error('البند غير موجود أو تمت مراجعته مسبقاً');
+    return { status: 'ok', affected: affected, id: id, is_revised: 1 };
+  } catch (err) {
+    Logger.log('dbBoxRevise_ error: ' + err.message);
+    throw err;
+  } finally {
+    if (stmt) stmt.close();
+    if (conn) conn.close();
+  }
+}
