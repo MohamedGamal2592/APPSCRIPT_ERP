@@ -47,7 +47,11 @@ function doGet(e) {
     return renderSessionExpiredPage_(scriptUrl);
   }
 
-  const page = getAllPages_().find(p => p.action === action);
+  // A registry entry with no template is a permission token, not a page (see
+  // valley_cost_view in Company_ValleyFoods_Registry.js). It must never be
+  // rendered — treat it exactly like an unknown action and bounce home, rather
+  // than reaching createTemplateFromFile(undefined) below.
+  const page = getAllPages_().find(p => p.action === action && p.template);
   if (!page) {
     // Unknown/deleted action — bounce home instead of a dead-end message.
     return _frame(HtmlService.createHtmlOutput(_topNavScript(scriptUrl + '?action=ERPDashboard&sessionToken=' + encodeURIComponent(e.parameter.sessionToken || ''))));

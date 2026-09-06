@@ -63,7 +63,18 @@ function registerValleyFoods_() {
       // الانتاج — خطوط الإنتاج والأصول
       { action: 'vf_workcenters', template: 'Company_ValleyFoods_WorkCenters', title: 'خطوط الإنتاج', label: 'خطوط الإنتاج', nav: false },
       { action: 'vf_asset_technical', template: 'Company_ValleyFoods_AssetTechnical', title: 'الأصول والماكينات', label: 'الأصول والماكينات', nav: false },
-      { action: 'vf_work_center_assets', template: 'Company_ValleyFoods_WorkCenterAssets', title: 'أصول خطوط الإنتاج', label: 'أصول خطوط الإنتاج', nav: false }
+      { action: 'vf_work_center_assets', template: 'Company_ValleyFoods_WorkCenterAssets', title: 'أصول خطوط الإنتاج', label: 'أصول خطوط الإنتاج', nav: false },
+
+      // ----- صلاحيات (رموز صلاحية، ليست صفحات) -----
+      // U-46. valley_cost_view is a PERMISSION TOKEN, not a page. It has no
+      // template on purpose: it exists so it appears in "صفحات النظام" and can
+      // then be granted per role in "صلاحيات الأدوار". A role holding `write`
+      // (or `full`) on it sees cost figures in purchasing, sales and
+      // manufacturing; anything less sees quantities only.
+      // nav:false keeps it out of every menu, and the two guards added
+      // alongside this entry (Code.js router, getFirstAuthorizedPageForUser_)
+      // keep a template-less entry from ever being navigated to.
+      { action: 'valley_cost_view', title: 'إظهار التكاليف (صلاحية)', label: 'إظهار التكاليف', nav: false, permissionOnly: true }
     ]
   });
 }

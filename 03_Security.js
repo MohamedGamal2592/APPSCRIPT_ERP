@@ -560,6 +560,10 @@ function getFirstAuthorizedPageForUser_(authUser) {
   if (!authUser || !authUser.company || !COMPANY_REGISTRY[authUser.company]) return '';
   const pages = COMPANY_REGISTRY[authUser.company].pages;
   for (let i = 0; i < pages.length; i++) {
+    // Skip permission tokens — a registry entry with no template is not a
+    // navigable page (valley_cost_view). Landing a user on one would send them
+    // to an action the router deliberately refuses to render.
+    if (!pages[i].template) continue;
     const pid = pages[i].action;
     if (authUser.isSuperAdmin) return pid;
     if (unifiedCheck_(authUser, authUser.company, pid, 'read')) return pid;
