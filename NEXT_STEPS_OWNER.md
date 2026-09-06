@@ -398,3 +398,66 @@ review process works, not a technical one. Tell me which you want.
 its own run. See `UI_FORMS_AND_FILTERS_RESULTS.md` §F4b for why, and the classification rule: form
 grids migrate, computed-value strips go to `-narrow`, and KPI/tile rows must be **left alone**, since
 a 240px floor would make the dashboards worse rather than better.
+
+---
+
+# iPhone run — four follow-ups, each gated on a device test
+
+The iPhone run (branch `ui/forms-readability`, commits `6b69f57` → Phase 5) deliberately left four
+things alone, because fixing any of them would have touched the Android and Windows flows that are
+working and liked. Each is written here as its own run, and each is **gated**: do the test first,
+and only start the run if the test fails. Full context in `IPHONE_RESULTS.md`.
+
+## A. Printing from inside the Apps Script iframe
+
+**Gate — checklist items 1 and 9.** On the iPhone, open an invoice and tap طباعة. If the AirPrint
+preview shows the invoice, there is nothing to do and this run is cancelled.
+
+If it shows Google's wrapper page instead, `window.print()` is printing the iframe's parent. This
+cannot be fixed in CSS. The run would have to choose between serving invoices outside the iframe
+and generating a PDF server-side, and that is a real architectural decision about how documents are
+delivered — worth making deliberately rather than as a bug fix. Affects all sixteen print pages, so
+it wants its own run either way.
+
+## B. Attachment download and PDF preview on iOS
+
+**Gate.** On the iPhone, download a document attachment, and open a PDF preview. If both work, cancel
+this run.
+
+If they do not: attachments are served as `<a download href="data:…">` and previews as
+`<iframe src="data:application/pdf…">` (`Code.js`, the `serveAttachment_` path). iOS Safari treats
+both differently from Chrome. Any change here alters the working Windows and Android path, which is
+why it was not attempted. The likely answer is a `blob:` URL or a redirect to a Drive URL, and both
+need testing on all three platforms before shipping.
+
+## C. The row menu's outside-click on iOS
+
+**Gate — checklist item 8.** Open a row menu on any list, then tap empty page space. If it closes,
+cancel this run.
+
+If it stays open, the cause is known: the menu closes via a `document` click listener
+(`UI_Components.html`), and iOS Safari does not reliably deliver a click event for a tap on a
+non-interactive element. The standard fix is `cursor: pointer` on `body`, or a `touchend` listener
+alongside the click one. Small, but it touches the shared row menu that every list on all three
+companies uses, so it deserves its own run and its own regression pass.
+
+## D. Sideways panning on the customer statement
+
+**Gate — checklist item 3.** On the iPhone, open a customer statement in portrait and try to swipe
+it sideways. After the iPhone run there should be nothing to pan to, because the statement is a
+stack of cards. If it reads correctly, cancel this run.
+
+If some other wide element still needs panning and will not respond to a swipe, the suspect is
+`touch-action: pan-y` on `body` (`CSS_Tokens.html`). Per the CSS spec a nested `overflow-x: auto`
+box should still pan horizontally, which is why it was left alone — and changing `body` affects
+Android, so it must not be changed on a hunch. This run would need a device in hand to confirm the
+diagnosis before touching the token.
+
+## Also worth knowing
+
+- **`node tools/ui_check.js` rewrites `design_preview/_sources.js`.** Its C9 check requires
+  `build_preview`, which regenerates the bundle as a side effect. Running the checker dirties a
+  tracked file. Restore it with `git checkout -- design_preview/_sources.js` unless you actually
+  meant to rebuild the preview.
+- **A backtick inside `UI_Components.html` breaks every page.** Its CSS lives inside a JavaScript
+  template literal. This is what `ui_check` C11 guards, and `parse_pages.js` catches it immediately.
