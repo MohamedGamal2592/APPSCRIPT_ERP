@@ -74,6 +74,11 @@
   (function () {
     var ROWS = [], ENUMS = {}, CATEGORY_OPTIONS = [], ACCOUNT_OPTIONS = [], PARTY_OPTIONS = [], NEXT_ID = 1;
     var BATCHES_BY_PRODUCT = {};
+    /* [P1] Client-side filters. Nothing here reaches the server: category_options
+       and current_stock_qty are already on the get_valley_products response, so
+       filtering is a pure re-render over ROWS. */
+    var FILTERS = { category: '', qtyMin: null, qtyMax: null };
+    var LAST_RES = null;
 
     function renderApp() {
       UIC.appShell('vf-root', {
@@ -89,6 +94,7 @@
           (CAN_WRITE ? '<button class="btn btn-primary" onclick="PRODUCTS_PAGE.openAdd()">+ إضافة منتج</button>' : '') +
         '</div><div class="vf-card-body">' +
           '<div id="pf-warning"></div>' +
+          '<div id="pf-filters"></div>' +
           '<div id="pf-table">' + UIC.tableSkeleton(['الكود', 'الاسم', 'النوع', 'الاسم الإنجليزي', 'العميل/المورد', 'الوحدة', 'الكرتونة او التغليف', 'الضريبة', 'التصنيف', 'الرصيد الحالي', 'القيمة (ج.م)', 'الباتشات']) + '</div>' +
         '</div></div>';
       load();
@@ -105,10 +111,105 @@
           PARTY_OPTIONS = (res && res.party_options) || [];
           NEXT_ID = (res && res.next_id) || 1;
           BATCHES_BY_PRODUCT = (res && res.batches_by_product) || {};
+          LAST_RES = res;
           renderTable(res);
+          renderFilters();
         })
         .catch(function (e) { UIC.toast((e && e.message) || 'خطأ في تحميل البيانات', 'error'); })
         .finally(function () { UI.hideSpinner(); try{schedulePrefetch();}catch(e){} });
+    }
+
+    /* [P1] The filter bar lives in its own container OUTSIDE #pf-table, so a
+       re-render cannot destroy the combo's DOM or its window.__comboData entry
+       while the user is still filtering. */
+    function renderFilters() {
+      var host = document.getElementById('pf-filters');
+      if (!host) return;
+      host.innerHTML =
+        '<div class="form-grid" style="background:var(--bg-subtle, #f8fafc);border:1px solid var(--border-color, #e5e7eb);border-radius:8px;padding:12px;margin-bottom:12px;">' +
+          UIC.combo({ key: 'flt-category', label: 'التصنيف',
+            options: [{ value: '', label: 'كل التصنيفات' }].concat(CATEGORY_OPTIONS || []),
+            value: FILTERS.category, placeholder: 'اكتب للبحث…' }) +
+          UIC.field({ key: 'flt-qty-min', label: 'الرصيد من', type: 'number', min: '0', step: '0.01',
+            value: FILTERS.qtyMin == null ? '' : FILTERS.qtyMin }) +
+          UIC.field({ key: 'flt-qty-max', label: 'الرصيد إلى', type: 'number', min: '0', step: '0.01',
+            value: FILTERS.qtyMax == null ? '' : FILTERS.qtyMax }) +
+          '<div class="form-field" style="align-self:end;">' +
+            '<button class="btn btn-outline" onclick="PRODUCTS_PAGE.clearFilters()">مسح الفلاتر</button>' +
+          '</div>' +
+        '</div>';
+
+      var cat = document.getElementById('flt-category');
+      var catDisp = document.getElementById('flt-category_display');
+      /* UIC.comboPick dispatches change on the hidden input; comboBlur does
+         not, so a typed-then-blurred value needs the display listener too. */
+      if (cat) cat.addEventListener('change', function () { FILTERS.category = cat.value || ''; applyFilters(); });
+      if (catDisp) catDisp.addEventListener('blur', function () {
+        setTimeout(function () {
+          var v = cat ? (cat.value || '') : '';
+          if (v !== FILTERS.category) { FILTERS.category = v; applyFilters(); }
+        }, 0);
+      });
+
+      var t = null;
+      ['flt-qty-min', 'flt-qty-max'].forEach(function (id) {
+        var el = document.getElementById(id);
+        if (!el) return;
+        el.addEventListener('input', function () {
+          clearTimeout(t);
+          t = setTimeout(function () {
+            FILTERS.qtyMin = numOrNull(document.getElementById('flt-qty-min'));
+            FILTERS.qtyMax = numOrNull(document.getElementById('flt-qty-max'));
+            applyFilters();
+          }, 250);
+        });
+      });
+    }
+
+    function numOrNull(el) {
+      if (!el) return null;
+      var raw = String(el.value == null ? '' : el.value).trim();
+      if (raw === '') return null;              /* a blank bound is unbounded */
+      var n = Number(raw);
+      return isFinite(n) ? n : null;
+    }
+
+    /* [P1] The filter predicate. Category is an EXACT match on the raw
+       r.category id, never on the mapped label. Both qty bounds are
+       INCLUSIVE. A blank bound is unbounded. A blank or null
+       current_stock_qty counts as 0, matching how the column already
+       renders it. `f` is a parameter so the offline verify script can run
+       this exact function without booting the page. */
+    function passesFilters(r, f) {
+      f = f || FILTERS;
+      if (f.category !== '' && f.category != null) {
+        if (String(r.category == null ? '' : r.category) !== String(f.category)) return false;
+      }
+      var q = Number(r.current_stock_qty);
+      if (!isFinite(q)) q = 0;
+      if (f.qtyMin != null && q < f.qtyMin) return false;
+      if (f.qtyMax != null && q > f.qtyMax) return false;
+      return true;
+    }
+
+    function filtersActive() {
+      return !!(FILTERS.category || FILTERS.qtyMin != null || FILTERS.qtyMax != null);
+    }
+
+    /* [P1] Known and accepted (decision D-D): re-rendering rebuilds
+       window.__dtStore[id], so the active sort and page position reset on
+       every filter change. A filtered list's page 3 is meaningless. */
+    function applyFilters() { renderTable(LAST_RES); }
+
+    function clearFilters() {
+      FILTERS.category = ''; FILTERS.qtyMin = null; FILTERS.qtyMax = null;
+      var c = document.getElementById('flt-category');
+      var cd = document.getElementById('flt-category_display');
+      if (c) c.value = '';
+      if (cd) { cd.value = 'كل التصنيفات'; cd.title = 'كل التصنيفات'; }
+      var lo = document.getElementById('flt-qty-min'); if (lo) lo.value = '';
+      var hi = document.getElementById('flt-qty-max'); if (hi) hi.value = '';
+      applyFilters();
     }
 
     function renderTable(res) {
@@ -122,7 +223,8 @@
       PARTY_OPTIONS.forEach(function (o) { partyMap[String(o.value)] = o.label; });
       var catMap = {};
       CATEGORY_OPTIONS.forEach(function (o) { catMap[String(o.value)] = o.label; });
-      var rows = ROWS.map(function (r) {
+      var visible = ROWS.filter(function (r) { return passesFilters(r); });
+      var rows = visible.map(function (r) {
         var partyLabel = partyMap[String(r.client_id)] || r.client_id || '-';
         var hasStock = r.batch_count > 0;
         return [
@@ -143,6 +245,9 @@
         ];
       });
       container.innerHTML = UIC.dataTable('products-table-id', {
+        emptyState: filtersActive()
+          ? { title: 'لا توجد منتجات مطابقة للفلتر', body: 'جرّب توسيع نطاق الرصيد أو اختيار تصنيف آخر.' }
+          : { title: 'لا توجد منتجات' },
         headers: ['الكود', 'الاسم', 'النوع', 'الاسم الإنجليزي', 'العميل/المورد', 'الوحدة', 'الكرتونة او التغليف', 'الضريبة', 'التصنيف',
                   { label: 'الرصيد الحالي', numeric: true }, { label: 'القيمة (ج.م)', numeric: true }, { label: 'الباتشات', numeric: true }],
         rows: rows,
@@ -237,7 +342,7 @@
         .finally(function () { UI.hideSpinner(); });
     }
 
-    window.PRODUCTS_PAGE = { openAdd: openAdd, openEdit: openEdit, save: save, openBatches: openBatches };
+    window.PRODUCTS_PAGE = { openAdd: openAdd, openEdit: openEdit, save: save, openBatches: openBatches, clearFilters: clearFilters };
 
     /* ===================== STOCK SUMMARY + BATCH MODAL =====================
      * Data logic ported from the legacy stock report (server-side grouping,
