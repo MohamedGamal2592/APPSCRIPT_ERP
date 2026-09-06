@@ -115,7 +115,13 @@ function doGet(e) {
     // timings cost nothing at all while it is closed.
     + '<script>window.PERF_LOG=' + (perfLogReadsEnabled_() ? 'true' : 'false') + ';</' + 'script>';
   rendered = rendered.replace('<head>', '<head>' + headInjection);
-  return _frame(HtmlService.createHtmlOutput(rendered)).setTitle(page.title).addMetaTag('viewport', 'width=device-width, initial-scale=1');
+  // viewport-fit=cover opts the page into the display's safe-area insets. It
+  // has no effect at all on Windows or on Android Chrome in a browser tab; on
+  // an iPhone it is what makes env(safe-area-inset-*) resolve to anything but
+  // zero, which activates the --safe-* tokens CSS_Tokens already defines and
+  // the home FAB and drawer already read. Without it the notch and the home
+  // indicator sit on top of the content in landscape.
+  return _frame(HtmlService.createHtmlOutput(rendered)).setTitle(page.title).addMetaTag('viewport', 'width=device-width, initial-scale=1, viewport-fit=cover');
 }
 
 /** Friendly access-denied page — unified §5.4. Never reveals attempted page/action (§5.4). Theme tokens only. */
