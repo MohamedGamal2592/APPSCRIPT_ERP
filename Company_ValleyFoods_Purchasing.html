@@ -53,16 +53,16 @@
     var __canEdit = false;
 
     var HEADER_FIELDS = [
-      { key: 'code', col: 'Code', label: 'الكود (Code) *', type: 'text', required: true },
+      { key: 'code', col: 'Code', label: 'الكود (Code)', type: 'text', required: true },
       { key: 'tax_system', col: 'tax_system', label: 'النظام الضريبي', type: 'select', options: [{ value: 'true', label: 'نعم' }, { value: 'false', label: 'لا' }], default: 'false' },
-      { key: 'receipt_date', col: 'Reciept Date', label: 'تاريخ الاستلام *', type: 'date', required: true, default: 'today' },
+      { key: 'receipt_date', col: 'Reciept Date', label: 'تاريخ الاستلام', type: 'date', required: true, default: 'today' },
       { key: 'items', col: 'Items', label: 'الأصناف', type: 'text' },
       { key: 'type', col: 'Type', label: 'النوع', type: 'select', options: ['بيع', 'تصنيع', 'اصول منشأة'] },
       { key: 'shipping_type', col: 'Shipping Type', label: 'نوع الشحن', type: 'select', options: ['CIF', 'FOB', 'C&F', 'محلي'] },
-      { key: 'supplier_name', col: 'Supplier Name', label: 'المورد', type: 'select', options: '__supplier__' },
+      { key: 'supplier_name', col: 'Supplier Name', label: 'المورد', type: 'select', options: '__supplier__', required: true },
       { key: 'currency', col: 'Currency', label: 'العملة', type: 'select', options: '__currency__', default: 'EGP' },
       { key: 'exchange_rate', col: 'Exchange rate', label: 'سعر الصرف', type: 'number', default: 1 },
-      { key: 'value', col: 'Value', label: 'القيمة (Value) *', type: 'number', required: true },
+      { key: 'value', col: 'Value', label: 'القيمة السعرية الاجمالية للمورد', type: 'number', required: true },
       { key: 'cif_insurance_value', col: 'If shipping via CIF, enter the insurance value.', label: 'قيمة التأمين (CIF)', type: 'number' },
       { key: 'importation_reprice', col: 'Importation Re-Price', label: 'إعادة تسعير الاستيراد', type: 'number' },
       { key: 'tax_declared_value', col: 'Tax Declared Value', label: 'القيمة الضريبية المعلنة', type: 'number' },
@@ -242,7 +242,10 @@
       else if (opts === '__currency__') opts = __options.currency_options || [];
       var v = fieldValue(s, record);
       if (s.type === 'select') {
-        return UIC.field({ key: s.key, label: s.label, type: 'select', options: opts, value: v });
+        /* UIC.field routes a select to UIC.combo (searchable) unless combo:false.
+           `required` was being dropped here, so a required dropdown got neither
+           its asterisk nor its validation. */
+        return UIC.field({ key: s.key, label: s.label, type: 'select', options: opts, value: v, required: !!s.required, placeholder: s.required ? 'ابحث واختر…' : undefined });
       }
       if (s.type === 'date') {
         return UIC.field({ key: s.key, label: s.label, type: 'date', value: v, required: !!s.required });
@@ -281,11 +284,10 @@
         sectionsHtml +
         '</form>' +
         '<h3 style="margin-top:20px;">الأصناف</h3>' +
-        '<div style="overflow-x:auto;">' +
-        '<table class="table" style="min-width:1200px;"><thead><tr>' +
-        '<th>المنتج</th><th>الكمية</th><th>سعر الوحدة</th><th>تكاليف أخرى</th><th>سعر البيع</th><th>نوع الحركة</th><th>مكان الحركة</th><th>تاريخ الاستلام</th><th>تاريخ الفاتورة</th><th>تاريخ الإنتاج</th><th>تاريخ الانتهاء</th><th>العملة</th><th>سعر الصرف</th><th>تكلفة العملة</th><th>الإجمالي</th>' + (__canEdit ? '<th></th>' : '') +
-        '</tr></thead><tbody id="lines-tbody"></tbody></table>' +
-        '</div>' +
+        /* One labelled card per line. The old 15-column table was pinned to
+           min-width:1200px and every control was a sliver; the product
+           dropdown in particular was a plain <select> with no search. */
+        '<div id="lines-body"></div>' +
         (__canEdit ? '<div style="margin:12px 0;"><button class="btn btn-outline" onclick="addLine()">+ إضافة صنف</button></div>' : '') +
         '<div style="margin:16px 0;">' + (__canEdit ? '<button class="btn btn-primary" onclick="UI.submitOnce(this, savePurchasing)">حفظ</button> ' : '') +
         '<button class="btn btn-outline" onclick="showList()">إلغاء</button></div>';
@@ -330,50 +332,137 @@
       });
     }
 
-    function renderLines() {
-      var lines = __lines || [];
+    /* A line's own field, laid out with room to read it. */
+    function lineField(label, control, span) {
+      return '<div class="form-field" style="margin-bottom:0;' + (span ? 'grid-column:span ' + span + ';' : '') + '">' +
+        '<label class="form-label">' + label + '</label>' + control + '</div>';
+    }
+    function lineRO(label, text, id) {
+      return lineField(label, '<div' + (id ? ' id="' + id + '"' : '') +
+        ' class="input" style="background:var(--bg-subtle);display:flex;align-items:center;">' + text + '</div>');
+    }
+
+    /* Products already taken by OTHER lines, so a duplicate is visible as it
+       happens rather than only at save. */
+    function duplicateLineIdx() {
+      var seen = {}, dup = {};
+      (__lines || []).forEach(function (l, i) {
+        var p = String(l.product || '').trim();
+        if (!p) return;
+        if (seen[p] !== undefined) { dup[i] = true; dup[seen[p]] = true; }
+        else seen[p] = i;
+      });
+      return dup;
+    }
+
+    function lineCardHtml(i) {
+      var l = (__lines || [])[i] || {};
       var opts = __options || {};
-      var html = '';
-      for (var i = 0; i < lines.length; i++) {
-        var l = lines[i];
-        var avail = availableProducts(i);
-        var costCurrency = (Number(l.unit_price) || 0) * (Number(l.qty) || 0);
-        l.cost_currency = costCurrency;
-        var unitPriceVal = l.unit_price != null ? Number(l.unit_price) : 0;
-        var expiryDate = l['Expiry date'] || '';
-        var prodDate = l['Production date'] || '';
-        html += '<tr>' +
-          '<td><select id="product_' + i + '" class="input" onchange="updateLineSelect(' + i + ', \'product\', this.value)">' +
-          '<option value="">اختر...</option>' +
-          avail.map(function (p) {
-            return '<option value="' + esc(p.value) + '"' + (String(p.value) === String(l.product) ? ' selected' : '') + '>' + esc(p.label) + '</option>';
-          }).join('') +
-          '</select></td>' +
-          '<td><input class="input" type="number" min="0" step="any" value="' + (l.qty != null ? l.qty : '') + '" oninput="updateLineInput(' + i + ', \'qty\', this.value)"></td>' +
-          '<td><input class="input" type="number" min="0" step="0.00001" value="' + (unitPriceVal ? unitPriceVal.toFixed(5) : '') + '" oninput="updateLineInput(' + i + ', \'unit_price\', this.value)"></td>' +
-          '<td><input class="input" type="number" min="0" step="any" value="' + (l.other_cost != null ? l.other_cost : '') + '" oninput="updateLineInput(' + i + ', \'other_cost\', this.value)"></td>' +
-          '<td><input class="input" type="number" min="0" step="any" value="' + (l.sales_value != null ? l.sales_value : '') + '" oninput="updateLineInput(' + i + ', \'sales_value\', this.value)"></td>' +
-          '<td><select id="movement_type_' + i + '" class="input" onchange="updateLineSelect(' + i + ', \'movement_type\', this.value)">' +
-          '<option value="">اختر...</option>' +
-          (opts.movement_type_options || []).map(function (o) {
-            return '<option value="' + esc(o.fifth) + '"' + (String(o.fifth) === String(l.movement_type) ? ' selected' : '') + '>' + esc(o.code) + '</option>';
-          }).join('') +
-          '</select></td>' +
-          '<td>' + esc(l.movement_place || '') + '</td>' +
-          '<td><input class="input" type="text" readonly value="' + esc(l.receipt_date || '') + '"></td>' +
-          '<td><input class="input" type="date" value="' + esc(l.invoice_date || '') + '" onchange="updateLineInput(' + i + ', \'invoice_date\', this.value)"></td>' +
-          '<td><input class="input" type="date" value="' + esc(prodDate) + '" onchange="updateLineInput(' + i + ', \'Production date\', this.value)"></td>' +
-          '<td><input class="input" type="date" value="' + esc(expiryDate) + '" onchange="updateLineInput(' + i + ', \'Expiry date\', this.value)"></td>' +
-          '<td>' + esc(l.currency || '') + '</td>' +
-          '<td>' + (l.exchange_rate || '') + '</td>' +
-          '<td id="cost_currency_' + i + '">' + FMT.number(costCurrency) + '</td>' +
-          '<td id="total_cost_' + i + '"></td>' +
-          (__canEdit ? '<td><button class="btn btn-outline" style="padding:4px 10px;" onclick="removeLine(' + i + ')">حذف</button></td>' : '') +
-          '</tr>';
+      var costCurrency = (Number(l.unit_price) || 0) * (Number(l.qty) || 0);
+      l.cost_currency = costCurrency;
+      var unitPriceVal = l.unit_price != null ? Number(l.unit_price) : 0;
+      var dis = __canEdit ? '' : ' disabled';
+
+      /* The product picker is the searchable combo, given a full-width row of
+         its own. availableProducts() still hides products taken by other lines
+         at the moment this card is drawn. */
+      var productCtl = __canEdit
+        ? UIC.combo({ key: 'product_' + i, inline: true, options: availableProducts(i), value: l.product || '', placeholder: 'ابحث عن منتج…' })
+        : '<div class="input" style="background:var(--bg-subtle);">' + esc(productLabel(l.product)) + '</div>';
+
+      var movementCtl = '<select id="movement_type_' + i + '" class="input"' + dis +
+        ' onchange="updateLineSelect(' + i + ', \'movement_type\', this.value)">' +
+        '<option value="">اختر...</option>' +
+        (opts.movement_type_options || []).map(function (o) {
+          return '<option value="' + esc(o.fifth) + '"' + (String(o.fifth) === String(l.movement_type) ? ' selected' : '') + '>' + esc(o.code) + '</option>';
+        }).join('') + '</select>';
+
+      var numCtl = function (key, val, step) {
+        return '<input class="input" type="number" min="0" step="' + step + '"' + dis +
+          ' value="' + (val != null && val !== '' ? val : '') + '" oninput="updateLineInput(' + i + ', \'' + key + '\', this.value)">';
+      };
+      var dateCtl = function (key, val) {
+        return '<input class="input" type="date"' + dis + ' value="' + esc(val || '') + '"' +
+          ' onchange="updateLineInput(' + i + ', \'' + key + '\', this.value)">';
+      };
+
+      /* Cost fields follow the same grant as everywhere else on this page. */
+      var costFields = canCost()
+        ? lineField('سعر الوحدة', numCtl('unit_price', unitPriceVal ? unitPriceVal.toFixed(5) : '', '0.00001')) +
+          lineField('تكاليف أخرى', numCtl('other_cost', l.other_cost, 'any')) +
+          lineField('سعر البيع', numCtl('sales_value', l.sales_value, 'any')) +
+          lineRO('تكلفة العملة', FMT.number(costCurrency), 'cost_currency_' + i) +
+          lineRO('الإجمالي', '', 'total_cost_' + i)
+        : '';
+
+      return '<div class="vf-line-card" id="line-card-' + i + '" style="border:1px solid var(--border-color);border-radius:8px;background:var(--bg-surface);padding:14px 16px;margin-bottom:12px;">' +
+        lineCardInnerHtml(i) + '</div>';
+
+      function lineCardInnerHtml() {
+        return '<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:10px;">' +
+            '<strong style="font-size:13px;">صنف ' + (i + 1) + '</strong>' +
+            '<span id="line-warn-' + i + '" style="color:var(--danger);font-weight:700;font-size:12px;"></span>' +
+            (__canEdit ? '<button class="btn btn-outline" style="padding:4px 12px;" onclick="removeLine(' + i + ')">حذف</button>' : '<span></span>') +
+          '</div>' +
+          '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px 16px;">' +
+            lineField('المنتج', productCtl, 2) +
+            lineField('الكمية', numCtl('qty', l.qty, 'any')) +
+            costFields +
+            lineField('نوع الحركة', movementCtl) +
+            lineRO('مكان الحركة', esc(l.movement_place || '—')) +
+            lineRO('تاريخ الاستلام', esc(l.receipt_date || '—')) +
+            lineField('تاريخ الفاتورة', dateCtl('invoice_date', l.invoice_date)) +
+            lineField('تاريخ الإنتاج', dateCtl('Production date', l['Production date'])) +
+            lineField('تاريخ الانتهاء', dateCtl('Expiry date', l['Expiry date'])) +
+            lineRO('العملة', esc(l.currency || '—')) +
+            lineRO('سعر الصرف', esc(String(l.exchange_rate || '—'))) +
+          '</div>';
       }
-      var tbody = document.getElementById('lines-tbody');
-      if (tbody) tbody.innerHTML = html;
+    }
+
+    function productLabel(v) {
+      var found = '';
+      (__options.product_options || []).forEach(function (p) { if (String(p.value) === String(v)) found = p.label; });
+      return found || v || '—';
+    }
+
+    /* Wire the searchable product combo for ONE line. UIC.combo fires `change`
+       on its hidden input when a product is picked. */
+    function wireLine(i) {
+      if (!__canEdit) return;
+      var el = document.getElementById('product_' + i);
+      if (el) el.addEventListener('change', function () { updateLineProduct(i, el.value); });
+    }
+
+    function renderLines() {
+      var host = document.getElementById('lines-body');
+      if (!host) return;
+      var html = '';
+      for (var i = 0; i < (__lines || []).length; i++) html += lineCardHtml(i);
+      host.innerHTML = html || '<div class="odoo-ro" style="padding:10px;color:var(--text-muted);">لا توجد أصناف بعد — اضغط «+ إضافة صنف»</div>';
+      for (var j = 0; j < (__lines || []).length; j++) wireLine(j);
+      refreshLineWarnings();
       recalc();
+    }
+
+    /* Append one line without touching the others, so a combo already being
+       typed into survives. */
+    function appendLineCard(i) {
+      var host = document.getElementById('lines-body');
+      if (!host || i === 0) { renderLines(); return; }
+      host.insertAdjacentHTML('beforeend', lineCardHtml(i));
+      wireLine(i);
+      refreshLineWarnings();
+      recalc();
+    }
+
+    /* Duplicate-product notices, updated in place. */
+    function refreshLineWarnings() {
+      var dup = duplicateLineIdx();
+      for (var i = 0; i < (__lines || []).length; i++) {
+        var el = document.getElementById('line-warn-' + i);
+        if (el) el.textContent = dup[i] ? '⚠ هذا المنتج مكرر في صنف آخر' : '';
+      }
     }
 
     function availableProducts(excludeIndex) {
@@ -407,11 +496,13 @@
         'Production date': hdrReceiptDate, 'Expiry date': expiryDate,
         currency: hdrCurrency, exchange_rate: hdrExchangeRate, cost_currency: 0
       });
-      renderLines();
+      /* Append only, so a product combo already being typed into survives. */
+      appendLineCard(__lines.length - 1);
     }
 
     function removeLine(i) {
       __lines.splice(i, 1);
+      /* Indices shift, so this one does need a full redraw. */
       renderLines();
     }
 
@@ -422,7 +513,18 @@
 
     function updateLineSelect(i, key, value) {
       __lines[i][key] = value;
-      renderLines();
+      /* No full re-render: it would destroy a combo mid-typing. Nothing else on
+         the card depends on this value. */
+      recalc();
+    }
+
+    /* The product picker. Re-rendering every line here (which is what the old
+       <select> did) destroyed the combo being typed into, so the duplicate
+       notice is refreshed in place instead and the save blocks duplicates. */
+    function updateLineProduct(i, value) {
+      __lines[i].product = value;
+      refreshLineWarnings();
+      recalc();
     }
 
     function computeTotals() {
@@ -500,7 +602,29 @@
         header[f.col] = (val === undefined || val === null) ? '' : val;
       });
       if (String(header['Code']).trim() === '') { UIC.toast('الكود (Code) مطلوب', 'error'); return; }
-      if (String(header['Value']).trim() === '') { UIC.toast('قيمة الفاتورة (Value) مطلوبة', 'error'); return; }
+      if (String(header['Supplier Name']).trim() === '') {
+        UIC.toast('المورد مطلوب — اختر مورداً من القائمة', 'error');
+        var _sup = document.getElementById('supplier_name_display');
+        if (_sup && _sup.focus) _sup.focus();
+        return;
+      }
+      if (String(header['Value']).trim() === '') { UIC.toast('القيمة السعرية الاجمالية للمورد مطلوبة', 'error'); return; }
+
+      /* The old plain <select> filtered out products already taken by another
+         line, so a duplicate was impossible to enter. The searchable combo is
+         rendered once per line and is deliberately NOT re-rendered when another
+         line changes (that is what destroyed the field being typed into), so
+         the same guarantee is enforced here instead. */
+      var _dup = duplicateLineIdx();
+      var _dupIdx = Object.keys(_dup);
+      if (_dupIdx.length) {
+        var _n = (__lines[Number(_dupIdx[0])] || {});
+        UIC.toast('المنتج (' + productLabel(_n.product) + ') مكرر في أكثر من صنف — ادمج الأصناف أو غيّر المنتج', 'error');
+        refreshLineWarnings();
+        return;
+      }
+      var _noProduct = (__lines || []).some(function (l) { return !String(l.product || '').trim(); });
+      if (_noProduct) { UIC.toast('كل صنف يجب أن يكون له منتج', 'error'); return; }
 
       var t = computeTotals();
       header['Value Based on Invoice'] = t.valueBasedOnInvoice;

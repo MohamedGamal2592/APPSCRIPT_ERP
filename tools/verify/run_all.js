@@ -23,7 +23,8 @@ const STEPS = [
   ['s6_client_gate.js', 'S6 — client gating, manufacturing'],
   ['s6b_list_gate.js', 'S6b — client gating, list pages'],
   ['s7_batch_modal.js', 'S7 — the FIFO batch modal'],
-  ['s8_material_rows.js', 'S8 — material entry ergonomics']
+  ['s8_material_rows.js', 'S8 — material entry ergonomics'],
+  ['s10_purchasing_ux.js', 'Purchasing form/lines UX + tl_sales pagination']
 ];
 
 let failed = 0;

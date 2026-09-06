@@ -100,8 +100,17 @@ function bootPage(opts) {
   };
   sandbox.__tables = tables;
 
-  /* The rest of the shared client layer the pages assume exists. */
   const calls = [];
+  /* The REAL shared client layer — FMT, UI and the rest of Client_Helpers —
+     rather than a hand-written stand-in. A stub drifts: FMT.percent was missing
+     from the old one and a page that used it rendered an error instead of a
+     table, which is exactly the kind of thing these tests exist to catch. */
+  vm.runInContext(
+    scriptOf('Client_Helpers.html').replace(/<\?[\s\S]*?\?>/g, '0'),
+    sandbox, { filename: 'Client_Helpers.html' });
+
+  /* AFTER Client_Helpers, which defines its own API bound to google.script.run.
+     Every request must go to the test's fixture router instead. */
   sandbox.API = {
     getSession: () => ({ token: 'TEST-TOKEN' }),
     call: (action, payload) => {
@@ -115,17 +124,16 @@ function bootPage(opts) {
       }
     }
   };
-  sandbox.UI = {
+
+  sandbox.UI = Object.assign({
     toast: (m, t) => { (sandbox.__toasts = sandbox.__toasts || []).push([m, t]); },
     showSpinner: () => {}, hideSpinner: () => {},
     submitOnce: (el, fn) => fn()
-  };
-  sandbox.FMT = {
-    number: v => (Number(v) || 0).toLocaleString('en-US'),
-    currency: v => (Number(v) || 0).toFixed(2),
-    date: v => String(v || ''),
-    escape: v => String(v == null ? '' : v)
-  };
+  }, sandbox.UI || {});
+  /* Spinners want a real DOM; nothing under test depends on them. */
+  sandbox.UI.showSpinner = () => {};
+  sandbox.UI.hideSpinner = () => {};
+  sandbox.UI.submitOnce = (el, fn) => fn();
   sandbox.SESSION = { token: 'TEST-TOKEN' };
   sandbox.scriptUrl = 'https://example.invalid/exec';
   sandbox.__calls = calls;
@@ -146,8 +154,11 @@ function bootPage(opts) {
      closes. The template on disk is never modified — this is a test hook, and
      the functions it reaches are the page's real ones. */
   if (o.expose && o.expose.length) {
-    const marker = pageSrc.lastIndexOf('})();');
-    if (marker === -1) throw new Error('no IIFE close found in ' + o.page + ' to expose from');
+    /* Most pages wrap their logic in an IIFE, so the export line has to go just
+       before it closes. A few (Purchasing, Sales) declare theirs at top level,
+       where appending at the end is both correct and simpler. */
+    const close = pageSrc.lastIndexOf('})();');
+    const marker = close === -1 ? pageSrc.length : close;
     /* An entry is a bare name, or 'alias=expression' when the thing under test
        is a variable the page later reassigns and a live getter is needed. */
     const line = '\ntry { window.__EXPORTS = { ' +

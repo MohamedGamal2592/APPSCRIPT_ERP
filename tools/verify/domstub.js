@@ -23,7 +23,8 @@ function makeElement(tag, registry) {
     value: '',
     checked: false,
     disabled: false,
-    style: {},
+    /* Enough of CSSStyleDeclaration for code that sets custom properties. */
+    style: { _p: {}, setProperty: function (k, v) { this._p[k] = v; }, getPropertyValue: function (k) { return this._p[k] || ''; }, removeProperty: function (k) { delete this._p[k]; } },
     dataset: {},
     children: [],
     parentNode: null,
@@ -174,6 +175,13 @@ function makeSandbox(extra) {
     getComputedStyle: function () { return { getPropertyValue: function () { return ''; } }; },
     alert: function () {},
     confirm: function () { return true; },
+    /* window-level listeners: recorded, never dispatched. Real client code
+       registers error/unhandledrejection handlers at load time. */
+    addEventListener: function (t, fn) { (sandbox.__winListeners[t] = sandbox.__winListeners[t] || []).push(fn); },
+    removeEventListener: function () {},
+    dispatchEvent: function () { return true; },
+    open: function () { return { document: { write: function () {}, close: function () {} }, focus: function () {}, print: function () {}, close: function () {} }; },
+    close: function () {},
     performance: { now: function () { return Date.now(); } },
     URLSearchParams: URLSearchParams,
     URL: URL,
@@ -183,6 +191,7 @@ function makeSandbox(extra) {
     parseFloat: parseFloat, parseInt: parseInt, encodeURIComponent: encodeURIComponent,
     decodeURIComponent: decodeURIComponent
   };
+  sandbox.__winListeners = {};
   sandbox.__timers = [];
   /* Fire queued timers up to `maxMs` (default: all). */
   sandbox.runTimers = function (maxMs) {
