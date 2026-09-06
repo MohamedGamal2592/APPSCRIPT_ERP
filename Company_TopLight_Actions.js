@@ -2170,13 +2170,13 @@ const TopLight = (function () {
     const boxes = boxBalanceSummary_(dbId, boxNames);
     const custNames = {};
     partyRefs_(dbId).forEach(c => { custNames[String(c.id)] = c.name; });
-    var headers = rows.map(r => {
-      const rec = Object.assign({}, r);
-      rec.box_name = boxNames[String(r.related_box)] || '';
-      rec.customer_name = custNames[String(r.name)] || '';
-      return rec;
-    });
-    headers.sort(function(a,b){ return Number(b.transaction_id) - Number(a.transaction_id); });
+    // Phase 12 — slice before mapping. The map was a full Object.assign({}, r) copy
+    // of every cash movement ever, and the sort key transaction_id is copied straight
+    // off the raw row, so the same comparator over an index array gives the same
+    // permutation. The two-branch cap below is applied to the index array unchanged.
+    var order = [];
+    for (var i = 0; i < rows.length; i++) order.push(i);
+    order.sort(function(ia,ib){ return Number(rows[ib].transaction_id) - Number(rows[ia].transaction_id); });
 
     let totalDebit = 0;
     let totalCredit = 0;
@@ -2204,10 +2204,17 @@ const TopLight = (function () {
     };
 
     if (data && data.limit) {
-      headers = headers.slice(0, limit);
+      order = order.slice(0, limit);
     } else if (!data || !data.loadAll) {
-      if (headers.length > 2000) headers = headers.slice(0, 2000);
+      if (order.length > 2000) order = order.slice(0, 2000);
     }
+    var headers = order.map(idx => {
+      const r = rows[idx];
+      const rec = Object.assign({}, r);
+      rec.box_name = boxNames[String(r.related_box)] || '';
+      rec.customer_name = custNames[String(r.name)] || '';
+      return rec;
+    });
     return {
       status: 'success',
       headers: headers,
@@ -2784,12 +2791,16 @@ const TopLight = (function () {
     const rows = getAllRecords_(dbId, OFFER_SHEET);
     const custNames = {};
     partyRefs_(dbId).forEach(c => { custNames[String(c.id)] = c.name; });
-    var headers = rows.map(r => {
-      const rec = Object.assign({}, r);
-      rec.customer_name = custNames[String(r['اسم العميل'])] || '';
-      return rec;
-    });
-    headers.sort(function(a,b){
+    // Phase 12 — slice before mapping. The map was Object.assign({}, r) for every
+    // offer ever, and the comparator reads only 'تاريخ الفاتورة', 'رقم الفاتورة' and
+    // invoice_unique_id, all of which the map copies verbatim off the raw row. So the
+    // same comparator over an index array gives the same permutation — sort is stable
+    // and the index array starts in the same order the mapped array did — and the
+    // slice stays ON THE INDEX ARRAY so an odd limit behaves identically.
+    var order = [];
+    for (var i = 0; i < rows.length; i++) order.push(i);
+    order.sort(function(ia,ib){
+      var a = rows[ia], b = rows[ib];
       var da = parseDate_(a['تاريخ الفاتورة']);
       var db = parseDate_(b['تاريخ الفاتورة']);
       var ta = da instanceof Date ? da.getTime() : 0;
@@ -2800,7 +2811,13 @@ const TopLight = (function () {
       if (nb !== na) return nb - na;
       return String(b.invoice_unique_id||'').localeCompare(String(a.invoice_unique_id||''));
     });
-    if (!data || !data.loadAll) headers = headers.slice(0, limit);
+    if (!data || !data.loadAll) order = order.slice(0, limit);
+    var headers = order.map(idx => {
+      const r = rows[idx];
+      const rec = Object.assign({}, r);
+      rec.customer_name = custNames[String(r['اسم العميل'])] || '';
+      return rec;
+    });
     return { status: 'success', headers: headers, options: salesOptions_(dbId) };
   }
 
