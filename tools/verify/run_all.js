@@ -30,6 +30,7 @@ const STEPS = [
   ['s13_forms_filters.js', 'S13 — forms readability (F1/A1/F2/F4a) + vf_products and vf_parties filters'],
   ['s14_iphone.js', 'S14 — iPhone: openTab/closeOrBack fallbacks, .inv-table three states, >=600px unchanged'],
   ['s15_iphone_rest.js', 'S15 — iPhone: printDoc/openDownload fallbacks, .card-table, >=600px unchanged'],
+  ['s16_realtime_authority.js', 'S16 — authority generation: kill switch, matrix and role are one-refresh'],
   /* ── UI/UX programme (branch ui/odoo-parity) ── */
   ['ui1_anchor.js', 'UI-1.2 — popups escape the table clip box (U-01)'],
   ['ui1_sort.js', 'UI-1.3 — tri-state sort, load order preserved (U-03)'],
@@ -45,6 +46,7 @@ const STEPS = [
   ['ui4_listview.js', 'UI-4.5/4.6/4.8 — columns, selection, phone cards'],
   ['ui4_grouping.js', 'UI-4.4/4.7 — group-by, aggregates, skeleton loads'],
   ['ui5_forms.js', 'UI-5.1/5.2/5.3 — dirty guard, styled confirm, validation'],
+  ['vf_daterange.js', 'vf_cash/vf_sales/vf_purchasing — the من/إلى date range filter'],
   ['ui_smoke_pages.js', 'deployment smoke — every page template boots'],
   /* ── Box analysis (branch feat/tc-box-analysis) ── */
   ['box_parser.js', 'B1 — transaction_details parser, over the fixture corpus'],
