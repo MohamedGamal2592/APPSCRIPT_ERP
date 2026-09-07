@@ -79,8 +79,17 @@ function fakeSheetFor(grid, calls) {
     getSheetId: () => 'sheet-' + Math.random(),
     getLastColumn: () => grid[0].length,
     getDataRange: () => ({ getValues: () => grid.map(r => r.slice()) }),
+    /* A real range reader: maxIdOf_ asks for one COLUMN over many rows, so a
+       stub that always returns a single row would silently read nothing. */
     getRange: (row, col, nRows, nCols) => ({
-      getValues: () => [grid[row - 1].slice(0, (col - 1) + (nCols || grid[0].length)).slice(col - 1)]
+      getValues: () => {
+        const out = [];
+        for (let r = 0; r < (nRows || 1); r++) {
+          const src = grid[row - 1 + r] || [];
+          out.push(src.slice(col - 1, col - 1 + (nCols || grid[0].length)));
+        }
+        return out;
+      }
     }),
     deleteRow: (n) => { calls.deleteRow++; grid.splice(n - 1, 1); },
     deleteRows: (n, howMany) => { calls.deleteRows++; grid.splice(n - 1, howMany); }
@@ -212,7 +221,12 @@ function runSave(opts) {
       getRange: (row, col, nRows, nCols) => ({
         getValues: () => {
           C.getValues++; C.cells += (nRows || 1) * (nCols || headers.length);
-          return row === 1 ? [headers.slice()] : [(grid[row - 1] || headers).slice()];
+          const out = [];
+          for (let r = 0; r < (nRows || 1); r++) {
+            const src = grid[row - 1 + r] || [];
+            out.push(src.slice(col - 1, col - 1 + (nCols || headers.length)));
+          }
+          return out;
         },
         setValue: () => { C.setValue++; },
         setValues: (v) => {
@@ -388,6 +402,98 @@ console.log('\n4 — a mismatched total is refused before any write\n');
   check(r.written === null, '  and NO line was written');
   check(r.C.deleteRow === 0 && r.C.deleteRows === 0, '  and no existing line was deleted');
   check(r.C.setValue === 0, '  and the header row was not updated either');
+}
+
+/* ══ 5. maxIdOf_ — the id scan that runs INSIDE the global lock ═════════ */
+console.log('\n5 — maxIdOf_: same answer as the whole-sheet scan, one column of data\n');
+{
+  /* The scan as it stood before: read the entire sheet, walk the id column. */
+  function maxIdWholeSheet(grid, headers, idName) {
+    const idIdx = headers.findIndex(h => String(h).trim().toLowerCase() === String(idName).toLowerCase());
+    if (idIdx === -1) return 0;
+    let max = 0;
+    for (let i = 1; i < grid.length; i++) {
+      const v = Number(grid[i][idIdx]);
+      if (Number.isInteger(v) && v > max) max = v;
+    }
+    return max;
+  }
+
+  function sheetOver(grid, headers, counter) {
+    return {
+      getParent: () => ({ getId: () => 'ss' }),
+      getSheetId: () => 'sh-' + Math.random(),
+      getLastRow: () => grid.length,
+      getLastColumn: () => headers.length,
+      getDataRange: () => ({ getValues: () => { counter.cells += grid.length * headers.length; return grid.map(r => r.slice()); } }),
+      getRange: (row, col, nRows, nCols) => ({
+        getValues: () => {
+          counter.cells += (nRows || 1) * (nCols || headers.length);
+          const out = [];
+          for (let r = 0; r < (nRows || 1); r++) {
+            const src = grid[row - 1 + r] || [];
+            out.push(src.slice(col - 1, col - 1 + (nCols || headers.length)));
+          }
+          return out;
+        }
+      })
+    };
+  }
+
+  const CASES = [
+    { name: 'ordinary ascending ids', hdr: ['id', 'a', 'b'], rows: 200, id: i => i + 1 },
+    { name: 'ids with gaps', hdr: ['id', 'a'], rows: 100, id: i => (i + 1) * 7 },
+    { name: 'ids out of order', hdr: ['id', 'a'], rows: 100, id: i => (i * 37) % 101 },
+    { name: 'the id column is not the first', hdr: ['unique_id', 'code', 'id', 'x'], rows: 150, id: i => i + 5 },
+    { name: 'blank ids mixed in', hdr: ['id', 'a'], rows: 80, id: i => (i % 3 === 0 ? '' : i + 1) },
+    { name: 'non-integer ids ignored', hdr: ['id', 'a'], rows: 60, id: i => (i % 4 === 0 ? 'X' + i : i + 1) },
+    { name: 'fractional ids ignored', hdr: ['id', 'a'], rows: 60, id: i => (i % 5 === 0 ? i + 0.5 : i + 1) },
+    { name: 'header row only', hdr: ['id', 'a'], rows: 0, id: () => 0 },
+    { name: 'a single data row', hdr: ['id', 'a'], rows: 1, id: () => 42 }
+  ];
+
+  CASES.forEach(function (C) {
+    const grid = [C.hdr.slice()];
+    for (let i = 0; i < C.rows; i++) {
+      const r = new Array(C.hdr.length).fill('v');
+      r[C.hdr.indexOf('id')] = C.id(i);
+      grid.push(r);
+    }
+    const cOld = { cells: 0 }, cNew = { cells: 0 };
+    const expected = maxIdWholeSheet(grid, C.hdr, 'id');
+    cOld.cells = grid.length * C.hdr.length;
+    const actual = dsb.maxIdOf_(sheetOver(grid, C.hdr, cNew), 'id');
+    check(actual === expected, C.name + ' — same max id (' + expected + ')',
+      'whole-sheet=' + expected + ' one-column=' + actual);
+    if (C.rows > 0) {
+      check(cNew.cells < cOld.cells, '  and it read less: ' + cNew.cells + ' cells vs ' + cOld.cells);
+    }
+  });
+
+  /* A sheet with no id column at all must still be 0, not a crash. */
+  const noId = [['code', 'name'], ['A', 'x']];
+  check(dsb.maxIdOf_(sheetOver(noId, ['code', 'name'], { cells: 0 }), 'id') === 0,
+    'a sheet with no id column returns 0');
+  check(dsb.maxIdOf_(null, 'id') === 0, 'a missing sheet returns 0');
+
+  /* The allocators must still hand out ids above whatever is on the sheet. */
+  console.log('');
+  const bigHdr = ['unique_id', 'id'].concat(new Array(31).fill(0).map((_, i) => 'c' + i));
+  const bigGrid = [bigHdr.slice()];
+  for (let i = 0; i < 5000; i++) {
+    const r = new Array(bigHdr.length).fill('');
+    r[1] = i + 1;
+    bigGrid.push(r);
+  }
+  const cc = { cells: 0 };
+  const mx = dsb.maxIdOf_(sheetOver(bigGrid, bigHdr, cc), 'id');
+  check(mx === 5000, 'over a 5000-row x 33-col table the max is still 5000', mx);
+  /* 5000 id cells plus one 33-cell header read, against 5001 x 33 = 165 033 for
+     the whole sheet. getHeaders_ is cached per sheet in production, so the
+     header read is paid once per request, not once per allocation. */
+  check(cc.cells < 6000, '  reading ' + cc.cells + ' cells instead of ' + (5001 * 33) +
+    ' — a ' + Math.round((5001 * 33) / cc.cells) + 'x reduction in what the global lock is held across',
+    cc.cells);
 }
 
 /* ══ the run ════════════════════════════════════════════════════════════ */

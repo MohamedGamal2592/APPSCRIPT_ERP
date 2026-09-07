@@ -290,6 +290,36 @@ function ensureGridRows_(sheet, lastNeeded) {
 // directly instead of re-acquiring, while still blocking other executions.
 let _scriptLockHeld_ = false;
 
+/**
+ * The highest id currently in a table's id column.
+ *
+ * Both id allocators call this INSIDE the one global script lock, so its cost
+ * is time every other user in every company spends queued. It therefore reads
+ * ONE COLUMN rather than the whole sheet: identical answer, and on a 33-column
+ * table it is 33x less data held under the lock (a 20 000-row purchasing line
+ * table drops from ~660 000 cells to ~20 000).
+ *
+ * Deliberately a direct range read, not getAllRecords_: this runs under the
+ * lock and must not populate or depend on the per-request memo.
+ */
+function maxIdOf_(sheet, idColumnName) {
+  if (!sheet) return 0;
+  const headers = getHeaders_(sheet);
+  const want = String(idColumnName || 'id').toLowerCase();
+  const idIdx = headers.findIndex(h => String(h).trim().toLowerCase() === want);
+  if (idIdx === -1) return 0;
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return 0;
+  countSheetRead_();
+  const col = sheet.getRange(2, idIdx + 1, lastRow - 1, 1).getValues();
+  let max = 0;
+  for (let i = 0; i < col.length; i++) {
+    const v = Number(col[i][0]);
+    if (Number.isInteger(v) && v > max) max = v;
+  }
+  return max;
+}
+
 function executeWithLock_(fn, timeoutMs) {
   if (_scriptLockHeld_) return fn();
   _scriptLockHeld_ = true;
@@ -346,20 +376,9 @@ function getNextIdUnderLock_(dbId, tableName, idColumnName = 'id') {
   if (nameIdx === -1 || nextIdx === -1) {
     throw new Error('ID_Counter sheet missing required columns (sheet_name, next_id)');
   }
-  let tableMax = 0;
-  const tableSheet = ss.getSheetByName(tableName);
-  if (tableSheet) {
-    const tHeaders = getHeaders_(tableSheet);
-    const idIdx = tHeaders.findIndex(h => String(h).trim().toLowerCase() === idColumnName.toLowerCase());
-    if (idIdx !== -1) {
-      countSheetRead_();
-      const tData = tableSheet.getDataRange().getValues();
-      for (let i = 1; i < tData.length; i++) {
-        const v = Number(tData[i][idIdx]);
-        if (Number.isInteger(v) && v > tableMax) tableMax = v;
-      }
-    }
-  }
+  /* One column, not the whole sheet — see maxIdOf_. This runs under the global
+     script lock, so its size is every other user's queue time. */
+  const tableMax = maxIdOf_(ss.getSheetByName(tableName), idColumnName);
   const safeNext = tableMax + 1;
   for (let i = 1; i < data.length; i++) {
     if (String(data[i][nameIdx]).toLowerCase() === tableName.toLowerCase()) {
@@ -434,21 +453,8 @@ function getNextIdBatch_(dbId, tableName, count, idColumnName = 'id') {
       throw new Error('ID_Counter sheet missing required columns (sheet_name, next_id)');
     }
     
-    // Find current max in the table
-    let tableMax = 0;
-    const tableSheet = ss.getSheetByName(tableName);
-    if (tableSheet) {
-      const tHeaders = getHeaders_(tableSheet);
-      const idIdx = tHeaders.findIndex(h => String(h).trim().toLowerCase() === idColumnName.toLowerCase());
-      if (idIdx !== -1) {
-        countSheetRead_();
-        const tData = tableSheet.getDataRange().getValues();
-        for (let i = 1; i < tData.length; i++) {
-          const v = Number(tData[i][idIdx]);
-          if (Number.isInteger(v) && v > tableMax) tableMax = v;
-        }
-      }
-    }
+    /* One column, not the whole sheet — see maxIdOf_. */
+    const tableMax = maxIdOf_(ss.getSheetByName(tableName), idColumnName);
     
     // Calculate starting ID and next counter value
     const startId = tableMax + 1;
