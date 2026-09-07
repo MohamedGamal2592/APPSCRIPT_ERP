@@ -34,6 +34,7 @@ const STEPS = [
   /* A different programme from s16_realtime_authority above; the file names do
      not collide and the label is S16b so this runner's output stays readable. */
   ['s16_attendance.js', 'S16b — الحضور: invariants, date inference, batch undo'],
+  ['s17_purchasing_save.js', 'S17 — vf_purchasing save: batched lines, batched delete'],
   /* ── UI/UX programme (branch ui/odoo-parity) ── */
   ['ui1_anchor.js', 'UI-1.2 — popups escape the table clip box (U-01)'],
   ['ui1_sort.js', 'UI-1.3 — tri-state sort, load order preserved (U-03)'],

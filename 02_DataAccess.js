@@ -580,6 +580,14 @@ function updateRowByCriteria_(sheet, criteriaHeader, criteriaValue, updatesObjec
 /**
  * Delete all rows where criteriaHeader == criteriaValue.
  * Deletes bottom-up so earlier row indices stay valid. Returns count deleted.
+ *
+ * PERF: matching rows are removed in CONTIGUOUS BLOCKS — one deleteRows(start,
+ * n) per run rather than one deleteRow() per row. Exactly the same rows go, in
+ * the same bottom-up order, and the same count comes back; the only difference
+ * is the number of round trips. That matters because the rows this is used on
+ * are almost always contiguous (a document's lines are appended together), so
+ * a 40-line purchase went from 40 API calls to 1, and each deleteRow on a
+ * 20 000-row sheet also forced Sheets to shift every row beneath it.
  */
 function deleteRowsByCriteria_(sheet, criteriaHeader, criteriaValue) {
   const headers = getHeaders_(sheet);
@@ -587,13 +595,25 @@ function deleteRowsByCriteria_(sheet, criteriaHeader, criteriaValue) {
   const data = sheet.getDataRange().getValues();
   const critIdx = headers.findIndex(h => String(h).trim().toLowerCase() === String(criteriaHeader).trim().toLowerCase());
   if (critIdx === -1) return 0;
+
+  /* 1-based sheet row numbers, ascending. */
+  const target = [];
+  const want = String(criteriaValue).trim();
+  for (let i = 1; i < data.length; i++) {
+    if (String(data[i][critIdx]).trim() === want) target.push(i + 1);
+  }
+  if (!target.length) return 0;
+
   let deleted = 0;
-  for (let i = data.length - 1; i >= 1; i--) {
-    if (String(data[i][critIdx]).trim() === String(criteriaValue).trim()) {
-      sheet.deleteRow(i + 1);
-      noteMutation_();
-      deleted++;
-    }
+  let end = target.length - 1;
+  while (end >= 0) {
+    let start = end;
+    while (start > 0 && target[start - 1] === target[start] - 1) start--;
+    const count = end - start + 1;
+    sheet.deleteRows(target[start], count);
+    noteMutation_();
+    deleted += count;
+    end = start - 1;
   }
   return deleted;
 }

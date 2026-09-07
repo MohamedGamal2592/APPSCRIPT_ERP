@@ -4257,6 +4257,18 @@ const ValleyFoodsHRModules = (function () {
       if (record[c] !== '' && record[c] !== undefined) record[c] = Number(record[c]);
     });
 
+    /* This check used to run at the very END of the handler — after the header
+       had been written and after the lines had been deleted and re-inserted.
+       So a mismatched total showed the user an error while the document was
+       already saved, and the old lines were already gone. It validates before
+       anything is written now. */
+    var headerTotal = Number(record['Total costs']) || 0;
+    var incomingTotal = 0;
+    (lines || []).forEach(function (l) { incomingTotal += Number(l.total_cost) || 0; });
+    if ((lines || []).length > 0 && Math.abs(incomingTotal - headerTotal) > 0.01) {
+      throw new Error('مجموع تكاليف الأصناف (' + incomingTotal.toFixed(2) + ') لا يساوي إجمالي التكاليف (' + headerTotal.toFixed(2) + ')');
+    }
+
     var _oldPur = null;
     if (isEdit) {
       _oldPur = rows.find(function(r){ return String(r.Code)===String(originalCode); }) || null;
@@ -4288,12 +4300,11 @@ const ValleyFoodsHRModules = (function () {
     var lineSheet = getSheet_(PURCHASING_LINE_SHEET, dbId);
     var lineKey = (isEdit && code !== originalCode) ? originalCode : code;
     deleteRowsByCriteria_(lineSheet, 'code', lineKey);
-    var linesTotal = 0;
+    var lineMaps = [];
     (lines || []).forEach(function (l) {
       var qty = Number(l.qty) || 0;
       var unitPrice = Number(l.unit_price) || 0;
       var totalCost = Number(l.total_cost) || 0;
-      linesTotal += totalCost;
       var movementPlace = '';
       if (shippingType === 'CIF' || shippingType === 'FOB' || shippingType === 'C&F') movementPlace = 'مستورد';
       else if (shippingType === 'محلي') movementPlace = 'محلي';
@@ -4325,12 +4336,45 @@ const ValleyFoodsHRModules = (function () {
         cost_currency: unitPrice * qty,
         user: (user && user.email) || ''
       };
-      addRecord_(dbId, PURCHASING_LINE_SHEET, lm, []);
+      lineMaps.push(lm);
     });
 
-    var headerTotal = Number(record['Total costs']) || 0;
-    if (lines.length > 0 && Math.abs(linesTotal - headerTotal) > 0.01) {
-      throw new Error('مجموع تكاليف الأصناف (' + linesTotal.toFixed(2) + ') لا يساوي إجمالي التكاليف (' + headerTotal.toFixed(2) + ')');
+    /* PERF — the reason this save used to take minutes.
+     *
+     * This loop used to call addRecord_ once per line. Each of those calls
+     * acquires the script lock, reads the whole ID_Counter sheet, reads the
+     * ENTIRE valley_product_purchasing sheet to recompute max(id), writes one
+     * counter cell and appends one row. That is five Sheets round trips per
+     * line, one of which is O(the whole table) — so a 40-line purchase against
+     * a 20 000-row line table did ~200 round trips and read ~27 MILLION cells
+     * before it could finish.
+     *
+     * logHistory_ already solved exactly this, and says so in its own comment:
+     * ONE lock, ONE counter allocation, ONE setValues. Same cell values, same
+     * ids, same order — only the number of round trips changes. getNextIdBatch_
+     * is the allocator it uses and is lock-reentrant, so this is safe here too.
+     */
+    if (lineMaps.length) {
+      var lineHeaders = getHeaders_(lineSheet);
+      var startId = getNextIdBatch_(dbId, PURCHASING_LINE_SHEET, lineMaps.length);
+      var startRow = lineSheet.getLastRow() + 1;
+      var matrix = lineMaps.map(function (lm, i) {
+        return lineHeaders.map(function (h) {
+          var name = String(h).trim();
+          if (name.toLowerCase() === 'id') return startId + i;
+          /* Exact header match FIRST. addRecord_ lowercased the header before
+             looking the value up, so 'Production date' and 'Expiry date' —
+             the only two capitalised keys in the line map — never matched and
+             were written blank on every save this module has ever done. The
+             lowercase lookup stays as the fallback so every other column
+             behaves exactly as before. */
+          if (lm[name] !== undefined) return lm[name];
+          var lower = name.toLowerCase();
+          return lm[lower] !== undefined ? lm[lower] : '';
+        });
+      });
+      lineSheet.getRange(startRow, 1, matrix.length, lineHeaders.length).setValues(matrix);
+      noteMutation_();
     }
 
     return { status: 'success', message: isEdit ? 'تم تحديث عملية الشراء' : 'تمت إضافة عملية الشراء', code: code };
