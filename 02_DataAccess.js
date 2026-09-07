@@ -593,10 +593,26 @@ function addRecord_(dbId, sheetName, dataMap, requiredFields) {
     const id = getNextIdUnderLock_(dbId, sheetName);
     const sheet = getSheet_(sheetName, dbId);
     const headers = getHeaders_(sheet);
+    /* Match the header EXACTLY first, then fall back to the lowercased name.
+     *
+     * This used to lowercase the header and look up only that, so a dataMap
+     * keyed by the real header name lost every column whose name is not already
+     * lowercase. On valley_purchasing_costing that is 32 of 46 columns — Code,
+     * Type, Shipping Type, Supplier Name, Total costs, the lot — so creating a
+     * purchase wrote a row that was blank apart from the audit columns. Worse,
+     * requiredFields is checked against the map (where 'Code' is present) and
+     * the row is then written from the lowercase lookup (where it is not), so
+     * it validated and discarded the same value.
+     *
+     * The lowercase lookup stays as the fallback, so every caller that already
+     * worked still behaves identically; this can only recover columns that were
+     * being dropped. */
     const rowValues = headers.map(h => {
-      const key = String(h).trim().toLowerCase();
-      if (key === 'id') return id;
-      return dataMap[key] !== undefined ? dataMap[key] : '';
+      const name = String(h).trim();
+      if (name.toLowerCase() === 'id') return id;
+      if (dataMap[name] !== undefined) return dataMap[name];
+      const lower = name.toLowerCase();
+      return dataMap[lower] !== undefined ? dataMap[lower] : '';
     });
     const newRowNumber = sheet.getLastRow() + 1;
     sheet.appendRow(rowValues);

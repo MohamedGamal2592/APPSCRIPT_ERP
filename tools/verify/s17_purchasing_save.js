@@ -312,25 +312,31 @@ function runSave(opts) {
 
   const header = {};
   HDR_HEADERS.forEach(c => { header[c] = ''; });
-  header['Code'] = 'PUR-T';
+  header['Code'] = opts.create ? 'PUR-NEW' : 'PUR-T';
   header['Reciept Date'] = '2026-01-15';
+  header['Type'] = 'تصنيع';
   header['Shipping Type'] = 'محلي';
+  header['Supplier Name'] = 'SUP-9';
   header['Currency'] = 'EGP';
   header['Total costs'] = opts.headerTotal !== undefined ? opts.headerTotal : nLines * 100;
+  if (opts.header) Object.keys(opts.header).forEach(k => { header[k] = opts.header[k]; });
 
-  const lines = [];
+  let lines = [];
   for (let i = 0; i < nLines; i++) {
-    lines.push({ product: 'P' + i, qty: 2, unit_price: 50, total_cost: 100, other_cost: 0, unit_cost: 50, vendor: 'V' });
+    lines.push({ product: 'P' + i, qty: 2, unit_price: 50, total_cost: 100, other_cost: 0,
+      unit_cost: 50, movement_type: '114100' });
   }
+  if (opts.lines !== undefined) lines = opts.lines;
 
   let error = null, result = null;
   try {
-    result = H.save({ header: header, originalCode: 'PUR-T', lines: lines },
+    result = H.save({ header: header, originalCode: opts.create ? '' : 'PUR-T', lines: lines },
       { email: 'buyer@valley.test', name: 'Buyer' }, 'db');
   } catch (e) { error = e; }
 
   const roundTrips = C.getValues + C.appendRow + C.deleteRow + C.deleteRows + C.setValue + C.setValues;
-  return { C: C, roundTrips: roundTrips, written: written.lines, result: result, error: error, SH: SH };
+  return { C: C, roundTrips: roundTrips, written: written.lines, header: written.header,
+    result: result, error: error, SH: SH };
 }
 
 {
@@ -676,6 +682,190 @@ console.log('\n7 — logHistoryMany_: same audit rows as N logHistory_ calls\n')
     user: 'u@x.test', action: 'update', newValues: same, oldValues: same
   }]);
   check(E.state.hist.length === 0, 'an update that changed nothing writes no audit row');
+}
+
+/* ══ 8. the purchasing rules, and the create-path data loss ═════════════ */
+console.log('\n8 — mandatory fields, and a create that actually stores its data\n');
+{
+  const L = h => LINE_HEADERS.indexOf(h);
+
+  /* -- the four refusals, each BEFORE anything is written -------------- */
+  const cases = [
+    { what: 'النوع missing', opts: { header: { 'Type': '' } }, msg: /النوع مطلوب/ },
+    { what: 'نوع الشحن missing', opts: { header: { 'Shipping Type': '' } }, msg: /نوع الشحن مطلوب/ },
+    { what: 'no lines at all', opts: { lines: [] }, msg: /صنف واحد على الأقل/ },
+    {
+      what: 'a line with no نوع الحركة',
+      opts: { lines: [{ product: 'P0', qty: 2, unit_price: 50, total_cost: 100, movement_type: '' }] },
+      msg: /نوع الحركة مطلوب/
+    }
+  ];
+  cases.forEach(function (c) {
+    const r = runSave(Object.assign({ nLines: 3, headerTotal: 100 }, c.opts));
+    check(!!r.error && c.msg.test(r.error.message), c.what + ' is refused, in Arabic',
+      r.error ? r.error.message : 'no error thrown');
+    check(r.written === null && r.C.deleteRows === 0 && r.C.deleteRow === 0 && r.C.appendRow === 0,
+      '  and nothing was written or deleted first');
+  });
+
+  /* the mismatch message names both figures */
+  {
+    const r = runSave({ nLines: 3, headerTotal: 999 });
+    check(!!r.error && /لا يساوي إجمالي التكاليف/.test(r.error.message),
+      'a line total that disagrees with the header is refused',
+      r.error ? r.error.message : 'no error');
+    check(/300\.00/.test(r.error.message) && /999\.00/.test(r.error.message),
+      '  naming both figures', r.error.message);
+  }
+
+  /* -- vendor comes from the header ------------------------------------ */
+  {
+    const r = runSave({ nLines: 2, headerTotal: 200 });
+    check(!r.error, 'a complete purchase saves', r.error && r.error.message);
+    check(r.written[0][L('vendor')] === 'SUP-9',
+      "every line's vendor is the document's supplier, not the blank the form sent",
+      JSON.stringify(r.written[0][L('vendor')]));
+    check(r.written[1][L('vendor')] === 'SUP-9', '  on every line');
+    check(r.written[0][L('movement_type')] === '114100', 'movement_type is stored');
+  }
+
+  /* -- movement_place mirrors the AppSheet IFS ------------------------- */
+  {
+    [['CIF', 'مستورد'], ['FOB', 'مستورد'], ['C&F', 'مستورد'], ['محلي', 'محلي']].forEach(function (pair) {
+      const r = runSave({ nLines: 1, headerTotal: 100, header: { 'Shipping Type': pair[0] } });
+      check(!r.error && r.written[0][L('movement_place')] === pair[1],
+        'shipping ' + pair[0] + ' -> movement_place ' + pair[1],
+        r.error ? r.error.message : JSON.stringify(r.written && r.written[0][L('movement_place')]));
+    });
+  }
+
+  /* -- the two sheet formulas ------------------------------------------ */
+  {
+    const r = runSave({ nLines: 3, headerTotal: 300, lineRows: 100, kExisting: 0 });
+    check(!r.error, 'a three-line purchase saves', r.error && r.error.message);
+    const mc = r.written.map(row => row[L('movement_code')]);
+    const pc = r.written.map(row => row[L('product_category')]);
+    check(mc.every(v => typeof v === 'string' && v.charAt(0) === '='),
+      'movement_code is written as a FORMULA, not a value', JSON.stringify(mc[0]));
+    check(pc.every(v => typeof v === 'string' && v.charAt(0) === '='),
+      'product_category likewise', JSON.stringify(pc[0]));
+    check(/valley_products!\$A:\$F/.test(mc[0]) && /TEXT\(/.test(mc[0]) && /DD\/MM\/YYYY/.test(mc[0]),
+      '  movement_code keeps the sheet formula it had', mc[0]);
+    check(/valley_products!A:N,14,0/.test(pc[0]) && /valley_categories!A:B,2,0/.test(pc[0]),
+      '  product_category keeps its two-step lookup', pc[0]);
+
+    /* each row must reference ITS OWN row number, not a fixed one */
+    const rowNums = mc.map(v => { const m = /B(\d+)/.exec(v); return m ? Number(m[1]) : null; });
+    check(rowNums.every(n => n !== null) &&
+      rowNums[1] === rowNums[0] + 1 && rowNums[2] === rowNums[1] + 1,
+      '  and each row references its own row number', JSON.stringify(rowNums));
+
+    /* the letters must come from the sheet's own header order */
+    const want = c => String.fromCharCode(65 + LINE_HEADERS.indexOf(c));
+    check(mc[0].indexOf('vlookup(' + want('product') + rowNums[0]) !== -1,
+      '  with column letters taken from the sheet header order', mc[0]);
+  }
+
+  /* -- the create path stores its data (32 of 46 columns were lost) ---- */
+  {
+    const r = runSave({ nLines: 2, headerTotal: 200, create: true });
+    check(!r.error, 'creating a new purchase succeeds', r.error && r.error.message);
+    check(!!r.header, '  and appends a costing row');
+    const H2 = r.header || {};
+    [['Code', 'PUR-NEW'], ['Type', 'تصنيع'], ['Shipping Type', 'محلي'],
+     ['Supplier Name', 'SUP-9'], ['Reciept Date', '2026-01-15'], ['Currency', 'EGP']]
+      .forEach(function (pair) {
+        check(String(H2[pair[0]]) === String(pair[1]),
+          "  '" + pair[0] + "' is stored (was written blank before)",
+          JSON.stringify(H2[pair[0]]) + ' expected ' + JSON.stringify(pair[1]));
+      });
+    check(Number(H2['Total costs']) === 200, "  'Total costs' is stored", JSON.stringify(H2['Total costs']));
+    check(String(H2['user']) === 'buyer@valley.test', '  and the lowercase columns still work');
+  }
+}
+
+/* ══ 9. addRecord_ no longer drops capitalised columns ══════════════════ */
+console.log('\n9 — addRecord_: a header that is not lowercase still gets its value\n');
+{
+  const HDRS = ['id', 'Code', 'Shipping Type', 'lowercase_col', 'Mixed Case', 'unique_id'];
+  const grid = [HDRS.slice()];
+  const counter = [['sheet_name', 'next_id']];
+  let appended = null;
+
+  function sheetOver(name, headers, g) {
+    return {
+      getName: () => name,
+      getParent: () => ({ getId: () => 'ss' }),
+      getSheetId: () => name,
+      getLastRow: () => g.length,
+      getLastColumn: () => headers.length,
+      getDataRange: () => ({ getValues: () => g.map(r => r.slice()) }),
+      getRange: (row, col, nRows, nCols) => ({
+        getValues: () => {
+          const out = [];
+          for (let r = 0; r < (nRows || 1); r++) {
+            const src = g[row - 1 + r] || [];
+            out.push(src.slice(col - 1, col - 1 + (nCols || headers.length)));
+          }
+          return out;
+        },
+        setValue: () => {}, setValues: (v) => { (v || []).forEach(r => g.push(r.slice())); }
+      }),
+      appendRow: (r) => {
+        g.push(r.slice());
+        if (name === 'T') { appended = {}; headers.forEach((h, i) => { appended[h] = r[i]; }); }
+      },
+      setFrozenRows: () => {}
+    };
+  }
+  const SHEETS = { 'T': sheetOver('T', HDRS, grid), 'ID_Counter': sheetOver('ID_Counter', ['sheet_name', 'next_id'], counter) };
+
+  const sb = {
+    console, JSON, Math, String, Number, Boolean, Object, Array, Error, RegExp, Date,
+    isNaN, parseInt, parseFloat,
+    SpreadsheetApp: { openById: () => ({ getSheetByName: n => SHEETS[n] || null, insertSheet: () => { throw new Error('x'); } }) },
+    LockService: { getScriptLock: () => ({ waitLock: () => {}, tryLock: () => true, releaseLock: () => {} }) },
+    Utilities: { getUuid: () => 'u', sleep: () => {}, formatDate: () => '' },
+    Session: { getScriptTimeZone: () => 'UTC', getActiveUser: () => ({ getEmail: () => '' }) },
+    CacheService: { getScriptCache: () => ({ get: () => null, put: () => {}, remove: () => {}, getAll: () => ({}), putAll: () => {}, removeAll: () => {} }) },
+    PropertiesService: { getScriptProperties: () => ({ getProperty: () => null, setProperty: () => {}, deleteProperty: () => {} }) },
+    Logger: { log: () => {} }, ScriptApp: { getProjectTriggers: () => [] }
+  };
+  sb.globalThis = sb;
+  vm.createContext(sb);
+  ['00_Config.js', '02_DataAccess.js'].forEach(f => {
+    vm.runInContext(fs.readFileSync(path.join(ROOT, f), 'utf8'), sb, { filename: f });
+  });
+  vm.runInContext(
+    "getSpreadsheet_ = function () { return SpreadsheetApp.openById('x'); };" +
+    "getSheet_ = function (n) { return SpreadsheetApp.openById('x').getSheetByName(n); };", sb);
+
+  sb.addRecord_('db', 'T', {
+    'Code': 'C-1', 'Shipping Type': 'CIF', 'lowercase_col': 'low',
+    'Mixed Case': 'mixed', 'unique_id': 'u1'
+  }, ['Code']);
+
+  check(!!appended, 'a row is appended');
+  check(appended['Code'] === 'C-1', "a capitalised header keeps its value ('Code')", JSON.stringify(appended['Code']));
+  check(appended['Shipping Type'] === 'CIF', "a two-word header too ('Shipping Type')", JSON.stringify(appended['Shipping Type']));
+  check(appended['Mixed Case'] === 'mixed', "and a mixed-case one ('Mixed Case')", JSON.stringify(appended['Mixed Case']));
+  check(appended['lowercase_col'] === 'low', 'a lowercase header still works, as before');
+  check(appended['unique_id'] === 'u1', 'and so does unique_id');
+  check(Number(appended['id']) === 1, "'id' is still assigned by the allocator, not taken from the map",
+    JSON.stringify(appended['id']));
+
+  /* the lowercase fallback must survive, or every existing caller breaks */
+  appended = null;
+  sb.addRecord_('db', 'T', { 'code': 'C-2', 'shipping type': 'FOB' }, []);
+  check(appended['Code'] === 'C-2' && appended['Shipping Type'] === 'FOB',
+    'a map keyed in lowercase still fills capitalised headers (the old contract)',
+    JSON.stringify([appended['Code'], appended['Shipping Type']]));
+
+  /* exact wins over lowercase when a caller supplies both */
+  appended = null;
+  sb.addRecord_('db', 'T', { 'Code': 'exact', 'code': 'lower' }, []);
+  check(appended['Code'] === 'exact', 'an exact header match wins over the lowercase one',
+    JSON.stringify(appended['Code']));
 }
 
 /* ══ the run ════════════════════════════════════════════════════════════ */

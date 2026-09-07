@@ -4218,7 +4218,7 @@ const ValleyFoodsHRModules = (function () {
       options: {
         supplier_options: valleyPurchasingSupplierOptions_(dbId),
         currency_options: PURCHASING_CURRENCIES,
-        movement_type_options: PURCHASING_MOVEMENT_TYPES
+        movement_type_options: valleyPurchasingMovementTypeOptions_(dbId)
       }
     };
     if (data && data.withOptions) out.options.product_options = valleyPurchasingProductOptions_(dbId);
@@ -4245,6 +4245,31 @@ const ValleyFoodsHRModules = (function () {
     } catch (e) { return []; }
   }
 
+  /**
+   * نوع الحركة — a reference into valley_chart_of_accounts, not a fixed list.
+   * Stored value is «المستوى الخامس», shown label is «اسم المستوى الخامس»,
+   * matching how the AppSheet app defined the column.
+   *
+   * The client renders these as {fifth, code} (value, label), which is the
+   * shape the hardcoded PURCHASING_MOVEMENT_TYPES used, so the form does not
+   * change. Falls back to the old fixed list if the sheet cannot be read, so a
+   * missing or renamed chart sheet degrades to today's behaviour rather than
+   * emptying the dropdown.
+   */
+  function valleyPurchasingMovementTypeOptions_(dbId) {
+    try {
+      var opts = vfRefsCached_(dbId, 'vf_purchasing_movement_opts', function () {
+        return getAllRecords_(dbId, FIN_CHART_SHEET).map(function (r) {
+          var fifth = String(r['المستوى الخامس'] == null ? '' : r['المستوى الخامس']).trim();
+          var name = String(r['اسم المستوى الخامس'] == null ? '' : r['اسم المستوى الخامس']).trim();
+          if (!fifth) return null;
+          return { fifth: fifth, code: name || fifth };
+        }).filter(Boolean);
+      }) || [];
+      return opts.length ? opts : PURCHASING_MOVEMENT_TYPES;
+    } catch (e) { return PURCHASING_MOVEMENT_TYPES; }
+  }
+
   /** Phase 2.1 — the form's product dropdown, fetched when the form opens. */
   function getValleyPurchasingOptions_(data, user, dbId) {
     return {
@@ -4253,7 +4278,7 @@ const ValleyFoodsHRModules = (function () {
         supplier_options: valleyPurchasingSupplierOptions_(dbId),
         product_options: valleyPurchasingProductOptions_(dbId),
         currency_options: PURCHASING_CURRENCIES,
-        movement_type_options: PURCHASING_MOVEMENT_TYPES
+        movement_type_options: valleyPurchasingMovementTypeOptions_(dbId)
       }
     };
   }
@@ -4280,6 +4305,25 @@ const ValleyFoodsHRModules = (function () {
     var lines = d.lines || [];
     var code = String(hdr.Code != null ? hdr.Code : '').trim();
     if (!code) throw new Error('الكود (Code) مطلوب');
+    if (!String(hdr['Type'] != null ? hdr['Type'] : '').trim()) throw new Error('النوع مطلوب');
+    if (!String(hdr['Shipping Type'] != null ? hdr['Shipping Type'] : '').trim()) {
+      throw new Error('نوع الشحن مطلوب');
+    }
+    /* A purchase with no lines has no cost to distribute and no stock movement
+       to make, so it is refused rather than stored as an empty document. */
+    if (!Array.isArray(lines) || !lines.length) {
+      throw new Error('يجب إضافة صنف واحد على الأقل');
+    }
+    /* movement_type drives the stock movement each line becomes, so a blank one
+       is not a default — it is a line that does nothing. Checked server-side as
+       well as in the form, because the server never trusts the client. */
+    var _missingMovement = [];
+    lines.forEach(function (l, i) {
+      if (!String((l && l.movement_type) != null ? l.movement_type : '').trim()) _missingMovement.push(i + 1);
+    });
+    if (_missingMovement.length) {
+      throw new Error('نوع الحركة مطلوب لكل صنف — الأصناف رقم: ' + _missingMovement.join('، '));
+    }
 
     /* U-46 + U-47's lesson, applied to purchasing.
      *
@@ -4387,8 +4431,13 @@ const ValleyFoodsHRModules = (function () {
         unique_id: uid16_(),
         code: code,
         product: l.product || '',
-        product_category: l.product_category || '',
-        vendor: l.vendor || '',
+        /* product_category and movement_code are SHEET FORMULAS, filled in
+           below once the row numbers are known — see the matrix build. */
+        product_category: '',
+        /* The vendor of a line is the supplier of the document. It was written
+           from l.vendor, which the form never sets, so every line stored a
+           blank vendor. */
+        vendor: record['Supplier Name'] || l.vendor || '',
         lot_identification: l.lot_identification || '',
         qty: qty,
         unit_price: unitPrice,
@@ -4431,7 +4480,40 @@ const ValleyFoodsHRModules = (function () {
       var lineHeaders = getHeaders_(lineSheet);
       var startId = getNextIdBatch_(dbId, PURCHASING_LINE_SHEET, lineMaps.length);
       var startRow = lineSheet.getLastRow() + 1;
+
+      /* movement_code and product_category are spreadsheet formulas, not values
+         — they were carried by the AppSheet sheet and must keep working the
+         same way, recalculating when a product or a category is renamed.
+         setValues writes a leading '=' as a formula, so they are built per row
+         with that row's own number.
+         The column letters come from the SHEET's headers, not from the
+         constant, so a reordered sheet still produces correct references. */
+      function _colLetter(headerName) {
+        var idx = lineHeaders.findIndex(function (h) {
+          return String(h).trim().toLowerCase() === headerName.toLowerCase();
+        });
+        if (idx === -1) return null;
+        var n = idx + 1, s = '';
+        while (n > 0) { var m2 = (n - 1) % 26; s = String.fromCharCode(65 + m2) + s; n = (n - m2 - 1) / 26; }
+        return s;
+      }
+      var CL = {
+        id: _colLetter('id'),
+        code: _colLetter('code'),
+        product: _colLetter('product'),
+        receipt_date: _colLetter('receipt_date')
+      };
+      var canFormula = CL.id && CL.code && CL.product && CL.receipt_date;
+
       var matrix = lineMaps.map(function (lm, i) {
+        var rowNo = startRow + i;
+        if (canFormula) {
+          lm.movement_code = '=CONCATENATE(' + CL.id + rowNo + ',"-",' + CL.code + rowNo +
+            ',"-",vlookup(' + CL.product + rowNo + ',valley_products!$A:$F,2,0),"-",TEXT(' +
+            CL.receipt_date + rowNo + ',"DD/MM/YYYY"))';
+          lm.product_category = '=vlookup(VLOOKUP(' + CL.product + rowNo +
+            ',valley_products!A:N,14,0),valley_categories!A:B,2,0)';
+        }
         return lineHeaders.map(function (h) {
           var name = String(h).trim();
           if (name.toLowerCase() === 'id') return startId + i;

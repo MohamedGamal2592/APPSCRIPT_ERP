@@ -644,6 +644,25 @@
       var _noProduct = (__lines || []).some(function (l) { return !String(l.product || '').trim(); });
       if (_noProduct) { UIC.toast('كل صنف يجب أن يكون له منتج', 'error'); return; }
 
+      /* A purchase with no lines has no cost to distribute and no stock
+         movement to make. The server refuses it too. */
+      if (!(__lines || []).length) {
+        UIC.toast('يجب إضافة صنف واحد على الأقل', 'error');
+        return;
+      }
+      /* نوع الحركة decides what stock movement a line becomes, so a blank one
+         is a line that does nothing rather than a line with a default. */
+      var _noMovement = [];
+      (__lines || []).forEach(function (l, i) {
+        if (!String(l.movement_type || '').trim()) _noMovement.push(i + 1);
+      });
+      if (_noMovement.length) {
+        UIC.toast('نوع الحركة مطلوب لكل صنف — الأصناف رقم: ' + _noMovement.join('، '), 'error');
+        var _mv = document.getElementById('movement_type_' + (_noMovement[0] - 1));
+        if (_mv && _mv.focus) _mv.focus();
+        return;
+      }
+
       var t = computeTotals();
       header['Value Based on Invoice'] = t.valueBasedOnInvoice;
       header['Total costs'] = t.totalCosts;
