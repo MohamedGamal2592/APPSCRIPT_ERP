@@ -477,11 +477,16 @@ function canCompanyAction_(authUser, moduleAction, pageId) {
  * (1 = system works, 0 = system closed). C2/D2 hold audit stamps.
  * payload.on === undefined → read-only current state.
  * payload.on = true|false  → write B2 (1/0) + C2/D2 and explicitly call
- *                            bumpVersion_('ERP_system_work') — invariant:
- *                            programmatic writes don't fire onEdit.
+ *                            bumpVersion_('ERP_system_work'), which bumps the
+ *                            authority generation — invariant: programmatic
+ *                            writes don't fire any edit trigger.
  * NOTE: once B2 = 0 the apiRouter gate blocks EVERY action, including this
- * one. Recovery when closed is always via editing B2 directly in the sheet
- * (onEdit then re-enables within seconds).
+ * one. Recovery when closed is always via editing B2 directly in the sheet.
+ * That direct edit is caught by the INSTALLABLE onAuthSheetEdit trigger
+ * (installTriggers_), which re-enables on the next request. The simple
+ * onEdit(e) has never fired — this is a standalone script. If the installable
+ * trigger is missing, recovery still happens, bounded by
+ * AUTH_STALENESS_CEILING_SECONDS.
  */
 function toggleKillSwitch_(payload, sessionToken, authUser) {
   requireSuperAdmin_(authUser);
@@ -1102,12 +1107,13 @@ function cleanupOldSessions_(payload, sessionToken, authUser) {
 }
 
 /* Batch 11 — Phase 6: install a daily time-driven trigger that prunes expired
- * sessions. Safe to call repeatedly (removes any prior instance first). */
+ * sessions, plus the installable onEdit trigger on the AUTH spreadsheet.
+ * Safe to call repeatedly (removes any prior instance of each first). */
 function installTriggers_(payload, sessionToken, authUser) {
   if (!(authUser && authUser.isSuperAdmin)) throw new Error('صلاحية غير كافية');
   ScriptApp.getProjectTriggers().forEach(function (t) {
     var h = t.getHandlerFunction();
-    if (h === 'cleanupOldSessions_' || h === 'dailyCsvBackup') {
+    if (h === 'cleanupOldSessions_' || h === 'dailyCsvBackup' || h === 'onAuthSheetEdit') {
       try { ScriptApp.deleteTrigger(t); } catch (e) {}
     }
   });
@@ -1118,6 +1124,21 @@ function installTriggers_(payload, sessionToken, authUser) {
     // runs mid-day. (Was 07:00, which is inside the working day in Cairo.)
     ScriptApp.newTrigger('dailyCsvBackup').timeBased().everyDays(1).atHour(1).create();
   } catch (e) {}
+  try {
+    // The INSTALLABLE onEdit on the AUTH spreadsheet. The simple onEdit(e) in
+    // 02_DataAccess.js never fires — this is a standalone script and simple
+    // triggers only run in container-bound projects — so without this trigger a
+    // change typed directly into ERP_Users / ERP_Pages_Matrix / ERP_system_work
+    // is caught only by the AUTH_STALENESS_CEILING_SECONDS bucket.
+    // Its own try/catch: this trigger needs a spreadsheet scope the others do
+    // not, and a scope failure here must not take down the installs above.
+    ScriptApp.newTrigger('onAuthSheetEdit')
+      .forSpreadsheet(CONFIG.AUTH_SPREADSHEET_ID)
+      .onEdit()
+      .create();
+  } catch (e) {
+    try { console.error('installTriggers_: onAuthSheetEdit not created — ' + e.message); } catch (e2) {}
+  }
   return { status: 'success', message: 'تم تثبيت المؤقتات اليومية' };
 }
 

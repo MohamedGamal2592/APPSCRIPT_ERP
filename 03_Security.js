@@ -484,6 +484,11 @@ function unifiedCheck_(authUser, companyName, pageId, requiredAccess) {
 // Fail-open: if the sheet or B2 is missing/unreadable, the system is ENABLED.
 // Recovery when closed is ALWAYS via editing B2 directly in the sheet — the
 // app itself cannot flip it once blocked (apiRouter gate precedes auth).
+// That direct edit is caught by the INSTALLABLE onAuthSheetEdit trigger, which
+// bumps the authority generation and re-enables on the next request. The simple
+// onEdit(e) in 02_DataAccess.js has never fired: this is a standalone script and
+// simple triggers only run in container-bound projects. With the installable
+// trigger missing, recovery is bounded by AUTH_STALENESS_CEILING_SECONDS.
 // ==========================================
 function ensureSystemWorkSheet_() {
   try {
