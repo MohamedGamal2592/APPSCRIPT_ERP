@@ -74,7 +74,10 @@ const STEPS = [
   ['ac4_write_contract.js', 'AC4 — acInsert_/acUpdate_ header-case contract (T-3/T-4) + batches (§5.2)'],
   ['ac5_candidate.js', 'AC5 — the public candidate page and its three PUBLIC_ACTIONS (T-1/T-2/T-5/T-9)'],
   ['ac6_review.js', 'AC6 — results list, grading, the trait chart, print'],
-  ['ac7_tierb.js', 'AC7 — Phase 8 Tier B (D-2): B-1/B-2, with AND without the columns']
+  ['ac7_tierb.js', 'AC7 — Phase 8 Tier B (D-2): B-1/B-2, with AND without the columns'],
+
+  /* ── Realtime feel (branch feat/realtime-feel) ── */
+  ['rt8_search_scope.js', 'RT8 — no search box over a truncated list stays silent about it']
 ];
 
 /* Two programmes share this repo and this runner, so a step's file can be

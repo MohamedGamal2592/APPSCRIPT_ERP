@@ -123,6 +123,10 @@
       });
 
       document.getElementById('ot-table-wrap').innerHTML = UIC.dataTable(OT_TABLE_ID, {
+        /* [RT-1] The list endpoint caps at the newest rows unless `loadAll` is
+           passed, and the search box filters only what is in memory — so the
+           table says which records the box actually searches. */
+        truncated: true,
         headers: headers,
         rows: tableRows
       });

@@ -321,6 +321,44 @@ UIC.statusPill = function (label, tone) {
   return '<span class="pill pill-' + t + '">' + (label || '') + '</span>';
 };
 
+/* Shared "من تاريخ / إلى تاريخ" strip.
+ *
+ * The list pages each had their own hand-rolled pair of date inputs (TopLight
+ * cash/sales/stock all repeat the same two form-fields), so this is the one
+ * place the markup, the ids and the clear button live. Returns HTML; the two
+ * inputs are addressable as <key>-from and <key>-to, and UIC.dateRangeValues
+ * reads them back.
+ *
+ * opts: { from, to, onchange, onclear, label }  — onchange/onclear are inline
+ * handler strings, matching how every other component in this file wires up. */
+UIC.dateRangeBar = function (key, opts) {
+  const o = opts || {};
+  const esc = function (v) { return FMT.escape(v == null ? '' : v); };
+  const onch = o.onchange ? ' onchange="' + o.onchange + '"' : '';
+  const has = !!(o.from || o.to);
+  return '<div class="date-range-bar" style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;margin-bottom:12px;">' +
+    '<div class="form-field" style="margin:0;">' +
+      '<label class="form-label" for="' + key + '-from">من تاريخ</label>' +
+      '<input id="' + key + '-from" class="input" type="date" value="' + esc(o.from) + '"' + onch + '>' +
+    '</div>' +
+    '<div class="form-field" style="margin:0;">' +
+      '<label class="form-label" for="' + key + '-to">إلى تاريخ</label>' +
+      '<input id="' + key + '-to" class="input" type="date" value="' + esc(o.to) + '"' + onch + '>' +
+    '</div>' +
+    (has && o.onclear
+      ? '<button type="button" class="btn btn-outline" onclick="' + o.onclear + '">✕ مسح التاريخ</button>'
+      : '') +
+  '</div>';
+};
+
+/* Current values of a UIC.dateRangeBar, as { from, to } (empty strings when
+   the inputs are blank or the bar is not on the page). */
+UIC.dateRangeValues = function (key) {
+  const f = document.getElementById(key + '-from');
+  const t = document.getElementById(key + '-to');
+  return { from: (f && f.value) || '', to: (t && t.value) || '' };
+};
+
 UIC.pageAuthorized_ = function (action) {
   const up = window.USER_PAGES;
   if (!up) return true;
@@ -939,44 +977,6 @@ UIC._colMin = function (v) {
 };
 
 /**
- * ONE builder for the header row, used by both renders.
- *
- * There were two near-identical copies of this markup: the first render built
- * it, and the column-hide menu rebuilt it. Patching only one is a trap with no
- * error attached — the contract would hold until a user opened the الأعمدة
- * menu and then vanish, on one table, for that user, silently. They are one
- * function now so that cannot happen again.
- *
- * [UI-1.3 / U-03] Sortable columns advertise their state to assistive tech and
- * carry a chevron. `sortable: false` on a header opts a column out — the
- * actions column is opted out automatically, since sorting by a block of
- * buttons is meaningless.
- *
- * [UI-9.1] The col-* class is the ENTIRE width contract. It goes here, on the
- * <th>, and on no other cell: in table-layout: auto the <th> is one of the
- * cells whose minimum sets the column's floor, so one attribute governs every
- * row without adding a node to any of them.
- */
-UIC._dtHeadRow = function (st) {
-  var cols = UIC._dtVisibleHeaders(st);
-  var roles = st.cols || {};
-  var selTh = st.selectable
-    ? '<th class="dt-sel"><input type="checkbox" class="dt-sel-all" aria-label="تحديد الكل" ' +
-      'onclick="UIC._dtToggleAll(\'' + st.id + '\', this)"></th>'
-    : '';
-  return '<tr>' + selTh + cols.map(function (h) {
-    var key = h.key || h.label;
-    var sortable = h.sortable !== false && key !== 'actions';
-    var role = roles[key];
-    var min = UIC._colMin(h.min);
-    return '<th scope="col" data-key="' + key + '"' +
-      (role ? ' class="col-' + role + '"' : '') +
-      (min ? ' style="min-width:' + min + '"' : '') +
-      (sortable ? ' data-sortable="true" aria-sort="none"' : '') + '>' +
-      '<span class="th-label">' + h.label + '</span>' +
-      (sortable ? '<span class="th-sort" aria-hidden="true"></span>' : '') +
-      '</th>';
-/**
  * The same contract, for a table a page wrote as markup rather than through
  * UIC.dataTable.
  *
@@ -1094,6 +1094,44 @@ UIC.autoColumnsAll = function (rootIdOrEl) {
   return n;
 };
 
+/**
+ * ONE builder for the header row, used by both renders.
+ *
+ * There were two near-identical copies of this markup: the first render built
+ * it, and the column-hide menu rebuilt it. Patching only one is a trap with no
+ * error attached — the contract would hold until a user opened the الأعمدة
+ * menu and then vanish, on one table, for that user, silently. They are one
+ * function now so that cannot happen again.
+ *
+ * [UI-1.3 / U-03] Sortable columns advertise their state to assistive tech and
+ * carry a chevron. `sortable: false` on a header opts a column out — the
+ * actions column is opted out automatically, since sorting by a block of
+ * buttons is meaningless.
+ *
+ * [UI-9.1] The col-* class is the ENTIRE width contract. It goes here, on the
+ * <th>, and on no other cell: in table-layout: auto the <th> is one of the
+ * cells whose minimum sets the column's floor, so one attribute governs every
+ * row without adding a node to any of them.
+ */
+UIC._dtHeadRow = function (st) {
+  var cols = UIC._dtVisibleHeaders(st);
+  var roles = st.cols || {};
+  var selTh = st.selectable
+    ? '<th class="dt-sel"><input type="checkbox" class="dt-sel-all" aria-label="تحديد الكل" ' +
+      'onclick="UIC._dtToggleAll(\'' + st.id + '\', this)"></th>'
+    : '';
+  return '<tr>' + selTh + cols.map(function (h) {
+    var key = h.key || h.label;
+    var sortable = h.sortable !== false && key !== 'actions';
+    var role = roles[key];
+    var min = UIC._colMin(h.min);
+    return '<th scope="col" data-key="' + key + '"' +
+      (role ? ' class="col-' + role + '"' : '') +
+      (min ? ' style="min-width:' + min + '"' : '') +
+      (sortable ? ' data-sortable="true" aria-sort="none"' : '') + '>' +
+      '<span class="th-label">' + h.label + '</span>' +
+      (sortable ? '<span class="th-sort" aria-hidden="true"></span>' : '') +
+      '</th>';
   }).join('') + '</tr>';
 };
 
@@ -1193,6 +1231,28 @@ UIC.dataTable = function (containerId, opts) {
   var toolbarParts = [];
   if (searchable) {
     toolbarParts.push('<input class="input" type="search" placeholder="بحث..." oninput="UIC._dtSearchInput(\'' + id + '\', this.value)">');
+    /* [RT-1 / Phase 8 step 1] The search box filters `st.originalRows` and never
+     * calls the server (see `UIC._applyFilters`). When the page was handed a
+     * server-truncated list — the list endpoints cap at the newest `limit` rows
+     * unless `loadAll` is passed — that box searches those rows and nothing else,
+     * and a user looking for a record outside them gets "لا توجد بيانات" with no
+     * indication that the search only ever looked at a slice.
+     *
+     * A search that quietly misses records is worse than no search box, so a page
+     * that knows its list is capped says so here. `showAll` is optional because
+     * most of these pages have no "عرض الكل" button to point at; where one
+     * exists the notice links to it, and where it does not the notice still tells
+     * the truth rather than inventing an affordance the page never had. */
+    if (o.truncated) {
+      toolbarParts.push(
+        '<span class="dt-search-scope" role="note">' + UIC.icon('info') +
+        '<span>' + (o.searchScopeNote || 'البحث في السجلات المعروضة فقط') + '</span>' +
+        (o.showAll
+          ? '<button type="button" class="dt-search-scope-all" onclick="' + o.showAll + '">' +
+            'عرض الكل للبحث في الكل</button>'
+          : '') +
+        '</span>');
+    }
   }
   if (o.dateFilter) {
     toolbarParts.push('<label style="font-size:13px;">من:</label><input id="' + id + '-from" type="date" class="input" style="width:150px;">');
@@ -4224,6 +4284,18 @@ document.addEventListener('keydown', function (e) {
   }
   .dt-batch-count { font-size: var(--text-sm); font-weight: 700; color: var(--brand-primary); }
   .dt-batch .btn { padding: 6px 12px; min-height: var(--tap-sm, 44px); }
+
+  /* ── [RT-1] Search-scope notice ──────────────────────────────── */
+  .dt-search-scope {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: var(--text-sm); color: var(--text-muted);
+  }
+  .dt-search-scope svg { width: 15px; height: 15px; flex: none; }
+  .dt-search-scope-all {
+    background: none; border: 0; padding: 0;
+    font: inherit; color: var(--brand-primary);
+    text-decoration: underline; cursor: pointer;
+  }
 
   /* ── [UI-4.5 / U-19] Optional columns ────────────────────────────────── */
   .dt-col-menu { max-height: 60dvh; overflow-y: auto; }

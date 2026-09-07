@@ -66,8 +66,8 @@
       { key: 'tax_system', col: 'tax_system', label: 'النظام الضريبي', type: 'select', options: [{ value: 'true', label: 'نعم' }, { value: 'false', label: 'لا' }], default: 'false' },
       { key: 'receipt_date', col: 'Reciept Date', label: 'تاريخ الاستلام', type: 'date', required: true, default: 'today' },
       { key: 'items', col: 'Items', label: 'الأصناف', type: 'text' },
-      { key: 'type', col: 'Type', label: 'النوع', type: 'select', options: ['بيع', 'تصنيع', 'اصول منشأة'] },
-      { key: 'shipping_type', col: 'Shipping Type', label: 'نوع الشحن', type: 'select', options: ['CIF', 'FOB', 'C&F', 'محلي'] },
+      { key: 'type', col: 'Type', label: 'النوع', type: 'select', options: ['بيع', 'تصنيع', 'اصول منشأة'], required: true },
+      { key: 'shipping_type', col: 'Shipping Type', label: 'نوع الشحن', type: 'select', options: ['CIF', 'FOB', 'C&F', 'محلي'], required: true },
       { key: 'supplier_name', col: 'Supplier Name', label: 'المورد', type: 'select', options: '__supplier__', required: true },
       { key: 'currency', col: 'Currency', label: 'العملة', type: 'select', options: '__currency__', default: 'EGP' },
       { key: 'exchange_rate', col: 'Exchange rate', label: 'سعر الصرف', type: 'number', default: 1 },
@@ -199,18 +199,28 @@
       (__loadedAll ? '' : '<button class="btn btn-outline" onclick="showAllPurchasing()">عرض الكل</button> ') +
       (CAN_WRITE && canCost() ? '<button class="btn btn-primary" onclick="openForm(\'\', false)">+ إضافة عملية شراء</button>' : '') +
       '</div><div class="vf-card-body">' +
+      UIC.dateRangeBar('pur-date', {
+        from: __dateFrom, to: __dateTo,
+        onchange: 'applyPurchasingDateFilter()',
+        onclear: 'clearPurchasingDateFilter()'
+      }) +
       UIC.dataTable('purchasing-table', {
+        /* [RT-1] The list endpoint caps at the newest rows unless `loadAll` is
+           passed, and the search box filters only what is in memory — so the
+           table says which records the box actually searches. */
+        truncated: !__loadedAll,
+        showAll: 'showAllPurchasing()',
         title: 'عمليات الشراء',
         searchable: true,
+        /* [UI-9.1] الأصناف holds every item on the purchase joined into one
+           cell, so it is the longest text on the row and the one worth reading
+           — declared prose so it absorbs the surplus instead of a date column
+           taking it. المورد is a name: real words, but not a sentence. */
         headers: [
           { key: 'Code', label: 'الكود' },
           { key: 'supplier_name', label: 'المورد', col: 'text' },
           { key: 'receipt_date', label: 'تاريخ الاستلام' },
           { key: 'items', label: 'الأصناف', col: 'prose' }
-        /* [UI-9.1] الأصناف holds every item on the purchase joined into one
-           cell, so it is the longest text on the row and the one worth reading
-           — declared prose so it absorbs the surplus instead of a date column
-           taking it. المورد is a name: real words, but not a sentence. */
         ].concat(canCost()
           ? [{ key: 'total_costs', label: 'إجمالي التكاليف', numeric: true }]
           : []).concat([
@@ -219,9 +229,21 @@
           { key: 'actions', label: 'إجراءات' }
         ]),
         rows: rows,
-        emptyText: 'لا توجد عمليات شراء'
+        emptyText: (__dateFrom || __dateTo) ? 'لا توجد عمليات شراء في هذه الفترة' : 'لا توجد عمليات شراء'
       }) + '</div></div>';
     UIC.initTableSort('purchasing-table');
+  }
+
+  function applyPurchasingDateFilter() {
+    var v = UIC.dateRangeValues('pur-date');
+    if (v.from && v.to && v.from > v.to) { UIC.toast('«من تاريخ» بعد «إلى تاريخ»', 'error'); return; }
+    __dateFrom = v.from; __dateTo = v.to;
+    renderList();
+  }
+
+  function clearPurchasingDateFilter() {
+    __dateFrom = ''; __dateTo = '';
+    renderList();
   }
 
     function openForm(code, viewOnly) {

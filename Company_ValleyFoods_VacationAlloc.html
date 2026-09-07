@@ -115,7 +115,11 @@
       });
       document.getElementById('vf-vacalloc-content').innerHTML =
         addBtn +
-        UIC.dataTable('vacalloc-table', { headers: headers, rows: rows, emptyText: 'لا توجد تخصيصات إجازات' });
+        UIC.dataTable('vacalloc-table', {
+          /* [RT-1] The list endpoint caps at the newest rows unless `loadAll` is
+             passed, and the search box filters only what is in memory — so the
+             table says which records the box actually searches. */
+          truncated: true, headers: headers, rows: rows, emptyText: 'لا توجد تخصيصات إجازات' });
       UIC.initTableSort('vacalloc-table');
     }
 

@@ -198,7 +198,11 @@
           '<div style="display:flex;justify-content:space-between;align-items:center;margin:18px 0 6px;">' +
           '<h3 style="margin:0;font-size:15px;">' + esc(key) + '</h3>' +
           '<span style="font-size:12px;color:var(--text-muted);">' + groups[key].length + ' سجل</span></div>' +
-          UIC.dataTable('import-table-' + gi, { headers: headers, rows: gRows, emptyText: '' });
+          UIC.dataTable('import-table-' + gi, {
+            /* [RT-1] The list endpoint caps at the newest rows unless `loadAll` is
+               passed, and the search box filters only what is in memory — so the
+               table says which records the box actually searches. */
+            truncated: true, headers: headers, rows: gRows, emptyText: '' });
         UIC.initTableSort('import-table-' + gi);
       });
     }

@@ -142,7 +142,11 @@
           esc(r.month_name)
         ];
       });
-      return UIC.dataTable('vf-msal-table', { headers: headers, rows: rows });
+      return UIC.dataTable('vf-msal-table', {
+        /* [RT-1] The list endpoint caps at the newest rows unless `loadAll` is
+           passed, and the search box filters only what is in memory — so the
+           table says which records the box actually searches. */
+        truncated: true, headers: headers, rows: rows });
     }
 
     function renderContent() {

@@ -123,7 +123,11 @@
     ];
     document.getElementById('budget-manufacture-content').innerHTML =
       (CAN_WRITE ? '<div style="display:flex;justify-content:flex-end;margin-bottom:12px;"><button class="btn btn-primary" onclick="openManufactureModal()">+ إضافة عملية تصنيع</button></div>' : '') +
-      UIC.dataTable('budget-manufacture-table', { title: 'عمليات التصنيع الداخلي', headers: headers, rows: rows, emptyText: 'لا توجد بيانات' });
+      UIC.dataTable('budget-manufacture-table', {
+        /* [RT-1] The list endpoint caps at the newest rows unless `loadAll` is
+           passed, and the search box filters only what is in memory — so the
+           table says which records the box actually searches. */
+        truncated: true, title: 'عمليات التصنيع الداخلي', headers: headers, rows: rows, emptyText: 'لا توجد بيانات' });
     UIC.initTableSort('budget-manufacture-table');
   }
 

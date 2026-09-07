@@ -104,6 +104,11 @@
         ];
       });
       c.innerHTML = UIC.dataTable('shift-tbl', {
+        /* [RT-1] The list endpoint caps at the newest rows unless `loadAll` is
+           passed, and the search box filters only what is in memory — so the
+           table says which records the box actually searches. */
+        truncated: !LOADED_ALL,
+        showAll: 'SHIFT_PAGE.loadAll()',
         headers: ['كود الموظف', 'الموظف', 'الوردية', 'من تاريخ', 'إلى تاريخ', 'ملاحظات', 'أضيف بواسطة'],
         rows: rows,
         emptyText: 'لا توجد ورديات معيّنة بعد'

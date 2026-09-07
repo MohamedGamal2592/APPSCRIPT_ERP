@@ -205,6 +205,10 @@
       };
     });
     container.innerHTML = UIC.dataTable('customs-dt', {
+      /* [RT-1] The list endpoint caps at the newest rows unless `loadAll` is
+         passed, and the search box filters only what is in memory — so the
+         table says which records the box actually searches. */
+      truncated: true,
       title: 'معاملات الجمارك',
       headers: [
         { key: 'id', label: '#', numeric: true },

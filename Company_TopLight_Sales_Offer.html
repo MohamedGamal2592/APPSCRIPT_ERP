@@ -97,6 +97,10 @@
     content.innerHTML = '<div style="display:flex;justify-content:flex-end;margin-bottom:12px;">' +
       '<button class="btn btn-primary" onclick="openForm(\'\')">+ إضافة عرض سعر</button></div>' +
       UIC.dataTable('offer-table', {
+        /* [RT-1] The list endpoint caps at the newest rows unless `loadAll` is
+           passed, and the search box filters only what is in memory — so the
+           table says which records the box actually searches. */
+        truncated: true,
         title: 'عروض الأسعار',
         headers: [
           { key: 'invoice_number', label: 'رقم العرض' },

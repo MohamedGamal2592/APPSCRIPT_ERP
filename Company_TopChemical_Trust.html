@@ -157,6 +157,10 @@
       '<h3 style="margin:0;">حساب: ' + FMT.escape(account) + '</h3>' + addBtn +
       '</div>' +
       UIC.dataTable('movements-table', {
+        /* [RT-1] The list endpoint caps at the newest rows unless `loadAll` is
+           passed, and the search box filters only what is in memory — so the
+           table says which records the box actually searches. */
+        truncated: true,
         title: 'حركات الحساب',
         headers: headers,
         rows: rows,
