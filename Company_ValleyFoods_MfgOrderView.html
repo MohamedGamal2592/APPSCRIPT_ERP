@@ -158,9 +158,12 @@
       }
 
       /* ---------- load ---------- */
-      function load() {
-        showLoading('جاري تحميل أمر التصنيع…');
-        var watchdog = setTimeout(function () { hideLoading(); if (UI.toast) UI.toast('انتهت مهلة التحميل — تحقق من الاتصال وأعد المحاولة', 'error'); }, 25000);
+      /* quiet: refresh in the background with no blocking overlay, for a
+         user who has already seen the change and must not be interrupted
+         to confirm it. */
+      function load(quiet) {
+        if (!quiet) showLoading('جاري تحميل أمر التصنيع…');
+        var watchdog = setTimeout(function () { if (!quiet) hideLoading(); if (UI.toast) UI.toast('انتهت مهلة التحميل — تحقق من الاتصال وأعد المحاولة', 'error'); }, 25000);
         companyCall('get_valley_mfg_order_detail', { mo_uid: IS_NEW ? '' : MO_UID }).then(function (res) {
           CAN_SEE_COST = (res.can_see_cost !== false);
           RECIPE_OPTIONS = res.recipe_options || [];
@@ -194,7 +197,7 @@
             renderDetail(res.order, res);
           }
         }).catch(function (e) { if (UI.toast) UI.toast((e && e.message) || 'خطأ في التحميل', 'error'); })
-          .finally(function () { clearTimeout(watchdog); hideLoading(); });
+          .finally(function () { clearTimeout(watchdog); if (!quiet) hideLoading(); });
       }
 
       /* ---------- render ---------- */
@@ -1166,6 +1169,15 @@
         approveMo: approveMo, printMo: printMo
       };
       document.addEventListener('DOMContentLoaded', load);
+      /* Another device's change to this page arrives on its own. The poll
+         reads timestamps from cache, never a spreadsheet, and stands down
+         while the tab is hidden or a save is in flight. */
+      UIC.Live.watchPage({
+        call: companyCall,
+        page: 'vf_mfg_orders',
+        onChange: function () { load(true); }
+      });
+
     })();
   </script>
 </body>

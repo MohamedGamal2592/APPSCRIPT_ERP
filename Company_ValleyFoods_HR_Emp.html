@@ -71,7 +71,10 @@
       SHIFT_MAP = {}; SHIFT_OPTIONS.forEach(function (o) { SHIFT_MAP[o.value] = o.label; });
     }
 
-    function load() {
+    /* quiet: refresh in the background with no blocking overlay, for a
+       user who has already seen the change and must not be interrupted
+       to confirm it. */
+    function load(quiet) {
       UIC.appShell('vf-emp-root', {
         companyLogoUrl: COMPANY_LOGO_URL,
         companyLogoHref: scriptUrl + '?action=vf_dashboard&sessionToken=' + SESSION_TOKEN,
@@ -80,11 +83,13 @@
         contentId: 'vf-emp-content',
         menuGroups: (window.VALLEYFOODS_MENU || [])
       });
-      fetchAll();
+      fetchAll(quiet);
     }
 
-    function fetchAll() {
-      UI.showSpinner();
+    /* fetchAll owns the overlay, so it is the one that takes the flag; load()
+       forwards whatever it was handed. */
+    function fetchAll(quiet) {
+      if (!quiet) UI.showSpinner();
       companyCall('get_valley_hr_page', {})
         .then(function (er) {
           EMPLOYEES = er.employees || [];
@@ -100,7 +105,7 @@
           render(); try{schedulePrefetch();}catch(e){};
         }).catch(function (e) {
           UIC.toast('خطأ: ' + (e && e.message ? e.message : e), 'error');
-        }).finally(function () { UI.hideSpinner(); });
+        }).finally(function () { if (!quiet) UI.hideSpinner(); });
     }
 
     function render() {
@@ -412,6 +417,18 @@
 
   <script>
     document.addEventListener('DOMContentLoaded', load);
+    /* Another device's change to this page arrives on its own. The poll
+       reads timestamps from cache, never a spreadsheet, and stands down
+       while the tab is hidden or a save is in flight. */
+    ['vf_hr_employees', 'vf_hr_status', 'vf_hr_shifts', 'vf_hr_salary']
+      .forEach(function (pg) {
+        UIC.Live.watchPage({
+          call: companyCall,
+          page: pg,
+          onChange: function () { fetchAll(true); }
+        });
+      });
+
   </script>
 </body>
 </html>

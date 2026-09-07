@@ -95,9 +95,12 @@
       load();
     }
 
-    function load() {
-      showLoading('جاري تحميل أوامر التصنيع…');
-      var watchdog = setTimeout(function () { hideLoading(); UIC.toast('انتهت مهلة التحميل — تحقق من الاتصال وأعد المحاولة', 'error'); }, 25000);
+    /* quiet: refresh in the background with no blocking overlay, for a
+       user who has already seen the change and must not be interrupted
+       to confirm it. */
+    function load(quiet) {
+      if (!quiet) showLoading('جاري تحميل أوامر التصنيع…');
+      var watchdog = setTimeout(function () { if (!quiet) hideLoading(); UIC.toast('انتهت مهلة التحميل — تحقق من الاتصال وأعد المحاولة', 'error'); }, 25000);
       var container = document.getElementById('mo-table');
       if (container) {
         UIC.PagedTable({
@@ -114,7 +117,7 @@
             RECIPE_OPTIONS = r.recipe_options || [];
             PRODUCT_OPTIONS = r.product_options || [];
             ENUMS = r.enums || {};
-            try { clearTimeout(watchdog); hideLoading(); } catch (e) {}
+            try { clearTimeout(watchdog); if (!quiet) hideLoading(); } catch (e) {}
           },
           mapRow: function (o) {
             var isLocked = o.mo_status === 'Locked';
@@ -140,7 +143,7 @@
             ];
           }
         });
-      } else { try { clearTimeout(watchdog); hideLoading(); } catch (e) {} }
+      } else { try { clearTimeout(watchdog); if (!quiet) hideLoading(); } catch (e) {} }
     }
 
     function statusPill(s, c) { return UIC.statusPill(s, c); }
@@ -766,6 +769,15 @@
     };
 
     document.addEventListener('DOMContentLoaded', renderApp);
+    /* Another device's change to this page arrives on its own. The poll
+       reads timestamps from cache, never a spreadsheet, and stands down
+       while the tab is hidden or a save is in flight. */
+    UIC.Live.watchPage({
+      call: companyCall,
+      page: 'vf_mfg_orders',
+      onChange: function () { load(true); }
+    });
+
   })();
   </script>
 </body>

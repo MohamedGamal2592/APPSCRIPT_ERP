@@ -66,6 +66,13 @@ converted.forEach(function (f) {
   const watchRe = /UIC\.Live\.watchPage\(\{[\s\S]{0,400}?page:\s*'([a-z0-9_]+)'/g;
   let m, watched = [];
   while ((m = watchRe.exec(src)) !== null) watched.push(m[1]);
+  /* One screen may watch several page ids by looping an array literal, when
+     several gated pages render into it (HR_Emp: employees, status, shifts,
+     salary). Those ids come from the array, not from a literal in the call. */
+  if (!watched.length && /UIC\.Live\.watchPage\(\{[\s\S]{0,300}?page:\s*[A-Za-z_$]/.test(src)) {
+    const loop = /\[([^\]]*'[a-z0-9_]+'[^\]]*)\]\s*\.forEach\(function\s*\([A-Za-z_$][A-Za-z0-9_$]*\)\s*\{[\s\S]{0,400}?UIC\.Live\.watchPage/.exec(src);
+    if (loop) watched = (loop[1].match(/'([a-z0-9_]+)'/g) || []).map(x => x.replace(/'/g, ''));
+  }
   check(watched.length > 0, label + ': registers a change watch', 'none found');
   watched.forEach(function (p) {
     check(!!KNOWN_PAGES[p], label + ': watches a page id the server knows (' + p + ')',
@@ -82,7 +89,10 @@ converted.forEach(function (f) {
   if (src.indexOf('load(true)') !== -1) {
     check(/function load\(quiet\)/.test(src), label + ': load() takes the quiet flag it is called with',
       'load(true) is called but load() has no parameter');
-    check(/if \(!quiet\) UI\.showSpinner\(\)/.test(src),
+    /* Two overlay helpers are in use: UI.showSpinner on most pages, and the
+       page-local showLoading() on the two manufacturing screens. Either one
+       counts, so long as the quiet flag suppresses it. */
+    check(/if \(!quiet\) UI\.showSpinner\(\)/.test(src) || /if \(!quiet\) showLoading\(/.test(src),
       label + ': and a quiet refresh does not raise the blocking overlay');
   }
 

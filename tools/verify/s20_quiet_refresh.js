@@ -134,9 +134,26 @@ console.log('\n3 — every change watch names a real page and a real function\n'
       watched++;
       const block = w[1];
       const pg = /page:\s*'([a-z0-9_]+)'/.exec(block);
-      if (!pg) { bad.push('        ' + f + ' — a watch with no page id'); continue; }
-      if (!knownPages[pg[1]]) {
-        bad.push('        ' + f + " — watches '" + pg[1] + "', which no action maps to");
+      if (pg) {
+        if (!knownPages[pg[1]]) {
+          bad.push('        ' + f + " — watches '" + pg[1] + "', which no action maps to");
+        }
+      } else if (/page:\s*[A-Za-z_$][A-Za-z0-9_$]*\s*,/.test(block)) {
+        /* One screen may watch several page ids by looping an array literal
+           (HR_Emp does: employees, status, shifts, salary all render there).
+           Validate the ids in the nearest preceding array instead. */
+        const before = src.slice(Math.max(0, w.index - 400), w.index);
+        const arr = /\[([^\]]*'[a-z0-9_]+'[^\]]*)\]/.exec(before);
+        const ids = arr ? (arr[1].match(/'([a-z0-9_]+)'/g) || []).map(x => x.replace(/'/g, '')) : [];
+        if (!ids.length) {
+          bad.push('        ' + f + ' — a watch over a variable with no page-id list to check');
+        }
+        ids.forEach(function (id) {
+          if (!knownPages[id]) bad.push('        ' + f + " — watches '" + id + "', which no action maps to");
+        });
+      } else {
+        bad.push('        ' + f + ' — a watch with no page id');
+        continue;
       }
       const fn = /onChange:\s*function\s*\(\)\s*\{\s*([A-Za-z0-9_]+)\s*\(/.exec(block);
       if (fn && src.indexOf('function ' + fn[1] + '(') === -1) {
