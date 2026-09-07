@@ -130,21 +130,48 @@ function setupFirstTimePassword_(payload, sessionToken, authUser) {
 }
 
 // ==========================================
-// Session authentication (versioned cache)
+// Session authentication + live identity overlay
+// SessionManager_.validate answers "is this token a live session" and is
+// correctly cached for the session's full lifetime. Authority must NOT inherit
+// that lifetime, so the live identity is overlaid on top of it here.
 // ==========================================
 function authenticateSystemUser_(sessionToken) {
   if (!sessionToken) return { status: 'error', authorized: false };
   const v = SessionManager_.validate(sessionToken);
   if (!v.valid) return { status: 'error', authorized: false };
-  const isSuperAdmin = /super\s*admin/i.test(String(v.role || ''));
+
+  // The session row denormalises role/company at login and sess_<hash> holds it
+  // for the session's full 12-hour lifetime. Authority must not inherit that: a
+  // role change, a company move or a deactivation has to bite on the user's next
+  // request. userDirectory_ is generation-keyed, so an admin's save invalidates
+  // it for every user at once.
+  const email = String(v.email || '').trim().toLowerCase();
+  const dir = userDirectory_();
+  const dirLoaded = Object.keys(dir).length > 0;
+  const live = dir[email] || null;
+
+  // FAIL-OPEN on a read failure, FAIL-CLOSED on a real absence. An empty map is
+  // indistinguishable from a transient read error, so it must not log everyone
+  // out at once; a POPULATED map that lacks this email means the user was
+  // removed. The two directions are not stylistic — do not unify them.
+  if (dirLoaded && !live) return { status: 'error', authorized: false, code: 'ACCOUNT_REMOVED' };
+  if (live && String(live.status).toLowerCase() !== 'active') {
+    return { status: 'error', authorized: false, code: 'ACCOUNT_DISABLED' };
+  }
+
+  const role    = (live && live.role)    ? live.role    : v.role;
+  const company = (live && live.company) ? live.company : v.company;
+  const name    = (live && live.name)    ? live.name    : v.name;
+
+  const isSuperAdmin = /super\s*admin/i.test(String(role || ''));
   const userObj = {
     email: v.email,
-    name: v.name,
-    role: v.role,
-    company: v.company,
-    companyId: v.company,
+    name: name,
+    role: role,
+    company: company,
+    companyId: company,
     isSuperAdmin: isSuperAdmin,
-    authorizedPages: isSuperAdmin ? ['*'] : getRoleAuthorityMatrix_(v.role),
+    authorizedPages: isSuperAdmin ? ['*'] : getRoleAuthorityMatrix_(role),
     expires: v.expires
   };
   return { status: 'success', authorized: true, user: userObj };
