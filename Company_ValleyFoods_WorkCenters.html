@@ -65,12 +65,15 @@
       load();
     }
 
-    function load() {
-      UI.showSpinner();
+    /* quiet: refresh in the background with no blocking overlay, for a
+       user who has already seen the change and must not be interrupted
+       to confirm it. */
+    function load(quiet) {
+      if (!quiet) UI.showSpinner();
       companyCall('get_valley_work_centers')
         .then(function (r) { RECORDS = r.records || []; renderTable(); try{schedulePrefetch();}catch(e){}; })
         .catch(function (e) { UIC.toast((e && e.message) || 'خطأ', 'error'); })
-        .finally(function () { UI.hideSpinner(); });
+        .finally(function () { if (!quiet) UI.hideSpinner(); });
     }
 
     function renderTable() {
@@ -139,12 +142,23 @@
       };
       UI.showSpinner();
       companyCall('save_valley_work_center', payload)
-        .then(function (r) { UIC.closeModal('wc-modal'); UIC.toast((r && r.message) || 'تم الحفظ', 'success'); load(); })
+        .then(function (r) { UIC.closeModal('wc-modal'); UIC.toast((r && r.message) || 'تم الحفظ', 'success'); load(true); })
         .catch(function (e) { UIC.toast((e && e.message) || 'فشل', 'error'); })
         .finally(function () { UI.hideSpinner(); });
     }
 
     window.WC_PAGE = { openAdd: openAdd, openEdit: openEdit, save: save };
+    /* Another device's change to this page arrives on its own. The poll
+       reads timestamps from cache, never a spreadsheet, and stands down
+       while the tab is hidden or a save is in flight. */
+    document.addEventListener('DOMContentLoaded', function () {
+      UIC.Live.watchPage({
+        call: companyCall,
+        page: 'vf_workcenters',
+        onChange: function () { load(true); }
+      });
+    });
+
     document.addEventListener('DOMContentLoaded', renderApp);
   })();
   </script>

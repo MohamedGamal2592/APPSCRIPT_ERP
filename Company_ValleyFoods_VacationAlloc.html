@@ -67,8 +67,11 @@
       fetchData();
     }
 
-    function fetchData() {
-      UI.showSpinner();
+    /* quiet: refresh in the background with no blocking overlay, for a
+       user who has already seen the change and must not be interrupted
+       to confirm it. */
+    function fetchData(quiet) {
+      if (!quiet) UI.showSpinner();
       companyCall('get_vacation_alloc_data').then(function (res) {
         ROWS = res.rows || [];
         EMP_OPTIONS = res.employee_options || [];
@@ -78,7 +81,7 @@
         render(); try{schedulePrefetch();}catch(e){};
       }).catch(function (e) {
         UIC.toast('خطأ: ' + (e && e.message ? e.message : e), 'error');
-      }).finally(function () { UI.hideSpinner(); });
+      }).finally(function () { if (!quiet) UI.hideSpinner(); });
     }
 
     function render() {
@@ -152,6 +155,17 @@
   </script>
 
   <script>
+    /* Another device's change to this page arrives on its own. The poll
+       reads timestamps from cache, never a spreadsheet, and stands down
+       while the tab is hidden or a save is in flight. */
+    document.addEventListener('DOMContentLoaded', function () {
+      UIC.Live.watchPage({
+        call: companyCall,
+        page: 'vf_hr_vacation_alloc',
+        onChange: function () { fetchData(true); }
+      });
+    });
+
     document.addEventListener('DOMContentLoaded', load);
   </script>
 </body>

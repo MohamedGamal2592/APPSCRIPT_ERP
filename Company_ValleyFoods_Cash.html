@@ -66,11 +66,21 @@
         menuGroups: (window.VALLEYFOODS_MENU || [])
       });
       load();
+      /* Someone else's cash movement shows up here within one poll, without
+         this page ever touching a spreadsheet to find out. */
+      UIC.Live.watchPage({
+        call: companyCall,
+        page: 'vf_cash',
+        onChange: function () { load(true); }
+      });
     }
 
-    function load() {
-      UI.showSpinner();
-      companyCall('get_valley_cash')
+    /* quiet: refresh in the background without the blocking overlay. Used
+       after an optimistic save and by the change poll, where the user has
+       already seen their change and must not be interrupted to confirm it. */
+    function load(quiet) {
+      if (!quiet) UI.showSpinner();
+      companyCall('get_valley_cash', { from: DATE_FROM, to: DATE_TO })
         .then(function (r) {
           HEADERS = r.headers || [];
           BOXES = r.boxes || [];
@@ -80,16 +90,27 @@
           window.__cashPartyOptions = r.party_options || [];
           window.__cashBoxOptions = r.box_options || [];
           window.__cashChartOptions = r.chart_options || [];
+          /* Only on the first load: a reload after a save (or after the user
+             changes a filter) must keep what is on screen, not snap back to the
+             saved view. */
+          if (VIEW_APPLIED) { renderList(); try{schedulePrefetch();}catch(e){}; return; }
           SESSION.loadActiveView('vf_cash').then(function (def) {
+            VIEW_APPLIED = true;
             if (def && def.box !== undefined) BOX_FILTER = def.box;
+            if (def && def.from !== undefined) DATE_FROM = def.from || '';
+            if (def && def.to !== undefined) DATE_TO = def.to || '';
+            if (DATE_FROM || DATE_TO) { load(quiet); return; }
             renderList(); try{schedulePrefetch();}catch(e){};
-          }).catch(function () { renderList(); });
+          }).catch(function () { VIEW_APPLIED = true; renderList(); });
         })
         .catch(function (e) {
+          /* A background refresh that fails must not replace the list the user
+             is looking at with an error page. */
+          if (quiet) return;
           var c = document.getElementById('vf-cash-content');
           if (c) c.innerHTML = '<div style="padding:20px;color:red;">خطأ: ' + esc(e.message || e) + '</div>';
         })
-        .finally(function () { UI.hideSpinner(); });
+        .finally(function () { if (!quiet) UI.hideSpinner(); });
     }
 
     function partyLabel(idRef) {
@@ -309,15 +330,64 @@
         transaction_purchasing_items: getVal_('f-items').trim(),
         tax_system: readCheckbox('f-tax-system')
       };
-      UI.showSpinner();
-      companyCall('save_valley_cash', payload)
-        .then(function (r) {
-          UIC.closeModal('cash-modal');
-          UIC.toast((r && r.message) || 'تم الحفظ بنجاح', 'success');
-          load();
-        })
-        .catch(function (e) { UIC.toast((e && e.message) || 'فشل الحفظ', 'error'); })
-        .finally(function () { UI.hideSpinner(); });
+      /* The row is drawn from what the user typed, immediately, and the
+         request stops being the thing they wait for. The box balance cards are
+         server-computed, so a QUIET refresh corrects them a moment later
+         without the user waiting on it. */
+      UIC.Live.save({
+        call: companyCall,
+        action: 'save_valley_cash',
+        data: payload,
+        list: HEADERS,
+        key: 'transaction_id',
+        draft: draftRow(payload, editId),
+        render: renderList,
+        modal: 'cash-modal',
+        message: 'تم الحفظ بنجاح',
+        onSuccess: function () { load(true); },
+        reload: load
+      }).catch(function () { /* UIC.Live has already reported and rolled back */ });
+    }
+
+    /* What the list needs to draw a row the server has not confirmed yet. The
+       display fields are derived exactly as renderList reads them; anything the
+       server computes (the running balance, the approval flag) is left at its
+       neutral value and corrected by the quiet refresh. */
+    function draftRow(p, editId) {
+      var existing = null;
+      if (editId != null && editId !== '') {
+        HEADERS.forEach(function (h) { if (String(h.transaction_id) === String(editId)) existing = h; });
+      }
+      var amt = num0(p.transaction_amount);
+      var net = amt - num0(p.total_discount);
+      var total = net + num0(p.taxes);
+      var isCredit = (p.transaction_type === 'Credit' || p.transaction_type === 'Credit Note');
+      var boxName = '';
+      (window.__cashBoxOptions || []).forEach(function (o) { if (String(o.value) === String(p.related_box)) boxName = o.label; });
+      return {
+        transaction_id: (editId != null && editId !== '') ? editId : NEXT_ID,
+        transaction_date: p.transaction_date,
+        date_edit: p.transaction_date,
+        date_display: p.transaction_date,
+        name: p.name,
+        name_vendor: p.name_vendor,
+        party_name: partyLabel(p.name),
+        transaction_details: p.transaction_details,
+        transaction_type: p.transaction_type,
+        transaction_method: p.transaction_method,
+        transaction_amount: amt,
+        total_discount: num0(p.total_discount),
+        taxes: num0(p.taxes),
+        related_box: p.related_box,
+        box_name: boxName || p.related_box,
+        chart_code: p.chart_code,
+        chart_name: '',
+        transaction_purchasing_items: p.transaction_purchasing_items,
+        tax_system: p.tax_system,
+        balance_amount: isCredit ? total * -1 : total,
+        user: (existing && existing.user) || '',
+        approved_bool: existing ? existing.approved_bool : false
+      };
     }
 
     function readCheckbox(id) {
@@ -361,20 +431,45 @@
 
     /* ---------- APPROVE / DELETE ---------- */
     function approve(tid) {
-      UI.showSpinner();
-      companyCall('approve_valley_cash', { transaction_id: tid })
-        .then(function (r) { UIC.toast((r && r.message) || 'تم', 'success'); load(); })
-        .catch(function (e) { UIC.toast((e && e.message) || 'فشل', 'error'); })
-        .finally(function () { UI.hideSpinner(); });
+      var row = null;
+      HEADERS.forEach(function (h) { if (String(h.transaction_id) === String(tid)) row = h; });
+      if (!row) return;
+      /* One flag on one row the browser already holds: the pill can flip now
+         and go back if the server disagrees. */
+      var draft = Object.assign({}, row, { approved_bool: !row.approved_bool });
+      UIC.Live.save({
+        call: companyCall,
+        action: 'approve_valley_cash',
+        data: { transaction_id: tid },
+        list: HEADERS, key: 'transaction_id', draft: draft, render: renderList,
+        message: 'تم',
+        onSuccess: function () { load(true); },
+        reload: load
+      }).catch(function () {});
     }
 
     function remove(tid) {
       if (!confirm('حذف هذه الحركة نهائياً؟ لا يمكن التراجع.')) return;
-      UI.showSpinner();
+      var at = -1;
+      HEADERS.forEach(function (h, i) { if (String(h.transaction_id) === String(tid)) at = i; });
+      if (at === -1) return;
+      /* A delete is its own kind of optimistic write: the row goes now, and is
+         put back exactly where it was if the server refuses. UIC.Live.save is
+         built around inserting or replacing, so the removal is done here and
+         the rollback is explicit. */
+      var removed = HEADERS[at];
+      HEADERS.splice(at, 1);
+      renderList();
       companyCall('delete_valley_cash', { transaction_id: tid })
-        .then(function (r) { UIC.toast((r && r.message) || 'تم الحذف', 'success'); load(); })
-        .catch(function (e) { UIC.toast((e && e.message) || 'فشل الحذف', 'error'); })
-        .finally(function () { UI.hideSpinner(); });
+        .then(function (r) {
+          UIC.toast((r && r.message) || 'تم الحذف', 'success');
+          load(true);
+        })
+        .catch(function (e) {
+          HEADERS.splice(at, 0, removed);
+          renderList();
+          UIC.toast((e && e.message) || 'فشل الحذف — لم يتم حذف الحركة', 'error');
+        });
     }
 
     window.CASH_PAGE = {

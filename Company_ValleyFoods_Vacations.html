@@ -65,8 +65,11 @@
       fetchData();
     }
 
-    function fetchData() {
-      UI.showSpinner();
+    /* quiet: refresh in the background with no blocking overlay, for a
+       user who has already seen the change and must not be interrupted
+       to confirm it. */
+    function fetchData(quiet) {
+      if (!quiet) UI.showSpinner();
       companyCall('get_vacations_data')
         .then(function (r) {
           ROWS = r.rows || [];
@@ -84,7 +87,7 @@
         .catch(function (e) {
           UIC.toast((e && e.message) ? e.message : 'خطأ في تحميل البيانات', 'error');
         })
-        .finally(function () { UI.hideSpinner(); });
+        .finally(function () { if (!quiet) UI.hideSpinner(); });
     }
 
     function render() {
@@ -296,6 +299,17 @@
         UIC.toast((e && e.message) ? e.message : 'خطأ في حفظ الإجازة', 'error');
       }).finally(function () { UI.hideSpinner(); });
     };
+
+    /* Another device's change to this page arrives on its own. The poll
+       reads timestamps from cache, never a spreadsheet, and stands down
+       while the tab is hidden or a save is in flight. */
+    document.addEventListener('DOMContentLoaded', function () {
+      UIC.Live.watchPage({
+        call: companyCall,
+        page: 'vf_hr_vacations',
+        onChange: function () { fetchData(true); }
+      });
+    });
 
     document.addEventListener('DOMContentLoaded', load);
   </script>

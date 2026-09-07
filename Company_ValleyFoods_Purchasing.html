@@ -108,12 +108,17 @@
      * never puts data out of reach. */
     var __loadedAll = false;
 
-    function renderList(loadAll) {
+    /* quiet: refresh in the background with no blocking overlay, for a user
+       who has already seen the change and must not be interrupted to confirm
+       it. */
+    function renderList(loadAll, quiet) {
       // Called with no argument after a save/delete — keep whichever view the
       // user is currently in rather than silently dropping back to 10 rows.
       __loadedAll = arguments.length ? !!loadAll : __loadedAll;
-      UI.showSpinner();
-      companyCall('get_valley_purchasing_costing', __loadedAll ? { loadAll: true } : {})
+      if (!quiet) UI.showSpinner();
+      var payload = { from: __dateFrom, to: __dateTo };
+      if (__loadedAll || __dateFrom || __dateTo) payload.loadAll = true;
+      companyCall('get_valley_purchasing_costing', payload)
         .then(function (r) {
           /* supplier_options still arrives with the list (the table shows
            * supplier names); product_options is fetched by ensureOptions() when
@@ -126,7 +131,7 @@
           renderHeadersTable(); try{schedulePrefetch();}catch(e){};
         })
         .catch(function (e) { showError(e); })
-        .finally(function () { UI.hideSpinner(); });
+        .finally(function () { if (!quiet) UI.hideSpinner(); });
     }
 
     function showAllPurchasing() { renderList(true); }
@@ -764,12 +769,12 @@
       if (!confirm('هل تريد حذف هذه العملية؟')) return;
       UI.showSpinner('جاري الحذف...');
       companyCall('delete_valley_purchasing_costing', { code: code })
-        .then(function (r) { UIC.toast(r.message || 'تم الحذف', 'success'); showList(); })
+        .then(function (r) { UIC.toast(r.message || 'تم الحذف', 'success'); showList(true); })
         .catch(function (e) { UI.hideSpinner(); UIC.toast((e && e.message) || 'خطأ', 'error'); });
     }
 
-    function showList() {
-      renderList();
+    function showList(quiet) {
+      renderList(undefined, quiet);
     }
 
     function showError(e) {
@@ -786,6 +791,15 @@
 
 
     load();
+
+    /* Another device's change to this page arrives on its own. The poll reads
+       timestamps from cache, never a spreadsheet, and stands down while the tab
+       is hidden or a save is in flight. */
+    UIC.Live.watchPage({
+      call: companyCall,
+      page: 'vf_purchasing',
+      onChange: function () { showList(true); }
+    });
   </script>
 </body>
 </html>

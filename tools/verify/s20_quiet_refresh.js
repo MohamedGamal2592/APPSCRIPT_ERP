@@ -1,0 +1,185 @@
+/**
+ * S20 — the quiet-refresh contract.
+ *
+ * Pages were moved off the blocking save+reload by giving each page's refresh
+ * function a `quiet` flag that suppresses the loading overlay, so a refresh
+ * caused by a write never interrupts a user who has already seen the change.
+ *
+ * That rollout is a text edit applied across ~20 files, and it has one failure
+ * mode that is invisible to a parser: guarding a `UI.hideSpinner()` that sits
+ * in a DIFFERENT function, one that never took the flag. The file still parses;
+ * `quiet` is simply not in scope, and the page throws a ReferenceError at the
+ * exact moment a save is completing. Fifteen of those existed when this check
+ * was first written.
+ *
+ * So: every reference to `quiet` must sit inside a function that declares it.
+ *
+ * The second half checks the rollout is actually wired: a page that registers a
+ * change watch must name a real page id and call a real function.
+ *
+ * Run: node tools/verify/s20_quiet_refresh.js
+ */
+'use strict';
+
+const fs = require('fs');
+const path = require('path');
+
+const ROOT = path.resolve(__dirname, '..', '..');
+const ACTIONS = fs.readFileSync(path.join(ROOT, 'Company_ValleyFoods_Actions.js'), 'utf8');
+
+let failed = 0;
+function check(ok, label, extra) {
+  if (ok) console.log('  PASS  ' + label);
+  else { failed++; console.log('  FAIL  ' + label); if (extra !== undefined) console.log(extra); }
+}
+
+/** Blank every comment, keeping character positions, so prose is not read as code. */
+function stripComments(src) {
+  return src.replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, function (m) {
+    return m.replace(/[^\n]/g, ' ');
+  });
+}
+
+/** [openBrace, closeBrace, declaresQuiet, name] for every function body. */
+function functionSpans(src) {
+  const out = [];
+  const re = /function\s*([A-Za-z0-9_]*)\s*\(([^)]*)\)\s*\{/g;
+  let m;
+  while ((m = re.exec(src)) !== null) {
+    const declares = /\bquiet\b/.test(m[2]);
+    const open = src.indexOf('{', m.index + m[0].length - 1);
+    if (open === -1) continue;
+    let depth = 0;
+    for (let j = open; j < src.length; j++) {
+      if (src[j] === '{') depth++;
+      else if (src[j] === '}') {
+        depth--;
+        if (depth === 0) { out.push([open, j, declares, m[1] || '(anonymous)']); break; }
+      }
+    }
+  }
+  return out;
+}
+
+const pages = fs.readdirSync(ROOT).filter(f => /\.html$/.test(f)).sort();
+
+/* ══ 1. no `quiet` outside a function that declares it ══════════════════ */
+console.log('\n1 — every `quiet` reference is in scope\n');
+{
+  let offenders = 0;
+  const detail = [];
+  pages.forEach(function (f) {
+    const src = stripComments(fs.readFileSync(path.join(ROOT, f), 'utf8'));
+    if (src.indexOf('quiet') === -1) return;
+    const fns = functionSpans(src);
+    const re = /\bquiet\b/g;
+    let m;
+    while ((m = re.exec(src)) !== null) {
+      const lineStart = src.lastIndexOf('\n', m.index) + 1;
+      let lineEnd = src.indexOf('\n', m.index);
+      if (lineEnd === -1) lineEnd = src.length;
+      const line = src.slice(lineStart, lineEnd);
+      /* the parameter declaration itself is what puts it in scope */
+      if (/function\s*[A-Za-z0-9_]*\s*\([^)]*\bquiet\b/.test(line)) continue;
+      const covering = fns.filter(s => m.index > s[0] && m.index < s[1]);
+      if (!covering.some(s => s[2])) {
+        offenders++;
+        detail.push('        ' + f + ':' + src.slice(0, m.index).split('\n').length +
+          '  ' + line.trim().slice(0, 88));
+      }
+    }
+  });
+  check(offenders === 0,
+    'no page references `quiet` outside a function that declares it',
+    detail.join('\n'));
+}
+
+/* ══ 2. a guarded show implies a guarded hide, in the same function ═════ */
+console.log('\n2 — a refresh that suppresses the overlay also suppresses hiding it\n');
+{
+  const bad = [];
+  pages.forEach(function (f) {
+    const src = stripComments(fs.readFileSync(path.join(ROOT, f), 'utf8'));
+    if (src.indexOf('if (!quiet) UI.showSpinner()') === -1) return;
+    const fns = functionSpans(src).filter(s => s[2]);
+    /* the function that guards the show must also guard every hide it owns */
+    fns.forEach(function (s) {
+      const body = src.slice(s[0], s[1]);
+      if (body.indexOf('if (!quiet) UI.showSpinner()') === -1) return;
+      const unguarded = (body.match(/(?<!if \(!quiet\) )UI\.hideSpinner\(\)/g) || []).length;
+      if (unguarded) bad.push('        ' + f + ' — ' + s[3] + '() hides the overlay unguarded');
+    });
+  });
+  check(bad.length === 0,
+    'every quiet-aware refresh guards its hideSpinner too',
+    bad.join('\n'));
+}
+
+/* ══ 3. the watches are wired to something real ═════════════════════════ */
+console.log('\n3 — every change watch names a real page and a real function\n');
+{
+  const knownPages = {};
+  let m;
+  const re = /'[a-z0-9_]+':\s*\{\s*page:\s*'([a-z0-9_]+)'/g;
+  while ((m = re.exec(ACTIONS)) !== null) knownPages[m[1]] = true;
+
+  let watched = 0;
+  const bad = [];
+  pages.forEach(function (f) {
+    const raw = fs.readFileSync(path.join(ROOT, f), 'utf8');
+    const src = stripComments(raw);
+    const wre = /UIC\.Live\.watchPage\(\{([\s\S]{0,400}?)\}\)/g;
+    let w;
+    while ((w = wre.exec(src)) !== null) {
+      watched++;
+      const block = w[1];
+      const pg = /page:\s*'([a-z0-9_]+)'/.exec(block);
+      if (!pg) { bad.push('        ' + f + ' — a watch with no page id'); continue; }
+      if (!knownPages[pg[1]]) {
+        bad.push('        ' + f + " — watches '" + pg[1] + "', which no action maps to");
+      }
+      const fn = /onChange:\s*function\s*\(\)\s*\{\s*([A-Za-z0-9_]+)\s*\(/.exec(block);
+      if (fn && src.indexOf('function ' + fn[1] + '(') === -1) {
+        bad.push('        ' + f + ' — onChange calls ' + fn[1] + '(), which the page does not define');
+      }
+      if (!/call:\s*companyCall/.test(block)) {
+        bad.push('        ' + f + ' — a watch with no call transport');
+      }
+    }
+  });
+  check(watched > 0, watched + ' page(s) register a change watch');
+  check(bad.length === 0, 'every watch names a real page id and a real function', bad.join('\n'));
+}
+
+/* ══ 4. no page still blocks on a write-triggered refresh ═══════════════ */
+console.log('\n4 — a converted page does not still block on its own writes\n');
+{
+  const WRITE = '(?:save|add|approve|delete|remove|toggle|transfer|commit|resolve|revert)_[a-z_]+';
+  const bad = [];
+  let converted = 0;
+  pages.forEach(function (f) {
+    if (!/^Company_ValleyFoods_/.test(f)) return;
+    const src = stripComments(fs.readFileSync(path.join(ROOT, f), 'utf8'));
+    if (src.indexOf('UIC.Live.watchPage') === -1) return;
+    converted++;
+    /* the refresh function the page made quiet */
+    const sig = /function\s+([A-Za-z0-9_]+)\s*\(\s*quiet\s*\)/.exec(src);
+    if (!sig) { bad.push('        ' + f + ' — watches, but no function takes `quiet`'); return; }
+    const name = sig[1];
+    /* a write .then that calls it WITHOUT the flag is still a blocking reload */
+    const re = new RegExp("companyCall\\('" + WRITE + "'[\\s\\S]{0,1200}?\\.then\\(function[^)]*\\)\\s*\\{[\\s\\S]{0,600}?\\}\\)", 'g');
+    let mm;
+    while ((mm = re.exec(src)) !== null) {
+      if (new RegExp('\\b' + name + '\\(\\s*\\)').test(mm[0])) {
+        bad.push('        ' + f + ' — a write still calls ' + name + '() blocking');
+      }
+    }
+  });
+  check(converted > 0, converted + ' ValleyFoods page(s) converted');
+  check(bad.length === 0, 'no converted page blocks on a refresh it triggered itself', bad.join('\n'));
+}
+
+console.log('\n' + (failed === 0
+  ? 'S20 — the quiet-refresh rollout is consistent.'
+  : failed + ' check(s) FAILED.'));
+process.exit(failed === 0 ? 0 : 1);

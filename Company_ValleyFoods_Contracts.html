@@ -66,8 +66,11 @@
       loadData();
     }
 
-    function loadData() {
-      UI.showSpinner();
+    /* quiet: refresh in the background with no blocking overlay, for a
+       user who has already seen the change and must not be interrupted
+       to confirm it. */
+    function loadData(quiet) {
+      if (!quiet) UI.showSpinner();
       companyCall('get_contracts_data')
         .then(function (res) {
           contractsRows = res.rows || [];
@@ -80,7 +83,7 @@
           UIC.toast('حدث خطأ في تحميل البيانات', 'error');
         })
         .finally(function () {
-          UI.hideSpinner();
+          if (!quiet) UI.hideSpinner();
         });
     }
 
@@ -198,6 +201,17 @@
           UI.hideSpinner();
         });
     }
+
+    /* Another device's change to this page arrives on its own. The poll
+       reads timestamps from cache, never a spreadsheet, and stands down
+       while the tab is hidden or a save is in flight. */
+    document.addEventListener('DOMContentLoaded', function () {
+      UIC.Live.watchPage({
+        call: companyCall,
+        page: 'vf_hr_contracts',
+        onChange: function () { loadData(true); }
+      });
+    });
 
     document.addEventListener('DOMContentLoaded', renderApp);
   </script>

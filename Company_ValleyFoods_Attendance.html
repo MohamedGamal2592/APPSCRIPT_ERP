@@ -1169,18 +1169,21 @@
         '<div id="vf-exc-body"></div>');
     }
 
-    function loadExceptions() {
+    /* quiet: refresh in the background with no blocking overlay, for a
+       user who has already seen the change and must not be interrupted
+       to confirm it. */
+    function loadExceptions(quiet) {
       var from = document.getElementById('vf-exc-start').value;
       var to = document.getElementById('vf-exc-end').value;
       if (!from || !to) { UIC.toast('اختر الفترة', 'error'); return; }
-      UI.showSpinner();
+      if (!quiet) UI.showSpinner();
       companyCall('get_attendance_exceptions', { from: from, to: to, loadAll: true })
         .then(function (r) {
           EXCEPTIONS = (r && r.rows) || [];
           renderExceptionsTable(r || {});
         })
         .catch(function (e) { UIC.toast((e && e.message) || 'تعذر تحميل البيانات', 'error'); })
-        .finally(function () { UI.hideSpinner(); });
+        .finally(function () { if (!quiet) UI.hideSpinner(); });
     }
 
     function renderExceptionsTable(resp) {
@@ -1547,6 +1550,21 @@
         loadReview(REVIEW_STATUS);
       });
     }
+
+    /* Another device's change to this page arrives on its own. The poll
+       reads timestamps from cache, never a spreadsheet, and stands down
+       while the tab is hidden or a save is in flight. */
+    document.addEventListener('DOMContentLoaded', function () {
+      UIC.Live.watchPage({
+        call: companyCall,
+        page: 'vf_hr_attendance',
+        onChange: function () {
+          /* the day list is the page's spine; the two queues hang off it */
+          loadSessions();
+          try { loadExceptions(true); } catch (e) {}
+        }
+      });
+    });
 
     document.addEventListener('DOMContentLoaded', renderApp);
 

@@ -85,8 +85,11 @@
     }
 
     /* ---------- LIST ---------- */
-    function load() {
-      UI.showSpinner();
+    /* quiet: refresh in the background with no blocking overlay, for a
+       user who has already seen the change and must not be interrupted
+       to confirm it. */
+    function load(quiet) {
+      if (!quiet) UI.showSpinner();
       companyCall('get_valley_warehouse_movements', { offset: 0, limit: PAGE_SIZE })
         .then(function (r) {
           CAN_SEE_COST = (r && r.can_see_cost !== false);
@@ -98,7 +101,7 @@
           var c = document.getElementById('wm-table');
           if (c) c.innerHTML = '<p style="color:var(--danger, #dc2626);">' + esc((e && e.message) || 'تعذر تحميل الحركات') + '</p>';
         })
-        .finally(function () { UI.hideSpinner(); });
+        .finally(function () { if (!quiet) UI.hideSpinner(); });
     }
 
     function buildTable() {
@@ -294,6 +297,17 @@
       save: save,
       recalc: recalc
     };
+
+    /* Another device's change to this page arrives on its own. The poll
+       reads timestamps from cache, never a spreadsheet, and stands down
+       while the tab is hidden or a save is in flight. */
+    document.addEventListener('DOMContentLoaded', function () {
+      UIC.Live.watchPage({
+        call: companyCall,
+        page: 'vf_warehouse_movement',
+        onChange: function () { load(true); }
+      });
+    });
 
     document.addEventListener('DOMContentLoaded', renderApp);
   })();

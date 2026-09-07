@@ -64,8 +64,11 @@
       load();
     }
 
-    function load() {
-      UI.showSpinner();
+    /* quiet: refresh in the background with no blocking overlay, for a
+       user who has already seen the change and must not be interrupted
+       to confirm it. */
+    function load(quiet) {
+      if (!quiet) UI.showSpinner();
       var container = document.getElementById('ret-table');
       if (container) {
         UIC.PagedTable({
@@ -89,7 +92,7 @@
           }
         });
       }
-      UI.hideSpinner(); try{schedulePrefetch();}catch(e){}
+      if (!quiet) UI.hideSpinner(); try{schedulePrefetch();}catch(e){}
     }
 
     /* ---------- ADD RETURN MODAL ---------- */
@@ -243,6 +246,17 @@
       save: save,
       recalc: recalc
     };
+
+    /* Another device's change to this page arrives on its own. The poll
+       reads timestamps from cache, never a spreadsheet, and stands down
+       while the tab is hidden or a save is in flight. */
+    document.addEventListener('DOMContentLoaded', function () {
+      UIC.Live.watchPage({
+        call: companyCall,
+        page: 'vf_sales_returns',
+        onChange: function () { load(true); }
+      });
+    });
 
     document.addEventListener('DOMContentLoaded', renderApp);
   })();

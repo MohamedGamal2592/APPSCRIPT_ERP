@@ -64,8 +64,11 @@
       fetchDeductions();
     }
 
-    function fetchDeductions() {
-      UI.showSpinner();
+    /* quiet: refresh in the background with no blocking overlay, for a
+       user who has already seen the change and must not be interrupted
+       to confirm it. */
+    function fetchDeductions(quiet) {
+      if (!quiet) UI.showSpinner();
       companyCall('get_deductions_data')
         .then(function (r) {
           ROWS = r.rows || [];
@@ -74,7 +77,7 @@
           renderDeductions(); try{schedulePrefetch();}catch(e){};
         })
         .catch(function (e) { showError(e); })
-        .finally(function () { UI.hideSpinner(); });
+        .finally(function () { if (!quiet) UI.hideSpinner(); });
     }
 
     function renderDeductions() {
@@ -304,6 +307,17 @@
   </script>
 
   <script>
+    /* Another device's change to this page arrives on its own. The poll
+       reads timestamps from cache, never a spreadsheet, and stands down
+       while the tab is hidden or a save is in flight. */
+    document.addEventListener('DOMContentLoaded', function () {
+      UIC.Live.watchPage({
+        call: companyCall,
+        page: 'vf_hr_deductions',
+        onChange: function () { fetchDeductions(true); }
+      });
+    });
+
     document.addEventListener('DOMContentLoaded', load);
   </script>
 </body>
