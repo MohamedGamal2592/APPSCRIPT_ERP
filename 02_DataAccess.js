@@ -758,21 +758,45 @@ function invalidateRefsCache_(dbId, kind) {
 }
 
 /**
- * email(lowercased) -> display name from ERP_Users. Cached 5 minutes.
- * Used to show user names instead of raw emails in tables/history.
+ * email(lowercased) -> { name, role, company, status } from ERP_Users.
+ * Keyed by the authority generation, NOT a TTL: an admin saving a user bumps the
+ * generation, so the next request anywhere in the system rebuilds this map.
+ *
+ * getRefsCached_ chunks, so a large ERP_Users cannot silently blow the ~100KB
+ * single-value cap. Do not swap it for a bare cache.put.
+ */
+function userDirectory_() {
+  try {
+    return getRefsCached_(CONFIG.AUTH_SPREADSHEET_ID, 'user_dir_g' + authGeneration_(),
+      CONFIG.CACHE_USER_DIR_SECONDS, function () {
+        var map = {};
+        getAllRecords_(CONFIG.AUTH_SPREADSHEET_ID, 'ERP_Users').forEach(function (u) {
+          var em = String(u.email || '').trim().toLowerCase();
+          if (!em) return;
+          map[em] = {
+            name:    String(u.name || '').trim(),
+            role:    String(u.role || '').trim(),
+            company: String(u.company || '').trim(),
+            status:  String(u.status == null ? 'Active' : u.status).trim() || 'Active'
+          };
+        });
+        return map;
+      }) || {};
+  } catch (e) { return {}; }
+}
+
+/**
+ * Unchanged contract: email(lowercased) -> display name. Now a projection over
+ * userDirectory_. Consumed at Code.js:110 — name, signature and return shape
+ * are a public contract and do not change.
+ *
+ * This costs nothing extra: userNameMap_() already read ERP_Users on every page
+ * load; the 300s TTL is simply replaced by a generation key on the same read.
  */
 function userNameMap_() {
-  try {
-    return getRefsCached_(CONFIG.AUTH_SPREADSHEET_ID, 'user_names', 300, function () {
-      var map = {};
-      getAllRecords_(CONFIG.AUTH_SPREADSHEET_ID, 'ERP_Users').forEach(function (u) {
-        var em = String(u.email || '').trim().toLowerCase();
-        var nm = String(u.name || '').trim();
-        if (em && nm) map[em] = nm;
-      });
-      return map;
-    }) || {};
-  } catch (e) { return {}; }
+  var dir = userDirectory_(), out = {};
+  for (var em in dir) if (dir[em].name) out[em] = dir[em].name;
+  return out;
 }
 
 // ==========================================
