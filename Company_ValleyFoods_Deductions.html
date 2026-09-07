@@ -275,7 +275,8 @@
     }
 
     function viewAttachment(ref){
-      window.open(scriptUrl + '?download=attachment&page=vf_hr_deductions&ref=' + encodeURIComponent(ref) + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN), '_blank');
+      UIC.openDownload(scriptUrl + '?download=attachment&page=vf_hr_deductions&ref=' + encodeURIComponent(ref) + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN),
+        'فتح المرفق');
     }
     function viewDeduction(uid){
       var r = ROWS.find(function(x){ return String(x.unique_id)===String(uid); });

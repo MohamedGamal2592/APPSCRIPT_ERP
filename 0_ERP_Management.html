@@ -796,7 +796,8 @@
 
   function printInvoiceDoc(uniqueId) {
     if (!uniqueId) return;
-    window.open(scriptUrl + '?download=erp_invoice&unique_id=' + encodeURIComponent(uniqueId) + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN), '_blank');
+    UIC.openDownload(scriptUrl + '?download=erp_invoice&unique_id=' + encodeURIComponent(uniqueId) + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN),
+      'فتح الفاتورة');
   }
 
   function formatDateShort(val) {

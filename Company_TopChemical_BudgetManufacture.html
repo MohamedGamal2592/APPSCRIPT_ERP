@@ -65,7 +65,8 @@
   }
 
   function viewAttachment(ref){
-    window.open(scriptUrl + '?download=attachment&page=tc_budget_manufacture&ref=' + encodeURIComponent(ref) + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN), '_blank');
+    UIC.openDownload(scriptUrl + '?download=attachment&page=tc_budget_manufacture&ref=' + encodeURIComponent(ref) + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN),
+      'فتح المرفق');
   }
   function render() {
     var list = ITEMS.filter(function (r) { return String(r.transaction_code || '').trim() !== ''; }).slice().sort(function (a, b) {
@@ -147,7 +148,8 @@
     UI.showSpinner(); companyCall('delete_legal_manufacture',{transaction_code:id}).then(function(res){ UIC.toast(res.message||'تم الحذف','success'); fetchAll(); }).catch(function(e){ UIC.toast(e.message||'خطأ','error'); }).finally(function(){ UI.hideSpinner(); });
   }
   function printManufacture(id) {
-    window.open(scriptUrl + '?download=budget_print&type=manufacture&id=' + encodeURIComponent(id) + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN), '_blank');
+    UIC.openDownload(scriptUrl + '?download=budget_print&type=manufacture&id=' + encodeURIComponent(id) + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN),
+      'فتح التقرير');
   }
 
   function productOptions() {

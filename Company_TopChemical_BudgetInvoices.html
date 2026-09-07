@@ -306,7 +306,8 @@
   }
 
   function printInvoice(id) {
-    window.open(scriptUrl + '?download=budget_print&type=invoice&id=' + encodeURIComponent(id) + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN), '_blank');
+    UIC.openDownload(scriptUrl + '?download=budget_print&type=invoice&id=' + encodeURIComponent(id) + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN),
+      'فتح الفاتورة');
   }
 
   function setFilter(k, v) {

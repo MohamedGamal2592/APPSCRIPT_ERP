@@ -148,7 +148,8 @@
 
   function printMovement(product) {
     if (!product) return;
-    window.open(scriptUrl + '?download=budget_print&type=movement&id=' + encodeURIComponent(product) + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN), '_blank');
+    UIC.openDownload(scriptUrl + '?download=budget_print&type=movement&id=' + encodeURIComponent(product) + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN),
+      'فتح التقرير');
   }
 
   function setFilter(k, v) {

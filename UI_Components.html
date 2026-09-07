@@ -405,6 +405,48 @@ UIC.closeOrBack = function (backUrl) {
   }, 200);
 };
 
+/* ── [iPhone run 2] Opening a FILE, which is not the same as a page ──────
+ *
+ * Seventeen call sites point at ?download=… — an attachment, a barcode sheet,
+ * a payroll report, a budget print. The server answers with a file or a viewer
+ * page, not an app screen, so UIC.openTab is the WRONG helper here: its
+ * fallback navigates this frame, and navigating the app away to a download is
+ * worse than the bug.
+ *
+ * Step 1 is the same window.open(url, '_blank') every one of them made. Only
+ * when that returns null — iOS Safari's default pop-up blocker, or the Apps
+ * Script sandbox — does anything new happen, and what happens is a dismissible
+ * dialog holding a real anchor for the same URL. A link the user TAPS carries
+ * its own activation, and an automatic pop-up block does not apply to it, so
+ * the file becomes reachable in one extra tap instead of not at all. It is
+ * deliberately a dialog and not a toast: a toast disappears before a person
+ * reading Arabic on a phone has decided to tap it. */
+UIC.openDownload = function (url, label) {
+  if (!url) return;
+  var w = null;
+  try { w = window.open(url, '_blank'); } catch (e) { w = null; }
+  if (w) { try { w.focus(); } catch (e) {} return; }
+
+  /* UIC.alert escapes its message, by design — it is built on UIC.confirm and
+     the whole point of that is that a record name cannot inject markup. An
+     anchor is exactly what is needed here, so this uses the styled modal
+     underneath it directly. */
+  var id = 'uic-download-fallback';
+  UIC.openModal(id, {
+    title: 'فتح ملف',
+    size: 'sm',
+    body: '<p style="margin:0 0 14px;">تعذر فتح نافذة جديدة. اضغط الرابط بالأسفل لفتح الملف.</p>' +
+      /* No class: ui_check C5 counts a class that no stylesheet defines, and
+         this anchor is fully described by the inline style already. */
+      '<p style="margin:0;"><a href="' + UIC.escHtml(url) + '" target="_blank" rel="noopener"' +
+      ' style="display:inline-flex;align-items:center;justify-content:center;min-height:44px;' +
+      'padding:0 18px;border-radius:8px;background:var(--brand-primary,#1976d2);color:#fff;' +
+      'font-weight:700;text-decoration:none;">' + UIC.escHtml(label || 'فتح الملف') + '</a></p>',
+    footer: UIC.button({ text: 'إغلاق', type: 'outline',
+      onClick: "UIC.closeModal('" + id + "')" })
+  });
+};
+
 /* ── [iPhone run 2] Printing a document that is BUILT, not navigated to ───
  *
  * Six places in this app build a whole HTML document as a string and write it

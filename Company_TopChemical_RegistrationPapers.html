@@ -160,8 +160,9 @@
   }
 
   function viewAttachment(ref) {
-    window.open(scriptUrl + '?download=attachment&page=tc_registration_papers&ref=' +
-      encodeURIComponent(ref) + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN), '_blank');
+    UIC.openDownload(scriptUrl + '?download=attachment&page=tc_registration_papers&ref=' +
+      encodeURIComponent(ref) + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN),
+      'فتح المرفق');
   }
   function downloadDoc(ref) { return viewAttachment(ref); }
 

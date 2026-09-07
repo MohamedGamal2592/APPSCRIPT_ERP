@@ -98,7 +98,8 @@
   }
 
   function downloadPrint(id) {
-    window.open(scriptUrl + '?download=print_file&id=' + encodeURIComponent(id) + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN), '_blank');
+    UIC.openDownload(scriptUrl + '?download=print_file&id=' + encodeURIComponent(id) + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN),
+      'فتح الملف');
   }
 
   function uploadSelectedFile(formEl, meta) {

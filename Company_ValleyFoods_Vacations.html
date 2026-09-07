@@ -142,8 +142,9 @@
 
     function viewAttachment(ref) {
       if (!ref) return;
-      window.open(scriptUrl + '?download=attachment&page=vf_hr_vacations&ref=' +
-        encodeURIComponent(ref) + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN), '_blank');
+      UIC.openDownload(scriptUrl + '?download=attachment&page=vf_hr_vacations&ref=' +
+        encodeURIComponent(ref) + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN),
+      'فتح المرفق');
     }
     function viewVacation(uid){
       var r = ROWS.find(function(x){ return String(x.unique_id||x.id)===String(uid); });

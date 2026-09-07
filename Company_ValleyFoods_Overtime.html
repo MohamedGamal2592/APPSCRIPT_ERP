@@ -95,7 +95,8 @@
       ];
 
       function viewAttachment(ref){
-        window.open(scriptUrl + '?download=attachment&page=vf_hr_overtime&ref=' + encodeURIComponent(ref) + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN), '_blank');
+        UIC.openDownload(scriptUrl + '?download=attachment&page=vf_hr_overtime&ref=' + encodeURIComponent(ref) + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN),
+          'فتح المرفق');
       }
       window._vfViewAttachment = viewAttachment;
 
@@ -420,7 +421,8 @@
         UI.showSpinner(); companyCall('delete_overtime', { unique_id: uid }).then(function(r){ UIC.toast(r.message||'تم الحذف / Deleted','success'); loadData(); }).catch(function(e){ UIC.toast(e.message||'خطأ','error'); }).finally(function(){ UI.hideSpinner(); });
       },
       printRow: function(uid){ window.print(); },
-      viewAttachment: function(ref){ window.open(scriptUrl + '?download=attachment&page=vf_hr_overtime&ref=' + encodeURIComponent(ref) + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN), '_blank'); },
+      viewAttachment: function(ref){ UIC.openDownload(scriptUrl + '?download=attachment&page=vf_hr_overtime&ref=' + encodeURIComponent(ref) + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN),
+        'فتح المرفق'); },
       filter: function (q) { buildTable(filterRows(q)); }
     };
 

@@ -311,8 +311,9 @@
 
   function downloadRef(ref) {
     if (!ref) return;
-    window.open(scriptUrl + '?download=doc_file&company=3fe1b5cb67b7223e&ref=' +
-      encodeURIComponent(ref) + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN), '_blank');
+    UIC.openDownload(scriptUrl + '?download=doc_file&company=3fe1b5cb67b7223e&ref=' +
+      encodeURIComponent(ref) + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN),
+      'فتح الملف');
   }
 
   function fileLinkCell(ref) {

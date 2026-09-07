@@ -501,7 +501,8 @@
     var m = document.getElementById('sal-month') ? document.getElementById('sal-month').value : FILTER_MONTH;
     var y = document.getElementById('sal-year')  ? document.getElementById('sal-year').value  : FILTER_YEAR;
     if (!m || !y) { UIC.toast('اختر الشهر والسنة أولاً لعرض التقرير', 'error'); return; }
-    window.open(scriptUrl + '?download=payroll_report&type=' + type + '&month=' + encodeURIComponent(m) + '&year=' + encodeURIComponent(y) + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN));
+    UIC.openDownload(scriptUrl + '?download=payroll_report&type=' + type + '&month=' + encodeURIComponent(m) + '&year=' + encodeURIComponent(y) + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN),
+      'فتح تقرير الرواتب');
   }
 
   function showError(e) {

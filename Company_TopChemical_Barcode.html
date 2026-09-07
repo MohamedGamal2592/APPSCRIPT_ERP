@@ -115,7 +115,8 @@
   }
 
   function printBarcode(id) {
-    window.open(scriptUrl + '?download=print_barcode&id=' + encodeURIComponent(id) + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN), '_blank');
+    UIC.openDownload(scriptUrl + '?download=print_barcode&id=' + encodeURIComponent(id) + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN),
+      'فتح الباركود');
   }
 
   function openBarcodeModal() {
