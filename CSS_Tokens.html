@@ -132,7 +132,29 @@
   --text-xl:   clamp(1.125rem, 4vw,   1.25rem);
   --text-2xl:  clamp(1.25rem,  5vw,   1.5rem);
 
-  
+  /* ── [UI-9.1] Table column floors ────────────────────────────────────────
+   * The two minimum widths of the column-width contract (see the `.table thead
+   * th.col-*` rules in UI_Components.html). A column that holds words gets the
+   * room words need; a column that holds a date or a figure gets exactly the
+   * room that atom needs and no more.
+   *
+   * The unit is `ch` — the width of a "0" in the element's own font — and not
+   * px or rem, deliberately. `ch` tracks the font, so one declaration stays
+   * correct in Arabic and in Latin, at comfortable and at compact density, and
+   * on the day someone changes --text-sm. A px floor would have to be re-tuned
+   * for each of those, and would be re-tuned for none of them.
+   *
+   * 14ch is about two Arabic words: enough that a name or a status phrase is
+   * not broken one word per line. 26ch is about four, which is the point where
+   * a description reads as a sentence rather than as a column of syllables.
+   *
+   * Both are FLOORS, not widths: a column with room to spare still grows. The
+   * shared @media print block relaxes them, because paper has no scrollbar to
+   * overflow into. */
+  --col-text-min:  14ch;
+  --col-prose-min: 26ch;
+
+
   --space-xs: clamp(0.25rem, 1vw,  0.5rem);
   --space-sm: clamp(0.5rem,  2vw,  1rem);
   --space-md: clamp(1rem,    3vw,  1.5rem);

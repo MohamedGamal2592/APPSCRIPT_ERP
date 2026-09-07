@@ -3650,6 +3650,74 @@ document.addEventListener('keydown', function (e) {
     z-index: 2;
   }
 
+  /* ── [UI-9.1] The column-width contract ────────────────────────────────
+   *
+   * THE PROBLEM. .table above has width:100% and no table-layout, so it uses
+   * the AUTO algorithm: every column gets at least its min-content width, and
+   * the surplus is shared by max-content. When the container is narrower than
+   * the sum of the max-contents, the shortfall comes out of whichever columns
+   * CAN shrink. A date, a document number and a formatted figure have no break
+   * opportunity — min-content equals max-content, and they cannot give up a
+   * pixel. A sentence has spaces, so its min-content is its longest single
+   * WORD. The sentence column therefore absorbs the entire shortfall alone and
+   * lands about seven characters wide, one word per line, nine lines tall —
+   * while five columns of em dashes sit comfortably beside it. The one column
+   * carrying something a human has to read is the only one that was squeezed.
+   *
+   * THE FIX, AND WHY IT IS ON THE HEADER. In auto layout a column's used
+   * minimum is the maximum of the minimums of ALL cells in that column, and
+   * the <th> is one of those cells. So min-width on the header raises the
+   * floor of the entire column, for every row, and its width feeds the same
+   * column's preferred width. One attribute governs five hundred rows.
+   *
+   * That is the whole reason this rides on <thead>: a class on every <td>
+   * would work too, and would cost 650 attributes on a 13-column 50-row page
+   * plus a change to UIC._dtRowHtml — which is the per-row DOM budget the
+   * performance programme owns. Nothing here adds an element to a row.
+   * The classes are emitted by the shared head-row builder (_dtHeadRow) for
+   * the 69 dataTable sites, and by the autoColumns helper for tables a page
+   * writes by hand; a page can also declare one outright with { col: 'prose' }.
+   * Both arrive in the next commit — this rule set is inert until a class
+   * appears, which is why it ships on its own and changes nothing visible.
+   *
+   * WIDTH: 1% is the standard shrink-to-fit idiom — a specified width far
+   * below min-content means the column receives its min-content and none of
+   * the surplus, and the surplus goes where width:100% asks for it. It fails
+   * safe: if a browser distributes differently the min-width floors still
+   * hold, and the prose column is still the widest thing on the row.
+   *
+   * white-space: nowrap is already global on .table thead th, which is what
+   * makes 1% shrink to the label rather than below it.
+   *
+   * AND THE SCROLLBAR IS THE POINT. Once floors exist, their sum can exceed
+   * the container. width:100% on .table is a PREFERRED width, not a cap, so
+   * min-content wins, the table grows past .table-wrap, and the overflow-x:
+   * auto written up there finally does the job it was written for — it has
+   * never once fired, because nothing has ever been wide enough. A 13-column
+   * table scrolling sideways on a tablet is the correct outcome. A one-word-
+   * per-line column is not. */
+  .table thead th.col-atom,
+  .table thead th.col-num,
+  .table thead th.col-actions { width: 1%; }
+  .table thead th.col-text    { min-width: var(--col-text-min); }
+  .table thead th.col-prose   { min-width: var(--col-prose-min); width: 100%; }
+
+  /* A single unbreakable 40-character token — a URL, a reference code someone
+     pasted — must not force the whole table to overflow on its own. This is on
+     the body cell, and it is a property, not an element: the row's DOM cost is
+     unchanged. */
+  .table td { overflow-wrap: break-word; }
+
+  /* A .table-wrap inside a dialog must not bring its own scrollport. The
+     wrapper's max-height + overflow-y is what makes the sticky header work on
+     a page, but .modal-body (UIC.openModal) is ALREADY the scroll container,
+     so inside one the same declarations produce two nested scrollbars and a
+     table that can only use 70% of a box that was already short.
+     One rule, in the shared sheet, correct everywhere — rather than a
+     judgement call per page about whether this particular table is in a
+     dialog. */
+  .modal-body .table-wrap { max-height: none; }
+
   /* [UI-1.5] The pager lives inside the scroll box, so it is pinned to the
      bottom rather than stranded below 50 rows of data. .dt-pager was emitted
      by UIC.dataTable but defined by no stylesheet until now (U-08). */
@@ -3686,6 +3754,23 @@ document.addEventListener('keydown', function (e) {
 
     /* The table scroll box is a screen idea; on paper it must simply flow. */
     .table-wrap { max-height: none; overflow: visible; border: 0; }
+
+    /* [UI-9.1] AND THEREFORE THE COLUMN FLOORS MUST STAND DOWN. This is the
+       one place the width contract has to be switched off, and it is the one
+       that would otherwise ship silently.
+       The line above sets overflow: visible, so on paper there is no scroll to
+       overflow INTO. A4 minus the 10mm margins is about 718px. A 13-column
+       table whose floors sum past that is not scrolled, it is CLIPPED — and
+       nobody finds out until a user prints an invoice and the last three
+       columns are missing.
+       Wrapping is the right answer on paper precisely because there is
+       nowhere to scroll to, so the floors go and the atoms stop being pinned
+       to their content width. */
+    .table thead th.col-text,
+    .table thead th.col-prose { min-width: 0; }
+    .table thead th.col-atom,
+    .table thead th.col-num,
+    .table thead th.col-actions { width: auto; }
     .app-content { max-width: none; padding: 0; }
 
     /* THE HEADER REPEATS. This one line is most of the value: without it, page
