@@ -31,7 +31,7 @@ function registerValleyFoods_() {
       // ----- الموارد البشرية -----
       { action: 'vf_hr_employees', template: 'Company_ValleyFoods_HR_Emp', title: 'قائمة الموظفين', label: 'قائمة الموظفين', nav: false },
       { action: 'vf_hr_status', template: 'Company_ValleyFoods_HR_Emp', title: 'حالة الموظفين', label: 'حالة الموظفين', nav: false },
-      { action: 'vf_hr_shifts', template: 'Company_ValleyFoods_HR_Emp', title: 'تحديد الورديات', label: 'تحديد الورديات', nav: false },
+      { action: 'vf_hr_shifts', template: 'Company_ValleyFoods_ShiftAssignment', title: 'تحديد الورديات', label: 'تحديد الورديات', nav: false },
       { action: 'vf_hr_salary', template: 'Company_ValleyFoods_HR_Emp', title: 'راتب الموظف', label: 'راتب الموظف', nav: false },
 
       // -----Modules إضافية -----
@@ -53,6 +53,10 @@ function registerValleyFoods_() {
       { action: 'vf_products', template: 'Company_ValleyFoods_Products', title: 'المنتجات', label: 'المنتجات', nav: false },
       { action: 'vf_parties', template: 'Company_ValleyFoods_Parties', title: 'العملاء والموردون', label: 'العملاء والموردون', nav: false },
       { action: 'vf_cash', template: 'Company_ValleyFoods_Cash', title: 'حركة النقدية والبنوك', label: 'حركة النقدية والبنوك', nav: false },
+      /* NOTE: this page id needs its own row in ERP_Pages_Matrix before anyone
+         can open it — see NEXT_STEPS_OWNER.md. Its DATA action is gated on
+         vf_cash, so only the route needs the grant. */
+      { action: 'vf_cash_expenses', template: 'Company_ValleyFoods_CashExpenses', title: 'تقرير المصروفات', label: 'تقرير المصروفات', nav: false },
       { action: 'vf_sales', template: 'Company_ValleyFoods_Sales', title: 'المبيعات', label: 'المبيعات', nav: false },
       { action: 'vf_sales_returns', template: 'Company_ValleyFoods_SalesReturns', title: 'مرتجعات المبيعات', label: 'مرتجعات المبيعات', nav: false },
       { action: 'vf_purchasing', template: 'Company_ValleyFoods_Purchasing', title: 'تكلفة المشتريات', label: 'المشتريات', nav: false },

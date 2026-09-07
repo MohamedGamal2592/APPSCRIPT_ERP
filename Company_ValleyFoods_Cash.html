@@ -178,10 +178,18 @@
       });
 
       content.innerHTML =
+        UIC.dateRangeBar('cash-date', {
+          from: DATE_FROM, to: DATE_TO,
+          onchange: 'CASH_PAGE.applyDateFilter()',
+          onclear: 'CASH_PAGE.clearDateFilter()'
+        }) +
         boxCardsHtml() +
         '<div style="display:flex;justify-content:flex-end;gap:8px;margin-bottom:12px;flex-wrap:wrap;">' +
           (BOX_FILTER ? '<button class="btn btn-outline" onclick="CASH_PAGE.setBoxFilter(\'\')">✕ إلغاء فلتر الصندوق</button>' : '') +
           '<button class="btn btn-outline" onclick="UI.submitOnce(this, CASH_PAGE.saveView)">💾 حفظ العرض</button>' +
+          /* The expenses report is its own page; it reads this same ledger. */
+          '<a class="btn btn-outline" href="' + scriptUrl + '?action=vf_cash_expenses&sessionToken=' +
+            encodeURIComponent(SESSION_TOKEN) + '">📊 تقرير المصروفات</a>' +
           (CAN_WRITE
             ? '<button class="btn btn-primary" onclick="CASH_PAGE.openForm(\'\')">+ إضافة حركة</button>' +
               '<button class="btn btn-outline" onclick="CASH_PAGE.openTransfer()">تحويل بين الصناديق</button>'

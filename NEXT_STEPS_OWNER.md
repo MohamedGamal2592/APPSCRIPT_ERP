@@ -627,3 +627,38 @@ It doubles the diff of this run, which is why it was scoped out rather than rush
 
 `Company_ValleyFoods_MfgOrderView.html` is the page that most visibly waits on it — every table on
 it is `odoo-table card-table`, so it gained nothing from this run.
+
+---
+
+## BLOCKED ON YOU — one grant, for تقرير المصروفات
+
+`vf_cash_expenses` is a new **page**, and page access comes from `ERP_Pages_Matrix`. I cannot add
+that row (that sheet is data, and off limits to me), so **the report page will refuse everyone
+until you add it** — the button on حركة النقدية will land on the standard "no access" screen.
+
+Add one row per role that should see the report:
+
+| role | page_id | access_type | status |
+|---|---|---|---|
+| *(the role that already has `vf_cash`)* | `vf_cash_expenses` | `read` | `active` |
+
+Nothing else is blocked. Specifically:
+
+- the report's DATA action (`get_valley_cash_expense_report`) is gated on `vf_cash`, which is
+  already granted, so only the *route* needs the new row;
+- تحديد الورديات needs **no** grant at all — it reuses the `vf_hr_shifts` page id you already
+  grant, and only its template changed, from the shared HR screen to its own page.
+
+### Worth checking once, in the sheet
+
+- **`valley_chart_of_accounts` → «المستوى الاساسي»** is what decides whether an account counts as an
+  expense. The report selects `= 3` and nothing else — no code range is hardcoded. If that column is
+  blank or text on some rows, those accounts silently do not appear in the report. It reports how
+  many accounts it considered, at the bottom of the page, so a number that looks too small is the
+  tell.
+- **`valley_cash_bank_movement` → `total`** is the figure the report uses. Where it is blank the
+  report rebuilds it as `transaction_amount - total_discount + taxes`, which is the formula the
+  AppSheet app used. If `total` holds something else on old rows, the report follows the sheet.
+- **`valley_employee_shift_assignment`** now refuses a second shift for one employee over days
+  already covered. Rows that ALREADY overlap are left exactly as they are — nothing was rewritten —
+  but the next edit touching such an employee will be refused until the old row is corrected.

@@ -856,16 +856,64 @@ const ValleyFoodsHREmp = (function () {
 
     const shifts = getAllRecords_(dbId, SHIFT_SCHEDULE_SHEET);
     const shiftOptions = shifts.map(function (s) {
-      const name = s.shift_name || '';
-      const type = s.shift_type || '';
-      const start = s.shift_start_time || '';
-      const end = s.shift_end_time || '';
-      const label = [name, (type ? '- ' + type : ''), '| من', fmtTime_(start), 'إلى', fmtTime_(end)]
-        .filter(function (x) { return x !== ''; }).join(' ');
-      return { value: s.shift_unique_id, label: label };
+      return { value: s.shift_unique_id, label: shiftLabel_(s) };
+    });
+
+    /* The list shows names, not ids, so it is resolved here rather than making
+       the page look every row up itself. */
+    const shiftLabelById = {};
+    shifts.forEach(function (s) { shiftLabelById[String(s.shift_unique_id)] = shiftLabel_(s); });
+    const empNameById = {};
+    try {
+      getAllRecords_(dbId, EMP_INFO_SHEET).forEach(function (e) {
+        empNameById[String(e.emp_id)] = e.name_ar || String(e.emp_id);
+      });
+    } catch (e) {}
+
+    assignments = assignments.map(function (a) {
+      return {
+        shift_assignment_id: a.shift_assignment_id,
+        emp_id: a.emp_id,
+        employee_name: empNameById[String(a.emp_id)] || String(a.emp_id),
+        shift_id: a.shift_id,
+        shift_label: shiftLabelById[String(a.shift_id)] || String(a.shift_id),
+        shift_start_date: dateOnlyStr_(a.shift_start_date),
+        shift_end_date: dateOnlyStr_(a.shift_end_date),
+        notes: a.notes || '',
+        user: a.user || '',
+        created_at: a.created_at || ''
+      };
     });
 
     return { status: 'success', assignments: assignments, total: total, employeeOptions: employeeOptions, shiftOptions: shiftOptions };
+  }
+
+  /** «shift_name - HH:MM - HH:MM - shift_type», the label the ref is shown by. */
+  function shiftLabel_(s) {
+    if (!s) return '';
+    return [s.shift_name || '', fmtTime_(s.shift_start_time), fmtTime_(s.shift_end_time), s.shift_type || '']
+      .filter(function (x) { return String(x).trim() !== ''; })
+      .join(' - ');
+  }
+
+  /** yyyy-MM-dd for any stored representation, '' when unparseable. */
+  function dateOnlyStr_(v) {
+    if (v === '' || v === null || v === undefined) return '';
+    var d = (v instanceof Date) ? v : new Date(v);
+    if (isNaN(d.getTime())) {
+      var m = String(v).match(/^(\d{4})-(\d{2})-(\d{2})/);
+      return m ? m[0] : '';
+    }
+    var p2 = function (n) { return n < 10 ? '0' + n : '' + n; };
+    return d.getFullYear() + '-' + p2(d.getMonth() + 1) + '-' + p2(d.getDate());
+  }
+
+  /** Midnight-local day number, so two dates compare as whole days. */
+  function dayNum_(v) {
+    var iso = dateOnlyStr_(v);
+    if (!iso) return null;
+    var p = iso.split('-');
+    return Date.UTC(Number(p[0]), Number(p[1]) - 1, Number(p[2])) / 86400000;
   }
 
   function addShiftAssignment_(data, user, dbId) {
@@ -876,6 +924,31 @@ const ValleyFoodsHREmp = (function () {
     if (!shiftId) throw new Error('الوردية مطلوبة');
     if (!d.shift_start_date) throw new Error('تاريخ بداية الوردية مطلوب');
     if (!d.shift_end_date) throw new Error('تاريخ نهاية الوردية مطلوب');
+
+    const startDay = dayNum_(d.shift_start_date);
+    const endDay = dayNum_(d.shift_end_date);
+    if (startDay === null) throw new Error('تاريخ بداية الوردية غير صحيح');
+    if (endDay === null) throw new Error('تاريخ نهاية الوردية غير صحيح');
+    if (endDay <= startDay) {
+      throw new Error('تاريخ نهاية الوردية يجب أن يكون بعد تاريخ البداية');
+    }
+
+    /* One employee cannot be on two shifts over the same days. Two periods
+       overlap unless one ends before the other begins, which is the whole test —
+       inclusive on both ends, because a day belongs to the period that names it. */
+    ensureSheet_(dbId, SHIFT_ASSIGN_SHEET, SHIFT_ASSIGN_HEADERS);
+    const clash = getAllRecords_(dbId, SHIFT_ASSIGN_SHEET).filter(function (a) {
+      if (String(a.emp_id) !== String(Number(empId))) return false;
+      var aStart = dayNum_(a.shift_start_date);
+      var aEnd = dayNum_(a.shift_end_date);
+      if (aStart === null || aEnd === null) return false;
+      return !(endDay < aStart || startDay > aEnd);
+    })[0];
+    if (clash) {
+      throw new Error('يوجد بالفعل وردية لهذا الموظف في نفس الفترة (' +
+        dateOnlyStr_(clash.shift_start_date) + ' إلى ' + dateOnlyStr_(clash.shift_end_date) +
+        ') — لا يمكن تعيين ورديتين في نفس الفترة');
+    }
 
     const row = {
       shift_assignment_id: uid16_(),
@@ -6758,6 +6831,8 @@ const ValleyFoodsHRModules = (function () {
   const FIN_CASH_SHEET = 'valley_cash_bank_movement';
   const FIN_BOXES_SHEET = 'valley_box_account_codes';
 
+  const VF_MONTH_NAMES_AR = ['يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو',
+                            'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر'];
   const FIN_CASH_TYPES = ['Credit', 'Debit', 'Credit Note', 'Debit Note'];
   const FIN_CASH_METHODS = ['Cash', 'Bank Transfer', 'Bank Withdrawl', 'Bank Deposit', 'Instapay'];
   const FIN_PURCHASE_ITEMS_SEED = ['شاي', 'سكر', 'قهوة'];
@@ -6787,6 +6862,139 @@ const ValleyFoodsHRModules = (function () {
 
   /* كود الدليل المحاسبي options: label = «كود المستوى»,
    * stored value = «المستوى الخامس», range 311100..421300. */
+  /**
+   * تقرير المصروفات — what was spent, per expense account, for one month and
+   * for the year to date, each as a share of its own total.
+   *
+   * WHAT COUNTS AS AN EXPENSE: a cash movement whose chart_code resolves to a
+   * valley_chart_of_accounts row with «المستوى الاساسي» = 3. That column is the
+   * authority; nothing here hardcodes a code range. The account is shown by its
+   * «كود المستوى» label, which is what people read.
+   *
+   * THE AMOUNT: the sheet's own `total` when it holds a number, because that is
+   * the column the spreadsheet computes and people reconcile against. When it is
+   * blank the same figure is rebuilt from what this app writes —
+   * transaction_amount − total_discount + taxes — which is the formula the
+   * AppSheet app used for `total`.
+   */
+  function getValleyCashExpenseReport_(data, user, dbId) {
+    var d = data || {};
+    var now = new Date();
+    var year = Number(d.year) || now.getFullYear();
+    var month = Number(d.month) || (now.getMonth() + 1);
+    if (month < 1 || month > 12) throw new Error('الشهر يجب أن يكون بين 1 و 12');
+
+    /* Which accounts are expenses, and what each is called. */
+    var expenseLabels = {};
+    var expenseCount = 0;
+    getAllRecords_(dbId, FIN_CHART_SHEET).forEach(function (r) {
+      if (Number(r['المستوى الاساسي']) !== 3) return;
+      var key = String(r['المستوى الخامس'] == null ? '' : r['المستوى الخامس']).trim();
+      if (!key) return;
+      var label = String(r['كود المستوى'] == null ? '' : r['كود المستوى']).trim();
+      expenseLabels[key] = label || key;
+      expenseCount++;
+    });
+    if (!expenseCount) {
+      throw new Error('لا توجد حسابات مصروفات — لم يُعثر على أي صف في دليل الحسابات قيمته في عمود «المستوى الاساسي» = 3');
+    }
+
+    function amountOf(r) {
+      var t = Number(r.total);
+      if (r.total !== '' && r.total != null && !isNaN(t)) return t;
+      return (Number(r.transaction_amount) || 0)
+        - (Number(r.total_discount) || 0)
+        + (Number(r.taxes) || 0);
+    }
+
+    var byAccount = {};        /* code -> { month, ytd, monthCount, ytdCount } */
+    var byMonth = {};          /* 1..12 -> total, for the trend */
+    var monthTotal = 0, ytdTotal = 0;
+    /* «حتى اليوم» is today when the report is for the current year, and the
+       whole year once it is behind us — otherwise a report on last year would
+       silently stop at today's date. */
+    var ytdEnd = (year === now.getFullYear())
+      ? new Date(year, now.getMonth(), now.getDate(), 23, 59, 59)
+      : new Date(year, 11, 31, 23, 59, 59);
+
+    getAllRecords_(dbId, FIN_CASH_SHEET).forEach(function (r) {
+      var code = String(r.chart_code == null ? '' : r.chart_code).trim();
+      if (!code || expenseLabels[code] === undefined) return;
+      var dt = parseDate_(r.transaction_date);
+      if (!dt || dt.getFullYear() !== year) return;
+
+      var amt = amountOf(r);
+      var m = dt.getMonth() + 1;
+      byMonth[m] = (byMonth[m] || 0) + amt;
+
+      if (!byAccount[code]) byAccount[code] = { month: 0, ytd: 0, monthCount: 0, ytdCount: 0 };
+      if (dt <= ytdEnd) {
+        byAccount[code].ytd += amt;
+        byAccount[code].ytdCount++;
+        ytdTotal += amt;
+      }
+      if (m === month) {
+        byAccount[code].month += amt;
+        byAccount[code].monthCount++;
+        monthTotal += amt;
+      }
+    });
+
+    function pct(part, whole) {
+      if (!whole) return 0;
+      return Math.round((part / whole) * 10000) / 100;
+    }
+    var round2 = function (n) { return Math.round(n * 100) / 100; };
+
+    var rows = Object.keys(byAccount).map(function (code) {
+      var a = byAccount[code];
+      return {
+        chart_code: code,
+        label: expenseLabels[code],
+        month_amount: round2(a.month),
+        month_pct: pct(a.month, monthTotal),
+        month_count: a.monthCount,
+        ytd_amount: round2(a.ytd),
+        ytd_pct: pct(a.ytd, ytdTotal),
+        ytd_count: a.ytdCount
+      };
+    }).filter(function (r) { return r.month_amount !== 0 || r.ytd_amount !== 0; });
+
+    rows.sort(function (a, b) { return b.month_amount - a.month_amount || b.ytd_amount - a.ytd_amount; });
+
+    var months = [];
+    for (var m2 = 1; m2 <= 12; m2++) {
+      months.push({ month: m2, label: VF_MONTH_NAMES_AR[m2 - 1], amount: round2(byMonth[m2] || 0) });
+    }
+
+    /* Years that actually have expense movements, so the picker offers real
+       choices instead of an arbitrary range. */
+    var yearSet = {};
+    getAllRecords_(dbId, FIN_CASH_SHEET).forEach(function (r) {
+      var code = String(r.chart_code == null ? '' : r.chart_code).trim();
+      if (!code || expenseLabels[code] === undefined) return;
+      var dt = parseDate_(r.transaction_date);
+      if (dt) yearSet[dt.getFullYear()] = true;
+    });
+    var years = Object.keys(yearSet).map(Number).sort(function (a, b) { return b - a; });
+    if (years.indexOf(year) === -1) years.unshift(year);
+
+    return {
+      status: 'success',
+      year: year,
+      month: month,
+      month_label: VF_MONTH_NAMES_AR[month - 1],
+      ytd_through: (year === now.getFullYear())
+        ? (now.getFullYear() + '-' + ('0' + (now.getMonth() + 1)).slice(-2) + '-' + ('0' + now.getDate()).slice(-2))
+        : (year + '-12-31'),
+      rows: rows,
+      totals: { month_amount: round2(monthTotal), ytd_amount: round2(ytdTotal) },
+      months: months,
+      years: years,
+      accounts_considered: expenseCount
+    };
+  }
+
   function buildCashChartOptions_(dbId) {
     return getAllRecords_(dbId, FIN_CHART_SHEET).map(function (r) {
       var lvl5 = Number(r['المستوى الخامس']);
@@ -8798,6 +9006,7 @@ const ValleyFoodsHRModules = (function () {
     ValleyFoods.register('get_valley_party_balances', getValleyPartyBalances_);
 
     ValleyFoods.register('get_valley_cash',    getValleyCash_);
+    ValleyFoods.register('get_valley_cash_expense_report', getValleyCashExpenseReport_);
     ValleyFoods.register('save_valley_cash', withRefBust_(saveValleyCash_));
     ValleyFoods.register('approve_valley_cash', approveValleyCash_);
     ValleyFoods.register('delete_valley_cash', deleteValleyCash_);
