@@ -11,11 +11,30 @@ const CONFIG = {
   MAX_CONCURRENT_SESSIONS: 5,
   BACKUP_FOLDER_ID: '',   // <-- SET to a Drive folder ID before running migration batches (batch0_preflight warns if empty)
   CACHE_SESSION_SECONDS: 360,
-  CACHE_MATRIX_SECONDS: 120,
+  // Authority caches are invalidated by the authority GENERATION (see
+  // authGeneration_ in 02_DataAccess.js), not by expiry. These TTLs are now only
+  // an upper bound on how long a generation's payload may occupy the cache.
+  // Shortening them does NOT make the system fresher — it only adds sheet reads.
+  CACHE_MATRIX_SECONDS: 21600,       // was 120
   CACHE_THEME_SECONDS: 21600,
   CACHE_LOGO_SECONDS: 21600,
   CACHE_GENERAL_SECONDS: 600,
-  CACHE_KILLSWITCH_SECONDS: 15,
+  CACHE_KILLSWITCH_SECONDS: 21600,   // was 15
+  // The user directory (email -> name/role/company/status) is keyed by the
+  // generation too; an admin saving a user bumps it, so this TTL is a ceiling
+  // on cache occupancy, not the freshness mechanism.
+  CACHE_USER_DIR_SECONDS: 21600,
+
+  // Worst-case staleness when NOTHING bumps the generation — i.e. a direct edit
+  // in the AUTH spreadsheet made while the installable onEdit trigger is missing
+  // or broken. Folded into the generation as a time bucket, so it is a hard
+  // ceiling and not a hope. START AT 300. Raise to 3600 only after the owner has
+  // confirmed the onAuthSheetEdit trigger is installed and firing.
+  AUTH_STALENESS_CEILING_SECONDS: 300,
+
+  // A kill-switch read that FAILED must never earn the long TTL — caching a
+  // fail-open default for six hours would hide a real shutdown.
+  CACHE_AUTH_FAILREAD_SECONDS: 15,
   // F-07: how often a session's last_activity is written back to ERP_Sessions.
   // Each write is a full read + full-row write of the shared AUTH spreadsheet,
   // per active user, so at 30s it was a hot spot under concurrent load.
