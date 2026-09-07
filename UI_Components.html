@@ -3538,6 +3538,22 @@ document.addEventListener('keydown', function (e) {
     .btn-danger:active  { background: #b91c1c; transform: scale(0.97); }
   }
 
+  /* ── [iPhone run 2] Make a tap on empty page space deliver a click ────
+     The row menu closes from a document click listener further up this file.
+     iOS Safari does not synthesise a click for a tap on an element that is not
+     interactive, so tapping empty page space never reached that listener and
+     the menu stayed open — the one thing the last run left on the owner's
+     checklist as follow-up C. Giving body a pointer cursor is the documented
+     way to make iOS treat it as clickable and deliver the event.
+
+     Why this and not JavaScript: no listener moves, so nothing can double-fire,
+     and no touch handler competes with the existing click one. It is gated on
+     (hover: none), so a desktop mouse never sees a changed cursor; on a touch
+     device there is no visible cursor to change, so it costs nothing there
+     either. Android Chrome on a phone also matches (hover: none) and also has
+     no visible cursor, so nothing about it moves. */
+  @media (hover: none) { body { cursor: pointer; } }
+
   /* ── [UI-3.3 / U-20] Row action kebab ────────────────────────────────
      Harvested from the dead ERP_DataTable engine (.erp-kebab), per the D-8
      standing answer: take the patterns, then delete the file in Phase 10. */
