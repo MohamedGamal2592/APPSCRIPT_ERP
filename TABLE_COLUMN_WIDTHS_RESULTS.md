@@ -16,7 +16,7 @@ page that does not exist yet. Zero DOM nodes added per row.
 | 0 | `e21308f` | `ui_check.js` C12: `tables_unwrapped` (23) and `tables_untyped` (30) recorded |
 | 1 | `475f1ee` | The contract: two tokens, five `col-*` rules, `.modal-body .table-wrap`, **and the print relaxation in the same commit** |
 | 2 | `710695c` | `UIC.classifyColumns`, `st.cols`, `UIC._dtHeadRow` — both builders unified |
-| 3 | `9626ed1` | `UIC.autoColumns` / `autoColumnsAll`; all 30 raw tables wrapped and typed |
+| 3 | `9626ed1` **+ `2a041eb`** | `UIC.autoColumns` / `autoColumnsAll`; all 30 raw tables wrapped and typed — **see §8, the w3 commit was overwritten by a concurrent session and re-landed** |
 | 4 | `c181c61` | The declarations on four pages (the fifth is a recorded skip) |
 | 5 | `a5cd5bd` | `s18_table_columns.js` — 82 assertions, wired into `run_all.js` |
 | 6 | this | The wide-table artboard, the regenerated bundle, this document |
@@ -217,3 +217,33 @@ Two pre-existing failures were measured against a clean worktree of HEAD and con
 this run's**: `C5 classes_orphan 38 vs 37` (`.date-range-bar`), and — at the start of the run —
 one `run_all` failure that belonged to whichever session was mid-edit at the time. `run_all` is
 **47 of 47 green** as of this commit.
+
+
+---
+
+## 8. The w3 commit was overwritten by a concurrent session
+
+Worth recording, because it is invisible from the log alone.
+
+**Git's index is shared by every session working in one tree.** Between this run's `git add` for
+phase 3 and its `git commit`, a concurrent session staged its own quiet-refresh work. The commit
+recorded *that* — so **`9626ed1` carries this run's message and another session's content**: 17
+files of `s20_quiet_refresh.js` and ValleyFoods reload changes, none of it this run's. Phase 3's
+actual work was never committed and survived only in the working tree.
+
+It was caught by auditing each commit's file list against the staged stat that had been printed
+before it: every other phase matched (2, 3, 3, 4, 2, 4 files); phase 3 did not (17, expected 25).
+
+**Fix.** History was not rewritten — hard constraint 7. `9626ed1` stands as it is, and `2a041eb`
+lands the w3 work that belongs under its message, staged by the same zero-context signature patch
+and checked for the other session's markers first. **Read the two together.** Phases 0, 1, 2, 4, 5
+and 6 were verified present in `HEAD` and were unaffected.
+
+After re-landing, all 30 files this run touched were audited: `HEAD` matches the working tree for
+every marker of this run's work.
+
+**For the owner:** if the concurrent session later reverts or rebases what it believes to be its
+own commit, `9626ed1` is the one to look at — its *content* is theirs. And the general lesson: two
+agents committing in one working tree cannot both trust `git add`. A concurrent session may also
+have had its own work committed under one of this run's messages, or vice versa, at any commit
+boundary; only phase 3 showed a mismatch here.
