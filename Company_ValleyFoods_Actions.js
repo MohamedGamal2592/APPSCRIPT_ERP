@@ -110,6 +110,7 @@ const ValleyFoods = (function () {
     'upload_attendance_csv': { page: 'vf_hr_attendance', access: 'write' },
     'analyze_attendance_csv': { page: 'vf_hr_attendance', access: 'read' },
     'get_attendance_report': { page: 'vf_hr_attendance', access: 'read' },
+    'get_attendance_index': { page: 'vf_hr_attendance', access: 'read' },
     'get_attendance_batches': { page: 'vf_hr_attendance', access: 'read' },
     /* Undo deletes rows, so it is the one attendance action gated at 'full'. */
     'revert_attendance_import': { page: 'vf_hr_attendance', access: 'full' },
@@ -233,6 +234,7 @@ const ValleyFoods = (function () {
     'get_attendance_data': 'valley_employee_attendance', 'add_manual_attendance': 'valley_employee_attendance',
     'upload_attendance_csv': 'valley_employee_attendance', 'analyze_attendance_csv': 'valley_employee_attendance',
     'get_attendance_report': 'valley_employee_attendance',
+    'get_attendance_index': 'valley_attendance_session',
     'get_attendance_batches': 'valley_attendance_import_batch',
     'revert_attendance_import': 'valley_attendance_import_batch',
 
@@ -2288,6 +2290,36 @@ const ValleyFoodsHRModules = (function () {
         review_deleted: reviewDeleted
       };
     });
+  }
+
+  /**
+   * One small read that lets the inference engine corroborate a hypothesis
+   * against reality: which days already have a session, and which employee
+   * codes exist. No punch rows — that is the whole point, the client used to
+   * have to send the file to the server to learn any of this.
+   */
+  function getAttendanceIndex_(data, user, dbId) {
+    var sessionDates = [];
+    try {
+      var seen = {};
+      getAllRecords_(dbId, ATTENDANCE_SESSION_SHEET).forEach(function (s) {
+        var k = sessionDateKey_(s.session_date);
+        if (k && /^\d{4}-\d{2}-\d{2}$/.test(k) && !seen[k]) { seen[k] = true; sessionDates.push(k); }
+      });
+      sessionDates.sort();
+    } catch (e) { sessionDates = []; }
+
+    var empIds = [];
+    try {
+      var seenEmp = {};
+      getAllRecords_(dbId, EMP_INFO_SHEET).forEach(function (e) {
+        var id = attNumericEmpId_(e.emp_id);
+        if (id !== null && !seenEmp[id]) { seenEmp[id] = true; empIds.push(id); }
+      });
+      empIds.sort(function (a, b) { return a - b; });
+    } catch (e) { empIds = []; }
+
+    return { status: 'success', session_dates: sessionDates, emp_ids: empIds };
   }
 
   /** The permanent home of undo: every import, newest first. */
@@ -8038,6 +8070,7 @@ const ValleyFoodsHRModules = (function () {
     ValleyFoods.register('upload_attendance_csv',     uploadAttendanceCsv_);
     ValleyFoods.register('analyze_attendance_csv',    analyzeAttendanceCsv_);
     ValleyFoods.register('get_attendance_report',     getAttendanceReport_);
+    ValleyFoods.register('get_attendance_index',      getAttendanceIndex_);
     ValleyFoods.register('get_attendance_batches',    getAttendanceBatches_);
     ValleyFoods.register('revert_attendance_import',  revertAttendanceImport_);
     ValleyFoods.register('add_upload_file',            addUploadFile_);
@@ -8160,6 +8193,7 @@ const ValleyFoodsHRModules = (function () {
     uploadAttendanceCsv_: uploadAttendanceCsv_,
     analyzeAttendanceCsv_: analyzeAttendanceCsv_,
     getAttendanceReport_: getAttendanceReport_,
+    getAttendanceIndex_: getAttendanceIndex_,
     getAttendanceBatches_: getAttendanceBatches_,
     revertAttendanceImport_: revertAttendanceImport_,
     addUploadFile_: addUploadFile_,

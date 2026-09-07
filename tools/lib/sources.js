@@ -46,7 +46,10 @@ const SHARED_PARTIALS = [
   'ERP_Modal.html',
   'ERP_DataTable.html',
   'ERP_DataTable_JS.html',
-  'Record_History_Panel.html'
+  'Record_History_Panel.html',
+  /* The attendance import parser. A partial, not a page: it has no shell and
+     no render entry point, so ui_smoke_pages.js must not try to boot it. */
+  'Client_AttendanceParser.html'
 ];
 
 /** Page templates: everything that is not a shared partial. */
