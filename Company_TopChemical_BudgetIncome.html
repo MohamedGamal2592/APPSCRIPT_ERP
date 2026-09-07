@@ -89,17 +89,24 @@
     }).filter(function (s) { return s.rows.length; });
     var grand = sel.reduce(function (acc, r) { return acc + (Number(r['القيمة']) || 0); }, 0);
 
+    var COLS = ['م', 'البند', 'كود المستوى الرابع', 'القيمة'];
     var html = '';
     sections.forEach(function (s, idx) {
       html += '<div class="inc-section">' +
         '<div class="inc-sec-head"><span>' + (idx + 1) + ' - ' + FMT.escape(s.label) + '</span>' +
         '<span class="inc-sec-total">' + fin(s.sum) + '</span></div>';
-      html += '<table class="inc-table"><thead><tr><th>م</th><th>البند</th><th>كود المستوى الرابع</th><th>القيمة</th></tr></thead><tbody>';
+      /* [iPhone run 2] card-table is the shared opt-in in UI_Components: a
+         card per row below 600px, an ordinary table from 600px up and on
+         paper. COLS builds the <th> row AND the data-labels, so the two
+         cannot drift apart. */
+      html += '<table class="inc-table card-table"><thead><tr>' +
+        COLS.map(function (c) { return '<th>' + c + '</th>'; }).join('') +
+        '</tr></thead><tbody>';
       s.rows.forEach(function (r) {
-        html += '<tr><td>' + FMT.escape(r['مسلسل'] || '-') + '</td>' +
-          '<td>' + FMT.escape(r['البند'] || '-') + '</td>' +
-          '<td>' + FMT.escape(r['كود المستوى الرابع'] || '-') + '</td>' +
-          '<td class="num">' + fin(r['القيمة']) + '</td></tr>';
+        html += '<tr><td data-label="' + COLS[0] + '">' + FMT.escape(r['مسلسل'] || '-') + '</td>' +
+          '<td data-label="' + COLS[1] + '">' + FMT.escape(r['البند'] || '-') + '</td>' +
+          '<td data-label="' + COLS[2] + '">' + FMT.escape(r['كود المستوى الرابع'] || '-') + '</td>' +
+          '<td class="num" data-label="' + COLS[3] + '">' + fin(r['القيمة']) + '</td></tr>';
       });
       html += '</tbody></table></div>';
     });
@@ -125,10 +132,16 @@
   .inc-section { margin-bottom: 18px; border: 1px solid #d1d5db; border-radius: 8px; overflow: hidden; }
   .inc-sec-head { display: flex; justify-content: space-between; align-items: center; padding: 8px 14px; background: var(--bg-subtle, #f3f4f6); border-bottom: 1px solid #d1d5db; font-weight: 700; font-size: 14px; color: var(--text-main, #111827); }
   .inc-sec-total { font-weight: 800; color: var(--text-main, #111827); }
-  .inc-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  .inc-table th, .inc-table td { border: 1px solid var(--border-color, #e5e7eb); padding: 6px 10px; text-align: right; }
-  .inc-table th { background: var(--bg-subtle, #f9fafb); }
-  .inc-table td.num { text-align: left; font-variant-numeric: tabular-nums; }
+  /* [iPhone run 2] Verbatim, but scoped: from 600px up and on paper this is
+     exactly the table it always was. Below 600px .card-table (UI_Components)
+     turns each row into a card, which is why none of this may reach a phone
+     unscoped — the borders and padding here are what clipped it. */
+  @media print, (min-width: 600px) {
+    .inc-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .inc-table th, .inc-table td { border: 1px solid var(--border-color, #e5e7eb); padding: 6px 10px; text-align: right; }
+    .inc-table th { background: var(--bg-subtle, #f9fafb); }
+    .inc-table td.num { text-align: left; font-variant-numeric: tabular-nums; }
+  }
   .inc-grand { margin-top: 6px; padding: 10px 14px; background: #374151; color: #fff; border-radius: 8px; font-size: 15px; font-weight: 700; }
 </style>
 </body>

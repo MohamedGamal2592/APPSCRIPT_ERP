@@ -29,10 +29,16 @@
     .detail-block { flex: 1 1 320px; min-width: 280px; }
     .detail-block h4 { margin: 0 0 6px; font-size: 13px; color: var(--text-muted); font-weight: 700; }
 
-    .items-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-    .items-table th, .items-table td { padding: 4px 8px; border-bottom: 1px solid var(--border, #e5e7eb); }
-    .items-table th { color: var(--text-muted); font-weight: 700; text-align: right; }
-    .items-table tfoot td { font-weight: 700; border-top: 2px solid var(--border, #e5e7eb); border-bottom: 0; }
+    /* [iPhone run 2] Verbatim, but scoped: from 600px up and on paper this is
+       exactly the table it always was. Below 600px .card-table
+       (UI_Components) turns each row into a card, so none of this may reach
+       a phone unscoped. */
+    @media print, (min-width: 600px) {
+      .items-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+      .items-table th, .items-table td { padding: 4px 8px; border-bottom: 1px solid var(--border, #e5e7eb); }
+      .items-table th { color: var(--text-muted); font-weight: 700; text-align: right; }
+      .items-table tfoot td { font-weight: 700; border-top: 2px solid var(--border, #e5e7eb); border-bottom: 0; }
+    }
 
     .parse-fail { background: #fef2f2; border: 1px solid #fecaca; border-radius: 6px;
                   padding: 6px 10px; margin-top: 6px; font-size: 12.5px; color: #991b1b; }
@@ -340,12 +346,13 @@
       });
       return;
     }
+    /* [iPhone run 2] MOVE_COLS builds the <th> row AND the data-labels. The
+       shared .table has been a card per row below 600px since UI-4.8, but
+       with no data-label those cards were a column of bare values. */
     var html = '<div class="table-wrap"><table class="table">' +
       '<thead><tr>' +
         '<th style="width:34px;"></th>' +
-        '<th>التاريخ</th><th>التفاصيل</th><th>المبلغ</th><th>النوع</th>' +
-        '<th>الحساب</th><th>المسؤول</th><th>الخزنة</th><th>الحالة</th>' +
-        '<th>الخطورة</th><th>إجراء</th>' +
+        MOVE_COLS.slice(1).map(function (c) { return '<th>' + c + '</th>'; }).join('') +
       '</tr></thead><tbody>';
 
     LAST.rows.forEach(function (row) {
@@ -355,25 +362,25 @@
       var failed = row.parse && row.parse.failed_count > 0;
 
       html += '<tr id="box-row-' + id + '">' +
-        '<td><button class="row-toggle" onclick="toggleRow(\'' + id + '\')" ' +
+        '<td data-label="' + MOVE_COLS[0] + '"><button class="row-toggle" onclick="toggleRow(\'' + id + '\')" ' +
           'aria-expanded="' + open + '" aria-controls="box-detail-' + id + '" ' +
           'aria-label="تفاصيل الحركة رقم ' + esc(row.id) + '">' + (open ? '▾' : '▸') + '</button></td>' +
-        '<td>' + esc(row.transaction_date || '—') + '</td>' +
-        '<td>' + esc(row.transaction_details || '—') +
+        '<td data-label="' + MOVE_COLS[1] + '">' + esc(row.transaction_date || '—') + '</td>' +
+        '<td data-label="' + MOVE_COLS[2] + '">' + esc(row.transaction_details || '—') +
           (failed ? ' <span class="pill pill-warn">تعذر تحليل التفاصيل</span>' : '') +
           (chk && chk.bad ? ' <span class="pill pill-warn">فرق ' + esc(money(Math.abs(chk.diff))) + '</span>' : '') +
         '</td>' +
-        '<td class="num">' + esc(money(row.transaction_amount)) + '</td>' +
-        '<td>' + typeLabel(row.transaction_type) + '</td>' +
-        '<td>' + esc(acctLabel(row.chart_of_accounts)) + '</td>' +
-        '<td>' + esc(row.responsible_person || '—') + '</td>' +
-        '<td class="num">' + esc(row.box_code == null ? '—' : row.box_code) + '</td>' +
-        '<td>' + revisePill(row.is_revised) + '</td>' +
-        '<td>' + riskBadge(row.risk) + '</td>' +
-        '<td>' + rowActions(row) + '</td>' +
+        '<td class="num" data-label="' + MOVE_COLS[3] + '">' + esc(money(row.transaction_amount)) + '</td>' +
+        '<td data-label="' + MOVE_COLS[4] + '">' + typeLabel(row.transaction_type) + '</td>' +
+        '<td data-label="' + MOVE_COLS[5] + '">' + esc(acctLabel(row.chart_of_accounts)) + '</td>' +
+        '<td data-label="' + MOVE_COLS[6] + '">' + esc(row.responsible_person || '—') + '</td>' +
+        '<td class="num" data-label="' + MOVE_COLS[7] + '">' + esc(row.box_code == null ? '—' : row.box_code) + '</td>' +
+        '<td data-label="' + MOVE_COLS[8] + '">' + revisePill(row.is_revised) + '</td>' +
+        '<td data-label="' + MOVE_COLS[9] + '">' + riskBadge(row.risk) + '</td>' +
+        '<td data-label="' + MOVE_COLS[10] + '">' + rowActions(row) + '</td>' +
       '</tr>' +
       '<tr id="box-detail-' + id + '"' + (open ? '' : ' hidden') + '>' +
-        '<td class="detail-cell" colspan="11">' + (open ? detailHtml(row) : '') + '</td>' +
+        '<td class="detail-cell" colspan="11" data-label="">' + (open ? detailHtml(row) : '') + '</td>' +
       '</tr>';
     });
 
@@ -417,34 +424,46 @@
     '</div>';
   }
 
+  var MOVE_COLS = ['', 'التاريخ', 'التفاصيل', 'المبلغ', 'النوع',
+                    'الحساب', 'المسؤول', 'الخزنة', 'الحالة', 'الخطورة', 'إجراء'];
+  var ALERT_COLS = ['الخطورة', '#', 'التاريخ', 'التفاصيل', 'المبلغ',
+                     'الحساب', 'المسؤول', 'الأسباب'];
+  var CLUSTER_COLS = ['الصنف', 'عدد الشراء', 'وسيط سعر الوحدة', 'الأدنى', 'الأعلى',
+                       'التسميات المدمجة', 'تصحيح'];
+  var ITEM_COLS = ['الكمية', 'الوحدة', 'الصنف', 'السعر', 'سعر الوحدة'];
+
   function itemsHtml(row) {
     var p = row.parse;
     if (!p) return '<div class="win-note">لم يتم تحليل التفاصيل.</div>';
 
     var html = '';
     if (p.items.length) {
-      html += '<table class="items-table"><thead><tr>' +
-        '<th>الكمية</th><th>الوحدة</th><th>الصنف</th><th>السعر</th><th>سعر الوحدة</th>' +
+      /* [iPhone run 2] card-table is the shared opt-in in UI_Components: a
+         card per row below 600px, an ordinary table from 600px up and on
+         paper. ITEM_COLS builds the <th> row AND the data-labels, so a
+         column and its label cannot drift apart. */
+      html += '<table class="items-table card-table"><thead><tr>' +
+        ITEM_COLS.map(function (c) { return '<th>' + c + '</th>'; }).join('') +
         '</tr></thead><tbody>';
       p.items.forEach(function (it) {
         html += '<tr>' +
-          '<td class="num">' + (it.qty == null ? '—' : esc(FMT.number(Math.round(it.qty * 10000) / 10000))) + '</td>' +
-          '<td>' + esc(it.unit || '—') + '</td>' +
-          '<td>' + esc(it.item_norm) + '</td>' +
-          '<td class="num">' + esc(money(it.price)) + '</td>' +
-          '<td class="num">' + (it.unit_price == null ? '—' : esc(money(it.unit_price))) + '</td>' +
+          '<td class="num" data-label="' + ITEM_COLS[0] + '">' + (it.qty == null ? '—' : esc(FMT.number(Math.round(it.qty * 10000) / 10000))) + '</td>' +
+          '<td data-label="' + ITEM_COLS[1] + '">' + esc(it.unit || '—') + '</td>' +
+          '<td data-label="' + ITEM_COLS[2] + '">' + esc(it.item_norm) + '</td>' +
+          '<td class="num" data-label="' + ITEM_COLS[3] + '">' + esc(money(it.price)) + '</td>' +
+          '<td class="num" data-label="' + ITEM_COLS[4] + '">' + (it.unit_price == null ? '—' : esc(money(it.unit_price))) + '</td>' +
         '</tr>';
       });
       var chk = sumCheck(row);
       html += '</tbody>';
       if (chk) {
         html += '<tfoot><tr>' +
-          '<td colspan="3">إجمالي البنود مقابل المبلغ المسجل</td>' +
-          '<td class="num ' + (chk.bad ? 'sum-bad' : 'sum-ok') + '">' + esc(money(chk.sum)) + '</td>' +
-          '<td class="num ' + (chk.bad ? 'sum-bad' : 'sum-ok') + '">' + esc(money(chk.amount)) + '</td>' +
+          '<td colspan="3" data-label="المطابقة">إجمالي البنود مقابل المبلغ المسجل</td>' +
+          '<td class="num ' + (chk.bad ? 'sum-bad' : 'sum-ok') + '" data-label="إجمالي البنود">' + esc(money(chk.sum)) + '</td>' +
+          '<td class="num ' + (chk.bad ? 'sum-bad' : 'sum-ok') + '" data-label="المبلغ المسجل">' + esc(money(chk.amount)) + '</td>' +
         '</tr>';
         if (chk.bad) {
-          html += '<tr><td colspan="5" class="sum-bad">' +
+          html += '<tr><td colspan="5" class="sum-bad" data-label="نتيجة المطابقة">' +
             'الفرق ' + esc(money(Math.abs(chk.diff))) + ' ' +
             (chk.diff > 0 ? '(البنود أكبر من المبلغ المسجل)' : '(المبلغ المسجل أكبر من البنود)') +
             '</td></tr>';
@@ -895,19 +914,18 @@
         body: 'لم تُطابق أي حركة قواعد الفحص. راجع الملاحظات أدناه لمعرفة القواعد التي لم تعمل ولماذا.' });
     } else {
       html += '<div class="table-wrap"><table class="table"><thead><tr>' +
-        '<th>الخطورة</th><th>#</th><th>التاريخ</th><th>التفاصيل</th><th>المبلغ</th>' +
-        '<th>الحساب</th><th>المسؤول</th><th>الأسباب</th>' +
+        ALERT_COLS.map(function (c) { return '<th>' + c + '</th>'; }).join('') +
         '</tr></thead><tbody>';
       alerts.forEach(function (a) {
         html += '<tr>' +
-          '<td>' + riskBadge(a.risk) + '</td>' +
-          '<td class="num">' + esc(a.id) + '</td>' +
-          '<td>' + esc(a.transaction_date || '—') + '</td>' +
-          '<td>' + esc(a.transaction_details || '—') + '</td>' +
-          '<td class="num">' + esc(money(a.transaction_amount)) + '</td>' +
-          '<td>' + esc(acctLabel(a.chart_of_accounts)) + '</td>' +
-          '<td>' + esc(a.responsible_person || '—') + '</td>' +
-          '<td>' + flagsHtml(a.risk) + '</td>' +
+          '<td data-label="' + ALERT_COLS[0] + '">' + riskBadge(a.risk) + '</td>' +
+          '<td class="num" data-label="' + ALERT_COLS[1] + '">' + esc(a.id) + '</td>' +
+          '<td data-label="' + ALERT_COLS[2] + '">' + esc(a.transaction_date || '—') + '</td>' +
+          '<td data-label="' + ALERT_COLS[3] + '">' + esc(a.transaction_details || '—') + '</td>' +
+          '<td class="num" data-label="' + ALERT_COLS[4] + '">' + esc(money(a.transaction_amount)) + '</td>' +
+          '<td data-label="' + ALERT_COLS[5] + '">' + esc(acctLabel(a.chart_of_accounts)) + '</td>' +
+          '<td data-label="' + ALERT_COLS[6] + '">' + esc(a.responsible_person || '—') + '</td>' +
+          '<td data-label="' + ALERT_COLS[7] + '">' + flagsHtml(a.risk) + '</td>' +
         '</tr>';
       });
       html += '</tbody></table></div>';
@@ -1015,8 +1033,7 @@
     }
 
     html += '<div class="table-wrap"><table class="table"><thead><tr>' +
-      '<th>الصنف</th><th>عدد الشراء</th><th>وسيط سعر الوحدة</th><th>الأدنى</th><th>الأعلى</th>' +
-      '<th>التسميات المدمجة</th><th>تصحيح</th>' +
+      CLUSTER_COLS.map(function (c) { return '<th>' + c + '</th>'; }).join('') +
       '</tr></thead><tbody>';
 
     clusters.forEach(function (c) {
@@ -1026,15 +1043,15 @@
         return (byRow[String(o.movement_id)] || []).length;
       }).length;
       html += '<tr>' +
-        '<td>' + esc(c.label) + (flagged ? ' <span class="pill pill-warn">' + flagged + ' ملاحظة</span>' : '') + '</td>' +
-        '<td class="num">' + esc(FMT.number(c.occurrence_count)) + '</td>' +
-        '<td class="num">' + (price ? esc(money(price.median)) : '—') + '</td>' +
-        '<td class="num">' + (price ? esc(money(price.min)) : '—') + '</td>' +
-        '<td class="num">' + (price ? esc(money(price.max)) : '—') + '</td>' +
-        '<td>' + (c.members.length > 1
+        '<td data-label="' + CLUSTER_COLS[0] + '">' + esc(c.label) + (flagged ? ' <span class="pill pill-warn">' + flagged + ' ملاحظة</span>' : '') + '</td>' +
+        '<td class="num" data-label="' + CLUSTER_COLS[1] + '">' + esc(FMT.number(c.occurrence_count)) + '</td>' +
+        '<td class="num" data-label="' + CLUSTER_COLS[2] + '">' + (price ? esc(money(price.median)) : '—') + '</td>' +
+        '<td class="num" data-label="' + CLUSTER_COLS[3] + '">' + (price ? esc(money(price.min)) : '—') + '</td>' +
+        '<td class="num" data-label="' + CLUSTER_COLS[4] + '">' + (price ? esc(money(price.max)) : '—') + '</td>' +
+        '<td data-label="' + CLUSTER_COLS[5] + '">' + (c.members.length > 1
             ? esc(c.members.slice(1).join('  |  '))
             : '<span style="color:#9ca3af;">—</span>') + '</td>' +
-        '<td>' + (CAN_WRITE
+        '<td data-label="' + CLUSTER_COLS[6] + '">' + (CAN_WRITE
             ? UIC.actionBtns([{ label: 'دمج/فصل', onclick: "openAliasDialog('" + esc(c.cluster_id).replace(/'/g, '') + "')" }])
             : '<span style="color:#9ca3af;">—</span>') + '</td>' +
       '</tr>';

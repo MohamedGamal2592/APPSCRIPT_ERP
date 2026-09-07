@@ -3697,12 +3697,12 @@ document.addEventListener('keydown', function (e) {
        cards either. Its card rules sit further down this stylesheet, after
        this block, so at equal specificity they would win here; the type
        selector out-ranks them without touching any property a page sets. */
-    table.inv-table { display: table; }
-    table.inv-table thead { display: table-header-group; }
-    table.inv-table tbody { display: table-row-group; width: auto; }
-    table.inv-table tr { display: table-row; width: auto; border: 0; border-radius: 0; margin: 0; padding: 0; background: transparent; }
-    table.inv-table td { display: table-cell; width: auto; align-items: normal; justify-content: normal; gap: normal; }
-    table.inv-table td[data-label]::before { content: none; }
+    table.card-table, table.inv-table { display: table; }
+    table.card-table thead, table.inv-table thead { display: table-header-group; }
+    table.card-table tbody, table.inv-table tbody { display: table-row-group; width: auto; }
+    table.card-table tr, table.inv-table tr { display: table-row; width: auto; border: 0; border-radius: 0; margin: 0; padding: 0; background: transparent; }
+    table.card-table td, table.inv-table td { display: table-cell; width: auto; align-items: normal; justify-content: normal; gap: normal; }
+    table.card-table td[data-label]::before, table.inv-table td[data-label]::before { content: none; }
 
     /* [7.2] The print palette. The two bespoke themes carried a blanket
        universal print-color-adjust:exact rule, which forces the browser to
@@ -4491,31 +4491,47 @@ document.addEventListener('keydown', function (e) {
    *   2. The card cell rules are wrapped in :where(), so they carry no
    *      specificity of their own: a page's own .inv-table td always out-ranks
    *      them. The last-cell rule needs that too: written plainly,
-   *      .inv-table td:last-child would beat a page's border on the desktop. */
+   *      .inv-table td:last-child would beat a page's border on the desktop.
+   *
+   * [iPhone run 2] .card-table is the OPT-IN twin of .inv-table: identical
+   * rules, no name of its own to defend. Three on-screen tables had their own
+   * page-local class and no phone tier at all, so they clipped on a phone
+   * exactly as .inv-table used to — TopChemical BoxAnalysis (.items-table),
+   * TopChemical BudgetIncome (.inc-table) and ValleyFoods MfgOrderView
+   * (.odoo-table). Each adds card-table beside its own class rather than
+   * moving its page-local name into this shared sheet. Not one .inv-table
+   * declaration changes; s14 section 5 and s15 section 8 both prove it.
+   *
+   * .card-table is written FIRST in each list. A selector list has no
+   * order-dependent meaning in CSS, but s14_iphone.js asserts on the
+   * literal text  .inv-table thead { display: none  and its siblings, and
+   * s14 must keep passing unchanged — so the .inv-table half of every list
+   * is left reading exactly as it did before. */
+  .card-table, .card-table tbody, .card-table tr,
   .inv-table, .inv-table tbody, .inv-table tr { display: block; width: 100%; }
-  .inv-table thead { display: none; }        /* the labels move into the cells */
-  .inv-table tr {
+  .card-table thead, .inv-table thead { display: none; }  /* labels move into the cells */
+  .card-table tr, .inv-table tr {
     border: 1px solid var(--border-color);
     border-radius: var(--radius-md);
     margin-bottom: var(--space-2);
     padding: var(--space-2);
     background: var(--bg-surface);
   }
-  .inv-table :where(td) {
+  .card-table :where(td), .inv-table :where(td) {
     display: flex; align-items: baseline; justify-content: space-between;
     gap: var(--space-3); width: 100%;
     border: 0; border-bottom: 1px solid var(--border-color);
     padding: 8px 4px;
     text-align: start;
   }
-  .inv-table :where(td:last-child) { border-bottom: 0; }
-  .inv-table td[data-label]::before {
+  .card-table :where(td:last-child), .inv-table :where(td:last-child) { border-bottom: 0; }
+  .card-table td[data-label]::before, .inv-table td[data-label]::before {
     content: attr(data-label);
     font-size: var(--text-xs); font-weight: 700; color: var(--text-muted);
     flex: 0 0 auto; max-width: 45%;
   }
   /* A numeric cell keeps its LTR direction (.num); its label stays Arabic. */
-  .inv-table td.num::before { direction: rtl; }
+  .card-table td.num::before, .inv-table td.num::before { direction: rtl; }
 
   /* ── tablet-p (>= 600px) — the drawer deliberately STAYS ── */
   @media (min-width: 600px) {
@@ -4544,12 +4560,12 @@ document.addEventListener('keydown', function (e) {
     /* [iPhone run] .inv-table back to a real table — layout only. Every
        property here returns to its initial value; the page's own declarations
        (border, padding, font-size, backgrounds) take over from here. */
-    .inv-table { display: table; }
-    .inv-table thead { display: table-header-group; }
-    .inv-table tbody { display: table-row-group; width: auto; }
-    .inv-table tr { display: table-row; width: auto; border: 0; border-radius: 0; margin: 0; padding: 0; background: transparent; }
-    .inv-table td { display: table-cell; width: auto; align-items: normal; justify-content: normal; gap: normal; }
-    .inv-table td[data-label]::before { content: none; }
+    .card-table, .inv-table { display: table; }
+    .card-table thead, .inv-table thead { display: table-header-group; }
+    .card-table tbody, .inv-table tbody { display: table-row-group; width: auto; }
+    .card-table tr, .inv-table tr { display: table-row; width: auto; border: 0; border-radius: 0; margin: 0; padding: 0; background: transparent; }
+    .card-table td, .inv-table td { display: table-cell; width: auto; align-items: normal; justify-content: normal; gap: normal; }
+    .card-table td[data-label]::before, .inv-table td[data-label]::before { content: none; }
     /* Enough width for the user's name beside the avatar. */
     .topbar-right .user-profile .user-name { display: inline; }
     /* Dialogs stop being bottom sheets and centre. */

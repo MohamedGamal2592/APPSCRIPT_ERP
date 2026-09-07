@@ -28,9 +28,15 @@
     .odoo-tab.active{color:#15803d;border-bottom-color:#15803d;}
     .odoo-pane{display:none;}
     .odoo-pane.active{display:block;}
-    .odoo-table{width:100%;border-collapse:collapse;font-size:13px;}
-    .odoo-table th{background:#f1f5f9;color:#334155;text-align:right;padding:8px 10px;border-bottom:1px solid var(--border-color, #e2e8f0);white-space:nowrap;}
-    .odoo-table td{padding:7px 10px;border-bottom:1px solid #f1f5f9;vertical-align:middle;}
+    /* [iPhone run 2] Verbatim, but scoped: from 600px up and on paper this is
+       exactly the table it always was. Below 600px .card-table
+       (UI_Components) turns each row into a card — white-space:nowrap on the
+       header is one of the things that made this clip on a phone. */
+    @media print, (min-width: 600px) {
+      .odoo-table{width:100%;border-collapse:collapse;font-size:13px;}
+      .odoo-table th{background:#f1f5f9;color:#334155;text-align:right;padding:8px 10px;border-bottom:1px solid var(--border-color, #e2e8f0);white-space:nowrap;}
+      .odoo-table td{padding:7px 10px;border-bottom:1px solid #f1f5f9;vertical-align:middle;}
+    }
     .odoo-ro{color:#94a3b8;font-size:12px;}
     .odoo-sub{background:var(--bg-subtle, #fafafa);border:1px dashed var(--border-color, #e2e8f0);border-radius:8px;padding:8px 10px;margin-top:8px;}
     .btn{cursor:pointer;border:none;border-radius:8px;padding:8px 14px;font-size:13px;font-weight:600;}
@@ -527,6 +533,17 @@
             ' دفعة — المتاح المعروض تقديري، والخادم يتحقق منه مقابل أرصدة الدفعات الفعلية عند الحفظ.</div>' : '');
       }
 
+      /* [iPhone run 2] Column labels for the four .odoo-table / .card-table
+         tables on this page. Each list is the SAME text as the <th> row it
+         belongs to, and each row builder indexes it, so a header and its
+         card label cannot drift apart. Below 600px the shared .card-table
+         rules turn each row into a card and print these as the labels;
+         from 600px up and on paper they are invisible. */
+      var BATCH_COLS = ['الدفعة', 'المتاح', 'المخصص', 'المتبقي', 'تكلفة الوحدة', 'الإجمالي'];
+      var FOOTER_COLS = ['الدفعة', 'المتاح', 'المخصص', 'المتبقي', 'إجمالي التكلفة', ''];
+      var WORKOP_COLS = ['مركز العمل', 'الحالة', 'ملاحظات', 'بدء / إنهاء', 'الساعات الفعلية', 'تكلفة المركز', 'الإجمالي', ''];
+      var BYPROD_COLS = ['المنتج الثانوي', 'الكمية', 'كود الدفعة', 'التكلفة', ''];
+
       function batchModalRowsHtml_() {
         return BM.rows.map(function (r, ix) {
           var alloc = round3(r.alloc);
@@ -534,12 +551,12 @@
           var overCls = remain < -0.0001 ? 'odoo-neg' : 'odoo-ro';
           var lineTotal = (Number(r.unit_cost) || 0) * alloc;
           return '<tr>' +
-            '<td>' + esc(r.lot || r.batch_uid) + '</td>' +
-            '<td class="odoo-ro">' + fmt3(r.available) + '</td>' +
-            '<td>' + inputHtml('bm-qty-' + ix, alloc || '', 'number', 'MFGVIEW_PAGE.batchModalSet(' + ix + ',this.value)', { min: '0', step: '0.001' }) + '</td>' +
-            '<td id="bm-remain-' + ix + '" class="' + overCls + '">' + fmt3(remain) + '</td>' +
+            '<td data-label="' + BATCH_COLS[0] + '">' + esc(r.lot || r.batch_uid) + '</td>' +
+            '<td class="odoo-ro" data-label="' + BATCH_COLS[1] + '">' + fmt3(r.available) + '</td>' +
+            '<td data-label="' + BATCH_COLS[2] + '">' + inputHtml('bm-qty-' + ix, alloc || '', 'number', 'MFGVIEW_PAGE.batchModalSet(' + ix + ',this.value)', { min: '0', step: '0.001' }) + '</td>' +
+            '<td id="bm-remain-' + ix + '" class="' + overCls + '" data-label="' + BATCH_COLS[3] + '">' + fmt3(remain) + '</td>' +
             (canCost()
-              ? '<td class="odoo-ro">' + fmtMoney(r.unit_cost) + '</td><td id="bm-line-' + ix + '" class="odoo-ro">' + fmtMoney(lineTotal) + '</td>'
+              ? '<td class="odoo-ro" data-label="' + BATCH_COLS[4] + '">' + fmtMoney(r.unit_cost) + '</td><td id="bm-line-' + ix + '" class="odoo-ro" data-label="' + BATCH_COLS[5] + '">' + fmtMoney(lineTotal) + '</td>'
               : '') +
             '</tr>';
         }).join('');
@@ -551,7 +568,7 @@
             esc(MFG_OUTPUTS[BM.i].product_name || MFG_OUTPUTS[BM.i].product_id || '') +
             ' — الكمية المطلوبة: <b>' + fmt3(BM.qty) + '</b>' +
           '</div>' +
-          '<div style="overflow-x:auto;"><table class="odoo-table"><thead><tr>' +
+          '<div style="overflow-x:auto;"><table class="odoo-table card-table"><thead><tr>' +
             '<th>الدفعة (transaction_code)</th>' +
             '<th style="width:110px;">المتاح</th>' +
             '<th style="width:120px;">المخصص</th>' +
@@ -762,12 +779,12 @@
               batchOpts.push({ value: f.item, label: (f.item_code || f.item) + ' (متاح: 0)' });
             }
             return '<tr style="background:#f3faf3;">' +
-              '<td>' + selHtml('ft-item-' + i + '-' + fi, batchOpts, f.item, 'MFGVIEW_PAGE.setFooterItem(' + i + ',' + fi + ',this)', '— اختر دفعة —', disOpt()) + '</td>' +
-              '<td class="odoo-ro">' + availCell + '</td>' +
-              '<td>' + inputHtml('ft-qty-' + i + '-' + fi, f.qty, 'number', 'MFGVIEW_PAGE.setFooterQty(' + i + ',' + fi + ',this.value)', { min: '0', step: '0.001', disabled: !editable() }) + '</td>' +
-              '<td class="' + remainCellCls + '">' + remainCell + '</td>' +
-              (canCost() ? '<td class="odoo-ro">' + fmtMoney(lineTotal) + '</td>' : '') +
-              (editable() ? '<td><button class="btn btn-ghost" style="padding:2px 6px;font-size:11px;" onclick="MFGVIEW_PAGE.removeFooterRow(' + i + ',' + fi + ')">✕</button></td>' : '<td></td>') +
+              '<td data-label="' + FOOTER_COLS[0] + '">' + selHtml('ft-item-' + i + '-' + fi, batchOpts, f.item, 'MFGVIEW_PAGE.setFooterItem(' + i + ',' + fi + ',this)', '— اختر دفعة —', disOpt()) + '</td>' +
+              '<td class="odoo-ro" data-label="' + FOOTER_COLS[1] + '">' + availCell + '</td>' +
+              '<td data-label="' + FOOTER_COLS[2] + '">' + inputHtml('ft-qty-' + i + '-' + fi, f.qty, 'number', 'MFGVIEW_PAGE.setFooterQty(' + i + ',' + fi + ',this.value)', { min: '0', step: '0.001', disabled: !editable() }) + '</td>' +
+              '<td class="' + remainCellCls + '" data-label="' + FOOTER_COLS[3] + '">' + remainCell + '</td>' +
+              (canCost() ? '<td class="odoo-ro" data-label="' + FOOTER_COLS[4] + '">' + fmtMoney(lineTotal) + '</td>' : '') +
+              (editable() ? '<td data-label="' + FOOTER_COLS[5] + '"><button class="btn btn-ghost" style="padding:2px 6px;font-size:11px;" onclick="MFGVIEW_PAGE.removeFooterRow(' + i + ',' + fi + ')">✕</button></td>' : '<td data-label="' + FOOTER_COLS[5] + '"></td>') +
               '</tr>';
           }).join('');
           /* U-43. The batch sub-table appears only once there is a product AND
@@ -777,7 +794,7 @@
           var footerTable = !ready
             ? ''
             : footers.length
-              ? '<table class="odoo-table"><thead><tr><th>الدفعة (transaction_code)</th><th style="width:110px;">المتاح</th><th style="width:120px;">المخصص</th><th style="width:110px;">المتبقي</th>' + (canCost() ? '<th style="width:130px;">إجمالي التكلفة</th>' : '') + '<th style="width:30px;"></th></tr></thead><tbody>' + footerRows + '</tbody></table>'
+              ? '<table class="odoo-table card-table"><thead><tr><th>الدفعة (transaction_code)</th><th style="width:110px;">المتاح</th><th style="width:120px;">المخصص</th><th style="width:110px;">المتبقي</th>' + (canCost() ? '<th style="width:130px;">إجمالي التكلفة</th>' : '') + '<th style="width:30px;"></th></tr></thead><tbody>' + footerRows + '</tbody></table>'
               : '<div class="odoo-ro" style="padding:4px;">اضغط «+ دفعة» لتخصيص الدفعات آلياً (الأقدم أولاً)</div>';
           var prodCell = editable()
             ? UIC.combo({ key: 'out-prod-' + i, label: '', required: true, options: PRODUCT_OPTIONS, value: o.product_id, placeholder: 'ابحث عن منتج…' })
@@ -938,7 +955,8 @@
         var unsaved = !w.uid;
         var wcc = unsaved ? '—' : fmtMoney(w.work_center_cost);
         var tot = unsaved ? '—' : fmtMoney(w.total_cost);
-        return '<td class="odoo-ro">' + wcc + '</td><td class="odoo-ro">' + tot + '</td>';
+        return '<td class="odoo-ro" data-label="تكلفة المركز">' + wcc + '</td>' +
+          '<td class="odoo-ro" data-label="الإجمالي">' + tot + '</td>';
       }
       function drawWorkOps() {
         var tb = document.getElementById('workops-body'); if (!tb) return;
@@ -962,20 +980,20 @@
               inputHtml('wo-end-' + i, toDtInput(w.end_time), 'datetime-local', 'MFGVIEW_PAGE.setWorkOp(' + i + ',\'end_time\',this.value)', { disabled: !editable() }) +
             '</div>' + rowBtns(i, w, canClock);
           return '<tr>' +
-            '<td>' + selHtml('wo-wc-' + i, WORKCENTER_OPTIONS, w.work_center_id, 'MFGVIEW_PAGE.setWorkOp(' + i + ',\'work_center_id\',this.value)', 'اختر مركز العمل', disOpt()) + '</td>' +
-            '<td><span class="odoo-pill ' + (w.operation_status === 'Done' ? 'Done' : (w.operation_status === 'Paused' ? 'Paused' : (w.operation_status === 'In Progress' ? 'InProgress' : 'Draft'))) + '">' + statusLabel(w.operation_status) + '</span></td>' +
-            '<td>' + inputHtml('wo-notes-' + i, w.notes, 'text', 'MFGVIEW_PAGE.setWorkOp(' + i + ',\'notes\',this.value)', disOpt()) + '</td>' +
-            '<td style="min-width:240px;">' + timing + '</td>' +
-            '<td class="odoo-ro">' + fmt3(w.actual_hours) + '<div style="font-size:10px;color:#888;">توقف: ' + fmt3(w.total_pause_duration) + '</div></td>' +
+            '<td data-label="' + WORKOP_COLS[0] + '">' + selHtml('wo-wc-' + i, WORKCENTER_OPTIONS, w.work_center_id, 'MFGVIEW_PAGE.setWorkOp(' + i + ',\'work_center_id\',this.value)', 'اختر مركز العمل', disOpt()) + '</td>' +
+            '<td data-label="' + WORKOP_COLS[1] + '"><span class="odoo-pill ' + (w.operation_status === 'Done' ? 'Done' : (w.operation_status === 'Paused' ? 'Paused' : (w.operation_status === 'In Progress' ? 'InProgress' : 'Draft'))) + '">' + statusLabel(w.operation_status) + '</span></td>' +
+            '<td data-label="' + WORKOP_COLS[2] + '">' + inputHtml('wo-notes-' + i, w.notes, 'text', 'MFGVIEW_PAGE.setWorkOp(' + i + ',\'notes\',this.value)', disOpt()) + '</td>' +
+            '<td style="min-width:240px;" data-label="' + WORKOP_COLS[3] + '">' + timing + '</td>' +
+            '<td class="odoo-ro" data-label="' + WORKOP_COLS[4] + '">' + fmt3(w.actual_hours) + '<div style="font-size:10px;color:#888;">توقف: ' + fmt3(w.total_pause_duration) + '</div></td>' +
             /* U-45: read-only, sheet-computed. An unsaved row has no cost yet —
                the formulas run on save — so it shows a dash, not a false zero. */
             wcCostCells(w) +
-            (editable() ? '<td><button class="btn btn-ghost" style="padding:2px 6px;font-size:11px;" onclick="MFGVIEW_PAGE.removeWorkOp(' + i + ')">✕</button></td>' : '<td></td>') +
+            (editable() ? '<td data-label="' + WORKOP_COLS[7] + '"><button class="btn btn-ghost" style="padding:2px 6px;font-size:11px;" onclick="MFGVIEW_PAGE.removeWorkOp(' + i + ')">✕</button></td>' : '<td data-label="' + WORKOP_COLS[7] + '"></td>') +
             '</tr>';
         }).join('');
         var addBtn = editable() ? '<button class="btn btn-outline" style="margin-top:8px;" onclick="MFGVIEW_PAGE.addWorkOp()">+ عملية تشغيل</button>' : '';
         tb.innerHTML = (MFG_WORKOPS.length
-          ? '<table class="odoo-table"><thead><tr><th>مركز العمل</th><th>الحالة</th><th>ملاحظات</th><th>بدء / إنهاء (توقيت يدوي)</th><th>الساعات الفعلية</th>' + wcCostHeaders() + '<th></th></tr></thead><tbody>' + rows + '</tbody></table>'
+          ? '<table class="odoo-table card-table"><thead><tr><th>مركز العمل</th><th>الحالة</th><th>ملاحظات</th><th>بدء / إنهاء (توقيت يدوي)</th><th>الساعات الفعلية</th>' + wcCostHeaders() + '<th></th></tr></thead><tbody>' + rows + '</tbody></table>'
           : '<div class="odoo-ro">لا توجد ورديات تشغيل</div>') + addBtn;
       }
 
@@ -993,18 +1011,18 @@
             ? UIC.combo({ key: 'bp-item-' + i, label: '', options: PRODUCT_OPTIONS, value: b.item, placeholder: 'ابحث عن منتج…' })
             : (function () { var nm = ''; (PRODUCT_OPTIONS || []).forEach(function (p) { if (String(p.value) === String(b.item)) nm = p.label; }); return esc(nm || b.item) || '<span class="odoo-ro">—</span>'; })();
           return '<tr>' +
-            '<td>' + bpCell + '</td>' +
-            '<td>' + inputHtml('bp-qty-' + i, b.qty, 'number', 'MFGVIEW_PAGE.setByproduct(' + i + ',\'qty\',this.value)', { min: '0', step: '0.01', disabled: !editable() }) + '</td>' +
-            '<td>' + inputHtml('bp-code-' + i, b.transaction_code, 'text', 'MFGVIEW_PAGE.setByproduct(' + i + ',\'transaction_code\',this.value)', disOpt()) + '</td>' +
+            '<td data-label="' + BYPROD_COLS[0] + '">' + bpCell + '</td>' +
+            '<td data-label="' + BYPROD_COLS[1] + '">' + inputHtml('bp-qty-' + i, b.qty, 'number', 'MFGVIEW_PAGE.setByproduct(' + i + ',\'qty\',this.value)', { min: '0', step: '0.01', disabled: !editable() }) + '</td>' +
+            '<td data-label="' + BYPROD_COLS[2] + '">' + inputHtml('bp-code-' + i, b.transaction_code, 'text', 'MFGVIEW_PAGE.setByproduct(' + i + ',\'transaction_code\',this.value)', disOpt()) + '</td>' +
             /* U-46. valley_manufacture_by_product.total_cost is a sheet formula,
                so hiding this input changes nothing about what gets written. */
-            (canCost() ? '<td>' + inputHtml('bp-cost-' + i, b.total_cost, 'number', 'MFGVIEW_PAGE.setByproduct(' + i + ',\'total_cost\',this.value)', { min: '0', step: '0.01', disabled: !editable() }) + '</td>' : '') +
-            (editable() ? '<td><button class="btn btn-ghost" style="padding:2px 6px;font-size:11px;" onclick="MFGVIEW_PAGE.removeByproduct(' + i + ')">✕</button></td>' : '<td></td>') +
+            (canCost() ? '<td data-label="' + BYPROD_COLS[3] + '">' + inputHtml('bp-cost-' + i, b.total_cost, 'number', 'MFGVIEW_PAGE.setByproduct(' + i + ',\'total_cost\',this.value)', { min: '0', step: '0.01', disabled: !editable() }) + '</td>' : '') +
+            (editable() ? '<td data-label="' + BYPROD_COLS[4] + '"><button class="btn btn-ghost" style="padding:2px 6px;font-size:11px;" onclick="MFGVIEW_PAGE.removeByproduct(' + i + ')">✕</button></td>' : '<td data-label="' + BYPROD_COLS[4] + '"></td>') +
             '</tr>';
         }).join('');
         var addBtn = editable() ? '<button class="btn btn-outline" style="margin-top:8px;" onclick="MFGVIEW_PAGE.addByproduct()">+ منتج ثانوي</button>' : '';
         tb.innerHTML = (MFG_BYPRODUCTS.length
-          ? '<table class="odoo-table"><thead><tr><th>المنتج الثانوي</th><th>الكمية</th><th>كود الدفعة</th>' + (canCost() ? '<th>التكلفة</th>' : '') + '<th></th></tr></thead><tbody>' + rows + '</tbody></table>'
+          ? '<table class="odoo-table card-table"><thead><tr><th>المنتج الثانوي</th><th>الكمية</th><th>كود الدفعة</th>' + (canCost() ? '<th>التكلفة</th>' : '') + '<th></th></tr></thead><tbody>' + rows + '</tbody></table>'
           : '<div class="odoo-ro">لا توجد منتجات ثانوية</div>') + addBtn;
         if (editable()) {
           MFG_BYPRODUCTS.forEach(function (bb, bi) {
