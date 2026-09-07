@@ -216,10 +216,26 @@ const HEADERS = [
     ],
     rows: [{ a: 1, b: 2, actions: '' }]
   });
-  /* scope="col" was added by step 6.3; the assertions move with it. */
-  ok(/<th scope="col" data-key="a" data-sortable="true" aria-sort="none">/.test(html),
+  /* scope="col" was added by step 6.3; the assertions move with it.
+   *
+   * UPDATED by the table column-width run (UI-9.1), and the reason is recorded
+   * here rather than in a commit nobody will re-read:
+   *
+   *   Every <th> now carries a col-* class naming what the column HOLDS, which
+   *   is the whole of the width contract. It sits between data-key and
+   *   data-sortable, so a reference that spelled out the full tag no longer
+   *   matches. All three columns here classify as `atom`: 'كود' and 'اسم' hold
+   *   single short unbreakable values, and the actions column has no data at
+   *   all, so it falls back to its own label.
+   *
+   * What these two lines actually guard is the SORT contract — that a sortable
+   * column advertises itself to assistive tech and that sortable:false opts a
+   * column out completely. Neither is weakened: the class is added to the
+   * reference markup, and the negative assertion still proves that column b
+   * carries no data-sortable in any form. */
+  ok(/<th scope="col" data-key="a" class="col-atom" data-sortable="true" aria-sort="none">/.test(html),
     'a sortable column advertises data-sortable and aria-sort="none"');
-  ok(/<th scope="col" data-key="b">/.test(html) && !/data-key="b" data-sortable/.test(html),
+  ok(/<th scope="col" data-key="b" class="col-atom">/.test(html) && !/data-key="b"[^>]*data-sortable/.test(html),
     'sortable:false opts a column out entirely');
   ok(/<th scope="col"/.test(html),
     'and every header carries scope="col" (U-31/6.3)');

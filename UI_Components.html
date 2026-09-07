@@ -799,6 +799,181 @@ UIC.reportError = function (detail, opt) {
  * name so any external readers keep working. */
 UIC.AUTO_PAGE_SIZE = 50;
 
+/* ── [UI-9.1] Column classification ────────────────────────────────────────
+ *
+ * A column's ROLE is a statement about what its cells HOLD — a date, a figure,
+ * a name, a sentence, a row of buttons — not about pixels. That is what makes
+ * one rule survive a font change, a translation and a page that does not exist
+ * yet. The five roles and the widths they earn are in the stylesheet, under
+ * "the column-width contract".
+ *
+ * WHY THIS MEASURES THE DATA AND NOT THE LABEL. The obvious implementation is
+ * a dictionary of Arabic column names. There are 703 distinct labels in this
+ * tree; that is a dictionary nobody will maintain, and it is wrong the first
+ * time someone adds an English page or a new module. Measuring the values
+ * actually in the column needs no configuration, is language-independent, and
+ * is right on a page nobody has written yet. The label survives only as the
+ * tiebreak for a column that has nothing in it at all.
+ */
+UIC.COL_ROLES = { atom: 1, num: 1, text: 1, prose: 1, actions: 1 };
+UIC.COL_SAMPLE = 200;
+
+/* What a cell is WORTH READING, for measurement purposes: markup stripped,
+ * entities and runs of whitespace collapsed. A status pill holds five
+ * characters of Arabic inside forty characters of <span>; measuring the markup
+ * would call it prose and hand it 26ch it has no use for. */
+UIC._colText = function (v) {
+  if (v === undefined || v === null) return '';
+  var s = String(v);
+  if (s.indexOf('<') !== -1) s = s.replace(/<[^>]*>/g, ' ');
+  return s.replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/\s+/g, ' ').trim();
+};
+
+/* A cell with nothing in it. `-` is how this codebase writes "no value" and an
+ * em dash is how a failed lazy fetch writes it, so neither is evidence about
+ * how wide the column should be. */
+UIC._colBlank = function (s) {
+  return s === '' || s === '-' || s === '—' || s === '–';
+};
+
+/* The §5 heuristics, over whatever text is the best evidence available. */
+UIC._colFromText = function (list) {
+  if (!list.length) return 'text';
+  /* Every value short AND unbreakable: a date, a code, a document number, a
+     formatted figure. These are the columns that cannot give up a pixel, so
+     the contract's job is to stop them GROWING. */
+  var allAtom = list.every(function (s) { return s.length <= 12 && s.indexOf(' ') === -1; });
+  if (allAtom) return 'atom';
+
+  var lens = list.map(function (s) { return s.length; }).sort(function (a, b) { return a - b; });
+  var words = list.map(function (s) { return s ? s.split(' ').length : 0; })
+    .sort(function (a, b) { return a - b; });
+  /* p90 and not max: one pasted 200-character note in a column of names must
+     not turn the whole column into prose. p90 and not mean: a column that is
+     mostly short with a long tail IS prose, and a mean would hide that. */
+  var p90 = lens[Math.min(lens.length - 1, Math.max(0, Math.ceil(0.9 * lens.length) - 1))];
+  var mid = words.length >> 1;
+  var medWords = words.length % 2 ? words[mid] : (words[mid - 1] + words[mid]) / 2;
+  if (p90 >= 24 || medWords >= 4) return 'prose';
+  return 'text';
+};
+
+/**
+ * The role of every column, in header order.
+ *
+ *     UIC.classifyColumns(headers, rows) -> ['atom', 'prose', 'num', …]
+ *
+ * Public and additive: UIC.dataTable calls it for you and a page may call it
+ * directly. Never throws — an unreadable column is reported as 'text', which
+ * is the role that assumes the least.
+ *
+ * Precedence, first answer wins (plan §5):
+ *   1. a declared col: on the header                    — always
+ *   2. money: true / numeric: true                      — 42 + 88 existing uses
+ *   3. an empty label, or cells holding a control       — actions
+ *   4. up to 200 sampled values of the column itself
+ *   5. the header label, only when every sampled cell was blank
+ */
+UIC.classifyColumns = function (headers, rows) {
+  var hs = headers || [];
+  var rs = rows || [];
+  var n = Math.min(rs.length, UIC.COL_SAMPLE);
+  return hs.map(function (h, i) {
+    try {
+      /* A header may be a plain STRING — 69 call sites and most of them pass
+         one. UIC.dataTable normalises before it gets here, but this function is
+         public and a page may call it with the array it already has, so it
+         normalises again rather than classifying every string column as an
+         unlabelled one (which is what an empty label means: actions). */
+      if (typeof h === 'string') h = { key: '__col' + i, label: h };
+      h = h || {};
+      /* 1. Declared. An UNRECOGNISED value falls through to inference rather
+            than throwing or rendering an undefined class — a typo in a page
+            should cost that column its override, not the page its table. */
+      if (h.col && UIC.COL_ROLES[h.col]) return h.col;
+      /* 2. Already declared, indirectly. */
+      if (h.money || h.numeric) return 'num';
+
+      var key = h.key || h.label;
+      var raw = [];
+      var vals = [];
+      for (var k = 0; k < n; k++) {
+        var r = rs[k];
+        var v = Array.isArray(r) ? r[i] : (r ? r[key] : '');
+        raw.push(v === undefined || v === null ? '' : String(v));
+        vals.push(UIC._colText(v));
+      }
+
+      /* 3. A column of controls. Checked BEFORE the data heuristics, because
+            an action cell is 1,066 bytes of markup and would otherwise be the
+            longest "prose" on the page. */
+      var control = raw.some(function (s) {
+        return s.indexOf('<button') !== -1 || s.indexOf('erp-kebab') !== -1;
+      });
+      var label = UIC._colText(h.label);
+      if (control || !label) return 'actions';
+
+      /* 4. The data. 5. Or, with no data at all, the label — which is then the
+            only evidence there is. */
+      var evidence = vals.filter(function (s) { return !UIC._colBlank(s); });
+      return UIC._colFromText(evidence.length ? evidence : [label]);
+    } catch (e) {
+      return 'text';
+    }
+  });
+};
+
+/* A per-column floor a page declared with { min: '30ch' }, validated before it
+ * reaches a style attribute. Anything that is not a bare CSS length is dropped
+ * rather than escaped: a width is never a reason to accept arbitrary text into
+ * markup. */
+UIC._colMin = function (v) {
+  if (!v) return '';
+  var s = String(v).trim();
+  return /^[0-9]+(?:\.[0-9]+)?(?:ch|px|rem|em|%)$/.test(s) ? s : '';
+};
+
+/**
+ * ONE builder for the header row, used by both renders.
+ *
+ * There were two near-identical copies of this markup: the first render built
+ * it, and the column-hide menu rebuilt it. Patching only one is a trap with no
+ * error attached — the contract would hold until a user opened the الأعمدة
+ * menu and then vanish, on one table, for that user, silently. They are one
+ * function now so that cannot happen again.
+ *
+ * [UI-1.3 / U-03] Sortable columns advertise their state to assistive tech and
+ * carry a chevron. `sortable: false` on a header opts a column out — the
+ * actions column is opted out automatically, since sorting by a block of
+ * buttons is meaningless.
+ *
+ * [UI-9.1] The col-* class is the ENTIRE width contract. It goes here, on the
+ * <th>, and on no other cell: in table-layout: auto the <th> is one of the
+ * cells whose minimum sets the column's floor, so one attribute governs every
+ * row without adding a node to any of them.
+ */
+UIC._dtHeadRow = function (st) {
+  var cols = UIC._dtVisibleHeaders(st);
+  var roles = st.cols || {};
+  var selTh = st.selectable
+    ? '<th class="dt-sel"><input type="checkbox" class="dt-sel-all" aria-label="تحديد الكل" ' +
+      'onclick="UIC._dtToggleAll(\'' + st.id + '\', this)"></th>'
+    : '';
+  return '<tr>' + selTh + cols.map(function (h) {
+    var key = h.key || h.label;
+    var sortable = h.sortable !== false && key !== 'actions';
+    var role = roles[key];
+    var min = UIC._colMin(h.min);
+    return '<th scope="col" data-key="' + key + '"' +
+      (role ? ' class="col-' + role + '"' : '') +
+      (min ? ' style="min-width:' + min + '"' : '') +
+      (sortable ? ' data-sortable="true" aria-sort="none"' : '') + '>' +
+      '<span class="th-label">' + h.label + '</span>' +
+      (sortable ? '<span class="th-sort" aria-hidden="true"></span>' : '') +
+      '</th>';
+  }).join('') + '</tr>';
+};
+
 UIC.dataTable = function (containerId, opts) {
   const o = opts || {};
   const rawHeaders = o.headers || [];
@@ -836,27 +1011,12 @@ UIC.dataTable = function (containerId, opts) {
     pageSize = Math.min(o.pageSize || 50, 50);
   }
 
-  /* [UI-1.3 / U-03] Sortable columns advertise their state to assistive tech and
-     carry a chevron. `sortable: false` on a header opts a column out — the
-     actions column is opted out automatically, since sorting by a block of
-     buttons is meaningless. */
-  const isSortable = h => h.sortable !== false && (h.key || h.label) !== 'actions';
   /* thead is rebuilt whenever the visible column set changes (UI-4.5), so it is
-     a function of the store rather than a one-off string. */
+     a function of the store rather than a one-off string. The row itself is
+     built by UIC._dtHeadRow, which the column-hide rebuild also calls — see the
+     note there about why there must be exactly one of these. */
   const theadFor = function (st) {
-    const cols = UIC._dtVisibleHeaders(st);
-    const selTh = st.selectable
-      ? '<th class="dt-sel"><input type="checkbox" class="dt-sel-all" aria-label="تحديد الكل" ' +
-        'onclick="UIC._dtToggleAll(\'' + st.id + '\', this)"></th>'
-      : '';
-    return '<thead><tr>' + selTh + cols.map(function (h) {
-      const key = h.key || h.label;
-      return '<th scope="col" data-key="' + key + '"' +
-        (isSortable(h) ? ' data-sortable="true" aria-sort="none"' : '') + '>' +
-        '<span class="th-label">' + h.label + '</span>' +
-        (isSortable(h) ? '<span class="th-sort" aria-hidden="true"></span>' : '') +
-        '</th>';
-    }).join('') + '</tr></thead>';
+    return '<thead>' + UIC._dtHeadRow(st) + '</thead>';
   };
 
   window.__dtStore = window.__dtStore || {};
@@ -881,8 +1041,29 @@ UIC.dataTable = function (containerId, opts) {
     /* [UI-4.6 / U-17] Selection, keyed by row identity so it survives sorting,
        filtering and paging. */
     selectable: o.selectable === true,
-    selected: {}
+    selected: {},
+    /* [UI-9.1] The width contract's verdict, decided ONCE, here, and read by
+       every later render. Keyed by the same key the <th> carries, so hiding a
+       column cannot shift the roles of the columns beside it.
+
+       Classified from `rows` — the load order, the same array originalRows
+       keeps — and never from st.filtered, which is re-derived on every search,
+       sort and page change. Classifying from the filtered view, or classifying
+       more than once, would give a table whose columns changed width when the
+       user sorted it or turned to page 2.
+
+       Across two LOADS of the same page the verdict can differ, because
+       September's descriptions are longer than August's. That is accepted: it
+       is stable within a render, which is what the eye notices, and it beats a
+       fixed guess that is wrong for both months. */
+    cols: {}
   };
+  (function (st) {
+    try {
+      var roles = UIC.classifyColumns(headers, rows);
+      headers.forEach(function (h, i) { st.cols[h.key || h.label] = roles[i]; });
+    } catch (e) { /* an unclassified table renders exactly as it did before */ }
+  })(window.__dtStore[id]);
   UIC._dtLoadColumnPrefs(id);
 
   /* ── Toolbar: search + date filter + Excel + Print ── */
@@ -1351,17 +1532,10 @@ UIC._dtRebuildHead = function (id) {
   if (!st || !table) return;
   var old = table.querySelector('thead');
   if (!old) return;
-  var cols = UIC._dtVisibleHeaders(st);
-  var selTh = st.selectable
-    ? '<th class="dt-sel"><input type="checkbox" class="dt-sel-all" aria-label="تحديد الكل" onclick="UIC._dtToggleAll(\'' + id + '\', this)"></th>'
-    : '';
-  old.innerHTML = '<tr>' + selTh + cols.map(function (h) {
-    var key = h.key || h.label;
-    var sortable = h.sortable !== false && key !== 'actions';
-    return '<th scope="col" data-key="' + key + '"' + (sortable ? ' data-sortable="true" aria-sort="none"' : '') + '>' +
-      '<span class="th-label">' + h.label + '</span>' +
-      (sortable ? '<span class="th-sort" aria-hidden="true"></span>' : '') + '</th>';
-  }).join('') + '</tr>';
+  /* [UI-9.1] The same builder the first render used. This function used to
+     carry its own copy of the <th> markup, which is exactly how the width
+     contract would have been lost the moment a user hid a column. */
+  old.innerHTML = UIC._dtHeadRow(st);
   try { UIC.initTableSort(id); } catch (e) {}
   UIC._dtSyncSortIndicators(id);
 };
