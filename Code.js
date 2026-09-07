@@ -84,7 +84,35 @@ function doGet(e) {
     }
   }
 
-  const tmpl = HtmlService.createTemplateFromFile(page.template);
+  /* A registry entry can name a template that is not in the deployment — a page
+   * registered by one branch whose HTML landed on another, or a file left out of
+   * a push. createTemplateFromFile throws a raw Apps Script exception at that
+   * point ("No HTML file named X was found"), which reaches the user as a stack
+   * trace on a white page and tells them nothing they can act on.
+   *
+   * The router already handles the two neighbouring cases — an unknown action,
+   * and an entry deliberately registered with no template — so this is the third
+   * one, and it fails the same way: a page that says what is wrong, with a way
+   * back, and a console line naming the missing file for whoever deploys. */
+  let tmpl;
+  try {
+    tmpl = HtmlService.createTemplateFromFile(page.template);
+  } catch (missingTemplate) {
+    try {
+      console.error('doGet: action "' + action + '" is registered against template "' +
+        page.template + '", which is not in this deployment — ' + missingTemplate.message);
+    } catch (logErr) {}
+    let backUrl = scriptUrl + '?action=ERPDashboard&sessionToken=' +
+      encodeURIComponent(e.parameter.sessionToken || '');
+    try {
+      const firstPage = authUser ? getFirstAuthorizedPageForUser_(authUser) : null;
+      if (firstPage) {
+        backUrl = scriptUrl + '?action=' + encodeURIComponent(firstPage) +
+          '&sessionToken=' + encodeURIComponent(e.parameter.sessionToken || '');
+      }
+    } catch (backErr) {}
+    return renderMissingPagePage_(page.title || action, page.template, backUrl);
+  }
   tmpl.user = authUser;
   CURRENT_USER = authUser;
   tmpl.email = (e.parameter.email || '').trim();
@@ -149,6 +177,47 @@ function renderAccessDeniedPage_(pageTitle, backUrl, companyUid) {
     '</div>' +
     '</body></html>'
   )).setTitle(msg);
+}
+
+/**
+ * A page is registered but its HTML file is not in this deployment.
+ *
+ * This is a deployment fault, not a user fault and not a permissions fault, so
+ * it says so rather than borrowing the access-denied wording — a user sent to
+ * "you are not authorised" for a file that was never pushed will ask for a
+ * grant that would change nothing. The template name is shown because the only
+ * person who can act on this needs it, and it reveals nothing sensitive: it is
+ * a file name already listed in the registry.
+ */
+function renderMissingPagePage_(pageTitle, templateName, backUrl) {
+  const esc = function (v) {
+    return String(v == null ? '' : v)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  };
+  const title = 'الصفحة غير متوفرة في هذه النسخة';
+  return _frame(HtmlService.createHtmlOutput(
+    '<!DOCTYPE html><html dir="rtl" lang="ar"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"></head>' +
+    '<body style="margin:0;font-family:Segoe UI,Tahoma,Arial,sans-serif;background:#f3f4f6;display:flex;align-items:center;justify-content:center;min-height:100vh;padding:16px;box-sizing:border-box;">' +
+    '<div style="background:#fff;border-radius:16px;box-shadow:0 10px 30px rgba(0,0,0,.08);max-width:460px;width:100%;overflow:hidden;text-align:center;">' +
+      '<div style="background:linear-gradient(135deg,#64748b 0%,#334155 100%);padding:28px 20px;color:#fff;">' +
+        '<div style="width:64px;height:64px;margin:0 auto 12px;background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.3);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:30px;">&#128679;</div>' +
+        '<h2 style="margin:0;font-size:19px;">' + title + '</h2>' +
+      '</div>' +
+      '<div style="padding:24px 20px;">' +
+        '<p style="margin:0 0 12px;color:#374151;font-size:14px;line-height:1.8;">صفحة «' + esc(pageTitle) +
+          '» مُعرَّفة في النظام لكن ملفها غير موجود في النسخة المنشورة حالياً.</p>' +
+        '<p style="margin:0 0 20px;color:#6b7280;font-size:12.5px;line-height:1.7;">' +
+          'هذه مشكلة في النشر وليست مشكلة صلاحيات — إضافة صلاحية لن تحلّها. ' +
+          'أبلغ مدير النظام بالملف الناقص:</p>' +
+        '<code style="display:block;margin:0 0 20px;padding:10px 12px;background:#f8fafc;border:1px solid #e5e7eb;' +
+          'border-radius:8px;font-size:12.5px;direction:ltr;color:#334155;">' + esc(templateName) + '.html</code>' +
+        '<a href="' + backUrl + '" onclick="window.top.location.href=this.getAttribute(\'href\');return false;"' +
+        ' style="display:inline-block;padding:11px 28px;background:#334155;color:#fff;border-radius:8px;text-decoration:none;font-weight:700;font-size:14px;margin:4px;">' +
+        '&#127968;&nbsp; العودة إلى الرئيسية</a>' +
+      '</div>' +
+    '</div>' +
+    '</body></html>'
+  )).setTitle(title);
 }
 
 /** Session-expired interstitial — button continues to the login page. */
