@@ -216,6 +216,34 @@ console.log('\n1 — تحديد الورديات: the two rules the table is sup
       'the shift options carry the same label the ref is shown by');
   }
 
+  /* -- it is reachable: a page nobody can navigate to does not exist -- */
+  {
+    const NAV = fs.readFileSync(path.join(ROOT, 'Company_ValleyFoods_Nav.html'), 'utf8');
+    check(/action:\s*'vf_hr_shifts'/.test(NAV),
+      'تحديد الورديات appears in the Valley Foods menu',
+      'it was registered nav:false and lived only as a tab inside قائمة الموظفين, ' +
+      'so giving it its own page made it unreachable until it was listed here');
+
+    /* It belongs to الموارد البشرية, not to some other group. */
+    const hr = NAV.slice(NAV.indexOf("label: 'الموارد البشرية'"));
+    const group = hr.slice(0, hr.indexOf('] }'));
+    check(group.indexOf("action: 'vf_hr_shifts'") !== -1,
+      'and specifically under الموارد البشرية');
+
+    /* The menu filters by UIC.pageAuthorized_, so listing it cannot leak it to
+       anyone who lacks the grant — which is what makes adding it safe. */
+    const UIC_SRC = fs.readFileSync(path.join(ROOT, 'UI_Components.html'), 'utf8');
+    check(/UIC\.pageAuthorized_\(it\.action\)/.test(UIC_SRC),
+      'and the menu hides items the viewer has no grant for');
+
+    /* The old in-page tab must not still render a second copy of this screen. */
+    const HR = fs.readFileSync(path.join(ROOT, 'Company_ValleyFoods_HR_Emp.html'), 'utf8');
+    check(HR.indexOf("tabBtn('shift'") === -1,
+      'قائمة الموظفين no longer renders its own shift tab');
+    check(HR.indexOf("action=vf_hr_shifts") !== -1,
+      '  it links through to the page that owns the subject instead');
+  }
+
   /* -- the page exists and is routable -- */
   {
     const PAGE_FILE = path.join(ROOT, 'Company_ValleyFoods_ShiftAssignment.html');

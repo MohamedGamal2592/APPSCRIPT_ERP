@@ -40,7 +40,7 @@
 
     // ---- state ----
     var TAB = (function () {
-      var map = { vf_hr_status: 'status', vf_hr_shifts: 'shift', vf_hr_salary: 'salary' };
+      var map = { vf_hr_status: 'status', vf_hr_salary: 'salary' };   /* vf_hr_shifts routes to its own page */
       return map[CURRENT_ACTION] || 'employees';
     })();
     var EMPLOYEES = [], STATUSES = [], ASSIGNMENTS = [], SALARIES = [];
@@ -113,7 +113,11 @@
         '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">' +
           tabBtn('employees', 'قائمة الموظفين') +
           tabBtn('status', 'حالة الموظفين') +
-          tabBtn('shift', 'تحديد الورديات') +
+          /* تحديد الورديات has its own page now. This stays as a way through to
+             it rather than a second copy of the same screen — the inline one
+             warned about nothing before the round trip. */
+          '<a class="btn btn-outline" href="' + scriptUrl + '?action=vf_hr_shifts&sessionToken=' +
+            encodeURIComponent(SESSION_TOKEN) + '">تحديد الورديات ↗</a>' +
           tabBtn('salary', 'راتب الموظف') +
         '</div>';
       document.getElementById('vf-emp-content').innerHTML = tabs + '<div id="vf-emp-tab"></div>';
