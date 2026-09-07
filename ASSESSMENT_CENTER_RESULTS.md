@@ -6,13 +6,17 @@ This run hit a real environment hazard partway through Phase 1 and had to change
 git topology mid-flight to keep working safely. Full account in §0. The short version:
 
 > All nine phases are complete and committed. The clean, complete history is on branch
-> **`feat/assessment-center-work`**, currently at commit **`f0dc1af`**, in a **separate git worktree**
-> at `d:\Work\Script-ac-work` (sibling to the main checkout at `d:\Work\Script`). The branch you
-> were told to expect, `feat/assessment-center`, exists in the main checkout but **stops early**
-> (commit `1de23af`, end of step 1.2) and has had **unrelated commits from another concurrent
-> session land on it since** — do not build on it directly. **Fast-forward or merge
-> `feat/assessment-center-work` into `feat/assessment-center` before doing anything else with this
-> work**; §0 gives the exact commands and what to expect.
+> **`feat/assessment-center-work`**, currently at commit **`266417b`**, in a **separate git worktree**
+> at `d:\Work\Script-ac-work` (sibling to the main checkout at `d:\Work\Script`). The branch you were
+> told to expect, `feat/assessment-center`, exists in the main checkout but effectively **stopped
+> being this run's branch after step 1.2** (commit `1de23af`) — an unrelated, still-active concurrent
+> session ("iPhone print pages") has kept committing directly onto it since (`feat(iphone-1)` through
+> at least `test(iphone-5)` as of this writing, and possibly more by the time you read this). **Do
+> not build on `feat/assessment-center` directly — merge `feat/assessment-center-work` into it
+> instead**; §0 gives the exact commands. Because that other session's work keeps landing on the
+> shared branch name, **this is a real merge, not a fast-forward** — check with `git log` immediately
+> before merging rather than trusting any specific commit hash named here, since it may have moved
+> again.
 
 ---
 
@@ -51,29 +55,39 @@ from inside that worktree and never touched the shared index again. Confirmed cl
 commit's `git status --porcelain` immediately before committing showed only this run's own staged
 files.
 
-**What you need to do about it:**
+**What you need to do about it.** Check the actual state first — the other session may have added
+more commits to `feat/assessment-center` between when this was written and when you read it:
 
 ```bash
 cd d:/Work/Script
-git fetch . feat/assessment-center-work:feat/assessment-center-work   # if not already visible
-git log --oneline feat/assessment-center..feat/assessment-center-work  # review the 13 commits
-git branch -f feat/assessment-center feat/assessment-center-work       # NOT while it's checked out elsewhere
+git log --oneline feat/assessment-center-work..feat/assessment-center   # what landed there meanwhile — review it
+git log --oneline feat/assessment-center..feat/assessment-center-work   # this run's own commits not yet on the other branch
 ```
 
-Since `feat/assessment-center-work`'s history *contains* `feat/assessment-center`'s current tip as
-an ancestor (it was branched from it), this is a **fast-forward**, not a merge — no conflicts are
-possible. If `git branch -f` refuses because `feat/assessment-center` is checked out in the main
-worktree, run it from inside `d:\Work\Script-ac-work` instead, or `git switch` the main checkout to
-something else first. Once done, the `Script-ac-work` worktree can be removed
+As of this writing, `feat/assessment-center` carries exactly one commit this run's branch doesn't
+(`test(iphone-5)`, from the same concurrent "iPhone print pages" effort) — so **the two branches
+have diverged and a merge is needed, not a fast-forward**:
+
+```bash
+git switch feat/assessment-center     # from the MAIN checkout, not the worktree
+git merge feat/assessment-center-work
+```
+
+The merge should be conflict-free: this run's commits touch only files in its own list (constraint 6
+of the run prompt) plus the one shared line in `UI_Components.html` (T-5, added well after the
+`iphone-*` commits' own edits to that file, at different lines). If `git log` above shows the branches
+have NOT diverged by the time you check (i.e. the second command lists nothing new on
+`feat/assessment-center`), a `git merge --ff-only feat/assessment-center-work` is equivalent and
+simpler. Once merged, the `Script-ac-work` worktree can be removed
 (`git worktree remove ../Script-ac-work`) — nothing further depends on it living there.
 
-If you would rather keep history exactly as it happened (including the interleaved `iphone-*`
-commits, which **are** ancestors of `feat/assessment-center-work` and will come along for the ride —
-they touch only `UI_Components.html` and five unrelated `Company_TopLight_*_Print.html` files, and
-were already reviewed and merged into `ui/forms-readability` by their own run), the fast-forward
-above is the simplest path. A rebase to strip them out is possible but not attempted here — it is a
-history rewrite on a branch other sessions may reference, which is exactly the kind of unilateral
-call this run was told not to make.
+The interleaved `iphone-*` commits already on `feat/assessment-center-work`'s history (it was
+branched from a point after several of them had landed) touch only `UI_Components.html` and five
+unrelated `Company_TopLight_*_Print.html` files, and were already reviewed and merged into
+`ui/forms-readability` by their own run — nothing to reconcile there either. A rebase to tidy the
+interleaving out of history is possible but not attempted here — it would rewrite commits another
+still-running session may reference, which is exactly the kind of unilateral call this run was told
+not to make.
 
 ---
 

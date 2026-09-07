@@ -404,9 +404,11 @@ a 240px floor would make the dashboards worse rather than better.
 # مركز التقييم — blocked on you
 
 Branch `feat/assessment-center-work` (a git worktree at `d:\Work\Script-ac-work` — **read
-[ASSESSMENT_CENTER_RESULTS.md](ASSESSMENT_CENTER_RESULTS.md) §0 before touching any of this**, the
-branch you were told to expect stops early and needs a fast-forward). **Not pushed.** Full write-up
-in [ASSESSMENT_CENTER_RESULTS.md](ASSESSMENT_CENTER_RESULTS.md); this section is the condensed,
+[ASSESSMENT_CENTER_RESULTS.md](ASSESSMENT_CENTER_RESULTS.md) §0 before touching any of this**: the
+branch you were told to expect, `feat/assessment-center`, has kept receiving unrelated commits from
+another concurrent session, so it now needs a real **merge**, not a fast-forward — §0 has the exact
+commands). **Not pushed.** Full write-up in
+[ASSESSMENT_CENTER_RESULTS.md](ASSESSMENT_CENTER_RESULTS.md); this section is the condensed,
 action-oriented version of its §4.
 
 ## 1. Confirm the company row — nothing renders without it
