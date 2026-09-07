@@ -1,0 +1,37 @@
+{
+  "assessment": {
+    "AssessmentID": "a1a1a1a1a1a1a1a1",
+    "Title": "Mixed Assessment",
+    "Category": "Technical",
+    "Description": "وصف تجريبي",
+    "TimeLimitMinutes": 30,
+    "PassScore": 60,
+    "IsActive": true,
+    "UserID": "staff1",
+    "CreatedAt": "2026-09-01 10:00:00",
+    "UpdatedAt": "2026-09-01 10:00:00"
+  },
+  "questions": [
+    {
+      "QuestionID": "q1", "AssessmentID": "a1a1a1a1a1a1a1a1", "OrderIndex": 1,
+      "QuestionText": "2+2=?", "QuestionType": "MCQ",
+      "OptionsJSON": "[\"3\",\"4\",\"5\"]", "CorrectAnswer": "4", "Weight": 10, "Trait": ""
+    },
+    {
+      "QuestionID": "q2", "AssessmentID": "a1a1a1a1a1a1a1a1", "OrderIndex": 2,
+      "QuestionText": "أشعر بالراحة أمام الجمهور", "QuestionType": "Likert",
+      "OptionsJSON": "[]", "CorrectAnswer": "", "Weight": 2, "Trait": "Extraversion"
+    },
+    {
+      "QuestionID": "q3", "AssessmentID": "a1a1a1a1a1a1a1a1", "OrderIndex": 3,
+      "QuestionText": "اختر الأكثر والأقل شبهاً بك", "QuestionType": "MostLeast",
+      "OptionsJSON": "[{\"text\":\"يقود الفرق\",\"trait\":\"Leadership\"},{\"text\":\"يلتزم بالقواعد\",\"trait\":\"Compliance\"},{\"text\":\"يخاطر\",\"trait\":\"Risk\"}]",
+      "CorrectAnswer": "", "Weight": 5, "Trait": ""
+    },
+    {
+      "QuestionID": "q4", "AssessmentID": "a1a1a1a1a1a1a1a1", "OrderIndex": 4,
+      "QuestionText": "اشرح كيف تتعامل مع ضغط العمل", "QuestionType": "OpenText",
+      "OptionsJSON": "[]", "CorrectAnswer": "", "Weight": 8, "Trait": ""
+    }
+  ]
+}

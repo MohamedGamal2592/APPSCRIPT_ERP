@@ -708,6 +708,11 @@ UIC.withPageLoading = function (promise, msg) {
  * #fff and rgba(0,0,0,.2), and it does not print.
  */
 UIC.ensureHomeLogo = function () {
+  // T-5 (D-6) — a public candidate page (Company_Assessment_Take.html) sets
+  // this flag before including UI_Components, so an external candidate never
+  // gets a floating entry point into the ERP. The ONLY gate: no page-list, no
+  // action-name check — asserted by tools/verify/ui3_homefab.js.
+  if (window.UIC_PUBLIC_PAGE) return;
   if (document.getElementById('home-logo-fab')) return;
   var a = document.createElement('a');
   a.id = 'home-logo-fab';

@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>مركز التقييم — التقييمات</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_Assessment_Nav'); ?>
+  <?!= getCompanyThemeCSS_('32fafd256ccb7a1c') ?>
+</head>
+<body>
+  <div id="ac-root"></div>
+
+  <script>
+    var params = new URLSearchParams(window.location.search);
+    var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+    var scriptUrl = window.scriptUrl || '/';
+    var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+    var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('32fafd256ccb7a1c') ?>';
+    var COMPANY_PAGES = <?!= companyPages ?>;
+    var CURRENT_ACTION = '<?!= currentAction ?>';
+    var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+    var CAN_WRITE = UIC.canAdd_(); var CAN_FULL = UIC.canFull_();
+
+    function companyCall(moduleAction, data) {
+      return API.call('company_action', {
+        target_system: '32fafd256ccb7a1c',
+        module_action: moduleAction,
+        data: data || {}
+      }, SESSION_TOKEN);
+    }
+    function esc(v) { return FMT.escape(v); }
+    function formUrl(id) {
+      var u = scriptUrl + '?action=ac_assessment_form&sessionToken=' + encodeURIComponent(SESSION_TOKEN);
+      if (id) u += '&id=' + encodeURIComponent(id);
+      return u;
+    }
+
+    var assessRows = [];
+
+    function renderApp() {
+      UIC.appShell('ac-root', {
+        companyLogoUrl: COMPANY_LOGO_URL,
+        companyLogoHref: scriptUrl + '?action=ac_dashboard&sessionToken=' + SESSION_TOKEN,
+        companyLogoTitle: 'مركز التقييم',
+        contentId: 'ac-assess-content',
+        menuGroups: (window.ASSESSMENT_MENU || []),
+        controlPanel: {
+          breadcrumb: 'مركز التقييم / التقييمات',
+          search: { table: 'ac-assess-table', placeholder: 'ابحث عن تقييم...' },
+          actions: [CAN_WRITE ? { text: 'إنشاء تقييم', onClick: "UIC.navTo(event, formUrl())" } : null].filter(Boolean)
+        }
+      });
+      loadData();
+    }
+
+    function loadData() {
+      UI.showSpinner();
+      companyCall('get_ac_assessments')
+        .then(function (res) {
+          assessRows = res.rows || [];
+          renderTable();
+        })
+        .catch(function (err) {
+          console.error(err);
+          UIC.toast('حدث خطأ في تحميل البيانات', 'error');
+        })
+        .finally(function () { UI.hideSpinner(); });
+    }
+
+    function rowActions(r) {
+      var btns = [
+        { label: 'عرض', onclick: "UIC.navTo(event, formUrl('" + esc(r.AssessmentID) + "'))" },
+        { label: 'طباعة', onclick: "UIC.navTo(event, formUrl('" + esc(r.AssessmentID) + "') + '&autoprint=1')" }
+      ];
+      if (CAN_WRITE) btns.push({ label: 'نسخة جديدة', onclick: "duplicateAssessment('" + esc(r.AssessmentID) + "')" });
+      if (CAN_FULL) {
+        btns.push({
+          label: r.IsActive ? 'إيقاف' : 'تفعيل',
+          onclick: "toggleActive('" + esc(r.AssessmentID) + "')"
+        });
+      }
+      return UIC.actionDropdown(btns);
+    }
+
+    function renderTable() {
+      var el = document.getElementById('ac-assess-content');
+      if (!el) return;
+
+      var headers = [
+        { key: 'Title', label: 'العنوان' },
+        { key: 'CategoryLabel', label: 'الفئة' },
+        { key: 'QuestionCount', label: 'الأسئلة', numeric: true },
+        { key: 'TimeLimitMinutes', label: 'المدة (د)', numeric: true },
+        { key: 'PassScore', label: 'نسبة النجاح %', numeric: true },
+        { key: 'StatusLabel', label: 'الحالة' },
+        { key: 'AttemptCount', label: 'المحاولات', numeric: true },
+        { key: 'actions', label: '', sortable: false }
+      ];
+      var rows = assessRows.map(function (r) {
+        return {
+          Title: esc(r.Title),
+          CategoryLabel: UIC.statusPill(esc(r.CategoryLabel), 'neutral'),
+          QuestionCount: r.QuestionCount,
+          TimeLimitMinutes: r.TimeLimitMinutes,
+          PassScore: r.PassScore,
+          StatusLabel: UIC.statusPill(r.IsActive ? 'نشط' : 'موقوف', r.IsActive ? 'success' : 'neutral'),
+          AttemptCount: r.AttemptCount,
+          actions: rowActions(r)
+        };
+      });
+
+      // UIC.dataTable RETURNS the markup — it does not write to the DOM
+      // itself. The container's innerHTML must be assigned from it directly
+      // (matching Company_ValleyFoods_Products.html's convention).
+      el.innerHTML = UIC.dataTable('ac-assess-table', {
+        headers: headers,
+        rows: rows,
+        emptyState: {
+          icon: 'file',
+          title: 'لا توجد تقييمات',
+          body: 'ابدأ بإنشاء أول تقييم.',
+          action: CAN_WRITE ? { text: 'إنشاء تقييم', onClick: "UIC.navTo(event, formUrl())" } : null
+        }
+      });
+    }
+
+    function duplicateAssessment(id) {
+      UI.showSpinner();
+      companyCall('add_ac_assessment_copy', { id: id })
+        .then(function () {
+          UIC.toast('تم إنشاء نسخة جديدة', 'success');
+          loadData();
+        })
+        .catch(function (err) { UIC.toast(err.message || 'تعذر إنشاء نسخة', 'error'); })
+        .finally(function () { UI.hideSpinner(); });
+    }
+
+    function toggleActive(id) {
+      UI.showSpinner();
+      companyCall('toggle_ac_assessment_active', { id: id })
+        .then(function (res) {
+          UIC.toast((res && res.message) || 'تم التحديث', 'success');
+          loadData();
+        })
+        .catch(function (err) { UIC.toast(err.message || 'تعذر التنفيذ', 'error'); })
+        .finally(function () { UI.hideSpinner(); });
+    }
+
+    document.addEventListener('DOMContentLoaded', renderApp);
+  </script>
+</body>
+</html>

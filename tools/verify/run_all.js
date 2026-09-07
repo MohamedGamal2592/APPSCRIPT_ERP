@@ -65,7 +65,15 @@ const STEPS = [
   ['box_sql.js', 'B3 — SQL discipline: additive, no DDL, closes, binds, credit'],
   ['box_wiring.js', 'B4 — access gate, registration, nav, query budget'],
   ['box_edit.js', 'B6 — edit path: allowlist, validators, named confirm, audit'],
-  ['box_rules.js', 'B7 — rules engine, run against fixtures both ways']
+  ['box_rules.js', 'B7 — rules engine, run against fixtures both ways'],
+  /* ── Assessment Center merge (branch feat/assessment-center) ── */
+  ['ac1_wiring.js', 'AC1 — registry, PAGE_ACCESS cross-ref, PUBLIC_ACTIONS/actions separation (D-14/T-2)'],
+  ['ac2_scoring.js', 'AC2 — the §5.4 scoring engine, OptionsJSON parser, candidate projection'],
+  ['ac3_authoring.js', 'AC3 — assessments list + full-page form, wire shapes, view-mode lockdown'],
+  ['ac4_write_contract.js', 'AC4 — acInsert_/acUpdate_ header-case contract (T-3/T-4) + batches (§5.2)'],
+  ['ac5_candidate.js', 'AC5 — the public candidate page and its three PUBLIC_ACTIONS (T-1/T-2/T-5/T-9)'],
+  ['ac6_review.js', 'AC6 — results list, grading, the trait chart, print'],
+  ['ac7_tierb.js', 'AC7 — Phase 8 Tier B (D-2): B-1/B-2, with AND without the columns']
 ];
 
 /* Two programmes share this repo and this runner, so a step's file can be

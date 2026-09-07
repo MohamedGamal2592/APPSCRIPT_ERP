@@ -50,13 +50,56 @@ const SRC = S.read('UI_Components.html');
   ok(/if \(document\.getElementById\('home-logo-fab'\)\) return;/.test(body),
     'it is still idempotent — a second call does not add a second button');
 
+  /* UPDATED 2026-09-07 by the Assessment Center merge, Phase 5.2 (T-5/D-6).
+   *
+   * A public candidate page (Company_Assessment_Take.html) needs no session
+   * and must never offer a floating way back into the ERP for an external
+   * candidate. Rather than a per-page/per-action allowlist (which silently
+   * stops covering a NEW public page someone adds later), one flag —
+   * window.UIC_PUBLIC_PAGE — set in the candidate template's <head> BEFORE
+   * the UI_Components include, is checked FIRST, before even the idempotency
+   * check above. This assertion is the contract: it must stay the ONLY gate
+   * (no `CURRENT_ACTION === 'ac_take'` special case, no page-list) so a
+   * future public company page is covered automatically by setting the same
+   * flag, and so this test fails loudly if anyone weakens that.
+   */
+  const bodyLines = body.split('\n').map(function (l) { return l.trim(); })
+    .filter(function (l) { return l && l !== '{' && l.indexOf('//') !== 0; });
+  const firstStatement = bodyLines[0];
+  ok(/if \(window\.UIC_PUBLIC_PAGE\) return;/.test(body),
+    'the T-5 gate (window.UIC_PUBLIC_PAGE) is present');
+  ok(firstStatement === 'if (window.UIC_PUBLIC_PAGE) return;',
+    'and it is the FIRST statement in the function — checked before anything else', firstStatement);
+  ok((body.match(/\breturn;/g) || []).length === 2,
+    'exactly two early returns in the whole function: the public-page gate and the idempotency check — no other conditional gate exists');
+
   /* Render it and check what it produces. */
   const sb = makeSandbox({ scriptUrl: 'https://example.invalid/exec', SESSION_TOKEN: 'tok' });
   S.scriptBlocks(SRC).forEach(function (b, i) {
     try { vm.runInContext(S.stripScriptlets(b.body), sb, { filename: 'u' + i }); } catch (e) {}
   });
+
+  /* The boot IIFE already called ensureHomeLogo() once at load time (this
+   * stub's readyState is 'complete'), so a button may already exist here —
+   * BEFORE UIC_PUBLIC_PAGE was ever set. Clear it so the two checks below
+   * each start from a clean slate and test exactly what they claim to,
+   * rather than the gate test trivially "passing" via the UNRELATED
+   * idempotency check (a stale element already present for a different
+   * reason would make ANY further call a no-op, gate or not). */
+  const staleFab = sb.document.getElementById('home-logo-fab');
+  if (staleFab) staleFab.remove();
+
+  /* The gate must actually suppress the button when the flag is set. */
+  sb.window.UIC_PUBLIC_PAGE = true;
+  sb.UIC.ensureHomeLogo();
+  ok(!sb.document.getElementById('home-logo-fab'),
+    'with UIC_PUBLIC_PAGE=true, ensureHomeLogo() is a no-op — no button is created at all');
+
+  /* ...and does not merely defer it: with the flag cleared, it renders. */
+  sb.window.UIC_PUBLIC_PAGE = false;
+  sb.UIC.ensureHomeLogo();
   const fab = sb.document.getElementById('home-logo-fab');
-  ok(!!fab, 'the button is created on a page that is not the dashboard');
+  ok(!!fab, 'and with the flag cleared, the button IS created on a normal (non-public) page');
   if (fab) {
     /* The stub sets .href as a property, as a browser does; read it that way. */
     const href = String(fab.href || fab.getAttribute('href') || '');
