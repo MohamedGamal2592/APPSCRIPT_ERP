@@ -49,7 +49,17 @@
   <div id="ac-root"></div>
 
   <script>
-    var params = new URLSearchParams(window.location.search);
+    /* See the note in Company_Assessment_Take.html: window.location.search is
+       empty inside the HtmlService iframe, so every parameter comes from the
+       server. sessionToken survived on its localStorage fallback; `id` had no
+       fallback, so opening an existing assessment always rendered as a new one. */
+    var PAGE_PARAMS = <?!= pageParams ?>;
+    var params = {
+      get: function (k) {
+        if (PAGE_PARAMS && PAGE_PARAMS[k] != null && PAGE_PARAMS[k] !== '') return String(PAGE_PARAMS[k]);
+        return (new URLSearchParams(window.location.search)).get(k);
+      }
+    };
     var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
     var scriptUrl = window.scriptUrl || '/';
     var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;

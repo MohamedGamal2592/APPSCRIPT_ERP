@@ -47,7 +47,15 @@
   <div class="ac-public-wrap" id="ac-root" dir="rtl"></div>
 
   <script>
-    var TOKEN = (new URLSearchParams(window.location.search)).get('token') || '';
+    /* From the SERVER, not from window.location: this page runs inside an
+       HtmlService iframe whose URL carries none of the caller's query string,
+       so window.location.search is empty in production. Session pages hide
+       this behind their localStorage fallback; a candidate link has no session
+       and no fallback, so the token simply arrived blank. */
+    var PAGE_PARAMS = <?!= pageParams ?>;
+    var TOKEN = (PAGE_PARAMS && PAGE_PARAMS.token)
+      ? String(PAGE_PARAMS.token)
+      : ((new URLSearchParams(window.location.search)).get('token') || '');
     var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('32fafd256ccb7a1c') ?>';
     var TYPE_LABELS = { MCQ: 'اختيار من متعدد', Likert: 'تقييم', MostLeast: 'الأكثر والأقل', OpenText: 'نص مفتوح' };
     var LATE_GRACE_SECONDS = 60;

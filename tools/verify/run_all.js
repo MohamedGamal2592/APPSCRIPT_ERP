@@ -40,6 +40,7 @@ const STEPS = [
   ['s20_quiet_refresh.js', 'S20 — quiet refresh: scope, watches, no blocking reload'],
   ['s21_shifts_and_expenses.js', 'S21 — الورديات: overlap rule; المصروفات: report maths'],
   ['s22_missing_template.js', 'S22 — a registered page with no HTML file fails as a page'],
+  ['s23_page_params.js', 'S23 — URL parameters come from the server, not the iframe URL'],
   ['s18_table_columns.js', 'S18b — table column widths: the classifier and the contract'],
   /* ── UI/UX programme (branch ui/odoo-parity) ── */
   ['ui1_anchor.js', 'UI-1.2 — popups escape the table clip box (U-01)'],
