@@ -430,7 +430,19 @@ both differently from Chrome. Any change here alters the working Windows and And
 why it was not attempted. The likely answer is a `blob:` URL or a redirect to a Drive URL, and both
 need testing on all three platforms before shipping.
 
-## C. The row menu's outside-click on iOS
+## C. The row menu's outside-click on iOS — ✅ RESOLVED by the second iPhone run
+
+**Fixed in commit `fd7dc8b`**, not deferred. `@media (hover: none) { body { cursor: pointer; } }`
+in `UI_Components.html` — the first of the two options this section named. No JavaScript moved, so
+no listener can double-fire; `s15` section 11 compares the outside-click listener against the
+revision before that run and asserts it is character-for-character identical. Gated on
+`(hover: none)`, so a desktop mouse never sees a changed cursor.
+
+**Still verify it on the device** (item 10 of the new checklist in `IPHONE_PHASE2_RESULTS.md`): open
+a row menu, tap empty page space, the menu closes. If it still does not, the remaining option is a
+`touchend` listener alongside the click one, and that would want its own run.
+
+The original gate, kept for reference:
 
 **Gate — checklist item 8.** Open a row menu on any list, then tap empty page space. If it closes,
 cancel this run.
@@ -461,3 +473,49 @@ diagnosis before touching the token.
   meant to rebuild the preview.
 - **A backtick inside `UI_Components.html` breaks every page.** Its CSS lives inside a JavaScript
   template literal. This is what `ui_check` C11 guards, and `parse_pages.js` catches it immediately.
+
+---
+
+# Second iPhone run — what changed, and what is now waiting on you
+
+Branch `feat/assessment-center` (**not** `ui/forms-readability` — see `IPHONE_PHASE2_RESULTS.md` §0).
+Five commits `d88a2f7` → `fd7dc8b` plus the docs commit. Nothing pushed, nothing deployed, no schema
+touched, no row created, edited or deleted.
+
+The first run fixed TopLight. This one finished the job on TopChemical and ValleyFoods, and fixed
+the print button — which was broken on iPhone on **every** company, TopLight included.
+
+## E. The ten-item iPhone checklist is the only thing left
+
+`IPHONE_PHASE2_RESULTS.md` §5 has it in full, as pass/fail statements. In short, on the iPhone:
+
+1. أوامر التصنيع → open a row: a page opens.
+2. Any list → طباعة: the document appears, in a tab **or** as a full-screen overlay.
+3. From the overlay, طباعة: does the preview show the document, or Google's wrapper page?
+   **This answer is the gate for follow-up A above — please record it.**
+4. From the overlay, إغلاق: it disappears cleanly, twice in a row, leaving the page as it was.
+5. Parties كشف حساب, Purchasing print: same as 2.
+6. Attendance نسيان البصمة, TopChemical جرد المخزون: same as 2.
+7. Any attachment or تقرير link: the file opens, or a dialog with a **tappable link** appears —
+   and tapping it delivers the file. **This is the gate for follow-up B above.**
+8. Box analysis and Budget income in portrait: each row is a labelled card.
+9. Manufacturing order view in portrait, including the + دفعة dialog: the same.
+10. Row menu → tap empty space: it closes. **This is the gate for follow-up C above.**
+
+Then repeat all ten on **Android Chrome and Windows**, where every one must behave exactly as it did
+before. In particular: every print and every download still opens a **new tab** (never the overlay
+or the link dialog — those are only reachable when the browser refuses a tab), every table above
+600px is still a table, a printed page is unchanged on paper, and the Windows mouse cursor is still
+an arrow over empty page space.
+
+## Also worth knowing, after this run
+
+- **Never write a literal `<style>` tag inside a comment in `UI_Components.html`.**
+  `tools/lib/sources.js` pairs the first opening tag it sees with the next closing one — which is
+  inside the `printTable` document string 1200 lines below — so every CSS check reads 58 kB of raw
+  JavaScript as the stylesheet. Two checks failed with nine assertions that pointed nowhere near the
+  cause. Sibling of the backtick trap above.
+- **`UIC.alert` escapes its message**, because it is built on `UIC.confirm` and that escaping is
+  what stops a record name injecting markup. Anything that needs real markup in a dialog — a link,
+  for instance — has to use `UIC.openModal` directly.
+

@@ -29,6 +29,7 @@ const STEPS = [
   ['s12_warehouse_movement.js', 'S12 — حركة المخزن: 17 columns, both formulas, add-only'],
   ['s13_forms_filters.js', 'S13 — forms readability (F1/A1/F2/F4a) + vf_products and vf_parties filters'],
   ['s14_iphone.js', 'S14 — iPhone: openTab/closeOrBack fallbacks, .inv-table three states, >=600px unchanged'],
+  ['s15_iphone_rest.js', 'S15 — iPhone: printDoc/openDownload fallbacks, .card-table, >=600px unchanged'],
   /* ── UI/UX programme (branch ui/odoo-parity) ── */
   ['ui1_anchor.js', 'UI-1.2 — popups escape the table clip box (U-01)'],
   ['ui1_sort.js', 'UI-1.3 — tri-state sort, load order preserved (U-03)'],
