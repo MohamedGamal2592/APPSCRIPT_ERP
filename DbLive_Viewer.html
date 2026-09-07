@@ -278,12 +278,13 @@ function openAnalysis() {
   });
 
   Promise.all(promises).then(function (results) {
-    var html = '<table class="table" style="width:100%"><thead><tr><th>العمود</th><th>النوع</th><th>العدد (非 NULL)</th></tr></thead><tbody>';
+    var html = '<div class="table-wrap"><table id="profile-table" class="table" style="width:100%"><thead><tr><th>العمود</th><th>النوع</th><th>العدد (非 NULL)</th></tr></thead><tbody>';
     results.forEach(function (r) {
       html += '<tr><td>' + esc(r.column) + '</td><td><code>' + esc(r.type) + '</code></td><td>' + esc(String(r.count)) + '</td></tr>';
     });
     html += '</tbody></table>';
     document.getElementById('analysisContent').innerHTML = html;
+    UIC.autoColumns('profile-table');
   });
 }
 

@@ -257,7 +257,7 @@
               '<button type="button" class="btn btn-outline" onclick="SALES_PAGE.addLine()">+ إضافة بند</button>' +
             '</div>' +
           '</div>' +
-          '<div style="overflow-x:auto;"><table class="table" id="lines-table" style="min-width:900px;">' +
+          '<div class="table-wrap"><table class="table" id="lines-table" style="min-width:900px;">' +
             '<thead><tr><th style="min-width:220px;">المنتج</th><th>تفاصيل</th><th>الكمية</th><th>السعر</th><th>الضريبة</th><th>الإجمالي</th><th></th></tr></thead>' +
             '<tbody id="lines-body"></tbody>' +
           '</table></div>' +
@@ -320,6 +320,7 @@
           var idx = parseInt(this.id.split('-').pop(), 10);
           onProductChange(idx);
         });
+      UIC.autoColumns('lines-table');
         if (DRAFT_LINES[i].product_id) loadBatches(i, DRAFT_LINES[i].product_id, DRAFT_LINES[i].allocations);
       }
       recalc();
@@ -607,7 +608,7 @@
         '<span style="font-size:12px;color:#166534;">الدفعات مرتبة FIFO (الأقدم أولاً)</span>' +
         '<label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;"><input type="checkbox" id="fifo-auto-' + i + '" checked> توزيع FIFO تلقائي</label>' +
         '</div>' +
-        '<table class="table" style="margin:0;"><thead><tr><th>الدفعة</th><th>المتاح</th><th style="width:140px;">الكمية من الدفعة</th></tr></thead><tbody>';
+        '<div class="table-wrap"><table class="table" style="margin:0;"><thead><tr><th>الدفعة</th><th>المتاح</th><th style="width:140px;">الكمية من الدفعة</th></tr></thead><tbody>';
       batches.forEach(function (b, bi) {
         var preQ = alloc[b.batch_uid] || 0;
         html += '<tr>' +
@@ -626,6 +627,7 @@
       for (var j = 0; ; j++) {
         var el = document.getElementById('alloc-q-' + i + '-' + j);
         if (!el) break;
+      UIC.autoColumns(strip);
         var q = parseFloat(el.value) || 0;
         if (q > 0) out.push({ batch_uid: el.getAttribute('data-buid'), lot: el.getAttribute('data-lot') || '', qty: q });
       }

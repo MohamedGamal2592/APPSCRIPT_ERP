@@ -141,7 +141,7 @@
             '<b style="color:#166534;">خطوات الاستهلاك (المواد الخام)</b>' +
             '<button type="button" class="btn btn-outline" onclick="RECIPES_PAGE.addStep()">+ إضافة خطوة</button>' +
           '</div>' +
-          '<div style="overflow-x:auto;"><table class="table" style="min-width:760px;"><thead><tr>' +
+          '<div class="table-wrap"><table id="recipe-steps-table" class="table" style="min-width:760px;"><thead><tr>' +
             '<th>اسم الخطوة</th><th>مركز العمل</th><th style="min-width:200px;">الخامة</th><th>الكمية المطلوبة</th><th>هدر %</th><th></th>' +
           '</tr></thead><tbody id="steps-body"></tbody></table></div>' +
         '</div>' +
@@ -179,6 +179,7 @@
           '<td><button type="button" class="btn btn-outline" style="padding:3px 10px;color:var(--danger, #dc2626);" onclick="RECIPES_PAGE.removeStep(' + i + ')">✕</button></td>' +
         '</tr>';
       }).join('');
+      UIC.autoColumns('recipe-steps-table');
     }
 
     window.RECIPES_PAGE = {

@@ -971,6 +971,124 @@ UIC._dtHeadRow = function (st) {
       '<span class="th-label">' + h.label + '</span>' +
       (sortable ? '<span class="th-sort" aria-hidden="true"></span>' : '') +
       '</th>';
+/**
+ * The same contract, for a table a page wrote as markup rather than through
+ * UIC.dataTable.
+ *
+ *     UIC.autoColumns('lines-table');     // after the markup is in the DOM
+ *
+ * Reads the header labels and the body text back OUT of the rendered table,
+ * classifies them with the very same UIC.classifyColumns the 69 dataTable
+ * sites use, and stamps one col-* class on each <th>. Nothing is added to any
+ * row: this only ever sets a class and, at most, a min-width on a header.
+ *
+ * A page may declare a column outright with data-col="prose" on the <th>, and
+ * override that column's floor with data-min="30ch" — the markup equivalents
+ * of { col: … } and { min: … }.
+ *
+ * Deliberately NOT a MutationObserver. Typing every table automatically would
+ * mean a per-table observer on a tree that chunk-renders 75 rows a frame, which
+ * is a performance regression bought to save one line per page. One explicit
+ * call, made where the page already knows its table exists.
+ *
+ * Returns the roles it applied, or null when it declined — and it declines
+ * rather than guesses whenever the table is not the simple shape this can read
+ * honestly: no thead, more than one header row (a colspan grouping header does
+ * not line up with the body), or a body whose cells do not match the headers.
+ * Safe to call twice; the previous verdict is removed before the new one.
+ */
+UIC.autoColumns = function (idOrEl) {
+  var el = null;
+  try {
+    el = (typeof idOrEl === 'string') ? document.getElementById(idOrEl) : idOrEl;
+  } catch (e) { return null; }
+  if (!el) return null;
+
+  var table = String(el.tagName || '').toUpperCase() === 'TABLE'
+    ? el
+    : (el.querySelector ? el.querySelector('table') : null);
+  if (!table || !table.querySelectorAll) return null;
+
+  var headRows = table.querySelectorAll('thead tr');
+  if (!headRows || headRows.length !== 1) return null;
+  var ths = table.querySelectorAll('thead th');
+  if (!ths || !ths.length) return null;
+
+  var cellsOf = function (tr) { return (tr && (tr.cells || tr.children)) || []; };
+
+  var headers = [];
+  for (var c = 0; c < ths.length; c++) {
+    var th = ths[c];
+    headers.push({
+      key: '__col' + c,
+      label: String(th.textContent || '').replace(/\s+/g, ' ').trim(),
+      col: th.getAttribute ? (th.getAttribute('data-col') || '') : '',
+      min: th.getAttribute ? (th.getAttribute('data-min') || '') : ''
+    });
+  }
+
+  /* Sampled from the rendered rows, exactly as the dataTable path samples from
+     originalRows. A row whose cell count does not match the header — a
+     "no data" row spanning the table, a subtotal, an expansion panel — carries
+     no information about any single column and is skipped rather than shifting
+     every column one to the left. */
+  var bodyRows = table.querySelectorAll('tbody tr') || [];
+  var rows = [];
+  for (var i = 0; i < bodyRows.length && rows.length < UIC.COL_SAMPLE; i++) {
+    var cells = cellsOf(bodyRows[i]);
+    if (cells.length !== ths.length) continue;
+    var row = [];
+    for (var j = 0; j < cells.length; j++) row.push(cells[j].innerHTML || '');
+    rows.push(row);
+  }
+
+  var roles = UIC.classifyColumns(headers, rows);
+  for (var k = 0; k < ths.length; k++) {
+    var t = ths[k];
+    var role = roles[k];
+    if (!role) continue;
+    /* Only the five roles this function itself can emit are stripped, so a
+       page's own class that happens to start with "col-" survives. */
+    var kept = String(t.className || '').split(/\s+/).filter(function (n) {
+      return n && !(n.indexOf('col-') === 0 && UIC.COL_ROLES[n.slice(4)]);
+    });
+    kept.push('col-' + role);
+    t.className = kept.join(' ');
+    var min = UIC._colMin(headers[k].min);
+    if (min && t.style) t.style.minWidth = min;
+  }
+  return roles;
+};
+
+/**
+ * Every raw .table under one root, typed in a single call.
+ *
+ *     UIC.autoColumnsAll('inputs-table-area');
+ *
+ * Several pages render N tables from ONE string — a card per certificate, a
+ * group per deduction date, a footer table per manufactured product — so there
+ * is no id to name and no fixed count to loop over. This types all of them
+ * after that one innerHTML assignment.
+ *
+ * Only tables carrying the shared `table` class are touched, matched as a whole
+ * class token: card-table, inv-table, items-table and pt-sk-table are page-local
+ * classes with their own layouts, and this contract deliberately does not cover
+ * them. Returns how many tables it typed.
+ */
+UIC.autoColumnsAll = function (rootIdOrEl) {
+  var root = null;
+  try {
+    root = (typeof rootIdOrEl === 'string') ? document.getElementById(rootIdOrEl) : rootIdOrEl;
+  } catch (e) { return 0; }
+  if (!root || !root.querySelectorAll) return 0;
+  var tables = root.querySelectorAll('table.table') || [];
+  var n = 0;
+  for (var i = 0; i < tables.length; i++) {
+    if (UIC.autoColumns(tables[i])) n++;
+  }
+  return n;
+};
+
   }).join('') + '</tr>';
 };
 

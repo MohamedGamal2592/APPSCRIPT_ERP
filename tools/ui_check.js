@@ -634,7 +634,13 @@ check('C12 raw page tables: wrapped, and typed by the column contract', function
       badWrap.push(f + ' ×' + loose.length + ' (L' + loose.map(t => t.line).join(',') + ')');
     }
     /* One autoColumns call types one table. A page with three raw tables and
-       two calls still has one untyped, and says so. */
+       two calls still has one untyped, and says so.
+
+       UIC.autoColumnsAll types EVERY table under a root in one call, which is
+       what the pages that render N tables from one string use — a card per
+       certificate, a group per deduction date. One of those covers the file, so
+       the per-table arithmetic does not apply to it. */
+    const all = /UIC\.autoColumnsAll\s*\(/.test(src);
     const typed = (src.match(/UIC\.autoColumns\s*\(/g) || []).length;
     const gap = Math.max(0, tables.length - typed);
     if (gap) { untyped += gap; badType.push(f + ' ×' + gap + ' of ' + tables.length); }

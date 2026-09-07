@@ -357,6 +357,7 @@
       if (!visible.length && !fromV) html += '<tr><td colspan="6" style="text-align:center;padding:30px;">لا توجد حركات مسجلة لهذا الحساب.</td></tr>';
       html += '</tbody></table>';
       document.getElementById('st-ledger').innerHTML = html;
+      UIC.autoColumns('st-ledger-table');
 
       var dirBadge = running > 0 ? 'لصالح الشركة (مدين) 🔺' : (running < 0 ? 'لصالح العميل (دائن) 🔻' : 'متوازن 🤝');
       var dirColor = running > 0 ? '#16a34a' : (running < 0 ? '#dc2626' : '#6b7280');
@@ -395,14 +396,15 @@
       container.innerHTML =
         '<h3 style="color:#166534;margin:20px 0 8px;border-right:4px solid #16a34a;padding-right:10px;">📦 تقييم المخزون المتاح بالعنابر</h3>' +
         '<p style="font-size:12px;color:var(--text-muted, #6b7280);margin:-4px 0 10px;">يمكن تعديل سعر التقييم لكل صنف — يُعاد احتساب الإجمالي وخصمه من الصافي تلقائياً.</p>' +
-        '<table class="table"><thead><tr><th>الصنف</th><th>الكمية الحالية</th><th>سعر التقييم ✏️</th><th>إجمالي القيمة</th></tr></thead><tbody>' +
-        rowsHtml + '</tbody></table>' +
+        '<div class="table-wrap"><table id="st-stock-table" class="table"><thead><tr><th>الصنف</th><th>الكمية الحالية</th><th>سعر التقييم ✏️</th><th>إجمالي القيمة</th></tr></thead><tbody>' +
+        rowsHtml + '</tbody></table></div>' +
         '<div style="display:flex;justify-content:space-between;align-items:center;background:var(--success-bg, #f0fdf4);border-radius:8px;padding:12px 16px;margin-top:10px;flex-wrap:wrap;gap:8px;">' +
           '<button class="btn btn-outline" onclick="PARTIES_PAGE.resetStockPrices()">🔄 إعادة تعيين الأسعار</button>' +
           '<div><span style="font-weight:700;color:#166534;">إجمالي قيمة المخزون:</span> ' +
           '<span id="stock-total" style="font-size:19px;font-weight:800;color:#059669;direction:ltr;">' + finFmt(stockTotal()) + '</span></div>' +
         '</div>' +
         '<div id="adjusted-box" style="margin-top:10px;"></div>';
+      UIC.autoColumns('st-stock-table');
 
       updateAdjusted();
     }

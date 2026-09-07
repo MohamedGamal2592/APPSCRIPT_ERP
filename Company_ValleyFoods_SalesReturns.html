@@ -192,8 +192,9 @@
             '<div style="background:var(--success-bg, #f0fdf4);border-left:4px solid #16a34a;padding:10px 14px;margin-bottom:10px;font-size:13px;">' +
               'فاتورة <b>' + esc((res.invoice || {}).number || '-') + '</b> — العميل: <b>' + esc((res.invoice || {}).client_name || '-') + '</b> · تاريخها: <b>' + esc((res.invoice || {}).date_display || '-') + '</b>' +
             '</div>' +
-            '<div style="overflow-x:auto;"><table class="table" style="min-width:820px;"><thead><tr><th>المنتج</th><th>سعر البيع الأصلي</th><th>المبيع</th><th>مرتجع سابقاً</th><th style="width:130px;">كمية المرتجع</th><th>القيمة</th></tr></thead><tbody>' +
+            '<div class="table-wrap"><table id="return-lines-table" class="table" style="min-width:820px;"><thead><tr><th>المنتج</th><th>سعر البيع الأصلي</th><th>المبيع</th><th>مرتجع سابقاً</th><th style="width:130px;">كمية المرتجع</th><th>القيمة</th></tr></thead><tbody>' +
             rowsHtml + '</tbody></table></div>';
+          UIC.autoColumns('return-lines-table');
         })
         .catch(function (e) { w.innerHTML = '<p style="color:red;">' + esc(e.message || 'خطأ') + '</p>'; });
     }

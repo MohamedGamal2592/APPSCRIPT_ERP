@@ -349,7 +349,7 @@
     /* [iPhone run 2] MOVE_COLS builds the <th> row AND the data-labels. The
        shared .table has been a card per row below 600px since UI-4.8, but
        with no data-label those cards were a column of bare values. */
-    var html = '<div class="table-wrap"><table class="table">' +
+    var html = '<div class="table-wrap"><table id="box-moves-table" class="table">' +
       '<thead><tr>' +
         '<th style="width:34px;"></th>' +
         MOVE_COLS.slice(1).map(function (c) { return '<th>' + c + '</th>'; }).join('') +
@@ -386,6 +386,7 @@
 
     html += '</tbody></table></div>';
     el.innerHTML = html;
+    UIC.autoColumns('box-moves-table');
   }
 
   function toggleRow(id) {
@@ -913,7 +914,7 @@
       html += UIC.emptyState({ icon: 'inbox', title: 'لا توجد تنبيهات في هذه الفترة',
         body: 'لم تُطابق أي حركة قواعد الفحص. راجع الملاحظات أدناه لمعرفة القواعد التي لم تعمل ولماذا.' });
     } else {
-      html += '<div class="table-wrap"><table class="table"><thead><tr>' +
+      html += '<div class="table-wrap"><table id="box-alerts-table" class="table"><thead><tr>' +
         ALERT_COLS.map(function (c) { return '<th>' + c + '</th>'; }).join('') +
         '</tr></thead><tbody>';
       alerts.forEach(function (a) {
@@ -957,6 +958,7 @@
       html += '</ul>';
     }
     el.innerHTML = html;
+    UIC.autoColumns('box-alerts-table');
   }
 
   /* ── Tab 3 — تحليل البنود ───────────────────────────────────────────────── */
@@ -1032,7 +1034,7 @@
         (r.aliases.updated_by ? ' — آخر تعديل بواسطة ' + esc(r.aliases.updated_by) : '') + '</div>';
     }
 
-    html += '<div class="table-wrap"><table class="table"><thead><tr>' +
+    html += '<div class="table-wrap"><table id="box-clusters-table" class="table"><thead><tr>' +
       CLUSTER_COLS.map(function (c) { return '<th>' + c + '</th>'; }).join('') +
       '</tr></thead><tbody>';
 
@@ -1058,6 +1060,7 @@
     });
     html += '</tbody></table></div>';
     el.innerHTML = html;
+    UIC.autoColumns('box-clusters-table');
   }
 
   /**

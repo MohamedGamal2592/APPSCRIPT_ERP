@@ -39,6 +39,20 @@ const F1_TABLES = [
   ['Company_ValleyFoods_MfgRecipes.html', 'min-width:760px', 760],
 ];
 
+/* What F1 actually guarantees is that a wide editor table SCROLLS SIDEWAYS
+ * rather than crushing its columns — not that the scrolling is spelled with an
+ * inline style.
+ *
+ * UPDATED by the table column-width run (UI-9.1), reasoning recorded here
+ * rather than in a commit nobody will re-read, per the precedent in
+ * s0_modal_size.js: these five wrappers were `<div style="overflow-x:auto">`
+ * and are now `<div class="table-wrap">`, the shared wrapper, which sets the
+ * same overflow-x: auto AND adds the sticky header and the vertical scroll box
+ * these tables never had. The assertion is RETARGETED at the guarantee, not
+ * weakened: a table with neither spelling still fails, which is the regression
+ * F1 was written to catch. */
+const SCROLLS_SIDEWAYS = /overflow-x\s*:\s*auto|class="[^"]*\btable-wrap\b/;
+
 F1_TABLES.forEach(function (t) {
   const [file, marker, floor] = t;
   const src = read(file);
@@ -50,7 +64,7 @@ F1_TABLES.forEach(function (t) {
   const lineEnd = src.indexOf('\n', at);
   const line = src.slice(lineStart, lineEnd === -1 ? src.length : lineEnd);
   /* The wrapper may be emitted on the same line (all five are). */
-  ok(/overflow-x\s*:\s*auto/.test(line),
+  ok(SCROLLS_SIDEWAYS.test(line),
     file + ' — the table is inside an overflow-x:auto wrapper');
   const mw = line.match(/min-width\s*:\s*(\d+)px/);
   ok(!!mw && Number(mw[1]) >= floor,
@@ -65,7 +79,7 @@ F1_TABLES.forEach(function (t) {
   if (at === -1) return;
   const lineStart = src.lastIndexOf('\n', at) + 1;
   const line = src.slice(lineStart, src.indexOf('\n', at));
-  ok(/overflow-x\s*:\s*auto/.test(line),
+  ok(SCROLLS_SIDEWAYS.test(line),
     'Company_ValleyFoods_MfgOrders.html — the outputs table is inside an overflow-x:auto wrapper');
 })();
 

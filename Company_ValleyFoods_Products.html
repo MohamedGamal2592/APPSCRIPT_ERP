@@ -391,7 +391,7 @@
       if (!batches.length) {
         inner += '<p class="vf-text-muted">لا يوجد رصيد حالي لهذا المنتج.</p>';
       } else {
-        inner += '<div style="overflow-x:auto;display:block;"><table class="table"><thead><tr>' +
+        inner += '<div class="table-wrap"><table id="product-batches-table" class="table"><thead><tr>' +
           '<th>كود الحركة (الدفعة)</th><th>التاريخ</th><th>حساب التوجيه</th>' +
           '<th>الكمية</th><th>تكلفة الوحدة</th><th>القيمة (ج.م)</th>' +
         '</tr></thead><tbody>';
@@ -428,3 +428,4 @@
 </html>
 
 
+      UIC.autoColumns('product-batches-table');

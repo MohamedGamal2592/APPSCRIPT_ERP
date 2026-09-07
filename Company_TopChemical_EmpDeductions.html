@@ -120,7 +120,7 @@
             '<span class="text-muted" style="font-size:12px;">' + g.dates[d].length + ' سجل</span>' +
             (CAN_WRITE ? '<button class="btn btn-outline" style="padding:3px 8px;font-size:11px;" onclick="openAddModal({type:\'' + esc(t) + '\',date:\'' + esc(d) + '\'})">+ في هذا التاريخ</button>' : '') +
             '</div>' +
-            '<table class="table" style="font-size:13px;">' +
+            '<div class="table-wrap"><table class="table" style="font-size:13px;">' +
             '<thead><tr><th>كود</th><th>الاسم</th><th>الأيام</th><th>الجزاء</th><th>خصم آخر</th><th>تفاصيل</th></tr></thead><tbody>';
           g.dates[d].forEach(function (r) {
             html += '<tr><td>' + r.emp_id + '</td><td>' + esc(r.name_ar || '-') + '</td>' +
@@ -135,6 +135,7 @@
       });
     }
     body.innerHTML = html;
+    UIC.autoColumnsAll('ded-content');
   }
 
   function toggleDedGroup(id) {

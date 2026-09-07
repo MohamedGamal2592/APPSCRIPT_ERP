@@ -96,6 +96,7 @@
       '<td class="num">' + FMT.number(grandCredit) + '</td>' +
       '<td class="num">' + FMT.number(grandNet) + '</td><td colspan="2"></td></tr>' +
       '</tbody></table></div>';
+    UIC.autoColumns('debts-table');
   }
 
   function toggleDebt(i) {
@@ -131,13 +132,14 @@
             '<td>' + (t.invoice_id === '' || t.invoice_id == null ? '-' : t.invoice_id) + '</td>' +
             '</tr>';
         }).join('');
-        el.innerHTML = '<td colspan="6"><table class="table">' +
+        el.innerHTML = '<td colspan="6"><div class="table-wrap"><table class="table">' +
           '<thead><tr><th>التاريخ</th><th>النوع</th><th>المبلغ</th><th>العملة</th><th>السبب</th><th>رقم الفاتورة</th></tr></thead>' +
           '<tbody>' +
           '<tr class="subtotal"><td colspan="2">إجمالي مدين</td><td class="num">' + FMT.number(debit) + '</td><td colspan="3"></td></tr>' +
           '<tr class="subtotal"><td colspan="2">إجمالي دائن</td><td class="num">' + FMT.number(credit) + '</td><td colspan="3"></td></tr>' +
           txsHtml +
-          '</tbody></table></td>';
+          '</tbody></table></div></td>';
+        UIC.autoColumns(el);
         el.setAttribute('data-loaded', '1');
       })
       .catch(function (e) {

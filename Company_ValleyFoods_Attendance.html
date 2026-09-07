@@ -528,6 +528,7 @@
         return;
       }
       panel.innerHTML = renderPreview();
+      UIC.autoColumnsAll(panel);
       panel.style.display = 'block';
     }
 
@@ -612,7 +613,7 @@
         PARSED.format = fmt;
       }
       var panel = document.getElementById('vf-analysis-panel');
-      if (panel) { panel.innerHTML = renderPreview(); panel.style.display = 'block'; }
+      if (panel) { panel.innerHTML = renderPreview(); UIC.autoColumnsAll(panel); panel.style.display = 'block'; }
     }
 
     /* ---- dry-run preview (D-15) ---- */
@@ -707,7 +708,7 @@
       var keys = Object.keys(stats || {});
       if (!keys.length) return '';
       var html = '<div style="margin-top:12px;font-weight:900;">📋 تفصيل كل تاريخ:</div>';
-      html += '<table class="table" style="margin-top:6px;"><thead><tr><th>التاريخ</th>' +
+      html += '<div class="table-wrap"><table class="table" style="margin-top:6px;"><thead><tr><th>التاريخ</th>' +
         '<th>✅ ' + (isPreview ? 'سيُسجل' : 'جديد') + '</th><th>♻️ مكرر</th><th>🚩 مراجعة</th>' +
         (isPreview ? '<th>اليوم</th>' : '') + '</tr></thead><tbody>';
       sortDateKeys(keys).forEach(function (dk) {

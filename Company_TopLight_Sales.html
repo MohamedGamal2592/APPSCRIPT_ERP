@@ -228,8 +228,8 @@
       '</div>' +
       '</form>' +
       '<h3 style="margin-top:20px;">الأصناف</h3>' +
-      '<div style="overflow-x:auto;">' +
-      '<table class="table" style="min-width:900px;"><thead><tr>' +
+      '<div class="table-wrap">' +
+      '<table id="lines-table" class="table" style="min-width:900px;"><thead><tr>' +
       '<th>المنتج</th><th>الكمية</th><th>السعر</th><th>نسبة الضريبة</th><th>الخصم</th><th>الإجمالي</th>' + (__canEdit ? '<th></th>' : '') +
       '</tr></thead><tbody id="lines-tbody"></tbody></table>' +
       '</div>' +
@@ -295,6 +295,7 @@
     }
     var tbody = document.getElementById('lines-tbody');
     if (tbody) tbody.innerHTML = html;
+    UIC.autoColumns('lines-table');
     // Wire combo hidden inputs: UIC.comboPick dispatches change; blur-only
     // matches do not, so saveSales() also syncs hidden values into __lines.
     for (var ci = 0; ci < lines.length; ci++) {

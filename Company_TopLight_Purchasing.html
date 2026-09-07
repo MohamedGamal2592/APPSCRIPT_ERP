@@ -268,8 +268,8 @@
       sectionsHtml +
       '</form>' +
       '<h3 style="margin-top:20px;">الأصناف</h3>' +
-      '<div style="overflow-x:auto;">' +
-      '<table class="table" style="min-width:900px;"><thead><tr>' +
+      '<div class="table-wrap">' +
+      '<table id="lines-table" class="table" style="min-width:900px;"><thead><tr>' +
       '<th>المنتج</th><th>الكمية</th><th>سعر الوحدة</th><th>تكاليف أخرى</th><th>سعر البيع</th><th>نوع الحركة</th><th>الإجمالي</th>' + (__canEdit ? '<th></th>' : '') +
       '</tr></thead><tbody id="lines-tbody"></tbody></table>' +
       '</div>' +
@@ -336,6 +336,7 @@
     }
     var tbody = document.getElementById('lines-tbody');
     if (tbody) tbody.innerHTML = html;
+    UIC.autoColumns('lines-table');
     recalc();
   }
 

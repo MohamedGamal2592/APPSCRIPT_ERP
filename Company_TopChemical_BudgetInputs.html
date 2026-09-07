@@ -376,7 +376,7 @@
       }).join('');
 
       var lineTable = lines.length ? (
-        '<table class="table" style="min-width:960px;">' +
+        '<div class="table-wrap"><table class="table" style="min-width:960px;">' +
           '<thead><tr>' +
             '<th>كود المعاملة</th><th>المادة</th><th>تفاصيل البند</th><th>نوع البند</th><th>المعاملة</th><th>الكمية</th><th>تكلفة الوحدة</th><th>قيمة التكلفة</th><th>سعر البيع</th><th>تاريخ الإنتاج</th><th>تاريخ الانتهاء</th><th>المرفقات</th>' +
           '</tr></thead>' +
@@ -441,6 +441,7 @@
     });
 
     document.getElementById('inputs-table-area').innerHTML = html;
+    UIC.autoColumnsAll('inputs-table-area');
   }
 
   function toggleExpand(i) {

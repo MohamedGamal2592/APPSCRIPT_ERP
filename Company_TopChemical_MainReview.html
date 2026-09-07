@@ -121,7 +121,7 @@
       el.innerHTML = '<div class="empty-state"><span>لا توجد بيانات مطابقة للفلاتر</span></div>';
       return;
     }
-    var html = '<div class="table-wrap"><table class="table">' +
+    var html = '<div class="table-wrap"><table id="review-table" class="table">' +
       '<thead><tr><th>#</th><th>العميل</th><th>المبلغ</th><th>تاريخ الاستحقاق</th>' +
       '<th>ملاحظات</th><th>الحالة</th><th>إجراء</th></tr></thead><tbody>';
     LAST.rows.forEach(function (row, i) {
@@ -142,6 +142,7 @@
     });
     html += '</tbody></table></div>';
     el.innerHTML = html;
+    UIC.autoColumns('review-table');
   }
 
   function renderPager() {

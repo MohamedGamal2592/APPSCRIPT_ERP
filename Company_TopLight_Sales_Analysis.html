@@ -170,8 +170,9 @@
           '<div><strong>قيمة الضريبة:</strong> <span class="num">' + FMT.number(h['قيمة الضريبة']) + '</span></div>' +
           '<div><strong>الإجمالي:</strong> <span class="num">' + FMT.number(h['إجمالي']) + '</span></div>' +
           '</div>' +
-          '<table class="table" style="min-width:400px;"><thead><tr><th>المنتج</th><th>الكمية</th><th>السعر</th><th>الإجمالي</th></tr></thead><tbody>' + lines + '</tbody></table>';
+          '<div class="table-wrap"><table id="invoice-lines-table" class="table" style="min-width:400px;"><thead><tr><th>المنتج</th><th>الكمية</th><th>السعر</th><th>الإجمالي</th></tr></thead><tbody>' + lines + '</tbody></table></div>';
         UIC.openModal('invoice-modal', { title: 'فاتورة بيع', body: body, footer: false });
+        UIC.autoColumns('invoice-lines-table');
       })
       .catch(function (e) { UIC.toast(e.message || 'خطأ', 'error'); })
       .finally(function () { UI.hideSpinner(); });

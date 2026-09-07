@@ -139,7 +139,8 @@
       });
     }
     tbody += '</tbody>';
-    wrap.innerHTML = totalBar + '<div style="overflow-x:auto;"><table id="sal-table" class="table" style="min-width:900px;">' + thead + tbody + '</table></div>' + salPagerHtml(all.length, totalPages);
+    wrap.innerHTML = totalBar + '<div class="table-wrap"><table id="sal-table" class="table" style="min-width:900px;">' + thead + tbody + '</table></div>' + salPagerHtml(all.length, totalPages);
+    UIC.autoColumns('sal-table');
     salInitSort();
   }
 
