@@ -64,6 +64,10 @@
     var REPORT_DATA = null;
     var csvText = null;
     var analysisResult = null;
+    /* The import that the result panel is currently describing, so ↩️ تراجع has
+       something concrete to point at. Undo lives permanently in the import
+       history card (Phase C); this is the one that is one click away. */
+    var lastBatch = null;
 
     /* ================= SHELL ================= */
     function renderApp() {
@@ -229,6 +233,7 @@
     function resetUploadFlow() {
       csvText = null;
       analysisResult = null;
+      lastBatch = null;
       var input = document.getElementById('vf-csv-input');
       var analyzeBtn = document.getElementById('vf-analyze-btn');
       var panel = document.getElementById('vf-analysis-panel');
@@ -245,6 +250,7 @@
       if (analyzeBtn) analyzeBtn.disabled = !file;
       csvText = null;
       analysisResult = null;
+      lastBatch = null;
       var panel = document.getElementById('vf-analysis-panel');
       if (panel) { panel.style.display = 'none'; panel.innerHTML = ''; }
       var result = document.getElementById('vf-upload-result');
@@ -359,7 +365,16 @@
           html += '</tbody></table>';
         }
       }
-      html += '<div style="margin-top:12px;"><button class="btn btn-outline" onclick="ATT_PAGE.resetUpload()">↩️ رفع ملف آخر</button></div>';
+      html += '<div style="margin-top:12px;"><button class="btn btn-outline" onclick="ATT_PAGE.resetUpload()">↩️ رفع ملف آخر</button>';
+      /* Guarded twice: by the authority to delete rows, and by the server
+         actually having given us a batch to undo. Before the owner adds the
+         import_batch_id column the server writes the batch row but the punches
+         carry no id, so revert would refuse — the button stays hidden rather
+         than offering something that cannot work. */
+      if (CAN_FULL && lastBatch && lastBatch.batch_id) {
+        html += ' <button class="btn btn-danger" onclick="ATT_PAGE.undoBatch()">↩️ تراجع عن هذا الرفع</button>';
+      }
+      html += '</div>';
       html += '</div>';
 
       container.innerHTML = html;
@@ -375,9 +390,16 @@
       var fmtEl = document.querySelector('input[name="vf-fmt"]:checked');
       if (!fmtEl) { UIC.toast('اختر صيغة التاريخ أولاً', 'error'); return; }
       if (!csvText) { UIC.toast('لا يوجد ملف محدد', 'error'); return; }
+      var fileInput = document.getElementById('vf-csv-input');
+      var fileName = (fileInput && fileInput.files && fileInput.files[0] && fileInput.files[0].name) || 'CSV';
       UI.showSpinner();
-      companyCall('upload_attendance_csv', { csv_content: csvText, format: fmtEl.value })
+      companyCall('upload_attendance_csv', { csv_content: csvText, format: fmtEl.value, file_name: fileName })
         .then(function (res) {
+          lastBatch = {
+            batch_id: (res && res.batch_id) || '',
+            file_name: fileName,
+            rows: (res && res.successCount) || 0
+          };
           renderUploadResult(res || {});
           UIC.toast((res && res.message) || 'تم الرفع', (res && res.flaggedCount) ? 'warning' : 'success');
         })
@@ -385,6 +407,33 @@
           UIC.toast((e && e.message) || 'حدث خطأ أثناء الاستيراد', 'error');
         })
         .finally(function () { UI.hideSpinner(); });
+    }
+
+    /* Never a bare "are you sure": the file and the row count are what the user
+       is actually deciding about. */
+    function undoBatch() {
+      if (!lastBatch || !lastBatch.batch_id) { UIC.toast('لا توجد عملية رفع للتراجع عنها', 'error'); return; }
+      var batch = lastBatch;
+      UIC.confirm({
+        title: 'تراجع عن الرفع',
+        message: 'سيتم حذف كل البصمات التي سجلها هذا الرفع، والأيام التي فتحها ولم تعد تحتوي على أي بصمة.',
+        record: batch.file_name + ' — ' + batch.rows + ' بصمة',
+        detail: 'البصمات المضافة يدوياً لن تُحذف.',
+        confirmText: 'تراجع وحذف',
+        danger: true
+      }).then(function (ok) {
+        if (!ok) return;
+        UI.showSpinner();
+        companyCall('revert_attendance_import', { batch_id: batch.batch_id })
+          .then(function (res) {
+            UIC.toast((res && res.message) || 'تم التراجع', 'success');
+            lastBatch = null;
+            resetUploadFlow();
+            loadSessions();
+          })
+          .catch(function (e) { UIC.toast((e && e.message) || 'تعذر التراجع', 'error'); })
+          .finally(function () { UI.hideSpinner(); });
+      });
     }
 
     /* ================= MANUAL ENTRY ================= */
@@ -663,6 +712,7 @@
       saveNewSession: saveNewSession,
       confirmUpload: confirmUpload,
       resetUpload: resetUploadFlow,
+      undoBatch: undoBatch,
       saveManualEntry: saveManualEntry
     };
   })();
