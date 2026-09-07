@@ -244,7 +244,7 @@ const TopLight = (function () {
       return '';
     });
     sheet.appendRow(rowValues);
-    noteMutation_();
+    noteMutation_(sheet);
     // Phase 11 — this was invalidateRefsCache_(dbId, 'categories'), which dropped
     // the unstamped key. Now that both category shapes live behind the version
     // stamp, that key is never written and dropping it would invalidate nothing:
@@ -818,7 +818,7 @@ const TopLight = (function () {
     // row already exists and is located by unique_id, so no lock is needed here.
     applyHeaderFormulas_(rowValues, headers, rowNum);
     sheet.getRange(rowNum, 1, 1, rowValues.length).setValues([rowValues]);
-    noteMutation_();
+    noteMutation_(sheet);
     writeLines_(dbId, uid, header, lines, user);
     try { var _uid = (_editPurchOld && _editPurchOld.record_uid) ? String(_editPurchOld.record_uid) : 'update_top_light_purchasing_costing_' + uid; logHistory_(dbId, PURCHASING_SHEET, _uid, String(uid), (user&&user.email)||'', 'update', header, _editPurchOld); } catch(e){}
     bustTopLightCaches_(dbId, 'purchasing');
@@ -859,7 +859,7 @@ const TopLight = (function () {
     const uIdx = headers.findIndex(h => String(h).trim().toLowerCase() === 'unique_id');
     const dataArr = sheet.getDataRange().getValues();
     for (let i = dataArr.length - 1; i >= 1; i--) {
-      if (String(dataArr[i][uIdx]).trim() === uid) { sheet.deleteRow(i + 1); noteMutation_(); break; }
+      if (String(dataArr[i][uIdx]).trim() === uid) { sheet.deleteRow(i + 1); noteMutation_(sheet); break; }
     }
     try { var _uid = (_delPurchOld && _delPurchOld.record_uid) ? String(_delPurchOld.record_uid) : 'delete_top_light_purchasing_costing_' + uid; logHistory_(dbId, PURCHASING_SHEET, _uid, String(uid), (user&&user.email)||'', 'delete', null, _delPurchOld); } catch(e){}
     bustTopLightCaches_(dbId, 'purchasing');
@@ -1068,7 +1068,7 @@ const TopLight = (function () {
     const fmap = headerFormulaMap_(headers, rowNum);
     Object.keys(fmap).forEach(function (c) {
       sheet.getRange(rowNum, Number(c) + 1).setFormula(fmap[c]);
-      noteMutation_();
+      noteMutation_(sheet);
     });
   }
 
@@ -1088,10 +1088,10 @@ const TopLight = (function () {
     return executeWithLock_(function () {
       const newRow = sheet.getLastRow() + 1;
       if (newRow > sheet.getMaxRows()) sheet.insertRowsAfter(sheet.getMaxRows(), newRow - sheet.getMaxRows());
-      noteMutation_();
+      noteMutation_(sheet);
       applyHeaderFormulas_(rowValues, headers, newRow);
       sheet.getRange(newRow, 1, 1, rowValues.length).setValues([rowValues]);
-      noteMutation_();
+      noteMutation_(sheet);
       return newRow;
     });
   }
@@ -1148,7 +1148,7 @@ const TopLight = (function () {
       const startRow = sheet.getLastRow() + 1;
       const lastNeeded = startRow + valueRows.length - 1;
       if (lastNeeded > sheet.getMaxRows()) sheet.insertRowsAfter(sheet.getMaxRows(), lastNeeded - sheet.getMaxRows());
-      noteMutation_();
+      noteMutation_(sheet);
 
       valueRows.forEach(function (rowValues, i) {
         // Identical row numbers to the old loop: appendRow put line i at
@@ -1179,7 +1179,7 @@ const TopLight = (function () {
       });
 
       sheet.getRange(startRow, 1, valueRows.length, headers.length).setValues(valueRows);
-      noteMutation_();
+      noteMutation_(sheet);
     });
   }
 
@@ -1191,7 +1191,7 @@ const TopLight = (function () {
     const data = sheet.getDataRange().getValues();
     for (let i = data.length - 1; i >= 1; i--) {
       if (String(data[i][idx]).trim() === headerUid) sheet.deleteRow(i + 1);
-      noteMutation_();
+      noteMutation_(sheet);
     }
   }
 
@@ -1517,7 +1517,7 @@ const TopLight = (function () {
     // exists and is located by unique_id, so no lock is needed here.
     applySalesHeaderFormulas_(rowValues, headers, rowNum);
     sheet.getRange(rowNum, 1, 1, rowValues.length).setValues([rowValues]);
-    noteMutation_();
+    noteMutation_(sheet);
     writeSalesLines_(dbId, uid, header, lines, user);
     try { var _uid = (_editSalesOld && _editSalesOld.record_uid) ? String(_editSalesOld.record_uid) : 'update_top_light_sales_invoices_' + uid; logHistory_(dbId, SALES_SHEET, _uid, String(uid), (user&&user.email)||'', 'update', header, _editSalesOld); } catch(e){}
     bustTopLightCaches_(dbId, 'sales');
@@ -1556,7 +1556,7 @@ const TopLight = (function () {
     const uIdx = headers.findIndex(h => String(h).trim().toLowerCase() === 'invoice_unique_id');
     const dataArr = sheet.getDataRange().getValues();
     for (let i = dataArr.length - 1; i >= 1; i--) {
-      if (String(dataArr[i][uIdx]).trim() === uid) { sheet.deleteRow(i + 1); noteMutation_(); break; }
+      if (String(dataArr[i][uIdx]).trim() === uid) { sheet.deleteRow(i + 1); noteMutation_(sheet); break; }
     }
     try { var _uid = (_delSalesOld && _delSalesOld.record_uid) ? String(_delSalesOld.record_uid) : 'delete_top_light_sales_invoices_' + uid; logHistory_(dbId, SALES_SHEET, _uid, String(uid), (user&&user.email)||'', 'delete', null, _delSalesOld); } catch(e){}
     bustTopLightCaches_(dbId, 'sales');
@@ -1703,7 +1703,7 @@ const TopLight = (function () {
     set('created_at', new Date());
     var _retNewVals = { unique_id: newUidRet, id: nextId, top_lightsales_invoices_id: invoiceId, top_lightsales_invoices_client: numOrKeep_(invoice['اسم العميل']), top_lightreturn_date: returnDate, top_lightsales_products_id: numOrKeep_(productId), top_lightreturn_qty: returnQty, top_lightreturn_discount: discount, top_lightreturn_price: price, top_lightreturn_value: value };
     sheet.appendRow(rowValues);
-    noteMutation_();
+    noteMutation_(sheet);
     try { var _uid = 'create_top_light_sales_returns_' + newUidRet; logHistory_(dbId, SALES_RETURNS_SHEET, _uid, String(newUidRet), (user&&user.email)||'', 'create', _retNewVals, null); } catch(e){}
     bustTopLightCaches_(dbId, 'sales');
     var prodNamesRet = {};
@@ -1738,7 +1738,7 @@ const TopLight = (function () {
     const uIdx = headers.findIndex(h => String(h).trim().toLowerCase() === 'unique_id');
     const dataArr = sheet.getDataRange().getValues();
     for (let i = dataArr.length - 1; i >= 1; i--) {
-      if (String(dataArr[i][uIdx]).trim() === uid) { sheet.deleteRow(i + 1); noteMutation_(); break; }
+      if (String(dataArr[i][uIdx]).trim() === uid) { sheet.deleteRow(i + 1); noteMutation_(sheet); break; }
     }
     try { var _uid = (_delRetOld && _delRetOld.record_uid) ? String(_delRetOld.record_uid) : 'delete_top_light_sales_returns_' + uid; var _delId = (_delRetOld && _delRetOld.id) ? String(_delRetOld.id) : String(uid); logHistory_(dbId, SALES_RETURNS_SHEET, _uid, _delId, (user&&user.email)||'', 'delete', null, _delRetOld); } catch(e){}
     bustTopLightCaches_(dbId, 'sales');
@@ -2069,7 +2069,7 @@ const TopLight = (function () {
     const fmap = salesHeaderFormulaMap_(headers, rowNum);
     Object.keys(fmap).forEach(function (c) {
       sheet.getRange(rowNum, Number(c) + 1).setFormula(fmap[c]);
-      noteMutation_();
+      noteMutation_(sheet);
     });
   }
 
@@ -2082,10 +2082,10 @@ const TopLight = (function () {
     return executeWithLock_(function () {
       const newRow = sheet.getLastRow() + 1;
       if (newRow > sheet.getMaxRows()) sheet.insertRowsAfter(sheet.getMaxRows(), newRow - sheet.getMaxRows());
-      noteMutation_();
+      noteMutation_(sheet);
       applySalesHeaderFormulas_(rowValues, headers, newRow);
       sheet.getRange(newRow, 1, 1, rowValues.length).setValues([rowValues]);
-      noteMutation_();
+      noteMutation_(sheet);
       return newRow;
     });
   }
@@ -2125,7 +2125,7 @@ const TopLight = (function () {
       const startRow = sheet.getLastRow() + 1;
       const lastNeeded = startRow + valueRows.length - 1;
       if (lastNeeded > sheet.getMaxRows()) sheet.insertRowsAfter(sheet.getMaxRows(), lastNeeded - sheet.getMaxRows());
-      noteMutation_();
+      noteMutation_(sheet);
 
       valueRows.forEach(function (rowValues, i) {
         const r = startRow + i;   // identical to the old appendRow row numbers
@@ -2144,7 +2144,7 @@ const TopLight = (function () {
       });
 
       sheet.getRange(startRow, 1, valueRows.length, headers.length).setValues(valueRows);
-      noteMutation_();
+      noteMutation_(sheet);
     });
   }
 
@@ -2156,7 +2156,7 @@ const TopLight = (function () {
     const data = sheet.getDataRange().getValues();
     for (let i = data.length - 1; i >= 1; i--) {
       if (String(data[i][idx]).trim() === headerUid) sheet.deleteRow(i + 1);
-      noteMutation_();
+      noteMutation_(sheet);
     }
   }
 
@@ -2257,7 +2257,7 @@ const TopLight = (function () {
     // exists and is located by transaction_id, so no lock is needed here.
     applyCashFormulas_(rowValues, headers, rowNum);
     sheet.getRange(rowNum, 1, 1, rowValues.length).setValues([rowValues]);
-    noteMutation_();
+    noteMutation_(sheet);
     try { var _uid = (_editCashOld && _editCashOld.record_uid) ? String(_editCashOld.record_uid) : 'update_top_light_cash_bank_movement_' + id; logHistory_(dbId, CASH_SHEET, _uid, String(id), (user&&user.email)||'', 'update', rec, _editCashOld); } catch(e){}
     bustTopLightCaches_(dbId, 'cash');
     return { status: 'success', message: 'تم تحديث الحركة' };
@@ -2272,7 +2272,7 @@ const TopLight = (function () {
     const idIdx = headers.findIndex(h => String(h).trim().toLowerCase() === 'transaction_id');
     const dataArr = sheet.getDataRange().getValues();
     for (let i = dataArr.length - 1; i >= 1; i--) {
-      if (Number(dataArr[i][idIdx]) === id) { sheet.deleteRow(i + 1); noteMutation_(); break; }
+      if (Number(dataArr[i][idIdx]) === id) { sheet.deleteRow(i + 1); noteMutation_(sheet); break; }
     }
     try { var _uid = (_delCashOld && _delCashOld.record_uid) ? String(_delCashOld.record_uid) : 'delete_top_light_cash_bank_movement_' + id; logHistory_(dbId, CASH_SHEET, _uid, String(id), (user&&user.email)||'', 'delete', null, _delCashOld); } catch(e){}
     bustTopLightCaches_(dbId, 'cash');
@@ -2554,7 +2554,7 @@ const TopLight = (function () {
     const fmap = cashFormulaMap_(headers, rowNum);
     Object.keys(fmap).forEach(function (c) {
       sheet.getRange(rowNum, Number(c) + 1).setFormula(fmap[c]);
-      noteMutation_();
+      noteMutation_(sheet);
     });
   }
 
@@ -2567,10 +2567,10 @@ const TopLight = (function () {
     return executeWithLock_(function () {
       const newRow = sheet.getLastRow() + 1;
       if (newRow > sheet.getMaxRows()) sheet.insertRowsAfter(sheet.getMaxRows(), newRow - sheet.getMaxRows());
-      noteMutation_();
+      noteMutation_(sheet);
       applyCashFormulas_(rowValues, headers, newRow);
       sheet.getRange(newRow, 1, 1, rowValues.length).setValues([rowValues]);
-      noteMutation_();
+      noteMutation_(sheet);
       return newRow;
     });
   }
@@ -2934,7 +2934,7 @@ const TopLight = (function () {
     // Phase 3 (F-04): formulas merged into the same setValues.
     applySalesHeaderFormulas_(rowValues, headers, rowNum);
     sheet.getRange(rowNum, 1, 1, rowValues.length).setValues([rowValues]);
-    noteMutation_();
+    noteMutation_(sheet);
     writeOfferLines_(dbId, uid, lines, user);
     try { var _uid = (_editOfferOld && _editOfferOld.record_uid) ? String(_editOfferOld.record_uid) : 'update_top_light_sales_offer_' + uid; logHistory_(dbId, OFFER_SHEET, _uid, String(uid), (user&&user.email)||'', 'update', header, _editOfferOld); } catch(e){}
 
@@ -2968,7 +2968,7 @@ const TopLight = (function () {
     const uIdx = headers.findIndex(h => String(h).trim().toLowerCase() === 'invoice_unique_id');
     const dataArr = sheet.getDataRange().getValues();
     for (let i = dataArr.length - 1; i >= 1; i--) {
-      if (String(dataArr[i][uIdx]).trim() === uid) { sheet.deleteRow(i + 1); noteMutation_(); break; }
+      if (String(dataArr[i][uIdx]).trim() === uid) { sheet.deleteRow(i + 1); noteMutation_(sheet); break; }
     }
     try { var _uid = (_delOfferOld && _delOfferOld.record_uid) ? String(_delOfferOld.record_uid) : 'delete_top_light_sales_offer_' + uid; logHistory_(dbId, OFFER_SHEET, _uid, String(uid), (user&&user.email)||'', 'delete', null, _delOfferOld); } catch(e){}
     return { status: 'success', message: 'تم حذف العرض' };
@@ -3029,10 +3029,10 @@ const TopLight = (function () {
     return executeWithLock_(function () {
       const newRow = sheet.getLastRow() + 1;
       if (newRow > sheet.getMaxRows()) sheet.insertRowsAfter(sheet.getMaxRows(), newRow - sheet.getMaxRows());
-      noteMutation_();
+      noteMutation_(sheet);
       applySalesHeaderFormulas_(rowValues, headers, newRow);
       sheet.getRange(newRow, 1, 1, rowValues.length).setValues([rowValues]);
-      noteMutation_();
+      noteMutation_(sheet);
       return newRow;
     });
   }
@@ -3069,7 +3069,7 @@ const TopLight = (function () {
       const startRow = sheet.getLastRow() + 1;
       const lastNeeded = startRow + valueRows.length - 1;
       if (lastNeeded > sheet.getMaxRows()) sheet.insertRowsAfter(sheet.getMaxRows(), lastNeeded - sheet.getMaxRows());
-      noteMutation_();
+      noteMutation_(sheet);
 
       valueRows.forEach(function (rowValues, i) {
         const r = startRow + i;   // identical to the old appendRow row numbers
@@ -3085,7 +3085,7 @@ const TopLight = (function () {
       });
 
       sheet.getRange(startRow, 1, valueRows.length, headers.length).setValues(valueRows);
-      noteMutation_();
+      noteMutation_(sheet);
     });
   }
 
@@ -3097,7 +3097,7 @@ const TopLight = (function () {
     const data = sheet.getDataRange().getValues();
     for (let i = data.length - 1; i >= 1; i--) {
       if (String(data[i][idx]).trim() === headerUid) sheet.deleteRow(i + 1);
-      noteMutation_();
+      noteMutation_(sheet);
     }
   }
 

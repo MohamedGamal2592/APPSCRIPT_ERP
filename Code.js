@@ -569,11 +569,11 @@ function toggleKillSwitch_(payload, sessionToken, authUser) {
 
   const newValue = !!payload.on;
   sheet.getRange('B2').setValue(newValue ? 1 : 0);
-  noteMutation_();
+  noteMutation_(sheet);
   sheet.getRange('C2').setValue(new Date());
-  noteMutation_();
+  noteMutation_(sheet);
   sheet.getRange('D2').setValue((authUser && authUser.email) || '');
-  noteMutation_();
+  noteMutation_(sheet);
   // Explicit invalidation — onEdit does NOT fire for script writes.
   bumpVersion_('ERP_system_work');
   return { status: 'success', message: newValue ? 'تم تشغيل النظام' : 'تم إيقاف النظام', enabled: newValue };
@@ -642,7 +642,7 @@ function logClientError_(payload) {
     payload = payload || {};
     const ss = getSpreadsheet_(CONFIG.AUTH_SPREADSHEET_ID);
     let sh = ss.getSheetByName('ERP_Client_Log');
-    if (!sh) { sh = ss.insertSheet('ERP_Client_Log'); sh.appendRow(['ts', 'page', 'message', 'stack', 'url', 'user_email']); noteMutation_(); }
+    if (!sh) { sh = ss.insertSheet('ERP_Client_Log'); sh.appendRow(['ts', 'page', 'message', 'stack', 'url', 'user_email']); noteMutation_(sh); }
     sh.appendRow([
       new Date().toISOString(),
       String(payload.page || ''),
@@ -651,7 +651,7 @@ function logClientError_(payload) {
       String(payload.url || '').slice(0, 1500),
       String(payload.user || '').slice(0, 200)
     ]);
-    noteMutation_();
+    noteMutation_(sh);
     return { status: 'success' };
   } catch (e) {
     return { status: 'error', message: e.message };
@@ -730,9 +730,9 @@ function logClientPerf_(payload) {
     let sh = ss.getSheetByName('ERP_Client_Perf');
     if (!sh) {
       sh = ss.insertSheet('ERP_Client_Perf');
-      noteMutation_();
+      noteMutation_(sh);
       sh.appendRow(['ts', 'page', 'metric', 'ms', 'url', 'user_email']);
-      noteMutation_();
+      noteMutation_(sh);
     }
     const ts = new Date().toISOString();
     const page = String(payload.page || '').slice(0, 200);
@@ -742,7 +742,7 @@ function logClientPerf_(payload) {
       return [ts, page, String(m.metric).slice(0, 60), Number(m.ms) || 0, url, who];
     });
     sh.getRange(sh.getLastRow() + 1, 1, rows.length, 6).setValues(rows);
-    noteMutation_();
+    noteMutation_(sh);
     return { status: 'success', rows: rows.length };
   } catch (e) {
     return { status: 'error', message: e.message };
@@ -866,9 +866,9 @@ function ensureSystemLogSheet_() {
     let sheet = ss.getSheetByName('SystemLog');
     if (!sheet) {
       sheet = ss.insertSheet('SystemLog');
-      noteMutation_();
+      noteMutation_(sheet);
       sheet.appendRow(SYSTEM_LOG_HEADERS);
-      noteMutation_();
+      noteMutation_(sheet);
       return sheet;
     }
     // Sheet already exists live — migrate in place. Only ADD missing headers
@@ -877,7 +877,7 @@ function ensureSystemLogSheet_() {
     const missing = SYSTEM_LOG_HEADERS.filter(function (h) { return existing.indexOf(h) === -1; });
     if (missing.length) {
       sheet.getRange(1, existing.length + 1, 1, missing.length).setValues([missing]);
-      noteMutation_();
+      noteMutation_(sheet);
       delete _headerCache_[sheet.getParent().getId() + '_' + sheet.getSheetId()]; // bust getHeaders_ cache
     }
     return sheet;
@@ -1189,7 +1189,7 @@ function cleanupOldSessions_(payload, sessionToken, authUser) {
         var exp = (raw instanceof Date) ? raw : new Date(raw);
         if (!isNaN(exp.getTime()) && now > exp.getTime()) {
           sheet.deleteRow(i + 1);
-          noteMutation_();
+          noteMutation_(sheet);
           removed++;
         }
       }

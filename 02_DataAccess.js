@@ -97,7 +97,47 @@ function rearmRecordCache_() {
  * correctness — which is why it is called liberally, including at sites that may
  * not strictly need it.
  */
-function noteMutation_() {
+/*
+ * [RT-5] …and, since this run, it also STAMPS the table it was told about.
+ *
+ * That it did not was a defect, not a gap in coverage, and it is the reason the
+ * live-change watch has been decorative on the pages that had it. The stamp
+ * helpers (noteTableChange_ / noteSheetChange_) were called from exactly three
+ * places, all inside the shared data layer — addRecord_, updateRowByCriteria_
+ * and the delete helpers. Company handlers write to sheets directly with
+ * setValues/setValue/appendRow/deleteRow in about 112 places, and every one of
+ * those called noteMutation_() with no arguments, which only ever emptied the
+ * per-request memo.
+ *
+ * The consequence, stated plainly: a change written by one of those handlers
+ * bumped no version, so a second device polling get_page_versions could never
+ * learn about it. saveValleyReturn_, transferValleyCash_ and addMonthlySalary_
+ * are three confirmed examples. Twenty-two pages have been polling for changes
+ * they were structurally incapable of seeing.
+ *
+ * Both arguments are OPTIONAL and the no-argument call behaves EXACTLY as it
+ * always has. That is deliberate: the signature change and the call-site sweep
+ * ship together, but a site the sweep missed is no worse off than it was
+ * yesterday, and tools/verify/rt3_stamp_coverage.js reports every one of them
+ * with a file and a line rather than leaving them to be rediscovered.
+ *
+ * Where a caller holds a Sheet rather than a pair of ids, noteSheetChange_
+ * derives both. Where a caller genuinely cannot tell which table it wrote,
+ * it stamps NOTHING and is reported: a site that stamps the WRONG table is
+ * worse than one that stamps none, because it makes every other page watching
+ * that table refetch for no reason and still misses its own change.
+ */
+function noteMutation_(scopeId, sheetName) {
+  if (scopeId && sheetName) {
+    noteTableChange_(scopeId, sheetName);
+  } else if (scopeId && typeof scopeId === 'object' && typeof scopeId.getName === 'function') {
+    /* A Sheet in the first position. Almost every company write site holds one
+     * — `const sheet = getSheet_(SOME_SHEET, dbId)` — and does NOT hold the
+     * spreadsheet id separately, so demanding the pair would have meant
+     * inventing a local at a hundred sites and getting some of them wrong.
+     * noteSheetChange_ derives both from the sheet itself. */
+    noteSheetChange_(scopeId);
+  }
   if (_recordCacheDisabled_) return;   // already off for this request
   disableRecordCache_();
 }

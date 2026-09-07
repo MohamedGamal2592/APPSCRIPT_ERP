@@ -1140,7 +1140,7 @@ const AssessmentCenter = (function () {
       });
       const startRow = sh.getLastRow() + 1;
       sh.getRange(startRow, 1, matrix.length, headers.length).setValues(matrix);
-      noteMutation_();
+      noteMutation_(sh);
       objs.forEach(function (obj, i) {
         const pk = obj[pkName];
         // Same header-case rule as acInsert_ — logHistory_ reads by real
@@ -1174,7 +1174,7 @@ const AssessmentCenter = (function () {
       });
       const startRow = sh.getLastRow() + 1;
       sh.getRange(startRow, 1, matrix.length, headers.length).setValues(matrix);
-      noteMutation_();
+      noteMutation_(sh);
     }, lockMs);
   }
 

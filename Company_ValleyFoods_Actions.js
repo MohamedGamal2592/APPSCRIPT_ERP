@@ -145,6 +145,9 @@ const ValleyFoods = (function () {
 
     // المالية — حركة النقدية والبنوك
     'get_valley_cash': { page: 'vf_cash', access: 'read' },
+    /* the expenses report reads the SAME page's data, so it rides the existing
+       vf_cash grant rather than needing one of its own */
+    'get_valley_cash_expense_report': { page: 'vf_cash', access: 'read' },
     'save_valley_cash': { page: 'vf_cash', access: 'write' },
     'approve_valley_cash': { page: 'vf_cash', access: 'write' },
     'delete_valley_cash': { page: 'vf_cash', access: 'full' },
@@ -265,6 +268,7 @@ const ValleyFoods = (function () {
     'get_valley_party_balances': 'valley_legal_customer_vendor',
 
     'get_valley_cash': 'valley_cash_bank_movement',
+    'get_valley_cash_expense_report': 'valley_cash_bank_movement',
     'save_valley_cash': 'valley_cash_bank_movement',
     'transfer_valley_cash': 'valley_cash_bank_movement',
 
@@ -553,9 +557,9 @@ const ValleyFoodsHREmp = (function () {
     let sheet = ss.getSheetByName(name);
     if (!sheet) {
       sheet = ss.insertSheet(name);
-      noteMutation_();
+      noteMutation_(sheet);
       sheet.appendRow(headers);
-      noteMutation_();
+      noteMutation_(sheet);
       sheet.setFrozenRows(1);
     }
     _ensuredSheets_[key] = sheet;
@@ -822,7 +826,7 @@ const ValleyFoodsHREmp = (function () {
         for (var r = 1; r < empData.length; r++) {
           if (String(empData[r][empIdIdx]) === empKey) {
             empSheet.getRange(r + 1, statusIdx + 1).setValue(statusType);
-            noteMutation_();
+            noteMutation_(empSheet);
             break;
           }
         }
@@ -1189,9 +1193,9 @@ const ValleyFoodsHRModules = (function () {
     var sheet = ss.getSheetByName(name);
     if (!sheet) {
       sheet = ss.insertSheet(name);
-      noteMutation_();
+      noteMutation_(sheet);
       sheet.appendRow(headers);
-      noteMutation_();
+      noteMutation_(sheet);
       sheet.setFrozenRows(1);
     }
     _ensuredSheets_[key] = sheet;
@@ -1276,11 +1280,11 @@ const ValleyFoodsHRModules = (function () {
 
     var rowNum = sheet.getLastRow() + 1;
     sheet.appendRow(attRowValues_(headers, row));
-    noteMutation_();
+    noteMutation_(sheet);
     /* D-21: format the cell that was just written, never the whole column. */
     var sdIdx = attColIdx_(headers, 'session_date');
     if (sdIdx !== -1) {
-      try { sheet.getRange(rowNum, sdIdx + 1).setNumberFormat('dd/mm/yyyy'); noteMutation_(); } catch (e) { /* non-fatal */ }
+      try { sheet.getRange(rowNum, sdIdx + 1).setNumberFormat('dd/mm/yyyy'); noteMutation_(sheet); } catch (e) { /* non-fatal */ }
     }
     try {
       logHistory_(dbId, ATTENDANCE_SESSION_SHEET, 'create_' + ATTENDANCE_SESSION_SHEET + '_' + row['session_id'],
@@ -1666,7 +1670,7 @@ const ValleyFoodsHRModules = (function () {
       row['created_at'] = new Date();
       var values = headers.map(function (h) { return row[h] !== undefined ? row[h] : ''; });
       sheet.appendRow(values);
-      noteMutation_();
+      noteMutation_(sheet);
       var _ctMap = {};
       try { var _idxRows = getAllRecords_(dbId, CONTRACTS_INDEX_SHEET); _idxRows.forEach(function(rr){ _ctMap[String(rr.id)] = (rr.contract_name_ar||'') + (rr.contract_name_en ? ' — ' + rr.contract_name_en : ''); }); } catch(e){}
       var _empNameC = '';
@@ -1768,7 +1772,7 @@ const ValleyFoodsHRModules = (function () {
     row['created_at'] = new Date();
     var values = headers.map(function (h) { return row[h] !== undefined ? row[h] : ''; });
     sheet.appendRow(values);
-    noteMutation_();
+    noteMutation_(sheet);
     var _vacNameMap = {};
     try { var _viRows = getAllRecords_(dbId, VACATIONS_INDEX_SHEET); _viRows.forEach(function(rr){ _vacNameMap[String(rr.id)] = rr.vacation_name_ar || String(rr.id); }); } catch(e){}
     var _empNameVA = '';
@@ -1933,7 +1937,7 @@ const ValleyFoodsHRModules = (function () {
     row['created_at'] = new Date();
     var values = headers.map(function (h) { return row[h] !== undefined ? row[h] : ''; });
     sheet.appendRow(values);
-    noteMutation_();
+    noteMutation_(sheet);
     var _vacNameMap2 = {};
     try { var _viRows2 = getAllRecords_(dbId, VACATIONS_INDEX_SHEET); _viRows2.forEach(function(rr){ _vacNameMap2[String(rr.id)] = rr.vacation_name_ar || String(rr.id); }); } catch(e){}
     var savedRecordVac = {
@@ -1959,7 +1963,7 @@ const ValleyFoodsHRModules = (function () {
           for (var i = 1; i < allData.length; i++) {
             if (String(allData[i][uidIdx]).trim() === allocId) {
               allocSheet.getRange(i + 1, usedIdx + 1).setValue(Number(allData[i][usedIdx]) + duration);
-              noteMutation_();
+              noteMutation_(allocSheet);
               break;
             }
           }
@@ -2066,7 +2070,7 @@ const ValleyFoodsHRModules = (function () {
     row['created_at'] = new Date();
     var values = headers.map(function (h) { return row[h] !== undefined ? row[h] : ''; });
     sheet.appendRow(values);
-    noteMutation_();
+    noteMutation_(sheet);
     var _rolesOT = getOvertimeRoles_(dbId);
     var _rmapOT = {}; _rolesOT.forEach(function(rr){ _rmapOT[rr.value]=rr; });
     var _roleOT = _rmapOT[otType] || {};
@@ -2176,7 +2180,7 @@ const ValleyFoodsHRModules = (function () {
       });
     });
     sheet.getRange(startRow, 1, rows.length, headers.length).setValues(rows);
-    noteMutation_();
+    noteMutation_(sheet);
     /* ONE audit write for the whole run. Per-employee logHistory_ took the
        global script lock once per employee, which on a full monthly generation
        is the dominant cost of the save. */
@@ -2457,13 +2461,13 @@ const ValleyFoodsHRModules = (function () {
 
     var rowNum = sheet.getLastRow() + 1;
     sheet.appendRow(attRowValues_(headers, row));
-    noteMutation_();
+    noteMutation_(sheet);
     /* D-21. This used to re-format the WHOLE column on every single insert —
        one setNumberFormat over tens of thousands of cells per added punch.
        The new cell is the only one that needs it. */
     var atIdx = attColIdx_(headers, 'attendance_date_time');
     if (atIdx !== -1) {
-      try { sheet.getRange(rowNum, atIdx + 1).setNumberFormat('dd/mm/yyyy hh:mm'); noteMutation_(); } catch (e) { /* non-fatal */ }
+      try { sheet.getRange(rowNum, atIdx + 1).setNumberFormat('dd/mm/yyyy hh:mm'); noteMutation_(sheet); } catch (e) { /* non-fatal */ }
     }
     /* One row added by hand keeps its per-row history entry. The batch entry
        that replaces per-row logging on import has no meaning here. */
@@ -2975,7 +2979,7 @@ const ValleyFoodsHRModules = (function () {
           date_max: dateMax === null ? '' : dateMax,
           batch_status: 'active', reverted_by: '', reverted_at: ''
         }));
-        noteMutation_();
+        noteMutation_(batchSheet);
         batch = attFindBatch_(dbId, batchId);
       } else {
         if (!batch) throw new Error('عملية الرفع غير موجودة — ابدأ من جديد');
@@ -3074,7 +3078,7 @@ const ValleyFoodsHRModules = (function () {
         var atIdx = attColIdx_(attHeaders, 'attendance_date_time');
         if (atIdx !== -1) {
           attSheet.getRange(startRow, atIdx + 1, toAppend.length, 1).setNumberFormat('dd/mm/yyyy hh:mm');
-          noteMutation_();
+          noteMutation_(attSheet);
         }
         attSheet.getRange(startRow, 1, toAppend.length, attHeaders.length).setValues(toAppend);
         noteMutation_();
@@ -3398,9 +3402,9 @@ const ValleyFoodsHRModules = (function () {
     var sheet = ss.getSheetByName(sheetName);
     if (!sheet) {
       sheet = ss.insertSheet(sheetName);
-      noteMutation_();
+      noteMutation_(sheet);
       sheet.appendRow(canonical);
-      noteMutation_();
+      noteMutation_(sheet);
       sheet.setFrozenRows(1);
       _ensuredSheets_[key] = sheet;
       return sheet;
@@ -3409,7 +3413,7 @@ const ValleyFoodsHRModules = (function () {
     var missing = canonical.filter(function (h) { return existing.indexOf(h) === -1; });
     if (missing.length) {
       sheet.getRange(1, existing.length + 1, 1, missing.length).setValues([missing]);
-      noteMutation_();
+      noteMutation_(sheet);
       delete _headerCache_[ss.getId() + '_' + sheet.getSheetId()];
     }
     _ensuredSheets_[key] = sheet;
@@ -3446,7 +3450,7 @@ const ValleyFoodsHRModules = (function () {
       return dataMap[k] !== undefined ? dataMap[k] : '';
     });
     sheet.appendRow(values);
-    noteMutation_();
+    noteMutation_(sheet);
   }
 
   /* ---------- OVERTIME ROLES ---------- */
@@ -4278,6 +4282,9 @@ const ValleyFoodsHRModules = (function () {
     settingsEnsureSheet_(dbId, PURCHASING_LINE_SHEET, PURCHASING_LINE_HEADERS);
     var rows = getAllRecords_(dbId, PURCHASING_COSTING_SHEET);
     rows.sort(function (a, b) { return (Number(b.id) || 0) - (Number(a.id) || 0); });
+    /* The from/to range narrows the set BEFORE the newest-10 slice, so the 10
+       rows the list shows are the newest 10 inside the range. */
+    rows = vfBoundRows_(rows, data, 'Reciept Date');
     if (!data || !data.loadAll) rows = rows.slice(0, limit);
     /* U-46. Whole sheet rows, so every landed-cost column rides along. Code,
        supplier, dates, type, currency, month/year and the approval columns stay,
@@ -4602,7 +4609,7 @@ const ValleyFoodsHRModules = (function () {
         });
       });
       lineSheet.getRange(startRow, 1, matrix.length, lineHeaders.length).setValues(matrix);
-      noteMutation_();
+      noteMutation_(lineSheet);
     }
 
     return { status: 'success', message: isEdit ? 'تم تحديث عملية الشراء' : 'تمت إضافة عملية الشراء', code: code };
@@ -5251,6 +5258,8 @@ const ValleyFoodsHRModules = (function () {
     var d = data || {};
     var isSuperAdmin = !!(user && user.isSuperAdmin);
     var editing = !!(d.mo_uid && String(d.mo_uid).trim());
+    /* declared here, not inside executeWithLock_: the success return below needs it */
+    var moUid;
     /* POLICY: add = page-write authority; edit existing = any writer, UNLESS the MO is Locked
        (Locked MOs are immutable and require super-admin unlock — enforced below at save time). */
 
@@ -5362,7 +5371,7 @@ const ValleyFoodsHRModules = (function () {
       var uidIdx = moHeaders.findIndex(function (h) { return String(h).trim() === 'unique_id'; });
       var idIdx = moHeaders.findIndex(function (h) { return String(h).trim() === 'id'; });
 
-      var moUid; var moNumberId;
+      var moNumberId;
       var stIdxG = moHeaders.findIndex(function (h) { return String(h).trim() === 'mo_status'; });
       if (editing) {
         moUid = String(d.mo_uid).trim();
@@ -5419,7 +5428,7 @@ const ValleyFoodsHRModules = (function () {
               return map[k] !== undefined ? map[k] : moDataAll[rr][hi];
             });
             sheetMo.getRange(rr + 1, 1, 1, rowVals.length).setValues([rowVals]);
-            noteMutation_();
+            noteMutation_(sheetMo);
             var newObj = Object.assign({}, oldObj, map);
             var oldUid = oldObj.record_uid || ('upd_' + MFG_ORDER_SHEET + '_' + moUid);
             try { logHistory_(dbId, MFG_ORDER_SHEET, oldUid, moUid, (user && user.email) || '', 'update', newObj, oldObj); } catch (eHist) {}
@@ -5502,7 +5511,7 @@ const ValleyFoodsHRModules = (function () {
             applyRowFormulas_(rv, outHeaders, mfgOutputFormulaMap_(outStart + oi2));
           });
           sheetOut.getRange(outStart, 1, outRows.length, outHeaders.length).setValues(outRows);
-          noteMutation_();
+          noteMutation_(sheetOut);
         });
       }
 
@@ -5594,7 +5603,7 @@ const ValleyFoodsHRModules = (function () {
             applyRowFormulas_(rv, consHeaders, mfgConsumptionFormulaMap_(consStart2 + ci));
           });
           sheetCons.getRange(consStart2, 1, consRows.length, consHeaders.length).setValues(consRows);
-          noteMutation_();
+          noteMutation_(sheetCons);
         });
       }
 
@@ -5670,7 +5679,7 @@ const ValleyFoodsHRModules = (function () {
           var wcStart = sheetWC.getLastRow() + 1;
           ensureGridRows_(sheetWC, wcStart + wcNewRows.length - 1);
           sheetWC.getRange(wcStart, 1, wcNewRows.length, wcHeaders.length).setValues(wcNewRows);
-          noteMutation_();
+          noteMutation_(sheetWC);
         });
       }
       /* ONE read for every dropped work op, not one per op. */
@@ -5726,7 +5735,7 @@ const ValleyFoodsHRModules = (function () {
             applyRowFormulas_(rv, bpHeaders, byproductFormulaMap_(bpStart + bi));
           });
           sheetBP.getRange(bpStart, 1, bpRows.length, bpHeaders.length).setValues(bpRows);
-          noteMutation_();
+          noteMutation_(sheetBP);
         });
       }
     });
@@ -5751,7 +5760,7 @@ const ValleyFoodsHRModules = (function () {
         if (String(dataU[ru][uidIdxU]).trim() === moUid) {
           var _oldU = getAllRecords_(dbId, MFG_ORDER_SHEET).find(function(r){ return String(r.unique_id)===String(moUid); }) || null;
           sheetU.getRange(ru + 1, stIdxU + 1).setValue('In Progress');
-          noteMutation_();
+          noteMutation_(sheetU);
           try{ var _newU = Object.assign({}, _oldU||{}, { mo_status: 'In Progress' }); logHistory_(dbId, MFG_ORDER_SHEET, _oldU&&_oldU.record_uid ? _oldU.record_uid : ('update_'+MFG_ORDER_SHEET+'_'+moUid), moUid, (user&&user.email)||'', 'update', _newU, _oldU) }catch(e){}
           return { status: 'success', message: 'تم فتح قفل أمر التصنيع' };
         }
@@ -5774,21 +5783,21 @@ const ValleyFoodsHRModules = (function () {
         headers.forEach(function (h, hi) { oldObj[String(h).trim()] = dataAll[r][hi]; });
         if (kind === 'production') {
           sheet.getRange(r + 1, paIdx + 1).setValue((user && user.email) || '');
-          noteMutation_();
+          noteMutation_(sheet);
           sheet.getRange(r + 1, patIdx + 1).setValue(new Date());
-          noteMutation_();
+          noteMutation_(sheet);
         } else {
           sheet.getRange(r + 1, qaIdx + 1).setValue((user && user.email) || '');
-          noteMutation_();
+          noteMutation_(sheet);
           sheet.getRange(r + 1, qatIdx + 1).setValue(new Date());
-          noteMutation_();
+          noteMutation_(sheet);
         }
         /* auto-lock when both approvals exist */
         var hasProd = kind === 'production' || (paIdx !== -1 && String(dataAll[r][paIdx]).trim() !== '');
         var hasQual = kind === 'quality' || (qaIdx !== -1 && String(dataAll[r][qaIdx]).trim() !== '');
         if (hasProd && hasQual && stIdx !== -1) {
           sheet.getRange(r + 1, stIdx + 1).setValue('Locked');
-          noteMutation_();
+          noteMutation_(sheet);
         }
         var newObj = Object.assign({}, oldObj, kind === 'production'
           ? { production_approval: (user && user.email) || '', production_approval_time: new Date() }
@@ -5866,7 +5875,7 @@ const ValleyFoodsHRModules = (function () {
       for (var r2 = 1; r2 < dataAll.length; r2++) {
         if (String(dataAll[r2][uidIdx]).trim() === moUid) {
           sheet.getRange(r2 + 1, stIdx + 1).setValue(next);
-          noteMutation_();
+          noteMutation_(sheet);
           break;
         }
       }
@@ -5961,6 +5970,21 @@ const ValleyFoodsHRModules = (function () {
     return 0;
   }
 
+  /* A date-only bound like "2026-03-31" is what the <input type="date"> filters
+     send. `new Date('2026-03-31')` is UTC midnight, which in a UTC+2 script is
+     02:00 local — so a "from" bound would drop rows stamped early on its own
+     first day, and a "to" bound would drop everything after midnight on its
+     last. Both ends are therefore parsed as local times, "to" at the end of its
+     day. A full timestamp is used as given. */
+  function vfDateBound_(v, endOfDay) {
+    if (!v) return null;
+    var t = String(v).trim();
+    var d = /^\d{4}-\d{2}-\d{2}$/.test(t)
+      ? new Date(t + (endOfDay ? 'T23:59:59.999' : 'T00:00:00.000'))
+      : new Date(t);
+    return isNaN(d.getTime()) ? null : d;
+  }
+
   /* Batch 7: opt-in list bounding. When the caller passes payload.from /
    * payload.to (ISO date strings) and/or payload.limit, the list is trimmed to
    * that window. With none provided the rows are returned untouched, so
@@ -5969,8 +5993,8 @@ const ValleyFoodsHRModules = (function () {
   function vfBoundRows_(rows, payload, dateField) {
     if (!rows || !rows.length) return rows;
     payload = payload || {};
-    var from = payload.from ? new Date(payload.from) : null;
-    var to = payload.to ? new Date(payload.to) : null;
+    var from = vfDateBound_(payload.from, false);
+    var to = vfDateBound_(payload.to, true);
     var limit = (payload.limit != null) ? Number(payload.limit) : null;
     var out = rows.filter(function (r) {
       if (from || to) {
@@ -5990,8 +6014,8 @@ const ValleyFoodsHRModules = (function () {
    * implement "load more" paging. Honors payload.offset + payload.limit. */
   function vfPage_(rows, payload, dateField) {
     payload = payload || {};
-    var from = payload.from ? new Date(payload.from) : null;
-    var to = payload.to ? new Date(payload.to) : null;
+    var from = vfDateBound_(payload.from, false);
+    var to = vfDateBound_(payload.to, true);
     var limit = (payload.limit != null) ? Number(payload.limit) : null;
     var offset = (payload.offset != null) ? Number(payload.offset) : 0;
     if (offset < 0) offset = 0;
@@ -6177,7 +6201,7 @@ const ValleyFoodsHRModules = (function () {
       ensureGridRows_(sheet, _bpRow);
       applyRowFormulas_(values, headers, byproductFormulaMap_(_bpRow));
       sheet.getRange(_bpRow, 1, 1, values.length).setValues([values]);
-      noteMutation_();
+      noteMutation_(sheet);
       var _prodNameBP = '';
       try { getAllRecords_(dbId, FIN_PRODUCTS_SHEET).forEach(function(pp){ if (String(pp.id)===String(pid)) _prodNameBP = String(pp.name_ar || pp.id); }); } catch(e){}
       _savedBP = {
@@ -6286,7 +6310,7 @@ const ValleyFoodsHRModules = (function () {
           return map[k] !== undefined ? map[k] : '';
         });
         sheet.appendRow(values);
-        noteMutation_();
+        noteMutation_(sheet);
         try{ logHistory_(dbId, MFG_WORKOPS_SHEET, map.record_uid || ('create_'+MFG_WORKOPS_SHEET+'_'+uid2), uid2, (user&&user.email)||'', 'create', map, null) }catch(e){}
       }
     });
@@ -6437,7 +6461,7 @@ const ValleyFoodsHRModules = (function () {
         map['created_at'] = new Date();
         var values = headers.map(function (h) { var k = String(h).trim(); return map[k] !== undefined ? map[k] : ''; });
         sheet.appendRow(values);
-        noteMutation_();
+        noteMutation_(sheet);
         try{ logHistory_(dbId, WC_SHEET, map.record_uid || ('create_'+WC_SHEET+'_'+map['unique_id']), map['unique_id'], (user&&user.email)||'', 'create', map, null) }catch(e){}
       }
     });
@@ -6500,7 +6524,7 @@ const ValleyFoodsHRModules = (function () {
         map['created_at'] = new Date();
         var values = headers.map(function (h) { var k = String(h).trim(); return map[k] !== undefined ? map[k] : ''; });
         sheet.appendRow(values);
-        noteMutation_();
+        noteMutation_(sheet);
         try{ logHistory_(dbId, WC_ASSET_TECH_SHEET, map.record_uid || ('create_'+WC_ASSET_TECH_SHEET+'_'+map['unique_id']), map['unique_id'], (user&&user.email)||'', 'create', map, null) }catch(e){}
       }
     });
@@ -6546,7 +6570,7 @@ const ValleyFoodsHRModules = (function () {
         map['created_at'] = new Date();
         var values = headers.map(function (h) { var k = String(h).trim(); return map[k] !== undefined ? map[k] : ''; });
         sheet.appendRow(values);
-        noteMutation_();
+        noteMutation_(sheet);
         try{ logHistory_(dbId, WC_ASSETS_SHEET, map.record_uid || ('create_'+WC_ASSETS_SHEET+'_'+map['unique_id']), map['unique_id'], (user&&user.email)||'', 'create', map, null) }catch(e){}
       }
     });
@@ -6606,7 +6630,7 @@ const ValleyFoodsHRModules = (function () {
             return map[k] !== undefined ? map[k] : '';
           });
           sheetP.appendRow(values);
-          noteMutation_();
+          noteMutation_(sheetP);
           try{ logHistory_(dbId, PLANS_SHEET, map.record_uid || ('create_'+PLANS_SHEET+'_'+map['plan_unique_id']), map['plan_unique_id'], (user&&user.email)||'', 'create', map, null) }catch(e){}
         });
       }
@@ -6814,7 +6838,7 @@ const ValleyFoodsHRModules = (function () {
         });
       });
       sheetSteps.getRange(startRow, 1, stepRows.length, stepHeaders.length).setValues(stepRows);
-      noteMutation_();
+      noteMutation_(sheetSteps);
       var _recMap = editing ? { unique_id: uid, recipe_name: name, produced_product_id: producedPid, yield_qty: yieldQty } : { unique_id: uid, recipe_name: name, produced_product_id: producedPid, yield_qty: yieldQty };
       var _oldRec = editing ? (rows.find(function(r){ return String(r.unique_id)===String(uid); }) || null) : null;
       try{ logHistory_(dbId, MFG_RECIPE_SHEET, _oldRec&&_oldRec.record_uid ? _oldRec.record_uid : ((editing ? 'update_' : 'create_')+MFG_RECIPE_SHEET+'_'+uid), uid, (user&&user.email)||'', editing ? 'update' : 'create', _recMap, _oldRec) }catch(e){}
@@ -7205,15 +7229,15 @@ const ValleyFoodsHRModules = (function () {
      * M=type, N=balance_amount, G=date, AA=Month, AB=Year */
     function setComputedFormulas_(rowNumber) {
       sheet.getRange(rowNumber, 10).setValue('=H' + rowNumber + '-I' + rowNumber);           // net_amount
-      noteMutation_();
+      noteMutation_(sheet);
       sheet.getRange(rowNumber, 12).setValue('=J' + rowNumber + '+K' + rowNumber);           // total
-      noteMutation_();
+      noteMutation_(sheet);
       sheet.getRange(rowNumber, 14).setValue(                                                 // balance_amount
         '=IFS(M' + rowNumber + '="Credit Note",L' + rowNumber + '*-1,M' + rowNumber + '="Credit",L' + rowNumber + '*-1,TRUE,L' + rowNumber + ')');
       sheet.getRange(rowNumber, 27).setValue('=MONTH(G' + rowNumber + ')');                   // Month
-      noteMutation_();
+      noteMutation_(sheet);
       sheet.getRange(rowNumber, 28).setValue('=YEAR(G' + rowNumber + ')');                    // Year
-      noteMutation_();
+      noteMutation_(sheet);
     }
 
       if (editing) {
@@ -7330,17 +7354,17 @@ const ValleyFoodsHRModules = (function () {
       });
       var rowNum = sheet.getLastRow() + 1;
       sheet.appendRow(values);
-      noteMutation_();
+      noteMutation_(sheet);
       sheet.getRange(rowNum, 10).setValue('=H' + rowNum + '-I' + rowNum);
-      noteMutation_();
+      noteMutation_(sheet);
       sheet.getRange(rowNum, 12).setValue('=J' + rowNum + '+K' + rowNum);
-      noteMutation_();
+      noteMutation_(sheet);
       sheet.getRange(rowNum, 14).setValue(
         '=IFS(M' + rowNum + '="Credit Note",L' + rowNum + '*-1,M' + rowNum + '="Credit",L' + rowNum + '*-1,TRUE,L' + rowNum + ')');
       sheet.getRange(rowNum, 27).setValue('=MONTH(G' + rowNum + ')');
-      noteMutation_();
+      noteMutation_(sheet);
       sheet.getRange(rowNum, 28).setValue('=YEAR(G' + rowNum + ')');
-      noteMutation_();
+      noteMutation_(sheet);
       try{ logHistory_(dbId, FIN_CASH_SHEET, map.record_uid || ('create_'+FIN_CASH_SHEET+'_'+tid), tid, (user&&user.email)||'', 'create', map, null) }catch(e){}
     }
 
@@ -7765,7 +7789,7 @@ const ValleyFoodsHRModules = (function () {
       });
     });
     sheet.getRange(startRow, 1, matrix.length, headers.length).setValues(matrix);
-    noteMutation_();
+    noteMutation_(sheet);
 
     /* ONE audit write for the batch, not one per row. */
     try {
@@ -8220,7 +8244,7 @@ const ValleyFoodsHRModules = (function () {
           return map[k] !== undefined ? map[k] : (k === 'invoice_unique_id' ? existingUid : '');
         });
         sheetInv.getRange(rowNum, 1, 1, rowVals.length).setValues([rowVals]);
-        noteMutation_();
+        noteMutation_(sheetInv);
         try{ var _oldInv = getAllRecords_(dbId, FIN_SALES_INV_SHEET).find(function(r){ return String(r.invoice_unique_id)===String(existingUid); }) || null; if(!_oldInv){ _oldInv={}; invHeaders.forEach(function(h,hi){ _oldInv[String(h).trim()] = dataAll[rowNum-1][hi]; }); } var _newInv = Object.assign({}, _oldInv||{}, map); logHistory_(dbId, FIN_SALES_INV_SHEET, _oldInv&&_oldInv.record_uid ? _oldInv.record_uid : ('update_'+FIN_SALES_INV_SHEET+'_'+existingUid), existingUid, (user&&user.email)||'', 'update', _newInv, _oldInv) }catch(e){}
       } else {
         map['رقم الفاتورة'] = invoiceNumber;
@@ -8233,7 +8257,7 @@ const ValleyFoodsHRModules = (function () {
           return map[k] !== undefined ? map[k] : '';
         });
         sheetInv.appendRow(newRow);
-        noteMutation_();
+        noteMutation_(sheetInv);
         try{ logHistory_(dbId, FIN_SALES_INV_SHEET, map.record_uid || ('create_'+FIN_SALES_INV_SHEET+'_'+uid), uid, (user&&user.email)||'', 'create', map, null) }catch(e){}
       }
 
@@ -8264,7 +8288,7 @@ const ValleyFoodsHRModules = (function () {
       });
       if (lineRows.length) {
         sheetLines.getRange(startLineRow, 1, lineRows.length, lineHeaders.length).setValues(lineRows);
-        noteMutation_();
+        noteMutation_(sheetLines);
       }
 
       /* ---- P2: rewrite batch-allocation rows (valley_sales_product_stock) ---- */
@@ -8293,14 +8317,14 @@ const ValleyFoodsHRModules = (function () {
         }
         if (newBody.length) {
           allocSheet.getRange(2, 1, newBody.length, allocHeaders.length).setValues(newBody);
-          noteMutation_();
+          noteMutation_(allocSheet);
           var totalRows = allocSheet.getLastRow();
           if (totalRows > newBody.length + 1) allocSheet.deleteRows(newBody.length + 2, totalRows - (newBody.length + 1));
-          noteMutation_();
+          noteMutation_(allocSheet);
         } else {
           var totalRows2 = allocSheet.getLastRow();
           if (totalRows2 > 1) allocSheet.deleteRows(2, totalRows2 - 1);
-          noteMutation_();
+          noteMutation_(allocSheet);
         }
       }
       /* insert fresh allocations */
@@ -8325,7 +8349,7 @@ const ValleyFoodsHRModules = (function () {
       });
       if (allocRows.length) {
         allocSheet.getRange(allocStart, 1, allocRows.length, allocHeaders.length).setValues(allocRows);
-        noteMutation_();
+        noteMutation_(allocSheet);
       }
     });
 
@@ -8449,11 +8473,11 @@ const ValleyFoodsHRModules = (function () {
         var next = cur === 'Approved' ? 'Pending' : 'Approved';
         var _oldInvA = getAllRecords_(dbId, FIN_SALES_INV_SHEET).find(function(rr){ return String(rr.invoice_unique_id)===String(uid); }) || null;
         sheet.getRange(r + 1, stIdx + 1).setValue(next);
-        noteMutation_();
+        noteMutation_(sheet);
         sheet.getRange(r + 1, apIdx + 1).setValue(next === 'Approved' ? ((user && user.email) || '') : '');
-        noteMutation_();
+        noteMutation_(sheet);
         sheet.getRange(r + 1, atIdx + 1).setValue(next === 'Approved' ? new Date() : '');
-        noteMutation_();
+        noteMutation_(sheet);
         try{ var _newInvA = Object.assign({}, _oldInvA||{}, { approval_status: next, approval: (next==='Approved' ? ((user&&user.email)||'') : ''), approval_time: (next==='Approved' ? new Date() : '') }); logHistory_(dbId, FIN_SALES_INV_SHEET, _oldInvA&&_oldInvA.record_uid ? _oldInvA.record_uid : ('approve_'+FIN_SALES_INV_SHEET+'_'+uid), uid, (user&&user.email)||'', 'approve', _newInvA, _oldInvA) }catch(e){}
         return { status: 'success', message: next === 'Approved' ? 'تم اعتماد الفاتورة' : 'تم إرجاع الفاتورة لقيد الانتظار', approval_status: next };
       }
@@ -8749,7 +8773,7 @@ const ValleyFoodsHRModules = (function () {
 
       if (retRowsToWrite.length) {
         sheetRet.getRange(retStart, 1, retRowsToWrite.length, retHeaders.length).setValues(retRowsToWrite);
-        noteMutation_();
+        noteMutation_(sheetRet);
         /* ONE audit write for every returned line, not one per line. */
         try {
           var _uidIx = retHeaders.findIndex(function (h) { return String(h).trim() === 'unique_id'; });
@@ -8773,7 +8797,7 @@ const ValleyFoodsHRModules = (function () {
       if (stockRowsToWrite.length) {
         var stStart = sheetStock.getLastRow() + 1;
         sheetStock.getRange(stStart, 1, stockRowsToWrite.length, stockHeaders.length).setValues(stockRowsToWrite);
-        noteMutation_();
+        noteMutation_(sheetStock);
       }
     });
 
@@ -8926,14 +8950,14 @@ const ValleyFoodsHRModules = (function () {
         var deleted = (vals.length - 1) - newBody.length;
         if (newBody.length) {
           sh.getRange(2, 1, newBody.length, vals[0].length).setValues(newBody);
-          noteMutation_();
+          noteMutation_(sh);
           var totalRows = sh.getLastRow();
           if (totalRows > newBody.length + 1) sh.deleteRows(newBody.length + 2, totalRows - (newBody.length + 1));
-          noteMutation_();
+          noteMutation_(sh);
         } else {
           var totalRows2 = sh.getLastRow();
           if (totalRows2 > 1) sh.deleteRows(2, totalRows2 - 1);
-          noteMutation_();
+          noteMutation_(sh);
         }
         results.push({ ok: true, sheet: s.label, deleted: deleted });
       } catch (e) {
