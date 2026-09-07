@@ -1031,8 +1031,12 @@ function safeStr_(v) {
  * For 'create' logs every business column's new value; for update/approve/delete
  * logs only columns whose old/new differ.
  */
-function logHistory_(dbId, sheetName, recordUid, recordId, user, action, newValues, oldValues) {
-  const histSheet = getSheet_('ERP_Record_History', CONFIG.AUTH_SPREADSHEET_ID);
+/**
+ * The history rows ONE record change would produce. No write, no lock.
+ * Split out of logHistory_ so many changes can share a single write — see
+ * logHistoryMany_.
+ */
+function historyRowsFor_(dbId, sheetName, recordUid, recordId, user, action, newValues, oldValues) {
   const targetSheet = getSheet_(sheetName, dbId);
   const allHeaders = getHeaders_(targetSheet).map(function (h) { return String(h).trim(); });
   const businessHeaders = allHeaders.filter(function (h) {
@@ -1057,7 +1061,39 @@ function logHistory_(dbId, sheetName, recordUid, recordId, user, action, newValu
       created_at: new Date()
     });
   });
-  if (!rows.length) return;
+  return rows;
+}
+
+/**
+ * Audit MANY record changes in one write.
+ *
+ * logHistory_ already batches the columns of a single record, but calling it in
+ * a loop still costs one script lock, one id allocation and one setValues PER
+ * ROW — and the lock is the global one every user shares. Saving a 50-line
+ * invoice paid that fifty times, on top of writing the lines themselves.
+ *
+ * `entries` are {dbId, sheetName, recordUid, recordId, user, action, newValues,
+ * oldValues}. Identical cell values to N logHistory_ calls, identical ids, in
+ * the same order.
+ */
+function logHistoryMany_(entries) {
+  const rows = [];
+  (entries || []).forEach(function (e) {
+    if (!e) return;
+    historyRowsFor_(e.dbId, e.sheetName, e.recordUid, e.recordId, e.user, e.action,
+      e.newValues, e.oldValues).forEach(function (r) { rows.push(r); });
+  });
+  writeHistoryRows_(rows);
+}
+
+function logHistory_(dbId, sheetName, recordUid, recordId, user, action, newValues, oldValues) {
+  writeHistoryRows_(historyRowsFor_(dbId, sheetName, recordUid, recordId, user, action, newValues, oldValues));
+}
+
+/** The batched write itself — one lock, one id allocation, one setValues. */
+function writeHistoryRows_(rows) {
+  if (!rows || !rows.length) return;
+  const histSheet = getSheet_('ERP_Record_History', CONFIG.AUTH_SPREADSHEET_ID);
   // FAST PATH (batched): identical cell values to N sequential addRecord_ calls,
   // but ONE lock + ONE counter allocation + ONE setValues instead of N locks +
   // N counter R/W + N appends. This is the dominant save-time cost on edits

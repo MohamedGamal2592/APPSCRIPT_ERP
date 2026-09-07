@@ -2104,7 +2104,21 @@ const ValleyFoodsHRModules = (function () {
     });
     sheet.getRange(startRow, 1, rows.length, headers.length).setValues(rows);
     noteMutation_();
-    try{ entries.forEach(function(e, i){ var _rec = { emp_id: Number(e.emp_id), month: month, year: year, working_days: Number(e.working_days)||30 }; var _uid = _rec.emp_id+'_'+month+'_'+year; try{ logHistory_(dbId, EMP_MONTHLY_SALARIES_SHEET, ('create_'+EMP_MONTHLY_SALARIES_SHEET+'_'+_uid), _uid, (user&&user.email)||'', 'create', _rec, null) }catch(e2){} }); }catch(e){}
+    /* ONE audit write for the whole run. Per-employee logHistory_ took the
+       global script lock once per employee, which on a full monthly generation
+       is the dominant cost of the save. */
+    try {
+      logHistoryMany_(entries.map(function (e) {
+        var _rec = { emp_id: Number(e.emp_id), month: month, year: year, working_days: Number(e.working_days) || 30 };
+        var _uid = _rec.emp_id + '_' + month + '_' + year;
+        return {
+          dbId: dbId, sheetName: EMP_MONTHLY_SALARIES_SHEET,
+          recordUid: 'create_' + EMP_MONTHLY_SALARIES_SHEET + '_' + _uid,
+          recordId: _uid, user: (user && user.email) || '',
+          action: 'create', newValues: _rec, oldValues: null
+        };
+      }));
+    } catch (e) {}
     // build enriched saved rows for echo
     var _empNameMapMS = {};
     try { getAllRecords_(dbId, EMP_INFO_SHEET).forEach(function(e){ _empNameMapMS[String(e.emp_id)] = e.name_ar || String(e.emp_id); }); } catch(e){}
@@ -8383,7 +8397,25 @@ const ValleyFoodsHRModules = (function () {
       if (retRowsToWrite.length) {
         sheetRet.getRange(retStart, 1, retRowsToWrite.length, retHeaders.length).setValues(retRowsToWrite);
         noteMutation_();
-        try{ retRowsToWrite.forEach(function(r){ var _uid = r[retHeaders.findIndex(function(h){return String(h).trim()==='unique_id';})]; var _qty = r[retHeaders.findIndex(function(h){return String(h).trim()==='valley_return_qty';})]; var _rowLog={ unique_id:_uid, id:groupId, valley_sales_invoices_id:invUid, valley_return_qty:_qty, valley_return_date:retDate }; try{ logHistory_(dbId, FIN_RETURNS_SHEET, ('create_'+FIN_RETURNS_SHEET+'_'+_uid), _uid, (user&&user.email)||'', 'create', _rowLog, null) }catch(e2){} }); }catch(e){}
+        /* ONE audit write for every returned line, not one per line. */
+        try {
+          var _uidIx = retHeaders.findIndex(function (h) { return String(h).trim() === 'unique_id'; });
+          var _qtyIx = retHeaders.findIndex(function (h) { return String(h).trim() === 'valley_return_qty'; });
+          logHistoryMany_(retRowsToWrite.map(function (r) {
+            var _uid = r[_uidIx];
+            return {
+              dbId: dbId, sheetName: FIN_RETURNS_SHEET,
+              recordUid: 'create_' + FIN_RETURNS_SHEET + '_' + _uid,
+              recordId: _uid, user: (user && user.email) || '',
+              action: 'create',
+              newValues: {
+                unique_id: _uid, id: groupId, valley_sales_invoices_id: invUid,
+                valley_return_qty: r[_qtyIx], valley_return_date: retDate
+              },
+              oldValues: null
+            };
+          }));
+        } catch (e) {}
       }
       if (stockRowsToWrite.length) {
         var stStart = sheetStock.getLastRow() + 1;

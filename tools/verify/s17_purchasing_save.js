@@ -549,6 +549,135 @@ console.log('\n6 — deleteRowsWhereIn_: N values, ONE sheet read\n');
     noneG.length === 61, 'values that match nothing leave the sheet alone');
 }
 
+/* ══ 7. logHistoryMany_ — N record changes, ONE audit write ═════════════ */
+console.log('\n7 — logHistoryMany_: same audit rows as N logHistory_ calls\n');
+{
+  function auditWorld() {
+    const state = { hist: [], locks: 0, idReads: 0 };
+    const HIST = ['id', 'sheet_name', 'record_uid', 'record_id', 'action', 'column_name',
+      'old_value', 'new_value', 'changed_by', 'changed_at', 'created_at'];
+    const TGT = ['unique_id', 'id', 'emp_id', 'month', 'year', 'working_days', 'user', 'created_at'];
+
+    function mk(name, headers, grid) {
+      return {
+        getName: () => name,
+        getParent: () => ({ getId: () => 'ss' }),
+        getSheetId: () => name,
+        getLastRow: () => grid.length,
+        getLastColumn: () => headers.length,
+        getDataRange: () => ({ getValues: () => grid.map(r => r.slice()) }),
+        getRange: (row, col, nRows, nCols) => ({
+          getValues: () => {
+            if (name === 'ERP_Record_History' && col === 2) state.idReads++;
+            const out = [];
+            for (let r = 0; r < (nRows || 1); r++) {
+              const src = grid[row - 1 + r] || [];
+              out.push(src.slice(col - 1, col - 1 + (nCols || headers.length)));
+            }
+            return out;
+          },
+          setValue: () => {},
+          setValues: (v) => {
+            (v || []).forEach(r => {
+              grid.push(r.slice());
+              if (name === 'ERP_Record_History') {
+                const o = {};
+                headers.forEach((h, i) => { o[h] = r[i]; });
+                state.hist.push(o);
+              }
+            });
+          },
+          setNumberFormat: () => {}
+        }),
+        appendRow: (r) => grid.push(r.slice()),
+        deleteRow: () => {}, deleteRows: () => {}, setFrozenRows: () => {}
+      };
+    }
+
+    const SH = {
+      'ERP_Record_History': mk('ERP_Record_History', HIST, [HIST.slice()]),
+      'valley_emp_salaries': mk('valley_emp_salaries', TGT, [TGT.slice()]),
+      'ID_Counter': mk('ID_Counter', ['sheet_name', 'next_id'], [['sheet_name', 'next_id']])
+    };
+
+    const sb = {
+      console, JSON, Math, String, Number, Boolean, Object, Array, Error, RegExp, Date,
+      isNaN, parseInt, parseFloat,
+      SpreadsheetApp: { openById: () => ({ getSheetByName: n => SH[n] || null, insertSheet: () => { throw new Error('x'); } }) },
+      LockService: { getScriptLock: () => ({ waitLock: () => { state.locks++; }, tryLock: () => { state.locks++; return true; }, releaseLock: () => {} }) },
+      Utilities: { getUuid: () => 'u', sleep: () => {}, formatDate: () => '' },
+      Session: { getScriptTimeZone: () => 'UTC', getActiveUser: () => ({ getEmail: () => '' }) },
+      CacheService: { getScriptCache: () => ({ get: () => null, put: () => {}, remove: () => {}, getAll: () => ({}), putAll: () => {}, removeAll: () => {} }) },
+      PropertiesService: { getScriptProperties: () => ({ getProperty: () => null, setProperty: () => {}, deleteProperty: () => {} }) },
+      Logger: { log: () => {} }, ScriptApp: { getProjectTriggers: () => [] }
+    };
+    sb.globalThis = sb;
+    vm.createContext(sb);
+    ['00_Config.js', '02_DataAccess.js'].forEach(f => {
+      vm.runInContext(fs.readFileSync(path.join(ROOT, f), 'utf8'), sb, { filename: f });
+    });
+    vm.runInContext(
+      "getSpreadsheet_ = function () { return SpreadsheetApp.openById('x'); };" +
+      "getSheet_ = function (n) { var s = SpreadsheetApp.openById('x').getSheetByName(n);" +
+      " if (!s) throw new Error('no sheet ' + n); return s; };", sb);
+    return { sb, state };
+  }
+
+  const N = 25;
+  const recs = [];
+  for (let i = 0; i < N; i++) {
+    recs.push({ emp_id: i + 1, month: 3, year: 2026, working_days: 30 });
+  }
+
+  /* the loop, as it was */
+  const A = auditWorld();
+  recs.forEach(function (r) {
+    A.sb.logHistory_('db', 'valley_emp_salaries', 'create_x_' + r.emp_id, r.emp_id,
+      'u@x.test', 'create', r, null);
+  });
+
+  /* the batch, as it is now */
+  const B = auditWorld();
+  B.sb.logHistoryMany_(recs.map(function (r) {
+    return {
+      dbId: 'db', sheetName: 'valley_emp_salaries',
+      recordUid: 'create_x_' + r.emp_id, recordId: r.emp_id,
+      user: 'u@x.test', action: 'create', newValues: r, oldValues: null
+    };
+  }));
+
+  check(A.state.hist.length === B.state.hist.length,
+    'the same number of audit rows (' + A.state.hist.length + ')',
+    A.state.hist.length + ' vs ' + B.state.hist.length);
+  check(JSON.stringify(A.state.hist.map(h => [h.sheet_name, h.record_uid, h.record_id, h.action, h.column_name, h.old_value, h.new_value, h.changed_by])) ===
+        JSON.stringify(B.state.hist.map(h => [h.sheet_name, h.record_uid, h.record_id, h.action, h.column_name, h.old_value, h.new_value, h.changed_by])),
+    '  carrying identical values, in the same order');
+  check(JSON.stringify(A.state.hist.map(h => h.id)) === JSON.stringify(B.state.hist.map(h => h.id)),
+    '  and identical ids');
+  check(B.state.locks < A.state.locks,
+    '  taking the global lock ' + B.state.locks + ' time(s) instead of ' + A.state.locks,
+    A.state.locks + ' -> ' + B.state.locks);
+  check(B.state.locks === 1, '  which is once', B.state.locks);
+
+  /* nothing to say means nothing written, as before */
+  const C = auditWorld();
+  C.sb.logHistoryMany_([]);
+  check(C.state.hist.length === 0 && C.state.locks === 0,
+    'an empty batch writes nothing and takes no lock');
+  const D = auditWorld();
+  D.sb.logHistoryMany_([null, undefined]);
+  check(D.state.hist.length === 0, 'null entries are ignored');
+
+  /* an update with no real change is still silent */
+  const E = auditWorld();
+  const same = { emp_id: 5, month: 3, year: 2026, working_days: 30 };
+  E.sb.logHistoryMany_([{
+    dbId: 'db', sheetName: 'valley_emp_salaries', recordUid: 'u1', recordId: 5,
+    user: 'u@x.test', action: 'update', newValues: same, oldValues: same
+  }]);
+  check(E.state.hist.length === 0, 'an update that changed nothing writes no audit row');
+}
+
 /* ══ the run ════════════════════════════════════════════════════════════ */
 console.log('\n' + (failed === 0
   ? 'S17 — the purchasing save and the batched delete both check out.'
