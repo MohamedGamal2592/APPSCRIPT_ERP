@@ -107,8 +107,7 @@ const ValleyFoods = (function () {
     'add_attendance_session': { page: 'vf_hr_attendance', access: 'write' },
     'get_attendance_data': { page: 'vf_hr_attendance', access: 'read' },
     'add_manual_attendance': { page: 'vf_hr_attendance', access: 'write' },
-    'upload_attendance_csv': { page: 'vf_hr_attendance', access: 'write' },
-    'analyze_attendance_csv': { page: 'vf_hr_attendance', access: 'read' },
+    'commit_attendance_import': { page: 'vf_hr_attendance', access: 'write' },
     'get_attendance_report': { page: 'vf_hr_attendance', access: 'read' },
     'get_attendance_index': { page: 'vf_hr_attendance', access: 'read' },
     'get_attendance_batches': { page: 'vf_hr_attendance', access: 'read' },
@@ -232,7 +231,7 @@ const ValleyFoods = (function () {
     'generate_monthly_salaries': 'valley_emp_salaries',
     'get_attendance_sessions': 'valley_attendance_session', 'add_attendance_session': 'valley_attendance_session',
     'get_attendance_data': 'valley_employee_attendance', 'add_manual_attendance': 'valley_employee_attendance',
-    'upload_attendance_csv': 'valley_employee_attendance', 'analyze_attendance_csv': 'valley_employee_attendance',
+    'commit_attendance_import': 'valley_employee_attendance',
     'get_attendance_report': 'valley_employee_attendance',
     'get_attendance_index': 'valley_attendance_session',
     'get_attendance_batches': 'valley_attendance_import_batch',
@@ -2361,315 +2360,236 @@ const ValleyFoodsHRModules = (function () {
     return { status: 'success', batches: p.rows, total: p.total };
   }
 
-  // ---- CSV analysis (date-format detection before upload) ----
-  function extractRawDateParts_(csvContent) {
-    var parsedCsv = Utilities.parseCsv(csvContent);
-    var dateTimeRegex = /(\d{1,2})\/(\d{1,2})\/(\d{4})\s+(\d{1,2}:\d{2})\s*([^\s\d]+)?/;
-    var results = [];
-    for (var j = 0; j < parsedCsv.length; j++) {
-      var row = parsedCsv[j];
-      if (!row || row.length === 0 || row.join('').trim() === '') continue;
-      var fullString = row.join(' ');
-      var match = fullString.match(dateTimeRegex);
-      if (match) {
-        results.push({
-          a: parseInt(match[1], 10),
-          b: parseInt(match[2], 10),
-          year: match[3],
-          time: match[4],
-          ampm: match[5] || '',
-          rawDatePart: match[1] + '/' + match[2] + '/' + match[3]
-        });
-      }
-    }
-    return results;
+  // ---- Chunked import commit ----
+  /* The two old CSV actions are gone. The file used to cross the wire twice —
+     once to be analysed, once to be imported, 5 MB cap each — and the server
+     had to be a CSV parser to answer either. Now the browser parses
+     (Client_AttendanceParser.html) and posts rows.
+
+     The server still re-validates everything: the numeric code, the plausibility
+     window and the duplicate check all run again here. A client is a thing that
+     can be wrong or lying, and I-2 is not the client's invariant to keep. */
+
+  /* Mirrors the client's window exactly. Deliberately built in serial space so
+     no Date, no setHours and no script timezone is involved. */
+  function attPlausibleWindow_() {
+    var now = new Date();
+    var y = now.getFullYear(), m = now.getMonth() + 1, d = now.getDate();
+    return { min: dateOnlyToSerial_(d, m, y - 3), max: dateOnlyToSerial_(d, m, y) + 2 };
   }
 
-  function analyzeAttendanceCsv_(data, user, dbId) {
-    var csvContent = String((data && data.csv_content) || '');
-    if (!csvContent) throw new Error('محتوى الملف مطلوب');
-    if (csvContent.length > 5 * 1024 * 1024) throw new Error('حجم الملف يتجاوز الحد الأقصى (5 ميجا)');
-    var parts = extractRawDateParts_(csvContent);
-
-    var result = {
-      status: 'success',
-      totalDates: parts.length,
-      detectedFormat: 'ambiguous',
-      evidenceCount: 0,
-      conflictCount: 0,
-      sampleDates: []
-    };
-    if (parts.length === 0) return result;
-
-    var dmyEvidence = 0; // a>12 => a must be day => DD/MM
-    var mdyEvidence = 0; // b>12 => b must be day => MM/DD
-    for (var i = 0; i < parts.length; i++) {
-      var a = parts[i].a, b = parts[i].b;
-      var aOver12 = a > 12 && a <= 31;
-      var bOver12 = b > 12 && b <= 31;
-      if (aOver12 && !bOver12) dmyEvidence++;
-      else if (bOver12 && !aOver12) mdyEvidence++;
-    }
-
-    result.evidenceCount = Math.max(dmyEvidence, mdyEvidence);
-    result.conflictCount = (dmyEvidence > 0 && mdyEvidence > 0) ? Math.min(dmyEvidence, mdyEvidence) : 0;
-
-    if (dmyEvidence > 0 && mdyEvidence === 0) result.detectedFormat = 'DMY';
-    else if (mdyEvidence > 0 && dmyEvidence === 0) result.detectedFormat = 'MDY';
-
-    var seen = {};
-    for (var k = 0; k < parts.length && result.sampleDates.length < 8; k++) {
-      var key = parts[k].rawDatePart;
-      if (!seen[key]) { seen[key] = true; result.sampleDates.push(key); }
-    }
-    return result;
+  function attFindBatch_(dbId, batchId) {
+    var found = null;
+    getAllRecords_(dbId, ATT_BATCH_SHEET).forEach(function (b) {
+      if (String(b.batch_id || '').trim() === batchId) found = b;
+    });
+    return found;
   }
 
-  /* Phase A keeps this handler alive and unchanged in its parsing — the parser
-     rewrite is Phase B's job — but puts it behind the same guards as every
-     other write: one lock, resolveSession_ as the only session writer, a batch
-     id on every row so the import can be undone, and one history entry instead
-     of one per row. Phase C replaces it wholesale. */
-  function uploadAttendanceCsv_(data, user, dbId) {
-    return withAttLock_(function () { return uploadAttendanceCsvLocked_(data, user, dbId); });
-  }
+  /**
+   * One chunk of an import. Chunk 0 writes the batch row; the last chunk
+   * finalises it. A chunk that fails leaves the batch `active` and partially
+   * written — which is acceptable precisely because the client already holds
+   * the batch_id and can point undo straight at it.
+   */
+  function commitAttendanceImport_(data, user, dbId) {
+    var d = data || {};
+    var batchId = String(d.batch_id || '').trim();
+    if (!batchId) throw new Error('رقم عملية الرفع مطلوب');
+    var rows = d.rows || [];
+    var flagged = d.flagged || [];
+    var chunkIndex = Number(d.chunk_index) || 0;
+    var isLast = !!d.is_last;
+    if (rows.length > 20000) throw new Error('حجم الدفعة كبير جداً');
 
-  function uploadAttendanceCsvLocked_(data, user, dbId) {
-    var csvContent = String((data && data.csv_content) || '');
-    if (!csvContent) throw new Error('محتوى الملف مطلوب');
-    if (csvContent.length > 5 * 1024 * 1024) throw new Error('حجم الملف يتجاوز الحد الأقصى (5 ميجا)');
-    var chosenFormat = String((data && data.format) || 'DMY').toUpperCase();
-    if (chosenFormat !== 'DMY' && chosenFormat !== 'MDY') chosenFormat = 'DMY';
-    var isMonthFirst = (chosenFormat === 'MDY');
-    var batchId = Utilities.getUuid();
+    var format = String(d.format || '').toUpperCase();
+    var dateMin = (d.date_min === '' || d.date_min == null) ? null : Number(d.date_min);
+    var dateMax = (d.date_max === '' || d.date_max == null) ? null : Number(d.date_max);
 
-    ensureSheet_(dbId, ATTENDANCE_SESSION_SHEET, ['session_id','session_date','session_status','selected_employees','user','created_at']);
-    ensureSheet_(dbId, EMP_ATTENDANCE_SHEET, ['unique_id','id','emp_id','attendance_date_time','time_in','time_out','excuse_in','excuse_out','abscence','user','created_at']);
+    return withAttLock_(function () {
+      ensureSheet_(dbId, ATTENDANCE_SESSION_SHEET, ['session_id','session_date','session_status','selected_employees','user','created_at']);
+      ensureSheet_(dbId, EMP_ATTENDANCE_SHEET, ['unique_id','id','emp_id','attendance_date_time','time_in','time_out','excuse_in','excuse_out','abscence','user','created_at']);
+      ensureSheet_(dbId, ATT_REVIEW_SHEET, ['raw_row_text','reason','chosen_format','uploaded_by','uploaded_at']);
 
-    var sessSheet = getSheet_(ATTENDANCE_SESSION_SHEET, dbId);
-    var attSheet = getSheet_(EMP_ATTENDANCE_SHEET, dbId);
-    var attHeaders = getHeaders_(attSheet);
+      var attSheet = getSheet_(EMP_ATTENDANCE_SHEET, dbId);
+      var attHeaders = getHeaders_(attSheet);
+      var reviewSheet = getSheet_(ATT_REVIEW_SHEET, dbId);
+      var reviewHeaders = getHeaders_(reviewSheet);
+      var batchSheet = attBatchSheet_(dbId);
+      var batchHeaders = getHeaders_(batchSheet);
 
-    ensureSheet_(dbId, ATT_REVIEW_SHEET, ['raw_row_text','reason','chosen_format','uploaded_by','uploaded_at']);
-    var reviewSheet = getSheet_(ATT_REVIEW_SHEET, dbId);
+      var recordedUser = (user && user.email) || 'System';
+      var stamp = new Date();
 
-    /* I-2, through the one shared implementation. Unwindowed here because this
-       legacy path does not know the file's date range before parsing it. */
-    var existingRecords = buildPunchKeySet_(dbId, null);
+      var batch = attFindBatch_(dbId, batchId);
+      if (chunkIndex === 0) {
+        if (batch) throw new Error('عملية الرفع هذه مسجلة بالفعل');
+        batchSheet.appendRow(attRowValues_(batchHeaders, {
+          batch_id: batchId,
+          file_name: String(d.file_name || 'ملف'),
+          file_rows: Number(d.file_rows) || (rows.length + flagged.length),
+          uploaded_by: recordedUser,
+          uploaded_at: stamp,
+          chosen_format: format,
+          detected_format: String(d.detected_format || ''),
+          confidence: String(d.confidence || ''),
+          rows_imported: 0, rows_duplicate: 0, rows_flagged: 0, sessions_created: 0,
+          date_min: dateMin === null ? '' : dateMin,
+          date_max: dateMax === null ? '' : dateMax,
+          batch_status: 'active', reverted_by: '', reverted_at: ''
+        }));
+        noteMutation_();
+        batch = attFindBatch_(dbId, batchId);
+      } else {
+        if (!batch) throw new Error('عملية الرفع غير موجودة — ابدأ من جديد');
+        if (String(batch.batch_status || '').trim() === 'reverted') {
+          throw new Error('تم التراجع عن عملية الرفع هذه، لا يمكن إكمالها');
+        }
+      }
 
-    var rowsToAppend = [];
-    var reviewRowsToAppend = [];
-    var sessionsCreated = 0;
-    var dateToSessionId = {};   // yyyy-MM-dd -> session_id (this file)
-    var skippedCount = 0, successCount = 0, flaggedCount = 0;
-    var dateMinSerial = null, dateMaxSerial = null;
+      /* Rebuilt PER CHUNK, filtered to the batch's own date window. Correct by
+         construction — a punch can only collide with another punch at the same
+         instant, and that instant is inside the window by definition — and it
+         keeps the set to a few thousand keys for a month-sized file. Rows
+         appended by chunk N are on the sheet before chunk N+1 rebuilds, so a
+         duplicate ACROSS chunks of one batch is caught with no bookkeeping.
+         Not CacheService: one value caps at 100 KB and a real set exceeds it
+         silently. */
+      var win = attPlausibleWindow_();
+      var lo = (dateMin === null) ? null : Math.min(dateMin, win.min);
+      var hi = (dateMax === null) ? null : (dateMax + 1);
+      var keySet = buildPunchKeySet_(dbId, (lo === null || hi === null) ? null : [lo, hi]);
 
-    var dateStats = {};
-    var UNDATED_KEY = 'غير محدد (صفوف بدون تاريخ صالح)';
-    function bumpStat(dateKey, field) {
-      if (!dateStats[dateKey]) dateStats[dateKey] = { imported: 0, duplicate: 0, flagged: 0 };
-      dateStats[dateKey][field]++;
-    }
+      var toAppend = [];
+      var reviewToAppend = [];
+      var imported = 0, duplicate = 0, flaggedCount = 0, sessionsCreated = 0;
+      var sessionByDay = {};
 
-    var recordedUser = (user && user.email) || 'System';
-    var uploadTimestamp = new Date();
-
-    var parsedCsv = Utilities.parseCsv(csvContent);
-    var dateTimeRegex = /(\d{1,2})\/(\d{1,2})\/(\d{4})\s+(\d{1,2}:\d{2})\s*([^\s\d]+)?/;
-
-    for (var j = 0; j < parsedCsv.length; j++) {
-      var row = parsedCsv[j];
-      if (!row || row.length === 0 || row.join('').trim() === '') continue;
-
-      var fullString = row.join(' ');
-      var match = fullString.match(dateTimeRegex);
-      if (!match) {
-        reviewRowsToAppend.push([fullString.trim(), 'تعذر استخراج كود الموظف أو التاريخ من هذا الصف', chosenFormat, recordedUser, uploadTimestamp]);
+      function pushReview(raw, reason, empGuess, serialGuess) {
+        var r = {
+          raw_row_text: String(raw || '').slice(0, 500),
+          reason: reason,
+          chosen_format: format,
+          uploaded_by: recordedUser,
+          uploaded_at: stamp
+        };
+        if (hasCol_(reviewHeaders, 'review_id')) r.review_id = Utilities.getUuid();
+        if (hasCol_(reviewHeaders, 'import_batch_id')) r.import_batch_id = batchId;
+        if (hasCol_(reviewHeaders, 'review_status')) r.review_status = 'open';
+        if (hasCol_(reviewHeaders, 'emp_id_guess')) r.emp_id_guess = empGuess == null ? '' : empGuess;
+        if (hasCol_(reviewHeaders, 'datetime_guess')) r.datetime_guess = (serialGuess === '' || serialGuess == null) ? '' : Number(serialGuess);
+        if (hasCol_(reviewHeaders, 'resolved_by')) r.resolved_by = '';
+        if (hasCol_(reviewHeaders, 'resolved_at')) r.resolved_at = '';
+        reviewToAppend.push(attRowValues_(reviewHeaders, r));
         flaggedCount++;
-        bumpStat(UNDATED_KEY, 'flagged');
-        continue;
       }
 
-      /* D-28. This read `match[1]`, which is the DAY capture group alone — not
-         the date. So datePieces was ['07'], month and year came out NaN, the
-         day/month sanity check below passed (every NaN comparison is false),
-         and toSerialInt_ turned the NaN serial into null: every uploaded punch
-         stored a BLANK attendance_date_time and every auto-created session a
-         NaN session_date. The same value is also what the employee code is cut
-         on, so splitting on '07' truncated code 107 to '1'. Rebuilt from the
-         three groups, exactly as extractRawDateParts_ already does for its
-         rawDatePart. Phase B replaces this parser wholesale; until then it has
-         to be right. */
-      var datePart = match[1] + '/' + match[2] + '/' + match[3];
-      var timePart = match[4], amPmChar = (match[5] || '').trim();
+      (flagged || []).forEach(function (f) {
+        pushReview(f[0], String(f[1] || 'يحتاج مراجعة'), f[2], f[3]);
+      });
 
-      // Employee code = whatever precedes the date in the joined row text.
-      var cleanEmpId = normalizeEmpIdVF_(fullString.split(datePart)[0]);
+      rows.forEach(function (row) {
+        var rawText = String(row[2] == null ? '' : row[2]);
+        /* Re-validated server-side. The client already checked all three; a
+           client is not what I-2 rests on. */
+        var empId = attNumericEmpId_(row[0]);
+        if (empId === null) { pushReview(rawText, 'كود الموظف غير رقمي', row[0], ''); return; }
 
-      var datePieces = datePart.split('/');
-      var partA = parseInt(datePieces[0], 10);
-      var partB = parseInt(datePieces[1], 10);
-      var year = parseInt(datePieces[2], 10);
+        var serial = toSerialInt_(row[1]);
+        if (serial === null) { pushReview(rawText, 'تعذر قراءة التاريخ والوقت', empId, ''); return; }
+        if (serial < win.min || serial > win.max) {
+          pushReview(rawText, 'التاريخ خارج الفترة المعقولة', empId, serial);
+          return;
+        }
 
-      var day, month;
-      if (isMonthFirst) { month = partA; day = partB; }
-      else { day = partA; month = partB; }
+        if (punchExists_(keySet, empId, serial)) { duplicate++; return; }
 
-      // Safety check: impossible dates under the chosen format -> review sheet
-      if (day < 1 || day > 31 || month < 1 || month > 12) {
-        reviewRowsToAppend.push([fullString.trim(), 'تعارض مع الصيغة المختارة (' + chosenFormat + ') - يوم=' + day + ' شهر=' + month, chosenFormat, recordedUser, uploadTimestamp]);
-        flaggedCount++;
-        bumpStat(datePart + ' (تاريخ متعارض)', 'flagged');
-        continue;
+        var daySerial = Math.floor(serial);
+        var dayKey = String(daySerial);
+        var sessionId = sessionByDay[dayKey];
+        if (!sessionId) {
+          var resolved = resolveSession_(dbId, daySerial, user, batchId);
+          sessionId = resolved.session_id;
+          sessionByDay[dayKey] = sessionId;
+          if (resolved.created) sessionsCreated++;
+        }
+
+        var newRow = {
+          unique_id: Utilities.getUuid(),
+          id: sessionId,
+          emp_id: empId,
+          attendance_date_time: serial,
+          time_in: '', time_out: '', excuse_in: '', excuse_out: '', abscence: '',
+          user: recordedUser,
+          created_at: stamp
+        };
+        if (hasCol_(attHeaders, 'import_batch_id')) newRow.import_batch_id = batchId;
+        if (hasCol_(attHeaders, 'entry_source')) newRow.entry_source = 'upload';
+        if (hasCol_(attHeaders, 'parsed_format')) newRow.parsed_format = format;
+        if (hasCol_(attHeaders, 'source_raw')) newRow.source_raw = rawText.slice(0, 500);
+        toAppend.push(attRowValues_(attHeaders, newRow));
+        keySet[punchKey_(empId, serial)] = true;
+        imported++;
+      });
+
+      if (toAppend.length) {
+        var startRow = attSheet.getLastRow() + 1;
+        var atIdx = attColIdx_(attHeaders, 'attendance_date_time');
+        if (atIdx !== -1) {
+          attSheet.getRange(startRow, atIdx + 1, toAppend.length, 1).setNumberFormat('dd/mm/yyyy hh:mm');
+          noteMutation_();
+        }
+        attSheet.getRange(startRow, 1, toAppend.length, attHeaders.length).setValues(toAppend);
+        noteMutation_();
+        /* Append-only. D-20's whole-sheet Range.sort is not coming back. */
       }
 
-      if (!cleanEmpId) {
-        reviewRowsToAppend.push([fullString.trim(), 'تعذر استخراج كود الموظف من هذا الصف', chosenFormat, recordedUser, uploadTimestamp]);
-        flaggedCount++;
-        bumpStat(_pad2(day) + '/' + _pad2(month) + '/' + year + ' (كود مفقود)', 'flagged');
-        continue;
-      }
-
-      // AM/PM normalization
-      var period = '';
-      if (amPmChar.match(/Õ|ص|am|a/i)) period = 'AM';
-      else if (amPmChar.match(/ã|م|pm|p/i)) period = 'PM';
-
-      var timeBits = timePart.split(':');
-      var hours = parseInt(timeBits[0], 10);
-      var minutes = parseInt(timeBits[1], 10);
-      if (period === 'PM' && hours < 12) hours += 12;
-      else if (period === 'AM' && hours === 12) hours = 0;
-
-      var serialDateTime = toSerialInt_(dateTimePartsToSerial_(day, month, year, hours, minutes));
-      var sessionDateSerial = dateOnlyToSerial_(day, month, year);
-
-      var normDateOnly = _pad2(day) + '/' + _pad2(month) + '/' + year;
-
-      /* D-10. normalizeEmpIdVF_ keeps Arabic letters on purpose and other
-         callers rely on that, so the numeric guard sits here, at the call site:
-         "1أحمد" is a parse that went wrong, not a code, and it belongs in the
-         review queue rather than in the table under a string primary value. */
-      var numericEmpId = attNumericEmpId_(cleanEmpId);
-      if (numericEmpId === null) {
-        reviewRowsToAppend.push([fullString.trim(), 'كود الموظف غير رقمي', chosenFormat, recordedUser, uploadTimestamp]);
-        flaggedCount++;
-        bumpStat(normDateOnly + ' (كود غير رقمي)', 'flagged');
-        continue;
-      }
-
-      if (punchExists_(existingRecords, numericEmpId, serialDateTime)) {
-        skippedCount++;
-        bumpStat(normDateOnly, 'duplicate');
-        continue;
-      }
-
-      /* D-03. resolveSession_ is the only writer of session rows. It appends
-         immediately rather than collecting into a deferred batch, which is what
-         lets the same helper serve the manual path, this path and the review
-         fix without three copies of I-1 that can drift apart. */
-      var currentSessionId = dateToSessionId[normDateOnly];
-      if (!currentSessionId) {
-        var resolved = resolveSession_(dbId, sessionDateSerial, user, batchId);
-        currentSessionId = resolved.session_id;
-        dateToSessionId[normDateOnly] = currentSessionId;
-        if (resolved.created) sessionsCreated++;
-      }
-
-      var newRow = {
-        unique_id: Utilities.getUuid(),
-        id: currentSessionId,
-        emp_id: numericEmpId,
-        attendance_date_time: serialDateTime,
-        time_in: '', time_out: '', excuse_in: '', excuse_out: '', abscence: '',
-        user: recordedUser,
-        created_at: uploadTimestamp
-      };
-      if (hasCol_(attHeaders, 'import_batch_id')) newRow.import_batch_id = batchId;
-      if (hasCol_(attHeaders, 'entry_source')) newRow.entry_source = 'upload';
-      if (hasCol_(attHeaders, 'parsed_format')) newRow.parsed_format = chosenFormat;
-      if (hasCol_(attHeaders, 'source_raw')) newRow.source_raw = fullString.trim();
-      rowsToAppend.push(attRowValues_(attHeaders, newRow));
-
-      existingRecords[punchKey_(numericEmpId, serialDateTime)] = true;
-      if (dateMinSerial === null || sessionDateSerial < dateMinSerial) dateMinSerial = sessionDateSerial;
-      if (dateMaxSerial === null || sessionDateSerial > dateMaxSerial) dateMaxSerial = sessionDateSerial;
-      successCount++;
-      bumpStat(normDateOnly, 'imported');
-    }
-
-    if (rowsToAppend.length > 0) {
-      var startRow = attSheet.getLastRow() + 1;
-      var atColIdx = attColIdx_(attHeaders, 'attendance_date_time');
-      if (atColIdx !== -1) {
-        attSheet.getRange(startRow, atColIdx + 1, rowsToAppend.length, 1).setNumberFormat('dd/mm/yyyy hh:mm');
+      if (reviewToAppend.length) {
+        var revStart = reviewSheet.getLastRow() + 1;
+        reviewSheet.getRange(revStart, 1, reviewToAppend.length, reviewHeaders.length).setValues(reviewToAppend);
         noteMutation_();
       }
-      attSheet.getRange(startRow, 1, rowsToAppend.length, attHeaders.length).setValues(rowsToAppend);
-      noteMutation_();
-      /* D-20. The whole-sheet Range.sort that used to run here re-sorted every
-         row in the table on every single upload — O(table), not O(upload), and
-         it grew with the table forever. Ordering is a display concern and
-         getAttendanceData_ already sorts in memory before paging, so writes are
-         append-only from here on. */
-    }
 
-    if (reviewRowsToAppend.length > 0) {
-      var reviewStartRow = reviewSheet.getLastRow() + 1;
-      reviewSheet.getRange(reviewStartRow, 1, reviewRowsToAppend.length, 5).setValues(reviewRowsToAppend);
-      noteMutation_();
-    }
+      /* Counters accumulate on the batch row, so a resumed or partial import
+         still reports what actually landed. */
+      var totals = {
+        rows_imported: (Number(batch && batch.rows_imported) || 0) + imported,
+        rows_duplicate: (Number(batch && batch.rows_duplicate) || 0) + duplicate,
+        rows_flagged: (Number(batch && batch.rows_flagged) || 0) + flaggedCount,
+        sessions_created: (Number(batch && batch.sessions_created) || 0) + sessionsCreated
+      };
+      updateRowByCriteria_(batchSheet, 'batch_id', batchId, totals);
 
-    /* The batch row is what makes this import undoable. It is written whether
-       or not the punches carry import_batch_id — revert is the one that refuses
-       when the column is missing, and it says which column it needs. */
-    var batchSheet = attBatchSheet_(dbId);
-    var batchHeaders = getHeaders_(batchSheet);
-    batchSheet.appendRow(attRowValues_(batchHeaders, {
-      batch_id: batchId,
-      file_name: String((data && data.file_name) || 'CSV'),
-      file_rows: parsedCsv.length,
-      uploaded_by: recordedUser,
-      uploaded_at: uploadTimestamp,
-      chosen_format: chosenFormat,
-      detected_format: String((data && data.detected_format) || ''),
-      confidence: String((data && data.confidence) || ''),
-      rows_imported: successCount,
-      rows_duplicate: skippedCount,
-      rows_flagged: flaggedCount,
-      sessions_created: sessionsCreated,
-      date_min: dateMinSerial === null ? '' : dateMinSerial,
-      date_max: dateMaxSerial === null ? '' : dateMaxSerial,
-      batch_status: 'active',
-      reverted_by: '',
-      reverted_at: ''
-    }));
-    noteMutation_();
+      /* ONE history entry per batch, written when the batch closes — not one
+         per row, which is fine for 40 rows and fatal for 40 000. */
+      if (isLast) {
+        try {
+          logHistory_(dbId, ATT_BATCH_SHEET, 'create_' + ATT_BATCH_SHEET + '_' + batchId, batchId,
+            recordedUser, 'create',
+            {
+              batch_id: batchId, file_name: String(d.file_name || ''), chosen_format: format,
+              confidence: String(d.confidence || ''),
+              rows_imported: totals.rows_imported, rows_duplicate: totals.rows_duplicate,
+              rows_flagged: totals.rows_flagged, sessions_created: totals.sessions_created,
+              date_min: dateMin, date_max: dateMax
+            }, null);
+        } catch (e) { /* history is never allowed to fail a write */ }
+      }
 
-    /* ONE history entry for the whole import. The loop this replaces called
-       logHistory_ once per imported row — fine for 40 rows, fatal for 40 000.
-       The batch row plus import_batch_id on every punch is the audit trail. */
-    try {
-      logHistory_(dbId, ATT_BATCH_SHEET, 'create_' + ATT_BATCH_SHEET + '_' + batchId, batchId,
-        recordedUser, 'create',
-        { batch_id: batchId, chosen_format: chosenFormat, rows_imported: successCount,
-          rows_duplicate: skippedCount, rows_flagged: flaggedCount,
-          sessions_created: sessionsCreated, date_min: dateMinSerial, date_max: dateMaxSerial },
-        null);
-    } catch (e) { /* history is never allowed to fail a write */ }
-
-    return {
-      status: 'success',
-      message: 'تم الرفع: ' + successCount + ' جديد، ' + skippedCount + ' مكرر' + (flaggedCount ? '، ' + flaggedCount + ' يحتاج مراجعة' : ''),
-      batch_id: batchId,
-      successCount: successCount,
-      skippedCount: skippedCount,
-      flaggedCount: flaggedCount,
-      newSessionsCount: sessionsCreated,
-      added: successCount,
-      undatedKey: UNDATED_KEY,
-      dateStats: dateStats
-    };
+      return {
+        status: 'success',
+        batch_id: batchId,
+        chunk_index: chunkIndex,
+        is_last: isLast,
+        chunk: { imported: imported, duplicate: duplicate, flagged: flaggedCount, sessions_created: sessionsCreated },
+        totals: totals,
+        has_batch_column: hasCol_(attHeaders, 'import_batch_id'),
+        message: isLast
+          ? ('تم الاستيراد: ' + totals.rows_imported + ' جديد، ' + totals.rows_duplicate + ' مكرر' +
+             (totals.rows_flagged ? '، ' + totals.rows_flagged + ' يحتاج مراجعة' : ''))
+          : ('تم استيراد جزء ' + (chunkIndex + 1))
+      };
+    });
   }
 
   function getAttendanceReport_(data, user, dbId) {
@@ -8067,8 +7987,7 @@ const ValleyFoodsHRModules = (function () {
     ValleyFoods.register('add_attendance_session',    addAttendanceSession_);
     ValleyFoods.register('get_attendance_data',       getAttendanceData_);
     ValleyFoods.register('add_manual_attendance',     addManualAttendance_);
-    ValleyFoods.register('upload_attendance_csv',     uploadAttendanceCsv_);
-    ValleyFoods.register('analyze_attendance_csv',    analyzeAttendanceCsv_);
+    ValleyFoods.register('commit_attendance_import', commitAttendanceImport_);
     ValleyFoods.register('get_attendance_report',     getAttendanceReport_);
     ValleyFoods.register('get_attendance_index',      getAttendanceIndex_);
     ValleyFoods.register('get_attendance_batches',    getAttendanceBatches_);
@@ -8190,8 +8109,7 @@ const ValleyFoodsHRModules = (function () {
     addAttendanceSession_: addAttendanceSession_,
     getAttendanceData_: getAttendanceData_,
     addManualAttendance_: addManualAttendance_,
-    uploadAttendanceCsv_: uploadAttendanceCsv_,
-    analyzeAttendanceCsv_: analyzeAttendanceCsv_,
+    commitAttendanceImport_: commitAttendanceImport_,
     getAttendanceReport_: getAttendanceReport_,
     getAttendanceIndex_: getAttendanceIndex_,
     getAttendanceBatches_: getAttendanceBatches_,

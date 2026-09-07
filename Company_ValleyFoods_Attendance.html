@@ -57,17 +57,32 @@
     .vf-badge.warn { background: #fef3c7; color: #92400e; }
     .vf-sample-list { font-size: 11px; direction: ltr; text-align: left; background: var(--bg-surface, #fff); border: 1px solid var(--border-color, #e5e7eb); border-radius: 6px; padding: 8px; max-height: 90px; overflow-y: auto; margin-bottom: 10px; font-family: monospace; }
     .vf-radio-row { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; font-size: 13px; font-weight: bold; }
+    /* Consequence cards. Two readings of the same file, described by what they
+       MEAN rather than by which number is the day — nobody can answer the
+       second question about a file they did not write. */
+    .vf-choice-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; margin: 10px 0; }
+    .vf-choice-card { border: 2px solid var(--border-color, #e5e7eb); border-radius: 8px; padding: 12px; background: var(--bg-surface, #fff); }
+    .vf-choice-card.recommended { border-color: #10b981; }
+    .vf-choice-head { font-weight: 900; font-size: 13px; margin-bottom: 8px; }
+    .vf-choice-line { font-size: 12px; line-height: 1.9; }
+    .vf-choice-dead { font-size: 11px; color: #6b7280; background: var(--bg-subtle, #f3f4f6); border-radius: 6px; padding: 6px 10px; margin-top: 6px; }
   </style>
 
   <script>
   (function () {
     var SESSIONS = [];
     var REPORT_DATA = null;
-    var csvText = null;
-    var analysisResult = null;
-    /* The import that the result panel is currently describing, so ↩️ تراجع has
-       something concrete to point at. Undo lives permanently in the import
-       history card (Phase C); this is the one that is one click away. */
+    var BATCHES = [];
+    var BATCHES_TOTAL = 0;
+    /* The parsed file, in the browser. It never becomes a string on the wire
+       again — only the rows do. */
+    var PARSED = null;
+    /* Session dates + employee codes, fetched once. What dbMatch corroborates
+       against, and what tells the preview which days already exist. */
+    var INDEX = null;
+    /* The import the result panel is currently describing, so ↩️ تراجع has
+       something concrete to point at. Undo also lives permanently in the
+       import-history card. */
     var lastBatch = null;
 
     /* ================= SHELL ================= */
@@ -83,6 +98,7 @@
       document.getElementById('vf-att-content').innerHTML = renderContent();
       bindEvents();
       loadSessions();
+      if (CAN_WRITE) loadBatches();
     }
 
     function card(title, bodyHtml, actionsHtml) {
@@ -99,6 +115,7 @@
         renderForgetSection() +
         renderReportSection() +
         renderSessionsSection() +
+        (CAN_WRITE ? renderBatchesSection() : '') +
       '</div>';
     }
 
@@ -219,112 +236,299 @@
         .finally(function () { UI.hideSpinner(); });
     }
 
-    /* ================= UPLOAD WIZARD ================= */
+    /* ================= IMPORT WIZARD ================= */
+    /* The file is read ONCE, here, and only parsed rows are posted. The two old
+       server actions (analyse, then upload) are gone, and with them the 5 MB
+       round trip that happened twice. */
     function renderUploadSection() {
       return card('رفع كشف البصمة',
         '<div class="vf-form-group">' +
-          '<label>ملف CSV (تصدير جهاز البصمة)</label>' +
-          '<input type="file" id="vf-csv-input" accept=".csv" class="vf-input">' +
+          '<label>ملف كشف البصمة</label>' +
+          '<input type="file" id="vf-csv-input" accept=".csv,.txt,.dat,.tsv,.xls,.xlsx" class="vf-input">' +
+          '<div class="vf-analysis-sub" style="margin-top:6px;">' +
+            '<b>الأفضل:</b> صدّر الملف من الجهاز بصيغة Excel (‎.xlsx‎). ملف Excel يحمل التاريخ كرقم، ' +
+            'فلا يحتاج أي تخمين ولن يسألك النظام عن صيغة التاريخ إطلاقاً. ' +
+            'ملفات CSV و TXT مدعومة أيضاً، بالعربي وبترميز Windows-1256.' +
+          '</div>' +
         '</div>' +
-        '<button id="vf-analyze-btn" class="btn btn-primary" disabled>🔍 فحص صيغة التاريخ</button>' +
+        '<div id="vf-parse-status" class="vf-analysis-sub" style="display:none;"></div>' +
         '<div id="vf-analysis-panel" style="display:none;margin-top:14px;"></div>' +
         '<div id="vf-upload-result" style="display:none;margin-top:14px;"></div>');
     }
 
     function resetUploadFlow() {
-      csvText = null;
-      analysisResult = null;
+      PARSED = null;
       lastBatch = null;
       var input = document.getElementById('vf-csv-input');
-      var analyzeBtn = document.getElementById('vf-analyze-btn');
-      var panel = document.getElementById('vf-analysis-panel');
-      var result = document.getElementById('vf-upload-result');
       if (input) input.value = '';
-      if (analyzeBtn) { analyzeBtn.disabled = true; analyzeBtn.style.display = ''; }
-      if (panel) { panel.style.display = 'none'; panel.innerHTML = ''; }
-      if (result) { result.style.display = 'none'; result.innerHTML = ''; }
+      ['vf-analysis-panel', 'vf-upload-result', 'vf-parse-status'].forEach(function (id) {
+        var el = document.getElementById(id);
+        if (el) { el.style.display = 'none'; el.innerHTML = ''; }
+      });
+    }
+
+    function setParseStatus(text, isError) {
+      var el = document.getElementById('vf-parse-status');
+      if (!el) return;
+      el.innerHTML = esc(text);
+      el.style.color = isError ? 'var(--danger, #dc2626)' : '';
+      el.style.display = text ? 'block' : 'none';
+    }
+
+    /** Session dates + employee codes, fetched once and kept for the page. */
+    function loadIndex() {
+      if (INDEX) return Promise.resolve(INDEX);
+      return companyCall('get_attendance_index', {})
+        .then(function (r) {
+          INDEX = { session_dates: (r && r.session_dates) || [], emp_ids: (r && r.emp_ids) || [] };
+          return INDEX;
+        })
+        .catch(function () { INDEX = { session_dates: [], emp_ids: [] }; return INDEX; });
+    }
+
+    function readFileBuffer(file) {
+      return new Promise(function (resolve, reject) {
+        var reader = new FileReader();
+        reader.onload = function (ev) { resolve(ev.target.result); };
+        reader.onerror = function () { reject(new Error('تعذر قراءة الملف')); };
+        reader.readAsArrayBuffer(file);
+      });
     }
 
     function handleFileSelect(e) {
-      var file = e.target.files[0];
-      var analyzeBtn = document.getElementById('vf-analyze-btn');
-      if (analyzeBtn) analyzeBtn.disabled = !file;
-      csvText = null;
-      analysisResult = null;
+      var file = e.target.files && e.target.files[0];
+      PARSED = null;
       lastBatch = null;
-      var panel = document.getElementById('vf-analysis-panel');
-      if (panel) { panel.style.display = 'none'; panel.innerHTML = ''; }
-      var result = document.getElementById('vf-upload-result');
-      if (result) { result.style.display = 'none'; result.innerHTML = ''; }
-      if (!file) return;
-      var reader = new FileReader();
-      reader.onload = function (ev) { csvText = ev.target.result; };
-      reader.readAsText(file);
-    }
-
-    function analyzeCsv() {
-      if (!csvText) { UIC.toast('اختر ملفاً أولاً', 'error'); return; }
-      var analyzeBtn = document.getElementById('vf-analyze-btn');
-      if (analyzeBtn) analyzeBtn.disabled = true;
+      ['vf-analysis-panel', 'vf-upload-result'].forEach(function (id) {
+        var el = document.getElementById(id);
+        if (el) { el.style.display = 'none'; el.innerHTML = ''; }
+      });
+      if (!file) { setParseStatus(''); return; }
+      setParseStatus('جاري قراءة الملف...');
       UI.showSpinner();
-      companyCall('analyze_attendance_csv', { csv_content: csvText })
-        .then(function (res) {
-          analysisResult = res;
-          renderAnalysisPanel(res);
+
+      var isExcel = /\.xlsx?$/i.test(file.name);
+      Promise.all([readFileBuffer(file), loadIndex()])
+        .then(function (both) {
+          var buf = both[0];
+          var index = both[1];
+          if (isExcel) {
+            /* An Excel export is unambiguous by construction — the cell holds a
+               number, not a rendering of one. cellDates:false keeps it that way. */
+            return API.ensureXlsx().then(function () {
+              var wb = XLSX.read(new Uint8Array(buf), { type: 'array', cellDates: false });
+              return ATT_PARSER.parseWorkbook(wb, { sessionDates: index.session_dates });
+            });
+          }
+          var dec = ATT_PARSER.decodeText(buf);
+          var out = ATT_PARSER.parseFile(dec.text, { sessionDates: index.session_dates });
+          out.encoding = dec.encoding;
+          /* Kept so a format the user picks from a consequence card can be
+             applied by RE-PARSING, rather than by patching serials in place. */
+          out.sourceText = dec.text;
+          return out;
         })
-        .catch(function (e) {
-          UIC.toast((e && e.message) || 'خطأ في الفحص', 'error');
+        .then(function (out) {
+          out.fileName = file.name;
+          out.fileSize = file.size;
+          PARSED = out;
+          setParseStatus('');
+          renderDecision();
         })
-        .finally(function () {
-          UI.hideSpinner();
-          if (analyzeBtn) analyzeBtn.disabled = false;
-        });
+        .catch(function (err) {
+          setParseStatus((err && err.message) || 'تعذر قراءة الملف', true);
+        })
+        .finally(function () { UI.hideSpinner(); });
     }
 
-    function renderAnalysisPanel(res) {
+    /* ---- the decision: certain / high / ambiguous ---- */
+    function renderDecision() {
       var panel = document.getElementById('vf-analysis-panel');
-      if (!panel) return;
-      if (!res || !res.totalDates) {
+      if (!panel || !PARSED) return;
+      var inf = PARSED.inference || {};
+      var total = PARSED.rows.length + PARSED.flagged.length;
+
+      if (!total) {
         panel.innerHTML = '<div class="vf-analysis-box ambiguous">' +
-          '<div class="vf-analysis-title">⚠️ لم يتم العثور على أي تواريخ صالحة</div>' +
-          '<div class="vf-analysis-sub">تأكد أن الملف بنفس شكل تصدير جهاز البصمة المعتاد.</div></div>';
+          '<div class="vf-analysis-title">⚠️ لم يتم العثور على أي بصمات في هذا الملف</div>' +
+          '<div class="vf-analysis-sub">تأكد أن الملف هو تصدير جهاز البصمة، وأنه يحتوي على عمود للتاريخ والوقت.</div></div>';
         panel.style.display = 'block';
         return;
       }
 
-      var boxClass = res.detectedFormat === 'ambiguous' ? 'ambiguous' : 'confident';
-      var badgeClass = res.detectedFormat === 'ambiguous' ? 'warn' : 'ok';
-      var badgeText = res.detectedFormat === 'ambiguous' ? 'يحتاج اختيارك' : 'تم الكشف تلقائياً';
-
-      var html = '<div class="vf-analysis-box ' + boxClass + '">';
-      html += '<div class="vf-analysis-title">نتيجة فحص ' + res.totalDates + ' تاريخ <span class="vf-badge ' + badgeClass + '">' + badgeText + '</span></div>';
-
-      if (res.detectedFormat !== 'ambiguous') {
-        html += '<div class="vf-analysis-sub">الصيغة المرجحة: <b>' + (res.detectedFormat === 'DMY' ? 'يوم/شهر/سنة' : 'شهر/يوم/سنة') + '</b> بناءً على ' + res.evidenceCount + ' تاريخ يثبت الصيغة بشكل قاطع (رقم أكبر من 12).</div>';
-      } else {
-        html += '<div class="vf-analysis-sub">كل الأرقام في هذا الملف ≤ 12، لذلك يستحيل التفريق تلقائياً بين اليوم والشهر. برجاء اختيار الصيغة الصحيحة بمراجعة العينة:</div>';
+      if (inf.confidence === 'ambiguous' && !PARSED.format) {
+        panel.innerHTML = renderConsequenceCards(inf);
+        panel.style.display = 'block';
+        return;
       }
-
-      html += '<div class="vf-sample-list">' + (res.sampleDates || []).map(esc).join('<br>') + '</div>';
-      html += '<div class="vf-radio-row"><input type="radio" name="vf-fmt" id="vf-fmt-dmy" value="DMY"' + (res.detectedFormat !== 'MDY' ? ' checked' : '') + '> <label for="vf-fmt-dmy">يوم/شهر/سنة (DD/MM/YYYY) - الشائع في مصر</label></div>';
-      html += '<div class="vf-radio-row"><input type="radio" name="vf-fmt" id="vf-fmt-mdy" value="MDY"' + (res.detectedFormat === 'MDY' ? ' checked' : '') + '> <label for="vf-fmt-mdy">شهر/يوم/سنة (MM/DD/YYYY) - صيغة أمريكية</label></div>';
-
-      if (res.conflictCount > 0) {
-        html += '<div class="vf-analysis-sub" style="color:var(--danger, #dc2626);margin-top:8px;">⚠️ تنبيه: ' + res.conflictCount + ' تاريخ يحمل دليلاً متعارضاً (قد يكون الملف مخلوطاً من صيغتين). أي صف غير منطقي مع الصيغة المختارة سيُنقل لجدول المراجعة بدلاً من تسجيله خطأً.</div>';
-      }
-
-      html += '<div style="margin-top:12px;"><button class="btn btn-primary" onclick="ATT_PAGE.confirmUpload()">✅ تأكيد ورفع الملف</button> ' +
-              '<button class="btn btn-outline" onclick="ATT_PAGE.resetUpload()">↩️ اختيار ملف آخر</button></div>';
-      html += '</div>';
-      panel.innerHTML = html;
+      panel.innerHTML = renderPreview();
       panel.style.display = 'block';
     }
 
-    function sortDateKeys(keys, undatedKey) {
+    /* ---- consequence cards (D-13) ---- */
+    /* Deliberately NOT radio buttons, and deliberately never the words "يوم"
+       or "شهر" as the choice itself: nobody can answer "is this DD/MM or
+       MM/DD?" about a file they did not write. Everybody can answer "is this
+       twelve days in September, or the 9th of twelve different months?" */
+    function renderConsequenceCards(inf) {
+      var alive = (inf.candidates || []).filter(function (c) { return !c.eliminated; });
+      var dead = (inf.candidates || []).filter(function (c) { return c.eliminated; });
+      var letters = ['أ', 'ب', 'ج'];
+
+      var html = '<div class="vf-analysis-box ambiguous">';
+      html += '<div class="vf-analysis-title">⚠️ الملف يحتمل أكثر من قراءة — أي فترة تصف ملفك؟</div>';
+      html += '<div class="vf-analysis-sub">اختر البطاقة التي تطابق الفترة التي رفعت عنها الكشف. ' +
+        'لا حاجة لمعرفة أي شيء عن صيغة التاريخ.</div>';
+
+      if (!alive.length) {
+        html += '<div class="vf-analysis-sub" style="color:var(--danger, #dc2626);font-weight:900;">' +
+          'لا توجد قراءة واحدة تصلح لكل صفوف هذا الملف — يبدو أن الملف مخلوط من أكثر من صيغة.</div>';
+      }
+
+      html += '<div class="vf-choice-grid">';
+      alive.forEach(function (c, i) {
+        var best = i === 0 && alive.length > 1 && c.score >= (alive[1].score || 0);
+        html += '<div class="vf-choice-card' + (best ? ' recommended' : '') + '">' +
+          '<div class="vf-choice-head">القراءة (' + letters[i] + ')' +
+            (best ? ' <span class="vf-badge ok">موصى بها</span>' : '') + '</div>' +
+          '<div class="vf-choice-line"><b>الفترة:</b> ' + esc(c.spanMinDisplay) + ' — ' + esc(c.spanMaxDisplay) + '</div>' +
+          '<div class="vf-choice-line">' + c.distinctDays + ' ' + dayWord(c.distinctDays) + ' ' +
+            (c.compact >= 0.8 ? 'متصلة' : 'متفرقة') + ' · ' + c.punches + ' بصمة</div>' +
+          '<div class="vf-choice-line">' + c.sessionsMatching + ' من ' + c.distinctDays + ' لها سجل قائم في النظام</div>' +
+          '<div style="margin-top:10px;"><button class="btn btn-primary" ' +
+            'onclick="ATT_PAGE.chooseFormat(\'' + esc(c.format) + '\')">اعتماد هذه القراءة</button></div>' +
+        '</div>';
+      });
+      html += '</div>';
+
+      dead.forEach(function (c) {
+        html += '<div class="vf-choice-dead">قراءة مستبعدة — ' + esc(c.reason) + '</div>';
+      });
+
+      html += renderSampleRows();
+      html += '<div style="margin-top:12px;"><button class="btn btn-outline" onclick="ATT_PAGE.resetUpload()">↩️ اختيار ملف آخر</button></div>';
+      html += '</div>';
+      return html;
+    }
+
+    function dayWord(n) { return n === 1 ? 'يوم' : (n === 2 ? 'يومان' : (n <= 10 ? 'أيام' : 'يوم')); }
+
+    /* 8 raw rows next to how each surviving reading would store them. */
+    function renderSampleRows() {
+      if (!PARSED || !PARSED.sample || !PARSED.sample.length) return '';
+      var alive = ((PARSED.inference || {}).candidates || []).filter(function (c) { return !c.eliminated; });
+      if (!alive.length) return '';
+      var html = '<div style="margin-top:12px;font-weight:900;font-size:12px;">عينة من صفوف الملف:</div>';
+      html += '<div class="vf-sample-list">';
+      PARSED.sample.forEach(function (s) {
+        var readings = alive.map(function (c) {
+          var day = c.format === 'MDY' ? s.token.b : s.token.a;
+          var month = c.format === 'MDY' ? s.token.a : s.token.b;
+          return c.format + ': ' + ATT_PARSER.serialArabicDate(ATT_PARSER.dateOnlyToSerial(day, month, s.token.y));
+        }).join('  |  ');
+        html += esc(s.raw) + '  →  ' + esc(readings) + '<br>';
+      });
+      html += '</div>';
+      return html;
+    }
+
+    function chooseFormat(fmt) {
+      if (!PARSED) return;
+      var index = INDEX || { session_dates: [] };
+      /* Re-parse with the choice forced, so the rows, the flags and the range
+         all come from the reading the user actually picked. */
+      var re = ATT_PARSER.parseFile(PARSED.text || PARSED.sourceText, { sessionDates: index.session_dates, forceFormat: fmt });
+      if (PARSED.sourceText) {
+        re.fileName = PARSED.fileName; re.fileSize = PARSED.fileSize;
+        re.encoding = PARSED.encoding; re.sourceText = PARSED.sourceText;
+        PARSED = re;
+      } else {
+        PARSED.format = fmt;
+      }
+      var panel = document.getElementById('vf-analysis-panel');
+      if (panel) { panel.innerHTML = renderPreview(); panel.style.display = 'block'; }
+    }
+
+    /* ---- dry-run preview (D-15) ---- */
+    /* The same per-date table the result panel renders, shown BEFORE the write
+       instead of after it, so the two can be compared at a glance. */
+    function buildPreviewStats() {
+      var sessionSet = {};
+      ((INDEX || {}).session_dates || []).forEach(function (k) { sessionSet[k] = true; });
+      var empSet = {};
+      ((INDEX || {}).emp_ids || []).forEach(function (e) { empSet[String(e)] = true; });
+
+      var stats = {};
+      var seen = {};
+      var unknownEmp = 0;
+      var dupInFile = 0;
+      function bump(key, field) {
+        if (!stats[key]) stats[key] = { imported: 0, duplicate: 0, flagged: 0, hasSession: false };
+        stats[key][field]++;
+      }
+      PARSED.rows.forEach(function (r) {
+        var daySerial = Math.floor(r[1]);
+        var key = ATT_PARSER.serialDateDisplay(daySerial);
+        var dedup = r[0] + '|' + Math.round(r[1] * 1440);
+        if (seen[dedup]) { bump(key, 'duplicate'); dupInFile++; }
+        else { seen[dedup] = true; bump(key, 'imported'); }
+        stats[key].hasSession = !!sessionSet[ATT_PARSER.serialDateKey(daySerial)];
+        if (!empSet[String(r[0])]) unknownEmp++;
+      });
+      PARSED.flagged.forEach(function () { bump('صفوف تحتاج مراجعة', 'flagged'); });
+      return { stats: stats, unknownEmp: unknownEmp, dupInFile: dupInFile };
+    }
+
+    function renderPreview() {
+      var inf = PARSED.inference || {};
+      var pv = buildPreviewStats();
+      var newRows = PARSED.rows.length - pv.dupInFile;
+
+      var html = '<div class="vf-analysis-box confident">';
+      html += '<div class="vf-analysis-title">مراجعة قبل الاستيراد — ' + esc(PARSED.fileName || '') + '</div>';
+
+      if (PARSED.format === 'XLSX') {
+        html += '<div class="vf-analysis-sub">✅ ملف Excel — التاريخ مقروء من الرقم مباشرة، لم يُطلب أي تخمين.</div>';
+      } else if (inf.confidence === 'certain') {
+        html += '<div class="vf-analysis-sub">✅ تم التعرف على التاريخ تلقائياً' +
+          (inf.reason ? ' — ' + esc(inf.reason) : '') + '</div>';
+      } else if (inf.confidence === 'high') {
+        html += '<div class="vf-analysis-sub">✅ تم التعرف على التاريخ تلقائياً — ' +
+          esc((inf.candidates.filter(function (c) { return c.format === PARSED.format; })[0] || {}).spanMinDisplay || '') +
+          ' إلى ' + esc((inf.candidates.filter(function (c) { return c.format === PARSED.format; })[0] || {}).spanMaxDisplay || '') +
+          ' <a href="#" onclick="ATT_PAGE.showAlternatives();return false;">تغيير طريقة القراءة</a></div>';
+      }
+      if (PARSED.encoding && PARSED.encoding !== 'utf-8') {
+        html += '<div class="vf-analysis-sub">ℹ️ تمت قراءة الملف بترميز ' + esc(PARSED.encoding) + '.</div>';
+      }
+
+      html += '<div style="margin-top:8px;background:var(--bg-subtle, #f9fafb);border:1px solid var(--border-color, #e5e7eb);border-radius:8px;padding:10px;line-height:1.9;">';
+      html += '<div>📥 <b style="color:#16a34a;">' + newRows + '</b> بصمة جاهزة للاستيراد</div>';
+      if (pv.dupInFile) html += '<div>♻️ <b style="color:#2563eb;">' + pv.dupInFile + '</b> بصمة مكررة داخل الملف نفسه (لن تُسجل مرتين)</div>';
+      if (PARSED.flagged.length) html += '<div>🚩 <b style="color:#f59e0b;">' + PARSED.flagged.length + '</b> صف يحتاج مراجعة</div>';
+      if (pv.unknownEmp) html += '<div>❓ <b style="color:#f59e0b;">' + pv.unknownEmp + '</b> بصمة لأكواد غير موجودة في قائمة الموظفين</div>';
+      html += '<div class="vf-analysis-sub" style="margin:6px 0 0;">البصمات المسجلة من قبل تُكتشف وتُستبعد لحظة الاستيراد.</div>';
+      html += '</div>';
+
+      html += renderDateTable(pv.stats, true);
+      html += '<div style="margin-top:12px;">' +
+        '<button class="btn btn-primary" onclick="ATT_PAGE.startCommit()">✅ تأكيد الاستيراد</button> ' +
+        '<button class="btn btn-outline" onclick="ATT_PAGE.resetUpload()">↩️ اختيار ملف آخر</button></div>';
+      html += '</div>';
+      return html;
+    }
+
+    function showAlternatives() {
+      var panel = document.getElementById('vf-analysis-panel');
+      if (!panel || !PARSED) return;
+      panel.innerHTML = renderConsequenceCards(PARSED.inference || {});
+      panel.style.display = 'block';
+    }
+
+    function sortDateKeys(keys) {
       var normal = [], special = [];
       keys.forEach(function (k) {
-        if (k === undatedKey || k.indexOf('(') !== -1) special.push(k);
-        else normal.push(k);
+        if (/^\d{2}\/\d{2}\/\d{4}$/.test(k)) normal.push(k); else special.push(k);
       });
       normal.sort(function (a, b) {
         var pa = a.split('/'), pb = b.split('/');
@@ -333,46 +537,137 @@
       return normal.concat(special);
     }
 
-    function renderUploadResult(res) {
+    function renderDateTable(stats, isPreview) {
+      var keys = Object.keys(stats || {});
+      if (!keys.length) return '';
+      var html = '<div style="margin-top:12px;font-weight:900;">📋 تفصيل كل تاريخ:</div>';
+      html += '<table class="table" style="margin-top:6px;"><thead><tr><th>التاريخ</th>' +
+        '<th>✅ ' + (isPreview ? 'سيُسجل' : 'جديد') + '</th><th>♻️ مكرر</th><th>🚩 مراجعة</th>' +
+        (isPreview ? '<th>اليوم</th>' : '') + '</tr></thead><tbody>';
+      sortDateKeys(keys).forEach(function (dk) {
+        var st = stats[dk];
+        html += '<tr><td><b>' + esc(dk) + '</b></td>' +
+          '<td style="color:#16a34a;">' + (st.imported || '-') + '</td>' +
+          '<td style="color:#2563eb;">' + (st.duplicate || '-') + '</td>' +
+          '<td style="color:#f59e0b;">' + (st.flagged || '-') + '</td>' +
+          (isPreview ? '<td>' + (st.hasSession ? 'قائم' : 'جديد') + '</td>' : '') + '</tr>';
+      });
+      html += '</tbody></table>';
+      return html;
+    }
+
+    /* ---- the commit, in chunks of 5000 ---- */
+    var CHUNK_SIZE = 5000;
+
+    function startCommit() {
+      if (!PARSED || !PARSED.rows) { UIC.toast('لا يوجد ملف محدد', 'error'); return; }
+      var batchId = uuid4();
+      var inf = PARSED.inference || {};
+      var chunks = [];
+      for (var i = 0; i < PARSED.rows.length; i += CHUNK_SIZE) {
+        chunks.push(PARSED.rows.slice(i, i + CHUNK_SIZE));
+      }
+      if (!chunks.length) chunks.push([]);
+
+      lastBatch = { batch_id: batchId, file_name: PARSED.fileName || 'ملف', rows: PARSED.rows.length };
+      UI.showSpinner();
+
+      var totals = null;
+      var chain = Promise.resolve();
+      chunks.forEach(function (chunk, idx) {
+        chain = chain.then(function () {
+          setParseStatus('جاري الاستيراد... جزء ' + (idx + 1) + ' من ' + chunks.length);
+          return companyCall('commit_attendance_import', {
+            batch_id: batchId,
+            chunk_index: idx,
+            is_last: idx === chunks.length - 1,
+            file_name: PARSED.fileName || 'ملف',
+            file_rows: PARSED.rows.length + PARSED.flagged.length,
+            format: PARSED.format || '',
+            detected_format: inf.format || '',
+            confidence: inf.confidence || '',
+            /* Sent on EVERY chunk: the server rebuilds its duplicate key set
+               per chunk, filtered to this window. */
+            date_min: PARSED.dateMin,
+            date_max: PARSED.dateMax,
+            rows: chunk,
+            /* The review rows ride with the first chunk only. */
+            flagged: idx === 0 ? PARSED.flagged : []
+          }).then(function (res) { totals = (res && res.totals) || totals; return res; });
+        });
+      });
+
+      chain
+        .then(function (res) {
+          setParseStatus('');
+          renderUploadResult(totals || {}, res);
+          UIC.toast((res && res.message) || 'تم الاستيراد', (totals && totals.rows_flagged) ? 'warning' : 'success');
+          loadSessions();
+          loadBatches();
+          INDEX = null;
+        })
+        .catch(function (e) {
+          setParseStatus('');
+          /* A partly-written batch is an acceptable failure: the undo button is
+             already pointed at it. */
+          renderCommitFailure(e, batchId);
+        })
+        .finally(function () { UI.hideSpinner(); });
+    }
+
+    function uuid4() {
+      if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
+      return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
+        var r = Math.random() * 16 | 0;
+        return (c === 'x' ? r : ((r & 0x3) | 0x8)).toString(16);
+      });
+    }
+
+    function renderCommitFailure(err, batchId) {
       var container = document.getElementById('vf-upload-result');
       if (!container) return;
+      var html = '<div class="vf-analysis-box ambiguous">';
+      html += '<div class="vf-analysis-title" style="color:var(--danger, #dc2626);">⚠️ توقف الاستيراد قبل أن يكتمل</div>';
+      html += '<div class="vf-analysis-sub">' + esc((err && err.message) || 'خطأ غير معروف') + '</div>';
+      html += '<div class="vf-analysis-sub">قد يكون جزء من الملف قد سُجل بالفعل. يمكنك التراجع عن العملية كاملة والمحاولة من جديد.</div>';
+      html += '<div style="margin-top:12px;">';
+      if (CAN_FULL) html += '<button class="btn btn-danger" onclick="ATT_PAGE.undoBatch()">↩️ تراجع عن هذا الرفع</button> ';
+      html += '<button class="btn btn-outline" onclick="ATT_PAGE.resetUpload()">↩️ اختيار ملف آخر</button></div>';
+      html += '</div>';
+      container.innerHTML = html;
+      container.style.display = 'block';
+      var panel = document.getElementById('vf-analysis-panel');
+      if (panel) { panel.style.display = 'none'; panel.innerHTML = ''; }
+    }
 
-      var totalSeen = (res.successCount || 0) + (res.skippedCount || 0) + (res.flaggedCount || 0);
+    function renderUploadResult(totals, res) {
+      var container = document.getElementById('vf-upload-result');
+      if (!container) return;
+      var imported = totals.rows_imported || 0;
+      var duplicate = totals.rows_duplicate || 0;
+      var flaggedN = totals.rows_flagged || 0;
+      var sessions = totals.sessions_created || 0;
+
       var html = '<div class="vf-analysis-box confident">';
-      if (!totalSeen) {
+      if (!(imported + duplicate + flaggedN)) {
         html += '<div style="color:var(--danger, #dc2626);font-weight:900;">⚠️ لم يتم العثور على أي بصمات قابلة للقراءة في هذا الملف</div>';
       } else {
-        html += '<div style="font-weight:900;font-size:15px;color:#166534;">نتيجة الرفع</div>';
+        html += '<div style="font-weight:900;font-size:15px;color:#166534;">نتيجة الاستيراد</div>';
         html += '<div style="margin-top:8px;background:var(--bg-subtle, #f9fafb);border:1px solid var(--border-color, #e5e7eb);border-radius:8px;padding:10px;line-height:1.9;">';
-        html += '<div>📥 <b style="color:#16a34a;">' + res.successCount + '</b> بصمة اتسجلت لأول مرة</div>';
-        html += '<div>♻️ <b style="color:#2563eb;">' + res.skippedCount + '</b> بصمة مكررة (تم تجاهلها)</div>';
-        if (res.flaggedCount > 0) html += '<div>🚩 <b style="color:#f59e0b;">' + res.flaggedCount + '</b> صف محتاج مراجعة (جدول valley_attendance_needs_review)</div>';
-        if (res.newSessionsCount > 0) html += '<div>🗓️ <b style="color:#7c3aed;">' + res.newSessionsCount + '</b> يوم/جلسة جديدة اتفتحت</div>';
+        html += '<div>📥 <b style="color:#16a34a;">' + imported + '</b> بصمة اتسجلت لأول مرة</div>';
+        html += '<div>♻️ <b style="color:#2563eb;">' + duplicate + '</b> بصمة مكررة (تم تجاهلها)</div>';
+        if (flaggedN > 0) html += '<div>🚩 <b style="color:#f59e0b;">' + flaggedN + '</b> صف محتاج مراجعة</div>';
+        if (sessions > 0) html += '<div>🗓️ <b style="color:#7c3aed;">' + sessions + '</b> يوم جديد اتفتح</div>';
         html += '</div>';
-
-        var stats = res.dateStats || {};
-        var keys = Object.keys(stats);
-        if (keys.length) {
-          var ordered = sortDateKeys(keys, res.undatedKey);
-          html += '<div style="margin-top:12px;font-weight:900;">📋 تفصيل كل تاريخ:</div>';
-          html += '<table class="table" style="margin-top:6px;"><thead><tr><th>التاريخ</th><th>✅ جديد</th><th>♻️ مكرر</th><th>🚩 مراجعة</th></tr></thead><tbody>';
-          ordered.forEach(function (dk) {
-            var st = stats[dk];
-            html += '<tr><td><b>' + esc(dk) + '</b></td>' +
-              '<td style="color:#16a34a;">' + (st.imported || '-') + '</td>' +
-              '<td style="color:#2563eb;">' + (st.duplicate || '-') + '</td>' +
-              '<td style="color:#f59e0b;">' + (st.flagged || '-') + '</td></tr>';
-          });
-          html += '</tbody></table>';
-        }
+      }
+      if (res && res.has_batch_column === false) {
+        html += '<div class="vf-analysis-sub" style="color:#92400e;margin-top:8px;">ℹ️ عمود import_batch_id غير موجود في جدول البصمات، ' +
+          'لذلك لا يمكن التراجع عن هذا الرفع. أضف العمود لتفعيل زر التراجع.</div>';
       }
       html += '<div style="margin-top:12px;"><button class="btn btn-outline" onclick="ATT_PAGE.resetUpload()">↩️ رفع ملف آخر</button>';
       /* Guarded twice: by the authority to delete rows, and by the server
-         actually having given us a batch to undo. Before the owner adds the
-         import_batch_id column the server writes the batch row but the punches
-         carry no id, so revert would refuse — the button stays hidden rather
-         than offering something that cannot work. */
-      if (CAN_FULL && lastBatch && lastBatch.batch_id) {
+         actually having a batch that CAN be undone. */
+      if (CAN_FULL && lastBatch && lastBatch.batch_id && (!res || res.has_batch_column !== false)) {
         html += ' <button class="btn btn-danger" onclick="ATT_PAGE.undoBatch()">↩️ تراجع عن هذا الرفع</button>';
       }
       html += '</div>';
@@ -382,43 +677,19 @@
       container.style.display = 'block';
       var panel = document.getElementById('vf-analysis-panel');
       if (panel) { panel.style.display = 'none'; panel.innerHTML = ''; }
-      var analyzeBtn = document.getElementById('vf-analyze-btn');
-      if (analyzeBtn) analyzeBtn.style.display = 'none';
-      loadSessions();
-    }
-
-    function confirmUpload() {
-      var fmtEl = document.querySelector('input[name="vf-fmt"]:checked');
-      if (!fmtEl) { UIC.toast('اختر صيغة التاريخ أولاً', 'error'); return; }
-      if (!csvText) { UIC.toast('لا يوجد ملف محدد', 'error'); return; }
-      var fileInput = document.getElementById('vf-csv-input');
-      var fileName = (fileInput && fileInput.files && fileInput.files[0] && fileInput.files[0].name) || 'CSV';
-      UI.showSpinner();
-      companyCall('upload_attendance_csv', { csv_content: csvText, format: fmtEl.value, file_name: fileName })
-        .then(function (res) {
-          lastBatch = {
-            batch_id: (res && res.batch_id) || '',
-            file_name: fileName,
-            rows: (res && res.successCount) || 0
-          };
-          renderUploadResult(res || {});
-          UIC.toast((res && res.message) || 'تم الرفع', (res && res.flaggedCount) ? 'warning' : 'success');
-        })
-        .catch(function (e) {
-          UIC.toast((e && e.message) || 'حدث خطأ أثناء الاستيراد', 'error');
-        })
-        .finally(function () { UI.hideSpinner(); });
     }
 
     /* Never a bare "are you sure": the file and the row count are what the user
        is actually deciding about. */
-    function undoBatch() {
-      if (!lastBatch || !lastBatch.batch_id) { UIC.toast('لا توجد عملية رفع للتراجع عنها', 'error'); return; }
-      var batch = lastBatch;
+    function undoBatch(batchId, fileName, rowCount) {
+      var batch = batchId
+        ? { batch_id: batchId, file_name: fileName || '', rows: rowCount || 0 }
+        : lastBatch;
+      if (!batch || !batch.batch_id) { UIC.toast('لا توجد عملية رفع للتراجع عنها', 'error'); return; }
       UIC.confirm({
         title: 'تراجع عن الرفع',
         message: 'سيتم حذف كل البصمات التي سجلها هذا الرفع، والأيام التي فتحها ولم تعد تحتوي على أي بصمة.',
-        record: batch.file_name + ' — ' + batch.rows + ' بصمة',
+        record: batch.file_name + (batch.rows ? ' — ' + batch.rows + ' بصمة' : ''),
         detail: 'البصمات المضافة يدوياً لن تُحذف.',
         confirmText: 'تراجع وحذف',
         danger: true
@@ -429,12 +700,66 @@
           .then(function (res) {
             UIC.toast((res && res.message) || 'تم التراجع', 'success');
             lastBatch = null;
+            INDEX = null;
             resetUploadFlow();
             loadSessions();
+            loadBatches();
           })
           .catch(function (e) { UIC.toast((e && e.message) || 'تعذر التراجع', 'error'); })
           .finally(function () { UI.hideSpinner(); });
       });
+    }
+
+    /* ================= IMPORT HISTORY ================= */
+    /* The permanent home of undo — not only the panel that happens to be on
+       screen right after an import. */
+    function renderBatchesSection() {
+      return card('سجل عمليات الرفع',
+        '<div id="vf-batches-table"><p class="vf-text-muted">جاري التحميل...</p></div>',
+        '<button id="vf-batches-all-btn" class="btn btn-outline">عرض الكل</button>');
+    }
+
+    function loadBatches(loadAll) {
+      companyCall('get_attendance_batches', loadAll ? { loadAll: true } : { limit: 10 })
+        .then(function (resp) {
+          BATCHES = (resp && resp.batches) || [];
+          BATCHES_TOTAL = (resp && resp.total) || BATCHES.length;
+          renderBatchesTable();
+        })
+        .catch(function () {
+          var c = document.getElementById('vf-batches-table');
+          if (c) c.innerHTML = '<p class="vf-text-muted">لا يوجد سجل رفع بعد.</p>';
+        });
+    }
+
+    function renderBatchesTable() {
+      var container = document.getElementById('vf-batches-table');
+      if (!container) return;
+      if (!BATCHES.length) {
+        container.innerHTML = '<p class="vf-text-muted">لم يتم رفع أي ملف بعد.</p>';
+        return;
+      }
+      var headers = ['الملف', 'الفترة', '✅ جديد', '♻️ مكرر', '🚩 مراجعة', 'المستخدم', 'الحالة',
+        { key: 'actions', label: 'إجراءات' }];
+      var rows = BATCHES.map(function (b) {
+        var isActive = b.batch_status !== 'reverted';
+        var acts = [];
+        if (CAN_FULL && isActive) {
+          acts.push({
+            label: '↩️ تراجع',
+            onclick: 'ATT_PAGE.undoBatch(\'' + esc(b.batch_id) + '\', \'' + esc(String(b.file_name || '').replace(/'/g, '')) + '\', ' + (b.rows_imported || 0) + ')'
+          });
+        }
+        return [
+          esc(b.file_name || '-'),
+          esc((b.date_min_display || '?') + ' — ' + (b.date_max_display || '?')),
+          b.rows_imported, b.rows_duplicate, b.rows_flagged,
+          esc(uname_(b.uploaded_by)),
+          isActive ? UIC.statusPill('نشط', 'success') : UIC.statusPill('تم التراجع', 'neutral'),
+          acts.length ? UIC.actionBtns(acts) : ''
+        ];
+      });
+      container.innerHTML = UIC.dataTable('vf-batches-table-id', { headers: headers, rows: rows, pageSize: 50 });
     }
 
     /* ================= MANUAL ENTRY ================= */
@@ -693,8 +1018,8 @@
       var csvInput = document.getElementById('vf-csv-input');
       if (csvInput) csvInput.addEventListener('change', handleFileSelect);
 
-      var analyzeBtn = document.getElementById('vf-analyze-btn');
-      if (analyzeBtn) analyzeBtn.addEventListener('click', analyzeCsv);
+      var batchesAllBtn = document.getElementById('vf-batches-all-btn');
+      if (batchesAllBtn) batchesAllBtn.addEventListener('click', function () { loadBatches(true); });
 
       var manualAddBtn = document.getElementById('vf-manual-add-btn');
       if (manualAddBtn) manualAddBtn.addEventListener('click', showManualEntryModal);
@@ -711,8 +1036,10 @@
     window.ATT_PAGE = {
       openSessionDetail: openSessionDetail,
       saveNewSession: saveNewSession,
-      confirmUpload: confirmUpload,
       resetUpload: resetUploadFlow,
+      chooseFormat: chooseFormat,
+      showAlternatives: showAlternatives,
+      startCommit: startCommit,
       undoBatch: undoBatch,
       saveManualEntry: saveManualEntry
     };
