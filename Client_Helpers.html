@@ -418,7 +418,12 @@ SESSION.openHistory = function (sheetName, recordId) {
   if (window.UIC && UIC.HistorySide) { UIC.HistorySide.open(sheetName, recordId); return; }
   var url = (window.scriptUrl || '/') + '?action=record_history&sheet=' + encodeURIComponent(sheetName) +
     '&record=' + encodeURIComponent(recordId) + '&sessionToken=' + encodeURIComponent(SESSION.token());
-  window.open(url, '_blank');
+  /* [iPhone run 2] Only the window.open fallback changes; the HistorySide
+     branch above is untouched. UIC.openTab makes the same call and lands in
+     this frame only when the tab is refused, so record_history stops being
+     unreachable when a pop-up is blocked. This file loads before
+     UI_Components on some pages, hence the guard. */
+  if (window.UIC && UIC.openTab) UIC.openTab(url); else window.open(url, '_blank');
 };
 
 SESSION.saveCurrentView = function (pageKey, definition, presetName) {

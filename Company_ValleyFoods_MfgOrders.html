@@ -495,12 +495,15 @@
     function getCombo_(id) { var el = document.getElementById(id); return el ? el.value : ''; }
     function getHid_(id) { var el = document.getElementById(id); return el ? el.value.trim() : ''; }
 
+    /* [iPhone run 2] Both open an app page, so both go through UIC.openTab:
+       the same window.open(url, '_blank'), and this frame navigates there
+       only when the tab is refused. Android and Windows still get a tab. */
     function openDetail(moUid) {
-      window.open(scriptUrl + '?action=vf_mfg_order&mo=' + encodeURIComponent(moUid) + '&sessionToken=' + SESSION_TOKEN, '_blank');
+      UIC.openTab(scriptUrl + '?action=vf_mfg_order&mo=' + encodeURIComponent(moUid) + '&sessionToken=' + SESSION_TOKEN);
     }
 
     function openNewPage() {
-      window.open(scriptUrl + '?action=vf_mfg_order&new=1&sessionToken=' + SESSION_TOKEN, '_blank');
+      UIC.openTab(scriptUrl + '?action=vf_mfg_order&new=1&sessionToken=' + SESSION_TOKEN);
     }
 
     function changeStatus(moUid, kind) {
