@@ -438,6 +438,17 @@
       }
     }
 
+    /* نوع الحركة stores «المستوى الخامس» and shows «اسم المستوى الخامس» —
+       a reference, so the read-only view must resolve the code to its name
+       rather than printing the code. */
+    function movementTypeLabel(v) {
+      var found = '';
+      (__options.movement_type_options || []).forEach(function (o) {
+        if (String(o.fifth) === String(v)) found = o.code;
+      });
+      return found || v || '—';
+    }
+
     function productLabel(v) {
       var found = '';
       (__options.product_options || []).forEach(function (p) { if (String(p.value) === String(v)) found = p.label; });
@@ -753,7 +764,7 @@
               '<td class="num">' + FMT.number(l.other_cost) + '</td>' +
               '<td class="num">' + FMT.number(l.total_cost) + '</td>'
             : '') +
-          '<td>' + esc(l.movement_type || '-') + '</td>' +
+          '<td>' + esc(l.movement_type ? movementTypeLabel(l.movement_type) : '-') + '</td>' +
           '</tr>';
       }).join('');
       if (!lrows) lrows = '<tr><td colspan="' + (canCost() ? 6 : 3) + '" style="text-align:center;padding:12px;">لا توجد أصناف</td></tr>';
