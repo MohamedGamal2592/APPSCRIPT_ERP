@@ -53,6 +53,11 @@
     var __headers = [];
     var __lines = [];
     var __editingCode = '';
+    /* Date range on the receipt date, applied server-side in
+       getValleyPurchasingCosting_ before the newest-10 slice — so a range in an
+       older month returns its own rows instead of an empty page. A range also
+       implies "show everything in it", hence loadAll below. */
+    var __dateFrom = '', __dateTo = '';
     var __viewOnly = false;
     var __canEdit = false;
 
@@ -199,9 +204,13 @@
         searchable: true,
         headers: [
           { key: 'Code', label: 'الكود' },
-          { key: 'supplier_name', label: 'المورد' },
+          { key: 'supplier_name', label: 'المورد', col: 'text' },
           { key: 'receipt_date', label: 'تاريخ الاستلام' },
-          { key: 'items', label: 'الأصناف' }
+          { key: 'items', label: 'الأصناف', col: 'prose' }
+        /* [UI-9.1] الأصناف holds every item on the purchase joined into one
+           cell, so it is the longest text on the row and the one worth reading
+           — declared prose so it absorbs the surplus instead of a date column
+           taking it. المورد is a name: real words, but not a sentence. */
         ].concat(canCost()
           ? [{ key: 'total_costs', label: 'إجمالي التكاليف', numeric: true }]
           : []).concat([

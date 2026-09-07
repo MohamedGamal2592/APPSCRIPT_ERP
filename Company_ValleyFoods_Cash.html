@@ -55,6 +55,12 @@
   (function () {
     var HEADERS = [], BOXES = [], OPTIONS = {}, ITEM_SUGGESTIONS = [], NEXT_ID = 1;
     var BOX_FILTER = '';
+    /* Date range for the list. Server-side: get_valley_cash bounds the rows by
+       transaction_date before the 2,000-row cap, so an old month stays reachable
+       — a client-side filter over the capped payload could not show it. The box
+       balance cards are computed over the whole ledger and are never bounded. */
+    var DATE_FROM = '', DATE_TO = '';
+    var VIEW_APPLIED = false;
 
     function renderApp() {
       UIC.appShell('vf-root', {
@@ -182,9 +188,26 @@
             : '') +
         '</div>' +
         UIC.dataTable('cash-table-id', {
-          headers: ['رقم', 'التاريخ', 'الطرف', 'البيان', 'النوع', 'طريقة الدفع',
+          /* [UI-9.1] Three columns are DECLARED rather than inferred. The
+             other ten classify correctly from their own data and are left to
+             do so — a declaration that only restates the inference is a second
+             place to keep in step with the page.
+               البيان is the column the whole contract exists for, and it is
+                 declared so it can never flap: inference reads the rows that
+                 happen to be on screen, and a month of short descriptions
+                 would quietly demote it to text. 30ch over the 26ch token
+                 because it shares this table with twelve other columns.
+               الطرف is a party name — real words, but a name, not a sentence.
+               الاعتماد holds a status pill, never more than two short words,
+                 and inference calls it text: that reserves 14ch on the widest
+                 table in the tree for a word that needs five. */
+          headers: ['رقم', 'التاريخ',
+                    { label: 'الطرف', col: 'text' },
+                    { label: 'البيان', col: 'prose', min: '30ch' },
+                    'النوع', 'طريقة الدفع',
                     { label: 'المبلغ', numeric: true }, 'الصندوق', 'كود الحساب', 'المستخدم',
-                    { label: 'الرصيد', numeric: true }, 'الاعتماد', ''],
+                    { label: 'الرصيد', numeric: true },
+                    { label: 'الاعتماد', col: 'atom' }, ''],
           rows: rows,
           emptyText: BOX_FILTER ? 'لا توجد حركات في هذا الصندوق' : 'لا توجد حركات'
         });

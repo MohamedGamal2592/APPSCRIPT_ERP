@@ -104,9 +104,15 @@
       if (container) {
         UIC.PagedTable({
           container: container,
-          headers: ['رقم الفاتورة', 'العميل', 'التاريخ',
+          /* [UI-9.1] العميل is the readable column of this list and its
+             length varies by customer; declared text so it keeps a name's
+             worth of room whichever page is on screen. الاعتماد is a status
+             pill that inference reads as text and that needs an atom's width.
+             This list is fetched a page at a time, so its rows differ between
+             loads more than most — which is exactly when declaring pays. */
+          headers: ['رقم الفاتورة', { label: 'العميل', col: 'text' }, 'التاريخ',
             { label: 'الصافي', numeric: true }, { label: 'الضريبة', numeric: true }, { label: 'الإجمالي', numeric: true },
-            'الاعتماد', ''],
+            { label: 'الاعتماد', col: 'atom' }, ''],
           pageSize: 100,
           emptyText: 'لا توجد فواتير',
           onRendered: function (tid) { try { UIC.initTableSort(tid); } catch (e) {} },

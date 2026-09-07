@@ -103,7 +103,11 @@
         ];
       });
       container.innerHTML = UIC.dataTable('parties-table-id', {
-        headers: ['الكود', 'الاسم', 'الاتجاه', 'نوع التعامل', 'التليفون', 'الدولة', 'المستوى الأساسي',
+        /* [UI-9.1] الاسم is the column a person actually reads this list by,
+           and it is the only one here whose length varies enough to be
+           classified differently from one load to the next. Declared text so
+           it always keeps a name's worth of room. */
+        headers: ['الكود', { label: 'الاسم', col: 'text' }, 'الاتجاه', 'نوع التعامل', 'التليفون', 'الدولة', 'المستوى الأساسي',
                   { label: 'الرصيد الحالي', numeric: true }, ''],
         rows: rows, pageSize: 100,
         /* [P2] UIC.dataTable rebuilds the tbody from the stored row HTML on every
@@ -316,8 +320,13 @@
         chip('المشتريات (دائن)', finFmt(kPurchases), 'color:#7c3aed;');
 
       var running = opening;
-      var html = '<table class="table"><thead><tr>' +
-        '<th>التاريخ</th><th>رقم المستند</th><th>البيان</th>' +
+      /* [UI-9.1] This is the table in plan §0 — six columns, five of them
+         atoms, and البيان rendering about seven characters wide, one word per
+         line, nine lines tall. UIC.autoColumns reads these labels back out of
+         the DOM; data-col is the markup form of { col: … }, so the sentence
+         column is declared rather than left to the month's data. */
+      var html = '<div class="table-wrap"><table id="st-ledger-table" class="table"><thead><tr>' +
+        '<th>التاريخ</th><th>رقم المستند</th><th data-col="prose" data-min="30ch">البيان</th>' +
         '<th>مدين</th><th>دائن</th><th>الرصيد التراكمي</th></tr></thead><tbody>';
 
       if (fromV) {
