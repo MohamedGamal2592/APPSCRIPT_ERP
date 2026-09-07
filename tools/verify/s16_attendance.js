@@ -448,6 +448,18 @@ function makeWorld(o) {
       W.tables[n] = W.tables[n].filter(r => String(r[col] == null ? '' : r[col]).trim() !== String(val).trim());
       return before - W.tables[n].length;
     },
+    /* Same predicate as deleteRowsByCriteria_ but over a SET of values, so the
+       revert deletes every emptied session in one pass instead of re-reading
+       the session sheet once per session. */
+    deleteRowsWhereIn_: (sh, col, vals) => {
+      const want = {};
+      let any = false;
+      (vals || []).forEach(v => { if (v !== undefined && v !== null) { want[String(v).trim()] = true; any = true; } });
+      if (!any) return 0;
+      const n = sh.__name, before = W.tables[n].length;
+      W.tables[n] = W.tables[n].filter(r => !want[String(r[col] == null ? '' : r[col]).trim()]);
+      return before - W.tables[n].length;
+    },
     updateRowByCriteria_: (sh, col, val, up) => {
       const n = sh.__name; let hit = false;
       W.tables[n].forEach(r => { if (String(r[col]).trim() === String(val).trim()) { Object.assign(r, up); hit = true; } });

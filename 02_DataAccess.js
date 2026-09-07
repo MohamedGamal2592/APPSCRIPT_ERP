@@ -596,6 +596,29 @@ function updateRowByCriteria_(sheet, criteriaHeader, criteriaValue, updatesObjec
  * 20 000-row sheet also forced Sheets to shift every row beneath it.
  */
 function deleteRowsByCriteria_(sheet, criteriaHeader, criteriaValue) {
+  return deleteRowsWhereIn_(sheet, criteriaHeader, [criteriaValue]);
+}
+
+/**
+ * Delete every row whose criteriaHeader is ANY OF `values`, in ONE pass.
+ *
+ * Calling deleteRowsByCriteria_ in a loop costs a full getDataRange() read per
+ * value, which is how deleting the 10 outputs of a manufacturing order came to
+ * read the whole consumption sheet ten times. One read, one predicate, the same
+ * contiguous-block deletion.
+ *
+ * Returns the number of rows removed.
+ */
+function deleteRowsWhereIn_(sheet, criteriaHeader, values) {
+  const want = Object.create(null);
+  let any = false;
+  (values || []).forEach(function (v) {
+    if (v === undefined || v === null) return;
+    want[String(v).trim()] = true;
+    any = true;
+  });
+  if (!any) return 0;
+
   const headers = getHeaders_(sheet);
   countSheetRead_();
   const data = sheet.getDataRange().getValues();
@@ -604,12 +627,13 @@ function deleteRowsByCriteria_(sheet, criteriaHeader, criteriaValue) {
 
   /* 1-based sheet row numbers, ascending. */
   const target = [];
-  const want = String(criteriaValue).trim();
   for (let i = 1; i < data.length; i++) {
-    if (String(data[i][critIdx]).trim() === want) target.push(i + 1);
+    if (want[String(data[i][critIdx]).trim()]) target.push(i + 1);
   }
   if (!target.length) return 0;
 
+  /* Bottom-up, in contiguous blocks: same rows, same order, one API call per
+     run instead of one per row. */
   let deleted = 0;
   let end = target.length - 1;
   while (end >= 0) {

@@ -2640,12 +2640,16 @@ const ValleyFoodsHRModules = (function () {
           var k = String(r.id || '').trim();
           if (k) remaining[k] = (remaining[k] || 0) + 1;
         });
+        /* Collect first, delete once. Calling deleteRowsByCriteria_ per session
+           re-read the whole session sheet for every day the revert emptied. */
+        var emptySessionIds = [];
         getAllRecords_(dbId, ATTENDANCE_SESSION_SHEET).forEach(function (s) {
           if (String(s.import_batch_id || '').trim() !== batchId) return;
           var sid = String(s.session_id || '').trim();
           if (!sid || remaining[sid]) return;
-          sessionsDeleted += deleteRowsByCriteria_(sessSheet, 'session_id', sid);
+          emptySessionIds.push(sid);
         });
+        sessionsDeleted = deleteRowsWhereIn_(sessSheet, 'session_id', emptySessionIds);
       }
 
       var reviewDeleted = 0;
@@ -5281,7 +5285,9 @@ const ValleyFoodsHRModules = (function () {
       /* rewrite raw-material batch consumption — per-product footers + legacy consumption */
       var sheetCons = getSheet_(MFG_CONSUMPTION_SHEET, dbId);
       /* footers are linked by the OUTPUT uid, not the MO uid — delete this MO's old output footers */
-      existingOutUids.forEach(function (ou) { deleteRowsByCriteria_(sheetCons, 'valley_manufacture_header_product_id', ou); });
+      /* ONE read for all of this MO's outputs. Per-output deletion re-read the
+         whole consumption sheet once per output. */
+      deleteRowsWhereIn_(sheetCons, 'valley_manufacture_header_product_id', existingOutUids);
       var consHeaders = getHeaders_(sheetCons);
       var consRows = [];
 
@@ -5443,9 +5449,10 @@ const ValleyFoodsHRModules = (function () {
           noteMutation_();
         });
       }
-      existingWC.forEach(function (r) {
-        if (keepWcUids.indexOf(String(r.unique_id)) === -1) deleteRowsByCriteria_(sheetWC, 'unique_id', String(r.unique_id));
-      });
+      /* ONE read for every dropped work op, not one per op. */
+      deleteRowsWhereIn_(sheetWC, 'unique_id', existingWC
+        .filter(function (r) { return keepWcUids.indexOf(String(r.unique_id)) === -1; })
+        .map(function (r) { return String(r.unique_id); }));
       try { Logger.log('MFGTRACE workops: in=' + (Array.isArray(d.work_ops) ? d.work_ops.length : 0) + ' kept=' + keepWcUids.length + ' tab=' + sheetWC.getName()); } catch (eLg5) {}
 
       /* work-center cost columns are SHEET FORMULAS */

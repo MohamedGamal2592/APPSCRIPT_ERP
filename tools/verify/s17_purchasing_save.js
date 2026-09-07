@@ -496,6 +496,59 @@ console.log('\n5 — maxIdOf_: same answer as the whole-sheet scan, one column o
     cc.cells);
 }
 
+/* ══ 6. deleteRowsWhereIn_ — one read for a SET of values ═══════════════ */
+console.log('\n6 — deleteRowsWhereIn_: N values, ONE sheet read\n');
+{
+  function readsCounting(grid, calls) {
+    const sh = fakeSheetFor(grid, calls);
+    const inner = sh.getDataRange;
+    sh.getDataRange = () => { calls.reads++; return inner(); };
+    return sh;
+  }
+  const headers = ['id', 'uid'];
+  const build = () => {
+    const g = [headers.slice()];
+    for (let i = 0; i < 60; i++) g.push([i + 1, 'U' + i]);
+    return g;
+  };
+
+  /* Deleting 10 uids the old way = 10 full reads. */
+  const targets = ['U3', 'U4', 'U5', 'U20', 'U21', 'U40', 'U41', 'U42', 'U43', 'U59'];
+  const gLoop = build(), cLoop = { deleteRow: 0, deleteRows: 0, reads: 0 };
+  const shLoop = readsCounting(gLoop, cLoop);
+  let loopDeleted = 0;
+  targets.forEach(t => { loopDeleted += dsb.deleteRowsByCriteria_(shLoop, 'uid', t); });
+
+  const gSet = build(), cSet = { deleteRow: 0, deleteRows: 0, reads: 0 };
+  const setDeleted = dsb.deleteRowsWhereIn_(readsCounting(gSet, cSet), 'uid', targets);
+
+  check(loopDeleted === setDeleted && loopDeleted === targets.length,
+    'the set form removes the same ' + targets.length + ' rows',
+    loopDeleted + ' vs ' + setDeleted);
+  check(JSON.stringify(gLoop) === JSON.stringify(gSet), '  leaving an identical sheet');
+  check(cLoop.reads === targets.length && cSet.reads === 1,
+    '  in ONE sheet read instead of ' + targets.length,
+    cLoop.reads + ' -> ' + cSet.reads);
+  check(cSet.deleteRows < cLoop.deleteRows,
+    '  and fewer delete calls (' + cLoop.deleteRows + ' -> ' + cSet.deleteRows + ')');
+
+  /* Edge cases. */
+  const empty = { deleteRow: 0, deleteRows: 0, reads: 0 };
+  check(dsb.deleteRowsWhereIn_(readsCounting(build(), empty), 'uid', []) === 0,
+    'an empty value list deletes nothing');
+  check(empty.reads === 0, '  and does not even read the sheet');
+  check(dsb.deleteRowsWhereIn_(fakeSheetFor(build(), { deleteRow: 0, deleteRows: 0 }), 'uid', [null, undefined]) === 0,
+    'null and undefined values are ignored');
+  const dupG = build(), dupC = { deleteRow: 0, deleteRows: 0 };
+  check(dsb.deleteRowsWhereIn_(fakeSheetFor(dupG, dupC), 'uid', ['U7', 'U7', 'U7']) === 1,
+    'a repeated value still deletes its row once');
+  check(dsb.deleteRowsWhereIn_(fakeSheetFor(build(), { deleteRow: 0, deleteRows: 0 }), 'nope', ['U1']) === 0,
+    'a missing criteria column returns 0');
+  const noneG = build();
+  check(dsb.deleteRowsWhereIn_(fakeSheetFor(noneG, { deleteRow: 0, deleteRows: 0 }), 'uid', ['ZZZ']) === 0 &&
+    noneG.length === 61, 'values that match nothing leave the sheet alone');
+}
+
 /* ══ the run ════════════════════════════════════════════════════════════ */
 console.log('\n' + (failed === 0
   ? 'S17 — the purchasing save and the batched delete both check out.'
