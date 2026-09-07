@@ -1207,7 +1207,27 @@ function saveRecordWithAudit_(sheetDbId, sheetName, existingRowId, dataMap, acti
   if (pk !== 'id') newValues[pk] = existingRowId;
   const ok = updateRowByCriteria_(sheet, pk, existingRowId, newValues);
   if (!ok) return { status: 'error', message: 'Row not found for update: ' + existingRowId };
-  logHistory_(dbId, sheetName, oldUid, existingRowId, currentUser, action || 'update', newValues, old);
+  /* [RT-1b] The create branch above has always wrapped logHistory_ and logged
+   * AUDIT-SKIPPED; this branch did not, and the difference was a live bug.
+   * updateRowByCriteria_ has ALREADY committed the change on the line above, so
+   * a history write that throws here turned a successful save into a reported
+   * error for a change that is in the sheet.
+   *
+   * That was merely confusing while the client waited for a server reply. Once
+   * the optimistic write rollout lands it is worse: the client rolls the row
+   * back off the screen, so the screen and the spreadsheet actively disagree
+   * and nobody is told. Hence this ships before that rollout, not after it.
+   *
+   * The audit row is not discarded quietly — AUDIT-SKIPPED goes to the log with
+   * the sheet and the reason, exactly as create does — and the queue work later
+   * in this programme removes the failure mode rather than tolerating it.
+   *
+   * The delete branch is deliberately NOT wrapped: it writes its history row
+   * BEFORE deleting, so a throw there leaves the row in the sheet and the
+   * reported failure is the truth. Guarding it would delete a row with no
+   * audit trail, which is the one outcome worth more than a clean error. */
+  try { logHistory_(dbId, sheetName, oldUid, existingRowId, currentUser, action || 'update', newValues, old); }
+  catch (eHist) { try { Logger.log('AUDIT-SKIPPED update ' + sheetName + ': ' + (eHist && eHist.message)); } catch (eLg) {} }
   return { status: 'success', data: { record: newValues, rowId: existingRowId } };
 }
 
@@ -1232,7 +1252,12 @@ function approveRecordWithAudit_(sheetDbId, sheetName, rowId, approveMap, curren
   if (pk !== 'id') merged[pk] = rowId;
   const ok = updateRowByCriteria_(sheet, pk, rowId, merged);
   if (!ok) return { status: 'error', message: 'Row not found for approve: ' + rowId };
-  logHistory_(dbId, sheetName, oldUid, rowId, currentUser, 'approve', merged, old);
+  /* [RT-1b] Same asymmetry, same fix, same reason as the update branch below:
+   * updateRowByCriteria_ has already committed the approval by the time this
+   * line runs, so an audit failure here must not be reported as a failed
+   * approve. */
+  try { logHistory_(dbId, sheetName, oldUid, rowId, currentUser, 'approve', merged, old); }
+  catch (eHist) { try { Logger.log('AUDIT-SKIPPED approve ' + sheetName + ': ' + (eHist && eHist.message)); } catch (eLg) {} }
   return { status: 'success', data: { record: merged, rowId: rowId } };
 }
 
