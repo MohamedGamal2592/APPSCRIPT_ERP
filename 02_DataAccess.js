@@ -46,6 +46,11 @@ function resetRecordCache_() {
   _recordCacheDisabled_ = false;
   _sheetsReadCount_ = 0;
   for (const k in _pkIndexCache_) delete _pkIndexCache_[k];
+  // Per-execution authority memos (see authGeneration_ / isSystemEnabled_).
+  // Called at the top of both doGet and apiRouter_, so every request starts
+  // with a freshly-read generation.
+  _genMemo_ = null;
+  _ksMemo_ = null;
 }
 
 function disableRecordCache_() {
@@ -773,7 +778,15 @@ function userNameMap_() {
 // ==========================================
 // Versioned cache invalidation
 // ==========================================
-function onEdit(e) {
+/**
+ * Installable onEdit target. THE SIMPLE TRIGGER onEdit(e) BELOW NEVER FIRES:
+ * this is a standalone script (.clasp.json carries a bare scriptId, no
+ * container) and simple triggers only run in container-bound projects. Until
+ * installTriggers_ creates this trigger, a change typed directly into the AUTH
+ * spreadsheet reaches no invalidation at all beyond the staleness ceiling
+ * folded into authGeneration_.
+ */
+function onAuthSheetEdit(e) {
   try {
     const sheet = e.range.getSheet();
     if (sheet.getParent().getId() !== CONFIG.AUTH_SPREADSHEET_ID) return;
@@ -783,7 +796,64 @@ function onEdit(e) {
     else if (sheetName === 'ERP_Pages_Matrix') bumpVersion_('ERP_Pages_Matrix');
     else if (sheetName === 'ERP_Information') bumpVersion_('ERP_Information');
     else if (sheetName === 'ERP_system_work') bumpVersion_('ERP_system_work');
-  } catch (err) { console.error('onEdit version update failed: ' + err.message); }
+  } catch (err) { console.error('onAuthSheetEdit failed: ' + err.message); }
+}
+
+/** Retained for compatibility. Never fires — see onAuthSheetEdit. */
+function onEdit(e) { onAuthSheetEdit(e); }
+
+// ==========================================
+// Authority generation (durable, event-driven invalidation)
+// ==========================================
+var _genMemo_ = null;   // per-execution memo, cleared by resetRecordCache_
+var _ksMemo_  = null;   // kill-switch memo, cleared by resetRecordCache_ and by a bump
+
+/**
+ * The authority generation. Durable in ScriptProperties, mirrored in
+ * CacheService at max TTL, so the steady-state cost is one cache get.
+ *
+ * NEVER writes to ScriptProperties — only bumpAuthGeneration_ does, and only in
+ * response to a real mutation. A fresh deployment with no property set reads '0'
+ * and works correctly; the first admin save bootstraps the real stamp.
+ *
+ * The trailing time bucket is the staleness CEILING: it guarantees that a direct
+ * sheet edit made while the onAuthSheetEdit trigger is missing or broken clears
+ * within AUTH_STALENESS_CEILING_SECONDS, so the trigger is not load-bearing.
+ */
+function authGeneration_() {
+  if (_genMemo_ !== null) return _genMemo_;
+  var base = null;
+  try { base = CacheService.getScriptCache().get('erp_gen'); } catch (e) {}
+  if (!base) {
+    try { base = PropertiesService.getScriptProperties().getProperty('erp_gen'); } catch (e) {}
+    if (!base) base = '0';
+    try { CacheService.getScriptCache().put('erp_gen', base, 21600); } catch (e) {}
+  }
+  var ceilSec = Number(CONFIG.AUTH_STALENESS_CEILING_SECONDS) || 300;
+  _genMemo_ = base + '.' + Math.floor(new Date().getTime() / (ceilSec * 1000));
+  return _genMemo_;
+}
+
+/**
+ * Invalidate every cached authority payload for every user, everywhere, at once.
+ *
+ * Order matters: the DURABLE write is the source of truth and goes first. If it
+ * fails, the cache mirror gets a 60s TTL instead of 6h, so a later eviction
+ * cannot strand readers on a stale Properties generation for six hours.
+ */
+function bumpAuthGeneration_() {
+  var g = String(new Date().getTime());
+  var durable = false;
+  try {
+    PropertiesService.getScriptProperties().setProperty('erp_gen', g);
+    durable = true;
+  } catch (e) {
+    try { console.error('bumpAuthGeneration_: durable write failed — ' + e.message); } catch (e2) {}
+  }
+  try { CacheService.getScriptCache().put('erp_gen', g, durable ? 21600 : 60); }
+  catch (e) { try { CacheService.getScriptCache().remove('erp_gen'); } catch (e2) {} }
+  _genMemo_ = null;   // recompute with the new base and the current bucket
+  _ksMemo_  = null;   // toggleKillSwitch_ flips the flag AFTER the gate memoised it
 }
 
 function bumpVersion_(sheetName) {
@@ -796,6 +866,15 @@ function bumpVersion_(sheetName) {
     else if (sheetName === 'ERP_Information') cache.put('version_killswitch', now);
     else if (sheetName === 'ERP_system_work') cache.put('version_killswitch', now);
   } catch (e) {}
+  // ERP_Users (role/company/status), ERP_Pages_Matrix (grants) and
+  // ERP_system_work / ERP_Information (kill switch) all feed the authority
+  // decision. Any of them changing invalidates every cached authority payload.
+  // Additive: the per-sheet version keys above stay, because version_companies
+  // still has live consumers.
+  if (sheetName === 'ERP_Users' || sheetName === 'ERP_Pages_Matrix' ||
+      sheetName === 'ERP_Information' || sheetName === 'ERP_system_work') {
+    bumpAuthGeneration_();
+  }
 }
 
 // ==========================================
