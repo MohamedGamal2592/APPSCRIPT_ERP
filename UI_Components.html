@@ -1389,6 +1389,17 @@ UIC._renderChunked = function(id, offset){
     else {
       try { UIC._dtRefreshBatchBar(id); } catch (e) {}
       try { UIC._dtRefreshFooter(id); } catch (e) {}
+      /* [RT-2] The last chunk of the first table body IS first meaningful
+       * paint on a list page, and this is the only place in the codebase that
+       * knows when it happened. PERF.mark fires once per metric per page and
+       * returns immediately unless window.PERF_LOG is true, so a closed
+       * measurement window pays one property read per table render.
+       *
+       * The metric was specified in Phase 0 as "already exists; keep it" — in
+       * fact PERF.mark existed and no page had ever called it, so the number
+       * has never been produced. Marking it here gives every list page the
+       * metric without eighty-five separate edits. */
+      try { if (window.PERF && PERF.mark) PERF.mark('first_data_render'); } catch (e) {}
       if (st.opts && st.opts.onRendered) { try{ st.opts.onRendered(id); }catch(e){} }
     }
   }

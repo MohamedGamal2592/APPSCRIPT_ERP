@@ -693,14 +693,39 @@ function servePrintFile_(params) {
   return dataUriDownloadHtml_(fileName, file.getBlob());
 }
 
-/* Phase 0b — client-side timing. Sibling of logClientError_ so page timings do
- * not pollute the error log. Only writes when Script Property PERF_LOG_READS is
- * on; the client is told via window.PERF_LOG (injected in doGet) so a disabled
- * measurement window costs no round trip at all. */
+/* Phase 0b / [RT-2] — client-side timing. Sibling of logClientError_ so page
+ * timings do not pollute the error log. Only writes when Script Property
+ * PERF_LOG_READS is on; the client is told via window.PERF_LOG (injected in
+ * doGet) so a disabled measurement window costs no round trip at all.
+ *
+ * The client now batches a navigation's marks into ONE call — four to six
+ * metrics arrive together in payload.marks — so this appends them in one
+ * setValues rather than one appendRow each. A navigation therefore costs one
+ * request and one write instead of four of each.
+ *
+ * The single-metric shape (payload.metric / payload.ms) is still accepted: a
+ * cached page served before this deploy will keep sending it, and a
+ * measurement window that silently drops half its rows is worse than none.
+ *
+ * ERP_Client_Perf keeps exactly the six columns it has always had. Byte counts
+ * (nav_transfer_bytes, nav_decoded_bytes) travel in the `ms` column with the
+ * unit in the metric name, because changing this sheet's columns is not what
+ * this work is for. */
 function logClientPerf_(payload) {
   try {
     if (!perfLogReadsEnabled_()) return { status: 'success', skipped: true };
     payload = payload || {};
+
+    var marks = Array.isArray(payload.marks) ? payload.marks : null;
+    if (!marks) {
+      if (!payload.metric) return { status: 'success', skipped: true };
+      marks = [{ metric: payload.metric, ms: payload.ms }];
+    }
+    /* A runaway client must not be able to turn one request into a thousand
+     * rows; a navigation produces six marks at the most. */
+    marks = marks.slice(0, 20).filter(function (m) { return m && m.metric; });
+    if (!marks.length) return { status: 'success', skipped: true };
+
     const ss = getSpreadsheet_(CONFIG.AUTH_SPREADSHEET_ID);
     let sh = ss.getSheetByName('ERP_Client_Perf');
     if (!sh) {
@@ -709,16 +734,16 @@ function logClientPerf_(payload) {
       sh.appendRow(['ts', 'page', 'metric', 'ms', 'url', 'user_email']);
       noteMutation_();
     }
-    sh.appendRow([
-      new Date().toISOString(),
-      String(payload.page || '').slice(0, 200),
-      String(payload.metric || '').slice(0, 60),
-      Number(payload.ms) || 0,
-      String(payload.url || '').slice(0, 1500),
-      String(payload.user || '').slice(0, 200)
-    ]);
+    const ts = new Date().toISOString();
+    const page = String(payload.page || '').slice(0, 200);
+    const url = String(payload.url || '').slice(0, 1500);
+    const who = String(payload.user || '').slice(0, 200);
+    const rows = marks.map(function (m) {
+      return [ts, page, String(m.metric).slice(0, 60), Number(m.ms) || 0, url, who];
+    });
+    sh.getRange(sh.getLastRow() + 1, 1, rows.length, 6).setValues(rows);
     noteMutation_();
-    return { status: 'success' };
+    return { status: 'success', rows: rows.length };
   } catch (e) {
     return { status: 'error', message: e.message };
   }

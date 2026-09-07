@@ -77,6 +77,7 @@ const STEPS = [
   ['ac7_tierb.js', 'AC7 — Phase 8 Tier B (D-2): B-1/B-2, with AND without the columns'],
 
   /* ── Realtime feel (branch feat/realtime-feel) ── */
+  ['rt0_perf_marks.js', 'RT0 — one batched perf round trip per navigation, inert when off'],
   ['rt8_search_scope.js', 'RT8 — no search box over a truncated list stays silent about it']
 ];
 

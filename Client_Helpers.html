@@ -474,31 +474,75 @@ function logout() {
   API.clearSession();
   window.location.href = (window.scriptUrl || '/') + '?action=login';
 }
-
-/* ── Phase 0b: client-side timing ──────────────────────────────────────
- * Inert unless window.PERF_LOG is true (server injects it in doGet from the
+/* ── Phase 0b / [RT-2]: client-side timing ─────────────────────────────
+ * Inert unless window.PERF_LOG is true (the server injects it in doGet from the
  * PERF_LOG_READS script property), so a closed measurement window costs zero
- * round trips. Reports two metrics: page_ready (navigation start -> DOM ready)
- * and first_data_render, which pages report themselves via PERF.mark().        */
+ * round trips and zero sheet writes. Nothing below runs when it is off.
+ *
+ * What is reported, and why these four:
+ *
+ *   nav_server        responseStart - requestStart      what doGet cost
+ *   nav_transfer      responseEnd   - responseStart     the download
+ *   nav_parse         domContentLoadedEventEnd
+ *                                   - responseEnd       the ~317 KB parse tax
+ *   first_data_render pages mark this themselves        the data round trip
+ *
+ * The first three split a navigation into the three stages that can each be
+ * optimised by a different piece of work, which the old page_ready/page_load
+ * pair could not: a page that is slow because the shared bundle is 268 KB and a
+ * page that is slow because its sheet read scans 40,000 rows produced the same
+ * two numbers before, and the fix for one does nothing for the other.
+ *
+ * nav_transfer_bytes and nav_decoded_bytes come from the same navigation entry
+ * and make the gzip ratio a measurement rather than an assumption. They are
+ * byte counts travelling through a column named `ms`; the unit is in the metric
+ * name because ERP_Client_Perf's columns are not this run's to change.
+ *
+ * EVERYTHING IS BATCHED INTO ONE CALL. The old PERF.send fired a
+ * google.script.run per metric, and at four metrics per navigation across a
+ * live system the measurement would have become a meaningful share of the load
+ * it was measuring. Marks are queued, and the queue is flushed once — on a
+ * short debounce, and unconditionally when the page is hidden or unloaded so a
+ * navigation cannot swallow the numbers it just produced.                     */
 window.PERF = window.PERF || {};
 
 PERF.enabled = function () { return window.PERF_LOG === true; };
 
-PERF.send = function (metric, ms) {
+PERF._queue = [];
+PERF._flushTimer = null;
+PERF._sent = false;
+
+/** Queue one metric. Never sends on its own — see PERF.flush. */
+PERF.push = function (metric, value) {
   if (!PERF.enabled()) return;
+  PERF._queue.push({ metric: String(metric), ms: Math.round(Number(value) || 0) });
+  try { clearTimeout(PERF._flushTimer); } catch (e) {}
+  PERF._flushTimer = setTimeout(PERF.flush, 1500);
+};
+
+/** Ship whatever is queued, in ONE round trip. Safe to call repeatedly. */
+PERF.flush = function () {
+  if (!PERF.enabled() || !PERF._queue.length) return;
+  var marks = PERF._queue;
+  PERF._queue = [];
+  try { clearTimeout(PERF._flushTimer); } catch (e) {}
   try {
     google.script.run.apiRouter({
       action: 'log_client_perf',
       payload: {
         page: (window.CURRENT_ACTION || document.title || '').toString().slice(0, 200),
-        metric: metric,
-        ms: Math.round(ms),
         url: location.href,
-        user: (API.getSession() && API.getSession().email) || ''
+        user: (API.getSession() && API.getSession().email) || '',
+        marks: marks
       }
     });
-  } catch (e) {}
+    PERF._sent = true;
+  } catch (e) { /* a measurement that cannot be sent is never worth an error */ }
 };
+
+/* Kept for callers outside this file: queue rather than send, so a page that
+ * still calls PERF.send gets the batching without being edited. */
+PERF.send = function (metric, ms) { PERF.push(metric, ms); };
 
 /* Pages call PERF.mark('first_data_render') once their first table body is
  * painted. Fires at most once per metric per page. */
@@ -508,12 +552,45 @@ PERF.mark = function (metric) {
   PERF._marked[metric] = true;
   var t = 0;
   try { t = performance.now(); } catch (e) {}
-  PERF.send(metric, t);
+  PERF.push(metric, t);
+};
+
+/* The four-part navigation timeline, read once from the Navigation Timing
+ * entry. Every field is guarded: the entry is absent on some embedded
+ * webviews, and transferSize reads 0 across an opaque cross-origin hop rather
+ * than throwing, so a 0 is dropped instead of being logged as a real zero. */
+PERF.navTimeline = function () {
+  if (!PERF.enabled() || PERF._marked.nav_server) return;
+  var e = null;
+  try { e = (performance.getEntriesByType('navigation') || [])[0] || null; } catch (err) {}
+  if (!e) return;
+  PERF._marked.nav_server = true;
+  function span(a, b) { return (a > 0 && b > 0 && a >= b) ? (a - b) : -1; }
+  var parts = [
+    ['nav_server', span(e.responseStart, e.requestStart)],
+    ['nav_transfer', span(e.responseEnd, e.responseStart)],
+    ['nav_parse', span(e.domContentLoadedEventEnd, e.responseEnd)],
+    ['nav_transfer_bytes', Number(e.transferSize) || 0],
+    ['nav_decoded_bytes', Number(e.decodedBodySize) || 0]
+  ];
+  parts.forEach(function (p) { if (p[1] > 0) PERF.push(p[0], p[1]); });
 };
 
 if (PERF.enabled()) {
   document.addEventListener('DOMContentLoaded', function () { PERF.mark('page_ready'); });
-  window.addEventListener('load', function () { PERF.mark('page_load'); });
+  window.addEventListener('load', function () {
+    PERF.mark('page_load');
+    /* domContentLoadedEventEnd is only settled after load, so the timeline is
+     * read here rather than on DOMContentLoaded where nav_parse would be 0. */
+    PERF.navTimeline();
+  });
+  /* A hard navigation is how this app moves between pages, so the debounce
+   * alone would lose the last flush on most page views. pagehide fires on the
+   * way out; visibilitychange covers the mobile case where it does not. */
+  window.addEventListener('pagehide', PERF.flush);
+  document.addEventListener('visibilitychange', function () {
+    if (document.visibilityState === 'hidden') PERF.flush();
+  });
 }
 
 /* ── Part 3: Idle-time prefetch (shared by all companies) ──────────── */
