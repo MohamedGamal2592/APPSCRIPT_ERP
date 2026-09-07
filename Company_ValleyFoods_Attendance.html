@@ -66,13 +66,43 @@
     .vf-choice-head { font-weight: 900; font-size: 13px; margin-bottom: 8px; }
     .vf-choice-line { font-size: 12px; line-height: 1.9; }
     .vf-choice-dead { font-size: 11px; color: #6b7280; background: var(--bg-subtle, #f3f4f6); border-radius: 6px; padding: 6px 10px; margin-top: 6px; }
+    /* Month navigator + calendar. The week starts on SATURDAY (Egypt). */
+    .vf-month-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+    .vf-month-label { font-weight: 900; font-size: 15px; min-width: 130px; text-align: center; }
+    .vf-cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; }
+    .vf-cal-head { font-size: 11px; font-weight: 900; text-align: center; color: #4b5563; padding: 4px 0; }
+    .vf-cal-cell { min-height: 56px; border: 1px solid var(--border-color, #e5e7eb); border-radius: 6px; padding: 3px; background: var(--bg-subtle, #f9fafb); }
+    .vf-cal-cell.empty { border: none; background: transparent; }
+    .vf-cal-cell.has-data { background: var(--bg-surface, #fff); border-color: #10b981; cursor: pointer; }
+    .vf-cal-cell.has-data:hover { box-shadow: 0 2px 6px rgba(0,0,0,.12); }
+    .vf-cal-day { font-weight: 900; font-size: 13px; display: flex; justify-content: space-between; align-items: center; }
+    .vf-cal-warn { background: #fef3c7; color: #92400e; border-radius: 8px; font-size: 10px; padding: 1px 6px; font-weight: bold; }
+    .vf-cal-stat { font-size: 10px; color: #4b5563; line-height: 1.6; }
+    .vf-cal-none { font-size: 10px; color: #9ca3af; }
+    /* Mobile-first, on the shared five-tier scale: the compact grid is the
+       BASE and the roomier one is a min-width tier. A max-width query here
+       would be the only one in the project and ui2_breakpoints.js says so. */
+    @media (min-width: 600px) {
+      .vf-cal-cell { min-height: 74px; padding: 6px; }
+      .vf-cal-stat, .vf-cal-head { font-size: 11px; }
+    }
   </style>
 
   <script>
   (function () {
     var SESSIONS = [];
+    var SESSIONS_TOTAL = 0;
     var REPORT_DATA = null;
     var BATCHES = [];
+    /* Which month the calendar is showing, and which day is open. */
+    var _now = new Date();
+    var VIEW_YEAR = _now.getFullYear();
+    var VIEW_MONTH = _now.getMonth();
+    var VIEW_MODE = 'calendar';
+    var TABLE_ALL = false;
+    var CURRENT_DAY = null;
+    /* The roster, fetched once (D-22) instead of riding on a punch read. */
+    var EMPLOYEES = null;
     var BATCHES_TOTAL = 0;
     /* The parsed file, in the browser. It never becomes a string on the wire
        again — only the rows do. */
@@ -119,93 +149,224 @@
       '</div>';
     }
 
-    /* ================= SESSIONS ================= */
+    /* ================= DAYS: CALENDAR + TABLE ================= */
+    /* Day-centric, not session-centric (D-06, D-07). The old card showed the
+       last 10 rows in sheet-insertion order, so a day added by hand after an
+       import sorted as if it were the newest day of the month and everything
+       older than ten days was simply unreachable. */
     function renderSessionsSection() {
-      return card('جلسات الحضور',
-        '<div id="vf-sessions-table"><p class="vf-text-muted">جاري التحميل...</p></div>',
-        CAN_WRITE ? '<button id="vf-new-session-btn" class="btn btn-primary">+ جلسة جديدة</button>' : '');
+      return card('أيام الحضور',
+        '<div class="vf-month-bar">' +
+          '<button class="btn btn-outline" id="vf-month-prev">‹ الشهر السابق</button>' +
+          '<span id="vf-month-label" class="vf-month-label"></span>' +
+          '<button class="btn btn-outline" id="vf-month-next">الشهر التالي ›</button>' +
+          '<button class="btn btn-outline" id="vf-month-today">اليوم</button>' +
+          '<span style="flex:1;"></span>' +
+          '<button class="btn btn-outline" id="vf-view-toggle">عرض كجدول</button>' +
+        '</div>' +
+        '<div id="vf-days-body"><p class="vf-text-muted">جاري التحميل...</p></div>',
+        CAN_WRITE ? '<button id="vf-new-session-btn" class="btn btn-primary">+ يوم جديد</button>' : '');
     }
 
-    function statusPill(status) {
-      if (status === 'synced') return UIC.statusPill('تمت المزامنة', 'success');
-      if (status === 'pending') return UIC.statusPill('قيد الانتظار', 'neutral');
-      return UIC.statusPill(esc(status || '-'), 'neutral');
-    }
+    var AR_MONTHS = ['يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو',
+      'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر'];
+    /* Egypt: the week starts on Saturday. JS getUTCDay() is 0=Sunday, so
+       Saturday (6) has to become column 0. */
+    var AR_WEEKDAYS = ['السبت', 'الأحد', 'الاثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة'];
+    function weekCol(jsDay) { return (jsDay + 1) % 7; }
 
-    function renderSessionsTable() {
-      var container = document.getElementById('vf-sessions-table');
-      if (!container) return;
-      if (!SESSIONS.length) {
-        container.innerHTML = '<p class="vf-text-muted">لا توجد جلسات — أنشئ جلسة جديدة أو ارفع كشف بصمة لفتح جلسة تلقائياً.</p>';
-        return;
-      }
-      var headers = ['التاريخ', 'الحالة', 'المستخدم', { key: 'actions', label: 'إجراءات' }];
-      var rows = SESSIONS.map(function (s) {
-        return [
-          '<b>' + esc(s.session_date_display) + '</b>',
-          statusPill(s.session_status),
-          esc(uname_(s.user)),
-          UIC.actionBtns([
-            { label: 'عرض البصمات', onclick: 'ATT_PAGE.openSessionDetail(\'' + esc(s.session_id) + '\', \'' + esc(s.session_date_display) + '\')' }
-          ])
-        ];
-      });
-      container.innerHTML = UIC.dataTable('vf-sessions-table-id', { headers: headers, rows: rows, pageSize: 100 });
+    function pad2_(n) { return n < 10 ? '0' + n : '' + n; }
+    function monthBounds(y, m) {
+      var last = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
+      return { from: y + '-' + pad2_(m + 1) + '-01', to: y + '-' + pad2_(m + 1) + '-' + pad2_(last), lastDay: last };
     }
 
     function loadSessions() {
-      companyCall('get_attendance_sessions')
+      var b = monthBounds(VIEW_YEAR, VIEW_MONTH);
+      var payload = (VIEW_MODE === 'table') ? { loadAll: TABLE_ALL ? true : undefined, limit: TABLE_ALL ? undefined : 30 } : { from: b.from, to: b.to };
+      companyCall('get_attendance_sessions', payload)
         .then(function (resp) {
           SESSIONS = (resp && resp.sessions) || [];
-          renderSessionsTable(); try{schedulePrefetch();}catch(e){};
-          populateSessionSelect();
+          SESSIONS_TOTAL = (resp && resp.total) || SESSIONS.length;
+          renderDays();
+          try { schedulePrefetch(); } catch (e) {}
         })
-        .catch(function () {});
+        .catch(function () {
+          var c = document.getElementById('vf-days-body');
+          if (c) c.innerHTML = '<p class="vf-text-muted">تعذر تحميل الأيام.</p>';
+        });
     }
 
-    function populateSessionSelect() {
-      var sel = document.getElementById('vf-manual-session-select');
-      if (!sel) return;
-      var html = '<option value="">اختر جلسة</option>';
+    function renderDays() {
+      var label = document.getElementById('vf-month-label');
+      if (label) label.innerHTML = esc(AR_MONTHS[VIEW_MONTH] + ' ' + VIEW_YEAR);
+      var toggle = document.getElementById('vf-view-toggle');
+      if (toggle) toggle.innerHTML = (VIEW_MODE === 'calendar') ? 'عرض كجدول' : 'عرض كتقويم';
+      var bar = document.querySelector('.vf-month-bar');
+      if (bar) bar.style.opacity = (VIEW_MODE === 'calendar') ? '1' : '0.55';
+      if (VIEW_MODE === 'calendar') renderCalendar(); else renderDaysTable();
+    }
+
+    function renderCalendar() {
+      var container = document.getElementById('vf-days-body');
+      if (!container) return;
+      var byDay = {};
       SESSIONS.forEach(function (s) {
-        html += '<option value="' + esc(s.session_id) + '">' + esc(s.session_date_display) + ' - ' + esc(uname_(s.user)) + '</option>';
+        var m = String(s.session_date_key || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+        if (m) byDay[Number(m[3])] = s;
       });
-      sel.innerHTML = html;
+
+      var b = monthBounds(VIEW_YEAR, VIEW_MONTH);
+      var firstCol = weekCol(new Date(Date.UTC(VIEW_YEAR, VIEW_MONTH, 1)).getUTCDay());
+
+      var html = '<div class="vf-cal-grid">';
+      AR_WEEKDAYS.forEach(function (w) { html += '<div class="vf-cal-head">' + w + '</div>'; });
+      for (var i = 0; i < firstCol; i++) html += '<div class="vf-cal-cell empty"></div>';
+      for (var day = 1; day <= b.lastDay; day++) {
+        var s = byDay[day];
+        if (!s) {
+          html += '<div class="vf-cal-cell"><div class="vf-cal-day">' + day + '</div>' +
+            '<div class="vf-cal-none">—</div></div>';
+          continue;
+        }
+        html += '<div class="vf-cal-cell has-data" role="button" tabindex="0" ' +
+          'onclick="ATT_PAGE.openSessionDetail(\'' + esc(s.session_id) + '\', \'' + esc(s.session_date_display) + '\')">' +
+          '<div class="vf-cal-day">' + day +
+            (s.exceptions ? '<span class="vf-cal-warn" title="موظفون ببصمات ناقصة">' + s.exceptions + '</span>' : '') +
+          '</div>' +
+          '<div class="vf-cal-stat"><b>' + s.punches + '</b> بصمة</div>' +
+          '<div class="vf-cal-stat">' + s.employees + ' موظف</div>' +
+        '</div>';
+      }
+      html += '</div>';
+      if (!SESSIONS.length) {
+        html += '<p class="vf-text-muted">لا توجد أيام مسجلة في هذا الشهر — ارفع كشف بصمة أو أضف يوماً.</p>';
+      }
+      container.innerHTML = html;
     }
 
-    /* ---- Session detail (modal popup) ---- */
+    function renderDaysTable() {
+      var container = document.getElementById('vf-days-body');
+      if (!container) return;
+      if (!SESSIONS.length) {
+        container.innerHTML = '<p class="vf-text-muted">لا توجد أيام مسجلة.</p>';
+        return;
+      }
+      var headers = ['التاريخ', 'البصمات', 'الموظفون', 'ناقص', 'المستخدم', { key: 'actions', label: 'إجراءات' }];
+      var rows = SESSIONS.map(function (s) {
+        return [
+          '<b>' + esc(s.session_date_display) + '</b>',
+          s.punches, s.employees,
+          s.exceptions ? '<b style="color:#f59e0b;">' + s.exceptions + '</b>' : '-',
+          esc(uname_(s.user)),
+          UIC.actionBtns([
+            { label: 'عرض اليوم', onclick: 'ATT_PAGE.openSessionDetail(\'' + esc(s.session_id) + '\', \'' + esc(s.session_date_display) + '\')' }
+          ])
+        ];
+      });
+      var html = UIC.dataTable('vf-sessions-table-id', { headers: headers, rows: rows, pageSize: 50 });
+      if (!TABLE_ALL && SESSIONS_TOTAL > SESSIONS.length) {
+        html += '<div style="margin-top:8px;"><button class="btn btn-outline" onclick="ATT_PAGE.loadAllDays()">عرض الكل (' + SESSIONS_TOTAL + ')</button></div>';
+      }
+      container.innerHTML = html;
+    }
+
+    function loadAllDays() { TABLE_ALL = true; loadSessions(); }
+
+    function shiftMonth(delta) {
+      var m = VIEW_MONTH + delta;
+      VIEW_YEAR += Math.floor(m / 12);
+      VIEW_MONTH = ((m % 12) + 12) % 12;
+      loadSessions();
+    }
+
+    function toggleView() {
+      VIEW_MODE = (VIEW_MODE === 'calendar') ? 'table' : 'calendar';
+      TABLE_ALL = false;
+      loadSessions();
+    }
+
+    /* ---- Day detail ---- */
+    /* Never capped: a day is bounded by definition, and the count printed here
+       is the count of what was actually loaded (D-05). */
     function openSessionDetail(sessionId, dateDisplay) {
+      CURRENT_DAY = { session_id: sessionId, display: dateDisplay };
       UIC.openModal('vf-session-modal', {
-        title: 'بصمات جلسة ' + (dateDisplay || ''),
+        title: 'يوم ' + (dateDisplay || ''),
         body: '<div id="vf-session-detail" style="min-height:120px;text-align:center;color:#888;">جاري التحميل...</div>',
         footer: false
       });
       companyCall('get_attendance_data', { session_id: sessionId })
-        .then(function (resp) {
-          var target = document.getElementById('vf-session-detail');
-          if (!target) return;
-          var rows = (resp && resp.rows) || [];
-          if (!rows.length) {
-            target.innerHTML = '<p class="vf-text-muted">لا توجد بصمات مسجلة في هذه الجلسة.</p>';
-            return;
-          }
-          var headers = ['الكود', 'الاسم', 'التاريخ والوقت'];
-          var tableRows = rows.map(function (r) {
-            return [esc(r.emp_id), esc(r.employee_name), esc(r.attendance_time_display)];
-          });
-          target.innerHTML = '<div style="text-align:right;margin-bottom:6px;">عدد السجلات: <b>' + rows.length + '</b></div>' +
-            UIC.dataTable('vf-session-detail-table', { headers: headers, rows: tableRows, emptyText: 'لا توجد سجلات' });
-        })
+        .then(function (resp) { renderDayDetail(resp || {}, dateDisplay); })
         .catch(function () {
           var target = document.getElementById('vf-session-detail');
           if (target) target.innerHTML = '<p style="color:red;">حدث خطأ أثناء تحميل البيانات</p>';
         });
     }
 
-    /* ---- New session ---- */
+    function renderDayDetail(resp, dateDisplay) {
+      var target = document.getElementById('vf-session-detail');
+      if (!target) return;
+      var rows = resp.rows || [];
+      var perEmp = resp.per_employee || [];
+
+      var html = '<div style="text-align:right;">';
+      if (CAN_WRITE) {
+        html += '<div style="margin-bottom:10px;"><button class="btn btn-primary" ' +
+          'onclick="ATT_PAGE.addPunchForDay()">+ إضافة بصمة</button></div>';
+      }
+      if (!rows.length) {
+        html += '<p class="vf-text-muted">لا توجد بصمات مسجلة في هذا اليوم.</p></div>';
+        target.innerHTML = html;
+        return;
+      }
+
+      var incomplete = perEmp.filter(function (p) { return p.status === 'incomplete'; });
+      html += '<div style="margin-bottom:8px;">عدد البصمات: <b>' + rows.length + '</b> · ' +
+        'عدد الموظفين: <b>' + perEmp.length + '</b>' +
+        (incomplete.length ? ' · <b style="color:#f59e0b;">' + incomplete.length + ' ببصمات ناقصة</b>' : '') +
+        '</div>';
+
+      /* Derived in/out per employee — computed on read, stored nowhere. */
+      html += '<div style="font-weight:900;font-size:13px;margin:10px 0 4px;">الحضور والانصراف</div>';
+      html += UIC.dataTable('vf-day-emp-table', {
+        headers: ['الكود', 'الاسم', 'دخول', 'خروج', 'بصمات', 'الحالة'],
+        rows: perEmp.map(function (p) {
+          return [
+            esc(p.emp_id), esc(p.employee_name),
+            esc(p.time_in_display || '-'), esc(p.time_out_display || '-'),
+            p.punches,
+            p.status === 'present' ? UIC.statusPill('مكتمل', 'success') : UIC.statusPill('ناقص', 'warning')
+          ];
+        }),
+        emptyText: 'لا توجد بيانات'
+      });
+
+      html += '<div style="font-weight:900;font-size:13px;margin:14px 0 4px;">كل البصمات</div>';
+      html += UIC.dataTable('vf-session-detail-table', {
+        headers: ['الكود', 'الاسم', 'التاريخ والوقت'],
+        rows: rows.map(function (r) {
+          return [esc(r.emp_id), esc(r.employee_name), esc(r.attendance_time_display)];
+        }),
+        emptyText: 'لا توجد سجلات'
+      });
+      html += '</div>';
+      target.innerHTML = html;
+    }
+
+    /** + إضافة بصمة from inside a day, prefilled with that day's date. */
+    function addPunchForDay() {
+      var iso = '';
+      var s = SESSIONS.filter(function (x) { return String(x.session_id) === String((CURRENT_DAY || {}).session_id); })[0];
+      if (s && s.session_date_key) iso = s.session_date_key;
+      UIC.closeModal('vf-session-modal');
+      showManualEntryModal({ date: iso });
+    }
+
+    /* ---- New day ---- */
     function showNewSessionModal() {
       UIC.openModal('vf-new-session-modal', {
-        title: 'جلسة جديدة',
+        title: 'يوم جديد',
         body: '<form id="vf-session-form">' +
           UIC.field({ key: 'vf-session-date', label: 'التاريخ', type: 'date', required: true, value: todayStr() }) +
           '</form>',
@@ -221,17 +382,12 @@
       companyCall('add_attendance_session', { session_date: date })
         .then(function (resp) {
           UIC.closeModal('vf-new-session-modal');
-          UIC.toast((resp && resp.message) || 'تم إنشاء الجلسة', 'success');
-          if (resp && resp.record) {
-            var RECENT_LIMIT = 10;
-            var idxS = SESSIONS.findIndex(function(x){ return String(x.session_id)===String(resp.record.session_id); });
-            if (idxS!==-1) SESSIONS[idxS]=resp.record; else SESSIONS.unshift(resp.record);
-            if (SESSIONS.length>RECENT_LIMIT) SESSIONS.pop();
-            renderSessionsTable(); populateSessionSelect();
-          } else { loadSessions(); }
+          UIC.toast((resp && resp.message) || 'تم إنشاء اليوم', 'success');
+          INDEX = null;
+          loadSessions();
         })
         .catch(function (e) {
-          UIC.toast((e && e.message) || 'فشل إنشاء الجلسة', 'error');
+          UIC.toast((e && e.message) || 'فشل إنشاء اليوم', 'error');
         })
         .finally(function () { UI.hideSpinner(); });
     }
@@ -763,29 +919,38 @@
     }
 
     /* ================= MANUAL ENTRY ================= */
+    /* D-02 / D-22. No session dropdown. The punch datetime is what decides
+       which day the punch belongs to, and the server resolves that itself —
+       so there is nowhere left for the client to name the wrong day, and no
+       reason to read the whole punch table to populate a select. */
     function renderManualSection() {
-      return card('تسجيل حضور يدوي',
-        '<div class="vf-form-group">' +
-          '<label>الجلسة</label>' +
-          '<select id="vf-manual-session-select" class="vf-input"><option value="">اختر جلسة</option></select>' +
-        '</div>',
-        '<button id="vf-manual-add-btn" class="btn btn-primary">إضافة يدوية</button>');
+      return card('تسجيل بصمة يدوية',
+        '<div class="vf-analysis-sub">اختر الموظف وتاريخ ووقت البصمة. اليوم يُفتح تلقائياً إن لم يكن موجوداً.</div>',
+        '<button id="vf-manual-add-btn" class="btn btn-primary">+ إضافة بصمة</button>');
     }
 
-    function showManualEntryModal() {
-      var sessionSelect = document.getElementById('vf-manual-session-select');
-      var sessionId = sessionSelect ? sessionSelect.value : '';
-      if (!sessionId) { UIC.toast('اختر جلسة أولاً', 'error'); return; }
+    /** Employee options, fetched once and kept for the life of the page. */
+    function loadEmployees() {
+      if (EMPLOYEES) return Promise.resolve(EMPLOYEES);
+      return companyCall('get_attendance_employees', {})
+        .then(function (r) { EMPLOYEES = (r && r.employee_options) || []; return EMPLOYEES; });
+    }
 
+    function showManualEntryModal(prefill) {
+      prefill = prefill || {};
+      var dt = prefill.date ? (prefill.date + 'T08:00') : '';
       UIC.openModal('vf-manual-entry-modal', {
-        title: 'إضافة حضور يدوي',
+        title: 'إضافة بصمة',
         body: '<form id="vf-manual-form">' +
-          '<input type="hidden" id="vf-manual-session-id" value="' + esc(sessionId) + '">' +
-          '<div id="vf-manual-emp-wrap">' + UIC.combo({ key: 'vf-manual-emp-id', label: 'الموظف', required: true, options: [], placeholder: 'جاري تحميل الموظفين...' }) + '</div>' +
-          UIC.field({ key: 'vf-manual-datetime', label: 'تاريخ ووقت الحضور', type: 'datetime-local', required: true }) +
+          '<div id="vf-manual-emp-wrap">' + UIC.combo({
+            key: 'vf-manual-emp-id', label: 'الموظف', required: true, options: EMPLOYEES || [],
+            value: prefill.empId || '',
+            placeholder: EMPLOYEES ? 'اختر موظفاً...' : 'جاري تحميل الموظفين...'
+          }) + '</div>' +
+          UIC.field({ key: 'vf-manual-datetime', label: 'تاريخ ووقت البصمة', type: 'datetime-local', required: true, value: dt }) +
           '<div class="vf-form-row">' +
-            '<div class="vf-form-group">' + UIC.field({ key: 'vf-manual-time-in', label: 'وقت الدخول', type: 'time' }) + '</div>' +
-            '<div class="vf-form-group">' + UIC.field({ key: 'vf-manual-time-out', label: 'وقت الخروج', type: 'time' }) + '</div>' +
+            '<div class="vf-form-group">' + UIC.field({ key: 'vf-manual-time-in', label: 'وقت الدخول (اختياري)', type: 'time' }) + '</div>' +
+            '<div class="vf-form-group">' + UIC.field({ key: 'vf-manual-time-out', label: 'وقت الخروج (اختياري)', type: 'time' }) + '</div>' +
           '</div>' +
           '<div class="vf-form-row">' +
             '<div class="vf-form-group">' + UIC.field({ key: 'vf-manual-excuse-in', label: 'عذر الدخول', type: 'text' }) + '</div>' +
@@ -795,17 +960,13 @@
         onSave: 'ATT_PAGE.saveManualEntry()'
       });
 
-      companyCall('get_attendance_data', {})
-        .then(function (resp) {
-          var opts = (resp && resp.employee_options) || [];
+      loadEmployees()
+        .then(function (opts) {
           var wrap = document.getElementById('vf-manual-emp-wrap');
           if (!wrap) return;
           wrap.innerHTML = UIC.combo({
-            key: 'vf-manual-emp-id',
-            label: 'الموظف',
-            required: true,
-            options: opts,
-            placeholder: 'اختر موظفاً...'
+            key: 'vf-manual-emp-id', label: 'الموظف', required: true, options: opts,
+            value: prefill.empId || '', placeholder: 'اختر موظفاً...'
           });
         })
         .catch(function () { UIC.toast('تعذر تحميل قائمة الموظفين', 'error'); });
@@ -815,7 +976,8 @@
       if (!UIC.validateForm('vf-manual-form')) return;
       var empHidden = document.getElementById('vf-manual-emp-id');
       var data = {
-        session_id: document.getElementById('vf-manual-session-id').value,
+        /* No session_id. The server resolves the day from the datetime, which
+           is what closes D-02 by construction rather than by validation. */
         emp_id: empHidden ? empHidden.value : '',
         attendance_date_time: document.getElementById('vf-manual-datetime').value,
         time_in: document.getElementById('vf-manual-time-in').value,
@@ -824,17 +986,16 @@
         excuse_out: document.getElementById('vf-manual-excuse-out').value
       };
       if (!data.emp_id) { UIC.toast('الموظف مطلوب', 'error'); return; }
-      if (!data.attendance_date_time) { UIC.toast('تاريخ ووقت الحضور مطلوب', 'error'); return; }
+      if (!data.attendance_date_time) { UIC.toast('تاريخ ووقت البصمة مطلوب', 'error'); return; }
       UI.showSpinner();
       companyCall('add_manual_attendance', data)
         .then(function (resp) {
           UIC.closeModal('vf-manual-entry-modal');
-          UIC.toast((resp && resp.message) || 'تمت الإضافة بنجاح', 'success');
-          if (resp && resp.record) {
-            // patch not needed for session detail table globally, but toast already; optionally keep record in memory if needed
-            // Could push to a global manual rows cache if exists
-            try { if (typeof ROWS !== 'undefined' && Array.isArray(ROWS)) { var RECENT_LIMIT=10; var idxM=ROWS.findIndex(function(x){return String(x.unique_id)===String(resp.record.unique_id);}); if(idxM!==-1) ROWS[idxM]=resp.record; else ROWS.unshift(resp.record); if(ROWS.length>RECENT_LIMIT) ROWS.pop(); } } catch(e){}
-          }
+          var created = resp && resp.data && resp.data.session_created;
+          UIC.toast(((resp && resp.message) || 'تم تسجيل البصمة') +
+            (created ? ' — وتم فتح اليوم' : ''), 'success');
+          INDEX = null;
+          loadSessions();
         })
         .catch(function (e) {
           UIC.toast((e && e.message) || 'فشل الحفظ', 'error');
@@ -1015,6 +1176,17 @@
       var newSessionBtn = document.getElementById('vf-new-session-btn');
       if (newSessionBtn) newSessionBtn.addEventListener('click', showNewSessionModal);
 
+      var prevBtn = document.getElementById('vf-month-prev');
+      if (prevBtn) prevBtn.addEventListener('click', function () { shiftMonth(-1); });
+      var nextBtn = document.getElementById('vf-month-next');
+      if (nextBtn) nextBtn.addEventListener('click', function () { shiftMonth(1); });
+      var todayBtn = document.getElementById('vf-month-today');
+      if (todayBtn) todayBtn.addEventListener('click', function () {
+        var n = new Date(); VIEW_YEAR = n.getFullYear(); VIEW_MONTH = n.getMonth(); loadSessions();
+      });
+      var viewBtn = document.getElementById('vf-view-toggle');
+      if (viewBtn) viewBtn.addEventListener('click', toggleView);
+
       var csvInput = document.getElementById('vf-csv-input');
       if (csvInput) csvInput.addEventListener('change', handleFileSelect);
 
@@ -1022,7 +1194,7 @@
       if (batchesAllBtn) batchesAllBtn.addEventListener('click', function () { loadBatches(true); });
 
       var manualAddBtn = document.getElementById('vf-manual-add-btn');
-      if (manualAddBtn) manualAddBtn.addEventListener('click', showManualEntryModal);
+      if (manualAddBtn) manualAddBtn.addEventListener('click', function () { showManualEntryModal(); });
 
       var printBtn = document.getElementById('vf-print-forget-btn');
       if (printBtn) printBtn.addEventListener('click', printForgetForm);
@@ -1036,6 +1208,8 @@
     window.ATT_PAGE = {
       openSessionDetail: openSessionDetail,
       saveNewSession: saveNewSession,
+      loadAllDays: loadAllDays,
+      addPunchForDay: addPunchForDay,
       resetUpload: resetUploadFlow,
       chooseFormat: chooseFormat,
       showAlternatives: showAlternatives,

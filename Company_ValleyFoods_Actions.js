@@ -106,6 +106,7 @@ const ValleyFoods = (function () {
     'get_attendance_sessions': { page: 'vf_hr_attendance', access: 'read' },
     'add_attendance_session': { page: 'vf_hr_attendance', access: 'write' },
     'get_attendance_data': { page: 'vf_hr_attendance', access: 'read' },
+    'get_attendance_employees': { page: 'vf_hr_attendance', access: 'read' },
     'add_manual_attendance': { page: 'vf_hr_attendance', access: 'write' },
     'commit_attendance_import': { page: 'vf_hr_attendance', access: 'write' },
     'get_attendance_report': { page: 'vf_hr_attendance', access: 'read' },
@@ -231,6 +232,7 @@ const ValleyFoods = (function () {
     'generate_monthly_salaries': 'valley_emp_salaries',
     'get_attendance_sessions': 'valley_attendance_session', 'add_attendance_session': 'valley_attendance_session',
     'get_attendance_data': 'valley_employee_attendance', 'add_manual_attendance': 'valley_employee_attendance',
+    'get_attendance_employees': 'valley_employee_info',
     'commit_attendance_import': 'valley_employee_attendance',
     'get_attendance_report': 'valley_employee_attendance',
     'get_attendance_index': 'valley_attendance_session',
@@ -1213,6 +1215,57 @@ const ValleyFoodsHRModules = (function () {
     return ensureSheet_(dbId, ATT_BATCH_SHEET, ATT_BATCH_HEADERS);
   }
 
+  /**
+   * §8.2 — derive in/out from the punches themselves (D-25).
+   *
+   * first = earliest punch, last = latest, worked = the minutes between them.
+   * Written to NOTHING: time_in / time_out stay manual-override columns, used
+   * when they hold something and derived otherwise. A pair of punches is one
+   * present day, not two attendances (D-19).
+   *
+   *   0 punches -> absent | 1 or an odd count -> incomplete | else present
+   */
+  function attPairPunches_(rows, empMap) {
+    var byEmp = {};
+    (rows || []).forEach(function (r) {
+      var serial = flexToSerial_(r.attendance_date_time);
+      if (serial === null) return;
+      var eid = String(r.emp_id == null ? '' : r.emp_id).trim();
+      if (!eid) return;
+      var g = byEmp[eid];
+      if (!g) g = byEmp[eid] = { emp_id: r.emp_id, first: serial, last: serial, punches: 0, time_in: '', time_out: '' };
+      g.punches++;
+      if (serial < g.first) g.first = serial;
+      if (serial > g.last) g.last = serial;
+      /* A manual override wins over the derived value when it is present. */
+      if (r.time_in && String(r.time_in).trim()) g.time_in = r.time_in;
+      if (r.time_out && String(r.time_out).trim()) g.time_out = r.time_out;
+    });
+
+    return Object.keys(byEmp).map(function (eid) {
+      var g = byEmp[eid];
+      var minutes = Math.round((g.last - g.first) * 1440);
+      return {
+        emp_id: g.emp_id,
+        employee_name: (empMap && empMap[eid]) || eid,
+        punches: g.punches,
+        first: g.first,
+        last: g.last,
+        time_in_display: g.time_in ? String(g.time_in) : attendanceTimeOnly_(g.first),
+        time_out_display: g.punches > 1 ? (g.time_out ? String(g.time_out) : attendanceTimeOnly_(g.last)) : (g.time_out ? String(g.time_out) : ''),
+        worked_minutes: g.punches > 1 ? minutes : 0,
+        status: (g.punches === 1 || g.punches % 2 === 1) ? 'incomplete' : 'present'
+      };
+    }).sort(function (a, b) { return (Number(a.emp_id) || 0) - (Number(b.emp_id) || 0); });
+  }
+
+  /** HH:mm of a serial, in serial space — never Utilities.formatDate. */
+  function attendanceTimeOnly_(serial) {
+    if (serial === null || serial === undefined || !isFinite(serial)) return '';
+    var d = serialToDate_(serial);
+    return _pad2(d.getUTCHours()) + ':' + _pad2(d.getUTCMinutes());
+  }
+
   // ===================== DATE/SERIAL HELPERS (attendance) =====================
   // Google Sheets epoch: serial 0 = 1899-12-30. Storing pure serial numbers in
   // attendance_date_time / session_date keeps values numeric (sortable, SUMIFS/QUERY
@@ -2031,31 +2084,106 @@ const ValleyFoodsHRModules = (function () {
   }
 
   // ===================== ATTENDANCE =====================
+  /**
+   * Per-day aggregates for the calendar (D-06, D-07).
+   *
+   * `{ from, to }` are yyyy-MM-dd month bounds, compared in SERIAL space —
+   * never as Dates — so no timezone can move a day. Without them every session
+   * is returned, which is what the table fallback and عرض الكل use.
+   *
+   * Ordering is by session_date, not by sheet insertion: rows were previously
+   * returned in the order they happened to be appended, so a day added by hand
+   * after an import sorted as if it were the newest day of the month.
+   */
   function getAttendanceSessions_(data, user, dbId) {
     ensureSheet_(dbId, ATTENDANCE_SESSION_SHEET, ['session_id','session_date','session_status','selected_employees','user','created_at']);
-    var _allSess = getAllRecords_(dbId, ATTENDANCE_SESSION_SHEET);
-    var limit = Number(data && data.limit) || 10;
-    var rows = _allSess.slice().reverse().map(function (r) {
-      return {
-        session_id: r.session_id,
-        session_date: r.session_date,
-        session_date_display: sessionDateDisplay_(r.session_date),
+    var d = data || {};
+
+    var fromSerial = attDateOnlyInputToSerial_(d.from);
+    var toSerial = attDateOnlyInputToSerial_(d.to);
+
+    /* One grouped pass over the punch table, keyed by session id. Counting per
+       day inside a loop over days would be one whole-table read per tile. */
+    var bySession = {};
+    try {
+      getAllRecords_(dbId, EMP_ATTENDANCE_SHEET).forEach(function (r) {
+        var sid = String(r.id || '').trim();
+        if (!sid) return;
+        var g = bySession[sid];
+        if (!g) { g = bySession[sid] = { punches: 0, emps: {}, empCount: 0 }; }
+        g.punches++;
+        var emp = String(r.emp_id == null ? '' : r.emp_id).trim();
+        if (emp) {
+          if (g.emps[emp] === undefined) { g.emps[emp] = 0; g.empCount++; }
+          g.emps[emp]++;
+        }
+      });
+    } catch (e) { bySession = {}; }
+
+    var rows = [];
+    getAllRecords_(dbId, ATTENDANCE_SESSION_SHEET).forEach(function (r) {
+      var serial = flexToSerial_(r.session_date);
+      if (serial === null) return;
+      var daySerial = Math.floor(serial);
+      if (fromSerial !== null && daySerial < fromSerial) return;
+      if (toSerial !== null && daySerial > toSerial) return;
+
+      var sid = String(r.session_id || '').trim();
+      var g = bySession[sid] || { punches: 0, emps: {}, empCount: 0 };
+      /* An exception is an employee whose punches that day do not pair up:
+         a lone punch, or an odd number of them. Absences need the roster and
+         belong to the exception queue, not to a calendar tile. */
+      var exceptions = 0;
+      Object.keys(g.emps).forEach(function (k) { if (g.emps[k] % 2 === 1) exceptions++; });
+
+      rows.push({
+        session_id: sid,
+        session_date: daySerial,
+        session_date_key: sessionDateKey_(daySerial),
+        session_date_display: sessionDateDisplay_(daySerial),
+        punches: g.punches,
+        employees: g.empCount,
+        exceptions: exceptions,
+        import_batch_id: r.import_batch_id === undefined ? '' : r.import_batch_id,
+        /* Kept on the wire because the column is still written; the UI stopped
+           displaying it (D-23/D-24), which is a display decision only. */
         session_status: r.session_status,
-        selected_employees: r.selected_employees,
         user: r.user,
         created_at: r.created_at
-      };
+      });
     });
-    // apply limit via vfPage if not loadAll, else return all
-    var sp;
-    if (data && data.loadAll) {
-      sp = vfPage_(rows, { limit: null, offset: 0 }, 'session_date');
-    } else {
-      // enforce default limit 10 when client does not supply limit
-      var lim = (data && data.limit != null) ? Number(data.limit) : limit;
-      sp = vfPage_(rows, { limit: lim, offset: (data && data.offset) || 0 }, 'session_date');
-    }
+
+    rows.sort(function (a, b) { return b.session_date - a.session_date; });
+
+    var lim = (d.loadAll || fromSerial !== null || toSerial !== null)
+      ? null
+      : ((d.limit != null) ? Number(d.limit) : 10);
+    var sp = vfPage_(rows, { limit: lim, offset: d.offset || 0 });
     return { status: 'success', sessions: sp.rows, total: sp.total };
+  }
+
+  /** "yyyy-MM-dd" from a date input -> a day serial, in serial space. */
+  function attDateOnlyInputToSerial_(v) {
+    if (v === '' || v === null || v === undefined) return null;
+    var m = String(v).trim().match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+    if (!m) {
+      var s = flexToSerial_(v);
+      return s === null ? null : Math.floor(s);
+    }
+    return dateOnlyToSerial_(Number(m[3]), Number(m[2]), Number(m[1]));
+  }
+
+  /**
+   * The roster, on its own (D-22).
+   *
+   * The manual-entry modal used to call get_attendance_data with no session_id
+   * purely to reach its employee_options — which read the WHOLE punch table,
+   * every employee and every status row, to fill a dropdown.
+   */
+  function getAttendanceEmployees_(data, user, dbId) {
+    var opts = [];
+    try { opts = getActiveEmployeeOptions_(dbId); } catch (e) { opts = []; }
+    return { status: 'success', employee_options: opts };
   }
 
   function addAttendanceSession_(data, user, dbId) {
@@ -2104,7 +2232,9 @@ const ValleyFoodsHRModules = (function () {
     if (sessionId) {
       rows = all.filter(function (r) { return String(r.id) === sessionId; });
     }
-    var empOpts = getActiveEmployeeOptions_(dbId);
+    /* D-22. The employee list moved to get_attendance_employees. This handler
+       used to read the whole punch table AND every employee AND every status
+       row on a call whose only purpose was to fill a dropdown. */
     var empMap = buildEmpNameMap_(dbId);
     rows.forEach(function (r) {
       r.employee_name = empMap[String(r.emp_id)] || r.emp_id;
@@ -2126,8 +2256,13 @@ const ValleyFoodsHRModules = (function () {
       var lim2 = (data && data.limit != null) ? Number(data.limit) : limit;
       ap = vfPage_(rows, { limit: lim2, offset: (data && data.offset) || 0 }, 'attendance_date_time');
     }
-    // also expose totalBeforeCap for calc if needed
-    return { status: 'success', rows: ap.rows, total: ap.total, totalRecords: totalBeforeCap, employee_options: empOpts };
+    /* §8.2 pairing, derived on read and written to nothing. time_in/time_out
+       stay manual-override columns: used when present, derived otherwise. */
+    var perEmployee = sessionId ? attPairPunches_(rows, empMap) : [];
+    return {
+      status: 'success', rows: ap.rows, total: ap.total, totalRecords: totalBeforeCap,
+      per_employee: perEmployee
+    };
   }
 
   /**
@@ -7986,6 +8121,7 @@ const ValleyFoodsHRModules = (function () {
     ValleyFoods.register('get_attendance_sessions',   getAttendanceSessions_);
     ValleyFoods.register('add_attendance_session',    addAttendanceSession_);
     ValleyFoods.register('get_attendance_data',       getAttendanceData_);
+    ValleyFoods.register('get_attendance_employees',  getAttendanceEmployees_);
     ValleyFoods.register('add_manual_attendance',     addManualAttendance_);
     ValleyFoods.register('commit_attendance_import', commitAttendanceImport_);
     ValleyFoods.register('get_attendance_report',     getAttendanceReport_);
@@ -8108,6 +8244,7 @@ const ValleyFoodsHRModules = (function () {
     getAttendanceSessions_: getAttendanceSessions_,
     addAttendanceSession_: addAttendanceSession_,
     getAttendanceData_: getAttendanceData_,
+    getAttendanceEmployees_: getAttendanceEmployees_,
     addManualAttendance_: addManualAttendance_,
     commitAttendanceImport_: commitAttendanceImport_,
     getAttendanceReport_: getAttendanceReport_,
