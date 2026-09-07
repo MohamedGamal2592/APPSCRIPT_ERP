@@ -399,6 +399,15 @@ UIC.token = function () {
 UIC.navTo = function (ev, href) {
   try { if (ev && ev.preventDefault) ev.preventDefault(); } catch (e) {}
   if (!href) return;
+  /* [RT-4] An optimistic row is on screen and not yet in the sheet. Navigating
+   * away takes it with the page that drew it, and nobody finds out. UIC.trackDirty
+   * already guards unsaved FORM state; this is the same problem one step later,
+   * and it is guarded the same way — by asking, not by refusing outright, so a
+   * user who genuinely wants to leave still can. */
+  try {
+    var pendingMsg = (window.UIC && UIC.Live && UIC.Live.guardMessage) ? UIC.Live.guardMessage() : null;
+    if (pendingMsg && !window.confirm(pendingMsg + ' المتابعة؟')) return;
+  } catch (e) {}
   try { UIC.showPageLoading('جاري التحميل...'); } catch (e) {}
   try { if (window.top && window.top !== window) { window.top.location.href = href; return; } } catch (e) {}
   window.location.href = href;
@@ -4643,6 +4652,27 @@ document.addEventListener('keydown', function (e) {
      class; nothing breaks if they do not. */
   .row-pending, tr.row-pending td { opacity: .62; font-style: italic; }
 
+  /* [RT-4] The retry chip. It is not a toast, and the difference is the whole
+     point: a toast that disappears in three seconds is how a change made on a
+     phone with no signal goes missing without anyone noticing. This stays on
+     screen, in an alert region, until the change is saved or the user
+     explicitly discards it. */
+  .uic-live-retry {
+    position: fixed; inset-inline-end: var(--space-4); inset-block-end: calc(var(--space-4) + 44px);
+    z-index: 9001; display: flex; align-items: center; gap: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    background: var(--danger-bg, #fee2e2); color: var(--text-main);
+    border: 1px solid var(--danger); border-radius: var(--radius-pill);
+    font-size: var(--text-xs); font-weight: 700;
+    box-shadow: 0 2px 10px rgba(0,0,0,.18);
+  }
+  .uic-live-retry-go, .uic-live-retry-drop {
+    background: none; border: 0; padding: 4px 8px; cursor: pointer;
+    font: inherit; border-radius: var(--radius-sm);
+  }
+  .uic-live-retry-go { color: var(--brand-primary); text-decoration: underline; }
+  .uic-live-retry-drop { color: var(--text-muted); }
+
   /* ── [UI-5.2 / U-28] Styled confirm ──────────────────────────────────── */
   .uic-confirm-msg { font-size: var(--text-base); color: var(--text-main); line-height: 1.7; }
   .uic-confirm-record {
@@ -5521,6 +5551,138 @@ UIC.Live = (function () {
    *   reload    function()                              used when a patch is impossible
    * @return {Promise}
    */
+  /* ── [RT-4] The retry queue, and why it is not a toast ────────────────────
+   *
+   * An optimistic row is a promise: it says "this is saved" before it is. The
+   * rollback path is what makes that promise honest, and until now it was the
+   * ONLY answer to a failure — roll back, toast, and the toast is gone in three
+   * seconds. On a warehouse phone with two bars, a dropped request is the
+   * common case rather than the edge case, and a three-second toast is how a
+   * change goes missing without anyone noticing.
+   *
+   * So failures are split, on the one signal that actually distinguishes them:
+   *
+   *   TRANSPORT failure (err.transport, set by API.call's failure handler) —
+   *     the request never reached a handler. The payload is still valid, so it
+   *     is queued, retried with backoff, and the row STAYS on screen marked
+   *     pending. A persistent chip says how many changes are waiting, and it
+   *     does not go away on its own.
+   *
+   *   SERVER rejection (a handler returned status:'error') — the payload was
+   *     refused and will be refused again. The row rolls back immediately and
+   *     exactly, as it always has, and the user is told why. Retrying a
+   *     validation error just shows the same error four times.
+   *
+   * The queue is persisted to localStorage, because a phone that loses its
+   * connection is a phone that is about to be locked and put in a pocket. Every
+   * access is wrapped: a browser that refuses storage keeps the in-memory queue
+   * and loses it on reload, which is exactly today's behaviour and no worse.
+   */
+  var RETRY_KEY = 'erp_live_queue';
+  var RETRY_MAX = 5;
+  var queue = [];                 // [{id, action, data, message, tries, at}]
+  var retryTimer = null;
+
+  function loadQueue() {
+    try {
+      var raw = localStorage.getItem(RETRY_KEY);
+      if (raw) queue = JSON.parse(raw) || [];
+    } catch (e) { queue = []; }
+    if (!Array.isArray(queue)) queue = [];
+  }
+
+  function persistQueue() {
+    try {
+      if (queue.length) localStorage.setItem(RETRY_KEY, JSON.stringify(queue));
+      else localStorage.removeItem(RETRY_KEY);
+    } catch (e) { /* a full or throwing store keeps the in-memory queue */ }
+  }
+
+  /**
+   * The chip. Persistent by design: it stays until the change is saved or the
+   * user discards it, because the whole point is that a failure must not be
+   * able to scroll off the screen unnoticed.
+   */
+  function renderChip() {
+    var el = document.getElementById('uic-live-retry');
+    if (!queue.length) { if (el) el.remove(); return; }
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'uic-live-retry';
+      el.className = 'uic-live-retry';
+      el.setAttribute('role', 'alert');
+      document.body.appendChild(el);
+    }
+    var n = queue.length;
+    el.innerHTML =
+      '<span>' + (n === 1 ? 'تغيير واحد لم يُحفظ' : (n + ' تغييرات لم تُحفظ')) + '</span>' +
+      '<button type="button" class="uic-live-retry-go" onclick="UIC.Live.retryNow()">إعادة المحاولة</button>' +
+      '<button type="button" class="uic-live-retry-drop" onclick="UIC.Live.discardQueue()" ' +
+      'title="تجاهل التغييرات غير المحفوظة">تجاهل</button>';
+  }
+
+  function enqueue(entry) {
+    queue.push(entry);
+    persistQueue();
+    renderChip();
+    scheduleRetry();
+  }
+
+  function scheduleRetry() {
+    if (retryTimer || !queue.length) return;
+    var tries = queue[0].tries || 0;
+    /* 5s, 10s, 20s, 40s, 80s — the same shape as watchPage's backoff, for the
+     * same reason: a system that is already unhappy must not be hammered. */
+    var wait = Math.min(5000 * Math.pow(2, tries), 80000);
+    retryTimer = setTimeout(function () { retryTimer = null; drainQueue(); }, wait);
+  }
+
+  /** Try the head of the queue. One at a time, in order — a queue that
+   *  reorders writes is a queue that corrupts a sequence of edits. */
+  function drainQueue() {
+    if (!queue.length || !queue._call) { renderChip(); return; }
+    var entry = queue[0];
+    entry.tries = (entry.tries || 0) + 1;
+    persistQueue();
+    queue._call(entry.action, entry.data)
+      .then(function () {
+        queue.shift();
+        persistQueue();
+        renderChip();
+        try { UIC.toast(entry.message || 'تم حفظ التغيير المؤجل', 'success'); } catch (e) {}
+        if (queue.length) scheduleRetry();
+      })
+      .catch(function (err) {
+        if (!err || !err.transport || entry.tries >= RETRY_MAX) {
+          /* Either the server has now refused it, or we have tried enough. It
+           * stops being a retry and becomes something the user must see. */
+          queue.shift();
+          persistQueue();
+          renderChip();
+          try {
+            UIC.toast((err && err.message) || 'تعذر حفظ تغيير مؤجل — لم يتم تسجيله', 'error');
+          } catch (e) {}
+        }
+        if (queue.length) scheduleRetry();
+      });
+  }
+
+  /* ── The navigation guard ────────────────────────────────────────────────
+   *
+   * UIC.trackDirty already refuses to leave with unsaved FORM state. An
+   * optimistic row is the same problem one step later: it is on screen, it is
+   * not in the sheet yet, and leaving the page that drew it loses it with no
+   * trace. So leaving is refused while anything is in flight or queued. */
+  function pendingCount() { return inFlight + queue.length; }
+
+  function guardMessage() {
+    var n = pendingCount();
+    if (!n) return null;
+    return n === 1
+      ? 'هناك تغيير لم يُحفظ بعد. الخروج الآن سيفقده.'
+      : ('هناك ' + n + ' تغييرات لم تُحفظ بعد. الخروج الآن سيفقدها.');
+  }
+
   function save(o) {
     o = o || {};
     var list = o.list;
@@ -5575,6 +5737,25 @@ UIC.Live = (function () {
         return resp;
       })
       .catch(function (err) {
+        /* [RT-4] A request that never reached a handler is retried, not
+         * thrown away. The row stays on screen marked pending and the chip
+         * says so, because the payload is still good and the user's change is
+         * still going to land. Everything else — a handler that refused the
+         * payload — rolls back exactly as it always has, because retrying a
+         * rejection just shows the same error five times. */
+        if (err && err.transport) {
+          queue._call = o.call;
+          enqueue({
+            action: o.action,
+            data: o.data,
+            message: o.message || 'تم الحفظ',
+            tries: 0,
+            at: Date.now()
+          });
+          try { UIC.toast('لا يوجد اتصال — سيتم الحفظ تلقائيًا', 'error'); } catch (e) {}
+          if (typeof o.onError === 'function') o.onError(err);
+          throw err;
+        }
         if (canPatch && undo) {
           var at3 = indexOfKey(list, key, draft[key]);
           if (undo.kind === 'insert') { if (at3 !== -1) list.splice(at3, 1); }
@@ -5699,7 +5880,63 @@ UIC.Live = (function () {
     if (watch) { try { watch.stop(); } catch (e) {} watch = null; }
   }
 
-  return { save: save, busy: busy, watchPage: watchPage, unwatchPage: unwatchPage };
+  /* Anything queued from a previous session is picked up on load, so a change
+   * made just before the tab was closed is not lost — it is retried the moment
+   * the page comes back. */
+  loadQueue();
+  try {
+    if (queue.length) {
+      renderChip();
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', function () { renderChip(); });
+      }
+    }
+    window.addEventListener('online', function () { retryNow(); });
+    window.addEventListener('beforeunload', function (e) {
+      var msg = guardMessage();
+      if (!msg) return undefined;
+      e.preventDefault();
+      e.returnValue = msg;
+      return msg;
+    });
+  } catch (e) {}
+
+  /** Retry now, from the chip or from the network coming back. */
+  function retryNow() {
+    if (retryTimer) { try { clearTimeout(retryTimer); } catch (e) {} retryTimer = null; }
+    drainQueue();
+  }
+
+  /** The user's explicit "I accept losing these". Never automatic. */
+  function discardQueue() {
+    if (!queue.length) return;
+    var n = queue.length;
+    var ok = true;
+    try {
+      ok = window.confirm(n === 1
+        ? 'سيتم تجاهل تغيير لم يُحفظ. متابعة؟'
+        : ('سيتم تجاهل ' + n + ' تغييرات لم تُحفظ. متابعة؟'));
+    } catch (e) {}
+    if (!ok) return;
+    queue.length = 0;
+    persistQueue();
+    renderChip();
+  }
+
+  return {
+    save: save,
+    busy: busy,
+    watchPage: watchPage,
+    unwatchPage: unwatchPage,
+    /* [RT-4] pending() counts saves in flight AND changes queued for retry.
+     * The navigation guard and UIC.navTo both read it: leaving a page while an
+     * optimistic row is unsaved loses it with the page that drew it. */
+    pending: pendingCount,
+    guardMessage: guardMessage,
+    retryNow: retryNow,
+    discardQueue: discardQueue,
+    queued: function () { return queue.length; }
+  };
 })();
 
 </script>

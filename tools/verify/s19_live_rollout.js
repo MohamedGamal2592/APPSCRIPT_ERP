@@ -1,5 +1,11 @@
 /**
- * S19 — the UIC.Live rollout across the ValleyFoods pages.
+ * S19 — the UIC.Live rollout, across all four companies.
+ *
+ * EXTENDED 2026-09-07 by the realtime-feel run, R4. It covered ValleyFoods
+ * alone, because ValleyFoods was the only company with any of this wired. The
+ * rollout now reaches TopChemical, TopLight and the Assessment Centre, and a
+ * check that looks at one company out of four reports a migration as finished
+ * when three quarters of it has not started.
  *
  * This is a STAGED migration, so this file has two jobs and only one of them
  * fails the build:
@@ -19,7 +25,16 @@ const fs = require('fs');
 const path = require('path');
 
 const ROOT = path.resolve(__dirname, '..', '..');
-const ACTIONS = fs.readFileSync(path.join(ROOT, 'Company_ValleyFoods_Actions.js'), 'utf8');
+/* The four registries, and the page prefix each one serves. PAGE_ACCESS lives
+ * in the company's own actions file, so a page id is only "known" to the
+ * company that gates it — checking a TopLight page against the ValleyFoods
+ * registry would recognise nothing and fail everything. */
+const COMPANIES = [
+  { prefix: 'Company_ValleyFoods_', actions: 'Company_ValleyFoods_Actions.js', label: 'ValleyFoods' },
+  { prefix: 'Company_TopChemical_', actions: 'Company_TopChemical_Actions.js', label: 'TopChemical' },
+  { prefix: 'Company_TopLight_', actions: 'Company_TopLight_Actions.js', label: 'TopLight' },
+  { prefix: 'Company_Assessment_', actions: 'Company_Assessment_Actions.js', label: 'Assessment' }
+].filter(c => fs.existsSync(path.join(ROOT, c.actions)));
 
 let failed = 0;
 function check(ok, label, extra) {
@@ -27,30 +42,40 @@ function check(ok, label, extra) {
   else { failed++; console.log('  FAIL  ' + label); if (extra !== undefined) console.log('        ' + extra); }
 }
 
-/* Every page id the server knows about, from PAGE_ACCESS itself. */
-const KNOWN_PAGES = (function () {
+/* Every page id a company's server knows about, from its own PAGE_ACCESS. */
+const _knownCache = {};
+function knownPages(actionsFile) {
+  if (_knownCache[actionsFile]) return _knownCache[actionsFile];
+  const src = fs.readFileSync(path.join(ROOT, actionsFile), 'utf8');
   const out = {};
   const re = /'[a-z0-9_]+':\s*\{\s*page:\s*'([a-z0-9_]+)'/g;
   let m;
-  while ((m = re.exec(ACTIONS)) !== null) out[m[1]] = true;
+  while ((m = re.exec(src)) !== null) out[m[1]] = true;
+  _knownCache[actionsFile] = out;
   return out;
-})();
+}
 
-const pages = fs.readdirSync(ROOT)
-  .filter(f => /^Company_ValleyFoods_.*\.html$/.test(f))
-  .sort();
+function companyOf(file) {
+  return COMPANIES.filter(c => file.indexOf(c.prefix) === 0)[0] || null;
+}
 
 const converted = [];
 const pending = [];
 
-pages.forEach(function (f) {
+fs.readdirSync(ROOT).filter(f => f.endsWith('.html') && companyOf(f)).sort().forEach(function (f) {
   const src = fs.readFileSync(path.join(ROOT, f), 'utf8');
   /* A converted page no longer contains a literal companyCall('save_...' —
      the action name moved into the UIC.Live.save options — so the write action
      is looked for wherever it appears, not only at a call site. */
+  /* UPDATED 2026-09-07, R4: `action:` is very often a ternary —
+   * `action: isEdit ? 'edit_x' : 'add_x'` — so anchoring on `action: '` missed
+   * every page converted with an edit/add pair and quietly dropped it out of
+   * the census entirely. A converted page disappearing from the rollout report
+   * is the one bug a rollout report must not have. */
+  const WRITE_VERB = '(save|add|edit|update|approve|delete|remove|toggle|transfer|commit|resolve|revert)';
   const savesToServer =
-    /companyCall\('(save|add|approve|delete|remove|toggle|transfer|commit|resolve|revert)_/.test(src) ||
-    /action:\s*'(save|add|approve|delete|remove|toggle|transfer|commit|resolve|revert)_/.test(src);
+    new RegExp("companyCall\\(\\s*'" + WRITE_VERB + '_').test(src) ||
+    new RegExp('action:[^,\\n]{0,80}?' + "'" + WRITE_VERB + '_').test(src);
   if (!savesToServer) return;
   (src.indexOf('UIC.Live.save') !== -1 || src.indexOf('UIC.Live.watchPage') !== -1 ? converted : pending).push(f);
 });
@@ -59,7 +84,9 @@ console.log('\n1 — converted pages are converted correctly\n');
 
 converted.forEach(function (f) {
   const src = fs.readFileSync(path.join(ROOT, f), 'utf8');
-  const label = f.replace('Company_ValleyFoods_', '').replace('.html', '');
+  const co = companyOf(f);
+  const KNOWN_PAGES = knownPages(co.actions);
+  const label = co.label + '/' + f.replace(co.prefix, '').replace('.html', '');
 
   /* The watch must name a page the server actually gates, or it polls forever
      and is refused every time. */
@@ -73,7 +100,20 @@ converted.forEach(function (f) {
     const loop = /\[([^\]]*'[a-z0-9_]+'[^\]]*)\]\s*\.forEach\(function\s*\([A-Za-z_$][A-Za-z0-9_$]*\)\s*\{[\s\S]{0,400}?UIC\.Live\.watchPage/.exec(src);
     if (loop) watched = (loop[1].match(/'([a-z0-9_]+)'/g) || []).map(x => x.replace(/'/g, ''));
   }
-  check(watched.length > 0, label + ': registers a change watch', 'none found');
+  /* A watch is only possible where the company's server answers
+   * get_page_versions. Requiring one before that endpoint exists would demand
+   * a poll that is refused on every tick — worse than no watch, because it
+   * costs an execution every interval and never returns anything. So the
+   * requirement is conditional on the endpoint, and the companies that lack it
+   * are named in the report rather than passing silently. */
+  const canWatch = fs.readFileSync(path.join(ROOT, co.actions), 'utf8')
+    .indexOf("'get_page_versions'") !== -1;
+  if (canWatch) {
+    check(watched.length > 0, label + ': registers a change watch', 'none found');
+  } else if (!watched.length) {
+    console.log('  ..    ' + label + ': no change watch — ' + co.label +
+      ' has no get_page_versions endpoint yet');
+  }
   watched.forEach(function (p) {
     check(!!KNOWN_PAGES[p], label + ': watches a page id the server knows (' + p + ')',
       'not present in PAGE_ACCESS');
@@ -134,10 +174,19 @@ converted.forEach(function (f) {
 if (!converted.length) check(false, 'at least one page has been converted');
 
 console.log('\n2 — rollout state\n');
-console.log('  converted (' + converted.length + '):');
-converted.forEach(f => console.log('    ' + f.replace('Company_ValleyFoods_', '').replace('.html', '')));
+function short(f) {
+  const co = companyOf(f);
+  return co.label + '/' + f.replace(co.prefix, '').replace('.html', '');
+}
+COMPANIES.forEach(function (c) {
+  const cv = converted.filter(f => f.indexOf(c.prefix) === 0).length;
+  const total = cv + pending.filter(f => f.indexOf(c.prefix) === 0).length;
+  if (total) console.log('  ' + c.label + ': ' + cv + ' of ' + total + ' write page(s) converted');
+});
+console.log('\n  converted (' + converted.length + '):');
+converted.forEach(f => console.log('    ' + short(f)));
 console.log('\n  still on the blocking save+reload (' + pending.length + '):');
-pending.forEach(f => console.log('    ' + f.replace('Company_ValleyFoods_', '').replace('.html', '')));
+pending.forEach(f => console.log('    ' + short(f)));
 console.log('\n  These are reported, not failed: the migration is staged on purpose.');
 console.log('  They behave exactly as they always did until they are converted.\n');
 

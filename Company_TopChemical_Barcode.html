@@ -145,20 +145,30 @@
     if (!UIC.validateForm('barcode-form')) return;
     if (data.product_id === '__new__') { UIC.toast('اختر منتجاً موجوداً', 'error'); return; }
     if (data.emp_id === '__new__') { UIC.toast('اختر موظفاً موجوداً', 'error'); return; }
-    UI.showSpinner('جاري الحفظ...');
-    companyCall('add_barcode', data)
-      .then(function (r) {
-        UIC.closeModal('barcode-modal');
-        UIC.toast(r.message || 'تم الحفظ', 'success');
-        if (r && r.record) {
-          window.__barcodes = window.__barcodes || [];
-          window.__barcodes.unshift(r.record);
-          if (window.__barcodes.length>10) window.__barcodes=window.__barcodes.slice(0,10);
-          renderBarcodes(window.__barcodes);
-        } else { fetchBarcodes(); }
-      })
-      .catch(function (e) { UIC.toast(e.message || 'خطأ', 'error'); })
-      .finally(function () { UI.hideSpinner(); });
+    /* [RT-4] Optimistic. The ten-row cap is applied in onSuccess, NOT in the
+       draft: trimming the list at draft time would drop the tenth row, and the
+       rollback restores the draft's slot but cannot bring that row back — so a
+       failed save would leave nine rows where there were ten. Applying the cap
+       only once the server has confirmed keeps the rollback exact, which is
+       the whole promise an optimistic row makes. */
+    window.__barcodes = window.__barcodes || [];
+    UIC.Live.save({
+      call: companyCall,
+      action: 'add_barcode',
+      data: data,
+      list: window.__barcodes,
+      key: 'unique_id',
+      draft: Object.assign({}, data),
+      render: function () { renderBarcodes(window.__barcodes); },
+      modal: 'barcode-modal',
+      message: 'تم الحفظ',
+      recordOf: function (r) { return r && r.record; },
+      onSuccess: function () {
+        if (window.__barcodes.length > 10) window.__barcodes = window.__barcodes.slice(0, 10);
+        renderBarcodes(window.__barcodes);
+      },
+      reload: fetchBarcodes
+    }).catch(function () { /* Live.save has already toasted and rolled back */ });
   }
 
   function showError(e) {

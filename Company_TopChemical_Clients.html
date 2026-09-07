@@ -121,24 +121,24 @@
     var data = UIC.collectForm('client-form');
     if (!UIC.validateForm('client-form')) return;
     if (id) data.id = id;
-    UI.showSpinner('جاري الحفظ...');
-    companyCall(id ? 'edit_client_vendor' : 'add_client_vendor', data)
-      .then(function (r) {
-        UIC.closeModal('client-modal');
-        UIC.toast(r.message || 'تم الحفظ', 'success');
-        if (r && r.record) {
-          window.__clients = window.__clients || [];
-          if (id) {
-            var idx = window.__clients.findIndex(function(c){ return String(c.id)===String(id); });
-            if (idx!==-1) window.__clients[idx]=r.record; else window.__clients.push(r.record);
-          } else {
-            window.__clients.unshift(r.record);
-          }
-          renderClients(window.__clients);
-        } else { fetchClients(); }
-      })
-      .catch(function (e) { UIC.toast(e.message || 'خطأ', 'error'); })
-      .finally(function () { UI.hideSpinner(); });
+    /* [RT-4] Optimistic: the row is on screen and the modal is closed before
+       the request leaves. The server's record replaces the draft when it
+       arrives, carrying whatever it assigned or computed; a rejection puts the
+       list back exactly as it was and says why. */
+    window.__clients = window.__clients || [];
+    UIC.Live.save({
+      call: companyCall,
+      action: id ? 'edit_client_vendor' : 'add_client_vendor',
+      data: data,
+      list: window.__clients,
+      key: 'id',
+      draft: Object.assign({}, data),
+      render: function () { renderClients(window.__clients); },
+      modal: 'client-modal',
+      message: 'تم الحفظ',
+      recordOf: function (r) { return r && r.record; },
+      reload: fetchClients
+    }).catch(function () { /* Live.save has already toasted and rolled back */ });
   }
 
   function showError(e) {

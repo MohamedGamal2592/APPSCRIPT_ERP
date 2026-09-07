@@ -114,7 +114,17 @@ API.call = function (action, payload, sessionToken) {
         }
       })
       .withFailureHandler(function (err) {
-        reject({ status: 'error', message: err && err.message ? err.message : 'خطأ غير متوقع' });
+        /* [RT-4] `transport: true` marks a failure that never reached a
+         * handler — the network dropped, the sandbox was torn down, the device
+         * went offline. It is the ONLY kind of failure worth retrying: a
+         * handler that rejected the payload will reject it again, and retrying
+         * a validation error just means showing the same error four times.
+         * UIC.Live.save reads this and nothing else to decide. */
+        reject({
+          status: 'error',
+          transport: true,
+          message: err && err.message ? err.message : 'خطأ غير متوقع'
+        });
       })
       .apiRouter(request);
   });

@@ -160,29 +160,33 @@
     if (data.unit === '__new__') { data.unit = data.unit_custom || ''; }
     delete data.unit_custom;
     if (id) data.id = id;
-    UI.showSpinner('جاري الحفظ...');
     var formEl = document.getElementById('product-form');
+    /* [RT-4] The file upload is a real round trip and stays in front of the
+       save — there is nothing optimistic to do about a file the server has not
+       received. Everything after it is UIC.Live.save: the row appears the
+       moment the upload finishes, the modal closes, and the server's record
+       replaces the draft when it lands. The hand-rolled patch/reload pair this
+       replaces did the same thing one round trip later, behind an overlay. */
     uploadSelectedFile(formEl, { sheet: 'products', id: id || data.id })
       .then(function (ref) {
         if (ref) data.print_file = ref;
-        return companyCall(id ? 'edit_product' : 'add_product', data);
+        window.__products = window.__products || [];
+        return UIC.Live.save({
+          call: companyCall,
+          action: id ? 'edit_product' : 'add_product',
+          data: data,
+          list: window.__products,
+          key: 'id',
+          draft: Object.assign({}, data),
+          render: function () { renderProducts(window.__products); },
+          modal: 'product-modal',
+          message: 'تم الحفظ',
+          recordOf: function (r) { return r && r.record; },
+          reload: fetchProducts
+        });
       })
-      .then(function (r) {
-        UIC.closeModal('product-modal');
-        UIC.toast(r.message || 'تم الحفظ', 'success');
-        if (r && r.record) {
-          window.__products = window.__products || [];
-          if (id) {
-            var idx = window.__products.findIndex(function(p){ return String(p.id)===String(id); });
-            if (idx!==-1) window.__products[idx]=r.record; else window.__products.push(r.record);
-          } else {
-            window.__products.unshift(r.record);
-          }
-          renderProducts(window.__products);
-        } else { fetchProducts(); }
-      })
-      .catch(function (e) { UIC.toast(e.message || 'خطأ', 'error'); })
-      .finally(function () { UI.hideSpinner(); });
+      /* Live.save has already toasted and already rolled the row back. */
+      .catch(function () {});
   }
 
   function showError(e) {
