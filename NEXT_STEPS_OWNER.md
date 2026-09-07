@@ -398,3 +398,82 @@ review process works, not a technical one. Tell me which you want.
 its own run. See `UI_FORMS_AND_FILTERS_RESULTS.md` §F4b for why, and the classification rule: form
 grids migrate, computed-value strips go to `-narrow`, and KPI/tile rows must be **left alone**, since
 a 240px floor would make the dashboards worse rather than better.
+
+---
+
+# مركز التقييم — blocked on you
+
+Branch `feat/assessment-center-work` (a git worktree at `d:\Work\Script-ac-work` — **read
+[ASSESSMENT_CENTER_RESULTS.md](ASSESSMENT_CENTER_RESULTS.md) §0 before touching any of this**, the
+branch you were told to expect stops early and needs a fast-forward). **Not pushed.** Full write-up
+in [ASSESSMENT_CENTER_RESULTS.md](ASSESSMENT_CENTER_RESULTS.md); this section is the condensed,
+action-oriented version of its §4.
+
+## 1. Confirm the company row — nothing renders without it
+
+`ERP_Companies`: a row with `company_unique_id = 32fafd256ccb7a1c`, `company_sheet_link` pointing at
+the assessment spreadsheet the standalone app already uses, `enabled = TRUE`, `company_name_ar` set.
+
+## 2. Users, roles, and the seven page ids — **grant the detail pages together with their lists**
+
+`ERP_Management` → صفحات النظام → عرض جميع الصفحات: `ac_dashboard`, `ac_assessments`,
+`ac_assessment_form`, `ac_batches`, `ac_results`, `ac_result_view`, `ac_take`. **`ac_assessment_form`
+must be granted alongside `ac_assessments`, and `ac_result_view` alongside `ac_results`** — they are
+separate registry entries that share their list's access gate, so a role holding only the list page
+cannot open a specific assessment or result. `ac_take` will be listed too; granting or denying it
+does nothing, it is public by design.
+
+Matrix, per role:
+
+| Page | Assessment Admin | Recruiter | Reviewer |
+|---|---|---|---|
+| `ac_dashboard` | full | read | read |
+| `ac_assessments`, `ac_assessment_form` | full | read | read |
+| `ac_batches` | full | write | read |
+| `ac_results`, `ac_result_view` | full | read | write |
+
+## 3. Tier B columns — add on your own schedule, either/both/neither is safe
+
+| Group | Tab | Columns (append at the end) | Unlocks |
+|---|---|---|---|
+| B-1 | `Assignments` | `CandidateName`, `CandidatePhone`, `AppliedPosition` | name/phone/position on the candidate welcome screen |
+| B-2 | `Assignments` | `ReviewDecision`, `ReviewNotes`, `ReviewedBy`, `ReviewedAt` | the hiring-decision block on the result view |
+
+Proven both ways (with and without) by `tools/verify/ac7_tierb.js` — nothing to redeploy but the
+sheet itself when you add one. Not built this run (independent follow-ups if wanted later): B-3
+(`Assessments.ShuffleQuestions`, `Assessments.Language`), B-4 (`Questions.Section`), B-5 (a `Results`
+tab — send its headers when you have them).
+
+## 4. Cutover order for retiring the standalone
+
+1. Deploy, grant, log in, create one test batch, confirm its candidate link opens the **ERP's**
+   `ac_take` page, not the old standalone URL.
+2. In the standalone project's Apps Script editor, archive its web app deployment — first check the
+   ERP's دفعات page (every batch's `ExpiresAt` is visible) and let active batches expire or re-issue
+   their links.
+3. Leave the standalone's `Users`/`UsersPermission` tabs in place; the ERP never reads them.
+4. `assessment center/` stays in the repo as reference. Say the word to move it under `Backup/`.
+
+## 5. Your visual checklist
+
+See ASSESSMENT_CENTER_RESULTS.md §4e for the full list. The two items this run adds beyond the
+original plan: confirm `ac_assessment_form`/`ac_result_view` were actually granted (item 2 above),
+and know going in that **an assessment can never be edited in place, only duplicated** — the plan
+implied otherwise but the action catalog never defined an edit verb (details in RESULTS.md §2).
+
+## Also worth knowing
+
+- **No schema was touched.** Zero columns added, zero tabs added, zero `ID_Counter` access — the
+  write-contract test greps the source for `addRecord_(`/`getNextId_(`/`saveRecordWithAudit_(` and
+  fails the suite if any ever appears.
+- **Nothing was deployed and nothing was pushed.** `clasp push` was never run against either project.
+- **Two real bugs were found and fixed before they ever reached a browser** — a header-case shadowing
+  trap one layer inside `logHistory_` itself (would have made record-history entries wrong, never the
+  sheet cells), and a copied `UIC.dataTable` usage pattern that appears to leave
+  `Company_ValleyFoods_Contracts.html` (outside this run's file set, not touched) rendering no table
+  at all. Both are described in RESULTS.md §2.
+- **The git worktree hazard in §0 is worth flagging to whoever runs the next multi-session task on
+  this machine** — several concurrent Claude Code sessions sharing one working directory can and did
+  interleave `git add`/`git commit` across sessions. Any future run touching shared files
+  (`Code.js`, `UI_Components.html`, `01_Registry.js`) should isolate itself in a worktree from the
+  start, not react to it mid-run as this one did.
