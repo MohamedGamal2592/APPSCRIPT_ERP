@@ -62,7 +62,10 @@ const AssessmentCenter = (function () {
 
     'get_ac_results': { page: 'ac_results', access: 'read' },
     'get_ac_result': { page: 'ac_results', access: 'read' },
-    'add_ac_candidate_grade': { page: 'ac_results', access: 'write' }
+    'add_ac_candidate_grade': { page: 'ac_results', access: 'write' },
+    // Phase 8/B-2 — gated at runtime on the columns actually existing
+    // (acHasColumns_); the access LEVEL is fixed regardless.
+    'add_ac_review_decision': { page: 'ac_results', access: 'write' }
   };
 
   // Sheet/table touched by a module_action, for SystemLog.Table — also carries
@@ -86,6 +89,7 @@ const AssessmentCenter = (function () {
     'get_ac_results': ASSIGNMENTS_SHEET,
     'get_ac_result': ASSIGNMENTS_SHEET,
     'add_ac_candidate_grade': RESPONSES_SHEET,
+    'add_ac_review_decision': ASSIGNMENTS_SHEET,
 
     'prefetch_refs': ASSESSMENTS_SHEET,
 
@@ -164,6 +168,20 @@ const AssessmentCenter = (function () {
   // ── §6.4 generic data helpers ──────────────────────────────────────────────
   function acRows_(dbId, sheet) { return getAllRecords_(dbId, sheet); }
   function acByPk_(dbId, sheet, pk) { return getRecordsByPk_(dbId, sheet, pk); }
+
+  /**
+   * Phase 8/D-2 — detect Tier B columns at runtime, NEVER by assumption.
+   * Returns { ColumnName: true|false } for each name asked about.
+   */
+  function acHasColumns_(dbId, sheet, columnNames) {
+    const headers = getHeaders_(getSheet_(sheet, dbId)).map(function (h) { return String(h).trim().toLowerCase(); });
+    const present = {};
+    columnNames.forEach(function (c) { present[c] = headers.indexOf(String(c).toLowerCase()) !== -1; });
+    return present;
+  }
+  function acAllColumnsPresent_(presence) {
+    return Object.keys(presence).every(function (k) { return presence[k]; });
+  }
 
   function acUid_() { return Utilities.getUuid().replace(/-/g, '').slice(0, 16); }
   function acToken_() { return Utilities.getUuid() + Utilities.getUuid(); }
@@ -740,9 +758,15 @@ const AssessmentCenter = (function () {
       }
     }
 
+    // Phase 8/B-1 — tell the client whether the welcome screen may ask for a
+    // name/phone/applied-position (the columns to hold them may not exist
+    // yet; detected here, never assumed).
+    const b1 = acHasColumns_(dbId, ASSIGNMENTS_SHEET, ['CandidateName', 'CandidatePhone', 'AppliedPosition']);
+
     return {
       status: 'success', assessment: projection.assessment, questions: projection.questions,
-      remaining_seconds: remainingSeconds, assignmentId: assignmentId, existingStatus: existingStatus
+      remaining_seconds: remainingSeconds, assignmentId: assignmentId, existingStatus: existingStatus,
+      capabilities: { candidateProfile: acAllColumnsPresent_(b1) }
     };
   }
   publicRegister('get_ac_candidate_assessment', getAcCandidateAssessment_);
@@ -774,6 +798,17 @@ const AssessmentCenter = (function () {
       if (hasInvites && !mine) throw new Error('هذه الدفعة مغلقة بدعوات محددة، وبريدك الإلكتروني غير مدرج ضمنها.');
       if (mine && mine.Status === 'Completed') throw new Error('لقد أكملت هذا التقييم بالفعل.');
 
+      // Phase 8/B-1 — captured only at first start, never on a resume, and
+      // only when the columns actually exist; a handler must never attempt
+      // to write a column that is not there.
+      const b1 = acHasColumns_(dbId, ASSIGNMENTS_SHEET, ['CandidateName', 'CandidatePhone', 'AppliedPosition']);
+      const b1Available = acAllColumnsPresent_(b1);
+      const b1Fields = b1Available ? {
+        CandidateName: String((data && data.name) || ''),
+        CandidatePhone: String((data && data.phone) || ''),
+        AppliedPosition: String((data && data.appliedPosition) || '')
+      } : null;
+
       let assignmentId, startedAt;
       if (mine && mine.Status === 'In Progress') {
         assignmentId = mine.AssignmentID;
@@ -784,7 +819,8 @@ const AssessmentCenter = (function () {
         // ACTUAL admissions, so it is bumped here too, on first start.
         assignmentId = mine.AssignmentID;
         startedAt = new Date();
-        acUpdate_(dbId, ASSIGNMENTS_SHEET, 'AssignmentID', assignmentId, { Status: 'In Progress', StartedAt: acStamp_() }, 'candidate:' + email);
+        acUpdate_(dbId, ASSIGNMENTS_SHEET, 'AssignmentID', assignmentId,
+          Object.assign({ Status: 'In Progress', StartedAt: acStamp_() }, b1Fields || {}), 'candidate:' + email);
         bumpUsedSlots_(dbId, batch);
       } else {
         const used = Number(batch.UsedSlots) || 0;
@@ -792,10 +828,10 @@ const AssessmentCenter = (function () {
         if (used >= max) throw new Error('اكتمل عدد المقاعد المتاحة لهذا التقييم.');
         assignmentId = acUid_();
         startedAt = new Date();
-        const row = {
+        const row = Object.assign({
           AssignmentID: assignmentId, BatchID: batch.BatchID, Token: token, CandidateEmail: email,
           AssessmentID: batch.AssessmentID, Status: 'In Progress', StartedAt: acStamp_(), CompletedAt: '', CreatedAt: acStamp_()
-        };
+        }, b1Fields || {});
         acInsert_(dbId, ASSIGNMENTS_SHEET, row, 'candidate:' + email, 'AssignmentID');
         bumpUsedSlots_(dbId, batch);
       }
@@ -961,13 +997,49 @@ const AssessmentCenter = (function () {
       };
     });
 
+    // Phase 8/B-2 — the decision block only when the four columns exist;
+    // acRows_ already omits properties for columns that are not there, so
+    // this is read straight off `assignment`, never assumed present.
+    const b2 = acHasColumns_(dbId, ASSIGNMENTS_SHEET, ['ReviewDecision', 'ReviewNotes', 'ReviewedBy', 'ReviewedAt']);
+    const b2Available = acAllColumnsPresent_(b2);
+
     return {
       status: 'success', assignment: assignment, batch: batch, assessment: assessment,
       answers: answers, traits: scored.traits, verdict: scored.verdict,
-      score: scored.score, max: scored.max, events: events
+      score: scored.score, max: scored.max, events: events,
+      capabilities: { review: b2Available },
+      review: b2Available ? {
+        decision: assignment.ReviewDecision || '', notes: assignment.ReviewNotes || '',
+        reviewedBy: assignment.ReviewedBy || '', reviewedAt: assignment.ReviewedAt || ''
+      } : null
     };
   }
   register('get_ac_result', getAcResult_);
+
+  /**
+   * Phase 8/B-2 — {assignment_id, decision, notes}. Throws a clear, actionable
+   * error when the columns are absent rather than silently discarding a
+   * reviewer's decision (unlike B-1's welcome-screen fields, a "hire" the
+   * reviewer believes was saved but was not is a real problem, not a
+   * cosmetic one).
+   */
+  function addAcReviewDecision_(data, user, dbId) {
+    const d = data || {};
+    const assignmentId = String(d.assignment_id || '').trim();
+    if (!assignmentId) throw new Error('AssignmentID مطلوب.');
+    const cols = acHasColumns_(dbId, ASSIGNMENTS_SHEET, ['ReviewDecision', 'ReviewNotes', 'ReviewedBy', 'ReviewedAt']);
+    if (!acAllColumnsPresent_(cols)) {
+      throw new Error('أعمدة قرار المراجعة غير مضافة بعد لهذا الشيت. راجع مدير النظام لإضافتها.');
+    }
+    const decision = String(d.decision || '').trim();
+    if (!decision) throw new Error('القرار مطلوب.');
+    const userEmail = (user && user.email) || '';
+    const res = acUpdate_(dbId, ASSIGNMENTS_SHEET, 'AssignmentID', assignmentId, {
+      ReviewDecision: decision, ReviewNotes: String(d.notes || ''), ReviewedBy: userEmail, ReviewedAt: acStamp_()
+    }, userEmail);
+    return { status: 'success', data: res.data, message: 'تم حفظ القرار.' };
+  }
+  register('add_ac_review_decision', addAcReviewDecision_);
 
   /** {assignment_id, grades:[{response_id, score}]} — clamped [0,Weight]. */
   function addAcCandidateGrade_(data, user, dbId) {

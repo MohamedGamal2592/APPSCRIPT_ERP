@@ -105,6 +105,7 @@
       publicCall('get_ac_candidate_assessment', { token: TOKEN })
         .then(function (res) {
           state.assessment = res.assessment; state.questions = res.questions || [];
+          state.capabilities = res.capabilities || {};
           state.screen = 'welcome';
           renderWelcome();
         })
@@ -118,6 +119,14 @@
 
     function renderWelcome() {
       var a = state.assessment;
+      // Phase 8/B-1 — shown only when Assignments.CandidateName/
+      // CandidatePhone/AppliedPosition exist; detected server-side, never
+      // assumed. Hidden entirely (not just disabled) when absent.
+      var profileFields = (state.capabilities && state.capabilities.candidateProfile)
+        ? UIC.field({ key: 'ac-name', label: 'الاسم', placeholder: 'اسمك بالكامل' }) +
+          UIC.field({ key: 'ac-phone', label: 'رقم الهاتف', type: 'tel' }) +
+          UIC.field({ key: 'ac-position', label: 'الوظيفة المتقدم إليها' })
+        : '';
       root().innerHTML = headHtml() +
         '<div class="ac-card">' +
         '<div class="ac-meta-row">' +
@@ -125,6 +134,7 @@
           '<span>' + state.questions.length + ' سؤال</span>' +
         '</div>' +
         (a.Description ? '<p dir="auto">' + esc(a.Description) + '</p>' : '') +
+        profileFields +
         '<div class="form-field"><label class="form-label">البريد الإلكتروني</label>' +
         '<input class="input" type="email" id="ac-email" placeholder="name@example.com"></div>' +
         '<label class="ac-consent"><input type="checkbox" id="ac-consent"> ' +
@@ -138,10 +148,16 @@
       var consent = !!(document.getElementById('ac-consent') || {}).checked;
       if (!email || email.indexOf('@') === -1) { UIC.toast('برجاء إدخال بريد إلكتروني صحيح', 'error'); return; }
       if (!consent) { UIC.toast('برجاء تأكيد الإقرار قبل البدء', 'error'); return; }
+      var profile = {};
+      if (state.capabilities && state.capabilities.candidateProfile) {
+        profile.name = (document.getElementById('ac-name') || {}).value || '';
+        profile.phone = (document.getElementById('ac-phone') || {}).value || '';
+        profile.appliedPosition = (document.getElementById('ac-position') || {}).value || '';
+      }
 
       var btn = document.getElementById('ac-start-btn');
       UI.submitOnce(btn, function () {
-        return publicCall('add_ac_candidate_attempt', { token: TOKEN, email: email })
+        return publicCall('add_ac_candidate_attempt', Object.assign({ token: TOKEN, email: email }, profile))
           .then(function (res) {
             state.email = email.toLowerCase();
             state.assignmentId = res.assignmentId;

@@ -107,6 +107,7 @@
         '<div class="ac-score-value">' + (state.max > 0 ? (state.score + ' / ' + state.max) : '—') + '</div>' +
         '<div>' + UIC.statusPill(VERDICT_LABELS[state.verdict] || state.verdict, state.verdict === 'Pass' ? 'success' : state.verdict === 'Fail' ? 'danger' : state.verdict === 'Pending' ? 'warning' : 'neutral') + '</div>' +
         '</div>' +
+        reviewPanel() +
         UIC.notebook('ac-rv', [
           { key: 'answers', label: 'الإجابات', content: answersPanel() },
           { key: 'traits', label: 'السمات', content: traitsPanel() },
@@ -116,6 +117,40 @@
 
       el.innerHTML = html;
       drawTraitChart();
+    }
+
+    // Phase 8/B-2 — shown only when Assignments.ReviewDecision/ReviewNotes/
+    // ReviewedBy/ReviewedAt exist (state.capabilities.review, detected
+    // server-side). Read-only for anyone without CAN_WRITE.
+    function reviewPanel() {
+      if (!state.capabilities || !state.capabilities.review) return '';
+      var r = state.review || {};
+      if (!CAN_WRITE) {
+        if (!r.decision) return '';
+        return '<div class="ac-score-card" style="text-align:start;"><strong>قرار المراجعة: </strong>' + esc(r.decision) +
+          (r.notes ? '<p>' + esc(r.notes) + '</p>' : '') +
+          '<div style="color:var(--text-muted);font-size:var(--text-xs);">' + esc(r.reviewedBy || '') + ' — ' + esc(r.reviewedAt || '') + '</div></div>';
+      }
+      var options = [{ value: 'Hire', label: 'توظيف' }, { value: 'Hold', label: 'انتظار' }, { value: 'Reject', label: 'رفض' }];
+      return '<div class="ac-score-card" style="text-align:start;">' +
+        '<div class="form-grid">' +
+        UIC.combo({ key: 'ac-review-decision', label: 'القرار', options: options, value: r.decision, placeholder: 'اختر القرار' }) +
+        '</div>' +
+        UIC.field({ key: 'ac-review-notes', label: 'ملاحظات المراجع', type: 'textarea', rows: 2, value: r.notes }) +
+        (r.reviewedBy ? '<div style="color:var(--text-muted);font-size:var(--text-xs);margin-bottom:8px;">آخر تحديث: ' + esc(r.reviewedBy) + ' — ' + esc(r.reviewedAt) + '</div>' : '') +
+        '<button type="button" class="btn btn-primary" onclick="saveReviewDecision()">حفظ القرار</button>' +
+        '</div>';
+    }
+
+    function saveReviewDecision() {
+      var decision = (document.getElementById('ac-review-decision') || {}).value || '';
+      var notes = (document.getElementById('ac-review-notes') || {}).value || '';
+      if (!decision) { UIC.toast('اختر القرار أولاً', 'error'); return; }
+      UI.showSpinner();
+      companyCall('add_ac_review_decision', { assignment_id: ASSIGNMENT_ID, decision: decision, notes: notes })
+        .then(function (res) { UIC.toast((res && res.message) || 'تم الحفظ', 'success'); load(); })
+        .catch(function (err) { UIC.toast(err.message || 'تعذر حفظ القرار', 'error'); })
+        .finally(function () { UI.hideSpinner(); });
     }
 
     function answersPanel() {
