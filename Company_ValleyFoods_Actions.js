@@ -7431,92 +7431,155 @@ const ValleyFoodsHRModules = (function () {
   function saveValleyWarehouseMovement_(data, user, dbId) {
     var d = data || {};
 
-    /* 1 — date */
-    var dateVal = parseDate_(d.movement_date);
-    if (!dateVal) throw new Error('تاريخ الحركة مطلوب وبصيغة صحيحة');
-
-    /* 2 — movement type */
-    var type = String(d.movement_type || '').trim();
-    if (WH_MOVE_TYPES.indexOf(type) === -1) {
-      throw new Error('نوع الحركة غير صحيح — القيم المسموحة: ' + WH_MOVE_TYPES.join(' / '));
+    /* One movement or many, through ONE validated path.
+     *
+     * The form used to post a single movement and the user had to reopen it for
+     * every line of a delivery note. It now posts { ...shared, rows: [ ... ] },
+     * where each row may override any shared field. A payload with no `rows` is
+     * still a single movement, so nothing that calls this today changes. */
+    var rows = Array.isArray(d.rows) && d.rows.length ? d.rows : null;
+    var incoming;
+    if (rows) {
+      incoming = rows.map(function (r) {
+        var merged = {};
+        Object.keys(d).forEach(function (k) { if (k !== 'rows') merged[k] = d[k]; });
+        Object.keys(r || {}).forEach(function (k) {
+          if (r[k] !== undefined && r[k] !== null && r[k] !== '') merged[k] = r[k];
+        });
+        return merged;
+      });
+    } else {
+      incoming = [d];
+    }
+    if (!incoming.length) throw new Error('لا توجد حركات للحفظ');
+    /* A whole delivery note is tens of lines, not thousands. The cap keeps one
+       request inside the six-minute limit and bounds the batch write. */
+    if (incoming.length > 200) {
+      throw new Error('حد أقصى 200 حركة في المرة الواحدة — تم إرسال ' + incoming.length);
     }
 
-    /* 3 — the batch exists. Availability is recomputed here, from the sheet. */
-    var batchUid = String(d.item || '').trim();
-    if (!batchUid) throw new Error('الدفعة (الصنف) مطلوبة');
-    var batch = whBatchAvailability_(dbId)[batchUid];
-    if (!batch) throw new Error('الدفعة المختارة غير موجودة في رصيد المخزن');
+    /* Read the reference data ONCE for the whole batch, not once per row. */
+    var availability = whBatchAvailability_(dbId);
+    var empNames = whEmployeeNames_(dbId);
+    var vendorNames = whVendorNames_(dbId);
 
-    /* 4 — quantity */
-    var qty = Number(d.qty);
-    if (d.qty === '' || d.qty == null || isNaN(qty) || qty <= 0) {
-      throw new Error('الكمية مطلوبة ويجب أن تكون أكبر من صفر');
-    }
+    /* How much each batch has already been drawn down by EARLIER ROWS IN THIS
+       SAME SUBMISSION. Without this, two rows issuing from one batch would each
+       be checked against the same starting figure and together overdraw it. An
+       inbound row credits the batch, so a return followed by an issue works. */
+    var drawn = {};
+    var prepared = [];
 
-    /* 5 — responsible person */
-    var resp = String(d.responsible_person || '').trim();
-    if (!resp) throw new Error('المسؤول عن الحركة مطلوب');
-    if (!whEmployeeNames_(dbId)[resp]) {
-      throw new Error('المسؤول المختار غير موجود في بيانات الموظفين');
-    }
+    incoming.forEach(function (row, i) {
+      var at = incoming.length > 1 ? ' (السطر ' + (i + 1) + ')' : '';
 
-    /* 6 — over-issue. AUTHORITATIVE and server-side: `available` is the figure
-           whBatchAvailability_ just computed off the sheet. Anything the client
-           sent as available/amount/unit_cost is ignored entirely. */
-    if (type !== WH_IN_TYPE) {
-      var available = Number(batch.available) || 0;
-      if (qty > available) {
-        throw new Error('الكمية المطلوب صرفها (' + qty + ') أكبر من المتاح في الدفعة (' +
-          available + (batch.unit ? ' ' + batch.unit : '') + ')');
+      var dateVal = parseDate_(row.movement_date);
+      if (!dateVal) throw new Error('تاريخ الحركة مطلوب وبصيغة صحيحة' + at);
+
+      var type = String(row.movement_type || '').trim();
+      if (WH_MOVE_TYPES.indexOf(type) === -1) {
+        throw new Error('نوع الحركة غير صحيح — القيم المسموحة: ' + WH_MOVE_TYPES.join(' / ') + at);
       }
-    }
 
-    /* vendor is optional; when supplied it must resolve */
-    var vendor = String(d.vendor == null ? '' : d.vendor).trim();
-    if (vendor && !whVendorNames_(dbId)[vendor]) {
-      throw new Error('المورد المختار غير موجود');
-    }
+      var batchUid = String(row.item || '').trim();
+      if (!batchUid) throw new Error('الدفعة (الصنف) مطلوبة' + at);
+      var batch = availability[batchUid];
+      if (!batch) throw new Error('الدفعة المختارة غير موجودة في رصيد المخزن' + at);
 
+      var qty = Number(row.qty);
+      if (row.qty === '' || row.qty == null || isNaN(qty) || qty <= 0) {
+        throw new Error('الكمية مطلوبة ويجب أن تكون أكبر من صفر' + at);
+      }
+
+      var resp = String(row.responsible_person || '').trim();
+      if (!resp) throw new Error('المسؤول عن الحركة مطلوب' + at);
+      if (!empNames[resp]) throw new Error('المسؤول المختار غير موجود في بيانات الموظفين' + at);
+
+      var vendor = String(row.vendor == null ? '' : row.vendor).trim();
+      if (vendor && !vendorNames[vendor]) throw new Error('المورد المختار غير موجود' + at);
+
+      /* Over-issue, AUTHORITATIVE and server-side: `available` is what
+         whBatchAvailability_ computed off the sheet, less whatever earlier rows
+         of this submission already took. Anything the client sent as
+         available/amount/unit_cost is ignored entirely. */
+      var used = drawn[batchUid] || 0;
+      if (type !== WH_IN_TYPE) {
+        var remaining = (Number(batch.available) || 0) - used;
+        if (qty > remaining) {
+          throw new Error('الكمية المطلوب صرفها (' + qty + ') أكبر من المتاح في الدفعة (' +
+            remaining + (batch.unit ? ' ' + batch.unit : '') + ')' + at);
+        }
+        drawn[batchUid] = used + qty;
+      } else {
+        drawn[batchUid] = used - qty;
+      }
+
+      var map = {};
+      map['unique_id'] = uid16Hex_();
+      map['warehouse'] = WH_WAREHOUSE;          /* constant, never rendered or edited */
+      map['vendor'] = vendor;
+      map['item'] = batchUid;
+      map['unit'] = whBatchUnit_(dbId, batch);
+      map['qty'] = qty;
+      /* amount is a server-computed snapshot, stored as a static value — never a
+         formula, never a number the client sent. */
+      map['amount'] = Math.round((Number(batch.unit_cost) || 0) * qty * 100) / 100;
+      map['movement_type'] = type;
+      map['movement_date'] = dateVal;
+      map['asset_target'] = '';                 /* always blank, never rendered */
+      map['responsible_person'] = resp;
+      map['notes'] = String(row.notes || '').trim();
+      map['user'] = (user && user.email) || '';
+      map['created_at'] = new Date();
+      prepared.push(map);
+    });
+
+    /* Nothing above writes, so a bad row anywhere rejects the WHOLE submission
+       and the user still has every line in front of them. */
     var sheet = getSheet_(WH_MOVE_SHEET, dbId);
     var headers = whAssertHeaders_(sheet);
+    var startId = getNextIdBatch_(dbId, WH_MOVE_SHEET, prepared.length);
+    var startRow = sheet.getLastRow() + 1;
 
-    /* amount is a server-computed snapshot, stored as a static value — never a
-       formula, never a number the client sent. */
-    var amount = Math.round((Number(batch.unit_cost) || 0) * qty * 100) / 100;
+    /* item_code and movmenent_sign are sheet formulas; they go into the same
+       matrix as the values, so the whole batch is ONE setValues instead of an
+       append plus two formula writes per row. */
+    var matrix = prepared.map(function (m, i) {
+      var rowNo = startRow + i;
+      var formulas = whMoveFormulaMap_(rowNo);
+      return headers.map(function (h) {
+        var name = String(h).trim();
+        var lower = name.toLowerCase();
+        if (lower === 'id') return startId + i;
+        if (formulas[lower] !== undefined) return formulas[lower];
+        if (m[name] !== undefined) return m[name];
+        return m[lower] !== undefined ? m[lower] : '';
+      });
+    });
+    sheet.getRange(startRow, 1, matrix.length, headers.length).setValues(matrix);
+    noteMutation_();
 
-    var map = {};
-    map['unique_id'] = uid16Hex_();
-    map['warehouse'] = WH_WAREHOUSE;          /* constant, never rendered or edited */
-    map['vendor'] = vendor;
-    map['item'] = batchUid;
-    map['unit'] = whBatchUnit_(dbId, batch);
-    map['qty'] = qty;
-    map['amount'] = amount;
-    map['movement_type'] = type;
-    map['movement_date'] = dateVal;
-    map['asset_target'] = '';                 /* always blank, never rendered */
-    map['responsible_person'] = resp;
-    map['notes'] = String(d.notes || '').trim();
-    map['user'] = (user && user.email) || '';
-    map['created_at'] = new Date();
-    /* `id` is assigned by addRecord_ under the lock; `item_code` and
-       `movmenent_sign` are sheet formulas written immediately below. */
-
-    var res = saveRecordWithAudit_(dbId, WH_MOVE_SHEET, null, map, 'create',
-      (user && user.email) || '', null, null, null, 'id');
-    if (!res || res.status !== 'success') {
-      throw new Error((res && res.message) || 'تعذّر حفظ حركة المخزن');
-    }
-    var rowNum = res.data.newRowNumber;
-    /* F and K are not adjacent, so this is two setValues — still cheaper than
-       two writeFormula_ round trips, each of which repeats getSheet_+getHeaders_. */
-    writeRowFormulas_(sheet, headers, rowNum, whMoveFormulaMap_(rowNum));
+    /* ONE audit write for the batch, not one per row. */
+    try {
+      logHistoryMany_(prepared.map(function (m, i) {
+        return {
+          dbId: dbId, sheetName: WH_MOVE_SHEET,
+          recordUid: 'rec_' + m['unique_id'],
+          recordId: startId + i,
+          user: (user && user.email) || '',
+          action: 'create', newValues: m, oldValues: null
+        };
+      }));
+    } catch (e) {}
 
     return {
       status: 'success',
-      message: 'تم تسجيل حركة المخزن (رقم ' + res.data.assignedId + ')',
-      id: res.data.assignedId,
-      row: rowNum
+      message: prepared.length === 1
+        ? 'تم تسجيل حركة المخزن (رقم ' + startId + ')'
+        : 'تم تسجيل ' + prepared.length + ' حركة مخزن',
+      count: prepared.length,
+      id: startId,
+      row: startRow
     };
   }
 

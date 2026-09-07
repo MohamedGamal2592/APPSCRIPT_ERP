@@ -191,90 +191,194 @@
         .finally(function () { UI.hideSpinner(); });
     }
 
+    /* Rows are keyed by a counter, not by their index, so removing one does not
+       renumber the others — which is what lets a row be removed without
+       re-rendering the rest and destroying a combo being typed into. */
+    var __rows = [];
+    var __rowKey = 0;
+
+    function newRow() { return { k: ++__rowKey, item: '', qty: '', notes: '' }; }
+    function rowByKey(k) {
+      for (var i = 0; i < __rows.length; i++) if (__rows[i].k === Number(k)) return __rows[i];
+      return null;
+    }
+
+    function batchOf(row) { return row && row.item ? (__batchByUid[String(row.item)] || null) : null; }
+
+    /* What this batch has left, given what the OTHER rows of this same form
+       already take from it. Mirrors the server's own cumulative check, so the
+       figure on screen is the figure that will be enforced. */
+    function remainingFor(row) {
+      var b = batchOf(row);
+      if (!b) return null;
+      var rem = Number(b.available) || 0;
+      var isIn = String(hid('wm-type')).trim() === __inType;
+      __rows.forEach(function (o) {
+        if (o.k === row.k || String(o.item) !== String(row.item)) return;
+        var q = parseFloat(o.qty) || 0;
+        rem += isIn ? q : -q;
+      });
+      return rem;
+    }
+
+    function rowHtml(row) {
+      var k = row.k;
+      return '' +
+        '<div class="wm-row" id="wm-row-' + k + '" style="display:grid;grid-template-columns:minmax(220px,2.2fr) minmax(90px,0.8fr) minmax(80px,0.6fr) minmax(90px,0.7fr) minmax(140px,1.2fr) 38px;gap:8px;align-items:end;padding:8px 0;border-bottom:1px solid var(--border-color,#e5e7eb);">' +
+          '<div>' +
+            UIC.combo({ key: 'wm-item-' + k, inline: true, required: true,
+              options: __options.batches || [], value: row.item || '',
+              placeholder: 'ابحث بكود الدفعة أو اسم الصنف…' }) +
+          '</div>' +
+          '<div><input id="wm-qty-' + k + '" class="input" type="number" min="0" step="0.001" ' +
+            'value="' + esc(row.qty) + '" placeholder="0" oninput="WM_PAGE.onQty(' + k + ')"></div>' +
+          '<div><input id="wm-unit-' + k + '" class="input" readonly value="" ' +
+            'style="background:var(--bg-muted,#f8fafc);" placeholder="—"></div>' +
+          '<div id="wm-avail-' + k + '" class="input" style="display:flex;align-items:center;background:var(--bg-muted,#f8fafc);">—</div>' +
+          '<div><input id="wm-notes-' + k + '" class="input" type="text" value="' + esc(row.notes) + '" ' +
+            'placeholder="ملاحظات" oninput="WM_PAGE.onNotes(' + k + ', this.value)"></div>' +
+          '<button class="btn btn-outline" style="color:#c5221f;border-color:#c5221f;padding:6px 10px;" ' +
+            'title="حذف السطر" onclick="WM_PAGE.removeRow(' + k + ')">✕</button>' +
+        '</div>';
+    }
+
+    function wireRow(row) {
+      var k = row.k;
+      var it = document.getElementById('wm-item-' + k);
+      if (it) it.addEventListener('change', function () { onItemPicked(k, it.value); });
+      refreshRow(row);
+    }
+
+    /* Update one row's read-only cells in place — never a re-render. */
+    function refreshRow(row) {
+      var b = batchOf(row);
+      var unitEl = document.getElementById('wm-unit-' + row.k);
+      var availEl = document.getElementById('wm-avail-' + row.k);
+      if (unitEl) unitEl.value = b ? (b.unit || '') : '';
+      if (availEl) {
+        var rem = remainingFor(row);
+        availEl.textContent = (rem === null)
+          ? '—'
+          : qtyFmt(rem) + (b && b.unit ? ' ' + b.unit : '');
+        availEl.style.color = (rem !== null && rem < 0) ? '#c5221f' : '';
+      }
+    }
+
+    /* Every row's remaining depends on every other row on the same batch. */
+    function refreshAll() {
+      __rows.forEach(refreshRow);
+      var total = 0;
+      __rows.forEach(function (o) {
+        var b = batchOf(o);
+        total += (b && b.unit_cost != null ? Number(b.unit_cost) : 0) * (parseFloat(o.qty) || 0);
+      });
+      var tv = document.getElementById('wm-total-value');
+      if (tv) tv.textContent = finFmt(total);
+      var tc = document.getElementById('wm-total-count');
+      if (tc) tc.textContent = String(__rows.length);
+    }
+
+    function onItemPicked(k, value) {
+      var row = rowByKey(k);
+      if (!row) return;
+      row.item = String(value || '').trim();
+      refreshAll();
+    }
+
+    function onQty(k) {
+      var row = rowByKey(k);
+      if (!row) return;
+      var el = document.getElementById('wm-qty-' + k);
+      row.qty = el ? el.value : '';
+
+      /* Ergonomics only. The server recomputes availability from the sheet and
+         refuses an over-issue on its own — this just stops the user filling in
+         a whole note for a quantity that was never going to be accepted. */
+      var b = batchOf(row);
+      var isIn = String(hid('wm-type')).trim() === __inType;
+      if (b && !isIn) {
+        var rem = remainingFor(row);
+        var q = parseFloat(row.qty) || 0;
+        if (rem !== null && q > rem) {
+          row.qty = rem;
+          if (el) el.value = rem;
+          UIC.toast('أقصى كمية متاحة الآن من هذه الدفعة: ' + qtyFmt(rem), 'error');
+        }
+      }
+      refreshAll();
+    }
+
+    function onNotes(k, v) {
+      var row = rowByKey(k);
+      if (row) row.notes = v;
+    }
+
+    function addRow() {
+      var row = newRow();
+      __rows.push(row);
+      var host = document.getElementById('wm-rows');
+      if (!host) return;
+      var empty = document.getElementById('wm-rows-empty');
+      if (empty) empty.remove();
+      host.insertAdjacentHTML('beforeend', rowHtml(row));
+      wireRow(row);
+      refreshAll();
+      var el = document.getElementById('wm-item-' + row.k + '_display');
+      if (el && el.focus) el.focus();
+    }
+
+    function removeRow(k) {
+      __rows = __rows.filter(function (o) { return o.k !== Number(k); });
+      var node = document.getElementById('wm-row-' + k);
+      if (node) node.remove();
+      if (!__rows.length) addRow();
+      refreshAll();
+    }
+
     function renderAddModal() {
       var typeOpts = (__options.movement_types || []).map(function (t) { return { value: t, label: t }; });
 
       var body =
         '<div id="wm-form">' +
+          /* The facts that are the same for every line of a delivery note are
+             entered once. A row only carries what actually differs. */
           '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;">' +
             UIC.combo({ key: 'wm-type', label: 'نوع الحركة', required: true, options: typeOpts, value: '', placeholder: 'اختر نوع الحركة…' }) +
             UIC.field({ key: 'wm-date', label: 'تاريخ الحركة', type: 'date', required: true, value: todayStr() }) +
-            UIC.combo({ key: 'wm-item', label: 'الدفعة / الصنف', required: true, options: __options.batches || [], value: '', placeholder: 'ابحث بكود الدفعة أو اسم الصنف…' }) +
             UIC.combo({ key: 'wm-responsible', label: 'المسؤول', required: true, options: __options.employees || [], value: '', placeholder: 'اختر الموظف المسؤول…' }) +
             UIC.combo({ key: 'wm-vendor', label: 'المورد (اختياري)', options: __options.vendors || [], value: '', placeholder: 'اختر المورد…' }) +
-            UIC.field({ key: 'wm-qty', label: 'الكمية', type: 'number', required: true, min: 0, step: '0.001', value: '', placeholder: '0' }) +
           '</div>' +
-          '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-top:4px;">' +
-            '<div class="form-field"><label class="form-label">الوحدة</label>' +
-              '<input id="wm-unit" class="input" readonly value="" placeholder="تُملأ من الدفعة"></div>' +
-            '<div class="form-field"><label class="form-label">المتاح</label>' +
-              '<div id="wm-available" class="input" style="display:flex;align-items:center;background:var(--bg-muted, #f8fafc);">—</div></div>' +
+
+          '<div style="display:flex;align-items:center;justify-content:space-between;margin:14px 0 6px;">' +
+            '<h4 style="margin:0;">الأصناف (<span id="wm-total-count">0</span>)</h4>' +
+            '<button class="btn btn-outline" onclick="WM_PAGE.addRow()">+ إضافة صنف</button>' +
           '</div>' +
-          UIC.field({ key: 'wm-notes', label: 'ملاحظات', type: 'text', value: '', placeholder: 'اختياري' }) +
+          '<div style="display:grid;grid-template-columns:minmax(220px,2.2fr) minmax(90px,0.8fr) minmax(80px,0.6fr) minmax(90px,0.7fr) minmax(140px,1.2fr) 38px;gap:8px;padding-bottom:4px;font-size:12px;color:var(--text-muted);font-weight:700;">' +
+            '<div>الدفعة / الصنف</div><div>الكمية</div><div>الوحدة</div><div>المتاح</div><div>ملاحظات</div><div></div>' +
+          '</div>' +
+          '<div id="wm-rows"></div>' +
         '</div>' +
         (canCost()
           ? '<div id="wm-value-box" style="display:flex;justify-content:flex-end;gap:16px;padding:10px;background:var(--bg-muted, #f8fafc);border-radius:8px;margin-top:10px;font-weight:800;">' +
-              '<span>القيمة:</span><span id="wm-value" style="direction:ltr;">0.00</span></div>'
+              '<span>إجمالي القيمة:</span><span id="wm-total-value" style="direction:ltr;">0.00</span></div>'
           : '');
 
       UIC.openModal('wm-modal', {
-        title: 'إضافة حركة مخزن',
+        title: 'إضافة حركات مخزن',
         body: body,
         size: 'lg',
         footer: '<button class="btn btn-outline" onclick="UIC.closeModal(\'wm-modal\')">إلغاء</button>' +
-                '<button class="btn btn-primary" onclick="UI.submitOnce(this, WM_PAGE.save)">💾 حفظ الحركة</button>'
+                '<button class="btn btn-primary" onclick="UI.submitOnce(this, WM_PAGE.save)">💾 حفظ كل الحركات</button>'
       });
 
-      /* UIC.combo writes its value into a hidden input at #<key> and fires a
-         `change` on it when an option is picked; #<key>_display is the text box. */
-      var itemHidden = document.getElementById('wm-item');
-      if (itemHidden) itemHidden.addEventListener('change', onBatchPicked);
+      /* Changing the type flips every row between issue and receipt, so the
+         remaining figures all have to be recomputed. */
       var typeHidden = document.getElementById('wm-type');
-      if (typeHidden) typeHidden.addEventListener('change', recalc);
-      var qtyEl = document.getElementById('wm-qty');
-      if (qtyEl) qtyEl.addEventListener('input', recalc);
-    }
+      if (typeHidden) typeHidden.addEventListener('change', refreshAll);
 
-    function currentBatch() {
-      var el = document.getElementById('wm-item');
-      return el ? (__batchByUid[String(el.value).trim()] || null) : null;
-    }
-
-    function onBatchPicked() {
-      var b = currentBatch();
-      var unitEl = document.getElementById('wm-unit');
-      var availEl = document.getElementById('wm-available');
-      if (unitEl) unitEl.value = b ? (b.unit || '') : '';
-      if (availEl) {
-        availEl.textContent = b
-          ? (qtyFmt(b.available) + (b.unit ? ' ' + b.unit : ''))
-          : '—';
-      }
-      recalc();
-    }
-
-    function recalc() {
-      var b = currentBatch();
-      var qtyEl = document.getElementById('wm-qty');
-      var typeEl = document.getElementById('wm-type');
-      var qty = qtyEl ? (parseFloat(qtyEl.value) || 0) : 0;
-      var isIn = typeEl ? String(typeEl.value).trim() === __inType : false;
-
-      /* Ergonomics only. The server recomputes availability from the sheet and
-         refuses an over-issue on its own — this just stops the user filling in
-         a whole form for a quantity that was never going to be accepted. */
-      if (b && !isIn && qty > Number(b.available)) {
-        if (qtyEl) qtyEl.value = b.available;
-        qty = Number(b.available);
-        UIC.toast('أقصى كمية متاحة في هذه الدفعة: ' + qtyFmt(b.available), 'error');
-      }
-
-      var valEl = document.getElementById('wm-value');
-      if (valEl) {
-        /* unit_cost is absent without the cost grant; the box is not drawn then. */
-        var uc = b && b.unit_cost != null ? Number(b.unit_cost) : 0;
-        valEl.textContent = finFmt(uc * qty);
-      }
+      __rows = [];
+      __rowKey = 0;
+      addRow();
     }
 
     function save() {
@@ -282,35 +386,51 @@
         UIC.toast('أكمل الحقول المطلوبة', 'error');
         return;
       }
-      var payload = {
-        movement_type: hid('wm-type'),
-        movement_date: hid('wm-date'),
-        item: hid('wm-item'),
-        responsible_person: hid('wm-responsible'),
-        vendor: hid('wm-vendor'),
-        qty: parseFloat(hid('wm-qty')) || 0,
-        notes: hid('wm-notes')
-      };
+      var rows = __rows.filter(function (o) {
+        return String(o.item || '').trim() !== '' || String(o.qty || '').trim() !== '';
+      });
+      if (!rows.length) { UIC.toast('أضف صنفًا واحدًا على الأقل', 'error'); return; }
+
+      var bad = [];
+      rows.forEach(function (o, i) {
+        if (!String(o.item || '').trim()) bad.push('السطر ' + (i + 1) + ': اختر الدفعة');
+        else if (!(parseFloat(o.qty) > 0)) bad.push('السطر ' + (i + 1) + ': الكمية مطلوبة');
+      });
+      if (bad.length) { UIC.toast(bad[0], 'error'); return; }
+
       /* amount, unit_cost and available are deliberately NOT sent: the server
          computes the first from the batch and ignores anything a client claims
          about the other two. */
+      var payload = {
+        movement_type: hid('wm-type'),
+        movement_date: hid('wm-date'),
+        responsible_person: hid('wm-responsible'),
+        vendor: hid('wm-vendor'),
+        rows: rows.map(function (o) {
+          return { item: o.item, qty: parseFloat(o.qty) || 0, notes: o.notes || '' };
+        })
+      };
       UI.showSpinner();
       companyCall('save_valley_warehouse_movement', payload)
         .then(function (r) {
           UIC.closeModal('wm-modal');
-          UIC.toast((r && r.message) || 'تم تسجيل الحركة', 'success');
-          load();
+          UIC.toast((r && r.message) || 'تم تسجيل الحركات', 'success');
+          load(true);
         })
-        .catch(function (e) { UIC.toast((e && e.message) || 'فشل حفظ الحركة', 'error'); })
+        .catch(function (e) { UIC.toast((e && e.message) || 'فشل حفظ الحركات', 'error'); })
         .finally(function () { UI.hideSpinner(); });
     }
+
 
     function hid(id) { var el = document.getElementById(id); return el ? String(el.value).trim() : ''; }
 
     window.WM_PAGE = {
       openAdd: openAdd,
       save: save,
-      recalc: recalc
+      addRow: addRow,
+      removeRow: removeRow,
+      onQty: onQty,
+      onNotes: onNotes
     };
 
     /* Another device's change to this page arrives on its own. The poll

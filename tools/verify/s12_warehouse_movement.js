@@ -180,6 +180,39 @@ check(SRC.indexOf('deleteValleyWarehouseMovement_') === -1,
 check(SRC.indexOf("'save_valley_warehouse_movement': { page: 'vf_warehouse_movement', access: 'full' }") === -1,
   'no action is registered at `full` access');
 
+/* ── 7b. the page and the handler agree on the multi-row shape ───────────── */
+console.log('\n7b — the form posts many rows, and the server reads them\n');
+if (PAGE) {
+  check(/rows:\s*rows\.map\(/.test(PAGE),
+    'the form posts a `rows` array, not one movement per request');
+  check(/Array\.isArray\(d\.rows\)/.test(SRC),
+    'and the handler reads it');
+
+  /* The shared facts belong to the submission; only what differs is repeated. */
+  ['wm-type', 'wm-date', 'wm-responsible', 'wm-vendor'].forEach(function (k) {
+    check(PAGE.indexOf("'" + k + "'") !== -1, k + ' is a header field, entered once');
+  });
+  check(/rows:\s*rows\.map\(function[^}]*item:[^}]*qty:[^}]*notes:/.test(PAGE.replace(/\s+/g, ' ')),
+    'a row carries only batch, quantity and notes');
+
+  /* Rows are keyed, not indexed — removing one must not renumber the rest,
+     which is what allows a removal without re-rendering and destroying a combo
+     that is being typed into. */
+  check(/wm-item-'\s*\+\s*k|wm-item-' \+ row\.k/.test(PAGE),
+    'row controls are keyed by a stable row key, not by array index');
+  check(/function removeRow\(/.test(PAGE) && /function addRow\(/.test(PAGE),
+    'rows can be added and removed');
+  check(/WM_PAGE\.addRow|WM_PAGE\.removeRow/.test(PAGE),
+    'and both are reachable from the markup');
+
+  /* The client must not send figures the server derives. */
+  check(!/amount:\s*[^,}]*(qty|unit_cost)/.test(PAGE),
+    'the form still sends no amount — the server prices every row itself');
+  check(PAGE.indexOf('unit_cost:') === -1,
+    'and no unit_cost');
+}
+
+
 /* ── 8. dry run: what the save would actually write ──────────────────────── */
 console.log('\n8 — dry run of the real save handler, against stubbed sheet access\n');
 
@@ -253,22 +286,9 @@ if (BLOCK_START !== -1 && BLOCK_END > BLOCK_START) {
       return TABLES[name].map(r => Object.assign({}, r));
     },
     /* the write path, recorded instead of performed */
-    saveRecordWithAudit_: (dbId, name, existingRowId, map, action, email, a, b, c, pk) => {
-      captured.appended = {
-        sheet: name, existingRowId: existingRowId, action: action,
-        email: email, pk: pk, map: map
-      };
-      /* mirror addRecord_: project the map onto the header row, id assigned here */
-      captured.appended.values = EXPECTED_HEADERS.map(h => {
-        const k = String(h).trim().toLowerCase();
-        if (k === 'id') return 99;
-        return map[k] !== undefined ? map[k] : '';
-      });
-      return { status: 'success', data: { newRowNumber: 42, assignedId: 99 } };
-    },
-    writeRowFormulas_: (sheet, hdrs, rowNum, fmap) => {
-      captured.formulas = { rowNum: rowNum, map: fmap, headers: hdrs };
-    },
+    getNextIdBatch_: (dbId, name, count) => { captured.idCount = count; return 99; },
+    noteMutation_: () => {},
+    logHistoryMany_: (entries) => { captured.audit = entries; },
     /* leaf helpers */
     uid16Hex_: () => 'ffffffff00000001',
     parseDate_: (v) => { if (!v) return null; const d = new Date(v); return isNaN(d.getTime()) ? null : d; },
@@ -396,12 +416,118 @@ if (BLOCK_START !== -1 && BLOCK_END > BLOCK_START) {
     { email: 'u@v.t' }, 'db')), 'an unknown responsible person is refused');
 
   /* -- 8e. the unit falls back to valley_products when the batch has none -- */
-  captured.appended = null;
+  reset();
   H.save({ movement_date: '2026-09-06', movement_type: 'منصرف', item: 'BATCH-B',
     qty: 1, responsible_person: 'E-1' }, { email: 'u@v.t' }, 'db');
-  check(captured.appended.map.unit === 'شيكارة',
+  check(writtenRow(0).unit === 'شيكارة',
     'a batch with no unit falls back to valley_products.unit via product_id',
-    'got ' + captured.appended.map.unit);
+    'got ' + writtenRow(0).unit);
+
+  /* -- 8g. MANY movements in one submission -- */
+  console.log('\n        many rows in one submission\n');
+  const shared = {
+    movement_date: '2026-09-06',
+    movement_type: 'منصرف',
+    responsible_person: 'E-1',
+    vendor: '18'
+  };
+
+  reset();
+  const many = H.save(Object.assign({}, shared, {
+    rows: [
+      { item: 'BATCH-A', qty: 10, notes: 'أ' },
+      { item: 'BATCH-B', qty: 2, notes: 'ب' },
+      { item: 'BATCH-A', qty: 5 }
+    ]
+  }), { email: 'u@v.t', canCost: true }, 'db');
+  check(many && many.status === 'success', 'three movements save together',
+    many && many.message);
+  check(many.count === 3, 'and the response says three', 'got ' + many.count);
+  check(captured.written && captured.written.rows === 3,
+    'all three reach the sheet in ONE setValues',
+    captured.written ? captured.written.rows : 'nothing written');
+  check(captured.idCount === 3, 'three ids allocated in one call', captured.idCount);
+  check(captured.audit && captured.audit.length === 3,
+    'and ONE audit write covering all three',
+    captured.audit ? captured.audit.length : 'none');
+
+  const r0 = writtenRow(0), r1 = writtenRow(1), r2 = writtenRow(2);
+  check(r0.item === 'BATCH-A' && r1.item === 'BATCH-B' && r2.item === 'BATCH-A',
+    'in the order they were entered');
+  check(r0.id === 99 && r1.id === 100 && r2.id === 101,
+    'with consecutive ids', [r0.id, r1.id, r2.id].join(','));
+  check(r0.movement_type === 'منصرف' && r1.movement_type === 'منصرف',
+    'the shared header applies to every row');
+  check(r0.notes === 'أ' && r1.notes === 'ب' && r2.notes === '',
+    'and a per-row field overrides nothing it did not set');
+  check(r0.amount === 125 && r1.amount === 6,
+    'each row prices from its OWN batch (12.5x10=125, 3x2=6)',
+    r0.amount + ' / ' + r1.amount);
+  /* each row's formulas must address its own row, not the first */
+  const sr = captured.written.startRow;
+  check(r1.item_code.indexOf('VLOOKUP(E' + (sr + 1) + ',') !== -1 &&
+        r2.item_code.indexOf('VLOOKUP(E' + (sr + 2) + ',') !== -1,
+    'every row\'s formulas address its own row number',
+    [r0.item_code, r1.item_code, r2.item_code].join('\n        '));
+
+  /* THE ONE THAT MATTERS: two rows drawing on the same batch */
+  reset();
+  const overdraw = throws(() => H.save(Object.assign({}, shared, {
+    rows: [
+      { item: 'BATCH-A', qty: 50 },
+      { item: 'BATCH-A', qty: 40 }   /* 50 + 40 = 90 > 80 available */
+    ]
+  }), { email: 'u@v.t' }, 'db'));
+  check(!!overdraw,
+    'two rows that TOGETHER overdraw one batch are refused — 50 + 40 > 80',
+    'no error thrown; the batch would have been overdrawn');
+  check(overdraw && /السطر 2/.test(overdraw),
+    '  and the message names the offending line', 'got: ' + overdraw);
+  check(captured.written === null, '  with nothing written — all or nothing');
+
+  reset();
+  check(throws(() => H.save(Object.assign({}, shared, {
+    rows: [{ item: 'BATCH-A', qty: 50 }, { item: 'BATCH-A', qty: 30 }]
+  }), { email: 'u@v.t' }, 'db')) === null,
+    'and 50 + 30 = exactly 80 is allowed');
+
+  /* an inbound row credits the batch for a later outbound one */
+  reset();
+  check(throws(() => H.save(Object.assign({}, shared, {
+    rows: [
+      { item: 'BATCH-A', qty: 20, movement_type: 'وارد داخلي / مرتجع للمخزن' },
+      { item: 'BATCH-A', qty: 95 }
+    ]
+  }), { email: 'u@v.t' }, 'db')) === null,
+    'a return earlier in the same submission credits a later issue (80 + 20 >= 95)');
+
+  /* one bad row rejects the whole submission */
+  reset();
+  const partial = throws(() => H.save(Object.assign({}, shared, {
+    rows: [
+      { item: 'BATCH-A', qty: 1 },
+      { item: 'NOPE', qty: 1 },
+      { item: 'BATCH-B', qty: 1 }
+    ]
+  }), { email: 'u@v.t' }, 'db'));
+  check(!!partial, 'one unknown batch rejects the whole submission');
+  check(partial && /السطر 2/.test(partial), '  naming the line', 'got: ' + partial);
+  check(captured.written === null,
+    '  and the two good rows are NOT written either — the user still has them all');
+
+  /* the cap */
+  reset();
+  const tooMany = [];
+  for (let i = 0; i < 201; i++) tooMany.push({ item: 'BATCH-A', qty: 0.001 });
+  check(!!throws(() => H.save(Object.assign({}, shared, { rows: tooMany }),
+    { email: 'u@v.t' }, 'db')), 'more than 200 rows in one submission is refused');
+
+  /* an empty rows array is still the single-movement shape, not a silent no-op */
+  reset();
+  check(!!throws(() => H.save(Object.assign({}, shared, { rows: [] }),
+    { email: 'u@v.t' }, 'db')),
+    'a submission with an empty rows array is refused, not silently ignored');
+
 
   /* -- 8f. cost gating, differential over the SAME data -- */
   console.log('');
