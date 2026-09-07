@@ -564,6 +564,89 @@ check('C11 template-literal CSS hazards (backticks, octal escapes)', function (r
   else r.detail.push('no stray backticks or octal escapes in template-literal CSS');
 });
 
+/* ── C12 — the column-width contract's reach ────────────────────────────── */
+/* Two counts, both of which must only ever fall.
+ *
+ * `tables_unwrapped` — a raw <table class="table"> written as page markup with
+ *   no .table-wrap ancestor. Such a table has never had horizontal scroll and
+ *   has never had a sticky header, because both live on the wrapper. Once the
+ *   width floors exist, an unwrapped wide table has nowhere to overflow TO, so
+ *   this number reaching zero is what makes the contract safe.
+ *
+ * `tables_untyped` — a raw page .table that no UIC.autoColumns() call types.
+ *   The 69 UIC.dataTable sites classify themselves and are not counted here;
+ *   this counts only the tables a page writes by hand.
+ *
+ * Both are deliberately counted from the SOURCE, not from a boot: a page that
+ * fails to render would otherwise silently report zero of each.
+ *
+ * The class attribute is split on whitespace and compared token-by-token.
+ * Substring-matching `table` would also match card-table, inv-table,
+ * items-table and pt-sk-table, which are page-local classes this contract
+ * deliberately does not cover (plan §7 W5). */
+const TABLE_OPEN_RE = /<table\b([^>]*)>/gi;
+
+function classTokens(attrs) {
+  const m = String(attrs).match(/class\s*=\s*["']([^"']*)["']/i);
+  return m ? m[1].trim().split(/\s+/) : [];
+}
+
+/* Every raw `.table` a page writes as markup, with whether a .table-wrap
+ * element is open at that point. The ancestry is resolved by walking the div
+ * tags before it and keeping a stack, rather than by looking at a window of
+ * preceding characters — a table two divs deep inside a wrapper is wrapped,
+ * and a table after a wrapper has closed is not. */
+function rawPageTables(src) {
+  const out = [];
+  const tag = /<(\/?)(div|table)\b([^>]*)>/gi;
+  const stack = [];
+  let m;
+  while ((m = tag.exec(src)) !== null) {
+    const closing = m[1] === '/';
+    const name = m[2].toLowerCase();
+    if (name === 'div') {
+      if (closing) stack.pop();
+      else if (!/\/\s*>$/.test(m[0])) stack.push(classTokens(m[3]).indexOf('table-wrap') !== -1);
+      continue;
+    }
+    if (closing) continue;
+    if (classTokens(m[3]).indexOf('table') === -1) continue;
+    out.push({
+      line: src.slice(0, m.index).split('\n').length,
+      wrapped: stack.indexOf(true) !== -1
+    });
+  }
+  return out;
+}
+
+check('C12 raw page tables: wrapped, and typed by the column contract', function (r) {
+  let unwrapped = 0;
+  let untyped = 0;
+  const badWrap = [];
+  const badType = [];
+  S.pageFiles().forEach(function (f) {
+    const src = S.read(f);
+    const tables = rawPageTables(src);
+    if (!tables.length) return;
+    const loose = tables.filter(t => !t.wrapped);
+    if (loose.length) {
+      unwrapped += loose.length;
+      badWrap.push(f + ' ×' + loose.length + ' (L' + loose.map(t => t.line).join(',') + ')');
+    }
+    /* One autoColumns call types one table. A page with three raw tables and
+       two calls still has one untyped, and says so. */
+    const typed = (src.match(/UIC\.autoColumns\s*\(/g) || []).length;
+    const gap = Math.max(0, tables.length - typed);
+    if (gap) { untyped += gap; badType.push(f + ' ×' + gap + ' of ' + tables.length); }
+  });
+  if (badWrap.length) r.detail.push('unwrapped: ' + badWrap.slice(0, 6).join('; ') +
+    (badWrap.length > 6 ? ' …' : ''));
+  if (badType.length) r.detail.push('untyped: ' + badType.slice(0, 6).join('; ') +
+    (badType.length > 6 ? ' …' : ''));
+  noWorse(r, 'tables_unwrapped', unwrapped, 'raw .table with no .table-wrap');
+  noWorse(r, 'tables_untyped', untyped, 'raw .table no autoColumns call types');
+});
+
 /* ── report ─────────────────────────────────────────────────────────────── */
 const failed = results.filter(r => r.status === 'FAIL');
 

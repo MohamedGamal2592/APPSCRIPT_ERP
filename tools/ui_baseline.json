@@ -28,6 +28,8 @@
     "dom_nodes_per_action_cell": 6,
     "dom_action_bytes": 1066,
     "components_checked": 19,
-    "template_css_hazards": 0
+    "template_css_hazards": 0,
+    "tables_unwrapped": 23,
+    "tables_untyped": 30
   }
 }
