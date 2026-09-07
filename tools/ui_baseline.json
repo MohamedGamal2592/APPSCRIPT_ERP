@@ -31,5 +31,31 @@
     "template_css_hazards": 0,
     "tables_unwrapped": 23,
     "tables_untyped": 30
+  },
+  "realtime_baseline": {
+    "recorded": "2026-09-07",
+    "_note": "R0 of the realtime-feel run. Measured at 05956a6 on branch feat/realtime-feel, with the tree dirty from another programme. Reproduced by hand rather than taken from REALTIME_FEEL_PLAN.md §1; where the two disagree the value here is the measured one and the difference is recorded in REALTIME_FEEL_RESULTS.md.",
+    "pages_with_inlined_payload": 103,
+    "page_bytes_median": 317880,
+    "page_bytes_mean": 296248,
+    "page_bytes_max": 425106,
+    "page_bytes_max_page": "Company_ValleyFoods_Attendance",
+    "shared_ui_components_bytes": 268510,
+    "shared_client_helpers_bytes": 23583,
+    "shared_css_tokens_bytes": 13636,
+    "overlay_sites": 263,
+    "overlay_files": 93,
+    "pages_with_optimistic_save": 2,
+    "pages_with_live_watch": 22,
+    "pages_with_skeleton": 1,
+    "company_direct_sheet_writes": 112,
+    "note_mutation_no_arg_calls": 127,
+    "company_stamping_call_sites": 0,
+    "truncating_list_actions": 30,
+    "pages_searchable_over_truncated_list": 22,
+    "pages_truncated_with_show_all": 3,
+    "appshell_inside_then": 2,
+    "verify_checks": 57,
+    "ui_check_orphan_classes": 39
   }
 }

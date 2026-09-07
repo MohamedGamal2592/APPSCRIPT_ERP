@@ -642,7 +642,7 @@ check('C12 raw page tables: wrapped, and typed by the column contract', function
        the per-table arithmetic does not apply to it. */
     const all = /UIC\.autoColumnsAll\s*\(/.test(src);
     const typed = (src.match(/UIC\.autoColumns\s*\(/g) || []).length;
-    const gap = Math.max(0, tables.length - typed);
+    const gap = all ? 0 : Math.max(0, tables.length - typed);
     if (gap) { untyped += gap; badType.push(f + ' ×' + gap + ' of ' + tables.length); }
   });
   if (badWrap.length) r.detail.push('unwrapped: ' + badWrap.slice(0, 6).join('; ') +
@@ -674,10 +674,19 @@ if (AS_JSON) {
 }
 
 if (SAVE) {
-  fs.writeFileSync(BASELINE_PATH, JSON.stringify({
+  /* [RT-0] Other programmes record their own census under their own top-level
+   * key in this file (`realtime_baseline`, and whatever comes after it). Those
+   * keys are not ui_check's to own, so --save rewrites `recorded` and `metrics`
+   * and carries everything else through untouched. Without this, one --save
+   * silently deletes another run's baseline. */
+  let carried = {};
+  try { carried = JSON.parse(fs.readFileSync(BASELINE_PATH, 'utf8')); } catch (e) { carried = {}; }
+  delete carried.recorded;
+  delete carried.metrics;
+  fs.writeFileSync(BASELINE_PATH, JSON.stringify(Object.assign({
     recorded: new Date().toISOString(),
     metrics: metrics
-  }, null, 2) + '\n');
+  }, carried), null, 2) + '\n');
   if (!AS_JSON) console.log('baseline written to tools/ui_baseline.json');
 }
 
