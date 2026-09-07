@@ -111,6 +111,9 @@ const ValleyFoods = (function () {
     'commit_attendance_import': { page: 'vf_hr_attendance', access: 'write' },
     'get_attendance_report': { page: 'vf_hr_attendance', access: 'read' },
     'get_attendance_index': { page: 'vf_hr_attendance', access: 'read' },
+    'get_attendance_review': { page: 'vf_hr_attendance', access: 'read' },
+    'resolve_attendance_review': { page: 'vf_hr_attendance', access: 'write' },
+    'get_attendance_exceptions': { page: 'vf_hr_attendance', access: 'read' },
     'get_attendance_batches': { page: 'vf_hr_attendance', access: 'read' },
     /* Undo deletes rows, so it is the one attendance action gated at 'full'. */
     'revert_attendance_import': { page: 'vf_hr_attendance', access: 'full' },
@@ -236,6 +239,9 @@ const ValleyFoods = (function () {
     'commit_attendance_import': 'valley_employee_attendance',
     'get_attendance_report': 'valley_employee_attendance',
     'get_attendance_index': 'valley_attendance_session',
+    'get_attendance_review': 'valley_attendance_needs_review',
+    'resolve_attendance_review': 'valley_attendance_needs_review',
+    'get_attendance_exceptions': 'valley_employee_attendance',
     'get_attendance_batches': 'valley_attendance_import_batch',
     'revert_attendance_import': 'valley_attendance_import_batch',
 
@@ -2272,6 +2278,61 @@ const ValleyFoodsHRModules = (function () {
    * old 10-session dropdown made easy) can no longer file a punch under the
    * wrong header, because there is nowhere for it to say so.
    */
+  /**
+   * Write ONE punch. The caller must already hold withAttLock_.
+   *
+   * Extracted so the manual add and the review-queue fix are not two code paths
+   * that have to keep agreeing about I-2 — they are the same one.
+   */
+  function attAddPunchLocked_(dbId, empId, serial, user, extra) {
+    extra = extra || {};
+    var keySet = buildPunchKeySet_(dbId, [serial, serial]);
+    if (punchExists_(keySet, empId, serial)) {
+      throw new Error('هذه البصمة مسجلة بالفعل لهذا الموظف في نفس التاريخ والوقت');
+    }
+
+    var daySerial = Math.floor(serial);
+    var session = resolveSession_(dbId, daySerial, user, '');
+
+    var sheet = getSheet_(EMP_ATTENDANCE_SHEET, dbId);
+    var headers = getHeaders_(sheet);
+    var row = {};
+    row['unique_id'] = Utilities.getUuid();
+    row['id'] = session.session_id;
+    row['emp_id'] = empId;
+    row['attendance_date_time'] = serial;
+    row['time_in'] = extra.time_in || '';
+    row['time_out'] = extra.time_out || '';
+    row['excuse_in'] = extra.excuse_in || '';
+    row['excuse_out'] = extra.excuse_out || '';
+    row['abscence'] = extra.abscence || '';
+    row['user'] = (user && user.email) || '';
+    row['created_at'] = new Date();
+    if (hasCol_(headers, 'import_batch_id')) row['import_batch_id'] = '';
+    if (hasCol_(headers, 'entry_source')) row['entry_source'] = extra.entry_source || 'manual';
+    if (hasCol_(headers, 'parsed_format')) row['parsed_format'] = extra.parsed_format || 'MANUAL';
+    if (hasCol_(headers, 'source_raw')) row['source_raw'] = extra.source_raw || '';
+
+    var rowNum = sheet.getLastRow() + 1;
+    sheet.appendRow(attRowValues_(headers, row));
+    noteMutation_();
+    /* D-21. This used to re-format the WHOLE column on every single insert —
+       one setNumberFormat over tens of thousands of cells per added punch.
+       The new cell is the only one that needs it. */
+    var atIdx = attColIdx_(headers, 'attendance_date_time');
+    if (atIdx !== -1) {
+      try { sheet.getRange(rowNum, atIdx + 1).setNumberFormat('dd/mm/yyyy hh:mm'); noteMutation_(); } catch (e) { /* non-fatal */ }
+    }
+    /* One row added by hand keeps its per-row history entry. The batch entry
+       that replaces per-row logging on import has no meaning here. */
+    try {
+      logHistory_(dbId, EMP_ATTENDANCE_SHEET, 'create_' + EMP_ATTENDANCE_SHEET + '_' + row['unique_id'],
+        row['unique_id'], (user && user.email) || '', 'create', row, null);
+    } catch (e) { /* history is never allowed to fail a write */ }
+
+    return { row: row, session: session, daySerial: daySerial };
+  }
+
   function addManualAttendance_(data, user, dbId) {
     var empId = attNumericEmpId_(data && data.emp_id);
     if (!empId) throw new Error('الموظف مطلوب');
@@ -2279,72 +2340,267 @@ const ValleyFoodsHRModules = (function () {
     if (!dt) throw new Error('تاريخ ووقت الحضور مطلوب');
     // Store as minute-precision numeric serial (integer-based, never text/Date).
     var serial = toSerialInt_(dateTimePartsToSerial_(dt.getDate(), dt.getMonth() + 1, dt.getFullYear(), dt.getHours(), dt.getMinutes()));
-    var daySerial = dateOnlyToSerial_(dt.getDate(), dt.getMonth() + 1, dt.getFullYear());
 
     return withAttLock_(function () {
-      /* I-2, one implementation. The window is this single minute, so the set
-         built here is one key wide however large the table is. */
-      var keySet = buildPunchKeySet_(dbId, [serial, serial]);
-      if (punchExists_(keySet, empId, serial)) {
-        throw new Error('هذه البصمة مسجلة بالفعل لهذا الموظف في نفس التاريخ والوقت');
-      }
-
-      var session = resolveSession_(dbId, daySerial, user, '');
-
-      var sheet = getSheet_(EMP_ATTENDANCE_SHEET, dbId);
-      var headers = getHeaders_(sheet);
-      var row = {};
-      row['unique_id'] = Utilities.getUuid();
-      row['id'] = session.session_id;
-      row['emp_id'] = empId;
-      row['attendance_date_time'] = serial;
-      row['time_in'] = (data && data.time_in) || '';
-      row['time_out'] = (data && data.time_out) || '';
-      row['excuse_in'] = (data && data.excuse_in) || '';
-      row['excuse_out'] = (data && data.excuse_out) || '';
-      row['abscence'] = (data && data.abscence) || '';
-      row['user'] = (user && user.email) || '';
-      row['created_at'] = new Date();
-      if (hasCol_(headers, 'import_batch_id')) row['import_batch_id'] = '';
-      if (hasCol_(headers, 'entry_source')) row['entry_source'] = 'manual';
-      if (hasCol_(headers, 'parsed_format')) row['parsed_format'] = 'MANUAL';
-      if (hasCol_(headers, 'source_raw')) row['source_raw'] = '';
-
-      var rowNum = sheet.getLastRow() + 1;
-      sheet.appendRow(attRowValues_(headers, row));
-      noteMutation_();
-      /* D-21. This used to re-format the WHOLE column on every single insert —
-         one setNumberFormat over tens of thousands of cells per added punch.
-         The new cell is the only one that needs it. */
-      var atIdx = attColIdx_(headers, 'attendance_date_time');
-      if (atIdx !== -1) {
-        try { sheet.getRange(rowNum, atIdx + 1).setNumberFormat('dd/mm/yyyy hh:mm'); noteMutation_(); } catch (e) { /* non-fatal */ }
-      }
-      /* Manual adds keep their per-row history entry — it is one row, and the
-         batch row that replaces per-row logging on import does not exist here. */
-      try {
-        logHistory_(dbId, EMP_ATTENDANCE_SHEET, 'create_' + EMP_ATTENDANCE_SHEET + '_' + row['unique_id'],
-          row['unique_id'], (user && user.email) || '', 'create', row, null);
-      } catch (e) { /* history is never allowed to fail a write */ }
-
+      var res = attAddPunchLocked_(dbId, empId, serial, user, {
+        time_in: (data && data.time_in) || '',
+        time_out: (data && data.time_out) || '',
+        excuse_in: (data && data.excuse_in) || '',
+        excuse_out: (data && data.excuse_out) || '',
+        abscence: (data && data.abscence) || ''
+      });
+      var row = res.row;
       var _empMapMan = buildEmpNameMap_(dbId);
       var savedRecordMan = {
         unique_id: row['unique_id'], id: row['id'], emp_id: empId,
         employee_name: _empMapMan[String(empId)] || String(empId),
         attendance_date_time: serial,
         attendance_time_display: attendanceTimeDisplay_(serial),
-        session_date: daySerial,
-        session_date_display: sessionDateDisplay_(daySerial),
+        session_date: res.daySerial,
+        session_date_display: sessionDateDisplay_(res.daySerial),
         time_in: row['time_in'], time_out: row['time_out'],
         excuse_in: row['excuse_in'], excuse_out: row['excuse_out'], abscence: row['abscence'],
         user: row['user'], created_at: row['created_at']
       };
       return {
         status: 'success', message: 'تم تسجيل الحضور',
-        data: { unique_id: row['unique_id'], session_id: session.session_id, session_created: session.created },
+        data: { unique_id: row['unique_id'], session_id: res.session.session_id, session_created: res.session.created },
         record: savedRecordMan
       };
     });
+  }
+
+  // ===================== WORK QUEUES =====================
+  /**
+   * The review queue (D-16).
+   *
+   * valley_attendance_needs_review has existed all along with no UI at all —
+   * the result panel told the user to go and open a raw sheet by name. The
+   * sheet name never appears in the interface again.
+   */
+  function getAttendanceReview_(data, user, dbId) {
+    var wanted = String((data && data.status) || 'open').trim();
+    var rows = [];
+    var headers = [];
+    try {
+      ensureSheet_(dbId, ATT_REVIEW_SHEET, ['raw_row_text','reason','chosen_format','uploaded_by','uploaded_at']);
+      headers = getHeaders_(getSheet_(ATT_REVIEW_SHEET, dbId));
+      rows = getAllRecords_(dbId, ATT_REVIEW_SHEET);
+    } catch (e) { rows = []; }
+
+    var hasStatus = hasCol_(headers, 'review_status');
+    var hasId = hasCol_(headers, 'review_id');
+    var empMap = buildEmpNameMap_(dbId);
+
+    var out = [];
+    var openCount = 0;
+    rows.forEach(function (r) {
+      /* A row written before the §1 columns were added has no status. It is
+         open by definition — nothing has resolved it. */
+      var status = hasStatus ? String(r.review_status || 'open').trim() : 'open';
+      if (status === 'open') openCount++;
+      if (wanted !== 'all' && status !== wanted) return;
+      var guess = r.datetime_guess === '' || r.datetime_guess == null ? null : flexToSerial_(r.datetime_guess);
+      out.push({
+        review_id: hasId ? r.review_id : '',
+        raw_row_text: r.raw_row_text,
+        reason: r.reason,
+        chosen_format: r.chosen_format,
+        uploaded_by: r.uploaded_by,
+        uploaded_at: r.uploaded_at,
+        import_batch_id: r.import_batch_id === undefined ? '' : r.import_batch_id,
+        review_status: status,
+        emp_id_guess: r.emp_id_guess === undefined ? '' : r.emp_id_guess,
+        employee_name_guess: empMap[String(r.emp_id_guess)] || '',
+        datetime_guess: guess,
+        datetime_guess_display: guess === null ? '' : attendanceTimeDisplay_(guess),
+        resolved_by: r.resolved_by === undefined ? '' : r.resolved_by,
+        resolved_at: r.resolved_at === undefined ? '' : r.resolved_at
+      });
+    });
+    out.reverse();
+
+    var p = vfPage_(out, { limit: (data && data.loadAll) ? null : ((data && data.limit != null) ? Number(data.limit) : 25), offset: (data && data.offset) || 0 });
+    return {
+      status: 'success', rows: p.rows, total: p.total, open_count: openCount,
+      /* Without review_id there is no way to address one row, so the client
+         shows the queue read-only rather than offering a button that cannot
+         work. */
+      resolvable: hasId && hasStatus
+    };
+  }
+
+  /**
+   * Resolve one review row. `import` runs the SAME validated path as a manual
+   * add — lock, dedup, resolveSession_ — and flips the row to `fixed`;
+   * `discard` flips it to `discarded`. Nothing is ever deleted, so the audit
+   * trail survives either way.
+   */
+  function resolveAttendanceReview_(data, user, dbId) {
+    var d = data || {};
+    var reviewId = String(d.review_id || '').trim();
+    if (!reviewId) throw new Error('رقم صف المراجعة مطلوب');
+    var action = String(d.action || '').trim();
+    if (action !== 'import' && action !== 'discard') throw new Error('الإجراء غير معروف');
+
+    return withAttLock_(function () {
+      ensureSheet_(dbId, ATT_REVIEW_SHEET, ['raw_row_text','reason','chosen_format','uploaded_by','uploaded_at']);
+      var sheet = getSheet_(ATT_REVIEW_SHEET, dbId);
+      var headers = getHeaders_(sheet);
+      if (!hasCol_(headers, 'review_id') || !hasCol_(headers, 'review_status')) {
+        throw new Error('لا يمكن معالجة المراجعة: العمودان review_id و review_status غير موجودين في جدول valley_attendance_needs_review');
+      }
+      var target = null;
+      getAllRecords_(dbId, ATT_REVIEW_SHEET).forEach(function (r) {
+        if (String(r.review_id || '').trim() === reviewId) target = r;
+      });
+      if (!target) throw new Error('صف المراجعة غير موجود');
+      if (String(target.review_status || 'open').trim() !== 'open') {
+        throw new Error('تمت معالجة هذا الصف من قبل');
+      }
+
+      var updates = {
+        review_status: action === 'import' ? 'fixed' : 'discarded',
+        resolved_by: (user && user.email) || '',
+        resolved_at: new Date()
+      };
+
+      var imported = null;
+      if (action === 'import') {
+        var empId = attNumericEmpId_(d.emp_id !== undefined && d.emp_id !== '' ? d.emp_id : target.emp_id_guess);
+        if (empId === null) throw new Error('كود الموظف غير رقمي');
+        var serial = null;
+        if (d.attendance_date_time !== undefined && d.attendance_date_time !== '') {
+          var dt = parseDate_(d.attendance_date_time);
+          if (!dt) throw new Error('تاريخ ووقت البصمة مطلوب');
+          serial = toSerialInt_(dateTimePartsToSerial_(dt.getDate(), dt.getMonth() + 1, dt.getFullYear(), dt.getHours(), dt.getMinutes()));
+        } else {
+          serial = toSerialInt_(target.datetime_guess);
+        }
+        if (serial === null) throw new Error('تاريخ ووقت البصمة مطلوب');
+        var win = attPlausibleWindow_();
+        if (serial < win.min || serial > win.max) throw new Error('التاريخ خارج الفترة المعقولة');
+
+        var res = attAddPunchLocked_(dbId, empId, serial, user, {
+          entry_source: 'manual', parsed_format: 'MANUAL',
+          source_raw: String(target.raw_row_text || '').slice(0, 500)
+        });
+        imported = {
+          unique_id: res.row.unique_id, emp_id: empId,
+          attendance_date_time: serial,
+          attendance_time_display: attendanceTimeDisplay_(serial),
+          session_id: res.session.session_id, session_created: res.session.created
+        };
+      }
+
+      updateRowByCriteria_(sheet, 'review_id', reviewId, updates);
+      try {
+        logHistory_(dbId, ATT_REVIEW_SHEET, 'resolve_' + ATT_REVIEW_SHEET + '_' + reviewId, reviewId,
+          (user && user.email) || '', 'update', updates, { review_status: 'open' });
+      } catch (e) { /* history is never allowed to fail a write */ }
+
+      return {
+        status: 'success',
+        message: action === 'import' ? 'تم تسجيل البصمة وإغلاق صف المراجعة' : 'تم استبعاد الصف',
+        review_id: reviewId, action: action, imported: imported
+      };
+    });
+  }
+
+  /**
+   * The missing-punch queue (D-26).
+   *
+   * The cross product of the ACTIVE roster and every day in range that has a
+   * session — which is what makes an absence visible at all: an employee with
+   * no punches has no rows, so nothing derived from the punch table alone can
+   * ever mention them.
+   *
+   *   absent      0 punches
+   *   incomplete  a single punch, or an odd number of them
+   *   present     >= 2 punches, an even number
+   */
+  function getAttendanceExceptions_(data, user, dbId) {
+    var d = data || {};
+    var fromSerial = attDateOnlyInputToSerial_(d.from);
+    var toSerial = attDateOnlyInputToSerial_(d.to);
+    if (fromSerial === null || toSerial === null) throw new Error('تاريخ البداية والنهاية مطلوب');
+    if (toSerial < fromSerial) throw new Error('تاريخ النهاية قبل تاريخ البداية');
+
+    var sessions = [];
+    getAllRecords_(dbId, ATTENDANCE_SESSION_SHEET).forEach(function (s) {
+      var serial = flexToSerial_(s.session_date);
+      if (serial === null) return;
+      var day = Math.floor(serial);
+      if (day < fromSerial || day > toSerial) return;
+      var sid = String(s.session_id || '').trim();
+      if (sid) sessions.push({ session_id: sid, day: day });
+    });
+    sessions.sort(function (a, b) { return a.day - b.day; });
+
+    var sessionDay = {};
+    sessions.forEach(function (s) { sessionDay[s.session_id] = s.day; });
+
+    /* One pass: (day, emp) -> punch serials. */
+    var byDayEmp = {};
+    getAllRecords_(dbId, EMP_ATTENDANCE_SHEET).forEach(function (r) {
+      var day = sessionDay[String(r.id || '').trim()];
+      if (day === undefined) {
+        /* A punch whose session is outside the range, or orphaned: fall back to
+           its own date so it is still counted on the day it happened. */
+        var s = flexToSerial_(r.attendance_date_time);
+        if (s === null) return;
+        day = Math.floor(s);
+        if (day < fromSerial || day > toSerial) return;
+        if (sessionDay[String(r.id || '').trim()] === undefined && !sessions.some(function (x) { return x.day === day; })) return;
+      }
+      var emp = attNumericEmpId_(r.emp_id);
+      if (emp === null) return;
+      var key = day + '|' + emp;
+      var serial = flexToSerial_(r.attendance_date_time);
+      if (serial === null) return;
+      if (!byDayEmp[key]) byDayEmp[key] = [];
+      byDayEmp[key].push(serial);
+    });
+
+    var roster = [];
+    try { roster = getActiveEmployeeOptions_(dbId); } catch (e) { roster = []; }
+    var empMap = buildEmpNameMap_(dbId);
+
+    var rows = [];
+    var counts = { absent: 0, incomplete: 0, present: 0 };
+    sessions.forEach(function (s) {
+      roster.forEach(function (o) {
+        var emp = attNumericEmpId_(o.value);
+        if (emp === null) return;
+        var punches = byDayEmp[s.day + '|' + emp] || [];
+        var status = punches.length === 0 ? 'absent'
+          : ((punches.length === 1 || punches.length % 2 === 1) ? 'incomplete' : 'present');
+        counts[status]++;
+        if (status === 'present') return;   /* the queue is what needs work */
+        punches.sort(function (a, b) { return a - b; });
+        rows.push({
+          session_id: s.session_id,
+          session_date: s.day,
+          session_date_key: sessionDateKey_(s.day),
+          session_date_display: sessionDateDisplay_(s.day),
+          emp_id: emp,
+          employee_name: empMap[String(emp)] || String(emp),
+          punches: punches.length,
+          first_display: punches.length ? attendanceTimeOnly_(punches[0]) : '',
+          last_display: punches.length > 1 ? attendanceTimeOnly_(punches[punches.length - 1]) : '',
+          /* Which half is missing, so the printed form can say so. */
+          missing: punches.length === 0 ? 'both' : 'out',
+          status: status
+        });
+      });
+    });
+
+    rows.sort(function (a, b) { return (b.session_date - a.session_date) || (a.emp_id - b.emp_id); });
+    var p = vfPage_(rows, { limit: (d.loadAll) ? null : ((d.limit != null) ? Number(d.limit) : 100), offset: d.offset || 0 });
+    return {
+      status: 'success', rows: p.rows, total: p.total, counts: counts,
+      working_days: sessions.length
+    };
   }
 
   /**
@@ -8126,6 +8382,9 @@ const ValleyFoodsHRModules = (function () {
     ValleyFoods.register('commit_attendance_import', commitAttendanceImport_);
     ValleyFoods.register('get_attendance_report',     getAttendanceReport_);
     ValleyFoods.register('get_attendance_index',      getAttendanceIndex_);
+    ValleyFoods.register('get_attendance_review',     getAttendanceReview_);
+    ValleyFoods.register('resolve_attendance_review', resolveAttendanceReview_);
+    ValleyFoods.register('get_attendance_exceptions', getAttendanceExceptions_);
     ValleyFoods.register('get_attendance_batches',    getAttendanceBatches_);
     ValleyFoods.register('revert_attendance_import',  revertAttendanceImport_);
     ValleyFoods.register('add_upload_file',            addUploadFile_);
@@ -8249,6 +8508,9 @@ const ValleyFoodsHRModules = (function () {
     commitAttendanceImport_: commitAttendanceImport_,
     getAttendanceReport_: getAttendanceReport_,
     getAttendanceIndex_: getAttendanceIndex_,
+    getAttendanceReview_: getAttendanceReview_,
+    resolveAttendanceReview_: resolveAttendanceReview_,
+    getAttendanceExceptions_: getAttendanceExceptions_,
     getAttendanceBatches_: getAttendanceBatches_,
     revertAttendanceImport_: revertAttendanceImport_,
     addUploadFile_: addUploadFile_,

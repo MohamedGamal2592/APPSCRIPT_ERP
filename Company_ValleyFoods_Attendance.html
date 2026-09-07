@@ -103,6 +103,11 @@
     var CURRENT_DAY = null;
     /* The roster, fetched once (D-22) instead of riding on a punch read. */
     var EMPLOYEES = null;
+    /* The two work queues. */
+    var REVIEW = [];
+    var REVIEW_STATUS = 'open';
+    var REVIEW_RESOLVABLE = false;
+    var EXCEPTIONS = [];
     var BATCHES_TOTAL = 0;
     /* The parsed file, in the browser. It never becomes a string on the wire
        again — only the rows do. */
@@ -128,6 +133,7 @@
       document.getElementById('vf-att-content').innerHTML = renderContent();
       bindEvents();
       loadSessions();
+      loadReview();
       if (CAN_WRITE) loadBatches();
     }
 
@@ -142,6 +148,8 @@
       return '<div class="vf-att-dashboard">' +
         (CAN_WRITE ? renderUploadSection() : '') +
         (CAN_WRITE ? renderManualSection() : '') +
+        renderReviewSection() +
+        renderExceptionsSection() +
         renderForgetSection() +
         renderReportSection() +
         renderSessionsSection() +
@@ -1003,6 +1011,233 @@
         .finally(function () { UI.hideSpinner(); });
     }
 
+    /* ================= WORK QUEUES ================= */
+    /* D-16. valley_attendance_needs_review has existed all along with no UI at
+       all — the old result panel told the user to go and open a raw sheet by
+       name. That sheet name does not appear anywhere in this interface. */
+    function renderReviewSection() {
+      return card('صفوف تحتاج مراجعة <span id="vf-review-badge" class="vf-badge warn" style="display:none;"></span>',
+        '<div id="vf-review-body"><p class="vf-text-muted">جاري التحميل...</p></div>',
+        '<button id="vf-review-all-btn" class="btn btn-outline">عرض المعالج أيضاً</button>');
+    }
+
+    function loadReview(status) {
+      REVIEW_STATUS = status || REVIEW_STATUS || 'open';
+      companyCall('get_attendance_review', { status: REVIEW_STATUS, loadAll: true })
+        .then(function (r) {
+          REVIEW = (r && r.rows) || [];
+          REVIEW_RESOLVABLE = !!(r && r.resolvable);
+          var badge = document.getElementById('vf-review-badge');
+          if (badge) {
+            var n = (r && r.open_count) || 0;
+            badge.innerHTML = n ? String(n) : '';
+            badge.style.display = n ? 'inline-block' : 'none';
+          }
+          renderReviewTable();
+        })
+        .catch(function () {
+          var c = document.getElementById('vf-review-body');
+          if (c) c.innerHTML = '<p class="vf-text-muted">لا توجد صفوف تحتاج مراجعة.</p>';
+        });
+    }
+
+    function renderReviewTable() {
+      var container = document.getElementById('vf-review-body');
+      if (!container) return;
+      if (!REVIEW.length) {
+        container.innerHTML = '<p class="vf-text-muted">' +
+          (REVIEW_STATUS === 'open' ? 'لا توجد صفوف تحتاج مراجعة. 👍' : 'لا توجد صفوف بهذه الحالة.') + '</p>';
+        return;
+      }
+      var headers = ['الصف كما ورد', 'السبب', 'الكود المقترح', 'التاريخ المقترح', 'الحالة',
+        { key: 'actions', label: 'إجراءات' }];
+      var rows = REVIEW.map(function (r) {
+        var acts = [];
+        if (CAN_WRITE && REVIEW_RESOLVABLE && r.review_status === 'open') {
+          acts.push({ label: '✔️ تسجيل', onclick: 'ATT_PAGE.showReviewFix(\'' + esc(r.review_id) + '\')' });
+          acts.push({ label: '🗑️ استبعاد', onclick: 'ATT_PAGE.discardReview(\'' + esc(r.review_id) + '\')' });
+        }
+        return [
+          '<span style="font-family:monospace;font-size:11px;direction:ltr;display:inline-block;text-align:left;">' + esc(r.raw_row_text) + '</span>',
+          esc(r.reason),
+          esc(r.emp_id_guess || '-') + (r.employee_name_guess ? ' — ' + esc(r.employee_name_guess) : ''),
+          esc(r.datetime_guess_display || '-'),
+          r.review_status === 'open' ? UIC.statusPill('مفتوح', 'warning')
+            : (r.review_status === 'fixed' ? UIC.statusPill('تم التسجيل', 'success') : UIC.statusPill('مستبعد', 'neutral')),
+          acts.length ? UIC.actionBtns(acts) : ''
+        ];
+      });
+      var html = '';
+      if (!REVIEW_RESOLVABLE) {
+        html += '<div class="vf-analysis-sub" style="color:#92400e;">ℹ️ العمودان review_id و review_status غير موجودين، ' +
+          'لذلك تظهر الصفوف للاطلاع فقط. أضف العمودين لتفعيل التسجيل والاستبعاد.</div>';
+      }
+      container.innerHTML = html + UIC.dataTable('vf-review-table-id', { headers: headers, rows: rows, pageSize: 50 });
+    }
+
+    /* The fix modal is the manual-entry form with the guess prefilled: the same
+       validated path — lock, dedup, resolveSession_ — runs on the server. */
+    function showReviewFix(reviewId) {
+      var r = REVIEW.filter(function (x) { return String(x.review_id) === String(reviewId); })[0];
+      if (!r) return;
+      var dtValue = '';
+      if (r.datetime_guess != null) {
+        var d = ATT_PARSER.serialToDate(r.datetime_guess);
+        dtValue = d.getUTCFullYear() + '-' + pad2_(d.getUTCMonth() + 1) + '-' + pad2_(d.getUTCDate()) +
+          'T' + pad2_(d.getUTCHours()) + ':' + pad2_(d.getUTCMinutes());
+      }
+      UIC.openModal('vf-review-fix-modal', {
+        title: 'تسجيل صف بعد المراجعة',
+        body: '<form id="vf-review-form">' +
+          '<div class="vf-sample-list">' + esc(r.raw_row_text) + '</div>' +
+          '<div class="vf-analysis-sub">السبب: ' + esc(r.reason) + '</div>' +
+          '<input type="hidden" id="vf-review-id" value="' + esc(r.review_id) + '">' +
+          '<div id="vf-review-emp-wrap">' + UIC.combo({
+            key: 'vf-review-emp-id', label: 'الموظف', required: true,
+            options: EMPLOYEES || [], value: r.emp_id_guess || '',
+            placeholder: EMPLOYEES ? 'اختر موظفاً...' : 'جاري تحميل الموظفين...'
+          }) + '</div>' +
+          UIC.field({ key: 'vf-review-datetime', label: 'تاريخ ووقت البصمة', type: 'datetime-local', required: true, value: dtValue }) +
+        '</form>',
+        onSave: 'ATT_PAGE.saveReviewFix()'
+      });
+      loadEmployees().then(function (opts) {
+        var wrap = document.getElementById('vf-review-emp-wrap');
+        if (!wrap) return;
+        wrap.innerHTML = UIC.combo({
+          key: 'vf-review-emp-id', label: 'الموظف', required: true,
+          options: opts, value: r.emp_id_guess || '', placeholder: 'اختر موظفاً...'
+        });
+      }).catch(function () {});
+    }
+
+    function saveReviewFix() {
+      if (!UIC.validateForm('vf-review-form')) return;
+      var emp = document.getElementById('vf-review-emp-id');
+      var payload = {
+        review_id: document.getElementById('vf-review-id').value,
+        action: 'import',
+        emp_id: emp ? emp.value : '',
+        attendance_date_time: document.getElementById('vf-review-datetime').value
+      };
+      if (!payload.emp_id) { UIC.toast('الموظف مطلوب', 'error'); return; }
+      if (!payload.attendance_date_time) { UIC.toast('تاريخ ووقت البصمة مطلوب', 'error'); return; }
+      UI.showSpinner();
+      companyCall('resolve_attendance_review', payload)
+        .then(function (res) {
+          UIC.closeModal('vf-review-fix-modal');
+          UIC.toast((res && res.message) || 'تم التسجيل', 'success');
+          INDEX = null;
+          loadReview();
+          loadSessions();
+        })
+        .catch(function (e) { UIC.toast((e && e.message) || 'فشل التسجيل', 'error'); })
+        .finally(function () { UI.hideSpinner(); });
+    }
+
+    function discardReview(reviewId) {
+      var r = REVIEW.filter(function (x) { return String(x.review_id) === String(reviewId); })[0];
+      UIC.confirm({
+        title: 'استبعاد الصف',
+        message: 'لن يتم تسجيل هذا الصف كبصمة. الصف نفسه يبقى في جدول المراجعة بحالة "مستبعد" ولا يُحذف.',
+        record: r ? r.raw_row_text : '',
+        confirmText: 'استبعاد',
+        danger: true
+      }).then(function (ok) {
+        if (!ok) return;
+        UI.showSpinner();
+        companyCall('resolve_attendance_review', { review_id: reviewId, action: 'discard' })
+          .then(function (res) {
+            UIC.toast((res && res.message) || 'تم الاستبعاد', 'success');
+            loadReview();
+          })
+          .catch(function (e) { UIC.toast((e && e.message) || 'تعذر الاستبعاد', 'error'); })
+          .finally(function () { UI.hideSpinner(); });
+      });
+    }
+
+    /* ---- missing punches (D-26) ---- */
+    function renderExceptionsSection() {
+      return card('غياب وبصمات ناقصة',
+        '<div class="vf-form-row">' +
+          '<div class="vf-form-group"><label>من تاريخ</label><input type="date" id="vf-exc-start" class="vf-input" value="' + esc(monthStartStr()) + '"></div>' +
+          '<div class="vf-form-group"><label>إلى تاريخ</label><input type="date" id="vf-exc-end" class="vf-input" value="' + esc(todayStr()) + '"></div>' +
+          '<div class="vf-form-group"><button id="vf-exc-btn" class="btn btn-primary">عرض</button></div>' +
+        '</div>' +
+        '<div id="vf-exc-body"></div>');
+    }
+
+    function loadExceptions() {
+      var from = document.getElementById('vf-exc-start').value;
+      var to = document.getElementById('vf-exc-end').value;
+      if (!from || !to) { UIC.toast('اختر الفترة', 'error'); return; }
+      UI.showSpinner();
+      companyCall('get_attendance_exceptions', { from: from, to: to, loadAll: true })
+        .then(function (r) {
+          EXCEPTIONS = (r && r.rows) || [];
+          renderExceptionsTable(r || {});
+        })
+        .catch(function (e) { UIC.toast((e && e.message) || 'تعذر تحميل البيانات', 'error'); })
+        .finally(function () { UI.hideSpinner(); });
+    }
+
+    function renderExceptionsTable(resp) {
+      var container = document.getElementById('vf-exc-body');
+      if (!container) return;
+      var counts = resp.counts || {};
+      var html = '<div class="vf-analysis-sub">أيام العمل في الفترة: <b>' + (resp.working_days || 0) + '</b> · ' +
+        'حضور مكتمل: <b style="color:#16a34a;">' + (counts.present || 0) + '</b> · ' +
+        'ناقص: <b style="color:#f59e0b;">' + (counts.incomplete || 0) + '</b> · ' +
+        'غياب: <b style="color:#dc2626;">' + (counts.absent || 0) + '</b></div>';
+      if (!EXCEPTIONS.length) {
+        container.innerHTML = html + '<p class="vf-text-muted">لا يوجد غياب أو بصمات ناقصة في هذه الفترة. 👍</p>';
+        return;
+      }
+      var headers = ['التاريخ', 'الكود', 'الاسم', 'البصمات', 'دخول', 'خروج', 'الحالة',
+        { key: 'actions', label: 'إجراءات' }];
+      var rows = EXCEPTIONS.map(function (r, i) {
+        var acts = [];
+        if (CAN_WRITE) {
+          acts.push({ label: '+ إضافة بصمة', onclick: 'ATT_PAGE.addPunchFromException(' + i + ')' });
+        }
+        acts.push({ label: '🖨️ نموذج نسيان', onclick: 'ATT_PAGE.printForgetFor(' + i + ')' });
+        return [
+          esc(r.session_date_display), esc(r.emp_id), esc(r.employee_name), r.punches,
+          esc(r.first_display || '-'), esc(r.last_display || '-'),
+          r.status === 'absent' ? UIC.statusPill('غياب', 'danger') : UIC.statusPill('ناقص', 'warning'),
+          UIC.actionBtns(acts)
+        ];
+      });
+      container.innerHTML = html + UIC.dataTable('vf-exc-table-id', { headers: headers, rows: rows, pageSize: 50 });
+    }
+
+    function addPunchFromException(i) {
+      var r = EXCEPTIONS[i];
+      if (!r) return;
+      showManualEntryModal({ date: r.session_date_key, empId: r.emp_id });
+    }
+
+    /** The form, prefilled from the row that says a punch is missing (D-26). */
+    function printForgetFor(i) {
+      var r = EXCEPTIONS[i];
+      if (!r) return;
+      UIC.printDoc(buildForgetFormHtml({
+        empName: r.employee_name,
+        empId: r.emp_id,
+        rows: [{
+          date: r.session_date_display,
+          direction: r.missing === 'both' ? 'both' : 'out',
+          expectedIn: r.first_display || '',
+          expectedOut: r.last_display || ''
+        }]
+      }), 'نموذج نسيان بصمة حضور', { features: 'width=800,height=600' });
+    }
+
+    function monthStartStr() {
+      var n = new Date();
+      return n.getFullYear() + '-' + pad2_(n.getMonth() + 1) + '-01';
+    }
+
     /* ================= REPORT ================= */
     function renderReportSection() {
       return card('تقرير الغياب التفاعلي',
@@ -1049,7 +1284,21 @@
         '<button id="vf-print-forget-btn" class="btn btn-outline">🖨️ طباعة النموذج</button>');
     }
 
-    function buildForgetFormHtml() {
+    /**
+     * The printed نموذج نسيان البصمة (D-26).
+     *
+     * `opts` is OPTIONAL and every insertion point below collapses to the empty
+     * string without it, so buildForgetFormHtml() with no argument still prints
+     * the blank form byte for byte. That is a verify assertion, not a hope:
+     * s16 compares the no-argument output against the committed fixture.
+     *
+     * @param {object} [opts] { empName, empId, dept, jobTitle,
+     *   rows: [{ date, direction, expectedIn, expectedOut, notes }] }
+     */
+    function buildForgetFormHtml(opts) {
+      var o = opts || {};
+      /* Empty in, empty out — identical markup to the blank form. */
+      var val = function (x) { return (x === undefined || x === null || x === '') ? '' : esc(String(x)); };
       var now = new Date();
       var pad = function (n) { return n < 10 ? '0' + n : '' + n; };
       var formattedDate = now.getFullYear() + '-' + pad(now.getMonth() + 1) + '-' + pad(now.getDate()) + ' ' + pad(now.getHours()) + ':' + pad(now.getMinutes());
@@ -1067,8 +1316,31 @@
           '<td><input type="text"></td>' +
         '</tr>';
       };
-      var dayRows = dayRow(true);
-      for (var i = 0; i < 4; i++) dayRows += dayRow(false);
+      /* A filled row carries a value attribute; the placeholder row and the
+         four blanks are produced EXACTLY as before when there is no data. */
+      var filledRow = function (r) {
+        var chk = function (on) { return on ? ' checked' : ''; };
+        var wantIn = r.direction === 'in' || r.direction === 'both';
+        var wantOut = r.direction === 'out' || r.direction === 'both';
+        return '<tr>' +
+          '<td><input type="text" value="' + val(r.date) + '"></td>' +
+          '<td><label><input type="checkbox"' + chk(wantIn) + '> دخول / In</label> ' +
+              '<label><input type="checkbox"' + chk(wantOut) + '> خروج / Out</label></td>' +
+          '<td><input type="text" value="' + val(r.expectedIn) + '"></td>' +
+          '<td><input type="text" value="' + val(r.expectedOut) + '"></td>' +
+          '<td><input type="text" value="' + val(r.notes) + '"></td>' +
+        '</tr>';
+      };
+      var dayRows;
+      var oRows = o.rows || [];
+      if (!oRows.length) {
+        dayRows = dayRow(true);
+        for (var i = 0; i < 4; i++) dayRows += dayRow(false);
+      } else {
+        dayRows = '';
+        for (var j = 0; j < oRows.length; j++) dayRows += filledRow(oRows[j]);
+        for (var k = oRows.length; k < 5; k++) dayRows += dayRow(false);
+      }
 
       return '<!DOCTYPE html><html lang="ar"><head><meta charset="UTF-8">' +
       '<title>Valley Employee Attendance Forget Form</title>' +
@@ -1131,10 +1403,10 @@
         '<div class="form-content">' +
           '<div class="section-title"><span>① بيانات الموظف</span><span>① Employee Details</span></div>' +
           '<div class="grid-2col">' +
-            '<div class="field-group"><label class="field-label"><span>اسم الموظف</span><span>Employee Name</span></label><div class="field-value"></div></div>' +
-            '<div class="field-group"><label class="field-label"><span>الرقم الوظيفي</span><span>Employee ID</span></label><div class="field-value"></div></div>' +
-            '<div class="field-group"><label class="field-label"><span>القسم</span><span>Department</span></label><div class="field-value"></div></div>' +
-            '<div class="field-group"><label class="field-label"><span>المسمى الوظيفي</span><span>Job Title</span></label><div class="field-value"></div></div>' +
+            '<div class="field-group"><label class="field-label"><span>اسم الموظف</span><span>Employee Name</span></label><div class="field-value">' + val(o.empName) + '</div></div>' +
+            '<div class="field-group"><label class="field-label"><span>الرقم الوظيفي</span><span>Employee ID</span></label><div class="field-value">' + val(o.empId) + '</div></div>' +
+            '<div class="field-group"><label class="field-label"><span>القسم</span><span>Department</span></label><div class="field-value">' + val(o.dept) + '</div></div>' +
+            '<div class="field-group"><label class="field-label"><span>المسمى الوظيفي</span><span>Job Title</span></label><div class="field-value">' + val(o.jobTitle) + '</div></div>' +
           '</div>' +
           '<div class="section-title"><span>② تفاصيل الحضور المفقود (أيام متعددة)</span><span>② Missing Attendance Details (Multi-Day)</span></div>' +
           '<table class="ot-table"><thead><tr>' +
@@ -1201,6 +1473,16 @@
 
       var reportBtn = document.getElementById('vf-show-report-btn');
       if (reportBtn) reportBtn.addEventListener('click', loadReport);
+
+      var excBtn = document.getElementById('vf-exc-btn');
+      if (excBtn) excBtn.addEventListener('click', loadExceptions);
+
+      var reviewAllBtn = document.getElementById('vf-review-all-btn');
+      if (reviewAllBtn) reviewAllBtn.addEventListener('click', function () {
+        REVIEW_STATUS = (REVIEW_STATUS === 'open') ? 'all' : 'open';
+        reviewAllBtn.innerHTML = (REVIEW_STATUS === 'open') ? 'عرض المعالج أيضاً' : 'عرض المفتوح فقط';
+        loadReview(REVIEW_STATUS);
+      });
     }
 
     document.addEventListener('DOMContentLoaded', renderApp);
@@ -1210,6 +1492,11 @@
       saveNewSession: saveNewSession,
       loadAllDays: loadAllDays,
       addPunchForDay: addPunchForDay,
+      showReviewFix: showReviewFix,
+      saveReviewFix: saveReviewFix,
+      discardReview: discardReview,
+      addPunchFromException: addPunchFromException,
+      printForgetFor: printForgetFor,
       resetUpload: resetUploadFlow,
       chooseFormat: chooseFormat,
       showAlternatives: showAlternatives,
