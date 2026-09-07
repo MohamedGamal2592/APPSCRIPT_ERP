@@ -108,6 +108,8 @@
     var REVIEW_STATUS = 'open';
     var REVIEW_RESOLVABLE = false;
     var EXCEPTIONS = [];
+    var REPORT_META = {};
+    var REPORT_RANGE = null;
     var BATCHES_TOTAL = 0;
     /* The parsed file, in the browser. It never becomes a string on the wire
        again — only the rows do. */
@@ -1239,27 +1241,34 @@
     }
 
     /* ================= REPORT ================= */
+    /* Renamed: it reports حضور AND غياب, and it now actually can, because the
+       rows come from the roster rather than from the punches. */
     function renderReportSection() {
-      return card('تقرير الغياب التفاعلي',
+      return card('تقرير الحضور والغياب',
         '<div class="vf-form-row">' +
-          '<div class="vf-form-group"><label>من تاريخ</label><input type="date" id="vf-report-start" class="vf-input" value="' + esc(todayStr()) + '"></div>' +
+          '<div class="vf-form-group"><label>من تاريخ</label><input type="date" id="vf-report-start" class="vf-input" value="' + esc(monthStartStr()) + '"></div>' +
           '<div class="vf-form-group"><label>إلى تاريخ</label><input type="date" id="vf-report-end" class="vf-input" value="' + esc(todayStr()) + '"></div>' +
           '<div class="vf-form-group"><button id="vf-show-report-btn" class="btn btn-primary">عرض التقرير</button></div>' +
         '</div>' +
-        '<div id="vf-report-table"></div>');
+        '<div id="vf-report-table"></div>' +
+        '<div id="vf-report-drill"></div>');
     }
 
     function loadReport() {
       var start = document.getElementById('vf-report-start').value;
       var end = document.getElementById('vf-report-end').value;
       if (!start || !end) { UIC.toast('اختر التاريخ', 'error'); return; }
+      REPORT_RANGE = { start: start, end: end };
       UI.showSpinner();
       companyCall('get_attendance_report', { start_date: start, end_date: end })
         .then(function (resp) {
           REPORT_DATA = (resp && resp.report) || [];
+          REPORT_META = resp || {};
+          var drill = document.getElementById('vf-report-drill');
+          if (drill) drill.innerHTML = '';
           renderReportTable();
         })
-        .catch(function () { UIC.toast('حدث خطأ أثناء تحميل التقرير', 'error'); })
+        .catch(function (e) { UIC.toast((e && e.message) || 'حدث خطأ أثناء تحميل التقرير', 'error'); })
         .finally(function () { UI.hideSpinner(); });
     }
 
@@ -1267,14 +1276,68 @@
       var container = document.getElementById('vf-report-table');
       if (!container) return;
       if (!REPORT_DATA.length) {
-        container.innerHTML = '<p class="vf-text-muted">لا توجد بيانات في هذه الفترة</p>';
+        container.innerHTML = '<p class="vf-text-muted">لا يوجد موظفون على رأس العمل لعرضهم.</p>';
         return;
       }
-      var headers = ['الكود', 'الاسم', 'الإجمالي', 'الحضور', 'الغياب', 'التأخير'];
+      var html = '<div class="vf-analysis-sub">أيام العمل في الفترة (' +
+        esc((REPORT_META.range || {}).start_display || '') + ' — ' +
+        esc((REPORT_META.range || {}).end_display || '') + '): <b>' +
+        (REPORT_META.working_days || 0) + '</b> يوم</div>';
+      var headers = ['الكود', 'الاسم', 'أيام العمل', 'أيام حضور', 'أيام غياب', 'أيام ناقصة',
+        'إجمالي الساعات', { key: 'actions', label: 'إجراءات' }];
       var rows = REPORT_DATA.map(function (r) {
-        return [esc(r.emp_id), esc(r.name_ar), r.total, r.present, r.absent, r.late];
+        return [
+          esc(r.emp_id), esc(r.name_ar),
+          r.working_days,
+          '<b style="color:#16a34a;">' + r.present_days + '</b>',
+          r.absent_days ? '<b style="color:#dc2626;">' + r.absent_days + '</b>' : '0',
+          r.incomplete_days ? '<b style="color:#f59e0b;">' + r.incomplete_days + '</b>' : '0',
+          r.worked_hours,
+          UIC.actionBtns([
+            { label: 'تفاصيل الأيام', onclick: 'ATT_PAGE.openReportDrill(' + r.emp_id + ')' }
+          ])
+        ];
       });
-      container.innerHTML = UIC.dataTable('vf-report-table-id', { headers: headers, rows: rows, pageSize: 100 });
+      container.innerHTML = html + UIC.dataTable('vf-report-table-id', {
+        headers: headers, rows: rows, pageSize: 50, title: 'تقرير الحضور والغياب'
+      });
+    }
+
+    /** Per-employee drilldown: one row per working day. */
+    function openReportDrill(empId) {
+      if (!REPORT_RANGE) return;
+      UI.showSpinner();
+      companyCall('get_attendance_report', {
+        start_date: REPORT_RANGE.start, end_date: REPORT_RANGE.end, emp_id: empId
+      })
+        .then(function (resp) {
+          var drill = document.getElementById('vf-report-drill');
+          if (!drill) return;
+          var rowsIn = (resp && resp.drilldown) || [];
+          var who = ((resp && resp.report) || []).filter(function (r) { return String(r.emp_id) === String(empId); })[0];
+          if (!rowsIn.length) {
+            drill.innerHTML = '<p class="vf-text-muted">لا توجد أيام عمل في هذه الفترة.</p>';
+            return;
+          }
+          drill.innerHTML = '<div style="font-weight:900;margin:16px 0 6px;">تفاصيل أيام ' +
+            esc(who ? who.name_ar : empId) + '</div>' +
+            UIC.dataTable('vf-report-drill-table', {
+              headers: ['اليوم', 'دخول', 'خروج', 'بصمات', 'ساعات', 'الحالة'],
+              rows: rowsIn.map(function (r) {
+                return [
+                  esc(r.session_date_display),
+                  esc(r.time_in_display || '-'), esc(r.time_out_display || '-'),
+                  r.punches, r.worked_hours,
+                  r.status === 'present' ? UIC.statusPill('حضور', 'success')
+                    : (r.status === 'absent' ? UIC.statusPill('غياب', 'danger') : UIC.statusPill('ناقص', 'warning'))
+                ];
+              }),
+              pageSize: 50,
+              title: 'تفاصيل أيام ' + (who ? who.name_ar : empId)
+            });
+        })
+        .catch(function (e) { UIC.toast((e && e.message) || 'تعذر تحميل التفاصيل', 'error'); })
+        .finally(function () { UI.hideSpinner(); });
     }
 
     /* ================= FORGET FORM (print) ================= */
@@ -1497,6 +1560,7 @@
       discardReview: discardReview,
       addPunchFromException: addPunchFromException,
       printForgetFor: printForgetFor,
+      openReportDrill: openReportDrill,
       resetUpload: resetUploadFlow,
       chooseFormat: chooseFormat,
       showAlternatives: showAlternatives,

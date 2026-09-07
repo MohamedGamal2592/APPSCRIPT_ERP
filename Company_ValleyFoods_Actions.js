@@ -2983,40 +2983,141 @@ const ValleyFoodsHRModules = (function () {
     });
   }
 
+  /**
+   * تقرير الحضور والغياب.
+   *
+   * The old handler answered "how many punch ROWS does this employee have",
+   * which is not a question anyone asked, and it answered it wrongly in four
+   * separate ways:
+   *
+   *   D-08  endDate.setHours(...) ran BEFORE the `if (!endDate)` guard, so a
+   *         blank end date was a TypeError rather than a message.
+   *   D-09  the range was built by mixing UTC-derived serial Dates with local
+   *         setHours, which clipped the last 2-3 hours of the final day. Both
+   *         bounds are now serials and no Date is constructed at all, so the
+   *         timezone question disappears rather than being compensated for.
+   *   D-17  الغياب and التأخير counted the abscence / excuse_in / excuse_out
+   *         columns, which no code path has ever written — so both were
+   *         structurally always zero. They are annotations now, never
+   *         aggregated.
+   *   D-18  an employee with ZERO punches never appeared at all, in a report
+   *         titled "تقرير الغياب". The output is roster-driven, so a fully
+   *         absent employee appears with أيام غياب = the working days.
+   *   D-19  الحضور counted punches, so an in and an out read as two
+   *         attendances. A day is a day.
+   */
   function getAttendanceReport_(data, user, dbId) {
-    var startDate = flexToDateTime_(data.start_date);
-    var endDate = flexToDateTime_(data.end_date);
-    endDate.setHours(23, 59, 59, 999);
-    if (!startDate || !endDate) throw new Error('تاريخ البداية والنهاية مطلوب');
+    var d = data || {};
 
-    var records = getAllRecords_(dbId, EMP_ATTENDANCE_SHEET);
-    var empOpts = getActiveEmployeeOptions_(dbId);
+    /* F.1 — null-check BEFORE touching either value, then stay in serial space. */
+    var startSerial = attDateOnlyInputToSerial_(d.start_date);
+    var endSerial = attDateOnlyInputToSerial_(d.end_date);
+    if (startSerial === null || endSerial === null) throw new Error('تاريخ البداية والنهاية مطلوب');
+    if (endSerial < startSerial) throw new Error('تاريخ النهاية قبل تاريخ البداية');
+    /* Exclusive upper bound at the START of the day after the last one, so a
+       punch at 23:30 on the final day is inside the range by construction. */
+    var endExclusive = endSerial + 1;
+
+    /* Working days: days in range that have a session. A day nobody worked and
+       nobody opened is not an absence, it is not a working day. */
+    var workingDays = {};
+    var sessionOfDay = {};
+    getAllRecords_(dbId, ATTENDANCE_SESSION_SHEET).forEach(function (s) {
+      var serial = flexToSerial_(s.session_date);
+      if (serial === null) return;
+      var day = Math.floor(serial);
+      if (day < startSerial || day >= endExclusive) return;
+      workingDays[day] = true;
+      var sid = String(s.session_id || '').trim();
+      if (sid) sessionOfDay[sid] = day;
+    });
+    var workingDayList = Object.keys(workingDays).map(Number).sort(function (a, b) { return a - b; });
+
+    /* (day, emp) -> punch serials, from one pass, filtered in serial space. */
+    var byDayEmp = {};
+    getAllRecords_(dbId, EMP_ATTENDANCE_SHEET).forEach(function (r) {
+      var s = flexToSerial_(r.attendance_date_time);
+      if (s === null) return;
+      if (s < startSerial || s >= endExclusive) return;
+      var emp = attNumericEmpId_(r.emp_id);
+      if (emp === null) return;
+      var day = Math.floor(s);
+      var key = day + '|' + emp;
+      if (!byDayEmp[key]) byDayEmp[key] = { punches: [], time_in: '', time_out: '' };
+      byDayEmp[key].punches.push(s);
+      /* §8.2 — a written time_in/time_out is a manual override and wins. */
+      if (r.time_in && String(r.time_in).trim()) byDayEmp[key].time_in = r.time_in;
+      if (r.time_out && String(r.time_out).trim()) byDayEmp[key].time_out = r.time_out;
+    });
+
+    /* F.3 — roster-driven. The employees come from the roster, not from the
+       punches, which is the whole reason a fully absent employee can appear. */
+    var roster = [];
+    try { roster = getActiveEmployeeOptions_(dbId); } catch (e) { roster = []; }
     var empMap = buildEmpNameMap_(dbId);
-    empOpts.forEach(function (o) {
-      var code = String(o.value);
-      if (!empMap[code]) empMap[code] = o.label;
+    var wantEmp = (d.emp_id === undefined || d.emp_id === '' || d.emp_id === null)
+      ? null : attNumericEmpId_(d.emp_id);
+
+    var report = [];
+    var drilldown = [];
+    roster.forEach(function (o) {
+      var emp = attNumericEmpId_(o.value);
+      if (emp === null) return;
+      var stat = {
+        emp_id: emp,
+        name_ar: empMap[String(emp)] || String(emp),
+        working_days: workingDayList.length,
+        present_days: 0,
+        absent_days: 0,
+        incomplete_days: 0,
+        punches: 0,
+        worked_minutes: 0
+      };
+      workingDayList.forEach(function (day) {
+        var g = byDayEmp[day + '|' + emp];
+        var punches = g ? g.punches.slice().sort(function (a, b) { return a - b; }) : [];
+        var status = punches.length === 0 ? 'absent'
+          : ((punches.length === 1 || punches.length % 2 === 1) ? 'incomplete' : 'present');
+        /* D-19: a day is counted once, whatever number of punches it holds. */
+        if (status === 'present') stat.present_days++;
+        else if (status === 'absent') stat.absent_days++;
+        else stat.incomplete_days++;
+        stat.punches += punches.length;
+
+        var first = punches.length ? punches[0] : null;
+        var last = punches.length ? punches[punches.length - 1] : null;
+        var minutes = (punches.length > 1) ? Math.round((last - first) * 1440) : 0;
+        stat.worked_minutes += minutes;
+
+        if (wantEmp !== null && emp === wantEmp) {
+          drilldown.push({
+            session_date: day,
+            session_date_display: sessionDateDisplay_(day),
+            time_in_display: (g && g.time_in) ? String(g.time_in) : (first === null ? '' : attendanceTimeOnly_(first)),
+            time_out_display: (g && g.time_out) ? String(g.time_out) : (punches.length > 1 ? attendanceTimeOnly_(last) : ''),
+            punches: punches.length,
+            worked_minutes: minutes,
+            worked_hours: Math.round((minutes / 60) * 100) / 100,
+            status: status
+          });
+        }
+      });
+      stat.worked_hours = Math.round((stat.worked_minutes / 60) * 100) / 100;
+      report.push(stat);
     });
 
-    var empStats = {};
-    records.forEach(function (r) {
-      var dt = flexToDateTime_(r.attendance_date_time);
-      if (!dt || dt < startDate || dt > endDate) return;
-      var eid = String(r.emp_id);
-      if (!empStats[eid]) {
-        empStats[eid] = { emp_id: r.emp_id, name_ar: empMap[eid] || r.emp_id, total: 0, present: 0, absent: 0, late: 0, excuse: 0 };
+    report.sort(function (a, b) { return a.emp_id - b.emp_id; });
+    return {
+      status: 'success',
+      report: report,
+      drilldown: drilldown,
+      working_days: workingDayList.length,
+      range: {
+        start: startSerial, end: endSerial,
+        start_display: sessionDateDisplay_(startSerial),
+        end_display: sessionDateDisplay_(endSerial)
       }
-      empStats[eid].total++;
-      if (r.abscence && String(r.abscence).trim()) {
-        empStats[eid].absent++;
-      } else {
-        empStats[eid].present++;
-      }
-      if (r.excuse_in && String(r.excuse_in).trim()) empStats[eid].late++;
-      if (r.excuse_out && String(r.excuse_out).trim()) empStats[eid].late++;
-    });
-
-    var report = Object.keys(empStats).map(function (k) { return empStats[k]; });
-    return { status: 'success', report: report };
+    };
   }
 
   // ===================== FILE UPLOAD =====================
