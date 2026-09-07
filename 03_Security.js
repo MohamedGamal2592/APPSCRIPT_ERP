@@ -355,12 +355,17 @@ function handleSetupWithDevice_(payload) {
 }
 
 // ==========================================
-// Role / permission matrix (versioned cache)
+// Role / permission matrix (authority-generation cache)
+// The key embeds authGeneration_(), so an admin save, a direct sheet edit with
+// the onAuthSheetEdit trigger installed, or the staleness ceiling all invalidate
+// it. CACHE_MATRIX_SECONDS is now only an occupancy ceiling, not the mechanism.
+// The role is normalised into the key, which also collapses the duplicate
+// entries the old key produced for roles differing only by case;
+// _hasUnifiedAccess_ already lowercases, so no lookup semantics change.
 // ==========================================
 function getRoleAuthorityMatrix_(userRole) {
   const cache = CacheService.getScriptCache();
-  const matrixVersion = cache.get('version_matrix') || '0';
-  const cacheKey = 'matrix_v_' + matrixVersion + '_' + userRole;
+  const cacheKey = 'mx_g' + authGeneration_() + '_' + String(userRole || '').trim().toLowerCase();
   try {
     const cached = cache.get(cacheKey);
     if (cached) return JSON.parse(cached);
@@ -376,6 +381,8 @@ function getRoleAuthorityMatrix_(userRole) {
     const pageIdx = headers.findIndex(h => String(h).trim().toLowerCase() === 'page_id');
     const accessIdx = headers.findIndex(h => String(h).trim().toLowerCase() === 'access_type');
     const statusIdx = headers.findIndex(h => String(h).trim().toLowerCase() === 'status');
+    // Structural bail: the sheet is not shaped like a matrix. FAIL CLOSED and,
+    // deliberately, DO NOT CACHE — an empty grant set must never earn the 6h TTL.
     if (roleIdx === -1 || pageIdx === -1) return {};
 
     const allowedPages = {};
@@ -399,6 +406,8 @@ function getRoleAuthorityMatrix_(userRole) {
 
     try { cache.put(cacheKey, JSON.stringify(allowedPages), CONFIG.CACHE_MATRIX_SECONDS); } catch (putErr) {}
     return allowedPages;
+  // Read failure: FAIL CLOSED and, deliberately, DO NOT CACHE. Same reason as
+  // the structural bail above.
   } catch (e) { return {}; }
 }
 
@@ -487,28 +496,39 @@ function readSystemWorkFlag_(sheet) {
 }
 
 /**
- * Cached kill-switch read. Cache key is versioned by 'version_killswitch'
- * (bumped by onEdit on manual B2 edits and explicitly by toggleKillSwitch_
- * on programmatic writes). Short fallback TTL covers the programmatic-write
- * case where onEdit never fires.
+ * Cached kill-switch read, keyed by the authority GENERATION ('ks_g<gen>').
+ *
+ * The old key was versioned by 'version_killswitch', bumped by the simple
+ * onEdit trigger — which never fires in a standalone script, so a direct B2
+ * edit was rescued only by the 15s TTL. Now toggleKillSwitch_ (via bumpVersion_)
+ * and the installable onAuthSheetEdit trigger both bump the generation, and
+ * authGeneration_'s time bucket caps staleness at AUTH_STALENESS_CEILING_SECONDS
+ * even if the trigger is missing. The TTL is no longer the mechanism.
  */
 function isSystemEnabled_() {
   try {
+    if (_ksMemo_ !== null) return _ksMemo_;
     const cache = CacheService.getScriptCache();
-    const version = cache.get('version_killswitch') || '0';
-    const cacheKey = 'killswitch_v_' + version;
+    const key = 'ks_g' + authGeneration_();
     let cached = null;
-    try { cached = cache.get(cacheKey); } catch (cacheErr) {}
-    if (cached !== null && cached !== undefined) return cached === 'true';
+    try { cached = cache.get(key); } catch (cacheErr) {}
+    if (cached !== null && cached !== undefined) { _ksMemo_ = (cached === 'true'); return _ksMemo_; }
 
     let enabled = true; // fail-open default
+    let readOk = true;
     try {
       const sheet = ensureSystemWorkSheet_();
       const flag = readSystemWorkFlag_(sheet);
       if (flag === 0) enabled = false;
-    } catch (readErr) { enabled = true; }
+    } catch (readErr) { enabled = true; readOk = false; }
 
-    try { cache.put(cacheKey, enabled ? 'true' : 'false', CONFIG.CACHE_KILLSWITCH_SECONDS); } catch (putErr) {}
+    // A FAILED read must not earn the long TTL — caching a fail-open default for
+    // six hours would hide a real shutdown.
+    try {
+      cache.put(key, enabled ? 'true' : 'false',
+        readOk ? CONFIG.CACHE_KILLSWITCH_SECONDS : CONFIG.CACHE_AUTH_FAILREAD_SECONDS);
+    } catch (putErr) {}
+    _ksMemo_ = enabled;
     return enabled;
   } catch (e) {
     return true;
