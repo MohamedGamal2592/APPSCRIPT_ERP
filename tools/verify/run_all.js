@@ -36,6 +36,7 @@ const STEPS = [
   ['s16_attendance.js', 'S16b — الحضور: invariants, date inference, batch undo'],
   ['s17_purchasing_save.js', 'S17 — vf_purchasing save: batched lines, batched delete'],
   ['s18_live_saves.js', 'S18 — UIC.Live: optimistic saves, rollback, change polling'],
+  ['s19_live_rollout.js', 'S19 — the UIC.Live rollout, page by page'],
   /* ── UI/UX programme (branch ui/odoo-parity) ── */
   ['ui1_anchor.js', 'UI-1.2 — popups escape the table clip box (U-01)'],
   ['ui1_sort.js', 'UI-1.3 — tri-state sort, load order preserved (U-03)'],

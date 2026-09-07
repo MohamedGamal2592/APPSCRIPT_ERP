@@ -311,9 +311,19 @@ if (predM) {
 section('8. P1 — no server call was added for filtering');
 
 (function () {
-  const calls = (products.match(/companyCall\('([a-z_]+)'/g) || [])
-    .map(s => s.replace(/companyCall\('/, '').replace(/'/, ''));
-  const uniq = Array.from(new Set(calls)).sort();
+  /* The action name is not always at the call site any more: UIC.Live.save
+     takes it as an option, so a converted page has `action: 'save_valley_product'`
+     and no literal companyCall for it. Both shapes are collected, because what
+     this assertion is actually about is that FILTERING added no server call —
+     not about which syntax the save happens to use.
+     get_page_versions is the cross-device change poll, which returns timestamps
+     and never filters anything, so it is allowed by name rather than silently
+     widening the set. */
+  const calls = []
+    .concat(products.match(/companyCall\('([a-z_]+)'/g) || [])
+    .concat(products.match(/action:\s*'([a-z_]+)'/g) || [])
+    .map(s => s.replace(/companyCall\('/, '').replace(/action:\s*'/, '').replace(/'/, ''));
+  const uniq = Array.from(new Set(calls)).filter(a => a !== 'get_page_versions').sort();
   ok(uniq.join(',') === 'get_valley_products,save_valley_product',
     'the products page still makes exactly its two pre-existing calls (' + uniq.join(', ') + ')');
   ok(/CATEGORY_OPTIONS = \(res && res\.category_options\)/.test(products),

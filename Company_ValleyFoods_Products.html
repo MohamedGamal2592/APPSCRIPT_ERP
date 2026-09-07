@@ -98,10 +98,18 @@
           '<div id="pf-table">' + UIC.tableSkeleton(['الكود', 'الاسم', 'النوع', 'الاسم الإنجليزي', 'العميل/المورد', 'الوحدة', 'الكرتونة او التغليف', 'الضريبة', 'التصنيف', 'الرصيد الحالي', 'القيمة (ج.م)', 'الباتشات']) + '</div>' +
         '</div></div>';
       load();
+      /* Another user's product edit lands here within one poll. */
+      UIC.Live.watchPage({
+        call: companyCall,
+        page: 'vf_products',
+        onChange: function () { load(true); }
+      });
     }
 
-    function load() {
-      UI.showSpinner();
+    /* quiet: refresh in the background, no blocking overlay. Used after an
+       optimistic save and by the change poll. */
+    function load(quiet) {
+      if (!quiet) UI.showSpinner();
       companyCall('get_valley_products')
         .then(function (res) {
           ROWS = (res && res.rows) || [];
@@ -115,8 +123,12 @@
           renderTable(res);
           renderFilters();
         })
-        .catch(function (e) { UIC.toast((e && e.message) || 'خطأ في تحميل البيانات', 'error'); })
-        .finally(function () { UI.hideSpinner(); try{schedulePrefetch();}catch(e){} });
+        .catch(function (e) {
+          /* A background refresh that fails must not shout at the user about a
+             list they can already see. */
+          if (!quiet) UIC.toast((e && e.message) || 'خطأ في تحميل البيانات', 'error');
+        })
+        .finally(function () { if (!quiet) UI.hideSpinner(); try{schedulePrefetch();}catch(e){} });
     }
 
     /* [P1] The filter bar lives in its own container OUTSIDE #pf-table, so a
@@ -331,15 +343,26 @@
         sales_tax: v('f-tax'),
         quality_controlled: v('f-quality')
       };
-      UI.showSpinner();
-      companyCall('save_valley_product', payload)
-        .then(function (r) {
-          UIC.closeModal('product-modal');
-          UIC.toast((r && r.message) || 'تم الحفظ بنجاح', 'success');
-          load();
-        })
-        .catch(function (e) { UIC.toast((e && e.message) || 'فشل الحفظ', 'error'); })
-        .finally(function () { UI.hideSpinner(); });
+      var existing = null;
+      if (editId != null) ROWS.forEach(function (r) { if (String(r.id) === String(editId)) existing = r; });
+      /* Start from the row that is already there so nothing the form does not
+         carry (stock figures, derived labels) is blanked while in flight. */
+      var draft = Object.assign({}, existing || {}, payload);
+      draft.id = (editId != null) ? editId : NEXT_ID;
+
+      UIC.Live.save({
+        call: companyCall,
+        action: 'save_valley_product',
+        data: payload,
+        list: ROWS,
+        key: 'id',
+        draft: draft,
+        render: function () { renderTable(LAST_RES); },
+        modal: 'product-modal',
+        message: 'تم الحفظ بنجاح',
+        onSuccess: function () { load(true); },
+        reload: load
+      }).catch(function () { /* UIC.Live has already reported and rolled back */ });
     }
 
     window.PRODUCTS_PAGE = { openAdd: openAdd, openEdit: openEdit, save: save, openBatches: openBatches, clearFilters: clearFilters };
