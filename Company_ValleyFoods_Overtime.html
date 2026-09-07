@@ -421,7 +421,7 @@
       deleteRow: function(uid){
         if(!UIC.canFull_()){ UIC.toast('غير مصرح / Not authorized','error'); return; }
         if(!confirm('هل تريد حذف هذا السجل؟ / Delete this record?')) return;
-        UI.showSpinner(); companyCall('delete_overtime', { unique_id: uid }).then(function(r){ UIC.toast(r.message||'تم الحذف / Deleted','success'); loadData(); }).catch(function(e){ UIC.toast(e.message||'خطأ','error'); }).finally(function(){ UI.hideSpinner(); });
+        UI.showSpinner(); companyCall('delete_overtime', { unique_id: uid }).then(function(r){ UIC.toast(r.message||'تم الحذف / Deleted','success'); loadData(true); }).catch(function(e){ UIC.toast(e.message||'خطأ','error'); }).finally(function(){ UI.hideSpinner(); });
       },
       printRow: function(uid){ window.print(); },
       viewAttachment: function(ref){ UIC.openDownload(scriptUrl + '?download=attachment&page=vf_hr_overtime&ref=' + encodeURIComponent(ref) + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN),

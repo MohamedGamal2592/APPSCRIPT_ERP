@@ -299,7 +299,7 @@
       if(!UIC.canFull_()){ UIC.toast('غير مصرح', 'error'); return; }
       if(!confirm('هل تريد حذف هذا السجل؟ / Delete this record?')) return;
       UI.showSpinner();
-      companyCall('delete_deduction', { unique_id: uid }).then(function(res){ UIC.toast(res.message||'تم الحذف','success'); fetchDeductions(); }).catch(function(e){ UIC.toast(e.message||'خطأ','error'); }).finally(function(){ UI.hideSpinner(); });
+      companyCall('delete_deduction', { unique_id: uid }).then(function(res){ UIC.toast(res.message||'تم الحذف','success'); fetchDeductions(true); }).catch(function(e){ UIC.toast(e.message||'خطأ','error'); }).finally(function(){ UI.hideSpinner(); });
     }
     function showError(e) {
       var body = document.getElementById('vf-ded-content');

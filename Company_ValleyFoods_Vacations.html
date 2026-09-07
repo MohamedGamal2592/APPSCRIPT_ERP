@@ -164,7 +164,7 @@
     function deleteVacation(uid){
       if(!UIC.canFull_()){ UIC.toast('غير مصرح', 'error'); return; }
       if(!confirm('هل تريد حذف هذا السجل؟ / Delete this record?')) return;
-      UI.showSpinner(); companyCall('delete_vacation', { unique_id: uid }).then(function(res){ UIC.toast(res.message||'تم الحذف','success'); fetchData(); }).catch(function(e){ UIC.toast(e.message||'خطأ','error'); }).finally(function(){ UI.hideSpinner(); });
+      UI.showSpinner(); companyCall('delete_vacation', { unique_id: uid }).then(function(res){ UIC.toast(res.message||'تم الحذف','success'); fetchData(true); }).catch(function(e){ UIC.toast(e.message||'خطأ','error'); }).finally(function(){ UI.hideSpinner(); });
     }
     function printVacation(uid){
       var r = ROWS.find(function(x){ return String(x.unique_id||x.id)===String(uid); });
