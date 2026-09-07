@@ -519,3 +519,64 @@ an arrow over empty page space.
   what stops a record name injecting markup. Anything that needs real markup in a dialog — a link,
   for instance — has to use `UIC.openModal` directly.
 
+---
+
+# Real-time kill switch + authority matrix (branch `feat/realtime-authority`)
+
+Full detail in [REALTIME_AUTHORITY_RESULTS.md](REALTIME_AUTHORITY_RESULTS.md). Nothing in this
+branch has been deployed, no trigger was created and no Script Property was set — all of that is
+below and all of it is yours to run.
+
+**What it fixes.** Changing a user's role or company, or setting them InActive, used to have no
+effect for up to **12 hours** no matter how many times they refreshed: the role was frozen into the
+session cache at login, and `bumpVersion_('ERP_Users')` wrote a key that nothing read. A change typed
+directly into `ERP_Pages_Matrix` or `ERP_system_work!B2` bumped nothing at all — the `onEdit` in the
+code has never fired, because simple triggers only run in container-bound projects and this is a
+standalone script. It was rescued only by a 15s / 120s cache expiry, which is also what forced the
+constant re-reads of the shared AUTH spreadsheet.
+
+Now a single durable **authority generation** in Script Properties keys the kill switch, the matrix
+and the user directory. Any admin save bumps it and every user sees the change on their next refresh,
+and the cache TTLs go to six hours, which removes the periodic sheet reads instead of adding to them.
+
+## Order matters — getting it wrong is the one way this makes things worse
+
+1. `AUTH_STALENESS_CEILING_SECONDS` on line 33 of `00_Config.js` reads **`300`**. If it reads `3600`,
+   stop — that is step 9, not step 1.
+2. `node tools/verify/run_all.js` prints **`All 41 checks pass.`**
+3. `clasp push`, then create or promote the deployment. Load any page as an ordinary user: it renders
+   normally and the console shows no error. The old and new cache keys cannot collide, so no stale
+   value survives the deploy.
+4. Signed in as **super admin**, run **`install_triggers`** from the admin UI **once**. Google will
+   prompt for a new spreadsheet scope — authorise it. This is the only step that touches your account.
+5. Apps Script editor → Triggers. A row exists with handler **`onAuthSheetEdit`**, source **From
+   spreadsheet**, event **On edit**, bound to the AUTH spreadsheet
+   (`1CmPxWAt8DYbXovgeofHpqe5MVaz1dQCzpqJvWP00HOM`). Run `install_triggers` a second time and confirm
+   there is still exactly **one** such row, not two.
+6. **The two-browser test.** A = super admin, B = an ordinary user sitting on a page. After each
+   action in A, refresh B **once**:
+   1. Kill switch OFF in the admin UI → B shows the shutdown page.
+   2. Kill switch ON in the admin UI → B shows the normal page.
+   3. Type `0` into `ERP_system_work!B2` **in the sheet** → B shows the shutdown page, **immediately**.
+   4. Type `1` back into B2 in the sheet → B is normal again.
+   5. Remove a page grant from B's role in the admin UI → the nav item is gone and the direct URL is denied.
+   6. Set that matrix row's `status` to `InActive` **in the sheet** → B is denied.
+   7. Change B's `role` in the admin UI → B gets the new role's pages. **This is the bug that used to
+      take 12 hours.**
+   8. Set B's `status` to `InActive` → B is bounced to login with the Arabic inactive message.
+   9. Leave everything idle 10 minutes, refresh → no error, no slowdown.
+7. **Row 6.3 is the trigger test.** If it takes up to five minutes instead of being immediate, the
+   trigger did not install — that is the safety ceiling doing its job, not an outage. Go back to
+   step 4. Rows 6.1, 6.2, 6.5, 6.7 and 6.8 are app-side and must be immediate either way.
+8. Project Settings → Script Properties now shows **`erp_gen`** with a millisecond timestamp. It
+   appears the first time any admin save runs; before that the system correctly reads `0`.
+9. **Only after step 6 passes in full**, change `AUTH_STALENESS_CEILING_SECONDS` on line 33 of
+   `00_Config.js` from `300` to **`3600`**, push and redeploy. This is the step that converts the
+   work into the full performance win: the B2 read drops from once per 15 seconds to at most once
+   per hour, and the per-role matrix read from once per 120 seconds to at most once per hour.
+10. Re-run rows 6.1, 6.3 and 6.7. If 6.3 is now slow, the trigger has stopped firing — at ceiling
+    3600 that is an hour of staleness. Put line 33 back to `300` and redeploy while you investigate.
+
+**Rolling back** is clean: reverting the deploy restores the old keys and the old short TTLs, which
+self-heal within 120s. Leave the `erp_gen` property — the old code never reads it. Leave the
+`onAuthSheetEdit` trigger too; it only calls `bumpVersion_`, which the old code also uses.
