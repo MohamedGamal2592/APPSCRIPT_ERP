@@ -82,7 +82,7 @@
 
   /* ---------- COMPANIES ---------- */
   function loadCompanies() {
-    UI.showSpinner();
+    UIC.readSkeleton('tab-body');
     API.call('admin_list_companies', {}, SESSION_TOKEN)
       .then(function (r) {
         renderCompanies(r.companies || []);
@@ -172,7 +172,7 @@
 
   /* ---------- USERS ---------- */
   function loadUsers() {
-    UI.showSpinner();
+    UIC.readSkeleton('tab-body');
     API.call('admin_list_users', {}, SESSION_TOKEN)
       .then(function (r) {
         window.__roleOptions = r.role_options || [];
@@ -272,7 +272,7 @@
 
   /* ---------- ROLES MATRIX ---------- */
   function loadMatrix() {
-    UI.showSpinner();
+    UIC.readSkeleton('tab-body');
     API.call('admin_list_matrix', {}, SESSION_TOKEN)
       .then(function (r) {
         window.__matrixData = r.matrix || [];
@@ -371,7 +371,7 @@
 
   /* ---------- SYSTEM PAGES ---------- */
   function loadPages() {
-    UI.showSpinner();
+    UIC.readSkeleton('tab-body');
     API.call('admin_list_pages', {}, SESSION_TOKEN)
       .then(function (r) {
         window.__systemPages = r.system_pages || [];
@@ -479,7 +479,7 @@
   var CURRENCY_CODES = ['EGP','USD','EUR','GBP','SAR','AED','KWD','QAR','BHD','OMR','JOD','CNY','JPY','INR','TRY','CAD','AUD','CHF'];
 
   function loadCurrency() {
-    UI.showSpinner();
+    UIC.readSkeleton('tab-body');
     API.call('admin_list_currency', {}, SESSION_TOKEN)
       .then(function (r) {
         window.__currencies = r.currencies || [];
@@ -547,7 +547,7 @@
 
   /* ---------- SYSTEM INVOICES ---------- */
   function loadInvoices() {
-    UI.showSpinner('جاري جلب فواتير الاشتراكات...');
+    UIC.readSkeleton('tab-body', { message: 'جاري جلب فواتير الاشتراكات...' });
     API.call('admin_list_invoices', {}, SESSION_TOKEN)
       .then(function (r) {
         window.__invoices = r.invoices || [];
@@ -817,7 +817,7 @@
 
   /* ---------- KILL SWITCH (super admin only) ---------- */
   function loadKillSwitch() {
-    UI.showSpinner();
+    UIC.readSkeleton('tab-body');
     API.call('toggle_kill_switch', {}, SESSION_TOKEN)
       .then(function (r) {
         renderKillSwitch(!!r.enabled);

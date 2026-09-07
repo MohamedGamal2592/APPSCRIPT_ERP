@@ -97,7 +97,7 @@
   }
 
   function fetchPage() {
-    UI.showSpinner('جاري تحميل البيانات...');
+    UIC.readSkeleton('review-table', { message: 'جاري تحميل البيانات...' });
     companyCall('get_main_review', FILTER)
       .then(function (r) {
         LAST.total = r.total || 0;

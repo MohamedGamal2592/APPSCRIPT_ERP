@@ -225,6 +225,9 @@ UI.showSpinner = function (message) {
 
 UI.hideSpinner = function () {
   try { UIC.hidePageLoading(); } catch (e) {}
+  /* [RT-3] A read that drew the progress hairline instead of the overlay is
+   * finished by the same call, so no call site had to learn a second name. */
+  try { UIC._clearReadProgress(); } catch (e) {}
 };
 
 /* [UI-3.4] UI.toast and UI.alert did not exist, and that was a real defect —
@@ -282,7 +285,7 @@ UI.submitOnce = function (btn, fn) {
     if (a.target && a.target !== '_self' && a.target !== '_top') return;
     var href = a.getAttribute('href') || '';
     if (href.indexOf('?action=') === -1) return;
-    try { UI.showSpinner(); } catch (err) {}
+    try { UIC.readSkeleton(); } catch (err) {}
   }, true);
   window.addEventListener('pageshow', function () {
     try { UI.hideSpinner(); } catch (err) {}

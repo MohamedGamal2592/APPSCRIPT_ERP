@@ -60,7 +60,7 @@
     }
 
     function loadData() {
-      UI.showSpinner();
+      UIC.readSkeleton('ac-batches-content');
       Promise.all([companyCall('get_ac_batches'), companyCall('get_ac_assessments')])
         .then(function (results) {
           batchRows = results[0].rows || [];
@@ -241,7 +241,7 @@
 
     /* ── candidates (read-only) ───────────────────────────────────────────── */
     function openCandidatesModal(batchId) {
-      UI.showSpinner();
+      UIC.readSkeleton('ac-candidates-table-wrap');
       companyCall('get_ac_batch', { id: batchId })
         .then(function (res) {
           var assignments = res.assignments || [];

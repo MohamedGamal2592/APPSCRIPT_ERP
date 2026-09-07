@@ -49,7 +49,7 @@
   }
 
   function fetchEmployees() {
-    UI.showSpinner();
+    UIC.readSkeleton('budget-hr-content');
     companyCall('get_legal_hr')
       .then(function (r) { EMPLOYEES = r.employees || []; render(); try{schedulePrefetch();}catch(e){}; })
       .catch(function (e) { showError(e); })
@@ -57,7 +57,7 @@
   }
 
   function fetchSalaries() {
-    UI.showSpinner();
+    UIC.readSkeleton('budget-hr-content');
     companyCall('get_legal_salaries', {
       payroll_month: SFILTER.month ? Number(SFILTER.month) : '',
       payroll_year: SFILTER.year ? Number(SFILTER.year) : ''

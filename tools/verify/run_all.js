@@ -78,6 +78,7 @@ const STEPS = [
 
   /* ── Realtime feel (branch feat/realtime-feel) ── */
   ['rt0_perf_marks.js', 'RT0 — one batched perf round trip per navigation, inert when off'],
+  ['rt1_skeletons.js', 'RT1 — reads draw skeletons; the overlay is for writes only'],
   ['rt8_search_scope.js', 'RT8 — no search box over a truncated list stays silent about it']
 ];
 

@@ -60,11 +60,11 @@
   var __filtersBuilt = false;
 
   function fetchData() {
-    UI.showSpinner([
+    UIC.readSkeleton('tl-content', { message: [
       'جاري إعداد تقرير حركة النقدية...',
       'جاري تجميع حركات الصناديق والمقبوضات والمدفوعات...',
       'لحظة، جاري عرض التقرير...'
-    ]);
+    ] });
     companyCall('get_cash_report', filterPayload())
       .then(function (r) {
         __boxOptions = r.box_options || [];

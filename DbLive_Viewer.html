@@ -65,7 +65,7 @@ function goBack() {
 }
 
 function init() {
-  UI.showSpinner('جاري تحميل القائمة...');
+  UIC.readSkeleton(null, { message: 'جاري تحميل القائمة...' });
   API.call('db_list_tables', {}, TOKEN)
     .then(function (r) {
       UI.hideSpinner();
@@ -88,7 +88,7 @@ function loadTable() {
   var tableName = document.getElementById('tableSelect').value;
   if (!tableName) return;
   CURRENT_TABLE = tableName;
-  UI.showSpinner('جاري تحميل البيانات...');
+  UIC.readSkeleton('tableContainer', { message: 'جاري تحميل البيانات...' });
   API.call('db_get_columns', { table: tableName }, TOKEN)
     .then(function (r) {
       if (r.status !== 'ok') throw new Error(r.message);
@@ -282,7 +282,7 @@ function openAnalysis() {
     results.forEach(function (r) {
       html += '<tr><td>' + esc(r.column) + '</td><td><code>' + esc(r.type) + '</code></td><td>' + esc(String(r.count)) + '</td></tr>';
     });
-    html += '</tbody></table>';
+    html += '</tbody></table></div>';
     document.getElementById('analysisContent').innerHTML = html;
     UIC.autoColumns('profile-table');
   });

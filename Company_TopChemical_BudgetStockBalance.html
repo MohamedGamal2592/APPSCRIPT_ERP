@@ -45,7 +45,7 @@
   }
 
   function fetchBalance() {
-    UI.showSpinner();
+    UIC.readSkeleton('stock-balance-content');
     companyCall('get_legal_current_products')
       .then(function (r) { renderBalance(r.items || []); })
       .catch(function (e) { showError(e); })

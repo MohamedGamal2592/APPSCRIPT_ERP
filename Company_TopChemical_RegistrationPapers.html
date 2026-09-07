@@ -82,7 +82,7 @@
   }
 
   function fetchPapers() {
-    UI.showSpinner();
+    UIC.readSkeleton();
     companyCall('get_registration_papers')
       .then(function (r) {
         window.__docTypes = r.document_types || [];

@@ -52,11 +52,11 @@
   }
 
   function fetchParties() {
-    UI.showSpinner([
+    UIC.readSkeleton('parties-content', { message: [
       'جاري تحميل قائمة العملاء والموردين...',
       'جاري استرجاع الأرصدة والبيانات...',
       'لحظة، جاري عرض الجدول...'
-    ]);
+    ] });
     companyCall('get_parties', { direction: DIRECTION_FILTER })
       .then(function (r) {
         window.__typeOptions = r.type_options || [];

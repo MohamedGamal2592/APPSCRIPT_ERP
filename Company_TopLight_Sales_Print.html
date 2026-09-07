@@ -65,12 +65,12 @@
   }
 
   function load() {
-    UI.showSpinner([
+    UIC.readSkeleton('invoice-root', { message: [
       'جاري تحميل فاتورة البيع...',
       'جاري استرجاع بيانات الأصناف والرصيد...',
       'لحظة، جاري إنهاء تحضير الفاتورة للطباعة...',
       'جاري تجهيز فاتورة كبيرة، برجاء الانتظار...'
-    ]);
+    ] });
     companyCall('get_sales_print', { sales_code: salesCode })
       .then(function (r) { renderInvoice(r.header, r.lines, r.returns, r.total_return_value, r.balance_before, r.balance_after); })
       .catch(function (e) {

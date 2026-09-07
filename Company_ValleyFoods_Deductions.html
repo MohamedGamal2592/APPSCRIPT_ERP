@@ -68,7 +68,7 @@
        user who has already seen the change and must not be interrupted
        to confirm it. */
     function fetchDeductions(quiet) {
-      if (!quiet) UI.showSpinner();
+      if (!quiet) UIC.readSkeleton('vf-ded-content');
       companyCall('get_deductions_data')
         .then(function (r) {
           ROWS = r.rows || [];
@@ -136,7 +136,7 @@
                 '<td>' + (r.deduction_value_other != null ? r.deduction_value_other : '') + '</td>' +
                 '<td>' + esc(r.details || '-') + '</td><td>' + dedAttCell + '</td><td>' + dedActions + '</td></tr>';
             });
-            html += '</tbody></table></div>';
+            html += '</tbody></table></div></div>';
           });
           html += '</div></div>';
         });

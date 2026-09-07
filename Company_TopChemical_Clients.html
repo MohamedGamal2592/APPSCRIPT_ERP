@@ -45,7 +45,7 @@
   }
 
   function fetchClients() {
-    UI.showSpinner();
+    UIC.readSkeleton('clients-content');
     companyCall('get_clients_vendors')
       .then(function (r) { renderClients(r.clients || []); })
       .catch(function (e) { showError(e); })

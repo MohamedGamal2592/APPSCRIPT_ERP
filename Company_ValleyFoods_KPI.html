@@ -39,7 +39,7 @@
       contentId: contentId,
       menuGroups: (window.VALLEYFOODS_MENU || [])
     });
-    UI.showSpinner('جاري تحميل المؤشرات...');
+    UIC.readSkeleton(null, { kind: 'card',  message: 'جاري تحميل المؤشرات...' });
     companyCall('get_kpi_data')
       .then(function(r){
         var inner = document.getElementById(contentId);

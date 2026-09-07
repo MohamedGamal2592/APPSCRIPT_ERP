@@ -45,11 +45,11 @@
       contentId: contentId
     });
 
-    UI.showSpinner([
+    UIC.readSkeleton(null, { kind: 'card',  message: [
       'جاري تحميل المؤشرات...',
       'جاري حساب المبيعات والأرصدة...',
       'لحظة، جاري عرض الرسوم البيانية...'
-    ]);
+    ] });
     companyCall('get_kpi_data')
       .then(function (r) {
         var inner = document.getElementById(contentId);

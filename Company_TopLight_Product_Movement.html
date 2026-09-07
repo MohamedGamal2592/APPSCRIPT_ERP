@@ -58,7 +58,7 @@
   }
 
   function load() {
-    UI.showSpinner('جاري تحميل حركة المنتج...');
+    UIC.readSkeleton('mov-root', { message: 'جاري تحميل حركة المنتج...' });
     companyCall('get_product_movement', filterPayload())
       .then(function (r) { render(r); })
       .catch(function (e) {

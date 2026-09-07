@@ -71,7 +71,7 @@
   }
 
   function fetchAccounts() {
-    UI.showSpinner();
+    UIC.readSkeleton('trust-content');
     companyCall('get_trust_accounts')
       .then(function (r) {
         window.__accountOptions = r.account_options || [];

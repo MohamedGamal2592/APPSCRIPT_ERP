@@ -54,6 +54,11 @@
   <script>
   (function () {
     var INVOICES = [], PARTIES = [], PRODUCTS = [], ENUMS = {};
+    /* Date range for the list. The invoices arrive one page at a time from
+       get_valley_sales_page, so the range has to travel with every fetch —
+       filtering the pages already in the browser would only ever search the
+       first 100 rows. */
+    var DATE_FROM = '', DATE_TO = '';
 
     function renderApp() {
       UIC.appShell('vf-root', {
@@ -99,7 +104,7 @@
        user who has already seen the change and must not be interrupted
        to confirm it. */
     function load(quiet) {
-      if (!quiet) UI.showSpinner();
+      if (!quiet) UIC.readSkeleton();
       var container = document.getElementById('sales-table');
       if (container) {
         UIC.PagedTable({
@@ -114,10 +119,12 @@
             { label: 'الصافي', numeric: true }, { label: 'الضريبة', numeric: true }, { label: 'الإجمالي', numeric: true },
             { label: 'الاعتماد', col: 'atom' }, ''],
           pageSize: 100,
-          emptyText: 'لا توجد فواتير',
+          emptyText: (DATE_FROM || DATE_TO) ? 'لا توجد فواتير في هذه الفترة' : 'لا توجد فواتير',
           onRendered: function (tid) { try { UIC.initTableSort(tid); } catch (e) {} },
           fetcher: function (offset, limit) {
-            return companyCall('get_valley_sales_page', { offset: offset, limit: limit });
+            return companyCall('get_valley_sales_page', {
+              offset: offset, limit: limit, from: DATE_FROM, to: DATE_TO
+            });
           },
           onFirst: function (r) {
             PARTIES = r.parties || [];
@@ -172,7 +179,7 @@
     }
 
     function openEdit(uid) {
-      UI.showSpinner();
+      UIC.readSkeleton();
       Promise.all([
         ensureBootstrap(),
         companyCall('get_valley_invoice_full', { invoice_unique_id: uid })
@@ -313,6 +320,7 @@
       if (!tb) return;
       tb.innerHTML = DRAFT_LINES.map(function (_, i) { return lineRowHtml(i, DRAFT_LINES[i]); }).join('') ||
         '<tr><td colspan="7" style="text-align:center;color:#94a3b8;">لا توجد بنود — اضغط «+ إضافة بند»</td></tr>';
+      UIC.autoColumns('lines-table');
       /* re-fetch batches for every line that already has a product */
       for (var i = 0; i < DRAFT_LINES.length; i++) {
         var pc = document.getElementById('ln-prod-' + i);
@@ -320,7 +328,6 @@
           var idx = parseInt(this.id.split('-').pop(), 10);
           onProductChange(idx);
         });
-      UIC.autoColumns('lines-table');
         if (DRAFT_LINES[i].product_id) loadBatches(i, DRAFT_LINES[i].product_id, DRAFT_LINES[i].allocations);
       }
       recalc();
@@ -464,7 +471,7 @@
         .then(function (r) {
           UIC.closeModal('sales-modal');
           UIC.toast((r && r.message) || 'تم الحفظ', 'success');
-          load();
+          load(true);
         })
         .catch(function (e) { UIC.toast((e && e.message) || 'فشل الحفظ', 'error'); })
         .finally(function () { UI.hideSpinner(); });
@@ -473,7 +480,7 @@
     function approve(uid) {
       UI.showSpinner();
       companyCall('approve_valley_invoice', { invoice_unique_id: uid })
-        .then(function (r) { UIC.toast((r && r.message) || 'تم', 'success'); load(); })
+        .then(function (r) { UIC.toast((r && r.message) || 'تم', 'success'); load(true); })
         .catch(function (e) { UIC.toast((e && e.message) || 'فشل', 'error'); })
         .finally(function () { UI.hideSpinner(); });
     }
@@ -482,7 +489,7 @@
       if (!confirm('سيتم حذف الفاتورة وجميع بنودها نهائياً. متابعة؟')) return;
       UI.showSpinner();
       companyCall('delete_valley_invoice', { invoice_unique_id: uid })
-        .then(function (r) { UIC.toast((r && r.message) || 'تم الحذف', 'success'); load(); })
+        .then(function (r) { UIC.toast((r && r.message) || 'تم الحذف', 'success'); load(true); })
         .catch(function (e) { UIC.toast((e && e.message) || 'فشل الحذف', 'error'); })
         .finally(function () { UI.hideSpinner(); });
     }
@@ -617,9 +624,10 @@
           '<td><input id="alloc-q-' + i + '-' + bi + '" class="input" type="number" min="0" step="0.01" max="' + b.available + '" value="' + (preQ || '') + '" data-buid="' + esc(b.batch_uid) + '" data-lot="' + esc(b.lot) + '" oninput="SALES_PAGE.recalc()" style="max-width:130px;direction:ltr;"></td>' +
         '</tr>';
       });
-      html += '</tbody></table>' +
+      html += '</tbody></table></div>' +
         '<div id="alloc-shortage-' + i + '" style="margin-top:6px;font-size:12px;display:none;"></div>';
       strip.innerHTML = html;
+      UIC.autoColumns(strip);
     }
 
     function collectAllocations(i) {
@@ -627,7 +635,6 @@
       for (var j = 0; ; j++) {
         var el = document.getElementById('alloc-q-' + i + '-' + j);
         if (!el) break;
-      UIC.autoColumns(strip);
         var q = parseFloat(el.value) || 0;
         if (q > 0) out.push({ batch_uid: el.getAttribute('data-buid'), lot: el.getAttribute('data-lot') || '', qty: q });
       }

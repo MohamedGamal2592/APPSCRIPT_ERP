@@ -32,7 +32,7 @@
   }
 
   function init() {
-    UI.showSpinner('جاري التحميل...');
+    UIC.readSkeleton('list', { message: 'جاري التحميل...' });
     API.call('list_user_views', {}, TOKEN)
       .then(function (r) {
         var views = (r && r.views) || [];

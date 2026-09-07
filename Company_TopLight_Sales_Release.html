@@ -59,11 +59,11 @@
   }
 
   function load() {
-    UI.showSpinner([
+    UIC.readSkeleton('release-root', { message: [
       'جاري تحميل إذن الصرف...',
       'جاري استرجاع أصناف وكميات الصرف...',
       'لحظة، جاري إعداد المستند للطباعة...'
-    ]);
+    ] });
     companyCall('get_sales_print', { sales_code: salesCode })
       .then(function (r) { render(r.header, r.lines); })
       .catch(function (e) {

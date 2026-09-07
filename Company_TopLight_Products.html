@@ -45,11 +45,11 @@
   }
 
   function fetchProducts() {
-    UI.showSpinner([
+    UIC.readSkeleton('products-content', { message: [
       'جاري تحميل قائمة المنتجات...',
       'جاري استرجاع الأرصدة والمخزون والتكاليف...',
       'لحظة، جاري عرض الجدول...'
-    ]);
+    ] });
     companyCall('get_products')
       .then(function (r) {
         window.__categoryOptions = r.category_options || [];

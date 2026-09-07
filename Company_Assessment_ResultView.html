@@ -86,7 +86,7 @@
 
     function load() {
       if (!ASSIGNMENT_ID) { UIC.toast('لا يوجد معرف محاولة', 'error'); return; }
-      UI.showSpinner();
+      UIC.readSkeleton('ac-rv-content');
       companyCall('get_ac_result', { id: ASSIGNMENT_ID })
         .then(function (res) {
           state = res;

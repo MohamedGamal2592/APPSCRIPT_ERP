@@ -121,7 +121,7 @@
   }
 
   function load() {
-    UI.showSpinner(['جاري تحميل تحليل تكلفة الفاتورة...', 'لحظة، جاري حساب الربحية...']);
+    UIC.readSkeleton('costing-root', { message: ['جاري تحميل تحليل تكلفة الفاتورة...', 'لحظة، جاري حساب الربحية...'] });
     companyCall('get_sales_costing', { sales_code: salesCode })
       .then(function (r) { renderDoc(r); })
       .catch(function (e) {

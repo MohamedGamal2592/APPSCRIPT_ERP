@@ -68,7 +68,7 @@
        user who has already seen the change and must not be interrupted
        to confirm it. */
     function load(quiet) {
-      if (!quiet) UI.showSpinner();
+      if (!quiet) UIC.readSkeleton();
       var container = document.getElementById('ret-table');
       if (container) {
         UIC.PagedTable({
@@ -107,7 +107,7 @@
     }
 
     function openAdd() {
-      UI.showSpinner();
+      UIC.readSkeleton();
       companyCall('get_valley_sales_list')
         .then(function (r) {
           var invs = (r.invoices || []).map(function (inv) {
@@ -227,7 +227,7 @@
         .then(function (r) {
           UIC.closeModal('return-modal');
           UIC.toast((r && r.message) || 'تم تسجيل المرتجع', 'success');
-          load();
+          load(true);
         })
         .catch(function (e) { UIC.toast((e && e.message) || 'فشل حفظ المرتجع', 'error'); })
         .finally(function () { UI.hideSpinner(); });

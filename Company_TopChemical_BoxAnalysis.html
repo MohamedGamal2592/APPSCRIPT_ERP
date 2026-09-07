@@ -265,7 +265,7 @@
   }
 
   function fetchPage() {
-    UI.showSpinner('جاري تحميل الحركات...');
+    UIC.readSkeleton('box-notices', { message: 'جاري تحميل الحركات...' });
     companyCall('get_box_analysis', FILTER)
       .then(function (r) {
         LAST.total = r.total || 0;
@@ -877,7 +877,7 @@
   function fetchAlerts() {
     var m = Number((document.getElementById('a-months') || {}).value) || 12;
     ALERTS.months = Math.min(Math.max(m, 1), 60);
-    UI.showSpinner('جاري تحليل الفترة...');
+    UIC.readSkeleton('alerts-body', { message: 'جاري تحليل الفترة...' });
     companyCall('get_box_alerts', {
       ref_date: LAST.ref_date, months: ALERTS.months,
       chart_of_accounts: FILTER.chart_of_accounts,
@@ -976,7 +976,7 @@
   function fetchItems() {
     var m = Number((document.getElementById('i-months') || {}).value) || 24;
     ITEMS.months = Math.min(Math.max(m, 1), 60);
-    UI.showSpinner('جاري تحليل البنود...');
+    UIC.readSkeleton('items-body', { message: 'جاري تحليل البنود...' });
     companyCall('get_box_item_history', {
       ref_date: LAST.ref_date, months: ITEMS.months,
       chart_of_accounts: FILTER.chart_of_accounts

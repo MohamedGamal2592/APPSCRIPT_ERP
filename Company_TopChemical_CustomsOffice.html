@@ -170,7 +170,7 @@
   }
 
   function fetchData() {
-    UI.showSpinner('جاري تحميل بيانات مكتب الجمارك...');
+    UIC.readSkeleton('customs-table', { message: 'جاري تحميل بيانات مكتب الجمارك...' });
     companyCall('get_customs_office', { scriptUrl: scriptUrl, sessionToken: SESSION_TOKEN })
       .then(function (d) {
         var s = d.summary || { egp_total: 0, usd_total: 0 };

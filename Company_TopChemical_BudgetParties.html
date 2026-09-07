@@ -67,7 +67,7 @@
   }
 
   function fetchParties() {
-    UI.showSpinner();
+    UIC.readSkeleton('budget-parties-content');
     companyCall('get_legal_parties')
       .then(function (r) { renderParties(r.parties || []); })
       .catch(function (e) { showError(e); })

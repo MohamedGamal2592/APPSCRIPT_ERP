@@ -90,12 +90,12 @@
   var __filtersBuilt = false;
 
   function load() {
-    UI.showSpinner([
+    UIC.readSkeleton('stmt-root', { message: [
       'جاري تحميل كشف الحساب...',
       'جاري تجميع حركات الفواتير والتحصيلات...',
       'لحظة، جاري حساب الأرصدة التراكمية...',
       'جاري إنهاء تجهيز كشف الحساب...'
-    ]);
+    ] });
     companyCall('get_customer_statement', { customer_id: customerId, date_from: __filters.from, date_to: __filters.to })
       .then(function (r) {
         var root = document.getElementById('stmt-root');

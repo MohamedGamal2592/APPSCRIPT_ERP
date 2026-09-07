@@ -127,7 +127,7 @@
   function fetchDashboard(year) {
     var inner = document.getElementById('tc-content');
     if (!inner) return;
-    UI.showSpinner('جاري تحميل بيانات لوحة التحكم...');
+    UIC.readSkeleton('tc-content', { kind: 'card',  message: 'جاري تحميل بيانات لوحة التحكم...' });
 
     companyCall('get_dashboard_data', { year: year })
       .then(function(d) {

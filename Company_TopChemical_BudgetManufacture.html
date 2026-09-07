@@ -52,7 +52,7 @@
   }
 
   function fetchAll() {
-    UI.showSpinner();
+    UIC.readSkeleton('budget-manufacture-content');
     Promise.all([
       companyCall('get_legal_manufacture'),
       companyCall('get_budget_refs')

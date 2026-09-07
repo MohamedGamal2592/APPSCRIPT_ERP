@@ -35,7 +35,7 @@
   }
 
   function init() {
-    UI.showSpinner('جاري التحميل...');
+    UIC.readSkeleton('list', { message: 'جاري التحميل...' });
     API.call('list_my_sessions', {}, TOKEN)
       .then(function (r) {
         var sessions = (r && r.sessions) || [];

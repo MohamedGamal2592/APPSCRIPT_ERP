@@ -719,7 +719,7 @@
           '<td style="color:#f59e0b;">' + (st.flagged || '-') + '</td>' +
           (isPreview ? '<td>' + (st.hasSession ? 'قائم' : 'جديد') + '</td>' : '') + '</tr>';
       });
-      html += '</tbody></table>';
+      html += '</tbody></table></div>';
       return html;
     }
 
@@ -1177,7 +1177,7 @@
       var from = document.getElementById('vf-exc-start').value;
       var to = document.getElementById('vf-exc-end').value;
       if (!from || !to) { UIC.toast('اختر الفترة', 'error'); return; }
-      if (!quiet) UI.showSpinner();
+      if (!quiet) UIC.readSkeleton('vf-exc-body');
       companyCall('get_attendance_exceptions', { from: from, to: to, loadAll: true })
         .then(function (r) {
           EXCEPTIONS = (r && r.rows) || [];
@@ -1263,7 +1263,7 @@
       var end = document.getElementById('vf-report-end').value;
       if (!start || !end) { UIC.toast('اختر التاريخ', 'error'); return; }
       REPORT_RANGE = { start: start, end: end };
-      UI.showSpinner();
+      UIC.readSkeleton('vf-report-drill');
       companyCall('get_attendance_report', { start_date: start, end_date: end })
         .then(function (resp) {
           REPORT_DATA = (resp && resp.report) || [];
@@ -1310,7 +1310,7 @@
     /** Per-employee drilldown: one row per working day. */
     function openReportDrill(empId) {
       if (!REPORT_RANGE) return;
-      UI.showSpinner();
+      UIC.readSkeleton('vf-report-drill');
       companyCall('get_attendance_report', {
         start_date: REPORT_RANGE.start, end_date: REPORT_RANGE.end, emp_id: empId
       })

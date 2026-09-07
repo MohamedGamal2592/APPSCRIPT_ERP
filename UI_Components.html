@@ -689,6 +689,18 @@ UIC._loadMessage = function (msg) {
   }
 };
 
+/* [RT-3] THE RULE, and it is a rule rather than a preference:
+ *
+ *   A full-screen overlay is for a WRITE THE USER MUST NOT INTERRUPT and for
+ *   NOTHING ELSE. A read draws a skeleton in place (UIC.readSkeleton). A
+ *   background refresh draws nothing but the progress hairline.
+ *
+ * This overlay covers the shell too, so raising it for a read takes away the
+ * nav, the header and every part of the page that was already on screen and
+ * working. If you are about to call this from a load/fetch/render function,
+ * you want UIC.readSkeleton instead — it falls back to this when it cannot
+ * find a container, so there is no case where the skeleton is the riskier
+ * choice. tools/verify/rt1_skeletons.js enforces it. */
 UIC.showPageLoading = function (msg) {
   try {
     UIC.ensurePageLoading();
@@ -1652,6 +1664,224 @@ UIC.listSkeleton = function (containerId, headers, rowCount) {
   el.innerHTML = '<div class="table-wrap">' + UIC.tableSkeleton(headers, rowCount || 8) + '</div>';
 };
 
+/* ── [RT-3] Skeletons: what a READ is allowed to draw ─────────────────────
+ *
+ * THE RULE, in one line: a full-screen overlay is for a WRITE THE USER MUST NOT
+ * INTERRUPT and for nothing else. A read draws a skeleton in place. A
+ * background refresh draws nothing but a hairline progress bar.
+ *
+ * Why this needed a rule rather than a helper. Reading a list and saving a
+ * record looked identical — both threw a grey modal over the whole document —
+ * so the screen never told anyone whether they were allowed to keep working.
+ * Worse, the overlay covers the shell as well, so the nav, the header and the
+ * parts of the page that were ALREADY on screen and perfectly usable became
+ * unusable for the duration of a fetch. That is the single most anti-realtime
+ * thing in this codebase and it cost nothing to fix, because it changes only
+ * what is drawn during a wait.
+ *
+ * UIC.readSkeleton is deliberately forgiving, because it is rolled out across
+ * a hundred call sites at once and a rollout that can break a page is not worth
+ * making:
+ *
+ *   - given a container it cannot find, it falls back to EXACTLY today's
+ *     overlay. A wrong id degrades to current behaviour, never to a blank page.
+ *   - given a container that already holds content, it does NOT wipe it. A
+ *     refresh over data someone is reading draws the progress hairline and
+ *     leaves the rows alone. Only a first paint gets a skeleton.
+ *   - with no argument at all it uses the shell's own content region, which
+ *     UIC.appShell gives every page it renders, so most call sites need to name
+ *     nothing.
+ *
+ * The matching UI.hideSpinner needs no change anywhere: hidePageLoading clamps
+ * its ref count at zero, so a hide that was never shown is already a no-op, and
+ * it now also clears any progress hairline this raised.
+ */
+
+/** The region a page's content lives in — UIC.appShell's <main class="app-content">. */
+UIC._contentRegion = function () {
+  try { return document.querySelector('.app-content') || null; } catch (e) { return null; }
+};
+
+UIC._resolveEl = function (target) {
+  try {
+    if (typeof target === 'string') return document.getElementById(target);
+    /* Anything else non-null is taken to be an element. Testing nodeType would
+     * be tidier and is wrong here: the verification harness's DOM stub does not
+     * set it, and a helper that silently does nothing under the harness is a
+     * helper nothing can check. */
+    if (target && typeof target === 'object') return target;
+  } catch (e) {}
+  return UIC._contentRegion();
+};
+
+/* Containers currently showing a progress hairline this module raised, and
+ * containers this module painted a skeleton into. Both lists are drained by
+ * UI.hideSpinner, which every one of these read paths already calls in its
+ * finally block. */
+UIC._readProgress = [];
+UIC._skelPainted = [];
+UIC._skelFallbacks = 0;
+
+/**
+ * Draw the right thing for a read in progress.
+ *   UIC.readSkeleton()                     → the shell's content region
+ *   UIC.readSkeleton('some-container')     → that element
+ *   UIC.readSkeleton(el, { kind: 'form' }) → form / card / table shimmer
+ * Returns true when a skeleton or a hairline was drawn, false when it fell
+ * back to the overlay.
+ */
+UIC.readSkeleton = function (target, opts) {
+  var o = opts || {};
+  var el = UIC._resolveEl(target);
+  if (!el) {
+    /* No container: this page is not built on the shell, or the id moved.
+     * Today's behaviour, unchanged, rather than a guess. */
+    UIC._skelFallbacks++;
+    UIC.showPageLoading(o.message);
+    return false;
+  }
+  var hasContent = false;
+  try { hasContent = !!(el.firstElementChild || String(el.textContent || '').trim()); } catch (e) {}
+  if (hasContent) {
+    /* [RT-3] A refresh must never move the page under someone who is reading
+     * it. The rows stay exactly where they are and a hairline says work is
+     * happening. This is the same idea as the `quiet` flag, applied to the
+     * cases the quiet rollout did not reach. */
+    try { UIC.listProgress(el, true); UIC._readProgress.push(el); } catch (e) {}
+    return true;
+  }
+  var kind = o.kind || 'table';
+  if (kind === 'form') UIC.formSkeleton(el, o.fields);
+  else if (kind === 'card') UIC.cardSkeleton(el, o.cards);
+  else UIC.tableSkeleton(el, o.headers, o.rows);
+  UIC._skelPainted.push(el);
+  return true;
+};
+
+/**
+ * Drop every hairline this module raised, and clear any skeleton still on
+ * screen. Called from UI.hideSpinner, which every converted read path already
+ * calls in its finally block.
+ *
+ * The second half is the safety net for the whole rollout. A skeleton is only
+ * ever painted into a container that was EMPTY, and the container is the one
+ * the page's own render assigns — but a page whose fetch fails, or whose render
+ * writes somewhere else, would otherwise be left shimmering forever with no way
+ * out. Clearing it restores exactly what that page shows today (an empty
+ * container), so the worst case of this phase is the current behaviour rather
+ * than a new stuck state.
+ */
+UIC._clearReadProgress = function () {
+  var list = UIC._readProgress;
+  UIC._readProgress = [];
+  list.forEach(function (el) { try { UIC.listProgress(el, false); } catch (e) {} });
+
+  var painted = UIC._skelPainted;
+  UIC._skelPainted = [];
+  painted.forEach(function (el) {
+    try {
+      var own = el.firstElementChild;
+      /* Only if the skeleton is STILL the only thing there — a render that
+       * replaced it has nothing to clear, and must not be touched. */
+      if (own && !own.nextElementSibling &&
+          (own.className || '').indexOf('rt-skel') !== -1) {
+        el.innerHTML = '';
+      }
+    } catch (e) {}
+  });
+};
+
+/* ── The three shapes ───────────────────────────────────────────────────── */
+
+/**
+ * A table skeleton.
+ *
+ * Two shapes, because the HTML-returning form already existed and is called by
+ * UIC.PagedTable and UIC.listSkeleton:
+ *
+ *   UIC.tableSkeleton(headersArray, rowCount)      → returns HTML  (unchanged)
+ *   UIC.tableSkeleton(containerIdOrEl, headers, n) → renders into it
+ *
+ * A string or an element in the first position means "container"; an array
+ * means "headers". Those are the only two things any caller has ever passed,
+ * so the discrimination is total rather than a heuristic.
+ *
+ * When headers are known the REAL <thead> is drawn — the same UIC._dtHeadRow
+ * the real table uses, with the same col-* width classes — so the table does
+ * not reflow when the rows land. A skeleton that jumps when data arrives reads
+ * as a bug; one that does not reads as loading.
+ */
+UIC.tableSkeleton = function (a, b, c) {
+  /* Headers are ALWAYS an array and a container never is, so this tells the
+   * two call shapes apart completely rather than by inspection. */
+  var isContainer = !Array.isArray(a);
+  var headers = isContainer ? (b || []) : (a || []);
+  var n = (isContainer ? c : b) || 8;
+
+  var head;
+  if (headers.length && typeof headers[0] === 'object') {
+    /* Real headers: reuse the real head row so the widths are the real widths. */
+    try {
+      head = UIC._dtHeadRow({ id: 'skeleton', headers: headers, cols: {}, selectable: false });
+    } catch (e) { head = null; }
+  }
+  if (!head) {
+    var cols = headers.map(function (h) {
+      return (h && typeof h === 'object') ? (h.label || '') : String(h == null ? '' : h);
+    });
+    head = '<tr>' + (cols.length ? cols : ['']).map(function (t) { return '<th>' + t + '</th>'; }).join('') + '</tr>';
+  }
+  var width = Math.max(1, (head.match(/<th/g) || ['']).length);
+  var body = '';
+  for (var i = 0; i < n; i++) {
+    body += '<tr>';
+    for (var j = 0; j < width; j++) body += '<td><div class="pt-sk-bar"></div></td>';
+    body += '</tr>';
+  }
+  var html =
+    '<div class="pt-loading"><div class="pt-spin"></div><span>جاري تحميل البيانات…</span></div>' +
+    '<table class="pt-sk-table table"><thead>' + head + '</thead><tbody>' + body + '</tbody></table>';
+
+  if (!isContainer) return html;
+  var el = UIC._resolveEl(a);
+  if (el) el.innerHTML = '<div class="rt-skel table-wrap" aria-busy="true" aria-live="polite">' + html + '</div>';
+  return html;
+};
+
+/**
+ * A form skeleton, for a modal body that is waiting on its record or its
+ * option lists. The point is that the form's SHAPE is on screen while the
+ * values arrive, instead of a grey sheet over the form the user opened.
+ */
+UIC.formSkeleton = function (target, fieldCount) {
+  var el = UIC._resolveEl(target);
+  if (!el) return;
+  var n = fieldCount || 6;
+  var rows = '';
+  for (var i = 0; i < n; i++) {
+    rows += '<div class="rt-skel-field">' +
+      '<div class="pt-sk-bar rt-skel-label"></div>' +
+      '<div class="pt-sk-bar rt-skel-input"></div>' +
+      '</div>';
+  }
+  el.innerHTML = '<div class="rt-skel rt-skel-form" aria-busy="true" aria-live="polite">' + rows + '</div>';
+};
+
+/** A card skeleton, for the dashboards, which have no table to shape. */
+UIC.cardSkeleton = function (target, count) {
+  var el = UIC._resolveEl(target);
+  if (!el) return;
+  var n = count || 4;
+  var cards = '';
+  for (var i = 0; i < n; i++) {
+    cards += '<div class="rt-skel-card">' +
+      '<div class="pt-sk-bar rt-skel-label"></div>' +
+      '<div class="pt-sk-bar rt-skel-figure"></div>' +
+      '</div>';
+  }
+  el.innerHTML = '<div class="rt-skel rt-skel-cards" aria-busy="true" aria-live="polite">' + cards + '</div>';
+};
+
 UIC.listProgress = function (containerId, on) {
   var el = typeof containerId === 'string' ? document.getElementById(containerId) : containerId;
   if (!el) return;
@@ -2174,19 +2404,6 @@ UIC.getCachedOptions = function (key) {
  *   mapRow(rawRecord) -> array of cell-HTML strings (UIC.dataTable row format)
  *   fetcher(offset, limit) -> Promise<{ rows: rawRecords[], total: number }>
  *   onFirst(firstResponse) -> capture globals (parties/enums) on first load   */
-/* Skeleton placeholder: shimmering table + spinner shown while the first fetch is in flight. */
-UIC.tableSkeleton = function (headers, rowCount) {
-  var cols = (headers || []).map(function (h) { return (h && typeof h === 'object') ? (h.label || '') : String(h == null ? '' : h); });
-  var n = rowCount || 8;
-  var ths = cols.map(function (c) { return '<th>' + c + '</th>'; }).join('');
-  var rows = '';
-  for (var i = 0; i < n; i++) {
-    rows += '<tr>' + cols.map(function () { return '<td><div class="pt-sk-bar"></div></td>'; }).join('') + '</tr>';
-  }
-  return '<div class="pt-loading"><div class="pt-spin"></div><span>جاري تحميل البيانات…</span></div>' +
-    '<table class="pt-sk-table"><thead><tr>' + ths + '</tr></thead><tbody>' + rows + '</tbody></table>';
-};
-
 UIC.PagedTable = function (opts) {
   try {
     var container = typeof opts.container === 'string' ? document.getElementById(opts.container) : opts.container;
@@ -4295,6 +4512,30 @@ document.addEventListener('keydown', function (e) {
   }
   .dt-batch-count { font-size: var(--text-sm); font-weight: 700; color: var(--brand-primary); }
   .dt-batch .btn { padding: 6px 12px; min-height: var(--tap-sm, 44px); }
+
+  /* ── [RT-3] Read skeletons ──────────────────────────────────── */
+  .rt-skel { padding: var(--space-3); }
+  .rt-skel .pt-sk-bar { opacity: .75; }
+  .rt-skel-form { display: grid; gap: var(--space-3); }
+  .rt-skel-field { display: grid; gap: 6px; }
+  .rt-skel-label { width: 34%; height: 10px; }
+  .rt-skel-input { width: 100%; height: 34px; border-radius: var(--radius-sm, 6px); }
+  .rt-skel-cards {
+    display: grid; gap: var(--space-3);
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  }
+  .rt-skel-card {
+    display: grid; gap: 10px;
+    padding: var(--space-3);
+    border: 1px solid var(--border-color); border-radius: var(--radius-md, 8px);
+    background: var(--bg-surface);
+  }
+  .rt-skel-figure { width: 60%; height: 24px; }
+  /* A skeleton is decoration, not information: someone who has asked for less
+     motion gets the shape without the shimmer. */
+  @media (prefers-reduced-motion: reduce) {
+    .rt-skel .pt-sk-bar { animation: none; }
+  }
 
   /* ── [RT-1] Search-scope notice ──────────────────────────────── */
   .dt-search-scope {

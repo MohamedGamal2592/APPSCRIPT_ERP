@@ -106,7 +106,7 @@
       contentId: 'budget-invoices-content',
       menuGroups: (window.TOPCHEMICAL_MENU || [])
     });
-    UI.showSpinner('جاري تحميل البيانات...');
+    UIC.readSkeleton(null, { message: 'جاري تحميل البيانات...' });
     companyCall('get_budget_refs')
       .then(function (r) {
         REFS = r.refs || {};
@@ -130,7 +130,7 @@
   }
 
   function fetchInvoices() {
-    UI.showSpinner('جاري جلب الفواتير...');
+    UIC.readSkeleton('budget-invoices-content', { message: 'جاري جلب الفواتير...' });
     Promise.all([
       companyCall('get_legal_invoices', {
         month: FILTER.month ? Number(FILTER.month) : '',

@@ -109,7 +109,7 @@
       var id = params.get('id');
       if (id) {
         state.mode = 'view'; state.id = id;
-        UI.showSpinner();
+        UIC.readSkeleton('ac-form-content');
         companyCall('get_ac_assessment', { id: id })
           .then(function (res) {
             state.header = res.assessment || {};

@@ -77,7 +77,7 @@
     /* [P1] Client-side filters. Nothing here reaches the server: category_options
        and current_stock_qty are already on the get_valley_products response, so
        filtering is a pure re-render over ROWS. */
-    var FILTERS = { category: '', qtyMin: null, qtyMax: null };
+    var FILTERS = { q: '', category: '', qtyMin: null, qtyMax: null };
     var LAST_RES = null;
 
     function renderApp() {
@@ -109,7 +109,7 @@
     /* quiet: refresh in the background, no blocking overlay. Used after an
        optimistic save and by the change poll. */
     function load(quiet) {
-      if (!quiet) UI.showSpinner();
+      if (!quiet) UIC.readSkeleton('pf-table');
       companyCall('get_valley_products')
         .then(function (res) {
           ROWS = (res && res.rows) || [];
@@ -139,6 +139,8 @@
       if (!host) return;
       host.innerHTML =
         '<div class="form-grid" style="background:var(--bg-subtle, #f8fafc);border:1px solid var(--border-color, #e5e7eb);border-radius:8px;padding:12px;margin-bottom:12px;">' +
+          UIC.field({ key: 'flt-search', label: 'بحث عام', type: 'search',
+            placeholder: 'ابحث في كل الأعمدة…', value: esc(FILTERS.q) }) +
           UIC.combo({ key: 'flt-category', label: 'التصنيف',
             options: [{ value: '', label: 'كل التصنيفات' }].concat(CATEGORY_OPTIONS || []),
             value: FILTERS.category, placeholder: 'اكتب للبحث…' }) +
@@ -161,6 +163,15 @@
           var v = cat ? (cat.value || '') : '';
           if (v !== FILTERS.category) { FILTERS.category = v; applyFilters(); }
         }, 0);
+      });
+
+      /* The same 250ms debounce as the qty bounds: one re-render per pause in
+         typing, not one per keystroke. */
+      var ts = null;
+      var search = document.getElementById('flt-search');
+      if (search) search.addEventListener('input', function () {
+        clearTimeout(ts);
+        ts = setTimeout(function () { FILTERS.q = search.value || ''; applyFilters(); }, 250);
       });
 
       var t = null;
@@ -194,6 +205,18 @@
        this exact function without booting the page. */
     function passesFilters(r, f) {
       f = f || FILTERS;
+      /* The general search. Every whitespace-separated word must appear
+         somewhere in the row, so "زيت 25" narrows instead of widening. It runs
+         over r.__search — the row's displayed values, joined and lowercased
+         once per render by renderTable — never over the rendered HTML, so a
+         style or a data- attribute can never be a hit. */
+      if (f.q) {
+        var hay = String(r.__search == null ? '' : r.__search).toLowerCase();
+        var terms = String(f.q).toLowerCase().split(/\s+/);
+        for (var i = 0; i < terms.length; i++) {
+          if (terms[i] && hay.indexOf(terms[i]) === -1) return false;
+        }
+      }
       if (f.category !== '' && f.category != null) {
         if (String(r.category == null ? '' : r.category) !== String(f.category)) return false;
       }
@@ -205,7 +228,7 @@
     }
 
     function filtersActive() {
-      return !!(FILTERS.category || FILTERS.qtyMin != null || FILTERS.qtyMax != null);
+      return !!(FILTERS.q || FILTERS.category || FILTERS.qtyMin != null || FILTERS.qtyMax != null);
     }
 
     /* [P1] Known and accepted (decision D-D): re-rendering rebuilds
@@ -214,7 +237,8 @@
     function applyFilters() { renderTable(LAST_RES); }
 
     function clearFilters() {
-      FILTERS.category = ''; FILTERS.qtyMin = null; FILTERS.qtyMax = null;
+      FILTERS.q = ''; FILTERS.category = ''; FILTERS.qtyMin = null; FILTERS.qtyMax = null;
+      var q = document.getElementById('flt-search'); if (q) q.value = '';
       var c = document.getElementById('flt-category');
       var cd = document.getElementById('flt-category_display');
       if (c) c.value = '';
@@ -235,6 +259,19 @@
       PARTY_OPTIONS.forEach(function (o) { partyMap[String(o.value)] = o.label; });
       var catMap = {};
       CATEGORY_OPTIONS.forEach(function (o) { catMap[String(o.value)] = o.label; });
+      /* What the general search reads: the values the columns SHOW, including
+         the mapped party and category labels, so what the user reads is what
+         they can search. Joined once per render rather than per keystroke. */
+      ROWS.forEach(function (r) {
+        r.__search = [
+          r.id, r.name_ar, r.product_type, r.name_en,
+          partyMap[String(r.client_id)] || r.client_id,
+          r.unit || r.price_unit, r.carton,
+          (r.sales_tax != null && r.sales_tax !== '' ? (Number(r.sales_tax) * 100).toFixed(2) + '%' : ''),
+          catMap[String(r.category)] || r.category,
+          r.current_stock_qty, r.stock_value, r.batch_count
+        ].map(function (v) { return v == null ? '' : String(v); }).join(' ').toLowerCase();
+      });
       var visible = ROWS.filter(function (r) { return passesFilters(r); });
       var rows = visible.map(function (r) {
         var partyLabel = partyMap[String(r.client_id)] || r.client_id || '-';
@@ -258,7 +295,7 @@
       });
       container.innerHTML = UIC.dataTable('products-table-id', {
         emptyState: filtersActive()
-          ? { title: 'لا توجد منتجات مطابقة للفلتر', body: 'جرّب توسيع نطاق الرصيد أو اختيار تصنيف آخر.' }
+          ? { title: 'لا توجد منتجات مطابقة للفلتر', body: 'جرّب كلمة بحث أخرى، أو توسيع نطاق الرصيد، أو اختيار تصنيف آخر.' }
           : { title: 'لا توجد منتجات' },
         headers: ['الكود', 'الاسم', 'النوع', 'الاسم الإنجليزي', 'العميل/المورد', 'الوحدة', 'الكرتونة او التغليف', 'الضريبة', 'التصنيف',
                   { label: 'الرصيد الحالي', numeric: true }, { label: 'القيمة (ج.م)', numeric: true }, { label: 'الباتشات', numeric: true }],
@@ -413,6 +450,7 @@
         body: inner,
         footer: false
       });
+      UIC.autoColumns('product-batches-table');
     }
 
     function chip(label, value) {
@@ -428,4 +466,3 @@
 </html>
 
 
-      UIC.autoColumns('product-batches-table');

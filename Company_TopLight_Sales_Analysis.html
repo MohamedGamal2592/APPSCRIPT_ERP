@@ -62,11 +62,11 @@
   var __filtersBuilt = false;
 
   function fetchData() {
-    UI.showSpinner([
+    UIC.readSkeleton('tl-content', { message: [
       'جاري تحليل المبيعات...',
       'جاري تجميع البيانات والكميات والأرباح...',
       'لحظة، جاري إعداد التقرير التحليلي...'
-    ]);
+    ] });
     companyCall('get_sales_analysis', filterPayload())
       .then(function (r) {
         __options.customer_options = r.customer_options || [];
@@ -154,7 +154,7 @@
   }
 
   function showInvoice(uid) {
-    UI.showSpinner('جاري تحميل الفاتورة...');
+    UIC.readSkeleton(null, { message: 'جاري تحميل الفاتورة...' });
     companyCall('get_sales_print', { sales_code: uid })
       .then(function (r) {
         var h = r.header;

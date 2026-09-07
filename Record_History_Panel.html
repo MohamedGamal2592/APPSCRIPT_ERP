@@ -34,7 +34,7 @@
   function init() {
     if (!SHEET || !RECORD) { UIC.toast('بيانات غير مكتملة', 'error'); return; }
     document.getElementById('subtitle').textContent = 'الجدول: ' + SHEET + ' • السجل رقم: ' + RECORD;
-    UI.showSpinner('جاري التحميل...');
+    UIC.readSkeleton('list', { message: 'جاري التحميل...' });
     API.call('get_record_history', { sheet_name: SHEET, record_id: RECORD }, TOKEN)
       .then(function (r) {
         var rows = (r && r.history) || [];

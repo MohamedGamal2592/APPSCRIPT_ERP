@@ -33,11 +33,11 @@
   function getVal(id) { var el = document.getElementById(id); return el ? el.value : ''; }
 
   function load() {
-    UI.showSpinner([
+    UIC.readSkeleton('returns-root', { message: [
       'جاري تحميل المرتجعات...',
       'جاري استرجاع أصناف الفاتورة والمرتجعات السابقة...',
       'لحظة، جاري عرض الشاشة...'
-    ]);
+    ] });
     companyCall('get_sales_returns', { invoice_id: invoiceId })
       .then(function (r) { __data = r; render(); try{schedulePrefetch();}catch(e){}; })
       .catch(function (e) {

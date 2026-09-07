@@ -89,11 +89,29 @@ converted.forEach(function (f) {
   if (src.indexOf('load(true)') !== -1) {
     check(/function load\(quiet\)/.test(src), label + ': load() takes the quiet flag it is called with',
       'load(true) is called but load() has no parameter');
-    /* Two overlay helpers are in use: UI.showSpinner on most pages, and the
-       page-local showLoading() on the two manufacturing screens. Either one
-       counts, so long as the quiet flag suppresses it. */
-    check(/if \(!quiet\) UI\.showSpinner\(\)/.test(src) || /if \(!quiet\) showLoading\(/.test(src),
-      label + ': and a quiet refresh does not raise the blocking overlay');
+    /* Three first-paint helpers are now in use: UIC.readSkeleton on the pages
+       the skeleton rollout converted, UI.showSpinner on the ones it did not,
+       and the page-local showLoading() on the two manufacturing screens. Any
+       of them counts, so long as the quiet flag suppresses it.
+     *
+     * UPDATED 2026-09-07 by the realtime-feel run, R3, and the reason is
+     * recorded here rather than in a commit nobody will re-read:
+     *
+     *   A read no longer raises the blocking overlay at all — it draws a
+     *   skeleton, or, over content that is already on screen, a progress
+     *   hairline. So `if (!quiet) UI.showSpinner()` is not the shape these
+     *   pages have any more.
+     *
+     * What this line guards is unchanged and is the thing that matters: a
+     * refresh the user did not ask for must not draw anything over the screen
+     * they are reading. The assertion is retargeted at the helper that now
+     * does the drawing, NOT weakened — an unguarded draw of any of the three
+     * still fails, and a page that drew unconditionally would still be
+     * caught. */
+    check(/if \(!quiet\) UIC\.readSkeleton\(/.test(src) ||
+          /if \(!quiet\) UI\.showSpinner\(\)/.test(src) ||
+          /if \(!quiet\) showLoading\(/.test(src),
+      label + ': and a quiet refresh does not draw over the screen');
   }
 
   /* An optimistic save has to be able to roll back, which needs all four. */

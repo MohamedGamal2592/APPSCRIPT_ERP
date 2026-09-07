@@ -69,7 +69,7 @@
        user who has already seen the change and must not be interrupted
        to confirm it. */
     function load(quiet) {
-      if (!quiet) UI.showSpinner();
+      if (!quiet) UIC.readSkeleton('tech-table');
       companyCall('get_valley_asset_technicals')
         .then(function (r) { RECORDS = r.records || []; PRODUCT_OPTIONS = r.product_options || []; renderTable(); try{schedulePrefetch();}catch(e){}; })
         .catch(function (e) { UIC.toast((e && e.message) || 'خطأ', 'error'); })

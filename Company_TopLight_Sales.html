@@ -48,11 +48,11 @@
       contentId: contentId
     });
 
-    UI.showSpinner([
+    UIC.readSkeleton('tl-content', { message: [
       'جاري تحميل فواتير المبيعات...',
       'جاري استرجاع خيارات العملاء والأصناف...',
       'لحظة، جاري إعداد جدول الفواتير...'
-    ]);
+    ] });
     renderList();
   }
 
@@ -187,7 +187,7 @@
     if (uid) {
       record = __headers.find(function (h) { return String(h.invoice_unique_id) === String(uid); }) || null;
     }
-    UI.showSpinner(['جاري استرجاع خيارات العملاء والأصناف...']);
+    UIC.readSkeleton('tl-content', { message: ['جاري استرجاع خيارات العملاء والأصناف...'] });
     ensureOptions()
       .then(function () { renderForm(record); })
       .catch(function (e) { showError(e); })

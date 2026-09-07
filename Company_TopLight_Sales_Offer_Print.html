@@ -56,12 +56,12 @@
   }
 
   function load() {
-    UI.showSpinner([
+    UIC.readSkeleton('invoice-root', { message: [
       'جاري تحميل عرض السعر...',
       'جاري استرجاع البنود والمواصفات...',
       'لحظة، جاري إعداد المستند للطباعة...',
       'جاري تجهيز البيانات، برجاء الانتظار...'
-    ]);
+    ] });
     companyCall('get_sales_offer_print', { offer_code: offerCode })
       .then(function (r) { renderInvoice(r.header, r.lines); })
       .catch(function (e) {

@@ -52,7 +52,7 @@
   }
 
   function fetchDebts() {
-    UI.showSpinner();
+    UIC.readSkeleton('debts-content');
     companyCall('get_ar_ap')
       .then(function (r) { renderDebts(r); })
       .catch(function (e) { showError(e); })
@@ -88,7 +88,7 @@
         ? '<div style="display:flex;justify-content:flex-end;margin-bottom:12px;"><button class="btn btn-primary" onclick="openDebtModal(\'\')">+ إضافة حركة</button></div>'
         : '') +
       '<div class="table-wrap">' +
-      '<table class="table">' +
+      '<table id="debts-table" class="table">' +
       '<thead><tr><th>العميل</th><th>مدين</th><th>دائن</th><th>الصافي</th><th>إجراءات</th><th></th></tr></thead>' +
       '<tbody>' + rows +
       '<tr class="grand-total"><td>الإجمالي</td>' +

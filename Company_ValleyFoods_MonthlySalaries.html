@@ -177,7 +177,7 @@
     }
 
     function loadData() {
-      UI.showSpinner();
+      UIC.readSkeleton('vf-msal-content');
       companyCall('get_monthly_salaries_data', { month: FILTER_MONTH, year: FILTER_YEAR }).then(function(res) {
         if (res) {
           salariesData.salaries = res.salaries || [];

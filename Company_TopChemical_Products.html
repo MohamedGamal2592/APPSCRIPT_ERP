@@ -45,7 +45,7 @@
   }
 
   function fetchProducts() {
-    UI.showSpinner();
+    UIC.readSkeleton('products-content');
     companyCall('get_products')
       .then(function (r) {
         window.__unitOptions = r.unit_options || [];

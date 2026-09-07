@@ -47,7 +47,7 @@
   }
 
   function fetchIncome() {
-    UI.showSpinner();
+    UIC.readSkeleton('budget-income-content');
     Promise.all([
       companyCall('get_budget_refs'),
       companyCall('get_income_statement', {})

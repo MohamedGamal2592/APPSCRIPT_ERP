@@ -70,11 +70,11 @@
   }
 
   function renderList() {
-    UI.showSpinner([
+    UIC.readSkeleton('tl-content', { message: [
       'جاري تحميل عمليات الشراء...',
       'جاري استرجاع الموردين والتكاليف...',
       'لحظة، جاري تجهيز جدول المشتريات...'
-    ]);
+    ] });
     companyCall('get_purchasing_headers')
       .then(function (r) {
         /* Phase 2.1: options no longer ride along with the list — see
@@ -176,7 +176,7 @@
     if (uid) {
       record = __headers.find(function (h) { return String(h.unique_id) === String(uid); }) || null;
     }
-    UI.showSpinner(['جاري استرجاع الموردين والأصناف...']);
+    UIC.readSkeleton('tl-content', { message: ['جاري استرجاع الموردين والأصناف...'] });
     ensureOptions()
       .then(function () { renderForm(record); })
       .catch(function (e) { showError(e); })

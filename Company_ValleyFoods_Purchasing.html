@@ -120,7 +120,7 @@
       // Called with no argument after a save/delete — keep whichever view the
       // user is currently in rather than silently dropping back to 10 rows.
       __loadedAll = arguments.length ? !!loadAll : __loadedAll;
-      if (!quiet) UI.showSpinner();
+      if (!quiet) UIC.readSkeleton('vf-purchasing-content');
       var payload = { from: __dateFrom, to: __dateTo };
       if (__loadedAll || __dateFrom || __dateTo) payload.loadAll = true;
       companyCall('get_valley_purchasing_costing', payload)
@@ -253,7 +253,7 @@
       if (code) {
         record = __headers.find(function (h) { return String(h.Code) === String(code); }) || null;
       }
-      UI.showSpinner('جاري استرجاع الأصناف والموردين...');
+      UIC.readSkeleton('vf-purchasing-content', { message: 'جاري استرجاع الأصناف والموردين...' });
       ensureOptions()
         .then(function () { renderForm(record); })
         .catch(function (e) { showError(e); })
@@ -760,7 +760,7 @@
     function openPrint(code) {
       var rec = __headers.find(function (h) { return String(h.Code) === String(code); }) || null;
       if (!rec) { UIC.toast('العملية غير موجودة', 'error'); return; }
-      UI.showSpinner('جاري تجهيز الطباعة...');
+      UIC.readSkeleton(null, { message: 'جاري تجهيز الطباعة...' });
       companyCall('get_valley_purchasing_lines', { code: code })
         .then(function (r) {
           var lines = (r && r.lines) || [];

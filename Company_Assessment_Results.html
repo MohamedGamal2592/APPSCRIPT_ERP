@@ -63,7 +63,7 @@
     }
 
     function loadData() {
-      UI.showSpinner();
+      UIC.readSkeleton('ac-results-content');
       companyCall('get_ac_results')
         .then(function (res) {
           allRows = res.rows || [];

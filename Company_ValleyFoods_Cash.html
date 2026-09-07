@@ -85,7 +85,7 @@
        after an optimistic save and by the change poll, where the user has
        already seen their change and must not be interrupted to confirm it. */
     function load(quiet) {
-      if (!quiet) UI.showSpinner();
+      if (!quiet) UIC.readSkeleton('vf-cash-content');
       companyCall('get_valley_cash', { from: DATE_FROM, to: DATE_TO })
         .then(function (r) {
           HEADERS = r.headers || [];
@@ -125,7 +125,7 @@
     }
 
     function saveView() {
-      SESSION.saveCurrentView('vf_cash', { box: BOX_FILTER || '' })
+      SESSION.saveCurrentView('vf_cash', { box: BOX_FILTER || '', from: DATE_FROM || '', to: DATE_TO || '' })
         .then(function () { UIC.toast('تم حفظ العرض', 'success'); })
         .catch(function (e) { if (e !== 'cancelled') UIC.toast((e && e.message) || 'تعذر الحفظ', 'error'); });
     }
@@ -454,7 +454,10 @@
         .then(function (r) {
           UIC.closeModal('transfer-modal');
           UIC.toast((r && r.message) || 'تم التحويل', 'success');
-          load();
+          /* One transfer becomes TWO ledger rows with server-assigned ids, so
+             there is no honest row to draw ahead of the reply. It refreshes in
+             the background instead — the user is not held up either way. */
+          load(true);
         })
         .catch(function (e) { UIC.toast((e && e.message) || 'فشل التحويل', 'error'); })
         .finally(function () { UI.hideSpinner(); });
@@ -511,7 +514,16 @@
       saveTransfer: saveTransfer,
       approve: approve,
       remove: remove,
-      setBoxFilter: function (box) { BOX_FILTER = box; renderList(); }
+      setBoxFilter: function (box) { BOX_FILTER = box; renderList(); },
+      /* Both go back to the server: the range is applied to the full ledger,
+         not to the slice already in the browser. */
+      applyDateFilter: function () {
+        var v = UIC.dateRangeValues('cash-date');
+        if (v.from && v.to && v.from > v.to) { UIC.toast('«من تاريخ» بعد «إلى تاريخ»', 'error'); return; }
+        DATE_FROM = v.from; DATE_TO = v.to;
+        load();
+      },
+      clearDateFilter: function () { DATE_FROM = ''; DATE_TO = ''; load(); }
     };
 
     document.addEventListener('DOMContentLoaded', renderApp);

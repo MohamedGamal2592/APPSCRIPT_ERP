@@ -57,7 +57,7 @@
   }
 
   function fetchBarcodes() {
-    UI.showSpinner();
+    UIC.readSkeleton('barcode-content');
     companyCall('get_barcode')
       .then(function (r) {
         window.__productOptions = r.product_options || [];

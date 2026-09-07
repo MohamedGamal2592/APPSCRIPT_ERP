@@ -155,7 +155,7 @@
 
     /* ---------- ENTRY MODAL ---------- */
     function openEdit(uid) {
-      UI.showSpinner();
+      UIC.readSkeleton();
       Promise.all([
         companyCall('get_valley_mfg_orders'),
         companyCall('get_valley_mfg_order_full', { mo_uid: uid })
@@ -416,7 +416,7 @@
               '<td class="num">' + Number(b.available).toLocaleString('en-US', { maximumFractionDigits: 2 }) + '</td>' +
               '<td><input id="cons-q-' + i + '-' + bi + '" class="input" type="number" min="0" max="' + b.available + '" step="0.01" data-buid="' + esc(b.batch_uid) + '" data-pid="' + esc(consItem.item_pid) + '" data-lot="' + esc(b.lot) + '" value="" oninput="MFG_PAGE.recalcCons()" style="max-width:130px;direction:ltr;"></td></tr>';
           });
-          html += '</tbody></table>';
+          html += '</tbody></table></div>';
           holder.innerHTML = html;
           UIC.autoColumns(holder);
         })
@@ -490,7 +490,7 @@
         .then(function (r) {
           UIC.closeModal('mfg-modal');
           UIC.toast((r && r.message) || 'تم الحفظ بنجاح', 'success');
-          load();
+          load(true);
         })
         .catch(function (e) { UIC.toast((e && e.message) || 'فشل الحفظ', 'error'); })
         .finally(function () { UI.hideSpinner(); });
@@ -525,7 +525,7 @@
       if (!confirm('سيتم حذف أمر التصنيع وبنوده واستهلاكاته نهائياً. متابعة؟')) return;
       UI.showSpinner();
       companyCall('delete_valley_mfg_order', { mo_uid: moUid })
-        .then(function (r) { UIC.toast((r && r.message) || 'تم الحذف', 'success'); load(); })
+        .then(function (r) { UIC.toast((r && r.message) || 'تم الحذف', 'success'); load(true); })
         .catch(function (e) { UIC.toast((e && e.message) || 'فشل الحذف', 'error'); })
         .finally(function () { UI.hideSpinner(); });
     }

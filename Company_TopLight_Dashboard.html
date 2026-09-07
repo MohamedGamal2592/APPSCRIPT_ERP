@@ -45,11 +45,11 @@
       contentId: contentId
     });
 
-    UI.showSpinner([
+    UIC.readSkeleton(null, { kind: 'card',  message: [
       'جاري تحميل لوحة التحكم...',
       'جاري حساب مؤشرات الأداء والأرصدة...',
       'لحظة، جاري عرض الإحصائيات...'
-    ]);
+    ] });
     companyCall('get_dashboard_data')
       .then(function (r) {
         var inner = document.getElementById(contentId);

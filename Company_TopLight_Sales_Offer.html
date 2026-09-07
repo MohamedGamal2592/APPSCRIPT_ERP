@@ -50,11 +50,11 @@
   }
 
   function renderList() {
-    UI.showSpinner([
+    UIC.readSkeleton('tl-content', { message: [
       'جاري تحميل عروض الأسعار...',
       'جاري استرجاع العملاء والأصناف...',
       'لحظة، جاري تجهيز جدول العروض...'
-    ]);
+    ] });
     companyCall('get_sales_offer_headers')
       .then(function (r) {
         __options = r.options || {};

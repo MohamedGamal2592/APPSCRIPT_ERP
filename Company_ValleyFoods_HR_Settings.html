@@ -151,7 +151,7 @@
     }
 
     function loadTab() {
-      UI.showSpinner();
+      UIC.readSkeleton('settings-table');
       companyCall(TABS[CURRENT_TAB].get)
         .then(function (res) {
           CACHE[CURRENT_TAB] = res || {};

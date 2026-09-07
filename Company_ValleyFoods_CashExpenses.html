@@ -70,7 +70,7 @@
     /* quiet: refresh in the background with no blocking overlay, for a user who
        has already seen the change and must not be interrupted to confirm it. */
     function load(quiet) {
-      if (!quiet) UI.showSpinner();
+      if (!quiet) UIC.readSkeleton('exp-body');
       var payload = {};
       if (YEAR) payload.year = YEAR;
       if (MONTH) payload.month = MONTH;

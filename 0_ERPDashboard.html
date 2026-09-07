@@ -19,7 +19,7 @@
 
   function loadDashboard() {
     var content = document.getElementById('dash-content');
-    UI.showSpinner();
+    UIC.readSkeleton('dash-content', { kind: 'card' });
     API.call('get_dashboard_data', {}, SESSION_TOKEN)
       .then(function (r) {
         var user = r.user;
@@ -84,7 +84,7 @@
 
   function openCompany(pageUrl) {
     if (!pageUrl) return;
-    UI.showSpinner('جاري فتح النظام...');
+    UIC.readSkeleton(null, { kind: 'card',  message: 'جاري فتح النظام...' });
     var base = (window.UIC && UIC.baseUrl) ? UIC.baseUrl() : (window.scriptUrl || '/');
     var tok = (window.UIC && UIC.token) ? UIC.token() : SESSION_TOKEN;
     var href = base + '?action=' + encodeURIComponent(pageUrl) + '&sessionToken=' + encodeURIComponent(tok);

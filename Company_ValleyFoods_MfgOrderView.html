@@ -303,7 +303,7 @@
         if (!MO_UID) { UI.toast && UI.toast('احفظ الأمر أولاً', 'error'); return; }
         showLoading();
         companyCall('approve_valley_mfg_order', { mo_uid: MO_UID, kind: kind })
-          .then(function (r) { UI.toast && UI.toast((r && r.message) || 'تم', 'success'); load(); })
+          .then(function (r) { UI.toast && UI.toast((r && r.message) || 'تم', 'success'); load(true); })
           .catch(function (e) { UI.toast && UI.toast((e && e.message) || 'فشل', 'error'); })
           .finally(function () { hideLoading(); });
       }
@@ -378,6 +378,44 @@
           .finally(function () { hideLoading(); });
       }
       function goBack() { window.location.href = scriptUrl + '?action=vf_mfg_orders&sessionToken=' + SESSION_TOKEN; }
+
+      /* ---------- FIRST SAVE OF A NEW MO ---------- */
+      /* The ?new=1 page has no MO_UID, so التشغيل، الاعتماد، القفل والدفعات all
+         refuse to act on it even after the order exists in the sheet. Reopening
+         it by unique_id — byte for byte the URL the MOs list uses — is what
+         turns it into a real, workable order, so that is what the modal offers.
+         Adopting the uid here first matters just as much: this page no longer
+         closes itself, so without it a second حفظ would insert a SECOND order
+         instead of updating the one just created. */
+      function moUrl_(uid) { return scriptUrl + '?action=vf_mfg_order&mo=' + encodeURIComponent(uid) + '&sessionToken=' + SESSION_TOKEN; }
+      function listUrl_() { return scriptUrl + '?action=vf_mfg_orders&sessionToken=' + SESSION_TOKEN; }
+      function navSelf_(url) {
+        if (typeof UIC !== 'undefined' && UIC.navTo) { UIC.navTo(null, url); return; }
+        window.location.href = url;
+      }
+      function onFirstSave(uid) {
+        MO_UID = uid;
+        IS_NEW = false;
+        /* the list that opened this tab is now stale — refresh it where it exists */
+        try { if (window.opener && !window.opener.closed) window.opener.location.href = listUrl_(); } catch (eOp) {}
+        if (typeof UIC === 'undefined' || !UIC.openModal) { navSelf_(moUrl_(uid)); return; }
+        UIC.openModal('mo-created', {
+          size: 'sm',
+          title: '✅ تم إنشاء أمر التصنيع',
+          body:
+            '<div style="text-align:center;line-height:1.9;">' +
+              '<div style="font-size:14px;margin-bottom:10px;">تم حفظ أمر التصنيع بنجاح.</div>' +
+              '<div class="odoo-ro" style="font-size:12px;">المعرّف الفريد</div>' +
+              '<div style="font-family:monospace;font-size:13px;font-weight:700;direction:ltr;word-break:break-all;margin-bottom:10px;">' + esc(uid) + '</div>' +
+              '<div style="font-size:12px;color:#6b7280;">افتح الأمر لإدخال ورديات التشغيل والدفعات والاعتمادات.</div>' +
+            '</div>',
+          footer:
+            UIC.button({ text: '📂 فتح أمر التصنيع', onClick: "MFGVIEW_PAGE.openCreatedMo('" + esc(uid) + "')" }) + ' ' +
+            UIC.button({ text: '← قائمة أوامر التصنيع', type: 'outline', onClick: 'MFGVIEW_PAGE.backToList()' })
+        });
+      }
+      function openCreatedMo(uid) { try { UIC.closeModal('mo-created'); } catch (e) {} navSelf_(moUrl_(uid)); }
+      function backToList() { try { UIC.closeModal('mo-created'); } catch (e) {} navSelf_(listUrl_()); }
       function switchTab(id) {
         ['tab-products', 'tab-work', 'tab-byproduct'].forEach(function (t) {
           var p = document.getElementById(t); if (p) p.classList.toggle('active', t === id);
@@ -1143,14 +1181,8 @@
           .then(function (r) {
             try { console.log('[MFGVIEW][save] server response:', JSON.stringify(r)); } catch (eLog2) { console.log('[MFGVIEW][save] server response (raw):', r); }
             UI.toast && UI.toast((r && r.message) || 'تم الحفظ بنجاح', 'success');
-            if (IS_NEW && r && r.mo_uid) {
-              var listUrl = scriptUrl + '?action=vf_mfg_orders&sessionToken=' + SESSION_TOKEN;
-              try { if (window.opener && !window.opener.closed) window.opener.location.href = listUrl; } catch (eOp) {}
-              window.close();
-              setTimeout(function () { try { window.location.href = listUrl; } catch (eNav) {} }, 400);
-              return;
-            }
-            load();
+            if (IS_NEW && r && r.mo_uid) { onFirstSave(String(r.mo_uid)); return; }
+            load(true);
             if (window.confirm('تم حفظ أمر التصنيع. هل تريد إدخال بيانات التشغيل (الخطوات/الدفعات) الآن؟')) { switchTab('workops'); }
           })
           .catch(function (e) { try { console.error('[MFGVIEW][save] FAILED:', (e && e.message) || e); } catch (eLog3) {} UI.toast && UI.toast((e && e.message) || 'فشل الحفظ', 'error'); })
@@ -1159,6 +1191,7 @@
 
       window.MFGVIEW_PAGE = {
         load: load, renderDetail: renderDetail, saveHeader: saveHeader, goBack: goBack,
+        openCreatedMo: openCreatedMo, backToList: backToList,
         switchTab: switchTab, changeStatus: changeStatus, onRecipeChange: onRecipeChange,
         addOutput: addOutput, removeOutput: removeOutput, setOutputProduct: setOutputProduct, setOutputQty: setOutputQty,
         addFooterRow: addFooterRow, removeFooterRow: removeFooterRow, setFooterItem: setFooterItem, setFooterQty: setFooterQty,

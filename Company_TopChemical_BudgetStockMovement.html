@@ -44,14 +44,14 @@
       contentId: 'stock-movement-content',
       menuGroups: (window.TOPCHEMICAL_MENU || [])
     });
-    UI.showSpinner('جاري تحميل البيانات...');
+    UIC.readSkeleton(null, { message: 'جاري تحميل البيانات...' });
     companyCall('get_budget_refs')
       .then(function (r) { REFS = r.refs || {}; fetchMovement(); })
       .catch(function (e) { UI.hideSpinner(); try{schedulePrefetch();}catch(e){} showError(e); });
   }
 
   function fetchMovement() {
-    UI.showSpinner();
+    UIC.readSkeleton('stock-movement-content');
     var year = new Date().getFullYear();
     companyCall('get_legal_products_movement', {
       month: FILTER.month ? Number(FILTER.month) : '',

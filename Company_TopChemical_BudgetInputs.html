@@ -188,7 +188,7 @@
   }
 
   function fetchInputs() {
-    UI.showSpinner('جاري تحميل بيانات الشهادات والبنود...');
+    UIC.readSkeleton('budget-inputs-content', { message: 'جاري تحميل بيانات الشهادات والبنود...' });
     Promise.all([
       companyCall('get_legal_inputs'),
       companyCall('get_budget_refs'),
@@ -389,7 +389,7 @@
             '<td style="text-align:left;">' + FMT.currency(totalLineSales) + '</td>' +
             '<td colspan="3"></td>' +
           '</tr></tfoot>' +
-        '</table>'
+        '</table></div>'
       ) : (
         '<div class="empty-state" style="padding:24px;">' +
           '<span>لا توجد بنود منتجات مرتبطة بهذه الشهادة في جدول (legal_product_purchasing).</span><br>' +

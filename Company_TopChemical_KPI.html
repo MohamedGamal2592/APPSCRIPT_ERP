@@ -54,7 +54,7 @@
   function fetchKPI(year) {
     var inner = document.getElementById('tc-kpi-content');
     if (!inner) return;
-    UI.showSpinner('جاري تحميل المؤشرات...');
+    UIC.readSkeleton('tc-kpi-content', { kind: 'card',  message: 'جاري تحميل المؤشرات...' });
     companyCall('get_kpi_data', { year: year })
       .then(function(d) { renderKPI(d, year); })
       .catch(function(e) { inner.innerHTML = '<div class="empty-state"><span>خطأ: ' + FMT.escape((e && e.message) || String(e)) + '</span></div>'; })

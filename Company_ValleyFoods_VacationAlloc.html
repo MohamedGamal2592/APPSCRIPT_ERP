@@ -71,7 +71,7 @@
        user who has already seen the change and must not be interrupted
        to confirm it. */
     function fetchData(quiet) {
-      if (!quiet) UI.showSpinner();
+      if (!quiet) UIC.readSkeleton('vf-vacalloc-content');
       companyCall('get_vacation_alloc_data').then(function (res) {
         ROWS = res.rows || [];
         EMP_OPTIONS = res.employee_options || [];

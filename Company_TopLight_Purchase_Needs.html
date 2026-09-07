@@ -38,7 +38,7 @@
   }
 
   function load() {
-    UI.showSpinner('جاري تحميل الأصناف...');
+    UIC.readSkeleton('needs-root', { message: 'جاري تحميل الأصناف...' });
     companyCall('get_purchase_needs')
       .then(function (r) { render(r.rows || []); })
       .catch(function (e) {
@@ -74,7 +74,7 @@
       '<div style="margin-bottom:12px;padding:10px 14px;background:#fee2e2;border:2px solid var(--danger-text, #b91c1c);border-radius:8px;color:#b91c1c;font-weight:700;">' +
       'عدد الأصناف المطلوب شراؤها: ' + needCount + '</div>' +
       '<div class="table-wrap" style="border:2px solid #111111;">' +
-      '<table class="table"><thead><tr>' +
+      '<table id="needs-table" class="table"><thead><tr>' +
       '<th>المنتج</th><th>الرصيد الحالي</th><th>آخر كمية شراء</th><th>النسبة</th><th>الحالة</th>' +
       '</tr></thead><tbody>' + tbody + '</tbody></table>' +
       '</div></div>';

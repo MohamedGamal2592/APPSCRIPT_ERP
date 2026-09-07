@@ -57,12 +57,12 @@
   }
 
   function load() {
-    UI.showSpinner([
+    UIC.readSkeleton('invoice-root', { message: [
       'جاري تحميل أمر الشراء...',
       'جاري استرجاع تكاليف وأصناف الشراء...',
       'لحظة، جاري إعداد أمر الشراء للطباعة...',
       'جاري تجهيز البيانات، برجاء الانتظار...'
-    ]);
+    ] });
     companyCall('get_purchase_print', { purchase_code: purchaseCode })
       .then(function (r) { renderInvoice(r.header, r.lines); })
       .catch(function (e) {

@@ -89,7 +89,7 @@
     /* fetchAll owns the overlay, so it is the one that takes the flag; load()
        forwards whatever it was handed. */
     function fetchAll(quiet) {
-      if (!quiet) UI.showSpinner();
+      if (!quiet) UIC.readSkeleton('vf-emp-content');
       companyCall('get_valley_hr_page', {})
         .then(function (er) {
           EMPLOYEES = er.employees || [];
@@ -239,7 +239,7 @@
             // update next ids
             if (NEXT_EMP_IDS && r.record.employee_type) NEXT_EMP_IDS[r.record.employee_type] = Number(r.record.emp_id)+1;
             renderEmployees();
-          } else { fetchAll(); }
+          } else { fetchAll(true); }
         } else UIC.toast('تعذر الحفظ', 'error');
       }).catch(function (e) { UIC.toast('خطأ: ' + (e && e.message ? e.message : e), 'error'); });
       return true;
@@ -293,7 +293,7 @@
             if (STATUSES.length>RECENT_LIMIT) STATUSES.pop();
             // also update employee status map if needed
             renderStatus();
-          } else { fetchAll(); }
+          } else { fetchAll(true); }
         } else UIC.toast('تعذر الحفظ', 'error');
       }).catch(function (e) { UIC.toast('خطأ: ' + (e && e.message ? e.message : e), 'error'); });
       return true;
@@ -349,7 +349,7 @@
             if (idxSH!==-1) ASSIGNMENTS[idxSH]=r.record; else ASSIGNMENTS.unshift(r.record);
             if (ASSIGNMENTS.length>RECENT_LIMIT) ASSIGNMENTS.pop();
             renderShift();
-          } else { fetchAll(); }
+          } else { fetchAll(true); }
         } else UIC.toast('تعذر الحفظ', 'error');
       }).catch(function (e) { UIC.toast('خطأ: ' + (e && e.message ? e.message : e), 'error'); });
       return true;
@@ -412,7 +412,7 @@
             if (idxSA!==-1) SALARIES[idxSA]=r.record; else SALARIES.unshift(r.record);
             if (SALARIES.length>RECENT_LIMIT) SALARIES.pop();
             renderSalary();
-          } else { fetchAll(); }
+          } else { fetchAll(true); }
         } else UIC.toast('تعذر الحفظ', 'error');
       }).catch(function (e) { UIC.toast('خطأ: ' + (e && e.message ? e.message : e), 'error'); });
       return true;

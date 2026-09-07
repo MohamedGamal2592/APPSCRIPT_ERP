@@ -68,7 +68,7 @@
        user who has already seen the change and must not be interrupted
        to confirm it. */
     function load(quiet) {
-      if (!quiet) UI.showSpinner();
+      if (!quiet) UIC.readSkeleton('pt-table');
       companyCall('get_valley_parties')
         .then(function (res) {
           ROWS = (res && res.rows) || [];
@@ -212,7 +212,7 @@
         .then(function (r) {
           UIC.closeModal('party-modal');
           UIC.toast((r && r.message) || 'تم الحفظ بنجاح', 'success');
-          load();
+          load(true);
         })
         .catch(function (e) { UIC.toast((e && e.message) || 'فشل الحفظ', 'error'); })
         .finally(function () { UI.hideSpinner(); });
@@ -237,7 +237,7 @@
     }
 
     function openStatement(pid) {
-      UI.showSpinner();
+      UIC.readSkeleton();
       companyCall('get_valley_party_statement', { id: pid })
         .then(function (res) {
           STMT = res;
@@ -355,7 +355,7 @@
       });
 
       if (!visible.length && !fromV) html += '<tr><td colspan="6" style="text-align:center;padding:30px;">لا توجد حركات مسجلة لهذا الحساب.</td></tr>';
-      html += '</tbody></table>';
+      html += '</tbody></table></div>';
       document.getElementById('st-ledger').innerHTML = html;
       UIC.autoColumns('st-ledger-table');
 

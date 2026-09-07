@@ -57,7 +57,7 @@
     }
 
     function loadData() {
-      UI.showSpinner();
+      UIC.readSkeleton('ac-assess-content');
       companyCall('get_ac_assessments')
         .then(function (res) {
           assessRows = res.rows || [];

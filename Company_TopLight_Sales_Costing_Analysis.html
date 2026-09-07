@@ -59,11 +59,11 @@
   var __filtersBuilt = false;
 
   function fetchData() {
-    UI.showSpinner([
+    UIC.readSkeleton('tl-content', { message: [
       'جاري تحليل تكلفة المبيعات...',
       'جاري حساب التكلفة والربحية لكل فاتورة...',
       'لحظة، جاري إعداد التقرير الإجمالي...'
-    ]);
+    ] });
     companyCall('get_sales_costing_analysis', filterPayload())
       .then(function (r) {
         var content = document.getElementById('tl-content');
