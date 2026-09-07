@@ -450,10 +450,9 @@
     function printStatement() {
       var ledger = document.getElementById('st-ledger');
       var p = STMT.party;
-      var win = window.open('', '_blank');
-      if (!win) { UIC.toast('يرجى السماح بالنوافذ المنبثقة', 'error'); return; }
-      win.document.open();
-      win.document.write(
+      /* [iPhone run 2] Same window.open and the same 500ms focus-then-print;
+         UIC.printDoc adds only the branch for a refused tab. */
+      UIC.printDoc(
         '<!DOCTYPE html><html dir="rtl" lang="ar"><head><meta charset="UTF-8"><title>كشف حساب - ' + p.name + '</title>' +
         '<style>body{font-family:Segoe UI,Tahoma,sans-serif;margin:20px;color:var(--text-main, #1f2937);}h2{text-align:center;color:#094d2c;border-bottom:3px solid #0e623b;padding-bottom:10px;}meta{}</style></head><body>' +
         '<h2>📊 كشف حساب مالي تفصيلي — ' + esc(p.name) + '</h2>' +
@@ -461,10 +460,10 @@
         (ledger ? ledger.outerHTML : '') +
         document.getElementById('st-kpis').outerHTML +
         document.getElementById('st-net').outerHTML +
-        '</body></html>'
+        '</body></html>',
+        'كشف حساب - ' + p.name,
+        { then: function (win) { setTimeout(function () { win.focus(); win.print(); }, 500); } }
       );
-      win.document.close();
-      setTimeout(function () { win.focus(); win.print(); }, 500);
     }
 
     window.PARTIES_PAGE = { openAdd: openAdd, openEdit: openEdit, save: save, openStatement: openStatement, applyFilter: applyFilter, printStatement: printStatement, recalcStock: recalcStock, resetStockPrices: resetStockPrices };

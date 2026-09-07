@@ -281,8 +281,6 @@
     var from = fromEl ? fromEl.value : '';
     var to = toEl ? toEl.value : '';
     var dateLabel = (from && to) ? 'من ' + from + ' إلى ' + to : from ? 'من ' + from : to ? 'إلى ' + to : 'الكل';
-    var w = window.open('', '_blank');
-    if (!w) { UIC.toast('تم حظر النافذة المنبثقة', 'error'); return; }
     var rowsHtml = list.map(function (s) {
       return '<tr>' +
         '<td>' + esc(s.product_name || ('#' + s.product)) + '</td>' +
@@ -297,8 +295,9 @@
         '<td>' + fmtPct(s.percentage) + '</td>' +
         '</tr>';
     }).join('');
-    w.document.open();
-    w.document.write(
+    /* [iPhone run 2] Was window.open + document.write, which ended at the
+       null check above on iOS. Same call, same document — see UIC.printDoc. */
+    UIC.printDoc(
       '<!DOCTYPE html><html lang="ar"><head><meta charset="utf-8"><title>طباعة جرد المخزون</title>' +
       '<style>body{font-family:Cairo,sans-serif;direction:rtl;padding:20px;}' +
       'h2{text-align:center;margin-bottom:4px;} .date-info{text-align:center;color:var(--text-muted, #666);margin-bottom:16px;}' +
@@ -309,10 +308,10 @@
       '<table><thead><tr>' +
       '<th>المنتج</th><th>الاسم</th><th>الفئة</th><th>الوحدة</th><th>التاريخ</th><th>الكمية</th><th>المخزن</th><th>رصيد السيستم</th><th>الفرق</th><th>النسبة</th>' +
       '</tr></thead><tbody>' + rowsHtml + '</tbody></table>' +
-      '</body></html>'
+      '</body></html>',
+      'جرد المخزون',
+      { then: function (w) { w.print(); } }
     );
-    w.document.close();
-    w.print();
   }
 
   function showError(e) {

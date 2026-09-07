@@ -405,6 +405,142 @@ UIC.closeOrBack = function (backUrl) {
   }, 200);
 };
 
+/* ── [iPhone run 2] Printing a document that is BUILT, not navigated to ───
+ *
+ * Six places in this app build a whole HTML document as a string and write it
+ * into a blank tab: UIC.printTable below (the shared data-table print, used by
+ * every list page in all three companies), and one print function each on
+ * TopChemical StockRevision, ValleyFoods MfgOrderView, Parties, Purchasing and
+ * Attendance. Every one of them opened the tab with window.open('', '_blank'),
+ * and every one of them raised a toast and gave up when that returned null.
+ * On iOS Safari it returns null every time, so those six features did not
+ * exist on the platform at all.
+ *
+ * UIC.printDoc(html, title, opts) is the same call, in the same order, with a
+ * destination for the null case.
+ *
+ *   opts.features  the third window.open argument, for the one caller that
+ *                  passes one (Attendance: 'width=800,height=600'). Omitted
+ *                  callers get the exact two-argument call they made before —
+ *                  an empty features string is NOT the same thing to every
+ *                  browser, so it is never synthesised.
+ *   opts.then(w)   whatever that caller did with the window after writing it:
+ *                  w.print(), or a focus and a delayed print. Kept per caller
+ *                  rather than merged, because the six differ and each delay
+ *                  was presumably tuned against the document it prints.
+ *
+ * Returns true if a real window was opened (Android, Windows — unchanged), and
+ * false if the overlay was used instead.
+ *
+ * WHAT THE OVERLAY DOES AND DOES NOT BUY. It is NOT a fix for printing on iOS.
+ * window.print() from inside the Apps Script iframe may still hand AirPrint
+ * Google's wrapper page rather than this document; that is a separate, still
+ * device-gated problem (follow-up A in NEXT_STEPS_OWNER.md). What the overlay
+ * does guarantee is that the document becomes READABLE on the phone at all —
+ * today the button does nothing and the document is simply unreachable. */
+UIC.printDoc = function (html, title, opts) {
+  opts = opts || {};
+  var w = null;
+  try {
+    w = opts.features ? window.open('', '_blank', opts.features) : window.open('', '_blank');
+  } catch (e) { w = null; }
+  if (w) {
+    w.document.open();
+    w.document.write(html);
+    w.document.close();
+    if (typeof opts.then === 'function') opts.then(w);
+    return true;
+  }
+  return UIC._printDocOverlay(html, title);
+};
+
+/* The fallback of UIC.printDoc, reachable only when no window came back.
+ * The six callers all pass a complete <!DOCTYPE html> document, so the <body>
+ * is lifted out of it; anything without a <body> tag is used whole. The
+ * document's own stylesheet stays behind deliberately — it is written for a
+ * page of its own, and its body/table rules would leak onto the app
+ * underneath. The overlay supplies its own, scoped under #uic-print-doc.
+ *
+ * (Do not write a literal style tag in a comment in this file: tools/lib
+ * /sources.js pairs the first one it sees with the next closing tag, which is
+ * inside the printTable document string 1200 lines below, and every CSS check
+ * then reads 58k of raw JavaScript as the stylesheet.) */
+UIC._printDocOverlay = function (html, title) {
+  UIC._printDocClose();
+
+  var body = String(html == null ? '' : html);
+  var m = body.match(/<body[^>]*>([\s\S]*)<\/body>/i);
+  if (m) body = m[1];
+
+  var st = document.createElement('style');
+  st.id = 'uic-print-doc-style';
+  st.textContent = [
+    '#uic-print-doc { position: fixed; inset: 0; z-index: 100000; overflow: auto;',
+    '  -webkit-overflow-scrolling: touch; background: #fff; color: #111; direction: rtl; }',
+    '#uic-print-doc-bar { position: sticky; top: 0; z-index: 1; display: flex; gap: 8px;',
+    '  align-items: center; padding: 8px 12px; background: #f5f5f5; border-bottom: 1px solid #ccc; }',
+    '#uic-print-doc-bar button { min-height: 44px; min-width: 88px; padding: 0 16px;',
+    '  font: inherit; font-weight: 700; border: 1px solid #999; border-radius: 8px;',
+    '  background: #fff; color: #111; cursor: pointer; }',
+    '#uic-print-doc-title { font-size: 13px; color: #555; overflow: hidden;',
+    '  text-overflow: ellipsis; white-space: nowrap; }',
+    '#uic-print-doc-body { padding: 12px; }',
+    '#uic-print-doc-body table { width: 100%; border-collapse: collapse; font-size: 12px; }',
+    '#uic-print-doc-body th, #uic-print-doc-body td { border: 1px solid #999; padding: 6px 8px;',
+    '  text-align: right; }',
+    '#uic-print-doc-body img { max-width: 100%; }',
+    /* A print started from the overlay must print the DOCUMENT, not the app
+       around it. Only direct children of body are hidden, so the overlay and
+       everything inside it survives. */
+    '@media print {',
+    '  body > *:not(#uic-print-doc) { display: none !important; }',
+    '  #uic-print-doc { position: static; overflow: visible; }',
+    '  #uic-print-doc-bar { display: none !important; }',
+    '  #uic-print-doc .no-print { display: none !important; }',
+    '}'
+  ].join('\n');
+  document.head.appendChild(st);
+
+  var box = document.createElement('div');
+  box.id = 'uic-print-doc';
+
+  var bar = document.createElement('div');
+  bar.id = 'uic-print-doc-bar';
+  var pb = document.createElement('button');
+  pb.type = 'button';
+  pb.textContent = 'طباعة';
+  pb.onclick = function () { try { window.print(); } catch (e) {} };
+  var cb = document.createElement('button');
+  cb.type = 'button';
+  cb.textContent = 'إغلاق';
+  cb.onclick = function () { UIC._printDocClose(); };
+  var tt = document.createElement('span');
+  tt.id = 'uic-print-doc-title';
+  tt.textContent = title || '';
+  bar.appendChild(pb);
+  bar.appendChild(cb);
+  bar.appendChild(tt);
+
+  var content = document.createElement('div');
+  content.id = 'uic-print-doc-body';
+  content.innerHTML = body;
+
+  box.appendChild(bar);
+  box.appendChild(content);
+  document.body.appendChild(box);
+  return false;
+};
+
+/* إغلاق. Removes the overlay AND the stylesheet it added — printing twice in
+ * a row must not leave a second copy of either behind. Also runs before a new
+ * overlay is built, for the same reason. */
+UIC._printDocClose = function () {
+  var el = document.getElementById('uic-print-doc');
+  if (el && el.parentNode) el.parentNode.removeChild(el);
+  var st = document.getElementById('uic-print-doc-style');
+  if (st && st.parentNode) st.parentNode.removeChild(st);
+};
+
 /* ── [UI-3.4 / U-24] The ONE loading overlay ──────────────────────────────
  *
  * There were four implementations, each with its own look:
@@ -1570,8 +1706,6 @@ UIC.printTable = function (id) {
   var title = (st.opts && st.opts.title) || '';
   var dateLabel = (from && to) ? 'من ' + from + ' إلى ' + to : from ? 'من ' + from : to ? 'إلى ' + to : 'الكل';
   var logoUrl = window.COMPANY_LOGO_URL || '';
-  var w = window.open('', '_blank');
-  if (!w) { UIC.toast('تم حظر النافذة المنبثقة', 'error'); return; }
   var rowsHtml = rows.map(function (r) {
     return '<tr>' + headers.map(function (h) {
       var v = r[h.key] != null ? r[h.key] : '';
@@ -1581,8 +1715,10 @@ UIC.printTable = function (id) {
   var theadHtml = '<tr>' + headers.map(function (h) {
     return '<th>' + esc(h.label) + '</th>';
   }).join('') + '</tr>';
-  w.document.open();
-  w.document.write(
+  /* [iPhone run 2] Was window.open + document.write, which on iOS ended at the
+     null check above and printed nothing. Same call, same document, with an
+     in-page fallback when the tab is refused. */
+  UIC.printDoc(
     '<!DOCTYPE html><html lang="ar"><head><meta charset="utf-8"><title>' + esc(title) + '</title>' +
     '<style>body{font-family:Cairo,sans-serif;direction:rtl;padding:20px;}' +
     'h2{text-align:center;margin-bottom:4px;} .date-info{text-align:center;color:#666;margin-bottom:16px;}' +
@@ -1593,10 +1729,10 @@ UIC.printTable = function (id) {
     '<h2>' + esc(title) + '</h2>' +
     '<div class="date-info">التاريخ: ' + esc(dateLabel) + ' — العدد: ' + rows.length + '</div>' +
     '<table><thead>' + theadHtml + '</thead><tbody>' + rowsHtml + '</tbody></table>' +
-    '</body></html>'
+    '</body></html>',
+    title,
+    { then: function (w) { w.print(); } }
   );
-  w.document.close();
-  w.print();
 };
 
 UIC.filterTable = function (containerId, term) {

@@ -684,11 +684,10 @@
           var lines = (r && r.lines) || [];
           var supMap = {}; (__options.supplier_options || []).forEach(function (o) { supMap[String(o.value)] = o.label; });
           var prodMap = {}; (__options.product_options || []).forEach(function (o) { prodMap[String(o.value)] = o.label; });
-          var w = window.open('', '_blank');
-          if (!w) { UIC.toast('تم حظر النافذة المنبثقة', 'error'); return; }
-          w.document.open();
-          w.document.write(buildPrintHtml(rec, lines, supMap, prodMap));
-          w.document.close();
+          /* [iPhone run 2] Same window.open and the same document; the printed
+             page carries its own طباعة button either way. See UIC.printDoc. */
+          UIC.printDoc(buildPrintHtml(rec, lines, supMap, prodMap),
+            'طباعة عملية شراء — ' + rec.Code);
         })
         .catch(function (e) { UIC.toast((e && e.message) || 'خطأ', 'error'); })
         .finally(function () { UI.hideSpinner(); });

@@ -629,11 +629,10 @@
     }
 
     function printForgetForm() {
-      var win = window.open('', '_blank', 'width=800,height=600');
-      if (!win) { UIC.toast('يرجى السماح بالنوافذ المنبثقة', 'error'); return; }
-      win.document.open();
-      win.document.write(buildForgetFormHtml());
-      win.document.close();
+      /* [iPhone run 2] Same window.open, including the same window features.
+         See UIC.printDoc. */
+      UIC.printDoc(buildForgetFormHtml(), 'نموذج نسيان بصمة حضور',
+        { features: 'width=800,height=600' });
     }
 
     /* ================= BINDINGS / INIT ================= */
