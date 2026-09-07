@@ -290,6 +290,64 @@ function ensureGridRows_(sheet, lastNeeded) {
 // directly instead of re-acquiring, while still blocking other executions.
 let _scriptLockHeld_ = false;
 
+/* ── per-table change stamps ───────────────────────────────────────────────
+ *
+ * Apps Script has no server push: no sockets, no long poll worth having. The
+ * only way one user's device can learn that another user's device changed
+ * something is to ASK — so the ask has to be cheap enough to repeat.
+ *
+ * A stamp is one CacheService entry per (spreadsheet, sheet). Writing one costs
+ * nothing measurable next to the Sheets write that earned it; reading a page's
+ * worth costs ONE CacheService.getAll, which is memory, not a spreadsheet.
+ * That is the whole point: polling must never touch a sheet.
+ *
+ * Honest limits, and the client is written to them:
+ *   - CacheService entries can be EVICTED before their TTL. A vanished stamp is
+ *     therefore treated by the client as "no information", never as a change,
+ *     so an eviction costs a missed refresh rather than a storm of them.
+ *   - A stamp says a table changed, not what changed. It is a hint to refetch,
+ *     not a substitute for the refetch.
+ *   - Coverage is best-effort: a handler that writes with a raw setValues and
+ *     does not stamp is simply not noticed. The shared write helpers below all
+ *     stamp, which is most of them.
+ */
+var TABLE_VERSION_TTL_ = 21600;   // 6h, the CacheService maximum
+
+function tableVersionKey_(scopeId, sheetName) {
+  return 'tv_' + String(scopeId) + '_' + String(sheetName);
+}
+
+/** Record that a table changed. Never throws — a failed stamp must not fail a save. */
+function noteTableChange_(scopeId, sheetName) {
+  if (!scopeId || !sheetName) return;
+  try {
+    CacheService.getScriptCache().put(
+      tableVersionKey_(scopeId, sheetName), String(new Date().getTime()), TABLE_VERSION_TTL_);
+  } catch (e) { /* a stamp is a convenience, never a requirement */ }
+}
+
+/** Stamp from a Sheet object, when that is all the caller has. */
+function noteSheetChange_(sheet) {
+  if (!sheet) return;
+  try { noteTableChange_(sheet.getParent().getId(), sheet.getName()); } catch (e) {}
+}
+
+/** Current stamps for a set of tables, in ONE CacheService round trip. */
+function readTableVersions_(scopeId, sheetNames) {
+  const out = {};
+  const names = (sheetNames || []).filter(Boolean);
+  if (!scopeId || !names.length) return out;
+  try {
+    const keys = names.map(function (n) { return tableVersionKey_(scopeId, n); });
+    const got = CacheService.getScriptCache().getAll(keys) || {};
+    names.forEach(function (n) {
+      const v = got[tableVersionKey_(scopeId, n)];
+      if (v) out[n] = v;
+    });
+  } catch (e) { /* no stamps is a valid answer: the client learns nothing and does nothing */ }
+  return out;
+}
+
 /**
  * The highest id currently in a table's id column.
  *
@@ -543,6 +601,7 @@ function addRecord_(dbId, sheetName, dataMap, requiredFields) {
     const newRowNumber = sheet.getLastRow() + 1;
     sheet.appendRow(rowValues);
     noteMutation_();
+    noteTableChange_(dbId, sheetName);
 
     const savedRecord = {};
     headers.forEach((h, colIdx) => {
@@ -577,6 +636,7 @@ function updateRowByCriteria_(sheet, criteriaHeader, criteriaValue, updatesObjec
       });
       sheet.getRange(i + 1, 1, 1, newRow.length).setValues([newRow]);
       noteMutation_();
+      noteSheetChange_(sheet);
       return true;
     }
   }
@@ -645,6 +705,7 @@ function deleteRowsWhereIn_(sheet, criteriaHeader, values) {
     deleted += count;
     end = start - 1;
   }
+  noteSheetChange_(sheet);
   return deleted;
 }
 

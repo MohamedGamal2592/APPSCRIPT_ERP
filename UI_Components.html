@@ -3921,6 +3921,22 @@ document.addEventListener('keydown', function (e) {
   .field-error { color: var(--danger); font-size: var(--text-xs); min-height: 16px; }
   .form-field.has-error .input { border-color: var(--danger); }
 
+  /* ── UIC.Live — the "still saving" hint, and a pending row ───────────── */
+  /* Deliberately NOT the blocking overlay: an optimistic save has already
+     shown the user their change, so the indicator's job is to say the write
+     is still travelling, not to stop them working. */
+  .uic-live-busy {
+    position: fixed; inset-inline-end: var(--space-4); inset-block-end: var(--space-4);
+    z-index: 9000; padding: var(--space-2) var(--space-4);
+    background: var(--bg-surface); color: var(--text-muted);
+    border: 1px solid var(--border-color); border-radius: var(--radius-pill);
+    font-size: var(--text-xs); font-weight: 700;
+    box-shadow: 0 2px 8px rgba(0,0,0,.12); pointer-events: none;
+  }
+  /* A row the server has not confirmed yet. Pages opt in by rendering the
+     class; nothing breaks if they do not. */
+  .row-pending, tr.row-pending td { opacity: .62; font-style: italic; }
+
   /* ── [UI-5.2 / U-28] Styled confirm ──────────────────────────────────── */
   .uic-confirm-msg { font-size: var(--text-base); color: var(--text-main); line-height: 1.7; }
   .uic-confirm-record {
@@ -4732,4 +4748,252 @@ if (document.readyState === 'loading') {
 } else if (window.SHEET && window.ERP_HISTORY_AUTO !== false) {
   UIC.HistorySide.showLatest(window.SHEET);
 }
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * UIC.Live — saves that feel immediate, and pages that notice each other.
+ *
+ * The problem this solves is not that Sheets is slow, though it is. It is that
+ * every page waited for a full round trip and THEN asked the server to send the
+ * whole list back, so the user watched a spinner for the sum of two requests
+ * before seeing a change they had already decided on.
+ *
+ * Apps Script gives no server push — no socket worth having, no long poll — so
+ * "realtime" here means two specific things, and neither of them is magic:
+ *
+ *   1. The row appears the instant you save it, because the browser already
+ *      knows what you typed. The request still takes as long as it takes; it
+ *      just stops being the thing you wait for. If it fails, the row goes back
+ *      exactly as it was and you are told why.
+ *
+ *   2. Other people's changes arrive within one poll interval, because the poll
+ *      is cheap enough to repeat: get_page_versions reads ONE CacheService
+ *      entry set, never a spreadsheet, and returns timestamps rather than data.
+ *
+ * What it deliberately does NOT do:
+ *   - It does not merge concurrent edits. Two people saving the same record is
+ *     still last-write-wins, exactly as before; the poll makes that VISIBLE
+ *     sooner rather than making it safe.
+ *   - It does not treat a vanished version stamp as a change. CacheService can
+ *     evict, and a storm of refreshes is worse than a missed one.
+ * ══════════════════════════════════════════════════════════════════════════ */
+UIC.Live = (function () {
+  'use strict';
+
+  var DEFAULT_INTERVAL = 30000;   // see the quota note on watchPage
+  var MIN_INTERVAL = 10000;
+  var IDLE_STOP_MS = 15 * 60 * 1000;
+
+  var inFlight = 0;               // saves currently on the wire, page-wide
+
+  function keyOf(rec, key) { return rec ? String(rec[key] == null ? '' : rec[key]) : ''; }
+
+  function indexOfKey(list, key, value) {
+    var want = String(value == null ? '' : value);
+    if (!want) return -1;
+    for (var i = 0; i < (list || []).length; i++) {
+      if (String(list[i][key] == null ? '' : list[i][key]) === want) return i;
+    }
+    return -1;
+  }
+
+  /**
+   * Save a record and show it immediately.
+   *
+   * @param {object} o
+   *   call      function(action, data) -> Promise      (the page's companyCall)
+   *   action    string
+   *   data      object                                  the payload to send
+   *   list      Array                                   in-memory rows, patched in place
+   *   key       string                                  identity field, e.g. 'unique_id'
+   *   draft     object                                  what to show now
+   *   render    function()                              redraw from `list`
+   *   modal     string                                  modal id to close immediately
+   *   message   string                                  success toast
+   *   recordOf  function(resp) -> object|null           pull the saved record out of the reply
+   *   onSuccess function(resp)
+   *   onError   function(err)
+   *   reload    function()                              used when a patch is impossible
+   * @return {Promise}
+   */
+  function save(o) {
+    o = o || {};
+    var list = o.list;
+    var key = o.key;
+    var draft = o.draft;
+    var canPatch = !!(list && key && draft && typeof o.render === 'function');
+
+    /* Enough state to put the list back EXACTLY as it was. */
+    var undo = null;
+    if (canPatch) {
+      if (!draft[key]) draft[key] = '__tmp_' + Math.random().toString(36).slice(2, 10);
+      draft.__pending = true;
+      var at = indexOfKey(list, key, draft[key]);
+      if (at === -1) {
+        list.unshift(draft);
+        undo = { kind: 'insert' };
+      } else {
+        undo = { kind: 'replace', at: at, was: list[at] };
+        list[at] = draft;
+      }
+      try { o.render(); } catch (e) {}
+    }
+
+    if (o.modal) { try { UIC.closeModal(o.modal); } catch (e) {} }
+    /* A quiet indicator, not the blocking overlay: the point is that the user
+       is free to carry on. */
+    setBusy(inFlight + 1);
+    inFlight++;
+
+    return o.call(o.action, o.data)
+      .then(function (resp) {
+        if (canPatch) {
+          var rec = null;
+          try { rec = o.recordOf ? o.recordOf(resp) : (resp && (resp.record || (resp.data && resp.data.record))); } catch (e) { rec = null; }
+          var at2 = indexOfKey(list, key, draft[key]);
+          if (rec && typeof rec === 'object') {
+            /* The server's version wins — it carries the assigned id and any
+               field the server computed. */
+            rec.__pending = false;
+            if (at2 !== -1) list[at2] = rec; else list.unshift(rec);
+          } else if (at2 !== -1) {
+            /* No record came back. Keep what we drew, but drop the temporary
+               key so a later real load replaces it rather than duplicating it. */
+            delete list[at2].__pending;
+            if (String(list[at2][key]).indexOf('__tmp_') === 0) list[at2].__stale = true;
+          }
+          try { o.render(); } catch (e) {}
+        }
+        try { UIC.toast((resp && resp.message) || o.message || 'تم الحفظ', 'success'); } catch (e) {}
+        if (typeof o.onSuccess === 'function') o.onSuccess(resp);
+        /* Nothing reloads here. That second round trip is what this replaces. */
+        return resp;
+      })
+      .catch(function (err) {
+        if (canPatch && undo) {
+          var at3 = indexOfKey(list, key, draft[key]);
+          if (undo.kind === 'insert') { if (at3 !== -1) list.splice(at3, 1); }
+          else if (at3 !== -1) list[at3] = undo.was;
+          try { o.render(); } catch (e) {}
+        }
+        try { UIC.toast((err && err.message) || 'تعذر الحفظ — لم يتم تسجيل التغيير', 'error'); } catch (e) {}
+        if (typeof o.onError === 'function') o.onError(err);
+        else if (!canPatch && typeof o.reload === 'function') o.reload();
+        throw err;
+      })
+      .finally(function () {
+        inFlight = Math.max(0, inFlight - 1);
+        setBusy(inFlight);
+      });
+  }
+
+  /** A non-blocking "still saving" hint in the corner. */
+  function setBusy(n) {
+    var el = document.getElementById('uic-live-busy');
+    if (n <= 0) { if (el) el.remove(); return; }
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'uic-live-busy';
+      el.className = 'uic-live-busy';
+      document.body.appendChild(el);
+    }
+    el.textContent = n === 1 ? 'جاري الحفظ...' : ('جاري حفظ ' + n + ' تغييرات...');
+  }
+
+  /** True while any optimistic save is still on the wire. */
+  function busy() { return inFlight > 0; }
+
+  /* ── change polling ──────────────────────────────────────────────────── */
+  var watch = null;
+
+  /**
+   * Poll for other devices' changes to the tables this page uses.
+   *
+   * QUOTA, stated plainly: every poll is a real Apps Script execution. At the
+   * 30s default, twenty people with the page open cost ~2400 executions an
+   * eight-hour day before anyone saves anything. That is affordable on a
+   * Workspace account and is NOT affordable at a 2-second interval, which is
+   * why the interval is floored at 10s, paused entirely while the tab is
+   * hidden, and stopped after fifteen idle minutes until the tab is touched
+   * again.
+   *
+   * @param {object} o
+   *   call        function(action, data) -> Promise
+   *   page        string          the page id, e.g. 'vf_cash'
+   *   intervalMs  number          default 30000, floored at 10000
+   *   onChange    function(tables) called with the names that moved
+   */
+  function watchPage(o) {
+    o = o || {};
+    if (!o.call || !o.page || typeof o.onChange !== 'function') return;
+    unwatchPage();
+
+    var interval = Math.max(MIN_INTERVAL, Number(o.intervalMs) || DEFAULT_INTERVAL);
+    var seen = null;             // null until the first reply sets the baseline
+    var lastActive = Date.now();
+    var failures = 0;
+    var timer = null;
+    var stopped = false;
+
+    function touch() { lastActive = Date.now(); }
+    ['click', 'keydown', 'focus'].forEach(function (ev) {
+      window.addEventListener(ev, touch, true);
+    });
+
+    function schedule(ms) {
+      if (stopped) return;
+      timer = setTimeout(tick, ms);
+    }
+
+    function tick() {
+      if (stopped) return;
+      /* Do not poll a page nobody is looking at, and do not poll over a save
+         that has not landed — the reply would undo the row the user just saw
+         appear. */
+      var hidden = (typeof document.hidden === 'boolean') ? document.hidden : false;
+      if (hidden || busy() || (Date.now() - lastActive) > IDLE_STOP_MS) {
+        schedule(interval);
+        return;
+      }
+      o.call('get_page_versions', { page: o.page })
+        .then(function (resp) {
+          failures = 0;
+          var now = (resp && resp.versions) || {};
+          if (seen === null) { seen = now; schedule(interval); return; }
+          var moved = [];
+          Object.keys(now).forEach(function (t) {
+            /* A stamp that EXISTS and DIFFERS is a change. A stamp that has
+               disappeared is a cache eviction and means nothing. */
+            if (seen[t] !== undefined && seen[t] !== now[t]) moved.push(t);
+            else if (seen[t] === undefined) seen[t] = now[t];
+          });
+          seen = now;
+          if (moved.length) { try { o.onChange(moved); } catch (e) {} }
+          schedule(interval);
+        })
+        .catch(function () {
+          /* Back off rather than hammer a system that is already unhappy. */
+          failures++;
+          schedule(Math.min(interval * Math.pow(2, Math.min(failures, 4)), 5 * 60 * 1000));
+        });
+    }
+
+    watch = {
+      stop: function () {
+        stopped = true;
+        if (timer) clearTimeout(timer);
+        ['click', 'keydown', 'focus'].forEach(function (ev) {
+          window.removeEventListener(ev, touch, true);
+        });
+      }
+    };
+    schedule(interval);
+  }
+
+  function unwatchPage() {
+    if (watch) { try { watch.stop(); } catch (e) {} watch = null; }
+  }
+
+  return { save: save, busy: busy, watchPage: watchPage, unwatchPage: unwatchPage };
+})();
+
 </script>

@@ -324,6 +324,58 @@ const ValleyFoods = (function () {
     'prefetch_refs': 'valley_products'
   };
 
+  /**
+   * page -> the tables its actions touch, derived by joining the two maps that
+   * already exist. No new configuration to keep in step: a page's watch set is
+   * exactly the set of tables its own actions declare.
+   */
+  const PAGE_TABLES = (function () {
+    const byPage = {};
+    Object.keys(PAGE_ACCESS).forEach(function (action) {
+      const page = PAGE_ACCESS[action].page;
+      const table = ACTION_TABLES[action];
+      if (!page || !table) return;
+      if (!byPage[page]) byPage[page] = {};
+      byPage[page][table] = true;
+    });
+    const out = {};
+    Object.keys(byPage).forEach(function (p) { out[p] = Object.keys(byPage[p]); });
+    return out;
+  })();
+
+  /**
+   * "Has anything this page cares about changed since I last looked?"
+   *
+   * This is the ONLY thing a client is allowed to poll, because it is the only
+   * thing cheap enough to poll: ONE CacheService.getAll over the page's tables.
+   * It reads no spreadsheet, takes no lock and returns no business data — only
+   * opaque timestamps — so a device that is merely watching costs a fraction of
+   * a device that is loading.
+   *
+   * Gated explicitly rather than through PAGE_ACCESS: one action serves every
+   * page, so the page being asked about is what has to be checked, and it is
+   * checked here against the caller's real read grant.
+   */
+  function getPageVersions_(data, user, dbId) {
+    const page = String((data && data.page) || '').trim();
+    if (!page) throw new Error('الصفحة مطلوبة');
+    if (!(user && user.isSuperAdmin)) {
+      if (!unifiedCheck_(user, '9940659bd83035d7', page, 'read')) {
+        throw new Error(ERP_MESSAGES.NOT_AUTHORIZED);
+      }
+    }
+    const tables = PAGE_TABLES[page] || [];
+    return {
+      status: 'success',
+      page: page,
+      tables: tables,
+      versions: readTableVersions_(dbId, tables),
+      /* The server's own clock, so a client can tell a stalled poll from a
+         quiet system without trusting the device clock. */
+      now: String(new Date().getTime())
+    };
+  }
+
   /** page for a module_action, reused for both access-control and logging. */
   function pageForAction_(action) {
     const req = PAGE_ACCESS[action];
@@ -414,6 +466,9 @@ const ValleyFoods = (function () {
     };
   }
   register('get_dashboard_data', getDashboardData_);
+  /* Deliberately NOT in PAGE_ACCESS: one action serves every page, so it
+     gates itself on the page it is asked about (see getPageVersions_). */
+  register('get_page_versions', getPageVersions_);
 
   // Independent KPI page — Read => welcome ("مرحباً بك في النظام..."), Write => KPI cards/charts
   function getKpiData_(data, user, dbId) {
