@@ -611,3 +611,19 @@ rather than shown-and-broken. Until `review_id` and `review_status` exist on
 `valley_attendance_needs_review`, the review queue is read-only and says so.
 
 The full acceptance checklist is in **VALLEY_ATTENDANCE_RESULTS.md §4**.
+
+---
+
+## W5 — the ~30 page-local table classes (recommended follow-up run)
+
+The table column-width contract (`ui/table-columns`) now covers every table built by
+`UIC.dataTable` and every raw `<table class="table">` — 99 tables. It deliberately does **not**
+cover the ~30 tables that carry a page-local class instead: `grid` (7), `inv-table` (5), `info`
+(5), `odoo-table` (4) and 9 singletons. Those still share their width by longest-word.
+
+W5 is the severable follow-up that adopts them, the same way `.card-table` was introduced: an
+opt-in class added **beside** the page's own class, with not one existing declaration changed.
+It doubles the diff of this run, which is why it was scoped out rather than rushed.
+
+`Company_ValleyFoods_MfgOrderView.html` is the page that most visibly waits on it — every table on
+it is `odoo-table card-table`, so it gained nothing from this run.

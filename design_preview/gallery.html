@@ -195,6 +195,73 @@
   section('table-empty', 'Empty state',
     UIC.dataTable('gx-empty', { headers: HEADERS, rows: [] }));
 
+  /* ── [UI-9.1] The wide-table artboard ─────────────────────────────────
+   * A vf_cash-shaped table: thirteen columns, eleven of them atoms, and two
+   * holding the sentence that says what the row IS. This is the case the
+   * column-width contract exists for, and it is the ONLY thing in this repo
+   * that can show whether the contract works — there is no layout engine in
+   * the verify suite, so s18 proves the classes are right and this artboard
+   * is where the WIDTHS are checked, by eye, at the six device widths.
+   *
+   * What to look for, at each width:
+   *   البيان is at least four words wide on one line, and is the widest
+   *     column on the row;
+   *   التاريخ, رقم, كود الحساب and المبلغ are each about as wide as their
+   *     contents and no wider;
+   *   below about 1100px the table scrolls SIDEWAYS inside its box rather
+   *     than crushing البيان to one word per line — the scrollbar is the
+   *     intended outcome, not a regression;
+   *   below 600px the whole thing becomes a card per row and none of this
+   *     applies, because the phone tier hides the thead entirely. */
+  var WIDE_HEADERS = ['رقم', 'التاريخ',
+    { label: 'الطرف', col: 'text' },
+    { label: 'البيان', col: 'prose', min: '30ch' },
+    'النوع', 'طريقة الدفع',
+    { label: 'المبلغ', numeric: true }, 'الصندوق', 'كود الحساب', 'المستخدم',
+    { label: 'الرصيد', numeric: true },
+    { label: 'الاعتماد', col: 'atom' }, ''];
+
+  function wideRows(n) {
+    var details = [
+      'إيصال صرف نقدي (مدفوعات له) - حساب عين سولار ٧٦٠ لتر ٦٥٠ توصيل',
+      'سداد دفعة من حساب المورد عن فاتورة رقم ٢٦٧٩ بتاريخ اليوم',
+      'تحويل بين الصناديق - من الخزنة الرئيسية إلى خزنة المصنع',
+      'مصروفات نقل وشحن بضاعة من ميناء الإسكندرية إلى المخزن',
+      'إيصال استلام نقدية من العميل مقابل فاتورة مبيعات'
+    ];
+    var parties = ['شركة النور للتجارة', 'مؤسسة الأمل', 'محمد عبد الرحمن', 'شركة عين سولار'];
+    var out = [];
+    for (var i = 0; i < n; i++) {
+      out.push([
+        '<b>' + (2670 + i) + '</b>',
+        '<span data-sort="2025-10-' + (10 + (i % 20)) + '">' + (10 + (i % 20)) + '/10/2025</span>',
+        parties[i % parties.length],
+        details[i % details.length],
+        i % 2 ? 'صرف نقدي' : 'استلام',
+        i % 3 ? 'نقدي' : 'شيك',
+        '<span class="num" data-num="13950">' + (13950 + i * 37).toLocaleString('en-US') + '.00</span>',
+        i % 2 ? 'الخزنة الرئيسية' : 'خزنة المصنع',
+        '510' + (i % 9),
+        ['محمد', 'أحمد', 'سارة'][i % 3],
+        '<span class="num" data-num="-13950">(' + (13950 - i * 11).toLocaleString('en-US') + '.00)</span>',
+        UIC.statusPill(i % 2 ? 'معتمد' : 'غير معتمد', i % 2 ? 'success' : 'neutral'),
+        UIC.actionDropdown([
+          { label: 'تعديل', onclick: "UIC.toast('تعديل')" },
+          { label: 'حذف', onclick: "UIC.toast('حذف','error')", color: 'var(--danger)' }
+        ])
+      ]);
+    }
+    return out;
+  }
+
+  section('table-wide', 'The wide table — 13 columns, vf_cash shaped (UI-9.1)',
+    '<div id="gx-wide"></div>',
+    'البيان must be at least four words wide on ONE line and the widest column ' +
+    'on the row; التاريخ / رقم / كود الحساب must each be only as wide as their ' +
+    'contents. Narrow the window: the table scrolls sideways rather than ' +
+    'crushing البيان — the scrollbar is the intended outcome. Below 600px the ' +
+    'thead is hidden and every row becomes a card, so the contract is inert.');
+
   section('skeleton', 'Loading skeleton',
     '<div class="table-wrap gx-pad">' + UIC.tableSkeleton(HEADERS, 4) + '</div>');
 
@@ -283,6 +350,14 @@
     } catch (e) {
       bootErrors.push('appShell: ' + e.message);
     }
+  }
+
+  if (document.getElementById('gx-wide')) {
+    document.getElementById('gx-wide').innerHTML = UIC.dataTable('gx-wide-dt', {
+      headers: WIDE_HEADERS,
+      rows: wideRows(40),
+      title: 'حركة الصناديق'
+    });
   }
 
   if (document.getElementById('gx-table')) {
