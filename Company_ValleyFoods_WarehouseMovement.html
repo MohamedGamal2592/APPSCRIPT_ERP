@@ -101,7 +101,12 @@
           var c = document.getElementById('wm-table');
           if (c) c.innerHTML = '<p style="color:var(--danger, #dc2626);">' + esc((e && e.message) || 'تعذر تحميل الحركات') + '</p>';
         })
-        .finally(function () { if (!quiet) UI.hideSpinner(); });
+        .finally(function () {
+          if (!quiet) UI.hideSpinner();
+          /* warm the modal's option lists while the user reads the ledger,
+             so opening the form costs no round trip */
+          try { ensureOptions().catch(function () {}); } catch (e) {}
+        });
     }
 
     function buildTable() {
@@ -162,9 +167,19 @@
     }
 
     /* ---------- ADD MODAL (add-only: this ledger has no edit or delete path) ---------- */
+    /* The option lists are the same every time the modal opens, so they are
+       fetched once and kept, and warmed while the user reads the ledger. */
+    var __optionsPromise = null;
+    function ensureOptions() {
+      if (__optionsPromise) return __optionsPromise;
+      __optionsPromise = companyCall('get_valley_warehouse_move_options')
+        .catch(function (e) { __optionsPromise = null; throw e; });
+      return __optionsPromise;
+    }
+
     function openAdd() {
       UI.showSpinner();
-      companyCall('get_valley_warehouse_move_options')
+      ensureOptions()
         .then(function (r) {
           __options = r || {};
           if (__options.in_type) __inType = __options.in_type;

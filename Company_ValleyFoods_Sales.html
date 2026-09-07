@@ -144,7 +144,7 @@
           }
         });
       }
-      if (!quiet) UI.hideSpinner(); try{schedulePrefetch();}catch(e){}
+      if (!quiet) UI.hideSpinner(); try{schedulePrefetch();}catch(e){} try{ensureBootstrap().catch(function(){});}catch(e){}
     }
 
     function partyLabel(idRef) {
@@ -158,10 +158,23 @@
 
     function openAdd() { DRAFT_LINES = []; openInvoiceModal(null); }
 
+    /* The parties, products and enums a form needs are the same every time it
+       opens, so they are fetched once and kept. Warmed while the user is still
+       reading the list, which is what makes the form open with no round trip.
+       A failure clears the memo so the next open retries rather than caching
+       an error forever. */
+    var __bootstrapPromise = null;
+    function ensureBootstrap() {
+      if (__bootstrapPromise) return __bootstrapPromise;
+      __bootstrapPromise = companyCall('get_valley_sales_bootstrap')
+        .catch(function (e) { __bootstrapPromise = null; throw e; });
+      return __bootstrapPromise;
+    }
+
     function openEdit(uid) {
       UI.showSpinner();
       Promise.all([
-        companyCall('get_valley_sales_bootstrap'),
+        ensureBootstrap(),
         companyCall('get_valley_invoice_full', { invoice_unique_id: uid })
       ])
         .then(function (res) {

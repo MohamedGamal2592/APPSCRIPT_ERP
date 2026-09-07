@@ -92,10 +92,20 @@
           }
         });
       }
-      if (!quiet) UI.hideSpinner(); try{schedulePrefetch();}catch(e){}
+      if (!quiet) UI.hideSpinner(); try{schedulePrefetch();}catch(e){} try{ensureBootstrap().catch(function(){});}catch(e){}
     }
 
     /* ---------- ADD RETURN MODAL ---------- */
+    /* Fetched once and kept, then warmed while the user reads the list — see
+       the same helper in Sales. */
+    var __bootstrapPromise = null;
+    function ensureBootstrap() {
+      if (__bootstrapPromise) return __bootstrapPromise;
+      __bootstrapPromise = companyCall('get_valley_sales_bootstrap')
+        .catch(function (e) { __bootstrapPromise = null; throw e; });
+      return __bootstrapPromise;
+    }
+
     function openAdd() {
       UI.showSpinner();
       companyCall('get_valley_sales_list')
@@ -104,7 +114,7 @@
             return { value: String(inv.invoice_unique_id), label: String(inv['رقم الفاتورة'] || '-') };
           });
           /* party labels need the parties list — fetch via bootstrap-lite */
-          return companyCall('get_valley_sales_bootstrap').then(function (bs) {
+          return ensureBootstrap().then(function (bs) {
             var pmap = {};
             (bs.parties || []).forEach(function (p) { pmap[String(p.value)] = p.label; });
             invs.forEach(function (o, i2) {

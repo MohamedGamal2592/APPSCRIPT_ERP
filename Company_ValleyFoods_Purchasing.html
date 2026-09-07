@@ -133,7 +133,7 @@
           Object.keys(incoming).forEach(function (k) { __options[k] = incoming[k]; });
           CAN_SEE_COST = (r && r.can_see_cost !== false);
           __headers = (r && r.headers) || [];
-          renderHeadersTable(); try{schedulePrefetch();}catch(e){};
+          renderHeadersTable(); try{schedulePrefetch();}catch(e){} try{ensureOptions().catch(function(){});}catch(e){};
         })
         .catch(function (e) { showError(e); })
         .finally(function () { if (!quiet) UI.hideSpinner(); });
