@@ -580,3 +580,34 @@ and the cache TTLs go to six hours, which removes the periodic sheet reads inste
 **Rolling back** is clean: reverting the deploy restores the old keys and the old short TTLs, which
 self-heal within 120s. Leave the `erp_gen` property — the old code never reads it. Leave the
 `onAuthSheetEdit` trigger too; it only calls `bumpVersion_`, which the old code also uses.
+
+---
+
+# الحضور والانصراف (`vf_hr_attendance`) — BLOCKED ON YOU
+
+The attendance rebuild is committed and green, but **it cannot be fully useful until you add the
+columns below by hand.** Code never adds a column to an existing sheet, so this step is yours and
+only yours. Every handler detects each column by header name and degrades correctly without it:
+imports still work, they just carry no batch id, and undo refuses with a message naming the column
+it needs.
+
+**Append at the END of each sheet, in this order. Reorder nothing, rename nothing, retype nothing.**
+
+`valley_employee_attendance` — after `created_at`:
+`import_batch_id`, `entry_source`, `parsed_format`, `source_raw`
+
+`valley_attendance_session` — after `created_at`:
+`import_batch_id`
+
+`valley_attendance_needs_review` — after `uploaded_at`:
+`review_id`, `import_batch_id`, `review_status`, `emp_id_guess`, `datetime_guess`,
+`resolved_by`, `resolved_at`
+
+`valley_attendance_import_batch` is a **new sheet** and is created by the code on first use. You do
+not need to make it.
+
+Until `import_batch_id` exists on `valley_employee_attendance`, the ↩️ تراجع button is hidden
+rather than shown-and-broken. Until `review_id` and `review_status` exist on
+`valley_attendance_needs_review`, the review queue is read-only and says so.
+
+The full acceptance checklist is in **VALLEY_ATTENDANCE_RESULTS.md §4**.

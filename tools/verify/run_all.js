@@ -31,6 +31,9 @@ const STEPS = [
   ['s14_iphone.js', 'S14 — iPhone: openTab/closeOrBack fallbacks, .inv-table three states, >=600px unchanged'],
   ['s15_iphone_rest.js', 'S15 — iPhone: printDoc/openDownload fallbacks, .card-table, >=600px unchanged'],
   ['s16_realtime_authority.js', 'S16 — authority generation: kill switch, matrix and role are one-refresh'],
+  /* A different programme from s16_realtime_authority above; the file names do
+     not collide and the label is S16b so this runner's output stays readable. */
+  ['s16_attendance.js', 'S16b — الحضور: invariants, date inference, batch undo'],
   /* ── UI/UX programme (branch ui/odoo-parity) ── */
   ['ui1_anchor.js', 'UI-1.2 — popups escape the table clip box (U-01)'],
   ['ui1_sort.js', 'UI-1.3 — tri-state sort, load order preserved (U-03)'],
