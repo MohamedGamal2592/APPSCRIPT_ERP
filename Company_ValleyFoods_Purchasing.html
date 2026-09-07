@@ -388,12 +388,21 @@
         ? UIC.combo({ key: 'product_' + i, inline: true, options: availableProducts(i), value: l.product || '', placeholder: 'ابحث عن منتج…' })
         : '<div class="input" style="background:var(--bg-subtle);">' + esc(productLabel(l.product)) + '</div>';
 
-      var movementCtl = '<select id="movement_type_' + i + '" class="input"' + dis +
-        ' onchange="updateLineSelect(' + i + ', \'movement_type\', this.value)">' +
-        '<option value="">اختر...</option>' +
-        (opts.movement_type_options || []).map(function (o) {
-          return '<option value="' + esc(o.fifth) + '"' + (String(o.fifth) === String(l.movement_type) ? ' selected' : '') + '>' + esc(o.code) + '</option>';
-        }).join('') + '</select>';
+      /* نوع الحركة is a reference into the chart of accounts, so the list is as
+         long as the chart — the same searchable combo the product picker uses,
+         for the same reason. Stores «المستوى الخامس», shows «اسم المستوى الخامس». */
+      var movementCtl = __canEdit
+        ? UIC.combo({
+            key: 'movement_type_' + i,
+            inline: true,
+            required: true,
+            options: (opts.movement_type_options || []).map(function (o) {
+              return { value: o.fifth, label: o.code };
+            }),
+            value: l.movement_type || '',
+            placeholder: 'ابحث عن نوع الحركة…'
+          })
+        : '<div class="input" style="background:var(--bg-subtle);">' + esc(movementTypeLabel(l.movement_type)) + '</div>';
 
       var numCtl = function (key, val, step) {
         return '<input class="input" type="number" min="0" step="' + step + '"' + dis +
@@ -461,6 +470,9 @@
       if (!__canEdit) return;
       var el = document.getElementById('product_' + i);
       if (el) el.addEventListener('change', function () { updateLineProduct(i, el.value); });
+      /* the combo reports through a change event, exactly as the product one does */
+      var mv = document.getElementById('movement_type_' + i);
+      if (mv) mv.addEventListener('change', function () { updateLineSelect(i, 'movement_type', mv.value); });
     }
 
     function renderLines() {
@@ -690,9 +702,13 @@
       companyCall('save_valley_purchasing_costing', payload)
         .then(function (r) {
           UIC.toast(r.message || 'تم الحفظ', 'success');
-          showList();
+          showList(true);
         })
-        .catch(function (e) { UI.hideSpinner(); UIC.toast((e && e.message) || 'خطأ', 'error'); });
+        .catch(function (e) { UIC.toast((e && e.message) || 'خطأ', 'error'); })
+        /* The overlay this save raised is lowered by this save. It used to be
+           cleared as a side effect of the reload's own hideSpinner, which
+           stopped happening the moment that reload went quiet. */
+        .finally(function () { UI.hideSpinner(); });
     }
 
     function doAction(code, action) {
@@ -809,7 +825,8 @@
       UI.showSpinner('جاري الحذف...');
       companyCall('delete_valley_purchasing_costing', { code: code })
         .then(function (r) { UIC.toast(r.message || 'تم الحذف', 'success'); showList(true); })
-        .catch(function (e) { UI.hideSpinner(); UIC.toast((e && e.message) || 'خطأ', 'error'); });
+        .catch(function (e) { UIC.toast((e && e.message) || 'خطأ', 'error'); })
+        .finally(function () { UI.hideSpinner(); });
     }
 
     function showList(quiet) {

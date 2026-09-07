@@ -196,6 +196,79 @@ console.log('\n4 — a converted page does not still block on its own writes\n')
   check(bad.length === 0, 'no converted page blocks on a refresh it triggered itself', bad.join('\n'));
 }
 
+/* ══ 5. no save leaves the loading overlay up ═══════════════════════════ */
+console.log('\n5 — a save that raises the overlay also lowers it\n');
+{
+  /* Before the rollout most saves did NOT hide their own spinner: they called
+     load(), and load()'s own .finally(UI.hideSpinner) cleared it as a side
+     effect. Making that refresh quiet removed the hide, so the overlay stayed
+     up after a successful save — the success toast appearing behind a modal
+     that never closed. Two purchasing paths did exactly that.
+
+     A save leaks when, in the same function, it shows the overlay and the only
+     hide is inside .catch(...) — or there is no hide at all. */
+  const WRITE = /companyCall\('(?:save|add|approve|delete|remove|toggle|transfer|commit|resolve|revert)_[a-z_]+'/;
+
+  function bodies(src) {
+    const out = [];
+    const re = /function\s+([A-Za-z0-9_]+)\s*\(([^)]*)\)\s*\{/g;
+    let m;
+    while ((m = re.exec(src)) !== null) {
+      const open = src.indexOf('{', m.index + m[0].length - 1);
+      let depth = 0;
+      for (let j = open; j < src.length; j++) {
+        if (src[j] === '{') depth++;
+        else if (src[j] === '}') {
+          depth--;
+          if (depth === 0) { out.push({ name: m[1], args: m[2], body: src.slice(open, j + 1) }); break; }
+        }
+      }
+    }
+    return out;
+  }
+
+  function catches(body) {
+    const out = [];
+    const re = /\.catch\s*\(/g;
+    let m;
+    while ((m = re.exec(body)) !== null) {
+      let depth = 0;
+      for (let j = m.index + m[0].length - 1; j < body.length; j++) {
+        if (body[j] === '(') depth++;
+        else if (body[j] === ')') { depth--; if (depth === 0) { out.push(body.slice(m.index, j + 1)); break; } }
+      }
+    }
+    return out;
+  }
+
+  const SHOW = /UI\.showSpinner\(|(?:^|[^A-Za-z_.])showLoading\(/;
+  const HIDE = /UI\.hideSpinner\(|(?:^|[^A-Za-z_.])hideLoading\(/g;
+
+  const bad = [];
+  let checked = 0;
+  pages.forEach(function (f) {
+    if (!/^Company_ValleyFoods_/.test(f)) return;
+    const src = stripComments(fs.readFileSync(path.join(ROOT, f), 'utf8'));
+    bodies(src).forEach(function (fn) {
+      if (!WRITE.test(fn.body)) return;
+      if (/\bquiet\b/.test(fn.args)) return;      /* that is the refresh itself */
+      if (!SHOW.test(fn.body)) return;
+      checked++;
+      const inCatch = catches(fn.body).join('\n');
+      const all = (fn.body.match(HIDE) || []).length;
+      const only = (inCatch.match(HIDE) || []).length;
+      if (all - only === 0) {
+        bad.push('        ' + f + ' — ' + fn.name +
+          '() raises the overlay and only lowers it on error');
+      }
+    });
+  });
+  check(checked > 0, checked + ' write path(s) raise the loading overlay');
+  check(bad.length === 0,
+    'every one of them lowers it on success too, not just on error',
+    bad.join('\n'));
+}
+
 console.log('\n' + (failed === 0
   ? 'S20 — the quiet-refresh rollout is consistent.'
   : failed + ' check(s) FAILED.'));
