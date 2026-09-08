@@ -895,9 +895,21 @@ console.log('\nL — calendar-first layout (VALLEY_ATTENDANCE_LAYOUT_PLAN.md §5
   const pf = fnBody('printForgetForm') || '';
   check(/features:\s*'width=800,height=600'/.test(pf), "L-11: printForgetForm still passes features: 'width=800,height=600'");
 
+  /* L-13 — month navigation shows the blocking overlay (owner-requested),
+     while loadSessions itself stays overlay-free so RT-1 holds. */
+  const be = fnBody('bindEvents') || '';
+  const sm = fnBody('shiftMonth') || '';
+  const ls = fnBody('loadSessions') || '';
+  const wmo = fnBody('withMonthOverlay') || '';
+  check(sm.indexOf('withMonthOverlay(loadSessions)') !== -1, 'L-13: shiftMonth loads the month under the overlay');
+  check((be.match(/withMonthOverlay\(loadSessions\)/g) || []).length === 1, 'L-13: and so does the اليوم handler');
+  check(/UI\.showSpinner\(/.test(wmo) && /finally[\s\S]*UI\.hideSpinner\(\)/.test(wmo),
+    'L-13: withMonthOverlay shows the spinner and always hides it');
+  check(!/showSpinner|showPageLoading/.test(ls) && /return companyCall\(/.test(ls),
+    'L-13: loadSessions raises no overlay itself and returns its promise');
+
   /* L-12 — controls that are created with a modal are bound after it opens,
      never in bindEvents(), where they would silently bind to nothing. */
-  const be = fnBody('bindEvents') || '';
   [['vf-csv-input', 'openImportModal'], ['vf-review-all-btn', 'openReviewModal'], ['vf-batches-all-btn', 'openBatchesModal']]
     .forEach(function (pair) {
       const opener = fnBody(pair[1]) || '';

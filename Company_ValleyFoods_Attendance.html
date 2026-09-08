@@ -267,7 +267,9 @@
     function loadSessions() {
       var b = monthBounds(VIEW_YEAR, VIEW_MONTH);
       var payload = (VIEW_MODE === 'table') ? { loadAll: TABLE_ALL ? true : undefined, limit: TABLE_ALL ? undefined : 30 } : { from: b.from, to: b.to };
-      companyCall('get_attendance_sessions', payload)
+      /* Returned so a caller can wait on it; the read itself raises no
+         overlay (RT-1). */
+      return companyCall('get_attendance_sessions', payload)
         .then(function (resp) {
           SESSIONS = (resp && resp.sessions) || [];
           SESSIONS_TOTAL = (resp && resp.total) || SESSIONS.length;
@@ -278,6 +280,15 @@
           var c = document.getElementById('vf-days-body');
           if (c) c.innerHTML = '<p class="vf-text-muted">تعذر تحميل الأيام.</p>';
         });
+    }
+
+    /* Owner-requested: moving between months raises the shared blocking
+       overlay, naming the month, so the change is visibly in progress. Only
+       the three navigation handlers wrap the read; every other caller of
+       loadSessions (boot, the live poll, saves) stays overlay-free. */
+    function withMonthOverlay(run) {
+      UI.showSpinner('جاري تحميل ' + AR_MONTHS[VIEW_MONTH] + ' ' + VIEW_YEAR + '...');
+      return Promise.resolve().then(run).finally(function () { UI.hideSpinner(); });
     }
 
     function renderDays() {
@@ -361,7 +372,7 @@
       VIEW_YEAR += Math.floor(m / 12);
       VIEW_MONTH = ((m % 12) + 12) % 12;
       syncRangeToMonth();
-      loadSessions();
+      withMonthOverlay(loadSessions);
     }
 
     function toggleView() {
@@ -1648,7 +1659,7 @@
       if (todayBtn) todayBtn.addEventListener('click', function () {
         var n = new Date(); VIEW_YEAR = n.getFullYear(); VIEW_MONTH = n.getMonth();
         syncRangeToMonth();
-        loadSessions();
+        withMonthOverlay(loadSessions);
       });
       var rangeStart = document.getElementById('vf-range-start');
       if (rangeStart) rangeStart.addEventListener('input', function () { RANGE_TOUCHED = true; });
