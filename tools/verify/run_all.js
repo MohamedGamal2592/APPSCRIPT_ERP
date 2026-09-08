@@ -83,6 +83,7 @@ const STEPS = [
   ['rt2_queue.js', 'RT2b — a refused save rolls back exactly; a dropped one is queued'],
   ['rt3_stamp_coverage.js', 'RT3 — every direct sheet write bumps the version a watcher reads'],
   ['rt4_cache.js', 'RT4 — cache-first with revalidation; a hostile store degrades to a fetch'],
+  ['rt5_budget.js', 'RT5 — the minified bundle is smaller and provably equivalent'],
   ['rt8_search_scope.js', 'RT8 — no search box over a truncated list stays silent about it']
 ];
 

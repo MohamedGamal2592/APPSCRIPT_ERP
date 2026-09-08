@@ -7,6 +7,11 @@
 /* Globals shared with HTML templates via include() (set per request in doGet). */
 var SCRIPT_URL = '';
 var CURRENT_SESSION_TOKEN = '';
+/* [RT-8] ?nominify=1 serves the shared files exactly as they are on disk.
+ * The minifier is the change in this programme that can ship silently wrong —
+ * a file that still parses and behaves differently — so there is a way to turn
+ * it off without a deploy while it is being trusted. */
+var NO_MINIFY = false;
 var CURRENT_USER = null;
 
 function doGet(e) {
@@ -39,6 +44,7 @@ function doGet(e) {
   const scriptUrl = ScriptApp.getService().getUrl();
   SCRIPT_URL = scriptUrl;
   CURRENT_SESSION_TOKEN = String(e.parameter.sessionToken || '').trim();
+  NO_MINIFY = String(e.parameter.nominify || '') === '1';
 
   // Session-expired interstitial: API layer redirects here; the button goes on
   // to the login page. Shown before any auth/page lookup.
@@ -620,6 +626,223 @@ function jsonSafe_(value) {
  * content actually contains a scriptlet, so an include that later gains one keeps
  * working with no further change here. Placeholder substitution is unchanged.
  */
+/* ══════════════════════════════════════════════════════════════════════════
+ * [RT-8] minifyInclude_ — comments and whitespace off the wire, nothing else
+ *
+ * Every navigation is a full document load and HtmlService cannot set
+ * Cache-Control, so the shared bundle is downloaded, parsed and executed again
+ * on every single navigation: 268 KB of UI_Components, 24 KB of Client_Helpers
+ * and 14 KB of CSS_Tokens, 85 times over. UI_Components alone is 37% comments
+ * and whitespace by byte. Gzip helps the transfer and does nothing at all for
+ * the parse, which is the part that blocks first paint.
+ *
+ * WHAT THIS MAY DO: remove comments, and collapse whitespace that is not inside
+ * a string, a template literal or a regular expression.
+ *
+ * WHAT THIS MAY NOT DO, ever: rename anything. UIC.*, API.*, FMT.*, UI.*,
+ * SESSION.*, ERPFlow.* and ERPModal.* are a cross-file public surface — pages
+ * call them by name and tools/ui_check.js C3 verifies them. An identifier
+ * mangler here would break every page in the product at once and pass every
+ * test that only looks at one file.
+ *
+ * The comments in this codebase are unusually good and they all stay in source.
+ * This removes them from the wire only.
+ *
+ * WHY A SCANNER AND NOT REGEXES. A regex that eats `//` inside a string
+ * literal, or `/* *\/` inside a template literal, produces a file that still
+ * parses and behaves differently — the worst possible failure, because nothing
+ * reports it. This walks the source one character at a time and knows exactly
+ * which of five states it is in. The two genuinely hard cases are handled
+ * explicitly:
+ *
+ *   - `/` is division or the start of a regex depending on what came before it.
+ *     Decided on the last significant token, the standard rule.
+ *   - A template literal may contain `${ ... }` holding arbitrary code, which
+ *     may itself contain another template literal. Depth is tracked.
+ *
+ * Everything inside a string, a template literal or a regex is copied byte for
+ * byte, which is what keeps Arabic literals, CSS in template literals and
+ * `https://` URLs intact.
+ * ══════════════════════════════════════════════════════════════════════════ */
+function minifyInclude_(src) {
+  if (!src) return src;
+  var out = [];
+  var n = src.length;
+  var i = 0;
+
+  /* The last significant character emitted, for the regex-vs-division call. */
+  var prev = '';
+  var prevWord = '';
+
+  /* Template-literal nesting: each entry is the ${} depth inside that level. */
+  var tmpl = [];
+
+  function lastNonSpace() {
+    for (var k = out.length - 1; k >= 0; k--) {
+      var c = out[k];
+      if (c !== ' ' && c !== '\n') return c;
+    }
+    return '';
+  }
+
+  /* A `/` begins a regex when the previous significant token cannot end an
+   * expression. Everything that CAN end one (an identifier, a number, `)`,
+   * `]`, a string) means division instead. */
+  function regexAllowed() {
+    var c = lastNonSpace();
+    if (c === '') return true;
+    if ('([{,;:!&|?+-*%^~=<>'.indexOf(c) !== -1) return true;
+    if (c === ')' || c === ']' || c === '}') return false;
+    /* keyword-then-slash: `return /x/`, `typeof /x/`, `case /x/` */
+    return /\b(return|typeof|case|in|of|new|delete|void|instanceof|do|else|yield|await)$/.test(prevWord);
+  }
+
+  while (i < n) {
+    var c = src[i];
+    var d = src[i + 1];
+
+    /* ── inside a template literal ─────────────────────────────────────── */
+    if (tmpl.length && tmpl[tmpl.length - 1].raw) {
+      if (c === '\\') { out.push(c, src[i + 1]); i += 2; continue; }
+      if (c === '`') { tmpl.pop(); out.push(c); i++; prev = c; continue; }
+      if (c === '$' && d === '{') {
+        tmpl[tmpl.length - 1].raw = false;
+        tmpl[tmpl.length - 1].depth = 1;
+        out.push('$', '{'); i += 2; continue;
+      }
+      out.push(c); i++; continue;      /* byte for byte, newlines included */
+    }
+
+    /* ── block comment ─────────────────────────────────────────────────── */
+    if (c === '/' && d === '*') {
+      var end = src.indexOf('*/', i + 2);
+      i = (end === -1) ? n : end + 2;
+      /* A comment separated two tokens; leave one space so `a/*x*\/b` does not
+       * become `ab`. */
+      if (out.length && lastNonSpace() !== '') out.push(' ');
+      continue;
+    }
+
+    /* ── line comment ──────────────────────────────────────────────────── */
+    if (c === '/' && d === '/') {
+      while (i < n && src[i] !== '\n') i++;
+      continue;
+    }
+
+    /* ── HTML comment ──────────────────────────────────────────────────── */
+    if (c === '<' && src.substr(i, 4) === '<!--') {
+      var he = src.indexOf('-->', i + 4);
+      i = (he === -1) ? n : he + 3;
+      continue;
+    }
+
+    /* ── string ────────────────────────────────────────────────────────── */
+    if (c === '"' || c === "'") {
+      var q = c;
+      out.push(c); i++;
+      while (i < n) {
+        if (src[i] === '\\') { out.push(src[i], src[i + 1]); i += 2; continue; }
+        out.push(src[i]);
+        if (src[i] === q) { i++; break; }
+        i++;
+      }
+      prev = q; prevWord = '';
+      continue;
+    }
+
+    /* ── template literal opens ────────────────────────────────────────── */
+    if (c === '`') {
+      tmpl.push({ raw: true, depth: 0 });
+      out.push(c); i++; prev = c; prevWord = '';
+      continue;
+    }
+
+    /* ── regex literal ─────────────────────────────────────────────────── */
+    if (c === '/' && regexAllowed()) {
+      out.push(c); i++;
+      var inClass = false;
+      while (i < n) {
+        var r = src[i];
+        if (r === '\\') { out.push(r, src[i + 1]); i += 2; continue; }
+        if (r === '[') inClass = true;
+        else if (r === ']') inClass = false;
+        else if (r === '/' && !inClass) { out.push(r); i++; break; }
+        else if (r === '\n') break;       /* not a regex after all; bail safely */
+        out.push(r); i++;
+      }
+      /* flags */
+      while (i < n && /[a-z]/.test(src[i])) { out.push(src[i]); i++; }
+      prev = '/'; prevWord = '';
+      continue;
+    }
+
+    /* ── whitespace ────────────────────────────────────────────────────── */
+    if (c === ' ' || c === '\t' || c === '\r' || c === '\n') {
+      var j = i;
+      var sawNewline = false;
+      while (j < n && (src[j] === ' ' || src[j] === '\t' || src[j] === '\r' || src[j] === '\n')) {
+        if (src[j] === '\n') sawNewline = true;
+        j++;
+      }
+      var before = lastNonSpace();
+      var after = src[j] || '';
+      /* Keep ONE separator when removing it would join two tokens, or when a
+       * newline is doing the job of a semicolon (ASI). Otherwise drop it. */
+      var wordish = function (ch) { return /[A-Za-z0-9_$-￿]/.test(ch); };
+      if (before && after && (wordish(before) && wordish(after))) out.push(' ');
+      else if (sawNewline && before && after && '+-'.indexOf(after) !== -1) out.push('\n');
+      else if (sawNewline && before && ')]}'.indexOf(before) === -1 &&
+               ';{}(,:[=&|?+-*/%<>!'.indexOf(before) === -1 && after && '.)]},;:'.indexOf(after) === -1) {
+        /* A line break that could be terminating a statement. Cheaper to keep
+         * it than to reason about automatic semicolon insertion. */
+        out.push('\n');
+      }
+      i = j;
+      continue;
+    }
+
+    /* ── ordinary code ─────────────────────────────────────────────────── */
+    if (tmpl.length && !tmpl[tmpl.length - 1].raw) {
+      if (c === '{') tmpl[tmpl.length - 1].depth++;
+      else if (c === '}') {
+        tmpl[tmpl.length - 1].depth--;
+        if (tmpl[tmpl.length - 1].depth === 0) tmpl[tmpl.length - 1].raw = true;
+      }
+    }
+    out.push(c);
+    prevWord = /[A-Za-z0-9_$]/.test(c) ? (prevWord + c) : '';
+    prev = c;
+    i++;
+  }
+
+  return out.join('');
+}
+
+/* Which files are worth minifying. The three shared ones are 87% of every
+ * page's payload and are included by 85 pages each; a page's own body is
+ * included once and is small. Keeping the list explicit means a new page
+ * template cannot accidentally be run through the minifier before anyone has
+ * looked at it. */
+var MINIFY_FILES_ = { 'UI_Components': 1, 'Client_Helpers': 1, 'CSS_Tokens': 1 };
+
+/* A cheap, stable content hash. Not a checksum — a cache key. */
+function contentHash_(s) {
+  var h = 5381;
+  for (var i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+  return (h >>> 0).toString(36) + '_' + s.length.toString(36);
+}
+
+/*
+ * [RT-8] include() runs for every shared file on every page render — 85 times
+ * per navigation — and already did a split().join() over the whole string
+ * twice. Minifying on top of that, per request, would cost far more than the
+ * bytes it saves.
+ *
+ * So the result is held in CacheService keyed by a hash of the CONTENT, not by
+ * the filename: a filename key would go stale on the next deploy and serve the
+ * previous release's JavaScript, which is a much worse bug than a slow render.
+ * With a content key, a deploy simply misses once and re-fills.
+ */
 function include(filename) {
   var rendered;
   try {
@@ -630,6 +853,31 @@ function include(filename) {
   } catch (e) {
     rendered = HtmlService.createTemplateFromFile(filename).evaluate().getContent();
   }
+
+  if (MINIFY_FILES_[filename] && !NO_MINIFY) {
+    try {
+      var key = 'min_' + contentHash_(rendered);
+      /* The CHUNKED cache, not CacheService directly: the minified
+       * UI_Components is about 195 KB and a single CacheService value is
+       * capped at 100 KB. A plain put() would fail silently and this would
+       * re-minify a 300 KB file on every one of the 85 include() calls per
+       * navigation — far more expensive than the bytes it saves.
+       * putChunkedCache_/getChunkedCache_ already solve exactly this, and
+       * already treat a partial eviction as a total miss. */
+      var hit = getChunkedCache_(key);
+      if (hit === null || typeof hit !== 'string') {
+        hit = minifyInclude_(rendered);
+        /* Six hours, the CacheService maximum. An eviction costs one
+         * re-minify, never a wrong answer, because the key IS the content. */
+        putChunkedCache_(key, hit, 21600);
+      }
+      rendered = hit;
+    } catch (eMin) {
+      /* A minifier that throws must never take a page down with it. The
+       * unminified file is always a correct answer. */
+    }
+  }
+
   rendered = rendered.split('__APP_WEB_URL__').join(SCRIPT_URL)
                    .split('__APP_SESSION_TOKEN__').join(CURRENT_SESSION_TOKEN);
   return rendered;
