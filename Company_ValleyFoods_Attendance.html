@@ -155,6 +155,9 @@
       syncRangeToMonth();
       loadSessions();
       loadReview();
+      /* One extra read per page open, for the الناقص badge (D-1). Flippable:
+         drop this line and the badge fills on the queue's first open. */
+      try { loadExceptions(true); } catch (e) {}
       if (CAN_WRITE) loadBatches();
     }
 
@@ -172,7 +175,6 @@
         renderCalendarSection() +
         (CAN_WRITE ? renderUploadSection() : '') +
         (CAN_WRITE ? renderManualSection() : '') +
-        renderReviewSection() +
         renderForgetSection() +
         (CAN_WRITE ? renderBatchesSection() : '') +
       '</div>';
@@ -1099,10 +1101,26 @@
     /* D-16. valley_attendance_needs_review has existed all along with no UI at
        all — the old result panel told the user to go and open a raw sheet by
        name. That sheet name does not appear anywhere in this interface. */
-    function renderReviewSection() {
-      return card('صفوف تحتاج مراجعة',
-        '<div id="vf-review-body"><p class="vf-text-muted">جاري التحميل...</p></div>',
-        '<button id="vf-review-all-btn" class="btn btn-outline">عرض المعالج أيضاً</button>');
+    /* The queue is already in REVIEW from boot, so the modal shows rows at
+       once and then refreshes. The عرض المعالج أيضاً toggle is the footer;
+       it is created with the modal, so it is bound here, not in bindEvents.
+       Its label follows REVIEW_STATUS, which outlives the modal. */
+    function openReviewModal() {
+      UIC.openModal('vf-review-modal', {
+        title: 'صفوف تحتاج مراجعة',
+        size: 'xl',
+        body: '<div id="vf-review-body"><p class="vf-text-muted">جاري التحميل...</p></div>',
+        footer: '<button id="vf-review-all-btn" class="btn btn-outline">' +
+          ((REVIEW_STATUS === 'open') ? 'عرض المعالج أيضاً' : 'عرض المفتوح فقط') + '</button>'
+      });
+      var reviewAllBtn = document.getElementById('vf-review-all-btn');
+      if (reviewAllBtn) reviewAllBtn.addEventListener('click', function () {
+        REVIEW_STATUS = (REVIEW_STATUS === 'open') ? 'all' : 'open';
+        reviewAllBtn.innerHTML = (REVIEW_STATUS === 'open') ? 'عرض المعالج أيضاً' : 'عرض المفتوح فقط';
+        loadReview(REVIEW_STATUS);
+      });
+      renderReviewTable();
+      loadReview();
     }
 
     function loadReview(status) {
@@ -1267,10 +1285,20 @@
       companyCall('get_attendance_exceptions', { from: from, to: to, loadAll: true })
         .then(function (r) {
           EXCEPTIONS = (r && r.rows) || [];
+          setExcBadge(EXCEPTIONS.length);
           renderExceptionsTable(r || {});
         })
         .catch(function (e) { UIC.toast((e && e.message) || 'تعذر تحميل البيانات', 'error'); })
         .finally(function () { if (!quiet) UI.hideSpinner(); });
+    }
+
+    /* The count on the ⚠️ الناقص button — shown and hidden exactly the way
+       loadReview treats vf-review-badge. */
+    function setExcBadge(n) {
+      var badge = document.getElementById('vf-exc-badge');
+      if (!badge) return;
+      badge.innerHTML = n ? String(n) : '';
+      badge.style.display = n ? 'inline-block' : 'none';
     }
 
     function renderExceptionsTable(resp) {
@@ -1633,7 +1661,7 @@
       var openExcBtn = document.getElementById('vf-open-exc');
       if (openExcBtn) openExcBtn.addEventListener('click', openExceptionsModal);
       var openReviewBtn = document.getElementById('vf-open-review');
-      if (openReviewBtn) openReviewBtn.addEventListener('click', function () { jumpTo('vf-review-body'); });
+      if (openReviewBtn) openReviewBtn.addEventListener('click', openReviewModal);
       var openImportBtn = document.getElementById('vf-open-import');
       if (openImportBtn) openImportBtn.addEventListener('click', function () { jumpTo('vf-csv-input'); });
       var moreToggle = document.getElementById('vf-more-toggle');
@@ -1650,13 +1678,6 @@
 
       var printBtn = document.getElementById('vf-print-forget-btn');
       if (printBtn) printBtn.addEventListener('click', printForgetForm);
-
-      var reviewAllBtn = document.getElementById('vf-review-all-btn');
-      if (reviewAllBtn) reviewAllBtn.addEventListener('click', function () {
-        REVIEW_STATUS = (REVIEW_STATUS === 'open') ? 'all' : 'open';
-        reviewAllBtn.innerHTML = (REVIEW_STATUS === 'open') ? 'عرض المعالج أيضاً' : 'عرض المفتوح فقط';
-        loadReview(REVIEW_STATUS);
-      });
     }
 
     /* Another device's change to this page arrives on its own. The poll
