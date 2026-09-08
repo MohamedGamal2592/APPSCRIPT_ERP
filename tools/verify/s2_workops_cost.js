@@ -37,7 +37,10 @@ const project = vm.runInNewContext('(function (r) { return ' + literal + '; })')
 console.log('S2 — the projection now carries the two cost fields\n');
 
 const rowGood = {
-  unique_id: 'WC-1', work_center_sequence: 1, work_center_id: 'WCX',
+  /* The work centre's key is in the `recipe_id` COLUMN — a legacy misnomer; the
+     AppSheet schema declares it a Ref to valley_work_centers. This fixture row is
+     shaped like the sheet, so it deliberately carries NO work_center_id. */
+  unique_id: 'WC-1', work_center_sequence: 1, recipe_id: 'WCX',
   operation_status: 'Done', start_time: '2026-09-01T08:00:00Z', end_time: '2026-09-01T12:00:00Z',
   actual_hours: 4, work_center_cost: 37.5, total_cost: 150,
   last_pause_time: '', total_pause_duration: 0, notes: 'n'
@@ -72,6 +75,32 @@ check(Number(before.work_center_cost || 0).toFixed(3) === '0.000',
   'omitted field -> fmt3(undefined) -> 0.000 (the bug)');
 check(Number(out.work_center_cost || 0).toFixed(3) === '37.500',
   'present field -> fmt3(37.5) -> 37.500 (the fix)');
+
+console.log('\nS2 — the work centre survives the round trip (the recipe_id column)\n');
+/* The bug: the projection read r.work_center_id, a column that does not exist on
+   valley_manufacture_work_center. It always yielded '', so reopening a saved
+   order showed an empty work-centre picker, and the next save wrote that blank
+   back over the key the previous save had stored correctly. */
+check(out.work_center_id === 'WCX',
+  'a sheet row whose recipe_id is a work-centre uid projects work_center_id = WCX',
+  'got ' + JSON.stringify(out.work_center_id));
+check(project({ recipe_id: '' }).work_center_id === '',
+  'a genuinely empty cell still projects an empty string, not undefined');
+check(project({ work_center_id: 'WRONG' }).work_center_id === '',
+  'and a stray work_center_id key is NOT read — that column does not exist');
+
+/* The MO save writes it into the right column, and so must the standalone add. */
+check(/m\['recipe_id'\] = wcId;/.test(SRC),
+  'the MO save writes the work-centre uid into recipe_id');
+check(/map\['recipe_id'\] = String\(d\.work_center_id\)/.test(SRC),
+  'and so does saveValleyMfgWorkOp_');
+check(SRC.indexOf("map['work_center_id']") === -1,
+  'nothing writes a work_center_id column on that table any more');
+
+/* The edit path on vf_mfg_orders sends no work_center_id; requiring one there
+   refused every manual start/end time save. */
+check(/if \(!String\(d\.workop_uid \|\| ''\)\.trim\(\) && !d\.work_center_id\)/.test(SRC),
+  'the work centre is required when ADDING an operation, not when editing one');
 
 console.log('\nS2 — the print template consumes both fields\n');
 check(VIEW.indexOf('fmt3(wop.work_center_cost)') !== -1, 'print reads wop.work_center_cost');

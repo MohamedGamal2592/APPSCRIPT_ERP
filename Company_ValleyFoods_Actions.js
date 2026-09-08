@@ -6249,7 +6249,18 @@ const ValleyFoodsHRModules = (function () {
           rows.push({
             unique_id: r.unique_id,
             work_center_sequence: r.work_center_sequence,
-            work_center_id: r.work_center_id != null ? r.work_center_id : '',
+            /* The work centre's key lives in the `recipe_id` COLUMN. That name is a
+             * legacy misnomer, like movmenent_sign: the AppSheet schema declares
+             * valley_manufacture_work_center.recipe_id a Ref to valley_work_centers,
+             * and the sheet's own work_center_cost formula proves it — it is
+             * INDEX(valley_work_centers!$H:$H, MATCH(E<row>, valley_work_centers!$A:$A, 0))
+             * and column E IS recipe_id. There is NO work_center_id column on this
+             * table, so reading one always yielded '': the picker came back empty on
+             * every reload of a saved order, and the next save wrote that blank back
+             * over the key the previous save had stored correctly.
+             * The client keeps calling the field work_center_id — that is the wire
+             * name and the options' value is valley_work_centers.unique_id. */
+            work_center_id: String(r.recipe_id == null ? '' : r.recipe_id).trim(),
             operation_status: r.operation_status || 'Pending',
             start_time: r.start_time || '',
             end_time: r.end_time || '',
@@ -6283,7 +6294,10 @@ const ValleyFoodsHRModules = (function () {
     var moUid = String(d.mo_uid || '').trim();
     if (!moUid) throw new Error('معرّف أمر التصنيع مطلوب');
     assertMoEditable_(moUid, user, dbId);
-    if (!d.work_center_id) throw new Error('مركز العمل مطلوب');
+    /* Required when ADDING an operation. An edit (the manual start/end time
+       tweak on vf_mfg_orders) sends no work_center_id because it is not
+       changing one, and the unconditional check refused every such save. */
+    if (!String(d.workop_uid || '').trim() && !d.work_center_id) throw new Error('مركز العمل مطلوب');
     var status = String(d.operation_status || 'Pending').trim();
     if (MFG_WC_OP_STATUSES.indexOf(status) === -1) throw new Error('حالة العملية غير صالحة');
 
@@ -6322,7 +6336,7 @@ const ValleyFoodsHRModules = (function () {
         map['unique_id'] = uid2;
         map['valley_manufacture_header_id'] = moUid;
         map['work_center_sequence'] = seqNum;
-        map['work_center_id'] = String(d.work_center_id);
+        map['recipe_id'] = String(d.work_center_id).trim();   /* the column holds valley_work_centers.unique_id */
         map['user'] = (user && user.email) || '';
         map['created_at'] = new Date();
         var values = headers.map(function (h) {
