@@ -3891,7 +3891,7 @@ const ValleyFoodsHRModules = (function () {
     try {
       var nowMs = Date.now();
       var NINETY = 90 * 24 * 60 * 60 * 1000;
-      getAllRecords_(dbId, 'valley_current_products').forEach(function (row) {
+      vfCurrentProducts_(dbId).forEach(function (row) {
         var qty = Number(row.current_qty) || 0;
         if (qty <= 0) return;
         var chartCode = Number(row.transaction_chart_code);
@@ -4933,7 +4933,7 @@ const ValleyFoodsHRModules = (function () {
     /* Stock valuation rows for the party's own products */
     var stockRows = [];
     try {
-      getAllRecords_(dbId, 'valley_current_products').forEach(function (cs) {
+      vfCurrentProducts_(dbId).forEach(function (cs) {
         var pid = String(cs.product_id || '').trim();
         var qty = Number(cs.current_qty || 0);
         if (!partyProductIds[pid] || qty <= 0) return;
@@ -5547,7 +5547,7 @@ const ValleyFoodsHRModules = (function () {
        * above throws for any batch uid it cannot find a balance for. */
       var footerBatchCost = {};
       try {
-        getAllRecords_(dbId, 'valley_current_products').forEach(function (r) {
+        vfCurrentProducts_(dbId).forEach(function (r) {
           var u = String(r.unique_id || '').trim();
           if (u && footerBatchCost[u] === undefined) footerBatchCost[u] = Number(r.unit_cost) || 0;
         });
@@ -6069,7 +6069,7 @@ const ValleyFoodsHRModules = (function () {
 
     /* batch unit-cost lookup for footer totals */
     var batchCost = {};
-    try { getAllRecords_(dbId, 'valley_current_products').forEach(function (r) { var u = String(r.unique_id || '').trim(); if (u) batchCost[u] = Number(r.unit_cost) || 0; }); } catch (e) {}
+    try { vfCurrentProducts_(dbId).forEach(function (r) { var u = String(r.unique_id || '').trim(); if (u) batchCost[u] = Number(r.unit_cost) || 0; }); } catch (e) {}
 
     /* load footer (consumption) rows grouped by output product UID */
     var footersByOutput = {};
@@ -7478,7 +7478,7 @@ const ValleyFoodsHRModules = (function () {
   function whBatchAvailability_(dbId) {
     var batches = {};
     try {
-      getAllRecords_(dbId, 'valley_current_products').forEach(function (r) {
+      vfCurrentProducts_(dbId).forEach(function (r) {
         var uid = String(r.unique_id || '').trim();
         if (!uid) return;
         batches[uid] = {
@@ -7545,7 +7545,7 @@ const ValleyFoodsHRModules = (function () {
     var empNames = whEmployeeNames_(dbId);
     var batchInfo = {};
     try {
-      getAllRecords_(dbId, 'valley_current_products').forEach(function (r) {
+      vfCurrentProducts_(dbId).forEach(function (r) {
         var uid = String(r.unique_id || '').trim();
         if (uid) batchInfo[uid] = { lot: String(r.transaction_code || ''), product: String(r.product || '') };
       });
@@ -7892,6 +7892,28 @@ const ValleyFoodsHRModules = (function () {
     try { return getAllRecords_(dbId, FIN_SALES_LINES_SHEET); } catch (e) { return []; }
   }
 
+  /* valley_current_products, read LIVE on every single call.
+   *
+   * Trusting current_qty means reading the CURRENT one. getAllRecords_ memoises
+   * whole sheets in _recordCache_ for the life of a request, which is right for
+   * a table code writes and wrong for one a sheet formula recalculates
+   * underneath us — a save that writes a feeding table and then re-reads the
+   * balance would see the value from before its own write.
+   *
+   * So this reads the range directly and neither populates nor consults that
+   * memo. There is no CacheService entry either: the old one was keyed by
+   * product and not by user, which would have handed one user another user's
+   * batch list, cost columns included, the day someone added the put.
+   *
+   * Every reader of valley_current_products in this module goes through here.
+   * The table is never written by code, and its formulas are never touched. */
+  function vfCurrentProducts_(dbId) {
+    var sheet = getSheet_('valley_current_products', dbId);
+    var headers = getHeaders_(sheet);
+    countSheetRead_();
+    return buildRecordsFromRaw_(sheet.getDataRange().getValues(), headers);
+  }
+
   /**
    * The ONE availability figure in the system.
    *
@@ -7937,7 +7959,7 @@ const ValleyFoodsHRModules = (function () {
 
     var list = [];
     try {
-      getAllRecords_(dbId, 'valley_current_products').forEach(function (r) {
+      vfCurrentProducts_(dbId).forEach(function (r) {
         var uid = String(r.unique_id || '').trim();
         if (!uid) return;
         var rp = String(r.product_id == null ? '' : r.product_id).trim();

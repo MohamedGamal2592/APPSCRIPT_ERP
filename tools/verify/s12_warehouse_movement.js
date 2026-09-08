@@ -131,24 +131,31 @@ console.log('\n6 — the over-issue guard\n');
 
 const saveStart = SRC.indexOf('function saveValleyWarehouseMovement_');
 check(saveStart !== -1, 'saveValleyWarehouseMovement_ exists');
-const saveBody = saveStart === -1 ? '' : SRC.slice(saveStart, saveStart + 6000);
+const saveBody = saveStart === -1 ? '' : SRC.slice(saveStart, saveStart + 9000);
 
-check(/whBatchAvailability_\(dbId\)\[batchUid\]/.test(saveBody),
-  'the save recomputes availability from the sheet, keyed by the batch uid');
-check(/if\s*\(qty\s*>\s*available\)/.test(saveBody),
-  'it refuses qty above available');
-check(/var available = Number\(batch\.available\)/.test(saveBody),
+check(/whBatchAvailability_\(dbId\)/.test(saveBody),
+  'the save recomputes availability from the sheet');
+check(/availability\[batchUid\]/.test(saveBody),
+  'and keys it by the batch uid');
+check(/Number\(batch\.available\)/.test(saveBody),
   '`available` comes from the recomputed batch, never from the payload');
-check(!/d\.available|data\.available|d\.amount|data\.amount|d\.unit_cost|data\.unit_cost/.test(saveBody),
+check(!/d\.available|data\.available|d\.amount|data\.amount|d\.unit_cost|data\.unit_cost|row\.available|row\.amount|row\.unit_cost/.test(saveBody),
   'the payload\'s own available / amount / unit_cost are never read');
-check(/var amount = Math\.round\(\(Number\(batch\.unit_cost\)[^)]*\)\s*\*\s*qty\s*\*\s*100\)\s*\/\s*100/.test(saveBody),
+check(/Math\.round\(\(Number\(batch\.unit_cost\)[^)]*\)\s*\*\s*qty\s*\*\s*100\)\s*\/\s*100/.test(saveBody),
   'amount is computed server-side as batch.unit_cost x qty, rounded to 2');
 check(/type\s*!==\s*WH_IN_TYPE/.test(saveBody),
   'the guard applies to منصرف only, not to the internal receipt');
+/* The batch path adds a second obligation: rows of ONE submission drawing on
+   the same batch must not each be measured against the same starting figure. */
+check(/drawn\[batchUid\]/.test(saveBody),
+  'earlier rows of the same submission draw the batch down for later ones');
+check(/remaining/.test(saveBody),
+  'and the guard compares against what is left, not the untouched figure');
 
 /* whBatchAvailability_ must read the movement sheet itself */
 check(/getAllRecords_\(dbId, WH_MOVE_SHEET\)\.forEach/.test(SRC),
   'availability folds in this table\'s own movmenent_sign');
+
 
 /* ── 7. the page ships add-only, with no warehouse / asset_target field ──── */
 console.log('\n7 — the page template\n');
@@ -224,7 +231,7 @@ const BLOCK_END = SRC.indexOf('/* ---------- SALES INVOICES', BLOCK_START);
 check(BLOCK_START !== -1 && BLOCK_END > BLOCK_START,
   'the handler block can be located in the real source');
 
-const captured = { appended: null, formulas: null, sheetsTouched: [] };
+const captured = { written: null, sheetsTouched: [], audit: null };
 
 if (BLOCK_START !== -1 && BLOCK_END > BLOCK_START) {
   const block = SRC.slice(BLOCK_START, BLOCK_END);
@@ -264,13 +271,20 @@ if (BLOCK_START !== -1 && BLOCK_END > BLOCK_START) {
     'valley_products': PRODUCTS
   };
 
-  /* A sheet stub that can only be read. Any write path throws, so a handler
-     that tried to repair the schema would fail this test rather than pass it. */
+  /* A sheet stub that records the ONE batched write and refuses anything else,
+     so a handler that went back to appending row by row fails here. */
   const fakeSheet = {
     _name: 'valley_warehouse_movement',
     getLastRow: () => EXISTING_MOVES.length + 1,
     getLastColumn: () => EXPECTED_HEADERS.length,
-    getRange: () => { throw new Error('DRY RUN: getRange must not be reached'); },
+    getRange: (row, col, nRows, nCols) => ({
+      setValues: (v) => {
+        if (captured.written) throw new Error('DRY RUN: the batch must be ONE setValues');
+        captured.written = { startRow: row, col: col, rows: nRows, cols: nCols, matrix: v };
+      },
+      getValues: () => { throw new Error('DRY RUN: the save must not read back'); },
+      setNumberFormat: () => {}
+    }),
     appendRow: () => { throw new Error('DRY RUN: appendRow must not be reached'); },
     insertSheet: () => { throw new Error('DRY RUN: insertSheet must not be reached'); }
   };
@@ -285,6 +299,9 @@ if (BLOCK_START !== -1 && BLOCK_END > BLOCK_START) {
          next read, exactly as the real per-execution cache behaves */
       return TABLES[name].map(r => Object.assign({}, r));
     },
+    /* §4: valley_current_products is read LIVE, never through the memo, so it
+       has its own reader rather than going through getAllRecords_. */
+    vfCurrentProducts_: () => CURRENT_PRODUCTS.map(r => Object.assign({}, r)),
     /* the write path, recorded instead of performed */
     getNextIdBatch_: (dbId, name, count) => { captured.idCount = count; return 99; },
     noteMutation_: () => {},
@@ -314,13 +331,22 @@ if (BLOCK_START !== -1 && BLOCK_END > BLOCK_START) {
     ' HEADERS: WH_MOVE_HEADERS, TYPES: WH_MOVE_TYPES, IN: WH_IN_TYPE, WAREHOUSE: WH_WAREHOUSE };\n}');
   const H = factory(env);
 
+  /** the written row i, as {header: value} */
+  function writtenRow(i) {
+    const o = {};
+    if (!captured.written) return o;
+    EXPECTED_HEADERS.forEach((h, c) => { o[h] = captured.written.matrix[i][c]; });
+    return o;
+  }
+  function reset() { captured.written = null; captured.audit = null; }
+
   /* -- 8a. availability arithmetic -- */
   const avail = H.avail('db');
   check(avail['BATCH-A'].available === 80,
     'availability = 100 − 10 sold + 2 returned − 5 consumed − 7 issued = 80',
     'got ' + avail['BATCH-A'].available);
 
-  /* -- 8b. a good save -- */
+  /* -- 8b. a good single save (the old payload shape still works) -- */
   const payload = {
     movement_date: '2026-09-06',
     movement_type: 'منصرف',
@@ -334,69 +360,75 @@ if (BLOCK_START !== -1 && BLOCK_END > BLOCK_START) {
     amount: 1,
     unit_cost: 1
   };
+  reset();
   const out = H.save(payload, { email: 'user@valley.test', canCost: true }, 'db');
   check(out && out.status === 'success', 'a valid منصرف saves');
+  check(out.count === 1, 'and reports one movement', 'got ' + (out && out.count));
 
-  const a = captured.appended;
-  check(!!a, 'saveRecordWithAudit_ was called');
-  check(a.sheet === 'valley_warehouse_movement', 'it targets valley_warehouse_movement');
-  check(a.existingRowId === null, 'existingRowId is null — this is a create, never an update');
-  check(a.action === 'create' && a.pk === 'id', "action is 'create' and the pk column is 'id'");
-  check(a.values.length === 17, 'exactly 17 values are projected onto the header row',
-    'got ' + a.values.length);
-  check(a.map.warehouse === 'مخزن مصنع فالي فودز', 'warehouse is the constant');
-  check(a.map.asset_target === '', 'asset_target is written blank');
-  check(a.map.item === 'BATCH-A', 'item is the batch uid');
-  check(a.map.unit === 'كجم', "unit comes from the batch");
-  check(a.map.qty === 4, 'qty is the payload qty');
-  check(a.map.amount === 50, 'amount = unit_cost 12.5 x qty 4 = 50, not the payload\'s 1',
-    'got ' + a.map.amount);
-  check(a.map.user === 'user@valley.test', 'user is the session email');
-  check(a.map.item_code === undefined && a.map.movmenent_sign === undefined,
-    'item_code and movmenent_sign are NOT in the row map — they are formulas');
-  check(a.map.id === undefined, 'id is not in the map — addRecord_ assigns it under the lock');
-  check(String(a.map.unique_id).length === 16, 'unique_id is a 16-char id');
+  check(!!captured.written, 'the row reached the sheet in one batched write');
+  check(captured.written.rows === 1 && captured.written.cols === 17,
+    'exactly one row of 17 columns',
+    captured.written.rows + ' x ' + captured.written.cols);
+  check(captured.sheetsTouched.indexOf('valley_warehouse_movement') !== -1,
+    'it targets valley_warehouse_movement');
 
-  const f = captured.formulas;
-  check(!!f, 'writeRowFormulas_ was called once');
-  check(f.rowNum === 42, 'it addresses the row saveRecordWithAudit_ reported');
-  check(Object.keys(f.map).length === 2 && f.map.item_code && f.map.movmenent_sign,
-    'exactly two formulas: item_code and movmenent_sign');
-  check(f.map.item_code.indexOf('VLOOKUP(E42,') !== -1,
-    'item_code (F) reads E on its own row');
-  check(f.map.movmenent_sign === '=IF(J42="وارد داخلي / مرتجع للمخزن",H42,H42*-1)',
+  const a = writtenRow(0);
+  check(a.warehouse === 'مخزن مصنع فالي فودز', 'warehouse is the constant');
+  check(a.asset_target === '', 'asset_target is written blank');
+  check(a.item === 'BATCH-A', 'item is the batch uid');
+  check(a.unit === 'كجم', 'unit comes from the batch');
+  check(a.qty === 4, 'qty is the payload qty');
+  check(a.amount === 50, "amount = unit_cost 12.5 x qty 4 = 50, not the payload's 1",
+    'got ' + a.amount);
+  check(a.user === 'user@valley.test', 'user is the session email');
+  check(a.id === 99, 'id comes from the batch allocator, not from the payload', 'got ' + a.id);
+  check(String(a.unique_id).length === 16, 'unique_id is a 16-char id');
+  check(captured.idCount === 1, 'exactly one id was allocated');
+
+  /* the two formulas now ride in the same matrix as the values */
+  check(typeof a.item_code === 'string' && a.item_code.charAt(0) === '=',
+    'item_code is written as a FORMULA', JSON.stringify(a.item_code));
+  check(typeof a.movmenent_sign === 'string' && a.movmenent_sign.charAt(0) === '=',
+    'movmenent_sign likewise', JSON.stringify(a.movmenent_sign));
+  const rowNo = captured.written.startRow;
+  check(a.item_code.indexOf('VLOOKUP(E' + rowNo + ',') !== -1,
+    'item_code (F) reads E on its OWN row', a.item_code);
+  check(a.movmenent_sign === '=IF(J' + rowNo + '="وارد داخلي / مرتجع للمخزن",H' + rowNo + ',H' + rowNo + '*-1)',
     'movmenent_sign (K) reads J and H on its own row, with the full enum',
-    'got ' + f.map.movmenent_sign);
-  check(f.headers.length === 17 && f.headers[5] === 'item_code' && f.headers[10] === 'movmenent_sign',
-    'the formulas are placed by header name against the asserted 17-column row');
+    'got ' + a.movmenent_sign);
+  check(EXPECTED_HEADERS[5] === 'item_code' && EXPECTED_HEADERS[10] === 'movmenent_sign',
+    'the formulas sit in the asserted 17-column row');
+  check(!!captured.audit && captured.audit.length === 1,
+    'the audit trail is written once for the batch',
+    captured.audit ? captured.audit.length : 'none');
 
   console.log('\n        captured row (header -> value):');
-  EXPECTED_HEADERS.forEach((h, i) => {
-    const v = a.values[i];
-    console.log('          ' + String(i + 1).padStart(2) + ' ' + h.padEnd(20) +
+  EXPECTED_HEADERS.forEach((h) => {
+    const v = a[h];
+    console.log('          ' + h.padEnd(20) +
       ' = ' + (v instanceof Date ? v.toISOString().slice(0, 10) + ' (Date)' : JSON.stringify(v)));
   });
-  console.log('        formulas: item_code = ' + f.map.item_code);
-  console.log('                  movmenent_sign = ' + f.map.movmenent_sign);
 
   /* -- 8c. the over-issue guard actually throws -- */
   console.log('');
   function throws(fn) { try { fn(); return null; } catch (e) { return e.message; } }
 
-  captured.appended = null;
+  reset();
   const over = throws(() => H.save(
     Object.assign({}, payload, { qty: 80.001 }),
     { email: 'user@valley.test', canCost: true }, 'db'));
   check(!!over, 'qty = available + 0.001 is refused');
   check(over && over.indexOf('80') !== -1,
     'the message names the available quantity', 'got: ' + over);
-  check(captured.appended === null, 'and nothing was written');
+  check(captured.written === null, 'and nothing was written');
 
+  reset();
   check(throws(() => H.save(Object.assign({}, payload, { qty: 80 }),
     { email: 'u@v.t', canCost: true }, 'db')) === null,
     'qty exactly equal to available is allowed');
 
   /* the internal receipt is NOT capped by availability */
+  reset();
   check(throws(() => H.save(Object.assign({}, payload,
     { movement_type: 'وارد داخلي / مرتجع للمخزن', qty: 5000 }),
     { email: 'u@v.t', canCost: true }, 'db')) === null,
@@ -404,6 +436,7 @@ if (BLOCK_START !== -1 && BLOCK_END > BLOCK_START) {
 
   /* -- 8d. the other five validations -- */
   console.log('');
+  reset();
   check(!!throws(() => H.save(Object.assign({}, payload, { movement_date: '' }),
     { email: 'u@v.t' }, 'db')), 'a missing date is refused');
   check(!!throws(() => H.save(Object.assign({}, payload, { movement_type: 'وارد' }),
