@@ -59,6 +59,9 @@
   <script>
   (function () {
     var ORDERS = [], RECIPE_OPTIONS = [], PRODUCT_OPTIONS = [], ENUMS = {};
+    /* The live PagedTable handle, reassigned on every load(). Row actions patch
+       through it instead of refetching the page. */
+    var TABLE = null;
 
     /* [UI-3.4 / U-24] Delegates to the one shared loading service. This was the
        second of two page-local overlays in ValleyFoods, both with the same
@@ -103,8 +106,11 @@
       var watchdog = setTimeout(function () { if (!quiet) hideLoading(); UIC.toast('انتهت مهلة التحميل — تحقق من الاتصال وأعد المحاولة', 'error'); }, 25000);
       var container = document.getElementById('mo-table');
       if (container) {
-        UIC.PagedTable({
+        TABLE = UIC.PagedTable({
           container: container,
+          /* rowKey lets a row action patch its own row instead of refetching
+             the page. COL_STATUS / COL_ACTIONS index into the row below. */
+          rowKey: 'unique_id',
           headers: ['كود الأمر', 'المنتج المنتج', 'نوع العملية', 'الوردية', 'التاريخ',
                     { label: 'المتوقع', numeric: true }, { label: 'المصنع', numeric: true }, 'الحالة', ''],
           pageSize: 100,
@@ -120,16 +126,6 @@
             try { clearTimeout(watchdog); if (!quiet) hideLoading(); } catch (e) {}
           },
           mapRow: function (o) {
-            var isLocked = o.mo_status === 'Locked';
-            var isInProgress = o.mo_status === 'In Progress';
-            var actions = UIC.actionBtns([
-              { label: 'فتح', onclick: 'MFG_PAGE.openDetail(\'' + esc(o.unique_id) + '\')' },
-              (IS_SUPER_ADMIN || CAN_WRITE) && o.mo_status === 'Draft' ? { label: '▶️ بدء', onclick: 'MFG_PAGE.changeStatus(\'' + esc(o.unique_id) + '\',\'start\')' } : null,
-              (IS_SUPER_ADMIN || CAN_WRITE) && isInProgress ? { label: '🏁 إنهاء', color: '#b45309', onclick: 'MFG_PAGE.changeStatus(\'' + esc(o.unique_id) + '\',\'lock\')' } : null,
-              (IS_SUPER_ADMIN || CAN_WRITE) && isLocked && IS_SUPER_ADMIN ? { label: '🔓 فتح القفل', color: '#b45309', onclick: 'MFG_PAGE.changeStatus(\'' + esc(o.unique_id) + '\',\'unlock\')' } : null,
-              IS_SUPER_ADMIN ? { label: 'حذف', color: '#dc2626', onclick: 'MFG_PAGE.remove(\'' + esc(o.unique_id) + '\')' } : null
-            ].filter(Boolean));
-            var statusLabel = isLocked ? 'مقفل' : (isInProgress ? 'قيد التنفيذ' : 'مسودة');
             return [
               '<b>' + esc(o.transaction_code || o.id) + '</b>',
               esc(prodLabel(o.produced_product)),
@@ -138,8 +134,8 @@
               fmtDate(o.manufacture_date),
               '<span class="num">' + fmt3(o.expected_qty) + '</span>',
               '<span class="num">' + fmt3(o.manufactured_qty) + '</span>',
-              statusPill(statusLabel, isLocked ? 'success' : 'neutral'),
-              actions
+              statusCellOf(o.mo_status),
+              actionsCellOf(o.unique_id, o.mo_status)
             ];
           }
         });
@@ -147,6 +143,29 @@
     }
 
     function statusPill(s, c) { return UIC.statusPill(s, c); }
+
+    /* The two cells a row action can change, built from mo_status alone.
+       mapRow above renders them, and changeStatus below re-renders exactly
+       these two on the row that changed — so the two can never drift into
+       showing different things for the same status. */
+    var COL_STATUS = 7, COL_ACTIONS = 8;
+    function statusCellOf(st) {
+      var isLocked = st === 'Locked';
+      var label = isLocked ? 'مقفل' : (st === 'In Progress' ? 'قيد التنفيذ' : 'مسودة');
+      return statusPill(label, isLocked ? 'success' : 'neutral');
+    }
+    function actionsCellOf(uid, st) {
+      var isLocked = st === 'Locked';
+      var isInProgress = st === 'In Progress';
+      var canAct = IS_SUPER_ADMIN || CAN_WRITE;
+      return UIC.actionBtns([
+        { label: 'فتح', onclick: 'MFG_PAGE.openDetail(\'' + esc(uid) + '\')' },
+        canAct && st === 'Draft' ? { label: '▶️ بدء', onclick: 'MFG_PAGE.changeStatus(\'' + esc(uid) + '\',\'start\')' } : null,
+        canAct && isInProgress ? { label: '🏁 إنهاء', color: '#b45309', onclick: 'MFG_PAGE.changeStatus(\'' + esc(uid) + '\',\'lock\')' } : null,
+        canAct && isLocked && IS_SUPER_ADMIN ? { label: '🔓 فتح القفل', color: '#b45309', onclick: 'MFG_PAGE.changeStatus(\'' + esc(uid) + '\',\'unlock\')' } : null,
+        IS_SUPER_ADMIN ? { label: 'حذف', color: '#dc2626', onclick: 'MFG_PAGE.remove(\'' + esc(uid) + '\')' } : null
+      ].filter(Boolean));
+    }
 
     function prodLabel(idRef) {
       var f = PRODUCT_OPTIONS.filter(function (o) { return String(o.value) === String(idRef); })[0];
@@ -516,7 +535,24 @@
       if (kind === 'unlock' && !confirm('فتح القفل سيعيد الأمر إلى «قيد التنفيذ». متابعة؟')) return;
       UI.showSpinner();
       companyCall('change_valley_mfg_status', { mo_uid: moUid, kind: kind })
-        .then(function (r) { UIC.toast((r && r.message) || 'تم', 'success'); load(); })
+        .then(function (r) {
+          UIC.toast((r && r.message) || 'تم', 'success');
+          /* The status change touches ONE cell, and the server already told us
+             the new value — nothing here needs refetching. Patched from the
+             REPLY, never optimistically: `lock` runs a real server-side check
+             (every item's batch total must equal its quantity) and can refuse,
+             so painting the new status before the answer would show a state
+             that is often wrong and have to be taken back.
+             load(true) is the fallback for a row the table cannot address. */
+          var st = (r && r.mo_status) || '';
+          var patched = st && TABLE && TABLE.patchRow(moUid, (function () {
+            var cells = [];
+            cells[COL_STATUS] = statusCellOf(st);
+            cells[COL_ACTIONS] = actionsCellOf(moUid, st);
+            return cells;
+          })());
+          if (!patched) load(true);
+        })
         .catch(function (e) { UIC.toast((e && e.message) || 'فشل', 'error'); })
         .finally(function () { UI.hideSpinner(); });
     }
@@ -525,7 +561,11 @@
       if (!confirm('سيتم حذف أمر التصنيع وبنوده واستهلاكاته نهائياً. متابعة؟')) return;
       UI.showSpinner();
       companyCall('delete_valley_mfg_order', { mo_uid: moUid })
-        .then(function (r) { UIC.toast((r && r.message) || 'تم الحذف', 'success'); load(true); })
+        .then(function (r) {
+          UIC.toast((r && r.message) || 'تم الحذف', 'success');
+          /* Drop the row locally; the rest of the table is unaffected by it. */
+          if (!(TABLE && TABLE.removeRow(moUid))) load(true);
+        })
         .catch(function (e) { UIC.toast((e && e.message) || 'فشل الحذف', 'error'); })
         .finally(function () { UI.hideSpinner(); });
     }

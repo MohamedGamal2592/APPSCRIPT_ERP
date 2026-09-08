@@ -58,6 +58,7 @@ const STEPS = [
   ['ui4_controlpanel.js', 'UI-4.1 — the control panel (U-13)'],
   ['ui4_listview.js', 'UI-4.5/4.6/4.8 — columns, selection, phone cards'],
   ['ui4_grouping.js', 'UI-4.4/4.7 — group-by, aggregates, skeleton loads'],
+  ['ui4_rowpatch.js', 'UI-4.9 — PagedTable row patching: a row action costs one round trip'],
   ['ui5_forms.js', 'UI-5.1/5.2/5.3 — dirty guard, styled confirm, validation'],
   ['vf_daterange.js', 'vf_cash/vf_sales/vf_purchasing — the من/إلى date range filter'],
   ['ui_smoke_pages.js', 'deployment smoke — every page template boots'],

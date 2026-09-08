@@ -2461,6 +2461,9 @@ UIC.PagedTable = function (opts) {
     var PAGE = opts.pageSize || 100;
     var offset = 0, total = 0, loading = false, done = false;
     var allRows = [];
+    /* Row identity, parallel to allRows, so a single row can be addressed after
+       it is on screen. Filled only when the caller passes `rowKey`. */
+    var allKeys = [];
     container.innerHTML =
       '<div id="' + hostId + '"></div>' +
       '<div class="pt-foot" style="display:flex;gap:12px;align-items:center;margin-top:10px;">' +
@@ -2493,7 +2496,11 @@ UIC.PagedTable = function (opts) {
         var recs = (opts.getRows ? opts.getRows(raw)
           : (raw.rows || raw.invoices || raw.returns || raw.orders || raw.sessions || raw.headers || [])) || [];
         if (offset === 0 && opts.onFirst) { try { opts.onFirst(raw); } catch (e) {} }
-        recs.forEach(function (rec) { try { allRows.push(opts.mapRow(rec)); } catch (e) {} });
+        recs.forEach(function (rec) {
+          /* The key is pushed only after mapRow has succeeded, so allKeys and
+             allRows stay index-aligned even when one record fails to map. */
+          try { var mapped = opts.mapRow(rec); allRows.push(mapped); allKeys.push(keyOfRec(rec)); } catch (e) {}
+        });
         offset += recs.length;
         total = (opts.getTotal ? opts.getTotal(raw) : (raw.total != null ? raw.total : offset));
         done = offset >= total;
@@ -2508,9 +2515,90 @@ UIC.PagedTable = function (opts) {
         loading = false; moreBtn.disabled = false; moreBtn.textContent = 'عرض المزيد';
       });
     }
+    /* ── Row-level updates ────────────────────────────────────────────────
+     * A row action — a status change, a delete — alters ONE row. Refetching the
+     * page to show it costs a full server read and throws away the user's
+     * scroll position, search text, sort order and every extra page they had
+     * pulled in with «عرض المزيد».
+     *
+     * These patch the row that changed and leave the rest of the table alone.
+     * Both need `rowKey`: without it a row has no identity, indexOfRow always
+     * returns -1, and they report false so the caller can fall back to a
+     * reload rather than silently doing nothing. */
+    function keyOfRec(rec) {
+      var f = opts.rowKey;
+      if (!f) return null;
+      try { return String(typeof f === 'function' ? f(rec) : rec[f]); } catch (e) { return null; }
+    }
+    function indexOfRow(key) {
+      var want = String(key == null ? '' : key);
+      if (!want) return -1;
+      for (var i = 0; i < allKeys.length; i++) { if (allKeys[i] === want) return i; }
+      return -1;
+    }
+
+    /**
+     * Replace cells of one row in place.
+     * @param key   the row's rowKey value
+     * @param cells either a sparse array (index -> html, undefined skips) or an
+     *              object keyed by column index
+     * @return true if the row was found
+     */
+    function patchRow(key, cells) {
+      var i = indexOfRow(key);
+      if (i === -1) return false;
+      var row = allRows[i];
+      if (!Array.isArray(row)) return false;
+      /* Mutated IN PLACE, never replaced. UIC.dataTable's store keeps its own
+         originalRows and filtered arrays; those are copies of the OUTER array
+         but hold these same row objects, so an in-place write is what a later
+         sort or search will see. Assigning a new array to allRows[i] would
+         leave both of them rendering the stale row. */
+      if (Array.isArray(cells)) {
+        cells.forEach(function (v, ci) { if (v !== undefined) row[ci] = v; });
+      } else {
+        Object.keys(cells || {}).forEach(function (ci) { row[Number(ci)] = cells[ci]; });
+      }
+      /* Repaint just this <tr>. If the row is not on the page currently shown
+         there is nothing to repaint — the data is already patched, so it draws
+         correctly the moment the user pages back to it. */
+      try {
+        var st = (window.__dtStore || {})[hostId];
+        var view = st && st.pageRows;
+        var at = view ? view.indexOf(row) : -1;
+        var tbody = document.getElementById(hostId + '_tbody');
+        if (at !== -1 && tbody) {
+          var tr = tbody.querySelector('tr[data-idx="' + at + '"]');
+          if (tr) {
+            var tmp = document.createElement('tbody');
+            tmp.innerHTML = UIC._dtRowHtml(row, UIC._dtVisibleHeaders(st), st.fmtMoney, at, st);
+            if (tmp.firstChild) tr.parentNode.replaceChild(tmp.firstChild, tr);
+          }
+        }
+      } catch (e) {}
+      return true;
+    }
+
+    /** Drop one row. Re-renders locally — no fetch. */
+    function removeRow(key) {
+      var i = indexOfRow(key);
+      if (i === -1) return false;
+      allRows.splice(i, 1);
+      allKeys.splice(i, 1);
+      if (offset > 0) offset--;
+      if (total > 0) total--;
+      done = offset >= total;
+      render();
+      if (opts.onRendered) { try { opts.onRendered(hostId); } catch (e) {} }
+      if (moreBtn) moreBtn.style.display = done ? 'none' : '';
+      setCount();
+      return true;
+    }
+
     moreBtn.addEventListener('click', loadMore);
     setCount();
     loadMore();
+    return { patchRow: patchRow, removeRow: removeRow, hostId: hostId };
   } catch (e) {
     UIC.toast('خطأ في الجدول: ' + (e && e.message ? e.message : e), 'error');
   }
