@@ -4835,6 +4835,7 @@ document.addEventListener('keydown', function (e) {
   }
   .uic-live-retry-go { color: var(--brand-primary); text-decoration: underline; }
   .uic-live-retry-drop { color: var(--text-muted); }
+  .uic-live-retry { flex-wrap: wrap; max-inline-size: min(92vw, 520px); }
 
   /* ── [UI-5.2 / U-28] Styled confirm ──────────────────────────────────── */
   .uic-confirm-msg { font-size: var(--text-base); color: var(--text-main); line-height: 1.7; }
@@ -6225,9 +6226,33 @@ UIC.Live = (function () {
    */
   var RETRY_KEY = 'erp_live_queue';
   var RETRY_MAX = 5;
-  var queue = [];                 // [{id, action, data, message, tries, at}]
+  var queue = [];                 // [{v, target_system, action, data, message, tries, at}]
   var retryTimer = null;
 
+  /* ── [RT-4b] Why a queued change could never drain in a new session ───────
+   *
+   * The entry was only half the request. `queue._call` — the page's companyCall
+   * — was hung on the ARRAY as a property, and JSON.stringify serialises only a
+   * array's indexed elements, so persistQueue() dropped it silently.
+   * loadQueue() then produced a fresh array with no `_call`, and drainQueue()
+   * opened with `if (!queue.length || !queue._call) return;`. After any reload
+   * the queue rendered its chip and could never drain: «إعادة المحاولة» did
+   * nothing, and the write sat in localStorage until the user pressed «تجاهل».
+   * The init block never called scheduleRetry() either, so even a live `_call`
+   * would not have started.
+   *
+   * The fix is to stop persisting a function. companyCall is always
+   *     API.call('company_action', { target_system, module_action, data }, token)
+   * so the only part the entry was missing is `target_system` — one string,
+   * which JSON carries perfectly. Every entry now stamps it, and the request is
+   * REBUILT from the entry at drain time, in-session and cross-session alike.
+   * There is one code path, so the reloaded case can no longer rot unnoticed
+   * behind a path that only ever ran while the tab stayed open.
+   *
+   * An entry written by an older build has no stamp and cannot be rebuilt. It
+   * is moved to `stuck` and REPORTED (§I6) — never retried into nothing, and
+   * never silently dropped.
+   */
   function loadQueue() {
     try {
       var raw = localStorage.getItem(RETRY_KEY);
@@ -6242,6 +6267,27 @@ UIC.Live = (function () {
       else localStorage.removeItem(RETRY_KEY);
     } catch (e) { /* a full or throwing store keeps the in-memory queue */ }
   }
+
+  /**
+   * Rebuild the request from the entry — never from a closure.
+   *
+   * Falls back to the same-session sender for an entry with no target: a save
+   * whose `call` is not a companyCall can still drain while the tab that made
+   * it is open. Such an entry cannot survive a reload, and drainQueue rotates
+   * it to the back rather than letting it block the queue behind it.
+   */
+  function callFor(entry) {
+    var t = entry && entry.target_system;
+    if (t && window.API && typeof API.call === 'function') {
+      return function (action, data) {
+        return API.call('company_action', {
+          target_system: t, module_action: action, data: data || {}
+        }, window.SESSION_TOKEN);
+      };
+    }
+    return queue._call || null;
+  }
+
 
   /**
    * The chip. Persistent by design: it stays until the change is saved or the
@@ -6283,13 +6329,23 @@ UIC.Live = (function () {
   }
 
   /** Try the head of the queue. One at a time, in order — a queue that
-   *  reorders writes is a queue that corrupts a sequence of edits. */
+   *  reorders writes is a queue that corrupts a sequence of edits (§I9). The
+   *  order survives a reload because it is the array's own order and the array
+   *  is what is persisted. */
   function drainQueue() {
-    if (!queue.length || !queue._call) { renderChip(); return; }
+    if (!queue.length) { renderChip(); return; }
+
     var entry = queue[0];
+    var send = callFor(entry);
+    /* An entry from a build that did not stamp target_system cannot be rebuilt
+       and cannot be sent from this session. It is NOT dropped: the chip goes on
+       saying it is unsaved, which is what it did before, and «تجاهل» is still
+       the only thing that removes it. */
+    if (!send) { renderChip(); return; }
+
     entry.tries = (entry.tries || 0) + 1;
     persistQueue();
-    queue._call(entry.action, entry.data)
+    send(entry.action, entry.data)
       .then(function () {
         queue.shift();
         persistQueue();
@@ -6357,7 +6413,14 @@ UIC.Live = (function () {
     setBusy(inFlight + 1);
     inFlight++;
 
-    return o.call(o.action, o.data)
+    var wire = o.call(o.action, o.data);
+    /* [RT-4b] Captured SYNCHRONOUSLY, not in the .catch below: companyCall has
+     * already called API.call by the time it returns its promise, so this is
+     * the target of THIS call and not of whatever the page did next. An
+     * explicit o.targetSystem (additive option) always wins. */
+    var target = o.targetSystem || (window.API && API._lastTarget) || '';
+
+    return wire
       .then(function (resp) {
         if (canPatch) {
           var rec = null;
@@ -6389,8 +6452,14 @@ UIC.Live = (function () {
          * payload — rolls back exactly as it always has, because retrying a
          * rejection just shows the same error five times. */
         if (err && err.transport) {
+          /* `_call` stays as the same-session sender, so a save whose call is
+             not a companyCall still retries while this tab is open. What is new
+             is `target_system`: one string, which JSON can carry, so the entry
+             can be REBUILT after a reload instead of rotting. */
           queue._call = o.call;
           enqueue({
+            v: 1,
+            target_system: target,
             action: o.action,
             data: o.data,
             message: o.message || 'تم الحفظ',
@@ -6627,7 +6696,13 @@ UIC.Live = (function () {
 
   /* Anything queued from a previous session is picked up on load, so a change
    * made just before the tab was closed is not lost — it is retried the moment
-   * the page comes back. */
+   * the page comes back.
+   *
+   * That sentence used to be false. loadQueue() ran, the chip appeared, and
+   * nothing ever started a drain: scheduleRetry() was not called here, and
+   * drainQueue() would have refused anyway because the persisted array has no
+   * `_call`. Both halves are fixed — callFor() rebuilds the request from the
+   * entry, and the drain is armed below. */
   loadQueue();
   try {
     if (queue.length) {
@@ -6635,6 +6710,7 @@ UIC.Live = (function () {
       if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', function () { renderChip(); });
       }
+      scheduleRetry();
     }
     window.addEventListener('online', function () { retryNow(); });
     window.addEventListener('beforeunload', function (e) {
@@ -6652,7 +6728,12 @@ UIC.Live = (function () {
     drainQueue();
   }
 
-  /** The user's explicit "I accept losing these". Never automatic. */
+  /** The user's explicit "I accept losing these". Never automatic.
+   *
+   * OPEN QUESTION for the owner (plan §11.1): discarding a real write is the
+   * one remaining way this system can lose data on purpose, and «تجاهل» is
+   * available to every user. The stated default is implemented unchanged — it
+   * stays available to anyone — and is recorded as an open question. */
   function discardQueue() {
     if (!queue.length) return;
     var n = queue.length;
@@ -6667,6 +6748,7 @@ UIC.Live = (function () {
     persistQueue();
     renderChip();
   }
+
 
   return {
     save: save,

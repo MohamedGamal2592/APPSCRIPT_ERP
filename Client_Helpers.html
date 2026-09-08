@@ -91,7 +91,20 @@ window.addEventListener('unhandledrejection', function (e) {
   }, { passive: true });
 })();
 
+/* [RT-4b] The last company this tab talked to.
+ *
+ * UIC.Live's retry queue has to survive a reload, and after a reload it has to
+ * be able to REBUILD the request. Every page's companyCall is a closure over a
+ * `target_system` literal, so the queue cannot see it and JSON.stringify cannot
+ * carry it — which is exactly why a queued entry could never drain in a new
+ * session. Recording it here costs one assignment and needs no page to change:
+ * companyCall calls API.call synchronously, so by the time UIC.Live.save has
+ * its promise back, this is already the target of that very call.
+ *
+ * Read-only from the outside. Nothing decides anything from it except the queue
+ * entry it stamps at save time, and an entry with no stamp is not queued. */
 API.call = function (action, payload, sessionToken) {
+  if (payload && payload.target_system) API._lastTarget = payload.target_system;
   return new Promise(function (resolve, reject) {
     var request = { action: action, payload: payload || {} };
     if (sessionToken) request.sessionToken = sessionToken;
