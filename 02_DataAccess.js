@@ -1146,8 +1146,339 @@ function logHistory_(dbId, sheetName, recordUid, recordId, user, action, newValu
   writeHistoryRows_(historyRowsFor_(dbId, sheetName, recordUid, recordId, user, action, newValues, oldValues));
 }
 
-/** The batched write itself — one lock, one id allocation, one setValues. */
+/* ══════════════════════════════════════════════════════════════════════════
+ * [RT-11] The audit trail comes off the request path
+ *
+ * A save does not return when the business row is written. It returns when the
+ * history has ALSO been written — synchronously, into the shared AUTH
+ * spreadsheet, while holding LockService.getScriptLock(), which is SCRIPT
+ * GLOBAL. Every save in every company queues behind every other save in the
+ * system for its audit write. On an edit touching ten columns that is ten
+ * history rows behind one global lock, and the user waits for all of it.
+ *
+ * writeHistoryRows_ is already well optimised — one lock, one id allocation,
+ * one setValues instead of N appends. The remaining cost is not the write. It
+ * is the LOCK, and the lock is the part every other user in every other company
+ * is waiting on.
+ *
+ * So the rows are appended to a queue with appendRowWithRetry_, which takes NO
+ * script lock and allocates NO ids, and a one-minute trigger does the locking
+ * and the id allocation once for everybody.
+ *
+ * ── WHY A SHEET AND NOT A CACHE ────────────────────────────────────────────
+ * Audit rows are the one thing in this programme that may not be lost.
+ * CacheService entries can be evicted before their TTL — the comment above the
+ * change stamps in this file says so explicitly, and the whole client-side
+ * design is built around it. A queue that silently drops audit rows is worse
+ * than a slow save, worse than a stale cache, worse than anything else here,
+ * because nobody finds out. Telemetry may use a cache; this may not.
+ *
+ * ── HOW THE DRAIN CANNOT DUPLICATE OR LOSE A ROW ───────────────────────────
+ * The drain MARKS rows before it moves them, in three phases:
+ *
+ *   1. CLAIM   stamp a unique drain id into the claim column of the rows this
+ *              run intends to move, and write that stamp. From this moment no
+ *              other drain will touch them.
+ *   2. WRITE   copy exactly the claimed rows into ERP_Record_History.
+ *   3. DELETE  remove the claimed rows from the queue.
+ *
+ *   2. DEDUPE  drop any claimed row that is ALREADY in ERP_Record_History,
+ *              matched on its natural key — record_uid, column_name, action and
+ *              changed_at. Only the TAIL of the history sheet is read, because
+ *              a row can only be a duplicate candidate if a drain wrote it and
+ *              died within the claim-stale window: minutes ago, not days.
+ *   4. MARK    stamp the claim as done, in the queue.
+ *   5. DELETE  remove the rows from the queue.
+ *
+ * Every place a trigger can die is covered, and none of them loses or
+ * duplicates a row:
+ *
+ *   died after CLAIM   rows stay claimed and unwritten. The next drain
+ *                      re-claims them once the claim goes stale, dedupe finds
+ *                      nothing, and they are written. NOTHING LOST.
+ *   died after WRITE   rows are in history AND still on the queue. The next
+ *                      drain re-claims them, DEDUPE FINDS THEM, and they are
+ *                      deleted without being written again. NOTHING DUPLICATED.
+ *   died after MARK    rows carry the done mark. The next drain sees it, skips
+ *                      the write entirely, and deletes. NOTHING DUPLICATED.
+ *
+ * The claim id is deliberately NOT written into ERP_Record_History: that
+ * sheet's columns are not this work's to change. The natural key does the same
+ * job with the columns already there.
+ *
+ * ── WHAT DOES NOT CHANGE ───────────────────────────────────────────────────
+ * What a history row CONTAINS, one row per changed column, the columns of
+ * ERP_Record_History, and everything Record_History_Panel reads. The rows put
+ * on the queue are exactly the rows historyRowsFor_ produces today. This phase
+ * changes WHEN the row is written and nothing else about it.
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+var HISTORY_QUEUE_SHEET_ = 'ERP_History_Queue';
+
+/* ERP_Record_History's own columns, plus the three the queue needs to be a
+ * queue. The extra three live HERE, in a new sheet; ERP_Record_History's
+ * columns are not touched. */
+var HISTORY_QUEUE_HEADERS_ = [
+  'sheet_name', 'record_uid', 'record_id', 'action', 'column_name',
+  'old_value', 'new_value', 'changed_by', 'changed_at', 'created_at',
+  'queued_at', 'claim_id', 'claimed_at'
+];
+
+/* A claim older than this is assumed to belong to a drain that died. Ten
+ * minutes: far longer than a drain takes, far shorter than anyone would wait
+ * to find out a row was stuck. */
+var HISTORY_CLAIM_STALE_MS_ = 10 * 60 * 1000;
+
+/* A row still queued after this is REPORTED. Never dropped. */
+var HISTORY_STALE_REPORT_MS_ = 30 * 60 * 1000;
+
+/** Whether the queue is in use. Off means writeHistoryRows_ behaves as it did. */
+var HISTORY_QUEUE_ENABLED_ = true;
+
+function ensureHistoryQueueSheet_() {
+  var ss = getSpreadsheet_(CONFIG.AUTH_SPREADSHEET_ID);
+  var sh = ss.getSheetByName(HISTORY_QUEUE_SHEET_);
+  if (!sh) {
+    sh = ss.insertSheet(HISTORY_QUEUE_SHEET_);
+    sh.appendRow(HISTORY_QUEUE_HEADERS_);
+    sh.setFrozenRows(1);
+    noteMutation_(sh);
+  }
+  return sh;
+}
+
+/**
+ * Put history rows on the queue. NO script lock, NO id allocation — that is the
+ * whole saving, and both of those move to the drain.
+ *
+ * Returns true when the rows are queued. On ANY failure it returns false and
+ * the caller writes them the old way, synchronously: a slow save is a much
+ * better outcome than a lost audit row.
+ */
+function enqueueHistoryRows_(rows) {
+  if (!rows || !rows.length) return true;
+  try {
+    var sh = ensureHistoryQueueSheet_();
+    var queuedAt = new Date();
+    var matrix = rows.map(function (hr) {
+      return HISTORY_QUEUE_HEADERS_.map(function (h) {
+        if (h === 'queued_at') return queuedAt;
+        if (h === 'claim_id' || h === 'claimed_at') return '';
+        var v = hr[h];
+        return (v !== undefined && v !== null) ? v : '';
+      });
+    });
+    /* appendRowWithRetry_ takes no script lock. One setValues for the batch,
+     * appended at the end, which is the cheapest thing a sheet can be asked to
+     * do and is the only sheet work left inside the user's request. */
+    sh.getRange(sh.getLastRow() + 1, 1, matrix.length, HISTORY_QUEUE_HEADERS_.length)
+      .setValues(matrix);
+    noteMutation_(sh);
+    return true;
+  } catch (e) {
+    try { console.error('enqueueHistoryRows_: ' + e.message); } catch (eL) {}
+    return false;
+  }
+}
+
+/**
+ * The drain. One minute, time-driven.
+ *
+ * Claims, writes, then deletes — see the header for why that order and not
+ * another. Runs under the same global lock writeHistoryRows_ used to take, but
+ * takes it ONCE for a minute's worth of saves from every company instead of
+ * once per save.
+ */
+function drainHistoryQueue_() {
+  try {
+    var ss = getSpreadsheet_(CONFIG.AUTH_SPREADSHEET_ID);
+    var sh = ss.getSheetByName(HISTORY_QUEUE_SHEET_);
+    if (!sh || sh.getLastRow() < 2) return { status: 'success', rows: 0 };
+
+    var claimId = 'd' + new Date().getTime().toString(36) + Utilities.getUuid().slice(0, 8);
+    var now = new Date().getTime();
+    var idx = {};
+    HISTORY_QUEUE_HEADERS_.forEach(function (h, i) { idx[h] = i; });
+
+    var all = sh.getRange(2, 1, sh.getLastRow() - 1, HISTORY_QUEUE_HEADERS_.length).getValues();
+
+    /* PHASE 1 — CLAIM. Unclaimed rows; rows already marked done by a drain that
+     * died before deleting them; and rows whose claim is old enough that the
+     * drain holding it must have died. */
+    var take = [], alreadyDone = {};
+    for (var i = 0; i < all.length; i++) {
+      var existing = String(all[i][idx.claim_id] || '').trim();
+      if (!existing) { take.push(i); continue; }
+      if (existing.indexOf('|done') !== -1) { take.push(i); alreadyDone[i] = true; continue; }
+      var at = new Date(all[i][idx.claimed_at]).getTime();
+      if (isNaN(at) || (now - at) > HISTORY_CLAIM_STALE_MS_) take.push(i);
+    }
+    if (!take.length) {
+      /* Nothing this drain may touch, but the queue is not empty — every row is
+       * freshly claimed by another drain, or something is stuck. This is the
+       * only moment worth checking, and it costs one column read. */
+      reportStaleHistoryQueue_();
+      return { status: 'success', rows: 0 };
+    }
+
+    var claimedAt = new Date();
+    take.forEach(function (r) {
+      if (alreadyDone[r]) return;      /* keep the done mark: it is the evidence */
+      sh.getRange(r + 2, idx.claim_id + 1, 1, 2).setValues([[claimId, claimedAt]]);
+    });
+    noteMutation_(sh);
+
+    /* PHASE 2 — DEDUPE. A drain that died after writing but before deleting
+     * left its rows in BOTH places. They are matched on their natural key
+     * against the tail of ERP_Record_History. */
+    var candidates = take.filter(function (r) { return !alreadyDone[r]; });
+    var written = historyTailKeys_(Math.max(candidates.length * 4, 500));
+    var toWrite = candidates.filter(function (r) {
+      return !written[historyRowKey_({
+        record_uid: all[r][idx.record_uid],
+        column_name: all[r][idx.column_name],
+        action: all[r][idx.action],
+        changed_at: all[r][idx.changed_at]
+      })];
+    });
+
+    /* PHASE 3 — WRITE the survivors, in ERP_Record_History's own column order,
+     * with the ids allocated once for the whole batch. */
+    if (toWrite.length) {
+      var histRows = toWrite.map(function (r) {
+        var row = all[r];
+        var o = {};
+        HISTORY_QUEUE_HEADERS_.forEach(function (h, c) {
+          if (h === 'queued_at' || h === 'claim_id' || h === 'claimed_at') return;
+          o[h] = row[c];
+        });
+        return o;
+      });
+      writeHistoryRowsDirect_(histRows);
+
+      /* PHASE 4 — MARK done, so a death before the delete below costs a skipped
+       * write next time rather than a duplicated one. */
+      toWrite.forEach(function (r) {
+        sh.getRange(r + 2, idx.claim_id + 1).setValue(claimId + '|done');
+      });
+      noteMutation_(sh);
+    }
+
+    /* PHASE 5 — DELETE, bottom-up so the indices stay valid. */
+    take.slice().sort(function (a, b) { return b - a; }).forEach(function (r) {
+      sh.deleteRow(r + 2);
+    });
+    noteMutation_(sh);
+
+    return {
+      status: 'success', rows: take.length, written: toWrite.length,
+      deduped: take.length - toWrite.length, claim: claimId
+    };
+  } catch (e) {
+    try { console.error('drainHistoryQueue_: ' + e.message); } catch (eL) {}
+    return { status: 'error', message: e.message };
+  }
+}
+
+/**
+ * Rows that have been on the queue too long. REPORTED, never dropped — a queue
+ * that quietly discards is the failure this whole design exists to avoid.
+ */
+function reportStaleHistoryQueue_() {
+  try {
+    var sh = getSpreadsheet_(CONFIG.AUTH_SPREADSHEET_ID).getSheetByName(HISTORY_QUEUE_SHEET_);
+    if (!sh || sh.getLastRow() < 2) return { status: 'success', stale: 0 };
+    var col = HISTORY_QUEUE_HEADERS_.indexOf('queued_at') + 1;
+    var stamps = sh.getRange(2, col, sh.getLastRow() - 1, 1).getValues();
+    var cutoff = new Date().getTime() - HISTORY_STALE_REPORT_MS_;
+    var stale = stamps.filter(function (r) {
+      var t = new Date(r[0]).getTime();
+      return !isNaN(t) && t < cutoff;
+    }).length;
+    if (stale) {
+      try {
+        console.error('ERP_History_Queue: ' + stale + ' audit row(s) still queued after ' +
+          Math.round(HISTORY_STALE_REPORT_MS_ / 60000) + ' minutes. The drain trigger may not be installed.');
+      } catch (eL) {}
+    }
+    return { status: 'success', stale: stale };
+  } catch (e) {
+    return { status: 'error', message: e.message };
+  }
+}
+
+/** The natural key of a history row: what makes two of them the same row. */
+function historyRowKey_(r) {
+  return [
+    String(r.record_uid || ''),
+    String(r.column_name || ''),
+    String(r.action || ''),
+    (r.changed_at instanceof Date) ? r.changed_at.getTime() : String(r.changed_at || '')
+  ].join('');
+}
+
+/**
+ * The natural keys of the last `n` rows of ERP_Record_History, as a lookup.
+ *
+ * Only the tail, deliberately: this runs every minute and the history sheet
+ * grows without bound, so reading it whole would make the drain the expensive
+ * thing this work exists to remove. The tail is sufficient because a row can
+ * only be a duplicate candidate if some drain wrote it and died within the
+ * claim-stale window — minutes ago, not days.
+ *
+ * A failure here returns an empty lookup, which means nothing is deduped and
+ * nothing is lost: the worst case is the duplicate this is trying to avoid,
+ * never a missing audit row.
+ */
+function historyTailKeys_(n) {
+  var out = {};
+  try {
+    var sh = getSpreadsheet_(CONFIG.AUTH_SPREADSHEET_ID).getSheetByName('ERP_Record_History');
+    if (!sh) return out;
+    var last = sh.getLastRow();
+    if (last < 2) return out;
+    var headers = getHeaders_(sh).map(function (h) { return String(h).trim().toLowerCase(); });
+    var take = Math.min(n, last - 1);
+    var rows = sh.getRange(last - take + 1, 1, take, headers.length).getValues();
+    var ui = headers.indexOf('record_uid');
+    var ci = headers.indexOf('column_name');
+    var ai = headers.indexOf('action');
+    var ti = headers.indexOf('changed_at');
+    if (ui === -1 || ci === -1) return out;
+    rows.forEach(function (r) {
+      out[historyRowKey_({
+        record_uid: r[ui], column_name: r[ci],
+        action: ai === -1 ? '' : r[ai],
+        changed_at: ti === -1 ? '' : r[ti]
+      })] = true;
+    });
+  } catch (e) { /* see above: no tail means no dedupe, never a lost row */ }
+  return out;
+}
+
+/**
+ * [RT-11] The audit write, as the request sees it.
+ *
+ * It ENQUEUES. That is the whole change: the rows are appended to
+ * ERP_History_Queue with no script lock and no id allocation, and the
+ * one-minute drain does the locking and the allocating once for everybody.
+ * The saving is the LOCK, and the lock is what every other user in every other
+ * company was waiting on.
+ *
+ * If the queue is unavailable for ANY reason — the sheet cannot be created, the
+ * append throws, the feature is switched off — this falls straight through to
+ * the old synchronous write. A slow save is a much better outcome than a lost
+ * audit row, and it is the only trade this function is allowed to make.
+ */
 function writeHistoryRows_(rows) {
+  if (!rows || !rows.length) return;
+  if (HISTORY_QUEUE_ENABLED_ && enqueueHistoryRows_(rows)) return;
+  writeHistoryRowsDirect_(rows);
+}
+
+/** The batched write itself — one lock, one id allocation, one setValues.
+ *  Unchanged, and still the fallback and the drain's own writer. */
+function writeHistoryRowsDirect_(rows) {
   if (!rows || !rows.length) return;
   const histSheet = getSheet_('ERP_Record_History', CONFIG.AUTH_SPREADSHEET_ID);
   // FAST PATH (batched): identical cell values to N sequential addRecord_ calls,
