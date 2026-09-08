@@ -3776,7 +3776,9 @@ const ValleyFoodsHRModules = (function () {
   // Schemas recovered verbatim from the AppSheet legacy design. Physical
   // columns only — AppSheet virtual/formula columns are computed for display
   // client-side and never stored. IDs are assigned exclusively through
-  // addRecord_ → getNextIdUnderLock_ (lock-protected max+1 iteration).
+  // addRecord_ → getNextIdUnderLock_ (lock-protected max(id in this table) + 1,
+  // floored by the execution's high-water mark; the ID_Counter sheet is never
+  // consulted).
   const FIN_PRODUCTS_SHEET = 'valley_products';
   const FIN_PARTIES_SHEET  = 'valley_legal_customer_vendor';
   const FIN_CATEGORIES_SHEET = 'valley_categories';
@@ -4556,17 +4558,20 @@ const ValleyFoodsHRModules = (function () {
     /* PERF — the reason this save used to take minutes.
      *
      * This loop used to call addRecord_ once per line. Each of those calls
-     * acquires the script lock, reads the whole ID_Counter sheet, reads the
-     * ENTIRE valley_product_purchasing sheet to recompute max(id), writes one
-     * counter cell and appends one row. That is five Sheets round trips per
-     * line, one of which is O(the whole table) — so a 40-line purchase against
-     * a 20 000-row line table did ~200 round trips and read ~27 MILLION cells
-     * before it could finish.
+     * acquires the script lock, reads the id column of the ENTIRE
+     * valley_product_purchasing sheet to recompute max(id), and appends one
+     * row — and, before A1, also read and wrote the ID_Counter sheet. That is
+     * several Sheets round trips per line, one of which is O(the whole table),
+     * so a 40-line purchase against a 20 000-row line table did ~200 round
+     * trips and read millions of cells before it could finish.
      *
      * logHistory_ already solved exactly this, and says so in its own comment:
-     * ONE lock, ONE counter allocation, ONE setValues. Same cell values, same
-     * ids, same order — only the number of round trips changes. getNextIdBatch_
-     * is the allocator it uses and is lock-reentrant, so this is safe here too.
+     * ONE lock, ONE id allocation, ONE setValues. Same cell values, same ids,
+     * same order — only the number of round trips changes. getNextIdBatch_ is
+     * the allocator it uses and is lock-reentrant, so this is safe here too;
+     * since A1 it derives startId from max(id) in the target table, floored by
+     * this execution's high-water mark, and reserves the whole run at once so
+     * the lines below cannot collide with a later allocation.
      */
     if (lineMaps.length) {
       var lineHeaders = getHeaders_(lineSheet);
@@ -5649,12 +5654,23 @@ const ValleyFoodsHRModules = (function () {
        * and written as one setValues instead of one appendRow per new work centre.
        * Phase 8 skipped this because getNextIdUnderLock_ runs between iterations and
        * deferring the appends changes what it reads. It does — and it does not change
-       * what it RETURNS. That function returns `current` (the ID_Counter value) when
-       * current > tableMax, and tableMax + 1 otherwise, then sets the counter to
-       * returned + 1. Every return is therefore >= tableMax + 1, so from the second
-       * call onward the counter is strictly greater than the table max whether or not
-       * the previous row has landed, and both orderings take the same branch and yield
-       * the same id. The update branch never writes the id column, so an interleaved
+       * what it RETURNS.
+       *
+       * The reasoning that USED to be written here rested on ID_Counter: the old
+       * allocator returned the counter's own value whenever the counter ran ahead of
+       * the table, so from the second call onward the counter was strictly greater
+       * than the table max whether or not the previous row had landed. That is no
+       * longer true and must not be relied on — the allocator no longer reads the
+       * counter at all (A1).
+       *
+       * What holds now: getNextIdUnderLock_ floors every answer at
+       * max(live table max, highest id handed out this execution) + 1 — the
+       * _idHighWater_ memo in 02_DataAccess.js. So the second iteration returns one
+       * more than the first even though the first row has not landed, and the ids
+       * this loop produces are consecutive and distinct in exactly the order the
+       * batched setValues writes them. Deferring the appends is therefore still
+       * invisible to the id sequence, for a reason that survives the counter's
+       * removal. The update branch never writes the id column, so an interleaved
        * update cannot move tableMax either.
        * Row numbers are unchanged for the same reason the Phase 8 blocks are: only
        * appends change the row count during this loop (the deletes run after it), so
