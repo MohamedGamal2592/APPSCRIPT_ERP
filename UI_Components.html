@@ -6225,9 +6225,12 @@ UIC.Live = (function () {
    * and loses it on reload, which is exactly today's behaviour and no worse.
    */
   var RETRY_KEY = 'erp_live_queue';
+  var LEAD_KEY = 'erp_live_lead';
+  var LEAD_TTL = 12000;
   var RETRY_MAX = 5;
   var queue = [];                 // [{v, target_system, action, data, message, tries, at}]
   var retryTimer = null;
+  var tabId = String(Math.random()).slice(2) + Date.now();
 
   /* ── [RT-4b] Why a queued change could never drain in a new session ───────
    *
@@ -6288,6 +6291,35 @@ UIC.Live = (function () {
     return queue._call || null;
   }
 
+  /* ── [§I4] One drainer, across every tab on the origin ────────────────────
+   *
+   * `erp_live_queue` is ONE localStorage key shared by every tab, and there was
+   * no coordination at all — no BroadcastChannel, no `storage` listener. Two
+   * open tabs both loaded the queue, both drained it, and each persistQueue()
+   * overwrote the other's state: duplicate sends and lost entries, together.
+   *
+   * A claim with a short TTL, re-claimed once stale — the same shape as the
+   * audit drain's claim in 02_DataAccess.js. A tab that does not hold the claim
+   * does not send: it reschedules and lets the leader work. The TTL is what
+   * makes a leader that was closed or crashed recoverable with no handshake,
+   * and it is short enough (12s, against a 5s first retry) that a queue is
+   * never stranded for long.
+   *
+   * A store that throws returns true. One tab that cannot coordinate is exactly
+   * today's behaviour and no worse; refusing to drain at all would turn a
+   * storage quirk into a change that never saves. */
+  function claimLead() {
+    try {
+      var v = localStorage.getItem(LEAD_KEY), now = Date.now();
+      if (v) {
+        var p = String(v).split('|');
+        if (p[0] !== tabId && (now - Number(p[1])) < LEAD_TTL) return false;
+      }
+      localStorage.setItem(LEAD_KEY, tabId + '|' + now);
+      return true;
+    } catch (e) { return true; }
+  }
+
 
   /**
    * The chip. Persistent by design: it stays until the change is saved or the
@@ -6334,6 +6366,10 @@ UIC.Live = (function () {
    *  is what is persisted. */
   function drainQueue() {
     if (!queue.length) { renderChip(); return; }
+
+    /* [§I4] Only the leader sends. The others wait — they still show the chip,
+       so every tab reports the same truth while exactly one tab acts on it. */
+    if (!claimLead()) { renderChip(); scheduleRetry(); return; }
 
     var entry = queue[0];
     var send = callFor(entry);
@@ -6712,6 +6748,12 @@ UIC.Live = (function () {
       }
       scheduleRetry();
     }
+    /* [§I4] Another tab moved the queue. Re-read and re-render — never race it.
+       This is what stops a follower's stale in-memory copy from being written
+       back over the leader's progress. */
+    window.addEventListener('storage', function (e) {
+      if (e && e.key === RETRY_KEY) { loadQueue(); renderChip(); }
+    });
     window.addEventListener('online', function () { retryNow(); });
     window.addEventListener('beforeunload', function (e) {
       var msg = guardMessage();
