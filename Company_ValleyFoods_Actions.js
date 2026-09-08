@@ -4624,6 +4624,7 @@ const ValleyFoodsHRModules = (function () {
       noteMutation_(lineSheet);
     }
 
+    vfFlush_();   /* the balance the client reads back must include this write */
     return { status: 'success', message: isEdit ? 'تم تحديث عملية الشراء' : 'تمت إضافة عملية الشراء', code: code };
   }
 
@@ -4638,6 +4639,7 @@ const ValleyFoodsHRModules = (function () {
     try{ logHistory_(dbId, PURCHASING_COSTING_SHEET, _oldDelUid, code, (user&&user.email)||'', 'delete', null, _oldDelPur) }catch(e){}
     deleteRowsByCriteria_(getSheet_(PURCHASING_COSTING_SHEET, dbId), 'Code', code);
     deleteRowsByCriteria_(getSheet_(PURCHASING_LINE_SHEET, dbId), 'code', code);
+    vfFlush_();   /* the balance the client reads back must include this write */
     return { status: 'success', message: 'تم حذف عملية الشراء' };
   }
 
@@ -5313,66 +5315,69 @@ const ValleyFoodsHRModules = (function () {
     settingsEnsureSheet_(dbId, MFG_ORDER_PRODUCTS_SHEET, MFG_OUTPUT_HEADERS);
     settingsEnsureSheet_(dbId, MFG_CONSUMPTION_SHEET, MFG_CONSUMPTION_HEADERS);
 
-    /* Defensive: requested batch qty may not exceed the balance in valley_current_products.
-       Runs BEFORE anything is written, so a violation aborts cleanly with no orphan header. */
-    (function assertFooterBalances_() {
-      var needByBatch = {};
-      function need_(buid, q) {
-        buid = String(buid || '').trim(); q = Number(q) || 0;
-        if (buid && q > 0) needByBatch[buid] = Math.round(((needByBatch[buid] || 0) + q) * 1000) / 1000;
-      }
-      var nameMap = {};
-      try { getAllRecords_(dbId, FIN_PRODUCTS_SHEET).forEach(function (p) { nameMap[String(p.id)] = String(p.name_ar || p.id); }); } catch (eNm) {}
-      outputs.forEach(function (o) {
-        var opid = String(o.product_id || '').trim();
-        var payQty = Math.round((Number(o.qty) || 0) * 1000) / 1000;
-        var rows = (Array.isArray(o.footers) ? o.footers : []).filter(function (f) { return f && String(f.item || '').trim(); })
-          .map(function (f) { return { batch: String(f.item).trim(), qty: Math.round((Number(f.qty) || 0) * 1000) / 1000 }; });
-        var paySum = Math.round(rows.reduce(function (t, r) { return t + r.qty; }, 0) * 1000) / 1000;
-        if (Math.abs(paySum - payQty) > 0.01) {
-          throw new Error('مجموع الدفعات للصنف (' + (nameMap[opid] || opid || '?') + ') يجب أن يساوي كمية البند. مجموع الدفعات: ' + paySum + '، الكمية: ' + payQty);
-        }
-        /* normalize the ceil-to-10 parent rounding into the largest footer so stored sums match product_qty */
-        var storedQty = Math.ceil((Number(o.qty) || 0) / 10) * 10;
-        var delta = Math.round((storedQty - paySum) * 1000) / 1000;
-        if (Math.abs(delta) > 0.0000001 && rows.length) {
-          var mi = 0, mq = -Infinity;
-          rows.forEach(function (r, ix) { if (r.qty > mq) { mq = r.qty; mi = ix; } });
-          rows[mi].qty = Math.round((rows[mi].qty + delta) * 1000) / 1000;
-        }
-        rows.forEach(function (r) { need_(r.batch, r.qty); });
-      });
-      (Array.isArray(consumption) ? consumption : []).forEach(function (cm) { need_(cm.batch_uid, cm.qty); });
-      var batchIds = Object.keys(needByBatch);
-      if (!batchIds.length) return;
-      /* available = current_qty + what THIS order already holds on the sheet.
-         The save is about to rewrite those very footer rows, so the quantity
-         they hold is still this order's to spend — without the add-back,
-         re-saving an unchanged order refuses its own stock. A NEW order holds
-         nothing and adds back nothing. include_empty keeps a batch this order
-         has fully consumed in the map, so a refusal names the real figure. */
-      var myUid = editing && d.mo_uid ? String(d.mo_uid).trim() : '';
-      var balanceByBatch = {};
-      vfBatchBalance_(dbId, { mo_uid: myUid, include_empty: true }).forEach(function (b) {
-        if (balanceByBatch[b.batch_uid] === undefined) balanceByBatch[b.batch_uid] = b.available;
-      });
-      batchIds.forEach(function (buid) {
-        var avail = Math.round((balanceByBatch[buid] || 0) * 1000) / 1000;
-        if (needByBatch[buid] - avail > 0.001) {
-          var label = buid;
-          try {
-            outputs.forEach(function (o) {
-              (o.footers || []).forEach(function (f) {
-                if (String(f.item || '').trim() === buid && f.item_code) label = String(f.item_code);
-              });
-            });
-          } catch (eLbl) {}
-          throw new Error('الكمية المطلوبة من الدفعة (' + label + ') تتجاوز المتاح. المطلوب: ' + needByBatch[buid] + '، المتاح: ' + avail);
-        }
-      });
-    })();
-
     executeWithLock_(function () {
+      /* Defensive: requested batch qty may not exceed the balance in
+         valley_current_products, which is now the ONLY guard on the batch. It runs
+         INSIDE the lock: outside it, two concurrent saves both read the same
+         balance, both pass, and both write. It still runs before the first row is
+         written, so a violation aborts cleanly with no orphan header. */
+      (function assertFooterBalances_() {
+        var needByBatch = {};
+        function need_(buid, q) {
+          buid = String(buid || '').trim(); q = Number(q) || 0;
+          if (buid && q > 0) needByBatch[buid] = Math.round(((needByBatch[buid] || 0) + q) * 1000) / 1000;
+        }
+        var nameMap = {};
+        try { getAllRecords_(dbId, FIN_PRODUCTS_SHEET).forEach(function (p) { nameMap[String(p.id)] = String(p.name_ar || p.id); }); } catch (eNm) {}
+        outputs.forEach(function (o) {
+          var opid = String(o.product_id || '').trim();
+          var payQty = Math.round((Number(o.qty) || 0) * 1000) / 1000;
+          var rows = (Array.isArray(o.footers) ? o.footers : []).filter(function (f) { return f && String(f.item || '').trim(); })
+            .map(function (f) { return { batch: String(f.item).trim(), qty: Math.round((Number(f.qty) || 0) * 1000) / 1000 }; });
+          var paySum = Math.round(rows.reduce(function (t, r) { return t + r.qty; }, 0) * 1000) / 1000;
+          if (Math.abs(paySum - payQty) > 0.01) {
+            throw new Error('مجموع الدفعات للصنف (' + (nameMap[opid] || opid || '?') + ') يجب أن يساوي كمية البند. مجموع الدفعات: ' + paySum + '، الكمية: ' + payQty);
+          }
+          /* normalize the ceil-to-10 parent rounding into the largest footer so stored sums match product_qty */
+          var storedQty = Math.ceil((Number(o.qty) || 0) / 10) * 10;
+          var delta = Math.round((storedQty - paySum) * 1000) / 1000;
+          if (Math.abs(delta) > 0.0000001 && rows.length) {
+            var mi = 0, mq = -Infinity;
+            rows.forEach(function (r, ix) { if (r.qty > mq) { mq = r.qty; mi = ix; } });
+            rows[mi].qty = Math.round((rows[mi].qty + delta) * 1000) / 1000;
+          }
+          rows.forEach(function (r) { need_(r.batch, r.qty); });
+        });
+        (Array.isArray(consumption) ? consumption : []).forEach(function (cm) { need_(cm.batch_uid, cm.qty); });
+        var batchIds = Object.keys(needByBatch);
+        if (!batchIds.length) return;
+        /* available = current_qty + what THIS order already holds on the sheet.
+           The save is about to rewrite those very footer rows, so the quantity
+           they hold is still this order's to spend — without the add-back,
+           re-saving an unchanged order refuses its own stock. A NEW order holds
+           nothing and adds back nothing. include_empty keeps a batch this order
+           has fully consumed in the map, so a refusal names the real figure. */
+        var myUid = editing && d.mo_uid ? String(d.mo_uid).trim() : '';
+        var balanceByBatch = {};
+        vfBatchBalance_(dbId, { mo_uid: myUid, include_empty: true }).forEach(function (b) {
+          if (balanceByBatch[b.batch_uid] === undefined) balanceByBatch[b.batch_uid] = b.available;
+        });
+        batchIds.forEach(function (buid) {
+          var avail = Math.round((balanceByBatch[buid] || 0) * 1000) / 1000;
+          if (needByBatch[buid] - avail > 0.001) {
+            var label = buid;
+            try {
+              outputs.forEach(function (o) {
+                (o.footers || []).forEach(function (f) {
+                  if (String(f.item || '').trim() === buid && f.item_code) label = String(f.item_code);
+                });
+              });
+            } catch (eLbl) {}
+            throw new Error('الكمية المطلوبة من الدفعة (' + label + ') تتجاوز المتاح. المطلوب: ' + needByBatch[buid] + '، المتاح: ' + avail);
+          }
+        });
+      })();
+
       var sheetMo = getSheet_(MFG_ORDER_SHEET, dbId);
       var moHeaders = getHeaders_(sheetMo);
       var moDataAll = sheetMo.getDataRange().getValues();
@@ -5753,6 +5758,7 @@ const ValleyFoodsHRModules = (function () {
     });
 
     finBustRefs_(dbId);
+    vfFlush_();   /* the balance the client reads back must include this write */
     return { status: 'success', message: editing ? 'تم تحديث أمر التصنيع' : 'تم إنشاء أمر التصنيع', mo_uid: moUid };
   }
 
@@ -5816,6 +5822,7 @@ const ValleyFoodsHRModules = (function () {
           : { quality_approval: (user && user.email) || '', quality_approval_time: new Date() });
         var oldUid = oldObj.record_uid || ('upd_' + MFG_ORDER_SHEET + '_' + moUid);
         try { logHistory_(dbId, MFG_ORDER_SHEET, oldUid, moUid, (user && user.email) || '', 'approve', newObj, oldObj); } catch (eHist) {}
+        vfFlush_();   /* the balance the client reads back must include this write */
         return { status: 'success', message: kind === 'production' ? 'تم اعتماد الإنتاج' : 'تم اعتماد الجودة' };
       }
     }
@@ -5893,6 +5900,7 @@ const ValleyFoodsHRModules = (function () {
       }
     });
     try{ var _newMfgSt = Object.assign({}, _oldMfgSt||{}, { mo_status: next }); logHistory_(dbId, MFG_ORDER_SHEET, _oldMfgSt&&_oldMfgSt.record_uid ? _oldMfgSt.record_uid : ('update_'+MFG_ORDER_SHEET+'_'+moUid), moUid, (user&&user.email)||'', 'update', _newMfgSt, _oldMfgSt) }catch(e){}
+    vfFlush_();   /* the balance the client reads back must include this write */
     return { status: 'success', message: kind === 'lock' ? 'تم قفل أمر التصنيع' : (kind === 'unlock' ? 'تم فتح قفل أمر التصنيع' : 'تم بدء أمر التصنيع'), mo_status: next };
   }
 
@@ -6663,6 +6671,7 @@ const ValleyFoodsHRModules = (function () {
     if (!removed) throw new Error('أمر التصنيع غير موجود');
     deleteRowsByCriteria_(getSheet_(MFG_ORDER_PRODUCTS_SHEET, dbId), 'valley_manufacture_header_id', moUid);
     deleteRowsByCriteria_(getSheet_(MFG_CONSUMPTION_SHEET, dbId), 'valley_manufacture_header_product_id', moUid);
+    vfFlush_();   /* the balance the client reads back must include this write */
     return { status: 'success', message: 'تم حذف أمر التصنيع وبياناته' };
   }
 
@@ -7797,6 +7806,7 @@ const ValleyFoodsHRModules = (function () {
       }));
     } catch (e) {}
 
+    vfFlush_();   /* the balance the client reads back must include this write */
     return {
       status: 'success',
       message: prepared.length === 1
@@ -7890,6 +7900,18 @@ const ValleyFoodsHRModules = (function () {
   }
   function safeRows_(dbId, FIN_SALES_LINES_SHEET) {
     try { return getAllRecords_(dbId, FIN_SALES_LINES_SHEET); } catch (e) { return []; }
+  }
+
+  /* §5.1. valley_current_products is a SHEET FORMULA over the feeding tables,
+   * and it only recalculates once the rows it reads are actually on the sheet.
+   * Apps Script batches writes, so a save can return, the client can re-read the
+   * balance, and the formula can still be answering from before that save. Every
+   * handler that writes valley_manufacture_footer, valley_sales_product_stock,
+   * valley_warehouse_movement, valley_product_purchasing, valley_manufacture_header
+   * or valley_manufacture_header_products flushes before it returns.
+   * Never throws: a failed flush must not turn a committed save into an error. */
+  function vfFlush_() {
+    try { SpreadsheetApp.flush(); } catch (e) {}
   }
 
   /* valley_current_products, read LIVE on every single call.
@@ -8415,6 +8437,7 @@ const ValleyFoodsHRModules = (function () {
     });
 
     finBustRefs_(dbId);
+    vfFlush_();   /* the balance the client reads back must include this write */
     return { status: 'success', message: editing ? 'تم تحديث الفاتورة' : 'تم إنشاء الفاتورة' };
   }
 
@@ -8863,6 +8886,7 @@ const ValleyFoodsHRModules = (function () {
     });
 
     finBustRefs_(dbId);
+    vfFlush_();   /* the balance the client reads back must include this write */
     return { status: 'success', message: 'تم تسجيل المرتجع بنجاح' };
   }
 

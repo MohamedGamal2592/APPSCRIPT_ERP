@@ -302,6 +302,9 @@ if (BLOCK_START !== -1 && BLOCK_END > BLOCK_START) {
     /* §4: valley_current_products is read LIVE, never through the memo, so it
        has its own reader rather than going through getAllRecords_. */
     vfCurrentProducts_: () => CURRENT_PRODUCTS.map(r => Object.assign({}, r)),
+    /* §5.1: the save flushes before it returns so the balance the client reads
+       back includes this write. */
+    vfFlush_: () => { captured.flushed = (captured.flushed || 0) + 1; },
     /* the write path, recorded instead of performed */
     getNextIdBatch_: (dbId, name, count) => { captured.idCount = count; return 99; },
     noteMutation_: () => {},
