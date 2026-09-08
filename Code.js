@@ -354,6 +354,11 @@ const ROUTES = {
   'daily_csv_backup': { handler: dailyCsvBackup, requireAuth: true },
   'log_client_error': { handler: logClientError_, requireAuth: false },
   'log_client_perf': { handler: logClientPerf_, requireAuth: false },
+  /* [RT-9] The soft-navigation body route. requireAuth is true and the handler
+     ALSO runs checkPageAccessForUI_ on the page being asked for — being logged
+     in is not the same as being allowed to see this page, and this endpoint
+     must not be the one place where those two are confused. */
+  'get_page_body': { handler: getPageBody_, requireAuth: true },
 
   // ─── MySQL Live Module (DbLive_Connector.js) ──────────
   'db_list_tables': { handler: dbListTables_, requireAuth: true },
@@ -818,6 +823,115 @@ function minifyInclude_(src) {
   return out.join('');
 }
 
+/* ══════════════════════════════════════════════════════════════════════════
+ * [RT-9] get_page_body — the same page, without the 190 KB that is already here
+ *
+ * doGet renders a page by evaluating its template with include() inlining the
+ * shared bundle. On a navigation from one page of the app to another, all of
+ * that shared bundle is ALREADY in the document: the browser downloads it,
+ * parses it and executes it a second time for no reason at all.
+ *
+ * This returns the same template, evaluated the same way, with the shared
+ * includes suppressed — so a soft navigation transfers a page's own body and
+ * script and nothing else.
+ *
+ * THE AUTHORIZATION GATE IS THE SAME GATE. checkPageAccessForUI_, on the same
+ * action, with the same registry lookup and the same public-page rule as doGet.
+ * A faster route to a page must never be a route around the check that decides
+ * whether you may see it. This is the single highest-risk line in the whole
+ * programme and it is deliberately a copy of doGet's, not a variation on it.
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+/* Set only for the duration of one getPageBody_ call. include() reads it and
+ * returns nothing for the three shared files, which are already in the
+ * document the router is swapping content inside. */
+var SUPPRESS_SHARED_INCLUDES = false;
+
+function getPageBody_(data, user) {
+  const action = String((data && data.action) || '').trim();
+  if (!action) throw new Error('الصفحة مطلوبة');
+
+  /* Same registry rule as doGet: an entry with no template is a permission
+   * token, not a page, and must never be rendered. */
+  const page = getAllPages_().find(p => p.action === action && p.template);
+  if (!page) throw new Error(ERP_MESSAGES.NOT_AUTHORIZED);
+
+  if (!page.public) {
+    if (!user) throw new Error(ERP_MESSAGES.NOT_AUTHORIZED);
+    if (!checkPageAccessForUI_(user, action)) {
+      /* Deliberately the same opaque message as an unknown page: a soft
+       * navigation must not become an oracle for which pages exist. */
+      throw new Error(ERP_MESSAGES.NOT_AUTHORIZED);
+    }
+  }
+
+  let tmpl;
+  try {
+    tmpl = HtmlService.createTemplateFromFile(page.template);
+  } catch (missing) {
+    throw new Error('الصفحة غير متاحة');
+  }
+
+  tmpl.user = user || null;
+  tmpl.email = '';
+  tmpl.purchaseCode = '';
+  tmpl.currentAction = action;
+  tmpl.pageParams = JSON.stringify({ action: action });
+  tmpl.companyPages = '[]';
+  for (const key in COMPANY_REGISTRY) {
+    const c = COMPANY_REGISTRY[key];
+    if (c.pages && c.pages.some(p => p.action === action)) {
+      tmpl.companyPages = JSON.stringify(
+        c.pages
+          .filter(p => p.nav !== false && (!user || checkPageAccessForUI_(user, p.action)))
+          .map(p => ({ action: p.action, label: p.label || p.title }))
+      );
+      break;
+    }
+  }
+
+  let rendered;
+  SUPPRESS_SHARED_INCLUDES = true;
+  try {
+    rendered = tmpl.evaluate().getContent();
+  } finally {
+    /* In a finally, so a template that throws cannot leave every LATER request
+     * in this execution rendering pages with no shared bundle at all. */
+    SUPPRESS_SHARED_INCLUDES = false;
+  }
+  rendered = rendered.split('__APP_WEB_URL__').join(SCRIPT_URL)
+                     .split('__APP_SESSION_TOKEN__').join(CURRENT_SESSION_TOKEN);
+
+  /* Split the rendered document into the two things the router needs. The
+   * scripts are returned SEPARATELY rather than left in the html, because
+   * assigning innerHTML does not execute <script> tags — the router has to
+   * evaluate them itself, and it needs them in order. */
+  const scripts = [];
+  const body = extractBody_(rendered).replace(
+    /<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/gi,
+    function (m, code) { scripts.push(code); return ''; }
+  );
+
+  /* Inline <style> blocks survive inside the html and are applied when it is
+   * inserted, so they need no special handling. */
+  return {
+    status: 'success',
+    action: action,
+    title: page.title || action,
+    html: body,
+    scripts: scripts
+  };
+}
+
+/** The contents of <body>, or the whole document when there is no body tag. */
+function extractBody_(html) {
+  const open = html.search(/<body[^>]*>/i);
+  if (open === -1) return html;
+  const start = html.indexOf('>', open) + 1;
+  const close = html.toLowerCase().lastIndexOf('</body>');
+  return (close === -1) ? html.slice(start) : html.slice(start, close);
+}
+
 /* Which files are worth minifying. The three shared ones are 87% of every
  * page's payload and are included by 85 pages each; a page's own body is
  * included once and is small. Keeping the list explicit means a new page
@@ -853,6 +967,10 @@ function include(filename) {
   } catch (e) {
     rendered = HtmlService.createTemplateFromFile(filename).evaluate().getContent();
   }
+
+  /* [RT-9] A soft navigation already has the shared bundle in the document.
+   * Returning it again would make the "cheap" route the expensive one. */
+  if (SUPPRESS_SHARED_INCLUDES && MINIFY_FILES_[filename]) return '';
 
   if (MINIFY_FILES_[filename] && !NO_MINIFY) {
     try {

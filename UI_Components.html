@@ -408,6 +408,17 @@ UIC.navTo = function (ev, href) {
     var pendingMsg = (window.UIC && UIC.Live && UIC.Live.guardMessage) ? UIC.Live.guardMessage() : null;
     if (pendingMsg && !window.confirm(pendingMsg + ' المتابعة؟')) return;
   } catch (e) {}
+  /* [RT-9] If both this page and the target are registered with the router,
+   * the content region is swapped and the shell stays. Anything else — an
+   * unregistered page either side, an error, a page that is not part of this
+   * app — falls through to the navigation below, which is what every page did
+   * before the router existed and still does. */
+  try {
+    var target = null;
+    try { target = new URLSearchParams(String(href).split('?')[1] || '').get('action'); } catch (eU) {}
+    if (target && UIC.Router && UIC.Router.isRegistered(target) && UIC.Router.go(target)) return;
+  } catch (e) {}
+
   try { UIC.showPageLoading('جاري التحميل...'); } catch (e) {}
   try { if (window.top && window.top !== window) { window.top.location.href = href; return; } } catch (e) {}
   window.location.href = href;
@@ -5604,6 +5615,270 @@ if (document.readyState === 'loading') {
  * because the alternative to evicting is a quota exception on someone else's
  * unrelated setItem.
  * ══════════════════════════════════════════════════════════════════════════ */
+/* ══════════════════════════════════════════════════════════════════════════
+ * [RT-9] UIC.Router — the shell stops reloading
+ *
+ * Every in-app navigation is a full top-frame document load: UIC.navTo sets
+ * window.top.location.href, doGet runs the kill-switch read, the company
+ * registration, the session authentication and the page-access check, and the
+ * browser then downloads, parses and executes the whole 190 KB shared bundle
+ * again — a bundle that is byte-identical to the one it already has, because
+ * HtmlService cannot set Cache-Control. Then the new page's load() makes a
+ * SEPARATE round trip for its data. Four serialised stages, a blank screen
+ * across all of them, and one of them returns anything the user asked for.
+ *
+ * The router replaces the middle two for pages that opt in: it fetches the
+ * page's own body and script, swaps the content region, and leaves the header,
+ * the nav, the drawer and the scroll position exactly where they are.
+ *
+ * THREE THINGS MAKE THIS SAFE ENOUGH TO SHIP AT ALL:
+ *
+ * 1. OPT-IN, per page. A page registers itself with UIC.Router.register. Every
+ *    page that has not is hard-navigated exactly as today. There is no flag
+ *    day and both modes coexist indefinitely.
+ *
+ * 2. HARD-NAVIGATION FALLBACK on ANY error. Authorization failure, network
+ *    failure, a script that throws while mounting — all of them fall through
+ *    to the ordinary navigation. The worst case of this whole phase is
+ *    precisely today's behaviour.
+ *
+ * 3. unmount IS THE PHASE. A router that mounts correctly and unmounts
+ *    sloppily leaks a watchPage poll for every page visited, and a user's tab
+ *    quietly turns into a quota problem over an afternoon. Page scripts here
+ *    assume they own the document — they register window listeners, they start
+ *    intervals, they call UIC.Live.watchPage — so the router tracks every
+ *    timer and every listener started while a page is mounted and tears all of
+ *    them down before the next one mounts. A page that cannot prove that is
+ *    not converted.
+ * ══════════════════════════════════════════════════════════════════════════ */
+UIC.Router = (function () {
+  'use strict';
+
+  var registered = {};      /* action -> { mount, unmount } */
+  var current = null;       /* the action currently mounted */
+  var teardown = [];        /* what to undo before the next mount */
+  var busy = false;
+
+  /* ── Tracking what a mounted page starts ───────────────────────────────── */
+
+  var realSetTimeout = window.setTimeout;
+  var realSetInterval = window.setInterval;
+  var realAdd = window.addEventListener;
+  var tracking = false;
+  var timers = [];
+  var intervals = [];
+  var listeners = [];
+
+  /**
+   * While a routed page is mounting and running, window.setTimeout,
+   * window.setInterval and window.addEventListener are wrapped so everything
+   * the page starts is recorded. This is deliberately blunt: asking eighty-nine
+   * page authors to remember to clean up is how leaks happen, and the router
+   * is the only place that knows when a page's life ends.
+   */
+  function startTracking() {
+    if (tracking) return;
+    tracking = true;
+    timers = []; intervals = []; listeners = [];
+    window.setTimeout = function (fn, ms) {
+      var id = realSetTimeout.apply(window, arguments);
+      timers.push(id);
+      return id;
+    };
+    window.setInterval = function (fn, ms) {
+      var id = realSetInterval.apply(window, arguments);
+      intervals.push(id);
+      return id;
+    };
+    window.addEventListener = function (type, fn, opts) {
+      listeners.push([type, fn, opts]);
+      return realAdd.apply(window, arguments);
+    };
+  }
+
+  function stopTracking() {
+    if (!tracking) return;
+    tracking = false;
+    window.setTimeout = realSetTimeout;
+    window.setInterval = realSetInterval;
+    window.addEventListener = realAdd;
+  }
+
+  /** Undo everything the mounted page started. */
+  function tearDown() {
+    /* The page's own unmount first: it may want to save state, and it should
+     * run while its timers still exist rather than after they are gone. */
+    teardown.forEach(function (fn) { try { fn(); } catch (e) {} });
+    teardown = [];
+
+    /* The change watch is page-scoped and is the leak that matters most: one
+     * abandoned poll per page visited, each one a real Apps Script execution
+     * every interval, for as long as the tab is open. */
+    try { UIC.Live.unwatchPage(); } catch (e) {}
+
+    timers.forEach(function (id) { try { clearTimeout(id); } catch (e) {} });
+    intervals.forEach(function (id) { try { clearInterval(id); } catch (e) {} });
+    listeners.forEach(function (l) {
+      try { window.removeEventListener(l[0], l[1], l[2]); } catch (e) {}
+    });
+    timers = []; intervals = []; listeners = [];
+  }
+
+  /* ── Registration ──────────────────────────────────────────────────────── */
+
+  /**
+   * A page opts in with one line.
+   *   UIC.Router.register('tl_dashboard', { mount: load, unmount: teardownFn })
+   * `unmount` is optional — the router's own tracking covers timers, listeners
+   * and the change watch — but a page holding anything else says so here.
+   */
+  function register(action, hooks) {
+    if (!action || !hooks || typeof hooks.mount !== 'function') return;
+    registered[action] = hooks;
+    if (!current) current = action;
+  }
+
+  function isRegistered(action) { return !!registered[action]; }
+
+  /* ── Navigation ────────────────────────────────────────────────────────── */
+
+  function hard(href) {
+    try { if (window.top && window.top !== window) { window.top.location.href = href; return; } } catch (e) {}
+    window.location.href = href;
+  }
+
+  function urlFor(action) {
+    return UIC.baseUrl() + '?action=' + encodeURIComponent(action) +
+      '&sessionToken=' + encodeURIComponent(UIC.token());
+  }
+
+  /**
+   * Go to `action`. Returns true when it was handled softly, false when the
+   * caller should hard-navigate — which UIC.navTo then does.
+   */
+  function go(action, opts) {
+    var o = opts || {};
+    if (busy) return false;
+    if (!action || action === current) return false;
+    /* Only between registered pages. A soft navigation INTO an unconverted
+     * page would leave that page's script running in a document it did not
+     * build. */
+    if (!registered[action] || !registered[current]) return false;
+
+    /* An unsaved optimistic row is lost with the page that drew it, softly or
+     * otherwise, so the same guard applies. */
+    try {
+      var warn = UIC.Live && UIC.Live.guardMessage ? UIC.Live.guardMessage() : null;
+      if (warn && !window.confirm(warn + ' المتابعة؟')) return true;
+    } catch (e) {}
+
+    busy = true;
+    var host = document.querySelector('.app-content');
+    if (!host) { busy = false; return false; }
+
+    try { UIC.readSkeleton(host); } catch (e) {}
+
+    API.call('get_page_body', { action: action }, UIC.token())
+      .then(function (r) {
+        if (!r || r.status !== 'success' || typeof r.html !== 'string') throw new Error('bad body');
+
+        tearDown();
+        stopTracking();
+        current = action;
+
+        /* The address bar, deep links and back/forward keep working. */
+        if (!o.replace) {
+          try { history.pushState({ action: action }, '', urlFor(action)); } catch (e) {}
+        }
+        try { window.CURRENT_ACTION = action; } catch (e) {}
+        try { if (r.title) document.title = r.title; } catch (e) {}
+
+        /* The page ROOT is swapped, not the shell's content region, because
+         * every page here builds its own shell: it renders <div id="x-root">
+         * and its script calls UIC.appShell('x-root', ...). Writing the new
+         * body into .app-content would nest a second header and nav inside the
+         * first one.
+         *
+         * So the old page's roots come out and the new body goes in, and the
+         * shell is rebuilt client-side from COMPANY_PAGES and the session —
+         * which is instant and needs no server input. The document is never
+         * reloaded and not one byte of the 190 KB shared bundle is fetched or
+         * parsed again, which is what this phase is actually for.
+         *
+         * UIC's own furniture is kept: the loading overlay, the toasts, the
+         * save-in-flight hint, the retry chip and the home button live at body
+         * level and belong to the session rather than to a page. Removing the
+         * retry chip in particular would take a persistent "not saved yet"
+         * warning off the screen while the change was still unsaved. */
+        var KEEP = /^(page-loading|uic-live-busy|uic-live-retry|uic-live-fresh|uic-home-fab|uic-toast-host)$/;
+        Array.prototype.slice.call(document.body.children).forEach(function (el) {
+          var tag = String(el.tagName || '').toUpperCase();
+          if (tag === 'SCRIPT' || tag === 'STYLE') return;
+          if (KEEP.test(String(el.id || ''))) return;
+          if (/(^|\s)(toast|uic-)/.test(String(el.className || ''))) return;
+          if (el.parentNode) el.parentNode.removeChild(el);
+        });
+        var holder = document.createElement('div');
+        holder.innerHTML = r.html;
+        while (holder.firstChild) document.body.appendChild(holder.firstChild);
+
+        /* innerHTML does not execute <script>, so the page's scripts come back
+         * separately and are evaluated here, in order, with tracking on. */
+        startTracking();
+        (r.scripts || []).forEach(function (code) {
+          var s = document.createElement('script');
+          s.textContent = code;
+          document.body.appendChild(s);
+          if (s.parentNode) s.parentNode.removeChild(s);
+        });
+
+        var hooks = registered[action];
+        if (hooks && typeof hooks.mount === 'function') hooks.mount(host);
+        if (hooks && typeof hooks.unmount === 'function') teardown.push(hooks.unmount);
+
+        try { UIC.wireNavPrefetch(); } catch (e) {}
+        busy = false;
+      })
+      .catch(function () {
+        /* THE SAFETY VALVE. Any failure at all — not authorized, offline, a
+         * script that threw — and the user simply gets the navigation they
+         * would have got before any of this existed. */
+        busy = false;
+        stopTracking();
+        hard(urlFor(action));
+      });
+    return true;
+  }
+
+  /* Back and forward. popstate carries the action we pushed. */
+  try {
+    window.addEventListener('popstate', function (ev) {
+      var action = (ev && ev.state && ev.state.action) || null;
+      if (!action) return;                      /* not ours; let the browser act */
+      if (!registered[action]) { hard(urlFor(action)); return; }
+      go(action, { replace: true });
+    });
+  } catch (e) {}
+
+  return {
+    register: register,
+    isRegistered: isRegistered,
+    go: go,
+    current: function () { return current; },
+    /* Exposed so the teardown contract can be EXERCISED rather than merely
+     * read. tools/verify/rt6_router.js mounts a page that starts a timer, an
+     * interval, a listener and a change watch, then tears it down and checks
+     * all four are gone — which is the only way to know the leak that matters
+     * most here is actually closed. A contract nothing can run is a comment. */
+    _tearDown: tearDown,
+    _startForTest: startTracking,
+    _pushTeardown: function (fn) { if (typeof fn === 'function') teardown.push(fn); },
+    _tracked: function () {
+      return { timers: timers.length, intervals: intervals.length, listeners: listeners.length };
+    }
+  };
+})();
+
 UIC.Cache = (function () {
   'use strict';
 

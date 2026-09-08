@@ -145,6 +145,23 @@
 
 
   load();
+
+  /* [RT-9] Soft-navigation opt-in. This page and tl_kpi/tl_dashboard are the
+     two pilot pages: both are read-only, both build their chrome from
+     UIC.appShell, both are small, and they are in the same company — so
+     moving between them is a journey somebody actually makes.
+
+     Navigating between two REGISTERED pages swaps the page root and leaves
+     the document, and the 190 KB shared bundle in it, alone. Navigating to
+     anything else, or any failure at all, hard-navigates exactly as before.
+
+     No `unmount` is declared because this page starts nothing that outlives
+     it: no interval, no window listener of its own, no change watch. The
+     router tears down timers, listeners and the watch generically anyway;
+     a page holding anything else would say so here, and tools/verify/
+     rt6_router.js fails a registered page that starts something it does not
+     declare. */
+  try { UIC.Router.register('tl_dashboard', { mount: load }); } catch (e) {}
 </script>
 </body>
 </html>
