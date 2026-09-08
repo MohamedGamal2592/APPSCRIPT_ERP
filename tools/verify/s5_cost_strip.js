@@ -370,10 +370,18 @@ console.log('\nS5 — every converted endpoint calls the gate\n');
   ['getValleyMfgByproducts_', 'vfStripCostAll_(rows, VF_COST_KEYS.mfg_bp)'],
   ['addValleyMfgByproduct_', 'vfStripCost_(_savedBP, VF_COST_KEYS.mfg_bp)'],
   ['getValleyProductBatches_ (computed)', 'vfStripCostAll_(list, VF_COST_KEYS.batch)'],
-  ['getValleyProductBatches_ (cache hit)', 'vfStripCostAll_(_cached.batches, VF_COST_KEYS.batch)'],
   ['getValleyPurchasingCosting_', 'vfStripCostAll_(rows, VF_COST_KEYS.pur_header)'],
   ['getValleyPurchasingLines_', 'vfStripCostAll_(rows, VF_COST_KEYS.pur_line)']
 ].forEach(p => check(SRC.indexOf(p[1]) !== -1, p[0] + ' wired'));
+
+/* getValleyProductBatches_ had a SECOND strip, for a CacheService hit. That
+   cache is gone (S25: valley_current_products is read live on every call), so
+   the strip it guarded is gone with it — and must stay gone: the key was
+   `vfbatch_<db>_<pid>_<excl>`, keyed by product and NOT by user, so the day
+   someone added the matching put, one user would have been handed another
+   user's batch list with the cost columns in it. */
+check(SRC.indexOf('_cached.batches') === -1 && SRC.indexOf('vfbatch_') === -1,
+  'the product-keyed batch cache — and its second strip — no longer exist');
 
 console.log('\n' + (failed === 0
   ? 'S5 OK — responses differ only in cost keys, and those keys are absent.'

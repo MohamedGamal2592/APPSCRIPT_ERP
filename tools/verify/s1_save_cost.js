@@ -37,7 +37,10 @@ check(SRC.indexOf("m7['cost_unit'] = (f.unit_cost != null && String(f.unit_cost)
   'the trust-the-client write is gone');
 check(/footerBatchCost\[u\] = Number\(r\.unit_cost\) \|\| 0;/.test(SRC),
   'footerBatchCost is built from valley_current_products.unit_cost');
-check(/getAllRecords_\(dbId, 'valley_current_products'\)[\s\S]{0,200}footerBatchCost/.test(SRC),
+/* S25: valley_current_products is read LIVE, through vfCurrentProducts_, never
+   through the memoising getAllRecords_ — the balance is a sheet formula and a
+   memo would hand back the value from before this very save. */
+check(/vfCurrentProducts_\(dbId\)[\s\S]{0,200}footerBatchCost/.test(SRC),
   'it reads the same sheet the read path reads');
 
 /* The read path's lookup, for comparison — they must agree. */

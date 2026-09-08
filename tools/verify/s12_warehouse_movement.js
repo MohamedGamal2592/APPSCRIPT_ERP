@@ -152,9 +152,14 @@ check(/drawn\[batchUid\]/.test(saveBody),
 check(/remaining/.test(saveBody),
   'and the guard compares against what is left, not the untouched figure');
 
-/* whBatchAvailability_ must read the movement sheet itself */
-check(/getAllRecords_\(dbId, WH_MOVE_SHEET\)\.forEach/.test(SRC),
-  'availability folds in this table\'s own movmenent_sign');
+/* whBatchAvailability_ subtracts NOTHING. valley_current_products.current_qty
+   is the net balance and it is trusted: this table's own signed movements are
+   already inside it, so folding them in a second time was a double count.
+   حركة المخزن is add-only, so there is no add-back either. */
+check(/available = Math\.max\(0, b\.current_qty\)/.test(SRC),
+  'availability is current_qty, taken raw');
+check(!/b\.(used|restored|consumed|moved)/.test(SRC),
+  'the used / restored / consumed / moved terms are gone');
 
 
 /* ── 7. the page ships add-only, with no warehouse / asset_target field ──── */
@@ -245,7 +250,12 @@ if (BLOCK_START !== -1 && BLOCK_END > BLOCK_START) {
       product: 'سكر', current_qty: 40, unit_cost: 3, unit: '',
       transaction_date: '2026-02-01' }
   ];
-  /* BATCH-A: 100 − 10 (sold) + 2 (returned) − 5 (consumed) − 7 (issued) = 80 */
+  /* BATCH-A's available is 100 — its current_qty, verbatim.
+     The sold 10, the returned 2, the consumed 5 and the issued 7 below are all
+     ALREADY inside current_qty, which is a sheet formula over exactly these
+     tables. They are in the fixture precisely so that a reader which starts
+     subtracting them again fails here: 90, 85, 93, 80 and 78 are each the
+     signature of one more double count. */
   const SALES_STOCK = [
     { unique_id: 'ALLOC-1', product_unique_id: 'BATCH-A', product_qty: 10 }
   ];
@@ -345,9 +355,12 @@ if (BLOCK_START !== -1 && BLOCK_END > BLOCK_START) {
 
   /* -- 8a. availability arithmetic -- */
   const avail = H.avail('db');
-  check(avail['BATCH-A'].available === 80,
-    'availability = 100 − 10 sold + 2 returned − 5 consumed − 7 issued = 80',
+  check(avail['BATCH-A'].available === 100,
+    'availability = current_qty = 100, with the sold / returned / consumed / issued\n        rows in the fixture and NONE of them subtracted a second time',
     'got ' + avail['BATCH-A'].available);
+  check(avail['BATCH-A'].current_qty === 100,
+    '  and it is the sheet value, not a recomputation that happens to agree',
+    'got ' + avail['BATCH-A'].current_qty);
 
   /* -- 8b. a good single save (the old payload shape still works) -- */
   const payload = {
@@ -418,15 +431,15 @@ if (BLOCK_START !== -1 && BLOCK_END > BLOCK_START) {
 
   reset();
   const over = throws(() => H.save(
-    Object.assign({}, payload, { qty: 80.001 }),
+    Object.assign({}, payload, { qty: 100.001 }),
     { email: 'user@valley.test', canCost: true }, 'db'));
   check(!!over, 'qty = available + 0.001 is refused');
-  check(over && over.indexOf('80') !== -1,
+  check(over && over.indexOf('100') !== -1,
     'the message names the available quantity', 'got: ' + over);
   check(captured.written === null, 'and nothing was written');
 
   reset();
-  check(throws(() => H.save(Object.assign({}, payload, { qty: 80 }),
+  check(throws(() => H.save(Object.assign({}, payload, { qty: 100 }),
     { email: 'u@v.t', canCost: true }, 'db')) === null,
     'qty exactly equal to available is allowed');
 
@@ -510,12 +523,12 @@ if (BLOCK_START !== -1 && BLOCK_END > BLOCK_START) {
   reset();
   const overdraw = throws(() => H.save(Object.assign({}, shared, {
     rows: [
-      { item: 'BATCH-A', qty: 50 },
-      { item: 'BATCH-A', qty: 40 }   /* 50 + 40 = 90 > 80 available */
+      { item: 'BATCH-A', qty: 60 },
+      { item: 'BATCH-A', qty: 50 }   /* 60 + 50 = 110 > 100 available */
     ]
   }), { email: 'u@v.t' }, 'db'));
   check(!!overdraw,
-    'two rows that TOGETHER overdraw one batch are refused — 50 + 40 > 80',
+    'two rows that TOGETHER overdraw one batch are refused — 60 + 50 > 100',
     'no error thrown; the batch would have been overdrawn');
   check(overdraw && /السطر 2/.test(overdraw),
     '  and the message names the offending line', 'got: ' + overdraw);
@@ -523,19 +536,19 @@ if (BLOCK_START !== -1 && BLOCK_END > BLOCK_START) {
 
   reset();
   check(throws(() => H.save(Object.assign({}, shared, {
-    rows: [{ item: 'BATCH-A', qty: 50 }, { item: 'BATCH-A', qty: 30 }]
+    rows: [{ item: 'BATCH-A', qty: 60 }, { item: 'BATCH-A', qty: 40 }]
   }), { email: 'u@v.t' }, 'db')) === null,
-    'and 50 + 30 = exactly 80 is allowed');
+    'and 60 + 40 = exactly 100 is allowed');
 
   /* an inbound row credits the batch for a later outbound one */
   reset();
   check(throws(() => H.save(Object.assign({}, shared, {
     rows: [
       { item: 'BATCH-A', qty: 20, movement_type: 'وارد داخلي / مرتجع للمخزن' },
-      { item: 'BATCH-A', qty: 95 }
+      { item: 'BATCH-A', qty: 115 }
     ]
   }), { email: 'u@v.t' }, 'db')) === null,
-    'a return earlier in the same submission credits a later issue (80 + 20 >= 95)');
+    'a return earlier in the same submission credits a later issue (100 + 20 >= 115)');
 
   /* one bad row rejects the whole submission */
   reset();

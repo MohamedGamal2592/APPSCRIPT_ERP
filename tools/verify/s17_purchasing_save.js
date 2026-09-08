@@ -199,7 +199,7 @@ function runSave(opts) {
   const kExisting = opts.kExisting === undefined ? nLines : opts.kExisting;
 
   const C = { getValues: 0, cells: 0, appendRow: 0, deleteRow: 0, deleteRows: 0, setValue: 0, setValues: 0, locks: 0 };
-  const written = { lines: null };
+  const written = { lines: null, header: null };
 
   function mk(name, headers, dataRows, codeFor) {
     const grid = [headers.slice()];
@@ -236,7 +236,15 @@ function runSave(opts) {
         },
         setNumberFormat: () => {}, sort: () => {}
       }),
-      appendRow: (r) => { C.appendRow++; grid.push(r.slice()); },
+      appendRow: (r) => {
+        C.appendRow++;
+        if (name === 'valley_purchasing_costing') {
+          const o = {};
+          headers.forEach((h, i) => { o[h] = r[i]; });
+          written.header = o;
+        }
+        grid.push(r.slice());
+      },
       deleteRow: (n) => { C.deleteRow++; grid.splice(n - 1, 1); },
       deleteRows: (n, h) => { C.deleteRows++; grid.splice(n - 1, h); },
       setFrozenRows: () => {},
@@ -265,6 +273,7 @@ function runSave(opts) {
     }
   })();
   C.appendRow = 0; C.getValues = 0; C.cells = 0; C.setValues = 0;
+  written.header = null;   /* discard what the seeding appended */
 
   const sb = {
     console, JSON, Math, String, Number, Boolean, Object, Array, Error, RegExp, Date,
@@ -298,6 +307,9 @@ function runSave(opts) {
   const env = {
     settingsEnsureSheet_: function () {},
     uid16_: () => 'ffffffff00000001',
+    /* S25 §5.1: the save flushes before it returns so the balance the client
+       reads back includes this write. Counted, not performed. */
+    vfFlush_: () => { C.flushes = (C.flushes || 0) + 1; },
     vfCanSeeCost_: () => true,
     vfRefsCached_: (db, k, fn) => fn(),
     vfPage_: (rows) => ({ rows: rows, total: rows.length }),

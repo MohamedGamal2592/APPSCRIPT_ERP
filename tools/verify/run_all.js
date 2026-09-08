@@ -42,6 +42,8 @@ const STEPS = [
   ['s22_missing_template.js', 'S22 — a registered page with no HTML file fails as a page'],
   ['s23_page_params.js', 'S23 — URL parameters come from the server, not the iframe URL'],
   ['s18_table_columns.js', 'S18b — table column widths: the classifier and the contract'],
+  ['s24_stock_scan.js', 'S24 — جرد دوري مخازن باركود + the USER_PAGES nav-visibility regression guard'],
+  ['s25_stock_authority.js', 'S25 — رصيد الدفعات: one stock authority — available = current_qty + held(this document)'],
   /* ── UI/UX programme (branch ui/odoo-parity) ── */
   ['ui1_anchor.js', 'UI-1.2 — popups escape the table clip box (U-01)'],
   ['ui1_sort.js', 'UI-1.3 — tri-state sort, load order preserved (U-03)'],
