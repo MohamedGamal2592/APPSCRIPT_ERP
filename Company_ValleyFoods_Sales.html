@@ -196,7 +196,16 @@
               details: l.product_details || '',
               tax: Number(l.product_tax || 0),
               qty: Number(l.product_qty || 0),
-              price: Number(l.product_price || 0)
+              price: Number(l.product_price || 0),
+              /* The server has always returned these; this mapper used to drop
+                 them, so every strip reopened blank and the user was forced to
+                 re-enter batches for EVERY line or the save was refused.
+                 alloc_uid is deliberately not carried: the server matches a row
+                 on (line uid, batch uid) and never needs the client to say
+                 which row is which. */
+              allocations: (l.allocations || []).map(function (a) {
+                return { batch_uid: String(a.batch_uid || ''), lot: a.lot || '', qty: Number(a.qty || 0) };
+              })
             };
           });
           openInvoiceModal(inv);
@@ -497,15 +506,31 @@
     /* ---------- P2: BATCH ALLOCATION — FIFO auto-fill (advisory, mirrors MfgOrderView autoAllocFifo_) ---------- */
     var BATCH_CACHE = {};   /* key: pid|exclude → batches array */
 
+    /* The allocations MUST sum to the line quantity to the last digit: the
+       server refuses the save outside a 0.0001 tolerance, and it refuses any
+       single allocation above its batch's available. The previous version
+       pushed a rounded `take` but decremented `rem` by the UNROUNDED one, so
+       the two could drift apart, and rounding half-up could push a quantity
+       fractionally ABOVE the batch it came from. Now `rem` is decremented by
+       exactly what was pushed, the batch that closes the line absorbs the whole
+       residue, and a partial take is never rounded up past `available`. */
     function salesAllocFifo_(batches, qty) {
-      var rem = Math.round(Number(qty || 0) * 1000) / 1000, out = [];
-      for (var i = 0; i < batches.length && rem > 0.0001; i++) {
+      var clean = function (n) { return Math.round(n * 1e6) / 1e6; };  /* kills float noise only */
+      var rem = Number(qty || 0), out = [];
+      for (var i = 0; i < batches.length && rem > 0.0000001; i++) {
         var avail = Number(batches[i].available) || 0; if (avail <= 0) continue;
-        var take = Math.min(rem, avail);
-        out.push({ batch_uid: batches[i].batch_uid, lot: batches[i].lot, qty: Math.round(take * 1000) / 1000, unit_cost: batches[i].unit_cost || 0 });
-        rem = Math.round((rem - take) * 1000) / 1000;
+        var take;
+        if (rem <= avail) {
+          take = rem;                 /* closes the line — takes the residue exactly */
+        } else {
+          take = clean(avail);
+          if (take > avail) take = Math.floor(avail * 1e6) / 1e6;   /* never above available */
+          if (take <= 0) continue;
+        }
+        out.push({ batch_uid: batches[i].batch_uid, lot: batches[i].lot, qty: take, unit_cost: batches[i].unit_cost || 0 });
+        rem = clean(rem - take);
       }
-      return { allocs: out, remaining: rem };
+      return { allocs: out, remaining: rem > 0.0000001 ? rem : 0 };
     }
 
     function autoAllocSalesFifo_(lineIdx) {
