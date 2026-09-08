@@ -46,7 +46,15 @@
   </script>
 
   <style>
-    .vf-att-dashboard { display: grid; gap: 16px; }
+    /* The page is one toolbar over one calendar. The toolbar is a single row
+       that wraps; its three clusters are separated by hairlines that only
+       appear from tablet-p up — a wrapped row on a phone has nothing
+       meaningful to separate. Tap targets are already 44px via .btn. */
+    .vf-att-page    { display: grid; gap: 12px; }
+    .vf-att-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 12px; background: var(--bg-surface, #fff); border: 1px solid var(--border-color, #e5e7eb); border-radius: 8px; }
+    .vf-att-toolbar .vf-tb-group { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+    .vf-att-toolbar .vf-tb-sep   { display: none; width: 1px; align-self: stretch; background: var(--border-color, #e5e7eb); }
+    .vf-att-toolbar input[type=date] { width: 140px; }
     .vf-analysis-box { border: 2px solid var(--border-color, #e5e7eb); border-radius: 8px; padding: 14px; background: var(--bg-subtle, #f9fafb); }
     .vf-analysis-box.confident { border-color: #10b981; background: var(--success-bg, #f0fdf4); }
     .vf-analysis-box.ambiguous { border-color: #f59e0b; background: var(--warning-bg, #fffbeb); }
@@ -67,11 +75,10 @@
     .vf-choice-line { font-size: 12px; line-height: 1.9; }
     .vf-choice-dead { font-size: 11px; color: #6b7280; background: var(--bg-subtle, #f3f4f6); border-radius: 6px; padding: 6px 10px; margin-top: 6px; }
     /* Month navigator + calendar. The week starts on SATURDAY (Egypt). */
-    .vf-month-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
     .vf-month-label { font-weight: 900; font-size: 15px; min-width: 130px; text-align: center; }
     .vf-cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; }
     .vf-cal-head { font-size: 11px; font-weight: 900; text-align: center; color: #4b5563; padding: 4px 0; }
-    .vf-cal-cell { min-height: 56px; border: 1px solid var(--border-color, #e5e7eb); border-radius: 6px; padding: 3px; background: var(--bg-subtle, #f9fafb); }
+    .vf-cal-cell { min-height: 64px; border: 1px solid var(--border-color, #e5e7eb); border-radius: 6px; padding: 3px; background: var(--bg-subtle, #f9fafb); }
     .vf-cal-cell.empty { border: none; background: transparent; }
     .vf-cal-cell.has-data { background: var(--bg-surface, #fff); border-color: #10b981; cursor: pointer; }
     .vf-cal-cell.has-data:hover { box-shadow: 0 2px 6px rgba(0,0,0,.12); }
@@ -85,6 +92,14 @@
     @media (min-width: 600px) {
       .vf-cal-cell { min-height: 74px; padding: 6px; }
       .vf-cal-stat, .vf-cal-head { font-size: 11px; }
+      .vf-att-toolbar .vf-tb-sep { display: block; }
+    }
+    /* The calendar is the body of the page now, so from tablet-l up the cells
+       take the room the eight cards used to take. */
+    @media (min-width: 900px) {
+      .vf-cal-cell  { min-height: 96px; padding: 8px; }
+      .vf-cal-day   { font-size: 15px; }
+      .vf-cal-stat  { font-size: 12px; }
     }
   </style>
 
@@ -146,17 +161,76 @@
     }
 
     function renderContent() {
-      /* All interactions first, the sessions list last */
-      return '<div class="vf-att-dashboard">' +
+      /* The toolbar, then the calendar. The cards below are on their way
+         out: each leaves in the commit that gives it a modal (att-ui-2..4). */
+      return '<div class="vf-att-page">' +
+        renderToolbar() +
+        renderCalendarSection() +
         (CAN_WRITE ? renderUploadSection() : '') +
         (CAN_WRITE ? renderManualSection() : '') +
         renderReviewSection() +
         renderExceptionsSection() +
         renderForgetSection() +
         renderReportSection() +
-        renderSessionsSection() +
         (CAN_WRITE ? renderBatchesSection() : '') +
       '</div>';
+    }
+
+    /* ================= TOOLBAR ================= */
+    /* One row, three clusters, wraps on a phone. In DOM order (RTL: right to
+       left on screen): the month, the shared date range, the actions. Every
+       task the page offers is a button here; nothing renders in-page except
+       the calendar. The low-frequency items sit under المزيد ▾ so the row
+       stays short (D-4). */
+    function renderToolbar() {
+      var moreItems = '';
+      if (CAN_WRITE) {
+        moreItems += '<button type="button" class="nav-dropdown-item" id="vf-new-session-btn">+ يوم جديد</button>';
+      }
+      moreItems += '<button type="button" class="nav-dropdown-item" id="vf-view-toggle">عرض كجدول</button>';
+
+      return '<div class="vf-att-toolbar">' +
+        /* .vf-month-bar has no CSS of its own any more; renderDays() still
+           finds the month controls by it to dim them in table mode. */
+        '<div class="vf-tb-group vf-month-bar">' +
+          '<button class="btn btn-outline" id="vf-month-prev">‹ الشهر السابق</button>' +
+          '<span id="vf-month-label" class="vf-month-label"></span>' +
+          '<button class="btn btn-outline" id="vf-month-next">الشهر التالي ›</button>' +
+          '<button class="btn btn-outline" id="vf-month-today">اليوم</button>' +
+        '</div>' +
+        '<span class="vf-tb-sep"></span>' +
+        '<div class="vf-tb-group">' +
+          '<label for="vf-range-start">من</label>' +
+          '<input type="date" id="vf-range-start" class="vf-input" value="' + esc(monthStartStr()) + '">' +
+          '<label for="vf-range-end">إلى</label>' +
+          '<input type="date" id="vf-range-end" class="vf-input" value="' + esc(todayStr()) + '">' +
+        '</div>' +
+        '<span class="vf-tb-sep"></span>' +
+        '<div class="vf-tb-group">' +
+          '<button class="btn btn-outline" id="vf-open-report">📊 التقرير</button>' +
+          '<button class="btn btn-outline" id="vf-open-exc">⚠️ الناقص' +
+            '<span class="vf-badge warn" id="vf-exc-badge" style="display:none;"></span></button>' +
+          '<button class="btn btn-outline" id="vf-open-review">🚩 المراجعة' +
+            '<span class="vf-badge warn" id="vf-review-badge" style="display:none;"></span></button>' +
+          (CAN_WRITE ? '<button class="btn btn-primary" id="vf-open-import">⬆️ رفع كشف</button>' : '') +
+          '<div class="nav-dropdown">' +
+            '<button type="button" class="btn btn-outline nav-dropdown-toggle" id="vf-more-toggle" ' +
+              'aria-haspopup="true" aria-expanded="false">المزيد ▾</button>' +
+            '<div class="nav-dropdown-menu" id="vf-more-menu">' + moreItems + '</div>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+    }
+
+    /* The shared dropdown closes on tap-outside and on the next toggle, but
+       not on its own item — the nav items are links that navigate away. Ours
+       are actions on this page, so each one closes the menu itself. */
+    function moreItem(fn) {
+      return function (e) {
+        var menu = document.getElementById('vf-more-menu');
+        if (menu && menu.classList.contains('open')) UIC.toggleDropdown('vf-more-menu');
+        fn(e);
+      };
     }
 
     /* ================= DAYS: CALENDAR + TABLE ================= */
@@ -164,18 +238,9 @@
        last 10 rows in sheet-insertion order, so a day added by hand after an
        import sorted as if it were the newest day of the month and everything
        older than ten days was simply unreachable. */
-    function renderSessionsSection() {
-      return card('أيام الحضور',
-        '<div class="vf-month-bar">' +
-          '<button class="btn btn-outline" id="vf-month-prev">‹ الشهر السابق</button>' +
-          '<span id="vf-month-label" class="vf-month-label"></span>' +
-          '<button class="btn btn-outline" id="vf-month-next">الشهر التالي ›</button>' +
-          '<button class="btn btn-outline" id="vf-month-today">اليوم</button>' +
-          '<span style="flex:1;"></span>' +
-          '<button class="btn btn-outline" id="vf-view-toggle">عرض كجدول</button>' +
-        '</div>' +
-        '<div id="vf-days-body"><p class="vf-text-muted">جاري التحميل...</p></div>',
-        CAN_WRITE ? '<button id="vf-new-session-btn" class="btn btn-primary">+ يوم جديد</button>' : '');
+    function renderCalendarSection() {
+      /* No card frame and no heading: the toolbar is the calendar's header. */
+      return '<div id="vf-days-body"><p class="vf-text-muted">جاري التحميل...</p></div>';
     }
 
     var AR_MONTHS = ['يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو',
@@ -1019,7 +1084,7 @@
        all — the old result panel told the user to go and open a raw sheet by
        name. That sheet name does not appear anywhere in this interface. */
     function renderReviewSection() {
-      return card('صفوف تحتاج مراجعة <span id="vf-review-badge" class="vf-badge warn" style="display:none;"></span>',
+      return card('صفوف تحتاج مراجعة',
         '<div id="vf-review-body"><p class="vf-text-muted">جاري التحميل...</p></div>',
         '<button id="vf-review-all-btn" class="btn btn-outline">عرض المعالج أيضاً</button>');
     }
@@ -1511,9 +1576,16 @@
     }
 
     /* ================= BINDINGS / INIT ================= */
+    /* Until a card has its modal (att-ui-2..4) its toolbar button scrolls to
+       the card, so the row is usable from the first commit. */
+    function jumpTo(id) {
+      var el = document.getElementById(id);
+      if (el && el.scrollIntoView) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+
     function bindEvents() {
       var newSessionBtn = document.getElementById('vf-new-session-btn');
-      if (newSessionBtn) newSessionBtn.addEventListener('click', showNewSessionModal);
+      if (newSessionBtn) newSessionBtn.addEventListener('click', moreItem(function () { showNewSessionModal(); }));
 
       var prevBtn = document.getElementById('vf-month-prev');
       if (prevBtn) prevBtn.addEventListener('click', function () { shiftMonth(-1); });
@@ -1524,7 +1596,18 @@
         var n = new Date(); VIEW_YEAR = n.getFullYear(); VIEW_MONTH = n.getMonth(); loadSessions();
       });
       var viewBtn = document.getElementById('vf-view-toggle');
-      if (viewBtn) viewBtn.addEventListener('click', toggleView);
+      if (viewBtn) viewBtn.addEventListener('click', moreItem(toggleView));
+
+      var openReportBtn = document.getElementById('vf-open-report');
+      if (openReportBtn) openReportBtn.addEventListener('click', function () { jumpTo('vf-report-table'); });
+      var openExcBtn = document.getElementById('vf-open-exc');
+      if (openExcBtn) openExcBtn.addEventListener('click', function () { jumpTo('vf-exc-body'); });
+      var openReviewBtn = document.getElementById('vf-open-review');
+      if (openReviewBtn) openReviewBtn.addEventListener('click', function () { jumpTo('vf-review-body'); });
+      var openImportBtn = document.getElementById('vf-open-import');
+      if (openImportBtn) openImportBtn.addEventListener('click', function () { jumpTo('vf-csv-input'); });
+      var moreToggle = document.getElementById('vf-more-toggle');
+      if (moreToggle) moreToggle.addEventListener('click', function (e) { UIC.toggleDropdown('vf-more-menu', e); });
 
       var csvInput = document.getElementById('vf-csv-input');
       if (csvInput) csvInput.addEventListener('change', handleFileSelect);
