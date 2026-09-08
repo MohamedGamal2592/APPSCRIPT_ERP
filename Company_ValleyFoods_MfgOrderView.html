@@ -439,7 +439,7 @@
         var nm = ''; (PRODUCT_OPTIONS || []).forEach(function (p) { if (String(p.value) === String(v)) nm = p.label; });
         MFG_OUTPUTS[i].product_name = nm;
         if (v) {
-          companyCall('get_valley_product_batches', { product_id: v }).then(function (r) { OUTPUT_BATCHES[i] = r.batches || []; autoAllocFifo_(i); redrawOutputRow_(i); })
+          companyCall('get_valley_product_batches', { product_id: v, mo_uid: MO_UID }).then(function (r) { OUTPUT_BATCHES[i] = r.batches || []; autoAllocFifo_(i); redrawOutputRow_(i); })
             .catch(function () { OUTPUT_BATCHES[i] = []; redrawOutputRow_(i); });
         } else { OUTPUT_BATCHES[i] = []; OUTPUT_FOOTERS[i] = []; redrawOutputRow_(i); }
       }
@@ -817,7 +817,14 @@
             var remainCellCls = f.saved ? 'odoo-ro' : remCls;
             var batchOpts = batches.map(function (bt) { return { value: bt.batch_uid, label: (bt.lot || bt.batch_uid) + ' (متاح: ' + Number(bt.available || 0).toLocaleString('en-US') + ')' }; });
             if (f.item && !batchOpts.some(function (bo) { return String(bo.value).trim() === String(f.item).trim(); })) {
-              batchOpts.push({ value: f.item, label: (f.item_code || f.item) + ' (متاح: 0)' });
+              /* A saved batch that is not in the offered list. With
+                 available = current_qty + held and `available > 0` as the offer
+                 filter this is unreachable for a live batch — but the figure is
+                 printed rather than hard-coded, because a literal 0 is
+                 indistinguishable from a genuine one and that is what hid the
+                 double-subtraction bug for so long. What this order can spend on
+                 that batch is what this order already holds of it. */
+              batchOpts.push({ value: f.item, label: (f.item_code || f.item) + ' (متاح: ' + (Number(f.qty) || 0).toLocaleString('en-US') + ')' });
             }
             return '<tr style="background:#f3faf3;">' +
               '<td data-label="' + FOOTER_COLS[0] + '">' + selHtml('ft-item-' + i + '-' + fi, batchOpts, f.item, 'MFGVIEW_PAGE.setFooterItem(' + i + ',' + fi + ',this)', '— اختر دفعة —', disOpt()) + '</td>' +
@@ -927,14 +934,16 @@
             var saved = ((OUTPUT_FOOTERS[i] || [])[fi]) || {};
             var savedCode = saved.item_code || selStr;
             var savedCost = (saved.unit_cost != null && saved.unit_cost !== '') ? saved.unit_cost : 0;
-            html += '<option value="' + esc(selStr) + '" data-code="' + esc(savedCode) + '" data-unitcost="' + esc(savedCost) + '" selected>' + esc(savedCode) + ' (متاح: 0)</option>';
+            /* the real figure, not a literal zero — see outputRowInner_ */
+            var savedQty = Number(saved.qty) || 0;
+            html += '<option value="' + esc(selStr) + '" data-code="' + esc(savedCode) + '" data-unitcost="' + esc(savedCost) + '" selected>' + esc(savedCode) + ' (متاح: ' + savedQty.toLocaleString('en-US') + ')</option>';
           }
           sel.innerHTML = html;
           sel.disabled = !editable();
         }
         var pre = OUTPUT_BATCHES[i];
         if (pre && pre.length) { fill(pre); }
-        else { companyCall('get_valley_product_batches', { product_id: productId }).then(function (r) { OUTPUT_BATCHES[i] = r.batches || []; fill(OUTPUT_BATCHES[i]); }).catch(function () { sel.innerHTML = '<option value="">خطأ في تحميل الدفعات</option>'; }); }
+        else { companyCall('get_valley_product_batches', { product_id: productId, mo_uid: MO_UID }).then(function (r) { OUTPUT_BATCHES[i] = r.batches || []; fill(OUTPUT_BATCHES[i]); }).catch(function () { sel.innerHTML = '<option value="">خطأ في تحميل الدفعات</option>'; }); }
       }
 
       /* ---------- WORK OPS (valley_manufacture_work_center) ---------- */
@@ -1115,7 +1124,7 @@
         if (hasManual && !window.confirm('جلب الوصفة سيستبدل الدفعات الحالية. متابعة؟')) return Promise.resolve();
         OUTPUT_FOOTERS = MFG_OUTPUTS.map(function () { return []; });
         if (!pids.filter(function (p) { return p; }).length) return Promise.resolve();
-        return companyCall('get_valley_product_batches_multi', { product_ids: pids }).then(function (r) {
+        return companyCall('get_valley_product_batches_multi', { product_ids: pids, mo_uid: MO_UID }).then(function (r) {
           var byProduct = (r && r.batches_by_product) || {};
           MFG_OUTPUTS.forEach(function (o, i) {
             var batches = (byProduct[String(o.product_id)] || []).filter(function (b) { return Number(b.available) > 0; });

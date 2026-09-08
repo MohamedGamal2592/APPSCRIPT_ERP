@@ -404,7 +404,7 @@
     }
 
     function loadBatchesForCons(i, consItem) {
-      companyCall('get_valley_product_batches', { product_id: consItem.item_pid, exclude_invoice_unique_id: '' })
+      companyCall('get_valley_product_batches', { product_id: consItem.item_pid, mo_uid: EDIT_MO_UID() })
         .then(function (r) {
           var holder = document.getElementById('cons-batches-' + i);
           if (!holder) return;
