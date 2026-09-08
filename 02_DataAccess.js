@@ -524,21 +524,23 @@ function getNextId_(dbId, tableName, idColumnName = 'id') {
 }
 
 /**
- * Read-only peek at the next ID for a table without incrementing it.
+ * Read-only peek at the next ID for a table without allocating it.
  * Used for UI display of "next ID" only — never for writes.
+ *
+ * Same source as the allocator: max(id in the target table) + 1. It used to
+ * read the ID_Counter row instead, so the number it showed the user was the
+ * counter's, and on a table where the counter had drifted it did not match the
+ * id the save would go on to assign. It is a DISPLAY value and stays advisory:
+ * the row is not reserved, so two users peeking at once see the same number and
+ * the allocator, under the lock, decides.
+ *
+ * Read-only, and it must stay that way. It writes nothing, creates nothing, and
+ * deliberately does NOT touch the _idHighWater_ memo — a peek that raised the
+ * floor would burn an id nobody asked for.
  */
-function peekNextId_(dbId, tableName) {
-  const sheet = getSheet_('ID_Counter', dbId);
-  const headers = getHeaders_(sheet);
-  countSheetRead_();
-  const data = sheet.getDataRange().getValues();
-  const nameIdx = headers.findIndex(h => String(h).trim().toLowerCase() === 'sheet_name');
-  const nextIdx = headers.findIndex(h => String(h).trim().toLowerCase() === 'next_id');
-  if (nameIdx === -1 || nextIdx === -1) return 1;
-  for (let i = 1; i < data.length; i++) {
-    if (String(data[i][nameIdx]).toLowerCase() === tableName.toLowerCase()) return data[i][nextIdx];
-  }
-  return 1;
+function peekNextId_(dbId, tableName, idColumnName = 'id') {
+  const ss = getSpreadsheet_(dbId);
+  return maxIdOf_(ss.getSheetByName(tableName), idColumnName) + 1;
 }
 
 /**
