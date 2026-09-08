@@ -359,6 +359,8 @@ const ROUTES = {
      in is not the same as being allowed to see this page, and this endpoint
      must not be the one place where those two are confused. */
   'get_page_body': { handler: getPageBody_, requireAuth: true },
+  /* [RT-10] Super-admin only; the handler checks, not just the route. */
+  'get_perf_dashboard': { handler: getPerfDashboard_, requireAuth: true },
 
   // ─── MySQL Live Module (DbLive_Connector.js) ──────────
   'db_list_tables': { handler: dbListTables_, requireAuth: true },
@@ -461,7 +463,9 @@ function apiRouter_(request) {
     
     // Log successful operation
     logSystemAction_(request, authUser, result, status, errorMessage, startTime);
-    
+    /* [RT-10] One cache write, no sheet write. See perfRecord_. */
+    perfRecordRequest_(request, authUser, status, startTime);
+
     return result;
   } catch (err) {
     status = 'FAILED';
@@ -469,9 +473,42 @@ function apiRouter_(request) {
     
     // Log failed operation
     logSystemAction_(request, authUser, null, status, errorMessage, startTime);
-    
+    perfRecordRequest_(request, authUser, status, startTime);
+
     return { status: 'error', message: err.message };
   }
+}
+
+/**
+ * [RT-10] Turn one request into one telemetry entry.
+ *
+ * Every field comes from something apiRouter_ already had: the action, the
+ * company, the page (through the same resolveLogPage_ SystemLog uses), the
+ * elapsed time and the sheet-read counter. Nothing is computed for telemetry
+ * that was not already being computed for the request.
+ *
+ * Wrapped whole. A telemetry path that can throw is a telemetry path that can
+ * fail a save.
+ */
+function perfRecordRequest_(request, authUser, status, startTime) {
+  try {
+    var payload = (request && request.payload) || {};
+    var action = String(request && request.action || '');
+    var moduleAction = String(payload.module_action || '');
+    var companyID = String(payload.target_system || '');
+    var elapsed = startTime ? (new Date().getTime() - startTime.getTime()) : 0;
+    perfRecord_({
+      action: moduleAction || action,
+      company: companyID,
+      page: payload.page_id || resolveLogPage_(companyID, moduleAction || action),
+      elapsed_ms: elapsed,
+      sheet_reads: (typeof getSheetsReadCount_ === 'function') ? getSheetsReadCount_() : 0,
+      status: status,
+      user_email: (authUser && authUser.email) || '',
+      client_ms: Number(payload.client_ms) || 0,
+      isWrite: requestMayWrite_(request)
+    });
+  } catch (e) { /* never the reason a request fails */ }
 }
 
 function doPost(e) {
@@ -1115,6 +1152,329 @@ function logClientPerf_(payload) {
   }
 }
 
+/* ══════════════════════════════════════════════════════════════════════════
+ * [RT-10] Request telemetry — cheap enough to leave on permanently
+ *
+ * PERF_LOG_READS answers "what is slow today", once, and then has to be turned
+ * off again: it appends a SystemLog row per request, so it adds a WRITE TO
+ * EVERY READ, and SystemLog already grows without bound and carries
+ * JSON.stringify(result.data) on every write row. PERF_BASELINE.md is explicit
+ * that it is a measuring instrument, not a monitor.
+ *
+ * That means it cannot tell you that Thursday's release made المشتريات 400 ms
+ * slower. Nothing can, today. So the thing worth building is not a better
+ * measurement — it is a telemetry path so cheap that leaving it on is not a
+ * decision anybody has to revisit.
+ *
+ * FOUR DESIGN DECISIONS, each answering a way this could go wrong:
+ *
+ * 1. A REQUEST PAYS ONE CACHE WRITE, NEVER A SHEET WRITE. apiRouter_ already
+ *    measures elapsed and sheet reads; the numbers exist. They go onto a
+ *    CacheService buffer keyed by the current minute, and a one-minute trigger
+ *    drains the whole minute in one setValues. Losing a telemetry row to a
+ *    cache eviction is acceptable — that is exactly why telemetry may use a
+ *    cache and the audit queue may not.
+ *
+ * 2. SAMPLING FROM THE START, not retrofitted. 100% of writes, 100% of
+ *    anything over a second, and a configurable fraction of fast reads. Without
+ *    it the first busy week produces a sheet nobody can open, and by then it is
+ *    too late to add.
+ *
+ * 3. NUMBERS ONLY. No payload, no record id, no email. The user column is a
+ *    salted hash, which gives concurrency without a per-person activity record.
+ *    SystemLog keeps the audit story; this sheet is what got slower. A perf log
+ *    that quietly becomes a surveillance log is a failure even if every
+ *    millisecond in it is correct.
+ *
+ * 4. IT CAN NEVER FAIL A REQUEST. Every path is wrapped. A full cache, a
+ *    throwing cache, a missing sheet — all of them mean "log nothing", never
+ *    "fail the thing the user asked for".
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+var PERF_LOG_SHEET_ = 'ERP_Perf_Log';
+var PERF_WEEKLY_SHEET_ = 'ERP_Perf_Weekly';
+
+/* The nine columns from the plan, and deliberately not a tenth. */
+var PERF_LOG_HEADERS_ = [
+  'ts', 'action', 'company', 'page', 'elapsed_ms', 'sheet_reads', 'status', 'user_hash', 'client_ms'
+];
+var PERF_WEEKLY_HEADERS_ = [
+  'week', 'action', 'count', 'p50_ms', 'p90_ms', 'p99_ms', 'error_rate', 'mean_sheet_reads'
+];
+
+/** Everything tunable, in one place, so none of it is buried in a function. */
+var PERF_TELEMETRY_ = {
+  ENABLED: true,
+  /* Fraction of FAST reads that are recorded. Writes and slow requests are
+   * always recorded regardless of this. */
+  READ_SAMPLE: 0.10,
+  /* Above this, a request is recorded whatever it is. */
+  SLOW_MS: 1000,
+  /* Raw rows kept this long; the weekly rollup is kept indefinitely because it
+   * is tiny and it is the thing anybody actually reads. */
+  RETAIN_DAYS: 90,
+  /* Guard against one runaway minute filling the buffer. */
+  MAX_PER_MINUTE: 500
+};
+
+function perfBufferKey_(minuteStamp) {
+  return 'perfbuf_' + minuteStamp;
+}
+
+/** The minute a timestamp falls in, as a stable string. */
+function perfMinute_(d) {
+  return String(Math.floor((d || new Date()).getTime() / 60000));
+}
+
+/**
+ * A stable, salted, non-reversible stand-in for an email.
+ *
+ * The salt is a Script Property so the mapping cannot be recomputed by anyone
+ * holding only the sheet. If it is unset, the hash is still stable within a
+ * deployment and still not an email — the property makes it harder to attack,
+ * it is not what makes it non-identifying.
+ */
+function perfUserHash_(email) {
+  var e = String(email || '').trim().toLowerCase();
+  if (!e) return '';
+  var salt = '';
+  try { salt = PropertiesService.getScriptProperties().getProperty('PERF_HASH_SALT') || ''; } catch (err) {}
+  var s = salt + '|' + e;
+  var h = 5381;
+  for (var i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+  return 'u' + (h >>> 0).toString(36);
+}
+
+/** Should this request be recorded at all? */
+function perfShouldSample_(isWrite, elapsedMs) {
+  if (!PERF_TELEMETRY_.ENABLED) return false;
+  if (isWrite) return true;
+  if (Number(elapsedMs) >= PERF_TELEMETRY_.SLOW_MS) return true;
+  return Math.random() < PERF_TELEMETRY_.READ_SAMPLE;
+}
+
+/**
+ * Record one request. Called from apiRouter_, on the way out, and costs one
+ * CacheService read plus one write — no sheet, no lock, no id allocation.
+ */
+function perfRecord_(entry) {
+  try {
+    if (!entry || !perfShouldSample_(!!entry.isWrite, entry.elapsed_ms)) return;
+    var key = perfBufferKey_(perfMinute_());
+    var cache = CacheService.getScriptCache();
+    var buf = [];
+    try {
+      var raw = cache.get(key);
+      if (raw) buf = JSON.parse(raw) || [];
+    } catch (eRead) { buf = []; }
+    if (!Array.isArray(buf)) buf = [];
+    if (buf.length >= PERF_TELEMETRY_.MAX_PER_MINUTE) return;
+
+    /* Exactly the nine values, in order. Nothing here is a payload, a record
+     * id or an email, and there is no branch that could make it one. */
+    buf.push([
+      new Date().toISOString(),
+      String(entry.action || '').slice(0, 80),
+      String(entry.company || '').slice(0, 40),
+      String(entry.page || '').slice(0, 60),
+      Number(entry.elapsed_ms) || 0,
+      Number(entry.sheet_reads) || 0,
+      String(entry.status || '').slice(0, 20),
+      perfUserHash_(entry.user_email),
+      Number(entry.client_ms) || 0
+    ]);
+    /* Ten minutes: long enough for a one-minute drain to be late four times
+     * over, short enough that an undrained buffer is not a slow leak. */
+    cache.put(key, JSON.stringify(buf), 600);
+  } catch (e) {
+    /* Telemetry must never be the reason a request fails. */
+  }
+}
+
+/** The sheet, created on first use. Additive, outside every business table. */
+function ensurePerfSheet_(name, headers) {
+  var ss = getSpreadsheet_(CONFIG.AUTH_SPREADSHEET_ID);
+  var sh = ss.getSheetByName(name);
+  if (!sh) {
+    sh = ss.insertSheet(name);
+    sh.appendRow(headers);
+    sh.setFrozenRows(1);
+    noteMutation_(sh);
+  }
+  return sh;
+}
+
+/**
+ * Drain the finished minutes into ERP_Perf_Log. Installed as a one-minute
+ * time-driven trigger.
+ *
+ * The CURRENT minute is deliberately left alone — draining it would race with
+ * requests still writing into it, and losing the tail of every minute is a
+ * worse answer than being sixty seconds behind.
+ */
+function drainPerfBuffer_() {
+  try {
+    var now = Number(perfMinute_());
+    var cache = CacheService.getScriptCache();
+    var rows = [];
+    /* Ten minutes back, so a trigger that missed a few runs catches up rather
+     * than silently dropping what it missed. */
+    for (var back = 1; back <= 10; back++) {
+      var key = perfBufferKey_(String(now - back));
+      var raw = null;
+      try { raw = cache.get(key); } catch (e) { raw = null; }
+      if (!raw) continue;
+      var buf = [];
+      try { buf = JSON.parse(raw) || []; } catch (e) { buf = []; }
+      if (buf.length) rows = rows.concat(buf);
+      /* Removed BEFORE the write. A duplicated telemetry row is worse than a
+       * lost one: it silently skews the percentiles this whole thing exists to
+       * produce, and nothing downstream could tell. The audit queue makes the
+       * opposite trade, on purpose. */
+      try { cache.remove(key); } catch (e) {}
+    }
+    if (!rows.length) return { status: 'success', rows: 0 };
+
+    var sh = ensurePerfSheet_(PERF_LOG_SHEET_, PERF_LOG_HEADERS_);
+    sh.getRange(sh.getLastRow() + 1, 1, rows.length, PERF_LOG_HEADERS_.length).setValues(rows);
+    noteMutation_(sh);
+    return { status: 'success', rows: rows.length };
+  } catch (e) {
+    try { console.error('drainPerfBuffer_: ' + e.message); } catch (eL) {}
+    return { status: 'error', message: e.message };
+  }
+}
+
+/** p-th percentile of a sorted numeric array, nearest-rank. */
+function perfPercentile_(sorted, p) {
+  if (!sorted.length) return 0;
+  var rank = Math.ceil((p / 100) * sorted.length);
+  return sorted[Math.min(sorted.length - 1, Math.max(0, rank - 1))];
+}
+
+/** ISO-ish week key: the Monday of the week, as YYYY-MM-DD. */
+function perfWeekKey_(d) {
+  var t = new Date(d.getTime());
+  var day = (t.getDay() + 6) % 7;          /* Monday = 0 */
+  t.setDate(t.getDate() - day);
+  return Utilities.formatDate(t, 'UTC', 'yyyy-MM-dd');
+}
+
+/**
+ * One row per action per week: p50, p90, p99, count, error rate, mean sheet
+ * reads. This is the table anybody actually reads. The raw log is evidence;
+ * the rollup is the review.
+ */
+function rollupPerfWeekly_() {
+  try {
+    var sh = ensurePerfSheet_(PERF_LOG_SHEET_, PERF_LOG_HEADERS_);
+    var values = sh.getDataRange().getValues();
+    if (values.length < 2) return { status: 'success', rows: 0 };
+
+    var groups = {};
+    for (var i = 1; i < values.length; i++) {
+      var r = values[i];
+      var when = new Date(r[0]);
+      if (isNaN(when.getTime())) continue;
+      var key = perfWeekKey_(when) + '|' + String(r[1] || '');
+      if (!groups[key]) groups[key] = { ms: [], reads: 0, errors: 0, n: 0 };
+      var g = groups[key];
+      g.ms.push(Number(r[4]) || 0);
+      g.reads += Number(r[5]) || 0;
+      if (String(r[6] || '').toUpperCase() === 'FAILED') g.errors++;
+      g.n++;
+    }
+
+    var out = [];
+    Object.keys(groups).sort().forEach(function (key) {
+      var g = groups[key];
+      var parts = key.split('|');
+      g.ms.sort(function (a, b) { return a - b; });
+      out.push([
+        parts[0], parts[1], g.n,
+        perfPercentile_(g.ms, 50), perfPercentile_(g.ms, 90), perfPercentile_(g.ms, 99),
+        g.n ? Number((g.errors / g.n).toFixed(4)) : 0,
+        g.n ? Number((g.reads / g.n).toFixed(2)) : 0
+      ]);
+    });
+    if (!out.length) return { status: 'success', rows: 0 };
+
+    var wk = ensurePerfSheet_(PERF_WEEKLY_SHEET_, PERF_WEEKLY_HEADERS_);
+    /* Rewritten whole rather than appended: a week's numbers change as more of
+     * it happens, and two rows for the same week and action would be a bug in
+     * the only table anybody reads. */
+    if (wk.getLastRow() > 1) wk.getRange(2, 1, wk.getLastRow() - 1, PERF_WEEKLY_HEADERS_.length).clearContent();
+    wk.getRange(2, 1, out.length, PERF_WEEKLY_HEADERS_.length).setValues(out);
+    noteMutation_(wk);
+    return { status: 'success', rows: out.length };
+  } catch (e) {
+    try { console.error('rollupPerfWeekly_: ' + e.message); } catch (eL) {}
+    return { status: 'error', message: e.message };
+  }
+}
+
+/**
+ * Retention. Raw rows older than RETAIN_DAYS go; the weekly rollup stays,
+ * because it is tiny and it is the point. Deliberately deletes from the TOP,
+ * where the oldest rows are, in one contiguous block.
+ */
+function prunePerfLog_() {
+  try {
+    var sh = getSpreadsheet_(CONFIG.AUTH_SPREADSHEET_ID).getSheetByName(PERF_LOG_SHEET_);
+    if (!sh || sh.getLastRow() < 2) return { status: 'success', removed: 0 };
+    var cutoff = new Date().getTime() - PERF_TELEMETRY_.RETAIN_DAYS * 86400000;
+    var stamps = sh.getRange(2, 1, sh.getLastRow() - 1, 1).getValues();
+    var keepFrom = 0;
+    while (keepFrom < stamps.length) {
+      var t = new Date(stamps[keepFrom][0]).getTime();
+      if (isNaN(t) || t >= cutoff) break;
+      keepFrom++;
+    }
+    if (!keepFrom) return { status: 'success', removed: 0 };
+    sh.deleteRows(2, keepFrom);
+    noteMutation_(sh);
+    return { status: 'success', removed: keepFrom };
+  } catch (e) {
+    return { status: 'error', message: e.message };
+  }
+}
+
+/** The ten slowest actions this week and last, for the dashboard page. */
+function getPerfDashboard_(data, user) {
+  if (!(user && user.isSuperAdmin)) throw new Error(ERP_MESSAGES.NOT_AUTHORIZED);
+  var out = { status: 'success', weeks: [], rows: [] };
+  try {
+    var wk = getSpreadsheet_(CONFIG.AUTH_SPREADSHEET_ID).getSheetByName(PERF_WEEKLY_SHEET_);
+    if (!wk || wk.getLastRow() < 2) return out;
+    var values = wk.getRange(2, 1, wk.getLastRow() - 1, PERF_WEEKLY_HEADERS_.length).getValues();
+    var weeks = {};
+    values.forEach(function (r) { weeks[String(r[0])] = true; });
+    var sorted = Object.keys(weeks).sort().reverse();
+    var thisWeek = sorted[0] || '', lastWeek = sorted[1] || '';
+    out.weeks = [thisWeek, lastWeek];
+
+    var prev = {};
+    values.forEach(function (r) { if (String(r[0]) === lastWeek) prev[String(r[1])] = Number(r[4]) || 0; });
+
+    out.rows = values
+      .filter(function (r) { return String(r[0]) === thisWeek; })
+      .map(function (r) {
+        var action = String(r[1]);
+        var p90 = Number(r[4]) || 0;
+        return {
+          action: action, count: Number(r[2]) || 0,
+          p50: Number(r[3]) || 0, p90: p90, p99: Number(r[5]) || 0,
+          error_rate: Number(r[6]) || 0, mean_sheet_reads: Number(r[7]) || 0,
+          prev_p90: prev[action] === undefined ? null : prev[action],
+          delta: prev[action] === undefined ? null : (p90 - prev[action])
+        };
+      })
+      .sort(function (a, b) { return b.p90 - a.p90; })
+      .slice(0, 10);
+  } catch (e) { /* an empty dashboard is a valid answer */ }
+  return out;
+}
+
 /**
  * System audit log helpers
  */
@@ -1599,7 +1959,35 @@ function installTriggers_(payload, sessionToken, authUser) {
   } catch (e) {
     try { console.error('installTriggers_: onAuthSheetEdit not created — ' + e.message); } catch (e2) {}
   }
-  return { status: 'success', message: 'تم تثبيت المؤقتات اليومية' };
+  /* [RT-10 / RT-11] The two one-minute drains, and the weekly rollup.
+   *
+   * Until these exist the telemetry buffer and the audit queue both FILL AND
+   * NEVER EMPTY. The telemetry buffer expires on its own, so the cost there is
+   * a lost measurement. The audit queue is a SHEET and does not expire, so
+   * without its drain it grows silently — which is why this is on the owner
+   * checklist in plain words rather than as an implementation detail.
+   *
+   * They share the same shape as the daily triggers above: removed first so a
+   * second install cannot double them up, then created. */
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    var h = t.getHandlerFunction();
+    if (h === 'drainPerfBuffer_' || h === 'drainHistoryQueue_' ||
+        h === 'rollupPerfWeekly_' || h === 'prunePerfLog_') {
+      try { ScriptApp.deleteTrigger(t); } catch (e) {}
+    }
+  });
+  try { ScriptApp.newTrigger('drainPerfBuffer_').timeBased().everyMinutes(1).create(); } catch (e) {
+    try { console.error('installTriggers_: drainPerfBuffer_ not created — ' + e.message); } catch (e2) {}
+  }
+  try { ScriptApp.newTrigger('drainHistoryQueue_').timeBased().everyMinutes(1).create(); } catch (e) {
+    try { console.error('installTriggers_: drainHistoryQueue_ not created — ' + e.message); } catch (e2) {}
+  }
+  /* Weekly, and the pruning with it: both read the raw log, and running them
+   * together keeps that read to one a week. */
+  try { ScriptApp.newTrigger('rollupPerfWeekly_').timeBased().everyDays(1).atHour(2).create(); } catch (e) {}
+  try { ScriptApp.newTrigger('prunePerfLog_').timeBased().everyDays(1).atHour(2).create(); } catch (e) {}
+
+  return { status: 'success', message: 'تم تثبيت المؤقتات اليومية والدقيقية' };
 }
 
 /* Migration batch functions (batch0_preflight, batch1_createSystemSheets, …)

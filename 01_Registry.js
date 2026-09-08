@@ -36,7 +36,11 @@ function getAllPages_() {
     { action: 'user_sessions', template: 'User_Sessions', title: 'جلساتي' },
     { action: 'user_views', template: 'User_Views', title: 'العروض المحفوظة' },
     { action: 'record_history', template: 'Record_History_Panel', title: 'السجل' },
-    { action: 'db_live_viewer', template: 'DbLive_Viewer', title: 'MySQL Database' }
+    { action: 'db_live_viewer', template: 'DbLive_Viewer', title: 'MySQL Database' },
+    /* [RT-10] The weekly performance review. Registered like any other page;
+       the handler behind it checks isSuperAdmin itself, so the registration
+       is not what keeps it private. */
+    { action: 'perf_dashboard', template: 'ERP_Perf_Dashboard', title: 'أداء النظام' }
   ];
   return base.concat(Object.values(COMPANY_REGISTRY).flatMap(c => c.pages));
 }
