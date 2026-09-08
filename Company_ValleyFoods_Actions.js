@@ -823,15 +823,27 @@ const ValleyFoodsHREmp = (function () {
       const empIdIdx = empHeaders.findIndex(function (h) { return String(h).trim().toLowerCase() === 'emp_id'; });
       const statusIdx = empHeaders.findIndex(function (h) { return String(h).trim() === 'الحالة الوظيفية'; });
       if (empIdIdx !== -1 && statusIdx !== -1) {
+        /* Recompute every employee's stored status from the real data instead
+         * of trusting the just-submitted value for the one employee touched.
+         * Re-fetched (not the `statuses` array read above, at the top of this
+         * function) because that read happened BEFORE addRecord_ inserted the
+         * row just written — it does not contain it yet. Self-healing: any
+         * employee whose stored value drifted some other way (a manual sheet
+         * edit, data from before this logic existed) is corrected here too. */
+        const statusMap = getLatestStatusMap_(dbId);
         for (var r = 1; r < empData.length; r++) {
-          if (String(empData[r][empIdIdx]) === empKey) {
-            empSheet.getRange(r + 1, statusIdx + 1).setValue(statusType);
-            noteMutation_(empSheet);
-            break;
+          const eid = String(empData[r][empIdIdx]);
+          const st = statusMap[eid];
+          const newVal = st ? st.status_type : '';
+          if (empData[r][statusIdx] !== newVal) {
+            empSheet.getRange(r + 1, statusIdx + 1).setValue(newVal);
           }
         }
+        noteMutation_(empSheet);
       }
-    } catch (e) { /* log but don't fail */ }
+    } catch (e) {
+      try { console.error('addEmpStatus_: status sync failed — ' + e.message); } catch (e2) {}
+    }
     var _empNameSt = '';
     try { var _allEmpsSt = getAllRecords_(dbId, EMP_INFO_SHEET); for (var _est=0; _est<_allEmpsSt.length; _est++) { if (String(_allEmpsSt[_est].emp_id)===String(empCode)) { _empNameSt = _allEmpsSt[_est].name_ar || ''; break; } } } catch(e){}
     var savedRecordSt = {
@@ -5287,6 +5299,13 @@ const ValleyFoodsHRModules = (function () {
       var hasFooters = outputs.some(function (o) { return Array.isArray(o.footers) && o.footers.some(function (f) { return String(f.item || '').trim(); }); });
       if (!consumption.length && !hasFooters) throw new Error('خصص استهلاك الخامات من الدفعات أولاً');
 
+    /* The three tabs exist before the guard runs, not just before the write: the
+       guard resolves footer ownership against them, and a missing tab there would
+       silently turn every already-committed quantity into an ignorable orphan. */
+    settingsEnsureSheet_(dbId, MFG_ORDER_SHEET, MFG_ORDER_HEADERS);
+    settingsEnsureSheet_(dbId, MFG_ORDER_PRODUCTS_SHEET, MFG_OUTPUT_HEADERS);
+    settingsEnsureSheet_(dbId, MFG_CONSUMPTION_SHEET, MFG_CONSUMPTION_HEADERS);
+
     /* Defensive: requested batch qty may not exceed the balance in valley_current_products.
        Runs BEFORE anything is written, so a violation aborts cleanly with no orphan header. */
     (function assertFooterBalances_() {
@@ -5326,26 +5345,8 @@ const ValleyFoodsHRModules = (function () {
           if (u && balanceByBatch[u] === undefined) balanceByBatch[u] = Number(r.current_qty) || 0;
         });
       } catch (eBal) {}
-      /* qty already consumed by OTHER manufacturing orders (own rows are rewritten on edit) */
-      var ownOutUids = {};
-      try {
-        if (editing && d.mo_uid) {
-          var myUid = String(d.mo_uid).trim();
-          getAllRecords_(dbId, MFG_ORDER_PRODUCTS_SHEET).forEach(function (o) {
-            if (String(o.valley_manufacture_header_id || '').trim() === myUid) ownOutUids[String(o.unique_id)] = true;
-          });
-        }
-      } catch (eOwn) {}
-      var usedByBatch = {};
-      try {
-        getAllRecords_(dbId, MFG_CONSUMPTION_SHEET).forEach(function (cm) {
-          if (ownOutUids[String(cm.valley_manufacture_header_product_id || '').trim()]) return;
-          var buid = String(cm.item || '').trim();
-          if (needByBatch[buid]) usedByBatch[buid] = Math.round(((usedByBatch[buid] || 0) + (Number(cm.qty) || 0)) * 1000) / 1000;
-        });
-      } catch (eUsed) {}
       batchIds.forEach(function (buid) {
-        var avail = Math.round(((balanceByBatch[buid] || 0) - (usedByBatch[buid] || 0)) * 1000) / 1000;
+        var avail = Math.round((balanceByBatch[buid] || 0) * 1000) / 1000;
         if (needByBatch[buid] - avail > 0.001) {
           var label = buid;
           try {
@@ -5359,10 +5360,6 @@ const ValleyFoodsHRModules = (function () {
         }
       });
     })();
-
-    settingsEnsureSheet_(dbId, MFG_ORDER_SHEET, MFG_ORDER_HEADERS);
-    settingsEnsureSheet_(dbId, MFG_ORDER_PRODUCTS_SHEET, MFG_OUTPUT_HEADERS);
-    settingsEnsureSheet_(dbId, MFG_CONSUMPTION_SHEET, MFG_CONSUMPTION_HEADERS);
 
     executeWithLock_(function () {
       var sheetMo = getSheet_(MFG_ORDER_SHEET, dbId);
@@ -5521,6 +5518,10 @@ const ValleyFoodsHRModules = (function () {
       /* ONE read for all of this MO's outputs. Per-output deletion re-read the
          whole consumption sheet once per output. */
       deleteRowsWhereIn_(sheetCons, 'valley_manufacture_header_product_id', existingOutUids);
+      /* …and the rows an earlier save parented on the MO uid itself through the
+         `outUid || moUid` fallback below. They are unambiguously ours, and left
+         behind they would be rewritten alongside, double-counting the batch. */
+      deleteRowsByCriteria_(sheetCons, 'valley_manufacture_header_product_id', moUid);
       var consHeaders = getHeaders_(sheetCons);
       var consRows = [];
 
@@ -6885,7 +6886,9 @@ const ValleyFoodsHRModules = (function () {
   }
 
   /* كود الدليل المحاسبي options: label = «كود المستوى»,
-   * stored value = «المستوى الخامس», range 311100..421300. */
+   * stored value = «المستوى الخامس». No filter of any kind — every row in the
+   * chart of accounts that carries a non-empty level-5 code is offered, full
+   * stop, whatever that value looks like. */
   /**
    * تقرير المصروفات — what was spent, per expense account, for one month and
    * for the year to date, each as a share of its own total.
@@ -7021,9 +7024,9 @@ const ValleyFoodsHRModules = (function () {
 
   function buildCashChartOptions_(dbId) {
     return getAllRecords_(dbId, FIN_CHART_SHEET).map(function (r) {
-      var lvl5 = Number(r['المستوى الخامس']);
+      var lvl5 = String(r['المستوى الخامس'] == null ? '' : r['المستوى الخامس']).trim();
+      if (!lvl5) return null;
       var code = r['كود المستوى'];
-      if (!Number.isInteger(lvl5) || lvl5 < 311100 || lvl5 > 421300) return null;
       return { value: lvl5, label: String(code != null && code !== '' ? code : lvl5) };
     }).filter(Boolean);
   }
@@ -7175,15 +7178,10 @@ const ValleyFoodsHRModules = (function () {
     if (!partyId && !vendorName) throw new Error('الطرف (عميل/مورد) أو اسم المورد مطلوب');
     var chartCode = String(d.chart_code || '').trim();
     if (chartCode) {
-      try {
-        var chartOk = getAllRecords_(dbId, FIN_CHART_SHEET).some(function (r) {
-          var lvl5 = Number(r['المستوى الخامس']);
-          return String(lvl5) === chartCode && lvl5 >= 311100 && lvl5 <= 421300;
-        });
-        if (!chartOk) throw new Error('x');
-      } catch (eChart) {
-        throw new Error('كود الدليل المحاسبي غير موجود ضمن النطاق (311100 - 421300)');
-      }
+      var chartOk = getAllRecords_(dbId, FIN_CHART_SHEET).some(function (r) {
+        return String(r['المستوى الخامس'] == null ? '' : r['المستوى الخامس']).trim() === chartCode;
+      });
+      if (!chartOk) throw new Error('كود الدليل المحاسبي غير موجود ضمن دليل الحسابات');
     }
 
     settingsEnsureSheet_(dbId, FIN_CASH_SHEET,
@@ -7210,7 +7208,9 @@ const ValleyFoodsHRModules = (function () {
       map['transaction_type'] = type;
       map['related_box'] = d.related_box;
       map['chart_code'] = d.chart_code ? d.chart_code : '';
-      map['chart_name'] = String(d.chart_name || '').trim();
+      /* chart_name and chart_account_main are NOT written here — they are the
+         sheet's VLOOKUPs into valley_chart_of_accounts, set by
+         setComputedFormulas_ once the row number is known. */
       map['transaction_method'] = method;
       map['tax_system'] = !!(d.tax_system === true || d.tax_system === 'true' || d.tax_system === 'Yes');
       map['approved'] = false;
@@ -7225,8 +7225,26 @@ const ValleyFoodsHRModules = (function () {
 
 
     /* Positional formula writer (column letters fixed by canonical layout):
-     * H=amount, I=discount, J=net_amount, K=taxes, L=total,
-     * M=type, N=balance_amount, G=date, AA=Month, AB=Year */
+     * G=date, H=amount, I=discount, J=net_amount, K=taxes, L=total,
+     * M=type, N=balance_amount, Q=chart_code, R=chart_name,
+     * U=chart_account_main. Every target sits inside the 25 canonical headers.
+     *
+     * There is no AA and no AB. `Month` and `Year` were AppSheet VIRTUAL
+     * columns — computed in the app, never stored — so the =MONTH/=YEAR writes
+     * this used to make landed two columns PAST the header row, on a sheet that
+     * ends at Y. That widened getLastColumn to 28, so every read of the largest
+     * ledger in the company carried three unnamed columns, and two of them
+     * collapsed onto one blank record key. Nothing ever read them back: the
+     * expenses report derives the month from transaction_date, which is where
+     * it has always come from.
+     *
+     * chart_name and chart_account_main are the sheet's own lookups into
+     * valley_chart_of_accounts (I = «المستوى الخامس», the key chart_code holds;
+     * N = «كود المستوى»; O = «اسم الحساب الرئيسي»), written here so an appended
+     * row carries what a hand-entered row carries. chart_code is optional and
+     * is validated against that same sheet when present, so the lookup can only
+     * hit — and with no chart_code there is nothing to look up, so the two
+     * cells are cleared rather than left holding #N/A. */
     function setComputedFormulas_(rowNumber) {
       sheet.getRange(rowNumber, 10).setValue('=H' + rowNumber + '-I' + rowNumber);           // net_amount
       noteMutation_(sheet);
@@ -7234,9 +7252,12 @@ const ValleyFoodsHRModules = (function () {
       noteMutation_(sheet);
       sheet.getRange(rowNumber, 14).setValue(                                                 // balance_amount
         '=IFS(M' + rowNumber + '="Credit Note",L' + rowNumber + '*-1,M' + rowNumber + '="Credit",L' + rowNumber + '*-1,TRUE,L' + rowNumber + ')');
-      sheet.getRange(rowNumber, 27).setValue('=MONTH(G' + rowNumber + ')');                   // Month
       noteMutation_(sheet);
-      sheet.getRange(rowNumber, 28).setValue('=YEAR(G' + rowNumber + ')');                    // Year
+      sheet.getRange(rowNumber, 18).setValue(                                                 // chart_name
+        chartCode ? '=VLOOKUP(Q' + rowNumber + ',valley_chart_of_accounts!I:N,6,0)' : '');
+      noteMutation_(sheet);
+      sheet.getRange(rowNumber, 21).setValue(                                                 // chart_account_main
+        chartCode ? '=VLOOKUP(Q' + rowNumber + ',valley_chart_of_accounts!I:O,7,0)' : '');
       noteMutation_(sheet);
     }
 
@@ -7257,7 +7278,7 @@ const ValleyFoodsHRModules = (function () {
         transaction_type: type,
         related_box: d.related_box,
         chart_code: d.chart_code ? d.chart_code : '',
-        chart_name: String(d.chart_name || '').trim(),
+        /* chart_name / chart_account_main: see setComputedFormulas_ */
         transaction_method: method,
         tax_system: !!(d.tax_system === true || d.tax_system === 'true' || d.tax_system === 'Yes'),
         user: (user && user.email) || ''
@@ -7361,10 +7382,10 @@ const ValleyFoodsHRModules = (function () {
       noteMutation_(sheet);
       sheet.getRange(rowNum, 14).setValue(
         '=IFS(M' + rowNum + '="Credit Note",L' + rowNum + '*-1,M' + rowNum + '="Credit",L' + rowNum + '*-1,TRUE,L' + rowNum + ')');
-      sheet.getRange(rowNum, 27).setValue('=MONTH(G' + rowNum + ')');
       noteMutation_(sheet);
-      sheet.getRange(rowNum, 28).setValue('=YEAR(G' + rowNum + ')');
-      noteMutation_(sheet);
+      /* No AA/AB here either — see setComputedFormulas_ in saveValleyCash_ for
+         why those two columns do not exist. And no chart lookups: a transfer
+         between two boxes carries no chart_code, so R and U stay empty. */
       try{ logHistory_(dbId, FIN_CASH_SHEET, map.record_uid || ('create_'+FIN_CASH_SHEET+'_'+tid), tid, (user&&user.email)||'', 'create', map, null) }catch(e){}
     }
 
@@ -7431,13 +7452,15 @@ const ValleyFoodsHRModules = (function () {
     };
   }
 
-  /* Batch availability for the WHOLE warehouse — the arithmetic of
-     getValleyProductBatches_, generalised off a single product and extended
-     with the two terms the legacy virtual `appsheet_current_qty` also carried:
-     manufacturing consumption, and this table's own signed movements.
+  /* Batch availability for the WHOLE warehouse.
 
-       available = current_qty − Σ sales allocations + Σ sales-return restores
-                                − Σ manufacturing consumption + Σ movmenent_sign
+       available = current_qty
+
+     valley_current_products.current_qty is the NET balance and it is TRUSTED.
+     Sales, sales returns, manufacturing consumption and this table's own signed
+     movements are ALREADY inside it, so subtracting any of them here is a
+     double count. حركة المخزن is add-only — there is no document being
+     edited — so there is no add-back either.
 
      Never strips unit_cost: this is the server's own costing input, and the
      cost gate applies to what leaves the server, not to what it computes with. */
@@ -7455,55 +7478,14 @@ const ValleyFoodsHRModules = (function () {
           current_qty: Number(r.current_qty) || 0,
           unit_cost: Number(r.unit_cost) || 0,
           unit: String(r.unit || ''),
-          transaction_date: r.transaction_date || '',
-          used: 0, restored: 0, consumed: 0, moved: 0
+          transaction_date: r.transaction_date || ''
         };
-      });
-    } catch (e) {}
-
-    /* sales allocations off the batch */
-    var allocToBatch = {};
-    try {
-      getAllRecords_(dbId, 'valley_sales_product_stock').forEach(function (a) {
-        var buid = String(a.product_unique_id || '').trim();
-        allocToBatch[String(a.unique_id || '').trim()] = buid;
-        if (batches[buid]) batches[buid].used += Number(a.product_qty || 0);
-      });
-    } catch (e) {}
-
-    /* sales returns restore onto the ORIGINAL allocation's batch */
-    try {
-      getAllRecords_(dbId, 'valley_sales_returns_stock').forEach(function (rs) {
-        var b = batches[allocToBatch[String(rs.product_unique_id || '').trim()]];
-        if (b) b.restored += Number(rs.product_qty || 0);
-      });
-    } catch (e) {}
-
-    /* manufacturing consumption (valley_manufacture_footer.item -> batch uid) */
-    try {
-      getAllRecords_(dbId, MFG_CONSUMPTION_SHEET).forEach(function (c) {
-        var b = batches[String(c.item || '').trim()];
-        if (b) b.consumed += Number(c.qty || 0);
-      });
-    } catch (e) {}
-
-    /* this table's own movements. movmenent_sign is already signed — منصرف is
-       negative — so it is ADDED, exactly as the legacy virtual column did.
-       A row whose sheet formula has not evaluated yet falls back to the enum. */
-    try {
-      getAllRecords_(dbId, WH_MOVE_SHEET).forEach(function (m) {
-        var b = batches[String(m.item || '').trim()];
-        if (!b) return;
-        var s = Number(m.movmenent_sign);
-        if (m.movmenent_sign !== '' && m.movmenent_sign != null && !isNaN(s)) { b.moved += s; return; }
-        var q = Number(m.qty) || 0;
-        b.moved += (String(m.movement_type || '').trim() === WH_IN_TYPE) ? q : -q;
       });
     } catch (e) {}
 
     Object.keys(batches).forEach(function (k) {
       var b = batches[k];
-      b.available = Math.max(0, b.current_qty - b.used + b.restored - b.consumed + b.moved);
+      b.available = Math.max(0, b.current_qty);
     });
     return batches;
   }
@@ -7900,27 +7882,15 @@ const ValleyFoodsHRModules = (function () {
   }
 
   /* ---------- P2: batch availability for a product ----------
-   * available(batch) = current_qty − Σ(sale allocations) + Σ(return restorations)
-   * excludeInvoiceUid removes the edited invoice's own allocations so they
-   * don't count against re-editing. */
+   * available(batch) = current_qty
+   *
+   * current_qty is the NET balance and it is TRUSTED — sales and sales returns
+   * are already inside it, so nothing is subtracted here. The add-back for the
+   * document being edited arrives in the next commit. */
   function getValleyProductBatches_(data, user, dbId) {
     var pid = String((data && data.product_id) || '').trim();
     if (!pid) throw new Error('معرّف المنتج مطلوب');
     var excludeInv = String((data && data.exclude_invoice_unique_id) || '').trim();
-    var _bCacheKey = 'vfbatch_' + String(dbId) + '_' + pid + '_' + (excludeInv || 'x');
-    try {
-      var _bc = CacheService.getScriptCache().get(_bCacheKey);
-      /* U-46. Stripped AFTER the cache read, never before: this cache is keyed
-         by product, not by user, so a stripped payload must never be what gets
-         stored. (Nothing writes this key today — the put was already absent —
-         but the gate has to hold if one is ever added.) */
-      if (_bc) {
-        var _cached = JSON.parse(_bc);
-        if (!vfCanSeeCost_(user)) vfStripCostAll_(_cached.batches, VF_COST_KEYS.batch);
-        return _cached;
-      }
-    } catch (e0) {}
-
     var batches = {};
     try {
       getAllRecords_(dbId, 'valley_current_products').forEach(function (r) {
@@ -7933,47 +7903,13 @@ const ValleyFoodsHRModules = (function () {
           current_qty: Number(r.current_qty) || 0,
           unit_cost: Number(r.unit_cost) || 0,
           transaction_date: r.transaction_date || '',
-          unit: String(r.unit || ''),
-          used: 0,
-          restored: 0
+          unit: String(r.unit || '')
         };
       });
     } catch (e) {}
 
-    /* line unique_id → invoice uid (to skip edited invoice's own allocations) */
-    var lineToInv = {};
-    try {
-      getAllRecords_(dbId, FIN_SALES_LINES_SHEET).forEach(function (l) {
-        var lu = String(l.unique_id || '').trim();
-        if (lu) lineToInv[lu] = String(l.valley_sales_header_id || '').trim();
-      });
-    } catch (e) {}
-
-    try {
-      getAllRecords_(dbId, 'valley_sales_product_stock').forEach(function (a) {
-        var buid = String(a.product_unique_id || '').trim();
-        if (!batches[buid]) return;
-        var lineUid = String(a.valley_sales_products_id || '').trim();
-        if (excludeInv && lineToInv[lineUid] === excludeInv) return;
-        batches[buid].used += Number(a.product_qty || 0);
-      });
-    } catch (e) {}
-
-    /* returns restore quantities back to the original allocation's batch */
-    try {
-      var allocToBatch = {};
-      getAllRecords_(dbId, 'valley_sales_product_stock').forEach(function (a) {
-        allocToBatch[String(a.unique_id || '').trim()] = String(a.product_unique_id || '').trim();
-      });
-      getAllRecords_(dbId, 'valley_sales_returns_stock').forEach(function (rs) {
-        var buid = allocToBatch[String(rs.product_unique_id || '').trim()];
-        var qty = Number(rs.product_qty || 0);
-        if (qty && batches[buid]) batches[buid].restored += qty;
-      });
-    } catch (e) {}
-
     var list = Object.keys(batches).map(function (k) { return batches[k]; }).filter(function (b) { return b.current_qty > 0; });
-    list.forEach(function (b) { b.available = Math.max(0, b.current_qty - b.used + b.restored); });
+    list.forEach(function (b) { b.available = Math.max(0, b.current_qty); });
     /* order oldest-first by transaction_date */
     list.sort(function (a, b) {
       var da = a.transaction_date ? new Date(a.transaction_date).getTime() : 0;
@@ -8095,41 +8031,11 @@ const ValleyFoodsHRModules = (function () {
 
     /* ---- P2: batch allocations validation ----
      * Each line must fully allocate its qty across that product's batches.
-     * Per-batch availability = current_qty − Σ(existing sale allocations)
-     * + Σ(return restorations), excluding this invoice's own when editing. */
+     * Per-batch availability = current_qty, the sheet's NET balance, taken raw.
+     * Existing sale allocations and return restorations are already inside it,
+     * so a second subtraction here would be a double count. */
     var allocByLine = [];
     var batchUsage = {};
-    try {
-      safeRows_(dbId, FIN_SALES_LINES_SHEET).forEach(function (l) { batchUsage['__line__' + String(l.unique_id||'').trim()] = String(l.valley_sales_header_id || '').trim(); });
-    } catch (e0) {}
-    var existingAllocToBatch = {};
-    var existingAllocQty = {};
-    try {
-      getAllRecords_(dbId, 'valley_sales_product_stock').forEach(function (a) {
-        var au = String(a.unique_id || '').trim();
-        existingAllocToBatch[au] = String(a.product_unique_id || '').trim();
-        existingAllocQty[au] = Number(a.product_qty || 0);
-      });
-    } catch (e1) {}
-    /* baseline usage excluding edited invoice's own allocations */
-    Object.keys(existingAllocToBatch).forEach(function (au) {
-      var lineInv = batchUsage['__line__' + au];
-      if (editing && lineInv === String(d.invoice_unique_id || '').trim()) return; /* own allocations excluded */
-      var bu = existingAllocToBatch[au];
-      if (!batchUsage[bu]) batchUsage[bu] = 0;
-      batchUsage[bu] += existingAllocQty[au];
-    });
-    /* returns restore back into availability */
-    try {
-      getAllRecords_(dbId, 'valley_sales_returns_stock').forEach(function (rs) {
-        var au = String(rs.product_unique_id || '').trim();
-        var qty = Number(rs.product_qty || 0);
-        if (qty && existingAllocToBatch[au]) {
-          var bu2 = existingAllocToBatch[au];
-          batchUsage[bu2] -= qty;
-        }
-      });
-    } catch (e2b) {}
     /* current quantities per batch for the requested products */
     var requestedProducts = {};
     cleanLines.forEach(function (ln) { requestedProducts[String(ln.product_id)] = true; });
@@ -8264,6 +8170,17 @@ const ValleyFoodsHRModules = (function () {
       /* Rewrite lines */
       var sheetLines = getSheet_(FIN_SALES_LINES_SHEET, dbId);
       var lineHeaders = getHeaders_(sheetLines);
+      /* the line uids this invoice had BEFORE the rewrite — read while the rows
+         are still there. A line the user removed is not in cleanLines, so
+         without this its allocations would survive and hold their batches. */
+      var priorLineUids = [];
+      if (editing) {
+        try {
+          getAllRecords_(dbId, FIN_SALES_LINES_SHEET).forEach(function (l) {
+            if (String(l.valley_sales_header_id || '').trim() === existingUid) priorLineUids.push(String(l.unique_id || '').trim());
+          });
+        } catch (ePl) {}
+      }
       if (editing) deleteRowsByCriteria_(sheetLines, 'valley_sales_header_id', existingUid);
       var startLineRow = sheetLines.getLastRow() + 1;
       var lineRows = cleanLines.map(function (ln, i2) {
@@ -8301,6 +8218,7 @@ const ValleyFoodsHRModules = (function () {
       var aLineIdx = allocHeaders.findIndex(function (h) { return String(h).trim() === 'valley_sales_products_id'; });
       var invLineUids = {};
       cleanLines.forEach(function (ln) { invLineUids[ln.unique_id] = true; });
+      priorLineUids.forEach(function (lu) { if (lu) invLineUids[lu] = true; });
       var toDelete = [];
       for (var ad = aData.length - 1; ad >= 1; ad--) {
         var lu = String(aData[ad][aLineIdx] || '').trim();
