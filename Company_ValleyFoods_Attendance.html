@@ -137,7 +137,7 @@
     var INDEX = null;
     /* The import the result panel is currently describing, so ↩️ تراجع has
        something concrete to point at. Undo also lives permanently in the
-       import-history card. */
+       import-history modal (سجل عمليات الرفع). */
     var lastBatch = null;
 
     /* ================= SHELL ================= */
@@ -161,23 +161,9 @@
       if (CAN_WRITE) loadBatches();
     }
 
-    function card(title, bodyHtml, actionsHtml) {
-      return '<div class="vf-card vf-att-card">' +
-        '<div class="vf-card-header"><h3>' + title + '</h3>' + (actionsHtml || '') + '</div>' +
-        '<div class="vf-card-body">' + bodyHtml + '</div></div>';
-    }
-
     function renderContent() {
-      /* The toolbar, then the calendar. The cards below are on their way
-         out: each leaves in the commit that gives it a modal (att-ui-2..4). */
-      return '<div class="vf-att-page">' +
-        renderToolbar() +
-        renderCalendarSection() +
-        (CAN_WRITE ? renderUploadSection() : '') +
-        (CAN_WRITE ? renderManualSection() : '') +
-        renderForgetSection() +
-        (CAN_WRITE ? renderBatchesSection() : '') +
-      '</div>';
+      /* The toolbar, then the calendar, and nothing else. */
+      return '<div class="vf-att-page">' + renderToolbar() + renderCalendarSection() + '</div>';
     }
 
     /* ================= TOOLBAR ================= */
@@ -189,9 +175,14 @@
     function renderToolbar() {
       var moreItems = '';
       if (CAN_WRITE) {
-        moreItems += '<button type="button" class="nav-dropdown-item" id="vf-new-session-btn">+ يوم جديد</button>';
+        moreItems +=
+          '<button type="button" class="nav-dropdown-item" id="vf-manual-add-btn">+ بصمة يدوية</button>' +
+          '<button type="button" class="nav-dropdown-item" id="vf-new-session-btn">+ يوم جديد</button>' +
+          '<button type="button" class="nav-dropdown-item" id="vf-open-batches">سجل عمليات الرفع</button>';
       }
-      moreItems += '<button type="button" class="nav-dropdown-item" id="vf-view-toggle">عرض كجدول</button>';
+      moreItems +=
+        '<button type="button" class="nav-dropdown-item" id="vf-print-forget-btn">🖨️ نموذج نسيان البصمة</button>' +
+        '<button type="button" class="nav-dropdown-item" id="vf-view-toggle">عرض كجدول</button>';
 
       return '<div class="vf-att-toolbar">' +
         /* .vf-month-bar has no CSS of its own any more; renderDays() still
@@ -489,9 +480,17 @@
     /* The file is read ONCE, here, and only parsed rows are posted. The two old
        server actions (analyse, then upload) are gone, and with them the 5 MB
        round trip that happened twice. */
-    function renderUploadSection() {
-      return card('رفع كشف البصمة',
-        '<div class="vf-form-group">' +
+    /* The wizard's four ids live in this modal body and exist only while it
+       is open. Every write the wizard makes to them is null-guarded, so a
+       dialog closed mid-flow is harmless; and startCommit() runs under
+       UI.showSpinner(), whose overlay sits above the dialog, so it cannot be
+       closed mid-commit. The file input is created with the modal, so its
+       change listener is bound here, not in bindEvents. */
+    function openImportModal() {
+      UIC.openModal('vf-import-modal', {
+        title: 'رفع كشف البصمة',
+        size: 'lg',
+        body: '<div class="vf-form-group">' +
           '<label>ملف كشف البصمة</label>' +
           '<input type="file" id="vf-csv-input" accept=".csv,.txt,.dat,.tsv,.xls,.xlsx" class="vf-input">' +
           '<div class="vf-analysis-sub" style="margin-top:6px;">' +
@@ -502,7 +501,12 @@
         '</div>' +
         '<div id="vf-parse-status" class="vf-analysis-sub" style="display:none;"></div>' +
         '<div id="vf-analysis-panel" style="display:none;margin-top:14px;"></div>' +
-        '<div id="vf-upload-result" style="display:none;margin-top:14px;"></div>');
+        '<div id="vf-upload-result" style="display:none;margin-top:14px;"></div>',
+        footer: false
+      });
+      var csvInput = document.getElementById('vf-csv-input');
+      if (csvInput) csvInput.addEventListener('change', handleFileSelect);
+      resetUploadFlow();
     }
 
     function resetUploadFlow() {
@@ -963,10 +967,20 @@
     /* ================= IMPORT HISTORY ================= */
     /* The permanent home of undo — not only the panel that happens to be on
        screen right after an import. */
-    function renderBatchesSection() {
-      return card('سجل عمليات الرفع',
-        '<div id="vf-batches-table"><p class="vf-text-muted">جاري التحميل...</p></div>',
-        '<button id="vf-batches-all-btn" class="btn btn-outline">عرض الكل</button>');
+    /* BATCHES is already loaded at boot for a write user, so the modal shows
+       rows at once and then refreshes. عرض الكل is the footer, created with
+       the modal and bound here. */
+    function openBatchesModal() {
+      UIC.openModal('vf-batches-modal', {
+        title: 'سجل عمليات الرفع',
+        size: 'lg',
+        body: '<div id="vf-batches-table"><p class="vf-text-muted">جاري التحميل...</p></div>',
+        footer: '<button id="vf-batches-all-btn" class="btn btn-outline">عرض الكل</button>'
+      });
+      var batchesAllBtn = document.getElementById('vf-batches-all-btn');
+      if (batchesAllBtn) batchesAllBtn.addEventListener('click', function () { loadBatches(true); });
+      renderBatchesTable();
+      loadBatches();
     }
 
     function loadBatches(loadAll) {
@@ -1017,12 +1031,6 @@
        which day the punch belongs to, and the server resolves that itself —
        so there is nowhere left for the client to name the wrong day, and no
        reason to read the whole punch table to populate a select. */
-    function renderManualSection() {
-      return card('تسجيل بصمة يدوية',
-        '<div class="vf-analysis-sub">اختر الموظف وتاريخ ووقت البصمة. اليوم يُفتح تلقائياً إن لم يكن موجوداً.</div>',
-        '<button id="vf-manual-add-btn" class="btn btn-primary">+ إضافة بصمة</button>');
-    }
-
     /** Employee options, fetched once and kept for the life of the page. */
     function loadEmployees() {
       if (EMPLOYEES) return Promise.resolve(EMPLOYEES);
@@ -1462,12 +1470,9 @@
     }
 
     /* ================= FORGET FORM (print) ================= */
-    function renderForgetSection() {
-      return card('نموذج نسيان البصمة',
-        'نموذج ثنائي اللغة (عربي/إنجليزي) لاعتماد إدخال حضور يدوي عند نسيان البصمة — يُفتح في نافذة مستقلة جاهزة للطباعة A4.',
-        '<button id="vf-print-forget-btn" class="btn btn-outline">🖨️ طباعة النموذج</button>');
-    }
-
+    /* A bilingual (Arabic/English) form for approving a manual attendance
+       entry when a punch was forgotten — opens in its own window, A4-ready.
+       Reached from المزيد ▾ (blank) and from an exceptions row (prefilled). */
     /**
      * The printed نموذج نسيان البصمة (D-26).
      *
@@ -1628,13 +1633,9 @@
     }
 
     /* ================= BINDINGS / INIT ================= */
-    /* Until a card has its modal (att-ui-2..4) its toolbar button scrolls to
-       the card, so the row is usable from the first commit. */
-    function jumpTo(id) {
-      var el = document.getElementById(id);
-      if (el && el.scrollIntoView) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }
-
+    /* Everything bound here exists from boot. Controls created with a modal
+       (vf-csv-input, vf-review-all-btn, vf-batches-all-btn) are bound in the
+       open*Modal function that creates them. */
     function bindEvents() {
       var newSessionBtn = document.getElementById('vf-new-session-btn');
       if (newSessionBtn) newSessionBtn.addEventListener('click', moreItem(function () { showNewSessionModal(); }));
@@ -1663,21 +1664,18 @@
       var openReviewBtn = document.getElementById('vf-open-review');
       if (openReviewBtn) openReviewBtn.addEventListener('click', openReviewModal);
       var openImportBtn = document.getElementById('vf-open-import');
-      if (openImportBtn) openImportBtn.addEventListener('click', function () { jumpTo('vf-csv-input'); });
+      if (openImportBtn) openImportBtn.addEventListener('click', openImportModal);
       var moreToggle = document.getElementById('vf-more-toggle');
       if (moreToggle) moreToggle.addEventListener('click', function (e) { UIC.toggleDropdown('vf-more-menu', e); });
 
-      var csvInput = document.getElementById('vf-csv-input');
-      if (csvInput) csvInput.addEventListener('change', handleFileSelect);
-
-      var batchesAllBtn = document.getElementById('vf-batches-all-btn');
-      if (batchesAllBtn) batchesAllBtn.addEventListener('click', function () { loadBatches(true); });
-
       var manualAddBtn = document.getElementById('vf-manual-add-btn');
-      if (manualAddBtn) manualAddBtn.addEventListener('click', function () { showManualEntryModal(); });
+      if (manualAddBtn) manualAddBtn.addEventListener('click', moreItem(function () { showManualEntryModal(); }));
+
+      var openBatchesBtn = document.getElementById('vf-open-batches');
+      if (openBatchesBtn) openBatchesBtn.addEventListener('click', moreItem(openBatchesModal));
 
       var printBtn = document.getElementById('vf-print-forget-btn');
-      if (printBtn) printBtn.addEventListener('click', printForgetForm);
+      if (printBtn) printBtn.addEventListener('click', moreItem(printForgetForm));
     }
 
     /* Another device's change to this page arrives on its own. The poll
@@ -1715,7 +1713,12 @@
       showAlternatives: showAlternatives,
       startCommit: startCommit,
       undoBatch: undoBatch,
-      saveManualEntry: saveManualEntry
+      saveManualEntry: saveManualEntry,
+      openReportModal: openReportModal,
+      openExceptionsModal: openExceptionsModal,
+      openReviewModal: openReviewModal,
+      openImportModal: openImportModal,
+      openBatchesModal: openBatchesModal
     };
   })();
   </script>
