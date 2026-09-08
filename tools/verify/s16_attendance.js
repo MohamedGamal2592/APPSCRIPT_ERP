@@ -789,6 +789,123 @@ if (BLOCK) {
     '  and the old structurally-always-zero total/late fields are gone');
 }
 
+/* ══ L. the calendar-first layout ═══════════════════════════════════════ */
+/* VALLEY_ATTENDANCE_LAYOUT_PLAN.md §5. Static assertions over the page source:
+   one toolbar over one calendar, every old card gone, every modal sized
+   explicitly, one shared range, and the public contract (ids, ATT_PAGE, the
+   forget form) intact. */
+console.log('\nL — calendar-first layout (VALLEY_ATTENDANCE_LAYOUT_PLAN.md §5)\n');
+{
+  /* The source of one top-level page function: from `    function name(` to
+     the first line that is exactly `    }`. Comments stripped so a name that
+     survives only in prose does not count. */
+  const fnBody = function (name) {
+    const start = PAGE.indexOf('    function ' + name + '(');
+    if (start === -1) return null;
+    const end = PAGE.indexOf('\n    }', start);
+    return PAGE.slice(start, end === -1 ? undefined : end)
+      .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  };
+  const countOf = function (needle) { return PAGE.split(needle).length - 1; };
+  const NO_COMMENTS = PAGE.replace(/\/\*[\s\S]*?\*\//g, '');
+
+  /* L-1 */
+  const rc = fnBody('renderContent');
+  check(!!rc, 'L-1: renderContent() exists');
+  if (rc) {
+    const ret = /return\s+([^;]+);/.exec(rc);
+    const expr = ret ? ret[1].replace(/\s+/g, ' ').trim() : '';
+    check(expr === "'<div class=\"vf-att-page\">' + renderToolbar() + renderCalendarSection() + '</div>'",
+      'L-1: renderContent() returns the toolbar, then the calendar, and nothing else', expr);
+  }
+
+  /* L-2 */
+  ['renderUploadSection', 'renderManualSection', 'renderReviewSection', 'renderExceptionsSection',
+    'renderForgetSection', 'renderReportSection', 'renderSessionsSection', 'renderBatchesSection']
+    .forEach(function (name) {
+      check(NO_COMMENTS.indexOf(name) === -1, 'L-2: ' + name + ' no longer occurs in the page');
+    });
+  check(!/(^|[^\w.$-])card\(/.test(NO_COMMENTS), 'L-2: card( has zero callers and no definition');
+
+  /* L-3 */
+  check(countOf('id="vf-days-body"') === 1, 'L-3: id="vf-days-body" occurs exactly once', countOf('id="vf-days-body"'));
+  check(!/class="vf-card\b/.test(PAGE) && PAGE.indexOf('vf-att-card') === -1,
+    'L-3: and no card frame remains anywhere in the page');
+
+  /* L-4 */
+  ['vf-month-prev', 'vf-month-label', 'vf-month-next', 'vf-month-today', 'vf-view-toggle',
+    'vf-range-start', 'vf-range-end', 'vf-open-report', 'vf-open-exc', 'vf-open-review',
+    'vf-exc-badge', 'vf-review-badge', 'vf-more-menu'].forEach(function (id) {
+    check(countOf('id="' + id + '"') === 1, 'L-4: id="' + id + '" present exactly once', countOf('id="' + id + '"'));
+  });
+
+  /* L-5 */
+  ['vf-report-start', 'vf-report-end', 'vf-exc-start', 'vf-exc-end', 'vf-show-report-btn', 'vf-exc-btn']
+    .forEach(function (id) {
+      check(PAGE.indexOf(id) === -1, 'L-5: ' + id + ' absent from the page');
+    });
+
+  /* L-6 */
+  [['vf-import-modal', 'lg'], ['vf-review-modal', 'xl'], ['vf-exc-modal', 'xl'],
+    ['vf-report-modal', 'xl'], ['vf-batches-modal', 'lg']].forEach(function (pair) {
+    const at = PAGE.indexOf("UIC.openModal('" + pair[0] + "'");
+    const call = at === -1 ? '' : PAGE.slice(at, PAGE.indexOf('});', at));
+    const size = /size:\s*'(lg|xl)'/.exec(call);
+    check(!!size && size[1] === pair[1], 'L-6: ' + pair[0] + " is opened with size: '" + pair[1] + "'", size ? size[1] : 'no size');
+    check(/footer:\s*(false|')/.test(call), 'L-6: ' + pair[0] + ' passes an explicit footer (false or markup), never the default حفظ');
+  });
+
+  /* L-7 */
+  ['loadReport', 'loadExceptions'].forEach(function (name) {
+    const b = fnBody(name) || '';
+    check(b.indexOf("getElementById('vf-range-start')") !== -1 && b.indexOf("getElementById('vf-range-end')") !== -1,
+      'L-7: ' + name + ' reads vf-range-start and vf-range-end');
+  });
+
+  /* L-8 */
+  const style = (/<style>([\s\S]*?)<\/style>/.exec(PAGE) || [])[1] || '';
+  const widths = style.replace(/\/\*[\s\S]*?\*\//g, '').match(/@media[^{]*\((min|max)-width:\s*[^)]+\)/g) || [];
+  check(widths.length > 0 && widths.every(function (q) { return /min-width:\s*(600|900)px/.test(q); }),
+    'L-8: every width query in <style> is min-width 600px or 900px', widths.join(' | '));
+  check(!/max-width\s*:/.test(style.replace(/\/\*[\s\S]*?\*\//g, '')), 'L-8: no max-width query in <style>');
+
+  /* L-9 */
+  const exportBlock = (/window\.ATT_PAGE\s*=\s*\{([\s\S]*?)\};/.exec(PAGE) || [])[1] || '';
+  const exported = (exportBlock.match(/^\s*(\w+):/gm) || []).map(function (s) { return s.replace(/[\s:]/g, ''); });
+  const KEPT = ['openSessionDetail', 'saveNewSession', 'loadAllDays', 'addPunchForDay', 'showReviewFix',
+    'saveReviewFix', 'discardReview', 'addPunchFromException', 'printForgetFor', 'openReportDrill',
+    'resetUpload', 'chooseFormat', 'showAlternatives', 'startCommit', 'undoBatch', 'saveManualEntry'];
+  const ADDED = ['openReportModal', 'openExceptionsModal', 'openReviewModal', 'openImportModal', 'openBatchesModal'];
+  KEPT.forEach(function (n) { check(exported.indexOf(n) !== -1, 'L-9: ATT_PAGE still exports ' + n); });
+  ADDED.forEach(function (n) { check(exported.indexOf(n) !== -1, 'L-9: ATT_PAGE now exports ' + n); });
+  check(exported.length === 21, 'L-9: ATT_PAGE has exactly 21 names', exported.length);
+
+  /* L-10 — the same comparison as §7, re-run here so a layout regression that
+     touches the form string is named in this section too. */
+  const fixturePath = path.join(FIX, 'forget_form_blank.html');
+  if (fs.existsSync(fixturePath)) {
+    const expected = fs.readFileSync(fixturePath, 'utf8');
+    const actual = normaliseForm(extractForgetForm(PAGE)());
+    check(actual === expected, 'L-10: buildForgetFormHtml() with no argument still equals the fixture');
+  } else {
+    check(false, 'L-10: the blank-form fixture is missing');
+  }
+
+  /* L-11 */
+  const pf = fnBody('printForgetForm') || '';
+  check(/features:\s*'width=800,height=600'/.test(pf), "L-11: printForgetForm still passes features: 'width=800,height=600'");
+
+  /* L-12 — controls that are created with a modal are bound after it opens,
+     never in bindEvents(), where they would silently bind to nothing. */
+  const be = fnBody('bindEvents') || '';
+  [['vf-csv-input', 'openImportModal'], ['vf-review-all-btn', 'openReviewModal'], ['vf-batches-all-btn', 'openBatchesModal']]
+    .forEach(function (pair) {
+      const opener = fnBody(pair[1]) || '';
+      check(be.indexOf(pair[0]) === -1 && opener.indexOf("getElementById('" + pair[0] + "')") !== -1,
+        'L-12: ' + pair[0] + ' is bound inside ' + pair[1] + ', not in bindEvents()');
+    });
+}
+
 /* ══ the run ════════════════════════════════════════════════════════════ */
 console.log('\n' + (failed === 0
   ? 'S16b — all attendance checks pass.'
