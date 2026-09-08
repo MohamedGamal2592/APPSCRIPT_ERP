@@ -5072,7 +5072,7 @@ const ValleyFoodsHRModules = (function () {
     var bps = getValleyMfgByproducts_({ mo_uid: moUid }, user, dbId);
     var outputs = (full.outputs || []).map(function (o) {
       var batches = [];
-      try { var br = getValleyProductBatches_({ product_id: o.product_id }, user, dbId); batches = br.batches || []; } catch (e) {}
+      try { var br = getValleyProductBatches_({ product_id: o.product_id, mo_uid: moUid }, user, dbId); batches = br.batches || []; } catch (e) {}
       return Object.assign({}, o, { batches: batches });
     });
     return {
@@ -5087,10 +5087,17 @@ const ValleyFoodsHRModules = (function () {
 
   function getValleyProductBatchesMulti_(data, user, dbId) {
     var ids = Array.isArray(data && data.product_ids) ? data.product_ids : [];
+    /* the document being edited travels with the request, exactly as it does
+       for the single-product call — same add-back, same numbers */
+    var moUid = String((data && data.mo_uid) || '').trim();
+    var invoiceUid = String((data && (data.invoice_uid || data.exclude_invoice_unique_id)) || '').trim();
     var map = {};
     ids.forEach(function (pid) {
       var batches = [];
-      try { var r = getValleyProductBatches_({ product_id: pid }, user, dbId); batches = r.batches || []; } catch (e) {}
+      try {
+        var r = getValleyProductBatches_({ product_id: pid, mo_uid: moUid, invoice_uid: invoiceUid }, user, dbId);
+        batches = r.batches || [];
+      } catch (e) {}
       map[String(pid)] = batches;
     });
     return { status: 'success', batches_by_product: map };
@@ -5338,13 +5345,17 @@ const ValleyFoodsHRModules = (function () {
       (Array.isArray(consumption) ? consumption : []).forEach(function (cm) { need_(cm.batch_uid, cm.qty); });
       var batchIds = Object.keys(needByBatch);
       if (!batchIds.length) return;
+      /* available = current_qty + what THIS order already holds on the sheet.
+         The save is about to rewrite those very footer rows, so the quantity
+         they hold is still this order's to spend — without the add-back,
+         re-saving an unchanged order refuses its own stock. A NEW order holds
+         nothing and adds back nothing. include_empty keeps a batch this order
+         has fully consumed in the map, so a refusal names the real figure. */
+      var myUid = editing && d.mo_uid ? String(d.mo_uid).trim() : '';
       var balanceByBatch = {};
-      try {
-        getAllRecords_(dbId, 'valley_current_products').forEach(function (r) {
-          var u = String(r.unique_id || '').trim();
-          if (u && balanceByBatch[u] === undefined) balanceByBatch[u] = Number(r.current_qty) || 0;
-        });
-      } catch (eBal) {}
+      vfBatchBalance_(dbId, { mo_uid: myUid, include_empty: true }).forEach(function (b) {
+        if (balanceByBatch[b.batch_uid] === undefined) balanceByBatch[b.batch_uid] = b.available;
+      });
       batchIds.forEach(function (buid) {
         var avail = Math.round((balanceByBatch[buid] || 0) * 1000) / 1000;
         if (needByBatch[buid] - avail > 0.001) {
@@ -8012,40 +8023,18 @@ const ValleyFoodsHRModules = (function () {
   }
 
   /* ---------- P2: batch availability for a product ----------
-   * available(batch) = current_qty
-   *
-   * current_qty is the NET balance and it is TRUSTED — sales and sales returns
-   * are already inside it, so nothing is subtracted here. The add-back for the
-   * document being edited arrives in the next commit. */
+   * One line, one authority:
+   *     available(batch, document) = current_qty(batch) + held(document, batch)
+   * See vfBatchBalance_. Nothing is subtracted here. */
   function getValleyProductBatches_(data, user, dbId) {
     var pid = String((data && data.product_id) || '').trim();
     if (!pid) throw new Error('معرّف المنتج مطلوب');
-    var excludeInv = String((data && data.exclude_invoice_unique_id) || '').trim();
-    var batches = {};
-    try {
-      getAllRecords_(dbId, 'valley_current_products').forEach(function (r) {
-        if (String(r.product_id || '').trim() !== pid) return;
-        var uid = String(r.unique_id || '').trim();
-        if (!uid) return;
-        batches[uid] = {
-          batch_uid: uid,
-          lot: String(r.transaction_code || '-'),
-          current_qty: Number(r.current_qty) || 0,
-          unit_cost: Number(r.unit_cost) || 0,
-          transaction_date: r.transaction_date || '',
-          unit: String(r.unit || '')
-        };
-      });
-    } catch (e) {}
-
-    var list = Object.keys(batches).map(function (k) { return batches[k]; }).filter(function (b) { return b.current_qty > 0; });
-    list.forEach(function (b) { b.available = Math.max(0, b.current_qty); });
-    /* order oldest-first by transaction_date */
-    list.sort(function (a, b) {
-      var da = a.transaction_date ? new Date(a.transaction_date).getTime() : 0;
-      var db = b.transaction_date ? new Date(b.transaction_date).getTime() : 0;
-      return da - db;
-    });
+    /* invoice_uid is canonical. exclude_invoice_unique_id stays accepted as an
+       alias so a half-deployed client cannot break — but its MEANING changed
+       from *exclude* to *add back*, which is why the name had to change too. */
+    var invoiceUid = String((data && (data.invoice_uid || data.exclude_invoice_unique_id)) || '').trim();
+    var moUid = String((data && data.mo_uid) || '').trim();
+    var list = vfBatchBalance_(dbId, { product_id: pid, mo_uid: moUid, invoice_uid: invoiceUid });
 
     /* U-46. batch_uid, lot, current_qty, available, transaction_date and unit
        all stay — FIFO allocation and the batch modal need every one of them.
@@ -8169,16 +8158,18 @@ const ValleyFoodsHRModules = (function () {
     /* current quantities per batch for the requested products */
     var requestedProducts = {};
     cleanLines.forEach(function (ln) { requestedProducts[String(ln.product_id)] = true; });
+    /* available = current_qty + what THIS invoice already holds on the sheet.
+       Its allocations are rewritten by this save, so that quantity is still the
+       invoice's to spend. A new invoice holds nothing and adds back nothing. */
     var batchCurrent = {};
-    try {
-      getAllRecords_(dbId, 'valley_current_products').forEach(function (r) {
-        var p = String(r.product_id || '').trim();
-        if (!requestedProducts[p]) return;
-        var uid = String(r.unique_id || '').trim();
-        if (!uid) return;
-        batchCurrent[uid] = { pid: p, lot: String(r.transaction_code || ''), current: Number(r.current_qty) || 0 };
-      });
-    } catch (e3) {}
+    vfBatchBalance_(dbId, {
+      invoice_uid: editing ? String(d.invoice_unique_id || '').trim() : '',
+      include_empty: true
+    }).forEach(function (b) {
+      if (!requestedProducts[b.product_id]) return;
+      if (batchCurrent[b.batch_uid] !== undefined) return;
+      batchCurrent[b.batch_uid] = { pid: b.product_id, lot: b.lot, current: b.available, unit_cost: b.unit_cost };
+    });
 
     /* No duplicate batches: same batch_uid may not appear in two lines (FIFO per-batch) */
     var seenBatch = {};
