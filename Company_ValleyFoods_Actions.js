@@ -8267,18 +8267,6 @@ const ValleyFoodsHRModules = (function () {
       allocByLine.push({ line_uid: ln.unique_id, allocations: als });
     });
 
-    /* M2: header total_inventory_cost = Σ consumption value */
-    var totalInventoryCost = 0;
-    cleanLines.forEach(function (ln) { totalInventoryCost += (ln.line_material_cost || 0); });
-    /* M3: output costing — simple average across outputs */
-    var totalOutQty = 0;
-    outputs.forEach(function (o) { totalOutQty += Number(o.qty || 0); });
-    var avgCostUnit = totalOutQty > 0 ? totalInventoryCost / totalOutQty : 0;
-    outputs.forEach(function (o) {
-      o.cost_unit = avgCostUnit;
-      o.total_cost = Number(o.qty || 0) * avgCostUnit;
-    });
-
     executeWithLock_(function () {
       var sheetInv = getSheet_(FIN_SALES_INV_SHEET, dbId);
       var invHeaders = getHeaders_(sheetInv);
