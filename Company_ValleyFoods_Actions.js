@@ -7881,6 +7881,136 @@ const ValleyFoodsHRModules = (function () {
     try { return getAllRecords_(dbId, FIN_SALES_LINES_SHEET); } catch (e) { return []; }
   }
 
+  /**
+   * The ONE availability figure in the system.
+   *
+   * valley_current_products.current_qty is the net balance and it is TRUSTED.
+   * The sheet already nets purchases, production, by-products, sales, returns,
+   * consumption and warehouse movement, so NOTHING here subtracts from it — a
+   * second subtraction is a double count, and four different second subtractions
+   * is what this function replaces.
+   *
+   * The only adjustment is the add-back. A document being edited already has its
+   * own committed quantity subtracted inside current_qty, and the save is about
+   * to rewrite those very rows, so that quantity is still the document's to
+   * spend. Without it, re-saving an unchanged order refuses its own stock.
+   *
+   *     available(batch, document) = current_qty(batch) + held(document, batch)
+   *
+   * opts: { product_id?, mo_uid?, invoice_uid?, include_empty? }
+   *   product_id     — narrow to one product; omitted means the whole warehouse
+   *   mo_uid         — the manufacturing order being edited; held comes from its footers
+   *   invoice_uid    — the sales invoice being edited; held comes from its allocations
+   *   include_empty  — keep batches with available <= 0. The OFFER filter is
+   *                    `available > 0` (a batch this document consumed entirely
+   *                    must stay on its own form or the document cannot be
+   *                    edited), but a save guard needs every batch it was asked
+   *                    about so its refusal can name the real figure.
+   *
+   * Returns a list, oldest-first by transaction_date — the FIFO allocator
+   * depends on that order — of
+   *   { batch_uid, lot, product_id, product_name, unit, transaction_date,
+   *     unit_cost, current_qty, held, available }
+   * Never strips unit_cost: the cost gate applies at the endpoint, to what
+   * leaves the server, not to what the server computes with.
+   */
+  function vfBatchBalance_(dbId, opts) {
+    var o = opts || {};
+    var pid = String(o.product_id == null ? '' : o.product_id).trim();
+    var moUid = String(o.mo_uid || '').trim();
+    var invUid = String(o.invoice_uid || '').trim();
+
+    /* held is 0 for a new document: no mo_uid and no invoice_uid, no add-back. */
+    var held = moUid ? vfMfgHeldByBatch_(dbId, moUid)
+      : (invUid ? vfSalesHeldByBatch_(dbId, invUid) : {});
+
+    var list = [];
+    try {
+      getAllRecords_(dbId, 'valley_current_products').forEach(function (r) {
+        var uid = String(r.unique_id || '').trim();
+        if (!uid) return;
+        var rp = String(r.product_id == null ? '' : r.product_id).trim();
+        if (pid && rp !== pid) return;
+        var cur = Number(r.current_qty) || 0;
+        var h = Number(held[uid]) || 0;
+        list.push({
+          batch_uid: uid,
+          lot: String(r.transaction_code || '-'),
+          product_id: rp,
+          product_name: String(r.product || '').trim(),
+          unit: String(r.unit || ''),
+          transaction_date: r.transaction_date || '',
+          unit_cost: Number(r.unit_cost) || 0,
+          current_qty: cur,
+          held: h,
+          available: Math.round((cur + h) * 1000) / 1000
+        });
+      });
+    } catch (e) {}
+
+    if (!o.include_empty) list = list.filter(function (b) { return b.available > 0; });
+    list.sort(function (a, b) {
+      var da = a.transaction_date ? new Date(a.transaction_date).getTime() : 0;
+      var db = b.transaction_date ? new Date(b.transaction_date).getTime() : 0;
+      return da - db;
+    });
+    return list;
+  }
+
+  /* batch uid -> quantity THIS manufacturing order already holds on the sheet.
+   * A consumption footer is parented on one of the order's output rows
+   * (valley_manufacture_header_products.valley_manufacture_header_id), and the
+   * save's `outUid || moUid` fallback can parent one directly on the MO uid, so
+   * both are accepted. */
+  function vfMfgHeldByBatch_(dbId, moUid) {
+    var held = {};
+    moUid = String(moUid || '').trim();
+    if (!moUid) return held;
+    var mine = {};
+    mine[moUid] = true;
+    try {
+      getAllRecords_(dbId, MFG_ORDER_PRODUCTS_SHEET).forEach(function (o) {
+        if (String(o.valley_manufacture_header_id || '').trim() !== moUid) return;
+        var u = String(o.unique_id || '').trim();
+        if (u) mine[u] = true;
+      });
+    } catch (e) {}
+    try {
+      getAllRecords_(dbId, MFG_CONSUMPTION_SHEET).forEach(function (c) {
+        if (!mine[String(c.valley_manufacture_header_product_id || '').trim()]) return;
+        var b = String(c.item || '').trim();
+        if (!b) return;
+        held[b] = Math.round(((held[b] || 0) + (Number(c.qty) || 0)) * 1000) / 1000;
+      });
+    } catch (e) {}
+    return held;
+  }
+
+  /* batch uid -> quantity THIS sales invoice already holds on the sheet. An
+   * allocation is reached through its line's valley_sales_header_id. */
+  function vfSalesHeldByBatch_(dbId, invoiceUid) {
+    var held = {};
+    invoiceUid = String(invoiceUid || '').trim();
+    if (!invoiceUid) return held;
+    var mine = {};
+    try {
+      getAllRecords_(dbId, FIN_SALES_LINES_SHEET).forEach(function (l) {
+        if (String(l.valley_sales_header_id || '').trim() !== invoiceUid) return;
+        var u = String(l.unique_id || '').trim();
+        if (u) mine[u] = true;
+      });
+    } catch (e) {}
+    try {
+      getAllRecords_(dbId, 'valley_sales_product_stock').forEach(function (a) {
+        if (!mine[String(a.valley_sales_products_id || '').trim()]) return;
+        var b = String(a.product_unique_id || '').trim();
+        if (!b) return;
+        held[b] = Math.round(((held[b] || 0) + (Number(a.product_qty) || 0)) * 1000) / 1000;
+      });
+    } catch (e) {}
+    return held;
+  }
+
   /* ---------- P2: batch availability for a product ----------
    * available(batch) = current_qty
    *
