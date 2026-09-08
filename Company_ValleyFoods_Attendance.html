@@ -116,6 +116,9 @@
     var VIEW_MODE = 'calendar';
     var TABLE_ALL = false;
     var CURRENT_DAY = null;
+    /* The toolbar's من/إلى follows the month the calendar shows until the
+       user edits either field; after that it is theirs (D-2). */
+    var RANGE_TOUCHED = false;
     /* The roster, fetched once (D-22) instead of riding on a punch read. */
     var EMPLOYEES = null;
     /* The two work queues. */
@@ -149,6 +152,7 @@
       });
       document.getElementById('vf-att-content').innerHTML = renderContent();
       bindEvents();
+      syncRangeToMonth();
       loadSessions();
       loadReview();
       if (CAN_WRITE) loadBatches();
@@ -169,9 +173,7 @@
         (CAN_WRITE ? renderUploadSection() : '') +
         (CAN_WRITE ? renderManualSection() : '') +
         renderReviewSection() +
-        renderExceptionsSection() +
         renderForgetSection() +
-        renderReportSection() +
         (CAN_WRITE ? renderBatchesSection() : '') +
       '</div>';
     }
@@ -254,6 +256,19 @@
     function monthBounds(y, m) {
       var last = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
       return { from: y + '-' + pad2_(m + 1) + '-01', to: y + '-' + pad2_(m + 1) + '-' + pad2_(last), lastDay: last };
+    }
+
+    /* The report and the exceptions queue describe the month on screen —
+       what a filter above a calendar is expected to mean — unless the user
+       has set the range by hand. End = the earlier of month-end and today. */
+    function syncRangeToMonth() {
+      if (RANGE_TOUCHED) return;
+      var b = monthBounds(VIEW_YEAR, VIEW_MONTH);
+      var today = todayStr();
+      var start = document.getElementById('vf-range-start');
+      var end = document.getElementById('vf-range-end');
+      if (start) start.value = b.from;
+      if (end) end.value = (b.to < today) ? b.to : today;
     }
 
     function loadSessions() {
@@ -352,6 +367,7 @@
       var m = VIEW_MONTH + delta;
       VIEW_YEAR += Math.floor(m / 12);
       VIEW_MONTH = ((m % 12) + 12) % 12;
+      syncRangeToMonth();
       loadSessions();
     }
 
@@ -1225,22 +1241,27 @@
     }
 
     /* ---- missing punches (D-26) ---- */
-    function renderExceptionsSection() {
-      return card('غياب وبصمات ناقصة',
-        '<div class="vf-form-row">' +
-          '<div class="vf-form-group"><label>من تاريخ</label><input type="date" id="vf-exc-start" class="vf-input" value="' + esc(monthStartStr()) + '"></div>' +
-          '<div class="vf-form-group"><label>إلى تاريخ</label><input type="date" id="vf-exc-end" class="vf-input" value="' + esc(todayStr()) + '"></div>' +
-          '<div class="vf-form-group"><button id="vf-exc-btn" class="btn btn-primary">عرض</button></div>' +
-        '</div>' +
-        '<div id="vf-exc-body"></div>');
+    /* Opening IS the request: the range is the toolbar's, and the table
+       renders into the modal body. The loud load draws its skeleton into
+       #vf-exc-body, which exists only once this modal is open. */
+    function openExceptionsModal() {
+      var start = document.getElementById('vf-range-start');
+      var end = document.getElementById('vf-range-end');
+      UIC.openModal('vf-exc-modal', {
+        title: 'غياب وبصمات ناقصة · من ' + esc(start ? start.value : '') + ' إلى ' + esc(end ? end.value : ''),
+        size: 'xl',
+        body: '<div id="vf-exc-body"></div>',
+        footer: false
+      });
+      loadExceptions();
     }
 
     /* quiet: refresh in the background with no blocking overlay, for a
        user who has already seen the change and must not be interrupted
        to confirm it. */
     function loadExceptions(quiet) {
-      var from = document.getElementById('vf-exc-start').value;
-      var to = document.getElementById('vf-exc-end').value;
+      var from = document.getElementById('vf-range-start').value;
+      var to = document.getElementById('vf-range-end').value;
       if (!from || !to) { UIC.toast('اختر الفترة', 'error'); return; }
       if (!quiet) UIC.readSkeleton('vf-exc-body');
       companyCall('get_attendance_exceptions', { from: from, to: to, loadAll: true })
@@ -1312,20 +1333,23 @@
     /* ================= REPORT ================= */
     /* Renamed: it reports حضور AND غياب, and it now actually can, because the
        rows come from the roster rather than from the punches. */
-    function renderReportSection() {
-      return card('تقرير الحضور والغياب',
-        '<div class="vf-form-row">' +
-          '<div class="vf-form-group"><label>من تاريخ</label><input type="date" id="vf-report-start" class="vf-input" value="' + esc(monthStartStr()) + '"></div>' +
-          '<div class="vf-form-group"><label>إلى تاريخ</label><input type="date" id="vf-report-end" class="vf-input" value="' + esc(todayStr()) + '"></div>' +
-          '<div class="vf-form-group"><button id="vf-show-report-btn" class="btn btn-primary">عرض التقرير</button></div>' +
-        '</div>' +
-        '<div id="vf-report-table"></div>' +
-        '<div id="vf-report-drill"></div>');
+    /* Opening IS the request. renderReportTable and openReportDrill render
+       into the two ids below, which now live in the modal body. */
+    function openReportModal() {
+      var start = document.getElementById('vf-range-start');
+      var end = document.getElementById('vf-range-end');
+      UIC.openModal('vf-report-modal', {
+        title: 'تقرير الحضور والغياب · من ' + esc(start ? start.value : '') + ' إلى ' + esc(end ? end.value : ''),
+        size: 'xl',
+        body: '<div id="vf-report-table"></div><div id="vf-report-drill"></div>',
+        footer: false
+      });
+      loadReport();
     }
 
     function loadReport() {
-      var start = document.getElementById('vf-report-start').value;
-      var end = document.getElementById('vf-report-end').value;
+      var start = document.getElementById('vf-range-start').value;
+      var end = document.getElementById('vf-range-end').value;
       if (!start || !end) { UIC.toast('اختر التاريخ', 'error'); return; }
       REPORT_RANGE = { start: start, end: end };
       UIC.readSkeleton('vf-report-drill');
@@ -1593,15 +1617,21 @@
       if (nextBtn) nextBtn.addEventListener('click', function () { shiftMonth(1); });
       var todayBtn = document.getElementById('vf-month-today');
       if (todayBtn) todayBtn.addEventListener('click', function () {
-        var n = new Date(); VIEW_YEAR = n.getFullYear(); VIEW_MONTH = n.getMonth(); loadSessions();
+        var n = new Date(); VIEW_YEAR = n.getFullYear(); VIEW_MONTH = n.getMonth();
+        syncRangeToMonth();
+        loadSessions();
       });
+      var rangeStart = document.getElementById('vf-range-start');
+      if (rangeStart) rangeStart.addEventListener('input', function () { RANGE_TOUCHED = true; });
+      var rangeEnd = document.getElementById('vf-range-end');
+      if (rangeEnd) rangeEnd.addEventListener('input', function () { RANGE_TOUCHED = true; });
       var viewBtn = document.getElementById('vf-view-toggle');
       if (viewBtn) viewBtn.addEventListener('click', moreItem(toggleView));
 
       var openReportBtn = document.getElementById('vf-open-report');
-      if (openReportBtn) openReportBtn.addEventListener('click', function () { jumpTo('vf-report-table'); });
+      if (openReportBtn) openReportBtn.addEventListener('click', openReportModal);
       var openExcBtn = document.getElementById('vf-open-exc');
-      if (openExcBtn) openExcBtn.addEventListener('click', function () { jumpTo('vf-exc-body'); });
+      if (openExcBtn) openExcBtn.addEventListener('click', openExceptionsModal);
       var openReviewBtn = document.getElementById('vf-open-review');
       if (openReviewBtn) openReviewBtn.addEventListener('click', function () { jumpTo('vf-review-body'); });
       var openImportBtn = document.getElementById('vf-open-import');
@@ -1620,12 +1650,6 @@
 
       var printBtn = document.getElementById('vf-print-forget-btn');
       if (printBtn) printBtn.addEventListener('click', printForgetForm);
-
-      var reportBtn = document.getElementById('vf-show-report-btn');
-      if (reportBtn) reportBtn.addEventListener('click', loadReport);
-
-      var excBtn = document.getElementById('vf-exc-btn');
-      if (excBtn) excBtn.addEventListener('click', loadExceptions);
 
       var reviewAllBtn = document.getElementById('vf-review-all-btn');
       if (reviewAllBtn) reviewAllBtn.addEventListener('click', function () {
