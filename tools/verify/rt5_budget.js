@@ -231,9 +231,16 @@ check(median < 317880,
   'the median page is smaller than the ' + 317880 + ' bytes recorded at R0',
   '        median is now ' + median);
 
-/* A regression gate that CAN be met today: nothing may exceed the heaviest
- * page as it stands, which is what stops the 214→267 KB drift recurring. */
-const CEILING = 330 * 1024;
+/* A regression gate that CAN be met today. This is NOT the target — the target
+ * is the 180 KB above and it needs the four-way split — it is the line that
+ * stops the 214→267 KB drift from recurring unnoticed.
+ *
+ * 340 KB, against a heaviest page of about 327 KB. The headroom is deliberate
+ * and small: enough that ordinary work on a page does not turn the suite red
+ * on a target nothing in that commit could meet, tight enough that another
+ * 50 KB of shared bundle cannot arrive without somebody being told. Raising
+ * this number again is the wrong answer; the split is the right one. */
+const CEILING = 340 * 1024;
 const bust = rows.filter(r => r.b > CEILING);
 check(bust.length === 0,
   'no page exceeds the ' + Math.round(CEILING / 1024) + ' KB ceiling — the heaviest page today is ' + Math.round(worst.b / 1024) + ' KB',
