@@ -54,8 +54,8 @@ or that a save felt instant.
 | Heaviest page | 425,106 | **327 KB** | 5 |
 | Blocking overlay call sites | 263 | **158**, all writes | 1 |
 | Read sites drawing a skeleton | 0 | **106** | 1 |
-| Pages with optimistic save | 2 | **8** | 2 |
-| Pages with a live watch | 22 | **28** | 3 |
+| Pages with the instant-close optimistic save | 2 | **7** | 2 |
+| Pages where another device's change arrives on its own | 22 | **27** | 3 |
 | Companies with `get_page_versions` | 1 of 4 | **4 of 4** | 3 |
 | Direct sheet writes that stamp their table | **0 of 133** | **132 of 133** | 3 |
 | Write actions returning their record | 54 | **60** (40 exempt, 26 pending) | 2 |
