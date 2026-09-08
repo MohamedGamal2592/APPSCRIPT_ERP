@@ -43,6 +43,10 @@ function getSheetsReadCount_() { return _sheetsReadCount_; }
 function resetRecordCache_() {
   for (const k in _recordCache_) delete _recordCache_[k];
   for (const k in _ensuredSheets_) delete _ensuredSheets_[k];
+  // The id high-water mark is request-scoped by construction: it only ever
+  // raises the floor above what the target table already says, and a value from
+  // a previous request must never be allowed to do even that.
+  for (const k in _idHighWater_) delete _idHighWater_[k];
   _recordCacheDisabled_ = false;
   _sheetsReadCount_ = 0;
   for (const k in _pkIndexCache_) delete _pkIndexCache_[k];
@@ -453,47 +457,60 @@ function appendRowWithRetry_(sheet, values, maxRetries = 3, delayMs = 1000) {
 }
 
 /**
- * Internal counter logic — MUST be called while already holding the script lock
+ * The id floor for allocations already made in THIS execution.
+ *
+ * Several handlers allocate ids in a LOOP and write the rows AFTERWARDS in one
+ * batched setValues — the work-centre and by-product loops in
+ * saveValleyMfgOrder_ are the clearest examples, and getNextIdBatch_'s callers
+ * do the same thing deliberately. `max(id) + 1` on its own hands every
+ * iteration of such a loop the SAME id, because no row has landed in between:
+ * the table each call reads is identical. That is silent, and it is the one way
+ * deriving ids from the table breaks production.
+ *
+ * So an allocation is floored by BOTH the live table and this execution's
+ * high-water mark for that (spreadsheet, table, id column):
+ *
+ *     next = max(maxIdOf_(table), highWater) + 1
+ *
+ * The target table is still read on EVERY allocation, so the id remains
+ * `max(id in the target table) + 1` and a row another execution appended
+ * between two of our allocations is seen. The memo can only ever RAISE the
+ * floor; it can never return a value the sheet does not already justify. It is
+ * request-scoped and cleared by resetRecordCache_() at the top of every
+ * request, so it can never outlive the execution that filled it.
+ */
+const _idHighWater_ = {};
+
+function idHighWaterKey_(dbId, tableName, idColumnName) {
+  return String(dbId) + '|' + String(tableName).trim().toLowerCase() + '|' +
+         String(idColumnName || 'id').trim().toLowerCase();
+}
+
+/**
+ * Internal id logic — MUST be called while already holding the script lock
  * (i.e. from getNextId_ or addRecord_, never standalone).
- * Defensively creates the ID_Counter sheet if it does not exist yet.
+ *
+ * The id is ALWAYS `max(id in the target table) + 1`, floored by the
+ * in-execution high-water mark above. `ID_Counter` is not read, not written and
+ * not created here.
+ *
+ * Why the counter is gone: this function used to return the counter's own value
+ * whenever the counter ran AHEAD of the table (`current > tableMax` → return
+ * `current`). The table was then never consulted for the answer, so a counter
+ * that had drifted — and the owner reports it has — handed out ids the data
+ * does not justify. `max(id) + 1` cannot drift, because it is measured from the
+ * only thing that matters.
  */
 function getNextIdUnderLock_(dbId, tableName, idColumnName = 'id') {
   const ss = getSpreadsheet_(dbId);
-  let sheet = ss.getSheetByName('ID_Counter');
-  if (!sheet) {
-    sheet = ss.insertSheet('ID_Counter');
-    noteMutation_();
-    sheet.appendRow(['sheet_name', 'next_id']);
-    noteMutation_();
-  }
-  const headers = getHeaders_(sheet);
-  countSheetRead_();
-  const data = sheet.getDataRange().getValues();
-  const nameIdx = headers.findIndex(h => String(h).trim().toLowerCase() === 'sheet_name');
-  const nextIdx = headers.findIndex(h => String(h).trim().toLowerCase() === 'next_id');
-  if (nameIdx === -1 || nextIdx === -1) {
-    throw new Error('ID_Counter sheet missing required columns (sheet_name, next_id)');
-  }
   /* One column, not the whole sheet — see maxIdOf_. This runs under the global
      script lock, so its size is every other user's queue time. */
   const tableMax = maxIdOf_(ss.getSheetByName(tableName), idColumnName);
-  const safeNext = tableMax + 1;
-  for (let i = 1; i < data.length; i++) {
-    if (String(data[i][nameIdx]).toLowerCase() === tableName.toLowerCase()) {
-      const current = Number(data[i][nextIdx]);
-      if (current <= tableMax) {
-        sheet.getRange(i + 1, nextIdx + 1).setValue(safeNext + 1);
-        noteMutation_();
-        return safeNext;
-      }
-      sheet.getRange(i + 1, nextIdx + 1).setValue(current + 1);
-      noteMutation_();
-      return current;
-    }
-  }
-  sheet.appendRow([tableName, safeNext + 1]);
-  noteMutation_();
-  return safeNext;
+  const key = idHighWaterKey_(dbId, tableName, idColumnName);
+  const seen = Number(_idHighWater_[key]) || 0;
+  const next = (tableMax > seen ? tableMax : seen) + 1;
+  _idHighWater_[key] = next;
+  return next;
 }
 
 /**
@@ -535,44 +552,17 @@ function getNextIdBatch_(dbId, tableName, count, idColumnName = 'id') {
   
   return executeWithLock_(function () {
     const ss = getSpreadsheet_(dbId);
-    let sheet = ss.getSheetByName('ID_Counter');
-    if (!sheet) {
-      sheet = ss.insertSheet('ID_Counter');
-      noteMutation_();
-      sheet.appendRow(['sheet_name', 'next_id']);
-      noteMutation_();
-    }
-    const headers = getHeaders_(sheet);
-    countSheetRead_();
-    const data = sheet.getDataRange().getValues();
-    const nameIdx = headers.findIndex(h => String(h).trim().toLowerCase() === 'sheet_name');
-    const nextIdx = headers.findIndex(h => String(h).trim().toLowerCase() === 'next_id');
-    if (nameIdx === -1 || nextIdx === -1) {
-      throw new Error('ID_Counter sheet missing required columns (sheet_name, next_id)');
-    }
-    
     /* One column, not the whole sheet — see maxIdOf_. */
     const tableMax = maxIdOf_(ss.getSheetByName(tableName), idColumnName);
-    
-    // Calculate starting ID and next counter value
-    const startId = tableMax + 1;
-    const nextCounter = startId + count;
-    
-    // Update or create counter in ID_Counter sheet
-    let found = false;
-    for (let i = 1; i < data.length; i++) {
-      if (String(data[i][nameIdx]).toLowerCase() === tableName.toLowerCase()) {
-        sheet.getRange(i + 1, nextIdx + 1).setValue(nextCounter);
-        noteMutation_();
-        found = true;
-        break;
-      }
-    }
-    if (!found) {
-      sheet.appendRow([tableName, nextCounter]);
-      noteMutation_();
-    }
-    
+    /* Same floor as getNextIdUnderLock_, and the same reason: the caller writes
+       `count` rows AFTER this returns, so a second batch (or a single
+       allocation) taken before those rows land must not see the same table max
+       twice. The counter bookkeeping this used to do is gone — the number was
+       already derived from tableMax, so only the write to ID_Counter is lost. */
+    const key = idHighWaterKey_(dbId, tableName, idColumnName);
+    const seen = Number(_idHighWater_[key]) || 0;
+    const startId = (tableMax > seen ? tableMax : seen) + 1;
+    _idHighWater_[key] = startId + count - 1;
     return startId;
   });
 }
