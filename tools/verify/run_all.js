@@ -82,6 +82,7 @@ const STEPS = [
   ['rt2_record_replies.js', 'RT2a — every write action returns its record or declares why not'],
   ['rt2_queue.js', 'RT2b — a refused save rolls back exactly; a dropped one is queued'],
   ['rt3_stamp_coverage.js', 'RT3 — every direct sheet write bumps the version a watcher reads'],
+  ['rt4_cache.js', 'RT4 — cache-first with revalidation; a hostile store degrades to a fetch'],
   ['rt8_search_scope.js', 'RT8 — no search box over a truncated list stays silent about it']
 ];
 

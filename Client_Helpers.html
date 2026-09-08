@@ -606,24 +606,133 @@ if (PERF.enabled()) {
   });
 }
 
-/* ── Part 3: Idle-time prefetch (shared by all companies) ──────────── */
-var __prefetchTimer = null;
+/* ── [RT-7] Prefetch on intent (M4), replacing the fixed two-second timer ──
+ *
+ * schedulePrefetch fired a companyCall('prefetch_refs') two seconds after every
+ * page load, for every user, whether or not they were about to open a form. Two
+ * seconds is a guess: too early and it competes with the page's own first
+ * fetch; too late and the user has already clicked. And on a page nobody opens
+ * a form on, it is a request that buys nothing.
+ *
+ * Intent is a better signal than a timer, and the browser gives it away for
+ * free: hovering a link, touching it, or simply finishing the first paint with
+ * nothing else to do.
+ *
+ *   requestIdleCallback after first paint  → warm this page's references
+ *   mouseenter / touchstart on a nav link  → warm the page being considered
+ *   UIC.prefetchOnIntent(el, fn)           → anything a page wants, row-level
+ *
+ * Every path is deduplicated, capped at three in flight, and abandoned the
+ * moment the tab is hidden — a prefetch is a bet on what the user will do next,
+ * and a user who has switched tabs is not doing anything next.
+ *
+ * The exported name schedulePrefetch is unchanged: about forty call sites use
+ * it and none of them needed to learn a new one.
+ */
 var __prefetchDone = false;
+var __prefetchInFlight = 0;
+var __prefetchSeen = {};
+var __prefetchIdle = null;
 
+var PREFETCH_MAX_INFLIGHT = 3;
+
+function __prefetchHidden() {
+  try { return document.visibilityState === 'hidden'; } catch (e) { return false; }
+}
+
+/**
+ * Run `fn` once, if we are under the in-flight cap and the tab is visible.
+ * `token` deduplicates: the same intent signalled ten times costs one request.
+ */
+function prefetchOnce(token, fn) {
+  if (__prefetchHidden()) return;
+  if (__prefetchSeen[token]) return;
+  if (__prefetchInFlight >= PREFETCH_MAX_INFLIGHT) return;
+  __prefetchSeen[token] = true;
+  __prefetchInFlight++;
+  var done = function () { __prefetchInFlight = Math.max(0, __prefetchInFlight - 1); };
+  try {
+    var p = fn();
+    if (p && typeof p.then === 'function') p.then(done, function () { done(); delete __prefetchSeen[token]; });
+    else done();
+  } catch (e) { done(); delete __prefetchSeen[token]; }
+}
+
+/** The company's shared reference data — what the old timer fetched. */
+function prefetchRefs() {
+  prefetchOnce('refs', function () {
+    if (typeof companyCall !== 'function') return null;
+    return companyCall('prefetch_refs', {}).catch(function () {});
+  });
+}
+
+/**
+ * Kept for the ~40 existing callers. It no longer schedules on a timer: it
+ * asks the browser for a moment when nothing else is happening, and falls back
+ * to a short timeout where requestIdleCallback does not exist (Safari).
+ */
 function schedulePrefetch() {
   if (__prefetchDone) return;
-  clearTimeout(__prefetchTimer);
-  __prefetchTimer = setTimeout(function () {
-    __prefetchDone = true;
-    try {
-      if (typeof companyCall === 'function') {
-        companyCall('prefetch_refs', {}).catch(function () {});
-      } else if (window.API && API.call && SESSION && SESSION.token) {
-        // Fallback if companyCall not in scope — use generic company_action path is not needed; prefetch is company-specific so require companyCall
-      }
-    } catch (e) {}
-  }, 2000);
+  __prefetchDone = true;
+  var run = function () { prefetchRefs(); };
+  try {
+    if (typeof window.requestIdleCallback === 'function') {
+      __prefetchIdle = window.requestIdleCallback(run, { timeout: 3000 });
+      return;
+    }
+  } catch (e) {}
+  setTimeout(run, 1200);
 }
+
+/**
+ * Attach an intent listener. `fn` runs at most once for this token, on the
+ * first hover or touch — the two signals that reliably precede a click by
+ * enough time to matter and do not fire when the user is merely scrolling past.
+ */
+UIC.prefetchOnIntent = function (el, token, fn) {
+  var node = (typeof el === 'string') ? document.getElementById(el) : el;
+  if (!node || !node.addEventListener || typeof fn !== 'function') return;
+  var go = function () { prefetchOnce(token, fn); };
+  try {
+    node.addEventListener('mouseenter', go, { once: true, passive: true });
+    node.addEventListener('touchstart', go, { once: true, passive: true });
+  } catch (e) {
+    /* Older browsers: no options object. One listener each, still harmless
+       because prefetchOnce is idempotent per token. */
+    node.addEventListener('mouseenter', go);
+    node.addEventListener('touchstart', go);
+  }
+};
+
+/* Nav links are the one thing on every page worth wiring automatically:
+ * hovering one is as close to a declaration of intent as this app gets. */
+UIC.wireNavPrefetch = function () {
+  var links;
+  try { links = document.querySelectorAll('a.nav-item, a.nav-dropdown-item'); } catch (e) { return; }
+  if (!links) return;
+  Array.prototype.slice.call(links).forEach(function (a) {
+    var href = a.getAttribute && a.getAttribute('href');
+    if (!href || href === '#') return;
+    UIC.prefetchOnIntent(a, 'nav:' + href, function () {
+      /* The page being considered shares this company's reference data, so
+         warming it now is the part of that navigation that can be paid for
+         early. The page's own document still has to be fetched on click —
+         that is what the soft-navigation work addresses, not this. */
+      return (typeof companyCall === 'function') ? companyCall('prefetch_refs', {}).catch(function () {}) : null;
+    });
+  });
+};
+
+/* A hidden tab is not about to click anything. */
+try {
+  document.addEventListener('visibilitychange', function () {
+    if (!__prefetchHidden()) return;
+    if (__prefetchIdle && typeof window.cancelIdleCallback === 'function') {
+      try { window.cancelIdleCallback(__prefetchIdle); } catch (e) {}
+      __prefetchIdle = null;
+    }
+  });
+} catch (e) {}
 
 
 /* Injects a small session bar (sessions / views / logout) into containerId.

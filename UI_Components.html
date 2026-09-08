@@ -1421,6 +1421,15 @@ UIC._renderChunked = function(id, offset){
        * has never been produced. Marking it here gives every list page the
        * metric without eighty-five separate edits. */
       try { if (window.PERF && PERF.mark) PERF.mark('first_data_render'); } catch (e) {}
+      /* [RT-7] Keep this paint, so returning to this page draws it instantly
+       * next time instead of showing a shimmer for the length of a full
+       * document load plus a full sheet read. Saved HERE rather than where
+       * dataTable returns, because there the tbody is still empty — the rows
+       * arrive through this chunked fill. */
+      try {
+        var wrap = document.getElementById(id);
+        if (wrap && wrap.outerHTML && UIC.Cache) UIC.Cache.saveLastPaint(wrap.outerHTML);
+      } catch (e) {}
       if (st.opts && st.opts.onRendered) { try{ st.opts.onRendered(id); }catch(e){} }
     }
   }
@@ -1760,6 +1769,26 @@ UIC.readSkeleton = function (target, opts) {
     return true;
   }
   var kind = o.kind || 'table';
+  /* [RT-7 / M5] If this page painted a list recently, show THAT instead of a
+   * shimmer: it is the same shape, in the same place, with the real numbers
+   * the user last saw, and it costs nothing to draw. The real fetch replaces
+   * it a moment later.
+   *
+   * It is drawn INERT (.rt-stale: pointer-events none, dimmed). These rows
+   * carry action buttons whose onclick names a record id, and a click on a row
+   * that has since been deleted or renumbered would act on the wrong record.
+   * This is a picture of what was there, not a list you can use. */
+  if (kind === 'table' && o.stale !== false) {
+    var prev = null;
+    try { prev = UIC.Cache && UIC.Cache.lastPaint(); } catch (e) { prev = null; }
+    if (prev) {
+      el.innerHTML = '<div class="rt-skel rt-stale" aria-busy="true" aria-live="polite">' +
+        '<div class="pt-loading"><div class="pt-spin"></div><span>جاري تحديث البيانات…</span></div>' +
+        prev + '</div>';
+      UIC._skelPainted.push(el);
+      return true;
+    }
+  }
   if (kind === 'form') UIC.formSkeleton(el, o.fields);
   else if (kind === 'card') UIC.cardSkeleton(el, o.cards);
   else UIC.tableSkeleton(el, o.headers, o.rows);
@@ -3917,6 +3946,13 @@ UIC.appShell = function (containerId, o) {
   /* Initialise drawer swipe-to-close after render */
   try { UIC._initDrawerSwipe(); } catch (e) {}
 
+  /* [RT-7] The nav links exist now, so this is the moment to attach the intent
+   * listeners: hovering or touching one is as close to a declaration of what
+   * the user will do next as this application gets, and it happens far enough
+   * ahead of the click to be worth acting on. Wrapped because Client_Helpers
+   * is included by 85 pages but not quite all of them. */
+  try { if (UIC.wireNavPrefetch) UIC.wireNavPrefetch(); } catch (e) {}
+
   return opts.contentId || 'app-content';
 };
 
@@ -4545,6 +4581,11 @@ document.addEventListener('keydown', function (e) {
   @media (prefers-reduced-motion: reduce) {
     .rt-skel .pt-sk-bar { animation: none; }
   }
+
+  /* [RT-7] The previous paint, shown while the real one loads. Inert on
+     purpose: its action buttons name record ids that may no longer be right. */
+  .rt-stale > *:not(.pt-loading) { pointer-events: none; opacity: .5; filter: saturate(.5); }
+  .rt-stale .table-toolbar { display: none; }
 
   /* ── [RT-1] Search-scope notice ──────────────────────────────── */
   .dt-search-scope {
@@ -5535,6 +5576,224 @@ if (document.readyState === 'loading') {
  *   - It does not treat a vanished version stamp as a change. CacheService can
  *     evict, and a storm of refreshes is worse than a missed one.
  * ══════════════════════════════════════════════════════════════════════════ */
+/* ══════════════════════════════════════════════════════════════════════════
+ * [RT-7] UIC.Cache — stale-while-revalidate over localStorage
+ *
+ * What this is for. Two round trips still sat in front of every form. Reference
+ * options are fetched on first form open, which is right, but it is still a
+ * wait the first time — on every page, on every navigation — because NOTHING
+ * survived a page load. localStorage held preferences, column widths and the
+ * session, and no data at all. Every navigation in this application is a full
+ * document load, so "nothing survives" means "every screen starts from zero".
+ *
+ * The contract, and it has one rule that matters more than the rest:
+ *
+ *   A CACHED VALUE IS ALWAYS RENDERED **AND** ALWAYS REVALIDATED. Never one
+ *   without the other. Rendering from cache alone is how a stale option list
+ *   becomes a wrong record; revalidating without rendering is just a slow
+ *   fetch with extra steps.
+ *
+ * Freshness rides on the table stamps the previous two commits made reliable.
+ * That ordering is not incidental — caching against stamps that miss writes
+ * serves stale data with confidence, which is worse than no cache at all.
+ *
+ * Failure is designed for rather than hoped against. Safari in private mode
+ * throws on ACCESS, not on quota, so every read and every write is wrapped;
+ * a store that throws, or is full, or has been cleared, degrades to a normal
+ * fetch and never to a broken page. The cap is a real cap with LRU eviction,
+ * because the alternative to evicting is a quota exception on someone else's
+ * unrelated setItem.
+ * ══════════════════════════════════════════════════════════════════════════ */
+UIC.Cache = (function () {
+  'use strict';
+
+  var PREFIX = 'erp_c_';
+  var INDEX_KEY = 'erp_c_index';
+  var MAX_BYTES = 4 * 1024 * 1024;      /* ~4 MB, well inside the usual 5 MB */
+  var DEFAULT_MAX_AGE = 10 * 60 * 1000; /* a hard ceiling, independent of stamps */
+
+  /* Every access goes through these two. There is no unguarded localStorage
+   * call anywhere in this module, on purpose. */
+  function raw(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
+  function put(k, v) { try { localStorage.setItem(k, v); return true; } catch (e) { return false; } }
+  function drop(k) { try { localStorage.removeItem(k); } catch (e) {} }
+
+  /** A small, stable, order-independent hash of a payload. */
+  function hash(obj) {
+    var s;
+    try { s = JSON.stringify(obj === undefined ? null : obj, Object.keys(obj || {}).sort()); }
+    catch (e) { s = String(obj); }
+    var h = 5381;
+    for (var i = 0; i < s.length; i++) { h = ((h << 5) + h + s.charCodeAt(i)) | 0; }
+    return (h >>> 0).toString(36);
+  }
+
+  /** company + action + hash(payload) — the three things that identify a reply. */
+  function keyFor(company, action, payload) {
+    return PREFIX + String(company || '_') + '|' + String(action) + '|' + hash(payload);
+  }
+
+  /* The index is what makes eviction possible: localStorage has no way to ask
+   * "what did I store and when did I last touch it?". */
+  function readIndex() {
+    try { return JSON.parse(raw(INDEX_KEY) || '{}') || {}; } catch (e) { return {}; }
+  }
+  function writeIndex(ix) { put(INDEX_KEY, JSON.stringify(ix)); }
+
+  function totalBytes(ix) {
+    var n = 0;
+    Object.keys(ix).forEach(function (k) { n += Number(ix[k].b) || 0; });
+    return n;
+  }
+
+  /** Evict least-recently-USED until `need` bytes fit. */
+  function evictFor(need) {
+    var ix = readIndex();
+    var keys = Object.keys(ix).sort(function (a, b) { return (ix[a].t || 0) - (ix[b].t || 0); });
+    var used = totalBytes(ix);
+    while (keys.length && used + need > MAX_BYTES) {
+      var k = keys.shift();
+      used -= Number(ix[k].b) || 0;
+      drop(k);
+      delete ix[k];
+    }
+    writeIndex(ix);
+  }
+
+  /**
+   * The cached value, or null. Touching it marks it recently used, so the LRU
+   * is a real LRU rather than an insertion-order queue.
+   */
+  function get(key, opts) {
+    var o = opts || {};
+    var body = raw(key);
+    if (body === null) return null;
+    var rec;
+    try { rec = JSON.parse(body); } catch (e) { drop(key); return null; }
+    if (!rec || typeof rec !== 'object') { drop(key); return null; }
+
+    var maxAge = Number(o.maxAge) || DEFAULT_MAX_AGE;
+    if (Date.now() - (Number(rec.at) || 0) > maxAge) { remove(key); return null; }
+
+    /* The stamp check. A value cached against a table version that has since
+     * moved is not stale-but-usable — it is known-wrong, and the whole reason
+     * the stamps were fixed first. */
+    if (rec.v && o.version && String(rec.v) !== String(o.version)) { remove(key); return null; }
+
+    var ix = readIndex();
+    if (ix[key]) { ix[key].t = Date.now(); writeIndex(ix); }
+    return rec.d;
+  }
+
+  function set(key, value, opts) {
+    var o = opts || {};
+    var body;
+    try { body = JSON.stringify({ d: value, at: Date.now(), v: o.version || '' }); }
+    catch (e) { return false; }          /* a value that will not serialise is not cached */
+    evictFor(body.length);
+    if (!put(key, body)) {
+      /* Full, or refused. Drop everything we own and try once more: a cache
+       * that cannot store is a cache that must not also be a leak. */
+      clear();
+      if (!put(key, body)) return false;
+    }
+    var ix = readIndex();
+    ix[key] = { b: body.length, t: Date.now() };
+    writeIndex(ix);
+    return true;
+  }
+
+  function remove(key) {
+    drop(key);
+    var ix = readIndex();
+    if (ix[key]) { delete ix[key]; writeIndex(ix); }
+  }
+
+  /** Drop every entry whose key contains `part`. Used by the change watch. */
+  function bust(part) {
+    var ix = readIndex();
+    var hit = Object.keys(ix).filter(function (k) { return !part || k.indexOf(part) !== -1; });
+    hit.forEach(function (k) { drop(k); delete ix[k]; });
+    writeIndex(ix);
+    return hit.length;
+  }
+
+  function clear() {
+    var ix = readIndex();
+    Object.keys(ix).forEach(drop);
+    writeIndex({});
+  }
+
+  /**
+   * The whole point, in one call.
+   *
+   * Returns a promise for the value AND, when the value came from cache, hands
+   * it to `onFresh` again as soon as the server answers. A caller that ignores
+   * onFresh still gets a correct first render and a revalidation it did not
+   * have to remember to schedule — which is why revalidation is built in here
+   * rather than left to seventy call sites.
+   */
+  function swr(o) {
+    o = o || {};
+    var key = keyFor(o.company, o.action, o.payload);
+    var cached = get(key, { maxAge: o.maxAge, version: o.version });
+    var fetch = function () {
+      return o.call(o.action, o.payload).then(function (resp) {
+        set(key, resp, { version: o.version });
+        return resp;
+      });
+    };
+    if (cached === null) return fetch();
+    /* Cached: answer NOW, and revalidate behind. */
+    fetch().then(function (fresh) {
+      if (typeof o.onFresh !== 'function') return;
+      try {
+        if (JSON.stringify(fresh) !== JSON.stringify(cached)) o.onFresh(fresh);
+      } catch (e) { try { o.onFresh(fresh); } catch (e2) {} }
+    }).catch(function () { /* the cached value is still on screen and still fine */ });
+    return Promise.resolve(cached);
+  }
+
+  /* ── The last list this page painted (M5) ────────────────────────────────
+   *
+   * Going "back" is the navigation people make most and the one that feels
+   * worst: every navigation here is a full document load, so returning to a
+   * list you were looking at ten seconds ago costs the same 317 KB and the same
+   * full sheet read as seeing it for the first time.
+   *
+   * So the last paint is kept, per page, and drawn IMMEDIATELY on the next
+   * visit while the real fetch runs. One list per page, which is all D-K asks
+   * for and all any of these pages has.
+   *
+   * It is drawn INERT — see .rt-stale — and that is not a detail. These rows
+   * carry action buttons whose onclick names a record id, and a click on a row
+   * that has since been deleted or renumbered would act on the wrong record.
+   * The stale paint is a picture of what was there, not a list you can use, and
+   * it is replaced by the real one a moment later. */
+  function lastPaintKey() {
+    var action = '';
+    try { action = window.CURRENT_ACTION || ''; } catch (e) {}
+    return PREFIX + 'lastpaint|' + action;
+  }
+  function saveLastPaint(html) {
+    if (!html || html.length > 400000) return false;   /* not worth the quota */
+    return set(lastPaintKey(), html, {});
+  }
+  function lastPaint() {
+    /* Deliberately short: five minutes. Longer and the first thing a user sees
+     * on a page they open every morning is yesterday's numbers. */
+    return get(lastPaintKey(), { maxAge: 5 * 60 * 1000 });
+  }
+
+  return {
+    key: keyFor, hash: hash,
+    get: get, set: set, remove: remove, bust: bust, clear: clear, swr: swr,
+    saveLastPaint: saveLastPaint, lastPaint: lastPaint,
+    _index: readIndex, _bytes: function () { return totalBytes(readIndex()); },
+    MAX_BYTES: MAX_BYTES
+  };
+})();
+
 UIC.Live = (function () {
   'use strict';
 
@@ -5965,7 +6224,19 @@ UIC.Live = (function () {
             else if (seen[t] === undefined) seen[t] = now[t];
           });
           seen = now;
-          if (moved.length) { try { o.onChange(moved); } catch (e) {} }
+          if (moved.length) {
+            /* [RT-7] A table moved, so anything this device has cached for it
+             * is now known-wrong rather than merely old. The whole cache is
+             * dropped rather than the entries for those tables specifically:
+             * cache keys are company+action+payload and the action-to-table
+             * map lives on the server, so picking out "the entries for this
+             * table" would mean shipping that map to the client and keeping
+             * two copies of it in step. A user has ONE page open, so the cost
+             * of the coarse version is a handful of refetches at exactly the
+             * moment refetching is what you want — someone else just wrote. */
+            try { UIC.Cache.bust(); } catch (e) {}
+            try { o.onChange(moved); } catch (e) {}
+          }
           schedule(interval);
         })
         .catch(function () {
