@@ -219,6 +219,19 @@
 
 
   load();
+
+  /* [RT-6] Another device's change to this page arrives on its own. The poll
+     reads timestamps from cache, never a spreadsheet, and stands down while the
+     tab is hidden, while a save is in flight, and after fifteen idle minutes.
+     UIC.Live.arrive decides whether the list may move right now: it refreshes
+     in place when the user is idle at the top, and raises a chip instead when
+     they are scrolled away, typing, or have a form open. */
+  UIC.Live.watchPage({
+    call: companyCall,
+    page: 'tl_customers',
+    onChange: function () { UIC.Live.arrive(function () { fetchParties(); }); }
+  });
+
 </script>
 </body>
 </html>

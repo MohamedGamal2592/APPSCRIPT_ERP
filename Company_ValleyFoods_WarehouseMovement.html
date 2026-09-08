@@ -440,7 +440,7 @@
       UIC.Live.watchPage({
         call: companyCall,
         page: 'vf_warehouse_movement',
-        onChange: function () { load(true); }
+        onChange: function () { UIC.Live.arrive(function () { load(true); }); }
       });
     });
 

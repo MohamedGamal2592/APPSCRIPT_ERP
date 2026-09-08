@@ -489,7 +489,7 @@
       UIC.Live.watchPage({
         call: companyCall,
         page: 'vf_parties',
-        onChange: function () { load(true); }
+        onChange: function () { UIC.Live.arrive(function () { load(true); }); }
       });
     });
 

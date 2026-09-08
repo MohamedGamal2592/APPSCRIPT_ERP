@@ -315,7 +315,7 @@
       UIC.Live.watchPage({
         call: companyCall,
         page: 'vf_hr_deductions',
-        onChange: function () { fetchDeductions(true); }
+        onChange: function () { UIC.Live.arrive(function () { fetchDeductions(true); }); }
       });
     });
 

@@ -1560,9 +1560,11 @@
         call: companyCall,
         page: 'vf_hr_attendance',
         onChange: function () {
-          /* the day list is the page's spine; the two queues hang off it */
-          loadSessions();
-          try { loadExceptions(true); } catch (e) {}
+          UIC.Live.arrive(function () {
+            /* the day list is the page's spine; the two queues hang off it */
+            loadSessions();
+            try { loadExceptions(true); } catch (e) {}
+          });
         }
       });
     });

@@ -265,6 +265,64 @@ const TopChemical = (function () {
     return ACTION_TABLES[action] || '';
   }
 
+  /* ── [RT-6] The change watch, ported from ValleyFoods ───────────────────
+   *
+   * page -> the tables its actions touch, DERIVED by joining the two maps this
+   * file already has. There is no new configuration to keep in step: a page's
+   * watch set is exactly the set of tables its own actions declare, so a new
+   * action that names a table joins the watch automatically and one that does
+   * not is visibly absent.
+   */
+  const PAGE_TABLES = (function () {
+    const byPage = {};
+    Object.keys(PAGE_ACCESS).forEach(function (action) {
+      const page = PAGE_ACCESS[action].page;
+      const table = ACTION_TABLES[action];
+      if (!page || !table) return;
+      if (!byPage[page]) byPage[page] = {};
+      byPage[page][table] = true;
+    });
+    const out = {};
+    Object.keys(byPage).forEach(function (p) { out[p] = Object.keys(byPage[p]); });
+    return out;
+  })();
+
+  /**
+   * "Has anything this page cares about changed since I last looked?"
+   *
+   * This is the ONLY thing a client is allowed to poll, because it is the only
+   * thing cheap enough to poll: ONE CacheService.getAll over the page's tables.
+   * It reads no spreadsheet, takes no lock and returns no business data — only
+   * opaque timestamps — so a device that is merely watching costs a fraction of
+   * a device that is loading.
+   *
+   * Gated EXPLICITLY rather than through PAGE_ACCESS, and this is the important
+   * part: one action serves every page, so guard_ would only ever check the
+   * grant for get_page_versions itself. The page being ASKED ABOUT is what has
+   * to be checked, and it is checked here against the caller's real read grant.
+   * An optimisation that is also a way around an access check is not an
+   * optimisation.
+   */
+  function getPageVersions_(data, user, dbId) {
+    const page = String((data && data.page) || '').trim();
+    if (!page) throw new Error('الصفحة مطلوبة');
+    if (!(user && user.isSuperAdmin)) {
+      if (!unifiedCheck_(user, '3fe1b5cb67b7223e', page, 'read')) {
+        throw new Error(ERP_MESSAGES.NOT_AUTHORIZED);
+      }
+    }
+    const tables = PAGE_TABLES[page] || [];
+    return {
+      status: 'success',
+      page: page,
+      tables: tables,
+      versions: readTableVersions_(dbId, tables),
+      /* The server's own clock, so a client can tell a stalled poll from a
+         quiet system without trusting the device clock. */
+      now: String(new Date().getTime())
+    };
+  }
+
   function guard_(user, action) {
     if (!user || user.isSuperAdmin) return;
     const req = PAGE_ACCESS[action];
@@ -4548,6 +4606,10 @@ const valueMap = {};
     return { status: 'success' };
   }
   register('prefetch_refs', prefetchRefs_);
+  /* One action for every page in this company. It does NOT go through
+     PAGE_ACCESS, because one entry could only describe one page; it gates
+     itself on the page it is asked about (see getPageVersions_). */
+  register('get_page_versions', getPageVersions_);
 
   // ─── Main-system debts review (live MySQL view clients_AR) ──
   // Thin wrappers: authority enforced by guard_() via PAGE_ACCESS above.

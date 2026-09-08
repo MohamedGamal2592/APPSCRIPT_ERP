@@ -311,7 +311,7 @@
       UIC.Live.watchPage({
         call: companyCall,
         page: 'vf_hr_vacations',
-        onChange: function () { fetchData(true); }
+        onChange: function () { UIC.Live.arrive(function () { fetchData(true); }); }
       });
     });
 

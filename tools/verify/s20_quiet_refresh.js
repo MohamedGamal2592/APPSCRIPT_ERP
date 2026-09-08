@@ -118,10 +118,30 @@ console.log('\n2 — a refresh that suppresses the overlay also suppresses hidin
 /* ══ 3. the watches are wired to something real ═════════════════════════ */
 console.log('\n3 — every change watch names a real page and a real function\n');
 {
+  /* UPDATED 2026-09-07 by the realtime-feel run, R6, and the reason is recorded
+   * here rather than in a commit nobody will re-read:
+   *
+   *   This read PAGE_ACCESS from Company_ValleyFoods_Actions.js alone, because
+   *   ValleyFoods was the only company with a change watch. The watch now runs
+   *   in TopChemical and TopLight too, and their page ids live in THEIR OWN
+   *   actions files — so every one of them looked like "a page id no action
+   *   maps to".
+   *
+   * The assertion is not weakened: a watch on a page id that no company gates
+   * still fails, and that is the failure worth catching (it polls forever and
+   * is refused every time). It now checks against every registry instead of
+   * one. */
   const knownPages = {};
   let m;
-  const re = /'[a-z0-9_]+':\s*\{\s*page:\s*'([a-z0-9_]+)'/g;
-  while ((m = re.exec(ACTIONS)) !== null) knownPages[m[1]] = true;
+  ['Company_ValleyFoods_Actions.js', 'Company_TopChemical_Actions.js',
+   'Company_TopLight_Actions.js', 'Company_Assessment_Actions.js']
+    .filter(f => fs.existsSync(path.join(ROOT, f)))
+    .forEach(function (f) {
+      const src = fs.readFileSync(path.join(ROOT, f), 'utf8');
+      const re = /'[a-z0-9_]+':\s*\{\s*page:\s*'([a-z0-9_]+)'/g;
+      let x;
+      while ((x = re.exec(src)) !== null) knownPages[x[1]] = true;
+    });
 
   let watched = 0;
   const bad = [];

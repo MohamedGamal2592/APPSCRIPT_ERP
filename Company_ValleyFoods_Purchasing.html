@@ -876,7 +876,7 @@
     UIC.Live.watchPage({
       call: companyCall,
       page: 'vf_purchasing',
-      onChange: function () { showList(true); }
+      onChange: function () { UIC.Live.arrive(function () { showList(true); }); }
     });
   </script>
 </body>

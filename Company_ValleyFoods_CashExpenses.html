@@ -208,7 +208,7 @@
       UIC.Live.watchPage({
         call: companyCall,
         page: 'vf_cash',
-        onChange: function () { load(true); }
+        onChange: function () { UIC.Live.arrive(function () { load(true); }); }
       });
     });
 

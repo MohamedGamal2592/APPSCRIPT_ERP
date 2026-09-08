@@ -4652,6 +4652,29 @@ document.addEventListener('keydown', function (e) {
      class; nothing breaks if they do not. */
   .row-pending, tr.row-pending td { opacity: .62; font-style: italic; }
 
+  /* [RT-6] "Someone else changed something" — shown ONLY when the user is in
+     the middle of something, so the list never moves under a person who is
+     reading or typing. It waits to be clicked rather than expiring, because a
+     change that arrived while you were typing is still there afterwards. */
+  .uic-live-fresh {
+    position: fixed; inset-inline-start: 50%; transform: translateX(-50%);
+    inset-block-start: var(--space-4); z-index: 9002;
+  }
+  .uic-live-fresh-go {
+    padding: var(--space-2) var(--space-4);
+    background: var(--brand-primary); color: #fff;
+    border: 0; border-radius: var(--radius-pill);
+    font: inherit; font-size: var(--text-xs); font-weight: 700;
+    box-shadow: 0 2px 10px rgba(0,0,0,.2); cursor: pointer;
+  }
+  /* The brief flash when a change IS merged in place. */
+  .rt-arrived { animation: rt-arrive 900ms ease; }
+  @keyframes rt-arrive {
+    0%   { box-shadow: inset 0 0 0 2px var(--brand-primary); }
+    100% { box-shadow: inset 0 0 0 2px transparent; }
+  }
+  @media (prefers-reduced-motion: reduce) { .rt-arrived { animation: none; } }
+
   /* [RT-4] The retry chip. It is not a toast, and the difference is the whole
      point: a toast that disappears in three seconds is how a change made on a
      phone with no signal goes missing without anyone noticing. This stays on
@@ -5789,6 +5812,94 @@ UIC.Live = (function () {
   /** True while any optimistic save is still on the wire. */
   function busy() { return inFlight > 0; }
 
+  /* ── [RT-6] How another device's change ARRIVES ──────────────────────────
+   *
+   * watchPage answers "did something move?". What every page then did with that
+   * answer was call its own load(true) — a full, quiet refetch that redraws the
+   * list. That is correct and it is also rude: it moves the page under someone
+   * who is reading row forty, and it can redraw the row behind a form they are
+   * halfway through filling.
+   *
+   * So the arrival is now split on one question — is the user in the middle of
+   * something?
+   *
+   *   NO  (at the top, no modal, not typing, nothing selected) → refresh in
+   *       place immediately, and flash the table briefly so the change is
+   *       noticed rather than silently swapped in.
+   *
+   *   YES → do NOTHING to the page. Raise a chip that says there is something
+   *       new and refreshes when it is clicked. The user decides when the
+   *       ground moves.
+   *
+   * The chip is deliberately dismissible-by-use rather than on a timer: a
+   * change that arrived while you were typing is still there when you finish.
+   */
+  var freshRefresh = null;
+
+  function userIsBusy() {
+    try {
+      /* A modal is open — almost always a form. */
+      if (document.querySelector && document.querySelector('.modal-backdrop, .uic-modal, [data-modal-open="true"]')) return true;
+      /* Typing. */
+      var a = document.activeElement;
+      if (a && /^(INPUT|TEXTAREA|SELECT)$/.test(String(a.tagName || '').toUpperCase())) return true;
+      /* Scrolled away from the top of the list. */
+      var y = window.scrollY || window.pageYOffset || 0;
+      if (y > 120) return true;
+      /* Rows are selected for a batch action; redrawing would drop them. */
+      if (document.querySelector && document.querySelector('.dt-batch:not([hidden])')) return true;
+    } catch (e) {}
+    return false;
+  }
+
+  function showFreshChip() {
+    var el = document.getElementById('uic-live-fresh');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'uic-live-fresh';
+      el.className = 'uic-live-fresh';
+      el.setAttribute('role', 'status');
+      document.body.appendChild(el);
+    }
+    /* Honest wording. The poll returns timestamps, not rows, so the number of
+     * new rows is not known here and is not claimed. */
+    el.innerHTML = '<button type="button" class="uic-live-fresh-go" onclick="UIC.Live.applyFresh()">' +
+      'هناك تغييرات جديدة · اضغط للتحديث</button>';
+  }
+
+  function hideFreshChip() {
+    var el = document.getElementById('uic-live-fresh');
+    if (el && el.remove) el.remove();
+  }
+
+  /** Refresh now, from the chip. */
+  function applyFresh() {
+    var fn = freshRefresh;
+    freshRefresh = null;
+    hideFreshChip();
+    if (typeof fn === 'function') { try { fn(); } catch (e) {} }
+  }
+
+  /**
+   * Called by a page from its watchPage onChange, in place of refreshing
+   * directly. `refresh` is the page's own quiet reload.
+   */
+  function arrive(refresh) {
+    if (typeof refresh !== 'function') return;
+    if (userIsBusy()) { freshRefresh = refresh; showFreshChip(); return; }
+    hideFreshChip();
+    freshRefresh = null;
+    try { refresh(); } catch (e) {}
+    /* A brief flash, so a silent swap is not mistaken for nothing happening. */
+    try {
+      var host = document.querySelector('.table-wrap');
+      if (host && host.classList) {
+        host.classList.add('rt-arrived');
+        setTimeout(function () { try { host.classList.remove('rt-arrived'); } catch (e) {} }, 900);
+      }
+    } catch (e) {}
+  }
+
   /* ── change polling ──────────────────────────────────────────────────── */
   var watch = null;
 
@@ -5933,6 +6044,11 @@ UIC.Live = (function () {
      * optimistic row is unsaved loses it with the page that drew it. */
     pending: pendingCount,
     guardMessage: guardMessage,
+    /* [RT-6] A page's watch calls arrive() instead of refreshing directly, so
+     * the decision "may the list move right now?" is made in ONE place rather
+     * than seventy. */
+    arrive: arrive,
+    applyFresh: applyFresh,
     retryNow: retryNow,
     discardQueue: discardQueue,
     queued: function () { return queue.length; }
