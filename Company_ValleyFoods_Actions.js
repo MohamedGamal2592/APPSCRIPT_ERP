@@ -8280,19 +8280,11 @@ const ValleyFoodsHRModules = (function () {
         lineCost += a.total_cost;
       });
       ln.line_material_cost = lineCost;
-      allocByLine.push({ line_uid: ln.unique_id, allocations: als });
-    });
-
-    /* M2: header total_inventory_cost = Σ consumption value */
-    var totalInventoryCost = 0;
-    cleanLines.forEach(function (ln) { totalInventoryCost += (ln.line_material_cost || 0); });
-    /* M3: output costing — simple average across outputs */
-    var totalOutQty = 0;
-    outputs.forEach(function (o) { totalOutQty += Number(o.qty || 0); });
-    var avgCostUnit = totalOutQty > 0 ? totalInventoryCost / totalOutQty : 0;
-    outputs.forEach(function (o) {
-      o.cost_unit = avgCostUnit;
-      o.total_cost = Number(o.qty || 0) * avgCostUnit;
+      /* The allocation rows must key on the REWRITTEN line uid: cleanLines[idx]
+         minted a uuid when the payload carried none (a new invoice, or a new
+         line added mid-edit), and the line rows on the sheet carry that uuid —
+         keying on the raw payload uid would orphan the rows under ''. */
+      allocByLine.push({ line_uid: cleanLines[idx].unique_id, allocations: als });
     });
 
     executeWithLock_(function () {
@@ -8403,64 +8395,110 @@ const ValleyFoodsHRModules = (function () {
         noteMutation_(sheetLines);
       }
 
-      /* ---- P2: rewrite batch-allocation rows (valley_sales_product_stock) ---- */
+      /* ---- P2: batch-allocation rows (valley_sales_product_stock) ----
+       * An edit UPDATES the rows this invoice already owns rather than deleting
+       * and re-adding them. A row is identified by (line uid, batch uid), so a
+       * changed quantity is one cell write on the SAME row, which keeps its
+       * unique_id and created_at. A batch the user added gets a new row; a
+       * batch removed — or a whole line removed — loses its row; an invoice
+       * re-saved unchanged writes nothing at all.
+       *
+       * The sheet body is deliberately NOT rewritten in one setValues() the way
+       * the previous version did: that rewrote every other invoice's rows too,
+       * and regenerated a unique_id and created_at for rows that had merely
+       * been re-saved. Deletions are the rare case here (a removed batch or a
+       * removed line); the common edit is a quantity, which costs one cell. */
       settingsEnsureSheet_(dbId, 'valley_sales_product_stock',
         ['unique_id','id','valley_sales_products_id','product_unique_id','product_transaction_code','product_qty','user','created_at']);
       var allocSheet = getSheet_('valley_sales_product_stock', dbId);
-      /* delete previous allocations belonging to this invoice's lines */
       var allocHeaders = getHeaders_(allocSheet);
       var aData = allocSheet.getDataRange().getValues();
-      var aLineIdx = allocHeaders.findIndex(function (h) { return String(h).trim() === 'valley_sales_products_id'; });
+      var allocIdxOf = function (name) {
+        return allocHeaders.findIndex(function (h) { return String(h).trim() === name; });
+      };
+      var aLineIdx = allocIdxOf('valley_sales_products_id');
+      var aBatchIdx = allocIdxOf('product_unique_id');
+      var aQtyIdx = allocIdxOf('product_qty');
+      var aLotIdx = allocIdxOf('product_transaction_code');
+      var aUserIdx = allocIdxOf('user');
+
+      /* the line uids this invoice owns now, plus the ones it owned before the
+         line rows were rewritten — a line the user deleted must release its
+         batches too. The line rows keep their unique_id across that rewrite,
+         which is exactly why keying allocation rows on them survives it. */
       var invLineUids = {};
       cleanLines.forEach(function (ln) { invLineUids[ln.unique_id] = true; });
       priorLineUids.forEach(function (lu) { if (lu) invLineUids[lu] = true; });
-      var toDelete = [];
-      for (var ad = aData.length - 1; ad >= 1; ad--) {
-        var lu = String(aData[ad][aLineIdx] || '').trim();
-        if (lu && invLineUids[lu]) toDelete.push(ad);
-      }
-      if (toDelete.length) {
-        // Collect surviving rows once and rewrite the sheet body in a single
-        // setValues() (Batch 4): equivalent to deleting only this invoice's
-        // allocation rows, without N individual deleteRow() round trips.
-        var newBody = [];
-        for (var ad2 = 1; ad2 < aData.length; ad2++) {
-          if (toDelete.indexOf(ad2) !== -1) continue;
-          newBody.push(aData[ad2]);
-        }
-        if (newBody.length) {
-          allocSheet.getRange(2, 1, newBody.length, allocHeaders.length).setValues(newBody);
-          noteMutation_(allocSheet);
-          var totalRows = allocSheet.getLastRow();
-          if (totalRows > newBody.length + 1) allocSheet.deleteRows(newBody.length + 2, totalRows - (newBody.length + 1));
-          noteMutation_(allocSheet);
-        } else {
-          var totalRows2 = allocSheet.getLastRow();
-          if (totalRows2 > 1) allocSheet.deleteRows(2, totalRows2 - 1);
-          noteMutation_(allocSheet);
-        }
-      }
-      /* insert fresh allocations */
-      var allocStart = allocSheet.getLastRow() + 1;
-      var allocRows = [];
+
+      /* what the invoice should hold after this save, keyed line|batch.
+         batch_uid is trimmed here so the key matches the trimmed sheet key
+         below (and the trimmed validation key above): an untrimmed uid would
+         delete-then-re-append instead of updating in place. */
+      var wanted = {};
       allocByLine.forEach(function (entry) {
         entry.allocations.forEach(function (a) {
-          var binfo = batchCurrent[String(a.batch_uid)] || {};
-          var m3 = {};
-          m3['unique_id'] = Utilities.getUuid();
-          m3['valley_sales_products_id'] = entry.line_uid;
-          m3['product_unique_id'] = String(a.batch_uid);
-          m3['product_transaction_code'] = binfo.lot || '';
-          m3['product_qty'] = Number(a.qty);
-          m3['user'] = (user && user.email) || '';
-          m3['created_at'] = new Date();
-          allocRows.push(allocHeaders.map(function (h) {
-            var k = String(h).trim();
-            return m3[k] !== undefined ? m3[k] : '';
-          }));
+          var wBatch = String(a.batch_uid || '').trim();
+          wanted[entry.line_uid + '|' + wBatch] =
+            { line_uid: entry.line_uid, batch_uid: wBatch, qty: Number(a.qty) };
         });
       });
+
+      var dropRows = [];
+      for (var ad = 1; ad < aData.length; ad++) {
+        var luA = String(aData[ad][aLineIdx] || '').trim();
+        if (!luA || !invLineUids[luA]) continue;                  /* another invoice's row — never read further */
+        var aKey = luA + '|' + String(aData[ad][aBatchIdx] || '').trim();
+        var want = wanted[aKey];
+        /* No want left for this pair means either the batch is no longer
+           allocated, or an earlier row already satisfied it — a hand-made
+           duplicate of the same (line, batch). Either way this row goes, or the
+           line would hold that batch's quantity twice. */
+        if (!want) { dropRows.push(ad + 1); continue; }
+        if (Math.abs(Number(aData[ad][aQtyIdx] || 0) - want.qty) > 0.0000001) {
+          allocSheet.getRange(ad + 1, aQtyIdx + 1).setValue(want.qty);
+          noteMutation_(allocSheet);
+          if (aUserIdx !== -1) {
+            allocSheet.getRange(ad + 1, aUserIdx + 1).setValue((user && user.email) || '');
+            noteMutation_(allocSheet);
+          }
+        }
+        /* the lot is a label, not a key: refresh it only when it is missing */
+        if (aLotIdx !== -1 && !String(aData[ad][aLotIdx] || '').trim()) {
+          var lotFix = (batchCurrent[want.batch_uid] || {}).lot || '';
+          if (lotFix) {
+            allocSheet.getRange(ad + 1, aLotIdx + 1).setValue(lotFix);
+            noteMutation_(allocSheet);
+          }
+        }
+        delete wanted[aKey];                                      /* this pair already has its row */
+      }
+
+      /* descending, so an earlier deletion cannot shift a later row number */
+      for (var dr = dropRows.length - 1; dr >= 0; dr--) {
+        allocSheet.deleteRow(dropRows[dr]);
+        noteMutation_(allocSheet);
+      }
+
+      /* only genuinely new (line, batch) pairs are appended */
+      var allocRows = [];
+      Object.keys(wanted).forEach(function (wk) {
+        var w = wanted[wk];
+        var binfo = batchCurrent[w.batch_uid] || {};
+        var m3 = {};
+        m3['unique_id'] = Utilities.getUuid();
+        m3['valley_sales_products_id'] = w.line_uid;
+        m3['product_unique_id'] = w.batch_uid;
+        m3['product_transaction_code'] = binfo.lot || '';
+        m3['product_qty'] = w.qty;
+        m3['user'] = (user && user.email) || '';
+        m3['created_at'] = new Date();
+        allocRows.push(allocHeaders.map(function (h) {
+          var k = String(h).trim();
+          return m3[k] !== undefined ? m3[k] : '';
+        }));
+      });
       if (allocRows.length) {
+        var allocStart = allocSheet.getLastRow() + 1;
         allocSheet.getRange(allocStart, 1, allocRows.length, allocHeaders.length).setValues(allocRows);
         noteMutation_(allocSheet);
       }
