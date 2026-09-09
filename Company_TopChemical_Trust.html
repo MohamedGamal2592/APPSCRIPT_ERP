@@ -70,8 +70,8 @@
     fetchAccounts();
   }
 
-  function fetchAccounts() {
-    UIC.readSkeleton('trust-content');
+  function fetchAccounts(quiet) {
+    if (!quiet) UIC.readSkeleton('trust-content');
     companyCall('get_trust_accounts')
       .then(function (r) {
         window.__accountOptions = r.account_options || [];
@@ -118,7 +118,8 @@
     UI.showSpinner();
     companyCall('get_trust_movements', { account: account })
       .then(function (r) {
-        renderMovements(r.movements || [], r.account);
+        window.__movements = r.movements || [];
+        renderMovements(window.__movements, r.account);
       })
       .catch(function (e) { UIC.toast(e.message || 'خطأ', 'error'); })
       .finally(function () { UI.hideSpinner(); });
@@ -131,8 +132,12 @@
       ? '<button class="btn btn-primary" style="padding:6px 14px;" onclick="openMovementModal(\'' + FMT.escape(account) + '\')">+ إضافة حركة لهذا الحساب</button>'
       : '';
     var rows = movements.map(function (m) {
+      /* Tier A: id is server-assigned and user is stamped server-side, so a
+         __pending row shows «—» in both — never an invented value. This table
+         has no action buttons. */
+      var pending = !!m.__pending;
       return {
-        id: m.id,
+        id: pending ? '—' : m.id,
         date: fmtDate(m.date),
         movement_type: m.movement_type === 'عهدة'
           ? '<span class="pill pill-success">عهدة</span>'
@@ -140,7 +145,7 @@
         reason: m.reason || '-',
         value: fmtNum(m.value),
         details: m.details || '-',
-        user: uname_(m.user) || '-'
+        user: pending ? '—' : (uname_(m.user) || '-')
       };
     });
     var headers = [
@@ -193,43 +198,73 @@
     if (data.account === '__new__') { data.account = data.account_custom || ''; }
     delete data.account_custom;
     if (!data.account) { UIC.toast('الحساب مطلوب', 'error'); return; }
-    UI.showSpinner('جاري الحفظ...');
-    companyCall('add_trust_movement', data)
-      .then(function (r) {
-        UIC.closeModal('movement-modal');
-        UIC.toast(r.message || 'تم الحفظ', 'success');
+    /* Tier A (MONEY form): the movement row is on screen before the request
+       returns, with no blocking overlay — and the rollback is loud. id is
+       server-assigned and user is stamped server-side, so the draft never
+       invents them — recordOf fills them from the reply, and returns null
+       when the reply carries no id. queueable:false is mandatory here: I1 is
+       unproven for add_trust_movement, so a transport failure rolls back
+       loudly instead of queueing a money row. No validation is weakened. */
+    var targetAccount = data.account;
+    if (SELECTED_ACCOUNT !== targetAccount) window.__movements = [];
+    window.__movements = window.__movements || [];
+    var draft = {
+      id: '',
+      account: data.account,
+      date: data.date,
+      movement_type: data.movement_type,
+      reason: data.reason,
+      value: Number(data.value) || 0,
+      details: data.details || '',
+      user: ''
+    };
+    UIC.Live.save({
+      call: companyCall,
+      action: 'add_trust_movement',
+      data: data,
+      list: window.__movements,
+      key: 'id',
+      draft: draft,
+      render: function () { renderMovements(window.__movements, SELECTED_ACCOUNT || targetAccount); },
+      modal: 'movement-modal',
+      message: 'تم الحفظ',
+      queueable: false,
+      reload: function () { refreshWithAccount(targetAccount, true); },
+      recordOf: function (resp) {
+        if (!(resp && resp.record && resp.record.id != null && resp.record.id !== '')) return null;
+        return Object.assign({}, draft, resp.record);
+      },
+      /* Account totals are server-computed aggregates, so the reply corrects
+         them here — the movement row itself is already on screen. */
+      onSuccess: function (resp) {
+        var r = resp || {};
         if (r && r.record) {
-          // patch movements panel if same account is selected
           if (SELECTED_ACCOUNT === r.record.account) {
-            // fetchAccounts aggregates are still needed for totals, but we can also try local patch
-            // update accounts totals locally
-            var acc = (window.__accounts||[]).find(function(a){ return a.account===r.record.account; });
+            var acc = (window.__accounts || []).find(function (a) { return a.account === r.record.account; });
             if (acc) {
               if (r.record.movement_type === 'عهدة') acc.in_total += r.record.value; else acc.out_total += r.record.value;
               acc.net = acc.in_total - acc.out_total;
               acc.count++;
             } else {
-              // new account
               window.__accounts = window.__accounts || [];
-              window.__accounts.push({ account: r.record.account, in_total: r.record.movement_type==='عهدة'?r.record.value:0, out_total: r.record.movement_type==='مصروف'?r.record.value:0, net: r.record.movement_type==='عهدة'?r.record.value:-r.record.value, count:1 });
+              window.__accounts.push({ account: r.record.account, in_total: r.record.movement_type === 'عهدة' ? r.record.value : 0, out_total: r.record.movement_type === 'مصروف' ? r.record.value : 0, net: r.record.movement_type === 'عهدة' ? r.record.value : -r.record.value, count: 1 });
             }
             renderAccounts(window.__accounts);
-            // also patch movement list without full fetch if already loaded
-            companyCall('get_trust_movements', { account: r.record.account, limit: 10 }).then(function(res){
-              renderMovements(res.movements||[], res.account);
-            }).catch(function(){ refreshWithAccount(data.account); });
+            companyCall('get_trust_movements', { account: r.record.account, limit: 10 }).then(function (res) {
+              window.__movements = res.movements || [];
+              renderMovements(window.__movements, res.account);
+            }).catch(function () { refreshWithAccount(targetAccount, true); });
           } else {
-            refreshWithAccount(data.account);
+            refreshWithAccount(targetAccount, true);
           }
-        } else { refreshWithAccount(data.account); }
-      })
-      .catch(function (e) { UIC.toast(e.message || 'خطأ', 'error'); })
-      .finally(function () { UI.hideSpinner(); });
+        } else { refreshWithAccount(targetAccount, true); }
+      }
+    }).catch(function () { /* UIC.Live has toasted and rolled back */ });
   }
 
-  function refreshWithAccount(account) {
+  function refreshWithAccount(account, quiet) {
     SELECTED_ACCOUNT = account;
-    fetchAccounts();
+    fetchAccounts(quiet);
   }
 
   function showError(e) {
@@ -237,6 +272,13 @@
     if (body) body.innerHTML = '<div class="empty-state"><span>' + FMT.escape(e.message || 'خطأ') + '</span></div>';
   }
 
+
+  /* Another device's change arrives quietly. */
+  UIC.Live.watchPage({
+    call: companyCall,
+    page: 'tc_trust',
+    onChange: function () { UIC.Live.arrive(function () { fetchAccounts(true); }); }
+  });
 
   load();
 </script>

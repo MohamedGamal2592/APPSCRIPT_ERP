@@ -51,8 +51,8 @@
     fetchDebts();
   }
 
-  function fetchDebts() {
-    UIC.readSkeleton('debts-content');
+  function fetchDebts(quiet) {
+    if (!quiet) UIC.readSkeleton('debts-content');
     companyCall('get_ar_ap')
       .then(function (r) { renderDebts(r); })
       .catch(function (e) { showError(e); })
@@ -68,16 +68,20 @@
     var grandNet = grandDebit - grandCredit;
 
     var rows = summary.map(function (g, i) {
+      /* Tier A: a __pending group is the user's own unconfirmed movement, so
+         its amounts stay visible — but it offers no actions until the server
+         confirms it. */
+      var pending = !!g.__pending;
       return '<tr class="group-header" onclick="toggleDebt(' + i + ')">' +
         '<td><strong>' + FMT.escape(g.client_name) + '</strong></td>' +
         '<td class="num">' + FMT.number(g.debit) + '</td>' +
         '<td class="num">' + FMT.number(g.credit) + '</td>' +
         '<td class="num">' + FMT.number(g.net) + '</td>' +
-        '<td>' + UIC.actionBtns(
+        '<td>' + (pending ? '…' : UIC.actionBtns(
           (CAN_WRITE ? [{ label: 'إضافة حركة', onclick: 'event.stopPropagation();openDebtModal(\'' + FMT.escape(g.client_id) + '\')' }] : []).concat([
             { label: 'التفاصيل', onclick: 'event.stopPropagation();toggleDebt(' + i + ')' }
           ])
-        ) + '</td>' +
+        )) + '</td>' +
         '</tr>' +
         '<tr class="tx-row" id="tx-' + i + '" style="display:none;" data-cid="' + FMT.escape(g.client_id) + '"><td colspan="6"><div class="tx-loading" style="text-align:center;padding:12px;color:var(--text-muted, #666);">جاري تحميل التفاصيل...</div></td></tr>';
     }).join('');
@@ -198,28 +202,49 @@
     if (!UIC.validateForm('debt-form')) return;
     if (data.reason === '__new__') { data.reason = data.reason_custom || ''; }
     delete data.reason_custom;
-    UI.showSpinner('جاري الحفظ...');
-    companyCall('add_ar_ap', data)
-      .then(function (r) {
-        UIC.closeModal('debt-modal');
-        UIC.toast(r.message || 'تم الحفظ', 'success');
-        if (r && r.record) {
-          // update summary locally: find client or add
-          var rec = r.record;
-          var summary = (window.__arap && window.__arap.summary) || [];
-          var found = summary.find(function(g){ return String(g.client_id)===String(rec.client); });
-          if (found) {
-            if (rec.transaction_type==='مدين') found.debit+=rec.amount; else found.credit+=rec.amount;
-            found.net = found.debit - found.credit;
-          } else {
-            summary.push({ client_id: rec.client, client_name: rec.client_name, debit: rec.transaction_type==='مدين'?rec.amount:0, credit: rec.transaction_type==='دائن'?rec.amount:0, net: rec.transaction_type==='مدين'?rec.amount:-rec.amount });
-          }
-          if (window.__arap) window.__arap.summary = summary;
-          renderDebts(window.__arap);
-        } else { fetchDebts(); }
-      })
-      .catch(function (e) { UIC.toast(e.message || 'خطأ', 'error'); })
-      .finally(function () { UI.hideSpinner(); });
+    /* Tier A (MONEY form): the group totals update before the request returns,
+       with no blocking overlay — and the rollback is loud. The draft is the
+       summary row the list draws, built from the form's own amount and type;
+       recordOf confirms it from the reply (client_name is a server VLOOKUP).
+       The client key comes from the form, so it is never unknown.
+       queueable:false is mandatory here: I1 is unproven for add_ar_ap, so a
+       transport failure rolls back loudly instead of queueing a money row.
+       No validation is weakened. */
+    var amt = Number(data.amount) || 0;
+    var cid = String(data.client);
+    var cname = ((document.getElementById('name_ar_display') || {}).value || '').trim() || ('#' + cid);
+    window.__arap = window.__arap || {};
+    window.__arap.summary = window.__arap.summary || [];
+    var base = window.__arap.summary.find(function (g) { return String(g.client_id) === cid; });
+    var draft = {
+      client_id: cid,
+      client_name: base ? base.client_name : cname,
+      debit: (base ? base.debit : 0) + (data.transaction_type === 'مدين' ? amt : 0),
+      credit: (base ? base.credit : 0) + (data.transaction_type === 'دائن' ? amt : 0),
+      net: 0
+    };
+    draft.net = draft.debit - draft.credit;
+    UIC.Live.save({
+      call: companyCall,
+      action: 'add_ar_ap',
+      data: data,
+      list: window.__arap.summary,
+      key: 'client_id',
+      draft: draft,
+      render: function () { renderDebts(window.__arap); },
+      modal: 'debt-modal',
+      message: 'تم الحفظ',
+      queueable: false,
+      reload: function () { fetchDebts(true); },
+      recordOf: function (resp) {
+        var rec = Object.assign({}, draft);
+        if (resp && resp.record) {
+          if (resp.record.client_name) rec.client_name = resp.record.client_name;
+          if (resp.record.client_id != null && resp.record.client_id !== '') rec.client_id = resp.record.client_id;
+        }
+        return rec;
+      }
+    }).catch(function () { /* UIC.Live has toasted and rolled back */ });
   }
 
   function showError(e) {
@@ -227,6 +252,13 @@
     if (body) body.innerHTML = '<div class="empty-state"><span>' + FMT.escape(e.message || 'خطأ') + '</span></div>';
   }
 
+
+  /* Another device's change arrives quietly. */
+  UIC.Live.watchPage({
+    call: companyCall,
+    page: 'tc_debts',
+    onChange: function () { UIC.Live.arrive(function () { fetchDebts(true); }); }
+  });
 
   load();
 </script>

@@ -51,8 +51,8 @@
     fetchAll();
   }
 
-  function fetchAll() {
-    UIC.readSkeleton('budget-manufacture-content');
+  function fetchAll(quiet) {
+    if (!quiet) UIC.readSkeleton('budget-manufacture-content');
     Promise.all([
       companyCall('get_legal_manufacture'),
       companyCall('get_budget_refs')
@@ -77,6 +77,13 @@
       return codeNum(b.transaction_code) - codeNum(a.transaction_code);
     });
     var rows = list.map(function (r) {
+      /* Tier A: transaction_code / net_qty / total_cost / sales_amount /
+         sales_price are sheet formulas, so a __pending row shows «—» in all
+         of them and offers no actions — its code names a record the server
+         has never seen. (The three money:true columns print 0.00, not «—»,
+         while pending — _dtRowHtml coerces money cells with Number(); the
+         reply corrects them. Same documented tradeoff as BudgetCash.) */
+      var pending = !!r.__pending;
       var code = String(r.transaction_code || '').trim();
       var fileKeys = ['analysis_certificate','sales_permit','technical_permit','registration'];
       var hasFile = fileKeys.some(function(k){ return r[k]; });
@@ -85,19 +92,19 @@
         return ref ? '<button class="btn btn-outline" style="padding:2px 6px;font-size:11px;" onclick="viewAttachment(\'' + FMT.escape(ref).replace(/\'/g, "\\\'") + '\')" title="'+k+'">📎 '+k.split('_')[0]+' / View</button>' : '';
       }).filter(Boolean).join(' ') || '-';
       return {
-        transaction_code: FMT.escape(r.transaction_code || '-'),
+        transaction_code: pending ? '—' : FMT.escape(r.transaction_code || '-'),
         transaction_type: FMT.escape(r.transaction_type || '-'),
         manufacture_date: FMT.escape(r.manufacture_date || '-'),
         manufcture_number: FMT.escape(r.manufcture_number || '-'),
         produced_product: FMT.escape(r.produced_product || '-'),
         manufactured_qty: Number(r.manufactured_qty) || 0,
-        net_qty: Number(r.net_qty) || 0,
+        net_qty: pending ? '—' : (Number(r.net_qty) || 0),
         profit_percent: FMT.escape(r.profit_percent || '-'),
-        total_cost: Number(r.total_cost) || 0,
-        sales_amount: Number(r.sales_amount) || 0,
-        sales_price: Number(r.sales_price) || 0,
+        total_cost: pending ? '—' : (Number(r.total_cost) || 0),
+        sales_amount: pending ? '—' : (Number(r.sales_amount) || 0),
+        sales_price: pending ? '—' : (Number(r.sales_price) || 0),
         file_cell: fileCell,
-        actions: UIC.actionBtns([
+        actions: pending ? '…' : UIC.actionBtns([
           { label: '👁️ عرض / View', onclick: "viewManufacture('" + FMT.escape(code) + "')" },
           { label: '🖨️ طباعة / Print', onclick: "printManufacture('" + FMT.escape(code) + "')" },
           hasFile ? { label: '📎 عرض المرفق / View Attachment', onclick: "viewManufactureFiles('" + FMT.escape(code) + "')" } : null,
@@ -316,6 +323,16 @@
       }
     }
     var keys = ['analysis_certificate', 'sales_permit', 'technical_permit', 'registration'];
+    /* The file uploads are real round trips and stay in front of the save —
+       there is nothing optimistic to do about a file the server has not
+       received. Everything after them is Tier A: the row is on screen before
+       the add request returns. transaction_code / net_qty / total_cost /
+       sales_amount / sales_price are sheet formulas, so the draft never
+       invents them — recordOf fills them from the reply, and returns null
+       when the reply carries no transaction_code. queueable:false: I1 is
+       unproven for add_legal_manufacture, so a transport failure rolls back
+       loudly instead of queueing. delete_legal_manufacture has no server
+       handler and is untouched. */
     UI.showSpinner('جاري رفع الملفات والحفظ...');
     var chain = Promise.resolve();
     keys.forEach(function (k) {
@@ -326,24 +343,52 @@
       });
     });
     chain.then(function () {
-      return companyCall('add_legal_manufacture', data);
-    })
-      .then(function (r) {
-        UIC.closeModal('manufacture-modal'); UIC.toast(r.message || 'تمت الإضافة', 'success');
-        if (r && r.record) {
-          ITEMS = ITEMS || [];
-          ITEMS.unshift(r.record);
-          if (ITEMS.length > 10) ITEMS = ITEMS.slice(0,10);
-          render();
-        } else { fetchAll(); }
-      })
-      .catch(function (e) { showError(e); })
-      .finally(function () { UI.hideSpinner(); });
+      UI.hideSpinner();
+      ITEMS = ITEMS || [];
+      var draft = Object.assign({}, data);
+      draft.transaction_code = '';
+      draft.transaction_type = 'التصنيع الداخلي';
+      draft.manufactured_qty = Number(data.manufactured_qty) || 0;
+      draft.net_qty = 0;
+      draft.total_cost = 0;
+      draft.sales_amount = 0;
+      draft.sales_price = 0;
+      UIC.Live.save({
+        call: companyCall,
+        action: 'add_legal_manufacture',
+        data: data,
+        list: ITEMS,
+        key: 'transaction_code',
+        draft: draft,
+        render: render,
+        modal: 'manufacture-modal',
+        message: 'تمت الإضافة',
+        queueable: false,
+        reload: function () { fetchAll(true); },
+        recordOf: function (resp) {
+          if (!(resp && resp.record && resp.record.transaction_code)) return null;
+          return Object.assign({}, draft, resp.record);
+        },
+      /* The ten-row cap is applied here, NOT in the draft (old code capped
+         the local list the same way). */
+      onSuccess: function () {
+        if (ITEMS.length > 10) ITEMS = ITEMS.slice(0, 10);
+        render();
+      }
+      }).catch(function () { /* UIC.Live has toasted and rolled back */ });
+    }, function (e) { UI.hideSpinner(); showError(e); });
   }
 
   function showError(e) {
     UIC.toast((e && e.message) || 'خطأ غير متوقع', 'error');
   }
+
+  /* Another device's change arrives quietly. */
+  UIC.Live.watchPage({
+    call: companyCall,
+    page: 'tc_budget_manufacture',
+    onChange: function () { UIC.Live.arrive(function () { fetchAll(true); }); }
+  });
 
   load();
 </script>

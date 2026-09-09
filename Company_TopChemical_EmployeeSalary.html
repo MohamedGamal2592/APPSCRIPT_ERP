@@ -57,8 +57,8 @@
     fetchSalaries();
   }
 
-  function fetchSalaries() {
-    UI.showSpinner();
+  function fetchSalaries(quiet) {
+    if (!quiet) UI.showSpinner();
     companyCall('get_employee_salary')
       .then(function (r) {
         window.__rows = r.rows || [];
@@ -66,16 +66,19 @@
         renderSalaries();
       })
       .catch(function (e) { showError(e); })
-      .finally(function () { UI.hideSpinner(); try{schedulePrefetch();}catch(e){} });
+      .finally(function () { if (!quiet) UI.hideSpinner(); try{schedulePrefetch();}catch(e){} });
   }
 
   function renderSalaries() {
     var rows = window.__rows.map(function (r) {
+      /* Tier A: id is server-assigned and name_ar is a sheet formula, so a
+         __pending row shows «—» in both — never an invented value. */
+      var pending = !!r.__pending;
       return {
-        id: r.id,
+        id: pending ? '—' : r.id,
         salary_date: fmtDate(r.salary_date),
         emp_id: r.emp_id,
-        name_ar: esc(r.name_ar || '-'),
+        name_ar: pending ? '—' : esc(r.name_ar || '-'),
         main_salary: r.main_salary,
         allow: r.allow,
         basic_salary: r.basic_salary
@@ -127,26 +130,59 @@
   function saveSalary() {
     if (!UIC.validateForm('salary-form')) return;
     var data = UIC.collectForm('salary-form');
-    UI.showSpinner('جاري الحفظ...');
-    companyCall('add_employee_salary', data)
-      .then(function (r) {
-        UIC.closeModal('salary-modal');
-        UIC.toast((r && r.message) || 'تم الحفظ', 'success');
-        if (r && r.record) {
-          window.__rows = window.__rows || [];
-          window.__rows.unshift(r.record);
-          if (window.__rows.length>10) window.__rows=window.__rows.slice(0,10);
-          renderSalaries();
-        } else { fetchSalaries(); }
-      })
-      .catch(function (e) { UIC.toast((e && e.message) || 'خطأ', 'error'); })
-      .finally(function () { UI.hideSpinner(); });
+    /* Tier A: the row is on screen before the request returns. id is
+       server-assigned and name_ar is a sheet formula, so the draft never
+       invents them — recordOf fills both from the reply, and returns null on
+       add when the reply carries no id. queueable:false: I1 is unproven for
+       add_employee_salary, so a transport failure rolls back loudly instead
+       of queueing. */
+    var draft = {
+      id: '',
+      salary_date: data.salary_date,
+      emp_id: data.emp_id,
+      name_ar: '',
+      main_salary: Number(data.main_salary) || 0,
+      allow: Number(data.allow) || 0,
+      basic_salary: Number(data.basic_salary) || 0
+    };
+    window.__rows = window.__rows || [];
+    UIC.Live.save({
+      call: companyCall,
+      action: 'add_employee_salary',
+      data: data,
+      list: window.__rows,
+      key: 'id',
+      draft: draft,
+      render: renderSalaries,
+      modal: 'salary-modal',
+      message: 'تم الحفظ',
+      queueable: false,
+      reload: function () { fetchSalaries(true); },
+      recordOf: function (resp) {
+        if (!(resp && resp.record && resp.record.id != null && resp.record.id !== '')) return null;
+        return Object.assign({}, draft, resp.record);
+      },
+      /* The ten-row cap is applied here, NOT in the draft: trimming at draft
+         time would drop the tenth row, and the rollback restores the draft's
+         slot but cannot bring that row back. */
+      onSuccess: function () {
+        if (window.__rows.length > 10) window.__rows = window.__rows.slice(0, 10);
+        renderSalaries();
+      }
+    }).catch(function () { /* UIC.Live has toasted and rolled back */ });
   }
 
   function showError(e) {
     var body = document.getElementById('salary-content');
     if (body) body.innerHTML = '<div class="empty-state"><span>' + esc(e.message || 'خطأ') + '</span></div>';
   }
+
+  /* Another device's change arrives quietly. */
+  UIC.Live.watchPage({
+    call: companyCall,
+    page: 'tc_employee_salary',
+    onChange: function () { UIC.Live.arrive(function () { fetchSalaries(true); }); }
+  });
 
   load();
 </script>

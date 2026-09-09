@@ -57,8 +57,8 @@
     fetchEmployees();
   }
 
-  function fetchEmployees() {
-    UI.showSpinner();
+  function fetchEmployees(quiet) {
+    if (!quiet) UI.showSpinner();
     companyCall('get_employees')
       .then(function (r) {
         console.log('[tc_employee_reg] _debug_title', JSON.stringify(r._debug_title));
@@ -70,23 +70,27 @@
         try { schedulePrefetch(); } catch (e) {}
       })
       .catch(function (e) { showError(e); })
-      .finally(function () { UI.hideSpinner(); });
+      .finally(function () { if (!quiet) UI.hideSpinner(); });
   }
 
   function renderEmployees() {
     var list = window.__employees;
     var rows = list.map(function (e) {
+      /* Tier A: emp_id is server-assigned and section / salaries / status are
+         sheet formulas, so a __pending row shows «—» in all of them — never
+         an invented value. */
+      var pending = !!e.__pending;
       return {
-        emp_id: e.emp_id,
+        emp_id: pending ? '—' : e.emp_id,
         name_ar: esc(e.name_ar || '-'),
         title: esc(e.title || '-'),
-        section: esc(e.section || '-'),
+        section: pending ? '—' : esc(e.section || '-'),
         category: esc(e.category || '-'),
         insurance: e.insurance ? 'نعم' : 'لا',
-        main_salary: e.main_salary,
-        allow: e.allow,
-        basic_salary: e.basic_salary,
-        status: esc(e.status || '-')
+        main_salary: pending ? '—' : e.main_salary,
+        allow: pending ? '—' : e.allow,
+        basic_salary: pending ? '—' : e.basic_salary,
+        status: pending ? '—' : esc(e.status || '-')
       };
     });
     var headers = [
@@ -146,25 +150,57 @@
     if (!UIC.validateForm('employee-form')) return;
     var data = UIC.collectForm('employee-form');
     data.insurance = !!document.getElementById('insurance').checked;
-    UI.showSpinner('جاري الحفظ...');
-    companyCall('add_employee', data)
-      .then(function (r) {
-        UIC.closeModal('employee-modal');
-        UIC.toast((r && r.message) || 'تم الحفظ', 'success');
-        if (r && r.record) {
-          window.__employees = window.__employees || [];
-          window.__employees.unshift(r.record);
-          renderEmployees();
-        } else { fetchEmployees(); }
-      })
-      .catch(function (e) { UIC.toast((e && e.message) || 'خطأ', 'error'); })
-      .finally(function () { UI.hideSpinner(); });
+    /* Tier A: the row is on screen before the request returns. emp_id is
+       server-assigned and section / salaries / status are sheet formulas, so
+       the draft never invents them — recordOf fills them from the reply, and
+       returns null on add when the reply carries no emp_id. queueable:false:
+       I1 is unproven for add_employee, so a transport failure rolls back
+       loudly instead of queueing. */
+    var draft = {
+      emp_id: '',
+      name_ar: data.name_ar,
+      national_id: data.national_id,
+      hiring_date: data.hiring_date,
+      title: data.title,
+      section: '',
+      category: data.category,
+      insurance: data.insurance,
+      main_salary: 0,
+      allow: 0,
+      basic_salary: 0,
+      status: ''
+    };
+    window.__employees = window.__employees || [];
+    UIC.Live.save({
+      call: companyCall,
+      action: 'add_employee',
+      data: data,
+      list: window.__employees,
+      key: 'emp_id',
+      draft: draft,
+      render: renderEmployees,
+      modal: 'employee-modal',
+      message: 'تم الحفظ',
+      queueable: false,
+      reload: function () { fetchEmployees(true); },
+      recordOf: function (resp) {
+        if (!(resp && resp.record && resp.record.emp_id != null && resp.record.emp_id !== '')) return null;
+        return Object.assign({}, draft, resp.record);
+      }
+    }).catch(function () { /* UIC.Live has toasted and rolled back */ });
   }
 
   function showError(e) {
     var body = document.getElementById('employee-content');
     if (body) body.innerHTML = '<div class="empty-state"><span>' + esc(e.message || 'خطأ') + '</span></div>';
   }
+
+  /* Another device's change arrives quietly. */
+  UIC.Live.watchPage({
+    call: companyCall,
+    page: 'tc_employee_reg',
+    onChange: function () { UIC.Live.arrive(function () { fetchEmployees(true); }); }
+  });
 
   load();
 </script>
