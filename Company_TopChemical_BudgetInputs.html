@@ -187,8 +187,8 @@
     fetchInputs();
   }
 
-  function fetchInputs() {
-    UIC.readSkeleton('budget-inputs-content', { message: 'جاري تحميل بيانات الشهادات والبنود...' });
+  function fetchInputs(quiet) {
+    if (!quiet) UIC.readSkeleton('budget-inputs-content', { message: 'جاري تحميل بيانات الشهادات والبنود...' });
     Promise.all([
       companyCall('get_legal_inputs'),
       companyCall('get_budget_refs'),
@@ -329,6 +329,11 @@
 
     list.forEach(function (r, i) {
       var cert = getCertNo(r);
+      /* Tier A: a __pending card shows «—» where the server has not answered
+         yet (اجمالي التكاليف and the computed detail cells are sheet
+         formulas) and offers no actions — print/edit/delete would name a
+         cert the server has never seen. */
+      var pending = !!r.__pending;
       
       // Filter child lines in legal_product_purchasing linked to this cert
       var lines = LINES.filter(function (l) {
@@ -393,7 +398,7 @@
       ) : (
         '<div class="empty-state" style="padding:24px;">' +
           '<span>لا توجد بنود منتجات مرتبطة بهذه الشهادة في جدول (legal_product_purchasing).</span><br>' +
-          (CAN_WRITE ? '<button class="btn btn-outline" style="margin-top:10px;" onclick="event.stopPropagation();openCostingModal(\'' + escHtml(cert) + '\')">+ إضافة وتعديل بنود المنتجات</button>' : '') +
+          (CAN_WRITE && !pending ? '<button class="btn btn-outline" style="margin-top:10px;" onclick="event.stopPropagation();openCostingModal(\'' + escHtml(cert) + '\')">+ إضافة وتعديل بنود المنتجات</button>' : '') +
         '</div>'
       );
 
@@ -411,14 +416,15 @@
             '<span style="flex:1;"></span>' +
             '<div style="text-align:left;margin-left:8px;">' +
               '<div style="font-size:11px;color:var(--text-muted);">إجمالي التكاليف</div>' +
-              '<div style="font-size:14px;font-weight:700;color:var(--brand-primary);">' + FMT.currency(Number(r['اجمالي التكاليف']) || 0) + '</div>' +
+              '<div style="font-size:14px;font-weight:700;color:var(--brand-primary);">' + (pending ? '—' : FMT.currency(Number(r['اجمالي التكاليف']) || 0)) + '</div>' +
             '</div>' +
             '<div style="display:flex;gap:6px;" onclick="event.stopPropagation();">' +
-              '<button class="btn btn-outline" style="min-height:36px;padding:6px 12px;font-size:13px;" onclick="printCosting(\'' + escHtml(cert) + '\')" title="طباعة الشهادة وبنودها">🖨️ طباعة</button>' +
-              (IS_SUPER_ADMIN
-                ? '<button class="btn btn-outline" style="min-height:36px;padding:6px 12px;font-size:13px;" onclick="openCostingModal(\'' + escHtml(cert) + '\')">✏️ تعديل</button>' +
-                  '<button class="btn btn-danger" style="min-height:36px;padding:6px 12px;font-size:13px;" onclick="deleteCosting(\'' + escHtml(cert) + '\')">🗑️ حذف</button>'
-                : '') +
+              (pending ? '…' :
+                '<button class="btn btn-outline" style="min-height:36px;padding:6px 12px;font-size:13px;" onclick="printCosting(\'' + escHtml(cert) + '\')" title="طباعة الشهادة وبنودها">🖨️ طباعة</button>' +
+                (IS_SUPER_ADMIN
+                  ? '<button class="btn btn-outline" style="min-height:36px;padding:6px 12px;font-size:13px;" onclick="openCostingModal(\'' + escHtml(cert) + '\')">✏️ تعديل</button>' +
+                    '<button class="btn btn-danger" style="min-height:36px;padding:6px 12px;font-size:13px;" onclick="deleteCosting(\'' + escHtml(cert) + '\')">🗑️ حذف</button>'
+                  : '')) +
             '</div>' +
           '</div>' +
           '<div id="exp-body-' + i + '" style="display:none;" class="nested-table-wrap">' +
@@ -428,8 +434,8 @@
               '<div><span style="color:var(--text-muted);">شهر الإقرار:</span> <strong>' + escHtml(r['تم_الاقرار_شهر'] || '-') + '</strong></div>' +
               '<div><span style="color:var(--text-muted);">سعر الصرف:</span> <strong>' + escHtml(r['سعر الصرف'] || '-') + '</strong></div>' +
               '<div><span style="color:var(--text-muted);">القيمة بالدولار:</span> <strong>' + FMT.currency(Number(r['القيمه بالدولار']) || 0) + '</strong></div>' +
-              '<div><span style="color:var(--text-muted);">القيمة بالسعر المعلن:</span> <strong>' + FMT.currency(Number(r['القيمه بالسعر المعلن']) || 0) + '</strong></div>' +
-              '<div><span style="color:var(--text-muted);">المبيعات:</span> <strong>' + FMT.currency(Number(r['المبيعات']) || 0) + '</strong></div>' +
+              '<div><span style="color:var(--text-muted);">القيمة بالسعر المعلن:</span> <strong>' + (pending ? '—' : FMT.currency(Number(r['القيمه بالسعر المعلن']) || 0)) + '</strong></div>' +
+              '<div><span style="color:var(--text-muted);">المبيعات:</span> <strong>' + (pending ? '—' : FMT.currency(Number(r['المبيعات']) || 0)) + '</strong></div>' +
               '<div><span style="color:var(--text-muted);">رقم الفاتورة:</span> <strong>' + escHtml(r['invoice_number'] || '-') + '</strong></div>' +
               '<div><span style="color:var(--text-muted);">تاريخ الفاتورة:</span> <strong>' + escHtml(r['invoice_date'] || '-') + '</strong></div>' +
             '</div>' +
@@ -800,46 +806,83 @@
           });
         });
         return chain.then(function () {
-          var payload = { header: data, lines: lines };
-          return companyCall(editMode ? 'edit_legal_costing_bundle' : 'add_legal_costing_bundle', payload);
+          return { header: data, lines: lines };
         });
       })
-      .then(function (r) {
-        UIC.closeModal('costing-modal');
-        UIC.toast(r.message || 'تم حفظ الشهادة وبنودها بنجاح', 'success');
-        if (r && r.record) {
-          if (editMode) {
-            var idx = COSTING.findIndex(function(c){ return getCertNo(c)===getCertNo(r.record); });
-            if (idx!==-1) COSTING[idx]=r.record; else COSTING.unshift(r.record);
-            // replace lines for this cert
-            LINES = LINES.filter(function(l){ return getCertNo(l)!==getCertNo(r.record); });
-            (r.lines||r.records||[]).forEach(function(l){ LINES.push(l); });
-          } else {
-            COSTING.unshift(r.record);
-            (r.lines||r.records||[]).forEach(function(l){ LINES.push(l); });
+      .then(function (payload) {
+        UI.hideSpinner();
+        /* Tier A: the master card is on screen before the request returns.
+           The cert number is the client-supplied natural key (the server
+           refuses duplicates), so the draft carries it and matches the
+           existing card on edit. Sheet-formula cells (اجمالي التكاليف and
+           the detail-grid computed values) are never invented — renderCosting
+           shows «—» for them while __pending. The lines converge on the
+           reply via onSuccess; they are not painted optimistically because
+           the undo only covers the COSTING list. queueable:false: I1 is
+           unproven for both bundle handlers, so a transport failure rolls
+           back loudly instead of queueing. */
+        var draft = Object.assign({}, payload.header);
+        draft['رقم الشهاده'] = cert;
+        UIC.Live.save({
+          call: companyCall,
+          action: editMode ? 'edit_legal_costing_bundle' : 'add_legal_costing_bundle',
+          data: payload,
+          list: COSTING,
+          key: 'رقم الشهاده',
+          draft: draft,
+          render: renderCosting,
+          modal: 'costing-modal',
+          message: 'تم حفظ الشهادة وبنودها بنجاح',
+          queueable: false,
+          reload: function () { fetchInputs(true); },
+          recordOf: function (resp) {
+            if (resp && resp.record) return resp.record;
+            if (editMode) return Object.assign({}, draft);
+            return null;
+          },
+          onSuccess: function (resp) {
+            var fresh = (resp && (resp.lines || resp.records)) || [];
+            LINES = LINES.filter(function (l) { return getCertNo(l) !== cert; });
+            fresh.forEach(function (l) { LINES.push(l); });
+            renderCosting();
           }
-          renderCosting();
-        } else { fetchInputs(); }
+        }).catch(function () { /* UIC.Live has toasted and rolled back */ });
       })
-      .catch(function (e) { showError(e); })
-      .finally(function () { UI.hideSpinner(); });
+      .catch(function (e) { UI.hideSpinner(); showError(e); });
   }
 
   function deleteCosting(cert) {
     if (!confirm('هل أنت متأكد من حذف الشهادة رقم ' + cert + ' وجميع بنود المنتجات المرتبطة بها؟ لا يمكن التراجع عن هذا الإجراء.')) return;
-    UI.showSpinner('جاري الحذف...');
-    companyCall('delete_legal_costing', { cert: cert })
-      .then(function (r) {
-        UIC.toast(r.message || 'تم حذف الشهادة وبنودها بنجاح', 'success');
-        fetchInputs();
-      })
-      .catch(function (e) { showError(e); })
-      .finally(function () { UI.hideSpinner(); });
+    /* Tier A delete: no optimistic paint (there is no record to draw — the
+       row is gone), so no draft/list/key/render. onSuccess splices the
+       in-memory lists and re-renders locally; reload is the error-path
+       backstop. No overlay. queueable:false: a transport failure rolls back
+       loudly instead of queueing a delete. */
+    UIC.Live.save({
+      call: companyCall,
+      action: 'delete_legal_costing',
+      data: { cert: cert },
+      onSuccess: function () {
+        COSTING = COSTING.filter(function (c) { return getCertNo(c) !== cert; });
+        LINES = LINES.filter(function (l) { return getCertNo(l) !== cert; });
+        renderCosting();
+      },
+      message: 'تم حذف الشهادة وبنودها بنجاح',
+      queueable: false,
+      reload: function () { fetchInputs(true); }
+    }).catch(function () { /* UIC.Live has toasted */ });
   }
 
   function showError(e) {
     UIC.toast((e && e.message) || 'حدث خطأ أثناء معالجة الطلب', 'error');
   }
+
+  /* Another device's change arrives quietly. */
+  UIC.Live.watchPage({
+    call: companyCall,
+    page: 'tc_budget_inputs',
+    onChange: function () { UIC.Live.arrive(function () { fetchInputs(true); }); }
+  });
 
   load();
 </script>

@@ -63,8 +63,8 @@
     fetchDeductions();
   }
 
-  function fetchDeductions() {
-    UI.showSpinner();
+  function fetchDeductions(quiet) {
+    if (!quiet) UI.showSpinner();
     companyCall('get_emp_deductions')
       .then(function (r) {
         window.__rows = r.rows || [];
@@ -73,7 +73,7 @@
         renderDeductions(); try{schedulePrefetch();}catch(e){};
       })
       .catch(function (e) { showError(e); })
-      .finally(function () { UI.hideSpinner(); });
+      .finally(function () { if (!quiet) UI.hideSpinner(); });
   }
 
   function renderDeductions() {
@@ -123,9 +123,13 @@
             '<div class="table-wrap"><table class="table" style="font-size:13px;">' +
             '<thead><tr><th>كود</th><th>الاسم</th><th>الأيام</th><th>الجزاء</th><th>خصم آخر</th><th>تفاصيل</th></tr></thead><tbody>';
           g.dates[d].forEach(function (r) {
-            html += '<tr><td>' + r.emp_id + '</td><td>' + esc(r.name_ar || '-') + '</td>' +
+            /* Tier A: penalty_value is a sheet formula, so a __pending row
+               shows «—» — never an invented value. The table has no action
+               buttons, so there is nothing to gate while __pending. */
+            var pending = !!r.__pending;
+            html += '<tr><td>' + r.emp_id + '</td><td>' + (pending ? '—' : esc(r.name_ar || '-')) + '</td>' +
               '<td>' + (r.number_of_days != null ? r.number_of_days : '') + '</td>' +
-              '<td>' + (r.penalty_value != null ? r.penalty_value : '') + '</td>' +
+              '<td>' + (pending ? '—' : (r.penalty_value != null ? r.penalty_value : '')) + '</td>' +
               '<td>' + (r.deduction_value_other != null ? r.deduction_value_other : '') + '</td>' +
               '<td>' + esc(r.details || '-') + '</td></tr>';
           });
@@ -224,26 +228,62 @@
       return;
     }
     var data = UIC.collectForm('ded-form');
-    UI.showSpinner('جاري الحفظ...');
-    companyCall('add_emp_deduction', data)
-      .then(function (r) {
-        UIC.closeModal('ded-modal');
-        UIC.toast((r && r.message) || 'تم الحفظ', 'success');
-        if (r && r.record) {
-          window.__rows = window.__rows || [];
-          window.__rows.unshift(r.record);
-          if (window.__rows.length>10) window.__rows=window.__rows.slice(0,10);
-          renderDeductions();
-        } else { fetchDeductions(); }
-      })
-      .catch(function (e) { UIC.toast((e && e.message) || 'خطأ', 'error'); })
-      .finally(function () { UI.hideSpinner(); });
+    /* Tier A: the row is on screen before the request returns. The deduction
+       record carries no stable server identity, so the draft carries a
+       client-side __draft key that recordOf copies onto the server record —
+       NEEDS-REPLY: addEmpDeduction_ needs a stable row id. penalty_value is
+       a sheet formula, so renderDeductions shows «—» for it while __pending.
+       queueable:false: I1 is unproven for add_emp_deduction, so a transport
+       failure rolls back loudly instead of queueing. */
+    var draft = {
+      emp_id: data.emp_id,
+      deduction_type: data.deduction_type,
+      date: data.date,
+      number_of_days: data.number_of_days,
+      deduction_value_other: data.deduction_value_other,
+      details: data.details,
+      __draft: 'tmp_' + Math.random().toString(36).slice(2, 10)
+    };
+    window.__rows = window.__rows || [];
+    UIC.Live.save({
+      call: companyCall,
+      action: 'add_emp_deduction',
+      data: data,
+      list: window.__rows,
+      key: '__draft',
+      draft: draft,
+      render: renderDeductions,
+      modal: 'ded-modal',
+      message: 'تم الحفظ',
+      queueable: false,
+      reload: function () { fetchDeductions(true); },
+      recordOf: function (resp) {
+        if (!(resp && resp.record)) return null;
+        var rec = Object.assign({}, resp.record);
+        rec.__draft = draft.__draft;
+        return rec;
+      },
+      /* The ten-row cap is applied here, NOT in the draft: trimming at draft
+         time would drop the tenth row, and the rollback restores the draft's
+         slot but cannot bring that row back. */
+      onSuccess: function () {
+        if (window.__rows.length > 10) window.__rows = window.__rows.slice(0, 10);
+        renderDeductions();
+      }
+    }).catch(function () { /* UIC.Live has toasted and rolled back */ });
   }
 
   function showError(e) {
     var body = document.getElementById('ded-content');
     if (body) body.innerHTML = '<div class="empty-state"><span>' + esc(e.message || 'خطأ') + '</span></div>';
   }
+
+  /* Another device's change arrives quietly. */
+  UIC.Live.watchPage({
+    call: companyCall,
+    page: 'tc_emp_deductions',
+    onChange: function () { UIC.Live.arrive(function () { fetchDeductions(true); }); }
+  });
 
   load();
 </script>

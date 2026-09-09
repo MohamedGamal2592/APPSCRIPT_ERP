@@ -130,6 +130,9 @@
   }
 
   var ALL_ROWS = [];
+  /* Last server-confirmed summary, so a Tier A save can advance the totals
+     from the reply record without a refetch. */
+  var CO_TOTALS = { egp: 0, usd: 0 };
 
   function load() {
     UIC.appShell('tc-root', {
@@ -169,11 +172,13 @@
       '</div>';
   }
 
-  function fetchData() {
-    UIC.readSkeleton('customs-table', { message: 'جاري تحميل بيانات مكتب الجمارك...' });
+  function fetchData(quiet) {
+    if (!quiet) UIC.readSkeleton('customs-table', { message: 'جاري تحميل بيانات مكتب الجمارك...' });
     companyCall('get_customs_office', { scriptUrl: scriptUrl, sessionToken: SESSION_TOKEN })
       .then(function (d) {
         var s = d.summary || { egp_total: 0, usd_total: 0 };
+        CO_TOTALS.egp = Number(s.egp_total) || 0;
+        CO_TOTALS.usd = Number(s.usd_total) || 0;
         document.getElementById('egp-total').textContent = fmt2(s.egp_total) + ' ج.م';
         document.getElementById('usd-total').textContent = '$ ' + fmt2(s.usd_total);
         ALL_ROWS = d.transactions || [];
@@ -190,8 +195,12 @@
     var container = document.getElementById('customs-table');
     if (!container) return;
     var rows = ALL_ROWS.map(function (r) {
+      /* Tier A: id is server-assigned (rowNumber-1), so a __pending row shows
+         «—» — never an invented value. The table has no action buttons, so
+         there is nothing to gate while __pending. */
+      var pending = !!r.__pending;
       return {
-        id: r.id || '',
+        id: pending ? '—' : (r.id || ''),
         transaction_date: r.transaction_date || '',
         transaction_type: r.transaction_type || '',
         operation_reason: r.operation_reason || '',
@@ -283,32 +292,74 @@
         data.mode = mode;
         data.claim_assignment = refs[0] || '';
         data.shipment_clearance = refs[1] || '';
-        return companyCall('add_customs_office', data);
-      })
-      .then(function (res) {
-        UIC.closeModal('customs-modal');
-        UIC.toast((res && res.message) || 'تمت الإضافة بنجاح', 'success');
-        if (res && res.record) {
-          ALL_ROWS = ALL_ROWS || [];
-          ALL_ROWS.unshift(res.record);
-          if (ALL_ROWS.length>10) ALL_ROWS=ALL_ROWS.slice(0,10);
-          // recompute summary from FULL? we have incremental; for simplicity update displayed totals via fetchData else render
-          // quick patch: update totals locally
-          var sEg = document.getElementById('egp-total');
-          var sUs = document.getElementById('usd-total');
-          if (sEg && sUs) {
-            // fetch summary? fallback to fetchData if no record totals
-            fetchData();
+        UI.hideSpinner();
+        /* Tier A: the row is on screen before the request returns. id is
+           server-assigned, so the draft leaves it empty and recordOf fills it
+           from the reply record, returning null on add when the reply
+           carries no id. user_email/created_at are server-set and stay out
+           of the draft. queueable:false: I1 is unproven for
+           add_customs_office, so a transport failure rolls back loudly
+           instead of queueing. */
+        var draft = {
+          id: '',
+          transaction_date: data.transaction_date,
+          transaction_type: data.transaction_type,
+          operation_reason: data.operation_reason,
+          amount_egp: data.amount_egp,
+          amount_usd: data.amount_usd,
+          transaction_details: data.transaction_details,
+          claim_assignment: data.claim_assignment,
+          shipment_clearance: data.shipment_clearance
+        };
+        ALL_ROWS = ALL_ROWS || [];
+        UIC.Live.save({
+          call: companyCall,
+          action: 'add_customs_office',
+          data: data,
+          list: ALL_ROWS,
+          key: 'id',
+          draft: draft,
+          render: renderTable,
+          modal: 'customs-modal',
+          message: 'تمت الإضافة بنجاح',
+          queueable: false,
+          reload: function () { fetchData(true); },
+          recordOf: function (resp) {
+            if (resp && resp.record && resp.record.id != null && resp.record.id !== '') return resp.record;
+            return null;
+          },
+          /* Advance the server-confirmed totals from the reply record, and
+             apply the ten-row cap here, NOT in the draft: trimming at draft
+             time would drop the tenth row, and the rollback restores the
+             draft's slot but cannot bring that row back. */
+          onSuccess: function (resp) {
+            var rec = resp && resp.record;
+            if (rec) {
+              CO_TOTALS.egp += Number(rec.amount_egp) || 0;
+              CO_TOTALS.usd += Number(rec.amount_usd) || 0;
+              var sEg = document.getElementById('egp-total');
+              var sUs = document.getElementById('usd-total');
+              if (sEg) sEg.textContent = fmt2(CO_TOTALS.egp) + ' ج.م';
+              if (sUs) sUs.textContent = '$ ' + fmt2(CO_TOTALS.usd);
+            }
+            if (ALL_ROWS.length > 10) ALL_ROWS = ALL_ROWS.slice(0, 10);
+            renderTable();
           }
-          renderTable();
-        } else { fetchData(); }
+        }).catch(function () { /* UIC.Live has toasted and rolled back */ });
       })
       .catch(function (err) {
+        UI.hideSpinner();
         UIC.toast((err && err.message) || 'خطأ في حفظ المعاملة', 'error');
-      })
-      .finally(function () { UI.hideSpinner(); });
+      });
   }
 
+
+  /* Another device's change arrives quietly. */
+  UIC.Live.watchPage({
+    call: companyCall,
+    page: 'tc_customs_office',
+    onChange: function () { UIC.Live.arrive(function () { fetchData(true); }); }
+  });
 
   load();
 </script>

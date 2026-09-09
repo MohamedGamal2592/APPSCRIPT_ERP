@@ -66,8 +66,8 @@
     if (idEl) idEl.setAttribute('disabled', 'disabled');
   }
 
-  function fetchParties() {
-    UIC.readSkeleton('budget-parties-content');
+  function fetchParties(quiet) {
+    if (!quiet) UIC.readSkeleton('budget-parties-content');
     companyCall('get_legal_parties')
       .then(function (r) { renderParties(r.parties || []); })
       .catch(function (e) { showError(e); })
@@ -105,23 +105,51 @@
     var data = UIC.collectForm('party-form');
     var sel = document.getElementById('type');
     if (sel && sel.value === '__new__') data['type'] = document.getElementById('type_custom').value;
-    UI.showSpinner('جاري الحفظ...');
-    companyCall('add_legal_party', data)
-      .then(function (r) {
-        UIC.closeModal('party-modal'); UIC.toast(r.message || 'تمت الإضافة', 'success');
-        if (r && r.record) {
-          window.__parties = window.__parties || [];
-          window.__parties.push(r.record);
-          renderParties(window.__parties);
-        } else { fetchParties(); }
-      })
-      .catch(function (e) { showError(e); })
-      .finally(function () { UI.hideSpinner(); });
+    /* Tier A: the row is on screen before the request returns. id is
+       client-proposed (maxId+1, server-checked for duplicates), never
+       server-assigned, so the draft shows it honestly; every other cell is
+       form-visible. The table has no action buttons, so there is nothing to
+       gate while __pending. queueable:false: I1 is unproven for
+       add_legal_party, so a transport failure rolls back loudly instead of
+       queueing. */
+    var draft = {
+      id: data.id,
+      name: data.name,
+      type: data.type,
+      registration_number: data.registration_number,
+      tax_id: data.tax_id,
+      name_en: data.name_en
+    };
+    window.__parties = window.__parties || [];
+    UIC.Live.save({
+      call: companyCall,
+      action: 'add_legal_party',
+      data: data,
+      list: window.__parties,
+      key: 'id',
+      draft: draft,
+      render: function () { renderParties(window.__parties); },
+      modal: 'party-modal',
+      message: 'تمت الإضافة',
+      queueable: false,
+      reload: function () { fetchParties(true); },
+      recordOf: function (resp) {
+        if (resp && resp.record && resp.record.id != null && resp.record.id !== '') return resp.record;
+        return Object.assign({}, draft);
+      }
+    }).catch(function () { /* UIC.Live has toasted and rolled back */ });
   }
 
   function showError(e) {
     UIC.toast((e && e.message) || 'خطأ غير متوقع', 'error');
   }
+
+  /* Another device's change arrives quietly. */
+  UIC.Live.watchPage({
+    call: companyCall,
+    page: 'tc_budget_parties',
+    onChange: function () { UIC.Live.arrive(function () { fetchParties(true); }); }
+  });
 
   load();
 </script>

@@ -48,16 +48,16 @@
     fetchEmployees();
   }
 
-  function fetchEmployees() {
-    UIC.readSkeleton('budget-hr-content');
+  function fetchEmployees(quiet) {
+    if (!quiet) UIC.readSkeleton('budget-hr-content');
     companyCall('get_legal_hr')
       .then(function (r) { EMPLOYEES = r.employees || []; render(); try{schedulePrefetch();}catch(e){}; })
       .catch(function (e) { showError(e); })
       .finally(function () { UI.hideSpinner(); });
   }
 
-  function fetchSalaries() {
-    UIC.readSkeleton('budget-hr-content');
+  function fetchSalaries(quiet) {
+    if (!quiet) UIC.readSkeleton('budget-hr-content');
     companyCall('get_legal_salaries', {
       payroll_month: SFILTER.month ? Number(SFILTER.month) : '',
       payroll_year: SFILTER.year ? Number(SFILTER.year) : ''
@@ -152,18 +152,45 @@
   function saveEmployee() {
     if (!UIC.validateForm('employee-form')) return;
     var data = UIC.collectForm('employee-form');
-    UI.showSpinner('جاري الحفظ...');
-    companyCall('add_legal_employee', data)
-      .then(function (r) {
-        UIC.closeModal('employee-modal'); UIC.toast(r.message || 'تمت الإضافة', 'success');
-        if (r && r.record) {
-          EMPLOYEES = EMPLOYEES || [];
-          EMPLOYEES.push(r.record);
-          render();
-        } else { fetchEmployees(); }
-      })
-      .catch(function (e) { showError(e); })
-      .finally(function () { UI.hideSpinner(); });
+    /* Tier A: the row is on screen before the request returns. collectForm
+       keys are the element ids verbatim, so the draft maps them to the
+       lower-cased record shape the list holds and renderEmployees reads.
+       employee_code is client-proposed (maxCode+1, server-checked for
+       duplicates), never server-assigned, so the draft shows it honestly.
+       queueable:false: I1 is unproven for add_legal_employee, so a transport
+        failure rolls back loudly instead of queueing. */
+    EMPLOYEES = EMPLOYEES || [];
+    var draft = {
+      employee_code: data.Employee_Code,
+      employee_name: data.Employee_name,
+      title: data.title,
+      section: data.section,
+      gross_salary: data.gross_salary,
+      allow: data.allow,
+      hiring_date: data.Hiring_Date,
+      national_id: data.National_ID,
+      address: data.Address,
+      insurance_status: data.Insurance_Status,
+      gender: data.Gender,
+      status: data.status
+    };
+    UIC.Live.save({
+      call: companyCall,
+      action: 'add_legal_employee',
+      data: data,
+      list: EMPLOYEES,
+      key: 'employee_code',
+      draft: draft,
+      render: render,
+      modal: 'employee-modal',
+      message: 'تمت الإضافة',
+      queueable: false,
+      reload: function () { fetchEmployees(true); },
+      recordOf: function (resp) {
+        if (resp && resp.record && resp.record.employee_code != null && resp.record.employee_code !== '') return resp.record;
+        return Object.assign({}, draft);
+      }
+    }).catch(function () { /* UIC.Live has toasted and rolled back */ });
   }
 
   function renderSalaries() {
@@ -242,24 +269,72 @@
     var data = UIC.collectForm('salary-form');
     var emp = EMPLOYEES.find(function (e) { return String(e.employee_code) === String(data.employee_code); });
     if (emp && !data.employee_name) data.employee_name = emp.employee_name;
-    UI.showSpinner('جاري الحفظ...');
-    companyCall('add_legal_salary', data)
-      .then(function (r) {
-        UIC.closeModal('salary-modal'); UIC.toast(r.message || 'تمت الإضافة', 'success');
-        if (r && r.record) {
-          SALARIES = SALARIES || [];
-          SALARIES.unshift(r.record);
-          if (SALARIES.length>10) SALARIES=SALARIES.slice(0,10);
-          render();
-        } else { fetchSalaries(); }
-      })
-      .catch(function (e) { showError(e); })
-      .finally(function () { UI.hideSpinner(); });
+    /* Tier A: the row is on screen before the request returns. The salary
+       record carries no stable server identity (employee_code repeats across
+       months, so it cannot be the key), therefore the draft carries a
+       client-side __draft key that recordOf copies onto the server record —
+       NEEDS-REPLY: addLegalSalary_ needs a stable row id. queueable:false:
+       I1 is unproven for add_legal_salary, so a transport failure rolls back
+       loudly instead of queueing. */
+    var draft = {
+      employee_code: data.employee_code,
+      employee_name: data.employee_name,
+      employee_dept: data.employee_dept,
+      gross_salary: data.gross_salary,
+      comp_insurance: data.comp_insurance,
+      emp_insurance: data.emp_insurance,
+      emp_allow: data.emp_allow,
+      emp_loan: data.emp_loan,
+      emp_tax: data.emp_tax,
+      emp_penalties: data.emp_penalties,
+      emp_others: data.emp_others,
+      emp_net_salary: data.emp_net_salary,
+      payroll_month: data.payroll_month,
+      payroll_year: data.payroll_year,
+      payroll_date: data.payroll_date,
+      transaction_type: data.transaction_type,
+      __draft: 'tmp_' + Math.random().toString(36).slice(2, 10)
+    };
+    SALARIES = SALARIES || [];
+    UIC.Live.save({
+      call: companyCall,
+      action: 'add_legal_salary',
+      data: data,
+      list: SALARIES,
+      key: '__draft',
+      draft: draft,
+      render: render,
+      modal: 'salary-modal',
+      message: 'تمت الإضافة',
+      queueable: false,
+      reload: function () { fetchSalaries(true); },
+      recordOf: function (resp) {
+        if (!(resp && resp.record)) return null;
+        var rec = Object.assign({}, resp.record);
+        rec.__draft = draft.__draft;
+        return rec;
+      },
+      /* The ten-row cap is applied here, NOT in the draft: trimming at draft
+         time would drop the tenth row, and the rollback restores the draft's
+         slot but cannot bring that row back. */
+      onSuccess: function () {
+        if (SALARIES.length > 10) SALARIES = SALARIES.slice(0, 10);
+        render();
+      }
+    }).catch(function () { /* UIC.Live has toasted and rolled back */ });
   }
 
   function showError(e) {
     UIC.toast((e && e.message) || 'خطأ غير متوقع', 'error');
   }
+
+  /* Another device's change arrives quietly on the visible tab. */
+  function refreshQuiet() { if (TAB === 'salaries') fetchSalaries(true); else fetchEmployees(true); }
+  UIC.Live.watchPage({
+    call: companyCall,
+    page: 'tc_budget_hr',
+    onChange: function () { UIC.Live.arrive(refreshQuiet); }
+  });
 
   load();
 </script>
