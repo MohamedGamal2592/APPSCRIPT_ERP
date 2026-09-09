@@ -86,9 +86,17 @@
       var container = document.getElementById('pt-table');
       if (!container) return;
       var rows = ROWS.map(function (r) {
+        /* Tier A: a __pending row shows «—» where the server has not answered
+           yet and offers no actions — its id names a record the server has
+           never seen, so acting on it would act on nothing. */
+        var pending = !!r.__pending;
         var level = r['المستوى الاساسي'] || ((r.name || '') + (r.name_en ? ' - ' + r.name_en : ''));
+        var balCell = pending
+          ? '<span class="num" data-num="0">—</span>'
+          : '<span class="num" data-bal="' + esc(r.id) + '" data-num="0">…</span>';
+        var actions = pending ? '…' : UIC.actionBtns([{ label: '📄 كشف حساب', onclick: 'PARTIES_PAGE.openStatement(\'' + esc(r.id) + '\')' }]);
         return [
-          '<b>' + esc(r.id) + '</b>',
+          pending ? '—' : ('<b>' + esc(r.id) + '</b>'),
           esc(r.name),
           esc(r.customer_direction),
           esc(r.type || '-'),
@@ -98,8 +106,8 @@
           /* [P2] Placeholder until get_valley_party_balances resolves. data-num
              starts at 0 so the existing numeric sort has something valid to work
              with even if the call never returns. */
-          '<span class="num" data-bal="' + esc(r.id) + '" data-num="0">…</span>',
-          UIC.actionBtns([{ label: '📄 كشف حساب', onclick: 'PARTIES_PAGE.openStatement(\'' + esc(r.id) + '\')' }])
+          balCell,
+          actions
         ];
       });
       container.innerHTML = UIC.dataTable('parties-table-id', {
@@ -207,15 +215,45 @@
         telephone: v('f-phone'),
         address: v('f-address')
       };
-      UI.showSpinner();
-      companyCall('save_valley_party', payload)
-        .then(function (r) {
-          UIC.closeModal('party-modal');
-          UIC.toast((r && r.message) || 'تم الحفظ بنجاح', 'success');
-          load(true);
-        })
-        .catch(function (e) { UIC.toast((e && e.message) || 'فشل الحفظ', 'error'); })
-        .finally(function () { UI.hideSpinner(); });
+      /* Tier A: the row is on screen before the request returns. The id cell
+         is server-assigned, so the draft never invents one — recordOf fills it
+         from the reply on add, and the payload id on edit. queueable:false: I1
+         is unproven for save_valley_party, so a transport failure rolls back
+         loudly instead of queueing. */
+      var isEdit = editId != null;
+      var draft = {
+        id: isEdit ? editId : '',
+        name: payload.name,
+        customer_direction: payload.customer_direction,
+        type: payload.type,
+        registration_number: payload.registration_number,
+        tax_id: payload.tax_id,
+        name_en: payload.name_en,
+        country: payload.country,
+        region: payload.region,
+        telephone: payload.telephone,
+        address: payload.address,
+        'المستوى الاساسي': payload.name + (payload.name_en ? ' - ' + payload.name_en : '')
+      };
+      UIC.Live.save({
+        call: companyCall,
+        action: 'save_valley_party',
+        data: payload,
+        list: ROWS,
+        key: 'id',
+        draft: draft,
+        render: renderTable,
+        modal: 'party-modal',
+        message: 'تم الحفظ بنجاح',
+        queueable: false,
+        reload: function () { load(true); },
+        recordOf: function (resp) {
+          var rec = Object.assign({}, draft);
+          if (resp && resp.id != null && resp.id !== '') rec.id = resp.id;
+          else if (!isEdit) return null;
+          return rec;
+        }
+      }).catch(function () { /* UIC.Live has toasted and rolled back */ });
     }
 
     /* ===================== PARTY STATEMENT (كشف حساب) =====================

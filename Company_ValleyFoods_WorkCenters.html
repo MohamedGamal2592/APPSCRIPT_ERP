@@ -80,9 +80,13 @@
       var c = document.getElementById('wc-table');
       if (!c) return;
       var rows = RECORDS.map(function (r) {
+        /* Tier A: code is server-assigned, so a __pending row shows «—» and
+           offers no actions — تعديل would name a unique_id the server has
+           never seen. */
+        var pending = !!r.__pending;
         var active = !(r.is_active === false || String(r.is_active).toLowerCase() === 'false');
-        var actions = IS_SUPER_ADMIN ? UIC.actionBtns([{ label: 'تعديل', onclick: 'WC_PAGE.openEdit(\'' + esc(r.unique_id) + '\')' }]) : '';
-        return [esc(r.code || r.id), esc(r.name_en), esc(r.name_ar), esc(r.work_center_type || '-'), num0(r.work_center_cost_per_hour), num0(r.capacity_per_hour_kg), esc(r.location || '-'), UIC.statusPill(active ? 'مفعل' : 'متوقف', active ? 'success' : 'neutral'), actions];
+        var actions = pending ? '…' : (IS_SUPER_ADMIN ? UIC.actionBtns([{ label: 'تعديل', onclick: 'WC_PAGE.openEdit(\'' + esc(r.unique_id) + '\')' }]) : '');
+        return [pending ? '—' : esc(r.code || r.id), esc(r.name_en), esc(r.name_ar), esc(r.work_center_type || '-'), num0(r.work_center_cost_per_hour), num0(r.capacity_per_hour_kg), esc(r.location || '-'), UIC.statusPill(active ? 'مفعل' : 'متوقف', active ? 'success' : 'neutral'), actions];
       });
       c.innerHTML = UIC.dataTable('wc-tbl', {
         headers: ['الكود', 'الاسم (EN)', 'الاسم (AR)', 'النوع', 'تكلفة/ساعة', 'السعة (كغ/ساعة)', 'الموقع', 'الحالة', ''],
@@ -140,11 +144,32 @@
         notes: (document.getElementById('f-notes') || {}).value || '',
         is_active: (document.getElementById('f-active') || {}).checked
       };
-      UI.showSpinner();
-      companyCall('save_valley_work_center', payload)
-        .then(function (r) { UIC.closeModal('wc-modal'); UIC.toast((r && r.message) || 'تم الحفظ', 'success'); load(true); })
-        .catch(function (e) { UIC.toast((e && e.message) || 'فشل', 'error'); })
-        .finally(function () { UI.hideSpinner(); });
+      /* Tier A: the row is on screen before the request returns. code and
+         unique_id are server-assigned, so the draft never invents them —
+         recordOf fills unique_id from the reply on add, and the payload uid on
+         edit. queueable:false: I1 is unproven for save_valley_work_center, so
+         a transport failure rolls back loudly instead of queueing. */
+      var isEdit = !!uid;
+      var draft = Object.assign({}, payload);
+      UIC.Live.save({
+        call: companyCall,
+        action: 'save_valley_work_center',
+        data: payload,
+        list: RECORDS,
+        key: 'unique_id',
+        draft: draft,
+        render: renderTable,
+        modal: 'wc-modal',
+        message: 'تم الحفظ',
+        queueable: false,
+        reload: function () { load(true); },
+        recordOf: function (resp) {
+          var rec = Object.assign({}, draft);
+          if (resp && resp.unique_id) rec.unique_id = resp.unique_id;
+          else if (!isEdit) return null;
+          return rec;
+        }
+      }).catch(function () { /* UIC.Live has toasted and rolled back */ });
     }
 
     window.WC_PAGE = { openAdd: openAdd, openEdit: openEdit, save: save };

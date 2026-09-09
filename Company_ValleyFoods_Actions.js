@@ -6515,7 +6515,7 @@ const ValleyFoodsHRModules = (function () {
         try{ logHistory_(dbId, WC_SHEET, map.record_uid || ('create_'+WC_SHEET+'_'+map['unique_id']), map['unique_id'], (user&&user.email)||'', 'create', map, null) }catch(e){}
       }
     });
-    return { status: 'success', message: editing ? 'تم التحديث' : 'تمت الإضافة' };
+    return { status: 'success', message: editing ? 'تم التحديث' : 'تمت الإضافة', unique_id: editing ? String(d.unique_id).trim() : map['unique_id'] };
   }
 
   function getValleyAssetTechnicals_(data, user, dbId) {
@@ -6578,7 +6578,7 @@ const ValleyFoodsHRModules = (function () {
         try{ logHistory_(dbId, WC_ASSET_TECH_SHEET, map.record_uid || ('create_'+WC_ASSET_TECH_SHEET+'_'+map['unique_id']), map['unique_id'], (user&&user.email)||'', 'create', map, null) }catch(e){}
       }
     });
-    return { status: 'success', message: editing ? 'تم التحديث' : 'تمت الإضافة' };
+    return { status: 'success', message: editing ? 'تم التحديث' : 'تمت الإضافة', unique_id: editing ? String(d.unique_id).trim() : map['unique_id'] };
   }
 
   function getValleyWorkCenterAssets_(data, user, dbId) {

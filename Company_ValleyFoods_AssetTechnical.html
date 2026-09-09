@@ -85,7 +85,11 @@
       var c = document.getElementById('tech-table');
       if (!c) return;
       var rows = RECORDS.map(function (r) {
-        var actions = IS_SUPER_ADMIN ? UIC.actionBtns([{ label: 'تعديل', onclick: 'TECH_PAGE.openEdit(\'' + esc(r.unique_id) + '\')' }]) : '';
+        /* Tier A: a __pending row offers no actions — تعديل would name a
+           unique_id the server has never seen. Values are all form-visible,
+           so the row paints from the draft as-is. */
+        var pending = !!r.__pending;
+        var actions = pending ? '…' : (IS_SUPER_ADMIN ? UIC.actionBtns([{ label: 'تعديل', onclick: 'TECH_PAGE.openEdit(\'' + esc(r.unique_id) + '\')' }]) : '');
         return [esc(r.asset_name), prodLabel(r.product_id), num0(r.purchase_value), esc(r.depreciation_method || '-'), num0(r.useful_life_years), num0(r.capacity_kg_per_hour), num0(r.kw_consumption), esc(r.status || '-'), actions];
       });
       c.innerHTML = UIC.dataTable('tech-tbl', {
@@ -163,11 +167,32 @@
         status: getV('f-status'),
         notes: getV('f-notes')
       };
-      UI.showSpinner();
-      companyCall('save_valley_asset_technical', payload)
-        .then(function (r) { UIC.closeModal('tech-modal'); UIC.toast((r && r.message) || 'تم الحفظ', 'success'); load(true); })
-        .catch(function (e) { UIC.toast((e && e.message) || 'فشل', 'error'); })
-        .finally(function () { UI.hideSpinner(); });
+      /* Tier A: the row is on screen before the request returns. unique_id is
+         server-assigned, so the draft never invents one — recordOf fills it
+         from the reply on add, and the payload uid on edit. queueable:false:
+         I1 is unproven for save_valley_asset_technical, so a transport failure
+         rolls back loudly instead of queueing. */
+      var isEdit = !!payload.unique_id;
+      var draft = Object.assign({}, payload);
+      UIC.Live.save({
+        call: companyCall,
+        action: 'save_valley_asset_technical',
+        data: payload,
+        list: RECORDS,
+        key: 'unique_id',
+        draft: draft,
+        render: renderTable,
+        modal: 'tech-modal',
+        message: 'تم الحفظ',
+        queueable: false,
+        reload: function () { load(true); },
+        recordOf: function (resp) {
+          var rec = Object.assign({}, draft);
+          if (resp && resp.unique_id) rec.unique_id = resp.unique_id;
+          else if (!isEdit) return null;
+          return rec;
+        }
+      }).catch(function () { /* UIC.Live has toasted and rolled back */ });
     }
 
     window.TECH_PAGE = { openAdd: openAdd, openEdit: openEdit, save: save };
