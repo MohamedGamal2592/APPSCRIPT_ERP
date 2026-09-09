@@ -55,8 +55,8 @@
       .catch(function (e) { UI.hideSpinner(); try{schedulePrefetch();}catch(e){} showError(e); });
   }
 
-  function fetchCash() {
-    UIC.readSkeleton();
+  function fetchCash(quiet) {
+    if (!quiet) UIC.readSkeleton();
     return companyCall('get_legal_cash', {
       transaction_type: FILTER.type,
       transaction_method: FILTER.method,
@@ -68,6 +68,7 @@
         LAST.total = r.total || 0;
         LAST.summary = r.summary || { debit: 0, credit: 0, count: 0 };
         LAST.boxes = r.boxes || [];
+        LAST.items = r.items || [];
         renderCash(r.items || [], r.total || 0, LAST.summary);
       })
       .catch(function (e) { showError(e); })
@@ -117,8 +118,16 @@
       var boxItems = items.filter(function (r) { return String(r.related_box || '').trim() === String(b.box); });
       if (!boxItems.length) return;
       var rows = boxItems.map(function (r) {
+        /* Tier A: transaction_id and chart_account_main are server-assigned
+           (max+1 id, VLOOKUP formula), so a __pending row shows «—» there and
+           offers no actions — اعتماد/طباعة would name a transaction_id the
+           server has never seen. balance_amount is also a sheet formula, but a
+           money column can only print a number: the draft carries the same
+           signed value the server computes (negative for Credit / Debit Note),
+           corrected by the reply. */
+        var pending = !!r.__pending;
         return {
-          transaction_id: FMT.escape(r.transaction_id || '-'),
+          transaction_id: pending ? '—' : FMT.escape(r.transaction_id || '-'),
           name: FMT.escape(r.name || '-'),
           details: FMT.escape(r.transaction_details || '-'),
           date: FMT.escape(r.transaction_date || '-'),
@@ -129,9 +138,9 @@
           type: FMT.escape(r.transaction_type || '-'),
           balance: Number(r.balance_amount) || 0,
           method: FMT.escape(r.transaction_method || '-'),
-          chart_main: FMT.escape(r.chart_account_main || '-'),
+          chart_main: pending ? '—' : FMT.escape(r.chart_account_main || '-'),
           approved: FMT.escape(r.approved || '-'),
-          actions: UIC.actionBtns([
+          actions: pending ? '…' : UIC.actionBtns([
             { label: String(r.approved || '').trim().toUpperCase() === 'TRUE' ? 'إلغاء' : 'اعتماد', onclick: "toggleApproved('" + (r.transaction_id || '') + "')" },
             { label: 'طباعة', onclick: "printCash('" + (r.transaction_id || '') + "')", color: '' }
           ])
@@ -285,23 +294,62 @@
     data.net_amount = amt - disc;
     data.total = data.net_amount + tax;
     data.approved = data.approved === 'TRUE' ? true : false;
-    UI.showSpinner('جاري الحفظ...');
-    companyCall('add_legal_cash', data)
-      .then(function (r) {
-        UIC.closeModal('cash-modal'); UIC.toast(r.message || 'تمت الإضافة', 'success');
-        if (r && r.record) {
-          LAST.items = LAST.items || [];
-          LAST.items.unshift(r.record);
-          // keep sort desc by transaction_id
-          LAST.items.sort(function(a,b){ return (Number(b.transaction_id)||0)-(Number(a.transaction_id)||0); });
-          if (LAST.items.length>200) LAST.items=LAST.items.slice(0,200);
-          // summary already computed from FULL on server, but we increment locally
-          if (LAST.summary) { LAST.summary.count++; if (String(r.record.transaction_type).indexOf('Debit')!==-1) LAST.summary.debit+=r.record.transaction_amount; else if(String(r.record.transaction_type).indexOf('Credit')!==-1) LAST.summary.credit+=r.record.transaction_amount; }
-          renderCash(LAST.items, LAST.total+1, LAST.summary);
-        } else { fetchCash(); }
-      })
-      .catch(function (e) { showError(e); })
-      .finally(function () { UI.hideSpinner(); });
+    /* Tier A (MONEY form): the row is on screen before the request returns,
+       but nothing about money is relaxed — validation above is unchanged, and
+       queueable:false is mandatory: I1 is unproven for add_legal_cash, so a
+       transport failure rolls back loudly instead of queueing a cash row.
+       transaction_id is server-assigned (max+1), so the draft never invents
+       one — recordOf fills it from the reply. */
+    var isCreditLike = (data.transaction_type === 'Credit' || data.transaction_type === 'Debit Note');
+    var draft = {
+      name: data.name,
+      transaction_details: data.transaction_details,
+      transaction_date: data.transaction_date,
+      transaction_amount: amt,
+      total_discount: disc,
+      taxes: tax,
+      net_amount: data.net_amount,
+      total: data.total,
+      transaction_type: data.transaction_type,
+      related_box: data.related_box,
+      transaction_method: data.transaction_method,
+      chart_code: data.chart_code,
+      balance_amount: isCreditLike ? -amt : amt,
+      chart_account_main: '',
+      approved: data.approved
+    };
+    LAST.items = LAST.items || [];
+    UIC.Live.save({
+      call: companyCall,
+      action: 'add_legal_cash',
+      data: data,
+      list: LAST.items,
+      key: 'transaction_id',
+      draft: draft,
+      render: function () { renderCash(LAST.items, LAST.total, LAST.summary); },
+      modal: 'cash-modal',
+      message: 'تمت الإضافة',
+      queueable: false,
+      reload: function () { fetchCash(true); },
+      recordOf: function (resp) {
+        var rec = Object.assign({}, draft, (resp && resp.record) || {});
+        var tid = (resp && resp.record && resp.record.transaction_id) || (resp && resp.transaction_id) ||
+          (resp && resp.data && (resp.data.transaction_id || resp.data.assignedId));
+        if (tid == null || tid === '') return null;
+        rec.transaction_id = tid;
+        return rec;
+      },
+      onSuccess: function (resp) {
+        if (!(resp && resp.record)) return;
+        // keep sort desc by transaction_id
+        LAST.items.sort(function (a, b) { return (Number(b.transaction_id) || 0) - (Number(a.transaction_id) || 0); });
+        if (LAST.items.length > 200) LAST.items = LAST.items.slice(0, 200);
+        // summary already computed from FULL on server, but we increment locally
+        var rr = resp.record;
+        if (LAST.summary) { LAST.summary.count++; if (String(rr.transaction_type).indexOf('Debit') !== -1) LAST.summary.debit += rr.transaction_amount; else if (String(rr.transaction_type).indexOf('Credit') !== -1) LAST.summary.credit += rr.transaction_amount; }
+        renderCash(LAST.items, LAST.total + 1, LAST.summary);
+      }
+    }).catch(function () { /* UIC.Live has toasted and rolled back */ });
   }
 
   function toggleApproved(id) {
@@ -322,6 +370,13 @@
   function showError(e) {
     UIC.toast((e && e.message) || 'خطأ غير متوقع', 'error');
   }
+
+  /* Another device's change arrives quietly. */
+  UIC.Live.watchPage({
+    call: companyCall,
+    page: 'tc_budget_cash',
+    onChange: function () { UIC.Live.arrive(function () { fetchCash(true); }); }
+  });
 
   load();
 </script>

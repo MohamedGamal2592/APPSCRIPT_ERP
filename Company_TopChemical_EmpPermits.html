@@ -74,8 +74,8 @@
     fetchPermits();
   }
 
-  function fetchPermits() {
-    UI.showSpinner();
+  function fetchPermits(quiet) {
+    if (!quiet) UI.showSpinner();
     companyCall('get_emp_permits')
       .then(function (r) {
         window.__rows = r.rows || [];
@@ -84,19 +84,23 @@
         renderPermits();
       })
       .catch(function (e) { showError(e); })
-      .finally(function () { UI.hideSpinner(); try{schedulePrefetch();}catch(e){} });
+      .finally(function () { if (!quiet) UI.hideSpinner(); try{schedulePrefetch();}catch(e){} });
   }
 
   function renderPermits() {
     var rows = window.__rows.map(function (r) {
+      /* Tier A: name_ar/total_minutes are sheet formulas, so a __pending row
+         shows «—» there and never a guessed value. This page has no row
+         actions, so there is nothing to gate. */
+      var pending = !!r.__pending;
       return {
         emp_id: r.emp_id,
-        name_ar: esc(r.name_ar || '-'),
+        name_ar: pending ? '—' : esc(r.name_ar || '-'),
         permit_type: esc(r.permit_type || '-'),
         permit_date: fmtDate(r.permit_date),
         start_time: fmtTime(r.start_time),
         end_time: fmtTime(r.end_time),
-        total_minutes: r.total_minutes
+        total_minutes: pending ? '—' : r.total_minutes
       };
     });
     var headers = [
@@ -146,26 +150,58 @@
   function savePermit() {
     if (!UIC.validateForm('permit-form')) return;
     var data = UIC.collectForm('permit-form');
-    UI.showSpinner('جاري الحفظ...');
-    companyCall('add_emp_permit', data)
-      .then(function (r) {
-        UIC.closeModal('permit-modal');
-        UIC.toast((r && r.message) || 'تم الحفظ', 'success');
-        if (r && r.record) {
-          window.__rows = window.__rows || [];
-          window.__rows.unshift(r.record);
-          if (window.__rows.length>10) window.__rows=window.__rows.slice(0,10);
-          renderPermits();
-        } else { fetchPermits(); }
-      })
-      .catch(function (e) { UIC.toast((e && e.message) || 'خطأ', 'error'); })
-      .finally(function () { UI.hideSpinner(); });
+    /* Tier A: the row is on screen before the request returns. These rows
+       carry no server-assigned id, so `key` names an absent field and the
+       machinery tracks the draft with its own __tmp_ value; recordOf replaces
+       it with the server's record. queueable:false: I1 is unproven for
+       add_emp_permit, so a transport failure rolls back loudly. */
+    var draft = {
+      emp_id: data.emp_id,
+      permit_type: data.permit_type,
+      permit_date: data.permit_date,
+      start_time: data.start_time,
+      end_time: data.end_time
+    };
+    window.__rows = window.__rows || [];
+    UIC.Live.save({
+      call: companyCall,
+      action: 'add_emp_permit',
+      data: data,
+      list: window.__rows,
+      key: 'unique_id',
+      draft: draft,
+      render: renderPermits,
+      modal: 'permit-modal',
+      message: 'تم الحفظ',
+      queueable: false,
+      reload: function () { fetchPermits(true); },
+      recordOf: function (resp) {
+        if (!resp || !resp.record) return null;
+        var rec = Object.assign({}, draft, resp.record);
+        if (resp.unique_id) rec.unique_id = resp.unique_id;
+        if (resp.id != null && resp.id !== '') rec.id = resp.id;
+        return rec;
+      },
+      /* The ten-row cap is applied here, NOT in the draft (old code capped
+         the local list the same way). */
+      onSuccess: function () {
+        if (window.__rows.length > 10) window.__rows = window.__rows.slice(0, 10);
+        renderPermits();
+      }
+    }).catch(function () { /* UIC.Live has toasted and rolled back */ });
   }
 
   function showError(e) {
     var body = document.getElementById('permit-content');
     if (body) body.innerHTML = '<div class="empty-state"><span>' + esc(e.message || 'خطأ') + '</span></div>';
   }
+
+  /* Another device's change arrives quietly. */
+  UIC.Live.watchPage({
+    call: companyCall,
+    page: 'tc_emp_permits',
+    onChange: function () { UIC.Live.arrive(function () { fetchPermits(true); }); }
+  });
 
   load();
 </script>

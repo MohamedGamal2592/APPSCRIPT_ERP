@@ -74,8 +74,8 @@
     fetchOvertime();
   }
 
-  function fetchOvertime() {
-    UI.showSpinner();
+  function fetchOvertime(quiet) {
+    if (!quiet) UI.showSpinner();
     companyCall('get_emp_overtime')
       .then(function (r) {
         window.__rows = r.rows || [];
@@ -84,22 +84,26 @@
         renderOvertime();
       })
       .catch(function (e) { showError(e); })
-      .finally(function () { UI.hideSpinner(); try{schedulePrefetch();}catch(e){} });
+      .finally(function () { if (!quiet) UI.hideSpinner(); try{schedulePrefetch();}catch(e){} });
   }
 
   function renderOvertime() {
     var rows = window.__rows.map(function (r) {
+      /* Tier A: name_ar/total_time/approved_amount are sheet formulas, so a
+         __pending row shows «—» there and never a guessed value. This page has
+         no row actions, so there is nothing to gate. */
+      var pending = !!r.__pending;
       return {
         emp_id: r.emp_id,
-        name_ar: esc(r.name_ar || '-'),
+        name_ar: pending ? '—' : esc(r.name_ar || '-'),
         date: fmtDate(r.date),
         start_time: fmtTime(r.start_time),
         end_time: fmtTime(r.end_time),
-        total_time: r.total_time,
+        total_time: pending ? '—' : r.total_time,
         approved: r.approved ? 'نعم' : 'لا',
         overtime_type: esc(r.overtime_type || '-'),
         amount: r.amount,
-        approved_amount: r.approved_amount
+        approved_amount: pending ? '—' : r.approved_amount
       };
     });
     var headers = [
@@ -187,26 +191,61 @@
     }
     var data = UIC.collectForm('ot-form');
     data.approved = !!document.getElementById('approved').checked;
-    UI.showSpinner('جاري الحفظ...');
-    companyCall('add_emp_overtime', data)
-      .then(function (r) {
-        UIC.closeModal('ot-modal');
-        UIC.toast((r && r.message) || 'تم الحفظ', 'success');
-        if (r && r.record) {
-          window.__rows = window.__rows || [];
-          window.__rows.unshift(r.record);
-          if (window.__rows.length>10) window.__rows=window.__rows.slice(0,10);
-          renderOvertime();
-        } else { fetchOvertime(); }
-      })
-      .catch(function (e) { UIC.toast((e && e.message) || 'خطأ', 'error'); })
-      .finally(function () { UI.hideSpinner(); });
+    /* Tier A: the row is on screen before the request returns. These rows
+       carry no server-assigned id, so `key` names an absent field and the
+       machinery tracks the draft with its own __tmp_ value; recordOf replaces
+       it with the server's record. queueable:false: I1 is unproven for
+       add_emp_overtime, so a transport failure rolls back loudly. */
+    var draft = {
+      emp_id: data.emp_id,
+      date: data.date,
+      start_time: data.start_time,
+      end_time: data.end_time,
+      details: data.details,
+      approved: data.approved,
+      overtime_type: data.overtime_type,
+      amount: data.amount
+    };
+    window.__rows = window.__rows || [];
+    UIC.Live.save({
+      call: companyCall,
+      action: 'add_emp_overtime',
+      data: data,
+      list: window.__rows,
+      key: 'unique_id',
+      draft: draft,
+      render: renderOvertime,
+      modal: 'ot-modal',
+      message: 'تم الحفظ',
+      queueable: false,
+      reload: function () { fetchOvertime(true); },
+      recordOf: function (resp) {
+        if (!resp || !resp.record) return null;
+        var rec = Object.assign({}, draft, resp.record);
+        if (resp.unique_id) rec.unique_id = resp.unique_id;
+        if (resp.id != null && resp.id !== '') rec.id = resp.id;
+        return rec;
+      },
+      /* The ten-row cap is applied here, NOT in the draft (old code capped
+         the local list the same way). */
+      onSuccess: function () {
+        if (window.__rows.length > 10) window.__rows = window.__rows.slice(0, 10);
+        renderOvertime();
+      }
+    }).catch(function () { /* UIC.Live has toasted and rolled back */ });
   }
 
   function showError(e) {
     var body = document.getElementById('ot-content');
     if (body) body.innerHTML = '<div class="empty-state"><span>' + esc(e.message || 'خطأ') + '</span></div>';
   }
+
+  /* Another device's change arrives quietly. */
+  UIC.Live.watchPage({
+    call: companyCall,
+    page: 'tc_emp_overtime',
+    onChange: function () { UIC.Live.arrive(function () { fetchOvertime(true); }); }
+  });
 
   load();
 </script>

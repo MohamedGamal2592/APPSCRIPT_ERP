@@ -113,6 +113,11 @@
   function renderPapers(list) {
     window.__papers = list;
     var rows = list.map(function (p, idx) {
+      /* Tier A: a __pending row offers no actions — view/edit/delete name a
+         document_number the server has not confirmed yet. product_name is
+         resolved server-side, so it renders «—» until the reply fills it;
+         document_number itself is typed in the form, so it paints as-is. */
+      var pending = !!p.__pending;
       var fileCell = p.document_file
         ? '<button class="btn btn-outline" style="padding:4px 10px;" onclick="viewAttachment(\'' + FMT.escape(p.document_file).replace(/\'/g, "\\\'") + '\')">📎 عرض / View</button>'
         : '-';
@@ -120,13 +125,13 @@
       return {
         document_name_ar: p.document_name_ar || '-',
         document_name_en: p.document_name_en || '-',
-        product: p.product_name || (p.product_id ? '#' + p.product_id : '-'),
+        product: pending ? '—' : (p.product_name || (p.product_id ? '#' + p.product_id : '-')),
         document_number: p.document_number,
         document_type: p.document_type || '-',
         document_start_date: fmtDate(p.document_start_date),
         document_end_date: fmtDate(p.document_end_date),
         document_file: fileCell,
-        actions: UIC.actionBtns([
+        actions: pending ? '…' : UIC.actionBtns([
           { label: '👁️ عرض / View', onclick: "viewPaper(" + idx + ")" },
           hasAtt ? { label: '📎 عرض المرفق / View Attachment', onclick: "viewAttachment('" + FMT.escape(p.document_file).replace(/\'/g, "\\\'") + "')" } : null,
           { label: '🖨️ طباعة / Print', onclick: "printPaper(" + idx + ")" },
@@ -197,25 +202,45 @@
     delete data.document_type_custom;
     if (data.product === '__new__') { UIC.toast('اختر منتجاً موجوداً', 'error'); return; }
     delete data.product_custom;
-    UI.showSpinner('جاري الحفظ...');
     var formEl = document.getElementById('paper-form');
+    /* The file upload is a real round trip and stays in front of the save —
+       there is nothing optimistic to do about a file the server has not
+       received. Everything after it is Tier A: the row is on screen before the
+       paper request returns, keyed by the client-typed document_number, and
+       the server's record replaces the draft. queueable:false: I1 is unproven
+       for add_registration_paper, so a transport failure rolls back loudly. */
     uploadSelectedFile(formEl, { sheet: 'registration_papers', name: data.document_name_ar })
       .then(function (ref) {
         if (ref) data.document_file = ref;
-        return companyCall('add_registration_paper', data);
+        var draft = Object.assign({}, data);
+        window.__papers = window.__papers || [];
+        return UIC.Live.save({
+          call: companyCall,
+          action: 'add_registration_paper',
+          data: data,
+          list: window.__papers,
+          key: 'document_number',
+          draft: draft,
+          render: function () { renderPapers(window.__papers); },
+          modal: 'paper-modal',
+          message: 'تم الحفظ',
+          queueable: false,
+          reload: function () { fetchPapers(); },
+          recordOf: function (resp) {
+            var rec = Object.assign({}, draft, (resp && resp.record) || {});
+            if (resp && resp.unique_id) rec.unique_id = resp.unique_id;
+            if (resp && resp.id != null && resp.id !== '') rec.id = resp.id;
+            if (rec.document_number == null || rec.document_number === '') return null;
+            return rec;
+          },
+          onSuccess: function () {
+            /* Only the "newest 10" view keeps its cap; the full history keeps growing. */
+            if (!__loadedAll && window.__papers.length > 10) window.__papers = window.__papers.slice(0, 10);
+            renderPapers(window.__papers);
+          }
+        }).catch(function () { /* UIC.Live has toasted and rolled back */ });
       })
-      .then(function (r) {
-        UIC.closeModal('paper-modal');
-        UIC.toast(r.message || 'تم الحفظ', 'success');
-        if (r && r.record) {
-          window.__papers = window.__papers || [];
-          window.__papers.unshift(r.record);
-          if (window.__papers.length>10) window.__papers=window.__papers.slice(0,10);
-          renderPapers(window.__papers);
-        } else { fetchPapers(); }
-      })
-      .catch(function (e) { UIC.toast(e.message || 'خطأ', 'error'); })
-      .finally(function () { UI.hideSpinner(); });
+      .catch(function (e) { UIC.toast((e && e.message) || 'خطأ', 'error'); });
   }
 
   function showError(e) {
@@ -223,6 +248,17 @@
     if (body) body.innerHTML = '<div class="empty-state"><span>' + FMT.escape(e.message || 'خطأ') + '</span></div>';
   }
 
+
+  /* Another device's change arrives quietly (keeps the loaded-all state).
+     NOTE: refreshes draw the skeleton here — a quiet variant would touch the
+     fetchPapers/loadAll lines that carry another effort's uncommitted work,
+     so it waits until that work lands. arrive() still defers while a save is
+     pending (B4 userIsBusy). */
+  UIC.Live.watchPage({
+    call: companyCall,
+    page: 'tc_registration_papers',
+    onChange: function () { UIC.Live.arrive(function () { fetchPapers(); }); }
+  });
 
   load();
 </script>
