@@ -8264,7 +8264,11 @@ const ValleyFoodsHRModules = (function () {
         lineCost += a.total_cost;
       });
       ln.line_material_cost = lineCost;
-      allocByLine.push({ line_uid: ln.unique_id, allocations: als });
+      /* The allocation rows must key on the REWRITTEN line uid: cleanLines[idx]
+         minted a uuid when the payload carried none (a new invoice, or a new
+         line added mid-edit), and the line rows on the sheet carry that uuid —
+         keying on the raw payload uid would orphan the rows under ''. */
+      allocByLine.push({ line_uid: cleanLines[idx].unique_id, allocations: als });
     });
 
     executeWithLock_(function () {
@@ -8410,12 +8414,16 @@ const ValleyFoodsHRModules = (function () {
       cleanLines.forEach(function (ln) { invLineUids[ln.unique_id] = true; });
       priorLineUids.forEach(function (lu) { if (lu) invLineUids[lu] = true; });
 
-      /* what the invoice should hold after this save, keyed line|batch */
+      /* what the invoice should hold after this save, keyed line|batch.
+         batch_uid is trimmed here so the key matches the trimmed sheet key
+         below (and the trimmed validation key above): an untrimmed uid would
+         delete-then-re-append instead of updating in place. */
       var wanted = {};
       allocByLine.forEach(function (entry) {
         entry.allocations.forEach(function (a) {
-          wanted[entry.line_uid + '|' + String(a.batch_uid)] =
-            { line_uid: entry.line_uid, batch_uid: String(a.batch_uid), qty: Number(a.qty) };
+          var wBatch = String(a.batch_uid || '').trim();
+          wanted[entry.line_uid + '|' + wBatch] =
+            { line_uid: entry.line_uid, batch_uid: wBatch, qty: Number(a.qty) };
         });
       });
 
