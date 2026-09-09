@@ -252,12 +252,13 @@
   /* ── real PK column — confirmed from schema ── */
   var PK_COL = 'id';
 
-  /* ── columns the edit form must never allow writing ── */
+  /* ── columns the edit form must never allow writing ──
+     deleted_at IS editable — clearing it restores a soft-deleted row;
+     setting it marks the row as deleted. */
   var READ_ONLY_COLS = {
     'id':         true,
     'created_at': true,
-    'updated_at': true,
-    'deleted_at': true
+    'updated_at': true
   };
 
   /* ── human-readable Arabic labels ── */
@@ -551,6 +552,19 @@
           '<div class="form-field' + fieldClass + '">' +
             '<label class="form-label">' + FMT.escape(label) + '</label>' +
             '<input type="date" class="input" name="' + col + '" id="cbsf_' + col + '" value="' + FMT.escape(dv) + '">' +
+          '</div>';
+
+      } else if (col === 'deleted_at') {
+        /* Timestamp (nullable). Clearing → restores the row. Setting → soft-deletes it.
+           Browser datetime-local expects "YYYY-MM-DDTHH:mm" — slice the first 16 chars. */
+        var dtv = val ? String(val).slice(0, 16).replace(' ', 'T') : '';
+        formHtml +=
+          '<div class="form-field' + fieldClass + '">' +
+            '<label class="form-label">' + FMT.escape(label) +
+              ' <span style="font-size:11px;background:#fef3c7;color:#92400e;border-radius:4px;padding:1px 5px;">تحكم بالحذف الناعم</span>' +
+            '</label>' +
+            '<input type="datetime-local" class="input" name="' + col + '" id="cbsf_' + col + '" value="' + FMT.escape(dtv) + '">' +
+            '<div style="font-size:11px;color:var(--text-muted,#64748b);margin-top:3px;">اتركه فارغاً لاستعادة السجل المحذوف. ضع تاريخاً للحذف الناعم.</div>' +
           '</div>';
 
       } else if (NUMERIC_COLS[col]) {

@@ -604,12 +604,12 @@ function dbClientBalanceSheetsUpdate_(data, user) {
   var id = String(data.id !== undefined && data.id !== null ? data.id : '').trim();
   if (!id) throw new Error('id is required');
 
-  // Columns the client must not overwrite — PK, audit timestamps, soft-delete.
+  // Columns the client must not overwrite — PK and server-managed audit timestamps.
+  // deleted_at IS editable: it controls soft-delete and the admin may need to restore rows.
   var readOnlyCols = {
-    'id': true,
+    'id':         true,
     'created_at': true,
-    'updated_at': true,
-    'deleted_at': true
+    'updated_at': true
   };
 
   var updates = [];
