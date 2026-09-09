@@ -6225,10 +6225,12 @@ UIC.Live = (function () {
    * and loses it on reload, which is exactly today's behaviour and no worse.
    */
   var RETRY_KEY = 'erp_live_queue';
+  var DEAD_KEY = 'erp_live_dead';
   var LEAD_KEY = 'erp_live_lead';
   var LEAD_TTL = 12000;
   var RETRY_MAX = 5;
   var queue = [];                 // [{v, target_system, action, data, message, tries, at}]
+  var dead = [];                  // exhausted/refused replays, awaiting a human ack (§I6)
   var retryTimer = null;
   var tabId = String(Math.random()).slice(2) + Date.now();
 
@@ -6269,6 +6271,24 @@ UIC.Live = (function () {
       if (queue.length) localStorage.setItem(RETRY_KEY, JSON.stringify(queue));
       else localStorage.removeItem(RETRY_KEY);
     } catch (e) { /* a full or throwing store keeps the in-memory queue */ }
+  }
+
+  /* ── [§I6] The dead letter: a replay the server refused, or that exhausted
+   * RETRY_MAX, stops being a retry and becomes a record a human must see. The
+   * chip section below stays until it is explicitly acknowledged — never a
+   * toast that can scroll away, and it survives a reload like the queue does.
+   * Only {action, message} are kept: enough to name the record, never
+   * the payload. The click IS the acknowledgement — the write already failed,
+   * so unlike discardQueue (which destroys a still-valid payload) no confirm
+   * stands between the user and dismissing it. */
+  function loadDead() {
+    try { dead = JSON.parse(localStorage.getItem(DEAD_KEY)) || []; }
+    catch (e) { dead = []; }
+  }
+
+  function persistDead() {
+    try { localStorage.setItem(DEAD_KEY, JSON.stringify(dead)); }
+    catch (e) { /* in-memory record only — still shown, still needs its ack */ }
   }
 
   /**
@@ -6328,7 +6348,7 @@ UIC.Live = (function () {
    */
   function renderChip() {
     var el = document.getElementById('uic-live-retry');
-    if (!queue.length) { if (el) el.remove(); return; }
+    if (!queue.length && !dead.length) { if (el) el.remove(); return; }
     if (!el) {
       el = document.createElement('div');
       el.id = 'uic-live-retry';
@@ -6342,6 +6362,11 @@ UIC.Live = (function () {
       '<button type="button" class="uic-live-retry-go" onclick="UIC.Live.retryNow()">إعادة المحاولة</button>' +
       '<button type="button" class="uic-live-retry-drop" onclick="UIC.Live.discardQueue()" ' +
       'title="تجاهل التغييرات غير المحفوظة">تجاهل</button>';
+    if (dead.length) {
+      el.innerHTML += '<div>' + dead.map(function (d) {
+        return '<div>' + d.m + ' (' + d.a + ')</div>';
+      }).join('') + '<button type="button" onclick="UIC.Live.ackDead()">تم</button></div>';
+    }
   }
 
   function enqueue(entry) {
@@ -6376,7 +6401,10 @@ UIC.Live = (function () {
     /* An entry from a build that did not stamp target_system cannot be rebuilt
        and cannot be sent from this session. It is NOT dropped: the chip goes on
        saying it is unsaved, which is what it did before, and «تجاهل» is still
-       the only thing that removes it. */
+       the only thing that removes it. (Rotating it past the live entries would
+       cost wire bytes this page does not have — headroom 601 B — so a legacy
+       head still waits for the next drain event like it always has. Once any
+       save in this session stamps queue._call, callFor drains it normally.) */
     if (!send) { renderChip(); return; }
 
     entry.tries = (entry.tries || 0) + 1;
@@ -6392,13 +6420,13 @@ UIC.Live = (function () {
       .catch(function (err) {
         if (!err || !err.transport || entry.tries >= RETRY_MAX) {
           /* Either the server has now refused it, or we have tried enough. It
-           * stops being a retry and becomes something the user must see. */
+           * stops being a retry and becomes a dead letter (§I6 above): named,
+           * persistent, and dismissed only by an explicit ack. */
           queue.shift();
           persistQueue();
+          dead.push({ a: entry.action, m: (err && err.transport) ? 'تعذر الاتصال — أعد إدخال التغيير' : ((err && err.message) || 'تعذر الحفظ') });
+          persistDead();
           renderChip();
-          try {
-            UIC.toast((err && err.message) || 'تعذر حفظ تغيير مؤجل — لم يتم تسجيله', 'error');
-          } catch (e) {}
         }
         if (queue.length) scheduleRetry();
       });
@@ -6796,8 +6824,9 @@ UIC.Live = (function () {
    * `_call`. Both halves are fixed — callFor() rebuilds the request from the
    * entry, and the drain is armed below. */
   loadQueue();
+  loadDead();
   try {
-    if (queue.length) {
+    if (queue.length || dead.length) {
       renderChip();
       if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', function () { renderChip(); });
@@ -6847,6 +6876,14 @@ UIC.Live = (function () {
     renderChip();
   }
 
+  /** Acknowledge the dead letters. See the §I6 note on persistDead: the click
+   * is the acknowledgement, so unlike discardQueue this asks nothing. */
+  function ackDead() {
+    dead.length = 0;
+    persistDead();
+    renderChip();
+  }
+
 
   return {
     save: save,
@@ -6865,6 +6902,7 @@ UIC.Live = (function () {
     applyFresh: applyFresh,
     retryNow: retryNow,
     discardQueue: discardQueue,
+    ackDead: ackDead,
     queued: function () { return queue.length; }
   };
 })();
