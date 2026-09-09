@@ -6420,12 +6420,30 @@ UIC.Live = (function () {
       : ('هناك ' + n + ' تغييرات لم تُحفظ بعد. الخروج الآن سيفقدها.');
   }
 
+  /**
+   * [§I1] A client-minted natural key, in the shape the server's own uid16_
+   * produces, so a row created from a client key is indistinguishable from one
+   * created from a server key.
+   *
+   * This IS the idempotency key. It is minted ONCE, before the first attempt,
+   * and it travels inside o.data — which is what the queue persists — so every
+   * retry re-sends the same one. A fresh key per attempt would defeat the whole
+   * mechanism, which is why nothing regenerates it on the retry path.
+   */
+  function uid16() {
+    return (Math.random().toString(16).slice(2) + Math.random().toString(16).slice(2) + '0000000000000000').slice(0, 16);
+  }
+
   function save(o) {
     o = o || {};
     var list = o.list;
     var key = o.key;
     var draft = o.draft;
     var canPatch = !!(list && key && draft && typeof o.render === 'function');
+    /* Mint the natural key when the caller asked for one and has not supplied
+       it. Never overwrite: a page that mints its own (because the draft row
+       needs the same value) stays in charge of it. */
+    if (o.uid && o.data && !o.data[o.uid]) o.data[o.uid] = uid16();
 
     /* Enough state to put the list back EXACTLY as it was. */
     var undo = null;
@@ -6487,7 +6505,24 @@ UIC.Live = (function () {
          * still going to land. Everything else — a handler that refused the
          * payload — rolls back exactly as it always has, because retrying a
          * rejection just shows the same error five times. */
-        if (err && err.transport) {
+        /* ── [§I3] Queueable is a SEPARATE axis from tier ──────────────────
+         *
+         *   Tier      decides whether the row is drawn before the server
+         *             answers.
+         *   Queueable decides whether the write may be replayed later.
+         *
+         * They are independent, and a save may be optimistic and NOT
+         * queueable. A write is only allowed into the queue when a replay
+         * cannot duplicate it — which, on the server, means its handler
+         * dedupes on the unique_id this payload carries (liveDedupe_ in
+         * 02_DataAccess.js). A save that fails that test is never queued: it
+         * rolls back and says so, loudly and immediately. Losing a write the
+         * user is TOLD about beats duplicating a cash row they are not.
+         *
+         * `queueable` is an additive option and defaults to today's behaviour,
+         * so the seven pages already on UIC.Live are unchanged. Every page
+         * converted from here on states it explicitly. */
+        if (err && err.transport && o.queueable !== false) {
           /* `_call` stays as the same-session sender, so a save whose call is
              not a companyCall still retries while this tab is open. What is new
              is `target_system`: one string, which JSON can carry, so the entry
@@ -6512,7 +6547,16 @@ UIC.Live = (function () {
           else if (at3 !== -1) list[at3] = undo.was;
           try { o.render(); } catch (e) {}
         }
-        try { UIC.toast((err && err.message) || 'تعذر الحفظ — لم يتم تسجيل التغيير', 'error'); } catch (e) {}
+        /* [§I3/§I6] A transport failure that was refused entry to the queue is
+           NOT the same event as a refusal, and the driver's own message
+           ("network") does not tell the user what happened to their change. It
+           is named, because losing a write the user is told about is only
+           better than duplicating one if they are actually told. */
+        try {
+          UIC.toast((err && err.transport)
+            ? 'تعذر الاتصال — لم يتم تسجيل التغيير، أعد إدخاله'
+            : ((err && err.message) || 'تعذر الحفظ — لم يتم تسجيل التغيير'), 'error');
+        } catch (e) {}
         if (typeof o.onError === 'function') o.onError(err);
         else if (!canPatch && typeof o.reload === 'function') o.reload();
         throw err;

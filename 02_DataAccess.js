@@ -612,6 +612,108 @@ function getAllRecords_(dbId, sheetName) {
   return buildRecordsFromRaw_(data, headers);
 }
 
+/* ══ [I1] EXACTLY ONCE — a replayed write must never create a second row ═════
+ *
+ * THE RISK, and it is the largest one the optimistic-save design introduces.
+ * A transport failure is *ambiguous*: the request may have reached the server
+ * and COMMITTED before the connection dropped. The client's queue then replays
+ * it. Nothing in the write path is idempotent — every add_* handler appends —
+ * so the replay writes the row AGAIN. On a cash movement or a stock scan that
+ * is duplicated money or duplicated stock, and neither the user nor the sheet
+ * shows any sign that it happened.
+ *
+ * THE NATURAL KEY, and why it is not a new column. `unique_id` already exists
+ * on these tables and already identifies a row; the client mints it, sends it,
+ * and re-sends the SAME one on every retry because it lives in the queued
+ * payload. So "have I already committed this request?" and "does a row with
+ * this unique_id exist?" are the same question, answered from columns that are
+ * already there. A `request_uid` column would be a schema change, and the
+ * schema is not this programme's to touch — that constraint dictated the
+ * design rather than the other way round. Same discipline as the audit-queue
+ * drain above, which dedupes on record_uid/column_name/action/changed_at for
+ * exactly the same reason.
+ *
+ * THE CRASH MATRIX, stated the way drainHistoryQueue_ states its own:
+ *   died BEFORE the write   no row exists. The replay finds nothing and writes.
+ *                           NOTHING LOST.
+ *   died AFTER the write,   the row exists, carrying the client's unique_id.
+ *   before the reply        The replay finds it and returns it as success
+ *                           without writing. NOTHING DUPLICATED. This is the
+ *                           case that actually happens, and the one worth
+ *                           testing.
+ *   the reply arrived       Nothing is queued at all; there is no replay.
+ *
+ * WHAT THIS DOES NOT DO. It does not scan for duplicates that already exist,
+ * and it never deletes anything. I1 prevents duplicates at the source; a job
+ * that removes rows it believes are duplicates is a data-loss engine.
+ *
+ * COST. One column of the target table, read the way maxIdOf_ reads one column
+ * — the same cost class as the id allocation the same handler already pays,
+ * and it reads the WHOLE column rather than a tail on purpose: a queued change
+ * can be replayed hours later, from a phone that spent the night in a pocket,
+ * so a tail scan would silently stop deduping exactly when it matters most.
+ */
+
+/**
+ * The first row whose `columnName` equals `value`, as a lowercase-keyed record,
+ * or null. Read-only.
+ */
+function findRowByColumn_(dbId, sheetName, columnName, value) {
+  const want = String(value == null ? '' : value).trim();
+  if (!want) return null;
+  const sheet = getSpreadsheet_(dbId).getSheetByName(sheetName);
+  if (!sheet) return null;
+  const headers = getHeaders_(sheet);
+  const wantCol = String(columnName || 'unique_id').trim().toLowerCase();
+  const idx = headers.findIndex(h => String(h).trim().toLowerCase() === wantCol);
+  if (idx === -1) return null;
+  const last = sheet.getLastRow();
+  if (last < 2) return null;
+  countSheetRead_();
+  const col = sheet.getRange(2, idx + 1, last - 1, 1).getValues();
+  for (let i = 0; i < col.length; i++) {
+    if (String(col[i][0]).trim() === want) {
+      countSheetRead_();
+      const row = sheet.getRange(i + 2, 1, 1, headers.length).getValues()[0];
+      const rec = {};
+      headers.forEach((h, c) => { rec[String(h).trim().toLowerCase()] = row[c]; });
+      return rec;
+    }
+  }
+  return null;
+}
+
+/**
+ * [I1] The exactly-once guard. Call it FIRST in a queueable add handler:
+ *
+ *     const dup = liveDedupe_(dbId, SHEET, d.unique_id);
+ *     if (dup) return liveDedupeReply_(dup);
+ *
+ * Returns the already-committed record when this request has been seen, and
+ * null when it has not — including when the client sent no unique_id at all, in
+ * which case the action is simply not queueable (plan §4.3) and the handler
+ * behaves exactly as it always has.
+ *
+ * Deliberately NOT wrapped in a try/catch that swallows. The audit drain can
+ * afford "no dedupe, worst case a duplicated audit row"; a business table
+ * cannot. If the table cannot be read, the handler's own write would fail on
+ * the same sheet a moment later anyway, so letting it throw loses nothing and
+ * refuses rather than risking a second money row.
+ */
+function liveDedupe_(dbId, sheetName, uniqueId) {
+  return findRowByColumn_(dbId, sheetName, 'unique_id', uniqueId);
+}
+
+/** The success reply for a request that had already been committed. */
+function liveDedupeReply_(record, message) {
+  return {
+    status: 'success',
+    deduped: true,
+    message: message || 'تم الحفظ',
+    data: { record: record }
+  };
+}
+
 /**
  * Add a record to a sheet. Assigns the ID via getNextIdUnderLock_ (the canonical
  * counter logic) inside a single lock acquisition — no nested locking.
