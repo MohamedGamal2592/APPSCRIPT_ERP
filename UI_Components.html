@@ -6410,6 +6410,14 @@ UIC.Live = (function () {
    * optimistic row is the same problem one step later: it is on screen, it is
    * not in the sheet yet, and leaving the page that drew it loses it with no
    * trace. So leaving is refused while anything is in flight or queued. */
+  /* ── [§I7/§I8] The page-side half of the contract ─────────────────────────
+   *
+   * The row is already flagged: draft.__pending is true until the server's
+   * record replaces it (pinned by s18). Pages render a __pending row with the
+   * .rt-stale treatment — inert actions, dimmed — because its buttons name a
+   * __tmp_ id the server has never seen, and they keep __pending rows across
+   * a quiet refresh. This file's half is below: userIsBusy() counts pending
+   * saves, so arrive() defers the refresh while anything is unconfirmed. */
   function pendingCount() { return inFlight + queue.length; }
 
   function guardMessage() {
@@ -6609,6 +6617,10 @@ UIC.Live = (function () {
 
   function userIsBusy() {
     try {
+      /* [§I8] A pending save is the busiest state there is: a quiet refresh
+         redraws from the server, which does not have the row yet, so the
+         optimistic row would disappear while the chip insists it is pending. */
+      if (pendingCount() > 0) return true;
       /* A modal is open — almost always a form. */
       if (document.querySelector && document.querySelector('.modal-backdrop, .uic-modal, [data-modal-open="true"]')) return true;
       /* Typing. */
