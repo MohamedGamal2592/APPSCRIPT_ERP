@@ -240,7 +240,6 @@
         }
       }
       var data = UIC.collectForm('vf-ded-form');
-      UI.showSpinner('جاري الحفظ...');
       var formEl = document.getElementById('vf-ded-form');
       var fileInput = formEl ? formEl.querySelector('input[type="file"]') : null;
       var filePromise = (fileInput && fileInput.files && fileInput.files[0])
@@ -261,21 +260,36 @@
         : Promise.resolve('');
       filePromise.then(function (ref) {
         if (ref) data.deduction_attachement = ref;
-        return companyCall('add_deduction', data);
-      }).then(function (r) {
-        UIC.closeModal('vf-ded-modal');
-        UIC.toast((r && r.message) || 'تم الحفظ', 'success');
-        if (r && r.record) {
-          var RECENT_LIMIT = 10;
-          var idx = ROWS.findIndex(function(x){ return String(x.unique_id)===String(r.record.unique_id); });
-          if (idx!==-1) ROWS[idx]=r.record; else ROWS.unshift(r.record);
-          if (ROWS.length>RECENT_LIMIT) ROWS.pop();
-          renderDeductions();
-        } else {
-          fetchDeductions();
-        }
-      }).catch(function (e) { UIC.toast((e && e.message) || 'خطأ', 'error'); })
-        .finally(function () { UI.hideSpinner(); });
+        /* Tier B: the 2-table handler (plus cross-row/period refuses invisible
+           in the form) can refuse for reasons the form cannot show — so NO
+           draft is painted: canPatch stays false, only the quiet corner hint
+           shows, and the row is patched from the reply instead. A refusal
+           toasts exactly as before and never paints a row. The file upload is
+           a real round trip and stays in front of the save. queueable:false:
+           I1 is unproven for add_deduction, so a transport failure rolls back
+           loudly. */
+        return UIC.Live.save({
+          call: companyCall,
+          action: 'add_deduction',
+          data: data,
+          modal: 'vf-ded-modal',
+          message: 'تم الحفظ',
+          queueable: false,
+          reload: function () { fetchDeductions(true); },
+          onSuccess: function (r) {
+            var rec = (r && r.record) || null;
+            if (rec) {
+              var RECENT_LIMIT = 10;
+              var idx = ROWS.findIndex(function(x){ return String(x.unique_id)===String(rec.unique_id); });
+              if (idx!==-1) ROWS[idx]=rec; else ROWS.unshift(rec);
+              if (ROWS.length>RECENT_LIMIT) ROWS.pop();
+              renderDeductions();
+            } else {
+              fetchDeductions(true);
+            }
+          }
+        }).catch(function () { /* UIC.Live has toasted */ });
+      }).catch(function (e) { UIC.toast((e && e.message) || 'خطأ', 'error'); });
     }
 
     function viewAttachment(ref){

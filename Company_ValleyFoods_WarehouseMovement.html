@@ -410,15 +410,28 @@
           return { item: o.item, qty: parseFloat(o.qty) || 0, notes: o.notes || '' };
         })
       };
-      UI.showSpinner();
-      companyCall('save_valley_warehouse_movement', payload)
-        .then(function (r) {
-          UIC.closeModal('wm-modal');
-          UIC.toast((r && r.message) || 'تم تسجيل الحركات', 'success');
+      /* Tier B: the batch-availability guard (whBatchAvailability_ over live
+         stock, plus the cumulative in-submission check) can refuse for reasons
+         invisible in the form — another device may have consumed the batch
+         first. So NO draft is painted: canPatch stays false, only the quiet
+         corner hint shows. The reply carries no record (count/id/row only),
+         so onSuccess falls back to the quiet refresh; a refusal toasts
+         exactly as before and paints nothing. queueable:false: I1 is unproven
+         for save_valley_warehouse_movement. */
+      return UIC.Live.save({
+        call: companyCall,
+        action: 'save_valley_warehouse_movement',
+        data: payload,
+        modal: 'wm-modal',
+        message: 'تم تسجيل الحركات',
+        queueable: false,
+        reload: function () { load(true); },
+        onSuccess: function () {
+          /* NEEDS-REPLY: the reply carries count/id/row, not the saved rows —
+             so the ledger converges via the quiet refresh. */
           load(true);
-        })
-        .catch(function (e) { UIC.toast((e && e.message) || 'فشل حفظ الحركات', 'error'); })
-        .finally(function () { UI.hideSpinner(); });
+        }
+      }).catch(function () { /* UIC.Live has toasted */ });
     }
 
 

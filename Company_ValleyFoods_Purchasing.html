@@ -720,17 +720,31 @@
       if (t.mismatch) { UIC.toast('مجموع تكاليف الأصناف لا يساوي إجمالي التكاليف', 'error'); return; }
 
       var payload = { header: header, originalCode: __editingCode, lines: __lines || [] };
-      UI.showSpinner('جاري الحفظ...');
-      companyCall('save_valley_purchasing_costing', payload)
-        .then(function (r) {
-          UIC.toast(r.message || 'تم الحفظ', 'success');
-          showList(true);
-        })
-        .catch(function (e) { UIC.toast((e && e.message) || 'خطأ', 'error'); })
-        /* The overlay this save raised is lowered by this save. It used to be
-           cleared as a side effect of the reload's own hideSpinner, which
-           stopped happening the moment that reload went quiet. */
-        .finally(function () { UI.hideSpinner(); });
+      /* Tier B: the 2-table costing handler (duplicate-code, reconcile and
+         cost-grant guards refuse for reasons invisible in the form) — so NO
+         draft is painted: canPatch stays false, only the quiet corner hint
+         shows. The reply carries no record (code only), so onSuccess falls
+         back to the quiet refresh; a refusal toasts exactly as before and
+         paints nothing. queueable:false: I1 is unproven for
+         save_valley_purchasing_costing. */
+      return UIC.Live.save({
+        call: companyCall,
+        action: 'save_valley_purchasing_costing',
+        data: payload,
+        message: 'تم الحفظ',
+        queueable: false,
+        reload: function () { renderList(__loadedAll, true); },
+        onSuccess: function (r) {
+          var rec = (r && r.record) || null;
+          if (rec) {
+            var idx = (__headers || []).findIndex(function (h) { return String(h.Code) === String(rec.Code || r.code); });
+            if (idx !== -1) __headers[idx] = rec; else __headers.unshift(rec);
+            renderHeadersTable();
+          } else {
+            renderList(__loadedAll, true);
+          }
+        }
+      }).catch(function () { /* UIC.Live has toasted */ });
     }
 
     function doAction(code, action) {
@@ -745,16 +759,23 @@
     /* Phase 2.7: same reasoning as approvePurchasing — three fields, one row,
      * no cascade (qualityApproveValleyPurchasingCosting_). */
     function qualityApprovePurchasing(code) {
-      UI.showSpinner('جاري اعتماد الجودة...');
-      companyCall('quality_approve_valley_purchasing_costing', { code: code })
-        .then(function (r) {
-          UIC.toast(r.message || 'تم اعتماد الجودة', 'success');
+      /* Tier B quality-approve: message-only reply, so no draft painted and no
+         draft/list/key/render. onSuccess applies the user's intent to the
+         in-memory row and re-renders locally; reload is the error-path
+         backstop. No overlay. queueable:false. */
+      UIC.Live.save({
+        call: companyCall,
+        action: 'quality_approve_valley_purchasing_costing',
+        data: { code: code },
+        message: 'تم اعتماد الجودة',
+        queueable: false,
+        reload: function () { renderList(__loadedAll, true); },
+        onSuccess: function () {
           var item = (__headers || []).find(function (h) { return String(h.Code) === String(code); });
           if (item) { item.quality_approval_status = 'Approved'; renderHeadersTable(); }
-          else showList();
-        })
-        .catch(function (e) { UIC.toast((e && e.message) || 'خطأ', 'error'); })
-        .finally(function () { UI.hideSpinner(); });
+          else renderList(__loadedAll, true);
+        }
+      }).catch(function () { /* UIC.Live has toasted */ });
     }
 
     function openPrint(code) {
@@ -827,28 +848,48 @@
      * (approval_status / approval / approval_time) on one row via
      * updateRowByCriteria_ and cascades to nothing — verified in
      * Company_ValleyFoods_Actions.js approveValleyPurchasingCosting_. So the row
-     * is patched in place instead of re-fetching the whole list. Save and delete
-     * deliberately keep their full reload; see the Phase 2 report. */
+     * is patched in place instead of re-fetching the whole list. (Tier B: save,
+     * delete and quality-approve are now patch-from-reply too — save falls back
+     * to the quiet refresh because its reply carries no record; see the Tier B
+     * comments on each.) */
     function approvePurchasing(code) {
-      UI.showSpinner('جاري الاعتماد...');
-      companyCall('approve_valley_purchasing_costing', { code: code })
-        .then(function (r) {
-          UIC.toast(r.message || 'تم الاعتماد', 'success');
+      /* Tier B approve: message-only reply, so no draft painted and no
+         draft/list/key/render. onSuccess applies the user's intent to the
+         in-memory row and re-renders locally; reload is the error-path
+         backstop. No overlay. queueable:false. */
+      UIC.Live.save({
+        call: companyCall,
+        action: 'approve_valley_purchasing_costing',
+        data: { code: code },
+        message: 'تم الاعتماد',
+        queueable: false,
+        reload: function () { renderList(__loadedAll, true); },
+        onSuccess: function () {
           var item = (__headers || []).find(function (h) { return String(h.Code) === String(code); });
           if (item) { item.approval_status = 'Approved'; renderHeadersTable(); }
-          else showList();
-        })
-        .catch(function (e) { UIC.toast((e && e.message) || 'خطأ', 'error'); })
-        .finally(function () { UI.hideSpinner(); });
+          else renderList(__loadedAll, true);
+        }
+      }).catch(function () { /* UIC.Live has toasted */ });
     }
 
     function deletePurchasing(code) {
       if (!confirm('هل تريد حذف هذه العملية؟')) return;
-      UI.showSpinner('جاري الحذف...');
-      companyCall('delete_valley_purchasing_costing', { code: code })
-        .then(function (r) { UIC.toast(r.message || 'تم الحذف', 'success'); showList(true); })
-        .catch(function (e) { UIC.toast((e && e.message) || 'خطأ', 'error'); })
-        .finally(function () { UI.hideSpinner(); });
+      /* Tier B delete: no optimistic paint (there is no record to draw — the
+         row is gone), so no draft/list/key/render. onSuccess splices the
+         in-memory list and re-renders locally; reload is the error-path
+         backstop. No overlay. queueable:false. */
+      UIC.Live.save({
+        call: companyCall,
+        action: 'delete_valley_purchasing_costing',
+        data: { code: code },
+        message: 'تم الحذف',
+        queueable: false,
+        reload: function () { renderList(__loadedAll, true); },
+        onSuccess: function () {
+          __headers = (__headers || []).filter(function (h) { return String(h.Code) !== String(code); });
+          renderHeadersTable();
+        }
+      }).catch(function () { /* UIC.Live has toasted */ });
     }
 
     function showList(quiet) {

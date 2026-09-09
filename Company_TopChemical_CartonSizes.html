@@ -58,8 +58,8 @@
     fetchSizes();
   }
 
-  function fetchSizes() {
-    UI.showSpinner();
+  function fetchSizes(quiet) {
+    if (!quiet) UI.showSpinner();
     companyCall('get_carton_sizes')
       .then(function (r) {
         window.__sizes = r.sizes || [];
@@ -69,7 +69,7 @@
         renderSizes();
       })
       .catch(function (e) { showError(e); })
-      .finally(function () { UI.hideSpinner(); try{schedulePrefetch();}catch(e){} });
+      .finally(function () { if (!quiet) UI.hideSpinner(); try{schedulePrefetch();}catch(e){} });
   }
 
   function renderSizes() {
@@ -175,30 +175,52 @@
     }
     if (!UIC.validateForm('carton-size-form')) return;
     if (String(data.type).trim() === '') { UIC.toast('النوع مطلوب', 'error'); return; }
-    UI.showSpinner('جاري الحفظ...');
-    companyCall('add_carton_size', data)
-      .then(function (r) {
+    /* Tier B: the vendor/product refs plus the duplicate guard can refuse for
+       reasons invisible in the form — another device may have taken the same
+       slot first. So NO draft is painted: canPatch stays false, only the
+       quiet corner hint shows, and the row is patched from the reply instead.
+       A refusal toasts exactly as before and never paints a row. The file leg
+       stays in front (blocking overlay only for the upload + files call); the
+       save leg itself raises no overlay. No validation is changed.
+       queueable:false: I1 is unproven for add_carton_size, so a transport
+       failure rolls back loudly. */
+    UIC.Live.save({
+      call: companyCall,
+      action: 'add_carton_size',
+      data: data,
+      modal: 'carton-modal',
+      message: 'تم الحفظ',
+      queueable: false,
+      reload: function () { fetchSizes(true); },
+      onSuccess: function (r) {
         var id = (r && r.data) ? r.data.assignedId : null;
-        return uploadDocument(formEl, id).then(function (docRef) {
-          if (docRef) {
-            if (r && r.record) r.record.document = docRef;
-            return companyCall('add_carton_size_files', { id: id, document: docRef }).then(function () { return r; });
-          }
-          return r;
-        });
-      })
-      .then(function (r) {
-        UIC.closeModal('carton-modal');
-        UIC.toast((r && r.message) || 'تم الحفظ', 'success');
-        if (r && r.record) {
+        var rec = (r && r.record) ? r.record : null;
+        if (!rec) { fetchSizes(true); return; }
+        var finish = function (docRef) {
+          if (docRef) rec.document = docRef;
           window.__sizes = window.__sizes || [];
-          window.__sizes.unshift(r.record);
+          window.__sizes.unshift(rec);
           if (window.__sizes.length>10) window.__sizes=window.__sizes.slice(0,10);
           renderSizes();
-        } else { fetchSizes(); }
-      })
-      .catch(function (e) { UIC.toast((e && e.message) || 'خطأ', 'error'); })
-      .finally(function () { UI.hideSpinner(); });
+        };
+        var fileInput = formEl ? formEl.querySelector('input[data-field-name="document"]') : null;
+        if (!fileInput || !fileInput.files || !fileInput.files[0]) { finish(null); return; }
+        UI.showSpinner('جاري رفع المستند...');
+        uploadDocument(formEl, id).then(function (docRef) {
+          if (!docRef) { UI.hideSpinner(); finish(null); return; }
+          return companyCall('add_carton_size_files', { id: id, document: docRef }).then(function () {
+            UI.hideSpinner();
+            finish(docRef);
+          });
+        }).catch(function (e) {
+          UI.hideSpinner();
+          /* The row itself is saved (first leg succeeded) — show it without
+             the file and surface the upload failure separately. */
+          finish(null);
+          UIC.toast((e && e.message) || 'خطأ في رفع الملف', 'error');
+        });
+      }
+    }).catch(function () { /* UIC.Live has toasted */ });
   }
 
   function uploadDocument(formEl, id) {
@@ -270,6 +292,13 @@
     var body = document.getElementById('carton-content');
     if (body) body.innerHTML = '<div class="empty-state"><span>' + esc(e.message || 'خطأ') + '</span></div>';
   }
+
+  /* Another device's change arrives quietly. */
+  UIC.Live.watchPage({
+    call: companyCall,
+    page: 'tc_carton_sizes',
+    onChange: function () { UIC.Live.arrive(function () { fetchSizes(true); }); }
+  });
 
   load();
 </script>

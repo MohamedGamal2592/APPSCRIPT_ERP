@@ -349,27 +349,40 @@
       // normalize amount numeric (TC does Number()||0)
       if (data.amount) data.amount = parseFloat(data.amount) || 0;
 
-      UI.showSpinner('جاري الحفظ…');
       var formEl = document.getElementById('ot-form');
       uploadSelectedFile(formEl, { sheet: 'valley_emp_overtime' })
         .then(function(ref){
           if (ref) data.overtime_attachement = ref;
-          return companyCall('add_overtime', data);
-        }).then(function(res){
-          if (res && res.error) { UIC.toast('خطأ: ' + res.error, 'error'); return; }
-          UIC.toast((res && res.message) || 'تم الحفظ بنجاح', 'success');
-          UIC.closeModal('ot-modal');
-          if (res && res.record) {
-            var RECENT_LIMIT = 10;
-            if (!OT_PAGE._allRows) OT_PAGE._allRows = [];
-            var idxOT = OT_PAGE._allRows.findIndex(function(x){ return String(x.unique_id)===String(res.record.unique_id); });
-            if (idxOT!==-1) OT_PAGE._allRows[idxOT]=res.record; else OT_PAGE._allRows.unshift(res.record);
-            if (OT_PAGE._allRows.length>RECENT_LIMIT) OT_PAGE._allRows.pop();
-            buildTable(OT_PAGE._allRows);
-          } else { loadData(); }
+          /* Tier B: the 2-table handler (duplicate-timing guard refuses for
+             reasons invisible in the form) — so NO draft is painted: canPatch
+             stays false, only the quiet corner hint shows, and the row is
+             patched from the reply instead. A refusal toasts exactly as before
+             and never paints a row. The file upload is a real round trip and
+             stays in front of the save. queueable:false: I1 is unproven for
+             add_overtime, so a transport failure rolls back loudly. */
+          return UIC.Live.save({
+            call: companyCall,
+            action: 'add_overtime',
+            data: data,
+            modal: 'ot-modal',
+            message: 'تم الحفظ بنجاح',
+            queueable: false,
+            reload: function () { loadData(true); },
+            onSuccess: function (res) {
+              var rec = (res && res.record) || null;
+              if (rec) {
+                var RECENT_LIMIT = 10;
+                if (!OT_PAGE._allRows) OT_PAGE._allRows = [];
+                var idxOT = OT_PAGE._allRows.findIndex(function(x){ return String(x.unique_id)===String(rec.unique_id); });
+                if (idxOT!==-1) OT_PAGE._allRows[idxOT]=rec; else OT_PAGE._allRows.unshift(rec);
+                if (OT_PAGE._allRows.length>RECENT_LIMIT) OT_PAGE._allRows.pop();
+                buildTable(OT_PAGE._allRows);
+              } else { loadData(true); }
+            }
+          }).catch(function () { /* UIC.Live has toasted */ });
         }).catch(function(e){
           UIC.toast((e && e.message) ? e.message : 'حدث خطأ', 'error');
-        }).finally(function(){ UI.hideSpinner(); });
+        });
     }
 
     /* quiet: refresh in the background with no blocking overlay, for a

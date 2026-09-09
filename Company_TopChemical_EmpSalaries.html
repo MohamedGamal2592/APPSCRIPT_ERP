@@ -47,8 +47,8 @@
     fetchSalaries();
   }
 
-  function fetchSalaries(month, year) {
-    UI.showSpinner(['جاري تحميل المرتبات...', 'جاري استرجاع بيانات الشهر...', 'لحظة، جاري إعداد الجدول...']);
+  function fetchSalaries(month, year, quiet) {
+    if (!quiet) UI.showSpinner(['جاري تحميل المرتبات...', 'جاري استرجاع بيانات الشهر...', 'لحظة، جاري إعداد الجدول...']);
     var data = {};
     if (month) data.month = Number(month);
     if (year) data.year = Number(year);
@@ -67,7 +67,7 @@
         renderSalaries();
       })
       .catch(function (e) { showError(e); })
-      .finally(function () { UI.hideSpinner(); try{schedulePrefetch();}catch(e){} });
+      .finally(function () { if (!quiet) UI.hideSpinner(); try{schedulePrefetch();}catch(e){} });
   }
 
   function renderFilterBar() {
@@ -270,22 +270,36 @@
     var y  = document.getElementById('es_year').value;
     if (!wd || !m || !y) { UIC.toast('جميع الحقول مطلوبة', 'error'); return; }
 
-    UI.showSpinner('جاري الحفظ...');
-    companyCall('edit_emp_salary', {
-      emp_id: r.emp_id,
-      old_month: r.month,
-      old_year: r.year,
-      month: Number(m),
-      year: Number(y),
-      working_days: Number(wd)
-    })
-      .then(function (res) {
-        UIC.closeModal('edit-sal-modal');
-        UIC.toast(res.message || 'تم التعديل بنجاح', 'success');
-        fetchSalaries(FILTER_MONTH, FILTER_YEAR);
-      })
-      .catch(function (e) { UIC.toast(e.message || 'خطأ في التعديل', 'error'); })
-      .finally(function () { UI.hideSpinner(); });
+    /* Tier B: the closed-period guard lives server-side (emp_salaries_close)
+       and can refuse for reasons invisible in the form — another device may
+       have closed the month first. So NO draft is painted: canPatch stays
+       false, only the quiet corner hint shows, and the row is patched from
+       intent instead. A refusal toasts exactly as before and never paints. No
+       validation is changed. queueable:false: a status precondition makes a
+       later replay meaningless (I3), so a transport failure rolls back
+       loudly. */
+    UIC.Live.save({
+      call: companyCall,
+      action: 'edit_emp_salary',
+      data: {
+        emp_id: r.emp_id,
+        old_month: r.month,
+        old_year: r.year,
+        month: Number(m),
+        year: Number(y),
+        working_days: Number(wd)
+      },
+      modal: 'edit-sal-modal',
+      message: 'تم التعديل بنجاح',
+      queueable: false,
+      reload: function () { fetchSalaries(FILTER_MONTH, FILTER_YEAR, true); },
+      onSuccess: function () {
+        r.working_days = Number(wd);
+        r.month = Number(m);
+        r.year = Number(y);
+        renderSalaries();
+      }
+    }).catch(function () { /* UIC.Live has toasted */ });
   }
 
   function confirmDeleteSalary(key) {
@@ -304,27 +318,43 @@
   function doDeleteSalary(key) {
     var r = window['__sal_' + key];
     if (!r) return;
-    UI.showSpinner('جاري الحذف...');
-    companyCall('delete_emp_salary', { emp_id: r.emp_id, month: r.month, year: r.year })
-      .then(function (res) {
-        UIC.closeModal('del-sal-modal');
-        UIC.toast(res.message || 'تم الحذف', 'success');
+    /* Tier B delete: no optimistic paint (there is no record to draw — the
+       row is gone), so no draft/list/key/render. onSuccess splices the
+       in-memory list and re-renders locally; reload is the error-path
+       backstop. No overlay. queueable:false. */
+    UIC.Live.save({
+      call: companyCall,
+      action: 'delete_emp_salary',
+      data: { emp_id: r.emp_id, month: r.month, year: r.year },
+      modal: 'del-sal-modal',
+      message: 'تم الحذف',
+      queueable: false,
+      reload: function () { fetchSalaries(FILTER_MONTH, FILTER_YEAR, true); },
+      onSuccess: function () {
         window.__salaries = (window.__salaries || []).filter(function (s) {
           return !(Number(s.emp_id) === Number(r.emp_id) && Number(s.month) === Number(r.month) && Number(s.year) === Number(r.year));
         });
         renderSalaries(); /* re-slice current page so pager counts stay correct */
-      })
-      .catch(function (e) { UIC.toast(e.message || 'خطأ', 'error'); })
-      .finally(function () { UI.hideSpinner(); });
+      }
+    }).catch(function () { /* UIC.Live has toasted */ });
   }
 
   function markReceipt(key) {
     var r = window['__sal_' + key];
     if (!r) return;
-    UI.showSpinner('جاري تسجيل الاستلام...');
-    companyCall('update_emp_salary_receipt', { emp_id: r.emp_id, month: r.month, year: r.year })
-      .then(function (res) {
-        UIC.toast(res.message || 'تم تسجيل الاستلام', 'success');
+    /* Tier B status flip: the receipt column can refuse on a closed month the
+       form cannot see, so no draft is painted and no list/key/render is
+       given. onSuccess applies the intent to the in-memory row and patches
+       the cell locally; reload is the error-path backstop. No overlay.
+       queueable:false. */
+    UIC.Live.save({
+      call: companyCall,
+      action: 'update_emp_salary_receipt',
+      data: { emp_id: r.emp_id, month: r.month, year: r.year },
+      message: 'تم تسجيل الاستلام',
+      queueable: false,
+      reload: function () { fetchSalaries(FILTER_MONTH, FILTER_YEAR, true); },
+      onSuccess: function () {
         r.receipt = true;
         var cell = document.getElementById('receipt-' + key);
         if (cell) cell.innerHTML = '<span style="color:var(--success,#22c55e);font-weight:600;">✔ نعم</span>';
@@ -333,9 +363,8 @@
           var btn = row.querySelector('button[onclick*="markReceipt"]');
           if (btn) btn.remove();
         }
-      })
-      .catch(function (e) { UIC.toast(e.message || 'خطأ', 'error'); })
-      .finally(function () { UI.hideSpinner(); });
+      }
+    }).catch(function () { /* UIC.Live has toasted */ });
   }
 
   /* ────────── Month Generation ("توليد شهر") Feature ────────── */
@@ -472,30 +501,41 @@
     });
     if (!entries.length) { UIC.toast('لا يوجد موظفون للتوليد', 'error'); return; }
 
-    UI.showSpinner('جاري توليد المرتبات...');
-    companyCall('add_emp_salaries', { month: Number(month), year: Number(year), entries: entries })
-      .then(function (r) {
-        UIC.closeModal('generate-modal');
-        UIC.toast((r && r.message) || 'تم التوليد بنجاح', 'success');
-        if (r && (r.records||r.record)) {
-          var recs = r.records || (r.record?[r.record]:[]);
+    /* Tier B: generation writes two tables (salaries plus the close guard it
+       checks) and the handler can refuse for a duplicate month invisible in
+       the form — another device may have generated it first. So NO draft is
+       painted: canPatch stays false, only the quiet corner hint shows, and
+       the rows are patched from the reply instead. A refusal toasts exactly
+       as before and never paints. No validation is changed. queueable:false:
+       I1 is unproven for add_emp_salaries, so a transport failure rolls back
+       loudly. */
+    UIC.Live.save({
+      call: companyCall,
+      action: 'add_emp_salaries',
+      data: { month: Number(month), year: Number(year), entries: entries },
+      modal: 'generate-modal',
+      message: 'تم التوليد بنجاح',
+      queueable: false,
+      reload: function () { fetchSalaries(FILTER_MONTH, FILTER_YEAR, true); },
+      onSuccess: function (r) {
+        var recs = (r && (r.records || r.record)) ? (r.records || [r.record]) : null;
+        if (recs && recs.length) {
           window.__salaries = window.__salaries || [];
           recs.forEach(function(rec){ window.__salaries.push(rec); });
           if (window.__salaries.length>10) { /* keep display limit but retain totals from server */ }
-          // if current filter matches generated month/year, re-render; else fetch
+          // if current filter matches generated month/year, re-render; else fetch quietly
           if (String(FILTER_MONTH)===String(month) && String(FILTER_YEAR)===String(year)) {
             renderSalaries();
           } else {
             FILTER_MONTH = month; FILTER_YEAR = year;
-            fetchSalaries(month, year);
+            fetchSalaries(month, year, true);
           }
         } else {
           FILTER_MONTH = month; FILTER_YEAR = year;
-          fetchSalaries(month, year);
+          fetchSalaries(month, year, true);
         }
-      })
-      .catch(function (e) { UIC.toast((e && e.message) || 'خطأ في التوليد', 'error'); })
-      .finally(function () { UI.hideSpinner(); });
+      }
+    }).catch(function () { /* UIC.Live has toasted */ });
   }
 
   function printPayrollReport(type) {
@@ -510,6 +550,13 @@
     var body = document.getElementById('sal-content');
     if (body) body.innerHTML = '<div class="empty-state"><span>' + esc(e.message || 'خطأ') + '</span></div>';
   }
+
+  /* Another device's change arrives quietly, keeping the current filter view. */
+  UIC.Live.watchPage({
+    call: companyCall,
+    page: 'tc_emp_salaries',
+    onChange: function () { UIC.Live.arrive(function () { fetchSalaries(FILTER_MONTH, FILTER_YEAR, true); }); }
+  });
 
   load();
 </script>

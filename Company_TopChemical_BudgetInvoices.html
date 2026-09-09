@@ -129,8 +129,8 @@
       });
   }
 
-  function fetchInvoices() {
-    UIC.readSkeleton('budget-invoices-content', { message: 'جاري جلب الفواتير...' });
+  function fetchInvoices(quiet) {
+    if (!quiet) UIC.readSkeleton('budget-invoices-content', { message: 'جاري جلب الفواتير...' });
     Promise.all([
       companyCall('get_legal_invoices', {
         month: FILTER.month ? Number(FILTER.month) : '',
@@ -166,13 +166,13 @@
           });
           FILTER.year = maxY || LAST.years[LAST.years.length - 1];
           FILTER.offset = 0;
-          fetchInvoices();
+          fetchInvoices(quiet);
           return;
         }
         renderInvoices(LAST.items, LAST.total);
       })
       .catch(function (e) { showError(e); })
-      .finally(function () { UI.hideSpinner(); });
+      .finally(function () { if (!quiet) UI.hideSpinner(); });
   }
 
   function taxClassLabel(v) {
@@ -291,18 +291,28 @@
 
   function makeCollectionFromInvoice(invoiceId) {
     if (!invoiceId) return;
-    UI.showSpinner('جاري إنشاء عملية التحصيل...');
-    companyCall('make_collection_from_invoice', { invoice_id: invoiceId })
-      .then(function (r) {
-        UIC.toast(r.message || 'تم إنشاء عملية التحصيل بنجاح', 'success');
-        fetchInvoices();
-      })
-      .catch(function (e) {
-        UIC.toast((e && e.message) || 'فشل إنشاء عملية التحصيل', 'error');
-      })
-      .finally(function () {
-        UI.hideSpinner();
-      });
+    /* Tier B: the collection writes the cash table while the list reads the
+       invoices table plus the cash movements — the handler can refuse for
+       reasons invisible in the button (missing invoice, zero net). So NO draft
+       is painted: canPatch stays false, only the quiet corner hint shows, and
+       the row is patched from intent instead. A refusal toasts exactly as
+       before and never paints. No validation is changed. queueable:false: I1
+       is unproven for make_collection_from_invoice, so a transport failure
+       rolls back loudly. */
+    UIC.Live.save({
+      call: companyCall,
+      action: 'make_collection_from_invoice',
+      data: { invoice_id: invoiceId },
+      message: 'تم إنشاء عملية التحصيل بنجاح',
+      queueable: false,
+      reload: function () { fetchInvoices(true); },
+      onSuccess: function () {
+        LAST.cashMovements = LAST.cashMovements || [];
+        var key = String(invoiceId).trim();
+        if (LAST.cashMovements.indexOf(key) === -1) LAST.cashMovements.push(key);
+        renderInvoices(LAST.items, LAST.total);
+      }
+    }).catch(function () { /* UIC.Live has toasted */ });
   }
 
   function printInvoice(id) {
@@ -512,28 +522,47 @@
     var d = new Date(data['تاريخ الفاتورة']);
     if (isNaN(d.getTime())) { showError({ message: 'تاريخ الفاتورة غير صحيح' }); return; }
     data['العام'] = d.getFullYear();
-    UI.showSpinner('جاري الحفظ...');
-    companyCall('add_legal_invoice', data)
-      .then(function (r) {
-        UIC.closeModal('invoice-modal');
-        UIC.toast(r.message || 'تمت الإضافة بنجاح', 'success');
-        if (r && r.record) {
+    /* Tier B: the stock-availability guard (live current_qty plus the client
+       availableQty check above) can refuse for reasons invisible in the form —
+       another device may have consumed the stock first. So NO draft is
+       painted: canPatch stays false, only the quiet corner hint shows, and the
+       row is patched from the reply instead. A refusal toasts exactly as
+       before and never paints a row. No validation is changed.
+       queueable:false: I1 is unproven for add_legal_invoice, so a transport
+       failure rolls back loudly. */
+    UIC.Live.save({
+      call: companyCall,
+      action: 'add_legal_invoice',
+      data: data,
+      modal: 'invoice-modal',
+      message: 'تمت الإضافة بنجاح',
+      queueable: false,
+      reload: function () { fetchInvoices(true); },
+      onSuccess: function (r) {
+        var rec = r.record || null;
+        if (rec) {
           LAST.items = LAST.items || [];
-          LAST.items.unshift(r.record);
+          LAST.items.unshift(rec);
           LAST.total = (LAST.total||0)+1;
           renderInvoices(LAST.items, LAST.total);
         } else {
           FILTER.offset = 0;
-          fetchInvoices();
+          fetchInvoices(true);
         }
-      })
-      .catch(function (e) { showError(e); })
-      .finally(function () { UI.hideSpinner(); });
+      }
+    }).catch(function () { /* UIC.Live has toasted */ });
   }
 
   function showError(e) {
     UIC.toast((e && e.message) || 'خطأ غير متوقع', 'error');
   }
+
+  /* Another device's change arrives quietly, keeping the current filter view. */
+  UIC.Live.watchPage({
+    call: companyCall,
+    page: 'tc_budget_invoices',
+    onChange: function () { UIC.Live.arrive(function () { fetchInvoices(true); }); }
+  });
 
   load();
 </script>

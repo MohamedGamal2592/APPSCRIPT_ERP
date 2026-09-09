@@ -74,8 +74,8 @@
     fetchPurchases();
   }
 
-  function fetchPurchases() {
-    UI.showSpinner();
+  function fetchPurchases(quiet) {
+    if (!quiet) UI.showSpinner();
     companyCall('get_purchase_items')
       .then(function (r) {
         window.__purchases = r.purchases || [];
@@ -87,7 +87,7 @@
         renderPurchases(); try{schedulePrefetch();}catch(e){};
       })
       .catch(function (e) { showError(e); })
-      .finally(function () { UI.hideSpinner(); });
+      .finally(function () { if (!quiet) UI.hideSpinner(); });
   }
 
   /* Phase 7.1: the option lists used to be rebuilt and Arabic-sorted on every
@@ -200,21 +200,32 @@
   function savePurchase() {
     var data = UIC.collectForm('purchase-form');
     if (!UIC.validateForm('purchase-form')) return;
-    UI.showSpinner('جاري الحفظ...');
-    companyCall('add_purchase_item', data)
-      .then(function (r) {
-        UIC.closeModal('purchase-modal');
-        UIC.toast(r.message || 'تم الحفظ', 'success');
-        if (r && r.record) {
+    /* Tier B: the vendor/item refs plus the invoice guards can refuse for
+       reasons invisible in the form — another device may have taken the same
+       invoice number first. So NO draft is painted: canPatch stays false,
+       only the quiet corner hint shows, and the row is patched from the reply
+       instead. A refusal toasts exactly as before and never paints a row. No
+       validation is changed. queueable:false: I1 is unproven for
+       add_purchase_item, so a transport failure rolls back loudly. */
+    UIC.Live.save({
+      call: companyCall,
+      action: 'add_purchase_item',
+      data: data,
+      modal: 'purchase-modal',
+      message: 'تم الحفظ',
+      queueable: false,
+      reload: function () { fetchPurchases(true); },
+      onSuccess: function (r) {
+        var rec = r.record || null;
+        if (rec) {
           window.__purchases = window.__purchases || [];
-          window.__purchases.unshift(r.record);
+          window.__purchases.unshift(rec);
           var lim = 10;
           if (window.__purchases.length > lim) window.__purchases = window.__purchases.slice(0, lim);
           renderPurchases();
-        } else { fetchPurchases(); }
-      })
-      .catch(function (e) { UIC.toast(e.message || 'خطأ', 'error'); })
-      .finally(function () { UI.hideSpinner(); });
+        } else { fetchPurchases(true); }
+      }
+    }).catch(function () { /* UIC.Live has toasted */ });
   }
 
   function openVendorPopup() {
@@ -240,16 +251,27 @@
   function saveVendorPopup() {
     var data = UIC.collectForm('vendor-form');
     if (!UIC.validateForm('vendor-form')) return;
-    UI.showSpinner('جاري الحفظ...');
-    companyCall('add_vendor', data)
-      .then(function (r) {
-        UIC.closeModal('vendor-modal');
-        window.__vendorOptions = (window.__vendorOptions || []).concat([r.vendor]);
-        setSelectOptions('vendor', window.__vendorOptions, r.vendor.value);
-        UIC.toast(r.message || 'تمت إضافة المورد', 'success');
-      })
-      .catch(function (e) { UIC.toast(e.message || 'خطأ', 'error'); })
-      .finally(function () { UI.hideSpinner(); });
+    /* Tier B: the vendor write touches its own table while the purchase form
+       stays open — there is no row to paint, so canPatch stays false and only
+       the quiet corner hint shows. onSuccess patches the in-memory vendor
+       options from the reply and re-renders the select locally; reload is the
+       error-path backstop. No overlay. queueable:false. */
+    UIC.Live.save({
+      call: companyCall,
+      action: 'add_vendor',
+      data: data,
+      modal: 'vendor-modal',
+      message: 'تمت إضافة المورد',
+      queueable: false,
+      reload: function () { fetchPurchases(true); },
+      onSuccess: function (r) {
+        var v = r.vendor || null;
+        if (v) {
+          window.__vendorOptions = (window.__vendorOptions || []).concat([v]);
+          setSelectOptions('vendor', window.__vendorOptions, v.value);
+        } else { fetchPurchases(true); }
+      }
+    }).catch(function () { /* UIC.Live has toasted */ });
   }
 
   function openItemPopup() {
@@ -271,16 +293,27 @@
   function saveItemPopup() {
     var data = UIC.collectForm('item-form');
     if (!UIC.validateForm('item-form')) return;
-    UI.showSpinner('جاري الحفظ...');
-    companyCall('add_item', data)
-      .then(function (r) {
-        UIC.closeModal('item-modal');
-        window.__itemOptions = (window.__itemOptions || []).concat([r.item]);
-        setSelectOptions('item', window.__itemOptions, r.item.value);
-        UIC.toast(r.message || 'تمت إضافة الصنف', 'success');
-      })
-      .catch(function (e) { UIC.toast(e.message || 'خطأ', 'error'); })
-      .finally(function () { UI.hideSpinner(); });
+    /* Tier B: the item write touches its own table while the purchase form
+       stays open — there is no row to paint, so canPatch stays false and only
+       the quiet corner hint shows. onSuccess patches the in-memory item
+       options from the reply and re-renders the select locally; reload is the
+       error-path backstop. No overlay. queueable:false. */
+    UIC.Live.save({
+      call: companyCall,
+      action: 'add_item',
+      data: data,
+      modal: 'item-modal',
+      message: 'تمت إضافة الصنف',
+      queueable: false,
+      reload: function () { fetchPurchases(true); },
+      onSuccess: function (r) {
+        var it = r.item || null;
+        if (it) {
+          window.__itemOptions = (window.__itemOptions || []).concat([it]);
+          setSelectOptions('item', window.__itemOptions, it.value);
+        } else { fetchPurchases(true); }
+      }
+    }).catch(function () { /* UIC.Live has toasted */ });
   }
 
   function openDetail(idx) {
@@ -314,6 +347,13 @@
     var body = document.getElementById('purchasing-content');
     if (body) body.innerHTML = '<div class="empty-state"><span>' + esc(e.message || 'خطأ') + '</span></div>';
   }
+
+  /* Another device's change arrives quietly. */
+  UIC.Live.watchPage({
+    call: companyCall,
+    page: 'tc_purchasing',
+    onChange: function () { UIC.Live.arrive(function () { fetchPurchases(true); }); }
+  });
 
 
   load();

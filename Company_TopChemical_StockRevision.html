@@ -188,20 +188,31 @@
   function saveStock() {
     var data = UIC.collectForm('stock-form');
     if (!UIC.validateForm('stock-form')) return;
-    UI.showSpinner('جاري الحفظ...');
-    companyCall('add_stock_revision', data)
-      .then(function (r) {
-        UIC.closeModal('stock-modal');
-        UIC.toast(r.message || 'تم الحفظ', 'success');
-        if (r && r.record) {
+    /* Tier B: the MySQL system balance plus the sheet guards can refuse for
+       reasons invisible in the form — another device may have moved the stock
+       first. So NO draft is painted: canPatch stays false, only the quiet
+       corner hint shows, and the row is patched from the reply instead. A
+       refusal toasts exactly as before and never paints a row. No validation
+       is changed. queueable:false: I1 is unproven for add_stock_revision, so
+       a transport failure rolls back loudly. */
+    UIC.Live.save({
+      call: companyCall,
+      action: 'add_stock_revision',
+      data: data,
+      modal: 'stock-modal',
+      message: 'تم الحفظ',
+      queueable: false,
+      reload: function () { fetchStock(); },
+      onSuccess: function (r) {
+        var rec = r.record || null;
+        if (rec) {
           window.__stock = window.__stock || [];
-          window.__stock.unshift(r.record);
-          if (window.__stock.length > 10) window.__stock = window.__stock.slice(0,10);
+          window.__stock.unshift(rec);
+          if (window.__stock.length > 10) window.__stock = window.__stock.slice(0, 10);
           renderStock();
         } else { fetchStock(); }
-      })
-      .catch(function (e) { UIC.toast(e.message || 'خطأ', 'error'); })
-      .finally(function () { UI.hideSpinner(); });
+      }
+    }).catch(function () { /* UIC.Live has toasted */ });
   }
 
   function openDetail(idx) {
@@ -267,15 +278,38 @@
       available_amount: data.edit_available_amount,
       notes: data.edit_notes
     };
-    UI.showSpinner('جاري الحفظ...');
-    companyCall('update_stock_revision', payload)
-      .then(function (r) {
-        UIC.closeModal('stock-edit-modal');
-        UIC.toast(r.message || 'تم التحديث', 'success');
-        fetchStock();
-      })
-      .catch(function (e) { UIC.toast(e.message || 'خطأ', 'error'); })
-      .finally(function () { UI.hideSpinner(); });
+    /* Tier B edit: the row-precondition guard (_expectedProduct vs the live
+       sheet row) can refuse for reasons invisible in the form — another
+       device may have rewritten the row first. So NO draft is painted:
+       canPatch stays false, only the quiet corner hint shows, and the row is
+       patched from intent instead (the handler returns a message only). A
+       refusal toasts exactly as before and never paints. No validation is
+       changed. queueable:false: a stale precondition makes a later replay
+       meaningless (I3), so a transport failure rolls back loudly. */
+    UIC.Live.save({
+      call: companyCall,
+      action: 'update_stock_revision',
+      data: payload,
+      modal: 'stock-edit-modal',
+      message: 'تم التحديث',
+      queueable: false,
+      reload: function () { fetchStock(); },
+      onSuccess: function () {
+        var list = window.__stock || [];
+        var row = null;
+        for (var i = 0; i < list.length; i++) {
+          if (Number(list[i]._sheetRow) === Number(payload._sheetRow)) { row = list[i]; break; }
+        }
+        if (row) {
+          row.date = payload.date;
+          row.amount = payload.amount;
+          row.warehouse = payload.warehouse;
+          row.available_amount = payload.available_amount;
+          row.notes = payload.notes;
+          renderStock();
+        } else { fetchStock(); }
+      }
+    }).catch(function () { /* UIC.Live has toasted */ });
   }
 
   function printFiltered() {
@@ -322,6 +356,17 @@
     var body = document.getElementById('stock-content');
     if (body) body.innerHTML = '<div class="empty-state"><span>' + esc(e.message || 'خطأ') + '</span></div>';
   }
+
+  /* Another device's change arrives quietly.
+     NOTE: the refresh draws the skeleton here — a quiet variant would touch
+     the fetchStock/loadAll lines that carry another effort's uncommitted work,
+     so it waits until that work lands. arrive() still defers while a save is
+     pending (B4 userIsBusy). */
+  UIC.Live.watchPage({
+    call: companyCall,
+    page: 'tc_stock_revision',
+    onChange: function () { UIC.Live.arrive(function () { fetchStock(); }); }
+  });
 
 
   load();
