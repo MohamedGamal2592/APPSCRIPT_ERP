@@ -96,6 +96,31 @@
       questions: []
     };
 
+    function loadView(quiet) {
+      var id = params.get('id') || state.id;
+      if (!id) return;
+      if (!quiet) UIC.readSkeleton('ac-form-content');
+      companyCall('get_ac_assessment', { id: id })
+        .then(function (res) {
+          state.header = res.assessment || {};
+          state.questions = (res.questions || []).map(function (q) {
+            return {
+              QuestionID: q.QuestionID, QuestionText: q.QuestionText, QuestionType: q.QuestionType,
+              Weight: q.Weight, Trait: q.Trait, CorrectAnswer: q.CorrectAnswer,
+              Options: q.Options || []
+            };
+          });
+          state.attempts = res.attempts || 0;
+          renderForm();
+          if (params.get('autoprint') === '1') setTimeout(function () { window.print(); }, 400);
+        })
+        .catch(function (err) {
+          UIC.toast(err.message || 'تعذر تحميل التقييم', 'error');
+          UIC.navTo(null, listUrl());
+        })
+        .finally(function () { if (!quiet) UI.hideSpinner(); });
+    }
+
     function renderApp() {
       UIC.appShell('ac-root', {
         companyLogoUrl: COMPANY_LOGO_URL,
@@ -109,26 +134,7 @@
       var id = params.get('id');
       if (id) {
         state.mode = 'view'; state.id = id;
-        UIC.readSkeleton('ac-form-content');
-        companyCall('get_ac_assessment', { id: id })
-          .then(function (res) {
-            state.header = res.assessment || {};
-            state.questions = (res.questions || []).map(function (q) {
-              return {
-                QuestionID: q.QuestionID, QuestionText: q.QuestionText, QuestionType: q.QuestionType,
-                Weight: q.Weight, Trait: q.Trait, CorrectAnswer: q.CorrectAnswer,
-                Options: q.Options || []
-              };
-            });
-            state.attempts = res.attempts || 0;
-            renderForm();
-            if (params.get('autoprint') === '1') setTimeout(function () { window.print(); }, 400);
-          })
-          .catch(function (err) {
-            UIC.toast(err.message || 'تعذر تحميل التقييم', 'error');
-            UIC.navTo(null, listUrl());
-          })
-          .finally(function () { UI.hideSpinner(); });
+        loadView();
       } else {
         state.mode = 'create';
         renderForm();
@@ -377,40 +383,73 @@
       });
 
       UI.submitOnce(btn, function () {
-        return companyCall('add_ac_assessment', Object.assign({}, header, { questions: outQuestions }))
-          .then(function (res) {
-            UIC.toast('تم الحفظ بنجاح', 'success');
+        /* Tier B: add_ac_assessment returns only data.assignedId (no record —
+           a create that also writes N question rows), so NO draft is painted:
+           canPatch stays false, only the quiet corner hint shows. A refusal
+           toasts and paints nothing, and the form stays for correction. On
+           success the new id navigates to the view, exactly as before. No
+           validation is changed. queueable:false: I1 is unproven. */
+        return UIC.Live.save({
+          call: companyCall,
+          action: 'add_ac_assessment',
+          data: Object.assign({}, header, { questions: outQuestions }),
+          message: 'تم الحفظ بنجاح',
+          queueable: false,
+          reload: function () { if (state.id) loadView(true); },
+          onSuccess: function (r) {
             try { UIC.clearDirty('ac-assess-form'); } catch (e) {}
-            var newId = res && res.data && res.data.assignedId;
+            var newId = (r && r.data && r.data.assignedId) || (r && r.assignedId);
             if (newId) UIC.navTo(null, formUrl(newId));
-          })
-          .catch(function (err) { UIC.toast(err.message || 'حدث خطأ أثناء الحفظ', 'error'); });
+          }
+        }).catch(function () { /* UIC.Live has toasted */ });
       });
     }
 
     function duplicateAssessment() {
-      UI.showSpinner();
-      companyCall('add_ac_assessment_copy', { id: state.id })
-        .then(function (res) {
-          UIC.toast('تم إنشاء نسخة جديدة', 'success');
-          var newId = res && res.data && res.data.assignedId;
+      /* Tier B copy: returns only data.assignedId, so no draft is painted.
+         onSuccess navigates to the new copy; reload is the error-path
+         backstop. queueable:false. */
+      UIC.Live.save({
+        call: companyCall,
+        action: 'add_ac_assessment_copy',
+        data: { id: state.id },
+        message: 'تم إنشاء نسخة جديدة',
+        queueable: false,
+        reload: function () { if (state.id) loadView(true); },
+        onSuccess: function (r) {
+          var newId = (r && r.data && r.data.assignedId) || (r && r.assignedId);
           if (newId) UIC.navTo(null, formUrl(newId));
-        })
-        .catch(function (err) { UIC.toast(err.message || 'تعذر إنشاء نسخة', 'error'); })
-        .finally(function () { UI.hideSpinner(); });
+        }
+      }).catch(function () { /* UIC.Live has toasted */ });
     }
 
     function toggleActive() {
-      UI.showSpinner();
-      companyCall('toggle_ac_assessment_active', { id: state.id })
-        .then(function (res) {
-          UIC.toast((res && res.message) || 'تم التحديث', 'success');
-          state.header.IsActive = !state.header.IsActive;
+      /* Tier B toggle: no draft painted, so no draft/list/key/render. onSuccess
+         patches the in-memory header and re-renders locally; reload is the
+         error-path backstop. No overlay. queueable:false. */
+      UIC.Live.save({
+        call: companyCall,
+        action: 'toggle_ac_assessment_active',
+        data: { id: state.id },
+        message: 'تم التحديث',
+        queueable: false,
+        reload: function () { if (state.id) loadView(true); },
+        onSuccess: function (r) {
+          var rec = r && r.data && r.data.record;
+          if (rec && rec.IsActive !== undefined) state.header.IsActive = rec.IsActive;
+          else state.header.IsActive = !state.header.IsActive;
           renderForm();
-        })
-        .catch(function (err) { UIC.toast(err.message || 'تعذر التنفيذ', 'error'); })
-        .finally(function () { UI.hideSpinner(); });
+        }
+      }).catch(function () { /* UIC.Live has toasted */ });
     }
+
+    /* Another device's change arrives quietly (view mode re-reads; create
+       mode has nothing to converge so the refresh is a no-op). */
+    UIC.Live.watchPage({
+      call: companyCall,
+      page: 'ac_assessments',
+      onChange: function () { UIC.Live.arrive(function () { loadView(true); }); }
+    });
 
     document.addEventListener('DOMContentLoaded', renderApp);
   </script>

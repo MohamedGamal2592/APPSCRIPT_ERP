@@ -71,6 +71,7 @@
 
     var state = null;
     var ASSIGNMENT_ID = params.get('assignment') || '';
+    var __rvRows = [];
 
     function renderApp() {
       UIC.appShell('ac-root', {
@@ -84,17 +85,32 @@
       load();
     }
 
-    function load() {
+    function load(quiet) {
       if (!ASSIGNMENT_ID) { UIC.toast('لا يوجد معرف محاولة', 'error'); return; }
-      UIC.readSkeleton('ac-rv-content');
+      if (!quiet) UIC.readSkeleton('ac-rv-content');
       companyCall('get_ac_result', { id: ASSIGNMENT_ID })
         .then(function (res) {
           state = res;
+          __rvRows = [res.assignment || { AssignmentID: ASSIGNMENT_ID }];
           renderPage();
           if (params.get('autoprint') === '1') setTimeout(function () { window.print(); }, 500);
         })
         .catch(function (err) { UIC.toast(err.message || 'تعذر تحميل النتيجة', 'error'); })
-        .finally(function () { UI.hideSpinner(); });
+        .finally(function () { if (!quiet) UI.hideSpinner(); });
+    }
+
+    function renderReviewRows() {
+      var cur = __rvRows[0];
+      if (cur && state) {
+        state.assignment = cur;
+        state.review = {
+          decision: cur.ReviewDecision || '',
+          notes: cur.ReviewNotes || '',
+          reviewedBy: cur.__pending ? '' : (cur.ReviewedBy || ''),
+          reviewedAt: cur.__pending ? '' : (cur.ReviewedAt || '')
+        };
+      }
+      renderPage();
     }
 
     function renderPage() {
@@ -134,6 +150,31 @@
     // server-side). Read-only for anyone without CAN_WRITE.
     function reviewPanel() {
       if (!state.capabilities || !state.capabilities.review) return '';
+      /* Tier A pending: the draft decision/notes are already on screen, the
+         server-stamped cells (ReviewedBy/ReviewedAt) render «—» and the save
+         offers no action while __pending. */
+      var pending = !!((__rvRows[0] || {}).__pending);
+      if (pending) {
+        var d = __rvRows[0] || {};
+        var r0 = state.review || {};
+        var pDec = d.ReviewDecision || r0.decision || '';
+        var pNotes = (d.ReviewNotes !== undefined && d.ReviewNotes !== null) ? d.ReviewNotes : (r0.notes || '');
+        if (!CAN_WRITE) {
+          if (!pDec && !r0.decision) return '';
+          return '<div class="ac-score-card" style="text-align:start;"><strong>قرار المراجعة: </strong>' + esc(pDec) +
+            (pNotes ? '<p>' + esc(pNotes) + '</p>' : '') +
+            '<div style="color:var(--text-muted);font-size:var(--text-xs);">«—»</div></div>';
+        }
+        var pOptions = [{ value: 'Hire', label: 'توظيف' }, { value: 'Hold', label: 'انتظار' }, { value: 'Reject', label: 'رفض' }];
+        return '<div class="ac-score-card" style="text-align:start;">' +
+          '<div class="form-grid">' +
+          UIC.combo({ key: 'ac-review-decision', label: 'القرار', options: pOptions, value: pDec, placeholder: 'اختر القرار' }) +
+          '</div>' +
+          UIC.field({ key: 'ac-review-notes', label: 'ملاحظات المراجع', type: 'textarea', rows: 2, value: pNotes }) +
+          '<div style="color:var(--text-muted);font-size:var(--text-xs);margin-bottom:8px;">آخر تحديث: «—»</div>' +
+          '<button type="button" class="btn btn-primary" disabled>…</button>' +
+          '</div>';
+      }
       var r = state.review || {};
       if (!CAN_WRITE) {
         if (!r.decision) return '';
@@ -156,12 +197,51 @@
       var decision = (document.getElementById('ac-review-decision') || {}).value || '';
       var notes = (document.getElementById('ac-review-notes') || {}).value || '';
       if (!decision) { UIC.toast('اختر القرار أولاً', 'error'); return; }
-      UI.showSpinner();
-      companyCall('add_ac_review_decision', { assignment_id: ASSIGNMENT_ID, decision: decision, notes: notes })
-        .then(function (res) { UIC.toast((res && res.message) || 'تم الحفظ', 'success'); load(); })
-        .catch(function (err) { UIC.toast(err.message || 'تعذر حفظ القرار', 'error'); })
-        .finally(function () { UI.hideSpinner(); });
+      /* Tier A: add_ac_review_decision is a single-table overwrite by
+         AssignmentID (Assignments only, via acUpdate_), so the draft
+         decision/notes paint at once with no blocking overlay. ReviewedBy/
+         ReviewedAt are server-assigned — the draft never invents them,
+         recordOf fills them from data.reply (Assessment nests the record
+         under data, not top-level) and the panel shows «—» meanwhile with
+         no save action. queueable:false: I1 is unproven for this handler,
+         so a transport failure rolls back loudly. */
+      var draft = Object.assign({}, (__rvRows[0] || {}), {
+        AssignmentID: ASSIGNMENT_ID,
+        ReviewDecision: decision,
+        ReviewNotes: notes,
+        ReviewedBy: '',
+        ReviewedAt: ''
+      });
+      UIC.Live.save({
+        call: companyCall,
+        action: 'add_ac_review_decision',
+        data: { assignment_id: ASSIGNMENT_ID, decision: decision, notes: notes },
+        list: __rvRows,
+        key: 'AssignmentID',
+        draft: draft,
+        render: renderReviewRows,
+        message: 'تم حفظ القرار.',
+        queueable: false,
+        reload: function () { load(true); },
+        recordOf: function (resp) {
+          var rec = (resp && resp.data && resp.data.record) || (resp && resp.record);
+          if (rec && typeof rec === 'object') {
+            if (!rec.AssignmentID) rec.AssignmentID = ASSIGNMENT_ID;
+            return rec;
+          }
+          var fb = Object.assign({}, draft);
+          fb.AssignmentID = ASSIGNMENT_ID;
+          return fb;
+        }
+      }).catch(function () { /* UIC.Live has toasted and rolled back */ });
     }
+
+    /* Another device's change arrives quietly. */
+    UIC.Live.watchPage({
+      call: companyCall,
+      page: 'ac_results',
+      onChange: function () { UIC.Live.arrive(function () { load(true); }); }
+    });
 
     function answersPanel() {
       var anyPending = state.answers.some(function (x) { return x.Pending; });
@@ -217,7 +297,11 @@
         return companyCall('add_ac_candidate_grade', { assignment_id: ASSIGNMENT_ID, grades: grades })
           .then(function (res) {
             UIC.toast((res && res.message) || 'تم الحفظ', 'success');
-            load();
+            /* Tier C: the grade save itself still blocks (submitOnce holds the
+               button until the reply) and is untouched. Only this follow-up
+               redraw is quiet — a converted page (review decision above) must
+               not redraw over the screen it just painted (s19). */
+            load(true);
           })
           .catch(function (err) { UIC.toast(err.message || 'تعذر حفظ الدرجات', 'error'); });
       });

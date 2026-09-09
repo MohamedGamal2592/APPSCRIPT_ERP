@@ -59,8 +59,8 @@
       loadData();
     }
 
-    function loadData() {
-      UIC.readSkeleton('ac-batches-content');
+    function loadData(quiet) {
+      if (!quiet) UIC.readSkeleton('ac-batches-content');
       Promise.all([companyCall('get_ac_batches'), companyCall('get_ac_assessments')])
         .then(function (results) {
           batchRows = results[0].rows || [];
@@ -71,7 +71,7 @@
           console.error(err);
           UIC.toast('حدث خطأ في تحميل البيانات', 'error');
         })
-        .finally(function () { UI.hideSpinner(); });
+        .finally(function () { if (!quiet) UI.hideSpinner(); });
     }
 
     function existingCompanyNames() {
@@ -174,15 +174,22 @@
       if (!UIC.validateForm('ac-batch-form')) return;
       var data = UIC.collectForm('ac-batch-form');
       if (!activeAssessments.length) { UIC.toast('لا توجد تقييمات نشطة لإنشاء دفعة عليها', 'error'); return; }
-      UI.showSpinner();
-      companyCall('add_ac_batch', data)
-        .then(function (res) {
-          UIC.closeModal('ac-batch-modal');
-          UIC.toast('تم إنشاء الدفعة بنجاح', 'success');
-          loadData();
-        })
-        .catch(function (err) { UIC.toast(err.message || 'تعذر إنشاء الدفعة', 'error'); })
-        .finally(function () { UI.hideSpinner(); });
+      /* Tier B: add_ac_batch returns data.record + link, but the list row is
+         computed on read (Link, HasInvites, AssessmentTitle backfill), so NO
+         draft is painted — canPatch stays false, only the quiet corner hint
+         shows. A refusal toasts and paints nothing. onSuccess converges with
+         a quiet reload; reload is the error-path backstop. No validation is
+         changed. queueable:false: I1 is unproven for this handler. */
+      UIC.Live.save({
+        call: companyCall,
+        action: 'add_ac_batch',
+        data: data,
+        modal: 'ac-batch-modal',
+        message: 'تم إنشاء الدفعة بنجاح',
+        queueable: false,
+        reload: function () { loadData(true); },
+        onSuccess: function () { loadData(true); }
+      }).catch(function () { /* UIC.Live has toasted */ });
     }
 
     /* ── invites ───────────────────────────────────────────────────────────── */
@@ -198,15 +205,21 @@
       var raw = (document.getElementById('ac-invites-emails') || {}).value || '';
       var emails = raw.split(/\r?\n/).map(function (s) { return s.trim(); }).filter(Boolean);
       if (!emails.length) { UIC.toast('أدخل عنوان بريد واحد على الأقل', 'error'); return; }
-      UI.showSpinner();
-      companyCall('add_ac_batch_invites', { id: batchId, emails: emails })
-        .then(function (res) {
-          UIC.closeModal('ac-invites-modal');
-          UIC.toast((res && res.message) || 'تم الحفظ', 'success');
-          loadData();
-        })
-        .catch(function (err) { UIC.toast(err.message || 'تعذر الحفظ', 'error'); })
-        .finally(function () { UI.hideSpinner(); });
+      /* Tier B: add_ac_batch_invites returns only data.count/skipped (a batch
+         commit writes N rows, so there is no single record) — NO draft is
+         painted, canPatch stays false. A refusal toasts and paints nothing.
+         onSuccess converges with a quiet reload; reload is the error-path
+         backstop. No validation is changed. queueable:false. */
+      UIC.Live.save({
+        call: companyCall,
+        action: 'add_ac_batch_invites',
+        data: { id: batchId, emails: emails },
+        modal: 'ac-invites-modal',
+        message: 'تم الحفظ',
+        queueable: false,
+        reload: function () { loadData(true); },
+        onSuccess: function () { loadData(true); }
+      }).catch(function () { /* UIC.Live has toasted */ });
     }
 
     /* ── extend ────────────────────────────────────────────────────────────── */
@@ -220,24 +233,60 @@
     function saveExtend(batchId) {
       if (!UIC.validateForm('ac-extend-form')) return;
       var data = UIC.collectForm('ac-extend-form');
-      UI.showSpinner();
-      companyCall('update_ac_batch_expiry', { id: batchId, ExpiresAt: data.ExpiresAt })
-        .then(function (res) {
-          UIC.closeModal('ac-extend-modal');
-          UIC.toast(res && res.capped ? 'تم التمديد (بحد أقصى 90 يوماً من اليوم)' : 'تم تحديث تاريخ الانتهاء', 'success');
-          loadData();
-        })
-        .catch(function (err) { UIC.toast(err.message || 'تعذر التنفيذ', 'error'); })
-        .finally(function () { UI.hideSpinner(); });
+      /* Tier B: update_ac_batch_expiry overwrites ExpiresAt by id and returns
+         data.record + capped — NO draft is painted, canPatch stays false. The
+         capped branch (extension clamped to 90 days) is preserved in onSuccess;
+         Live.save already toasted the server message, so the cap note is an
+         additional toast only when capped. reload is the error-path backstop.
+         No validation is changed. queueable:false. */
+      UIC.Live.save({
+        call: companyCall,
+        action: 'update_ac_batch_expiry',
+        data: { id: batchId, ExpiresAt: data.ExpiresAt },
+        modal: 'ac-extend-modal',
+        message: 'تم تحديث تاريخ الانتهاء',
+        queueable: false,
+        reload: function () { loadData(true); },
+        onSuccess: function (r) {
+          if (r && r.capped) UIC.toast('تم التمديد (بحد أقصى 90 يوماً من اليوم)', 'success');
+          var rec = r && r.data && r.data.record;
+          var row = (batchRows || []).filter(function (x) { return String(x.BatchID) === String(batchId); })[0];
+          if (row && rec && rec.ExpiresAt) row.ExpiresAt = rec.ExpiresAt;
+          renderTable();
+          loadData(true);
+        }
+      }).catch(function () { /* UIC.Live has toasted */ });
     }
 
     function toggleActive(batchId) {
-      UI.showSpinner();
-      companyCall('toggle_ac_batch_active', { id: batchId })
-        .then(function (res) { UIC.toast((res && res.message) || 'تم التحديث', 'success'); loadData(); })
-        .catch(function (err) { UIC.toast(err.message || 'تعذر التنفيذ', 'error'); })
-        .finally(function () { UI.hideSpinner(); });
+      /* Tier B toggle: no draft painted, so no draft/list/key/render. onSuccess
+         patches the in-memory row and re-renders locally; reload is the
+         error-path backstop. No overlay. queueable:false. */
+      UIC.Live.save({
+        call: companyCall,
+        action: 'toggle_ac_batch_active',
+        data: { id: batchId },
+        message: 'تم التحديث',
+        queueable: false,
+        reload: function () { loadData(true); },
+        onSuccess: function (r) {
+          var rec = r && r.data && r.data.record;
+          var row = (batchRows || []).filter(function (x) { return String(x.BatchID) === String(batchId); })[0];
+          if (row) {
+            if (rec && rec.IsActive !== undefined) row.IsActive = rec.IsActive;
+            else row.IsActive = !row.IsActive;
+          }
+          renderTable();
+        }
+      }).catch(function () { /* UIC.Live has toasted */ });
     }
+
+    /* Another device's change arrives quietly. */
+    UIC.Live.watchPage({
+      call: companyCall,
+      page: 'ac_batches',
+      onChange: function () { UIC.Live.arrive(function () { loadData(true); }); }
+    });
 
     /* ── candidates (read-only) ───────────────────────────────────────────── */
     function openCandidatesModal(batchId) {

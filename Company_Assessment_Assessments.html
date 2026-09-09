@@ -56,8 +56,8 @@
       loadData();
     }
 
-    function loadData() {
-      UIC.readSkeleton('ac-assess-content');
+    function loadData(quiet) {
+      if (!quiet) UIC.readSkeleton('ac-assess-content');
       companyCall('get_ac_assessments')
         .then(function (res) {
           assessRows = res.rows || [];
@@ -67,7 +67,7 @@
           console.error(err);
           UIC.toast('حدث خطأ في تحميل البيانات', 'error');
         })
-        .finally(function () { UI.hideSpinner(); });
+        .finally(function () { if (!quiet) UI.hideSpinner(); });
     }
 
     function rowActions(r) {
@@ -128,26 +128,51 @@
     }
 
     function duplicateAssessment(id) {
-      UI.showSpinner();
-      companyCall('add_ac_assessment_copy', { id: id })
-        .then(function () {
-          UIC.toast('تم إنشاء نسخة جديدة', 'success');
-          loadData();
-        })
-        .catch(function (err) { UIC.toast(err.message || 'تعذر إنشاء نسخة', 'error'); })
-        .finally(function () { UI.hideSpinner(); });
+      /* Tier B: add_ac_assessment_copy returns only data.assignedId (no record),
+         so NO draft is painted — canPatch stays false, only the quiet corner
+         hint shows. A refusal toasts and paints nothing. onSuccess converges
+         with a quiet reload; reload is the error-path backstop. No validation
+         is changed. queueable:false: I1 is unproven for this handler. */
+      UIC.Live.save({
+        call: companyCall,
+        action: 'add_ac_assessment_copy',
+        data: { id: id },
+        message: 'تم إنشاء نسخة جديدة',
+        queueable: false,
+        reload: function () { loadData(true); },
+        onSuccess: function () { loadData(true); }
+      }).catch(function () { /* UIC.Live has toasted */ });
     }
 
     function toggleActive(id) {
-      UI.showSpinner();
-      companyCall('toggle_ac_assessment_active', { id: id })
-        .then(function (res) {
-          UIC.toast((res && res.message) || 'تم التحديث', 'success');
-          loadData();
-        })
-        .catch(function (err) { UIC.toast(err.message || 'تعذر التنفيذ', 'error'); })
-        .finally(function () { UI.hideSpinner(); });
+      /* Tier B toggle: no draft painted, so no draft/list/key/render. onSuccess
+         patches the in-memory row and re-renders locally; reload is the
+         error-path backstop. No overlay. queueable:false. */
+      UIC.Live.save({
+        call: companyCall,
+        action: 'toggle_ac_assessment_active',
+        data: { id: id },
+        message: 'تم التحديث',
+        queueable: false,
+        reload: function () { loadData(true); },
+        onSuccess: function (r) {
+          var rec = r && r.data && r.data.record;
+          var row = (assessRows || []).filter(function (x) { return String(x.AssessmentID) === String(id); })[0];
+          if (row) {
+            if (rec && rec.IsActive !== undefined) row.IsActive = rec.IsActive;
+            else row.IsActive = !row.IsActive;
+          }
+          renderTable();
+        }
+      }).catch(function () { /* UIC.Live has toasted */ });
     }
+
+    /* Another device's change arrives quietly. */
+    UIC.Live.watchPage({
+      call: companyCall,
+      page: 'ac_assessments',
+      onChange: function () { UIC.Live.arrive(function () { loadData(true); }); }
+    });
 
     document.addEventListener('DOMContentLoaded', renderApp);
   </script>
