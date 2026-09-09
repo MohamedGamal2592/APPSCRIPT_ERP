@@ -1,0 +1,623 @@
+<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>جدول مديونيات العملاء — client_balance_sheets</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_TopChemical_Nav'); ?>
+  <?!= getCompanyThemeCSS_('3fe1b5cb67b7223e') ?>
+  <style>
+    .cbs-wrapper {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      padding: 4px 0;
+    }
+
+    /* ── header card ── */
+    .cbs-header-card {
+      background: var(--bg-surface, #fff);
+      border: 1px solid var(--border-color, #e2e8f0);
+      border-radius: 12px;
+      padding: 16px 20px;
+      box-shadow: 0 1px 3px rgba(0,0,0,.06);
+    }
+    .cbs-header-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+    .cbs-heading {
+      font-size: 17px;
+      font-weight: 700;
+      color: var(--text-primary, #0f172a);
+      margin: 0 0 4px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .cbs-subheading {
+      font-size: 12px;
+      color: var(--text-muted, #64748b);
+      margin: 0;
+    }
+    .cbs-badges {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+    .cbs-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 3px 10px;
+      border-radius: 8px;
+      font-size: 12px;
+      background: var(--bg-subtle, #f8fafc);
+      border: 1px solid var(--border-color, #e2e8f0);
+      color: var(--text-secondary, #334155);
+    }
+    .cbs-badge b { color: var(--brand-primary, #0284c7); }
+
+    /* ── toolbar ── */
+    .cbs-toolbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 10px;
+      padding-top: 14px;
+      border-top: 1px solid var(--border-color, #e2e8f0);
+    }
+    .cbs-search-box {
+      position: relative;
+      flex: 1;
+      min-width: 220px;
+      max-width: 380px;
+    }
+    .cbs-search-input {
+      width: 100%;
+      padding: 8px 12px 8px 30px;
+      border: 1px solid var(--border-color, #cbd5e1);
+      border-radius: 8px;
+      font-size: 13px;
+      background: var(--bg-surface, #fff);
+      color: var(--text-primary, #0f172a);
+      outline: none;
+      transition: border-color .2s, box-shadow .2s;
+    }
+    .cbs-search-input:focus {
+      border-color: var(--brand-primary, #0284c7);
+      box-shadow: 0 0 0 2px rgba(2,132,199,.12);
+    }
+    .cbs-search-clear {
+      position: absolute;
+      left: 9px;
+      top: 50%;
+      transform: translateY(-50%);
+      cursor: pointer;
+      color: var(--text-muted, #94a3b8);
+      font-size: 13px;
+      display: none;
+    }
+
+    /* ── table card ── */
+    .cbs-table-card {
+      background: var(--bg-surface, #fff);
+      border: 1px solid var(--border-color, #e2e8f0);
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 1px 3px rgba(0,0,0,.06);
+    }
+    .cbs-table-scroll {
+      width: 100%;
+      overflow-x: auto;
+    }
+    .cbs-tbl {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+      white-space: nowrap;
+    }
+    .cbs-tbl thead th {
+      background: var(--bg-subtle, #f1f5f9);
+      color: var(--text-secondary, #334155);
+      font-weight: 700;
+      padding: 9px 13px;
+      border-bottom: 2px solid var(--border-color, #cbd5e1);
+      text-align: right;
+      position: sticky;
+      top: 0;
+      z-index: 2;
+    }
+    .cbs-tbl tbody tr {
+      border-bottom: 1px solid var(--border-color, #f1f5f9);
+      transition: background .12s;
+    }
+    .cbs-tbl tbody tr:hover { background: var(--brand-subtle-bg, #f0f9ff); }
+    .cbs-tbl td {
+      padding: 9px 13px;
+      color: var(--text-primary, #0f172a);
+      vertical-align: middle;
+    }
+
+    /* ── cell helpers ── */
+    .cell-num {
+      text-align: left;
+      font-variant-numeric: tabular-nums;
+      font-family: monospace;
+      font-weight: 600;
+      direction: ltr;
+    }
+    .cell-date {
+      font-family: monospace;
+      direction: ltr;
+      text-align: left;
+    }
+    .badge-pk {
+      padding: 2px 7px;
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 700;
+      background: #e0f2fe;
+      color: #0369a1;
+      font-family: monospace;
+    }
+    .badge-rev-1 {
+      padding: 2px 8px;
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 700;
+      background: #dcfce7;
+      color: #166534;
+    }
+    .badge-rev-0 {
+      padding: 2px 8px;
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 700;
+      background: #fef3c7;
+      color: #92400e;
+    }
+
+    /* ── edit form grid ── */
+    .cbs-form-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 14px;
+      padding: 6px 2px;
+    }
+    .cbs-form-grid .form-field { margin: 0; }
+    .cbs-form-full { grid-column: 1 / -1; }
+
+    .cbs-empty {
+      text-align: center;
+      padding: 40px 20px;
+      color: var(--text-muted, #64748b);
+      font-size: 14px;
+    }
+
+    /* label — PK indicator */
+    .lbl-pk {
+      font-size: 11px;
+      background: #e0f2fe;
+      color: #0369a1;
+      border-radius: 4px;
+      padding: 1px 5px;
+      font-weight: 600;
+      margin-right: 4px;
+    }
+    .lbl-ro {
+      font-size: 11px;
+      background: #f1f5f9;
+      color: #64748b;
+      border-radius: 4px;
+      padding: 1px 5px;
+      font-weight: 600;
+      margin-right: 4px;
+    }
+  </style>
+</head>
+<body>
+<div id="tc-root" dir="rtl"></div>
+<script>
+  var params        = new URLSearchParams(window.location.search);
+  var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+  var scriptUrl     = window.scriptUrl || '/';
+  var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('3fe1b5cb67b7223e') ?>';
+  var COMPANY_PAGES    = <?!= companyPages ?>;
+  var CURRENT_ACTION   = '<?!= currentAction ?>';
+  var IS_SUPER_ADMIN   = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+  var USER_PAGES       = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+  var CAN_WRITE = UIC.canAdd_();
+  var CAN_FULL  = UIC.canFull_();
+
+  /* ── state ── */
+  var S = {
+    columns:    [],   /* as returned from server */
+    rows:       [],
+    total:      0,
+    loadedAll:  false,
+    searchQ:    '',
+    editingId:  null  /* id value of the row currently in the edit modal */
+  };
+
+  /* ── real PK column — confirmed from schema ── */
+  var PK_COL = 'id';
+
+  /* ── columns the edit form must never allow writing ── */
+  var READ_ONLY_COLS = {
+    'id':         true,
+    'created_at': true,
+    'updated_at': true,
+    'deleted_at': true
+  };
+
+  /* ── human-readable Arabic labels ── */
+  var COL_LABELS = {
+    'id':                  '# المعرف (PK)',
+    'client_id':           'معرف العميل',
+    'admin_id':            'معرف المسؤول',
+    'debit_currency_id':   'معرف عملة المدين',
+    'credit_currency_id':  'معرف عملة الدائن',
+    'invoice_id':          'رقم الفاتورة',
+    'debit_amount':        'مبلغ المدين',
+    'credit_amount':       'مبلغ الدائن',
+    'balance_amount':      'الرصيد',
+    'notes':               'ملاحظات',
+    'payment_type':        'نوع الدفع',
+    'payment_date':        'تاريخ الدفع',
+    'created_at':          'تاريخ الإنشاء',
+    'updated_at':          'آخر تحديث',
+    'deleted_at':          'تاريخ الحذف',
+    'is_revised':          'حالة المراجعة'
+  };
+
+  /* Columns that hold decimal / numeric values */
+  var NUMERIC_COLS = { debit_amount:1, credit_amount:1, balance_amount:1,
+                       client_id:1, admin_id:1, debit_currency_id:1,
+                       credit_currency_id:1, invoice_id:1, id:1 };
+
+  /* Columns that are dates / timestamps */
+  var DATE_COLS = { payment_date:1, created_at:1, updated_at:1, deleted_at:1 };
+
+  function colLabel(col) { return COL_LABELS[col] || col; }
+
+  /* ── company API call helper ── */
+  function companyCall(moduleAction, data) {
+    return API.call('company_action', {
+      target_system: '3fe1b5cb67b7223e',
+      module_action:  moduleAction,
+      data:           data || {}
+    }, SESSION_TOKEN);
+  }
+
+  /* ══════════════════ INIT ══════════════════ */
+  function load() {
+    UIC.appShell('tc-root', {
+      companyLogoUrl:   COMPANY_LOGO_URL,
+      companyLogoHref:  scriptUrl + '?action=tc_dashboard&sessionToken=' + SESSION_TOKEN,
+      companyLogoTitle: 'توب كيميكال',
+      breadcrumb: 'توب كيميكال / تحليلات النظام الرئيسي / جدول مديونيات العملاء (client_balance_sheets)',
+      contentId: 'cbs-content',
+      menuGroups: (window.TOPCHEMICAL_MENU || [])
+    });
+    fetchData(false);
+  }
+
+  /* ══════════════════ DATA ══════════════════ */
+  function fetchData(loadAll) {
+    if (loadAll !== undefined) S.loadedAll = !!loadAll;
+    /* RT1: reads draw skeletons, never the blocking overlay */
+    UIC.readSkeleton('cbs-content', {
+      message: S.loadedAll ? 'جاري تحميل كامل البيانات...' : 'جاري تحميل آخر 10 سجلات...'
+    });
+    companyCall('get_client_balance_sheets', { loadAll: S.loadedAll })
+      .then(function (res) {
+        S.columns = res.columns || [];
+        S.rows    = res.rows    || [];
+        S.total   = res.total   || 0;
+        renderPage();
+      })
+      .catch(showError)
+      .finally(function () {
+        UI.hideSpinner();
+        try { schedulePrefetch(); } catch (e) {}
+      });
+  }
+
+  function toggleLoadAll() { fetchData(!S.loadedAll); }
+
+  /* ══════════════════ RENDER ══════════════════ */
+  function filteredRows() {
+    if (!S.searchQ) return S.rows;
+    var q = S.searchQ.toLowerCase();
+    return S.rows.filter(function (r) {
+      return Object.keys(r).some(function (k) {
+        var v = r[k];
+        return v !== null && v !== undefined && String(v).toLowerCase().indexOf(q) !== -1;
+      });
+    });
+  }
+
+  function renderPage() {
+    var content = document.getElementById('cbs-content');
+    if (!content) return;
+
+    var rows = filteredRows();
+    var cols = S.columns.length ? S.columns : (S.rows[0] ? Object.keys(S.rows[0]) : []);
+
+    /* header card */
+    var html =
+      '<div class="cbs-wrapper">' +
+      '<div class="cbs-header-card">' +
+        '<div class="cbs-header-top">' +
+          '<div>' +
+            '<h2 class="cbs-heading">📋 جدول مديونيات العملاء <span style="font-size:13px;font-weight:400;color:var(--text-muted)">(client_balance_sheets)</span></h2>' +
+            '<p class="cbs-subheading">جدول قاعدة البيانات المباشر — ' + S.total + ' سجل إجمالاً (الحذف الناعم مُطبَّق)</p>' +
+          '</div>' +
+          '<div class="cbs-badges">' +
+            '<div class="cbs-badge">الإجمالي: <b>' + FMT.number(S.total) + '</b></div>' +
+            '<div class="cbs-badge">المُحمَّل: <b>' + FMT.number(S.rows.length) + '</b></div>' +
+            '<div class="cbs-badge">المعروض: <b>' + FMT.number(rows.length) + '</b></div>' +
+            '<div class="cbs-badge">الوضع: <b>' + (S.loadedAll ? 'عرض الكل' : 'آخر 10 سجلات') + '</b></div>' +
+          '</div>' +
+        '</div>' +
+        '<div class="cbs-toolbar">' +
+          '<div class="cbs-search-box">' +
+            '<input id="cbs-srch" class="cbs-search-input" type="text"' +
+              ' placeholder="بحث في جميع الأعمدة…"' +
+              ' value="' + FMT.escape(S.searchQ) + '"' +
+              ' oninput="onSearch(this.value)">' +
+            '<span id="cbs-srch-x" class="cbs-search-clear" onclick="clearSearch()"' +
+              ' style="display:' + (S.searchQ ? 'block' : 'none') + '">✕</span>' +
+          '</div>' +
+          '<div style="display:flex;gap:8px;flex-wrap:wrap;">' +
+            '<button class="btn btn-outline" onclick="fetchData(S.loadedAll)">🔄 تحديث</button>' +
+            '<button class="btn ' + (S.loadedAll ? 'btn-secondary' : 'btn-primary') + '" onclick="toggleLoadAll()">' +
+              (S.loadedAll
+                ? '📄 عرض آخر 10 سجلات فقط'
+                : '📊 عرض الكل (' + FMT.number(S.total) + ' سجل)') +
+            '</button>' +
+          '</div>' +
+        '</div>' +
+      '</div>' +   /* end header card */
+
+      /* table card */
+      '<div class="cbs-table-card">' +
+        '<div class="cbs-table-scroll">' +
+          buildTable(rows, cols) +
+        '</div>' +
+      '</div>' +
+      '</div>';   /* end wrapper */
+
+    content.innerHTML = html;
+  }
+
+  function buildTable(rows, cols) {
+    if (!rows.length) {
+      return '<div class="cbs-empty">لا توجد سجلات مطابقة</div>';
+    }
+
+    /* thead */
+    var head = '<thead><tr><th>إجراءات</th>';
+    cols.forEach(function (c) { head += '<th>' + FMT.escape(colLabel(c)) + '</th>'; });
+    head += '</tr></thead>';
+
+    /* tbody */
+    var body = '<tbody>';
+    rows.forEach(function (row) {
+      var pkVal = row[PK_COL] !== undefined && row[PK_COL] !== null ? row[PK_COL] : '';
+      body += '<tr>';
+      body += '<td>';
+      if (CAN_WRITE) {
+        body += '<button class="btn btn-sm btn-outline" onclick="openEdit(\'' + FMT.escape(pkVal) + '\')">✏️ تعديل</button>';
+      }
+      body += '</td>';
+
+      cols.forEach(function (c) {
+        var v = row[c];
+        body += '<td>' + renderCell(c, v) + '</td>';
+      });
+
+      body += '</tr>';
+    });
+    body += '</tbody>';
+
+    return '<table class="cbs-tbl">' + head + body + '</table>';
+  }
+
+  function renderCell(col, val) {
+    if (val === null || val === undefined) return '<span style="color:var(--text-muted);font-size:11px">—</span>';
+
+    if (col === PK_COL) {
+      return '<span class="badge-pk">' + FMT.escape(String(val)) + '</span>';
+    }
+    if (col === 'is_revised') {
+      var rev = String(val) === '1';
+      return '<span class="' + (rev ? 'badge-rev-1' : 'badge-rev-0') + '">' +
+             (rev ? '✓ مراجع' : '⏳ غير مراجع') + '</span>';
+    }
+    if (col === 'payment_type') {
+      return '<span style="font-size:12px;background:var(--bg-subtle);padding:2px 7px;border-radius:5px;">' + FMT.escape(String(val)) + '</span>';
+    }
+    if (DATE_COLS[col]) {
+      return '<span class="cell-date">' + FMT.escape(String(val).slice(0, 19)) + '</span>';
+    }
+    if (NUMERIC_COLS[col]) {
+      return '<span class="cell-num">' + FMT.number(val) + '</span>';
+    }
+    var str = String(val);
+    if (str.length > 60) str = str.slice(0, 60) + '…';
+    return FMT.escape(str);
+  }
+
+  /* ══════════════════ SEARCH ══════════════════ */
+  function onSearch(val) {
+    S.searchQ = val;
+    var x = document.getElementById('cbs-srch-x');
+    if (x) x.style.display = val ? 'block' : 'none';
+    refreshTableOnly();
+  }
+  function clearSearch() {
+    S.searchQ = '';
+    var inp = document.getElementById('cbs-srch');
+    if (inp) inp.value = '';
+    var x = document.getElementById('cbs-srch-x');
+    if (x) x.style.display = 'none';
+    refreshTableOnly();
+  }
+  function refreshTableOnly() {
+    var wrap = document.querySelector('.cbs-table-scroll');
+    if (!wrap) return;
+    var cols = S.columns.length ? S.columns : (S.rows[0] ? Object.keys(S.rows[0]) : []);
+    wrap.innerHTML = buildTable(filteredRows(), cols);
+  }
+
+  /* ══════════════════ EDIT MODAL ══════════════════ */
+  function openEdit(pkVal) {
+    var row = (S.rows).find(function (r) {
+      return String(r[PK_COL]) === String(pkVal);
+    });
+    if (!row) { UIC.toast('السجل غير موجود في الذاكرة', 'error'); return; }
+
+    S.editingId = pkVal;
+    var cols = S.columns.length ? S.columns : Object.keys(row);
+
+    var formHtml = '<form id="cbs-edit-form"><div class="cbs-form-grid">';
+
+    cols.forEach(function (col) {
+      var val  = row[col];
+      var label = colLabel(col);
+      var isRO  = READ_ONLY_COLS[col];
+
+      if (isRO) {
+        /* Read-only display field — not submitted */
+        formHtml +=
+          '<div class="form-field">' +
+            '<label class="form-label">' +
+              '<span class="lbl-ro">' + (col === PK_COL ? 'PK' : 'للقراءة فقط') + '</span> ' +
+              FMT.escape(label) +
+            '</label>' +
+            '<input type="text" class="input" value="' + FMT.escape(val !== null && val !== undefined ? String(val) : '') + '" disabled>' +
+          '</div>';
+        return;
+      }
+
+      var fieldClass = (col === 'notes') ? ' cbs-form-full' : '';
+
+      if (col === 'is_revised') {
+        var rev1 = String(val) === '1';
+        formHtml +=
+          '<div class="form-field' + fieldClass + '">' +
+            '<label class="form-label">' + FMT.escape(label) + '</label>' +
+            '<select class="input" name="' + col + '" id="cbsf_' + col + '">' +
+              '<option value="0"' + (!rev1 ? ' selected' : '') + '>0 — غير مراجع</option>' +
+              '<option value="1"' + (rev1 ? ' selected' : '') + '>1 — مراجع</option>' +
+            '</select>' +
+          '</div>';
+
+      } else if (col === 'notes') {
+        formHtml +=
+          '<div class="form-field' + fieldClass + '">' +
+            '<label class="form-label">' + FMT.escape(label) + '</label>' +
+            '<textarea class="input" rows="3" name="' + col + '" id="cbsf_' + col + '">' + FMT.escape(val !== null && val !== undefined ? String(val) : '') + '</textarea>' +
+          '</div>';
+
+      } else if (col === 'payment_type') {
+        /* enum options from schema */
+        var ptOpts = ['Cash Factory','Cash Management','Bank Transfer','Cheque','Other'];
+        formHtml +=
+          '<div class="form-field' + fieldClass + '">' +
+            '<label class="form-label">' + FMT.escape(label) + '</label>' +
+            '<select class="input" name="' + col + '" id="cbsf_' + col + '">' +
+              '<option value="">— لم يحدد —</option>' +
+              ptOpts.map(function (o) {
+                return '<option value="' + FMT.escape(o) + '"' + (String(val) === o ? ' selected' : '') + '>' + FMT.escape(o) + '</option>';
+              }).join('') +
+            '</select>' +
+          '</div>';
+
+      } else if (col === 'payment_date') {
+        var dv = val ? String(val).slice(0, 10) : '';
+        formHtml +=
+          '<div class="form-field' + fieldClass + '">' +
+            '<label class="form-label">' + FMT.escape(label) + '</label>' +
+            '<input type="date" class="input" name="' + col + '" id="cbsf_' + col + '" value="' + FMT.escape(dv) + '">' +
+          '</div>';
+
+      } else if (NUMERIC_COLS[col]) {
+        formHtml +=
+          '<div class="form-field' + fieldClass + '">' +
+            '<label class="form-label">' + FMT.escape(label) + '</label>' +
+            '<input type="number" step="any" class="input cell-num" name="' + col + '" id="cbsf_' + col + '" value="' + FMT.escape(val !== null && val !== undefined ? String(val) : '') + '">' +
+          '</div>';
+
+      } else {
+        formHtml +=
+          '<div class="form-field' + fieldClass + '">' +
+            '<label class="form-label">' + FMT.escape(label) + '</label>' +
+            '<input type="text" class="input" name="' + col + '" id="cbsf_' + col + '" value="' + FMT.escape(val !== null && val !== undefined ? String(val) : '') + '">' +
+          '</div>';
+      }
+    });
+
+    formHtml += '</div></form>';
+
+    UIC.openModal('cbs-edit-modal', {
+      title: 'تعديل سجل مديونية — #' + pkVal,
+      body: formHtml,
+      saveLabel: 'حفظ التعديلات',
+      onSave: 'saveEdit()'
+    });
+  }
+
+  /* ══════════════════ SAVE ══════════════════ */
+  function saveEdit() {
+    var pkVal = S.editingId;
+    if (!pkVal) { UIC.toast('لا يوجد سجل محدد', 'error'); return; }
+
+    var row = (S.rows).find(function (r) { return String(r[PK_COL]) === String(pkVal); });
+    if (!row) { UIC.toast('السجل غير موجود', 'error'); return; }
+
+    var cols = S.columns.length ? S.columns : Object.keys(row);
+    var payload = {};
+    payload[PK_COL] = pkVal;   /* the server expects `id` */
+
+    cols.forEach(function (col) {
+      if (READ_ONLY_COLS[col]) return;
+      var el = document.getElementById('cbsf_' + col);
+      if (el) payload[col] = el.value;
+    });
+
+    UI.showSpinner('جاري حفظ التعديلات…');
+
+    companyCall('save_client_balance_sheet', payload)
+      .then(function () {
+        UIC.toast('تم الحفظ بنجاح ✓', 'success');
+        UIC.closeModal('cbs-edit-modal');
+        /* patch local state so we don't need a full reload */
+        Object.keys(payload).forEach(function (k) { row[k] = payload[k]; });
+        renderPage();
+      })
+      .catch(showError)
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  /* ── error helper ── */
+  function showError(err) {
+    var msg = (err && (err.message || err.error)) || String(err || 'حدث خطأ غير متوقع');
+    UIC.toast(msg, 'error');
+  }
+
+  document.addEventListener('DOMContentLoaded', load);
+</script>
+</body>
+</html>

@@ -448,17 +448,23 @@ function dbClientsArList_(data, user) {
   var offset = Math.max(Number(data.offset) || 0, 0);
   var where = dbClientsArWhere_(data);
   var cols = DB_CLIENTS_AR_COLUMNS.map(dbSanitizeIdentifier_).join(', ');
+  var isVendor = String(data.source || data.view || '').trim() === 'vendors_AP';
   var conn, countStmt, countRs, stmt, rs;
   try {
     conn = dbGetConnection_();
-    countStmt = conn.prepareStatement('SELECT COUNT(*) AS cnt FROM `clients_AR`' + where.sql);
+    countStmt = conn.prepareStatement(isVendor
+      ? 'SELECT COUNT(*) AS cnt FROM `vendors_AP`' + where.sql
+      : 'SELECT COUNT(*) AS cnt FROM `clients_AR`' + where.sql);
     dbBindParams_(countStmt, where.params);
     countRs = countStmt.executeQuery();
     var total = countRs.next() ? countRs.getInt('cnt') : 0;
-    stmt = conn.prepareStatement(
-      'SELECT ' + cols + ' FROM `clients_AR`' + where.sql +
-      ' ORDER BY `payment_date` DESC, `client_balance_sheet_id` DESC' +
-      ' LIMIT ' + limit + ' OFFSET ' + offset);
+    stmt = conn.prepareStatement(isVendor
+      ? 'SELECT ' + cols + ' FROM `vendors_AP`' + where.sql +
+        ' ORDER BY `payment_date` DESC, `client_balance_sheet_id` DESC' +
+        ' LIMIT ' + limit + ' OFFSET ' + offset
+      : 'SELECT ' + cols + ' FROM `clients_AR`' + where.sql +
+        ' ORDER BY `payment_date` DESC, `client_balance_sheet_id` DESC' +
+        ' LIMIT ' + limit + ' OFFSET ' + offset);
     dbBindParams_(stmt, where.params);
     rs = stmt.executeQuery();
     var rows = [];
@@ -474,7 +480,7 @@ function dbClientsArList_(data, user) {
         is_revised: rs.getObject(8) !== null ? String(rs.getObject(8)) : '0'
       });
     }
-    return { status: 'ok', columns: DB_CLIENTS_AR_COLUMNS.slice(), rows: rows, total: total, limit: limit, offset: offset };
+    return { status: 'ok', columns: DB_CLIENTS_AR_COLUMNS.slice(), rows: rows, total: total, limit: limit, offset: offset, source: isVendor ? 'vendors_AP' : 'clients_AR' };
   } catch (err) {
     Logger.log('dbClientsArList_ error: ' + err.message);
     throw err;
@@ -488,8 +494,8 @@ function dbClientsArList_(data, user) {
 }
 
 /**
- * Flip one row 0 -> 1. data: { client_balance_sheet_id }.
- * NOTE: if clients_AR is a non-updatable view (joins/aggregates) MySQL
+ * Flip one row 0 -> 1. data: { client_balance_sheet_id, source }.
+ * NOTE: if clients_AR / vendors_AP is a non-updatable view (joins/aggregates) MySQL
  * raises 1288/1353 — then retarget this UPDATE to the base table holding
  * is_revised (find via SHOW CREATE VIEW clients_AR); SELECT stays on view.
  */
@@ -497,15 +503,17 @@ function dbClientsArRevise_(data, user) {
   data = data || {};
   var id = String(data.client_balance_sheet_id === undefined || data.client_balance_sheet_id === null ? '' : data.client_balance_sheet_id).trim();
   if (!id) throw new Error('client_balance_sheet_id is required');
+  var isVendor = String(data.source || data.view || '').trim() === 'vendors_AP';
   var conn, stmt;
   try {
     conn = dbGetConnection_();
-    stmt = conn.prepareStatement(
-      'UPDATE `clients_AR` SET `is_revised` = 1 WHERE `client_balance_sheet_id` = ? AND (`is_revised` = 0 OR `is_revised` IS NULL)');
+    stmt = conn.prepareStatement(isVendor
+      ? 'UPDATE `vendors_AP` SET `is_revised` = 1 WHERE `client_balance_sheet_id` = ? AND (`is_revised` = 0 OR `is_revised` IS NULL)'
+      : 'UPDATE `clients_AR` SET `is_revised` = 1 WHERE `client_balance_sheet_id` = ? AND (`is_revised` = 0 OR `is_revised` IS NULL)');
     stmt.setObject(1, id);
     var affected = stmt.executeUpdate();
     if (affected === 0) throw new Error('البند غير موجود أو تمت مراجعته مسبقاً');
-    return { status: 'ok', affected: affected, client_balance_sheet_id: id, is_revised: 1 };
+    return { status: 'ok', affected: affected, client_balance_sheet_id: id, is_revised: 1, source: isVendor ? 'vendors_AP' : 'clients_AR' };
   } catch (err) {
     Logger.log('dbClientsArRevise_ error: ' + err.message);
     throw err;
@@ -514,6 +522,131 @@ function dbClientsArRevise_(data, user) {
     if (conn) conn.close();
   }
 }
+
+// ─── client_balance_sheets (Top Chemical: tc_client_balance_sheets) ──
+//
+// Schema (16 columns): id (PK), client_id, admin_id, debit_currency_id,
+// credit_currency_id, invoice_id, debit_amount, credit_amount, balance_amount,
+// notes, payment_type, payment_date, created_at, updated_at, deleted_at, is_revised.
+// Soft-deleted rows (deleted_at IS NOT NULL) are excluded from reads.
+
+/**
+ * Paginated or full list from the client_balance_sheets table.
+ * Default: last 10 rows (ORDER BY id DESC). Pass loadAll:true for up to 1000.
+ * Soft-deleted rows are excluded (WHERE deleted_at IS NULL).
+ */
+function dbClientBalanceSheetsList_(data, user) {
+  data = data || {};
+  var loadAll = !!(data.loadAll === true || data.loadAll === 'true' || data.loadAll === '1' || data.loadAll === 1);
+  var limit = loadAll ? 1000 : Math.min(Math.max(Number(data.limit) || 10, 1), 1000);
+  var offset = Math.max(Number(data.offset) || 0, 0);
+
+  var conn, countStmt, countRs, stmt, rs;
+  try {
+    conn = dbGetConnection_();
+    countStmt = conn.prepareStatement(
+      'SELECT COUNT(*) AS cnt FROM `client_balance_sheets` WHERE `deleted_at` IS NULL'
+    );
+    countRs = countStmt.executeQuery();
+    var total = countRs.next() ? countRs.getInt('cnt') : 0;
+
+    stmt = conn.prepareStatement(
+      'SELECT * FROM `client_balance_sheets` WHERE `deleted_at` IS NULL' +
+      ' ORDER BY `id` DESC LIMIT ' + limit + ' OFFSET ' + offset
+    );
+    rs = stmt.executeQuery();
+
+    var md = rs.getMetaData();
+    var colCount = md.getColumnCount();
+    var columns = [];
+    for (var c = 1; c <= colCount; c++) {
+      columns.push(md.getColumnLabel(c) || md.getColumnName(c));
+    }
+
+    var rows = [];
+    while (rs.next()) {
+      var row = {};
+      for (var i = 1; i <= colCount; i++) {
+        var colName = columns[i - 1];
+        var val = rs.getObject(i);
+        row[colName] = val !== null ? String(val) : null;
+      }
+      rows.push(row);
+    }
+
+    return {
+      status: 'ok',
+      columns: columns,
+      rows: rows,
+      total: total,
+      limit: limit,
+      offset: offset,
+      loadedAll: loadAll
+    };
+  } catch (err) {
+    Logger.log('dbClientBalanceSheetsList_ error: ' + err.message);
+    throw err;
+  } finally {
+    if (rs) rs.close();
+    if (stmt) stmt.close();
+    if (countRs) countRs.close();
+    if (countStmt) countStmt.close();
+    if (conn) conn.close();
+  }
+}
+
+/**
+ * Update a single row in client_balance_sheets by the real PK `id`.
+ * Read-only / server-managed columns are stripped before building the SET clause.
+ */
+function dbClientBalanceSheetsUpdate_(data, user) {
+  data = data || {};
+  var id = String(data.id !== undefined && data.id !== null ? data.id : '').trim();
+  if (!id) throw new Error('id is required');
+
+  // Columns the client must not overwrite — PK, audit timestamps, soft-delete.
+  var readOnlyCols = {
+    'id': true,
+    'created_at': true,
+    'updated_at': true,
+    'deleted_at': true
+  };
+
+  var updates = [];
+  var params = [];
+
+  for (var key in data) {
+    if (!Object.prototype.hasOwnProperty.call(data, key)) continue;
+    if (readOnlyCols[key]) continue;
+    // Skip internal/private keys (prefixed _)
+    if (key.charAt(0) === '_') continue;
+    var safeCol = dbSanitizeIdentifier_(key);
+    var rawVal = data[key];
+    updates.push(safeCol + ' = ?');
+    params.push(rawVal === null || rawVal === undefined || rawVal === '' ? null : rawVal);
+  }
+
+  if (updates.length === 0) throw new Error('لا توجد حقول للتحديث');
+
+  params.push(id);
+
+  var conn, stmt;
+  try {
+    conn = dbGetConnection_();
+    var sql = 'UPDATE `client_balance_sheets` SET ' + updates.join(', ') + ' WHERE `id` = ?';
+    stmt = conn.prepareStatement(sql);
+    dbBindParams_(stmt, params);
+    var affected = stmt.executeUpdate();
+    return { status: 'ok', affected: affected, id: id };
+  } catch (err) {
+    Logger.log('dbClientBalanceSheetsUpdate_ error: ' + err.message);
+    throw err;
+  } finally {
+    if (stmt) stmt.close();
+    if (conn) conn.close();
+  }
+}
+
 
 // ─── regular_box_movement analysis (Top Chemical: tc_box_analysis) ──
 //

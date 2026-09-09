@@ -81,6 +81,14 @@ const TopChemical = (function () {
     'get_stock_revision': { page: 'tc_stock_revision', access: 'read' },
     'add_stock_revision': { page: 'tc_stock_revision', access: 'write' },
     'update_stock_revision': { page: 'tc_stock_revision', access: 'full' },
+    'get_system_qty': { page: 'tc_stock_revision', access: 'read' },
+    /* جرد دوري مخازن باركود — the floor-facing scan screen. Same underlying
+       sheet and mostly the same handlers as tc_stock_revision (accounting),
+       registered under separate action names below so the two pages can be
+       granted independently instead of sharing one permission. */
+    'get_stock_scan_options': { page: 'tc_stock_scan', access: 'read' },
+    'get_stock_scan_qty': { page: 'tc_stock_scan', access: 'read' },
+    'add_stock_scan': { page: 'tc_stock_scan', access: 'write' },
     'get_customs_office': { page: 'tc_customs_office', access: 'read' },
     'add_customs_office': { page: 'tc_customs_office', access: 'write' },
     'get_purchase_items': { page: 'tc_purchasing', access: 'read' },
@@ -143,6 +151,8 @@ const TopChemical = (function () {
     'prefetch_refs': { page: 'tc_dashboard', access: 'read' },
     'get_main_review': { page: 'tc_main_review', access: 'read' },
     'revise_main_review': { page: 'tc_main_review', access: 'write' },
+    'get_client_balance_sheets': { page: 'tc_client_balance_sheets', access: 'read' },
+    'save_client_balance_sheet': { page: 'tc_client_balance_sheets', access: 'write' },
     // تحليل حركة الخزنة العادية — live MySQL regular_box_movement.
     // Listing an action here is what makes it FAIL CLOSED: guard_ returns
     // early for anything it does not find, so an unlisted action is open to
@@ -213,6 +223,8 @@ const TopChemical = (function () {
     'add_trust_movement': TRUST_SHEET,
     'get_stock_revision': STOCK_SHEET,
     'add_stock_revision': STOCK_SHEET,
+    'get_stock_scan_options': PRODUCTS_SHEET,
+    'add_stock_scan': STOCK_SHEET,
     'get_purchase_items': PURCHASE_SHEET,
     'get_purchase_options': PURCHASE_SHEET,
     'add_purchase_item': PURCHASE_SHEET,
@@ -250,6 +262,8 @@ const TopChemical = (function () {
     'prefetch_refs': PRODUCTS_SHEET,
     'get_main_review': 'mysql:clients_AR',
     'revise_main_review': 'mysql:clients_AR',
+    'get_client_balance_sheets': 'mysql:client_balance_sheets',
+    'save_client_balance_sheet': 'mysql:client_balance_sheets',
     'get_box_analysis': 'mysql:regular_box_movement',
     'get_box_item_history': 'mysql:regular_box_movement',
     'update_box_movement': 'mysql:regular_box_movement',
@@ -1489,6 +1503,62 @@ const TopChemical = (function () {
     });
   }
 
+  /* Not a sheet: a MySQL view on the live database, read for one column. */
+  const SYSTEM_QTY_VIEW = 'product_current_quantity';
+  const SYSTEM_QTY_KEY = 'tc_system_qty';
+  const SYSTEM_QTY_TTL = 120;
+
+  /**
+   * product id -> current_qty, from the MySQL view product_current_quantity.
+   *
+   * رصيد السيستم is the balance a physical count is judged against, and it was
+   * typed from memory — so a slip put the count against the wrong balance and
+   * the difference/percentage formulas dutifully computed a shortage that was
+   * never real. The view's `id` is the same product id this sheet stores in
+   * `product`, so the join needs no mapping table.
+   *
+   * Cached briefly and shared across users: one JDBC connection costs more
+   * than everything else this page does, and the view is two columns wide.
+   * Deliberately NOT folded into get_stock_revision — the list must not wait
+   * on a database on another host before it can paint.
+   */
+  function systemQtyMap_() {
+    const cached = getChunkedCache_(SYSTEM_QTY_KEY);
+    if (cached) return cached;
+    const map = {};
+    let conn, stmt, rs;
+    try {
+      conn = dbGetConnection_();
+      stmt = conn.createStatement();
+      rs = stmt.executeQuery('SELECT id, current_qty FROM ' + SYSTEM_QTY_VIEW);
+      while (rs.next()) {
+        const id = Number(rs.getString('id'));
+        if (!Number.isInteger(id) || id <= 0) continue;
+        const qty = rs.getString('current_qty');
+        if (qty === null || qty === '') continue;
+        const n = Number(qty);
+        if (!isNaN(n)) map[id] = n;
+      }
+    } finally {
+      try { if (rs) rs.close(); } catch (e) {}
+      try { if (stmt) stmt.close(); } catch (e) {}
+      try { if (conn) conn.close(); } catch (e) {}
+    }
+    putChunkedCache_(SYSTEM_QTY_KEY, map, SYSTEM_QTY_TTL);
+    return map;
+  }
+
+  /**
+   * The map, for the count form's default.
+   *
+   * A MySQL that is down throws from here, and the form falls back to a
+   * hand-typed balance: جرد المخزون must not become unusable because a
+   * database on another host is.
+   */
+  function getSystemQty_() {
+    return { status: 'success', system_qty: systemQtyMap_() };
+  }
+
   // =========================================
   // جرد المخزون (stock_revision)
   // Columns (real sheet): product | name_ar | category | date | unit | amount |
@@ -1514,6 +1584,30 @@ const TopChemical = (function () {
     var limit = Number(data && data.limit) || 10;
     if (!data || !data.loadAll) rows = rows.slice(0, limit);
     return { status: 'success', stock: rows, product_options: products.options };
+  }
+
+  /** جرد دوري مخازن باركود — bootstrap for the scan page: product options only,
+   *  no full stock_revision history scan (the accounting list already does that
+   *  in getStockRevision_; the scan screen never needs it). */
+  function getStockScanOptions_(data, user, dbId) {
+    return { status: 'success', product_options: productRefs_(dbId).options };
+  }
+
+  /** Same semantics as the retired difference formula:
+   *  =IF(ISBLANK(avail),"",IF(avail-amount=0,"مظبوط",avail>amount ? (avail-amount)+" عجز" : (avail-amount)+" زيادة")) */
+  function stockRevisionDifference_(amount, avail) {
+    if (avail === '' || avail === undefined || avail === null || isNaN(avail)) return '';
+    var d = Math.round((Number(avail) - Number(amount)) * 100) / 100;
+    if (d === 0) return 'مظبوط';
+    return d + '  ' + (Number(avail) > Number(amount) ? 'عجز' : 'زيادة');
+  }
+
+  /** Same semantics as the retired percentage formula:
+   *  =IFERROR(IF(ISBLANK(avail),"",IF(1-((amount-avail)/avail)>1, amount/avail, 1-((amount-avail)/avail))),"") */
+  function stockRevisionPercentage_(amount, avail) {
+    if (avail === '' || avail === undefined || avail === null || isNaN(avail) || Number(avail) === 0) return '';
+    var v = 1 - ((Number(amount) - Number(avail)) / Number(avail));
+    return v > 1 ? Number(amount) / Number(avail) : v;
   }
 
   function addStockRevision_(data, user, dbId) {
@@ -1560,50 +1654,58 @@ const TopChemical = (function () {
     // inside executeWithLock_ (reentrant, so nesting is harmless), with the row
     // number computed inside it. ensureGridRows_ grows the grid the way
     // appendRow did implicitly.
+    // fetch product name/category/unit BEFORE the lock, so the values (not
+    // formulas) are ready to write in the same setValues call below.
+    var prodMap = productRefs_(dbId).map;
+    var nameArVal = prodMap[product] || '';
+    var categoryVal = '';
+    var unitVal = '';
+    try {
+      var prodRow = tcProductsRaw_(dbId).find(function(p){ return Number(p.id)===product; });
+      if (prodRow) { nameArVal = String(prodRow.name_ar||'').trim(); categoryVal = String(prodRow.category||'').trim(); unitVal = String(prodRow.unit||'').trim(); }
+    } catch(e){}
+    var differenceVal = stockRevisionDifference_(amount, avail);
+    var percentageVal = stockRevisionPercentage_(amount, avail);
+
     let rowNum;
     executeWithLock_(function () {
       rowNum = sheet.getLastRow() + 1;
       headers.forEach(function (h, i) {
         const key = String(h).trim().toLowerCase();
-        let f = '';
-        if (key === 'name_ar') f = '=VLOOKUP(A' + rowNum + ',products!A:C,3,0)';
-        if (key === 'category') f = '=INDEX(products!E:E,MATCH(A' + rowNum + ',products!A:A,0))';
-        if (key === 'unit') f = '=INDEX(products!D:D,MATCH(A' + rowNum + ',products!A:A,0))';
-        if (key === 'difference') {
-          f = '=IF(ISBLANK(I' + rowNum + '),"",IF(I' + rowNum + '-F' + rowNum + '=0,"مظبوط",IF(I' + rowNum + '>F' + rowNum + ',ROUND(I' + rowNum + '-F' + rowNum + ',2) & "  عجز",ROUND(I' + rowNum + '-F' + rowNum + ',2) & "  زيادة")))';
-        }
-        if (key === 'percentage') {
-          f = '=iferror(IF(ISBLANK(I' + rowNum + '),"",IF(1-((F' + rowNum + '-I' + rowNum + ')/I' + rowNum + ')>1,F' + rowNum + '/I' + rowNum + ',1-((F' + rowNum + '-I' + rowNum + ')/I' + rowNum + '))),"")';
-        }
-        if (f) rowValues[i] = f;
+        // Computed once above, in JS, and written as a literal VALUE — not a
+        // live Sheet formula. Each revision is a point-in-time snapshot: if a
+        // product is renamed/recategorised later, past revisions keep showing
+        // what was true when counted, which is the more correct behaviour for
+        // an audit record. This also means the response below can carry the
+        // real difference/percentage immediately, with no wait on a sheet
+        // recalculation — which a live formula could never give the caller.
+        if (key === 'name_ar') rowValues[i] = nameArVal;
+        if (key === 'category') rowValues[i] = categoryVal;
+        if (key === 'unit') rowValues[i] = unitVal;
+        if (key === 'difference') rowValues[i] = differenceVal;
+        if (key === 'percentage') rowValues[i] = percentageVal;
       });
       ensureGridRows_(sheet, rowNum);
       sheet.getRange(rowNum, 1, 1, rowValues.length).setValues([rowValues]);
       noteMutation_(sheet);
     });
-    var prodMap = productRefs_(dbId).map;
     var savedRecord = {
       product: product,
-      product_name: prodMap[product] || ('#' + product),
-      name_ar: prodMap[product] || '',
-      category: '',
-      unit: '',
+      product_name: nameArVal || ('#' + product),
+      name_ar: nameArVal,
+      category: categoryVal,
+      unit: unitVal,
       date: date,
       amount: amount,
       warehouse: warehouse,
       notes: notes,
       available_amount: avail,
-      difference: '',
-      percentage: '',
+      difference: differenceVal,
+      percentage: percentageVal,
       user: (user && user.email) || '',
       created_at: new Date(),
       _sheetRow: rowNum
     };
-    // fill category/unit from products sheet if available
-    try {
-      var prodRow = tcProductsRaw_(dbId).find(function(p){ return Number(p.id)===product; });
-      if (prodRow) { savedRecord.name_ar = String(prodRow.name_ar||'').trim(); savedRecord.category = String(prodRow.category||'').trim(); savedRecord.unit = String(prodRow.unit||'').trim(); }
-    } catch(e){}
     try { var _mapStock = { product: product, date: date, amount: amount, warehouse: warehouse, notes: notes, available_amount: avail, user: (user && user.email) || '', created_at: new Date() }; logHistory_(dbId, STOCK_SHEET, 'create_'+STOCK_SHEET+'_'+rowNum, String(rowNum), (user&&user.email)||'', 'create', _mapStock, null); } catch(e){}
     return { status: 'success', message: 'تمت إضافة جرد المخزون', record: savedRecord, data: { assignedId: rowNum, rowNumber: rowNum } };
   }
@@ -4534,6 +4636,10 @@ const valueMap = {};
   register('get_stock_revision', getStockRevision_);
   register('add_stock_revision', addStockRevision_);
   register('update_stock_revision', updateStockRevision_);
+  register('get_system_qty', getSystemQty_);
+  register('get_stock_scan_options', getStockScanOptions_);
+  register('get_stock_scan_qty', getSystemQty_);
+  register('add_stock_scan', addStockRevision_);
   register('get_customs_office', getCustomsOffice_);
   register('add_customs_office', addCustomsOffice_);
   register('get_purchase_items', getPurchaseItems_);
@@ -4620,10 +4726,24 @@ const valueMap = {};
     data = data || {};
     var id = String(data.client_balance_sheet_id === undefined || data.client_balance_sheet_id === null ? '' : data.client_balance_sheet_id).trim();
     if (!id) throw new Error('client_balance_sheet_id is required');
-    return dbClientsArRevise_({ client_balance_sheet_id: id }, user);
+    return dbClientsArRevise_(data, user);
   }
   register('get_main_review', getMainReview_);
   register('revise_main_review', reviseMainReview_);
+
+  // ─── client_balance_sheets (live MySQL base table) ──
+  // PK is `id` (bigint AUTO_INCREMENT).  Authority via PAGE_ACCESS (above).
+  function getClientBalanceSheets_(data, user, dbId) {
+    return dbClientBalanceSheetsList_(data || {}, user);
+  }
+  function saveClientBalanceSheet_(data, user, dbId) {
+    data = data || {};
+    var id = String(data.id !== undefined && data.id !== null ? data.id : '').trim();
+    if (!id) throw new Error('id is required for client_balance_sheets update');
+    return dbClientBalanceSheetsUpdate_(data, user);
+  }
+  register('get_client_balance_sheets', getClientBalanceSheets_);
+  register('save_client_balance_sheet', saveClientBalanceSheet_);
 
   // ─── تحليل حركة الخزنة العادية (live MySQL regular_box_movement) ──
   //

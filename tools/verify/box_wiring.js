@@ -139,7 +139,7 @@ const group = NAV.match(groupRe);
 ok(!!group, 'the تحليلات النظام الرئيسي nav group is present');
 if (group) {
   const items = (group[1].match(/action: '(\w+)'/g) || []).map(function (s) { return s.slice(9, -1); });
-  ok(items.length === 2, 'the group now has two items', items.join(', '));
+  ok(items.length === 3, 'the group now has three items (tc_main_review + tc_client_balance_sheets + tc_box_analysis)', items.join(', '));
   ok(items.indexOf('tc_main_review') !== -1, 'the existing item is still there');
   ok(items.indexOf(PAGE) !== -1, 'the new item is beside it');
 }
