@@ -49,8 +49,8 @@
     renderList();
   }
 
-  function renderList() {
-    UIC.readSkeleton('tl-content', { message: [
+  function renderList(quiet) {
+    if (!quiet) UIC.readSkeleton('tl-content', { message: [
       'جاري تحميل عروض الأسعار...',
       'جاري استرجاع العملاء والأصناف...',
       'لحظة، جاري تجهيز جدول العروض...'
@@ -62,7 +62,7 @@
         renderHeadersTable(); try{schedulePrefetch();}catch(e){};
       })
       .catch(function (e) { showError(e); })
-      .finally(function () { UI.hideSpinner(); });
+      .finally(function () { if (!quiet) UI.hideSpinner(); });
   }
 
   function renderHeadersTable() {
@@ -71,6 +71,14 @@
       return new Date(b['تاريخ الفاتورة']) - new Date(a['تاريخ الفاتورة']);
     });
     var rows = __headers.map(function (h) {
+      /* Tier A: a __pending row shows «—» where the server has not answered
+         yet (رقم العرض is server-assigned, the money cells and approval_status
+         are server-computed) and offers no actions — print/approve/edit/delete
+         would name an invoice_unique_id the server has never seen. The عميل
+         and date stay visible: they are the user's own typed values. (Money
+         cells print «—» explicitly here; UIC._dtRowHtml would coerce a
+         money:true column to 0.00 transiently — no column defs changed.) */
+      var pending = !!h.__pending;
       var opts = '<option value="">إجراءات...</option>' +
         '<option value="print">طباعة</option>';
       if (String(h.approval_status) !== 'Approved') {
@@ -81,16 +89,16 @@
           opts += '<option value="view">عرض</option>';
         }
       }
-      var actions = '<select class="input" style="padding:6px 8px;width:130px;" onchange="doAction(\'' + FMT.escape(h.invoice_unique_id) + '\', this.value); this.value=\'\';">' + opts + '</select>';
+      var actions = pending ? '…' : '<select class="input" style="padding:6px 8px;width:130px;" onchange="doAction(\'' + FMT.escape(h.invoice_unique_id) + '\', this.value); this.value=\'\';">' + opts + '</select>';
       return {
-        invoice_number: h['رقم الفاتورة'] || '-',
+        invoice_number: pending ? '—' : (h['رقم الفاتورة'] || '-'),
         customer_name: h.customer_name || '-',
         invoice_date: h['تاريخ الفاتورة'] ? String(h['تاريخ الفاتورة']).slice(0, 10) : '-',
-        net: FMT.number(h['المبلغ الصافي']),
-        discount_percent: FMT.percent(h['نسبة الخصم']),
-        discount_amount: FMT.number(h['قيمة الخصم']),
-        total: FMT.number(h['إجمالي']),
-        approval_status: h.approval_status || '-',
+        net: pending ? '—' : FMT.number(h['المبلغ الصافي']),
+        discount_percent: pending ? '—' : FMT.percent(h['نسبة الخصم']),
+        discount_amount: pending ? '—' : FMT.number(h['قيمة الخصم']),
+        total: pending ? '—' : FMT.number(h['إجمالي']),
+        approval_status: pending ? '—' : (h.approval_status || '-'),
         actions: actions
       };
     });
@@ -324,37 +332,59 @@
       var isEdit = __editingUid ? true : false;
       if (isEdit) header.unique_id = __editingUid;
 
-      UI.showSpinner([
-        'جاري الحفظ...',
-        'جاري تسجيل بنود عرض السعر...',
-        'لحظة، جاري إنهاء العملية...'
-      ]);
-      return companyCall(isEdit ? 'edit_sales_offer' : 'add_sales_offer', payload)
-        .then(function (r) {
-          UIC.toast(r.message || 'تم الحفظ', 'success');
-          var rec = r.record || null;
-           if (rec) {
-             var RECENT_LIMIT = 10;
-             var uid = rec.invoice_unique_id || r.unique_id || __editingUid;
-             rec.invoice_unique_id = uid;
-             if (rec.customer_name == null) {
-               var optsO = (__options.customer_options||[]);
-               for(var ci=0;ci<optsO.length;ci++){ if(String(optsO[ci].value)===String(header.customer_id)){ rec.customer_name=optsO[ci].label||''; break; } }
-             }
-             if (isEdit) {
-               var idxO = __headers.findIndex(function(x){ return String(x.invoice_unique_id)===String(uid); });
-               if(idxO!==-1) __headers[idxO]=rec; else __headers.push(rec);
-             } else {
-               __headers.unshift(rec);
-               if (__headers.length > RECENT_LIMIT) __headers.pop();
-             }
-             renderHeadersTable();
-          } else {
-            showList();
+      /* Tier A: the offer row is on screen before the request returns, with no
+         blocking overlay. Validation above (required customer/date, one line
+         minimum, per-line product/tax/qty/price/discount) is unchanged. Unlike
+         invoices, offers carry no stock-availability guard (validateSales_
+         runs with allowOutOfStock), so there is nothing invisible left to
+         refuse. The draft echoes the form; رقم العرض is server-assigned so an
+         ADD draft never invents one — recordOf fills it from the reply
+         (record/unique_id/assignedId) and answers null when an ADD key stays
+         unknown. queueable:false: I1 is unproven for add/edit_sales_offer. */
+      var draft = {
+        invoice_unique_id: isEdit ? __editingUid : '',
+        unique_id: isEdit ? __editingUid : '',
+        'اسم العميل': header.customer_id,
+        'تاريخ الفاتورة': header.invoice_date,
+        'نسبة الخصم': header.discount_percent,
+        tax_system: header.tax_system,
+        customer_name: ''
+      };
+      var optsO = (__options.customer_options || []);
+      for (var ci = 0; ci < optsO.length; ci++) {
+        if (String(optsO[ci].value) === String(header.customer_id)) { draft.customer_name = optsO[ci].label || ''; break; }
+      }
+      return UIC.Live.save({
+        call: companyCall,
+        action: isEdit ? 'edit_sales_offer' : 'add_sales_offer',
+        data: payload,
+        list: __headers,
+        key: 'invoice_unique_id',
+        draft: draft,
+        render: renderHeadersTable,
+        message: 'تم الحفظ',
+        queueable: false,
+        reload: function () { renderList(true); },
+        recordOf: function (resp) {
+          if (resp && resp.record && resp.record.invoice_unique_id != null && resp.record.invoice_unique_id !== '') return resp.record;
+          var uid = (resp && resp.unique_id) || (resp && resp.assignedId) || (resp && resp.id);
+          if (uid != null && uid !== '') {
+            var rec = Object.assign({}, draft);
+            rec.invoice_unique_id = uid;
+            rec.unique_id = uid;
+            return rec;
           }
-        })
-        .catch(function (e) { UIC.toast(e.message || 'خطأ', 'error'); })
-        .finally(function () { UI.hideSpinner(); });
+          if (isEdit) { var ec = Object.assign({}, draft); ec.invoice_unique_id = __editingUid; ec.unique_id = __editingUid; return ec; }
+          return null;
+        },
+        /* The ten-row cap is applied here, NOT in the draft: trimming at draft
+           time would drop the tenth row, and the rollback restores the draft's
+           slot but cannot bring that row back. */
+        onSuccess: function () {
+          if (!isEdit && __headers.length > 10) __headers = __headers.slice(0, 10);
+          renderHeadersTable();
+        }
+      }).catch(function () { /* UIC.Live has toasted and rolled back */ });
     });
   }
 
@@ -371,35 +401,55 @@
   }
 
   function approveOffer(uid) {
-    UI.showSpinner(['جاري الاعتماد...', 'لحظة، جاري تحديث حالة العرض...']);
-    companyCall('approve_sales_offer', { unique_id: uid })
-      .then(function (r) {
-        UIC.toast(r.message || 'تم الاعتماد', 'success');
+    /* Tier A approve: no draft painted, so no draft/list/key/render. onSuccess
+       patches the in-memory row and re-renders locally; reload is the
+       error-path backstop. No overlay. queueable:false. */
+    UIC.Live.save({
+      call: companyCall,
+      action: 'approve_sales_offer',
+      data: { unique_id: uid },
+      onSuccess: function () {
         var item = (__headers || []).find(function (x) { return String(x.invoice_unique_id) === String(uid); });
         if (item) item.approval_status = 'Approved';
         renderHeadersTable();
-      })
-      .catch(function (e) { UIC.toast(e.message || 'خطأ', 'error'); })
-      .finally(function () { UI.hideSpinner(); });
+      },
+      message: 'تم الاعتماد',
+      queueable: false,
+      reload: function () { renderList(true); }
+    }).catch(function () { /* UIC.Live has toasted */ });
   }
 
   function deleteOffer(uid) {
     if (!UIC.canFull_()) { UIC.toast('غير مصرح', 'error'); return; }
     if (!confirm('هل تريد حذف هذا العرض؟')) return;
-    UI.showSpinner(['جاري الحذف...', 'لحظة، جاري تحديث القائمة...']);
-    companyCall('delete_sales_offer', { unique_id: uid })
-      .then(function (r) {
-        UIC.toast(r.message || 'تم الحذف', 'success');
+    /* Tier A delete: no optimistic paint (there is no record to draw — the row
+       is gone), so no draft/list/key/render. onSuccess splices the in-memory
+       list and re-renders locally; reload is the error-path backstop. No
+       overlay. queueable:false. */
+    UIC.Live.save({
+      call: companyCall,
+      action: 'delete_sales_offer',
+      data: { unique_id: uid },
+      onSuccess: function () {
         __headers = (__headers || []).filter(function (x) { return String(x.invoice_unique_id) !== String(uid); });
         renderHeadersTable();
-      })
-      .catch(function (e) { UIC.toast(e.message || 'خطأ', 'error'); })
-      .finally(function () { UI.hideSpinner(); });
+      },
+      message: 'تم الحذف',
+      queueable: false,
+      reload: function () { renderList(true); }
+    }).catch(function () { /* UIC.Live has toasted */ });
   }
 
   function showList() {
     renderList();
   }
+
+  /* Another device's change arrives quietly. */
+  UIC.Live.watchPage({
+    call: companyCall,
+    page: 'tl_sales_offer',
+    onChange: function () { UIC.Live.arrive(function () { renderList(true); }); }
+  });
 
   function showError(e) {
     var content = document.getElementById('tl-content');

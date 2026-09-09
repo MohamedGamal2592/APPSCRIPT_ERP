@@ -69,8 +69,8 @@
     renderList();
   }
 
-  function renderList() {
-    UIC.readSkeleton('tl-content', { message: [
+  function renderList(quiet) {
+    if (!quiet) UIC.readSkeleton('tl-content', { message: [
       'جاري تحميل عمليات الشراء...',
       'جاري استرجاع الموردين والتكاليف...',
       'لحظة، جاري تجهيز جدول المشتريات...'
@@ -84,7 +84,7 @@
         renderHeadersTable(); try{schedulePrefetch();}catch(e){};
       })
       .catch(function (e) { showError(e); })
-      .finally(function () { UI.hideSpinner(); });
+      .finally(function () { if (!quiet) UI.hideSpinner(); });
   }
 
   function pick(h) {
@@ -104,6 +104,12 @@
       return new Date(db) - new Date(da);
     });
     var rows = __headers.map(function (h) {
+      /* Tier A: a __pending row shows «—» where the server has not answered
+         yet (unique_id is server-assigned, إجمالي التكاليف and approval_status
+         are server-computed) and offers no actions — print/approve/edit/delete
+         would name a unique_id the server has never seen. The code and header
+         fields stay visible: they are the user's own typed values. */
+      var pending = !!h.__pending;
       var uid = FMT.escape(h.unique_id||'');
       var btns = [
         { label: '👁️ عرض / View', onclick: "doAction('" + uid + "','view')" },
@@ -118,15 +124,15 @@
           btns.push({ label: '👁️ عرض / View', onclick: "doAction('" + uid + "','view')" });
         }
       }
-      var actions = UIC.actionDropdown(btns);
+      var actions = pending ? '…' : UIC.actionDropdown(btns);
       return {
         code: FMT.escape(String(pick(h,'code')||'-')),
         receipt_date: (function(v){ var s=pick(h,'reciept date','receipt date'); return s ? String(s).slice(0,10) : '-'; })(),
         items: FMT.escape(String(pick(h,'items')||'-')),
         type: FMT.escape(String(pick(h,'type')||'-')),
         currency: FMT.escape(String(pick(h,'currency')||'-')),
-        total_costs: FMT.escape(String(pick(h,'total costs','total_costs')|| (h['total costs']!=null ? String(h['total costs']) : '-'))),
-        approval_status: FMT.escape(String(pick(h,'approval_status')||h.approval_status||'-')),
+        total_costs: pending ? '—' : FMT.escape(String(pick(h,'total costs','total_costs')|| (h['total costs']!=null ? String(h['total costs']) : '-'))),
+        approval_status: pending ? '—' : FMT.escape(String(pick(h,'approval_status')||h.approval_status||'-')),
         actions: actions
       };
     });
@@ -461,37 +467,52 @@
       var isEdit = __editingUid ? true : false;
       if (isEdit) header.unique_id = __editingUid;
 
-      UI.showSpinner([
-        'جاري الحفظ...',
-        'جاري حساب التكاليف وبنود الشراء...',
-        'لحظة، جاري إنهاء العملية...'
-      ]);
-      return companyCall(isEdit ? 'edit_purchasing' : 'add_purchasing', payload)
-        .then(function (r) {
-          UIC.toast(r.message || 'تم الحفظ', 'success');
-          var rec = r.record || null;
-           if (rec) {
-             var RECENT_LIMIT = 10;
-             var uid = rec.unique_id || r.unique_id || __editingUid;
-             rec.unique_id = uid;
-             if (!rec.supplier_name) {
-               var sOpts = (__options.supplier_options||[]);
-               for(var si=0;si<sOpts.length;si++){ if(String(sOpts[si].value)===String(header.supplier_name)){ rec.supplier_name=sOpts[si].label||''; break; } }
-             }
-             if (isEdit) {
-               var idxP = __headers.findIndex(function(x){ return String(x.unique_id)===String(uid); });
-               if(idxP!==-1) __headers[idxP]=rec; else __headers.push(rec);
-             } else {
-               __headers.unshift(rec);
-               if (__headers.length > RECENT_LIMIT) __headers.pop();
-             }
-             renderHeadersTable();
-          } else {
-            showList();
+      /* Tier A: the header row is on screen before the request returns, with
+         no blocking overlay. Validation above (required code/value, the
+         lines-total reconciliation) is unchanged. The draft echoes the form's
+         own header; unique_id is server-assigned so an ADD draft never invents
+         one — recordOf fills it from the reply (record/unique_id/assignedId)
+         and answers null when an ADD key stays unknown. The lines converge on
+         the reply via the list replace; they are not painted separately.
+         queueable:false: I1 is unproven for add/edit_purchasing. */
+      var draft = Object.assign({}, header);
+      draft.unique_id = isEdit ? __editingUid : '';
+      if (draft.supplier_name) {
+        var sOpts = (__options.supplier_options || []);
+        for (var si = 0; si < sOpts.length; si++) {
+          if (String(sOpts[si].value) === String(header.supplier_name)) { draft.supplier_name = sOpts[si].label || draft.supplier_name; break; }
+        }
+      }
+      return UIC.Live.save({
+        call: companyCall,
+        action: isEdit ? 'edit_purchasing' : 'add_purchasing',
+        data: payload,
+        list: __headers,
+        key: 'unique_id',
+        draft: draft,
+        render: renderHeadersTable,
+        message: 'تم الحفظ',
+        queueable: false,
+        reload: function () { renderList(true); },
+        recordOf: function (resp) {
+          if (resp && resp.record && resp.record.unique_id != null && resp.record.unique_id !== '') return resp.record;
+          var uid = (resp && resp.unique_id) || (resp && resp.assignedId) || (resp && resp.id);
+          if (uid != null && uid !== '') {
+            var rec = Object.assign({}, draft);
+            rec.unique_id = uid;
+            return rec;
           }
-        })
-        .catch(function (e) { UIC.toast(e.message || 'خطأ', 'error'); })
-        .finally(function () { UI.hideSpinner(); });
+          if (isEdit) { var ec = Object.assign({}, draft); ec.unique_id = __editingUid; return ec; }
+          return null;
+        },
+        /* The ten-row cap is applied here, NOT in the draft: trimming at draft
+           time would drop the tenth row, and the rollback restores the draft's
+           slot but cannot bring that row back. */
+        onSuccess: function () {
+          if (!isEdit && __headers.length > 10) __headers = __headers.slice(0, 10);
+          renderHeadersTable();
+        }
+      }).catch(function () { /* UIC.Live has toasted and rolled back */ });
     });
   }
 
@@ -508,35 +529,55 @@
   }
 
   function approvePurchasing(uid) {
-    UI.showSpinner(['جاري الاعتماد...', 'لحظة، جاري تحديث حالة العملية...']);
-    companyCall('approve_purchasing', { unique_id: uid })
-      .then(function (r) {
-        UIC.toast(r.message || 'تم الاعتماد', 'success');
+    /* Tier A approve: no draft painted, so no draft/list/key/render. onSuccess
+       patches the in-memory row and re-renders locally; reload is the
+       error-path backstop. No overlay. queueable:false. */
+    UIC.Live.save({
+      call: companyCall,
+      action: 'approve_purchasing',
+      data: { unique_id: uid },
+      onSuccess: function () {
         var item = (__headers || []).find(function (x) { return String(x.unique_id) === String(uid); });
         if (item) item.approval_status = 'Approved';
         renderHeadersTable();
-      })
-      .catch(function (e) { UIC.toast(e.message || 'خطأ', 'error'); })
-      .finally(function () { UI.hideSpinner(); });
+      },
+      message: 'تم الاعتماد',
+      queueable: false,
+      reload: function () { renderList(true); }
+    }).catch(function () { /* UIC.Live has toasted */ });
   }
 
   function deletePurchasing(uid) {
     if (!UIC.canFull_()) { UIC.toast('غير مصرح', 'error'); return; }
     if (!confirm('هل تريد حذف هذه العملية؟')) return;
-    UI.showSpinner(['جاري الحذف...', 'لحظة، جاري تحديث القائمة...']);
-    companyCall('delete_purchasing', { unique_id: uid })
-      .then(function (r) {
-        UIC.toast(r.message || 'تم الحذف', 'success');
+    /* Tier A delete: no optimistic paint (there is no record to draw — the row
+       is gone), so no draft/list/key/render. onSuccess splices the in-memory
+       list and re-renders locally; reload is the error-path backstop. No
+       overlay. queueable:false. */
+    UIC.Live.save({
+      call: companyCall,
+      action: 'delete_purchasing',
+      data: { unique_id: uid },
+      onSuccess: function () {
         __headers = (__headers || []).filter(function (x) { return String(x.unique_id) !== String(uid); });
         renderHeadersTable();
-      })
-      .catch(function (e) { UIC.toast(e.message || 'خطأ', 'error'); })
-      .finally(function () { UI.hideSpinner(); });
+      },
+      message: 'تم الحذف',
+      queueable: false,
+      reload: function () { renderList(true); }
+    }).catch(function () { /* UIC.Live has toasted */ });
   }
 
   function showList() {
     renderList();
   }
+
+  /* Another device's change arrives quietly. */
+  UIC.Live.watchPage({
+    call: companyCall,
+    page: 'tl_purchasing',
+    onChange: function () { UIC.Live.arrive(function () { renderList(true); }); }
+  });
 
   function showError(e) {
     var content = document.getElementById('tl-content');

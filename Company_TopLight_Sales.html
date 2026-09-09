@@ -48,11 +48,6 @@
       contentId: contentId
     });
 
-    UIC.readSkeleton('tl-content', { message: [
-      'جاري تحميل فواتير المبيعات...',
-      'جاري استرجاع خيارات العملاء والأصناف...',
-      'لحظة، جاري إعداد جدول الفواتير...'
-    ] });
     renderList();
   }
 
@@ -65,8 +60,13 @@
 
   function showAllSales() { renderList(true); }
 
-  function renderList(loadAll) {
+  function renderList(loadAll, quiet) {
     __loadedAll = arguments.length ? !!loadAll : __loadedAll;
+    if (!quiet) UIC.readSkeleton('tl-content', { message: [
+      'جاري تحميل فواتير المبيعات...',
+      'جاري استرجاع خيارات العملاء والأصناف...',
+      'لحظة، جاري إعداد جدول الفواتير...'
+    ] });
     companyCall('get_sales_headers', __loadedAll ? { loadAll: true } : {})
       .then(function (r) {
         /* Phase 2.1: options no longer ride along with the list — see
@@ -79,7 +79,7 @@
         renderHeadersTable(); try{schedulePrefetch();}catch(e){};
       })
       .catch(function (e) { showError(e); })
-      .finally(function () { UI.hideSpinner(); });
+      .finally(function () { if (!quiet) UI.hideSpinner(); });
   }
 
   function renderHeadersTable() {
@@ -414,14 +414,22 @@
       var isEdit = __editingUid ? true : false;
       if (isEdit) header.unique_id = __editingUid;
 
-      UI.showSpinner([
-        'جاري الحفظ...',
-        'جاري تسجيل بنود الفاتورة...',
-        'لحظة، جاري تحديث الحسابات...'
-      ]);
-      return companyCall(isEdit ? 'edit_sales' : 'add_sales', payload)
-        .then(function (r) {
-          UIC.toast(r.message || 'تم الحفظ', 'success');
+      /* Tier B: the stock-availability guard (validateSales_ over the live
+         qtyMap, plus the client availableQty check above) can refuse for
+         reasons invisible in the form — another device may have consumed the
+         stock first. So NO draft is painted: canPatch stays false, only the
+         quiet corner hint shows, and the row is patched from the reply instead.
+         A refusal toasts exactly as before and never paints a row. No
+         validation is changed. queueable:false: I1 is unproven for
+         add/edit_sales, so a transport failure rolls back loudly. */
+      return UIC.Live.save({
+        call: companyCall,
+        action: isEdit ? 'edit_sales' : 'add_sales',
+        data: payload,
+        message: 'تم الحفظ',
+        queueable: false,
+        reload: function () { renderList(__loadedAll, true); },
+        onSuccess: function (r) {
            var rec = r.record || null;
            if (rec) {
              var RECENT_LIMIT = 10;
@@ -443,9 +451,8 @@
           } else {
             showList();
           }
-        })
-        .catch(function (e) { UIC.toast(e.message || 'خطأ', 'error'); })
-        .finally(function () { UI.hideSpinner(); });
+        }
+      }).catch(function () { /* UIC.Live has toasted */ });
     });
   }
 
@@ -489,35 +496,56 @@
   }
 
   function approveSales(uid) {
-    UI.showSpinner(['جاري الاعتماد...', 'لحظة، جاري تحديث حالة الفاتورة...']);
-    companyCall('approve_sales', { unique_id: uid })
-      .then(function (r) {
-        UIC.toast(r.message || 'تم الاعتماد', 'success');
+    /* Tier B approve: no draft painted, so no draft/list/key/render. onSuccess
+       patches the in-memory row and re-renders locally; reload is the
+       error-path backstop. No overlay. queueable:false. */
+    UIC.Live.save({
+      call: companyCall,
+      action: 'approve_sales',
+      data: { unique_id: uid },
+      message: 'تم الاعتماد',
+      queueable: false,
+      reload: function () { renderList(__loadedAll, true); },
+      onSuccess: function () {
         var item = (__headers || []).find(function (x) { return String(x.invoice_unique_id) === String(uid); });
         if (item) item.approval_status = 'Approved';
         renderHeadersTable();
-      })
-      .catch(function (e) { UIC.toast(e.message || 'خطأ', 'error'); })
-      .finally(function () { UI.hideSpinner(); });
+      }
+    }).catch(function () { /* UIC.Live has toasted */ });
   }
 
   function deleteSales(uid) {
     if (!UIC.canFull_()) { UIC.toast('غير مصرح', 'error'); return; }
     if (!confirm('هل تريد حذف هذه الفاتورة؟')) return;
-    UI.showSpinner(['جاري الحذف...', 'لحظة، جاري تحديث القائمة...']);
-    companyCall('delete_sales', { unique_id: uid })
-      .then(function (r) {
-        UIC.toast(r.message || 'تم الحذف', 'success');
+    /* Tier B delete: no optimistic paint (there is no record to draw — the row
+       is gone), so no draft/list/key/render. onSuccess splices the in-memory
+       list and re-renders locally; reload is the error-path backstop. No
+       overlay. queueable:false. */
+    UIC.Live.save({
+      call: companyCall,
+      action: 'delete_sales',
+      data: { unique_id: uid },
+      message: 'تم الحذف',
+      queueable: false,
+      reload: function () { renderList(__loadedAll, true); },
+      onSuccess: function () {
         __headers = (__headers || []).filter(function (x) { return String(x.invoice_unique_id) !== String(uid); });
         renderHeadersTable();
-      })
-      .catch(function (e) { UIC.toast(e.message || 'خطأ', 'error'); })
-      .finally(function () { UI.hideSpinner(); });
+      }
+    }).catch(function () { /* UIC.Live has toasted */ });
   }
 
   function showList() {
     renderList();
   }
+
+  /* Another device's change arrives quietly, keeping whichever view (latest 10
+     or all) the user is in. */
+  UIC.Live.watchPage({
+    call: companyCall,
+    page: 'tl_sales',
+    onChange: function () { UIC.Live.arrive(function () { renderList(__loadedAll, true); }); }
+  });
 
   function showError(e) {
     var content = document.getElementById('tl-content');

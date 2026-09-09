@@ -69,8 +69,8 @@
       load();
     }
 
-    function load() {
-      UIC.readSkeleton('tl-cash-content');
+    function load(quiet) {
+      if (!quiet) UIC.readSkeleton('tl-cash-content');
       companyCall('get_cash_headers', { loadAll: true })
         .then(function (r) {
           HEADERS = r.headers || [];
@@ -97,7 +97,7 @@
           var c = document.getElementById('tl-cash-content');
           if (c) c.innerHTML = '<div style="padding:20px;color:red;">خطأ: ' + esc(e.message || e) + '</div>';
         })
-        .finally(function () { UI.hideSpinner(); });
+        .finally(function () { if (!quiet) UI.hideSpinner(); });
     }
 
     function saveView() {
@@ -129,8 +129,16 @@
         : HEADERS;
 
       var rows = filtered.map(function (h) {
+        /* Tier A: a __pending row shows «—» where the server has not answered
+           yet (transaction_id is server-assigned max+1, box_balance is a sheet
+           formula) and offers no actions — its id names a record the server
+           has never seen. The amount cells stay visible: they are the user's
+           own typed values, not server-computed. (No money:true column defs
+           exist here; UIC._dtRowHtml coerces money:true cells to 0.00, so a
+           money column could never print «—» — no defs changed.) */
+        var pending = !!h.__pending;
         var approved = String(h.approved) === 'true';
-        var actions = UIC.actionBtns([
+        var actions = pending ? '…' : UIC.actionBtns([
           { label: 'السجل', onclick: 'SESSION.openHistory(\'top_light_cash_bank_movement\',\'' + esc(h.transaction_id) + '\')' },
           { label: 'عرض', onclick: 'CASH_PAGE.openForm(\'' + esc(h.transaction_id) + '\', true)' },
           !approved ? { label: 'اعتماد', onclick: 'CASH_PAGE.approve(\'' + esc(h.transaction_id) + '\')' } : null,
@@ -142,7 +150,7 @@
         var balNum = num0(h.box_balance);
 
         return [
-          '<b>' + esc(h.transaction_id) + '</b>',
+          pending ? '—' : ('<b>' + esc(h.transaction_id) + '</b>'),
           '<span data-sort="' + esc(h.transaction_date ? String(h.transaction_date).slice(0, 10) : '') + '">' + (h.transaction_date ? String(h.transaction_date).slice(0, 10) : '-') + '</span>',
           esc(h.customer_name || h.name_vendor || h.name || '-'),
           esc(h.transaction_details || '-'),
@@ -150,7 +158,7 @@
           esc(h.transaction_method || '-'),
           '<span class="num" data-num="' + amtNum + '">' + FMT.number(amtNum) + '</span>',
           esc(h.box_name || '-'),
-          '<span class="num" style="font-weight:700;' + (balNum < 0 ? 'color:var(--color-danger,var(--danger, #dc2626));' : 'color:#0e623b;') + '" data-num="' + balNum + '">' + FMT.number(balNum) + '</span>',
+          pending ? '—' : ('<span class="num" style="font-weight:700;' + (balNum < 0 ? 'color:var(--color-danger,var(--danger, #dc2626));' : 'color:#0e623b;') + '" data-num="' + balNum + '">' + FMT.number(balNum) + '</span>'),
           UIC.statusPill(approved ? 'معتمد' : 'قيد الانتظار', approved ? 'success' : 'neutral'),
           actions
         ];
@@ -395,19 +403,58 @@
         tax_system: (document.getElementById('tax_system') || {}).checked || false
       };
 
-      UI.showSpinner();
+      /* Tier A (MONEY form): the row is on screen before the request returns,
+         with no blocking overlay — and the rollback is loud. Validation above
+         is unchanged and never weakened. The draft carries form-visible fields
+         only; transaction_id is server-assigned (max+1) so the draft never
+         invents one. NEEDS-REPLY: addCash_ returns only data.assignedId and
+         editCash_ returns no identifier at all, so recordOf walks the whole
+         defensive chain (record/transaction_id/id/unique_id/assignedId, incl.
+         data.*) and answers null when an ADD key stays unknown. queueable:false
+         is mandatory here: I1 is unproven for add/edit_cash, so a transport
+         failure rolls back loudly instead of queueing a money row. */
       var isEdit = (editId != null && editId !== '');
-      var action = isEdit ? 'edit_cash' : 'add_cash';
-      var dataArg = isEdit ? { record: payload } : { record: payload };
-
-      companyCall(action, dataArg)
-        .then(function (r) {
-          UIC.closeModal('cash-modal');
-          UIC.toast((r && r.message) || (isEdit ? 'تم تحديث الحركة' : 'تمت إضافة الحركة'), 'success');
-          load();
-        })
-        .catch(function (e) { UIC.toast((e && e.message) || 'فشل الحفظ', 'error'); })
-        .finally(function () { UI.hideSpinner(); });
+      var draft = {
+        transaction_id: isEdit ? editId : '',
+        name: payload.name,
+        related_box: payload.related_box,
+        chart_code: payload.chart_code,
+        transaction_details: payload.transaction_details,
+        transaction_date: payload.transaction_date,
+        transaction_amount: payload.transaction_amount,
+        total_discount: payload.total_discount,
+        taxes: payload.taxes,
+        transaction_type: payload.transaction_type,
+        transaction_method: payload.transaction_method,
+        currency: payload.currency,
+        exchange_rate: payload.exchange_rate,
+        invoice_id: payload.invoice_id,
+        name_vendor: payload.name_vendor,
+        transaction_purchasing_items: payload.transaction_purchasing_items,
+        tax_system: payload.tax_system
+      };
+      UIC.Live.save({
+        call: companyCall,
+        action: isEdit ? 'edit_cash' : 'add_cash',
+        data: { record: payload },
+        list: HEADERS,
+        key: 'transaction_id',
+        draft: draft,
+        render: renderList,
+        modal: 'cash-modal',
+        message: isEdit ? 'تم تحديث الحركة' : 'تمت إضافة الحركة',
+        queueable: false,
+        reload: function () { load(true); },
+        recordOf: function (resp) {
+          var rec = Object.assign({}, draft);
+          var tid = (resp && resp.record && resp.record.transaction_id) || (resp && resp.transaction_id) ||
+            (resp && resp.id) || (resp && resp.unique_id) || (resp && resp.assignedId) ||
+            (resp && resp.data && (resp.data.transaction_id || resp.data.assignedId));
+          if (tid == null || tid === '') { if (!isEdit) return null; }
+          else { rec.transaction_id = tid; }
+          return rec;
+        }
+      }).catch(function () { /* UIC.Live has toasted and rolled back */ });
     }
 
     /* ---------- TRANSFER ---------- */
@@ -427,45 +474,99 @@
       var fromBox = getVal('tf-from'), toBox = getVal('tf-to');
       if (!fromBox || !toBox) { UIC.toast('اختر الصندوقين', 'error'); return; }
       if (fromBox === toBox) { UIC.toast('لا يمكن التحويل إلى نفس الصندوق', 'error'); return; }
-      UI.showSpinner();
-      companyCall('add_transfer', {
+      var payload = {
         from_box: fromBox,
         to_box: toBox,
         transfer_date: getVal('tf-date'),
         amount: num0(getVal('tf-amount')),
         details: getVal('tf-details').trim()
-      })
-        .then(function (r) {
-          UIC.closeModal('transfer-modal');
-          UIC.toast((r && r.message) || 'تم التحويل بنجاح', 'success');
-          load();
-        })
-        .catch(function (e) { UIC.toast((e && e.message) || 'فشل التحويل', 'error'); })
-        .finally(function () { UI.hideSpinner(); });
+      };
+      /* Tier A (MONEY, double-leg): the debit leg is on screen before the
+         request returns, with no blocking overlay — validation above is
+         unchanged. The server writes two rows (credit from-box, debit to-box)
+         and replies with the debit record; the draft echoes it, and the credit
+         leg converges via reload/watch. The draft id is never invented —
+         recordOf fills it from the reply, null when it stays unknown.
+         queueable:false is mandatory: I1 is unproven for add_transfer. */
+      var draft = {
+        transaction_id: '',
+        name: '',
+        related_box: toBox,
+        transaction_details: payload.details || 'تحويل صندوق إلى صندوق',
+        transaction_date: payload.transfer_date,
+        transaction_amount: payload.amount,
+        total_discount: 0,
+        taxes: 0,
+        transaction_type: 'Debit',
+        currency: 'EGP',
+        exchange_rate: 1
+      };
+      UIC.Live.save({
+        call: companyCall,
+        action: 'add_transfer',
+        data: payload,
+        list: HEADERS,
+        key: 'transaction_id',
+        draft: draft,
+        render: renderList,
+        modal: 'transfer-modal',
+        message: 'تم التحويل بنجاح',
+        queueable: false,
+        reload: function () { load(true); },
+        /* The credit leg is not painted optimistically (only the debit reply
+           is known), so a quiet refresh converges both legs right away — no
+           overlay, no blocking, just the second row arriving a moment later. */
+        onSuccess: function () { load(true); },
+        recordOf: function (resp) {
+          if (resp && resp.record && resp.record.transaction_id != null && resp.record.transaction_id !== '') return resp.record;
+          var tid = (resp && resp.unique_id) || (resp && resp.assignedId) || (resp && resp.id);
+          if (tid == null || tid === '') return null;
+          var rec = Object.assign({}, draft);
+          rec.transaction_id = tid;
+          return rec;
+        }
+      }).catch(function () { /* UIC.Live has toasted and rolled back */ });
     }
 
     /* ---------- APPROVE / DELETE ---------- */
     function approve(tid) {
-      UI.showSpinner(['جاري الاعتماد...', 'لحظة، جاري تحديث حالة الحركة...']);
-      companyCall('approve_cash', { unique_id: Number(tid) })
-        .then(function (r) {
-          UIC.toast((r && r.message) || 'تم الاعتماد بنجاح', 'success');
-          load();
-        })
-        .catch(function (e) { UIC.toast((e && e.message) || 'فشل الاعتماد', 'error'); })
-        .finally(function () { UI.hideSpinner(); });
+      /* Tier A approve: no draft painted (there is no record to draw — the row
+         stays, only its flag flips), so no draft/list/key/render. onSuccess
+         patches the in-memory row and re-renders locally; reload is the
+         error-path backstop. No overlay. queueable:false. */
+      UIC.Live.save({
+        call: companyCall,
+        action: 'approve_cash',
+        data: { unique_id: Number(tid) },
+        onSuccess: function () {
+          var item = HEADERS.find(function (h) { return Number(h.transaction_id) === Number(tid); });
+          if (item) item.approved = true;
+          renderList();
+        },
+        message: 'تم الاعتماد بنجاح',
+        queueable: false,
+        reload: function () { load(true); }
+      }).catch(function () { /* UIC.Live has toasted */ });
     }
 
     function remove(tid) {
       if (!confirm('حذف هذه الحركة نهائياً؟ لا يمكن التراجع.')) return;
-      UI.showSpinner();
-      companyCall('delete_cash', { unique_id: Number(tid) })
-        .then(function (r) {
-          UIC.toast((r && r.message) || 'تم حذف الحركة', 'success');
-          load();
-        })
-        .catch(function (e) { UIC.toast((e && e.message) || 'فشل الحذف', 'error'); })
-        .finally(function () { UI.hideSpinner(); });
+      /* Tier A delete: no optimistic paint (there is no record to draw — the
+         row is gone), so no draft/list/key/render. onSuccess splices the
+         in-memory list and re-renders locally; reload is the error-path
+         backstop. No overlay. queueable:false. */
+      UIC.Live.save({
+        call: companyCall,
+        action: 'delete_cash',
+        data: { unique_id: Number(tid) },
+        onSuccess: function () {
+          HEADERS = HEADERS.filter(function (h) { return Number(h.transaction_id) !== Number(tid); });
+          renderList();
+        },
+        message: 'تم حذف الحركة',
+        queueable: false,
+        reload: function () { load(true); }
+      }).catch(function () { /* UIC.Live has toasted */ });
     }
 
     window.CASH_PAGE = {
@@ -484,6 +585,13 @@
     };
 
     document.addEventListener('DOMContentLoaded', renderApp);
+
+    /* Another device's change arrives quietly. */
+    UIC.Live.watchPage({
+      call: companyCall,
+      page: 'tl_cash',
+      onChange: function () { UIC.Live.arrive(function () { load(true); }); }
+    });
   })();
   </script>
 </body>
