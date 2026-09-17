@@ -7,6 +7,7 @@
   <?!= include('CSS_Tokens'); ?>
   <?!= include('UI_Components'); ?>
   <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_TopLight_Nav'); ?>
   <?!= getCompanyThemeCSS_('8df5c89a117fe9a5') ?>
 </head>
 <body>
@@ -60,6 +61,7 @@
   function load() {
     var contentId = 'tl-content';
     UIC.appShell('tl-root', {
+      menuGroups: window.TOPLIGHT_MENU || [],
       companyLogoUrl: COMPANY_LOGO_URL,
       companyLogoHref: scriptUrl + '?action=tl_dashboard&sessionToken=' + SESSION_TOKEN,
       companyLogoTitle: 'القمة لايت',
@@ -181,6 +183,10 @@
     var record = null;
     if (uid) {
       record = __headers.find(function (h) { return String(h.unique_id) === String(uid); }) || null;
+      /* Row-edit repair (5.5): a requested record that no longer exists shows
+         a clear error and returns to the list — it must never silently render
+         the Add form. */
+      if (!record) { UIC.toast('السجل غير موجود — تم تحديث القائمة', 'error'); showList(); return; }
     }
     UIC.readSkeleton('tl-content', { message: ['جاري استرجاع الموردين والأصناف...'] });
     ensureOptions()

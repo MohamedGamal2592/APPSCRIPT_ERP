@@ -206,7 +206,7 @@
         UIC.field({ key: 'f-taxes', label: 'الضرائب', type: 'number', min: '0', step: '0.01', value: record ? (record.taxes != null ? record.taxes : '') : '' }) +
         '' +
         UIC.combo({ key: 'f-box', label: 'الصندوق / الحساب البنكي', required: true, options: window.__cashBoxOptions || [], value: record ? String(record.related_box || '') : '', placeholder: 'اكتب للبحث…' }) +
-        UIC.combo({ key: 'f-chart', label: 'كود الدليل المحاسبي', options: window.__cashChartOptions || [], value: record ? String(record.chart_code || '') : '', placeholder: 'اكتب للبحث…' }) +
+        UIC.combo({ key: 'f-chart', label: 'كود الدليل المحاسبي', required: true, options: window.__cashChartOptions || [], value: record ? String(record.chart_code || '') : '', placeholder: 'اكتب للبحث…' }) +
         UIC.field({ key: 'f-items', label: 'أصناف المشتريات (اختياري — اكتب قيماً جديدة لإضافتها)', type: 'text', list: datalistId, value: record ? (record.transaction_purchasing_items || '') : '' }) +
         '{{DATALIST}}' +
         checkboxField('f-tax-system', 'خاضع للنظام الضريبي', record && (record.tax_system === true || String(record.tax_system).toLowerCase() === 'yes')) +

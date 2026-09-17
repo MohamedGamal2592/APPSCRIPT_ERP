@@ -94,6 +94,9 @@
           ITEM_SUGGESTIONS = r.item_suggestions || [];
           NEXT_ID = r.next_id || 1;
           window.__cashPartyOptions = r.party_options || [];
+          window.__cashCanAddParty = !!(r && r.can_add_party);
+          window.__cashPartyDirections = (r && r.party_direction_options) || [];
+          window.__cashPartyTypes = (r && r.party_type_options) || [];
           window.__cashBoxOptions = r.box_options || [];
           window.__cashChartOptions = r.chart_options || [];
           /* Only on the first load: a reload after a save (or after the user
@@ -163,13 +166,13 @@
         return [
           '<b>' + esc(h.transaction_id) + '</b>',
           '<span data-sort="' + esc(h.date_edit || '') + '">' + esc(h.date_display || '-') + '</span>',
-          esc(h.party_name || h.name_vendor || h.name || '-'),
+          esc(h.party_name || '-'),
           esc(h.transaction_details || '-'),
           esc(h.transaction_type),
           esc(h.transaction_method || '-'),
           '<span class="num" data-num="' + num0(h.transaction_amount) + '">' + num0(h.transaction_amount).toLocaleString('en-US') + '</span>',
           esc(h.box_name || h.related_box || '-'),
-          esc(h.chart_code || h.chart_name || '-'),
+          esc(h.chart_name || h.chart_code || '-'),
           esc(uname_(h.user) || '-'),
           '<span class="num" style="font-weight:700;' + (num0(h.balance_amount) < 0 ? 'color:var(--danger, #dc2626);' : 'color:#0e623b;') + '" data-num="' + num0(h.balance_amount) + '">' + num0(h.balance_amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + '</span>',
           UIC.statusPill(isApproved ? 'معتمد' : 'غير معتمد', isApproved ? 'success' : 'neutral'),
@@ -188,8 +191,12 @@
           (BOX_FILTER ? '<button class="btn btn-outline" onclick="CASH_PAGE.setBoxFilter(\'\')">✕ إلغاء فلتر الصندوق</button>' : '') +
           '<button class="btn btn-outline" onclick="UI.submitOnce(this, CASH_PAGE.saveView)">💾 حفظ العرض</button>' +
           /* The expenses report is its own page; it reads this same ledger. */
-          '<a class="btn btn-outline" href="' + scriptUrl + '?action=vf_cash_expenses&sessionToken=' +
+          '<a class="btn btn-outline" target="_blank" rel="noopener" href="' + scriptUrl + '?action=vf_cash_expenses&sessionToken=' +
             encodeURIComponent(SESSION_TOKEN) + '">📊 تقرير المصروفات</a>' +
+          '<a class="btn btn-outline" target="_blank" rel="noopener" href="' + scriptUrl + '?action=vf_cash_box_balances&sessionToken=' +
+            encodeURIComponent(SESSION_TOKEN) + '">💰 تقرير أرصدة الصناديق</a>' +
+          '<a class="btn btn-outline" target="_blank" rel="noopener" href="' + scriptUrl + '?action=vf_cash_incomes&sessionToken=' +
+            encodeURIComponent(SESSION_TOKEN) + '">📈 تقرير الايرادات الاخرى</a>' +
           (CAN_WRITE
             ? '<button class="btn btn-primary" onclick="CASH_PAGE.openForm(\'\')">+ إضافة حركة</button>' +
               '<button class="btn btn-outline" onclick="CASH_PAGE.openTransfer()">تحويل بين الصناديق</button>'
@@ -215,7 +222,8 @@
                     'النوع', 'طريقة الدفع',
                     { label: 'المبلغ', numeric: true }, 'الصندوق', 'كود الحساب', 'المستخدم',
                     { label: 'الرصيد', numeric: true },
-                    { label: 'الاعتماد', col: 'atom' }, ''],
+                    { label: 'الاعتماد', col: 'atom' },
+                    { key: 'actions', label: '' }],
           rows: rows,
           emptyText: BOX_FILTER ? 'لا توجد حركات في هذا الصندوق' : 'لا توجد حركات'
         });
@@ -247,8 +255,8 @@
         UIC.field({ key: 'f-date', label: 'تاريخ الحركة', type: 'date', required: true, value: record ? (record.date_edit || todayStr()) : todayStr() }) +
         UIC.combo({ key: 'f-type', label: 'نوع الحركة', required: true, options: selOpts(OPTIONS.transaction_type), value: record ? record.transaction_type : '', placeholder: 'اكتب للبحث…' }) +
         UIC.combo({ key: 'f-method', label: 'طريقة الدفع', required: true, options: selOpts(OPTIONS.transaction_method), value: record ? (record.transaction_method || '') : '', placeholder: 'اكتب للبحث…' }) +
-        UIC.combo({ key: 'f-party', label: 'العميل / المورد', options: window.__cashPartyOptions || [], value: record ? String(record.name || '') : '', placeholder: 'اكتب للبحث…' }) +
-        UIC.field({ key: 'f-vendor', label: 'اسم المورد (إن لم يكن مسجلاً)', type: 'text', value: record ? (record.name_vendor || '') : '' }) +
+        UIC.combo({ key: 'f-party', label: 'العميل / المورد', required: true, options: window.__cashPartyOptions || [], value: record ? String(record.name || '') : '', placeholder: 'اكتب للبحث…' }) +
+        (window.__cashCanAddParty ? '<div style="margin:-6px 0 12px;"><button type="button" class="btn btn-outline" onclick="CASH_PAGE.openPartyQuickAdd()">+ عميل / مورد جديد</button></div>' : '') +
         UIC.field({ key: 'f-details', label: 'البيان', type: 'textarea', required: true, value: record ? (record.transaction_details || '') : '' }) +
         UIC.field({ key: 'f-amount', label: 'المبلغ', type: 'number', required: true, min: '0.01', step: '0.01', value: record ? (record.transaction_amount != null ? record.transaction_amount : '') : '' }) +
         UIC.field({ key: 'f-discount', label: 'الخصم', type: 'number', min: '0', step: '0.01', value: record ? (record.total_discount != null ? record.total_discount : '') : '' }) +
@@ -264,7 +272,7 @@
         UIC.field({ key: 'f-taxes', label: 'الضرائب', type: 'number', min: '0', step: '0.01', value: record ? (record.taxes != null ? record.taxes : '') : '' }) +
         '' +
         UIC.combo({ key: 'f-box', label: 'الصندوق / الحساب البنكي', required: true, options: window.__cashBoxOptions || [], value: record ? String(record.related_box || '') : '', placeholder: 'اكتب للبحث…' }) +
-        UIC.combo({ key: 'f-chart', label: 'كود الدليل المحاسبي', options: window.__cashChartOptions || [], value: record ? String(record.chart_code || '') : '', placeholder: 'اكتب للبحث…' }) +
+        UIC.combo({ key: 'f-chart', label: 'كود الدليل المحاسبي', required: true, options: window.__cashChartOptions || [], value: record ? String(record.chart_code || '') : '', placeholder: 'اكتب للبحث…' }) +
         UIC.field({ key: 'f-items', label: 'أصناف المشتريات (اختياري — اكتب قيماً جديدة لإضافتها)', type: 'text', list: datalistId, value: record ? (record.transaction_purchasing_items || '') : '' }) +
         '{{DATALIST}}' +
         checkboxField('f-tax-system', 'خاضع للنظام الضريبي', record && (record.tax_system === true || String(record.tax_system).toLowerCase() === 'yes')) +
@@ -350,7 +358,7 @@
         transaction_type: getVal_('f-type'),
         transaction_method: getVal_('f-method'),
         name: getVal_('f-party'),
-        name_vendor: getVal_('f-vendor').trim(),
+        name_vendor: '',
         transaction_details: getVal_('f-details').trim(),
         transaction_amount: getVal_('f-amount'),
         total_discount: getVal_('f-discount'),
@@ -401,7 +409,6 @@
         date_edit: p.transaction_date,
         date_display: p.transaction_date,
         name: p.name,
-        name_vendor: p.name_vendor,
         party_name: partyLabel(p.name),
         transaction_details: p.transaction_details,
         transaction_type: p.transaction_type,
@@ -424,6 +431,74 @@
     function readCheckbox(id) {
       var el = document.getElementById(id);
       return !!(el && el.checked);
+    }
+
+    /* ---------- PARTY QUICK-ADD ---------- */
+    /* Same 10-field contract as the Parties page form (save_valley_party
+       rejects anything less), opened stacked above the cash form modal.
+       UIC.closeModal is stacking-safe: closing this returns to the cash
+       form with its values intact. */
+    function openPartyQuickAdd() {
+      var dirOpts = (window.__cashPartyDirections || []).map(function (v) { return { value: v, label: v }; });
+      var typeOpts = (window.__cashPartyTypes || []).map(function (v) { return { value: v, label: v }; });
+      var body = '<form id="party-quick-form">' +
+        UIC.field({ key: 'q-name', label: 'الاسم', type: 'text', required: true, noCorrect: true }) +
+        UIC.combo({ key: 'q-direction', label: 'الاتجاه', required: true, options: dirOpts, placeholder: 'اكتب للبحث…' }) +
+        UIC.combo({ key: 'q-type', label: 'نوع التعامل', required: true, options: typeOpts, placeholder: 'اكتب للبحث…' }) +
+        UIC.field({ key: 'q-reg', label: 'رقم السجل التجاري', type: 'number', required: true, min: '0' }) +
+        UIC.field({ key: 'q-tax', label: 'الرقم الضريبي', type: 'number', required: true, min: '0' }) +
+        UIC.field({ key: 'q-name-en', label: 'الاسم الإنجليزي', type: 'text', required: true }) +
+        UIC.field({ key: 'q-country', label: 'الدولة', type: 'text', required: true }) +
+        UIC.field({ key: 'q-region', label: 'المنطقة', type: 'text', required: true }) +
+        UIC.field({ key: 'q-phone', label: 'التليفون', type: 'tel', required: true }) +
+        UIC.field({ key: 'q-address', label: 'العنوان', type: 'textarea', required: true }) +
+      '</form>';
+      UIC.openModal('party-quick-modal', {
+        title: 'إضافة عميل / مورد',
+        body: body,
+        onSave: 'CASH_PAGE.savePartyQuickAdd()'
+      });
+    }
+
+    function savePartyQuickAdd() {
+      if (!UIC.validateForm('party-quick-form')) return;
+      var payload = {
+        id: '',
+        name: getVal_('q-name').trim(),
+        customer_direction: getVal_('q-direction'),
+        type: getVal_('q-type'),
+        registration_number: getVal_('q-reg'),
+        tax_id: getVal_('q-tax'),
+        name_en: getVal_('q-name-en').trim(),
+        country: getVal_('q-country').trim(),
+        region: getVal_('q-region').trim(),
+        telephone: getVal_('q-phone').trim(),
+        address: getVal_('q-address').trim()
+      };
+      UI.showSpinner();
+      companyCall('save_valley_party', payload)
+        .then(function (r) {
+          var newId = (r && r.id != null && r.id !== '') ? String(r.id) : '';
+          UIC.closeModal('party-quick-modal');
+          UIC.toast((r && r.message) || 'تمت إضافة الطرف', 'success');
+          /* Refresh party options (the save busts the shared vf_parties_opts
+             cache), then preselect the new party in the cash form combo. */
+          return companyCall('get_valley_cash', { from: DATE_FROM, to: DATE_TO }).then(function (r2) {
+            window.__cashPartyOptions = (r2 && r2.party_options) || window.__cashPartyOptions || [];
+            if (newId) {
+              var hid = document.getElementById('f-party');
+              var disp = document.getElementById('f-party_display');
+              if (hid) { hid.value = newId; try { hid.dispatchEvent(new Event('change', { bubbles: true })); } catch (e) {} }
+              if (disp) {
+                var lbl = newId;
+                window.__cashPartyOptions.forEach(function (o) { if (String(o.value) === newId) lbl = o.label; });
+                disp.value = lbl;
+              }
+            }
+          });
+        })
+        .catch(function (e) { UIC.toast((e && e.message) || 'تعذر إضافة الطرف', 'error'); })
+        .finally(function () { UI.hideSpinner(); });
     }
 
     /* ---------- TRANSFER ---------- */
@@ -510,6 +585,8 @@
       openForm: openForm,
       openEdit: openForm,
       save: save,
+      openPartyQuickAdd: openPartyQuickAdd,
+      savePartyQuickAdd: savePartyQuickAdd,
       openTransfer: openTransfer,
       saveTransfer: saveTransfer,
       approve: approve,
@@ -531,5 +608,4 @@
   </script>
 </body>
 </html>
-
 

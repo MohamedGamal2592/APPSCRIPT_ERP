@@ -1,0 +1,19 @@
+<script>
+/**
+ * Company_Assessment_Nav.html
+ * Single source of truth for the مركز التقييم header dropdown groups (D-20).
+ * "إنشاء تقييم" opens the same form template with no ?id= (create mode).
+ */
+window.ASSESSMENT_MENU = [
+  { label: 'التقييمات', items: [
+    { label: 'التقييمات', action: 'ac_assessments' },
+    { label: 'إنشاء تقييم', action: 'ac_assessment_form' }
+  ] },
+  { label: 'التوزيع', items: [
+    { label: 'دفعات التقييم', action: 'ac_batches' }
+  ] },
+  { label: 'النتائج', items: [
+    { label: 'النتائج', action: 'ac_results' }
+  ] }
+];
+</script>

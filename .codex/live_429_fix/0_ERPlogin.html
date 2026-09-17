@@ -1,0 +1,171 @@
+﻿<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="description" content="تسجيل الدخول إلى نظام إدارة الموارد">
+  <title>تسجيل الدخول</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('ERP_Flow'); ?>
+  <?!= include('ERP_Modal'); ?>
+</head>
+<body>
+<div dir="rtl" style="position:relative;display:flex;align-items:center;justify-content:center;min-height:100dvh;min-height:calc(var(--vh,1vh)*100);background-image:url('https://drive.google.com/thumbnail?id=1Ug1T9j5vQBeBA_5w52ufDO07IsefW6QH&sz=w2000');background-size:cover;background-position:center;padding:max(16px,env(safe-area-inset-top)) max(16px,env(safe-area-inset-right)) max(16px,env(safe-area-inset-bottom)) max(16px,env(safe-area-inset-left));">
+  <div style="position:absolute;inset:0;background:rgba(255,255,255,0.88);"></div>
+  <div id="login-card" style="position:relative;width:100%;max-width:400px;background:var(--bg-surface);border:1px solid var(--border-color);border-radius:var(--radius-lg);padding:clamp(20px,5vw,32px);box-shadow:var(--shadow-lg);">
+    <h1 style="text-align:center;margin-bottom:16px;font-size:clamp(18px,5vw,24px);">تسجيل الدخول</h1>
+    <div id="login-form">
+      <div class="form-field">
+        <label class="form-label" for="login-email">البريد الإلكتروني</label>
+        <input id="login-email" class="input" type="email" placeholder="you@example.com" inputmode="email" autocomplete="email" autocapitalize="off" enterkeyhint="next">
+      </div>
+      <div class="form-field">
+        <label class="form-label" for="login-password">كلمة المرور</label>
+        <input id="login-password" class="input" type="password" placeholder="********" autocomplete="current-password" enterkeyhint="done">
+      </div>
+      <div class="field-error" id="login-error" style="min-height:20px;"></div>
+      <button class="btn btn-primary" style="width:100%;justify-content:center;" onclick="doLogin()">دخول</button>
+    </div>
+    <div id="welcome-box" style="display:none;text-align:center;padding:8px 0;">
+      <div style="font-size:40px;margin-bottom:12px;">👋</div>
+      <h3 style="margin-bottom:8px;">مرحباً بك</h3>
+      <p id="welcome-message" style="color:var(--text-muted);font-size:14px;margin-bottom:20px;"></p>
+      <button id="go-dashboard" class="btn btn-primary" style="width:100%;justify-content:center;" onclick="goToDashboard()">متابعة إلى لوحة التحكم</button>
+      <button class="btn btn-outline" style="width:100%;justify-content:center;margin-top:10px;" onclick="backToLogin()">تسجيل الخروج</button>
+    </div>
+    <div id="newuser-box" style="display:none;text-align:center;padding:8px 0;">
+      <div style="font-size:40px;margin-bottom:12px;">🎉</div>
+      <h3 style="margin-bottom:8px;">مرحباً بك</h3>
+      <p style="color:var(--text-muted);font-size:14px;margin-bottom:4px;">يبدو أن هذه أول مرة تسجل فيها الدخول</p>
+      <p id="newuser-email" style="font-weight:600;font-size:14px;margin-bottom:20px;direction:ltr;"></p>
+      <button class="btn btn-primary" style="width:100%;justify-content:center;" onclick="openSetupModal()">تعيين كلمة مرور جديدة</button>
+      <button class="btn btn-outline" style="width:100%;justify-content:center;margin-top:10px;" onclick="backToLogin()">رجوع</button>
+    </div>
+    <div id="setup-success-box" style="display:none;text-align:center;padding:8px 0;">
+      <div style="font-size:40px;margin-bottom:12px;">✅</div>
+      <h3 style="margin-bottom:8px;">تم تعيين كلمة المرور بنجاح</h3>
+      <p style="color:var(--text-muted);font-size:14px;margin-bottom:20px;">يمكنك الآن تسجيل الدخول بكلمة المرور الجديدة</p>
+      <button class="btn btn-primary" style="width:100%;justify-content:center;" onclick="backToLogin(true)">العودة إلى تسجيل الدخول</button>
+    </div>
+  </div>
+</div>
+<script>
+  var SESSION_TOKEN = '';
+
+  function getDeviceInfo() {
+    try {
+      var ua = navigator.userAgent || '';
+      var os = 'Unknown', browser = 'Unknown';
+      if (/Windows/i.test(ua)) os = 'Windows'; else if (/Mac/i.test(ua)) os = 'macOS'; else if (/Android/i.test(ua)) os = 'Android'; else if (/iPhone|iPad/i.test(ua)) os = 'iOS'; else if (/Linux/i.test(ua)) os = 'Linux';
+      if (/Edg/i.test(ua)) browser = 'Edge'; else if (/Chrome/i.test(ua)) browser = 'Chrome'; else if (/Firefox/i.test(ua)) browser = 'Firefox'; else if (/Safari/i.test(ua)) browser = 'Safari';
+      var type = /Mobi|Android|iPhone|iPad/i.test(ua) ? 'Mobile' : 'Desktop';
+      var name = (type === 'Mobile' ? 'جوال' : 'حاسوب') + ' • ' + browser + ' • ' + os;
+      return { name: name, type: type, os: os, browser: browser };
+    } catch (e) { return { name: 'Unknown', type: 'Unknown', os: 'Unknown', browser: 'Unknown' }; }
+  }
+
+  function doLogin() {
+    var email = document.getElementById('login-email').value.trim();
+    var password = document.getElementById('login-password').value;
+    var err = document.getElementById('login-error');
+    // Email-only is allowed: the server detects password-less (new) accounts
+    // and returns setup_required without needing a password.
+    if (!email) { err.textContent = 'أدخل البريد الإلكتروني'; return; }
+    err.textContent = '';
+    try { if (window.ERPFlow) ERPFlow.start('جاري تسجيل الدخول...'); } catch(e){}
+    UI.showSpinner('جاري الدخول...');
+    API.call('login_user', { email: email, password: password, device: getDeviceInfo() })
+      .then(function (r) {
+        if (r.status === 'setup_required') {
+          showNewUserBox(r.email || email);
+          return;
+        }
+        API.setSession({ token: r.token, user: r.user });
+        SESSION_TOKEN = r.token;
+        var name = (r.user && r.user.name) ? r.user.name : email;
+        document.getElementById('welcome-message').textContent = 'تم تسجيل دخولك بنجاح، ' + name;
+        showBox('welcome-box');
+      })
+      .catch(function (e) {
+        err.textContent = e.message || 'تعذر الدخول';
+      })
+      .finally(function () { UI.hideSpinner(); try{ if(window.ERPFlow) ERPFlow.finish(); }catch(e){} });
+  }
+
+  function showBox(id) {
+    ['login-form', 'welcome-box', 'newuser-box', 'setup-success-box'].forEach(function (b) {
+      var el = document.getElementById(b);
+      if (el) el.style.display = (b === id) ? 'block' : 'none';
+    });
+  }
+
+  function showNewUserBox(email) {
+    document.getElementById('newuser-email').textContent = email;
+    showBox('newuser-box');
+  }
+
+  /* ---- First-time password setup (modal, no page redirect) ---- */
+  function openSetupModal() {
+    var body = '<form id="setup-modal-form" onsubmit="return false;">' +
+      '<div class="form-field"><label class="form-label" for="ns-pass1">كلمة المرور الجديدة</label>' +
+      '<input id="ns-pass1" class="input" type="password" placeholder="********" autocomplete="new-password" oninput="checkNewPass()"></div>' +
+      '<div class="form-field"><label class="form-label" for="ns-pass2">تأكيد كلمة المرور</label>' +
+      '<input id="ns-pass2" class="input" type="password" placeholder="********" autocomplete="new-password" oninput="checkNewPass()"></div>' +
+      '<div class="field-error" id="ns-error" style="min-height:20px;"></div>' +
+      '</form>';
+    UIC.openModal('setup-modal', { title: 'تعيين كلمة مرور جديدة', body: body, onSave: 'doSetupInline()' });
+  }
+
+  function checkNewPass() {
+    var p1 = document.getElementById('ns-pass1').value;
+    var p2 = document.getElementById('ns-pass2').value;
+    var err = document.getElementById('ns-error');
+    if (!err) return;
+    err.textContent = (p2 && p1 !== p2) ? 'كلمتا المرور غير متطابقتين' : '';
+  }
+
+  function doSetupInline() {
+    var email = document.getElementById('newuser-email').textContent.trim();
+    var p1 = document.getElementById('ns-pass1').value;
+    var p2 = document.getElementById('ns-pass2').value;
+    var err = document.getElementById('ns-error');
+    if (!p1) { err.textContent = 'أدخل كلمة المرور الجديدة'; return; }
+    if (p1.length < 8) { err.textContent = 'كلمة المرور يجب ألا تقل عن 8 أحرف'; return; }
+    if (p1 !== p2) { err.textContent = 'كلمتا المرور غير متطابقتين'; return; }
+    // NOTE: no UI.submitOnce here — the modal footer Save button already wraps
+    // onSave in submitOnce, and a nested call would no-op on the same button.
+    try { if (window.ERPFlow) ERPFlow.start('جاري تعيين كلمة المرور...'); } catch(e){}
+    UI.showSpinner('جاري تعيين كلمة المرور...');
+    API.call('setup_password', { email: email, password: p1, device: getDeviceInfo() })
+      .then(function (r) {
+        // Per UX spec: do NOT auto-login — discard the session token,
+        // show loading, then offer a button back to login.
+        UIC.closeModal('setup-modal');
+        UIC.toast('تم تعيين كلمة المرور بنجاح', 'success');
+        document.getElementById('login-email').value = email;
+        document.getElementById('login-password').value = '';
+        showBox('setup-success-box');
+      })
+      .catch(function (e) { err.textContent = e.message || 'تعذر الحفظ'; })
+      .finally(function () { UI.hideSpinner(); try{ if(window.ERPFlow) ERPFlow.finish(); }catch(e){} });
+  }
+
+  function goToDashboard() {
+    var _dashUrl = (window.scriptUrl || '/') + '?action=ERPDashboard&sessionToken=' + encodeURIComponent(SESSION_TOKEN);
+    try { window.top.location.href = _dashUrl; } catch (e) { window.location.href = _dashUrl; }
+  }
+
+  function backToLogin(keepEmail) {
+    API.clearSession();
+    SESSION_TOKEN = '';
+    document.getElementById('login-error').textContent = '';
+    if (!keepEmail) document.getElementById('login-email').value = '';
+    document.getElementById('login-password').value = '';
+    showBox('login-form');
+  }
+</script>
+</body>
+</html>
+

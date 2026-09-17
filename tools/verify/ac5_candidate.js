@@ -13,6 +13,7 @@ const { bootPage, flush } = require('./pageharness');
 const S = require('../lib/sources');
 
 const ROOT = path.resolve(__dirname, '..', '..');
+const helper = fs.readFileSync(path.join(ROOT, 'JS_Simplification_Helpers.js'), 'utf8');
 const PAGE = 'Company_Assessment_Take.html';
 
 let failures = 0;
@@ -250,6 +251,7 @@ function buildActionsSandbox() {
 
   const sandbox = { getSheet_, getHeaders_, appendRowWithRetry_, noteMutation_, executeWithLock_, updateRowByCriteria_, getAllRecords_, getRecordsByPk_, logHistory_, Utilities, Session, CacheService };
   vm.createContext(sandbox);
+  vm.runInContext(helper, sandbox, { filename: 'JS_Simplification_Helpers.js' });
   vm.runInContext(src, sandbox, { filename: 'Company_Assessment_Actions.js' });
   const AC = vm.runInContext('AssessmentCenter', sandbox);
   return { AC: AC, store: store, TOKEN72: TOKEN72 };
@@ -355,3 +357,4 @@ function testPublicHandlers() {
   if (failures) { console.log(failures + ' assertion(s) FAILED'); process.exit(1); }
   console.log('ac5_candidate: all assertions pass.');
 })();
+

@@ -9,6 +9,12 @@
   <?!= include('Client_Helpers'); ?>
   <?!= include('Company_ValleyFoods_Nav'); ?>
   <?!= getCompanyThemeCSS_('9940659bd83035d7') ?>
+  <style>
+    @media print {
+      .no-print { display: none !important; }
+      body { background: #fff !important; }
+    }
+  </style>
 </head>
 <body>
   <div id="vf-root"></div>
@@ -40,7 +46,7 @@
   <script>
   (function () {
     var DATA = null;
-    var YEAR = 0, MONTH = 0;
+    var DATE_FROM = '', DATE_TO = '', RANGE_DIRTY = false;
 
     function renderApp() {
       UIC.appShell('vf-root', {
@@ -55,15 +61,45 @@
         '<div class="vf-card">' +
           '<div class="vf-card-header">' +
             '<h3>تقرير المصروفات</h3>' +
-            '<div style="display:flex;gap:8px;align-items:center;">' +
-              '<select id="exp-year" class="input" style="width:auto;" onchange="EXP_PAGE.reload()"></select>' +
-              '<select id="exp-month" class="input" style="width:auto;" onchange="EXP_PAGE.reload()"></select>' +
+            '<div class="no-print" style="display:flex;gap:8px;align-items:center;">' +
+              '<button class="btn btn-outline" onclick="window.print()">🖨 طباعة</button>' +
               '<button class="btn btn-outline" onclick="EXP_PAGE.exportExcel()">⬇ تصدير</button>' +
               '<a class="btn btn-outline" href="' + scriptUrl + '?action=vf_cash&sessionToken=' + SESSION_TOKEN + '">↩ حركة النقدية</a>' +
             '</div>' +
           '</div>' +
-          '<div class="vf-card-body"><div id="exp-body"><p class="vf-text-muted">جاري التحميل...</p></div></div>' +
+          '<div class="vf-card-body">' +
+            '<div id="exp-filter" class="no-print"></div>' +
+            '<div id="exp-body"><p class="vf-text-muted">جاري التحميل...</p></div>' +
+          '</div>' +
         '</div>';
+      renderFilter();
+      load();
+    }
+
+    function renderFilter() {
+      var host = document.getElementById('exp-filter');
+      if (!host) return;
+      /* Replacing the bar while its date input (or clear button) holds focus
+         throws NotFoundError in Chrome — drop focus first. */
+      if (host.contains(document.activeElement)) { try { document.activeElement.blur(); } catch (e) {} }
+      host.innerHTML = UIC.dateRangeBar('exp-date', {
+        from: DATE_FROM, to: DATE_TO,
+        onchange: 'EXP_PAGE.applyDateFilter()',
+        onclear: 'EXP_PAGE.clearDateFilter()'
+      });
+    }
+
+    function applyDateFilter() {
+      var v = UIC.dateRangeValues('exp-date');
+      if (v.from && v.to && v.from > v.to) { UIC.toast('«من تاريخ» بعد «إلى تاريخ»', 'error'); return; }
+      DATE_FROM = v.from; DATE_TO = v.to; RANGE_DIRTY = true;
+      renderFilter();
+      load();
+    }
+
+    function clearDateFilter() {
+      DATE_FROM = ''; DATE_TO = ''; RANGE_DIRTY = true;
+      renderFilter();
       load();
     }
 
@@ -71,14 +107,14 @@
        has already seen the change and must not be interrupted to confirm it. */
     function load(quiet) {
       if (!quiet) UIC.readSkeleton('exp-body');
-      var payload = {};
-      if (YEAR) payload.year = YEAR;
-      if (MONTH) payload.month = MONTH;
+      /* First load sends no keys so the server defaults to month-to-date;
+         afterwards the keys are always explicit (empty = unbounded). */
+      var payload = RANGE_DIRTY ? { from: DATE_FROM, to: DATE_TO } : {};
       companyCall('get_valley_cash_expense_report', payload)
         .then(function (r) {
           DATA = r;
-          YEAR = r.year; MONTH = r.month;
-          fillPickers();
+          var rg = (r && r.range) || {};
+          if (!RANGE_DIRTY) { DATE_FROM = rg.from || ''; DATE_TO = rg.to || ''; renderFilter(); }
           renderReport();
           try { schedulePrefetch(); } catch (e) {}
         })
@@ -89,90 +125,62 @@
         .finally(function () { if (!quiet) UI.hideSpinner(); });
     }
 
-    function fillPickers() {
-      var ys = document.getElementById('exp-year');
-      var ms = document.getElementById('exp-month');
-      if (ys) {
-        ys.innerHTML = (DATA.years || []).map(function (y) {
-          return '<option value="' + y + '"' + (y === DATA.year ? ' selected' : '') + '>' + y + '</option>';
-        }).join('');
-      }
-      if (ms) {
-        ms.innerHTML = (DATA.months || []).map(function (m) {
-          return '<option value="' + m.month + '"' + (m.month === DATA.month ? ' selected' : '') + '>' +
-            esc(m.label) + '</option>';
-        }).join('');
-      }
+    function rangeLabel() {
+      var rg = (DATA && DATA.range) || {};
+      var a = rg.from ? fmtDate(rg.from) : 'البداية';
+      var b = rg.to ? fmtDate(rg.to) : 'اليوم';
+      return a + ' — ' + b;
     }
 
-    function reload() {
-      var ys = document.getElementById('exp-year');
-      var ms = document.getElementById('exp-month');
-      YEAR = ys ? Number(ys.value) : 0;
-      MONTH = ms ? Number(ms.value) : 0;
-      load();
+    function fmtDate(v) {
+      if (!v) return '-';
+      var d = (v instanceof Date) ? v : new Date(v);
+      if (isNaN(d.getTime())) return String(v);
+      var p = function (n) { return n < 10 ? '0' + n : '' + n; };
+      return p(d.getDate()) + '/' + p(d.getMonth() + 1) + '/' + d.getFullYear();
     }
 
     function renderReport() {
       var b = document.getElementById('exp-body');
       if (!b) return;
       var rows = DATA.rows || [];
-      var t = DATA.totals || { month_amount: 0, ytd_amount: 0 };
+      var t = DATA.totals || { range_amount: 0, prev_amount: 0, range_moves: 0 };
 
       var kpis =
         '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:14px;">' +
-          kpi('مصروفات ' + esc(DATA.month_label) + ' ' + DATA.year, money(t.month_amount)) +
-          kpi('من أول العام حتى ' + esc(DATA.ytd_through), money(t.ytd_amount)) +
+          kpi('مصروفات الفترة (' + esc(rangeLabel()) + ')', money(t.range_amount)) +
+          kpi('الفترة السابقة', money(t.prev_amount)) +
           kpi('عدد حسابات المصروفات', String(rows.length)) +
+          kpi('عدد حركات الفترة', String(t.range_moves || 0)) +
         '</div>';
 
       var body = rows.map(function (r) {
         return [
           esc(r.label),
           esc(r.chart_code),
-          money(r.month_amount),
-          pctText(r.month_pct),
-          money(r.ytd_amount),
-          pctText(r.ytd_pct)
+          money(r.range_amount),
+          pctText(r.range_pct),
+          money(r.prev_amount),
+          pctText(r.prev_pct)
         ];
       });
 
       var table = UIC.dataTable('exp-tbl', {
-        headers: ['الحساب', 'الكود', 'مصروف ' + DATA.month_label, '% من الشهر',
-                  'من أول العام', '% من العام'],
+        headers: ['الحساب', 'الكود', 'مبلغ الفترة', '% من الفترة',
+                  'الفترة السابقة', '% من السابقة'],
         rows: body.concat(body.length ? [[
-          'الإجمالي', '', money(t.month_amount), pctText(100), money(t.ytd_amount), pctText(100)
+          'الإجمالي', '', money(t.range_amount), pctText(100), money(t.prev_amount), pctText(100)
         ]] : []),
-        emptyText: 'لا توجد مصروفات في هذه الفترة',
-        title: 'تقرير المصروفات ' + DATA.month_label + ' ' + DATA.year,
+        emptyText: (DATE_FROM || DATE_TO) ? 'لا توجد مصروفات في هذه الفترة' : 'لا توجد مصروفات',
+        title: 'تقرير المصروفات ' + rangeLabel(),
         autoPage: false
       });
 
-      /* The month strip answers "based on periods" at a glance: where this
-         month sits against the other eleven. */
-      var maxMonth = 0;
-      (DATA.months || []).forEach(function (m) { if (m.amount > maxMonth) maxMonth = m.amount; });
-      var strip = '<div style="margin-top:18px;">' +
-        '<h4 style="margin:0 0 8px;">المصروفات شهرياً — ' + DATA.year + '</h4>' +
-        '<div style="display:grid;grid-template-columns:repeat(12,1fr);gap:6px;align-items:end;height:120px;">' +
-          (DATA.months || []).map(function (m) {
-            var h = maxMonth > 0 ? Math.round((m.amount / maxMonth) * 100) : 0;
-            var on = (m.month === DATA.month);
-            return '<div title="' + esc(m.label) + ': ' + money(m.amount) + '" ' +
-              'style="display:flex;flex-direction:column;justify-content:flex-end;height:100%;cursor:pointer;" ' +
-              'onclick="EXP_PAGE.pickMonth(' + m.month + ')">' +
-              '<div style="height:' + h + '%;min-height:2px;border-radius:4px 4px 0 0;background:' +
-                (on ? 'var(--color-primary,#2563eb)' : 'var(--border-color,#cbd5e1)') + ';"></div>' +
-              '<div style="font-size:11px;text-align:center;margin-top:4px;' +
-                (on ? 'font-weight:800;' : 'color:var(--text-muted);') + '">' + esc(m.label) + '</div>' +
-            '</div>';
-          }).join('') +
-        '</div></div>';
-
-      b.innerHTML = kpis + table + strip +
+      b.innerHTML = kpis + table +
         '<p class="vf-text-muted" style="margin-top:14px;font-size:12px;">' +
           'يشمل التقرير حركات النقدية التي يقابل كود الدليل فيها حساباً قيمته في عمود «المستوى الاساسي» = 3 ' +
-          '(' + DATA.accounts_considered + ' حساب). القيمة هي إجمالي الحركة بعد الخصم ومع الضرائب.' +
+          '(' + DATA.accounts_considered + ' حساب). القيمة هي إجمالي الحركة بعد الخصم ومع الضرائب. ' +
+          'الفترة السابقة = نفس طول الفترة مباشرة قبل بدايتها.' +
         '</p>';
       UIC.initTableSort('exp-tbl');
     }
@@ -184,20 +192,13 @@
       '</div>';
     }
 
-    function pickMonth(m) {
-      MONTH = m;
-      var ms = document.getElementById('exp-month');
-      if (ms) ms.value = String(m);
-      load();
-    }
-
     /* UIC.exportExcel reads the rendered table's own store, so the sheet it
        writes is exactly the table on screen — including the totals row. */
     function exportExcel() { UIC.exportExcel('exp-tbl'); }
 
     window.EXP_PAGE = {
-      reload: reload,
-      pickMonth: pickMonth,
+      applyDateFilter: applyDateFilter,
+      clearDateFilter: clearDateFilter,
       exportExcel: exportExcel
     };
 

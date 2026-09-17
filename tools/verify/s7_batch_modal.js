@@ -328,3 +328,4 @@ function originalFifo(batches, qty) {
     : 'S7 FAILED: ' + failed));
   process.exit(failed === 0 ? 0 : 1);
 })();
+

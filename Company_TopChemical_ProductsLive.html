@@ -1,0 +1,593 @@
+<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>اصناف النظام الرئيسي — products</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_TopChemical_Nav'); ?>
+  <?!= getCompanyThemeCSS_('3fe1b5cb67b7223e') ?>
+  <style>
+    .pl-wrapper {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      padding: 4px 0;
+    }
+    .pl-header-card {
+      background: var(--bg-surface, #fff);
+      border: 1px solid var(--border-color, #e2e8f0);
+      border-radius: 12px;
+      padding: 16px 20px;
+      box-shadow: 0 1px 3px rgba(0,0,0,.06);
+    }
+    .pl-header-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+    .pl-heading {
+      font-size: 17px;
+      font-weight: 700;
+      color: var(--text-primary, #0f172a);
+      margin: 0 0 4px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .pl-subheading {
+      font-size: 12px;
+      color: var(--text-muted, #64748b);
+      margin: 0;
+    }
+    .pl-badges {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+    .pl-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 3px 10px;
+      border-radius: 8px;
+      font-size: 12px;
+      background: var(--bg-subtle, #f8fafc);
+      border: 1px solid var(--border-color, #e2e8f0);
+      color: var(--text-secondary, #334155);
+    }
+    .pl-badge b { color: var(--brand-primary, #0284c7); }
+    .pl-toolbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 10px;
+      padding-top: 14px;
+      border-top: 1px solid var(--border-color, #e2e8f0);
+    }
+    .pl-search-box {
+      position: relative;
+      flex: 1;
+      min-width: 220px;
+      max-width: 380px;
+    }
+    .pl-search-input {
+      width: 100%;
+      padding: 8px 12px 8px 30px;
+      border: 1px solid var(--border-color, #cbd5e1);
+      border-radius: 8px;
+      font-size: 13px;
+      background: var(--bg-surface, #fff);
+      color: var(--text-primary, #0f172a);
+      outline: none;
+      transition: border-color .2s, box-shadow .2s;
+    }
+    .pl-search-input:focus {
+      border-color: var(--brand-primary, #0284c7);
+      box-shadow: 0 0 0 2px rgba(2,132,199,.12);
+    }
+    .pl-search-clear {
+      position: absolute;
+      left: 9px;
+      top: 50%;
+      transform: translateY(-50%);
+      cursor: pointer;
+      color: var(--text-muted, #94a3b8);
+      font-size: 13px;
+      display: none;
+    }
+    .pl-table-card {
+      background: var(--bg-surface, #fff);
+      border: 1px solid var(--border-color, #e2e8f0);
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 1px 3px rgba(0,0,0,.06);
+    }
+    .pl-table-scroll {
+      width: 100%;
+      overflow-x: auto;
+    }
+    .pl-tbl {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+      white-space: nowrap;
+    }
+    .pl-tbl thead th {
+      background: var(--bg-subtle, #f1f5f9);
+      color: var(--text-secondary, #334155);
+      font-weight: 700;
+      padding: 9px 13px;
+      border-bottom: 2px solid var(--border-color, #cbd5e1);
+      text-align: right;
+      position: sticky;
+      top: 0;
+      z-index: 2;
+    }
+    .pl-tbl tbody tr {
+      border-bottom: 1px solid var(--border-color, #f1f5f9);
+      transition: background .12s;
+    }
+    .pl-tbl tbody tr:hover { background: var(--brand-subtle-bg, #f0f9ff); }
+    .pl-tbl td {
+      padding: 9px 13px;
+      color: var(--text-primary, #0f172a);
+      vertical-align: middle;
+    }
+    .cell-num {
+      text-align: left;
+      font-variant-numeric: tabular-nums;
+      font-family: monospace;
+      font-weight: 600;
+      direction: ltr;
+    }
+    .cell-date {
+      font-family: monospace;
+      direction: ltr;
+      text-align: left;
+    }
+    .badge-pk {
+      padding: 2px 7px;
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 700;
+      background: #e0f2fe;
+      color: #0369a1;
+      font-family: monospace;
+    }
+    .badge-on {
+      padding: 2px 8px;
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 700;
+      background: #dcfce7;
+      color: #166534;
+    }
+    .badge-off {
+      padding: 2px 8px;
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 700;
+      background: #fef3c7;
+      color: #92400e;
+    }
+    .pl-form-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 14px;
+      padding: 6px 2px;
+    }
+    .pl-form-grid .form-field { margin: 0; }
+    .pl-form-full { grid-column: 1 / -1; }
+    .pl-empty {
+      text-align: center;
+      padding: 40px 20px;
+      color: var(--text-muted, #64748b);
+      font-size: 14px;
+    }
+    .lbl-pk {
+      font-size: 11px;
+      background: #e0f2fe;
+      color: #0369a1;
+      border-radius: 4px;
+      padding: 1px 5px;
+      font-weight: 600;
+      margin-right: 4px;
+    }
+    .lbl-ro {
+      font-size: 11px;
+      background: #f1f5f9;
+      color: #64748b;
+      border-radius: 4px;
+      padding: 1px 5px;
+      font-weight: 600;
+      margin-right: 4px;
+    }
+    .btn-danger-soft {
+      background: #fef2f2;
+      border: 1px solid #fecaca;
+      color: #b91c1c;
+    }
+  </style>
+</head>
+<body>
+<div id="tc-root" dir="rtl"></div>
+<script>
+  var params        = new URLSearchParams(window.location.search);
+  var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+  var scriptUrl     = window.scriptUrl || '/';
+  var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('3fe1b5cb67b7223e') ?>';
+  var COMPANY_PAGES    = <?!= companyPages ?>;
+  var CURRENT_ACTION   = '<?!= currentAction ?>';
+  var IS_SUPER_ADMIN   = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+  var USER_PAGES       = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+  var CAN_WRITE = UIC.canAdd_();
+  var CAN_FULL  = UIC.canFull_();
+
+  /* ── state (VIEW-ONLY page: no add / edit / delete here) ── */
+  var S = {
+    columns:    [],
+    rows:       [],
+    total:      0,
+    loadedAll:  false
+  };
+
+  var PK_COL = 'id';
+
+  /* ── columns hidden from VIEW ONLY (never mapped into the data table,
+     so they never render, export or print; page performs no writes) ── */
+  var PL_HIDDEN = {
+    'active':         true,   /* نشط (0/1) */
+    'manufacture_id': true,   /* معرف التصنيع */
+    'created_at':     true,   /* تاريخ الإنشاء */
+    'updated_at':     true,   /* آخر تحديث */
+    'deleted_at':     true    /* تاريخ الحذف */
+  };
+
+  /* ── unified ERP table columns (UIC.dataTable contract) ── */
+  var PL_HEADERS = [
+    { key: 'id', label: '#', numeric: true },
+    { key: 'category_id', label: 'معرف الفئة', numeric: true },
+    { key: 'client_id', label: 'معرف العميل', numeric: true },
+    { key: 'name_ar', label: 'الاسم (عربي)' },
+    { key: 'name_en', label: 'الاسم (إنجليزي)' },
+    { key: 'code', label: 'الكود' },
+    { key: 'price', label: 'السعر', numeric: true },
+    { key: 'unit', label: 'الوحدة' },
+    { key: 'quantity', label: 'الكمية', numeric: true },
+    { key: 'number_of_cartons_bags', label: 'عدد الكراتين/الأجولة', numeric: true },
+    { key: 'number_of_small_boxes', label: 'عدد العبوات الصغيرة', numeric: true },
+    { key: 'product_unit_metric', label: 'مقياس الوحدة', numeric: true },
+    { key: 'actions', label: 'إجراءات' }
+  ];
+
+  var COL_LABELS = {
+    'id':                        '# المعرف (PK)',
+    'category_id':               'معرف الفئة',
+    'client_id':                 'معرف العميل',
+    'name_ar':                   'الاسم (عربي)',
+    'name_en':                   'الاسم (إنجليزي)',
+    'code':                      'الكود',
+    'price':                     'السعر',
+    'unit':                      'الوحدة',
+    'quantity':                  'الكمية',
+    'number_of_cartons_bags':    'عدد الكراتين/الأجولة',
+    'number_of_small_boxes':     'عدد العبوات الصغيرة',
+    'product_unit_metric':       'مقياس الوحدة',
+    'active':                    'نشط (0/1)',
+    'manufacture_id':            'معرف التصنيع',
+    'created_at':                'تاريخ الإنشاء',
+    'updated_at':                'آخر تحديث',
+    'deleted_at':                'تاريخ الحذف'
+  };
+
+  var NUMERIC_COLS = { category_id:1, client_id:1, price:1, quantity:1,
+    number_of_cartons_bags:1, number_of_small_boxes:1, product_unit_metric:1,
+    active:1, manufacture_id:1, id:1 };
+  var DATE_COLS = { created_at:1, updated_at:1, deleted_at:1 };
+
+  function colLabel(col) { return COL_LABELS[col] || col; }
+
+  /* live quantity for a row: view value first, stored fallback */
+  function liveQtyOf(row) {
+    var lq = row.live_quantity;
+    if (lq !== null && lq !== undefined && String(lq) !== '') return String(lq);
+    var q = row.quantity;
+    return (q !== null && q !== undefined) ? String(q) : '';
+  }
+
+  /* distinct existing values of a column across loaded rows (dropdown source) */
+  function distinctVals(col) {
+    var seen = {}, out = [];
+    S.rows.forEach(function (r) {
+      var v = r[col];
+      if (v === null || v === undefined || String(v) === '') return;
+      var k = String(v);
+      if (!seen[k]) { seen[k] = true; out.push(k); }
+    });
+    out.sort();
+    return out;
+  }
+
+  function companyCall(moduleAction, data) {
+    return API.call('company_action', {
+      target_system: '3fe1b5cb67b7223e',
+      module_action:  moduleAction,
+      data:           data || {}
+    }, SESSION_TOKEN);
+  }
+
+  /* ══════════════════ INIT ══════════════════ */
+  function load() {
+    UIC.appShell('tc-root', {
+      companyLogoUrl:   COMPANY_LOGO_URL,
+      companyLogoHref:  scriptUrl + '?action=tc_dashboard&sessionToken=' + SESSION_TOKEN,
+      companyLogoTitle: 'توب كيميكال',
+      breadcrumb: 'توب كيميكال / تحليلات النظام الرئيسي / اصناف النظام الرئيسي',
+      contentId: 'pl-content',
+      menuGroups: (window.TOPCHEMICAL_MENU || [])
+    });
+    fetchData(false);
+  }
+
+  /* ══════════════════ DATA ══════════════════ */
+  function fetchData(loadAll) {
+    if (loadAll !== undefined) S.loadedAll = !!loadAll;
+    UIC.readSkeleton('pl-content', {
+      message: S.loadedAll ? 'جاري تحميل كامل الأصناف...' : 'جاري تحميل آخر 10 أصناف...'
+    });
+    companyCall('get_products_live', { loadAll: S.loadedAll })
+      .then(function (res) {
+        S.columns = res.columns || [];
+        S.rows    = res.rows    || [];
+        S.total   = res.total   || 0;
+        renderPage();
+      })
+      .catch(showError)
+      .finally(function () {
+        UI.hideSpinner();
+        try { schedulePrefetch(); } catch (e) {}
+      });
+  }
+
+  function toggleLoadAll() { fetchData(!S.loadedAll); }
+
+  /* ══════════════════ RENDER — unified table ══════════════════ */
+  function renderPage() {
+    var content = document.getElementById('pl-content');
+    if (!content) return;
+
+    content.innerHTML =
+      '<div class="pl-wrapper">' +
+      '<div class="pl-header-card">' +
+        '<div class="pl-header-top">' +
+          '<div>' +
+            '<h2 class="pl-heading">🏷️ اصناف النظام الرئيسي <span style="font-size:13px;font-weight:400;color:var(--text-muted)">(products)</span></h2>' +
+            '<p class="pl-subheading">جدول قاعدة البيانات المباشر — ' + S.total + ' صنف إجمالاً (الحذف الناعم مُطبَّق)</p>' +
+          '</div>' +
+          '<div class="pl-badges">' +
+            '<div class="pl-badge">الإجمالي: <b>' + FMT.number(S.total) + '</b></div>' +
+            '<div class="pl-badge">المُحمَّل: <b>' + FMT.number(S.rows.length) + '</b></div>' +
+            '<div class="pl-badge">الوضع: <b>' + (S.loadedAll ? 'عرض الكل' : 'آخر 10 سجلات') + '</b></div>' +
+          '</div>' +
+        '</div>' +
+        '<div class="pl-toolbar">' +
+          '<div style="display:flex;gap:8px;flex-wrap:wrap;">' +
+            '<button class="btn btn-outline" onclick="fetchData(S.loadedAll)">🔄 تحديث</button>' +
+            '<button class="btn ' + (S.loadedAll ? 'btn-secondary' : 'btn-primary') + '" onclick="toggleLoadAll()">' +
+              (S.loadedAll
+                ? '📄 عرض آخر 10 سجلات فقط'
+                : '📊 عرض الكل (' + FMT.number(S.total) + ' سجل)') +
+            '</button>' +
+          '</div>' +
+        '</div>' +
+      '</div>' +
+      '<div id="pl-table-host"></div>' +
+      '</div>';
+
+    renderPlTable();
+  }
+
+  function renderPlTable() {
+    var host = document.getElementById('pl-table-host');
+    if (!host) return;
+
+    var rows = S.rows.map(function (row) {
+      var pkVal = row[PK_COL] !== undefined && row[PK_COL] !== null ? String(row[PK_COL]) : '';
+      return {
+        id: (row.id !== null && row.id !== undefined) ? row.id : '',
+        category_id: (row.category_id !== null && row.category_id !== undefined) ? row.category_id : '',
+        client_id: (row.client_id !== null && row.client_id !== undefined) ? row.client_id : '',
+        name_ar: row.name_ar ? '<b>' + FMT.escape(String(row.name_ar)) + '</b>' : '—',
+        name_en: row.name_en ? FMT.escape(String(row.name_en)) : '—',
+        code: row.code ? FMT.escape(String(row.code)) : '—',
+        price: (row.price !== null && row.price !== undefined && String(row.price) !== '') ? row.price : '',
+        unit: row.unit ? FMT.escape(String(row.unit)) : '—',
+        quantity: liveQtyOf(row),
+        number_of_cartons_bags: (row.number_of_cartons_bags !== null && row.number_of_cartons_bags !== undefined) ? row.number_of_cartons_bags : '',
+        number_of_small_boxes: (row.number_of_small_boxes !== null && row.number_of_small_boxes !== undefined) ? row.number_of_small_boxes : '',
+        product_unit_metric: (row.product_unit_metric !== null && row.product_unit_metric !== undefined) ? row.product_unit_metric : '',
+        actions: UIC.actionBtns(
+          [{ label: 'عرض', onclick: "openDetail('" + FMT.escape(pkVal) + "')" }]
+          .concat(CAN_WRITE ? [
+            { label: 'تعديل', onclick: "openEdit('" + FMT.escape(pkVal) + "')" },
+            { label: 'حذف', color: '#d32f2f', onclick: "askDelete('" + FMT.escape(pkVal) + "')" }
+          ] : [])
+        )
+      };
+    });
+
+    host.innerHTML = UIC.dataTable('pl-table', {
+      truncated: !S.loadedAll,
+      showAll: 'toggleLoadAll()',
+      title: 'اصناف النظام الرئيسي',
+      headers: PL_HEADERS,
+      rows: rows,
+      emptyText: 'لا توجد أصناف مطابقة'
+    });
+    UIC.initTableSort('pl-table');
+  }
+
+  /* ══════════════════ READ-ONLY DETAIL (all columns, incl. hidden) ══════════════════ */
+  function openDetail(pkVal) {
+    var row = (S.rows).find(function (r) { return String(r[PK_COL]) === String(pkVal); });
+    if (!row) { UIC.toast('الصنف غير موجود في الذاكرة', 'error'); return; }
+    var cols = S.columns.length ? S.columns : Object.keys(row);
+    var body = cols.map(function (c) {
+      if (c === 'live_quantity') return '';   /* merged into the quantity row */
+      var v = (c === 'quantity') ? liveQtyOf(row) : row[c];
+      var disp = (v === null || v === undefined || String(v) === '') ? '—'
+        : (c === 'active' ? (String(v) === '1' ? '✓ نشط' : '— غير نشط') : String(v));
+      return '<div class="form-field"><label class="form-label">' + FMT.escape(colLabel(c)) + '</label>' +
+        '<div style="padding:8px 12px;background:var(--bg-subtle);border-radius:var(--radius-sm);font-size:13px;">' + FMT.escape(disp) + '</div></div>';
+    }).join('');
+    UIC.openModal('pl-detail-modal', {
+      title: 'تفاصيل الصنف — #' + FMT.escape(String(pkVal)),
+      body: body,
+      footer: false
+    });
+  }
+
+  /* ══════════════════ EDIT MODAL + SOFT DELETE (CAN_WRITE: super admin included) ══════════════════
+     Everything is editable except PK. created_at/updated_at are not shown at
+     all; quantity is display-only live data from product_current_quantity;
+     unit + product_unit_metric are dropdowns of existing table values. */
+  var PL_EDITING = null;
+  var READ_ONLY_COLS = { 'id': true };
+  var PL_HIDE_EDIT = { 'created_at': true, 'updated_at': true, 'live_quantity': true };
+
+  function openEdit(pkVal) {
+    var row = (S.rows).find(function (r) { return String(r[PK_COL]) === String(pkVal); });
+    if (!row) { UIC.toast('الصنف غير موجود في الذاكرة', 'error'); return; }
+    PL_EDITING = pkVal;
+    var cols = S.columns.length ? S.columns : Object.keys(row);
+    var formHtml = '<form id="pl-edit-form"><div class="pl-form-grid">';
+    cols.forEach(function (col) {
+      if (PL_HIDE_EDIT[col]) return;   /* never shown in the edit form */
+      var val = row[col];
+      var label = colLabel(col);
+      if (col === 'quantity') {
+        /* uneditable live data from the product_current_quantity view */
+        var live = liveQtyOf(row);
+        formHtml += '<div class="form-field"><label class="form-label">' + FMT.escape(label) +
+          ' <span style="font-size:11px;background:#e0f2fe;color:#0369a1;border-radius:4px;padding:1px 5px;">من النظام مباشرة</span></label>' +
+          '<input type="text" class="input cell-num" value="' + FMT.escape(live) + '" disabled></div>';
+        return;
+      }
+      if (READ_ONLY_COLS[col]) {
+        formHtml += '<div class="form-field"><label class="form-label">' +
+          '<span class="lbl-ro">' + (col === PK_COL ? 'PK' : 'للقراءة فقط') + '</span> ' + FMT.escape(label) + '</label>' +
+          '<input type="text" class="input" value="' + FMT.escape(val !== null && val !== undefined ? String(val) : '') + '" disabled></div>';
+        return;
+      }
+      if (col === 'active') {
+        var on = String(val) === '1';
+        formHtml += '<div class="form-field"><label class="form-label">' + FMT.escape(label) + '</label>' +
+          '<select class="input" id="plf_' + col + '">' +
+          '<option value="0"' + (!on ? ' selected' : '') + '>0 — غير نشط</option>' +
+          '<option value="1"' + (on ? ' selected' : '') + '>1 — نشط</option></select></div>';
+      } else if (col === 'deleted_at') {
+        var dtv = val ? String(val).slice(0, 16).replace(' ', 'T') : '';
+        formHtml += '<div class="form-field"><label class="form-label">' + FMT.escape(label) +
+          ' <span style="font-size:11px;background:#fef3c7;color:#92400e;border-radius:4px;padding:1px 5px;">تحكم بالحذف الناعم</span></label>' +
+          '<input type="datetime-local" class="input" id="plf_' + col + '" value="' + FMT.escape(dtv) + '">' +
+          '<div style="font-size:11px;color:var(--text-muted,#64748b);margin-top:3px;">اتركه فارغاً لاستعادة الصنف. ضع تاريخاً للحذف الناعم.</div></div>';
+      } else if (col === 'unit' || col === 'product_unit_metric') {
+        /* dropdown of values already existing in the table */
+        var opts = distinctVals(col);
+        if (opts.length) {
+          formHtml += '<div class="form-field"><label class="form-label">' + FMT.escape(label) + '</label>' +
+            '<select class="input" id="plf_' + col + '">' +
+            '<option value="">— اختر —</option>' +
+            opts.map(function (o) {
+              return '<option value="' + FMT.escape(o) + '"' + (String(val) === o ? ' selected' : '') + '>' + FMT.escape(o) + '</option>';
+            }).join('') + '</select></div>';
+        } else {
+          formHtml += '<div class="form-field"><label class="form-label">' + FMT.escape(label) + '</label>' +
+            '<input type="text" class="input" id="plf_' + col + '" value="' + FMT.escape(val !== null && val !== undefined ? String(val) : '') + '"></div>';
+        }
+      } else if (NUMERIC_COLS[col]) {
+        formHtml += '<div class="form-field"><label class="form-label">' + FMT.escape(label) + '</label>' +
+          '<input type="number" step="any" class="input cell-num" id="plf_' + col + '" value="' + FMT.escape(val !== null && val !== undefined ? String(val) : '') + '"></div>';
+      } else {
+        formHtml += '<div class="form-field"><label class="form-label">' + FMT.escape(label) + '</label>' +
+          '<input type="text" class="input" id="plf_' + col + '" value="' + FMT.escape(val !== null && val !== undefined ? String(val) : '') + '"></div>';
+      }
+    });
+    formHtml += '</div></form>';
+    UIC.openModal('pl-edit-modal', {
+      title: 'تعديل صنف — #' + FMT.escape(String(pkVal)),
+      body: formHtml,
+      saveLabel: 'حفظ التعديلات',
+      onSave: 'saveEdit()'
+    });
+  }
+
+  function saveEdit() {
+    var pkVal = PL_EDITING;
+    if (!pkVal) { UIC.toast('لا يوجد سجل محدد', 'error'); return; }
+    var row = (S.rows).find(function (r) { return String(r[PK_COL]) === String(pkVal); });
+    if (!row) { UIC.toast('السجل غير موجود', 'error'); return; }
+    var cols = S.columns.length ? S.columns : Object.keys(row);
+    var payload = {};
+    payload[PK_COL] = pkVal;
+    cols.forEach(function (col) {
+      if (READ_ONLY_COLS[col] || PL_HIDE_EDIT[col] || col === 'quantity') return;
+      var el = document.getElementById('plf_' + col);
+      if (el) payload[col] = el.value;
+    });
+    UI.showSpinner('جاري حفظ التعديلات…');
+    companyCall('save_product_live', payload)
+      .then(function () {
+        UIC.toast('تم الحفظ بنجاح ✓', 'success');
+        UIC.closeModal('pl-edit-modal');
+        Object.keys(payload).forEach(function (k) { row[k] = payload[k]; });
+        renderPage();
+      })
+      .catch(showError)
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function askDelete(pkVal) {
+    var row = (S.rows).find(function (r) { return String(r[PK_COL]) === String(pkVal); });
+    var label = (row && row.name_ar) ? ' — ' + row.name_ar : '';
+    UIC.openModal('pl-delete-modal', {
+      title: 'تأكيد الحذف الناعم',
+      body: '<p style="font-size:14px;line-height:1.9;">سيتم حذف الصنف <b>#' + FMT.escape(String(pkVal)) + FMT.escape(label) + '</b> حذفاً ناعماً ' +
+            '(تخزين الطابع الزمني الحالي في <code dir="ltr">deleted_at</code>) وسيختفي من القائمة.</p>',
+      saveLabel: '🗑️ تأكيد الحذف',
+      onSave: 'doDelete(\'' + FMT.escape(String(pkVal)) + '\')'
+    });
+  }
+
+  function doDelete(pkVal) {
+    UI.showSpinner('جاري الحذف الناعم…');
+    companyCall('delete_product_live', { id: pkVal })
+      .then(function () {
+        UIC.toast('تم الحذف الناعم ✓', 'success');
+        UIC.closeModal('pl-delete-modal');
+        S.rows = S.rows.filter(function (r) { return String(r[PK_COL]) !== String(pkVal); });
+        S.total = Math.max(0, S.total - 1);
+        renderPage();
+      })
+      .catch(showError)
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  /* ── error helper ── */
+  function showError(err) {
+    var msg = (err && (err.message || err.error)) || String(err || 'حدث خطأ غير متوقع');
+    UIC.toast(msg, 'error');
+  }
+
+  document.addEventListener('DOMContentLoaded', load);
+</script>
+</body>
+</html>

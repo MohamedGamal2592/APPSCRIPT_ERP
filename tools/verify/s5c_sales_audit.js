@@ -6,7 +6,8 @@
  * evidence for the third: sales exposes NO cost of its own, so there is nothing
  * to strip there beyond the shared batch endpoint already handled in S5a.
  *
- * It also records U-48, a pre-existing defect found during this audit.
+ * It also keeps a regression guard for the pre-existing sales-save defect: the current
+handler must remain executable and the stock-authority fixture must continue to pass.
  *
  * Run: node tools/verify/s5c_sales_audit.js
  */
@@ -14,6 +15,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { execFileSync } = require('child_process');
 
 const ROOT = path.resolve(__dirname, '..', '..');
 const SRC = fs.readFileSync(path.join(ROOT, 'Company_ValleyFoods_Actions.js'), 'utf8');
@@ -101,54 +103,30 @@ check(/a\.cost_unit = batchCurrent\[buid\]/.test(SRC),
 check(allocCols.indexOf('unit_cost') === -1 && allocCols.indexOf('cost_unit') === -1,
   'so a stripped unit_cost in the payload cannot wipe anything — the sheet stores no cost');
 
-/* ── U-48 — a pre-existing defect found during this audit ────────────────── */
-console.log('\nS5c — U-48: saveValleyInvoice_ references an undeclared `outputs`\n');
+/* ── U-48 — behavioral regression for the current sales-save path ───────── */
+console.log('\nS5c — U-48: the historical undeclared `outputs` assertion is obsolete\n');
 {
   const b = bodyOf('saveValleyInvoice_');
   const uses = (b.text.match(/(^|[^\w.])outputs\b/gm) || []).length;
-  const decls = (b.text.match(/\b(var|let|const)\s+outputs\b/g) || []).length;
-  check(uses > 0, 'saveValleyInvoice_ uses `outputs` (' + uses + ' reference(s))');
-  check(decls === 0, 'and never declares it');
+  check(uses === 0,
+    'saveValleyInvoice_ has no undeclared `outputs` reference in the current source',
+    'references: ' + uses);
 
-  /* Nor does anything else in scope: the IIFE body, or the file's globals. */
-  const otherDecls = [];
-  LINES.forEach((l, i) => {
-    if (/^\s*(var|let|const)\s+outputs\b/.test(l)) otherDecls.push(i + 1);
-  });
-  const inScope = otherDecls.filter(n => {
-    const indent = LINES[n - 1].match(/^\s*/)[0].length;
-    return indent <= 2; /* IIFE-level (2) or file-level (0) would be visible */
-  });
-  check(inScope.length === 0,
-    'no IIFE-level or file-level `outputs` exists either',
-    'declared at lines: ' + otherDecls.join(', ') + ' (all inside other functions)');
-
-  /* And nothing creates it as an implicit global. */
-  check(!/^\s*outputs\s*=/m.test(SRC), 'no implicit-global `outputs = ...` assignment anywhere');
-
-  /* Where it sits relative to the writes. */
-  const lockAt = b.text.indexOf('executeWithLock_');
-  const useAt = b.text.search(/(^|[^\w.])outputs\.forEach/m);
-  check(useAt !== -1 && lockAt !== -1 && useAt < lockAt,
-    'the reference is reached BEFORE the handler takes its write lock');
-
-  /* And the values it computes are never consumed. */
-  const after = b.text.slice(b.text.indexOf('var avgCostUnit'));
-  const consumed = (after.match(/avgCostUnit/g) || []).length;
-  check(consumed <= 3, 'avgCostUnit is written onto `outputs` and never read again — dead computation',
-    'references after declaration: ' + consumed);
-
-  console.log('');
-  console.log('        CONCLUSION: reading an undeclared identifier throws ReferenceError in');
-  console.log('        Apps Script (V8), so saveValleyInvoice_ throws before it writes anything.');
-  console.log('        The block is dead costing computation (M2/M3) copied from the');
-  console.log('        manufacturing handler; nothing downstream consumes it and the sales');
-  console.log('        sheets have no column to hold it. Present since the initial commit —');
-  console.log('        NOT introduced by the performance programme or by this run.');
-  console.log('        Reported, deliberately NOT fixed: see VALLEYFOODS_RESULTS.md.');
+  /* The sales-save behavior is exercised by the existing stock-authority
+   * fixture, which loads the real handler guards and compares available stock,
+   * held-this-document stock, FIFO order and insufficient-stock rejection. It
+   * is a behavioral check, not a second implementation hidden in this audit. */
+  try {
+    execFileSync(process.execPath, [path.join(__dirname, 's25_stock_authority.js')], { stdio: 'pipe' });
+    check(true, 'the sales-save stock/cost authority regression fixture passes');
+  } catch (e) {
+    const detail = String(e.stdout || e.stderr || '').split('\n').slice(-8).join(' ');
+    check(false, 'the sales-save stock/cost authority regression fixture passes', detail);
+  }
 }
-
 console.log('\n' + (failed === 0
   ? 'S5c OK — sales exposes no cost of its own; nothing to strip. U-48 recorded.'
   : 'S5c FAILED: ' + failed));
 process.exit(failed === 0 ? 0 : 1);
+
+

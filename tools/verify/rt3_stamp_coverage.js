@@ -165,3 +165,5 @@ console.log('\n' + (failed === 0
   ? 'RT3 — a direct sheet write now bumps the version another device is watching.'
   : failed + ' check(s) FAILED.'));
 process.exit(failed === 0 ? 0 : 1);
+
+

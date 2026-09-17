@@ -387,3 +387,4 @@ console.log('\n' + (failed === 0
   ? 'S5 OK — responses differ only in cost keys, and those keys are absent.'
   : 'S5 FAILED: ' + failed));
 process.exit(failed === 0 ? 0 : 1);
+

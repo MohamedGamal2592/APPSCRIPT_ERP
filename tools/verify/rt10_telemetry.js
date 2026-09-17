@@ -28,6 +28,8 @@ const vm = require('vm');
 
 const ROOT = path.resolve(__dirname, '..', '..');
 const CODE = fs.readFileSync(path.join(ROOT, 'Code.js'), 'utf8');
+const TELEMETRY = fs.readFileSync(path.join(ROOT, 'Code_Telemetry.js'), 'utf8');
+const SOURCES = CODE + '\n' + TELEMETRY;
 
 let failed = 0;
 function check(ok, label, extra) {
@@ -38,7 +40,7 @@ function check(ok, label, extra) {
 function mask(src) {
   return src.replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, m => m.replace(/[^\n]/g, ' '));
 }
-const code = mask(CODE);
+const code = mask(SOURCES);
 
 function fnBody(name) {
   const at = code.indexOf('function ' + name);
@@ -46,7 +48,7 @@ function fnBody(name) {
   let d = 0;
   for (let i = code.indexOf('{', at); i < code.length; i++) {
     if (code[i] === '{') d++;
-    else if (code[i] === '}') { d--; if (d === 0) return CODE.slice(at, i + 1); }
+    else if (code[i] === '}') { d--; if (d === 0) return SOURCES.slice(at, i + 1); }
   }
   return '';
 }
@@ -74,7 +76,7 @@ check((code.match(/perfRecordRequest_\(request, authUser, status, startTime\)/g)
 
 /* ── 2. Nine columns, and nothing that identifies a person ───────────────── */
 
-const headers = /var PERF_LOG_HEADERS_ = \[([\s\S]*?)\]/.exec(CODE);
+const headers = /var PERF_LOG_HEADERS_ = \[([\s\S]*?)\]/.exec(SOURCES);
 check(!!headers, 'ERP_Perf_Log declares its columns');
 const cols = headers ? headers[1].split(',').map(s => s.trim().replace(/'/g, '')).filter(Boolean) : [];
 check(JSON.stringify(cols) === JSON.stringify(
@@ -119,8 +121,8 @@ check(/isWrite\) return true/.test(sample), '100% of writes are recorded');
 check(/SLOW_MS\) return true/.test(sample), '100% of anything slow');
 check(/Math\.random\(\) < PERF_TELEMETRY_\.READ_SAMPLE/.test(sample),
   'and a configurable fraction of fast reads');
-check(/READ_SAMPLE:\s*0\.10/.test(CODE), 'the default read sample is 10%');
-check(/PERF_TELEMETRY_ = \{/.test(CODE),
+check(/READ_SAMPLE:\s*0\.10/.test(SOURCES), 'the default read sample is 10%');
+check(/PERF_TELEMETRY_ = \{/.test(SOURCES),
   'every tunable is in one CONFIG block rather than buried in a function');
 
 /* The sampling actually behaves. Run the real function. */
@@ -128,7 +130,7 @@ check(/PERF_TELEMETRY_ = \{/.test(CODE),
   const box = { Math: Math, PERF_TELEMETRY_: null };
   vm.createContext(box);
   vm.runInContext(
-    /var PERF_TELEMETRY_ = \{[\s\S]*?\};/.exec(CODE)[0] + '\n' + fnBody('perfShouldSample_'), box);
+    /var PERF_TELEMETRY_ = \{[\s\S]*?\};/.exec(SOURCES)[0] + '\n' + fnBody('perfShouldSample_'), box);
   const alwaysWrite = [];
   for (let i = 0; i < 200; i++) alwaysWrite.push(vm.runInContext('perfShouldSample_(true, 5)', box));
   check(alwaysWrite.every(Boolean), 'every write is sampled, 200 times out of 200');
@@ -175,7 +177,7 @@ check(/clearContent\(\)/.test(rollup),
 const prune = fnBody('prunePerfLog_');
 check(/RETAIN_DAYS/.test(prune) && /deleteRows\(2, keepFrom\)/.test(prune),
   'raw rows are pruned after the retention window, from the top, in one block');
-check(/RETAIN_DAYS:\s*90/.test(CODE), 'the window is 90 days');
+check(/RETAIN_DAYS:\s*90/.test(SOURCES), 'the window is 90 days');
 check(!/PERF_WEEKLY_SHEET_/.test(prune),
   'and the weekly rollup is never pruned — it is tiny and it is the point');
 
@@ -183,7 +185,7 @@ check(!/PERF_WEEKLY_SHEET_/.test(prune),
 
 check(/catch \(eRead\) \{ buf = \[\]; \}/.test(record),
   'a throwing cache read degrades to an empty buffer');
-check(/catch \(e\) \{\s*\/\* Telemetry must never be the reason a request fails\. \*\/\s*\}/.test(CODE) ||
+check(/catch \(e\) \{\s*\/\* Telemetry must never be the reason a request fails\. \*\/\s*\}/.test(SOURCES) ||
       /catch \(e\) \{[\s\S]{0,120}never be the reason/.test(record),
   'and any other failure means log nothing, never fail the request');
 check(/MAX_PER_MINUTE/.test(record),
@@ -191,7 +193,7 @@ check(/MAX_PER_MINUTE/.test(record),
 
 /* ── 6. Wiring: the sheets, the triggers, the page ───────────────────────── */
 
-check(/ERP_Perf_Log/.test(CODE) && /ERP_Perf_Weekly/.test(CODE),
+check(/ERP_Perf_Log/.test(SOURCES) && /ERP_Perf_Weekly/.test(SOURCES),
   'both sheets are named');
 check(/ss\.insertSheet\(name\)/.test(fnBody('ensurePerfSheet_')),
   'and created on first use — new, additive, and droppable without consequence');
@@ -218,3 +220,6 @@ console.log('\n' + (failed === 0
   ? 'RT10 — one cache write per request, nine columns of numbers, nobody named.'
   : failed + ' check(s) FAILED.'));
 process.exit(failed === 0 ? 0 : 1);
+
+
+

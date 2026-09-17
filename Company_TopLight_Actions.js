@@ -26,28 +26,6 @@ const TopLight = (function () {
   const BOX_SHEET = 'top_light_box_account_codes';
   const CURRENCY_SHEET = 'ERP_currency_exchange';
 
-  /* ── [RT-6] The change watch, ported from ValleyFoods ───────────────────
-   *
-   * page -> the tables its actions touch, DERIVED by joining the two maps this
-   * file already has. There is no new configuration to keep in step: a page's
-   * watch set is exactly the set of tables its own actions declare, so a new
-   * action that names a table joins the watch automatically and one that does
-   * not is visibly absent.
-   */
-  const PAGE_TABLES = (function () {
-    const byPage = {};
-    Object.keys(PAGE_ACCESS).forEach(function (action) {
-      const page = PAGE_ACCESS[action].page;
-      const table = ACTION_TABLES[action];
-      if (!page || !table) return;
-      if (!byPage[page]) byPage[page] = {};
-      byPage[page][table] = true;
-    });
-    const out = {};
-    Object.keys(byPage).forEach(function (p) { out[p] = Object.keys(byPage[p]); });
-    return out;
-  })();
-
   /**
    * "Has anything this page cares about changed since I last looked?"
    *
@@ -111,63 +89,74 @@ const TopLight = (function () {
   // get_xlsx_export is intentionally unmapped: generic client-data exporter
   // usable from any page (coarse get_/add_ rules still apply).
   // =========================================
-  const PAGE_ACCESS = {
-    'get_products':            { page: 'tl_products', access: 'read' },
-    'add_product':             { page: 'tl_products', access: 'write' },
-    'edit_product':            { page: 'tl_products', access: 'full' },
-
-    'get_parties':             { page: 'tl_customers', access: 'read' },
-    'add_party':               { page: 'tl_customers', access: 'write' },
-    'edit_party':              { page: 'tl_customers', access: 'full' },
-
-    'get_purchasing_headers':  { page: 'tl_purchasing', access: 'read' },
-    'get_purchasing_options':  { page: 'tl_purchasing', access: 'read' },
-    'get_purchasing_lines':    { page: 'tl_purchasing', access: 'read' },
-    'add_purchasing':          { page: 'tl_purchasing', access: 'write' },
-    'edit_purchasing':         { page: 'tl_purchasing', access: 'full' },
-    'delete_purchasing':       { page: 'tl_purchasing', access: 'full' },
-    'approve_purchasing':      { page: 'tl_purchasing', access: 'write' },
-    'get_purchase_print':      { page: 'tl_purchase_print', access: 'read' },
-
-    'get_sales_headers':       { page: 'tl_sales', access: 'read' },
-    'get_sales_options':       { page: 'tl_sales', access: 'read' },
-    'get_sales_lines':         { page: 'tl_sales', access: 'read' },
-    'add_sales':               { page: 'tl_sales', access: 'write' },
-    'edit_sales':              { page: 'tl_sales', access: 'full' },
-    'delete_sales':            { page: 'tl_sales', access: 'full' },
-    'approve_sales':           { page: 'tl_sales', access: 'write' },
-    'get_sales_print':         { page: 'tl_sales_print', access: 'read' },
-    'get_sales_costing':      { page: 'tl_sales_costing_print', access: 'read' },
-
-    'get_sales_returns':       { page: 'tl_sales_returns', access: 'read' },
-    'add_sales_return':        { page: 'tl_sales_returns', access: 'write' },
-    'delete_sales_return':     { page: 'tl_sales_returns', access: 'full' },
-
-    'get_sales_offer_headers': { page: 'tl_sales_offer', access: 'read' },
-    'get_sales_offer_lines':   { page: 'tl_sales_offer', access: 'read' },
-    'add_sales_offer':         { page: 'tl_sales_offer', access: 'write' },
-    'edit_sales_offer':        { page: 'tl_sales_offer', access: 'full' },
-    'delete_sales_offer':      { page: 'tl_sales_offer', access: 'full' },
-    'approve_sales_offer':     { page: 'tl_sales_offer', access: 'write' },
-    'get_sales_offer_print':   { page: 'tl_sales_offer_print', access: 'read' },
-
-    'get_sales_analysis':      { page: 'tl_sales_analysis', access: 'read' },
-    'get_sales_costing_analysis': { page: 'tl_sales_costing_analysis', access: 'read' },
-
-    'get_cash_headers':        { page: 'tl_cash', access: 'read' },
-    'add_cash':                { page: 'tl_cash', access: 'write' },
-    'edit_cash':               { page: 'tl_cash', access: 'full' },
-    'delete_cash':             { page: 'tl_cash', access: 'full' },
-    'approve_cash':            { page: 'tl_cash', access: 'write' },
-    'add_transfer':            { page: 'tl_cash', access: 'write' },
-
-    'get_cash_report':         { page: 'tl_cash_report', access: 'read' },
-    'get_customer_statement':  { page: 'tl_customer_statement', access: 'read' },
-    'get_purchase_needs':      { page: 'tl_purchase_needs', access: 'read' },
-    'get_product_movement':    { page: 'tl_product_movement', access: 'read' },
-    'prefetch_refs':           { page: 'tl_dashboard', access: 'read' },
-    'get_kpi_data':            { page: 'tl_kpi', access: 'read' }
+    /* One declaration per routine action. PAGE_ACCESS and ACTION_TABLES below are compatibility projections.
+   * page/navigation metadata remains separate in Company_TopLight_Registry.js.
+   * Empty page/table values intentionally preserve the existing unmapped
+   * behavior for dashboard/export/special actions. */
+  const ACTION_DEFINITIONS = {
+    'get_dashboard_data': { handler: getDashboardData_, page: '', access: '', primaryLogTable: '' },
+    'get_kpi_data': { handler: getKpiData_, page: 'tl_kpi', access: 'read', primaryLogTable: '' },
+    'get_products': { handler: getProducts_, page: 'tl_products', access: 'read', primaryLogTable: PRODUCTS_SHEET },
+    'add_product': { handler: addProduct_, page: 'tl_products', access: 'write', primaryLogTable: PRODUCTS_SHEET },
+    'edit_product': { handler: editProduct_, page: 'tl_products', access: 'full', primaryLogTable: PRODUCTS_SHEET },
+    'get_parties': { handler: getParties_, page: 'tl_customers', access: 'read', primaryLogTable: CUSTOMERS_SHEET },
+    'add_party': { handler: addParty_, page: 'tl_customers', access: 'write', primaryLogTable: CUSTOMERS_SHEET },
+    'edit_party': { handler: editParty_, page: 'tl_customers', access: 'full', primaryLogTable: CUSTOMERS_SHEET },
+    'get_purchasing_headers': { handler: getPurchasingHeaders_, page: 'tl_purchasing', access: 'read', primaryLogTable: PURCHASING_SHEET },
+    'get_purchasing_options': { handler: getPurchasingOptions_, page: 'tl_purchasing', access: 'read', primaryLogTable: PURCHASING_SHEET },
+    'get_purchasing_lines': { handler: getPurchasingLines_, page: 'tl_purchasing', access: 'read', primaryLogTable: PURCHASING_LINES_SHEET },
+    'get_purchase_print': { handler: getPurchasePrint_, page: 'tl_purchase_print', access: 'read', primaryLogTable: PURCHASING_SHEET },
+    'add_purchasing': { handler: addPurchasing_, page: 'tl_purchasing', access: 'write', primaryLogTable: PURCHASING_SHEET },
+    'edit_purchasing': { handler: editPurchasing_, page: 'tl_purchasing', access: 'full', primaryLogTable: PURCHASING_SHEET },
+    'delete_purchasing': { handler: deletePurchasing_, page: 'tl_purchasing', access: 'full', primaryLogTable: PURCHASING_SHEET },
+    'approve_purchasing': { handler: approvePurchasing_, page: 'tl_purchasing', access: 'write', primaryLogTable: PURCHASING_SHEET },
+    'get_sales_headers': { handler: getSalesHeaders_, page: 'tl_sales', access: 'read', primaryLogTable: SALES_SHEET },
+    'get_sales_options': { handler: getSalesOptions_, page: 'tl_sales', access: 'read', primaryLogTable: SALES_SHEET },
+    'get_sales_lines': { handler: getSalesLines_, page: 'tl_sales', access: 'read', primaryLogTable: SALES_LINES_SHEET },
+    'get_sales_print': { handler: getSalesPrint_, page: 'tl_sales_print', access: 'read', primaryLogTable: SALES_SHEET },
+    'get_sales_costing': { handler: getSalesCosting_, page: 'tl_sales_costing_print', access: 'read', primaryLogTable: SALES_SHEET },
+    'add_sales': { handler: addSales_, page: 'tl_sales', access: 'write', primaryLogTable: SALES_SHEET },
+    'edit_sales': { handler: editSales_, page: 'tl_sales', access: 'full', primaryLogTable: SALES_SHEET },
+    'delete_sales': { handler: deleteSales_, page: 'tl_sales', access: 'full', primaryLogTable: SALES_SHEET },
+    'approve_sales': { handler: approveSales_, page: 'tl_sales', access: 'write', primaryLogTable: SALES_SHEET },
+    'get_sales_returns': { handler: getSalesReturns_, page: 'tl_sales_returns', access: 'read', primaryLogTable: SALES_RETURNS_SHEET },
+    'add_sales_return': { handler: addSalesReturn_, page: 'tl_sales_returns', access: 'write', primaryLogTable: SALES_RETURNS_SHEET },
+    'delete_sales_return': { handler: deleteSalesReturn_, page: 'tl_sales_returns', access: 'full', primaryLogTable: SALES_RETURNS_SHEET },
+    'get_cash_headers': { handler: getCashHeaders_, page: 'tl_cash', access: 'read', primaryLogTable: CASH_SHEET },
+    'add_cash': { handler: addCash_, page: 'tl_cash', access: 'write', primaryLogTable: CASH_SHEET },
+    'edit_cash': { handler: editCash_, page: 'tl_cash', access: 'full', primaryLogTable: CASH_SHEET },
+    'delete_cash': { handler: deleteCash_, page: 'tl_cash', access: 'full', primaryLogTable: CASH_SHEET },
+    'approve_cash': { handler: approveCash_, page: 'tl_cash', access: 'write', primaryLogTable: CASH_SHEET },
+    'add_transfer': { handler: addTransfer_, page: 'tl_cash', access: 'write', primaryLogTable: CASH_SHEET },
+    'get_customer_statement': { handler: getCustomerStatement_, page: 'tl_customer_statement', access: 'read', primaryLogTable: CUSTOMERS_SHEET },
+    'get_sales_offer_headers': { handler: getSalesOfferHeaders_, page: 'tl_sales_offer', access: 'read', primaryLogTable: OFFER_SHEET },
+    'get_sales_offer_lines': { handler: getSalesOfferLines_, page: 'tl_sales_offer', access: 'read', primaryLogTable: OFFER_LINES_SHEET },
+    'get_sales_offer_print': { handler: getSalesOfferPrint_, page: 'tl_sales_offer_print', access: 'read', primaryLogTable: OFFER_SHEET },
+    'add_sales_offer': { handler: addSalesOffer_, page: 'tl_sales_offer', access: 'write', primaryLogTable: OFFER_SHEET },
+    'edit_sales_offer': { handler: editSalesOffer_, page: 'tl_sales_offer', access: 'full', primaryLogTable: OFFER_SHEET },
+    'delete_sales_offer': { handler: deleteSalesOffer_, page: 'tl_sales_offer', access: 'full', primaryLogTable: OFFER_SHEET },
+    'approve_sales_offer': { handler: approveSalesOffer_, page: 'tl_sales_offer', access: 'write', primaryLogTable: OFFER_SHEET },
+    'get_sales_analysis': { handler: getSalesAnalysis_, page: 'tl_sales_analysis', access: 'read', primaryLogTable: SALES_SHEET },
+    'get_sales_costing_analysis': { handler: getSalesCostingAnalysis_, page: 'tl_sales_costing_analysis', access: 'read', primaryLogTable: SALES_SHEET },
+    'get_income_statement': { handler: getIncomeStatement_, page: 'tl_income_statement', access: 'read', primaryLogTable: SALES_SHEET },
+    'get_financial_position': { handler: getFinancialPosition_, page: 'tl_financial_position', access: 'read', primaryLogTable: CASH_SHEET },
+    'get_cash_report': { handler: getCashReport_, page: 'tl_cash_report', access: 'read', primaryLogTable: CASH_SHEET },
+    'get_xlsx_export': { handler: getXlsxExport_, page: '', access: '', primaryLogTable: '' },
+    'get_purchase_needs': { handler: getPurchaseNeeds_, page: 'tl_purchase_needs', access: 'read', primaryLogTable: PURCHASING_LINES_SHEET },
+    'get_product_movement': { handler: getProductMovement_, page: 'tl_product_movement', access: 'read', primaryLogTable: CURRENT_PRODUCTS_SHEET },
+    'prefetch_refs': { handler: prefetchRefs_, page: 'tl_dashboard', access: 'read', primaryLogTable: PRODUCTS_SHEET },
+    'get_page_versions': { handler: getPageVersions_, page: '', access: '', primaryLogTable: '' }
   };
+
+  const PAGE_ACCESS = {};
+  const ACTION_TABLES = {};
+  Object.keys(ACTION_DEFINITIONS).forEach(function (action) {
+    const definition = ACTION_DEFINITIONS[action];
+    if (definition.page && definition.access) {
+      PAGE_ACCESS[action] = { page: definition.page, access: definition.access };
+    }
+    if (definition.primaryLogTable) ACTION_TABLES[action] = definition.primaryLogTable;
+  });
 
   /** Page for a module_action, for both page-access enforcement and SystemLog. */
   function pageForAction_(action) {
@@ -175,48 +164,31 @@ const TopLight = (function () {
     return req ? req.page : '';
   }
 
-  /** Sheet/table touched by a module_action, for the SystemLog Table column. */
-  const ACTION_TABLES = {
-    'get_products': PRODUCTS_SHEET, 'add_product': PRODUCTS_SHEET, 'edit_product': PRODUCTS_SHEET,
-
-    'get_parties': CUSTOMERS_SHEET, 'add_party': CUSTOMERS_SHEET, 'edit_party': CUSTOMERS_SHEET,
-
-    'get_purchasing_headers': PURCHASING_SHEET, 'get_purchasing_options': PURCHASING_SHEET,
-    'add_purchasing': PURCHASING_SHEET,
-    'edit_purchasing': PURCHASING_SHEET, 'delete_purchasing': PURCHASING_SHEET,
-    'approve_purchasing': PURCHASING_SHEET, 'get_purchase_print': PURCHASING_SHEET,
-    'get_purchasing_lines': PURCHASING_LINES_SHEET,
-
-    'get_sales_headers': SALES_SHEET, 'add_sales': SALES_SHEET, 'edit_sales': SALES_SHEET,
-    'delete_sales': SALES_SHEET, 'approve_sales': SALES_SHEET, 'get_sales_print': SALES_SHEET,
-    'get_sales_costing': SALES_SHEET,
-    'get_sales_options': SALES_SHEET,
-    'get_sales_lines': SALES_LINES_SHEET,
-
-    'get_sales_returns': SALES_RETURNS_SHEET, 'add_sales_return': SALES_RETURNS_SHEET,
-    'delete_sales_return': SALES_RETURNS_SHEET,
-
-    'get_sales_offer_headers': OFFER_SHEET, 'add_sales_offer': OFFER_SHEET,
-    'edit_sales_offer': OFFER_SHEET, 'delete_sales_offer': OFFER_SHEET,
-    'approve_sales_offer': OFFER_SHEET, 'get_sales_offer_print': OFFER_SHEET,
-    'get_sales_offer_lines': OFFER_LINES_SHEET,
-
-    'get_sales_analysis': SALES_SHEET,
-    'get_sales_costing_analysis': SALES_SHEET,
-
-    'get_cash_headers': CASH_SHEET, 'add_cash': CASH_SHEET, 'edit_cash': CASH_SHEET,
-    'delete_cash': CASH_SHEET, 'approve_cash': CASH_SHEET, 'add_transfer': CASH_SHEET,
-    'get_cash_report': CASH_SHEET,
-
-    'get_customer_statement': CUSTOMERS_SHEET,
-    'get_purchase_needs': PURCHASING_LINES_SHEET,
-    'get_product_movement': CURRENT_PRODUCTS_SHEET,
-    'prefetch_refs': PRODUCTS_SHEET
-  };
-
   function tableForAction_(action) {
     return ACTION_TABLES[action] || '';
   }
+
+  /* ── [RT-6] The change watch, ported from ValleyFoods ───────────────────
+   *
+   * page -> the tables its actions touch, DERIVED by joining the two maps this
+   * file already has. There is no new configuration to keep in step: a page's
+   * watch set is exactly the set of tables its own actions declare, so a new
+   * action that names a table joins the watch automatically and one that does
+   * not is visibly absent.
+   */
+  const PAGE_TABLES = (function () {
+    const byPage = {};
+    Object.keys(PAGE_ACCESS).forEach(function (action) {
+      const page = PAGE_ACCESS[action].page;
+      const table = ACTION_TABLES[action];
+      if (!page || !table) return;
+      if (!byPage[page]) byPage[page] = {};
+      byPage[page][table] = true;
+    });
+    const out = {};
+    Object.keys(byPage).forEach(function (p) { out[p] = Object.keys(byPage[p]); });
+    return out;
+  })();
 
   // Normalize customer_direction to 'customer' | 'vendor' (handles Arabic + English).
   function normalizeDirection_(val) {
@@ -3332,17 +3304,410 @@ const TopLight = (function () {
   }
 
   // =========================================
+  // Income statement (قائمة الدخل)
+  // Net revenue: same locked per-invoice math as getSalesCostingAnalysis_
+  //   (net = إجمالي − returnsValue). COGS from period stock movement:
+  //   COGS = startVal + purchVal − endVal, where quantities are rebuilt
+  //   from movement history and valued at the snapshot unitCost
+  //   (total_cost_sign / current_qty, same as the costing page).
+  // Direct expenses: top_light_cash_bank_movement rows with
+  //   chart_account_main = 'التكاليف', dated by transaction_date,
+  //   grouped by chart_name, amount = column `total` strictly.
+  // Date columns: purchasing = top_light_product_purchasing[receipt_date];
+  //   sales = joined top_light_sales_invoices[تاريخ الفاتورة];
+  //   returns = top_light_sales_returns[top_lightreturn_date];
+  //   expenses = top_light_cash_bank_movement[transaction_date].
+  // Single-pass aggregation (one scan per sheet) — never per-invoice
+  // scans — to stay within execution limits.
+  // =========================================
+  function getIncomeStatement_(data, user, dbId) {
+    const core = incomeStatementCore_(dbId, parseDate_(data && data.date_from), parseDate_(data && data.date_to));
+    return { status: 'success', summary: core.summary, expenses: core.expenses, revenueRows: core.revenueRows, stockDetail: core.stockDetail, startDetail: core.startDetail, purchDetail: core.purchDetail };
+  }
+
+  // Shared P&L core — single source of truth for period profit. Both the
+  // income-statement page and the financial-position page (أرباح الفترة)
+  // compute through here so the two statements can never drift apart.
+  function incomeStatementCore_(dbId, dateFrom, dateTo) {
+    const fromT = dateFrom instanceof Date ? dateFrom.getTime() : null;
+    const toT = dateTo instanceof Date ? dateTo.getTime() : null;
+    function inPeriod_(t) {
+      if (t !== 0 && !t) return false;
+      if (fromT != null && t < fromT) return false;
+      if (toT != null && t > toT) return false;
+      return true;
+    }
+    function timeOf_(v) {
+      const d = parseDate_(v);
+      return d instanceof Date ? d.getTime() : 0;
+    }
+
+    // Snapshot unit cost per product — identical to the costing page.
+    const costMap = {};
+    getAllRecords_(dbId, CURRENT_PRODUCTS_SHEET).forEach(s => {
+      const q = num0_(s.current_qty);
+      costMap[String(s.unique_id)] = q > 0 ? num0_(s.total_cost_sign) / q : 0;
+    });
+    const custNames = {};
+    partyRefs_(dbId).forEach(c => { custNames[String(c.id)] = c.name; });
+    const prodNames = {};
+    productRefs_(dbId).forEach(p => { prodNames[String(p.id)] = p.name_ar; });
+
+    // Invoice date lookup for sales-line joins.
+    const invDate = {};
+    const invNum = {};
+    const invCustomer = {};
+    getAllRecords_(dbId, SALES_SHEET).forEach(inv => {
+      const uid = String(inv.invoice_unique_id);
+      invDate[uid] = timeOf_(inv['تاريخ الفاتورة']);
+      invNum[uid] = inv['رقم الفاتورة'] || '';
+      invCustomer[uid] = custNames[String(inv['اسم العميل'])] || '';
+    });
+
+    // ---- Revenue block: same math as getSalesCostingAnalysis_ ----
+    const lineAgg = {};
+    getAllRecords_(dbId, SALES_LINES_SHEET).forEach(l => {
+      const inv = String(l.top_lightsales_header_id);
+      const pid = String(l.product_id);
+      const unitCost = costMap[pid] != null ? costMap[pid] : 0;
+      if (!lineAgg[inv]) lineAgg[inv] = { costOrig: 0, qty: 0 };
+      lineAgg[inv].costOrig += num0_(l.product_qty) * unitCost;
+      lineAgg[inv].qty += num0_(l.product_qty);
+    });
+
+    // Returns: revenue impact + cost relief use only returns whose
+    // top_lightreturn_date falls in the period (period-correct, and this is
+    // what makes net revenue match the costing page whenever returns fall in
+    // the same period as their invoices). Pre-period returns still move the
+    // opening stock quantity via the before-bucket below.
+    const retAgg = {};
+    const retQtyByDate = { before: {}, inPeriod: {} };
+    getAllRecords_(dbId, SALES_RETURNS_SHEET).forEach(r => {
+      const pid = String(r.top_lightsales_products_id);
+      const unitCost = costMap[pid] != null ? costMap[pid] : 0;
+      // Quantity movement dated by top_lightreturn_date (independent of invoice date).
+      const t = timeOf_(r.top_lightreturn_date);
+      if (fromT != null && t && t < fromT) {
+        retQtyByDate.before[pid] = (retQtyByDate.before[pid] || 0) + num0_(r.top_lightreturn_qty);
+        return;
+      }
+      if (!inPeriod_(t)) return;
+      const inv = String(r.top_lightsales_invoices_id);
+      if (!retAgg[inv]) retAgg[inv] = { retValue: 0, retCost: 0 };
+      retAgg[inv].retValue += num0_(r.top_lightreturn_value) - num0_(r.top_lightreturn_discount);
+      retAgg[inv].retCost += num0_(r.top_lightreturn_qty) * unitCost;
+      retQtyByDate.inPeriod[pid] = (retQtyByDate.inPeriod[pid] || 0) + num0_(r.top_lightreturn_qty);
+    });
+
+    let gross = 0, netAmount = 0, discount = 0, tax = 0, returns = 0, net = 0, cost = 0, count = 0;
+    const revRows = [];
+    getAllRecords_(dbId, SALES_SHEET).forEach(inv => {
+      const uid = String(inv.invoice_unique_id);
+      const t = invDate[uid] || 0;
+      if (!inPeriod_(t)) return;
+      const la = lineAgg[uid] || { costOrig: 0 };
+      const ra = retAgg[uid] || { retValue: 0, retCost: 0 };
+      let n = num0_(inv['إجمالي']) - ra.retValue;
+      let c = Math.max(0, la.costOrig - ra.retCost);
+      if (n <= 0.05) { n = 0; c = 0; }
+      gross += num0_(inv['إجمالي']);
+      netAmount += num0_(inv['المبلغ الصافي']);
+      discount += num0_(inv['قيمة الخصم']);
+      tax += num0_(inv['قيمة الضريبة']);
+      returns += ra.retValue;
+      net += n;
+      cost += c;
+      count += 1;
+      revRows.push({
+        code: inv['رقم الفاتورة'] || '',
+        invoice_unique_id: uid,
+        date: parseDate_(inv['تاريخ الفاتورة']),
+        customer_name: custNames[String(inv['اسم العميل'])] || '',
+        gross: num0_(inv['إجمالي']),
+        discount: num0_(inv['قيمة الخصم']),
+        ret: ra.retValue,
+        net: n,
+        cost: c,
+        profit: n - c
+      });
+    });
+    revRows.sort(function (a, b) {
+      const na = parseInt(String(a.code).split('-')[0], 10) || 0;
+      const nb = parseInt(String(b.code).split('-')[0], 10) || 0;
+      return na - nb;
+    });
+    // COGS check value: net sales cost in period (sales cost − returns cost).
+    const cogsCheck = cost;
+    const grossProfit = net - cost;
+    const grossMargin = net > 0.05 ? (grossProfit / net) * 100 : 0;
+
+    // ---- Stock block: rebuild quantities from movement history ----
+    const startQty = {}, purchQtyIn = {}, salesQtyIn = {};
+    // Purchases dated by receipt_date.
+    let purchVal = 0;
+    const startDetail = [];
+    const purchDetail = [];
+    getAllRecords_(dbId, PURCHASING_LINES_SHEET).forEach(l => {
+      const pid = String((l.product == null) ? '' : l.product).trim();
+      if (!pid) return;
+      const t = timeOf_(l.receipt_date);
+      const q = num0_(l.qty);
+      if (fromT != null && t && t < fromT) {
+        startQty[pid] = (startQty[pid] || 0) + q;
+        return;
+      }
+      if (!inPeriod_(t)) return;
+      purchQtyIn[pid] = (purchQtyIn[pid] || 0) + q;
+      purchVal += num0_(l.total_cost);
+      purchDetail.push({ product_id: pid, product_name: prodNames[pid] || ('#' + pid), qty: q, total_cost: num0_(l.total_cost), receipt_date: parseDate_(l.receipt_date) });
+    });
+    // Sales out dated by joined invoice date.
+    getAllRecords_(dbId, SALES_LINES_SHEET).forEach(l => {
+      const pid = String(l.product_id);
+      const t = invDate[String(l.top_lightsales_header_id)] || 0;
+      const q = num0_(l.product_qty);
+      if (fromT != null && t && t < fromT) {
+        startQty[pid] = (startQty[pid] || 0) - q;
+        return;
+      }
+      if (!inPeriod_(t)) return;
+      salesQtyIn[pid] = (salesQtyIn[pid] || 0) + q;
+    });
+    // Returns in dated by top_lightreturn_date (already bucketed above).
+    Object.keys(retQtyByDate.before).forEach(pid => {
+      startQty[pid] = (startQty[pid] || 0) + retQtyByDate.before[pid];
+    });
+    const retQtyIn = retQtyByDate.inPeriod;
+
+    let startVal = 0, endVal = 0, salesCostIn = 0, retCostIn = 0;
+    const stockDetail = [];
+    const allPids = {};
+    [startQty, purchQtyIn, salesQtyIn, retQtyIn, costMap].forEach(m => {
+      Object.keys(m).forEach(pid => { allPids[pid] = true; });
+    });
+    Object.keys(allPids).forEach(pid => {
+      const unitCost = costMap[pid] != null ? costMap[pid] : 0;
+      const sq = startQty[pid] || 0;
+      if (sq > 0) startVal += sq * unitCost;
+      const eq = sq + (purchQtyIn[pid] || 0) - (salesQtyIn[pid] || 0) + (retQtyIn[pid] || 0);
+      if (eq > 0) endVal += eq * unitCost;
+      if (sq > 0) startDetail.push({ product_id: pid, product_name: prodNames[pid] || ('#' + pid), qty: sq, unit_cost: unitCost, value: sq * unitCost });
+      if (eq !== 0) stockDetail.push({ product_id: pid, product_name: prodNames[pid] || ('#' + pid), qty: eq, unit_cost: unitCost, value: eq > 0 ? eq * unitCost : 0 });
+      salesCostIn += (salesQtyIn[pid] || 0) * unitCost;
+      retCostIn += (retQtyIn[pid] || 0) * unitCost;
+    });
+    stockDetail.sort(function (a, b) { return b.value - a.value; });
+    startDetail.sort(function (a, b) { return b.value - a.value; });
+    purchDetail.sort(function (a, b) {
+      const ta = a.receipt_date instanceof Date ? a.receipt_date.getTime() : 0;
+      const tb = b.receipt_date instanceof Date ? b.receipt_date.getTime() : 0;
+      return ta - tb;
+    });
+    const cogs = startVal + purchVal - endVal;
+
+    // ---- Direct expenses: chart_account_main = 'التكاليف', amount = `total` ----
+    const expByName = {};
+    let expensesTotal = 0, expenseLines = 0;
+    getAllRecords_(dbId, CASH_SHEET).forEach(r => {
+      if (String((r.chart_account_main == null) ? '' : r.chart_account_main).trim() !== 'التكاليف') return;
+      const t = timeOf_(r.transaction_date);
+      if (!inPeriod_(t)) return;
+      const name = String((r.chart_name == null) ? '' : r.chart_name).trim() || '(بدون اسم حساب)';
+      const amt = num0_(r.total);
+      if (!expByName[name]) expByName[name] = { chart_name: name, amount: 0, count: 0 };
+      expByName[name].amount += amt;
+      expByName[name].count += 1;
+      expensesTotal += amt;
+      expenseLines += 1;
+    });
+    const expenses = Object.keys(expByName).map(k => expByName[k])
+      .sort(function (a, b) { return b.amount - a.amount; });
+
+    const netProfit = grossProfit - expensesTotal;
+    const netMargin = net > 0.05 ? (netProfit / net) * 100 : 0;
+
+    return {
+      summary: {
+        gross: gross,
+        netAmount: netAmount,
+        discount: discount,
+        tax: tax,
+        returns: returns,
+        net: net,
+        startVal: startVal,
+        purchVal: purchVal,
+        endVal: endVal,
+        cogs: cogs,
+        cogsCheck: cogsCheck,
+        cogsDiff: cogs - cogsCheck,
+        salesCostIn: salesCostIn,
+        retCostIn: retCostIn,
+        grossProfit: grossProfit,
+        grossMargin: grossMargin,
+        expensesTotal: expensesTotal,
+        expenseLines: expenseLines,
+        netProfit: netProfit,
+        netMargin: netMargin,
+        count: count
+      },
+      expenses: expenses,
+      revenueRows: revRows,
+      stockDetail: stockDetail,
+      startDetail: startDetail,
+      purchDetail: purchDetail
+    };
+  }
+
+  // =========================================
+  // Statement of financial position (قائمة المركز المالي) — balances as of
+  // date_to (defaults to today); period P&L over [date_from, date_to] comes
+  // from incomeStatementCore_ so both statements always agree.
+  // Assets: fixed = purchasing lines with 121100 ≤ movement_type ≤ 211100
+  //   (Σ total_cost, receipt_date ≤ as-of); cash = Σ balance_amount
+  //   (transaction_date ≤ as-of, excluding related_box 111103 — same
+  //   exclusion as the cash KPIs); AR = positive as-of party balances
+  //   (same engine as the tl_customers الرصيد column).
+  // Liabilities & equity: AP = negative as-of party balances; capital is a
+  //   fixed 20,000,000; owner running account is 0 unless recalc_running is
+  //   set, in which case it is recomputed to balance the statement.
+  // Single-pass aggregation per sheet — never per-party scans.
+  // =========================================
+  var TL_FIXED_CAPITAL = 14000000;
+  var TL_FOUNDATION_EXPENSES = 269130.999;
+
+  function getFinancialPosition_(data, user, dbId) {
+    const dateFrom = parseDate_(data && data.date_from);
+    const dateTo = parseDate_(data && data.date_to);
+    const asofT = dateTo instanceof Date ? dateTo.getTime() : new Date().getTime();
+    function asofOk_(v) {
+      if (v == null || v === '') return true;
+      const d = parseDate_(v);
+      if (!(d instanceof Date)) return true;
+      return d.getTime() <= asofT;
+    }
+
+    // ---- Fixed assets ----
+    const prodNames = {};
+    productRefs_(dbId).forEach(p => { prodNames[String(p.id)] = p.name_ar; });
+    let fixedAssets = 0;
+    const fixedLines = [];
+    getAllRecords_(dbId, PURCHASING_LINES_SHEET).forEach(l => {
+      const mt = Number(String((l.movement_type == null) ? '' : l.movement_type).trim());
+      if (!(mt >= 121100 && mt <= 211100)) return;
+      if (!asofOk_(l.receipt_date)) return;
+      const amt = num0_(l.total_cost);
+      fixedAssets += amt;
+      fixedLines.push({
+        product_name: prodNames[String(l.product)] || '',
+        movement_type: l.movement_type,
+        date: parseDate_(l.receipt_date),
+        amount: amt
+      });
+    });
+    fixedLines.sort(function (a, b) {
+      const ta = a.date instanceof Date ? a.date.getTime() : 0;
+      const tb = b.date instanceof Date ? b.date.getTime() : 0;
+      return ta - tb;
+    });
+
+    // ---- Cash (signed balance_amount column, summed directly) ----
+    const boxNames = boxNameMap_(dbId);
+    let cash = 0;
+    const boxMap = {};
+    getAllRecords_(dbId, CASH_SHEET).forEach(r => {
+      if (String((r.related_box == null) ? '' : r.related_box).trim() === '111103') return;
+      if (!asofOk_(r.transaction_date)) return;
+      const amt = Number(r.balance_amount) || 0;
+      cash += amt;
+      const b = String((r.related_box == null) ? '' : r.related_box).trim() || '(بدون صندوق)';
+      if (!boxMap[b]) boxMap[b] = { box: b, box_name: boxNames[b] || '', amount: 0 };
+      boxMap[b].amount += amt;
+    });
+    const boxes = Object.keys(boxMap).map(k => boxMap[k])
+      .sort(function (a, b) { return b.amount - a.amount; });
+
+    // ---- AR / AP — as-of party balances, single scan ----
+    const balAsOf = {};
+    customerRawMovements_(dbId).forEach(m => {
+      const t = m.date instanceof Date ? m.date.getTime() : 0;
+      if (t > asofT) return;
+      balAsOf[m.customer] = (balAsOf[m.customer] || 0) + m.amount;
+    });
+    const ar = [], ap = [];
+    let arTotal = 0, apTotal = 0;
+    partyRefs_(dbId).forEach(p => {
+      if (String(p.id) === '19') return; // excluded from SFP AR/AP by policy
+      const b = balAsOf[String(p.id)] || 0;
+      if (b > 0) {
+        ar.push({ id: p.id, name: p.name, direction: normalizeDirection_(p.customer_direction) || p.customer_direction, balance: b });
+        arTotal += b;
+      } else if (b < 0) {
+        ap.push({ id: p.id, name: p.name, direction: normalizeDirection_(p.customer_direction) || p.customer_direction, balance: -b });
+        apTotal += -b;
+      }
+    });
+    ar.sort(function (a, b) { return b.balance - a.balance; });
+    ap.sort(function (a, b) { return b.balance - a.balance; });
+
+    // ---- Equity ----
+    const pnl = incomeStatementCore_(dbId, dateFrom, dateTo);
+    const periodProfit = pnl.summary.netProfit;
+    // Stock as of the as-of date: same movement engine with an open start,
+    // so it always agrees with the income statement's ending stock.
+    const stockAsOf = incomeStatementCore_(dbId, '', dateTo);
+    const stock = stockAsOf.summary.endVal;
+    const stockDetail = stockAsOf.stockDetail;
+    const capital = TL_FIXED_CAPITAL;
+    const totalAssets = fixedAssets + cash + arTotal + stock + TL_FOUNDATION_EXPENSES;
+    let running = 0;
+    if (data && (data.recalc_running === true || data.recalc_running === 'true')) {
+      running = totalAssets - apTotal - capital - periodProfit;
+    }
+    const totalEquity = capital + running + periodProfit;
+    const totalLiabEquity = apTotal + totalEquity;
+    const balanceDiff = totalAssets - totalLiabEquity;
+    const currentAssets = cash + arTotal + stock + TL_FOUNDATION_EXPENSES;
+
+    return {
+      status: 'success',
+      asof: dateTo instanceof Date ? dateTo : new Date(),
+      summary: {
+        fixedAssets: fixedAssets,
+        fixedCount: fixedLines.length,
+        cash: cash,
+        arTotal: arTotal,
+        arCount: ar.length,
+        stock: stock,
+        stockCount: stockDetail.length,
+        foundation: TL_FOUNDATION_EXPENSES,
+        currentAssets: currentAssets,
+        totalAssets: totalAssets,
+        apTotal: apTotal,
+        apCount: ap.length,
+        capital: capital,
+        running: running,
+        runningRecalculated: !!(data && (data.recalc_running === true || data.recalc_running === 'true')),
+        periodProfit: periodProfit,
+        totalEquity: totalEquity,
+        totalLiabEquity: totalLiabEquity,
+        balanceDiff: balanceDiff
+      },
+      boxes: boxes,
+      ar: ar,
+      ap: ap,
+      fixedLines: fixedLines,
+      stockDetail: stockDetail,
+      pnlSummary: pnl.summary
+    };
+  }
+
+  // =========================================
   // Cash movement report
   // =========================================
   function companyArabicName_() {
     try {
-      const sheet = getSheet_('ERP_Companies', CONFIG.AUTH_SPREADSHEET_ID);
-      const headers = getHeaders_(sheet);
-      const data = sheet.getDataRange().getValues();
-      const uidIdx = headers.findIndex(h => String(h).trim().toLowerCase() === 'company_unique_id');
-      const arIdx = headers.findIndex(h => String(h).trim().toLowerCase() === 'company_name_ar');
-      const row = data.slice(1).find(r => uidIdx !== -1 && String(r[uidIdx]).trim() === '8df5c89a117fe9a5');
-      return (row && arIdx !== -1) ? String(row[arIdx]).trim() : 'شركة القمة لايت';
+      const row = systemFindByBusinessKey_('ERP_Companies', 'company_unique_id', '8df5c89a117fe9a5');
+      return row ? String(row.company_name_ar || '').trim() : 'شركة القمة لايت';
     } catch (e) { return 'شركة القمة لايت'; }
   }
 
@@ -3643,6 +4008,8 @@ const TopLight = (function () {
   register('approve_sales_offer', approveSalesOffer_);
   register('get_sales_analysis', getSalesAnalysis_);
   register('get_sales_costing_analysis', getSalesCostingAnalysis_);
+  register('get_income_statement', getIncomeStatement_);
+  register('get_financial_position', getFinancialPosition_);
   register('get_cash_report', getCashReport_);
   register('get_xlsx_export', getXlsxExport_);
   register('get_purchase_needs', getPurchaseNeeds_);

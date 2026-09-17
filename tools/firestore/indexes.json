@@ -1,0 +1,57 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "ERP_Sessions",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "email", "order": "ASCENDING" },
+        { "fieldPath": "revoked", "order": "ASCENDING" },
+        { "fieldPath": "last_activity", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "ERP_User_Views",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "email", "order": "ASCENDING" },
+        { "fieldPath": "page_action", "order": "ASCENDING" },
+        { "fieldPath": "is_default", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "ERP_Pages_Matrix",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "role", "order": "ASCENDING" },
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "page_id", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "ERP_Record_History",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "changed_at", "order": "DESCENDING" },
+        { "fieldPath": "record_uid", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "ERP_History_Queue",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "state", "order": "ASCENDING" },
+        { "fieldPath": "queued_at", "order": "ASCENDING" },
+        { "fieldPath": "claimed_at", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "ERP_Perf_Log",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "ts", "order": "ASCENDING" },
+        { "fieldPath": "action", "order": "ASCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}

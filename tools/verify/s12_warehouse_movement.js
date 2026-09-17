@@ -268,6 +268,9 @@ if (BLOCK_START !== -1 && BLOCK_END > BLOCK_START) {
   ];
   const PARTIES = [{ id: 18, name: 'مورد افتراضي' }];
   const EMPLOYEES = [{ emp_id: 'E-1', name: 'أحمد' }];
+  /* New records reference valley_dept_section_index[section], not employees.
+     E-1 stays in the employee fixture so history rows still resolve. */
+  const SECTIONS = [{ section: 'مخزن الخامات' }, { section: 'مخزن الإنتاج' }];
   const PRODUCTS = [{ id: '9', name_ar: 'سكر', unit: 'شيكارة' }];
 
   const TABLES = {
@@ -278,6 +281,7 @@ if (BLOCK_START !== -1 && BLOCK_END > BLOCK_START) {
     'valley_warehouse_movement': EXISTING_MOVES,
     'valley_legal_customer_vendor': PARTIES,
     'valley_employee_info': EMPLOYEES,
+    'valley_dept_section_index': SECTIONS,
     'valley_products': PRODUCTS
   };
 
@@ -369,7 +373,7 @@ if (BLOCK_START !== -1 && BLOCK_END > BLOCK_START) {
     item: 'BATCH-A',
     qty: 4,
     vendor: '18',
-    responsible_person: 'E-1',
+    responsible_person: 'مخزن الخامات',
     notes: 'صرف للإنتاج',
     /* the client is lying about all three; the server must ignore them */
     available: 999999,
@@ -462,12 +466,16 @@ if (BLOCK_START !== -1 && BLOCK_END > BLOCK_START) {
   check(!!throws(() => H.save(Object.assign({}, payload, { qty: 0 }),
     { email: 'u@v.t' }, 'db')), 'qty of zero is refused');
   check(!!throws(() => H.save(Object.assign({}, payload, { responsible_person: 'E-404' }),
-    { email: 'u@v.t' }, 'db')), 'an unknown responsible person is refused');
+    { email: 'u@v.t' }, 'db')), 'an unknown section is refused');
+  check(!!throws(() => H.save(Object.assign({}, payload, { responsible_person: 'E-1' }),
+    { email: 'u@v.t' }, 'db')), 'an employee id is no longer accepted as the responsible person — only a valley_dept_section_index section');
+  check(!!throws(() => H.save(Object.assign({}, payload, { responsible_person: 'أمين مخزن' }),
+    { email: 'u@v.t' }, 'db')), 'a job title is not accepted either — only a section');
 
   /* -- 8e. the unit falls back to valley_products when the batch has none -- */
   reset();
   H.save({ movement_date: '2026-09-06', movement_type: 'منصرف', item: 'BATCH-B',
-    qty: 1, responsible_person: 'E-1' }, { email: 'u@v.t' }, 'db');
+    qty: 1, responsible_person: 'مخزن الخامات' }, { email: 'u@v.t' }, 'db');
   check(writtenRow(0).unit === 'شيكارة',
     'a batch with no unit falls back to valley_products.unit via product_id',
     'got ' + writtenRow(0).unit);
@@ -477,7 +485,7 @@ if (BLOCK_START !== -1 && BLOCK_END > BLOCK_START) {
   const shared = {
     movement_date: '2026-09-06',
     movement_type: 'منصرف',
-    responsible_person: 'E-1',
+    responsible_person: 'مخزن الخامات',
     vendor: '18'
   };
 
@@ -785,3 +793,4 @@ async function renderList(canCost) {
   if (failed) { console.log('S12 — ' + failed + ' check(s) FAILED.\n'); process.exit(1); }
   console.log('S12 — all checks pass.\n');
 })();
+

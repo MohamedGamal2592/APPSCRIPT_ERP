@@ -16,6 +16,7 @@ const vm = require('vm');
 const S = require('../lib/sources');
 
 const ROOT = path.resolve(__dirname, '..', '..');
+const helper = fs.readFileSync(path.join(ROOT, 'JS_Simplification_Helpers.js'), 'utf8');
 
 let failures = 0;
 function ok(cond, label, extra) {
@@ -120,6 +121,7 @@ function buildSandbox() {
     updateRowByCriteria_: function () { return true; }, logHistory_: function () {}
   };
   vm.createContext(sandbox);
+  vm.runInContext(helper, sandbox, { filename: 'JS_Simplification_Helpers.js' });
   vm.runInContext(actionsSrc, sandbox, { filename: 'Company_Assessment_Actions.js' });
   return { sandbox: sandbox, AC: vm.runInContext('AssessmentCenter', sandbox) };
 }
@@ -194,3 +196,4 @@ console.log('\nCode.js — the company_public_action route\n');
 console.log('');
 if (failures) { console.log(failures + ' assertion(s) FAILED'); process.exit(1); }
 console.log('ac1_wiring: all assertions pass.');
+

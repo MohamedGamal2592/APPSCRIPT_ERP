@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>فاتورة مبيعات</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= getCompanyThemeCSS_('9940659bd83035d7') ?>
+  <style>
+    @media print {
+      .no-print { display: none !important; }
+      body { background: var(--bg-surface, #fff) !important; }
+      .invoice { border: none !important; }
+    }
+    .invoice { max-width: 900px; margin: 0 auto; padding: 24px; background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: 8px; }
+    .invoice-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; border-bottom: 2px solid var(--brand-primary); padding-bottom: 16px; }
+    .invoice-title { font-size: 22px; font-weight: 700; color: var(--brand-primary); }
+    .invoice-meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px 16px; margin-bottom: 20px; }
+    .meta-item { font-size: 13px; }
+    .meta-item strong { color: var(--text-muted); font-weight: 600; }
+    @media print, (min-width: 600px) {
+      .inv-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 20px; }
+      .inv-table th, .inv-table td { border: 1px solid var(--border-color); padding: 8px 10px; text-align: right; }
+      .inv-table th { background: var(--bg-subtle); font-weight: 600; }
+    }
+    .inv-totals { margin-right: auto; width: min(320px, 100%); font-size: 14px; }
+    .inv-totals .row { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border-color); }
+    .inv-totals .row.total { font-weight: 700; font-size: 16px; color: var(--brand-primary); border-bottom: none; }
+    .alloc-sub { font-size: 11px; color: var(--text-muted); }
+  </style>
+</head>
+<body>
+<div id="invoice-root" dir="rtl"></div>
+<script>
+  /* Query params arrive via the server (pageParams) — window.location.search is
+     empty inside the Apps Script iframe (see s23_page_params). */
+  var PAGE_PARAMS = <?!= pageParams ?>;
+  var params = new URLSearchParams(window.location.search);
+  var SESSION_TOKEN = (PAGE_PARAMS && PAGE_PARAMS.sessionToken) || params.get('sessionToken') || (API.getSession() || {}).token || '';
+  var INVOICE_UID = (PAGE_PARAMS && PAGE_PARAMS.invoice_unique_id) ? String(PAGE_PARAMS.invoice_unique_id) : '';
+
+  function backUrl_() {
+    return UIC.baseUrl() + '?action=vf_sales&sessionToken=' + encodeURIComponent(SESSION_TOKEN);
+  }
+  var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('9940659bd83035d7') ?>';
+
+  function companyCall(moduleAction, data) {
+    return API.call('company_action', {
+      target_system: '9940659bd83035d7',
+      module_action: moduleAction,
+      data: data || {}
+    }, SESSION_TOKEN);
+  }
+
+  function fmtDate(v) {
+    if (!v) return '-';
+    var d = (v instanceof Date) ? v : new Date(v);
+    if (isNaN(d.getTime())) return String(v);
+    var p = function (n) { return n < 10 ? '0' + n : '' + n; };
+    return p(d.getDate()) + '/' + p(d.getMonth() + 1) + '/' + d.getFullYear();
+  }
+  function fmtNum(n) { return (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2 }); }
+  /* Server line shapes vary (get_valley_invoice_full uses product_qty /
+     product_price / product_tax / product_details; drafts use short names).
+     Take the first usable value so neither shape prints blank. */
+  function num() {
+    for (var i = 0; i < arguments.length; i++) {
+      var n = Number(arguments[i]);
+      if (arguments[i] !== '' && arguments[i] !== null && arguments[i] !== undefined && !isNaN(n)) return n;
+    }
+    return 0;
+  }
+  function str() {
+    for (var j = 0; j < arguments.length; j++) {
+      if (arguments[j] !== '' && arguments[j] !== null && arguments[j] !== undefined) return String(arguments[j]);
+    }
+    return '';
+  }
+  function enumLabel(list, v) {
+    var f = (list || []).filter(function (o) { return String(o.value) === String(v); })[0];
+    return f ? f.label : (v != null && v !== '' ? v : '-');
+  }
+
+  function load() {
+    if (!INVOICE_UID) {
+      document.getElementById('invoice-root').innerHTML =
+        '<div class="empty-state"><span>لا توجد فاتورة محددة</span></div>';
+      return;
+    }
+    UIC.readSkeleton('invoice-root', { message: [
+      'جاري تحميل فاتورة المبيعات...',
+      'جاري استرجاع البنود والدفعات...',
+      'لحظة، جاري تجهيز الفاتورة للطباعة...'
+    ] });
+    Promise.all([
+      companyCall('get_valley_invoice_full', { invoice_unique_id: INVOICE_UID }),
+      companyCall('get_valley_sales_bootstrap', {}).catch(function () { return {}; })
+    ])
+      .then(function (rs) { renderInvoice(rs[0], rs[1] || {}); })
+      .catch(function (e) {
+        document.getElementById('invoice-root').innerHTML =
+          '<div class="empty-state"><span>' + FMT.escape(e.message || 'خطأ') + '</span></div>';
+      })
+      .finally(function () { UI.hideSpinner(); try{schedulePrefetch();}catch(e){} });
+  }
+
+  var COLS = ['المنتج', 'تفاصيل', 'الكمية', 'السعر', 'الضريبة', 'الإجمالي'];
+  function row_(cells) {
+    return '<tr>' + cells.map(function (c, i) {
+      return '<td data-label="' + FMT.escape(COLS[i]) + '">' + c + '</td>';
+    }).join('') + '</tr>';
+  }
+  function head_() {
+    return '<thead><tr>' + COLS.map(function (c) { return '<th>' + c + '</th>'; }).join('') + '</tr></thead>';
+  }
+  function metaItem(label, value) {
+    return '<div class="meta-item"><strong>' + label + ': </strong>' + FMT.escape(value != null && value !== '' ? String(value) : '-') + '</div>';
+  }
+  function prodLabel(products, pid) {
+    var f = (products || []).filter(function (o) { return String(o.value) === String(pid); })[0];
+    return f ? f.label : (pid || '-');
+  }
+
+  function renderInvoice(res, boot) {
+    var inv = res.invoice || res.record || {};
+    var lines = res.lines || [];
+    var enums = boot.enums || {};
+    var parties = boot.parties || [];
+    var products = boot.products || [];
+    var party = parties.filter(function (o) { return String(o.value) === String(inv['اسم العميل']); })[0] || {};
+
+    var rows = lines.map(function (l) {
+      var qty = num(l.product_qty, l.qty), price = num(l.product_price, l.price), tax = num(l.product_tax, l.tax);
+      var total = qty * price * (1 + tax);
+      var allocs = (l.allocations || []).map(function (a) {
+        return '<div class="alloc-sub">الدفعة: <b>' + FMT.escape(a.lot || a.batch_uid) + '</b> — الكمية: <span class="num">' + fmtNum(a.qty) + '</span></div>';
+      }).join('');
+      return row_([
+        FMT.escape(l.product_name || prodLabel(products, l.product_id)) + allocs,
+        FMT.escape(str(l.product_details, l.details) || '-'),
+        '<span class="num">' + fmtNum(qty) + '</span>',
+        '<span class="num">' + fmtNum(price) + '</span>',
+        '<span class="num">' + Math.round(tax * 100) + '%</span>',
+        '<span class="num">' + fmtNum(total) + '</span>'
+      ]);
+    }).join('');
+
+    var html =
+      '<div class="no-print" style="max-width:900px;margin:12px auto;display:flex;justify-content:flex-end;gap:8px;">' +
+      '<button class="btn btn-primary" onclick="window.print()">طباعة</button>' +
+      '<button class="btn btn-outline" onclick="UIC.closeOrBack(backUrl_())">إغلاق</button>' +
+      '</div>' +
+      '<div class="invoice">' +
+      '<div class="invoice-head">' +
+      '<img src="' + (COMPANY_LOGO_URL || '') + '" style="height:42px;" alt="">' +
+      '<div class="invoice-title">فاتورة مبيعات</div>' +
+      '</div>' +
+      '<div class="invoice-meta">' +
+      metaItem('رقم الفاتورة', inv['رقم الفاتورة']) +
+      metaItem('تاريخ الفاتورة', fmtDate(inv['تاريخ الفاتورة'])) +
+      metaItem('العميل', party.label || inv['اسم العميل']) +
+      metaItem('الرقم الضريبي', party.tax_id) +
+      metaItem('الهاتف', party.phone) +
+      metaItem('العنوان', party.address) +
+      metaItem('نوع الضريبة', enumLabel(enums.class_tax, inv['نوع الضريبة (سلع عامة 1/سلع جدول 2)'])) +
+      metaItem('نوع البيان', enumLabel(enums.class_statement, inv['نوع البيان (سلعة 3/خدمة 4/تسويات 5)'])) +
+      metaItem('نوع السلعة', enumLabel(enums.class_goods, inv['نوع السلعة (محلي 1/صادرات 2/آلات ومعدات 5/أجزاء آلات 6/إعفاءات 7)'])) +
+      metaItem('الحالة', inv.approval_status === 'Approved' ? 'معتمد' : 'قيد الانتظار') +
+      '</div>' +
+      '<table class="inv-table">' + head_() + '<tbody>' + rows + '</tbody></table>' +
+      '<div class="inv-totals">' +
+      '<div class="row"><span>المبلغ الصافي</span><span class="num">' + fmtNum(inv['المبلغ الصافي']) + '</span></div>' +
+      '<div class="row"><span>قيمة الضريبة</span><span class="num">' + fmtNum(inv['قيمة الضريبة']) + '</span></div>' +
+      '<div class="row total"><span>الإجمالي</span><span class="num">' + fmtNum(inv['إجمالي']) + ' ج.م</span></div>' +
+      '</div>' +
+      '</div>';
+
+    document.getElementById('invoice-root').innerHTML = html;
+  }
+
+  document.addEventListener('DOMContentLoaded', load);
+</script>
+</body>
+</html>

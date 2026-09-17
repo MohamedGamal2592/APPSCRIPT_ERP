@@ -139,7 +139,7 @@ const group = NAV.match(groupRe);
 ok(!!group, 'the تحليلات النظام الرئيسي nav group is present');
 if (group) {
   const items = (group[1].match(/action: '(\w+)'/g) || []).map(function (s) { return s.slice(9, -1); });
-  ok(items.length === 3, 'the group now has three items (tc_main_review + tc_client_balance_sheets + tc_box_analysis)', items.join(', '));
+  ok(items.length === 5, 'the group now has five items (tc_main_review + tc_client_balance_sheets + tc_box_analysis + tc_manufacture_orders + tc_products_live)', items.join(', '));
   ok(items.indexOf('tc_main_review') !== -1, 'the existing item is still there');
   ok(items.indexOf(PAGE) !== -1, 'the new item is beside it');
 }
@@ -242,7 +242,7 @@ if (fs.existsSync(path.join(ROOT, PREVIEW))) {
 console.log('the precompute is written but NOT installed');
 ok(/^function rebuildBoxAnalysisIndex\(\) \{/m.test(ACTIONS),
   'rebuildBoxAnalysisIndex is a global with NO trailing underscore, so the trigger dialog lists it');
-ok(ACTIONS.indexOf('rebuildBoxAnalysisIndex_') !== -1, 'and it delegates into the namespace');
+ok(ACTIONS.indexOf('TopChemical.rebuildBoxAnalysisIndex_') !== -1, 'and it delegates into the namespace');
 ok(!/ScriptApp\s*\.\s*newTrigger/.test(ACTIONS),
   'nothing in the actions file creates a trigger');
 ['Box_Analysis_Engine.js', 'DbLive_Connector.js', TEMPLATE + '.html'].forEach(function (f) {
@@ -267,3 +267,4 @@ console.log(failures === 0
   ? '\nAll wiring checks pass.'
   : '\n' + failures + ' wiring check(s) FAILED.');
 process.exit(failures === 0 ? 0 : 1);
+

@@ -103,15 +103,118 @@ window.addEventListener('unhandledrejection', function (e) {
  *
  * Read-only from the outside. Nothing decides anything from it except the queue
  * entry it stamps at save time, and an entry with no stamp is not queued. */
+/* A save keeps its request ID through transport failures, queue replays and
+ * reloads in this tab. No payload contents or session tokens are persisted here.
+ * A completed save is removed from the pending index, allowing a NEW form with
+ * identical values to be a separate legitimate transaction.
+ */
+API._requestGuard = (function () {
+  var STORAGE_KEY = 'erp_pending_write_requests_v1';
+  var flights = Object.create(null), forms = Object.create(null);
+  function canonical(value) {
+    if (value === null || typeof value !== 'object') return JSON.stringify(value);
+    if (Array.isArray(value)) return '[' + value.map(canonical).join(',') + ']';
+    return '{' + Object.keys(value).sort().map(function (k) { return JSON.stringify(k) + ':' + canonical(value[k]); }).join(',') + '}';
+  }
+  function hash(text) {
+    var a = 2166136261, b = 5381;
+    for (var i = 0; i < text.length; i++) { a = Math.imul(a ^ text.charCodeAt(i), 16777619); b = Math.imul(b, 33) ^ text.charCodeAt(i); }
+    return (a >>> 0).toString(16) + '_' + (b >>> 0).toString(16);
+  }
+  function read() {
+    try {
+      var value = JSON.parse(window.sessionStorage.getItem(STORAGE_KEY) || '{}');
+      if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid pending-request index');
+      return value;
+    } catch (e) { throw { status: 'error', code: 'REQUEST_STORAGE_UNAVAILABLE', message: 'تعذر حفظ رقم الطلب في المتصفح. فعّل تخزين الجلسة قبل الحفظ لتجنب التكرار.' }; }
+  }
+  function persist(value) {
+    try { window.sessionStorage.setItem(STORAGE_KEY, JSON.stringify(value)); }
+    catch (e) { throw { status: 'error', code: 'REQUEST_STORAGE_UNAVAILABLE', message: 'تعذر حفظ رقم الطلب؛ لم يُرسل الطلب. تحقق من مساحة تخزين المتصفح.' }; }
+  }
+  function id() {
+    if (window.crypto && window.crypto.randomUUID) return window.crypto.randomUUID();
+    var values = new Uint32Array(4);
+    if (window.crypto && window.crypto.getRandomValues) window.crypto.getRandomValues(values);
+    else for (var i = 0; i < values.length; i++) values[i] = Math.floor(Math.random() * 4294967296);
+    return Array.prototype.map.call(values, function (v) { return ('00000000' + v.toString(16)).slice(-8); }).join('');
+  }
+  function formData(form, data) {
+    if (!form || !data) return data;
+    var stamp = hash(canonical(JSON.parse(JSON.stringify(data))));
+    if (!form.__erpWriteIntent || form.__erpWriteIntent.stamp !== stamp) form.__erpWriteIntent = {stamp:stamp,id:id()};
+    var formId = form.__erpWriteIntent.id;
+    forms[formId] = form;
+    Object.defineProperty(data, '__request_form_id', {value:formId,enumerable:false});
+    return data;
+  }
+  function prepare(action, payload, sessionToken) {
+    if (action !== 'company_action' || /^(get_|list_|prefetch_|preview_|search_|check_|validate_|export_|lookup_|ping$)/.test(String(payload.module_action || ''))) return null;
+    var data = payload.data || (payload.data = {});
+    if (!data || typeof data !== 'object' || Array.isArray(data)) throw { status:'error', message:'Invalid write payload' };
+    var clean = JSON.parse(JSON.stringify(data)); delete clean.__request_id; delete clean.__request_owner;
+    var session = API.getSession ? API.getSession() || {} : {};
+    var who = String((session.user && session.user.email) || session.email || '').trim().toLowerCase();
+    if (!who) throw {status:'error',code:'REQUEST_LOGIN_REQUIRED',message:'أعد تسجيل الدخول لتثبيت هوية الطلب قبل الحفظ.'};
+    if (data.__request_owner && data.__request_owner !== who) throw {status:'error',code:'REQUEST_OWNER_MISMATCH',uncertain:true,message:'هذا الطلب المؤجل يخص مستخدمًا آخر. سجّل الدخول بالحساب الأصلي لمراجعته.'};
+    var signature = hash(JSON.stringify([who,payload.target_system,payload.module_action])) + ':' + hash(canonical(clean));
+    var pending = read(), existing = pending[signature];
+    var requestId = data.__request_id || (existing && existing.id) || data.__request_form_id || id();
+    if (!/^[A-Za-z0-9_-]{16,100}$/.test(String(requestId))) throw {status:'error',message:'Invalid request ID'};
+    var flightKey = signature + ':' + requestId;
+    data.__request_id = requestId; data.__request_owner = who;
+    if (flights[flightKey]) return flights[flightKey];
+    if (!existing && Object.keys(pending).length >= 500) throw {status:'error',message:'يوجد عدد كبير من الطلبات غير المؤكدة؛ راجعها مع المسؤول قبل إضافة طلبات أخرى.'};
+    pending[signature] = {id:requestId}; persist(pending);
+    var entry = {key:flightKey,signature:signature,id:requestId,formId:data.__request_form_id,promise:null};
+    flights[flightKey] = entry;
+    return entry;
+  }
+  function finish(entry, result, error) {
+    if (!entry) return;
+    delete flights[entry.key];
+    // Even an auth rejection may follow an earlier attempt whose reply was lost.
+    // The retained intent is released only when the server confirms success or
+    // explicitly confirms that no mutation occurred (notApplied).
+    if (error) return;
+    if (result && result.notApplied === true) {
+      try {
+        var pending = read();
+        if (pending[entry.signature] && pending[entry.signature].id === entry.id) { delete pending[entry.signature]; persist(pending); }
+      } catch (e) { /* Keeping a receipt after success is safer than losing an uncertain one. */ }
+      return;
+    }
+    if (entry.formId && forms[entry.formId]) {
+      var form = forms[entry.formId];
+      if (form.__erpWriteIntent && form.__erpWriteIntent.id === entry.formId) delete form.__erpWriteIntent;
+      delete forms[entry.formId];
+    }
+    try {
+      var pending = read();
+      if (pending[entry.signature] && pending[entry.signature].id === entry.id) { delete pending[entry.signature]; persist(pending); }
+    } catch (e) { /* Keeping a receipt after success is safer than losing an uncertain one. */ }
+  }
+  return {prepare:prepare,finish:finish,formData:formData};
+})();
+
 API.call = function (action, payload, sessionToken) {
   if (payload && payload.target_system) API._lastTarget = payload.target_system;
-  return new Promise(function (resolve, reject) {
-    var request = { action: action, payload: payload || {} };
+  payload = payload || {};
+  var intent;
+  try { intent = API._requestGuard.prepare(action, payload, sessionToken); } catch (e) { return Promise.reject(e); }
+  if (intent && intent.promise) return intent.promise;
+  var wire = new Promise(function (resolve, reject) {
+    var request = { action: action, payload: intent ? JSON.parse(JSON.stringify(payload)) : payload }; 
     if (sessionToken) request.sessionToken = sessionToken;
 
     google.script.run
       .withSuccessHandler(function (result) {
-        if (result && result.status === 'error') {
+        if (result && result.notApplied === true) {
+          /* Server-confirmed non-mutation: release the retained request so a
+             corrected save starts clean, then reject for the toast. */
+          API._requestGuard.finish(intent, result, null);
+          reject(result);
+        } else if (result && result.status === 'error') {
           /* Redirect targets MUST be absolute: inside the HtmlService sandbox
            * the executing origin is a *.googleusercontent.com iframe, so a
            * relative '/' would land on Google Drive's error page. */
@@ -121,26 +224,29 @@ API.call = function (action, payload, sessionToken) {
           } else if (result.code === 'SYSTEM_DISABLED') {
             if (window.UIC && UIC.navTo) UIC.navTo(null, _s + '?action=login&shutdown=1'); else window.location.href = _s + '?action=login&shutdown=1';
           }
+          API._requestGuard.finish(intent, null, result);
           reject(result);
         } else {
+          API._requestGuard.finish(intent, result, null);
           resolve(result);
         }
       })
       .withFailureHandler(function (err) {
-        /* [RT-4] `transport: true` marks a failure that never reached a
-         * handler — the network dropped, the sandbox was torn down, the device
-         * went offline. It is the ONLY kind of failure worth retrying: a
-         * handler that rejected the payload will reject it again, and retrying
-         * a validation error just means showing the same error four times.
-         * UIC.Live.save reads this and nothing else to decide. */
-        reject({
-          status: 'error',
-          transport: true,
-          message: err && err.message ? err.message : 'خطأ غير متوقع'
-        });
+        /* The response can be lost AFTER commit; reuse the original request ID. */
+        var failure = {
+          status: 'error', transport: true, uncertain: !!intent,
+          message: intent ? 'انقطع الاتصال؛ قد يكون الطلب حُفظ. أعد المحاولة بنفس الطلب ولا تنشئ طلبًا بديلًا قبل التحقق.' : (err && err.message ? err.message : 'خطأ غير متوقع')
+        };
+        API._requestGuard.finish(intent, null, failure);
+        reject(failure);
       })
       .apiRouter(request);
   });
+  if (intent) intent.promise = wire;
+  wire.catch(function (err) {
+    if (err && !err.status) { err.transport = true; err.uncertain = !!intent; API._requestGuard.finish(intent, null, err); }
+  });
+  return wire;
 };
 
 /* F-18: xlsx.full.min.js is ~900 KB and was a top-level <script> here, so all 83

@@ -1,0 +1,912 @@
+<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>أوامر التصنيع — manufacture_headers</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_TopChemical_Nav'); ?>
+  <?!= getCompanyThemeCSS_('3fe1b5cb67b7223e') ?>
+  <style>
+    .mo-wrapper {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      padding: 4px 0;
+    }
+
+    /* ── header card ── */
+    .mo-header-card {
+      background: var(--bg-surface, #fff);
+      border: 1px solid var(--border-color, #e2e8f0);
+      border-radius: 12px;
+      padding: 16px 20px;
+      box-shadow: 0 1px 3px rgba(0,0,0,.06);
+    }
+    .mo-header-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+    .mo-heading {
+      font-size: 17px;
+      font-weight: 700;
+      color: var(--text-primary, #0f172a);
+      margin: 0 0 4px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .mo-subheading {
+      font-size: 12px;
+      color: var(--text-muted, #64748b);
+      margin: 0;
+    }
+    .mo-badges {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+    .mo-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 3px 10px;
+      border-radius: 8px;
+      font-size: 12px;
+      background: var(--bg-subtle, #f8fafc);
+      border: 1px solid var(--border-color, #e2e8f0);
+      color: var(--text-secondary, #334155);
+    }
+    .mo-badge b { color: var(--brand-primary, #0284c7); }
+
+    /* ── toolbar ── */
+    .mo-toolbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 10px;
+      padding-top: 14px;
+      border-top: 1px solid var(--border-color, #e2e8f0);
+    }
+    .mo-search-box {
+      position: relative;
+      flex: 1;
+      min-width: 220px;
+      max-width: 380px;
+    }
+    .mo-search-input {
+      width: 100%;
+      padding: 8px 12px 8px 30px;
+      border: 1px solid var(--border-color, #cbd5e1);
+      border-radius: 8px;
+      font-size: 13px;
+      background: var(--bg-surface, #fff);
+      color: var(--text-primary, #0f172a);
+      outline: none;
+      transition: border-color .2s, box-shadow .2s;
+    }
+    .mo-search-input:focus {
+      border-color: var(--brand-primary, #0284c7);
+      box-shadow: 0 0 0 2px rgba(2,132,199,.12);
+    }
+    .mo-search-clear {
+      position: absolute;
+      left: 9px;
+      top: 50%;
+      transform: translateY(-50%);
+      cursor: pointer;
+      color: var(--text-muted, #94a3b8);
+      font-size: 13px;
+      display: none;
+    }
+
+    /* ── table card ── */
+    .mo-table-card {
+      background: var(--bg-surface, #fff);
+      border: 1px solid var(--border-color, #e2e8f0);
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 1px 3px rgba(0,0,0,.06);
+    }
+    .mo-table-scroll {
+      width: 100%;
+      overflow-x: auto;
+    }
+    .mo-tbl {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+      white-space: nowrap;
+    }
+    .mo-tbl thead th {
+      background: var(--bg-subtle, #f1f5f9);
+      color: var(--text-secondary, #334155);
+      font-weight: 700;
+      padding: 9px 13px;
+      border-bottom: 2px solid var(--border-color, #cbd5e1);
+      text-align: right;
+      position: sticky;
+      top: 0;
+      z-index: 2;
+    }
+    .mo-tbl tbody tr {
+      border-bottom: 1px solid var(--border-color, #f1f5f9);
+      transition: background .12s;
+    }
+    .mo-tbl tbody tr:hover { background: var(--brand-subtle-bg, #f0f9ff); }
+    .mo-tbl td {
+      padding: 9px 13px;
+      color: var(--text-primary, #0f172a);
+      vertical-align: middle;
+    }
+
+    /* ── inline footer sub-table ── */
+    .mo-foot-row td {
+      background: var(--bg-subtle, #f8fafc);
+      padding: 0;
+    }
+    .mo-foot-wrap { padding: 10px 14px 14px; }
+    .mo-foot-title {
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--text-secondary, #334155);
+      margin: 4px 0 8px;
+    }
+    .mo-foot-tbl {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+      background: var(--bg-surface, #fff);
+      border: 1px solid var(--border-color, #e2e8f0);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .mo-foot-tbl th {
+      background: var(--bg-subtle, #f1f5f9);
+      padding: 7px 10px;
+      text-align: right;
+      font-weight: 700;
+      border-bottom: 1px solid var(--border-color, #e2e8f0);
+    }
+    .mo-foot-tbl td {
+      padding: 6px 10px;
+      border-bottom: 1px solid var(--border-color, #f1f5f9);
+    }
+    .mo-foot-tbl tr.mo-draft-row td { background: #fffbeb; }
+    .mo-inline-input {
+      width: 100%;
+      min-width: 90px;
+      padding: 5px 8px;
+      border: 1px solid var(--border-color, #cbd5e1);
+      border-radius: 6px;
+      font-size: 12px;
+      background: var(--bg-surface, #fff);
+      color: var(--text-primary, #0f172a);
+    }
+    select.mo-inline-input { min-width: 120px; }
+
+    /* ── cell helpers ── */
+    .cell-num {
+      text-align: left;
+      font-variant-numeric: tabular-nums;
+      font-family: monospace;
+      font-weight: 600;
+      direction: ltr;
+    }
+    .cell-date {
+      font-family: monospace;
+      direction: ltr;
+      text-align: left;
+    }
+    .badge-pk {
+      padding: 2px 7px;
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 700;
+      background: #e0f2fe;
+      color: #0369a1;
+      font-family: monospace;
+    }
+    .badge-status {
+      padding: 2px 8px;
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 700;
+      background: var(--bg-subtle, #f1f5f9);
+      color: var(--text-secondary, #334155);
+    }
+
+    /* ── edit form grid ── */
+    .mo-form-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 14px;
+      padding: 6px 2px;
+    }
+    .mo-form-grid .form-field { margin: 0; }
+    .mo-form-full { grid-column: 1 / -1; }
+
+    .mo-empty {
+      text-align: center;
+      padding: 40px 20px;
+      color: var(--text-muted, #64748b);
+      font-size: 14px;
+    }
+
+    /* label — PK / read-only indicator */
+    .lbl-pk {
+      font-size: 11px;
+      background: #e0f2fe;
+      color: #0369a1;
+      border-radius: 4px;
+      padding: 1px 5px;
+      font-weight: 600;
+      margin-right: 4px;
+    }
+    .lbl-ro {
+      font-size: 11px;
+      background: #f1f5f9;
+      color: #64748b;
+      border-radius: 4px;
+      padding: 1px 5px;
+      font-weight: 600;
+      margin-right: 4px;
+    }
+  </style>
+</head>
+<body>
+<div id="tc-root" dir="rtl"></div>
+<script>
+  var params        = new URLSearchParams(window.location.search);
+  var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+  var scriptUrl     = window.scriptUrl || '/';
+  var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('3fe1b5cb67b7223e') ?>';
+  var COMPANY_PAGES    = <?!= companyPages ?>;
+  var CURRENT_ACTION   = '<?!= currentAction ?>';
+  var IS_SUPER_ADMIN   = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+  var USER_PAGES       = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+  var CAN_WRITE = UIC.canAdd_();
+  var CAN_FULL  = UIC.canFull_();
+
+  /* ── state ── */
+  var H = {
+    columns:    [],   /* manufacture_headers columns, as returned from server */
+    rows:       [],
+    total:      0,
+    loadedAll:  false,
+    searchQ:    '',
+    editingId:  null  /* header id currently in the edit modal */
+  };
+  /* footers cache: headerId -> { columns:[], rows:[], expanded:bool, loading:bool, draft:null|{...} } */
+  var FOOT = {};
+  /* dropdown refs: { products:[{value,label}], warehouses:[...], statuses:[...] } */
+  var REFS = { products: [], warehouses: [], statuses: [] };
+
+  /* ── real PK columns — confirmed from schema ── */
+  var H_PK = 'id';
+  var F_PK = 'id';
+
+  /* ── columns the edit UI must never allow writing (server strips them too) ──
+     deleted_at IS editable — clearing it restores a soft-deleted row;
+     setting it marks the row as deleted (list hides soft-deleted rows). */
+  var H_READ_ONLY = {
+    'id':         true,
+    'created_at': true,
+    'updated_at': true
+  };
+  var F_READ_ONLY = {
+    'id':                   true,
+    'manufacture_header_id': true,
+    'created_at':            true,
+    'updated_at':            true
+  };
+
+  /* ── human-readable Arabic labels ── */
+  var H_LABELS = {
+    'id':                           '# المعرف (PK)',
+    'user_id':                      'معرف المستخدم',
+    'user_type':                    'نوع المستخدم',
+    'name_ar':                      'الاسم (عربي)',
+    'expected_quantity':            'الكمية المتوقعة',
+    'deliver_quantity':             'كمية التسليم',
+    'is_product':                   'منتج؟ (0/1)',
+    'product_id':                   'معرف الصنف',
+    'status':                       'الحالة',
+    'manufacture_number':           'رقم أمر التصنيع',
+    'manufacture_delivery_number':  'رقم تسليم التصنيع',
+    'admin_approved':               'اعتماد الإدارة (0/1)',
+    'admin_approved_at':            'تاريخ اعتماد الإدارة',
+    'created_at':                   'تاريخ الإنشاء',
+    'updated_at':                   'آخر تحديث',
+    'deleted_at':                   'تاريخ الحذف',
+    'is_revised':                   'مراجَع (0/1)'
+  };
+  var F_LABELS = {
+    'id':                   '# المعرف (PK)',
+    'manufacture_header_id': 'معرف الأمر',
+    'product_id':           'معرف الصنف',
+    'product_code':         'كود الصنف',
+    'productUnit':          'الوحدة',
+    'productQuantity':      'الكمية',
+    'warehouse_id':         'المخزن',
+    'created_at':           'تاريخ الإنشاء',
+    'updated_at':           'آخر تحديث'
+  };
+
+  /* Columns that hold decimal / numeric values */
+  var H_NUMERIC = { user_id:1, expected_quantity:1, deliver_quantity:1, is_product:1,
+                    product_id:1, admin_approved:1, is_revised:1, id:1 };
+  var F_NUMERIC = { manufacture_header_id:1, product_id:1, productQuantity:1,
+                    warehouse_id:1, id:1 };
+
+  /* Columns that are dates / timestamps */
+  var H_DATES = { admin_approved_at:1, created_at:1, updated_at:1, deleted_at:1 };
+  var F_DATES = { created_at:1, updated_at:1 };
+
+  /* 0/1 flag columns rendered as مراجع/غير مراجع-style selects */
+  var H_FLAGS = { is_product:1, admin_approved:1, is_revised:1 };
+
+  function hLabel(col) { return H_LABELS[col] || col; }
+  function fLabel(col) { return F_LABELS[col] || col; }
+
+  /* ── company API call helper ── */
+  function companyCall(moduleAction, data) {
+    return API.call('company_action', {
+      target_system: '3fe1b5cb67b7223e',
+      module_action:  moduleAction,
+      data:           data || {}
+    }, SESSION_TOKEN);
+  }
+
+  /* ══════════════════ INIT ══════════════════ */
+  function load() {
+    UIC.appShell('tc-root', {
+      companyLogoUrl:   COMPANY_LOGO_URL,
+      companyLogoHref:  scriptUrl + '?action=tc_dashboard&sessionToken=' + SESSION_TOKEN,
+      companyLogoTitle: 'توب كيميكال',
+      breadcrumb: 'توب كيميكال / تحليلات النظام الرئيسي / أوامر التصنيع (manufacture_headers)',
+      contentId: 'mo-content',
+      menuGroups: (window.TOPCHEMICAL_MENU || [])
+    });
+    fetchRefs();
+    fetchHeaders(false);
+  }
+
+  /* ══════════════════ DATA — headers ══════════════════ */
+  function fetchHeaders(loadAll) {
+    if (loadAll !== undefined) H.loadedAll = !!loadAll;
+    /* RT1: reads draw skeletons, never the blocking overlay */
+    UIC.readSkeleton('mo-content', {
+      message: H.loadedAll ? 'جاري تحميل كامل البيانات...' : 'جاري تحميل آخر 10 سجلات...'
+    });
+    companyCall('get_manufacture_headers', { loadAll: H.loadedAll })
+      .then(function (res) {
+        H.columns = res.columns || [];
+        H.rows    = res.rows    || [];
+        H.total   = res.total   || 0;
+        renderPage();
+      })
+      .catch(showError)
+      .finally(function () {
+        UI.hideSpinner();
+        try { schedulePrefetch(); } catch (e) {}
+      });
+  }
+
+  function toggleLoadAll() { fetchHeaders(!H.loadedAll); }
+
+  /* ══════════════════ DATA — dropdown refs ══════════════════
+     Empty lists are NOT an error: selects degrade to free-text inputs. */
+  function fetchRefs() {
+    companyCall('get_manufacture_refs', {})
+      .then(function (res) {
+        REFS.products   = res.products   || [];
+        REFS.warehouses = res.warehouses || [];
+        REFS.statuses   = res.statuses   || [];
+      })
+      .catch(function () { REFS = { products: [], warehouses: [], statuses: [] }; });
+  }
+
+  /* ══════════════════ DATA — footers (inline, per header) ══════════════════ */
+  function footState(hid) {
+    hid = String(hid);
+    if (!FOOT[hid]) FOOT[hid] = { columns: [], rows: [], expanded: false, loading: false, draft: null };
+    return FOOT[hid];
+  }
+
+  function toggleFooters(hid) {
+    var st = footState(hid);
+    st.expanded = !st.expanded;
+    if (st.expanded && !st.columns.length && !st.loading) fetchFooters(hid);
+    else renderPage();
+  }
+
+  function fetchFooters(hid) {
+    var st = footState(hid);
+    st.loading = true;
+    renderPage();
+    companyCall('get_manufacture_footers', { manufacture_header_id: String(hid) })
+      .then(function (res) {
+        st.columns = res.columns || [];
+        st.rows    = res.rows    || [];
+      })
+      .catch(showError)
+      .finally(function () {
+        st.loading = false;
+        renderPage();
+      });
+  }
+
+  /* ══════════════════ RENDER — headers ══════════════════ */
+  function filteredHeaders() {
+    if (!H.searchQ) return H.rows;
+    var q = H.searchQ.toLowerCase();
+    return H.rows.filter(function (r) {
+      return Object.keys(r).some(function (k) {
+        var v = r[k];
+        return v !== null && v !== undefined && String(v).toLowerCase().indexOf(q) !== -1;
+      });
+    });
+  }
+
+  function renderPage() {
+    var content = document.getElementById('mo-content');
+    if (!content) return;
+
+    var rows = filteredHeaders();
+    var cols = H.columns.length ? H.columns : (H.rows[0] ? Object.keys(H.rows[0]) : []);
+
+    /* header card */
+    var html =
+      '<div class="mo-wrapper">' +
+      '<div class="mo-header-card">' +
+        '<div class="mo-header-top">' +
+          '<div>' +
+            '<h2 class="mo-heading">🏭 أوامر التصنيع <span style="font-size:13px;font-weight:400;color:var(--text-muted)">(manufacture_headers)</span></h2>' +
+            '<p class="mo-subheading">جدول قاعدة البيانات المباشر — ' + H.total + ' سجل إجمالاً (الحذف الناعم مُطبَّق)</p>' +
+          '</div>' +
+          '<div class="mo-badges">' +
+            '<div class="mo-badge">الإجمالي: <b>' + FMT.number(H.total) + '</b></div>' +
+            '<div class="mo-badge">المُحمَّل: <b>' + FMT.number(H.rows.length) + '</b></div>' +
+            '<div class="mo-badge">المعروض: <b>' + FMT.number(rows.length) + '</b></div>' +
+            '<div class="mo-badge">الوضع: <b>' + (H.loadedAll ? 'عرض الكل' : 'آخر 10 سجلات') + '</b></div>' +
+          '</div>' +
+        '</div>' +
+        '<div class="mo-toolbar">' +
+          '<div class="mo-search-box">' +
+            '<input id="mo-srch" class="mo-search-input" type="text"' +
+              ' placeholder="بحث في جميع الأعمدة…"' +
+              ' value="' + FMT.escape(H.searchQ) + '"' +
+              ' oninput="onSearch(this.value)">' +
+            '<span id="mo-srch-x" class="mo-search-clear" onclick="clearSearch()"' +
+              ' style="display:' + (H.searchQ ? 'block' : 'none') + '">✕</span>' +
+          '</div>' +
+          '<div style="display:flex;gap:8px;flex-wrap:wrap;">' +
+            '<button class="btn btn-outline" onclick="fetchHeaders(H.loadedAll)">🔄 تحديث</button>' +
+            '<button class="btn ' + (H.loadedAll ? 'btn-secondary' : 'btn-primary') + '" onclick="toggleLoadAll()">' +
+              (H.loadedAll
+                ? '📄 عرض آخر 10 سجلات فقط'
+                : '📊 عرض الكل (' + FMT.number(H.total) + ' سجل)') +
+            '</button>' +
+          '</div>' +
+        '</div>' +
+      '</div>' +   /* end header card */
+
+      /* table card */
+      '<div class="mo-table-card">' +
+        '<div class="mo-table-scroll">' +
+          buildHeadersTable(rows, cols) +
+        '</div>' +
+      '</div>' +
+      '</div>';   /* end wrapper */
+
+    content.innerHTML = html;
+  }
+
+  function buildHeadersTable(rows, cols) {
+    if (!rows.length) {
+      return '<div class="mo-empty">لا توجد سجلات مطابقة</div>';
+    }
+
+    /* thead */
+    var head = '<thead><tr><th>إجراءات</th>';
+    cols.forEach(function (c) { head += '<th>' + FMT.escape(hLabel(c)) + '</th>'; });
+    head += '</tr></thead>';
+
+    /* tbody */
+    var body = '<tbody>';
+    rows.forEach(function (row) {
+      var pkVal = row[H_PK] !== undefined && row[H_PK] !== null ? row[H_PK] : '';
+      var st = footState(pkVal);
+      body += '<tr>';
+      body += '<td style="white-space:nowrap;">';
+      body += '<button class="btn btn-sm btn-outline" onclick="toggleFooters(\'' + FMT.escape(pkVal) + '\')">' +
+              (st.expanded ? '▾ طي البنود' : '▸ عرض البنود') + '</button> ';
+      if (CAN_WRITE) {
+        body += '<button class="btn btn-sm btn-outline" onclick="openHeaderEdit(\'' + FMT.escape(pkVal) + '\')">✏️ تعديل</button>';
+      }
+      body += '</td>';
+
+      cols.forEach(function (c) {
+        body += '<td>' + renderHCell(c, row[c]) + '</td>';
+      });
+      body += '</tr>';
+
+      /* inline footers sub-row */
+      if (st.expanded) {
+        body += '<tr class="mo-foot-row"><td colspan="' + (cols.length + 1) + '">' +
+                '<div class="mo-foot-wrap">' + buildFootersBlock(pkVal, st) + '</div>' +
+                '</td></tr>';
+      }
+    });
+    body += '</tbody>';
+
+    return '<table class="mo-tbl">' + head + body + '</table>';
+  }
+
+  function renderHCell(col, val) {
+    if (val === null || val === undefined) return '<span style="color:var(--text-muted);font-size:11px">—</span>';
+
+    if (col === H_PK) {
+      return '<span class="badge-pk">' + FMT.escape(String(val)) + '</span>';
+    }
+    if (col === 'status') {
+      return '<span class="badge-status">' + FMT.escape(String(val)) + '</span>';
+    }
+    if (H_FLAGS[col]) {
+      return String(val) === '1'
+        ? '<span style="color:#166534;font-weight:700;">✓ نعم</span>'
+        : '<span style="color:#92400e;font-weight:700;">— لا</span>';
+    }
+    if (H_DATES[col]) {
+      return '<span class="cell-date">' + FMT.escape(String(val).slice(0, 19)) + '</span>';
+    }
+    if (H_NUMERIC[col]) {
+      return '<span class="cell-num">' + FMT.number(val) + '</span>';
+    }
+    var str = String(val);
+    if (str.length > 60) str = str.slice(0, 60) + '…';
+    return FMT.escape(str);
+  }
+
+  /* ══════════════════ RENDER — inline footers ══════════════════ */
+  function buildFootersBlock(hid, st) {
+    var cols = st.columns.length ? st.columns : ['product_id', 'product_code', 'productUnit', 'productQuantity', 'warehouse_id'];
+    var html = '<div class="mo-foot-title">📦 بنود الأمر #' + FMT.escape(hid) + '</div>';
+
+    if (st.loading) {
+      return html + '<div class="mo-empty" style="padding:16px;">جاري تحميل البنود…</div>';
+    }
+
+    html += '<table class="mo-foot-tbl"><thead><tr><th style="width:130px;">إجراءات</th>';
+    cols.forEach(function (c) {
+      if (F_READ_ONLY[c]) return;
+      html += '<th>' + FMT.escape(fLabel(c)) + '</th>';
+    });
+    html += '</tr></thead><tbody>';
+
+    /* existing rows — inline editable */
+    st.rows.forEach(function (row) {
+      var fid = row[F_PK];
+      html += '<tr>';
+      html += '<td style="white-space:nowrap;">';
+      if (CAN_WRITE) {
+        html += '<button class="btn btn-sm btn-outline" onclick="saveFooterInline(\'' + FMT.escape(hid) + '\',\'' + FMT.escape(fid) + '\')">💾 حفظ</button> ';
+        html += '<button class="btn btn-sm btn-outline" onclick="copyFooterRow(\'' + FMT.escape(hid) + '\',\'' + FMT.escape(fid) + '\')">⧉ نسخ</button>';
+      }
+      html += '</td>';
+      cols.forEach(function (c) {
+        if (F_READ_ONLY[c]) return;
+        html += '<td>' + footerInput(hid, fid, c, row[c]) + '</td>';
+      });
+      html += '</tr>';
+    });
+
+    /* copy draft row — local only until حفظ النسخة */
+    if (st.draft) {
+      html += '<tr class="mo-draft-row">';
+      html += '<td style="white-space:nowrap;">';
+      html += '<button class="btn btn-sm btn-primary" onclick="saveFooterDraft(\'' + FMT.escape(hid) + '\')">💾 حفظ النسخة</button> ';
+      html += '<button class="btn btn-sm btn-outline" onclick="cancelFooterDraft(\'' + FMT.escape(hid) + '\')">إلغاء</button>';
+      html += '</td>';
+      cols.forEach(function (c) {
+        if (F_READ_ONLY[c]) return;
+        html += '<td>' + footerInput(hid, 'new', c, st.draft[c]) + '</td>';
+      });
+      html += '</tr>';
+    } else if (CAN_WRITE) {
+      html += '<tr><td colspan="' + (cols.length + 1) + '" style="text-align:center;">' +
+              '<span style="font-size:11px;color:var(--text-muted);">استخدم زر «⧉ نسخ» على أي بند لإنشاء صف جديد قابل للتعديل قبل الحفظ</span></td></tr>';
+    }
+
+    html += '</tbody></table>';
+    return html;
+  }
+
+  /* one editable control per footer column; selects degrade to free text
+     when the corresponding refs list came back empty */
+  function footerInput(hid, fid, col, val) {
+    var v = (val !== null && val !== undefined) ? String(val) : '';
+    var id = 'mof_' + hid + '_' + fid + '_' + col;
+    if (col === 'product_id' && REFS.products.length) {
+      return '<select class="input mo-inline-input" id="' + id + '">' +
+        '<option value="">— اختر الصنف —</option>' +
+        REFS.products.map(function (o) {
+          return '<option value="' + FMT.escape(o.value) + '"' + (String(o.value) === v ? ' selected' : '') + '>' + FMT.escape(o.label) + '</option>';
+        }).join('') +
+      '</select>';
+    }
+    if (col === 'warehouse_id' && REFS.warehouses.length) {
+      return '<select class="input mo-inline-input" id="' + id + '">' +
+        '<option value="">— اختر المخزن —</option>' +
+        REFS.warehouses.map(function (o) {
+          return '<option value="' + FMT.escape(o.value) + '"' + (String(o.value) === v ? ' selected' : '') + '>' + FMT.escape(o.label) + '</option>';
+        }).join('') +
+      '</select>';
+    }
+    if (F_NUMERIC[col]) {
+      return '<input type="number" step="any" class="input mo-inline-input cell-num" id="' + id + '" value="' + FMT.escape(v) + '">';
+    }
+    return '<input type="text" class="input mo-inline-input" id="' + id + '" value="' + FMT.escape(v) + '">';
+  }
+
+  function footVal(hid, fid, col) {
+    var el = document.getElementById('mof_' + hid + '_' + fid + '_' + col);
+    return el ? el.value : '';
+  }
+
+  /* ══════════════════ SEARCH ══════════════════ */
+  function onSearch(val) {
+    H.searchQ = val;
+    var x = document.getElementById('mo-srch-x');
+    if (x) x.style.display = val ? 'block' : 'none';
+    refreshTableOnly();
+  }
+  function clearSearch() {
+    H.searchQ = '';
+    var inp = document.getElementById('mo-srch');
+    if (inp) inp.value = '';
+    var x = document.getElementById('mo-srch-x');
+    if (x) x.style.display = 'none';
+    refreshTableOnly();
+  }
+  function refreshTableOnly() {
+    var wrap = document.querySelector('.mo-table-scroll');
+    if (!wrap) return;
+    var cols = H.columns.length ? H.columns : (H.rows[0] ? Object.keys(H.rows[0]) : []);
+    wrap.innerHTML = buildHeadersTable(filteredHeaders(), cols);
+  }
+
+  /* ══════════════════ HEADER EDIT MODAL ══════════════════ */
+  function openHeaderEdit(pkVal) {
+    var row = (H.rows).find(function (r) {
+      return String(r[H_PK]) === String(pkVal);
+    });
+    if (!row) { UIC.toast('السجل غير موجود في الذاكرة', 'error'); return; }
+
+    H.editingId = pkVal;
+    var cols = H.columns.length ? H.columns : Object.keys(row);
+
+    var formHtml = '<form id="mo-edit-form"><div class="mo-form-grid">';
+
+    cols.forEach(function (col) {
+      var val   = row[col];
+      var label = hLabel(col);
+      var isRO  = H_READ_ONLY[col];
+
+      if (isRO) {
+        /* Read-only display field — not submitted (server strips it too) */
+        formHtml +=
+          '<div class="form-field">' +
+            '<label class="form-label">' +
+              '<span class="lbl-ro">' + (col === H_PK ? 'PK' : 'للقراءة فقط') + '</span> ' +
+              FMT.escape(label) +
+            '</label>' +
+            '<input type="text" class="input" value="' + FMT.escape(val !== null && val !== undefined ? String(val) : '') + '" disabled>' +
+          '</div>';
+        return;
+      }
+
+      if (col === 'status' && REFS.statuses.length) {
+        formHtml +=
+          '<div class="form-field">' +
+            '<label class="form-label">' + FMT.escape(label) + '</label>' +
+            '<select class="input" name="' + col + '" id="mof_' + col + '">' +
+              '<option value="">— لم يحدد —</option>' +
+              REFS.statuses.map(function (o) {
+                return '<option value="' + FMT.escape(o.value) + '"' + (String(val) === String(o.value) ? ' selected' : '') + '>' + FMT.escape(o.label) + '</option>';
+              }).join('') +
+            '</select>' +
+          '</div>';
+
+      } else if (H_FLAGS[col]) {
+        var on = String(val) === '1';
+        formHtml +=
+          '<div class="form-field">' +
+            '<label class="form-label">' + FMT.escape(label) + '</label>' +
+            '<select class="input" name="' + col + '" id="mof_' + col + '">' +
+              '<option value="0"' + (!on ? ' selected' : '') + '>0 — لا</option>' +
+              '<option value="1"' + (on ? ' selected' : '') + '>1 — نعم</option>' +
+            '</select>' +
+          '</div>';
+
+      } else if (col === 'product_id' && REFS.products.length) {
+        formHtml +=
+          '<div class="form-field">' +
+            '<label class="form-label">' + FMT.escape(label) + '</label>' +
+            '<select class="input" name="' + col + '" id="mof_' + col + '">' +
+              '<option value="">— اختر الصنف —</option>' +
+              REFS.products.map(function (o) {
+                return '<option value="' + FMT.escape(o.value) + '"' + (String(o.value) === String(v0(val)) ? ' selected' : '') + '>' + FMT.escape(o.label) + '</option>';
+              }).join('') +
+            '</select>' +
+          '</div>';
+
+      } else if (H_DATES[col]) {
+        /* Timestamps nullable; datetime-local wants "YYYY-MM-DDTHH:mm" */
+        var dtv = val ? String(val).slice(0, 16).replace(' ', 'T') : '';
+        var extra = (col === 'deleted_at')
+          ? '<div style="font-size:11px;color:var(--text-muted,#64748b);margin-top:3px;">اتركه فارغاً لاستعادة السجل. ضع تاريخاً للحذف الناعم (يختفي السجل من القائمة).</div>'
+          : '';
+        formHtml +=
+          '<div class="form-field">' +
+            '<label class="form-label">' + FMT.escape(label) +
+              (col === 'deleted_at' ? ' <span style="font-size:11px;background:#fef3c7;color:#92400e;border-radius:4px;padding:1px 5px;">تحكم بالحذف الناعم</span>' : '') +
+            '</label>' +
+            '<input type="datetime-local" class="input" name="' + col + '" id="mof_' + col + '" value="' + FMT.escape(dtv) + '">' +
+            extra +
+          '</div>';
+
+      } else if (H_NUMERIC[col]) {
+        formHtml +=
+          '<div class="form-field">' +
+            '<label class="form-label">' + FMT.escape(label) + '</label>' +
+            '<input type="number" step="any" class="input cell-num" name="' + col + '" id="mof_' + col + '" value="' + FMT.escape(val !== null && val !== undefined ? String(val) : '') + '">' +
+          '</div>';
+
+      } else {
+        formHtml +=
+          '<div class="form-field">' +
+            '<label class="form-label">' + FMT.escape(label) + '</label>' +
+            '<input type="text" class="input" name="' + col + '" id="mof_' + col + '" value="' + FMT.escape(val !== null && val !== undefined ? String(val) : '') + '">' +
+          '</div>';
+      }
+    });
+
+    formHtml += '</div></form>';
+
+    UIC.openModal('mo-edit-modal', {
+      title: 'تعديل أمر تصنيع — #' + pkVal,
+      body: formHtml,
+      saveLabel: 'حفظ التعديلات',
+      onSave: 'saveHeaderEdit()'
+    });
+  }
+
+  function v0(v) { return (v !== null && v !== undefined) ? v : ''; }
+
+  /* ══════════════════ HEADER SAVE ══════════════════ */
+  function saveHeaderEdit() {
+    var pkVal = H.editingId;
+    if (!pkVal) { UIC.toast('لا يوجد سجل محدد', 'error'); return; }
+
+    var row = (H.rows).find(function (r) { return String(r[H_PK]) === String(pkVal); });
+    if (!row) { UIC.toast('السجل غير موجود', 'error'); return; }
+
+    var cols = H.columns.length ? H.columns : Object.keys(row);
+    var payload = {};
+    payload[H_PK] = pkVal;   /* the server expects `id` */
+
+    cols.forEach(function (col) {
+      if (H_READ_ONLY[col]) return;
+      var el = document.getElementById('mof_' + col);
+      if (el) payload[col] = el.value;
+    });
+
+    UI.showSpinner('جاري حفظ التعديلات…');
+
+    companyCall('save_manufacture_header', payload)
+      .then(function () {
+        UIC.toast('تم الحفظ بنجاح ✓', 'success');
+        UIC.closeModal('mo-edit-modal');
+        /* patch local state so we don't need a full reload */
+        Object.keys(payload).forEach(function (k) { row[k] = payload[k]; });
+        renderPage();
+      })
+      .catch(showError)
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  /* ══════════════════ FOOTER INLINE SAVE ══════════════════ */
+  function footerCols(hid) {
+    var st = footState(hid);
+    return st.columns.length ? st.columns : ['product_id', 'product_code', 'productUnit', 'productQuantity', 'warehouse_id'];
+  }
+
+  function saveFooterInline(hid, fid) {
+    var st = footState(hid);
+    var row = (st.rows).find(function (r) { return String(r[F_PK]) === String(fid); });
+    if (!row) { UIC.toast('البند غير موجود', 'error'); return; }
+
+    var payload = { id: fid };
+    footerCols(hid).forEach(function (col) {
+      if (F_READ_ONLY[col]) return;
+      payload[col] = footVal(hid, fid, col);
+    });
+
+    UI.showSpinner('جاري حفظ البند…');
+
+    companyCall('save_manufacture_footer', payload)
+      .then(function () {
+        UIC.toast('تم حفظ البند ✓', 'success');
+        Object.keys(payload).forEach(function (k) { row[k] = payload[k]; });
+        renderPage();
+      })
+      .catch(showError)
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  /* ══════════════════ FOOTER COPY ROW ══════════════════
+     Clone an existing inline row into a LOCAL draft (no id). The draft stays
+     on screen, fully editable, until حفظ النسخة — nothing is written before. */
+  function copyFooterRow(hid, fid) {
+    var st = footState(hid);
+    var src = (st.rows).find(function (r) { return String(r[F_PK]) === String(fid); });
+    if (!src) { UIC.toast('البند غير موجود', 'error'); return; }
+
+    st.draft = {};
+    footerCols(hid).forEach(function (col) {
+      if (F_READ_ONLY[col]) return;
+      st.draft[col] = src[col] !== null && src[col] !== undefined ? String(src[col]) : '';
+    });
+    renderPage();
+  }
+
+  function cancelFooterDraft(hid) {
+    footState(hid).draft = null;
+    renderPage();
+  }
+
+  function saveFooterDraft(hid) {
+    var st = footState(hid);
+    if (!st.draft) return;
+
+    var payload = { manufacture_header_id: String(hid) };
+    footerCols(hid).forEach(function (col) {
+      if (F_READ_ONLY[col]) return;
+      payload[col] = footVal(hid, 'new', col);
+    });
+
+    UI.showSpinner('جاري إضافة البند…');
+
+    companyCall('add_manufacture_footer', payload)
+      .then(function (res) {
+        UIC.toast('تمت إضافة البند ✓', 'success');
+        var newRow = { id: (res && res.id) || null, manufacture_header_id: String(hid) };
+        Object.keys(payload).forEach(function (k) { if (k !== 'manufacture_header_id') newRow[k] = payload[k]; });
+        st.rows.push(newRow);
+        st.draft = null;
+        renderPage();
+      })
+      .catch(showError)
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  /* ── error helper ── */
+  function showError(err) {
+    var msg = (err && (err.message || err.error)) || String(err || 'حدث خطأ غير متوقع');
+    UIC.toast(msg, 'error');
+  }
+
+  document.addEventListener('DOMContentLoaded', load);
+</script>
+</body>
+</html>

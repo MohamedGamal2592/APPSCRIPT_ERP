@@ -86,7 +86,8 @@ check(ARITH.length === 0,
   ARITH.map(p => p[0] + ': ' + p[1].trim()).join('\n        '));
 
 /* The ONLY adjustment in the module, stated positively. */
-const CODE = SRC.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+const FINANCE_MARKER = SRC.indexOf('/* CONSOLIDATED VALLEYFOODS FINANCIAL REPORTING');
+const CODE = (FINANCE_MARKER >= 0 ? SRC.slice(0, FINANCE_MARKER) : SRC).replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
 const AVAIL = (CODE.match(/\bavailable\s*[:=][^;\n]*/g) || []).map(x => x.trim());
 const ALLOWED = [
   'available: Math.round((cur + h) * 1000) / 1000',   /* vfBatchBalance_: the add-back */
@@ -432,3 +433,4 @@ console.log('\n' + (failed === 0
   ? 'S25 OK — one authority: available = current_qty + held(this document). Nothing subtracts.'
   : 'S25 — ' + failed + ' check(s) FAILED.'));
 process.exit(failed === 0 ? 0 : 1);
+

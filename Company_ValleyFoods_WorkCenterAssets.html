@@ -112,6 +112,9 @@
     function openEdit(uid) {
       var row = null;
       RECORDS.forEach(function (r) { if (String(r.unique_id) === uid) row = r; });
+      /* Row-edit repair (5.5): a missing record reloads with a clear error —
+         it must never fall through into the Add form. */
+      if (!row) { UIC.toast('السجل غير موجود — تم تحديث القائمة', 'error'); load(true); return; }
       openModal(row);
     }
 

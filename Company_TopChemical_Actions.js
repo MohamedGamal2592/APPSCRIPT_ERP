@@ -75,6 +75,7 @@ const TopChemical = (function () {
     'add_barcode': { page: 'tc_barcode', access: 'write' },
     'get_registration_papers': { page: 'tc_registration_papers', access: 'read' },
     'add_registration_paper': { page: 'tc_registration_papers', access: 'write' },
+    'update_registration_paper': { page: 'tc_registration_papers', access: 'write' },
     'get_trust_accounts': { page: 'tc_trust', access: 'read' },
     'get_trust_movements': { page: 'tc_trust', access: 'read' },
     'add_trust_movement': { page: 'tc_trust', access: 'write' },
@@ -136,6 +137,7 @@ const TopChemical = (function () {
     'delete_legal_costing': { page: 'tc_budget_inputs', access: 'full' },
     'get_legal_manufacture': { page: 'tc_budget_manufacture', access: 'read' },
     'add_legal_manufacture': { page: 'tc_budget_manufacture', access: 'write' },
+    'update_legal_manufacture': { page: 'tc_budget_manufacture', access: 'write' },
     'get_legal_invoices': { page: 'tc_budget_invoices', access: 'read' },
     'add_legal_invoice': { page: 'tc_budget_invoices', access: 'write' },
     'make_collection_from_invoice': { page: 'tc_budget_invoices', access: 'full' },
@@ -153,6 +155,7 @@ const TopChemical = (function () {
     'revise_main_review': { page: 'tc_main_review', access: 'write' },
     'get_client_balance_sheets': { page: 'tc_client_balance_sheets', access: 'read' },
     'save_client_balance_sheet': { page: 'tc_client_balance_sheets', access: 'write' },
+    'delete_client_balance_sheet': { page: 'tc_client_balance_sheets', access: 'write' },
     // تحليل حركة الخزنة العادية — live MySQL regular_box_movement.
     // Listing an action here is what makes it FAIL CLOSED: guard_ returns
     // early for anything it does not find, so an unlisted action is open to
@@ -163,7 +166,20 @@ const TopChemical = (function () {
     'update_box_movement': { page: 'tc_box_analysis', access: 'write' },
     'revise_box_movement': { page: 'tc_box_analysis', access: 'write' },
     'get_box_alerts': { page: 'tc_box_analysis', access: 'read' },
-    'save_box_item_alias': { page: 'tc_box_analysis', access: 'write' }
+    'save_box_item_alias': { page: 'tc_box_analysis', access: 'write' },
+    // ── manufacture orders (tc_manufacture_orders) ──
+    'get_manufacture_headers':  { page: 'tc_manufacture_orders', access: 'read' },
+    'get_manufacture_footers':  { page: 'tc_manufacture_orders', access: 'read' },
+    'save_manufacture_header':  { page: 'tc_manufacture_orders', access: 'write' },
+    'save_manufacture_footer':  { page: 'tc_manufacture_orders', access: 'write' },
+    'add_manufacture_footer':   { page: 'tc_manufacture_orders', access: 'write' },
+    'delete_manufacture_header': { page: 'tc_manufacture_orders', access: 'write' },
+    'delete_manufacture_footer': { page: 'tc_manufacture_orders', access: 'write' },
+    'get_manufacture_refs':     { page: 'tc_manufacture_orders', access: 'read' },
+    // ── products live table (tc_products_live / اصناف النظام الرئيسي) ──
+    'get_products_live':    { page: 'tc_products_live', access: 'read' },
+    'save_product_live':    { page: 'tc_products_live', access: 'write' },
+    'delete_product_live':  { page: 'tc_products_live', access: 'write' }
   };
 
   /** page for a module_action, reused for both access-control and logging. */
@@ -193,6 +209,7 @@ const TopChemical = (function () {
     'delete_legal_costing': LEGAL_COSTING_SHEET + '/' + LEGAL_PURCHASING_SHEET,
     'get_legal_manufacture': LEGAL_MANUFACTURE_SHEET,
     'add_legal_manufacture': LEGAL_MANUFACTURE_SHEET,
+    'update_legal_manufacture': LEGAL_MANUFACTURE_SHEET,
     'get_legal_invoices': LEGAL_INVOICES_SHEET,
     'add_legal_invoice': LEGAL_INVOICES_SHEET,
     'make_collection_from_invoice': LEGAL_CASH_SHEET,
@@ -218,6 +235,7 @@ const TopChemical = (function () {
     'add_barcode': BARCODE_SHEET,
     'get_registration_papers': REGISTRATION_SHEET,
     'add_registration_paper': REGISTRATION_SHEET,
+    'update_registration_paper': REGISTRATION_SHEET,
     'get_trust_accounts': TRUST_SHEET,
     'get_trust_movements': TRUST_SHEET,
     'add_trust_movement': TRUST_SHEET,
@@ -264,6 +282,7 @@ const TopChemical = (function () {
     'revise_main_review': 'mysql:clients_AR',
     'get_client_balance_sheets': 'mysql:client_balance_sheets',
     'save_client_balance_sheet': 'mysql:client_balance_sheets',
+    'delete_client_balance_sheet': 'mysql:client_balance_sheets',
     'get_box_analysis': 'mysql:regular_box_movement',
     'get_box_item_history': 'mysql:regular_box_movement',
     'update_box_movement': 'mysql:regular_box_movement',
@@ -272,7 +291,18 @@ const TopChemical = (function () {
     // The alias overrides are a Drive JSON file, not a table — there is no
     // DDL available, and this records that honestly rather than naming a
     // table that does not exist.
-    'save_box_item_alias': 'drive:Box_Analysis_Audit/box_item_aliases.json'
+    'save_box_item_alias': 'drive:Box_Analysis_Audit/box_item_aliases.json',
+    'get_manufacture_headers': 'mysql:manufacture_headers',
+    'get_manufacture_footers': 'mysql:manufacture_footers',
+    'save_manufacture_header': 'mysql:manufacture_headers',
+    'save_manufacture_footer': 'mysql:manufacture_footers',
+    'add_manufacture_footer':  'mysql:manufacture_footers',
+    'delete_manufacture_header': 'mysql:manufacture_headers',
+    'delete_manufacture_footer': 'mysql:manufacture_footers',
+    'get_manufacture_refs':     'mysql:manufacture_headers',
+    'get_products_live':   'mysql:products',
+    'save_product_live':   'mysql:products',
+    'delete_product_live': 'mysql:products'
   };
 
   function tableForAction_(action) {
@@ -346,11 +376,20 @@ const TopChemical = (function () {
     }
   }
 
-  function dispatch_(payload, user, dbId) {
+  function dispatch_(payload, user, dbId, ctx) {
     const action = payload.module_action;
     if (!actions[action]) throw new Error('Unknown Top Chemical action: ' + action);
     guard_(user, action);
-    return actions[action](payload.data, user, dbId);
+    return actions[action](payload.data, user, dbId, ctx);
+  }
+
+  /* Request-scoped recovery allowlist: these handlers can locate an earlier
+     result by request ID without creating anything new, so the request guard
+     may re-run them to reconcile a stale receipt. Every other action stays
+     blocked on uncertain receipts to avoid duplicate replay. */
+  const REQUEST_RECOVERABLE_ACTIONS_ = { add_upload_file: 'request-id' };
+  function requestRecovery_(action) {
+    return REQUEST_RECOVERABLE_ACTIONS_[String(action || '')] || '';
   }
 
   function num0_(v) { return Math.max(0, Number(v) || 0); }
@@ -734,13 +773,8 @@ const TopChemical = (function () {
 
   function companyArabicName_() {
     try {
-      const sheet = getSheet_('ERP_Companies', CONFIG.AUTH_SPREADSHEET_ID);
-      const headers = getHeaders_(sheet);
-      const data = sheet.getDataRange().getValues();
-      const uidIdx = headers.findIndex(h => String(h).trim().toLowerCase() === 'company_unique_id');
-      const arIdx = headers.findIndex(h => String(h).trim().toLowerCase() === 'company_name_ar');
-      const row = data.slice(1).find(r => uidIdx !== -1 && String(r[uidIdx]).trim() === COMPANY_UID);
-      return (row && arIdx !== -1) ? String(row[arIdx]).trim() : 'توب كيميكال';
+      const row = systemFindByBusinessKey_('ERP_Companies', 'company_unique_id', COMPANY_UID);
+      return row ? String(row.company_name_ar || '').trim() : 'توب كيميكال';
     } catch (e) { return 'توب كيميكال'; }
   }
 
@@ -1136,6 +1170,13 @@ const TopChemical = (function () {
       number_of_cartons_bags: cartons,
       print_file: String(data.print_file || '').trim()
     };
+    var _pfId = (typeof attachmentPickFileId_ === 'function') ? String(attachmentPickFileId_(data, 'print_file') || '').trim() : '';
+    if (!_pfId && recP.print_file) { try { _pfId = String(CacheService.getScriptCache().get('attid_' + recP.print_file) || '').trim(); } catch (e2) {} }
+    _pfId = requireAttachmentBinding_(recP.print_file, _pfId, 'print_file');
+    if (_pfId) {
+      recP.print_file_id = _pfId;
+      try { if (typeof ensureAttachmentColumn_ === 'function') ensureAttachmentColumn_(dbId, PRODUCTS_SHEET, 'print_file_id'); } catch (e3) {}
+    }
     var resP = appendRow_(dbId, PRODUCTS_SHEET, recP);
     try { logHistory_(dbId, PRODUCTS_SHEET, recP.record_uid || ('create_'+PRODUCTS_SHEET+'_'+id), String(id), (user&&user.email)||'', 'create', recP, null); } catch(e){}
     try { bustTcRefs_(dbId); } catch(e){}
@@ -1179,7 +1220,17 @@ const TopChemical = (function () {
       if (!Number.isInteger(cartons)) throw new Error('عدد الكراتين/الشنط يجب أن يكون رقماً صحيحاً');
       updates['number_of_cartons_bags'] = cartons;
     }
-    if (data.print_file !== undefined) updates['print_file'] = String(data.print_file || '').trim();
+    if (data.print_file !== undefined) {
+      updates['print_file'] = String(data.print_file || '').trim();
+      var _epfId = (typeof attachmentPickFileId_ === 'function') ? String(attachmentPickFileId_(data, 'print_file') || '').trim() : '';
+      if (!_epfId && updates['print_file']) { try { _epfId = String(CacheService.getScriptCache().get('attid_' + updates['print_file']) || '').trim(); } catch (e2) {} }
+      if (!_epfId && updates['print_file'] && data.print_file_id && typeof attachmentAuthorizedStoredId_ === 'function') _epfId = attachmentAuthorizedStoredId_(dbId, PRODUCTS_SHEET, data, 'print_file', data.print_file_id);
+      _epfId = requireAttachmentBinding_(updates['print_file'], _epfId, 'print_file');
+      updates['print_file_id'] = _epfId;
+      if (_epfId || updates['print_file'] === '') {
+        try { if (typeof ensureAttachmentColumn_ === 'function') ensureAttachmentColumn_(dbId, PRODUCTS_SHEET, 'print_file_id'); } catch (e3) {}
+      }
+    }
     var _oldProd = null; try { _oldProd = getAllRecords_(dbId, PRODUCTS_SHEET).find(function(r){ return String(r.id)===String(id); }) || null; } catch(e2){}
     const sheet = getSheet_(PRODUCTS_SHEET, dbId);
     if (!updateRowByCriteria_(sheet, 'id', id, updates)) throw new Error('المنتج غير موجود');
@@ -1328,7 +1379,8 @@ const TopChemical = (function () {
           document_type: r.document_type,
           document_start_date: r.document_start_date,
           document_end_date: r.document_end_date,
-          document_file: r.document_file
+          document_file: r.document_file,
+          document_file_id: r.document_file_id || ''
         };
       });
     return {
@@ -1352,6 +1404,13 @@ const TopChemical = (function () {
     const endDate = data.document_end_date ? parseDate_(data.document_end_date) : new Date();
     const product = Number(data.product);
     const documentFile = String(data.document_file || '').trim();
+    var documentFileId = '';
+    try { documentFileId = (typeof attachmentPickFileId_ === 'function') ? String(attachmentPickFileId_(data, 'document_file') || '').trim() : ''; } catch (e) {}
+    if (!documentFileId && documentFile) {
+      try { documentFileId = String(CacheService.getScriptCache().get('attid_' + documentFile) || '').trim(); } catch (e) {}
+    }
+    documentFileId = requireAttachmentBinding_(documentFile, documentFileId, 'document_file');
+    try { if (typeof ensureAttachmentColumn_ === 'function') ensureAttachmentColumn_(dbId, REGISTRATION_SHEET, 'document_file_id'); } catch (e) {}
 
     if (product) {
       const productExists = productRefs_(dbId).map[product];
@@ -1369,7 +1428,8 @@ const TopChemical = (function () {
       document_type: type,
       document_start_date: startDate,
       document_end_date: endDate,
-      document_file: documentFile
+      document_file: documentFile,
+      document_file_id: documentFileId
     };
     var _mapReg = {
       document_name_ar: nameAr,
@@ -1379,14 +1439,105 @@ const TopChemical = (function () {
       document_type: type,
       document_start_date: startDate,
       document_end_date: endDate,
-      document_file: documentFile
+      document_file: documentFile,
+      document_file_id: documentFileId
     };
     var res = appendRow_(dbId, REGISTRATION_SHEET, _mapReg);
-    try { logHistory_(dbId, REGISTRATION_SHEET, 'create_'+REGISTRATION_SHEET+'_'+num, String(num), (user&&user.email)||'', 'create', _mapReg, null); } catch(e){}
+    try { logHistory_(dbId, REGISTRATION_SHEET, 'create_'+REGISTRATION_SHEET+'_'+num, String(num), (user&&user.email)||'', 'create', _mapReg, null); }catch(e){}
     res.record = savedRecord;
     res.data = res.data || {};
     res.data.assignedId = num;
     return res;
+  }
+
+  /* Row-edit repair (Stage 4): keyed registration-paper correction. The sheet
+   * carries no UID column, so the original document_number is the selector:
+   * it must match exactly one row or the edit is refused (missing/ambiguous).
+   * Manual validation mirrors addRegistrationPaper_; only manual literals are
+   * written through the formula-safe patch helper. The existing attachment
+   * pair is retained unless a replacement arrives through the trusted upload
+   * flow; a changed business number must not collide with another row. */
+  function updateRegistrationPaper_(data, user, dbId) {
+    if (!(user && user.isSuperAdmin)) throw new Error('التعديل مسموح فقط للمشرف العام');
+    var originalRaw = String((data && data.original_document_number) == null ? '' : data.original_document_number).trim();
+    if (originalRaw === '') throw new Error('رقم المستند الأصلي مطلوب');
+    const nameAr = String(data.document_name_ar || '').trim();
+    if (!nameAr) throw new Error('اسم المستند بالعربية مطلوب');
+    const numRaw = String(data.document_number == null ? '' : data.document_number).trim();
+    if (numRaw === '') throw new Error('رقم المستند مطلوب');
+    const num = Number(numRaw);
+    if (!Number.isInteger(num)) throw new Error('رقم المستند يجب أن يكون رقماً صحيحاً');
+    const type = String(data.document_type || '').trim();
+    if (!type) throw new Error('نوع المستند مطلوب');
+    const startDate = data.document_start_date ? parseDate_(data.document_start_date) : new Date();
+    const endDate = data.document_end_date ? parseDate_(data.document_end_date) : new Date();
+    const product = Number(data.product);
+    if (product) {
+      const productExists = productRefs_(dbId).map[product];
+      if (!productExists) throw new Error('المنتج غير موجود');
+    }
+
+    var sheet = getSheet_(REGISTRATION_SHEET, dbId);
+    var allReg = getAllRecords_(dbId, REGISTRATION_SHEET);
+    var matches = allReg.filter(function (r) {
+      return String(r.document_number == null ? '' : r.document_number).trim() === originalRaw;
+    });
+    if (!matches.length) throw new Error('السجل غير موجود');
+    if (matches.length > 1) throw new Error('رقم المستند مكرر — يلزم مراجعة السجل قبل التعديل');
+    var oldRow = matches[0];
+    if (String(num) !== originalRaw) {
+      var clash = allReg.some(function (r) {
+        return r !== oldRow && String(r.document_number == null ? '' : r.document_number).trim() === String(num);
+      });
+      if (clash) throw new Error('رقم المستند مستخدم في سجل آخر');
+    }
+
+    var merged = Object.assign({}, data);
+    if ((merged.document_file == null || String(merged.document_file).trim() === '') && oldRow.document_file) {
+      merged.document_file = oldRow.document_file;
+      if (oldRow.document_file_id) merged.document_file_id = oldRow.document_file_id;
+    }
+    var documentFile = String(merged.document_file || '').trim();
+    var documentFileId = '';
+    try { documentFileId = (typeof attachmentPickFileId_ === 'function') ? String(attachmentPickFileId_(merged, 'document_file') || '').trim() : ''; } catch (e) {}
+    if (!documentFileId && documentFile) {
+      try { documentFileId = String(CacheService.getScriptCache().get('attid_' + documentFile) || '').trim(); } catch (e2) {}
+    }
+    documentFileId = requireAttachmentBinding_(documentFile, documentFileId, 'document_file');
+    try { if (typeof ensureAttachmentColumn_ === 'function') ensureAttachmentColumn_(dbId, REGISTRATION_SHEET, 'document_file_id'); } catch (e3) {}
+
+    var pMapU = productRefs_(dbId).map;
+    var map = {
+      document_name_ar: nameAr,
+      document_name_en: String(merged.document_name_en || '').trim(),
+      product: product || '',
+      document_number: num,
+      document_type: type,
+      document_start_date: startDate,
+      document_end_date: endDate,
+      document_file: documentFile,
+      document_file_id: documentFileId
+    };
+    var result;
+    executeWithLock_(function () {
+      if (!patchRowByCriteria_(sheet, 'document_number', originalRaw, map)) throw new Error('السجل غير موجود');
+      var savedUpdated = {
+        document_name_ar: nameAr,
+        document_name_en: String(merged.document_name_en || '').trim(),
+        product: product || '',
+        product_id: product || '',
+        product_name: product ? (pMapU[product] || '') : '',
+        document_number: num,
+        document_type: type,
+        document_start_date: startDate,
+        document_end_date: endDate,
+        document_file: documentFile,
+        document_file_id: documentFileId
+      };
+      try { logHistory_(dbId, REGISTRATION_SHEET, oldRow.record_uid || ('update_' + REGISTRATION_SHEET + '_' + originalRaw), originalRaw, (user && user.email) || '', 'update', savedUpdated, oldRow); } catch (e4) {}
+      result = { status: 'success', message: 'تم تحديث المستند', record: savedUpdated, data: { assignedId: num } };
+    });
+    return result;
   }
 
   // =========================================
@@ -1757,6 +1908,27 @@ const TopChemical = (function () {
         noteMutation_(sheet);
       }
     });
+    /* Row-edit repair (5.1): recompute the derived snapshot literals when a
+       corrected input changes them. Rows designed as literals get fresh
+       values; older rows whose cells still hold live formulas are left alone
+       so the sheet recalculates them. */
+    if (updates.amount != null || updates.available_amount != null) {
+      try {
+        var _amtCol = hMap['amount'], _availCol = hMap['available_amount'];
+        var _curAmt = (updates.amount != null) ? updates.amount : Number(sheet.getRange(sheetRow, _amtCol + 1).getValue());
+        var _curAvl = (updates.available_amount != null) ? updates.available_amount : Number(sheet.getRange(sheetRow, _availCol + 1).getValue());
+        var _diffVal = stockRevisionDifference_(_curAmt, _curAvl);
+        var _pctVal = stockRevisionPercentage_(_curAmt, _curAvl);
+        var _formRow = sheet.getRange(sheetRow, 1, 1, headers.length).getFormulas()[0];
+        [['difference', _diffVal], ['percentage', _pctVal]].forEach(function (pair) {
+          var _c = hMap[pair[0]];
+          if (_c != null && !_formRow[_c]) {
+            sheet.getRange(sheetRow, _c + 1).setValue(pair[1]);
+            noteMutation_(sheet);
+          }
+        });
+      } catch (e3) {}
+    }
     try { var _uidStock = _oldStock && _oldStock.record_uid ? _oldStock.record_uid : 'create_'+STOCK_SHEET+'_'+sheetRow; var _newStock = {}; if(_oldStock) Object.keys(_oldStock).forEach(function(k){ _newStock[k]=_oldStock[k]; }); Object.keys(updates).forEach(function(k){ _newStock[k]=updates[k]; }); logHistory_(dbId, STOCK_SHEET, _uidStock, String(sheetRow), (user&&user.email)||'', 'update', _newStock, _oldStock); } catch(e){}
 
     return { status: 'success', message: 'تم تحديث جرد المخزون' };
@@ -1766,8 +1938,8 @@ const TopChemical = (function () {
   // مكتب الجمارك — existing live sheet KEEPS its 10 Arabic/English headers:
   // التاريخ | نوع المعاملة | سبب العملية | المبلغ | تفاصيل المعاملة |
   // تكليف المطالبة | تخليص الشحنة | المبلغ_دولار | user | created_at
-  // (no id column — id is synthesized from the row index at read time)
-  // تكليف المطالبة / تخليص الشحنة are optional file uploads stored as text refs.
+  // The original ten business columns are retained; attachment references remain in the two business columns.
+  // Attachment IDs and customs_uid are intentionally not part of this table API.
   // =========================================
   const CUSTOMS_HEADERS = [
     'التاريخ', 'نوع المعاملة', 'سبب العملية', 'المبلغ', 'تفاصيل المعاملة',
@@ -1777,7 +1949,9 @@ const TopChemical = (function () {
   function ensureCustomsOfficeSheet_(dbId) {
     const ss = getSpreadsheet_(dbId);
     let sheet = ss.getSheetByName(CUSTOMS_OFFICE_SHEET);
-    if (sheet) return sheet;
+    if (sheet) {
+      return sheet;
+    }
     sheet = ss.insertSheet(CUSTOMS_OFFICE_SHEET);
     noteMutation_(sheet);
     sheet.appendRow(CUSTOMS_HEADERS);
@@ -1888,7 +2062,7 @@ const TopChemical = (function () {
         shipmentClearance,
         usd,
         (user && user.email) || '',
-        new Date()
+        new Date(),
       ];
       sheet.appendRow(rowValues);
       noteMutation_(sheet);
@@ -2194,6 +2368,7 @@ const TopChemical = (function () {
   }
 
   function addImportFollow_(data, user, dbId) {
+    attachmentIdsForFields_(dbId, IMPORT_FOLLOW_SHEET, data || {}, ['porforma_file', 'swift_file', 'approval_1', 'approval_2', 'approval_3']);
     const vendor = String(data.vendor || '').trim();
     if (!vendor) throw new Error('المورد مطلوب');
     const product = Number(data.product);
@@ -2223,6 +2398,7 @@ const TopChemical = (function () {
 
     return executeWithLock_(function () {
       const id = getNextIdUnderLock_(dbId, IMPORT_FOLLOW_SHEET);
+      var _impFileIds = attachmentIdsForFields_(dbId, IMPORT_FOLLOW_SHEET, data || {}, ['porforma_file', 'swift_file', 'approval_1', 'approval_2', 'approval_3']);
       const sheet = getSheet_(IMPORT_FOLLOW_SHEET, dbId);
       const headers = getHeaders_(sheet);
       const rec = {
@@ -2247,6 +2423,7 @@ const TopChemical = (function () {
         user: (user && user.email) || '',
         created_at: new Date()
       };
+      try { Object.keys(_impFileIds).forEach(function (k) { rec[k] = _impFileIds[k]; rec[String(k).toLowerCase()] = _impFileIds[k]; }); } catch (e) {}
       const rowValues = headers.map(function (h) {
         const key = String(h).trim().toLowerCase();
         return rec[key] !== undefined ? rec[key] : '';
@@ -2308,6 +2485,8 @@ const TopChemical = (function () {
       if (data[f] !== undefined && data[f] !== null) updates[f] = String(data[f]).trim();
     });
     if (!Object.keys(updates).length) throw new Error('لا توجد ملفات للتحديث');
+    var _impFIds = attachmentIdsForFields_(dbId, IMPORT_FOLLOW_SHEET, data || {}, ['porforma_file', 'swift_file', 'approval_1', 'approval_2', 'approval_3']);
+    Object.keys(_impFIds).forEach(function (k) { updates[k] = _impFIds[k]; });
     var _oldImpFiles = null; try { _oldImpFiles = getAllRecords_(dbId, IMPORT_FOLLOW_SHEET).find(function(r){ return String(r.id)===String(id); }) || null; } catch(e2){}
     const sheet = getSheet_(IMPORT_FOLLOW_SHEET, dbId);
     if (!updateRowByCriteria_(sheet, 'id', id, updates)) throw new Error('السجل غير موجود');
@@ -2403,6 +2582,7 @@ const TopChemical = (function () {
   }
 
   function addCartonSize_(data, user, dbId) {
+    attachmentIdsForFields_(dbId, CARTON_SIZES_SHEET, data || {}, ['document']);
     const product = Number(data.product);
     if (!Number.isInteger(product) || product <= 0) throw new Error('المنتج مطلوب');
     if (!productRefs_(dbId).map[product]) throw new Error('المنتج غير موجود');
@@ -2424,6 +2604,7 @@ const TopChemical = (function () {
 
     return executeWithLock_(function () {
       const id = getNextIdUnderLock_(dbId, CARTON_SIZES_SHEET);
+      var _csFileIds = attachmentIdsForFields_(dbId, CARTON_SIZES_SHEET, data || {}, ['document']);
       const sheet = getSheet_(CARTON_SIZES_SHEET, dbId);
       const headers = getHeaders_(sheet);
       const rec = {
@@ -2439,6 +2620,7 @@ const TopChemical = (function () {
         user: (user && user.email) || '',
         created_at: new Date()
       };
+      try { Object.keys(_csFileIds).forEach(function (k) { rec[k] = _csFileIds[k]; rec[String(k).toLowerCase()] = _csFileIds[k]; }); } catch (e) {}
       const rowValues = headers.map(function (h) {
         const key = String(h).trim().toLowerCase();
         return rec[key] !== undefined ? rec[key] : '';
@@ -2474,6 +2656,8 @@ const TopChemical = (function () {
     const updates = {};
     if (data.document !== undefined && data.document !== null) updates['document'] = String(data.document).trim();
     if (!Object.keys(updates).length) throw new Error('لا توجد ملفات للتحديث');
+    var _csFIds = attachmentIdsForFields_(dbId, CARTON_SIZES_SHEET, data || {}, ['document']);
+    Object.keys(_csFIds).forEach(function (k) { updates[k] = _csFIds[k]; });
     var _oldCarton = null; try { _oldCarton = getAllRecords_(dbId, CARTON_SIZES_SHEET).find(function(r){ return String(r.id)===String(id); }) || null; } catch(e2){}
     const sheet = getSheet_(CARTON_SIZES_SHEET, dbId);
     if (!updateRowByCriteria_(sheet, 'id', id, updates)) throw new Error('السجل غير موجود');
@@ -3466,6 +3650,7 @@ const TopChemical = (function () {
   }
 
   function addLegalCosting_(data, user, dbId) {
+    var _costFileIds = attachmentIdsForFields_(dbId, LEGAL_COSTING_SHEET, data || {}, ['invoice_swift']);
     const cert = String(data['رقم الشهاده'] || '').trim();
     if (!cert) throw new Error('رقم الشهادة مطلوب');
     if (!String(data['تاريخ الافراج'] || '').trim()) throw new Error('تاريخ الافراج مطلوب');
@@ -3475,6 +3660,7 @@ const TopChemical = (function () {
     validateBudgetMonth_(data['تم_الاقرار_شهر']);
     const valueMap = {};
     Object.keys(data).forEach(function (k) { valueMap[k.trim().toLowerCase()] = data[k]; });
+    Object.keys(_costFileIds).forEach(function (k) { valueMap[k] = _costFileIds[k]; });
     valueMap['user'] = (user && user.email) || '';
     const formulaMap = {
       'القيمه بالسعر المعلن': '=G{r}*H{r}',
@@ -3496,12 +3682,14 @@ const TopChemical = (function () {
   }
 
   function addLegalPurchasingLine_(data, user, dbId) {
+    var _lineFileIds = attachmentIdsForFields_(dbId, LEGAL_PURCHASING_SHEET, data || {}, ['شهادة_تحليل_ان_وجد', 'ترخيص_بالافراج_الزراعي', 'صورة الافراج', 'صورة التسجيل']);
     const item = String(data['المادة'] || '').trim();
     if (!item) throw new Error('المادة مطلوبة');
     if (!(Number(data['الكمية']) > 0)) throw new Error('الكمية مطلوبة (أكبر من صفر)');
     if (!(Number(data['قيمة التكلفة']) >= 0)) throw new Error('قيمة التكلفة مطلوبة');
     const valueMap = {};
     Object.keys(data).forEach(function (k) { valueMap[k.trim().toLowerCase()] = data[k]; });
+    Object.keys(_lineFileIds).forEach(function (k) { valueMap[k] = _lineFileIds[k]; });
     valueMap['user'] = (user && user.email) || '';
     if (String(valueMap['رقم الشهاده'] || '').trim()) {
       ensureBudgetHeader_(dbId, LEGAL_PURCHASING_SHEET, 'رقم الشهاده');
@@ -3612,6 +3800,8 @@ const TopChemical = (function () {
     lm['المعاملة'] = String(line['المعاملة'] || 'مشتريات').trim();
     lm['سعر البيع'] = line['سعر البيع'] !== undefined && line['سعر البيع'] !== '' ? Number(line['سعر البيع']) : '';
     lm['user'] = (user && user.email) || '';
+    var _bundleLineFileIds = attachmentIdsForFields_(dbId, LEGAL_PURCHASING_SHEET, line || {}, ['شهادة_تحليل_ان_وجد', 'ترخيص_بالافراج_الزراعي', 'صورة الافراج', 'صورة التسجيل']);
+    Object.keys(_bundleLineFileIds).forEach(function (k) { lm[k] = _bundleLineFileIds[k]; });
     writeBudgetRow_(dbId, LEGAL_PURCHASING_SHEET, lm, {
       'كود المعاملة': '=CONCATENATE(I{r},"-",B{r},"-",E{r},"-",TEXT(F{r},"DD/MM/YYYY"))',
       'قيمة البيع': '=G{r}',
@@ -3770,6 +3960,7 @@ const TopChemical = (function () {
   }
 
   function addLegalManufacture_(data, user, dbId) {
+    var _manufactureFileIds = attachmentIdsForFields_(dbId, LEGAL_MANUFACTURE_SHEET, data || {}, ['analysis_certificate', 'sales_permit', 'technical_permit', 'registration']);
     const product = String(data.produced_product || '').trim();
     if (!product) throw new Error('المنتج المنتج مطلوب');
     if (!(Number(data.manufactured_qty) > 0)) throw new Error('الكمية المنتجة مطلوبة');
@@ -3779,6 +3970,7 @@ const TopChemical = (function () {
     if (!(Number(data.qty_1) > 0)) throw new Error('كمية المادة الأولى مطلوبة');
     const valueMap = {};
     Object.keys(data).forEach(function (k) { valueMap[k.trim().toLowerCase()] = data[k]; });
+    Object.keys(_manufactureFileIds).forEach(function (k) { valueMap[k] = _manufactureFileIds[k]; });
     valueMap['transaction_type'] = 'التصنيع الداخلي';
     valueMap['user'] = (user && user.email) || '';
     const formulaMap = {
@@ -3799,6 +3991,67 @@ const TopChemical = (function () {
     savedRecord['manufactured_qty'] = Number(data.manufactured_qty) || 0;
     savedRecord['user'] = (user && user.email) || '';
     return { status: 'success', message: 'تمت إضافة عملية التصنيع', record: savedRecord, data: { assignedId: savedRecord['transaction_code'], rowNumber: rowNum } };
+  }
+
+  /* Row-edit repair (Stage 4): keyed manufacture correction. The sheet carries
+   * no UID column, so the original transaction_code is the selector: it must
+   * match exactly one row or the edit is refused (missing/ambiguous). Manual
+   * validation mirrors addLegalManufacture_; only manual inputs are written
+   * through the formula-safe patch helper, so calculated cells
+   * (transaction_code, code, dep_qty, net_qty, total_cost, sales_amount,
+   * sales_price) recompute from the corrected inputs and creation metadata is
+   * preserved. Existing attachment pairs are retained unless a replacement
+   * arrives through the trusted upload flow. */
+  function updateLegalManufacture_(data, user, dbId) {
+    if (!(user && user.isSuperAdmin)) throw new Error('التعديل مسموح فقط للمشرف العام');
+    var originalCode = String((data && data.original_transaction_code) || '').trim();
+    if (!originalCode) throw new Error('كود المعاملة الأصلي مطلوب');
+    const product = String(data.produced_product || '').trim();
+    if (!product) throw new Error('المنتج المنتج مطلوب');
+    if (!(Number(data.manufactured_qty) > 0)) throw new Error('الكمية المنتجة مطلوبة');
+    if (!String(data.manufcture_number || '').trim()) throw new Error('رقم التشغيلة مطلوب');
+    if (!String(data.manufacture_date || '').trim()) throw new Error('تاريخ التصنيع مطلوب');
+    if (!String(data.item_1 || '').trim()) throw new Error('المادة الأولى مطلوبة');
+    if (!(Number(data.qty_1) > 0)) throw new Error('كمية المادة الأولى مطلوبة');
+
+    var sheet = getSheet_(LEGAL_MANUFACTURE_SHEET, dbId);
+    var matches = getAllRecords_(dbId, LEGAL_MANUFACTURE_SHEET).filter(function (r) {
+      return String(r.transaction_code || '').trim() === originalCode;
+    });
+    if (!matches.length) throw new Error('السجل غير موجود');
+    if (matches.length > 1) throw new Error('كود المعاملة مكرر — يلزم مراجعة السجل قبل التعديل');
+    var oldRow = matches[0];
+
+    var merged = Object.assign({}, data);
+    ['analysis_certificate', 'sales_permit', 'technical_permit', 'registration'].forEach(function (k) {
+      if ((merged[k] == null || String(merged[k]).trim() === '') && oldRow[k]) {
+        merged[k] = oldRow[k];
+        var oldIdKey = k + '_id';
+        if (oldRow[oldIdKey]) merged[oldIdKey] = oldRow[oldIdKey];
+      }
+    });
+    var fileIds = attachmentIdsForFields_(dbId, LEGAL_MANUFACTURE_SHEET, merged, ['analysis_certificate', 'sales_permit', 'technical_permit', 'registration']);
+
+    var PROTECTED_MANF = ['transaction_code', 'code', 'dep_qty', 'net_qty', 'total_cost', 'sales_amount', 'sales_price', 'transaction_type', 'user', 'created_at', 'original_transaction_code'];
+    var map = {};
+    Object.keys(merged).forEach(function (k) {
+      var key = String(k).trim().toLowerCase();
+      if (PROTECTED_MANF.indexOf(key) !== -1) return;
+      map[key] = merged[k];
+    });
+    Object.keys(fileIds).forEach(function (k) { map[k] = fileIds[k]; });
+    var result;
+    executeWithLock_(function () {
+      if (!patchRowByCriteria_(sheet, 'transaction_code', originalCode, map)) throw new Error('السجل غير موجود');
+      try { logHistory_(dbId, LEGAL_MANUFACTURE_SHEET, oldRow.record_uid || ('update_' + LEGAL_MANUFACTURE_SHEET + '_' + originalCode), originalCode, (user && user.email) || '', 'update', map, oldRow); } catch (e) {}
+      var savedUpdated = {};
+      Object.keys(merged).forEach(function (k) { savedUpdated[k] = merged[k]; });
+      savedUpdated['transaction_type'] = 'التصنيع الداخلي';
+      savedUpdated['transaction_code'] = String(product) + '-' + String(data.manufcture_number || '') + '-' + String(product) + '-' + String(data.manufacture_date || '');
+      savedUpdated['manufactured_qty'] = Number(data.manufactured_qty) || 0;
+      result = { status: 'success', message: 'تم تحديث عملية التصنيع', record: savedUpdated, data: { assignedId: savedUpdated['transaction_code'] } };
+    });
+    return result;
   }
 
   function getLegalInvoices_(data, user, dbId) {
@@ -4180,6 +4433,24 @@ const valueMap = {};
     }
   };
 
+  function attachmentIdsForFields_(dbId, sheetName, data, fileFields) {
+    var out = {}, source = data || {};
+    (fileFields || []).forEach(function (ff) {
+      var fid = (typeof attachmentPickFileId_ === 'function') ? String(attachmentPickFileId_(source, ff) || '').trim() : '';
+      var ref = source[ff] != null ? String(source[ff]).trim() : '';
+      if (!fid && ref && source[ff + '_id'] && typeof attachmentAuthorizedStoredId_ === 'function') fid = attachmentAuthorizedStoredId_(dbId, sheetName, source, ff, source[ff + '_id']);
+      if (ref && !fid) throw new Error('لم يتم تثبيت معرف Drive للمرفق ' + ff + '؛ أعد رفع الملف ثم احفظ السجل.');
+      if (Object.prototype.hasOwnProperty.call(source, ff)) out[ff + '_id'] = fid;
+      if (fid) {
+        if (typeof ensureAttachmentColumn_ === 'function' && !ensureAttachmentColumn_(dbId, sheetName, ff + '_id')) {
+          var check = getHeaders_(getSheet_(sheetName, dbId)).map(function (h) { return String(h).trim().toLowerCase(); });
+          if (check.indexOf(String(ff + '_id').toLowerCase()) === -1) throw new Error('تعذر تجهيز عمود ارتباط المرفق ' + ff + '_id');
+        }
+      }
+    });
+    return out;
+  }
+
   function ensureDriveFolderId_(folderName) {
     const cache = CacheService.getScriptCache();
     const key = 'uploadfolder_' + folderName;
@@ -4193,7 +4464,8 @@ const valueMap = {};
       if (typeof Drive !== 'undefined' && Drive.Files && Drive.Files.list) {
         const q = "name = '" + folderName.replace(/'/g, "\\'") + "' and mimeType = 'application/vnd.google-apps.folder' and trashed = false";
         const res = Drive.Files.list({ q: q, fields: 'files(id, name)' });
-        if (res && res.files && res.files.length > 0) {
+        if (res && res.files && res.files.length > 1) throw new Error('مجلد Google Drive مكرر: ' + folderName);
+        if (res && res.files && res.files.length === 1) {
           const folderId = res.files[0].id;
           try { cache.put(key, folderId, 21600); } catch (e) {}
           return folderId;
@@ -4222,7 +4494,8 @@ const valueMap = {};
       });
       if (searchRes.getResponseCode() === 200) {
         const data = JSON.parse(searchRes.getContentText());
-        if (data.files && data.files.length > 0) {
+        if (data.files && data.files.length > 1) throw new Error('مجلد Google Drive مكرر: ' + folderName);
+        if (data.files && data.files.length === 1) {
           const folderId = data.files[0].id;
           try { cache.put(key, folderId, 21600); } catch (e) {}
           return folderId;
@@ -4247,7 +4520,11 @@ const valueMap = {};
     throw new Error('تعذر العثور على مجلد حفظ الملفات أو إنشائه في Google Drive');
   }
 
-  function uploadDriveFileRest_(folderId, blob, fileName) {
+  function uploadDriveFileRest_(folderId, blob, fileName, requestId) {
+    /* Private request tag for idempotent recovery (Drive appProperties are
+       visible only to this app; the file is never made public). */
+    var reqProps = (/^[A-Za-z0-9_-]{16,100}$/.test(String(requestId || '')))
+      ? { erpRequestId: String(requestId) } : null;
     // 1. Try Advanced Drive API v3 (Drive.Files.create)
     try {
       if (typeof Drive !== 'undefined' && Drive.Files && Drive.Files.create) {
@@ -4255,6 +4532,7 @@ const valueMap = {};
           name: fileName,
           parents: [folderId]
         };
+        if (reqProps) resource.appProperties = reqProps;
         const created = Drive.Files.create(resource, blob);
         if (created && created.id) return created;
       }
@@ -4265,6 +4543,7 @@ const valueMap = {};
     // 2. Fallback via UrlFetchApp Multipart Upload (bypasses DriveApp permission locks)
     const token = ScriptApp.getOAuthToken();
     const metadata = { name: fileName, parents: [folderId] };
+    if (reqProps) metadata.appProperties = reqProps;
     const boundary = '-------' + Utilities.getUuid();
     const delimiter = "\r\n--" + boundary + "\r\n";
     const close_delim = "\r\n--" + boundary + "--";
@@ -4343,40 +4622,64 @@ const valueMap = {};
   }
 
   /** استقبال الملف base64 عبر router (add_upload_file) وحفظه بأسلوب AppSheet. */
-  function addUploadFile_(data, user, dbId) {
+  function addUploadFile_(data, user, dbId, ctx) {
     const sheet = String((data && data.sheet) || '').trim();
     const cfg = UPLOAD_META[sheet];
-    if (!cfg) throw new Error('الجدول غير معروف');
+    const requestId = String((ctx && ctx.requestId) || '').trim();
+    /* Deterministic pre-mutation checks first: these failures prove nothing
+       was written, so they are marked notApplied (safe to correct and retry)
+       instead of uncertain. Only errors raised before any mutation may carry
+       that marker. */
+    const notApplied = function (message) { const e = new Error(message); e.notApplied = true; e.code = 'REQUEST_NOT_APPLIED'; throw e; };
+    if (!cfg) notApplied('الجدول غير معروف');
     if (!(user && user.isSuperAdmin)) {
       const grants = ((user && user.authorizedPages) || {})[cfg.page] || [];
       if (grants.indexOf('write') === -1) {
-        throw new Error('لا يوجد صلاحية لإضافة سجلات في هذه الصفحة');
+        notApplied('لا يوجد صلاحية لإضافة سجلات في هذه الصفحة');
       }
     }
     const filename = String((data && data.filename) || '').trim();
-    if (!filename) throw new Error('اسم الملف مطلوب');
+    if (!filename) notApplied('اسم الملف مطلوب');
     const dot = filename.lastIndexOf('.');
     const ext = (dot > 0 ? filename.slice(dot + 1) : '').toLowerCase();
     const allowedExt = ['pdf', 'doc', 'docx', 'png', 'jpg', 'jpeg'];
     if (allowedExt.indexOf(ext) === -1) {
-      throw new Error('نوع الملف غير مسموح (pdf, word, png, jpg فقط)');
+      notApplied('نوع الملف غير مسموح (pdf, word, png, jpg فقط)');
     }
     const b64 = String((data && data.base64) || '').replace(/\s/g, '');
-    if (!b64) throw new Error('لا يوجد ملف');
+    if (!b64) notApplied('لا يوجد ملف');
     const bytes = Utilities.base64Decode(b64);
     if (bytes.length > 10 * 1024 * 1024) {
-      throw new Error('حجم الملف يتجاوز 10 ميجابايت');
+      notApplied('حجم الملف يتجاوز 10 ميجابايت');
     }
     const field = String((data && data.field) || '').trim();
     const folderName = (cfg.folderByField && cfg.folderByField[field]) || cfg.folder;
     const folderId = ensureDriveFolderId_(folderName);
+    /* Idempotent recovery: a retry carrying the same client request ID finds
+       the file created by the unconfirmed attempt (folder-scoped appProperties
+       lookup — never a global filename search) instead of uploading again. */
+    if (/^[A-Za-z0-9_-]{16,100}$/.test(requestId) && typeof findDriveFileByRequestId_ === 'function') {
+      var prior = null;
+      try { prior = findDriveFileByRequestId_(folderId, requestId); } catch (ePrior) { prior = null; }
+      if (prior && prior.id) {
+        var priorRef = folderName + '/' + (prior.name || filename);
+        try { CacheService.getScriptCache().put('attid_' + priorRef, prior.id, 21600); } catch (eCache) {}
+        return { status: 'success', reference: priorRef, fileId: prior.id, recovered: true };
+      }
+    }
     let newName = buildUploadName_(sheet, data, ext);
     newName = uniqueDriveName_(newName);
 
     const blob = Utilities.newBlob(bytes, mimeForExt_(ext), newName);
-    uploadDriveFileRest_(folderId, blob, newName);
+    const created = uploadDriveFileRest_(folderId, blob, newName, requestId);
+    var fileId = (created && created.id) ? String(created.id) : '';
+    var reference = folderName + '/' + newName;
+    if (!fileId) throw new Error('تم رفع الملف دون معرف Drive قابل للحفظ؛ لم يتم إنشاء ارتباط بالسجل.');
+    if (fileId) {
+      try { CacheService.getScriptCache().put('attid_' + reference, fileId, 21600); } catch (e) {}
+    }
 
-    return { status: 'success', reference: folderName + '/' + newName };
+    return { status: 'success', reference: reference, fileId: fileId };
   }
 
   /**
@@ -4630,6 +4933,7 @@ const valueMap = {};
   register('add_barcode', addBarcode_);
   register('get_registration_papers', getRegistrationPapers_);
   register('add_registration_paper', addRegistrationPaper_);
+  register('update_registration_paper', updateRegistrationPaper_);
   register('get_trust_accounts', getTrustAccounts_);
   register('get_trust_movements', getTrustMovements_);
   register('add_trust_movement', addTrustMovement_);
@@ -4687,6 +4991,7 @@ const valueMap = {};
   register('delete_legal_costing', deleteLegalCosting_);
   register('get_legal_manufacture', getLegalManufacture_);
   register('add_legal_manufacture', addLegalManufacture_);
+  register('update_legal_manufacture', updateLegalManufacture_);
   register('get_legal_invoices', getLegalInvoices_);
   register('add_legal_invoice', addLegalInvoice_);
   register('get_legal_cash', getLegalCash_);
@@ -4742,8 +5047,84 @@ const valueMap = {};
     if (!id) throw new Error('id is required for client_balance_sheets update');
     return dbClientBalanceSheetsUpdate_(data, user);
   }
+  function deleteClientBalanceSheet_(data, user, dbId) {
+    data = data || {};
+    var id = String(data.id !== undefined && data.id !== null ? data.id : '').trim();
+    if (!id) throw new Error('id is required for client_balance_sheets soft-delete');
+    return dbClientBalanceSheetsDelete_(data, user);
+  }
   register('get_client_balance_sheets', getClientBalanceSheets_);
   register('save_client_balance_sheet', saveClientBalanceSheet_);
+  register('delete_client_balance_sheet', deleteClientBalanceSheet_);
+
+  // ─── manufacture_headers / manufacture_footers (tc_manufacture_orders) ──
+  function getManufactureHeaders_(data, user, dbId) {
+    return dbManufactureList_(data || {}, user);
+  }
+  function getManufactureFooters_(data, user, dbId) {
+    return dbManufactureGetFooters_(data || {}, user);
+  }
+  function saveManufactureHeader_(data, user, dbId) {
+    data = data || {};
+    var id = String(data.id !== null && data.id !== undefined ? data.id : '').trim();
+    if (!id) throw new Error('id is required for manufacture_headers update');
+    return dbManufactureUpdateHeader_(data, user);
+  }
+  function saveManufactureFooter_(data, user, dbId) {
+    data = data || {};
+    var id = String(data.id !== null && data.id !== undefined ? data.id : '').trim();
+    if (!id) throw new Error('id is required for manufacture_footers update');
+    return dbManufactureUpdateFooter_(data, user);
+  }
+  function addManufactureFooter_(data, user, dbId) {
+    data = data || {};
+    var hid = String(data.manufacture_header_id !== null && data.manufacture_header_id !== undefined ? data.manufacture_header_id : '').trim();
+    if (!hid) throw new Error('manufacture_header_id is required');
+    return dbManufactureInsertFooter_(data, user);
+  }
+  function getManufactureRefs_(data, user, dbId) {
+    return dbManufactureRefs_(data || {}, user);
+  }
+  function deleteManufactureHeader_(data, user, dbId) {
+    data = data || {};
+    var id = String(data.id !== null && data.id !== undefined ? data.id : '').trim();
+    if (!id) throw new Error('id is required for manufacture_headers soft-delete');
+    return dbManufactureSoftDeleteHeader_(data, user);
+  }
+  function deleteManufactureFooter_(data, user, dbId) {
+    data = data || {};
+    var id = String(data.id !== null && data.id !== undefined ? data.id : '').trim();
+    if (!id) throw new Error('id is required for manufacture_footers delete');
+    return dbManufactureDeleteFooter_(data, user);
+  }
+  register('get_manufacture_headers', getManufactureHeaders_);
+  register('get_manufacture_footers', getManufactureFooters_);
+  register('save_manufacture_header', saveManufactureHeader_);
+  register('save_manufacture_footer', saveManufactureFooter_);
+  register('add_manufacture_footer',  addManufactureFooter_);
+  register('delete_manufacture_header', deleteManufactureHeader_);
+  register('delete_manufacture_footer', deleteManufactureFooter_);
+  register('get_manufacture_refs',    getManufactureRefs_);
+
+  // ─── products live table (tc_products_live / اصناف النظام الرئيسي) ──
+  function getProductsLive_(data, user, dbId) {
+    return dbProductsLiveList_(data || {}, user);
+  }
+  function saveProductLive_(data, user, dbId) {
+    data = data || {};
+    var id = String(data.id !== undefined && data.id !== null ? data.id : '').trim();
+    if (!id) throw new Error('id is required for products update');
+    return dbProductsLiveUpdate_(data, user);
+  }
+  function deleteProductLive_(data, user, dbId) {
+    data = data || {};
+    var id = String(data.id !== undefined && data.id !== null ? data.id : '').trim();
+    if (!id) throw new Error('id is required for products soft-delete');
+    return dbProductsLiveDelete_(data, user);
+  }
+  register('get_products_live', getProductsLive_);
+  register('save_product_live', saveProductLive_);
+  register('delete_product_live', deleteProductLive_);
 
   // ─── تحليل حركة الخزنة العادية (live MySQL regular_box_movement) ──
   //
@@ -5504,6 +5885,7 @@ const valueMap = {};
     dispatch_: dispatch_,
     pageForAction_: pageForAction_,
     tableForAction_: tableForAction_,
+    requestRecovery_: requestRecovery_,
     /* Exposed only so the global trigger entry point below can reach it. */
     rebuildBoxAnalysisIndex_: rebuildBoxAnalysisIndex_
   };
@@ -5545,13 +5927,7 @@ const PAYROLL_MONTH_NAMES = [
 ];
 
 function servePayrollReport_(params) {
-  const token = String(params.sessionToken || '').trim();
-  const auth = token ? authenticateSystemUser_(token) : { authorized: false };
-  if (!auth.authorized) {
-    return HtmlService.createHtmlOutput(
-      '<script>window.top.location.href="' + ScriptApp.getService().getUrl() + '?action=login";</script>'
-    ).setTitle('تسجيل الدخول');
-  }
+  authorizeArtifact_(params, { company: '3fe1b5cb67b7223e', page: 'tc_emp_salaries', access: 'read' });
   const month = Number(params.month);
   const year = Number(params.year);
   if (!Number.isInteger(month) || month < 1 || month > 12) return ContentService.createTextOutput('Invalid month');
@@ -5823,14 +6199,10 @@ const BUDGET_PRINT_MONTH_NAMES = [
 ];
 
 function serveBudgetPrint_(params) {
-  const token = String(params.sessionToken || '').trim();
-  const auth = token ? authenticateSystemUser_(token) : { authorized: false };
-  if (!auth.authorized) {
-    return HtmlService.createHtmlOutput(
-      '<script>window.top.location.href="' + ScriptApp.getService().getUrl() + '?action=login";</script>'
-    ).setTitle('تسجيل الدخول');
-  }
   const type = String(params.type || '').trim();
+  const pages = { invoice: 'tc_budget_invoices', manufacture: 'tc_budget_manufacture', costing: 'tc_budget_inputs', cash: 'tc_budget_cash', movement: 'tc_budget_stock_movement' };
+  if (!pages[type]) return ContentService.createTextOutput('Invalid type');
+  authorizeArtifact_(params, { company: '3fe1b5cb67b7223e', page: pages[type], access: 'read' });
   const id = decodeURIComponent(String(params.id || '')).trim();
   if (!id) return ContentService.createTextOutput('Invalid id');
   const dbId = getCompanySpreadsheetId_('3fe1b5cb67b7223e');
@@ -6328,6 +6700,7 @@ function budgetPrintShell_(title, body) {
     '</body></html>';
 }
 
-function kv(k, v) {
+function kv_(k, v) {
   return '<tr><th>' + payrollEsc_(k) + '</th><td>' + payrollEsc_(v == null ? '' : v) + '</td></tr>';
 }
+

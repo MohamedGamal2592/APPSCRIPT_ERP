@@ -885,3 +885,4 @@ console.log('\n' + (failed === 0
   ? 'S17 — the purchasing save and the batched delete both check out.'
   : failed + ' check(s) FAILED.'));
 process.exit(failed === 0 ? 0 : 1);
+

@@ -7,6 +7,7 @@
   <?!= include('CSS_Tokens'); ?>
   <?!= include('UI_Components'); ?>
   <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_TopLight_Nav'); ?>
   <?!= getCompanyThemeCSS_('8df5c89a117fe9a5') ?>
 </head>
 <body>
@@ -40,6 +41,7 @@
 
   function load() {
     UIC.appShell('tl-root', {
+      menuGroups: window.TOPLIGHT_MENU || [],
       companyLogoUrl: COMPANY_LOGO_URL,
       companyLogoHref: scriptUrl + '?action=tl_dashboard&sessionToken=' + SESSION_TOKEN,
       companyLogoTitle: 'القمة لايت',
@@ -132,6 +134,10 @@
     var record = null;
     if (uid) {
       record = __headers.find(function (h) { return String(h.invoice_unique_id) === String(uid); }) || null;
+      /* Row-edit repair (5.5): a requested record that no longer exists shows
+         a clear error and returns to the list — it must never silently render
+         the Add form. */
+      if (!record) { UIC.toast('السجل غير موجود — تم تحديث القائمة', 'error'); showList(); return; }
     }
     renderForm(record);
   }
@@ -220,13 +226,15 @@
     var html = '';
     for (var i = 0; i < lines.length; i++) {
       var l = lines[i];
+      var productCombo = UIC.combo({
+        key: 'product_id_' + i,
+        options: opts.product_options || [],
+        value: l.product_id,
+        placeholder: 'اكتب للبحث…',
+        inline: true
+      });
       html += '<tr>' +
-        '<td><select id="product_id_' + i + '" class="input" onchange="updateLineSelect(' + i + ', \'product_id\', this.value)">' +
-          '<option value="">اختر...</option>' +
-          (opts.product_options || []).map(function (p) {
-            return '<option value="' + FMT.escape(p.value) + '"' + (String(p.value) === String(l.product_id) ? ' selected' : '') + '>' + FMT.escape(p.label) + '</option>';
-          }).join('') +
-          '</select></td>' +
+        '<td>' + productCombo + '</td>' +
         '<td><input class="input" type="number" min="0" step="any" value="' + (l.product_qty != null ? l.product_qty : '') + '" oninput="updateLineInput(' + i + ', \'product_qty\', this.value)">' +
         '<div style="font-size:11px;color:var(--text-muted);">متاح: ' + availableQty(i) + '</div></td>' +
         '<td><input class="input" type="number" min="0" step="any" value="' + (l.product_price != null ? l.product_price : '') + '" oninput="updateLineInput(' + i + ', \'product_price\', this.value)"></td>' +
@@ -242,6 +250,14 @@
     }
     var tbody = document.getElementById('lines-tbody');
     if (tbody) tbody.innerHTML = html;
+    for (var j = 0; j < lines.length; j++) {
+      var productEl = document.getElementById('product_id_' + j);
+      if (productEl) {
+        productEl.addEventListener('change', (function (lineIndex) {
+          return function () { updateLineSelect(lineIndex, 'product_id', this.value); };
+        })(j));
+      }
+    }
     UIC.autoColumns('lines-table');
     recalc();
   }
@@ -468,6 +484,5 @@
 </script>
 </body>
 </html>
-
 
 

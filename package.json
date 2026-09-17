@@ -1,0 +1,11 @@
+{
+  "dependencies": {
+    "opencode-model-router": "^1.11.1"
+  },
+  "scripts": {
+    "verify": "node tools/verify/run_all.js",
+    "ui_check": "node tools/ui_check.js",
+    "preview": "node tools/build_preview.js",
+    "simplification_benchmark": "node tools/verify/js_simplification_benchmark.js"
+  }
+}

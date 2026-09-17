@@ -15,6 +15,7 @@ const path = require('path');
 const vm = require('vm');
 
 const ROOT = path.resolve(__dirname, '..', '..');
+const helper = fs.readFileSync(path.join(ROOT, 'JS_Simplification_Helpers.js'), 'utf8');
 const src = fs.readFileSync(path.join(ROOT, 'Company_Assessment_Actions.js'), 'utf8');
 
 let failures = 0;
@@ -107,6 +108,7 @@ function buildSandbox(assignmentsHeaders) {
 
   const sandbox = { getSheet_, getHeaders_, appendRowWithRetry_: function (s, v) { s.appendRow(v); }, noteMutation_, executeWithLock_, updateRowByCriteria_, getAllRecords_, getRecordsByPk_, logHistory_, Utilities, Session, CacheService };
   vm.createContext(sandbox);
+  vm.runInContext(helper, sandbox, { filename: 'JS_Simplification_Helpers.js' });
   vm.runInContext(src, sandbox, { filename: 'Company_Assessment_Actions.js' });
   const AC = vm.runInContext('AssessmentCenter', sandbox);
   return { AC: AC, store: store };
@@ -186,3 +188,4 @@ console.log('\nB-2 — WITH the columns\n');
 console.log('');
 if (failures) { console.log(failures + ' assertion(s) FAILED'); process.exit(1); }
 console.log('ac7_tierb: all assertions pass.');
+

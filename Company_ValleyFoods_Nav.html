@@ -1,22 +1,18 @@
 <script>
-/**
- * Company_ValleyFoods_Nav.html
- * Single source of truth for the Valley Foods header dropdown groups.
- * The dashboard currently builds its menuGroups inline, but this global
- * mirrors the same structure for reuse / consistency.
- */
+/** Valley Foods header dropdown groups. Items with a real page are { label, action }; plain strings are "قيد الإنشاء" placeholders. */
 window.VALLEYFOODS_MENU = [
   { label: 'الادارة المالية', items: [
-    { label: 'المنتجات', action: 'vf_products' },
+    { label: 'الاصناف وتحركاتها', action: 'vf_products' },
     { label: 'العملاء والموردون', action: 'vf_parties' },
     { label: 'حركة النقدية والبنوك', action: 'vf_cash' },
+    { label: 'قائمة الدخل', action: 'vf_income_statement' },
     { label: 'المبيعات', action: 'vf_sales' },
     { label: 'مرتجعات المبيعات', action: 'vf_sales_returns' },
     { label: 'المشتريات', action: 'vf_purchasing' },
     { label: 'حركة المخزن', action: 'vf_warehouse_movement' }
   ] },
   { label: 'الموارد البشرية', items: [
-    { label: 'قائمة الموظفين', action: 'vf_hr_employees' },
+    { label: 'قائمة الموظفين', action: 'vf_hr_employees' }, { label: 'راتب الموظف', action: 'vf_hr_salary' },
     { label: 'الغياب والخصومات', action: 'vf_hr_deductions' },
     { label: 'العقود', action: 'vf_hr_contracts' },
     { label: 'تخصيص الإجازات', action: 'vf_hr_vacation_alloc' },
@@ -39,3 +35,4 @@ window.VALLEYFOODS_MENU = [
   ] }
 ];
 </script>
+

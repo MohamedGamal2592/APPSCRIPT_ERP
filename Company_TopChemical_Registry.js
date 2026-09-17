@@ -50,7 +50,9 @@ function registerTopChemical_() {
       { action: 'tc_budget_invoices', template: 'Company_TopChemical_BudgetInvoices', title: 'الفواتير الضريبية', nav: false },
       { action: 'tc_budget_cash', template: 'Company_TopChemical_BudgetCash', title: 'تحركات صناديق الميزانية', nav: false },
       { action: 'tc_budget_hr', template: 'Company_TopChemical_BudgetHR', title: 'شؤون العاملين القانونية', nav: false },
-      { action: 'tc_budget_income', template: 'Company_TopChemical_BudgetIncome', title: 'قائمة الدخل السنوية', nav: false }
+      { action: 'tc_budget_income', template: 'Company_TopChemical_BudgetIncome', title: 'قائمة الدخل السنوية', nav: false },
+      { action: 'tc_manufacture_orders', template: 'Company_TopChemical_ManufactureOrders', title: 'أوامر التصنيع', label: 'أوامر التصنيع', nav: false },
+      { action: 'tc_products_live', template: 'Company_TopChemical_ProductsLive', title: 'اصناف النظام الرئيسي', label: 'اصناف النظام الرئيسي', nav: false }
     ]
   });
 }

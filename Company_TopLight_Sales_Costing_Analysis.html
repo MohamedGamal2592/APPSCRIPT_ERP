@@ -7,6 +7,7 @@
   <?!= include('CSS_Tokens'); ?>
   <?!= include('UI_Components'); ?>
   <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_TopLight_Nav'); ?>
   <?!= getCompanyThemeCSS_('8df5c89a117fe9a5') ?>
   <style>
     @media print {
@@ -40,6 +41,7 @@
 
   function load() {
     UIC.appShell('tl-root', {
+      menuGroups: window.TOPLIGHT_MENU || [],
       companyLogoUrl: COMPANY_LOGO_URL,
       companyLogoHref: scriptUrl + '?action=tl_dashboard&sessionToken=' + SESSION_TOKEN,
       companyLogoTitle: 'القمة لايت',

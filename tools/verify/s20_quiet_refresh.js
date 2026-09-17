@@ -141,6 +141,8 @@ console.log('\n3 — every change watch names a real page and a real function\n'
       const re = /'[a-z0-9_]+':\s*\{\s*page:\s*'([a-z0-9_]+)'/g;
       let x;
       while ((x = re.exec(src)) !== null) knownPages[x[1]] = true;
+      const defs = /handler:\s*(?:'[^']*'|[A-Za-z_$][A-Za-z0-9_$]*)\s*,\s*page:\s*'([a-z0-9_]+)'/g;
+      while ((x = defs.exec(src)) !== null) knownPages[x[1]] = true;
     });
 
   let watched = 0;
@@ -293,3 +295,5 @@ console.log('\n' + (failed === 0
   ? 'S20 — the quiet-refresh rollout is consistent.'
   : failed + ' check(s) FAILED.'));
 process.exit(failed === 0 ? 0 : 1);
+
+

@@ -13,7 +13,15 @@ const path = require('path');
 
 const HERE = __dirname;
 const STEPS = [
+  ['request_guard.js', 'Durable duplicate-request protection and lost-response recovery'],
+  ['tc_registration_upload_recovery.js', 'Registration upload idempotency: request-ID recovery, confirmed failures, physical folder'],
+  ['attachment_download.js', 'Attachment identity and migration contracts'],
+  ['appsheet_attachments.js', 'AppSheet paths across all attachment tables'],
+  ['firestore_configuration_contract.js', 'Firestore configuration, preflight and router-safe secondary reporting'],
+  ['fs_storage_contract.js', 'Firestore storage adapter contract — typed REST, retries, pagination, preconditions'],
   ['parse_pages.js', 'inline <script> of every template touched'],
+  ['js_simplification_metadata.js', 'Phase 2 — Top Light action metadata differential'],
+  ['js_simplification_snapshot.js', 'Phase 4 — bounded read-only snapshot lifecycle'],
   ['s0_modal_size.js', 'S0 — UIC.openModal size option is purely additive'],
   ['s1_save_cost.js', 'S1 — the save resolves cost_unit server-side'],
   ['s2_workops_cost.js', 'S2 — work-centre costs reach the client'],
@@ -44,6 +52,8 @@ const STEPS = [
   ['s18_table_columns.js', 'S18b — table column widths: the classifier and the contract'],
   ['s24_stock_scan.js', 'S24 — جرد دوري مخازن باركود + the USER_PAGES nav-visibility regression guard'],
   ['s25_stock_authority.js', 'S25 — رصيد الدفعات: one stock authority — available = current_qty + held(this document)'],
+  ['s26_party_agreements.js', 'S26 — vf_parties كشف حساب: factory/agreements/packaging + balance-once'],
+  ['vf_financial_reporting.js', 'Valley Foods IFRS income-statement financial acceptance groups'],
   /* ── UI/UX programme (branch ui/odoo-parity) ── */
   ['ui1_anchor.js', 'UI-1.2 — popups escape the table clip box (U-01)'],
   ['ui1_sort.js', 'UI-1.3 — tri-state sort, load order preserved (U-03)'],
@@ -67,6 +77,7 @@ const STEPS = [
   ['box_matcher.js', 'B2 — item matcher: stemming, blocking, scores, clusters'],
   ['box_windows.js', 'B3 — the four account windows and the month-end clamp'],
   ['box_sql.js', 'B3 — SQL discipline: additive, no DDL, closes, binds, credit'],
+  ['js_simplification_operational.js', 'Phase 6 — bounded operational scripts and SQL access path'],
   ['box_wiring.js', 'B4 — access gate, registration, nav, query budget'],
   ['box_edit.js', 'B6 — edit path: allowlist, validators, named confirm, audit'],
   ['box_rules.js', 'B7 — rules engine, run against fixtures both ways'],
@@ -90,22 +101,21 @@ const STEPS = [
   ['rt6_router.js', 'RT6 — soft nav: the same gate, a hard fallback, nothing left running'],
   ['rt10_telemetry.js', 'RT10 — telemetry costs one cache write and names nobody'],
   ['rt9_history_queue.js', 'RT9 — the audit queue: nothing lost, nothing duplicated'],
-  ['rt8_search_scope.js', 'RT8 — no search box over a truncated list stays silent about it']
+  ['rt8_search_scope.js', 'RT8 — no search box over a truncated list stays silent about it'],
+  ['customs_office_path_repair.js', 'Customs-office path repair: مكتب الجمارك prefix preview contract']
 ];
 
-/* Two programmes share this repo and this runner, so a step's file can be
- * present in one working tree and not yet committed in another. A missing file
- * is reported and SKIPPED rather than crashing the whole suite: the alternative
- * is that one uncommitted file makes every other check unrunnable. */
+/* Every listed check is part of this execution contract. A missing verifier is
+ * a failure, because a green run with an omitted check is not evidence. */
 const fs = require('fs');
 
-let failed = 0, skipped = 0;
+let failed = 0;
 STEPS.forEach(function (s) {
   const [file, label] = s;
   process.stdout.write('── ' + label + '\n');
   if (!fs.existsSync(path.join(HERE, file))) {
-    skipped++;
-    console.log('   SKIPPED — ' + file + ' is not present in this working tree\n');
+    failed++;
+    console.log('   FAILED — required verifier ' + file + ' is not present in this working tree\n');
     return;
   }
   try {
@@ -118,8 +128,13 @@ STEPS.forEach(function (s) {
   }
 });
 
-const ran = STEPS.length - skipped;
+const ran = STEPS.length;
 console.log(failed === 0
-  ? 'All ' + ran + ' checks pass.' + (skipped ? '  (' + skipped + ' skipped — file not in this tree)' : '')
-  : failed + ' of ' + ran + ' checks FAILED.' + (skipped ? '  (' + skipped + ' skipped)' : ''));
+  ? 'All ' + ran + ' checks pass.'
+  : failed + ' of ' + ran + ' checks FAILED.');
 process.exit(failed === 0 ? 0 : 1);
+
+
+
+
+

@@ -1,0 +1,790 @@
+<script>
+
+/* [UI-1.1 / U-02] Guarantee the document direction on every page.
+ *
+ * Only 24 of the 85 page templates set dir="rtl" on their own <html> element.
+ * The other 61 render left-to-right, so every component that positions itself
+ * against the document direction — modals, toasts, spinners, the drawer, the
+ * combo list, `margin-inline-*` on anything — comes out mirrored. The page
+ * *content* still looked right because the text is Arabic and CSS_Tokens sets
+ * `[dir="rtl"] body { text-align: right }`, which is why this survived so long.
+ *
+ * Client_Helpers is included by 82 of the 85 templates, in <head>, before any
+ * paint, so one assignment fixes all of them. It is idempotent: the 24 pages
+ * that already declare dir="rtl" are unaffected. No page in the tree declares
+ * dir="ltr" (verified), so there is nothing to opt out.
+ *
+ * Expect this to REVEAL small layout bugs that the wrong direction was masking.
+ * Those are listed, not silently fixed — they are budgeted as step 3.7. */
+try { document.documentElement.setAttribute('dir', 'rtl'); } catch (e) {}
+
+window.API = window.API || {};
+window.FMT = window.FMT || {};
+window.UI  = window.UI  || {};
+
+/* Code.js include() now evaluates included files as templates and passes
+ * scriptUrl + sessionToken, so these tokens ARE evaluated here. NOTE: the
+ * Apps Script template scriptlet context has no JSON global, so use a plain
+ * force-print scriptlets — both values are strings (URL / token). */
+window.SESSION_TOKEN = '__APP_SESSION_TOKEN__';
+
+/* Surface any uncaught error as a visible banner instead of a silent blank page. */
+window.addEventListener('error', function (e) {
+  try {
+    var b = document.getElementById('app-error-banner');
+    if (!b) {
+      b = document.createElement('div');
+      b.id = 'app-error-banner';
+      b.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:99999;background:#7f1d1d;color:#fff;font:13px/1.5 Segoe UI,Tahoma,Arial;padding:10px 14px;white-space:pre-wrap;direction:ltr;text-align:left;';
+      (document.body || document.documentElement).appendChild(b);
+    }
+    b.textContent = 'JS Error: ' + (e.message || e.error || e) + (e.filename ? ' @ ' + e.filename + ':' + e.lineno : '');
+  } catch (err) {}
+  try { if (window.UIC && UIC.reportError) UIC.reportError((e && e.message) || e, { stack: (e && e.error && e.error.stack) || '' }); } catch (er) {}
+});
+
+window.addEventListener('unhandledrejection', function (e) {
+  try {
+    if (window.UIC && UIC.reportError) UIC.reportError('Unhandled Promise Rejection: ' + ((e && e.reason && (e.reason.message || e.reason)) || e), { stack: (e && e.reason && e.reason.stack) || '' });
+  } catch (er) {}
+});
+
+(function initVhPolyfill() {
+  function setVh() {
+    var vh = window.innerHeight * 0.01;
+    document.documentElement.style.setProperty('--vh', vh + 'px');
+  }
+  setVh();
+  window.addEventListener('resize', setVh, { passive: true });
+  window.addEventListener('orientationchange', function () {
+
+    setTimeout(setVh, 300);
+  });
+})();
+
+(function initKeyboardDetection() {
+  var vv = window.visualViewport;
+  if (!vv) return;
+
+  function onViewportChange() {
+    var keyboardHeight = Math.max(0, window.innerHeight - vv.height);
+    var isOpen = keyboardHeight > 150; // 150px threshold avoids false positives
+    document.documentElement.style.setProperty('--keyboard-height', keyboardHeight + 'px');
+    document.documentElement.classList.toggle('keyboard-open', isOpen);
+  }
+
+  vv.addEventListener('resize', onViewportChange, { passive: true });
+  vv.addEventListener('scroll', onViewportChange, { passive: true });
+})();
+
+(function initInputAutoScroll() {
+  document.addEventListener('focusin', function (e) {
+    var el = e.target;
+    if (!el || !['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName)) return;
+    setTimeout(function () {
+      try {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      } catch (_) {
+        el.scrollIntoView();
+      }
+    }, 350);
+  }, { passive: true });
+})();
+
+/* [RT-4b] The last company this tab talked to.
+ *
+ * UIC.Live's retry queue has to survive a reload, and after a reload it has to
+ * be able to REBUILD the request. Every page's companyCall is a closure over a
+ * `target_system` literal, so the queue cannot see it and JSON.stringify cannot
+ * carry it — which is exactly why a queued entry could never drain in a new
+ * session. Recording it here costs one assignment and needs no page to change:
+ * companyCall calls API.call synchronously, so by the time UIC.Live.save has
+ * its promise back, this is already the target of that very call.
+ *
+ * Read-only from the outside. Nothing decides anything from it except the queue
+ * entry it stamps at save time, and an entry with no stamp is not queued. */
+API.call = function (action, payload, sessionToken) {
+  if (payload && payload.target_system) API._lastTarget = payload.target_system;
+  return new Promise(function (resolve, reject) {
+    var request = { action: action, payload: payload || {} };
+    if (sessionToken) request.sessionToken = sessionToken;
+
+    google.script.run
+      .withSuccessHandler(function (result) {
+        if (result && result.status === 'error') {
+          /* Redirect targets MUST be absolute: inside the HtmlService sandbox
+           * the executing origin is a *.googleusercontent.com iframe, so a
+           * relative '/' would land on Google Drive's error page. */
+          var _s = window.scriptUrl || '/';
+          if (result.code === 'SESSION_EXPIRED') {
+            if (window.UIC && UIC.navTo) UIC.navTo(null, _s + '?action=session_expired'); else window.location.href = _s + '?action=session_expired';
+          } else if (result.code === 'SYSTEM_DISABLED') {
+            if (window.UIC && UIC.navTo) UIC.navTo(null, _s + '?action=login&shutdown=1'); else window.location.href = _s + '?action=login&shutdown=1';
+          }
+          reject(result);
+        } else {
+          resolve(result);
+        }
+      })
+      .withFailureHandler(function (err) {
+        /* [RT-4] `transport: true` marks a failure that never reached a
+         * handler — the network dropped, the sandbox was torn down, the device
+         * went offline. It is the ONLY kind of failure worth retrying: a
+         * handler that rejected the payload will reject it again, and retrying
+         * a validation error just means showing the same error four times.
+         * UIC.Live.save reads this and nothing else to decide. */
+        reject({
+          status: 'error',
+          transport: true,
+          message: err && err.message ? err.message : 'خطأ غير متوقع'
+        });
+      })
+      .apiRouter(request);
+  });
+};
+
+/* F-18: xlsx.full.min.js is ~900 KB and was a top-level <script> here, so all 83
+ * pages that include Client_Helpers paid for it on every navigation while only
+ * the Excel-export button ever uses it. It is now fetched on first export.
+ * Resolves immediately once loaded; concurrent callers share one request. */
+API._xlsxPromise = null;
+
+API.ensureXlsx = function () {
+  if (typeof XLSX !== 'undefined') return Promise.resolve();
+  if (API._xlsxPromise) return API._xlsxPromise;
+  API._xlsxPromise = new Promise(function (resolve, reject) {
+    var s = document.createElement('script');
+    s.src = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+    s.async = true;
+    s.onload = function () { resolve(); };
+    s.onerror = function () {
+      API._xlsxPromise = null;   // let a later click retry
+      reject(new Error('تعذر تحميل مكتبة Excel'));
+    };
+    document.head.appendChild(s);
+  });
+  return API._xlsxPromise;
+};
+
+/* ── [UI-9.3 / U-37] Chart.js, fetched on demand ──────────────────────────
+ *
+ * Chart.js is a blocking <script> in the <head> of 5 dashboard and KPI pages,
+ * so every visit to one of them waits for ~200 KB before the page can render —
+ * including the visits where the user is only reading the KPI tiles.
+ *
+ * This is the same shape as API.ensureXlsx directly above, deliberately: one
+ * lazy-loader pattern in this codebase rather than two. Concurrent callers
+ * share one request, and a failure clears the promise so a later attempt can
+ * retry rather than being stuck with a rejected one forever.
+ */
+API._chartPromise = null;
+
+API.ensureChart = function () {
+  if (typeof Chart !== 'undefined') return Promise.resolve();
+  if (API._chartPromise) return API._chartPromise;
+  API._chartPromise = new Promise(function (resolve, reject) {
+    var s = document.createElement('script');
+    s.src = 'https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js';
+    s.async = true;
+    s.onload = function () {
+      try { if (window.UIC && UIC.applyChartDefaults) UIC.applyChartDefaults(); } catch (e) {}
+      resolve();
+    };
+    s.onerror = function () {
+      API._chartPromise = null;   // let a later call retry
+      reject(new Error('تعذر تحميل مكتبة الرسوم البيانية'));
+    };
+    document.head.appendChild(s);
+  });
+  return API._chartPromise;
+};
+
+API.downloadXlsx = function (base64, filename) {
+  var bin = atob(base64);
+  var bytes = new Uint8Array(bin.length);
+  for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  var blob = new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url;
+  a.download = filename || 'report.xlsx';
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(function () { URL.revokeObjectURL(url); a.remove(); }, 1000);
+};
+
+API.getSession = function () {
+  try {
+    return JSON.parse(localStorage.getItem('erp_session') || 'null');
+  } catch (e) {
+    return null;
+  }
+};
+
+API.setSession = function (s) {
+  localStorage.setItem('erp_session', JSON.stringify(s || null));
+};
+
+API.clearSession = function () {
+  localStorage.removeItem('erp_session');
+};
+
+/* ── [UI-3.4 / U-24] One loading overlay, one notification path ──────────
+ *
+ * UI.showSpinner is called from 80 pages, so the NAME and the SIGNATURE are a
+ * public contract and do not change. The implementation moved: it is now a thin
+ * wrapper over UIC.showPageLoading, which is the single loading service.
+ *
+ * The rotating-message behaviour is preserved — passing an array still cycles
+ * the lines every 2.5 seconds — because several long saves rely on it. That
+ * loop now lives in UIC._loadMessage rather than being duplicated here.
+ *
+ * The overlay's markup and CSS are the ones that used to live in this file:
+ * they were the only ones of the four written against the token layer, so they
+ * became the canonical look rather than the one that was hardest to theme. */
+UI.showSpinner = function (message) {
+  try { UIC.showPageLoading(message); } catch (e) {}
+};
+
+UI.hideSpinner = function () {
+  try { UIC.hidePageLoading(); } catch (e) {}
+  /* [RT-3] A read that drew the progress hairline instead of the overlay is
+   * finished by the same call, so no call site had to learn a second name. */
+  try { UIC._clearReadProgress(); } catch (e) {}
+};
+
+/* [UI-3.4] UI.toast and UI.alert did not exist, and that was a real defect —
+ * found by tools/ui_check.js check C3 during the Phase 0 baseline and recorded
+ * as N-01 and N-02 in UI_BASELINE.md.
+ *
+ *   N-01  Company_ValleyFoods_MfgOrderView.html calls UI.toast 40 times, every
+ *         call guarded as `UI.toast && UI.toast(...)`. Nothing threw, and every
+ *         success and error message on the manufacturing order page was
+ *         silently discarded. A user saving a manufacturing order got no
+ *         confirmation and no error text at all.
+ *   N-02  DbLive_Viewer.html calls UI.alert 9 times, UNGUARDED, all on error
+ *         paths — so the page threw `UI.alert is not a function` at exactly the
+ *         moment it was trying to report a problem.
+ *
+ * Both are fixed additively: two new names on an existing namespace, delegating
+ * to components that already exist. Nothing is renamed or removed. */
+UI.toast = function (message, type) {
+  try { UIC.toast(message, type); }
+  catch (e) { try { console.warn('toast: ' + message); } catch (e2) {} }
+};
+
+/* [UI-5.2] Delegates to the styled UIC.alert rather than to a toast. Native
+ * alert() required an acknowledgement, and the 9 DbLive_Viewer call sites are
+ * all error reports — a toast that vanishes after three seconds can be missed
+ * entirely, which is the failure the original code was trying to avoid.
+ * Returns the promise so a caller can chain if it ever wants to. */
+UI.alert = function (message) {
+  try { return UIC.alert(message); }
+  catch (e) {
+    try { console.warn('alert: ' + message); } catch (e2) {}
+    return Promise.resolve(true);
+  }
+};
+
+/* Batch 10: guard a submit button against double-clicks / double-submits.
+ * Disables the button until `fn` (which may return a Promise) settles.
+ * Safe no-op if already in flight. Existing loading overlays still apply. */
+UI.submitOnce = function (btn, fn) {
+  if (!btn) { if (fn) fn(); return; }
+  if (btn.dataset && btn.dataset.vfSubmitting === '1') return;
+  if (btn.dataset) btn.dataset.vfSubmitting = '1';
+  var prev = btn.disabled;
+  btn.disabled = true;
+  var done = function () { btn.disabled = prev; if (btn.dataset) btn.dataset.vfSubmitting = ''; };
+  var p = fn ? fn() : undefined;
+  if (p && typeof p.then === 'function') p.then(done, done); else done();
+};
+
+(function initNavSpinner() {
+  document.addEventListener('click', function (e) {
+    var el = e.target;
+    var a = (el && el.closest) ? el.closest('a[href]') : null;
+    if (!a) return;
+    if (a.target && a.target !== '_self' && a.target !== '_top') return;
+    var href = a.getAttribute('href') || '';
+    if (href.indexOf('?action=') === -1) return;
+    try { UIC.readSkeleton(); } catch (err) {}
+  }, true);
+  window.addEventListener('pageshow', function () {
+    try { UI.hideSpinner(); } catch (err) {}
+  });
+})();
+
+FMT.currency = function (n, suffix) {
+  var num = Number(n) || 0;
+  var s = num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return s + (suffix ? ' ' + suffix : '');
+};
+
+FMT.date = function (d) {
+  if (!d) return '';
+  var dt = new Date(d);
+  if (isNaN(dt.getTime())) return String(d);
+  return dt.toLocaleDateString('en-GB');
+};
+
+FMT.datetime = function (d) {
+  if (!d) return '';
+  var dt = new Date(d);
+  if (isNaN(dt.getTime())) return String(d);
+  return dt.toLocaleString('en-GB');
+};
+
+FMT.number = function (n) {
+  var num = Number(n) || 0;
+  return num.toLocaleString('en-US');
+};
+
+FMT.percent = function (n) {
+  var num = Number(n) || 0;
+  return (num * 100).toLocaleString('en-US', { maximumFractionDigits: 2 }) + '%';
+};
+
+FMT.phone = function (p) {
+  if (!p) return '';
+  return String(p).replace(/[^\d+]/g, '');
+};
+
+FMT.escape = function (v) {
+  if (v === undefined || v === null) return '';
+  return String(v)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+};
+
+(function () {
+  var css = `
+  /* ── Spinner overlay ─────────────────────────────────── */
+  /* [UI-3.4 / U-24] .spinner-overlay / .spinner-box / .spinner / .spinner-msg
+     moved to UI_Components.html with the implementation, so the one loading
+     service carries its own styles and every page gets them whether or not it
+     includes this file. */
+  @keyframes erp-spin { to { transform: rotate(360deg); } }
+
+  /* ── Mobile input zoom prevention ───────────────────── */
+  /* Chrome on Android zooms the page when an <input> has font-size < 16px.
+     Setting max(16px, 1rem) prevents this without affecting desktop layout. */
+  input, textarea, select {
+    font-size: max(16px, 1rem);
+  }
+
+  /* ── Universal minimum touch targets ────────────────── */
+  /* Every interactive element needs at least 48×48px hit area. */
+  button, [role="button"], select {
+    min-height: var(--tap-min, 48px);
+    cursor: pointer;
+  }
+  /* Anchors used as nav items get a minimum height via padding */
+  a.nav-item {
+    min-height: var(--tap-min, 48px);
+    display: inline-flex;
+    align-items: center;
+  }
+
+  /* ── Active-state feedback (mobile: no hover, use :active) ─ */
+  @media (hover: none) {
+    .btn:active          { opacity: 0.80; transform: scale(0.97); }
+    .nav-item:active     { opacity: 0.75; }
+    .company-tile:active { transform: scale(0.98); }
+    .module-tile:active  { transform: scale(0.98); }
+  }
+
+  /* ── Prevent accidental horizontal scroll on tables ─── */
+  .table-wrap {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-x: contain;
+  }
+  `;
+  var style = document.createElement('style');
+  style.textContent = css;
+  document.head.appendChild(style);
+})();
+
+/* ── Batch 11: session views / saved views / record history helpers ── */
+window.SESSION = window.SESSION || {};
+
+SESSION.getQueryParam = function (name) {
+  var m = new RegExp('[?&]' + name + '=([^&]*)').exec(window.location.search);
+  return m ? decodeURIComponent(m[1]) : '';
+};
+
+SESSION.token = function () {
+  return window.SESSION_TOKEN || SESSION.getQueryParam('sessionToken') || (API.getSession() && API.getSession().token) || '';
+};
+
+SESSION.ensure = function () {
+  var t = SESSION.token();
+  if (t) {
+    var s = API.getSession() || {};
+    s.token = t;
+    API.setSession(s);
+  }
+  return t;
+};
+
+SESSION.openPage = function (action, extra) {
+  var url = (window.scriptUrl || '/') + '?action=' + encodeURIComponent(action) + '&sessionToken=' + encodeURIComponent(SESSION.token());
+  if (extra) url += '&' + extra;
+  if (window.UIC && UIC.navTo) UIC.navTo(null, url); else window.location.href = url;
+};
+
+SESSION.openSessions = function () { SESSION.openPage('user_sessions'); };
+SESSION.openViews = function () { SESSION.openPage('user_views'); };
+
+SESSION.openHistory = function (sheetName, recordId) {
+  if (window.UIC && UIC.HistorySide) { UIC.HistorySide.open(sheetName, recordId); return; }
+  var url = (window.scriptUrl || '/') + '?action=record_history&sheet=' + encodeURIComponent(sheetName) +
+    '&record=' + encodeURIComponent(recordId) + '&sessionToken=' + encodeURIComponent(SESSION.token());
+  /* [iPhone run 2] Only the window.open fallback changes; the HistorySide
+     branch above is untouched. UIC.openTab makes the same call and lands in
+     this frame only when the tab is refused, so record_history stops being
+     unreachable when a pop-up is blocked. This file loads before
+     UI_Components on some pages, hence the guard. */
+  if (window.UIC && UIC.openTab) UIC.openTab(url); else window.open(url, '_blank');
+};
+
+SESSION.saveCurrentView = function (pageKey, definition, presetName) {
+  var name = presetName || prompt('اسم العرض المحفوظ:');
+  if (!name) return Promise.reject('cancelled');
+  var device = (function () {
+    try {
+      var ua = navigator.userAgent || '';
+      var type = /Mobi|Android|iPhone|iPad/i.test(ua) ? 'Mobile' : 'Desktop';
+      return type;
+    } catch (e) { return 'Unknown'; }
+  })();
+  return API.call('save_user_view', { page_key: pageKey, name: name, definition: definition || {}, device: device }, SESSION.token())
+    .then(function (r) { UIC.toast('تم حفظ العرض', 'success'); return r; });
+};
+
+SESSION.loadActiveView = function (pageKey) {
+  var viewId = SESSION.getQueryParam('applyView');
+  if (!viewId) return Promise.resolve(null);
+  return API.call('list_user_views', {}, SESSION.token())
+    .then(function (r) {
+      var views = (r && r.views) || [];
+      var v = views.find(function (x) { return String(x.view_id) === String(viewId); });
+      if (!v || !v.layout_json) return null;
+      try { return typeof v.layout_json === 'string' ? JSON.parse(v.layout_json) : v.layout_json; }
+      catch (e) { return null; }
+    })
+    .catch(function () { return null; });
+};
+
+SESSION.logout = function () {
+  var t = SESSION.token();
+  if (t) { try { API.call('logout', {}, t).catch(function () {}); } catch (e) {} }
+  API.clearSession();
+  var _lurl = (window.scriptUrl || '/') + '?action=login';
+  if (window.UIC && UIC.navTo) UIC.navTo(null, _lurl); else window.location.href = _lurl;
+};
+
+SESSION.revokeAll = function () {
+  if (!confirm('تسجيل الخروج من جميع الأجهزة؟')) return;
+  UI.showSpinner('جاري التنفيذ...');
+  API.call('revoke_all_sessions', {}, SESSION.token())
+    .then(function () { API.clearSession(); var _lurl = (window.scriptUrl || '/') + '?action=login'; if (window.UIC && UIC.navTo) UIC.navTo(null, _lurl); else window.location.href = _lurl; })
+    .catch(function (e) { UIC.toast(e.message || 'تعذر التنفيذ', 'error'); UI.hideSpinner(); });
+};
+
+function logout() {
+  API.clearSession();
+  window.location.href = (window.scriptUrl || '/') + '?action=login';
+}
+/* ── Phase 0b / [RT-2]: client-side timing ─────────────────────────────
+ * Inert unless window.PERF_LOG is true (the server injects it in doGet from the
+ * PERF_LOG_READS script property), so a closed measurement window costs zero
+ * round trips and zero sheet writes. Nothing below runs when it is off.
+ *
+ * What is reported, and why these four:
+ *
+ *   nav_server        responseStart - requestStart      what doGet cost
+ *   nav_transfer      responseEnd   - responseStart     the download
+ *   nav_parse         domContentLoadedEventEnd
+ *                                   - responseEnd       the ~317 KB parse tax
+ *   first_data_render pages mark this themselves        the data round trip
+ *
+ * The first three split a navigation into the three stages that can each be
+ * optimised by a different piece of work, which the old page_ready/page_load
+ * pair could not: a page that is slow because the shared bundle is 268 KB and a
+ * page that is slow because its sheet read scans 40,000 rows produced the same
+ * two numbers before, and the fix for one does nothing for the other.
+ *
+ * nav_transfer_bytes and nav_decoded_bytes come from the same navigation entry
+ * and make the gzip ratio a measurement rather than an assumption. They are
+ * byte counts travelling through a column named `ms`; the unit is in the metric
+ * name because ERP_Client_Perf's columns are not this run's to change.
+ *
+ * EVERYTHING IS BATCHED INTO ONE CALL. The old PERF.send fired a
+ * google.script.run per metric, and at four metrics per navigation across a
+ * live system the measurement would have become a meaningful share of the load
+ * it was measuring. Marks are queued, and the queue is flushed once — on a
+ * short debounce, and unconditionally when the page is hidden or unloaded so a
+ * navigation cannot swallow the numbers it just produced.                     */
+window.PERF = window.PERF || {};
+
+PERF.enabled = function () { return window.PERF_LOG === true; };
+
+PERF._queue = [];
+PERF._flushTimer = null;
+PERF._sent = false;
+
+/** Queue one metric. Never sends on its own — see PERF.flush. */
+PERF.push = function (metric, value) {
+  if (!PERF.enabled()) return;
+  PERF._queue.push({ metric: String(metric), ms: Math.round(Number(value) || 0) });
+  try { clearTimeout(PERF._flushTimer); } catch (e) {}
+  PERF._flushTimer = setTimeout(PERF.flush, 1500);
+};
+
+/** Ship whatever is queued, in ONE round trip. Safe to call repeatedly. */
+PERF.flush = function () {
+  if (!PERF.enabled() || !PERF._queue.length) return;
+  var marks = PERF._queue;
+  PERF._queue = [];
+  try { clearTimeout(PERF._flushTimer); } catch (e) {}
+  try {
+    google.script.run.apiRouter({
+      action: 'log_client_perf',
+      payload: {
+        page: (window.CURRENT_ACTION || document.title || '').toString().slice(0, 200),
+        url: location.href,
+        user: (API.getSession() && API.getSession().email) || '',
+        marks: marks
+      }
+    });
+    PERF._sent = true;
+  } catch (e) { /* a measurement that cannot be sent is never worth an error */ }
+};
+
+/* Kept for callers outside this file: queue rather than send, so a page that
+ * still calls PERF.send gets the batching without being edited. */
+PERF.send = function (metric, ms) { PERF.push(metric, ms); };
+
+/* Pages call PERF.mark('first_data_render') once their first table body is
+ * painted. Fires at most once per metric per page. */
+PERF._marked = {};
+PERF.mark = function (metric) {
+  if (!PERF.enabled() || PERF._marked[metric]) return;
+  PERF._marked[metric] = true;
+  var t = 0;
+  try { t = performance.now(); } catch (e) {}
+  PERF.push(metric, t);
+};
+
+/* The four-part navigation timeline, read once from the Navigation Timing
+ * entry. Every field is guarded: the entry is absent on some embedded
+ * webviews, and transferSize reads 0 across an opaque cross-origin hop rather
+ * than throwing, so a 0 is dropped instead of being logged as a real zero. */
+PERF.navTimeline = function () {
+  if (!PERF.enabled() || PERF._marked.nav_server) return;
+  var e = null;
+  try { e = (performance.getEntriesByType('navigation') || [])[0] || null; } catch (err) {}
+  if (!e) return;
+  PERF._marked.nav_server = true;
+  function span(a, b) { return (a > 0 && b > 0 && a >= b) ? (a - b) : -1; }
+  var parts = [
+    ['nav_server', span(e.responseStart, e.requestStart)],
+    ['nav_transfer', span(e.responseEnd, e.responseStart)],
+    ['nav_parse', span(e.domContentLoadedEventEnd, e.responseEnd)],
+    ['nav_transfer_bytes', Number(e.transferSize) || 0],
+    ['nav_decoded_bytes', Number(e.decodedBodySize) || 0]
+  ];
+  parts.forEach(function (p) { if (p[1] > 0) PERF.push(p[0], p[1]); });
+};
+
+if (PERF.enabled()) {
+  document.addEventListener('DOMContentLoaded', function () { PERF.mark('page_ready'); });
+  window.addEventListener('load', function () {
+    PERF.mark('page_load');
+    /* domContentLoadedEventEnd is only settled after load, so the timeline is
+     * read here rather than on DOMContentLoaded where nav_parse would be 0. */
+    PERF.navTimeline();
+  });
+  /* A hard navigation is how this app moves between pages, so the debounce
+   * alone would lose the last flush on most page views. pagehide fires on the
+   * way out; visibilitychange covers the mobile case where it does not. */
+  window.addEventListener('pagehide', PERF.flush);
+  document.addEventListener('visibilitychange', function () {
+    if (document.visibilityState === 'hidden') PERF.flush();
+  });
+}
+
+/* ── [RT-7] Prefetch on intent (M4), replacing the fixed two-second timer ──
+ *
+ * schedulePrefetch fired a companyCall('prefetch_refs') two seconds after every
+ * page load, for every user, whether or not they were about to open a form. Two
+ * seconds is a guess: too early and it competes with the page's own first
+ * fetch; too late and the user has already clicked. And on a page nobody opens
+ * a form on, it is a request that buys nothing.
+ *
+ * Intent is a better signal than a timer, and the browser gives it away for
+ * free: hovering a link, touching it, or simply finishing the first paint with
+ * nothing else to do.
+ *
+ *   requestIdleCallback after first paint  → warm this page's references
+ *   mouseenter / touchstart on a nav link  → warm the page being considered
+ *   UIC.prefetchOnIntent(el, fn)           → anything a page wants, row-level
+ *
+ * Every path is deduplicated, capped at three in flight, and abandoned the
+ * moment the tab is hidden — a prefetch is a bet on what the user will do next,
+ * and a user who has switched tabs is not doing anything next.
+ *
+ * The exported name schedulePrefetch is unchanged: about forty call sites use
+ * it and none of them needed to learn a new one.
+ */
+var __prefetchDone = false;
+var __prefetchInFlight = 0;
+var __prefetchSeen = {};
+var __prefetchIdle = null;
+
+var PREFETCH_MAX_INFLIGHT = 3;
+
+function __prefetchHidden() {
+  try { return document.visibilityState === 'hidden'; } catch (e) { return false; }
+}
+
+/**
+ * Run `fn` once, if we are under the in-flight cap and the tab is visible.
+ * `token` deduplicates: the same intent signalled ten times costs one request.
+ */
+function prefetchOnce(token, fn) {
+  if (__prefetchHidden()) return;
+  if (__prefetchSeen[token]) return;
+  if (__prefetchInFlight >= PREFETCH_MAX_INFLIGHT) return;
+  __prefetchSeen[token] = true;
+  __prefetchInFlight++;
+  var done = function () { __prefetchInFlight = Math.max(0, __prefetchInFlight - 1); };
+  try {
+    var p = fn();
+    if (p && typeof p.then === 'function') p.then(done, function () { done(); delete __prefetchSeen[token]; });
+    else done();
+  } catch (e) { done(); delete __prefetchSeen[token]; }
+}
+
+/** The company's shared reference data — what the old timer fetched. */
+function prefetchRefs() {
+  prefetchOnce('refs', function () {
+    if (typeof companyCall !== 'function') return null;
+    return companyCall('prefetch_refs', {}).catch(function () {});
+  });
+}
+
+/**
+ * Kept for the ~40 existing callers. It no longer schedules on a timer: it
+ * asks the browser for a moment when nothing else is happening, and falls back
+ * to a short timeout where requestIdleCallback does not exist (Safari).
+ */
+function schedulePrefetch() {
+  if (__prefetchDone) return;
+  __prefetchDone = true;
+  var run = function () { prefetchRefs(); };
+  try {
+    if (typeof window.requestIdleCallback === 'function') {
+      __prefetchIdle = window.requestIdleCallback(run, { timeout: 3000 });
+      return;
+    }
+  } catch (e) {}
+  setTimeout(run, 1200);
+}
+
+/**
+ * Attach an intent listener. `fn` runs at most once for this token, on the
+ * first hover or touch — the two signals that reliably precede a click by
+ * enough time to matter and do not fire when the user is merely scrolling past.
+ */
+UIC.prefetchOnIntent = function (el, token, fn) {
+  var node = (typeof el === 'string') ? document.getElementById(el) : el;
+  if (!node || !node.addEventListener || typeof fn !== 'function') return;
+  var go = function () { prefetchOnce(token, fn); };
+  try {
+    node.addEventListener('mouseenter', go, { once: true, passive: true });
+    node.addEventListener('touchstart', go, { once: true, passive: true });
+  } catch (e) {
+    /* Older browsers: no options object. One listener each, still harmless
+       because prefetchOnce is idempotent per token. */
+    node.addEventListener('mouseenter', go);
+    node.addEventListener('touchstart', go);
+  }
+};
+
+/* Nav links are the one thing on every page worth wiring automatically:
+ * hovering one is as close to a declaration of intent as this app gets. */
+UIC.wireNavPrefetch = function () {
+  var links;
+  try { links = document.querySelectorAll('a.nav-item, a.nav-dropdown-item'); } catch (e) { return; }
+  if (!links) return;
+  Array.prototype.slice.call(links).forEach(function (a) {
+    var href = a.getAttribute && a.getAttribute('href');
+    if (!href || href === '#') return;
+    UIC.prefetchOnIntent(a, 'nav:' + href, function () {
+      /* The page being considered shares this company's reference data, so
+         warming it now is the part of that navigation that can be paid for
+         early. The page's own document still has to be fetched on click —
+         that is what the soft-navigation work addresses, not this. */
+      return (typeof companyCall === 'function') ? companyCall('prefetch_refs', {}).catch(function () {}) : null;
+    });
+  });
+};
+
+/* A hidden tab is not about to click anything. */
+try {
+  document.addEventListener('visibilitychange', function () {
+    if (!__prefetchHidden()) return;
+    if (__prefetchIdle && typeof window.cancelIdleCallback === 'function') {
+      try { window.cancelIdleCallback(__prefetchIdle); } catch (e) {}
+      __prefetchIdle = null;
+    }
+  });
+} catch (e) {}
+
+
+/* Injects a small session bar (sessions / views / logout) into containerId.
+ * Call from any page's header so users can manage devices and saved views. */
+SESSION.renderBar = function (containerId) {
+  var el = document.getElementById(containerId);
+  if (!el) return;
+  var bar = document.createElement('div');
+  bar.className = 'session-bar';
+  bar.innerHTML =
+    '<button class="btn btn-ghost" onclick="SESSION.openSessions()">جلساتي</button>' +
+    '<button class="btn btn-ghost" onclick="SESSION.openViews()">عروضي</button>' +
+    '<button class="btn btn-ghost btn-danger" onclick="SESSION.logout()">تسجيل الخروج</button>';
+  el.appendChild(bar);
+};
+
+/* Session-bar styles for explicit SESSION.renderBar(containerId) callers.
+ * NOTE: جلساتي / عروضي / logout now live in the topbar user-profile dropdown
+ * (UIC.appShell), so nothing is auto-injected into .topbar-nav anymore. */
+(function initSessionBar() {
+  SESSION.ensure();
+  var css = document.createElement('style');
+  css.textContent =
+    '.session-bar{display:inline-flex;gap:6px;margin-inline-start:auto;align-items:center;flex-wrap:wrap;}' +
+    '.btn-ghost{background:transparent;border:1px solid var(--border-color);border-radius:var(--radius-sm,8px);padding:6px 12px;font-size:13px;color:var(--text-muted);}' +
+    '.btn-danger{color:#c5221f;border-color:#c5221f;}';
+  document.head.appendChild(css);
+})();
+
+/* Email -> user display name (ERP_Users.name). window.USER_NAMES is injected
+ * server-side on every page render. Falls back to the raw value. */
+function uname_(email) {
+  var e = String(email == null ? '' : email).trim();
+  if (!e) return e;
+  try {
+    var map = window.USER_NAMES || {};
+    return map[e.toLowerCase()] || map[e] || e;
+  } catch (err) { return e; }
+}
+
+</script>
+

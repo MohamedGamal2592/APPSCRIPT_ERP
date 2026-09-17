@@ -345,7 +345,7 @@
           '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;">' +
             UIC.combo({ key: 'wm-type', label: 'نوع الحركة', required: true, options: typeOpts, value: '', placeholder: 'اختر نوع الحركة…' }) +
             UIC.field({ key: 'wm-date', label: 'تاريخ الحركة', type: 'date', required: true, value: todayStr() }) +
-            UIC.combo({ key: 'wm-responsible', label: 'المسؤول', required: true, options: __options.employees || [], value: '', placeholder: 'اختر الموظف المسؤول…' }) +
+            UIC.combo({ key: 'wm-responsible', label: 'المسؤول (القسم)', required: true, options: (__options.sections || __options.titles || __options.employees || []), value: '', placeholder: 'اختر القسم المسؤول…' }) +
             UIC.combo({ key: 'wm-vendor', label: 'المورد (اختياري)', options: __options.vendors || [], value: '', placeholder: 'اختر المورد…' }) +
           '</div>' +
 

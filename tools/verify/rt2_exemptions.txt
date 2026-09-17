@@ -56,7 +56,7 @@ A multi-sheet commit: the header and its lines land in two or more sheets, so "t
   ValleyFoods | save_valley_invoice -> saveValleyInvoice_
   ValleyFoods | save_valley_return -> saveValleyReturn_
 
-## pending (26)
+## pending (30)
 NOT exempt. These could return a record and do not yet. Each one blocks its
 page from the optimistic path until it is fixed, which rt2 enforces: a page
 converted against one of these without a `reload` fallback fails the build.
@@ -68,6 +68,10 @@ converted against one of these without a `reload` fallback fails the build.
   TopChemical | edit_emp_salary -> editEmpSalary_
   TopChemical | update_emp_salary_receipt -> updateEmpSalaryReceipt_
   TopChemical | revise_main_review -> reviseMainReview_
+  TopChemical | save_client_balance_sheet -> saveClientBalanceSheet_
+  TopChemical | save_manufacture_header -> saveManufactureHeader_
+  TopChemical | save_manufacture_footer -> saveManufactureFooter_
+  TopChemical | add_manufacture_footer -> addManufactureFooter_
   TopChemical | update_box_movement -> updateBoxMovement_
   TopChemical | revise_box_movement -> reviseBoxMovement_
   TopChemical | save_box_item_alias -> saveBoxItemAlias_

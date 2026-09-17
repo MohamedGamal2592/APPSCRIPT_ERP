@@ -51,7 +51,7 @@ const PRINT_SITES = [
   ['Company_ValleyFoods_Attendance.html', 'printForgetForm']
 ];
 
-/** The 17 file links, and the download type each one must still build. */
+/** The 18 file links, and the download type each one must still build. */
 const DOWNLOAD_SITES = [
   ['0_ERP_Management.html', ['erp_invoice']],
   ['Company_TopChemical_Barcode.html', ['print_barcode']],
@@ -62,7 +62,7 @@ const DOWNLOAD_SITES = [
   ['Company_TopChemical_CartonSizes.html', ['doc_file']],
   ['Company_TopChemical_EmpSalaries.html', ['payroll_report']],
   ['Company_TopChemical_ImportFollow.html', ['doc_file']],
-  ['Company_TopChemical_Products.html', ['print_file']],
+  ['Company_TopChemical_Products.html', ['print_product_barcode', 'print_file']],
   ['Company_TopChemical_RegistrationPapers.html', ['attachment']],
   ['Company_ValleyFoods_Deductions.html', ['attachment']],
   ['Company_ValleyFoods_Overtime.html', ['attachment', 'attachment']],
@@ -278,7 +278,7 @@ console.log('\n6 — every ?download= link goes through UIC.openDownload (D-4)\n
       total++;
     });
   });
-  check(total === 17, 'all 17 download sites are accounted for', 'counted ' + total);
+  check(total === 18, 'all 18 download sites are accounted for', 'counted ' + total);
 
   const openDownload = functionBody(UIC_SRC, 'UIC.openDownload');
   check(openDownload.length > 0, 'UIC.openDownload is defined in UI_Components.html');

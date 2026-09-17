@@ -1,0 +1,1032 @@
+﻿<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Valley Foods — المشتريات</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_ValleyFoods_Nav'); ?>
+  <?!= getCompanyThemeCSS_('9940659bd83035d7') ?>
+</head>
+<body>
+  <div id="vf-root"></div>
+
+  <script>
+    var params = new URLSearchParams(window.location.search);
+    var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+    var scriptUrl = window.scriptUrl || '/';
+    var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+    var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('9940659bd83035d7') ?>';
+    var COMPANY_PAGES = <?!= companyPages ?>;
+    var CURRENT_ACTION = '<?!= currentAction ?>';
+    var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+    var CAN_WRITE = UIC.canAdd_(); var CAN_FULL = UIC.canFull_();
+    /* U-46. Set from the server's can_see_cost on every list load. NOT derived
+       from USER_PAGES: the browser cannot see the fail-open guard, which keeps
+       costs visible to everyone until the owner grants valley_cost_view to a
+       first role. Defaults to true so nothing changes before that. */
+    var CAN_SEE_COST = true;
+    function canCost() { return CAN_SEE_COST !== false; }
+
+    function companyCall(moduleAction, data) {
+      return API.call('company_action', {
+        target_system: '9940659bd83035d7',
+        module_action: moduleAction,
+        data: data || {}
+      }, SESSION_TOKEN);
+    }
+    function esc(v) {
+      /* [UI-2.8 / U-36] Delegates to the shared formatter. This body used to
+         carry its own replace-chain behind a `typeof FMT !== 'undefined'`
+         guard, but Client_Helpers.html defines FMT in <head> before any page
+         script runs, so that fallback was unreachable and the duplicate was
+         pure drift risk. Output is identical for every input — proved in
+         tools/verify/ui2_formatters.js. */
+      return FMT.escape(v);
+    }
+  </script>
+
+  <script>
+    var __options = {};
+    var __headers = [];
+    var __lines = [];
+    var __editingCode = '';
+    /* Date range on the receipt date, applied server-side in
+       getValleyPurchasingCosting_ before the newest-10 slice — so a range in an
+       older month returns its own rows instead of an empty page. A range also
+       implies "show everything in it", hence loadAll below. */
+    var __dateFrom = '', __dateTo = '';
+    var __viewOnly = false;
+    var __canEdit = false;
+    /* Section checkpoints are intentionally page-local and non-blocking. The
+       queue preserves document order; lines wait for the header acknowledgement
+       so a new document can never receive children before its header exists. */
+    var __checkpointQueue = [], __checkpointRunning = false, __headerCheckpointAck = false, __checkpointWaiters = [];
+
+    var HEADER_FIELDS = [
+      { key: 'code', col: 'Code', label: 'الكود (Code)', type: 'text', required: true },
+      { key: 'tax_system', col: 'tax_system', label: 'النظام الضريبي', type: 'select', options: [{ value: 'true', label: 'نعم' }, { value: 'false', label: 'لا' }], default: 'false' },
+      { key: 'receipt_date', col: 'Reciept Date', label: 'تاريخ الاستلام', type: 'date', required: true, default: 'today' },
+      { key: 'items', col: 'Items', label: 'الأصناف', type: 'text' },
+      { key: 'type', col: 'Type', label: 'النوع', type: 'select', options: ['بيع', 'تصنيع', 'اصول منشأة'], required: true },
+      { key: 'shipping_type', col: 'Shipping Type', label: 'نوع الشحن', type: 'select', options: ['CIF', 'FOB', 'C&F', 'محلي'], required: true },
+      { key: 'supplier_name', col: 'Supplier Name', label: 'المورد', type: 'select', options: '__supplier__', required: true },
+      { key: 'currency', col: 'Currency', label: 'العملة', type: 'select', options: '__currency__', default: 'EGP' },
+      { key: 'exchange_rate', col: 'Exchange rate', label: 'سعر الصرف', type: 'number', default: 1 },
+      { key: 'value', col: 'Value', label: 'القيمة السعرية الاجمالية للمورد', type: 'number', required: true },
+      { key: 'cif_insurance_value', col: 'If shipping via CIF, enter the insurance value.', label: 'قيمة التأمين (CIF)', type: 'number' },
+      { key: 'importation_reprice', col: 'Importation Re-Price', label: 'إعادة تسعير الاستيراد', type: 'number' },
+      { key: 'tax_declared_value', col: 'Tax Declared Value', label: 'القيمة الضريبية المعلنة', type: 'number' },
+      { key: 'administrative_expenses', col: 'Administrative Expenses', label: 'مصاريف إدارية', type: 'number' },
+      { key: 'customs_expenses', col: 'Customs Expenses', label: 'مصاريف جمركية', type: 'number' },
+      { key: 'unloading_expenses', col: 'Unloading expenses', label: 'مصاريف تفريغ', type: 'number' },
+      { key: 'bank_commission', col: 'bank commission', label: 'عمولة البنك', type: 'number' },
+      { key: 'customs_clearance', col: 'Customs clearance and port receipts', label: 'تخليص جمركي ومينائي', type: 'number' },
+      { key: 'additional_fees', col: 'Additional fees', label: 'رسوم إضافية', type: 'number' },
+      { key: 'clearance_expenses', col: 'Clearance Expenses', label: 'مصاريف تخليص', type: 'number' },
+      { key: 'other_expenses', col: 'Other Expenses', label: 'مصاريف أخرى', type: 'number' },
+      { key: 'internal_cost_adjustment', col: 'Internal cost adjustment', label: 'تسوية التكلفة الداخلية', type: 'number' },
+      { key: 'purchase_tax', col: 'Purchase Tax', label: 'ضريبة الشراء', type: 'number' },
+      { key: 'income_tax', col: 'Income Tax', label: 'ضريبة الدخل', type: 'number' },
+      { key: 'minimum_differences', col: 'Minimum differences', label: 'الحد الأدنى للفروقات', type: 'text' },
+      { key: 'approved_this_month', col: 'Approved this month', label: 'معتمد هذا الشهر', type: 'text' },
+      { key: 'associated_bank', col: 'Associated bank', label: 'البنك المرتبط', type: 'text' }
+    ];
+
+    function num(v) { var n = Number(v); return isNaN(n) ? 0 : n; }
+    function getVal(id) { var el = document.getElementById(id); return el ? el.value : ''; }
+    function setText(id, t) { var el = document.getElementById(id); if (el) el.textContent = t; }
+
+    function load() {
+      UIC.appShell('vf-root', {
+        companyLogoUrl: COMPANY_LOGO_URL,
+        companyLogoHref: scriptUrl + '?action=vf_dashboard&sessionToken=' + SESSION_TOKEN,
+        companyLogoTitle: 'Valley Foods',
+        breadcrumb: 'Valley Foods / المالية / المشتريات',
+        contentId: 'vf-purchasing-content',
+        menuGroups: (window.VALLEYFOODS_MENU || [])
+      });
+      renderList();
+    }
+
+    /* Phase 2.4: the endpoint now returns the 10 most recent rows by default,
+     * matching the equivalent TopLight screens. __loadedAll tracks whether the
+     * user has asked for the full set via the "عرض الكل" button, so the limit
+     * never puts data out of reach. */
+    var __loadedAll = false;
+
+    /* quiet: refresh in the background with no blocking overlay, for a user
+       who has already seen the change and must not be interrupted to confirm
+       it. */
+    function renderList(loadAll, quiet) {
+      // Called with no argument after a save/delete — keep whichever view the
+      // user is currently in rather than silently dropping back to 10 rows.
+      __loadedAll = arguments.length ? !!loadAll : __loadedAll;
+      if (!quiet) UIC.readSkeleton('vf-purchasing-content');
+      var payload = { from: __dateFrom, to: __dateTo };
+      if (__loadedAll || __dateFrom || __dateTo) payload.loadAll = true;
+      companyCall('get_valley_purchasing_costing', payload)
+        .then(function (r) {
+          /* supplier_options still arrives with the list (the table shows
+           * supplier names); product_options is fetched by ensureOptions() when
+           * the form opens. Merge rather than replace, so options already loaded
+           * for the form survive a list refresh. */
+          var incoming = (r && r.options) || {};
+          Object.keys(incoming).forEach(function (k) { __options[k] = incoming[k]; });
+          CAN_SEE_COST = (r && r.can_see_cost !== false);
+          __headers = (r && r.headers) || [];
+          renderHeadersTable(); try{schedulePrefetch();}catch(e){} try{ensureOptions().catch(function(){});}catch(e){};
+        })
+        .catch(function (e) { showError(e); })
+        .finally(function () { if (!quiet) UI.hideSpinner(); });
+    }
+
+    function showAllPurchasing() { renderList(true); }
+
+    /* Phase 2.1: product options are fetched on first form open, not on every
+     * list render. */
+    var __optionsPromise = null;
+
+    function ensureOptions() {
+      if (__optionsPromise) return __optionsPromise;
+      __optionsPromise = companyCall('get_valley_purchasing_options')
+        .then(function (r) {
+          var incoming = (r && r.options) || {};
+          Object.keys(incoming).forEach(function (k) { __options[k] = incoming[k]; });
+          return __options;
+        })
+        .catch(function (e) {
+          __optionsPromise = null;   // let the next open retry
+          throw e;
+        });
+      return __optionsPromise;
+    }
+
+  function renderHeadersTable() {
+    var content = document.getElementById('vf-purchasing-content');
+    __headers.sort(function (a, b) { return Number(b.id) - Number(a.id); });
+    var supMap = {};
+    (__options.supplier_options || []).forEach(function (o) { supMap[String(o.value)] = o.label; });
+    var rows = __headers.map(function (h) {
+      var btns = [
+        { label: 'طباعة', onclick: 'doAction(\'' + esc(String(h.Code)) + '\',\'print\')' }
+      ];
+      if (String(h.approval_status) !== 'Approved') {
+        btns.push({ label: 'اعتماد', onclick: 'doAction(\'' + esc(String(h.Code)) + '\',\'approve\')' });
+        if (CAN_WRITE && canCost()) {
+          /* U-46: without the cost grant the server refuses the save, so the
+             edit form is not offered. Viewing and approving stay available. */
+          btns.push({ label: 'تعديل', onclick: 'doAction(\'' + esc(String(h.Code)) + '\',\'edit\')' });
+          btns.push({ label: 'حذف', color: 'var(--danger)', onclick: 'doAction(\'' + esc(String(h.Code)) + '\',\'delete\')' });
+        } else {
+          btns.push({ label: 'عرض', onclick: 'doAction(\'' + esc(String(h.Code)) + '\',\'view\')' });
+        }
+      } else {
+        btns.push({ label: 'عرض', onclick: 'doAction(\'' + esc(String(h.Code)) + '\',\'view\')' });
+      }
+      if (CAN_WRITE) btns.push({ label: 'اعتماد الجودة', onclick: 'doAction(\'' + esc(String(h.Code)) + '\',\'quality\')' });
+      var actions = UIC.actionBtns(btns);
+      return {
+        Code: h.Code || '-',
+        supplier_name: supMap[String(h['Supplier Name'])] || h['Supplier Name'] || '-',
+        receipt_date: h['Reciept Date'] ? String(h['Reciept Date']).slice(0, 10) : '-',
+        items: h.Items || '-',
+        total_costs: canCost() ? FMT.number(h['Total costs']) : '',
+        approval_status: h.approval_status || '-',
+        quality_status: h.quality_approval_status || '—',
+        actions: actions
+      };
+    });
+    content.innerHTML = '<div class="vf-card"><div class="vf-card-header"><h3>المشتريات</h3>' +
+      (__loadedAll ? '' : '<button class="btn btn-outline" onclick="showAllPurchasing()">عرض الكل</button> ') +
+      '<a class="btn btn-outline" href="' + scriptUrl + '?action=vf_purchasing_report&sessionToken=' + SESSION_TOKEN + '">📊 تقرير المشتريات</a> ' +
+      (CAN_WRITE && canCost() ? '<button class="btn btn-primary" onclick="openForm(\'\', false)">+ إضافة عملية شراء</button>' : '') +
+      '</div><div class="vf-card-body">' +
+      UIC.dateRangeBar('pur-date', {
+        from: __dateFrom, to: __dateTo,
+        onchange: 'applyPurchasingDateFilter()',
+        onclear: 'clearPurchasingDateFilter()'
+      }) +
+      UIC.dataTable('purchasing-table', {
+        /* [RT-1] The list endpoint caps at the newest rows unless `loadAll` is
+           passed, and the search box filters only what is in memory — so the
+           table says which records the box actually searches. */
+        truncated: !__loadedAll,
+        showAll: 'showAllPurchasing()',
+        title: 'عمليات الشراء',
+        searchable: true,
+        /* [UI-9.1] الأصناف holds every item on the purchase joined into one
+           cell, so it is the longest text on the row and the one worth reading
+           — declared prose so it absorbs the surplus instead of a date column
+           taking it. المورد is a name: real words, but not a sentence. */
+        headers: [
+          { key: 'Code', label: 'الكود' },
+          { key: 'supplier_name', label: 'المورد', col: 'text' },
+          { key: 'receipt_date', label: 'تاريخ الاستلام' },
+          { key: 'items', label: 'الأصناف', col: 'prose' }
+        ].concat(canCost()
+          ? [{ key: 'total_costs', label: 'إجمالي التكاليف', numeric: true }]
+          : []).concat([
+          { key: 'approval_status', label: 'الحالة' },
+          { key: 'quality_status', label: 'حالة الجودة' },
+          { key: 'actions', label: 'إجراءات' }
+        ]),
+        rows: rows,
+        emptyText: (__dateFrom || __dateTo) ? 'لا توجد عمليات شراء في هذه الفترة' : 'لا توجد عمليات شراء'
+      }) + '</div></div>';
+    UIC.initTableSort('purchasing-table');
+  }
+
+  function applyPurchasingDateFilter() {
+    var v = UIC.dateRangeValues('pur-date');
+    if (v.from && v.to && v.from > v.to) { UIC.toast('«من تاريخ» بعد «إلى تاريخ»', 'error'); return; }
+    __dateFrom = v.from; __dateTo = v.to;
+    renderList();
+  }
+
+  function clearPurchasingDateFilter() {
+    __dateFrom = ''; __dateTo = '';
+    renderList();
+  }
+
+    function openForm(code, viewOnly) {
+      __editingCode = code || '';
+      __viewOnly = !!viewOnly;
+      var record = null;
+      if (code) {
+        record = __headers.find(function (h) { return String(h.Code) === String(code); }) || null;
+      }
+      UIC.readSkeleton('vf-purchasing-content', { message: 'جاري استرجاع الأصناف والموردين...' });
+      ensureOptions()
+        .then(function () { renderForm(record); })
+        .catch(function (e) { showError(e); })
+        .finally(function () { UI.hideSpinner(); });
+    }
+
+    function headerSections() {
+      return [
+        { title: 'البيانات الأساسية', open: true, fields: HEADER_FIELDS.slice(0, 10) },
+        { title: 'التكاليف والمصاريف', fields: HEADER_FIELDS.slice(10, 22) },
+        { title: 'الضرائب وأخرى', fields: HEADER_FIELDS.slice(22) }
+      ];
+    }
+
+    function fieldValue(s, record) {
+      var v = record ? record[s.col] : null;
+      if (v !== null && v !== undefined && v !== '') return v;
+      if (s.type === 'date' && s.default === 'today') return formatDate(new Date());
+      if (s.default !== undefined && s.default !== null) return s.default;
+      return s.type === 'number' ? 0 : '';
+    }
+
+    function renderField(s, record) {
+      var opts = s.options;
+      if (opts === '__supplier__') opts = __options.supplier_options || [];
+      else if (opts === '__currency__') opts = __options.currency_options || [];
+      var v = fieldValue(s, record);
+      if (s.type === 'select') {
+        /* UIC.field routes a select to UIC.combo (searchable) unless combo:false.
+           `required` was being dropped here, so a required dropdown got neither
+           its asterisk nor its validation. */
+        return UIC.field({ key: s.key, label: s.label, type: 'select', options: opts, value: v, required: !!s.required, placeholder: s.required ? 'ابحث واختر…' : undefined });
+      }
+      if (s.type === 'date') {
+        return UIC.field({ key: s.key, label: s.label, type: 'date', value: v, required: !!s.required });
+      }
+      if (s.key === 'value' && (!v || Number(v) === 0)) v = '';
+      return UIC.field({ key: s.key, label: s.label, type: s.type, value: v, required: !!s.required, min: s.type === 'number' ? 0 : undefined, step: s.type === 'number' ? 'any' : undefined });
+    }
+
+    function renderForm(record) {
+      var content = document.getElementById('vf-purchasing-content');
+      __canEdit = !__viewOnly && CAN_WRITE;
+
+      var sectionsHtml = headerSections().map(function (sec) {
+        var grid = '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:0 16px;">' +
+          sec.fields.map(function (s) { return renderField(s, record); }).join('') + '</div>';
+        return '<details' + (sec.open ? ' open' : '') + ' style="margin-bottom:12px;border:1px solid var(--border-color);border-radius:8px;padding:12px 16px;background:var(--bg-surface);">' +
+          '<summary style="font-weight:700;cursor:pointer;margin-bottom:12px;">' + sec.title + '</summary>' + grid + '</details>';
+      }).join('');
+
+      content.innerHTML =
+        '<div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;">' +
+        '<button class="btn btn-outline" onclick="showList()">← عودة</button>' +
+        '<h2 style="margin:0;">' + (record ? 'تعديل عملية شراء' : 'إضافة عملية شراء') + '</h2></div>' +
+        '<form id="purchasing-form">' +
+        '<div style="display:flex;flex-wrap:wrap;gap:24px;padding:16px;background:var(--bg-surface);border:1px solid var(--border-color);border-radius:8px;margin-bottom:16px;">' +
+        '<div>قيمة بناءً على الفاتورة: <strong id="value_based_on_invoice_display">0</strong></div>' +
+        '<div>إجمالي التكاليف: <strong id="total_costs_display">0</strong></div>' +
+        '<div>مجموع تكاليف الأصناف: <strong id="lines_total_display">0</strong></div>' +
+        '<div>قيمة البيع: <strong id="sales_value_display">0</strong></div>' +
+        '<div>نوع الضريبة: <strong id="tax_type_display">-</strong></div>' +
+        '<div>ضريبة المبيعات: <strong id="sales_tax_display">0</strong></div>' +
+        '<div>الشهر: <strong id="month_display">-</strong></div>' +
+        '<div>السنة: <strong id="year_display">-</strong></div>' +
+        '<div id="reconcile_warning" style="flex-basis:100%;color:var(--danger);font-weight:700;display:none;">⚠ مجموع تكاليف الأصناف لا يساوي إجمالي التكاليف</div>' +
+        '</div>' +
+         sectionsHtml +
+         '</form>' +
+         (__canEdit ? '<div style="margin:12px 0;display:flex;gap:8px;flex-wrap:wrap;align-items:center;"><button type="button" class="btn btn-outline" onclick="UI.submitOnce(this, checkpointHeader)">حفظ بيانات الرأس ومتابعة الإدخال</button><span id="header-checkpoint-status" class="vf-text-muted" style="font-size:12px;"></span></div>' : '') +
+         '<h3 style="margin-top:20px;">الأصناف</h3>' +
+        /* One labelled card per line. The old 15-column table was pinned to
+           min-width:1200px and every control was a sliver; the product
+           dropdown in particular was a plain <select> with no search. */
+        '<div id="lines-body"></div>' +
+         (__canEdit ? '<div style="margin:12px 0;"><button class="btn btn-outline" onclick="addLine()">+ إضافة صنف</button></div>' : '') +
+         (__canEdit ? '<div style="margin:12px 0;display:flex;gap:8px;flex-wrap:wrap;align-items:center;"><button type="button" class="btn btn-outline" onclick="UI.submitOnce(this, checkpointLines)">حفظ قسم الأصناف</button><span id="lines-checkpoint-status" class="vf-text-muted" style="font-size:12px;"></span></div>' : '') +
+         '<div style="margin:16px 0;">' + (__canEdit ? '<button class="btn btn-primary" onclick="UI.submitOnce(this, savePurchasing)">حفظ</button> ' : '') +
+        '<button class="btn btn-outline" onclick="showList()">إلغاء</button></div>';
+
+      var curEl = document.getElementById('currency');
+      if (curEl) curEl.addEventListener('change', onCurrencyChange);
+
+      attachCalcListeners();
+
+      __lines = [];
+      if (record) {
+        companyCall('get_valley_purchasing_lines', { code: record.Code })
+          .then(function (r) {
+            __lines = (r.lines || []).map(function (l) {
+              return {
+                product: l.product, qty: l.qty, unit_price: l.unit_price, other_cost: l.other_cost,
+                sales_value: l.sales_value, movement_type: l.movement_type, total_cost: l.total_cost,
+                product_category: l.product_category, vendor: l.vendor, lot_identification: l.lot_identification,
+                receipt_date: l.receipt_date, invoice_date: l.invoice_date, currency: l.currency,
+                exchange_rate: l.exchange_rate, unit_cost: l.unit_cost, sales_qty: l.sales_qty,
+                sales_value_amount: l.sales_value_amount,
+                movement_place: l.movement_place || '',
+                'Production date': l['Production date'] || '',
+                'Expiry date': l['Expiry date'] || '',
+                cost_currency: l.cost_currency || 0
+              };
+            });
+            renderLines();
+          })
+          .catch(function (e) { UIC.toast((e && e.message) || 'خطأ', 'error'); });
+      } else {
+        renderLines();
+      }
+    }
+
+    function attachCalcListeners() {
+      ['value', 'exchange_rate', 'type', 'tax_type', 'receipt_date', 'administrative_expenses', 'customs_expenses',
+        'unloading_expenses', 'bank_commission', 'customs_clearance', 'additional_fees', 'clearance_expenses',
+        'other_expenses', 'internal_cost_adjustment'].forEach(function (k) {
+        var el = document.getElementById(k);
+        if (el) { el.addEventListener('input', recalc); el.addEventListener('change', recalc); }
+      });
+    }
+
+    /* A line's own field, laid out with room to read it. */
+    function lineField(label, control, span) {
+      return '<div class="form-field" style="margin-bottom:0;' + (span ? 'grid-column:span ' + span + ';' : '') + '">' +
+        '<label class="form-label">' + label + '</label>' + control + '</div>';
+    }
+    function lineRO(label, text, id) {
+      return lineField(label, '<div' + (id ? ' id="' + id + '"' : '') +
+        ' class="input" style="background:var(--bg-subtle);display:flex;align-items:center;">' + text + '</div>');
+    }
+
+    /* Products already taken by OTHER lines, so a duplicate is visible as it
+       happens rather than only at save. */
+    function duplicateLineIdx() {
+      var seen = {}, dup = {};
+      (__lines || []).forEach(function (l, i) {
+        var p = String(l.product || '').trim();
+        if (!p) return;
+        if (seen[p] !== undefined) { dup[i] = true; dup[seen[p]] = true; }
+        else seen[p] = i;
+      });
+      return dup;
+    }
+
+    function lineCardHtml(i) {
+      var l = (__lines || [])[i] || {};
+      var opts = __options || {};
+      var costCurrency = (Number(l.unit_price) || 0) * (Number(l.qty) || 0);
+      l.cost_currency = costCurrency;
+      var unitPriceVal = l.unit_price != null ? Number(l.unit_price) : 0;
+      var dis = __canEdit ? '' : ' disabled';
+
+      /* The product picker is the searchable combo, given a full-width row of
+         its own. availableProducts() still hides products taken by other lines
+         at the moment this card is drawn. */
+      var productCtl = __canEdit
+        ? UIC.combo({ key: 'product_' + i, inline: true, options: availableProducts(i), value: l.product || '', placeholder: 'ابحث عن منتج…' })
+        : '<div class="input" style="background:var(--bg-subtle);">' + esc(productLabel(l.product)) + '</div>';
+
+      /* نوع الحركة is a reference into the chart of accounts, so the list is as
+         long as the chart — the same searchable combo the product picker uses,
+         for the same reason. Stores «المستوى الخامس», shows «اسم المستوى الخامس». */
+      var movementCtl = __canEdit
+        ? UIC.combo({
+            key: 'movement_type_' + i,
+            inline: true,
+            required: true,
+            options: (opts.movement_type_options || []).map(function (o) {
+              return { value: o.fifth, label: o.code };
+            }),
+            value: l.movement_type || '',
+            placeholder: 'ابحث عن نوع الحركة…'
+          })
+        : '<div class="input" style="background:var(--bg-subtle);">' + esc(movementTypeLabel(l.movement_type)) + '</div>';
+
+      var numCtl = function (key, val, step) {
+        return '<input class="input" type="number" min="0" step="' + step + '"' + dis +
+          ' value="' + (val != null && val !== '' ? val : '') + '" oninput="updateLineInput(' + i + ', \'' + key + '\', this.value)">';
+      };
+      var dateCtl = function (key, val) {
+        return '<input class="input" type="date"' + dis + ' value="' + esc(val || '') + '"' +
+          ' onchange="updateLineInput(' + i + ', \'' + key + '\', this.value)">';
+      };
+
+      /* Cost fields follow the same grant as everywhere else on this page. */
+      var costFields = canCost()
+        ? lineField('سعر الوحدة', numCtl('unit_price', unitPriceVal ? unitPriceVal.toFixed(5) : '', '0.00001')) +
+          lineField('تكاليف أخرى', numCtl('other_cost', l.other_cost, 'any')) +
+          lineField('سعر البيع', numCtl('sales_value', l.sales_value, 'any')) +
+          lineRO('تكلفة العملة', FMT.number(costCurrency), 'cost_currency_' + i) +
+          lineRO('الإجمالي', '', 'total_cost_' + i)
+        : '';
+
+      return '<div class="vf-line-card" id="line-card-' + i + '" style="border:1px solid var(--border-color);border-radius:8px;background:var(--bg-surface);padding:14px 16px;margin-bottom:12px;">' +
+        lineCardInnerHtml(i) + '</div>';
+
+      function lineCardInnerHtml() {
+        return '<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:10px;">' +
+            '<strong style="font-size:13px;">صنف ' + (i + 1) + '</strong>' +
+            '<span id="line-warn-' + i + '" style="color:var(--danger);font-weight:700;font-size:12px;"></span>' +
+            (__canEdit ? '<button class="btn btn-outline" style="padding:4px 12px;" onclick="removeLine(' + i + ')">حذف</button>' : '<span></span>') +
+          '</div>' +
+          '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px 16px;">' +
+            lineField('المنتج', productCtl, 2) +
+            lineField('الكمية', numCtl('qty', l.qty, 'any')) +
+            costFields +
+            lineField('نوع الحركة', movementCtl) +
+            lineRO('مكان الحركة', esc(l.movement_place || '—')) +
+            lineRO('تاريخ الاستلام', esc(l.receipt_date || '—')) +
+            lineField('تاريخ الفاتورة', dateCtl('invoice_date', l.invoice_date)) +
+            lineField('تاريخ الإنتاج', dateCtl('Production date', l['Production date'])) +
+            lineField('تاريخ الانتهاء', dateCtl('Expiry date', l['Expiry date'])) +
+            lineRO('العملة', esc(l.currency || '—')) +
+            lineRO('سعر الصرف', esc(String(l.exchange_rate || '—'))) +
+          '</div>';
+      }
+    }
+
+    /* نوع الحركة stores «المستوى الخامس» and shows «اسم المستوى الخامس» —
+       a reference, so the read-only view must resolve the code to its name
+       rather than printing the code. */
+    function movementTypeLabel(v) {
+      var found = '';
+      (__options.movement_type_options || []).forEach(function (o) {
+        if (String(o.fifth) === String(v)) found = o.code;
+      });
+      return found || v || '—';
+    }
+
+    function productLabel(v) {
+      var found = '';
+      (__options.product_options || []).forEach(function (p) { if (String(p.value) === String(v)) found = p.label; });
+      return found || v || '—';
+    }
+
+    /* Wire the searchable product combo for ONE line. UIC.combo fires `change`
+       on its hidden input when a product is picked. */
+    function wireLine(i) {
+      if (!__canEdit) return;
+      var el = document.getElementById('product_' + i);
+      if (el) el.addEventListener('change', function () { updateLineProduct(i, el.value); });
+      /* the combo reports through a change event, exactly as the product one does */
+      var mv = document.getElementById('movement_type_' + i);
+      if (mv) mv.addEventListener('change', function () { updateLineSelect(i, 'movement_type', mv.value); });
+    }
+
+    function renderLines() {
+      var host = document.getElementById('lines-body');
+      if (!host) return;
+      var html = '';
+      for (var i = 0; i < (__lines || []).length; i++) html += lineCardHtml(i);
+      host.innerHTML = html || '<div class="odoo-ro" style="padding:10px;color:var(--text-muted);">لا توجد أصناف بعد — اضغط «+ إضافة صنف»</div>';
+      for (var j = 0; j < (__lines || []).length; j++) wireLine(j);
+      refreshLineWarnings();
+      recalc();
+    }
+
+    /* Append one line without touching the others, so a combo already being
+       typed into survives. */
+    function appendLineCard(i) {
+      var host = document.getElementById('lines-body');
+      if (!host || i === 0) { renderLines(); return; }
+      host.insertAdjacentHTML('beforeend', lineCardHtml(i));
+      wireLine(i);
+      refreshLineWarnings();
+      recalc();
+    }
+
+    /* Duplicate-product notices, updated in place. */
+    function refreshLineWarnings() {
+      var dup = duplicateLineIdx();
+      for (var i = 0; i < (__lines || []).length; i++) {
+        var el = document.getElementById('line-warn-' + i);
+        if (el) el.textContent = dup[i] ? '⚠ هذا المنتج مكرر في صنف آخر' : '';
+      }
+    }
+
+    function availableProducts(excludeIndex) {
+      var chosen = {};
+      (__lines || []).forEach(function (l, i) {
+        if (i !== excludeIndex && l.product) chosen[String(l.product)] = true;
+      });
+      return (__options.product_options || []).filter(function (p) { return !chosen[String(p.value)]; });
+    }
+
+    function addLine() {
+      var hdrReceiptDate = getVal('receipt_date') || '';
+      var hdrCurrency = getVal('currency') || '';
+      var hdrExchangeRate = getVal('exchange_rate') || '';
+      var hdrShippingType = getVal('shipping_type') || '';
+      var movementPlace = '';
+      if (hdrShippingType === 'CIF' || hdrShippingType === 'FOB' || hdrShippingType === 'C&F') movementPlace = 'مستورد';
+      else if (hdrShippingType === 'محلي') movementPlace = 'محلي';
+      var expiryDate = '';
+      if (hdrReceiptDate) {
+        var parts = hdrReceiptDate.split('-');
+        if (parts.length === 3) {
+          var d = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
+          d.setDate(d.getDate() + 720);
+          expiryDate = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+        }
+      }
+      __lines.push({
+        product: '', qty: 0, unit_price: 0, other_cost: 0, sales_value: 0, movement_type: '',
+        movement_place: movementPlace, receipt_date: hdrReceiptDate, invoice_date: hdrReceiptDate,
+        'Production date': hdrReceiptDate, 'Expiry date': expiryDate,
+        currency: hdrCurrency, exchange_rate: hdrExchangeRate, cost_currency: 0
+      });
+      /* Append only, so a product combo already being typed into survives. */
+      appendLineCard(__lines.length - 1);
+    }
+
+    function removeLine(i) {
+      __lines.splice(i, 1);
+      /* Indices shift, so this one does need a full redraw. */
+      renderLines();
+    }
+
+    function updateLineInput(i, key, value) {
+      __lines[i][key] = value;
+      recalc();
+    }
+
+    function updateLineSelect(i, key, value) {
+      __lines[i][key] = value;
+      /* No full re-render: it would destroy a combo mid-typing. Nothing else on
+         the card depends on this value. */
+      recalc();
+    }
+
+    /* The product picker. Re-rendering every line here (which is what the old
+       <select> did) destroyed the combo being typed into, so the duplicate
+       notice is refreshed in place instead and the save blocks duplicates. */
+    function updateLineProduct(i, value) {
+      __lines[i].product = value;
+      refreshLineWarnings();
+      recalc();
+    }
+
+    function computeTotals() {
+      var rate = num(getVal('exchange_rate'));
+      var lineSum = 0;
+      (__lines || []).forEach(function (l) {
+        var tc = num(l.qty) * num(l.unit_price) * rate + num(l.other_cost);
+        l.total_cost = tc;
+        lineSum += tc;
+      });
+      var value = num(getVal('value'));
+      var vbi = value * rate;
+      var expenses = num(getVal('administrative_expenses')) + num(getVal('customs_expenses')) +
+        num(getVal('unloading_expenses')) + num(getVal('bank_commission')) + num(getVal('customs_clearance')) +
+        num(getVal('additional_fees')) + num(getVal('clearance_expenses')) + num(getVal('other_expenses'));
+      var type = getVal('type');
+      var totalCosts = vbi + expenses + (type === 'بيع' ? 0 : num(getVal('internal_cost_adjustment')) + num(getVal('purchase_tax')));
+      var mismatch = Math.abs(lineSum - totalCosts) > 0.01;
+      var salesValue = type === 'بيع' ? Math.round((totalCosts * 103 / 100) / 100) * 100 : 0;
+      var purchaseTax = num(getVal('purchase_tax'));
+      var denom = num(getVal('importation_reprice')) + num(getVal('customs_expenses'));
+      var taxType = denom > 0 ? (purchaseTax / denom >= 0.08 ? 0.14 : purchaseTax / denom) : '';
+      var salesTax = (taxType === '' || num(taxType) > 0.06) ? salesValue * 14 / 100 : 0;
+      var d = new Date(getVal('receipt_date'));
+      var month = (!isNaN(d.getTime())) ? d.getMonth() + 1 : '';
+      var year = (!isNaN(d.getTime())) ? d.getFullYear() : '';
+      return { valueBasedOnInvoice: vbi, totalCosts: totalCosts, linesTotal: lineSum, salesValue: salesValue, taxType: taxType, salesTax: salesTax, month: month, year: year, mismatch: mismatch };
+    }
+
+    function recalc() {
+      var t = computeTotals();
+      setText('lines_total_display', FMT.number(t.linesTotal));
+      setText('value_based_on_invoice_display', FMT.number(t.valueBasedOnInvoice));
+      setText('total_costs_display', FMT.number(t.totalCosts));
+      var lcEl = document.getElementById('lines_total_display');
+      var tcEl = document.getElementById('total_costs_display');
+      var warnEl = document.getElementById('reconcile_warning');
+      if (lcEl) lcEl.style.color = t.mismatch ? 'var(--danger)' : '';
+      if (tcEl) tcEl.style.color = t.mismatch ? 'var(--danger)' : '';
+      if (warnEl) warnEl.style.display = t.mismatch ? '' : 'none';
+      setText('sales_value_display', FMT.number(t.salesValue));
+      setText('tax_type_display', t.taxType === '' ? '-' : t.taxType);
+      setText('sales_tax_display', FMT.number(t.salesTax));
+      setText('month_display', t.month === '' ? '-' : t.month);
+      setText('year_display', t.year === '' ? '-' : t.year);
+      var lines = __lines || [];
+      for (var i = 0; i < lines.length; i++) {
+        setText('total_cost_' + i, FMT.number(lines[i].total_cost));
+        var cc = (Number(lines[i].unit_price) || 0) * (Number(lines[i].qty) || 0);
+        setText('cost_currency_' + i, FMT.number(cc));
+      }
+    }
+
+    function onCurrencyChange() {
+      var sel = document.getElementById('currency');
+      if (!sel) return;
+      var cur = sel.value;
+      var opts = __options.currency_options || [];
+      for (var i = 0; i < opts.length; i++) {
+        if (String(opts[i].value) === String(cur)) {
+          var rateEl = document.getElementById('exchange_rate');
+          if (rateEl && opts[i].rate !== '' && opts[i].rate !== undefined && opts[i].rate !== null) rateEl.value = opts[i].rate;
+          recalc();
+          break;
+        }
+      }
+    }
+
+    function checkpointSnapshotHeader() {
+      var form = UIC.collectForm('purchasing-form');
+      if (!UIC.validateForm('purchasing-form')) return null;
+      var header = {};
+      HEADER_FIELDS.forEach(function (f) { var v = form[f.key]; header[f.col] = v === undefined || v === null ? '' : v; });
+      if (String(header.Code).trim() === '' || String(header['Type']).trim() === '' || String(header['Shipping Type']).trim() === '') {
+        UIC.toast('أكمل الكود والنوع ونوع الشحن قبل حفظ بيانات الرأس', 'error'); return null;
+      }
+      var t = computeTotals();
+      header['Value Based on Invoice'] = t.valueBasedOnInvoice; header['Total costs'] = t.totalCosts;
+      header['Sales Value'] = t.salesValue; header['Tax type'] = t.taxType; header['sales tax amount'] = t.salesTax;
+      header.month = t.month; header.Year = t.year;
+      return { header: header, originalCode: __editingCode };
+    }
+
+    function checkpointSnapshotLines() {
+      var code = String(getVal('code') || '').trim();
+      if (!code) { UIC.toast('الكود (Code) مطلوب قبل حفظ الأصناف', 'error'); return null; }
+      if (!(__lines || []).length) { UIC.toast('يجب إضافة صنف واحد على الأقل', 'error'); return null; }
+      return { code: code, originalCode: __editingCode, lines: (__lines || []).map(function (l) { return Object.assign({}, l); }) };
+    }
+
+    function checkpointStatus(kind, text, bad) {
+      var el = document.getElementById(kind === 'header' ? 'header-checkpoint-status' : 'lines-checkpoint-status');
+      if (el) { el.textContent = text; el.style.color = bad ? 'var(--danger)' : ''; }
+    }
+
+    function checkpointDrainDone(err) {
+      var waiters = __checkpointWaiters.splice(0);
+      waiters.forEach(function (w) { try { err ? w.reject(err) : w.resolve(); } catch (e) {} });
+    }
+
+    function checkpointSend(entry, attempt) {
+      attempt = attempt || 0;
+      var wire = (window.UIC && UIC.Live && typeof UIC.Live.save === 'function')
+        ? UIC.Live.save({ call: companyCall, action: entry.action, data: entry.data, message: '', queueable: false })
+        : companyCall(entry.action, entry.data);
+      return wire.catch(function (e) {
+        /* Lock/transport failures are retried twice with backoff; validation
+           failures are surfaced immediately and never replayed blindly. */
+        if (e && (e.transport || /lock|timeout/i.test(String(e.message || ''))) && attempt < 2) {
+          return new Promise(function (resolve) { setTimeout(resolve, 250 * Math.pow(2, attempt)); }).then(function () { return checkpointSend(entry, attempt + 1); });
+        }
+        throw e;
+      });
+    }
+
+    function drainCheckpointQueue() {
+      if (__checkpointRunning || !__checkpointQueue.length) { if (!__checkpointRunning && !__checkpointQueue.length) checkpointDrainDone(); return; }
+      var entry = __checkpointQueue[0];
+      if (entry.kind === 'lines' && !__headerCheckpointAck) return;
+      __checkpointRunning = true;
+      checkpointStatus(entry.kind, 'جاري حفظ القسم…', false);
+      checkpointSend(entry, 0).then(function () {
+        __checkpointQueue.shift();
+        if (entry.kind === 'header') __headerCheckpointAck = true;
+        checkpointStatus(entry.kind, entry.kind === 'header' ? 'تم حفظ بيانات الرأس' : 'تم حفظ الأصناف', false);
+        UIC.toast(entry.kind === 'header' ? 'تم حفظ بيانات الرأس' : 'تم حفظ الأصناف', 'success');
+      }).catch(function (e) {
+        __checkpointQueue.shift();
+        if (entry.kind === 'header') {
+          __headerCheckpointAck = false;
+          /* Lines queued behind a failed header cannot be sent safely. */
+          __checkpointQueue = __checkpointQueue.filter(function (q) { if (q.kind === 'lines') checkpointStatus('lines', 'فشل حفظ الرأس — أعد المحاولة', true); return q.kind !== 'lines'; });
+        }
+        checkpointStatus(entry.kind, 'فشل حفظ القسم — ' + ((e && e.message) || 'تعذر الحفظ'), true);
+        UIC.toast((entry.kind === 'header' ? 'فشل حفظ بيانات الرأس: ' : 'فشل حفظ الأصناف: ') + ((e && e.message) || 'تعذر الحفظ'), 'error');
+        checkpointDrainDone(e);
+      }).finally(function () {
+        __checkpointRunning = false;
+        if (__checkpointQueue.length) drainCheckpointQueue(); else checkpointDrainDone();
+      });
+    }
+
+    function enqueueCheckpoint(kind, action, data) {
+      __checkpointQueue.push({ kind: kind, action: action, data: data });
+      drainCheckpointQueue();
+    }
+
+    function waitForCheckpointDrain() {
+      if (!__checkpointRunning && !__checkpointQueue.length) return Promise.resolve();
+      return new Promise(function (resolve, reject) { __checkpointWaiters.push({ resolve: resolve, reject: reject }); });
+    }
+
+    function checkpointHeader() {
+      var data = checkpointSnapshotHeader(); if (!data) return;
+      __headerCheckpointAck = false;
+      enqueueCheckpoint('header', 'save_valley_purchasing_header_checkpoint', data);
+    }
+
+    function checkpointLines() {
+      var data = checkpointSnapshotLines(); if (!data) return;
+      if (!__headerCheckpointAck && !__checkpointQueue.some(function (q) { return q.kind === 'header'; })) {
+        var header = checkpointSnapshotHeader(); if (!header) return;
+        enqueueCheckpoint('header', 'save_valley_purchasing_header_checkpoint', header);
+      }
+      enqueueCheckpoint('lines', 'save_valley_purchasing_lines_checkpoint', data);
+    }
+
+    function savePurchasing() {
+      var form = UIC.collectForm('purchasing-form');
+      if (!UIC.validateForm('purchasing-form')) return;
+      var header = {};
+      HEADER_FIELDS.forEach(function (f) {
+        var val = form[f.key];
+        header[f.col] = (val === undefined || val === null) ? '' : val;
+      });
+      if (String(header['Code']).trim() === '') { UIC.toast('الكود (Code) مطلوب', 'error'); return; }
+      if (String(header['Supplier Name']).trim() === '') {
+        UIC.toast('المورد مطلوب — اختر مورداً من القائمة', 'error');
+        var _sup = document.getElementById('supplier_name_display');
+        if (_sup && _sup.focus) _sup.focus();
+        return;
+      }
+      if (String(header['Value']).trim() === '') { UIC.toast('القيمة السعرية الاجمالية للمورد مطلوبة', 'error'); return; }
+
+      /* The old plain <select> filtered out products already taken by another
+         line, so a duplicate was impossible to enter. The searchable combo is
+         rendered once per line and is deliberately NOT re-rendered when another
+         line changes (that is what destroyed the field being typed into), so
+         the same guarantee is enforced here instead. */
+      var _dup = duplicateLineIdx();
+      var _dupIdx = Object.keys(_dup);
+      if (_dupIdx.length) {
+        var _n = (__lines[Number(_dupIdx[0])] || {});
+        UIC.toast('المنتج (' + productLabel(_n.product) + ') مكرر في أكثر من صنف — ادمج الأصناف أو غيّر المنتج', 'error');
+        refreshLineWarnings();
+        return;
+      }
+      var _noProduct = (__lines || []).some(function (l) { return !String(l.product || '').trim(); });
+      if (_noProduct) { UIC.toast('كل صنف يجب أن يكون له منتج', 'error'); return; }
+
+      /* A purchase with no lines has no cost to distribute and no stock
+         movement to make. The server refuses it too. */
+      if (!(__lines || []).length) {
+        UIC.toast('يجب إضافة صنف واحد على الأقل', 'error');
+        return;
+      }
+      /* نوع الحركة decides what stock movement a line becomes, so a blank one
+         is a line that does nothing rather than a line with a default. */
+      var _noMovement = [];
+      (__lines || []).forEach(function (l, i) {
+        if (!String(l.movement_type || '').trim()) _noMovement.push(i + 1);
+      });
+      if (_noMovement.length) {
+        UIC.toast('نوع الحركة مطلوب لكل صنف — الأصناف رقم: ' + _noMovement.join('، '), 'error');
+        var _mv = document.getElementById('movement_type_' + (_noMovement[0] - 1));
+        if (_mv && _mv.focus) _mv.focus();
+        return;
+      }
+
+      var t = computeTotals();
+      header['Value Based on Invoice'] = t.valueBasedOnInvoice;
+      header['Total costs'] = t.totalCosts;
+      header['Sales Value'] = t.salesValue;
+      header['Tax type'] = t.taxType;
+      header['sales tax amount'] = t.salesTax;
+      header['month'] = t.month;
+      header['Year'] = t.year;
+
+      if (t.mismatch) { UIC.toast('مجموع تكاليف الأصناف لا يساوي إجمالي التكاليف', 'error'); return; }
+
+      var payload = { header: header, originalCode: __editingCode, lines: __lines || [], commitOnly: true };
+      /* Tier B: the 2-table costing handler (duplicate-code, reconcile and
+         cost-grant guards refuse for reasons invisible in the form) — so NO
+         draft is painted: canPatch stays false, only the quiet corner hint
+         shows. The reply carries no record (code only), so onSuccess falls
+         back to the quiet refresh; a refusal toasts exactly as before and
+         paints nothing. queueable:false: I1 is unproven for
+         save_valley_purchasing_costing. */
+      /* The final commit is the only foreground wait: any section checkpoint
+         queued while the user typed must finish first. */
+      return waitForCheckpointDrain().then(function () { return UIC.Live.save({
+        call: companyCall,
+        action: 'save_valley_purchasing_costing',
+        data: payload,
+        message: 'تم الحفظ',
+        queueable: false,
+        reload: function () { renderList(__loadedAll, true); },
+        onSuccess: function (r) {
+          var rec = (r && r.record) || null;
+          if (rec) {
+            var idx = (__headers || []).findIndex(function (h) { return String(h.Code) === String(rec.Code || r.code); });
+            if (idx !== -1) __headers[idx] = rec; else __headers.unshift(rec);
+            renderHeadersTable();
+          } else {
+            renderList(__loadedAll, true);
+          }
+        }
+      }); }).catch(function () { /* UIC.Live has toasted */ });
+    }
+
+    function doAction(code, action) {
+      if (action === 'approve') approvePurchasing(code);
+      else if (action === 'edit') openForm(code, false);
+      else if (action === 'view') openForm(code, true);
+      else if (action === 'delete') deletePurchasing(code);
+      else if (action === 'quality') qualityApprovePurchasing(code);
+      else if (action === 'print') openPrint(code);
+    }
+
+    /* Phase 2.7: same reasoning as approvePurchasing — three fields, one row,
+     * no cascade (qualityApproveValleyPurchasingCosting_). */
+    function qualityApprovePurchasing(code) {
+      /* Tier B quality-approve: message-only reply, so no draft painted and no
+         draft/list/key/render. onSuccess applies the user's intent to the
+         in-memory row and re-renders locally; reload is the error-path
+         backstop. No overlay. queueable:false. */
+      UIC.Live.save({
+        call: companyCall,
+        action: 'quality_approve_valley_purchasing_costing',
+        data: { code: code },
+        message: 'تم اعتماد الجودة',
+        queueable: false,
+        reload: function () { renderList(__loadedAll, true); },
+        onSuccess: function () {
+          var item = (__headers || []).find(function (h) { return String(h.Code) === String(code); });
+          if (item) { item.quality_approval_status = 'Approved'; renderHeadersTable(); }
+          else renderList(__loadedAll, true);
+        }
+      }).catch(function () { /* UIC.Live has toasted */ });
+    }
+
+    function openPrint(code) {
+      var rec = __headers.find(function (h) { return String(h.Code) === String(code); }) || null;
+      if (!rec) { UIC.toast('العملية غير موجودة', 'error'); return; }
+      UIC.readSkeleton(null, { message: 'جاري تجهيز الطباعة...' });
+      companyCall('get_valley_purchasing_lines', { code: code })
+        .then(function (r) {
+          var lines = (r && r.lines) || [];
+          var supMap = {}; (__options.supplier_options || []).forEach(function (o) { supMap[String(o.value)] = o.label; });
+          var prodMap = {}; (__options.product_options || []).forEach(function (o) { prodMap[String(o.value)] = o.label; });
+          /* [iPhone run 2] Same window.open and the same document; the printed
+             page carries its own طباعة button either way. See UIC.printDoc. */
+          UIC.printDoc(buildPrintHtml(rec, lines, supMap, prodMap),
+            'طباعة عملية شراء — ' + rec.Code);
+        })
+        .catch(function (e) { UIC.toast((e && e.message) || 'خطأ', 'error'); })
+        .finally(function () { UI.hideSpinner(); });
+    }
+
+    function buildPrintHtml(rec, lines, supMap, prodMap) {
+      var supName = supMap[String(rec['Supplier Name'])] || rec['Supplier Name'] || '-';
+      var finStatus = rec.approval_status || '-';
+      var qStatus = rec.quality_approval_status || '-';
+      var qBy = rec.quality_approval || '';
+      var qTime = rec.quality_approval_time ? String(rec.quality_approval_time).slice(0, 19) : '';
+      var head = '<tr><th>الكود</th><td>' + esc(rec.Code) + '</td>' +
+        '<th>المورد</th><td>' + esc(supName) + '</td></tr>' +
+        '<tr><th>تاريخ الاستلام</th><td>' + esc(rec['Reciept Date'] ? String(rec['Reciept Date']).slice(0, 10) : '-') + '</td>' +
+        '<th>النوع</th><td>' + esc(rec.Type || '-') + '</td></tr>' +
+        '<tr><th>العملة</th><td>' + esc(rec.Currency || '-') + '</td>' +
+        (canCost()
+          ? '<th>القيمة (Value)</th><td>' + FMT.number(rec.Value) + '</td></tr>' +
+            '<tr><th>إجمالي التكاليف</th><td>' + FMT.number(rec['Total costs']) + '</td>'
+          : '<th></th><td></td></tr><tr>') +
+        '<th>الأصناف</th><td>' + esc(rec.Items || '-') + '</td></tr>' +
+        '<tr><th>حالة الاعتماد المالي</th><td>' + esc(finStatus) + '</td>' +
+        '<th>حالة اعتماد الجودة</th><td>' + esc(qStatus) + (qBy ? ' (' + esc(qBy) + (qTime ? ' — ' + esc(qTime) : '') + ')' : '') + '</td></tr>';
+      var lrows = (lines || []).map(function (l) {
+        return '<tr>' +
+          '<td>' + esc(prodMap[String(l.product)] || l.product || '-') + '</td>' +
+          '<td class="num">' + FMT.number(l.qty) + '</td>' +
+          (canCost()
+            ? '<td class="num">' + FMT.number(l.unit_price) + '</td>' +
+              '<td class="num">' + FMT.number(l.other_cost) + '</td>' +
+              '<td class="num">' + FMT.number(l.total_cost) + '</td>'
+            : '') +
+          '<td>' + esc(l.movement_type ? movementTypeLabel(l.movement_type) : '-') + '</td>' +
+          '</tr>';
+      }).join('');
+      if (!lrows) lrows = '<tr><td colspan="' + (canCost() ? 6 : 3) + '" style="text-align:center;padding:12px;">لا توجد أصناف</td></tr>';
+      return '<!DOCTYPE html><html lang="ar" dir="rtl"><head><meta charset="utf-8">' +
+        '<title>طباعة عملية شراء — ' + esc(String(rec.Code)) + '</title>' +
+        '<style>body{font-family:Tahoma,Arial,sans-serif;padding:24px;color:var(--text-main, #111);}' +
+        'h2{margin:0 0 12px;}table{border-collapse:collapse;width:100%;margin-bottom:18px;}' +
+        'th,td{border:1px solid #999;padding:6px 10px;text-align:right;}' +
+        'th{background:var(--bg-subtle, #f0f0f0);white-space:nowrap;}td.num{text-align:left;direction:ltr;}' +
+        '.btn{margin-bottom:16px;padding:8px 18px;background:#1976d2;color:#fff;border:none;border-radius:6px;cursor:pointer;}' +
+        '@media print{.no-print{display:none;}}</style></head><body>' +
+        '<button class="btn no-print" onclick="window.print()">طباعة هذه الصفحة</button>' +
+        '<h2>تفاصيل عملية الشراء — ' + esc(String(rec.Code)) + '</h2>' +
+        '<table>' + head + '</table>' +
+        '<h3>الأصناف</h3>' +
+        '<table><thead><tr><th>المنتج</th><th>الكمية</th>' + (canCost() ? '<th>سعر الوحدة</th><th>تكاليف أخرى</th><th>الإجمالي</th>' : '') + '<th>نوع الحركة</th></tr></thead>' +
+        '<tbody>' + lrows + '</tbody></table>' +
+        '</body></html>';
+    }
+
+    /* Phase 2.7: approve_valley_purchasing_costing writes exactly three fields
+     * (approval_status / approval / approval_time) on one row via
+     * updateRowByCriteria_ and cascades to nothing — verified in
+     * Company_ValleyFoods_Actions.js approveValleyPurchasingCosting_. So the row
+     * is patched in place instead of re-fetching the whole list. (Tier B: save,
+     * delete and quality-approve are now patch-from-reply too — save falls back
+     * to the quiet refresh because its reply carries no record; see the Tier B
+     * comments on each.) */
+    function approvePurchasing(code) {
+      /* Tier B approve: message-only reply, so no draft painted and no
+         draft/list/key/render. onSuccess applies the user's intent to the
+         in-memory row and re-renders locally; reload is the error-path
+         backstop. No overlay. queueable:false. */
+      UIC.Live.save({
+        call: companyCall,
+        action: 'approve_valley_purchasing_costing',
+        data: { code: code },
+        message: 'تم الاعتماد',
+        queueable: false,
+        reload: function () { renderList(__loadedAll, true); },
+        onSuccess: function () {
+          var item = (__headers || []).find(function (h) { return String(h.Code) === String(code); });
+          if (item) { item.approval_status = 'Approved'; renderHeadersTable(); }
+          else renderList(__loadedAll, true);
+        }
+      }).catch(function () { /* UIC.Live has toasted */ });
+    }
+
+    function deletePurchasing(code) {
+      if (!confirm('هل تريد حذف هذه العملية؟')) return;
+      /* Tier B delete: no optimistic paint (there is no record to draw — the
+         row is gone), so no draft/list/key/render. onSuccess splices the
+         in-memory list and re-renders locally; reload is the error-path
+         backstop. No overlay. queueable:false. */
+      UIC.Live.save({
+        call: companyCall,
+        action: 'delete_valley_purchasing_costing',
+        data: { code: code },
+        message: 'تم الحذف',
+        queueable: false,
+        reload: function () { renderList(__loadedAll, true); },
+        onSuccess: function () {
+          __headers = (__headers || []).filter(function (h) { return String(h.Code) !== String(code); });
+          renderHeadersTable();
+        }
+      }).catch(function () { /* UIC.Live has toasted */ });
+    }
+
+    function showList(quiet) {
+      renderList(undefined, quiet);
+    }
+
+    function showError(e) {
+      var content = document.getElementById('vf-purchasing-content');
+      if (content) content.innerHTML = '<div class="empty-state"><span>' + esc((e && e.message) || 'خطأ') + '</span></div>';
+    }
+
+    function formatDate(v) {
+      if (!v) return '';
+      var d = new Date(v);
+      if (isNaN(d.getTime())) return String(v).slice(0, 10);
+      return d.toISOString().slice(0, 10);
+    }
+
+
+    load();
+
+    /* Another device's change to this page arrives on its own. The poll reads
+       timestamps from cache, never a spreadsheet, and stands down while the tab
+       is hidden or a save is in flight. */
+    UIC.Live.watchPage({
+      call: companyCall,
+      page: 'vf_purchasing',
+      onChange: function () { UIC.Live.arrive(function () { showList(true); }); }
+    });
+  </script>
+</body>
+</html>

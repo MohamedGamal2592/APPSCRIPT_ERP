@@ -158,3 +158,4 @@ console.log('\n' + (failed === 0
   ? 'RT8 — every search box says what it searched.'
   : failed + ' check(s) FAILED.'));
 process.exit(failed === 0 ? 0 : 1);
+

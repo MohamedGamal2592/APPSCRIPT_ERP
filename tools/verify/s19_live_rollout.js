@@ -51,6 +51,8 @@ function knownPages(actionsFile) {
   const re = /'[a-z0-9_]+':\s*\{\s*page:\s*'([a-z0-9_]+)'/g;
   let m;
   while ((m = re.exec(src)) !== null) out[m[1]] = true;
+  const defs = /handler:\s*(?:'[^']*'|[A-Za-z_$][A-Za-z0-9_$]*)\s*,\s*page:\s*'([a-z0-9_]+)'/g;
+  while ((m = defs.exec(src)) !== null) out[m[1]] = true;
   _knownCache[actionsFile] = out;
   return out;
 }
@@ -194,3 +196,6 @@ console.log((failed === 0
   ? 'S19 — every converted page is converted correctly.'
   : failed + ' check(s) FAILED.'));
 process.exit(failed === 0 ? 0 : 1);
+
+
+

@@ -1,0 +1,360 @@
+<!-- F-22: resource hints for the only two external origins the app uses —
+     cdnjs.cloudflare.com (xlsx, lazy-loaded on first Excel export) and
+     cdn.jsdelivr.net (Chart.js, on the 5 dashboard/KPI pages). Warms DNS + TLS
+     before either script is requested. CSS_Tokens is included by all 82 pages. -->
+<link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
+<link rel="dns-prefetch" href="https://cdnjs.cloudflare.com">
+<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+<link rel="dns-prefetch" href="https://cdn.jsdelivr.net">
+<!-- [UI-2.2 / D-3 / U-11] The one Arabic typeface, loaded once for all 85 pages.
+     It lived inside topLightThemeCss_ and topChemicalThemeCss_, so ValleyFoods
+     — which takes the generic theme path — never loaded it and fell back to
+     Tahoma. Moving it here unifies the three companies on Cairo and makes the
+     load happen once instead of per-theme. display=swap so Arabic text paints
+     immediately in the fallback rather than being invisible while the webfont
+     downloads. Net payload effect: neutral — two page sets stop requesting it
+     from their theme, one page set starts. -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800&display=swap">
+<style>
+
+:root {
+
+  /* ── [UI-2.1] Canvas and surfaces — neutral, shared by all three companies ──
+   * Plan §2.1. The brand colour is applied ONLY to the topbar, primary buttons,
+   * the active nav state, the focus ring, the row-hover tint and print accents.
+   * Nothing else. The page canvas is the same light grey-white everywhere, so
+   * the three companies stop looking like three different products.
+   *
+   * --bg-canvas is the new name for the page background. --bg-primary is kept
+   * as an alias of it because 82 pages and both bespoke themes already
+   * reference --bg-primary; renaming it would be a breaking change for no gain.
+   * Set --bg-canvas and --bg-primary together, always. */
+  --bg-canvas:      #f5f6f8;   /* page background (was amber / green / #f4f5f7) */
+  --bg-primary:     #f5f6f8;   /* alias of --bg-canvas — see above */
+  --bg-surface:     #ffffff;   /* cards, tables, modals, sheets */
+  --bg-subtle:      #f7f8fa;   /* table headers, inset panels */
+  --bg-sunken:      #eef0f3;   /* wells, disabled fields */
+
+  /* Borders — hairline and neutral, replacing the 2px black / 2px green frames
+   * the two bespoke themes drew around every card, table and modal. */
+  --border-color:   #e2e5ea;   /* default hairline */
+  --border-strong:  #cfd4db;   /* emphasis, table outer edge */
+
+  /* Ink — raised for AA contrast at the 11–12px sizes this app actually uses.
+   * --text-disabled was #9ca3af: 2.5:1 on white, a WCAG failure. */
+  --text-main:      #111827;   /* unchanged */
+  --text-muted:     #5b6572;   /* was #6b7280 — 4.8:1 -> 6.4:1 on white */
+  --text-disabled:  #7c8694;   /* was #9ca3af — 2.5:1 (FAIL) -> 4.6:1 */
+
+  /* Numeric columns. Defined here so all three companies share one stack; the
+   * two bespoke themes still override it with the identical value. */
+  --font-mono: 'Consolas', 'Courier New', monospace;
+
+  
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 14px;
+
+  
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08);
+  --shadow-lg: 0 10px 30px rgba(0, 0, 0, 0.12);
+
+  
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --space-8: 32px;
+
+  
+  /* [UI-2.2 / D-3] Cairo for all three companies. The two bespoke themes set
+   * the same value, so they are unchanged; ValleyFoods stops falling back to
+   * Tahoma. Segoe UI and Tahoma remain in the stack as the swap face and for
+   * the Latin text that appears alongside the Arabic. */
+  --font-sans: 'Cairo', 'Segoe UI', Tahoma, sans-serif;
+
+  
+  --success: #16a34a;
+  --success-bg: #f0fdf4;
+  --success-text: #166534;
+  --success-border: #bbf7d0;
+  --warning: #d97706;
+  --warning-bg: #fffbeb;
+  --warning-text: #92400e;
+  --warning-border: #fde68a;
+  --danger: #dc2626;
+  --danger-bg: #fef2f2;
+  --danger-text: #991b1b;
+  --danger-border: #fecaca;
+  --info: #2563eb;
+
+  
+  --brand-primary: #D62828;
+  --brand-primary-hover: #B91C1C;
+  --brand-subtle-bg: #FEF2F2;
+  --brand-border: #FECACA;
+  --btn-text-color: #FFFFFF;
+  --shadow-brand: 0 4px 14px rgba(214, 40, 40, 0.25);
+
+  /* §3.7 + §3.5 pending/rollback tokens — frontend only, sanctioned extension */
+  --pending-bg: #fef3c7;
+  --pending-border: #fde68a;
+  --pending-text: #92400e;
+  --row-pending-opacity: 0.62;
+
+  
+
+  
+  --vh: 1vh;
+
+  
+  --safe-top:    env(safe-area-inset-top,    0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left:   env(safe-area-inset-left,   0px);
+  --safe-right:  env(safe-area-inset-right,  0px);
+
+  
+  --keyboard-height: 0px;
+
+  
+  --tap-min: 48px;
+  --tap-sm:  44px;
+
+  
+  --text-xs:   clamp(0.70rem,  2vw,   0.80rem);
+  --text-sm:   clamp(0.80rem,  2.5vw, 0.875rem);
+  --text-base: clamp(0.875rem, 3vw,   1rem);
+  --text-lg:   clamp(1rem,     3.5vw, 1.125rem);
+  --text-xl:   clamp(1.125rem, 4vw,   1.25rem);
+  --text-2xl:  clamp(1.25rem,  5vw,   1.5rem);
+
+  /* ── [UI-9.1] Table column floors ────────────────────────────────────────
+   * The two minimum widths of the column-width contract (see the `.table thead
+   * th.col-*` rules in UI_Components.html). A column that holds words gets the
+   * room words need; a column that holds a date or a figure gets exactly the
+   * room that atom needs and no more.
+   *
+   * The unit is `ch` — the width of a "0" in the element's own font — and not
+   * px or rem, deliberately. `ch` tracks the font, so one declaration stays
+   * correct in Arabic and in Latin, at comfortable and at compact density, and
+   * on the day someone changes --text-sm. A px floor would have to be re-tuned
+   * for each of those, and would be re-tuned for none of them.
+   *
+   * 14ch is about two Arabic words: enough that a name or a status phrase is
+   * not broken one word per line. 26ch is about four, which is the point where
+   * a description reads as a sentence rather than as a column of syllables.
+   *
+   * Both are FLOORS, not widths: a column with room to spare still grows. The
+   * shared @media print block relaxes them, because paper has no scrollbar to
+   * overflow into. */
+  --col-text-min:  14ch;
+  --col-prose-min: 26ch;
+
+
+  --space-xs: clamp(0.25rem, 1vw,  0.5rem);
+  --space-sm: clamp(0.5rem,  2vw,  1rem);
+  --space-md: clamp(1rem,    3vw,  1.5rem);
+  --space-lg: clamp(1.5rem,  4vw,  2rem);
+
+  /* ── [UI-2.9b / U-48] The breakpoint scale ───────────────────────────────
+   * Five tiers, and only these five. Authored mobile-first with min-width, so
+   * each tier inherits the one below and every rule is additive.
+   *
+   *   phone     <= 599   single column, drawer nav, bottom-sheet dialogs
+   *   tablet-p   600     drawer STAYS — the topbar cannot hold five dropdown
+   *                      groups at 768px; dialogs centre
+   *   tablet-l   900     topbar nav appears, full tables
+   *   desktop   1280     the primary working target
+   *   wide      1920     content unclamps so wide tables use the screen
+   *
+   * IMPORTANT: these tokens cannot be used inside an @media query. A media
+   * query is evaluated before custom properties are resolved, so
+   * `@media (min-width: var(--bp-tablet-l))` is invalid CSS in every browser.
+   * They are the canonical record of the scale, they are readable from
+   * JavaScript via getComputedStyle, and the literals in the stylesheets must
+   * be kept equal to them. tools/ui_check.js check C7 enforces that no width
+   * query uses a value outside this set.
+   *
+   * None of these is a proxy for input type. A Windows desktop can have a
+   * touchscreen and a tablet can have a keyboard, so tap targets stay
+   * 44/48px at every width and pointer affordances are gated on
+   * (hover: hover) / (pointer: fine) instead. */
+  --bp-phone:    599px;
+  --bp-tablet-p: 600px;
+  --bp-tablet-l: 900px;
+  --bp-desktop:  1280px;
+  --bp-wide:     1920px;
+
+  --topbar-h: 56px;
+
+  
+  --transition-fast: 0.15s ease;
+  --transition-med:  0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* ── [UI-8.1 / U-12] Dark mode ───────────────────────────────────────────
+ *
+ * This is only possible because of Phase 2: until steps 2.4–2.6 the three
+ * company themes each re-stated the canvas and ink tokens further down the
+ * cascade, so any dark values set here were immediately overwritten. Now the
+ * themes carry brand and semantics only, and these tokens are the single place
+ * the canvas is decided.
+ *
+ * Three states, in this order, deliberately:
+ *   1. the light palette above, on bare :root — the default;
+ *   2. the OS preference, guarded so an explicit light choice still wins;
+ *   3. an explicit [data-theme] choice, which wins in both directions.
+ * Only the tokens change. No component has a dark variant of its own, which is
+ * what keeps this from becoming a second design system to maintain.
+ */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg-canvas:      #12151a;
+    --bg-primary:     #12151a;
+    --bg-surface:     #1a1e25;
+    --bg-subtle:      #222731;
+    --bg-sunken:      #0d1014;
+    --border-color:   #2c323c;
+    --border-strong:  #3a4150;
+    --text-main:      #e8eaed;
+    --text-muted:     #a4adba;
+    --text-disabled:  #78818f;
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.5);
+    --shadow-lg: 0 10px 30px rgba(0, 0, 0, 0.6);
+    /* Status backgrounds have to come down with everything else, or a success
+       pill is a bright green rectangle glowing on a dark page. */
+    --success-bg: #10261a;  --success-border: #1e4632;  --success-text: #6ee7a8;
+    --warning-bg: #2a2011;  --warning-border: #4d3d1c;  --warning-text: #f5c265;
+    --danger-bg:  #2a1416;  --danger-border:  #4d2226;  --danger-text:  #f19396;
+    --pending-bg: #2a2011;  --pending-border: #4d3d1c;  --pending-text: #f5c265;
+  }
+}
+
+:root[data-theme="dark"] {
+  --bg-canvas:      #12151a;
+  --bg-primary:     #12151a;
+  --bg-surface:     #1a1e25;
+  --bg-subtle:      #222731;
+  --bg-sunken:      #0d1014;
+  --border-color:   #2c323c;
+  --border-strong:  #3a4150;
+  --text-main:      #e8eaed;
+  --text-muted:     #a4adba;
+  --text-disabled:  #78818f;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.5);
+  --shadow-lg: 0 10px 30px rgba(0, 0, 0, 0.6);
+  --success-bg: #10261a;  --success-border: #1e4632;  --success-text: #6ee7a8;
+  --warning-bg: #2a2011;  --warning-border: #4d3d1c;  --warning-text: #f5c265;
+  --danger-bg:  #2a1416;  --danger-border:  #4d2226;  --danger-text:  #f19396;
+  --pending-bg: #2a2011;  --pending-border: #4d3d1c;  --pending-text: #f5c265;
+}
+
+/* ── [UI-8.2 / U-41] Density ─────────────────────────────────────────────
+ * Compact drives the SPACING SCALE, not a pile of per-component overrides, so
+ * every component that already uses var(--space-*) tightens together and
+ * nothing has to opt in. Tap targets are deliberately NOT reduced: a denser
+ * table on a touchscreen still has to be tappable. */
+:root[data-density="compact"] {
+  --space-1: 2px;
+  --space-2: 6px;
+  --space-3: 8px;
+  --space-4: 12px;
+  --space-6: 16px;
+  --space-8: 24px;
+  --space-xs: 0.25rem;
+  --space-sm: 0.5rem;
+  --space-md: 0.75rem;
+  --space-lg: 1rem;
+}
+:root[data-density="compact"] .table tbody td { padding-block: 5px; }
+:root[data-density="compact"] .table thead th { padding-block: 6px; }
+
+/* Printing is always light: dark tokens on paper waste toner and read badly. */
+@media print {
+  :root, :root[data-theme="dark"] {
+    --bg-canvas: #ffffff; --bg-primary: #ffffff; --bg-surface: #ffffff;
+    --bg-subtle: #ffffff; --bg-sunken: #ffffff;
+    --text-main: #000000; --text-muted: #333333; --text-disabled: #666666;
+    --border-color: #999999; --border-strong: #666666;
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  
+  -webkit-tap-highlight-color: transparent;
+}
+
+html {
+  
+  overflow-x: hidden;
+  
+  text-size-adjust: 100%;
+  -webkit-text-size-adjust: 100%;
+  
+  overscroll-behavior-y: contain;
+  
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  font-family: var(--font-sans);
+  background-color: var(--bg-primary);
+  color: var(--text-main);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+
+  
+  min-height: 100dvh;
+  min-height: calc(var(--vh, 1vh) * 100);
+
+  
+  overflow-x: hidden;
+
+  
+  touch-action: pan-y;
+}
+
+[dir="ltr"] body { text-align: left; }
+[dir="rtl"] body { text-align: right; }
+
+:focus-visible {
+  outline: 2px solid var(--brand-primary);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+:focus:not(:focus-visible) {
+  outline: none;
+}
+
+.scroll-x {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+}
+.scroll-y {
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-y: contain;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+</style>

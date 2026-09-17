@@ -6,6 +6,11 @@
  * Loaded after 07_Backup.js.
  */
 
+/** Super-admin-only gate for every live MySQL operation. */
+function dbGuard_(user) {
+  if (!user || !user.isSuperAdmin) throw new Error('غير مصرح — للمسؤول فقط');
+}
+
 const DBLIVE_CONFIG = {
   host: '164.92.143.177',
   port: 3306,
@@ -47,7 +52,7 @@ function dbLiveProp_(props, canonicalKey, legacyKey) {
  * Project Settings → Script properties so they never land in source code,
  * and re-running this can never clobber working credentials with placeholders.
  */
-function setupMySqlCredentials() {
+function setupMySqlCredentials_() {
   var props = PropertiesService.getScriptProperties();
   var current = props.getProperties() || {};
   var toSet = {};
@@ -647,6 +652,607 @@ function dbClientBalanceSheetsUpdate_(data, user) {
   }
 }
 
+// ─── manufacture_headers / manufacture_footers (Top Chemical: tc_manufacture_orders) ──
+//
+// manufacture_headers (17 cols): id, user_id, user_type, name_ar,
+//   expected_quantity, deliver_quantity, is_product, product_id, status,
+//   manufacture_number, manufacture_delivery_number, admin_approved,
+//   admin_approved_at, created_at, updated_at, deleted_at, is_revised.
+// manufacture_footers (9 cols): id, manufacture_header_id, product_id,
+//   product_code, productUnit, productQuantity, created_at, updated_at, warehouse_id.
+
+/**
+ * Paginated / full list of manufacture_headers.
+ * Soft-deleted rows (deleted_at IS NOT NULL) are excluded.
+ */
+function dbManufactureList_(data, user) {
+  data = data || {};
+  var loadAll = !!(data.loadAll === true || data.loadAll === 'true' || data.loadAll === '1' || data.loadAll === 1);
+  var limit  = loadAll ? 1000 : Math.min(Math.max(Number(data.limit)  || 10, 1), 1000);
+  var offset = Math.max(Number(data.offset) || 0, 0);
+  var conn, countStmt, countRs, stmt, rs;
+  try {
+    conn = dbGetConnection_();
+    countStmt = conn.prepareStatement(
+      'SELECT COUNT(*) AS cnt FROM `manufacture_headers` WHERE `deleted_at` IS NULL'
+    );
+    countRs = countStmt.executeQuery();
+    var total = countRs.next() ? countRs.getInt('cnt') : 0;
+    // product_label lets the page show products.name_ar next to the raw product_id
+    // so the user can understand which item the order is for.
+    stmt = conn.prepareStatement(
+      'SELECT `h`.*, `p`.`name_ar` AS `product_label` FROM `manufacture_headers` `h`' +
+      ' LEFT JOIN `products` `p` ON `p`.`id` = `h`.`product_id`' +
+      ' WHERE `h`.`deleted_at` IS NULL' +
+      ' ORDER BY `h`.`id` DESC LIMIT ' + limit + ' OFFSET ' + offset
+    );
+    rs = stmt.executeQuery();
+    var md = rs.getMetaData();
+    var colCount = md.getColumnCount();
+    var columns = [];
+    for (var c = 1; c <= colCount; c++) { columns.push(md.getColumnLabel(c) || md.getColumnName(c)); }
+    var rows = [];
+    while (rs.next()) {
+      var row = {};
+      for (var i = 1; i <= colCount; i++) { var v = rs.getObject(i); row[columns[i-1]] = v !== null ? String(v) : null; }
+      rows.push(row);
+    }
+    return { status: 'ok', columns: columns, rows: rows, total: total, limit: limit, offset: offset, loadedAll: loadAll };
+  } catch (err) {
+    Logger.log('dbManufactureList_ error: ' + err.message);
+    throw err;
+  } finally {
+    if (rs) rs.close();
+    if (stmt) stmt.close();
+    if (countRs) countRs.close();
+    if (countStmt) countStmt.close();
+    if (conn) conn.close();
+  }
+}
+
+/**
+ * Return all footers for one header. data: { manufacture_header_id }.
+ */
+function dbManufactureGetFooters_(data, user) {
+  data = data || {};
+  var hid = String(data.manufacture_header_id !== null && data.manufacture_header_id !== undefined ? data.manufacture_header_id : '').trim();
+  if (!hid) throw new Error('manufacture_header_id is required');
+  var conn, stmt, rs;
+  try {
+    conn = dbGetConnection_();
+    // product_name_ar / product_code_ref / product_unit_ref come from the
+    // products master so every inline shows the Arabic name next to the id.
+    // (product_code / productUnit stay the stored snapshot on the footer row.)
+    stmt = conn.prepareStatement(
+      'SELECT `f`.*, `p`.`name_ar` AS `product_name_ar`,' +
+      ' `p`.`code` AS `product_code_ref`, `p`.`unit` AS `product_unit_ref`' +
+      ' FROM `manufacture_footers` `f`' +
+      ' LEFT JOIN `products` `p` ON `p`.`id` = `f`.`product_id`' +
+      ' WHERE `f`.`manufacture_header_id` = ? ORDER BY `f`.`id` ASC'
+    );
+    stmt.setObject(1, hid);
+    rs = stmt.executeQuery();
+    var md = rs.getMetaData();
+    var colCount = md.getColumnCount();
+    var columns = [];
+    for (var c = 1; c <= colCount; c++) { columns.push(md.getColumnLabel(c) || md.getColumnName(c)); }
+    var rows = [];
+    while (rs.next()) {
+      var row = {};
+      for (var i = 1; i <= colCount; i++) { var v = rs.getObject(i); row[columns[i-1]] = v !== null ? String(v) : null; }
+      rows.push(row);
+    }
+    return { status: 'ok', columns: columns, rows: rows, manufacture_header_id: hid };
+  } catch (err) {
+    Logger.log('dbManufactureGetFooters_ error: ' + err.message);
+    throw err;
+  } finally {
+    if (rs) rs.close();
+    if (stmt) stmt.close();
+    if (conn) conn.close();
+  }
+}
+
+/**
+ * UPDATE one manufacture_headers row by id.
+ * read-only: id, created_at, updated_at.
+ */
+function dbManufactureUpdateHeader_(data, user) {
+  data = data || {};
+  var id = String(data.id !== null && data.id !== undefined ? data.id : '').trim();
+  if (!id) throw new Error('id is required');
+  var RO = { 'id': true, 'created_at': true, 'updated_at': true };
+  var updates = [], params = [];
+  for (var key in data) {
+    if (!Object.prototype.hasOwnProperty.call(data, key)) continue;
+    if (RO[key]) continue;
+    if (key.charAt(0) === '_') continue;
+    var safeCol = dbSanitizeIdentifier_(key);
+    var rawVal = data[key];
+    updates.push(safeCol + ' = ?');
+    params.push(rawVal === null || rawVal === undefined || rawVal === '' ? null : rawVal);
+  }
+  if (updates.length === 0) throw new Error('لا توجد حقول للتحديث');
+  params.push(id);
+  var conn, stmt;
+  try {
+    conn = dbGetConnection_();
+    stmt = conn.prepareStatement('UPDATE `manufacture_headers` SET ' + updates.join(', ') + ' WHERE `id` = ?');
+    dbBindParams_(stmt, params);
+    var affected = stmt.executeUpdate();
+    return { status: 'ok', affected: affected, id: id };
+  } catch (err) {
+    Logger.log('dbManufactureUpdateHeader_ error: ' + err.message);
+    throw err;
+  } finally {
+    if (stmt) stmt.close();
+    if (conn) conn.close();
+  }
+}
+
+/**
+ * Look up a product's code + unit from the products master.
+ * Returns { code, unit } (nullable strings) or null when not found.
+ * Caller must close the connection it opens — this helper takes an OPEN
+ * connection so updates/inserts stay on one connection.
+ */
+function dbProductCodeUnit_(conn, productId) {
+  var stmt = null, rs = null;
+  try {
+    stmt = conn.prepareStatement(
+      'SELECT `code`, `unit` FROM `products` WHERE `id` = ? LIMIT 1'
+    );
+    stmt.setObject(1, productId);
+    rs = stmt.executeQuery();
+    if (rs.next()) {
+      var c = rs.getObject(1), u = rs.getObject(2);
+      return {
+        code: c !== null ? String(c) : null,
+        unit: u !== null ? String(u) : null
+      };
+    }
+    return null;
+  } finally {
+    if (rs) rs.close();
+    if (stmt) stmt.close();
+  }
+}
+
+/**
+ * UPDATE one manufacture_footers row by id.
+ * read-only: id, manufacture_header_id, created_at, updated_at.
+ */
+function dbManufactureUpdateFooter_(data, user) {
+  data = data || {};
+  var id = String(data.id !== null && data.id !== undefined ? data.id : '').trim();
+  if (!id) throw new Error('id is required');
+  var RO = { 'id': true, 'manufacture_header_id': true, 'created_at': true, 'updated_at': true };
+  var updates = [], params = [];
+  for (var key in data) {
+    if (!Object.prototype.hasOwnProperty.call(data, key)) continue;
+    if (RO[key]) continue;
+    if (key.charAt(0) === '_') continue;
+    // product_code / productUnit are withdrawn automatically from products —
+    // ignore client-sent values when product_id is being changed; the lookup
+    // below overwrites them authoritatively.
+    if ((key === 'product_code' || key === 'productUnit') && data.product_id) continue;
+    var safeCol = dbSanitizeIdentifier_(key);
+    var rawVal = data[key];
+    updates.push(safeCol + ' = ?');
+    params.push(rawVal === null || rawVal === undefined || rawVal === '' ? null : rawVal);
+  }
+  if (updates.length === 0 && !data.product_id) throw new Error('لا توجد حقول للتحديث');
+  params.push(id);
+  var conn, stmt;
+  try {
+    conn = dbGetConnection_();
+    // Authoritative auto-fill: changing product_id re-withdraws code/unit.
+    var newPid = data.product_id !== null && data.product_id !== undefined
+      ? String(data.product_id).trim() : '';
+    if (newPid) {
+      var ref = dbProductCodeUnit_(conn, newPid);
+      if (ref) {
+        updates.push('`product_code` = ?');
+        params.splice(params.length - 1, 0, ref.code);
+        updates.push('`productUnit` = ?');
+        params.splice(params.length - 1, 0, ref.unit);
+      }
+    }
+    if (updates.length === 0) throw new Error('لا توجد حقول للتحديث');
+    stmt = conn.prepareStatement('UPDATE `manufacture_footers` SET ' + updates.join(', ') + ' WHERE `id` = ?');
+    dbBindParams_(stmt, params);
+    var affected = stmt.executeUpdate();
+    return { status: 'ok', affected: affected, id: id };
+  } catch (err) {
+    Logger.log('dbManufactureUpdateFooter_ error: ' + err.message);
+    throw err;
+  } finally {
+    if (stmt) stmt.close();
+    if (conn) conn.close();
+  }
+}
+
+/**
+ * INSERT a new manufacture_footers row (used for the copy-row feature).
+ * data: { manufacture_header_id, product_id, product_code, productUnit,
+ *         productQuantity, warehouse_id }
+ * Returns { status:'ok', id: newId, manufacture_header_id }
+ */
+function dbManufactureInsertFooter_(data, user) {
+  data = data || {};
+  var hid = String(data.manufacture_header_id !== null && data.manufacture_header_id !== undefined ? data.manufacture_header_id : '').trim();
+  if (!hid) throw new Error('manufacture_header_id is required');
+
+  var ALLOWED = ['manufacture_header_id', 'product_id', 'product_code', 'productUnit', 'productQuantity', 'warehouse_id'];
+  var insertCols = [], params = [];
+  ALLOWED.forEach(function (col) {
+    if (Object.prototype.hasOwnProperty.call(data, col)) {
+      insertCols.push(dbSanitizeIdentifier_(col));
+      var rawVal = data[col];
+      params.push(rawVal === null || rawVal === undefined || rawVal === '' ? null : rawVal);
+    }
+  });
+  if (!insertCols.length) throw new Error('لا توجد بيانات للإدراج');
+
+  var conn, stmt, idStmt, idRs;
+  try {
+    conn = dbGetConnection_();
+    // Auto-withdraw code/unit from products when only product_id is supplied,
+    // and default warehouse_id to 1. created_at/updated_at are left to the
+    // DB CURRENT_TIMESTAMP defaults.
+    var pidForLookup = data.product_id !== null && data.product_id !== undefined
+      ? String(data.product_id).trim() : '';
+    if (pidForLookup) {
+      var ref = dbProductCodeUnit_(conn, pidForLookup);
+      if (ref) {
+        if (insertCols.indexOf('`product_code`') === -1) {
+          insertCols.push('`product_code`');
+          params.push(ref.code);
+        }
+        if (insertCols.indexOf('`productUnit`') === -1) {
+          insertCols.push('`productUnit`');
+          params.push(ref.unit);
+        }
+      }
+    }
+    if (insertCols.indexOf('`warehouse_id`') === -1) {
+      insertCols.push('`warehouse_id`');
+      params.push('1');
+    }
+    var sql = 'INSERT INTO `manufacture_footers` (' + insertCols.join(', ') + ') VALUES (' +
+              insertCols.map(function () { return '?'; }).join(', ') + ')';
+    stmt = conn.prepareStatement(sql);
+    dbBindParams_(stmt, params);
+    stmt.executeUpdate();
+    idStmt = conn.prepareStatement('SELECT LAST_INSERT_ID() AS new_id');
+    idRs   = idStmt.executeQuery();
+    var newId = idRs.next() ? String(idRs.getLong('new_id')) : null;
+    return { status: 'ok', id: newId, manufacture_header_id: hid };
+  } catch (err) {
+    Logger.log('dbManufactureInsertFooter_ error: ' + err.message);
+    throw err;
+  } finally {
+    if (idRs)   idRs.close();
+    if (idStmt) idStmt.close();
+    if (stmt)   stmt.close();
+    if (conn)   conn.close();
+  }
+}
+
+/**
+ * Label lists for the manufacture-orders forms: product options, warehouse
+ * options, and the DISTINCT status values actually present in
+ * manufacture_headers. Every candidate query is attempted defensively — the
+ * products/warehouses table and column names are NOT guaranteed, so a miss
+ * yields an empty list (the page falls back to free-text inputs) instead of
+ * an error. Only the status list (known table + column) is required.
+ * Returns { status:'ok', products:[{value,label}], warehouses:[...], statuses:[...] }.
+ */
+function dbManufactureRefs_(data, user) {
+  var products = [], productsFull = [], warehouses = [], statuses = [];
+  var conn;
+  try {
+    conn = dbGetConnection_();
+    products = tryLabelList_(conn, [
+      'SELECT `id`, `name_ar` AS `label` FROM `products` ORDER BY `id` ASC LIMIT 500',
+      'SELECT `id`, `name` AS `label` FROM `products` ORDER BY `id` ASC LIMIT 500'
+    ]);
+    // Full option rows so the page can auto-fill code/unit on product change
+    // and show the Arabic name next to raw product_id values.
+    productsFull = tryFullList_(conn, [
+      'SELECT `id`, `name_ar`, `code`, `unit` FROM `products` ORDER BY `id` ASC LIMIT 500'
+    ]);
+    warehouses = tryLabelList_(conn, [
+      'SELECT `id`, `name_ar` AS `label` FROM `warehouses` ORDER BY `id` ASC LIMIT 500',
+      'SELECT `id`, `name` AS `label` FROM `warehouses` ORDER BY `id` ASC LIMIT 500'
+    ]);
+    statuses = tryLabelList_(conn, [
+      'SELECT DISTINCT `status` AS `label` FROM `manufacture_headers` WHERE `status` IS NOT NULL ORDER BY `status` ASC'
+    ]);
+    statuses = statuses.map(function (s) { return { value: s.label, label: s.label }; });
+  } catch (err) {
+    Logger.log('dbManufactureRefs_ error: ' + err.message);
+    throw err;
+  } finally {
+    if (conn) conn.close();
+  }
+  return { status: 'ok', products: products, products_full: productsFull, warehouses: warehouses, statuses: statuses };
+}
+
+/**
+ * Like tryLabelList_ but returns full rows { value, name_ar, code, unit } for
+ * the products master. Misses → [] (page falls back to the plain label list).
+ */
+function tryFullList_(conn, candidates) {
+  for (var i = 0; i < candidates.length; i++) {
+    var stmt = null, rs = null;
+    try {
+      stmt = conn.prepareStatement(candidates[i]);
+      rs = stmt.executeQuery();
+      var out = [];
+      while (rs.next()) {
+        var v = rs.getObject(1), n = rs.getObject(2), c = rs.getObject(3), u = rs.getObject(4);
+        out.push({
+          value: v !== null ? String(v) : '',
+          label: (n !== null ? String(n) : '') || (v !== null ? String(v) : ''),
+          code: c !== null ? String(c) : '',
+          unit: u !== null ? String(u) : ''
+        });
+      }
+      return out;
+    } catch (e) {
+      /* candidate shape absent — try the next one */
+    } finally {
+      try { if (rs) rs.close(); } catch (e2) {}
+      try { if (stmt) stmt.close(); } catch (e3) {}
+    }
+  }
+  return [];
+}
+
+/**
+ * Run each candidate SELECT in order; return rows of the first one that
+ * executes ({value, label} stringified). All misses → []. One statement and
+ * result set are open at a time and always closed, including on error paths.
+ */
+function tryLabelList_(conn, candidates) {
+  for (var i = 0; i < candidates.length; i++) {
+    var stmt = null, rs = null;
+    try {
+      stmt = conn.prepareStatement(candidates[i]);
+      rs = stmt.executeQuery();
+      var md = rs.getMetaData();
+      var colCount = md.getColumnCount();
+      var out = [];
+      while (rs.next()) {
+        var v = rs.getObject(1), l = colCount > 1 ? rs.getObject(2) : rs.getObject(1);
+        out.push({
+          value: v !== null ? String(v) : '',
+          label: (l !== null ? String(l) : '') || (v !== null ? String(v) : '')
+        });
+      }
+      return out;
+    } catch (e) {
+      /* candidate table/columns absent — try the next shape */
+    } finally {
+      try { if (rs) rs.close(); } catch (e2) {}
+      try { if (stmt) stmt.close(); } catch (e3) {}
+    }
+  }
+  return [];
+}
+
+// ─── manufacture soft-delete ──
+//
+// manufacture_headers HAS deleted_at → soft delete stores NOW() timestamp.
+// manufacture_footers has NO deleted_at column (9 cols per schema) → footer
+// lines are deleted with a real DELETE. Both are page-level authorized (no
+// dbGuard_), exactly like the update/insert helpers above.
+
+/**
+ * Soft-delete one manufacture_headers row: SET deleted_at = NOW().
+ * data: { id }. Only touches rows not already deleted.
+ */
+function dbManufactureSoftDeleteHeader_(data, user) {
+  data = data || {};
+  var id = String(data.id !== null && data.id !== undefined ? data.id : '').trim();
+  if (!id) throw new Error('id is required');
+  var conn, stmt;
+  try {
+    conn = dbGetConnection_();
+    stmt = conn.prepareStatement(
+      'UPDATE `manufacture_headers` SET `deleted_at` = NOW(), `updated_at` = NOW()' +
+      ' WHERE `id` = ? AND `deleted_at` IS NULL'
+    );
+    stmt.setObject(1, id);
+    var affected = stmt.executeUpdate();
+    if (affected === 0) throw new Error('السجل غير موجود أو محذوف مسبقاً');
+    return { status: 'ok', affected: affected, id: id };
+  } catch (err) {
+    Logger.log('dbManufactureSoftDeleteHeader_ error: ' + err.message);
+    throw err;
+  } finally {
+    if (stmt) stmt.close();
+    if (conn) conn.close();
+  }
+}
+
+/**
+ * Delete one manufacture_footers row by id.
+ * NOTE: footers table has no deleted_at column, so this is a hard DELETE.
+ */
+function dbManufactureDeleteFooter_(data, user) {
+  data = data || {};
+  var id = String(data.id !== null && data.id !== undefined ? data.id : '').trim();
+  if (!id) throw new Error('id is required');
+  var conn, stmt;
+  try {
+    conn = dbGetConnection_();
+    stmt = conn.prepareStatement('DELETE FROM `manufacture_footers` WHERE `id` = ?');
+    stmt.setObject(1, id);
+    var affected = stmt.executeUpdate();
+    if (affected === 0) throw new Error('البند غير موجود');
+    return { status: 'ok', affected: affected, id: id };
+  } catch (err) {
+    Logger.log('dbManufactureDeleteFooter_ error: ' + err.message);
+    throw err;
+  } finally {
+    if (stmt) stmt.close();
+    if (conn) conn.close();
+  }
+}
+
+// ─── client_balance_sheets soft-delete (Top Chemical: tc_client_balance_sheets) ──
+
+/**
+ * Soft-delete one client_balance_sheets row: SET deleted_at = NOW().
+ * data: { id }. Reads already exclude deleted_at IS NOT NULL rows.
+ */
+function dbClientBalanceSheetsDelete_(data, user) {
+  data = data || {};
+  var id = String(data.id !== undefined && data.id !== null ? data.id : '').trim();
+  if (!id) throw new Error('id is required');
+  var conn, stmt;
+  try {
+    conn = dbGetConnection_();
+    stmt = conn.prepareStatement(
+      'UPDATE `client_balance_sheets` SET `deleted_at` = NOW(), `updated_at` = NOW()' +
+      ' WHERE `id` = ? AND `deleted_at` IS NULL'
+    );
+    stmt.setObject(1, id);
+    var affected = stmt.executeUpdate();
+    if (affected === 0) throw new Error('السجل غير موجود أو محذوف مسبقاً');
+    return { status: 'ok', affected: affected, id: id };
+  } catch (err) {
+    Logger.log('dbClientBalanceSheetsDelete_ error: ' + err.message);
+    throw err;
+  } finally {
+    if (stmt) stmt.close();
+    if (conn) conn.close();
+  }
+}
+
+// ─── products live table (Top Chemical: tc_products_live / اصناف النظام الرئيسي) ──
+//
+// products (17 cols): id, category_id, client_id, name_ar, name_en, code,
+//   price, unit, quantity, number_of_cartons_bags, number_of_small_boxes,
+//   product_unit_metric, active, manufacture_id, created_at, updated_at, deleted_at.
+// Independent MySQL data beside the company sheets — same discipline as the
+// client_balance_sheets block: paginated reads excluding soft-deleted rows,
+// allowlist-free updates with read-only strip, soft-delete via NOW().
+
+/**
+ * Paginated or full list from the products table.
+ * Soft-deleted rows (deleted_at IS NOT NULL) are excluded.
+ */
+function dbProductsLiveList_(data, user) {
+  data = data || {};
+  var loadAll = !!(data.loadAll === true || data.loadAll === 'true' || data.loadAll === '1' || data.loadAll === 1);
+  var limit = loadAll ? 1000 : Math.min(Math.max(Number(data.limit) || 10, 1), 1000);
+  var offset = Math.max(Number(data.offset) || 0, 0);
+  var conn, countStmt, countRs, stmt, rs;
+  try {
+    conn = dbGetConnection_();
+    countStmt = conn.prepareStatement(
+      'SELECT COUNT(*) AS cnt FROM `products` WHERE `deleted_at` IS NULL'
+    );
+    countRs = countStmt.executeQuery();
+    var total = countRs.next() ? countRs.getInt('cnt') : 0;
+    stmt = conn.prepareStatement(
+      'SELECT `p`.*, `q`.`current_qty` AS `live_quantity` FROM `products` `p`' +
+      ' LEFT JOIN `product_current_quantity` `q` ON `q`.`id` = `p`.`id`' +
+      ' WHERE `p`.`deleted_at` IS NULL' +
+      ' ORDER BY `p`.`id` DESC LIMIT ' + limit + ' OFFSET ' + offset
+    );
+    rs = stmt.executeQuery();
+    var md = rs.getMetaData();
+    var colCount = md.getColumnCount();
+    var columns = [];
+    for (var c = 1; c <= colCount; c++) { columns.push(md.getColumnLabel(c) || md.getColumnName(c)); }
+    var rows = [];
+    while (rs.next()) {
+      var row = {};
+      for (var i = 1; i <= colCount; i++) { var v = rs.getObject(i); row[columns[i-1]] = v !== null ? String(v) : null; }
+      rows.push(row);
+    }
+    return { status: 'ok', columns: columns, rows: rows, total: total, limit: limit, offset: offset, loadedAll: loadAll };
+  } catch (err) {
+    Logger.log('dbProductsLiveList_ error: ' + err.message);
+    throw err;
+  } finally {
+    if (rs) rs.close();
+    if (stmt) stmt.close();
+    if (countRs) countRs.close();
+    if (countStmt) countStmt.close();
+    if (conn) conn.close();
+  }
+}
+
+/**
+ * UPDATE one products row by id. Everything is editable except the PK,
+ * server-managed timestamps, and quantity — quantity is read-only live data
+ * from the product_current_quantity view (see dbProductsLiveList_).
+ */
+function dbProductsLiveUpdate_(data, user) {
+  data = data || {};
+  var id = String(data.id !== undefined && data.id !== null ? data.id : '').trim();
+  if (!id) throw new Error('id is required');
+  var readOnlyCols = { 'id': true, 'created_at': true, 'updated_at': true, 'quantity': true, 'live_quantity': true };
+  var updates = [], params = [];
+  for (var key in data) {
+    if (!Object.prototype.hasOwnProperty.call(data, key)) continue;
+    if (readOnlyCols[key]) continue;
+    if (key.charAt(0) === '_') continue;
+    var safeCol = dbSanitizeIdentifier_(key);
+    var rawVal = data[key];
+    updates.push(safeCol + ' = ?');
+    params.push(rawVal === null || rawVal === undefined || rawVal === '' ? null : rawVal);
+  }
+  if (updates.length === 0) throw new Error('لا توجد حقول للتحديث');
+  params.push(id);
+  var conn, stmt;
+  try {
+    conn = dbGetConnection_();
+    stmt = conn.prepareStatement('UPDATE `products` SET ' + updates.join(', ') + ' WHERE `id` = ?');
+    dbBindParams_(stmt, params);
+    var affected = stmt.executeUpdate();
+    return { status: 'ok', affected: affected, id: id };
+  } catch (err) {
+    Logger.log('dbProductsLiveUpdate_ error: ' + err.message);
+    throw err;
+  } finally {
+    if (stmt) stmt.close();
+    if (conn) conn.close();
+  }
+}
+
+/**
+ * Soft-delete one products row: SET deleted_at = NOW().
+ * data: { id }.
+ */
+function dbProductsLiveDelete_(data, user) {
+  data = data || {};
+  var id = String(data.id !== undefined && data.id !== null ? data.id : '').trim();
+  if (!id) throw new Error('id is required');
+  var conn, stmt;
+  try {
+    conn = dbGetConnection_();
+    stmt = conn.prepareStatement(
+      'UPDATE `products` SET `deleted_at` = NOW(), `updated_at` = NOW()' +
+      ' WHERE `id` = ? AND `deleted_at` IS NULL'
+    );
+    stmt.setObject(1, id);
+    var affected = stmt.executeUpdate();
+    if (affected === 0) throw new Error('الصنف غير موجود أو محذوف مسبقاً');
+    return { status: 'ok', affected: affected, id: id };
+  } catch (err) {
+    Logger.log('dbProductsLiveDelete_ error: ' + err.message);
+    throw err;
+  } finally {
+    if (stmt) stmt.close();
+    if (conn) conn.close();
+  }
+}
 
 // ─── regular_box_movement analysis (Top Chemical: tc_box_analysis) ──
 //
@@ -1305,3 +1911,4 @@ function dbBoxMaxUpdatedAt_(data, user) {
     if (conn) conn.close();
   }
 }
+

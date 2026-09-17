@@ -107,7 +107,8 @@
         { key: 'contract_start_Date', label: 'تاريخ البداية' },
         { key: 'contract_end_Date', label: 'تاريخ النهاية' },
         { key: 'contract_salary', label: 'راتب العقد' },
-        { key: 'contract_insurance_salary', label: 'راتب التأمين' }
+        { key: 'contract_insurance_salary', label: 'راتب التأمين' },
+        { key: 'actions', label: 'إجراءات / Actions' }
       ];
 
       var rows = contractsRows.map(function (r) {
@@ -118,7 +119,10 @@
           fmtDate(r.contract_start_Date),
           fmtDate(r.contract_end_Date),
           r.contract_salary != null ? esc(r.contract_salary) : '',
-          r.contract_insurance_salary != null ? esc(r.contract_insurance_salary) : ''
+          r.contract_insurance_salary != null ? esc(r.contract_insurance_salary) : '',
+          IS_SUPER_ADMIN ? UIC.actionBtns([
+            { label: '✏️ تعديل / Edit', onclick: "openEditModal('" + esc(r.unique_id).replace(/\'/g, "\\\'") + "')" }
+          ]) : ''
         ];
       });
 
@@ -143,21 +147,34 @@
       });
     }
 
-    function openEditModal(id) {
+    /* Row-edit repair (Stage 4.6): the dormant editor is completed with a real
+       update contract keyed by stable unique_id (the sheet's id column is a
+       positional serial, not a safe selector). */
+    function openEditModal(uid) {
+      if (!UIC.canFull_()) { UIC.toast('غير مصرح', 'error'); return; }
       var row = null;
       for (var i = 0; i < contractsRows.length; i++) {
-        if (contractsRows[i].id == id) {
+        if (String(contractsRows[i].unique_id) === String(uid)) {
           row = contractsRows[i];
           break;
         }
       }
-      if (!row) return;
+      if (!row) { UIC.toast('السجل غير موجود — تم تحديث القائمة', 'error'); loadData(true); return; }
+
+      var emps = employeeOptions.slice();
+      if (row.emp_id && !emps.some(function (o) { return String(o.value) === String(row.emp_id); })) {
+        emps.push({ value: row.emp_id, label: (row.employee_name || row.emp_id) + ' (غير نشط)' });
+      }
+      var types = contractTypeOptions.slice();
+      if (row.contract_Type && !types.some(function (o) { return String(o.value) === String(row.contract_Type); })) {
+        types.push({ value: row.contract_Type, label: String(row.contract_Type) + ' (غير نشط)' });
+      }
 
       var html = '<form id="contract-form">';
-      html += UIC.combo({ key: 'emp_id', label: 'الموظف', required: true, options: employeeOptions, value: row.emp_id, placeholder: 'اختر الموظف' });
-      html += UIC.combo({ key: 'contract_Type', label: 'نوع العقد', required: true, options: contractTypeOptions, value: row.contract_Type, placeholder: 'اختر نوع العقد...' });
-      html += UIC.field({ key: 'contract_start_Date', label: 'تاريخ البداية', type: 'date', required: true, value: row.contract_start_Date });
-      html += UIC.field({ key: 'contract_end_Date', label: 'تاريخ النهاية', type: 'date', value: row.contract_end_Date });
+      html += UIC.combo({ key: 'emp_id', label: 'الموظف', required: true, options: emps, value: row.emp_id, placeholder: 'اختر الموظف' });
+      html += UIC.combo({ key: 'contract_Type', label: 'نوع العقد', required: true, options: types, value: row.contract_Type, placeholder: 'اختر نوع العقد...' });
+      html += UIC.field({ key: 'contract_start_Date', label: 'تاريخ البداية', type: 'date', required: true, value: fmtDate(row.contract_start_Date) });
+      html += UIC.field({ key: 'contract_end_Date', label: 'تاريخ النهاية', type: 'date', value: fmtDate(row.contract_end_Date) });
       html += UIC.field({ key: 'contract_salary', label: 'راتب العقد', type: 'number', required: true, step: '0.01', value: row.contract_salary });
       html += UIC.field({ key: 'contract_insurance_salary', label: 'راتب التأمين', type: 'number', required: true, step: '0.01', value: row.contract_insurance_salary });
       html += '</form>';
@@ -165,11 +182,11 @@
       UIC.openModal('contract-modal', {
         title: 'تعديل العقد',
         body: html,
-        onSave: 'saveContractFromForm(\'' + esc(id) + '\')'
+        onSave: 'saveContractFromForm(\'' + esc(row.unique_id).replace(/\'/g, "\\\'") + '\')'
       });
     }
 
-    function saveContractFromForm(existingId) {
+    function saveContractFromForm(existingUid) {
       if (!UIC.validateForm('contract-form')) return;
       var data = UIC.collectForm('contract-form');
       if (!data.contract_Type || data.contract_Type === '__new__') { UIC.toast('نوع العقد مطلوب', 'error'); return; }
@@ -177,7 +194,7 @@
       if (!data.contract_insurance_salary || Number(data.contract_insurance_salary) <= 0) { UIC.toast('راتب التأمين يجب أن يكون أكبر من صفر', 'error'); return; }
 
       UI.showSpinner();
-      companyCall('add_contract', existingId ? Object.assign({}, data, { id: existingId }) : data)
+      companyCall(existingUid ? 'update_contract' : 'add_contract', existingUid ? Object.assign({}, data, { unique_id: existingUid }) : data)
         .then(function (res) {
           if (res && res.error) {
             UIC.toast(res.error, 'error');

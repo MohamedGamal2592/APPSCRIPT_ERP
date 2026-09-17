@@ -45,6 +45,7 @@
   <script>
   (function () {
     var ROWS = [], ENUMS = {}, NEXT_ID = 1;
+    var DIR_FILTER = '', TYPE_FILTER = '';
 
     function renderApp() {
       UIC.appShell('vf-root', {
@@ -59,8 +60,10 @@
         '<div class="vf-card"><div class="vf-card-header"><h3>العملاء والموردون</h3>' +
           (CAN_WRITE ? '<button class="btn btn-primary" onclick="PARTIES_PAGE.openAdd()">+ إضافة سجل</button>' : '') +
         '</div><div class="vf-card-body">' +
+          '<div id="pt-filter" style="margin-bottom:4px;"></div>' +
           '<div id="pt-table"><p class="vf-text-muted">جاري التحميل...</p></div>' +
         '</div></div>';
+      renderFilterBar();
       load();
     }
 
@@ -74,6 +77,7 @@
           ROWS = (res && res.rows) || [];
           ENUMS = (res && res.enums) || {};
           NEXT_ID = (res && res.next_id) || 1;
+          renderFilterBar();
           renderTable(); try{schedulePrefetch();}catch(e){};
         })
         .catch(function (e) { UIC.toast((e && e.message) || 'خطأ في تحميل البيانات', 'error'); })
@@ -82,10 +86,52 @@
 
     var BALANCES;
 
+    /* List filters: الاتجاه + نوع التعامل, client-side over ROWS (the list
+       endpoint already returns everything). Re-renders, never refetches. */
+    function renderFilterBar() {
+      var host = document.getElementById('pt-filter');
+      if (!host) return;
+      var dirs = (ENUMS.customer_direction || []).map(function (v) { return { value: v, label: v }; });
+      var types = (ENUMS.type || []).map(function (v) { return { value: v, label: v }; });
+      host.innerHTML = '<div style="display:flex;gap:0 12px;flex-wrap:wrap;align-items:flex-end;">' +
+        '<div style="flex:1;min-width:220px;">' + UIC.combo({ key: 'pt-direction', label: 'الاتجاه', options: dirs, value: DIR_FILTER, placeholder: 'كل الاتجاهات' }) + '</div>' +
+        '<div style="flex:1;min-width:220px;">' + UIC.combo({ key: 'pt-type', label: 'نوع التعامل', options: types, value: TYPE_FILTER, placeholder: 'كل الأنواع' }) + '</div>' +
+        '<div style="flex:0 0 auto;padding-bottom:12px;"><button class="btn btn-outline" onclick="PARTIES_PAGE.clearFilters()">✕ مسح الفلاتر</button></div>' +
+      '</div>';
+      /* UIC.comboPick dispatches change on the hidden input when picked. */
+      ['pt-direction', 'pt-type'].forEach(function (id) {
+        var el = document.getElementById(id);
+        if (el) el.addEventListener('change', onListFilterChange);
+      });
+    }
+
+    function onListFilterChange() {
+      var d = document.getElementById('pt-direction');
+      var t = document.getElementById('pt-type');
+      var nd = d ? String(d.value || '') : '';
+      var nt = t ? String(t.value || '') : '';
+      if (nd === DIR_FILTER && nt === TYPE_FILTER) return;
+      DIR_FILTER = nd; TYPE_FILTER = nt;
+      renderTable();
+    }
+
+    function clearFilters() {
+      if (!DIR_FILTER && !TYPE_FILTER) return;
+      DIR_FILTER = ''; TYPE_FILTER = '';
+      renderFilterBar(); renderTable();
+    }
+
     function renderTable() {
       var container = document.getElementById('pt-table');
       if (!container) return;
-      var rows = ROWS.map(function (r) {
+      var list = ROWS.filter(function (r) {
+        /* Hidden records: codes 18 and 19 never appear in the list (nor search/export, which derive from this list). */
+        if (String(r.id) === '18' || String(r.id) === '19' || Number(r.id) === 18 || Number(r.id) === 19) return false;
+        if (DIR_FILTER && String(r.customer_direction || '') !== DIR_FILTER) return false;
+        if (TYPE_FILTER && String(r.type || '') !== TYPE_FILTER) return false;
+        return true;
+      });
+      var rows = list.map(function (r) {
         /* Tier A: a __pending row shows «—» where the server has not answered
            yet and offers no actions — its id names a record the server has
            never seen, so acting on it would act on nothing. */
@@ -116,14 +162,18 @@
            classified differently from one load to the next. Declared text so
            it always keeps a name's worth of room. */
         headers: ['الكود', { label: 'الاسم', col: 'text' }, 'الاتجاه', 'نوع التعامل', 'التليفون', 'الدولة', 'المستوى الأساسي',
-                  { label: 'الرصيد الحالي', numeric: true }, ''],
+                  { label: 'الرصيد الحالي', numeric: true }, { key: 'actions', label: '' }],
         rows: rows, pageSize: 100,
+        emptyText: (DIR_FILTER || TYPE_FILTER) ? 'لا توجد سجلات مطابقة' : 'لا توجد بيانات',
         /* [P2] UIC.dataTable rebuilds the tbody from the stored row HTML on every
            sort, search and page change, which would restore the … placeholder.
            onRendered is the component's existing post-render hook (:811), so the
            balances are repainted after each of those without touching UIC. */
         onRendered: function () { paintBalances(); }
       });
+      /* Click a header to sort (asc -> desc -> load order); balances repaint
+         through onRendered above. */
+      UIC.initTableSort('parties-table-id');
       loadBalances();
     }
 
@@ -158,6 +208,49 @@
         cells[i].textContent = finFmt(v);
         cells[i].setAttribute('data-num', String(v));
       }
+      /* The managed sort reads the table STORE, which still holds the …
+         placeholders — push the real values in (idempotent), and if a sort is
+         active, re-derive the view once so the order is decimal, not markup. */
+      if (patchBalanceStore() && !BAL_RESORTING) {
+        try {
+          var st = (window.__dtStore || {})['parties-table-id'];
+          if (st && st.sortKey) {
+            BAL_RESORTING = true;
+            UIC._applyFilters('parties-table-id');
+            BAL_RESORTING = false;
+          }
+        } catch (e) { BAL_RESORTING = false; }
+      }
+    }
+
+    var BAL_RESORTING = false;
+    function patchBalanceStore() {
+      try {
+        if (!BALANCES) return false;
+        var st = (window.__dtStore || {})['parties-table-id'];
+        if (!st) return false;
+        var bIdx = -1;
+        for (var h = 0; h < (st.headers || []).length; h++) {
+          var hh = st.headers[h];
+          if ((hh.key || hh.label) === 'الرصيد الحالي') { bIdx = h; break; }
+        }
+        if (bIdx === -1) return false;
+        var changed = false;
+        ['originalRows', 'rows', 'filtered'].forEach(function (k) {
+          var arr = st[k];
+          if (!arr) return;
+          for (var i = 0; i < arr.length; i++) {
+            var row = arr[i];
+            if (!Array.isArray(row) || row.length <= bIdx) continue;
+            var m = String(row[bIdx]).match(/data-bal="([^"]*)"/);
+            if (!m) continue;
+            var v = Number(BALANCES[m[1]] || 0);
+            var html = '<span class="num" data-bal="' + m[1] + '" data-num="' + v + '">' + finFmt(v) + '</span>';
+            if (row[bIdx] !== html) { row[bIdx] = html; changed = true; }
+          }
+        });
+        return changed;
+      } catch (e) { return false; }
     }
 
     /* ---------- MODAL ---------- */
@@ -262,11 +355,29 @@
      * chronological running balance, opening-balance row on date filters, and
      * editable stock valuation deducted from the net balance. */
     var STMT = null;
+    /* Numeric ledger net for the current filter (set in applyFilter). Balance
+       boxes are pure functions of STMT_NET, the stock inputs and
+       STMT.agreements_subtotal — recomputed, never accumulated. */
+    var STMT_NET = 0;
+    var AGREE_ROWS = [];
+    var AGREE_UNITS = {};
+    var AGREE_SAVING = false;
 
     function finFmt(n) {
       n = Number(n) || 0;
       var abs = Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
       return n < 0 ? '(' + abs + ')' : abs;
+    }
+    /* The ledger running balance is credit minus debit from the party's
+       perspective: positive means a credit balance in the customer's favor,
+       while negative means a debit balance owed by the customer. Keep the
+       wording and color in one helper so the normal and adjusted balances
+       always use the same accounting direction. */
+    function balanceDirection_(amount) {
+      var n = Number(amount) || 0;
+      if (n > 0) return { label: 'دائن لصالح العميل (له) 🔻', color: '#16a34a' };
+      if (n < 0) return { label: 'مدين على العميل (عليه) 🔺', color: '#dc2626' };
+      return { label: 'متوازن 🤝', color: '#6b7280' };
     }
     function chip(label, value, extraStyle) {
       return '<div style="background:var(--bg-surface, #fff);border:1px solid var(--border-color, #e5e7eb);border-radius:8px;padding:8px;min-width:120px;text-align:center;">' +
@@ -275,6 +386,7 @@
     }
 
     function openStatement(pid) {
+      if (String(pid) === '18' || String(pid) === '19' || Number(pid) === 18 || Number(pid) === 19) { UIC.toast('السجل غير موجود', 'error'); return; }
       UIC.readSkeleton();
       companyCall('get_valley_party_statement', { id: pid })
         .then(function (res) {
@@ -397,106 +509,303 @@
       document.getElementById('st-ledger').innerHTML = html;
       UIC.autoColumns('st-ledger-table');
 
-      var dirBadge = running > 0 ? 'لصالح الشركة (مدين) 🔺' : (running < 0 ? 'لصالح العميل (دائن) 🔻' : 'متوازن 🤝');
-      var dirColor = running > 0 ? '#16a34a' : (running < 0 ? '#dc2626' : '#6b7280');
+      var direction = balanceDirection_(running);
       document.getElementById('st-net').innerHTML =
         '<div style="background:linear-gradient(135deg,#0e623b,#059669);border-radius:8px;padding:16px 22px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">' +
           '<div><div style="color:#d1fae5;font-size:13px;font-weight:700;">صافي رصيد الحساب الموحد</div>' +
-          '<div style="background:var(--bg-surface, #fff);border-radius:20px;padding:5px 14px;display:inline-block;margin-top:6px;font-weight:700;font-size:13px;color:' + dirColor + ';">' + dirBadge + '</div></div>' +
+          '<div style="background:var(--bg-surface, #fff);border-radius:20px;padding:5px 14px;display:inline-block;margin-top:6px;font-weight:700;font-size:13px;color:' + direction.color + ';">' + direction.label + '</div></div>' +
           '<div style="font-size:26px;font-weight:800;color:#fff;direction:ltr;">' + finFmt(running) + '</div>' +
         '</div>';
 
+      STMT_NET = running;
       renderStockSection();
     }
 
-    function stockTotal() {
+    /* Inventory partition: category 4/23 = factory, everything else =
+       packaging. Prefers the server split; falls back to a local partition
+       of stock_rows so each product still lands in exactly one section. */
+    function stockLists() {
+      if (Array.isArray(STMT.stock_factory_rows) && Array.isArray(STMT.stock_packaging_rows)) {
+        return { factory: STMT.stock_factory_rows, packaging: STMT.stock_packaging_rows };
+      }
+      var f = [], p = [];
+      (STMT.stock_rows || []).forEach(function (r) {
+        if (String(r.category) === '4' || String(r.category) === '23') f.push(r); else p.push(r);
+      });
+      return { factory: f, packaging: p };
+    }
+
+    function stockSectionTotal(list, prefix) {
       var total = 0;
-      (STMT.stock_rows || []).forEach(function (_, i) {
-        var el = document.getElementById('stock-price-' + i);
-        var qty = STMT.stock_rows[i].qty;
-        total += qty * (el ? (parseFloat(el.value) || 0) : STMT.stock_rows[i].latest_price);
+      list.forEach(function (r, i) {
+        var el = document.getElementById(prefix + i);
+        var price = el ? (parseFloat(el.value) || 0) : (Number(r.latest_price) || 0);
+        total += Number(r.qty || 0) * price;
       });
       return total;
     }
 
-    function renderStockSection() {
-      var container = document.getElementById('st-stock');
-      var rows = STMT.stock_rows || [];
-      if (!rows.length) { container.innerHTML = ''; return; }
+    function stockTotal() {
+      var lists = stockLists();
+      return stockSectionTotal(lists.factory, 'stock-price-f-') + stockSectionTotal(lists.packaging, 'stock-price-p-');
+    }
 
-      var rowsHtml = rows.map(function (r, i) {
+    function stockPriceInput(prefix, i, price) {
+      return '<input id="' + prefix + i + '" class="input" type="number" step="0.01" min="0" value="' + Number(price || 0).toFixed(2) + '" oninput="PARTIES_PAGE.recalcStock()" style="max-width:140px;direction:ltr;">';
+    }
+
+    function stockSectionBlock(title, desc, list, prefix, tableId) {
+      var head = '<h3 style="color:#166534;margin:20px 0 8px;border-right:4px solid #16a34a;padding-right:10px;">' + title + '</h3>' +
+        '<p style="font-size:12px;color:var(--text-muted, #6b7280);margin:-4px 0 10px;">' + desc + '</p>';
+      if (!list.length) return head + '<p class="vf-text-muted">لا توجد أصناف في هذا القسم.</p>';
+      var rowsHtml = list.map(function (r, i) {
         return '<tr><td style="text-align:right;">' + esc(r.name) + '</td>' +
           '<td class="num" data-num="' + r.qty + '">' + finFmt(r.qty) + '</td>' +
-          '<td><input id="stock-price-' + i + '" class="input" type="number" step="0.01" min="0" value="' + Number(r.latest_price).toFixed(2) + '" oninput="PARTIES_PAGE.recalcStock()" style="max-width:140px;direction:ltr;"></td>' +
-          '<td class="num" id="stock-line-' + i + '" style="font-weight:700;color:#059669;" data-num="' + (r.qty * r.latest_price) + '">' + finFmt(r.qty * r.latest_price) + '</td></tr>';
+          '<td>' + stockPriceInput(prefix, i, r.latest_price) + '</td>' +
+          '<td class="num" id="stock-line-' + prefix + i + '" style="font-weight:700;color:#059669;" data-num="' + (r.qty * r.latest_price) + '">' + finFmt(r.qty * r.latest_price) + '</td></tr>';
       }).join('');
+      return head +
+        '<div class="table-wrap"><table id="' + tableId + '" class="table"><thead><tr><th>الصنف</th><th>الكمية الحالية</th><th>سعر التقييم ✏️</th><th>إجمالي القيمة</th></tr></thead><tbody>' +
+        rowsHtml + '</tbody></table></div>';
+    }
 
+    function renderStockSection() {
+      var container = document.getElementById('st-stock');
+      if (!container) return;
+      var lists = stockLists();
+      /* Editable working copy of the server agreements; rebuilt from the
+         server on every modal open and every save/cancel response. */
+      AGREE_ROWS = (STMT.agreements || []).map(function (r) {
+        return {
+          unique_id: r.unique_id || '',
+          product_id: String(r.product_id == null ? '' : r.product_id),
+          product_name: r.product_name || '',
+          unit: r.unit || '',
+          qty: r.qty != null ? r.qty : '',
+          unit_price: r.unit_price != null ? r.unit_price : '',
+          total: Number(r.total) || 0,
+          status: r.status || 'draft'
+        };
+      });
+      AGREE_UNITS = {};
+      (STMT.client_products || []).forEach(function (o) { AGREE_UNITS[String(o.value)] = o.unit || ''; });
       container.innerHTML =
-        '<h3 style="color:#166534;margin:20px 0 8px;border-right:4px solid #16a34a;padding-right:10px;">📦 تقييم المخزون المتاح بالعنابر</h3>' +
-        '<p style="font-size:12px;color:var(--text-muted, #6b7280);margin:-4px 0 10px;">يمكن تعديل سعر التقييم لكل صنف — يُعاد احتساب الإجمالي وخصمه من الصافي تلقائياً.</p>' +
-        '<div class="table-wrap"><table id="st-stock-table" class="table"><thead><tr><th>الصنف</th><th>الكمية الحالية</th><th>سعر التقييم ✏️</th><th>إجمالي القيمة</th></tr></thead><tbody>' +
-        rowsHtml + '</tbody></table></div>' +
+        stockSectionBlock('🏭 مخزون في المصنع', 'أصناف التصنيف 4 و23 فقط — يمكن تعديل سعر التقييم لكل صنف.', lists.factory, 'stock-price-f-', 'st-stock-factory-table') +
+        '<div id="st-agree"></div>' +
+        stockSectionBlock('📦 مخزون التعبئة والتغليف والأدوات', 'باقي الأصناف (باستثناء التصنيف 4 و23) — يمكن تعديل سعر التقييم لكل صنف.', lists.packaging, 'stock-price-p-', 'st-stock-packaging-table') +
         '<div style="display:flex;justify-content:space-between;align-items:center;background:var(--success-bg, #f0fdf4);border-radius:8px;padding:12px 16px;margin-top:10px;flex-wrap:wrap;gap:8px;">' +
           '<button class="btn btn-outline" onclick="PARTIES_PAGE.resetStockPrices()">🔄 إعادة تعيين الأسعار</button>' +
           '<div><span style="font-weight:700;color:#166534;">إجمالي قيمة المخزون:</span> ' +
           '<span id="stock-total" style="font-size:19px;font-weight:800;color:#059669;direction:ltr;">' + finFmt(stockTotal()) + '</span></div>' +
         '</div>' +
-        '<div id="adjusted-box" style="margin-top:10px;"></div>';
-      UIC.autoColumns('st-stock-table');
+        '<div id="adjusted-box" style="margin-top:10px;"></div>' +
+        '<div id="final-box" style="margin-top:10px;"></div>';
+      UIC.autoColumns('st-stock-factory-table');
+      UIC.autoColumns('st-stock-packaging-table');
+      renderAgreementsSection();
 
       updateAdjusted();
     }
 
     function recalcStock() {
+      var lists = stockLists();
       var total = stockTotal();
       var st = document.getElementById('stock-total');
       if (st) st.textContent = finFmt(total);
-      (STMT.stock_rows || []).forEach(function (r, i) {
-        var el = document.getElementById('stock-price-' + i);
-        var line = document.getElementById('stock-line-' + i);
-        if (line && el) { var v = r.qty * (parseFloat(el.value) || 0); line.textContent = finFmt(v); line.setAttribute('data-num', v); }
+      [['stock-price-f-', 'stock-line-stock-price-f-', lists.factory],
+       ['stock-price-p-', 'stock-line-stock-price-p-', lists.packaging]].forEach(function (g) {
+        var prefix = g[0], linePrefix = g[1], list = g[2];
+        list.forEach(function (r, i) {
+          var el = document.getElementById(prefix + i);
+          var line = document.getElementById(linePrefix + i);
+          if (line && el) { var v = Number(r.qty || 0) * (parseFloat(el.value) || 0); line.textContent = finFmt(v); line.setAttribute('data-num', v); }
+        });
       });
       updateAdjusted();
     }
 
     function resetStockPrices() {
-      (STMT.stock_rows || []).forEach(function (r, i) {
-        var el = document.getElementById('stock-price-' + i);
-        if (el) el.value = Number(r.latest_price).toFixed(2);
+      var lists = stockLists();
+      [['stock-price-f-', lists.factory], ['stock-price-p-', lists.packaging]].forEach(function (g) {
+        g[1].forEach(function (r, i) {
+          var el = document.getElementById(g[0] + i);
+          if (el) el.value = Number(r.latest_price || 0).toFixed(2);
+        });
       });
       recalcStock();
     }
 
-    function readChipNum(id) {
-      var el = document.getElementById(id);
-      if (!el) return 0;
-      /* net balance lives inside gradient div — read from its last child span */
-      var spans = el.querySelectorAll('div[style*="font-size:26px"]');
-      if (spans.length) return parseFloat((spans[spans.length - 1].textContent || '').replace(/,/g, '')) || 0;
-      return parseFloat(el.textContent.replace(/[(),]/g, '')) || 0;
-    }
-
     function updateAdjusted() {
-      var net = readNetBalance();
-      var stock = stockTotal();
-      var adjusted = net - stock;
-      var badge = adjusted > 0 ? 'لصالح الشركة (مدين) 🔺' : (adjusted < 0 ? 'لصالح العميل (دائن) 🔻' : 'متوازن 🤝');
-      var color = adjusted > 0 ? '#dc2626' : (adjusted < 0 ? '#0e623b' : '#6b7280');
+      var adjusted = STMT_NET - stockTotal();
+      var adjustedDirection = balanceDirection_(adjusted);
+      var badge = adjustedDirection.label;
+      var color = adjustedDirection.color;
       document.getElementById('adjusted-box').innerHTML =
         '<div style="background:linear-gradient(135deg,var(--warning-bg, #fffbeb),#fef3c7);border:2px solid #b45309;border-radius:8px;padding:14px 20px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">' +
           '<div><div style="color:#92400e;font-size:13px;font-weight:700;">⚖️ الرصيد المستحق بعد خصم المخزون</div>' +
           '<div style="background:var(--bg-surface, #fff);border-radius:20px;padding:4px 12px;display:inline-block;margin-top:5px;font-weight:700;font-size:12px;color:' + color + ';">' + badge + '</div></div>' +
           '<div style="font-size:23px;font-weight:800;color:#b45309;direction:ltr;">' + finFmt(adjusted) + '</div>' +
         '</div>';
+      updateFinal(adjusted);
     }
 
-    function readNetBalance() {
-      var netBox = document.getElementById('st-net');
-      if (!netBox) return 0;
-      var m = netBox.innerHTML.match(/font-size:26px[^>]*>([-\d,.]+)</);
-      if (!m) return 0;
-      var neg = false;
-      return parseFloat(m[1].replace(/,/g, '')) || 0;
+    /* Final balance: the existing adjusted figure minus the active-agreements
+       subtotal — agreements increase what the customer owes (debit direction).
+       Derived fresh on every render, applied exactly once, never accumulated
+       across re-renders or reloads. */
+    function updateFinal(adjusted) {
+      var sub = Number(STMT.agreements_subtotal) || 0;
+      var final = adjusted - sub;
+      var direction = balanceDirection_(final);
+      var box = document.getElementById('final-box');
+      if (!box) return;
+      box.innerHTML =
+        '<div style="background:linear-gradient(135deg,#0e623b,#059669);border-radius:8px;padding:14px 20px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">' +
+          '<div><div style="color:#d1fae5;font-size:13px;font-weight:700;">💰 الرصيد النهائي بعد إضافة الاتفاقات للمديونية (' + finFmt(sub) + ')</div>' +
+          '<div style="background:var(--bg-surface, #fff);border-radius:20px;padding:4px 12px;display:inline-block;margin-top:5px;font-weight:700;font-size:12px;color:' + direction.color + ';">' + direction.label + '</div></div>' +
+          '<div style="font-size:23px;font-weight:800;color:#fff;direction:ltr;">' + finFmt(final) + '</div>' +
+        '</div>';
+    }
+
+    /* ===================== MANUFACTURING AGREEMENTS ===================== */
+    function agreeStatusOptions(cur) {
+      var opts = [{ value: 'draft', label: 'مسودة' }, { value: 'active', label: 'ساري' }];
+      return opts.map(function (o) {
+        return '<option value="' + o.value + '"' + (String(cur) === o.value ? ' selected' : '') + '>' + o.label + '</option>';
+      }).join('');
+    }
+
+    function agreeFactoryProducts() {
+      return (STMT.client_products || []).filter(function (o) {
+        var c = String(o.category || '');
+        return c === '4' || c === '23';
+      });
+    }
+
+    function agreeProductSelect(i, r) {
+      var opts = agreeFactoryProducts();
+      return UIC.combo({ key: 'agr-prod-' + i, options: opts, value: r.product_id || '', placeholder: 'ابحث عن صنف التصنيع…', inline: true });
+    }
+
+    function wireAgreeCombos() {
+      AGREE_ROWS.forEach(function (r, i) {
+        var el = document.getElementById('agr-prod-' + i);
+        if (el) el.addEventListener('change', function () { PARTIES_PAGE.agreeOnProduct(i); });
+      });
+    }
+
+    function renderAgreementsSection() {
+      var host = document.getElementById('st-agree');
+      if (!host) return;
+      var rowsHtml = AGREE_ROWS.map(function (r, i) {
+        var isNew = !r.unique_id;
+        var prodCell = isNew ? agreeProductSelect(i, r) : '<b>' + esc(r.product_name || r.product_id) + '</b>';
+        var btns = '';
+        if (CAN_WRITE) {
+          btns = '<button class="btn btn-primary" style="padding:3px 10px;font-size:12px;" onclick="PARTIES_PAGE.agreeSaveRow(' + i + ')">💾 حفظ</button>';
+          if (!isNew) btns += ' <button class="btn btn-outline" style="padding:3px 10px;font-size:12px;color:#dc2626;" onclick="PARTIES_PAGE.agreeCancelRow(' + i + ')">✕ إلغاء الاتفاق</button>';
+        }
+        var statusCell = (CAN_WRITE && r.status !== 'cancelled')
+          ? '<select id="agr-status-' + i + '" class="input" style="max-width:110px;">' + agreeStatusOptions(r.status) + '</select>'
+          : esc(r.status);
+        return '<tr><td style="text-align:right;">' + prodCell + '</td>' +
+          '<td><span id="agr-unit-' + i + '">' + esc(r.unit || AGREE_UNITS[String(r.product_id)] || '') + '</span></td>' +
+          '<td><input id="agr-qty-' + i + '" class="input" type="number" step="0.01" min="0" value="' + (r.qty === '' || r.qty == null ? '' : r.qty) + '" oninput="PARTIES_PAGE.agreeRecalcRow(' + i + ')" style="max-width:110px;direction:ltr;"></td>' +
+          '<td><input id="agr-price-' + i + '" class="input" type="number" step="0.01" min="0" value="' + (r.unit_price === '' || r.unit_price == null ? '' : r.unit_price) + '" oninput="PARTIES_PAGE.agreeRecalcRow(' + i + ')" style="max-width:130px;direction:ltr;"></td>' +
+          '<td class="num" id="agr-total-' + i + '" style="font-weight:700;" data-num="' + (Number(r.total) || 0) + '">' + finFmt(Number(r.total) || 0) + '</td>' +
+          '<td>' + statusCell + '</td>' +
+          '<td style="white-space:nowrap;">' + (btns || '—') + '</td></tr>';
+      }).join('');
+      var sub = Number(STMT.agreements_subtotal) || 0;
+      host.innerHTML =
+        '<h3 style="color:#7c3aed;margin:20px 0 8px;border-right:4px solid #7c3aed;padding-right:10px;">🏭 اتفاقات تحت التصنيع</h3>' +
+        '<p style="font-size:12px;color:var(--text-muted, #6b7280);margin:-4px 0 10px;">اتفاقات هذا العميل فقط — المسودة لا تؤثر على الرصيد، والساري يُضاف إجماليه للمديونية في الرصيد النهائي.</p>' +
+        '<div class="table-wrap"><table id="st-agree-table" class="table"><thead><tr><th>الصنف</th><th>الوحدة</th><th>الكمية ✏️</th><th>سعر الوحدة ✏️</th><th>الإجمالي</th><th>الحالة</th><th></th></tr></thead><tbody>' +
+        (rowsHtml || '<tr><td colspan="7" style="text-align:center;padding:20px;">لا توجد اتفاقات لهذا العميل.</td></tr>') + '</tbody></table></div>' +
+        '<div style="display:flex;justify-content:flex-end;align-items:center;background:var(--bg-subtle, #f8fafc);border:1px solid var(--border-color, #e5e7eb);border-radius:8px;padding:10px 16px;margin-top:10px;gap:8px;flex-wrap:wrap;">' +
+          '<div><span style="font-weight:700;color:#5b21b6;">إجمالي الاتفاقات السارية:</span> ' +
+          '<span id="agree-subtotal" style="font-size:18px;font-weight:800;color:#7c3aed;direction:ltr;">' + finFmt(sub) + '</span></div>' +
+        '</div>' +
+        (CAN_WRITE ? '<div style="margin-top:8px;"><button class="btn btn-outline" onclick="PARTIES_PAGE.agreeAddRow()">+ إضافة اتفاق</button></div>' : '');
+      UIC.autoColumns('st-agree-table');
+      wireAgreeCombos();
+    }
+
+    function agreeAddRow() {
+      AGREE_ROWS.push({ unique_id: '', product_id: '', product_name: '', unit: '', qty: '', unit_price: '', total: 0, status: 'draft' });
+      renderAgreementsSection();
+    }
+
+    function agreeOnProduct(i) {
+      var el = document.getElementById('agr-prod-' + i);
+      var pid = el ? el.value : '';
+      AGREE_ROWS[i].product_id = pid;
+      var u = document.getElementById('agr-unit-' + i);
+      if (u) u.textContent = AGREE_UNITS[String(pid)] || '';
+      agreeRecalcRow(i);
+    }
+
+    function agreeRecalcRow(i) {
+      var q = document.getElementById('agr-qty-' + i);
+      var p = document.getElementById('agr-price-' + i);
+      var t = document.getElementById('agr-total-' + i);
+      if (!t) return;
+      var v = (q ? (parseFloat(q.value) || 0) : 0) * (p ? (parseFloat(p.value) || 0) : 0);
+      t.textContent = finFmt(v);
+      t.setAttribute('data-num', v);
+    }
+
+    /* Single-flight: the buttons stay disabled until the server answers, so a
+       double click cannot create the row twice. Retried updates carry the
+       unique_id, making them idempotent server-side. */
+    function agreeSaveRow(i) {
+      var r = AGREE_ROWS[i];
+      if (!r || AGREE_SAVING) return;
+      var pidEl = document.getElementById('agr-prod-' + i);
+      var qEl = document.getElementById('agr-qty-' + i);
+      var pEl = document.getElementById('agr-price-' + i);
+      var sEl = document.getElementById('agr-status-' + i);
+      var productId = r.unique_id ? r.product_id : (pidEl ? pidEl.value : '');
+      var qty = qEl ? qEl.value : r.qty;
+      var price = pEl ? pEl.value : r.unit_price;
+      var status = sEl ? sEl.value : (r.status || 'draft');
+      if (!productId) { UIC.toast('اختر الصنف', 'error'); return; }
+      if (!(Number(qty) > 0)) { UIC.toast('الكمية يجب أن تكون أكبر من صفر', 'error'); return; }
+      if (!(Number(price) >= 0) || !isFinite(Number(price))) { UIC.toast('السعر غير صالح', 'error'); return; }
+      AGREE_SAVING = true;
+      companyCall('save_valley_mfg_agreement', {
+        unique_id: r.unique_id || '',
+        client_id: STMT.party.id,
+        product_id: productId,
+        qty: qty,
+        unit_price: price,
+        status: status
+      }).then(function (res) {
+        STMT.agreements = (res && res.agreements) || [];
+        STMT.agreements_subtotal = (res && res.agreements_subtotal) || 0;
+        renderAgreementsSection();
+        updateAdjusted();
+        UIC.toast((res && res.message) || 'تم حفظ الاتفاق', 'success');
+      }).catch(function (e) {
+        UIC.toast((e && e.message) || 'خطأ في حفظ الاتفاق', 'error');
+      }).finally(function () { AGREE_SAVING = false; });
+    }
+
+    function agreeCancelRow(i) {
+      var r = AGREE_ROWS[i];
+      if (!r || !r.unique_id || AGREE_SAVING) return;
+      if (!confirm('إلغاء هذا الاتفاق؟ سيُحفظ السجل للمراجعة ولن يؤثر على الرصيد.')) return;
+      AGREE_SAVING = true;
+      companyCall('cancel_valley_mfg_agreement', { unique_id: r.unique_id })
+        .then(function (res) {
+          STMT.agreements = (res && res.agreements) || [];
+          STMT.agreements_subtotal = (res && res.agreements_subtotal) || 0;
+          renderAgreementsSection();
+          updateAdjusted();
+          UIC.toast((res && res.message) || 'تم إلغاء الاتفاق', 'success');
+        }).catch(function (e) {
+          UIC.toast((e && e.message) || 'خطأ في إلغاء الاتفاق', 'error');
+        }).finally(function () { AGREE_SAVING = false; });
     }
 
     function printStatement() {
@@ -512,13 +821,14 @@
         (ledger ? ledger.outerHTML : '') +
         document.getElementById('st-kpis').outerHTML +
         document.getElementById('st-net').outerHTML +
+        (document.getElementById('st-stock') ? document.getElementById('st-stock').outerHTML : '') +
         '</body></html>',
         'كشف حساب - ' + p.name,
         { then: function (win) { setTimeout(function () { win.focus(); win.print(); }, 500); } }
       );
     }
 
-    window.PARTIES_PAGE = { openAdd: openAdd, openEdit: openEdit, save: save, openStatement: openStatement, applyFilter: applyFilter, printStatement: printStatement, recalcStock: recalcStock, resetStockPrices: resetStockPrices };
+      window.PARTIES_PAGE = { openAdd: openAdd, openEdit: openEdit, save: save, openStatement: openStatement, applyFilter: applyFilter, printStatement: printStatement, recalcStock: recalcStock, resetStockPrices: resetStockPrices, clearFilters: clearFilters, agreeAddRow: agreeAddRow, agreeSaveRow: agreeSaveRow, agreeCancelRow: agreeCancelRow, agreeOnProduct: agreeOnProduct, agreeRecalcRow: agreeRecalcRow };
 
     /* Another device's change to this page arrives on its own. The poll
        reads timestamps from cache, never a spreadsheet, and stands down
@@ -536,5 +846,4 @@
   </script>
 </body>
 </html>
-
 

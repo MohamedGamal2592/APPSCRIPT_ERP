@@ -490,6 +490,55 @@
       }).filter(function (o) { return o.product_id && num0(o.qty) > 0; });
       if (!outputs.length) { UIC.toast('أضف منتج ناتج واحد على الأقل', 'error'); return; }
 
+      var consPayload = collectConsumption();
+
+      /* Pre-flight: mirror the server guard (need = outputs footers +
+         consumption per batch) so a refusal names its source BEFORE the round
+         trip. Availability comes from the consumption inputs' max attributes —
+         the same figure the server checks. */
+      try {
+        (function preflightBatches_(outs) {
+          var need = {}, needOut = {}, needCons = {}, avail = {}, where = {};
+          var acc = function (b, q, isOut, place) {
+            b = String(b || '').trim(); q = Number(q) || 0;
+            if (!b || q <= 0) return;
+            need[b] = Math.round(((need[b] || 0) + q) * 1000) / 1000;
+            var src = isOut ? needOut : needCons;
+            src[b] = Math.round(((src[b] || 0) + q) * 1000) / 1000;
+            if (!where[b]) where[b] = place;
+          };
+          outs.forEach(function (o, oi) {
+            (o.footers || []).forEach(function (f) { acc(f.item, f.qty, true, 'بند المخرجات ' + (oi + 1)); });
+          });
+          consPayload.forEach(function (x) { acc(x.batch_uid, x.qty, false, 'بنود الاستهلاك'); });
+          for (var i = 0; i < 500; i++) {
+            var rowSeen = !!document.getElementById('cons-sum-' + i);
+            var anyIn = false;
+            for (var j = 0; ; j++) {
+              var el = document.getElementById('cons-q-' + i + '-' + j);
+              if (!el) break;
+              anyIn = true;
+              var bu = el.getAttribute('data-buid');
+              var mx = parseFloat(el.getAttribute('max'));
+              if (bu && !isNaN(mx) && avail[bu] === undefined) avail[bu] = mx;
+            }
+            if (!anyIn && !rowSeen) break;
+          }
+          var bad = Object.keys(need).filter(function (b) {
+            return avail[b] !== undefined && need[b] - avail[b] > 0.001;
+          });
+          if (!bad.length) return;
+          var b0 = bad[0];
+          UI.toast && UI.toast('الدفعة (' + b0 + ') تتجاوز المتاح قبل الحفظ. المطلوب: ' + need[b0] +
+            ' (مخرجات: ' + (needOut[b0] || 0) + ' + استهلاك: ' + (needCons[b0] || 0) + ')، المتاح: ' + avail[b0] +
+            (where[b0] ? ' — راجع ' + where[b0] : ''), 'error');
+          throw { preflight: true };
+        })(outputs);
+      } catch (ePre) {
+        if (ePre && ePre.preflight) return;
+        throw ePre;
+      }
+
       var payload = {
         mo_uid: EDIT_MO_UID(),
         manufacture_date: getV_('f-date'),
@@ -501,10 +550,11 @@
         actual_qty: getV_('f-actual'),
         recipe_id: getCombo_('f-recipe'),
         mo_status: getHid_('f-status'),
-        outputs: outputs,
-        consumption: collectConsumption()
-      };
-      UI.showSpinner();
+          outputs: outputs,
+          consumption: consPayload
+        };
+        try { console.log('[MFG][save] outgoing payload:', JSON.stringify({ outputs: outputs, consumption: consPayload })); } catch (eLog) {}
+        UI.showSpinner();
       companyCall('save_valley_mfg_order', payload)
         .then(function (r) {
           UIC.closeModal('mfg-modal');
@@ -736,7 +786,11 @@
       if (startCell.querySelector('input')) {
         var sv = startCell.querySelector('input').value;
         var ev = endCell.querySelector('input').value;
-        var payload = { workop_uid: uid, mo_uid: getHid_('wo-mo-uid'), operation_status: 'In Progress', start_time: sv, end_time: ev, actual_hours: '', notes: '' };
+        /* Row-edit repair (5.2): manual corrections send only times. Status
+           transitions belong to control_valley_mfg_workop_, hours/costs are
+           sheet formulas the server reinstalls, and notes stay stored because
+           this editor has no notes input (an absent key preserves the column). */
+        var payload = { workop_uid: uid, mo_uid: getHid_('wo-mo-uid'), start_time: sv, end_time: ev };
         UI.showSpinner();
         companyCall('save_valley_mfg_workop', payload)
           .then(function (r) { UIC.toast('تم الحفظ', 'success'); loadWorkOpsTab(getHid_('wo-mo-uid')); })

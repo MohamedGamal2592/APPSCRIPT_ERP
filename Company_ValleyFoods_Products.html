@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>Valley Foods — المنتجات</title>
+  <title>Valley Foods — الاصناف وتحركاتها</title>
   <?!= include('CSS_Tokens'); ?>
   <?!= include('UI_Components'); ?>
   <?!= include('Client_Helpers'); ?>
@@ -36,6 +36,13 @@
     #product-batches-modal table.table th:nth-child(5), #product-batches-modal table.table td:nth-child(5) { min-width: 100px; }
     #product-batches-modal table.table th:nth-child(6), #product-batches-modal table.table td:nth-child(6) { min-width: 100px; }
     @media (min-width: 900px) { #product-batches-modal .modal { min-width: 700px; width: 90vw; } }
+    /* vf_products: 9-col compact fit — no horizontal scroll on desktop.
+       Removes 3 cols (EN name/carton/tax) + tightens padding so the rest fits 100%. */
+    #vf-products-content #products-table-id_table { width: 100%; table-layout: auto; }
+    #vf-products-content #products-table-id_table th,
+    #vf-products-content #products-table-id_table td { padding: 6px 8px; font-size: 12.5px; overflow-wrap: break-word; }
+    #vf-products-content #products-table-id_table td.num { white-space: nowrap; }
+    #vf-products-content .table-wrap { overflow-x: auto; }
   </style>
 </head>
 <body>
@@ -85,17 +92,17 @@
         companyLogoUrl: COMPANY_LOGO_URL,
         companyLogoHref: scriptUrl + '?action=vf_dashboard&sessionToken=' + SESSION_TOKEN,
         companyLogoTitle: 'Valley Foods',
-        breadcrumb: 'Valley Foods / الادارة المالية / المنتجات',
+        breadcrumb: 'Valley Foods / الادارة المالية / الاصناف وتحركاتها',
         contentId: 'vf-products-content',
         menuGroups: (window.VALLEYFOODS_MENU || [])
       });
       document.getElementById('vf-products-content').innerHTML =
-        '<div class="vf-card"><div class="vf-card-header"><h3>المنتجات</h3>' +
+        '<div class="vf-card"><div class="vf-card-header"><h3>الاصناف وتحركاتها</h3>' +
           (CAN_WRITE ? '<button class="btn btn-primary" onclick="PRODUCTS_PAGE.openAdd()">+ إضافة منتج</button>' : '') +
         '</div><div class="vf-card-body">' +
           '<div id="pf-warning"></div>' +
           '<div id="pf-filters"></div>' +
-          '<div id="pf-table">' + UIC.tableSkeleton(['الكود', 'الاسم', 'النوع', 'الاسم الإنجليزي', 'العميل/المورد', 'الوحدة', 'الكرتونة او التغليف', 'الضريبة', 'التصنيف', 'الرصيد الحالي', 'القيمة (ج.م)', 'الباتشات']) + '</div>' +
+          '<div id="pf-table">' + UIC.tableSkeleton(['الكود', 'الاسم', 'النوع', 'العميل/المورد', 'الوحدة', 'التصنيف', 'الرصيد الحالي', 'القيمة (ج.م)', 'الباتشات']) + '</div>' +
         '</div></div>';
       load();
       /* Another user's product edit lands here within one poll. */
@@ -142,11 +149,11 @@
           UIC.field({ key: 'flt-search', label: 'بحث عام', type: 'search',
             placeholder: 'ابحث في كل الأعمدة…', value: esc(FILTERS.q) }) +
           UIC.combo({ key: 'flt-category', label: 'التصنيف',
-            options: [{ value: '', label: 'كل التصنيفات' }].concat(CATEGORY_OPTIONS || []),
+            options: [{ value: '', label: '' }].concat(CATEGORY_OPTIONS || []),
             value: FILTERS.category, placeholder: 'اكتب للبحث…' }) +
-          UIC.field({ key: 'flt-qty-min', label: 'الرصيد من', type: 'number', min: '0', step: '0.01',
+          UIC.field({ key: 'flt-qty-min', label: 'قيمة الرصيد من', type: 'number', min: '0', step: '0.01',
             value: FILTERS.qtyMin == null ? '' : FILTERS.qtyMin }) +
-          UIC.field({ key: 'flt-qty-max', label: 'الرصيد إلى', type: 'number', min: '0', step: '0.01',
+          UIC.field({ key: 'flt-qty-max', label: 'قيمة الرصيد الى', type: 'number', min: '0', step: '0.01',
             value: FILTERS.qtyMax == null ? '' : FILTERS.qtyMax }) +
           '<div class="form-field" style="align-self:end;">' +
             '<button class="btn btn-outline" onclick="PRODUCTS_PAGE.clearFilters()">مسح الفلاتر</button>' +
@@ -242,7 +249,7 @@
       var c = document.getElementById('flt-category');
       var cd = document.getElementById('flt-category_display');
       if (c) c.value = '';
-      if (cd) { cd.value = 'كل التصنيفات'; cd.title = 'كل التصنيفات'; }
+      if (cd) { cd.value = ''; cd.title = ''; }
       var lo = document.getElementById('flt-qty-min'); if (lo) lo.value = '';
       var hi = document.getElementById('flt-qty-max'); if (hi) hi.value = '';
       applyFilters();
@@ -280,14 +287,11 @@
           '<b data-pid="' + esc(r.id) + '">' + esc(r.id) + '</b>',
           esc(r.name_ar),
           esc(r.product_type),
-          esc(r.name_en || '-'),
           esc(partyLabel),
           esc(r.unit || r.price_unit || '-'),
-          esc(r.carton != null && r.carton !== '' ? r.carton : '-'),
-          (r.sales_tax != null && r.sales_tax !== '' ? (Number(r.sales_tax) * 100).toFixed(2) + '%' : '-'),
           esc(catMap[String(r.category)] || r.category || '-'),
-          '<span class="num" data-num="' + (r.current_stock_qty || 0) + '">' + fmtNum(r.current_stock_qty) + '</span>',
-          '<span class="num" style="font-weight:700;color:#0e623b;" data-num="' + (r.stock_value || 0) + '">' + fmtNum(r.stock_value, 2) + '</span>',
+          '<span class="num" data-num="' + (Number(r.current_stock_qty) || 0) + '">' + fmtNum(r.current_stock_qty) + '</span>',
+          '<span class="num" style="font-weight:700;color:#0e623b;" data-num="' + (Number(r.stock_value) || 0) + '">' + fmtNum(r.stock_value, 2) + '</span>',
           (hasStock
             ? fmtNum(r.batch_count) + (r.aged_count ? ' <span style="color:#d97706;font-weight:700;">⚠' + r.aged_count + '</span>' : '')
             : '<span style="color:#94a3b8;">0</span>')
@@ -297,8 +301,8 @@
         emptyState: filtersActive()
           ? { title: 'لا توجد منتجات مطابقة للفلتر', body: 'جرّب كلمة بحث أخرى، أو توسيع نطاق الرصيد، أو اختيار تصنيف آخر.' }
           : { title: 'لا توجد منتجات' },
-        headers: ['الكود', 'الاسم', 'النوع', 'الاسم الإنجليزي', 'العميل/المورد', 'الوحدة', 'الكرتونة او التغليف', 'الضريبة', 'التصنيف',
-                  { label: 'الرصيد الحالي', numeric: true }, { label: 'القيمة (ج.م)', numeric: true }, { label: 'الباتشات', numeric: true }],
+        headers: ['الكود', 'الاسم', 'النوع', 'العميل/المورد', 'الوحدة', 'التصنيف',
+                  { key: 'stock_qty', label: 'الرصيد الحالي', numeric: true }, { key: 'stock_value', label: 'القيمة (ج.م)', numeric: true }, { key: 'batches', label: 'الباتشات', numeric: true }],
         rows: rows,
         rowClick: function (rec, tr) {
           var el = tr.querySelector('[data-pid]');

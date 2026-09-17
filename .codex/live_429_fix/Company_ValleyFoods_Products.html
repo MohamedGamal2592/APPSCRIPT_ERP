@@ -1,0 +1,468 @@
+﻿<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Valley Foods — المنتجات</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_ValleyFoods_Nav'); ?>
+  <?!= getCompanyThemeCSS_('9940659bd83035d7') ?>
+  <style>
+    #product-modal .modal { width: min(94vw, 920px); max-width: 920px; }
+    #product-modal .modal-body { max-height: 78vh; overflow-y: auto; }
+    /* [UI-2.9b / U-48] Single-column form on a phone, two columns from
+       tablet-p. Was an off-scale max-width:640.
+       [F4a] Superseded by the shared .form-grid class on the <form> itself.
+       The id selector had to go, not just the class be added:
+       #product-modal .modal-body #pf-form outranks .form-grid and would pin the
+       hard 1fr 1fr in place. .form-grid keeps the same one-column phone
+       behaviour but replaces the fixed two columns with a 240px floor, so a
+       13-field form reflows instead of holding two narrow columns. */
+    /* Batches modal: wide, scrollable, non-wrapping table */
+    /* [UI-2.9b / U-48] The 700px min-width is applied from tablet-l up, not
+       unconditionally. A 768px tablet in portrait cannot show a 700px-wide
+       modal without the page scrolling sideways, which rule 6 of plan §0.4
+       forbids at any width. */
+    #product-batches-modal .modal { width: 94vw; max-width: min(92vw, 1100px); min-width: 0; overflow-x: visible; }
+    #product-batches-modal .modal-body { max-height: 85vh; overflow-y: auto; }
+    #product-batches-modal table.table { width: 100%; table-layout: auto; }
+    #product-batches-modal table.table th, #product-batches-modal table.table td { white-space: nowrap; }
+    #product-batches-modal table.table th:nth-child(1), #product-batches-modal table.table td:nth-child(1) { min-width: 180px; }
+    #product-batches-modal table.table th:nth-child(2), #product-batches-modal table.table td:nth-child(2) { min-width: 110px; }
+    #product-batches-modal table.table th:nth-child(3), #product-batches-modal table.table td:nth-child(3) { min-width: 130px; }
+    #product-batches-modal table.table th:nth-child(4), #product-batches-modal table.table td:nth-child(4) { min-width: 80px; }
+    #product-batches-modal table.table th:nth-child(5), #product-batches-modal table.table td:nth-child(5) { min-width: 100px; }
+    #product-batches-modal table.table th:nth-child(6), #product-batches-modal table.table td:nth-child(6) { min-width: 100px; }
+    @media (min-width: 900px) { #product-batches-modal .modal { min-width: 700px; width: 90vw; } }
+  </style>
+</head>
+<body>
+  <div id="vf-root"></div>
+
+  <script>
+    var params = new URLSearchParams(window.location.search);
+    var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+    var scriptUrl = window.scriptUrl || '/';
+    var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+    var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('9940659bd83035d7') ?>';
+    var COMPANY_PAGES = <?!= companyPages ?>;
+    var CURRENT_ACTION = '<?!= currentAction ?>';
+    var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+    var CAN_WRITE = UIC.canAdd_(); var CAN_FULL = UIC.canFull_();
+
+    function companyCall(moduleAction, data) {
+      return API.call('company_action', {
+        target_system: '9940659bd83035d7',
+        module_action: moduleAction,
+        data: data || {}
+      }, SESSION_TOKEN);
+    }
+    function esc(v) {
+      /* [UI-2.8 / U-36] Delegates to the shared formatter. This body used to
+         carry its own replace-chain behind a `typeof FMT !== 'undefined'`
+         guard, but Client_Helpers.html defines FMT in <head> before any page
+         script runs, so that fallback was unreachable and the duplicate was
+         pure drift risk. Output is identical for every input — proved in
+         tools/verify/ui2_formatters.js. */
+      return FMT.escape(v);
+    }
+  </script>
+
+  <script>
+  (function () {
+    var ROWS = [], ENUMS = {}, CATEGORY_OPTIONS = [], ACCOUNT_OPTIONS = [], PARTY_OPTIONS = [], NEXT_ID = 1;
+    var BATCHES_BY_PRODUCT = {};
+    /* [P1] Client-side filters. Nothing here reaches the server: category_options
+       and current_stock_qty are already on the get_valley_products response, so
+       filtering is a pure re-render over ROWS. */
+    var FILTERS = { q: '', category: '', qtyMin: null, qtyMax: null };
+    var LAST_RES = null;
+
+    function renderApp() {
+      UIC.appShell('vf-root', {
+        companyLogoUrl: COMPANY_LOGO_URL,
+        companyLogoHref: scriptUrl + '?action=vf_dashboard&sessionToken=' + SESSION_TOKEN,
+        companyLogoTitle: 'Valley Foods',
+        breadcrumb: 'Valley Foods / الادارة المالية / المنتجات',
+        contentId: 'vf-products-content',
+        menuGroups: (window.VALLEYFOODS_MENU || [])
+      });
+      document.getElementById('vf-products-content').innerHTML =
+        '<div class="vf-card"><div class="vf-card-header"><h3>المنتجات</h3>' +
+          (CAN_WRITE ? '<button class="btn btn-primary" onclick="PRODUCTS_PAGE.openAdd()">+ إضافة منتج</button>' : '') +
+        '</div><div class="vf-card-body">' +
+          '<div id="pf-warning"></div>' +
+          '<div id="pf-filters"></div>' +
+          '<div id="pf-table">' + UIC.tableSkeleton(['الكود', 'الاسم', 'النوع', 'الاسم الإنجليزي', 'العميل/المورد', 'الوحدة', 'الكرتونة او التغليف', 'الضريبة', 'التصنيف', 'الرصيد الحالي', 'القيمة (ج.م)', 'الباتشات']) + '</div>' +
+        '</div></div>';
+      load();
+      /* Another user's product edit lands here within one poll. */
+      UIC.Live.watchPage({
+        call: companyCall,
+        page: 'vf_products',
+        onChange: function () { UIC.Live.arrive(function () { load(true); }); }
+      });
+    }
+
+    /* quiet: refresh in the background, no blocking overlay. Used after an
+       optimistic save and by the change poll. */
+    function load(quiet) {
+      if (!quiet) UIC.readSkeleton('pf-table');
+      companyCall('get_valley_products')
+        .then(function (res) {
+          ROWS = (res && res.rows) || [];
+          ENUMS = (res && res.enums) || {};
+          CATEGORY_OPTIONS = (res && res.category_options) || [];
+          ACCOUNT_OPTIONS = (res && res.account_options) || [];
+          PARTY_OPTIONS = (res && res.party_options) || [];
+          NEXT_ID = (res && res.next_id) || 1;
+          BATCHES_BY_PRODUCT = (res && res.batches_by_product) || {};
+          LAST_RES = res;
+          renderTable(res);
+          renderFilters();
+        })
+        .catch(function (e) {
+          /* A background refresh that fails must not shout at the user about a
+             list they can already see. */
+          if (!quiet) UIC.toast((e && e.message) || 'خطأ في تحميل البيانات', 'error');
+        })
+        .finally(function () { if (!quiet) UI.hideSpinner(); try{schedulePrefetch();}catch(e){} });
+    }
+
+    /* [P1] The filter bar lives in its own container OUTSIDE #pf-table, so a
+       re-render cannot destroy the combo's DOM or its window.__comboData entry
+       while the user is still filtering. */
+    function renderFilters() {
+      var host = document.getElementById('pf-filters');
+      if (!host) return;
+      host.innerHTML =
+        '<div class="form-grid" style="background:var(--bg-subtle, #f8fafc);border:1px solid var(--border-color, #e5e7eb);border-radius:8px;padding:12px;margin-bottom:12px;">' +
+          UIC.field({ key: 'flt-search', label: 'بحث عام', type: 'search',
+            placeholder: 'ابحث في كل الأعمدة…', value: esc(FILTERS.q) }) +
+          UIC.combo({ key: 'flt-category', label: 'التصنيف',
+            options: [{ value: '', label: 'كل التصنيفات' }].concat(CATEGORY_OPTIONS || []),
+            value: FILTERS.category, placeholder: 'اكتب للبحث…' }) +
+          UIC.field({ key: 'flt-qty-min', label: 'الرصيد من', type: 'number', min: '0', step: '0.01',
+            value: FILTERS.qtyMin == null ? '' : FILTERS.qtyMin }) +
+          UIC.field({ key: 'flt-qty-max', label: 'الرصيد إلى', type: 'number', min: '0', step: '0.01',
+            value: FILTERS.qtyMax == null ? '' : FILTERS.qtyMax }) +
+          '<div class="form-field" style="align-self:end;">' +
+            '<button class="btn btn-outline" onclick="PRODUCTS_PAGE.clearFilters()">مسح الفلاتر</button>' +
+          '</div>' +
+        '</div>';
+
+      var cat = document.getElementById('flt-category');
+      var catDisp = document.getElementById('flt-category_display');
+      /* UIC.comboPick dispatches change on the hidden input; comboBlur does
+         not, so a typed-then-blurred value needs the display listener too. */
+      if (cat) cat.addEventListener('change', function () { FILTERS.category = cat.value || ''; applyFilters(); });
+      if (catDisp) catDisp.addEventListener('blur', function () {
+        setTimeout(function () {
+          var v = cat ? (cat.value || '') : '';
+          if (v !== FILTERS.category) { FILTERS.category = v; applyFilters(); }
+        }, 0);
+      });
+
+      /* The same 250ms debounce as the qty bounds: one re-render per pause in
+         typing, not one per keystroke. */
+      var ts = null;
+      var search = document.getElementById('flt-search');
+      if (search) search.addEventListener('input', function () {
+        clearTimeout(ts);
+        ts = setTimeout(function () { FILTERS.q = search.value || ''; applyFilters(); }, 250);
+      });
+
+      var t = null;
+      ['flt-qty-min', 'flt-qty-max'].forEach(function (id) {
+        var el = document.getElementById(id);
+        if (!el) return;
+        el.addEventListener('input', function () {
+          clearTimeout(t);
+          t = setTimeout(function () {
+            FILTERS.qtyMin = numOrNull(document.getElementById('flt-qty-min'));
+            FILTERS.qtyMax = numOrNull(document.getElementById('flt-qty-max'));
+            applyFilters();
+          }, 250);
+        });
+      });
+    }
+
+    function numOrNull(el) {
+      if (!el) return null;
+      var raw = String(el.value == null ? '' : el.value).trim();
+      if (raw === '') return null;              /* a blank bound is unbounded */
+      var n = Number(raw);
+      return isFinite(n) ? n : null;
+    }
+
+    /* [P1] The filter predicate. Category is an EXACT match on the raw
+       r.category id, never on the mapped label. Both qty bounds are
+       INCLUSIVE. A blank bound is unbounded. A blank or null
+       current_stock_qty counts as 0, matching how the column already
+       renders it. `f` is a parameter so the offline verify script can run
+       this exact function without booting the page. */
+    function passesFilters(r, f) {
+      f = f || FILTERS;
+      /* The general search. Every whitespace-separated word must appear
+         somewhere in the row, so "زيت 25" narrows instead of widening. It runs
+         over r.__search — the row's displayed values, joined and lowercased
+         once per render by renderTable — never over the rendered HTML, so a
+         style or a data- attribute can never be a hit. */
+      if (f.q) {
+        var hay = String(r.__search == null ? '' : r.__search).toLowerCase();
+        var terms = String(f.q).toLowerCase().split(/\s+/);
+        for (var i = 0; i < terms.length; i++) {
+          if (terms[i] && hay.indexOf(terms[i]) === -1) return false;
+        }
+      }
+      if (f.category !== '' && f.category != null) {
+        if (String(r.category == null ? '' : r.category) !== String(f.category)) return false;
+      }
+      var q = Number(r.current_stock_qty);
+      if (!isFinite(q)) q = 0;
+      if (f.qtyMin != null && q < f.qtyMin) return false;
+      if (f.qtyMax != null && q > f.qtyMax) return false;
+      return true;
+    }
+
+    function filtersActive() {
+      return !!(FILTERS.q || FILTERS.category || FILTERS.qtyMin != null || FILTERS.qtyMax != null);
+    }
+
+    /* [P1] Known and accepted (decision D-D): re-rendering rebuilds
+       window.__dtStore[id], so the active sort and page position reset on
+       every filter change. A filtered list's page 3 is meaningless. */
+    function applyFilters() { renderTable(LAST_RES); }
+
+    function clearFilters() {
+      FILTERS.q = ''; FILTERS.category = ''; FILTERS.qtyMin = null; FILTERS.qtyMax = null;
+      var q = document.getElementById('flt-search'); if (q) q.value = '';
+      var c = document.getElementById('flt-category');
+      var cd = document.getElementById('flt-category_display');
+      if (c) c.value = '';
+      if (cd) { cd.value = 'كل التصنيفات'; cd.title = 'كل التصنيفات'; }
+      var lo = document.getElementById('flt-qty-min'); if (lo) lo.value = '';
+      var hi = document.getElementById('flt-qty-max'); if (hi) hi.value = '';
+      applyFilters();
+    }
+
+    function renderTable(res) {
+      var container = document.getElementById('pf-table');
+      if (!container) return;
+      if (res && res.alignment_warning) {
+        document.getElementById('pf-warning').innerHTML =
+          '<div style="background:var(--warning-bg, #fffbeb);border:1px solid #fde68a;color:#92400e;border-radius:8px;padding:10px;margin-bottom:12px;font-size:13px;">⚠️ ' + esc(res.alignment_warning) + '</div>';
+      }
+      var partyMap = {};
+      PARTY_OPTIONS.forEach(function (o) { partyMap[String(o.value)] = o.label; });
+      var catMap = {};
+      CATEGORY_OPTIONS.forEach(function (o) { catMap[String(o.value)] = o.label; });
+      /* What the general search reads: the values the columns SHOW, including
+         the mapped party and category labels, so what the user reads is what
+         they can search. Joined once per render rather than per keystroke. */
+      ROWS.forEach(function (r) {
+        r.__search = [
+          r.id, r.name_ar, r.product_type, r.name_en,
+          partyMap[String(r.client_id)] || r.client_id,
+          r.unit || r.price_unit, r.carton,
+          (r.sales_tax != null && r.sales_tax !== '' ? (Number(r.sales_tax) * 100).toFixed(2) + '%' : ''),
+          catMap[String(r.category)] || r.category,
+          r.current_stock_qty, r.stock_value, r.batch_count
+        ].map(function (v) { return v == null ? '' : String(v); }).join(' ').toLowerCase();
+      });
+      var visible = ROWS.filter(function (r) { return passesFilters(r); });
+      var rows = visible.map(function (r) {
+        var partyLabel = partyMap[String(r.client_id)] || r.client_id || '-';
+        var hasStock = r.batch_count > 0;
+        return [
+          '<b data-pid="' + esc(r.id) + '">' + esc(r.id) + '</b>',
+          esc(r.name_ar),
+          esc(r.product_type),
+          esc(r.name_en || '-'),
+          esc(partyLabel),
+          esc(r.unit || r.price_unit || '-'),
+          esc(r.carton != null && r.carton !== '' ? r.carton : '-'),
+          (r.sales_tax != null && r.sales_tax !== '' ? (Number(r.sales_tax) * 100).toFixed(2) + '%' : '-'),
+          esc(catMap[String(r.category)] || r.category || '-'),
+          '<span class="num" data-num="' + (r.current_stock_qty || 0) + '">' + fmtNum(r.current_stock_qty) + '</span>',
+          '<span class="num" style="font-weight:700;color:#0e623b;" data-num="' + (r.stock_value || 0) + '">' + fmtNum(r.stock_value, 2) + '</span>',
+          (hasStock
+            ? fmtNum(r.batch_count) + (r.aged_count ? ' <span style="color:#d97706;font-weight:700;">⚠' + r.aged_count + '</span>' : '')
+            : '<span style="color:#94a3b8;">0</span>')
+        ];
+      });
+      container.innerHTML = UIC.dataTable('products-table-id', {
+        emptyState: filtersActive()
+          ? { title: 'لا توجد منتجات مطابقة للفلتر', body: 'جرّب كلمة بحث أخرى، أو توسيع نطاق الرصيد، أو اختيار تصنيف آخر.' }
+          : { title: 'لا توجد منتجات' },
+        headers: ['الكود', 'الاسم', 'النوع', 'الاسم الإنجليزي', 'العميل/المورد', 'الوحدة', 'الكرتونة او التغليف', 'الضريبة', 'التصنيف',
+                  { label: 'الرصيد الحالي', numeric: true }, { label: 'القيمة (ج.م)', numeric: true }, { label: 'الباتشات', numeric: true }],
+        rows: rows,
+        rowClick: function (rec, tr) {
+          var el = tr.querySelector('[data-pid]');
+          if (el) PRODUCTS_PAGE.openBatches(el.getAttribute('data-pid'));
+        }
+      });
+    }
+
+    /* ---------- MODAL ---------- */
+    function openAdd() { openModal(null); }
+
+    function openEdit(id) {
+      var row = null;
+      ROWS.forEach(function (r) { if (String(r.id) === String(id)) row = r; });
+      if (!row) { UIC.toast('لم يتم العثور على المنتج', 'error'); return; }
+      openModal(row);
+    }
+
+    function openModal(row) {
+      var isEdit = !!row;
+      /* Grayed-out non-editable id: preview of the auto-assigned code (add)
+         or the actual record id (edit). Server always decides the final id. */
+      var idValue = row ? row.id : NEXT_ID;
+      /* UIC.field select expects an ARRAY of {value,label} — not HTML */
+      var withEmpty = function (arr) {
+        return [{ value: '', label: '—' }].concat(arr || []);
+      };
+      var TAX_OPTIONS = [
+        { value: 0, label: '0%' },
+        { value: 0.05, label: '5%' },
+        { value: 0.10, label: '10%' },
+        { value: 0.14, label: '14%' }
+      ];
+      /* ALL entry fields are mandatory (mirrors server validation). */
+      var body = '<form id="pf-form" class="form-grid">' +
+        '<div class="form-field">' +
+          '<label class="form-label">رقم المنتج (يُعتمد تلقائياً)</label>' +
+          '<input id="f-id-display" class="input" type="text" readonly value="' + esc(idValue) + '" style="background:var(--bg-subtle, #f3f4f6);color:var(--text-muted, #6b7280);cursor:not-allowed;">' +
+        '</div>' +
+        UIC.field({ key: 'f-name-ar', label: 'الاسم العربي', type: 'text', required: true, value: row ? row.name_ar : '', noCorrect: true }) +
+        UIC.combo({ key: 'f-type', label: 'نوع المنتج', required: true, options: (ENUMS.product_type || []).map(function (v) { return { value: v, label: v }; }), value: row ? row.product_type : '', placeholder: 'اكتب للبحث…' }) +
+        UIC.field({ key: 'f-name-en', label: 'الاسم الإنجليزي', type: 'text', required: true, value: row ? (row.name_en || '') : '' }) +
+        UIC.combo({ key: 'f-client', label: 'العميل / المورد', options: PARTY_OPTIONS, value: row ? String(row.client_id || '') : '', placeholder: 'اكتب للبحث…' }) +
+        UIC.field({ key: 'f-gpc', label: 'GPC', type: 'number', required: true, min: '0', value: row ? (row.GPC != null ? row.GPC : '') : '' }) +
+        UIC.combo({ key: 'f-unit', label: 'الوحدة', required: true, options: (ENUMS.unit || []).map(function (v) { return { value: v, label: v }; }), value: row ? (row.unit || row.price_unit) : '', placeholder: 'اكتب للبحث…' }) +
+        UIC.field({ key: 'f-carton', label: 'الكرتونة او التغليف', type: 'number', required: true, min: '0', step: '0.01', value: row ? (row.carton != null ? row.carton : '') : '' }) +
+        UIC.field({ key: 'f-alloc', label: 'نسبة تخصيص التكلفة %', type: 'number', required: true, min: '0', max: '100', step: '0.01', value: row ? (row.cost_allocation_percentage != null ? row.cost_allocation_percentage : '') : '' }) +
+        UIC.field({ key: 'f-conc', label: 'التركيز', type: 'text', required: true, value: row ? (row.concentration || '') : '' }) +
+        UIC.combo({ key: 'f-asset', label: 'كود الأصل', required: true, options: ACCOUNT_OPTIONS, value: row ? String(row.asset_code || '') : '', placeholder: 'اكتب للبحث…' }) +
+        UIC.combo({ key: 'f-category', label: 'التصنيف', required: true, options: CATEGORY_OPTIONS, value: row ? String(row.category || '') : '', placeholder: 'اكتب للبحث…' }) +
+        UIC.combo({ key: 'f-tax', label: 'نسبة ضريبة المبيعات %', required: true, options: TAX_OPTIONS, value: row != null && row.sales_tax !== '' && row.sales_tax != null ? Number(row.sales_tax) : 0, placeholder: 'اكتب للبحث…' }) +
+        UIC.combo({ key: 'f-quality', label: 'رقابة الجودة', required: true, options: withEmpty(ENUMS.quality_controlled), value: row ? String(row.quality_controlled || '') : '', placeholder: 'اكتب للبحث…' }) +
+      '</form>';
+
+      UIC.openModal('product-modal', {
+        size: 'lg',
+        title: (isEdit ? 'تعديل منتج: ' : 'إضافة منتج') ,
+        body: body,
+        onSave: 'PRODUCTS_PAGE.save(' + (isEdit ? esc(row.id) : 'null') + ')'
+      });
+    }
+
+    function save(editId) {
+      if (!UIC.validateForm('pf-form')) return;
+      var v = function (id) { var el = document.getElementById(id); return el ? el.value.trim() : ''; };
+      var payload = {
+        id: editId != null ? editId : '',
+        name_ar: v('f-name-ar'),
+        product_type: v('f-type'),
+        name_en: v('f-name-en'),
+        client_id: v('f-client'),
+        GPC: v('f-gpc'),
+        unit: v('f-unit'),
+        carton: v('f-carton'),
+        cost_allocation_percentage: v('f-alloc'),
+        concentration: v('f-conc'),
+        asset_code: v('f-asset'),
+        category: v('f-category'),
+        sales_tax: v('f-tax'),
+        quality_controlled: v('f-quality')
+      };
+      var existing = null;
+      if (editId != null) ROWS.forEach(function (r) { if (String(r.id) === String(editId)) existing = r; });
+      /* Start from the row that is already there so nothing the form does not
+         carry (stock figures, derived labels) is blanked while in flight. */
+      var draft = Object.assign({}, existing || {}, payload);
+      draft.id = (editId != null) ? editId : NEXT_ID;
+
+      UIC.Live.save({
+        call: companyCall,
+        action: 'save_valley_product',
+        data: payload,
+        list: ROWS,
+        key: 'id',
+        draft: draft,
+        render: function () { renderTable(LAST_RES); },
+        modal: 'product-modal',
+        message: 'تم الحفظ بنجاح',
+        onSuccess: function () { load(true); },
+        reload: load
+      }).catch(function () { /* UIC.Live has already reported and rolled back */ });
+    }
+
+    window.PRODUCTS_PAGE = { openAdd: openAdd, openEdit: openEdit, save: save, openBatches: openBatches, clearFilters: clearFilters };
+
+    /* ===================== STOCK SUMMARY + BATCH MODAL =====================
+     * Data logic ported from the legacy stock report (server-side grouping,
+     * chart-range exclusions, 90-day aging). */
+    function fmtNum(n, dec) {
+      return Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: dec || 0, maximumFractionDigits: dec == null ? 2 : dec });
+    }
+
+    function openBatches(pid) {
+      var row = null;
+      ROWS.forEach(function (r) { if (String(r.id) === String(pid)) row = r; });
+      var batches = BATCHES_BY_PRODUCT[String(pid)] || [];
+      var qtySum = 0, valSum = 0, agedN = 0;
+      batches.forEach(function (b) { qtySum += b.qty; valSum += b.value; if (b.aged) agedN++; });
+
+      var inner = '<div style="display:flex;flex-wrap:wrap;gap:12px;margin-bottom:14px;">' +
+        chip('إجمالي الرصيد', fmtNum(qtySum)) +
+        chip('القيمة (ج.م)', fmtNum(valSum, 2)) +
+        chip('عدد الباتشات', fmtNum(batches.length)) +
+        chip('متقادم ⚠', fmtNum(agedN)) +
+      '</div>';
+
+      if (!batches.length) {
+        inner += '<p class="vf-text-muted">لا يوجد رصيد حالي لهذا المنتج.</p>';
+      } else {
+        inner += '<div class="table-wrap"><table id="product-batches-table" class="table"><thead><tr>' +
+          '<th>كود الحركة (الدفعة)</th><th>التاريخ</th><th>حساب التوجيه</th>' +
+          '<th>الكمية</th><th>تكلفة الوحدة</th><th>القيمة (ج.م)</th>' +
+        '</tr></thead><tbody>';
+        batches.forEach(function (b) {
+          inner += '<tr' + (b.aged ? ' style="background:var(--warning-bg, #fffbeb);"' : '') + '>' +
+            '<td><span style="background:#eef2f6;border:1px solid #cbd5e1;border-radius:4px;padding:2px 8px;font-size:11px;font-weight:700;">' + esc(b.lot) + '</span></td>' +
+            '<td style="font-family:monospace;">' + (b.aged ? '<span style="color:#d97706;" title="باتش متقادم (>90 يوم)">⚠ </span>' : '') + esc(b.date_display) + '</td>' +
+            '<td style="text-align:right;font-size:12px;color:var(--text-muted, #6b7280);">' + esc(b.chart_name) + '</td>' +
+            '<td class="num" data-num="' + b.qty + '">' + fmtNum(b.qty) + '</td>' +
+            '<td class="num" data-num="' + b.cost + '">' + fmtNum(b.cost, 2) + '</td>' +
+            '<td class="num" data-num="' + b.value + '">' + fmtNum(b.value, 2) + '</td>' +
+          '</tr>';
+        });
+        inner += '</tbody></table></div>';
+      }
+
+      UIC.openModal('product-batches-modal', {
+        title: 'الباتشات — ' + ((row && row.name_ar) || '') + ' (' + pid + ')',
+        body: inner,
+        footer: false
+      });
+      UIC.autoColumns('product-batches-table');
+    }
+
+    function chip(label, value) {
+      return '<div style="background:var(--success-bg, #f0fdf4);border:1px solid #a7f0ba;border-radius:8px;padding:8px 16px;flex:1 1 150px;text-align:center;">' +
+        '<div style="font-size:11px;color:#166534;font-weight:700;">' + label + '</div>' +
+        '<div style="font-size:17px;font-weight:800;color:#14532d;">' + value + '</div></div>';
+    }
+
+    document.addEventListener('DOMContentLoaded', renderApp);
+  })();
+  </script>
+</body>
+</html>
+
+

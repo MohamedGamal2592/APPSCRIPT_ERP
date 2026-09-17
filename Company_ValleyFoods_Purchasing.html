@@ -60,6 +60,10 @@
     var __dateFrom = '', __dateTo = '';
     var __viewOnly = false;
     var __canEdit = false;
+    /* Section checkpoints are intentionally page-local and non-blocking. The
+       queue preserves document order; lines wait for the header acknowledgement
+       so a new document can never receive children before its header exists. */
+    var __checkpointQueue = [], __checkpointRunning = false, __headerCheckpointAck = false, __checkpointWaiters = [];
 
     var HEADER_FIELDS = [
       { key: 'code', col: 'Code', label: 'الكود (Code)', type: 'text', required: true },
@@ -197,6 +201,7 @@
     });
     content.innerHTML = '<div class="vf-card"><div class="vf-card-header"><h3>المشتريات</h3>' +
       (__loadedAll ? '' : '<button class="btn btn-outline" onclick="showAllPurchasing()">عرض الكل</button> ') +
+      '<a class="btn btn-outline" target="_blank" rel="noopener" href="' + scriptUrl + '?action=vf_purchasing_report&sessionToken=' + SESSION_TOKEN + '">📊 تقرير المشتريات</a> ' +
       (CAN_WRITE && canCost() ? '<button class="btn btn-primary" onclick="openForm(\'\', false)">+ إضافة عملية شراء</button>' : '') +
       '</div><div class="vf-card-body">' +
       UIC.dateRangeBar('pur-date', {
@@ -321,15 +326,17 @@
         '<div>السنة: <strong id="year_display">-</strong></div>' +
         '<div id="reconcile_warning" style="flex-basis:100%;color:var(--danger);font-weight:700;display:none;">⚠ مجموع تكاليف الأصناف لا يساوي إجمالي التكاليف</div>' +
         '</div>' +
-        sectionsHtml +
-        '</form>' +
-        '<h3 style="margin-top:20px;">الأصناف</h3>' +
+         sectionsHtml +
+         '</form>' +
+         (__canEdit ? '<div style="margin:12px 0;display:flex;gap:8px;flex-wrap:wrap;align-items:center;"><button type="button" class="btn btn-outline" onclick="UI.submitOnce(this, checkpointHeader)">حفظ بيانات الرأس ومتابعة الإدخال</button><span id="header-checkpoint-status" class="vf-text-muted" style="font-size:12px;"></span></div>' : '') +
+         '<h3 style="margin-top:20px;">الأصناف</h3>' +
         /* One labelled card per line. The old 15-column table was pinned to
            min-width:1200px and every control was a sliver; the product
            dropdown in particular was a plain <select> with no search. */
         '<div id="lines-body"></div>' +
-        (__canEdit ? '<div style="margin:12px 0;"><button class="btn btn-outline" onclick="addLine()">+ إضافة صنف</button></div>' : '') +
-        '<div style="margin:16px 0;">' + (__canEdit ? '<button class="btn btn-primary" onclick="UI.submitOnce(this, savePurchasing)">حفظ</button> ' : '') +
+         (__canEdit ? '<div style="margin:12px 0;"><button class="btn btn-outline" onclick="addLine()">+ إضافة صنف</button></div>' : '') +
+         (__canEdit ? '<div style="margin:12px 0;display:flex;gap:8px;flex-wrap:wrap;align-items:center;"><button type="button" class="btn btn-outline" onclick="UI.submitOnce(this, checkpointLines)">حفظ قسم الأصناف</button><span id="lines-checkpoint-status" class="vf-text-muted" style="font-size:12px;"></span></div>' : '') +
+         '<div style="margin:16px 0;">' + (__canEdit ? '<button class="btn btn-primary" onclick="UI.submitOnce(this, savePurchasing)">حفظ</button> ' : '') +
         '<button class="btn btn-outline" onclick="showList()">إلغاء</button></div>';
 
       var curEl = document.getElementById('currency');
@@ -656,6 +663,105 @@
       }
     }
 
+    function checkpointSnapshotHeader() {
+      var form = UIC.collectForm('purchasing-form');
+      if (!UIC.validateForm('purchasing-form')) return null;
+      var header = {};
+      HEADER_FIELDS.forEach(function (f) { var v = form[f.key]; header[f.col] = v === undefined || v === null ? '' : v; });
+      if (String(header.Code).trim() === '' || String(header['Type']).trim() === '' || String(header['Shipping Type']).trim() === '') {
+        UIC.toast('أكمل الكود والنوع ونوع الشحن قبل حفظ بيانات الرأس', 'error'); return null;
+      }
+      var t = computeTotals();
+      header['Value Based on Invoice'] = t.valueBasedOnInvoice; header['Total costs'] = t.totalCosts;
+      header['Sales Value'] = t.salesValue; header['Tax type'] = t.taxType; header['sales tax amount'] = t.salesTax;
+      header.month = t.month; header.Year = t.year;
+      return { header: header, originalCode: __editingCode };
+    }
+
+    function checkpointSnapshotLines() {
+      var code = String(getVal('code') || '').trim();
+      if (!code) { UIC.toast('الكود (Code) مطلوب قبل حفظ الأصناف', 'error'); return null; }
+      if (!(__lines || []).length) { UIC.toast('يجب إضافة صنف واحد على الأقل', 'error'); return null; }
+      return { code: code, originalCode: __editingCode, lines: (__lines || []).map(function (l) { return Object.assign({}, l); }) };
+    }
+
+    function checkpointStatus(kind, text, bad) {
+      var el = document.getElementById(kind === 'header' ? 'header-checkpoint-status' : 'lines-checkpoint-status');
+      if (el) { el.textContent = text; el.style.color = bad ? 'var(--danger)' : ''; }
+    }
+
+    function checkpointDrainDone(err) {
+      var waiters = __checkpointWaiters.splice(0);
+      waiters.forEach(function (w) { try { err ? w.reject(err) : w.resolve(); } catch (e) {} });
+    }
+
+    function checkpointSend(entry, attempt) {
+      attempt = attempt || 0;
+      var wire = (window.UIC && UIC.Live && typeof UIC.Live.save === 'function')
+        ? UIC.Live.save({ call: companyCall, action: entry.action, data: entry.data, message: '', queueable: false })
+        : companyCall(entry.action, entry.data);
+      return wire.catch(function (e) {
+        /* Lock/transport failures are retried twice with backoff; validation
+           failures are surfaced immediately and never replayed blindly. */
+        if (e && (e.transport || /lock|timeout/i.test(String(e.message || ''))) && attempt < 2) {
+          return new Promise(function (resolve) { setTimeout(resolve, 250 * Math.pow(2, attempt)); }).then(function () { return checkpointSend(entry, attempt + 1); });
+        }
+        throw e;
+      });
+    }
+
+    function drainCheckpointQueue() {
+      if (__checkpointRunning || !__checkpointQueue.length) { if (!__checkpointRunning && !__checkpointQueue.length) checkpointDrainDone(); return; }
+      var entry = __checkpointQueue[0];
+      if (entry.kind === 'lines' && !__headerCheckpointAck) return;
+      __checkpointRunning = true;
+      checkpointStatus(entry.kind, 'جاري حفظ القسم…', false);
+      checkpointSend(entry, 0).then(function () {
+        __checkpointQueue.shift();
+        if (entry.kind === 'header') __headerCheckpointAck = true;
+        checkpointStatus(entry.kind, entry.kind === 'header' ? 'تم حفظ بيانات الرأس' : 'تم حفظ الأصناف', false);
+        UIC.toast(entry.kind === 'header' ? 'تم حفظ بيانات الرأس' : 'تم حفظ الأصناف', 'success');
+      }).catch(function (e) {
+        __checkpointQueue.shift();
+        if (entry.kind === 'header') {
+          __headerCheckpointAck = false;
+          /* Lines queued behind a failed header cannot be sent safely. */
+          __checkpointQueue = __checkpointQueue.filter(function (q) { if (q.kind === 'lines') checkpointStatus('lines', 'فشل حفظ الرأس — أعد المحاولة', true); return q.kind !== 'lines'; });
+        }
+        checkpointStatus(entry.kind, 'فشل حفظ القسم — ' + ((e && e.message) || 'تعذر الحفظ'), true);
+        UIC.toast((entry.kind === 'header' ? 'فشل حفظ بيانات الرأس: ' : 'فشل حفظ الأصناف: ') + ((e && e.message) || 'تعذر الحفظ'), 'error');
+        checkpointDrainDone(e);
+      }).finally(function () {
+        __checkpointRunning = false;
+        if (__checkpointQueue.length) drainCheckpointQueue(); else checkpointDrainDone();
+      });
+    }
+
+    function enqueueCheckpoint(kind, action, data) {
+      __checkpointQueue.push({ kind: kind, action: action, data: data });
+      drainCheckpointQueue();
+    }
+
+    function waitForCheckpointDrain() {
+      if (!__checkpointRunning && !__checkpointQueue.length) return Promise.resolve();
+      return new Promise(function (resolve, reject) { __checkpointWaiters.push({ resolve: resolve, reject: reject }); });
+    }
+
+    function checkpointHeader() {
+      var data = checkpointSnapshotHeader(); if (!data) return;
+      __headerCheckpointAck = false;
+      enqueueCheckpoint('header', 'save_valley_purchasing_header_checkpoint', data);
+    }
+
+    function checkpointLines() {
+      var data = checkpointSnapshotLines(); if (!data) return;
+      if (!__headerCheckpointAck && !__checkpointQueue.some(function (q) { return q.kind === 'header'; })) {
+        var header = checkpointSnapshotHeader(); if (!header) return;
+        enqueueCheckpoint('header', 'save_valley_purchasing_header_checkpoint', header);
+      }
+      enqueueCheckpoint('lines', 'save_valley_purchasing_lines_checkpoint', data);
+    }
+
     function savePurchasing() {
       var form = UIC.collectForm('purchasing-form');
       if (!UIC.validateForm('purchasing-form')) return;
@@ -719,7 +825,7 @@
 
       if (t.mismatch) { UIC.toast('مجموع تكاليف الأصناف لا يساوي إجمالي التكاليف', 'error'); return; }
 
-      var payload = { header: header, originalCode: __editingCode, lines: __lines || [] };
+      var payload = { header: header, originalCode: __editingCode, lines: __lines || [], commitOnly: true };
       /* Tier B: the 2-table costing handler (duplicate-code, reconcile and
          cost-grant guards refuse for reasons invisible in the form) — so NO
          draft is painted: canPatch stays false, only the quiet corner hint
@@ -727,7 +833,9 @@
          back to the quiet refresh; a refusal toasts exactly as before and
          paints nothing. queueable:false: I1 is unproven for
          save_valley_purchasing_costing. */
-      return UIC.Live.save({
+      /* The final commit is the only foreground wait: any section checkpoint
+         queued while the user typed must finish first. */
+      return waitForCheckpointDrain().then(function () { return UIC.Live.save({
         call: companyCall,
         action: 'save_valley_purchasing_costing',
         data: payload,
@@ -744,7 +852,7 @@
             renderList(__loadedAll, true);
           }
         }
-      }).catch(function () { /* UIC.Live has toasted */ });
+      }); }).catch(function () { /* UIC.Live has toasted */ });
     }
 
     function doAction(code, action) {
@@ -922,4 +1030,3 @@
   </script>
 </body>
 </html>
-

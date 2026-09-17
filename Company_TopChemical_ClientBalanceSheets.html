@@ -417,9 +417,10 @@
     rows.forEach(function (row) {
       var pkVal = row[PK_COL] !== undefined && row[PK_COL] !== null ? row[PK_COL] : '';
       body += '<tr>';
-      body += '<td>';
+      body += '<td style="white-space:nowrap;">';
       if (CAN_WRITE) {
-        body += '<button class="btn btn-sm btn-outline" onclick="openEdit(\'' + FMT.escape(pkVal) + '\')">✏️ تعديل</button>';
+        body += '<button class="btn btn-sm btn-outline" onclick="openEdit(\'' + FMT.escape(pkVal) + '\')">✏️ تعديل</button> ';
+        body += '<button class="btn btn-sm" style="background:#fef2f2;border:1px solid #fecaca;color:#b91c1c;" onclick="askDelete(\'' + FMT.escape(pkVal) + '\')">🗑️ حذف</button>';
       }
       body += '</td>';
 
@@ -619,6 +620,31 @@
         UIC.closeModal('cbs-edit-modal');
         /* patch local state so we don't need a full reload */
         Object.keys(payload).forEach(function (k) { row[k] = payload[k]; });
+        renderPage();
+      })
+      .catch(showError)
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  /* ══════════════════ SOFT DELETE — stores NOW() in deleted_at ══════════════════ */
+  function askDelete(pkVal) {
+    UIC.openModal('cbs-delete-modal', {
+      title: 'تأكيد الحذف الناعم',
+      body: '<p style="font-size:14px;line-height:1.9;">سيتم حذف السجل <b>#' + FMT.escape(pkVal) + '</b> حذفاً ناعماً ' +
+            '(تخزين الطابع الزمني الحالي في <code dir="ltr">deleted_at</code>) وسيختفي من القائمة.</p>',
+      saveLabel: '🗑️ تأكيد الحذف',
+      onSave: 'doDelete(\'' + FMT.escape(pkVal) + '\')'
+    });
+  }
+
+  function doDelete(pkVal) {
+    UI.showSpinner('جاري الحذف الناعم…');
+    companyCall('delete_client_balance_sheet', { id: pkVal })
+      .then(function () {
+        UIC.toast('تم الحذف الناعم ✓', 'success');
+        UIC.closeModal('cbs-delete-modal');
+        S.rows = S.rows.filter(function (r) { return String(r[PK_COL]) !== String(pkVal); });
+        S.total = Math.max(0, S.total - 1);
         renderPage();
       })
       .catch(showError)

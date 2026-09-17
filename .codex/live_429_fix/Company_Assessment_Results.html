@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>مركز التقييم — النتائج</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_Assessment_Nav'); ?>
+  <?!= getCompanyThemeCSS_('32fafd256ccb7a1c') ?>
+  <style>
+    .ac-filters-row { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
+    .ac-filters-row .form-field { min-width: 180px; margin-bottom: 0; }
+  </style>
+</head>
+<body>
+  <div id="ac-root"></div>
+
+  <script>
+    var params = new URLSearchParams(window.location.search);
+    var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+    var scriptUrl = window.scriptUrl || '/';
+    var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+    var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('32fafd256ccb7a1c') ?>';
+    var COMPANY_PAGES = <?!= companyPages ?>;
+    var CURRENT_ACTION = '<?!= currentAction ?>';
+    var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+    var CAN_WRITE = UIC.canAdd_(); var CAN_FULL = UIC.canFull_();
+
+    function companyCall(moduleAction, data) {
+      return API.call('company_action', {
+        target_system: '32fafd256ccb7a1c',
+        module_action: moduleAction,
+        data: data || {}
+      }, SESSION_TOKEN);
+    }
+    function esc(v) { return FMT.escape(v); }
+    function resultViewUrl(id) {
+      return scriptUrl + '?action=ac_result_view&assignment=' + encodeURIComponent(id) + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN);
+    }
+
+    var VERDICT_LABELS = { Pass: 'نجح', Fail: 'لم ينجح', Pending: 'بانتظار التصحيح', 'N/A': '—' };
+    var VERDICT_TONE = { Pass: 'success', Fail: 'danger', Pending: 'warning', 'N/A': 'neutral' };
+
+    var allRows = [];
+    var filters = { company: '', assessment: '', status: '', verdict: '' };
+
+    function renderApp() {
+      UIC.appShell('ac-root', {
+        companyLogoUrl: COMPANY_LOGO_URL,
+        companyLogoHref: scriptUrl + '?action=ac_dashboard&sessionToken=' + SESSION_TOKEN,
+        companyLogoTitle: 'مركز التقييم',
+        contentId: 'ac-results-content',
+        menuGroups: (window.ASSESSMENT_MENU || []),
+        controlPanel: {
+          breadcrumb: 'مركز التقييم / النتائج',
+          search: { table: 'ac-results-table', placeholder: 'ابحث في النتائج...' },
+          tools: [UIC.groupMenu('ac-results-table', ['CompanyName', 'AssessmentTitle', 'Status'])]
+        }
+      });
+      loadData();
+    }
+
+    function loadData() {
+      UIC.readSkeleton('ac-results-content');
+      companyCall('get_ac_results')
+        .then(function (res) {
+          allRows = res.rows || [];
+          renderContent();
+        })
+        .catch(function (err) {
+          console.error(err);
+          UIC.toast('حدث خطأ في تحميل البيانات', 'error');
+        })
+        .finally(function () { UI.hideSpinner(); });
+    }
+
+    function uniqueValues(key) {
+      var seen = {}; var out = [];
+      allRows.forEach(function (r) { var v = r[key]; if (v && !seen[v]) { seen[v] = true; out.push(v); } });
+      return out;
+    }
+
+    function filtersHtml() {
+      var statusOptions = uniqueValues('Status').map(function (v) { return { value: v, label: v }; });
+      var verdictOptions = Object.keys(VERDICT_LABELS).map(function (v) { return { value: v, label: VERDICT_LABELS[v] }; });
+      return '<div class="ac-filters-row">' +
+        UIC.combo({ key: 'ac-f-company', label: 'الجهة', placeholder: 'كل الجهات', options: uniqueValues('CompanyName').map(function (v) { return { value: v, label: v }; }) }) +
+        UIC.combo({ key: 'ac-f-assessment', label: 'التقييم', placeholder: 'كل التقييمات', options: uniqueValues('AssessmentTitle').map(function (v) { return { value: v, label: v }; }) }) +
+        UIC.combo({ key: 'ac-f-status', label: 'الحالة', placeholder: 'كل الحالات', options: statusOptions }) +
+        UIC.combo({ key: 'ac-f-verdict', label: 'النتيجة', placeholder: 'كل النتائج', options: verdictOptions }) +
+        '<div class="form-field" style="align-self:flex-end;"><button type="button" class="btn btn-outline" onclick="applyFilters()">تصفية</button></div>' +
+        '</div>';
+    }
+
+    function applyFilters() {
+      filters.company = (document.getElementById('ac-f-company') || {}).value || '';
+      filters.assessment = (document.getElementById('ac-f-assessment') || {}).value || '';
+      filters.status = (document.getElementById('ac-f-status') || {}).value || '';
+      filters.verdict = (document.getElementById('ac-f-verdict') || {}).value || '';
+      renderTable();
+    }
+
+    function filteredRows() {
+      return allRows.filter(function (r) {
+        if (filters.company && r.CompanyName !== filters.company) return false;
+        if (filters.assessment && r.AssessmentTitle !== filters.assessment) return false;
+        if (filters.status && r.Status !== filters.status) return false;
+        if (filters.verdict && r.Verdict !== filters.verdict) return false;
+        return true;
+      });
+    }
+
+    function rowActions(r) {
+      var btns = [
+        { label: 'عرض', onclick: "UIC.navTo(event, resultViewUrl('" + esc(r.AssignmentID) + "'))" },
+        { label: 'طباعة', onclick: "UIC.navTo(event, resultViewUrl('" + esc(r.AssignmentID) + "') + '&autoprint=1')" }
+      ];
+      return UIC.actionDropdown(btns);
+    }
+
+    function renderContent() {
+      var el = document.getElementById('ac-results-content');
+      if (!el) return;
+      el.innerHTML = '<div id="ac-results-filters"></div><div id="ac-results-table-wrap"></div>';
+      document.getElementById('ac-results-filters').innerHTML = filtersHtml();
+      renderTable();
+    }
+
+    function renderTable() {
+      var wrap = document.getElementById('ac-results-table-wrap');
+      if (!wrap) return;
+      var headers = [
+        { key: 'CompanyName', label: 'الجهة' },
+        { key: 'AssessmentTitle', label: 'التقييم' },
+        { key: 'CandidateEmail', label: 'المرشح' },
+        { key: 'StartedAt', label: 'بدأ في' },
+        { key: 'ScoreLabel', label: 'الدرجة' },
+        { key: 'VerdictLabel', label: 'النتيجة' },
+        { key: 'StatusLabel', label: 'الحالة' },
+        { key: 'actions', label: '', sortable: false }
+      ];
+      var rows = filteredRows().map(function (r) {
+        var pct = r.Max > 0 ? Math.round((r.Score / r.Max) * 100) : null;
+        return {
+          CompanyName: esc(r.CompanyName), AssessmentTitle: esc(r.AssessmentTitle), CandidateEmail: esc(r.CandidateEmail),
+          StartedAt: esc(r.StartedAt || '—'),
+          ScoreLabel: r.Max > 0 ? (r.Score + ' / ' + r.Max + ' (' + pct + '%)') : '—',
+          VerdictLabel: UIC.statusPill(VERDICT_LABELS[r.Verdict] || r.Verdict, VERDICT_TONE[r.Verdict] || 'neutral'),
+          StatusLabel: UIC.statusPill(esc(r.Status), r.Status === 'Reviewed' ? 'success' : 'neutral'),
+          actions: rowActions(r),
+          _id: r.AssignmentID
+        };
+      });
+
+      wrap.innerHTML = UIC.dataTable('ac-results-table', {
+        headers: headers,
+        rows: rows,
+        rowClick: function (rec) { if (rec && rec._id) UIC.navTo(null, resultViewUrl(rec._id)); },
+        emptyState: { icon: 'chart', title: 'لا توجد نتائج بعد' }
+      });
+    }
+
+    document.addEventListener('DOMContentLoaded', renderApp);
+  </script>
+</body>
+</html>

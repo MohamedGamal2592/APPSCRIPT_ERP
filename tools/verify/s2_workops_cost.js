@@ -112,3 +112,4 @@ console.log('\n' + (failed === 0
   ? 'S2 OK — work_center_cost and total_cost now reach the client.'
   : 'S2 FAILED: ' + failed));
 process.exit(failed === 0 ? 0 : 1);
+

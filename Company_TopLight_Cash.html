@@ -7,7 +7,13 @@
   <?!= include('CSS_Tokens'); ?>
   <?!= include('UI_Components'); ?>
   <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_TopLight_Nav'); ?>
   <?!= getCompanyThemeCSS_('8df5c89a117fe9a5') ?>
+  <style>
+    /* كود الحساب: full form row with larger text so long code+name labels read fully. */
+    #cash-form .cash-chart-wide { grid-column: 1 / -1; }
+    #cash-form .cash-chart-wide select { font-size: 16px; padding: 10px 12px; width: 100%; }
+  </style>
 </head>
 <body>
   <div id="tl-root"></div>
@@ -59,6 +65,7 @@
 
     function renderApp() {
       UIC.appShell('tl-root', {
+      menuGroups: window.TOPLIGHT_MENU || [],
         companyLogoUrl: COMPANY_LOGO_URL,
         companyLogoHref: scriptUrl + '?action=tl_dashboard&sessionToken=' + SESSION_TOKEN,
         companyLogoTitle: 'القمة لايت',
@@ -200,6 +207,10 @@
       var record = null;
       if (id) {
         record = HEADERS.find(function (h) { return Number(h.transaction_id) === Number(id); }) || null;
+        /* Row-edit repair (5.5): a requested record that no longer exists
+           shows a clear error and returns to the list — it must never
+           silently render the Add form. */
+        if (!record) { UIC.toast('السجل غير موجود — تم تحديث القائمة', 'error'); load(true); return; }
       }
       renderForm(record, readOnly);
     }
@@ -242,7 +253,7 @@
           f('transaction_method', 'طريقة الدفع *', 'select', selOpts(o.method_options || ['نقدي', 'ايداع بنكي', 'تحويل بنكي', 'انستا باي', 'فودافون كاش']), record ? record.transaction_method : '', true, 'اختر الطريقة...') +
           f('name', 'الطرف *', 'select', window.__cashPartyOptions || [], record ? String(record.name || '') : '', true, 'اختر الطرف...') +
           f('related_box', 'الصندوق *', 'select', window.__cashBoxOptions || [], relatedBoxVal, true, 'اختر الصندوق...') +
-          f('chart_code', 'كود الحساب *', 'select', window.__cashChartOptions || [], record ? record.chart_code : '', true, 'اختر كود الحساب...') +
+          '<div class="cash-chart-wide">' + f('chart_code', 'كود الحساب *', 'select', window.__cashChartOptions || [], record ? record.chart_code : '', true, 'اختر كود الحساب...') + '</div>' +
           f('transaction_details', 'البيان *', 'text', null, record ? record.transaction_details : '', true) +
           f('transaction_date', 'التاريخ *', 'date', null, record ? (record.transaction_date ? String(record.transaction_date).slice(0, 10) : todayStr()) : todayStr(), true) +
           f('transaction_amount', 'المبلغ *', 'number', null, record ? record.transaction_amount : '', true) +

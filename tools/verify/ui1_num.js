@@ -68,7 +68,7 @@ Object.keys(WAS).forEach(function (prop) {
 });
 
 /* ── 2. The duplicates are gone from both bespoke themes ────────────────── */
-const sec = S.read('03_Security.js');
+const sec = S.read('03_Security.js') + '\n' + S.read('Theme_Builders.js');
 ok(!/'\.num \{/.test(sec) && !/\.num\s*\{[^}]*font-variant-numeric/.test(sec),
   '03_Security.js no longer defines .num anywhere');
 /* Count DEFINITIONS, not mentions — the replacement comment names the token. */
@@ -114,3 +114,4 @@ ok((row.match(/class="num"/g) || []).length === 2,
 console.log('');
 if (failures) { console.log(failures + ' assertion(s) FAILED'); process.exit(1); }
 console.log('UI-1.4 .num: all assertions pass.');
+

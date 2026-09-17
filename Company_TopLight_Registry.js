@@ -36,6 +36,8 @@ function registerTopLight_() {
       { action: 'tl_sales_offer_print', template: 'Company_TopLight_Sales_Offer_Print', title: 'عرض سعر', nav: false },
       { action: 'tl_sales_analysis', template: 'Company_TopLight_Sales_Analysis', title: 'Top Light — تحليل المبيعات', nav: false },
       { action: 'tl_sales_costing_analysis', template: 'Company_TopLight_Sales_Costing_Analysis', title: 'تحليل تكلفة المبيعات الاجمالية', nav: false },
+      { action: 'tl_income_statement', template: 'Company_TopLight_Income_Statement', title: 'قائمة الدخل', nav: false },
+      { action: 'tl_financial_position', template: 'Company_TopLight_Financial_Position', title: 'قائمة المركز المالي', nav: false },
       { action: 'tl_cash', template: 'Company_TopLight_Cash', title: 'Top Light — حركة النقدية', label: 'حركة النقدية' },
       { action: 'tl_cash_report', template: 'Company_TopLight_Cash_Report', title: 'Top Light — تقرير النقدية', nav: false },
       { action: 'tl_customer_statement', template: 'Company_TopLight_Customer_Statement', title: 'كشف حساب عميل', nav: false },

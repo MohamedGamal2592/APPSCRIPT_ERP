@@ -25,6 +25,19 @@ const _ssCache_ = {};
 const _recordCache_ = {};
 let _recordCacheDisabled_ = false;
 
+/* Opt-in read-only snapshot ownership. Legacy getAllRecords_ callers still get
+ * fresh mutable record objects. Audited readers may retain one materialized
+ * row array per table for this execution, subject to a conservative budget. */
+const _readOnlySnapshots_ = {};
+let _readOnlySnapshotBytes_ = 0;
+const READ_ONLY_SNAPSHOT_MAX_BYTES_ = 2 * 1024 * 1024;
+const READ_ONLY_SNAPSHOT_MAX_ROWS_ = 50000;
+
+function resetReadOnlySnapshots_() {
+  for (const k in _readOnlySnapshots_) delete _readOnlySnapshots_[k];
+  _readOnlySnapshotBytes_ = 0;
+}
+
 // Batch 8: request-scoped memo of sheets already ensured this execution, so
 // repeated ensureSheet_/settingsEnsureSheet_ calls (getSheetByName round trips)
 // are paid at most once per sheet per request.
@@ -42,6 +55,7 @@ function getSheetsReadCount_() { return _sheetsReadCount_; }
 
 function resetRecordCache_() {
   for (const k in _recordCache_) delete _recordCache_[k];
+  resetReadOnlySnapshots_();
   for (const k in _ensuredSheets_) delete _ensuredSheets_[k];
   // The id high-water mark is request-scoped by construction: it only ever
   // raises the floor above what the target table already says, and a value from
@@ -60,6 +74,7 @@ function resetRecordCache_() {
 function disableRecordCache_() {
   _recordCacheDisabled_ = true;
   for (const k in _recordCache_) delete _recordCache_[k];
+  resetReadOnlySnapshots_();
   for (const k in _pkIndexCache_) delete _pkIndexCache_[k];
 }
 
@@ -76,6 +91,7 @@ function disableRecordCache_() {
  */
 function rearmRecordCache_() {
   for (const k in _recordCache_) delete _recordCache_[k];
+  resetReadOnlySnapshots_();
   for (const k in _pkIndexCache_) delete _pkIndexCache_[k];
   _recordCacheDisabled_ = false;
 }
@@ -436,24 +452,20 @@ function executeWithLock_(fn, timeoutMs) {
 }
 
 /**
- * Retry wrapper for appending rows to handle concurrent writes.
+ * Single-attempt append; legacy signature retained for existing callers.
  */
 function appendRowWithRetry_(sheet, values, maxRetries = 3, delayMs = 1000) {
-  let attempt = 0;
-  while (attempt <= maxRetries) {
-    try {
-      sheet.appendRow(values);
-      noteMutation_();
-      return true;
-    } catch (e) {
-      attempt++;
-      if (attempt > maxRetries) {
-        throw new Error('Failed to append row after ' + maxRetries + ' attempts: ' + e.message);
-      }
-      Utilities.sleep(delayMs);
-    }
+  // appendRow is not idempotent: a timeout can arrive AFTER it committed.
+  // Retain the signature for callers, but never blindly repeat an append.
+  try {
+    sheet.appendRow(values);
+    noteMutation_();
+    return true;
+  } catch (e) {
+    var err = new Error('Append outcome is uncertain; check the saved record before retrying: ' + e.message);
+    err.code = 'WRITE_OUTCOME_UNKNOWN'; err.uncertain = true;
+    throw err;
   }
-  return false;
 }
 
 /**
@@ -502,6 +514,14 @@ function idHighWaterKey_(dbId, tableName, idColumnName) {
  * only thing that matters.
  */
 function getNextIdUnderLock_(dbId, tableName, idColumnName = 'id') {
+  if (typeof isSystemTableBackend_ === 'function' && isSystemTableBackend_(dbId, tableName)) {
+    const key = idHighWaterKey_(dbId, tableName, idColumnName);
+    const live = systemNextNumericId_(tableName, idColumnName);
+    const seen = Number(_idHighWater_[key]) || 0;
+    const next = Math.max(live, seen + 1);
+    _idHighWater_[key] = next;
+    return next;
+  }
   const ss = getSpreadsheet_(dbId);
   /* One column, not the whole sheet — see maxIdOf_. This runs under the global
      script lock, so its size is every other user's queue time. */
@@ -539,6 +559,7 @@ function getNextId_(dbId, tableName, idColumnName = 'id') {
  * floor would burn an id nobody asked for.
  */
 function peekNextId_(dbId, tableName, idColumnName = 'id') {
+  if (typeof isSystemTableBackend_ === 'function' && isSystemTableBackend_(dbId, tableName)) return systemNextNumericId_(tableName, idColumnName);
   const ss = getSpreadsheet_(dbId);
   return maxIdOf_(ss.getSheetByName(tableName), idColumnName) + 1;
 }
@@ -553,6 +574,12 @@ function getNextIdBatch_(dbId, tableName, count, idColumnName = 'id') {
   }
   
   return executeWithLock_(function () {
+    if (typeof isSystemTableBackend_ === 'function' && isSystemTableBackend_(dbId, tableName)) {
+      const key = idHighWaterKey_(dbId, tableName, idColumnName);
+      const startId = Math.max(systemNextNumericId_(tableName, idColumnName), (Number(_idHighWater_[key]) || 0) + 1);
+      _idHighWater_[key] = startId + count - 1;
+      return startId;
+    }
     const ss = getSpreadsheet_(dbId);
     /* One column, not the whole sheet — see maxIdOf_. */
     const tableMax = maxIdOf_(ss.getSheetByName(tableName), idColumnName);
@@ -574,6 +601,7 @@ function getNextIdBatch_(dbId, tableName, count, idColumnName = 'id') {
  * Empty rows are filtered out. Does not touch any counter.
  */
 function getAllRecords_(dbId, sheetName) {
+  if (typeof isSystemTableBackend_ === 'function' && isSystemTableBackend_(dbId, sheetName)) return systemGetAllRecords_(sheetName);
   const sheet = getSheet_(sheetName, dbId);
   const headers = getHeaders_(sheet);
   if (!_recordCacheDisabled_) {
@@ -612,6 +640,44 @@ function getAllRecords_(dbId, sheetName) {
   return buildRecordsFromRaw_(data, headers);
 }
 
+/**
+ * Opt-in read-only path for audited consumers. It shares the existing raw
+ * request memo and invalidation lifecycle, materializes rows once, and returns
+ * the owned array to code that promises not to mutate it. A large table falls
+ * back to the legacy mutable reader without truncating results. 
+ */
+function getReadOnlyRecords_(dbId, sheetName) {
+  if (_recordCacheDisabled_) return getAllRecords_(dbId, sheetName);
+  const key = String(dbId) + '|' + String(sheetName);
+  let snapshot = _readOnlySnapshots_[key];
+  if (!snapshot) {
+    let raw = _recordCache_[key];
+    if (!raw) {
+      const sheet = getSheet_(sheetName, dbId);
+      const headers = getHeaders_(sheet);
+      countSheetRead_();
+      const data = sheet.getDataRange().getValues();
+      raw = { data: data, headers: headers };
+      _recordCache_[key] = raw;
+    }
+    const rows = Math.max(0, (raw.data || []).length - 1);
+    const estimatedBytes = (raw.data || []).reduce(function (total, row) {
+      return total + (row || []).reduce(function (n, value) {
+        return n + 16 + String(value == null ? '' : value).length * 2;
+      }, 0);
+    }, (raw.headers || []).length * 32);
+    if (rows > READ_ONLY_SNAPSHOT_MAX_ROWS_ ||
+        _readOnlySnapshotBytes_ + estimatedBytes > READ_ONLY_SNAPSHOT_MAX_BYTES_) {
+      return buildRecordsFromRaw_(raw.data, raw.headers);
+    }
+    snapshot = { data: raw.data, headers: raw.headers, rows: null,
+      estimatedBytes: estimatedBytes, retainedRows: rows };
+    _readOnlySnapshots_[key] = snapshot;
+    _readOnlySnapshotBytes_ += estimatedBytes;
+  }
+  if (!snapshot.rows) snapshot.rows = buildRecordsFromRaw_(snapshot.data, snapshot.headers);
+  return snapshot.rows;
+}
 /* ══ [I1] EXACTLY ONCE — a replayed write must never create a second row ═════
  *
  * THE RISK, and it is the largest one the optimistic-save design introduces.
@@ -659,6 +725,7 @@ function getAllRecords_(dbId, sheetName) {
  * or null. Read-only.
  */
 function findRowByColumn_(dbId, sheetName, columnName, value) {
+  if (typeof isSystemTableBackend_ === 'function' && isSystemTableBackend_(dbId, sheetName)) return systemFindByBusinessKey_(sheetName, columnName, value);
   const want = String(value == null ? '' : value).trim();
   if (!want) return null;
   const sheet = getSpreadsheet_(dbId).getSheetByName(sheetName);
@@ -720,6 +787,7 @@ function liveDedupeReply_(record, message) {
  * All sheet writes must go through this or getNextId_.
  */
 function addRecord_(dbId, sheetName, dataMap, requiredFields) {
+  if (typeof isSystemTableBackend_ === 'function' && isSystemTableBackend_(dbId, sheetName)) return systemAddRecordCompat_(sheetName, dataMap, requiredFields);
   const missing = (requiredFields || []).filter(f => dataMap[f] === undefined || dataMap[f] === null || String(dataMap[f]).trim() === '');
   if (missing.length) throw new Error('Missing required fields: ' + missing.join(', '));
 
@@ -785,6 +853,67 @@ function updateRowByCriteria_(sheet, criteriaHeader, criteriaValue, updatesObjec
         return updateKey !== undefined ? updatesObject[updateKey] : originalVal;
       });
       sheet.getRange(i + 1, 1, 1, newRow.length).setValues([newRow]);
+      noteMutation_();
+      noteSheetChange_(sheet);
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Row-edit repair (Stage 2): formula-safe patch for keyed record updates.
+ *
+ * Same match contract as updateRowByCriteria_ (case-insensitive header and
+ * criteria match; returns true when a row matches, false when none does) but
+ * writes ONLY cells that satisfy both conditions:
+ *   1. the update map names the column (case-insensitive, as before), and
+ *   2. the cell does not currently hold a sheet formula.
+ * Cells holding formulas are preserved unconditionally — even when the update
+ * map names them — so evaluated values are never written back over live
+ * expressions and array/spill outputs are never clipped. Update keys with no
+ * matching header are ignored, as with updateRowByCriteria_.
+ *
+ * Adjacent writable columns are written in single contiguous setValues calls;
+ * formula cells, untouched columns and unknown keys break batches, so a write
+ * can never span a protected gap. Callers that must install or refresh
+ * application-owned formulas use the explicit writeFormula_/writeRowFormulas_
+ * path instead; this helper never writes a formula.
+ *
+ * The extra single-row getFormulas() read runs only after a row matches.
+ * Callers must still check the Boolean result: false means no matching row
+ * (missing record), never a silent success.
+ */
+function patchRowByCriteria_(sheet, criteriaHeader, criteriaValue, updatesObject) {
+  const headers = getHeaders_(sheet);
+  countSheetRead_();
+  const data = sheet.getDataRange().getValues();
+  const critIdx = headers.findIndex(h => String(h).trim().toLowerCase() === String(criteriaHeader).trim().toLowerCase());
+  if (critIdx === -1) throw new Error('Criteria header "' + criteriaHeader + '" not found.');
+
+  for (let i = 1; i < data.length; i++) {
+    if (String(data[i][critIdx]).trim().toLowerCase() === String(criteriaValue).trim().toLowerCase()) {
+      const formulas = sheet.getRange(i + 1, 1, 1, headers.length).getFormulas()[0];
+      const cells = [];
+      headers.forEach(function (header, colIdx) {
+        const updateKey = Object.keys(updatesObject).find(k => k.trim().toLowerCase() === String(header).trim().toLowerCase());
+        if (updateKey === undefined) return;
+        if (formulas[colIdx]) return; /* live formula: preserve, never overwrite */
+        cells.push({ col: colIdx, value: updatesObject[updateKey] });
+      });
+      /* Batch adjacent writable columns; a protected/untouched column ends the run. */
+      let run = [];
+      const flush = function () {
+        if (!run.length) return;
+        const start = run[0].col;
+        sheet.getRange(i + 1, start + 1, 1, run.length).setValues([run.map(function (c) { return c.value; })]);
+        run = [];
+      };
+      cells.forEach(function (c) {
+        if (run.length && c.col !== run[run.length - 1].col + 1) flush();
+        run.push(c);
+      });
+      flush();
       noteMutation_();
       noteSheetChange_(sheet);
       return true;
@@ -1187,8 +1316,9 @@ function safeStr_(v) {
  * logHistoryMany_.
  */
 function historyRowsFor_(dbId, sheetName, recordUid, recordId, user, action, newValues, oldValues) {
-  const targetSheet = getSheet_(sheetName, dbId);
-  const allHeaders = getHeaders_(targetSheet).map(function (h) { return String(h).trim(); });
+  const allHeaders = (typeof isSystemTableBackend_ === 'function' && isSystemTableBackend_(dbId, sheetName))
+    ? Object.keys(newValues || oldValues || {})
+    : getHeaders_(getSheet_(sheetName, dbId)).map(function (h) { return String(h).trim(); });
   const businessHeaders = allHeaders.filter(function (h) {
     const lc = h.toLowerCase();
     return AUDIT_COLUMNS.indexOf(lc) === -1 && lc !== 'id';
@@ -1375,6 +1505,45 @@ function enqueueHistoryRows_(rows) {
   }
 }
 
+function enqueueHistoryRowsFirestore_(rows) {
+  rows.forEach(function (hr) {
+    var required = ['sheet_name', 'record_uid', 'action', 'column_name'];
+    var missing = required.filter(function (k) { return hr[k] === undefined || hr[k] === null || String(hr[k]).trim() === ''; });
+    if (missing.length) throw new Error('Missing required fields: ' + missing.join(', '));
+    var natural = [hr.record_uid, hr.column_name, hr.action, hr.changed_at instanceof Date ? hr.changed_at.toISOString() : String(hr.changed_at || '')].join('|');
+    var eventId = firestoreOperationId_('history:' + natural);
+    systemCreateRecord_('ERP_History_Queue', Object.assign({ event_id: eventId, state: 'pending', attempts: 0, queued_at: new Date(), claim_id: '', claimed_at: null, last_error: '' }, hr), { operationId: 'history-queue:' + eventId });
+  });
+}
+
+function drainHistoryQueueFirestore_() {
+  var claimId = 'fsd_' + new Date().getTime().toString(36) + '_' + Utilities.getUuid().slice(0, 8), now = new Date(), taken = 0, written = 0, deduped = 0, stale = 0;
+  var queued = systemStore_().queryAll('ERP_History_Queue', {}).records;
+  queued.forEach(function (record) {
+    var d = record.data || {}, meta = record.meta || {}, state = String(d.state || 'pending').toLowerCase(), claimedAt = new Date(d.claimed_at || 0).getTime();
+    var reclaim = state === 'claimed' && (!isFinite(claimedAt) || now.getTime() - claimedAt > HISTORY_CLAIM_STALE_MS_);
+    if (state === 'done' || (state !== 'pending' && !reclaim)) return;
+    if (now.getTime() - new Date(d.queued_at || now).getTime() > HISTORY_STALE_REPORT_MS_) stale++;
+    var claimed;
+    try {
+      claimed = systemPatchRecord_('ERP_History_Queue', meta.documentId, { state: 'claimed', claim_id: claimId, claimed_at: now, attempts: (Number(d.attempts) || 0) + 1 }, { expectedUpdateTime: meta.updateTime });
+      taken++;
+    } catch (claimError) { return; }
+    try {
+      var history = {};
+      ['sheet_name', 'record_uid', 'record_id', 'action', 'column_name', 'old_value', 'new_value', 'changed_by', 'changed_at', 'created_at', 'event_id'].forEach(function (k) { if (d[k] !== undefined) history[k] = d[k]; });
+      systemCreateRecord_('ERP_Record_History', history, { operationId: 'history:' + String(d.event_id || '') });
+      var done = systemPatchRecord_('ERP_History_Queue', meta.documentId, { state: 'done', processed_at: new Date(), last_error: '' }, { expectedUpdateTime: claimed.meta && claimed.meta.updateTime });
+      try { systemRemoveRecord_('ERP_History_Queue', meta.documentId, { expectedUpdateTime: done.meta && done.meta.updateTime }); } catch (removeError) {}
+      written++;
+    } catch (writeError) {
+      try { systemPatchRecord_('ERP_History_Queue', meta.documentId, { state: 'pending', last_error: String(writeError.message || writeError).slice(0, 1000) }, { expectedUpdateTime: claimed.meta && claimed.meta.updateTime }); } catch (retryError) {}
+    }
+  });
+  if (stale) try { console.error('ERP_History_Queue: ' + stale + ' audit row(s) exceeded the stale-report threshold.'); } catch (e) {}
+  return { status: 'success', rows: taken, written: written, deduped: deduped, stale: stale, claim: claimId, backend: 'firestore' };
+}
+
 /**
  * The drain. One minute, time-driven.
  *
@@ -1384,6 +1553,7 @@ function enqueueHistoryRows_(rows) {
  * once per save.
  */
 function drainHistoryQueue_() {
+  if (typeof systemStorageTarget_ === 'function' && systemStorageTarget_().backend === 'firestore') return drainHistoryQueueFirestore_();
   try {
     var ss = getSpreadsheet_(CONFIG.AUTH_SPREADSHEET_ID);
     var sh = ss.getSheetByName(HISTORY_QUEUE_SHEET_);
@@ -1512,7 +1682,8 @@ function historyRowKey_(r) {
 }
 
 /**
- * The natural keys of the last `n` rows of ERP_Record_History, as a lookup.
+ * The natural keys of the last 
+` rows of ERP_Record_History, as a lookup.
  *
  * Only the tail, deliberately: this runs every minute and the history sheet
  * grows without bound, so reading it whole would make the drain the expensive
@@ -1525,6 +1696,11 @@ function historyRowKey_(r) {
  * never a missing audit row.
  */
 function historyTailKeys_(n) {
+  if (typeof systemStorageTarget_ === 'function' && systemStorageTarget_().backend === 'firestore') {
+    var fsOut = {};
+    try { systemStore_().query('ERP_Record_History', { orderBy: [{ field: 'changed_at', direction: 'DESCENDING' }], limit: n }).records.map(function (r) { return r.data; }).slice(-n).forEach(function (r) { fsOut[historyRowKey_(r)] = true; }); } catch (e) {}
+    return fsOut;
+  }
   var out = {};
   try {
     var sh = getSpreadsheet_(CONFIG.AUTH_SPREADSHEET_ID).getSheetByName('ERP_Record_History');
@@ -1566,14 +1742,31 @@ function historyTailKeys_(n) {
  */
 function writeHistoryRows_(rows) {
   if (!rows || !rows.length) return;
+  if (typeof systemStorageTarget_ === 'function' && systemStorageTarget_().backend === 'firestore') { writeHistoryRowsFirestore_(rows); return; }
   if (HISTORY_QUEUE_ENABLED_ && enqueueHistoryRows_(rows)) return;
   writeHistoryRowsDirect_(rows);
+}
+
+function writeHistoryRowsFirestore_(rows) {
+  var items = rows.map(function (hr) {
+    var required = ['sheet_name', 'record_uid', 'action', 'column_name'];
+    var missing = required.filter(function (k) { return hr[k] === undefined || hr[k] === null || String(hr[k]).trim() === ''; });
+    if (missing.length) throw new Error('Missing required fields: ' + missing.join(', '));
+    var eventId = firestoreOperationId_([
+      hr.record_uid, hr.column_name, hr.action,
+      hr.changed_at instanceof Date ? hr.changed_at.toISOString() : String(hr.changed_at || '')
+    ].join('|'));
+    return { record: Object.assign({ event_id: eventId }, hr), operationId: 'history:' + eventId };
+  });
+  var config = systemStorageTarget_(), collection = systemSchema_('ERP_Record_History').collection;
+  firestoreCreateDocuments_(config, collection, items);
 }
 
 /** The batched write itself — one lock, one id allocation, one setValues.
  *  Unchanged, and still the fallback and the drain's own writer. */
 function writeHistoryRowsDirect_(rows) {
   if (!rows || !rows.length) return;
+  if (typeof systemStorageTarget_ === 'function' && systemStorageTarget_().backend === 'firestore') { writeHistoryRowsFirestore_(rows); return; }
   const histSheet = getSheet_('ERP_Record_History', CONFIG.AUTH_SPREADSHEET_ID);
   // FAST PATH (batched): identical cell values to N sequential addRecord_ calls,
   // but ONE lock + ONE counter allocation + ONE setValues instead of N locks +
@@ -1740,3 +1933,4 @@ function deleteRecordWithAudit_(sheetDbId, sheetName, rowId, currentUser, auditC
   const removed = deleteRowsByCriteria_(sheet, pk, rowId);
   return { status: 'success', removed: removed };
 }
+

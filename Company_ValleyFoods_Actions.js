@@ -80,10 +80,12 @@ const ValleyFoods = (function () {
     // الغياب والخصومات
     'get_deductions_data': { page: 'vf_hr_deductions', access: 'read' },
     'add_deduction': { page: 'vf_hr_deductions', access: 'write' },
+    'update_deduction': { page: 'vf_hr_deductions', access: 'write' },
 
     // العقود
     'get_contracts_data': { page: 'vf_hr_contracts', access: 'read' },
     'add_contract': { page: 'vf_hr_contracts', access: 'write' },
+    'update_contract': { page: 'vf_hr_contracts', access: 'write' },
 
     // تخصيص الإجازات
     'get_vacation_alloc_data': { page: 'vf_hr_vacation_alloc', access: 'read' },
@@ -92,10 +94,13 @@ const ValleyFoods = (function () {
     // الإجازات
     'get_vacations_data': { page: 'vf_hr_vacations', access: 'read' },
     'add_vacation': { page: 'vf_hr_vacations', access: 'write' },
+    'update_vacation': { page: 'vf_hr_vacations', access: 'write' },
+    'delete_vacation': { page: 'vf_hr_vacations', access: 'full' },
 
     // العمل الإضافي
     'get_overtime_data': { page: 'vf_hr_overtime', access: 'read' },
     'add_overtime': { page: 'vf_hr_overtime', access: 'write' },
+    'update_overtime': { page: 'vf_hr_overtime', access: 'write' },
 
     // الرواتب الشهرية
     'get_monthly_salaries_data': { page: 'vf_hr_monthly_salaries', access: 'read' },
@@ -142,12 +147,16 @@ const ValleyFoods = (function () {
     'save_valley_party': { page: 'vf_parties', access: 'write' },
     'get_valley_party_statement': { page: 'vf_parties', access: 'read' },
     'get_valley_party_balances': { page: 'vf_parties', access: 'read' },
+    'save_valley_mfg_agreement': { page: 'vf_parties', access: 'write' },
+    'cancel_valley_mfg_agreement': { page: 'vf_parties', access: 'write' },
 
     // المالية — حركة النقدية والبنوك
     'get_valley_cash': { page: 'vf_cash', access: 'read' },
     /* the expenses report reads the SAME page's data, so it rides the existing
-       vf_cash grant rather than needing one of its own */
+       vf_cash grant rather than needing one of its own (same for incomes) */
     'get_valley_cash_expense_report': { page: 'vf_cash', access: 'read' },
+    'get_valley_cash_income_report': { page: 'vf_cash', access: 'read' },
+    'get_valley_cash_box_balance_report': { page: 'vf_cash', access: 'read' },
     'save_valley_cash': { page: 'vf_cash', access: 'write' },
     'approve_valley_cash': { page: 'vf_cash', access: 'write' },
     'delete_valley_cash': { page: 'vf_cash', access: 'full' },
@@ -160,10 +169,13 @@ const ValleyFoods = (function () {
 
     // المشتريات — valley_purchasing_costing (header) + valley_product_purchasing (lines)
     'get_valley_purchasing_costing': { page: 'vf_purchasing', access: 'read' },
+    'get_valley_purchasing_report': { page: 'vf_purchasing', access: 'read' },
     'get_valley_purchasing_options': { page: 'vf_purchasing', access: 'read' },
     'get_valley_purchasing_lines': { page: 'vf_purchasing', access: 'read' },
-    'save_valley_purchasing_costing': { page: 'vf_purchasing', access: 'write' },
-    'delete_valley_purchasing_costing': { page: 'vf_purchasing', access: 'full' },
+     'save_valley_purchasing_costing': { page: 'vf_purchasing', access: 'write' },
+     'save_valley_purchasing_header_checkpoint': { page: 'vf_purchasing', access: 'write' },
+     'save_valley_purchasing_lines_checkpoint': { page: 'vf_purchasing', access: 'write' },
+     'delete_valley_purchasing_costing': { page: 'vf_purchasing', access: 'full' },
     'approve_valley_purchasing_costing': { page: 'vf_purchasing', access: 'write' },
     'quality_approve_valley_purchasing_costing': { page: 'vf_purchasing', access: 'write' },
 
@@ -171,6 +183,10 @@ const ValleyFoods = (function () {
     'get_valley_sales_bootstrap': { page: 'vf_sales', access: 'read' },
     'get_valley_sales_page': { page: 'vf_sales', access: 'read' },
     'get_valley_product_batches': { page: 'vf_sales', access: 'read' },
+    'get_valley_sales_report': { page: 'vf_sales', access: 'read' },
+
+    // القوائم المالية — صفحة مستقلة وصلاحياتها منفصلة عن التشغيل
+    'get_valley_income_statement': { page: 'vf_income_statement', access: 'read' },
 
     // الانتاج — الوصفات
     'get_valley_mfg_recipes': { page: 'vf_mfg_recipes', access: 'read' },
@@ -230,10 +246,14 @@ const ValleyFoods = (function () {
     'get_shift_assignment_data': 'valley_employee_shift_assignment', 'add_shift_assignment': 'valley_employee_shift_assignment',
     'get_salary_data': 'valley_employee_salary', 'add_employee_salary': 'valley_employee_salary',
     'get_deductions_data': 'valley_emp_deductions', 'add_deduction': 'valley_emp_deductions',
+    'update_deduction': 'valley_emp_deductions',
     'get_contracts_data': 'valley_employee_contracts', 'add_contract': 'valley_employee_contracts',
+    'update_contract': 'valley_employee_contracts',
     'get_vacation_alloc_data': 'valley_employee_vacation_allocation', 'add_vacation_alloc': 'valley_employee_vacation_allocation',
     'get_vacations_data': 'valley_employee_vacations', 'add_vacation': 'valley_employee_vacations',
+    'update_vacation': 'valley_employee_vacations',
     'get_overtime_data': 'valley_emp_overtime', 'add_overtime': 'valley_emp_overtime',
+    'update_overtime': 'valley_emp_overtime',
     'get_monthly_salaries_data': 'valley_emp_salaries', 'add_monthly_salary': 'valley_emp_salaries',
     'generate_monthly_salaries': 'valley_emp_salaries',
     'get_attendance_sessions': 'valley_attendance_session', 'add_attendance_session': 'valley_attendance_session',
@@ -266,15 +286,34 @@ const ValleyFoods = (function () {
     'save_valley_party': 'valley_legal_customer_vendor',
     'get_valley_party_statement': 'valley_legal_customer_vendor',
     'get_valley_party_balances': 'valley_legal_customer_vendor',
+    'save_valley_mfg_agreement': 'valley_manufacturing_agreements',
+    'cancel_valley_mfg_agreement': 'valley_manufacturing_agreements',
 
     'get_valley_cash': 'valley_cash_bank_movement',
     'get_valley_cash_expense_report': 'valley_cash_bank_movement',
+    'get_valley_cash_income_report': 'valley_cash_bank_movement',
+    'get_valley_cash_box_balance_report': 'valley_cash_bank_movement',
     'save_valley_cash': 'valley_cash_bank_movement',
     'transfer_valley_cash': 'valley_cash_bank_movement',
 
     'get_valley_warehouse_movements': 'valley_warehouse_movement',
     'get_valley_warehouse_move_options': 'valley_warehouse_movement',
     'save_valley_warehouse_movement': 'valley_warehouse_movement',
+
+    /* Purchasing changes affect both the header and its child lines. The
+     * derived PAGE_TABLES map has one table per action, so the read actions
+     * intentionally cover each table and the save/delete/approval action is
+     * anchored on the authoritative header. */
+    'get_valley_purchasing_costing': 'valley_purchasing_costing',
+    'get_valley_purchasing_report': 'valley_purchasing_costing',
+    'get_valley_purchasing_options': 'valley_product_purchasing',
+    'get_valley_purchasing_lines': 'valley_product_purchasing',
+     'save_valley_purchasing_costing': 'valley_purchasing_costing',
+     'save_valley_purchasing_header_checkpoint': 'valley_purchasing_costing',
+     'save_valley_purchasing_lines_checkpoint': 'valley_product_purchasing',
+     'delete_valley_purchasing_costing': 'valley_purchasing_costing',
+    'approve_valley_purchasing_costing': 'valley_purchasing_costing',
+    'quality_approve_valley_purchasing_costing': 'valley_purchasing_costing',
 
     'get_valley_sales_bootstrap': 'valley_sales_invoices',
     'get_valley_product_batches': 'valley_current_products',
@@ -307,6 +346,8 @@ const ValleyFoods = (function () {
     'delete_valley_invoice': 'valley_sales_invoices',
     'get_valley_sales_list': 'valley_sales_invoices',
     'get_valley_invoice_full': 'valley_sales_invoices',
+    'get_valley_sales_report': 'valley_sales_invoices',
+    'get_valley_income_statement': 'valley_chart_of_accounts',
 
     'get_valley_returns_list': 'valley_sales_returns',
     'get_valley_invoice_for_return': 'valley_sales_returns',
@@ -1066,7 +1107,9 @@ const ValleyFoodsHREmp = (function () {
     const er = getEmployeesData_(data, user, dbId);
     const sr = getEmpStatusData_(data, user, dbId);
     const shr = getShiftAssignmentData_(data, user, dbId);
-    const sal = getSalaryData_(data, user, dbId);
+    /* salaries intentionally excluded: راتب الموظف lives on its own page
+       (vf_hr_salary, served by get_salary_data). Serving them here would hand
+       the salary dataset to anyone granted only the employees list. */
     return {
       status: 'success',
       employees: er.employees,
@@ -1076,8 +1119,7 @@ const ValleyFoodsHREmp = (function () {
       statuses: sr.statuses,
       employeeOptions: sr.employeeOptions,
       assignments: shr.assignments,
-      shiftOptions: shr.shiftOptions,
-      salaries: sal.salaries
+      shiftOptions: shr.shiftOptions
     };
   }
 
@@ -1110,6 +1152,22 @@ const ValleyFoodsHREmp = (function () {
  * ValleyFoodsHRModules IIFE
  * Handles: Deductions, Contracts, Vacation Allocation, Vacations,
  * Overtime, Monthly Salaries, Attendance
+ */
+
+
+
+
+
+
+
+
+/* CONSOLIDATED VALLEYFOODS HR MODULES — retained as an independent IIFE. */
+/**
+ * Valley Foods HR domain module (consolidated here).
+ * RESPONSIBILITY: Valley Foods HR domain modules, including attendance,
+ * deductions, contracts, vacations, overtime and salary workflows.
+ * The original ValleyFoodsHRModules IIFE and its registration bridge are moved
+ * intact; global helpers and action names remain unchanged.
  */
 const ValleyFoodsHRModules = (function () {
   const EMP_DEDUCTIONS_SHEET       = 'valley_emp_deductions';
@@ -1148,6 +1206,14 @@ const ValleyFoodsHRModules = (function () {
     if (v instanceof Date && !isNaN(v.getTime())) return v;
     var d = new Date(v);
     return (!isNaN(d.getTime())) ? d : null;
+  }
+
+  /* transaction_date is a DATE column, not a datetime: truncate any time part
+   * to local midnight so insert/edit never store (or shift by) a time. */
+  function dateOnly_(v) {
+    var d = parseDate_(v);
+    if (!d) return null;
+    return new Date(d.getFullYear(), d.getMonth(), d.getDate());
   }
 
   function getLatestStatusMap_(dbId) {
@@ -1553,7 +1619,7 @@ const ValleyFoodsHRModules = (function () {
 
   // ===================== DEDUCTIONS =====================
   function getDeductionsData_(data, user, dbId) {
-    ensureSheet_(dbId, EMP_DEDUCTIONS_SHEET, ['unique_id','emp_id','name_ar','deduction_type','date','number_of_days','penalty_value','penalty_type_days','abscence_type_days','delay_type_minutes','details','deduction_attachement','month','year','user','created_at']);
+    ensureSheet_(dbId, EMP_DEDUCTIONS_SHEET, ['unique_id','emp_id','name_ar','deduction_type','date','number_of_days','penalty_value','penalty_type_days','abscence_type_days','delay_type_minutes','details','deduction_attachement','deduction_attachement_id','month','year','user','created_at']);
     var roles = getDeductionRoles_(dbId);
     var roleMap = {};
     roles.forEach(function (r) { roleMap[r.value] = r; });
@@ -1576,6 +1642,7 @@ const ValleyFoodsHRModules = (function () {
         number_of_days: r.number_of_days, penalty_value: r.penalty_value,
         penalty_type_days: r.penalty_type_days, abscence_type_days: r.abscence_type_days,
         delay_type_minutes: r.delay_type_minutes, details: r.details,
+        deduction_attachement: r.deduction_attachement, deduction_attachement_id: r.deduction_attachement_id || '',
         month: r.month, year: r.year, user: r.user, created_at: r.created_at
       };
     });
@@ -1596,6 +1663,13 @@ const ValleyFoodsHRModules = (function () {
       var otherVal = Number(data.deduction_value_other) || 0;
       var details = String(data.details || '').trim();
       var attachment = String(data.deduction_attachement || '').trim();
+      var attachmentId = '';
+      try { attachmentId = (typeof attachmentPickFileId_ === 'function') ? String(attachmentPickFileId_(data, 'deduction_attachement') || '').trim() : ''; } catch (e) {}
+      if (!attachmentId && attachment) {
+        try { attachmentId = String(CacheService.getScriptCache().get('attid_' + attachment) || '').trim(); } catch (e) {}
+      }
+      attachmentId = requireAttachmentBinding_(attachment, attachmentId, 'deduction_attachement');
+      try { if (typeof ensureAttachmentColumn_ === 'function') ensureAttachmentColumn_(dbId, EMP_DEDUCTIONS_SHEET, 'deduction_attachement_id'); } catch (e) {}
 
       var sheet = getSheet_(EMP_DEDUCTIONS_SHEET, dbId);
       var rowNumber = sheet.getLastRow() + 1;
@@ -1613,6 +1687,7 @@ const ValleyFoodsHRModules = (function () {
       row['delay_type_minutes'] = '=if(VLOOKUP(D' + rowNumber + ',valley_employee_deduction_roles!A:C,3,0) = "حضور وانصراف",60* INDEX(valley_employee_deduction_roles!G:G,MATCH(D' + rowNumber + ',valley_employee_deduction_roles!A:A,0)),0)';
       row['details'] = details;
       row['deduction_attachement'] = attachment;
+      row['deduction_attachement_id'] = attachmentId;
       row['month'] = '=MONTH(E' + rowNumber + ')';
       row['year'] = '=YEAR(E' + rowNumber + ')';
       row['user'] = (user && user.email) || '';
@@ -1630,12 +1705,95 @@ const ValleyFoodsHRModules = (function () {
         penalty_type_days: (_role2.category==='جزاءات'? days : 0),
         abscence_type_days: (_role2.category==='غياب'? days * (Number(_role2.days)||0) : 0),
         delay_type_minutes: (_role2.category==='حضور وانصراف'? 60*(Number(_role2.hours)||0) : 0),
-        details: details, deduction_attachement: attachment,
+        details: details, deduction_attachement: attachment, deduction_attachement_id: attachmentId,
         month: date ? (date.getMonth()+1) : '', year: date ? date.getFullYear() : '',
         user: (user && user.email) || '', created_at: new Date()
       };
-      result = { status: 'success', message: 'تم تسجيل الخصم', data: { unique_id: row['unique_id'] }, record: savedRecord };
-    });
+    result = { status: 'success', message: 'تم تسجيل الخصم', data: { unique_id: row['unique_id'] }, record: savedRecord };
+    }); /* executeWithLock_ */
+    return result;
+  }
+
+  /* Row-edit repair (Stage 4): keyed deduction correction. Same manual-field
+   * validation as addDeduction_ (including its exact column mapping, so Add
+   * and Edit store identical shapes); only manual inputs are written through
+   * the formula-safe patch helper, preserving calculated cells (name_ar,
+   * penalty_type_days, abscence_type_days, delay_type_minutes, month, year)
+   * and system fields (unique_id, user, created_at). The existing attachment
+   * pair is retained unless a different reference arrives through the trusted
+   * upload flow. */
+  function updateDeduction_(data, user, dbId) {
+    requireSuperAdmin_(user);
+    var result;
+    executeWithLock_(function () {
+    var uid = String((data || {}).unique_id || '').trim();
+    if (!uid) throw new Error('معرف السجل مطلوب');
+    var empId = Number(data.emp_id);
+    if (!empId) throw new Error('الموظف مطلوب');
+    var dedType = String(data.deduction_type || '').trim();
+    if (!dedType) throw new Error('نوع الخصم مطلوب');
+    var date = parseDate_(data.date);
+    if (!date) throw new Error('التاريخ مطلوب');
+    var days = Number(data.number_of_days) || 0;
+    var otherVal = Number(data.deduction_value_other) || 0;
+    var details = String(data.details || '').trim();
+
+    var sheet = getSheet_(EMP_DEDUCTIONS_SHEET, dbId);
+    var allRows = getAllRecords_(dbId, EMP_DEDUCTIONS_SHEET);
+    var oldRow = null;
+    for (var k = 0; k < allRows.length; k++) {
+      if (String(allRows[k].unique_id) === uid) { oldRow = allRows[k]; break; }
+    }
+    if (!oldRow) throw new Error('السجل غير موجود');
+
+    var storedRef = String(oldRow.deduction_attachement || '').trim();
+    var storedId = String(oldRow.deduction_attachement_id || '').trim();
+    var newRef = String(data.deduction_attachement || '').trim();
+    var attachmentId;
+    if (!newRef) {
+      newRef = storedRef;
+      attachmentId = storedId;
+    } else if (storedRef && newRef === storedRef && storedId) {
+      attachmentId = storedId;
+    } else {
+      attachmentId = '';
+      try { attachmentId = (typeof attachmentPickFileId_ === 'function') ? String(attachmentPickFileId_(data, 'deduction_attachement') || '').trim() : ''; } catch (e) {}
+      if (!attachmentId && newRef) {
+        try { attachmentId = String(CacheService.getScriptCache().get('attid_' + newRef) || '').trim(); } catch (e2) {}
+      }
+      attachmentId = requireAttachmentBinding_(newRef, attachmentId, 'deduction_attachement');
+    }
+    try { if (typeof ensureAttachmentColumn_ === 'function') ensureAttachmentColumn_(dbId, EMP_DEDUCTIONS_SHEET, 'deduction_attachement_id'); } catch (e3) {}
+
+    var map = {};
+    map['emp_id'] = empId;
+    map['deduction_type'] = dedType;
+    map['date'] = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+    map['number_of_days'] = days;
+    map['penalty_value'] = otherVal;
+    map['details'] = details;
+    map['deduction_attachement'] = newRef;
+    map['deduction_attachement_id'] = attachmentId;
+    if (!patchRowByCriteria_(sheet, 'unique_id', uid, map)) throw new Error('السجل غير موجود');
+
+    var _roleMapD = {};
+    try { getDeductionRoles_(dbId).forEach(function (rr) { _roleMapD[rr.value] = rr; }); } catch (e4) {}
+    var _roleD = _roleMapD[dedType] || {};
+    var _empNameD = '';
+    try { var _allEmpsD = getAllRecords_(dbId, EMP_INFO_SHEET); for (var _ed = 0; _ed < _allEmpsD.length; _ed++) { if (String(_allEmpsD[_ed].emp_id) === String(empId)) { _empNameD = _allEmpsD[_ed].name_ar || ''; break; } } } catch (e5) {}
+    var savedRecordD = {
+      unique_id: uid, emp_id: empId, name_ar: _empNameD || String(empId),
+      deduction_type: dedType, deduction_name: _roleD.label || dedType, deduction_category: _roleD.category || '',
+      date: map['date'], number_of_days: days, penalty_value: otherVal,
+      penalty_type_days: oldRow.penalty_type_days, abscence_type_days: oldRow.abscence_type_days,
+      delay_type_minutes: oldRow.delay_type_minutes,
+      details: details, deduction_attachement: newRef, deduction_attachement_id: attachmentId,
+      month: date ? (date.getMonth() + 1) : '', year: date ? date.getFullYear() : '',
+      user: oldRow.user, created_at: oldRow.created_at
+    };
+    try { logHistory_(dbId, EMP_DEDUCTIONS_SHEET, oldRow.record_uid || ('update_' + EMP_DEDUCTIONS_SHEET + '_' + uid), uid, (user && user.email) || '', 'update', savedRecordD, oldRow); } catch (e6) {}
+    result = { status: 'success', message: 'تم تحديث الخصم', data: { unique_id: uid }, record: savedRecordD };
+    }); /* executeWithLock_ */
     return result;
   }
 
@@ -1697,6 +1855,63 @@ const ValleyFoodsHRModules = (function () {
       try{ logHistory_(dbId, EMP_CONTRACTS_SHEET, row.record_uid || ('create_'+EMP_CONTRACTS_SHEET+'_'+row['unique_id']), row['unique_id'], (user&&user.email)||'', 'create', row, null) }catch(e){}
       result = { status: 'success', message: 'تم إضافة العقد', data: { unique_id: row['unique_id'] }, record: savedRecordContract };
     });
+    return result;
+  }
+
+  /* Row-edit repair (Stage 4.6): keyed contract correction, completing the
+   * dormant update contract. Same manual-field validation as addContract_;
+   * only manual inputs are written through the formula-safe patch helper, so
+   * the calculated employee_name and system fields (unique_id, id, user,
+   * created_at) are preserved. */
+  function updateContract_(data, user, dbId) {
+    requireSuperAdmin_(user);
+    var result;
+    executeWithLock_(function () {
+    var uid = String((data || {}).unique_id || '').trim();
+    if (!uid) throw new Error('معرف السجل مطلوب');
+    var empId = Number(data.emp_id);
+    if (!empId) throw new Error('الموظف مطلوب');
+    var contractType = String(data.contract_Type || '').trim();
+    if (!contractType) throw new Error('نوع العقد مطلوب');
+    var startDate = parseDate_(data.contract_start_Date);
+    if (!startDate) throw new Error('تاريخ البداية مطلوب');
+    var endDate = parseDate_(data.contract_end_Date);
+    var salary = Number(data.contract_salary);
+    if (!salary || salary <= 0) throw new Error('راتب العقد يجب أن يكون أكبر من صفر');
+    var insSalary = Number(data.contract_insurance_salary);
+    if (!insSalary || insSalary <= 0) throw new Error('راتب التأمين يجب أن يكون أكبر من صفر');
+
+    var sheet = getSheet_(EMP_CONTRACTS_SHEET, dbId);
+    var allRows = getAllRecords_(dbId, EMP_CONTRACTS_SHEET);
+    var oldRow = null;
+    for (var k = 0; k < allRows.length; k++) {
+      if (String(allRows[k].unique_id) === uid) { oldRow = allRows[k]; break; }
+    }
+    if (!oldRow) throw new Error('السجل غير موجود');
+
+    var map = {};
+    map['emp_id'] = empId;
+    map['contract_Type'] = contractType;
+    map['contract_start_Date'] = startDate;
+    map['contract_end_Date'] = endDate || '';
+    map['contract_salary'] = salary;
+    map['contract_insurance_salary'] = insSalary;
+    if (!patchRowByCriteria_(sheet, 'unique_id', uid, map)) throw new Error('السجل غير موجود');
+
+    var _ctMapU = {};
+    try { var _idxRowsU = getAllRecords_(dbId, CONTRACTS_INDEX_SHEET); _idxRowsU.forEach(function (rr) { _ctMapU[String(rr.id)] = (rr.contract_name_ar || '') + (rr.contract_name_en ? ' — ' + rr.contract_name_en : ''); }); } catch (e) {}
+    var _empNameU = '';
+    try { var _allEmpsU = getAllRecords_(dbId, EMP_INFO_SHEET); for (var _eu = 0; _eu < _allEmpsU.length; _eu++) { if (String(_allEmpsU[_eu].emp_id) === String(empId)) { _empNameU = _allEmpsU[_eu].name_ar || ''; break; } } } catch (e2) {}
+    var savedRecordU = {
+      unique_id: uid, id: oldRow.id, emp_id: empId, employee_name: _empNameU || String(empId),
+      contract_Type: contractType, contract_type_label: _ctMapU[String(contractType)] || contractType,
+      contract_start_Date: startDate, contract_end_Date: endDate || '',
+      contract_salary: salary, contract_insurance_salary: insSalary,
+      user: oldRow.user, created_at: oldRow.created_at
+    };
+    try { logHistory_(dbId, EMP_CONTRACTS_SHEET, oldRow.record_uid || ('update_' + EMP_CONTRACTS_SHEET + '_' + uid), uid, (user && user.email) || '', 'update', savedRecordU, oldRow); } catch (e3) {}
+    result = { status: 'success', message: 'تم تحديث العقد', data: { unique_id: uid }, record: savedRecordU };
+    }); /* executeWithLock_ */
     return result;
   }
 
@@ -1804,7 +2019,7 @@ const ValleyFoodsHRModules = (function () {
 
   // ===================== VACATIONS =====================
   function getVacationsData_(data, user, dbId) {
-    ensureSheet_(dbId, VACATIONS_SHEET, ['unique_id','id','emp_id','vacation_half_day','vacation_type','allocation_id','start_date','end_date','duration_days','duration_days_other','amount_other','vacation_reason','attachment','user','created_at']);
+    ensureSheet_(dbId, VACATIONS_SHEET, ['unique_id','id','emp_id','vacation_half_day','vacation_type','allocation_id','start_date','end_date','duration_days','duration_days_other','amount_other','vacation_reason','attachment','attachment_id','user','created_at']);
 
     // Vacation index options (type reference)
     var vacIndexRows = [];
@@ -1826,20 +2041,27 @@ const ValleyFoodsHRModules = (function () {
     var activeEmpIds = {};
     activeEmpOpts.forEach(function (o) { activeEmpIds[String(o.value)] = true; });
 
-    // Allocation options map (keyed by emp_id)
+    // Allocation options map (keyed by emp_id) + flat unique_id -> label map
+    // for the vacations table column. Label order: employee - vacation type -
+    // alloc start - alloc end - number_of_days - remaining - used_days.
     var allocs = getAllRecords_(dbId, VACATION_ALLOC_SHEET);
     var allocOptionsMap = {};
+    var allocLabelMap = {};
     allocs.forEach(function (a) {
-      var eid = String(a.emp_id);
-      if (!activeEmpIds[eid]) return;
-      var remaining = (Number(a.number_of_days) || 0) - (Number(a.used_days) || 0);
-      if (remaining <= 0) return;
-      if (!allocOptionsMap[eid]) allocOptionsMap[eid] = [];
+      var aUid = String(a.unique_id == null ? '' : a.unique_id).trim();
       var vacName = vacTypeNameMap[String(a.vacation_type)] || a.vacation_type || '';
       var empName = a.employee_name || '';
       var startD = a.vacation_alloc_start_Date ? fmtDate_(a.vacation_alloc_start_Date) : '';
       var endD = a.vacation_alloc_end_Date ? fmtDate_(a.vacation_alloc_end_Date) : '';
-      var label = empName + ' - ' + vacName + ' - ' + startD + ' - ' + endD + ' - الرصيد المتبقي -- ' + remaining;
+      var numDays = Number(a.number_of_days) || 0;
+      var usedD = Number(a.used_days) || 0;
+      var remaining = numDays - usedD;
+      var label = empName + ' - ' + vacName + ' - ' + startD + ' - ' + endD + ' - ' + numDays + ' - ' + remaining + ' - ' + usedD;
+      if (aUid) allocLabelMap[aUid] = label;
+      var eid = String(a.emp_id);
+      if (!activeEmpIds[eid]) return;
+      if (remaining <= 0) return;
+      if (!allocOptionsMap[eid]) allocOptionsMap[eid] = [];
       allocOptionsMap[eid].push({ value: a.unique_id, label: label, remaining: remaining, vacation_type: a.vacation_type, require_allocation: requireAllocMap[String(a.vacation_type)] || false });
     });
 
@@ -1854,7 +2076,7 @@ const ValleyFoodsHRModules = (function () {
     });
     var total = _allVac.length;
     if (!data || !data.loadAll) rows = rows.slice(0, limit);
-    return { status: 'success', rows: rows, total: total, employee_options: activeEmpOpts, allocation_options_map: allocOptionsMap, vacation_index_options: vacationIndexOptions };
+    return { status: 'success', rows: rows, total: total, employee_options: activeEmpOpts, allocation_options_map: allocOptionsMap, allocation_label_map: allocLabelMap, vacation_index_options: vacationIndexOptions };
   }
 
   function fmtDate_(v) {
@@ -1863,6 +2085,42 @@ const ValleyFoodsHRModules = (function () {
     if (isNaN(d.getTime())) return String(v);
     var pad = function (n) { return n < 10 ? '0' + n : '' + n; };
     return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+  }
+
+  /* Allocation balance: number_of_days and consumed = SUM(duration_days of
+   * vacations pointing at this allocation). Call only inside executeWithLock_.
+   * Throws when the allocation does not exist. */
+  function allocBalance_(dbId, allocId) {
+    var allocRows = getAllRecords_(dbId, VACATION_ALLOC_SHEET);
+    var alloc = null;
+    for (var i = 0; i < allocRows.length; i++) {
+      if (String(allocRows[i].unique_id == null ? '' : allocRows[i].unique_id).trim() === allocId) { alloc = allocRows[i]; break; }
+    }
+    if (!alloc) throw new Error('التخصيص المحدد غير موجود في سجل التخصيصات');
+    var vacRows = getAllRecords_(dbId, VACATIONS_SHEET);
+    var consumed = 0;
+    for (var j = 0; j < vacRows.length; j++) {
+      if (String(vacRows[j].allocation_id == null ? '' : vacRows[j].allocation_id).trim() === allocId) {
+        consumed += Number(vacRows[j].duration_days) || 0;
+      }
+    }
+    return { numberOfDays: Number(alloc.number_of_days) || 0, consumed: consumed };
+  }
+
+  function writeAllocUsedDays_(dbId, allocId, value) {
+    var allocSheet = getSheet_(VACATION_ALLOC_SHEET, dbId);
+    var allocHeaders = getHeaders_(allocSheet);
+    var uidIdx = allocHeaders.findIndex(function (h) { return String(h).trim() === 'unique_id'; });
+    var usedIdx = allocHeaders.findIndex(function (h) { return String(h).trim() === 'used_days'; });
+    if (uidIdx === -1 || usedIdx === -1) return;
+    var allData = allocSheet.getDataRange().getValues();
+    for (var i = 1; i < allData.length; i++) {
+      if (String(allData[i][uidIdx]).trim() === allocId) {
+        allocSheet.getRange(i + 1, usedIdx + 1).setValue(value);
+        noteMutation_(allocSheet);
+        break;
+      }
+    }
   }
 
   function addVacation_(data, user, dbId) {
@@ -1928,6 +2186,16 @@ const ValleyFoodsHRModules = (function () {
       }
     }
 
+    // Allocation cap (hard block): the requested duration must fit inside
+    // the remaining balance of the chosen allocation.
+    if (isRequireAlloc && allocId) {
+      var __cap = allocBalance_(dbId, allocId);
+      var __remaining = __cap.numberOfDays - __cap.consumed;
+      if (duration > __remaining) {
+        throw new Error('لا يمكن حفظ الإجازة: المدة المطلوبة (' + duration + ' يوم) تتجاوز الرصيد المتبقي (' + __remaining + ' يوم) من إجمالي التخصيص (' + __cap.numberOfDays + ' يوم)');
+      }
+    }
+
     var sheet = getSheet_(VACATIONS_SHEET, dbId);
     var rowNumber = sheet.getLastRow() + 1;
     var headers = getHeaders_(sheet);
@@ -1945,6 +2213,14 @@ const ValleyFoodsHRModules = (function () {
     row['amount_other'] = Number(data.amount_other) || 0;
     row['vacation_reason'] = String(data.vacation_reason || '').trim();
     row['attachment'] = String(data.attachment || '').trim();
+    var attachmentIdVac = '';
+    try { attachmentIdVac = (typeof attachmentPickFileId_ === 'function') ? String(attachmentPickFileId_(data, 'attachment') || '').trim() : ''; } catch (e) {}
+    if (!attachmentIdVac && row['attachment']) {
+      try { attachmentIdVac = String(CacheService.getScriptCache().get('attid_' + row['attachment']) || '').trim(); } catch (e) {}
+    }
+    row['attachment_id'] = attachmentIdVac;
+    attachmentIdVac = requireAttachmentBinding_(row['attachment'], attachmentIdVac, 'attachment');
+    try { if (typeof ensureAttachmentColumn_ === 'function') ensureAttachmentColumn_(dbId, VACATIONS_SHEET, 'attachment_id'); } catch (e) {}
     row['user'] = (user && user.email) || '';
     row['created_at'] = new Date();
     var values = headers.map(function (h) { return row[h] !== undefined ? row[h] : ''; });
@@ -1957,29 +2233,19 @@ const ValleyFoodsHRModules = (function () {
       vacation_half_day: halfDay, vacation_type: vacType, vacation_type_name: _vacNameMap2[String(vacType)] || vacType,
       allocation_id: allocId, start_date: startDate, end_date: endDate,
       duration_days: duration, duration_days_other: Number(data.duration_days_other) || 0, amount_other: Number(data.amount_other) || 0,
-      vacation_reason: String(data.vacation_reason || '').trim(), attachment: String(data.attachment || '').trim(),
+      vacation_reason: String(data.vacation_reason || '').trim(), attachment: String(data.attachment || '').trim(), attachment_id: attachmentIdVac,
       user: (user && user.email) || '', created_at: new Date()
     };
     try{ logHistory_(dbId, VACATIONS_SHEET, row.record_uid || ('create_'+VACATIONS_SHEET+'_'+row['unique_id']), row['unique_id'], (user&&user.email)||'', 'create', row, null) }catch(e){}
     result = { status: 'success', message: 'تم تسجيل الإجازة', data: { unique_id: row['unique_id'] }, record: savedRecordVac };
 
-    // Increment used_days in allocation if allocation_id provided
+    // Rollup: recompute consumed days for this allocation as
+    // SUM(duration_days) so used_days/remaining always reflect reality
+    // (self-heals any past drift; the new row is already appended above).
     if (allocId) {
       try {
-        var allocSheet = getSheet_(VACATION_ALLOC_SHEET, dbId);
-        var allocHeaders = getHeaders_(allocSheet);
-        var uidIdx = allocHeaders.findIndex(function (h) { return String(h).trim() === 'unique_id'; });
-        var usedIdx = allocHeaders.findIndex(function (h) { return String(h).trim() === 'used_days'; });
-        if (uidIdx !== -1 && usedIdx !== -1) {
-          var allData = allocSheet.getDataRange().getValues();
-          for (var i = 1; i < allData.length; i++) {
-            if (String(allData[i][uidIdx]).trim() === allocId) {
-              allocSheet.getRange(i + 1, usedIdx + 1).setValue(Number(allData[i][usedIdx]) + duration);
-              noteMutation_(allocSheet);
-              break;
-            }
-          }
-        }
+        var __newBal = allocBalance_(dbId, allocId);
+        writeAllocUsedDays_(dbId, allocId, __newBal.consumed);
       } catch (e) { /* log but don't fail */ }
     }
 
@@ -1987,9 +2253,177 @@ const ValleyFoodsHRModules = (function () {
     return result;
   }
 
+  /* Row-edit repair (Stage 4): keyed vacation correction. Same manual-field
+   * validation and server-side duration computation as addVacation_; the
+   * overlap check excludes the edited row, the allocation cap counts the old
+   * row's returned days, and consumption rollups are recomputed for both the
+   * old and the new allocation. Only manual inputs are written through the
+   * formula-safe patch helper; id/user/created_at and the existing attachment
+   * pair are preserved unless a replacement arrives via the trusted flow. */
+  function updateVacation_(data, user, dbId) {
+    requireSuperAdmin_(user);
+    var result;
+    executeWithLock_(function () {
+    var uid = String((data || {}).unique_id || '').trim();
+    if (!uid) throw new Error('المعرف مطلوب');
+    var empId = Number(data.emp_id);
+    if (!empId) throw new Error('الموظف مطلوب');
+    var vacType = String(data.vacation_type || '').trim();
+    if (!vacType) throw new Error('نوع الإجازة مطلوب');
+    var startDate = parseDate_(data.start_date);
+    if (!startDate) throw new Error('تاريخ البداية مطلوب');
+    var endDate = parseDate_(data.end_date);
+    if (!endDate) throw new Error('تاريخ النهاية مطلوب');
+    startDate = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate());
+    endDate = new Date(endDate.getFullYear(), endDate.getMonth(), endDate.getDate());
+    if (endDate < startDate) throw new Error('تاريخ النهاية يجب أن يكون بعد أو يساوي تاريخ البداية');
+    var halfDay = data.vacation_half_day === true || data.vacation_half_day === 'true';
+
+    var sheet = getSheet_(VACATIONS_SHEET, dbId);
+    var allRows = getAllRecords_(dbId, VACATIONS_SHEET);
+    var oldRow = null;
+    for (var k = 0; k < allRows.length; k++) {
+      if (String(allRows[k].unique_id) === uid) { oldRow = allRows[k]; break; }
+    }
+    if (!oldRow) throw new Error('الإجازة غير موجودة');
+    var oldAllocId = String(oldRow.allocation_id == null ? '' : oldRow.allocation_id).trim();
+    var oldDuration = Number(oldRow.duration_days) || 0;
+
+    var vacIndexRows = [];
+    try { vacIndexRows = getAllRecords_(dbId, VACATIONS_INDEX_SHEET); } catch (e) {}
+    var isRequireAlloc = false;
+    for (var vi = 0; vi < vacIndexRows.length; vi++) {
+      if (String(vacIndexRows[vi].id) === String(vacType)) {
+        isRequireAlloc = vacIndexRows[vi].require_allocation === true || String(vacIndexRows[vi].require_allocation).toLowerCase() === 'true';
+        break;
+      }
+    }
+    var allocId = String(data.allocation_id || '').trim();
+    if (isRequireAlloc && !allocId) throw new Error('تخصيص الإجازة مطلوب لهذا النوع');
+
+    var duration = 0;
+    if (halfDay) {
+      duration = 0.5;
+    } else if (vacType) {
+      var totalDays = Math.round((endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24)) + 1;
+      if (totalDays < 0) totalDays = 0;
+      duration = totalDays;
+    }
+
+    for (var vi2 = 0; vi2 < allRows.length; vi2++) {
+      var ev = allRows[vi2];
+      if (String(ev.unique_id) === uid) continue;
+      if (Number(ev.emp_id) !== empId) continue;
+      var existStart = parseDate_(ev.start_date);
+      var existEnd = parseDate_(ev.end_date);
+      if (!existStart || !existEnd) continue;
+      existStart = new Date(existStart.getFullYear(), existStart.getMonth(), existStart.getDate());
+      existEnd = new Date(existEnd.getFullYear(), existEnd.getMonth(), existEnd.getDate());
+      if (startDate <= existEnd && existStart <= endDate) {
+        throw new Error('يوجد إجازة أخرى لنفس الموظف في الفترة المحددة');
+      }
+    }
+
+    /* Cap check: the edited row's old days return to its allocation first, so
+       keeping the same allocation and duration always passes. */
+    if (isRequireAlloc && allocId) {
+      var __cap = allocBalance_(dbId, allocId);
+      var __remaining = (__cap.numberOfDays - __cap.consumed) + (allocId === oldAllocId ? oldDuration : 0);
+      if (duration > __remaining) {
+        throw new Error('لا يمكن حفظ الإجازة: المدة المطلوبة (' + duration + ' يوم) تتجاوز الرصيد المتبقي (' + __remaining + ' يوم) من إجمالي التخصيص (' + __cap.numberOfDays + ' يوم)');
+      }
+    }
+
+    var storedRef = String(oldRow.attachment || '').trim();
+    var storedId = String(oldRow.attachment_id || '').trim();
+    var newRef = String(data.attachment || '').trim();
+    var attachmentIdVac;
+    if (!newRef) {
+      newRef = storedRef;
+      attachmentIdVac = storedId;
+    } else if (storedRef && newRef === storedRef && storedId) {
+      attachmentIdVac = storedId;
+    } else {
+      attachmentIdVac = '';
+      try { attachmentIdVac = (typeof attachmentPickFileId_ === 'function') ? String(attachmentPickFileId_(data, 'attachment') || '').trim() : ''; } catch (e2) {}
+      if (!attachmentIdVac && newRef) {
+        try { attachmentIdVac = String(CacheService.getScriptCache().get('attid_' + newRef) || '').trim(); } catch (e3) {}
+      }
+      attachmentIdVac = requireAttachmentBinding_(newRef, attachmentIdVac, 'attachment');
+    }
+    try { if (typeof ensureAttachmentColumn_ === 'function') ensureAttachmentColumn_(dbId, VACATIONS_SHEET, 'attachment_id'); } catch (e4) {}
+
+    var map = {};
+    map['emp_id'] = empId;
+    map['vacation_half_day'] = halfDay;
+    map['vacation_type'] = vacType;
+    map['allocation_id'] = allocId;
+    map['start_date'] = startDate;
+    map['end_date'] = endDate;
+    map['duration_days'] = duration;
+    map['duration_days_other'] = Number(data.duration_days_other) || 0;
+    map['amount_other'] = Number(data.amount_other) || 0;
+    map['vacation_reason'] = String(data.vacation_reason || '').trim();
+    map['attachment'] = newRef;
+    map['attachment_id'] = attachmentIdVac;
+    if (!patchRowByCriteria_(sheet, 'unique_id', uid, map)) throw new Error('الإجازة غير موجودة');
+
+    /* Reconcile consumption on both sides of an allocation change; same-side
+       edits recompute once. Failures only affect the rollup, never the edit. */
+    var __allocs = allocId ? [allocId] : [];
+    if (oldAllocId && oldAllocId !== allocId) __allocs.push(oldAllocId);
+    __allocs.forEach(function (aid) {
+      try {
+        var __bal = allocBalance_(dbId, aid);
+        writeAllocUsedDays_(dbId, aid, __bal.consumed);
+      } catch (e5) { /* log but don't fail */ }
+    });
+
+    var _vacNameMapU = {};
+    try { vacIndexRows.forEach(function (rr) { _vacNameMapU[String(rr.id)] = rr.vacation_name_ar || String(rr.id); }); } catch (e6) {}
+    var savedRecordU = {
+      unique_id: uid, id: oldRow.id, emp_id: empId,
+      vacation_half_day: halfDay, vacation_type: vacType, vacation_type_name: _vacNameMapU[String(vacType)] || vacType,
+      allocation_id: allocId, start_date: startDate, end_date: endDate,
+      duration_days: duration, duration_days_other: Number(data.duration_days_other) || 0, amount_other: Number(data.amount_other) || 0,
+      vacation_reason: String(data.vacation_reason || '').trim(), attachment: newRef, attachment_id: attachmentIdVac,
+      user: oldRow.user, created_at: oldRow.created_at
+    };
+    try { logHistory_(dbId, VACATIONS_SHEET, oldRow.record_uid || ('update_' + VACATIONS_SHEET + '_' + uid), uid, (user && user.email) || '', 'update', savedRecordU, oldRow); } catch (e7) {}
+    result = { status: 'success', message: 'تم تحديث الإجازة', data: { unique_id: uid }, record: savedRecordU };
+    }); /* executeWithLock_ */
+    return result;
+  }
+
+  /* Super-admin only: delete a vacation and return its days to the
+   * allocation pool by recomputing SUM(duration_days). */
+  function deleteVacation_(data, user, dbId) {
+    requireSuperAdmin_(user);
+    var result;
+    executeWithLock_(function () {
+      var uid = String((data || {}).unique_id || '').trim();
+      if (!uid) throw new Error('المعرف مطلوب');
+      var oldRow = getAllRecords_(dbId, VACATIONS_SHEET).find(function (r) { return String(r.unique_id) === uid; }) || null;
+      if (!oldRow) throw new Error('الإجازة غير موجودة');
+      var allocId = String(oldRow.allocation_id == null ? '' : oldRow.allocation_id).trim();
+      var oldUid = oldRow.record_uid || ('del_' + VACATIONS_SHEET + '_' + uid);
+      try { logHistory_(dbId, VACATIONS_SHEET, oldUid, uid, (user && user.email) || '', 'delete', null, oldRow); } catch (e) {}
+      var deleted = deleteRowsByCriteria_(getSheet_(VACATIONS_SHEET, dbId), 'unique_id', uid);
+      if (!deleted) throw new Error('الإجازة غير موجودة');
+      if (allocId) {
+        try {
+          var __bal = allocBalance_(dbId, allocId);
+          writeAllocUsedDays_(dbId, allocId, __bal.consumed);
+        } catch (e) { /* log but don't fail */ }
+      }
+      result = { status: 'success', message: 'تم حذف الإجازة وإرجاع الرصيد إلى التخصيص' };
+    }); /* executeWithLock_ */
+    return result;
+  }
+
   // ===================== OVERTIME =====================
   function getOvertimeData_(data, user, dbId) {
-    ensureSheet_(dbId, EMP_OVERTIME_SHEET, ['unique_id','emp_id','name_ar','date','overtime_type','start_time','end_time','overtime_hours','overtime_vacation_days','details','overtime_attachement','amount','month','year','user','created_at']);
+    ensureSheet_(dbId, EMP_OVERTIME_SHEET, ['unique_id','emp_id','name_ar','date','overtime_type','start_time','end_time','overtime_hours','overtime_vacation_days','details','overtime_attachement','overtime_attachement_id','amount','month','year','user','created_at']);
     var roles = getOvertimeRoles_(dbId);
     var roleMap = {};
     roles.forEach(function (r) { roleMap[r.value] = r; });
@@ -2008,6 +2442,7 @@ const ValleyFoodsHRModules = (function () {
         start_time: r.start_time, end_time: r.end_time,
         overtime_hours: r.overtime_hours, overtime_vacation_days: r.overtime_vacation_days,
         details: r.details, overtime_attachement: r.overtime_attachement,
+        overtime_attachement_id: r.overtime_attachement_id || '',
         amount: r.amount, month: r.month, year: r.year,
         user: r.user, created_at: r.created_at
       };
@@ -2029,6 +2464,13 @@ const ValleyFoodsHRModules = (function () {
     if (!details) throw new Error('التفاصيل مطلوبة');
     var attachment = String(data.overtime_attachement || '').trim();
     if (!attachment) throw new Error('المرفق مطلوب');
+    var attachmentIdOT = '';
+    try { attachmentIdOT = (typeof attachmentPickFileId_ === 'function') ? String(attachmentPickFileId_(data, 'overtime_attachement') || '').trim() : ''; } catch (e) {}
+    if (!attachmentIdOT && attachment) {
+      try { attachmentIdOT = String(CacheService.getScriptCache().get('attid_' + attachment) || '').trim(); } catch (e) {}
+    }
+    attachmentIdOT = requireAttachmentBinding_(attachment, attachmentIdOT, 'overtime_attachement');
+    try { if (typeof ensureAttachmentColumn_ === 'function') ensureAttachmentColumn_(dbId, EMP_OVERTIME_SHEET, 'overtime_attachement_id'); } catch (e) {}
 
     var roles = getOvertimeRoles_(dbId);
     var roleInfo = null;
@@ -2075,6 +2517,7 @@ const ValleyFoodsHRModules = (function () {
     row['overtime_vacation_days'] = '=if(IF(E' + rowNumber + '="", "", COUNTIFS(valley_employee_overtime_roles!$A$2:$A, E' + rowNumber + ', valley_employee_overtime_roles!$D$2:$D, FALSE, valley_employee_overtime_roles!$E$2:$E, TRUE) > 0)=TRUE,VLOOKUP(E' + rowNumber + ',valley_employee_overtime_roles!A:C,3,0),0)';
     row['details'] = details;
     row['overtime_attachement'] = attachment;
+    row['overtime_attachement_id'] = attachmentIdOT;
     row['amount'] = isMoneyRelated ? (Number(data.amount) || 0) : 0;
     row['month'] = '=MONTH(D' + rowNumber + ')';
     row['year'] = '=YEAR(D' + rowNumber + ')';
@@ -2093,12 +2536,134 @@ const ValleyFoodsHRModules = (function () {
       date: date, overtime_type: otType, overtime_name: _roleOT.label || otType,
       start_time: startTime, end_time: endTime,
       overtime_hours: '', overtime_vacation_days: '',
-      details: details, overtime_attachement: attachment, amount: isMoneyRelated ? (Number(data.amount)||0) : 0,
+      details: details, overtime_attachement: attachment, overtime_attachement_id: attachmentIdOT, amount: isMoneyRelated ? (Number(data.amount)||0) : 0,
       month: date ? (date.getMonth()+1) : '', year: date ? date.getFullYear() : '',
       user: (user && user.email) || '', created_at: new Date()
     };
     try{ logHistory_(dbId, EMP_OVERTIME_SHEET, row.record_uid || ('create_'+EMP_OVERTIME_SHEET+'_'+row['unique_id']), row['unique_id'], (user&&user.email)||'', 'create', row, null) }catch(e){}
     result = { status: 'success', message: 'تم تسجيل العمل الإضافي', data: { unique_id: row['unique_id'] }, record: savedRecordOT };
+    }); /* executeWithLock_ */
+    return result;
+  }
+
+  /* Row-edit repair (Stage 3): keyed overtime correction. Same manual-field
+   * validation as addOvertime_; only manual inputs are written, through the
+   * formula-safe patch helper, so calculated cells (name_ar, overtime_hours,
+   * overtime_vacation_days, month, year) and system fields (unique_id, user,
+   * created_at) are preserved. The existing attachment pair is retained unless
+   * the caller supplies a different reference through the trusted upload flow,
+   * in which case the new pair must bind before anything is written. */
+  function updateOvertime_(data, user, dbId) {
+    requireSuperAdmin_(user);
+    var result;
+    executeWithLock_(function () {
+    var uid = String((data || {}).unique_id || '').trim();
+    if (!uid) throw new Error('معرف السجل مطلوب');
+    var empId = Number(data.emp_id);
+    if (!empId) throw new Error('الموظف مطلوب');
+    var otType = String(data.overtime_type || '').trim();
+    if (!otType) throw new Error('نوع العمل الإضافي مطلوب');
+    var date = parseDate_(data.date);
+    if (!date) throw new Error('التاريخ مطلوب');
+    var details = String(data.details || '').trim();
+    if (!details) throw new Error('التفاصيل مطلوبة');
+
+    var roles = getOvertimeRoles_(dbId);
+    var roleInfo = null;
+    for (var i = 0; i < roles.length; i++) {
+      if (String(roles[i].value) === String(otType)) { roleInfo = roles[i]; break; }
+    }
+    var isMoneyRelated = roleInfo && roleInfo.moneyRelated;
+    var amount = 0;
+    var startTime = String(data.start_time || '').trim();
+    var endTime = String(data.end_time || '').trim();
+    if (isMoneyRelated) {
+      amount = Number(data.amount) || 0;
+      if (amount <= 0) throw new Error('المبلغ مطلوب لهذا النوع');
+      startTime = '';
+      endTime = '';
+    } else {
+      if (!startTime) throw new Error('وقت البداية مطلوب');
+      if (!endTime) throw new Error('وقت النهاية مطلوب');
+    }
+
+    var sheet = getSheet_(EMP_OVERTIME_SHEET, dbId);
+    var allRows = getAllRecords_(dbId, EMP_OVERTIME_SHEET);
+    var oldRow = null;
+    for (var k = 0; k < allRows.length; k++) {
+      if (String(allRows[k].unique_id) === uid) { oldRow = allRows[k]; break; }
+    }
+    if (!oldRow) throw new Error('السجل غير موجود');
+
+    /* Duplicate-timing check excludes the edited row itself. Times are
+       compared as normalized fractions because stored cells hold Sheets time
+       fractions while callers send HH:mm. */
+    var newStartFrac = timeFrac_(startTime), newEndFrac = timeFrac_(endTime);
+    var newDay = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+    for (var j = 0; j < allRows.length; j++) {
+      var er = allRows[j];
+      if (String(er.unique_id) === uid) continue;
+      if (Number(er.emp_id) !== empId) continue;
+      if (String(er.overtime_type || '').trim() !== otType) continue;
+      var erDate = parseDate_(er.date);
+      var erDay = erDate ? new Date(erDate.getFullYear(), erDate.getMonth(), erDate.getDate()).getTime() : NaN;
+      if (erDay !== newDay) continue;
+      if (String(timeFrac_(er.start_time)) === String(newStartFrac) &&
+          String(timeFrac_(er.end_time)) === String(newEndFrac)) {
+        throw new Error('يوجد سجل عمل إضافي مطابق لهذا الموظف في نفس التوقيت');
+      }
+    }
+
+    /* Attachment: preserve the stored pair unless the caller supplies a
+       different reference from the trusted upload flow. */
+    var storedRef = String(oldRow.overtime_attachement || '').trim();
+    var storedId = String(oldRow.overtime_attachement_id || '').trim();
+    var newRef = String(data.overtime_attachement || '').trim();
+    var attachmentIdOT;
+    if (!newRef) {
+      newRef = storedRef;
+      attachmentIdOT = storedId;
+    } else if (storedRef && newRef === storedRef && storedId) {
+      attachmentIdOT = storedId;
+    } else {
+      attachmentIdOT = '';
+      try { attachmentIdOT = (typeof attachmentPickFileId_ === 'function') ? String(attachmentPickFileId_(data, 'overtime_attachement') || '').trim() : ''; } catch (e) {}
+      if (!attachmentIdOT && newRef) {
+        try { attachmentIdOT = String(CacheService.getScriptCache().get('attid_' + newRef) || '').trim(); } catch (e2) {}
+      }
+      attachmentIdOT = requireAttachmentBinding_(newRef, attachmentIdOT, 'overtime_attachement');
+    }
+    try { if (typeof ensureAttachmentColumn_ === 'function') ensureAttachmentColumn_(dbId, EMP_OVERTIME_SHEET, 'overtime_attachement_id'); } catch (e3) {}
+
+    var map = {};
+    map['emp_id'] = empId;
+    map['date'] = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+    map['overtime_type'] = otType;
+    map['start_time'] = isMoneyRelated ? '' : timeFrac_(startTime);
+    map['end_time'] = isMoneyRelated ? '' : timeFrac_(endTime);
+    map['details'] = details;
+    map['overtime_attachement'] = newRef;
+    map['overtime_attachement_id'] = attachmentIdOT;
+    map['amount'] = isMoneyRelated ? amount : 0;
+    if (!patchRowByCriteria_(sheet, 'unique_id', uid, map)) throw new Error('السجل غير موجود');
+
+    var _roleMapU = {};
+    roles.forEach(function (rr) { _roleMapU[rr.value] = rr; });
+    var _roleU = _roleMapU[otType] || {};
+    var _empNameU = '';
+    try { var _allEmpsU = getAllRecords_(dbId, EMP_INFO_SHEET); for (var _eu = 0; _eu < _allEmpsU.length; _eu++) { if (String(_allEmpsU[_eu].emp_id) === String(empId)) { _empNameU = _allEmpsU[_eu].name_ar || ''; break; } } } catch (e4) {}
+    var savedRecordU = {
+      unique_id: uid, emp_id: empId, name_ar: _empNameU || String(empId),
+      date: map['date'], overtime_type: otType, overtime_name: _roleU.label || otType,
+      start_time: startTime, end_time: endTime,
+      overtime_hours: oldRow.overtime_hours, overtime_vacation_days: oldRow.overtime_vacation_days,
+      details: details, overtime_attachement: newRef, overtime_attachement_id: attachmentIdOT,
+      amount: isMoneyRelated ? amount : 0,
+      month: date ? (date.getMonth() + 1) : '', year: date ? date.getFullYear() : '',
+      user: oldRow.user, created_at: oldRow.created_at
+    };
+    try { logHistory_(dbId, EMP_OVERTIME_SHEET, oldRow.record_uid || ('update_' + EMP_OVERTIME_SHEET + '_' + uid), uid, (user && user.email) || '', 'update', savedRecordU, oldRow); } catch (e5) {}
+    result = { status: 'success', message: 'تم تحديث العمل الإضافي', data: { unique_id: uid }, record: savedRecordU };
     }); /* executeWithLock_ */
     return result;
   }
@@ -3300,7 +3865,8 @@ const ValleyFoodsHRModules = (function () {
       if (typeof Drive !== 'undefined' && Drive.Files && Drive.Files.list) {
         var q = "name = '" + folderName.replace(/'/g, "\\'") + "' and mimeType = 'application/vnd.google-apps.folder' and trashed = false";
         var res = Drive.Files.list({ q: q, fields: 'files(id, name)' });
-        if (res && res.files && res.files.length > 0) {
+        if (res && res.files && res.files.length > 1) throw new Error('مجلد Google Drive مكرر: ' + folderName);
+        if (res && res.files && res.files.length === 1) {
           var folderId = res.files[0].id;
           try { cache.put(key, folderId, 21600); } catch (e) {}
           return folderId;
@@ -3316,7 +3882,8 @@ const ValleyFoodsHRModules = (function () {
       var searchRes = UrlFetchApp.fetch(searchUrl, { headers: { Authorization: 'Bearer ' + token }, muteHttpExceptions: true });
       if (searchRes.getResponseCode() === 200) {
         var sd = JSON.parse(searchRes.getContentText());
-        if (sd.files && sd.files.length > 0) { var sid = sd.files[0].id; try { cache.put(key, sid, 21600); } catch (e) {} return sid; }
+        if (sd.files && sd.files.length > 1) throw new Error('مجلد Google Drive مكرر: ' + folderName);
+        if (sd.files && sd.files.length === 1) { var sid = sd.files[0].id; try { cache.put(key, sid, 21600); } catch (e) {} return sid; }
       }
       var createRes = UrlFetchApp.fetch('https://www.googleapis.com/drive/v3/files', {
         method: 'post', contentType: 'application/json',
@@ -3387,8 +3954,14 @@ const ValleyFoodsHRModules = (function () {
     var cleanName = (filename.replace(/[\\/:*?"<>|]/g, '_').replace(/\.[^.]+$/, '') || 'file');
     var newName = cleanName + '.' + ts + '.' + ext;
     var blob = Utilities.newBlob(bytes, mimeForExt_(ext), newName);
-    uploadDriveFileRest_(folderId, blob, newName);
-    return { status: 'success', reference: cfg.folder + '/' + newName };
+    var created = uploadDriveFileRest_(folderId, blob, newName);
+    var fileId = (created && created.id) ? String(created.id) : '';
+    var reference = cfg.folder + '/' + newName;
+    if (!fileId) throw new Error('تم رفع الملف دون معرف Drive قابل للحفظ؛ لم يتم إنشاء ارتباط بالسجل.');
+    if (fileId) {
+      try { CacheService.getScriptCache().put('attid_' + reference, fileId, 21600); } catch (e) {}
+    }
+    return { status: 'success', reference: reference, fileId: fileId };
   }
 
   // ===================== HR SETTINGS (reference tables) =====================
@@ -4121,6 +4694,20 @@ const ValleyFoodsHRModules = (function () {
    * and manufacturing, so all three modules share one gate. */
   var VF_COST_PAGE_ID = 'valley_cost_view';
 
+  function vfReadAuthorityRows_() {
+    if (typeof systemGetAllRecords_ === 'function') return systemGetAllRecords_('ERP_Pages_Matrix');
+    var sheet = getSheet_('ERP_Pages_Matrix', CONFIG.AUTH_SPREADSHEET_ID);
+    var headers = getHeaders_(sheet);
+    var values = sheet.getDataRange().getValues();
+    return values.slice(1).filter(function (row) {
+      return row.some(function (value) { return value !== '' && value !== null && value !== undefined; });
+    }).map(function (row) {
+      var record = {};
+      headers.forEach(function (header, index) { record[String(header).trim().toLowerCase()] = row[index]; });
+      return record;
+    });
+  }
+
   /**
    * THE FAIL-OPEN GUARD, and it is mandatory.
    *
@@ -4153,15 +4740,11 @@ const ValleyFoodsHRModules = (function () {
 
     var unused = true;
     try {
-      var sheet = getSheet_('ERP_Pages_Matrix', CONFIG.AUTH_SPREADSHEET_ID);
-      var headers = getHeaders_(sheet);
-      var values = sheet.getDataRange().getValues();
-      var pageIdx = headers.findIndex(function (h) { return String(h).trim().toLowerCase() === 'page_id'; });
-      var statusIdx = headers.findIndex(function (h) { return String(h).trim().toLowerCase() === 'status'; });
-      if (pageIdx !== -1) {
-        for (var i = 1; i < values.length; i++) {
-          if (String(values[i][pageIdx]).trim() !== VF_COST_PAGE_ID) continue;
-          if (statusIdx !== -1 && String(values[i][statusIdx]).trim().toLowerCase() !== 'active') continue;
+      var values = vfReadAuthorityRows_();
+      if (values.length) {
+        for (var i = 0; i < values.length; i++) {
+          if (String(values[i].page_id || '').trim() !== VF_COST_PAGE_ID) continue;
+          if (String(values[i].status || 'active').trim().toLowerCase() !== 'active') continue;
           unused = false;
           break;
         }
@@ -4189,6 +4772,14 @@ const ValleyFoodsHRModules = (function () {
     if (grants && grants.length &&
         (grants.indexOf('write') !== -1 || grants.indexOf('full') !== -1)) return true;
     return vfCostGrantUnused_();
+  }
+
+  /** True when this user may quick-add a party from Cash (needs vf_parties add grant). */
+  function vfCanAddParty_(user) {
+    if (user && user.isSuperAdmin) return true;
+    var grants = (user && user.authorizedPages && user.authorizedPages['vf_parties']) || null;
+    return !!(grants && grants.length &&
+        (grants.indexOf('write') !== -1 || grants.indexOf('full') !== -1));
   }
 
   /** Remove keys from one object. Deletes — never zeroes. */
@@ -4319,6 +4910,121 @@ const ValleyFoodsHRModules = (function () {
     return out;
   }
 
+  /* Purchasing report, operation by operation (تقرير المشتريات).
+   * Per operation: Code, supplier label, receipt date, Total costs — plus a
+   * grand-totals row (operation count + costs sum). Costs-only by design.
+   * Rows follow oldest-first sheet order with a global مسلسل, then the
+   * date-range bounds (vfBoundRows_ on 'Reciept Date'). Cost visibility honors
+   * vfCanSeeCost_ exactly like the list: without the grant the cost cells are
+   * stripped (deleted, never zeroed) and totals stay 0. Read-only; no schema. */
+  function getValleyPurchasingReport_(data, user, dbId) {
+    data = data || {};
+    settingsEnsureSheet_(dbId, PURCHASING_COSTING_SHEET, PURCHASING_COSTING_HEADERS);
+    settingsEnsureSheet_(dbId, PURCHASING_LINE_SHEET, PURCHASING_LINE_HEADERS);
+    var rows = getAllRecords_(dbId, PURCHASING_COSTING_SHEET);
+    var lines = getAllRecords_(dbId, PURCHASING_LINE_SHEET);
+    var supMap = {};
+    try {
+      valleyPurchasingSupplierOptions_(dbId).forEach(function (o) { supMap[String(o.value)] = o.label; });
+    } catch (eS) {}
+    var prodMap = {};
+    try {
+      valleyPurchasingProductOptions_(dbId).forEach(function (o) { prodMap[String(o.value)] = o.label; });
+    } catch (eP) {}
+    var canCost = vfCanSeeCost_(user);
+    var vendor = String(data.vendor || '').trim();
+    var vendorLabel = vendor ? (supMap[vendor] || vendor) : '';
+    var product = String(data.product || '').trim();
+    var productLabel = product ? (prodMap[product] || product) : '';
+
+    function lineMatches_(l) {
+      if (vendor && String(l.vendor) !== vendor && String(l.vendor) !== vendorLabel) return false;
+      if (product && String(l.product) !== product && String(l.product) !== productLabel &&
+          String(prodMap[String(l.product)] || '') !== product) return false;
+      return true;
+    }
+    /* Lines date-bounded first, so the range applies to inlines as well. */
+    var boundLines = vfBoundRows_(lines, data, 'receipt_date').filter(lineMatches_);
+    var codesWithProduct = {};
+    if (product) boundLines.forEach(function (l) { codesWithProduct[String(l.code)] = true; });
+
+    var all = rows.map(function (r, i) {
+      var cost = Number(r['Total costs']) || 0;
+      var rec = {
+        Code: r.Code,
+        supplier_name: supMap[String(r['Supplier Name'])] || r['Supplier Name'] || '-',
+        supplier_ref: (r['Supplier Name'] == null || r['Supplier Name'] === '') ? '' : String(r['Supplier Name']),
+        receipt_date: r['Reciept Date'],
+        approval_status: r.approval_status || 'Pending',
+        total_costs: canCost ? Math.round(cost * 100) / 100 : 0,
+        'مسلسل': i + 1
+      };
+      return rec;
+    });
+    /* NOTE: this was vfBoundRows_(all, data, 'Reciept Date') — a silent no-op,
+     * because the projected rows carry receipt_date, not Reciept Date, so the
+     * date filter never filtered. Bounding on the real key. */
+    var list = vfBoundRows_(all, data, 'receipt_date').filter(function (r) {
+      if (vendor && String(r.supplier_ref) !== vendor &&
+          String(r.supplier_name) !== vendor && String(r.supplier_name) !== vendorLabel) return false;
+      if (product && !codesWithProduct[String(r.Code)]) return false;
+      return true;
+    });
+    var totalCosts = 0;
+    list.forEach(function (r) { totalCosts = Math.round((totalCosts + r.total_costs) * 100) / 100; });
+
+    /* Inlines grouped by operation Code, restricted to the listed headers so
+     * the payload stays tight. Cost keys are deleted (never zeroed) for
+     * cost-blind callers, exactly like getValleyPurchasingLines_. */
+    var allowedCodes = {};
+    list.forEach(function (r) { allowedCodes[String(r.Code)] = true; });
+    var linesByCode = {};
+    var lineQty = 0, lineCost = 0, lineCount = 0;
+    var summaryByProduct = {};
+    boundLines.forEach(function (l) {
+      var code = String(l.code || '');
+      if (!code || !allowedCodes[code]) return;
+      var item = {
+        code: code,
+        vendor: supMap[String(l.vendor)] || l.vendor || '-',
+        product: prodMap[String(l.product)] || l.product || '-',
+        product_category: l.product_category || '',
+        receipt_date: l.receipt_date || '',
+        qty: Number(l.qty) || 0,
+        unit_price: Number(l.unit_price) || 0,
+        other_cost: Number(l.other_cost) || 0,
+        total_cost: Number(l.total_cost) || 0,
+        unit_cost: Number(l.unit_cost) || 0,
+        movement_type: l.movement_type || '',
+        lot_identification: l.lot_identification || ''
+      };
+      if (!canCost) vfStripCost_(item, VF_COST_KEYS.pur_line);
+      (linesByCode[code] = linesByCode[code] || []).push(item);
+      lineQty += item.qty;
+      lineCost = Math.round((lineCost + (item.total_cost || 0)) * 100) / 100;
+      lineCount++;
+      /* Qty + cost per product, over the same filtered line set. */
+      var sKey = String(item.product || '-');
+      var sEntry = summaryByProduct[sKey] || (summaryByProduct[sKey] = { product: sKey, qty: 0, total_cost: 0 });
+      sEntry.qty = Math.round((sEntry.qty + item.qty) * 100) / 100;
+      sEntry.total_cost = Math.round((sEntry.total_cost + (item.total_cost || 0)) * 100) / 100;
+    });
+    var productSummary = Object.keys(summaryByProduct).map(function (k) { return summaryByProduct[k]; });
+    productSummary.sort(function (a, b) { return b.qty - a.qty; });
+    /* Cost-blind callers get qty-only summary rows (delete, never zero). */
+    if (!canCost) productSummary.forEach(function (e) { delete e.total_cost; });
+    return {
+      status: 'success',
+      rows: list,
+      totals: { operations: list.length, total_costs: totalCosts },
+      total: list.length,
+      linesByCode: linesByCode,
+      line_totals: { count: lineCount, qty: Math.round(lineQty * 100) / 100, total_cost: Math.round(lineCost * 100) / 100 },
+      productSummary: productSummary,
+      can_see_cost: canCost
+    };
+  }
+
   function valleyPurchasingSupplierOptions_(dbId) {
     try {
       return vfRefsCached_(dbId, 'vf_purchasing_supplier_opts', function () {
@@ -4393,6 +5099,108 @@ const ValleyFoodsHRModules = (function () {
     return { status: 'success', lines: rows, can_see_cost: _plCost };
   }
 
+  /* Section checkpoints share the final-save rules but persist one section at
+   * a time: header checkpoints never touch child rows, and lines checkpoints
+   * never rewrite the header. */
+  function purchasingCheckpointHeader_(data, user, dbId) {
+    var d = data || {}, hdr = d.header || {};
+    var code = String(hdr.Code != null ? hdr.Code : '').trim();
+    if (!code) throw new Error('الكود (Code) مطلوب');
+    if (!String(hdr.Type != null ? hdr.Type : '').trim()) throw new Error('النوع مطلوب');
+    if (!String(hdr['Shipping Type'] != null ? hdr['Shipping Type'] : '').trim()) throw new Error('نوع الشحن مطلوب');
+    if (!vfCanSeeCost_(user)) throw new Error('لا تملك صلاحية عرض أو تعديل التكاليف (valley_cost_view) — لا يمكن حفظ عملية شراء.');
+    var originalCode = String(d.originalCode != null ? d.originalCode : '').trim();
+    settingsEnsureSheet_(dbId, PURCHASING_COSTING_SHEET, PURCHASING_COSTING_HEADERS);
+    var sheet = getSheet_(PURCHASING_COSTING_SHEET, dbId), rows = getAllRecords_(dbId, PURCHASING_COSTING_SHEET);
+    var existing = originalCode ? rows.find(function (r) { return String(r.Code) === originalCode; }) : null;
+    var duplicate = rows.some(function (r) { return String(r.Code) === code && (!existing || String(r.Code) !== originalCode); });
+    if (duplicate) throw new Error('الكود (Code) مكرر — يجب أن يكون فريداً');
+    if (existing) {
+      if (String(existing.approval_status || '').toLowerCase() === 'approved' || String(existing.quality_approval_status || '').toLowerCase() === 'approved') throw new Error('لا يمكن تعديل عملية شراء معتمدة. يلزم إجراء إعادة فتح مصرح به خارج الحفظ العادي.');
+      var updates = {};
+      PURCHASING_COSTING_HEADERS.forEach(function (col) {
+        if (['id', 'unique_id', 'user', 'user_name', 'approval_status', 'approval', 'approval_time', 'quality_approval_status', 'quality_approval', 'quality_approval_time', 'Related valley_product_purchasings', 'code_identification'].indexOf(col) !== -1) return;
+        if (hdr[col] !== undefined && hdr[col] !== null) updates[col] = hdr[col];
+      });
+      PURCHASING_NUMERIC.forEach(function (c) { if (updates[c] !== '' && updates[c] !== undefined) updates[c] = Number(updates[c]); });
+      if (code !== originalCode) updates.Code = code;
+      if (!updateRowByCriteria_(sheet, 'Code', originalCode, updates)) throw new Error('عملية الشراء غير موجودة');
+      try { logHistory_(dbId, PURCHASING_COSTING_SHEET, existing.record_uid || ('checkpoint_update_' + originalCode), code, (user && user.email) || '', 'update', Object.assign({}, existing, updates), existing); } catch (e) {}
+      vfFlush_();
+      return { status: 'success', message: 'تم حفظ بيانات العملية', code: code, checkpoint: 'header' };
+    }
+    var record = {};
+    PURCHASING_COSTING_HEADERS.forEach(function (col) {
+      if (['id', 'unique_id', 'user', 'user_name', 'approval_status', 'approval', 'approval_time', 'quality_approval_status', 'quality_approval', 'quality_approval_time', 'Related valley_product_purchasings', 'code_identification'].indexOf(col) !== -1) return;
+      var v = hdr[col]; record[col] = v === undefined || v === null ? '' : v;
+    });
+    PURCHASING_NUMERIC.forEach(function (c) { if (record[c] !== '' && record[c] !== undefined) record[c] = Number(record[c]); });
+    record.unique_id = uid16_(); record.user = (user && user.email) || ''; record.user_name = (user && user.name) || (user && user.email) || '';
+    addRecord_(dbId, PURCHASING_COSTING_SHEET, record, ['Code']);
+    try { logHistory_(dbId, PURCHASING_COSTING_SHEET, 'checkpoint_create_' + code, code, (user && user.email) || '', 'create', record, null); } catch (e) {}
+    vfFlush_();
+    return { status: 'success', message: 'تم حفظ بيانات العملية', code: code, checkpoint: 'header' };
+  }
+
+  function purchasingCheckpointLines_(data, user, dbId) {
+    var d = data || {}, code = String(d.code || '').trim(), originalCode = String(d.originalCode || '').trim(), lines = d.lines || [];
+    if (!code) throw new Error('الكود (Code) مطلوب');
+    if (!Array.isArray(lines) || !lines.length) throw new Error('يجب إضافة صنف واحد على الأقل');
+    var missing = []; lines.forEach(function (l, i) { if (!String((l && l.movement_type) || '').trim()) missing.push(i + 1); });
+    if (missing.length) throw new Error('نوع الحركة مطلوب لكل صنف — الأصناف رقم: ' + missing.join('، '));
+    if (!vfCanSeeCost_(user)) throw new Error('لا تملك صلاحية عرض أو تعديل التكاليف (valley_cost_view) — لا يمكن حفظ عملية شراء.');
+    settingsEnsureSheet_(dbId, PURCHASING_COSTING_SHEET, PURCHASING_COSTING_HEADERS); settingsEnsureSheet_(dbId, PURCHASING_LINE_SHEET, PURCHASING_LINE_HEADERS);
+    var headers = getAllRecords_(dbId, PURCHASING_COSTING_SHEET), header = headers.find(function (r) { return String(r.Code) === code; });
+    if (!header) throw new Error('عملية الشراء غير موجودة — احفظ البيانات الأساسية أولاً');
+    if (String(header.approval_status || '').toLowerCase() === 'approved' || String(header.quality_approval_status || '').toLowerCase() === 'approved') throw new Error('لا يمكن تعديل عملية شراء معتمدة. يلزم إجراء إعادة فتح مصرح به خارج الحفظ العادي.');
+    var lineSheet = getSheet_(PURCHASING_LINE_SHEET, dbId); deleteRowsByCriteria_(lineSheet, 'code', originalCode && originalCode !== code ? originalCode : code);
+    var shippingType = header['Shipping Type'] || '', receiptDateStr = header['Reciept Date'] || '', expiryDateStr = '', rd = receiptDateStr ? new Date(receiptDateStr) : null;
+    if (rd && !isNaN(rd.getTime())) { rd.setDate(rd.getDate() + 720); expiryDateStr = Utilities.formatDate(rd, Session.getScriptTimeZone(), 'yyyy-MM-dd'); }
+    var maps = lines.map(function (l) {
+      var place = (shippingType === 'CIF' || shippingType === 'FOB' || shippingType === 'C&F') ? 'مستورد' : (shippingType === 'محلي' ? 'محلي' : ''), qty = Number(l.qty) || 0, unit = Number(l.unit_price) || 0;
+      return { unique_id: uid16_(), code: code, product: l.product || '', product_category: '', vendor: header['Supplier Name'] || l.vendor || '', lot_identification: l.lot_identification || '', qty: qty, unit_price: unit, other_cost: Number(l.other_cost) || 0, total_cost: Number(l.total_cost) || 0, sales_qty: Number(l.sales_qty) || 0, sales_value: Number(l.sales_value) || 0, sales_value_amount: Number(l.sales_value_amount) || 0, unit_cost: Number(l.unit_cost) || 0, movement_type: l.movement_type || '', movement_place: place, receipt_date: l.receipt_date || receiptDateStr, invoice_date: l.invoice_date || receiptDateStr, 'Production date': l['Production date'] || receiptDateStr, 'Expiry date': l['Expiry date'] || expiryDateStr, currency: l.currency || header.Currency || '', exchange_rate: Number(l.exchange_rate) || Number(header['Exchange rate']) || 0, cost_currency: unit * qty, user: (user && user.email) || '' };
+    });
+    var lineHeaders = getHeaders_(lineSheet), startId = getNextIdBatch_(dbId, PURCHASING_LINE_SHEET, maps.length), startRow = lineSheet.getLastRow() + 1;
+    function col(name) { var i = lineHeaders.findIndex(function (h) { return String(h).trim().toLowerCase() === name; }); if (i < 0) return null; var n = i + 1, s = ''; while (n) { var m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26); } return s; }
+    var CL = { id: col('id'), code: col('code'), product: col('product'), receipt: col('receipt_date') }, canFormula = CL.id && CL.code && CL.product && CL.receipt;
+    var matrix = maps.map(function (m, i) { var row = startRow + i; if (canFormula) { m.movement_code = '=CONCATENATE(' + CL.id + row + ',"-",' + CL.code + row + ',"-",vlookup(' + CL.product + row + ',valley_products!$A:$F,2,0),"-",TEXT(' + CL.receipt + row + ',"DD/MM/YYYY"))'; m.product_category = '=vlookup(VLOOKUP(' + CL.product + row + ',valley_products!A:N,14,0),valley_categories!A:B,2,0)'; } return lineHeaders.map(function (h) { var n = String(h).trim(); if (n.toLowerCase() === 'id') return startId + i; if (m[n] !== undefined) return m[n]; var low = n.toLowerCase(); return m[low] !== undefined ? m[low] : ''; }); });
+    lineSheet.getRange(startRow, 1, matrix.length, lineHeaders.length).setValues(matrix); noteMutation_(lineSheet); vfFlush_();
+    try { logHistory_(dbId, PURCHASING_LINE_SHEET, 'checkpoint_lines_' + code, code, (user && user.email) || '', 'update', { code: code, line_count: matrix.length }, null); } catch (e) {}
+    return { status: 'success', message: 'تم حفظ الأصناف', code: code, checkpoint: 'lines', line_count: matrix.length };
+  }
+
+  function saveValleyPurchasingHeaderCheckpoint_(data, user, dbId) { return purchasingCheckpointHeader_(data, user, dbId); }
+  function saveValleyPurchasingLinesCheckpoint_(data, user, dbId) { return purchasingCheckpointLines_(data, user, dbId); }
+
+  /* Read-only fast path for the final commit. When both checkpoints already
+   * match the submitted payload, return the existing record without rewriting
+   * either table. Post-checkpoint edits deliberately miss this comparison and
+   * use the unchanged full-save path. */
+  function purchasingCommitAlreadyApplied_(data, dbId) {
+    var d = data || {}, hdr = d.header || {}, code = String(hdr.Code || '').trim();
+    if (!code || !Array.isArray(d.lines) || !d.lines.length) return null;
+    var rows = getAllRecords_(dbId, PURCHASING_COSTING_SHEET), rec = rows.find(function (r) { return String(r.Code) === code; });
+    if (!rec) return null;
+    function same(a, b) {
+      if (a instanceof Date && b instanceof Date) return a.getTime() === b.getTime();
+      if (a instanceof Date) a = a.toISOString().slice(0, 10);
+      if (b instanceof Date) b = b.toISOString().slice(0, 10);
+      if (a === '' || a === null || a === undefined) return b === '' || b === null || b === undefined;
+      if (b === '' || b === null || b === undefined) return false;
+      var na = Number(a), nb = Number(b);
+      if (String(a).trim() !== '' && String(b).trim() !== '' && !isNaN(na) && !isNaN(nb)) return Math.abs(na - nb) <= 0.000001;
+      return String(a).slice(0, 10) === String(b).slice(0, 10);
+    }
+    var headerMatches = true;
+    Object.keys(hdr).forEach(function (k) { if (headerMatches && rec[k] !== undefined && !same(rec[k], hdr[k])) headerMatches = false; });
+    if (!headerMatches) return null;
+    var saved = getAllRecords_(dbId, PURCHASING_LINE_SHEET).filter(function (r) { return String(r.code) === code; });
+    if (saved.length !== d.lines.length) return null;
+    var keys = ['product', 'qty', 'unit_price', 'other_cost', 'total_cost', 'movement_type', 'lot_identification', 'receipt_date', 'invoice_date', 'Production date', 'Expiry date'];
+    for (var i = 0; i < saved.length; i++) for (var j = 0; j < keys.length; j++) { var k = keys[j]; if (!same(saved[i][k], d.lines[i][k])) return null; }
+    return rec;
+  }
+
   function saveValleyPurchasingCosting_(data, user, dbId) {
     var d = data || {};
     var hdr = d.header || {};
@@ -4445,10 +5253,26 @@ const ValleyFoodsHRModules = (function () {
 
     settingsEnsureSheet_(dbId, PURCHASING_COSTING_SHEET, PURCHASING_COSTING_HEADERS);
     settingsEnsureSheet_(dbId, PURCHASING_LINE_SHEET, PURCHASING_LINE_HEADERS);
+    if (d.commitOnly) {
+      var committed = purchasingCommitAlreadyApplied_(d, dbId);
+      if (committed) return { status: 'success', message: 'تم الحفظ', code: code, record: committed, committed: true };
+    }
     var sheet = getSheet_(PURCHASING_COSTING_SHEET, dbId);
     var rows = getAllRecords_(dbId, PURCHASING_COSTING_SHEET);
     var existingMatch = rows.filter(function (r) { return String(r.Code) === code; });
     var isEdit = originalCode !== '' && rows.some(function (r) { return String(r.Code) === originalCode; });
+    var existingRecord = isEdit ? rows.find(function (r) { return String(r.Code) === originalCode; }) : null;
+
+    /* Approval is a server-side business lock, never just a disabled client
+     * button. Reopen is intentionally absent because the current schema has no
+     * dedicated audited reopen state/field. */
+    if (existingRecord) {
+      var financialApproval = String(existingRecord.approval_status || '').trim().toLowerCase();
+      var qualityApproval = String(existingRecord.quality_approval_status || '').trim().toLowerCase();
+      if (financialApproval === 'approved' || qualityApproval === 'approved') {
+        throw new Error('لا يمكن تعديل عملية شراء معتمدة. يلزم إجراء إعادة فتح مصرح به خارج الحفظ العادي.');
+      }
+    }
 
     if (!isEdit) {
       if (existingMatch.length) throw new Error('الكود (Code) مكرر — يجب أن يكون فريداً');
@@ -4483,7 +5307,8 @@ const ValleyFoodsHRModules = (function () {
     var _oldPur = null;
     if (isEdit) {
       _oldPur = rows.find(function(r){ return String(r.Code)===String(originalCode); }) || null;
-      updateRowByCriteria_(sheet, 'Code', originalCode, record);
+      /* Row-edit repair (5.4): formula-safe patch for the purchase header. */
+      patchRowByCriteria_(sheet, 'Code', originalCode, record);
       try{ var _newPur = Object.assign({}, _oldPur||{}, record); logHistory_(dbId, PURCHASING_COSTING_SHEET, _oldPur&&_oldPur.record_uid ? _oldPur.record_uid : ('update_'+PURCHASING_COSTING_SHEET+'_'+originalCode), originalCode, (user&&user.email)||'', 'update', _newPur, _oldPur) }catch(e){}
     } else {
       record.unique_id = uid16_();
@@ -4656,7 +5481,8 @@ const ValleyFoodsHRModules = (function () {
     var rows = getAllRecords_(dbId, PURCHASING_COSTING_SHEET);
     if (!rows.some(function (r) { return String(r.Code) === code; })) throw new Error('عملية الشراء غير موجودة');
     var _oldAppPur = rows.find(function(r){ return String(r.Code)===String(code); }) || null;
-    updateRowByCriteria_(sheet, 'Code', code, {
+    /* Row-edit repair (5.4): formula-safe patch for purchase approval. */
+    patchRowByCriteria_(sheet, 'Code', code, {
       approval_status: 'Approved',
       approval: (user && user.email) || '',
       approval_time: new Date()
@@ -4673,7 +5499,8 @@ const ValleyFoodsHRModules = (function () {
     var rows = getAllRecords_(dbId, PURCHASING_COSTING_SHEET);
     if (!rows.some(function (r) { return String(r.Code) === code; })) throw new Error('عملية الشراء غير موجودة');
     var _oldQAppPur = rows.find(function(r){ return String(r.Code)===String(code); }) || null;
-    updateRowByCriteria_(sheet, 'Code', code, {
+    /* Row-edit repair (5.4): formula-safe patch for purchase quality approval. */
+    patchRowByCriteria_(sheet, 'Code', code, {
       quality_approval_status: 'Approved',
       quality_approval: (user && user.email) || '',
       quality_approval_time: new Date()
@@ -4682,9 +5509,12 @@ const ValleyFoodsHRModules = (function () {
     return { status: 'success', message: 'تم اعتماد الجودة' };
   }
 
-  ValleyFoods.register('get_valley_purchasing_costing', getValleyPurchasingCosting_);
-  ValleyFoods.register('get_valley_purchasing_options', getValleyPurchasingOptions_);
-  ValleyFoods.register('get_valley_purchasing_lines', getValleyPurchasingLines_);
+    ValleyFoods.register('get_valley_purchasing_costing', getValleyPurchasingCosting_);
+    ValleyFoods.register('get_valley_purchasing_report', getValleyPurchasingReport_);
+    ValleyFoods.register('get_valley_purchasing_options', getValleyPurchasingOptions_);
+    ValleyFoods.register('get_valley_purchasing_lines', getValleyPurchasingLines_);
+  ValleyFoods.register('save_valley_purchasing_header_checkpoint', saveValleyPurchasingHeaderCheckpoint_);
+  ValleyFoods.register('save_valley_purchasing_lines_checkpoint', saveValleyPurchasingLinesCheckpoint_);
   ValleyFoods.register('save_valley_purchasing_costing', saveValleyPurchasingCosting_);
   ValleyFoods.register('delete_valley_purchasing_costing', deleteValleyPurchasingCosting_);
   ValleyFoods.register('approve_valley_purchasing_costing', approveValleyPurchasingCosting_);
@@ -4826,11 +5656,18 @@ const ValleyFoodsHRModules = (function () {
       }
     });
 
-    /* Product maps */
-    var productName = {}, partyProductIds = {};
+    /* Product maps (meta is additive: category/unit/client for the statement
+       sections; the name/id maps below are untouched). */
+    var productName = {}, partyProductIds = {}, productMeta = {};
     safeRows_(dbId, FIN_PRODUCTS_SHEET).forEach(function (p) {
-      productName[String(p.id)] = String(p.name_ar || '');
-      if (String(p.client_id || '').trim() === clientId) partyProductIds[String(p.id)] = true;
+      var pid = String(p.id);
+      productName[pid] = String(p.name_ar || '');
+      productMeta[pid] = {
+        category: String(p.category == null ? '' : p.category).trim(),
+        unit: String(p.unit || p.price_unit || ''),
+        client_id: String(p.client_id == null ? '' : p.client_id).trim()
+      };
+      if (String(p.client_id || '').trim() === clientId) partyProductIds[pid] = true;
     });
 
     /* Sales products: latest price map + line items by header id + uid→pid */
@@ -4937,22 +5774,278 @@ const ValleyFoodsHRModules = (function () {
 
     transactions.sort(function (a, b) { return a.sort_key - b.sort_key; });
 
-    /* Stock valuation rows for the party's own products */
+    /* Stock valuation rows for the party's own products. Valuation formula
+       unchanged (qty from valley_current_products, latest selling price);
+       product_id/category ride along so the modal can partition the rows. */
     var stockRows = [];
     try {
       vfCurrentProducts_(dbId).forEach(function (cs) {
         var pid = String(cs.product_id || '').trim();
         var qty = Number(cs.current_qty || 0);
         if (!partyProductIds[pid] || qty <= 0) return;
+        var meta = productMeta[pid] || { category: '', unit: '' };
         stockRows.push({
+          product_id: pid,
           name: productName[pid] || pid,
           qty: qty,
-          latest_price: latestPrice[pid] ? latestPrice[pid].price : 0
+          latest_price: latestPrice[pid] ? latestPrice[pid].price : 0,
+          category: meta.category,
+          unit: meta.unit
         });
       });
     } catch (e) {}
 
-    return { status: 'success', party: party, transactions: transactions, stock_rows: stockRows };
+    /* Factory vs packaging partition: category 4/23 go to مخزون المصنع,
+       everything else to مخزون التعبئة والتغليف والأدوات. A partition, so
+       each product appears in exactly one section. */
+    var stockFactoryRows = [], stockPackagingRows = [];
+    stockRows.forEach(function (r) {
+      if (r.category === '4' || r.category === '23') stockFactoryRows.push(r);
+      else stockPackagingRows.push(r);
+    });
+
+    /* Manufacturing agreements for this client, derived fresh on every
+       statement call — never a stored balance, so reloads cannot stack. */
+    var mfgAgreements = mfgAgreementsForClient_(dbId, clientId, productName, productMeta);
+
+    /* Client-scoped product selector options for new agreement rows. */
+    var clientProducts = [];
+    Object.keys(partyProductIds).forEach(function (pid) {
+      var meta = productMeta[pid] || {};
+      clientProducts.push({
+        value: pid,
+        label: productName[pid] || pid,
+        unit: meta.unit || '',
+        category: meta.category || ''
+      });
+    });
+
+    return {
+      status: 'success',
+      party: party,
+      transactions: transactions,
+      stock_rows: stockRows,
+      stock_factory_rows: stockFactoryRows,
+      stock_packaging_rows: stockPackagingRows,
+      agreements: mfgAgreements.list,
+      agreements_subtotal: mfgAgreements.subtotal,
+      client_products: clientProducts
+    };
+  }
+
+  /* ---------- MANUFACTURING AGREEMENTS (اتفاقات تحت التصنيع) ----------
+   * Per-client editable rows inside the كشف حساب modal. Stored in
+   * valley_manufacturing_agreements (created on first use via
+   * settingsEnsureSheet_, same convention as the FIN sheets).
+   *
+   * Statuses: draft (no balance effect), active (affects balance),
+   * cancelled (preserved for audit, no balance effect), completed
+   * (future; affects balance like active).
+   *
+   * The subtotal is DERIVED on every read (SUM of active/completed line
+   * totals). Nothing ever writes it back into a balance sheet, so repeated
+   * saves and reloads cannot double-count. */
+  const MFG_AGREE_SHEET = 'valley_manufacturing_agreements';
+  const MFG_AGREE_HEADERS = ['unique_id','id','client_id','product_id','qty','unit_price','total','status','created_by','created_at','updated_by','updated_at','cancelled_by','cancelled_at'];
+  const MFG_AGREE_FACTORY_CATS = ['4', '23'];
+
+  function mfgAgreeRound2_(n) { return Math.round((Number(n) || 0) * 100) / 100; }
+  function mfgAgreeRoundQty_(n) { return Math.round((Number(n) || 0) * 1000) / 1000; }
+  function mfgAgreeAffectsBalance_(status) {
+    var s = String(status || '').trim().toLowerCase();
+    return s === 'active' || s === 'completed';
+  }
+  function mfgAgreeRows_(dbId) {
+    settingsEnsureSheet_(dbId, MFG_AGREE_SHEET, MFG_AGREE_HEADERS);
+    return safeRows_(dbId, MFG_AGREE_SHEET);
+  }
+  function mfgAgreePublicRow_(r, productName, productMeta) {
+    var pid = String(r.product_id == null ? '' : r.product_id);
+    var meta = (productMeta && productMeta[pid]) || {};
+    return {
+      unique_id: String(r.unique_id || ''),
+      client_id: String(r.client_id == null ? '' : r.client_id),
+      product_id: pid,
+      product_name: (productName && productName[pid]) || pid,
+      unit: meta.unit || '',
+      qty: Number(r.qty) || 0,
+      unit_price: Number(r.unit_price) || 0,
+      total: mfgAgreeRound2_(r.total),
+      status: String(r.status || 'draft'),
+      created_at: r.created_at || ''
+    };
+  }
+  /* All non-cancelled rows for the client + the balance-affecting subtotal. */
+  function mfgAgreementsForClient_(dbId, clientId, productName, productMeta) {
+    var list = [];
+    mfgAgreeRows_(dbId).forEach(function (r) {
+      if (String(r.client_id == null ? '' : r.client_id).trim() !== String(clientId)) return;
+      if (String(r.status || '').trim().toLowerCase() === 'cancelled') return;
+      list.push(mfgAgreePublicRow_(r, productName, productMeta));
+    });
+    var subtotal = 0;
+    list.forEach(function (r) {
+      if (mfgAgreeAffectsBalance_(r.status)) subtotal += mfgAgreeRound2_(r.qty * r.unit_price);
+    });
+    return { list: list, subtotal: mfgAgreeRound2_(subtotal) };
+  }
+  /* Shared validation: product must exist AND belong to the client (server
+     re-reads valley_products; the client payload is never trusted). */
+  function mfgAgreeCheckProduct_(dbId, clientId, productId) {
+    var found = null;
+    safeRows_(dbId, FIN_PRODUCTS_SHEET).forEach(function (p) {
+      if (String(p.id) === String(productId)) found = p;
+    });
+    if (!found) throw new Error('الصنف غير موجود');
+    if (String(found.client_id == null ? '' : found.client_id).trim() !== String(clientId)) {
+      throw new Error('الصنف لا يتبع هذا العميل');
+    }
+    return found;
+  }
+  function mfgAgreeCheckMoney_(qty, unitPrice) {
+    var q = Number(qty), pr = Number(unitPrice);
+    if (!isFinite(q) || !isFinite(pr)) throw new Error('الكمية والسعر قيمان رقميتان مطلوبتان');
+    if (q <= 0) throw new Error('الكمية يجب أن تكون أكبر من صفر');
+    if (pr < 0) throw new Error('السعر لا يمكن أن يكون سالباً');
+    return { qty: mfgAgreeRoundQty_(q), unit_price: mfgAgreeRound2_(pr) };
+  }
+
+  /* Create or update one agreement row. Updates are keyed by unique_id, so a
+     retried save is idempotent; creates carry no unique_id and get one. */
+  function saveValleyMfgAgreement_(data, user, dbId) {
+    var d = data || {};
+    var clientId = String(d.client_id == null ? '' : d.client_id).trim();
+    var productId = String(d.product_id == null ? '' : d.product_id).trim();
+    if (!clientId) throw new Error('معرّف العميل مطلوب');
+    if (!productId) throw new Error('الصنف مطلوب');
+    var actor = (user && user.email) || '';
+    mfgAgreeCheckProduct_(dbId, clientId, productId);
+    var money = mfgAgreeCheckMoney_(d.qty, d.unit_price);
+    var total = mfgAgreeRound2_(money.qty * money.unit_price);
+
+    var uid = String(d.unique_id || '').trim();
+    var status = String(d.status || 'draft').trim().toLowerCase();
+    if (['draft', 'active', 'completed'].indexOf(status) === -1) {
+      throw new Error('الحالة غير صالحة');
+    }
+
+    var result;
+    executeWithLock_(function () {
+      settingsEnsureSheet_(dbId, MFG_AGREE_SHEET, MFG_AGREE_HEADERS);
+      var sheet = getSheet_(MFG_AGREE_SHEET, dbId);
+      var rows = getAllRecords_(dbId, MFG_AGREE_SHEET);
+      if (uid) {
+        var existing = null;
+        rows.forEach(function (r) { if (String(r.unique_id) === uid) existing = r; });
+        if (!existing) throw new Error('السجل غير موجود');
+        if (String(existing.status || '').trim().toLowerCase() === 'cancelled') {
+          throw new Error('السجل ملغي ولا يمكن تعديله');
+        }
+        if (String(existing.client_id == null ? '' : existing.client_id).trim() !== clientId) {
+          throw new Error('السجل لا يتبع هذا العميل');
+        }
+        mfgAgreeCheckProduct_(dbId, clientId, productId);
+        var updates = {
+          product_id: productId,
+          qty: money.qty,
+          unit_price: money.unit_price,
+          total: total,
+          status: status,
+          updated_by: actor,
+          updated_at: new Date()
+        };
+        if (!updateRowByCriteria_(sheet, 'unique_id', uid, updates)) throw new Error('تعذر حفظ السجل');
+        try { logHistory_(dbId, MFG_AGREE_SHEET, existing.record_uid || ('update_' + MFG_AGREE_SHEET + '_' + uid), uid, actor, 'update', updates, existing); } catch (e) {}
+        result = uid;
+      } else {
+        /* Double-submit guard: an identical active row is a retried create,
+           not a second agreement — point at the existing row instead. */
+        var dup = null;
+        rows.forEach(function (r) {
+          if (String(r.client_id == null ? '' : r.client_id).trim() !== clientId) return;
+          if (!mfgAgreeAffectsBalance_(r.status)) return;
+          if (String(r.product_id) !== productId) return;
+          if (mfgAgreeRoundQty_(r.qty) !== money.qty) return;
+          if (mfgAgreeRound2_(r.unit_price) !== money.unit_price) return;
+          dup = r;
+        });
+        if (dup && mfgAgreeAffectsBalance_(status)) {
+          throw new Error('يوجد اتفاق مطابق بالفعل لهذا الصنف');
+        }
+        var map = {
+          unique_id: uid16_(),
+          client_id: clientId,
+          product_id: productId,
+          qty: money.qty,
+          unit_price: money.unit_price,
+          total: total,
+          status: status,
+          created_by: actor,
+          created_at: new Date(),
+          updated_by: actor,
+          updated_at: new Date(),
+          cancelled_by: '',
+          cancelled_at: ''
+        };
+        var res = addRecord_(dbId, MFG_AGREE_SHEET, map, ['client_id', 'product_id']);
+        try { logHistory_(dbId, MFG_AGREE_SHEET, map.record_uid || ('create_' + MFG_AGREE_SHEET + '_' + map.unique_id), map.unique_id, actor, 'create', map, null); } catch (e) {}
+        result = map.unique_id;
+      }
+    });
+
+    /* Fresh derived lists, so the modal shows server-canonical totals. */
+    var productName = {}, productMeta = {};
+    safeRows_(dbId, FIN_PRODUCTS_SHEET).forEach(function (p) {
+      var pid = String(p.id);
+      productName[pid] = String(p.name_ar || '');
+      productMeta[pid] = { unit: String(p.unit || p.price_unit || '') };
+    });
+    var fresh = mfgAgreementsForClient_(dbId, clientId, productName, productMeta);
+    return {
+      status: 'success',
+      message: 'تم حفظ الاتفاق',
+      unique_id: result,
+      agreements: fresh.list,
+      agreements_subtotal: fresh.subtotal
+    };
+  }
+
+  /* Cancel preserves the row for audit (cancelled_by/at); cancelled rows
+     never affect the balance and cannot be edited afterwards. */
+  function cancelValleyMfgAgreement_(data, user, dbId) {
+    var d = data || {};
+    var uid = String(d.unique_id || '').trim();
+    if (!uid) throw new Error('معرّف السجل مطلوب');
+    var actor = (user && user.email) || '';
+    var clientId = '';
+    executeWithLock_(function () {
+      settingsEnsureSheet_(dbId, MFG_AGREE_SHEET, MFG_AGREE_HEADERS);
+      var sheet = getSheet_(MFG_AGREE_SHEET, dbId);
+      var rows = getAllRecords_(dbId, MFG_AGREE_SHEET);
+      var existing = null;
+      rows.forEach(function (r) { if (String(r.unique_id) === uid) existing = r; });
+      if (!existing) throw new Error('السجل غير موجود');
+      if (String(existing.status || '').trim().toLowerCase() === 'cancelled') {
+        throw new Error('السجل ملغي بالفعل');
+      }
+      clientId = String(existing.client_id == null ? '' : existing.client_id).trim();
+      var updates = { status: 'cancelled', updated_by: actor, updated_at: new Date(), cancelled_by: actor, cancelled_at: new Date() };
+      if (!updateRowByCriteria_(sheet, 'unique_id', uid, updates)) throw new Error('تعذر إلغاء السجل');
+      try { logHistory_(dbId, MFG_AGREE_SHEET, existing.record_uid || ('cancel_' + MFG_AGREE_SHEET + '_' + uid), uid, actor, 'cancel', updates, existing); } catch (e) {}
+    });
+    var productName = {}, productMeta = {};
+    safeRows_(dbId, FIN_PRODUCTS_SHEET).forEach(function (p) {
+      var pid = String(p.id);
+      productName[pid] = String(p.name_ar || '');
+      productMeta[pid] = { unit: String(p.unit || p.price_unit || '') };
+    });
+    var fresh = mfgAgreementsForClient_(dbId, clientId, productName, productMeta);
+    return {
+      status: 'success',
+      message: 'تم إلغاء الاتفاق',
+      agreements: fresh.list,
+      agreements_subtotal: fresh.subtotal
+    };
   }
 
   /* [P2] All-parties ledger balance, for the الرصيد الحالي column on vf_parties.
@@ -5184,7 +6277,7 @@ const ValleyFoodsHRModules = (function () {
       materials.push({
         raw_material_id: String(s.raw_material_id || ''),
         raw_material_name: String(s.raw_material_name || ''),
-        required_qty: Math.ceil(raw / 10) * 10,
+        required_qty: Math.round(raw * 1000) / 1000,
         work_center_name: String(s.work_center_name || '')
       });
     });
@@ -5328,9 +6421,14 @@ const ValleyFoodsHRModules = (function () {
          written, so a violation aborts cleanly with no orphan header. */
       (function assertFooterBalances_() {
         var needByBatch = {};
-        function need_(buid, q) {
+        var needOutByBatch = {}, needConsByBatch = {};
+        function need_(buid, q, isOut) {
           buid = String(buid || '').trim(); q = Number(q) || 0;
-          if (buid && q > 0) needByBatch[buid] = Math.round(((needByBatch[buid] || 0) + q) * 1000) / 1000;
+          if (buid && q > 0) {
+            needByBatch[buid] = Math.round(((needByBatch[buid] || 0) + q) * 1000) / 1000;
+            var src = isOut ? needOutByBatch : needConsByBatch;
+            src[buid] = Math.round(((src[buid] || 0) + q) * 1000) / 1000;
+          }
         }
         var nameMap = {};
         try { getAllRecords_(dbId, FIN_PRODUCTS_SHEET).forEach(function (p) { nameMap[String(p.id)] = String(p.name_ar || p.id); }); } catch (eNm) {}
@@ -5343,17 +6441,10 @@ const ValleyFoodsHRModules = (function () {
           if (Math.abs(paySum - payQty) > 0.01) {
             throw new Error('مجموع الدفعات للصنف (' + (nameMap[opid] || opid || '?') + ') يجب أن يساوي كمية البند. مجموع الدفعات: ' + paySum + '، الكمية: ' + payQty);
           }
-          /* normalize the ceil-to-10 parent rounding into the largest footer so stored sums match product_qty */
-          var storedQty = Math.ceil((Number(o.qty) || 0) / 10) * 10;
-          var delta = Math.round((storedQty - paySum) * 1000) / 1000;
-          if (Math.abs(delta) > 0.0000001 && rows.length) {
-            var mi = 0, mq = -Infinity;
-            rows.forEach(function (r, ix) { if (r.qty > mq) { mq = r.qty; mi = ix; } });
-            rows[mi].qty = Math.round((rows[mi].qty + delta) * 1000) / 1000;
-          }
-          rows.forEach(function (r) { need_(r.batch, r.qty); });
+          /* numbers are stored exactly as sent — no rounding-up into any row */
+          rows.forEach(function (r) { need_(r.batch, r.qty, true); });
         });
-        (Array.isArray(consumption) ? consumption : []).forEach(function (cm) { need_(cm.batch_uid, cm.qty); });
+        (Array.isArray(consumption) ? consumption : []).forEach(function (cm) { need_(cm.batch_uid, cm.qty, false); });
         var batchIds = Object.keys(needByBatch);
         if (!batchIds.length) return;
         /* available = current_qty + what THIS order already holds on the sheet.
@@ -5378,7 +6469,7 @@ const ValleyFoodsHRModules = (function () {
                 });
               });
             } catch (eLbl) {}
-            throw new Error('الكمية المطلوبة من الدفعة (' + label + ') تتجاوز المتاح. المطلوب: ' + needByBatch[buid] + '، المتاح: ' + avail);
+            throw new Error('الكمية المطلوبة من الدفعة (' + label + ') تتجاوز المتاح. المطلوب: ' + needByBatch[buid] + ' (مخرجات: ' + (needOutByBatch[buid] || 0) + ' + استهلاك: ' + (needConsByBatch[buid] || 0) + ')، المتاح: ' + avail);
           }
         });
       })();
@@ -5498,7 +6589,7 @@ const ValleyFoodsHRModules = (function () {
         m6['valley_manufacture_header_id'] = moUid;
         m6['product_id'] = String(o.product_id).trim();
         m6['product_name'] = prodNameMap[String(o.product_id)] || '';
-        m6['product_qty'] = Math.ceil((Number(o.qty) || 0) / 10) * 10;
+        m6['product_qty'] = Math.round((Number(o.qty) || 0) * 1000) / 1000;
         m6['cost_unit'] = o.cost_unit != null ? o.cost_unit : '';
         m6['total_cost'] = o.total_cost != null ? o.total_cost : '';
         m6['user'] = (user && user.email) || '';
@@ -5567,23 +6658,13 @@ const ValleyFoodsHRModules = (function () {
       outputs.forEach(function (o, oi) {
         var outUid = outputUidMap[oi];
         var footers = (Array.isArray(o.footers) ? o.footers : []).filter(function (f) { return f && String(f.item || '').trim(); });
-        var storedQty = Math.ceil((Number(o.qty) || 0) / 10) * 10;
-        var sumF = Math.round(footers.reduce(function (t, f) { return t + (Number(f.qty) || 0); }, 0) * 1000) / 1000;
-        var delta = Math.round((storedQty - sumF) * 1000) / 1000;
-        var deltaIx = -1;
-        if (Math.abs(delta) > 0.0000001 && footers.length) {
-          var mq = -Infinity;
-          footers.forEach(function (f, ix) { var q = Number(f.qty) || 0; if (q > mq) { mq = q; deltaIx = ix; } });
-        }
-        footers.forEach(function (f, fix) {
+        footers.forEach(function (f) {
           var m7 = {};
           m7['unique_id'] = uid16Hex_();
           m7['valley_manufacture_header_product_id'] = outUid || moUid;
           m7['item'] = String(f.item || '').trim();
           m7['item_code'] = String(f.item_code || '');
-          var fq = Math.round((Number(f.qty) || 0) * 1000) / 1000;
-          if (fix === deltaIx) fq = Math.round((fq + delta) * 1000) / 1000;
-          m7['qty'] = fq;
+          m7['qty'] = Math.round((Number(f.qty) || 0) * 1000) / 1000;
           /* U-47: server-resolved, never f.unit_cost. */
           m7['cost_unit'] = footerBatchCost[m7['item']] || 0;
           m7['created_at'] = new Date();
@@ -5694,7 +6775,8 @@ const ValleyFoodsHRModules = (function () {
         m['total_pause_duration'] = (w.total_pause_duration !== '' && w.total_pause_duration != null) ? Number(w.total_pause_duration) : (old ? Number(old.total_pause_duration || 0) : 0);
         /* work_center_cost / total_cost are sheet-computed — written as formulas below */
         if (old) {
-          updateRowByCriteria_(sheetWC, 'unique_id', editingUid, m);
+          /* Row-edit repair (5.4): formula-safe patch; formulas reinstalled below. */
+          patchRowByCriteria_(sheetWC, 'unique_id', editingUid, m);
           keepWcUids.push(editingUid);
         } else {
           m['unique_id'] = uid16Hex_();
@@ -5950,7 +7032,7 @@ const ValleyFoodsHRModules = (function () {
         materials.push({
           raw_material_id: String(s.raw_material_id || ''),
           raw_material_name: String(s.raw_material_name || ''),
-          required_qty: Math.ceil(raw / 10) * 10
+          required_qty: Math.round(raw * 1000) / 1000
         });
       }
     });
@@ -6336,6 +7418,12 @@ const ValleyFoodsHRModules = (function () {
     }
 
     var _oldWO = editingUid ? (rows.find(function(r){ return String(r.unique_id)===String(editingUid); }) || null) : null;
+    /* Row-edit repair (5.2): the edited operation must belong to the stated
+       parent order; a cross-order unique_id is a missing record, not an edit. */
+    if (editingUid) {
+      if (!_oldWO) throw new Error('السجل غير موجود');
+      if (String(_oldWO.valley_manufacture_header_id || '').trim() !== moUid) throw new Error('السجل غير موجود');
+    }
     executeWithLock_(function () {
       var map = {};
       map['operation_status'] = status;
@@ -6345,8 +7433,31 @@ const ValleyFoodsHRModules = (function () {
       map['notes'] = String(d.notes || '').trim();
 
       if (editingUid) {
-        updateRowByCriteria_(sheet, 'unique_id', editingUid, map);
-        try{ var _newWO = Object.assign({}, _oldWO||{}, map); logHistory_(dbId, MFG_WORKOPS_SHEET, _oldWO&&_oldWO.record_uid ? _oldWO.record_uid : ('update_'+MFG_WORKOPS_SHEET+'_'+editingUid), editingUid, (user&&user.email)||'', 'update', _newWO, _oldWO) }catch(e){}
+        /* Manual time corrections write only the supplied times (and notes when
+           the caller actually sends them — the inline editor has no notes
+           input, so an absent key preserves the stored notes). Status
+           transitions belong to control_valley_mfg_workop_, and hours/costs
+           are sheet formulas reinstalled below through the trusted map —
+           caller-supplied actual_hours/costs are never stored. */
+        var editMap = {
+          start_time: map['start_time'],
+          end_time: map['end_time']
+        };
+        if (d.notes !== undefined && d.notes !== null) editMap['notes'] = String(d.notes).trim();
+        if (!patchRowByCriteria_(sheet, 'unique_id', editingUid, editMap)) throw new Error('السجل غير موجود');
+        try {
+          var _freshWO = getAllRecords_(dbId, MFG_WORKOPS_SHEET);
+          for (var _wi = 0; _wi < _freshWO.length; _wi++) {
+            /* getAllRecords_ order matches sheet order; row numbers are 1-based
+               with a header row, so index+2 locates the edited row for the
+               trusted formula reinstall. */
+            if (String(_freshWO[_wi].unique_id) === String(editingUid)) {
+              writeRowFormulas_(sheet, headers, _wi + 2, mfgWorkCenterFormulaMap_(_wi + 2));
+              break;
+            }
+          }
+        } catch (eWF) {}
+        try{ var _newWO = Object.assign({}, _oldWO||{}, editMap); logHistory_(dbId, MFG_WORKOPS_SHEET, _oldWO&&_oldWO.record_uid ? _oldWO.record_uid : ('update_'+MFG_WORKOPS_SHEET+'_'+editingUid), editingUid, (user&&user.email)||'', 'update', _newWO, _oldWO) }catch(e){}
       } else {
         var uid2 = Utilities.getUuid();
         map['unique_id'] = uid2;
@@ -6439,7 +7550,9 @@ const ValleyFoodsHRModules = (function () {
     }
 
     executeWithLock_(function () {
-      updateRowByCriteria_(getSheet_(MFG_WORKOPS_SHEET, dbId), 'unique_id', workopUid, map);
+      /* Row-edit repair (5.4): formula-safe patch with a checked result — a
+         missing row throws instead of reporting success. */
+      if (!patchRowByCriteria_(getSheet_(MFG_WORKOPS_SHEET, dbId), 'unique_id', workopUid, map)) throw new Error('السجل غير موجود');
     });
     try{ var _newWC = Object.assign({}, found.row||{}, map); logHistory_(dbId, MFG_WORKOPS_SHEET, found.row.record_uid || ('update_'+MFG_WORKOPS_SHEET+'_'+workopUid), workopUid, (user&&user.email)||'', 'update', _newWC, found.row) }catch(e){}
     var upd = {
@@ -6477,6 +7590,9 @@ const ValleyFoodsHRModules = (function () {
     vfBustRefs_(dbId, ['work_centers']);
     var d = data || {};
     var editing = !!(d.unique_id && String(d.unique_id).trim());
+    /* Row-edit repair (5.3): Add stays page-write; correcting an existing row
+       requires super-admin, matching the Edit UI. No blanket save_ rule. */
+    if (editing) requireSuperAdmin_(user);
     var name = String(d.name_en || '').trim();
     if (!name) throw new Error('الاسم بالإنجليزية مطلوب');
     settingsEnsureSheet_(dbId, WC_SHEET, WC_HEADERS);
@@ -6502,7 +7618,9 @@ const ValleyFoodsHRModules = (function () {
     var _oldWC = editing ? (rows.find(function(r){ return String(r.unique_id)===String(d.unique_id); }) || null) : null;
     executeWithLock_(function () {
       if (editing) {
-        updateRowByCriteria_(sheet, 'unique_id', String(d.unique_id).trim(), map);
+        /* Row-edit repair (5.4): formula-safe patch with a checked result — a
+           missing row throws instead of reporting success. */
+        if (!patchRowByCriteria_(sheet, 'unique_id', String(d.unique_id).trim(), map)) throw new Error('السجل غير موجود');
         try{ var _newWC = Object.assign({}, _oldWC||{}, map); logHistory_(dbId, WC_SHEET, _oldWC&&_oldWC.record_uid ? _oldWC.record_uid : ('update_'+WC_SHEET+'_'+d.unique_id), String(d.unique_id).trim(), (user&&user.email)||'', 'update', _newWC, _oldWC) }catch(e){}
       } else {
         map['unique_id'] = Utilities.getUuid();
@@ -6537,6 +7655,9 @@ const ValleyFoodsHRModules = (function () {
     vfBustRefs_(dbId, ['asset_technicals']);
     var d = data || {};
     var editing = !!(d.unique_id && String(d.unique_id).trim());
+    /* Row-edit repair (5.3): Add stays page-write; correcting an existing row
+       requires super-admin, matching the Edit UI. No blanket save_ rule. */
+    if (editing) requireSuperAdmin_(user);
     var name = String(d.asset_name || '').trim();
     if (!name) throw new Error('اسم الأصل مطلوب');
     settingsEnsureSheet_(dbId, WC_ASSET_TECH_SHEET, WC_ASSET_TECH_HEADERS);
@@ -6566,7 +7687,9 @@ const ValleyFoodsHRModules = (function () {
     var _oldAT = null; try{ var _rowsAT = getAllRecords_(dbId, WC_ASSET_TECH_SHEET); _oldAT = _rowsAT.find(function(r){ return String(r.unique_id)===String(d.unique_id); }) || null; }catch(e){}
     executeWithLock_(function () {
       if (editing) {
-        updateRowByCriteria_(sheet, 'unique_id', String(d.unique_id).trim(), map);
+        /* Row-edit repair (5.4): formula-safe patch with a checked result — a
+           missing row throws instead of reporting success. */
+        if (!patchRowByCriteria_(sheet, 'unique_id', String(d.unique_id).trim(), map)) throw new Error('السجل غير موجود');
         try{ var _newAT = Object.assign({}, _oldAT||{}, map); logHistory_(dbId, WC_ASSET_TECH_SHEET, _oldAT&&_oldAT.record_uid ? _oldAT.record_uid : ('update_'+WC_ASSET_TECH_SHEET+'_'+d.unique_id), String(d.unique_id).trim(), (user&&user.email)||'', 'update', _newAT, _oldAT) }catch(e){}
       } else {
         map['unique_id'] = Utilities.getUuid();
@@ -6593,6 +7716,9 @@ const ValleyFoodsHRModules = (function () {
   function saveValleyWorkCenterAsset_(data, user, dbId) {
     var d = data || {};
     var editing = !!(d.unique_id && String(d.unique_id).trim());
+    /* Row-edit repair (5.3): Add stays page-write; correcting an existing row
+       requires super-admin, matching the Edit UI. No blanket save_ rule. */
+    if (editing) requireSuperAdmin_(user);
     var wcUid = String(d.valley_work_centers_id || '').trim();
     if (!wcUid) throw new Error('خط الإنتاج مطلوب');
     var techUid = String(d.valley_asset_technical || '').trim();
@@ -6612,7 +7738,9 @@ const ValleyFoodsHRModules = (function () {
     var _oldWCA = null; try{ var _rowsWCA = getAllRecords_(dbId, WC_ASSETS_SHEET); _oldWCA = _rowsWCA.find(function(r){ return String(r.unique_id)===String(d.unique_id); }) || null; }catch(e){}
     executeWithLock_(function () {
       if (editing) {
-        updateRowByCriteria_(sheet, 'unique_id', String(d.unique_id).trim(), map);
+        /* Row-edit repair (5.4): formula-safe patch with a checked result — a
+           missing row throws instead of reporting success. */
+        if (!patchRowByCriteria_(sheet, 'unique_id', String(d.unique_id).trim(), map)) throw new Error('السجل غير موجود');
         try{ var _newWCA = Object.assign({}, _oldWCA||{}, map); logHistory_(dbId, WC_ASSETS_SHEET, _oldWCA&&_oldWCA.record_uid ? _oldWCA.record_uid : ('update_'+WC_ASSETS_SHEET+'_'+d.unique_id), String(d.unique_id).trim(), (user&&user.email)||'', 'update', _newWCA, _oldWCA) }catch(e){}
       } else {
         map['unique_id'] = Utilities.getUuid();
@@ -6820,7 +7948,8 @@ const ValleyFoodsHRModules = (function () {
         var foundRow = null;
         rows.forEach(function (r, ri2) { if (String(r.unique_id) === uid) foundRow = ri2 + 2; });
         if (!foundRow) throw new Error('الوصفة غير موجودة');
-        updateRowByCriteria_(sheet, 'unique_id', uid, {
+        /* Row-edit repair (5.4): formula-safe patch for the recipe header. */
+        patchRowByCriteria_(sheet, 'unique_id', uid, {
           recipe_name: name,
           produced_product_id: producedPid,
           produced_product_name: producedName,
@@ -6954,12 +8083,17 @@ const ValleyFoodsHRModules = (function () {
    * transaction_amount − total_discount + taxes — which is the formula the
    * AppSheet app used for `total`.
    */
+  /* تقرير المصروفات — per expense account over a DATE RANGE on
+   * transaction_date, with the previous equal-length period alongside for
+   * comparison. Empty/unparseable bounds are unbounded on that side.
+   *
+   * Which accounts are expenses, and what each is called: chart rows whose
+   * «المستوى الاساسي» = 3, shown by «كود المستوى». */
   function getValleyCashExpenseReport_(data, user, dbId) {
     var d = data || {};
     var now = new Date();
-    var year = Number(d.year) || now.getFullYear();
-    var month = Number(d.month) || (now.getMonth() + 1);
-    if (month < 1 || month > 12) throw new Error('الشهر يجب أن يكون بين 1 و 12');
+    var range = cashReportRange_(d, now);
+    var from = range.from, to = range.to, prevFrom = range.prevFrom, prevTo = range.prevTo;
 
     /* Which accounts are expenses, and what each is called. */
     var expenseLabels = {};
@@ -6984,36 +8118,26 @@ const ValleyFoodsHRModules = (function () {
         + (Number(r.taxes) || 0);
     }
 
-    var byAccount = {};        /* code -> { month, ytd, monthCount, ytdCount } */
-    var byMonth = {};          /* 1..12 -> total, for the trend */
-    var monthTotal = 0, ytdTotal = 0;
-    /* «حتى اليوم» is today when the report is for the current year, and the
-       whole year once it is behind us — otherwise a report on last year would
-       silently stop at today's date. */
-    var ytdEnd = (year === now.getFullYear())
-      ? new Date(year, now.getMonth(), now.getDate(), 23, 59, 59)
-      : new Date(year, 11, 31, 23, 59, 59);
+    var byAccount = {};        /* code -> { range, rangeCount, prev, prevCount } */
+    var rangeTotal = 0, prevTotal = 0, rangeMoves = 0;
 
     getAllRecords_(dbId, FIN_CASH_SHEET).forEach(function (r) {
       var code = String(r.chart_code == null ? '' : r.chart_code).trim();
       if (!code || expenseLabels[code] === undefined) return;
       var dt = parseDate_(r.transaction_date);
-      if (!dt || dt.getFullYear() !== year) return;
+      if (!dt) return;
 
       var amt = amountOf(r);
-      var m = dt.getMonth() + 1;
-      byMonth[m] = (byMonth[m] || 0) + amt;
-
-      if (!byAccount[code]) byAccount[code] = { month: 0, ytd: 0, monthCount: 0, ytdCount: 0 };
-      if (dt <= ytdEnd) {
-        byAccount[code].ytd += amt;
-        byAccount[code].ytdCount++;
-        ytdTotal += amt;
-      }
-      if (m === month) {
-        byAccount[code].month += amt;
-        byAccount[code].monthCount++;
-        monthTotal += amt;
+      if (!byAccount[code]) byAccount[code] = { range: 0, rangeCount: 0, prev: 0, prevCount: 0 };
+      if ((!from || dt >= from) && (!to || dt <= to)) {
+        byAccount[code].range += amt;
+        byAccount[code].rangeCount++;
+        rangeTotal += amt;
+        rangeMoves++;
+      } else if (prevFrom && prevTo && dt >= prevFrom && dt <= prevTo) {
+        byAccount[code].prev += amt;
+        byAccount[code].prevCount++;
+        prevTotal += amt;
       }
     });
 
@@ -7028,47 +8152,305 @@ const ValleyFoodsHRModules = (function () {
       return {
         chart_code: code,
         label: expenseLabels[code],
-        month_amount: round2(a.month),
-        month_pct: pct(a.month, monthTotal),
-        month_count: a.monthCount,
-        ytd_amount: round2(a.ytd),
-        ytd_pct: pct(a.ytd, ytdTotal),
-        ytd_count: a.ytdCount
+        range_amount: round2(a.range),
+        range_pct: pct(a.range, rangeTotal),
+        range_count: a.rangeCount,
+        prev_amount: round2(a.prev),
+        prev_pct: pct(a.prev, prevTotal),
+        prev_count: a.prevCount
       };
-    }).filter(function (r) { return r.month_amount !== 0 || r.ytd_amount !== 0; });
+    }).filter(function (r) { return r.range_amount !== 0 || r.prev_amount !== 0; });
 
-    rows.sort(function (a, b) { return b.month_amount - a.month_amount || b.ytd_amount - a.ytd_amount; });
-
-    var months = [];
-    for (var m2 = 1; m2 <= 12; m2++) {
-      months.push({ month: m2, label: VF_MONTH_NAMES_AR[m2 - 1], amount: round2(byMonth[m2] || 0) });
-    }
-
-    /* Years that actually have expense movements, so the picker offers real
-       choices instead of an arbitrary range. */
-    var yearSet = {};
-    getAllRecords_(dbId, FIN_CASH_SHEET).forEach(function (r) {
-      var code = String(r.chart_code == null ? '' : r.chart_code).trim();
-      if (!code || expenseLabels[code] === undefined) return;
-      var dt = parseDate_(r.transaction_date);
-      if (dt) yearSet[dt.getFullYear()] = true;
-    });
-    var years = Object.keys(yearSet).map(Number).sort(function (a, b) { return b - a; });
-    if (years.indexOf(year) === -1) years.unshift(year);
+    rows.sort(function (a, b) { return b.range_amount - a.range_amount || b.prev_amount - a.prev_amount; });
 
     return {
       status: 'success',
-      year: year,
-      month: month,
-      month_label: VF_MONTH_NAMES_AR[month - 1],
-      ytd_through: (year === now.getFullYear())
-        ? (now.getFullYear() + '-' + ('0' + (now.getMonth() + 1)).slice(-2) + '-' + ('0' + now.getDate()).slice(-2))
-        : (year + '-12-31'),
+      range: range.iso,
       rows: rows,
-      totals: { month_amount: round2(monthTotal), ytd_amount: round2(ytdTotal) },
-      months: months,
-      years: years,
+      totals: { range_amount: round2(rangeTotal), prev_amount: round2(prevTotal), range_moves: rangeMoves },
       accounts_considered: expenseCount
+    };
+  }
+
+  /* Shared range resolution for the cash expenses/incomes reports.
+   * d.from/d.to are ISO date strings; a missing side is unbounded. No from/to
+   * keys at all (first load) defaults to the current month-to-date; explicit
+   * empty strings clear to unbounded. Unparseable bounds are unbounded, never
+   * an error, so a filter can never hide data by accident. The comparison
+   * period is the equal-length span immediately before `from` and needs a
+   * bounded from. */
+  function cashReportRange_(d, now) {
+    d = d || {};
+    var defFrom = now.getFullYear() + '-' + pad2_(now.getMonth() + 1) + '-01';
+    var hasFromKey = Object.prototype.hasOwnProperty.call(d, 'from');
+    var hasToKey = Object.prototype.hasOwnProperty.call(d, 'to');
+    var from, to;
+    if (!hasFromKey && !hasToKey) {
+      from = vfDateBound_(defFrom, false);
+      to = null;
+    } else {
+      from = hasFromKey ? vfDateBound_(d.from, false) : null;
+      to = hasToKey ? vfDateBound_(d.to, true) : null;
+    }
+    var prevFrom = null, prevTo = null;
+    if (from) {
+      var effTo = to || new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+      var lenMs = Math.max(86400000, effTo.getTime() - from.getTime() + 1);
+      prevTo = new Date(from.getTime() - 1);
+      prevFrom = new Date(prevTo.getTime() - lenMs + 1);
+    }
+    function iso(v) {
+      if (!v) return '';
+      return v.getFullYear() + '-' + pad2_(v.getMonth() + 1) + '-' + pad2_(v.getDate());
+    }
+    return {
+      from: from, to: to, prevFrom: prevFrom, prevTo: prevTo,
+      iso: { from: iso(from), to: iso(to), prev_from: iso(prevFrom), prev_to: iso(prevTo) }
+    };
+  }
+
+  /**
+   * تقرير الايرادات الاخرى — other incomes aside from sales, per income
+   * account, for one month and for the year to date, each as a share of its
+   * own total. Mirrors getValleyCashExpenseReport_ shape and amount rule.
+   *
+   * WHAT COUNTS AS OTHER INCOME (owner-specified, unlike expenses which use
+   * the المستوى الاساسي authority): a cash movement with transaction_type
+   * 'Debit' whose numeric chart_code falls in [411102, 421201]. The account
+   * is shown by its «كود المستوى» label, which is what people read.
+   *
+   * THE AMOUNT: the sheet's own `total` when it holds a number, else
+   * transaction_amount − total_discount + taxes (same AppSheet formula).
+   */
+  function getValleyCashIncomeReport_(data, user, dbId) {
+    var d = data || {};
+    var now = new Date();
+    var range = cashReportRange_(d, now);
+    var from = range.from, to = range.to, prevFrom = range.prevFrom, prevTo = range.prevTo;
+
+    var INC_FROM = 411102, INC_TO = 421201;
+
+    /* Which accounts are in range, and what each is called. */
+    var incomeLabels = {};
+    var incomeCount = 0;
+    getAllRecords_(dbId, FIN_CHART_SHEET).forEach(function (r) {
+      var lvl5 = String(r['المستوى الخامس'] == null ? '' : r['المستوى الخامس']).trim();
+      if (!lvl5) return;
+      var codeNum = Number(lvl5);
+      if (isNaN(codeNum) || codeNum < INC_FROM || codeNum > INC_TO) return;
+      var label = String(r['كود المستوى'] == null ? '' : r['كود المستوى']).trim();
+      incomeLabels[lvl5] = label || lvl5;
+      incomeCount++;
+    });
+    if (!incomeCount) {
+      throw new Error('لا توجد حسابات إيرادات في النطاق 411102..421201 — لم يُعثر على أي صف مطابق في دليل الحسابات');
+    }
+
+    function amountOf(r) {
+      var t = Number(r.total);
+      if (r.total !== '' && r.total != null && !isNaN(t)) return t;
+      return (Number(r.transaction_amount) || 0)
+        - (Number(r.total_discount) || 0)
+        + (Number(r.taxes) || 0);
+    }
+
+    var byAccount = {};        /* code -> { range, rangeCount, prev, prevCount } */
+    var rangeTotal = 0, prevTotal = 0, rangeMoves = 0;
+
+    getAllRecords_(dbId, FIN_CASH_SHEET).forEach(function (r) {
+      if (String(r.transaction_type || '').trim() !== 'Debit') return;
+      var code = String(r.chart_code == null ? '' : r.chart_code).trim();
+      if (!code || incomeLabels[code] === undefined) return;
+      var dt = parseDate_(r.transaction_date);
+      if (!dt) return;
+
+      var amt = amountOf(r);
+      if (!byAccount[code]) byAccount[code] = { range: 0, rangeCount: 0, prev: 0, prevCount: 0 };
+      if ((!from || dt >= from) && (!to || dt <= to)) {
+        byAccount[code].range += amt;
+        byAccount[code].rangeCount++;
+        rangeTotal += amt;
+        rangeMoves++;
+      } else if (prevFrom && prevTo && dt >= prevFrom && dt <= prevTo) {
+        byAccount[code].prev += amt;
+        byAccount[code].prevCount++;
+        prevTotal += amt;
+      }
+    });
+
+    function pct(part, whole) {
+      if (!whole) return 0;
+      return Math.round((part / whole) * 10000) / 100;
+    }
+    var round2 = function (n) { return Math.round(n * 100) / 100; };
+
+    var rows = Object.keys(byAccount).map(function (code) {
+      var a = byAccount[code];
+      return {
+        chart_code: code,
+        label: incomeLabels[code],
+        range_amount: round2(a.range),
+        range_pct: pct(a.range, rangeTotal),
+        range_count: a.rangeCount,
+        prev_amount: round2(a.prev),
+        prev_pct: pct(a.prev, prevTotal),
+        prev_count: a.prevCount
+      };
+    }).filter(function (r) { return r.range_amount !== 0 || r.prev_amount !== 0; });
+
+    rows.sort(function (a, b) { return b.range_amount - a.range_amount || b.prev_amount - a.prev_amount; });
+
+    return {
+      status: 'success',
+      range: range.iso,
+      rows: rows,
+      totals: { range_amount: round2(rangeTotal), prev_amount: round2(prevTotal), range_moves: rangeMoves },
+      accounts_considered: incomeCount
+    };
+  }
+
+  /* تقرير أرصدة الصناديق — an unbounded movement statement by default.
+   * When a from date is supplied, opening balance is every earlier movement
+   * for the selected box(es). Period balance is then rebuilt as Debit minus
+   * Credit in transaction_id order instead of trusting stored balance columns. */
+  function getValleyCashBoxBalanceReport_(data, user, dbId) {
+    var d = data || {};
+    var from = vfDateBound_(d.from, false);
+    var to = vfDateBound_(d.to, true);
+    if (from && to && from.getTime() > to.getTime()) throw new Error('«من تاريخ» بعد «إلى تاريخ»');
+
+    var requestedBox = String(d.related_box == null ? '' : d.related_box).trim();
+    var boxMap = finBoxMap_(dbId);
+    requestedBox = finResolveBoxKey_(boxMap, requestedBox);
+
+    var partyNames = {};
+    try {
+      getAllRecords_(dbId, FIN_PARTIES_SHEET).forEach(function (p) {
+        partyNames[String(p.id)] = String(p.name || p.id);
+      });
+    } catch (e) {}
+
+    function round2(n) { return Math.round((Number(n) || 0) * 100) / 100; }
+    function amountOf(r) {
+      var total = Number(r.total);
+      if (r.total !== '' && r.total != null && !isNaN(total)) return total;
+      return (Number(r.transaction_amount) || 0)
+        - (Number(r.total_discount) || 0)
+        + (Number(r.taxes) || 0);
+    }
+    function isCredit(r) {
+      var type = String(r.transaction_type || '').trim();
+      return type === 'Credit' || type === 'Credit Note';
+    }
+    function validDate(v) {
+      var parsed = parseDate_(v);
+      return parsed instanceof Date && !isNaN(parsed.getTime()) ? parsed : null;
+    }
+    function iso(v) {
+      if (!v) return '';
+      return v.getFullYear() + '-' + pad2_(v.getMonth() + 1) + '-' + pad2_(v.getDate());
+    }
+
+    var openingByBox = {};
+    var periodRows = [];
+    var seenBoxes = {};
+    var invalidDateCount = 0;
+
+    getAllRecords_(dbId, FIN_CASH_SHEET).forEach(function (r) {
+      var boxKey = finResolveBoxKey_(boxMap, r.related_box);
+      if (!boxKey || (requestedBox && boxKey !== requestedBox)) return;
+      seenBoxes[boxKey] = true;
+
+      var dt = validDate(r.transaction_date);
+      if ((from || to) && !dt) { invalidDateCount++; return; }
+      var amount = round2(amountOf(r));
+      var signed = isCredit(r) ? -amount : amount;
+
+      if (from && dt && dt < from) {
+        openingByBox[boxKey] = round2((openingByBox[boxKey] || 0) + signed);
+        return;
+      }
+      if (to && dt && dt > to) return;
+      periodRows.push({ source: r, boxKey: boxKey, date: dt, amount: amount, credit: isCredit(r) });
+    });
+
+    periodRows.sort(function (a, b) {
+      return (Number(a.source.transaction_id) || 0) - (Number(b.source.transaction_id) || 0);
+    });
+
+    var runningByBox = {};
+    Object.keys(openingByBox).forEach(function (key) { runningByBox[key] = openingByBox[key]; });
+    var debitByBox = {}, creditByBox = {};
+    var totalDebit = 0, totalCredit = 0;
+    var rows = periodRows.map(function (entry) {
+      var r = entry.source;
+      var key = entry.boxKey;
+      var debit = entry.credit ? 0 : entry.amount;
+      var credit = entry.credit ? entry.amount : 0;
+      debitByBox[key] = round2((debitByBox[key] || 0) + debit);
+      creditByBox[key] = round2((creditByBox[key] || 0) + credit);
+      totalDebit = round2(totalDebit + debit);
+      totalCredit = round2(totalCredit + credit);
+      runningByBox[key] = round2((runningByBox[key] || 0) + debit - credit);
+      var rawDate = r.transaction_date;
+      var dateText = entry.date ? iso(entry.date) : String(rawDate == null ? '' : rawDate);
+      return {
+        transaction_id: r.transaction_id,
+        transaction_date: dateText,
+        related_box: key,
+        box_name: boxMap.byKey[key] || key,
+        party_name: partyNames[String(r.name)] || String(r.name_vendor || ''),
+        transaction_details: r.transaction_details || '',
+        transaction_type: r.transaction_type || '',
+        transaction_method: r.transaction_method || '',
+        chart_name: r.chart_name || r.chart_code || '',
+        debit: round2(debit),
+        credit: round2(credit),
+        calculated_balance: runningByBox[key],
+        approved: !(r.approved === false || String(r.approved).toLowerCase() === 'no' || r.approved === '')
+      };
+    });
+
+    var summaryKeys = {};
+    if (requestedBox) summaryKeys[requestedBox] = true;
+    else {
+      Object.keys(boxMap.byKey).forEach(function (key) { summaryKeys[key] = true; });
+      Object.keys(seenBoxes).forEach(function (key) { summaryKeys[key] = true; });
+    }
+    var boxes = Object.keys(summaryKeys).map(function (key) {
+      var opening = round2(openingByBox[key] || 0);
+      var debit = round2(debitByBox[key] || 0);
+      var credit = round2(creditByBox[key] || 0);
+      return {
+        related_box: key,
+        box_name: boxMap.byKey[key] || key,
+        opening_balance: opening,
+        debit: debit,
+        credit: credit,
+        calculated_balance: round2(opening + debit - credit)
+      };
+    }).sort(function (a, b) {
+      return String(a.box_name).localeCompare(String(b.box_name), 'ar');
+    });
+
+    var openingTotal = round2(boxes.reduce(function (sum, b) { return sum + b.opening_balance; }, 0));
+    return {
+      status: 'success',
+      range: { from: iso(from), to: iso(to) },
+      selected_box: requestedBox,
+      box_options: Object.keys(boxMap.byKey).map(function (key) {
+        return { value: key, label: boxMap.byKey[key] || key };
+      }).sort(function (a, b) { return String(a.label).localeCompare(String(b.label), 'ar'); }),
+      rows: rows,
+      boxes: boxes,
+      totals: {
+        opening_balance: openingTotal,
+        debit: round2(totalDebit),
+        credit: round2(totalCredit),
+        calculated_balance: round2(openingTotal + totalDebit - totalCredit),
+        movement_count: rows.length
+      },
+      invalid_date_count: invalidDateCount
     };
   }
 
@@ -7166,7 +8548,7 @@ const ValleyFoodsHRModules = (function () {
         date_display: (d && !isNaN(d.getTime())) ? pad2_(d.getDate()) + '/' + pad2_(d.getMonth() + 1) + '/' + d.getFullYear() : '-',
         date_edit: (d && !isNaN(d.getTime())) ? d.getFullYear() + '-' + pad2_(d.getMonth() + 1) + '-' + pad2_(d.getDate()) : '',
         party_name: partyNames[String(r.name)] || '',
-        name_vendor: r.name_vendor || '',
+        name: (r.name === '' || r.name == null) ? '' : r.name,
         transaction_details: r.transaction_details || '',
         transaction_type: r.transaction_type,
         transaction_method: r.transaction_method || '',
@@ -7193,6 +8575,9 @@ const ValleyFoodsHRModules = (function () {
       enums: { transaction_type: FIN_CASH_TYPES, transaction_method: FIN_CASH_METHODS },
       item_suggestions: Object.keys(itemSet),
       party_options: partyOpts,
+      can_add_party: vfCanAddParty_(user),
+      party_direction_options: FIN_DIRECTIONS,
+      party_type_options: FIN_PARTY_TYPES,
       box_options: Object.keys(boxNames).map(function (k) {
         return { value: k, label: boxNames[k] };
       }),
@@ -7225,14 +8610,21 @@ const ValleyFoodsHRModules = (function () {
     if (isNaN(taxes) || taxes < 0) throw new Error('الضرائب يجب أن تكون رقماً');
     var partyId = String(d.name || '').trim();
     var vendorName = String(d.name_vendor || '').trim();
-    if (!partyId && !vendorName) throw new Error('الطرف (عميل/مورد) أو اسم المورد مطلوب');
+    /* Ref-only policy: name_vendor is retired. Free text is rejected so every
+     * movement links to valley_legal_customer_vendor; unregistered parties go
+     * through the Parties form (or the Cash quick-add, same contract). */
+    if (vendorName) throw new Error('سجل الطرف أولاً في العملاء والموردون ثم اختره من القائمة');
+    if (!partyId) throw new Error('الطرف (عميل/مورد) مطلوب — اختره من القائمة');
+    var partyOk = getAllRecords_(dbId, FIN_PARTIES_SHEET).some(function (p) {
+      return String(p.id).trim() === partyId;
+    });
+    if (!partyOk) throw new Error('الطرف المختار غير مسجل في العملاء والموردون');
     var chartCode = String(d.chart_code || '').trim();
-    if (chartCode) {
-      var chartOk = getAllRecords_(dbId, FIN_CHART_SHEET).some(function (r) {
-        return String(r['المستوى الخامس'] == null ? '' : r['المستوى الخامس']).trim() === chartCode;
-      });
-      if (!chartOk) throw new Error('كود الدليل المحاسبي غير موجود ضمن دليل الحسابات');
-    }
+    if (!chartCode) throw new Error('كود الدليل المحاسبي مطلوب — اختره من القائمة');
+    var chartOk = getAllRecords_(dbId, FIN_CHART_SHEET).some(function (r) {
+      return String(r['المستوى الخامس'] == null ? '' : r['المستوى الخامس']).trim() === chartCode;
+    });
+    if (!chartOk) throw new Error('كود الدليل المحاسبي غير موجود ضمن دليل الحسابات');
 
     settingsEnsureSheet_(dbId, FIN_CASH_SHEET,
       ['transaction_id','invoice_id','name','name_vendor','transaction_purchasing_items','transaction_details','transaction_date','transaction_amount','total_discount','net_amount','taxes','total','transaction_type','balance_amount','box_balance','related_box','chart_code','chart_name','transaction_method','tax_system','chart_account_main','approved','user','created_at','Temp_Target_Box']);
@@ -7240,7 +8632,8 @@ const ValleyFoodsHRModules = (function () {
     var headers = getHeaders_(sheet);
     var rows = getAllRecords_(dbId, FIN_CASH_SHEET);
 
-    var dateVal = parseDate_(d.transaction_date);
+    var dateVal = dateOnly_(d.transaction_date);
+    if (!dateVal) throw new Error('تاريخ الحركة غير صالح');
 
     function buildValues(tid) {
       var rowNumber = sheet.getLastRow() + 1;
@@ -7248,7 +8641,7 @@ const ValleyFoodsHRModules = (function () {
       map['transaction_id'] = tid;
       map['invoice_id'] = String(d.invoice_id || '').trim();
       map['name'] = partyId ? Number(partyId) : '';
-      map['name_vendor'] = vendorName;
+      map['name_vendor'] = '';
       map['transaction_purchasing_items'] = String(d.transaction_purchasing_items || '').trim();
       map['transaction_details'] = String(d.transaction_details || '').trim();
       map['transaction_date'] = dateVal;
@@ -7318,7 +8711,7 @@ const ValleyFoodsHRModules = (function () {
       var editMap = {
         invoice_id: String(d.invoice_id || '').trim(),
         name: partyId ? Number(partyId) : '',
-        name_vendor: vendorName,
+        name_vendor: '',
         transaction_purchasing_items: String(d.transaction_purchasing_items || '').trim(),
         transaction_details: String(d.transaction_details || '').trim(),
         transaction_date: dateVal,
@@ -7334,7 +8727,9 @@ const ValleyFoodsHRModules = (function () {
         user: (user && user.email) || ''
       };
       var oldRow = rows.find(function (r) { return Number(r.transaction_id) === tidEdit; }) || null;
-      updateRowByCriteria_(sheet, 'transaction_id', tidEdit, editMap);
+      /* Row-edit repair (5.4): formula-safe patch with a checked result — a
+         missing row throws instead of reporting success. */
+      if (!patchRowByCriteria_(sheet, 'transaction_id', tidEdit, editMap)) throw new Error('السجل غير موجود');
       var oldUid = oldRow ? (oldRow.record_uid || ('upd_' + FIN_CASH_SHEET + '_' + tidEdit)) : ('upd_' + FIN_CASH_SHEET + '_' + tidEdit);
       logHistory_(dbId, FIN_CASH_SHEET, oldUid, tidEdit, (user && user.email) || '', 'update', Object.assign({}, oldRow || {}, editMap), oldRow);
       var editRowNum = 0;
@@ -7403,7 +8798,8 @@ const ValleyFoodsHRModules = (function () {
     var headers = getHeaders_(sheet);
     var boxMap = finBoxMap_(dbId);
     var boxNames = boxMap.byKey;
-    var dateVal = parseDate_(d.transaction_date);
+    var dateVal = dateOnly_(d.transaction_date);
+    if (!dateVal) throw new Error('تاريخ التحويل غير صالح');
     var email = (user && user.email) || '';
 
      function appendTransferRow(tid, type, box, target, desc) {
@@ -7575,6 +8971,26 @@ const ValleyFoodsHRModules = (function () {
     return m;
   }
 
+  /* New records store valley_dept_section_index[section] in responsible_person —
+     matching the legacy AppSheet Ref (key column `section`, القسم المسؤول) —
+     NOT an emp_id. History rows keep their old emp_id values and still resolve
+     through whEmployeeNames_ above. Reads the sheet directly (literal name, no
+     outside-block const) so the s12 dry-run block stays self-contained. */
+  function whSectionNames_(dbId) {
+    var options = [];
+    var labels = {};
+    try {
+      getAllRecords_(dbId, 'valley_dept_section_index').forEach(function (r) {
+        var t = String(r['section'] != null ? r['section'] : (r['Section'] != null ? r['Section'] : (r['section_name'] != null ? r['section_name'] : ''))).trim();
+        if (!t || labels[t]) return;
+        labels[t] = t;
+        options.push({ value: t, label: t });
+      });
+    } catch (e) {}
+    options.sort(function (a, b) { return String(a.label).localeCompare(String(b.label), 'ar'); });
+    return { options: options, labels: labels };
+  }
+
   /* ---------- list ---------- */
   function getValleyWarehouseMovements_(data, user, dbId) {
     var sheet = getSheet_(WH_MOVE_SHEET, dbId);
@@ -7582,6 +8998,7 @@ const ValleyFoodsHRModules = (function () {
 
     var vendorNames = whVendorNames_(dbId);
     var empNames = whEmployeeNames_(dbId);
+    var sectionLabels = whSectionNames_(dbId).labels;
     var batchInfo = {};
     try {
       vfCurrentProducts_(dbId).forEach(function (r) {
@@ -7612,9 +9029,11 @@ const ValleyFoodsHRModules = (function () {
         movement_type: String(r.movement_type || ''),
         movmenent_sign: Number(r.movmenent_sign) || 0,
         responsible_person: rkey,
-        /* legacy rows stored a dept section here, not an emp_id — fall back to
-           the stored value so those rows still read correctly */
-        responsible_name: rkey ? (empNames[rkey] || rkey) : '',
+        /* History rows store an emp_id and resolve through empNames; new rows
+           store a valley_dept_section_index[section] which resolves to itself.
+           Legacy rows that stored a dept section also fall back to the stored
+           value so they still read correctly. */
+        responsible_name: rkey ? (empNames[rkey] || sectionLabels[rkey] || rkey) : '',
         notes: String(r.notes || ''),
         user: String(r.user || '')
       };
@@ -7643,17 +9062,21 @@ const ValleyFoodsHRModules = (function () {
     };
   }
 
-  /* ---------- form bootstrap: vendors + employees + available batches ---------- */
+  /* ---------- form bootstrap: vendors + titles + available batches ---------- */
   function getValleyWarehouseMoveOptions_(data, user, dbId) {
     var vendorNames = whVendorNames_(dbId);
     var vendors = Object.keys(vendorNames).map(function (k) {
       return { value: k, label: vendorNames[k] };
     }).sort(function (a, b) { return String(a.label).localeCompare(String(b.label), 'ar'); });
 
+    /* The responsible-person picker offers valley_dept_section_index[section],
+       not employees. `employees` is kept in the payload for backward
+       compatibility but the form no longer uses it. */
     var empNames = whEmployeeNames_(dbId);
     var employees = Object.keys(empNames).map(function (k) {
       return { value: k, label: empNames[k] };
     }).sort(function (a, b) { return String(a.label).localeCompare(String(b.label), 'ar'); });
+    var sections = whSectionNames_(dbId).options;
 
     var avail = whBatchAvailability_(dbId);
     var batches = Object.keys(avail).map(function (k) { return avail[k]; })
@@ -7684,6 +9107,7 @@ const ValleyFoodsHRModules = (function () {
       status: 'success',
       vendors: vendors,
       employees: employees,
+      sections: sections,
       batches: batches,
       movement_types: WH_MOVE_TYPES,
       in_type: WH_IN_TYPE,
@@ -7724,7 +9148,7 @@ const ValleyFoodsHRModules = (function () {
 
     /* Read the reference data ONCE for the whole batch, not once per row. */
     var availability = whBatchAvailability_(dbId);
-    var empNames = whEmployeeNames_(dbId);
+    var sectionLabels = whSectionNames_(dbId).labels;
     var vendorNames = whVendorNames_(dbId);
 
     /* How much each batch has already been drawn down by EARLIER ROWS IN THIS
@@ -7757,7 +9181,10 @@ const ValleyFoodsHRModules = (function () {
 
       var resp = String(row.responsible_person || '').trim();
       if (!resp) throw new Error('المسؤول عن الحركة مطلوب' + at);
-      if (!empNames[resp]) throw new Error('المسؤول المختار غير موجود في بيانات الموظفين' + at);
+      /* New records reference valley_dept_section_index[section]. History rows
+         that stored an emp_id are never re-validated — this ledger is
+         add-only. */
+      if (!sectionLabels[resp]) throw new Error('القسم المختار غير موجود في دليل الأقسام' + at);
 
       var vendor = String(row.vendor == null ? '' : row.vendor).trim();
       if (vendor && !vendorNames[vendor]) throw new Error('المورد المختار غير موجود' + at);
@@ -7928,10 +9355,6 @@ const ValleyFoodsHRModules = (function () {
     lines.forEach(function (l) { l.product_name = nameMap[l.product_id] || l.product_id; });
     return { status: 'success', lines: lines };
   }
-  function safeRows_(dbId, FIN_SALES_LINES_SHEET) {
-    try { return getAllRecords_(dbId, FIN_SALES_LINES_SHEET); } catch (e) { return []; }
-  }
-
   /* §5.1. valley_current_products is a SHEET FORMULA over the feeding tables,
    * and it only recalculates once the rows it reads are actually on the sheet.
    * Apps Script batches writes, so a save can return, the client can re-read the
@@ -8161,6 +9584,7 @@ const ValleyFoodsHRModules = (function () {
     if (!d.date) throw new Error('تاريخ الفاتورة مطلوب');
     var invDate = parseDate_(d.date);
     if (!invDate) throw new Error('تاريخ الفاتورة غير صالح');
+    invDate.setHours(0, 0, 0, 0); /* date-only: never persist a time component */
     var classTax = Number(d.class_tax);
     if ([1, 2].indexOf(classTax) === -1) throw new Error('نوع الضريبة مطلوب');
     var classSchedule = Number(d.class_schedule);
@@ -8209,7 +9633,7 @@ const ValleyFoodsHRModules = (function () {
       net += lineNet;
       taxVal += lineTaxVal;
       cleanLines.push({
-        unique_id: (ln.unique_id && String(ln.unique_id).trim()) || Utilities.getUuid(),
+        unique_id: (ln.unique_id && String(ln.unique_id).trim()) || uid16_(),
         product_id: Number(pid) || pid,
         details: String(ln.details || '').trim(),
         tax: tax,
@@ -8295,6 +9719,7 @@ const ValleyFoodsHRModules = (function () {
       var dateIdx = invHeaders.findIndex(function (h) { return String(h).trim() === 'تاريخ الفاتورة'; });
       var tsIdx = invHeaders.findIndex(function (h) { return String(h).trim().toLowerCase() === 'tax_system'; });
       var uidIdx = invHeaders.findIndex(function (h) { return String(h).trim() === 'invoice_unique_id'; });
+      var createdAtIdx = invHeaders.findIndex(function (h) { return String(h).trim() === 'created_at'; });
 
       /* S1: deletion-proof numbering via persisted incremental counter
        * (Batch 5) — replaces the lock-held full-sheet scan with a single
@@ -8332,8 +9757,10 @@ const ValleyFoodsHRModules = (function () {
         }
         // keep original رقم الفاتورة on edit
         map['رقم الفاتورة'] = dataAll[rowNum - 1][numIdx];
-        var rowVals = invHeaders.map(function (h) {
+        var rowVals = invHeaders.map(function (h, hi) {
           var k = String(h).trim();
+          /* created_at is stamped once at creation and preserved on edit */
+          if (k === 'created_at') return dataAll[rowNum - 1][hi];
           return map[k] !== undefined ? map[k] : (k === 'invoice_unique_id' ? existingUid : '');
         });
         sheetInv.getRange(rowNum, 1, 1, rowVals.length).setValues([rowVals]);
@@ -8343,8 +9770,9 @@ const ValleyFoodsHRModules = (function () {
         map['رقم الفاتورة'] = invoiceNumber;
         map['approval_status'] = 'Pending';
         map['invoice_label'] = invoiceNumber + ' - ' + partyName + ' - ' + invDate.toISOString().slice(0, 10) + ' - ' + net;
-        var uid = Utilities.getUuid();
+        var uid = uid16_();
         map['invoice_unique_id'] = uid;
+        map['created_at'] = new Date(); /* stamped once at creation; edit path preserves it */
         var newRow = invHeaders.map(function (h) {
           var k = String(h).trim();
           return map[k] !== undefined ? map[k] : '';
@@ -8485,7 +9913,7 @@ const ValleyFoodsHRModules = (function () {
         var w = wanted[wk];
         var binfo = batchCurrent[w.batch_uid] || {};
         var m3 = {};
-        m3['unique_id'] = Utilities.getUuid();
+        m3['unique_id'] = uid16_();
         m3['valley_sales_products_id'] = w.line_uid;
         m3['product_unique_id'] = w.batch_uid;
         m3['product_transaction_code'] = binfo.lot || '';
@@ -8511,9 +9939,12 @@ const ValleyFoodsHRModules = (function () {
 
   function getValleySalesList_(data, user, dbId) {
     settingsEnsureSheet_(dbId, FIN_SALES_INV_SHEET, FIN_SALES_INV_HEADERS);
-    var rows = getAllRecords_(dbId, FIN_SALES_INV_SHEET);
+    var rows = getReadOnlyRecords_(dbId, FIN_SALES_INV_SHEET);
     /* Slim + newest-first: only the columns the list displays. */
-    var slim = rows.map(function (r) {
+    /* The source array is already oldest-first: new invoices append and edits
+     * stay in place. Project and number in one pass, before filtering/paging,
+     * so global serials and all vfPage_ modes remain unchanged. */
+    var slim = rows.map(function (r, i) {
       return {
         invoice_unique_id: r.invoice_unique_id,
         'رقم الفاتورة': r['رقم الفاتورة'],
@@ -8523,20 +9954,10 @@ const ValleyFoodsHRModules = (function () {
         'قيمة الضريبة': Number(r['قيمة الضريبة']) || 0,
         'إجمالي': Number(r['إجمالي']) || 0,
         tax_system: String(r.tax_system || '').trim().toLowerCase(),
-        approval_status: r.approval_status || 'Pending'
+        approval_status: r.approval_status || 'Pending',
+        'مسلسل': i + 1
       };
-    }).sort(function (a, b) {
-      return (b.date_sort_key || 0) - 0; // placeholder replaced below
-    });
-    // newest-first by date then numeric id
-    slim.forEach(function (s) {
-      var d = s['تاريخ الفاتورة'] ? new Date(s['تاريخ الفاتورة']) : null;
-      s.date_sort_key = d && !isNaN(d.getTime()) ? d.getTime() : 0;
-      var n = parseFloat(String(s['رقم الفاتورة'] || '').split('-')[0]);
-      if (!isNaN(n)) s.date_sort_key += n / 100000;
-    });
-    slim.sort(function (a, b) { return b.date_sort_key - a.date_sort_key; });
-    const sp = vfPage_(slim, data, 'تاريخ الفاتورة');
+    });    const sp = vfPage_(slim, data, 'تاريخ الفاتورة');
     return { status: 'success', invoices: sp.rows, total: sp.total };
   }
 
@@ -8551,6 +9972,165 @@ const ValleyFoodsHRModules = (function () {
       invoices: l.invoices,
       total: l.total
     };
+  }
+
+  /* Sales report, invoice by invoice (تقرير المبيعات).
+   * Per invoice: sales (إجمالي), discount (Σ valley_sales_products.product_discount —
+   * that column has no writer in this app; it sums sheet values when present,
+   * 0 otherwise — never added to any ensure-list), returns (Σ
+   * valley_return_value by valley_sales_invoices_id), taxes (قيمة الضريبة),
+   * net = إجمالي − returns (discount shown separately, not double-subtracted).
+   * Rows follow the list rule (oldest-first by sheet order, global مسلسل),
+   * then the date-range bounds. Read-only; no schema change. */
+  function getValleySalesReport_(data, user, dbId) {
+    data = data || {};
+    settingsEnsureSheet_(dbId, FIN_SALES_INV_SHEET, FIN_SALES_INV_HEADERS);
+    var invRows = getReadOnlyRecords_(dbId, FIN_SALES_INV_SHEET);
+    var lineRows = [];
+    try { lineRows = getReadOnlyRecords_(dbId, FIN_SALES_LINES_SHEET); } catch (eL) {}
+    var retRows = [];
+    try { retRows = getReadOnlyRecords_(dbId, FIN_RETURNS_SHEET); } catch (eR) {}
+
+    var discountByInv = {};
+    lineRows.forEach(function (l) {
+      var key = String(l.valley_sales_header_id || '').trim();
+      if (!key) return;
+      /* product_discount has no app writer; read the sheet value when present */
+      var dv = Number(l.product_discount);
+      if (isNaN(dv) || !dv) return;
+      discountByInv[key] = Math.round(((discountByInv[key] || 0) + dv) * 100) / 100;
+    });
+
+    var returnsByInv = {};
+    retRows.forEach(function (r) {
+      var key = String(r.valley_sales_invoices_id || '').trim();
+      if (!key) return;
+      var v = Math.abs(Number(r.valley_return_value) || 0);
+      if (!v) return;
+      returnsByInv[key] = Math.round(((returnsByInv[key] || 0) + v) * 100) / 100;
+    });
+
+    var partyName = {};
+    try {
+      getAllRecords_(dbId, FIN_PARTIES_SHEET).forEach(function (p) {
+        partyName[String(p.id)] = String(p.name || p.id);
+      });
+    } catch (eP) {}
+
+    var customer = String(data.customer || '').trim();
+    var product = String(data.product || '').trim();
+
+    /* Product id -> Arabic label, same resolution as getValleyInvoiceLines_. */
+    var prodNameMap = {};
+    try {
+      getAllRecords_(dbId, FIN_PRODUCTS_SHEET).forEach(function (p) {
+        prodNameMap[String(p.id)] = String(p.name_ar || p.id);
+      });
+    } catch (eN) {}
+    var productLabel = product ? (prodNameMap[product] || product) : '';
+
+    function salesLineMatches_(l) {
+      if (!product) return true;
+      var pid = String(l.product_id != null ? l.product_id : '');
+      if (pid === product || pid === productLabel) return true;
+      return String(prodNameMap[pid] || '') === product;
+    }
+    var invHasProduct = {};
+    if (product) lineRows.forEach(function (l) {
+      if (salesLineMatches_(l)) invHasProduct[String(l.valley_sales_header_id || '').trim()] = true;
+    });
+
+    var all = invRows.map(function (r, i) {
+      var uid = String(r.invoice_unique_id || '').trim();
+      var sales = Number(r['إجمالي']) || 0;
+      var discount = discountByInv[uid] || 0;
+      var returns = returnsByInv[uid] || 0;
+      var taxes = Number(r['قيمة الضريبة']) || 0;
+      var rawCustomer = String(r['اسم العميل'] != null ? r['اسم العميل'] : '');
+      return {
+        invoice_unique_id: uid,
+        'مسلسل': i + 1,
+        'رقم الفاتورة': r['رقم الفاتورة'],
+        'اسم العميل': partyName[rawCustomer] || r['اسم العميل'],
+        customer_ref: rawCustomer,
+        'تاريخ الفاتورة': r['تاريخ الفاتورة'],
+        sales: Math.round(sales * 100) / 100,
+        discount: discount,
+        returns: returns,
+        taxes: Math.round(taxes * 100) / 100,
+        net: Math.round((sales - returns) * 100) / 100,
+        approval_status: r.approval_status || 'Pending'
+      };
+    });
+
+    var rows = vfBoundRows_(all, data, 'تاريخ الفاتورة').filter(function (r) {
+      if (customer && String(r.customer_ref) !== customer && String(r['اسم العميل']) !== customer) return false;
+      if (product && !invHasProduct[String(r.invoice_unique_id)]) return false;
+      return true;
+    });
+    var t = { sales: 0, discount: 0, returns: 0, taxes: 0, net: 0 };
+    rows.forEach(function (r) {
+      t.sales = Math.round((t.sales + r.sales) * 100) / 100;
+      t.discount = Math.round((t.discount + r.discount) * 100) / 100;
+      t.returns = Math.round((t.returns + r.returns) * 100) / 100;
+      t.taxes = Math.round((t.taxes + r.taxes) * 100) / 100;
+      t.net = Math.round((t.net + r.net) * 100) / 100;
+    });
+
+    /* Inlines + qty summary, restricted to the listed invoices so the payload
+     * stays tight. Gross from invoice lines; net subtracts returns (joined by
+     * line uid, the same key the statement uses) — both shown for revision. */
+    var allowedInv = {};
+    rows.forEach(function (r) { allowedInv[String(r.invoice_unique_id)] = true; });
+    var linesByInvoice = {};
+    var lineUidToProduct = {};
+    var grossByProduct = {};
+    lineRows.forEach(function (l) {
+      var uid = String(l.valley_sales_header_id || '').trim();
+      if (!uid || !allowedInv[uid]) return;
+      if (product && !salesLineMatches_(l)) return;
+      var pid = String(l.product_id != null ? l.product_id : '');
+      var pname = prodNameMap[pid] || pid || '-';
+      var qty = Number(l.product_qty) || 0;
+      var price = Number(l.product_price) || 0;
+      var item = {
+        unique_id: l.unique_id,
+        product_id: pid,
+        product_name: pname,
+        product_details: l.product_details || '',
+        product_qty: qty,
+        product_price: price,
+        product_tax: Number(l.product_tax || 0),
+        product_discount: Number(l.product_discount || 0)
+      };
+      (linesByInvoice[uid] = linesByInvoice[uid] || []).push(item);
+      var lu = String(l.unique_id || '').trim();
+      if (lu) lineUidToProduct[lu] = pname;
+      var g = grossByProduct[pname] || (grossByProduct[pname] = { product: pname, gross_qty: 0, gross_value: 0, ret_qty: 0, ret_value: 0 });
+      g.gross_qty = Math.round((g.gross_qty + qty) * 100) / 100;
+      g.gross_value = Math.round((g.gross_value + qty * price) * 100) / 100;
+    });
+    retRows.forEach(function (r) {
+      var uid = String(r.valley_sales_invoices_id || '').trim();
+      if (!uid || !allowedInv[uid]) return;
+      var pname = lineUidToProduct[String(r.valley_sales_products_id || '').trim()];
+      if (!pname) return;
+      var g = grossByProduct[pname] || (grossByProduct[pname] = { product: pname, gross_qty: 0, gross_value: 0, ret_qty: 0, ret_value: 0 });
+      g.ret_qty = Math.round((g.ret_qty + (Math.abs(Number(r.valley_return_qty)) || 0)) * 100) / 100;
+      g.ret_value = Math.round((g.ret_value + (Math.abs(Number(r.valley_return_value)) || 0)) * 100) / 100;
+    });
+    var productSummary = Object.keys(grossByProduct).map(function (k) {
+      var g = grossByProduct[k];
+      return {
+        product: g.product,
+        gross_qty: g.gross_qty,
+        gross_value: Math.round(g.gross_value * 100) / 100,
+        net_qty: Math.round((g.gross_qty - g.ret_qty) * 100) / 100,
+        net_value: Math.round((g.gross_value - g.ret_value) * 100) / 100
+      };
+    });
+    productSummary.sort(function (a, b) { return b.gross_qty - a.gross_qty; });
+    return { status: 'success', rows: rows, totals: t, total: rows.length, linesByInvoice: linesByInvoice, productSummary: productSummary };
   }
 
   function getValleyInvoiceFull_(data, user, dbId) {
@@ -8642,7 +10222,7 @@ const ValleyFoodsHRModules = (function () {
     var uid = String((data && data.invoice_unique_id) || '').trim();
     if (!uid) throw new Error('معرّف الفاتورة مطلوب');
     /* S2: approved invoices cannot be deleted — revert first (BEFORE deletion) */
-    var invRows = getAllRecords_(dbId, FIN_SALES_INV_SHEET);
+    var invRows = getReadOnlyRecords_(dbId, FIN_SALES_INV_SHEET);
     for (var vi = 0; vi < invRows.length; vi++) {
       if (String(invRows[vi].invoice_unique_id).trim() === uid && String(invRows[vi].approval_status || '').trim() === 'Approved') {
         throw new Error('لا يمكن حذف فاتورة معتمدة — أرجعها لقيد الانتظار أولاً');
@@ -8853,7 +10433,7 @@ const ValleyFoodsHRModules = (function () {
         }
         var value = qty * info.price;
 
-        var rowUuid = Utilities.getUuid();
+        var rowUuid = uid16_();
         if (!clientId) clientId = ''; /* filled below from invoice header */
         retRowsToWrite.push(retHeaders.map(function (h) {
           var k = String(h).trim();
@@ -8889,7 +10469,7 @@ const ValleyFoodsHRModules = (function () {
           stockRowsToWrite.push(stockHeaders.map(function (h) {
             var k = String(h).trim();
             var m4 = {
-              unique_id: Utilities.getUuid(),
+              unique_id: uid16_(),
               id: groupId,
               valley_sales_returns_id: rowUuid,
               product_unique_id: al.alloc_uid,
@@ -9132,14 +10712,19 @@ const ValleyFoodsHRModules = (function () {
   if (typeof ValleyFoods !== 'undefined' && typeof ValleyFoods.register === 'function') {
     ValleyFoods.register('get_deductions_data',       getDeductionsData_);
     ValleyFoods.register('add_deduction',             addDeduction_);
+    ValleyFoods.register('update_deduction',          updateDeduction_);
     ValleyFoods.register('get_contracts_data',        getContractsData_);
     ValleyFoods.register('add_contract',              addContract_);
+    ValleyFoods.register('update_contract',           updateContract_);
     ValleyFoods.register('get_vacation_alloc_data',   getVacationAllocData_);
     ValleyFoods.register('add_vacation_alloc',        addVacationAlloc_);
     ValleyFoods.register('get_vacations_data',        getVacationsData_);
     ValleyFoods.register('add_vacation',              addVacation_);
+    ValleyFoods.register('update_vacation',           updateVacation_);
+    ValleyFoods.register('delete_vacation',           deleteVacation_);
     ValleyFoods.register('get_overtime_data',         getOvertimeData_);
     ValleyFoods.register('add_overtime',              addOvertime_);
+    ValleyFoods.register('update_overtime',           updateOvertime_);
     ValleyFoods.register('get_monthly_salaries_data', getMonthlySalariesData_);
     ValleyFoods.register('add_monthly_salary',        addMonthlySalary_);
     ValleyFoods.register('generate_monthly_salaries',  generateMonthlySalaries_);
@@ -9181,9 +10766,13 @@ const ValleyFoodsHRModules = (function () {
     ValleyFoods.register('save_valley_party', withRefBust_(saveValleyParty_));
     ValleyFoods.register('get_valley_party_statement', getValleyPartyStatement_);
     ValleyFoods.register('get_valley_party_balances', getValleyPartyBalances_);
+    ValleyFoods.register('save_valley_mfg_agreement', saveValleyMfgAgreement_);
+    ValleyFoods.register('cancel_valley_mfg_agreement', cancelValleyMfgAgreement_);
 
     ValleyFoods.register('get_valley_cash',    getValleyCash_);
     ValleyFoods.register('get_valley_cash_expense_report', getValleyCashExpenseReport_);
+    ValleyFoods.register('get_valley_cash_income_report', getValleyCashIncomeReport_);
+    ValleyFoods.register('get_valley_cash_box_balance_report', getValleyCashBoxBalanceReport_);
     ValleyFoods.register('save_valley_cash', withRefBust_(saveValleyCash_));
     ValleyFoods.register('approve_valley_cash', approveValleyCash_);
     ValleyFoods.register('delete_valley_cash', deleteValleyCash_);
@@ -9225,6 +10814,7 @@ const ValleyFoodsHRModules = (function () {
     ValleyFoods.register('get_valley_sales_list',     getValleySalesList_);
     ValleyFoods.register('get_valley_sales_page',      getValleySalesPage_);
     ValleyFoods.register('get_valley_invoice_full',   getValleyInvoiceFull_);
+    ValleyFoods.register('get_valley_sales_report',   getValleySalesReport_);
 
   // بيانات تجريبية
   ValleyFoods.register('get_test_data',     getTestData_);
@@ -9260,14 +10850,19 @@ const ValleyFoodsHRModules = (function () {
   return {
     getDeductionsData_: getDeductionsData_,
     addDeduction_: addDeduction_,
+    updateDeduction_: updateDeduction_,
     getContractsData_: getContractsData_,
     addContract_: addContract_,
+    updateContract_: updateContract_,
     getVacationAllocData_: getVacationAllocData_,
     addVacationAlloc_: addVacationAlloc_,
     getVacationsData_: getVacationsData_,
     addVacation_: addVacation_,
+    updateVacation_: updateVacation_,
+    deleteVacation_: deleteVacation_,
     getOvertimeData_: getOvertimeData_,
     addOvertime_: addOvertime_,
+    updateOvertime_: updateOvertime_,
     getMonthlySalariesData_: getMonthlySalariesData_,
     addMonthlySalary_: addMonthlySalary_,
     getAttendanceSessions_: getAttendanceSessions_,
@@ -9299,7 +10894,243 @@ const ValleyFoodsHRModules = (function () {
     getValleyProducts_: getValleyProducts_,
     saveValleyProduct_: saveValleyProduct_,
     getValleyParties_: getValleyParties_,
-    saveValleyParty_: saveValleyParty_
+    saveValleyParty_: saveValleyParty_,
+    canSeeReportCost_: vfCanSeeCost_
   };
 })();
 
+
+
+/* CONSOLIDATED VALLEYFOODS FINANCIAL REPORTING — existing records only.
+ * No setup helpers, company writes, persistent report cache, or accounting tables.
+ * The surrounding authenticated router still touches sessions and audits reads.
+ */
+var ValleyFoodsFinancialReporting = (function () {
+  var COMPANY = '9940659bd83035d7', PAGE = 'vf_income_statement';
+  var TABLES = {
+    invoices: 'valley_sales_invoices',
+    lines: 'valley_sales_products',
+    returns: 'valley_sales_returns',
+    allocations: 'valley_sales_product_stock',
+    purchases: 'valley_product_purchasing',
+    manufacture: 'valley_manufacture_header',
+    byproducts: 'valley_manufacture_by_product',
+    products: 'valley_products',
+    returnStock: 'valley_sales_returns_stock',
+    consumption: 'valley_manufacture_footer',
+    warehouse: 'valley_warehouse_movement'
+  };
+  var COST_TABLES = ['allocations','purchases','manufacture','byproducts','products','returnStock','consumption','warehouse'];
+  function str_(v) { return v == null ? '' : String(v).trim(); }
+  function num_(v) { var n = Number(v); return isFinite(n) ? n : 0; }
+  function t_(v) {
+    var y, m, d;
+    if (v instanceof Date) {
+      if (isNaN(v.getTime())) return 0;
+      y = v.getUTCFullYear(); m = v.getUTCMonth(); d = v.getUTCDate();
+    } else {
+      if (v == null || v === '') return 0;
+      var mt = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(v).trim());
+      if (mt) { y = +mt[1]; m = +mt[2] - 1; d = +mt[3]; }
+      else { var x = new Date(v); if (isNaN(x.getTime())) return 0; y = x.getUTCFullYear(); m = x.getUTCMonth(); d = x.getUTCDate(); }
+    }
+    return Date.UTC(y, m, d);
+  }
+  function period_(start, end) {
+    var p = { start: '', end: '', fromT: 0, toT: 0 };
+    p.fromT = t_(start); p.toT = t_(end);
+    if (!p.fromT || !p.toT || p.fromT > p.toT) throw new Error('أدخل بداية ونهاية صحيحتين للفترة YYYY-MM-DD');
+    function day(t) { var d = new Date(t); return d.getUTCFullYear() + '-' + ('0' + (d.getUTCMonth() + 1)).slice(-2) + '-' + ('0' + d.getUTCDate()).slice(-2); }
+    p.start = day(p.fromT); p.end = day(p.toT);
+    return p;
+  }
+  function round_(v) { return v == null ? null : Math.round(v * 100) / 100; }
+  function r3_(v) { return Math.round(v * 1000) / 1000; }
+  function map_() { return Object.create(null); }
+  function authorize_(user, dbId) {
+    if (!user || (!user.isSuperAdmin && user.company !== COMPANY) || !unifiedCheck_(user, COMPANY, PAGE, 'read')) throw new Error(ERP_MESSAGES.NOT_AUTHORIZED);
+    if (!dbId || String(dbId) !== String(getCompanySpreadsheetId_(COMPANY))) throw new Error(ERP_MESSAGES.NOT_AUTHORIZED);
+    // Reuse the existing scoped write/full grant and legacy unused-grant policy.
+    return !!ValleyFoodsHRModules.canSeeReportCost_(user);
+  }
+  function snapshot_(dbId, cost) {
+    var rows = {}, ok = { invoices: true, lines: true, returns: true };
+    Object.keys(TABLES).forEach(function (alias) {
+      rows[alias] = [];
+      if (!cost && COST_TABLES.indexOf(alias) !== -1) return;
+      try { rows[alias] = getAllRecords_(dbId, TABLES[alias]) || []; }
+      catch (e) { rows[alias] = []; if (alias === 'invoices' || alias === 'lines' || alias === 'returns') ok[alias] = false; }
+    });
+    return { rows: rows, cost: cost, ok: ok };
+  }
+  function prepare_(s) {
+    var ix = { invoices: map_(), lines: map_(), returns: map_(), purchases: map_(), manufacture: map_(), byproducts: map_() };
+    function put(map, k, r) { if (k && !Object.prototype.hasOwnProperty.call(map, k)) map[k] = r; }
+    s.rows.invoices.forEach(function (r) { put(ix.invoices, str_(r.invoice_unique_id), r); });
+    s.rows.lines.forEach(function (r) { put(ix.lines, str_(r.unique_id), r); });
+    s.rows.returns.forEach(function (r) { put(ix.returns, str_(r.unique_id), r); });
+    var allocByLine = map_();
+    s.rows.allocations.forEach(function (a) {
+      var k = str_(a.valley_sales_products_id);
+      if (!k) return;
+      if (!allocByLine[k]) allocByLine[k] = [];
+      allocByLine[k].push(a);
+    });
+    var productCat = map_();
+    s.rows.products.forEach(function (r) { var k = str_(r.id); if (k) productCat[k] = str_(r.category); });
+    if (s.cost) {
+      s.rows.purchases.forEach(function (r) { put(ix.purchases, str_(r.unique_id), r); });
+      s.rows.manufacture.forEach(function (r) { put(ix.manufacture, str_(r.unique_id), r); });
+      s.rows.byproducts.forEach(function (r) { put(ix.byproducts, str_(r.unique_id), r); });
+    }
+    s.ix = ix; s.allocByLine = allocByLine; s.productCat = productCat;
+    s.invDate = map_();
+    s.rows.invoices.forEach(function (r) { var k = str_(r.invoice_unique_id); if (k && !s.invDate[k]) s.invDate[k] = t_(r['تاريخ الفاتورة']); });
+    s.retDate = map_();
+    s.rows.returns.forEach(function (r) { var k = str_(r.unique_id); if (k && !s.retDate[k]) s.retDate[k] = t_(r.valley_return_date); });
+    return s;
+  }
+  function rawNum_(r, field) {
+    var v = r[field];
+    if (v === null || v === undefined || v === '') return null;
+    var n = Number(v);
+    return isFinite(n) ? n : null;
+  }
+  function unitCost_(s, uid) {
+    uid = str_(uid); if (!uid) return null;
+    var p = s.ix.purchases[uid];
+    if (p) { var u = rawNum_(p, 'unit_cost'); if (u !== null && u >= 0) return u; }
+    var m = s.ix.manufacture[uid];
+    if (m) { var t = rawNum_(m, 'total_batch_cost'), q = rawNum_(m, 'actual_qty'); if (t !== null && t >= 0 && q !== null && q > 0) return t / q; }
+    var b = s.ix.byproducts[uid];
+    if (b) { var t2 = rawNum_(b, 'total_cost'), q2 = rawNum_(b, 'qty'); if (t2 !== null && t2 >= 0 && q2 !== null && q2 > 0) return t2 / q2; }
+    return null;
+  }
+  function ident_(s, uid) {
+    uid = str_(uid); if (!uid) return '';
+    var p = s.ix.purchases[uid];
+    if (p && str_(p.movement_code)) return str_(p.movement_code);
+    var m = s.ix.manufacture[uid];
+    if (m && str_(m.transaction_code)) return str_(m.transaction_code);
+    var b = s.ix.byproducts[uid];
+    if (b && str_(b.transaction_code)) return str_(b.transaction_code);
+    return '';
+  }
+  function qty_(v) { if (v === null || v === undefined || v === '') return null; var n = Number(v); return isFinite(n) ? n : null; }
+  function core_(s, fromT, toT) {
+    var revenue = { gross: 0, returns: 0, line_count: 0, return_count: 0 };
+    var cTotal = 0, cQty = 0, cUnpriced = 0, cogBatch = map_(), cogOrder = [];
+    var acc = map_(), order = [], excluded = 0;
+    function batch(bk) {
+      if (!Object.prototype.hasOwnProperty.call(acc, bk)) { acc[bk] = { start: 0, purch: 0, inOther: 0, sold: 0, out: 0, excl: 0, end: 0 }; order.push(bk); }
+      return acc[bk];
+    }
+    function leg(uid, t, q, kind, product) {
+      if (!uid || q === null) return;
+      var g = batch(uid);
+      if (!t || t < fromT) { g.start += q; g.end += q; return; }
+      if (t > toT) return;
+      g.end += q;
+      if (kind === 1) {
+        if (s.productCat[str_(product)] === '3') { excluded += q; g.excl += q; return; }
+        g.purch += q;
+      }
+      else if (kind === 2) g.sold -= q;
+      else if (kind === 3) g.out -= q;
+      else g.inOther += q;
+    }
+    s.rows.lines.forEach(function (line) {
+      var d = s.invDate[str_(line.valley_sales_header_id)] || 0;
+      if (!d || d < fromT || d > toT) return;
+      var v = qty_(line.product_net_value);
+      revenue.gross += v === null ? 0 : v; revenue.line_count++;
+      var allocs = s.allocByLine[str_(line.unique_id)] || [];
+      if (!allocs.length) {
+        var lq = qty_(line.product_qty);
+        cUnpriced += lq === null ? 0 : lq;
+        return;
+      }
+      allocs.forEach(function (a) {
+        var aq = qty_(a.product_qty);
+        if (aq === null) return;
+        var bk = str_(a.product_unique_id);
+        if (!bk) return;
+        var u = unitCost_(s, bk);
+        if (u === null) { cUnpriced += aq; leg(bk, d, -aq, 2); return; }
+        cTotal += aq * u; cQty += aq;
+        if (!Object.prototype.hasOwnProperty.call(cogBatch, bk)) { cogBatch[bk] = { batch: bk, qty: 0, unit_cost: u, total: 0 }; cogOrder.push(bk); }
+        var g = cogBatch[bk];
+        g.qty += aq; g.total += aq * u;
+        leg(bk, d, -aq, 2);
+      });
+    });
+    s.rows.returns.forEach(function (r) {
+      var d = s.retDate[str_(r.unique_id)] || 0;
+      if (!d || d < fromT || d > toT) return;
+      var v = qty_(r.valley_return_value);
+      revenue.returns += v === null ? 0 : v; revenue.return_count++;
+    });
+    s.rows.manufacture.forEach(function (r) {
+      if (str_(r.mo_status) !== 'Locked') return;
+      leg(str_(r.unique_id), t_(r.manufacture_date), qty_(r.actual_qty), 0);
+    });
+    s.rows.byproducts.forEach(function (r) { leg(str_(r.unique_id), t_(r.manufacture_date), qty_(r.qty), 0); });
+    s.rows.purchases.forEach(function (r) {
+      leg(str_(r.unique_id), t_(r.receipt_date) || t_(r.invoice_date), qty_(r.qty), 1, r.product);
+    });
+    s.rows.returnStock.forEach(function (r) {
+      leg(str_(r.product_unique_id), s.retDate[str_(r.valley_sales_returns_id)] || 0, qty_(r.product_qty), 0);
+    });
+    s.rows.warehouse.forEach(function (r) {
+      var q = qty_(r.movmenent_sign);
+      leg(str_(r.item), t_(r.movement_date), q, q !== null && q < 0 ? 3 : 0);
+    });
+    s.rows.consumption.forEach(function (r) {
+      var q = qty_(r.qty);
+      if (q !== null) leg(str_(r.item), t_(r.created_at), -q, 3);
+    });
+    order.sort();
+    var stockLines = order.map(function (bk) {
+      var g = acc[bk], u = unitCost_(s, bk);
+      function val(qty) { return u === null ? null : round_(qty * u); }
+      return { batch: bk, ident: ident_(s, bk),
+        start: r3_(g.start), purchasing: r3_(g.purch), in_other: r3_(g.inOther),
+        sold: r3_(g.sold), out_other: r3_(g.out), excluded: r3_(g.excl), end: r3_(g.end),
+        unit_cost: u === null ? null : round_(u),
+        start_v: val(g.start), purch_v: val(g.purch), end_v: val(g.end), cogs_v: val(g.sold) };
+    });
+    var cogsLines = cogOrder.map(function (bk) { var g = cogBatch[bk]; return { batch: g.batch, ident: ident_(s, g.batch), qty: r3_(g.qty), unit_cost: round_(g.unit_cost), total: round_(g.total) }; });
+    revenue.gross = round_(revenue.gross); revenue.returns = round_(revenue.returns);
+    return {
+      revenue: { gross: revenue.gross, returns: revenue.returns, net: round_(revenue.gross - revenue.returns),
+        line_count: revenue.line_count, return_count: revenue.return_count,
+        sources_ready: !!(s.ok.invoices && s.ok.lines && s.ok.returns) },
+      cogs: { value: round_(cTotal), qty: r3_(cQty), unpriced_qty: r3_(cUnpriced), lines: cogsLines },
+      stock: { lines: stockLines, excluded_fixed: r3_(excluded) }
+    };
+  }
+  /* Revenue, COGS and stock now come from core_() in a single pass per table. */
+  function calculate_(data, user, dbId) {
+    data = data || {};
+    var cost = authorize_(user, dbId), p = period_(data.start, data.end);
+    var s = prepare_(snapshot_(dbId, cost));
+    var r = core_(s, p.fromT, p.toT);
+    return { cost: cost, period: { start: p.start, end: p.end },
+      revenue: r.revenue, cogs: cost ? r.cogs : null, stock: cost ? r.stock : null };
+  }
+  function summary_(c) {
+    function gross(rev, cg) { return cg ? round_(rev.net - cg.value) : null; }
+    return { status: 'success', period: c.period, can_see_cost: c.cost,
+      revenue: c.revenue,
+      cogs: c.cogs || { state: 'restricted' },
+      stock: c.stock || { state: 'restricted' },
+      gross: gross(c.revenue, c.cogs),
+      generated_at: new Date().toISOString() };
+  }
+  function reportAction_(data, user, dbId) { return summary_(calculate_(data, user, dbId)); }
+  return { reportAction_: reportAction_ };
+})();
+
+if (typeof ValleyFoods !== 'undefined' && ValleyFoods.register) {
+  ValleyFoods.register('get_valley_income_statement', ValleyFoodsFinancialReporting.reportAction_);
+}

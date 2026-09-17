@@ -1,0 +1,598 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>القمة لايت — حركة النقدية</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= getCompanyThemeCSS_('8df5c89a117fe9a5') ?>
+</head>
+<body>
+  <div id="tl-root"></div>
+
+  <script>
+    var params = new URLSearchParams(window.location.search);
+    var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+    var scriptUrl = window.scriptUrl || '/';
+    var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+    var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('8df5c89a117fe9a5') ?>';
+    var COMPANY_PAGES = <?!= companyPages ?>;
+    var CURRENT_ACTION = '<?!= currentAction ?>';
+    var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+    var CAN_WRITE = UIC.canAdd_(); var CAN_FULL = UIC.canFull_();
+
+    function companyCall(moduleAction, data) {
+      return API.call('company_action', {
+        target_system: '8df5c89a117fe9a5',
+        module_action: moduleAction,
+        data: data || {}
+      }, SESSION_TOKEN);
+    }
+    function esc(v) {
+      /* [UI-2.8 / U-36] Delegates to the shared formatter. This body used to
+         carry its own replace-chain behind a `typeof FMT !== 'undefined'`
+         guard, but Client_Helpers.html defines FMT in <head> before any page
+         script runs, so that fallback was unreachable and the duplicate was
+         pure drift risk. Output is identical for every input — proved in
+         tools/verify/ui2_formatters.js. */
+      return FMT.escape(v);
+    }
+    function num0(v) { var n = Number(v); return isNaN(n) ? 0 : n; }
+    function todayStr() { return new Date().toISOString().slice(0, 10); }
+    function isCreditType(v) {
+      var s = String(v == null ? '' : v).trim().toLowerCase();
+      return s === 'credit' || s === 'c' || s.indexOf('دائن') !== -1;
+    }
+    function openReport() {
+      window.location.href = scriptUrl + '?action=tl_cash_report&sessionToken=' + SESSION_TOKEN;
+    }
+  </script>
+
+  <script>
+  (function () {
+    var HEADERS = [], BOXES = [], OPTIONS = {}, NEXT_ID = 1;
+    var BOX_FILTER = '';
+    var __isNewCash = false;
+    var __autoDiscount = null;
+
+    function renderApp() {
+      UIC.appShell('tl-root', {
+        companyLogoUrl: COMPANY_LOGO_URL,
+        companyLogoHref: scriptUrl + '?action=tl_dashboard&sessionToken=' + SESSION_TOKEN,
+        companyLogoTitle: 'القمة لايت',
+        breadcrumb: 'القمة لايت / حركة النقدية',
+        contentId: 'tl-cash-content',
+        menuGroups: (window.TOPLIGHT_MENU || [])
+      });
+      load();
+    }
+
+    function load(quiet) {
+      if (!quiet) UIC.readSkeleton('tl-cash-content');
+      companyCall('get_cash_headers', { loadAll: true })
+        .then(function (r) {
+          HEADERS = r.headers || [];
+          BOXES = r.boxes || [];
+          OPTIONS = r.options || {};
+          NEXT_ID = r.next_id || (HEADERS.length ? Math.max.apply(null, HEADERS.map(function(h){ return Number(h.transaction_id)||0; })) + 1 : 1);
+          window.__cashPartyOptions = (OPTIONS.customer_options || []).map(function (c) {
+            if (typeof c === 'object' && c !== null) {
+              return {
+                value: c.value !== undefined ? c.value : (c.id !== undefined ? c.id : ''),
+                label: c.label || c.name || String(c.value !== undefined ? c.value : (c.id || ''))
+              };
+            }
+            return { value: c, label: c };
+          });
+          window.__cashBoxOptions = OPTIONS.box_options || [];
+          window.__cashChartOptions = OPTIONS.chart_options || [];
+          SESSION.loadActiveView('tl_cash').then(function (def) {
+            if (def && def.box !== undefined) BOX_FILTER = def.box;
+            renderList(); try{schedulePrefetch();}catch(e){};
+          }).catch(function () { renderList(); });
+        })
+        .catch(function (e) {
+          var c = document.getElementById('tl-cash-content');
+          if (c) c.innerHTML = '<div style="padding:20px;color:red;">خطأ: ' + esc(e.message || e) + '</div>';
+        })
+        .finally(function () { if (!quiet) UI.hideSpinner(); });
+    }
+
+    function saveView() {
+      SESSION.saveCurrentView('tl_cash', { box: BOX_FILTER || '' })
+        .then(function () { UIC.toast('تم حفظ العرض', 'success'); })
+        .catch(function (e) { if (e !== 'cancelled') UIC.toast((e && e.message) || 'تعذر الحفظ', 'error'); });
+    }
+
+    /* ---------- BOX BALANCE CARDS ---------- */
+    function boxCardsHtml() {
+      return '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:16px;">' +
+        BOXES.map(function (b) {
+          var active = String(BOX_FILTER) === String(b.box);
+          return '<div class="stat-card" title="اضغط لعرض حركات هذا الصندوق" style="cursor:pointer;' + (active ? 'border:2px solid var(--color-primary);background:var(--bg-subtle);' : '') + '" onclick="CASH_PAGE.setBoxFilter(\'' + esc(b.box) + '\')">' +
+            '<div class="stat-body">' +
+              '<div class="stat-label" style="font-weight:600;">' + esc(b.box_name || b.name || '-') + '</div>' +
+              '<div class="stat-value num" style="font-size:1.25rem;' + (num0(b.balance) < 0 ? 'color:var(--color-danger, var(--danger, #dc2626));' : 'color:#0e623b;') + '">' +
+                Number(b.balance).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + '</div>' +
+            '</div></div>';
+        }).join('') +
+      '</div>';
+    }
+
+    /* ---------- LIST ---------- */
+    function renderList() {
+      var content = document.getElementById('tl-cash-content');
+      var filtered = (BOX_FILTER !== '')
+        ? HEADERS.filter(function (h) { return String(h.related_box) === String(BOX_FILTER); })
+        : HEADERS;
+
+      var rows = filtered.map(function (h) {
+        /* Tier A: a __pending row shows «—» where the server has not answered
+           yet (transaction_id is server-assigned max+1, box_balance is a sheet
+           formula) and offers no actions — its id names a record the server
+           has never seen. The amount cells stay visible: they are the user's
+           own typed values, not server-computed. (No money:true column defs
+           exist here; UIC._dtRowHtml coerces money:true cells to 0.00, so a
+           money column could never print «—» — no defs changed.) */
+        var pending = !!h.__pending;
+        var approved = String(h.approved) === 'true';
+        var actions = pending ? '…' : UIC.actionBtns([
+          { label: 'السجل', onclick: 'SESSION.openHistory(\'top_light_cash_bank_movement\',\'' + esc(h.transaction_id) + '\')' },
+          { label: 'عرض', onclick: 'CASH_PAGE.openForm(\'' + esc(h.transaction_id) + '\', true)' },
+          !approved ? { label: 'اعتماد', onclick: 'CASH_PAGE.approve(\'' + esc(h.transaction_id) + '\')' } : null,
+          (!approved || IS_SUPER_ADMIN || CAN_FULL) ? { label: 'تعديل', onclick: 'CASH_PAGE.openForm(\'' + esc(h.transaction_id) + '\', false)' } : null,
+          (!approved || IS_SUPER_ADMIN || CAN_FULL) ? { label: 'حذف', color: '#dc2626', onclick: 'CASH_PAGE.remove(\'' + esc(h.transaction_id) + '\')' } : null
+        ].filter(Boolean));
+
+        var amtNum = num0(h.transaction_amount);
+        var balNum = num0(h.box_balance);
+
+        return [
+          pending ? '—' : ('<b>' + esc(h.transaction_id) + '</b>'),
+          '<span data-sort="' + esc(h.transaction_date ? String(h.transaction_date).slice(0, 10) : '') + '">' + (h.transaction_date ? String(h.transaction_date).slice(0, 10) : '-') + '</span>',
+          esc(h.customer_name || h.name_vendor || h.name || '-'),
+          esc(h.transaction_details || '-'),
+          esc(h.transaction_type || '-'),
+          esc(h.transaction_method || '-'),
+          '<span class="num" data-num="' + amtNum + '">' + FMT.number(amtNum) + '</span>',
+          esc(h.box_name || '-'),
+          pending ? '—' : ('<span class="num" style="font-weight:700;' + (balNum < 0 ? 'color:var(--color-danger,var(--danger, #dc2626));' : 'color:#0e623b;') + '" data-num="' + balNum + '">' + FMT.number(balNum) + '</span>'),
+          UIC.statusPill(approved ? 'معتمد' : 'قيد الانتظار', approved ? 'success' : 'neutral'),
+          actions
+        ];
+      });
+
+      content.innerHTML =
+        boxCardsHtml() +
+        '<div style="display:flex;justify-content:flex-end;gap:8px;margin-bottom:12px;flex-wrap:wrap;">' +
+          (BOX_FILTER ? '<button class="btn btn-outline" onclick="CASH_PAGE.setBoxFilter(\'\')">✕ إلغاء فلتر الصندوق</button>' : '') +
+          '<button class="btn btn-outline" onclick="UI.submitOnce(this, CASH_PAGE.saveView)">💾 حفظ العرض</button>' +
+          '<button class="btn btn-outline" onclick="openReport()">تقرير النقدية</button>' +
+          (CAN_WRITE
+            ? '<button class="btn btn-primary" onclick="CASH_PAGE.openForm(\'\', false)">+ إضافة حركة</button>' +
+              '<button class="btn btn-outline" onclick="CASH_PAGE.openTransfer()">تحويل بين الصناديق</button>'
+            : '') +
+        '</div>' +
+        UIC.dataTable('cash-table', {
+          headers: [
+            'رقم',
+            'التاريخ',
+            'الطرف',
+            'البيان',
+            'النوع',
+            'طريقة الدفع',
+            { label: 'المبلغ', numeric: true },
+            'الصندوق',
+            { label: 'الرصيد', numeric: true },
+            'الحالة',
+            ''
+          ],
+          rows: rows,
+          emptyText: BOX_FILTER ? 'لا توجد حركات لهذا الصندوق' : 'لا توجد حركات'
+        });
+      UIC.initTableSort('cash-table');
+    }
+
+    /* ---------- ADD / EDIT MODAL ---------- */
+    function openForm(id, readOnly) {
+      var record = null;
+      if (id) {
+        record = HEADERS.find(function (h) { return Number(h.transaction_id) === Number(id); }) || null;
+      }
+      renderForm(record, readOnly);
+    }
+
+    function selOpts(list) {
+      return (list || []).map(function (v) { return { value: v, label: v }; }).filter(Boolean);
+    }
+    function refOpts(list) {
+      return [{ value: '', label: '—' }].concat(list || []);
+    }
+
+    function renderForm(record, readOnly) {
+      var isEdit = !!record;
+      __isNewCash = !record && !readOnly;
+      __autoDiscount = null;
+
+      var o = OPTIONS;
+      var curOpts = o.currency_options || [{ value: 'EGP', label: 'EGP', rate: 1 }];
+      var defCurrency = record ? record.currency : (curOpts[0] ? curOpts[0].value : 'EGP');
+      var defRate = record ? record.exchange_rate : (curOpts[0] ? (curOpts[0].rate || 1) : 1);
+      var relatedBoxVal = record ? String(record.related_box || '') : (BOX_FILTER || '');
+
+      var f = function (key, label, type, opts, value, required, placeholder) {
+        return UIC.field({
+          key: key,
+          label: label,
+          type: type || 'text',
+          options: opts,
+          value: value,
+          required: required,
+          placeholder: placeholder,
+          disabled: !!readOnly,
+          min: type === 'number' ? 0 : undefined,
+          step: type === 'number' ? 'any' : undefined
+        });
+      };
+
+      var body = '<form id="cash-form">' +
+        '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:0 16px;padding:16px;background:var(--bg-surface);border:1px solid var(--border-color);border-radius:8px;">' +
+          f('transaction_method', 'طريقة الدفع *', 'select', selOpts(o.method_options || ['نقدي', 'ايداع بنكي', 'تحويل بنكي', 'انستا باي', 'فودافون كاش']), record ? record.transaction_method : '', true, 'اختر الطريقة...') +
+          f('name', 'الطرف *', 'select', window.__cashPartyOptions || [], record ? String(record.name || '') : '', true, 'اختر الطرف...') +
+          f('related_box', 'الصندوق *', 'select', window.__cashBoxOptions || [], relatedBoxVal, true, 'اختر الصندوق...') +
+          f('chart_code', 'كود الحساب *', 'select', window.__cashChartOptions || [], record ? record.chart_code : '', true, 'اختر كود الحساب...') +
+          f('transaction_details', 'البيان *', 'text', null, record ? record.transaction_details : '', true) +
+          f('transaction_date', 'التاريخ *', 'date', null, record ? (record.transaction_date ? String(record.transaction_date).slice(0, 10) : todayStr()) : todayStr(), true) +
+          f('transaction_amount', 'المبلغ *', 'number', null, record ? record.transaction_amount : '', true) +
+          f('total_discount', 'الخصم', 'number', null, record ? record.total_discount : 0, false) +
+          f('taxes', 'الضرائب', 'number', null, record ? record.taxes : 0, false) +
+          f('transaction_type', 'النوع *', 'select', o.type_options || [{ value: 'Debit', label: 'مدين (Debit)' }, { value: 'Credit', label: 'دائن (Credit)' }], record ? record.transaction_type : '', true, 'اختر النوع...') +
+          f('currency', 'العملة *', 'select', curOpts, defCurrency, true, 'اختر العملة...') +
+          f('exchange_rate', 'سعر الصرف', 'number', null, defRate, false) +
+          f('invoice_id', 'رقم الفاتورة (اختياري)', 'text', null, record ? record.invoice_id : '', false) +
+          f('name_vendor', 'اسم المورد (إن وجد)', 'text', null, record ? record.name_vendor : '', false) +
+          f('transaction_purchasing_items', 'أصناف المشتريات', 'text', null, record ? record.transaction_purchasing_items : '', false) +
+          checkboxField('tax_system', 'خاضع للنظام الضريبي', record && (record.tax_system === true || String(record.tax_system).toLowerCase() === 'yes' || record.tax_system === 'true'), readOnly) +
+        '</div>' +
+        '<div class="form-field" style="margin-top:16px;">' +
+          '<label class="form-label" style="font-weight:700;">القيم المحتسبة تلقائياً (للعرض فقط)</label>' +
+          '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;">' +
+            grayedField('net_display', 'net_amount (الصافي)') +
+            grayedField('total_display', 'total (الإجمالي)') +
+            grayedField('balance_display', 'balance_amount (الرصيد)') +
+            grayedField('boxbal_display', 'box_balance Σ') +
+          '</div>' +
+        '</div>' +
+      '</form>';
+
+      UIC.openModal('cash-modal', {
+        size: 'lg',
+        title: isEdit ? (readOnly ? 'عرض حركة رقم ' + record.transaction_id : 'تعديل حركة رقم ' + record.transaction_id) : 'إضافة حركة نقدية جديدة',
+        body: body,
+        onSave: (!readOnly && CAN_WRITE) ? ('CASH_PAGE.save(' + (isEdit ? esc(record.transaction_id) : 'null') + ')') : null
+      });
+
+      /* Pin box if filtered from cards */
+      if (!isEdit && BOX_FILTER) {
+        var boxEl = document.getElementById('related_box');
+        if (boxEl) {
+          boxEl.value = BOX_FILTER;
+          boxEl.disabled = true;
+          boxEl.style.background = '#f3f4f6';
+          boxEl.style.color = '#6b7280';
+          boxEl.style.cursor = 'not-allowed';
+        }
+      }
+
+      /* Event listeners for live calculation & currency */
+      var curEl = document.getElementById('currency');
+      if (curEl && !readOnly) {
+        curEl.addEventListener('change', function () {
+          var sel = curEl.value;
+          var found = curOpts.find(function (c) { return c.value === sel; });
+          var exEl = document.getElementById('exchange_rate');
+          if (found && exEl) {
+            exEl.value = found.rate || 1;
+            recalc();
+          }
+        });
+      }
+
+      ['transaction_amount', 'total_discount', 'taxes', 'transaction_type', 'exchange_rate', 'related_box'].forEach(function (k) {
+        var el = document.getElementById(k);
+        if (el && !readOnly) {
+          el.addEventListener('input', function () {
+            if (k === 'transaction_amount') applyVodafoneDiscount(false);
+            recalc();
+          });
+          el.addEventListener('change', function () {
+            if (k === 'transaction_amount') applyVodafoneDiscount(false);
+            recalc();
+          });
+        }
+      });
+
+      var methodEl = document.getElementById('transaction_method');
+      if (methodEl && !readOnly) {
+        methodEl.addEventListener('change', function () {
+          applyVodafoneDiscount(true);
+          recalc();
+        });
+        methodEl.addEventListener('input', recalc);
+      }
+
+      recalc();
+    }
+
+    function getVal(id) { var el = document.getElementById(id); return el ? el.value : ''; }
+    function setText(id, t) { var el = document.getElementById(id); if (el) el.value = t; }
+
+    function checkboxField(key, label, checked, disabled) {
+      return '<label style="display:flex;align-items:center;gap:8px;margin-top:16px;font-size:14px;">' +
+        '<input type="checkbox" id="' + key + '"' + (checked ? ' checked' : '') + (disabled ? ' disabled' : '') + '> ' + label + '</label>';
+    }
+    function grayedField(id, label) {
+      return '<div><div style="font-size:10px;color:var(--text-muted, #6b7280);margin-bottom:3px;">' + esc(label) + '</div>' +
+        '<input id="' + id + '" class="input" type="text" readonly value="0.00" style="background:var(--bg-subtle, #f3f4f6);color:var(--text-muted, #6b7280);cursor:not-allowed;direction:ltr;text-align:left;font-family:monospace;font-weight:700;"></div>';
+    }
+
+    function applyVodafoneDiscount(fromMethodChange) {
+      if (!__isNewCash) return;
+      if (getVal('transaction_method') !== 'فودافون كاش') { __autoDiscount = null; return; }
+      var discEl = document.getElementById('total_discount');
+      if (!discEl) return;
+      var cur = num0(discEl.value);
+      if (fromMethodChange || cur === 0 || (__autoDiscount !== null && cur === __autoDiscount)) {
+        var v = Math.round(num0(getVal('transaction_amount')) * 0.01 * 100) / 100;
+        discEl.value = v;
+        __autoDiscount = v;
+      }
+    }
+
+    function recalc() {
+      var amount = num0(getVal('transaction_amount'));
+      var discount = num0(getVal('total_discount'));
+      var taxes = num0(getVal('taxes'));
+      var rate = num0(getVal('exchange_rate'));
+      if (!rate && rate !== 0) rate = 1;
+      var method = getVal('transaction_method');
+      var type = getVal('transaction_type');
+      var boxKey = getVal('related_box');
+
+      var net = (method === 'فودافون كاش')
+        ? (amount * rate)
+        : ((amount - discount) * rate);
+
+      var total = ((amount - discount) * rate) + (taxes * rate);
+      var balance = isCreditType(type) ? (-1 * total) : total;
+
+      setText('net_display', FMT.number(net));
+      setText('total_display', FMT.number(total));
+      setText('balance_display', FMT.number(balance));
+
+      var boxCur = 0;
+      BOXES.forEach(function (b) { if (String(b.box) === String(boxKey)) boxCur = num0(b.balance); });
+      setText('boxbal_display', FMT.number(boxCur + balance));
+    }
+
+    function save(editId) {
+      if (!UIC.validateForm('cash-form')) return;
+
+      var boxVal = getVal('related_box');
+      if (!boxVal && BOX_FILTER) boxVal = BOX_FILTER;
+
+      var payload = {
+        transaction_id: editId != null ? editId : '',
+        name: getVal('name'),
+        related_box: boxVal,
+        chart_code: getVal('chart_code'),
+        transaction_details: getVal('transaction_details').trim(),
+        transaction_date: getVal('transaction_date'),
+        transaction_amount: num0(getVal('transaction_amount')),
+        total_discount: num0(getVal('total_discount')),
+        taxes: num0(getVal('taxes')),
+        transaction_type: getVal('transaction_type'),
+        transaction_method: getVal('transaction_method'),
+        currency: getVal('currency'),
+        exchange_rate: num0(getVal('exchange_rate')),
+        invoice_id: getVal('invoice_id').trim(),
+        name_vendor: getVal('name_vendor').trim(),
+        transaction_purchasing_items: getVal('transaction_purchasing_items').trim(),
+        tax_system: (document.getElementById('tax_system') || {}).checked || false
+      };
+
+      /* Tier A (MONEY form): the row is on screen before the request returns,
+         with no blocking overlay — and the rollback is loud. Validation above
+         is unchanged and never weakened. The draft carries form-visible fields
+         only; transaction_id is server-assigned (max+1) so the draft never
+         invents one. NEEDS-REPLY: addCash_ returns only data.assignedId and
+         editCash_ returns no identifier at all, so recordOf walks the whole
+         defensive chain (record/transaction_id/id/unique_id/assignedId, incl.
+         data.*) and answers null when an ADD key stays unknown. queueable:false
+         is mandatory here: I1 is unproven for add/edit_cash, so a transport
+         failure rolls back loudly instead of queueing a money row. */
+      var isEdit = (editId != null && editId !== '');
+      var draft = {
+        transaction_id: isEdit ? editId : '',
+        name: payload.name,
+        related_box: payload.related_box,
+        chart_code: payload.chart_code,
+        transaction_details: payload.transaction_details,
+        transaction_date: payload.transaction_date,
+        transaction_amount: payload.transaction_amount,
+        total_discount: payload.total_discount,
+        taxes: payload.taxes,
+        transaction_type: payload.transaction_type,
+        transaction_method: payload.transaction_method,
+        currency: payload.currency,
+        exchange_rate: payload.exchange_rate,
+        invoice_id: payload.invoice_id,
+        name_vendor: payload.name_vendor,
+        transaction_purchasing_items: payload.transaction_purchasing_items,
+        tax_system: payload.tax_system
+      };
+      UIC.Live.save({
+        call: companyCall,
+        action: isEdit ? 'edit_cash' : 'add_cash',
+        data: { record: payload },
+        list: HEADERS,
+        key: 'transaction_id',
+        draft: draft,
+        render: renderList,
+        modal: 'cash-modal',
+        message: isEdit ? 'تم تحديث الحركة' : 'تمت إضافة الحركة',
+        queueable: false,
+        reload: function () { load(true); },
+        recordOf: function (resp) {
+          var rec = Object.assign({}, draft);
+          var tid = (resp && resp.record && resp.record.transaction_id) || (resp && resp.transaction_id) ||
+            (resp && resp.id) || (resp && resp.unique_id) || (resp && resp.assignedId) ||
+            (resp && resp.data && (resp.data.transaction_id || resp.data.assignedId));
+          if (tid == null || tid === '') { if (!isEdit) return null; }
+          else { rec.transaction_id = tid; }
+          return rec;
+        }
+      }).catch(function () { /* UIC.Live has toasted and rolled back */ });
+    }
+
+    /* ---------- TRANSFER ---------- */
+    function openTransfer() {
+      var body = '<form id="transfer-form">' +
+        UIC.field({ key: 'tf-from', label: 'من صندوق / حساب *', type: 'select', required: true, options: refOpts(window.__cashBoxOptions), placeholder: 'اختر الصندوق المصدر' }) +
+        UIC.field({ key: 'tf-to', label: 'إلى صندوق / حساب *', type: 'select', required: true, options: refOpts(window.__cashBoxOptions), placeholder: 'اختر الصندوق الهدف' }) +
+        UIC.field({ key: 'tf-date', label: 'تاريخ التحويل *', type: 'date', required: true, value: todayStr() }) +
+        UIC.field({ key: 'tf-amount', label: 'المبلغ *', type: 'number', required: true, min: '0.01', step: '0.01' }) +
+        UIC.field({ key: 'tf-details', label: 'ملاحظات', type: 'text', placeholder: 'تحويل صندوق إلى صندوق' }) +
+      '</form>';
+      UIC.openModal('transfer-modal', { title: 'تحويل بين الصناديق', body: body, onSave: 'CASH_PAGE.saveTransfer()' });
+    }
+
+    function saveTransfer() {
+      if (!UIC.validateForm('transfer-form')) return;
+      var fromBox = getVal('tf-from'), toBox = getVal('tf-to');
+      if (!fromBox || !toBox) { UIC.toast('اختر الصندوقين', 'error'); return; }
+      if (fromBox === toBox) { UIC.toast('لا يمكن التحويل إلى نفس الصندوق', 'error'); return; }
+      var payload = {
+        from_box: fromBox,
+        to_box: toBox,
+        transfer_date: getVal('tf-date'),
+        amount: num0(getVal('tf-amount')),
+        details: getVal('tf-details').trim()
+      };
+      /* Tier A (MONEY, double-leg): the debit leg is on screen before the
+         request returns, with no blocking overlay — validation above is
+         unchanged. The server writes two rows (credit from-box, debit to-box)
+         and replies with the debit record; the draft echoes it, and the credit
+         leg converges via reload/watch. The draft id is never invented —
+         recordOf fills it from the reply, null when it stays unknown.
+         queueable:false is mandatory: I1 is unproven for add_transfer. */
+      var draft = {
+        transaction_id: '',
+        name: '',
+        related_box: toBox,
+        transaction_details: payload.details || 'تحويل صندوق إلى صندوق',
+        transaction_date: payload.transfer_date,
+        transaction_amount: payload.amount,
+        total_discount: 0,
+        taxes: 0,
+        transaction_type: 'Debit',
+        currency: 'EGP',
+        exchange_rate: 1
+      };
+      UIC.Live.save({
+        call: companyCall,
+        action: 'add_transfer',
+        data: payload,
+        list: HEADERS,
+        key: 'transaction_id',
+        draft: draft,
+        render: renderList,
+        modal: 'transfer-modal',
+        message: 'تم التحويل بنجاح',
+        queueable: false,
+        reload: function () { load(true); },
+        /* The credit leg is not painted optimistically (only the debit reply
+           is known), so a quiet refresh converges both legs right away — no
+           overlay, no blocking, just the second row arriving a moment later. */
+        onSuccess: function () { load(true); },
+        recordOf: function (resp) {
+          if (resp && resp.record && resp.record.transaction_id != null && resp.record.transaction_id !== '') return resp.record;
+          var tid = (resp && resp.unique_id) || (resp && resp.assignedId) || (resp && resp.id);
+          if (tid == null || tid === '') return null;
+          var rec = Object.assign({}, draft);
+          rec.transaction_id = tid;
+          return rec;
+        }
+      }).catch(function () { /* UIC.Live has toasted and rolled back */ });
+    }
+
+    /* ---------- APPROVE / DELETE ---------- */
+    function approve(tid) {
+      /* Tier A approve: no draft painted (there is no record to draw — the row
+         stays, only its flag flips), so no draft/list/key/render. onSuccess
+         patches the in-memory row and re-renders locally; reload is the
+         error-path backstop. No overlay. queueable:false. */
+      UIC.Live.save({
+        call: companyCall,
+        action: 'approve_cash',
+        data: { unique_id: Number(tid) },
+        onSuccess: function () {
+          var item = HEADERS.find(function (h) { return Number(h.transaction_id) === Number(tid); });
+          if (item) item.approved = true;
+          renderList();
+        },
+        message: 'تم الاعتماد بنجاح',
+        queueable: false,
+        reload: function () { load(true); }
+      }).catch(function () { /* UIC.Live has toasted */ });
+    }
+
+    function remove(tid) {
+      if (!confirm('حذف هذه الحركة نهائياً؟ لا يمكن التراجع.')) return;
+      /* Tier A delete: no optimistic paint (there is no record to draw — the
+         row is gone), so no draft/list/key/render. onSuccess splices the
+         in-memory list and re-renders locally; reload is the error-path
+         backstop. No overlay. queueable:false. */
+      UIC.Live.save({
+        call: companyCall,
+        action: 'delete_cash',
+        data: { unique_id: Number(tid) },
+        onSuccess: function () {
+          HEADERS = HEADERS.filter(function (h) { return Number(h.transaction_id) !== Number(tid); });
+          renderList();
+        },
+        message: 'تم حذف الحركة',
+        queueable: false,
+        reload: function () { load(true); }
+      }).catch(function () { /* UIC.Live has toasted */ });
+    }
+
+    window.CASH_PAGE = {
+      openForm: openForm,
+      openEdit: function (id) { openForm(id, false); },
+      save: save,
+      openTransfer: openTransfer,
+      saveTransfer: saveTransfer,
+      approve: approve,
+      remove: remove,
+      setBoxFilter: function (box) {
+        BOX_FILTER = (BOX_FILTER === box) ? '' : box;
+        renderList();
+      },
+      saveView: saveView
+    };
+
+    document.addEventListener('DOMContentLoaded', renderApp);
+
+    /* Another device's change arrives quietly. */
+    UIC.Live.watchPage({
+      call: companyCall,
+      page: 'tl_cash',
+      onChange: function () { UIC.Live.arrive(function () { load(true); }); }
+    });
+  })();
+  </script>
+</body>
+</html>

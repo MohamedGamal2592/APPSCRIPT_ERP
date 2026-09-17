@@ -19,7 +19,7 @@ function registerValleyFoods_() {
     tableForAction: ValleyFoods.tableForAction_,
     // §2.1 Table Catalog — metadata only, no schema change
     tables: [
-      { id: 'vf_products_tbl', sheetName: 'vf_products', pkColumn: 'id', labelAr: 'المنتجات', pageId: 'vf_products' },
+      { id: 'vf_products_tbl', sheetName: 'vf_products', pkColumn: 'id', labelAr: 'الاصناف وتحركاتها', pageId: 'vf_products' },
       { id: 'vf_parties_tbl', sheetName: 'vf_parties', pkColumn: 'id', labelAr: 'العملاء والموردون', pageId: 'vf_parties' },
       { id: 'vf_mfg_orders_tbl', sheetName: 'vf_mfg_orders', pkColumn: 'id', labelAr: 'أوامر التصنيع', pageId: 'vf_mfg_orders' }
     ],
@@ -32,7 +32,7 @@ function registerValleyFoods_() {
       { action: 'vf_hr_employees', template: 'Company_ValleyFoods_HR_Emp', title: 'قائمة الموظفين', label: 'قائمة الموظفين', nav: false },
       { action: 'vf_hr_status', template: 'Company_ValleyFoods_HR_Emp', title: 'حالة الموظفين', label: 'حالة الموظفين', nav: false },
       { action: 'vf_hr_shifts', template: 'Company_ValleyFoods_ShiftAssignment', title: 'تحديد الورديات', label: 'تحديد الورديات', nav: false },
-      { action: 'vf_hr_salary', template: 'Company_ValleyFoods_HR_Emp', title: 'راتب الموظف', label: 'راتب الموظف', nav: false },
+      { action: 'vf_hr_salary', template: 'Company_ValleyFoods_Salary', title: 'راتب الموظف', label: 'راتب الموظف', nav: false },
 
       // -----Modules إضافية -----
       { action: 'vf_hr_deductions', template: 'Company_ValleyFoods_Deductions', title: 'الغياب والخصومات', nav: false },
@@ -50,16 +50,23 @@ function registerValleyFoods_() {
       { action: 'vf_hr_settings_shifts', template: 'Company_ValleyFoods_HR_Settings', title: 'إعدادات الورديات', label: 'إعدادات الورديات', nav: false },
 
       // ----- المالية (بيانات أساسية) -----
-      { action: 'vf_products', template: 'Company_ValleyFoods_Products', title: 'المنتجات', label: 'المنتجات', nav: false },
+      { action: 'vf_products', template: 'Company_ValleyFoods_Products', title: 'الاصناف وتحركاتها', label: 'الاصناف وتحركاتها', nav: false },
       { action: 'vf_parties', template: 'Company_ValleyFoods_Parties', title: 'العملاء والموردون', label: 'العملاء والموردون', nav: false },
       { action: 'vf_cash', template: 'Company_ValleyFoods_Cash', title: 'حركة النقدية والبنوك', label: 'حركة النقدية والبنوك', nav: false },
+      { action: 'vf_income_statement', template: 'Company_ValleyFoods_IncomeStatement', title: 'Valley Foods — قائمة الدخل', label: 'قائمة الدخل' },
       /* NOTE: this page id needs its own row in ERP_Pages_Matrix before anyone
          can open it — see NEXT_STEPS_OWNER.md. Its DATA action is gated on
          vf_cash, so only the route needs the grant. */
       { action: 'vf_cash_expenses', template: 'Company_ValleyFoods_CashExpenses', title: 'تقرير المصروفات', label: 'تقرير المصروفات', nav: false },
+      /* NOTE: same pattern as vf_cash_expenses above — own route row, data gated on vf_cash. */
+      { action: 'vf_cash_incomes', template: 'Company_ValleyFoods_CashIncomes', title: 'تقرير الايرادات الاخرى', label: 'تقرير الايرادات الاخرى', nav: false },
+      { action: 'vf_cash_box_balances', template: 'Company_ValleyFoods_CashBoxBalances', title: 'تقرير أرصدة الصناديق', label: 'تقرير أرصدة الصناديق', nav: false, accessPage: 'vf_cash' },
       { action: 'vf_sales', template: 'Company_ValleyFoods_Sales', title: 'المبيعات', label: 'المبيعات', nav: false },
       { action: 'vf_sales_returns', template: 'Company_ValleyFoods_SalesReturns', title: 'مرتجعات المبيعات', label: 'مرتجعات المبيعات', nav: false },
+      { action: 'vf_sales_print', template: 'Company_ValleyFoods_SalesPrint', title: 'طباعة فاتورة مبيعات', label: 'طباعة فاتورة مبيعات', nav: false },
+      { action: 'vf_sales_report', template: 'Company_ValleyFoods_SalesReport', title: 'تقرير المبيعات', label: 'تقرير المبيعات', nav: false },
       { action: 'vf_purchasing', template: 'Company_ValleyFoods_Purchasing', title: 'تكلفة المشتريات', label: 'المشتريات', nav: false },
+      { action: 'vf_purchasing_report', template: 'Company_ValleyFoods_PurchasingReport', title: 'تقرير المشتريات', label: 'تقرير المشتريات', nav: false },
       { action: 'vf_warehouse_movement', template: 'Company_ValleyFoods_WarehouseMovement', title: 'حركة المخزن', label: 'حركة المخزن', nav: false },
       { action: 'vf_mfg_recipes', template: 'Company_ValleyFoods_MfgRecipes', title: 'وصفات التصنيع (BOM)', label: 'وصفات التصنيع', nav: false },
       { action: 'vf_mfg_orders', template: 'Company_ValleyFoods_MfgOrders', title: 'أوامر التصنيع', label: 'أوامر التصنيع', nav: false },
@@ -83,3 +90,4 @@ function registerValleyFoods_() {
     ]
   });
 }
+

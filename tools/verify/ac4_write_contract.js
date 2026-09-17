@@ -27,6 +27,7 @@ const path = require('path');
 const vm = require('vm');
 
 const ROOT = path.resolve(__dirname, '..', '..');
+const helper = fs.readFileSync(path.join(ROOT, 'JS_Simplification_Helpers.js'), 'utf8');
 const ACTIONS_FILE = 'Company_Assessment_Actions.js';
 const src = fs.readFileSync(path.join(ROOT, ACTIONS_FILE), 'utf8');
 
@@ -163,6 +164,7 @@ function buildSandbox() {
 }
 
 const built = buildSandbox();
+vm.runInContext(helper, built.sandbox, { filename: 'JS_Simplification_Helpers.js' });
 vm.runInContext(src, built.sandbox, { filename: ACTIONS_FILE });
 const AC = vm.runInContext('AssessmentCenter', built.sandbox);
 
@@ -318,6 +320,7 @@ function buildBatchSandbox() {
 }
 
 const batchBuilt = buildBatchSandbox();
+vm.runInContext(helper, batchBuilt.sandbox, { filename: 'JS_Simplification_Helpers.js' });
 vm.runInContext(src, batchBuilt.sandbox, { filename: ACTIONS_FILE });
 const AC2 = vm.runInContext('AssessmentCenter', batchBuilt.sandbox);
 
@@ -390,3 +393,4 @@ ok(sheetsAccessed.indexOf('ID_Counter') === -1, 'getSheet_ was never asked for "
 console.log('');
 if (failures) { console.log(failures + ' assertion(s) FAILED'); process.exit(1); }
 console.log('ac4_write_contract: all assertions pass.');
+

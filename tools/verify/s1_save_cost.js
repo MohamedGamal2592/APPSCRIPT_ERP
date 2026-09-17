@@ -194,3 +194,4 @@ console.log('\n' + (failed === 0
   ? 'S1 OK — cost_unit now comes from valley_current_products; nothing else changed.'
   : 'S1 FAILED: ' + failed));
 process.exit(failed === 0 ? 0 : 1);
+

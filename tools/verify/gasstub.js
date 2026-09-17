@@ -57,6 +57,11 @@ function createHarness(opts) {
     _failSet: 0,
     /* what the stubbed sheets return */
     users: [],                       // records for ERP_Users
+    companies: [                    // rows for ERP_Companies used by live gate fixtures
+      { company_unique_id: 'NewCo', company_name_ar: 'NewCo', company_name_en: 'NewCo', company_sheet_link: 'new-db', enabled: true },
+      { company_unique_id: 'OldCo', company_name_ar: 'OldCo', company_name_en: 'OldCo', company_sheet_link: 'old-db', enabled: true },
+      { company_unique_id: 'VF', company_name_ar: 'VF', company_name_en: 'VF', company_sheet_link: 'vf-db', enabled: true }
+    ],
     matrix: { headers: [], rows: [] },
     killFlag: 1,                     // what readSystemWorkFlag_ returns
     ensureThrows: false,             // make ensureSystemWorkSheet_ throw
@@ -188,6 +193,16 @@ function createHarness(opts) {
   });
 
   /* ── replace only the leaves that would touch a spreadsheet ────────────── */
+  function companiesSheet() {
+    const headers = ['company_unique_id', 'company_name_ar', 'company_name_en', 'company_sheet_link', 'enabled'];
+    const rows = H.companies.map(function (c) { return headers.map(function (h) { return c[h]; }); });
+    return {
+      __headers: headers.slice(),
+      getName: function () { return 'ERP_Companies'; },
+      getDataRange: function () { return { getValues: function () { return [headers.slice()].concat(rows.map(function (r) { return r.slice(); })); } }; }
+    };
+  }
+
   function matrixSheet() {
     H.reads.matrix++;
     return {
@@ -200,6 +215,7 @@ function createHarness(opts) {
   }
 
   ctx.getSheet_ = function (sheetName) {
+    if (sheetName === 'ERP_Companies') return companiesSheet();
     if (sheetName === 'ERP_Pages_Matrix') return matrixSheet();
     throw new Error('stub: getSheet_ has no fixture for ' + sheetName);
   };
@@ -253,3 +269,4 @@ function createHarness(opts) {
 }
 
 module.exports = { createHarness: createHarness, ROOT: ROOT, SOURCES: SOURCES, CACHE_MAX_TTL: CACHE_MAX_TTL };
+

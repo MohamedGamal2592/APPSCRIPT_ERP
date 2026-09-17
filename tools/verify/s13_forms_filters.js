@@ -220,7 +220,7 @@ ok(/<input type="hidden" id="'\s*\+\s*key\s*\+\s*'"/.test(uic), 'the hidden valu
 /* ── 4/5/6. P2 — the balance aggregate ───────────────────────────────────── */
 section('4-6. P2 — getValleyPartyBalances_: joins, signs, registration, sources');
 
-const actions = read('Company_ValleyFoods_Actions.js');
+const actions = read('Company_ValleyFoods_Actions.js') + '\n' + '';
 const balFnM = actions.match(/function getValleyPartyBalances_\(data, user, dbId\) \{[\s\S]*?\n  \}/);
 ok(!!balFnM, 'getValleyPartyBalances_ exists');
 const balFn = balFnM ? balFnM[0] : '';
@@ -319,6 +319,54 @@ if (predM) {
   /* The label map must not be what is compared. */
   ok(!/passesFilters[\s\S]{0,400}catMap/.test(products),
     'the predicate does not consult catMap — it compares the raw id');
+
+  /* ── The general search (بحث عام), through the same real predicate ── */
+  section('7b. P1 — the general search across the columns');
+
+  const hay = [
+    { id: 1, __search: '1 زيت عباد الشمس oil مورد النيل كرتونة 14.00% زيوت 25 500 2' },
+    { id: 2, __search: '2 سكر ناعم sugar acme trading كيس 0.00% مواد خام 10 100 1' },
+    { id: 3, __search: '3 زيت ذرة corn oil acme trading كيس 14.00% زيوت 0 0 0' },
+  ];
+  const find = (q) => hay.filter(r => passes(r, { q: q, category: '', qtyMin: null, qtyMax: null }))
+    .map(r => r.id).join(',');
+
+  ok(find('') === '1,2,3', 'an empty search passes every row');
+  ok(find('زيت') === '1,3', 'an Arabic word matches the rows that contain it');
+  ok(find('OIL') === '1,3', 'the search is case-insensitive');
+  ok(find('acme') === '2,3', 'a supplier LABEL is searchable, not just the id behind it');
+  ok(find('زيوت') === '1,3', 'the category label is searchable too');
+  ok(find('14.00%') === '1,3', 'a formatted value (the tax percent) is searchable as displayed');
+  ok(find('زيت acme') === '3', 'two words narrow — every term must appear (AND, not OR)');
+  ok(find('  زيت   acme  ') === '3', 'extra whitespace between terms is ignored');
+  ok(find('لا يوجد') === '', 'a term nothing contains yields no rows');
+  ok(passes({ id: 9 }, { q: 'زيت' }) === false,
+    'a row with no search text simply does not match — it never throws');
+
+  /* Composition with the filters that were already there. */
+  const mixed = [
+    { id: 1, category: 'CAT_A', current_stock_qty: 5, __search: 'زيت' },
+    { id: 2, category: 'CAT_B', current_stock_qty: 5, __search: 'زيت' },
+    { id: 3, category: 'CAT_A', current_stock_qty: 50, __search: 'زيت' },
+  ];
+  ok(mixed.filter(r => passes(r, { q: 'زيت', category: 'CAT_A', qtyMin: null, qtyMax: 10 }))
+    .map(r => r.id).join(',') === '1',
+    'the search composes with the category and the qty bounds');
+
+  /* The text it searches is built from the row's values, not from markup. */
+  ok(/r\.__search = \[/.test(products),
+    'renderTable builds __search from the row values');
+  ok(/__search[\s\S]{0,600}partyMap\[String\(r\.client_id\)\]/.test(products)
+    && /__search[\s\S]{0,600}catMap\[String\(r\.category\)\]/.test(products),
+    'and it includes the mapped party and category labels');
+  ok(!/__search[\s\S]{0,600}innerHTML/.test(products),
+    'it is never built from rendered HTML, so styles and data- attributes cannot be hits');
+  ok(/FILTERS\.q = ''; FILTERS\.category/.test(products), 'مسح الفلاتر clears the search too');
+  ok(/filtersActive\(\)[\s\S]{0,120}FILTERS\.q/.test(products),
+    'a search on its own counts as an active filter, so the empty state explains itself');
+  ok(/key: 'flt-search'/.test(products) && /بحث عام/.test(products),
+    'the search box is part of the page filter bar');
+  ok(/clearTimeout\(ts\)/.test(products), 'the search input is debounced like the qty bounds');
 }
 
 /* ── 8. P1 is client-side by design — no server call for filtering ───────── */
@@ -381,3 +429,4 @@ if (failed === 0) {
 }
 console.log('S13: ' + failed + ' assertion(s) FAILED');
 process.exit(1);
+

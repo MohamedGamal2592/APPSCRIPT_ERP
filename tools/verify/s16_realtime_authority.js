@@ -270,6 +270,7 @@ function sessionFixture() {
 /* 10 — the DIRECTORY role, not the session role, decides authority. */
 {
   const H = harness();
+  H.companies = [{ company_unique_id: 'NewCo', company_name_ar: 'NewCo', company_name_en: 'NewCo', company_sheet_link: 'new-db', enabled: true }];
   H.users = [{ email: 'a@x.com', name: 'Real Name', role: 'Manager', company: 'NewCo', status: 'Active' }];
   H.setSession(sessionFixture());
   const seen = [];
@@ -293,6 +294,7 @@ function sessionFixture() {
 /* 10b — a live role of Super Admin is honoured immediately. */
 {
   const H = harness();
+  H.companies = [{ company_unique_id: 'VF', company_name_ar: 'VF', company_name_en: 'VF', company_sheet_link: 'vf-db', enabled: true }];
   H.users = [{ email: 'a@x.com', name: 'N', role: 'Super Admin', company: 'VF', status: 'Active' }];
   H.setSession(sessionFixture());
   H.newExecution();
@@ -304,6 +306,7 @@ function sessionFixture() {
 /* 11 — an EMPTY directory fails OPEN. */
 {
   const H = harness();
+  H.companies = [{ company_unique_id: 'OldCo', company_name_ar: 'OldCo', company_name_en: 'OldCo', company_sheet_link: 'old-db', enabled: true }];
   H.users = [];                              // indistinguishable from a read failure
   H.setSession(sessionFixture());
   const seen = [];
@@ -320,6 +323,7 @@ function sessionFixture() {
 /* 11b — a directory read that THREW is the same case as an empty one. */
 {
   const H = harness();
+  H.companies = [{ company_unique_id: 'OldCo', company_name_ar: 'OldCo', company_name_en: 'OldCo', company_sheet_link: 'old-db', enabled: true }];
   H.ctx.getAllRecords_ = function () { throw new Error('stub: ERP_Users read failed'); };
   H.setSession(sessionFixture());
   H.newExecution();
@@ -330,6 +334,7 @@ function sessionFixture() {
 /* 12 — a POPULATED directory that lacks the email fails CLOSED. */
 {
   const H = harness();
+  H.companies = [{ company_unique_id: 'NewCo', company_name_ar: 'NewCo', company_name_en: 'NewCo', company_sheet_link: 'new-db', enabled: true }];
   H.users = [{ email: 'someone.else@x.com', name: 'Other', role: 'Manager', company: 'NewCo', status: 'Active' }];
   H.setSession(sessionFixture());
   H.newExecution();
@@ -503,3 +508,4 @@ if (failed === 0) {
 }
 console.log('S16: ' + failed + ' assertion(s) FAILED');
 process.exit(1);
+

@@ -1,0 +1,77 @@
+﻿<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="description" content="تعيين كلمة المرور الجديدة">
+  <title>تعيين كلمة المرور</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('ERP_Flow'); ?>
+  <?!= include('ERP_Modal'); ?>
+</head>
+<body>
+<div dir="rtl" style="display:flex;align-items:center;justify-content:center;min-height:100dvh;min-height:calc(var(--vh,1vh)*100);padding:max(16px,env(safe-area-inset-top)) max(16px,env(safe-area-inset-right)) max(16px,env(safe-area-inset-bottom)) max(16px,env(safe-area-inset-left));">
+  <div style="width:100%;max-width:400px;background:var(--bg-surface);border:1px solid var(--border-color);border-radius:var(--radius-lg);padding:clamp(20px,5vw,32px);box-shadow:var(--shadow-lg);">
+    <h2 style="text-align:center;margin-bottom:8px;font-size:clamp(18px,4vw,22px);">تعيين كلمة مرور جديدة</h2>
+    <p style="text-align:center;color:var(--text-muted);font-size:13px;margin-bottom:16px;">مرحباً! هذه أول زيارة لك، يرجى اختيار كلمة مرور.</p>
+    <div class="form-field">
+      <label class="form-label" for="setup-email">البريد الإلكتروني</label>
+      <input id="setup-email" class="input" type="email" value="<?!= email ?>" readonly inputmode="email">
+    </div>
+    <div class="form-field">
+      <label class="form-label" for="setup-password">كلمة المرور الجديدة</label>
+      <input id="setup-password" class="input" type="password" placeholder="********" autocomplete="new-password" enterkeyhint="next" oninput="checkPass()">
+    </div>
+    <div class="form-field">
+      <label class="form-label" for="setup-password2">تأكيد كلمة المرور</label>
+      <input id="setup-password2" class="input" type="password" placeholder="********" autocomplete="new-password" enterkeyhint="done" oninput="checkPass()">
+    </div>
+    <div class="field-error" id="setup-error" style="min-height:20px;"></div>
+    <button class="btn btn-primary" style="width:100%;justify-content:center;" onclick="doSetup()">حفظ كلمة المرور</button>
+  </div>
+</div>
+<script>
+  function getDeviceInfo() {
+    try {
+      var ua = navigator.userAgent || '';
+      var os = 'Unknown', browser = 'Unknown';
+      if (/Windows/i.test(ua)) os = 'Windows'; else if (/Mac/i.test(ua)) os = 'macOS'; else if (/Android/i.test(ua)) os = 'Android'; else if (/iPhone|iPad/i.test(ua)) os = 'iOS'; else if (/Linux/i.test(ua)) os = 'Linux';
+      if (/Edg/i.test(ua)) browser = 'Edge'; else if (/Chrome/i.test(ua)) browser = 'Chrome'; else if (/Firefox/i.test(ua)) browser = 'Firefox'; else if (/Safari/i.test(ua)) browser = 'Safari';
+      var type = /Mobi|Android|iPhone|iPad/i.test(ua) ? 'Mobile' : 'Desktop';
+      var name = (type === 'Mobile' ? 'جوال' : 'حاسوب') + ' • ' + browser + ' • ' + os;
+      return { name: name, type: type, os: os, browser: browser };
+    } catch (e) { return { name: 'Unknown', type: 'Unknown', os: 'Unknown', browser: 'Unknown' }; }
+  }
+  function checkPass() {
+    var p1 = document.getElementById('setup-password').value;
+    var p2 = document.getElementById('setup-password2').value;
+    var err = document.getElementById('setup-error');
+    if (p2 && p1 !== p2) { err.textContent = 'كلمتا المرور غير متطابقتين'; }
+    else { err.textContent = ''; }
+  }
+  function doSetup() {
+    var email = document.getElementById('setup-email').value.trim();
+    var p1 = document.getElementById('setup-password').value;
+    var p2 = document.getElementById('setup-password2').value;
+    var err = document.getElementById('setup-error');
+    if (!p1) { err.textContent = 'أدخل كلمة المرور الجديدة'; return; }
+    if (p1.length < 8) { err.textContent = 'كلمة المرور يجب ألا تقل عن 8 أحرف'; return; }
+    if (p1 !== p2) { err.textContent = 'كلمتا المرور غير متطابقتين'; return; }
+    try { if (window.ERPFlow) ERPFlow.start('جاري تعيين كلمة المرور...'); } catch(e){}
+    UI.showSpinner('جاري الحفظ...');
+    API.call('setup_password', { email: email, password: p1, device: getDeviceInfo() })
+      .then(function (r) {
+        API.setSession({ token: r.token, user: r.user });
+        UIC.toast('تم تعيين كلمة المرور بنجاح', 'success');
+        window.location.href = (window.scriptUrl || '/') + '?action=ERPDashboard&sessionToken=' + r.token;
+      })
+      .catch(function (e) {
+        err.textContent = e.message || 'تعذر الحفظ';
+      })
+      .finally(function () { UI.hideSpinner(); try{ if(window.ERPFlow) ERPFlow.finish(); }catch(e){} });
+  }
+</script>
+</body>
+</html>

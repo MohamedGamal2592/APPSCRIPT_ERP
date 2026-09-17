@@ -264,7 +264,7 @@ console.log('\n1 — تحديد الورديات: the two rules the table is sup
 }
 
 /* ══ 2. تقرير المصروفات ═════════════════════════════════════════════════ */
-console.log('\n2 — تقرير المصروفات: selection by «المستوى الاساسي» = 3, and the maths\n');
+console.log('\n2 — تقرير المصروفات: range on transaction_date + previous-period comparison\n');
 {
   const START = SRC.indexOf('  function getValleyCashExpenseReport_(data, user, dbId) {');
   const END = SRC.indexOf('  function buildCashChartOptions_(dbId) {', START);
@@ -298,25 +298,37 @@ console.log('\n2 — تقرير المصروفات: selection by «المستو�
     /* no chart code at all */
     { transaction_date: '2026-03-09', chart_code: '', total: 7777, transaction_amount: 7777, total_discount: 0, taxes: 0 },
     /* a different year */
-    { transaction_date: '2025-03-05', chart_code: 411100, total: 6666, transaction_amount: 6666, total_discount: 0, taxes: 0 }
+    { transaction_date: '2025-03-05', chart_code: 411100, total: 6666, transaction_amount: 6666, total_discount: 0, taxes: 0 },
+    /* February, so the previous equal-length period of a March range is non-empty */
+    { transaction_date: '2026-02-10', chart_code: 411100, total: 400, transaction_amount: 400, total_discount: 0, taxes: 0 }
   ];
 
   const env = {
     FIN_CHART_SHEET: 'valley_chart_of_accounts',
     FIN_CASH_SHEET: 'valley_cash_bank_movement',
-    VF_MONTH_NAMES_AR: ['يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو',
-      'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر'],
     getAllRecords_: (dbId, name) => {
       const T = { 'valley_chart_of_accounts': CHART, 'valley_cash_bank_movement': CASH };
       if (!T[name]) throw new Error('no fixture for ' + name);
       return T[name].map(r => Object.assign({}, r));
     },
-    parseDate_: (v) => { if (!v) return null; const d = new Date(v); return isNaN(d.getTime()) ? null : d; }
+    parseDate_: (v) => { if (!v) return null; const d = new Date(v); return isNaN(d.getTime()) ? null : d; },
+    pad2_: (n) => (n < 10 ? '0' + n : '' + n),
+    vfDateBound_: (v, endOfDay) => {
+      if (!v) return null;
+      const t = String(v).trim();
+      const d = /^\d{4}-\d{2}-\d{2}$/.test(t)
+        ? new Date(t + (endOfDay ? 'T23:59:59.999' : 'T00:00:00.000'))
+        : new Date(t);
+      return isNaN(d.getTime()) ? null : d;
+    }
   };
   const H = runBlock(block, env, '{ report: getValleyCashExpenseReport_ }');
 
-  const out = H.report({ year: 2026, month: 3 }, { email: 'u@v.t' }, 'db');
+  /* March range: 1000 + 500 = 1500, 300, and the rebuilt 220 → 2020 */
+  const out = H.report({ from: '2026-03-01', to: '2026-03-31' }, { email: 'u@v.t' }, 'db');
   check(out.status === 'success', 'the report runs');
+  check(out.range.from === '2026-03-01' && out.range.to === '2026-03-31',
+    'the range is echoed back', JSON.stringify(out.range));
   check(out.accounts_considered === 3,
     'exactly the three accounts whose «المستوى الاساسي» is 3 are considered',
     'got ' + out.accounts_considered);
@@ -331,60 +343,66 @@ console.log('\n2 — تقرير المصروفات: selection by «المستو�
   check(byCode['411100'].label === 'مصروفات إدارية',
     'the account is labelled by «كود المستوى»', byCode['411100'].label);
 
-  /* March: 1000 + 500 = 1500, 300, and the rebuilt 220 → 2020 */
-  check(byCode['411100'].month_amount === 1500, 'March for 411100 is 1000 + 500 = 1500',
-    byCode['411100'].month_amount);
-  check(byCode['411300'].month_amount === 220,
+  check(byCode['411100'].range_amount === 1500, 'March for 411100 is 1000 + 500 = 1500',
+    byCode['411100'].range_amount);
+  check(byCode['411300'].range_amount === 220,
     'a row with no `total` on the sheet is rebuilt as 250 − 50 + 20 = 220',
-    byCode['411300'].month_amount);
-  check(out.totals.month_amount === 2020, 'the month total is 2020', out.totals.month_amount);
+    byCode['411300'].range_amount);
+  check(out.totals.range_amount === 2020, 'the range total is 2020', out.totals.range_amount);
+  check(out.totals.range_moves === 4, 'four movements fall in March', out.totals.range_moves);
 
-  /* Year to date adds January's 700; 2025 is a different year and excluded. */
-  check(byCode['411100'].ytd_amount === 2200, 'the year adds January 700 → 2200',
-    byCode['411100'].ytd_amount);
-  check(out.totals.ytd_amount === 2720, 'the year total is 2720', out.totals.ytd_amount);
+  /* Previous equal-length period: March is 31 days, so prev is Jan 29..Feb 28.
+     Only the Feb 10 400 falls inside; January's 700 is before it, 2025 excluded. */
+  check(out.range.prev_from === '2026-01-29' && out.range.prev_to === '2026-02-28',
+    'the previous equal-length period is reported', JSON.stringify(out.range));
+  check(byCode['411100'].prev_amount === 400, 'the previous period holds February 400',
+    byCode['411100'].prev_amount);
+  check(out.totals.prev_amount === 400, 'the previous total is 400', out.totals.prev_amount);
 
   /* percentages are of their OWN total, and they add up */
-  const sumMonthPct = out.rows.reduce((a, r) => a + r.month_pct, 0);
-  const sumYtdPct = out.rows.reduce((a, r) => a + r.ytd_pct, 0);
-  check(Math.abs(sumMonthPct - 100) < 0.05, 'the month percentages add up to 100',
-    sumMonthPct.toFixed(2));
-  check(Math.abs(sumYtdPct - 100) < 0.05, 'the year percentages add up to 100', sumYtdPct.toFixed(2));
-  check(Math.abs(byCode['411100'].month_pct - (1500 / 2020 * 100)) < 0.01,
-    '1500 of 2020 is reported as ' + byCode['411100'].month_pct + '%');
-  check(byCode['411100'].month_pct !== byCode['411100'].ytd_pct,
-    'the month share and the year share are computed against different totals');
+  const sumRangePct = out.rows.reduce((a, r) => a + r.range_pct, 0);
+  const sumPrevPct = out.rows.reduce((a, r) => a + r.prev_pct, 0);
+  check(Math.abs(sumRangePct - 100) < 0.05, 'the range percentages add up to 100',
+    sumRangePct.toFixed(2));
+  check(Math.abs(sumPrevPct - 100) < 0.05, 'the previous percentages add up to 100',
+    sumPrevPct.toFixed(2));
+  check(Math.abs(byCode['411100'].range_pct - (1500 / 2020 * 100)) < 0.01,
+    '1500 of 2020 is reported as ' + byCode['411100'].range_pct + '%');
+  check(byCode['411100'].range_pct !== byCode['411100'].prev_pct,
+    'the range share and the previous share are computed against different totals');
 
   /* ordering, so the biggest expense is first */
-  check(out.rows[0].chart_code === '411100', 'rows are ordered by the month amount, biggest first',
+  check(out.rows[0].chart_code === '411100', 'rows are ordered by the range amount, biggest first',
     out.rows.map(r => r.chart_code).join(','));
 
-  /* the monthly strip */
-  check(out.months.length === 12, 'twelve months are returned for the trend');
-  check(out.months[2].amount === 2020, 'March in the strip matches the month total',
-    out.months[2].amount);
-  check(out.months[0].amount === 700, 'January in the strip is 700', out.months[0].amount);
-  check(out.months[0].label === 'يناير', 'months are labelled in Arabic', out.months[0].label);
+  /* no month strip, pickers or YTD columns anymore */
+  check(!('months' in out) && !('years' in out) && !('month_label' in out) && !('ytd_through' in out),
+    'the response carries no month strip, year list or YTD fields');
 
-  /* a month with nothing in it is empty, not an error */
+  /* a range with nothing in it is empty, not an error */
   {
-    const feb = H.report({ year: 2026, month: 2 }, { email: 'u@v.t' }, 'db');
-    check(feb.totals.month_amount === 0, 'a month with no expenses totals zero');
-    check(feb.rows.every(r => r.month_pct === 0),
-      '  and every share is 0 rather than a division by zero',
-      JSON.stringify(feb.rows.map(r => r.month_pct)));
-    check(feb.totals.ytd_amount > 0, '  while the year to date still has its figures');
+    const old = H.report({ from: '2019-01-01', to: '2019-12-31' }, { email: 'u@v.t' }, 'db');
+    check(old.rows.length === 0 && old.totals.range_amount === 0 && old.totals.prev_amount === 0,
+      'a range with no expense movements returns an empty report, not an error');
   }
 
-  /* a year with nothing in it */
+  /* unparseable bounds never hide data: everything lands in the range */
   {
-    const old = H.report({ year: 2019, month: 5 }, { email: 'u@v.t' }, 'db');
-    check(old.rows.length === 0 && old.totals.ytd_amount === 0,
-      'a year with no expense movements returns an empty report, not an error');
+    const un = H.report({ from: 'nonsense', to: '' }, { email: 'u@v.t' }, 'db');
+    check(un.totals.range_amount === 9786,
+      'an unparseable bound is unbounded — 2020 + 700 + 6666 + 400 = 9786',
+      un.totals.range_amount);
   }
 
-  check(!!throws(() => H.report({ year: 2026, month: 13 }, { email: 'u@v.t' }, 'db')),
-    'a month outside 1..12 is refused');
+  /* no keys at all defaults to the current month-to-date */
+  {
+    const realNow = new Date();
+    const first = realNow.getFullYear() + '-' +
+      (realNow.getMonth() + 1 < 10 ? '0' + (realNow.getMonth() + 1) : '' + (realNow.getMonth() + 1)) + '-01';
+    const def = H.report({}, { email: 'u@v.t' }, 'db');
+    check(def.range.from === first && def.range.to === '',
+      'the default range is month-to-date', JSON.stringify(def.range));
+  }
 
   /* the report is gated on the page it reads */
   check(/'get_valley_cash_expense_report':\s*\{\s*page:\s*'vf_cash',\s*access:\s*'read'\s*\}/.test(SRC),
@@ -410,3 +428,4 @@ console.log('\n' + (failed === 0
   ? 'S21 — the shift rules and the expenses report both check out.'
   : failed + ' check(s) FAILED.'));
 process.exit(failed === 0 ? 0 : 1);
+

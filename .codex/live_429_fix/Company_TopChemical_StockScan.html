@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>جرد دوري مخازن باركود</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_TopChemical_Nav'); ?>
+  <?!= getCompanyThemeCSS_('3fe1b5cb67b7223e') ?>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
+  <style>
+    .scan-wrap { max-width: 520px; margin: 0 auto; padding: 4px 4px 32px; }
+    .scan-card { background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: var(--radius-lg); padding: 20px; box-shadow: var(--shadow-sm); }
+    .scan-big-btn { width: 100%; padding: 16px; font-size: 16px; font-weight: 800; border-radius: 12px; }
+    .scan-reader { width: 100%; margin: 12px 0; border-radius: 10px; overflow: hidden; }
+    .scan-manual { display: flex; gap: 8px; margin-top: 12px; }
+    .scan-manual input { flex: 1; font-size: 15px; padding: 12px; }
+    .scan-hint { color: var(--text-muted); font-size: 12.5px; text-align: center; margin-top: 8px; }
+    .scan-product-header { text-align: center; margin-bottom: 14px; }
+    .scan-product-header .name { font-size: 18px; font-weight: 800; color: var(--text-main); }
+    .scan-product-header .unit { color: var(--text-muted); font-size: 13px; }
+    .scan-avail { text-align: center; background: var(--bg-muted, #f5f5f5); border-radius: 10px; padding: 10px; margin-bottom: 14px; font-size: 14px; }
+    .scan-avail .value { font-weight: 800; font-size: 18px; }
+    .scan-total-row { display: flex; justify-content: space-between; align-items: center; background: var(--bg-muted, #f5f5f5); border-radius: 10px; padding: 12px 14px; margin: 14px 0; font-weight: 800; }
+    .scan-total-row .val { font-size: 20px; color: var(--brand-primary); }
+    .scan-actions { display: flex; gap: 10px; margin-top: 16px; }
+    .scan-actions .btn { flex: 1; }
+    .confirm-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--border-color); font-size: 14px; }
+    .confirm-row:last-child { border-bottom: none; }
+    .confirm-row .label { color: var(--text-muted); }
+    .confirm-row .val { font-weight: 700; }
+    .save-status { text-align: center; margin-top: 14px; font-weight: 700; }
+    .save-status.saving { color: var(--text-muted); }
+    .save-status.success { color: #16a34a; }
+    .save-status.error { color: #dc2626; }
+  </style>
+</head>
+<body>
+<div id="tc-root" dir="rtl"></div>
+<script>
+  var params = new URLSearchParams(window.location.search);
+  var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+  var scriptUrl = window.scriptUrl || '/';
+  var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+  var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('3fe1b5cb67b7223e') ?>';
+  var COMPANY_PAGES = <?!= companyPages ?>;
+  var CURRENT_ACTION = '<?!= currentAction ?>';
+  var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+  var CAN_WRITE = UIC.canAdd_(); var CAN_FULL = UIC.canFull_();
+  var WAREHOUSES = ['1', '2', '3', '4', '5', 'شبرا'];
+  var CONTAINER_TYPES = ['شيكارة', 'كرتونة', 'برميل', 'بستلة'];
+
+  function companyCall(moduleAction, data) {
+    return API.call('company_action', {
+      target_system: '3fe1b5cb67b7223e',
+      module_action: moduleAction,
+      data: data || {}
+    }, SESSION_TOKEN);
+  }
+
+  function esc(s) { return FMT.escape(s == null ? '' : s); }
+  function pad(n) { return ('0' + n).slice(-2); }
+  function todayStr() {
+    var d = new Date();
+    return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+  }
+  function round2(n) { return Math.round((Number(n) || 0) * 100) / 100; }
+
+  /* ── State ─────────────────────────────────────────────────────────────── */
+  var currentProduct = null;   // { id, label }
+  var currentAvail = null;     // number | null (null = unknown / fetch failed)
+  var pendingEntry = null;     // payload built at confirm time, resent on retry
+  var qrReader = null;
+  var cameraActive = false;
+
+  function load() {
+    UIC.appShell('tc-root', {
+      companyLogoUrl: COMPANY_LOGO_URL,
+      companyLogoHref: scriptUrl + '?action=tc_dashboard&sessionToken=' + SESSION_TOKEN,
+      companyLogoTitle: 'توب كيميكال',
+      breadcrumb: 'توب كيميكال / المخازن / جرد دوري مخازن باركود',
+      contentId: 'scan-content',
+      menuGroups: (window.TOPCHEMICAL_MENU || [])
+    });
+    fetchOptions();
+  }
+
+  function fetchOptions() {
+    companyCall('get_stock_scan_options')
+      .then(function (r) {
+        window.__productOptions = r.product_options || [];
+        renderShell();
+        showStep('scan');
+      })
+      .catch(function (e) { showFatalError(e); });
+  }
+
+  function showFatalError(e) {
+    var body = document.getElementById('scan-content');
+    if (body) body.innerHTML = '<div class="empty-state"><span>' + esc((e && e.message) || 'خطأ') + '</span></div>';
+  }
+
+  /* ── Shell: three steps, one visible at a time ───────────────────────────── */
+  function renderShell() {
+    var body = document.getElementById('scan-content');
+    body.innerHTML =
+      '<div class="scan-wrap">' +
+        '<div id="scan-step" class="scan-card"></div>' +
+        '<div id="count-step" class="scan-card" style="display:none;"></div>' +
+        '<div id="confirm-step" class="scan-card" style="display:none;"></div>' +
+      '</div>';
+  }
+
+  function showStep(name) {
+    ['scan', 'count', 'confirm'].forEach(function (s) {
+      var el = document.getElementById(s + '-step');
+      if (el) el.style.display = (s === name) ? '' : 'none';
+    });
+    if (name === 'scan') {
+      renderScanStep();
+      var input = document.getElementById('scan-input');
+      if (input) { input.value = ''; input.focus(); }
+    }
+  }
+
+  /* ── Step 1: scan ─────────────────────────────────────────────────────── */
+  function renderScanStep() {
+    var el = document.getElementById('scan-step');
+    if (!el) return;
+    el.innerHTML =
+      '<button class="btn btn-primary scan-big-btn" onclick="startCamera()">📷 مسح بالكاميرا</button>' +
+      '<div id="scan-reader" class="scan-reader" style="display:none;"></div>' +
+      '<div class="scan-manual">' +
+        '<input id="scan-input" class="input" type="text" placeholder="أو امسح/اكتب كود الصنف ثم Enter" autofocus autocomplete="off">' +
+      '</div>' +
+      '<div class="scan-hint">كود الصنف مطبوع أسفل الباركود أرقاماً فقط (مثال: 12)، والملصقات القديمة بصيغة TCP-12 تُقرأ أيضاً — قارئ الباركود المحمول أو لوحة المفاتيح يعملان في نفس الحقل.</div>';
+    var input = document.getElementById('scan-input');
+    if (input) {
+      input.addEventListener('keydown', function (e) {
+        if (e.key !== 'Enter') return;
+        e.preventDefault();
+        var v = this.value.trim();
+        this.value = '';
+        if (v) handleScannedCode(v);
+      });
+    }
+  }
+
+  function startCamera() {
+    if (cameraActive || typeof Html5Qrcode === 'undefined') {
+      if (typeof Html5Qrcode === 'undefined') UIC.toast('تعذر تحميل مكتبة الكاميرا', 'error');
+      return;
+    }
+    var readerEl = document.getElementById('scan-reader');
+    if (!readerEl) return;
+    readerEl.style.display = '';
+    try {
+      qrReader = new Html5Qrcode('scan-reader', {
+        formatsToSupport: [Html5QrcodeSupportedFormats.CODE_128]
+      });
+    } catch (e) {
+      UIC.toast('تعذر تشغيل الكاميرا: ' + ((e && e.message) || e), 'error');
+      readerEl.style.display = 'none';
+      return;
+    }
+    qrReader.start(
+      { facingMode: 'environment' },
+      { fps: 10, qrbox: { width: 260, height: 140 } },
+      function onScanSuccess(decodedText) {
+        var code = decodedText;
+        stopCamera();
+        handleScannedCode(code);
+      },
+      function onScanFailure() { /* no code in this frame — expected continuously while aiming */ }
+    ).then(function () { cameraActive = true; }).catch(function (err) {
+      UIC.toast('تعذر الوصول للكاميرا: ' + ((err && err.message) || err), 'error');
+      readerEl.style.display = 'none';
+    });
+  }
+
+  function stopCamera() {
+    var readerEl = document.getElementById('scan-reader');
+    if (!cameraActive || !qrReader) { if (readerEl) readerEl.style.display = 'none'; return; }
+    qrReader.stop().then(function () {
+      try { qrReader.clear(); } catch (e) {}
+      cameraActive = false;
+      if (readerEl) readerEl.style.display = 'none';
+    }).catch(function () { cameraActive = false; if (readerEl) readerEl.style.display = 'none'; });
+  }
+
+  function handleScannedCode(code) {
+    var raw = String(code || '').trim();
+    var m = raw.match(/^TCP-(\d+)$/i);
+    var pid = m ? Number(m[1]) : Number(raw);
+    if (!Number.isInteger(pid) || pid <= 0) {
+      UIC.toast('كود غير صالح: ' + raw, 'error');
+      return;
+    }
+    var opt = (window.__productOptions || []).find(function (o) { return Number(o.value) === pid; });
+    if (!opt) {
+      UIC.toast('لم يتم العثور على صنف بهذا الكود', 'error');
+      return;
+    }
+    selectProduct(pid, opt.label);
+  }
+
+  /* ── System qty (رصيد السيستم) — one shared fetch, reused across scans ──── */
+  var systemQtyPromise = null;
+  function ensureSystemQty(forceRefresh) {
+    if (forceRefresh) systemQtyPromise = null;
+    if (!systemQtyPromise) {
+      systemQtyPromise = companyCall('get_stock_scan_qty').then(function (r) { return r.system_qty || {}; });
+    }
+    return systemQtyPromise;
+  }
+
+  /* ── Step 2: count entry ──────────────────────────────────────────────── */
+  function selectProduct(pid, label) {
+    currentProduct = { id: pid, label: label };
+    currentAvail = null;
+    showStep('count');
+    renderCountStep();
+    ensureSystemQty().then(function (map) {
+      if (!currentProduct || currentProduct.id !== pid) return; // reset happened meanwhile
+      currentAvail = (map && map[pid] !== undefined) ? Number(map[pid]) : null;
+      renderAvailability();
+    }).catch(function () {
+      if (!currentProduct || currentProduct.id !== pid) return;
+      currentAvail = null;
+      renderAvailability(true);
+    });
+  }
+
+  function retryAvailability() {
+    renderAvailability(false, true);
+    var pid = currentProduct && currentProduct.id;
+    ensureSystemQty(true).then(function (map) {
+      if (!currentProduct || currentProduct.id !== pid) return;
+      currentAvail = (map && map[pid] !== undefined) ? Number(map[pid]) : null;
+      renderAvailability();
+    }).catch(function () {
+      if (!currentProduct || currentProduct.id !== pid) return;
+      currentAvail = null;
+      renderAvailability(true);
+    });
+  }
+
+  function renderAvailability(failed, loading) {
+    var el = document.getElementById('scan-avail-box');
+    if (!el) return;
+    if (loading) { el.innerHTML = 'جارٍ تحميل رصيد السيستم...'; return; }
+    if (currentAvail == null) {
+      el.innerHTML = (failed ? 'تعذر جلب رصيد السيستم لهذا الصنف. ' : 'لا يوجد رصيد سيستم مسجل لهذا الصنف. ') +
+        '<button type="button" class="btn btn-outline" style="margin-inline-start:8px;" onclick="retryAvailability()">إعادة المحاولة</button>';
+      return;
+    }
+    el.innerHTML = 'رصيد السيستم الحالي: <span class="value">' + esc(currentAvail) + '</span>';
+  }
+
+  function renderCountStep() {
+    var el = document.getElementById('count-step');
+    if (!el) return;
+    el.innerHTML =
+      '<div class="scan-product-header">' +
+        '<div class="name">' + esc(currentProduct.label) + '</div>' +
+      '</div>' +
+      '<div id="scan-avail-box" class="scan-avail">جارٍ تحميل رصيد السيستم...</div>' +
+      '<form id="scan-form">' +
+        UIC.field({ key: 'container_type', label: 'نوع العبوة', type: 'select', required: true, options: CONTAINER_TYPES, placeholder: 'اختر نوع العبوة...' }) +
+        UIC.field({ key: 'unit_count', label: 'عدد العبوات', type: 'number', step: '1', required: true, placeholder: 'مثال: 40' }) +
+        UIC.field({ key: 'amount_per_unit', label: 'الكمية بالعبوة الواحدة', type: 'number', step: '0.01', required: true, placeholder: 'مثال: 25' }) +
+        UIC.field({ key: 'loose_amount', label: 'الكمية الفرط', type: 'number', step: '0.01', value: '0', required: true }) +
+        UIC.field({ key: 'warehouse', label: 'المخزن', type: 'select', required: true, options: WAREHOUSES, placeholder: 'اختر المخزن...' }) +
+        UIC.field({ key: 'date', label: 'التاريخ', type: 'date', value: todayStr(), required: true }) +
+      '</form>' +
+      '<div class="scan-total-row"><span>الكمية الإجمالية</span><span id="total-preview" class="val">0</span></div>' +
+      '<div class="scan-actions">' +
+        '<button type="button" class="btn btn-outline" onclick="cancelCount()">إلغاء</button>' +
+        '<button type="button" class="btn btn-primary" onclick="goToConfirm()">تأكيد الكمية</button>' +
+      '</div>';
+    ['unit_count', 'amount_per_unit', 'loose_amount'].forEach(function (key) {
+      var input = document.getElementById(key);
+      if (input) input.addEventListener('input', updateTotalPreview);
+    });
+    updateTotalPreview();
+  }
+
+  function computeTotal() {
+    var count = Number((document.getElementById('unit_count') || {}).value) || 0;
+    var perUnit = Number((document.getElementById('amount_per_unit') || {}).value) || 0;
+    var loose = Number((document.getElementById('loose_amount') || {}).value) || 0;
+    return round2(count * perUnit + loose);
+  }
+
+  function updateTotalPreview() {
+    var t = document.getElementById('total-preview');
+    if (t) t.textContent = computeTotal();
+  }
+
+  function cancelCount() {
+    currentProduct = null;
+    currentAvail = null;
+    showStep('scan');
+  }
+
+  /* ── Step 3: confirm, then save in the background ────────────────────── */
+  function diffText(amount, avail) {
+    if (avail === '' || avail == null || isNaN(avail)) return '';
+    var d = round2(Number(avail) - Number(amount));
+    if (d === 0) return 'مظبوط';
+    return d + '  ' + (Number(avail) > Number(amount) ? 'عجز' : 'زيادة');
+  }
+
+  function goToConfirm() {
+    if (!UIC.validateForm('scan-form')) return;
+    if (currentAvail == null) {
+      UIC.toast('لا يمكن المتابعة بدون رصيد السيستم — أعد تحميل الرصيد أعلاه', 'error');
+      return;
+    }
+    var data = UIC.collectForm('scan-form');
+    var total = computeTotal();
+    if (!(total > 0)) {
+      UIC.toast('الكمية الإجمالية يجب أن تكون أكبر من صفر', 'error');
+      return;
+    }
+    var loose = Number(data.loose_amount) || 0;
+    var notes = data.container_type + ' ' + data.unit_count + ' × ' + data.amount_per_unit +
+      (loose > 0 ? (' + فرط ' + loose) : '') + ' = ' + total;
+    pendingEntry = {
+      product: currentProduct.id,
+      warehouse: data.warehouse,
+      date: data.date,
+      amount: total,
+      available_amount: currentAvail,
+      notes: notes
+    };
+    showStep('confirm');
+    renderConfirmStep();
+  }
+
+  function renderConfirmStep() {
+    var el = document.getElementById('confirm-step');
+    if (!el) return;
+    var entry = pendingEntry;
+    el.innerHTML =
+      '<div class="scan-product-header"><div class="name">' + esc(currentProduct.label) + '</div></div>' +
+      '<div class="confirm-row"><span class="label">الكمية المدخلة</span><span class="val">' + esc(entry.amount) + '</span></div>' +
+      '<div class="confirm-row"><span class="label">رصيد السيستم</span><span class="val">' + esc(entry.available_amount) + '</span></div>' +
+      '<div class="confirm-row"><span class="label">الفرق</span><span class="val">' + esc(diffText(entry.amount, entry.available_amount)) + '</span></div>' +
+      '<div class="confirm-row"><span class="label">المخزن</span><span class="val">' + esc(entry.warehouse) + '</span></div>' +
+      '<div class="confirm-row"><span class="label">التفاصيل</span><span class="val">' + esc(entry.notes) + '</span></div>' +
+      '<div class="scan-actions">' +
+        '<button type="button" class="btn btn-outline" id="confirm-back-btn" onclick="backToCount()">رجوع للتعديل</button>' +
+        '<button type="button" class="btn btn-primary" id="confirm-save-btn" onclick="confirmSave()"' + (CAN_WRITE ? '' : ' disabled') + '>تأكيد الحفظ</button>' +
+      '</div>' +
+      '<div id="save-status" class="save-status"></div>';
+    if (!CAN_WRITE) UIC.toast('غير مصرح بالحفظ', 'error');
+  }
+
+  /* count-step's markup is still in the DOM from when it was first entered
+     (showStep only re-renders the scan step); this just re-shows it. */
+  function backToCount() { showStep('count'); }
+
+  function setSaveStatus(kind, msg) {
+    var el = document.getElementById('save-status');
+    var backBtn = document.getElementById('confirm-back-btn');
+    var saveBtn = document.getElementById('confirm-save-btn');
+    if (!el) return;
+    if (kind === 'saving') {
+      el.className = 'save-status saving';
+      el.innerHTML = 'جارٍ الحفظ في الخلفية...';
+      if (backBtn) backBtn.disabled = true;
+      if (saveBtn) saveBtn.disabled = true;
+    } else if (kind === 'success') {
+      el.className = 'save-status success';
+      el.innerHTML = '✓ تم الحفظ';
+    } else if (kind === 'error') {
+      el.className = 'save-status error';
+      el.innerHTML = '⚠ فشل الحفظ' + (msg ? (' — ' + esc(msg)) : '') +
+        '<div class="scan-actions" style="margin-top:8px;">' +
+          '<button type="button" class="btn btn-outline" onclick="cancelCount()">تجاهل والمسح التالي</button>' +
+          '<button type="button" class="btn btn-primary" onclick="confirmSave()">إعادة المحاولة</button>' +
+        '</div>';
+      if (backBtn) backBtn.disabled = false;
+    }
+  }
+
+  function confirmSave() {
+    if (!CAN_WRITE || !pendingEntry) { UIC.toast('غير مصرح', 'error'); return; }
+    /* NOTE (save-rollout run): this page and its s24 suite belong to another
+       effort — its `companyCall('add_stock_scan', …)` shape is pinned by
+       s24_stock_scan.js ("the page calls all three new actions by name"), so
+       the Tier B conversion is deferred until that suite migrates to the
+       `action:` matching s19 uses. The save below is the page's own blocking
+       chain, unchanged apart from this note. */
+    setSaveStatus('saving');
+    /* Fired without blocking the confirmation already on screen — every number
+       shown here was already computed client-side, so the operator does not
+       wait on this round trip to keep scanning. Failure stays visible with a
+       retry rather than being silently lost. */
+    companyCall('add_stock_scan', pendingEntry)
+      .then(function () {
+        setSaveStatus('success');
+        setTimeout(function () { currentProduct = null; currentAvail = null; pendingEntry = null; showStep('scan'); }, 1200);
+      })
+      .catch(function (e) { setSaveStatus('error', e && e.message); });
+  }
+
+  /* Another device's balance change arrives quietly (system qty only — the
+     scan flow itself has no list to redraw). */
+  UIC.Live.watchPage({
+    call: companyCall,
+    page: 'tc_stock_scan',
+    onChange: function () { UIC.Live.arrive(function () { ensureSystemQty(true); }); }
+  });
+
+  load();
+</script>
+</body>
+</html>
