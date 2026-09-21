@@ -24,7 +24,7 @@ Field names, hashes, types, counts, line numbers and bounded summaries only.
 |---|---|---|---|
 | 0 | Audit (read-only) | — | **DONE** — records in §4 |
 | 1 | Freeze canonical response contracts; resolve/document anomalies | — | **DONE** — `RV-1.1` fixed and closed with VM evidence (`RV-1.2`/`RV-1.3`, TR-12/TR-13); canonical contracts frozen (`RV-1.4`, TR-15); staging/live execution NOT RUN |
-| 2 | `Core_FastRead.js` primitives + metrics + parity guard | `FAST_READ_CORE_` (false) | NOT STARTED |
+| 2 | `Core_FastRead.js` primitives + metrics + parity guard | `FAST_READ_CORE_` (false) | **DONE** — engine committed inert (`RV-2.1`, TR-16/TR-17); no callers; one DoD row NOT MET with reason (document read call floor) |
 | 3 | Sales list (`NARROW_SCAN_PAGE` / `KEYSET`, no caching) | `SALES_FAST_READ_` | NOT STARTED |
 | 4 | Sales document reads | `SALES_FAST_READ_` | NOT STARTED |
 | 5 | Small-payload cache (stable key, stamp in manifest, pre/post validation) | `FAST_READ_CORE_` | NOT STARTED |
@@ -34,9 +34,10 @@ Field names, hashes, types, counts, line numbers and bounded summaries only.
 
 Flag states as of the last commit:
 
-- **Read/view flags: not yet defined.** They do not exist in the source yet (they are introduced
-  in step 2/3), so they are *absent*, not `false`. When introduced, each must default to
-  `false`, and this table must be updated in the same commit that introduces it.
+- **Read/view flags:** `FAST_READ_CORE_` **exists and is `false`** (introduced by RV-2.1).
+  `SALES_FAST_READ_`, `FAST_VIEW_CORE_` and `MFG_FAST_READ_` do not exist yet (steps 3, 6, 7);
+  when introduced, each must default to `false` and this table must be updated in the same
+  commit that introduces it.
 - Write-side flags (`FAST_SAVE_CORE_`, `MFG_BATCH_WRITES_`, `SALES_BATCH_WRITES_`,
   `RETURNS_BATCH_WRITES_`, `PURCHASE_BATCH_WRITES_`): **all `false`**.
 
@@ -449,6 +450,72 @@ review finding rather than a surprise.
 
 - Test runs: TR-15.
 
+### RV-2.1 — `Core_FastRead.js`: declared-strategy list and document primitives
+- Date / Commit: 2026-09-21 / identified by message — `feat(rv-2): Core_FastRead declared-strategy
+  primitives with honest metrics and parity guard`.
+- Step: 2.
+- Files (with line anchors):
+  - `Core_FastRead.js` (new, ~1100 lines) — `FAST_READ_CORE_ = false`;
+    `frNewContext_` / `frCheckDeadline_` (`FR_DEADLINE_MS_ = 120000`, DEC-3); the metrics
+    contract (`frNewMetrics_` + `frNoteMeta_`/`frNoteRead_`/`frNoteApi_`, `frMergeMetrics_`);
+    Layer-1 primitives `frReadColumnValues_`, `frKeyIndex_`, `frReadBlockRows_`,
+    `frReadRowsByParent_`, `frFetchRowsByNumber_`; the list strategies (`fastFetchList_`:
+    `APPEND_WINDOW`, `NARROW_SCAN_PAGE`, `KEYSET`, `FULL_SCAN`); the document fetcher
+    (`fastFetchDocument_` with `PARENT_SCAN`, `PARENT_FK_INDEX_THEN_FETCH`, `FULL_SCAN` per
+    section); `frShadowCompare_`; `frParityGuard_`; typed `FR_*` errors.
+  - `tools/verify/vf_workbook_stub.js` — extended: `valueRenderOption: 'UNFORMATTED_VALUE'` +
+    `dateTimeRenderOption: 'SERIAL_NUMBER'` now return date serials, which is what makes type
+    normalisation testable rather than assumed.
+  - `tools/verify/vf_action_harness.js` — loads `Core_FastRead.js` when present; `H.grab(names)`.
+  - `tools/verify/fast_read_primitives.js`, `tools/verify/fast_read_parity.js` (new).
+  - `READ_VIEW_MODULARIZATION_RESULTS.md` (this record, TR-16/TR-17).
+- What changed (behaviour terms): nothing. The engine has **no caller anywhere**; every
+  existing reader keeps running its legacy path. What now exists is the ability for a caller to
+  declare a query strategy and get an answer that either satisfies the declaration or refuses
+  (`FR_STRATEGY_UNSUPPORTED`), never a silent partial answer, together with per-call metrics
+  (`serviceCalls`, `rowsScanned`, `colsRead`, `cellsRead`, `bytesRead`, `partial`,
+  `cacheOutcome`) and a typed budget abort.
+- Why: plan §5.1 (metrics), §5.2 (declared list strategies), §5.3 (document strategies),
+  §5.7 (parity guard), §7 step 2, and §7.4's budget table.
+- Flag state before → after: `FAST_READ_CORE_` **introduced in this commit and `false`**
+  (the ledger's flag note is updated). No other read/view flag exists yet; the four
+  write-side flags are unchanged and `false`.
+- **Deliberate divergence from the write engine's discipline (recorded because it is a
+  contract):** `Core_FastSave.js` refuses every entry point while its master flag is false.
+  Here the primitives stay callable with `FAST_READ_CORE_` false, because plan §7.5 requires
+  `fr_shadow_compare` to run the modern reader **before** any flag is on. What the flag gates
+  is module opt-in (`fastReadOnFor_(moduleFlag)`), and that is what the parity test asserts.
+- Behaviour if reverted: L2 only: `git revert <sha>` deletes the engine. No flag flip is
+  needed because nothing calls it.
+- Retraction recipe: L2 only (commit-message grep above). L1 is a no-op while there are no
+  callers (flipping `FAST_READ_CORE_` back to false would still be the one-line action once a
+  module adopts it). L3 not applicable — this record adds no cache.
+- Metrics observed (with baseline): measured by TR-16 on the VM fixtures, not production.
+  `APPEND_WINDOW` 2 calls / 5 rows scanned for a 5-row page on a 40-row table (baseline:
+  legacy reads the whole table); `NARROW_SCAN_PAGE` 3 calls, `rowsScanned` 40 = table rows;
+  `KEYSET` 2 calls with a verified id column (published budget `2*log2(rows)+1` — beaten,
+  because verification makes the binary search a CPU operation and the page one block read);
+  document `PARENT_SCAN` 2 calls per section, `rowsScanned` = table rows.
+- Residual risk (what this does NOT prove):
+  - **No DoD table row is claimed as met by inspection.** One row is recorded **NOT MET**:
+    "Document fetch: `PARENT_SCAN` = 1 `serviceCalls`". The floor measured here is **2** —
+    one metadata call for the table length plus one projection read — because a bounded range
+    read cannot be addressed without the row count, and the engine refuses to accept a stale
+    row-count hint (a truncated result is worse than a call). With headers not supplied by the
+    caller the same section costs 4. The published target is therefore unreachable without
+    either a schema change or an unsound hint; the shortfall is recorded rather than papered
+    over, and the `cellsRead`/`rowsScanned` halves of that DoD row are met.
+  - The claimed DoD budgets for lists are met **when the caller supplies the header row** it
+    already holds (the shared `getHeaders_` memo). Without it the header read is 2 extra calls
+    and the metrics say so; the test asserts both paths.
+  - `cellsRead` for a **non-contiguous** narrow set is `rows x (maxIdx-minIdx+1)`, not
+    `rows x narrowCols`; the published bound is the contiguous case and is asserted as such.
+  - `bytesRead` is an approximation of received bytes (the service returns parsed values).
+  - Everything is fixtures: no staging or production execution, and `KEYSET`'s "measured
+    latency comparison" precondition is satisfied only by the harness's call-count comparison,
+    not by a live latency measurement — that is why no module may declare `KEYSET` yet.
+- Test runs: TR-16, TR-17.
+
 ---
 
 ## 5. Test-run records
@@ -654,6 +721,44 @@ review finding rather than a surprise.
 - Not covered: live data (fixtures again); the client-consumption quotes in RV-1.4 were read
   from the page sources, not executed in a browser; and the contract does not yet bind any
   reader — steps 3/4 must project through it.
+
+### TR-16 — Core_FastRead primitives: strategies, budgets, refusals, type fidelity
+- When: 2026-09-21
+- Environment: VM harness (no data) — real `Core_FastRead.js` + the fake workbook's call counters
+- Command: `node tools/verify/fast_read_primitives.js`
+- Purpose (claim under test): every declared strategy returns the right rows, spends within its
+  published call budget (or says why not), refuses what it cannot satisfy, and normalises
+  Advanced-API date serials to the same instants `Range.getValues()` returns; shadow compare
+  projects both readers through one canonicalizer and reports no raw values.
+- Result: **PASS** — exit 0, `fast_read_primitives: PASS`. Six failure/repair cycles are part
+  of the evidence (each was a real defect in the first cut, not a fixture tweak): the
+  APPEND_WINDOW budget needed caller-supplied headers to reach 2; a scattered narrow set reads
+  the enclosing rectangle and `cellsRead` was corrected to say so; `rowsScanned` counted
+  fetched page rows and now counts only scanned rows; the sort column had to join the narrow
+  read (a sort on an unread column silently did nothing); `frBinarySearch_`'s backward
+  predicate was inverted; date normalisation treated every numeric cell as a date until
+  `dateColumns` became a declared input; and `frDiffValues_` reported every Date as different.
+- Evidence: `tools/verify/fast_read_primitives.js`; exit code 0 observed.
+- Not covered: staging/production; live latency (KEYSET's "measured comparison" precondition is
+  satisfied only by call counts here); the 6-minute execution limit.
+
+### TR-17 — Decoupling gate and parity guard, including "test the test"
+- When: 2026-09-21
+- Environment: VM harness (no data) + static source inspection
+- Command: `node tools/verify/fast_read_parity.js`
+- Purpose (claim under test): `Core_FastRead.js` contains zero business tokens, zero Arabic
+  characters, zero whole-sheet range access and zero writes; its duplicated contracts equal the
+  write engine's executably; and the guard detects a divergence rather than always passing.
+- Result: **PASS** — exit 0, `fast_read_parity: PASS`. All seven token/character/write gates are
+  0; the parity guard's header-index, key-normalisation, key-of-row, epoch, block-cap,
+  batch-cap and bound-read checks all pass; a deliberately case-sensitive `fsHeaderIndex_`
+  fixture makes the guard report `ok: false` naming exactly `header index parity`; and a list
+  primitive still executes with `FAST_READ_CORE_` false while `fastReadOnFor_(true)` stays
+  false — the evidence-before-enablement property §7.5 requires.
+- Evidence: `tools/verify/fast_read_parity.js`; exit code 0 observed.
+- Not covered: the gate is textual (a token inside a string literal would count); and the
+  guard compares only the contracts listed in RV-5.7 of the plan, not every conceivable
+  duplication.
 
 ---
 

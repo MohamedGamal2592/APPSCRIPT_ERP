@@ -332,13 +332,31 @@ function createWorkbookStub(opts) {
     return { book: book, sheet: sheet, parsed: parsed };
   }
 
-  function valuesForA1(dbId, a1) {
+  /* Render a cell the way the Advanced API would for the requested options.
+   * Modelled: UNFORMATTED_VALUE + SERIAL_NUMBER returns date cells as serial
+   * numbers (the mode Core_FastRead.js always asks for, so its input type is
+   * deterministic). FORMATTED_VALUE is not modelled — a Date is returned as-is
+   * and a harness must not rely on display formatting being simulated. */
+  function renderCell_(v, req) {
+    if (!(v instanceof Date)) return v;
+    var wantsSerial = !!(req && (req.dateTimeRenderOption === 'SERIAL_NUMBER' ||
+      req.valueRenderOption === 'UNFORMATTED_VALUE'));
+    if (!wantsSerial) return stubClone_(v);
+    var localMs = Date.UTC(v.getFullYear(), v.getMonth(), v.getDate(),
+      v.getHours(), v.getMinutes(), v.getSeconds(), v.getMilliseconds());
+    return (localMs - VF_STUB_EPOCH_UTC) / 86400000;
+  }
+
+  function valuesForA1(dbId, a1, req) {
     var hit = sheetForRange(dbId, a1);
     var lastRow = hit.sheet.getLastRow();
     var p = hit.parsed;
     var numRows = p.numRows === 1 && !/\d/.test(String(a1).split('!').pop() || '') ? Math.max(1, lastRow) : p.numRows;
     var r = hit.sheet.getRange(p.row, p.col, numRows, p.numCols);
-    return { range: stubQuote_(hit.sheet.getName()) + '!' + r.getA1Notation(), values: r.getValues() };
+    var values = r.getValues().map(function (row) {
+      return row.map(function (v) { return renderCell_(v, req); });
+    });
+    return { range: stubQuote_(hit.sheet.getName()) + '!' + r.getA1Notation(), values: values };
   }
 
   function stubQuote_(n) { return "'" + String(n).replace(/'/g, "''") + "'"; }
@@ -357,9 +375,9 @@ function createWorkbookStub(opts) {
         };
       },
       Values: {
-        get: function (dbId, a1) {
+        get: function (dbId, a1, opts) {
           counts.sheetsApiCalls++;
-          var out = valuesForA1(dbId, a1);
+          var out = valuesForA1(dbId, a1, opts || {});
           return { spreadsheetId: String(dbId), range: out.range, majorDimension: 'ROWS', values: out.values };
         },
         batchGet: function (req, dbId) {
@@ -368,7 +386,7 @@ function createWorkbookStub(opts) {
           return {
             spreadsheetId: String(dbId),
             valueRanges: ranges.map(function (a1) {
-              var out = valuesForA1(dbId, a1);
+              var out = valuesForA1(dbId, a1, req);
               return { range: out.range, majorDimension: 'ROWS', values: out.values };
             })
           };

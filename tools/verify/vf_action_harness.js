@@ -24,11 +24,13 @@
  * system.
  */
 
+const fs = require('fs');
 const path = require('path');
 const gasstub = require('./gasstub');
 const workbookStub = require('./vf_workbook_stub');
 
-const EXTRA_SOURCES = ['Core_FastSave.js', 'Company_ValleyFoods_Actions.js'];
+const EXTRA_SOURCES = ['Core_FastSave.js', 'Core_FastRead.js', 'Company_ValleyFoods_Actions.js']
+  .filter(function (f) { return fs.existsSync(path.join(path.resolve(__dirname, '..', '..'), f)); });
 
 /**
  * @param {object} [opts]
@@ -110,6 +112,17 @@ function createVfHarness(opts) {
   H.sheetsReadCount = function () { return H.ctx.getSheetsReadCount_(); };
   H.stats = function () { return workbook.stats(); };
   H.resetStats = function () { workbook.resetStats(); };
+
+  /** Pull named globals out of the VM context (functions stay VM-realm, which
+   *  is what makes them execute the loaded source rather than a copy). */
+  H.grab = function (names) {
+    const out = {};
+    (names || []).forEach(function (n) {
+      if (typeof H.ctx[n] === 'undefined') throw new Error('harness: global not found: ' + n);
+      out[n] = H.ctx[n];
+    });
+    return out;
+  };
 
   return H;
 }
