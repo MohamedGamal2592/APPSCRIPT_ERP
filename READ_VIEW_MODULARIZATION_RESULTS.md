@@ -28,7 +28,7 @@ Field names, hashes, types, counts, line numbers and bounded summaries only.
 | 3 | Sales list (`NARROW_SCAN_PAGE` / `KEYSET`, no caching) | `SALES_FAST_READ_` | **DONE** — fast reader + admin shadow compare (`RV-3.1`, TR-19); flag `false`; `bytesOut` unchanged (endpoint was already slimmed), cells 299 vs 351 measured |
 | 4 | Sales document reads | `SALES_FAST_READ_` | **DONE** — both invoice readers behind declared document strategies (`RV-4.1`, TR-20); flag `false`; calls 17 vs ~14 legacy measured (win is cells 101 vs ~155), recorded as a trade-off |
 | 5 | Small-payload cache (stable key, stamp in manifest, pre/post validation) | `FAST_READ_CORE_` | **DONE** — `frCachedRead_` protocol + full chunk/identity/stamp suite (`RV-5.1`, TR-21/TR-22); adopted by both Sales document readers behind the flags |
-| 6 | DTO projection + permission tests | `FAST_VIEW_CORE_` | NOT STARTED |
+| 6 | DTO projection + permission tests | `FAST_VIEW_CORE_` | **DONE** — `Core_ViewEngine.js` + projection adopted by all three Sales readers (`RV-6.1`, TR-23); flag `false`; measured 69.3 % header / 50 % whole-response reduction |
 | 7 | MFG list + view (separate query design) | `MFG_FAST_READ_` | NOT STARTED |
 | 8 | Client phase | separate approval | OUT OF SCOPE |
 
@@ -728,6 +728,58 @@ review finding rather than a surprise.
   - The 120 s TTL is a first value, not a measured optimum.
 - Test runs: TR-21, TR-22.
 
+### RV-6.1 — `Core_ViewEngine.js`: DTO projection after authorization, measured
+- Date / Commit: 2026-09-21 / identified by message — `feat(rv-6): Core_ViewEngine projection
+  with measured bytes (FAST_VIEW_CORE_ off)`.
+- Step: 6.
+- Files (with line anchors):
+  - `Core_ViewEngine.js` (new) — `FAST_VIEW_CORE_ = false`; `viewOnFor_`; `vwBytesOf_`;
+    `viewProject_(rows, spec, opts)` with `fields`/`renames`/`dropEmpty`; `viewProjectResponse_`;
+    `viewOptions_` (option-bundle rebuild avoidance, delegating to the read engine's stamp-gated
+    cache); `viewProjectionStats_`.
+  - `Company_ValleyFoods_Actions.js` — `VF_SALES_VIEW_PROJECTIONS_` (built from the frozen
+    contracts), `vfProjectResponse_`, adoption in all three fast readers, and
+    `vfFastReadLog_` now reporting `projected`/`bytesIn`/`bytesOut`; the shadow canonicalizer
+    applies the same projection to **both** readers.
+  - `tools/verify/vf_action_harness.js` (loads the new engine),
+    `tools/verify/view_projection.js` (new).
+  - `READ_VIEW_MODULARIZATION_RESULTS.md` (this record, TR-23).
+- What changed (behaviour terms): with `FAST_VIEW_CORE_` false (shipped) nothing changes — the
+  projection returns its input and reports equal byte counts. With both switches true, the three
+  Sales read endpoints answer with exactly the frozen contract's fields, empty fields omitted,
+  and the reduction is measured rather than asserted.
+- Why: plan §7 step 6, §6.1 (one contract for both readers), §6.2 (projection after
+  authorization, bytes reported), §7.4 ("≥40 % reduction on migrated endpoints").
+- Flag state before → after: `FAST_VIEW_CORE_` **introduced and `false`**. `FAST_READ_CORE_`,
+  `SALES_FAST_READ_` and every write flag unchanged (`false`). The projection is additionally
+  gated by the module's `SALES_FAST_READ_` through `viewOnFor_` — recorded because it means one
+  module flag controls two behaviours (which reader serves, and whether the response is
+  projected). If the owner wants them separable, that is a new flag and a new record.
+- Behaviour if reverted: L1 sets `FAST_VIEW_CORE_` to `false` (one line + deploy) and responses
+  return to their unprojected shape; L2 `git revert <sha>`. No data or schema is touched, and the
+  page's own `||` fallbacks mean the projected shape is a subset of what it already handles.
+- Retraction recipe: L1 as above. L2 `git revert <sha>`. L3 not applicable (projection holds no
+  cache of its own; `viewOptions_` uses the `fr1_` namespace, so `frCacheDrop_` applies).
+- Metrics observed (with baseline, measured by TR-23 on the detail endpoint's fixture):
+  **header 994 → 305 bytes (69.3 % reduction); whole response 1420 → 710 bytes (50.0 %)**. The
+  header clears the ≥40 % target; the whole-response figure is reported as measured, not as a
+  target met by the easier half.
+- Residual risk (what this does NOT prove):
+  - `dropEmpty` is a **shape change**, not merely a size change: an empty field is absent rather
+    than `''`. The Sales page's field reads all carry fallbacks (`|| ''`, `num0()`,
+    `String(x).toLowerCase() === 'true'`), and that was verified by reading the page, not by
+    running it. A client path that distinguishes "absent" from "empty" would behave differently
+    — the one place I found that could is `fmtDate(inv['تاريخ الفاتورة'])` on an empty date,
+    which the page already treats as a blank date in the unprojected shape too.
+  - The measurement is a fixture, not production traffic; the real reduction depends on how many
+    columns are empty on live rows.
+  - `viewOptions_` has **no caller** yet: the existing reference bundles already have a
+    stamp-versioned chunked cache, and replacing it is not this step's mandate. Recorded so a
+    reader does not mistake it for an adopted path.
+  - No deferred sections and no option-transmission claims exist in this step (§6.5): nothing
+    here reduces what the client sends.
+- Test runs: TR-23.
+
 ---
 
 ## 5. Test-run records
@@ -1075,6 +1127,28 @@ review finding rather than a surprise.
   `refused-after-write` and reads the sheet.
 - Evidence: `tools/verify/sales_document_fast_read.js`; exit code 0 observed.
 - Not covered: live data; TTL expiry timing (unit-covered in TR-21, not re-run here).
+
+### TR-23 — Projection: contract conformance, measured bytes, permission boundary
+- When: 2026-09-21
+- Environment: VM harness (no data); on-flag harness (in-memory source patches for
+  `SALES_FAST_READ_` and `FAST_VIEW_CORE_`)
+- Command: `node tools/verify/view_projection.js`
+- Purpose (claim under test): the projection emits exactly the declared fields in order, drops
+  empty values only when asked, reports real byte counts, runs after authorization, and does not
+  turn a projection into a shadow-compare difference.
+- Result: **PASS** — exit 0, `view_projection: PASS`. Asserted: whitelist + order; `dropEmpty`
+  omitting `''`/`null` while keeping `0` and `false`; `fields` as an output→input map; single
+  object vs array; `null` preserved; refusal of an empty field list; nested object/array
+  projection at the response level with no invented fields; on the served path the projected
+  header carries fewer fields with populated ones intact and empty ones absent; the list and
+  returns readers projected to their contracts; an unauthorized caller refused by the dispatcher
+  (`REQUEST_NOT_APPLIED`) before any reader runs, and a caller holding only the page's read grant
+  served; shadow compare zero-diff for both targets while the projection is on, because both
+  sides are canonicalised through the same projection. Measured and printed by the run:
+  **header 994 → 305 bytes (69.3 %), whole response 1420 → 710 (50.0 %)**.
+- Evidence: `tools/verify/view_projection.js`; exit code 0; the byte line is reproduced in RV-6.1.
+- Not covered: live traffic; the browser behaviour of the absent-vs-empty change (checked by
+  reading the page, not by executing it).
 
 ---
 

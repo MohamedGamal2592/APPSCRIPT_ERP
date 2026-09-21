@@ -12272,8 +12272,7 @@ const ValleyFoodsHRModules = (function () {
       limit: payload.limit,
       ctx: ctx
     });
-    vfFastReadLog_('get_valley_sales_list', out.metrics);
-    var invoices = out.rows.map(function (r) {
+    var projectedList = vfProjectResponse_('vf_invoices_list_v1', { status: 'success', invoices: out.rows.map(function (r) {
       return {
         invoice_unique_id: r.invoice_unique_id,
         'رقم الفاتورة': r['رقم الفاتورة'],
@@ -12286,13 +12285,14 @@ const ValleyFoodsHRModules = (function () {
         approval_status: r.approval_status || 'Pending',
         'مسلسل': r.__ordinal
       };
-    });
-    return { status: 'success', invoices: invoices, total: out.total };
+    }), total: out.total });
+    vfFastReadLog_('get_valley_sales_list', out.metrics, null, projectedList);
+    return projectedList.res;
   }
 
   /* Per-response metrics travel with every fast read as ONE structured log
      line (G4): counts and outcomes only, never a value. */
-  function vfFastReadLog_(action, m, ctx) {
+  function vfFastReadLog_(action, m, ctx, projected) {
     try {
       Logger.log(JSON.stringify({
         evt: 'vf_fast_read',
@@ -12300,7 +12300,10 @@ const ValleyFoodsHRModules = (function () {
         serviceCalls: m.serviceCalls, rowsScanned: m.rowsScanned, colsRead: m.colsRead,
         cellsRead: m.cellsRead, bytesRead: m.bytesRead,
         partial: !!m.partial,
-        cacheOutcome: String((ctx && ctx.cacheOutcome) || m.cacheOutcome || 'disabled')
+        cacheOutcome: String((ctx && ctx.cacheOutcome) || m.cacheOutcome || 'disabled'),
+        projected: !!(projected && projected.projected),
+        bytesIn: projected ? projected.bytesIn : null,
+        bytesOut: projected ? projected.bytesOut : null
       }));
     } catch (e) {}
   }
@@ -12437,8 +12440,10 @@ const ValleyFoodsHRModules = (function () {
 
     var invInfo = null;
     if (doc.parent) invInfo = vfInvoiceHeaderFields_(doc.parent);
-    vfFastReadLog_('get_valley_invoice_for_return', doc.metrics.total, ctx);
-    return { status: 'success', invoice: invInfo || { uid: invUid, number: '-' }, lines: lines };
+    var projectedReturn = vfProjectResponse_('vf_invoice_for_return_v1',
+      { status: 'success', invoice: invInfo || { uid: invUid, number: '-' }, lines: lines });
+    vfFastReadLog_('get_valley_invoice_for_return', doc.metrics.total, ctx, projectedReturn);
+    return projectedReturn.res;
   }
 
   /* get_valley_invoice_full, fast path. */
@@ -12539,8 +12544,58 @@ const ValleyFoodsHRModules = (function () {
       var key = String(h).trim();
       invoice[key] = doc.parent[key] !== undefined ? doc.parent[key] : '';
     });
-    vfFastReadLog_('get_valley_invoice_full', doc.metrics.total, ctx);
-    return { status: 'success', invoice: invoice, lines: lines };
+    var projectedFull = vfProjectResponse_('vf_invoice_full_v1', { status: 'success', invoice: invoice, lines: lines });
+    vfFastReadLog_('get_valley_invoice_full', doc.metrics.total, ctx, projectedFull);
+    return projectedFull.res;
+  }
+
+  /* ── Response projection (Core_ViewEngine, FAST_VIEW_CORE_, step 6) ───────
+   * The projection IS the contract: each fast response is rebuilt from the
+   * frozen field lists (VF_SALES_VIEW_CONTRACTS_) with empty fields omitted.
+   * It runs after authorization on every request (dispatch_ has already gated),
+   * on raw data — never on a cached DTO — which is what makes the shared script
+   * cache safe to use at all (G8). bytesIn/bytesOut are measured and logged.
+   *
+   * `dropEmpty` removes a field whose value is '' / null / undefined. The Sales
+   * page reads every one of these fields with a `||` fallback (`esc(x || '')`,
+   * `num0(x)`, `String(x).toLowerCase() === 'true'`), so an absent field behaves
+   * as the empty one did. Fields that are always populated (serials, statuses,
+   * line ids and numbers) are untouched. */
+  var VF_SALES_VIEW_PROJECTIONS_ = {
+    vf_invoices_list_v1: {
+      top: ['status', 'total', 'invoices'],
+      sections: { invoices: { fields: VF_SALES_VIEW_CONTRACTS_.contracts.vf_invoices_list_v1.invoice, dropEmpty: true } }
+    },
+    vf_invoice_for_return_v1: {
+      top: ['status', 'invoice', 'lines'],
+      sections: {
+        invoice: { fields: VF_SALES_VIEW_CONTRACTS_.contracts.vf_invoice_for_return_v1.invoice, dropEmpty: false },
+        lines: { fields: VF_SALES_VIEW_CONTRACTS_.contracts.vf_invoice_for_return_v1.line, dropEmpty: true }
+      }
+    },
+    vf_invoice_full_v1: {
+      top: ['status', 'invoice', 'lines'],
+      sections: {
+        invoice: { fields: FIN_SALES_INV_HEADERS, dropEmpty: true },
+        lines: {
+          fields: VF_SALES_VIEW_CONTRACTS_.contracts.vf_invoice_full_v1.line,
+          dropEmpty: true
+        }
+      }
+    }
+  };
+
+  /** Project one fast response when the view flag is on; otherwise pass it
+   *  through untouched and report no byte change. */
+  function vfProjectResponse_(kind, res) {
+    if (typeof viewOnFor_ !== 'function' || !viewOnFor_(SALES_FAST_READ_)) {
+      return { res: res, bytesIn: vwBytesOf_(res), bytesOut: vwBytesOf_(res), projected: false };
+    }
+    var spec = VF_SALES_VIEW_PROJECTIONS_[kind];
+    if (!spec) return { res: res, bytesIn: vwBytesOf_(res), bytesOut: vwBytesOf_(res), projected: false };
+    var bytesIn = vwBytesOf_(res);
+    var projected = viewProjectResponse_(res, spec);
+    return { res: projected, bytesIn: bytesIn, bytesOut: vwBytesOf_(projected), projected: true };
   }
 
   /* Bounded fail-open (G1): an engine failure is logged without raw values and
@@ -12604,6 +12659,7 @@ const ValleyFoodsHRModules = (function () {
    * No raw values leave this action: field paths, types, hashes and counts. */
   var VF_SHADOW_TARGETS_ = {
     'vf_sales_list': {
+      projection: 'vf_invoices_list_v1',
       legacy: function (payload, user, dbId) { return vfSalesListLegacy_(payload, user, dbId); },
       modern: function (payload, user, dbId) { return vfSalesListFast_(payload, user, dbId); },
       canonicalize: function (res) {
@@ -12628,6 +12684,7 @@ const ValleyFoodsHRModules = (function () {
       }
     },
     'vf_invoice_for_return': {
+      projection: 'vf_invoice_for_return_v1',
       legacy: function (payload, user, dbId) { return vfInvoiceForReturnLegacy_(payload, user, dbId); },
       modern: function (payload, user, dbId) { return vfInvoiceForReturnFast_(payload, user, dbId); },
       canonicalize: function (res) {
@@ -12644,6 +12701,7 @@ const ValleyFoodsHRModules = (function () {
       }
     },
     'vf_invoice_full': {
+      projection: 'vf_invoice_full_v1',
       legacy: function (payload, user, dbId) { return vfInvoiceFullLegacy_(payload, user, dbId); },
       modern: function (payload, user, dbId) { return vfInvoiceFullFast_(payload, user, dbId); },
       canonicalize: function (res) {
@@ -12677,7 +12735,14 @@ const ValleyFoodsHRModules = (function () {
       label: 'vf:' + target,
       legacy: function () { return spec.legacy(payload, user, dbId); },
       modern: function () { return spec.modern(payload, user, dbId); },
-      canonicalize: spec.canonicalize,
+      /* Both sides pass through the SAME projection before the contract
+       * canonicaliser: with the view flag on, the fast reader serves a projected
+       * response, and comparing it against an unprojected legacy response would
+       * report the projection itself as a difference (plan §6.1). */
+      canonicalize: function (res) {
+        var projected = spec.projection ? vfProjectResponse_(spec.projection, res).res : res;
+        return spec.canonicalize(projected);
+      },
       onResult: function (r) { report = r; }
     });
     return {

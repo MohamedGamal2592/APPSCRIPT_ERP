@@ -29,7 +29,7 @@ const path = require('path');
 const gasstub = require('./gasstub');
 const workbookStub = require('./vf_workbook_stub');
 
-const EXTRA_SOURCES = ['Core_FastSave.js', 'Core_FastRead.js', 'Company_ValleyFoods_Actions.js']
+const EXTRA_SOURCES = ['Core_FastSave.js', 'Core_FastRead.js', 'Core_ViewEngine.js', 'Company_ValleyFoods_Actions.js']
   .filter(function (f) { return fs.existsSync(path.join(path.resolve(__dirname, '..', '..'), f)); });
 
 /**
