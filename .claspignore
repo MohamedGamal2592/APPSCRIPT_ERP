@@ -39,4 +39,5 @@ Fire base json key/**
 # preview pages are opened by double-clicking them on disk and the node scripts
 # never run inside Apps Script. Neither may ever be pushed.
 tools/**
+tools/apps_script_maintenance/**
 design_preview/**

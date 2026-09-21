@@ -2,7 +2,17 @@
 const fs = require('fs');
 const vm = require('vm');
 const assert = require('assert');
-const source = fs.readFileSync('D:/Work/Script/Code.js', 'utf8');
+const source = [
+  fs.readFileSync('D:/Work/Script/Code.js', 'utf8'),
+  fs.readFileSync('D:/Work/Script/Company_Assessment_Actions.js', 'utf8'),
+  fs.readFileSync('D:/Work/Script/Company_Assessment_Registry.js', 'utf8'),
+  fs.readFileSync('D:/Work/Script/Company_TopChemical_Actions.js', 'utf8'),
+  fs.readFileSync('D:/Work/Script/Company_TopChemical_Registry.js', 'utf8'),
+  fs.readFileSync('D:/Work/Script/Company_TopLight_Actions.js', 'utf8'),
+  fs.readFileSync('D:/Work/Script/Company_TopLight_Registry.js', 'utf8'),
+  fs.readFileSync('D:/Work/Script/Company_ValleyFoods_Actions.js', 'utf8'),
+  fs.readFileSync('D:/Work/Script/Company_ValleyFoods_Registry.js', 'utf8')
+].join('\n');
 function grab(name) {
   const start = source.indexOf('function ' + name + '(');
   if (start < 0) throw new Error('missing ' + name);
@@ -28,7 +38,19 @@ ctx.Drive = { Files: { list: () => ({ files: [] }) } };
 ctx._frame = x => x;
 ctx.HtmlService = { createHtmlOutput: x => x };
 vm.createContext(ctx);
-vm.runInContext(names.map(grab).join('\n'), ctx);
+vm.runInContext(source, ctx, { filename: 'canonical-attachment-runtime.js' });
+Object.assign(ctx, {
+  authenticateSystemUser_: () => ({ authorized: true, user: { isSuperAdmin: true, company: '3fe1b5cb67b7223e' } }),
+  authorizeArtifact_: () => ({ company: '3fe1b5cb67b7223e' }),
+  getCompanySpreadsheetId_: () => 'db',
+  noteMutation_: () => {},
+  getHeaders_: sheet => sheet.headers,
+  getAllRecords_: () => [{ document_number: 1, document_file: 'folder-A/same.pdf' }],
+  getSheet_: () => ctx.fakeSheet,
+  _frame: x => x,
+  HtmlService: { createHtmlOutput: x => x }
+});
+vm.runInContext('COMPANY_REGISTRY = {}; _companiesInitialized_ = false; ensureCompaniesRegistered_();', ctx);
 
 const rows = [{ id: 1, document: 'folder-A/same.pdf' }, { id: 2, document: 'folder-B/same.pdf' }];
 assert.strictEqual(ctx.findAttachmentRecord_(rows, 'id', '', ['document'], 'folder-B/same.pdf').record.id, 2, 'exact path must select the owning record');

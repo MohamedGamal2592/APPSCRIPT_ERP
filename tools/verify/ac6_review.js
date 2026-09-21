@@ -13,7 +13,7 @@ const { bootPage, flush } = require('./pageharness');
 const S = require('../lib/sources');
 
 const ROOT = path.resolve(__dirname, '..', '..');
-const helper = fs.readFileSync(path.join(ROOT, 'JS_Simplification_Helpers.js'), 'utf8');
+const helper = fs.readFileSync(path.join(ROOT, 'Company_Assessment_Actions.js'), 'utf8');
 
 let failures = 0;
 function ok(cond, label, extra) {
@@ -95,9 +95,29 @@ function buildSandbox() {
     return { rows: rows, byPk: byPk, headers: hdrs, pkHeader: pkHeader || pkColumn };
   }
   function logHistory_() {}
-  const sandbox = { getSheet_, getHeaders_, appendRowWithRetry_: function (s, v) { s.appendRow(v); }, noteMutation_, executeWithLock_, updateRowByCriteria_, getAllRecords_, getRecordsByPk_, logHistory_ };
+  /* Gap-closure ported stubs: acUpdate_ now version-checks and patches via
+   * Code.js helpers, and authorize_ double-checks the tenant dbId.
+   * Faithful to the real contracts (missing version -> 0, mismatch throws;
+   * the stub store holds no formulas so patching == updating here). */
+  function getRowVersion_(row) {
+    if (!row) return 0;
+    var v = row.version;
+    if (v === undefined) { var k = Object.keys(row).find(function (kk) { return String(kk).trim().toLowerCase() === 'version'; }); v = k ? row[k] : undefined; }
+    if (v === undefined || v === null || v === '') return 0;
+    var n = Number(v); return (isFinite(n) && n >= 0) ? Math.floor(n) : 0;
+  }
+  function checkRowVersion_(oldRow, clientVersion) {
+    var current = getRowVersion_(oldRow);
+    var want = (clientVersion === undefined || clientVersion === null || clientVersion === '') ? 0 : Number(clientVersion);
+    if (!isFinite(want) || want < 0) want = 0; else want = Math.floor(want);
+    if (want !== current) throw new Error('CONFLICT: stale version — reload and retry | تعارض: النسخة قديمة — أعد التحميل وحاول مجدداً');
+    return current;
+  }
+  function patchRowByCriteria_(sheet, criteriaHeader, criteriaValue, updatesObject) { return updateRowByCriteria_(sheet, criteriaHeader, criteriaValue, updatesObject); }
+  function getCompanySpreadsheetId_() { return 'DB1'; }
+
+  const sandbox = { getSheet_, getHeaders_, appendRowWithRetry_: function (s, v) { s.appendRow(v); }, noteMutation_, executeWithLock_, updateRowByCriteria_, patchRowByCriteria_, checkRowVersion_, getCompanySpreadsheetId_, getAllRecords_, getRecordsByPk_, logHistory_ };
   vm.createContext(sandbox);
-  vm.runInContext(helper, sandbox, { filename: 'JS_Simplification_Helpers.js' });
   vm.runInContext(src, sandbox, { filename: 'Company_Assessment_Actions.js' });
   const AC = vm.runInContext('AssessmentCenter', sandbox);
   return { AC: AC, store: store };

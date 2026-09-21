@@ -111,7 +111,7 @@
       renderList();
     }
 
-    /* Phase 2.4: the endpoint now returns the 10 most recent rows by default,
+    /* Phase 2.4: the endpoint now returns the 20 most recent rows by default,
      * matching the equivalent TopLight screens. __loadedAll tracks whether the
      * user has asked for the full set via the "عرض الكل" button, so the limit
      * never puts data out of reach. */
@@ -122,7 +122,7 @@
        it. */
     function renderList(loadAll, quiet) {
       // Called with no argument after a save/delete — keep whichever view the
-      // user is currently in rather than silently dropping back to 10 rows.
+      // user is currently in rather than silently dropping back to 20 rows.
       __loadedAll = arguments.length ? !!loadAll : __loadedAll;
       if (!quiet) UIC.readSkeleton('vf-purchasing-content');
       var payload = { from: __dateFrom, to: __dateTo };
@@ -144,6 +144,7 @@
     }
 
     function showAllPurchasing() { renderList(true); }
+    function showLatestPurchasing() { renderList(false); }
 
     /* Phase 2.1: product options are fetched on first form open, not on every
      * list render. */
@@ -191,7 +192,7 @@
       return {
         Code: h.Code || '-',
         supplier_name: supMap[String(h['Supplier Name'])] || h['Supplier Name'] || '-',
-        receipt_date: h['Reciept Date'] ? String(h['Reciept Date']).slice(0, 10) : '-',
+        receipt_date: (typeof FMT !== 'undefined' && FMT.dateOnly) ? (FMT.dateOnly(h['Reciept Date']) || '-') : (h['Reciept Date'] ? String(h['Reciept Date']).slice(0, 10) : '-'),
         items: h.Items || '-',
         total_costs: canCost() ? FMT.number(h['Total costs']) : '',
         approval_status: h.approval_status || '-',
@@ -200,10 +201,10 @@
       };
     });
     content.innerHTML = '<div class="vf-card"><div class="vf-card-header"><h3>المشتريات</h3>' +
-      (__loadedAll ? '' : '<button class="btn btn-outline" onclick="showAllPurchasing()">عرض الكل</button> ') +
       '<a class="btn btn-outline" target="_blank" rel="noopener" href="' + scriptUrl + '?action=vf_purchasing_report&sessionToken=' + SESSION_TOKEN + '">📊 تقرير المشتريات</a> ' +
       (CAN_WRITE && canCost() ? '<button class="btn btn-primary" onclick="openForm(\'\', false)">+ إضافة عملية شراء</button>' : '') +
       '</div><div class="vf-card-body">' +
+      UIC.showAllBar({ loadedAll: __loadedAll, showAll: 'showAllPurchasing()', showLatest: 'showLatestPurchasing()' }) +
       UIC.dateRangeBar('pur-date', {
         from: __dateFrom, to: __dateTo,
         onchange: 'applyPurchasingDateFilter()',
@@ -341,6 +342,17 @@
 
       var curEl = document.getElementById('currency');
       if (curEl) curEl.addEventListener('change', onCurrencyChange);
+
+      /* Code is the permanent document key and the FK stored on every
+         purchasing line. Existing documents must keep the value the user
+         originally entered; request/recovery IDs live in separate columns. */
+      var codeEl = document.getElementById('code');
+      if (codeEl && record) {
+        codeEl.value = String(record.Code == null ? '' : record.Code);
+        codeEl.readOnly = true;
+        codeEl.setAttribute('aria-readonly', 'true');
+        codeEl.title = 'الكود ثابت بعد إنشاء عملية الشراء';
+      }
 
       attachCalcListeners();
 
@@ -718,7 +730,22 @@
       checkpointStatus(entry.kind, 'جاري حفظ القسم…', false);
       checkpointSend(entry, 0).then(function () {
         __checkpointQueue.shift();
-        if (entry.kind === 'header') __headerCheckpointAck = true;
+        if (entry.kind === 'header') {
+          __headerCheckpointAck = true;
+          /* The acknowledged header makes the typed Code durable. Keep that
+             exact business key for line checkpoints and the final commit. */
+          var savedCode = String((entry.data && entry.data.header && entry.data.header.Code) || '').trim();
+          if (savedCode) {
+            __editingCode = savedCode;
+            var codeEl = document.getElementById('code');
+            if (codeEl) {
+              codeEl.value = savedCode;
+              codeEl.readOnly = true;
+              codeEl.setAttribute('aria-readonly', 'true');
+              codeEl.title = 'الكود ثابت بعد إنشاء عملية الشراء';
+            }
+          }
+        }
         checkpointStatus(entry.kind, entry.kind === 'header' ? 'تم حفظ بيانات الرأس' : 'تم حفظ الأصناف', false);
         UIC.toast(entry.kind === 'header' ? 'تم حفظ بيانات الرأس' : 'تم حفظ الأصناف', 'success');
       }).catch(function (e) {
@@ -909,10 +936,10 @@
       var finStatus = rec.approval_status || '-';
       var qStatus = rec.quality_approval_status || '-';
       var qBy = rec.quality_approval || '';
-      var qTime = rec.quality_approval_time ? String(rec.quality_approval_time).slice(0, 19) : '';
+      var qTime = (typeof FMT !== 'undefined' && FMT.dateTimeLocal) ? (FMT.dateTimeLocal(rec.quality_approval_time) || '') : (rec.quality_approval_time ? String(rec.quality_approval_time).slice(0, 19) : '');
       var head = '<tr><th>الكود</th><td>' + esc(rec.Code) + '</td>' +
         '<th>المورد</th><td>' + esc(supName) + '</td></tr>' +
-        '<tr><th>تاريخ الاستلام</th><td>' + esc(rec['Reciept Date'] ? String(rec['Reciept Date']).slice(0, 10) : '-') + '</td>' +
+        '<tr><th>تاريخ الاستلام</th><td>' + esc((typeof FMT !== 'undefined' && FMT.dateOnly) ? (FMT.dateOnly(rec['Reciept Date']) || '-') : (rec['Reciept Date'] ? String(rec['Reciept Date']).slice(0, 10) : '-')) + '</td>' +
         '<th>النوع</th><td>' + esc(rec.Type || '-') + '</td></tr>' +
         '<tr><th>العملة</th><td>' + esc(rec.Currency || '-') + '</td>' +
         (canCost()
@@ -1010,10 +1037,21 @@
     }
 
     function formatDate(v) {
+      /* As-stored wall date: date-only strings pass through opaquely (never
+       * via Date/UTC), otherwise local getters recover the wall date. */
       if (!v) return '';
-      var d = new Date(v);
-      if (isNaN(d.getTime())) return String(v).slice(0, 10);
-      return d.toISOString().slice(0, 10);
+      if (typeof FMT !== 'undefined' && FMT.dateOnly) return FMT.dateOnly(v);
+      if (Object.prototype.toString.call(v) === '[object Date]' && !isNaN(v.getTime())) {
+        var p0 = function (n) { return n < 10 ? '0' + n : '' + n; };
+        return v.getFullYear() + '-' + p0(v.getMonth() + 1) + '-' + p0(v.getDate());
+      }
+      var s = String(v).trim();
+      var m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+      if (m) return m[1] + '-' + m[2] + '-' + m[3];
+      var d = new Date(s);
+      if (isNaN(d.getTime())) return s.slice(0, 10);
+      var p = function (n) { return n < 10 ? '0' + n : '' + n; };
+      return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
     }
 
 

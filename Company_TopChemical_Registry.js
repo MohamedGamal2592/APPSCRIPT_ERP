@@ -11,6 +11,11 @@ function registerTopChemical_() {
     dispatch: TopChemical.dispatch_,
     pageForAction: TopChemical.pageForAction_,
     tableForAction: TopChemical.tableForAction_,
+    themeCss: TopChemical.themeCss_,
+    blockTheme: TopChemical.blockTheme_,
+    approvalPolicy: TopChemical.approvalPolicy_,
+    attachmentPolicy: TopChemical.attachmentPolicy_,
+    artifactHandlers: TopChemical.artifactHandlers_,
     tables: [
       { id: 'tc_products_tbl', sheetName: 'top_chemical_products', pkColumn: 'id', labelAr: 'الأصناف', pageId: 'tc_products' },
       { id: 'tc_clients_tbl', sheetName: 'top_chemical_clients', pkColumn: 'id', labelAr: 'العملاء والموردون', pageId: 'tc_clients_vendors' },
@@ -52,7 +57,8 @@ function registerTopChemical_() {
       { action: 'tc_budget_hr', template: 'Company_TopChemical_BudgetHR', title: 'شؤون العاملين القانونية', nav: false },
       { action: 'tc_budget_income', template: 'Company_TopChemical_BudgetIncome', title: 'قائمة الدخل السنوية', nav: false },
       { action: 'tc_manufacture_orders', template: 'Company_TopChemical_ManufactureOrders', title: 'أوامر التصنيع', label: 'أوامر التصنيع', nav: false },
-      { action: 'tc_products_live', template: 'Company_TopChemical_ProductsLive', title: 'اصناف النظام الرئيسي', label: 'اصناف النظام الرئيسي', nav: false }
+      { action: 'tc_products_live', template: 'Company_TopChemical_ProductsLive', title: 'اصناف النظام الرئيسي', label: 'اصناف النظام الرئيسي', nav: false },
+      { action: 'tc_exec_sales', template: 'Company_TopChemical_ExecSales', title: 'التحليل التنفيذي للمبيعات', label: 'التحليل التنفيذي للمبيعات', nav: false }
     ]
   });
 }

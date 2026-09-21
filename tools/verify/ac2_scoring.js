@@ -19,7 +19,7 @@ const path = require('path');
 const vm = require('vm');
 
 const ROOT = path.resolve(__dirname, '..', '..');
-const helper = fs.readFileSync(path.join(ROOT, 'JS_Simplification_Helpers.js'), 'utf8');
+const helper = fs.readFileSync(path.join(ROOT, 'Company_Assessment_Actions.js'), 'utf8');
 
 function loadFixture(name) {
   return JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', name), 'utf8'));
@@ -28,8 +28,7 @@ function loadFixture(name) {
 const src = fs.readFileSync(path.join(ROOT, 'Company_Assessment_Actions.js'), 'utf8');
 const sandbox = {};
 vm.createContext(sandbox);
-vm.runInContext(helper, sandbox, { filename: 'JS_Simplification_Helpers.js' });
-  vm.runInContext(src, sandbox, { filename: 'Company_Assessment_Actions.js' });
+vm.runInContext(src, sandbox, { filename: 'Company_Assessment_Actions.js' });
 const AC = vm.runInContext('AssessmentCenter', sandbox);
 
 /* acDate_ builds its Date objects inside the vm's own realm, so a plain

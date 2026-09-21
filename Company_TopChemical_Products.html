@@ -59,6 +59,15 @@
 
   function renderProducts(list) {
     window.__products = list;
+    /* Row actions. Editing is a full-access act; printing a label is not —
+       anyone who can see the product can relabel its containers, so the
+       barcode entry is offered at every access level. */
+    var btnsFor = function (p) {
+      var btns = [];
+      if (UIC.canFull_()) btns.push({ label: 'تعديل', onclick: "openProductModal('" + FMT.escape(p.id) + "')" });
+      btns.push({ label: 'طباعة باركود', onclick: "printProductBarcode('" + FMT.escape(p.id) + "')" });
+      return btns;
+    };
     var rows = list.map(function (p) {
       var printLink = p.print_file
         ? '<button class="btn btn-outline" style="padding:4px 10px;" onclick="downloadPrint(\'' + FMT.escape(p.id) + '\')">تحميل</button>'
@@ -71,7 +80,7 @@
         category: p.category || '-',
         number_of_cartons_bags: p.number_of_cartons_bags,
         print_file: printLink,
-        actions: UIC.actionBtns(UIC.canFull_() ? [{ label: 'تعديل', onclick: "openProductModal('" + FMT.escape(p.id) + "')" }] : [])
+        actions: UIC.actionBtns(btnsFor(p))
       };
     });
     var headers = [
@@ -97,14 +106,30 @@
     UIC.initTableSort('products-table');
   }
 
+  /* One product, one full A4 sheet of 18 identical labels — the same repeat
+     grid the production barcode print uses (servePrintBarcode_ in Code.js),
+     because both feed the same label paper. This replaces the
+     "طباعة باركود الأصناف" button that used to sit on tc_stock_scan and
+     printed the whole catalogue one label at a time. */
+  function printProductBarcode(id) {
+    UIC.openDownload(scriptUrl + '?download=print_product_barcode&id=' + encodeURIComponent(id) +
+      '&sessionToken=' + encodeURIComponent(SESSION_TOKEN), 'طباعة باركود الصنف');
+  }
+
   function downloadPrint(id) {
     UIC.openDownload(scriptUrl + '?download=print_file&id=' + encodeURIComponent(id) + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN),
       'فتح الملف');
   }
 
   function uploadSelectedFile(formEl, meta) {
+    /* Legacy on-save upload kept as fallback when UploadSet is unavailable.
+       Instant mode (Option A) uploads on file selection; save uses the
+       pre-bound ref via UIC.UploadSet.getBound. */
+    try {
+      if (window.UIC && UIC.UploadSet) return Promise.resolve(null);
+    } catch (e) {}
     var input = formEl.querySelector('input[type=file]');
-    if (!input || !input.files || !input.files[0]) return Promise.resolve('');
+    if (!input || !input.files || !input.files[0]) return Promise.resolve(null);
     var file = input.files[0];
     return new Promise(function (resolve, reject) {
       var reader = new FileReader();
@@ -116,7 +141,7 @@
         if (meta.name) payload.name = meta.name;
         companyCall('add_upload_file', payload)
           .then(function (res) {
-            if (res && res.status === 'success') resolve(res.reference);
+            if (res && res.status === 'success') resolve({ reference: res.reference, fileId: res.fileId || '' });
             else reject(new Error((res && res.message) || 'خطأ في رفع الملف'));
           })
           .catch(function (err) {
@@ -139,7 +164,7 @@
         options: window.__categoryOptions || [], placeholder: 'اختر الفئة...', value: p ? p.category : '' }) +
       UIC.field({ key: 'number_of_cartons_bags', label: 'عدد الكراتين/الشنط', type: 'number', value: p ? p.number_of_cartons_bags : '', required: true }) +
       (p && p.print_file ? '<div class="form-field"><label class="form-label">ملف الطباعة الحالي</label><input class="input" value="' + FMT.escape(p.print_file) + '" disabled></div>' : '') +
-      UIC.fileField({ key: 'file', label: 'ملف الطباعة (pdf, word, png, jpg)', accept: '.pdf,.doc,.docx,.png,.jpg,.jpeg' }) +
+      UIC.fileField({ key: 'file', label: 'ملف الطباعة (pdf, word, png, jpg)', accept: '.pdf,.doc,.docx,.png,.jpg,.jpeg', instant: true, sheet: 'products', field: 'print_file', formModalId: 'product-modal' }) +
       '</form>';
     UIC.openModal('product-modal', {
       title: p ? 'تعديل صنف' : 'إضافة صنف',
@@ -150,6 +175,10 @@
       var idField = document.getElementById('id');
       if (idField) idField.setAttribute('disabled', 'disabled');
     }
+    try { UIC.trackDirty('product-form'); } catch (e) {}
+    try {
+      if (p && p.print_file && UIC.UploadSet) UIC.UploadSet.setBound('file', p.print_file, p.print_file_id || '');
+    } catch (e2) {}
   }
 
   function saveProduct(id) {
@@ -161,32 +190,57 @@
     delete data.unit_custom;
     if (id) data.id = id;
     var formEl = document.getElementById('product-form');
-    /* [RT-4] The file upload is a real round trip and stays in front of the
-       save — there is nothing optimistic to do about a file the server has not
-       received. Everything after it is UIC.Live.save: the row appears the
-       moment the upload finishes, the modal closes, and the server's record
-       replaces the draft when it lands. The hand-rolled patch/reload pair this
-       replaces did the same thing one round trip later, behind an overlay. */
-    uploadSelectedFile(formEl, { sheet: 'products', id: id || data.id })
-      .then(function (ref) {
-        if (ref) data.print_file = ref;
-        window.__products = window.__products || [];
-        return UIC.Live.save({
-          call: companyCall,
-          action: id ? 'edit_product' : 'add_product',
-          data: data,
-          list: window.__products,
-          key: 'id',
-          draft: Object.assign({}, data),
-          render: function () { renderProducts(window.__products); },
-          modal: 'product-modal',
-          message: 'تم الحفظ',
-          recordOf: function (r) { return r && r.record; },
-          reload: fetchProducts
-        });
-      })
-      /* Live.save has already toasted and already rolled the row back. */
-      .catch(function () {});
+    var proceed = function () {
+      /* Option A instant-upload: file already bound on selection; save only
+         carries the pre-bound ref (retain data-ref via dataset). */
+      try {
+        var input = formEl ? formEl.querySelector('input[type=file]') : null;
+        var bound = (input && UIC.UploadSet) ? UIC.UploadSet.getBound(input) : null;
+        if (bound && bound.ref) {
+          data.print_file = bound.ref;
+          if (bound.id) data.print_file_id = bound.id;
+        }
+      } catch (e) {}
+      window.__products = window.__products || [];
+      return UIC.Live.save({
+        call: companyCall,
+        action: id ? 'edit_product' : 'add_product',
+        data: data,
+        list: window.__products,
+        key: 'id',
+        draft: Object.assign({}, data),
+        render: function () { renderProducts(window.__products); },
+        modal: 'product-modal',
+        message: 'تم الحفظ',
+        recordOf: function (r) { return r && r.record; },
+        reload: fetchProducts
+      }).catch(function () {});
+    };
+    try {
+      if (window.UIC && UIC.UploadSet && UIC.UploadSet.isBusy('product-modal')) {
+        UIC.toast('جاري رفع الملف... يرجى الانتظار', 'warning');
+        UIC.UploadSet.awaitPending('product-modal').then(proceed);
+        return;
+      }
+    } catch (e) {}
+    /* Fallback path when instant is unavailable: legacy on-save upload. */
+    try {
+      if (!(window.UIC && UIC.UploadSet)) {
+        uploadSelectedFile(formEl, { sheet: 'products', id: id || data.id })
+          .then(function (up) {
+            if (up) {
+              var ref = (typeof up === 'string') ? up : up.reference;
+              var fid = (up && up.fileId) ? up.fileId : '';
+              if (ref) data.print_file = ref;
+              if (fid) data.print_file_id = fid;
+            }
+            return proceed();
+          })
+          .catch(function () {});
+        return;
+      }
+    } catch (e2) {}
+    proceed();
   }
 
   function showError(e) {

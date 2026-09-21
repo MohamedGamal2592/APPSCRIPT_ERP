@@ -51,6 +51,9 @@
     }
 
     var ROWS = [], EMP_OPTIONS = [], ROLE_OPTIONS = [];
+    var DED_SHOW_ALL = false, DED_TOTAL = 0;
+
+    function toggleDedAll() { DED_SHOW_ALL = !DED_SHOW_ALL; fetchDeductions(); }
 
     function load() {
       UIC.appShell('vf-root', {
@@ -69,9 +72,10 @@
        to confirm it. */
     function fetchDeductions(quiet) {
       if (!quiet) UIC.readSkeleton('vf-ded-content');
-      companyCall('get_deductions_data')
+      companyCall('get_deductions_data', DED_SHOW_ALL ? { loadAll: true } : {})
         .then(function (r) {
           ROWS = r.rows || [];
+          DED_TOTAL = (r && r.total != null) ? r.total : ROWS.length;
           EMP_OPTIONS = r.employee_options || [];
           ROLE_OPTIONS = r.role_options || [];
           renderDeductions(); try{schedulePrefetch();}catch(e){};
@@ -96,7 +100,8 @@
       });
       var html = (CAN_WRITE
         ? '<div style="display:flex;justify-content:flex-end;margin-bottom:12px;"><button class="btn btn-primary" onclick="openAddModal()">+ تسجيل خصم</button></div>'
-        : '');
+        : '') +
+        UIC.showAllBar({ loadedAll: DED_SHOW_ALL, total: DED_TOTAL, showAll: 'toggleDedAll()', showLatest: 'toggleDedAll()' });
       if (!order.length) {
         html += '<div class="empty-state"><span>لا توجد خصومات</span></div>';
       } else {
@@ -117,17 +122,17 @@
             html += '<div style="padding:8px 14px 4px;"><div style="display:flex;align-items:center;gap:10px;margin-bottom:4px;">' +
               '<b style="flex:1;font-size:13px;">' + esc(d) + '</b>' +
               '<span class="text-muted" style="font-size:12px;">' + g.dates[d].length + ' سجل</span>' +
-              (CAN_WRITE ? '<button class="btn btn-outline" style="padding:3px 8px;font-size:11px;" onclick="openAddModal({type:\'' + esc(t) + '\',date:\'' + esc(d) + '\'})">+ في هذا التاريخ</button>' : '') +
+              (CAN_WRITE ? '<button class="btn btn-outline" style="padding:3px 8px;font-size:11px;" onclick="event.stopPropagation();openAddModal({type:\'' + esc(t) + '\',date:\'' + esc(d) + '\'})">+ في هذا التاريخ</button>' : '') +
               '</div>' +
               '<div class="table-wrap"><table class="table" style="font-size:13px;">' +
               '<thead><tr><th>كود الموظف</th><th>الاسم</th><th>الأيام</th><th>الجزاء</th><th>خصم آخر</th><th>تفاصيل</th><th>المرفق</th><th>إجراءات / Actions</th></tr></thead><tbody>';
             g.dates[d].forEach(function (r) {
               var dedAtt = r.deduction_attachement || '';
-              var dedAttCell = dedAtt ? '<button class="btn btn-outline" style="padding:4px 10px;" onclick="viewAttachment(\'' + esc(dedAtt).replace(/\'/g, "\\\'") + '\')">📎 عرض / View</button>' : '-';
+              var dedAttCell = dedAtt ? '<button class="btn btn-outline" style="padding:4px 10px;" onclick="viewAttachment(\'' + esc(dedAtt).replace(/\'/g, "\\\'") + '\',\'' + esc(r.unique_id).replace(/\'/g, "\\\'") + '\')">📎 عرض / View</button>' : '-';
               var dedActions = UIC.actionBtns([
                 { label: '👁️ عرض / View', onclick: "viewDeduction('" + esc(r.unique_id).replace(/\'/g, "\\\'") + "')" },
-                dedAtt ? { label: '📎 عرض المرفق / View Attachment', onclick: "viewAttachment('" + esc(dedAtt).replace(/\'/g, "\\\'") + "')" } : null,
-                CAN_WRITE ? { label: '✏️ تعديل / Edit', onclick: "openAddModal({type:'" + esc(r.deduction_type).replace(/\'/g, "\\\'") + "',date:'" + esc(fmtDate(r.date)) + "'})" } : null,
+                dedAtt ? { label: '📎 عرض المرفق / View Attachment', onclick: "viewAttachment('" + esc(dedAtt).replace(/\'/g, "\\\'") + "','" + esc(r.unique_id).replace(/\'/g, "\\\'") + "')" } : null,
+                IS_SUPER_ADMIN ? { label: '✏️ تعديل / Edit', onclick: "openEditModal('" + esc(r.unique_id).replace(/\'/g, "\\\'") + "')" } : null,
                 IS_SUPER_ADMIN ? { label: '🗑️ حذف / Delete', color: '#dc2626', onclick: "deleteDeduction('" + esc(r.unique_id).replace(/\'/g, "\\\'") + "')" } : null
               ].filter(Boolean));
               html += '<tr><td>' + esc(r.emp_id) + '</td><td>' + esc(r.name_ar || '-') + '</td>' +
@@ -158,31 +163,88 @@
       }
     }
 
-    function openAddModal(prefill) {
+    /* Row-edit repair (Stage 4): explicit create/edit mode. DED_EDIT.uid holds
+       the edited unique_id, DED_EDIT.att the retained attachment pair,
+       DED_EDIT.roles the augmented role list; all null in Add mode. */
+    var DED_EDIT = { uid: null, att: null, roles: null };
+    function _dedRoles() { return (DED_EDIT.roles || ROLE_OPTIONS); }
+
+    function openAddModal(prefill, title) {
       prefill = prefill || {};
+      DED_EDIT.uid = null;
+      DED_EDIT.att = null;
+      DED_EDIT.roles = null;
+      var empOpts = EMP_OPTIONS.slice();
+      if (prefill.emp_id && !empOpts.some(function (o) { return String(o.value) === String(prefill.emp_id); })) {
+        empOpts.push({ value: prefill.emp_id, label: (prefill.name_ar || prefill.emp_id) + ' (غير نشط)' });
+      }
+      var roles = (_dedRoles)().slice ? (_dedRoles)().slice() : ROLE_OPTIONS.slice();
+      if (prefill.deduction_type && !roles.some(function (o) { return String(o.value) === String(prefill.deduction_type); })) {
+        roles.push({ value: prefill.deduction_type, label: (prefill.deduction_name || prefill.deduction_type) + ' (غير نشط)' });
+      }
       var body =
         '<form id="vf-ded-form">' +
         UIC.combo({ key: 'emp_id', label: 'الموظف', required: true,
-          options: EMP_OPTIONS, placeholder: 'اختر الموظف...' }) +
+          options: empOpts, placeholder: 'اختر الموظف...', value: prefill.emp_id || '' }) +
         UIC.field({ key: 'deduction_type', label: 'نوع الخصم', type: 'select', required: true,
-          options: ROLE_OPTIONS, placeholder: 'اختر النوع...', value: prefill.type || '' }) +
+          options: roles, placeholder: 'اختر النوع...', value: prefill.deduction_type || prefill.type || '' }) +
         UIC.field({ key: 'date', label: 'التاريخ', type: 'date', required: true, value: prefill.date || todayStr() }) +
-        UIC.field({ key: 'number_of_days', label: 'عدد الأيام', type: 'number', min: '0', step: '0.5', value: '0' }) +
-        UIC.field({ key: 'penalty_value', label: 'قيمة الجزاء', type: 'number', min: '0', step: '0.01' }) +
-        UIC.field({ key: 'deduction_value_other', label: 'خصم آخر', type: 'number', min: '0', step: '0.01' }) +
+        UIC.field({ key: 'number_of_days', label: 'عدد الأيام', type: 'number', min: '0', step: '0.5', value: (prefill.number_of_days != null && prefill.number_of_days !== '' ? prefill.number_of_days : '0') }) +
+        UIC.field({ key: 'penalty_value', label: 'قيمة الجزاء', type: 'number', min: '0', step: '0.01', value: (prefill.penalty_value != null && prefill.penalty_value !== '' ? prefill.penalty_value : '') }) +
+        UIC.field({ key: 'deduction_value_other', label: 'خصم آخر', type: 'number', min: '0', step: '0.01', value: (prefill.deduction_value_other != null && prefill.deduction_value_other !== '' ? prefill.deduction_value_other : '') }) +
         '<div class="form-field" data-field="details"><label class="form-label" for="details">تفاصيل <span class="req">*</span></label>' +
-        '<textarea id="details" class="input" data-field-name="details" rows="2" placeholder="وصف الخصم..." required></textarea>' +
+        '<textarea id="details" class="input" data-field-name="details" rows="2" placeholder="وصف الخصم..." required>' + esc(prefill.details || '') + '</textarea>' +
         '<div class="field-error" id="err-details"></div></div>' +
-        UIC.fileField({ key: 'file', label: 'المرفق', accept: '.pdf,.doc,.docx,.png,.jpg,.jpeg' }) +
+        UIC.fileField({ key: 'file', label: prefill._editMode ? 'استبدال المرفق (اختياري)' : 'المرفق', accept: '.pdf,.doc,.docx,.png,.jpg,.jpeg', instant: true, sheet: 'valley_emp_deductions', field: 'deduction_attachement', formModalId: 'vf-ded-modal' }) +
         '</form>';
       UIC.openModal('vf-ded-modal', {
-        title: 'تسجيل غياب / خصم',
+        title: title || 'تسجيل غياب / خصم',
         body: body,
         onSave: 'saveDeduction()'
       });
+      try { UIC.trackDirty('vf-ded-form'); } catch (eT) {}
+      try {
+        if (prefill._editMode && prefill._attRef && UIC.UploadSet) {
+          var ar = DED_EDIT.att ? DED_EDIT.att.ref : prefill._attRef;
+          var ai = DED_EDIT.att ? DED_EDIT.att.id : '';
+          if (ar) UIC.UploadSet.setBound('file', ar, ai);
+        }
+      } catch (eB) {}
       var sel = document.getElementById('deduction_type');
       if (sel) sel.addEventListener('change', onDedTypeChange);
+      DED_EDIT.roles = roles;
       onDedTypeChange();
+      if (prefill._editMode && prefill._attRef) {
+        try {
+          var fw = document.querySelector('#vf-ded-form [data-field="file"], #vf-ded-form .form-field:last-child');
+          var note = document.createElement('div');
+          note.style.cssText = 'font-size:12px;color:var(--text-muted);margin-top:4px;';
+          note.textContent = 'المرفق الحالي: ' + String(prefill._attRef).split('/').pop() + ' — اترك حقل الملف فارغاً للاحتفاظ به';
+          var host = document.getElementById('vf-ded-form');
+          if (host)           host.appendChild(note);
+        } catch (e) {}
+      }
+    }
+
+    function openEditModal(uid) {
+      if (!UIC.canFull_()) { UIC.toast('غير مصرح', 'error'); return; }
+      var r = ROWS.find(function (x) { return String(x.unique_id) === String(uid); });
+      if (!r) { UIC.toast('السجل غير موجود — تم تحديث القائمة', 'error'); fetchDeductions(true); return; }
+      DED_EDIT.uid = String(r.unique_id);
+      DED_EDIT.att = { ref: r.deduction_attachement || '', id: r.deduction_attachement_id || '' };
+      openAddModal({
+        _editMode: true,
+        _attRef: r.deduction_attachement || '',
+        emp_id: r.emp_id,
+        name_ar: r.name_ar,
+        deduction_type: r.deduction_type,
+        deduction_name: r.deduction_name,
+        date: fmtDate(r.date),
+        number_of_days: r.number_of_days,
+        penalty_value: r.penalty_value,
+        deduction_value_other: r.deduction_value_other,
+        details: r.details || ''
+      }, 'تعديل خصم / غياب');
     }
 
     function clearFieldError(id) {
@@ -204,9 +266,10 @@
       var other = document.getElementById('deduction_value_other');
       if (!sel || !days) return;
       var selectedVal = sel.value;
+      var _rl2 = _dedRoles();
       var role = null;
-      for (var i = 0; i < ROLE_OPTIONS.length; i++) {
-        if (String(ROLE_OPTIONS[i].value) === String(selectedVal)) { role = ROLE_OPTIONS[i]; break; }
+      for (var i = 0; i < _rl2.length; i++) {
+        if (String(_rl2[i].value) === String(selectedVal)) { role = _rl2[i]; break; }
       }
       var isMoneyBased = role && role.deductionValue != null;
       if (isMoneyBased) {
@@ -227,9 +290,10 @@
     function saveDeduction() {
       if (!UIC.validateForm('vf-ded-form')) return;
       var selectedVal = document.getElementById('deduction_type').value;
+      var _rl3 = _dedRoles();
       var role = null;
-      for (var i = 0; i < ROLE_OPTIONS.length; i++) {
-        if (String(ROLE_OPTIONS[i].value) === String(selectedVal)) { role = ROLE_OPTIONS[i]; break; }
+      for (var i = 0; i < _rl3.length; i++) {
+        if (String(_rl3[i].value) === String(selectedVal)) { role = _rl3[i]; break; }
       }
       var isMoneyBased = role && role.deductionValue != null;
       if (isMoneyBased) {
@@ -241,25 +305,46 @@
       }
       var data = UIC.collectForm('vf-ded-form');
       var formEl = document.getElementById('vf-ded-form');
-      var fileInput = formEl ? formEl.querySelector('input[type="file"]') : null;
-      var filePromise = (fileInput && fileInput.files && fileInput.files[0])
-        ? new Promise(function (resolve, reject) {
-            var reader = new FileReader();
-            reader.onerror = function () { reject(new Error('خطأ في قراءة الملف')); };
-            reader.onload = function () {
-              var b64 = String(reader.result || '').split(',')[1] || '';
-              companyCall('add_upload_file', { sheet: 'valley_emp_deductions', filename: fileInput.files[0].name, base64: b64 })
-                .then(function (res) {
-                  if (res && res.status === 'success') resolve(res.reference);
-                  else reject(new Error((res && res.message) || 'خطأ في رفع الملف'));
-                })
-                .catch(function (err) { reject(new Error((err && err.message) || 'خطأ في رفع الملف')); });
-            };
-            reader.readAsDataURL(fileInput.files[0]);
-          })
-        : Promise.resolve('');
-      filePromise.then(function (ref) {
-        if (ref) data.deduction_attachement = ref;
+      var doSaveDed = function () {
+        /* Option A instant-upload: pre-bound ref from dataset/DED_EDIT. */
+        try {
+          var fileInput = formEl ? formEl.querySelector('input[type="file"]') : null;
+          var bound = (fileInput && UIC.UploadSet) ? UIC.UploadSet.getBound(fileInput) : null;
+          if (bound && bound.ref) {
+            data.deduction_attachement = bound.ref;
+            if (bound.id) data.deduction_attachement_id = bound.id;
+          } else if (DED_EDIT.uid && DED_EDIT.att) {
+            if (DED_EDIT.att.ref) data.deduction_attachement = DED_EDIT.att.ref;
+            if (DED_EDIT.att.id) data.deduction_attachement_id = DED_EDIT.att.id;
+          }
+        } catch (e) {}
+        /* Keyed refresh: the server record replaces the row with the same
+           unique_id, so an edit never duplicates; a missing record reloads. */
+        var afterDedSave = function (r) {
+            var rec = (r && r.record) || null;
+            if (rec) {
+              var RECENT_LIMIT = 10;
+              var idx = ROWS.findIndex(function(x){ return String(x.unique_id)===String(rec.unique_id); });
+              if (idx!==-1) ROWS[idx]=rec; else ROWS.unshift(rec);
+              if (ROWS.length>RECENT_LIMIT) ROWS.pop();
+              renderDeductions();
+            } else {
+              fetchDeductions(true);
+            }
+        };
+        if (DED_EDIT.uid) {
+          data.unique_id = DED_EDIT.uid;
+          return UIC.Live.save({
+            call: companyCall,
+            action: 'update_deduction',
+            data: data,
+            modal: 'vf-ded-modal',
+            message: 'تم تحديث الخصم',
+            queueable: false,
+            reload: function () { fetchDeductions(true); },
+            onSuccess: afterDedSave
+          }).catch(function () { /* UIC.Live has toasted */ });
+        }
         /* Tier B: the 2-table handler (plus cross-row/period refuses invisible
            in the form) can refuse for reasons the form cannot show — so NO
            draft is painted: canPatch stays false, only the quiet corner hint
@@ -276,30 +361,28 @@
           message: 'تم الحفظ',
           queueable: false,
           reload: function () { fetchDeductions(true); },
-          onSuccess: function (r) {
-            var rec = (r && r.record) || null;
-            if (rec) {
-              var RECENT_LIMIT = 10;
-              var idx = ROWS.findIndex(function(x){ return String(x.unique_id)===String(rec.unique_id); });
-              if (idx!==-1) ROWS[idx]=rec; else ROWS.unshift(rec);
-              if (ROWS.length>RECENT_LIMIT) ROWS.pop();
-              renderDeductions();
-            } else {
-              fetchDeductions(true);
-            }
-          }
+          onSuccess: afterDedSave
         }).catch(function () { /* UIC.Live has toasted */ });
-      }).catch(function (e) { UIC.toast((e && e.message) || 'خطأ', 'error'); });
+      };
+      try {
+        if (window.UIC && UIC.UploadSet && UIC.UploadSet.isBusy('vf-ded-modal')) {
+          UIC.toast('جاري رفع الملف... يرجى الانتظار', 'warning');
+          UIC.UploadSet.awaitPending('vf-ded-modal').then(doSaveDed);
+          return;
+        }
+      } catch (e2) {}
+      doSaveDed();
     }
 
-    function viewAttachment(ref){
-      UIC.openDownload(scriptUrl + '?download=attachment&page=vf_hr_deductions&ref=' + encodeURIComponent(ref) + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN),
+    function viewAttachment(ref, id){
+      if(!ref && (id == null || String(id) === '')) return;
+      UIC.openDownload(scriptUrl + '?download=attachment&page=vf_hr_deductions&ref=' + encodeURIComponent(ref || '') + ((id != null && String(id) !== '') ? '&id=' + encodeURIComponent(id) : '') + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN),
         'فتح المرفق');
     }
     function viewDeduction(uid){
       var r = ROWS.find(function(x){ return String(x.unique_id)===String(uid); });
       if(!r) return;
-      var attBtn = r.deduction_attachement ? '<button class="btn btn-outline" style="padding:6px 12px;" onclick="viewAttachment(\'' + esc(r.deduction_attachement).replace(/\'/g, "\\\'") + '\')">📎 عرض — ' + esc(String(r.deduction_attachement).split('/').pop()) + '</button>' : 'لا يوجد';
+      var attBtn = r.deduction_attachement ? '<button class="btn btn-outline" style="padding:6px 12px;" onclick="viewAttachment(\'' + esc(r.deduction_attachement).replace(/\'/g, "\\\'") + '\',\'' + esc(r.unique_id).replace(/\'/g, "\\\'") + '\')">📎 عرض — ' + esc(String(r.deduction_attachement).split('/').pop()) + '</button>' : 'لا يوجد';
       var body = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 16px;font-size:14px;">' +
         '<div><b>الموظف:</b> ' + esc(r.name_ar||r.emp_id) + ' (#' + esc(r.emp_id)+')</div>' +
         '<div><b>التاريخ:</b> ' + fmtDate(r.date) + '</div>' +

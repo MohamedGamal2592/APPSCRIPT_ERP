@@ -65,7 +65,9 @@
 
   function fetchDeductions(quiet) {
     if (!quiet) UI.showSpinner();
-    companyCall('get_emp_deductions')
+    /* Small reference set, custom grouped render with no truncation notice —
+       always load the full set (server keeps a last-300 safety window). */
+    companyCall('get_emp_deductions', { loadAll: true })
       .then(function (r) {
         window.__rows = r.rows || [];
         window.__empOptions = r.employee_options || [];
@@ -263,11 +265,9 @@
         rec.__draft = draft.__draft;
         return rec;
       },
-      /* The ten-row cap is applied here, NOT in the draft: trimming at draft
-         time would drop the tenth row, and the rollback restores the draft's
-         slot but cannot bring that row back. */
+      /* The list is loaded in full, so there is nothing to trim back to:
+         the optimistic row simply stays until the quiet reload confirms it. */
       onSuccess: function () {
-        if (window.__rows.length > 10) window.__rows = window.__rows.slice(0, 10);
         renderDeductions();
       }
     }).catch(function () { /* UIC.Live has toasted and rolled back */ });

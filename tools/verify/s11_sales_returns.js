@@ -41,7 +41,7 @@ async function renderSales(count, loadAll) {
     scriptlets: { CURRENT_ACTION: "'tl_sales'" },
     call: (action, data) => {
       if (action === 'get_sales_headers') {
-        return { status: 'success', headers: invoices(data && data.loadAll ? count : 10) };
+        return { status: 'success', headers: invoices(data && data.loadAll ? count : 20) };
       }
       return { status: 'success' };
     }
@@ -118,7 +118,7 @@ async function renderSales(count, loadAll) {
       'neither screen opts out of the shared pager');
     const few = await renderSales(10, false);
     check(few.html('tl-content').indexOf('عرض الكل') !== -1,
-      'and the 10-row default still offers عرض الكل, as المشتريات does');
+      'and the 20-row default still offers عرض الكل, as المشتريات does');
   }
 
   console.log('\n' + (failed === 0

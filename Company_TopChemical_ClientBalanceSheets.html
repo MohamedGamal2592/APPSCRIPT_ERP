@@ -318,7 +318,7 @@
     if (loadAll !== undefined) S.loadedAll = !!loadAll;
     /* RT1: reads draw skeletons, never the blocking overlay */
     UIC.readSkeleton('cbs-content', {
-      message: S.loadedAll ? 'جاري تحميل كامل البيانات...' : 'جاري تحميل آخر 10 سجلات...'
+      message: S.loadedAll ? 'جاري تحميل كامل البيانات...' : 'جاري تحميل آخر 20 سجل...'
     });
     companyCall('get_client_balance_sheets', { loadAll: S.loadedAll })
       .then(function (res) {
@@ -368,7 +368,7 @@
             '<div class="cbs-badge">الإجمالي: <b>' + FMT.number(S.total) + '</b></div>' +
             '<div class="cbs-badge">المُحمَّل: <b>' + FMT.number(S.rows.length) + '</b></div>' +
             '<div class="cbs-badge">المعروض: <b>' + FMT.number(rows.length) + '</b></div>' +
-            '<div class="cbs-badge">الوضع: <b>' + (S.loadedAll ? 'عرض الكل' : 'آخر 10 سجلات') + '</b></div>' +
+            '<div class="cbs-badge">الوضع: <b>' + (S.loadedAll ? 'عرض الكل' : 'آخر 20 سجل') + '</b></div>' +
           '</div>' +
         '</div>' +
         '<div class="cbs-toolbar">' +
@@ -384,7 +384,7 @@
             '<button class="btn btn-outline" onclick="fetchData(S.loadedAll)">🔄 تحديث</button>' +
             '<button class="btn ' + (S.loadedAll ? 'btn-secondary' : 'btn-primary') + '" onclick="toggleLoadAll()">' +
               (S.loadedAll
-                ? '📄 عرض آخر 10 سجلات فقط'
+                ? '📄 عرض آخر 20 سجل فقط'
                 : '📊 عرض الكل (' + FMT.number(S.total) + ' سجل)') +
             '</button>' +
           '</div>' +

@@ -62,7 +62,6 @@
       document.getElementById('vf-shift-content').innerHTML =
         '<div class="vf-card"><div class="vf-card-header"><h3>تحديد الورديات</h3>' +
           '<div style="display:flex;gap:8px;align-items:center;">' +
-            '<button class="btn btn-outline" onclick="SHIFT_PAGE.loadAll()">عرض الكل</button>' +
             (CAN_WRITE ? '<button class="btn btn-primary" onclick="SHIFT_PAGE.openAdd()">+ تعيين وردية</button>' : '') +
           '</div>' +
         '</div><div class="vf-card-body">' +
@@ -88,6 +87,8 @@
     }
 
     function loadAll() { LOADED_ALL = true; load(); }
+    function showLatest() { LOADED_ALL = false; load(); }
+    function toggleAll() { LOADED_ALL = !LOADED_ALL; load(); }
 
     function renderTable(total) {
       var c = document.getElementById('shift-table');
@@ -103,7 +104,7 @@
           esc(r.user || '-')
         ];
       });
-      c.innerHTML = UIC.dataTable('shift-tbl', {
+      c.innerHTML = UIC.showAllBar({ loadedAll: LOADED_ALL, total: (total != null ? total : ROWS.length), showAll: 'SHIFT_PAGE.loadAll()', showLatest: 'SHIFT_PAGE.showLatest()' }) + UIC.dataTable('shift-tbl', {
         /* [RT-1] The list endpoint caps at the newest rows unless `loadAll` is
            passed, and the search box filters only what is in memory — so the
            table says which records the box actually searches. */
@@ -204,7 +205,7 @@
         .finally(function () { UI.hideSpinner(); });
     }
 
-    window.SHIFT_PAGE = { openAdd: openAdd, save: save, loadAll: loadAll };
+    window.SHIFT_PAGE = { openAdd: openAdd, save: save, loadAll: loadAll, toggleAll: toggleAll, showLatest: showLatest };
 
     /* Another device's change to this page arrives on its own. The poll reads
        timestamps from cache, never a spreadsheet, and stands down while the tab

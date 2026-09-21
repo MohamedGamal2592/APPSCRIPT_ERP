@@ -7,7 +7,8 @@ const fs = require('fs');
 const vm = require('vm');
 const assert = require('assert');
 
-const source = fs.readFileSync('D:/Work/Script/Code.js', 'utf8');
+const source = fs.readFileSync('D:/Work/Script/Code.js', 'utf8') + '\n' +
+  fs.readFileSync('D:/Work/Script/Company_TopChemical_Actions.js', 'utf8');
 function grab(name) {
   const start = source.indexOf('function ' + name + '(');
   if (start < 0) throw new Error('missing ' + name);
@@ -21,8 +22,8 @@ const preview = ctx.customsOfficePathPreview_;
 assert.ok(preview, 'preview helper must load');
 
 // Route + registry wiring must exist.
-assert.match(source, /'customs_office_path_repair':\s*\{\s*handler:\s*customsOfficePathRepair_,\s*requireAuth:\s*true\s*\}/, 'repair route must be registered with auth');
-assert.match(source, /'tc_customs_office':\s*\{[^}]*sheet:\s*'مكتب الجمارك'[^}]*folder:\s*'customs_office_Files_'/, 'registry must keep target folder');
+assert.match(source, /'customs_office_path_repair':\s*\{\s*handler:\s*companyArtifactRoute_,\s*requireAuth:\s*true\s*\}/, 'repair route must be registered with auth');
+assert.match(source, /tc_customs_office\s*:\s*\{[^}]*sheet:\s*'مكتب الجمارك'[^}]*folder:\s*'customs_office_Files_'/, 'registry must keep target folder');
 assert.ok(source.indexOf('function customsOfficePathRepair_(') > 0, 'repair handler must exist');
 
 // Blank cells -> blank, never rewritten.

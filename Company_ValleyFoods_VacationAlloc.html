@@ -70,9 +70,12 @@
     /* quiet: refresh in the background with no blocking overlay, for a
        user who has already seen the change and must not be interrupted
        to confirm it. */
+    var LOADED_ALL = false;
+    function toggleLoadAll() { LOADED_ALL = !LOADED_ALL; fetchData(); }
+
     function fetchData(quiet) {
       if (!quiet) UIC.readSkeleton('vf-vacalloc-content');
-      companyCall('get_vacation_alloc_data').then(function (res) {
+      companyCall('get_vacation_alloc_data', LOADED_ALL ? { loadAll: true } : {}).then(function (res) {
         ROWS = res.rows || [];
         EMP_OPTIONS = res.employee_options || [];
         VAC_INDEX_OPTIONS = res.vacation_index_options || [];
@@ -115,11 +118,12 @@
       });
       document.getElementById('vf-vacalloc-content').innerHTML =
         addBtn +
+        UIC.showAllBar({ loadedAll: LOADED_ALL, showAll: 'toggleLoadAll()', showLatest: 'toggleLoadAll()' }) +
         UIC.dataTable('vacalloc-table', {
           /* [RT-1] The list endpoint caps at the newest rows unless `loadAll` is
              passed, and the search box filters only what is in memory — so the
              table says which records the box actually searches. */
-          truncated: true, headers: headers, rows: rows, emptyText: 'لا توجد تخصيصات إجازات' });
+          truncated: !LOADED_ALL, showAll: 'toggleLoadAll()', headers: headers, rows: rows, emptyText: 'لا توجد تخصيصات إجازات' });
       UIC.initTableSort('vacalloc-table');
     }
 

@@ -7,7 +7,7 @@
  * There is no browser and no database reachable from here, so this is the only
  * thing that actually EXECUTES the parser before it ships. It runs under plain
  * `node` with no Apps Script globals, which is the whole reason
- * Box_Analysis_Engine.js is a separate file from the actions file.
+ * Company_TopChemical_Actions.js is a separate file from the actions file.
  *
  * READ THE COVERAGE NUMBER WITH CARE. Exactly one fixture is a real production
  * string. A 100% pass here says the parser handles the failure modes somebody
@@ -20,7 +20,7 @@ const fs = require('fs');
 const path = require('path');
 
 const ROOT = path.resolve(__dirname, '..', '..');
-const E = require(path.join(ROOT, 'Box_Analysis_Engine.js'));
+const E = require(path.join(ROOT, 'Company_TopChemical_Actions.js'));
 const FIX = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'box_details.json'), 'utf8'));
 
 const SHOW = process.argv.indexOf('--show') !== -1;

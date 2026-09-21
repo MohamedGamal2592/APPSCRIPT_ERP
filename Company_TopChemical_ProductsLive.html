@@ -10,174 +10,12 @@
   <?!= include('Company_TopChemical_Nav'); ?>
   <?!= getCompanyThemeCSS_('3fe1b5cb67b7223e') ?>
   <style>
-    .pl-wrapper {
-      display: flex;
-      flex-direction: column;
-      gap: 16px;
-      padding: 4px 0;
-    }
-    .pl-header-card {
-      background: var(--bg-surface, #fff);
-      border: 1px solid var(--border-color, #e2e8f0);
-      border-radius: 12px;
-      padding: 16px 20px;
-      box-shadow: 0 1px 3px rgba(0,0,0,.06);
-    }
-    .pl-header-top {
-      display: flex;
-      justify-content: space-between;
-      align-items: flex-start;
-      flex-wrap: wrap;
-      gap: 12px;
-      margin-bottom: 14px;
-    }
-    .pl-heading {
-      font-size: 17px;
-      font-weight: 700;
-      color: var(--text-primary, #0f172a);
-      margin: 0 0 4px;
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-    .pl-subheading {
-      font-size: 12px;
-      color: var(--text-muted, #64748b);
-      margin: 0;
-    }
-    .pl-badges {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-      align-items: center;
-    }
-    .pl-badge {
-      display: inline-flex;
-      align-items: center;
-      gap: 5px;
-      padding: 3px 10px;
-      border-radius: 8px;
-      font-size: 12px;
-      background: var(--bg-subtle, #f8fafc);
-      border: 1px solid var(--border-color, #e2e8f0);
-      color: var(--text-secondary, #334155);
-    }
-    .pl-badge b { color: var(--brand-primary, #0284c7); }
-    .pl-toolbar {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      flex-wrap: wrap;
-      gap: 10px;
-      padding-top: 14px;
-      border-top: 1px solid var(--border-color, #e2e8f0);
-    }
-    .pl-search-box {
-      position: relative;
-      flex: 1;
-      min-width: 220px;
-      max-width: 380px;
-    }
-    .pl-search-input {
-      width: 100%;
-      padding: 8px 12px 8px 30px;
-      border: 1px solid var(--border-color, #cbd5e1);
-      border-radius: 8px;
-      font-size: 13px;
-      background: var(--bg-surface, #fff);
-      color: var(--text-primary, #0f172a);
-      outline: none;
-      transition: border-color .2s, box-shadow .2s;
-    }
-    .pl-search-input:focus {
-      border-color: var(--brand-primary, #0284c7);
-      box-shadow: 0 0 0 2px rgba(2,132,199,.12);
-    }
-    .pl-search-clear {
-      position: absolute;
-      left: 9px;
-      top: 50%;
-      transform: translateY(-50%);
-      cursor: pointer;
-      color: var(--text-muted, #94a3b8);
-      font-size: 13px;
-      display: none;
-    }
-    .pl-table-card {
-      background: var(--bg-surface, #fff);
-      border: 1px solid var(--border-color, #e2e8f0);
-      border-radius: 12px;
-      overflow: hidden;
-      box-shadow: 0 1px 3px rgba(0,0,0,.06);
-    }
-    .pl-table-scroll {
-      width: 100%;
-      overflow-x: auto;
-    }
-    .pl-tbl {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 13px;
-      white-space: nowrap;
-    }
-    .pl-tbl thead th {
-      background: var(--bg-subtle, #f1f5f9);
-      color: var(--text-secondary, #334155);
-      font-weight: 700;
-      padding: 9px 13px;
-      border-bottom: 2px solid var(--border-color, #cbd5e1);
-      text-align: right;
-      position: sticky;
-      top: 0;
-      z-index: 2;
-    }
-    .pl-tbl tbody tr {
-      border-bottom: 1px solid var(--border-color, #f1f5f9);
-      transition: background .12s;
-    }
-    .pl-tbl tbody tr:hover { background: var(--brand-subtle-bg, #f0f9ff); }
-    .pl-tbl td {
-      padding: 9px 13px;
-      color: var(--text-primary, #0f172a);
-      vertical-align: middle;
-    }
-    .cell-num {
-      text-align: left;
-      font-variant-numeric: tabular-nums;
-      font-family: monospace;
-      font-weight: 600;
-      direction: ltr;
-    }
-    .cell-date {
-      font-family: monospace;
-      direction: ltr;
-      text-align: left;
-    }
-    .badge-pk {
-      padding: 2px 7px;
-      border-radius: 6px;
-      font-size: 11px;
-      font-weight: 700;
-      background: #e0f2fe;
-      color: #0369a1;
-      font-family: monospace;
-    }
-    .badge-on {
-      padding: 2px 8px;
-      border-radius: 6px;
-      font-size: 11px;
-      font-weight: 700;
-      background: #dcfce7;
-      color: #166534;
-    }
-    .badge-off {
-      padding: 2px 8px;
-      border-radius: 6px;
-      font-size: 11px;
-      font-weight: 700;
-      background: #fef3c7;
-      color: #92400e;
-    }
+    /* NOTE: the list itself is rendered by the unified UIC.dataTable
+       (search + Excel + print toolbar, .table styling, phone cards, print
+       rules). No page-level table CSS here by design — visual overrides
+       would fork this list away from every other table in the system.
+       Numeric alignment reuses the shared .num class (numeric:true columns
+       already emit <td class="num">); do not add a local duplicate. */
     .pl-form-grid {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
@@ -186,34 +24,14 @@
     }
     .pl-form-grid .form-field { margin: 0; }
     .pl-form-full { grid-column: 1 / -1; }
-    .pl-empty {
-      text-align: center;
-      padding: 40px 20px;
-      color: var(--text-muted, #64748b);
-      font-size: 14px;
-    }
-    .lbl-pk {
-      font-size: 11px;
-      background: #e0f2fe;
-      color: #0369a1;
-      border-radius: 4px;
-      padding: 1px 5px;
-      font-weight: 600;
-      margin-right: 4px;
-    }
     .lbl-ro {
       font-size: 11px;
-      background: #f1f5f9;
-      color: #64748b;
+      background: var(--bg-subtle, #f1f5f9);
+      color: var(--text-muted, #64748b);
       border-radius: 4px;
       padding: 1px 5px;
       font-weight: 600;
       margin-right: 4px;
-    }
-    .btn-danger-soft {
-      background: #fef2f2;
-      border: 1px solid #fecaca;
-      color: #b91c1c;
     }
   </style>
 </head>
@@ -231,13 +49,14 @@
   var CAN_WRITE = UIC.canAdd_();
   var CAN_FULL  = UIC.canFull_();
 
-  /* ── state (VIEW-ONLY page: no add / edit / delete here) ── */
-  var S = {
-    columns:    [],
-    rows:       [],
-    total:      0,
-    loadedAll:  false
-  };
+  /* ── state: newest-50 or all rows in memory, like tc_stock_revision
+     (VIEW-ONLY page: no add here; edit/delete act on the in-memory rows).
+     Search, sort and paging are the shared dataTable's client-side behavior
+     over what is loaded; "عرض الكل" loads the whole catalog (cap 1000). ── */
+  var S = { columns: [], rows: [] };
+  var __loadedAll = false;
+  function showAllProducts() { fetchData(true); }
+  function showLatestProducts() { fetchData(false); }
 
   var PK_COL = 'id';
 
@@ -334,20 +153,22 @@
       contentId: 'pl-content',
       menuGroups: (window.TOPCHEMICAL_MENU || [])
     });
-    fetchData(false);
+    fetchData();
   }
 
   /* ══════════════════ DATA ══════════════════ */
+  /* Newest 50 by default, whole catalog on "عرض الكل" — the tc_stock_revision
+     pattern. A re-fetch with no argument (after save/delete/refresh) keeps
+     whichever view the user is in. */
   function fetchData(loadAll) {
-    if (loadAll !== undefined) S.loadedAll = !!loadAll;
+    if (arguments.length) __loadedAll = !!loadAll;
     UIC.readSkeleton('pl-content', {
-      message: S.loadedAll ? 'جاري تحميل كامل الأصناف...' : 'جاري تحميل آخر 10 أصناف...'
+      message: __loadedAll ? 'جاري تحميل كل الأصناف...' : 'جاري التحميل...'
     });
-    companyCall('get_products_live', { loadAll: S.loadedAll })
+    companyCall('get_products_live', __loadedAll ? { loadAll: true } : {})
       .then(function (res) {
         S.columns = res.columns || [];
         S.rows    = res.rows    || [];
-        S.total   = res.total   || 0;
         renderPage();
       })
       .catch(showError)
@@ -357,41 +178,11 @@
       });
   }
 
-  function toggleLoadAll() { fetchData(!S.loadedAll); }
-
   /* ══════════════════ RENDER — unified table ══════════════════ */
   function renderPage() {
     var content = document.getElementById('pl-content');
     if (!content) return;
-
-    content.innerHTML =
-      '<div class="pl-wrapper">' +
-      '<div class="pl-header-card">' +
-        '<div class="pl-header-top">' +
-          '<div>' +
-            '<h2 class="pl-heading">🏷️ اصناف النظام الرئيسي <span style="font-size:13px;font-weight:400;color:var(--text-muted)">(products)</span></h2>' +
-            '<p class="pl-subheading">جدول قاعدة البيانات المباشر — ' + S.total + ' صنف إجمالاً (الحذف الناعم مُطبَّق)</p>' +
-          '</div>' +
-          '<div class="pl-badges">' +
-            '<div class="pl-badge">الإجمالي: <b>' + FMT.number(S.total) + '</b></div>' +
-            '<div class="pl-badge">المُحمَّل: <b>' + FMT.number(S.rows.length) + '</b></div>' +
-            '<div class="pl-badge">الوضع: <b>' + (S.loadedAll ? 'عرض الكل' : 'آخر 10 سجلات') + '</b></div>' +
-          '</div>' +
-        '</div>' +
-        '<div class="pl-toolbar">' +
-          '<div style="display:flex;gap:8px;flex-wrap:wrap;">' +
-            '<button class="btn btn-outline" onclick="fetchData(S.loadedAll)">🔄 تحديث</button>' +
-            '<button class="btn ' + (S.loadedAll ? 'btn-secondary' : 'btn-primary') + '" onclick="toggleLoadAll()">' +
-              (S.loadedAll
-                ? '📄 عرض آخر 10 سجلات فقط'
-                : '📊 عرض الكل (' + FMT.number(S.total) + ' سجل)') +
-            '</button>' +
-          '</div>' +
-        '</div>' +
-      '</div>' +
-      '<div id="pl-table-host"></div>' +
-      '</div>';
-
+    content.innerHTML = '<div id="pl-table-host"></div>';
     renderPlTable();
   }
 
@@ -424,14 +215,44 @@
       };
     });
 
-    host.innerHTML = UIC.dataTable('pl-table', {
-      truncated: !S.loadedAll,
-      showAll: 'toggleLoadAll()',
+    var bar = UIC.showAllBar({
+      latestN: 50,
+      loadedAll: __loadedAll,
+      total: S.rows.length,
+      showAll: 'showAllProducts()',
+      showLatest: 'showLatestProducts()'
+    });
+
+    if (!rows.length) {
+      host.innerHTML = bar +
+        '<div id="pl-table" class="table-wrap">' +
+        '<div class="table-toolbar" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">' +
+          '<button type="button" class="btn btn-outline" onclick="fetchData()">' +
+            UIC.icon('refresh') + '<span>تحديث</span></button>' +
+        '</div>' +
+        UIC.emptyState({ title: 'لا توجد أصناف مطابقة' }) + '</div>';
+      return;
+    }
+
+    host.innerHTML = bar + UIC.dataTable('pl-table', {
+      /* Like tc_stock_revision: newest-50 or all rows in memory. The
+         built-in search box filters what is loaded, the shared pager
+         handles >50 rows, and the scope notice stays honest via
+         truncated/showAll. */
+      truncated: !__loadedAll,
+      showAll: 'showAllProducts()',
       title: 'اصناف النظام الرئيسي',
       headers: PL_HEADERS,
       rows: rows,
       emptyText: 'لا توجد أصناف مطابقة'
     });
+    var tableWrap = document.getElementById('pl-table');
+    var toolbar = tableWrap && tableWrap.querySelector('.table-toolbar');
+    if (toolbar) {
+      toolbar.insertAdjacentHTML('beforeend',
+        '<button type="button" class="btn btn-outline" onclick="fetchData()">' +
+          UIC.icon('refresh') + '<span>تحديث</span></button>');
+    }
     UIC.initTableSort('pl-table');
   }
 
@@ -458,10 +279,15 @@
   /* ══════════════════ EDIT MODAL + SOFT DELETE (CAN_WRITE: super admin included) ══════════════════
      Everything is editable except PK. created_at/updated_at are not shown at
      all; quantity is display-only live data from product_current_quantity;
-     unit + product_unit_metric are dropdowns of existing table values. */
+     unit is a dropdown of existing table values; product_unit_metric
+     suggests existing values but accepts new ones. */
   var PL_EDITING = null;
   var READ_ONLY_COLS = { 'id': true };
-  var PL_HIDE_EDIT = { 'created_at': true, 'updated_at': true, 'live_quantity': true };
+  /* Hidden from the edit form (never sent, so the server leaves them
+     untouched): server timestamps, the live view value, internal FK ids
+     and the active flag — all visible in the read-only detail modal. */
+  var PL_HIDE_EDIT = { 'created_at': true, 'updated_at': true, 'live_quantity': true,
+    'manufacture_id': true, 'category_id': true, 'client_id': true, 'active': true };
 
   function openEdit(pkVal) {
     var row = (S.rows).find(function (r) { return String(r[PK_COL]) === String(pkVal); });
@@ -477,8 +303,8 @@
         /* uneditable live data from the product_current_quantity view */
         var live = liveQtyOf(row);
         formHtml += '<div class="form-field"><label class="form-label">' + FMT.escape(label) +
-          ' <span style="font-size:11px;background:#e0f2fe;color:#0369a1;border-radius:4px;padding:1px 5px;">من النظام مباشرة</span></label>' +
-          '<input type="text" class="input cell-num" value="' + FMT.escape(live) + '" disabled></div>';
+          ' <span style="font-size:11px;background:var(--bg-subtle);color:var(--info);border-radius:4px;padding:1px 5px;">من النظام مباشرة</span></label>' +
+          '<input type="text" class="input num" value="' + FMT.escape(live) + '" disabled></div>';
         return;
       }
       if (READ_ONLY_COLS[col]) {
@@ -496,10 +322,19 @@
       } else if (col === 'deleted_at') {
         var dtv = val ? String(val).slice(0, 16).replace(' ', 'T') : '';
         formHtml += '<div class="form-field"><label class="form-label">' + FMT.escape(label) +
-          ' <span style="font-size:11px;background:#fef3c7;color:#92400e;border-radius:4px;padding:1px 5px;">تحكم بالحذف الناعم</span></label>' +
+          ' <span style="font-size:11px;background:var(--warning-bg);color:var(--warning-text);border-radius:4px;padding:1px 5px;">تحكم بالحذف الناعم</span></label>' +
           '<input type="datetime-local" class="input" id="plf_' + col + '" value="' + FMT.escape(dtv) + '">' +
           '<div style="font-size:11px;color:var(--text-muted,#64748b);margin-top:3px;">اتركه فارغاً لاستعادة الصنف. ضع تاريخاً للحذف الناعم.</div></div>';
-      } else if (col === 'unit' || col === 'product_unit_metric') {
+      } else if (col === 'product_unit_metric') {
+        /* Guidance, not a restriction: existing values offered as suggestions
+           but a new value can be typed (allowNew renders the _custom input;
+           saveEdit reads it when the hidden value is __new__). */
+        var mopts = distinctVals(col).map(function (o) { return { value: o, label: o }; });
+        formHtml += '<div class="form-field"><label class="form-label">' + FMT.escape(label) + '</label>' +
+          UIC.combo({ key: 'plf_' + col, options: mopts,
+            value: (val !== null && val !== undefined ? String(val) : ''),
+            placeholder: '— اختر أو اكتب قيمة جديدة —', allowNew: true }) + '</div>';
+      } else if (col === 'unit') {
         /* dropdown of values already existing in the table */
         var opts = distinctVals(col);
         if (opts.length) {
@@ -515,7 +350,7 @@
         }
       } else if (NUMERIC_COLS[col]) {
         formHtml += '<div class="form-field"><label class="form-label">' + FMT.escape(label) + '</label>' +
-          '<input type="number" step="any" class="input cell-num" id="plf_' + col + '" value="' + FMT.escape(val !== null && val !== undefined ? String(val) : '') + '"></div>';
+          '<input type="number" step="any" class="input num" id="plf_' + col + '" value="' + FMT.escape(val !== null && val !== undefined ? String(val) : '') + '"></div>';
       } else {
         formHtml += '<div class="form-field"><label class="form-label">' + FMT.escape(label) + '</label>' +
           '<input type="text" class="input" id="plf_' + col + '" value="' + FMT.escape(val !== null && val !== undefined ? String(val) : '') + '"></div>';
@@ -541,7 +376,15 @@
     cols.forEach(function (col) {
       if (READ_ONLY_COLS[col] || PL_HIDE_EDIT[col] || col === 'quantity') return;
       var el = document.getElementById('plf_' + col);
-      if (el) payload[col] = el.value;
+      if (el) {
+        var v = el.value;
+        if (v === '__new__') {
+          /* allowNew combo: the typed value lives in the _custom input. */
+          var cust = document.getElementById('plf_' + col + '_custom');
+          v = cust ? cust.value : '';
+        }
+        payload[col] = v;
+      }
     });
     UI.showSpinner('جاري حفظ التعديلات…');
     companyCall('save_product_live', payload)
@@ -574,7 +417,6 @@
         UIC.toast('تم الحذف الناعم ✓', 'success');
         UIC.closeModal('pl-delete-modal');
         S.rows = S.rows.filter(function (r) { return String(r[PK_COL]) !== String(pkVal); });
-        S.total = Math.max(0, S.total - 1);
         renderPage();
       })
       .catch(showError)

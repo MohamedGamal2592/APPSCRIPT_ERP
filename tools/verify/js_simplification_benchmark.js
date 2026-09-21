@@ -44,7 +44,7 @@ function fixture(n) {
 function loadAlgorithms() {
   const sandbox = { Set, Map, Array, Object, String };
   vm.createContext(sandbox);
-  vm.runInContext(fs.readFileSync(path.join(ROOT, 'JS_Simplification_Helpers.js'), 'utf8'), sandbox);
+  vm.runInContext(fs.readFileSync(path.join(ROOT, 'Company_Assessment_Actions.js'), 'utf8'), sandbox);
   return sandbox.ERPReadAlgorithms_;
 }
 

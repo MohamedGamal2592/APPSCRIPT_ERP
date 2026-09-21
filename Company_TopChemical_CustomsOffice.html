@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="ar">
 <head>
   <meta charset="utf-8">
@@ -70,9 +70,11 @@
   var params = new URLSearchParams(window.location.search);
   var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
   var scriptUrl = window.scriptUrl || '/';
+  var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
   var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('3fe1b5cb67b7223e') ?>';
   var COMPANY_PAGES = <?!= companyPages ?>;
   var CURRENT_ACTION = '<?!= currentAction ?>';
+  var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
 
   function companyCall(moduleAction, data) {
     return API.call('company_action', {
@@ -100,18 +102,27 @@
     return v.toLocaleString('ar-EG', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   }
 
-  function fileLink(ref) {
+  function fileLink(ref, field) {
     if (!ref) return '—';
-    if (String(ref).indexOf('/') === -1) return esc(ref); // plain text, not a file ref
-    var href = scriptUrl + '?download=doc_file&ref=' + encodeURIComponent(ref) +
-      '&sessionToken=' + encodeURIComponent(SESSION_TOKEN);
+    if (String(ref).indexOf('/') === -1) return esc(ref);
+    var href = scriptUrl + '?download=attachment&page=tc_customs_office';
+    if (ref) href += '&ref=' + encodeURIComponent(ref);
+    if (field) href += '&field=' + encodeURIComponent(field);
+    href += '&sessionToken=' + encodeURIComponent(SESSION_TOKEN);
     var name = String(ref).split('/').pop();
     return '<a class="file-link" href="' + href + '" target="_blank" rel="noopener">' + esc(name) + ' ↗</a>';
   }
 
-  // ---- Upload helper (mirrors BudgetInputs.uploadFileInput) ----
+  // ---- Upload helper (Option A instant: pre-bound on selection; legacy fallback) ----
   function uploadFileInput(inputEl, field, sheet) {
-    if (!inputEl || !inputEl.files || !inputEl.files[0]) return Promise.resolve('');
+    try {
+      if (window.UIC && UIC.UploadSet) {
+        var b0 = inputEl ? UIC.UploadSet.getBound(inputEl) : null;
+        if (b0 && b0.ref) return Promise.resolve({ reference: b0.ref, fileId: b0.id || '', field: field });
+        if (inputEl && !(inputEl.files && inputEl.files[0])) return Promise.resolve(null);
+      }
+    } catch (e) {}
+    if (!inputEl || !inputEl.files || !inputEl.files[0]) return Promise.resolve(null);
     var file = inputEl.files[0];
     return new Promise(function (resolve, reject) {
       var reader = new FileReader();
@@ -120,7 +131,7 @@
         var b64 = String(reader.result || '').split(',')[1] || '';
         companyCall('add_upload_file', { sheet: sheet, field: field, filename: file.name, base64: b64 })
           .then(function (res) {
-            if (res && res.status === 'success') resolve(res.reference);
+            if (res && res.status === 'success') resolve({ reference: res.reference, fileId: res.fileId || '', field: field });
             else reject(new Error((res && res.message) || 'خطأ في رفع الملف'));
           })
           .catch(function (err) { reject(new Error((err && err.message) || 'خطأ في رفع الملف')); });
@@ -130,6 +141,10 @@
   }
 
   var ALL_ROWS = [];
+  /* The endpoint returns the newest 20 records by default. Once the user asks
+     for every record, keep that scope through saves and realtime refreshes so
+     the table never silently falls back to the short list. */
+  var CO_LOADED_ALL = false;
   /* Last server-confirmed summary, so a Tier A save can advance the totals
      from the reply record without a refetch. */
   var CO_TOTALS = { egp: 0, usd: 0 };
@@ -174,7 +189,9 @@
 
   function fetchData(quiet) {
     if (!quiet) UIC.readSkeleton('customs-table', { message: 'جاري تحميل بيانات مكتب الجمارك...' });
-    companyCall('get_customs_office', { scriptUrl: scriptUrl, sessionToken: SESSION_TOKEN })
+    var payload = { scriptUrl: scriptUrl, sessionToken: SESSION_TOKEN };
+    if (CO_LOADED_ALL) payload.loadAll = true;
+    companyCall('get_customs_office', payload)
       .then(function (d) {
         var s = d.summary || { egp_total: 0, usd_total: 0 };
         CO_TOTALS.egp = Number(s.egp_total) || 0;
@@ -189,6 +206,16 @@
         if (t) t.innerHTML = '<div class="empty-state"><span>خطأ في تحميل البيانات: ' + esc((e && e.message) || String(e)) + '</span></div>';
       })
       .finally(function () { UI.hideSpinner(); });
+  }
+
+  function showAllCustoms() {
+    CO_LOADED_ALL = true;
+    fetchData(false);
+  }
+
+  function showLatestCustoms() {
+    CO_LOADED_ALL = false;
+    fetchData(false);
   }
 
   function renderTable() {
@@ -207,17 +234,18 @@
         amount_egp: r.amount_egp || 0,
         amount_usd: r.amount_usd || 0,
         transaction_details: r.transaction_details || '',
-        claim_assignment: fileLink(r.claim_assignment),
-        shipment_clearance: fileLink(r.shipment_clearance),
+        claim_assignment: fileLink(r.claim_assignment, 'تكليف المطالبة'),
+        shipment_clearance: fileLink(r.shipment_clearance, 'تخليص الشحنة'),
         user_email: uname_(r.user_email) || '',
         created_at: r.created_at || ''
       };
     });
-    container.innerHTML = UIC.dataTable('customs-dt', {
+    container.innerHTML = UIC.showAllBar({ loadedAll: CO_LOADED_ALL, total: ALL_ROWS.length, showAll: 'showAllCustoms()', showLatest: 'showLatestCustoms()' }) + UIC.dataTable('customs-dt', {
       /* [RT-1] The list endpoint caps at the newest rows unless `loadAll` is
          passed, and the search box filters only what is in memory — so the
          table says which records the box actually searches. */
-      truncated: true,
+      truncated: !CO_LOADED_ALL,
+      showAll: 'showAllCustoms()',
       title: 'معاملات الجمارك',
       headers: [
         { key: 'id', label: '#', numeric: true },
@@ -233,6 +261,8 @@
         { key: 'created_at', label: 'تم الإنشاء' }
       ],
       rows: rows,
+      searchable: true,
+      pageSize: 50,
       dateFilter: true,
       dateKey: 'transaction_date',
       emptyText: 'لا توجد معاملات'
@@ -259,8 +289,8 @@
       egpField +
       usdField +
       UIC.field({ key: 'transaction_details', label: 'تفاصيل المعاملة', type: 'textarea' }) +
-      UIC.fileField({ key: 'claim_assignment_file', label: 'تكليف المطالبة (اختياري)', accept: '.pdf,.doc,.docx,.png,.jpg,.jpeg' }) +
-      UIC.fileField({ key: 'shipment_clearance_file', label: 'تخليص الشحنة (اختياري)', accept: '.pdf,.doc,.docx,.png,.jpg,.jpeg' }) +
+      UIC.fileField({ key: 'claim_assignment_file', label: 'تكليف المطالبة (اختياري)', accept: '.pdf,.doc,.docx,.png,.jpg,.jpeg', instant: true, sheet: 'customs_office_transactions', field: 'claim_assignment', formModalId: 'customs-modal' }) +
+      UIC.fileField({ key: 'shipment_clearance_file', label: 'تخليص الشحنة (اختياري)', accept: '.pdf,.doc,.docx,.png,.jpg,.jpeg', instant: true, sheet: 'customs_office_transactions', field: 'shipment_clearance', formModalId: 'customs-modal' }) +
       '</form>';
   }
 
@@ -271,6 +301,7 @@
       body: buildFormHtml(mode),
       onSave: 'submitCustoms(\'' + mode + '\')'
     });
+    try { UIC.trackDirty('customs-form'); } catch (e) {}
   }
 
   function submitCustoms(mode) {
@@ -278,21 +309,20 @@
       UIC.toast('يرجى تعبئة الحقول المطلوبة', 'warning');
       return;
     }
-    var claimInput = document.getElementById('claim_assignment_file');
-    var shipInput = document.getElementById('shipment_clearance_file');
-    var claimFile = (claimInput && claimInput.files && claimInput.files[0]) ? claimInput.files[0] : null;
-    var shipFile = (shipInput && shipInput.files && shipInput.files[0]) ? shipInput.files[0] : null;
-
-    UI.showSpinner('جاري الحفظ...');
-    var p1 = claimFile ? uploadFileInput(claimInput, 'claim_assignment', 'customs_office_transactions') : Promise.resolve('');
-    var p2 = shipFile ? uploadFileInput(shipInput, 'shipment_clearance', 'customs_office_transactions') : Promise.resolve('');
-    Promise.all([p1, p2])
-      .then(function (refs) {
-        var data = UIC.collectForm('customs-form');
-        data.mode = mode;
-        data.claim_assignment = refs[0] || '';
-        data.shipment_clearance = refs[1] || '';
-        UI.hideSpinner();
+    var doSaveCustoms = function () {
+      /* Option A instant-upload: 2 files pre-bound (per-row status inline). */
+      var claimInput = document.getElementById('claim_assignment_file');
+      var shipInput = document.getElementById('shipment_clearance_file');
+      var data = UIC.collectForm('customs-form');
+      data.mode = mode;
+      try {
+        var b0 = (claimInput && UIC.UploadSet) ? UIC.UploadSet.getBound(claimInput) : null;
+        var b1 = (shipInput && UIC.UploadSet) ? UIC.UploadSet.getBound(shipInput) : null;
+        data.claim_assignment = (b0 && b0.ref) ? b0.ref : '';
+        data.shipment_clearance = (b1 && b1.ref) ? b1.ref : '';
+        if (b0 && b0.id) data.claim_assignment_id = b0.id;
+        if (b1 && b1.id) data.shipment_clearance_id = b1.id;
+      } catch (e) {}
         /* Tier A: the row is on screen before the request returns. id is
            server-assigned, so the draft leaves it empty and recordOf fills it
            from the reply record, returning null on add when the reply
@@ -342,15 +372,19 @@
               if (sEg) sEg.textContent = fmt2(CO_TOTALS.egp) + ' ج.م';
               if (sUs) sUs.textContent = '$ ' + fmt2(CO_TOTALS.usd);
             }
-            if (ALL_ROWS.length > 10) ALL_ROWS = ALL_ROWS.slice(0, 10);
+            if (!CO_LOADED_ALL && ALL_ROWS.length > 10) ALL_ROWS = ALL_ROWS.slice(0, 10);
             renderTable();
           }
         }).catch(function () { /* UIC.Live has toasted and rolled back */ });
-      })
-      .catch(function (err) {
-        UI.hideSpinner();
-        UIC.toast((err && err.message) || 'خطأ في حفظ المعاملة', 'error');
-      });
+    };
+    try {
+      if (window.UIC && UIC.UploadSet && UIC.UploadSet.isBusy('customs-modal')) {
+        UIC.toast('جاري رفع الملفات... يرجى الانتظار', 'warning');
+        UIC.UploadSet.awaitPending('customs-modal').then(doSaveCustoms);
+        return;
+      }
+    } catch (e2) {}
+    doSaveCustoms();
   }
 
 
@@ -365,6 +399,5 @@
 </script>
 </body>
 </html>
-
 
 

@@ -9,23 +9,21 @@
  * implemented by anything this run wrote — it falls out of two pieces of the
  * existing platform:
  *
- *   guard_(user, action) in Company_TopChemical_Actions.js does
- *       const req = PAGE_ACCESS[action];
- *       if (!req) return;                      // <- UNLISTED = UNGUARDED
- *   so an action that is not in PAGE_ACCESS is open to any authenticated user
- *   of the company. Being listed is the whole gate.
+ *   guard_(user, action) in Company_TopChemical_Actions.js is fail-closed: an
+ *   action not in PAGE_ACCESS is denied, and a listed action still requires the
+ *   caller's page grant. Super-admin bypass is the only blanket exception.
  *
  *   checkPageAccessForUI_ gates the route and the nav on unifiedCheck_, which
  *   returns false for a user with no grant on the page.
  *
- * So the thing worth asserting is not "the guard works" — it is "we are
- * actually inside the guard". This checks that, and that no second permission
- * mechanism was invented beside it.
+ * The verifier therefore exercises the guard's effective behavior, rather than
+ * freezing an obsolete implementation detail such as an early return.
  */
 'use strict';
 
 const fs = require('fs');
 const path = require('path');
+const vm = require('vm');
 
 const ROOT = path.resolve(__dirname, '..', '..');
 const read = function (f) { return fs.readFileSync(path.join(ROOT, f), 'utf8'); };
@@ -33,7 +31,7 @@ const read = function (f) { return fs.readFileSync(path.join(ROOT, f), 'utf8'); 
 const ACTIONS = read('Company_TopChemical_Actions.js');
 const REGISTRY = read('Company_TopChemical_Registry.js');
 const NAV = read('Company_TopChemical_Nav.html');
-const SECURITY = read('03_Security.js');
+const SECURITY = read('Code.js');
 
 const PAGE = 'tc_box_analysis';
 const TEMPLATE = 'Company_TopChemical_BoxAnalysis';
@@ -65,10 +63,32 @@ WRITERS.forEach(function (a) {
     a + ' is in PAGE_ACCESS with write');
 });
 
-/* The early return that makes the above load-bearing. If this shape ever
-   changes, the comment above is wrong and so is the reasoning. */
-ok(/const req = PAGE_ACCESS\[action\];\s*\n\s*if \(!req\) return;/.test(ACTIONS),
-  'guard_ still returns early for an action it does not find (so listing IS the gate)');
+/* Exercise the real guard behavior in a small isolated context. This catches
+   both accidental fail-open changes and a broken listed-action grant check. */
+const guardStart = ACTIONS.indexOf('function guard_(user, action');
+const guardEnd = ACTIONS.indexOf('\n  function authorize_', guardStart);
+ok(guardStart !== -1 && guardEnd > guardStart, 'guard_ implementation is present');
+if (guardStart !== -1 && guardEnd > guardStart) {
+  const guardSource = ACTIONS.slice(guardStart, guardEnd);
+  const guardBox = vm.createContext({
+    PAGE_ACCESS: { get_box_analysis: { page: PAGE, access: 'read' } },
+    COMPANY_UID: '3fe1b5cb67b7223e',
+    ERP_MESSAGES: { NOT_AUTHORIZED: 'denied' },
+    unifiedCheck_: function (user, company, page, access) {
+      const grants = (user && user.authorizedPages && user.authorizedPages[page]) || [];
+      return access === 'read' ? grants.indexOf('read') !== -1 || grants.indexOf('write') !== -1 || grants.indexOf('full') !== -1 : grants.indexOf(access) !== -1;
+    }
+  });
+  vm.runInContext(guardSource + '\nthis.__guard = guard_;', guardBox);
+  ok((function () { try { guardBox.__guard({ authorizedPages: {} }, 'unlisted_action'); return false; } catch (e) { return e && e.message === 'denied'; } })(),
+    'an unlisted action is denied (fail-closed)');
+  ok((function () { try { guardBox.__guard({ authorizedPages: {} }, 'get_box_analysis'); return false; } catch (e) { return e && e.message === 'denied'; } })(),
+    'a listed action still requires its page grant');
+  ok((function () { try { guardBox.__guard({ authorizedPages: { [PAGE]: ['read'] } }, 'get_box_analysis'); return true; } catch (e) { return false; } })(),
+    'a listed action is allowed with the required page grant');
+  ok((function () { try { guardBox.__guard({ isSuperAdmin: true }, 'unlisted_action'); return true; } catch (e) { return false; } })(),
+    'super-admin bypass remains explicit');
+}
 
 /* ── 2. Every action is registered, and dispatch reaches it through guard_ ── */
 console.log('registration');
@@ -83,7 +103,7 @@ ALL.filter(function (a) { return a !== 'save_box_item_alias'; }).forEach(functio
 });
 ok(ACTIONS.indexOf("'save_box_item_alias': 'drive:Box_Analysis_Audit/box_item_aliases.json'") !== -1,
   'save_box_item_alias logs the Drive file it actually writes');
-ok(/function dispatch_\([\s\S]{0,300}?guard_\(user, action\);/.test(ACTIONS),
+ok(/function dispatch_\([\s\S]{0,300}?guard_\(user, action(?:,\s*[^)]*)?\);/.test(ACTIONS),
   'dispatch_ still calls guard_ before the action');
 
 /* ── 3. No second permission mechanism ────────────────────────────────────
@@ -139,7 +159,7 @@ const group = NAV.match(groupRe);
 ok(!!group, 'the تحليلات النظام الرئيسي nav group is present');
 if (group) {
   const items = (group[1].match(/action: '(\w+)'/g) || []).map(function (s) { return s.slice(9, -1); });
-  ok(items.length === 5, 'the group now has five items (tc_main_review + tc_client_balance_sheets + tc_box_analysis + tc_manufacture_orders + tc_products_live)', items.join(', '));
+ok(items.length === 6, 'the group now has six items (tc_main_review + tc_client_balance_sheets + tc_box_analysis + tc_manufacture_orders + tc_products_live + tc_exec_sales)', items.join(', '));
   ok(items.indexOf('tc_main_review') !== -1, 'the existing item is still there');
   ok(items.indexOf(PAGE) !== -1, 'the new item is beside it');
 }
@@ -200,7 +220,7 @@ const PREVIEW = 'design_preview/tc_box_analysis.html';
 ok(fs.existsSync(path.join(ROOT, PREVIEW)), PREVIEW + ' is present');
 if (fs.existsSync(path.join(ROOT, PREVIEW))) {
   const PV = read(PREVIEW);
-  const E = require(path.join(ROOT, 'Box_Analysis_Engine.js'));
+  const E = require(path.join(ROOT, 'Company_TopChemical_Actions.js'));
 
   ok(PV.indexOf("'CSS_Tokens.html', 'UI_Components.html', 'Client_Helpers.html'") !== -1 &&
      PV.indexOf("'" + TEMPLATE + ".html'") !== -1,
@@ -245,7 +265,7 @@ ok(/^function rebuildBoxAnalysisIndex\(\) \{/m.test(ACTIONS),
 ok(ACTIONS.indexOf('TopChemical.rebuildBoxAnalysisIndex_') !== -1, 'and it delegates into the namespace');
 ok(!/ScriptApp\s*\.\s*newTrigger/.test(ACTIONS),
   'nothing in the actions file creates a trigger');
-['Box_Analysis_Engine.js', 'DbLive_Connector.js', TEMPLATE + '.html'].forEach(function (f) {
+['Company_TopChemical_Actions.js', 'Company_TopChemical_Actions.js', TEMPLATE + '.html'].forEach(function (f) {
   ok(!/ScriptApp\s*\.\s*newTrigger/.test(read(f)), f + ' creates no trigger either');
 });
 ok(/Triggers \(clock icon\)/.test(ACTIONS),

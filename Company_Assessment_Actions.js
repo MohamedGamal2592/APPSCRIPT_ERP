@@ -15,6 +15,36 @@
  */
 
 const AssessmentCenter = (function () {
+  /**
+   * Small pure algorithms shared by audited read-only workflows.
+   * Keep this file dependency-free so Apps Script can load it before company code
+   * and local benchmarks can execute the same functions over deterministic data.
+   */
+  var ERPReadAlgorithms_ = (function () {
+    function invitedBatchMembership(assignments) {
+      var ids = new Set();
+      (assignments || []).forEach(function (assignment) {
+        if (assignment && assignment.Status === 'Invited') ids.add(assignment.BatchID);
+      });
+      return ids;
+    }
+  
+    /* First match wins, including duplicate and undefined keys. */
+    function firstScoreIndex(items) {
+      var byQuestion = new Map();
+      (items || []).forEach(function (item) {
+        var key = item && item.QuestionID;
+        if (!byQuestion.has(key)) byQuestion.set(key, item);
+      });
+      return byQuestion;
+    }
+  
+    return {
+      invitedBatchMembership: invitedBatchMembership,
+      firstScoreIndex: firstScoreIndex
+    };
+  })();
+  
   const actions = {};
   function register(name, fn) { actions[name] = fn; }
 
@@ -168,19 +198,31 @@ const AssessmentCenter = (function () {
     };
   }
 
+  // Phase 3: FAIL-CLOSED (trivial port). An action not listed in PAGE_ACCESS is
+  // denied, not allowed. Super-admin bypass preserved. get_page_versions is the
+  // sole exception: it gates itself on the page asked about (see getPageVersions_).
+  // Public candidate actions bypass this entirely via publicDispatch_ below.
   function guard_(user, action) {
-    if (!user || user.isSuperAdmin) return;
+    if (user && user.isSuperAdmin) return;
+    if (action === 'get_page_versions') return;
     const req = PAGE_ACCESS[action];
-    if (!req) return;
+    if (!req) throw new Error(ERP_MESSAGES.NOT_AUTHORIZED);
     if (!unifiedCheck_(user, COMPANY_UID, req.page, req.access)) {
       throw new Error(ERP_MESSAGES.NOT_AUTHORIZED);
     }
+  }
+
+  // Phase 3: Valley-style tenant double-check. dbId must be this company's own
+  // spreadsheet; a mismatched dbId is denied before any sheet read.
+  function authorize_(user, dbId) {
+    if (!user || (!user.isSuperAdmin && user.company !== COMPANY_UID) || !dbId || String(dbId) !== String(getCompanySpreadsheetId_(COMPANY_UID))) throw new Error(ERP_MESSAGES.NOT_AUTHORIZED);
   }
 
   function dispatch_(payload, user, dbId) {
     const action = payload.module_action;
     if (!actions[action]) throw new Error('Unknown Assessment Center action: ' + action);
     guard_(user, action);
+    authorize_(user, dbId);
     return actions[action](payload.data, user, dbId);
   }
 
@@ -192,7 +234,7 @@ const AssessmentCenter = (function () {
   }
 
   // D-7 — 300 requests/min per token+action, after checkLoginThrottle_'s
-  // CacheService-counter shape in the standalone / 03_Security.js. Fails OPEN on
+  // CacheService-counter shape in the standalone Code.js. Fails OPEN on
   // a CacheService hiccup: a candidate must never be blocked by an infra fault,
   // only by actually exceeding the limit.
   function acRateLimit_(token, action) {
@@ -1170,7 +1212,7 @@ const AssessmentCenter = (function () {
       });
       appendRowWithRetry_(sh, rowValues);
       // logHistory_ looks new/old values up BY THE SHEET'S REAL HEADER SPELLING
-      // (02_DataAccess.js). Handing it the caller's possibly differently-cased
+      // (Code.js). Handing it the caller's possibly differently-cased
       // `obj` directly would silently blank every column whose key case
       // doesn't match — the very same R-16 shadowing trap, one layer further
       // in. A header-case object built from the row just written sidesteps it.
@@ -1243,8 +1285,8 @@ const AssessmentCenter = (function () {
   }
 
   /**
-   * Header-case-safe update. `patch` is handed to updateRowByCriteria_ ALONE —
-   * never merged with the old record first — because updateRowByCriteria_
+   * Header-case-safe update. `patch` is handed to patchRowByCriteria_ ALONE —
+   * never merged with the old record first — because patchRowByCriteria_
    * matches each of the CALLER's keys against the sheet's real headers
    * case-insensitively on every cell independently; merging `old` (header-case
    * keys, from acRows_) with a differently-cased patch first is exactly the
@@ -1257,7 +1299,9 @@ const AssessmentCenter = (function () {
       const idx = acByPk_(dbId, sheet, pkName);
       const old = idx.byPk.get(String(pkValue)) || null;
       const sh = getSheet_(sheet, dbId);
-      const ok = updateRowByCriteria_(sh, pkName, pkValue, patch);
+      var __acVer = checkRowVersion_(old, patch && (patch.version !== undefined ? patch.version : patch.Version));
+      patch.version = __acVer + 1;
+      const ok = patchRowByCriteria_(sh, pkName, pkValue, patch);
       if (!ok) throw new Error('Record not found: ' + pkValue);
       // Same header-case rule as acInsert_, now on the READ side: build the
       // "new values" object for logHistory_ by resolving each of the sheet's
@@ -1265,7 +1309,7 @@ const AssessmentCenter = (function () {
       // Object.assign(old, patch) — which would leave the header-case `old`
       // key untouched next to patch's differently-cased one and report the
       // column as unchanged in ERP_Record_History even though the cell
-      // itself (via updateRowByCriteria_'s own case-insensitive match) was
+      // itself (via patchRowByCriteria_'s own case-insensitive match) was
       // correctly written.
       const headers = getHeaders_(sh);
       const patchLut = {};
@@ -1307,8 +1351,21 @@ const AssessmentCenter = (function () {
     acUpdate_: acUpdate_,
     acOptionsForWire_: acOptionsForWire_,
     acCategoryLabel_: acCategoryLabel_,
-    acCandidateLink_: acCandidateLink_
+    acCandidateLink_: acCandidateLink_,
+    readAlgorithms_: ERPReadAlgorithms_
   };
 })();
 
 
+
+
+/* Company policy hooks. The generic engines in Code.js consume these immutable
+ * values through COMPANY_REGISTRY; no company policy is duplicated there. */
+
+AssessmentCenter.themeCss_ = function () { return getGenericCompanyThemeCSS_('32fafd256ccb7a1c'); };
+AssessmentCenter.blockTheme_ = function () { return { from: '#054719', to: '#16a34a' }; };
+/* Compatibility alias for offline checks; it points at the same helper object. */
+var ERPReadAlgorithms_ = AssessmentCenter.readAlgorithms_;
+AssessmentCenter.approvalPolicy_ = { aliases: {}, chains: [], transitions: {}, actionToDocType: {}, statusOnly: {} };
+AssessmentCenter.attachmentPolicy_ = function () { return {}; };
+AssessmentCenter.artifactHandlers_ = {};

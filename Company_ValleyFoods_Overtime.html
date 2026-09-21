@@ -56,6 +56,10 @@
     var OT_TABLE_ID = 'ot-table';
     var empOptions = [];
     var roleOptions = [];
+    /* Latest-PAGE_LIMIT window by default; عرض الكل loads the full history
+       (same pattern as vf_hr_vacations). */
+    var SHOW_ALL = false;
+    var PAGE_LIMIT = 20;
 
     UIC.appShell('vf-root', {
       companyLogoUrl: COMPANY_LOGO_URL,
@@ -71,6 +75,9 @@
 
     function renderToolbar() {
       var html = '<div id="ot-toolbar" style="margin-bottom:12px;display:flex;gap:8px;align-items:center;">';
+      if (SHOW_ALL) {
+        html += '<button type="button" class="btn btn-outline" onclick="OT_PAGE.showLatest()">عرض الأحدث (' + PAGE_LIMIT + ')</button>';
+      }
       if (CAN_WRITE) {
         html += '<button id="ot-add-btn" class="btn btn-primary" onclick="OT_PAGE.openAddModal()">إضافة عمل إضافي</button>';
       }
@@ -94,8 +101,9 @@
         { key: 'overtime_attachement', label: 'المرفق' }
       ];
 
-      function viewAttachment(ref){
-        UIC.openDownload(scriptUrl + '?download=attachment&page=vf_hr_overtime&ref=' + encodeURIComponent(ref) + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN),
+      function viewAttachment(ref, id){
+        if(!ref && (id == null || String(id) === '')) return;
+        UIC.openDownload(scriptUrl + '?download=attachment&page=vf_hr_overtime&ref=' + encodeURIComponent(ref || '') + ((id != null && String(id) !== '') ? '&id=' + encodeURIComponent(id) : '') + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN),
           'فتح المرفق');
       }
       window._vfViewAttachment = viewAttachment;
@@ -106,6 +114,7 @@
         var rowCells = cols.map(function (c) {
           var val = r[c.key];
           if (c.key === 'date') return fmtDate(val);
+          if (c.key === 'start_time' || c.key === 'end_time') return fracToTime(val) || '-';
           if (c.key === 'amount') return (val != null) ? Number(val).toFixed(2) : '-';
           if (c.key === 'overtime_attachement') return val ? esc(String(val).split('/').pop()) : '-';
           return val != null ? val : '';
@@ -113,12 +122,16 @@
         var hasAtt = !!r.overtime_attachement;
         var actions = UIC.actionDropdown([
           { label: '👁️ عرض / View', onclick: "OT_PAGE.viewOvertimeById('" + esc(r.unique_id||r.emp_id+'_'+r.date).replace(/\'/g, "\\\'") + "')" },
-          hasAtt ? { label: '📎 عرض المرفق / View Attachment', onclick: "OT_PAGE.viewAttachment('" + esc(r.overtime_attachement).replace(/\'/g, "\\\'") + "')" } : null,
+          hasAtt ? { label: '📎 عرض المرفق / View Attachment', onclick: "OT_PAGE.viewAttachment('" + esc(r.overtime_attachement).replace(/\'/g, "\\\'") + "','" + esc(r.unique_id||'').replace(/\'/g, "\\\'") + "')" } : null,
           { label: '🖨️ طباعة / Print', onclick: "OT_PAGE.printRow('" + esc(r.unique_id||'').replace(/\'/g, "\\\'") + "')" },
-          IS_SUPER_ADMIN ? { label: '✏️ تعديل / Edit', onclick: "OT_PAGE.openAddModal({emp_id:'" + esc(r.emp_id).replace(/\'/g, "\\\'") + "'})" } : null,
+          IS_SUPER_ADMIN ? { label: '✏️ تعديل / Edit', onclick: "OT_PAGE.openEditModal('" + esc(r.unique_id||'').replace(/\'/g, "\\\'") + "')" } : null,
           IS_SUPER_ADMIN ? { label: '🗑️ حذف / Delete', color: '#dc2626', onclick: "OT_PAGE.deleteRow('" + esc(r.unique_id).replace(/\'/g, "\\\'") + "')" } : null
         ].filter(Boolean));
         rowCells.push(actions);
+        /* Row-edit repair 2.2: carry the stable record key on the row array
+           itself, so clicks resolve by unique_id after sorting/filtering/paging
+           rebuild the tbody (positional indexes go stale on re-render). */
+        rowCells.__uid = r.unique_id || '';
         return rowCells;
       });
 
@@ -126,7 +139,8 @@
         /* [RT-1] The list endpoint caps at the newest rows unless `loadAll` is
            passed, and the search box filters only what is in memory — so the
            table says which records the box actually searches. */
-        truncated: true,
+        truncated: !SHOW_ALL,
+        showAll: SHOW_ALL ? null : 'OT_PAGE.showAll()',
         headers: headers,
         rows: tableRows
       });
@@ -135,9 +149,25 @@
 
       setTimeout(function () {
         var trs = document.querySelectorAll('#' + OT_TABLE_ID + ' tbody tr');
+        var st = (window.__dtStore || {})[OT_TABLE_ID];
+        var view = (st && st.pageRows) || rows;
         trs.forEach(function (tr, i) {
           tr.style.cursor = 'pointer';
-          tr.addEventListener('click', function () { OT_PAGE.viewOvertime(rows[i]); });
+          tr.addEventListener('click', function (ev) {
+            /* Row-edit repair 2.2: ignore clicks on interactive descendants
+               (the shared menu already stops propagation; this guards direct
+               buttons/inputs inside cells), then resolve by stable record key.
+               view holds the rendered cell-arrays (each carries __uid); rows
+               holds the data rows in build order as a last-resort fallback. */
+            if (ev && ev.target && ev.target.closest && ev.target.closest('button,a,input,select,textarea,.action-dropdown,.combo-list,.combo')) return;
+            var row = null;
+            var di = tr.getAttribute('data-idx');
+            var cellRow = (di != null && di !== '' && view[Number(di)]) ? view[Number(di)] : null;
+            var uid = (cellRow && cellRow.__uid) || '';
+            if (uid) row = (OT_PAGE._allRows || []).find(function (x) { return String(x.unique_id) === String(uid); });
+            if (!row && rows[i]) row = rows[i];
+            if (row) OT_PAGE.viewOvertime(row);
+          });
         });
       }, 100);
     }
@@ -166,10 +196,18 @@
       return body;
     }
 
-    // — TC-style helper — shared upload like RegistrationPapers.html:46 —
+    // — Instant-upload (Option A): pre-bound on selection; legacy on-save fallback —
     function uploadSelectedFile(formEl, meta){
+      try {
+        if (window.UIC && UIC.UploadSet) {
+          var inp0 = formEl.querySelector('input[type=file]');
+          var b0 = inp0 ? UIC.UploadSet.getBound(inp0) : null;
+          if (b0 && b0.ref) return Promise.resolve({ reference: b0.ref, fileId: b0.id || '' });
+          if (inp0 && !(inp0.files && inp0.files[0])) return Promise.resolve(null);
+        }
+      } catch (e) {}
       var input = formEl.querySelector('input[type=file]');
-      if (!input || !input.files || !input.files[0]) return Promise.resolve('');
+      if (!input || !input.files || !input.files[0]) return Promise.resolve(null);
       var file = input.files[0];
       return new Promise(function(resolve, reject){
         var reader = new FileReader();
@@ -177,7 +215,7 @@
         reader.onload = function(){
           var b64 = String(reader.result||'').split(',')[1]||'';
           companyCall('add_upload_file', { sheet: meta.sheet, filename: file.name, base64: b64 })
-            .then(function(res){ if(res && res.status==='success') resolve(res.reference); else reject(new Error((res&&res.message)||'خطأ في رفع الملف')); })
+            .then(function(res){ if(res && res.status==='success') resolve({ reference: res.reference, fileId: res.fileId || '' }); else reject(new Error((res&&res.message)||'خطأ في رفع الملف')); })
             .catch(function(err){ reject(new Error((err&&err.message)||'خطأ في رفع الملف')); });
         };
         reader.readAsDataURL(file);
@@ -195,7 +233,7 @@
         label: 'الموظف (ابحث بالاسم أو الكود)',
         required: true,
         placeholder: 'اكتب للبحث…',
-        options: empOptions.map(function (o) {
+        options: _empList().map(function (o) {
           return { value: o.value, label: o.label };
         }),
         value: data.emp_id || ''
@@ -209,7 +247,7 @@
         value: data.date || todayStr()
       });
 
-      var typeOptions = roleOptions.map(function (o) {
+      var typeOptions = _roleList().map(function (o) {
         return { value: o.value, label: o.label, moneyRelated: o.moneyRelated, vacationDays: o.vacationDays, rate: o.rate };
       });
 
@@ -240,16 +278,18 @@
 
       var selectedType = null;
       if (data.overtime_type) {
-        selectedType = roleOptions.find(function (o) { return o.value === data.overtime_type; }) || null;
+        selectedType = _roleList().find(function (o) { return String(o.value) === String(data.overtime_type); }) || null;
       }
 
-      var isMoney = selectedType && selectedType.moneyRelated;
+      var isMoney = _isMoneyRole(selectedType);
       document.getElementById('ot-f-amount-wrap').innerHTML = UIC.field({
         key: 'amount',
-        label: 'المبلغ',
+        label: 'المبلغ (مطلوب للنوع النقدي)',
         type: 'number',
         required: !!isMoney,
         value: data.amount || '',
+        min: '0.01',
+        step: '0.01',
         disabled: !isMoney
       });
 
@@ -264,8 +304,11 @@
       document.getElementById('ot-f-file-wrap').innerHTML = UIC.fileField({
         key: 'file',
         label: 'المرفق (مطلوب)',
-        accept: '.pdf,.doc,.docx,.png,.jpg,.jpeg'
+        required: !(OT_PAGE._editingAtt && OT_PAGE._editingAtt.ref),
+        accept: '.pdf,.doc,.docx,.png,.jpg,.jpeg',
+        instant: true, sheet: 'valley_emp_overtime', field: 'overtime_attachement', formModalId: 'ot-modal'
       });
+      try { UIC.trackDirty('ot-form'); } catch (eT) {}
 
       var timeWrap = document.getElementById('ot-f-time-wrap');
       var amountWrap = document.getElementById('ot-f-amount-wrap');
@@ -284,12 +327,15 @@
         if (amountInputInit) { amountInputInit.value = ''; amountInputInit.removeAttribute('required'); amountInputInit.disabled = true; }
       }
 
-      var typeCombo = document.querySelector('[data-field-key="overtime_type"]');
+      /* UIC.combo stores the selected value in this hidden input and dispatches
+         change on it. Binding to the old data-field-key selector never fired
+         because that attribute is not part of the combo markup. */
+      var typeCombo = document.getElementById('overtime_type');
       if (typeCombo) {
         typeCombo.addEventListener('change', function () {
           var val = typeCombo.value;
-          var match = roleOptions.find(function (o) { return o.value === val; });
-          var isM = match && match.moneyRelated;
+          var match = _roleList().find(function (o) { return String(o.value) === String(val); });
+          var isM = _isMoneyRole(match);
           var tw = document.getElementById('ot-f-time-wrap');
           var aw = document.getElementById('ot-f-amount-wrap');
           var startInput = document.getElementById('start_time');
@@ -312,26 +358,105 @@
       }
     }
 
-    function openModal(prefill) {
+    /* Row-edit repair (Stage 3): explicit create/edit mode. OT_PAGE._editingUid
+       holds the edited unique_id, OT_PAGE._editingAtt the retained attachment
+       pair; both are null in Add mode. Augmented option lists retain stored
+       inactive employee/type selections without polluting the shared globals. */
+    function _empList() { return OT_PAGE._editEmps || empOptions; }
+    function _roleList() { return OT_PAGE._editRoles || roleOptions; }
+    function _isMoneyRole(role) {
+      if (!role) return false;
+      var flag = role.moneyRelated;
+      return flag === true || flag === 1 || String(flag).trim().toLowerCase() === 'true' || String(flag).trim() === '1';
+    }
+    function fracToTime(v) {
+      if (v == null || v === '') return '';
+      /* The sheet stores times as a day fraction, but hands them back either
+         as that fraction or as a full Date (30/12/1899 + time) — both must
+         render as HH:MM, never the long datetime string. */
+      if (v instanceof Date) {
+        if (isNaN(v.getTime())) return '';
+        var hh = v.getHours(), mm0 = v.getMinutes();
+        return (hh < 10 ? '0' : '') + hh + ':' + (mm0 < 10 ? '0' : '') + mm0;
+      }
+      var s = String(v).trim();
+      if (!s || s === '-') return '';
+      var m = s.match(/(\d{1,2}):(\d{2})/);
+      if (m) return (m[1].length < 2 ? '0' + m[1] : m[1]) + ':' + m[2];
+      var n = Number(s);
+      if (!isNaN(n)) {
+        var frac = ((n % 1) + 1) % 1;
+        var mins = Math.round(frac * 24 * 60) % 1440;
+        var h = Math.floor(mins / 60), mm = mins % 60;
+        return (h < 10 ? '0' : '') + h + ':' + (mm < 10 ? '0' : '') + mm;
+      }
+      return '';
+    }
+
+    function openModal(prefill, title) {
       var modalId = 'ot-modal';
       UIC.openModal(modalId, {
-        title: 'إضافة عمل إضافي',
+        title: title || 'إضافة عمل إضافي',
         body: renderBody(),
         onSave: 'OT_PAGE.saveOvertime()'
       });
       buildModalFields(prefill);
+      try { UIC.trackDirty('ot-form'); } catch (e4) {}
+    }
+
+    function openEditModal(uid) {
+      if (!UIC.canFull_()) { UIC.toast('غير مصرح / Not authorized', 'error'); return; }
+      var row = (OT_PAGE._allRows || []).find(function (x) { return String(x.unique_id) === String(uid); });
+      if (!row) { UIC.toast('السجل غير موجود — تم تحديث القائمة', 'error'); loadData(true); return; }
+      var emps = empOptions.slice();
+      if (row.emp_id && !emps.some(function (o) { return String(o.value) === String(row.emp_id); })) {
+        emps.push({ value: row.emp_id, label: (row.name_ar || row.emp_id) + ' (غير نشط)' });
+      }
+      var roles = roleOptions.slice();
+      var typeMatch = roles.find(function (o) { return String(o.value) === String(row.overtime_type); });
+      if (row.overtime_type && !typeMatch) {
+        roles.push({ value: row.overtime_type, label: (row.overtime_name || row.overtime_type) + ' (غير نشط)', moneyRelated: Number(row.amount) > 0 });
+      }
+      OT_PAGE._editEmps = emps;
+      OT_PAGE._editRoles = roles;
+      OT_PAGE._editingUid = String(row.unique_id);
+      OT_PAGE._editingAtt = { ref: row.overtime_attachement || '', id: row.overtime_attachement_id || '' };
+      openModal({
+        emp_id: row.emp_id,
+        date: fmtDate(row.date),
+        overtime_type: row.overtime_type,
+        start_time: fracToTime(row.start_time),
+        end_time: fracToTime(row.end_time),
+        amount: (row.amount != null && row.amount !== '') ? row.amount : '',
+        details: row.details || ''
+      }, 'تعديل عمل إضافي');
+      try {
+        if (OT_PAGE._editingAtt && OT_PAGE._editingAtt.ref && UIC.UploadSet) UIC.UploadSet.setBound('file', OT_PAGE._editingAtt.ref, OT_PAGE._editingAtt.id || '');
+      } catch (eB) {}
+      /* Existing attachment stays valid without re-upload: the file input is
+         optional in edit mode, and the current file is shown for reference. */
+      try {
+        var fw = document.getElementById('ot-f-file-wrap');
+        if (fw && OT_PAGE._editingAtt.ref) {
+          var note = document.createElement('div');
+          note.style.cssText = 'font-size:12px;color:var(--text-muted);margin-top:4px;';
+          note.textContent = 'المرفق الحالي: ' + String(OT_PAGE._editingAtt.ref).split('/').pop() + ' — اترك حقل الملف فارغاً للاحتفاظ به';
+          fw.appendChild(note);
+        }
+      } catch (e) {}
     }
 
     function saveOvertime() {
-      // TC-style: validate, then TC-like amount guard, then shared upload helper
+      // TC-style: validate, then TC-like amount guard, then instant pre-bound ref
       var formId = 'ot-form';
       if (!UIC.validateForm(formId)) return;
       var data = UIC.collectForm(formId);
       // keep conditional: money types require amount (mirrors backend 1461)
       var selType = data.overtime_type;
+      var _rl = _roleList();
       var match = null;
-      for(var i=0;i<roleOptions.length;i++){ if(String(roleOptions[i].value)===String(selType)){ match=roleOptions[i]; break; } }
-      var isMoney = match && match.moneyRelated;
+      for(var i=0;i<_rl.length;i++){ if(String(_rl[i].value)===String(selType)){ match=_rl[i]; break; } }
+      var isMoney = _isMoneyRole(match);
       if (isMoney) {
         data.start_time = '';
         data.end_time = '';
@@ -350,9 +475,55 @@
       if (data.amount) data.amount = parseFloat(data.amount) || 0;
 
       var formEl = document.getElementById('ot-form');
-      uploadSelectedFile(formEl, { sheet: 'valley_emp_overtime' })
-        .then(function(ref){
-          if (ref) data.overtime_attachement = ref;
+      var editingUid = OT_PAGE._editingUid || null;
+      var doSaveOT = function () {
+        /* Option A instant-upload: pre-bound ref; required check kept. */
+        try {
+          var input = formEl ? formEl.querySelector('input[type=file]') : null;
+          var bound = (input && UIC.UploadSet) ? UIC.UploadSet.getBound(input) : null;
+          if (bound && bound.ref) {
+            data.overtime_attachement = bound.ref;
+            if (bound.id) data.overtime_attachement_id = bound.id;
+          } else if (editingUid && OT_PAGE._editingAtt) {
+            if (OT_PAGE._editingAtt.ref) data.overtime_attachement = OT_PAGE._editingAtt.ref;
+            if (OT_PAGE._editingAtt.id) data.overtime_attachement_id = OT_PAGE._editingAtt.id;
+          }
+        } catch (e) {}
+        /* Required attachment: add-mode needs a bound file; edit-mode may
+           retain the existing one. */
+        if (!data.overtime_attachement || String(data.overtime_attachement).trim() === '') {
+          UIC.toast('المرفق مطلوب', 'error');
+          try { UIC.setFieldError('file', 'المرفق مطلوب'); } catch (e2) {}
+          return;
+        }
+          /* Keyed refresh (3.9): the server record replaces the row with the
+             same unique_id, so an edit never duplicates and list context
+             (search text, scroll) survives; a missing record reloads. */
+          var afterSave = function (res) {
+              var rec = (res && res.record) || null;
+              if (rec) {
+                if (!OT_PAGE._allRows) OT_PAGE._allRows = [];
+                var idxOT = OT_PAGE._allRows.findIndex(function(x){ return String(x.unique_id)===String(rec.unique_id); });
+                if (idxOT!==-1) OT_PAGE._allRows[idxOT]=rec; else OT_PAGE._allRows.unshift(rec);
+                /* In latest-window mode the view holds PAGE_LIMIT rows; in عرض الكل
+                   mode it holds everything, so nothing is dropped. */
+                if (!SHOW_ALL && OT_PAGE._allRows.length>PAGE_LIMIT) OT_PAGE._allRows.pop();
+                buildTable(OT_PAGE._allRows);
+              } else { loadData(true); }
+          };
+          if (editingUid) {
+            data.unique_id = editingUid;
+            return UIC.Live.save({
+              call: companyCall,
+              action: 'update_overtime',
+              data: data,
+              modal: 'ot-modal',
+              message: 'تم تحديث العمل الإضافي',
+              queueable: false,
+              reload: function () { loadData(true); },
+              onSuccess: afterSave
+            }).catch(function () { /* UIC.Live has toasted */ });
+          }
           /* Tier B: the 2-table handler (duplicate-timing guard refuses for
              reasons invisible in the form) — so NO draft is painted: canPatch
              stays false, only the quiet corner hint shows, and the row is
@@ -368,21 +539,17 @@
             message: 'تم الحفظ بنجاح',
             queueable: false,
             reload: function () { loadData(true); },
-            onSuccess: function (res) {
-              var rec = (res && res.record) || null;
-              if (rec) {
-                var RECENT_LIMIT = 10;
-                if (!OT_PAGE._allRows) OT_PAGE._allRows = [];
-                var idxOT = OT_PAGE._allRows.findIndex(function(x){ return String(x.unique_id)===String(rec.unique_id); });
-                if (idxOT!==-1) OT_PAGE._allRows[idxOT]=rec; else OT_PAGE._allRows.unshift(rec);
-                if (OT_PAGE._allRows.length>RECENT_LIMIT) OT_PAGE._allRows.pop();
-                buildTable(OT_PAGE._allRows);
-              } else { loadData(true); }
-            }
+            onSuccess: afterSave
           }).catch(function () { /* UIC.Live has toasted */ });
-        }).catch(function(e){
-          UIC.toast((e && e.message) ? e.message : 'حدث خطأ', 'error');
-        });
+      };
+      try {
+        if (window.UIC && UIC.UploadSet && UIC.UploadSet.isBusy('ot-modal')) {
+          UIC.toast('جاري رفع الملف... يرجى الانتظار', 'warning');
+          UIC.UploadSet.awaitPending('ot-modal').then(doSaveOT);
+          return;
+        }
+      } catch (eB) {}
+      doSaveOT();
     }
 
     /* quiet: refresh in the background with no blocking overlay, for a
@@ -390,7 +557,7 @@
        to confirm it. */
     function loadData(quiet) {
       if (!quiet) UI.showSpinner();
-      companyCall('get_overtime_data')
+      companyCall('get_overtime_data', SHOW_ALL ? { loadAll: true } : { limit: PAGE_LIMIT })
         .then(function (res) {
           OT_PAGE._allRows = res.rows || [];
           empOptions = res.employee_options || [];
@@ -409,13 +576,13 @@
 
     function viewOvertime(row) {
       var attBtn = row.overtime_attachement
-        ? '<button class="btn btn-outline" style="padding:6px 12px;" onclick="OT_PAGE.viewAttachment(\'' + esc(row.overtime_attachement).replace(/\'/g, "\\\'") + '\')">📎 عرض — ' + esc(String(row.overtime_attachement).split("/").pop()) + '</button>'
+        ? '<button class="btn btn-outline" style="padding:6px 12px;" onclick="OT_PAGE.viewAttachment(\'' + esc(row.overtime_attachement).replace(/\'/g, "\\\'") + '\',\'' + esc(row.unique_id||'').replace(/\'/g, "\\\'") + '\')">📎 عرض — ' + esc(String(row.overtime_attachement).split("/").pop()) + '</button>'
         : 'لا يوجد';
       var body = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 16px;font-size:14px;">' +
         '<div><b>الموظف:</b> ' + esc(row.name_ar) + ' (#' + esc(row.emp_id) + ')</div>' +
         '<div><b>التاريخ:</b> ' + fmtDate(row.date) + '</div>' +
         '<div><b>النوع:</b> ' + esc(row.overtime_name || row.overtime_type) + '</div>' +
-        '<div><b>من:</b> ' + esc(row.start_time || '-') + ' — <b>إلى:</b> ' + esc(row.end_time || '-') + '</div>' +
+        '<div><b>من:</b> ' + esc(fracToTime(row.start_time) || '-') + ' — <b>إلى:</b> ' + esc(fracToTime(row.end_time) || '-') + '</div>' +
         '<div><b>الساعات:</b> ' + (row.overtime_hours || '-') + '</div>' +
         '<div><b>المبلغ:</b> ' + (row.amount || '-') + '</div>' +
         '<div style="grid-column:1/-1;"><b>التفاصيل:</b> ' + esc(row.details || '-') + '</div>' +
@@ -426,9 +593,23 @@
       UIC.openModal('ot-view-modal', { title: 'تفاصيل العمل الإضافي', body: body });
     }
 
+    function showAll() { SHOW_ALL = true; loadData(); }
+    function showLatest() { SHOW_ALL = false; loadData(); }
+
     window.OT_PAGE = {
       _allRows: [],
-      openAddModal: function () { openModal(); },
+      _editingUid: null,
+      _editingAtt: null,
+      _editEmps: null,
+      _editRoles: null,
+      openAddModal: function () {
+        OT_PAGE._editingUid = null;
+        OT_PAGE._editingAtt = null;
+        OT_PAGE._editEmps = null;
+        OT_PAGE._editRoles = null;
+        openModal();
+      },
+      openEditModal: openEditModal,
       saveOvertime: saveOvertime,
       viewOvertime: viewOvertime,
       viewOvertimeById: function(uid){
@@ -441,9 +622,10 @@
         UI.showSpinner(); companyCall('delete_overtime', { unique_id: uid }).then(function(r){ UIC.toast(r.message||'تم الحذف / Deleted','success'); loadData(true); }).catch(function(e){ UIC.toast(e.message||'خطأ','error'); }).finally(function(){ UI.hideSpinner(); });
       },
       printRow: function(uid){ window.print(); },
-      viewAttachment: function(ref){ UIC.openDownload(scriptUrl + '?download=attachment&page=vf_hr_overtime&ref=' + encodeURIComponent(ref) + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN),
-        'فتح المرفق'); },
-      filter: function (q) { buildTable(filterRows(q)); }
+      viewAttachment: function(ref, id){ if(!ref && (id == null || String(id) === '')) return; UIC.openDownload(scriptUrl + '?download=attachment&page=vf_hr_overtime&ref=' + encodeURIComponent(ref || '') + ((id != null && String(id) !== '') ? '&id=' + encodeURIComponent(id) : '') + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN), 'فتح المرفق'); },
+      filter: function (q) { buildTable(filterRows(q)); },
+      showAll: function () { showAll(); },
+      showLatest: function () { showLatest(); }
     };
 
     loadData();

@@ -283,6 +283,11 @@ const env = {
   WH_MOVE_SHEET: 'valley_warehouse_movement',
   WH_IN_TYPE: 'وارد داخلي / مرتجع للمخزن',
   vfCanSeeCost_: (user) => !!(user && user.canCost),
+  /* The balance guard raises proven pre-mutation refusals through
+     vfNotApplied_ (failed receipt, safe to correct and retry) instead of a
+     bare throw (which the request guard would file as uncertain). Same Arabic
+     message, plus the notApplied marker. */
+  vfNotApplied_: (message) => { const e = new Error(message); e.notApplied = true; e.code = 'REQUEST_NOT_APPLIED'; throw e; },
   vfStripCostAll_: (list, keys) => { (list || []).forEach(o => keys.forEach(k => { delete o[k]; })); return list; },
   VF_COST_KEYS: { batch: ['unit_cost'] },
   dbId: 'db'

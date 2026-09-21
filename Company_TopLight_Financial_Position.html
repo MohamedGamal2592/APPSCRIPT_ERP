@@ -63,6 +63,8 @@
   var params = new URLSearchParams(window.location.search);
   var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
   var scriptUrl = window.scriptUrl || '/';
+  var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+  var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
   var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('8df5c89a117fe9a5') ?>';
   var COMPANY_PAGES = <?!= companyPages ?>;
   var CURRENT_ACTION = '<?!= currentAction ?>';
@@ -133,16 +135,23 @@
     num = Number(num) || 0;
     den = Number(den) || 0;
     if (den === 0) return '—';
-    return (num / den * 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' %';
+    return excelNumber(num / den * 100, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' %';
+  }
+
+  function excelNumber(v, options) {
+    var n = Number(v);
+    if (!isFinite(n)) n = 0;
+    var formatted = Math.abs(n).toLocaleString('en-US', options || {});
+    return n < 0 ? '(' + formatted + ')' : formatted;
   }
 
   function money(v) {
-    return '<span class="num">' + FMT.number(v) + '</span>';
+    return '<span class="num">' + excelNumber(v) + '</span>';
   }
 
   function moneySigned(v) {
     var n = Number(v) || 0;
-    return '<span class="num' + (n < 0 ? ' is-neg' : '') + '">' + FMT.number(v) + '</span>';
+    return '<span class="num' + (n < 0 ? ' is-neg' : '') + '">' + excelNumber(v) + '</span>';
   }
 
   function row(label, valueHtml, ratioHtml, subtotal, modalKey) {
@@ -176,42 +185,42 @@
     fixed: function () {
       var s = (LAST && LAST.summary) || {};
       var rows = ((LAST && LAST.fixedLines) || []).map(function (l) {
-        return '<tr><td>' + FMT.escape(l.product_name || '-') + '</td><td>' + FMT.escape(l.movement_type) + '</td><td>' + fmtDate(l.date) + '</td><td class="num">' + FMT.number(l.amount) + '</td></tr>';
+        return '<tr><td>' + FMT.escape(l.product_name || '-') + '</td><td>' + FMT.escape(l.movement_type) + '</td><td>' + fmtDate(l.date) + '</td><td class="num">' + excelNumber(l.amount) + '</td></tr>';
       }).join('');
-      return { title: 'تفاصيل الأصول الثابتة (' + FMT.number(s.fixedAssets) + ')', body: modalTable(
+      return { title: 'تفاصيل الأصول الثابتة (' + excelNumber(s.fixedAssets) + ')', body: modalTable(
         [{ label: 'الصنف' }, { label: 'نوع الحركة' }, { label: 'التاريخ' }, { label: 'القيمة', num: 1 }], rows) };
     },
     boxes: function () {
       var s = (LAST && LAST.summary) || {};
       var rows = ((LAST && LAST.boxes) || []).map(function (b) {
-        return '<tr><td>' + FMT.escape(b.box_name || b.box) + ' (' + FMT.escape(b.box) + ')</td><td class="num">' + FMT.number(b.amount) + '</td><td class="num">' + pct(b.amount, s.cash) + '</td></tr>';
+        return '<tr><td>' + FMT.escape(b.box_name || b.box) + ' (' + FMT.escape(b.box) + ')</td><td class="num">' + excelNumber(b.amount) + '</td><td class="num">' + pct(b.amount, s.cash) + '</td></tr>';
       }).join('');
-      return { title: 'تفاصيل النقدية (' + FMT.number(s.cash) + ')', body: modalTable(
+      return { title: 'تفاصيل النقدية (' + excelNumber(s.cash) + ')', body: modalTable(
         [{ label: 'الصندوق' }, { label: 'الرصيد', num: 1 }, { label: 'النسبة', num: 1 }], rows) };
     },
     ar: function () {
       var s = (LAST && LAST.summary) || {};
       var rows = ((LAST && LAST.ar) || []).map(function (p) {
-        return '<tr><td>' + FMT.escape(p.name || ('#' + p.id)) + ' (' + FMT.escape(p.direction || '') + ')</td><td class="num">' + FMT.number(p.balance) + '</td><td class="num">' + pct(p.balance, s.arTotal) + '</td></tr>';
+        return '<tr><td>' + FMT.escape(p.name || ('#' + p.id)) + ' (' + FMT.escape(p.direction || '') + ')</td><td class="num">' + excelNumber(p.balance) + '</td><td class="num">' + pct(p.balance, s.arTotal) + '</td></tr>';
       }).join('');
-      return { title: 'تفاصيل العملاء (' + FMT.number(s.arTotal) + ')', body: modalTable(
+      return { title: 'تفاصيل العملاء (' + excelNumber(s.arTotal) + ')', body: modalTable(
         [{ label: 'الشريك' }, { label: 'الرصيد', num: 1 }, { label: 'النسبة', num: 1 }], rows) };
     },
     stock: function () {
       var s = (LAST && LAST.summary) || {};
       var rows = ((LAST && LAST.stockDetail) || []).map(function (l) {
         return '<tr><td>' + FMT.escape(l.product_name || ('#' + l.product_id)) + '</td>' +
-          '<td class="num">' + Number(l.qty).toLocaleString('en-US') + '</td><td class="num">' + FMT.number(l.unit_cost) + '</td><td class="num">' + FMT.number(l.value) + '</td></tr>';
+          '<td class="num">' + excelNumber(l.qty) + '</td><td class="num">' + excelNumber(l.unit_cost) + '</td><td class="num">' + excelNumber(l.value) + '</td></tr>';
       }).join('');
-      return { title: 'تفاصيل المخزون (' + FMT.number(s.stock) + ')', body: modalTable(
+      return { title: 'تفاصيل المخزون (' + excelNumber(s.stock) + ')', body: modalTable(
         [{ label: 'الصنف' }, { label: 'الكمية', num: 1 }, { label: 'التكلفة', num: 1 }, { label: 'القيمة', num: 1 }], rows) };
     },
     ap: function () {
       var s = (LAST && LAST.summary) || {};
       var rows = ((LAST && LAST.ap) || []).map(function (p) {
-        return '<tr><td>' + FMT.escape(p.name || ('#' + p.id)) + ' (' + FMT.escape(p.direction || '') + ')</td><td class="num">' + FMT.number(p.balance) + '</td><td class="num">' + pct(p.balance, s.apTotal) + '</td></tr>';
+        return '<tr><td>' + FMT.escape(p.name || ('#' + p.id)) + ' (' + FMT.escape(p.direction || '') + ')</td><td class="num">' + excelNumber(p.balance) + '</td><td class="num">' + pct(p.balance, s.apTotal) + '</td></tr>';
       }).join('');
-      return { title: 'تفاصيل الموردين (' + FMT.number(s.apTotal) + ')', body: modalTable(
+      return { title: 'تفاصيل الموردين (' + excelNumber(s.apTotal) + ')', body: modalTable(
         [{ label: 'الشريك' }, { label: 'الرصيد', num: 1 }, { label: 'النسبة', num: 1 }], rows) };
     }
   };
@@ -235,17 +244,16 @@
 
     /* 1 — الأصول */
     html += section(1, 'الأصول', money(s.totalAssets),
-      row('<strong>الأصول الثابتة</strong> <span style="color:var(--text-muted);font-size:11px;">(' + FMT.number(s.fixedCount) + ' بند)</span>', money(s.fixedAssets), pct(s.fixedAssets, s.totalAssets), false, 'fixed') +
+      row('<strong>الأصول الثابتة</strong> <span style="color:var(--text-muted);font-size:11px;">(' + excelNumber(s.fixedCount) + ' بند)</span>', money(s.fixedAssets), pct(s.fixedAssets, s.totalAssets), false, 'fixed') +
       row('النقدية بالخزينة والبنوك', moneySigned(s.cash), pct(s.cash, s.totalAssets), false, 'boxes') +
-      row('العملاء (أرصدة مدينة) <span style="color:var(--text-muted);font-size:11px;">(' + FMT.number(s.arCount) + ')</span>', money(s.arTotal), pct(s.arTotal, s.totalAssets), false, 'ar') +
-      row('المخزون <span style="color:var(--text-muted);font-size:11px;">(' + FMT.number(s.stockCount) + ' صنف)</span>', money(s.stock), pct(s.stock, s.totalAssets), false, 'stock') +
-      row('مصاريف التأسيس (قيمة ثابتة)', money(s.foundation), pct(s.foundation, s.totalAssets)) +
+      row('العملاء (أرصدة مدينة) <span style="color:var(--text-muted);font-size:11px;">(' + excelNumber(s.arCount) + ')</span>', money(s.arTotal), pct(s.arTotal, s.totalAssets), false, 'ar') +
+      row('المخزون <span style="color:var(--text-muted);font-size:11px;">(' + excelNumber(s.stockCount) + ' صنف)</span>', money(s.stock), pct(s.stock, s.totalAssets), false, 'stock') +
       row('<strong>إجمالي الأصول</strong>', money(s.totalAssets), '—', true),
       'النسبة من الإجمالي');
 
     /* 2 — الالتزامات وحقوق الملكية */
     html += section(2, 'الالتزامات وحقوق الملكية', money(s.totalLiabEquity),
-      row('الموردون (أرصدة دائنة) <span style="color:var(--text-muted);font-size:11px;">(' + FMT.number(s.apCount) + ')</span>', money(s.apTotal), pct(s.apTotal, s.totalAssets), false, 'ap') +
+      row('الموردون (أرصدة دائنة) <span style="color:var(--text-muted);font-size:11px;">(' + excelNumber(s.apCount) + ')</span>', money(s.apTotal), pct(s.apTotal, s.totalAssets), false, 'ap') +
       row('رأس المال (ثابت)', money(s.capital), pct(s.capital, s.totalLiabEquity)) +
       row('جاري المالك' + (s.runningRecalculated ? ' (معاد احتسابه)' : ''), moneySigned(s.running), pct(s.running, s.totalLiabEquity)) +
       row('أرباح / (خسائر) الفترة', moneySigned(s.periodProfit), pct(s.periodProfit, s.totalLiabEquity)) +
@@ -255,9 +263,9 @@
     /* مطابقة الميزان */
     var balanced = Math.abs(Number(s.balanceDiff) || 0) < 0.01;
     html += '<div class="is-grand"><span>فرق الميزان (أصول − خصوم وحقوق)</span>' +
-      '<span class="' + (balanced ? 'check-ok' : 'check-bad') + '">' + FMT.number(s.balanceDiff) + (balanced ? ' — متطابقة' : ' — غير متطابقة') + '</span></div>';
+      '<span class="' + (balanced ? 'check-ok' : 'check-bad') + '">' + excelNumber(s.balanceDiff) + (balanced ? ' — متطابقة' : ' — غير متطابقة') + '</span></div>';
 
-    html += '<div class="is-foot">الأصول الثابتة: بنود المشتريات ذات movement_type بين 121100 و 211100 · النقدية: مجموع balance_amount باستبعاد الصندوق 111103 · العملاء/الموردون: أرصدة الشركاء كما في كشف الحساب بتاريخ الرصيد · المخزون: صافي كميات الحركة حتى تاريخ الرصيد × تكلفة الوحدة (مطابق لمخزون آخر المدة بقائمة الدخل) · مصاريف التأسيس: قيمة ثابتة.</div>';
+    html += '<div class="is-foot">الأصول الثابتة: بنود المشتريات ذات movement_type بين 121100 و 211100 · النقدية: مجموع balance_amount باستبعاد الصندوق 111103 · العملاء/الموردون: أرصدة الشركاء كما في كشف الحساب بتاريخ الرصيد · المخزون: صافي كميات الحركة حتى تاريخ الرصيد × تكلفة الوحدة (مطابق لمخزون آخر المدة بقائمة الدخل).</div>';
 
     el.innerHTML = html + '</div>';
   }

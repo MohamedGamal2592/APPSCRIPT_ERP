@@ -12,20 +12,15 @@
     ".json"
   ],
   "filePushOrder": [
-    "00_Config.js",
-    "01_Registry.js",
-    "02_StorageConfig.js",
-    "02_SystemSchema.js",
-    "02_Firestore.js",
-    "02_SystemStore.js",
-    "02_DataAccess.js",
-    "JS_Simplification_Helpers.js",
-    "03_Security.js",
-    "Theme_Builders.js",
-    "05_Admin.js",
-    "Code_Telemetry.js",
     "Code.js",
-    "Company_ValleyFoods_Actions.js"
+    "Company_Assessment_Actions.js",
+    "Company_Assessment_Registry.js",
+    "Company_TopChemical_Actions.js",
+    "Company_TopChemical_Registry.js",
+    "Company_TopLight_Actions.js",
+    "Company_TopLight_Registry.js",
+    "Company_ValleyFoods_Actions.js",
+    "Company_ValleyFoods_Registry.js"
   ],
   "skipSubdirectories": true
 }

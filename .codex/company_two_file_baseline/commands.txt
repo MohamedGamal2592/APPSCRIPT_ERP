@@ -1,0 +1,3 @@
+npm run verify
+npm run ui_check
+npm run preview

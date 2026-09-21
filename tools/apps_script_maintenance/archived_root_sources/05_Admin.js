@@ -234,7 +234,7 @@ function adminSaveMatrix_(payload, sessionToken, authUser) {
         if (statusIdx !== -1) updates['status'] = status;
         if (userIdx !== -1) updates['user'] = authUser ? authUser.email : '';
         if (uidIdx !== -1 && String(uidVal).trim() !== '') {
-          updateRowByCriteria_(sheet, 'erp_pages_matrix_unique_id', uidVal, updates);
+          patchRowByCriteria_(sheet, 'erp_pages_matrix_unique_id', uidVal, updates);
         }
         updated++;
       } else {
@@ -328,7 +328,7 @@ function adminSavePages_(payload, sessionToken, authUser) {
         if (nameIdx !== -1) updates['page_name'] = name;
         if (moduleIdx !== -1) updates['page_module'] = module;
         if (companyIdx !== -1) updates['page_company'] = company;
-        updateRowByCriteria_(sheet, 'page_id', pageId, updates);
+        patchRowByCriteria_(sheet, 'page_id', pageId, updates);
         updated++;
       } else {
         skipped++;
@@ -551,7 +551,7 @@ function adminSaveInvoice_(payload, sessionToken, authUser) {
       updated_at: new Date()
     };
 
-    updateRowByCriteria_(sheet, 'unique_id', uid, updates);
+    patchRowByCriteria_(sheet, 'unique_id', uid, updates);
     return { status: 'success', message: 'تم تحديث الفاتورة بنجاح', unique_id: uid };
   }
 

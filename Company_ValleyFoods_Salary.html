@@ -80,7 +80,7 @@
         }).finally(function () { if (!quiet) UI.hideSpinner(); });
     }
 
-    /* The list endpoint caps at the newest 10 unless loadAll is passed, so the
+    /* The list endpoint caps at the newest 20 unless loadAll is passed, so the
        search box must say which slice it searches (RT-1). */
     function toggleLoadAll() { fetchSalaries(false, !LOADED_ALL); }
 
@@ -117,11 +117,7 @@
       });
       document.getElementById('vf-sal-content').innerHTML =
         addBtn('openSalaryModal()', '+ إضافة راتب') +
-        '<div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap;">' +
-          '<span style="color:var(--text-muted);font-size:12px;">' +
-            (LOADED_ALL ? 'عرض كل الرواتب (' + SALARIES.length + ')' : 'عرض أحدث ' + SALARIES.length + ' راتب') + '</span>' +
-          (LOADED_ALL ? '' : '<button class="btn btn-outline" onclick="toggleLoadAll()">عرض الكل</button>') +
-        '</div>' +
+        UIC.showAllBar({ loadedAll: LOADED_ALL, total: SALARIES.length, showAll: 'toggleLoadAll()', showLatest: 'toggleLoadAll()' }) +
         UIC.dataTable('salary-table', {
           headers: headers, rows: rows, pageSize: 100, emptyText: 'لا توجد رواتب',
           truncated: !LOADED_ALL, showAll: 'toggleLoadAll()'

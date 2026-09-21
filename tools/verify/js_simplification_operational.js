@@ -36,7 +36,7 @@ check(/spreadsheets\.readonly/.test(history) && !/datastore/.test(history), 'his
 check(!/:batchUpdate|:append|:clear|:delete|values:batchUpdate/.test(history), 'history analysis contains no spreadsheet write endpoint');
 
 console.log('\n2 — Box SQL access path remains bounded, parameterized, and DDL-free\n');
-const connector = read('DbLive_Connector.js');
+const connector = read('Company_TopChemical_Actions.js');
 const connectorCode = connector.replace(/\/\*[\s\S]*?\*\/|\/\/.*$/gm, '');
 check(!/\b(CREATE\s+(TABLE|INDEX|VIEW|TRIGGER)|ALTER\s+TABLE|DROP\s+(TABLE|INDEX|VIEW|COLUMN))\b/i.test(connectorCode), 'connector has no schema-changing SQL');
 const boxStart = connector.indexOf('function dbBoxList_');
@@ -57,10 +57,10 @@ check(order.indexOf('Company_ValleyFoods_Actions.js') >= 0 &&
       vfActions.includes('const ValleyFoodsHRModules') &&
       vfActions.includes('var ValleyFoodsFinancialReporting'),
   'explicit push order loads the consolidated Valley Foods business file');
-check(order.indexOf('03_Security.js') >= 0 && order.indexOf('Theme_Builders.js') > order.indexOf('03_Security.js'),
-  'explicit push order includes extracted theme builders after security');
-check(order.indexOf('Code_Telemetry.js') >= 0 && order.indexOf('Code.js') > order.indexOf('Code_Telemetry.js'),
-  'explicit push order includes telemetry before the router');
+check(order.indexOf('Code.js') === 0 && order.indexOf('Company_TopLight_Actions.js') > 0,
+  'explicit push order starts with shared Code.js and then company Actions');
+check(order.length === 9 && order.indexOf('Company_ValleyFoods_Registry.js') === 8,
+  'explicit push order contains exactly the nine canonical runtime files');
 check(!fs.existsSync(path.join(ROOT, 'DbLive_Routes.js')), 'empty duplicate DbLive_Routes.js is removed');
 
 console.log('\n' + (failed === 0

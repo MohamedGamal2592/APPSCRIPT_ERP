@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="ar">
 <head>
   <meta charset="utf-8">
@@ -238,6 +238,14 @@
   var CFILTER = { month: '', year: '', fromDate: '', toDate: '', itemType: '', search: '' };
 
   function renderCosting() {
+    /* Preserve search focus across re-renders: this function rebuilds
+       #inputs-table-area (including the filter bar), so without this every
+       keystroke in #cf-search destroys the focused input. */
+    var prevActiveId = document.activeElement ? document.activeElement.id : '';
+    var prevSel = null;
+    if (prevActiveId === 'cf-search') {
+      try { prevSel = { start: document.activeElement.selectionStart, end: document.activeElement.selectionEnd }; } catch (e) {}
+    }
     var list = COSTING.filter(function (r) {
       var cert = getCertNo(r);
       var lines = LINES.filter(function (l) { return getCertNo(l) === cert; });
@@ -256,8 +264,8 @@
         if (!hasMatchingLine && shipType !== CFILTER.itemType) return false;
       }
 
-      if (CFILTER.search) {
-        var q = CFILTER.search.toLowerCase();
+      if (CFILTER.search && String(CFILTER.search).trim()) {
+        var q = String(CFILTER.search).trim().toLowerCase();
         var certLower = cert.toLowerCase();
         var item = String(r['الصنف'] || '').toLowerCase();
         var supp = String(r['اسم_المورد'] || '').toLowerCase();
@@ -313,7 +321,7 @@
         '</div>' +
         '<div style="display:flex;flex-direction:column;gap:3px;flex:1;min-width:180px;">' +
           '<label style="font-size:11px;font-weight:700;color:var(--text-muted);" for="cf-search">بحث:</label>' +
-          '<input id="cf-search" class="input" style="width:100%;min-height:36px;" type="search" placeholder="بحث برقم الشهادة، الصنف، المورد..." onkeyup="setCFilter(\'search\', this.value)" value="' + escHtml(CFILTER.search) + '">' +
+          '<input id="cf-search" class="input" style="width:100%;min-height:36px;" type="search" placeholder="بحث برقم الشهادة، الصنف، المورد..." oninput="setCFilter(\'search\', this.value)" value="' + escHtml(CFILTER.search) + '">' +
         '</div>' +
         '<div style="display:flex;gap:6px;align-items:flex-end;margin-top:auto;">' +
           '<button class="btn btn-outline" style="min-height:36px;padding:6px 12px;font-size:13px;" onclick="resetCFilters()" title="إعادة تعيين كافة الفلاتر">مسح الفلاتر</button>' +
@@ -361,7 +369,7 @@
         var uploadsHtml = UPLOAD_KEYS.map(function (u) {
           var ref = l[u.key];
           if (!ref) return '';
-          return '<button class="btn btn-outline" style="padding:2px 6px;font-size:11px;margin-inline-end:4px;" onclick="viewAttachment(\'' + escHtml(ref).replace(/\'/g, "\\\'") + '\')" title="' + u.label + '">📎 ' + u.label.split(' ')[0] + ' / View</button>';
+          return '<button class="btn btn-outline" style="padding:2px 6px;font-size:11px;margin-inline-end:4px;" onclick="viewAttachment(\'' + escHtml(ref).replace(/\'/g, "\\\'") + '\',\'' + escHtml(l['كود المعاملة'] || '').replace(/\'/g, "\\\'") + '\',\'legal_product_purchasing\',\'' + escHtml(u.key).replace(/\'/g, "\\\'") + '\')" title="' + u.label + '">📎 ' + u.label.split(' ')[0] + ' / View</button>';
         }).filter(Boolean).join('');
 
         return '<tr>' +
@@ -448,6 +456,16 @@
 
     document.getElementById('inputs-table-area').innerHTML = html;
     UIC.autoColumnsAll('inputs-table-area');
+    /* Restore search caret if the user was typing (or a quiet background
+       refresh rebuilt the DOM mid-typing). Only restores when cf-search had
+       focus before the rebuild, so select/date changes are unaffected. */
+    if (prevActiveId === 'cf-search') {
+      var searchEl = document.getElementById('cf-search');
+      if (searchEl) {
+        searchEl.focus();
+        if (prevSel) { try { searchEl.setSelectionRange(prevSel.start, prevSel.end); } catch (e) {} }
+      }
+    }
   }
 
   function toggleExpand(i) {
@@ -461,12 +479,23 @@
     if (head) head.classList.toggle('is-open', !open);
   }
 
+  var __cfSearchTimer = null;
   function setCFilter(k, v) {
-    CFILTER[k] = k === 'search' ? v.trim() : v;
+    /* Search is debounced: without this each keystroke rebuilds the whole
+       list (COSTING x LINES scan) and the input. Keep the raw value while
+       typing (no trim) so caret/spaces behave; filtering trims itself. */
+    if (k === 'search') {
+      CFILTER.search = v;
+      if (__cfSearchTimer) clearTimeout(__cfSearchTimer);
+      __cfSearchTimer = setTimeout(function () { renderCosting(); }, 250);
+      return;
+    }
+    CFILTER[k] = v;
     renderCosting();
   }
 
   function resetCFilters() {
+    if (__cfSearchTimer) { clearTimeout(__cfSearchTimer); __cfSearchTimer = null; }
     CFILTER.month = '';
     CFILTER.year = '';
     CFILTER.fromDate = '';
@@ -503,8 +532,16 @@
   }
 
   function uploadFieldFile(formEl, key, sheet) {
+    try {
+      if (window.UIC && UIC.UploadSet) {
+        var inp0 = formEl.querySelector('[data-field-name="' + key + '"]');
+        var b0 = inp0 ? UIC.UploadSet.getBound(inp0) : null;
+        if (b0 && b0.ref) return Promise.resolve({ reference: b0.ref, fileId: b0.id || '' });
+        if (inp0 && !(inp0.files && inp0.files[0])) return Promise.resolve(null);
+      }
+    } catch (e) {}
     var input = formEl.querySelector('[data-field-name="' + key + '"]');
-    if (!input || !input.files || !input.files[0]) return Promise.resolve('');
+    if (!input || !input.files || !input.files[0]) return Promise.resolve(null);
     var file = input.files[0];
     return new Promise(function (resolve, reject) {
       var reader = new FileReader();
@@ -513,7 +550,7 @@
         var b64 = String(reader.result || '').split(',')[1] || '';
         companyCall('add_upload_file', { sheet: sheet, field: key, filename: file.name, base64: b64 })
           .then(function (res) {
-            if (res && res.status === 'success') resolve(res.reference);
+            if (res && res.status === 'success') resolve({ reference: res.reference, fileId: res.fileId || '' });
             else reject(new Error((res && res.message) || 'خطأ في رفع الملف'));
           })
           .catch(function (err) { reject(new Error((err && err.message) || 'خطأ في رفع الملف')); });
@@ -523,7 +560,14 @@
   }
 
   function uploadFileInput(inputEl, field, sheet) {
-    if (!inputEl || !inputEl.files || !inputEl.files[0]) return Promise.resolve('');
+    try {
+      if (window.UIC && UIC.UploadSet) {
+        var b1 = inputEl ? UIC.UploadSet.getBound(inputEl) : null;
+        if (b1 && b1.ref) return Promise.resolve({ reference: b1.ref, fileId: b1.id || '' });
+        if (inputEl && !(inputEl.files && inputEl.files[0])) return Promise.resolve(null);
+      }
+    } catch (e) {}
+    if (!inputEl || !inputEl.files || !inputEl.files[0]) return Promise.resolve(null);
     var file = inputEl.files[0];
     return new Promise(function (resolve, reject) {
       var reader = new FileReader();
@@ -532,7 +576,7 @@
         var b64 = String(reader.result || '').split(',')[1] || '';
         companyCall('add_upload_file', { sheet: sheet, field: field, filename: file.name, base64: b64 })
           .then(function (res) {
-            if (res && res.status === 'success') resolve(res.reference);
+            if (res && res.status === 'success') resolve({ reference: res.reference, fileId: res.fileId || '' });
             else reject(new Error((res && res.message) || 'خطأ في رفع الملف'));
           })
           .catch(function (err) { reject(new Error((err && err.message) || 'خطأ في رفع الملف')); });
@@ -562,10 +606,12 @@
 
     var uploads = UPLOAD_KEYS.map(function (u) {
       var ref = l[u.key] || '';
+      var fid = l[u.key + '_id'] || '';
       var note = ref ? '<div style="font-size:11px;color:var(--success);margin-top:2px;">✔ تم إرفاق ملف سابقاً (<a href="' + escHtml(ref) + '" target="_blank">عرض</a>)</div>' : '';
       return '<div class="upload-box">' +
         '<label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px;">' + u.label + '</label>' +
-        '<input id="line_idx_' + idx + '_upload_' + u.key + '" class="input" type="file" accept=".pdf,.doc,.docx,.jpg,.jpeg,.png" data-ref="' + escHtml(ref) + '">' +
+        '<input id="line_idx_' + idx + '_upload_' + u.key + '" class="input" type="file" accept=".pdf,.doc,.docx,.jpg,.jpeg,.png" data-ref="' + escHtml(ref) + '" data-upload-ref="' + escHtml(ref) + '" data-upload-id="' + escHtml(fid) + '" data-uic-instant="1" data-uic-sheet="legal_product_purchasing" data-uic-field="' + escHtml(u.key) + '" data-uic-form="costing-modal">' +
+        '<div class="uic-file-preview" data-uic-file-preview hidden aria-live="polite"></div>' +
         note +
         '</div>';
     }).join('');
@@ -669,7 +715,8 @@
       '</div>' +
       '<div style="margin-top:10px;">' +
         '<label style="font-size:13px;font-weight:600;color:var(--text-main);margin-bottom:4px;display:block;">مرفق صورة السويفت / التحويل البنكي</label>' +
-        '<input id="cf-invoice_swift" data-field-name="invoice_swift" class="input" type="file" accept=".pdf,.doc,.docx,.jpg,.jpeg,.png">' +
+        '<input id="cf-invoice_swift" data-field-name="invoice_swift" data-uic-instant="1" data-uic-sheet="legal_purchasing_costing" data-uic-field="invoice_swift" data-uic-form="costing-modal" class="input" type="file" accept=".pdf,.doc,.docx,.jpg,.jpeg,.png" data-upload-ref="' + escHtml(v('invoice_swift') || '') + '" data-upload-id="' + escHtml(v('invoice_swift_id') || '') + '">' +
+        '<div class="uic-file-preview" data-uic-file-preview hidden aria-live="polite"></div>' +
         (v('invoice_swift') ? '<div style="font-size:11px;color:var(--success);margin-top:2px;">✔ ملف السويفت مرفق مسبقاً (<a href="' + escHtml(v('invoice_swift')) + '" target="_blank">عرض</a>)</div>' : '') +
       '</div>';
 
@@ -717,11 +764,31 @@
     } else {
       addLineRow(null);
     }
+    try { UIC.trackDirty('costing-form'); } catch (e) {}
+    try {
+      if (UIC.UploadSet) {
+        var swiftRef = v('invoice_swift') || '';
+        var swiftId = v('invoice_swift_id') || '';
+        if (swiftRef) UIC.UploadSet.setBound('cf-invoice_swift', swiftRef, swiftId);
+        UPLOAD_KEYS.forEach(function (u) {
+          LINELIST.forEach(function (idx) {
+            var fi = document.getElementById('line_idx_' + idx + '_upload_' + u.key);
+            if (fi) {
+              var r0 = fi.getAttribute('data-ref') || '';
+              var i0 = fi.getAttribute('data-upload-id') || '';
+              if (r0) {
+                try { UIC.UploadSet.setBound(fi, r0, i0); } catch (e2) {}
+              }
+            }
+          });
+        });
+      }
+    } catch (e3) {}
   }
 
-  function viewAttachment(ref){
-    if(!ref) return;
-    UIC.openDownload(scriptUrl + '?download=attachment&page=tc_budget_inputs&ref=' + encodeURIComponent(ref) + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN),
+  function viewAttachment(ref, id, sheet, field){
+    if(!ref && (id == null || String(id) === '')) return;
+    UIC.openDownload(scriptUrl + '?download=attachment&page=tc_budget_inputs&ref=' + encodeURIComponent(ref || '') + ((id != null && String(id) !== '') ? '&id=' + encodeURIComponent(id) : '') + (sheet ? '&sheet=' + encodeURIComponent(sheet) : '') + (field ? '&field=' + encodeURIComponent(field) : '') + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN),
       'فتح المرفق');
   }
   function printCosting(cert) {
@@ -754,7 +821,6 @@
     }
 
     var lines = [];
-    var uploads = [];
     LINELIST.forEach(function (idx) {
       var l = {};
       var matEl = document.getElementById('line_idx_' + idx + '_المادة');
@@ -771,10 +837,22 @@
         if (el) l[k] = el.value;
       });
 
+      /* Option A instant-upload: per-row bound ref (retain data-ref). */
       UPLOAD_KEYS.forEach(function (u) {
         var fi = document.getElementById('line_idx_' + idx + '_upload_' + u.key);
-        if (fi && fi.files && fi.files[0]) uploads.push({ line: l, key: u.key, input: fi });
-        else l[u.key] = fi ? fi.getAttribute('data-ref') || '' : '';
+        var bound = (fi && UIC.UploadSet) ? UIC.UploadSet.getBound(fi) : null;
+        if (bound && bound.ref) {
+          l[u.key] = bound.ref;
+          if (bound.id) l[u.key + '_id'] = bound.id;
+        } else if (fi && fi.files && fi.files[0]) {
+          l[u.key] = fi.getAttribute('data-ref') || '';
+        } else {
+          l[u.key] = fi ? (fi.getAttribute('data-upload-ref') || fi.getAttribute('data-ref') || '') : '';
+          try {
+            var bid = fi ? (fi.getAttribute('data-upload-id') || '') : '';
+            if (bid) l[u.key + '_id'] = bid;
+          } catch (e) {}
+        }
       });
 
       lines.push(l);
@@ -793,34 +871,25 @@
       return;
     }
 
-    UI.showSpinner('جاري رفع المرفقات وحفظ الشهادة وبنودها...');
-    uploadFieldFile(formEl, 'invoice_swift', 'legal_purchasing_costing')
-      .then(function (ref) {
-        if (ref) data.invoice_swift = ref;
-        var chain = Promise.resolve();
-        uploads.forEach(function (u) {
-          chain = chain.then(function () {
-            return uploadFileInput(u.input, u.key, 'legal_product_purchasing').then(function (ref2) {
-              if (ref2) u.line[u.key] = ref2;
-            });
-          });
-        });
-        return chain.then(function () {
-          return { header: data, lines: lines };
-        });
-      })
-      .then(function (payload) {
-        UI.hideSpinner();
-        /* Tier A: the master card is on screen before the request returns.
-           The cert number is the client-supplied natural key (the server
-           refuses duplicates), so the draft carries it and matches the
-           existing card on edit. Sheet-formula cells (اجمالي التكاليف and
-           the detail-grid computed values) are never invented — renderCosting
-           shows «—» for them while __pending. The lines converge on the
-           reply via onSuccess; they are not painted optimistically because
-           the undo only covers the COSTING list. queueable:false: I1 is
-           unproven for both bundle handlers, so a transport failure rolls
-           back loudly instead of queueing. */
+    var doSaveInputs = function () {
+      /* Header swift pre-bound on selection. */
+      try {
+        var swiftInput = formEl ? formEl.querySelector('[data-field-name="invoice_swift"]') : null;
+        var swiftBound = (swiftInput && UIC.UploadSet) ? UIC.UploadSet.getBound(swiftInput) : null;
+        if (swiftBound && swiftBound.ref) {
+          data.invoice_swift = swiftBound.ref;
+          if (swiftBound.id) data.invoice_swift_id = swiftBound.id;
+        } else if (swiftInput) {
+          var sr = swiftInput.getAttribute('data-upload-ref') || swiftInput.getAttribute('data-ref') || '';
+          if (sr && !data.invoice_swift) data.invoice_swift = sr;
+        }
+      } catch (e) {}
+      return { header: data, lines: lines };
+    };
+
+    var runSaveInputs = function (payload) {
+        /* Tier A: master card on screen before reply; no blocking overlay for
+           instant uploads (inline per-row status only). */
         var draft = Object.assign({}, payload.header);
         draft['رقم الشهاده'] = cert;
         UIC.Live.save({
@@ -847,8 +916,15 @@
             renderCosting();
           }
         }).catch(function () { /* UIC.Live has toasted and rolled back */ });
-      })
-      .catch(function (e) { UI.hideSpinner(); showError(e); });
+    };
+    try {
+      if (window.UIC && UIC.UploadSet && UIC.UploadSet.isBusy('costing-modal')) {
+        UIC.toast('جاري رفع الملفات... يرجى الانتظار', 'warning');
+        UIC.UploadSet.awaitPending('costing-modal').then(function () { runSaveInputs(doSaveInputs()); });
+        return;
+      }
+    } catch (e) {}
+    runSaveInputs(doSaveInputs());
   }
 
   function deleteCosting(cert) {

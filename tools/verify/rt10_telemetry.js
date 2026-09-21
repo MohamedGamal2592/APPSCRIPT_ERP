@@ -28,7 +28,7 @@ const vm = require('vm');
 
 const ROOT = path.resolve(__dirname, '..', '..');
 const CODE = fs.readFileSync(path.join(ROOT, 'Code.js'), 'utf8');
-const TELEMETRY = fs.readFileSync(path.join(ROOT, 'Code_Telemetry.js'), 'utf8');
+const TELEMETRY = fs.readFileSync(path.join(ROOT, 'Code.js'), 'utf8');
 const SOURCES = CODE + '\n' + TELEMETRY;
 
 let failed = 0;
@@ -213,7 +213,7 @@ check(/user\.isSuperAdmin/.test(dash),
   'the dashboard handler checks isSuperAdmin itself, rather than trusting the page not to be opened');
 check(fs.existsSync(path.join(ROOT, 'ERP_Perf_Dashboard.html')),
   'and the page exists');
-check(/perf_dashboard/.test(fs.readFileSync(path.join(ROOT, '01_Registry.js'), 'utf8')),
+check(/perf_dashboard/.test(fs.readFileSync(path.join(ROOT, 'Code.js'), 'utf8')),
   'registered like any other page');
 
 console.log('\n' + (failed === 0

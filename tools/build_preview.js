@@ -6,7 +6,8 @@
  * WHY A GENERATED BUNDLE
  * ----------------------
  * The design preview must show the REAL CSS_Tokens.html, the REAL
- * UI_Components.html and the REAL theme CSS from Theme_Builders.js. A hand-written
+ * UI_Components.html and the REAL theme CSS from the canonical Actions files.
+ * A hand-written
  * copy of those would drift and become a lie — worse than no preview at all.
  *
  * A browser opened on a file:// page refuses to read its neighbouring files, so
@@ -16,7 +17,7 @@
  * no longer matches the sources. The preview therefore cannot silently drift:
  * either it is current, or the suite says so out loud.
  *
- * The three theme functions are not copied either — they are EXECUTED here,
+ * The company theme hooks are not copied either — they are EXECUTED here,
  * against stubs, so the preview shows what the server would really emit. No
  * spreadsheet is opened and no Google service is contacted; the stubs return
  * fixed values.
@@ -30,7 +31,11 @@ const crypto = require('crypto');
 const S = require('./lib/sources');
 
 /* Files whose bytes the preview claims to be showing. */
-const WATCHED = ['CSS_Tokens.html', 'UI_Components.html', 'Client_Helpers.html', '03_Security.js', 'Theme_Builders.js'];
+const WATCHED = [
+  'CSS_Tokens.html', 'UI_Components.html', 'Client_Helpers.html',
+  'Code.js', 'Company_TopLight_Actions.js', 'Company_TopChemical_Actions.js',
+  'Company_ValleyFoods_Actions.js', 'Company_Assessment_Actions.js'
+];
 
 const OUT = path.join(S.ROOT, 'design_preview', '_sources.js');
 
@@ -44,7 +49,7 @@ function fingerprint() {
   return h.digest('hex').slice(0, 16);
 }
 
-/* ── Executing 03_Security.js's theme functions against stubs ───────────── */
+/* ── Executing canonical shared/company theme hooks against stubs ── */
 
 /** A fake ERP_Companies sheet, so the generic theme path runs for real. */
 function fakeCompaniesSheet(colors) {
@@ -88,7 +93,7 @@ function themeSandbox(colors) {
     UrlFetchApp: { fetch: function () { throw new Error('blocked'); } },
     HtmlService: { createTemplate: function () { return { evaluate: function () { return {}; } }; } },
     DriveApp: {}, MailApp: {}, GmailApp: {},
-    /* Data-layer helpers 03_Security.js calls. */
+    /* Data-layer helpers Code.js calls. */
     getSheet_: function (name) {
       if (String(name) === 'ERP_Companies') return fakeCompaniesSheet(colors);
       return fakeCompaniesSheet(colors);
@@ -101,22 +106,29 @@ function themeSandbox(colors) {
 }
 
 function extractThemes() {
-  const src = S.read('03_Security.js') + '\n' + S.read('Theme_Builders.js');
+  const src = [
+    S.read('Code.js'),
+    S.read('Company_TopLight_Actions.js'),
+    S.read('Company_TopChemical_Actions.js'),
+    S.read('Company_ValleyFoods_Actions.js'),
+    S.read('Company_Assessment_Actions.js')
+  ].join('\n');
   const out = {};
 
   /* TopLight and TopChemical are pure string builders — no service calls. */
   const plain = themeSandbox('green,white');
   try {
-    vm.runInContext(src, plain, { filename: 'Theme_Builders.js' });
+    vm.runInContext(src, plain, { filename: 'Code.js' });
   } catch (e) {
     throw new Error('could not load the security/theme sources into the stub sandbox: ' + e.message);
   }
-  out.TopLight = plain.topLightThemeCss_();
-  out.TopChemical = plain.topChemicalThemeCss_();
+  out.TopLight = vm.runInContext('TopLight.themeCss_()', plain);
+  out.TopChemical = vm.runInContext('TopChemical.themeCss_()', plain);
 
   /* ValleyFoods takes the generic path. Run it against the fake sheet so the
      preview shows the real mapping, not a guess at it. */
-  out.ValleyFoods = plain.getCompanyThemeCSS_('ValleyFoods');
+  out.ValleyFoods = vm.runInContext('ValleyFoods.themeCss_()', plain);
+  out.Assessment = vm.runInContext('AssessmentCenter.themeCss_()', plain);
 
   return out;
 }

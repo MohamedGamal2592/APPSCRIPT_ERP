@@ -22,8 +22,11 @@ const sandbox = {
   Utilities: { getUuid: () => 'id', sleep: () => {} }, console
 };
 vm.createContext(sandbox);
-vm.runInContext(fs.readFileSync(path.join(root, '02_Firestore.js'), 'utf8'), sandbox);
-vm.runInContext(fs.readFileSync(path.join(root, '02_StorageConfig.js'), 'utf8'), sandbox);
+vm.runInContext(fs.readFileSync(path.join(root, 'Code.js'), 'utf8'), sandbox);
+/* Code.js owns the canonical CONFIG binding now. Re-apply the fixture's
+   linked-script map after loading it so this contract exercises the same
+   explicit configuration as the pre-consolidation test. */
+vm.runInContext("CONFIG.FIRESTORE_PROJECT_IDS_BY_SCRIPT = {'linked-production-script':'erp-project-3cae0'}; CONFIG.SYSTEM_STORAGE_BACKEND = 'firestore'; CONFIG.FIRESTORE_DATABASE_ID = '(default)'; CONFIG.ERP_ENVIRONMENT = 'production';", sandbox);
 function throwsCode(fn, code) { assert.throws(fn, e => e.code === code, code); }
 props = { SYSTEM_STORAGE_BACKEND: 'firestore', FIRESTORE_PROJECT_ID: '', FIRESTORE_DATABASE_ID: '(default)', ERP_ENVIRONMENT: 'staging' };
 throwsCode(() => sandbox.getSystemStorageConfig_(), 'STORAGE_CONFIGURATION_ERROR');

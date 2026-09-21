@@ -19,6 +19,11 @@ function registerAssessmentCenter_() {
     // executeCompanyAction_. The three existing companies register no
     // publicDispatch, so the public route stays inert for them (ac1_wiring.js).
     publicDispatch: AssessmentCenter.publicDispatch_,
+    themeCss: AssessmentCenter.themeCss_,
+    blockTheme: AssessmentCenter.blockTheme_,
+    approvalPolicy: AssessmentCenter.approvalPolicy_,
+    attachmentPolicy: AssessmentCenter.attachmentPolicy_,
+    artifactHandlers: AssessmentCenter.artifactHandlers_,
     pageForAction: AssessmentCenter.pageForAction_,
     tableForAction: AssessmentCenter.tableForAction_,
     // §2.2 table catalog — metadata only, no schema change.

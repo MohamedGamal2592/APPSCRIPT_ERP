@@ -101,9 +101,15 @@
       var RECIPE_OPTIONS = [], PRODUCT_OPTIONS = [], ENUMS = {}, WORKCENTER_OPTIONS = [];
       var MFG_OUTPUTS = [];      /* [{uid,product_id,qty,cost_unit,total_cost,product_name}] */
       var OUTPUT_FOOTERS = [];   /* [[{item,item_code,qty,unit_cost,total_cost}]] parallel to MFG_OUTPUTS */
-      var OUTPUT_BATCHES = [];   /* [[batches]] parallel to MFG_OUTPUTS (preloaded) */
+      var OUTPUT_BATCHES = [];   /* [[batches]] parallel to MFG_OUTPUTS (lazy-loaded per material) */
+      var OUTPUT_BATCH_PROMISES = []; /* one in-flight batch request per material */
       var MFG_WORKOPS = [];      /* [{uid,work_center_id,operation_status,notes,start_time,last_pause_time,end_time,actual_hours,work_center_cost,total_cost}] */
       var MFG_BYPRODUCTS = [];   /* [{uid,item,qty,transaction_code,total_cost}] */
+      var MFG_DELETED_UIDS = { outputs: [], consumption: [], work_ops: [], byproducts: [] };
+      /* Schema-free edit token for the loaded MO (detail scope). Returned as
+         base_token/save_scope so the server can reject stale editors. */
+      var MFG_EDIT_TOKEN = '';
+      var MFG_SAVE_SCOPE = ['header', 'outputs', 'consumption', 'work_ops', 'byproducts'];
 
       /* U-46. Whether this user may see cost figures. Set from the server's
          can_see_cost on every load, and deliberately NOT re-derived from
@@ -115,7 +121,13 @@
       var CAN_SEE_COST = true;
       function canCost() { return CAN_SEE_COST !== false; }
 
-      function editable() { return IS_SUPER_ADMIN ? true : (CAN_WRITE && MO_STATUS !== 'Locked'); }
+      function editable() { return (IS_SUPER_ADMIN || CAN_WRITE) && MO_STATUS !== 'Locked'; }
+      function rememberDeleted_(section, uid) {
+        uid = String(uid || '').trim();
+        if (!uid) return;
+        var list = MFG_DELETED_UIDS[section] || (MFG_DELETED_UIDS[section] = []);
+        if (list.indexOf(uid) === -1) list.push(uid);
+      }
       function fmt3(v) { return Number(v || 0).toFixed(3); }
       function fmtMoney(v) { return fmt3(v); }
       function fmtDateTime(v) { if (!v) return '—'; try { var d = (v instanceof Date) ? v : new Date(v); if (isNaN(d.getTime())) return String(v); var p = function (n) { return n < 10 ? '0' + n : '' + n; }; return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes()); } catch (e) { return String(v); } }
@@ -158,13 +170,35 @@
       }
 
       /* ---------- load ---------- */
+      function validateDetailResponse_(res) {
+        if (!res || typeof res !== 'object' || Array.isArray(res)) {
+          throw new Error('لم يُرجع الخادم بيانات أمر التصنيع. أعد المحاولة، وإذا استمرت المشكلة تواصل مع مسؤول النظام.');
+        }
+        if (!IS_NEW && (!res.order || typeof res.order !== 'object' || Array.isArray(res.order))) {
+          throw new Error('لم يُرجع الخادم سجل أمر التصنيع المطلوب. أعد فتح الأمر من القائمة.');
+        }
+        return res;
+      }
+
+      /* If google.script.run completes with a null result instead of invoking
+         the failure handler, this read-only request may be replayed safely.
+         Keep the replay bounded so a persistently empty backend response is
+         reported instead of becoming "Cannot read properties of null". */
+      function requestDetail_() {
+        var payload = { mo_uid: IS_NEW ? '' : MO_UID };
+        return companyCall('get_valley_mfg_order_detail', payload).then(function (res) {
+          if (res !== null && res !== undefined) return validateDetailResponse_(res);
+          return companyCall('get_valley_mfg_order_detail', payload).then(validateDetailResponse_);
+        });
+      }
+
       /* quiet: refresh in the background with no blocking overlay, for a
          user who has already seen the change and must not be interrupted
          to confirm it. */
       function load(quiet) {
         if (!quiet) showLoading('جاري تحميل أمر التصنيع…');
         var watchdog = setTimeout(function () { if (!quiet) hideLoading(); if (UI.toast) UI.toast('انتهت مهلة التحميل — تحقق من الاتصال وأعد المحاولة', 'error'); }, 25000);
-        companyCall('get_valley_mfg_order_detail', { mo_uid: IS_NEW ? '' : MO_UID }).then(function (res) {
+        return requestDetail_().then(function (res) {
           CAN_SEE_COST = (res.can_see_cost !== false);
           RECIPE_OPTIONS = res.recipe_options || [];
           PRODUCT_OPTIONS = res.product_options || [];
@@ -172,31 +206,61 @@
           WORKCENTER_OPTIONS = res.work_center_options || {};
           if (IS_NEW) {
             MO_STATUS = 'Draft';
-            MFG_OUTPUTS = []; OUTPUT_FOOTERS = []; OUTPUT_BATCHES = []; MFG_WORKOPS = []; MFG_BYPRODUCTS = [];
+            MFG_OUTPUTS = []; OUTPUT_FOOTERS = []; OUTPUT_BATCHES = []; OUTPUT_BATCH_PROMISES = []; MFG_WORKOPS = []; MFG_BYPRODUCTS = [];
+            MFG_DELETED_UIDS = { outputs: [], consumption: [], work_ops: [], byproducts: [] };
+            MFG_EDIT_TOKEN = '';
+            MFG_SAVE_SCOPE = ['header', 'outputs', 'consumption', 'work_ops', 'byproducts'];
             renderDetail({ transaction_code: '', mo_status: 'Draft', operation_type: '', shift: '', manufacture_date: '', expected_qty: '', manufactured_qty: '', actual_qty: '', produced_product: '', recipe_id: '' }, res);
           } else {
             var full = res;
+            MFG_DELETED_UIDS = { outputs: [], consumption: [], work_ops: [], byproducts: [] };
             MO_STATUS = (res.order && res.order.mo_status) || 'Draft';
+            MFG_EDIT_TOKEN = res.edit_token || '';
+            MFG_SAVE_SCOPE = res.save_scope || ['header', 'outputs', 'consumption', 'work_ops', 'byproducts'];
             MFG_OUTPUTS = (full.outputs || []).map(function (o) {
               return { uid: o.unique_id || '', product_id: String(o.product_id || ''), qty: o.product_qty != null ? o.product_qty : '', cost_unit: o.cost_unit || '', total_cost: o.total_cost || '', product_name: o.product_name || '' };
             });
             OUTPUT_FOOTERS = (full.outputs || []).map(function (o) {
-              return (o.footers || []).map(function (f) { return { item: f.item || '', item_code: f.item_code || '', qty: f.qty != null ? f.qty : '', unit_cost: f.unit_cost != null ? f.unit_cost : 0, total_cost: f.total_cost != null ? f.total_cost : 0, saved: true }; });
+              return (o.footers || []).map(function (f) { return { uid: f.unique_id || '', item: f.item || '', item_code: f.item_code || '', qty: f.qty != null ? f.qty : '', unit_cost: f.unit_cost != null ? f.unit_cost : 0, total_cost: f.total_cost != null ? f.total_cost : 0, saved: true }; });
             });
             OUTPUT_BATCHES = (full.outputs || []).map(function (o) { return o.batches || []; });
+            OUTPUT_BATCH_PROMISES = (full.outputs || []).map(function () { return null; });
             MFG_WORKOPS = (res.workops || []).map(function (w) {
               /* U-45: work_center_cost / total_cost are sheet-computed and now
                  arrive from the server. They may be absent when the user has no
                  cost grant, so keep them undefined rather than defaulting to 0 —
                  the table tells the two cases apart. */
               return { uid: w.unique_id || '', work_center_id: String(w.work_center_id || ''), operation_status: w.operation_status || 'Pending', notes: w.notes || '', start_time: w.start_time || '', last_pause_time: w.last_pause_time || '', end_time: w.end_time || '', actual_hours: w.actual_hours != null ? w.actual_hours : '', work_center_cost: w.work_center_cost, total_cost: w.total_cost };
+            }).filter(function (w) {
+              if (w.work_center_id) return true;
+              rememberDeleted_('work_ops', w.uid);
+              return false;
             });
             MFG_BYPRODUCTS = (res.byproducts || []).map(function (b) {
               return { uid: b.unique_id || '', item: String(b.item || ''), qty: b.qty || '', transaction_code: b.transaction_code || '', total_cost: b.total_cost || '' };
+            }).filter(function (b) {
+              if (b.item) return true;
+              rememberDeleted_('byproducts', b.uid);
+              return false;
             });
             renderDetail(res.order, res);
           }
-        }).catch(function (e) { if (UI.toast) UI.toast((e && e.message) || 'خطأ في التحميل', 'error'); })
+        }).catch(function (e) {
+          var message = (e && e.message) || 'خطأ في التحميل';
+          /* A failed first request previously left only the floating home icon,
+             which looked like a blank page. Keep the error visible and give the
+             user deterministic retry/back actions even if a future server-side
+             validation or network failure occurs. */
+          var host = root();
+          if (host) host.innerHTML =
+            '<div class="odoo-wrap"><div class="odoo-card"><div class="odoo-card-b" style="text-align:center;padding:28px 18px;">' +
+              '<div style="font-weight:700;color:#b91c1c;margin-bottom:10px;">تعذر تحميل أمر التصنيع</div>' +
+              '<div style="color:#64748b;line-height:1.8;margin-bottom:18px;word-break:break-word;">' + esc(message) + '</div>' +
+              '<button class="btn btn-primary" onclick="MFGVIEW_PAGE.load()">إعادة المحاولة</button> ' +
+              '<button class="btn btn-outline" onclick="MFGVIEW_PAGE.goBack()">العودة إلى القائمة</button>' +
+            '</div></div></div>';
+          if (UI.toast) UI.toast(message, 'error');
+        })
           .finally(function () { clearTimeout(watchdog); if (!quiet) hideLoading(); });
       }
 
@@ -212,20 +276,20 @@
           '</div></div>';
 
         var headerCard = '<div class="odoo-card"><div class="odoo-card-h"><h3>بيانات الأمر</h3></div><div class="odoo-card-b">' +
-          (MO_STATUS === 'Locked' && !IS_SUPER_ADMIN ? '<div class="odoo-ro" style="margin-bottom:10px;color:#b45309;">الأمر مقفل — العرض فقط (يلزم مدير النظام للتعديل).</div>' : '') +
+          (MO_STATUS === 'Locked' ? '<div class="odoo-ro" style="margin-bottom:10px;color:#b45309;">الأمر مقفل — افتح القفل أولاً ثم عدّل واحفظ.</div>' : '') +
           '<form id="mo-form"><input type="hidden" id="f-status" value="' + esc(MO_STATUS) + '">' +
           '<div class="odoo-grid">' +
-            UIC.combo({ key: 'f-op-type', label: 'نوع العملية', required: true, options: selList_(ENUMS.operation_type), value: order.operation_type || '', placeholder: 'اكتب للبحث…' }) +
-            UIC.combo({ key: 'f-shift', label: 'الوردية', required: true, options: selList_(ENUMS.shift), value: order.shift || '', placeholder: 'اكتب للبحث…' }) +
-            UIC.field({ key: 'f-date', label: 'تاريخ التصنيع', type: 'date', required: true, value: toInputDate(order.manufacture_date) }) +
+            UIC.combo({ key: 'f-op-type', label: 'نوع العملية', required: true, options: selList_(ENUMS.operation_type), value: order.operation_type || '', placeholder: 'اكتب للبحث…', disabled: !editable() }) +
+            UIC.combo({ key: 'f-shift', label: 'الوردية', required: true, options: selList_(ENUMS.shift), value: order.shift || '', placeholder: 'اكتب للبحث…', disabled: !editable() }) +
+            UIC.field({ key: 'f-date', label: 'تاريخ التصنيع', type: 'date', required: true, value: toInputDate(order.manufacture_date), disabled: !editable() }) +
             UIC.field({ key: 'f-expected', label: 'الكمية المتوقعة (تلقائي = الخام × 0.65)', type: 'number', required: true, min: '0', step: '0.001', value: num0(order.expected_qty), disabled: true }) +
-            UIC.field({ key: 'f-manufactured', label: 'كمية الخام الداخلة', type: 'number', required: true, min: '0', step: '0.001', value: num0(order.manufactured_qty) }) +
-            UIC.field({ key: 'f-batch', label: 'رقم التشغيلة', type: 'text', value: esc(order.manufacture_batch || '') }) +
-            UIC.field({ key: 'f-actual', label: 'الكمية الفعلية المنتجة', type: 'number', min: '0', step: '0.01', value: order.actual_qty != null ? num0(order.actual_qty) : '' }) +
+            UIC.field({ key: 'f-manufactured', label: 'كمية الخام الداخلة', type: 'number', required: true, min: '0', step: '0.001', value: num0(order.manufactured_qty), disabled: !editable() }) +
+            UIC.field({ key: 'f-batch', label: 'رقم التشغيلة', type: 'text', value: esc(order.manufacture_batch || ''), disabled: !editable() }) +
+            UIC.field({ key: 'f-actual', label: 'الكمية الفعلية المنتجة', type: 'number', min: '0', step: '0.01', value: order.actual_qty != null ? num0(order.actual_qty) : '', disabled: !editable() }) +
           '</div>' +
           '<div class="odoo-grid" style="margin-top:14px;">' +
-            UIC.combo({ key: 'f-product', label: 'المنتج المنتج', required: true, options: PRODUCT_OPTIONS, value: String(order.produced_product || ''), placeholder: 'اكتب للبحث…' }) +
-            UIC.combo({ key: 'f-recipe', label: 'الوصفة', required: false, options: RECIPE_OPTIONS.filter(function (o) { return o.active !== false; }), value: String(order.recipe_id || ''), placeholder: 'اختر الوصفة (اختياري)…' }) +
+            UIC.combo({ key: 'f-product', label: 'المنتج المنتج', required: true, options: PRODUCT_OPTIONS, value: String(order.produced_product || ''), placeholder: 'اكتب للبحث…', disabled: !editable() }) +
+            UIC.combo({ key: 'f-recipe', label: 'الوصفة', required: false, options: RECIPE_OPTIONS.filter(function (o) { return o.active !== false; }), value: String(order.recipe_id || ''), placeholder: 'اختر الوصفة (اختياري)…', disabled: !editable() }) +
           '</div>' +
           '</form></div></div>';
 
@@ -244,6 +308,12 @@
         drawWorkOps();
         drawByproducts();
         renderKpi();
+
+        if (!editable()) {
+          ['f-op-type_display', 'f-shift_display', 'f-product_display', 'f-recipe_display'].forEach(function (id) {
+            var el = document.getElementById(id); if (el) el.disabled = true;
+          });
+        }
 
         var rec = document.getElementById('f-recipe');
         if (rec && editable()) rec.addEventListener('change', function () { MFGVIEW_PAGE.onRecipeChange(); });
@@ -426,18 +496,22 @@
       /* ---------- OUTPUTS (valley_manufacture_header_products) ---------- */
       function addOutput() {
         MFG_OUTPUTS.push({ uid: '', product_id: '', qty: '', cost_unit: '', total_cost: '', product_name: '' });
-        OUTPUT_FOOTERS.push([]); OUTPUT_BATCHES.push([]);
+        OUTPUT_FOOTERS.push([]); OUTPUT_BATCHES.push([]); OUTPUT_BATCH_PROMISES.push(null);
         /* U-43: append only. A full redraw here destroyed the combo the user was
            typing into on the row above. */
         appendOutputRow_(MFG_OUTPUTS.length - 1);
       }
       function removeOutput(i) {
-        MFG_OUTPUTS.splice(i, 1); OUTPUT_FOOTERS.splice(i, 1); OUTPUT_BATCHES.splice(i, 1); drawOutputs();
+        var old = MFG_OUTPUTS[i] || {};
+        rememberDeleted_('outputs', old.uid);
+        (OUTPUT_FOOTERS[i] || []).forEach(function (f) { rememberDeleted_('consumption', f.uid); });
+        MFG_OUTPUTS.splice(i, 1); OUTPUT_FOOTERS.splice(i, 1); OUTPUT_BATCHES.splice(i, 1); OUTPUT_BATCH_PROMISES.splice(i, 1); drawOutputs();
       }
       function setOutputProduct(i, v) {
         MFG_OUTPUTS[i].product_id = v;
         var nm = ''; (PRODUCT_OPTIONS || []).forEach(function (p) { if (String(p.value) === String(v)) nm = p.label; });
         MFG_OUTPUTS[i].product_name = nm;
+        OUTPUT_BATCH_PROMISES[i] = null;
         if (v) {
           companyCall('get_valley_product_batches', { product_id: v, mo_uid: MO_UID }).then(function (r) { OUTPUT_BATCHES[i] = r.batches || []; autoAllocFifo_(i); redrawOutputRow_(i); })
             .catch(function () { OUTPUT_BATCHES[i] = []; redrawOutputRow_(i); });
@@ -465,7 +539,7 @@
           if (round3(sum - qty) > BATCH_TOLERANCE) {
             UI.toast && UI.toast('الدفعات المخصصة (' + fmt3(sum) + ') أكبر من الكمية الجديدة (' + fmt3(qty) + ') — عدّل الدفعات من «+ دفعة».', 'warning');
           } else if (round3(qty - sum) > BATCH_TOLERANCE) {
-            OUTPUT_FOOTERS[i] = fifoFill_(OUTPUT_BATCHES[i] || [], qty, keep);
+            OUTPUT_FOOTERS[i] = fifoFill_(OUTPUT_BATCHES[i] || [], qty, keep, footerUidMap_(i));
           }
         }
         redrawOutputRow_(i);
@@ -481,18 +555,21 @@
        * against the requirement; only the SHORTFALL is filled, oldest-first,
        * from batches not already held. With no `keep` it behaves exactly as the
        * original autoAllocFifo_ did. */
-      function fifoFill_(batches, qty, keep) {
+      function fifoFill_(batches, qty, keep, keepUid) {
         keep = keep || {};
+        keepUid = keepUid || {};
         var out = [];
         var remaining = round3(qty);
         if (remaining <= 0 || !batches || !batches.length) return out;
 
-        /* 1) what the user already allocated, in batch (oldest-first) order */
+        /* 1) what the user already allocated, in batch (oldest-first) order.
+           The kept rows carry their server uid forward so a quantity change
+           never orphans the original rows on the next save. */
         batches.forEach(function (b) {
           var uid = String(b.batch_uid || '');
           var held = round3(keep[uid]);
           if (!uid || held <= 0) return;
-          var row = { item: uid, item_code: String(b.lot || ''), qty: held };
+          var row = { uid: keepUid[uid] || '', item: uid, item_code: String(b.lot || ''), qty: held };
           if (b.unit_cost != null) row.unit_cost = Number(b.unit_cost) || 0;
           out.push(row);
           remaining = round3(remaining - held);
@@ -506,7 +583,7 @@
           var avail = Number(bb.available) || 0;
           if (avail <= 0) continue;
           var take = avail >= remaining ? remaining : avail;
-          var row2 = { item: uid2, item_code: String(bb.lot || ''), qty: round3(take) };
+          var row2 = { uid: '', item: uid2, item_code: String(bb.lot || ''), qty: round3(take) };
           if (bb.unit_cost != null) row2.unit_cost = Number(bb.unit_cost) || 0;
           out.push(row2);
           remaining = round3(remaining - take);
@@ -526,6 +603,16 @@
         (OUTPUT_FOOTERS[i] || []).forEach(function (f) {
           var uid = String(f.item || '').trim();
           if (uid) m[uid] = round3((m[uid] || 0) + (Number(f.qty) || 0));
+        });
+        return m;
+      }
+
+      /* Server uid per allocated batch (first uid wins), so refills keep identity. */
+      function footerUidMap_(i) {
+        var m = {};
+        (OUTPUT_FOOTERS[i] || []).forEach(function (f) {
+          var k = String(f.item || '').trim();
+          if (k && f.uid && !m[k]) m[k] = f.uid;
         });
         return m;
       }
@@ -635,7 +722,16 @@
         var qty = round3(o.qty);
         if (qty <= 0) { UI.toast && UI.toast('أدخل كمية الخامة أولاً', 'error'); return; }
         var batches = (OUTPUT_BATCHES[i] || []);
-        if (!batches.length) { UI.toast && UI.toast('لا توجد دفعات متاحة لهذه الخامة', 'error'); return; }
+        if (!batches.length) {
+          showLoading('جاري تحميل الدفعات…');
+          ensureOutputBatches_(i).then(function (loaded) {
+            if (!loaded.length) { UI.toast && UI.toast('لا توجد دفعات متاحة لهذه الخامة', 'error'); return; }
+            openBatchModal(i);
+          }).catch(function (e) {
+            UI.toast && UI.toast((e && e.message) || 'تعذر تحميل الدفعات', 'error');
+          }).finally(function () { hideLoading(); });
+          return;
+        }
 
         var keep = allocatedMap_(i);
         var proposed = fifoFill_(batches, qty, keep);
@@ -702,20 +798,26 @@
         var st = batchModalState_();
         if (!st.matched) return;   /* the button is disabled; belt and braces */
         var i = BM.i;
+        var oldRows = (OUTPUT_FOOTERS[i] || []).slice();
+        var oldUidByBatch = footerUidMap_(i);
+        var keptOld = {};
         OUTPUT_FOOTERS[i] = BM.rows
           .filter(function (r) { return round3(r.alloc) > 0; })
           .map(function (r) {
-            var row = { item: r.batch_uid, item_code: r.lot, qty: round3(r.alloc) };
+            var oldUid = oldUidByBatch[String(r.batch_uid || '')] || '';
+            if (oldUid) keptOld[oldUid] = true;
+            var row = { uid: oldUid, item: r.batch_uid, item_code: r.lot, qty: round3(r.alloc) };
             if (r.unit_cost != null) row.unit_cost = Number(r.unit_cost) || 0;
             return row;
           });
+        oldRows.forEach(function (f) { if (f.uid && !keptOld[f.uid]) rememberDeleted_('consumption', f.uid); });
         BM = null;
         UIC.closeModal('vf-batch-modal');
         redrawOutputRow_(i);
       }
 
-      function addFooterRow(i) { if (!OUTPUT_FOOTERS[i]) OUTPUT_FOOTERS[i] = []; OUTPUT_FOOTERS[i].push({ item: '', item_code: '', qty: '' }); redrawOutputRow_(i); }
-      function removeFooterRow(i, fi) { OUTPUT_FOOTERS[i].splice(fi, 1); redrawOutputRow_(i); }
+      function addFooterRow(i) { if (!OUTPUT_FOOTERS[i]) OUTPUT_FOOTERS[i] = []; OUTPUT_FOOTERS[i].push({ uid: '', item: '', item_code: '', qty: '' }); redrawOutputRow_(i); }
+      function removeFooterRow(i, fi) { var f = (OUTPUT_FOOTERS[i] || [])[fi] || {}; rememberDeleted_('consumption', f.uid); OUTPUT_FOOTERS[i].splice(fi, 1); redrawOutputRow_(i); }
       function setFooterItem(i, fi, el) {
         OUTPUT_FOOTERS[i][fi].item = el.value;
         var opt = el.selectedOptions && el.selectedOptions[0];
@@ -943,7 +1045,26 @@
         }
         var pre = OUTPUT_BATCHES[i];
         if (pre && pre.length) { fill(pre); }
-        else { companyCall('get_valley_product_batches', { product_id: productId, mo_uid: MO_UID }).then(function (r) { OUTPUT_BATCHES[i] = r.batches || []; fill(OUTPUT_BATCHES[i]); }).catch(function () { sel.innerHTML = '<option value="">خطأ في تحميل الدفعات</option>'; }); }
+        else { ensureOutputBatches_(i).then(fill).catch(function () { sel.innerHTML = '<option value="">خطأ في تحميل الدفعات</option>'; }); }
+      }
+
+      /* Share one lazy request between every saved footer select in the same
+         material row. Without this cache, an output allocated across ten
+         batches would issue ten identical reads as soon as it rendered. */
+      function ensureOutputBatches_(i) {
+        var ready = OUTPUT_BATCHES[i] || [];
+        if (ready.length) return Promise.resolve(ready);
+        if (OUTPUT_BATCH_PROMISES[i]) return OUTPUT_BATCH_PROMISES[i];
+        var productId = String((MFG_OUTPUTS[i] && MFG_OUTPUTS[i].product_id) || '').trim();
+        if (!productId) return Promise.resolve([]);
+        OUTPUT_BATCH_PROMISES[i] = companyCall('get_valley_product_batches', { product_id: productId, mo_uid: MO_UID })
+          .then(function (r) {
+            if (!r || typeof r !== 'object') throw new Error('لم يُرجع الخادم بيانات الدفعات');
+            OUTPUT_BATCHES[i] = r.batches || [];
+            return OUTPUT_BATCHES[i];
+          })
+          .finally(function () { OUTPUT_BATCH_PROMISES[i] = null; });
+        return OUTPUT_BATCH_PROMISES[i];
       }
 
       /* ---------- WORK OPS (valley_manufacture_work_center) ---------- */
@@ -952,7 +1073,7 @@
         MFG_WORKOPS.push({ uid: '', work_center_id: '', operation_status: 'Pending', notes: '', start_time: '', end_time: '', last_pause_time: '', total_pause_duration: 0, actual_hours: '' });
         drawWorkOps();
       }
-      function removeWorkOp(i) { MFG_WORKOPS.splice(i, 1); drawWorkOps(); }
+      function removeWorkOp(i) { rememberDeleted_('work_ops', (MFG_WORKOPS[i] || {}).uid); MFG_WORKOPS.splice(i, 1); drawWorkOps(); }
       function setWorkOp(i, field, val) { MFG_WORKOPS[i][field] = val; }
       function clockWorkOp(i, command) {
         var w = MFG_WORKOPS[i];
@@ -1052,7 +1173,7 @@
         MFG_BYPRODUCTS.push({ uid: '', item: '', qty: '', transaction_code: '', total_cost: '' });
         drawByproducts();
       }
-      function removeByproduct(i) { MFG_BYPRODUCTS.splice(i, 1); drawByproducts(); }
+      function removeByproduct(i) { rememberDeleted_('byproducts', (MFG_BYPRODUCTS[i] || {}).uid); MFG_BYPRODUCTS.splice(i, 1); drawByproducts(); }
       function setByproduct(i, field, val) { MFG_BYPRODUCTS[i][field] = val; }
       function drawByproducts() {
         var tb = document.getElementById('byproducts-body'); if (!tb) return;
@@ -1113,6 +1234,8 @@
             var rQty = Math.round(num0(m.required_qty) * 1000) / 1000;
             MFG_OUTPUTS.push({ uid: '', product_id: pid, qty: rQty, cost_unit: '', total_cost: '', product_name: m.raw_material_name || '' });
             OUTPUT_FOOTERS.push([]);
+            OUTPUT_BATCHES.push([]);
+            OUTPUT_BATCH_PROMISES.push(null);
           }
         });
         var pending = allocateBatchesAll();
@@ -1122,23 +1245,35 @@
         var pids = MFG_OUTPUTS.map(function (o) { return o.product_id; });
         var hasManual = (OUTPUT_FOOTERS || []).some(function (frs) { return (frs || []).length; });
         if (hasManual && !window.confirm('جلب الوصفة سيستبدل الدفعات الحالية. متابعة؟')) return Promise.resolve();
-        OUTPUT_FOOTERS = MFG_OUTPUTS.map(function () { return []; });
-        if (!pids.filter(function (p) { return p; }).length) return Promise.resolve();
+        var previousFooters = MFG_OUTPUTS.map(function (_, i) { return (OUTPUT_FOOTERS[i] || []).slice(); });
+        var previousUidByBatch = previousFooters.map(function (rows) {
+          var m = {};
+          rows.forEach(function (f) { var k = String(f.item || '').trim(); if (k && f.uid && !m[k]) m[k] = f.uid; });
+          return m;
+        });
+        if (!pids.filter(function (p) { return p; }).length) {
+          previousFooters.forEach(function (rows) { rows.forEach(function (f) { rememberDeleted_('consumption', f.uid); }); });
+          OUTPUT_FOOTERS = MFG_OUTPUTS.map(function () { return []; });
+          return Promise.resolve();
+        }
         return companyCall('get_valley_product_batches_multi', { product_ids: pids, mo_uid: MO_UID }).then(function (r) {
           var byProduct = (r && r.batches_by_product) || {};
           MFG_OUTPUTS.forEach(function (o, i) {
             var batches = (byProduct[String(o.product_id)] || []).filter(function (b) { return Number(b.available) > 0; });
             OUTPUT_BATCHES[i] = byProduct[String(o.product_id)] || [];
-            var remaining = num0(o.qty), footers = [];
+            var remaining = num0(o.qty), footers = [], keptOld = {};
             batches.forEach(function (b) {
               if (remaining <= 0) return;
               var avail = Number(b.available) || 0;
               if (avail <= 0) return;
               var take = Math.min(remaining, avail);
               var uc = Number(b.unit_cost) || 0;
-              footers.push({ item: b.batch_uid, item_code: b.lot || b.batch_uid, qty: take, unit_cost: uc, total_cost: uc * take });
+              var oldUid = previousUidByBatch[i][String(b.batch_uid || '')] || '';
+              if (oldUid) keptOld[oldUid] = true;
+              footers.push({ uid: oldUid, item: b.batch_uid, item_code: b.lot || b.batch_uid, qty: take, unit_cost: uc, total_cost: uc * take });
               remaining -= take;
             });
+            previousFooters[i].forEach(function (f) { if (f.uid && !keptOld[f.uid]) rememberDeleted_('consumption', f.uid); });
             OUTPUT_FOOTERS[i] = footers;
           });
         });
@@ -1152,8 +1287,8 @@
              it from valley_current_products and ignores the payload's value, so
              a client without the cost grant (which has no unit_cost to send)
              saves exactly as correctly as one with it. */
-          var footers = (OUTPUT_FOOTERS[i] || []).filter(function (f) { return f.item; }).map(function (f) { return { item: f.item, item_code: f.item_code, qty: f.qty }; });
-          return { product_id: pid, qty: o.qty, footers: footers };
+          var footers = (OUTPUT_FOOTERS[i] || []).filter(function (f) { return f.item; }).map(function (f) { return { uid: f.uid || '', item: f.item, item_code: f.item_code, qty: f.qty }; });
+          return { uid: o.uid || '', product_id: pid, qty: o.qty, footers: footers };
         }).filter(function (o) { return o.product_id && num0(o.qty) > 0; });
         if (!outputs.length) { UI.toast && UI.toast('أضف خامة داخلة واحدة على الأقل', 'error'); return; }
         for (var si = 0; si < outputs.length; si++) {
@@ -1169,6 +1304,8 @@
 
         var payload = {
           mo_uid: MO_UID,
+          base_token: MFG_EDIT_TOKEN,
+          save_scope: MFG_SAVE_SCOPE,
           manufacture_date: getV_('f-date'),
           operation_type: getCombo_('f-op-type'),
           shift: getCombo_('f-shift'),
@@ -1180,9 +1317,17 @@
           mo_status: getV_('f-status'),
           manufacture_batch: getV_('f-batch'),
           outputs: outputs,
-          work_ops: MFG_WORKOPS.map(function (w) { return { uid: w.uid, work_center_id: w.work_center_id, operation_status: w.operation_status, notes: w.notes, start_time: w.start_time, last_pause_time: w.last_pause_time, end_time: w.end_time, actual_hours: w.actual_hours, total_pause_duration: w.total_pause_duration }; }),
-          byproducts: MFG_BYPRODUCTS.map(function (b, bi) { return { item: b.item || getCombo_('bp-item-' + bi), qty: b.qty, transaction_code: b.transaction_code, total_cost: b.total_cost }; }),
-          consumption: []
+          work_ops: MFG_WORKOPS.filter(function (w) { return String((w && w.work_center_id) || '').trim(); })
+            .map(function (w) { return { uid: w.uid, work_center_id: w.work_center_id, operation_status: w.operation_status, notes: w.notes, start_time: w.start_time, last_pause_time: w.last_pause_time, end_time: w.end_time, actual_hours: w.actual_hours, total_pause_duration: w.total_pause_duration }; }),
+          byproducts: MFG_BYPRODUCTS.map(function (b, bi) { return { uid: b.uid || '', item: b.item || getCombo_('bp-item-' + bi), qty: b.qty, transaction_code: b.transaction_code, total_cost: b.total_cost }; })
+            .filter(function (b) { return String(b.item || '').trim(); }),
+          consumption: [],
+          deleted_uids: {
+            outputs: MFG_DELETED_UIDS.outputs.slice(),
+            consumption: MFG_DELETED_UIDS.consumption.slice(),
+            work_ops: MFG_DELETED_UIDS.work_ops.slice(),
+            byproducts: MFG_DELETED_UIDS.byproducts.slice()
+          }
         };
         try { console.log('[MFGVIEW][save] outgoing payload:', JSON.stringify(payload)); } catch (eLog) { console.log('[MFGVIEW][save] outgoing payload (raw):', payload); }
         showLoading();
@@ -1194,7 +1339,7 @@
             load(true);
             if (window.confirm('تم حفظ أمر التصنيع. هل تريد إدخال بيانات التشغيل (الخطوات/الدفعات) الآن؟')) { switchTab('workops'); }
           })
-          .catch(function (e) { try { console.error('[MFGVIEW][save] FAILED:', (e && e.message) || e); } catch (eLog3) {} UI.toast && UI.toast((e && e.message) || 'فشل الحفظ', 'error'); })
+          .catch(function (e) { try { console.error('[MFGVIEW][save] FAILED:', (e && e.message) || e); } catch (eLog3) {} UI.toast && UI.toast((e && e.code === 'VERSION_CONFLICT' ? (e.message + ' — أعد تحميل الصفحة') : ((e && e.message) || 'فشل الحفظ')), 'error'); })
           .finally(function () { hideLoading(); });
       }
 
@@ -1224,5 +1369,3 @@
   </script>
 </body>
 </html>
-
-

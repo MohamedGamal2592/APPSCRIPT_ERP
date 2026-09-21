@@ -58,7 +58,12 @@
 
   <script>
   (function () {
-    var ORDERS = [], RECIPE_OPTIONS = [], PRODUCT_OPTIONS = [], ENUMS = {};
+    var ORDERS = [], RECIPE_OPTIONS = [], PRODUCT_OPTIONS = [], FILTER_PRODUCT_OPTIONS = [], ENUMS = {};
+    /* List filters: blank means no constraint (all data). F persists across
+       table rebuilds, so save/delete/background refreshes keep the filter. */
+    var F = { from: '', to: '', shift: '', operation_type: '', produced_product: '', product_category: '', manufacture_batch: '' };
+    var FILTER_OPTIONS = { shift: [], operation_types: [], categories: [], batches: [] };
+    var FILTERS_SIG = '';
     /* The live PagedTable handle, reassigned on every load(). Row actions patch
        through it instead of refetching the page. */
     var TABLE = null;
@@ -91,8 +96,24 @@
       });
       document.getElementById('vf-mfg-content').innerHTML =
         '<div class="vf-card"><div class="vf-card-header"><h3>أوامر التصنيع</h3>' +
+          '<div class="no-print" style="display:flex;gap:8px;align-items:center;">' +
           (CAN_WRITE ? '<button class="btn btn-primary" onclick="MFG_PAGE.openNewPage()">اضافة امر تصنيع</button>' : '') +
+          '<a class="btn btn-outline" href="' + scriptUrl + '?action=vf_mfg_client_report&sessionToken=' + SESSION_TOKEN + '" onclick="UIC.navTo(event, this.getAttribute(\'href\'))">تقرير تصنيع العملاء</a>' +
+          '</div>' +
         '</div><div class="vf-card-body">' +
+          '<div class="vf-filter-bar" style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;margin-bottom:12px;">' +
+            '<div class="form-field" style="margin:0;"><label class="form-label">من تاريخ</label><input type="date" id="ff-from" class="input" value=""></div>' +
+            '<div class="form-field" style="margin:0;"><label class="form-label">إلى تاريخ</label><input type="date" id="ff-to" class="input" value=""></div>' +
+            '<div class="form-field" style="margin:0;min-width:150px;"><label class="form-label">الوردية</label><span id="ff-shift-wrap"></span></div>' +
+            '<div class="form-field" style="margin:0;min-width:170px;"><label class="form-label">نوع العملية</label><span id="ff-operation-wrap"></span></div>' +
+            '<div class="form-field" style="margin:0;min-width:180px;"><label class="form-label">المنتج المنتج</label><span id="ff-product-wrap"></span></div>' +
+            '<div class="form-field" style="margin:0;min-width:150px;"><label class="form-label">فئة المنتج</label><span id="ff-category-wrap"></span></div>' +
+            '<div class="form-field" style="margin:0;min-width:150px;"><label class="form-label">التشغيلة</label><span id="ff-batch-wrap"></span></div>' +
+            '<div style="display:flex;gap:8px;">' +
+              '<button class="btn btn-primary" onclick="MFG_PAGE.applyFilters()">🔍 بحث</button>' +
+              '<button class="btn btn-outline" onclick="MFG_PAGE.clearFilters()">مسح</button>' +
+            '</div>' +
+          '</div>' +
           '<div id="mo-table"><p class="vf-text-muted">جاري التحميل...</p></div>' +
         '</div></div>';
       load();
@@ -111,24 +132,33 @@
           /* rowKey lets a row action patch its own row instead of refetching
              the page. COL_STATUS / COL_ACTIONS index into the row below. */
           rowKey: 'unique_id',
-          headers: ['كود الأمر', 'المنتج المنتج', 'نوع العملية', 'الوردية', 'التاريخ',
+          headers: ['كود الأمر', 'المنتج المنتج', 'فئة المنتج', 'نوع العملية', 'الوردية', 'التاريخ',
                     { label: 'المتوقع', numeric: true }, { label: 'المصنع', numeric: true }, 'الحالة', ''],
           pageSize: 100,
           emptyText: 'لا توجد أوامر تصنيع',
           onRendered: function (tid) { try { UIC.initTableSort(tid); } catch (e) {} },
           fetcher: function (offset, limit) {
-            return companyCall('get_valley_mfg_orders', { offset: offset, limit: limit });
+            return companyCall('get_valley_mfg_orders', {
+              offset: offset, limit: limit,
+              from: F.from, to: F.to, shift: F.shift, operation_type: F.operation_type,
+              produced_product: F.produced_product,
+              product_category: F.product_category,
+              manufacture_batch: F.manufacture_batch
+            });
           },
           onFirst: function (r) {
             RECIPE_OPTIONS = r.recipe_options || [];
             PRODUCT_OPTIONS = r.product_options || [];
+            FILTER_PRODUCT_OPTIONS = r.filter_product_options || PRODUCT_OPTIONS;
             ENUMS = r.enums || {};
+            buildFilterCombos(r.filter_options);
             try { clearTimeout(watchdog); if (!quiet) hideLoading(); } catch (e) {}
           },
           mapRow: function (o) {
             return [
               '<b>' + esc(o.transaction_code || o.id) + '</b>',
               esc(prodLabel(o.produced_product)),
+              esc(o.product_category || '-'),
               esc(o.operation_type),
               esc(o.shift),
               fmtDate(o.manufacture_date),
@@ -142,13 +172,69 @@
       } else { try { clearTimeout(watchdog); if (!quiet) hideLoading(); } catch (e) {} }
     }
 
+    /* ---------- LIST FILTERS (blank = all data) ---------- */
+    function labeledOpts_(pairs) {
+      return [{ value: '', label: 'الكل' }].concat((pairs || []).map(function(o){
+        return Array.isArray(o) ? { value: o[0], label: o[1] } : o;
+      }));
+    }
+    function filterCombo_(wrapId, key, opts, current) {
+      var wrap = document.getElementById(wrapId);
+      if (!wrap) return;
+      if (window.UIC && UIC.combo) {
+        wrap.innerHTML = UIC.combo({ key: key, options: opts, value: current || '' });
+      } else {
+        wrap.innerHTML = '<select id="' + key + '" class="input">' + opts.map(function(o){
+          return '<option value="' + esc(String(o.value)) + '"' + (String(o.value) === String(current || '') ? ' selected' : '') + '>' + esc(o.label) + '</option>';
+        }).join('') + '</select>';
+      }
+    }
+    /* (Re)builds the four searchable dropdowns, preserving the active
+       selection. Skipped when the option set is unchanged so background
+       refreshes never clobber what the user picked. */
+    function buildFilterCombos(serverOpts) {
+      serverOpts = serverOpts || {};
+      var shifts = (serverOpts.shift && serverOpts.shift.length ? serverOpts.shift : ((ENUMS && ENUMS.shift) || [])).slice();
+      var operationTypes = serverOpts.operation_types || [];
+      var cats = serverOpts.categories || [];
+      var batches = serverOpts.batches || [];
+      var sig = JSON.stringify([shifts, operationTypes, cats, batches, FILTER_PRODUCT_OPTIONS]);
+      if (sig === FILTERS_SIG) return;
+      FILTERS_SIG = sig;
+      FILTER_OPTIONS = { shift: shifts, operation_types: operationTypes, categories: cats, batches: batches };
+      var pairs = function(vs){ return (vs || []).map(function(v){ return [v, v]; }); };
+      filterCombo_('ff-shift-wrap', 'ff-shift', labeledOpts_(pairs(shifts)), F.shift);
+      filterCombo_('ff-operation-wrap', 'ff-operation', labeledOpts_(pairs(operationTypes)), F.operation_type);
+      filterCombo_('ff-product-wrap', 'ff-product', labeledOpts_(FILTER_PRODUCT_OPTIONS), F.produced_product);
+      filterCombo_('ff-category-wrap', 'ff-category', labeledOpts_(cats), F.product_category);
+      filterCombo_('ff-batch-wrap', 'ff-batch', labeledOpts_(pairs(batches)), F.manufacture_batch);
+    }
+    function readFilterInputs() {
+      var g = function(id){ var el = document.getElementById(id); return el ? String(el.value || '').trim() : ''; };
+      F.from = g('ff-from'); F.to = g('ff-to');
+      F.shift = g('ff-shift'); F.operation_type = g('ff-operation'); F.produced_product = g('ff-product');
+      F.product_category = g('ff-category'); F.manufacture_batch = g('ff-batch');
+    }
+    function applyFilters() {
+      readFilterInputs();
+      if (F.from && F.to && F.from > F.to) { UIC.toast('«من تاريخ» بعد «إلى تاريخ» — صحّح النطاق.', 'error'); return; }
+      load();
+    }
+    function clearFilters() {
+      F = { from: '', to: '', shift: '', operation_type: '', produced_product: '', product_category: '', manufacture_batch: '' };
+      ['ff-from', 'ff-to'].forEach(function(id){ var el = document.getElementById(id); if (el) el.value = ''; });
+      FILTERS_SIG = '';
+      buildFilterCombos({ shift: FILTER_OPTIONS.shift, operation_types: FILTER_OPTIONS.operation_types, categories: FILTER_OPTIONS.categories, batches: FILTER_OPTIONS.batches });
+      load();
+    }
+
     function statusPill(s, c) { return UIC.statusPill(s, c); }
 
     /* The two cells a row action can change, built from mo_status alone.
        mapRow above renders them, and changeStatus below re-renders exactly
        these two on the row that changed — so the two can never drift into
        showing different things for the same status. */
-    var COL_STATUS = 7, COL_ACTIONS = 8;
+    var COL_STATUS = 8, COL_ACTIONS = 9;
     function statusCellOf(st) {
       var isLocked = st === 'Locked';
       var label = isLocked ? 'مقفل' : (st === 'In Progress' ? 'قيد التنفيذ' : 'مسودة');
@@ -182,6 +268,8 @@
         .then(function (res) {
           ORDERS = res[0].orders || [];
           var order = res[1].order;
+          MFG_EDIT_TOKEN = res[1].edit_token || '';
+          MFG_SAVE_SCOPE = res[1].save_scope || ['header', 'outputs', 'consumption'];
           openModal(order, res[1].consumption, res[1].outputs);
         })
         .catch(function (e) { UIC.toast((e && e.message) || 'خطأ في تحميل الأمر', 'error'); })
@@ -262,6 +350,8 @@
 
       MFG_OUTPUTS = [];
       OUTPUT_FOOTERS = {};
+      MFG_DELETED_UIDS = { outputs: [], consumption: [] };
+      if (!isEdit) { MFG_EDIT_TOKEN = ''; MFG_SAVE_SCOPE = ['header', 'outputs', 'consumption']; }
       CONSUMPTION_DRAFT = existingConsumption ? existingConsumption.slice() : [];
 
       /* load existing outputs with footers */
@@ -301,6 +391,19 @@
     /* ---------- OUTPUTS with footer child table ---------- */
     var MFG_OUTPUTS = [];
     var OUTPUT_FOOTERS = {};
+    var MFG_DELETED_UIDS = { outputs: [], consumption: [] };
+    /* Schema-free edit token for the loaded MO (list scope). Returned as
+       base_token/save_scope so the server can reject stale editors without a
+       version column. Reset for new orders. */
+    var MFG_EDIT_TOKEN = '';
+    var MFG_SAVE_SCOPE = ['header', 'outputs', 'consumption'];
+
+    function rememberDeleted_(section, uid) {
+      uid = String(uid || '').trim();
+      if (!uid) return;
+      var list = MFG_DELETED_UIDS[section] || (MFG_DELETED_UIDS[section] = []);
+      if (list.indexOf(uid) === -1) list.push(uid);
+    }
 
     function addOutput(pre) {
       pre = pre || {};
@@ -313,10 +416,17 @@
     }
 
     function removeOutput(i) {
+      rememberDeleted_('outputs', (MFG_OUTPUTS[i] || {}).uid);
+      (OUTPUT_FOOTERS[i] || []).forEach(function (f) { rememberDeleted_('consumption', f.unique_id || f.uid); });
       MFG_OUTPUTS.splice(i, 1);
-      delete OUTPUT_FOOTERS[i];
+      /* Reindex footer rows with the outputs: keys above the removed row shift
+         down by one, so saved UIDs stay attached to their own output. */
       var newF = {};
-      MFG_OUTPUTS.forEach(function (_, ni) { if (OUTPUT_FOOTERS[i + ni] !== undefined) newF[ni] = OUTPUT_FOOTERS[i + ni]; });
+      Object.keys(OUTPUT_FOOTERS).forEach(function (k) {
+        var ki = Number(k);
+        if (ki === i) return;
+        newF[ki > i ? ki - 1 : ki] = OUTPUT_FOOTERS[k];
+      });
       OUTPUT_FOOTERS = newF;
       drawOutputs();
     }
@@ -361,7 +471,11 @@
     }
 
     function removeFooterRow(outputIdx, footerIdx) {
-      if (OUTPUT_FOOTERS[outputIdx]) OUTPUT_FOOTERS[outputIdx].splice(footerIdx, 1);
+      if (OUTPUT_FOOTERS[outputIdx]) {
+        var f = OUTPUT_FOOTERS[outputIdx][footerIdx] || {};
+        rememberDeleted_('consumption', f.unique_id || f.uid);
+        OUTPUT_FOOTERS[outputIdx].splice(footerIdx, 1);
+      }
       drawOutputs();
     }
 
@@ -484,9 +598,13 @@
         var footers = (OUTPUT_FOOTERS[i] || []).map(function (f, fi) {
           var fItem = document.getElementById('ft-item-' + i + '-' + fi);
           var fQty = document.getElementById('ft-qty-' + i + '-' + fi);
-          return { item: fItem ? fItem.value : '', qty: fQty ? fQty.value : '' };
+          /* Preserve the loaded footer UID through redraws, FIFO changes,
+             validation failures and modal state: without it the server would
+             delete and replace an unchanged row. */
+          return { uid: f.unique_id || f.uid || '', item: fItem ? fItem.value : (f.item || ''), qty: fQty ? fQty.value : (f.qty || '') };
         }).filter(function (f) { return f.item; });
-        return { product_id: el ? el.value : '', qty: qEl ? qEl.value : '', footers: footers };
+        /* Preserve the loaded output UID (same reason as footers above). */
+        return { uid: o.uid || '', product_id: el ? el.value : (o.product_id || ''), qty: qEl ? qEl.value : (o.qty || ''), footers: footers };
       }).filter(function (o) { return o.product_id && num0(o.qty) > 0; });
       if (!outputs.length) { UIC.toast('أضف منتج ناتج واحد على الأقل', 'error'); return; }
 
@@ -541,6 +659,8 @@
 
       var payload = {
         mo_uid: EDIT_MO_UID(),
+        base_token: MFG_EDIT_TOKEN,
+        save_scope: MFG_SAVE_SCOPE,
         manufacture_date: getV_('f-date'),
         operation_type: getCombo_('f-op-type'),
         shift: getCombo_('f-shift'),
@@ -549,9 +669,13 @@
         manufactured_qty: getV_('f-manufactured'),
         actual_qty: getV_('f-actual'),
         recipe_id: getCombo_('f-recipe'),
-        mo_status: getHid_('f-status'),
+          mo_status: getHid_('f-status'),
           outputs: outputs,
-          consumption: consPayload
+          consumption: consPayload,
+          deleted_uids: {
+            outputs: MFG_DELETED_UIDS.outputs.slice(),
+            consumption: MFG_DELETED_UIDS.consumption.slice()
+          }
         };
         try { console.log('[MFG][save] outgoing payload:', JSON.stringify({ outputs: outputs, consumption: consPayload })); } catch (eLog) {}
         UI.showSpinner();
@@ -561,7 +685,12 @@
           UIC.toast((r && r.message) || 'تم الحفظ بنجاح', 'success');
           load(true);
         })
-        .catch(function (e) { UIC.toast((e && e.message) || 'فشل الحفظ', 'error'); })
+        .catch(function (e) {
+          /* Stale-editor conflict is a proven non-mutation: reload the list so
+             the user reopens the order on fresh state instead of retrying. */
+          if (e && e.code === 'VERSION_CONFLICT') { UIC.toast((e.message || 'تعارض') + ' — أعيد تحميل القائمة', 'error'); load(true); return; }
+          UIC.toast((e && e.message) || 'فشل الحفظ', 'error');
+        })
         .finally(function () { UI.hideSpinner(); });
     }
 
@@ -850,6 +979,7 @@
       tabBtn: tabBtn,
       openDetail: openDetail, openNewPage: openNewPage, save: save,
       changeStatus: changeStatus, remove: removeMo,
+      applyFilters: applyFilters, clearFilters: clearFilters,
       switchTab: function (paneId) {
         ['tab-main-extra', 'tab-cons', 'tab-workops', 'tab-byproducts', 'tab-outputs'].forEach(function (id) {
           var el = document.getElementById(id);
@@ -880,5 +1010,3 @@
   </script>
 </body>
 </html>
-
-

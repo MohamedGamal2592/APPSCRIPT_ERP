@@ -57,9 +57,12 @@
     fetchSalaries();
   }
 
+  var LOADED_ALL = false;
+  function toggleLoadAll() { LOADED_ALL = !LOADED_ALL; fetchSalaries(); }
+
   function fetchSalaries(quiet) {
     if (!quiet) UI.showSpinner();
-    companyCall('get_employee_salary')
+    companyCall('get_employee_salary', LOADED_ALL ? { loadAll: true } : {})
       .then(function (r) {
         window.__rows = r.rows || [];
         window.__empOptions = r.employee_options || [];
@@ -97,11 +100,13 @@
     body.innerHTML = (CAN_WRITE
       ? '<div style="display:flex;justify-content:flex-end;margin-bottom:12px;"><button class="btn btn-primary" onclick="openAddModal()">+ تسجيل راتب</button></div>'
       : '') +
+      UIC.showAllBar({ loadedAll: LOADED_ALL, showAll: 'toggleLoadAll()', showLatest: 'toggleLoadAll()' }) +
       UIC.dataTable('salary-table', {
         /* [RT-1] The list endpoint caps at the newest rows unless `loadAll` is
            passed, and the search box filters only what is in memory — so the
            table says which records the box actually searches. */
-        truncated: true,
+        truncated: !LOADED_ALL,
+        showAll: 'toggleLoadAll()',
         title: 'رواتب الموظفين',
         headers: headers,
         rows: rows,

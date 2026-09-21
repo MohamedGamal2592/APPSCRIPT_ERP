@@ -14,6 +14,9 @@
     .scan-wrap { max-width: 520px; margin: 0 auto; padding: 4px 4px 32px; }
     .scan-card { background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: var(--radius-lg); padding: 20px; box-shadow: var(--shadow-sm); }
     .scan-big-btn { width: 100%; padding: 16px; font-size: 16px; font-weight: 800; border-radius: 12px; }
+    .scan-alt-btn { width: 100%; padding: 12px; font-size: 14px; font-weight: 700; border-radius: 12px; margin-top: 8px; }
+    .scan-alt-btn.suggested { animation: scan-pulse 1.1s ease-in-out 3; }
+    @keyframes scan-pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(37, 99, 235, 0); } 50% { box-shadow: 0 0 0 4px var(--brand-primary); } }
     .scan-reader { width: 100%; margin: 12px 0; border-radius: 10px; overflow: hidden; }
     .scan-manual { display: flex; gap: 8px; margin-top: 12px; }
     .scan-manual input { flex: 1; font-size: 15px; padding: 12px; }
@@ -21,8 +24,7 @@
     .scan-product-header { text-align: center; margin-bottom: 14px; }
     .scan-product-header .name { font-size: 18px; font-weight: 800; color: var(--text-main); }
     .scan-product-header .unit { color: var(--text-muted); font-size: 13px; }
-    .scan-avail { text-align: center; background: var(--bg-muted, #f5f5f5); border-radius: 10px; padding: 10px; margin-bottom: 14px; font-size: 14px; }
-    .scan-avail .value { font-weight: 800; font-size: 18px; }
+    .scan-pick { margin-top: 14px; }
     .scan-total-row { display: flex; justify-content: space-between; align-items: center; background: var(--bg-muted, #f5f5f5); border-radius: 10px; padding: 12px 14px; margin: 14px 0; font-weight: 800; }
     .scan-total-row .val { font-size: 20px; color: var(--brand-primary); }
     .scan-actions { display: flex; gap: 10px; margin-top: 16px; }
@@ -50,7 +52,7 @@
   var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
   var CAN_WRITE = UIC.canAdd_(); var CAN_FULL = UIC.canFull_();
   var WAREHOUSES = ['1', '2', '3', '4', '5', 'شبرا'];
-  var CONTAINER_TYPES = ['شيكارة', 'كرتونة', 'برميل', 'بستلة'];
+  var CONTAINER_TYPES = ['شيكارة', 'كرتونة', 'برميل', 'بستلة', 'جونية'];
 
   function companyCall(moduleAction, data) {
     return API.call('company_action', {
@@ -129,11 +131,27 @@
   function renderScanStep() {
     var el = document.getElementById('scan-step');
     if (!el) return;
+    /* Once the live camera failed with a permission error this session, the
+       button is dropped entirely — the operator never re-hits that wall on
+       every scan. A new browser session restores it. */
+    var camBlocked = false;
+    try { camBlocked = sessionStorage.getItem('tc_scan_cam_blocked') === '1'; } catch (e) {}
     el.innerHTML =
-      '<button class="btn btn-primary scan-big-btn" onclick="startCamera()">📷 مسح بالكاميرا</button>' +
+      '<button type="button" class="btn btn-primary scan-big-btn" id="photo-scan-btn" onclick="pickScanPhoto()">🖼️ مسح من صورة</button>' +
+      (camBlocked ? '' : '<button type="button" class="btn btn-outline scan-alt-btn" onclick="startCamera()">📷 مسح بالكاميرا</button>') +
+      '<input type="file" id="scan-file" accept="image/*" capture="environment" style="display:none;">' +
       '<div id="scan-reader" class="scan-reader" style="display:none;"></div>' +
+      '<div id="scan-file-reader" style="display:none;"></div>' +
       '<div class="scan-manual">' +
         '<input id="scan-input" class="input" type="text" placeholder="أو امسح/اكتب كود الصنف ثم Enter" autofocus autocomplete="off">' +
+      '</div>' +
+      '<div class="scan-pick">' +
+        UIC.combo({
+          key: 'product_pick',
+          label: 'اختيار صنف بالاسم',
+          placeholder: 'ابحث عن الصنف بالاسم...',
+          options: (window.__productOptions || []).map(function (o) { return { value: o.value, label: o.label }; })
+        }) +
       '</div>' +
       '<div class="scan-hint">كود الصنف مطبوع أسفل الباركود أرقاماً فقط (مثال: 12)، والملصقات القديمة بصيغة TCP-12 تُقرأ أيضاً — قارئ الباركود المحمول أو لوحة المفاتيح يعملان في نفس الحقل.</div>';
     var input = document.getElementById('scan-input');
@@ -146,11 +164,43 @@
         if (v) handleScannedCode(v);
       });
     }
+    /* The photo path's file input: value is reset before use so picking the
+       SAME image twice still fires change (a common retry pattern). */
+    var fileInput = document.getElementById('scan-file');
+    if (fileInput) {
+      fileInput.addEventListener('change', function () {
+        var f = this.files && this.files[0];
+        this.value = '';
+        if (f) scanFromImage(f);
+      });
+    }
+    /* comboPick/comboBlur dispatch a change event on the combo's hidden input
+       (UI_Components.html) — the hook that turns a name search into a product
+       selection without touching the component itself. */
+    var pick = document.getElementById('product_pick');
+    if (pick) {
+      pick.addEventListener('change', function () {
+        var pid = Number(this.value);
+        if (!Number.isInteger(pid) || pid <= 0) return;
+        var opt = (window.__productOptions || []).find(function (o) { return Number(o.value) === pid; });
+        if (opt) selectProduct(pid, opt.label, opt.per_unit);
+      });
+    }
   }
 
+  /* ── Live camera — kept where the browser allows it ────────────────────── */
   function startCamera() {
     if (cameraActive || typeof Html5Qrcode === 'undefined') {
       if (typeof Html5Qrcode === 'undefined') UIC.toast('تعذر تحميل مكتبة الكاميرا', 'error');
+      return;
+    }
+    /* Secure-context / support pre-check: a browser without getUserMedia
+       (or an insecure embedding) would only fail after a confusing round
+       trip — steer the user to the permission-free photo path instead. */
+    if (!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia)) {
+      rememberCameraBlocked();
+      UIC.toast('هذا المتصفح لا يدعم الكاميرا المباشرة هنا — استخدم زر «مسح من صورة» بالأسفل.', 'error');
+      suggestPhotoScan();
       return;
     }
     var readerEl = document.getElementById('scan-reader');
@@ -161,7 +211,7 @@
         formatsToSupport: [Html5QrcodeSupportedFormats.CODE_128]
       });
     } catch (e) {
-      UIC.toast('تعذر تشغيل الكاميرا: ' + ((e && e.message) || e), 'error');
+      UIC.toast(cameraErrorMessage(e), 'error');
       readerEl.style.display = 'none';
       return;
     }
@@ -175,9 +225,82 @@
       },
       function onScanFailure() { /* no code in this frame — expected continuously while aiming */ }
     ).then(function () { cameraActive = true; }).catch(function (err) {
-      UIC.toast('تعذر الوصول للكاميرا: ' + ((err && err.message) || err), 'error');
+      UIC.toast(cameraErrorMessage(err), 'error');
       readerEl.style.display = 'none';
     });
+  }
+
+  /* A denied/stuck camera is never a dead end: every failure message points
+     here, and the button pulses so the user lands on the working path in one
+     tap instead of fighting browser settings. Permission-class failures are
+     also remembered for the session, so the camera button stops being
+     offered at all (see renderScanStep). */
+  function rememberCameraBlocked() {
+    try { sessionStorage.setItem('tc_scan_cam_blocked', '1'); } catch (e) {}
+  }
+
+  function cameraErrorMessage(err) {
+    var name = (err && err.name) || '';
+    var msg = String((err && err.message) || err || '');
+    if (name === 'NotAllowedError' || /permission|denied|dismissed|notallowed/i.test(msg)) {
+      rememberCameraBlocked();
+      suggestPhotoScan();
+      return 'المتصفح يمنع الكاميرا لهذا الموقع — يمكن السماح بها لاحقاً من إعدادات الموقع (أيقونة القفل بجانب الرابط)، أو استخدم زر «مسح من صورة» بالأسفل الآن.';
+    }
+    if (name === 'NotFoundError' || /no camera|not found|device/i.test(msg)) {
+      suggestPhotoScan();
+      return 'لا توجد كاميرا متصلة — استخدم زر «مسح من صورة» أو أدخل الكود يدوياً.';
+    }
+    suggestPhotoScan();
+    return 'تعذر الوصول للكاميرا — استخدم زر «مسح من صورة» أو أدخل الكود يدوياً.';
+  }
+
+  function suggestPhotoScan() {
+    var btn = document.getElementById('photo-scan-btn');
+    if (!btn) return;
+    btn.classList.remove('suggested');
+    void btn.offsetWidth; // restart the pulse animation
+    btn.classList.add('suggested');
+  }
+
+  /* ── Scan from a photo — the permission-free path, identical on Windows,
+     Android and iOS. capture="environment" opens the NATIVE camera app on
+     phones (its own permission flow, the one users already understand) and
+     the file picker on Windows; html5-qrcode then decodes CODE_128 from the
+     image file. getUserMedia is never involved. A fresh instance per scan
+     because renderScanStep recreates the reader div on every step return. */
+  function pickScanPhoto() {
+    var fileInput = document.getElementById('scan-file');
+    if (!fileInput) return;
+    fileInput.value = '';
+    fileInput.click();
+  }
+
+  function scanFromImage(file) {
+    if (!file) return;
+    if (typeof Html5Qrcode === 'undefined') {
+      UIC.toast('تعذر تحميل مكتبة قراءة الباركود', 'error');
+      return;
+    }
+    var inst;
+    try {
+      inst = new Html5Qrcode('scan-file-reader', {
+        formatsToSupport: [Html5QrcodeSupportedFormats.CODE_128]
+      });
+    } catch (e) {
+      UIC.toast('تعذر تهيئة قارئ الصور: ' + ((e && e.message) || e), 'error');
+      return;
+    }
+    inst.scanFile(file, false)
+      .then(function (decodedText) {
+        handleScannedCode(decodedText);
+      })
+      .catch(function () {
+        UIC.toast('لم يتم العثور على باركود واضح في الصورة — أعد التصوير بحيث يظهر الباركود كبيراً ومستقيماً وملامئاً للصورة', 'error');
+      })
+      .then(function () {
+        try { inst.clear().catch(function () {}); } catch (e) {}
+      });
   }
 
   function stopCamera() {
@@ -203,7 +326,7 @@
       UIC.toast('لم يتم العثور على صنف بهذا الكود', 'error');
       return;
     }
-    selectProduct(pid, opt.label);
+    selectProduct(pid, opt.label, opt.per_unit);
   }
 
   /* ── System qty (رصيد السيستم) — one shared fetch, reused across scans ──── */
@@ -217,60 +340,43 @@
   }
 
   /* ── Step 2: count entry ──────────────────────────────────────────────── */
-  function selectProduct(pid, label) {
-    currentProduct = { id: pid, label: label };
+  /* The system balance is NOT fetched here anymore — the operator counts
+     first and presses تأكيد الكمية; the balance loads on the confirm step
+     (loadConfirmAvailability_) so the count screen never waits on it. */
+  function selectProduct(pid, label, perUnit) {
+    currentProduct = { id: pid, label: label, perUnit: perUnit };
     currentAvail = null;
     showStep('count');
     renderCountStep();
+    /* Silent prefetch while the operator is still entering quantities:
+       ensureSystemQty caches ONE shared promise for the whole page, so the
+       fetch started here is awaited again on the confirm step — by the time
+       تأكيد الكمية is pressed the map is usually resolved and رصيد السيستم
+       appears instantly instead of spinning. No UI here: the loading state
+       belongs to the confirm step alone, and a prefetch failure surfaces
+       there too (loadConfirmAvailability re-awaits the same promise). */
     ensureSystemQty().then(function (map) {
-      if (!currentProduct || currentProduct.id !== pid) return; // reset happened meanwhile
+      if (!currentProduct || currentProduct.id !== pid || currentAvail != null) return;
       currentAvail = (map && map[pid] !== undefined) ? Number(map[pid]) : null;
-      renderAvailability();
-    }).catch(function () {
-      if (!currentProduct || currentProduct.id !== pid) return;
-      currentAvail = null;
-      renderAvailability(true);
-    });
-  }
-
-  function retryAvailability() {
-    renderAvailability(false, true);
-    var pid = currentProduct && currentProduct.id;
-    ensureSystemQty(true).then(function (map) {
-      if (!currentProduct || currentProduct.id !== pid) return;
-      currentAvail = (map && map[pid] !== undefined) ? Number(map[pid]) : null;
-      renderAvailability();
-    }).catch(function () {
-      if (!currentProduct || currentProduct.id !== pid) return;
-      currentAvail = null;
-      renderAvailability(true);
-    });
-  }
-
-  function renderAvailability(failed, loading) {
-    var el = document.getElementById('scan-avail-box');
-    if (!el) return;
-    if (loading) { el.innerHTML = 'جارٍ تحميل رصيد السيستم...'; return; }
-    if (currentAvail == null) {
-      el.innerHTML = (failed ? 'تعذر جلب رصيد السيستم لهذا الصنف. ' : 'لا يوجد رصيد سيستم مسجل لهذا الصنف. ') +
-        '<button type="button" class="btn btn-outline" style="margin-inline-start:8px;" onclick="retryAvailability()">إعادة المحاولة</button>';
-      return;
-    }
-    el.innerHTML = 'رصيد السيستم الحالي: <span class="value">' + esc(currentAvail) + '</span>';
+    }).catch(function () { /* prefetch failure is handled on the confirm step */ });
   }
 
   function renderCountStep() {
     var el = document.getElementById('count-step');
     if (!el) return;
+    /* Pre-filled from the product master (products.number_of_cartons_bags,
+       delivered with get_stock_scan_options) but still editable — a physical
+       count can disagree with the master. */
+    var perUnitVal = (currentProduct && currentProduct.perUnit !== undefined && currentProduct.perUnit !== null)
+      ? String(currentProduct.perUnit) : '';
     el.innerHTML =
       '<div class="scan-product-header">' +
         '<div class="name">' + esc(currentProduct.label) + '</div>' +
       '</div>' +
-      '<div id="scan-avail-box" class="scan-avail">جارٍ تحميل رصيد السيستم...</div>' +
       '<form id="scan-form">' +
-        UIC.field({ key: 'container_type', label: 'نوع العبوة', type: 'select', required: true, options: CONTAINER_TYPES, placeholder: 'اختر نوع العبوة...' }) +
-        UIC.field({ key: 'unit_count', label: 'عدد العبوات', type: 'number', step: '1', required: true, placeholder: 'مثال: 40' }) +
-        UIC.field({ key: 'amount_per_unit', label: 'الكمية بالعبوة الواحدة', type: 'number', step: '0.01', required: true, placeholder: 'مثال: 25' }) +
+        UIC.field({ key: 'container_type', label: 'نوع العبوات او الشكل الخارجي', type: 'select', required: true, options: CONTAINER_TYPES, placeholder: 'اختر نوع العبوة...' }) +
+        UIC.field({ key: 'amount_per_unit', label: 'الكمية بالعبوة الواحدة او الشكل', type: 'number', step: '0.01', required: true, placeholder: 'مثال: 25', value: perUnitVal }) +
+        UIC.field({ key: 'unit_count', label: 'عدد العبوات او الشكل', type: 'number', step: '1', required: true, placeholder: 'مثال: 40' }) +
         UIC.field({ key: 'loose_amount', label: 'الكمية الفرط', type: 'number', step: '0.01', value: '0', required: true }) +
         UIC.field({ key: 'warehouse', label: 'المخزن', type: 'select', required: true, options: WAREHOUSES, placeholder: 'اختر المخزن...' }) +
         UIC.field({ key: 'date', label: 'التاريخ', type: 'date', value: todayStr(), required: true }) +
@@ -315,10 +421,6 @@
 
   function goToConfirm() {
     if (!UIC.validateForm('scan-form')) return;
-    if (currentAvail == null) {
-      UIC.toast('لا يمكن المتابعة بدون رصيد السيستم — أعد تحميل الرصيد أعلاه', 'error');
-      return;
-    }
     var data = UIC.collectForm('scan-form');
     var total = computeTotal();
     if (!(total > 0)) {
@@ -333,11 +435,63 @@
       warehouse: data.warehouse,
       date: data.date,
       amount: total,
-      available_amount: currentAvail,
+      available_amount: null, // filled by loadConfirmAvailability once the system balance arrives
       notes: notes
     };
     showStep('confirm');
     renderConfirmStep();
+    loadConfirmAvailability();
+  }
+
+  /* ── System balance on the confirm step: loads AFTER تأكيد الكمية ────── */
+  function loadConfirmAvailability(forceRefresh) {
+    renderAvailRow('loading');
+    var pid = currentProduct && currentProduct.id;
+    ensureSystemQty(forceRefresh).then(function (map) {
+      if (!currentProduct || currentProduct.id !== pid || !pendingEntry) return; // reset happened meanwhile
+      currentAvail = (map && map[pid] !== undefined) ? Number(map[pid]) : null;
+      applyAvail();
+    }).catch(function () {
+      if (!currentProduct || currentProduct.id !== pid || !pendingEntry) return;
+      currentAvail = null;
+      applyAvail(true);
+    });
+  }
+
+  function retryConfirmAvailability() { loadConfirmAvailability(true); }
+
+  function applyAvail(failed) {
+    var saveBtn = document.getElementById('confirm-save-btn');
+    if (currentAvail == null || isNaN(currentAvail)) {
+      // add_stock_scan (addStockRevision_) requires a numeric available_amount,
+      // so the save stays locked until a balance is on screen.
+      pendingEntry.available_amount = null;
+      renderAvailRow(failed ? 'failed' : 'missing');
+      if (saveBtn) saveBtn.disabled = true;
+      return;
+    }
+    pendingEntry.available_amount = currentAvail;
+    renderAvailRow('loaded');
+    if (saveBtn && CAN_WRITE) saveBtn.disabled = false;
+  }
+
+  function renderAvailRow(kind) {
+    var availEl = document.getElementById('confirm-avail-val');
+    var diffEl = document.getElementById('confirm-diff-val');
+    if (!availEl) return;
+    if (kind === 'loading') {
+      availEl.innerHTML = 'جارٍ تحميل رصيد السيستم...';
+      if (diffEl) diffEl.textContent = '—';
+      return;
+    }
+    if (currentAvail == null || isNaN(currentAvail)) {
+      availEl.innerHTML = (kind === 'failed' ? 'تعذر جلب رصيد السيستم لهذا الصنف. ' : 'لا يوجد رصيد سيستم مسجل لهذا الصنف. ') +
+        '<button type="button" class="btn btn-outline" style="margin-inline-start:8px;" onclick="retryConfirmAvailability()">إعادة المحاولة</button>';
+      if (diffEl) diffEl.textContent = '—';
+      return;
+    }
+    availEl.textContent = currentAvail;
+    if (diffEl && pendingEntry) diffEl.textContent = diffText(pendingEntry.amount, currentAvail);
   }
 
   function renderConfirmStep() {
@@ -347,13 +501,13 @@
     el.innerHTML =
       '<div class="scan-product-header"><div class="name">' + esc(currentProduct.label) + '</div></div>' +
       '<div class="confirm-row"><span class="label">الكمية المدخلة</span><span class="val">' + esc(entry.amount) + '</span></div>' +
-      '<div class="confirm-row"><span class="label">رصيد السيستم</span><span class="val">' + esc(entry.available_amount) + '</span></div>' +
-      '<div class="confirm-row"><span class="label">الفرق</span><span class="val">' + esc(diffText(entry.amount, entry.available_amount)) + '</span></div>' +
+      '<div class="confirm-row"><span class="label">رصيد السيستم</span><span class="val" id="confirm-avail-val">جارٍ تحميل رصيد السيستم...</span></div>' +
+      '<div class="confirm-row"><span class="label">الفرق</span><span class="val" id="confirm-diff-val">—</span></div>' +
       '<div class="confirm-row"><span class="label">المخزن</span><span class="val">' + esc(entry.warehouse) + '</span></div>' +
       '<div class="confirm-row"><span class="label">التفاصيل</span><span class="val">' + esc(entry.notes) + '</span></div>' +
       '<div class="scan-actions">' +
         '<button type="button" class="btn btn-outline" id="confirm-back-btn" onclick="backToCount()">رجوع للتعديل</button>' +
-        '<button type="button" class="btn btn-primary" id="confirm-save-btn" onclick="confirmSave()"' + (CAN_WRITE ? '' : ' disabled') + '>تأكيد الحفظ</button>' +
+        '<button type="button" class="btn btn-primary" id="confirm-save-btn" onclick="confirmSave()" disabled>تأكيد الحفظ</button>' +
       '</div>' +
       '<div id="save-status" class="save-status"></div>';
     if (!CAN_WRITE) UIC.toast('غير مصرح بالحفظ', 'error');
@@ -389,6 +543,10 @@
 
   function confirmSave() {
     if (!CAN_WRITE || !pendingEntry) { UIC.toast('غير مصرح', 'error'); return; }
+    if (pendingEntry.available_amount == null || isNaN(pendingEntry.available_amount)) {
+      UIC.toast('لا يمكن الحفظ بدون رصيد السيستم — أعد المحاولة أعلاه', 'error');
+      return;
+    }
     /* NOTE (save-rollout run): this page and its s24 suite belong to another
        effort — its `companyCall('add_stock_scan', …)` shape is pinned by
        s24_stock_scan.js ("the page calls all three new actions by name"), so

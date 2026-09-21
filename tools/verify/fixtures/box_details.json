@@ -1,6 +1,6 @@
 {
   "_about": {
-    "purpose": "Test corpus for the transaction_details parser in Box_Analysis_Engine.js (BOX_ANALYSIS_PLAN.md §4).",
+    "purpose": "Test corpus for the transaction_details parser in Company_TopChemical_Actions.js (BOX_ANALYSIS_PLAN.md §4).",
     "READ_THIS_FIRST": "Exactly ONE entry in this file is a real production string (origin: 'real'). Every other entry is SYNTHETIC — written by hand to exercise a documented failure mode. A parser that scores 100% here has proved that it handles the failure modes somebody imagined, and nothing at all about production text. The real coverage number can only come from running the page over live rows; that measurement is a blocked-on-owner item in NEXT_STEPS_OWNER.md.",
     "origin_values": {
       "real": "Observed in the production table regular_box_movement.",

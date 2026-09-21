@@ -117,7 +117,7 @@ function templateLiteralCss(src) {
 /**
  * CSS assembled from quoted string literals joined with `+`.
  *
- * Both 03_Security.js's theme builders and UIC.HistorySide write their
+ * Both Code.js's theme builders and UIC.HistorySide write their
  * stylesheets this way:
  *
  *     var css = '#history-side{position:fixed;…}' +

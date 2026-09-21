@@ -50,8 +50,13 @@
       return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
     }
 
-    var ROWS = [], EMP_OPTIONS = [], VAC_INDEX_OPTIONS = [], ALLOC_MAP = {};
+    var ROWS = [], EMP_OPTIONS = [], VAC_INDEX_OPTIONS = [], ALLOC_MAP = {}, ALLOC_LABEL = {};
     var VAC_INDEX_MAP = {}, REQUIRE_ALLOC_MAP = {};
+    /* Latest-PAGE_LIMIT window by default; عرض الكل loads the full history.
+       UIC.dataTable paginates >50 rows itself, like the other tables. */
+    var SHOW_ALL = false;
+    var PAGE_LIMIT = 20;
+    var TOTAL = 0;
 
     function load() {
       UIC.appShell('vf-root', {
@@ -70,12 +75,23 @@
        to confirm it. */
     function fetchData(quiet) {
       if (!quiet) UIC.readSkeleton();
-      companyCall('get_vacations_data')
+      companyCall('get_vacations_data', SHOW_ALL ? { loadAll: true } : { limit: PAGE_LIMIT })
         .then(function (r) {
           ROWS = r.rows || [];
+          TOTAL = Number((r && r.total) || ROWS.length) || 0;
           EMP_OPTIONS = r.employee_options || [];
           VAC_INDEX_OPTIONS = r.vacation_index_options || [];
           ALLOC_MAP = r.allocation_options_map || {};
+          ALLOC_LABEL = r.allocation_label_map || {};
+          /* Fallback for older server responses: flatten per-employee option
+             labels into a unique_id -> label map for the table column. */
+          if (!Object.keys(ALLOC_LABEL).length && ALLOC_MAP) {
+            Object.keys(ALLOC_MAP).forEach(function (eid) {
+              (ALLOC_MAP[eid] || []).forEach(function (a) {
+                if (a && a.value) ALLOC_LABEL[String(a.value)] = a.label;
+              });
+            });
+          }
           VAC_INDEX_MAP = {};
           REQUIRE_ALLOC_MAP = {};
           VAC_INDEX_OPTIONS.forEach(function (o) {
@@ -93,26 +109,27 @@
     function render() {
       var body = document.getElementById('vf-vac-content');
       if (!body) return;
-      var html = (CAN_WRITE
-        ? '<div style="display:flex;justify-content:flex-end;margin-bottom:12px;"><button class="btn btn-primary" onclick="openAddModal()">+ إضافة إجازة</button></div>'
-        : '');
+      var html = '<div style="display:flex;justify-content:flex-end;gap:8px;margin-bottom:12px;">' +
+        (SHOW_ALL ? '<button class="btn btn-outline" onclick="VAC_PAGE.showLatest()">عرض الأحدث (' + PAGE_LIMIT + ')</button>' : '') +
+        (CAN_WRITE ? '<button class="btn btn-primary" onclick="openAddModal()">+ إضافة إجازة</button>' : '') +
+        '</div>';
       var rows = ROWS.map(function (r) {
         var vacName = VAC_INDEX_MAP[String(r.vacation_type)] || r.vacation_type_name || r.vacation_type || '';
         var halfDay = (r.vacation_half_day == 0.5 || r.vacation_half_day === '0.5' || r.vacation_half_day === true) ? 'نعم' : 'لا';
         var attachCell = r.attachment
-          ? '<button class="btn btn-outline" style="padding:3px 8px;font-size:11px;" onclick="viewAttachment(\'' + esc(r.attachment).replace(/\'/g, "\\\'") + '\')">📎 عرض / View</button>'
+          ? '<button class="btn btn-outline" style="padding:3px 8px;font-size:11px;" onclick="viewAttachment(\'' + esc(r.attachment).replace(/\'/g, "\\\'") + '\',\'' + esc(r.unique_id||'').replace(/\'/g, "\\\'") + '\')">📎 عرض / View</button>'
           : '—';
         var rowActions = UIC.actionBtns([
           { label: '👁️ عرض / View', onclick: "viewVacation('" + esc(r.unique_id||r.id).replace(/\'/g, "\\\'") + "')" },
-          r.attachment ? { label: '📎 عرض المرفق / View Attachment', onclick: "viewAttachment('" + esc(r.attachment).replace(/\'/g, "\\\'") + "')" } : null,
-          CAN_WRITE ? { label: '✏️ تعديل / Edit', onclick: "openAddModal()" } : null,
+          r.attachment ? { label: '📎 عرض المرفق / View Attachment', onclick: "viewAttachment('" + esc(r.attachment).replace(/\'/g, "\\\'") + "','" + esc(r.unique_id||'').replace(/\'/g, "\\\'") + "')" } : null,
+          IS_SUPER_ADMIN ? { label: '✏️ تعديل / Edit', onclick: "openEditModal('" + esc(r.unique_id||'').replace(/\'/g, "\\\'") + "')" } : null,
           IS_SUPER_ADMIN ? { label: '🗑️ حذف / Delete', color: '#dc2626', onclick: "deleteVacation('" + esc(r.unique_id||r.id).replace(/\'/g, "\\\'") + "')" } : null,
           { label: '🖨️ طباعة / Print', onclick: "printVacation('" + esc(r.unique_id||r.id).replace(/\'/g, "\\\'") + "')" }
         ].filter(Boolean));
         return {
           emp_id: r.emp_id || '',
           vacation_type: vacName,
-          allocation_id: r.allocation_id || '—',
+          allocation_id: (r.allocation_id != null && String(r.allocation_id) !== '' && ALLOC_LABEL[String(r.allocation_id)]) ? ALLOC_LABEL[String(r.allocation_id)] : (r.allocation_id || '—'),
           start_date: fmtDate(r.start_date),
           end_date: fmtDate(r.end_date),
           duration_days: r.duration_days != null ? r.duration_days : '',
@@ -126,7 +143,8 @@
         /* [RT-1] The list endpoint caps at the newest rows unless `loadAll` is
            passed, and the search box filters only what is in memory — so the
            table says which records the box actually searches. */
-        truncated: true,
+        truncated: !SHOW_ALL,
+        showAll: SHOW_ALL ? null : 'VAC_PAGE.showAll()',
         title: 'الإجازات',
         headers: [
           { key: 'emp_id', label: 'الكود' },
@@ -147,19 +165,21 @@
       UIC.initTableSort('vac-table');
     }
 
-    function viewAttachment(ref) {
-      if (!ref) return;
-      UIC.openDownload(scriptUrl + '?download=attachment&page=vf_hr_vacations&ref=' +
-        encodeURIComponent(ref) + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN),
-      'فتح المرفق');
+    function viewAttachment(ref, id) {
+      if (!ref && (id == null || String(id) === '')) return;
+      UIC.openDownload(scriptUrl + '?download=attachment&page=vf_hr_vacations&ref=' + encodeURIComponent(ref || '') + ((id != null && String(id) !== '') ? '&id=' + encodeURIComponent(id) : '') + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN),
+        'فتح المرفق');
     }
     function viewVacation(uid){
       var r = ROWS.find(function(x){ return String(x.unique_id||x.id)===String(uid); });
       if(!r) return;
-      var attBtn = r.attachment ? '<button class="btn btn-outline" style="padding:6px 12px;" onclick="viewAttachment(\'' + esc(r.attachment).replace(/\'/g, "\\\'") + '\')">📎 عرض — ' + esc(String(r.attachment).split('/').pop()) + '</button>' : 'لا يوجد';
+      var attBtn = r.attachment ? '<button class="btn btn-outline" style="padding:6px 12px;" onclick="viewAttachment(\'' + esc(r.attachment).replace(/\'/g, "\\\'") + '\',\'' + esc(r.unique_id||'').replace(/\'/g, "\\\'") + '\')">📎 عرض — ' + esc(String(r.attachment).split('/').pop()) + '</button>' : 'لا يوجد';
+      var allocLabel = (r.allocation_id != null && String(r.allocation_id) !== '' && ALLOC_LABEL[String(r.allocation_id)]) ? ALLOC_LABEL[String(r.allocation_id)] : (r.allocation_id || '-');
       var body = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 16px;font-size:14px;">' +
         '<div><b>الموظف:</b> ' + esc(r.emp_id) + '</div>' +
         '<div><b>النوع:</b> ' + esc(VAC_INDEX_MAP[String(r.vacation_type)]||r.vacation_type) + '</div>' +
+        '<div><b>التخصيص:</b> ' + esc(allocLabel) + '</div>' +
+        '<div><b>المدة (يوم):</b> ' + esc(r.duration_days) + '</div>' +
         '<div><b>من:</b> ' + fmtDate(r.start_date) + '</div><div><b>إلى:</b> ' + fmtDate(r.end_date) + '</div>' +
         '<div><b>السبب:</b> ' + esc(r.vacation_reason||'-') + '</div>' +
         '<div style="grid-column:1/-1;display:flex;gap:10px;align-items:center;"><b>المرفق:</b> ' + attBtn + '</div></div>';
@@ -176,31 +196,67 @@
     }
     function downloadAttach(ref) { return viewAttachment(ref); }
 
-    function openAddModal() {
+    /* Row-edit repair (Stage 4): explicit create/edit mode. VAC_EDIT.uid holds
+       the edited unique_id, VAC_EDIT.att the retained attachment pair, plus
+       the old allocation/duration for the edit-aware balance guard. */
+    var VAC_EDIT = { uid: null, att: null, oldAlloc: '', oldDuration: 0 };
+
+    function openAddModal(prefill, title) {
+      prefill = prefill || {};
+      VAC_EDIT.uid = null;
+      VAC_EDIT.att = null;
+      VAC_EDIT.oldAlloc = '';
+      VAC_EDIT.oldDuration = 0;
+      var empOpts = EMP_OPTIONS.slice();
+      if (prefill.emp_id && !empOpts.some(function (o) { return String(o.value) === String(prefill.emp_id); })) {
+        empOpts.push({ value: prefill.emp_id, label: String(prefill.emp_id) + ' (غير نشط)' });
+      }
+      var typeOpts = VAC_INDEX_OPTIONS.slice();
+      if (prefill.vacation_type && !typeOpts.some(function (o) { return String(o.value) === String(prefill.vacation_type); })) {
+        typeOpts.push({ value: prefill.vacation_type, label: (prefill.vacation_type_name || prefill.vacation_type) + ' (غير نشط)' });
+      }
       var body =
         '<form id="vf-vac-form">' +
         UIC.combo({ key: 'emp_id', label: 'الموظف', required: true,
-          options: EMP_OPTIONS, placeholder: 'اختر الموظف...' }) +
+          options: empOpts, placeholder: 'اختر الموظف...', value: prefill.emp_id || '' }) +
         UIC.combo({ key: 'vacation_type', label: 'نوع الإجازة', required: true,
-          options: VAC_INDEX_OPTIONS, placeholder: 'اختر النوع...' }) +
+          options: typeOpts, placeholder: 'اختر النوع...', value: prefill.vacation_type || '' }) +
         '<div id="alloc-wrapper" style="display:none;">' +
         UIC.combo({ key: 'allocation_id', label: 'التخصيص', required: false,
           options: [], placeholder: 'اختر التخصيص...' }) +
         '</div>' +
-        UIC.field({ key: 'vacation_half_day', label: 'نصف يوم', type: 'checkbox' }) +
-        UIC.field({ key: 'start_date', label: 'من تاريخ', type: 'date', required: true, value: todayStr() }) +
-        UIC.field({ key: 'end_date', label: 'إلى تاريخ', type: 'date', required: true, value: todayStr() }) +
-        UIC.field({ key: 'duration_days', label: 'عدد الأيام (محسوب)', type: 'number', value: '1' }) +
-        UIC.field({ key: 'duration_days_other', label: 'أيام أخرى', type: 'number', value: '0' }) +
-        UIC.field({ key: 'amount_other', label: 'مبلغ إضافي', type: 'number', value: '0' }) +
-        UIC.field({ key: 'vacation_reason', label: 'سبب الإجازة', type: 'textarea', required: true }) +
-        UIC.fileField({ key: 'attachment', label: 'المرفق', accept: '.pdf,.doc,.docx,.png,.jpg,.jpeg' }) +
+        UIC.field({ key: 'vacation_half_day', label: 'نصف يوم', type: 'checkbox', value: prefill.vacation_half_day ? 'true' : '' }) +
+        UIC.field({ key: 'start_date', label: 'من تاريخ', type: 'date', required: true, value: prefill.start_date || todayStr() }) +
+        UIC.field({ key: 'end_date', label: 'إلى تاريخ', type: 'date', required: true, value: prefill.end_date || todayStr() }) +
+        UIC.field({ key: 'duration_days', label: 'عدد الأيام (محسوب)', type: 'number', value: (prefill.duration_days != null && prefill.duration_days !== '' ? prefill.duration_days : '1') }) +
+        UIC.field({ key: 'vacation_reason', label: 'سبب الإجازة', type: 'textarea', required: true, value: prefill.vacation_reason || '' }) +
+        UIC.fileField({ key: 'attachment', label: prefill._editMode ? 'استبدال المرفق (اختياري)' : 'المرفق', accept: '.pdf,.doc,.docx,.png,.jpg,.jpeg', instant: true, sheet: 'valley_employee_vacations', field: 'attachment', formModalId: 'vf-vac-modal' }) +
         '</form>';
       UIC.openModal('vf-vac-modal', {
-        title: 'إضافة إجازة',
+        title: title || 'إضافة إجازة',
         body: body,
         onSave: 'saveVacation()'
       });
+      try { UIC.trackDirty('vf-vac-form'); } catch (eT) {}
+      try {
+        if (prefill._editMode && prefill._attRef && UIC.UploadSet) {
+          var vr = (VAC_EDIT.att && VAC_EDIT.att.ref) ? VAC_EDIT.att.ref : prefill._attRef;
+          var vi = (VAC_EDIT.att && VAC_EDIT.att.id) ? VAC_EDIT.att.id : '';
+          if (vr) UIC.UploadSet.setBound('attachment', vr, vi);
+        }
+      } catch (eB) {}
+      if (prefill._editMode && prefill._attRef) {
+        try {
+          var host = document.getElementById('vf-vac-form');
+          if (host) {
+            var note = document.createElement('div');
+            note.style.cssText = 'font-size:12px;color:var(--text-muted);margin-top:4px;';
+            note.textContent = 'المرفق الحالي: ' + String(prefill._attRef).split('/').pop() + ' — اترك حقل الملف فارغاً للاحتفاظ به';
+            host.appendChild(note);
+          }
+        } catch (e) {}
+      }
+      var _editPrefill = (prefill && prefill._editMode) ? prefill : null;
       setTimeout(function () {
         var empSel = document.getElementById('emp_id');
         var vacSel = document.getElementById('vacation_type');
@@ -208,7 +264,10 @@
         var endEl = document.getElementById('end_date');
         var halfChk = document.getElementById('vacation_half_day');
         var durEl = document.getElementById('duration_days');
-        if (durEl) durEl.disabled = true;
+        /* Keep the calculated value in the form payload, but do not allow the
+           user to override it. Disabled controls are commonly omitted when a
+           form is serialized; readOnly controls are still submitted. */
+        if (durEl) durEl.readOnly = true;
 
         function updateAllocVisibility() {
           var empId = empSel ? empSel.value : '';
@@ -248,7 +307,47 @@
         if (startEl) startEl.onchange = calcDuration;
         if (endEl) endEl.onchange = calcDuration;
         if (halfChk) halfChk.onchange = calcDuration;
+        /* Edit prefill applied after widgets exist: checkbox state, reason
+           text, allocation visibility + stored selection, duration. */
+        if (_editPrefill) {
+          try {
+            if (halfChk) halfChk.checked = !!_editPrefill.vacation_half_day;
+            var reasonEl = document.getElementById('vacation_reason');
+            if (reasonEl && _editPrefill.vacation_reason != null) reasonEl.value = _editPrefill.vacation_reason;
+            updateAllocVisibility();
+            if (_editPrefill.allocation_id) {
+              var allocSel = document.getElementById('allocation_id');
+              if (allocSel) allocSel.value = _editPrefill.allocation_id;
+            }
+            calcDuration();
+          } catch (e) {}
+        }
       }, 200);
+    }
+
+    function openEditModal(uid) {
+      if (!UIC.canFull_()) { UIC.toast('غير مصرح', 'error'); return; }
+      var r = ROWS.find(function (x) { return String(x.unique_id) === String(uid); });
+      if (!r) { UIC.toast('السجل غير موجود — تم تحديث القائمة', 'error'); fetchData(true); return; }
+      VAC_EDIT.uid = String(r.unique_id);
+      VAC_EDIT.att = { ref: r.attachment || '', id: r.attachment_id || '' };
+      VAC_EDIT.oldAlloc = (r.allocation_id != null ? String(r.allocation_id) : '');
+      VAC_EDIT.oldDuration = Number(r.duration_days) || 0;
+      openAddModal({
+        _editMode: true,
+        _attRef: r.attachment || '',
+        emp_id: r.emp_id,
+        vacation_type: r.vacation_type,
+        vacation_type_name: VAC_INDEX_MAP[String(r.vacation_type)] || '',
+        allocation_id: (r.allocation_id != null ? String(r.allocation_id) : ''),
+        vacation_half_day: (r.vacation_half_day == 0.5 || r.vacation_half_day === '0.5' || r.vacation_half_day === true),
+        start_date: fmtDate(r.start_date),
+        end_date: fmtDate(r.end_date),
+        duration_days: (r.duration_days != null ? r.duration_days : ''),
+        duration_days_other: (r.duration_days_other != null ? r.duration_days_other : ''),
+        amount_other: (r.amount_other != null ? r.amount_other : ''),
+        vacation_reason: r.vacation_reason || ''
+      }, 'تعديل إجازة');
     }
 
     window.saveVacation = function () {
@@ -259,50 +358,83 @@
       if (!d.start_date) { UIC.toast('تاريخ البداية مطلوب', 'error'); return; }
       if (!d.end_date) { UIC.toast('تاريخ النهاية مطلوب', 'error'); return; }
       if (!d.vacation_reason || !d.vacation_reason.trim()) { UIC.toast('سبب الإجازة مطلوب', 'error'); return; }
-      d.vacation_half_day = !!d.vacation_half_day;
-      d.duration_days = parseFloat(d.duration_days) || 0;
+      /* UIC.collectForm reads input.value; a checkbox value is "on" even when
+         unchecked. Read the checked state explicitly so an untouched checkbox
+         is stored as false. */
+      var halfDayInput = document.getElementById('vacation_half_day');
+      var durationInput = document.getElementById('duration_days');
+      d.vacation_half_day = !!(halfDayInput && halfDayInput.checked);
+      d.duration_days = parseFloat(durationInput ? durationInput.value : d.duration_days) || 0;
 
       var wrap = document.getElementById('alloc-wrapper');
       var needAlloc = wrap && wrap.style.display !== 'none';
       if (needAlloc && !d.allocation_id) { UIC.toast('التخصيص مطلوب', 'error'); return; }
       if (!needAlloc) d.allocation_id = '';
+      /* Client-side cap guard (server re-checks authoritatively): the
+         requested duration must fit the selected allocation's remaining. In
+         edit mode the old row's days return to its allocation first, mirroring
+         the server rule. */
+      if (needAlloc && d.allocation_id) {
+        var __empAllocs = ALLOC_MAP[String(d.emp_id)] || [];
+        var __sel = null;
+        for (var __ai = 0; __ai < __empAllocs.length; __ai++) {
+          if (String(__empAllocs[__ai].value) === String(d.allocation_id)) { __sel = __empAllocs[__ai]; break; }
+        }
+        var __remaining = __sel ? Number(__sel.remaining) : NaN;
+        if (VAC_EDIT.uid && __sel && String(d.allocation_id) === VAC_EDIT.oldAlloc) __remaining += VAC_EDIT.oldDuration;
+        if (__sel && __remaining < d.duration_days) {
+          UIC.toast('المدة المطلوبة (' + d.duration_days + ' يوم) تتجاوز الرصيد المتبقي (' + __remaining + ' يوم) لهذا التخصيص', 'error');
+          return;
+        }
+      }
 
-      UI.showSpinner('جاري الحفظ...');
-      var formEl = document.getElementById('vf-vac-form');
-      var fileInput = formEl ? formEl.querySelector('input[type="file"]') : null;
-      var filePromise = (fileInput && fileInput.files && fileInput.files[0])
-        ? new Promise(function (resolve, reject) {
-            var reader = new FileReader();
-            reader.onerror = function () { reject(new Error('خطأ في قراءة الملف')); };
-            reader.onload = function () {
-              var b64 = String(reader.result || '').split(',')[1] || '';
-              companyCall('add_upload_file', { sheet: 'valley_employee_vacations', filename: fileInput.files[0].name, base64: b64 })
-                .then(function (res) {
-                  if (res && res.status === 'success') resolve(res.reference);
-                  else reject(new Error((res && res.message) || 'خطأ في رفع الملف'));
-                })
-                .catch(function (err) { reject(new Error((err && err.message) || 'خطأ في رفع الملف')); });
-            };
-            reader.readAsDataURL(fileInput.files[0]);
-          })
-        : Promise.resolve('');
-      filePromise.then(function (ref) {
-        if (ref) d.attachment = ref;
-        return companyCall('add_vacation', d);
-      }).then(function (r) {
+      var doSaveVac = function () {
+        /* Option A instant-upload: pre-bound ref from dataset/VAC_EDIT. */
+        var formEl = document.getElementById('vf-vac-form');
+        var fileInput = formEl ? formEl.querySelector('input[type="file"]') : null;
+        try {
+          var bound = (fileInput && UIC.UploadSet) ? UIC.UploadSet.getBound(fileInput) : null;
+          if (bound && bound.ref) {
+            d.attachment = bound.ref;
+            if (bound.id) d.attachment_id = bound.id;
+          } else if (VAC_EDIT.uid && VAC_EDIT.att) {
+            if (VAC_EDIT.att.ref) d.attachment = VAC_EDIT.att.ref;
+            if (VAC_EDIT.att.id) d.attachment_id = VAC_EDIT.att.id;
+          }
+        } catch (e) {}
+        if (VAC_EDIT.uid) d.unique_id = VAC_EDIT.uid;
+        return companyCall(VAC_EDIT.uid ? 'update_vacation' : 'add_vacation', d);
+      };
+      var afterVac = function (r) {
         UIC.closeModal('vf-vac-modal');
         UIC.toast((r && r.message) || 'تم الحفظ', 'success');
         if (r && r.record) {
-          var RECENT_LIMIT = 10;
           var idx3 = ROWS.findIndex(function(x){ return String(x.unique_id)===String(r.record.unique_id); });
           if (idx3!==-1) ROWS[idx3]=r.record; else ROWS.unshift(r.record);
-          if (ROWS.length>RECENT_LIMIT) ROWS.pop();
+          /* In latest-window mode the view holds PAGE_LIMIT rows; in عرض الكل
+             mode it holds everything, so nothing is dropped. */
+          if (!SHOW_ALL && ROWS.length>PAGE_LIMIT) ROWS.pop();
           render();
         } else { fetchData(); }
-      }).catch(function (e) {
-        UIC.toast((e && e.message) ? e.message : 'خطأ في حفظ الإجازة', 'error');
-      }).finally(function () { UI.hideSpinner(); });
+      };
+      var runVac = function () {
+        doSaveVac().then(afterVac).catch(function (e) {
+          UIC.toast((e && e.message) ? e.message : 'خطأ في حفظ الإجازة', 'error');
+        });
+      };
+      try {
+        if (window.UIC && UIC.UploadSet && UIC.UploadSet.isBusy('vf-vac-modal')) {
+          UIC.toast('جاري رفع الملف... يرجى الانتظار', 'warning');
+          UIC.UploadSet.awaitPending('vf-vac-modal').then(runVac);
+          return;
+        }
+      } catch (e2) {}
+      runVac();
     };
+
+    function showAll() { SHOW_ALL = true; fetchData(); }
+    function showLatest() { SHOW_ALL = false; fetchData(); }
+    window.VAC_PAGE = { showAll: showAll, showLatest: showLatest };
 
     /* Another device's change to this page arrives on its own. The poll
        reads timestamps from cache, never a spreadsheet, and stands down
@@ -319,4 +451,3 @@
   </script>
 </body>
 </html>
-

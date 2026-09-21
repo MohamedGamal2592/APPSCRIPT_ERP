@@ -22,12 +22,12 @@ const fs = require('fs');
 const path = require('path');
 
 const ROOT = path.resolve(__dirname, '..', '..');
-const E = require(path.join(ROOT, 'Box_Analysis_Engine.js'));
+const E = require(path.join(ROOT, 'Company_TopChemical_Actions.js'));
 const read = function (f) { return fs.readFileSync(path.join(ROOT, f), 'utf8'); };
 
 const PAGE = read('Company_TopChemical_BoxAnalysis.html');
 const ACTIONS = read('Company_TopChemical_Actions.js');
-const CONNECTOR = read('DbLive_Connector.js');
+const CONNECTOR = read('Company_TopChemical_Actions.js');
 
 let failures = 0;
 function ok(cond, label, extra) {

@@ -1,3 +1,5509 @@
+/* ========================================================================
+ * Code.js — shared runtime (single deployed shared source)
+ * Table of contents:
+ * 1. Configuration and registry bootstrap
+ * 2. Storage, schema, Firestore and system store
+ * 3. Generic data access and policy engines
+ * 4. Security and authorization
+ * 5. Administration and generic themes
+ * 6. Generic DB Viewer infrastructure
+ * 7. Routing, rendering and artifact delivery
+ * 8. Telemetry and logging
+ * 9. Backup, retention and runtime operations
+ * ======================================================================== */
+
+/* ===================== 1. CONFIGURATION / REGISTRY ===================== */
+/**
+ * shared Code.js section
+ * RESPONSIBILITY: CONFIG constants and the empty mutable COMPANY_REGISTRY = {}.
+ * No business logic. Loaded first (numeric prefix + filePushOrder).
+ */
+
+const CONFIG = {
+  SESSION_EXPIRY_HOURS: 12,
+  AUTH_SPREADSHEET_ID: '1CmPxWAt8DYbXovgeofHpqe5MVaz1dQCzpqJvWP00HOM',
+  // System data is Firestore-backed in the release build. The project/database
+  // and environment are Script Properties, never client configuration.
+  SYSTEM_STORAGE_BACKEND: 'firestore',
+  // Bootstrap only the linked production script. A copied or staging script
+  // has a different ID and must configure FIRESTORE_PROJECT_ID explicitly.
+  FIRESTORE_PROJECT_IDS_BY_SCRIPT: {
+    '1cQVRHYv7PltoPKV7RgkrdvLjVQHtrDLlRiWbY5Nd9P5UrY0SFnPYCCZM': 'erp-project-3cae0'
+  },
+  FIRESTORE_DATABASE_ID: '(default)',
+  ERP_ENVIRONMENT: 'production',
+  SESSION_SALT: 'erp-salt-2024',
+  MAX_CONCURRENT_SESSIONS: 5,
+  BACKUP_FOLDER_ID: '',   // <-- SET to a Drive folder ID before running migration batches (batch0_preflight warns if empty)
+  CACHE_SESSION_SECONDS: 360,
+  // Authority caches are invalidated by the authority GENERATION (see
+  // authGeneration_ in shared Code.js section), not by expiry. These TTLs are now only
+  // an upper bound on how long a generation's payload may occupy the cache.
+  // Shortening them does NOT make the system fresher — it only adds sheet reads.
+  CACHE_MATRIX_SECONDS: 21600,       // was 120
+  CACHE_THEME_SECONDS: 21600,
+  CACHE_LOGO_SECONDS: 21600,
+  CACHE_GENERAL_SECONDS: 600,
+  CACHE_KILLSWITCH_SECONDS: 21600,   // was 15
+  // The user directory (email -> name/role/company/status) is keyed by the
+  // generation too; an admin saving a user bumps it, so this TTL is a ceiling
+  // on cache occupancy, not the freshness mechanism.
+  CACHE_USER_DIR_SECONDS: 21600,
+
+  // Worst-case staleness when NOTHING bumps the generation — i.e. a direct edit
+  // in the AUTH spreadsheet made while the installable onEdit trigger is missing
+  // or broken. Folded into the generation as a time bucket, so it is a hard
+  // ceiling and not a hope. START AT 300. Raise to 3600 only after the owner has
+  // confirmed the onAuthSheetEdit trigger is installed and firing.
+  AUTH_STALENESS_CEILING_SECONDS: 300,
+
+  // A kill-switch read that FAILED must never earn the long TTL — caching a
+  // fail-open default for six hours would hide a real shutdown.
+  CACHE_AUTH_FAILREAD_SECONDS: 15,
+  // F-07: how often a session's last_activity is written back to ERP_Sessions.
+  // Each write is a full read + full-row write of the shared AUTH spreadsheet,
+  // per active user, so at 30s it was a hot spot under concurrent load.
+  // last_activity is a soft "last seen" field; 5-minute staleness is harmless.
+  SESSION_TOUCH_THROTTLE_SECONDS: 300,
+  LOGIN_LOCKOUT_MAX_ATTEMPTS: 5,
+  LOGIN_LOCKOUT_TTL_SECONDS: 900,
+  // ── Retention (Phase 5, F-12 / F-13) ──────────────────────────────────────
+  // How many months of ERP_Record_History and SystemLog stay in the LIVE tab.
+  // Older rows move to dated archive tabs in the same spreadsheet — same columns,
+  // nothing is deleted. THIS IS THE ONLY PLACE THE PERIOD IS DEFINED.
+  //
+  // *** 24 IS AN ASSUMPTION, NOT A DECISION. *** The retention period is an
+  // audit/business question (Q2 in the investigation) that was never answered.
+  // Change this one number if 24 months is wrong; nothing else needs editing.
+  ARCHIVE_RETENTION_MONTHS: 24,
+  // TableEngine cache (spec §2.2 Tier B)
+  TABLE_CACHE_TTL_SECONDS: 600,
+  TABLE_CACHE_MAX_CHUNKS: 50,
+  TABLE_CACHE_CHUNK_SIZE: 90000
+};
+
+/**
+ * Staging switch (Phase 0, Step 2). AUTH_SPREADSHEET_ID is the ONLY hardcoded
+ * spreadsheet id in the project — every company database is resolved at runtime
+ * from ERP_Companies.company_sheet_link — so redirecting this one value points
+ * the whole system at a copied dataset.
+ *
+ * Resolution order: Script Property 'AUTH_SPREADSHEET_ID', else the literal
+ * above. Production therefore needs NO property set: the fallback is the live
+ * id, and staging sets the property. That way identical source can be pushed to
+ * both projects and a staging id can never be committed into production code.
+ *
+ * The lookup is memoised per execution, so it costs at most one PropertiesService
+ * call per request and only when the id is first used.
+ */
+(function () {
+  var literalAuthId = CONFIG.AUTH_SPREADSHEET_ID;
+  var resolved = null;
+  Object.defineProperty(CONFIG, 'AUTH_SPREADSHEET_ID', {
+    enumerable: true,
+    configurable: true,
+    get: function () {
+      if (resolved === null) {
+        resolved = literalAuthId;
+        try {
+          var override = PropertiesService.getScriptProperties().getProperty('AUTH_SPREADSHEET_ID');
+          if (override && String(override).trim()) resolved = String(override).trim();
+        } catch (e) { /* properties unavailable — keep the literal */ }
+      }
+      return resolved;
+    }
+  });
+})();
+
+let COMPANY_REGISTRY = {};
+
+/**
+ * Unified system messages — single source of truth (§5.4).
+ * Constants only, lives in shared Code.js section. Injected to client via include helper.
+ * SYSTEM_OFF must stay byte-identical to the kill-switch message ('عطل في السيستم' used live;
+ * spec requires 'عطل في النظام' — we expose both and alias SYSTEM_OFF to the canonical spec string
+ * while preserving the live check via check via isSystemEnabled_ string-agnostic flag).
+ */
+const ERP_MESSAGES = {
+  SYSTEM_OFF: 'عطل في النظام',
+  SYSTEM_OFF_LEGACY: 'عطل في السيستم',
+  NOT_AUTHORIZED: 'غير مصرح لك بالوصول',
+  SESSION_EXPIRED: 'انتهت الجلسة، يرجى تسجيل الدخول مرة أخرى'
+};
+
+// Tunable for ERPFlow (§3.8) — minimum overlay lifetime in ms. 300-1000 allowed, default 600.
+const ERP_FLOW_MIN_MS = 600;
+
+/**
+ * shared Code.js section
+ * RESPONSIBILITY: registerCompany_(key, config) — the ONE function that populates
+ * COMPANY_REGISTRY, plus getAllPages_() used by the router.
+ * No business logic. Loaded second.
+ */
+
+let _companiesInitialized_ = false;
+
+function ensureCompaniesRegistered_() {
+  if (_companiesInitialized_) return COMPANY_REGISTRY;
+  /* Company action files register their document validators while their IIFEs
+   * are being evaluated. registerDocValidator_ normalizes the document type
+   * through companyPolicies_(), which can reach this function before all four
+   * Registry files have loaded. The old bootstrap set the completion flag
+   * before its first registration call; that expected early miss was caught by
+   * companyPolicies_(), but the flag stayed true forever and the dashboard saw
+   * an empty registry, marking every company "under construction".
+   *
+   * Preflight every registration function and publish a fresh registry only
+   * after the complete set succeeds. This keeps initialization retryable during
+   * source evaluation and atomic for real doGet/apiRouter requests. */
+  const registrations = [
+    ['Top Light', typeof registerTopLight_ === 'function' ? registerTopLight_ : null],
+    ['Top Chemical', typeof registerTopChemical_ === 'function' ? registerTopChemical_ : null],
+    ['Valley Foods', typeof registerValleyFoods_ === 'function' ? registerValleyFoods_ : null],
+    ['Assessment Center', typeof registerAssessmentCenter_ === 'function' ? registerAssessmentCenter_ : null]
+  ];
+  const missing = registrations.filter(function (entry) { return !entry[1]; }).map(function (entry) { return entry[0]; });
+  if (missing.length) throw new Error('Company registries are not loaded yet: ' + missing.join(', '));
+
+  const previousRegistry = COMPANY_REGISTRY;
+  COMPANY_REGISTRY = {};
+  try {
+    // Keep these calls explicit: besides being easier to audit when a company
+    // is added, the registry/page cross-reference checks verify each one.
+    registerTopLight_();
+    registerTopChemical_();
+    registerValleyFoods_();
+    registerAssessmentCenter_();
+    _companiesInitialized_ = true;
+  } catch (registrationError) {
+    COMPANY_REGISTRY = previousRegistry;
+    _companiesInitialized_ = false;
+    throw registrationError;
+  }
+  // MANUAL STEP: every new company (Company_*_Registry.js) MUST be added here.
+  // registerValleyFoods_(), etc. as they are built —
+  // forgetting this is the classic "registered company missing" bug.
+  return COMPANY_REGISTRY;
+}
+
+function registerCompany_(key, config) {
+  if (COMPANY_REGISTRY[key]) throw new Error('Duplicate company registration: ' + key);
+  if (!config.dispatch || typeof config.dispatch !== 'function') {
+    throw new Error('Company "' + key + '" must provide a dispatch function');
+  }
+  COMPANY_REGISTRY[key] = config;
+}
+
+function getAllPages_() {
+  const base = [
+    { action: 'login', template: '0_ERPlogin', title: 'Login', public: true },
+    { action: 'setup', template: '0_ERPsetup', title: 'Setup Password', public: true },
+    { action: 'ERPDashboard', template: '0_ERPDashboard', title: 'Dashboard' },
+    { action: 'ERP_Management', template: '0_ERP_Management', title: 'System Admin' },
+    { action: 'user_sessions', template: 'User_Sessions', title: 'جلساتي' },
+    { action: 'user_views', template: 'User_Views', title: 'العروض المحفوظة' },
+    { action: 'record_history', template: 'Record_History_Panel', title: 'السجل' },
+    { action: 'db_live_viewer', template: 'DbLive_Viewer', title: 'MySQL Database' },
+    /* [RT-10] The weekly performance review. Registered like any other page;
+       the handler behind it checks isSuperAdmin itself, so the registration
+       is not what keeps it private. */
+    { action: 'perf_dashboard', template: 'ERP_Perf_Dashboard', title: 'أداء النظام' }
+  ];
+  return base.concat(Object.values(COMPANY_REGISTRY).flatMap(c => c.pages));
+}
+
+/* ===================== 2. STORAGE / SCHEMA / FIRESTORE ================ */
+/** Storage target resolution. System and company backends are separate. */
+var SYSTEM_STORAGE_PROPERTY_KEYS_ = { backend: 'SYSTEM_STORAGE_BACKEND', projectId: 'FIRESTORE_PROJECT_ID', databaseId: 'FIRESTORE_DATABASE_ID', environment: 'ERP_ENVIRONMENT' };
+var STORAGE_BACKENDS_ = { firestore: true, sheets: true };
+var STORAGE_ENVIRONMENTS_ = { staging: true, production: true };
+function storageError_(code, message, cause) { var e = new Error(code + ': ' + message); e.code = code; if (cause) e.cause = String(cause && cause.message || cause).slice(0, 160); return e; }
+function readScriptProperty_(key, fallback) {
+  try { var v = PropertiesService.getScriptProperties().getProperty(key); return v === null || v === undefined ? fallback : String(v).trim(); }
+  catch (e) { throw storageError_('STORAGE_PROPERTY_ACCESS_ERROR', 'Unable to read Script Property ' + key, e); }
+}
+function getSystemStorageConfig_() {
+  var backend = String(readScriptProperty_(SYSTEM_STORAGE_PROPERTY_KEYS_.backend, CONFIG.SYSTEM_STORAGE_BACKEND || 'firestore')).trim().toLowerCase();
+  if (!STORAGE_BACKENDS_[backend]) throw storageError_('STORAGE_BACKEND_ERROR', 'Unsupported system storage backend');
+  var projectId = String(readScriptProperty_(SYSTEM_STORAGE_PROPERTY_KEYS_.projectId, '') || '').trim();
+  if (!projectId && backend === 'firestore') {
+    var scriptId = '';
+    try { scriptId = String(ScriptApp.getScriptId() || '').trim(); } catch (e) {}
+    var projectIdsByScript = CONFIG.FIRESTORE_PROJECT_IDS_BY_SCRIPT || {};
+    projectId = String(projectIdsByScript[scriptId] || '').trim();
+  }
+  var databaseId = String(readScriptProperty_(SYSTEM_STORAGE_PROPERTY_KEYS_.databaseId, CONFIG.FIRESTORE_DATABASE_ID || '(default)') || '').trim();
+  var environment = String(readScriptProperty_(SYSTEM_STORAGE_PROPERTY_KEYS_.environment, CONFIG.ERP_ENVIRONMENT || 'production') || '').trim().toLowerCase();
+  if (!STORAGE_ENVIRONMENTS_[environment]) throw storageError_('STORAGE_CONFIGURATION_ERROR', 'ERP_ENVIRONMENT must be staging or production');
+  if (!databaseId || !/^[A-Za-z0-9_-]{1,63}$|^\(default\)$/.test(databaseId)) throw storageError_('STORAGE_CONFIGURATION_ERROR', 'FIRESTORE_DATABASE_ID is invalid');
+  if (backend === 'firestore' && !projectId) throw storageError_('STORAGE_CONFIGURATION_ERROR', 'FIRESTORE_PROJECT_ID is not configured');
+  if (backend === 'firestore' && !/^[a-z][a-z0-9-]{4,28}[a-z0-9]$/.test(projectId)) throw storageError_('STORAGE_CONFIGURATION_ERROR', 'FIRESTORE_PROJECT_ID is invalid');
+  return { backend: backend, projectId: projectId, databaseId: databaseId, environment: environment };
+}
+function systemStorageTarget_() { return getSystemStorageConfig_(); }
+function firestoreConfigurationPreflight_() {
+  var c;
+  try { c = getSystemStorageConfig_(); } catch (e) { return { ok: false, code: e.code || 'STORAGE_CONFIGURATION_ERROR', message: 'Firestore configuration is not ready' }; }
+  if (c.backend !== 'firestore') return { ok: true, backend: c.backend, environment: c.environment, read: false };
+  try { firestoreRequest_('get', firestoreDocumentsBaseUrl_(c, 'erp_preflight_probe') + '?pageSize=1', null, { maxRetries: 0 }); return { ok: true, backend: c.backend, projectId: c.projectId, databaseId: c.databaseId, environment: c.environment, read: true }; }
+  catch (e) {
+    var status = Number(e.httpStatus || 0), code = e.code || '';
+    var category = status === 401 || status === 403 || code === 'UNAUTHENTICATED' || code === 'PERMISSION_DENIED' ? 'STORAGE_OAUTH_IAM_ERROR' : status === 404 ? 'STORAGE_DATABASE_PATH_ERROR' : code === 'FAILED_PRECONDITION' ? 'STORAGE_INDEX_ERROR' : e.retryable ? 'STORAGE_TRANSPORT_ERROR' : 'STORAGE_FIRESTORE_ERROR';
+    return { ok: false, code: category, message: 'Read-only Firestore preflight failed' };
+  }
+}
+function getCompanyStorage_(companyUid) {
+  var uid = String(companyUid || '').trim();
+  if (!uid) throw new Error('COMPANY_STORAGE_ERROR: company UID is required');
+  var record = companyRecord_(uid);
+  return { backend: 'sheets', companyUid: record.uid || uid, spreadsheetId: record.spreadsheetId, supported: true };
+}
+function assertCompanyStorageSupported_(descriptor) {
+  if (!descriptor || descriptor.backend !== 'sheets' || !descriptor.spreadsheetId) throw new Error('COMPANY_STORAGE_ERROR: unsupported company backend');
+  return descriptor;
+}
+
+/** Canonical imported system collection mappings. */
+var SYSTEM_TABLE_SCHEMAS_ = {
+  ERP_Users: { collection: 'ERP_Users', keys: ['email'], unique: ['email'] },
+  ERP_Companies: { collection: 'ERP_Companies', keys: ['company_unique_id'], unique: ['company_unique_id'] },
+  ERP_Pages_Matrix: { collection: 'ERP_Pages_Matrix', keys: ['erp_pages_matrix_unique_id'], unique: ['role', 'page_id'] },
+  ERP_System_Pages: { collection: 'ERP_System_Pages', keys: ['page_id'], unique: ['page_id'] },
+  ERP_system_work: { collection: 'ERP_system_work', keys: [], unique: [] },
+  ERP_Sessions: { collection: 'ERP_Sessions', keys: ['token_hash'], unique: ['token_hash'] },
+  ERP_User_Devices: { collection: 'ERP_User_Devices', keys: ['email', 'device_id'], unique: ['email', 'device_id'] },
+  ERP_User_Views: { collection: 'ERP_User_Views', keys: ['view_id'], unique: ['email', 'page_action', 'view_name'] },
+  ERP_currency_exchange: { collection: 'ERP_currency_exchange', keys: ['id'], unique: ['currency'] },
+  ERP_system_invoices: { collection: 'ERP_system_invoices', keys: ['unique_id'], unique: ['unique_id'] },
+  ERP_Record_History: { collection: 'ERP_Record_History', keys: [], unique: [] },
+  ERP_History_Queue: { collection: 'ERP_History_Queue', keys: ['event_id'], unique: ['event_id'] },
+  SystemLog: { collection: 'SystemLog', keys: [], unique: [] },
+  ERP_Client_Log: { collection: 'ERP_Client_Log', keys: [], unique: [] },
+  ERP_Client_Perf: { collection: 'ERP_Client_Perf', keys: [], unique: [] },
+  ERP_Perf_Log: { collection: 'ERP_Perf_Log', keys: [], unique: [] },
+  ERP_Perf_Weekly: { collection: 'ERP_Perf_Weekly', keys: [], unique: [] }
+  ,ERP_Record_History_Archive: { collection: 'ERP_Record_History_Archive', keys: [], unique: [] }
+  ,SystemLog_Archive: { collection: 'SystemLog_Archive', keys: [], unique: [] }
+};
+function systemSchema_(tableKey) { var s = SYSTEM_TABLE_SCHEMAS_[String(tableKey || '')]; if (!s) throw new Error('STORAGE_SCHEMA_ERROR: unknown system table ' + tableKey); return s; }
+function isSystemTable_(tableKey) { return !!SYSTEM_TABLE_SCHEMAS_[String(tableKey || '')]; }
+function systemTableNames_() { return Object.keys(SYSTEM_TABLE_SCHEMAS_); }
+
+/** Typed Firestore REST adapter. Credentials and REST envelopes stay server-side. */
+var FIRESTORE_MAX_RETRIES_ = 5;
+var FIRESTORE_PAGE_SIZE_ = 250;
+var FIRESTORE_RETRY_BASE_MS_ = 750;
+var FIRESTORE_RETRY_MAX_MS_ = 15000;
+var FIRESTORE_METRICS_ = { calls: 0, reads: 0, writes: 0, retries: 0, cacheHits: 0, latencyMs: 0 };
+function firestoreMetric_(kind, count) { if (kind === 'call') FIRESTORE_METRICS_.calls++; else if (kind === 'read') FIRESTORE_METRICS_.reads += Number(count || 1); else if (kind === 'write') FIRESTORE_METRICS_.writes += Number(count || 1); else if (kind === 'retry') FIRESTORE_METRICS_.retries++; }
+function getFirestoreMetrics_() { return JSON.parse(JSON.stringify(FIRESTORE_METRICS_)); }
+function resetFirestoreMetrics_() { FIRESTORE_METRICS_ = { calls: 0, reads: 0, writes: 0, retries: 0, cacheHits: 0, latencyMs: 0 }; }
+function firestoreEncodeValue_(v) {
+  if (v === null || v === undefined) return { nullValue: null };
+  if (v === '') return { stringValue: '' };
+  if (Object.prototype.toString.call(v) === '[object Date]') { if (isNaN(v.getTime())) throw new Error('STORAGE_VALUE_ERROR: invalid date'); return { timestampValue: v.toISOString() }; }
+  if (typeof v === 'boolean') return { booleanValue: v };
+  if (typeof v === 'number') { if (!isFinite(v)) throw new Error('STORAGE_VALUE_ERROR: non-finite number'); return Math.floor(v) === v && Math.abs(v) <= 9007199254740991 ? { integerValue: String(v) } : { doubleValue: v }; }
+  if (Array.isArray(v)) return { arrayValue: { values: v.map(firestoreEncodeValue_) } };
+  if (typeof v === 'object') { var f = {}; Object.keys(v).forEach(function (k) { f[k] = firestoreEncodeValue_(v[k]); }); return { mapValue: { fields: f } }; }
+  return { stringValue: String(v) };
+}
+function firestoreDecodeValue_(v) {
+  if (!v) return null;
+  if ('nullValue' in v) return null;
+  if ('stringValue' in v) return v.stringValue;
+  if ('booleanValue' in v) return !!v.booleanValue;
+  if ('integerValue' in v) return Number(v.integerValue);
+  if ('doubleValue' in v) return Number(v.doubleValue);
+  if ('timestampValue' in v) return new Date(v.timestampValue);
+  if ('bytesValue' in v) return v.bytesValue;
+  if ('referenceValue' in v) return v.referenceValue;
+  if ('geoPointValue' in v) return v.geoPointValue;
+  if ('arrayValue' in v) return (v.arrayValue.values || []).map(firestoreDecodeValue_);
+  if ('mapValue' in v) { var o = {}; Object.keys(v.mapValue.fields || {}).forEach(function (k) { o[k] = firestoreDecodeValue_(v.mapValue.fields[k]); }); return o; }
+  return null;
+}
+function firestoreEncodeFields_(record) { var f = {}; Object.keys(record || {}).forEach(function (k) { f[k] = firestoreEncodeValue_(record[k]); }); return f; }
+function firestoreDecodeDocument_(doc) { var d = {}; Object.keys((doc && doc.fields) || {}).forEach(function (k) { d[k] = firestoreDecodeValue_(doc.fields[k]); }); var n = String((doc && doc.name) || ''); return { data: d, meta: { documentId: n ? n.split('/').pop() : '', name: n, updateTime: doc && doc.updateTime ? doc.updateTime : '' } }; }
+function firestoreQuoteFieldPath_(p) { p = String(p || ''); return /^[A-Za-z_][A-Za-z0-9_]*$/.test(p) ? p : '`' + p.replace(/`/g, '``') + '`'; }
+function firestorePathPart_(v) { return encodeURIComponent(String(v)); }
+function firestoreDocumentsBaseUrl_(c, collection) { return 'https://firestore.googleapis.com/v1/projects/' + firestorePathPart_(c.projectId) + '/databases/' + firestorePathPart_(c.databaseId) + '/documents/' + firestorePathPart_(collection); }
+function firestoreDocumentUrl_(c, collection, id) { return firestoreDocumentsBaseUrl_(c, collection) + '/' + firestorePathPart_(id); }
+function firestoreError_(status, body, url) { var msg = body && body.error && body.error.message ? body.error.message : 'Firestore request failed'; var code = body && body.error && body.error.status ? String(body.error.status) : 'HTTP_' + status; var e = new Error('FIRESTORE_' + code + ': ' + msg); e.code = code; e.httpStatus = status; e.retryable = status === 408 || status === 429 || status >= 500; e.url = url; return e; }
+function firestoreRetryAfterMs_(response) {
+  if (!response || typeof response.getAllHeaders !== 'function') return 0;
+  var headers = {}; try { headers = response.getAllHeaders() || {}; } catch (e) { return 0; }
+  var value = ''; Object.keys(headers).some(function (key) { if (String(key).toLowerCase() !== 'retry-after') return false; value = Array.isArray(headers[key]) ? headers[key][0] : headers[key]; return true; });
+  if (value === '' || value === null || value === undefined) return 0;
+  var seconds = Number(value); if (isFinite(seconds) && seconds >= 0) return Math.min(60000, Math.ceil(seconds * 1000));
+  var at = new Date(String(value)).getTime(); return isFinite(at) ? Math.min(60000, Math.max(0, at - new Date().getTime())) : 0;
+}
+function firestoreRetryDelayMs_(attempt, response) {
+  var cap = Math.min(FIRESTORE_RETRY_MAX_MS_, FIRESTORE_RETRY_BASE_MS_ * Math.pow(2, Math.max(0, attempt - 1)));
+  var jittered = Math.floor(cap / 2 + Math.random() * Math.max(1, cap / 2));
+  return Math.min(60000, Math.max(jittered, firestoreRetryAfterMs_(response)));
+}
+function firestoreRequest_(method, url, body, options) {
+  var o = options || {}, retries = Number(o.maxRetries === undefined ? FIRESTORE_MAX_RETRIES_ : o.maxRetries), attempt = 0;
+  while (true) {
+    var started = new Date().getTime(); firestoreMetric_('call'); var req = { method: method, muteHttpExceptions: true, contentType: 'application/json', headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() } }; if (body !== undefined && body !== null) req.payload = JSON.stringify(body);
+    var response;
+    try { response = UrlFetchApp.fetch(url, req); } catch (err) { if (attempt < retries) { attempt++; firestoreMetric_('retry'); Utilities.sleep(firestoreRetryDelayMs_(attempt, null)); continue; } var te = new Error('FIRESTORE_TRANSPORT_ERROR: ' + err.message); te.retryable = true; throw te; }
+    FIRESTORE_METRICS_.latencyMs += new Date().getTime() - started; var status = response.getResponseCode(), text = response.getContentText() || '', parsed = null; try { parsed = text ? JSON.parse(text) : null; } catch (ignore) {}
+    if (status >= 200 && status < 300) return parsed || {};
+    var error = firestoreError_(status, parsed, url); if (error.retryable && attempt < retries) { attempt++; firestoreMetric_('retry'); Utilities.sleep(firestoreRetryDelayMs_(attempt, response)); continue; } throw error;
+  }
+}
+function firestoreGetDocument_(c, collection, id, options) { var r; try { r = firestoreRequest_('get', firestoreDocumentUrl_(c, collection, id), null, options); } catch (e) { if (e.httpStatus === 404) return null; throw e; } firestoreMetric_('read'); return firestoreDecodeDocument_(r); }
+function firestoreOperationId_(id) { var raw = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(id), Utilities.Charset.UTF_8); return 'op_' + raw.map(function (b) { return ('0' + (b & 255).toString(16)).slice(-2); }).join('').slice(0, 40); }
+function firestoreCreateDocument_(c, collection, record, options) { var o = options || {}, id = o.documentId || (o.operationId ? firestoreOperationId_(o.operationId) : Utilities.getUuid().replace(/-/g, '')), url = firestoreDocumentsBaseUrl_(c, collection) + '?documentId=' + firestorePathPart_(id), r; try { r = firestoreRequest_('post', url, { fields: firestoreEncodeFields_(record) }, o); } catch (e) { if (o.operationId && (e.httpStatus === 409 || e.code === 'ALREADY_EXISTS')) { var existing = firestoreGetDocument_(c, collection, id, o); if (existing) return existing; } throw e; } firestoreMetric_('write'); return firestoreDecodeDocument_(r); }
+function firestoreCreateDocuments_(c, collection, items) {
+  var prepared = (items || []).map(function (item) { var operationId = String(item.operationId || Utilities.getUuid()), id = firestoreOperationId_(operationId); return { id: id, operationId: operationId, record: item.record || {}, name: 'projects/' + c.projectId + '/databases/' + c.databaseId + '/documents/' + collection + '/' + id }; });
+  var out = [];
+  for (var offset = 0; offset < prepared.length; offset += 500) {
+    var chunk = prepared.slice(offset, offset + 500), result;
+    try { result = firestoreCommit_(c, chunk.map(function (item) { return { update: { name: item.name, fields: firestoreEncodeFields_(item.record) }, currentDocument: { exists: false } }; })); }
+    catch (e) {
+      if (e.httpStatus !== 409 && e.code !== 'ALREADY_EXISTS') throw e;
+      chunk.forEach(function (item) { out.push(firestoreCreateDocument_(c, collection, item.record, { operationId: item.operationId })); });
+      continue;
+    }
+    var writeResults = result.writeResults || [];
+    chunk.forEach(function (item, index) { out.push({ data: item.record, meta: { documentId: item.id, name: item.name, updateTime: writeResults[index] && writeResults[index].updateTime || result.commitTime || '' } }); });
+  }
+  return out;
+}
+function firestorePatchDocument_(c, collection, id, changes, options) { var o = options || {}, keys = Object.keys(changes || {}); if (!keys.length) return firestoreGetDocument_(c, collection, id, o); var q = keys.map(function (k) { return 'updateMask.fieldPaths=' + encodeURIComponent(firestoreQuoteFieldPath_(k)); }).join('&'); if (o.expectedUpdateTime) q += '&currentDocument.updateTime=' + encodeURIComponent(o.expectedUpdateTime); var r = firestoreRequest_('patch', firestoreDocumentUrl_(c, collection, id) + '?' + q, { fields: firestoreEncodeFields_(changes) }, o); firestoreMetric_('write'); return firestoreDecodeDocument_(r); }
+function firestoreDeleteDocument_(c, collection, id, options) { var o = options || {}, url = firestoreDocumentUrl_(c, collection, id); if (o.expectedUpdateTime) url += '?currentDocument.updateTime=' + encodeURIComponent(o.expectedUpdateTime); try { firestoreRequest_('delete', url, null, o); } catch (e) { if (e.httpStatus === 404) return false; throw e; } firestoreMetric_('write'); return true; }
+function firestoreQueryDocuments_(c, collection, options) {
+  var o = options || {}, filters = o.filters || [], order = (o.orderBy || []).slice(); if (!order.length) order.push({ field: '__name__', direction: 'ASCENDING' }); if (!order.some(function (x) { return x.field === '__name__'; })) order.push({ field: '__name__', direction: 'ASCENDING' });
+  var where = null; if (filters.length === 1) where = { fieldFilter: { field: { fieldPath: firestoreQuoteFieldPath_(filters[0].field) }, op: filters[0].op || 'EQUAL', value: firestoreEncodeValue_(filters[0].value) } }; else if (filters.length > 1) where = { compositeFilter: { op: 'AND', filters: filters.map(function (f) { return { fieldFilter: { field: { fieldPath: firestoreQuoteFieldPath_(f.field) }, op: f.op || 'EQUAL', value: firestoreEncodeValue_(f.value) } }; }) } };
+  var query = { from: [{ collectionId: collection }], orderBy: order.map(function (x) { return { field: { fieldPath: firestoreQuoteFieldPath_(x.field) }, direction: x.direction || 'ASCENDING' }; }), limit: Number(o.limit || FIRESTORE_PAGE_SIZE_) }; if (where) query.where = where; if (o.cursor) { var cursor = typeof o.cursor === 'string' ? JSON.parse(o.cursor) : o.cursor; query.startAt = { values: cursor.values || [], before: false }; }
+  var url = 'https://firestore.googleapis.com/v1/projects/' + firestorePathPart_(c.projectId) + '/databases/' + firestorePathPart_(c.databaseId) + '/documents:runQuery', result = firestoreRequest_('post', url, { structuredQuery: query }, o), records = [];
+  (Array.isArray(result) ? result : []).forEach(function (item) { if (item && item.document) { firestoreMetric_('read'); records.push(firestoreDecodeDocument_(item.document)); } });
+  var nextCursor = null; if (records.length >= Number(o.limit || FIRESTORE_PAGE_SIZE_)) { var last = records[records.length - 1]; nextCursor = JSON.stringify({ values: order.map(function (x) { return x.field === '__name__' ? { referenceValue: last.meta.name } : firestoreEncodeValue_(last.data[x.field]); }) }); }
+  return { records: records, nextCursor: nextCursor };
+}
+function firestoreCommit_(c, writes, transaction) { var body = { writes: writes }; if (transaction) body.transaction = transaction; var url = 'https://firestore.googleapis.com/v1/projects/' + firestorePathPart_(c.projectId) + '/databases/' + firestorePathPart_(c.databaseId) + '/documents:commit'; var r = firestoreRequest_('post', url, body, {}); firestoreMetric_('write', writes.length); return r; }
+
+/** Repository boundary for system data; company code keeps using Sheet helpers. */
+function isSystemTableBackend_(dbId, tableName) { return String(dbId || '') === String(CONFIG.AUTH_SPREADSHEET_ID || '') && isSystemTable_(tableName); }
+function systemLegacyRecord_(r) { var out = {}; Object.keys(r.data || {}).forEach(function (k) { out[String(k).trim().toLowerCase()] = r.data[k]; }); try { Object.defineProperty(out, '_meta', { value: r.meta, enumerable: false }); } catch (e) { out._meta = r.meta; } return out; }
+function systemRecordData_(r) { var out = {}; Object.keys(r || {}).forEach(function (k) { if (k !== '_meta') out[k] = r[k]; }); return out; }
+function systemGetAllRecords_(table, options) { return systemStore_().queryAll(table, options || {}).records.map(systemLegacyRecord_); }
+function systemFindByBusinessKey_(table, field, value, options) { var r = systemStore_().query(table, { filters: [{ field: field, value: value, op: 'EQUAL' }], limit: 2 }); if (r.records.length > 1 && !(options && options.allowMultiple)) throw new Error('STORAGE_INTEGRITY_ERROR: duplicate ' + table + '.' + field); return r.records.length ? systemLegacyRecord_(r.records[0]) : null; }
+function systemFindByFields_(table, filters, options) { var r = systemStore_().query(table, { filters: (filters || []).map(function (f) { return { field: f.field, value: f.value, op: f.op || 'EQUAL' }; }), limit: (options && options.limit) || 2 }); if (r.records.length > 1 && !(options && options.allowMultiple)) throw new Error('STORAGE_INTEGRITY_ERROR: duplicate query for ' + table); return r.records.length ? systemLegacyRecord_(r.records[0]) : null; }
+function systemPatchByFields_(table, filters, changes, options) { var found = systemFindByFields_(table, filters, options); if (!found) throw new Error('STORAGE_NOT_FOUND: ' + table); return systemPatchRecord_(table, found._meta.documentId, changes, Object.assign({}, options || {}, { expectedUpdateTime: options && options.expectedUpdateTime || found._meta.updateTime })); }
+function systemCreateRecord_(table, data, options) { return systemStore_().create(table, data, options || {}); }
+function systemAddRecordCompat_(table, data, requiredFields) {
+  var missing = (requiredFields || []).filter(function (f) { return data[f] === undefined || data[f] === null || String(data[f]).trim() === ''; });
+  if (missing.length) throw new Error('Missing required fields: ' + missing.join(', '));
+  var payload = Object.assign({}, data);
+  if (payload.id === undefined && systemSchema_(table).keys.indexOf('id') === -1) {
+    var wantsId = table === 'ERP_Users' || table === 'ERP_Companies' || table === 'ERP_currency_exchange' || table === 'ERP_User_Views';
+    if (wantsId) payload.id = systemNextNumericId_(table, 'id');
+  }
+  var operationId = payload.unique_id || payload.event_id || payload.email || Utilities.getUuid();
+  var created = systemCreateRecord_(table, payload, { operationId: operationId });
+  var record = systemLegacyRecord_(created);
+  return { status: 'success', message: 'Record added successfully', data: { record: record, newRowNumber: null, assignedId: payload.id } };
+}
+function systemPatchRecord_(table, id, changes, options) { return systemStore_().patch(table, id, changes, options || {}); }
+function systemRemoveRecord_(table, id, options) { return systemStore_().remove(table, id, options || {}); }
+function systemPatchByBusinessKey_(table, field, value, changes, options) { var found = systemFindByBusinessKey_(table, field, value, options); if (!found) throw new Error('STORAGE_NOT_FOUND: ' + table + '.' + field); return systemPatchRecord_(table, found._meta.documentId, changes, Object.assign({}, options || {}, { expectedUpdateTime: options && options.expectedUpdateTime || found._meta.updateTime })); }
+function systemRemoveByBusinessKey_(table, field, value, options) { var found = systemFindByBusinessKey_(table, field, value, options); if (!found) return false; return systemRemoveRecord_(table, found._meta.documentId, Object.assign({}, options || {}, { expectedUpdateTime: options && options.expectedUpdateTime || found._meta.updateTime })); }
+function systemFindFlagRecord_() { var rows = systemStore_().queryAll('ERP_system_work', {}).records.filter(function (r) { return Object.prototype.hasOwnProperty.call(r.data || {}, 'on_off'); }); if (rows.length > 1) throw new Error('STORAGE_INTEGRITY_ERROR: multiple ERP_system_work flag documents'); return rows.length ? rows[0] : null; }
+function systemNextNumericId_(table, field) { var rows = systemStore_().queryAll(table, {}).records, max = 0; rows.forEach(function (r) { var n = Number(r.data[field]); if (isFinite(n) && Math.floor(n) === n && n > max) max = n; }); return max + 1; }
+function systemStore_() { var c = systemStorageTarget_(); return c.backend === 'sheets' ? sheetsStore_() : firestoreStore_(c); }
+function getAllRecordsFromSheets_(dbId, table) { var sheet = getSheet_(table, dbId), headers = getHeaders_(sheet), rows = buildRecordsFromRaw_(sheet.getDataRange().getValues(), headers); rows.forEach(function (r, i) { try { Object.defineProperty(r, '_meta', { value: { documentId: String(i + 2), updateTime: '' }, enumerable: false }); } catch (e) { r._meta = { documentId: String(i + 2), updateTime: '' }; } }); return rows; }
+function sheetsStore_() { return { query: function (table, options) { var rows = getAllRecordsFromSheets_(CONFIG.AUTH_SPREADSHEET_ID, table), fs = (options && options.filters) || []; rows = rows.filter(function (r) { return fs.every(function (f) { var actual = r[String(f.field).toLowerCase()]; return String(actual == null ? '' : actual).trim().toLowerCase() === String(f.value == null ? '' : f.value).trim().toLowerCase(); }); }); return { records: rows.map(function (r) { return { data: systemRecordData_(r), meta: r._meta || {} }; }), nextCursor: null }; }, queryAll: function (t, o) { return this.query(t, o || {}); }, create: function (t, d, o) { var sheet = getSheet_(t, CONFIG.AUTH_SPREADSHEET_ID), headers = getHeaders_(sheet), id = o && o.documentId ? o.documentId : getNextId_(CONFIG.AUTH_SPREADSHEET_ID, t), values = headers.map(function (h) { var k = String(h).trim(); return k.toLowerCase() === 'id' ? id : (d[k] !== undefined ? d[k] : (d[k.toLowerCase()] !== undefined ? d[k.toLowerCase()] : '')); }); sheet.appendRow(values); noteMutation_(sheet); var rec = {}; headers.forEach(function (h, i) { rec[String(h).trim().toLowerCase()] = values[i]; }); return { data: rec, meta: { documentId: String(sheet.getLastRow()), updateTime: '' } }; }, patch: function (t, id, d) { var sheet = getSheet_(t, CONFIG.AUTH_SPREADSHEET_ID), row = Number(id); if (!isFinite(row) || row < 2 || row !== Math.floor(row) || row > sheet.getLastRow()) throw new Error('STORAGE_NOT_FOUND: ' + t + '/' + id); var headers = getHeaders_(sheet), current = sheet.getRange(row, 1, 1, headers.length).getValues()[0], next = current.map(function (value, index) { var key = String(headers[index]).trim().toLowerCase(), found = Object.keys(d || {}).find(function (k) { return String(k).trim().toLowerCase() === key; }); return found === undefined ? value : d[found]; }); sheet.getRange(row, 1, 1, next.length).setValues([next]); noteMutation_(sheet); var rec = {}; headers.forEach(function (h, i) { rec[String(h).trim().toLowerCase()] = next[i]; }); return { data: rec, meta: { documentId: String(row), updateTime: '' } }; }, remove: function (t, id) { var sheet = getSheet_(t, CONFIG.AUTH_SPREADSHEET_ID), row = Number(id); if (!isFinite(row) || row < 2 || row !== Math.floor(row) || row > sheet.getLastRow()) throw new Error('STORAGE_NOT_FOUND: ' + t + '/' + id); sheet.deleteRow(row); noteMutation_(sheet); return true; } }; }
+function firestoreStore_(c) { return { query: function (t, o) { var r = firestoreQueryDocuments_(c, systemSchema_(t).collection, o || {}); return { records: r.records, nextCursor: r.nextCursor }; }, queryAll: function (t, o) { var opts = o || {}, out = [], cursor = opts.cursor || null, pages = 0; do { var p = this.query(t, Object.assign({}, opts, { cursor: cursor, limit: opts.limit || FIRESTORE_PAGE_SIZE_ })); out = out.concat(p.records); cursor = p.nextCursor; if (++pages > 1000) throw new Error('STORAGE_LIMIT_ERROR: pagination exceeded 250000 records'); } while (cursor); return { records: out, nextCursor: null }; }, create: function (t, d, o) { var r = firestoreCreateDocument_(c, systemSchema_(t).collection, d, o || {}); return { data: r.data, meta: r.meta }; }, patch: function (t, id, d, o) { var r = firestorePatchDocument_(c, systemSchema_(t).collection, id, d, o || {}); return { data: r.data, meta: r.meta }; }, remove: function (t, id, o) { return firestoreDeleteDocument_(c, systemSchema_(t).collection, id, o || {}); }, transact: function (writes) { var encoded = (writes || []).map(function (w) { var s = systemSchema_(w.tableName); return { update: { name: 'projects/' + c.projectId + '/databases/' + c.databaseId + '/documents/' + s.collection + '/' + w.documentId, fields: firestoreEncodeFields_(w.data || {}) }, updateMask: { fieldPaths: Object.keys(w.data || {}).map(firestoreQuoteFieldPath_) } }; }); return firestoreCommit_(c, encoded); } }; }
+
+
+/* ===================== 3. DATA ACCESS / POLICY ========================= */
+/**
+ * shared Code.js section
+ * RESPONSIBILITY: Generic sheet CRUD: getSheet_, getHeaders_, getAllRecords_,
+ * addRecord_, updateRowByCriteria_, getNextId_ (lock-protected via executeWithLock_),
+ * plus versioned-cache invalidation (bumpVersion_ / onEdit).
+ * getNextId_ is the ONLY ID-assignment function in the project.
+ * No business logic. Loaded third.
+ */
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// WARNING: DO NOT send row indices to the client and trust them back for writes.
+// The pattern getStockRevision_ → _sheetRow → updateStockRevision_ was FRAGILE
+// because empty rows can shift indices. ALWAYS match by a business key
+// (unique_id, product+date, etc.) server-side in the write function.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/* Stable canonicalization + hash for operation identity (recovery design).
+ * Pure JavaScript: no GAS services, so vm-based verify suites can load it.
+ * - stableCanonical_: sorted-key JSON; object key order, Dates (ISO day),
+ *   and undefined-vs-missing are normalized. Arrays keep their order.
+ * - stableHash64_: FNV-1a 64-bit over UTF-16 code units, 16 hex chars.
+ *   Strength is adequate for accidental-collision detection between a request
+ *   ID and one payload: the receipt ledger's SHA-256 hash remains the primary
+ *   request-ID/payload binding enforced before any recovery runs. */
+function stableCanonical_(value) {
+  if (value === null || value === undefined) return 'null';
+  if (value instanceof Date) {
+    var t = value.getTime();
+    if (isNaN(t)) return 'null';
+    return JSON.stringify(value.toISOString().slice(0, 10));
+  }
+  if (Array.isArray(value)) return '[' + value.map(stableCanonical_).join(',') + ']';
+  if (typeof value === 'object') {
+    return '{' + Object.keys(value).sort().map(function (k) {
+      return JSON.stringify(k) + ':' + stableCanonical_(value[k]);
+    }).join(',') + '}';
+  }
+  return JSON.stringify(value);
+}
+function stableHash64_(text) {
+  var s = String(text == null ? '' : text);
+  var hi = 0x811c9dc5, lo = 0x811c9dc5;
+  for (var i = 0; i < s.length; i++) {
+    var c = s.charCodeAt(i);
+    hi = Math.imul(hi ^ c, 16777619) >>> 0;
+    lo = Math.imul(lo ^ (c + ((i * 31) | 0)), 16777619) >>> 0;
+  }
+  function hex(n) { return ('00000000' + (n >>> 0).toString(16)).slice(-8); }
+  return hex(hi) + hex(lo);
+}
+
+// Execution-scoped memoization so SpreadsheetApp.openById is called once per execution.
+const _ssCache_ = {};
+
+// Batch 1: request-scoped memoization for getAllRecords_(). Lives only for the
+// duration of a single apiRouter_()/doGet execution (reset at entry) and is
+// disabled entirely for mutating actions so a write can never be served stale
+// data. Stores the raw getValues() 2D array; record objects are rebuilt on each
+// read so callers may mutate them freely (identical behavior to before).
+const _recordCache_ = {};
+let _recordCacheDisabled_ = false;
+
+/* Opt-in read-only snapshot ownership. Legacy getAllRecords_ callers still get
+ * fresh mutable record objects. Audited readers may retain one materialized
+ * row array per table for this execution, subject to a conservative budget. */
+const _readOnlySnapshots_ = {};
+let _readOnlySnapshotBytes_ = 0;
+const READ_ONLY_SNAPSHOT_MAX_BYTES_ = 2 * 1024 * 1024;
+const READ_ONLY_SNAPSHOT_MAX_ROWS_ = 50000;
+
+function resetReadOnlySnapshots_() {
+  for (const k in _readOnlySnapshots_) delete _readOnlySnapshots_[k];
+  _readOnlySnapshotBytes_ = 0;
+}
+
+// Batch 8: request-scoped memo of sheets already ensured this execution, so
+// repeated ensureSheet_/settingsEnsureSheet_ calls (getSheetByName round trips)
+// are paid at most once per sheet per request.
+const _ensuredSheets_ = {};
+
+// Phase 0b instrumentation: how many real Sheets value-reads this execution paid
+// for. Counted at the data-layer read sites only, so it undercounts any company
+// code that calls getDataRange().getValues() directly — it is a floor, not a
+// total. Reported in the SystemLog SheetReads column.
+let _sheetsReadCount_ = 0;
+
+function countSheetRead_() { _sheetsReadCount_++; }
+
+function getSheetsReadCount_() { return _sheetsReadCount_; }
+
+function resetRecordCache_() {
+  for (const k in _recordCache_) delete _recordCache_[k];
+  resetReadOnlySnapshots_();
+  for (const k in _ensuredSheets_) delete _ensuredSheets_[k];
+  // The id high-water mark is request-scoped by construction: it only ever
+  // raises the floor above what the target table already says, and a value from
+  // a previous request must never be allowed to do even that.
+  for (const k in _idHighWater_) delete _idHighWater_[k];
+  _recordCacheDisabled_ = false;
+  _sheetsReadCount_ = 0;
+  for (const k in _pkIndexCache_) delete _pkIndexCache_[k];
+  // Per-execution authority memos (see authGeneration_ / isSystemEnabled_).
+  // Called at the top of both doGet and apiRouter_, so every request starts
+  // with a freshly-read generation.
+  _genMemo_ = null;
+  _ksMemo_ = null;
+}
+
+function disableRecordCache_() {
+  _recordCacheDisabled_ = true;
+  for (const k in _recordCache_) delete _recordCache_[k];
+  resetReadOnlySnapshots_();
+  for (const k in _pkIndexCache_) delete _pkIndexCache_[k];
+}
+
+/**
+ * Phase 9 (F-01, conservative variant). Clear and RE-ENABLE the memo, without
+ * touching the Phase 0b read counter or the ensured-sheets memo.
+ *
+ * apiRouter_ calls this once more immediately before the handler runs. The
+ * preamble before it authenticates and may TOUCH the session row, and that write
+ * would otherwise reach noteMutation_ and cost the handler its memo because of a
+ * write the handler does not care about. Re-arming instead of leaving it
+ * disabled is safe: the memo is empty at that point, so nothing in it can
+ * predate the preamble's writes.
+ */
+function rearmRecordCache_() {
+  for (const k in _recordCache_) delete _recordCache_[k];
+  resetReadOnlySnapshots_();
+  for (const k in _pkIndexCache_) delete _pkIndexCache_[k];
+  _recordCacheDisabled_ = false;
+}
+
+/**
+ * Phase 9 (F-01, conservative variant) — the whole of it, in one function.
+ *
+ * The memo used to be switched OFF for the entire request as soon as the router
+ * saw a non-read action, so a save handler that legitimately reads six sheets
+ * paid six full getDataRange().getValues() with zero reuse. The concern behind
+ * that was real: a memo taken BEFORE a write must never be served AFTER it.
+ *
+ * The cure is narrower than the disease. The memo now starts ENABLED, and the
+ * FIRST mutation of the request turns it off — clearing it — for the remainder
+ * of that request. So:
+ *   - reads before any write are memoised and reused;
+ *   - the instant anything is written, the memo is emptied and stays off,
+ *     exactly as today;
+ *   - therefore no read can ever be served from a memo taken before a write it
+ *     did not see. The memo is either younger than every write so far, or gone.
+ *
+ * Over-calling this is always SAFE — it only ever costs a cache, never
+ * correctness — which is why it is called liberally, including at sites that may
+ * not strictly need it.
+ */
+/*
+ * [RT-5] …and, since this run, it also STAMPS the table it was told about.
+ *
+ * That it did not was a defect, not a gap in coverage, and it is the reason the
+ * live-change watch has been decorative on the pages that had it. The stamp
+ * helpers (noteTableChange_ / noteSheetChange_) were called from exactly three
+ * places, all inside the shared data layer — addRecord_, updateRowByCriteria_
+ * and the delete helpers. Company handlers write to sheets directly with
+ * setValues/setValue/appendRow/deleteRow in about 112 places, and every one of
+ * those called noteMutation_() with no arguments, which only ever emptied the
+ * per-request memo.
+ *
+ * The consequence, stated plainly: a change written by one of those handlers
+ * bumped no version, so a second device polling get_page_versions could never
+ * learn about it. saveValleyReturn_, transferValleyCash_ and addMonthlySalary_
+ * are three confirmed examples. Twenty-two pages have been polling for changes
+ * they were structurally incapable of seeing.
+ *
+ * Both arguments are OPTIONAL and the no-argument call behaves EXACTLY as it
+ * always has. That is deliberate: the signature change and the call-site sweep
+ * ship together, but a site the sweep missed is no worse off than it was
+ * yesterday, and tools/verify/rt3_stamp_coverage.js reports every one of them
+ * with a file and a line rather than leaving them to be rediscovered.
+ *
+ * Where a caller holds a Sheet rather than a pair of ids, noteSheetChange_
+ * derives both. Where a caller genuinely cannot tell which table it wrote,
+ * it stamps NOTHING and is reported: a site that stamps the WRONG table is
+ * worse than one that stamps none, because it makes every other page watching
+ * that table refetch for no reason and still misses its own change.
+ */
+function noteMutation_(scopeId, sheetName) {
+  if (scopeId && sheetName) {
+    noteTableChange_(scopeId, sheetName);
+  } else if (scopeId && typeof scopeId === 'object' && typeof scopeId.getName === 'function') {
+    /* A Sheet in the first position. Almost every company write site holds one
+     * — `const sheet = getSheet_(SOME_SHEET, dbId)` — and does NOT hold the
+     * spreadsheet id separately, so demanding the pair would have meant
+     * inventing a local at a hundred sites and getting some of them wrong.
+     * noteSheetChange_ derives both from the sheet itself. */
+    noteSheetChange_(scopeId);
+  }
+  if (_recordCacheDisabled_) return;   // already off for this request
+  disableRecordCache_();
+}
+
+/**
+ * Phase 9, defence in depth — see the guard in getAllRecords_.
+ *
+ * Set by apiRouter_ for any request whose effective action is not a read. On a
+ * pure read request nothing writes at all, so the guard would be paying two
+ * metadata round trips per memo hit to protect against a write that cannot
+ * happen; it stays off there and the read path is exactly as fast as before.
+ */
+let _guardMemoHits_ = false;
+
+function setMemoGuard_(on) { _guardMemoHits_ = !!on; }
+
+/**
+ * F-02.1: the empty-row test used to be Object.values(record).some(v =>
+ * String(v).trim() !== ''), i.e. a second full pass over every cell, allocating
+ * an array and coercing every value to a string — after already having built the
+ * object. On a 20-column x 10,000-row sheet that is ~200,000 needless string
+ * coercions per call.
+ *
+ * Now the row is tested directly on the raw array before any object is built.
+ * Same predicate, same result — a row counts as non-empty iff at least one cell
+ * is a non-blank string once trimmed — but it short-circuits on the first
+ * non-empty cell and skips object construction entirely for blank rows.
+ *
+ * Trimmed header names are hoisted out of the loop too; they were being
+ * recomputed for every row.
+ */
+function buildRecordsFromRaw_(data, headers) {
+  const records = [];
+  if (!data || data.length < 2) return records;
+  const keys = headers.map(h => String(h).trim());
+  const colCount = keys.length;
+  // Headers that trim to the same name (including several blank ones) collapse
+  // onto one object key, and the LAST such column wins. The old emptiness test
+  // ran over Object.values(record), so it only ever saw those surviving columns.
+  // testCols reproduces that exact set, so filtering is unchanged.
+  const lastColForKey = {};
+  for (let c = 0; c < colCount; c++) lastColForKey[keys[c]] = c;
+  const testCols = Object.keys(lastColForKey).map(k => lastColForKey[k]);
+  for (let i = 1; i < data.length; i++) {
+    const row = data[i];
+    let hasValue = false;
+    for (let t = 0; t < testCols.length; t++) {
+      const v = row[testCols[t]];
+      // Reproduces String(v).trim() !== '' exactly. Note the two traps:
+      //   undefined -> the old code substituted '' at assignment, so it is EMPTY;
+      //   null      -> String(null) is 'null', so it is NOT empty.
+      // Everything else (0, false, a Date) stringifies non-blank and is not empty.
+      if (v === undefined || v === '') continue;
+      if (typeof v === 'string') { if (v.trim() !== '') { hasValue = true; break; } continue; }
+      hasValue = true;
+      break;
+    }
+    if (!hasValue) continue;
+    const record = {};
+    for (let c = 0; c < colCount; c++) {
+      record[keys[c]] = row[c] !== undefined ? row[c] : '';
+    }
+    records.push(record);
+  }
+  return records;
+}
+
+function getSpreadsheet_(ssId) {
+  if (!_ssCache_[ssId]) _ssCache_[ssId] = SpreadsheetApp.openById(ssId);
+  return _ssCache_[ssId];
+}
+
+function getSheet_(sheetName, ssId) {
+  const sheet = getSpreadsheet_(ssId).getSheetByName(sheetName);
+  if (!sheet) throw new Error('Database Error: Missing tab "' + sheetName + '" in spreadsheet ' + ssId + '.');
+  return sheet;
+}
+
+const _headerCache_ = {};
+
+function getHeaders_(sheet) {
+  const key = sheet.getParent().getId() + '_' + sheet.getSheetId();
+  if (!_headerCache_[key]) {
+    const lastCol = sheet.getLastColumn();
+    countSheetRead_();
+    _headerCache_[key] = lastCol > 0 ? sheet.getRange(1, 1, 1, lastCol).getValues()[0] : [];
+  }
+  return _headerCache_[key];
+}
+
+/**
+ * Writes a sheet formula into the cell at (rowNumber, headerName).
+ * GLOBAL scope (not inside any IIFE) so every company namespace
+ * (ValleyFoods, TopLight, TopChemical, HR modules) can call it.
+ */
+function writeFormula_(dbId, sheetName, rowNumber, headerName, formula) {
+  const sheet = getSheet_(sheetName, dbId);
+  const headers = getHeaders_(sheet);
+  const idx = headers.findIndex(function (h) { return String(h).trim().toLowerCase() === headerName.toLowerCase(); });
+  if (idx !== -1) {
+    var cell = sheet.getRange(rowNumber, idx + 1);
+    if (typeof cell.setFormula === 'function') {
+      cell.setFormula(formula);
+      noteMutation_();
+    } else {
+      cell.setValue(formula);
+      noteMutation_();
+    }
+  }
+}
+
+/**
+ * Phase 8 (F-04). Merge a { headerName: formulaString } map into a row array
+ * that is ABOUT to be written, so the formulas ride along in the same setValues
+ * instead of costing a writeFormula_ round trip each.
+ *
+ * setValues() treats a string beginning with '=' as a formula, exactly as
+ * appendRow() and setFormula() already do throughout this codebase, so the cells
+ * end up as formulas with identical text. This is the same equivalence Phase 3
+ * rests on.
+ *
+ * Mutates and returns rowValues. A header the map names but the sheet does not
+ * have is skipped, matching writeFormula_'s `if (idx !== -1)`.
+ */
+function applyRowFormulas_(rowValues, headers, formulaMap) {
+  const idx = {};
+  // First match wins, exactly as writeFormula_'s findIndex does, so a sheet with
+  // two columns trimming to the same header name behaves identically.
+  headers.forEach(function (h, i) {
+    const k = String(h).trim().toLowerCase();
+    if (idx[k] === undefined) idx[k] = i;
+  });
+  Object.keys(formulaMap).forEach(function (name) {
+    const i = idx[String(name).trim().toLowerCase()];
+    if (i !== undefined) rowValues[i] = formulaMap[name];
+  });
+  return rowValues;
+}
+
+/**
+ * Phase 8 (F-04). Write a { headerName: formulaString } map onto a row that has
+ * ALREADY been written and so cannot be merged into.
+ *
+ * Replaces N x writeFormula_, each of which paid its own getSheet_ +
+ * getHeaders_ + setFormula: the sheet and its headers are passed in once, and
+ * columns that happen to be adjacent are written as a single setValues. Only the
+ * named columns are touched — exactly what the individual setFormula calls did —
+ * so nothing else on the row is read or rewritten.
+ */
+function writeRowFormulas_(sheet, headers, rowNum, formulaMap) {
+  const idx = {};
+  // First match wins, exactly as writeFormula_'s findIndex does, so a sheet with
+  // two columns trimming to the same header name behaves identically.
+  headers.forEach(function (h, i) {
+    const k = String(h).trim().toLowerCase();
+    if (idx[k] === undefined) idx[k] = i;
+  });
+  const cols = [];
+  Object.keys(formulaMap).forEach(function (name) {
+    const i = idx[String(name).trim().toLowerCase()];
+    if (i !== undefined) cols.push({ i: i, f: formulaMap[name] });
+  });
+  if (!cols.length) return;
+  cols.sort(function (a, b) { return a.i - b.i; });
+
+  let run = [cols[0]];
+  for (let k = 1; k <= cols.length; k++) {
+    const cur = cols[k];
+    if (cur && cur.i === run[run.length - 1].i + 1) { run.push(cur); continue; }
+    sheet.getRange(rowNum, run[0].i + 1, 1, run.length)
+      .setValues([run.map(function (c) { return c.f; })]);
+    noteMutation_();
+    if (cur) run = [cur];
+  }
+}
+
+/**
+ * Phase 8 (F-04). Grow the grid so a block ending at `lastNeeded` fits.
+ * appendRow() did this implicitly; a precomputed target range does not, and
+ * setValues() past getMaxRows() throws.
+ */
+function ensureGridRows_(sheet, lastNeeded) {
+  const max = sheet.getMaxRows();
+  if (lastNeeded > max) sheet.insertRowsAfter(max, lastNeeded - max);
+  noteMutation_();
+}
+
+// Reentrant-safe script lock: a nested executeWithLock_ (e.g. an audit helper
+// called from inside a company action that already holds the lock) runs its fn
+// directly instead of re-acquiring, while still blocking other executions.
+let _scriptLockHeld_ = false;
+
+/* ── per-table change stamps ───────────────────────────────────────────────
+ *
+ * Apps Script has no server push: no sockets, no long poll worth having. The
+ * only way one user's device can learn that another user's device changed
+ * something is to ASK — so the ask has to be cheap enough to repeat.
+ *
+ * A stamp is one CacheService entry per (spreadsheet, sheet). Writing one costs
+ * nothing measurable next to the Sheets write that earned it; reading a page's
+ * worth costs ONE CacheService.getAll, which is memory, not a spreadsheet.
+ * That is the whole point: polling must never touch a sheet.
+ *
+ * Honest limits, and the client is written to them:
+ *   - CacheService entries can be EVICTED before their TTL. A vanished stamp is
+ *     therefore treated by the client as "no information", never as a change,
+ *     so an eviction costs a missed refresh rather than a storm of them.
+ *   - A stamp says a table changed, not what changed. It is a hint to refetch,
+ *     not a substitute for the refetch.
+ *   - Coverage is best-effort: a handler that writes with a raw setValues and
+ *     does not stamp is simply not noticed. The shared write helpers below all
+ *     stamp, which is most of them.
+ */
+var TABLE_VERSION_TTL_ = 21600;   // 6h, the CacheService maximum
+
+function tableVersionKey_(scopeId, sheetName) {
+  return 'tv_' + String(scopeId) + '_' + String(sheetName);
+}
+
+/** Record that a table changed. Never throws — a failed stamp must not fail a save. */
+function noteTableChange_(scopeId, sheetName) {
+  if (!scopeId || !sheetName) return;
+  try {
+    CacheService.getScriptCache().put(
+      tableVersionKey_(scopeId, sheetName), String(new Date().getTime()), TABLE_VERSION_TTL_);
+  } catch (e) { /* a stamp is a convenience, never a requirement */ }
+}
+
+/** Stamp from a Sheet object, when that is all the caller has. */
+function noteSheetChange_(sheet) {
+  if (!sheet) return;
+  try { noteTableChange_(sheet.getParent().getId(), sheet.getName()); } catch (e) {}
+}
+
+/** Current stamps for a set of tables, in ONE CacheService round trip. */
+function readTableVersions_(scopeId, sheetNames) {
+  const out = {};
+  const names = (sheetNames || []).filter(Boolean);
+  if (!scopeId || !names.length) return out;
+  try {
+    const keys = names.map(function (n) { return tableVersionKey_(scopeId, n); });
+    const got = CacheService.getScriptCache().getAll(keys) || {};
+    names.forEach(function (n) {
+      const v = got[tableVersionKey_(scopeId, n)];
+      if (v) out[n] = v;
+    });
+  } catch (e) { /* no stamps is a valid answer: the client learns nothing and does nothing */ }
+  return out;
+}
+
+/**
+ * The highest id currently in a table's id column.
+ *
+ * Both id allocators call this INSIDE the one global script lock, so its cost
+ * is time every other user in every company spends queued. It therefore reads
+ * ONE COLUMN rather than the whole sheet: identical answer, and on a 33-column
+ * table it is 33x less data held under the lock (a 20 000-row purchasing line
+ * table drops from ~660 000 cells to ~20 000).
+ *
+ * Deliberately a direct range read, not getAllRecords_: this runs under the
+ * lock and must not populate or depend on the per-request memo.
+ */
+function maxIdOf_(sheet, idColumnName) {
+  if (!sheet) return 0;
+  const headers = getHeaders_(sheet);
+  const want = String(idColumnName || 'id').toLowerCase();
+  const idIdx = headers.findIndex(h => String(h).trim().toLowerCase() === want);
+  if (idIdx === -1) return 0;
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return 0;
+  countSheetRead_();
+  const col = sheet.getRange(2, idIdx + 1, lastRow - 1, 1).getValues();
+  let max = 0;
+  for (let i = 0; i < col.length; i++) {
+    const v = Number(col[i][0]);
+    if (Number.isInteger(v) && v > max) max = v;
+  }
+  return max;
+}
+
+function executeWithLock_(fn, timeoutMs) {
+  if (_scriptLockHeld_) return fn();
+  _scriptLockHeld_ = true;
+  const lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(timeoutMs || 5000);
+    return fn();
+  } finally {
+    _scriptLockHeld_ = false;
+    try { lock.releaseLock(); } catch (e) {}
+  }
+}
+
+/**
+ * Shared locked document counter (Phase 1 numbering).
+ *
+ * Modeled on ValleyFoods `nextInvoiceSeq_`: a PropertiesService persisted
+ * counter keyed by dbId + docType + year (+ taxSystem variant via opts),
+ * seeded once from the sheet max via a scanner callback. Returns an integer
+ * seq; formatting (e.g. `seq + '-' + year`) stays in the callers so existing
+ * formats are preserved.
+ *
+ * MUST be called while already holding `executeWithLock_` (throws otherwise).
+ * A missing counter defaults to 0, so the first allocation seeds (via the
+ * scanner when provided) and then returns `seededMax + 1`.
+ *
+ * @param {string} dbId spreadsheet id / scope.
+ * @param {string} docType caller-chosen sequence name (e.g. 'tl_sales').
+ * @param {number} year full year for the key.
+ * @param {Object|Function} opts either a scanner fn or
+ *   `{ taxSystem, seedScanner|scanner|seedMax|scanMax, taxVariant }`.
+ * @return {number} next integer sequence value.
+ */
+function nextDocumentNumber_(dbId, docType, year, opts) {
+  if (!_scriptLockHeld_) {
+    throw new Error('nextDocumentNumber_ must be called inside executeWithLock_');
+  }
+  var scanner = null;
+  var taxSuffix = '';
+  if (typeof opts === 'function') {
+    scanner = opts;
+  } else if (opts) {
+    if (typeof opts.seedScanner === 'function') scanner = opts.seedScanner;
+    else if (typeof opts.scanner === 'function') scanner = opts.scanner;
+    else if (typeof opts.seedMax === 'function') scanner = opts.seedMax;
+    else if (typeof opts.scanMax === 'function') scanner = opts.scanMax;
+    if ('taxSystem' in opts) taxSuffix = '_' + (opts.taxSystem ? '1' : '0');
+    else if ('taxVariant' in opts) taxSuffix = '_' + String(opts.taxVariant);
+  }
+  var y = Number(year) || new Date().getFullYear();
+  var key = 'doc_seq_' + String(dbId) + '_' + String(docType) + '_' + y + taxSuffix;
+  var props = PropertiesService.getScriptProperties();
+  var cur = Number(props.getProperty(key));
+  if (!cur || cur <= 0) {
+    var seeded = 0;
+    if (scanner) {
+      try { seeded = Number(scanner()) || 0; } catch (e) { seeded = 0; }
+    }
+    cur = seeded > 0 ? seeded : 0;
+  }
+  var next = (cur || 0) + 1;
+  props.setProperty(key, String(next));
+  return next;
+}
+
+/**
+ * Single-attempt append; legacy signature retained for existing callers.
+ */
+function appendRowWithRetry_(sheet, values, maxRetries = 3, delayMs = 1000) {
+  // appendRow is not idempotent: a timeout can arrive AFTER it committed.
+  // Retain the signature for callers, but never blindly repeat an append.
+  try {
+    sheet.appendRow(values);
+    noteMutation_();
+    return true;
+  } catch (e) {
+    var err = new Error('Append outcome is uncertain; check the saved record before retrying: ' + e.message);
+    err.code = 'WRITE_OUTCOME_UNKNOWN'; err.uncertain = true;
+    throw err;
+  }
+}
+
+/**
+ * The id floor for allocations already made in THIS execution.
+ *
+ * Several handlers allocate ids in a LOOP and write the rows AFTERWARDS in one
+ * batched setValues — the work-centre and by-product loops in
+ * saveValleyMfgOrder_ are the clearest examples, and getNextIdBatch_'s callers
+ * do the same thing deliberately. `max(id) + 1` on its own hands every
+ * iteration of such a loop the SAME id, because no row has landed in between:
+ * the table each call reads is identical. That is silent, and it is the one way
+ * deriving ids from the table breaks production.
+ *
+ * So an allocation is floored by BOTH the live table and this execution's
+ * high-water mark for that (spreadsheet, table, id column):
+ *
+ *     next = max(maxIdOf_(table), highWater) + 1
+ *
+ * The target table is still read on EVERY allocation, so the id remains
+ * `max(id in the target table) + 1` and a row another execution appended
+ * between two of our allocations is seen. The memo can only ever RAISE the
+ * floor; it can never return a value the sheet does not already justify. It is
+ * request-scoped and cleared by resetRecordCache_() at the top of every
+ * request, so it can never outlive the execution that filled it.
+ */
+const _idHighWater_ = {};
+
+function idHighWaterKey_(dbId, tableName, idColumnName) {
+  return String(dbId) + '|' + String(tableName).trim().toLowerCase() + '|' +
+         String(idColumnName || 'id').trim().toLowerCase();
+}
+
+/**
+ * Internal id logic — MUST be called while already holding the script lock
+ * (i.e. from getNextId_ or addRecord_, never standalone).
+ *
+ * The id is ALWAYS `max(id in the target table) + 1`, floored by the
+ * in-execution high-water mark above. `ID_Counter` is not read, not written and
+ * not created here.
+ *
+ * Why the counter is gone: this function used to return the counter's own value
+ * whenever the counter ran AHEAD of the table (`current > tableMax` → return
+ * `current`). The table was then never consulted for the answer, so a counter
+ * that had drifted — and the owner reports it has — handed out ids the data
+ * does not justify. `max(id) + 1` cannot drift, because it is measured from the
+ * only thing that matters.
+ */
+function getNextIdUnderLock_(dbId, tableName, idColumnName = 'id') {
+  if (typeof isSystemTableBackend_ === 'function' && isSystemTableBackend_(dbId, tableName)) {
+    const key = idHighWaterKey_(dbId, tableName, idColumnName);
+    const live = systemNextNumericId_(tableName, idColumnName);
+    const seen = Number(_idHighWater_[key]) || 0;
+    const next = Math.max(live, seen + 1);
+    _idHighWater_[key] = next;
+    return next;
+  }
+  const ss = getSpreadsheet_(dbId);
+  /* One column, not the whole sheet — see maxIdOf_. This runs under the global
+     script lock, so its size is every other user's queue time. */
+  const tableMax = maxIdOf_(ss.getSheetByName(tableName), idColumnName);
+  const key = idHighWaterKey_(dbId, tableName, idColumnName);
+  const seen = Number(_idHighWater_[key]) || 0;
+  const next = (tableMax > seen ? tableMax : seen) + 1;
+  _idHighWater_[key] = next;
+  return next;
+}
+
+/**
+ * Canonical ID assignment. The ONLY public function that computes a new ID.
+ * Lock-protected. Returns the current counter value and increments it.
+ */
+function getNextId_(dbId, tableName, idColumnName = 'id') {
+  return executeWithLock_(function () {
+    return getNextIdUnderLock_(dbId, tableName, idColumnName);
+  });
+}
+
+/**
+ * Read-only peek at the next ID for a table without allocating it.
+ * Used for UI display of "next ID" only — never for writes.
+ *
+ * Same source as the allocator: max(id in the target table) + 1. It used to
+ * read the ID_Counter row instead, so the number it showed the user was the
+ * counter's, and on a table where the counter had drifted it did not match the
+ * id the save would go on to assign. It is a DISPLAY value and stays advisory:
+ * the row is not reserved, so two users peeking at once see the same number and
+ * the allocator, under the lock, decides.
+ *
+ * Read-only, and it must stay that way. It writes nothing, creates nothing, and
+ * deliberately does NOT touch the _idHighWater_ memo — a peek that raised the
+ * floor would burn an id nobody asked for.
+ */
+function peekNextId_(dbId, tableName, idColumnName = 'id') {
+  if (typeof isSystemTableBackend_ === 'function' && isSystemTableBackend_(dbId, tableName)) return systemNextNumericId_(tableName, idColumnName);
+  const ss = getSpreadsheet_(dbId);
+  return maxIdOf_(ss.getSheetByName(tableName), idColumnName) + 1;
+}
+
+/**
+ * Batch ID assignment. Lock-protected. Returns the starting ID for `count`
+ * consecutive IDs (caller uses startId, startId+1, ..., startId+count-1).
+ */
+function getNextIdBatch_(dbId, tableName, count, idColumnName = 'id') {
+  if (!Number.isInteger(count) || count <= 0) {
+    throw new Error('Count must be a positive integer');
+  }
+  
+  return executeWithLock_(function () {
+    if (typeof isSystemTableBackend_ === 'function' && isSystemTableBackend_(dbId, tableName)) {
+      const key = idHighWaterKey_(dbId, tableName, idColumnName);
+      const startId = Math.max(systemNextNumericId_(tableName, idColumnName), (Number(_idHighWater_[key]) || 0) + 1);
+      _idHighWater_[key] = startId + count - 1;
+      return startId;
+    }
+    const ss = getSpreadsheet_(dbId);
+    /* One column, not the whole sheet — see maxIdOf_. */
+    const tableMax = maxIdOf_(ss.getSheetByName(tableName), idColumnName);
+    /* Same floor as getNextIdUnderLock_, and the same reason: the caller writes
+       `count` rows AFTER this returns, so a second batch (or a single
+       allocation) taken before those rows land must not see the same table max
+       twice. The counter bookkeeping this used to do is gone — the number was
+       already derived from tableMax, so only the write to ID_Counter is lost. */
+    const key = idHighWaterKey_(dbId, tableName, idColumnName);
+    const seen = Number(_idHighWater_[key]) || 0;
+    const startId = (tableMax > seen ? tableMax : seen) + 1;
+    _idHighWater_[key] = startId + count - 1;
+    return startId;
+  });
+}
+
+/**
+ * Get all records from a sheet as an array of objects with lowercase keys.
+ * Empty rows are filtered out. Does not touch any counter.
+ */
+function getAllRecords_(dbId, sheetName) {
+  if (typeof isSystemTableBackend_ === 'function' && isSystemTableBackend_(dbId, sheetName)) return systemGetAllRecords_(sheetName);
+  const sheet = getSheet_(sheetName, dbId);
+  const headers = getHeaders_(sheet);
+  if (!_recordCacheDisabled_) {
+    const key = dbId + '|' + sheetName;
+    const cached = _recordCache_[key];
+    if (cached) {
+      // Phase 9, defence in depth. The conservative variant is only as good as
+      // noteMutation_'s coverage of the 183 direct write sites, and a missed one
+      // would show up as a stale read INSIDE a save handler — silent, and
+      // expensive. So on a request that CAN write, a memo entry is reused only
+      // if the sheet still has the same shape.
+      //
+      // getLastRow/getLastColumn are metadata calls, not a values read, so this
+      // costs a small fraction of a rebuild, and it independently catches an
+      // append or a delete that reached the sheet without going through
+      // noteMutation_. It does NOT catch an in-place update of an existing cell;
+      // that case rests on coverage alone.
+      //
+      // On a read request the guard is off (setMemoGuard_), because nothing can
+      // write, so the read path pays nothing for it.
+      if (!_guardMemoHits_) return buildRecordsFromRaw_(cached.data, cached.headers);
+      const cRows = cached.data.length;
+      const cCols = cRows ? cached.data[0].length : 0;
+      if (sheet.getLastRow() === cRows && sheet.getLastColumn() === cCols) {
+        return buildRecordsFromRaw_(cached.data, cached.headers);
+      }
+      delete _recordCache_[key];
+    }
+    countSheetRead_();
+    const data = sheet.getDataRange().getValues();
+    _recordCache_[key] = { data: data, headers: headers };
+    return buildRecordsFromRaw_(data, headers);
+  }
+  countSheetRead_();
+  const data = sheet.getDataRange().getValues();
+  return buildRecordsFromRaw_(data, headers);
+}
+
+/**
+ * Opt-in read-only path for audited consumers. It shares the existing raw
+ * request memo and invalidation lifecycle, materializes rows once, and returns
+ * the owned array to code that promises not to mutate it. A large table falls
+ * back to the legacy mutable reader without truncating results. 
+ */
+function getReadOnlyRecords_(dbId, sheetName) {
+  if (_recordCacheDisabled_) return getAllRecords_(dbId, sheetName);
+  const key = String(dbId) + '|' + String(sheetName);
+  let snapshot = _readOnlySnapshots_[key];
+  if (!snapshot) {
+    let raw = _recordCache_[key];
+    if (!raw) {
+      const sheet = getSheet_(sheetName, dbId);
+      const headers = getHeaders_(sheet);
+      countSheetRead_();
+      const data = sheet.getDataRange().getValues();
+      raw = { data: data, headers: headers };
+      _recordCache_[key] = raw;
+    }
+    const rows = Math.max(0, (raw.data || []).length - 1);
+    const estimatedBytes = (raw.data || []).reduce(function (total, row) {
+      return total + (row || []).reduce(function (n, value) {
+        return n + 16 + String(value == null ? '' : value).length * 2;
+      }, 0);
+    }, (raw.headers || []).length * 32);
+    if (rows > READ_ONLY_SNAPSHOT_MAX_ROWS_ ||
+        _readOnlySnapshotBytes_ + estimatedBytes > READ_ONLY_SNAPSHOT_MAX_BYTES_) {
+      return buildRecordsFromRaw_(raw.data, raw.headers);
+    }
+    snapshot = { data: raw.data, headers: raw.headers, rows: null,
+      estimatedBytes: estimatedBytes, retainedRows: rows };
+    _readOnlySnapshots_[key] = snapshot;
+    _readOnlySnapshotBytes_ += estimatedBytes;
+  }
+  if (!snapshot.rows) snapshot.rows = buildRecordsFromRaw_(snapshot.data, snapshot.headers);
+  return snapshot.rows;
+}
+/* ══ [I1] EXACTLY ONCE — a replayed write must never create a second row ═════
+ *
+ * THE RISK, and it is the largest one the optimistic-save design introduces.
+ * A transport failure is *ambiguous*: the request may have reached the server
+ * and COMMITTED before the connection dropped. The client's queue then replays
+ * it. Nothing in the write path is idempotent — every add_* handler appends —
+ * so the replay writes the row AGAIN. On a cash movement or a stock scan that
+ * is duplicated money or duplicated stock, and neither the user nor the sheet
+ * shows any sign that it happened.
+ *
+ * THE NATURAL KEY, and why it is not a new column. `unique_id` already exists
+ * on these tables and already identifies a row; the client mints it, sends it,
+ * and re-sends the SAME one on every retry because it lives in the queued
+ * payload. So "have I already committed this request?" and "does a row with
+ * this unique_id exist?" are the same question, answered from columns that are
+ * already there. A `request_uid` column would be a schema change, and the
+ * schema is not this programme's to touch — that constraint dictated the
+ * design rather than the other way round. Same discipline as the audit-queue
+ * drain above, which dedupes on record_uid/column_name/action/changed_at for
+ * exactly the same reason.
+ *
+ * THE CRASH MATRIX, stated the way drainHistoryQueue_ states its own:
+ *   died BEFORE the write   no row exists. The replay finds nothing and writes.
+ *                           NOTHING LOST.
+ *   died AFTER the write,   the row exists, carrying the client's unique_id.
+ *   before the reply        The replay finds it and returns it as success
+ *                           without writing. NOTHING DUPLICATED. This is the
+ *                           case that actually happens, and the one worth
+ *                           testing.
+ *   the reply arrived       Nothing is queued at all; there is no replay.
+ *
+ * WHAT THIS DOES NOT DO. It does not scan for duplicates that already exist,
+ * and it never deletes anything. I1 prevents duplicates at the source; a job
+ * that removes rows it believes are duplicates is a data-loss engine.
+ *
+ * COST. One column of the target table, read the way maxIdOf_ reads one column
+ * — the same cost class as the id allocation the same handler already pays,
+ * and it reads the WHOLE column rather than a tail on purpose: a queued change
+ * can be replayed hours later, from a phone that spent the night in a pocket,
+ * so a tail scan would silently stop deduping exactly when it matters most.
+ */
+
+/**
+ * The first row whose `columnName` equals `value`, as a lowercase-keyed record,
+ * or null. Read-only.
+ */
+function findRowByColumn_(dbId, sheetName, columnName, value) {
+  if (typeof isSystemTableBackend_ === 'function' && isSystemTableBackend_(dbId, sheetName)) return systemFindByBusinessKey_(sheetName, columnName, value);
+  const want = String(value == null ? '' : value).trim();
+  if (!want) return null;
+  const sheet = getSpreadsheet_(dbId).getSheetByName(sheetName);
+  if (!sheet) return null;
+  const headers = getHeaders_(sheet);
+  const wantCol = String(columnName || 'unique_id').trim().toLowerCase();
+  const idx = headers.findIndex(h => String(h).trim().toLowerCase() === wantCol);
+  if (idx === -1) return null;
+  const last = sheet.getLastRow();
+  if (last < 2) return null;
+  countSheetRead_();
+  const col = sheet.getRange(2, idx + 1, last - 1, 1).getValues();
+  for (let i = 0; i < col.length; i++) {
+    if (String(col[i][0]).trim() === want) {
+      countSheetRead_();
+      const row = sheet.getRange(i + 2, 1, 1, headers.length).getValues()[0];
+      const rec = {};
+      headers.forEach((h, c) => { rec[String(h).trim().toLowerCase()] = row[c]; });
+      return rec;
+    }
+  }
+  return null;
+}
+
+/**
+ * [I1] The exactly-once guard. Call it FIRST in a queueable add handler:
+ *
+ *     const dup = liveDedupe_(dbId, SHEET, d.unique_id);
+ *     if (dup) return liveDedupeReply_(dup);
+ *
+ * Returns the already-committed record when this request has been seen, and
+ * null when it has not — including when the client sent no unique_id at all, in
+ * which case the action is simply not queueable (plan §4.3) and the handler
+ * behaves exactly as it always has.
+ *
+ * Deliberately NOT wrapped in a try/catch that swallows. The audit drain can
+ * afford "no dedupe, worst case a duplicated audit row"; a business table
+ * cannot. If the table cannot be read, the handler's own write would fail on
+ * the same sheet a moment later anyway, so letting it throw loses nothing and
+ * refuses rather than risking a second money row.
+ */
+function liveDedupe_(dbId, sheetName, uniqueId) {
+  return findRowByColumn_(dbId, sheetName, 'unique_id', uniqueId);
+}
+
+/** The success reply for a request that had already been committed. */
+function liveDedupeReply_(record, message) {
+  return {
+    status: 'success',
+    deduped: true,
+    message: message || 'تم الحفظ',
+    data: { record: record }
+  };
+}
+
+/**
+ * Add a record to a sheet. Assigns the ID via getNextIdUnderLock_ (the canonical
+ * counter logic) inside a single lock acquisition — no nested locking.
+ * All sheet writes must go through this or getNextId_.
+ */
+function addRecord_(dbId, sheetName, dataMap, requiredFields) {
+  if (typeof isSystemTableBackend_ === 'function' && isSystemTableBackend_(dbId, sheetName)) return systemAddRecordCompat_(sheetName, dataMap, requiredFields);
+  const missing = (requiredFields || []).filter(f => dataMap[f] === undefined || dataMap[f] === null || String(dataMap[f]).trim() === '');
+  if (missing.length) throw new Error('Missing required fields: ' + missing.join(', '));
+
+  return executeWithLock_(function () {
+    const id = getNextIdUnderLock_(dbId, sheetName);
+    const sheet = getSheet_(sheetName, dbId);
+    const headers = getHeaders_(sheet);
+    /* Match the header EXACTLY first, then fall back to the lowercased name.
+     *
+     * This used to lowercase the header and look up only that, so a dataMap
+     * keyed by the real header name lost every column whose name is not already
+     * lowercase. On valley_purchasing_costing that is 32 of 46 columns — Code,
+     * Type, Shipping Type, Supplier Name, Total costs, the lot — so creating a
+     * purchase wrote a row that was blank apart from the audit columns. Worse,
+     * requiredFields is checked against the map (where 'Code' is present) and
+     * the row is then written from the lowercase lookup (where it is not), so
+     * it validated and discarded the same value.
+     *
+     * The lowercase lookup stays as the fallback, so every caller that already
+     * worked still behaves identically; this can only recover columns that were
+     * being dropped. */
+    const rowValues = headers.map(h => {
+      const name = String(h).trim();
+      if (name.toLowerCase() === 'id') return id;
+      if (dataMap[name] !== undefined) return dataMap[name];
+      const lower = name.toLowerCase();
+      return dataMap[lower] !== undefined ? dataMap[lower] : '';
+    });
+    const newRowNumber = sheet.getLastRow() + 1;
+    sheet.appendRow(rowValues);
+    noteMutation_();
+    noteTableChange_(dbId, sheetName);
+
+    const savedRecord = {};
+    headers.forEach((h, colIdx) => {
+      savedRecord[String(h).trim().toLowerCase()] = rowValues[colIdx];
+    });
+
+    return {
+      status: 'success',
+      message: 'Record added successfully (row ' + newRowNumber + ')',
+      data: { record: savedRecord, newRowNumber: newRowNumber, assignedId: id }
+    };
+  });
+}
+
+/**
+ * Update a row by matching criteriaHeader == criteriaValue.
+ * Uses a single batched setValues() write.
+ */
+function updateRowByCriteria_(sheet, criteriaHeader, criteriaValue, updatesObject) {
+  const headers = getHeaders_(sheet);
+  countSheetRead_();
+  const data = sheet.getDataRange().getValues();
+  const critIdx = headers.findIndex(h => String(h).trim().toLowerCase() === String(criteriaHeader).trim().toLowerCase());
+  if (critIdx === -1) throw new Error('Criteria header "' + criteriaHeader + '" not found.');
+
+  for (let i = 1; i < data.length; i++) {
+    if (String(data[i][critIdx]).trim().toLowerCase() === String(criteriaValue).trim().toLowerCase()) {
+      const newRow = data[i].map((originalVal, colIdx) => {
+        const header = headers[colIdx];
+        const updateKey = Object.keys(updatesObject).find(k => k.trim().toLowerCase() === String(header).trim().toLowerCase());
+        return updateKey !== undefined ? updatesObject[updateKey] : originalVal;
+      });
+      sheet.getRange(i + 1, 1, 1, newRow.length).setValues([newRow]);
+      noteMutation_();
+      noteSheetChange_(sheet);
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Row-edit repair (Stage 2): formula-safe patch for keyed record updates.
+ *
+ * Same match contract as updateRowByCriteria_ (case-insensitive header and
+ * criteria match; returns true when a row matches, false when none does) but
+ * writes ONLY cells that satisfy both conditions:
+ *   1. the update map names the column (case-insensitive, as before), and
+ *   2. the cell does not currently hold a sheet formula.
+ * Cells holding formulas are preserved unconditionally — even when the update
+ * map names them — so evaluated values are never written back over live
+ * expressions and array/spill outputs are never clipped. Update keys with no
+ * matching header are ignored, as with updateRowByCriteria_.
+ *
+ * Adjacent writable columns are written in single contiguous setValues calls;
+ * formula cells, untouched columns and unknown keys break batches, so a write
+ * can never span a protected gap. Callers that must install or refresh
+ * application-owned formulas use the explicit writeFormula_/writeRowFormulas_
+ * path instead; this helper never writes a formula.
+ *
+ * The extra single-row getFormulas() read runs only after a row matches.
+ * Callers must still check the Boolean result: false means no matching row
+ * (missing record), never a silent success.
+ */
+function patchRowByCriteria_(sheet, criteriaHeader, criteriaValue, updatesObject) {
+  const headers = getHeaders_(sheet);
+  countSheetRead_();
+  const data = sheet.getDataRange().getValues();
+  const critIdx = headers.findIndex(h => String(h).trim().toLowerCase() === String(criteriaHeader).trim().toLowerCase());
+  if (critIdx === -1) throw new Error('Criteria header "' + criteriaHeader + '" not found.');
+
+  for (let i = 1; i < data.length; i++) {
+    if (String(data[i][critIdx]).trim().toLowerCase() === String(criteriaValue).trim().toLowerCase()) {
+      const formulas = sheet.getRange(i + 1, 1, 1, headers.length).getFormulas()[0];
+      const cells = [];
+      headers.forEach(function (header, colIdx) {
+        const updateKey = Object.keys(updatesObject).find(k => k.trim().toLowerCase() === String(header).trim().toLowerCase());
+        if (updateKey === undefined) return;
+        if (formulas[colIdx]) return; /* live formula: preserve, never overwrite */
+        cells.push({ col: colIdx, value: updatesObject[updateKey] });
+      });
+      /* Batch adjacent writable columns; a protected/untouched column ends the run. */
+      let run = [];
+      const flush = function () {
+        if (!run.length) return;
+        const start = run[0].col;
+        sheet.getRange(i + 1, start + 1, 1, run.length).setValues([run.map(function (c) { return c.value; })]);
+        run = [];
+      };
+      cells.forEach(function (c) {
+        if (run.length && c.col !== run[run.length - 1].col + 1) flush();
+        run.push(c);
+      });
+      flush();
+      noteMutation_();
+      noteSheetChange_(sheet);
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Phase 1 version-check (optimistic concurrency, static only).
+ * No `version` column exists yet; AUDIT_COLUMNS has updated_at but business
+ * headers lack version. Missing column/value safely defaults to 0 and unknown
+ * `version` keys are ignored by patchRowByCriteria_, so this never backfills.
+ */
+function getRowVersion_(row) {
+  if (!row) return 0;
+  var v = row.version;
+  if (v === undefined) {
+    var k = Object.keys(row).find(function (kk) { return String(kk).trim().toLowerCase() === 'version'; });
+    v = k ? row[k] : undefined;
+  }
+  if (v === undefined || v === null || v === '') return 0;
+  var n = Number(v);
+  if (!isFinite(n) || n < 0) return 0;
+  return Math.floor(n);
+}
+function checkRowVersion_(oldRow, clientVersion) {
+  var current = getRowVersion_(oldRow);
+  var want = (clientVersion === undefined || clientVersion === null || clientVersion === '') ? 0 : Number(clientVersion);
+  if (!isFinite(want) || want < 0) want = 0;
+  else want = Math.floor(want);
+  if (want !== current) {
+    /* Pre-mutation optimistic-locking refusal: nothing has been written, so the
+       request-guard ledger must record a confirmed failure (safe to correct and
+       retry with a fresh request), never an uncertain outcome. */
+    var _conflict = new Error('CONFLICT: stale version — reload and retry | تعارض: النسخة قديمة — أعد التحميل وحاول مجدداً');
+    _conflict.notApplied = true; _conflict.code = 'REQUEST_NOT_APPLIED';
+    throw _conflict;
+  }
+  return current;
+}
+
+/**
+ * Delete all rows where criteriaHeader == criteriaValue.
+ * Deletes bottom-up so earlier row indices stay valid. Returns count deleted.
+ *
+ * PERF: matching rows are removed in CONTIGUOUS BLOCKS — one deleteRows(start,
+ * n) per run rather than one deleteRow() per row. Exactly the same rows go, in
+ * the same bottom-up order, and the same count comes back; the only difference
+ * is the number of round trips. That matters because the rows this is used on
+ * are almost always contiguous (a document's lines are appended together), so
+ * a 40-line purchase went from 40 API calls to 1, and each deleteRow on a
+ * 20 000-row sheet also forced Sheets to shift every row beneath it.
+ */
+function deleteRowsByCriteria_(sheet, criteriaHeader, criteriaValue) {
+  return deleteRowsWhereIn_(sheet, criteriaHeader, [criteriaValue]);
+}
+
+/**
+ * Delete every row whose criteriaHeader is ANY OF `values`, in ONE pass.
+ *
+ * Calling deleteRowsByCriteria_ in a loop costs a full getDataRange() read per
+ * value, which is how deleting the 10 outputs of a manufacturing order came to
+ * read the whole consumption sheet ten times. One read, one predicate, the same
+ * contiguous-block deletion.
+ *
+ * Returns the number of rows removed.
+ */
+function deleteRowsWhereIn_(sheet, criteriaHeader, values) {
+  const want = Object.create(null);
+  let any = false;
+  (values || []).forEach(function (v) {
+    if (v === undefined || v === null) return;
+    want[String(v).trim()] = true;
+    any = true;
+  });
+  if (!any) return 0;
+
+  const headers = getHeaders_(sheet);
+  countSheetRead_();
+  const data = sheet.getDataRange().getValues();
+  const critIdx = headers.findIndex(h => String(h).trim().toLowerCase() === String(criteriaHeader).trim().toLowerCase());
+  if (critIdx === -1) return 0;
+
+  /* 1-based sheet row numbers, ascending. */
+  const target = [];
+  for (let i = 1; i < data.length; i++) {
+    if (want[String(data[i][critIdx]).trim()]) target.push(i + 1);
+  }
+  if (!target.length) return 0;
+
+  /* Bottom-up, in contiguous blocks: same rows, same order, one API call per
+     run instead of one per row. */
+  let deleted = 0;
+  let end = target.length - 1;
+  while (end >= 0) {
+    let start = end;
+    while (start > 0 && target[start - 1] === target[start] - 1) start--;
+    const count = end - start + 1;
+    sheet.deleteRows(target[start], count);
+    noteMutation_();
+    deleted += count;
+    end = start - 1;
+  }
+  noteSheetChange_(sheet);
+  return deleted;
+}
+
+// ==========================================
+// Canonical per-company reference-data cache (Part 1)
+// ==========================================
+/**
+ * Canonical per-company reference-data cache. Every key is namespaced by
+ * dbId, so one company's cached data can never be served to a request for
+ * a different company — this is the ONLY caching helper any company's
+ * Actions file should use for hot reference-data reads going forward.
+ *
+ * Cache-key / version contract (Phase 4):
+ *   Base key format:    refs_<dbId>_<kind>
+ *   Versioned key:      refs_<dbId>_<kind>_v<version>
+ *     Versioned callers (tlRefs_/tcRefs_/vfRefsCached_) append
+ *     '_v' + <stamp> to `kind` BEFORE calling here, so the final
+ *     CacheService key carries the stamp (e.g. refs_<dbId>_products_v171...).
+ *   TTL: 600s for reference entries (TL_REF_TTL / TC_REF_TTL / FIN_REF_TTL_G).
+ *     Stamps (tl_refs_ver_<dbId> / tc_refs_ver_<dbId> / vf_refs_ver_<dbId>)
+ *     live 21600s (6h) and are bumped on write, not expired.
+ *   Version bump rule: after EVERY successful write to a cached table
+ *     (title_index/parties/products and per-company equivalents), bump the
+ *     company's stamp (bumpTlRefsVersion_/bumpTcRefsVersion_/bumpVfRefsVersion_
+ *     or the bust* wrapper) to orphan ALL derived versioned keys at once.
+ *     ALSO call invalidateRefsCache_(dbId, kind) for each touched kind so
+ *     legacy unstamped keys (refs_<dbId>_<kind> written before versioning)
+ *     are removed too. Manual sheet edits bypass both and surface within TTL.
+ *
+ * @param {string} dbId - the requesting company's own spreadsheet ID,
+ *   always taken from the resolved company context of the CURRENT
+ *   request — never from a raw client-supplied parameter (see Part 1b).
+ * @param {string} kind - a short label for what's being cached, e.g.
+ *   'categories', 'chart_of_accounts', 'products', 'parties'.
+ * @param {number} ttlSeconds - how long to keep the cached value.
+ * @param {function} builder - a zero-argument function that performs the
+ *   actual (expensive) Sheets read when there's a cache miss.
+ */
+function getRefsCached_(dbId, kind, ttlSeconds, builder) {
+  const key = 'refs_' + String(dbId) + '_' + String(kind);
+  try {
+    const cached = getChunkedCache_(key);
+    if (cached !== null) return cached;
+  } catch (e) { /* fall through to rebuild */ }
+  const value = builder();
+  try { putChunkedCache_(key, value, ttlSeconds); } catch (e2) { /* cache write failures are non-fatal */ }
+  return value;
+}
+
+// ==========================================
+// Chunked CacheService (Phase 6 — harvested from 04_TableEngine.js)
+// ==========================================
+/**
+ * CacheService rejects any single value over ~100 KB. getRefsCached_ used to do
+ * a plain cache.put inside a try/catch, so for a large reference list — a big
+ * products or parties table — the put threw, was swallowed, and the cache
+ * SILENTLY NEVER WORKED: every call rebuilt from a full sheet read. The bigger
+ * the company, the less the cache helped.
+ *
+ * 04_TableEngine.js had a correct chunked implementation (manifest + numbered
+ * chunk keys) that nothing could reach, because that whole engine was dead code
+ * (F-17). It is harvested here, generalised, before the engine is deleted.
+ *
+ * Layout: '<key>__m' is a stable pointer to immutable generation-specific chunks.
+ * Chunks are published before the pointer, so readers see one complete generation or
+ * a miss. The old sanitized namespace is not read: punctuation-colliding legacy
+ * keys are ambiguous and must cold-migrate.
+ */
+function chunkedCacheKeyDigest_(value) {
+  var text = String(value);
+  try {
+    if (typeof Utilities !== 'undefined' && Utilities.computeDigest && Utilities.DigestAlgorithm && Utilities.Charset) {
+      return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, text, Utilities.Charset.UTF_8)
+        .map(function (b) { var n = b < 0 ? b + 256 : b; return ('0' + n.toString(16)).slice(-2); }).join('').slice(0, 16);
+    }
+  } catch (e) {}
+  // Offline harnesses do not provide Utilities. Two independent 32-bit hashes
+  // still keep sanitized/truncated cache namespaces isolated in that fallback.
+  var h1 = 2166136261, h2 = 2246822519;
+  for (var i = 0; i < text.length; i++) {
+    var c = text.charCodeAt(i);
+    h1 ^= c; h1 = Math.imul(h1, 16777619);
+    h2 ^= c + i; h2 = Math.imul(h2, 3266489917);
+  }
+  return ('00000000' + (h1 >>> 0).toString(16)).slice(-8) + ('00000000' + (h2 >>> 0).toString(16)).slice(-8);
+}
+
+function chunkedCacheKeys_(key) {
+  var raw = String(key);
+  var safe = raw.replace(/[^a-zA-Z0-9_]/g, '_').slice(0, 184);
+  var scoped = 'ck2_' + safe + '_' + chunkedCacheKeyDigest_(raw);
+  var generation = arguments.length > 1 && arguments[1] != null ? String(arguments[1]).replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 48) : '';
+  return { manifest: scoped + '__m', prefix: scoped + (generation ? '__g' + generation : '') + '__c', generation: generation, base: scoped };
+}
+
+// Read the pre-byte-aware namespace during the migration window. New writes
+// always use chunkedCacheKeys_; removal clears both layouts for rollback safety.
+function legacyChunkedCacheKeys_(key) {
+  var safe = String(key).replace(/[^a-zA-Z0-9_]/g, '_').slice(0, 200);
+  return { manifest: safe + '__m', prefix: safe + '__c' };
+}
+
+function utf8ByteLength_(text) {
+  try { return encodeURIComponent(String(text)).replace(/%[0-9A-F]{2}/g, 'x').length; }
+  catch (e) { return String(text).length; }
+}
+
+function utf8Chunks_(text, maxBytes) {
+  var chunks = [], part = '', bytes = 0;
+  Array.from(String(text)).forEach(function (ch) {
+    var n = utf8ByteLength_(ch);
+    if (part && bytes + n > maxBytes) { chunks.push(part); part = ''; bytes = 0; }
+    part += ch; bytes += n;
+  });
+  if (part || !chunks.length) chunks.push(part);
+  return chunks;
+}
+
+function chunkedCacheEpochKey_(key) {
+  return 'ck2e_' + chunkedCacheKeyDigest_(String(key));
+}
+
+function chunkedCacheGeneration_() {
+  var uuid = '';
+  try { if (Utilities && Utilities.getUuid) uuid = String(Utilities.getUuid()); } catch (e) {}
+  if (!uuid) uuid = String(new Date().getTime()) + '_' + String(Math.random()).slice(2);
+  return uuid.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 48) || 'g' + String(new Date().getTime());
+}
+
+function withChunkedCacheLock_(fn) {
+  var lock = null;
+  try {
+    if (typeof LockService !== 'undefined' && LockService.getScriptLock) {
+      lock = LockService.getScriptLock();
+      if (!lock.tryLock(5000)) return null;
+    }
+    return fn();
+  } catch (e) { return null; }
+  finally { try { if (lock) lock.releaseLock(); } catch (e2) {} }
+}
+
+function removeChunkedPublication_(cache, keys, maxChunks) {
+  if (!keys || !keys.generation) return;
+  var all = [];
+  for (var i = 0; i < maxChunks; i++) all.push(keys.prefix + i);
+  if (all.length) cache.removeAll(all);
+}
+
+function readChunkedCache_(keys, maxChunks) {
+  try {
+    var cache = CacheService.getScriptCache();
+    var manifestRaw = cache.get(keys.manifest);
+    if (!manifestRaw) return null;
+    var manifest = JSON.parse(manifestRaw);
+    if (!manifest || !manifest.g || (keys.generation && String(manifest.g) !== String(keys.generation))) return null;
+    var n = Number(manifest.n);
+    if (!isFinite(n) || n < 1 || n !== Math.floor(n) || n > maxChunks) return null;
+    var chunkKeys = [], payload = '';
+    for (var i = 0; i < n; i++) chunkKeys.push(keys.prefix + i);
+    var map = cache.getAll(chunkKeys) || {};
+    for (var j = 0; j < n; j++) {
+      var ck = keys.prefix + j;
+      if (map[ck] === undefined || map[ck] === null) return null;
+      payload += map[ck];
+    }
+    if (Number(manifest.bytes) !== utf8ByteLength_(payload) || String(manifest.h || '') !== chunkedCacheKeyDigest_(payload)) return null;
+    return JSON.parse(payload);
+  } catch (e) { return null; }
+}
+
+function putChunkedCache_(key, value, ttlSeconds) {
+  try {
+    var baseKeys = chunkedCacheKeys_(key);
+    var cache = CacheService.getScriptCache();
+    var payload = JSON.stringify(value);
+    var chunkSize = Number(CONFIG.TABLE_CACHE_CHUNK_SIZE || 90000);
+    var maxChunks = Number(CONFIG.TABLE_CACHE_MAX_CHUNKS || 50);
+    var chunks = utf8Chunks_(payload, chunkSize);
+    if (!isFinite(chunkSize) || chunkSize < 1 || !isFinite(maxChunks) || maxChunks < 1 || chunks.length > maxChunks || chunks.some(function (c) { return utf8ByteLength_(c) > chunkSize; })) return false;
+    var generation = chunkedCacheGeneration_();
+    var keys = chunkedCacheKeys_(key, generation);
+    var epochKey = chunkedCacheEpochKey_(key);
+    var epoch = cache.get(epochKey) || '0';
+    var put = {};
+    chunks.forEach(function (c, i) { put[keys.prefix + i] = c; });
+    // Chunks are immutable and unreferenced until the manifest is written.
+    cache.putAll(put, ttlSeconds);
+    var published = withChunkedCacheLock_(function () {
+      var currentEpoch = cache.get(epochKey) || '0';
+      if (String(currentEpoch) !== String(epoch)) {
+        removeChunkedPublication_(cache, keys, maxChunks);
+        return false;
+      }
+      var oldManifest = null;
+      try { oldManifest = JSON.parse(cache.get(baseKeys.manifest) || ''); } catch (e) {}
+      cache.put(baseKeys.manifest, JSON.stringify({ v: 2, g: generation, n: chunks.length, bytes: utf8ByteLength_(payload), h: chunkedCacheKeyDigest_(payload), ts: new Date().getTime() }), ttlSeconds);
+      if (oldManifest && oldManifest.g && String(oldManifest.g) !== generation) removeChunkedPublication_(cache, chunkedCacheKeys_(key, oldManifest.g), maxChunks);
+      return true;
+    });
+    return published === true;
+  } catch (e) { return false; }
+}
+
+/** @return the cached value, or null on any miss. */
+function getChunkedCache_(key) {
+  try {
+    var maxChunks = Number(CONFIG.TABLE_CACHE_MAX_CHUNKS || 50);
+    var base = chunkedCacheKeys_(key);
+    var raw = CacheService.getScriptCache().get(base.manifest);
+    if (!raw) return null;
+    var manifest = JSON.parse(raw);
+    if (!manifest || !manifest.g) return null;
+    return readChunkedCache_(chunkedCacheKeys_(key, manifest.g), maxChunks);
+  } catch (e) { return null; }
+}
+
+function removeChunkedCache_(key) {
+  try {
+    var maxChunks = Number(CONFIG.TABLE_CACHE_MAX_CHUNKS || 50);
+    var base = chunkedCacheKeys_(key);
+    withChunkedCacheLock_(function () {
+      var cache = CacheService.getScriptCache();
+      var current = null;
+      try { current = JSON.parse(cache.get(base.manifest) || ''); } catch (e) {}
+      var epochKey = chunkedCacheEpochKey_(key);
+      cache.put(epochKey, String(Number(cache.get(epochKey) || 0) + 1), 21600);
+      cache.remove(base.manifest);
+      if (current && current.g) removeChunkedPublication_(cache, chunkedCacheKeys_(key, current.g), maxChunks);
+      // Legacy fixed-key entries are safe to remove, but never read.
+      var legacy = legacyChunkedCacheKeys_(key), old = [legacy.manifest];
+      for (var i = 0; i < maxChunks; i++) old.push(legacy.prefix + i);
+      cache.removeAll(old);
+      return true;
+    });
+  } catch (e) {}
+}
+
+// ==========================================
+// O(1) primary-key lookup (Phase 6 — harvested from 04_TableEngine.js)
+// ==========================================
+/**
+ * Returns { rows, byPk, pks, headers } for a sheet, with byPk a Map giving O(1)
+ * lookup by primary key. Callers that repeatedly do
+ * rows.find(r => String(r.id) === String(x)) inside a loop are O(n*m); this
+ * makes them O(n+m).
+ *
+ * Built on getAllRecords_, so it shares the request memo and is counted by the
+ * Phase 0b SheetReads instrumentation — unlike the TableEngine original, which
+ * kept a second parallel read path and its own cache.
+ *
+ * byPk preserves the pre-optimization Map contract from indexById: stored
+ * trimmed keys and lowercase aliases are indexed, but Map queries are not
+ * normalized. Callers that need an alias must probe it explicitly. The whole
+ * entry { rows, byPk, pks, headers } is memoised per request; rows and the
+ * records byPk returns are SHARED objects across memo hits — do not mutate
+ * them unless you are the sole owner of this read.
+ */
+const _pkIndexCache_ = {};
+
+/**
+ * Generalised O(1) id index over an in-memory row array (Phase 4).
+ * Use instead of rows.find(function(r){ return String(r.id)===String(x); })
+ * or full-range forEach scans for party/product lookups.
+ *
+ * MATCHING CONTRACT (Task 1B — read before converting a .find() to this):
+ * - Header resolution: idField is matched case-insensitively and after trim
+ *   against the record keys; the record's own key spelling is used to read
+ *   the value. Default field is 'id'.
+ * - Stored ids are keyed by their trimmed string form AND their lowercase
+ *   alias. Queries are ordinary Map queries: whitespace is not removed and
+ *   case is not repaired unless the caller explicitly probes the alias.
+ * - Duplicate precedence: LAST match wins, as in the pre-optimization Map.
+ * - Blank/null ids are skipped (never indexed). A miss returns undefined
+ *   from get() / false from has() — callers decide what a miss means.
+ * - Numeric ids are string-normalized (7 and '7' are the same key; the
+ *   first-stored row wins).
+ * - Ownership: the Map holds REFERENCES to the caller's row objects. When
+ *   obtained via getRecordsByPk_ the entry (rows + index) is memoised for
+ *   the request, so mutating a returned record is visible to later readers
+ *   in the same request. Treat returned records as read-only unless you
+ *   own the rows array you passed in.
+ *
+ * @param {Array} rows - records from getAllRecords_ (or a cached accessor).
+ * @param {string} idField - id column name, default 'id' (case-insensitive).
+ * @return {Map} the pre-optimization exact-query Map with lowercase aliases.
+ */
+function indexById(rows, idField) {
+  var want = String(idField == null || idField === '' ? 'id' : idField).trim().toLowerCase() || 'id';
+  var byId = new Map();
+  if (!rows || !rows.length) return byId;
+  var actual = null;
+  try {
+    var sample = rows[0];
+    for (var k in sample) {
+      if (String(k).trim().toLowerCase() === want) { actual = k; break; }
+    }
+  } catch (e) { actual = null; }
+  rows.forEach(function (r) {
+    var raw = actual !== null ? r[actual] : (r[want] !== undefined ? r[want] : r[idField]);
+    var pk = String(raw == null ? '' : raw).trim();
+    if (!pk) return;
+    var lc = pk.toLowerCase();
+    // Preserve the original last-write-wins behavior for both the stored key
+    // and lowercase alias. Query normalization belongs to callers, not here.
+    byId.set(pk, r);
+    byId.set(lc, r);
+  });
+  return byId;
+}
+
+function getRecordsByPk_(dbId, sheetName, pkColumn) {
+  const pkLc = String(pkColumn || 'id').trim().toLowerCase();
+  const key = dbId + '|' + sheetName + '|' + pkLc;
+  if (!_recordCacheDisabled_ && _pkIndexCache_[key]) return _pkIndexCache_[key];
+
+  const rows = getAllRecords_(dbId, sheetName);
+  const headers = getHeaders_(getSheet_(sheetName, dbId)).map(function (h) { return String(h).trim(); });
+  let pkHeader = null;
+  headers.forEach(function (h) { if (h.toLowerCase() === pkLc) pkHeader = h; });
+
+  const byPk = indexById(rows, pkHeader || pkColumn || 'id');
+  const pks = [];
+  rows.forEach(function (r) {
+    const raw = pkHeader !== null && r[pkHeader] !== undefined ? r[pkHeader] : r[pkLc];
+    const pk = String(raw == null ? '' : raw).trim();
+    if (!pk) return;
+    pks.push(pk);
+  });
+
+  const entry = { rows: rows, byPk: byPk, pks: pks, headers: headers, pkHeader: pkHeader || pkColumn };
+  if (!_recordCacheDisabled_) _pkIndexCache_[key] = entry;
+  return entry;
+}
+
+/**
+ * Invalidates one company's cached reference data for one kind. Call this
+ * from every add_/edit_/delete_ action that mutates a sheet this helper
+ * caches, immediately after the mutation succeeds.
+ */
+function invalidateRefsCache_(dbId, kind) {
+  const key = 'refs_' + String(dbId) + '_' + kind;
+  // Remove both forms: the chunked entry written today, and the single-key entry
+  // any still-live cache may hold from before Phase 6.
+  try { removeChunkedCache_(key); } catch (e) {}
+  try { CacheService.getScriptCache().remove(key); } catch (e) {}
+}
+
+/**
+ * email(lowercased) -> { name, role, company, status } from ERP_Users.
+ * Keyed by the authority generation, NOT a TTL: an admin saving a user bumps the
+ * generation, so the next request anywhere in the system rebuilds this map.
+ *
+ * getRefsCached_ chunks, so a large ERP_Users cannot silently blow the ~100KB
+ * single-value cap. Do not swap it for a bare cache.put.
+ */
+function userDirectory_() {
+  try {
+    return getRefsCached_(CONFIG.AUTH_SPREADSHEET_ID, 'user_dir_g' + authGeneration_(),
+      CONFIG.CACHE_USER_DIR_SECONDS, function () {
+        var map = {};
+        getAllRecords_(CONFIG.AUTH_SPREADSHEET_ID, 'ERP_Users').forEach(function (u) {
+          var em = String(u.email || '').trim().toLowerCase();
+          if (!em) return;
+          map[em] = {
+            name:    String(u.name || '').trim(),
+            role:    String(u.role || '').trim(),
+            company: String(u.company || '').trim(),
+            status:  String(u.status == null ? 'Active' : u.status).trim() || 'Active'
+          };
+        });
+        return map;
+      }) || {};
+  } catch (e) { return {}; }
+}
+
+/**
+ * Unchanged contract: email(lowercased) -> display name. Now a projection over
+ * userDirectory_. Consumed at Code.js:110 — name, signature and return shape
+ * are a public contract and do not change.
+ *
+ * This costs nothing extra: userNameMap_() already read ERP_Users on every page
+ * load; the 300s TTL is simply replaced by a generation key on the same read.
+ */
+function userNameMap_() {
+  var dir = userDirectory_(), out = {};
+  for (var em in dir) if (dir[em].name) out[em] = dir[em].name;
+  return out;
+}
+
+// ==========================================
+// Versioned cache invalidation
+// ==========================================
+/**
+ * Installable onEdit target. THE SIMPLE TRIGGER onEdit(e) BELOW NEVER FIRES:
+ * this is a standalone script (.clasp.json carries a bare scriptId, no
+ * container) and simple triggers only run in container-bound projects. Until
+ * installTriggers_ creates this trigger, a change typed directly into the AUTH
+ * spreadsheet reaches no invalidation at all beyond the staleness ceiling
+ * folded into authGeneration_.
+ */
+function onAuthSheetEdit(e) {
+  try {
+    const sheet = e.range.getSheet();
+    if (sheet.getParent().getId() !== CONFIG.AUTH_SPREADSHEET_ID) return;
+    const sheetName = sheet.getName();
+    if (sheetName === 'ERP_Users') bumpVersion_('ERP_Users');
+    else if (sheetName === 'ERP_Companies') bumpVersion_('ERP_Companies');
+    else if (sheetName === 'ERP_Pages_Matrix') bumpVersion_('ERP_Pages_Matrix');
+    else if (sheetName === 'ERP_Information') bumpVersion_('ERP_Information');
+    else if (sheetName === 'ERP_system_work') bumpVersion_('ERP_system_work');
+  } catch (err) { console.error('onAuthSheetEdit failed: ' + err.message); }
+}
+
+/** Retained for compatibility. Never fires — see onAuthSheetEdit. */
+function onEdit(e) { onAuthSheetEdit(e); }
+
+// ==========================================
+// Authority generation (durable, event-driven invalidation)
+// ==========================================
+var _genMemo_ = null;   // per-execution memo, cleared by resetRecordCache_
+var _ksMemo_  = null;   // kill-switch memo, cleared by resetRecordCache_ and by a bump
+
+/**
+ * The authority generation. Durable in ScriptProperties, mirrored in
+ * CacheService at max TTL, so the steady-state cost is one cache get.
+ *
+ * NEVER writes to ScriptProperties — only bumpAuthGeneration_ does, and only in
+ * response to a real mutation. A fresh deployment with no property set reads '0'
+ * and works correctly; the first admin save bootstraps the real stamp.
+ *
+ * The trailing time bucket is the staleness CEILING: it guarantees that a direct
+ * sheet edit made while the onAuthSheetEdit trigger is missing or broken clears
+ * within AUTH_STALENESS_CEILING_SECONDS, so the trigger is not load-bearing.
+ */
+function authGeneration_() {
+  if (_genMemo_ !== null) return _genMemo_;
+  var base = null;
+  try { base = CacheService.getScriptCache().get('erp_gen'); } catch (e) {}
+  if (!base) {
+    try { base = PropertiesService.getScriptProperties().getProperty('erp_gen'); } catch (e) {}
+    if (!base) base = '0';
+    try { CacheService.getScriptCache().put('erp_gen', base, 21600); } catch (e) {}
+  }
+  var ceilSec = Number(CONFIG.AUTH_STALENESS_CEILING_SECONDS) || 300;
+  _genMemo_ = base + '.' + Math.floor(new Date().getTime() / (ceilSec * 1000));
+  return _genMemo_;
+}
+
+/**
+ * Invalidate every cached authority payload for every user, everywhere, at once.
+ *
+ * Order matters: the DURABLE write is the source of truth and goes first. If it
+ * fails, the cache mirror gets a 60s TTL instead of 6h, so a later eviction
+ * cannot strand readers on a stale Properties generation for six hours.
+ */
+function bumpAuthGeneration_() {
+  var g = String(new Date().getTime());
+  var durable = false;
+  try {
+    PropertiesService.getScriptProperties().setProperty('erp_gen', g);
+    durable = true;
+  } catch (e) {
+    try { console.error('bumpAuthGeneration_: durable write failed — ' + e.message); } catch (e2) {}
+  }
+  try { CacheService.getScriptCache().put('erp_gen', g, durable ? 21600 : 60); }
+  catch (e) { try { CacheService.getScriptCache().remove('erp_gen'); } catch (e2) {} }
+  _genMemo_ = null;   // recompute with the new base and the current bucket
+  _ksMemo_  = null;   // toggleKillSwitch_ flips the flag AFTER the gate memoised it
+}
+
+function bumpVersion_(sheetName) {
+  try {
+    const cache = CacheService.getScriptCache();
+    const now = String(new Date().getTime());
+    if (sheetName === 'ERP_Users') cache.put('version_users', now);
+    else if (sheetName === 'ERP_Companies') cache.put('version_companies', now);
+    else if (sheetName === 'ERP_Pages_Matrix') cache.put('version_matrix', now);
+    else if (sheetName === 'ERP_Information') cache.put('version_killswitch', now);
+    else if (sheetName === 'ERP_system_work') cache.put('version_killswitch', now);
+  } catch (e) {}
+  // ERP_Users (role/company/status), ERP_Pages_Matrix (grants) and
+  // ERP_system_work / ERP_Information (kill switch) all feed the authority
+  // decision. Any of them changing invalidates every cached authority payload.
+  // Additive: the per-sheet version keys above stay, because version_companies
+  // still has live consumers.
+  if (sheetName === 'ERP_Users' || sheetName === 'ERP_Pages_Matrix' ||
+      sheetName === 'ERP_Information' || sheetName === 'ERP_system_work') {
+    bumpAuthGeneration_();
+  }
+}
+
+// ==========================================
+// Phase 5 — shared totals lib (single source of truth for all companies)
+// No rounding applied here: callers preserve existing raw-float behavior.
+// Apply round2_/roundQty_ at the display/write layer only, never in here.
+// ==========================================
+function sharedNum0_(v) { return Math.max(0, Number(v) || 0); }
+
+/** Global compat alias. Per-file num0_ wrappers delegate to sharedNum0_. */
+function num0_(v) { return sharedNum0_(v); }
+
+function calcLineNet_(qty, price) { return sharedNum0_(qty) * sharedNum0_(price); }
+
+/**
+ * Shared invoice totals. Accepts generic {qty,price,tax,discount} and also
+ * TopLight {product_qty,product_price,product_tax,product_discount} shapes.
+ * discountPercent (header-level, e.g. TopLight discount_percent) defaults to 0
+ * for Valley-style invoices with no header discount.
+ * Returns {net,tax,discount,total} with total = net - discount + tax.
+ */
+function calcTotals_(lines, discountPercent) {
+  var dp = sharedNum0_(discountPercent);
+  var net = 0, tax = 0, discount = 0;
+  (lines || []).forEach(function (l) {
+    var qty = (l && l.qty !== undefined) ? l.qty : (l ? l.product_qty : 0);
+    var price = (l && l.price !== undefined) ? l.price : (l ? l.product_price : 0);
+    var taxRate = (l && l.tax !== undefined) ? l.tax : (l ? l.product_tax : 0);
+    var disc = (l && l.discount !== undefined) ? l.discount : (l ? l.product_discount : 0);
+    var nv = calcLineNet_(qty, price);
+    net += nv;
+    discount += sharedNum0_(disc);
+    tax += nv * sharedNum0_(taxRate);
+  });
+  discount += net * dp;
+  return { net: net, tax: tax, discount: discount, total: net - discount + tax };
+}
+
+/**
+ * Shared manufacture total (JS source of truth). Components carry resolved
+ * numbers [{qty, unitCost[, mult]}]; the Sheet-formula builder in
+ * Company_TopChemical_Actions.js is display-only. mult covers the T×M / T×N
+ * movement-part multipliers.
+ */
+function calcManufactureTotal_(components) {
+  var total = 0;
+  (components || []).forEach(function (c) {
+    var m = (c && c.mult !== undefined && c.mult !== null && c.mult !== '') ? Number(c.mult) : 1;
+    if (!isFinite(m)) m = 1;
+    var unitCost = (c && c.unitCost !== undefined) ? c.unitCost : (c ? c.price : 0);
+    total += calcLineNet_(c ? c.qty : 0, unitCost) * m;
+  });
+  return total;
+}
+
+// ==========================================
+// Audit trail helpers (B5) — multi-device sessions + Odoo-style history
+// ==========================================
+const AUDIT_COLUMNS = ['record_uid', 'created_by', 'created_at', 'updated_by', 'updated_at', 'approved_by', 'approved_at'];
+
+function safeStr_(v) {
+  if (v === null || v === undefined) return '';
+  if (v instanceof Date) return v.toISOString();
+  if (typeof v === 'object') { try { return JSON.stringify(v); } catch (e) { return String(v); } }
+  return String(v);
+}
+
+/**
+ * Append one ERP_Record_History row per CHANGED business column.
+ * `dbId` is the business sheet's spreadsheet; history is ALWAYS stored in the
+ * AUTH spreadsheet's ERP_Record_History tab (created by batch1_createSystemSheets).
+ * For 'create' logs every business column's new value; for update/approve/delete
+ * logs only columns whose old/new differ.
+ */
+/**
+ * The history rows ONE record change would produce. No write, no lock.
+ * Split out of logHistory_ so many changes can share a single write — see
+ * logHistoryMany_.
+ */
+function historyRowsFor_(dbId, sheetName, recordUid, recordId, user, action, newValues, oldValues) {
+  const allHeaders = (typeof isSystemTableBackend_ === 'function' && isSystemTableBackend_(dbId, sheetName))
+    ? Object.keys(newValues || oldValues || {})
+    : getHeaders_(getSheet_(sheetName, dbId)).map(function (h) { return String(h).trim(); });
+  const businessHeaders = allHeaders.filter(function (h) {
+    const lc = h.toLowerCase();
+    return AUDIT_COLUMNS.indexOf(lc) === -1 && lc !== 'id';
+  });
+  const rows = [];
+  businessHeaders.forEach(function (col) {
+    const nVal = newValues ? (newValues[col] !== undefined ? newValues[col] : '') : null;
+    const oVal = oldValues ? (oldValues[col] !== undefined ? oldValues[col] : '') : null;
+    if (action !== 'create' && safeStr_(nVal) === safeStr_(oVal)) return;
+    rows.push({
+      sheet_name: sheetName,
+      record_uid: recordUid,
+      record_id: recordId,
+      action: action,
+      column_name: col,
+      old_value: safeStr_(oVal),
+      new_value: safeStr_(nVal),
+      changed_by: (user && String(user).trim() !== '') ? user : 'System',
+      changed_at: new Date(),
+      created_at: new Date()
+    });
+  });
+  return rows;
+}
+
+/**
+ * Audit MANY record changes in one write.
+ *
+ * logHistory_ already batches the columns of a single record, but calling it in
+ * a loop still costs one script lock, one id allocation and one setValues PER
+ * ROW — and the lock is the global one every user shares. Saving a 50-line
+ * invoice paid that fifty times, on top of writing the lines themselves.
+ *
+ * `entries` are {dbId, sheetName, recordUid, recordId, user, action, newValues,
+ * oldValues}. Identical cell values to N logHistory_ calls, identical ids, in
+ * the same order.
+ */
+function logHistoryMany_(entries) {
+  const rows = [];
+  (entries || []).forEach(function (e) {
+    if (!e) return;
+    historyRowsFor_(e.dbId, e.sheetName, e.recordUid, e.recordId, e.user, e.action,
+      e.newValues, e.oldValues).forEach(function (r) { rows.push(r); });
+  });
+  writeHistoryRows_(rows);
+}
+
+function logHistory_(dbId, sheetName, recordUid, recordId, user, action, newValues, oldValues) {
+  writeHistoryRows_(historyRowsFor_(dbId, sheetName, recordUid, recordId, user, action, newValues, oldValues));
+}
+
+/* Phase 5 — afterWrite(docType, change): single audit fan-out for the shared
+ * save path (saveRecordWithAudit_ / approveRecordWithAudit_). Writes
+ * ERP_Record_History old/new via logHistory_ AND a SystemLog entry with
+ * RecordID = record_uid, linking SystemLog.RecordID ↔ record_uid.
+ * Never throws: audit failure must not fail the save (RT-1b).
+ * Per-handler manual logHistory_ calls remain for direct-write paths that do
+ * not go through the shared saver; they are compat, not duplicates of this. */
+function afterWrite_(docType, change) {
+  var c = change || {};
+  var dbId = c.dbId || CONFIG.AUTH_SPREADSHEET_ID;
+  var sheetName = c.sheetName || docType;
+  var recordUid = c.recordUid || '';
+  var recordId = (c.recordId !== undefined) ? c.recordId : null;
+  var user = c.user || '';
+  var action = c.action || 'update';
+  var newValues = (c.newValues !== undefined) ? c.newValues : null;
+  var oldValues = (c.oldValues !== undefined) ? c.oldValues : null;
+  try { logHistory_(dbId, sheetName, recordUid, recordId, user, action, newValues, oldValues); }
+  catch (eHist) { try { Logger.log('AUDIT-SKIPPED afterWrite ' + sheetName + ': ' + (eHist && eHist.message)); } catch (eLg) {} }
+  try {
+    var changed = '';
+    try { changed = JSON.stringify({ record_uid: recordUid, action: action }); } catch (eJ) { changed = String(recordUid); }
+    writeSystemLogLink_(sheetName, recordUid, user, action, changed);
+  } catch (eSys) { try { console.error('afterWrite SystemLog link skipped: ' + (eSys && eSys.message)); } catch (e2) {} }
+  return { status: 'success', record_uid: recordUid };
+}
+
+/* Phase 5 — SystemLog bridge: RecordID is always record_uid so
+ * SystemLog.RecordID ↔ ERP_Record_History.record_uid. Defensive: uses the
+ * existing SystemLog infra when present, otherwise skips silently. */
+function writeSystemLogLink_(table, recordUid, userEmail, action, changedFields) {
+  try {
+    var logId = (typeof Utilities !== 'undefined' && Utilities.getUuid) ? Utilities.getUuid() : ('log_' + new Date().getTime());
+    var values = {
+      logid: logId,
+      timestamp: new Date(),
+      companyid: '',
+      companyname: '',
+      action: action,
+      sourceaction: 'afterWrite:' + String(table || ''),
+      recordid: String(recordUid || ''),
+      useremail: String(userEmail || ''),
+      changedfields: String(changedFields || ''),
+      status: 'success',
+      errormessage: '',
+      table: String(table || ''),
+      page: ''
+    };
+    if (typeof systemStorageTarget_ === 'function' && systemStorageTarget_().backend === 'firestore') {
+      if (typeof systemCreateRecord_ === 'function') {
+        systemCreateRecord_('SystemLog', values, { operationId: 'system-log:' + values.logid });
+        return;
+      }
+    }
+    if (typeof ensureSystemLogSheet_ === 'function' && typeof SYSTEM_LOG_HEADERS !== 'undefined') {
+      var entry = SYSTEM_LOG_HEADERS.map(function (h) {
+        var v = values[String(h).toLowerCase()];
+        return (v === undefined || v === null) ? '' : v;
+      });
+      if (typeof appendRowWithRetry_ === 'function') appendRowWithRetry_(ensureSystemLogSheet_(), entry);
+      else ensureSystemLogSheet_().appendRow(entry);
+    }
+  } catch (e) { try { console.error('writeSystemLogLink_ skipped: ' + (e && e.message)); } catch (e2) {} }
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * [RT-11] The audit trail comes off the request path
+ *
+ * A save does not return when the business row is written. It returns when the
+ * history has ALSO been written — synchronously, into the shared AUTH
+ * spreadsheet, while holding LockService.getScriptLock(), which is SCRIPT
+ * GLOBAL. Every save in every company queues behind every other save in the
+ * system for its audit write. On an edit touching ten columns that is ten
+ * history rows behind one global lock, and the user waits for all of it.
+ *
+ * writeHistoryRows_ is already well optimised — one lock, one id allocation,
+ * one setValues instead of N appends. The remaining cost is not the write. It
+ * is the LOCK, and the lock is the part every other user in every other company
+ * is waiting on.
+ *
+ * So the rows are appended to a queue with appendRowWithRetry_, which takes NO
+ * script lock and allocates NO ids, and a one-minute trigger does the locking
+ * and the id allocation once for everybody.
+ *
+ * ── WHY A SHEET AND NOT A CACHE ────────────────────────────────────────────
+ * Audit rows are the one thing in this programme that may not be lost.
+ * CacheService entries can be evicted before their TTL — the comment above the
+ * change stamps in this file says so explicitly, and the whole client-side
+ * design is built around it. A queue that silently drops audit rows is worse
+ * than a slow save, worse than a stale cache, worse than anything else here,
+ * because nobody finds out. Telemetry may use a cache; this may not.
+ *
+ * ── HOW THE DRAIN CANNOT DUPLICATE OR LOSE A ROW ───────────────────────────
+ * The drain MARKS rows before it moves them, in three phases:
+ *
+ *   1. CLAIM   stamp a unique drain id into the claim column of the rows this
+ *              run intends to move, and write that stamp. From this moment no
+ *              other drain will touch them.
+ *   2. WRITE   copy exactly the claimed rows into ERP_Record_History.
+ *   3. DELETE  remove the claimed rows from the queue.
+ *
+ *   2. DEDUPE  drop any claimed row that is ALREADY in ERP_Record_History,
+ *              matched on its natural key — record_uid, column_name, action and
+ *              changed_at. Only the TAIL of the history sheet is read, because
+ *              a row can only be a duplicate candidate if a drain wrote it and
+ *              died within the claim-stale window: minutes ago, not days.
+ *   4. MARK    stamp the claim as done, in the queue.
+ *   5. DELETE  remove the rows from the queue.
+ *
+ * Every place a trigger can die is covered, and none of them loses or
+ * duplicates a row:
+ *
+ *   died after CLAIM   rows stay claimed and unwritten. The next drain
+ *                      re-claims them once the claim goes stale, dedupe finds
+ *                      nothing, and they are written. NOTHING LOST.
+ *   died after WRITE   rows are in history AND still on the queue. The next
+ *                      drain re-claims them, DEDUPE FINDS THEM, and they are
+ *                      deleted without being written again. NOTHING DUPLICATED.
+ *   died after MARK    rows carry the done mark. The next drain sees it, skips
+ *                      the write entirely, and deletes. NOTHING DUPLICATED.
+ *
+ * The claim id is deliberately NOT written into ERP_Record_History: that
+ * sheet's columns are not this work's to change. The natural key does the same
+ * job with the columns already there.
+ *
+ * ── WHAT DOES NOT CHANGE ───────────────────────────────────────────────────
+ * What a history row CONTAINS, one row per changed column, the columns of
+ * ERP_Record_History, and everything Record_History_Panel reads. The rows put
+ * on the queue are exactly the rows historyRowsFor_ produces today. This phase
+ * changes WHEN the row is written and nothing else about it.
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+var HISTORY_QUEUE_SHEET_ = 'ERP_History_Queue';
+
+/* ERP_Record_History's own columns, plus the three the queue needs to be a
+ * queue. The extra three live HERE, in a new sheet; ERP_Record_History's
+ * columns are not touched. */
+var HISTORY_QUEUE_HEADERS_ = [
+  'sheet_name', 'record_uid', 'record_id', 'action', 'column_name',
+  'old_value', 'new_value', 'changed_by', 'changed_at', 'created_at',
+  'queued_at', 'claim_id', 'claimed_at'
+];
+
+/* A claim older than this is assumed to belong to a drain that died. Ten
+ * minutes: far longer than a drain takes, far shorter than anyone would wait
+ * to find out a row was stuck. */
+var HISTORY_CLAIM_STALE_MS_ = 10 * 60 * 1000;
+
+/* A row still queued after this is REPORTED. Never dropped. */
+var HISTORY_STALE_REPORT_MS_ = 30 * 60 * 1000;
+
+/** Whether the queue is in use. Off means writeHistoryRows_ behaves as it did. */
+var HISTORY_QUEUE_ENABLED_ = true;
+
+function ensureHistoryQueueSheet_() {
+  var ss = getSpreadsheet_(CONFIG.AUTH_SPREADSHEET_ID);
+  var sh = ss.getSheetByName(HISTORY_QUEUE_SHEET_);
+  if (!sh) {
+    sh = ss.insertSheet(HISTORY_QUEUE_SHEET_);
+    sh.appendRow(HISTORY_QUEUE_HEADERS_);
+    sh.setFrozenRows(1);
+    noteMutation_(sh);
+  }
+  return sh;
+}
+
+/**
+ * Put history rows on the queue. NO script lock, NO id allocation — that is the
+ * whole saving, and both of those move to the drain.
+ *
+ * Returns true when the rows are queued. On ANY failure it returns false and
+ * the caller writes them the old way, synchronously: a slow save is a much
+ * better outcome than a lost audit row.
+ */
+function enqueueHistoryRows_(rows) {
+  if (!rows || !rows.length) return true;
+  try {
+    var sh = ensureHistoryQueueSheet_();
+    var queuedAt = new Date();
+    var matrix = rows.map(function (hr) {
+      return HISTORY_QUEUE_HEADERS_.map(function (h) {
+        if (h === 'queued_at') return queuedAt;
+        if (h === 'claim_id' || h === 'claimed_at') return '';
+        var v = hr[h];
+        return (v !== undefined && v !== null) ? v : '';
+      });
+    });
+    /* appendRowWithRetry_ takes no script lock. One setValues for the batch,
+     * appended at the end, which is the cheapest thing a sheet can be asked to
+     * do and is the only sheet work left inside the user's request. */
+    sh.getRange(sh.getLastRow() + 1, 1, matrix.length, HISTORY_QUEUE_HEADERS_.length)
+      .setValues(matrix);
+    noteMutation_(sh);
+    return true;
+  } catch (e) {
+    try { console.error('enqueueHistoryRows_: ' + e.message); } catch (eL) {}
+    return false;
+  }
+}
+
+function enqueueHistoryRowsFirestore_(rows) {
+  rows.forEach(function (hr) {
+    var required = ['sheet_name', 'record_uid', 'action', 'column_name'];
+    var missing = required.filter(function (k) { return hr[k] === undefined || hr[k] === null || String(hr[k]).trim() === ''; });
+    if (missing.length) throw new Error('Missing required fields: ' + missing.join(', '));
+    var natural = [hr.record_uid, hr.column_name, hr.action, hr.changed_at instanceof Date ? hr.changed_at.toISOString() : String(hr.changed_at || '')].join('|');
+    var eventId = firestoreOperationId_('history:' + natural);
+    systemCreateRecord_('ERP_History_Queue', Object.assign({ event_id: eventId, state: 'pending', attempts: 0, queued_at: new Date(), claim_id: '', claimed_at: null, last_error: '' }, hr), { operationId: 'history-queue:' + eventId });
+  });
+}
+
+function drainHistoryQueueFirestore_() {
+  var claimId = 'fsd_' + new Date().getTime().toString(36) + '_' + Utilities.getUuid().slice(0, 8), now = new Date(), taken = 0, written = 0, deduped = 0, stale = 0;
+  var queued = systemStore_().queryAll('ERP_History_Queue', {}).records;
+  queued.forEach(function (record) {
+    var d = record.data || {}, meta = record.meta || {}, state = String(d.state || 'pending').toLowerCase(), claimedAt = new Date(d.claimed_at || 0).getTime();
+    var reclaim = state === 'claimed' && (!isFinite(claimedAt) || now.getTime() - claimedAt > HISTORY_CLAIM_STALE_MS_);
+    if (state === 'done' || (state !== 'pending' && !reclaim)) return;
+    if (now.getTime() - new Date(d.queued_at || now).getTime() > HISTORY_STALE_REPORT_MS_) stale++;
+    var claimed;
+    try {
+      claimed = systemPatchRecord_('ERP_History_Queue', meta.documentId, { state: 'claimed', claim_id: claimId, claimed_at: now, attempts: (Number(d.attempts) || 0) + 1 }, { expectedUpdateTime: meta.updateTime });
+      taken++;
+    } catch (claimError) { return; }
+    try {
+      var history = {};
+      ['sheet_name', 'record_uid', 'record_id', 'action', 'column_name', 'old_value', 'new_value', 'changed_by', 'changed_at', 'created_at', 'event_id'].forEach(function (k) { if (d[k] !== undefined) history[k] = d[k]; });
+      systemCreateRecord_('ERP_Record_History', history, { operationId: 'history:' + String(d.event_id || '') });
+      var done = systemPatchRecord_('ERP_History_Queue', meta.documentId, { state: 'done', processed_at: new Date(), last_error: '' }, { expectedUpdateTime: claimed.meta && claimed.meta.updateTime });
+      try { systemRemoveRecord_('ERP_History_Queue', meta.documentId, { expectedUpdateTime: done.meta && done.meta.updateTime }); } catch (removeError) {}
+      written++;
+    } catch (writeError) {
+      try { systemPatchRecord_('ERP_History_Queue', meta.documentId, { state: 'pending', last_error: String(writeError.message || writeError).slice(0, 1000) }, { expectedUpdateTime: claimed.meta && claimed.meta.updateTime }); } catch (retryError) {}
+    }
+  });
+  if (stale) try { console.error('ERP_History_Queue: ' + stale + ' audit row(s) exceeded the stale-report threshold.'); } catch (e) {}
+  return { status: 'success', rows: taken, written: written, deduped: deduped, stale: stale, claim: claimId, backend: 'firestore' };
+}
+
+/**
+ * The drain. One minute, time-driven.
+ *
+ * Claims, writes, then deletes — see the header for why that order and not
+ * another. Runs under the same global lock writeHistoryRows_ used to take, but
+ * takes it ONCE for a minute's worth of saves from every company instead of
+ * once per save.
+ */
+function drainHistoryQueue_() {
+  if (typeof systemStorageTarget_ === 'function' && systemStorageTarget_().backend === 'firestore') return drainHistoryQueueFirestore_();
+  try {
+    var ss = getSpreadsheet_(CONFIG.AUTH_SPREADSHEET_ID);
+    var sh = ss.getSheetByName(HISTORY_QUEUE_SHEET_);
+    if (!sh || sh.getLastRow() < 2) return { status: 'success', rows: 0 };
+
+    var claimId = 'd' + new Date().getTime().toString(36) + Utilities.getUuid().slice(0, 8);
+    var now = new Date().getTime();
+    var idx = {};
+    HISTORY_QUEUE_HEADERS_.forEach(function (h, i) { idx[h] = i; });
+
+    var all = sh.getRange(2, 1, sh.getLastRow() - 1, HISTORY_QUEUE_HEADERS_.length).getValues();
+
+    /* PHASE 1 — CLAIM. Unclaimed rows; rows already marked done by a drain that
+     * died before deleting them; and rows whose claim is old enough that the
+     * drain holding it must have died. */
+    var take = [], alreadyDone = {};
+    for (var i = 0; i < all.length; i++) {
+      var existing = String(all[i][idx.claim_id] || '').trim();
+      if (!existing) { take.push(i); continue; }
+      if (existing.indexOf('|done') !== -1) { take.push(i); alreadyDone[i] = true; continue; }
+      var at = new Date(all[i][idx.claimed_at]).getTime();
+      if (isNaN(at) || (now - at) > HISTORY_CLAIM_STALE_MS_) take.push(i);
+    }
+    if (!take.length) {
+      /* Nothing this drain may touch, but the queue is not empty — every row is
+       * freshly claimed by another drain, or something is stuck. This is the
+       * only moment worth checking, and it costs one column read. */
+      reportStaleHistoryQueue_();
+      return { status: 'success', rows: 0 };
+    }
+
+    var claimedAt = new Date();
+    take.forEach(function (r) {
+      if (alreadyDone[r]) return;      /* keep the done mark: it is the evidence */
+      sh.getRange(r + 2, idx.claim_id + 1, 1, 2).setValues([[claimId, claimedAt]]);
+    });
+    noteMutation_(sh);
+
+    /* PHASE 2 — DEDUPE. A drain that died after writing but before deleting
+     * left its rows in BOTH places. They are matched on their natural key
+     * against the tail of ERP_Record_History. */
+    var candidates = take.filter(function (r) { return !alreadyDone[r]; });
+    var written = historyTailKeys_(Math.max(candidates.length * 4, 500));
+    var toWrite = candidates.filter(function (r) {
+      return !written[historyRowKey_({
+        record_uid: all[r][idx.record_uid],
+        column_name: all[r][idx.column_name],
+        action: all[r][idx.action],
+        changed_at: all[r][idx.changed_at]
+      })];
+    });
+
+    /* PHASE 3 — WRITE the survivors, in ERP_Record_History's own column order,
+     * with the ids allocated once for the whole batch. */
+    if (toWrite.length) {
+      var histRows = toWrite.map(function (r) {
+        var row = all[r];
+        var o = {};
+        HISTORY_QUEUE_HEADERS_.forEach(function (h, c) {
+          if (h === 'queued_at' || h === 'claim_id' || h === 'claimed_at') return;
+          o[h] = row[c];
+        });
+        return o;
+      });
+      writeHistoryRowsDirect_(histRows);
+
+      /* PHASE 4 — MARK done, so a death before the delete below costs a skipped
+       * write next time rather than a duplicated one. */
+      toWrite.forEach(function (r) {
+        sh.getRange(r + 2, idx.claim_id + 1).setValue(claimId + '|done');
+      });
+      noteMutation_(sh);
+    }
+
+    /* PHASE 5 — DELETE, bottom-up so the indices stay valid. */
+    take.slice().sort(function (a, b) { return b - a; }).forEach(function (r) {
+      sh.deleteRow(r + 2);
+    });
+    noteMutation_(sh);
+
+    return {
+      status: 'success', rows: take.length, written: toWrite.length,
+      deduped: take.length - toWrite.length, claim: claimId
+    };
+  } catch (e) {
+    try { console.error('drainHistoryQueue_: ' + e.message); } catch (eL) {}
+    return { status: 'error', message: e.message };
+  }
+}
+
+/**
+ * Rows that have been on the queue too long. REPORTED, never dropped — a queue
+ * that quietly discards is the failure this whole design exists to avoid.
+ */
+function reportStaleHistoryQueue_() {
+  try {
+    var sh = getSpreadsheet_(CONFIG.AUTH_SPREADSHEET_ID).getSheetByName(HISTORY_QUEUE_SHEET_);
+    if (!sh || sh.getLastRow() < 2) return { status: 'success', stale: 0 };
+    var col = HISTORY_QUEUE_HEADERS_.indexOf('queued_at') + 1;
+    var stamps = sh.getRange(2, col, sh.getLastRow() - 1, 1).getValues();
+    var cutoff = new Date().getTime() - HISTORY_STALE_REPORT_MS_;
+    var stale = stamps.filter(function (r) {
+      var t = new Date(r[0]).getTime();
+      return !isNaN(t) && t < cutoff;
+    }).length;
+    if (stale) {
+      try {
+        console.error('ERP_History_Queue: ' + stale + ' audit row(s) still queued after ' +
+          Math.round(HISTORY_STALE_REPORT_MS_ / 60000) + ' minutes. The drain trigger may not be installed.');
+      } catch (eL) {}
+    }
+    return { status: 'success', stale: stale };
+  } catch (e) {
+    return { status: 'error', message: e.message };
+  }
+}
+
+/** The natural key of a history row: what makes two of them the same row. */
+function historyRowKey_(r) {
+  return [
+    String(r.record_uid || ''),
+    String(r.column_name || ''),
+    String(r.action || ''),
+    (r.changed_at instanceof Date) ? r.changed_at.getTime() : String(r.changed_at || '')
+  ].join('');
+}
+
+/**
+ * The natural keys of the last 
+` rows of ERP_Record_History, as a lookup.
+ *
+ * Only the tail, deliberately: this runs every minute and the history sheet
+ * grows without bound, so reading it whole would make the drain the expensive
+ * thing this work exists to remove. The tail is sufficient because a row can
+ * only be a duplicate candidate if some drain wrote it and died within the
+ * claim-stale window — minutes ago, not days.
+ *
+ * A failure here returns an empty lookup, which means nothing is deduped and
+ * nothing is lost: the worst case is the duplicate this is trying to avoid,
+ * never a missing audit row.
+ */
+function historyTailKeys_(n) {
+  if (typeof systemStorageTarget_ === 'function' && systemStorageTarget_().backend === 'firestore') {
+    var fsOut = {};
+    try { systemStore_().query('ERP_Record_History', { orderBy: [{ field: 'changed_at', direction: 'DESCENDING' }], limit: n }).records.map(function (r) { return r.data; }).slice(-n).forEach(function (r) { fsOut[historyRowKey_(r)] = true; }); } catch (e) {}
+    return fsOut;
+  }
+  var out = {};
+  try {
+    var sh = getSpreadsheet_(CONFIG.AUTH_SPREADSHEET_ID).getSheetByName('ERP_Record_History');
+    if (!sh) return out;
+    var last = sh.getLastRow();
+    if (last < 2) return out;
+    var headers = getHeaders_(sh).map(function (h) { return String(h).trim().toLowerCase(); });
+    var take = Math.min(n, last - 1);
+    var rows = sh.getRange(last - take + 1, 1, take, headers.length).getValues();
+    var ui = headers.indexOf('record_uid');
+    var ci = headers.indexOf('column_name');
+    var ai = headers.indexOf('action');
+    var ti = headers.indexOf('changed_at');
+    if (ui === -1 || ci === -1) return out;
+    rows.forEach(function (r) {
+      out[historyRowKey_({
+        record_uid: r[ui], column_name: r[ci],
+        action: ai === -1 ? '' : r[ai],
+        changed_at: ti === -1 ? '' : r[ti]
+      })] = true;
+    });
+  } catch (e) { /* see above: no tail means no dedupe, never a lost row */ }
+  return out;
+}
+
+/**
+ * [RT-11] The audit write, as the request sees it.
+ *
+ * It ENQUEUES. That is the whole change: the rows are appended to
+ * ERP_History_Queue with no script lock and no id allocation, and the
+ * one-minute drain does the locking and the allocating once for everybody.
+ * The saving is the LOCK, and the lock is what every other user in every other
+ * company was waiting on.
+ *
+ * If the queue is unavailable for ANY reason — the sheet cannot be created, the
+ * append throws, the feature is switched off — this falls straight through to
+ * the old synchronous write. A slow save is a much better outcome than a lost
+ * audit row, and it is the only trade this function is allowed to make.
+ */
+function writeHistoryRows_(rows) {
+  if (!rows || !rows.length) return;
+  if (typeof systemStorageTarget_ === 'function' && systemStorageTarget_().backend === 'firestore') { writeHistoryRowsFirestore_(rows); return; }
+  if (HISTORY_QUEUE_ENABLED_ && enqueueHistoryRows_(rows)) return;
+  writeHistoryRowsDirect_(rows);
+}
+
+function writeHistoryRowsFirestore_(rows) {
+  var items = rows.map(function (hr) {
+    var required = ['sheet_name', 'record_uid', 'action', 'column_name'];
+    var missing = required.filter(function (k) { return hr[k] === undefined || hr[k] === null || String(hr[k]).trim() === ''; });
+    if (missing.length) throw new Error('Missing required fields: ' + missing.join(', '));
+    var eventId = firestoreOperationId_([
+      hr.record_uid, hr.column_name, hr.action,
+      hr.changed_at instanceof Date ? hr.changed_at.toISOString() : String(hr.changed_at || '')
+    ].join('|'));
+    return { record: Object.assign({ event_id: eventId }, hr), operationId: 'history:' + eventId };
+  });
+  var config = systemStorageTarget_(), collection = systemSchema_('ERP_Record_History').collection;
+  firestoreCreateDocuments_(config, collection, items);
+}
+
+/** The batched write itself — one lock, one id allocation, one setValues.
+ *  Unchanged, and still the fallback and the drain's own writer. */
+function writeHistoryRowsDirect_(rows) {
+  if (!rows || !rows.length) return;
+  if (typeof systemStorageTarget_ === 'function' && systemStorageTarget_().backend === 'firestore') { writeHistoryRowsFirestore_(rows); return; }
+  const histSheet = getSheet_('ERP_Record_History', CONFIG.AUTH_SPREADSHEET_ID);
+  // FAST PATH (batched): identical cell values to N sequential addRecord_ calls,
+  // but ONE lock + ONE counter allocation + ONE setValues instead of N locks +
+  // N counter R/W + N appends. This is the dominant save-time cost on edits
+  // (one history row per changed column).
+  var required = ['sheet_name', 'record_uid', 'action', 'column_name'];
+  rows.forEach(function (hr) {
+    var missing = required.filter(function (k) { return hr[k] === undefined || hr[k] === null || String(hr[k]).trim() === ''; });
+    if (missing.length) throw new Error('Missing required fields: ' + missing.join(', '));
+  });
+  executeWithLock_(function () {
+    var histHeaders = getHeaders_(histSheet);
+    var lower = histHeaders.map(function (h) { return String(h).trim().toLowerCase(); });
+    var startId = null;
+    if (lower.indexOf('id') !== -1) {
+      // Replicates addRecord_'s per-row id assignment with a single allocation
+      // (getNextIdBatch_ is lock-reentrant, so nesting here is safe).
+      startId = getNextIdBatch_(CONFIG.AUTH_SPREADSHEET_ID, 'ERP_Record_History', rows.length);
+    }
+    var matrix = rows.map(function (hr, i) {
+      return histHeaders.map(function (h) {
+        var key = String(h).trim().toLowerCase();
+        if (key === 'id' && startId !== null) return startId + i;
+        var v = hr[key];
+        return v !== undefined && v !== null ? v : '';
+      });
+    });
+    histSheet.getRange(histSheet.getLastRow() + 1, 1, matrix.length, histHeaders.length).setValues(matrix);
+    noteMutation_();
+  });
+}
+
+/**
+ * Stamps audit fields onto a data map ONLY for columns that already exist in the
+ * sheet. This prevents the audit trail from creating new columns in business
+ * tables. Supported fields: user, created_by, created_at, updated_by,
+ * updated_at, approved_by, approved_at, record_uid.
+ */
+function _stampExistingAuditCols_(sheet, target, stamps) {
+  const headers = getHeaders_(sheet).map(function (h) { return String(h).trim().toLowerCase(); });
+  function setIf(col, val) {
+    if (val !== undefined && headers.indexOf(col.toLowerCase()) !== -1) target[col] = val;
+  }
+  setIf('user', stamps.user);
+  setIf('created_by', stamps.created_by);
+  setIf('created_at', stamps.created_at);
+  setIf('updated_by', stamps.updated_by);
+  setIf('updated_at', stamps.updated_at);
+  setIf('approved_by', stamps.approved_by);
+  setIf('approved_at', stamps.approved_at);
+  setIf('record_uid', stamps.record_uid);
+}
+
+/**
+ * Create or update a business row AND write its audit history.
+ * existingRowId null => create (id assigned by addRecord_). Otherwise update by pkColumn.
+ * oldRowByUid (optional) maps pkColumn value -> full record object, used to recover
+ * record_uid and old values without an extra read.
+ */
+function saveRecordWithAudit_(sheetDbId, sheetName, existingRowId, dataMap, action, currentUser, auditCols, requiredFields, oldRowByUid, pkColumn) {
+  const dbId = sheetDbId || CONFIG.AUTH_SPREADSHEET_ID;
+  const pk = pkColumn || 'id';
+  const sheet = getSheet_(sheetName, dbId);
+  if (existingRowId == null) {
+    const merged = Object.assign({}, dataMap);
+    const uid = 'rec_' + Utilities.getUuid();
+    _stampExistingAuditCols_(sheet, merged, {
+      user: currentUser || '',
+      created_by: currentUser || '',
+      created_at: new Date(),
+      updated_by: currentUser || '',
+      updated_at: new Date(),
+      approved_by: '',
+      approved_at: '',
+      record_uid: uid
+    });
+    const res = addRecord_(dbId, sheetName, merged, requiredFields);
+    if (res.status !== 'success') return res;
+    /* Phase 5: shared-path audit fan-out — History old/new + SystemLog link (RecordID=record_uid). */
+    try { afterWrite_(sheetName, { dbId: dbId, sheetName: sheetName, recordUid: uid, recordId: null, user: currentUser, action: action || 'create', newValues: merged, oldValues: null }); }
+    catch (eHist) { try { Logger.log('AUDIT-SKIPPED create ' + sheetName + ': ' + (eHist && eHist.message)); } catch (eLg) {} }
+    return res;
+  }
+  let old = oldRowByUid ? (oldRowByUid[String(existingRowId)] || null) : null;
+  if (!old) {
+    const rows = getAllRecords_(dbId, sheetName);
+    old = rows.find(function (r) { return String(r[pk]) === String(existingRowId); }) || null;
+  }
+  const oldUid = old ? (old.record_uid || ('upd_' + sheetName + '_' + existingRowId)) : ('upd_' + sheetName + '_' + existingRowId);
+  const newValues = Object.assign({}, old || {}, dataMap);
+  _stampExistingAuditCols_(sheet, newValues, {
+    user: currentUser || '',
+    updated_by: currentUser || '',
+    updated_at: new Date(),
+    record_uid: oldUid
+  });
+  if (pk !== 'id') newValues[pk] = existingRowId;
+  var __curVer = checkRowVersion_(old, dataMap && (dataMap.version !== undefined ? dataMap.version : dataMap.Version));
+  newValues.version = __curVer + 1;
+  const ok = patchRowByCriteria_(sheet, pk, existingRowId, newValues);
+  if (!ok) return { status: 'error', message: 'Row not found for update: ' + existingRowId };
+  /* [RT-1b] The create branch above has always wrapped logHistory_ and logged
+   * AUDIT-SKIPPED; this branch did not, and the difference was a live bug.
+   * patchRowByCriteria_ has ALREADY committed the change on the line above, so
+   * a history write that throws here turned a successful save into a reported
+   * error for a change that is in the sheet.
+   *
+   * That was merely confusing while the client waited for a server reply. Once
+   * the optimistic write rollout lands it is worse: the client rolls the row
+   * back off the screen, so the screen and the spreadsheet actively disagree
+   * and nobody is told. Hence this ships before that rollout, not after it.
+   *
+   * The audit row is not discarded quietly — AUDIT-SKIPPED goes to the log with
+   * the sheet and the reason, exactly as create does — and the queue work later
+   * in this programme removes the failure mode rather than tolerating it.
+   *
+   * The delete branch is deliberately NOT wrapped: it writes its history row
+   * BEFORE deleting, so a throw there leaves the row in the sheet and the
+   * reported failure is the truth. Guarding it would delete a row with no
+   * audit trail, which is the one outcome worth more than a clean error. */
+  try { afterWrite_(sheetName, { dbId: dbId, sheetName: sheetName, recordUid: oldUid, recordId: existingRowId, user: currentUser, action: action || 'update', newValues: newValues, oldValues: old }); }
+  catch (eHist) { try { Logger.log('AUDIT-SKIPPED update ' + sheetName + ': ' + (eHist && eHist.message)); } catch (eLg) {} }
+  return { status: 'success', data: { record: newValues, rowId: existingRowId } };
+}
+
+function approveRecordWithAudit_(sheetDbId, sheetName, rowId, approveMap, currentUser, auditCols, requiredFields, oldRowByUid, pkColumn) {
+  const dbId = sheetDbId || CONFIG.AUTH_SPREADSHEET_ID;
+  const pk = pkColumn || 'id';
+  const sheet = getSheet_(sheetName, dbId);
+  let old = oldRowByUid ? (oldRowByUid[String(rowId)] || null) : null;
+  if (!old) {
+    const rows = getAllRecords_(dbId, sheetName);
+    old = rows.find(function (r) { return String(r[pk]) === String(rowId); }) || null;
+  }
+  const oldUid = old ? (old.record_uid || ('upd_' + sheetName + '_' + rowId)) : ('upd_' + sheetName + '_' + rowId);
+  const merged = Object.assign({}, old || {}, approveMap);
+  _stampExistingAuditCols_(sheet, merged, {
+    approved_by: currentUser || '',
+    approved_at: new Date(),
+    updated_by: currentUser || '',
+    updated_at: new Date(),
+    record_uid: oldUid
+  });
+  if (pk !== 'id') merged[pk] = rowId;
+  var __curVerAp = checkRowVersion_(old, approveMap && (approveMap.version !== undefined ? approveMap.version : approveMap.Version));
+  merged.version = __curVerAp + 1;
+  const ok = patchRowByCriteria_(sheet, pk, rowId, merged);
+  if (!ok) return { status: 'error', message: 'Row not found for approve: ' + rowId };
+  /* [RT-1b] Same asymmetry, same fix, same reason as the update branch below:
+   * patchRowByCriteria_ has already committed the approval by the time this
+   * line runs, so an audit failure here must not be reported as a failed
+   * approve. */
+  try { afterWrite_(sheetName, { dbId: dbId, sheetName: sheetName, recordUid: oldUid, recordId: rowId, user: currentUser, action: 'approve', newValues: merged, oldValues: old }); }
+  catch (eHist) { try { Logger.log('AUDIT-SKIPPED approve ' + sheetName + ': ' + (eHist && eHist.message)); } catch (eLg) {} }
+  return { status: 'success', data: { record: merged, rowId: rowId } };
+}
+
+function deleteRecordWithAudit_(sheetDbId, sheetName, rowId, currentUser, auditCols, oldRowByUid, pkColumn) {
+  const dbId = sheetDbId || CONFIG.AUTH_SPREADSHEET_ID;
+  const pk = pkColumn || 'id';
+  const sheet = getSheet_(sheetName, dbId);
+  let old = oldRowByUid ? (oldRowByUid[String(rowId)] || null) : null;
+  if (!old) {
+    const rows = getAllRecords_(dbId, sheetName);
+    old = rows.find(function (r) { return String(r[pk]) === String(rowId); }) || null;
+  }
+  const oldUid = old ? (old.record_uid || ('del_' + sheetName + '_' + rowId)) : ('del_' + sheetName + '_' + rowId);
+  logHistory_(dbId, sheetName, oldUid, rowId, currentUser, 'delete', null, old);
+  const removed = deleteRowsByCriteria_(sheet, pk, rowId);
+  return { status: 'success', removed: removed };
+}
+
+/* ══ Phase 6 — approvals as DATA + Valley-parity idempotency guard ═══
+ *
+ * (1) APPROVAL_CHAINS. Every approval step in the system is one row here:
+ *     { docType, step, role, required } plus the write routing the engine
+ *     needs (sheet, keyColumn, kind, versioned). ADDING A STEP = ONE TABLE
+ *     ROW — e.g. to add a second TopLight sales approver, append
+ *       { docType: 'tl_sales', step: 'second', role: 'tl_manager',
+ *         required: true, sheet: 'top_light_sales_invoices',
+ *         keyColumn: 'invoice_unique_id', kind: 'standard', versioned: true }
+ *     and call approveStep_('tl_sales', id, 'second', user, { dbId: dbId }).
+ *     There is deliberately NO if/switch on docType anywhere below:
+ *     getApprovalChain_/requestApprove_/approveStep_ FILTER this table, and
+ *     the column patch is chosen by a map lookup on the row's `kind` field.
+ *     If you are about to write `if (docType === ...)` here, add a row
+ *     instead. No sheet, column, or migration is involved — this table lives
+ *     in code, so approval routing changes without touching data.
+ *
+ * (2) requestDedupeExecute_ + REQUEST_DEDUPE_PROBE_COLUMNS_. The Valley pattern
+ *     (liveDedupe_ on unique_id) as a reusable guard for the TC/TL large
+ *     multi-step saves that still mint a fresh id on every call: callers
+ *     accept an incoming request_key/unique_id, probe with this helper, and
+ *     return the committed row on replay instead of writing a second
+ *     document. Probes are null-safe when a column does not exist
+ *     (findRowByColumn_ returns null), so no schema change is required.
+ */
+
+
+function companyPolicies_() {
+  try { ensureCompaniesRegistered_(); } catch (e) {}
+  return Object.keys(COMPANY_REGISTRY || {}).map(function (k) {
+    const c = COMPANY_REGISTRY[k] || {};
+    return typeof c.approvalPolicy === 'function' ? c.approvalPolicy() : (c.approvalPolicy || {});
+  });
+}
+function approvalChains_() {
+  const out = [];
+  companyPolicies_().forEach(function (p) { out.push.apply(out, p.chains || []); });
+  return out;
+}
+
+/* Patch builders keyed by the row's `kind` — a data lookup, not a branch
+ * on docType. `standard` mirrors the TL purchase/sales/offer approvers,
+ * `cash` mirrors approveCash_ ({approved,user}), `quality` mirrors the
+ * Valley quality approver. */
+var APPROVAL_PATCH_KINDS_ = {
+  standard: function (email) { return { approval_status: 'Approved', approval: email, approval_time: new Date() }; },
+  cash: function (email) { return { approved: true, user: email }; },
+  quality: function (email) { return { quality_approval_status: 'Approved', quality_approval: email, quality_approval_time: new Date() }; }
+};
+
+/* All steps registered for a docType, in table order. Read-only. */
+function getApprovalChain_(docType) {
+  return approvalChains_().filter(function (r) { return String(r.docType) === String(docType); });
+}
+
+/* What must still approve this document — read-only, no write. Clients use
+ * it to render approval buttons; the write itself is approveStep_. */
+function requestApprove_(docType, id, user, opts) {
+  var steps = getApprovalChain_(docType);
+  if (!steps.length) throw new Error('Unknown approval docType: ' + docType);
+  return {
+    status: 'success',
+    docType: String(docType),
+    id: (id == null ? '' : id),
+    requested_by: (user && user.email) || '',
+    steps: steps.map(function (s) { return { step: s.step, role: s.role, required: !!s.required }; })
+  };
+}
+
+/* Advance one table-driven approval step. Resolves sheet/key/patch from the
+ * APPROVAL_CHAINS row and delegates the write to the generic stamper
+ * approveRecordWithAudit_ — this function contains no per-document logic. */
+function approveStep_(docType, id, step, user, opts) {
+  var o = opts || {};
+  var key = String(id == null ? '' : id).trim();
+  if (!key) throw new Error('Approval id is required');
+  var entry = null;
+  approvalChains_().some(function (r) {
+    if (String(r.docType) === String(docType) && String(r.step) === String(step)) { entry = r; return true; }
+    return false;
+  });
+  if (!entry) throw new Error('Unknown approval step: ' + docType + '/' + step);
+  var email = (user && user.email) || '';
+  var build = APPROVAL_PATCH_KINDS_[String(entry.kind || 'standard')] || APPROVAL_PATCH_KINDS_.standard;
+  var approveMap = build(email);
+  if (entry.versioned) {
+    approveMap.version = (o.version !== undefined ? o.version : o.Version);
+  } else {
+    /* Unversioned legacy steps (both Valley steps): these approvers never
+     * took a client version, so asserting the CURRENT version keeps the
+     * shared stamper's check a no-op while the counter still advances —
+     * exactly today's behaviour, enforced optimistic locking not added. */
+    var db0 = o.dbId || CONFIG.AUTH_SPREADSHEET_ID;
+    var old0 = null;
+    try {
+      old0 = getAllRecords_(db0, entry.sheet).find(function (r) { return String(r[entry.keyColumn]) === String(key); }) || null;
+    } catch (eRead) { old0 = null; }
+    approveMap.version = getRowVersion_(old0);
+  }
+  var out = approveRecordWithAudit_(o.dbId, entry.sheet, key, approveMap, email, null, null, null, entry.keyColumn);
+  if (!out || out.status !== 'success') {
+    /* Preserve each wrapper's legacy not-found message from the row's own
+     * `missingMsg` — still data, still no docType branch. */
+    var mOut = String((out && out.message) || '');
+    if (mOut.indexOf('Row not found') !== -1) throw new Error(entry.missingMsg || ('Row not found for approve: ' + key));
+    throw new Error(mOut || (entry.missingMsg || 'Approve failed'));
+  }
+  return out;
+}
+
+/* Columns probed, in order, by requestDedupeExecute_. Documents intent only:
+ * findRowByColumn_ returns null for a column a sheet does not have, so
+ * sheets without request_key simply skip that probe — no migration.
+ * NOTE: formerly named requestGuardExecute_/REQUEST_RECEIPT_HEADERS_, which
+ * collided with the receipt-ledger guard of the same names in Code.js (one
+ * global scope: the last definition silently won and the 4-arg probe call
+ * sites received the wrong function). Renamed so each guard resolves
+ * deterministically. */
+var REQUEST_DEDUPE_PROBE_COLUMNS_ = ['request_key', 'unique_id', 'invoice_unique_id', 'created_at', 'user'];
+
+/* Valley-parity exactly-once guard for queueable multi-step saves.
+ * Query form requestDedupeExecute_(dbId, sheet, requestKey, uniqueId) returns
+ * the already-committed row or null. Wrap form with a trailing fn executes
+ * fn() once per key and returns liveDedupeReply_ on replay. */
+function requestDedupeExecute_(dbId, sheetName, requestKey, uniqueId, fn) {
+  var key = String(requestKey == null ? '' : requestKey).trim() || String(uniqueId == null ? '' : uniqueId).trim();
+  var dup = null;
+  if (key) {
+    try { dup = liveDedupe_(dbId, sheetName, key); } catch (e1) { dup = null; }
+    if (!dup) { try { dup = findRowByColumn_(dbId, sheetName, 'request_key', key); } catch (e2) { dup = null; } }
+    if (!dup) { try { dup = findRowByColumn_(dbId, sheetName, 'invoice_unique_id', key); } catch (e3) { dup = null; } }
+  }
+  if (typeof fn === 'function') {
+    if (dup) return liveDedupeReply_(dup);
+    return fn();
+  }
+  return dup;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * Phase 2 — central document status machine + pre-write validation gate.
+ * Static only: no migration, no backfill, no data changes. Existing statuses
+ * in sheets are untouched; this only gates FUTURE transitions/validations.
+ * ══════════════════════════════════════════════════════════════════════════
+ *
+ * DOC_STATUS_TRANSITIONS covers (keys lowercased; lookup is case-insensitive):
+ *   tl_purchasing / tl_sales / tl_offer : Pending->Approved, Approved terminal
+ *   tl_cash (approved bool)             : false->true, true terminal (one-way)
+ *   tc_legal_cash (toggle)              : false<->true (both ways)
+ *   vf_purchasing (dual legs)           : Pending->Approved each, Approved terminal;
+ *                                         edit-blocked if either leg Approved —
+ *                                         enforced via pseudo-target 'edit'
+ *                                         (Pending->edit allowed, Approved->edit blocked)
+ *   vf_mfg_order                        : Draft->In Progress->Locked->In Progress
+ *   vf_mfg_agree                        : draft/active/completed + *->cancelled,
+ *                                         cancelled terminal
+ *   vf_sales_inv                        : Pending<->Approved + Approved delete-block —
+ *                                         enforced via pseudo-target 'delete'
+ *                                         (Pending->delete allowed, Approved->delete blocked)
+ *   att_batch                           : active->reverted, reverted terminal
+ *   payroll_month                       : open->closed, closed terminal (via insert)
+ *
+ * Pseudo-targets 'edit'/'delete' are NOT sheet values; they let edit/delete
+ * guards route through the same table instead of keeping inline if(cur...) checks.
+ */
+function policyStatusTransitions_() {
+  const out = {};
+  companyPolicies_().forEach(function (p) { Object.keys(p.transitions || {}).forEach(function (k) { out[k] = p.transitions[k]; }); });
+  return out;
+}
+
+function normDocStatus_(v) {
+  if (v === true) return 'true';
+  if (v === false) return 'false';
+  var s = String(v == null ? '' : v).trim().toLowerCase();
+  if (s === 'true' || s === 'false') return s;
+  return s;
+}
+
+function normDocType_(docType) {
+  let dt = String(docType == null ? '' : docType).trim().toLowerCase();
+  companyPolicies_().some(function (p) {
+    const aliases = p.aliases || {};
+    if (aliases[dt]) { dt = aliases[dt]; return true; }
+    return false;
+  });
+  return dt;
+}
+
+/* Bool-returning gate. Unknown docType -> false (fail-closed). */
+function canTransition(docType, from, to) {
+  var dt = normDocType_(docType);
+  var table = policyStatusTransitions_()[dt];
+  if (!table) return false;
+  var f = normDocStatus_(from);
+  var t = normDocStatus_(to);
+  var allowed = table[f];
+  if (!allowed) return false;
+  for (var i = 0; i < allowed.length; i++) {
+    if (String(allowed[i]).toLowerCase() === t) return true;
+  }
+  return false;
+}
+
+/* Throwing helper. Throws on illegal transition; returns true otherwise.
+ * A refused transition is a deterministic pre-mutation check, so the error is
+ * marked notApplied: the request-guard ledger records a confirmed failure
+ * (safe to correct and retry), never an uncertain outcome. */
+function assertTransition_(docType, from, to, message) {
+  if (!canTransition(docType, from, to)) {
+    var _err = new Error(message || ('Invalid status transition: ' + docType + ' ' + from + ' -> ' + to));
+    _err.notApplied = true; _err.code = 'REQUEST_NOT_APPLIED';
+    throw _err;
+  }
+  return true;
+}
+
+/* ── validateBeforeWrite wiring ──────────────────────────────────────────
+ * DOC_ACTION_TO_DOCTYPE_ maps module_action (lowercased) -> docType for the
+ * Phase 2 commit paths. STATUS_ONLY_ACTIONS_ marks approve_/toggle_/cancel_/
+ * revert_/close_/delete_ paths as status-only: they explicitly SKIP field
+ * validation (documented choice) because their payloads carry only an id/code
+ * + version, not header+lines. They remain gated on status via
+ * canTransition/assertTransition_ in their handlers. Field validation runs
+ * only on add_/edit_/save_ paths via registered validators (no logic duplicated
+ * here — DOC_VALIDATORS_ entries call the existing company validators).
+ */
+function policyActionMap_() {
+  const out = {};
+  companyPolicies_().forEach(function (p) { Object.keys(p.actionToDocType || {}).forEach(function (k) { out[k] = p.actionToDocType[k]; }); });
+  return out;
+}
+
+function policyStatusOnly_() {
+  const out = {};
+  companyPolicies_().forEach(function (p) { Object.keys(p.statusOnly || {}).forEach(function (k) { out[k] = true; }); });
+  return out;
+}
+
+var DOC_VALIDATORS_ = {};
+
+function registerDocValidator_(docType, fn) {
+  DOC_VALIDATORS_[normDocType_(docType)] = fn;
+}
+
+function docTypeForAction_(action) {
+  return policyActionMap_()[String(action == null ? '' : action).trim().toLowerCase()] || null;
+}
+
+function isStatusOnlyAction_(action) {
+  return !!policyStatusOnly_()[String(action == null ? '' : action).trim().toLowerCase()];
+}
+
+/* Central field-validation gate. docType + payload (full {module_action,data}
+ * or raw data) + dbId. Status-only actions skip field validation explicitly;
+ * all other known docTypes delegate to registered company validators. Unknown
+ * docTypes / reads pass through. Validation errors are marked notApplied (safe
+ * to correct and retry — thrown before any mutation). */
+function validateBeforeWrite(docType, payload, dbId) {
+  var action = null;
+  var data = payload;
+  if (payload && typeof payload === 'object' && ('module_action' in payload || 'data' in payload)) {
+    action = payload.module_action || null;
+    data = (payload.data !== undefined ? payload.data : payload);
+  }
+  if (!docType && action) docType = docTypeForAction_(action);
+  if (action && isStatusOnlyAction_(action)) return true;
+  var dt = docType ? normDocType_(docType) : (action ? normDocType_(docTypeForAction_(action) || '') : '');
+  if (!dt) return true;
+  var fn = DOC_VALIDATORS_[dt];
+  if (typeof fn !== 'function') return true;
+  try {
+    fn(data, dbId);
+  } catch (e) {
+    if (e && e.notApplied === undefined) { try { e.notApplied = true; } catch (e2) {} }
+    throw e;
+  }
+  return true;
+}
+
+
+
+/* ===================== 4. SECURITY / AUTHORIZATION ===================== */
+/**
+ * shared Code.js section
+ * RESPONSIBILITY: hashPassword_ (salted), generateSalt_, session auth
+ * (versioned cache), login lockout, role/permission matrix,
+ * checkPageAccess_, checkPageAccessForUI_, getCompanySpreadsheetId_,
+ * getCompanyThemeCSS_. No business logic. Loaded fourth.
+ */
+
+// ==========================================
+// Password hashing (salted SHA-256)
+// ==========================================
+function generateSalt_() { return Utilities.getUuid(); }
+
+function hashPassword_(password, salt) {
+  const raw = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, salt + password, Utilities.Charset.UTF_8);
+  return raw.map(b => ('0' + (b & 0xFF).toString(16)).slice(-2)).join('');
+}
+
+function generateSecureToken_() { return Utilities.getUuid() + Utilities.getUuid(); }
+
+// The deployed script loads the Firestore repository before this file. These
+// compatibility wrappers keep the existing isolated verifier and explicit
+// Sheets rollback path usable when the repository layer is not loaded.
+function systemRowsCompat_(tableName) {
+  if (typeof systemGetAllRecords_ === 'function') return systemGetAllRecords_(tableName);
+  try {
+    const legacyRows = getAllRecords_(CONFIG.AUTH_SPREADSHEET_ID, tableName);
+    // The verifier's legacy stub only implements ERP_Users. For other tables,
+    // retain the old direct-sheet behavior when that stub returns an empty set.
+    if (legacyRows && (legacyRows.length || tableName === 'ERP_Users')) return legacyRows;
+  } catch (e) {}
+  try {
+    const sheet = getSheet_(tableName, CONFIG.AUTH_SPREADSHEET_ID);
+    const headers = getHeaders_(sheet);
+    const values = sheet.getDataRange().getValues();
+    return values.slice(1).filter(function (row) {
+      return row.some(function (value) { return value !== '' && value !== null && value !== undefined; });
+    }).map(function (row) {
+      const record = {};
+      headers.forEach(function (header, index) { record[String(header).trim().toLowerCase()] = row[index]; });
+      return record;
+    });
+  } catch (e2) { return []; }
+}
+function systemFindCompat_(tableName, fieldName, value) {
+  if (typeof systemFindByBusinessKey_ === 'function') return systemFindByBusinessKey_(tableName, fieldName, value);
+  const wanted = String(value == null ? '' : value).trim().toLowerCase();
+  return systemRowsCompat_(tableName).find(function (row) {
+    return String(row[fieldName] == null ? '' : row[fieldName]).trim().toLowerCase() === wanted;
+  }) || null;
+}
+function storagePatchCompat_(tableName, fieldName, value, changes) {
+  if (typeof systemPatchByBusinessKey_ === 'function') return systemPatchByBusinessKey_(tableName, fieldName, value, changes);
+  return patchRowByCriteria_(getSheet_(tableName, CONFIG.AUTH_SPREADSHEET_ID), fieldName, value, changes);
+}
+function storagePatchFieldsCompat_(tableName, filters, changes) {
+  if (typeof systemPatchByFields_ === 'function') return systemPatchByFields_(tableName, filters, changes);
+  if (!filters || !filters.length) return false;
+  return patchRowByCriteria_(getSheet_(tableName, CONFIG.AUTH_SPREADSHEET_ID), filters[0].field, filters[0].value, changes);
+}
+
+// ==========================================
+// Login lockout (5 failures -> 15 minutes)
+// ==========================================
+function checkLoginLockout_(email) {
+  const n = Number(CacheService.getScriptCache().get('fail_' + email) || 0);
+  if (n >= CONFIG.LOGIN_LOCKOUT_MAX_ATTEMPTS) {
+    throw new Error('Too many attempts. Try again in 15 minutes.');
+  }
+}
+
+function recordLoginFailure_(email) {
+  const cache = CacheService.getScriptCache();
+  cache.put('fail_' + email, String(Number(cache.get('fail_' + email) || 0) + 1), CONFIG.LOGIN_LOCKOUT_TTL_SECONDS);
+}
+
+function clearLoginFailures_(email) {
+  CacheService.getScriptCache().remove('fail_' + email);
+}
+
+// ==========================================
+// Login / first-time password setup
+// ==========================================
+function loginUser_(payload, sessionToken, authUser) {
+  if (!payload || !payload.email) throw new Error('البريد الإلكتروني مطلوب');
+  const email = String(payload.email).trim().toLowerCase();
+  checkLoginLockout_(email);
+
+  const rows = systemRowsCompat_('ERP_Users');
+  const userRow = rows.find(function (r) { return String(r.email || '').trim().toLowerCase() === email; });
+  if (!userRow) throw new Error('البريد الإلكتروني غير مسجل في النظام');
+  const currentStatus = String(userRow.status || 'active').trim().toLowerCase();
+  if (currentStatus !== 'active') throw new Error('هذا الحساب غير مفعل، يرجى مراجعة الإدارة');
+
+  const assignedCompany = String(userRow.company || '').trim();
+  const assignedRole = String(userRow.role || '').trim();
+  if (assignedCompany) assertCompanyEnabled_(assignedCompany);
+  else if (!/super\s*admin/i.test(assignedRole)) throw new Error('الحساب غير مرتبط بشركة مفعلة، يرجى مراجعة الإدارة');
+
+  const storedHash = String(userRow.passwordhash || '').trim();
+  if (storedHash === '') {
+    throw new Error('لم يتم تعيين كلمة مرور لهذا الحساب. يرجى طلب إعادة تعيين من مسؤول النظام.');
+  }
+
+  if (!payload.password) throw new Error('كلمة المرور مطلوبة');
+  const salt = String(userRow.salt || '').trim();
+  const loginHash = hashPassword_(payload.password, salt);
+  if (loginHash !== storedHash) {
+    recordLoginFailure_(email);
+    throw new Error('بيانات الدخول غير صحيحة');
+  }
+
+  clearLoginFailures_(email);
+  const token = generateSecureToken_();
+  const now = new Date();
+  const expires = new Date(now.getTime() + CONFIG.SESSION_EXPIRY_HOURS * 60 * 60 * 1000);
+  storagePatchCompat_('ERP_Users', 'email', email, { sessiontoken: token, sessionexpiry: expires, updated_at: now });
+  bumpVersion_('ERP_Users');
+
+  return {
+    status: 'success',
+    token: token,
+    user: {
+      email: email,
+      name: userRow.name || '',
+      role: userRow.role || '',
+      company: userRow.company || ''
+    }
+  };
+}
+
+function setupFirstTimePassword_(payload, sessionToken, authUser) {
+  /* A known email address must never be enough to claim a pre-created account.
+   * Existing passwordhash/salt fields already support the super-admin reset flow
+   * in adminSaveUser_; a token workflow would require prohibited schema. */
+  throw new Error('تعيين كلمة المرور لأول مرة متوقف. اطلب من مسؤول النظام إعادة تعيين كلمة المرور.');
+}
+
+// ==========================================
+// Session authentication + live identity overlay
+// SessionManager_.validate answers "is this token a live session" and is
+// correctly cached for the session's full lifetime. Authority must NOT inherit
+// that lifetime, so the live identity is overlaid on top of it here.
+// ==========================================
+function authenticateSystemUser_(sessionToken) {
+  if (!sessionToken) return { status: 'error', authorized: false };
+  const v = SessionManager_.validate(sessionToken);
+  if (!v.valid) return { status: 'error', authorized: false };
+
+  // The session row denormalises role/company at login and sess_<hash> holds it
+  // for the session's full 12-hour lifetime. Authority must not inherit that: a
+  // role change, a company move or a deactivation has to bite on the user's next
+  // request. userDirectory_ is generation-keyed, so an admin's save invalidates
+  // it for every user at once.
+  const email = String(v.email || '').trim().toLowerCase();
+  const dir = userDirectory_();
+  const dirLoaded = Object.keys(dir).length > 0;
+  const live = dir[email] || null;
+
+  // FAIL-OPEN on a read failure, FAIL-CLOSED on a real absence. An empty map is
+  // indistinguishable from a transient read error, so it must not log everyone
+  // out at once; a POPULATED map that lacks this email means the user was
+  // removed. The two directions are not stylistic — do not unify them.
+  if (dirLoaded && !live) return { status: 'error', authorized: false, code: 'ACCOUNT_REMOVED' };
+  if (live && String(live.status).toLowerCase() !== 'active') {
+    return { status: 'error', authorized: false, code: 'ACCOUNT_DISABLED' };
+  }
+
+  const role    = (live && live.role)    ? live.role    : v.role;
+  const company = (live && live.company) ? live.company : v.company;
+  const name    = (live && live.name)    ? live.name    : v.name;
+
+  const isSuperAdmin = /super\s*admin/i.test(String(role || ''));
+  if (company) {
+    try {
+      assertCompanyEnabled_(company);
+    } catch (companyErr) {
+      return { status: 'error', authorized: false, code: 'COMPANY_DISABLED' };
+    }
+  } else if (!isSuperAdmin) {
+    return { status: 'error', authorized: false, code: 'COMPANY_DISABLED' };
+  }
+  const userObj = {
+    email: v.email,
+    name: name,
+    role: role,
+    company: company,
+    companyId: company,
+    isSuperAdmin: isSuperAdmin,
+    authorizedPages: isSuperAdmin ? ['*'] : getRoleAuthorityMatrix_(role),
+    expires: v.expires
+  };
+  return { status: 'success', authorized: true, user: userObj };
+}
+
+// ==========================================
+// Multi-device session manager (B4)
+// Sessions live in the AUTH spreadsheet's ERP_Sessions tab; tokens are stored
+// ONLY as SHA-256 hashes. Caching keyed by hash is script-global.
+// ==========================================
+var SessionManager_ = (function () {
+  function hashToken_(token) {
+    if (!token) return '';
+    const salt = CONFIG.SESSION_SALT || 'erp-salt-2024';
+    const raw = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, salt + token, Utilities.Charset.UTF_8);
+    return raw.map(function (b) { return ('0' + (b & 0xFF).toString(16)).slice(-2); }).join('');
+  }
+  function readRows_(sheetName) { return getAllRecords_(CONFIG.AUTH_SPREADSHEET_ID, sheetName); }
+
+  function create(email, name, role, company, deviceId, deviceName, maxConcurrent) {
+    return executeWithLock_(function () {
+      const max = Number(maxConcurrent) || Number(CONFIG.MAX_CONCURRENT_SESSIONS) || 5;
+      const token = generateSecureToken_();
+      const hash = hashToken_(token);
+      const now = new Date();
+      const expires = new Date(now.getTime() + CONFIG.SESSION_EXPIRY_HOURS * 3600 * 1000);
+      const devRows = readRows_('ERP_User_Devices');
+      const deviceRec = devRows.find(function (d) { return d.email === email && d.device_id === deviceId; });
+      if (!deviceRec) {
+        addRecord_(CONFIG.AUTH_SPREADSHEET_ID, 'ERP_User_Devices', {
+          email: email, device_id: deviceId, device_name: deviceName, first_seen: now, last_seen: now
+        }, ['email', 'device_id']);
+      } else {
+        storagePatchFieldsCompat_('ERP_User_Devices', [{ field: 'email', value: email }, { field: 'device_id', value: deviceId }], { device_name: deviceName, last_seen: now });
+      }
+      const sessions = readRows_('ERP_Sessions').filter(function (s) { return s.email === email && !s.revoked; });
+      if (sessions.length >= max) {
+        sessions.sort(function (a, b) {
+          return new Date(a.last_activity || a.created_at || 0) - new Date(b.last_activity || b.created_at || 0);
+        });
+        const toRevoke = sessions.slice(0, sessions.length - max + 1);
+        toRevoke.forEach(function (s) {
+          storagePatchCompat_('ERP_Sessions', 'token_hash', s.token_hash, { revoked: true, revoked_at: now });
+        });
+      }
+      addRecord_(CONFIG.AUTH_SPREADSHEET_ID, 'ERP_Sessions', {
+        token_hash: hash, email: email, name: name, role: role, company: company,
+        device_id: deviceId, device_name: deviceName, created_at: now, last_activity: now,
+        expires_at: expires, revoked: false
+      }, ['token_hash', 'email']);
+      const cache = CacheService.getScriptCache();
+      try {
+        cache.put('sess_' + hash, JSON.stringify({
+          email: email, name: name, role: role, company: company, expires: expires.toISOString()
+        }), Math.max(1, Math.floor((expires - now) / 1000)));
+      } catch (e) {}
+      return { token: token, token_hash: hash, expires_at: expires, device_id: deviceId };
+    });
+  }
+
+  function validate(token) {
+    if (!token) return { valid: false };
+    const hash = hashToken_(token);
+    const cache = CacheService.getScriptCache();
+    try {
+      const cached = cache.get('sess_' + hash);
+      if (cached) {
+        const obj = JSON.parse(cached);
+        if (new Date(obj.expires) > new Date()) return Object.assign({ valid: true }, obj);
+        cache.remove('sess_' + hash);
+      }
+    } catch (e) {}
+    try {
+      const rows = readRows_('ERP_Sessions');
+      const s = rows.find(function (r) { return r.token_hash === hash && !r.revoked; });
+      if (!s) return { valid: false };
+      if (new Date(s.expires_at) < new Date()) {
+        storagePatchCompat_('ERP_Sessions', 'token_hash', hash, { revoked: true, revoked_at: new Date() });
+        return { valid: false };
+      }
+      const identity = {
+        email: s.email, name: s.name, role: s.role, company: s.company,
+        expires: new Date(s.expires_at).toISOString()
+      };
+      const exp = new Date(s.expires_at);
+      try {
+        cache.put('sess_' + hash, JSON.stringify(identity), Math.max(1, Math.floor((exp - new Date()) / 1000)));
+      } catch (e) {}
+      return Object.assign({ valid: true }, identity);
+    } catch (e) { return { valid: false }; }
+  }
+
+  /**
+   * F-07. Writing last_activity costs a full getDataRange().getValues() plus a
+   * setValues on ERP_Sessions — on the shared AUTH spreadsheet, once per active
+   * user, contending with every other user's session validation. The throttle
+   * moved from a hardcoded 30s to CONFIG.SESSION_TOUCH_THROTTLE_SECONDS (300s),
+   * cutting those writes roughly 10x.
+   *
+   * Only the freshness of a "last seen" timestamp changes. Session lifetime,
+   * expiry and revocation are unaffected: validate() checks expires_at, which is
+   * set at login and never derived from last_activity.
+   */
+  function touch(token) {
+    if (!token) return;
+    const hash = hashToken_(token);
+    const cache = CacheService.getScriptCache();
+    try {
+      if (cache.get('touch_' + hash)) return;
+      cache.put('touch_' + hash, '1', CONFIG.SESSION_TOUCH_THROTTLE_SECONDS);
+    } catch (e) {}
+    try {
+      storagePatchCompat_('ERP_Sessions', 'token_hash', hash, { last_activity: new Date() });
+    } catch (e) {}
+  }
+
+  function revoke(tokenHash) {
+    return executeWithLock_(function () {
+      const ok = storagePatchCompat_('ERP_Sessions', 'token_hash', tokenHash, { revoked: true, revoked_at: new Date() });
+      try { CacheService.getScriptCache().remove('sess_' + tokenHash); } catch (e) {}
+      return ok;
+    });
+  }
+
+  function revokeAllForUser(email) {
+    return executeWithLock_(function () {
+      const rows = readRows_('ERP_Sessions').filter(function (s) { return s.email === email && !s.revoked; });
+      rows.forEach(function (s) {
+        storagePatchCompat_('ERP_Sessions', 'token_hash', s.token_hash, { revoked: true, revoked_at: new Date() });
+        try { CacheService.getScriptCache().remove('sess_' + s.token_hash); } catch (e) {}
+      });
+      return rows.length;
+    });
+  }
+
+  function listSessions(email) {
+    return readRows_('ERP_Sessions')
+      .filter(function (s) { return s.email === email && !s.revoked; })
+      .map(function (s) {
+        return {
+          token_hash: s.token_hash, device_name: s.device_name, device_id: s.device_id,
+          created_at: s.created_at, last_activity: s.last_activity
+        };
+      });
+  }
+
+  return {
+    hashToken_: hashToken_, create: create, validate: validate, touch: touch,
+    revoke: revoke, revokeAllForUser: revokeAllForUser, listSessions: listSessions
+  };
+})();
+
+function readMaxConcurrent_(email) {
+  try {
+    const row = systemFindCompat_('ERP_Users', 'email', String(email).trim().toLowerCase());
+    if (row && row.max_concurrent_sessions) {
+      const n = Number(row.max_concurrent_sessions);
+      if (!isNaN(n) && n > 0) return n;
+    }
+  } catch (e) {}
+  return Number(CONFIG.MAX_CONCURRENT_SESSIONS) || 5;
+}
+
+function handleLoginWithDevice_(payload) {
+  if (!payload || !payload.email) throw new Error('البريد الإلكتروني مطلوب');
+  const lr = loginUser_(payload, null, null);
+  if (lr.status === 'setup_required') return lr;
+  if (lr.status !== 'success') throw new Error(lr.message || 'فشل تسجيل الدخول');
+  const email = lr.user.email;
+  const maxConcurrent = readMaxConcurrent_(email);
+  const deviceId = (payload.deviceId && String(payload.deviceId).trim()) || ('dev_' + Utilities.getUuid());
+  const deviceName = (payload.deviceName && String(payload.deviceName).trim()) || 'جهاز غير معروف';
+  const session = SessionManager_.create(email, lr.user.name, lr.user.role, lr.user.company, deviceId, deviceName, maxConcurrent);
+  return {
+    status: 'success',
+    token: session.token,
+    user: lr.user,
+    device_id: session.device_id,
+    requires_device_name: !payload.deviceName,
+    session_expires_at: session.expires_at
+  };
+}
+
+function handleSetupWithDevice_(payload) {
+  const sr = setupFirstTimePassword_(payload, null, null);
+  if (sr.status !== 'success') return sr;
+  const email = sr.user.email;
+  const maxConcurrent = readMaxConcurrent_(email);
+  const deviceId = (payload.deviceId && String(payload.deviceId).trim()) || ('dev_' + Utilities.getUuid());
+  const deviceName = (payload.deviceName && String(payload.deviceName).trim()) || 'جهاز غير معروف';
+  const session = SessionManager_.create(email, sr.user.name, sr.user.role, sr.user.company, deviceId, deviceName, maxConcurrent);
+  return {
+    status: 'success',
+    token: session.token,
+    user: sr.user,
+    device_id: session.device_id,
+    requires_device_name: !payload.deviceName,
+    session_expires_at: session.expires_at
+  };
+}
+
+// ==========================================
+// Role / permission matrix (authority-generation cache)
+// The key embeds authGeneration_(), so an admin save, a direct sheet edit with
+// the onAuthSheetEdit trigger installed, or the staleness ceiling all invalidate
+// it. CACHE_MATRIX_SECONDS is now only an occupancy ceiling, not the mechanism.
+// The role is normalised into the key, which also collapses the duplicate
+// entries the old key produced for roles differing only by case;
+// _hasUnifiedAccess_ already lowercases, so no lookup semantics change.
+// ==========================================
+function getRoleAuthorityMatrix_(userRole) {
+  const cache = CacheService.getScriptCache();
+  const cacheKey = 'mx_g' + authGeneration_() + '_' + String(userRole || '').trim().toLowerCase();
+  try {
+    const cached = cache.get(cacheKey);
+    if (cached) return JSON.parse(cached);
+  } catch (cacheErr) {}
+
+  try {
+    const rows = systemRowsCompat_('ERP_Pages_Matrix');
+    // An empty or structurally incomplete matrix is a read/contract failure:
+    // fail closed for authority and do not cache the empty result.
+    if (!rows.length || !Object.prototype.hasOwnProperty.call(rows[0], 'role') ||
+        !Object.prototype.hasOwnProperty.call(rows[0], 'page_id')) return {};
+    const allowedPages = {};
+    const lowerUserRole = String(userRole || '').trim().toLowerCase();
+
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      if (String(r.role).trim().toLowerCase() === lowerUserRole &&
+          String(r.status || 'active').trim().toLowerCase() === 'active') {
+        const rowPage = String(r.page_id || '').trim();
+        let rowAccess = String(r.access_type || 'read').trim().toLowerCase();
+        // normalize full-access variants: "full access", "full_access", "fullaccess", "full"
+        rowAccess = rowAccess.replace(/[_\s]+/g, ' ').trim();
+        if (rowAccess === 'full' || rowAccess === 'full access') rowAccess = 'full';
+        // keep read/write/full canonical
+        if (['read','write','full'].indexOf(rowAccess) === -1) rowAccess = 'read';
+        if (!allowedPages[rowPage]) allowedPages[rowPage] = [];
+        if (!allowedPages[rowPage].includes(rowAccess)) allowedPages[rowPage].push(rowAccess);
+      }
+    }
+
+    try { cache.put(cacheKey, JSON.stringify(allowedPages), CONFIG.CACHE_MATRIX_SECONDS); } catch (putErr) {}
+    return allowedPages;
+  // Read failure: FAIL CLOSED and, deliberately, DO NOT CACHE. Same reason as
+  // the structural bail above.
+  } catch (e) { return {}; }
+}
+
+// ==========================================
+// Unified authority (single source of truth)
+// view = see page/nav/data read  -> any grant (read/write/full)
+// add  = create new record       -> write or full
+// edit/delete family              -> full only (write does NOT imply edit/delete)
+// Hierarchy: full ⊇ write ⊇ read  (full satisfies all, write satisfies view+add)
+// ==========================================
+function _normalizeAccess_(a) {
+  let s = String(a || '').trim().toLowerCase().replace(/[_\s]+/g, ' ').trim();
+  if (s === 'full' || s === 'full access') return 'full';
+  if (s === 'read' || s === 'view') return 'read';
+  if (s === 'write' || s === 'add') return 'write';
+  if (s === 'delete' || s === 'edit' || s === 'update' || s === 'remove' || s === 'toggle' || s === 'close' || s === 'make') return s;
+  return s || 'read';
+}
+function _hasUnifiedAccess_(grants, required) {
+  if (!grants || !grants.length) return false;
+  const need = _normalizeAccess_(required);
+  const lowerGrants = grants.map(g => _normalizeAccess_(g));
+  if (need === 'read' || need === 'view') return lowerGrants.includes('read') || lowerGrants.includes('write') || lowerGrants.includes('full');
+  if (need === 'write' || need === 'add') return lowerGrants.includes('write') || lowerGrants.includes('full');
+  if (need === 'full') return lowerGrants.includes('full');
+  // edit/delete family
+  if (['edit','delete','update','remove','toggle','close','make'].indexOf(need) !== -1) return lowerGrants.includes('full');
+  // fallback exact
+  return lowerGrants.includes(need);
+}
+function unifiedCheck_(authUser, companyName, pageId, requiredAccess) {
+  if (!authUser) return false;
+  if (authUser.isSuperAdmin) return true;
+  // company isolation except global pages handled by caller
+  if (companyName && authUser.company !== companyName) return false;
+  if (!pageId) return false;
+  const grants = authUser.authorizedPages && authUser.authorizedPages[pageId];
+  if (!grants || !grants.length) return false;
+  if (!requiredAccess) return true; // view if any grant
+  return _hasUnifiedAccess_(grants, requiredAccess);
+}
+
+// ==========================================
+// System kill switch (ERP_system_work sheet)
+// Contract: B1 = header «on_off», B2 = 1 (system works) / 0 (system closed).
+// C2/D2 hold updated_at/updated_by audit stamps (informational only).
+// Fail-open: if the sheet or B2 is missing/unreadable, the system is ENABLED.
+// Recovery when closed is ALWAYS via editing B2 directly in the sheet — the
+// app itself cannot flip it once blocked (apiRouter gate precedes auth).
+// That direct edit is caught by the INSTALLABLE onAuthSheetEdit trigger, which
+// bumps the authority generation and re-enables on the next request. The simple
+// onEdit(e) in shared Code.js section has never fired: this is a standalone script and
+// simple triggers only run in container-bound projects. With the installable
+// trigger missing, recovery is bounded by AUTH_STALENESS_CEILING_SECONDS.
+// ==========================================
+function ensureSystemWorkSheet_() {
+  if (typeof systemFindFlagRecord_ === 'function') return systemFindFlagRecord_();
+  const ss = getSpreadsheet_(CONFIG.AUTH_SPREADSHEET_ID);
+  let sheet = ss.getSheetByName('ERP_system_work');
+  if (!sheet) {
+    sheet = ss.insertSheet('ERP_system_work');
+    noteMutation_();
+    sheet.getRange('B1').setValue('on_off');
+    sheet.getRange('C1').setValue('updated_at');
+    sheet.getRange('D1').setValue('updated_by');
+    sheet.getRange('B2').setValue(1);
+    noteMutation_();
+  }
+  return sheet;
+}
+
+/** Raw read of the B2 flag. Returns 1/0 as number, or null when unreadable/empty. */
+function readSystemWorkFlag_(sheet) {
+  const v = sheet && sheet.data ? sheet.data.on_off : (sheet && typeof sheet.getRange === 'function' ? sheet.getRange('B2').getValue() : null);
+  if (v === '' || v === null || v === undefined) return null;
+  const n = Number(v);
+  if (!isNaN(n) && String(v).trim() !== '') return n;
+  const s = String(v).trim().toLowerCase();
+  if (s === 'false') return 0;
+  if (s === 'true') return 1;
+  return null;
+}
+
+/**
+ * Cached kill-switch read, keyed by the authority GENERATION ('ks_g<gen>').
+ *
+ * The old key was versioned by 'version_killswitch', bumped by the simple
+ * onEdit trigger — which never fires in a standalone script, so a direct B2
+ * edit was rescued only by the 15s TTL. Now toggleKillSwitch_ (via bumpVersion_)
+ * and the installable onAuthSheetEdit trigger both bump the generation, and
+ * authGeneration_'s time bucket caps staleness at AUTH_STALENESS_CEILING_SECONDS
+ * even if the trigger is missing. The TTL is no longer the mechanism.
+ */
+function isSystemEnabled_() {
+  try {
+    if (_ksMemo_ !== null) return _ksMemo_;
+    const cache = CacheService.getScriptCache();
+    const key = 'ks_g' + authGeneration_();
+    let cached = null;
+    try { cached = cache.get(key); } catch (cacheErr) {}
+    if (cached !== null && cached !== undefined) { _ksMemo_ = (cached === 'true'); return _ksMemo_; }
+
+    let enabled = true; // fail-open default
+    let readOk = true;
+    try {
+      const flagRecord = ensureSystemWorkSheet_();
+      const flag = readSystemWorkFlag_(flagRecord);
+      if (flag === 0) enabled = false;
+    } catch (readErr) { enabled = true; readOk = false; }
+
+    // A FAILED read must not earn the long TTL — caching a fail-open default for
+    // six hours would hide a real shutdown.
+    try {
+      cache.put(key, enabled ? 'true' : 'false',
+        readOk ? CONFIG.CACHE_KILLSWITCH_SECONDS : CONFIG.CACHE_AUTH_FAILREAD_SECONDS);
+    } catch (putErr) {}
+    _ksMemo_ = enabled;
+    return enabled;
+  } catch (e) {
+    return true;
+  }
+}
+
+// ==========================================
+// Page access checks — wrappers over unifiedCheck_
+// ==========================================
+function checkPageAccess_(authUser, companyName, pageId, requiredAccess) {
+  if (authUser && authUser.isSuperAdmin) return true;
+  function deny_(reason) {
+    try { console.warn('[DENY] checkPageAccess_ email=' + (authUser && authUser.email) + ' company=' + companyName + ' page=' + pageId + ' need=' + requiredAccess + ' reason=' + reason + ' grants=' + (authUser && authUser.authorizedPages && authUser.authorizedPages[pageId] ? authUser.authorizedPages[pageId].join(',') : '')); } catch(e){}
+    throw new Error(ERP_MESSAGES.NOT_AUTHORIZED);
+  }
+  // company isolation
+  if (companyName && authUser && authUser.company !== companyName) return deny_('company_mismatch expected=' + (authUser && authUser.company) + ' got=' + companyName);
+  if (!pageId) return deny_('no_pageId');
+  const need = _normalizeAccess_(requiredAccess || 'read');
+  if (!unifiedCheck_(authUser, companyName || (authUser && authUser.company), pageId, need)) {
+    // distinguish no-grant vs wrong level for logs
+    const grants = authUser && authUser.authorizedPages && authUser.authorizedPages[pageId];
+    if (!grants || !grants.length) return deny_('no_page_grant');
+    return deny_('missing_access_type need=' + need + ' have=' + grants.join(','));
+  }
+  return true;
+}
+
+function checkPageAccessForUI_(authUser, pageId) {
+  // L2 ROUTE + L1 NAV gate — fail-closed, unified (view = any grant)
+  if (pageId === 'ERPDashboard') return true;
+  if (pageId === 'ERP_Management') {
+    return !!(authUser.isSuperAdmin || String(authUser.role || '').toLowerCase() === 'admin');
+  }
+  if (['user_sessions', 'user_views', 'record_history'].indexOf(pageId) !== -1) return true;
+  if (authUser.isSuperAdmin) return true;
+  if (!authUser.company || !COMPANY_REGISTRY[authUser.company]) return false;
+  const companyPages = COMPANY_REGISTRY[authUser.company].pages || [];
+  const companyPageIds = companyPages.map(p => p.action);
+  if (!companyPageIds.includes(pageId)) return false;
+  // dashboard view requires at least Read (any grant) — unified: assigned => see, write => add, full => edit/delete
+  const allowed = unifiedCheck_(authUser, authUser.company, pageId, 'read');
+  if (!allowed) { try { console.warn('[DENY-UI] email='+(authUser&&authUser.email)+' page='+pageId); } catch(e){} }
+  return allowed;
+}
+
+/** Helper for §5.3: returns first authorized page action for user's company, or '' if none. */
+function getFirstAuthorizedPageForUser_(authUser) {
+  if (!authUser || !authUser.company || !COMPANY_REGISTRY[authUser.company]) return '';
+  const pages = COMPANY_REGISTRY[authUser.company].pages;
+  for (let i = 0; i < pages.length; i++) {
+    // Skip permission tokens — a registry entry with no template is not a
+    // navigable page (valley_cost_view). Landing a user on one would send them
+    // to an action the router deliberately refuses to render.
+    if (!pages[i].template) continue;
+    const pid = pages[i].action;
+    if (authUser.isSuperAdmin) return pid;
+    if (unifiedCheck_(authUser, authUser.company, pid, 'read')) return pid;
+  }
+  return '';
+}
+
+// ==========================================
+// Company lookup helpers
+// ==========================================
+function companyRecord_(companyName) {
+  if (!companyName) throw new Error('Company name is required to fetch spreadsheet ID.');
+  const wanted = String(companyName).trim().toLowerCase();
+  const rows = systemRowsCompat_('ERP_Companies');
+  const companyRow = rows.find(function (r) {
+    return [r.company_unique_id, r.company_name_ar, r.company_name_en].some(function (v) {
+      return String(v || '').trim().toLowerCase() === wanted;
+    });
+  });
+  if (!companyRow) throw new Error('Company "' + companyName + '" not found in ERP_Companies.');
+
+  const enabledRaw = String(companyRow.enabled == null ? '' : companyRow.enabled).trim().toLowerCase();
+  /* Legacy company rows predate the enabled toggle and therefore contain an
+   * empty cell. Preserve their pre-existing availability; only an explicit
+   * false/disabled value blocks a company. The admin UI now writes TRUE/FALSE
+   * for all later changes. */
+  const enabled = ['false', '0', 'no', 'disabled', 'inactive'].indexOf(enabledRaw) === -1;
+  if (companyRow.company_sheet_link === undefined) throw new Error("Database Error: 'company_sheet_link' column missing.");
+  const rawLink = String(companyRow.company_sheet_link).trim();
+  const spreadsheetId = rawLink.match(/\/d\/([a-zA-Z0-9-_]+)/) ? rawLink.match(/\/d\/([a-zA-Z0-9-_]+)/)[1] : rawLink;
+  return { enabled: enabled, spreadsheetId: spreadsheetId, uid: String(companyRow.company_unique_id || companyName).trim() };
+}
+
+function assertCompanyEnabled_(companyName) {
+  const record = companyRecord_(companyName);
+  if (!record.enabled) throw new Error('هذه الشركة غير مفعلة حالياً.');
+  return record;
+}
+
+function getCompanySpreadsheetId_(companyName) {
+  const cache = CacheService.getScriptCache();
+  const compVersion = cache.get('version_companies') || '0';
+  const cacheKey = 'company_spreadsheet_v_' + compVersion + '_' + companyName;
+  try {
+    const cached = cache.get(cacheKey);
+    if (cached) {
+      const parsed = JSON.parse(cached);
+      if (parsed && parsed.enabled && parsed.spreadsheetId) return parsed.spreadsheetId;
+    }
+  } catch (cacheErr) {}
+
+  const record = assertCompanyEnabled_(companyName);
+  try { cache.put(cacheKey, JSON.stringify(record), CONFIG.CACHE_GENERAL_SECONDS); } catch (putErr) {}
+  return record.spreadsheetId;
+}
+
+// ==========================================
+// Phase 3: central dbId resolution + tenant assertion
+// Single source of truth for which spreadsheet a company request may touch.
+// resolveDbId_ derives the tenant from identity (a super-admin may target
+// payload.target_system; everyone else is pinned to their own company) and
+// asserts the result matches that company's spreadsheet. assertDbIdBelongsToCompany_
+// is the Valley-style double-check reused by dispatch_ layers.
+// ==========================================
+function assertDbIdBelongsToCompany_(dbId, company) {
+  if (!company) throw new Error(ERP_MESSAGES.NOT_AUTHORIZED);
+  if (!dbId || String(dbId) !== String(getCompanySpreadsheetId_(company))) throw new Error(ERP_MESSAGES.NOT_AUTHORIZED);
+  return String(dbId);
+}
+
+function resolveDbId_(authUser, payload) {
+  if (!authUser) throw new Error(ERP_MESSAGES.NOT_AUTHORIZED);
+  if (authUser.isSuperAdmin) {
+    const target = payload && payload.target_system;
+    if (!target) throw new Error(ERP_MESSAGES.NOT_AUTHORIZED);
+    const dbId = getCompanySpreadsheetId_(target);
+    return assertDbIdBelongsToCompany_(dbId, target);
+  }
+  const company = authUser.company;
+  if (!company) throw new Error(ERP_MESSAGES.NOT_AUTHORIZED);
+  if (payload && payload.target_system && payload.target_system !== company) throw new Error(ERP_MESSAGES.NOT_AUTHORIZED);
+  const dbId = getCompanySpreadsheetId_(company);
+  return assertDbIdBelongsToCompany_(dbId, company);
+}
+
+// ==========================================
+// Dashboard data — assigned company only, unassigned sees all (no schema change)
+// ==========================================
+function getDashboardData_(payload, sessionToken, authUser) {
+  const rows = getAllRecords_(CONFIG.AUTH_SPREADSHEET_ID, 'ERP_Companies');
+  const hasCompany = String(authUser.company || '').trim() !== '';
+  const normCompany = String(authUser.company || '').trim().toLowerCase();
+  const companies = rows
+    .filter(r => {
+      const enabled = String(r.enabled == null ? '' : r.enabled).trim().toLowerCase();
+      const isEnabled = ['false', '0', 'no', 'disabled', 'inactive'].indexOf(enabled) === -1;
+      return isEnabled &&
+        (authUser.isSuperAdmin || !hasCompany || String(r.company_unique_id || '').trim().toLowerCase() === normCompany);
+    })
+    .map(r => {
+      const isReady = !!COMPANY_REGISTRY[r.company_unique_id];
+      return {
+        unique_id: r.company_unique_id,
+        name_ar: r.company_name_ar,
+        name_en: r.company_name_en,
+        logo_url: r.company_logo ? driveDirectImageUrl_(String(r.company_logo), 300) : '',
+        main_page: isReady ? COMPANY_REGISTRY[r.company_unique_id].pages[0].action : null,
+        is_ready: isReady
+      };
+    });
+  return { status: 'success', user: authUser, companies: companies };
+}
+
+function driveDirectImageUrl_(fileId, width) {
+  const w = width || 300;
+  return 'https://drive.google.com/thumbnail?id=' + fileId + '&sz=w' + w;
+}
+
+// Company logo thumbnail URL (from ERP_Companies.company_logo) for a company page.
+// F-08: this was the one ERP_Companies reader with no cache — a full
+// getDataRange().getValues() on every page render — while both of its siblings
+// (getCompanySpreadsheetId_, getCompanyThemeCSS_) are version-cached. Same
+// version_companies pattern applied here, so bumpVersion_('ERP_Companies')
+// already invalidates it along with the others.
+function getCompanyLogoUrl_(companyName) {
+  if (!companyName) return '';
+  const cache = CacheService.getScriptCache();
+  const compVersion = cache.get('version_companies') || '0';
+  const cacheKey = 'company_logo_v_' + compVersion + '_' + companyName;
+  try {
+    const cached = cache.get(cacheKey);
+    if (cached !== null && cached !== undefined) return cached === '\u0000' ? '' : cached;
+  } catch (cacheErr) {}
+  const url = getCompanyLogoUrlUncached_(companyName);
+  try { cache.put(cacheKey, url === '' ? '\u0000' : url, CONFIG.CACHE_LOGO_SECONDS); } catch (putErr) {}
+  return url;
+}
+
+function getCompanyLogoUrlUncached_(companyName) {
+  try {
+    const row = systemFindCompat_('ERP_Companies', 'company_unique_id', String(companyName).trim());
+    if (!row) return '';
+    const logoId = String(row.company_logo || '').trim();
+    return logoId ? driveDirectImageUrl_(logoId, 200) : '';
+  } catch (e) { return ''; }
+}
+
+
+
+/* ===================== 5. ADMINISTRATION / GENERIC THEMES ============== */
+/**
+ * shared Code.js section
+ * RESPONSIBILITY: Super-admin handlers for the control plane:
+ *   companies CRUD (with 'enabled' toggle), users CRUD (with password reset),
+ *   roles matrix CRUD.
+ * No routing here — handlers are wired into Code.js ROUTES. Every handler
+ * re-checks isSuperAdmin server-side (never trusts the client).
+ */
+
+function requireSuperAdmin_(authUser) {
+  if (!authUser || !authUser.isSuperAdmin) throw new Error('Access Denied: Super admin only.');
+}
+
+function adminListCompanies_(payload, sessionToken, authUser) {
+  requireSuperAdmin_(authUser);
+  const rows = getAllRecords_(CONFIG.AUTH_SPREADSHEET_ID, 'ERP_Companies');
+  return { status: 'success', companies: rows };
+}
+
+function adminSaveCompany_(payload, sessionToken, authUser) {
+  requireSuperAdmin_(authUser);
+  const p = payload || {};
+  let uid = String(p.company_unique_id || '').trim();
+  const nameAr = String(p.company_name_ar || '').trim();
+  const nameEn = String(p.company_name_en || '').trim();
+  const link = String(p.company_sheet_link || '').trim();
+  if (!nameAr) throw new Error('الاسم العربي مطلوب');
+  if (!uid) uid = Utilities.getUuid().replace(/-/g, '').slice(0, 16);
+  if (!/^[a-zA-Z0-9_-]+$/.test(uid)) throw new Error('المعرف يجب أن يكون أحرفاً لاتينية وأرقاماً فقط');
+
+  const existingRow = systemFindByBusinessKey_('ERP_Companies', 'company_unique_id', uid);
+
+  const enabled = p.enabled === true || String(p.enabled).trim().toLowerCase() === 'true';
+  const fields = {
+    company_unique_id: uid,
+    company_name_ar: nameAr,
+    company_name_en: nameEn,
+    company_sheet_link: link,
+    company_colors: String(p.company_colors || ''),
+    company_logo: String(p.company_logo || ''),
+    company_main_page: String(p.company_main_page || ''),
+    enabled: enabled ? 'TRUE' : 'FALSE',
+    updated_at: new Date()
+  };
+
+  if (existingRow) {
+    systemPatchRecord_('ERP_Companies', existingRow._meta.documentId, fields, { expectedUpdateTime: existingRow._meta.updateTime });
+    bumpVersion_('ERP_Companies');
+    return { status: 'success', message: 'تم تحديث الشركة', company: fields };
+  }
+
+  systemAddRecordCompat_('ERP_Companies', Object.assign({ id: systemNextNumericId_('ERP_Companies', 'id'), created_at: new Date() }, fields), ['company_unique_id', 'company_name_ar']);
+  bumpVersion_('ERP_Companies');
+  return { status: 'success', message: 'تمت إضافة الشركة', company: fields };
+}
+
+function adminListUsers_(payload, sessionToken, authUser) {
+  requireSuperAdmin_(authUser);
+  const rows = getAllRecords_(CONFIG.AUTH_SPREADSHEET_ID, 'ERP_Users');
+  const roles = [];
+  const seen = {};
+  rows.forEach(u => {
+    const r = String((u.role == null) ? '' : u.role).trim();
+    if (r && !seen[r]) { seen[r] = true; roles.push(r); }
+  });
+  const companies = getAllRecords_(CONFIG.AUTH_SPREADSHEET_ID, 'ERP_Companies').map(c => ({
+    value: String(c.company_unique_id || '').trim(),
+    label: String(c.company_name_ar || c.company_name_en || c.company_unique_id || '').trim()
+  })).filter(c => c.value);
+  return { status: 'success', users: rows, role_options: roles, company_options: companies };
+}
+
+/**
+ * Add a user, or (if password supplied) reset an existing user's password with
+ * a fresh salt. New users must receive an administrator-controlled password;
+ * public first-time claiming by known email is intentionally disabled.
+ */
+function adminSaveUser_(payload, sessionToken, authUser) {
+  requireSuperAdmin_(authUser);
+  const p = payload || {};
+  const email = String(p.email || '').trim().toLowerCase();
+  const name = String(p.name || '').trim();
+  const role = String(p.role || '').trim() || 'User';
+  const company = String(p.company || '').trim();
+  const status = String(p.status || 'Active').trim();
+  const isActive = status.toLowerCase() === 'active' ? 'Active' : 'InActive';
+  if (!email || !name) throw new Error('الاسم والبريد الإلكتروني مطلوبان');
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('بريد إلكتروني غير صالح');
+
+  const existing = systemFindByBusinessKey_('ERP_Users', 'email', email);
+
+  if (!existing && !(p.resetPassword && String(p.resetPassword).trim())) {
+    throw new Error('يجب على مسؤول النظام تعيين كلمة مرور مبدئية للمستخدم الجديد.');
+  }
+
+  const base = {
+    name: name,
+    email: email,
+    role: role,
+    company: company,
+    status: isActive,
+    updated_at: new Date()
+  };
+
+  if (p.resetPassword && String(p.resetPassword).trim()) {
+    const salt = generateSalt_();
+    base['passwordhash'] = hashPassword_(String(p.resetPassword), salt);
+    base['salt'] = salt;
+    base['sessiontoken'] = '';
+    base['sessionexpiry'] = '';
+  }
+
+  if (existing) {
+    systemPatchRecord_('ERP_Users', existing._meta.documentId, base, { expectedUpdateTime: existing._meta.updateTime });
+    bumpVersion_('ERP_Users');
+    return { status: 'success', message: 'تم تحديث المستخدم', user: { email: email, name: name, role: role, company: company, status: isActive } };
+  }
+
+  systemAddRecordCompat_('ERP_Users',
+    Object.assign({ id: systemNextNumericId_('ERP_Users', 'id'), created_at: new Date(), sessiontoken: '', sessionexpiry: '', passwordhash: '', salt: '' }, base),
+    ['name', 'email', 'role']);
+  bumpVersion_('ERP_Users');
+  return { status: 'success', message: 'تمت إضافة المستخدم', user: { email: email, name: name, role: role, company: company, status: isActive } };
+}
+
+function adminListMatrix_(payload, sessionToken, authUser) {
+  requireSuperAdmin_(authUser);
+  const matrix = getAllRecords_(CONFIG.AUTH_SPREADSHEET_ID, 'ERP_Pages_Matrix');
+  const pages = getAllRecords_(CONFIG.AUTH_SPREADSHEET_ID, 'ERP_System_Pages');
+  const users = getAllRecords_(CONFIG.AUTH_SPREADSHEET_ID, 'ERP_Users');
+  const companyOptions = getAllRecords_(CONFIG.AUTH_SPREADSHEET_ID, 'ERP_Companies').map(c => ({ value: String(c.company_unique_id || '').trim(), label: String(c.company_name_ar || c.company_name_en || c.company_unique_id || '').trim() })).filter(c => c.value);
+  const userRoles = users.map(u => ({
+    role: String(u.role == null ? '' : u.role).trim(),
+    company: String(u.company == null ? '' : u.company).trim()
+  })).filter(u => u.role);
+  const roles = [];
+  const seen = {};
+  userRoles.forEach(u => {
+    if (!seen[u.role]) { seen[u.role] = true; roles.push(u.role); }
+  });
+  return {
+    status: 'success',
+    matrix: matrix,
+    pages: pages,
+    roles: roles,
+    user_roles: userRoles,
+    company_options: companyOptions,
+    module_options: ['HR', 'Finance', 'Warehouse', 'Production', 'Quality', 'Sales', 'Supply Chain', 'Tax System', 'General', 'Top Management']
+  };
+}
+
+/**
+ * Bulk save of a role's page assignments. Upserts by (role, page_id): inserts a
+ * new row (16-char UUID) when missing, updates only changed columns otherwise.
+ */
+function adminSaveMatrix_(payload, sessionToken, authUser) {
+  requireSuperAdmin_(authUser);
+  const p = payload || {};
+  const role = String(p.role || '').trim();
+  const assignments = Array.isArray(p.assignments) ? p.assignments : [];
+  if (!role) throw new Error('الدور مطلوب');
+  if (!assignments.length) throw new Error('لا توجد صلاحيات للحفظ');
+
+  if (systemStorageTarget_().backend === 'firestore') {
+    var matrixRows = systemGetAllRecords_('ERP_Pages_Matrix'), addedFs = 0, updatedFs = 0, skippedFs = 0;
+    assignments.forEach(function (a) {
+      var pageIdFs = String(a.page_id || '').trim(); if (!pageIdFs) return;
+      var accessFs = String(a.access_type || 'Read').trim();
+      var statusFs = String(a.status || 'Active').trim() === 'Active' ? 'Active' : 'InActive';
+      var foundFs = systemFindByFields_('ERP_Pages_Matrix', [{ field: 'role', value: role }, { field: 'page_id', value: pageIdFs }]);
+      if (!foundFs) {
+        systemCreateRecord_('ERP_Pages_Matrix', { erp_pages_matrix_unique_id: Utilities.getUuid().replace(/-/g, '').slice(0, 16), role: role, page_id: pageIdFs, access_type: accessFs, status: statusFs, user: authUser ? authUser.email : '', created_at: new Date() }, { operationId: 'matrix:' + role + ':' + pageIdFs });
+        addedFs++;
+      } else if (String(foundFs.access_type || '').trim() !== accessFs || String(foundFs.status || '').trim() !== statusFs) {
+        systemPatchRecord_('ERP_Pages_Matrix', foundFs._meta.documentId, { access_type: accessFs, status: statusFs, user: authUser ? authUser.email : '' }, { expectedUpdateTime: foundFs._meta.updateTime });
+        updatedFs++;
+      } else skippedFs++;
+    });
+    bumpVersion_('ERP_Pages_Matrix');
+    return { status: 'success', message: 'تم حفظ الصلاحيات', added: addedFs, updated: updatedFs, skipped: skippedFs };
+  }
+
+  const sheet = getSheet_('ERP_Pages_Matrix', CONFIG.AUTH_SPREADSHEET_ID);
+  const headers = getHeaders_(sheet);
+  const data = sheet.getDataRange().getValues();
+  const rowData = data.slice(1);
+  const idx = name => headers.findIndex(h => String(h).trim().toLowerCase() === name);
+  const roleIdx = idx('role');
+  const pageIdx = idx('page_id');
+  const accessIdx = idx('access_type');
+  const statusIdx = idx('status');
+  const uidIdx = idx('erp_pages_matrix_unique_id');
+  const userIdx = idx('user');
+  const createdIdx = idx('created_at');
+  if (roleIdx === -1 || pageIdx === -1) throw new Error('ERP_Pages_Matrix missing role/page_id columns');
+
+  const existingMap = {};
+  rowData.forEach((r, i) => {
+    const rl = String(r[roleIdx]).trim().toLowerCase();
+    const pg = String(r[pageIdx]).trim().toLowerCase();
+    if (rl && pg) existingMap[rl + '|' + pg] = i + 2;
+  });
+
+  let added = 0, updated = 0, skipped = 0;
+  assignments.forEach(a => {
+    const pageId = String(a.page_id || '').trim();
+    if (!pageId) return;
+    const accessType = String(a.access_type || 'Read').trim();
+    const status = String(a.status || 'Active').trim() === 'Active' ? 'Active' : 'InActive';
+    const key = role.toLowerCase() + '|' + pageId.toLowerCase();
+    const rowNum = existingMap[key];
+    if (!rowNum) {
+      const rowValues = headers.map(() => '');
+      const set = (n, v) => { const i = idx(n); if (i !== -1) rowValues[i] = v; };
+      set('erp_pages_matrix_unique_id', Utilities.getUuid().replace(/-/g, '').slice(0, 16));
+      set('role', role);
+      set('page_id', pageId);
+      set('access_type', accessType);
+      set('status', status);
+      set('user', authUser ? authUser.email : '');
+      set('created_at', new Date());
+      sheet.appendRow(rowValues);
+      noteMutation_();
+      existingMap[key] = sheet.getLastRow();
+      added++;
+    } else {
+      const existing = data[rowNum - 1];
+      const curAccess = accessIdx !== -1 ? String(existing[accessIdx]).trim() : '';
+      const curStatus = statusIdx !== -1 ? String(existing[statusIdx]).trim() : '';
+      if (curAccess !== accessType || curStatus !== status) {
+        const uidVal = uidIdx !== -1 ? existing[uidIdx] : '';
+        const updates = {};
+        if (accessIdx !== -1) updates['access_type'] = accessType;
+        if (statusIdx !== -1) updates['status'] = status;
+        if (userIdx !== -1) updates['user'] = authUser ? authUser.email : '';
+        if (uidIdx !== -1 && String(uidVal).trim() !== '') {
+          patchRowByCriteria_(sheet, 'erp_pages_matrix_unique_id', uidVal, updates);
+        }
+        updated++;
+      } else {
+        skipped++;
+      }
+    }
+  });
+  bumpVersion_('ERP_Pages_Matrix');
+  return { status: 'success', message: 'تم حفظ الصلاحيات', added: added, updated: updated, skipped: skipped };
+}
+
+/* =========================================
+ * System Pages — list + bulk upsert (dedup by page_id)
+ * ========================================= */
+function adminListPages_(payload, sessionToken, authUser) {
+  requireSuperAdmin_(authUser);
+  const systemPages = getAllRecords_(CONFIG.AUTH_SPREADSHEET_ID, 'ERP_System_Pages');
+  const allPages = getAllPages_().map(p => ({ page_id: p.action, title: p.title || p.action, label: p.label || '' }));
+  const companyOptions = getAllRecords_(CONFIG.AUTH_SPREADSHEET_ID, 'ERP_Companies').map(c => ({ value: String(c.company_unique_id || '').trim(), label: String(c.company_name_ar || c.company_name_en || c.company_unique_id || '').trim() })).filter(c => c.value);
+  return {
+    status: 'success',
+    system_pages: systemPages,
+    all_pages: allPages,
+    company_options: companyOptions,
+    module_options: ['HR', 'Finance', 'Warehouse', 'Production', 'Quality', 'Sales', 'Supply Chain', 'Tax System', 'General', 'Top Management']
+  };
+}
+
+function adminSavePages_(payload, sessionToken, authUser) {
+  requireSuperAdmin_(authUser);
+  const pages = Array.isArray(payload && payload.pages) ? payload.pages : [];
+  if (!pages.length) throw new Error('لا توجد صفحات للحفظ');
+
+  if (systemStorageTarget_().backend === 'firestore') {
+    var pageRowsFs = systemGetAllRecords_('ERP_System_Pages'), addedPagesFs = 0, updatedPagesFs = 0, skippedPagesFs = 0;
+    pages.forEach(function (p) {
+      var pageFs = String(p.page_id || '').trim(); if (!pageFs) return;
+      var foundPageFs = systemFindByBusinessKey_('ERP_System_Pages', 'page_id', pageFs);
+      var changesPageFs = { page_name: String(p.page_name || '').trim(), page_module: String(p.page_module || '').trim(), page_company: String(p.page_company || '').trim() };
+      if (!foundPageFs) { systemCreateRecord_('ERP_System_Pages', Object.assign({ page_id: pageFs }, changesPageFs), { operationId: 'page:' + pageFs }); addedPagesFs++; }
+      else if (String(foundPageFs.page_name || '') !== changesPageFs.page_name || String(foundPageFs.page_module || '') !== changesPageFs.page_module || String(foundPageFs.page_company || '') !== changesPageFs.page_company) { systemPatchRecord_('ERP_System_Pages', foundPageFs._meta.documentId, changesPageFs, { expectedUpdateTime: foundPageFs._meta.updateTime }); updatedPagesFs++; }
+      else skippedPagesFs++;
+    });
+    bumpVersion_('ERP_Pages_Matrix');
+    return { status: 'success', message: 'تم حفظ الصفحات', added: addedPagesFs, updated: updatedPagesFs, skipped: skippedPagesFs };
+  }
+
+  const sheet = getSheet_('ERP_System_Pages', CONFIG.AUTH_SPREADSHEET_ID);
+  const headers = getHeaders_(sheet);
+  const data = sheet.getDataRange().getValues();
+  const rowData = data.slice(1);
+  const idx = name => headers.findIndex(h => String(h).trim().toLowerCase() === name);
+  const pageIdIdx = idx('page_id');
+  const nameIdx = idx('page_name');
+  const moduleIdx = idx('page_module');
+  const companyIdx = idx('page_company');
+  if (pageIdIdx === -1) throw new Error('ERP_System_Pages missing page_id column');
+
+  const existingMap = {};
+  rowData.forEach((r, i) => {
+    const pid = String(r[pageIdIdx]).trim().toLowerCase();
+    if (pid) existingMap[pid] = i + 2;
+  });
+
+  let added = 0, updated = 0, skipped = 0;
+  pages.forEach(p => {
+    const pageId = String(p.page_id || '').trim();
+    if (!pageId) return;
+    const name = String(p.page_name || '').trim();
+    const module = String(p.page_module || '').trim();
+    const company = String(p.page_company || '').trim();
+    const rowNum = existingMap[pageId.toLowerCase()];
+    if (!rowNum) {
+      const rowValues = headers.map(() => '');
+      const set = (n, v) => { const i = idx(n); if (i !== -1) rowValues[i] = v; };
+      set('page_id', pageId);
+      set('page_name', name);
+      set('page_module', module);
+      set('page_company', company);
+      sheet.appendRow(rowValues);
+      noteMutation_();
+      existingMap[pageId.toLowerCase()] = sheet.getLastRow();
+      added++;
+    } else {
+      const existing = data[rowNum - 1];
+      const curName = nameIdx !== -1 ? String(existing[nameIdx]).trim() : '';
+      const curModule = moduleIdx !== -1 ? String(existing[moduleIdx]).trim() : '';
+      const curCompany = companyIdx !== -1 ? String(existing[companyIdx]).trim() : '';
+      if (curName !== name || curModule !== module || curCompany !== company) {
+        const updates = {};
+        if (nameIdx !== -1) updates['page_name'] = name;
+        if (moduleIdx !== -1) updates['page_module'] = module;
+        if (companyIdx !== -1) updates['page_company'] = company;
+        patchRowByCriteria_(sheet, 'page_id', pageId, updates);
+        updated++;
+      } else {
+        skipped++;
+      }
+    }
+  });
+  bumpVersion_('ERP_Pages_Matrix');
+  return { status: 'success', message: 'تم حفظ الصفحات', added: added, updated: updated, skipped: skipped };
+}
+
+/* =========================================
+ * Currency — list / add / update / delete (GOOGLEFINANCE rate)
+ * ========================================= */
+function adminListCurrency_(payload, sessionToken, authUser) {
+  requireSuperAdmin_(authUser);
+  const rows = getAllRecords_(CONFIG.AUTH_SPREADSHEET_ID, 'ERP_currency_exchange');
+  return { status: 'success', currencies: rows };
+}
+
+function setRateFormula_(sheet, headers, rowNum) {
+  const idx = name => headers.findIndex(h => String(h).trim().toLowerCase() === name);
+  const currencyIdx = idx('currency');
+  const rateIdx = idx('rate');
+  if (currencyIdx === -1 || rateIdx === -1) return;
+  const colLetter = function (ci) {
+    let s = ''; let n = ci + 1;
+    while (n > 0) { const m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26); }
+    return s;
+  };
+  const B = colLetter(currencyIdx);
+  sheet.getRange(rowNum, rateIdx + 1).setFormula(
+    '=IF(' + B + rowNum + '="EGP", 1, GOOGLEFINANCE("CURRENCY:" & ' + B + rowNum + ' & "EGP"))');
+  noteMutation_();
+}
+
+function adminSaveCurrency_(payload, sessionToken, authUser) {
+  requireSuperAdmin_(authUser);
+  const currency = String((payload && payload.currency) || '').trim().toUpperCase();
+  if (!currency) throw new Error('العملة مطلوبة');
+
+  if (systemStorageTarget_().backend === 'firestore') {
+    var existingCurrencyFs = systemFindByBusinessKey_('ERP_currency_exchange', 'currency', currency);
+    var suppliedRateFs = payload && payload.rate !== undefined && payload.rate !== '' ? Number(payload.rate) : null;
+    if (currency === 'EGP') suppliedRateFs = 1;
+    if (suppliedRateFs !== null && (!isFinite(suppliedRateFs) || suppliedRateFs <= 0)) throw new Error('سعر الصرف غير صالح');
+    var currencyChangesFs = { currency: currency, user: authUser ? authUser.email : '', updated_at: new Date(), rate_source: suppliedRateFs === null ? (existingCurrencyFs && existingCurrencyFs.rate_source) || 'imported' : 'admin' };
+    if (suppliedRateFs !== null) currencyChangesFs.rate = suppliedRateFs;
+    if (existingCurrencyFs) systemPatchRecord_('ERP_currency_exchange', existingCurrencyFs._meta.documentId, currencyChangesFs, { expectedUpdateTime: existingCurrencyFs._meta.updateTime });
+    else systemCreateRecord_('ERP_currency_exchange', Object.assign({ id: systemNextNumericId_('ERP_currency_exchange', 'id'), created_at: new Date() }, currencyChangesFs), { operationId: 'currency:' + currency });
+    return { status: 'success', message: existingCurrencyFs ? 'تم تحديث العملة' : 'تمت إضافة العملة' };
+  }
+
+  const sheet = getSheet_('ERP_currency_exchange', CONFIG.AUTH_SPREADSHEET_ID);
+  const headers = getHeaders_(sheet);
+  const data = sheet.getDataRange().getValues();
+  const idx = name => headers.findIndex(h => String(h).trim().toLowerCase() === name);
+  const currencyIdx = idx('currency');
+  const idIdx = idx('id');
+  if (currencyIdx === -1) throw new Error('ERP_currency_exchange missing currency column');
+
+  let existingRowNum = -1;
+  for (let i = 1; i < data.length; i++) {
+    if (String(data[i][currencyIdx]).trim().toUpperCase() === currency) { existingRowNum = i + 1; break; }
+  }
+
+  if (existingRowNum !== -1) {
+    sheet.getRange(existingRowNum, currencyIdx + 1).setValue(currency);
+    noteMutation_();
+    setRateFormula_(sheet, headers, existingRowNum);
+    return { status: 'success', message: 'تم تحديث العملة' };
+  }
+
+  const nextId = getNextId_(CONFIG.AUTH_SPREADSHEET_ID, 'ERP_currency_exchange', 'id');
+  const rowValues = headers.map(() => '');
+  const set = (n, v) => { const i = idx(n); if (i !== -1) rowValues[i] = v; };
+  set('id', nextId);
+  set('currency', currency);
+  set('user', authUser ? authUser.email : '');
+  set('created_at', new Date());
+  sheet.appendRow(rowValues);
+  noteMutation_();
+  setRateFormula_(sheet, headers, sheet.getLastRow());
+  return { status: 'success', message: 'تمت إضافة العملة' };
+}
+
+function adminDeleteCurrency_(payload, sessionToken, authUser) {
+  requireSuperAdmin_(authUser);
+  const id = Number(payload && payload.id);
+  if (!id) throw new Error('معرف العملة مطلوب');
+  if (systemStorageTarget_().backend === 'firestore') {
+    var currencyFs = systemFindByBusinessKey_('ERP_currency_exchange', 'id', id);
+    if (currencyFs) systemRemoveRecord_('ERP_currency_exchange', currencyFs._meta.documentId, { expectedUpdateTime: currencyFs._meta.updateTime });
+    return { status: 'success', message: 'تم حذف العملة' };
+  }
+  const sheet = getSheet_('ERP_currency_exchange', CONFIG.AUTH_SPREADSHEET_ID);
+  const headers = getHeaders_(sheet);
+  const idIdx = headers.findIndex(h => String(h).trim().toLowerCase() === 'id');
+  const data = sheet.getDataRange().getValues();
+  for (let i = data.length - 1; i >= 1; i--) {
+    if (Number(data[i][idIdx]) === id) { sheet.deleteRow(i + 1); noteMutation_(); break; }
+  }
+  return { status: 'success', message: 'تم حذف العملة' };
+}
+
+/* =========================================
+ * ERP System Invoices — list / save / delete / print
+ * ========================================= */
+const ERP_INVOICES_SHEET = 'ERP_system_invoices';
+const ERP_INVOICES_HEADERS = [
+  'unique_id',
+  'id',
+  'invoice_number',
+  'invoice_date',
+  'company',
+  'no_of_user',
+  'cost_per_user_usd',
+  'current_exchange_rate',
+  'cost_per_user_egp',
+  'maintenance_cost_usd',
+  'maintenance_cost_per_user_egp',
+  'user',
+  'created_at',
+  'updated_at'
+];
+
+function getOrCreateErpInvoicesSheet_() {
+  const ss = getSpreadsheet_(CONFIG.AUTH_SPREADSHEET_ID);
+  let sheet = ss.getSheetByName(ERP_INVOICES_SHEET);
+  if (!sheet) {
+    sheet = ss.insertSheet(ERP_INVOICES_SHEET);
+    noteMutation_();
+    sheet.appendRow(ERP_INVOICES_HEADERS);
+    noteMutation_();
+  }
+  return sheet;
+}
+
+function adminListInvoices_(payload, sessionToken, authUser) {
+  requireSuperAdmin_(authUser);
+  if (systemStorageTarget_().backend === 'firestore') return { status: 'success', invoices: systemGetAllRecords_('ERP_system_invoices').sort(function (a, b) { return (Number(b.id) || 0) - (Number(a.id) || 0); }), company_options: systemGetAllRecords_('ERP_Companies').map(function (c) { return { value: String(c.company_unique_id || '').trim(), name_en: String(c.company_name_en || c.company_name_ar || '').trim(), name_ar: String(c.company_name_ar || '').trim() }; }) };
+  getOrCreateErpInvoicesSheet_();
+  const rows = getAllRecords_(CONFIG.AUTH_SPREADSHEET_ID, ERP_INVOICES_SHEET);
+  const companies = getAllRecords_(CONFIG.AUTH_SPREADSHEET_ID, 'ERP_Companies').map(c => ({
+    value: String(c.company_unique_id || '').trim(),
+    name_en: String(c.company_name_en || c.company_name_ar || '').trim(),
+    name_ar: String(c.company_name_ar || '').trim()
+  }));
+
+  // Auto-sort descending by id / invoice_date
+  rows.sort(function (a, b) {
+    return (Number(b.id) || 0) - (Number(a.id) || 0);
+  });
+
+  return { status: 'success', invoices: rows, company_options: companies };
+}
+
+function adminSaveInvoice_(payload, sessionToken, authUser) {
+  requireSuperAdmin_(authUser);
+  if (systemStorageTarget_().backend === 'firestore') return adminSaveInvoiceFirestore_(payload, authUser);
+  getOrCreateErpInvoicesSheet_();
+  const p = payload || {};
+
+  const invoiceNumber = String(p.invoice_number || '').trim();
+  if (!invoiceNumber) throw new Error('رقم الفاتورة مطلوب (invoice_number)');
+
+  const invoiceDate = String(p.invoice_date || '').trim();
+  if (!invoiceDate) throw new Error('تاريخ الفاتورة مطلوب (invoice_date)');
+
+  const company = String(p.company || '').trim();
+  if (!company) throw new Error('الشركة مطلوبة (company)');
+
+  const noOfUsers = parseInt(p.no_of_user, 10);
+  if (isNaN(noOfUsers) || noOfUsers < 0) throw new Error('عدد المستخدمين يجب أن يكون رقماً صحيحاً (no_of_user)');
+
+  const costPerUserUsd = parseFloat(p.cost_per_user_usd);
+  if (isNaN(costPerUserUsd) || costPerUserUsd < 0) throw new Error('تكلفة المستخدم بالدولار مطلوبة (cost_per_user_usd)');
+
+  const currentExchangeRate = parseFloat(p.current_exchange_rate);
+  if (isNaN(currentExchangeRate) || currentExchangeRate <= 0) throw new Error('سعر الصرف الحالي بالجنيه مطلوب (current_exchange_rate)');
+
+  const maintenanceCostUsd = p.maintenance_cost_usd !== undefined && p.maintenance_cost_usd !== '' ? parseFloat(p.maintenance_cost_usd) : 14;
+  if (isNaN(maintenanceCostUsd) || maintenanceCostUsd < 0) throw new Error('تكلفة الصيانة بالدولار غير صالحة');
+
+  // Calculations per specifications:
+  // cost_per_user_egp = cost_per_user_usd * current_exchange_rate * 1.04
+  // maintenance_cost_per_user_egp = maintenance_cost_usd * current_exchange_rate
+  const costPerUserEgp = Math.round(costPerUserUsd * currentExchangeRate * 1.04 * 100) / 100;
+  const maintenanceCostPerUserEgp = Math.round(maintenanceCostUsd * currentExchangeRate * 100) / 100;
+
+  const sheet = getSheet_(ERP_INVOICES_SHEET, CONFIG.AUTH_SPREADSHEET_ID);
+  const headers = getHeaders_(sheet);
+  const idx = name => headers.findIndex(h => String(h).trim().toLowerCase() === name);
+
+  let uid = String(p.unique_id || '').trim();
+
+  // If editing an existing invoice
+  if (uid) {
+    const data = sheet.getDataRange().getValues();
+    const uiIdx = idx('unique_id');
+    let rowNum = -1;
+    for (let i = 1; i < data.length; i++) {
+      if (String(data[i][uiIdx]).trim() === uid) {
+        rowNum = i + 1;
+        break;
+      }
+    }
+    if (rowNum === -1) throw new Error('الفاتورة غير موجودة لتعديلها');
+
+    const updates = {
+      invoice_number: invoiceNumber,
+      invoice_date: invoiceDate,
+      company: company,
+      no_of_user: noOfUsers,
+      cost_per_user_usd: costPerUserUsd,
+      current_exchange_rate: currentExchangeRate,
+      cost_per_user_egp: costPerUserEgp,
+      maintenance_cost_usd: maintenanceCostUsd,
+      maintenance_cost_per_user_egp: maintenanceCostPerUserEgp,
+      user: authUser ? authUser.email : '',
+      updated_at: new Date()
+    };
+
+    patchRowByCriteria_(sheet, 'unique_id', uid, updates);
+    return { status: 'success', message: 'تم تحديث الفاتورة بنجاح', unique_id: uid };
+  }
+
+  // Creating a new invoice: unique_id is 8-char UUID, id is auto-increment
+  uid = Utilities.getUuid().replace(/-/g, '').slice(0, 8);
+  const nextId = getNextId_(CONFIG.AUTH_SPREADSHEET_ID, ERP_INVOICES_SHEET, 'id');
+
+  const rowValues = headers.map(() => '');
+  const set = (n, v) => { const i = idx(n); if (i !== -1) rowValues[i] = v; };
+
+  set('unique_id', uid);
+  set('id', nextId);
+  set('invoice_number', invoiceNumber);
+  set('invoice_date', invoiceDate);
+  set('company', company);
+  set('no_of_user', noOfUsers);
+  set('cost_per_user_usd', costPerUserUsd);
+  set('current_exchange_rate', currentExchangeRate);
+  set('cost_per_user_egp', costPerUserEgp);
+  set('maintenance_cost_usd', maintenanceCostUsd);
+  set('maintenance_cost_per_user_egp', maintenanceCostPerUserEgp);
+  set('user', authUser ? authUser.email : '');
+  set('created_at', new Date());
+  set('updated_at', new Date());
+
+  sheet.appendRow(rowValues);
+  noteMutation_();
+  return { status: 'success', message: 'تم إصدار الفاتورة بنجاح', unique_id: uid, id: nextId };
+}
+
+function adminDeleteInvoice_(payload, sessionToken, authUser) {
+  requireSuperAdmin_(authUser);
+  const uid = String(payload && payload.unique_id || '').trim();
+  if (!uid) throw new Error('معرف الفاتورة مطلوب');
+  if (systemStorageTarget_().backend === 'firestore') {
+    var invoiceFs = systemFindByBusinessKey_('ERP_system_invoices', 'unique_id', uid);
+    if (invoiceFs) systemRemoveRecord_('ERP_system_invoices', invoiceFs._meta.documentId, { expectedUpdateTime: invoiceFs._meta.updateTime });
+    return { status: 'success', message: 'تم حذف الفاتورة' };
+  }
+  const sheet = getSheet_(ERP_INVOICES_SHEET, CONFIG.AUTH_SPREADSHEET_ID);
+  const headers = getHeaders_(sheet);
+  const uiIdx = headers.findIndex(h => String(h).trim().toLowerCase() === 'unique_id');
+  const data = sheet.getDataRange().getValues();
+  for (let i = data.length - 1; i >= 1; i--) {
+    if (String(data[i][uiIdx]).trim() === uid) {
+      sheet.deleteRow(i + 1);
+      noteMutation_();
+      break;
+    }
+  }
+  return { status: 'success', message: 'تم حذف الفاتورة' };
+}
+
+function adminSaveInvoiceFirestore_(payload, authUser) {
+  var p = payload || {}, invoiceNumber = String(p.invoice_number || '').trim(), invoiceDate = String(p.invoice_date || '').trim(), company = String(p.company || '').trim();
+  if (!invoiceNumber || !invoiceDate || !company) throw new Error('رقم الفاتورة والتاريخ والشركة مطلوبة');
+  var users = parseInt(p.no_of_user, 10), usd = parseFloat(p.cost_per_user_usd), rate = parseFloat(p.current_exchange_rate), maintenance = p.maintenance_cost_usd !== undefined && p.maintenance_cost_usd !== '' ? parseFloat(p.maintenance_cost_usd) : 14;
+  if (isNaN(users) || users < 0 || isNaN(usd) || usd < 0 || isNaN(rate) || rate <= 0 || isNaN(maintenance) || maintenance < 0) throw new Error('بيانات الفاتورة الرقمية غير صالحة');
+  var changes = { invoice_number: invoiceNumber, invoice_date: invoiceDate, company: company, no_of_user: users, cost_per_user_usd: usd, current_exchange_rate: rate, cost_per_user_egp: Math.round(usd * rate * 1.04 * 100) / 100, maintenance_cost_usd: maintenance, maintenance_cost_per_user_egp: Math.round(maintenance * rate * 100) / 100, user: authUser ? authUser.email : '', updated_at: new Date() };
+  var uid = String(p.unique_id || '').trim();
+  if (uid) {
+    var existing = systemFindByBusinessKey_('ERP_system_invoices', 'unique_id', uid);
+    if (!existing) throw new Error('الفاتورة غير موجودة لتعديلها');
+    systemPatchRecord_('ERP_system_invoices', existing._meta.documentId, changes, { expectedUpdateTime: existing._meta.updateTime });
+    return { status: 'success', message: 'تم تحديث الفاتورة بنجاح', unique_id: uid };
+  }
+  uid = Utilities.getUuid().replace(/-/g, '').slice(0, 8);
+  systemCreateRecord_('ERP_system_invoices', Object.assign({ unique_id: uid, id: systemNextNumericId_('ERP_system_invoices', 'id'), created_at: new Date() }, changes), { operationId: 'invoice:' + uid });
+  return { status: 'success', message: 'تم إصدار الفاتورة بنجاح', unique_id: uid };
+}
+
+function invoiceHtmlEscape_(value) { return String(value == null ? '' : value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;'); }
+function serveErpInvoiceFirestore_(params) {
+  var uid = String(params.unique_id || params.id || '').trim(), inv = systemFindByBusinessKey_('ERP_system_invoices', 'unique_id', uid);
+  if (!inv) throw new Error('السند الفريد المطلوب غير مسجل');
+  assertCompanyEnabled_(String(inv.company || '').trim());
+  var total = (Number(inv.no_of_user) || 0) * (Number(inv.cost_per_user_usd) || 0) + (Number(inv.maintenance_cost_usd) || 0);
+  return HtmlService.createHtmlOutput('<!doctype html><html><head><meta charset="UTF-8"><title>Receipt - ' + invoiceHtmlEscape_(inv.invoice_number) + '</title><style>body{font-family:Arial;padding:32px;color:#111}table{border-collapse:collapse;width:100%;max-width:680px}td,th{padding:10px;border-bottom:1px solid #ddd;text-align:left}.total{font-weight:bold;font-size:18px}@media print{button{display:none}}</style></head><body><button onclick="window.print()">طباعة</button><h1>Receipt</h1><table><tr><th>Invoice</th><td>' + invoiceHtmlEscape_(inv.invoice_number) + '</td></tr><tr><th>Date</th><td>' + invoiceHtmlEscape_(inv.invoice_date) + '</td></tr><tr><th>Company</th><td>' + invoiceHtmlEscape_(inv.company) + '</td></tr><tr><th>Users</th><td>' + invoiceHtmlEscape_(inv.no_of_user) + '</td></tr><tr class="total"><th>Total USD</th><td>' + total.toFixed(2) + '</td></tr></table></body></html>').setTitle('Receipt - ' + invoiceHtmlEscape_(inv.invoice_number)).setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+}
+
+/**
+ * Print module for ERP System Invoices (AppSheet Receipt Layout)
+ */
+function serveErpInvoice_(params) {
+  try {
+    authorizeArtifact_(params, { superAdmin: true });
+    if (systemStorageTarget_().backend === 'firestore') return serveErpInvoiceFirestore_(params);
+    const targetUniqueId = String(params.unique_id || params.id || '').trim();
+    if (!targetUniqueId) {
+      throw new Error('لم يتم تحديد كود السند الفريد (unique_id) المطلوب عرضه.');
+    }
+
+    const ss = getSpreadsheet_(CONFIG.AUTH_SPREADSHEET_ID);
+    const appsheetInvSheet = ss.getSheetByName(ERP_INVOICES_SHEET);
+    if (!appsheetInvSheet) {
+      throw new Error('تنبيه: جدول فواتير النظام (' + ERP_INVOICES_SHEET + ') غير موجود.');
+    }
+
+    const data = appsheetInvSheet.getDataRange().getValues();
+    if (data.length < 2) {
+      throw new Error('جدول الفواتير لا يحتوي على أي سجلات حالياً.');
+    }
+
+    const headers = data[0].map(function (h) { return String(h).trim().toLowerCase(); });
+    const idxUi = headers.indexOf('unique_id');
+    const idxInvNumber = headers.indexOf('invoice_number');
+    const idxInvDate = headers.indexOf('invoice_date');
+    const idxCompany = headers.indexOf('company');
+    const idxNoOfUsers = headers.indexOf('no_of_user');
+    const idxCostUser = headers.indexOf('cost_per_user_usd');
+    const idxMaintCost = headers.indexOf('maintenance_cost_usd');
+
+    if (idxUi === -1 || idxInvNumber === -1 || idxInvDate === -1 || idxNoOfUsers === -1 || idxCostUser === -1) {
+      throw new Error('فشل فحص بنية الجدول: تأكد من مطابقة أسماء الأعمدة في شيت ' + ERP_INVOICES_SHEET + '.');
+    }
+
+    let invRow = null;
+    for (let i = 1; i < data.length; i++) {
+      if (String(data[i][idxUi]).trim() === targetUniqueId) {
+        invRow = data[i];
+        break;
+      }
+    }
+
+    if (!invRow) {
+      throw new Error('السند الفريد المطلوب (ID: ' + targetUniqueId + ') غير مسجل بالجدول.');
+    }
+
+    const invoiceNumber = String(invRow[idxInvNumber]).trim();
+    const companyUid = idxCompany !== -1 ? String(invRow[idxCompany]).trim() : '';
+    if (!companyUid) throw new Error('تعذر التحقق من شركة الفاتورة.');
+    assertCompanyEnabled_(companyUid);
+
+    let companyName = companyUid;
+    let companyLogo = '';
+    const compRows = getAllRecords_(CONFIG.AUTH_SPREADSHEET_ID, 'ERP_Companies');
+    const comp = compRows.find(function (c) { return String(c.company_unique_id || '').trim() === companyUid; });
+    if (comp) {
+      companyName = String(comp.company_name_en || comp.company_name_ar || companyUid).trim();
+      companyLogo = String(comp.company_logo || '').trim();
+    }
+    if (!companyName) companyName = 'Top Chemical Factory';
+
+    const noOfUsers = parseInt(invRow[idxNoOfUsers], 10) || 0;
+    const costPerUser = parseFloat(invRow[idxCostUser]) || 0;
+    const maintCost = idxMaintCost !== -1 ? (parseFloat(invRow[idxMaintCost]) || 0) : 0;
+
+    const rawDate = invRow[idxInvDate];
+    let formattedDate = '---';
+    if (rawDate instanceof Date && !isNaN(rawDate.getTime())) {
+      formattedDate = Utilities.formatDate(rawDate, 'Africa/Cairo', 'MMMM d, yyyy');
+    } else if (rawDate) {
+      const dt = new Date(rawDate);
+      if (!isNaN(dt.getTime())) {
+        formattedDate = Utilities.formatDate(dt, 'Africa/Cairo', 'MMMM d, yyyy');
+      } else {
+        formattedDate = String(rawDate);
+      }
+    }
+
+    const licenseSubtotal = noOfUsers * costPerUser;
+    const totalAmount = licenseSubtotal + maintCost;
+
+    const rightLogoUrl = 'https://lh3.googleusercontent.com/d/1OJN15s3LHY4EL2Vcn90X07NnucIjgfJa';
+    const leftLogoUrl = 'https://lh3.googleusercontent.com/d/1Ug1T9j5vQBeBA_5w52ufDO07IsefW6QH';
+
+    const htmlContent = `<!DOCTYPE html>
+    <html lang="en" dir="ltr">
+    <head>
+      <meta charset="UTF-8">
+      <title>Receipt from AppSheet - ${invoiceNumber}</title>
+      <style>
+        @page { size: A4 portrait; margin: 0; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; color: #32325d; background-color: #ffffff; margin: 0; padding: 0; font-size: 13px; -webkit-font-smoothing: antialiased; }
+        
+        .top-stripe {
+          background-color: #4285f4;
+          height: 10px;
+          width: 100%;
+          -webkit-print-color-adjust: exact;
+          print-color-adjust: exact;
+        }
+
+        .invoice-wrapper { max-width: 660px; margin: 0 auto; padding: 24px 18px; box-sizing: border-box; }
+        
+        .header-table { width: 100%; border-collapse: collapse; margin-bottom: 24px; }
+        .header-table td { vertical-align: middle; padding: 0; }
+        .logo-left img { max-height: 80px; max-width: 170px; object-fit: contain; }
+        .logo-right { text-align: right; }
+        .logo-right img { max-height: 60px; max-width: 170px; object-fit: contain; }
+        .title-text { font-size: 22px; font-weight: 600; color: #111111; margin-bottom: 18px; }
+        
+        .meta-table { width: 100%; border-collapse: collapse; margin-bottom: 24px; }
+        .meta-table td { vertical-align: top; padding: 0; padding-bottom: 6px; font-size: 13px; }
+        .meta-label { color: #4f5b66; width: 130px; font-weight: 400; }
+        .meta-value { color: #111111; font-weight: 600; }
+        
+        .info-row { display: flex; justify-content: space-between; margin-bottom: 24px; font-size: 13px; line-height: 1.5; color: #4f5b66; }
+        
+        .info-left { width: 50%; }
+        .info-left strong { color: #111111; font-size: 15px; font-weight: 600; display: inline-block; margin-bottom: 4px; }
+        
+        .info-right { width: 45%; }
+        .bill-to-title { color: #7a8c9e; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
+        .bill-to-company { color: #111111; font-weight: 600; margin-bottom: 2px; }
+        
+        .amount-paid-text { display: inline-block; margin-top: 10px; color: #111111; font-weight: 600; font-size: 13px; }
+
+        .items-table { width: 100%; border-collapse: collapse; margin-bottom: 20px; margin-top: 8px; }
+        .items-table th { text-align: left; color: #7a8c9e; font-size: 11.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 1px solid #e3e8ee; padding-bottom: 6px; }
+        .items-table td { padding: 12px 0; border-bottom: 1px solid #e3e8ee; color: #111111; font-size: 13px; vertical-align: top; }
+        .items-table th.num-col, .items-table td.num-col { text-align: right; }
+        
+        .description-text { font-weight: 500; margin: 0; color: #111111; }
+        .description-sub { color: #4f5b66; font-size: 11.5px; margin: 3px 0 0 0; }
+
+        .totals-table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+        .totals-table td { padding: 5px 0; font-size: 13px; }
+        .totals-label { text-align: right; color: #7a8c9e; padding-right: 20px !important; }
+        .totals-value { text-align: right; color: #111111; font-weight: 500; width: 100px; }
+        
+        .divider-row td { border-top: 1px solid #e3e8ee; padding-top: 8px !important; }
+        .grand-total td { font-size: 14px; font-weight: 600; color: #111111; }
+
+        .footer-clause { margin-top: 30px; border-top: 1px solid #e3e8ee; padding-top: 12px; color: #7a8c9e; font-size: 11px; line-height: 1.5; text-align: center; }
+        
+        .print-button-wrapper {
+          max-width: 660px;
+          margin: 12px auto 0 auto;
+          text-align: center;
+        }
+
+        .print-btn {
+          background-color: #4285f4;
+          color: #ffffff;
+          border: none;
+          padding: 8px 24px;
+          font-size: 13px;
+          font-weight: 600;
+          border-radius: 6px;
+          cursor: pointer;
+          font-family: inherit;
+        }
+
+        .print-btn:hover {
+          background-color: #3367d6;
+        }
+
+        @media print {
+          .invoice-wrapper { padding: 10mm 8mm; }
+          .print-button-wrapper { display: none; }
+        }
+      </style>
+    </head>
+    <body>
+
+      <div class="top-stripe"></div>
+
+      <div class="print-button-wrapper">
+        <button onclick="window.print()" class="print-btn">
+          🖨️ طباعة الإيصال
+        </button>
+      </div>
+
+      <div class="invoice-wrapper">
+        
+        <table class="header-table">
+          <tr>
+            <td class="logo-left">
+              <img src="${leftLogoUrl}" alt="Company Logo">
+            </td>
+            <td class="logo-right">
+              <img src="${rightLogoUrl}" alt="AppSheet Logo">
+            </td>
+          </tr>
+        </table>
+
+        <div class="title-text">Receipt</div>
+
+        <table class="meta-table">
+          <tr>
+            <td class="meta-label">Invoice number</td>
+            <td class="meta-value">${invoiceNumber}</td>
+          </tr>
+          <tr>
+            <td class="meta-label">Date paid</td>
+            <td class="meta-value">${formattedDate}</td>
+          </tr>
+          <tr>
+            <td class="meta-label">Payment method</td>
+            <td class="meta-value">USD Balance Account</td>
+          </tr>
+        </table>
+
+        <div class="info-row">
+          <div class="info-left">
+            <strong>AppSheet</strong><br>
+            AppSheet<br>
+            1600 Amphitheatre Pkwy<br>
+            Mountain View, California 94043<br>
+            United States<br>
+            +1 206-486-4185<br>
+            sales@appsheet.com<br>
+            <div class="amount-paid-text">$${totalAmount.toFixed(2)} paid on ${formattedDate}</div>
+          </div>
+          <div class="info-right">
+            <div class="bill-to-title">Bill to</div>
+            <div class="bill-to-company">${companyName}</div>
+            <div class="bill-to-email">m.gamal2363@gmail.com</div>
+          </div>
+        </div>
+
+        <table class="items-table">
+          <thead>
+            <tr>
+              <th style="width: 50%;">Description</th>
+              <th class="num-col" style="width: 10%;">Qty</th>
+              <th class="num-col" style="width: 20%;">Unit Price</th>
+              <th class="num-col" style="width: 20%;">Amount</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>
+                <p class="description-text">AppSheet PREMIUM User Licenses</p>
+                <p class="description-sub">Monthly active operational application seats subscription</p>
+              </td>
+              <td class="num-col">${noOfUsers}</td>
+              <td class="num-col">$${costPerUser.toFixed(2)}</td>
+              <td class="num-col">$${licenseSubtotal.toFixed(2)}</td>
+            </tr>
+            ${maintCost > 0 ? `
+            <tr>
+              <td>
+                <p class="description-text">AppSheet Server Infrastructure Maintenance Cost</p>
+                <p class="description-sub">Technical optimization, data safety & backup routine control</p>
+              </td>
+              <td class="num-col">1</td>
+              <td class="num-col">$${maintCost.toFixed(2)}</td>
+              <td class="num-col">$${maintCost.toFixed(2)}</td>
+            </tr>
+            ` : ''}
+          </tbody>
+        </table>
+
+        <table class="totals-table">
+          <tr>
+            <td class="totals-label">Subtotal</td>
+            <td class="totals-value">$${totalAmount.toFixed(2)}</td>
+          </tr>
+          <tr class="divider-row grand-total">
+            <td class="totals-label">Total</td>
+            <td class="totals-value">$${totalAmount.toFixed(2)}</td>
+          </tr>
+          <tr class="grand-total">
+            <td class="totals-label" style="color:#111111;">Amount paid</td>
+            <td class="totals-value" style="color:#111111;">$${totalAmount.toFixed(2)}</td>
+          </tr>
+        </table>
+
+        <div class="footer-clause">
+          <br>
+          Generated automatically via ERP System Architecture.
+        </div>
+
+      </div>
+
+    </body>
+    </html>`;
+
+    return HtmlService.createHtmlOutput(htmlContent)
+      .setTitle("Receipt from AppSheet - " + invoiceNumber)
+      .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+
+  } catch (err) {
+    return HtmlService.createHtmlOutput(
+      "<h3 style='direction:rtl; text-align:center; color:#c53030; padding-top:40px;'>❌ خطأ في معالجة إيصال الأب شيت: " + err.message + "</h3>"
+    );
+  }
+}
+
+/* =========================================
+ * Multi-device sessions + audit trail endpoints (B6)
+ * All require an authenticated user (wired in Code.js ROUTES). No super-admin
+ * gate — any logged-in user manages their own sessions/views. Authority for
+ * business pages is untouched (ERP_Users.authorizedPages / guard_ unchanged).
+ * ========================================= */
+function list_user_views_(payload, sessionToken, authUser) {
+  const dbId = CONFIG.AUTH_SPREADSHEET_ID;
+  const pageAction = payload && payload.page_action ? String(payload.page_action) : '';
+  const all = getAllRecords_(dbId, 'ERP_User_Views');
+  const mine = all.filter(function (v) {
+    return v.email === authUser.email && (!pageAction || v.page_action === pageAction);
+  });
+  mine.sort(function (a, b) { return (Number(b.is_default) || 0) - (Number(a.is_default) || 0); });
+  return { status: 'success', views: mine };
+}
+
+function save_user_view_(payload, sessionToken, authUser) {
+  const dbId = CONFIG.AUTH_SPREADSHEET_ID;
+  const isDelete = !!(payload && payload._delete);
+  const viewId = payload && payload.view_id ? String(payload.view_id).trim() : '';
+  const viewName = payload && payload.view_name ? String(payload.view_name).trim() :
+    (payload && payload.name ? String(payload.name).trim() : '');
+  const pageAction = payload && payload.page_action ? String(payload.page_action).trim() :
+    (payload && payload.page_key ? String(payload.page_key).trim() : '');
+  const layoutJson = payload && (payload.layout_json !== undefined) ? payload.layout_json :
+    (payload && payload.definition !== undefined ? payload.definition : '');
+  if (systemStorageTarget_().backend === 'firestore') {
+    if (isDelete) {
+      if (!viewId) throw new Error('معرف العرض مطلوب للحذف');
+      var delViewFs = systemFindByFields_('ERP_User_Views', [{ field: 'email', value: authUser.email }, { field: 'view_id', value: viewId }]);
+      if (!delViewFs) throw new Error('العرض غير موجود');
+      systemRemoveRecord_('ERP_User_Views', delViewFs._meta.documentId, { expectedUpdateTime: delViewFs._meta.updateTime });
+      return { status: 'success', message: 'تم حذف العرض' };
+    }
+    if (!viewName || !pageAction || !layoutJson) throw new Error('اسم العرض والصفحة والتخطيط مطلوبة');
+    var defaultFs = !!(payload && (payload.is_default === true || String(payload.is_default).trim().toLowerCase() === 'true'));
+    var currentFs = viewId ? systemFindByFields_('ERP_User_Views', [{ field: 'email', value: authUser.email }, { field: 'view_id', value: viewId }]) : systemFindByFields_('ERP_User_Views', [{ field: 'email', value: authUser.email }, { field: 'page_action', value: pageAction }, { field: 'view_name', value: viewName }]);
+    if (defaultFs) systemGetAllRecords_('ERP_User_Views').filter(function (v) { return String(v.email).toLowerCase() === String(authUser.email).toLowerCase() && String(v.page_action) === pageAction && String(v.view_id) !== String(currentFs && currentFs.view_id); }).forEach(function (v) { var vm = v._meta; if (vm) systemPatchRecord_('ERP_User_Views', vm.documentId, { is_default: false }, { expectedUpdateTime: vm.updateTime }); });
+    var viewChangesFs = { email: authUser.email, page_action: pageAction, view_name: viewName, layout_json: typeof layoutJson === 'string' ? layoutJson : JSON.stringify(layoutJson), is_default: defaultFs, updated_at: new Date() };
+    if (currentFs) systemPatchRecord_('ERP_User_Views', currentFs._meta.documentId, viewChangesFs, { expectedUpdateTime: currentFs._meta.updateTime });
+    else systemCreateRecord_('ERP_User_Views', Object.assign({ view_id: String(systemNextNumericId_('ERP_User_Views', 'view_id')), created_at: new Date() }, viewChangesFs), { operationId: 'view:' + authUser.email + ':' + pageAction + ':' + viewName });
+    return { status: 'success', message: currentFs ? 'تم تحديث العرض' : 'تم حفظ العرض', view_name: viewName };
+  }
+  const sheet = getSheet_('ERP_User_Views', dbId);
+  const headers = getHeaders_(sheet);
+  const data = sheet.getDataRange().getValues();
+  const idx = function (n) { return headers.findIndex(function (h) { return String(h).trim().toLowerCase() === n; }); };
+  const emIdx = idx('email'), paIdx = idx('page_action'), vaIdx = idx('view_name'), idIdx = idx('view_id');
+
+  if (isDelete) {
+    if (!viewId) throw new Error('معرف العرض مطلوب للحذف');
+    let found = -1;
+    for (let i = 1; i < data.length; i++) {
+      if (idIdx !== -1 && String(data[i][idIdx]).trim() === viewId &&
+          String(data[i][emIdx]).trim().toLowerCase() === authUser.email) { found = i + 1; break; }
+    }
+    if (found === -1) throw new Error('العرض غير موجود');
+    sheet.deleteRow(found);
+    noteMutation_();
+    return { status: 'success', message: 'تم حذف العرض' };
+  }
+
+  if (!viewName) throw new Error('اسم العرض مطلوب');
+  if (!pageAction) throw new Error('الصفحة غير محددة');
+  if (!layoutJson) throw new Error('تخطيط العرض مطلوب');
+  const isDefault = !!(payload && (payload.is_default === true || String(payload.is_default).trim().toLowerCase() === 'true'));
+  let existingRowNum = -1;
+  for (let i = 1; i < data.length; i++) {
+    const matchId = idIdx !== -1 && viewId && String(data[i][idIdx]).trim() === viewId;
+    const matchName = String(data[i][emIdx]).trim().toLowerCase() === authUser.email &&
+      String(data[i][paIdx]).trim() === pageAction && String(data[i][vaIdx]).trim() === viewName;
+    if (matchId || matchName) { existingRowNum = i + 1; break; }
+  }
+  if (isDefault) {
+    for (let i = 1; i < data.length; i++) {
+      if (i + 1 === existingRowNum) continue;
+      if (String(data[i][emIdx]).trim().toLowerCase() === authUser.email &&
+          String(data[i][paIdx]).trim() === pageAction) {
+        const newRow = data[i].slice();
+        newRow[idx('is_default')] = false;
+        sheet.getRange(i + 1, 1, 1, newRow.length).setValues([newRow]);
+        noteMutation_();
+      }
+    }
+  }
+  const layoutStr = typeof layoutJson === 'string' ? layoutJson : JSON.stringify(layoutJson);
+  const now = new Date();
+  if (existingRowNum !== -1) {
+    const newRow = data[existingRowNum - 1].slice();
+    newRow[idx('layout_json')] = layoutStr;
+    newRow[idx('is_default')] = isDefault;
+    newRow[idx('updated_at')] = now;
+    sheet.getRange(existingRowNum, 1, 1, newRow.length).setValues([newRow]);
+    noteMutation_();
+    return { status: 'success', message: 'تم تحديث العرض', view_name: viewName };
+  }
+  const rowValues = headers.map(function () { return ''; });
+  const set = function (n, v) { const ci = idx(n); if (ci !== -1) rowValues[ci] = v; };
+  if (idIdx !== -1) set('view_id', getNextId_(dbId, 'ERP_User_Views', 'view_id'));
+  set('email', authUser.email);
+  set('page_action', pageAction);
+  set('view_name', viewName);
+  set('layout_json', layoutStr);
+  set('is_default', isDefault);
+  set('created_at', now);
+  set('updated_at', now);
+  sheet.appendRow(rowValues);
+  noteMutation_();
+  return { status: 'success', message: 'تم حفظ العرض', view_name: viewName };
+}
+
+function get_record_history_(payload, sessionToken, authUser) {
+  const dbId = CONFIG.AUTH_SPREADSHEET_ID;
+  const sheetName = payload && payload.sheet_name ? String(payload.sheet_name) : '';
+  const recordId = payload && payload.record_id ? String(payload.record_id) : '';
+  const recordUid = payload && payload.record_uid ? String(payload.record_uid) : '';
+  if (!sheetName) throw new Error('بيانات غير مكتملة');
+  const all = getAllRecords_(dbId, 'ERP_Record_History');
+  let rows = all.filter(function (h) { return h.sheet_name === sheetName; });
+  if (recordId) rows = rows.filter(function (h) { return h.record_id === recordId; });
+  else if (recordUid) rows = rows.filter(function (h) { return h.record_uid === recordUid; });
+  // Phase 5 (F-12): rows older than CONFIG.ARCHIVE_RETENTION_MONTHS live in
+  // ERP_Record_History_Archive_<year> tabs. The default path reads only the live
+  // tab — that is the whole point of archiving — so archived history is fetched
+  // only when the caller explicitly asks for it.
+  if (payload && payload.include_archive) {
+    try { rows = rows.concat(readArchivedHistory_(sheetName, recordId, recordUid)); } catch (e) {
+      if (systemStorageTarget_().backend === 'firestore') throw e;
+    }
+  }
+  const specific = recordId || recordUid;
+  rows.sort(function (a, b) {
+    return specific ? (new Date(a.changed_at) - new Date(b.changed_at)) : (new Date(b.changed_at) - new Date(a.changed_at));
+  });
+  return { status: 'success', history: rows };
+}
+
+function list_my_sessions_(payload, sessionToken, authUser) {
+  const tokenHash = SessionManager_.hashToken_(sessionToken);
+  const list = SessionManager_.listSessions(authUser.email).map(function (s) {
+    return {
+      token_hash: s.token_hash, device_name: s.device_name, device_id: s.device_id,
+      created_at: s.created_at, last_activity: s.last_activity,
+      is_current: s.token_hash === tokenHash
+    };
+  });
+  return { status: 'success', sessions: list };
+}
+
+function revoke_session_(payload, sessionToken, authUser) {
+  const tokenHash = payload && payload.token_hash ? String(payload.token_hash) : '';
+  if (!tokenHash) throw new Error('معرف الجلسة مطلوب');
+  const sessions = SessionManager_.listSessions(authUser.email);
+  const target = sessions.find(function (s) { return s.token_hash === tokenHash; });
+  if (!target) throw new Error('الجلسة غير موجودة أو لا تملك صلاحاً بإلغائها');
+  SessionManager_.revoke(tokenHash);
+  return { status: 'success', message: 'تم إلغاء الجلسة' };
+}
+
+function revoke_all_sessions_(payload, sessionToken, authUser) {
+  const n = SessionManager_.revokeAllForUser(authUser.email);
+  return { status: 'success', message: 'تم تسجيل الخروج من جميع الأجهزة', revoked: n };
+}
+
+function logout_(payload, sessionToken, authUser) {
+  SessionManager_.revokeAllForUser(authUser.email);
+  return { status: 'success', message: 'تم تسجيل الخروج' };
+}
+
+function get_erp_session_meta_(payload, sessionToken, authUser) {
+  return {
+    status: 'success',
+    max_concurrent_sessions: readMaxConcurrent_(authUser.email),
+    requires_device_name: false,
+    session_expiry_hours: CONFIG.SESSION_EXPIRY_HOURS
+  };
+}
+
+/**
+ * shared Code.js section
+ * RESPONSIBILITY: company theme markup and CSS builders extracted from the
+ * security/authentication module. Function names and output remain global
+ * because Code.js and the preview/runtime callers use those contracts.
+ * Dependencies are the existing CONFIG, CacheService, getSheet_ and helpers.
+ */
+// ==========================================
+// Per-company theme CSS (versioned cache)
+// ==========================================
+function themeSystemRowsCompat_(tableName) {
+  if (typeof systemGetAllRecords_ === 'function') return systemGetAllRecords_(tableName);
+  if (typeof getAllRecords_ === 'function') return getAllRecords_(CONFIG.AUTH_SPREADSHEET_ID, tableName);
+  return [];
+}
+function themeSystemFindCompat_(tableName, fieldName, value) {
+  if (typeof systemFindByBusinessKey_ === 'function') return systemFindByBusinessKey_(tableName, fieldName, value);
+  const wanted = String(value == null ? '' : value).trim().toLowerCase();
+  return themeSystemRowsCompat_(tableName).find(function (row) {
+    return String(row[fieldName] == null ? '' : row[fieldName]).trim().toLowerCase() === wanted;
+  }) || null;
+}
+/** Brand gradient for standalone block pages (access-denied etc.). */
+function getCompanyBlockTheme_(companyUid) {
+  const uid = String(companyUid || '').trim().toLowerCase();
+  try {
+    ensureCompaniesRegistered_();
+    const cfg = COMPANY_REGISTRY[uid];
+    if (cfg && typeof cfg.blockTheme === 'function') return cfg.blockTheme();
+  } catch (e) {}
+  let theme = { from: '#054719', to: '#16a34a' };
+  try {
+    if (uid) {
+      const row = themeSystemFindCompat_('ERP_Companies', 'company_unique_id', uid);
+      const gradMap = { red: ['#7f1d1d', '#dc2626'], green: ['#054719', '#16a34a'], yellow: ['#b45309', '#f59e0b'], black: ['#111827', '#374151'] };
+      const first = String(row && row.company_colors || '').toLowerCase().split(',').map(c => c.trim())[0];
+      if (gradMap[first]) theme = { from: gradMap[first][0], to: gradMap[first][1] };
+    }
+  } catch (e) {}
+  return theme;
+}
+
+function getGenericCompanyThemeCSS_(companyName) {
+
+  const cache = CacheService.getScriptCache();
+  const compVersion = cache.get('version_companies') || '0';
+  const cacheKey = 'theme_v_' + compVersion + '_' + (companyName || '__default__');
+  try {
+    const cached = cache.get(cacheKey);
+    if (cached) return cached;
+  } catch (cacheErr) {}
+
+  // ValleyFoods' generic theme has always been the green default. Keep that
+  // default available to the offline preview and to an empty company lookup;
+  // configured company_colors still overrides it below.
+  let primaryColor = 'green'; let bgColor = 'white';
+  try {
+    if (companyName) {
+      const wanted = String(companyName).trim().toLowerCase();
+      const companyRow = themeSystemRowsCompat_('ERP_Companies').find(function (r) { return [r.company_unique_id, r.company_name_ar, r.company_name_en].some(function (v) { return String(v || '').trim().toLowerCase() === wanted; }); });
+      if (companyRow) {
+        const colorsArr = String(companyRow.company_colors || '').toLowerCase().split(',').map(c => c.trim());
+        if (colorsArr.length > 0 && ['red', 'green', 'yellow', 'black', 'white'].includes(colorsArr[0])) primaryColor = colorsArr[0];
+        if (colorsArr.length > 1 && ['red', 'green', 'yellow', 'black', 'white'].includes(colorsArr[1])) bgColor = colorsArr[1];
+      }
+    }
+  } catch (e) { console.error('Theme Error: ' + e.message); }
+
+  const primaryMap = {
+    red: { p: '#D62828', h: '#B91C1C', sb: '#FEF2F2', b: '#FECACA', t: '#FFFFFF' },
+    green: { p: '#16A34A', h: '#15803D', sb: '#F0FDF4', b: '#BBF7D0', t: '#FFFFFF' },
+    yellow: { p: '#D97706', h: '#B45309', sb: '#FFFBEB', b: '#FDE68A', t: '#111827' },
+    black: { p: '#111827', h: '#1F2937', sb: '#F3F4F6', b: '#E5E7EB', t: '#FFFFFF' },
+    white: { p: '#FFFFFF', h: '#F9FAFB', sb: '#F9FAFB', b: '#E5E7EB', t: '#111827' }
+  };
+  const pc = primaryMap[primaryColor];
+  let css = "<style>\n:root {\n";
+  css += '  --brand-primary: ' + pc.p + ';\n';
+  css += '  --brand-primary-hover: ' + pc.h + ';\n';
+  css += '  --brand-subtle-bg: ' + pc.sb + ';\n';
+  css += '  --brand-border: ' + pc.b + ';\n';
+  css += '  --btn-text-color: ' + pc.t + ';\n';
+  /* [UI-2.6 / D-1 / D-2 / U-10] The light branch no longer overrides the canvas,
+     surfaces, borders or ink. It used to re-state the OLD values of those tokens
+     (#F9FAFB / #F3F4F6 / #6B7280 / #E5E7EB), which would have silently undone
+     the whole of Phase 2.1 for every company on this generic path — including
+     ValleyFoods. They now come from CSS_Tokens.html like everyone else.
+
+     The dark branch is left intact. It is a data-driven option a company can
+     select through `company_colors`, it is not the coloured-canvas problem D-2
+     is about, and a proper dark mode is Phase 8. Since no data may be read or
+     written by this programme there is no way to know whether a company is
+     configured this way, so it is not touched. */
+  if (bgColor === 'black') {
+    css += '  --bg-primary: #0F172A;\n  --bg-canvas: #0F172A;\n  --bg-surface: #1E293B;\n  --bg-subtle: #334155;\n  --text-main: #F8FAFC;\n  --text-muted: #94A3B8;\n  --border-color: #334155;\n';
+  }
+  css += '}\n';
+
+  /* [UI-2.6] The brand topbar, which this path never had.
+     ValleyFoods takes this path, so its topbar rendered in --bg-surface: a
+     white bar with grey links, indistinguishable from the page. The two bespoke
+     companies each hand-wrote a topbar; this gives every other company the same
+     treatment, expressed in TOKENS so it adapts to whichever colour the company
+     is configured with rather than hardcoding green. A company on 'white' or
+     'yellow' gets dark ink automatically, because --btn-text-color already
+     carries the readable ink for its primary colour. */
+  if (bgColor !== 'black') {
+    css += '.topbar { background: var(--brand-primary); border-bottom: 1px solid var(--brand-primary); }\n';
+    css += '.topbar .nav-item, .topbar .nav-dropdown-toggle { color: var(--btn-text-color); }\n';
+    css += '.topbar .nav-item:hover, .topbar .nav-item.active,\n';
+    css += '.topbar .nav-dropdown-toggle:hover, .topbar .nav-dropdown-toggle.open { color: var(--brand-primary); background: var(--btn-text-color); }\n';
+    /* The shared .user-name rule is --text-main, which is near-invisible on a
+       saturated topbar. Same reason TopLight and TopChemical carry this. */
+    css += '.topbar .user-profile-toggle { border: 1px solid var(--btn-text-color); border-radius: 999px; padding: 4px 12px; }\n';
+    css += '.topbar .user-profile-toggle .user-name, .topbar .user-profile-toggle .nav-dropdown-caret { color: var(--btn-text-color); }\n';
+    css += '.topbar .user-profile-toggle:hover, .topbar .user-profile-toggle.open { background: var(--btn-text-color); }\n';
+    css += '.topbar .user-profile-toggle:hover .user-name, .topbar .user-profile-toggle.open .user-name,\n';
+    css += '.topbar .user-profile-toggle:hover .nav-dropdown-caret, .topbar .user-profile-toggle.open .nav-dropdown-caret { color: var(--brand-primary); }\n';
+    css += '.topbar .user-avatar { background: var(--btn-text-color); color: var(--brand-primary); }\n';
+    /* Hamburger bars default to --text-main and would vanish on the topbar. */
+    css += '.topbar-hamburger { border: 1px solid var(--btn-text-color); }\n';
+    css += '.topbar-hamburger .hamburger-bar { background: var(--btn-text-color); }\n';
+    css += '.invoice { background: #ffffff; border: 1px solid var(--border-color); }\n';
+  }
+  css += '</style>\n';
+  try { cache.put(cacheKey, css, CONFIG.CACHE_THEME_SECONDS); } catch (putErr) {}
+  return css;
+}
+
+
+
+function getCompanyThemeCSS_(companyName) {
+  try {
+    ensureCompaniesRegistered_();
+    const uid = String(companyName || '').trim().toLowerCase();
+    const cfg = COMPANY_REGISTRY[uid];
+    if (cfg && typeof cfg.themeCss === 'function') return cfg.themeCss();
+  } catch (e) {}
+  return getGenericCompanyThemeCSS_(companyName);
+}
+
+
+/* ===================== 6. GENERIC DB VIEWER ============================= */
+/**
+ * shared Code.js section
+ * RESPONSIBILITY: MySQL JDBC connector — live CRUD against remote MySQL database.
+ * Credentials stored in ScriptProperties (setup via setupMySqlCredentials()).
+ * Independent module — not tied to any company or Sheets-based data layer.
+ * Loaded after shared Code.js section.
+ */
+
+/** Super-admin-only gate for every live MySQL operation. */
+function dbGuard_(user) {
+  if (!user || !user.isSuperAdmin) throw new Error('غير مصرح — للمسؤول فقط');
+}
+
+const DBLIVE_CONFIG = {
+  host: '164.92.143.177',
+  port: 3306,
+  database: 'topchemicalpest',
+  maxRows: 500,
+  // These are Script Property KEY NAMES, not values. `user` and `pass` used to
+  // hold a literal username and a password-shaped string, so every lookup asked
+  // for a property named 'appscript_user' / 'YourStrongPassword123!' while every
+  // error message said MYSQL_USER / MYSQL_PASSWORD. Corrected to the documented
+  // key names; legacyProps below keeps any existing install working.
+  props: {
+    host: 'MYSQL_HOST',
+    port: 'MYSQL_PORT',
+    database: 'MYSQL_DATABASE',
+    user: 'MYSQL_USER',
+    pass: 'MYSQL_PASSWORD'
+  },
+  legacyProps: {
+    user: 'appscript_user',
+    pass: 'YourStrongPassword123!'
+  }
+};
+
+/**
+ * Reads a Script Property by its canonical key, falling back to the legacy key
+ * the old (incorrect) props map used, so an install that already stored its
+ * credentials under the legacy names keeps working.
+ */
+function dbLiveProp_(props, canonicalKey, legacyKey) {
+  var v = props.getProperty(canonicalKey);
+  if ((v === null || v === '') && legacyKey) v = props.getProperty(legacyKey);
+  return v;
+}
+
+/**
+ * One-time setup: run from editor to store connection DEFAULTS.
+ * Only fills host/port/database when missing — NEVER touches MYSQL_USER /
+ * MYSQL_PASSWORD: the real username/password must be entered manually in
+ * Project Settings → Script properties so they never land in source code,
+ * and re-running this can never clobber working credentials with placeholders.
+ */
+function setupMySqlCredentials_() {
+  var props = PropertiesService.getScriptProperties();
+  var current = props.getProperties() || {};
+  var toSet = {};
+  if (!current[DBLIVE_CONFIG.props.host]) toSet[DBLIVE_CONFIG.props.host] = DBLIVE_CONFIG.host;
+  if (!current[DBLIVE_CONFIG.props.port]) toSet[DBLIVE_CONFIG.props.port] = String(DBLIVE_CONFIG.port);
+  if (!current[DBLIVE_CONFIG.props.database]) toSet[DBLIVE_CONFIG.props.database] = DBLIVE_CONFIG.database;
+  if (Object.keys(toSet).length > 0) props.setProperties(toSet);
+  var missing = [];
+  if (!dbLiveProp_(props, DBLIVE_CONFIG.props.user, DBLIVE_CONFIG.legacyProps.user)) missing.push('MYSQL_USER');
+  if (!dbLiveProp_(props, DBLIVE_CONFIG.props.pass, DBLIVE_CONFIG.legacyProps.pass)) missing.push('MYSQL_PASSWORD');
+  if (missing.length > 0) {
+    Logger.log('MySQL defaults saved. STILL MISSING — add manually in Project Settings → Script properties: ' + missing.join(', '));
+  } else {
+    Logger.log('MySQL configuration complete.');
+  }
+}
+
+/**
+ * Returns a JDBC connection. Caller MUST close in finally block.
+ * URL shape matches the verified getTableNames snippet exactly (plain
+ * jdbc:mysql://host:port/db, no query params). Credentials come ONLY from
+ * Script Properties (MYSQL_USER / MYSQL_PASSWORD) — never hardcode them.
+ */
+function dbGetConnection_() {
+  const props = PropertiesService.getScriptProperties();
+  const host = props.getProperty(DBLIVE_CONFIG.props.host) || DBLIVE_CONFIG.host;
+  const port = props.getProperty(DBLIVE_CONFIG.props.port) || DBLIVE_CONFIG.port;
+  const db = props.getProperty(DBLIVE_CONFIG.props.database) || DBLIVE_CONFIG.database;
+  const user = (dbLiveProp_(props, DBLIVE_CONFIG.props.user, DBLIVE_CONFIG.legacyProps.user) || '').trim();
+  const pass = dbLiveProp_(props, DBLIVE_CONFIG.props.pass, DBLIVE_CONFIG.legacyProps.pass) || '';
+  var missingCreds = [];
+  if (!user) missingCreds.push('MYSQL_USER');
+  if (!pass) missingCreds.push('MYSQL_PASSWORD');
+  if (missingCreds.length > 0) throw new Error('MySQL credentials not configured (' + missingCreds.join(', ') + ' missing). Add them in Project Settings → Script properties of this script project — never put passwords in code.');
+  const url = 'jdbc:mysql://' + host + ':' + port + '/' + db;
+  return Jdbc.getConnection(url, user, pass);
+}
+
+/**
+ * Lists all tables in the database.
+ */
+function dbListTables_(data, user) {
+  dbGuard_(user);
+  let conn, stmt, rs;
+  try {
+    conn = dbGetConnection_();
+    stmt = conn.createStatement();
+    rs = stmt.executeQuery('SHOW TABLES');
+    const tables = [];
+    while (rs.next()) {
+      tables.push(rs.getString(1));
+    }
+    return { status: 'ok', tables: tables };
+  } catch (err) {
+    Logger.log('dbListTables_ error: ' + err.message);
+    throw err;
+  } finally {
+    if (rs) rs.close();
+    if (stmt) stmt.close();
+    if (conn) conn.close();
+  }
+}
+
+/**
+ * Returns column info for a table: name, type, key, nullable, default.
+ */
+function dbGetColumns_(data, user) {
+  dbGuard_(user);
+  if (!data.table) throw new Error('table name required');
+  const safeTable = dbSanitizeIdentifier_(data.table);
+  let conn, stmt, rs;
+  try {
+    conn = dbGetConnection_();
+    stmt = conn.prepareStatement('SHOW COLUMNS FROM ' + safeTable);
+    rs = stmt.executeQuery();
+    const columns = [];
+    while (rs.next()) {
+      columns.push({
+        name: rs.getString('Field'),
+        type: rs.getString('Type'),
+        key: rs.getString('Key'),
+        nullable: rs.getString('Null'),
+        default: rs.getString('Default'),
+        extra: rs.getString('Extra')
+      });
+    }
+    return { status: 'ok', columns: columns };
+  } catch (err) {
+    Logger.log('dbGetColumns_ error: ' + err.message);
+    throw err;
+  } finally {
+    if (rs) rs.close();
+    if (stmt) stmt.close();
+    if (conn) conn.close();
+  }
+}
+
+/**
+ * Executes a SELECT query with optional WHERE, ORDER BY, LIMIT, OFFSET.
+ * Returns { columns, rows, total }.
+ */
+function dbQuery_(data, user) {
+  dbGuard_(user);
+  if (!data.table) throw new Error('table name required');
+  const safeTable = dbSanitizeIdentifier_(data.table);
+  const limit = Math.min(Number(data.limit) || DBLIVE_CONFIG.maxRows, DBLIVE_CONFIG.maxRows);
+  const offset = Math.max(Number(data.offset) || 0, 0);
+
+  let conn, stmt, rs, countStmt, countRs;
+  try {
+    conn = dbGetConnection_();
+
+    // Build WHERE clause
+    let whereSql = '';
+    const params = [];
+    if (data.where && typeof data.where === 'object') {
+      const conditions = [];
+      for (const col in data.where) {
+        if (data.where[col] === null || data.where[col] === undefined) continue;
+        conditions.push(dbSanitizeIdentifier_(col) + ' = ?');
+        params.push(data.where[col]);
+      }
+      if (conditions.length > 0) {
+        whereSql = ' WHERE ' + conditions.join(' AND ');
+      }
+    }
+
+    // Get total count
+    countStmt = conn.prepareStatement('SELECT COUNT(*) AS cnt FROM ' + safeTable + whereSql);
+    dbBindParams_(countStmt, params);
+    countRs = countStmt.executeQuery();
+    const total = countRs.next() ? countRs.getInt('cnt') : 0;
+
+    // Build main query
+    let querySql = 'SELECT * FROM ' + safeTable + whereSql;
+    if (data.orderBy) {
+      const safeOrder = dbSanitizeOrderBy_(data.orderBy);
+      querySql += ' ORDER BY ' + safeOrder;
+    }
+    querySql += ' LIMIT ' + limit + ' OFFSET ' + offset;
+
+    stmt = conn.prepareStatement(querySql);
+    dbBindParams_(stmt, params);
+    rs = stmt.executeQuery();
+
+    const meta = rs.getMetaData();
+    const colCount = meta.getColumnCount();
+    const columns = [];
+    for (let i = 1; i <= colCount; i++) {
+      columns.push(meta.getColumnName(i));
+    }
+
+    const rows = [];
+    while (rs.next()) {
+      const row = {};
+      for (let i = 1; i <= colCount; i++) {
+        const val = rs.getObject(i);
+        row[columns[i - 1]] = val !== null ? String(val) : null;
+      }
+      rows.push(row);
+    }
+
+    return { status: 'ok', columns: columns, rows: rows, total: total, limit: limit, offset: offset };
+  } catch (err) {
+    Logger.log('dbQuery_ error: ' + err.message);
+    throw err;
+  } finally {
+    if (rs) rs.close();
+    if (stmt) stmt.close();
+    if (countRs) countRs.close();
+    if (countStmt) countStmt.close();
+    if (conn) conn.close();
+  }
+}
+
+/**
+ * Inserts a new row. data.table, data.values = { col: val, ... }
+ */
+function dbInsert_(data, user) {
+  dbGuard_(user);
+  if (!data.table || !data.values || Object.keys(data.values).length === 0) {
+    throw new Error('table and values required');
+  }
+  const safeTable = dbSanitizeIdentifier_(data.table);
+  const cols = Object.keys(data.values);
+  const safeCols = cols.map(dbSanitizeIdentifier_);
+  const placeholders = cols.map(function () { return '?'; });
+
+  let conn, stmt;
+  try {
+    conn = dbGetConnection_();
+    const sql = 'INSERT INTO ' + safeTable + ' (' + safeCols.join(', ') + ') VALUES (' + placeholders.join(', ') + ')';
+    stmt = conn.prepareStatement(sql);
+    for (let i = 0; i < cols.length; i++) {
+      stmt.setObject(i + 1, data.values[cols[i]]);
+    }
+    const affected = stmt.executeUpdate();
+    return { status: 'ok', affected: affected };
+  } catch (err) {
+    Logger.log('dbInsert_ error: ' + err.message);
+    throw err;
+  } finally {
+    if (stmt) stmt.close();
+    if (conn) conn.close();
+  }
+}
+
+/**
+ * Updates rows. data.table, data.where = { pk: val }, data.values = { col: val }
+ */
+function dbUpdate_(data, user) {
+  dbGuard_(user);
+  if (!data.table || !data.where || !data.values || Object.keys(data.values).length === 0) {
+    throw new Error('table, where, and values required');
+  }
+  const safeTable = dbSanitizeIdentifier_(data.table);
+
+  // Build SET clause
+  const setParts = [];
+  const setVals = [];
+  for (const col in data.values) {
+    setParts.push(dbSanitizeIdentifier_(col) + ' = ?');
+    setVals.push(data.values[col]);
+  }
+
+  // Build WHERE clause
+  const whereParts = [];
+  const whereVals = [];
+  for (const col in data.where) {
+    whereParts.push(dbSanitizeIdentifier_(col) + ' = ?');
+    whereVals.push(data.where[col]);
+  }
+
+  let conn, stmt;
+  try {
+    conn = dbGetConnection_();
+    const sql = 'UPDATE ' + safeTable + ' SET ' + setParts.join(', ') + ' WHERE ' + whereParts.join(' AND ');
+    stmt = conn.prepareStatement(sql);
+    const allVals = setVals.concat(whereVals);
+    for (let i = 0; i < allVals.length; i++) {
+      stmt.setObject(i + 1, allVals[i]);
+    }
+    const affected = stmt.executeUpdate();
+    return { status: 'ok', affected: affected };
+  } catch (err) {
+    Logger.log('dbUpdate_ error: ' + err.message);
+    throw err;
+  } finally {
+    if (stmt) stmt.close();
+    if (conn) conn.close();
+  }
+}
+
+/**
+ * Deletes rows. data.table, data.where = { col: val }
+ */
+function dbDelete_(data, user) {
+  dbGuard_(user);
+  if (!data.table || !data.where || Object.keys(data.where).length === 0) {
+    throw new Error('table and where required');
+  }
+  const safeTable = dbSanitizeIdentifier_(data.table);
+
+  const whereParts = [];
+  const whereVals = [];
+  for (const col in data.where) {
+    whereParts.push(dbSanitizeIdentifier_(col) + ' = ?');
+    whereVals.push(data.where[col]);
+  }
+
+  let conn, stmt;
+  try {
+    conn = dbGetConnection_();
+    const sql = 'DELETE FROM ' + safeTable + ' WHERE ' + whereParts.join(' AND ');
+    stmt = conn.prepareStatement(sql);
+    for (let i = 0; i < whereVals.length; i++) {
+      stmt.setObject(i + 1, whereVals[i]);
+    }
+    const affected = stmt.executeUpdate();
+    return { status: 'ok', affected: affected };
+  } catch (err) {
+    Logger.log('dbDelete_ error: ' + err.message);
+    throw err;
+  } finally {
+    if (stmt) stmt.close();
+    if (conn) conn.close();
+  }
+}
+
+/**
+ * Aggregates a column: COUNT, SUM, AVG, MIN, MAX, optionally GROUP BY another column.
+ */
+function dbAggregate_(data, user) {
+  dbGuard_(user);
+  if (!data.table || !data.column) throw new Error('table and column required');
+  const safeTable = dbSanitizeIdentifier_(data.table);
+  const safeCol = dbSanitizeIdentifier_(data.column);
+  const func = (data.func || 'COUNT').toUpperCase();
+  const validFuncs = ['COUNT', 'SUM', 'AVG', 'MIN', 'MAX'];
+  if (validFuncs.indexOf(func) === -1) throw new Error('Invalid aggregate function: ' + func);
+
+  let conn, stmt, rs;
+  try {
+    conn = dbGetConnection_();
+
+    if (data.groupBy) {
+      const safeGroup = dbSanitizeIdentifier_(data.groupBy);
+      stmt = conn.prepareStatement('SELECT ' + safeGroup + ', ' + func + '(' + safeCol + ') AS result FROM ' + safeTable + ' WHERE ' + safeCol + ' IS NOT NULL GROUP BY ' + safeGroup + ' ORDER BY result DESC LIMIT 100');
+    } else {
+      stmt = conn.prepareStatement('SELECT ' + func + '(' + safeCol + ') AS result FROM ' + safeTable + ' WHERE ' + safeCol + ' IS NOT NULL');
+    }
+    rs = stmt.executeQuery();
+
+    if (data.groupBy) {
+      const rows = [];
+      while (rs.next()) {
+        rows.push({ group: String(rs.getObject(1)), value: rs.getObject(2) });
+      }
+      return { status: 'ok', func: func, rows: rows };
+    } else {
+      const result = rs.next() ? rs.getObject(1) : null;
+      return { status: 'ok', func: func, result: result };
+    }
+  } catch (err) {
+    Logger.log('dbAggregate_ error: ' + err.message);
+    throw err;
+  } finally {
+    if (rs) rs.close();
+    if (stmt) stmt.close();
+    if (conn) conn.close();
+  }
+}
+
+// ─── Helpers ──────────────────────────────────────────────
+
+function dbSanitizeIdentifier_(name) {
+  // Allow only alphanumeric and underscore, wrap in backticks
+  const clean = String(name).replace(/[^a-zA-Z0-9_]/g, '');
+  if (!clean || /^[0-9]/.test(clean)) throw new Error('Invalid identifier: ' + name);
+  return '`' + clean + '`';
+}
+
+function dbSanitizeOrderBy_(orderBy) {
+  // "col ASC", "col DESC", or just "col" → safe SQL fragment
+  const parts = String(orderBy).trim().split(/\s+/);
+  const col = dbSanitizeIdentifier_(parts[0]);
+  const dir = parts[1] && parts[1].toUpperCase() === 'DESC' ? ' DESC' : ' ASC';
+  return col + dir;
+}
+
+function dbBindParams_(stmt, params) {
+  for (let i = 0; i < params.length; i++) {
+    stmt.setObject(i + 1, params[i]);
+  }
+}
+
+// ─── clients_AR live review (Top Chemical: tc_main_review) ──────────
+// Server-side paginated read + single-row revise against the MySQL view
+// `clients_AR`. Called via TopChemical company actions (get_main_review /
+// revise_main_review) so page-level authority applies; no dbGuard_ here.
+
+
+
+/* ===================== 7. ROUTING / RENDERING / ARTIFACT DELIVERY ====== */
 /**
  * Code.js
  * RESPONSIBILITY: doGet, doPost, ROUTES map, executeCompanyAction_, json_, include.
@@ -34,12 +5540,12 @@ function doGet(e) {
   }
   ensureCompaniesRegistered_();
   const download = String(e.parameter.download || '').trim();
-  if (download === 'print_file') return servePrintFile_(e.parameter);
-  if (download === 'print_barcode') return servePrintBarcode_(e.parameter);
-  if (download === 'print_product_barcode') return servePrintProductBarcode_(e.parameter);
+  if (download === 'print_file') return dispatchCompanyArtifact_('printFile', e.parameter);
+  if (download === 'print_barcode') return dispatchCompanyArtifact_('printBarcode', e.parameter);
+  if (download === 'print_product_barcode') return dispatchCompanyArtifact_('printProductBarcode', e.parameter);
   if (download === 'attachment' || download === 'doc_file') return serveAttachment_(e.parameter);
-  if (download === 'payroll_report') return servePayrollReport_(e.parameter);
-  if (download === 'budget_print') return serveBudgetPrint_(e.parameter);
+  if (download === 'payroll_report') return dispatchCompanyArtifact_('payrollReport', e.parameter);
+  if (download === 'budget_print') return dispatchCompanyArtifact_('budgetPrint', e.parameter);
   if (download === 'erp_invoice' || download === 'appsheet_invoice') return serveErpInvoice_(e.parameter);
   const action = (e.parameter.action || 'login').trim();
   const scriptUrl = ScriptApp.getService().getUrl();
@@ -145,6 +5651,11 @@ function doGet(e) {
   try { userNamesJson = JSON.stringify(userNameMap_()).replace(/</g, '\\u003c'); } catch (eUN) {}
   var headInjection = '<meta name="app-web-url" content="' + scriptUrl + '">'
     + '<script>try{window.scriptUrl=document.querySelector(\'meta[name="app-web-url"]\').getAttribute(\'content\')||\'\';}catch(e){}</' + 'script>'
+    /* The write request guard must not depend on localStorage for identity.
+     * Safari / Apps Script iframe origins may expose the valid URL session while
+     * the login page's localStorage entry is unavailable. The server has already
+     * authenticated this page, so inject only that authoritative email. */
+    + '<script>window.AUTH_USER_EMAIL=' + JSON.stringify(String((authUser && authUser.email) || '').trim().toLowerCase()).replace(/</g, '\\u003c') + ';</' + 'script>'
     + '<script>window.USER_NAMES=' + userNamesJson + ';</' + 'script>'
     // Phase 0b: tells the client whether a measurement window is open, so page
     // timings cost nothing at all while it is closed.
@@ -350,11 +5861,13 @@ const ROUTES = {
   'get_erp_session_meta': { handler: get_erp_session_meta_, requireAuth: true },
   'cleanup_sessions': { handler: cleanupOldSessions_, requireAuth: true },
   'backfill_attachment_ids': { handler: backfillAttachmentIds_, requireAuth: true },
-  'customs_office_path_repair': { handler: customsOfficePathRepair_, requireAuth: true },
+  'customs_office_path_repair': { handler: companyArtifactRoute_, requireAuth: true },
   'install_triggers': { handler: installTriggers_, requireAuth: true },
   'install_retention_trigger': { handler: installRetentionTrigger_, requireAuth: true },
   'archive_old_records': { handler: archiveOldRecordsRoute_, requireAuth: true },
   'daily_csv_backup': { handler: dailyCsvBackupRoute_, requireAuth: true },
+  'sys_download_backups': { handler: sysDownloadBackupsRoute_, requireAuth: true },
+  'install_daily_backup_trigger': { handler: installDailyBackupTriggerRoute_, requireAuth: true },
   'log_client_error': { handler: logClientError_, requireAuth: false },
   'log_client_perf': { handler: logClientPerf_, requireAuth: false },
   /* [RT-9] The soft-navigation body route. requireAuth is true and the handler
@@ -364,8 +5877,12 @@ const ROUTES = {
   'get_page_body': { handler: getPageBody_, requireAuth: true },
   /* [RT-10] Super-admin only; the handler checks, not just the route. */
   'get_perf_dashboard': { handler: getPerfDashboard_, requireAuth: true },
+  /* Read-only request-status lookup for the client recovery poll. Authenticated;
+     the handler resolves the tenant from identity and never trusts a
+     client-supplied database ID or email. Never mutates. */
+  'request_status': { handler: requestStatusRoute_, requireAuth: true },
 
-  // ─── MySQL Live Module (DbLive_Connector.js) ──────────
+  // ─── MySQL Live Module (shared Code.js section) ──────────
   'db_list_tables': { handler: dbListTables_, requireAuth: true },
   'db_get_columns': { handler: dbGetColumns_, requireAuth: true },
   'db_query':       { handler: dbQuery_,       requireAuth: true },
@@ -459,7 +5976,7 @@ function apiRouter_(request) {
   // sheet within one request.
   //
   // The memo now starts enabled and the first mutation disables it for the rest
-  // of the request (noteMutation_ in 02_DataAccess.js). A read action never
+  // of the request (noteMutation_ in shared Code.js section). A read action never
   // mutates, so it keeps the memo throughout; a write action behaves exactly as
   // today from its first write onward.
   resetRecordCache_();
@@ -605,6 +6122,18 @@ function requestGuardFailedReply_(err) {
   var code = (err && err.code) || 'REQUEST_NOT_APPLIED';
   return { status: 'error', code: code, message: message, notApplied: true, uncertain: false, transport: false };
 }
+/* Throwing helper for deterministic PRE-MUTATION refusals (field validation,
+ * duplicate keys, totals reconciliation, permission/state gates evaluated
+ * before the handler's first sheet write). The receipt ledger records these
+ * as confirmed failures (REQUEST_NOT_APPLIED, safe to correct and retry with
+ * a fresh request) instead of uncertain outcomes. ONLY errors raised before
+ * any mutation may use this marker — anything thrown after a write must stay
+ * a plain error so the guard keeps blocking replay. */
+function notAppliedError_(message, code) {
+  var err = new Error(message);
+  err.notApplied = true; err.code = code || 'REQUEST_NOT_APPLIED';
+  throw err;
+}
 var REQUEST_RECEIPT_HEADERS_ = ['request_key','request_id','user_email','module_action','payload_hash','state','response_json','created_at','updated_at'];
 function requestGuardSheet_(dbId) {
   var ss = getSpreadsheet_(dbId), sheet = ss.getSheetByName('ERP_Request_Receipts');
@@ -665,7 +6194,7 @@ function requestGuardExecute_(payload, user, dbId, invoke, opts) {
            the handler locates its earlier result by request ID without
            creating anything new, so a stale receipt is safe to reconcile.
            Anything else stays blocked to avoid duplicate replay. */
-        if (opts && opts.recovery === 'request-id') return { recover: true };
+        if (opts && opts.recovery === 'request-id') return { recover: true, priorState: String(prior.values[5]), priorReceipt: prior };
         return { reply: requestGuardReply_('REQUEST_UNCERTAIN', 'نتيجة الطلب غير مؤكدة. راجع السجل مع المسؤول قبل إنشاء طلب جديد؛ تم منع إعادة التنفيذ لتجنب التكرار. رقم الطلب: ' + requestId, true, false) };
       }
       var now = new Date(), row = sheet.getLastRow() + 1;
@@ -682,14 +6211,99 @@ function requestGuardExecute_(payload, user, dbId, invoke, opts) {
   var result, state = 'done';
   try {
     rearmRecordCache_();
-    result = jsonSafe_(invoke(safePayload, { requestId: requestId }));
+    /* Recovery receives an explicit context.  A recovering handler must first
+     * reconcile its durable business record and may only resume an operation
+     * when the module can prove that doing so is idempotent. */
+    var invokeCtx = {
+      requestId: requestId,
+      payloadHash: hash,
+      recovering: !!claim.recover,
+      priorState: claim.priorState || '',
+      userEmail: email,
+      moduleAction: action,
+      priorRecovery: null,
+      _recovery: null,
+      /* Bounded recovery checkpoint: updates ONLY this request's existing
+       * receipt row (response_json + updated_at). The caller holds the script
+       * lock during the business mutation, so this performs a direct write
+       * with no nested lock acquisition. Throws on any validation or write
+       * failure — handlers must checkpoint 'validated' BEFORE the first
+       * business write so a checkpoint failure yields zero business writes. */
+      checkpoint: function (recoveryData) {
+        var rec = recoveryData || {};
+        if (!rec || typeof rec !== 'object') throw new Error('Invalid recovery checkpoint');
+        var envelope = {
+          type: String(rec.type || ''),
+          request_id: requestId,
+          payload_hash: hash,
+          mo_uid: String(rec.mo_uid || ''),
+          base_token: String(rec.base_token || ''),
+          scope: Array.isArray(rec.scope) ? rec.scope.slice(0, 8).map(function (s) { return String(s); }) : [],
+          stage: String(rec.stage || '')
+        };
+        if (!envelope.type || envelope.type.length > 64) throw new Error('Invalid recovery checkpoint');
+        if (!envelope.mo_uid || envelope.mo_uid.length > 64) throw new Error('Invalid recovery checkpoint');
+        if (!envelope.stage || envelope.stage.length > 32) throw new Error('Invalid recovery checkpoint');
+        var sized = JSON.stringify({ status: 'pending', recovery: envelope });
+        if (sized.length > 5000) throw new Error('Recovery checkpoint too large');
+        var sheet = requestGuardSheet_(dbId), receipt = requestGuardFind_(sheet, key);
+        if (!receipt) throw new Error('Receipt not found');
+        if (String(receipt.values[4]) !== hash) throw new Error('Receipt payload mismatch');
+        if (String(receipt.values[1]) !== requestId) throw new Error('Receipt request mismatch');
+        if (String(receipt.values[2]).toLowerCase() !== email) throw new Error('Receipt owner mismatch');
+        if (String(receipt.values[3]) !== action) throw new Error('Receipt action mismatch');
+        var st = String(receipt.values[5]);
+        if (st !== 'pending' && st !== 'uncertain') throw new Error('Receipt not checkpointable');
+        sheet.getRange(receipt.row, 7, 1, 2).setValues([[sized, new Date()]]);
+        noteMutation_(dbId, 'ERP_Request_Receipts');
+        SpreadsheetApp.flush();
+        invokeCtx._recovery = envelope;
+        return true;
+      },
+      /* Read-only scan for another unresolved receipt envelope naming the same
+       * MO. Called under the handler's script lock; reads only. Returns the
+       * conflicting request ID or ''. Bound to recent rows. */
+      findOpenEntity: function (actionName, moUid) {
+        var target = String(moUid || '').trim();
+        if (!target) return '';
+        try {
+          var sheet = requestGuardSheet_(dbId);
+          var last = sheet.getLastRow();
+          if (last < 2) return '';
+          var from = Math.max(2, last - 499);
+          var rows = sheet.getRange(from, 1, last - from + 1, REQUEST_RECEIPT_HEADERS_.length).getValues();
+          for (var i = 0; i < rows.length; i++) {
+            var r = rows[i];
+            if (String(r[3]) !== String(actionName)) continue;
+            if (String(r[0]) === key) continue;
+            var rst = String(r[5]);
+            if (rst !== 'pending' && rst !== 'uncertain') continue;
+            var body = null;
+            try { body = JSON.parse(String(r[6] || '')); } catch (ignore) { body = null; }
+            var env = body && (body.recovery || (body.result && body.result.recovery));
+            if (env && String(env.mo_uid || '') === target) return String(r[1] || '');
+          }
+        } catch (ignoreScan) {}
+        return '';
+      }
+    };
+    try {
+      if (claim.priorReceipt) {
+        var priorBody = null;
+        try { priorBody = JSON.parse(String(claim.priorReceipt.values[6] || '')); } catch (ignorePrior) { priorBody = null; }
+        if (priorBody && priorBody.recovery && typeof priorBody.recovery === 'object') invokeCtx.priorRecovery = priorBody.recovery;
+      }
+    } catch (ignorePriorOuter) {}
+    result = jsonSafe_(invoke(safePayload, invokeCtx));
     if (!result || result.status === 'error') {
       if (requestGuardNotApplied_(result)) {
         state = 'failed';
         result = jsonSafe_(requestGuardFailedReply_(result));
       } else {
         state = 'uncertain';
+        var handlerRecovery = (result && result.recovery) || invokeCtx._recovery || null;
         result = requestGuardReply_('REQUEST_UNCERTAIN', ((result && result.message) || 'تعذر إكمال العملية.') + ' راجع السجل قبل إنشاء طلب جديد. رقم الطلب: ' + requestId, true, false);
+        if (handlerRecovery) result.recovery = handlerRecovery;
       }
     }
   } catch (err) {
@@ -698,7 +6312,9 @@ function requestGuardExecute_(payload, user, dbId, invoke, opts) {
       result = jsonSafe_(requestGuardFailedReply_(err));
     } else {
       state = 'uncertain';
+      var thrownRecovery = (err && err.recovery) || (typeof invokeCtx !== 'undefined' && invokeCtx._recovery) || null;
       result = requestGuardReply_('REQUEST_UNCERTAIN', (err.message || 'تعذر إكمال العملية.') + ' قد تكون بعض البيانات حُفظت؛ راجع السجل قبل إنشاء طلب جديد. رقم الطلب: ' + requestId, true, false);
+      if (thrownRecovery) result.recovery = thrownRecovery;
     }
   }
   try {
@@ -742,14 +6358,78 @@ function executeCompanyAction_(payload, sessionToken, authUser) {
   if (!canCompanyAction_(authUser, payload.module_action, pageId)) {
     throw new Error(ERP_MESSAGES.NOT_AUTHORIZED);
   }
-  const dbId = authUser.isSuperAdmin ? getCompanySpreadsheetId_(payload.target_system) : getCompanySpreadsheetId_(authUser.company);
+  // Phase 3: central tenant resolution — derives dbId from identity and asserts
+  // it belongs to the target company before any sheet read.
+  const dbId = resolveDbId_(authUser, payload);
   /* Request-scoped recovery is opt-in per action on the company module (the
      handler must locate its earlier result by request ID without mutating).
      Extra dispatch arguments are ignored by modules that do not accept them. */
   var recovery = (company.requestRecovery_ && company.requestRecovery_(payload.module_action)) || '';
   return requestGuardExecute_(payload, authUser, dbId, function (safePayload, guardCtx) {
+    /* Phase 2: single choke point for field validation before any company write.
+     * Status-only paths (approve_/toggle_/cancel_/revert_/close_/delete_) skip
+     * field validation explicitly inside validateBeforeWrite via
+     * STATUS_ONLY_ACTIONS_; they remain status-gated in their handlers. */
+    if (typeof validateBeforeWrite === 'function' && typeof docTypeForAction_ === 'function') {
+      var __dt = docTypeForAction_(safePayload.module_action);
+      if (__dt) validateBeforeWrite(__dt, safePayload, dbId);
+    }
     return company.dispatch(safePayload, authUser, dbId, guardCtx);
   }, { recovery: recovery });
+}
+
+/**
+ * Read-only request-status lookup backing the client recovery poll.
+ * Authenticated (route-level). Resolves the tenant from identity via
+ * resolveDbId_ — a client-supplied database ID or email is never trusted.
+ * The receipt key binds (dbId, company, user email, action, request ID), so a
+ * caller can only ever observe their own requests; anything else (including a
+ * receipt owned by another user) resolves to 'unknown', revealing nothing.
+ * Never mutates: no lock, no receipt write, no business dispatch.
+ */
+function requestStatusRoute_(payload, sessionToken, authUser) {
+  var p = payload || {};
+  var target = String(p.target_system || '');
+  var action = String(p.module_action || '');
+  var requestId = String(p.request_id || '');
+  if (!target || !requestGuardIsWrite_(action) || !/^[A-Za-z0-9_-]{16,100}$/.test(requestId)) {
+    return { status: 'unknown', retryable: false };
+  }
+  var company = COMPANY_REGISTRY[target];
+  if (!company) return { status: 'unknown', retryable: false };
+  var email = String((authUser && authUser.email) || '').trim().toLowerCase();
+  if (!email) return { status: 'unknown', retryable: false };
+  var dbId;
+  try { dbId = resolveDbId_(authUser, { target_system: target }); }
+  catch (deny) { return { status: 'unknown', retryable: false }; }
+  var key = requestGuardHash_(JSON.stringify([dbId, target, email, action, requestId]));
+  var receipt = null;
+  try { receipt = requestGuardFind_(requestGuardSheet_(dbId), key); }
+  catch (lookupErr) { receipt = null; }
+  if (!receipt) return { status: 'unknown', retryable: true, requestId: requestId };
+  var state = String(receipt.values[5]);
+  if (state === 'done') {
+    var result = null;
+    try { result = JSON.parse(String(receipt.values[6])); } catch (parseDone) {}
+    if (result && result.status === 'success') {
+      result.recovered = true;
+      return { status: 'done', result: result, requestId: requestId };
+    }
+    return { status: 'review_required', requestId: requestId };
+  }
+  if (state === 'failed') {
+    var failure = null;
+    try { failure = JSON.parse(String(receipt.values[6])); } catch (parseFailed) {}
+    if (failure && failure.status === 'error') {
+      return { status: 'failed', error: failure, requestId: requestId };
+    }
+    return { status: 'review_required', requestId: requestId };
+  }
+  var age = new Date().getTime() - new Date(receipt.values[7]).getTime();
+  if (state === 'pending' && age >= 0 && age < 360000) {
+    return { status: 'pending', retryAfterMs: 1500, requestId: requestId };
+  }
+  return { status: 'review_required', requestId: requestId };
 }
 
 /**
@@ -1289,22 +6969,7 @@ function logClientError_(payload, sessionToken, authUser) {
  * Params: download=print_file, id=<product id>, company=<uid> (optional),
  * sessionToken=<valid token>.
  */
-function servePrintFile_(params) {
-  const artifact = authorizeArtifact_(params, { company: '3fe1b5cb67b7223e', page: 'tc_products', access: 'read' });
-  const company = artifact.company;
-  const id = Number(params.id);
-  if (!Number.isInteger(id)) return ContentService.createTextOutput('Invalid id');
 
-  const dbId = getCompanySpreadsheetId_(company);
-  const product = getAllRecords_(dbId, 'products').find(function (r) { return Number(r.id) === id; });
-  if (!product || (!product.print_file && !product.print_file_id)) return ContentService.createTextOutput('Not found');
-
-  var file;
-  try { file = attachmentOpenFile_(product, 'print_file', attachmentRegistry_().tc_products); }
-  catch (e) { return ContentService.createTextOutput(e.message || 'تعذر فتح المرفق.'); }
-
-  return dataUriDownloadHtml_(file.getName(), file.getBlob());
-}
 
 /* Phase 0b / [RT-2] — client-side timing. Sibling of logClientError_ so page
  * timings do not pollute the error log. Only writes when Script Property
@@ -1548,140 +7213,90 @@ function resolveDriveFile_(storedFileId) {
   try { return DriveApp.getFileById(fileId); } catch (e) { return null; }
 }
 
-/**
- * Print a production barcode as PDF via the browser print dialog. Renders the
- * Code128 image (high DPI) + the raw data string, then auto-prints.
- * Params: download=print_barcode, id=<barcode id>, sessionToken=<valid token>.
- */
-function servePrintBarcode_(params) {
-  const artifact = authorizeArtifact_(params, { company: '3fe1b5cb67b7223e', page: 'tc_barcode', access: 'read' });
-  const company = artifact.company;
-  const id = Number(params.id);
-  if (!Number.isInteger(id)) return ContentService.createTextOutput('Invalid id');
+/* Folder-scoped upload recovery: find the one file tagged with a request ID
+ * (Drive appProperties, private to this app — nothing is made public). Never a
+ * global or filename-only search: the query is confined to one trusted folder.
+ * Returns {id, name} on exactly one hit, null when missing or ambiguous. */
 
-  const dbId = getCompanySpreadsheetId_(company);
-  const row = getAllRecords_(dbId, 'top_chemical_barcode_generator').find(function (r) { return Number(r.id) === id; });
-  if (!row) return ContentService.createTextOutput('Not found');
-
-  let data = '';
-  const m = String(row.display_barcode || '').match(/data=([^&]+)/);
-  if (m) { try { data = decodeURIComponent(m[1]); } catch (e) { data = m[1]; } }
-  if (!data) data = barcodeDataFromRecord_(row);
-
-  const imgUrl = 'https://barcode.tec-it.com/barcode.ashx?data=' +
-    encodeURIComponent(data) + '&code=Code128&dpi=300';
-  const esc = function (s) {
-    return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-  };
-  const cell =
-    '<td style="width:33.33%;height:40mm;border:0.5px dashed #999;text-align:center;vertical-align:middle;padding:0.5mm;">' +
-    '<img src="' + esc(imgUrl) + '" alt="باركود" style="max-width:92%;max-height:27mm;height:auto;">' +
-    '<div style="margin-top:0.5mm;font-size:8.5pt;font-weight:700;letter-spacing:0.5px;word-break:break-all;line-height:1.2;">' + esc(data) + '</div>' +
-    '</td>';
-  let rowsHtml = '';
-  for (let r = 0; r < 6; r++) { rowsHtml += '<tr>' + cell + cell + cell + '</tr>'; }
-  const html =
-    '<!DOCTYPE html><html lang="ar"><head><meta charset="utf-8"><title>باركود الإنتاج #' + id + '</title>' +
-    '<style>' +
-    '@page{size:A4 portrait;margin:3mm;}' +
-    'html,body{margin:0;padding:0;font-family:sans-serif;}' +
-    'table.labels{width:100%;height:240mm;table-layout:fixed;border-collapse:collapse;}' +
-    'tr{page-break-inside:avoid;}' +
-    '</style></head>' +
-    '<body><table class="labels">' + rowsHtml + '</table>' +
-    '<script>window.onload=function(){setTimeout(function(){window.print();},300);};</script>' +
-    '</body></html>';
-  return _frame(HtmlService.createHtmlOutput(html)).setTitle('باركود الإنتاج #' + id);
+function findDriveFolderIdByName_(folderName) {
+  try {
+    var it = DriveApp.getFoldersByName(folderName), ids = [];
+    while (it && it.hasNext()) ids.push(it.next().getId());
+    if (ids.length === 1) return ids[0];
+    if (ids.length > 1) return '';
+  } catch (e) {}
+  try {
+    if (typeof Drive !== 'undefined' && Drive.Files && Drive.Files.list) {
+      var q = "name = '" + String(folderName).replace(/'/g, "\'") + "' and mimeType = 'application/vnd.google-apps.folder' and trashed = false";
+      var res = Drive.Files.list({ q: q, fields: 'files(id)' });
+      if (res && res.files && res.files.length === 1) return res.files[0].id;
+    }
+  } catch (e2) {}
+  return '';
+}
+function findDriveFileIdInFolder_(folderId, fileName) {
+  if (!folderId || !fileName) return '';
+  try {
+    var folder = DriveApp.getFolderById(folderId), it = folder.getFilesByName(fileName), ids = [];
+    while (it && it.hasNext()) ids.push(it.next().getId());
+    if (ids.length === 1) return ids[0];
+    if (ids.length > 1) return '';
+  } catch (e) {}
+  try {
+    if (typeof Drive !== 'undefined' && Drive.Files && Drive.Files.list) {
+      var q = "name = '" + String(fileName).replace(/'/g, "\'") + "' and '" + String(folderId).replace(/'/g, "\'") + "' in parents and trashed = false";
+      var res = Drive.Files.list({ q: q, fields: 'files(id)' });
+      if (res && res.files && res.files.length === 1) return res.files[0].id;
+    }
+  } catch (e2) {}
+  return '';
 }
 
-/** Recomputed barcode data from a stored row (fallback when display_barcode missing). */
-function barcodeDataFromRecord_(rec) {
-  const pad = function (n) { return ('0' + n).slice(-2); };
-  let d = null;
-  const raw = rec.production_date;
-  if (raw instanceof Date) { d = raw; } else {
-    const s = String(raw || '').match(/^(\d{4})-(\d{2})-(\d{2})/);
-    d = s ? new Date(Number(s[1]), Number(s[2]) - 1, Number(s[3])) : (raw ? new Date(raw) : null);
+function findDriveFileByRequestId_(folderId, requestId) {
+  var rid = String(requestId || '').trim();
+  if (!folderId || !/^[A-Za-z0-9_-]{16,100}$/.test(rid)) return null;
+  var q = "appProperties has {key='erpRequestId' and value='" + rid + "'} and '" +
+    String(folderId).replace(/'/g, "\\'") + "' in parents and trashed = false";
+  function pick(files) {
+    if (files && files.length === 1 && files[0] && files[0].id) {
+      return { id: String(files[0].id), name: String(files[0].name || '') };
+    }
+    return null;
   }
-  if (!d || isNaN(d.getTime())) d = new Date();
-  const sysId = String(rec.system_id == null ? '' : rec.system_id).trim();
-  return String(rec.id) + pad(d.getFullYear() % 100) + String(rec.emp_id) +
-    pad(d.getMonth() + 1) + String(rec.production_id) + pad(d.getDate()) + sysId;
+  try {
+    if (typeof Drive !== 'undefined' && Drive.Files && Drive.Files.list) {
+      var res = Drive.Files.list({ q: q, fields: 'files(id,name)', pageSize: 10 });
+      if (res && res.files) {
+        if (res.files.length === 1) return pick(res.files);
+        if (res.files.length > 1) return null;
+      }
+    }
+  } catch (e) {}
+  try {
+    var token = ScriptApp.getOAuthToken();
+    var url = 'https://www.googleapis.com/drive/v3/files?q=' + encodeURIComponent(q) +
+      '&fields=files(id,name)&pageSize=10';
+    var fetched = UrlFetchApp.fetch(url, {
+      headers: { Authorization: 'Bearer ' + token },
+      muteHttpExceptions: true
+    });
+    if (fetched.getResponseCode() === 200) {
+      var data = JSON.parse(fetched.getContentText());
+      if (data && data.files) {
+        if (data.files.length === 1) return pick(data.files);
+        if (data.files.length > 1) return null;
+      }
+    }
+  } catch (e2) {}
+  return null;
 }
-
 /**
- * Print ONE product's warehouse barcode as a full A4 label sheet — the same
- * 3×6 repeat grid as the production print (servePrintBarcode_ above), because
- * both feed the same label paper: 18 identical labels of a single product,
- * cut apart and stuck on that product's containers.
- *
- * Reached from a row action on tc_products. It replaces the one-label-per-
- * product sheet that used to hang off tc_stock_scan — a whole-catalogue print
- * is not what anyone needs at a shelf; relabelling one product is.
- *
- * The label carries NOTHING but the barcode and its number: no product name,
- * not on the sticker and not in the document title either, because a browser
- * printing with headers on would put that title straight onto the paper.
- *
- * Encoded is 'TCP-' + product id; printed underneath is the bare id. The two
- * agree — handleScannedCode in Company_TopChemical_StockScan.html takes either
- * form, so a scan and a hand-typed number land on the same product. The prefix
- * stays in the encoded value on purpose: it is what marks a code as OUR label,
- * so a supplier's numeric barcode on the same carton cannot be scanned during a
- * count and silently resolve to some unrelated product id.
- *
- * The id is a pure function of the product, nothing is read from a stored
- * barcode column because none exists.
- *
- * Params: download=print_product_barcode, id=<product id>,
- * sessionToken=<valid token>, company=<uid> (optional).
+ * One-time backfill: folder/filename -> Drive file ID for all attachment sheets.
+ * Run manually (superAdmin) or via company_action. Params: {dryRun:true, page:<optional>}.
+ * Resolves each stored ref basename inside its expected Drive folder(s) and writes
+ * <file>_id columns. Never does global filename search — folder-constrained only.
  */
-function servePrintProductBarcode_(params) {
-  const artifact = authorizeArtifact_(params, { company: '3fe1b5cb67b7223e', page: 'tc_products', access: 'read' });
-  const company = artifact.company;
-  const id = Number(params.id);
-  if (!Number.isInteger(id)) return ContentService.createTextOutput('Invalid id');
-
-  /* Nothing off the product row is printed any more, but it is still looked up:
-     it is the only thing standing between a mistyped id and a sheet of 18
-     labels for a product that does not exist. */
-  const dbId = getCompanySpreadsheetId_(company);
-  const product = getAllRecords_(dbId, 'products').find(function (p) { return Number(p.id) === id; });
-  if (!product) return ContentService.createTextOutput('Not found');
-
-  const data = 'TCP-' + id;
-  /* hidehrt suppresses the generator's own caption. Left on, it draws the
-     encoded value — 'TCP-12' — under the bars, and the sticker would carry
-     that on top of the plain number printed below. The number is set here
-     instead so the label reads as digits and nothing else. */
-  const imgUrl = 'https://barcode.tec-it.com/barcode.ashx?data=' +
-    encodeURIComponent(data) + '&code=Code128&dpi=300&hidehrt=True';
-  const esc = function (s) {
-    return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-  };
-  const human = String(id);
-  const cell =
-    '<td style="width:33.33%;height:40mm;border:0.5px dashed #999;text-align:center;vertical-align:middle;padding:0.5mm;">' +
-    '<img src="' + esc(imgUrl) + '" alt="باركود" style="max-width:92%;max-height:28mm;height:auto;">' +
-    '<div style="margin-top:0.5mm;font-size:10pt;font-weight:700;letter-spacing:1px;">' + esc(human) + '</div>' +
-    '</td>';
-  let rowsHtml = '';
-  for (let r = 0; r < 6; r++) { rowsHtml += '<tr>' + cell + cell + cell + '</tr>'; }
-  const title = 'باركود الصنف رقم ' + id;
-  const html =
-    '<!DOCTYPE html><html lang="ar"><head><meta charset="utf-8"><title>' + esc(title) + '</title>' +
-    '<style>' +
-    '@page{size:A4 portrait;margin:3mm;}' +
-    'html,body{margin:0;padding:0;font-family:sans-serif;}' +
-    'table.labels{width:100%;height:240mm;table-layout:fixed;border-collapse:collapse;}' +
-    'tr{page-break-inside:avoid;}' +
-    '</style></head>' +
-    '<body><table class="labels">' + rowsHtml + '</table>' +
-    '<script>window.onload=function(){setTimeout(function(){window.print();},300);};</script>' +
-    '</body></html>';
-  return _frame(HtmlService.createHtmlOutput(html)).setTitle(title);
-}
-
+/** Resolve a stored AppSheet path only within folders allowed for this field. */
 /**
  * Generic attachment viewer (image/pdf preview + download). Authorizes the
  * business record, then opens its stored Drive ID or exact AppSheet path
@@ -1760,20 +7375,15 @@ function attachmentOpenFile_(record, field, target) {
   return file;
 }
 function attachmentRegistry_() {
-  var TC = '3fe1b5cb67b7223e';
-  var VF = '9940659bd83035d7';
-  return {
-    'tc_products': { company: TC, sheet: 'products', idField: 'id', fileFields: ['print_file'], folder: 'products_Files_' },
-    'tc_registration_papers': { company: TC, sheet: 'registration_papers', idField: 'document_number', fileFields: ['document_file'], folder: 'registration_papers 2_Files_', legacyFolders: ['registration_papers_Files_', 'registration_papers_Images', 'registration_papers 2_Images'], folderAliases: { 'registration_papers_Files_': 'registration_papers 2_Files_' } },
-    'tc_carton_sizes': { company: TC, sheet: 'purchasing_support_data', idField: 'id', fileFields: ['document'], folder: 'purchasing_support_data_Images' },
-    'tc_import_follow': { company: TC, sheet: 'legal_importation_follow', idField: 'id', fileFields: ['porforma_file', 'swift_file', 'approval_1', 'approval_2', 'approval_3'], folder: 'legal_importation_follow_Files_', folderByField: { approval_1: 'legal_importation_follow_Images', approval_2: 'legal_importation_follow_Images', approval_3: 'legal_importation_follow_Images' } },
-    'tc_budget_inputs': { company: TC, sheet: 'legal_purchasing_costing', idField: 'رقم الشهاده', fileFields: ['invoice_swift'], folder: 'legal_purchasing_costing_Files_', altSheets: [{ sheet: 'legal_product_purchasing', idField: 'كود المعاملة', fileFields: ['شهادة_تحليل_ان_وجد', 'ترخيص_بالافراج_الزراعي', 'صورة الافراج', 'صورة التسجيل'], folder: 'legal_product_purchasing_Files_' }] },
-    'tc_budget_manufacture': { company: TC, sheet: 'legal_manufacture', idField: 'transaction_code', fileFields: ['analysis_certificate', 'sales_permit', 'technical_permit', 'registration'], folder: 'legal_manufacture_Files_', folderByField: { analysis_certificate: 'manufacture_Images', sales_permit: 'manufacture_Images', technical_permit: 'manufacture_Images' } },
-    'tc_customs_office': { company: TC, sheet: 'مكتب الجمارك', idField: '', fileFields: ['تكليف المطالبة', 'تخليص الشحنة'], folder: 'customs_office_Files_', legacyFolders: ['مكتب الجماركFiles'], folderByField: { 'تكليف المطالبة': 'customs_office_Files_', 'تخليص الشحنة': 'customs_office_Files_', claim_assignment: 'customs_office_Files_', shipment_clearance: 'customs_office_Files_' } },
-    'vf_hr_deductions': { company: VF, sheet: 'valley_emp_deductions', idField: 'unique_id', fileFields: ['deduction_attachement'], folder: 'valley_emp_deductions_Files_' },
-    'vf_hr_overtime': { company: VF, sheet: 'valley_emp_overtime', idField: 'unique_id', fileFields: ['overtime_attachement'], folder: 'valley_emp_overtime_Files_' },
-    'vf_hr_vacations': { company: VF, sheet: 'valley_employee_vacations', idField: 'unique_id', fileFields: ['attachment'], folder: 'valley_employee_vacations_Files_' }
-  };
+  try { ensureCompaniesRegistered_(); } catch (e) {}
+  var out = {};
+  var companies = typeof COMPANY_REGISTRY === 'undefined' ? {} : COMPANY_REGISTRY;
+  Object.keys(companies || {}).forEach(function (key) {
+    var cfg = companies[key] || {}, policy = cfg.attachmentPolicy;
+    if (typeof policy === 'function') policy = policy();
+    Object.keys(policy || {}).forEach(function (page) { out[page] = policy[page]; });
+  });
+  return out;
 }
 function ensureAttachmentColumn_(dbId, sheetName, fileIdField) {
   try {
@@ -1976,90 +7586,7 @@ function serveAttachment_(params) {
 }
 function serveDocFile_(params) { return serveAttachment_(params); }
 
-function findDriveFolderIdByName_(folderName) {
-  try {
-    var it = DriveApp.getFoldersByName(folderName);
-    var ids = []; while (it && it.hasNext()) ids.push(it.next().getId());
-    if (ids.length === 1) return ids[0];
-    if (ids.length > 1) return '';
-  } catch (e) {}
-  try {
-    if (typeof Drive !== 'undefined' && Drive.Files && Drive.Files.list) {
-      var q = "name = '" + String(folderName).replace(/'/g, "\\'") + "' and mimeType = 'application/vnd.google-apps.folder' and trashed = false";
-      var res = Drive.Files.list({ q: q, fields: 'files(id)' });
-      if (res && res.files && res.files.length === 1) return res.files[0].id;
-    }
-  } catch (e) {}
-  return '';
-}
-function findDriveFileIdInFolder_(folderId, fileName) {
-  var name = String(fileName || '').trim();
-  if (!name || !folderId) return '';
-  try {
-    var folder = DriveApp.getFolderById(folderId);
-    var it = folder.getFilesByName(name);
-    var ids = []; while (it && it.hasNext()) ids.push(it.next().getId());
-    if (ids.length === 1) return ids[0];
-    if (ids.length > 1) return '';
-  } catch (e) {}
-  try {
-    if (typeof Drive !== 'undefined' && Drive.Files && Drive.Files.list) {
-      var q = "name = '" + name.replace(/'/g, "\\'") + "' and '" + folderId + "' in parents and trashed = false";
-      var res = Drive.Files.list({ q: q, fields: 'files(id,name)' });
-      if (res && res.files && res.files.length === 1) return res.files[0].id;
-    }
-  } catch (e) {}
-  return '';
-}
-/* Folder-scoped upload recovery: find the one file tagged with a request ID
- * (Drive appProperties, private to this app — nothing is made public). Never a
- * global or filename-only search: the query is confined to one trusted folder.
- * Returns {id, name} on exactly one hit, null when missing or ambiguous. */
-function findDriveFileByRequestId_(folderId, requestId) {
-  var rid = String(requestId || '').trim();
-  if (!folderId || !/^[A-Za-z0-9_-]{16,100}$/.test(rid)) return null;
-  var q = "appProperties has {key='erpRequestId' and value='" + rid + "'} and '" +
-    String(folderId).replace(/'/g, "\\'") + "' in parents and trashed = false";
-  function pick(files) {
-    if (files && files.length === 1 && files[0] && files[0].id) {
-      return { id: String(files[0].id), name: String(files[0].name || '') };
-    }
-    return null;
-  }
-  try {
-    if (typeof Drive !== 'undefined' && Drive.Files && Drive.Files.list) {
-      var res = Drive.Files.list({ q: q, fields: 'files(id,name)', pageSize: 10 });
-      if (res && res.files) {
-        if (res.files.length === 1) return pick(res.files);
-        if (res.files.length > 1) return null;
-      }
-    }
-  } catch (e) {}
-  try {
-    var token = ScriptApp.getOAuthToken();
-    var url = 'https://www.googleapis.com/drive/v3/files?q=' + encodeURIComponent(q) +
-      '&fields=files(id,name)&pageSize=10';
-    var fetched = UrlFetchApp.fetch(url, {
-      headers: { Authorization: 'Bearer ' + token },
-      muteHttpExceptions: true
-    });
-    if (fetched.getResponseCode() === 200) {
-      var data = JSON.parse(fetched.getContentText());
-      if (data && data.files) {
-        if (data.files.length === 1) return pick(data.files);
-        if (data.files.length > 1) return null;
-      }
-    }
-  } catch (e2) {}
-  return null;
-}
-/**
- * One-time backfill: folder/filename -> Drive file ID for all attachment sheets.
- * Run manually (superAdmin) or via company_action. Params: {dryRun:true, page:<optional>}.
- * Resolves each stored ref basename inside its expected Drive folder(s) and writes
- * <file>_id columns. Never does global filename search — folder-constrained only.
- */
-/** Resolve a stored AppSheet path only within folders allowed for this field. */
+
 function attachmentReferenceFolder_(target, field, reference) {
   var preferred = (target.folderByField && target.folderByField[field]) || target.folder;
   var parts = String(reference || '').trim().split('/');
@@ -2086,7 +7613,6 @@ function backfillAttachmentIds_(payload, sessionToken, authUser) {
   pages.forEach(function (page) {
     var cfg = registry[page], targets = [{ sheet: cfg.sheet, idField: cfg.idField, fileFields: cfg.fileFields, folder: cfg.folder, folderByField: cfg.folderByField || {}, legacyFolders: cfg.legacyFolders || [], folderAliases: cfg.folderAliases || {} }];
     if (cfg.altSheets) cfg.altSheets.forEach(function (alt) { targets.push({ sheet: alt.sheet, idField: alt.idField, fileFields: alt.fileFields, folder: alt.folder, folderByField: alt.folderByField || {}, legacyFolders: alt.legacyFolders || [], folderAliases: alt.folderAliases || {} }); });
-    var extraFolders = []; if (page === 'tc_import_follow') extraFolders.push('legal_importation_follow_Images'); if (page === 'tc_budget_manufacture') extraFolders.push('manufacture_Images');
     targets.forEach(function (t) {
       var key = page + '/' + t.sheet, stat = { sheet: t.sheet, total: 0, alreadyHaveId: 0, inlineId: 0, wouldUpdate: 0, updated: 0, missing: 0, invalidExistingIds: 0, conflicts: 0, errors: [], unresolved: [], missingIdColumns: [], nextOffset: null };
       try {
@@ -2151,199 +7677,8 @@ function backfillAttachmentIds_(payload, sessionToken, authUser) {
  * physical files exist in `customs_office_Files_`, captures a recoverable
  * backup sheet, then applies a bounded idempotent batch under script lock.
  */
-function customsOfficePathPreview_(raw) {
-  var TARGET = 'customs_office_Files_';
-  var LEGACY_IMAGES = 'مكتب الجمارك_Images';
-  var LEGACY_FILES = 'مكتب الجمارك_Files_';
-  var s = raw == null ? '' : String(raw);
-  var t = s.replace(/^[\s\uFEFF]+|[\s\uFEFF]+$/g, '');
-  if (!t) return { action: 'blank', newRef: '', reason: 'blank' };
-  var c0 = t.charAt(0);
-  if (c0 === '=' || c0 === '+' || c0 === '-' || c0 === '@') return { action: 'malformed', newRef: '', reason: 'formula' };
-  if (t.indexOf('://') !== -1) return { action: 'skip', newRef: '', reason: 'url' };
-  if (/\/d\/[A-Za-z0-9_-]+/.test(t)) return { action: 'skip', newRef: '', reason: 'drive-id-url' };
-  if (/^[A-Za-z0-9_-]{20,}$/.test(t)) return { action: 'skip', newRef: '', reason: 'drive-id' };
-  if (t.indexOf('&#x20;') !== -1) return { action: 'malformed', newRef: '', reason: 'encoded-space' };
-  if (t.indexOf('customs_office_Files_/') === 0) {
-    var rest0 = t.slice('customs_office_Files_/'.length);
-    if (!rest0 || rest0.indexOf('/') !== -1 || rest0 === '.' || rest0 === '..') return { action: 'malformed', newRef: '', reason: 'bad-target-shape' };
-    return { action: 'already-correct', newRef: '', reason: 'already-correct' };
-  }
-  var slash = t.indexOf('/');
-  if (slash <= 0) return { action: 'malformed', newRef: '', reason: 'no-folder-prefix' };
-  var folder = t.slice(0, slash);
-  var filename = t.slice(slash + 1);
-  if (!filename || filename.indexOf('/') !== -1 || filename === '.' || filename === '..') return { action: 'malformed', newRef: '', reason: 'bad-path-shape' };
-  if (folder === LEGACY_IMAGES || folder === LEGACY_FILES) return { action: 'rewrite', newRef: TARGET + '/' + filename, reason: folder, filename: filename };
-  return { action: 'unexpected', newRef: '', reason: 'unknown-folder:' + folder };
-}
-function customsOfficePathRepair_(payload, sessionToken, authUser) {
-  payload = payload || {};
-  var user = authUser || null;
-  if (!user && sessionToken) { try { var a = authenticateSystemUser_(String(sessionToken).trim()); if (a && a.authorized) user = a.user; } catch (e) {} }
-  if (!(user && user.isSuperAdmin)) throw new Error('صلاحية غير كافية؛ يلزم تشغيل الترحيل من جلسة مدير النظام المصادق عليها.');
-  var dryRun = !(payload.dryRun === false || String(payload.dryRun).toLowerCase() === 'false');
-  var offset = Math.max(0, Number(payload.offset) || 0);
-  var limit = Math.max(1, Math.min(500, Number(payload.limit) || 500));
-  var TARGET = 'customs_office_Files_';
-  var FIELDS = ['تكليف المطالبة', 'تخليص الشحنة'];
-  var reg = attachmentRegistry_();
-  var cfg = reg['tc_customs_office'];
-  if (!cfg) throw new Error('missing tc_customs_office registry entry');
-  var stat = { sheet: cfg.sheet, targetFolder: TARGET, dryRun: dryRun, offset: offset, limit: limit, totalCells: 0, blank: 0, alreadyCorrect: 0, legacyImages: 0, legacyFiles: 0, wouldRewrite: 0, malformed: 0, unexpected: 0, skippedUrlOrId: 0, missingInTarget: 0, conflicts: 0, updated: 0, backupSheet: '', errors: [], exceptions: [], verification: null, nextOffset: null, blocked: false, blockReason: '' };
-  try {
-    var targetFolderId = findDriveFolderIdByName_(TARGET);
-    if (!targetFolderId) {
-      stat.blocked = true;
-      stat.blockReason = 'target Drive folder missing, duplicated or inaccessible: ' + TARGET;
-      stat.exceptions.push(stat.blockReason);
-      return { status: 'blocked', summary: stat };
-    }
-    var dbId = getCompanySpreadsheetId_(cfg.company);
-    var sheet = getSheet_(cfg.sheet, dbId);
-    var headers = getHeaders_(sheet).map(function (h) { return String(h == null ? '' : h).trim(); });
-    var lower = headers.map(function (h) { return String(h).toLowerCase(); });
-    var colIdx = {};
-    lower.forEach(function (h, i) { if (h && !(h in colIdx)) colIdx[h] = i; });
-    var fieldCols = [];
-    FIELDS.forEach(function (ff) {
-      var k = String(ff).toLowerCase();
-      if (!(k in colIdx)) stat.errors.push('source column missing: ' + ff);
-      else fieldCols.push({ field: ff, col: colIdx[k] });
-    });
-    if (stat.errors.length) { stat.blocked = true; stat.blockReason = 'required column missing'; return { status: 'blocked', summary: stat }; }
-    var idColKey = String(cfg.idField || 'customs_uid').toLowerCase();
-    var idCol = (idColKey in colIdx) ? colIdx[idColKey] : -1;
-    var values = sheet.getDataRange().getValues();
-    var startRow = 1 + offset;
-    var endRow = Math.min(values.length, startRow + limit);
-    var candidates = [];
-    for (var r = startRow; r < endRow; r++) {
-      for (var f = 0; f < fieldCols.length; f++) {
-        var fc = fieldCols[f];
-        var raw = values[r] ? values[r][fc.col] : '';
-        stat.totalCells++;
-        var prev = customsOfficePathPreview_(raw);
-        var keyVal = idCol >= 0 ? String(values[r][idCol] == null ? '' : values[r][idCol]).trim() : '';
-        if (prev.action === 'blank') { stat.blank++; continue; }
-        if (prev.action === 'already-correct') { stat.alreadyCorrect++; continue; }
-        if (prev.action === 'skip') { stat.skippedUrlOrId++; stat.exceptions.push('row ' + (r + 1) + ' ' + fc.field + ': skipped ' + prev.reason); continue; }
-        if (prev.action === 'malformed') { stat.malformed++; stat.exceptions.push('row ' + (r + 1) + ' ' + fc.field + ': malformed (' + prev.reason + ')'); continue; }
-        if (prev.action === 'unexpected') { stat.unexpected++; stat.exceptions.push('row ' + (r + 1) + ' ' + fc.field + ': ' + prev.reason); continue; }
-        if (prev.action === 'rewrite') {
-          if (prev.reason === 'مكتب الجمارك_Images') stat.legacyImages++;
-          else stat.legacyFiles++;
-          stat.wouldRewrite++;
-          var fileId = '';
-          try { fileId = findDriveFileIdInFolder_(targetFolderId, prev.filename); } catch (e) { fileId = ''; }
-          if (!fileId) {
-            stat.missingInTarget++;
-            stat.exceptions.push('row ' + (r + 1) + ' ' + fc.field + ': "' + prev.filename + '" not found exactly once in ' + TARGET);
-            continue;
-          }
-          candidates.push({ row: r + 1, col: fc.col + 1, field: fc.field, oldRef: String(raw == null ? '' : String(raw)).replace(/^[\s\uFEFF]+|[\s\uFEFF]+$/g, ''), newRef: prev.newRef, filename: prev.filename, keyValue: keyVal, fileId: fileId });
-        }
-      }
-    }
-    stat.nextOffset = endRow < values.length ? endRow - 1 : null;
-    if (!dryRun) {
-      if (stat.missingInTarget > 0) {
-        stat.blocked = true;
-        stat.blockReason = stat.missingInTarget + ' file(s) missing or ambiguous in ' + TARGET + '; refusing to rewrite. Resolve exceptions first.';
-        return { status: 'blocked', summary: stat };
-      }
-      if (!candidates.length) {
-        stat.verification = { legacyRemaining: 0, changedPrefixOk: true, filenamesIntact: true, note: 'nothing to apply in this batch' };
-        return { status: 'success', summary: stat };
-      }
-      var applied = executeWithLock_(function () {
-        var ss = null;
-        try { ss = sheet.getParent ? sheet.getParent() : null; } catch (e) { ss = null; }
-        var stamp = '';
-        try { stamp = Utilities.formatDate(new Date(), 'Africa/Cairo', 'yyyyMMdd_HHmmss'); } catch (e) { stamp = String(Date.now()); }
-        var backupName = String(payload.backupSheet || '').trim() || ('مكتب الجمارك_path_backup_' + stamp);
-        var backupLoc = '';
-        try {
-          var parent = ss;
-          if (!parent) {
-            var bk = { name: backupName, rows: [['row', 'customs_uid', 'field', 'oldRef', 'newRef']] };
-            candidates.forEach(function (c) { bk.rows.push([c.row, c.keyValue, c.field, c.oldRef, c.newRef]); });
-            try { CacheService.getScriptCache().put('customs_path_backup_' + stamp, JSON.stringify(bk).slice(0, 90000), 21600); } catch (e2) {}
-            backupLoc = 'cache:customs_path_backup_' + stamp;
-          } else {
-            var exists = null;
-            try { exists = parent.getSheetByName(backupName); } catch (e3) { exists = null; }
-            if (!exists) {
-              var nb = parent.insertSheet(backupName);
-              nb.appendRow(['row', 'customs_uid', 'field', 'oldRef', 'newRef', 'at']);
-              candidates.forEach(function (c) { nb.appendRow([c.row, c.keyValue, c.field, c.oldRef, c.newRef, new Date()]); });
-              try { noteMutation_(nb); } catch (e4) {}
-            }
-            backupLoc = 'sheet:' + backupName;
-          }
-        } catch (e5) { backupLoc = 'backup-failed:' + String((e5 && e5.message) || e5); }
-        stat.backupSheet = backupLoc;
-        var n = 0;
-        candidates.forEach(function (c) {
-          try {
-            var rowNow = sheet.getRange(c.row, 1, 1, headers.length).getValues()[0];
-            var curNow = String(rowNow[c.col - 1] == null ? '' : rowNow[c.col - 1]).replace(/^[\s\uFEFF]+|[\s\uFEFF]+$/g, '');
-            var keyNow = idCol >= 0 ? String(rowNow[idCol] == null ? '' : rowNow[idCol]).trim() : '';
-            if (curNow !== c.oldRef || (c.keyValue != null && keyNow !== c.keyValue)) { stat.conflicts++; stat.exceptions.push('row ' + c.row + ' ' + c.field + ': concurrent change, skipped'); return; }
-            sheet.getRange(c.row, c.col).setValue(c.newRef);
-            n++;
-          } catch (e6) { stat.errors.push('row ' + c.row + ' ' + c.field + ': ' + String((e6 && e6.message) || e6)); }
-        });
-        stat.updated = n;
-        try { if (n) noteMutation_(sheet); } catch (e7) {}
-        return n;
-      });
-      void applied;
-      var reValues = sheet.getDataRange().getValues();
-      var reEnd = Math.min(reValues.length, startRow + limit);
-      var legacyRemaining = 0;
-      var changedPrefixOk = true;
-      var filenamesIntact = true;
-      candidates.forEach(function (c) {
-        var cur = String(reValues[c.row - 1][c.col - 1] == null ? '' : reValues[c.row - 1][c.col - 1]).trim();
-        if (cur.indexOf('مكتب الجمارك_Images/') === 0 || cur.indexOf('مكتب الجمارك_Files_/') === 0) legacyRemaining++;
-        if (cur !== c.newRef) { changedPrefixOk = false; }
-        var base = cur.split('/').pop();
-        if (base !== c.filename) filenamesIntact = false;
-      });
-      for (var rr = startRow; rr < reEnd; rr++) {
-        for (var ff2 = 0; ff2 < fieldCols.length; ff2++) {
-          var v2 = String(reValues[rr][fieldCols[ff2].col] == null ? '' : reValues[rr][fieldCols[ff2].col]).trim();
-          if (v2.indexOf('مكتب الجمارك_Images/') === 0 || v2.indexOf('مكتب الجمارك_Files_/') === 0) legacyRemaining++;
-        }
-      }
-      var jpgOk = null;
-      var pdfOk = null;
-      try {
-        var pickJpg = null;
-        var pickPdf = null;
-        candidates.forEach(function (c) {
-          var ln = String(c.filename).toLowerCase();
-          if (!pickJpg && (ln.slice(-4) === '.jpg' || ln.slice(-5) === '.jpeg')) pickJpg = c;
-          if (!pickPdf && ln.slice(-4) === '.pdf') pickPdf = c;
-        });
-        if (pickJpg) {
-          var jid = findDriveFileIdInFolder_(targetFolderId, pickJpg.filename);
-          jpgOk = !!jid;
-        }
-        if (pickPdf) {
-          var pid = findDriveFileIdInFolder_(targetFolderId, pickPdf.filename);
-          pdfOk = !!pid;
-        }
-      } catch (e8) { stat.errors.push('open-check: ' + String((e8 && e8.message) || e8)); }
-      stat.verification = { legacyRemaining: legacyRemaining, changedPrefixOk: changedPrefixOk, filenamesIntact: filenamesIntact, jpgInTarget: jpgOk, pdfInTarget: pdfOk };
-    }
-    return { status: stat.blocked ? 'blocked' : 'success', summary: stat };
-  } catch (e) {
-    stat.errors.push(String((e && e.message) || e));
-    return { status: 'error', summary: stat };
-  }
-}
+
+
 /** Preview page for image/pdf: inline view + download button. */
 function attachmentPreviewHtml_(fileName, blob) {
   const b64 = Utilities.base64Encode(blob.getBytes());
@@ -2452,7 +7787,7 @@ function installTriggers_(payload, sessionToken, authUser) {
   } catch (e) {}
   try {
     // The INSTALLABLE onEdit on the AUTH spreadsheet. The simple onEdit(e) in
-    // 02_DataAccess.js never fires — this is a standalone script and simple
+    // shared Code.js section never fires — this is a standalone script and simple
     // triggers only run in container-bound projects — so without this trigger a
     // change typed directly into ERP_Users / ERP_Pages_Matrix / ERP_system_work
     // is caught only by the AUTH_STALENESS_CEILING_SECONDS bucket.
@@ -2512,3 +7847,1137 @@ function _topNavScript(url) {
 
 /* v@496 sync marker — forces clasp to re-upload Code.js after a transient
  * server-side corruption reported a stale SyntaxError. */
+
+
+function companyArtifactEntries_(kind, requestedCompany) {
+  ensureCompaniesRegistered_();
+  const requested = String(requestedCompany || '').trim();
+  const entries = [];
+  Object.keys(COMPANY_REGISTRY || {}).forEach(function (uid) {
+    const cfg = COMPANY_REGISTRY[uid] || {};
+    const handlers = cfg.artifactHandlers || {};
+    if (typeof handlers[kind] !== 'function') return;
+    if (requested && uid !== requested) return;
+    entries.push({ uid: uid, handler: handlers[kind] });
+  });
+  if (entries.length !== 1) throw new Error(entries.length ? 'Ambiguous company artifact' : 'Unsupported company artifact');
+  return entries[0];
+}
+function dispatchCompanyArtifact_(kind, params) {
+  const p = params || {};
+  const target = p.company || p.target_system || '';
+  return companyArtifactEntries_(kind, target).handler(p, p.sessionToken || '', null);
+}
+function companyArtifactRoute_(payload, sessionToken, authUser) {
+  const p = payload || {};
+  return companyArtifactEntries_('customsOfficePathRepair', p.target_system || p.company || '').handler(p, sessionToken, authUser);
+}
+
+
+/* ===================== 8. TELEMETRY / LOGGING =========================== */
+/**
+ * shared Code.js section
+ * RESPONSIBILITY: request telemetry buffers, drains and read-only dashboard.
+ * The global names are preserved because Code.js routes and triggers call them.
+ * The module intentionally depends only on existing Apps Script/data-layer
+ * globals; no business schema or request path contract changes here.
+ */
+var PERF_LOG_SHEET_ = 'ERP_Perf_Log';
+var PERF_WEEKLY_SHEET_ = 'ERP_Perf_Weekly';
+
+/* The nine columns from the plan, and deliberately not a tenth. */
+var PERF_LOG_HEADERS_ = [
+  'ts', 'action', 'company', 'page', 'elapsed_ms', 'sheet_reads', 'status', 'user_hash', 'client_ms'
+];
+var PERF_WEEKLY_HEADERS_ = [
+  'week', 'action', 'count', 'p50_ms', 'p90_ms', 'p99_ms', 'error_rate', 'mean_sheet_reads'
+];
+
+/** Everything tunable, in one place, so none of it is buried in a function. */
+var PERF_TELEMETRY_ = {
+  ENABLED: true,
+  /* Fraction of FAST reads that are recorded. Writes and slow requests are
+   * always recorded regardless of this. */
+  READ_SAMPLE: 0.10,
+  /* Above this, a request is recorded whatever it is. */
+  SLOW_MS: 1000,
+  /* Raw rows kept this long; the weekly rollup is kept indefinitely because it
+   * is tiny and it is the thing anybody actually reads. */
+  RETAIN_DAYS: 90,
+  /* Guard against one runaway minute filling the buffer. */
+  MAX_PER_MINUTE: 500
+};
+
+function perfBufferKey_(minuteStamp) {
+  return 'perfbuf_' + minuteStamp;
+}
+
+/** The minute a timestamp falls in, as a stable string. */
+function perfMinute_(d) {
+  return String(Math.floor((d || new Date()).getTime() / 60000));
+}
+
+/**
+ * A stable, salted, non-reversible stand-in for an email.
+ *
+ * The salt is a Script Property so the mapping cannot be recomputed by anyone
+ * holding only the sheet. If it is unset, the hash is still stable within a
+ * deployment and still not an email — the property makes it harder to attack,
+ * it is not what makes it non-identifying.
+ */
+function perfUserHash_(email) {
+  var e = String(email || '').trim().toLowerCase();
+  if (!e) return '';
+  var salt = '';
+  try { salt = PropertiesService.getScriptProperties().getProperty('PERF_HASH_SALT') || ''; } catch (err) {}
+  var s = salt + '|' + e;
+  var h = 5381;
+  for (var i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+  return 'u' + (h >>> 0).toString(36);
+}
+
+/** Should this request be recorded at all? */
+function perfShouldSample_(isWrite, elapsedMs) {
+  if (!PERF_TELEMETRY_.ENABLED) return false;
+  if (isWrite) return true;
+  if (Number(elapsedMs) >= PERF_TELEMETRY_.SLOW_MS) return true;
+  return Math.random() < PERF_TELEMETRY_.READ_SAMPLE;
+}
+
+/**
+ * Record one request. Called from apiRouter_, on the way out, and costs one
+ * CacheService read plus one write — no sheet, no lock, no id allocation.
+ */
+function perfRecord_(entry) {
+  try {
+    if (!entry || !perfShouldSample_(!!entry.isWrite, entry.elapsed_ms)) return;
+    var key = perfBufferKey_(perfMinute_());
+    var cache = CacheService.getScriptCache();
+    var buf = [];
+    try {
+      var raw = cache.get(key);
+      if (raw) buf = JSON.parse(raw) || [];
+    } catch (eRead) { buf = []; }
+    if (!Array.isArray(buf)) buf = [];
+    if (buf.length >= PERF_TELEMETRY_.MAX_PER_MINUTE) return;
+
+    /* Exactly the nine values, in order. Nothing here is a payload, a record
+     * id or an email, and there is no branch that could make it one. */
+    buf.push([
+      new Date().toISOString(),
+      String(entry.action || '').slice(0, 80),
+      String(entry.company || '').slice(0, 40),
+      String(entry.page || '').slice(0, 60),
+      Number(entry.elapsed_ms) || 0,
+      Number(entry.sheet_reads) || 0,
+      String(entry.status || '').slice(0, 20),
+      perfUserHash_(entry.user_email),
+      Number(entry.client_ms) || 0
+    ]);
+    /* Ten minutes: long enough for a one-minute drain to be late four times
+     * over, short enough that an undrained buffer is not a slow leak. */
+    cache.put(key, JSON.stringify(buf), 600);
+  } catch (e) {
+    /* Telemetry must never be the reason a request fails. */
+  }
+}
+
+/** The sheet, created on first use. Additive, outside every business table. */
+function ensurePerfSheet_(name, headers) {
+  var ss = getSpreadsheet_(CONFIG.AUTH_SPREADSHEET_ID);
+  var sh = ss.getSheetByName(name);
+  if (!sh) {
+    sh = ss.insertSheet(name);
+    sh.appendRow(headers);
+    sh.setFrozenRows(1);
+    noteMutation_(sh);
+  }
+  return sh;
+}
+
+/**
+ * Drain the finished minutes into ERP_Perf_Log. Installed as a one-minute
+ * time-driven trigger.
+ *
+ * The CURRENT minute is deliberately left alone — draining it would race with
+ * requests still writing into it, and losing the tail of every minute is a
+ * worse answer than being sixty seconds behind.
+ */
+function drainPerfBuffer_() {
+  try {
+    var now = Number(perfMinute_());
+    var cache = CacheService.getScriptCache();
+    var rows = [];
+    /* Ten minutes back, so a trigger that missed a few runs catches up rather
+     * than silently dropping what it missed. */
+    for (var back = 1; back <= 10; back++) {
+      var key = perfBufferKey_(String(now - back));
+      var raw = null;
+      try { raw = cache.get(key); } catch (e) { raw = null; }
+      if (!raw) continue;
+      var buf = [];
+      try { buf = JSON.parse(raw) || []; } catch (e) { buf = []; }
+      if (buf.length) rows = rows.concat(buf);
+      /* Removed BEFORE the write. A duplicated telemetry row is worse than a
+       * lost one: it silently skews the percentiles this whole thing exists to
+       * produce, and nothing downstream could tell. The audit queue makes the
+       * opposite trade, on purpose. */
+      try { cache.remove(key); } catch (e) {}
+    }
+    if (!rows.length) return { status: 'success', rows: 0 };
+
+    if (systemStorageTarget_().backend === 'firestore') {
+      rows.forEach(function (r, i) { systemCreateRecord_('ERP_Perf_Log', { ts: r[0], action: r[1], company: r[2], page: r[3], elapsed_ms: r[4], sheet_reads: r[5], status: r[6], user_hash: r[7], client_ms: r[8] }, { operationId: 'perf:' + String(r[0]) + ':' + String(r[1]) + ':' + i }); });
+      return { status: 'success', rows: rows.length, backend: 'firestore' };
+    }
+
+    var sh = ensurePerfSheet_(PERF_LOG_SHEET_, PERF_LOG_HEADERS_);
+    sh.getRange(sh.getLastRow() + 1, 1, rows.length, PERF_LOG_HEADERS_.length).setValues(rows);
+    noteMutation_(sh);
+    return { status: 'success', rows: rows.length };
+  } catch (e) {
+    try { console.error('drainPerfBuffer_: ' + e.message); } catch (eL) {}
+    return { status: 'error', message: e.message };
+  }
+}
+
+/** p-th percentile of a sorted numeric array, nearest-rank. */
+function perfPercentile_(sorted, p) {
+  if (!sorted.length) return 0;
+  var rank = Math.ceil((p / 100) * sorted.length);
+  return sorted[Math.min(sorted.length - 1, Math.max(0, rank - 1))];
+}
+
+/** ISO-ish week key: the Monday of the week, as YYYY-MM-DD. */
+function perfWeekKey_(d) {
+  var t = new Date(d.getTime());
+  var day = (t.getDay() + 6) % 7;          /* Monday = 0 */
+  t.setDate(t.getDate() - day);
+  return Utilities.formatDate(t, 'UTC', 'yyyy-MM-dd');
+}
+
+/**
+ * One row per action per week: p50, p90, p99, count, error rate, mean sheet
+ * reads. This is the table anybody actually reads. The raw log is evidence;
+ * the rollup is the review.
+ */
+function rollupPerfWeekly_() {
+  if (systemStorageTarget_().backend === 'firestore') return rollupPerfWeeklyFirestore_();
+  try {
+    var sh = ensurePerfSheet_(PERF_LOG_SHEET_, PERF_LOG_HEADERS_);
+    var values = sh.getDataRange().getValues();
+    if (values.length < 2) return { status: 'success', rows: 0 };
+
+    var groups = {};
+    for (var i = 1; i < values.length; i++) {
+      var r = values[i];
+      var when = new Date(r[0]);
+      if (isNaN(when.getTime())) continue;
+      var key = perfWeekKey_(when) + '|' + String(r[1] || '');
+      if (!groups[key]) groups[key] = { ms: [], reads: 0, errors: 0, n: 0 };
+      var g = groups[key];
+      g.ms.push(Number(r[4]) || 0);
+      g.reads += Number(r[5]) || 0;
+      if (String(r[6] || '').toUpperCase() === 'FAILED') g.errors++;
+      g.n++;
+    }
+
+    var out = [];
+    Object.keys(groups).sort().forEach(function (key) {
+      var g = groups[key];
+      var parts = key.split('|');
+      g.ms.sort(function (a, b) { return a - b; });
+      out.push([
+        parts[0], parts[1], g.n,
+        perfPercentile_(g.ms, 50), perfPercentile_(g.ms, 90), perfPercentile_(g.ms, 99),
+        g.n ? Number((g.errors / g.n).toFixed(4)) : 0,
+        g.n ? Number((g.reads / g.n).toFixed(2)) : 0
+      ]);
+    });
+    if (!out.length) return { status: 'success', rows: 0 };
+
+    var wk = ensurePerfSheet_(PERF_WEEKLY_SHEET_, PERF_WEEKLY_HEADERS_);
+    /* Rewritten whole rather than appended: a week's numbers change as more of
+     * it happens, and two rows for the same week and action would be a bug in
+     * the only table anybody reads. */
+    if (wk.getLastRow() > 1) wk.getRange(2, 1, wk.getLastRow() - 1, PERF_WEEKLY_HEADERS_.length).clearContent();
+    wk.getRange(2, 1, out.length, PERF_WEEKLY_HEADERS_.length).setValues(out);
+    noteMutation_(wk);
+    return { status: 'success', rows: out.length };
+  } catch (e) {
+    try { console.error('rollupPerfWeekly_: ' + e.message); } catch (eL) {}
+    return { status: 'error', message: e.message };
+  }
+}
+
+function rollupPerfWeeklyFirestore_() {
+  try {
+    var values = systemGetAllRecords_('ERP_Perf_Log'), groups = {};
+    values.forEach(function (r) { var when = new Date(r.ts); if (isNaN(when.getTime())) return; var key = perfWeekKey_(when) + '|' + String(r.action || ''); if (!groups[key]) groups[key] = { ms: [], reads: 0, errors: 0, n: 0 }; var g = groups[key]; g.ms.push(Number(r.elapsed_ms) || 0); g.reads += Number(r.sheet_reads) || 0; if (String(r.status || '').toUpperCase() === 'FAILED') g.errors++; g.n++; });
+    Object.keys(groups).forEach(function (key) { var g = groups[key], parts = key.split('|'); g.ms.sort(function (a, b) { return a - b; }); var data = { week: parts[0], action: parts[1], count: g.n, p50_ms: perfPercentile_(g.ms, 50), p90_ms: perfPercentile_(g.ms, 90), p99_ms: perfPercentile_(g.ms, 99), error_rate: g.n ? Number((g.errors / g.n).toFixed(4)) : 0, mean_sheet_reads: g.n ? Number((g.reads / g.n).toFixed(2)) : 0 }; systemCreateRecord_('ERP_Perf_Weekly', data, { operationId: 'perf-week:' + key }); });
+    return { status: 'success', rows: Object.keys(groups).length, backend: 'firestore' };
+  } catch (e) { return { status: 'error', message: e.message }; }
+}
+
+/**
+ * Retention. Raw rows older than RETAIN_DAYS go; the weekly rollup stays,
+ * because it is tiny and it is the point. Deliberately deletes from the TOP,
+ * where the oldest rows are, in one contiguous block.
+ */
+function prunePerfLog_() {
+  if (systemStorageTarget_().backend === 'firestore') {
+    try { var cutoffFs = Date.now() - PERF_TELEMETRY_.RETAIN_DAYS * 86400000, removedFs = 0; systemGetAllRecords_('ERP_Perf_Log').forEach(function (r) { var d = new Date(r.ts); if (r._meta && !isNaN(d.getTime()) && d.getTime() < cutoffFs && systemRemoveRecord_('ERP_Perf_Log', r._meta.documentId, { expectedUpdateTime: r._meta.updateTime })) removedFs++; }); return { status: 'success', removed: removedFs, backend: 'firestore' }; } catch (e) { return { status: 'error', message: e.message }; }
+  }
+  try {
+    var sh = getSpreadsheet_(CONFIG.AUTH_SPREADSHEET_ID).getSheetByName(PERF_LOG_SHEET_);
+    if (!sh || sh.getLastRow() < 2) return { status: 'success', removed: 0 };
+    var cutoff = new Date().getTime() - PERF_TELEMETRY_.RETAIN_DAYS * 86400000;
+    var stamps = sh.getRange(2, 1, sh.getLastRow() - 1, 1).getValues();
+    var keepFrom = 0;
+    while (keepFrom < stamps.length) {
+      var t = new Date(stamps[keepFrom][0]).getTime();
+      if (isNaN(t) || t >= cutoff) break;
+      keepFrom++;
+    }
+    if (!keepFrom) return { status: 'success', removed: 0 };
+    sh.deleteRows(2, keepFrom);
+    noteMutation_(sh);
+    return { status: 'success', removed: keepFrom };
+  } catch (e) {
+    return { status: 'error', message: e.message };
+  }
+}
+
+/** The ten slowest actions this week and last, for the dashboard page. */
+function getPerfDashboard_(data, user) {
+  if (!(user && user.isSuperAdmin)) throw new Error(ERP_MESSAGES.NOT_AUTHORIZED);
+  var out = { status: 'success', weeks: [], rows: [] };
+  if (systemStorageTarget_().backend === 'firestore') {
+    try {
+      var weekly = systemGetAllRecords_('ERP_Perf_Weekly'), weeksFs = {}; weekly.forEach(function (r) { weeksFs[String(r.week)] = true; }); var sortedFs = Object.keys(weeksFs).sort().reverse(), thisWeekFs = sortedFs[0] || '', lastWeekFs = sortedFs[1] || '', prevFs = {}; weekly.forEach(function (r) { if (String(r.week) === lastWeekFs) prevFs[String(r.action)] = Number(r.p90_ms) || 0; });
+      out.weeks = [thisWeekFs, lastWeekFs]; out.rows = weekly.filter(function (r) { return String(r.week) === thisWeekFs; }).map(function (r) { var p = Number(r.p90_ms) || 0; return { action: String(r.action), count: Number(r.count) || 0, p50: Number(r.p50_ms) || 0, p90: p, p99: Number(r.p99_ms) || 0, error_rate: Number(r.error_rate) || 0, mean_sheet_reads: Number(r.mean_sheet_reads) || 0, prev_p90: prevFs[r.action] === undefined ? null : prevFs[r.action], delta: prevFs[r.action] === undefined ? null : p - prevFs[r.action] }; }).sort(function (a, b) { return b.p90 - a.p90; }).slice(0, 10);
+      return out;
+    } catch (e) { return out; }
+  }
+  try {
+    var wk = getSpreadsheet_(CONFIG.AUTH_SPREADSHEET_ID).getSheetByName(PERF_WEEKLY_SHEET_);
+    if (!wk || wk.getLastRow() < 2) return out;
+    var values = wk.getRange(2, 1, wk.getLastRow() - 1, PERF_WEEKLY_HEADERS_.length).getValues();
+    var weeks = {};
+    values.forEach(function (r) { weeks[String(r[0])] = true; });
+    var sorted = Object.keys(weeks).sort().reverse();
+    var thisWeek = sorted[0] || '', lastWeek = sorted[1] || '';
+    out.weeks = [thisWeek, lastWeek];
+
+    var prev = {};
+    values.forEach(function (r) { if (String(r[0]) === lastWeek) prev[String(r[1])] = Number(r[4]) || 0; });
+
+    out.rows = values
+      .filter(function (r) { return String(r[0]) === thisWeek; })
+      .map(function (r) {
+        var action = String(r[1]);
+        var p90 = Number(r[4]) || 0;
+        return {
+          action: action, count: Number(r[2]) || 0,
+          p50: Number(r[3]) || 0, p90: p90, p99: Number(r[5]) || 0,
+          error_rate: Number(r[6]) || 0, mean_sheet_reads: Number(r[7]) || 0,
+          prev_p90: prev[action] === undefined ? null : prev[action],
+          delta: prev[action] === undefined ? null : (p90 - prev[action])
+        };
+      })
+      .sort(function (a, b) { return b.p90 - a.p90; })
+      .slice(0, 10);
+  } catch (e) { /* an empty dashboard is a valid answer */ }
+  return out;
+}
+
+/**
+ * System audit log helpers
+ */
+function classifyAction_(action) {
+  if (!action) return 'UNKNOWN';
+  const actionStr = String(action).toLowerCase();
+  
+  // No log actions
+  if (actionStr.startsWith('get_') || actionStr === 'ping' || 
+      actionStr === 'login_user' || actionStr === 'setup_password') {
+    return 'NO_LOG';
+  }
+  
+  // Admin list actions
+  if (actionStr.startsWith('admin_list_')) {
+    return 'NO_LOG';
+  }
+  
+  // Action classification
+  if (actionStr.startsWith('add_')) return 'ADD';
+  if (actionStr.startsWith('edit_') || actionStr.startsWith('update_') || 
+      actionStr.startsWith('approve_') || actionStr.startsWith('toggle_')) {
+    return 'EDIT';
+  }
+  if (actionStr.startsWith('delete_') || actionStr.startsWith('remove_')) {
+    return 'DELETE';
+  }
+  if (actionStr.startsWith('admin_delete_')) {
+    return 'DELETE';
+  }
+  if (actionStr.startsWith('admin_save_')) {
+    // For admin_save_, check if it's creating new or updating existing
+    return 'ADMIN_SAVE'; // We'll handle this specifically in the log function
+  }
+  
+  return 'UNKNOWN';
+}
+
+function extractRecordId_(action, result) {
+  // Try to extract assigned ID from result
+  if (result && result.data && result.data.assignedId) {
+    return result.data.assignedId;
+  }
+  if (result && result.data && result.data.id) {
+    return result.data.id;
+  }
+  return null;
+}
+
+/**
+ * F-10: logSystemAction_ calls this on every logged write, and because writes run
+ * with the request memo disabled (Code.js apiRouter_), it paid a full
+ * ERP_Companies read every time. Version-cached on version_companies, the same
+ * stamp its siblings in shared Code.js section use, so bumpVersion_('ERP_Companies')
+ * invalidates it too.
+ */
+function getCompanyName_(companyId) {
+  if (!companyId) return '';
+  const cache = CacheService.getScriptCache();
+  const compVersion = cache.get('version_companies') || '0';
+  const cacheKey = 'company_name_v_' + compVersion + '_' + companyId;
+  try {
+    const cached = cache.get(cacheKey);
+    if (cached !== null && cached !== undefined) return cached === ' ' ? '' : cached;
+  } catch (cacheErr) {}
+  let name = '';
+  try {
+    const companies = getAllRecords_(CONFIG.AUTH_SPREADSHEET_ID, 'ERP_Companies');
+    const company = companies.find(c => String(c.company_unique_id) === companyId);
+    name = company ? String(company.company_name_ar || '') : '';
+  } catch (e) {
+    return '';
+  }
+  try { cache.put(cacheKey, name === '' ? ' ' : name, CONFIG.CACHE_GENERAL_SECONDS); } catch (putErr) {}
+  return name;
+}
+
+/** Canonical SystemLog header order — add new columns to the END only, never insert in the middle. */
+const SYSTEM_LOG_HEADERS = [
+  'LogID', 'Timestamp', 'CompanyID', 'CompanyName', 'Action',
+  'SourceAction', 'RecordID', 'UserEmail', 'ChangedFields',
+  'Status', 'ErrorMessage', 'Table', 'Page',
+  // Phase 0b instrumentation — appended at the END, per this list's own
+  // documented convention. ensureSystemLogSheet_ migrates a live sheet in place
+  // by adding only missing headers, so existing rows and columns are untouched.
+  'ElapsedMs', 'SheetReads'
+];
+
+/**
+ * Phase 0b: read actions (get_*, admin_list_*, ping) are classified NO_LOG, so
+ * the slowest requests in the system are the ones we cannot see. Setting Script
+ * Property PERF_LOG_READS=1 logs them too, for a measurement window.
+ *
+ * Deliberately OFF by default and property-gated rather than always-on: logging
+ * a read appends a SystemLog row, i.e. adds a WRITE to every read, and SystemLog
+ * already grows unbounded (F-13). It is a measuring instrument, not a setting to
+ * leave on. Memoised per execution.
+ */
+let _perfLogReads_ = null;
+
+
+
+/* ===================== 9. BACKUP / RETENTION / OPERATIONS =============== */
+/* shared Code.js section — Daily CSV cloud backup of all configured DB sheets (rolling 15 days). */
+
+/**
+ * Backup source catalog. Derived at call time from ERP_Companies so it can never
+ * drift from the live company list, plus the AUTH spreadsheet itself (which holds
+ * ERP_Users / ERP_Sessions / ERP_Record_History / SystemLog and is not a company).
+ *
+ * A globally-defined DB_CONFIG, if one ever exists, still wins — this function is
+ * the fallback that makes dailyCsvBackup actually run. Before this existed,
+ * DB_CONFIG was referenced but defined nowhere, so every invocation returned
+ * {ok:false,error:'no DB_CONFIG'} and no backup was ever produced.
+ *
+ * @return {Object} map of backup name -> { id: spreadsheetId }
+ */
+function buildDbConfig_() {
+  var cfg = { AUTH: { id: CONFIG.AUTH_SPREADSHEET_ID } };
+  try {
+    var rows = getAllRecords_(CONFIG.AUTH_SPREADSHEET_ID, 'ERP_Companies');
+    rows.forEach(function (r) {
+      var uid = String(r.company_unique_id || '').trim();
+      if (!uid) return;
+      var rawLink = String(r.company_sheet_link || '').trim();
+      if (!rawLink) return;
+      var m = rawLink.match(/\/d\/([a-zA-Z0-9-_]+)/);
+      var ssId = m ? m[1] : rawLink;
+      if (!ssId) return;
+      var label = String(r.company_name_en || '').trim() || uid;
+      cfg[safeFileNamePart_(label)] = { id: ssId };
+    });
+  } catch (e) {
+    // A failure here still leaves the AUTH spreadsheet backed up.
+    console.error('buildDbConfig_ could not read ERP_Companies: ' + e.message);
+  }
+  return cfg;
+}
+
+/** Strips characters that are awkward inside a Drive file name. */
+function safeFileNamePart_(s) {
+  return String(s === null || s === undefined ? '' : s).replace(/[\/\\:*?"<>|]/g, '_').trim();
+}
+
+/* Public only because existing time-driven triggers bind by function name.
+ * A google.script.run caller cannot supply the native trigger object, so fail
+ * closed unless this invocation matches an installed trigger for this handler. */
+function dailyCsvBackup(e) {
+  if (!isVerifiedTimeTrigger_(e, 'dailyCsvBackup')) throw new Error('Time-trigger invocation required.');
+  return dailyCsvBackup_();
+}
+
+function dailyCsvBackup_(opts) {
+  var storage = systemStorageTarget_();
+  var cfg = (typeof DB_CONFIG !== 'undefined' && DB_CONFIG) ? DB_CONFIG : buildDbConfig_();
+  if (!cfg || !Object.keys(cfg).length) return { ok: false, error: 'no DB_CONFIG' };
+  if (storage.backend === 'firestore') {
+    var companyCfg = {};
+    Object.keys(cfg).forEach(function (name) { if (name !== 'AUTH') companyCfg[name] = cfg[name]; });
+    return { ok: false, backend: 'firestore', firestore: firestoreSystemBackupManifest_(), companyCsv: runCsvBackupConfig_(companyCfg) };
+  }
+  return runCsvBackupConfig_(cfg);
+}
+
+function runCsvBackupConfig_(cfg) {
+  if (!cfg || !Object.keys(cfg).length) return { ok: true, files: 0, errors: [], skipped: [] };
+  var folder = getOrCreateCsvFolder_();
+  if (!folder) return { ok: false, error: 'no backup folder (Drive API not enabled in project 45602854301?)' };
+  var stamp = Utilities.formatDate(new Date(), 'Africa/Cairo', 'yyyyMMdd');
+  var count = 0, errors = [], skipped = [];
+  // Apps Script kills a trigger run at 6 minutes. Stop cleanly at 5 and report
+  // what was not written, so a truncated backup is visible instead of silent.
+  var deadline = new Date().getTime() + (5 * 60 * 1000);
+  Object.keys(cfg).forEach(function (dbName) {
+    try {
+      var ss = SpreadsheetApp.openById(cfg[dbName].id);
+      ss.getSheets().forEach(function (sh) {
+        var name = sh.getName();
+        if (name.charAt(0) === '~') return; // skip temp/system sheets
+        if (new Date().getTime() > deadline) { skipped.push(dbName + '/' + name); return; }
+        var csv = sheetToCsv_(sh);
+        var fname = dbName + '_' + safeFileNamePart_(name) + '_' + stamp + '.csv';
+        try { folder.createFile(fname, csv, MimeType.CSV); count++; }
+        catch (e2) { errors.push(fname + ': ' + e2.message); }
+      });
+    } catch (e) { errors.push(dbName + ': ' + e.message); }
+  });
+  try { pruneOldCsvBackups_(); } catch (e) {}
+  return { ok: skipped.length === 0 && errors.length === 0, files: count, errors: errors, skipped: skipped };
+}
+
+/* Native Firestore export is an operator/project operation, not a CSV copy.
+ * Return an explicit manifest so the old AUTH spreadsheet is never mislabeled
+ * as the system database backup. The actual export command is documented in
+ * FIRESTORE_READ_WRITE_IMPLEMENTATION_RESULTS.md. */
+function firestoreSystemBackupManifest_() {
+  var c = systemStorageTarget_();
+  return { ok: false, backend: 'firestore', projectId: c.projectId, databaseId: c.databaseId, collections: systemTableNames_(), error: 'FIRESTORE_EXPORT_REQUIRED: configure and run a native Firestore export to an approved bucket', companyCsv: 'not run by this system-backup operation' };
+}
+
+/* The routed operator command remains available through Code.js, where the
+ * session and super-admin checks are established before this handler runs. */
+function dailyCsvBackupRoute_(payload, sessionToken, authUser) {
+  if (!(authUser && authUser.isSuperAdmin)) throw new Error('صلاحية غير كافية');
+  return dailyCsvBackup_();
+}
+
+/**
+ * Resolves the backup folder, in order:
+ *   1. Script Property BACKUP_FOLDER_ID  (set this for prod; keeps ids out of source)
+ *   2. CONFIG.BACKUP_FOLDER_ID
+ *   3. a Drive folder named ERP_Backups_CSV, created on first use
+ */
+function getOrCreateCsvFolder_() {
+  var rootName = 'ERP_Backups_CSV';
+  var folderId = '';
+  try { folderId = PropertiesService.getScriptProperties().getProperty('BACKUP_FOLDER_ID') || ''; } catch (e) {}
+  if (!folderId) folderId = String(CONFIG.BACKUP_FOLDER_ID || '').trim();
+  if (folderId) {
+    try { return DriveApp.getFolderById(folderId); }
+    catch (e) { console.error('BACKUP_FOLDER_ID "' + folderId + '" is not reachable: ' + e.message); }
+  }
+  try {
+    var it = DriveApp.getFoldersByName(rootName);
+    if (it.hasNext()) return it.next();
+    return DriveApp.createFolder(rootName);
+  } catch (e) { return null; }
+}
+
+function csvCell_(v) {
+  if (v === null || v === undefined) v = '';
+  var s = String(v);
+  if (/[",\r\n]/.test(s)) s = '"' + s.replace(/"/g, '""') + '"';
+  return s;
+}
+
+function sheetToCsv_(sh) {
+  var data = sh.getDataRange().getValues();
+  if (!data.length) return '';
+  return data.map(function (row) {
+    return row.map(csvCell_).join(',');
+  }).join('\r\n');
+}
+
+function pruneOldCsvBackups_(days) {
+  var maxAge = days || 15;
+  var folder = getOrCreateCsvFolder_();
+  if (!folder) return;
+  var cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - maxAge);
+  var files = folder.getFiles();
+  while (files.hasNext()) {
+    var f = files.next();
+    try {
+      if (f.getLastUpdated().getTime() < cutoff.getTime()) f.setTrashed(true);
+    } catch (e) {}
+  }
+}
+
+/**
+ * Restore-test helper — run manually from the Apps Script editor.
+ * Reads one backup CSV out of the backup folder and writes it into a brand-new
+ * scratch spreadsheet. It never touches a live sheet. An untested backup is not
+ * a backup; this is how you test it.
+ *
+ * @param {string} csvFileName exact file name, e.g. 'AUTH_ERP_Users_20260905.csv'
+ * @return {Object} { ok, url } or { ok:false, error }
+ */
+function restoreCsvToScratchSpreadsheet_(csvFileName) {
+  if (!csvFileName) return { ok: false, error: 'csvFileName is required' };
+  var folder = getOrCreateCsvFolder_();
+  if (!folder) return { ok: false, error: 'backup folder not reachable' };
+  var it = folder.getFilesByName(csvFileName);
+  if (!it.hasNext()) return { ok: false, error: 'file not found in backup folder: ' + csvFileName };
+  var data = Utilities.parseCsv(it.next().getBlob().getDataAsString());
+  if (!data.length) return { ok: false, error: 'csv is empty' };
+  var width = data.reduce(function (m, r) { return Math.max(m, r.length); }, 0);
+  var padded = data.map(function (r) {
+    var out = r.slice();
+    while (out.length < width) out.push('');
+    return out;
+  });
+  var ss = SpreadsheetApp.create('RESTORE_TEST_' + csvFileName.replace(/\.csv$/i, ''));
+  ss.getSheets()[0].getRange(1, 1, padded.length, width).setValues(padded);
+  noteMutation_();
+  return { ok: true, rows: padded.length, cols: width, url: ss.getUrl() };
+}
+
+/**
+ * shared Code.js section — Phase 5. Archiving for the two unbounded log sheets.
+ *
+ * F-12: ERP_Record_History gets ONE ROW PER CHANGED COLUMN PER EDIT, for all
+ *       three companies, into a single sheet — and get_record_history reads all
+ *       of it and filters in JS. It grows faster than any business table and the
+ *       history panel gets permanently slower.
+ * F-13: SystemLog stores JSON.stringify(result.data) — a whole record object —
+ *       in ChangedFields, so it grows fast in BYTES, not just rows.
+ *
+ * What this does: moves rows older than CONFIG.ARCHIVE_RETENTION_MONTHS out of
+ * the live tab into a dated archive tab in the SAME spreadsheet, with the SAME
+ * columns. Nothing is deleted, no schema changes, no business table touched.
+ * Archive tabs are the structural exception pre-authorised in the plan.
+ *
+ * RETENTION PERIOD IS AN ASSUMPTION — see CONFIG.ARCHIVE_RETENTION_MONTHS.
+ *
+ * Nothing here runs automatically until you install the trigger. Run
+ * archiveOldRecords_({ dryRun: true }) first; it reports exactly what would move
+ * and writes nothing.
+ */
+
+/** Sheets eligible for archiving: live tab -> the column holding its timestamp. */
+var ARCHIVE_TARGETS = [
+  { sheet: 'ERP_Record_History', dateColumn: 'changed_at' },
+  { sheet: 'SystemLog', dateColumn: 'Timestamp' }
+];
+
+/**
+ * Archives everything older than the retention period.
+ *
+ * @param {Object} opts { dryRun: true } to report without writing.
+ * @return {Object} per-sheet counts
+ */
+/* Public only because an installed time trigger binds by handler name. */
+function archiveOldRecords(e) {
+  if (!isVerifiedTimeTrigger_(e, 'archiveOldRecords')) throw new Error('Time-trigger invocation required.');
+  return archiveOldRecords_({});
+}
+
+function archiveOldRecords_(opts) {
+  opts = opts || {};
+  var months = Number(CONFIG.ARCHIVE_RETENTION_MONTHS) || 24;
+  var cutoff = new Date();
+  cutoff.setMonth(cutoff.getMonth() - months);
+
+  if (systemStorageTarget_().backend === 'firestore') return archiveFirestoreCollections_(cutoff, !!opts.dryRun, months);
+
+  var out = { retentionMonths: months, cutoff: cutoff.toISOString(), dryRun: !!opts.dryRun, sheets: [] };
+  ARCHIVE_TARGETS.forEach(function (t) {
+    try {
+      out.sheets.push(archiveSheetRows_(CONFIG.AUTH_SPREADSHEET_ID, t.sheet, t.dateColumn, cutoff, !!opts.dryRun));
+    } catch (e) {
+      out.sheets.push({ sheet: t.sheet, error: e.message });
+    }
+  });
+  try { Logger.log(JSON.stringify(out, null, 2)); } catch (e) {}
+  return out;
+}
+
+function archiveFirestoreCollections_(cutoff, dryRun, months) {
+  var result = { retentionMonths: months, cutoff: cutoff.toISOString(), dryRun: dryRun, collections: [] };
+  [{ live: 'ERP_Record_History', archive: 'ERP_Record_History_Archive', date: 'changed_at' }, { live: 'SystemLog', archive: 'SystemLog_Archive', date: 'timestamp' }].forEach(function (spec) {
+    try {
+      var rows = systemStore_().queryAll(spec.live, {}).records, stale = rows.filter(function (r) { var d = new Date(r.data[spec.date] || r.data[String(spec.date).toLowerCase()]); return !isNaN(d.getTime()) && d.getTime() < cutoff.getTime(); });
+      if (!dryRun) stale.forEach(function (r) { systemCreateRecord_(spec.archive, Object.assign({}, r.data, { archived_at: new Date(), archive_source_document: r.meta.documentId }), { operationId: 'archive:' + spec.live + ':' + r.meta.documentId }); systemRemoveRecord_(spec.live, r.meta.documentId, { expectedUpdateTime: r.meta.updateTime }); });
+      result.collections.push({ collection: spec.live, archived: stale.length });
+    } catch (e) { result.collections.push({ collection: spec.live, error: e.message }); }
+  });
+  return result;
+}
+
+/** Convenience: see what would move, write nothing. */
+function archiveOldRecordsDryRun_() {
+  return archiveOldRecords_({ dryRun: true });
+}
+
+/**
+ * Moves rows older than `cutoff` from one sheet into <sheet>_Archive_<year> tabs.
+ *
+ * Order of operations matters and is deliberate: rows are written to the archive
+ * FIRST and the write is verified by re-reading the archive tab's last row. Only
+ * then is the live tab rewritten. If anything throws in between, the worst case
+ * is rows existing in both places — recoverable — never rows existing in neither.
+ *
+ * Rows whose date is blank or unparseable are KEPT, never archived. Being unable
+ * to date a row is not a reason to move it.
+ */
+function archiveSheetRows_(ssId, sheetName, dateColumn, cutoff, dryRun) {
+  var ss = getSpreadsheet_(ssId);
+  var sheet = ss.getSheetByName(sheetName);
+  if (!sheet) return { sheet: sheetName, skipped: 'sheet not found' };
+
+  var data = sheet.getDataRange().getValues();
+  if (data.length < 2) return { sheet: sheetName, liveRows: 0, archived: 0 };
+
+  var headers = data[0];
+  var colCount = headers.length;
+  var dateIdx = -1;
+  for (var c = 0; c < colCount; c++) {
+    if (String(headers[c]).trim().toLowerCase() === String(dateColumn).trim().toLowerCase()) { dateIdx = c; break; }
+  }
+  if (dateIdx === -1) return { sheet: sheetName, skipped: 'date column "' + dateColumn + '" not found' };
+
+  var keep = [];
+  var byYear = {};
+  var undated = 0;
+  for (var i = 1; i < data.length; i++) {
+    var row = data[i];
+    var raw = row[dateIdx];
+    var d = (raw instanceof Date) ? raw : (raw === '' || raw === null || raw === undefined ? null : new Date(raw));
+    if (!d || isNaN(d.getTime())) { keep.push(row); undated++; continue; }
+    if (d.getTime() >= cutoff.getTime()) { keep.push(row); continue; }
+    var y = String(d.getFullYear());
+    if (!byYear[y]) byYear[y] = [];
+    byYear[y].push(row);
+  }
+
+  var years = Object.keys(byYear).sort();
+  var archivedCount = years.reduce(function (n, y) { return n + byYear[y].length; }, 0);
+  var result = {
+    sheet: sheetName,
+    liveRowsBefore: data.length - 1,
+    archived: archivedCount,
+    liveRowsAfter: keep.length,
+    undatedKept: undated,
+    archiveTabs: years.map(function (y) { return sheetName + '_Archive_' + y + ' (' + byYear[y].length + ')'; })
+  };
+  if (!archivedCount || dryRun) return result;
+
+  executeWithLock_(function () {
+    years.forEach(function (y) {
+      var tabName = sheetName + '_Archive_' + y;
+      var target = ss.getSheetByName(tabName);
+      if (!target) {
+        target = ss.insertSheet(tabName);
+        noteMutation_();
+        target.getRange(1, 1, 1, colCount).setValues([headers]);
+        noteMutation_();
+        target.setFrozenRows(1);
+      }
+      var rows = byYear[y];
+      var startRow = target.getLastRow() + 1;
+      var needed = startRow + rows.length - 1;
+      if (needed > target.getMaxRows()) target.insertRowsAfter(target.getMaxRows(), needed - target.getMaxRows());
+      noteMutation_();
+      target.getRange(startRow, 1, rows.length, colCount).setValues(rows);
+      noteMutation_();
+      SpreadsheetApp.flush();
+      // Verify before removing anything from the live tab.
+      if (target.getLastRow() < needed) {
+        throw new Error('archive write to ' + tabName + ' did not land; live sheet left untouched');
+      }
+    });
+
+    // Rewrite the live body with the survivors, then clear the tail.
+    var lastRow = sheet.getLastRow();
+    if (keep.length) sheet.getRange(2, 1, keep.length, colCount).setValues(keep);
+    noteMutation_();
+    var firstStale = 2 + keep.length;
+    if (lastRow >= firstStale) sheet.getRange(firstStale, 1, lastRow - firstStale + 1, colCount).clearContent();
+    noteMutation_();
+    SpreadsheetApp.flush();
+  });
+
+  return result;
+}
+
+/**
+ * Reads history rows for one sheet out of the archive tabs. Used by
+ * get_record_history when the caller passes include_archive:true, so archived
+ * history is still reachable — just not on the default path.
+ */
+function readArchivedHistory_(sheetName, recordId, recordUid) {
+  if (systemStorageTarget_().backend === 'firestore') {
+    return systemGetAllRecords_('ERP_Record_History_Archive').filter(function (rec) {
+      return String(rec.sheet_name) === String(sheetName) && (!recordId || String(rec.record_id) === String(recordId)) && (recordId || !recordUid || String(rec.record_uid) === String(recordUid));
+    });
+  }
+  var ss = getSpreadsheet_(CONFIG.AUTH_SPREADSHEET_ID);
+  var out = [];
+  ss.getSheets().forEach(function (sh) {
+    var name = sh.getName();
+    if (name.indexOf('ERP_Record_History_Archive_') !== 0) return;
+    var data = sh.getDataRange().getValues();
+    if (data.length < 2) return;
+    var headers = data[0].map(function (h) { return String(h).trim(); });
+    for (var i = 1; i < data.length; i++) {
+      var rec = {};
+      for (var c = 0; c < headers.length; c++) rec[headers[c]] = data[i][c];
+      if (String(rec.sheet_name) !== String(sheetName)) continue;
+      if (recordId && String(rec.record_id) !== String(recordId)) continue;
+      if (!recordId && recordUid && String(rec.record_uid) !== String(recordUid)) continue;
+      out.push(rec);
+    }
+  });
+  return out;
+}
+
+/**
+ * Route handler for 'archive_old_records'. Super-admin only, and DRY RUN unless
+ * the caller explicitly passes confirm:true — this rewrites two log sheets.
+ */
+function archiveOldRecordsRoute_(payload, sessionToken, authUser) {
+  if (!(authUser && authUser.isSuperAdmin)) throw new Error('صلاحية غير كافية');
+  var confirm = !!(payload && payload.confirm === true);
+  return { status: 'success', data: archiveOldRecords_({ dryRun: !confirm }) };
+}
+
+/**
+ * Installs the monthly archive trigger. Safe to run repeatedly — removes any
+ * prior instance first. 02:00 on the 1st, outside working hours: the run reads
+ * and rewrites two large sheets.
+ */
+function installRetentionTrigger_(payload, sessionToken, authUser) {
+  if (!(authUser && authUser.isSuperAdmin)) throw new Error('صلاحية غير كافية');
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === 'archiveOldRecords') {
+      try { ScriptApp.deleteTrigger(t); } catch (e) {}
+    }
+  });
+  ScriptApp.newTrigger('archiveOldRecords').timeBased().onMonthDay(1).atHour(2).create();
+  return { status: 'success', message: 'تم تثبيت مؤقت الأرشفة الشهري' };
+}
+
+/**
+ * shared Code.js section
+ * RESPONSIBILITY: automated daily full-spreadsheet backups (one copy per
+ * company database), 10-day trash retention, per-backup logging, and a
+ * super-admin one-click zip download. Additive only — no business logic here.
+ *
+ * Mapping to the prompt: the "ERP Information spreadsheet" is the AUTH
+ * spreadsheet (CONFIG.AUTH_SPREADSHEET_ID), which is where ERP_System_Backups
+ * already lives by project convention (see batch1_createSystemSheets in
+ * Backup/06_Migration.js). The log sheet is created with its header row if
+ * it is somehow missing.
+ *
+ * Ground rules honored:
+ *  - Reads/copies sources only. No write/edit/delete call against any source
+ *    spreadsheet exists in this file — only DriveApp makeCopy / export reads.
+ *  - No spreadsheet IDs are hardcoded: BACKUP_SOURCES lists company registry
+ *    keys (stable identifiers, same as target_system values used across the
+ *    client), and IDs are resolved at runtime via getCompanySpreadsheetId_().
+ *  - One source failing never stops the others (per-source try/catch).
+ */
+
+/* ── Config: everything in one place. Adding a source = one line here. ── */
+var BACKUP_SOURCES = null;
+var BACKUP_FOLDER_NAME = 'ERP_Daily_Backups';
+var BACKUP_RETENTION_DAYS = 10;
+var BACKUP_LOG_SHEET = 'ERP_System_Backups';
+var BACKUP_LOG_HEADERS = ['backup_id', 'source', 'file_id', 'created_at'];
+/* google.script.run responses cap at ~50MB. Above this we refuse to build the
+ * download and say so, instead of silently truncating the archive. */
+var BACKUP_DOWNLOAD_MAX_BYTES = 40 * 1024 * 1024;
+
+/**
+ * Find the persistent backup folder by name; create it once if missing.
+ * getFoldersByName returns the existing folder on every later run, so this
+ * can never create a duplicate.
+ */
+function getOrCreateBackupFolder_() {
+  var it = DriveApp.getFoldersByName(BACKUP_FOLDER_NAME);
+  if (it.hasNext()) return it.next();
+  return DriveApp.createFolder(BACKUP_FOLDER_NAME);
+}
+
+/** Resolve BACKUP_SOURCES to [{ name, spreadsheetId }]. Never throws as a
+ *  whole: a company that fails to resolve is reported per-source instead. */
+function resolveBackupSources_() {
+  ensureCompaniesRegistered_();
+  var sources = Object.keys(COMPANY_REGISTRY || {}).map(function (companyKey) {
+    var cfg = COMPANY_REGISTRY[companyKey] || {};
+    return { companyKey: companyKey, name: cfg.name || cfg.displayName || companyKey };
+  });
+  return sources.map(function (entry) {
+    try {
+      var ssId = getCompanySpreadsheetId_(entry.companyKey);
+      if (!ssId) throw new Error('empty spreadsheet id');
+      return { name: entry.name, spreadsheetId: ssId, error: null };
+    } catch (e) {
+      return { name: entry.name, spreadsheetId: null, error: e.message };
+    }
+  });
+}
+
+/** Return the log sheet in the AUTH spreadsheet, creating it (with header)
+ *  only if it does not exist yet. Never touches any other spreadsheet. */
+function ensureBackupLogSheet_() {
+  var ss = getSpreadsheet_(CONFIG.AUTH_SPREADSHEET_ID);
+  var sheet = ss.getSheetByName(BACKUP_LOG_SHEET);
+  if (!sheet) {
+    sheet = ss.insertSheet(BACKUP_LOG_SHEET);
+    sheet.appendRow(BACKUP_LOG_HEADERS);
+    noteMutation_();
+  }
+  return sheet;
+}
+
+/** Append one log row under a single lock acquisition: the backup_id comes
+ *  from the canonical getNextIdUnderLock_ pattern (max(backup_id)+1), so no
+ *  second ID scheme is introduced. */
+function appendBackupLogRow_(source, fileId) {
+  return executeWithLock_(function () {
+    var sheet = ensureBackupLogSheet_();
+    var backupId = getNextIdUnderLock_(CONFIG.AUTH_SPREADSHEET_ID, BACKUP_LOG_SHEET, 'backup_id');
+    sheet.appendRow([backupId, source, fileId, new Date()]);
+    noteMutation_();
+    try { noteTableChange_(CONFIG.AUTH_SPREADSHEET_ID, BACKUP_LOG_SHEET); } catch (e) {}
+    return backupId;
+  });
+}
+
+/**
+ * Copy every configured source spreadsheet into the backup folder and log
+ * each success. Per-source try/catch: one failure is collected and the run
+ * continues with the rest.
+ */
+function runDailyBackup_() {
+  var folder = getOrCreateBackupFolder_();
+  var stamp = Utilities.formatDate(new Date(), 'Africa/Cairo', 'yyyy-MM-dd_HHmm');
+  var sources = resolveBackupSources_();
+  var backedUp = [];
+  var failures = [];
+  sources.forEach(function (src) {
+    if (!src.spreadsheetId) {
+      failures.push({ source: src.name, step: 'resolve', error: src.error || 'unresolvable' });
+      return;
+    }
+    var fileId = null;
+    try {
+      var copy = DriveApp.getFileById(src.spreadsheetId)
+        .makeCopy(src.name + '_Backup_' + stamp, folder);
+      fileId = copy.getId();
+    } catch (e) {
+      failures.push({ source: src.name, step: 'copy', error: e.message });
+      return;
+    }
+    try {
+      var backupId = appendBackupLogRow_(src.name, fileId);
+      backedUp.push({ source: src.name, backup_id: backupId, file_id: fileId });
+    } catch (e) {
+      failures.push({ source: src.name, step: 'log', file_id: fileId, error: e.message });
+    }
+  });
+  return { status: failures.length ? 'partial' : 'success', backedUp: backedUp, failures: failures };
+}
+
+/**
+ * Trash backup-folder files older than BACKUP_RETENTION_DAYS (recoverable
+ * from Drive Trash — not permanent deletion). Scoped strictly to the backup
+ * folder: source spreadsheets are never listed, let alone trashed.
+ */
+function purgeOldBackups_() {
+  var folder = getOrCreateBackupFolder_();
+  var cutoff = new Date().getTime() - BACKUP_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+  var trashed = [];
+  var files = folder.getFiles();
+  while (files.hasNext()) {
+    var f = files.next();
+    try {
+      if (f.getLastUpdated().getTime() < cutoff) {
+        trashed.push(f.getName());
+        f.setTrashed(true);
+      }
+    } catch (e) {}
+  }
+  return { status: 'success', trashed: trashed };
+}
+
+/**
+ * Single trigger entry point. Public only because time-driven triggers bind
+ * by function name — same fail-closed pattern as dailyCsvBackup in 07_Backup.
+ */
+function dailyBackupJob_(e) {
+  if (!isVerifiedTimeTrigger_(e, 'dailyBackupJob_')) throw new Error('Time-trigger invocation required.');
+  var backup = runDailyBackup_();
+  var purge = null;
+  /* Purge only after a fully successful backup day. */
+  if (backup.status === 'success') {
+    try {
+      purge = purgeOldBackups_();
+    } catch (e) {
+      purge = { status: 'error', error: e.message };
+    }
+  } else {
+    purge = { status: 'skipped', reason: 'backup day had failures; retention run deferred' };
+  }
+  return { status: backup.status, backup: backup, purge: purge };
+}
+
+/**
+ * One-time setup (run manually from the script editor, not on deploy):
+ * delete any existing trigger for the daily job, then schedule ~2 AM daily.
+ * Safe to re-run — it cannot create a duplicate.
+ */
+function installDailyBackupTrigger_() {
+  /* The ~2 AM schedule is only correct in Africa/Cairo. Fail the setup loudly
+   * if the project time zone was ever changed, instead of backing up silently
+   * at the wrong hour. (Confirmed: project time zone is Africa/Cairo.) */
+  try {
+    var tz = Session.getScriptTimeZone();
+    if (tz && tz !== 'Africa/Cairo') {
+      throw new Error('Project time zone is "' + tz + '" — set it to Africa/Cairo (Project Settings) before installing the 2 AM trigger.');
+    }
+  } catch (e) {
+    if (String(e.message || '').indexOf('Project time zone') === 0) throw e;
+  }
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === 'dailyBackupJob_') {
+      try { ScriptApp.deleteTrigger(t); } catch (e) {}
+    }
+  });
+  ScriptApp.newTrigger('dailyBackupJob_').timeBased().atHour(2).everyDays(1).create();
+  return { status: 'success', message: 'تم تثبيت مؤقت النسخ الاحتياطي اليومي (~2 صباحاً)' };
+}
+
+/** Route form of the one-time setup, super-admin only. */
+function installDailyBackupTriggerRoute_(payload, sessionToken, authUser) {
+  if (!(authUser && authUser.isSuperAdmin)) throw new Error('صلاحية غير كافية');
+  return installDailyBackupTrigger_();
+}
+
+/** Latest logged file_id per source (max created_at wins). Read-only. */
+function latestBackupFileIds_() {
+  var sheet = ensureBackupLogSheet_();
+  var values = sheet.getDataRange().getValues();
+  if (values.length < 2) return {};
+  var headers = values[0].map(function (h) { return String(h).trim().toLowerCase(); });
+  var iSource = headers.indexOf('source');
+  var iFile = headers.indexOf('file_id');
+  var iCreated = headers.indexOf('created_at');
+  var latest = {};
+  for (var r = 1; r < values.length; r++) {
+    var source = String(values[r][iSource] || '').trim();
+    var fileId = String(values[r][iFile] || '').trim();
+    if (!source || !fileId) continue;
+    var when = values[r][iCreated] instanceof Date
+      ? values[r][iCreated].getTime()
+      : new Date(values[r][iCreated]).getTime();
+    if (!latest[source] || when > latest[source].when) {
+      latest[source] = { file_id: fileId, when: when };
+    }
+  }
+  return latest;
+}
+
+/** Export one backed-up spreadsheet as .xlsx bytes via the Drive export
+ *  endpoint. A native Google Sheet has no usable getBlob() — UrlFetchApp
+ *  export is required (same note as the prompt's implementation detail). */
+function exportBackupAsXlsx_(fileId, name) {
+  var resp = UrlFetchApp.fetch(
+    'https://docs.google.com/spreadsheets/d/' + fileId + '/export?format=xlsx',
+    { headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() }, muteHttpExceptions: true }
+  );
+  if (resp.getResponseCode() !== 200) {
+    throw new Error('xlsx export failed for ' + name + ' (HTTP ' + resp.getResponseCode() + ')');
+  }
+  return resp.getBlob().setName(name + '.xlsx');
+}
+
+/**
+ * Super-admin route: bundle each source's latest backup xlsx into ONE zip
+ * and return it as base64 for a single browser download. Fail-closed on the
+ * role check before any export happens. Oversize archives are reported, not
+ * truncated.
+ */
+function sysDownloadBackupsRoute_(payload, sessionToken, authUser) {
+  if (!(authUser && authUser.isSuperAdmin)) throw new Error('صلاحية غير كافية');
+  var latest = latestBackupFileIds_();
+  var names = Object.keys(latest);
+  if (!names.length) throw new Error('لا توجد نسخ احتياطية مسجلة بعد');
+  var blobs = [];
+  var failures = [];
+  names.forEach(function (source) {
+    try {
+      blobs.push(exportBackupAsXlsx_(latest[source].file_id, source));
+    } catch (e) {
+      failures.push({ source: source, error: e.message });
+    }
+  });
+  if (!blobs.length) throw new Error('تعذر تصدير أي نسخة احتياطية');
+  var totalBytes = blobs.reduce(function (sum, b) { return sum + b.getBytes().length; }, 0);
+  if (totalBytes > BACKUP_DOWNLOAD_MAX_BYTES) {
+    return {
+      status: 'too_large',
+      bytes: totalBytes,
+      limit: BACKUP_DOWNLOAD_MAX_BYTES,
+      sources: names,
+      message: 'حجم النسخ يتجاوز حد الاستجابة الواحدة — يلزم تنزيل مجزأ'
+    };
+  }
+  var stamp = Utilities.formatDate(new Date(), 'Africa/Cairo', 'yyyy-MM-dd');
+  var zip = Utilities.zip(blobs, 'ERP_Backups_' + stamp + '.zip');
+  return {
+    status: 'success',
+    filename: 'ERP_Backups_' + stamp + '.zip',
+    base64: Utilities.base64Encode(zip.getBytes()),
+    sources: names,
+    failures: failures
+  };
+}

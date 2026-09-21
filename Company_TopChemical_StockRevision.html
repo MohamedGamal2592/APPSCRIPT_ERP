@@ -64,14 +64,15 @@
     fetchStock();
   }
 
-  /* The list endpoint returns only the newest 10 revisions unless `loadAll`
+  /* The list endpoint returns only the newest 20 revisions unless `loadAll`
      is passed. "عرض الكل" asks for the whole history; UIC.dataTable then
      paginates on its own, so "all" never means one enormous table. Called with
      no argument after a save or an edit, fetchStock keeps whichever view the
-     user is in rather than silently dropping them back to the newest 10. */
+     user is in rather than silently dropping them back to the newest 20. */
   var __loadedAll = false;
 
   function showAllStock() { fetchStock(true); }
+  function showLatestStock() { fetchStock(false); }
 
   function fetchStock(loadAll) {
     if (arguments.length) __loadedAll = !!loadAll;
@@ -227,12 +228,8 @@
     body.innerHTML = (CAN_WRITE
       ? '<div style="display:flex;justify-content:flex-end;margin-bottom:12px;"><button id="stock-add-btn" class="btn btn-primary" onclick="openAddModal()">+ إضافة جرد</button></div>'
       : '') +
+      UIC.showAllBar({ loadedAll: __loadedAll, total: (window.__stock || []).length, showAll: 'showAllStock()', showLatest: 'showLatestStock()' }) +
       '<div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap;">' +
-        '<span style="color:var(--text-muted);font-size:12px;">' +
-          (__loadedAll
-            ? 'عرض كل سجلات الجرد (' + (window.__stock || []).length + ')'
-            : 'عرض أحدث ' + (window.__stock || []).length + ' سجل') + '</span>' +
-        (__loadedAll ? '' : '<button id="stock-show-all" class="btn btn-outline" onclick="showAllStock()">عرض الكل</button>') +
         '<label style="font-size:13px;">من:</label><input id="filter-from" type="date" class="input" style="width:150px;" value="' + esc((document.getElementById('filter-from') || {}).value || '') + '">' +
         '<label style="font-size:13px;">إلى:</label><input id="filter-to" type="date" class="input" style="width:150px;" value="' + esc((document.getElementById('filter-to') || {}).value || '') + '">' +
         '<button class="btn btn-outline" onclick="renderStock()">فلتر</button>' +

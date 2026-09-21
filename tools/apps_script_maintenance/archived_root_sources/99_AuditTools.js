@@ -271,6 +271,6 @@ function deactivateAuditTestUser_() {
     systemPatchByBusinessKey_('ERP_Users', 'email', AUDIT_TEST_EMAIL, { status: 'inactive' });
     return;
   }
-  updateRowByCriteria_(getSheet_('ERP_Users', CONFIG.AUTH_SPREADSHEET_ID),
+  patchRowByCriteria_(getSheet_('ERP_Users', CONFIG.AUTH_SPREADSHEET_ID),
     'email', AUDIT_TEST_EMAIL, { status: 'inactive' });
 }

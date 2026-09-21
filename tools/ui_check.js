@@ -233,7 +233,7 @@ function definedClasses() {
     let m;
     while ((m = re.exec(css)) !== null) set[m[1]] = true;
   });
-  /* 03_Security.js emits the per-company theme stylesheets as JS strings, so
+  /* Code.js emits the per-company theme stylesheets as JS strings, so
      those selectors are only visible through the same concatenation reader. */
   S.jsFiles().forEach(function (f) {
     const css = S.allCss(S.read(f));

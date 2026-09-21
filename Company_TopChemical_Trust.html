@@ -109,6 +109,12 @@
     if (SELECTED_ACCOUNT) selectAccount(SELECTED_ACCOUNT);
   }
 
+  var TRUST_ALL = false;
+  function toggleTrustAll() {
+    TRUST_ALL = !TRUST_ALL;
+    if (SELECTED_ACCOUNT) selectAccount(SELECTED_ACCOUNT);
+  }
+
   function selectAccount(account) {
     SELECTED_ACCOUNT = account;
     var cards = document.querySelectorAll('.trust-card');
@@ -116,7 +122,7 @@
       c.classList.toggle('active', c.textContent.indexOf(account) !== -1);
     });
     UI.showSpinner();
-    companyCall('get_trust_movements', { account: account })
+    companyCall('get_trust_movements', TRUST_ALL ? { account: account, loadAll: true } : { account: account })
       .then(function (r) {
         window.__movements = r.movements || [];
         renderMovements(window.__movements, r.account);
@@ -161,11 +167,13 @@
       '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">' +
       '<h3 style="margin:0;">حساب: ' + FMT.escape(account) + '</h3>' + addBtn +
       '</div>' +
+      UIC.showAllBar({ loadedAll: TRUST_ALL, showAll: 'toggleTrustAll()', showLatest: 'toggleTrustAll()' }) +
       UIC.dataTable('movements-table', {
         /* [RT-1] The list endpoint caps at the newest rows unless `loadAll` is
            passed, and the search box filters only what is in memory — so the
            table says which records the box actually searches. */
-        truncated: true,
+        truncated: !TRUST_ALL,
+        showAll: 'toggleTrustAll()',
         title: 'حركات الحساب',
         headers: headers,
         rows: rows,
@@ -250,7 +258,7 @@
               window.__accounts.push({ account: r.record.account, in_total: r.record.movement_type === 'عهدة' ? r.record.value : 0, out_total: r.record.movement_type === 'مصروف' ? r.record.value : 0, net: r.record.movement_type === 'عهدة' ? r.record.value : -r.record.value, count: 1 });
             }
             renderAccounts(window.__accounts);
-            companyCall('get_trust_movements', { account: r.record.account, limit: 10 }).then(function (res) {
+            companyCall('get_trust_movements', { account: r.record.account, limit: 20 }).then(function (res) {
               window.__movements = res.movements || [];
               renderMovements(window.__movements, res.account);
             }).catch(function () { refreshWithAccount(targetAccount, true); });

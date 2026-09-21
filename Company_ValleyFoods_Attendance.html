@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="ar" dir="rtl">
 <head>
   <meta charset="utf-8">
@@ -55,6 +55,23 @@
     .vf-att-toolbar .vf-tb-group { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
     .vf-att-toolbar .vf-tb-sep   { display: none; width: 1px; align-self: stretch; background: var(--border-color, #e5e7eb); }
     .vf-att-toolbar input[type=date] { width: 140px; }
+    #vf-more-toggle.btn.nav-dropdown-toggle {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-color);
+      color: var(--text-main);
+      border-radius: var(--radius-lg);
+      padding: 10px 20px;
+      box-shadow: var(--shadow-sm);
+      min-height: 48px;
+      font-weight: 600;
+    }
+    #vf-more-toggle.btn.nav-dropdown-toggle:hover,
+    #vf-more-toggle.btn.nav-dropdown-toggle.open {
+      background: var(--bg-subtle);
+      border-color: var(--brand-primary);
+      color: var(--brand-primary);
+      transform: translateY(-1px);
+    }
     .vf-analysis-box { border: 2px solid var(--border-color, #e5e7eb); border-radius: 8px; padding: 14px; background: var(--bg-subtle, #f9fafb); }
     .vf-analysis-box.confident { border-color: #10b981; background: var(--success-bg, #f0fdf4); }
     .vf-analysis-box.ambiguous { border-color: #f59e0b; background: var(--warning-bg, #fffbeb); }
@@ -101,6 +118,13 @@
       .vf-cal-day   { font-size: 15px; }
       .vf-cal-stat  { font-size: 12px; }
     }
+    /* الناقص (exceptions) modal: XL+ wide/tall for the 8-col table + row
+       actions. Scoped to #vf-exc-modal so the other xl modals on this page
+       (review/report) keep the shared 1100px cap. NOTE (L-8): no max-width
+       *property* in <style> — the cap is lifted via inline style in
+       openExceptionsModal instead. */
+    #vf-exc-modal .modal { width: min(94vw, 1400px); }
+    #vf-exc-modal .modal-body { max-height: 85vh; min-height: 50vh; overflow-y: auto; }
   </style>
 
   <script>
@@ -210,7 +234,7 @@
           (CAN_WRITE ? '<button class="btn btn-primary" id="vf-open-import">⬆️ رفع كشف</button>' : '') +
           '<div class="nav-dropdown">' +
             '<button type="button" class="btn btn-outline nav-dropdown-toggle" id="vf-more-toggle" ' +
-              'aria-haspopup="true" aria-expanded="false">المزيد ▾</button>' +
+              'aria-haspopup="true" aria-expanded="false">المزيد <span class="nav-dropdown-caret" aria-hidden="true">▾</span></button>' +
             '<div class="nav-dropdown-menu" id="vf-more-menu">' + moreItems + '</div>' +
           '</div>' +
         '</div>' +
@@ -224,6 +248,8 @@
       return function (e) {
         var menu = document.getElementById('vf-more-menu');
         if (menu && menu.classList.contains('open')) UIC.toggleDropdown('vf-more-menu');
+        var moreToggle = document.getElementById('vf-more-toggle');
+        if (moreToggle) moreToggle.setAttribute('aria-expanded', 'false');
         fn(e);
       };
     }
@@ -358,14 +384,13 @@
           ])
         ];
       });
-      var html = UIC.dataTable('vf-sessions-table-id', { headers: headers, rows: rows, pageSize: 50 });
-      if (!TABLE_ALL && SESSIONS_TOTAL > SESSIONS.length) {
-        html += '<div style="margin-top:8px;"><button class="btn btn-outline" onclick="ATT_PAGE.loadAllDays()">عرض الكل (' + SESSIONS_TOTAL + ')</button></div>';
-      }
+      var html = UIC.showAllBar({ loadedAll: TABLE_ALL, latestN: 30, total: SESSIONS_TOTAL, showAll: 'ATT_PAGE.loadAllDays()', showLatest: 'ATT_PAGE.showLatestDays()' }) +
+        UIC.dataTable('vf-sessions-table-id', { headers: headers, rows: rows, pageSize: 50 });
       container.innerHTML = html;
     }
 
     function loadAllDays() { TABLE_ALL = true; loadSessions(); }
+    function showLatestDays() { TABLE_ALL = false; loadSessions(); }
 
     function shiftMonth(delta) {
       var m = VIEW_MONTH + delta;
@@ -989,13 +1014,18 @@
         footer: '<button id="vf-batches-all-btn" class="btn btn-outline">عرض الكل</button>'
       });
       var batchesAllBtn = document.getElementById('vf-batches-all-btn');
-      if (batchesAllBtn) batchesAllBtn.addEventListener('click', function () { loadBatches(true); });
+      if (batchesAllBtn) batchesAllBtn.addEventListener('click', function () { toggleBatches(); });
+      BATCHES_ALL = false;
       renderBatchesTable();
       loadBatches();
     }
 
+    var BATCHES_ALL = false;
+    function toggleBatches() { loadBatches(!BATCHES_ALL); }
+
     function loadBatches(loadAll) {
-      companyCall('get_attendance_batches', loadAll ? { loadAll: true } : { limit: 10 })
+      if (loadAll !== undefined) BATCHES_ALL = !!loadAll;
+      companyCall('get_attendance_batches', BATCHES_ALL ? { loadAll: true } : { limit: 20 })
         .then(function (resp) {
           BATCHES = (resp && resp.batches) || [];
           BATCHES_TOTAL = (resp && resp.total) || BATCHES.length;
@@ -1034,7 +1064,13 @@
           acts.length ? UIC.actionBtns(acts) : ''
         ];
       });
-      container.innerHTML = UIC.dataTable('vf-batches-table-id', { headers: headers, rows: rows, pageSize: 50 });
+      container.innerHTML = UIC.showAllBar({ loadedAll: BATCHES_ALL, total: BATCHES_TOTAL, showAll: 'ATT_PAGE.toggleBatches()', showLatest: 'ATT_PAGE.toggleBatches()' }) +
+        UIC.dataTable('vf-batches-table-id', { headers: headers, rows: rows, pageSize: 50 });
+      var allBtn = document.getElementById('vf-batches-all-btn');
+      if (allBtn) {
+        allBtn.textContent = BATCHES_ALL ? '📄 عرض آخر 20 سجل فقط' : '📊 عرض الكل';
+        allBtn.onclick = function () { toggleBatches(); };
+      }
     }
 
     /* ================= MANUAL ENTRY ================= */
@@ -1290,6 +1326,10 @@
         body: '<div id="vf-exc-body"></div>',
         footer: false
       });
+      /* Lift the shared modal-xl 1100px cap for this dialog only (inline, so
+         the L-8 <style> lint stays green). */
+      var excDlg = document.querySelector('#vf-exc-modal .modal');
+      if (excDlg) excDlg.style.maxWidth = '1400px';
       loadExceptions();
     }
 
@@ -1677,7 +1717,29 @@
       var openImportBtn = document.getElementById('vf-open-import');
       if (openImportBtn) openImportBtn.addEventListener('click', openImportModal);
       var moreToggle = document.getElementById('vf-more-toggle');
-      if (moreToggle) moreToggle.addEventListener('click', function (e) { UIC.toggleDropdown('vf-more-menu', e); });
+      if (moreToggle) {
+        moreToggle.addEventListener('click', function (e) {
+          UIC.toggleDropdown('vf-more-menu', e);
+          var menu = document.getElementById('vf-more-menu');
+          var isOpen = !!(menu && menu.classList.contains('open'));
+          moreToggle.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+        });
+      }
+      document.addEventListener('click', function (e) {
+        var dd = e.target && e.target.closest ? e.target.closest('.nav-dropdown') : null;
+        if (!dd && moreToggle) {
+          moreToggle.setAttribute('aria-expanded', 'false');
+        }
+      });
+      document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape') {
+          var menu = document.getElementById('vf-more-menu');
+          if (menu && menu.classList.contains('open')) {
+            UIC.toggleDropdown('vf-more-menu');
+            if (moreToggle) moreToggle.setAttribute('aria-expanded', 'false');
+          }
+        }
+      });
 
       var manualAddBtn = document.getElementById('vf-manual-add-btn');
       if (manualAddBtn) manualAddBtn.addEventListener('click', moreItem(function () { showManualEntryModal(); }));
@@ -1712,6 +1774,8 @@
       openSessionDetail: openSessionDetail,
       saveNewSession: saveNewSession,
       loadAllDays: loadAllDays,
+      showLatestDays: showLatestDays,
+      toggleBatches: toggleBatches,
       addPunchForDay: addPunchForDay,
       showReviewFix: showReviewFix,
       saveReviewFix: saveReviewFix,

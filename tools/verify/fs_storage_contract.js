@@ -35,7 +35,7 @@ const sandbox = {
   }
 };
 vm.createContext(sandbox);
-vm.runInContext(fs.readFileSync(path.join(root, '02_Firestore.js'), 'utf8'), sandbox, { filename: '02_Firestore.js' });
+vm.runInContext(fs.readFileSync(path.join(root, 'Code.js'), 'utf8'), sandbox, { filename: 'Code.js' });
 
 const config = { projectId: 'erp-test', databaseId: '(default)' };
 const encoded = sandbox.firestoreEncodeValue_({

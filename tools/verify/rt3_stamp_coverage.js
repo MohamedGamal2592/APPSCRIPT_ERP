@@ -70,7 +70,7 @@ const FILES = [
 
 /* ── 1. The primitive itself ─────────────────────────────────────────────── */
 
-const DA = fs.readFileSync(path.join(ROOT, '02_DataAccess.js'), 'utf8');
+const DA = fs.readFileSync(path.join(ROOT, 'Code.js'), 'utf8');
 const daCode = mask(DA);
 
 const nm = daCode.slice(daCode.indexOf('function noteMutation_'));

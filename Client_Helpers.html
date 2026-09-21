@@ -154,7 +154,10 @@ API._requestGuard = (function () {
     if (!data || typeof data !== 'object' || Array.isArray(data)) throw { status:'error', message:'Invalid write payload' };
     var clean = JSON.parse(JSON.stringify(data)); delete clean.__request_id; delete clean.__request_owner;
     var session = API.getSession ? API.getSession() || {} : {};
-    var who = String((session.user && session.user.email) || session.email || '').trim().toLowerCase();
+    /* AUTH_USER_EMAIL is injected only after doGet has authenticated the page.
+     * Prefer it over browser storage: on iPhone the Apps Script iframe can have
+     * the valid URL session but no access to the login page's localStorage. */
+    var who = String(window.AUTH_USER_EMAIL || (session.user && session.user.email) || session.email || '').trim().toLowerCase();
     if (!who) throw {status:'error',code:'REQUEST_LOGIN_REQUIRED',message:'أعد تسجيل الدخول لتثبيت هوية الطلب قبل الحفظ.'};
     if (data.__request_owner && data.__request_owner !== who) throw {status:'error',code:'REQUEST_OWNER_MISMATCH',uncertain:true,message:'هذا الطلب المؤجل يخص مستخدمًا آخر. سجّل الدخول بالحساب الأصلي لمراجعته.'};
     var signature = hash(JSON.stringify([who,payload.target_system,payload.module_action])) + ':' + hash(canonical(clean));
@@ -194,7 +197,57 @@ API._requestGuard = (function () {
       if (pending[entry.signature] && pending[entry.signature].id === entry.id) { delete pending[entry.signature]; persist(pending); }
     } catch (e) { /* Keeping a receipt after success is safer than losing an uncertain one. */ }
   }
-  return {prepare:prepare,finish:finish,formData:formData};
+  /* Bounded recovery poll after a lost response. Keeps the SAME request ID and
+   * asks the server for its receipt state (request_status route — read-only,
+   * never a mutation). Resolves {outcome:'done'|'failed', ...} when the server
+   * proves an outcome, rejects {outcome:'unknown'|'review'} when the budget is
+   * exhausted. Never mints a new ID, never advises a replacement request.
+   * pollDelays is exposed so verify suites can shrink the backoff. */
+  var RECOVER_POLL_MS_ = [700, 1300, 2500];
+  function statusCall(meta, sessionToken) {
+    return new Promise(function (resolve) {
+      var settled = false;
+      function done(v) { if (!settled) { settled = true; resolve(v); } }
+      try {
+        google.script.run
+          .withSuccessHandler(function (r) { done({ ok: true, body: r }); })
+          .withFailureHandler(function () { done({ ok: false }); })
+          .apiRouter({ action: 'request_status',
+            payload: { target_system: meta.target_system, module_action: meta.module_action, request_id: meta.requestId },
+            sessionToken: sessionToken });
+        /* A status poll that never answers is evidence of nothing; treat it
+           as a missed round and let the next attempt run. */
+        setTimeout(function () { done({ ok: false }); }, 10000);
+      } catch (e) { done({ ok: false }); }
+    });
+  }
+  function recoverAfterLoss(meta, sessionToken) {
+    var delays = RECOVER_POLL_MS_;
+    try {
+      if (window.UIC && UIC.toast) UIC.toast('جاري التحقق من نتيجة الحفظ…', 'info');
+    } catch (e) {}
+    return new Promise(function (resolve, reject) {
+      var attempt = 0;
+      function next() {
+        statusCall(meta, sessionToken).then(function (r) {
+          var b = (r && r.ok && r.body) || null;
+          var st = b && b.status;
+          if (st === 'done' && b.result) { resolve({ outcome: 'done', result: b.result }); return; }
+          if (st === 'failed' && b.error) { resolve({ outcome: 'failed', error: b.error }); return; }
+          if (st === 'review_required') { reject({ outcome: 'review', requestId: meta.requestId }); return; }
+          /* pending, unknown, or a lost poll round: keep checking inside the
+             budget, then hand back an actionable uncertain outcome. */
+          if (attempt < delays.length) {
+            setTimeout(next, delays[attempt++]);
+          } else {
+            reject({ outcome: 'unknown', requestId: meta.requestId });
+          }
+        });
+      }
+      next();
+    });
+  }
+  return {prepare:prepare,finish:finish,formData:formData,recoverAfterLoss:recoverAfterLoss,pollDelays:RECOVER_POLL_MS_};
 })();
 
 API.call = function (action, payload, sessionToken) {
@@ -206,9 +259,55 @@ API.call = function (action, payload, sessionToken) {
   var wire = new Promise(function (resolve, reject) {
     var request = { action: action, payload: intent ? JSON.parse(JSON.stringify(payload)) : payload }; 
     if (sessionToken) request.sessionToken = sessionToken;
+    var reconcileReplayUsed = false;
+    /* Recovery metadata for a guarded write: the poll reuses this exact
+       identity and never invents another one. */
+    var recoverMeta = (intent && payload && payload.target_system && payload.module_action) ?
+      { target_system: payload.target_system, module_action: payload.module_action, requestId: intent.id } : null;
+    function uncertainFailure(message) {
+      var failure = {
+        status: 'error', transport: true, uncertain: !!intent,
+        checkStatus: !!intent, requestId: intent ? intent.id : undefined,
+        message: message
+      };
+      API._requestGuard.finish(intent, null, failure);
+      reject(failure);
+    }
+    /* A transport loss or an in-progress reply starts the bounded status poll
+       before surfacing anything destructive. The red uncertain message is the
+       last resort, and it carries the request ID plus a check-status flag so
+       the UI can offer reconciliation instead of a replacement request. */
+    function pollThenUncertain(fallbackMessage) {
+      if (!recoverMeta) {
+        uncertainFailure(fallbackMessage);
+        return;
+      }
+      API._requestGuard.recoverAfterLoss(recoverMeta, sessionToken).then(function (rc) {
+        if (rc.outcome === 'done') {
+          API._requestGuard.finish(intent, rc.result, null);
+          resolve(rc.result);
+        } else {
+          API._requestGuard.finish(intent, rc.error, null);
+          reject(rc.error);
+        }
+      }, function (rc) {
+        var msg = (rc && rc.outcome === 'review')
+          ? 'تعذر تأكيد نتيجة الطلب — بانتظار مراجعة المسؤول. لا تنشئ طلبًا بديلًا؛ رقم الطلب: ' + recoverMeta.requestId
+          : fallbackMessage;
+        uncertainFailure(msg);
+      });
+    }
 
-    google.script.run
-      .withSuccessHandler(function (result) {
+    /* A server-side uncertain result is different from a lost response: the
+       receipt is already durable and marked uncertain. Re-submit the exact
+       same envelope once so actions that explicitly support request-id
+       recovery can inspect their business markers and either return the
+       original success or safely finish an interrupted staged write. Actions
+       without recovery support remain blocked by the server guard, so this
+       can never turn into a blind second mutation. */
+    function send() {
+      google.script.run
+        .withSuccessHandler(function (result) {
         if (result && result.notApplied === true) {
           /* Server-confirmed non-mutation: release the retained request so a
              corrected save starts clean, then reject for the toast. */
@@ -224,23 +323,40 @@ API.call = function (action, payload, sessionToken) {
           } else if (result.code === 'SYSTEM_DISABLED') {
             if (window.UIC && UIC.navTo) UIC.navTo(null, _s + '?action=login&shutdown=1'); else window.location.href = _s + '?action=login&shutdown=1';
           }
+          if (result.code === 'REQUEST_IN_PROGRESS' && recoverMeta) {
+            pollThenUncertain(result.message || 'الطلب قيد المعالجة.');
+            return;
+          }
+          if (result.code === 'REQUEST_UNCERTAIN' && recoverMeta && !reconcileReplayUsed) {
+            reconcileReplayUsed = true;
+            try {
+              if (window.UIC && UIC.toast) UIC.toast('جاري مطابقة نتيجة الحفظ واستكمالها بأمان…', 'info');
+            } catch (e) {}
+            send();
+            return;
+          }
+          if (result.code === 'REQUEST_UNCERTAIN' && recoverMeta) {
+            result.checkStatus = true;
+            result.requestId = recoverMeta.requestId;
+          }
           API._requestGuard.finish(intent, null, result);
           reject(result);
         } else {
           API._requestGuard.finish(intent, result, null);
           resolve(result);
         }
-      })
-      .withFailureHandler(function (err) {
-        /* The response can be lost AFTER commit; reuse the original request ID. */
-        var failure = {
-          status: 'error', transport: true, uncertain: !!intent,
-          message: intent ? 'انقطع الاتصال؛ قد يكون الطلب حُفظ. أعد المحاولة بنفس الطلب ولا تنشئ طلبًا بديلًا قبل التحقق.' : (err && err.message ? err.message : 'خطأ غير متوقع')
-        };
-        API._requestGuard.finish(intent, null, failure);
-        reject(failure);
-      })
-      .apiRouter(request);
+        })
+        .withFailureHandler(function (err) {
+        /* transport: true is set inside uncertainFailure below: ONLY this
+         * failure handler marks a failure that never reached a handler, so
+         * the retry decision stays exact — a handler that rejected is never
+         * retried. The response can be lost AFTER commit; reuse the original
+         * request ID via the bounded status poll. */
+          pollThenUncertain(intent ? 'انقطع الاتصال؛ قد يكون الطلب حُفظ. أعد المحاولة بنفس الطلب ولا تنشئ طلبًا بديلًا قبل التحقق.' : (err && err.message ? err.message : 'خطأ غير متوقع'));
+        })
+        .apiRouter(request);
+    }
+    send();
   });
   if (intent) intent.promise = wire;
   wire.catch(function (err) {
@@ -439,6 +555,53 @@ FMT.datetime = function (d) {
   var dt = new Date(d);
   if (isNaN(dt.getTime())) return String(d);
   return dt.toLocaleString('en-GB');
+};
+
+/* As-stored wall-date helpers (no UTC shift). Date-only strings are opaque:
+ * 'yyyy-MM-dd...' is returned as-is without constructing a Date, so a
+ * server-canonical '2026-09-19' can never become '2026-09-18'. Anything else
+ * is rendered with LOCAL getters, which recover the script-timezone wall date
+ * from a UTC ISO string when client TZ matches script TZ. */
+FMT.dateOnly = function (v) {
+  if (v === null || v === undefined || v === '') return '';
+  if (Object.prototype.toString.call(v) === '[object Date]' && !isNaN(v.getTime())) {
+    var p0 = function (n) { return n < 10 ? '0' + n : '' + n; };
+    return v.getFullYear() + '-' + p0(v.getMonth() + 1) + '-' + p0(v.getDate());
+  }
+  var s = String(v).trim();
+  var m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (m) return m[1] + '-' + m[2] + '-' + m[3];
+  m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (m) {
+    var dd = ('0' + m[1]).slice(-2), mm = ('0' + m[2]).slice(-2);
+    return m[3] + '-' + mm + '-' + dd;
+  }
+  var d = new Date(s);
+  if (isNaN(d.getTime())) return s;
+  var p = function (n) { return n < 10 ? '0' + n : '' + n; };
+  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+};
+
+FMT.dateTimeLocal = function (v) {
+  if (v === null || v === undefined || v === '') return '';
+  var s = String(v instanceof Date ? '' : v).trim();
+  var m = s.match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})/);
+  if (m) return m[1] + '-' + m[2] + '-' + m[3] + ' ' + m[4] + ':' + m[5];
+  var d = (v instanceof Date) ? v : new Date(s || v);
+  if (isNaN(d.getTime())) return String(v);
+  var p = function (n) { return n < 10 ? '0' + n : '' + n; };
+  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+};
+
+FMT.timeOnly = function (v) {
+  if (v === null || v === undefined || v === '') return '';
+  var s = String(v instanceof Date ? '' : v).trim();
+  var m = s.match(/(\d{2}):(\d{2})/);
+  if (m && !(v instanceof Date)) return m[1] + ':' + m[2];
+  var d = (v instanceof Date) ? v : new Date(s || v);
+  if (isNaN(d.getTime())) return String(v);
+  var p = function (n) { return n < 10 ? '0' + n : '' + n; };
+  return p(d.getHours()) + ':' + p(d.getMinutes());
 };
 
 FMT.number = function (n) {
@@ -893,4 +1056,3 @@ function uname_(email) {
 }
 
 </script>
-

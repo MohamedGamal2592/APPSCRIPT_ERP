@@ -119,6 +119,12 @@ function world() {
     canCompanyAction_: () => true,
     checkPageAccess_: () => {},
     getCompanySpreadsheetId_: id => id,
+    /* Ported from Code.js (gap-closure Phase 3): executeCompanyAction_
+       now resolves the tenant centrally. Self-contained (vm sandboxes cannot
+       see sibling stubs by bare name): super-admins target the payload system,
+       everyone else is pinned to their own company; getCompanySpreadsheetId_
+       is the identity stub here so dbId is the company key the sheet stubs use. */
+    resolveDbId_: (authUser, payload) => { if (!authUser) throw Error('denied'); if (authUser.isSuperAdmin) { const t = payload && payload.target_system; if (!t) throw Error('denied'); return String(t); } const c = authUser.company; if (!c) throw Error('denied'); if (payload && payload.target_system && payload.target_system !== c) throw Error('denied'); return String(c); },
     Drive: {
       Files: {
         list: args => driveList(args.q),
@@ -348,4 +354,48 @@ function world() {
   assert.strictEqual(w.driveFiles.length, 1, 'exactly one file across the lost response');
 }
 
-console.log('tc_registration_upload_recovery: PASS (one file + one row, lost-response recovery, finalize recovery, confirmed validation failures, blocked ambiguity, single-flight concurrency, ID conflicts, folder-scoped lookup, REST fallback tagging, end-to-end threading)');
+/* 11. Every current Top Chemical attachment destination is authorized from
+ * its submitted sheet. This exercises the real full-module dispatcher rather
+ * than the extracted upload handler used above. */
+{
+  const auth = {
+    console,
+    ERP_MESSAGES: { NOT_AUTHORIZED: 'DENIED' },
+    getCompanySpreadsheetId_: () => 'tc-db',
+    unifiedCheck_: (user, company, page, need) => {
+      if (!user || user.company !== company) return false;
+      const grants = (user.authorizedPages && user.authorizedPages[page]) || [];
+      return need === 'write' ? grants.includes('write') || grants.includes('full') : grants.length > 0;
+    }
+  };
+  vm.createContext(auth);
+  vm.runInContext(tcSource, auth, { filename: 'Company_TopChemical_Actions.js' });
+  const destinations = {
+    products: 'tc_products',
+    registration_papers: 'tc_registration_papers',
+    purchasing_support_data: 'tc_carton_sizes',
+    legal_importation_follow: 'tc_import_follow',
+    legal_purchasing_costing: 'tc_budget_inputs',
+    legal_product_purchasing: 'tc_budget_inputs',
+    legal_manufacture: 'tc_budget_manufacture',
+    customs_office_transactions: 'tc_customs_office'
+  };
+  function direct(user, sheet) {
+    auth.__user = user;
+    auth.__payload = { module_action: 'add_upload_file', data: { sheet, filename: '' } };
+    try { vm.runInContext("TopChemical.dispatch_(__payload, __user, 'tc-db', {})", auth); }
+    catch (error) { return error; }
+    return null;
+  }
+  Object.keys(destinations).forEach(sheet => {
+    const page = destinations[sheet];
+    const error = direct({ company: '3fe1b5cb67b7223e', authorizedPages: { [page]: ['write'] } }, sheet);
+    assert(error && error.message === 'اسم الملف مطلوب', sheet + ' reaches its authorized upload handler');
+  });
+  const fullError = direct({ company: '3fe1b5cb67b7223e', authorizedPages: { tc_products: ['full'] } }, 'products');
+  assert(fullError && fullError.message === 'اسم الملف مطلوب', 'full grant includes Top Chemical upload/write');
+  const crossed = direct({ company: '3fe1b5cb67b7223e', authorizedPages: { tc_products: ['write'] } }, 'registration_papers');
+  assert(crossed && crossed.message === 'DENIED', 'a grant for one Top Chemical attachment page cannot upload to another');
+}
+
+console.log('tc_registration_upload_recovery: PASS (all TC attachment destinations, one file + one row, lost-response recovery, finalize recovery, confirmed validation failures, blocked ambiguity, single-flight concurrency, ID conflicts, folder-scoped lookup, REST fallback tagging, end-to-end threading)');

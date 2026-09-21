@@ -181,8 +181,11 @@ async function render(canSeeCost) {
     'print by-products column gated');
 
   console.log('\nS6 — the save payload no longer carries unit_cost\n');
-  check(VIEW.indexOf('return { item: f.item, item_code: f.item_code, qty: f.qty };') !== -1,
-    'footers are sent without unit_cost (S1 resolves it server-side)');
+  /* The UID contract (unchanged-row identity) rides on the same object: the
+     security property is the ABSENCE of unit_cost, which S1 resolves
+     server-side. */
+  check(VIEW.indexOf("return { uid: f.uid || '', item: f.item, item_code: f.item_code, qty: f.qty };") !== -1,
+    'footers carry uid but no unit_cost (S1 resolves it server-side)');
   check(VIEW.indexOf('qty: f.qty, unit_cost: f.unit_cost }') === -1,
     'the old payload shape is gone');
 

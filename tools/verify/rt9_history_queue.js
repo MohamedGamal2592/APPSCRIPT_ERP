@@ -28,7 +28,7 @@ const path = require('path');
 const vm = require('vm');
 
 const ROOT = path.resolve(__dirname, '..', '..');
-const DA = fs.readFileSync(path.join(ROOT, '02_DataAccess.js'), 'utf8');
+const DA = fs.readFileSync(path.join(ROOT, 'Code.js'), 'utf8');
 
 let failed = 0;
 function check(ok, label, extra) {

@@ -239,7 +239,7 @@ async function openPurchasingForm(viewOnly) {
         scriptlets: { CURRENT_ACTION: "'tl_sales'" },
         call: (action, data) => {
           if (action === 'get_sales_headers') {
-            return { status: 'success', headers: invoices(data && data.loadAll ? 137 : 10) };
+            return { status: 'success', headers: invoices(data && data.loadAll ? 137 : 20) };
           }
           return { status: 'success' };
         }
@@ -250,14 +250,15 @@ async function openPurchasingForm(viewOnly) {
     }
     const few = await renderSales(false);
     const hFew = few.html('tl-content');
-    check(hFew.indexOf('عرض الكل') !== -1, 'the default view offers عرض الكل');
-    check(hFew.indexOf('عرض أحدث 10 فاتورة') !== -1, 'and says how many it is showing');
-    check(hFew.indexOf('_pager') === -1, 'no pager for 10 rows');
+    check(hFew.indexOf('📊 عرض الكل') !== -1, 'the default view offers عرض الكل');
+    check(hFew.indexOf('آخر 20 سجل') !== -1, 'and says which window it is showing');
+    check(hFew.indexOf('_pager') === -1, 'no pager for 20 rows');
 
     const all = await renderSales(true);
     const hAll = all.html('tl-content');
-    check(hAll.indexOf('عرض كل الفواتير (137)') !== -1, 'showing all says so, with the count');
-    check(hAll.indexOf('عرض الكل') === -1, 'and stops offering the button it already honoured');
+    check(hAll.indexOf('الوضع: <b>عرض الكل</b>') !== -1, 'showing all says so, with the count');
+    check(hAll.indexOf('showAllSales()') === -1, 'and stops offering the button it already honoured');
+    check(hAll.indexOf('📄 عرض آخر 20 سجل فقط') !== -1, 'offering the way back instead');
     check(hAll.indexOf('id="sales-table_pager"') !== -1, 'a pager appears for 137 rows');
     const store = all.__dtStore && all.__dtStore['sales-table'];
     check(!!store && store.pageSize === 50, 'page size is 50');

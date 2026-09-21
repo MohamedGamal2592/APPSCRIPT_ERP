@@ -236,7 +236,7 @@ const BLOCK_END = SRC.indexOf('/* ---------- SALES INVOICES', BLOCK_START);
 check(BLOCK_START !== -1 && BLOCK_END > BLOCK_START,
   'the handler block can be located in the real source');
 
-const captured = { written: null, sheetsTouched: [], audit: null };
+const captured = { written: null, sheetsTouched: [], audit: null, productReads: 0 };
 
 if (BLOCK_START !== -1 && BLOCK_END > BLOCK_START) {
   const block = SRC.slice(BLOCK_START, BLOCK_END);
@@ -309,6 +309,7 @@ if (BLOCK_START !== -1 && BLOCK_END > BLOCK_START) {
     getHeaders_: () => EXPECTED_HEADERS.slice(),
     getAllRecords_: (dbId, name) => {
       if (!TABLES[name]) throw new Error('no fixture for ' + name);
+      if (name === 'valley_products') captured.productReads++;
       /* hand out copies: a handler that mutated a record would not corrupt the
          next read, exactly as the real per-execution cache behaves */
       return TABLES[name].map(r => Object.assign({}, r));
@@ -355,7 +356,7 @@ if (BLOCK_START !== -1 && BLOCK_END > BLOCK_START) {
     EXPECTED_HEADERS.forEach((h, c) => { o[h] = captured.written.matrix[i][c]; });
     return o;
   }
-  function reset() { captured.written = null; captured.audit = null; }
+  function reset() { captured.written = null; captured.audit = null; captured.productReads = 0; }
 
   /* -- 8a. availability arithmetic -- */
   const avail = H.avail('db');
@@ -397,6 +398,7 @@ if (BLOCK_START !== -1 && BLOCK_END > BLOCK_START) {
   check(a.asset_target === '', 'asset_target is written blank');
   check(a.item === 'BATCH-A', 'item is the batch uid');
   check(a.unit === 'كجم', 'unit comes from the batch');
+  check(captured.productReads === 0, 'a row with an existing unit performs zero fallback product reads', 'got ' + captured.productReads);
   check(a.qty === 4, 'qty is the payload qty');
   check(a.amount === 50, "amount = unit_cost 12.5 x qty 4 = 50, not the payload's 1",
     'got ' + a.amount);
@@ -479,6 +481,7 @@ if (BLOCK_START !== -1 && BLOCK_END > BLOCK_START) {
   check(writtenRow(0).unit === 'شيكارة',
     'a batch with no unit falls back to valley_products.unit via product_id',
     'got ' + writtenRow(0).unit);
+  check(captured.productReads === 1, 'one unit-less row builds one reusable fallback index', 'got ' + captured.productReads);
 
   /* -- 8g. MANY movements in one submission -- */
   console.log('\n        many rows in one submission\n');
@@ -497,6 +500,7 @@ if (BLOCK_START !== -1 && BLOCK_END > BLOCK_START) {
       { item: 'BATCH-A', qty: 5 }
     ]
   }), { email: 'u@v.t', canCost: true }, 'db');
+  check(captured.productReads === 1, 'multiple rows needing fallback share one product read/index build', 'got ' + captured.productReads);
   check(many && many.status === 'success', 'three movements save together',
     many && many.message);
   check(many.count === 3, 'and the response says three', 'got ' + many.count);

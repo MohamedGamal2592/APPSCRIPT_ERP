@@ -1,6 +1,6 @@
 {
   "_about": {
-    "purpose": "Movement rows for the Tier 1/2/3 rules in Box_Analysis_Engine.js (BOX_ANALYSIS_PLAN.md §7).",
+    "purpose": "Movement rows for the Tier 1/2/3 rules in Company_TopChemical_Actions.js (BOX_ANALYSIS_PLAN.md §7).",
     "READ_THIS_FIRST": "EVERY ROW HERE IS SYNTHETIC. Not one of them came from the production table. They were constructed to make a specific rule fire, or — just as important — to make sure it does NOT. They prove the rules do what they say on data whose answer is known; they say nothing about how often any of this occurs in the live table, and nothing about the false-positive rate on real data. That measurement needs DB access and is a blocked-on-owner item in NEXT_STEPS_OWNER.md.",
     "shape": "Columns match regular_box_movement. `parse` is NOT stored — the test runs the real parser over transaction_details, so a parser change cannot leave a stale rule fixture behind.",
     "expect": "rule ids that MUST fire for the row, and must_not for ids that must not.",

@@ -13,7 +13,7 @@
  *      register).
  *   2. A BEHAVIOURAL run of acInsert_ / acInsertMany_ / acUpdate_ against a
  *      stubbed sheet whose header row is the exact PascalCase list from plan
- *      §2.2, with 02_DataAccess.js's real updateRowByCriteria_ logic ported
+ *      §2.2, with Code.js's real updateRowByCriteria_ logic ported
  *      in verbatim (see PORTED note below) so the matching semantics under
  *      test are the real ones, not a reimplementation that happens to pass.
  *
@@ -27,7 +27,7 @@ const path = require('path');
 const vm = require('vm');
 
 const ROOT = path.resolve(__dirname, '..', '..');
-const helper = fs.readFileSync(path.join(ROOT, 'JS_Simplification_Helpers.js'), 'utf8');
+const helper = fs.readFileSync(path.join(ROOT, 'Company_Assessment_Actions.js'), 'utf8');
 const ACTIONS_FILE = 'Company_Assessment_Actions.js';
 const src = fs.readFileSync(path.join(ROOT, ACTIONS_FILE), 'utf8');
 
@@ -48,7 +48,7 @@ console.log('source: none of the three forbidden helpers are called\n');
 
 /* ── 2. A stubbed sheet + the real Apps Script service surface acInsert_/
  *      acUpdate_ need. updateRowByCriteria_ below is a VERBATIM port of
- *      02_DataAccess.js's implementation (same matching semantics), so this
+ *      Code.js's implementation (same matching semantics), so this
  *      test exercises the real case-insensitive per-cell matching rule that
  *      makes T-3 safe — not a friendlier stand-in. ── */
 function makeStubSheet(headers, name) {
@@ -102,7 +102,7 @@ function buildSandbox() {
   function noteMutation_() {}
   function executeWithLock_(fn) { return fn(); }
 
-  /* PORTED VERBATIM from 02_DataAccess.js's updateRowByCriteria_ — same
+  /* PORTED VERBATIM from Code.js's updateRowByCriteria_ — same
    * case-insensitive per-cell matching, so this proves the real contract. */
   function updateRowByCriteria_(sheet, criteriaHeader, criteriaValue, updatesObject) {
     const headers = getHeaders_(sheet);
@@ -158,13 +158,34 @@ function buildSandbox() {
     historyCalls.push({ dbId: dbId, sheetName: sheetName, recordUid: recordUid, recordId: recordId, user: user, action: action, newValues: newValues, oldValues: oldValues });
   }
 
-  const sandbox = { getSheet_, getHeaders_, appendRowWithRetry_, noteMutation_, executeWithLock_, updateRowByCriteria_, getAllRecords_, getRecordsByPk_, logHistory_ };
+  /* Gap-closure ported stubs: acUpdate_ now version-checks and patches via
+   * Code.js helpers, and authorize_ double-checks the tenant dbId.
+   * Faithful to the real contracts — missing version -> 0, mismatch throws,
+   * unknown update keys ignored (the stub store holds no formulas, so every
+   * named cell is writable exactly as patchRowByCriteria_ would find it). */
+  function getRowVersion_(row) {
+    if (!row) return 0;
+    var v = row.version;
+    if (v === undefined) { var k = Object.keys(row).find(function (kk) { return String(kk).trim().toLowerCase() === 'version'; }); v = k ? row[k] : undefined; }
+    if (v === undefined || v === null || v === '') return 0;
+    var n = Number(v); return (isFinite(n) && n >= 0) ? Math.floor(n) : 0;
+  }
+  function checkRowVersion_(oldRow, clientVersion) {
+    var current = getRowVersion_(oldRow);
+    var want = (clientVersion === undefined || clientVersion === null || clientVersion === '') ? 0 : Number(clientVersion);
+    if (!isFinite(want) || want < 0) want = 0; else want = Math.floor(want);
+    if (want !== current) throw new Error('CONFLICT: stale version — reload and retry | تعارض: النسخة قديمة — أعد التحميل وحاول مجدداً');
+    return current;
+  }
+  function patchRowByCriteria_(sheet, criteriaHeader, criteriaValue, updatesObject) { return updateRowByCriteria_(sheet, criteriaHeader, criteriaValue, updatesObject); }
+  function getCompanySpreadsheetId_() { return 'DB1'; }
+
+  const sandbox = { getSheet_, getHeaders_, appendRowWithRetry_, noteMutation_, executeWithLock_, updateRowByCriteria_, patchRowByCriteria_, checkRowVersion_, getCompanySpreadsheetId_, getAllRecords_, getRecordsByPk_, logHistory_ };
   vm.createContext(sandbox);
   return { sandbox: sandbox, store: store };
 }
 
 const built = buildSandbox();
-vm.runInContext(helper, built.sandbox, { filename: 'JS_Simplification_Helpers.js' });
 vm.runInContext(src, built.sandbox, { filename: ACTIONS_FILE });
 const AC = vm.runInContext('AssessmentCenter', built.sandbox);
 
@@ -311,8 +332,26 @@ function buildBatchSandbox() {
     historyCalls.push({ dbId: dbId, sheetName: sheetName, recordUid: recordUid, recordId: recordId, user: user, action: action, newValues: newValues, oldValues: oldValues });
   }
 
+  /* Same gap-closure stubs as buildSandbox above (see note there). */
+  function getRowVersion_(row) {
+    if (!row) return 0;
+    var v = row.version;
+    if (v === undefined) { var k = Object.keys(row).find(function (kk) { return String(kk).trim().toLowerCase() === 'version'; }); v = k ? row[k] : undefined; }
+    if (v === undefined || v === null || v === '') return 0;
+    var n = Number(v); return (isFinite(n) && n >= 0) ? Math.floor(n) : 0;
+  }
+  function checkRowVersion_(oldRow, clientVersion) {
+    var current = getRowVersion_(oldRow);
+    var want = (clientVersion === undefined || clientVersion === null || clientVersion === '') ? 0 : Number(clientVersion);
+    if (!isFinite(want) || want < 0) want = 0; else want = Math.floor(want);
+    if (want !== current) throw new Error('CONFLICT: stale version — reload and retry | تعارض: النسخة قديمة — أعد التحميل وحاول مجدداً');
+    return current;
+  }
+  function patchRowByCriteria_(sheet, criteriaHeader, criteriaValue, updatesObject) { return updateRowByCriteria_(sheet, criteriaHeader, criteriaValue, updatesObject); }
+  function getCompanySpreadsheetId_() { return 'DB1'; }
+
   const sandbox = Object.assign(
-    { getSheet_, getHeaders_, appendRowWithRetry_, noteMutation_, executeWithLock_, updateRowByCriteria_, getAllRecords_, getRecordsByPk_, logHistory_ },
+    { getSheet_, getHeaders_, appendRowWithRetry_, noteMutation_, executeWithLock_, updateRowByCriteria_, patchRowByCriteria_, checkRowVersion_, getCompanySpreadsheetId_, getAllRecords_, getRecordsByPk_, logHistory_ },
     makeAppsScriptStubs()
   );
   vm.createContext(sandbox);
@@ -320,7 +359,6 @@ function buildBatchSandbox() {
 }
 
 const batchBuilt = buildBatchSandbox();
-vm.runInContext(helper, batchBuilt.sandbox, { filename: 'JS_Simplification_Helpers.js' });
 vm.runInContext(src, batchBuilt.sandbox, { filename: ACTIONS_FILE });
 const AC2 = vm.runInContext('AssessmentCenter', batchBuilt.sandbox);
 

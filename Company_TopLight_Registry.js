@@ -11,6 +11,11 @@ function registerTopLight_() {
     dispatch: TopLight.dispatch_,
     pageForAction: TopLight.pageForAction_,
     tableForAction: TopLight.tableForAction_,
+    themeCss: TopLight.themeCss_,
+    blockTheme: TopLight.blockTheme_,
+    approvalPolicy: TopLight.approvalPolicy_,
+    attachmentPolicy: TopLight.attachmentPolicy_,
+    artifactHandlers: TopLight.artifactHandlers_,
     // §2.1 Table Catalog — metadata only, no schema change, validated at runtime via getHeaders_
     tables: [
       { id: 'tl_products_tbl', sheetName: 'top_light_products', pkColumn: 'id', labelAr: 'المنتجات', pageId: 'tl_products' },

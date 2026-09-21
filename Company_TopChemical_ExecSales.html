@@ -1,0 +1,613 @@
+<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Top Chemical — التحليل التنفيذي للمبيعات</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_TopChemical_Nav'); ?>
+  <?!= getCompanyThemeCSS_('3fe1b5cb67b7223e') ?>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+  <style>
+    .dash-wrap { padding: 16px 20px 32px; }
+    .filter-bar { background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: var(--radius-lg); padding: 14px 16px; margin-bottom: 18px; display: flex; flex-wrap: wrap; gap: 14px; align-items: center; box-shadow: var(--shadow-sm); }
+    .filter-group { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 13px; }
+    .filter-group label { font-weight: 700; }
+    .chart-card { background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: var(--radius-lg); padding: 16px 18px 20px; box-shadow: var(--shadow-sm); }
+    .chart-title { font-size: 14px; font-weight: 700; color: var(--text-main); margin: 0 0 14px 0; text-align: center; }
+    .chart-canvas-wrap { position: relative; height: 280px; }
+    .metric-bar { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; margin-bottom: 14px; }
+    .chart-spacer { height: 48px; }
+    .card-actions { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; margin-top: 12px; }
+    .modal-table-wrap { overflow-x: auto; max-height: 60vh; overflow-y: auto; }
+    .modal-table { width: 100%; border-collapse: collapse; font-size: 13px; direction: rtl; }
+    .modal-table th, .modal-table td { border: 1px solid var(--border-color); padding: 6px 10px; text-align: center; }
+    .modal-table th { background: var(--bg-muted); font-weight: 700; }
+    .modal-btn-row { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; margin-top: 12px; }
+  </style>
+</head>
+<body>
+<div id="tc-exec-root" dir="rtl"></div>
+<script>
+  var params = new URLSearchParams(window.location.search);
+  var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+  var scriptUrl = window.scriptUrl || '/';
+  var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+  var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('3fe1b5cb67b7223e') ?>';
+  var COMPANY_PAGES = <?!= companyPages ?>;
+  var CURRENT_ACTION = '<?!= currentAction ?>';
+  var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+  var _charts = {};
+  // Exec-sales page: monthly sales line chart from date_sales_product_qty_value
+  // plus a monthly box-movement chart from box_movement_daily_revise below it,
+  // filtered by chart_of_accounts. Both share the date range + compare toggle.
+  var METRICS = {
+    value:  { label: 'صافي القيمة', unit: 'جنيه', field: 'net_value_egp', money: true },
+    qty:    { label: 'صافي الكمية', unit: 'كمية', field: 'net_qty', money: false },
+    metric: { label: 'كمية المتري', unit: 'متري', field: 'sales_metric_qty', money: false }
+  };
+  var BOX_METRICS = {
+    net:     { label: 'الصافي (دخل − منصرف)', unit: 'جنيه', field: 'net', money: true, acct: true },
+    income:  { label: 'إجمالي الدخل', unit: 'جنيه', field: 'income', money: true, acct: false },
+    outcome: { label: 'إجمالي المنصرف', unit: 'جنيه', field: 'outcome', money: true, acct: false }
+  };
+  var MONTH_NAMES = ['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];
+  var S = { from: '', to: '', product_id: '', products: [], rows: [], metric: 'value',
+    compare: false, prevRows: [], prevFrom: '', prevTo: '' };
+  var B = { acct: '', accounts: [], rows: [], metric: 'net', prevRows: [], prevFrom: '', prevTo: '' };
+  // Default range: first day of the month 11 months ago → today (last 12 months).
+  (function initRange(){
+    var now = new Date();
+    var t = now.getFullYear() + '-' + ('0' + (now.getMonth() + 1)).slice(-2) + '-' + ('0' + now.getDate()).slice(-2);
+    var d = new Date(now.getFullYear(), now.getMonth() - 11, 1);
+    var f = d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-01';
+    S.from = f; S.to = t;
+  })();
+  var _reqSeq = 0;
+  var FETCH_TIMEOUT_MS = 60000;
+  function normDate(v) { v = String(v === undefined || v === null ? '' : v).trim().slice(0, 10); return /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : ''; }
+  function productName(pid) {
+    pid = String(pid == null ? '' : pid);
+    for (var i = 0; i < S.products.length; i++) {
+      if (String(S.products[i].product_id) === pid) return S.products[i].name_ar || pid;
+    }
+    return pid;
+  }
+  function acctLabel(code) {
+    code = String(code == null ? '' : code);
+    for (var i = 0; i < B.accounts.length; i++) {
+      if (String(B.accounts[i].code) === code) return B.accounts[i].label || code;
+    }
+    return code;
+  }
+  function filterSummary() {
+    return ' (من ' + FMT.escape(S.from) + ' إلى ' + FMT.escape(S.to) +
+      (S.product_id ? ' — الصنف: ' + FMT.escape(productName(S.product_id)) : '') + ')';
+  }
+  function boxFilterSummary() {
+    return ' (من ' + FMT.escape(S.from) + ' إلى ' + FMT.escape(S.to) +
+      (B.acct ? ' — الحساب: ' + FMT.escape(acctLabel(B.acct)) : ' — كل الحسابات') + ')';
+  }
+  function ymLabel(ym) {
+    var m = /^(\d{4})-(\d{2})$/.exec(String(ym || ''));
+    if (!m) return String(ym || '');
+    var mi = Number(m[2]);
+    return (mi >= 1 && mi <= 12 ? MONTH_NAMES[mi - 1] + ' ' : '') + m[1];
+  }
+  function monthsBetween(from, to) {
+    var out = [];
+    var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(from || ''));
+    var t = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(to || ''));
+    if (!m || !t) return out;
+    var y = Number(m[1]), mo = Number(m[2]);
+    var ey = Number(t[1]), emo = Number(t[2]);
+    var guard = 0;
+    while ((y < ey || (y === ey && mo <= emo)) && guard++ < 120) {
+      out.push(y + '-' + ('0' + mo).slice(-2));
+      mo++;
+      if (mo > 12) { mo = 1; y++; }
+    }
+    return out;
+  }
+  function destroyChart(id) { if (_charts[id]) { try { _charts[id].destroy(); } catch(e){} delete _charts[id]; } }
+  function companyCall(moduleAction, data) {
+    return API.call('company_action', { target_system: '3fe1b5cb67b7223e', module_action: moduleAction, data: data || {} }, SESSION_TOKEN);
+  }
+  function fmtCompact(v) {
+    var n = Number(v); if (!isFinite(n)) return '—';
+    var a = Math.abs(n);
+    if (a >= 1000000) return (n / 1000000).toLocaleString('en-US', { maximumFractionDigits: 1 }) + 'M';
+    if (a >= 1000) return (n / 1000).toLocaleString('en-US', { maximumFractionDigits: 1 }) + 'k';
+    return n.toLocaleString('en-US', { maximumFractionDigits: 2 });
+  }
+  function fmtVal(v, money) {
+    if (v === null || v === undefined || v === '' || !isFinite(Number(v))) return '—';
+    return Number(v).toLocaleString('en-US', { maximumFractionDigits: 2 }) + (money ? ' جنيه' : '');
+  }
+  // Accounting style: negatives between parentheses, e.g. (1,234.50) جنيه.
+  function fmtAcct(v, money) {
+    if (v === null || v === undefined || v === '' || !isFinite(Number(v))) return '—';
+    var n = Number(v);
+    var body = Math.abs(n).toLocaleString('en-US', { maximumFractionDigits: 2 });
+    return (n < 0 ? '(' + body + ')' : body) + (money ? ' جنيه' : '');
+  }
+  function load() {
+    UIC.appShell('tc-exec-root', {
+      companyLogoUrl: COMPANY_LOGO_URL,
+      companyLogoHref: (window.UIC && UIC.baseUrl ? UIC.baseUrl() : scriptUrl) + '?action=tc_dashboard&sessionToken=' + ((window.UIC && UIC.token) ? UIC.token() : SESSION_TOKEN),
+      companyLogoTitle: 'توب كيميكال',
+      breadcrumb: 'توب كيميكال / تحليلات النظام الرئيسي / التحليل التنفيذي للمبيعات',
+      contentId: 'tc-exec-content',
+      menuGroups: (window.TOPCHEMICAL_MENU || [])
+    });
+    renderShell();
+    loadRefs();
+  }
+  function productComboHtml() {
+    var opts = [{ value: '', label: 'كل الأصناف' }].concat(S.products.map(function(p){
+      return { value: String(p.product_id), label: String(p.name_ar || p.product_id) };
+    }));
+    if (window.UIC && UIC.combo) {
+      return UIC.combo({ key: 'exec-product', options: opts, value: S.product_id });
+    }
+    return '<select id="exec-product" class="input">' + opts.map(function(o){
+      return '<option value="' + FMT.escape(o.value) + '"' + (String(o.value) === String(S.product_id) ? ' selected' : '') + '>' + FMT.escape(o.label) + '</option>';
+    }).join('') + '</select>';
+  }
+  function boxAcctComboHtml() {
+    var opts = [{ value: '', label: 'كل الحسابات' }].concat(B.accounts.map(function(a){
+      return { value: String(a.code), label: String(a.label || a.code) };
+    }));
+    if (window.UIC && UIC.combo) {
+      return UIC.combo({ key: 'exec-box-acct', options: opts, value: B.acct });
+    }
+    return '<select id="exec-box-acct" class="input">' + opts.map(function(o){
+      return '<option value="' + FMT.escape(o.value) + '"' + (String(o.value) === String(B.acct) ? ' selected' : '') + '>' + FMT.escape(o.label) + '</option>';
+    }).join('') + '</select>';
+  }
+  function renderShell() {
+    var inner = document.getElementById('tc-exec-content');
+    if (!inner) return;
+    inner.innerHTML =
+      '<div class="dash-wrap">' +
+        '<div class="filter-bar">' +
+          '<div class="filter-group"><label>من:</label><input type="date" id="exec-from" class="input" value="' + FMT.escape(S.from) + '"></div>' +
+          '<div class="filter-group"><label>إلى:</label><input type="date" id="exec-to" class="input" value="' + FMT.escape(S.to) + '"></div>' +
+          '<div class="filter-group"><label>الصنف:</label><span id="exec-product-wrap">' + productComboHtml() + '</span></div>' +
+          '<div class="filter-group"><label>حساب الخزنة:</label><span id="exec-box-acct-wrap">' + boxAcctComboHtml() + '</span></div>' +
+          '<div class="filter-group"><label style="display:inline-flex;align-items:center;gap:4px;font-weight:400;"><input type="checkbox" id="exec-compare"' + (S.compare ? ' checked' : '') + '> مقارنة بالفترة السابقة</label></div>' +
+          '<div class="filter-group">' +
+          '<button class="btn btn-primary" onclick="applyFilters()">🔄 تحديث</button></div>' +
+        '</div>' +
+        '<div id="exec-body"><div class="empty-state"><span>جاري التحميل...</span></div></div>' +
+        '<div class="chart-spacer"></div>' +
+        '<div id="exec-box-body"><div class="empty-state"><span>جاري التحميل...</span></div></div>' +
+      '</div>';
+  }
+  function refreshProductCombo() {
+    var wrap = document.getElementById('exec-product-wrap');
+    if (wrap) wrap.innerHTML = productComboHtml();
+  }
+  function refreshBoxAcctCombo() {
+    var wrap = document.getElementById('exec-box-acct-wrap');
+    if (wrap) wrap.innerHTML = boxAcctComboHtml();
+  }
+  function readFilters() {
+    var f = document.getElementById('exec-from');
+    var t = document.getElementById('exec-to');
+    var p = document.getElementById('exec-product');
+    var a = document.getElementById('exec-box-acct');
+    var cb = document.getElementById('exec-compare');
+    S.from = normDate(f ? f.value : S.from);
+    S.to = normDate(t ? t.value : S.to);
+    S.product_id = p ? String(p.value || '').trim() : '';
+    B.acct = a ? String(a.value || '').trim() : '';
+    S.compare = !!(cb && cb.checked);
+  }
+  function shiftIso(iso, days) {
+    var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso || ''));
+    if (!m) return '';
+    var d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
+    if (isNaN(d.getTime())) return '';
+    d.setUTCDate(d.getUTCDate() + days);
+    return d.getUTCFullYear() + '-' + ('0' + (d.getUTCMonth() + 1)).slice(-2) + '-' + ('0' + d.getUTCDate()).slice(-2);
+  }
+  // Previous equal-length period ending the day before `from` (UTC math, no TZ drift).
+  function prevRange(from, to) {
+    function dayNum(iso) {
+      var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso || ''));
+      if (!m) return NaN;
+      return Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+    }
+    var len = Math.round((dayNum(to) - dayNum(from)) / 86400000) + 1;
+    if (!isFinite(len) || len < 1) return null;
+    var pto = shiftIso(from, -1);
+    var pfrom = shiftIso(pto, -(len - 1));
+    return (pfrom && pto) ? { from: pfrom, to: pto } : null;
+  }
+  function applyFilters() { readFilters(); fetchData(); }
+  function loadRefs() {
+    var done = 0;
+    function next() { if (++done >= 2) fetchData(); }
+    companyCall('get_date_sales_products', {})
+      .then(function(r){
+        S.products = (r && r.products) || [];
+        refreshProductCombo();
+      })
+      .catch(function(){ S.products = []; })
+      .finally(function(){ next(); });
+    companyCall('get_box_daily_accounts', {})
+      .then(function(r){
+        B.accounts = (r && r.accounts) || [];
+        refreshBoxAcctCombo();
+      })
+      .catch(function(){ B.accounts = []; })
+      .finally(function(){ next(); });
+  }
+  function showBodyError(msg) {
+    var b = document.getElementById('exec-body');
+    if (b) b.innerHTML = '<div class="empty-state"><span>' + FMT.escape(msg) + '</span>' +
+      '<div style="margin-top:12px;"><button class="btn btn-primary" onclick="fetchData()">🔄 إعادة المحاولة</button></div></div>';
+    var x = document.getElementById('exec-box-body');
+    if (x) x.innerHTML = '<div class="empty-state"><span>' + FMT.escape(msg) + '</span></div>';
+  }
+  function fetchData() {
+    var mySeq = ++_reqSeq;
+    readFilters();
+    if (!S.from || !S.to) { showBodyError('اختر نطاق التاريخ (من / إلى) ثم اضغط تحديث.'); return; }
+    if (S.from > S.to) { showBodyError('«من تاريخ» بعد «إلى تاريخ» — صحّح النطاق.'); return; }
+    var prev = S.compare ? prevRange(S.from, S.to) : null;
+    if (S.compare && !prev) { showBodyError('تعذر حساب الفترة السابقة — صحّح النطاق.'); return; }
+    var body0 = document.getElementById('exec-body');
+    if (body0) UIC.readSkeleton('exec-body', { kind: 'card', message: 'جاري تحميل الرسم...' });
+    var box0 = document.getElementById('exec-box-body');
+    if (box0) UIC.readSkeleton('exec-box-body', { kind: 'card', message: 'جاري تحميل رسم الخزنة...' });
+    var settled = false;
+    var timer = setTimeout(function() {
+      if (settled || mySeq !== _reqSeq) return;
+      settled = true; // park it: a late server response is ignored, never spins forever
+      showBodyError('انتهت المهلة (60 ثانية) دون رد — جرّب نطاقًا أضيق.');
+      try { UI.hideSpinner(); } catch (e) {}
+    }, FETCH_TIMEOUT_MS);
+    var salesCur = companyCall('get_date_sales_monthly', { from: S.from, to: S.to, product_id: S.product_id });
+    var boxCur = companyCall('get_box_daily_monthly', { from: S.from, to: S.to, chart_of_accounts: B.acct });
+    var salesBoth = prev
+      ? Promise.all([salesCur, companyCall('get_date_sales_monthly', { from: prev.from, to: prev.to, product_id: S.product_id })])
+      : salesCur.then(function(c){ return [c]; });
+    var boxBoth = prev
+      ? Promise.all([boxCur, companyCall('get_box_daily_monthly', { from: prev.from, to: prev.to, chart_of_accounts: B.acct })])
+      : boxCur.then(function(c){ return [c]; });
+    Promise.all([salesBoth, boxBoth])
+      .then(function(all){
+        if (settled || mySeq !== _reqSeq) return; settled = true; clearTimeout(timer);
+        var sArr = all[0], bArr = all[1];
+        S.rows = (sArr[0] && sArr[0].rows) || [];
+        S.prevRows = prev ? ((sArr[1] && sArr[1].rows) || []) : [];
+        S.prevFrom = prev ? prev.from : ''; S.prevTo = prev ? prev.to : '';
+        B.rows = (bArr[0] && bArr[0].rows) || [];
+        B.prevRows = prev ? ((bArr[1] && bArr[1].rows) || []) : [];
+        B.prevFrom = prev ? prev.from : ''; B.prevTo = prev ? prev.to : '';
+        renderChartSection({ status: 'ok', rows: S.rows });
+        renderBoxSection({ status: 'ok', rows: B.rows });
+      })
+      .catch(function(e){ if (settled || mySeq !== _reqSeq) return; settled = true; clearTimeout(timer); showBodyError('خطأ: ' + ((e && e.message) || String(e))); })
+      .finally(function(){ clearTimeout(timer); try { UI.hideSpinner(); } catch (e) {} });
+  }
+  function setMetric(m) {
+    if (!METRICS[m]) return;
+    S.metric = m;
+    renderChartSection({ status: 'ok', rows: S.rows });
+  }
+  function setBoxMetric(m) {
+    if (!BOX_METRICS[m]) return;
+    B.metric = m;
+    renderBoxSection({ status: 'ok', rows: B.rows });
+  }
+  function metricTitle() {
+    var def = METRICS[S.metric] || METRICS.value;
+    return '📈 ' + def.label + ' الشهري' + (def.money ? ' بالجنيه' : '') + ' — كل الشهور' + filterSummary() +
+      (S.compare ? ' (مقارنة بالفترة السابقة)' : '');
+  }
+  function boxMetricTitle() {
+    var def = BOX_METRICS[B.metric] || BOX_METRICS.net;
+    return '💰 حركة الخزنة الشهرية — ' + def.label + boxFilterSummary() +
+      (S.compare ? ' (مقارنة بالفترة السابقة)' : '');
+  }
+  function sumField(rows, field) {
+    var t = 0;
+    (rows || []).forEach(function(r){ if (r) t += Number(r[field]) || 0; });
+    return t;
+  }
+  function fmtPct(cur, prev) {
+    if (!isFinite(cur) || !isFinite(prev) || prev === 0) return '—';
+    var ch = (cur - prev) / Math.abs(prev) * 100;
+    if (!isFinite(ch)) return '—';
+    return (ch > 0 ? '+' : '') + ch.toFixed(1) + '%';
+  }
+  function compareSummary() {
+    if (!S.compare) return '';
+    var def = METRICS[S.metric] || METRICS.value;
+    var cur = sumField(S.rows, def.field);
+    var prev = sumField(S.prevRows, def.field);
+    return '<div style="text-align:center;font-size:13px;color:var(--text-muted);margin-bottom:10px;">' +
+      'الحالية: <b>' + FMT.escape(fmtVal(cur, def.money)) + '</b> — السابقة: <b>' + FMT.escape(fmtVal(prev, def.money)) +
+      '</b> — التغير: <b>' + FMT.escape(fmtPct(cur, prev)) + '</b></div>';
+  }
+  function boxCompareSummary() {
+    if (!S.compare) return '';
+    var def = BOX_METRICS[B.metric] || BOX_METRICS.net;
+    var cur = sumField(B.rows, def.field);
+    var prev = sumField(B.prevRows, def.field);
+    var fmt = def.acct ? fmtAcct : fmtVal;
+    return '<div style="text-align:center;font-size:13px;color:var(--text-muted);margin-bottom:10px;">' +
+      'الحالية: <b>' + FMT.escape(fmt(cur, def.money)) + '</b> — السابقة: <b>' + FMT.escape(fmt(prev, def.money)) +
+      '</b> — التغير: <b>' + FMT.escape(fmtPct(cur, prev)) + '</b></div>';
+  }
+  function renderChartSection(c) {
+    var body = document.getElementById('exec-body');
+    if (!body) return;
+    if (!c || c.status !== 'ok') {
+      body.innerHTML = '<div class="empty-state"><span>تعذر عرض الرسم' + filterSummary() + '</span>' +
+        '<div style="margin-top:12px;"><button class="btn btn-primary" onclick="fetchData()">🔄 إعادة المحاولة</button></div></div>';
+      return;
+    }
+    if (!S.rows.length && !(S.compare && S.prevRows.length)) {
+      body.innerHTML = '<div class="empty-state"><span>لا توجد بيانات' + filterSummary() + ' — جرّب نطاقًا أوسع أو صنفًا آخر.</span></div>';
+      return;
+    }
+    var toggle = '<div class="metric-bar">' + Object.keys(METRICS).map(function(k){
+      return '<button class="btn ' + (S.metric === k ? 'btn-primary' : 'btn-outline') + '" style="padding:4px 14px;font-size:12px;" onclick="setMetric(\'' + k + '\')">' + METRICS[k].label + '</button>';
+    }).join('') + '</div>';
+    body.innerHTML =
+      '<div class="chart-card" style="grid-column:1/-1;"><p class="chart-title">' + FMT.escape(metricTitle()) + '</p>' +
+      toggle + compareSummary() + '<div class="chart-canvas-wrap"><canvas id="chart-monthly"></canvas></div>' +
+      '<div class="card-actions"><button class="btn btn-outline" style="padding:4px 14px;font-size:12px;" onclick="openSalesModal()">📋 عرض الجدول / تحميل / طباعة</button></div></div>';
+    setTimeout(function(){ drawChart(); }, 50);
+  }
+  function renderBoxSection(c) {
+    var body = document.getElementById('exec-box-body');
+    if (!body) return;
+    if (!c || c.status !== 'ok') {
+      body.innerHTML = '<div class="empty-state"><span>تعذر عرض رسم الخزنة' + boxFilterSummary() + '</span>' +
+        '<div style="margin-top:12px;"><button class="btn btn-primary" onclick="fetchData()">🔄 إعادة المحاولة</button></div></div>';
+      return;
+    }
+    if (!B.rows.length && !(S.compare && B.prevRows.length)) {
+      body.innerHTML = '<div class="empty-state"><span>لا توجد حركة خزنة' + boxFilterSummary() + ' — جرّب نطاقًا أوسع أو حسابًا آخر.</span></div>';
+      return;
+    }
+    var toggle = '<div class="metric-bar">' + Object.keys(BOX_METRICS).map(function(k){
+      return '<button class="btn ' + (B.metric === k ? 'btn-primary' : 'btn-outline') + '" style="padding:4px 14px;font-size:12px;" onclick="setBoxMetric(\'' + k + '\')">' + BOX_METRICS[k].label + '</button>';
+    }).join('') + '</div>';
+    body.innerHTML =
+      '<div class="chart-card" style="grid-column:1/-1;"><p class="chart-title">' + FMT.escape(boxMetricTitle()) + '</p>' +
+      toggle + boxCompareSummary() + '<div class="chart-canvas-wrap"><canvas id="chart-box-monthly"></canvas></div>' +
+      '<div class="card-actions"><button class="btn btn-outline" style="padding:4px 14px;font-size:12px;" onclick="openBoxModal()">📋 عرض الجدول / تحميل / طباعة</button></div></div>';
+    setTimeout(function(){ drawBoxChart(); }, 50);
+  }
+  function drawChart() {
+    destroyChart('monthly'); var ctx = document.getElementById('chart-monthly'); if (!ctx) return;
+    var def = METRICS[S.metric] || METRICS.value;
+    var yms = monthsBetween(S.from, S.to);
+    var prevYms = (S.compare && S.prevFrom && S.prevTo) ? monthsBetween(S.prevFrom, S.prevTo) : [];
+    var len = Math.max(yms.length, prevYms.length);
+    if (!len) { ctx.parentElement.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-muted);">لا توجد بيانات</div>'; return; }
+    var labels = [];
+    for (var li = 0; li < len; li++) {
+      labels.push(yms[li] ? ymLabel(yms[li]) : (prevYms[li] ? ymLabel(prevYms[li]) : ''));
+    }
+    function seriesFor(rows, monthList) {
+      var byYm = {};
+      (rows || []).forEach(function(r){ if (r && r.ym) byYm[String(r.ym)] = r; });
+      var out = [];
+      for (var i = 0; i < len; i++) {
+        var ym = monthList[i];
+        var r = ym ? byYm[ym] : null;
+        out.push(r ? Number(r[def.field]) : null);
+      }
+      return out;
+    }
+    var datasets = [{ label: S.compare ? 'الفترة الحالية' : def.label,
+      data: seriesFor(S.rows, yms),
+      borderColor: '#3b82f6', backgroundColor: '#3b82f633', tension: 0.3, fill: false, spanGaps: true }];
+    if (S.compare) {
+      datasets.push({ label: 'الفترة السابقة',
+        data: seriesFor(S.prevRows, prevYms),
+        borderColor: '#94a3b8', backgroundColor: '#94a3b833', borderDash: [6, 4],
+        tension: 0.3, fill: false, spanGaps: true });
+    }
+    _charts['monthly'] = new Chart(ctx, { type: 'line',
+      data: { labels: labels, datasets: datasets },
+      options: { responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: true, position: 'top' },
+          tooltip: { callbacks: { label: function(c){
+            var v = c.parsed.y;
+            if (v === null || v === undefined) return ' لا توجد بيانات';
+            return ' ' + fmtVal(v, def.money);
+          } } } },
+        scales: { y: { beginAtZero: false, grace: '10%',
+          ticks: { callback: function(v){ return fmtCompact(v); } },
+          title: { display: true, text: def.unit } } } } });
+  }
+  function drawBoxChart() {
+    destroyChart('box'); var ctx = document.getElementById('chart-box-monthly'); if (!ctx) return;
+    var def = BOX_METRICS[B.metric] || BOX_METRICS.net;
+    var fmt = def.acct ? fmtAcct : fmtVal;
+    var yms = monthsBetween(S.from, S.to);
+    var prevYms = (S.compare && B.prevFrom && B.prevTo) ? monthsBetween(B.prevFrom, B.prevTo) : [];
+    var len = Math.max(yms.length, prevYms.length);
+    if (!len) { ctx.parentElement.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-muted);">لا توجد بيانات</div>'; return; }
+    var labels = [];
+    for (var li = 0; li < len; li++) {
+      labels.push(yms[li] ? ymLabel(yms[li]) : (prevYms[li] ? ymLabel(prevYms[li]) : ''));
+    }
+    function seriesFor(rows, monthList) {
+      var byYm = {};
+      (rows || []).forEach(function(r){ if (r && r.ym) byYm[String(r.ym)] = r; });
+      var out = [];
+      for (var i = 0; i < len; i++) {
+        var ym = monthList[i];
+        var r = ym ? byYm[ym] : null;
+        out.push(r ? Number(r[def.field]) : null);
+      }
+      return out;
+    }
+    var datasets = [{ label: S.compare ? 'الفترة الحالية' : def.label,
+      data: seriesFor(B.rows, yms),
+      borderColor: '#10b981', backgroundColor: '#10b98133', tension: 0.3, fill: false, spanGaps: true }];
+    if (S.compare) {
+      datasets.push({ label: 'الفترة السابقة',
+        data: seriesFor(B.prevRows, prevYms),
+        borderColor: '#94a3b8', backgroundColor: '#94a3b833', borderDash: [6, 4],
+        tension: 0.3, fill: false, spanGaps: true });
+    }
+    _charts['box'] = new Chart(ctx, { type: 'line',
+      data: { labels: labels, datasets: datasets },
+      options: { responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: true, position: 'top' },
+          tooltip: { callbacks: { label: function(c){
+            var v = c.parsed.y;
+            if (v === null || v === undefined) return ' لا توجد بيانات';
+            return ' ' + fmt(v, def.money);
+          } } } },
+        scales: { y: { beginAtZero: false, grace: '10%',
+          ticks: { callback: function(v){ return fmtCompact(v); } },
+          title: { display: true, text: def.unit } } } } });
+  }
+  // ─── Detail modals: aggregated monthly rows behind each chart ──
+  function modalRowsHtml(cols, rows) {
+    var h = '<div class="modal-table-wrap"><table class="modal-table"><thead><tr>';
+    cols.forEach(function(c){ h += '<th>' + FMT.escape(c) + '</th>'; });
+    h += '</tr></thead><tbody>';
+    rows.forEach(function(r){
+      h += '<tr>';
+      r.forEach(function(cell){ h += '<td>' + FMT.escape(String(cell)) + '</td>'; });
+      h += '</tr>';
+    });
+    h += '</tbody></table></div>';
+    return h;
+  }
+  function csvEsc(v) {
+    var s = String(v == null ? '' : v);
+    return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  }
+  function downloadCsv(filename, headers, rows) {
+    var lines = [headers.map(csvEsc).join(',')];
+    rows.forEach(function(r){ lines.push(r.map(csvEsc).join(',')); });
+    var blob = new Blob(['\uFEFF' + lines.join('\n')], { type: 'text/csv;charset=utf-8' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click();
+    setTimeout(function(){ URL.revokeObjectURL(url); if (a.parentNode) a.parentNode.removeChild(a); }, 500);
+  }
+  function printTable(title, headers, rows) {
+    var h = '<html><head><meta charset="utf-8"><title>' + FMT.escape(title) + '</title>' +
+      '<style>body{font-family:Arial,sans-serif;direction:rtl;padding:24px;}h2{text-align:center;}table{width:100%;border-collapse:collapse;font-size:13px;}th,td{border:1px solid #999;padding:6px 10px;text-align:center;}th{background:#eee;}</style>' +
+      '</head><body><h2>' + FMT.escape(title) + '</h2><table><thead><tr>';
+    headers.forEach(function(c){ h += '<th>' + FMT.escape(c) + '</th>'; });
+    h += '</tr></thead><tbody>';
+    rows.forEach(function(r){
+      h += '<tr>';
+      r.forEach(function(cell){ h += '<td>' + FMT.escape(String(cell)) + '</td>'; });
+      h += '</tr>';
+    });
+    h += '</tbody></table><script>window.onload=function(){window.print();}<\/script></body></html>';
+    var w = window.open('', '_blank');
+    if (!w) { try { window.print(); } catch (e) {} return; }
+    w.document.write(h); w.document.close();
+  }
+  function salesModalData() {
+    var def = METRICS[S.metric] || METRICS.value;
+    var yms = monthsBetween(S.from, S.to);
+    var prevYms = (S.compare && S.prevFrom && S.prevTo) ? monthsBetween(S.prevFrom, S.prevTo) : [];
+    var byCur = {}, byPrev = {};
+    (S.rows || []).forEach(function(r){ if (r && r.ym) byCur[String(r.ym)] = r; });
+    (S.prevRows || []).forEach(function(r){ if (r && r.ym) byPrev[String(r.ym)] = r; });
+    var len = S.compare ? Math.max(yms.length, prevYms.length) : yms.length;
+    var headers = S.compare
+      ? ['الشهر (حالية)', 'الحالية', 'الشهر (سابقة)', 'السابقة', 'التغير']
+      : ['الشهر', def.label];
+    var tableRows = [], csvRows = [];
+    for (var i = 0; i < len; i++) {
+      var ym = yms[i], pym = prevYms[i];
+      var cur = ym && byCur[ym] ? Number(byCur[ym][def.field]) : null;
+      if (!S.compare) {
+        var v0 = cur === null ? '—' : fmtVal(cur, def.money);
+        tableRows.push([ym ? ymLabel(ym) : '—', v0]);
+        csvRows.push([ym || '', cur === null ? '' : cur]);
+      } else {
+        var prv = pym && byPrev[pym] ? Number(byPrev[pym][def.field]) : null;
+        var vc = cur === null ? '—' : fmtVal(cur, def.money);
+        var vp = prv === null ? '—' : fmtVal(prv, def.money);
+        var ch = (cur === null || prv === null) ? '—' : fmtPct(cur, prv);
+        tableRows.push([ym ? ymLabel(ym) : '—', vc, pym ? ymLabel(pym) : '—', vp, ch]);
+        csvRows.push([ym || '', cur === null ? '' : cur, pym || '', prv === null ? '' : prv, ch]);
+      }
+    }
+    return { def: def, headers: headers, tableRows: tableRows, csvRows: csvRows };
+  }
+  function openSalesModal() {
+    var d = salesModalData();
+    var title = metricTitle();
+    window._salesModalCsv = function() {
+      downloadCsv('sales_monthly_' + S.from + '_' + S.to + '.csv', d.headers, d.csvRows);
+    };
+    window._printModal = function() { printTable(title, d.headers, d.tableRows); };
+    var body = modalRowsHtml(d.headers, d.tableRows) +
+      '<div class="modal-btn-row">' +
+      '<button class="btn btn-primary" onclick="window._salesModalCsv()">⬇ تحميل CSV</button>' +
+      '<button class="btn btn-outline" onclick="window._printModal()">🖨 طباعة</button>' +
+      '</div>';
+    UIC.openModal('exec-modal', { title: title, size: 'lg', body: body, footer: false });
+  }
+  function boxModalData() {
+    var def = BOX_METRICS[B.metric] || BOX_METRICS.net;
+    var fmt = def.acct ? fmtAcct : fmtVal;
+    var yms = monthsBetween(S.from, S.to);
+    var prevYms = (S.compare && B.prevFrom && B.prevTo) ? monthsBetween(B.prevFrom, B.prevTo) : [];
+    var byCur = {}, byPrev = {};
+    (B.rows || []).forEach(function(r){ if (r && r.ym) byCur[String(r.ym)] = r; });
+    (B.prevRows || []).forEach(function(r){ if (r && r.ym) byPrev[String(r.ym)] = r; });
+    var len = S.compare ? Math.max(yms.length, prevYms.length) : yms.length;
+    var headers = S.compare
+      ? ['الشهر (حالية)', 'الحالية', 'الشهر (سابقة)', 'السابقة', 'التغير']
+      : ['الشهر', def.label];
+    var tableRows = [], csvRows = [];
+    for (var i = 0; i < len; i++) {
+      var ym = yms[i], pym = prevYms[i];
+      var cur = ym && byCur[ym] ? Number(byCur[ym][def.field]) : null;
+      if (!S.compare) {
+        tableRows.push([ym ? ymLabel(ym) : '—', cur === null ? '—' : fmt(cur, def.money)]);
+        csvRows.push([ym || '', cur === null ? '' : cur]);
+      } else {
+        var prv = pym && byPrev[pym] ? Number(byPrev[pym][def.field]) : null;
+        var ch = (cur === null || prv === null) ? '—' : fmtPct(cur, prv);
+        tableRows.push([ym ? ymLabel(ym) : '—', cur === null ? '—' : fmt(cur, def.money),
+          pym ? ymLabel(pym) : '—', prv === null ? '—' : fmt(prv, def.money), ch]);
+        csvRows.push([ym || '', cur === null ? '' : cur, pym || '', prv === null ? '' : prv, ch]);
+      }
+    }
+    return { def: def, headers: headers, tableRows: tableRows, csvRows: csvRows };
+  }
+  function openBoxModal() {
+    var d = boxModalData();
+    var title = boxMetricTitle();
+    var acctPart = B.acct ? '_' + String(B.acct).replace(/[^a-zA-Z0-9_-]/g, '') : '_all';
+    window._boxModalCsv = function() {
+      downloadCsv('box_monthly' + acctPart + '_' + S.from + '_' + S.to + '.csv', d.headers, d.csvRows);
+    };
+    window._printModal = function() { printTable(title, d.headers, d.tableRows); };
+    var body = modalRowsHtml(d.headers, d.tableRows) +
+      '<div class="modal-btn-row">' +
+      '<button class="btn btn-primary" onclick="window._boxModalCsv()">⬇ تحميل CSV</button>' +
+      '<button class="btn btn-outline" onclick="window._printModal()">🖨 طباعة</button>' +
+      '</div>';
+    UIC.openModal('exec-modal', { title: title, size: 'lg', body: body, footer: false });
+  }
+  load();
+</script>
+</body>
+</html>

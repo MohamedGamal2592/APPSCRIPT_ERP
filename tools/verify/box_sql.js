@@ -1,5 +1,5 @@
 /**
- * Box analysis — SQL discipline in DbLive_Connector.js.
+ * Box analysis — SQL discipline in Company_TopChemical_Actions.js.
  *
  *   node tools/verify/box_sql.js
  *
@@ -23,7 +23,7 @@ const fs = require('fs');
 const path = require('path');
 
 const ROOT = path.resolve(__dirname, '..', '..');
-const SRC = fs.readFileSync(path.join(ROOT, 'DbLive_Connector.js'), 'utf8');
+const SRC = fs.readFileSync(path.join(ROOT, 'Company_TopChemical_Actions.js'), 'utf8');
 
 let failures = 0;
 function ok(cond, label, extra) {
@@ -55,7 +55,7 @@ console.log('additive — nothing above the box section changed');
 ].forEach(function (needle) {
   ok(BEFORE.indexOf(needle) !== -1, 'clients_AR still carries: ' + needle.slice(0, 60));
 });
-ok(BEFORE.indexOf('dbBox') === -1, 'no box code leaked above the section marker');
+ok(!/\bfunction\s+dbBox/.test(BEFORE), 'no box implementation leaked above the section marker');
 
 /* ── 2. NOTHING in the box section changes the schema ──────────────────────
  * Hard constraint 1. No DDL of any kind, and specifically not the
@@ -127,14 +127,14 @@ ok(getOne.indexOf('conn.close()') === -1,
  * if (conn) conn.close(); }` — result set, then statement, then connection.
  * A leaked JDBC connection in Apps Script outlives the request. */
 console.log('every db function closes rs → stmt → conn in a finally');
-const fnNames = (BOX.match(/^function (dbBox\w+|dbChartAccountLabels_)\s*\(/gm) || [])
-  .map(function (s) { return s.replace(/^function /, '').replace(/\s*\($/, ''); });
+const fnNames = (BOX.match(/^\s*function (dbBox\w+|dbChartAccountLabels_)\s*\(/gm) || [])
+  .map(function (s) { return s.replace(/^\s*function /, '').replace(/\s*\($/, ''); });
 ok(fnNames.length > 0, 'box functions found: ' + fnNames.join(', '));
 
 fnNames.forEach(function (name) {
   const start = BOX.indexOf('function ' + name + '(');
   /* The body runs to the next top-level `function ` or end of section. */
-  const nextIdx = BOX.slice(start + 1).search(/\nfunction \w/);
+  const nextIdx = BOX.slice(start + 1).search(/\n\s*function \w/);
   const body = nextIdx === -1 ? BOX.slice(start) : BOX.slice(start, start + 1 + nextIdx);
 
   const opensConn = body.indexOf('dbGetConnection_()') !== -1;

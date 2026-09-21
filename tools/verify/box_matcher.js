@@ -22,7 +22,7 @@ const fs = require('fs');
 const path = require('path');
 
 const ROOT = path.resolve(__dirname, '..', '..');
-const E = require(path.join(ROOT, 'Box_Analysis_Engine.js'));
+const E = require(path.join(ROOT, 'Company_TopChemical_Actions.js'));
 const FIX = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'box_details.json'), 'utf8'));
 
 const SHOW = process.argv.indexOf('--show') !== -1;

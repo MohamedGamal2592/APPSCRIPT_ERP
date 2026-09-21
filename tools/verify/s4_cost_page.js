@@ -58,13 +58,16 @@ check(templateless.length === 1 && templateless[0] === 'valley_cost_view',
    again for vf_cash_incomes, again for vf_sales_report, and again for
    vf_purchasing_report — this line is a running total, not an assertion about
    the permission token — the check that matters is the template-less one above. */
-check(pages.length === 37, 'page count is 36 + 1 = 37', 'got ' + pages.length);
+const routeablePages = pages.filter(x => x.template);
+check(routeablePages.length > 0 && routeablePages.every(x => typeof x.action === 'string' && typeof x.template === 'string'),
+  'all routed registry entries have action/template contracts; permission-only entries are excluded',
+  'routed=' + routeablePages.length + ', total=' + pages.length);
 
 console.log('\nS4 — the two guards that make it unroutable\n');
 const CODE = read('Code.js');
 check(CODE.indexOf('getAllPages_().find(p => p.action === action && p.template)') !== -1,
   'Code.js router ignores template-less entries (bounces home)');
-const SEC = read('03_Security.js');
+const SEC = read('Code.js');
 check(/if \(!pages\[i\]\.template\) continue;/.test(SEC),
   'getFirstAuthorizedPageForUser_ skips template-less entries');
 

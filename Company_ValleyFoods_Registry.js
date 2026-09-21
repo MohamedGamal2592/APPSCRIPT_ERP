@@ -17,6 +17,11 @@ function registerValleyFoods_() {
     dispatch: ValleyFoods.dispatch_,
     pageForAction: ValleyFoods.pageForAction_,
     tableForAction: ValleyFoods.tableForAction_,
+    themeCss: ValleyFoods.themeCss_,
+    blockTheme: ValleyFoods.blockTheme_,
+    approvalPolicy: ValleyFoods.approvalPolicy_,
+    attachmentPolicy: ValleyFoods.attachmentPolicy_,
+    artifactHandlers: ValleyFoods.artifactHandlers_,
     // §2.1 Table Catalog — metadata only, no schema change
     tables: [
       { id: 'vf_products_tbl', sheetName: 'vf_products', pkColumn: 'id', labelAr: 'الاصناف وتحركاتها', pageId: 'vf_products' },
@@ -71,6 +76,9 @@ function registerValleyFoods_() {
       { action: 'vf_mfg_recipes', template: 'Company_ValleyFoods_MfgRecipes', title: 'وصفات التصنيع (BOM)', label: 'وصفات التصنيع', nav: false },
       { action: 'vf_mfg_orders', template: 'Company_ValleyFoods_MfgOrders', title: 'أوامر التصنيع', label: 'أوامر التصنيع', nav: false },
       { action: 'vf_mfg_order', template: 'Company_ValleyFoods_MfgOrderView', title: 'أمر تصنيع', label: 'أمر تصنيع', nav: false },
+      /* Client manufacturing report: own page, authority inherited from the
+         orders page (same pattern as vf_cash_box_balances on vf_cash). */
+      { action: 'vf_mfg_client_report', template: 'Company_ValleyFoods_MfgClientReport', title: 'تقرير تصنيع العملاء', label: 'تقرير تصنيع العملاء', nav: false, accessPage: 'vf_mfg_orders' },
 
       // الانتاج — خطوط الإنتاج والأصول
       { action: 'vf_workcenters', template: 'Company_ValleyFoods_WorkCenters', title: 'خطوط الإنتاج', label: 'خطوط الإنتاج', nav: false },

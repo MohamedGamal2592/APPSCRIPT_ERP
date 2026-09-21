@@ -21,7 +21,7 @@
 'use strict';
 
 const path = require('path');
-const E = require(path.join(path.resolve(__dirname, '..', '..'), 'Box_Analysis_Engine.js'));
+const E = require(path.join(path.resolve(__dirname, '..', '..'), 'Company_TopChemical_Actions.js'));
 
 let failures = 0;
 function ok(cond, label, extra) {

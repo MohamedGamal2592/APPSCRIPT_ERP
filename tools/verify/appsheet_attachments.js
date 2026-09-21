@@ -1,7 +1,17 @@
 'use strict';
 const fs = require('fs'), vm = require('vm'), assert = require('assert'), path = require('path');
 const root = path.resolve(__dirname, '../..');
-const source = fs.readFileSync(path.join(root, 'Code.js'), 'utf8');
+const source = [
+  fs.readFileSync(path.join(root, 'Code.js'), 'utf8'),
+  fs.readFileSync(path.join(root, 'Company_Assessment_Actions.js'), 'utf8'),
+  fs.readFileSync(path.join(root, 'Company_Assessment_Registry.js'), 'utf8'),
+  fs.readFileSync(path.join(root, 'Company_TopChemical_Actions.js'), 'utf8'),
+  fs.readFileSync(path.join(root, 'Company_TopChemical_Registry.js'), 'utf8'),
+  fs.readFileSync(path.join(root, 'Company_TopLight_Actions.js'), 'utf8'),
+  fs.readFileSync(path.join(root, 'Company_TopLight_Registry.js'), 'utf8'),
+  fs.readFileSync(path.join(root, 'Company_ValleyFoods_Actions.js'), 'utf8'),
+  fs.readFileSync(path.join(root, 'Company_ValleyFoods_Registry.js'), 'utf8')
+].join('\n');
 function grab(name) {
   const start = source.indexOf('function ' + name + '(');
   assert(start >= 0, 'missing ' + name);
@@ -21,6 +31,7 @@ const ctx = {
   ContentService: { createTextOutput: text => ({ error: text }) },
   HtmlService: { createHtmlOutput: text => ({ html: text, setTitle() { return this; } }) },
   _frame: x => x, _topNavScript: () => '', ScriptApp: { getService: () => ({ getUrl: () => '/exec' }) },
+  Utilities: { base64Encode: value => Buffer.from(String(value)).toString('base64'), computeDigest: () => [0], DigestAlgorithm: { SHA_256: 'SHA_256' }, Charset: { UTF_8: 'UTF_8' } },
   authenticateSystemUser_: () => ({ authorized: !!currentUser, user: currentUser }),
   assertCompanyEnabled_: () => {},
   checkPageAccess_: (user, company, page) => {
@@ -29,6 +40,32 @@ const ctx = {
   },
   getCompanySpreadsheetId_: company => company,
   getAllRecords_: (_, sheet) => { recordReads++; return rowsBySheet[sheet] || []; },
+  /* Faithful port of Code.js indexById (Task 1B contract): trimmed
+     original + lowercase keys, first match wins, blanks skipped; get/has trim
+     the query and fall back to its lowercase form. servePrintFile_ was
+     converted to this index (gap-closure Phase 4) so the sandbox must provide it. */
+  indexById: (rows, idField) => {
+    const want = String(idField == null || idField === '' ? 'id' : idField).trim().toLowerCase() || 'id';
+    const raw = new Map();
+    if (rows && rows.length) {
+      let actual = null;
+      for (const k in rows[0]) { if (String(k).trim().toLowerCase() === want) { actual = k; break; } }
+      rows.forEach(r => {
+        const rv = actual !== null ? r[actual] : (r[want] !== undefined ? r[want] : r[idField]);
+        const pk = String(rv == null ? '' : rv).trim();
+        if (!pk) return;
+        const lc = pk.toLowerCase();
+        if (raw.has(pk) || raw.has(lc)) return;
+        raw.set(pk, r);
+        if (lc !== pk) raw.set(lc, r);
+      });
+    }
+    const norm = q => String(q == null ? '' : q).trim();
+    return {
+      get: q => { const k = norm(q); return raw.has(k) ? raw.get(k) : raw.get(k.toLowerCase()); },
+      has: q => { const k = norm(q); return raw.has(k) || raw.has(k.toLowerCase()); }
+    };
+  },
   getSheet_: () => { throw Error('Opening attachments must not write/read migration sheets'); },
   CacheService: { getScriptCache: () => { throw Error('Download must not trust the upload cache'); } },
   attachmentPreviewHtml_: name => ({ kind: 'preview', name }),
@@ -38,9 +75,26 @@ function iterator(values) { const copy = values.slice(); return { hasNext: () =>
 ctx.DriveApp = {
   getFoldersByName: name => { driveReads++; return iterator((folders[name] || []).map(id => ({ getId: () => id }))); },
   getFolderById: folder => ({ getFilesByName: name => { driveReads++; return iterator((files[folder + '/' + name] || []).map(id => ({ getId: () => id }))); } }),
-  getFileById: id => { driveReads++; if (id === 'X'.repeat(25)) throw Error('Unavailable'); return { getId: () => id, getName: () => id, getBlob: () => ({ getContentType: () => mime }) }; }
+  getFileById: id => { driveReads++; if (id === 'X'.repeat(25)) throw Error('Unavailable'); return { getId: () => id, getName: () => id, getBlob: () => ({ getContentType: () => mime, getBytes: () => [80, 75, 3, 4] }) }; }
 };
-vm.createContext(ctx); vm.runInContext(names.map(grab).join('\n'), ctx);
+vm.createContext(ctx); vm.runInContext(source, ctx, { filename: 'canonical-attachment-runtime.js' });
+Object.assign(ctx, {
+  authenticateSystemUser_: () => ({ authorized: !!currentUser, user: currentUser }),
+  assertCompanyEnabled_: () => {},
+  checkPageAccess_: (user, company, page) => { accesses.push({ company, page }); if (!user || user.denied || user.company !== company) throw Error('Denied'); },
+  getCompanySpreadsheetId_: company => company,
+  getAllRecords_: (_, sheet) => { recordReads++; return rowsBySheet[sheet] || []; },
+  getSheet_: () => { throw Error('Opening attachments must not write/read migration sheets'); },
+  CacheService: { getScriptCache: () => { throw Error('Download must not trust the upload cache'); } },
+  HtmlService: { XFrameOptionsMode: { ALLOWALL: 'ALLOWALL' }, createHtmlOutput: text => ({ html: text, setXFrameOptionsMode() { return this; }, setTitle() { return this; } }) },
+  attachmentPreviewHtml_: name => ({ kind: 'preview', name }),
+  dataUriDownloadHtml_: name => ({ kind: 'download', name })
+});
+ctx.__attFrame = ctx._frame;
+ctx.__attPreview = ctx.attachmentPreviewHtml_;
+ctx.__attDownload = ctx.dataUriDownloadHtml_;
+vm.runInContext('_frame = globalThis.__attFrame; attachmentPreviewHtml_ = globalThis.__attPreview; dataUriDownloadHtml_ = globalThis.__attDownload;', ctx);
+vm.runInContext('COMPANY_REGISTRY = {}; _companiesInitialized_ = false; ensureCompaniesRegistered_();', ctx);
 function setup(cfg, target, field, folder) {
   currentUser = { company: cfg.company }; accesses = []; driveReads = 0; recordReads = 0;
   const ref = folder + '/تسجيل Top One.' + field + '.103330.pdf';

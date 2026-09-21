@@ -17,6 +17,7 @@
   var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
   var scriptUrl = window.scriptUrl || '/';
   var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+  var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
   var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('8df5c89a117fe9a5') ?>';
   var COMPANY_PAGES = <?!= companyPages ?>;
   var CURRENT_ACTION = '<?!= currentAction ?>';
@@ -53,14 +54,15 @@
     renderList();
   }
 
-  /* The list shows the 10 most recent by default (the server's default limit).
+  /* The list shows the 20 most recent by default (the server's default limit).
      "عرض الكل" asks for every invoice; UIC.dataTable then paginates on its own
      at 50 rows a page, so "all" never means one enormous table.
      Called with no argument after a save or a delete, it keeps whichever view
-     the user is in rather than silently dropping them back to 10. */
+      the user is in rather than silently dropping them back to 20. */
   var __loadedAll = false;
 
   function showAllSales() { renderList(true); }
+  function showLatestSales() { renderList(false); }
 
   function renderList(loadAll, quiet) {
     __loadedAll = arguments.length ? !!loadAll : __loadedAll;
@@ -129,16 +131,18 @@
         actions: actions
       };
     });
-    content.innerHTML = '<div style="display:flex;justify-content:flex-end;align-items:center;margin-bottom:12px;gap:8px;flex-wrap:wrap;">' +
-      '<span style="margin-inline-end:auto;color:var(--text-muted);font-size:12px;">' +
-        (__loadedAll
-          ? 'عرض كل الفواتير (' + __headers.length + ')'
-          : 'عرض أحدث ' + __headers.length + ' فاتورة') + '</span>' +
-      (__loadedAll ? '' : '<button class="btn btn-outline" onclick="showAllSales()">عرض الكل</button>') +
+    content.innerHTML = UIC.showAllBar({ loadedAll: __loadedAll, total: __headers.length, showAll: 'showAllSales()', showLatest: 'showLatestSales()' }) +
+    '<div style="display:flex;justify-content:flex-end;align-items:center;margin-bottom:12px;gap:8px;flex-wrap:wrap;">' +
       '<button class="btn btn-outline" onclick="openAnalysis()">تحليل المبيعات</button>' +
       '<button class="btn btn-outline" onclick="openCostingAnalysis()">تحليل تكلفة المبيعات الاجمالية</button>' +
+      UIC.favouritesMenu('sales-table', 'tl_sales') +
       '<button class="btn btn-primary" onclick="openForm(\'\')">+ إضافة فاتورة بيع</button></div>' +
       UIC.dataTable('sales-table', {
+        /* Phase 6 (opt): selectable wires the existing dt-sel bulk bar
+         * (export/print selection — read-only actions only) to this list;
+         * favouritesMenu above generalizes saved views beyond the Cash
+         * pages via the existing SESSION.saveCurrentView endpoint. */
+        selectable: true,
         /* [RT-1] The list endpoint caps at the newest rows unless `loadAll` is
            passed, and the search box filters only what is in memory — so the
            table says which records the box actually searches. */

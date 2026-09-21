@@ -56,6 +56,8 @@
 
     var FILTER_MONTH = '';
     var FILTER_YEAR = '';
+    var MSAL_ALL = false;
+    function toggleMsalAll() { MSAL_ALL = !MSAL_ALL; loadData(); }
 
     var salariesData = { salaries: [], total: 0, existing_emp_ids: [], months: [], month_options: [], employee_options: [] };
 
@@ -146,13 +148,15 @@
         /* [RT-1] The list endpoint caps at the newest rows unless `loadAll` is
            passed, and the search box filters only what is in memory — so the
            table says which records the box actually searches. */
-        truncated: true, headers: headers, rows: rows });
+        truncated: !MSAL_ALL, showAll: 'toggleMsalAll()', headers: headers, rows: rows });
     }
 
     function renderContent() {
       var el = document.getElementById('vf-msal-content');
       if (!el) return;
-      el.innerHTML = renderFilterBar() + renderTotalBar() + '<div id="vf-msal-table-wrap">' + renderTable() + '</div>';
+      el.innerHTML = renderFilterBar() + renderTotalBar() +
+        UIC.showAllBar({ loadedAll: MSAL_ALL, showAll: 'toggleMsalAll()', showLatest: 'toggleMsalAll()' }) +
+        '<div id="vf-msal-table-wrap">' + renderTable() + '</div>';
       bindEvents();
     }
 
@@ -178,7 +182,11 @@
 
     function loadData() {
       UIC.readSkeleton('vf-msal-content');
-      companyCall('get_monthly_salaries_data', { month: FILTER_MONTH, year: FILTER_YEAR }).then(function(res) {
+      /* The month/year filter narrows the set; عرض الكل loads the whole
+         month instead of the newest-20 window. */
+      var _msalPayload = { month: FILTER_MONTH, year: FILTER_YEAR };
+      if (MSAL_ALL) _msalPayload.loadAll = true;
+      companyCall('get_monthly_salaries_data', _msalPayload).then(function(res) {
         if (res) {
           salariesData.salaries = res.salaries || [];
           salariesData.total = res.total || 0;

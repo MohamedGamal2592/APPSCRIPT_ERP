@@ -77,7 +77,7 @@ ok(/var total = mfgAgreeRound2_\(money\.qty \* money\.unit_price\);/.test(ACTION
   'line totals are calculated server-side (qty 3dp, money 2dp)');
 ok(/يوجد اتفاق مطابق بالفعل لهذا الصنف/.test(ACTIONS),
   'exact active duplicates are rejected (double-submit guard)');
-ok(/updateRowByCriteria_\(sheet, 'unique_id', uid, updates\)/.test(ACTIONS),
+ok(/(?:patchRowByCriteria_|updateRowByCriteria_)\(sheet, 'unique_id', uid, (?:updates|map)\)/.test(ACTIONS),
   'edits are idempotent updates keyed by unique_id');
 ok(/status: 'cancelled', updated_by: actor, updated_at: new Date\(\), cancelled_by: actor, cancelled_at: new Date\(\)/.test(ACTIONS),
   'cancel preserves the row with cancelling user + time (audit, no hard delete)');

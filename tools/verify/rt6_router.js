@@ -53,8 +53,8 @@ const at = code.indexOf('function getPageBody_');
 check(at !== -1, 'get_page_body exists');
 const body = code.slice(at, code.indexOf('\nfunction extractBody_'));
 
-check(/checkPageAccessForUI_\(user, action\)/.test(body),
-  'it runs checkPageAccessForUI_ on the page being asked for — the same check doGet runs');
+check(/checkPageAccessForUI_\(user, page\.accessPage \|\| action\)/.test(body),
+  'it runs checkPageAccessForUI_ on the resolved page access id — the same check doGet runs');
 check(/if \(!user\) throw/.test(body),
   'an unauthenticated caller gets nothing');
 check(/p\.action === action && p\.template/.test(body),

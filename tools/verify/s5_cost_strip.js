@@ -344,7 +344,11 @@ console.log('\nS5 — the purchasing save guard (the wipe it prevents)\n');
     'without a guard, an unguarded save would blank all ' + blanked.length + ' cost columns',
     'e.g. Total costs ' + PUR_HEADER_FIXTURE['Total costs'] + " -> '" + wouldWrite['Total costs'] + "'");
 
-  check(SRC.indexOf("throw new Error('لا تملك صلاحية عرض أو تعديل التكاليف (valley_cost_view) — لا يمكن حفظ عملية شراء.');") !== -1,
+  /* The refusal is a confirmed pre-mutation failure (vfNotApplied_: recorded as
+     REQUEST_NOT_APPLIED, never uncertain); the legacy bare-throw form is also
+     accepted so this contract does not pin the classification mechanism. */
+  check(SRC.indexOf("throw new Error('لا تملك صلاحية عرض أو تعديل التكاليف (valley_cost_view) — لا يمكن حفظ عملية شراء.');") !== -1 ||
+      SRC.indexOf("vfNotApplied_('لا تملك صلاحية عرض أو تعديل التكاليف (valley_cost_view) — لا يمكن حفظ عملية شراء.')") !== -1,
     'saveValleyPurchasingCosting_ refuses the write instead');
   /* The guard must sit before any write. */
   const saveAt = SRC.indexOf('function saveValleyPurchasingCosting_');

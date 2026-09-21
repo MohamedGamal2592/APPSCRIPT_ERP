@@ -49,7 +49,7 @@
 
   function fetchSalaries(month, year, quiet) {
     if (!quiet) UI.showSpinner(['جاري تحميل المرتبات...', 'جاري استرجاع بيانات الشهر...', 'لحظة، جاري إعداد الجدول...']);
-    var data = {};
+    var data = { loadAll: true };
     if (month) data.month = Number(month);
     if (year) data.year = Number(year);
     companyCall('get_emp_salaries', data)

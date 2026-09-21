@@ -16,7 +16,7 @@ const vm = require('vm');
 const S = require('../lib/sources');
 
 const ROOT = path.resolve(__dirname, '..', '..');
-const helper = fs.readFileSync(path.join(ROOT, 'JS_Simplification_Helpers.js'), 'utf8');
+const helper = fs.readFileSync(path.join(ROOT, 'Company_Assessment_Actions.js'), 'utf8');
 
 let failures = 0;
 function ok(cond, label, extra) {
@@ -26,9 +26,9 @@ function ok(cond, label, extra) {
 }
 
 /* ── 1. The registry call exists and is invoked ────────────────────────────── */
-console.log('01_Registry.js — the call exists and is wired in\n');
+console.log('Code.js — the call exists and is wired in\n');
 (function () {
-  const reg = S.read('01_Registry.js');
+  const reg = S.read('Code.js');
   ok(/function registerAssessmentCenter_\s*\(/.test(S.read('Company_Assessment_Registry.js')),
     'Company_Assessment_Registry.js defines registerAssessmentCenter_()');
   ok(/registerAssessmentCenter_\(\);/.test(reg),
@@ -121,7 +121,6 @@ function buildSandbox() {
     updateRowByCriteria_: function () { return true; }, logHistory_: function () {}
   };
   vm.createContext(sandbox);
-  vm.runInContext(helper, sandbox, { filename: 'JS_Simplification_Helpers.js' });
   vm.runInContext(actionsSrc, sandbox, { filename: 'Company_Assessment_Actions.js' });
   return { sandbox: sandbox, AC: vm.runInContext('AssessmentCenter', sandbox) };
 }

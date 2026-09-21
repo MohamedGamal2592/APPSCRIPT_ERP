@@ -2,7 +2,7 @@
  * Company_TopLight_Actions.js
  * RESPONSIBILITY: Top Light business logic, IIFE-namespaced to TopLight.
  * Dashboard + Products + Customers/Vendors (create / list / edit).
- * All writes go through getNextId_ + addRecord_ from 02_DataAccess.js.
+ * All writes go through getNextId_ + addRecord_ from Code.js.
  * No functions leak into global scope (the only global is TopLight).
  */
 
@@ -25,6 +25,8 @@ const TopLight = (function () {
   const CASH_SHEET = 'top_light_cash_bank_movement';
   const BOX_SHEET = 'top_light_box_account_codes';
   const CURRENCY_SHEET = 'ERP_currency_exchange';
+  // Phase 3: own tenant UID for guard_/authorize_ (was inline literal).
+  const COMPANY_UID = '8df5c89a117fe9a5';
 
   /**
    * "Has anything this page cares about changed since I last looked?"
@@ -62,20 +64,40 @@ const TopLight = (function () {
     };
   }
 
+  // Phase 3: FAIL-CLOSED. An action not listed in PAGE_ACCESS is denied, not
+  // allowed. Super-admin bypass preserved. Two intentional exceptions, both
+  // reading no other page's sheets: get_page_versions gates itself on the page
+  // asked about (see getPageVersions_), and get_xlsx_export builds an xlsx
+  // from client-supplied cells only.
   function guard_(user, action) {
-    if (!user || user.isSuperAdmin) return;
+    if (user && user.isSuperAdmin) return;
+    if (action === 'get_page_versions' || action === 'get_xlsx_export') return;
     const req = PAGE_ACCESS[action];
-    if (!req) return;
+    if (!req) throw new Error(ERP_MESSAGES.NOT_AUTHORIZED);
     const need = _normalizeAccess_(req.access);
     // unified: view=any, add=write/full, edit/delete=full only
-    if (!unifiedCheck_(user, '8df5c89a117fe9a5', req.page, need)) {
+    if (!unifiedCheck_(user, COMPANY_UID, req.page, need)) {
       throw new Error(ERP_MESSAGES.NOT_AUTHORIZED);
     }
+  }
+
+  // Phase 3: Valley-style tenant double-check. dbId must be this company's own
+  // spreadsheet; a mismatched dbId (cross-tenant routing fault) is denied
+  // before any sheet read.
+  function authorize_(user, dbId) {
+    if (!user || (!user.isSuperAdmin && user.company !== COMPANY_UID) || !dbId || String(dbId) !== String(getCompanySpreadsheetId_(COMPANY_UID))) throw new Error(ERP_MESSAGES.NOT_AUTHORIZED);
   }
   function dispatch_(payload, user, dbId) {
     const action = payload.module_action;
     if (!actions[action]) throw new Error('Unknown Top Light action: ' + action);
     guard_(user, action);
+    /* Phase 2: defensive gate so direct dispatch also validates. Status-only
+     * paths skip field validation inside validateBeforeWrite; handlers still
+     * enforce status via canTransition/assertTransition_. */
+    if (typeof validateBeforeWrite === 'function' && typeof docTypeForAction_ === 'function') {
+      var __dt = docTypeForAction_(action);
+      if (__dt) validateBeforeWrite(__dt, payload, dbId);
+    }
     return actions[action](payload.data, user, dbId);
   }
 
@@ -469,7 +491,7 @@ const TopLight = (function () {
     const id = Number((data && data.id));
     if (!id) throw new Error('معرف المنتج مطلوب');
     const resolvedCat = resolveCategoryId_(data, user, dbId);
-    var _editProdOld = null; try { _editProdOld = getAllRecords_(dbId, PRODUCTS_SHEET).find(function(r){ return String(r.id)===String(id); }) || null; } catch(e){}
+    var _editProdOld = null; try { var _editProdRows = getAllRecords_(dbId, PRODUCTS_SHEET); var _editProdIdx = indexById(_editProdRows, 'id'); var _editProdKey = String(id).trim(); _editProdOld = _editProdIdx.get(_editProdKey) || _editProdIdx.get(_editProdKey.toLowerCase()) || null; } catch(e){}
     var _editProdNewVals = {
       name_ar: String((data && data.name_ar) || '').trim(),
       name_en: String((data && data.name_en) || '').trim(),
@@ -481,7 +503,7 @@ const TopLight = (function () {
       updated_at: new Date()
     };
     const sheet = getSheet_(PRODUCTS_SHEET, dbId);
-    const updated = updateRowByCriteria_(sheet, 'id', id, _editProdNewVals);
+    const updated = patchRowByCriteria_(sheet, 'id', id, _editProdNewVals);
     if (!updated) throw new Error('المنتج غير موجود');
     try { var _uid = (_editProdOld && _editProdOld.record_uid) ? String(_editProdOld.record_uid) : 'update_top_light_products_' + id; logHistory_(dbId, PRODUCTS_SHEET, _uid, String(id), (user&&user.email)||'', 'update', _editProdNewVals, _editProdOld); } catch(e){}
     bustTopLightCaches_(dbId, 'products');
@@ -586,7 +608,7 @@ const TopLight = (function () {
     const id = Number((data && data.id));
     if (!id) throw new Error('معرف الطرف مطلوب');
     const dirVal = String((data && data.customer_direction) || 'customer').trim();
-    var _editPartyOld = null; try { _editPartyOld = getAllRecords_(dbId, CUSTOMERS_SHEET).find(function(r){ return String(r.id)===String(id); }) || null; } catch(e){}
+    var _editPartyOld = null; try { var _editPartyRows = getAllRecords_(dbId, CUSTOMERS_SHEET); var _editPartyIdx = indexById(_editPartyRows, 'id'); var _editPartyKey = String(id).trim(); _editPartyOld = _editPartyIdx.get(_editPartyKey) || _editPartyIdx.get(_editPartyKey.toLowerCase()) || null; } catch(e){}
     var _editPartyNewVals = {
       name: String((data && data.name) || '').trim(),
       customer_direction: dirVal,
@@ -601,7 +623,7 @@ const TopLight = (function () {
       updated_at: new Date()
     };
     const sheet = getSheet_(CUSTOMERS_SHEET, dbId);
-    const updated = updateRowByCriteria_(sheet, 'id', id, _editPartyNewVals);
+    const updated = patchRowByCriteria_(sheet, 'id', id, _editPartyNewVals);
     if (!updated) throw new Error('الطرف غير موجود');
     try { var _uid = (_editPartyOld && _editPartyOld.record_uid) ? String(_editPartyOld.record_uid) : 'update_top_light_customer_vendor_' + id; logHistory_(dbId, CUSTOMERS_SHEET, _uid, String(id), (user&&user.email)||'', 'update', _editPartyNewVals, _editPartyOld); } catch(e){}
     bustTopLightCaches_(dbId, 'parties');
@@ -668,7 +690,7 @@ const TopLight = (function () {
   }
 
   function getPurchasingHeaders_(data, user, dbId) {
-    var limit = Number(data && data.limit) || 10;
+    var limit = Number(data && data.limit) || 20;
     const rows = getAllRecords_(dbId, PURCHASING_SHEET);
     const vendorNames = {};
     partyRefs_(dbId).forEach(v => { vendorNames[String(v.id)] = v.name; });
@@ -790,7 +812,18 @@ const TopLight = (function () {
     const header = data && data.header ? data.header : {};
     const lines = (data && data.lines) ? data.lines : [];
     validatePurchasingHeader_(header, lines);
-    const uid = uid16_();
+    /* Phase 6 — Valley parity (requestDedupeExecute_ semantics): a replayed
+     * create carries the same request_key/unique_id, so it returns the
+     * committed row instead of writing a second document. The key is reused
+     * as the row id so the retry converges on one row. Callers that send no
+     * key get a minted id exactly as before. */
+    const _reqKeyP = String((data && (data.request_key || data.unique_id)) || (header && (header.request_key || header.unique_id)) || '').trim();
+    if (_reqKeyP) {
+      var _seenP = null;
+      try { _seenP = requestDedupeExecute_(dbId, PURCHASING_SHEET, _reqKeyP, _reqKeyP); } catch (eGuardP) { _seenP = null; }
+      if (_seenP) return liveDedupeReply_(_seenP, 'تمت إضافة عملية الشراء');
+    }
+    const uid = _reqKeyP || uid16_();
     writeHeaderRow_(dbId, uid, header, user);
     writeLines_(dbId, uid, header, lines, user);
     try { var _uid = 'create_top_light_purchasing_costing_' + uid; logHistory_(dbId, PURCHASING_SHEET, _uid, String(uid), (user&&user.email)||'', 'create', header, null); } catch(e){}
@@ -840,7 +873,15 @@ const TopLight = (function () {
     }
     if (rowNum === -1) throw new Error('الفاتورة غير موجودة');
 
-    var _editPurchOld = null; try { _editPurchOld = getAllRecords_(dbId, PURCHASING_SHEET).find(function(r){ return String(r.unique_id)===String(uid); }) || null; } catch(e){}
+    var _editPurchOld = null;
+    try {
+      var oldRaw = dataArr[rowNum - 1] || [];
+      _editPurchOld = {};
+      headers.forEach(function (h, c) {
+        var k = String(h).trim();
+        _editPurchOld[k] = oldRaw[c] !== undefined ? oldRaw[c] : '';
+      });
+    } catch (e) { _editPurchOld = null; }
     deleteLines_(dbId, uid);
     const rowValues = buildHeaderValues_(headers, uid, header, user);
     // Phase 3 (F-04): formulas merged into the same setValues that writes the
@@ -897,17 +938,16 @@ const TopLight = (function () {
   }
 
   function approvePurchasing_(data, user, dbId) {
+    /* Phase 6: thin wrapper — routing + patch come from APPROVAL_CHAINS via
+     * approveStep_ (Code.js). Cache bust stays here: it is a company
+     * concern, not approval routing. */
     const uid = String((data && data.unique_id) || '').trim();
     if (!uid) throw new Error('معرف الفاتورة مطلوب');
-    var _apprPurchOld = null; try { _apprPurchOld = getAllRecords_(dbId, PURCHASING_SHEET).find(function(r){ return String(r.unique_id)===String(uid); }) || null; } catch(e){}
-    const sheet = getSheet_(PURCHASING_SHEET, dbId);
-    const updated = updateRowByCriteria_(sheet, 'unique_id', uid, {
-      approval_status: 'Approved',
-      approval: user ? user.email : '',
-      approval_time: new Date()
-    });
-    if (!updated) throw new Error('الفاتورة غير موجودة');
-    try { var _newVals = { approval_status: 'Approved', approval: user ? user.email : '' }; var _uid = (_apprPurchOld && _apprPurchOld.record_uid) ? String(_apprPurchOld.record_uid) : 'approve_top_light_purchasing_costing_' + uid; logHistory_(dbId, PURCHASING_SHEET, _uid, String(uid), (user&&user.email)||'', 'approve', _newVals, _apprPurchOld); } catch(e){}
+    /* Phase 2: Pending->Approved only, Approved terminal — via table (no inline cur check). */
+    var __curPurch = null; try { __curPurch = getAllRecords_(dbId, PURCHASING_SHEET).find(function(r){ return String(r.unique_id)===String(uid); }) || null; } catch(eRead){}
+    if (__curPurch) assertTransition_('tl_purchasing', __curPurch.approval_status || 'Pending', 'Approved', 'لا يمكن اعتماد عملية الشراء من هذه الحالة');
+    const res = approveStep_('tl_purchasing', uid, 'approve', user, { dbId: dbId, version: data && data.version });
+    if (!res || res.status !== 'success') throw new Error((res && res.message) || 'الفاتورة غير موجودة');
     bustTopLightCaches_(dbId, 'purchasing');
     return { status: 'success', message: 'تمت الموافقة على العملية' };
   }
@@ -965,7 +1005,8 @@ const TopLight = (function () {
     return s;
   }
 
-  function num0_(v) { return Math.max(0, Number(v) || 0); }
+  /* Phase 5 compat: delegates to shared sharedNum0_ (Code.js). */
+  function num0_(v) { return (typeof sharedNum0_ === 'function') ? sharedNum0_(v) : Math.max(0, Number(v) || 0); }
 
   function parseDate_(v) {
     if (v == null || v === '') return '';
@@ -1246,7 +1287,7 @@ const TopLight = (function () {
    * 2.3 fully_returned therefore gets computed for the returned slice only.
    */
   function getSalesHeaders_(data, user, dbId) {
-    var limit = Number(data && data.limit) || 10;
+    var limit = Number(data && data.limit) || 20;
     const rows = getAllRecords_(dbId, SALES_SHEET);
     const custNames = {};
     partyRefs_(dbId).forEach(c => { custNames[String(c.id)] = c.name; });
@@ -1476,15 +1517,27 @@ const TopLight = (function () {
   }
 
   function addSales_(data, user, dbId) {
+    /* Phase 1: numbering via the shared locked counter must hold the lock. */
+    return executeWithLock_(function () {
     const header = data && data.header ? data.header : {};
     const lines = (data && data.lines) ? data.lines : [];
     validateSales_(header, lines, dbId);
-    const uid = uid16_();
+    /* Phase 6 — Valley parity: replay guard inside the lock, before numbering,
+     * so a retried save returns the committed invoice without burning the
+     * next invoice number. See addPurchasing_. */
+    const _reqKeyS = String((data && (data.request_key || data.unique_id)) || (header && (header.request_key || header.unique_id)) || '').trim();
+    if (_reqKeyS) {
+      var _seenS = null;
+      try { _seenS = requestDedupeExecute_(dbId, SALES_SHEET, _reqKeyS, _reqKeyS); } catch (eGuardS) { _seenS = null; }
+      if (_seenS) return liveDedupeReply_(_seenS, 'تمت إضافة الفاتورة');
+    }
+    const uid = _reqKeyS || uid16_();
     header.customer_tax_id = lookupCustomerField_(dbId, header.customer_id, 'tax_id');
     header.customer_telephone = lookupCustomerField_(dbId, header.customer_id, 'telephone');
     header.customer_address = lookupCustomerField_(dbId, header.customer_id, 'address');
     header.invoice_number = nextInvoiceNumber_(dbId);
     computeSalesTotals_(header, lines);
+    header.version = 0;
     writeSalesHeaderRow_(dbId, uid, header, user);
     writeSalesLines_(dbId, uid, header, lines, user);
     try { var _uid = 'create_top_light_sales_invoices_' + uid; logHistory_(dbId, SALES_SHEET, _uid, String(uid), (user&&user.email)||'', 'create', header, null); } catch(e){}
@@ -1513,9 +1566,12 @@ const TopLight = (function () {
     // copy raw header keys for compatibility
     savedSales['invoice_unique_id'] = uid;
     return { status: 'success', message: 'تمت إضافة الفاتورة', unique_id: uid, assignedId: uid, record: savedSales };
+    });
   }
 
   function editSales_(data, user, dbId) {
+    /* Phase 1: fallback numbering via the shared locked counter must hold the lock. */
+    return executeWithLock_(function () {
     const header = data && data.header ? data.header : {};
     const lines = (data && data.lines) ? data.lines : [];
     const uid = String((header.unique_id == null) ? '' : header.unique_id).trim();
@@ -1534,6 +1590,8 @@ const TopLight = (function () {
     if (rowNum === -1) throw new Error('الفاتورة غير موجودة');
 
     var _editSalesOld = null; try { _editSalesOld = getAllRecords_(dbId, SALES_SHEET).find(function(r){ return String(r.invoice_unique_id)===String(uid); }) || null; } catch(e){}
+    var __editSalesVer = checkRowVersion_(_editSalesOld, header.version);
+    header.version = __editSalesVer + 1;
     header.customer_tax_id = lookupCustomerField_(dbId, header.customer_id, 'tax_id');
     header.customer_telephone = lookupCustomerField_(dbId, header.customer_id, 'telephone');
     header.customer_address = lookupCustomerField_(dbId, header.customer_id, 'address');
@@ -1544,7 +1602,8 @@ const TopLight = (function () {
     deleteSalesLines_(dbId, uid);
     const rowValues = buildSalesHeaderValues_(headers, uid, header, user);
     // Phase 3 (F-04): formulas merged into the same setValues. The row already
-    // exists and is located by unique_id, so no lock is needed here.
+    // exists and is located by unique_id; the outer executeWithLock_ covers the
+    // fallback numbering above (inner helpers are re-entrant).
     applySalesHeaderFormulas_(rowValues, headers, rowNum);
     sheet.getRange(rowNum, 1, 1, rowValues.length).setValues([rowValues]);
     noteMutation_(sheet);
@@ -1574,6 +1633,7 @@ const TopLight = (function () {
       unique_id: uid
     };
     return { status: 'success', message: 'تم تحديث الفاتورة', unique_id: uid, assignedId: uid, record: savedSalesE };
+    });
   }
 
   function deleteSales_(data, user, dbId) {
@@ -1594,17 +1654,14 @@ const TopLight = (function () {
   }
 
   function approveSales_(data, user, dbId) {
+    /* Phase 6: thin wrapper — see approvePurchasing_. */
     const uid = String((data && data.unique_id) || '').trim();
     if (!uid) throw new Error('معرف الفاتورة مطلوب');
-    var _apprSalesOld = null; try { _apprSalesOld = getAllRecords_(dbId, SALES_SHEET).find(function(r){ return String(r.invoice_unique_id)===String(uid); }) || null; } catch(e){}
-    const sheet = getSheet_(SALES_SHEET, dbId);
-    const updated = updateRowByCriteria_(sheet, 'invoice_unique_id', uid, {
-      approval_status: 'Approved',
-      approval: user ? user.email : '',
-      approval_time: new Date()
-    });
-    if (!updated) throw new Error('الفاتورة غير موجودة');
-    try { var _newVals = { approval_status: 'Approved', approval: user ? user.email : '' }; var _uid = (_apprSalesOld && _apprSalesOld.record_uid) ? String(_apprSalesOld.record_uid) : 'approve_top_light_sales_invoices_' + uid; logHistory_(dbId, SALES_SHEET, _uid, String(uid), (user&&user.email)||'', 'approve', _newVals, _apprSalesOld); } catch(e){}
+    /* Phase 2: Pending->Approved only, Approved terminal — via table. */
+    var __curSales = null; try { __curSales = getAllRecords_(dbId, SALES_SHEET).find(function(r){ return String(r.invoice_unique_id)===String(uid); }) || null; } catch(eRead){}
+    if (__curSales) assertTransition_('tl_sales', __curSales.approval_status || 'Pending', 'Approved', 'لا يمكن اعتماد الفاتورة من هذه الحالة');
+    const res = approveStep_('tl_sales', uid, 'approve', user, { dbId: dbId, version: data && data.version });
+    if (!res || res.status !== 'success') throw new Error((res && res.message) || 'الفاتورة غير موجودة');
     bustTopLightCaches_(dbId, 'sales');
     return { status: 'success', message: 'تمت الموافقة على الفاتورة' };
   }
@@ -1803,13 +1860,19 @@ const TopLight = (function () {
   }
 
   // Cache an object derived from a heavy sheet read (TTL seconds, script cache).
+  // OPT-2: chunked storage. A plain single-key put SILENTLY NEVER WORKS past
+  // ~100 KB (the put throws, was swallowed), so the bigger the map the less
+  // the cache helped — every call rebuilt from a full sheet read. Chunking
+  // keeps the same logical key, TTL, and stamp-orphaning contract while
+  // letting large maps actually persist. Small values cost one extra manifest
+  // entry; misses (null, eviction, partial chunks) rebuild exactly as before.
   function cachedMap_(cacheKey, ttlSeconds, buildFn) {
     try {
-      const cached = CacheService.getScriptCache().get(cacheKey);
-      if (cached) return JSON.parse(cached);
+      const cached = getChunkedCache_(cacheKey);
+      if (cached !== null) return cached;
     } catch (e) {}
     const result = buildFn();
-    try { CacheService.getScriptCache().put(cacheKey, JSON.stringify(result), ttlSeconds); } catch (e) {}
+    try { putChunkedCache_(cacheKey, result, ttlSeconds); } catch (e) {}
     return result;
   }
 
@@ -1905,7 +1968,12 @@ const TopLight = (function () {
       if (!type || type === 'purchasing') { keys.push('tl_qty_map_' + dbId, 'tl_price_map_' + dbId); }
       if (!type || type === 'sales') { keys.push('tl_qty_map_' + dbId); }
       if (!type || type === 'cash') { keys.push('tl_box_names_' + dbId, 'tl_box_opts_' + dbId, 'tl_chart_opts_' + dbId); }
+      // Legacy single-key entries from before chunking (OPT-2).
       cache.removeAll(keys);
+      // OPT-2: cachedMap_ entries now live in chunk manifests/data, which a
+      // plain removeAll cannot reach. Drop those namespaces too; the stamp
+      // bump above already orphans every versioned key at once.
+      keys.forEach(function (k) { removeChunkedCache_(k); });
     } catch (e) {}
   }
 
@@ -1981,16 +2049,35 @@ const TopLight = (function () {
   }
 
   function nextInvoiceNumber_(dbId) {
-    let maxPrefix = 0;
-    getAllRecords_(dbId, SALES_SHEET).forEach(r => {
-      const s = String((r['رقم الفاتورة'] == null) ? '' : r['رقم الفاتورة']).trim();
-      const m = s.match(/^(\d+)-/);
-      if (m) { const n = Number(m[1]); if (!isNaN(n) && n > maxPrefix) maxPrefix = n; }
+    /* Phase 1: delegates to the shared locked counter. Format identical:
+     * "{seq}-{year}". MUST be called while holding executeWithLock_. */
+    var year = new Date().getFullYear();
+    var seq = nextDocumentNumber_(dbId, 'tl_sales', year, {
+      seedScanner: function () {
+        var maxPrefix = 0;
+        getAllRecords_(dbId, SALES_SHEET).forEach(function (r) {
+          var s = String((r['رقم الفاتورة'] == null) ? '' : r['رقم الفاتورة']).trim();
+          var m = s.match(/^(\d+)-/);
+          if (m) { var n = Number(m[1]); if (!isNaN(n) && n > maxPrefix) maxPrefix = n; }
+        });
+        return maxPrefix;
+      }
     });
-    return (maxPrefix + 1) + '-' + new Date().getFullYear();
+    return seq + '-' + year;
   }
 
   function computeSalesTotals_(header, lines) {
+    /* Phase 5: shared totals lib (Code.js calcTotals_) is source of
+     * truth. No rounding here — raw-float behavior preserved. */
+    if (typeof calcTotals_ === 'function') {
+      const mapped = (lines || []).map(l => ({ qty: l.product_qty, price: l.product_price, tax: l.product_tax, discount: l.product_discount }));
+      const t = calcTotals_(mapped, header.discount_percent);
+      header.net_amount = t.net;
+      header.discount_amount = t.discount;
+      header.tax_amount = t.tax;
+      header.total_amount = t.total;
+      return;
+    }
     const discountPercent = num0_(header.discount_percent);
     let net = 0, lineDiscount = 0, tax = 0;
     (lines || []).forEach(l => {
@@ -2060,6 +2147,7 @@ const TopLight = (function () {
     put('user', user ? user.email : '');
     put('created_at', new Date());
     put('approval_status', (header.approval_status != null && header.approval_status !== '') ? header.approval_status : 'Pending');
+    put('version', header.version !== undefined ? header.version : 0);
 
     return rowValues;
   }
@@ -2310,16 +2398,14 @@ const TopLight = (function () {
   }
 
   function approveCash_(data, user, dbId) {
+    /* Phase 6: thin wrapper — kind 'cash' row in APPROVAL_CHAINS. */
     const id = Number(data && data.unique_id);
     if (!id) throw new Error('معرف الحركة مطلوب');
-    var _apprCashOld = null; try { _apprCashOld = getAllRecords_(dbId, CASH_SHEET).find(function(r){ return String(r.transaction_id)===String(id); }) || null; } catch(e){}
-    const sheet = getSheet_(CASH_SHEET, dbId);
-    const updated = updateRowByCriteria_(sheet, 'transaction_id', id, {
-      approved: true,
-      user: user ? user.email : ''
-    });
-    if (!updated) throw new Error('الحركة غير موجودة');
-    try { var _newVals = { approved: true }; var _uid = (_apprCashOld && _apprCashOld.record_uid) ? String(_apprCashOld.record_uid) : 'approve_top_light_cash_bank_movement_' + id; logHistory_(dbId, CASH_SHEET, _uid, String(id), (user&&user.email)||'', 'approve', _newVals, _apprCashOld); } catch(e){}
+    /* Phase 2: approved bool false->true only, true terminal — via table. */
+    var __curCash = null; try { __curCash = getAllRecords_(dbId, CASH_SHEET).find(function(r){ return String(r.transaction_id)===String(id); }) || null; } catch(eRead){}
+    if (__curCash) assertTransition_('tl_cash', __curCash.approved, 'true', 'لا يمكن اعتماد الحركة من هذه الحالة');
+    const res = approveStep_('tl_cash', id, 'approve', user, { dbId: dbId, version: data && data.version });
+    if (!res || res.status !== 'success') throw new Error((res && res.message) || 'الحركة غير موجودة');
     bustTopLightCaches_(dbId, 'cash');
     return { status: 'success', message: 'تم اعتماد الحركة' };
   }
@@ -2817,7 +2903,7 @@ const TopLight = (function () {
   // Sales offers — clone of sales without returns, offer tables
   // =========================================
   function getSalesOfferHeaders_(data, user, dbId) {
-    var limit = Number(data && data.limit) || 10;
+    var limit = Number(data && data.limit) || 20;
     const rows = getAllRecords_(dbId, OFFER_SHEET);
     const custNames = {};
     partyRefs_(dbId).forEach(c => { custNames[String(c.id)] = c.name; });
@@ -2904,7 +2990,15 @@ const TopLight = (function () {
     const header = data && data.header ? data.header : {};
     const lines = (data && data.lines) ? data.lines : [];
     validateSales_(header, lines, dbId, true);
-    const uid = uid16_();
+    /* Phase 6 — Valley parity: see addPurchasing_. Guard sits before offer
+     * numbering so a replay never allocates a second offer number. */
+    const _reqKeyO = String((data && (data.request_key || data.unique_id)) || (header && (header.request_key || header.unique_id)) || '').trim();
+    if (_reqKeyO) {
+      var _seenO = null;
+      try { _seenO = requestDedupeExecute_(dbId, OFFER_SHEET, _reqKeyO, _reqKeyO); } catch (eGuardO) { _seenO = null; }
+      if (_seenO) return liveDedupeReply_(_seenO, 'تمت إضافة العرض');
+    }
+    const uid = _reqKeyO || uid16_();
     header.customer_tax_id = lookupCustomerField_(dbId, header.customer_id, 'tax_id');
     header.customer_telephone = lookupCustomerField_(dbId, header.customer_id, 'telephone');
     header.customer_address = lookupCustomerField_(dbId, header.customer_id, 'address');
@@ -3005,17 +3099,14 @@ const TopLight = (function () {
   }
 
   function approveSalesOffer_(data, user, dbId) {
+    /* Phase 6: thin wrapper — see approvePurchasing_. */
     const uid = String((data && data.unique_id) || '').trim();
     if (!uid) throw new Error('معرف العرض مطلوب');
-    var _apprOfferOld = null; try { _apprOfferOld = getAllRecords_(dbId, OFFER_SHEET).find(function(r){ return String(r.invoice_unique_id)===String(uid); }) || null; } catch(e){}
-    const sheet = getSheet_(OFFER_SHEET, dbId);
-    const updated = updateRowByCriteria_(sheet, 'invoice_unique_id', uid, {
-      approval_status: 'Approved',
-      approval: user ? user.email : '',
-      approval_time: new Date()
-    });
-    if (!updated) throw new Error('العرض غير موجود');
-    try { var _newVals = { approval_status: 'Approved', approval: user ? user.email : '' }; var _uid = (_apprOfferOld && _apprOfferOld.record_uid) ? String(_apprOfferOld.record_uid) : 'approve_top_light_sales_offer_' + uid; logHistory_(dbId, OFFER_SHEET, _uid, String(uid), (user&&user.email)||'', 'approve', _newVals, _apprOfferOld); } catch(e){}
+    /* Phase 2: Pending->Approved only, Approved terminal — via table. */
+    var __curOffer = null; try { __curOffer = getAllRecords_(dbId, OFFER_SHEET).find(function(r){ return String(r.invoice_unique_id)===String(uid); }) || null; } catch(eRead){}
+    if (__curOffer) assertTransition_('tl_offer', __curOffer.approval_status || 'Pending', 'Approved', 'لا يمكن اعتماد العرض من هذه الحالة');
+    const res = approveStep_('tl_sales_offer', uid, 'approve', user, { dbId: dbId, version: data && data.version });
+    if (!res || res.status !== 'success') throw new Error((res && res.message) || 'العرض غير موجود');
     return { status: 'success', message: 'تمت الموافقة على العرض' };
   }
 
@@ -3568,12 +3659,13 @@ const TopLight = (function () {
   //   exclusion as the cash KPIs); AR = positive as-of party balances
   //   (same engine as the tl_customers الرصيد column).
   // Liabilities & equity: AP = negative as-of party balances; capital is a
-  //   fixed 20,000,000; owner running account is 0 unless recalc_running is
+  //   fixed 14,000,000; owner running account is 0 unless recalc_running is
   //   set, in which case it is recomputed to balance the statement.
   // Single-pass aggregation per sheet — never per-party scans.
   // =========================================
-  var TL_FIXED_CAPITAL = 14000000;
-  var TL_FOUNDATION_EXPENSES = 269130.999;
+  // Fixed capital after the requested 294,512.99 adjustment.
+  var TL_CAPITAL_REDUCTION = 294512.99;
+  var TL_FIXED_CAPITAL = 14000000 - TL_CAPITAL_REDUCTION;
 
   function getFinancialPosition_(data, user, dbId) {
     const dateFrom = parseDate_(data && data.date_from);
@@ -3658,7 +3750,7 @@ const TopLight = (function () {
     const stock = stockAsOf.summary.endVal;
     const stockDetail = stockAsOf.stockDetail;
     const capital = TL_FIXED_CAPITAL;
-    const totalAssets = fixedAssets + cash + arTotal + stock + TL_FOUNDATION_EXPENSES;
+    const totalAssets = fixedAssets + cash + arTotal + stock;
     let running = 0;
     if (data && (data.recalc_running === true || data.recalc_running === 'true')) {
       running = totalAssets - apTotal - capital - periodProfit;
@@ -3666,7 +3758,7 @@ const TopLight = (function () {
     const totalEquity = capital + running + periodProfit;
     const totalLiabEquity = apTotal + totalEquity;
     const balanceDiff = totalAssets - totalLiabEquity;
-    const currentAssets = cash + arTotal + stock + TL_FOUNDATION_EXPENSES;
+    const currentAssets = cash + arTotal + stock;
 
     return {
       status: 'success',
@@ -3679,7 +3771,6 @@ const TopLight = (function () {
         arCount: ar.length,
         stock: stock,
         stockCount: stockDetail.length,
-        foundation: TL_FOUNDATION_EXPENSES,
         currentAssets: currentAssets,
         totalAssets: totalAssets,
         apTotal: apTotal,
@@ -4036,5 +4127,127 @@ const TopLight = (function () {
      itself on the page it is asked about (see getPageVersions_). */
   register('get_page_versions', getPageVersions_);
 
-  return { dispatch_: dispatch_, pageForAction_: pageForAction_, tableForAction_: tableForAction_ };
+  /* Phase 2: register field validators for validateBeforeWrite (no logic duplicated —
+   * each entry calls the existing validator). Status-only paths skip via STATUS_ONLY_ACTIONS_. */
+  try {
+    if (typeof registerDocValidator_ === 'function') {
+      registerDocValidator_('tl_purchasing', function(payloadData, dbId){ var h=(payloadData&&payloadData.header)||{}; var l=(payloadData&&payloadData.lines)||[]; return validatePurchasingHeader_(h, l); });
+      registerDocValidator_('tl_sales', function(payloadData, dbId){ var h=(payloadData&&payloadData.header)||{}; var l=(payloadData&&payloadData.lines)||[]; return validateSales_(h, l, dbId, false); });
+      registerDocValidator_('tl_offer', function(payloadData, dbId){ var h=(payloadData&&payloadData.header)||{}; var l=(payloadData&&payloadData.lines)||[]; return validateSales_(h, l, dbId, true); });
+      registerDocValidator_('tl_cash', function(payloadData, dbId){ var r=(payloadData&&payloadData.record)||payloadData||{}; return validateCash_(r); });
+    }
+  } catch(eRegTL){}
+
+
+  function topLightThemeCss_() {
+    return '' +
+      '<style>\n' +
+      ':root {\n' +
+      /* [UI-2.4 / D-1 / U-10] Canvas, surfaces, borders and ink are NO LONGER
+         overridden here. They come from CSS_Tokens.html, so all three companies
+         share one neutral canvas and one hairline border, and TopLight is
+         identified by its topbar and its buttons rather than by painting the
+         whole page amber. What stays below is brand and semantics only. */
+      '  --font-sans: \'Cairo\', sans-serif;\n' +
+      '  --font-mono: \'Consolas\', \'Courier New\', monospace;\n' +
+      '  --success: #16a34a;\n' +
+      '  --success-bg: #f0fdf4;\n' +
+      '  --success-text: #16a34a;\n' +
+      '  --success-border: #bbf7d0;\n' +
+      '  --warning: #c2410c;\n' +
+      '  --warning-bg: #fff7ed;\n' +
+      '  --warning-text: #c2410c;\n' +
+      '  --warning-border: #fed7aa;\n' +
+      '  --danger: #b91c1c;\n' +
+      '  --danger-bg: #fef2f2;\n' +
+      '  --danger-text: #b91c1c;\n' +
+      '  --danger-border: #fecaca;\n' +
+      '  --info: #0369a1;\n' +
+      '  --amber: #b45309;\n' +
+      '  --brand-primary: #111111;\n' +
+      '  --brand-primary-hover: #000000;\n' +
+      '  --brand-subtle-bg: #fef08a;\n' +
+      '  --brand-border: #111111;\n' +
+      '  --btn-text-color: #fbbf24;\n' +
+      '  --shadow-brand: 0 4px 14px rgba(17, 17, 17, 0.25);\n' +
+      '}\n' +
+      /* The brand topbar: black with amber ink. This, the primary button and the
+         row-hover tint are where the brand lives now. */
+      '.topbar { background: #111111; border-bottom: 1px solid #111111; }\n' +
+      '.topbar .nav-item { color: #fbbf24; }\n' +
+      '.topbar .nav-item:hover, .topbar .nav-item.active { color: #111111; background: #fbbf24; }\n' +
+      '/* TopLight dropdowns: curved black fill, yellow ink + black-on-yellow hover — always apparent.\n' +
+      '   Scoped to .topbar so a dropdown rendered in page content keeps the neutral surface. */\n' +
+      '.topbar .nav-dropdown-menu {\n' +
+      '  background: #111111;\n' +
+      '  border: 1px solid #fbbf24;\n' +
+      '  border-radius: 16px;\n' +
+      '  box-shadow: 0 12px 28px rgba(0,0,0,.45);\n' +
+      '}\n' +
+      '.topbar .nav-dropdown-toggle { color: #fbbf24; }\n' +
+      '.topbar .nav-dropdown-toggle:hover, .topbar .nav-dropdown-toggle.open { color: #111111; background: #fbbf24; }\n' +
+      '/* Profile toggle must read without hovering: pill button + yellow name (the .user-name\n' +
+      '   rule would otherwise paint it near-black on the black topbar) */\n' +
+      '.topbar .user-profile-toggle { border: 1px solid #fbbf24; border-radius: 999px; padding: 4px 12px; background: #111111; }\n' +
+      '.topbar .user-profile-toggle .user-name { color: #fbbf24; }\n' +
+      '.topbar .user-profile-toggle .nav-dropdown-caret { color: #fbbf24; }\n' +
+      '.topbar .user-profile-toggle:hover, .topbar .user-profile-toggle.open { background: #fbbf24; }\n' +
+      '.topbar .user-profile-toggle:hover .user-name, .topbar .user-profile-toggle.open .user-name,\n' +
+      '.topbar .user-profile-toggle:hover .nav-dropdown-caret, .topbar .user-profile-toggle.open .nav-dropdown-caret { color: #111111; }\n' +
+      '.topbar .nav-dropdown-item { color: #fbbf24; font-weight: 700; border-radius: 10px; }\n' +
+      '.topbar .nav-dropdown-item:hover { background: #fbbf24; color: #111111; }\n' +
+      '.topbar .nav-dropdown-item-active { background: #fbbf24; color: #111111; font-weight: 800; }\n' +
+      '.topbar .user-avatar { background: #fbbf24; color: #111111; }\n' +
+      '.topbar .user-profile-name { color: #fbbf24; }\n' +
+      '.topbar .user-profile-email { color: #fde68a; }\n' +
+      '.topbar .user-profile-divider { background: #fbbf24; opacity: .4; }\n' +
+      '.topbar .user-profile-logout { color: #fbbf24; }\n' +
+      '.topbar .user-profile-logout:hover { background: #fbbf24; color: #111111; }\n' +
+      '/* Mobile hamburger: black bars are invisible on the black topbar — yellow instead */\n' +
+      '.topbar-hamburger { border: 1px solid #fbbf24; }\n' +
+      '.topbar-hamburger .hamburger-bar { background: #fbbf24; }\n' +
+      /* Documents keep a visible frame, but a hairline one rather than 2px black. */
+      '.invoice { background: #ffffff; border: 1px solid var(--border-color); }\n' +
+      /* [UI-7.2 / U-34] The blanket universal print-color-adjust:exact rule is
+         gone. It forced the browser to render EVERY background, so this
+         company's table header printed as a solid bar and a multi-page report
+         cost a cartridge of toner. UI_Components.html now applies print colour
+         deliberately, to the document header rule and the totals row only. */
+      '</style>\n';
+  }
+  
+  
+  
+  return { dispatch_: dispatch_,
+    themeCss_: topLightThemeCss_,
+    blockTheme_: function () { return { from: '#b45309', to: '#f59e0b' }; }, pageForAction_: pageForAction_, tableForAction_: tableForAction_ };
 })();
+
+TopLight.approvalPolicy_ = {
+  aliases: { tl_sales_offer: 'tl_offer' },
+  chains: [
+    { docType: 'tl_purchasing', step: 'approve', role: 'tl_approver', required: true, sheet: 'top_light_purchasing_costing', keyColumn: 'unique_id', kind: 'standard', versioned: true, missingMsg: 'الفاتورة غير موجودة' },
+    { docType: 'tl_sales', step: 'approve', role: 'tl_approver', required: true, sheet: 'top_light_sales_invoices', keyColumn: 'invoice_unique_id', kind: 'standard', versioned: true, missingMsg: 'الفاتورة غير موجودة' },
+    { docType: 'tl_cash', step: 'approve', role: 'tl_approver', required: true, sheet: 'top_light_cash_bank_movement', keyColumn: 'transaction_id', kind: 'cash', versioned: true, missingMsg: 'الحركة غير موجودة' },
+    { docType: 'tl_sales_offer', step: 'approve', role: 'tl_approver', required: true, sheet: 'top_light_sales_offer', keyColumn: 'invoice_unique_id', kind: 'standard', versioned: true, missingMsg: 'العرض غير موجود' }
+  ],
+  transitions: {
+    tl_purchasing: { pending: ['approved'], approved: [] },
+    tl_sales: { pending: ['approved'], approved: [] },
+    tl_offer: { pending: ['approved'], approved: [] },
+    tl_sales_offer: { pending: ['approved'], approved: [] },
+    tl_cash: { false: ['true'], true: [] }
+  },
+  actionToDocType: {
+    add_purchasing: 'tl_purchasing', edit_purchasing: 'tl_purchasing', delete_purchasing: 'tl_purchasing', approve_purchasing: 'tl_purchasing',
+    add_sales: 'tl_sales', edit_sales: 'tl_sales', delete_sales: 'tl_sales', approve_sales: 'tl_sales',
+    add_sales_offer: 'tl_offer', edit_sales_offer: 'tl_offer', delete_sales_offer: 'tl_offer', approve_sales_offer: 'tl_offer',
+    add_cash: 'tl_cash', edit_cash: 'tl_cash', delete_cash: 'tl_cash', approve_cash: 'tl_cash', add_transfer: 'tl_cash'
+  },
+  statusOnly: {
+    approve_purchasing: true, approve_sales: true, approve_sales_offer: true, approve_cash: true,
+    delete_purchasing: true, delete_sales: true, delete_sales_offer: true, delete_cash: true
+  }
+};
+TopLight.attachmentPolicy_ = function () { return {}; };
+TopLight.artifactHandlers_ = {};

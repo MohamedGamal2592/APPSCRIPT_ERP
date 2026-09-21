@@ -56,9 +56,12 @@
     fetchBarcodes();
   }
 
+  var LOADED_ALL = false;
+  function toggleLoadAll() { LOADED_ALL = !LOADED_ALL; fetchBarcodes(); }
+
   function fetchBarcodes() {
     UIC.readSkeleton('barcode-content');
-    companyCall('get_barcode')
+    companyCall('get_barcode', LOADED_ALL ? { loadAll: true } : {})
       .then(function (r) {
         window.__productOptions = r.product_options || [];
         window.__empOptions = r.emp_options || [];
@@ -105,11 +108,13 @@
     body.innerHTML = (CAN_WRITE
       ? '<div style="display:flex;justify-content:flex-end;margin-bottom:12px;"><button class="btn btn-primary" onclick="openBarcodeModal()">+ إضافة باركود</button></div>'
       : '') +
+      UIC.showAllBar({ loadedAll: LOADED_ALL, showAll: 'toggleLoadAll()', showLatest: 'toggleLoadAll()' }) +
       UIC.dataTable('barcode-table', {
         /* [RT-1] The list endpoint caps at the newest rows unless `loadAll` is
            passed, and the search box filters only what is in memory — so the
            table says which records the box actually searches. */
-        truncated: true,
+        truncated: !LOADED_ALL,
+        showAll: 'toggleLoadAll()',
         title: 'باركود الإنتاج',
         headers: headers,
         rows: rows,

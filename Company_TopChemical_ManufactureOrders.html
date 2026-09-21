@@ -412,7 +412,7 @@
     if (loadAll !== undefined) H.loadedAll = !!loadAll;
     /* RT1: reads draw skeletons, never the blocking overlay */
     UIC.readSkeleton('mo-content', {
-      message: H.loadedAll ? 'جاري تحميل كامل البيانات...' : 'جاري تحميل آخر 10 سجلات...'
+      message: H.loadedAll ? 'جاري تحميل كامل البيانات...' : 'جاري تحميل آخر 20 سجل...'
     });
     companyCall('get_manufacture_headers', { loadAll: H.loadedAll })
       .then(function (res) {
@@ -802,7 +802,7 @@
           '<div class="mo-badges">' +
             '<div class="mo-badge">الإجمالي: <b>' + FMT.number(H.total) + '</b></div>' +
             '<div class="mo-badge">المُحمَّل: <b>' + FMT.number(H.rows.length) + '</b></div>' +
-            '<div class="mo-badge">الوضع: <b>' + (H.loadedAll ? 'عرض الكل' : 'آخر 10 سجلات') + '</b></div>' +
+            '<div class="mo-badge">الوضع: <b>' + (H.loadedAll ? 'عرض الكل' : 'آخر 20 سجل') + '</b></div>' +
           '</div>' +
         '</div>' +
         '<div class="mo-toolbar">' +
@@ -810,7 +810,7 @@
             '<button class="btn btn-outline" onclick="fetchHeaders(H.loadedAll)">🔄 تحديث</button>' +
             '<button class="btn ' + (H.loadedAll ? 'btn-secondary' : 'btn-primary') + '" onclick="toggleLoadAll()">' +
               (H.loadedAll
-                ? '📄 عرض آخر 10 سجلات فقط'
+                ? '📄 عرض آخر 20 سجل فقط'
                 : '📊 عرض الكل (' + FMT.number(H.total) + ' سجل)') +
             '</button>' +
           '</div>' +

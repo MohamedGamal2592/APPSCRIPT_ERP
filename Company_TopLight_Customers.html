@@ -27,6 +27,7 @@
   var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
   var scriptUrl = window.scriptUrl || '/';
   var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+  var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
   var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('8df5c89a117fe9a5') ?>';
   var COMPANY_PAGES = <?!= companyPages ?>;
   var CURRENT_ACTION = '<?!= currentAction ?>';

@@ -275,7 +275,7 @@ function sessionFixture() {
   H.setSession(sessionFixture());
   const seen = [];
   const realMatrix = H.ctx.getRoleAuthorityMatrix_;
-  H.ctx.getRoleAuthorityMatrix_ = function (r) { seen.push(r); return realMatrix(r); };
+  H.override('getRoleAuthorityMatrix_', function (r) { seen.push(r); return realMatrix(r); });
 
   H.newExecution();
   const auth = H.call('authenticateSystemUser_', 'tok');
@@ -311,7 +311,7 @@ function sessionFixture() {
   H.setSession(sessionFixture());
   const seen = [];
   const realMatrix = H.ctx.getRoleAuthorityMatrix_;
-  H.ctx.getRoleAuthorityMatrix_ = function (r) { seen.push(r); return realMatrix(r); };
+  H.override('getRoleAuthorityMatrix_', function (r) { seen.push(r); return realMatrix(r); });
 
   H.newExecution();
   const auth = H.call('authenticateSystemUser_', 'tok');
@@ -324,7 +324,7 @@ function sessionFixture() {
 {
   const H = harness();
   H.companies = [{ company_unique_id: 'OldCo', company_name_ar: 'OldCo', company_name_en: 'OldCo', company_sheet_link: 'old-db', enabled: true }];
-  H.ctx.getAllRecords_ = function () { throw new Error('stub: ERP_Users read failed'); };
+  H.override('getAllRecords_', function () { throw new Error('stub: ERP_Users read failed'); });
   H.setSession(sessionFixture());
   H.newExecution();
   const auth = H.call('authenticateSystemUser_', 'tok');
@@ -414,9 +414,9 @@ section('14. userNameMap_ keeps its exact public contract (consumed at Code.js:1
  * SOURCE — cheap regressions the behaviour above cannot catch
  * ──────────────────────────────────────────────────────────────────────── */
 
-const CONFIG_SRC = read('00_Config.js');
-const DA_SRC = read('02_DataAccess.js');
-const SEC_SRC = read('03_Security.js');
+const CONFIG_SRC = read('Code.js');
+const DA_SRC = read('Code.js');
+const SEC_SRC = read('Code.js');
 const CODE_SRC = read('Code.js');
 
 function configNumber(name) {
@@ -451,7 +451,7 @@ section('16. The staleness ceiling is present, sane, and actually folded into th
 section('17. No authority READ still references the old version stamps');
 {
   ok(!/get\(\s*['"]version_(matrix|killswitch)['"]/.test(SEC_SRC),
-    "03_Security.js no longer reads 'version_matrix' or 'version_killswitch' from the cache");
+    "Code.js no longer reads 'version_matrix' or 'version_killswitch' from the cache");
   ok(!/matrix_v_/.test(SEC_SRC), "the old 'matrix_v_' key prefix is gone");
   ok(!/killswitch_v_/.test(SEC_SRC), "the old 'killswitch_v_' key prefix is gone");
   ok(/'mx_g' \+ authGeneration_\(\)/.test(SEC_SRC), 'the matrix key is built from authGeneration_()');
@@ -475,7 +475,7 @@ section('18. installTriggers_ creates onAuthSheetEdit, idempotently');
     'it is .forSpreadsheet(CONFIG.AUTH_SPREADSHEET_ID).onEdit().create() — an INSTALLABLE trigger on the AUTH spreadsheet');
   ok(/catch \(e\) \{\s*\n?\s*try \{ console\.error\('installTriggers_: onAuthSheetEdit not created/.test(body),
     'wrapped in its own try/catch, so a trigger-scope failure cannot take down the daily-backup install beside it');
-  ok(/function onAuthSheetEdit\(e\)/.test(DA_SRC), 'the handler onAuthSheetEdit exists in 02_DataAccess.js');
+  ok(/function onAuthSheetEdit\(e\)/.test(DA_SRC), 'the handler onAuthSheetEdit exists in Code.js');
   ok(/function onEdit\(e\) \{ onAuthSheetEdit\(e\); \}/.test(DA_SRC), 'and onEdit is retained as a one-line delegate, so nothing referencing it breaks');
 }
 
@@ -501,8 +501,8 @@ section('19. The per-execution memos are reset at the top of every request');
 /* ── Result ──────────────────────────────────────────────────────────────── */
 console.log('');
 if (failed === 0) {
-  console.log('S16 OK — the authority generation verified by EXECUTING the real 00_Config.js,');
-  console.log('02_DataAccess.js and 03_Security.js against a controllable CacheService and');
+  console.log('S16 OK — the authority generation verified by EXECUTING the real Code.js,');
+  console.log('canonical Code.js against a controllable CacheService and');
   console.log('PropertiesService. No spreadsheet, no trigger, no deployment was touched.');
   process.exit(0);
 }

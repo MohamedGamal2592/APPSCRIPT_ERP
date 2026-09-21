@@ -13,8 +13,11 @@ const path = require('path');
 
 const HERE = __dirname;
 const STEPS = [
+  ['company_two_file_boundary.js', 'Company two-file deployment and ownership boundary'],
+  ['company_registry_bootstrap.js', 'Company registry bootstrap survives merged source load order'],
   ['request_guard.js', 'Durable duplicate-request protection and lost-response recovery'],
   ['tc_registration_upload_recovery.js', 'Registration upload idempotency: request-ID recovery, confirmed failures, physical folder'],
+  ['vf_hr_upload_recovery.js', 'Valley Foods HR upload idempotency: request-ID recovery and Drive tagging'],
   ['attachment_download.js', 'Attachment identity and migration contracts'],
   ['appsheet_attachments.js', 'AppSheet paths across all attachment tables'],
   ['firestore_configuration_contract.js', 'Firestore configuration, preflight and router-safe secondary reporting'],
@@ -43,6 +46,9 @@ const STEPS = [
      not collide and the label is S16b so this runner's output stays readable. */
   ['s16_attendance.js', 'S16b — الحضور: invariants, date inference, batch undo'],
   ['s17_purchasing_save.js', 'S17 — vf_purchasing save: batched lines, batched delete'],
+  ['vf_purchasing_guard.js', 'VF-GUARD — uncertain-result safeguard: confirmed failures, no duplicate execution, collision-free guards'],
+  ['vf_purchasing_recovery.js', 'VF-RECOVERY — durable reconciliation: staged generations, markers, status route, reconcile utility'],
+  ['vf_mfg_request_recovery.js', 'VF-MFG — uncertain manufacturing save: child identity, edit tokens, receipt checkpoints, deterministic IDs, recovery'],
   ['s18_live_saves.js', 'S18 — UIC.Live: optimistic saves, rollback, change polling'],
   ['s19_live_rollout.js', 'S19 — the UIC.Live rollout, page by page'],
   ['s20_quiet_refresh.js', 'S20 — quiet refresh: scope, watches, no blocking reload'],
@@ -53,6 +59,7 @@ const STEPS = [
   ['s24_stock_scan.js', 'S24 — جرد دوري مخازن باركود + the USER_PAGES nav-visibility regression guard'],
   ['s25_stock_authority.js', 'S25 — رصيد الدفعات: one stock authority — available = current_qty + held(this document)'],
   ['s26_party_agreements.js', 'S26 — vf_parties كشف حساب: factory/agreements/packaging + balance-once'],
+  ['s27_mfg_client_report.js', 'S27 — vf_mfg_client_report: client manufacturing pivot, filters, cost gating'],
   ['vf_financial_reporting.js', 'Valley Foods IFRS income-statement financial acceptance groups'],
   /* ── UI/UX programme (branch ui/odoo-parity) ── */
   ['ui1_anchor.js', 'UI-1.2 — popups escape the table clip box (U-01)'],
@@ -102,7 +109,14 @@ const STEPS = [
   ['rt10_telemetry.js', 'RT10 — telemetry costs one cache write and names nobody'],
   ['rt9_history_queue.js', 'RT9 — the audit queue: nothing lost, nothing duplicated'],
   ['rt8_search_scope.js', 'RT8 — no search box over a truncated list stays silent about it'],
-  ['customs_office_path_repair.js', 'Customs-office path repair: مكتب الجمارك prefix preview contract']
+  ['customs_office_path_repair.js', 'Customs-office path repair: مكتب الجمارك prefix preview contract'],
+  /* ── Apps Script optimization run (19/09/2026) ── */
+  ['optimization_record_cache.js', 'OPT-1 — PK memo lifecycle, index matching contract, blank rows and snapshot ownership'],
+  ['optimization_chunk_cache.js', 'OPT-2 — chunked cache layout, byte limits, partial eviction and invalidation'],
+  ['optimization_reads.js', 'OPT-3 — hoisted lookups: invoice approval scan/snapshot, movement unit map'],
+  ['optimization_writes.js', 'OPT-4 — batched approval writes with layout-verified fallback'],
+  ['dblive_products_paging.js', 'DBLIVE-1 — tc_products_live paging: 50/page, cached total, bust on write'],
+  ['dblive_sales_cache.js', 'DBLIVE-2 — tc_exec_sales permanent fix: cached charts (600s) + cached view pages (90s)']
 ];
 
 /* Every listed check is part of this execution contract. A missing verifier is
@@ -133,8 +147,5 @@ console.log(failed === 0
   ? 'All ' + ran + ' checks pass.'
   : failed + ' of ' + ran + ' checks FAILED.');
 process.exit(failed === 0 ? 0 : 1);
-
-
-
 
 

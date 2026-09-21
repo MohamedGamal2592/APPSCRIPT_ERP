@@ -86,6 +86,7 @@
         UIC.moduleTile({ icon: '&#128176;', title: 'العملات', subtitle: 'إدارة أسعار الصرف', onOpen: 'loadTab(\'currency\')' }) +
         UIC.moduleTile({ icon: '&#128179;', title: 'فواتير الاشتراكات', subtitle: 'إصدار وطباعة فواتير النظام (ERP Invoices)', onOpen: 'loadTab(\'invoices\')' }) +
         (IS_SUPER_ADMIN ? UIC.moduleTile({ icon: '&#9888;', title: 'مفتاح إيقاف النظام', subtitle: 'إيقاف/تشغيل النظام بالكامل', onOpen: 'loadTab(\'killswitch\')' }) : '') +
+        (IS_SUPER_ADMIN ? UIC.moduleTile({ icon: '&#128230;', title: 'النسخ الاحتياطي', subtitle: 'تنزيل أحدث نسخ قواعد البيانات', onOpen: 'loadTab(\'backups\')' }) : '') +
        '</div>' +
       '<div id="admin-tab-area" style="display:none;">' +
       renderTabsHtml() +
@@ -104,6 +105,7 @@
       { id: 'invoices', label: 'فواتير الاشتراكات' }
     ];
     if (IS_SUPER_ADMIN) tabs.push({ id: 'killswitch', label: 'مفتاح إيقاف النظام' });
+    if (IS_SUPER_ADMIN) tabs.push({ id: 'backups', label: 'النسخ الاحتياطي' });
     return '<div style="display:flex;gap:8px;margin-bottom:24px;flex-wrap:wrap;">' +
       '<button class="btn btn-outline" onclick="renderHub()">← العودة</button>' +
       tabs.map(function (t) {
@@ -126,6 +128,7 @@
     else if (tab === 'currency') loadCurrency();
     else if (tab === 'invoices') loadInvoices();
     else if (tab === 'killswitch') loadKillSwitch();
+    else if (tab === 'backups') loadBackups();
   }
 
   /* ---------- COMPANIES ---------- */
@@ -982,6 +985,46 @@
         loadKillSwitch();
       })
       .finally(function () { UI.hideSpinner(); });
+  }
+
+  /* ---------- BACKUPS (super admin only) ---------- */
+  function loadBackups() {
+    var body = document.getElementById('tab-body');
+    if (!body) return;
+    body.innerHTML =
+      '<div style="max-width:520px;margin:0 auto;text-align:center;padding:24px;border:1px solid var(--border,var(--border-color, #e5e7eb));border-radius:12px;">' +
+        '<h3 style="margin-top:0;">النسخ الاحتياطي اليومي</h3>' +
+        '<p style="color:var(--text-muted,var(--text-muted, #666));font-size:13px;">تنزيل أحدث نسخة محفوظة من كل قاعدة بيانات (TopChemical، TopLight، ValleyFoods، AssessmentCenter) في ملف zip واحد.</p>' +
+        '<button class="btn btn-primary" id="backups-btn" onclick="downloadBackups()">⬇ تنزيل النسخ (zip)</button>' +
+      '</div>';
+  }
+
+  function downloadBackups() {
+    UI.showSpinner('جاري تجهيز ملف النسخ...');
+    var btn = document.getElementById('backups-btn');
+    if (btn) btn.disabled = true;
+    API.call('sys_download_backups', {}, SESSION_TOKEN)
+      .then(function (r) {
+        if (!r || r.status === 'too_large') {
+          showError({ message: (r && r.message) || 'حجم النسخ يتجاوز حد التنزيل الواحد' });
+          return;
+        }
+        if (!r.base64) { showError({ message: 'استجابة غير صالحة من الخادم' }); return; }
+        var bin = atob(r.base64);
+        var bytes = new Uint8Array(bin.length);
+        for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        var blob = new Blob([bytes], { type: 'application/zip' });
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = r.filename || 'ERP_Backups.zip';
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(function () { URL.revokeObjectURL(url); a.remove(); }, 1000);
+        UIC.toast('تم تنزيل النسخ بنجاح', 'success');
+      })
+      .catch(function (e) { showError(e); })
+      .finally(function () { UI.hideSpinner(); if (btn) btn.disabled = false; });
   }
 
   function showError(e) {

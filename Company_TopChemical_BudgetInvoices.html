@@ -33,6 +33,27 @@
       font-weight: 700;
       color: var(--text-muted);
     }
+    /* tc_budget_invoices: fit table without horizontal scroll */
+    #budget-invoices-content { min-width: 0; max-width: 100%; }
+    #invoice-table-area { min-width: 0; max-width: 100%; }
+    #invoice-table-area .table-wrap {
+      overflow-x: hidden;
+      overflow-x: clip;
+      max-width: 100%;
+    }
+    #invoice-table-area .table { table-layout: fixed; width: 100%; }
+    #invoice-table-area .table thead th,
+    #invoice-table-area .table tbody td {
+      white-space: normal;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+      padding: 8px 6px;
+      min-width: 0;
+    }
+    @media (max-width: 900px) {
+      #invoice-table-area .table thead th,
+      #invoice-table-area .table tbody td { padding: 6px 4px; font-size: 12px; }
+    }
   </style>
 </head>
 <body>
@@ -60,6 +81,7 @@
   };
   var LAST = { total: 0, years: [], items: [] };
   var REFS = null;
+  var SELECTED = {};
 
   function companyCall(moduleAction, data) {
     return API.call('company_action', {
@@ -182,7 +204,29 @@
     return String(v == null ? '-' : v);
   }
 
+  var BULK_RUNNING = false;
+  var BULK_MODAL = 'bulk-collect-modal';
+  var BULK_CLOSE_ORIG = null;
+  var BULK_LAST_IDS = [];
+
+  function isCollected(invNo) {
+    var key = String(invNo || '').trim();
+    if (!key) return false;
+    return !!(LAST.cashMovements && LAST.cashMovements.some(function (c) { return String(c).trim() === key; }));
+  }
+
+  /* Hard duplicate rule: a collected invoice can never stay selected.
+     Pruned on every render, so a quiet refresh (another tab/device collecting
+     meanwhile) revokes it instead of letting it ride into the bulk request. */
+  function pruneSelection() {
+    if (!LAST.cashMovements) return;
+    Object.keys(SELECTED).forEach(function (k) {
+      if (isCollected(k)) delete SELECTED[k];
+    });
+  }
+
   function renderInvoices(items, total) {
+    pruneSelection();
     var mOpts = MONTHS.map(function (m, i) {
       if (!i) return '<option value="">كل الشهور</option>';
       return '<option value="' + i + '"' + (String(FILTER.month) === String(i) ? ' selected' : '') + '>' + m + '</option>';
@@ -203,8 +247,17 @@
       if (!hasCollection) {
         actionBtns.push({ label: 'تحصيل', onclick: 'makeCollectionFromInvoice(\'' + FMT.escape(invNo) + '\')' });
       }
+      var selHtml;
+      if (!invNo) {
+        selHtml = '';
+      } else if (hasCollection) {
+        selHtml = '<input type="checkbox" disabled checked title="تم تحصيله" style="width:16px;height:16px;cursor:not-allowed;">';
+      } else {
+        selHtml = '<input type="checkbox" ' + (SELECTED[invNo] ? 'checked' : '') + ' onchange="toggleSelect(\'' + FMT.escape(invNo) + '\', this.checked)" title="تحديد للتحصيل" style="width:16px;height:16px;cursor:pointer;">';
+      }
 
       return {
+        sel: selHtml,
         inv: FMT.escape(invNo || '-'),
         date: FMT.escape(normalizeDate(r['تاريخ الفاتورة']) || '-'),
         customer: FMT.escape(r['اسم العميل'] || '-'),
@@ -215,13 +268,21 @@
         tax_value: Number(r['قيمة الضريبة']) || 0,
         net: Number(r['المبلغ الصافي']) || 0,
         total: Number(r['إجمالي']) || 0,
-        month: FMT.escape(MONTHS[Number(r['الشهر'])] || r['الشهر'] || '-'),
-        year: FMT.escape(r['العام'] || '-'),
         actions: UIC.actionBtns(actionBtns)
       };
     });
 
+    var selectableCount = items.filter(function (r) {
+      var v = String(r['رقم الفاتورة'] || '').trim();
+      return v && !(LAST.cashMovements && LAST.cashMovements.some(function (id) { return String(id).trim() === v; }));
+    }).length;
+    var allChecked = selectableCount > 0 && items.filter(function (r) {
+      var v = String(r['رقم الفاتورة'] || '').trim();
+      return v && !(LAST.cashMovements && LAST.cashMovements.some(function (id) { return String(id).trim() === v; })) && !SELECTED[v];
+    }).length === 0;
+
     var headers = [
+      { key: 'sel', label: '<input type="checkbox" ' + (allChecked ? 'checked' : '') + ' onchange="toggleSelectAll(this.checked)" title="تحديد الكل" style="width:16px;height:16px;cursor:pointer;">' },
       { key: 'inv', label: 'رقم الفاتورة' },
       { key: 'date', label: 'تاريخ الفاتورة' },
       { key: 'customer', label: 'العميل' },
@@ -232,8 +293,6 @@
       { key: 'tax_value', label: 'قيمة الضريبة', money: true },
       { key: 'net', label: 'الصافي', money: true },
       { key: 'total', label: 'الإجمالي', money: true },
-      { key: 'month', label: 'الشهر' },
-      { key: 'year', label: 'السنة' },
       { key: 'actions', label: 'إجراءات' }
     ];
 
@@ -260,7 +319,7 @@
         '</div>' +
         '<div class="filter-item" style="flex:1;min-width:180px;">' +
           '<label class="filter-label" for="inv-search">بحث:</label>' +
-          '<input id="inv-search" class="input" style="width:100%;min-height:36px;" type="search" placeholder="بحث برقم الفاتورة، العميل، المنتج..." onkeyup="setFilter(\'search\', this.value)" value="' + escHtml(FILTER.search) + '">' +
+          '<input id="inv-search" class="input" style="width:100%;min-height:36px;" type="search" placeholder="بحث برقم الفاتورة، العميل، المنتج... (يدعم البحث الجزئي برقم الفاتورة)" onkeyup="setFilter(\'search\', this.value)" value="' + escHtml(FILTER.search) + '">' +
         '</div>' +
         '<div style="display:flex;gap:6px;align-items:flex-end;margin-top:auto;">' +
           '<button class="btn btn-outline" style="min-height:36px;padding:6px 12px;font-size:13px;" onclick="resetFilters()" title="إعادة تعيين كافة الفلاتر">مسح الفلاتر</button>' +
@@ -268,6 +327,7 @@
           (CAN_WRITE ? '<button class="btn btn-primary" style="min-height:36px;padding:6px 14px;font-size:13px;" onclick="openInvoiceModal()">+ إضافة فاتورة</button>' : '') +
         '</div>' +
       '</div>' +
+      '<div id="bulk-collect-bar" style="display:flex;align-items:center;gap:10px;margin:10px 0;padding:10px 12px;background:var(--bg-surface);border:1px solid var(--border-color);border-radius:var(--radius-lg);"></div>' +
       '<div id="invoice-table-area"></div>' +
       '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:14px;flex-wrap:wrap;gap:10px;">' +
         '<div style="font-size:13px;color:var(--text-muted);">' +
@@ -283,6 +343,209 @@
     document.getElementById('invoice-table-area').innerHTML =
       UIC.dataTable('invoice-table', { title: 'الفواتير الضريبية', headers: headers, rows: rows, emptyText: 'لا توجد فواتير مطابقة للفلاتر الحالية' });
     UIC.initTableSort('invoice-table');
+    updateBulkBar();
+  }
+
+  function selectedIds() {
+    return Object.keys(SELECTED).filter(function (k) { return SELECTED[k]; });
+  }
+
+  function toggleSelect(invNo, on) {
+    if (BULK_RUNNING) return;
+    var key = String(invNo || '').trim();
+    if (!key) return;
+    if (isCollected(key)) return;
+    if (on) SELECTED[key] = true; else delete SELECTED[key];
+    updateBulkBar();
+  }
+
+  function toggleSelectAll(on) {
+    if (BULK_RUNNING) return;
+    (LAST.items || []).forEach(function (r) {
+      var v = String(r['رقم الفاتورة'] || '').trim();
+      if (!v) return;
+      if (isCollected(v)) return;
+      if (on) SELECTED[v] = true; else delete SELECTED[v];
+    });
+    renderInvoices(LAST.items, LAST.total);
+  }
+
+  function clearSelection() {
+    if (BULK_RUNNING) return;
+    SELECTED = {};
+    renderInvoices(LAST.items, LAST.total);
+  }
+
+  function updateBulkBar() {
+    var bar = document.getElementById('bulk-collect-bar');
+    if (!bar) return;
+    var ids = selectedIds();
+    var skipped = ids.filter(function (id) {
+      return LAST.cashMovements && LAST.cashMovements.some(function (c) { return String(c).trim() === String(id).trim(); });
+    });
+    var fresh = ids.length - skipped.length;
+    var html = '<span style="font-size:13px;color:var(--text-main);">المحدد: <strong>' + ids.length + '</strong>';
+    if (skipped.length) html += ' (منها محصلة مسبقاً: ' + skipped.length + ')';
+    html += '</span>';
+    if (CAN_FULL) {
+      html += '<button class="btn btn-primary" style="min-height:36px;padding:6px 14px;font-size:13px;" ' + ((fresh === 0 || BULK_RUNNING) ? 'disabled' : '') + ' onclick="makeCollectionsFromInvoices()">تحصيل المحدد (' + fresh + ')</button>';
+    }
+    html += '<button class="btn btn-outline" style="min-height:36px;padding:6px 12px;font-size:13px;" ' + ((ids.length === 0 || BULK_RUNNING) ? 'disabled' : '') + ' onclick="clearSelection()">مسح التحديد</button>';
+    html += '<span style="font-size:12px;color:var(--text-muted);">الفواتير المحصلة مسبقاً معطلة ولا يمكن اختيارها مرة أخرى</span>';
+    bar.innerHTML = html;
+  }
+
+  function makeCollectionsFromInvoices() {
+    if (BULK_RUNNING) return;
+    pruneSelection();
+    var ids = selectedIds().map(function (v) { return String(v).trim(); }).filter(Boolean);
+    if (!ids.length) { UIC.toast('اختر فاتورة واحدة على الأقل', 'warning'); return; }
+    var totalNet = 0;
+    (LAST.items || []).forEach(function (r) {
+      var v = String(r['رقم الفاتورة'] || '').trim();
+      if (v && ids.indexOf(v) !== -1) totalNet += Number(r['المبلغ الصافي']) || 0;
+    });
+    UIC.confirm({
+      title: 'تأكيد التحصيل الجماعي',
+      message: 'سيتم تحصيل ' + ids.length + ' فاتورة',
+      record: 'إجمالي المبلغ الصافي: ' + FMT.number(totalNet),
+      detail: 'الفواتير المحصلة مسبقاً مستبعدة ولا يمكن اختيارها مرة أخرى.',
+      confirmText: 'تأكيد التحصيل',
+      cancelText: 'إلغاء'
+    }).then(function (ok) {
+      if (!ok) return;
+      runBulkCollection(ids);
+    });
+  }
+
+  function setBulkModalBody(html) {
+    try {
+      var el = document.getElementById(BULK_MODAL);
+      if (el) {
+        var b = el.querySelector('.modal-body');
+        if (b) b.innerHTML = html;
+      }
+    } catch (e) {}
+  }
+
+  /* Blocking progress dialog: the X is removed and closeModal is guarded while
+     BULK_RUNNING, so the user must wait until the run settles. Dismissal paths
+     that remain (Escape, backdrop) all funnel through UIC.closeModal. */
+  function lockBulkModal() {
+    try {
+      var el = document.getElementById(BULK_MODAL);
+      if (el) {
+        var x = el.querySelector('.modal-header .btn-icon');
+        if (x) x.remove();
+      }
+    } catch (e) {}
+    if (!BULK_CLOSE_ORIG && UIC.closeModal) {
+      BULK_CLOSE_ORIG = UIC.closeModal;
+      UIC.closeModal = function (id) {
+        if (id === BULK_MODAL && BULK_RUNNING) {
+          try { UIC.toast('انتظر حتى اكتمال التحصيل...', 'warning'); } catch (e2) {}
+          return;
+        }
+        return BULK_CLOSE_ORIG(id);
+      };
+    }
+  }
+
+  function unlockBulkModal() {
+    if (BULK_CLOSE_ORIG) {
+      try { UIC.closeModal = BULK_CLOSE_ORIG; } catch (e) {}
+      BULK_CLOSE_ORIG = null;
+    }
+  }
+
+  function bulkReportHtml(d) {
+    var collected = (d && d.collected) || [];
+    var skipped = (d && d.skipped) || [];
+    var failed = (d && d.failed) || [];
+    var h = '<div style="font-size:13px;color:var(--text-main);margin-bottom:10px;">' +
+      'تم تحصيل <strong>' + collected.length + '</strong> فاتورة';
+    if (skipped.length) h += '، وتجاوز <strong>' + skipped.length + '</strong> محصلة مسبقاً';
+    if (failed.length) h += '، وفشل <strong>' + failed.length + '</strong>';
+    h += '.</div>';
+    if (failed.length) {
+      h += '<div style="font-size:12px;font-weight:700;color:var(--danger-text,#b91c1c);margin-bottom:4px;">تعذر تحصيل:</div>' +
+        '<ul style="font-size:12px;margin:0 0 12px;padding-right:18px;">' +
+        failed.map(function (f) {
+          return '<li>' + escHtml(f.id) + ' — ' + escHtml(f.reason || 'فشل الحفظ') + '</li>';
+        }).join('') + '</ul>';
+    }
+    h += '<div style="display:flex;gap:8px;justify-content:flex-start;">' +
+      '<button class="btn btn-outline" style="min-height:36px;padding:6px 14px;font-size:13px;" onclick="UIC.closeModal(\'' + BULK_MODAL + '\')">إغلاق</button>' +
+      '</div>';
+    return h;
+  }
+
+  function runBulkCollection(ids) {
+    if (BULK_RUNNING) return;
+    BULK_RUNNING = true;
+    BULK_LAST_IDS = ids.slice();
+    updateBulkBar();
+    UIC.openModal(BULK_MODAL, {
+      title: 'جاري التحصيل الجماعي',
+      body: '<div class="spinner-box" style="box-shadow:none;padding:8px 4px;">' +
+        '<div class="spinner"></div>' +
+        '<div class="spinner-msg">جاري تحصيل ' + ids.length + ' فاتورة...<br>لا تغلق الصفحة أو تحدثها حتى الاكتمال.</div></div>',
+      footer: false
+    });
+    lockBulkModal();
+    /* Kept on UIC.Live.save with queueable:false: the in-flight request keeps
+       UIC.Live.guardMessage() non-null, so the beforeunload tab-close guard,
+       the in-app nav guard and the arrive() refresh deferral all stay armed
+       until the run settles. A transport failure still rolls back loudly. */
+    UIC.Live.save({
+      call: companyCall,
+      action: 'make_collections_from_invoices',
+      data: { invoice_ids: ids },
+      message: 'تم إنشاء عمليات التحصيل بنجاح',
+      queueable: false,
+      reload: function () { fetchInvoices(true); },
+      onSuccess: function (r) {
+        var d = (r && (r.data || r)) || {};
+        var doneIds = d.collected || [];
+        var skippedIds = (d.skipped || []).map(function (s) { return s.id; });
+        LAST.cashMovements = LAST.cashMovements || [];
+        doneIds.concat(skippedIds).forEach(function (id) {
+          var key = String(id).trim();
+          if (key && LAST.cashMovements.indexOf(key) === -1) LAST.cashMovements.push(key);
+          delete SELECTED[key];
+        });
+        ids.forEach(function (id) { delete SELECTED[String(id).trim()]; });
+        BULK_RUNNING = false;
+        unlockBulkModal();
+        renderInvoices(LAST.items, LAST.total);
+        var failed = d.failed || [];
+        if (!failed.length) {
+          try { UIC.closeModal(BULK_MODAL); } catch (e) {}
+        } else {
+          setBulkModalBody(bulkReportHtml(d));
+        }
+      }
+    }).catch(function () {
+      /* UIC.Live has toasted the transport error; the modal stays with retry. */
+      BULK_RUNNING = false;
+      unlockBulkModal();
+      updateBulkBar();
+      setBulkModalBody(
+        '<div style="font-size:13px;color:var(--danger-text,#b91c1c);margin-bottom:12px;">تعذر إتمام التحصيل — تحقق من الاتصال ثم أعد المحاولة. لم يتم تسجيل أي تحصيل جديد.</div>' +
+        '<div style="display:flex;gap:8px;justify-content:flex-start;">' +
+        '<button class="btn btn-primary" style="min-height:36px;padding:6px 14px;font-size:13px;" onclick="retryBulkCollection()">إعادة المحاولة</button>' +
+        '<button class="btn btn-outline" style="min-height:36px;padding:6px 14px;font-size:13px;" onclick="UIC.closeModal(\'' + BULK_MODAL + '\')">إغلاق</button>' +
+        '</div>');
+    });
+  }
+
+  function retryBulkCollection() {
+    if (BULK_RUNNING) return;
+    try { UIC.closeModal(BULK_MODAL); } catch (e) {}
+    pruneSelection();
+    var ids = (BULK_LAST_IDS || []).map(function (v) { return String(v).trim(); }).filter(function (v) { return v && !isCollected(v); });
+    if (!ids.length) { UIC.toast('لا توجد فواتير صالحة لإعادة المحاولة', 'warning'); return; }
+    runBulkCollection(ids);
   }
 
   function escHtml(s) {
@@ -291,6 +554,7 @@
 
   function makeCollectionFromInvoice(invoiceId) {
     if (!invoiceId) return;
+    if (BULK_RUNNING) { UIC.toast('انتظر حتى اكتمال التحصيل الجماعي...', 'warning'); return; }
     /* Tier B: the collection writes the cash table while the list reads the
        invoices table plus the cash movements — the handler can refuse for
        reasons invisible in the button (missing invoice, zero net). So NO draft
@@ -310,6 +574,7 @@
         LAST.cashMovements = LAST.cashMovements || [];
         var key = String(invoiceId).trim();
         if (LAST.cashMovements.indexOf(key) === -1) LAST.cashMovements.push(key);
+        try { delete SELECTED[key]; } catch (e) {}
         renderInvoices(LAST.items, LAST.total);
       }
     }).catch(function () { /* UIC.Live has toasted */ });

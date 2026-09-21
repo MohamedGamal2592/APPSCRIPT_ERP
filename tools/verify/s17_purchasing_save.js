@@ -58,13 +58,13 @@ function makeDeleteSandbox() {
     Utilities: { getUuid: () => 'u', sleep: () => {} },
     Session: { getScriptTimeZone: () => 'UTC', getActiveUser: () => ({ getEmail: () => '' }) },
     CacheService: { getScriptCache: () => ({ get: () => null, put: () => {}, remove: () => {}, getAll: () => ({}), putAll: () => {}, removeAll: () => {} }) },
-    PropertiesService: { getScriptProperties: () => ({ getProperty: () => null, setProperty: () => {}, deleteProperty: () => {} }) },
+    PropertiesService: { getScriptProperties: () => ({ getProperty: (key) => key === 'SYSTEM_STORAGE_BACKEND' ? 'sheets' : null, setProperty: () => {}, deleteProperty: () => {} }) },
     Logger: { log: () => {} },
     ScriptApp: { getProjectTriggers: () => [] }
   };
   sb.globalThis = sb;
   vm.createContext(sb);
-  ['00_Config.js', '02_DataAccess.js'].forEach(f => {
+  ['Code.js'].forEach(f => {
     vm.runInContext(fs.readFileSync(path.join(ROOT, f), 'utf8'), sb, { filename: f });
   });
   return sb;
@@ -228,6 +228,13 @@ function runSave(opts) {
           }
           return out;
         },
+        /* patchRowByCriteria_ reads one row of formulas before writing, so a
+           formula-preserving patch is one more counted round trip. The stub
+           grid holds no formulas; real getFormulas returns '' per value cell. */
+        getFormulas: () => {
+          C.getValues++; C.cells += (nCols || headers.length);
+          return [new Array(nCols || headers.length).fill('')];
+        },
         setValue: () => { C.setValue++; },
         setValues: (v) => {
           C.setValues++;
@@ -287,12 +294,12 @@ function runSave(opts) {
     },
     Session: { getScriptTimeZone: () => 'Africa/Cairo', getActiveUser: () => ({ getEmail: () => '' }) },
     CacheService: { getScriptCache: () => ({ get: () => null, put: () => {}, remove: () => {}, getAll: () => ({}), putAll: () => {}, removeAll: () => {} }) },
-    PropertiesService: { getScriptProperties: () => ({ getProperty: () => null, setProperty: () => {}, deleteProperty: () => {} }) },
+    PropertiesService: { getScriptProperties: () => ({ getProperty: (key) => key === 'SYSTEM_STORAGE_BACKEND' ? 'sheets' : null, setProperty: () => {}, deleteProperty: () => {} }) },
     Logger: { log: () => {} }, ScriptApp: { getProjectTriggers: () => [] }
   };
   sb.globalThis = sb;
   vm.createContext(sb);
-  ['00_Config.js', '02_DataAccess.js'].forEach(f => {
+  ['Code.js'].forEach(f => {
     vm.runInContext(fs.readFileSync(path.join(ROOT, f), 'utf8'), sb, { filename: f });
   });
   vm.runInContext(
@@ -594,6 +601,9 @@ console.log('\n7 — logHistoryMany_: same audit rows as N logHistory_ calls\n')
             }
             return out;
           },
+          /* The stub store holds no formulas; real getFormulas returns ''
+             per value cell. Needed wherever the real patch helper runs. */
+          getFormulas: () => [new Array(nCols || headers.length).fill('')],
           setValue: () => {},
           setValues: (v) => {
             (v || []).forEach(r => {
@@ -626,12 +636,12 @@ console.log('\n7 — logHistoryMany_: same audit rows as N logHistory_ calls\n')
       Utilities: { getUuid: () => 'u', sleep: () => {}, formatDate: () => '' },
       Session: { getScriptTimeZone: () => 'UTC', getActiveUser: () => ({ getEmail: () => '' }) },
       CacheService: { getScriptCache: () => ({ get: () => null, put: () => {}, remove: () => {}, getAll: () => ({}), putAll: () => {}, removeAll: () => {} }) },
-      PropertiesService: { getScriptProperties: () => ({ getProperty: () => null, setProperty: () => {}, deleteProperty: () => {} }) },
+      PropertiesService: { getScriptProperties: () => ({ getProperty: (key) => key === 'SYSTEM_STORAGE_BACKEND' ? 'sheets' : null, setProperty: () => {}, deleteProperty: () => {} }) },
       Logger: { log: () => {} }, ScriptApp: { getProjectTriggers: () => [] }
     };
     sb.globalThis = sb;
     vm.createContext(sb);
-    ['00_Config.js', '02_DataAccess.js'].forEach(f => {
+    ['Code.js'].forEach(f => {
       vm.runInContext(fs.readFileSync(path.join(ROOT, f), 'utf8'), sb, { filename: f });
     });
     vm.runInContext(
@@ -821,6 +831,9 @@ console.log('\n9 — addRecord_: a header that is not lowercase still gets its v
           }
           return out;
         },
+        /* The stub store holds no formulas; real getFormulas returns ''
+           per value cell. Needed wherever the real patch helper runs. */
+        getFormulas: () => [new Array(nCols || headers.length).fill('')],
         setValue: () => {}, setValues: (v) => { (v || []).forEach(r => g.push(r.slice())); }
       }),
       appendRow: (r) => {
@@ -840,12 +853,12 @@ console.log('\n9 — addRecord_: a header that is not lowercase still gets its v
     Utilities: { getUuid: () => 'u', sleep: () => {}, formatDate: () => '' },
     Session: { getScriptTimeZone: () => 'UTC', getActiveUser: () => ({ getEmail: () => '' }) },
     CacheService: { getScriptCache: () => ({ get: () => null, put: () => {}, remove: () => {}, getAll: () => ({}), putAll: () => {}, removeAll: () => {} }) },
-    PropertiesService: { getScriptProperties: () => ({ getProperty: () => null, setProperty: () => {}, deleteProperty: () => {} }) },
+    PropertiesService: { getScriptProperties: () => ({ getProperty: (key) => key === 'SYSTEM_STORAGE_BACKEND' ? 'sheets' : null, setProperty: () => {}, deleteProperty: () => {} }) },
     Logger: { log: () => {} }, ScriptApp: { getProjectTriggers: () => [] }
   };
   sb.globalThis = sb;
   vm.createContext(sb);
-  ['00_Config.js', '02_DataAccess.js'].forEach(f => {
+    ['Code.js'].forEach(f => {
     vm.runInContext(fs.readFileSync(path.join(ROOT, f), 'utf8'), sb, { filename: f });
   });
   vm.runInContext(

@@ -275,7 +275,11 @@ UIC.actionDropdown = function (btns) {
        block per item, on every row, was both unthemeable and pure payload. */
     return '<button type="button" class="action-dropdown-item erp-kebab-item"' +
       (b.color ? ' style="color:' + b.color + ';"' : '') +
-      ' onclick="' + b.onclick.replace(/"/g, '&quot;') + ';try{UIC.closeActionMenu(\'' + id + '\');}catch(e){}">' +
+      /* Row-edit repair 2.1: an action-menu click must not bubble to the row's
+         View/click listener, or one tap opens both the action and a View popup.
+         Stopping here is safe for every caller: menu callbacks never rely on
+         the event reaching the row. */
+      ' onclick="try{event.stopPropagation();}catch(e){};' + b.onclick.replace(/"/g, '&quot;') + ';try{UIC.closeActionMenu(\'' + id + '\');}catch(e){}">' +
       UIC.escHtml(b.label) + '</button>';
   }).join('');
   /* [UI-3.3 / U-20] A quiet kebab, not a primary-coloured pill on every row.
@@ -336,7 +340,8 @@ UIC.dateRangeBar = function (key, opts) {
   const esc = function (v) { return FMT.escape(v == null ? '' : v); };
   const onch = o.onchange ? ' onchange="' + o.onchange + '"' : '';
   const has = !!(o.from || o.to);
-  return '<div class="date-range-bar" style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;margin-bottom:12px;">' +
+  return (o.label ? '<div class="form-label" style="margin-bottom:6px;">' + esc(o.label) + '</div>' : '') +
+    '<div class="date-range-bar" style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;margin-bottom:12px;">' +
     '<div class="form-field" style="margin:0;">' +
       '<label class="form-label" for="' + key + '-from">من تاريخ</label>' +
       '<input id="' + key + '-from" class="input" type="date" value="' + esc(o.from) + '"' + onch + '>' +
@@ -862,10 +867,14 @@ UIC.reportError = function (detail, opt) {
       page: location.pathname,
       message: String(detail || '').slice(0, 2000),
       stack: (opt && opt.stack ? String(opt.stack).slice(0, 4000) : ''),
-      url: location.href ? location.href.slice(0, 1500) : '',
-      user: ((window.API && API.getSession && API.getSession() && API.getSession().user && API.getSession().user.email) || '')
+      url: location.href ? location.href.replace(/([?&](?:sessionToken|token|password)=)[^&]*/ig, '$1[redacted]').slice(0, 1500) : ''
     };
-    try { google.script.run.withFailureHandler(function () {}).logClientError_(payload); } catch (e2) {}
+    try {
+      if (window.API && typeof API.call === 'function') {
+        var token = window.SESSION && typeof SESSION.token === 'function' ? SESSION.token() : '';
+        API.call('log_client_error', payload, token).catch(function () {});
+      }
+    } catch (e2) {}
   } catch (e) {}
 };
 
@@ -1677,6 +1686,44 @@ UIC._dtApplySavedView = function (id, viewId) {
   UIC.toast('تم تطبيق العرض: ' + (v.name || ''), 'success');
 };
 
+/* ── [UI-4.10] Unified "عرض الكل / عرض الأحدث" bar ───────────────────────
+ *
+ * Every capped list shows the newest LATEST_N rows unless the user asked for
+ * the full set via { loadAll: true }. This is the ONE markup for that switch —
+ * a state badge plus a two-way toggle button — so the scattered copies of the
+ * same bar (mo/pl/cbs-badge, assorted wordings) collapse into one call:
+ *
+ *     html += UIC.showAllBar({ loadedAll: S.loadedAll, total: S.total,
+ *                              showAll: 'toggleLoadAll()',
+ *                              showLatest: 'toggleLoadAll()' });
+ *
+ * showAll / showLatest are inline handler strings (same convention as
+ * UIC.button onClick and the dataTable showAll option). When both name the
+ * same toggler, one function flips both ways. `total` is optional; when given
+ * it is shown on the collapsed button. `latestN` defaults to UIC.LATEST_N
+ * (20), the server default window (see the loadAll slices in *Actions.js).
+ *
+ * Pages with a custom (non-dataTable) render drop the returned string into
+ * their own toolbar; dataTable pages keep passing truncated/showAll for the
+ * search-scope notice and render this bar above the table.
+ */
+UIC.LATEST_N = 20;
+
+UIC.showAllBar = function (opts) {
+  var o = opts || {};
+  var n = Number(o.latestN) || UIC.LATEST_N || 20;
+  var loaded = !!o.loadedAll;
+  var total = (o.total != null && o.total !== '') ? UIC.escHtml(String(o.total)) : '';
+  var badge = '<span class="dt-showall-badge" role="status">' +
+    'الوضع: <b>' + (loaded ? 'عرض الكل' : 'آخر ' + n + ' سجل') + '</b></span>';
+  var btn = loaded
+    ? '<button type="button" class="btn btn-outline" onclick="' + (o.showLatest || o.showAll || '') + '">📄 عرض آخر ' + n + ' سجل فقط</button>'
+    : '<button type="button" class="btn btn-outline" onclick="' + (o.showAll || '') + '">📊 عرض الكل' +
+      (total ? ' (' + total + ' سجل)' : '') + '</button>';
+  return '<div class="dt-showall-bar">' +
+    badge + btn + '</div>';
+};
+
 /* ── [UI-4.7 / U-23] Skeleton loading for lists ───────────────────────────
  *
  * A list load put a full-screen blocking overlay over the page on 80 of 85
@@ -2319,7 +2366,11 @@ UIC._applySort = function (id) {
     else if (sortKey) raw = r[sortKey];
     else raw = r[key];
     var s = (raw == null) ? '' : String(raw);
-    var n = parseFloat(s.replace(/,/g, ''));
+    /* A numeric cell carries its value in data-num (see _dtCellText); the raw
+       string is markup, which parseFloat cannot read — without this every
+       numeric column sorted as text. */
+    var dm = s.match(/data-num="(-?[\d.]+)"/);
+    var n = dm ? Number(dm[1]) : parseFloat(s.replace(/,/g, ''));
     return { r: r, s: s, n: n, i: i, isNum: !isNaN(n) && s.trim() !== '' };
   });
   decorated.sort(function (a, b) {
@@ -2357,6 +2408,26 @@ UIC.applyDateFilter = function (id) {
   UIC._applyFilters(id);
 };
 
+/* Most tables hand UIC.dataTable rows as plain arrays of cell-HTML strings,
+ * matched to headers by position (see _dtRowHtml) rather than as keyed
+ * objects. Excel/print used to read `r[h.key]` unconditionally, which is
+ * undefined for an array row — every exported/printed cell came back blank.
+ * This mirrors _dtRowHtml's own Array.isArray branch, then strips any HTML
+ * markup down to the text (or the row's data-num, for a real numeric cell)
+ * so a rendered <b>/<span> cell exports as its value, not its markup. */
+UIC._dtCellText = function (v) {
+  if (v == null) return '';
+  if (typeof v !== 'string' || v.indexOf('<') === -1) return v;
+  var numMatch = v.match(/data-num="(-?[\d.]+)"/);
+  if (numMatch) {
+    var n = Number(numMatch[1]);
+    if (!isNaN(n)) return n;
+  }
+  return v.replace(/<[^>]*>/g, '')
+    .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"').replace(/&#39;/g, '\'').trim();
+};
+
 UIC.exportExcel = function (id) {
   var st = (window.__dtStore || {})[id];
   if (!st) return;
@@ -2365,10 +2436,15 @@ UIC.exportExcel = function (id) {
   // F-18: the library is fetched on first export instead of on every page load.
   if (typeof XLSX === 'undefined') UIC.toast('جاري تحميل مكتبة Excel...', 'info');
   API.ensureXlsx().then(function () {
-    var headers = st.headers.filter(function (h) { return h.key !== 'actions'; });
+    var cols = st.headers
+      .map(function (h, i) { return { h: h, i: i }; })
+      .filter(function (c) { return c.h.key !== 'actions'; });
     var data = rows.map(function (r) {
       var obj = {};
-      headers.forEach(function (h) { obj[h.label] = r[h.key] != null ? r[h.key] : ''; });
+      cols.forEach(function (c) {
+        var raw = Array.isArray(r) ? r[c.i] : r[c.h.key || c.h.label];
+        obj[c.h.label] = UIC._dtCellText(raw != null ? raw : '');
+      });
       return obj;
     });
     var ws = XLSX.utils.json_to_sheet(data);
@@ -2389,20 +2465,23 @@ UIC.printTable = function (id) {
   if (!st) return;
   var rows = st.filtered || st.rows;
   if (!rows || !rows.length) { UIC.toast('لا توجد بيانات للطباعة', 'error'); return; }
-  var headers = st.headers.filter(function (h) { return h.key !== 'actions'; });
+  var cols = st.headers
+    .map(function (h, i) { return { h: h, i: i }; })
+    .filter(function (c) { return c.h.key !== 'actions'; });
   var from = st.dateFrom || '';
   var to = st.dateTo || '';
   var title = (st.opts && st.opts.title) || '';
   var dateLabel = (from && to) ? 'من ' + from + ' إلى ' + to : from ? 'من ' + from : to ? 'إلى ' + to : 'الكل';
   var logoUrl = window.COMPANY_LOGO_URL || '';
   var rowsHtml = rows.map(function (r) {
-    return '<tr>' + headers.map(function (h) {
-      var v = r[h.key] != null ? r[h.key] : '';
+    return '<tr>' + cols.map(function (c) {
+      var raw = Array.isArray(r) ? r[c.i] : r[c.h.key || c.h.label];
+      var v = UIC._dtCellText(raw != null ? raw : '');
       return '<td>' + esc(String(v)) + '</td>';
     }).join('') + '</tr>';
   }).join('');
-  var theadHtml = '<tr>' + headers.map(function (h) {
-    return '<th>' + esc(h.label) + '</th>';
+  var theadHtml = '<tr>' + cols.map(function (c) {
+    return '<th>' + esc(c.h.label) + '</th>';
   }).join('') + '</tr>';
   /* [iPhone run 2] Was window.open + document.write, which on iOS ended at the
      null check above and printed nothing. Same call, same document, with an
@@ -2903,6 +2982,7 @@ UIC.comboBlur = function (key) {
   const hidden = document.getElementById(key);
   const data = (window.__comboData || {})[key];
   if (!disp || !hidden || !data) return;
+  const oldValue = String(hidden.value || '');
   const text = String(disp.value || '').trim();
   const textLower = text.toLowerCase();
   let match = null;
@@ -2927,6 +3007,10 @@ UIC.comboBlur = function (key) {
      clear or rewrite disp.value, which would otherwise leave the previous
      selection's title hovering over an empty or different field. */
   disp.title = disp.value;
+  /* Blur is also a value change: clearing a selection or typing an exact
+     option must notify pages that listen to the hidden input. Without this,
+     report filters keep the previous value until another choice happens. */
+  if (oldValue !== String(hidden.value || '')) hidden.dispatchEvent(new Event('change'));
   const list = document.getElementById(key + '_list');
   if (list) { list.hidden = true; UIC._unanchor(list); }
   UIC._comboAria(key, false);
@@ -3007,9 +3091,137 @@ UIC.fileField = function (o) {
     '<label class="form-label" for="' + o.key + '">' + (o.label || '') + '</label>' +
     '<input id="' + o.key + '" name="' + (o.name || 'file') + '" class="input" type="file"' +
     (accept ? ' accept="' + accept + '"' : '') + required + '>' +
+    '<div class="uic-file-preview" data-uic-file-preview hidden aria-live="polite"></div>' +
     '<div class="field-error" id="err-' + o.key + '"></div>' +
     '</div>';
 };
+
+/* AppSheet-style local attachment confirmation. The real Drive upload still
+ * starts only when the form is saved; this preview deliberately says
+ * "selected" rather than claiming that an unsaved file has already uploaded. */
+UIC._ensureFilePreviewStyles = function () {
+  if (!document.head || document.getElementById('uic-file-preview-styles')) return;
+  var style = document.createElement('style');
+  style.id = 'uic-file-preview-styles';
+  style.textContent =
+    '.uic-file-preview{display:flex;align-items:center;gap:10px;margin-top:8px;padding:8px;' +
+      'min-height:58px;border:1px solid var(--border-color,#d9dee7);border-radius:10px;' +
+      'background:var(--bg-soft,#f7f9fc);color:var(--text-primary,#1f2937);}' +
+    '.uic-file-preview[hidden]{display:none!important;}' +
+    '.uic-file-preview__thumb{width:54px;height:54px;flex:0 0 54px;border-radius:8px;' +
+      'object-fit:cover;border:1px solid var(--border-color,#d9dee7);background:#fff;}' +
+    '.uic-file-preview__file{width:54px;height:54px;flex:0 0 54px;border-radius:8px;' +
+      'display:flex;align-items:center;justify-content:center;background:var(--bg-surface,#fff);' +
+      'border:1px solid var(--border-color,#d9dee7);font-size:24px;}' +
+    '.uic-file-preview__info{min-width:0;flex:1;}' +
+    '.uic-file-preview__name{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;' +
+      'font-size:12px;font-weight:700;}' +
+    '.uic-file-preview__status{display:block;margin-top:3px;color:var(--success,#18864b);font-size:11px;}' +
+    '.uic-file-preview__remove{width:34px;height:34px;flex:0 0 34px;border:0;border-radius:50%;' +
+      'background:transparent;color:var(--text-muted,#667085);font-size:22px;line-height:1;cursor:pointer;}' +
+    '.uic-file-preview__remove:hover{background:rgba(127,127,127,.12);}' +
+    '.uic-file-preview__remove:focus-visible{outline:2px solid var(--brand-primary,#2563eb);outline-offset:2px;}';
+  document.head.appendChild(style);
+};
+
+UIC._filePreviewHost = function (input) {
+  var field = input && input.closest ? input.closest('.form-field') : null;
+  var host = field && field.querySelector ? field.querySelector('[data-uic-file-preview]') : null;
+  if (!host && input && input.nextElementSibling && input.nextElementSibling.hasAttribute('data-uic-file-preview')) {
+    host = input.nextElementSibling;
+  }
+  if (!host && input && input.parentNode) {
+    host = document.createElement('div');
+    host.className = 'uic-file-preview';
+    host.setAttribute('data-uic-file-preview', '');
+    host.setAttribute('aria-live', 'polite');
+    host.hidden = true;
+    input.parentNode.insertBefore(host, input.nextSibling);
+  }
+  return host;
+};
+
+UIC._formatFileSize = function (bytes) {
+  var size = Number(bytes) || 0;
+  if (size < 1024) return size + ' B';
+  if (size < 1024 * 1024) return Math.round(size / 1024) + ' KB';
+  return (size / (1024 * 1024)).toFixed(1) + ' MB';
+};
+
+UIC.showFileSelection = function (input) {
+  if (!input || String(input.type).toLowerCase() !== 'file') return;
+  UIC._ensureFilePreviewStyles();
+  var host = UIC._filePreviewHost(input);
+  if (!host) return;
+
+  if (input.__uicPreviewUrl) {
+    try { URL.revokeObjectURL(input.__uicPreviewUrl); } catch (e) {}
+    input.__uicPreviewUrl = '';
+  }
+  host.innerHTML = '';
+  var file = input.files && input.files[0];
+  if (!file) { host.hidden = true; return; }
+
+  var isImage = /^image\//i.test(String(file.type || '')) || /\.(png|jpe?g|gif|webp|bmp|heic|heif)$/i.test(file.name || '');
+  var visual;
+  if (isImage && window.URL && typeof URL.createObjectURL === 'function') {
+    visual = document.createElement('img');
+    visual.className = 'uic-file-preview__thumb';
+    visual.alt = 'معاينة الصورة المختارة';
+    input.__uicPreviewUrl = URL.createObjectURL(file);
+    visual.src = input.__uicPreviewUrl;
+  } else {
+    visual = document.createElement('span');
+    visual.className = 'uic-file-preview__file';
+    visual.setAttribute('aria-hidden', 'true');
+    visual.textContent = '📎';
+  }
+
+  var info = document.createElement('span');
+  info.className = 'uic-file-preview__info';
+  var name = document.createElement('span');
+  name.className = 'uic-file-preview__name';
+  name.textContent = file.name || 'Attachment';
+  var status = document.createElement('span');
+  status.className = 'uic-file-preview__status';
+  status.textContent = '✓ تم الاختيار · ' + UIC._formatFileSize(file.size) + ' · سيتم الرفع عند الحفظ';
+  info.appendChild(name);
+  info.appendChild(status);
+
+  var remove = document.createElement('button');
+  remove.type = 'button';
+  remove.className = 'uic-file-preview__remove';
+  remove.setAttribute('aria-label', 'إزالة المرفق المختار');
+  remove.title = 'إزالة المرفق';
+  remove.textContent = '×';
+  remove.addEventListener('click', function () {
+    input.value = '';
+    UIC.showFileSelection(input);
+    try { input.focus(); } catch (e) {}
+  });
+
+  host.appendChild(visual);
+  host.appendChild(info);
+  host.appendChild(remove);
+  host.hidden = false;
+};
+
+/* Event delegation also covers older/custom attachment fields that do not use
+ * UIC.fileField and forms that are injected into a modal after page load. */
+(function () {
+  UIC._ensureFilePreviewStyles();
+  document.addEventListener('change', function (ev) {
+    var input = ev && ev.target;
+    if (input && String(input.type).toLowerCase() === 'file') UIC.showFileSelection(input);
+  }, true);
+  document.addEventListener('reset', function (ev) {
+    setTimeout(function () {
+      var form = ev && ev.target;
+      if (!form || !form.querySelectorAll) return;
+      Array.prototype.forEach.call(form.querySelectorAll('input[type="file"]'), UIC.showFileSelection);
+    }, 0);
+  }, true);
+})();
 
 UIC.fileError = function (key, msg) {
   const err = document.getElementById('err-' + key);
@@ -3046,11 +3258,13 @@ UIC.validateForm = function (formId) {
 };
 
 UIC.collectForm = function (formId) {
-  return UIC._readForm(formId).data;
+  var data = UIC._readForm(formId).data;
+  return window.API && API._requestGuard ? API._requestGuard.formData(document.getElementById(formId), data) : data;
 };
 
 UIC.collectAndValidateForm = function (formId) {
   const r = UIC._readForm(formId);
+  if (window.API && API._requestGuard) API._requestGuard.formData(document.getElementById(formId), r.data);
   return { data: r.data, valid: r.valid };
 };
 
@@ -4698,6 +4912,13 @@ document.addEventListener('keydown', function (e) {
     text-decoration: underline; cursor: pointer;
   }
 
+  /* ── [UI-4.10] Unified show-all bar: one badge + one two-way toggle ── */
+  .dt-showall-bar {
+    display: flex; justify-content: flex-end; align-items: center;
+    gap: var(--space-2); flex-wrap: wrap; margin-bottom: var(--space-2);
+  }
+  .dt-showall-badge { color: var(--text-muted); font-size: 12px; }
+
   /* ── [UI-4.5 / U-19] Optional columns ────────────────────────────────── */
   .dt-col-menu { max-height: 60dvh; overflow-y: auto; }
   .dt-col-item {
@@ -5163,9 +5384,29 @@ document.addEventListener('keydown', function (e) {
     -webkit-overflow-scrolling: touch;
   }
   .nav-dropdown-menu.open { display: block; }
-  .nav-dropdown-item { display: flex; align-items: center; padding: 10px 12px; font-size: var(--text-sm); color: var(--text-main); text-decoration: none; border-radius: var(--radius-sm); cursor: pointer; white-space: nowrap; min-height: 40px; transition: background-color 0.15s, color 0.15s; }
+  .nav-dropdown-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    text-align: start;
+    background: transparent;
+    border: 0;
+    font: inherit;
+    line-height: inherit;
+    padding: 10px 12px;
+    font-size: var(--text-sm);
+    color: var(--text-main);
+    text-decoration: none;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    white-space: nowrap;
+    min-height: 44px;
+    transition: background-color 0.15s, color 0.15s;
+  }
   .nav-dropdown-item:hover { background: var(--brand-subtle-bg); color: var(--brand-primary); }
   .nav-dropdown-item-active { background: var(--brand-subtle-bg); color: var(--brand-primary); font-weight: 700; }
+  .nav-dropdown-item:focus-visible { outline: 2px solid var(--brand-primary); outline-offset: -2px; }
 
   /* ── [UI-8.3 / U-41] Preferences panel ───────────────────────────────── */
   .pref-group { margin-bottom: var(--space-4); }
@@ -6209,13 +6450,13 @@ UIC.Live = (function () {
    * So failures are split, on the one signal that actually distinguishes them:
    *
    *   TRANSPORT failure (err.transport, set by API.call's failure handler) —
-   *     the request never reached a handler. The payload is still valid, so it
+   *     the response is missing, or processing is still pending. The same ID
    *     is queued, retried with backoff, and the row STAYS on screen marked
    *     pending. A persistent chip says how many changes are waiting, and it
    *     does not go away on its own.
    *
-   *   SERVER rejection (a handler returned status:'error') — the payload was
-   *     refused and will be refused again. The row rolls back immediately and
+   *   SERVER rejection or uncertain outcome — automatic retry stops; the UI is
+   *     restored without claiming a database rollback. The row rolls back immediately and
    *     exactly, as it always has, and the user is told why. Retrying a
    *     validation error just shows the same error four times.
    *
@@ -6301,6 +6542,9 @@ UIC.Live = (function () {
    */
   function callFor(entry) {
     var t = entry && entry.target_system;
+    if (window.API && API._requestGuard && (!entry.data || !entry.data.__request_id)) {
+      return function () { return Promise.reject({status:'error',code:'LEGACY_RETRY_REVIEW',uncertain:true,message:'طلب مؤجل قديم بلا رقم حماية. راجع السجل مع المسؤول قبل إعادة إدخاله.'}); };
+    }
     if (t && window.API && typeof API.call === 'function') {
       return function (action, data) {
         return API.call('company_action', {
@@ -6358,7 +6602,7 @@ UIC.Live = (function () {
     }
     var n = queue.length;
     el.innerHTML =
-      '<span>' + (n === 1 ? 'تغيير واحد لم يُحفظ' : (n + ' تغييرات لم تُحفظ')) + '</span>' +
+      '<span>' + (n === 1 ? 'طلب واحد بانتظار التأكيد' : (n + ' طلبات بانتظار التأكيد')) + '</span>' +
       '<button type="button" class="uic-live-retry-go" onclick="UIC.Live.retryNow()">إعادة المحاولة</button>' +
       '<button type="button" class="uic-live-retry-drop" onclick="UIC.Live.discardQueue()" ' +
       'title="تجاهل التغييرات غير المحفوظة">تجاهل</button>';
@@ -6424,7 +6668,7 @@ UIC.Live = (function () {
            * persistent, and dismissed only by an explicit ack. */
           queue.shift();
           persistQueue();
-          dead.push({ a: entry.action, m: (err && err.transport) ? 'تعذر الاتصال — أعد إدخال التغيير' : ((err && err.message) || 'تعذر الحفظ') });
+          dead.push({ a: entry.action, m: (err && err.transport) ? 'تعذر تأكيد نتيجة الطلب — راجع السجل قبل إنشاء طلب جديد' : ((err && err.message) || 'تعذر الحفظ') });
           persistDead();
           renderChip();
         }
@@ -6535,10 +6779,10 @@ UIC.Live = (function () {
         return resp;
       })
       .catch(function (err) {
-        /* [RT-4] A request that never reached a handler is retried, not
+        /* [RT-4] A request without a confirmed response is retried, not
          * thrown away. The row stays on screen marked pending and the chip
          * says so, because the payload is still good and the user's change is
-         * still going to land. Everything else — a handler that refused the
+         * retried under its original identity. Other terminal errors for the
          * payload — rolls back exactly as it always has, because retrying a
          * rejection just shows the same error five times. */
         /* ── [§I3] Queueable is a SEPARATE axis from tier ──────────────────
@@ -6573,7 +6817,7 @@ UIC.Live = (function () {
             tries: 0,
             at: Date.now()
           });
-          try { UIC.toast('لا يوجد اتصال — سيتم الحفظ تلقائيًا', 'error'); } catch (e) {}
+          try { UIC.toast('انقطع الاتصال — سنعيد التحقق من نفس الطلب دون إنشاء نسخة أخرى', 'error'); } catch (e) {}
           if (typeof o.onError === 'function') o.onError(err);
           throw err;
         }
@@ -6590,7 +6834,7 @@ UIC.Live = (function () {
            better than duplicating one if they are actually told. */
         try {
           UIC.toast((err && err.transport)
-            ? 'تعذر الاتصال — لم يتم تسجيل التغيير، أعد إدخاله'
+            ? 'تعذر تأكيد نتيجة الطلب — قد يكون حُفظ. أعد المحاولة بنفس الطلب أو راجع السجل'
             : ((err && err.message) || 'تعذر الحفظ — لم يتم تسجيل التغيير'), 'error');
         } catch (e) {}
         if (typeof o.onError === 'function') o.onError(err);
@@ -6905,6 +7149,736 @@ UIC.Live = (function () {
     ackDead: ackDead,
     queued: function () { return queue.length; }
   };
+})();
+
+/* ── [Option A] Instant-upload UploadSet (ERP-standard, Odoo/SAP pattern) ──
+ *
+ * A file is uploaded the moment it is chosen, not when the form is saved.
+ * The save then stores only the pre-bound {reference,fileId} pair.
+ *
+ *   UIC.fileField({..., instant:true, sheet:'products', field:'print_file',
+ *                   formModalId:'product-modal'})
+ *   UIC.UploadSet.awaitPending('product-modal').then(...save with getBound...)
+ *
+ * Per-form busy counter disables Save while any upload is in flight, the
+ * inline row reuses .uic-file-preview + .dt-progress (no blocking overlay),
+ * status flows Draft -> Uploading -> Bound / Failed with Retry + remove,
+ * RTL Arabic throughout, accept + 10MB validated client-side, __request_id
+ * preserved per selection so a retry recovers the same Drive file server-side.
+ * Close during upload confirms via UIC.confirm and aborts; remove aborts too.
+ * ?download=attachment view path is untouched (this only writes refs).
+ */
+UIC.UploadSet = (function () {
+  'use strict';
+  var MAX_BYTES = 10 * 1024 * 1024;
+  var ALLOWED = { pdf: 1, doc: 1, docx: 1, png: 1, jpg: 1, jpeg: 1 };
+  var busyByModal = {};
+  /* Per-form uploadBusyCounter (ERP-standard): modalId -> in-flight count. */
+  var uploadBusyCounter = busyByModal;
+  var entries = {};
+  var seq = 0;
+
+  function uuid() {
+    try {
+      if (window.crypto && window.crypto.randomUUID) return window.crypto.randomUUID();
+    } catch (e) {}
+    try {
+      if (window.crypto && window.crypto.getRandomValues) {
+        var a = new Uint32Array(4);
+        window.crypto.getRandomValues(a);
+        var s = '';
+        for (var i = 0; i < a.length; i++) s += ('00000000' + a[i].toString(16)).slice(-8);
+        return s;
+      }
+    } catch (e) {}
+    var t = '';
+    for (var j = 0; j < 32; j++) t += Math.floor(Math.random() * 16).toString(16);
+    return t;
+  }
+
+  function callServer(action, data) {
+    try {
+      if (typeof window.companyCall === 'function') return window.companyCall(action, data);
+    } catch (e) {}
+    try {
+      var target = (window.API && API._lastTarget) || '';
+      return API.call('company_action', { target_system: target, module_action: action, data: data || {} }, window.SESSION_TOKEN);
+    } catch (e) { return Promise.reject(e); }
+  }
+
+  function modalOf(input, fallback) {
+    if (fallback) return fallback;
+    try {
+      if (input && input.getAttribute) {
+        var d = input.getAttribute('data-uic-form');
+        if (d) return d;
+      }
+      if (input && input.dataset && input.dataset.uicForm) return input.dataset.uicForm;
+      if (input && input.closest) {
+        var m = input.closest('.modal-overlay');
+        if (m && m.id) return m.id;
+      }
+    } catch (e) {}
+    return '';
+  }
+
+  function sheetOf(input, fallback) {
+    if (fallback) return fallback;
+    try {
+      if (input && input.getAttribute) {
+        var s = input.getAttribute('data-uic-sheet');
+        if (s) return s;
+      }
+      if (input && input.dataset && input.dataset.uicSheet) return input.dataset.uicSheet;
+    } catch (e) {}
+    return '';
+  }
+
+  function fieldOf(input, fallback) {
+    if (fallback) return fallback;
+    try {
+      if (input && input.getAttribute) {
+        var f = input.getAttribute('data-uic-field');
+        if (f) return f;
+      }
+      if (input && input.dataset && input.dataset.uicField) return input.dataset.uicField;
+      if (input && input.getAttribute) {
+        var dn = input.getAttribute('data-field-name');
+        if (dn) return dn;
+      }
+      if (input && input.id) return input.id;
+    } catch (e) {}
+    return '';
+  }
+
+  function isBusy(modalId) {
+    if (!modalId) return false;
+    return (busyByModal[modalId] || 0) > 0;
+  }
+
+  function anyBusy() {
+    for (var k in busyByModal) {
+      if (busyByModal[k] > 0) return true;
+    }
+    return false;
+  }
+
+  function setBusy(modalId, delta) {
+    if (!modalId) return;
+    busyByModal[modalId] = Math.max(0, (busyByModal[modalId] || 0) + delta);
+    updateSaveBtn(modalId);
+  }
+
+  function updateSaveBtn(modalId) {
+    if (!modalId) return;
+    try {
+      var modal = document.getElementById(modalId);
+      if (!modal) return;
+      var busy = isBusy(modalId);
+      var btns = modal.querySelectorAll('.modal-footer button');
+      for (var i = 0; i < btns.length; i++) {
+        var b = btns[i];
+        var txt = '';
+        try { txt = String(b.textContent || ''); } catch (e) {}
+        var isSave = false;
+        try {
+          if (b.className && String(b.className).indexOf('btn-primary') !== -1) isSave = true;
+          if (txt.indexOf('حفظ') !== -1) isSave = true;
+        } catch (e2) {}
+        if (isSave) {
+          b.disabled = busy;
+          try {
+            if (busy) b.setAttribute('aria-disabled', 'true');
+            else b.removeAttribute('aria-disabled');
+            b.title = busy ? 'جاري رفع الملف... يرجى الانتظار' : '';
+          } catch (e3) {}
+        }
+      }
+    } catch (e) {}
+  }
+
+  function hostFor(input) {
+    try {
+      if (UIC._filePreviewHost) return UIC._filePreviewHost(input);
+    } catch (e) {}
+    return null;
+  }
+
+  function fmtSize(n) {
+    try {
+      if (UIC._formatFileSize) return UIC._formatFileSize(n);
+    } catch (e) {}
+    return String(n || 0);
+  }
+
+  function trackForm(input) {
+    try {
+      var form = input && input.closest ? input.closest('form') : null;
+      if (form && form.id && UIC.trackDirty) UIC.trackDirty(form.id);
+    } catch (e) {}
+  }
+
+  function clearBound(input) {
+    try {
+      if (input.dataset) {
+        input.dataset.uploadRef = '';
+        input.dataset.uploadId = '';
+        input.dataset.uploadStatus = '';
+      }
+      input.removeAttribute('data-upload-ref');
+      input.removeAttribute('data-upload-id');
+    } catch (e) {}
+  }
+
+  function storeBound(input, ref, id) {
+    try {
+      if (input.dataset) {
+        input.dataset.uploadRef = ref || '';
+        input.dataset.uploadId = id || '';
+        input.dataset.uploadStatus = ref ? 'bound' : '';
+      }
+      if (ref) {
+        input.setAttribute('data-upload-ref', ref);
+        if (id) input.setAttribute('data-upload-id', id);
+        try { input.setAttribute('data-ref', ref); } catch (e) {}
+      } else {
+        input.removeAttribute('data-upload-ref');
+        input.removeAttribute('data-upload-id');
+      }
+    } catch (e) {}
+  }
+
+  function renderRow(input, host, opts) {
+    try { if (UIC._ensureFilePreviewStyles) UIC._ensureFilePreviewStyles(); } catch (e) {}
+    if (!host) return null;
+    var file = opts.file || null;
+    var fname = opts.filename || (file && file.name) || '';
+    try {
+      var short = String(fname).split('/').pop();
+      fname = short || fname;
+    } catch (e) {}
+    var sizeTxt = '';
+    try {
+      if (file && file.size != null) sizeTxt = fmtSize(file.size);
+      else if (opts.sizeTxt) sizeTxt = opts.sizeTxt;
+    } catch (e) {}
+    var statusTxt = opts.statusTxt || '';
+    var showBar = !!opts.showBar;
+    var pct = (opts.pct != null) ? opts.pct : null;
+    var showRetry = !!opts.showRetry;
+    var entryKey = opts.entryKey || '';
+
+    host.setAttribute('dir', 'rtl');
+    host.innerHTML = '';
+    var visual;
+    var isImg = false;
+    try {
+      var nm = String(fname || '');
+      var tp = String((file && file.type) || '');
+      isImg = (/^image\//i.test(tp)) || (/\.(png|jpe?g|gif|webp|bmp)$/i.test(nm));
+    } catch (e) {}
+    if (isImg && file && window.URL && typeof URL.createObjectURL === 'function') {
+      visual = document.createElement('img');
+      visual.className = 'uic-file-preview__thumb';
+      visual.alt = 'معاينة الصورة المختارة';
+      try {
+        if (input.__uicPreviewUrl) { try { URL.revokeObjectURL(input.__uicPreviewUrl); } catch (e2) {} }
+        input.__uicPreviewUrl = URL.createObjectURL(file);
+        visual.src = input.__uicPreviewUrl;
+      } catch (e3) {}
+    } else {
+      visual = document.createElement('span');
+      visual.className = 'uic-file-preview__file';
+      visual.setAttribute('aria-hidden', 'true');
+      visual.textContent = '📎';
+    }
+    var info = document.createElement('span');
+    info.className = 'uic-file-preview__info';
+    var name = document.createElement('span');
+    name.className = 'uic-file-preview__name';
+    name.textContent = fname || 'Attachment';
+    info.appendChild(name);
+    var st = document.createElement('span');
+    st.className = 'uic-file-preview__status';
+    var fullStatus = statusTxt;
+    if (pct != null && opts.phase === 'uploading') fullStatus += ' · ' + pct + '%';
+    if (sizeTxt) fullStatus += (fullStatus ? ' · ' : '') + sizeTxt;
+    st.textContent = fullStatus;
+    try {
+      if (opts.phase === 'failed') st.style.color = 'var(--danger,#b91c1c)';
+      else if (opts.phase === 'bound') st.style.color = 'var(--success,#18864b)';
+      else st.style.color = '';
+    } catch (e4) {}
+    info.appendChild(st);
+    if (showBar) {
+      var bar = document.createElement('div');
+      bar.className = 'dt-progress';
+      try { bar.style.marginTop = '6px'; } catch (e5) {}
+      bar.setAttribute('role', 'progressbar');
+      if (pct != null) bar.setAttribute('aria-valuenow', String(pct));
+      info.appendChild(bar);
+    }
+    host.appendChild(visual);
+    host.appendChild(info);
+    if (showRetry) {
+      var rb = document.createElement('button');
+      rb.type = 'button';
+      rb.className = 'btn btn-outline';
+      try { rb.style.cssText = 'min-height:34px;padding:4px 10px;font-size:12px;white-space:nowrap;'; } catch (e6) {}
+      rb.textContent = 'إعادة المحاولة';
+      rb.setAttribute('aria-label', 'إعادة محاولة الرفع');
+      (function (k) {
+        rb.addEventListener('click', function (ev) {
+          try { if (ev && ev.stopPropagation) ev.stopPropagation(); } catch (e7) {}
+          retry(k);
+        });
+      })(entryKey);
+      host.appendChild(rb);
+    }
+    var rm = document.createElement('button');
+    rm.type = 'button';
+    rm.className = 'uic-file-preview__remove';
+    rm.setAttribute('aria-label', 'إزالة المرفق المختار');
+    rm.title = 'إزالة المرفق';
+    rm.textContent = '×';
+    (function (k, inp) {
+      rm.addEventListener('click', function (ev) {
+        try { if (ev && ev.stopPropagation) ev.stopPropagation(); } catch (e8) {}
+        cancel(k, inp);
+        try {
+          inp.value = '';
+          var h = hostFor(inp);
+          if (h) { h.innerHTML = ''; h.hidden = true; }
+          clearBound(inp);
+          try { inp.focus(); } catch (e9) {}
+        } catch (e10) {}
+      });
+    })(entryKey, input);
+    host.appendChild(rm);
+    host.hidden = false;
+    return { statusEl: st, host: host };
+  }
+
+  function extOf(name) {
+    var s = String(name || '');
+    var d = s.lastIndexOf('.');
+    return (d > 0 ? s.slice(d + 1) : '').toLowerCase();
+  }
+
+  function onFileChosen(input) {
+    if (!input || String(input.type).toLowerCase() !== 'file') return;
+    var modalId = modalOf(input, '');
+    var sheet = sheetOf(input, '');
+    var field = fieldOf(input, '');
+    var file = input.files && input.files[0];
+    var host = hostFor(input);
+    trackForm(input);
+    if (!file) {
+      try {
+        var prevKey = input.dataset ? input.dataset.uploadEntry : '';
+        if (prevKey && entries[prevKey] && entries[prevKey].status === 'uploading') {
+          cancel(prevKey, input);
+        }
+      } catch (e) {}
+      clearBound(input);
+      if (host) { host.innerHTML = ''; host.hidden = true; }
+      if (modalId) updateSaveBtn(modalId);
+      return;
+    }
+    if (!sheet) {
+      try { UIC.toast('تعذر تحديد وجهة الرفع', 'error'); } catch (e) {}
+      input.value = '';
+      return;
+    }
+    var ext = extOf(file.name);
+    if (!ALLOWED[ext]) {
+      try { UIC.toast('نوع الملف غير مسموح (pdf, word, png, jpg فقط)', 'error'); } catch (e) {}
+      renderRow(input, host, { file: file, phase: 'failed', statusTxt: 'فشل الرفع · نوع غير مسموح', showBar: false, showRetry: false, entryKey: '' });
+      try { UIC.fileError(field, 'نوع الملف غير مسموح'); } catch (e2) {}
+      input.value = '';
+      clearBound(input);
+      return;
+    }
+    if (file.size > MAX_BYTES) {
+      try { UIC.toast('حجم الملف يتجاوز 10 ميجابايت', 'error'); } catch (e) {}
+      renderRow(input, host, { file: file, phase: 'failed', statusTxt: 'فشل الرفع · الحجم يتجاوز 10 ميجابايت', showBar: false, showRetry: false, entryKey: '' });
+      input.value = '';
+      clearBound(input);
+      return;
+    }
+    try { UIC.fileError(field, ''); } catch (e) {}
+    var extraId = '';
+    var extraName = '';
+    try {
+      extraId = input.getAttribute('data-uic-id') || '';
+      extraName = input.getAttribute('data-uic-name') || '';
+      if (!extraId && input.dataset && input.dataset.uicId) extraId = input.dataset.uicId;
+      if (!extraName && input.dataset && input.dataset.uicName) extraName = input.dataset.uicName;
+    } catch (e2) {}
+    clearBound(input);
+    instantUpload({ formModalId: modalId, sheet: sheet, field: field, file: file, input: input, id: extraId, name: extraName });
+  }
+
+  function instantUpload(opts) {
+    opts = opts || {};
+    var modalId = opts.formModalId || '';
+    var sheet = opts.sheet || '';
+    var field = opts.field || '';
+    var file = opts.file || null;
+    var input = opts.input || null;
+    if (!file) return Promise.resolve(null);
+    if (!sheet) return Promise.reject(new Error('وجهة الرفع غير محددة'));
+    var ext = extOf(file.name);
+    if (!ALLOWED[ext]) return Promise.reject(new Error('نوع الملف غير مسموح (pdf, word, png, jpg فقط)'));
+    if (file.size > MAX_BYTES) return Promise.reject(new Error('حجم الملف يتجاوز 10 ميجابايت'));
+    if (input) {
+      try {
+        var prev = input.dataset ? input.dataset.uploadEntry : '';
+        if (prev && entries[prev] && entries[prev].status === 'uploading') {
+          entries[prev].cancelled = true;
+          try { if (entries[prev].pctTimer) clearInterval(entries[prev].pctTimer); } catch (e) {}
+        }
+      } catch (e2) {}
+    }
+    var key = 'up' + (++seq) + '_' + Date.now().toString(36);
+    var entry = {
+      key: key,
+      modalId: modalId,
+      sheet: sheet,
+      field: field,
+      file: file,
+      input: input,
+      status: 'draft',
+      ref: '',
+      fileId: '',
+      requestId: uuid(),
+      cancelled: false,
+      pct: 0,
+      pctTimer: null,
+      optId: opts.id || '',
+      optName: opts.name || ''
+    };
+    entries[key] = entry;
+    if (input) {
+      try { input.dataset.uploadEntry = key; } catch (e) {}
+      try { input.dataset.uploadStatus = 'draft'; } catch (e2) {}
+    }
+    if (modalId) setBusy(modalId, 1);
+    trackForm(input);
+    try {
+      var draftHost = input ? hostFor(input) : null;
+      renderRow(input, draftHost, { file: file, phase: 'draft', statusTxt: 'مسودة', showBar: false, showRetry: false, entryKey: key });
+    } catch (eD) {}
+    return doUpload(entry);
+  }
+
+  function doUpload(entry) {
+    var input = entry.input;
+    var host = input ? hostFor(input) : null;
+    entry.status = 'uploading';
+    entry.cancelled = false;
+    entry.pct = 5;
+    if (input) { try { input.dataset.uploadStatus = 'uploading'; } catch (e) {} }
+    renderRow(input, host, { file: entry.file, phase: 'uploading', statusTxt: 'جاري الرفع', showBar: true, pct: entry.pct, showRetry: false, entryKey: entry.key });
+    try {
+      if (entry.pctTimer) clearInterval(entry.pctTimer);
+      entry.pctTimer = setInterval(function () {
+        if (entry.cancelled || entry.status !== 'uploading') { try { clearInterval(entry.pctTimer); } catch (e) {} return; }
+        if (entry.pct < 90) {
+          entry.pct = Math.min(90, entry.pct + 7);
+          try {
+            var h = input ? hostFor(input) : null;
+            if (h) {
+              var st = h.querySelector('.uic-file-preview__status');
+              if (st) st.textContent = 'جاري الرفع · ' + entry.pct + '% · ' + fmtSize(entry.file.size);
+              var bar = h.querySelector('.dt-progress');
+              if (bar) bar.setAttribute('aria-valuenow', String(entry.pct));
+            }
+          } catch (e2) {}
+        }
+      }, 300);
+    } catch (e3) {}
+    return new Promise(function (resolve, reject) {
+      var reader = null;
+      try { reader = new FileReader(); } catch (e) { finishFail(entry, 'تعذر قراءة الملف'); reject(new Error('تعذر قراءة الملف')); return; }
+      entry.reader = reader;
+      reader.onerror = function () {
+        if (entry.cancelled) { reject(new Error('cancelled')); return; }
+        finishFail(entry, 'خطأ في قراءة الملف');
+        reject(new Error('خطأ في قراءة الملف'));
+      };
+      reader.onload = function () {
+        if (entry.cancelled) { reject(new Error('cancelled')); return; }
+        entry.pct = 35;
+        try {
+          var h = input ? hostFor(input) : null;
+          if (h) {
+            var st = h.querySelector('.uic-file-preview__status');
+            if (st) st.textContent = 'جاري الرفع · 35% · ' + fmtSize(entry.file.size);
+          }
+        } catch (e2) {}
+        var b64 = '';
+        try { b64 = String(reader.result || '').split(',')[1] || ''; } catch (e3) {}
+        if (!b64) {
+          finishFail(entry, 'لا يوجد ملف');
+          reject(new Error('لا يوجد ملف'));
+          return;
+        }
+        entry.pct = 60;
+        var payload = { sheet: entry.sheet, filename: entry.file.name, base64: b64, __request_id: entry.requestId };
+        if (entry.field) payload.field = entry.field;
+        if (entry.optId) payload.id = entry.optId;
+        if (entry.optName) payload.name = entry.optName;
+        callServer('add_upload_file', payload).then(function (res) {
+          if (entry.cancelled) { reject(new Error('cancelled')); return; }
+          try { if (entry.pctTimer) clearInterval(entry.pctTimer); } catch (e4) {}
+          if (res && res.status === 'success' && res.reference) {
+            entry.status = 'bound';
+            entry.ref = res.reference;
+            entry.fileId = res.fileId || '';
+            entry.pct = 100;
+            if (input) {
+              storeBound(input, entry.ref, entry.fileId);
+              try { input.dataset.uploadStatus = 'bound'; } catch (e5) {}
+            }
+            var h2 = input ? hostFor(input) : null;
+            renderRow(input, h2, { file: entry.file, phase: 'bound', statusTxt: 'تم الربط', showBar: false, showRetry: false, entryKey: entry.key });
+            if (entry.modalId) setBusy(entry.modalId, -1);
+            resolve({ reference: entry.ref, fileId: entry.fileId });
+          } else if (res && res.notApplied === true) {
+            finishFail(entry, (res && res.message) || 'تعذر الرفع');
+            reject(res);
+          } else {
+            finishFail(entry, (res && res.message) || 'خطأ في رفع الملف');
+            reject(new Error((res && res.message) || 'خطأ في رفع الملف'));
+          }
+        }).catch(function (err) {
+          if (entry.cancelled) { reject(new Error('cancelled')); return; }
+          try { if (entry.pctTimer) clearInterval(entry.pctTimer); } catch (e6) {}
+          if (err && err.notApplied === true) {
+            finishFail(entry, (err && err.message) || 'تعذر الرفع');
+            reject(err);
+            return;
+          }
+          finishFail(entry, (err && err.message) || 'خطأ في رفع الملف');
+          reject(new Error((err && err.message) || 'خطأ في رفع الملف'));
+        });
+      };
+      try { reader.readAsDataURL(entry.file); } catch (e4) {
+        finishFail(entry, 'تعذر قراءة الملف');
+        reject(new Error('تعذر قراءة الملف'));
+      }
+    });
+  }
+
+  function finishFail(entry, msg) {
+    entry.status = 'failed';
+    try { if (entry.pctTimer) clearInterval(entry.pctTimer); } catch (e) {}
+    var input = entry.input;
+    if (input) { try { input.dataset.uploadStatus = 'failed'; } catch (e2) {} }
+    var host = input ? hostFor(input) : null;
+    renderRow(input, host, { file: entry.file, phase: 'failed', statusTxt: 'فشل الرفع' + (msg ? ' · ' + msg : ''), showBar: false, showRetry: true, entryKey: entry.key });
+    if (entry.modalId) setBusy(entry.modalId, -1);
+    try { UIC.toast(msg || 'خطأ في رفع الملف', 'error'); } catch (e3) {}
+  }
+
+  function retry(entryKey) {
+    var entry = entries[entryKey];
+    if (!entry) return Promise.reject(new Error('لا يوجد رفع'));
+    if (entry.status === 'uploading') return Promise.resolve(null);
+    var input = entry.input;
+    var file = entry.file;
+    if (!file && input && input.files && input.files[0]) file = input.files[0];
+    if (!file) {
+      try { UIC.toast('اختر الملف مجددا', 'error'); } catch (e) {}
+      return Promise.reject(new Error('اختر الملف مجددا'));
+    }
+    entry.file = file;
+    if (entry.modalId) setBusy(entry.modalId, 1);
+    return doUpload(entry);
+  }
+
+  function cancel(entryKey, input) {
+    var entry = entries[entryKey];
+    if (entry) {
+      entry.cancelled = true;
+      try { if (entry.pctTimer) clearInterval(entry.pctTimer); } catch (e) {}
+      if ((entry.status === 'uploading' || entry.status === 'draft') && entry.modalId) setBusy(entry.modalId, -1);
+      entry.status = 'cancelled';
+    }
+    if (input) {
+      clearBound(input);
+      try { input.dataset.uploadStatus = ''; input.dataset.uploadEntry = ''; } catch (e2) {}
+    }
+    if (entry && entry.modalId) updateSaveBtn(entry.modalId);
+  }
+
+  function abortAll(modalId) {
+    if (!modalId) return;
+    for (var k in entries) {
+      if (entries[k] && entries[k].modalId === modalId && (entries[k].status === 'uploading' || entries[k].status === 'draft')) {
+        entries[k].cancelled = true;
+        try { if (entries[k].pctTimer) clearInterval(entries[k].pctTimer); } catch (e) {}
+        entries[k].status = 'cancelled';
+      }
+    }
+    busyByModal[modalId] = 0;
+    updateSaveBtn(modalId);
+  }
+
+  function awaitPending(modalId) {
+    return new Promise(function (resolve) {
+      var n = 0;
+      var check = function () {
+        if (!isBusy(modalId)) { resolve(); return; }
+        n++;
+        if (n > 300) { resolve(); return; }
+        setTimeout(check, 100);
+      };
+      check();
+    });
+  }
+
+  function getBound(input) {
+    var el = (typeof input === 'string') ? document.getElementById(input) : input;
+    if (!el) return null;
+    var ref = '';
+    var id = '';
+    try {
+      if (el.dataset) {
+        ref = el.dataset.uploadRef || '';
+        id = el.dataset.uploadId || '';
+      }
+      if (!ref) ref = el.getAttribute('data-upload-ref') || '';
+      if (!id) id = el.getAttribute('data-upload-id') || '';
+      if (!ref) ref = el.getAttribute('data-ref') || '';
+    } catch (e) {}
+    if (!ref) return null;
+    return { ref: ref, id: id || '' };
+  }
+
+  function setBound(input, ref, id) {
+    var el = (typeof input === 'string') ? document.getElementById(input) : input;
+    if (!el || !ref) return;
+    storeBound(el, ref, id);
+    try { el.dataset.uploadStatus = 'bound'; } catch (e) {}
+    var host = hostFor(el);
+    renderRow(el, host, { filename: String(ref).split('/').pop(), sizeTxt: '', phase: 'bound', statusTxt: 'تم الربط', showBar: false, showRetry: false, entryKey: '' });
+  }
+
+  function bind(input, opts) {
+    var el = (typeof input === 'string') ? document.getElementById(input) : input;
+    if (!el) return;
+    opts = opts || {};
+    try {
+      el.setAttribute('data-uic-instant', '1');
+      if (opts.sheet) el.setAttribute('data-uic-sheet', opts.sheet);
+      if (opts.field) el.setAttribute('data-uic-field', opts.field);
+      if (opts.formModalId) el.setAttribute('data-uic-form', opts.formModalId);
+      if (opts.id) el.setAttribute('data-uic-id', opts.id);
+      if (opts.name) el.setAttribute('data-uic-name', opts.name);
+    } catch (e) {}
+  }
+
+  return {
+    MAX_BYTES: MAX_BYTES,
+    uploadBusyCounter: uploadBusyCounter,
+    isBusy: isBusy,
+    awaitPending: awaitPending,
+    getBound: getBound,
+    setBound: setBound,
+    bind: bind,
+    instantUpload: instantUpload,
+    retry: retry,
+    cancel: cancel,
+    abortAll: abortAll,
+    _onFileChosen: onFileChosen,
+    _updateSaveBtn: updateSaveBtn
+  };
+})();
+
+/* fileField + showFileSelection instant extension (additive). */
+(function () {
+  try {
+    if (!UIC._fileFieldOriginal) UIC._fileFieldOriginal = UIC.fileField;
+    UIC.fileField = function (o) {
+      o = o || {};
+      var base = '';
+      try { base = UIC._fileFieldOriginal(o); } catch (e) { base = ''; }
+      if (!o.instant) return base;
+      try {
+        var sheet = o.sheet || '';
+        var field = o.field || o.key || '';
+        var form = o.formModalId || '';
+        var inject = ' data-uic-instant="1"';
+        if (sheet) inject += ' data-uic-sheet="' + UIC.escHtml(sheet) + '"';
+        if (field) inject += ' data-uic-field="' + UIC.escHtml(field) + '"';
+        if (form) inject += ' data-uic-form="' + UIC.escHtml(form) + '"';
+        base = String(base).replace('<input ', '<input' + inject + ' ');
+      } catch (e2) {}
+      return base;
+    };
+  } catch (e) {}
+  try {
+    if (!UIC._showFileSelectionOriginal) UIC._showFileSelectionOriginal = UIC.showFileSelection;
+    UIC.showFileSelection = function (input) {
+      try {
+        var instant = false;
+        if (input) {
+          if (input.hasAttribute && input.hasAttribute('data-uic-instant')) instant = true;
+          else if (input.dataset && (input.dataset.uicInstant === '1' || input.dataset.uicInstant === 1 || input.dataset.uicInstant === true)) instant = true;
+          else if (input.getAttribute && input.getAttribute('data-uic-instant')) instant = true;
+        }
+        if (instant && UIC.UploadSet && UIC.UploadSet._onFileChosen) {
+          UIC.UploadSet._onFileChosen(input);
+          return;
+        }
+      } catch (e) {}
+      try { return UIC._showFileSelectionOriginal(input); } catch (e2) {}
+    };
+  } catch (e3) {}
+  try {
+    if (!UIC._closeModalOriginal) UIC._closeModalOriginal = UIC.closeModal;
+    UIC.closeModal = function (modalId) {
+      try {
+        if (modalId && UIC.UploadSet && UIC.UploadSet.isBusy(modalId)) {
+          UIC.confirm({
+            title: 'رفع جارٍ',
+            message: 'يوجد رفع ملف جارٍ. إغلاق النافذة الآن سيلغي الرفع.',
+            confirmText: 'إغلاق وإلغاء الرفع',
+            cancelText: 'البقاء في الصفحة',
+            danger: true
+          }).then(function (go) {
+            if (!go) return;
+            try { UIC.UploadSet.abortAll(modalId); } catch (e) {}
+            try { UIC._closeModalOriginal(modalId); } catch (e2) {}
+          });
+          return;
+        }
+      } catch (e3) {}
+      try { return UIC._closeModalOriginal(modalId); } catch (e4) {}
+    };
+  } catch (e5) {}
+  try {
+    if (!UIC._isDirtyOriginal && UIC.isDirty) {
+      UIC._isDirtyOriginal = UIC.isDirty;
+      UIC.isDirty = function () {
+        try {
+          if (UIC.UploadSet) {
+            var busy = false;
+            try {
+              var all = document.querySelectorAll('.modal-overlay');
+              for (var i = 0; i < all.length; i++) {
+                if (all[i] && all[i].id && UIC.UploadSet.isBusy(all[i].id)) { busy = true; break; }
+              }
+            } catch (e) {}
+            if (busy) return true;
+          }
+        } catch (e2) {}
+        try { return UIC._isDirtyOriginal(); } catch (e3) { return false; }
+      };
+    }
+  } catch (e6) {}
 })();
 
 </script>

@@ -43,6 +43,12 @@
     #vf-products-content #products-table-id_table td { padding: 6px 8px; font-size: 12.5px; overflow-wrap: break-word; }
     #vf-products-content #products-table-id_table td.num { white-space: nowrap; }
     #vf-products-content .table-wrap { overflow-x: auto; }
+    /* vf_products main view: tight الكود (col 1) so الاسم (col 2) gets room.
+       Name floor is 24ch; narrow screens may scroll inside .table-wrap. */
+    #vf-products-content #products-table-id_table th:nth-child(1),
+    #vf-products-content #products-table-id_table td:nth-child(1) { width: 1%; white-space: nowrap; }
+    #vf-products-content #products-table-id_table th:nth-child(2),
+    #vf-products-content #products-table-id_table td:nth-child(2) { min-width: 24ch; }
   </style>
 </head>
 <body>

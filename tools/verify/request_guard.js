@@ -2,6 +2,8 @@
 const fs=require('fs'),vm=require('vm'),assert=require('assert'),crypto=require('crypto'),path=require('path');
 const root=path.resolve(__dirname,'../..');
 const source=fs.readFileSync(path.join(root,'Code.js'),'utf8');
+assert(source.includes('window.AUTH_USER_EMAIL=') && source.includes('(authUser && authUser.email)'),
+  'authenticated page render must inject the server-verified request owner');
 function grab(source,name){const start=source.indexOf('function '+name+'(');assert(start>=0,name);const end=source.indexOf('\nfunction ',start+10);return source.slice(start,end<0?source.length:end);}
 const names=['requestGuardIsWrite_','requestGuardCanonical_','requestGuardHash_','requestGuardReply_','requestGuardNotApplied_','requestGuardFailedReply_','requestGuardSheet_','requestGuardFind_','requestGuardExecute_','executeCompanyAction_'];
 function grabVar(source){const start=source.indexOf('var REQUEST_RECEIPT_HEADERS_');assert(start>=0,'receipt headers');const end=source.indexOf(';\n',start);return source.slice(start,end+1);}
@@ -21,7 +23,14 @@ function server(shared){
       createTextFinder:key=>({matchEntireCell(){return this;},matchCase(){return this;},findAll:()=>rows.map((row,i)=>({row,i})).filter(x=>x.i>=r-1&&x.i<r-1+n&&x.row[c-1]===key).map(x=>({getRow:()=>x.i+1}))})
     })};
   }
-  const ctx={console,noteMutation_(){},Utilities:{DigestAlgorithm:{SHA_256:'sha256'},Charset:{UTF_8:'utf8'},computeDigest:(_,text)=>Array.from(crypto.createHash('sha256').update(text).digest())},SpreadsheetApp:{flush(){}},executeWithLock_:fn=>fn(),rearmRecordCache_(){},jsonSafe_:x=>JSON.parse(JSON.stringify(x)),getSpreadsheet_:db=>({getSheetByName:name=>shared.sheets[db+'/'+name],insertSheet:name=>(shared.sheets[db+'/'+name]=makeSheet())}),COMPANY_SA_ONLY_RE:/^(edit_|delete_|remove_|update_|toggle_|close_|make_)/,ERP_MESSAGES:{NOT_AUTHORIZED:'denied'},canCompanyAction_:user=>!user.denied,checkPageAccess_:user=>{if(user.denied)throw Error('denied');},getCompanySpreadsheetId_:id=>id};
+  const ctx={console,noteMutation_(){},Utilities:{DigestAlgorithm:{SHA_256:'sha256'},Charset:{UTF_8:'utf8'},computeDigest:(_,text)=>Array.from(crypto.createHash('sha256').update(text).digest())},SpreadsheetApp:{flush(){}},executeWithLock_:fn=>fn(),rearmRecordCache_(){},jsonSafe_:x=>JSON.parse(JSON.stringify(x)),getSpreadsheet_:db=>({getSheetByName:name=>shared.sheets[db+'/'+name],insertSheet:name=>(shared.sheets[db+'/'+name]=makeSheet())}),COMPANY_SA_ONLY_RE:/^(edit_|delete_|remove_|update_|toggle_|close_|make_)/,ERP_MESSAGES:{NOT_AUTHORIZED:'denied'},canCompanyAction_:user=>!user.denied,checkPageAccess_:user=>{if(user.denied)throw Error('denied');},getCompanySpreadsheetId_:id=>id,
+  /* Ported from Code.js (gap-closure Phase 3): executeCompanyAction_
+     now resolves the tenant centrally. Self-contained (vm sandboxes cannot see
+     sibling stubs by bare name): super-admins target the payload system,
+     everyone else is pinned to their own company; getCompanySpreadsheetId_ is
+     the identity stub here so the assert passes trivially and dbId is the
+     company key the sheet stubs use. */
+  resolveDbId_:(authUser,payload)=>{if(!authUser)throw Error('denied');if(authUser.isSuperAdmin){const t=payload&&payload.target_system;if(!t)throw Error('denied');return String(t);}const c=authUser.company;if(!c)throw Error('denied');if(payload&&payload.target_system&&payload.target_system!==c)throw Error('denied');return String(c);}};
   ctx.COMPANY_REGISTRY={company:{pageForAction:()=> 'page',dispatch:payload=>{assert(!('__request_id' in payload.data));assert(!('__request_owner' in payload.data));shared.business.push(payload.data);return {status:'success',record:{id:shared.business.length,amount:payload.data.amount}};}}};
   vm.createContext(ctx);vm.runInContext(headerVar+'\n'+names.map(n=>grab(source,n)).join('\n'),ctx);
   return {ctx,shared};
@@ -54,7 +63,7 @@ P.shared.fail='';const receipt=P.shared.sheets['company/ERP_Request_Receipts'].r
 assert.strictEqual(P.ctx.requestGuardExecute_(request(),user,'company',()=>{calls++;}).code,'REQUEST_UNCERTAIN','old pending claims must never execute again');assert.strictEqual(calls,1);
 for(const mode of ['claim-before','claim-after']){const F=server();F.shared.fail=mode;calls=0;assert.strictEqual(F.ctx.requestGuardExecute_(request(),user,'company',()=>{calls++;}).code,'REQUEST_GUARD_UNAVAILABLE');assert.strictEqual(calls,0);}
 const R=server();assert.strictEqual(R.ctx.requestGuardExecute_({module_action:'get_cash'},user,'company',()=>42),42);assert.strictEqual(Object.keys(R.shared.sheets).length,0,'reads create no ledger');
- const dataSource=fs.readFileSync(path.join(root,'02_DataAccess.js'),'utf8');let appends=0;
+ const dataSource=fs.readFileSync(path.join(root,'Code.js'),'utf8');let appends=0;
 const appendCtx={noteMutation_(){}};vm.createContext(appendCtx);vm.runInContext(grab(dataSource,'appendRowWithRetry_'),appendCtx);
 assert.throws(()=>appendCtx.appendRowWithRetry_({appendRow(){appends++;throw Error('committed but reply lost');}},[1]),/uncertain/);assert.strictEqual(appends,1,'ambiguous append must never be retried');
 
@@ -86,22 +95,76 @@ assert.strictEqual(ruCalls,1);
 // Real shared client API, with controllable lost responses and persistent tab storage.
 const clientSource=fs.readFileSync(path.join(root,'Client_Helpers.html'),'utf8');
 const clientSlice=clientSource.slice(clientSource.indexOf('API._requestGuard ='),clientSource.indexOf('/* F-18:'));
-function client(store=new Map(),identity=user.email){
+function client(store=new Map(),identity=user.email,serverIdentity=''){
   const sent=[];let serial=0;
-  const browser={API:{getSession:()=>({user:{email:identity}})},crypto:{randomUUID:()=>crypto.randomUUID()},sessionStorage:{getItem:k=>store.get(k)||null,setItem:(k,v)=>store.set(k,v)},location:{}};
+  const browser={AUTH_USER_EMAIL:serverIdentity,API:{getSession:()=>identity?({user:{email:identity}}):null},crypto:{randomUUID:()=>crypto.randomUUID()},sessionStorage:{getItem:k=>store.get(k)||null,setItem:(k,v)=>store.set(k,v)},location:{}};
   function runner(success,failure){return {withSuccessHandler:fn=>runner(fn,failure),withFailureHandler:fn=>runner(success,fn),apiRouter:req=>{sent.push({req,success,failure});}};}
-  const ctx={window:browser,API:browser.API,google:{script:{run:runner()}},console,Uint32Array,Promise};vm.createContext(ctx);vm.runInContext(clientSlice,ctx);
+  const ctx={window:browser,API:browser.API,google:{script:{run:runner()}},console,Uint32Array,Promise,setTimeout,clearTimeout};vm.createContext(ctx);vm.runInContext(clientSlice,ctx);
   return {browser,sent,store,call:(data={amount:10})=>browser.API.call('company_action',{target_system:'company',module_action:'add_cash',data},'fake-token')};
 }
+async function sentAt(C,n){
+  for(let i=0;i<400 && C.sent.length<=n;i++) await new Promise(r=>setTimeout(r,10));
+  assert(C.sent.length>n,'expected sent entry '+n);
+  return C.sent[n];
+}
 (async()=>{
- const A=client();const p=A.call(),p2=A.call();assert.strictEqual(p,p2,'concurrent identical saves share a single request');assert.strictEqual(A.sent.length,1);
- const sentId=A.sent[0].req.payload.data.__request_id;assert(sentId);assert.strictEqual(A.sent[0].req.payload.data.__request_owner,user.email);
- A.sent[0].failure(Error('reply lost'));await assert.rejects(p,e=>e.transport&&e.uncertain);await assert.rejects(p2);
- const B=client(A.store);const retry=B.call();assert.strictEqual(B.sent[0].req.payload.data.__request_id,sentId,'reload must reuse the original ID');
- const live=server();const original=live.ctx.executeCompanyAction_(A.sent[0].req.payload,'',user);assert.strictEqual(original.record.id,1);
+  const A=client();A.browser.API._requestGuard.pollDelays.splice(0,Infinity,5,5,5);
+  const p=A.call(),p2=A.call();assert.strictEqual(p,p2,'concurrent identical saves share a single request');assert.strictEqual(A.sent.length,1);
+  const sentId=A.sent[0].req.payload.data.__request_id;assert(sentId);assert.strictEqual(A.sent[0].req.payload.data.__request_owner,user.email);
+  /* A server-authenticated page must still save when the Apps Script iframe
+     cannot see the login page's localStorage (the iPhone production failure). */
+  const SI=client(new Map(),'',user.email);const sip=SI.call();assert.strictEqual(SI.sent.length,1);assert.strictEqual(SI.sent[0].req.payload.data.__request_owner,user.email);SI.sent[0].success({status:'success'});await sip;
+  /* The authenticated page identity is authoritative over stale browser data. */
+  const ST=client(new Map(),'stale@example.test',user.email);const stp=ST.call();assert.strictEqual(ST.sent[0].req.payload.data.__request_owner,user.email);ST.sent[0].success({status:'success'});await stp;
+  A.sent[0].failure(Error('reply lost'));
+  /* Transport loss polls request_status with the SAME id before surfacing. */
+  const poll1=await sentAt(A,1);
+  assert.strictEqual(poll1.req.action,'request_status','lost response triggers a status poll, not a blind retry');
+  assert.strictEqual(poll1.req.payload.request_id,sentId,'the poll reuses the original request ID');
+  assert.strictEqual(poll1.req.payload.module_action,'add_cash');
+  assert(!('__request_id' in (poll1.req.payload.data||{})),'the poll mints no new write identity');
+  poll1.success({status:'pending'});
+  const poll2=await sentAt(A,2);poll2.success({status:'done',result:{status:'success',record:{id:7},recovered:true}});
+  assert.strictEqual((await p).record.id,7,'a response lost after commit resolves as the original success');
+  assert.strictEqual((await p2).record.id,7);
+  /* Exhausted budget keeps the safeguard: uncertain + request ID + check flag. */
+  const E=client();E.browser.API._requestGuard.pollDelays.length=0;
+  const ep0=E.call();E.sent[0].failure(Error('offline'));
+  await sentAt(E,1);
+  E.sent[1].success({status:'pending'});
+  await assert.rejects(ep0,e=>e.transport&&e.uncertain&&e.checkStatus===true&&e.requestId===E.sent[0].req.payload.data.__request_id,'budget exhaustion must stay uncertain with a check-status action');
+  /* REQUEST_IN_PROGRESS takes the same poll path. */
+  const IP=client();IP.browser.API._requestGuard.pollDelays.splice(0,Infinity,5);
+  const ipp=IP.call();IP.sent[0].success({status:'error',code:'REQUEST_IN_PROGRESS',transport:true,uncertain:true});
+  const ips=await sentAt(IP,1);assert.strictEqual(ips.req.action,'request_status');
+  ips.success({status:'done',result:{status:'success',record:{id:9}}});
+  assert.strictEqual((await ipp).record.id,9);
+  /* A direct uncertain server reply (the exact path shown in the purchasing
+     recording) replays the same guarded envelope once. Recoverable actions
+     can reconcile/resume; non-recoverable actions are still blocked by the
+     server and are never executed twice. */
+  const DU=client();const dup=DU.call();const duId=DU.sent[0].req.payload.data.__request_id;
+  DU.sent[0].success({status:'error',code:'REQUEST_UNCERTAIN',uncertain:true,message:'uncertain'});
+  const duRetry=await sentAt(DU,1);
+  assert.strictEqual(duRetry.req.action,'company_action');
+  assert.strictEqual(duRetry.req.payload.data.__request_id,duId,'uncertain reconciliation must reuse the exact request ID');
+  duRetry.success({status:'success',record:{id:11},recovered:true});
+  assert.strictEqual((await dup).record.id,11,'direct uncertainty resolves through same-ID recovery');
+  const DB=client();const dbp=DB.call();const dbId=DB.sent[0].req.payload.data.__request_id;
+  DB.sent[0].success({status:'error',code:'REQUEST_UNCERTAIN',uncertain:true,message:'first'});
+  const dbRetry=await sentAt(DB,1);
+  assert.strictEqual(dbRetry.req.payload.data.__request_id,dbId);
+  dbRetry.success({status:'error',code:'REQUEST_UNCERTAIN',uncertain:true,message:'still uncertain'});
+  await assert.rejects(dbp,e=>e.code==='REQUEST_UNCERTAIN'&&e.checkStatus===true&&e.requestId===dbId);
+  assert.strictEqual(DB.sent.length,2,'uncertain reconciliation is bounded to one same-ID replay');
+ /* Reload reuses the still-uncertain ID (E's budget was exhausted, so its
+    pending entry is retained); the server dedupes the replay to one row. */
+ const eId=E.sent[0].req.payload.data.__request_id;
+ const B=client(E.store);const retry=B.call();assert.strictEqual(B.sent[0].req.payload.data.__request_id,eId,'reload must reuse the original ID');
+ const live=server();const original=live.ctx.executeCompanyAction_(E.sent[0].req.payload,'',user);assert.strictEqual(original.record.id,1);
  const recovered=live.ctx.executeCompanyAction_(B.sent[0].req.payload,'',user);assert.strictEqual(recovered.deduped,true);B.sent[0].success(recovered);await retry;assert.strictEqual(live.shared.business.length,1,'lost response then reload inserts only one row');
- const again=B.call();assert.notStrictEqual(B.sent[1].req.payload.data.__request_id,sentId,'new completed form may deliberately add identical data');B.sent[1].success({status:'success'});await again;
- const ownerMismatch=B.call({amount:10,__request_id:sentId,__request_owner:'other@example.test'});await assert.rejects(ownerMismatch,e=>e.code==='REQUEST_OWNER_MISMATCH');assert.strictEqual(B.sent.length,2);
+ const again=B.call();assert.notStrictEqual(B.sent[1].req.payload.data.__request_id,eId,'new completed form may deliberately add identical data');B.sent[1].success({status:'success'});await again;
+ const ownerMismatch=B.call({amount:10,__request_id:eId,__request_owner:'other@example.test'});await assert.rejects(ownerMismatch,e=>e.code==='REQUEST_OWNER_MISMATCH');assert.strictEqual(B.sent.length,2);
  const blocked=client();blocked.browser.sessionStorage.setItem=()=>{throw Error('storage full');};await assert.rejects(blocked.call(),e=>e.code==='REQUEST_STORAGE_UNAVAILABLE');assert.strictEqual(blocked.sent.length,0);
  const read=blocked.browser.API.call('company_action',{target_system:'company',module_action:'get_cash',data:{}},'fake');assert.strictEqual(blocked.sent.length,1);blocked.sent[0].success({status:'success'});await read;
  const expired=client();const ep=expired.call();const originalId=expired.sent[0].req.payload.data.__request_id;expired.sent[0].success({status:'error',code:'SESSION_EXPIRED'});await assert.rejects(ep);const resumed=client(expired.store);const rp=resumed.call();assert.strictEqual(resumed.sent[0].req.payload.data.__request_id,originalId,'auth rejection must not discard an uncertain earlier request identity');resumed.sent[0].success({status:'success'});await rp;
@@ -127,5 +190,5 @@ function client(store=new Map(),identity=user.email){
  const NA2=client(NA.store);const nap2=NA2.call();
  assert.notStrictEqual(NA2.sent[0].req.payload.data.__request_id,naId,'confirmed non-mutation releases the retained ID');
  NA2.sent[0].success({status:'success'});await nap2;
- console.log('request_guard: PASS (lost responses, reloads, duplicate/concurrent requests, authorization, payload conflicts, distinct saves, durable uncertainty, storage failures, no blind append retry, confirmed failures, request-id recovery)');
+  console.log('request_guard: PASS (lost responses auto-recover via status poll, reloads, duplicate/concurrent requests, authorization, payload conflicts, distinct saves, durable uncertainty with check-status, storage failures, no blind append retry, confirmed failures, request-id recovery)');
 })().catch(err=>{console.error(err);process.exitCode=1;});

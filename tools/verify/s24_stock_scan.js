@@ -124,14 +124,14 @@ check(fs.existsSync(path.join(ROOT, 'Company_TopChemical_StockScan.html')), 'Com
 check(/var IS_SUPER_ADMIN = <\?!= user && user\.isSuperAdmin/.test(scanPage)
   && /var USER_PAGES = <\?!= user && user\.isSuperAdmin/.test(scanPage),
   'the new page sets IS_SUPER_ADMIN/USER_PAGES from the start — the exact gap found on the Valley Foods dashboard (§5)');
-check(/CONTAINER_TYPES = \['شيكارة', 'كرتونة', 'برميل', 'بستلة'\]/.test(scanPage),
-  'container type is the fixed four-option list, not free text');
+check(/CONTAINER_TYPES = \['شيكارة', 'كرتونة', 'برميل', 'بستلة', 'جونية'\]/.test(scanPage),
+  'container type is the fixed five-option list (جونية added for the sack container), not free text');
 check(/companyCall\('get_stock_scan_options'\)/.test(scanPage) && /companyCall\('get_stock_scan_qty'\)/.test(scanPage)
   && /companyCall\('add_stock_scan'/.test(scanPage),
   'the page calls all three new actions by name');
 check(/TCP-/.test(scanPage), "barcode resolution uses the 'TCP-' computed-id convention, matching the print route");
 
-const codeJs = read('Code.js');
+const codeJs = read('Code.js') + '\n' + read('Company_TopChemical_Actions.js');
 /* Label printing moved after this run. The scan page's "طباعة باركود الأصناف"
  * printed the whole catalogue, one label per product — not what anyone needs
  * standing at a shelf. It is gone; tc_products now prints a full A4 sheet of
@@ -152,10 +152,18 @@ check(/for \(let r = 0; r < 6; r\+\+\)[\s\S]{0,80}cell \+ cell \+ cell/.test(cod
  * with headers turned on stamps the title across the top of the paper, which
  * would put the product name back on a sheet meant not to carry it. */
 const pbStart = codeJs.indexOf('function servePrintProductBarcode_');
-/* Bounded by the next top-level function rather than a brace scan — if one is
-   ever inserted between the two, this check fails loudly instead of quietly
-   testing the wrong body. */
-const pbEnd = codeJs.indexOf('function serveAttachment_', pbStart);
+/* The handler is now in the company Actions file, after shared Code.js has
+   already defined serveAttachment_. Balance this one function so the test is
+   independent of concatenation order and indentation. */
+let pbEnd = -1;
+if (pbStart !== -1) {
+  const open = codeJs.indexOf('{', pbStart);
+  let depth = 0;
+  for (let i = open; i < codeJs.length; i++) {
+    if (codeJs[i] === '{') depth++;
+    else if (codeJs[i] === '}') { depth--; if (depth === 0) { pbEnd = i + 1; break; } }
+  }
+}
 check(pbStart !== -1 && pbEnd > pbStart, 'servePrintProductBarcode_ body located');
 const pbFn = codeJs.slice(pbStart, pbEnd);
 check(!/name_ar/.test(pbFn),

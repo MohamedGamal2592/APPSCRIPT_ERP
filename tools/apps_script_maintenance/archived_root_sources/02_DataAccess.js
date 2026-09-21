@@ -14,6 +14,41 @@
 // (unique_id, product+date, etc.) server-side in the write function.
 // ═══════════════════════════════════════════════════════════════════════════════
 
+/* Stable canonicalization + hash for operation identity (recovery design).
+ * Pure JavaScript: no GAS services, so vm-based verify suites can load it.
+ * - stableCanonical_: sorted-key JSON; object key order, Dates (ISO day),
+ *   and undefined-vs-missing are normalized. Arrays keep their order.
+ * - stableHash64_: FNV-1a 64-bit over UTF-16 code units, 16 hex chars.
+ *   Strength is adequate for accidental-collision detection between a request
+ *   ID and one payload: the receipt ledger's SHA-256 hash remains the primary
+ *   request-ID/payload binding enforced before any recovery runs. */
+function stableCanonical_(value) {
+  if (value === null || value === undefined) return 'null';
+  if (value instanceof Date) {
+    var t = value.getTime();
+    if (isNaN(t)) return 'null';
+    return JSON.stringify(value.toISOString().slice(0, 10));
+  }
+  if (Array.isArray(value)) return '[' + value.map(stableCanonical_).join(',') + ']';
+  if (typeof value === 'object') {
+    return '{' + Object.keys(value).sort().map(function (k) {
+      return JSON.stringify(k) + ':' + stableCanonical_(value[k]);
+    }).join(',') + '}';
+  }
+  return JSON.stringify(value);
+}
+function stableHash64_(text) {
+  var s = String(text == null ? '' : text);
+  var hi = 0x811c9dc5, lo = 0x811c9dc5;
+  for (var i = 0; i < s.length; i++) {
+    var c = s.charCodeAt(i);
+    hi = Math.imul(hi ^ c, 16777619) >>> 0;
+    lo = Math.imul(lo ^ (c + ((i * 31) | 0)), 16777619) >>> 0;
+  }
+  function hex(n) { return ('00000000' + (n >>> 0).toString(16)).slice(-8); }
+  return hex(hi) + hex(lo);
+}
+
 // Execution-scoped memoization so SpreadsheetApp.openById is called once per execution.
 const _ssCache_ = {};
 
@@ -449,6 +484,58 @@ function executeWithLock_(fn, timeoutMs) {
     _scriptLockHeld_ = false;
     try { lock.releaseLock(); } catch (e) {}
   }
+}
+
+/**
+ * Shared locked document counter (Phase 1 numbering).
+ *
+ * Modeled on ValleyFoods `nextInvoiceSeq_`: a PropertiesService persisted
+ * counter keyed by dbId + docType + year (+ taxSystem variant via opts),
+ * seeded once from the sheet max via a scanner callback. Returns an integer
+ * seq; formatting (e.g. `seq + '-' + year`) stays in the callers so existing
+ * formats are preserved.
+ *
+ * MUST be called while already holding `executeWithLock_` (throws otherwise).
+ * A missing counter defaults to 0, so the first allocation seeds (via the
+ * scanner when provided) and then returns `seededMax + 1`.
+ *
+ * @param {string} dbId spreadsheet id / scope.
+ * @param {string} docType caller-chosen sequence name (e.g. 'tl_sales').
+ * @param {number} year full year for the key.
+ * @param {Object|Function} opts either a scanner fn or
+ *   `{ taxSystem, seedScanner|scanner|seedMax|scanMax, taxVariant }`.
+ * @return {number} next integer sequence value.
+ */
+function nextDocumentNumber_(dbId, docType, year, opts) {
+  if (!_scriptLockHeld_) {
+    throw new Error('nextDocumentNumber_ must be called inside executeWithLock_');
+  }
+  var scanner = null;
+  var taxSuffix = '';
+  if (typeof opts === 'function') {
+    scanner = opts;
+  } else if (opts) {
+    if (typeof opts.seedScanner === 'function') scanner = opts.seedScanner;
+    else if (typeof opts.scanner === 'function') scanner = opts.scanner;
+    else if (typeof opts.seedMax === 'function') scanner = opts.seedMax;
+    else if (typeof opts.scanMax === 'function') scanner = opts.scanMax;
+    if ('taxSystem' in opts) taxSuffix = '_' + (opts.taxSystem ? '1' : '0');
+    else if ('taxVariant' in opts) taxSuffix = '_' + String(opts.taxVariant);
+  }
+  var y = Number(year) || new Date().getFullYear();
+  var key = 'doc_seq_' + String(dbId) + '_' + String(docType) + '_' + y + taxSuffix;
+  var props = PropertiesService.getScriptProperties();
+  var cur = Number(props.getProperty(key));
+  if (!cur || cur <= 0) {
+    var seeded = 0;
+    if (scanner) {
+      try { seeded = Number(scanner()) || 0; } catch (e) { seeded = 0; }
+    }
+    cur = seeded > 0 ? seeded : 0;
+  }
+  var next = (cur || 0) + 1;
+  props.setProperty(key, String(next));
+  return next;
 }
 
 /**
@@ -923,6 +1010,40 @@ function patchRowByCriteria_(sheet, criteriaHeader, criteriaValue, updatesObject
 }
 
 /**
+ * Phase 1 version-check (optimistic concurrency, static only).
+ * No `version` column exists yet; AUDIT_COLUMNS has updated_at but business
+ * headers lack version. Missing column/value safely defaults to 0 and unknown
+ * `version` keys are ignored by patchRowByCriteria_, so this never backfills.
+ */
+function getRowVersion_(row) {
+  if (!row) return 0;
+  var v = row.version;
+  if (v === undefined) {
+    var k = Object.keys(row).find(function (kk) { return String(kk).trim().toLowerCase() === 'version'; });
+    v = k ? row[k] : undefined;
+  }
+  if (v === undefined || v === null || v === '') return 0;
+  var n = Number(v);
+  if (!isFinite(n) || n < 0) return 0;
+  return Math.floor(n);
+}
+function checkRowVersion_(oldRow, clientVersion) {
+  var current = getRowVersion_(oldRow);
+  var want = (clientVersion === undefined || clientVersion === null || clientVersion === '') ? 0 : Number(clientVersion);
+  if (!isFinite(want) || want < 0) want = 0;
+  else want = Math.floor(want);
+  if (want !== current) {
+    /* Pre-mutation optimistic-locking refusal: nothing has been written, so the
+       request-guard ledger must record a confirmed failure (safe to correct and
+       retry with a fresh request), never an uncertain outcome. */
+    var _conflict = new Error('CONFLICT: stale version — reload and retry | تعارض: النسخة قديمة — أعد التحميل وحاول مجدداً');
+    _conflict.notApplied = true; _conflict.code = 'REQUEST_NOT_APPLIED';
+    throw _conflict;
+  }
+  return current;
+}
+
+/**
  * Delete all rows where criteriaHeader == criteriaValue.
  * Deletes bottom-up so earlier row indices stay valid. Returns count deleted.
  *
@@ -997,6 +1118,23 @@ function deleteRowsWhereIn_(sheet, criteriaHeader, values) {
  * a different company — this is the ONLY caching helper any company's
  * Actions file should use for hot reference-data reads going forward.
  *
+ * Cache-key / version contract (Phase 4):
+ *   Base key format:    refs_<dbId>_<kind>
+ *   Versioned key:      refs_<dbId>_<kind>_v<version>
+ *     Versioned callers (tlRefs_/tcRefs_/vfRefsCached_) append
+ *     '_v' + <stamp> to `kind` BEFORE calling here, so the final
+ *     CacheService key carries the stamp (e.g. refs_<dbId>_products_v171...).
+ *   TTL: 600s for reference entries (TL_REF_TTL / TC_REF_TTL / FIN_REF_TTL_G).
+ *     Stamps (tl_refs_ver_<dbId> / tc_refs_ver_<dbId> / vf_refs_ver_<dbId>)
+ *     live 21600s (6h) and are bumped on write, not expired.
+ *   Version bump rule: after EVERY successful write to a cached table
+ *     (title_index/parties/products and per-company equivalents), bump the
+ *     company's stamp (bumpTlRefsVersion_/bumpTcRefsVersion_/bumpVfRefsVersion_
+ *     or the bust* wrapper) to orphan ALL derived versioned keys at once.
+ *     ALSO call invalidateRefsCache_(dbId, kind) for each touched kind so
+ *     legacy unstamped keys (refs_<dbId>_<kind> written before versioning)
+ *     are removed too. Manual sheet edits bypass both and surface within TTL.
+ *
  * @param {string} dbId - the requesting company's own spreadsheet ID,
  *   always taken from the resolved company context of the CURRENT
  *   request — never from a raw client-supplied parameter (see Part 1b).
@@ -1031,63 +1169,177 @@ function getRefsCached_(dbId, kind, ttlSeconds, builder) {
  * chunk keys) that nothing could reach, because that whole engine was dead code
  * (F-17). It is harvested here, generalised, before the engine is deleted.
  *
- * Layout: '<key>__m' holds {n, ts}; '<key>__c0..cN' hold the JSON slices.
- * Any missing chunk is treated as a total miss, so a partial eviction can never
- * produce a truncated value.
+ * Layout: '<key>__m' is a stable pointer to immutable generation-specific chunks.
+ * Chunks are published before the pointer, so readers see one complete generation or
+ * a miss. The old sanitized namespace is not read: punctuation-colliding legacy
+ * keys are ambiguous and must cold-migrate.
  */
+function chunkedCacheKeyDigest_(value) {
+  var text = String(value);
+  try {
+    if (typeof Utilities !== 'undefined' && Utilities.computeDigest && Utilities.DigestAlgorithm && Utilities.Charset) {
+      return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, text, Utilities.Charset.UTF_8)
+        .map(function (b) { var n = b < 0 ? b + 256 : b; return ('0' + n.toString(16)).slice(-2); }).join('').slice(0, 16);
+    }
+  } catch (e) {}
+  // Offline harnesses do not provide Utilities. Two independent 32-bit hashes
+  // still keep sanitized/truncated cache namespaces isolated in that fallback.
+  var h1 = 2166136261, h2 = 2246822519;
+  for (var i = 0; i < text.length; i++) {
+    var c = text.charCodeAt(i);
+    h1 ^= c; h1 = Math.imul(h1, 16777619);
+    h2 ^= c + i; h2 = Math.imul(h2, 3266489917);
+  }
+  return ('00000000' + (h1 >>> 0).toString(16)).slice(-8) + ('00000000' + (h2 >>> 0).toString(16)).slice(-8);
+}
+
 function chunkedCacheKeys_(key) {
-  const safe = String(key).replace(/[^a-zA-Z0-9_]/g, '_').slice(0, 200);
+  var raw = String(key);
+  var safe = raw.replace(/[^a-zA-Z0-9_]/g, '_').slice(0, 184);
+  var scoped = 'ck2_' + safe + '_' + chunkedCacheKeyDigest_(raw);
+  var generation = arguments.length > 1 && arguments[1] != null ? String(arguments[1]).replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 48) : '';
+  return { manifest: scoped + '__m', prefix: scoped + (generation ? '__g' + generation : '') + '__c', generation: generation, base: scoped };
+}
+
+// Read the pre-byte-aware namespace during the migration window. New writes
+// always use chunkedCacheKeys_; removal clears both layouts for rollback safety.
+function legacyChunkedCacheKeys_(key) {
+  var safe = String(key).replace(/[^a-zA-Z0-9_]/g, '_').slice(0, 200);
   return { manifest: safe + '__m', prefix: safe + '__c' };
+}
+
+function utf8ByteLength_(text) {
+  try { return encodeURIComponent(String(text)).replace(/%[0-9A-F]{2}/g, 'x').length; }
+  catch (e) { return String(text).length; }
+}
+
+function utf8Chunks_(text, maxBytes) {
+  var chunks = [], part = '', bytes = 0;
+  Array.from(String(text)).forEach(function (ch) {
+    var n = utf8ByteLength_(ch);
+    if (part && bytes + n > maxBytes) { chunks.push(part); part = ''; bytes = 0; }
+    part += ch; bytes += n;
+  });
+  if (part || !chunks.length) chunks.push(part);
+  return chunks;
+}
+
+function chunkedCacheEpochKey_(key) {
+  return 'ck2e_' + chunkedCacheKeyDigest_(String(key));
+}
+
+function chunkedCacheGeneration_() {
+  var uuid = '';
+  try { if (Utilities && Utilities.getUuid) uuid = String(Utilities.getUuid()); } catch (e) {}
+  if (!uuid) uuid = String(new Date().getTime()) + '_' + String(Math.random()).slice(2);
+  return uuid.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 48) || 'g' + String(new Date().getTime());
+}
+
+function withChunkedCacheLock_(fn) {
+  var lock = null;
+  try {
+    if (typeof LockService !== 'undefined' && LockService.getScriptLock) {
+      lock = LockService.getScriptLock();
+      if (!lock.tryLock(5000)) return null;
+    }
+    return fn();
+  } catch (e) { return null; }
+  finally { try { if (lock) lock.releaseLock(); } catch (e2) {} }
+}
+
+function removeChunkedPublication_(cache, keys, maxChunks) {
+  if (!keys || !keys.generation) return;
+  var all = [];
+  for (var i = 0; i < maxChunks; i++) all.push(keys.prefix + i);
+  if (all.length) cache.removeAll(all);
+}
+
+function readChunkedCache_(keys, maxChunks) {
+  try {
+    var cache = CacheService.getScriptCache();
+    var manifestRaw = cache.get(keys.manifest);
+    if (!manifestRaw) return null;
+    var manifest = JSON.parse(manifestRaw);
+    if (!manifest || !manifest.g || (keys.generation && String(manifest.g) !== String(keys.generation))) return null;
+    var n = Number(manifest.n);
+    if (!isFinite(n) || n < 1 || n !== Math.floor(n) || n > maxChunks) return null;
+    var chunkKeys = [], payload = '';
+    for (var i = 0; i < n; i++) chunkKeys.push(keys.prefix + i);
+    var map = cache.getAll(chunkKeys) || {};
+    for (var j = 0; j < n; j++) {
+      var ck = keys.prefix + j;
+      if (map[ck] === undefined || map[ck] === null) return null;
+      payload += map[ck];
+    }
+    if (Number(manifest.bytes) !== utf8ByteLength_(payload) || String(manifest.h || '') !== chunkedCacheKeyDigest_(payload)) return null;
+    return JSON.parse(payload);
+  } catch (e) { return null; }
 }
 
 function putChunkedCache_(key, value, ttlSeconds) {
   try {
-    const keys = chunkedCacheKeys_(key);
-    const cache = CacheService.getScriptCache();
-    const payload = JSON.stringify(value);
-    const chunkSize = CONFIG.TABLE_CACHE_CHUNK_SIZE || 90000;
-    const maxChunks = CONFIG.TABLE_CACHE_MAX_CHUNKS || 50;
-    if (payload.length > maxChunks * chunkSize) return false;   // too big to cache; not an error
-    const chunks = [];
-    for (let i = 0; i < payload.length; i += chunkSize) chunks.push(payload.slice(i, i + chunkSize));
-    removeChunkedCache_(key);   // drop older chunks so a shrinking value leaves no tail
-    const put = {};
+    var baseKeys = chunkedCacheKeys_(key);
+    var cache = CacheService.getScriptCache();
+    var payload = JSON.stringify(value);
+    var chunkSize = Number(CONFIG.TABLE_CACHE_CHUNK_SIZE || 90000);
+    var maxChunks = Number(CONFIG.TABLE_CACHE_MAX_CHUNKS || 50);
+    var chunks = utf8Chunks_(payload, chunkSize);
+    if (!isFinite(chunkSize) || chunkSize < 1 || !isFinite(maxChunks) || maxChunks < 1 || chunks.length > maxChunks || chunks.some(function (c) { return utf8ByteLength_(c) > chunkSize; })) return false;
+    var generation = chunkedCacheGeneration_();
+    var keys = chunkedCacheKeys_(key, generation);
+    var epochKey = chunkedCacheEpochKey_(key);
+    var epoch = cache.get(epochKey) || '0';
+    var put = {};
     chunks.forEach(function (c, i) { put[keys.prefix + i] = c; });
-    put[keys.manifest] = JSON.stringify({ n: chunks.length, ts: new Date().getTime() });
+    // Chunks are immutable and unreferenced until the manifest is written.
     cache.putAll(put, ttlSeconds);
-    return true;
+    var published = withChunkedCacheLock_(function () {
+      var currentEpoch = cache.get(epochKey) || '0';
+      if (String(currentEpoch) !== String(epoch)) {
+        removeChunkedPublication_(cache, keys, maxChunks);
+        return false;
+      }
+      var oldManifest = null;
+      try { oldManifest = JSON.parse(cache.get(baseKeys.manifest) || ''); } catch (e) {}
+      cache.put(baseKeys.manifest, JSON.stringify({ v: 2, g: generation, n: chunks.length, bytes: utf8ByteLength_(payload), h: chunkedCacheKeyDigest_(payload), ts: new Date().getTime() }), ttlSeconds);
+      if (oldManifest && oldManifest.g && String(oldManifest.g) !== generation) removeChunkedPublication_(cache, chunkedCacheKeys_(key, oldManifest.g), maxChunks);
+      return true;
+    });
+    return published === true;
   } catch (e) { return false; }
 }
 
 /** @return the cached value, or null on any miss. */
 function getChunkedCache_(key) {
   try {
-    const keys = chunkedCacheKeys_(key);
-    const cache = CacheService.getScriptCache();
-    const manifestRaw = cache.get(keys.manifest);
-    if (!manifestRaw) return null;
-    const manifest = JSON.parse(manifestRaw);
-    if (!manifest || !manifest.n) return null;
-    const chunkKeys = [];
-    for (let i = 0; i < manifest.n; i++) chunkKeys.push(keys.prefix + i);
-    const map = cache.getAll(chunkKeys);
-    let payload = '';
-    for (let i = 0; i < manifest.n; i++) {
-      const ck = keys.prefix + i;
-      if (map[ck] === undefined || map[ck] === null) return null;   // any miss → full rebuild
-      payload += map[ck];
-    }
-    return JSON.parse(payload);
+    var maxChunks = Number(CONFIG.TABLE_CACHE_MAX_CHUNKS || 50);
+    var base = chunkedCacheKeys_(key);
+    var raw = CacheService.getScriptCache().get(base.manifest);
+    if (!raw) return null;
+    var manifest = JSON.parse(raw);
+    if (!manifest || !manifest.g) return null;
+    return readChunkedCache_(chunkedCacheKeys_(key, manifest.g), maxChunks);
   } catch (e) { return null; }
 }
 
 function removeChunkedCache_(key) {
   try {
-    const keys = chunkedCacheKeys_(key);
-    const all = [keys.manifest];
-    const maxChunks = CONFIG.TABLE_CACHE_MAX_CHUNKS || 50;
-    for (let i = 0; i < maxChunks; i++) all.push(keys.prefix + i);
-    CacheService.getScriptCache().removeAll(all);
+    var maxChunks = Number(CONFIG.TABLE_CACHE_MAX_CHUNKS || 50);
+    var base = chunkedCacheKeys_(key);
+    withChunkedCacheLock_(function () {
+      var cache = CacheService.getScriptCache();
+      var current = null;
+      try { current = JSON.parse(cache.get(base.manifest) || ''); } catch (e) {}
+      var epochKey = chunkedCacheEpochKey_(key);
+      cache.put(epochKey, String(Number(cache.get(epochKey) || 0) + 1), 21600);
+      cache.remove(base.manifest);
+      if (current && current.g) removeChunkedPublication_(cache, chunkedCacheKeys_(key, current.g), maxChunks);
+      // Legacy fixed-key entries are safe to remove, but never read.
+      var legacy = legacyChunkedCacheKeys_(key), old = [legacy.manifest];
+      for (var i = 0; i < maxChunks; i++) old.push(legacy.prefix + i);
+      cache.removeAll(old);
+      return true;
+    });
   } catch (e) {}
 }
 
@@ -1104,33 +1356,87 @@ function removeChunkedCache_(key) {
  * Phase 0b SheetReads instrumentation — unlike the TableEngine original, which
  * kept a second parallel read path and its own cache.
  *
- * Both the raw and lowercased key are registered, matching the original.
+ * byPk preserves the pre-optimization Map contract from indexById: stored
+ * trimmed keys and lowercase aliases are indexed, but Map queries are not
+ * normalized. Callers that need an alias must probe it explicitly. The whole
+ * entry { rows, byPk, pks, headers } is memoised per request; rows and the
+ * records byPk returns are SHARED objects across memo hits — do not mutate
+ * them unless you are the sole owner of this read.
  */
 const _pkIndexCache_ = {};
+
+/**
+ * Generalised O(1) id index over an in-memory row array (Phase 4).
+ * Use instead of rows.find(function(r){ return String(r.id)===String(x); })
+ * or full-range forEach scans for party/product lookups.
+ *
+ * MATCHING CONTRACT (Task 1B — read before converting a .find() to this):
+ * - Header resolution: idField is matched case-insensitively and after trim
+ *   against the record keys; the record's own key spelling is used to read
+ *   the value. Default field is 'id'.
+ * - Stored ids are keyed by their trimmed string form AND their lowercase
+ *   alias. Queries are ordinary Map queries: whitespace is not removed and
+ *   case is not repaired unless the caller explicitly probes the alias.
+ * - Duplicate precedence: LAST match wins, as in the pre-optimization Map.
+ * - Blank/null ids are skipped (never indexed). A miss returns undefined
+ *   from get() / false from has() — callers decide what a miss means.
+ * - Numeric ids are string-normalized (7 and '7' are the same key; the
+ *   first-stored row wins).
+ * - Ownership: the Map holds REFERENCES to the caller's row objects. When
+ *   obtained via getRecordsByPk_ the entry (rows + index) is memoised for
+ *   the request, so mutating a returned record is visible to later readers
+ *   in the same request. Treat returned records as read-only unless you
+ *   own the rows array you passed in.
+ *
+ * @param {Array} rows - records from getAllRecords_ (or a cached accessor).
+ * @param {string} idField - id column name, default 'id' (case-insensitive).
+ * @return {Map} the pre-optimization exact-query Map with lowercase aliases.
+ */
+function indexById(rows, idField) {
+  var want = String(idField == null || idField === '' ? 'id' : idField).trim().toLowerCase() || 'id';
+  var byId = new Map();
+  if (!rows || !rows.length) return byId;
+  var actual = null;
+  try {
+    var sample = rows[0];
+    for (var k in sample) {
+      if (String(k).trim().toLowerCase() === want) { actual = k; break; }
+    }
+  } catch (e) { actual = null; }
+  rows.forEach(function (r) {
+    var raw = actual !== null ? r[actual] : (r[want] !== undefined ? r[want] : r[idField]);
+    var pk = String(raw == null ? '' : raw).trim();
+    if (!pk) return;
+    var lc = pk.toLowerCase();
+    // Preserve the original last-write-wins behavior for both the stored key
+    // and lowercase alias. Query normalization belongs to callers, not here.
+    byId.set(pk, r);
+    byId.set(lc, r);
+  });
+  return byId;
+}
 
 function getRecordsByPk_(dbId, sheetName, pkColumn) {
   const pkLc = String(pkColumn || 'id').trim().toLowerCase();
   const key = dbId + '|' + sheetName + '|' + pkLc;
-  if (_pkIndexCache_[key]) return _pkIndexCache_[key];
+  if (!_recordCacheDisabled_ && _pkIndexCache_[key]) return _pkIndexCache_[key];
 
   const rows = getAllRecords_(dbId, sheetName);
   const headers = getHeaders_(getSheet_(sheetName, dbId)).map(function (h) { return String(h).trim(); });
   let pkHeader = null;
   headers.forEach(function (h) { if (h.toLowerCase() === pkLc) pkHeader = h; });
 
-  const byPk = new Map();
+  const byPk = indexById(rows, pkHeader || pkColumn || 'id');
   const pks = [];
   rows.forEach(function (r) {
     const raw = pkHeader !== null && r[pkHeader] !== undefined ? r[pkHeader] : r[pkLc];
     const pk = String(raw == null ? '' : raw).trim();
     if (!pk) return;
-    byPk.set(pk, r);
-    byPk.set(pk.toLowerCase(), r);
     pks.push(pk);
   });
 
   const entry = { rows: rows, byPk: byPk, pks: pks, headers: headers, pkHeader: pkHeader || pkColumn };
-  _pkIndexCache_[key] = entry;
+  if (!_recordCacheDisabled_) _pkIndexCache_[key] = entry;
   return entry;
 }
 
@@ -1292,6 +1598,59 @@ function bumpVersion_(sheetName) {
 }
 
 // ==========================================
+// Phase 5 — shared totals lib (single source of truth for all companies)
+// No rounding applied here: callers preserve existing raw-float behavior.
+// Apply round2_/roundQty_ at the display/write layer only, never in here.
+// ==========================================
+function sharedNum0_(v) { return Math.max(0, Number(v) || 0); }
+
+/** Global compat alias. Per-file num0_ wrappers delegate to sharedNum0_. */
+function num0_(v) { return sharedNum0_(v); }
+
+function calcLineNet_(qty, price) { return sharedNum0_(qty) * sharedNum0_(price); }
+
+/**
+ * Shared invoice totals. Accepts generic {qty,price,tax,discount} and also
+ * TopLight {product_qty,product_price,product_tax,product_discount} shapes.
+ * discountPercent (header-level, e.g. TopLight discount_percent) defaults to 0
+ * for Valley-style invoices with no header discount.
+ * Returns {net,tax,discount,total} with total = net - discount + tax.
+ */
+function calcTotals_(lines, discountPercent) {
+  var dp = sharedNum0_(discountPercent);
+  var net = 0, tax = 0, discount = 0;
+  (lines || []).forEach(function (l) {
+    var qty = (l && l.qty !== undefined) ? l.qty : (l ? l.product_qty : 0);
+    var price = (l && l.price !== undefined) ? l.price : (l ? l.product_price : 0);
+    var taxRate = (l && l.tax !== undefined) ? l.tax : (l ? l.product_tax : 0);
+    var disc = (l && l.discount !== undefined) ? l.discount : (l ? l.product_discount : 0);
+    var nv = calcLineNet_(qty, price);
+    net += nv;
+    discount += sharedNum0_(disc);
+    tax += nv * sharedNum0_(taxRate);
+  });
+  discount += net * dp;
+  return { net: net, tax: tax, discount: discount, total: net - discount + tax };
+}
+
+/**
+ * Shared manufacture total (JS source of truth). Components carry resolved
+ * numbers [{qty, unitCost[, mult]}]; the Sheet-formula builder in
+ * Company_TopChemical_Actions.js is display-only. mult covers the T×M / T×N
+ * movement-part multipliers.
+ */
+function calcManufactureTotal_(components) {
+  var total = 0;
+  (components || []).forEach(function (c) {
+    var m = (c && c.mult !== undefined && c.mult !== null && c.mult !== '') ? Number(c.mult) : 1;
+    if (!isFinite(m)) m = 1;
+    var unitCost = (c && c.unitCost !== undefined) ? c.unitCost : (c ? c.price : 0);
+    total += calcLineNet_(c ? c.qty : 0, unitCost) * m;
+  });
+  return total;
+}
+
+// ==========================================
 // Audit trail helpers (B5) — multi-device sessions + Odoo-style history
 // ==========================================
 const AUDIT_COLUMNS = ['record_uid', 'created_by', 'created_at', 'updated_by', 'updated_at', 'approved_by', 'approved_at'];
@@ -1368,6 +1727,71 @@ function logHistoryMany_(entries) {
 
 function logHistory_(dbId, sheetName, recordUid, recordId, user, action, newValues, oldValues) {
   writeHistoryRows_(historyRowsFor_(dbId, sheetName, recordUid, recordId, user, action, newValues, oldValues));
+}
+
+/* Phase 5 — afterWrite(docType, change): single audit fan-out for the shared
+ * save path (saveRecordWithAudit_ / approveRecordWithAudit_). Writes
+ * ERP_Record_History old/new via logHistory_ AND a SystemLog entry with
+ * RecordID = record_uid, linking SystemLog.RecordID ↔ record_uid.
+ * Never throws: audit failure must not fail the save (RT-1b).
+ * Per-handler manual logHistory_ calls remain for direct-write paths that do
+ * not go through the shared saver; they are compat, not duplicates of this. */
+function afterWrite_(docType, change) {
+  var c = change || {};
+  var dbId = c.dbId || CONFIG.AUTH_SPREADSHEET_ID;
+  var sheetName = c.sheetName || docType;
+  var recordUid = c.recordUid || '';
+  var recordId = (c.recordId !== undefined) ? c.recordId : null;
+  var user = c.user || '';
+  var action = c.action || 'update';
+  var newValues = (c.newValues !== undefined) ? c.newValues : null;
+  var oldValues = (c.oldValues !== undefined) ? c.oldValues : null;
+  try { logHistory_(dbId, sheetName, recordUid, recordId, user, action, newValues, oldValues); }
+  catch (eHist) { try { Logger.log('AUDIT-SKIPPED afterWrite ' + sheetName + ': ' + (eHist && eHist.message)); } catch (eLg) {} }
+  try {
+    var changed = '';
+    try { changed = JSON.stringify({ record_uid: recordUid, action: action }); } catch (eJ) { changed = String(recordUid); }
+    writeSystemLogLink_(sheetName, recordUid, user, action, changed);
+  } catch (eSys) { try { console.error('afterWrite SystemLog link skipped: ' + (eSys && eSys.message)); } catch (e2) {} }
+  return { status: 'success', record_uid: recordUid };
+}
+
+/* Phase 5 — SystemLog bridge: RecordID is always record_uid so
+ * SystemLog.RecordID ↔ ERP_Record_History.record_uid. Defensive: uses the
+ * existing SystemLog infra when present, otherwise skips silently. */
+function writeSystemLogLink_(table, recordUid, userEmail, action, changedFields) {
+  try {
+    var logId = (typeof Utilities !== 'undefined' && Utilities.getUuid) ? Utilities.getUuid() : ('log_' + new Date().getTime());
+    var values = {
+      logid: logId,
+      timestamp: new Date(),
+      companyid: '',
+      companyname: '',
+      action: action,
+      sourceaction: 'afterWrite:' + String(table || ''),
+      recordid: String(recordUid || ''),
+      useremail: String(userEmail || ''),
+      changedfields: String(changedFields || ''),
+      status: 'success',
+      errormessage: '',
+      table: String(table || ''),
+      page: ''
+    };
+    if (typeof systemStorageTarget_ === 'function' && systemStorageTarget_().backend === 'firestore') {
+      if (typeof systemCreateRecord_ === 'function') {
+        systemCreateRecord_('SystemLog', values, { operationId: 'system-log:' + values.logid });
+        return;
+      }
+    }
+    if (typeof ensureSystemLogSheet_ === 'function' && typeof SYSTEM_LOG_HEADERS !== 'undefined') {
+      var entry = SYSTEM_LOG_HEADERS.map(function (h) {
+        var v = values[String(h).toLowerCase()];
+        return (v === undefined || v === null) ? '' : v;
+      });
+      if (typeof appendRowWithRetry_ === 'function') appendRowWithRetry_(ensureSystemLogSheet_(), entry);
+      else ensureSystemLogSheet_().appendRow(entry);
+    }
+  } catch (e) { try { console.error('writeSystemLogLink_ skipped: ' + (e && e.message)); } catch (e2) {} }
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
@@ -1845,7 +2269,8 @@ function saveRecordWithAudit_(sheetDbId, sheetName, existingRowId, dataMap, acti
     });
     const res = addRecord_(dbId, sheetName, merged, requiredFields);
     if (res.status !== 'success') return res;
-    try { logHistory_(dbId, sheetName, uid, null, currentUser, action || 'create', merged, null); }
+    /* Phase 5: shared-path audit fan-out — History old/new + SystemLog link (RecordID=record_uid). */
+    try { afterWrite_(sheetName, { dbId: dbId, sheetName: sheetName, recordUid: uid, recordId: null, user: currentUser, action: action || 'create', newValues: merged, oldValues: null }); }
     catch (eHist) { try { Logger.log('AUDIT-SKIPPED create ' + sheetName + ': ' + (eHist && eHist.message)); } catch (eLg) {} }
     return res;
   }
@@ -1863,11 +2288,13 @@ function saveRecordWithAudit_(sheetDbId, sheetName, existingRowId, dataMap, acti
     record_uid: oldUid
   });
   if (pk !== 'id') newValues[pk] = existingRowId;
-  const ok = updateRowByCriteria_(sheet, pk, existingRowId, newValues);
+  var __curVer = checkRowVersion_(old, dataMap && (dataMap.version !== undefined ? dataMap.version : dataMap.Version));
+  newValues.version = __curVer + 1;
+  const ok = patchRowByCriteria_(sheet, pk, existingRowId, newValues);
   if (!ok) return { status: 'error', message: 'Row not found for update: ' + existingRowId };
   /* [RT-1b] The create branch above has always wrapped logHistory_ and logged
    * AUDIT-SKIPPED; this branch did not, and the difference was a live bug.
-   * updateRowByCriteria_ has ALREADY committed the change on the line above, so
+   * patchRowByCriteria_ has ALREADY committed the change on the line above, so
    * a history write that throws here turned a successful save into a reported
    * error for a change that is in the sheet.
    *
@@ -1884,7 +2311,7 @@ function saveRecordWithAudit_(sheetDbId, sheetName, existingRowId, dataMap, acti
    * BEFORE deleting, so a throw there leaves the row in the sheet and the
    * reported failure is the truth. Guarding it would delete a row with no
    * audit trail, which is the one outcome worth more than a clean error. */
-  try { logHistory_(dbId, sheetName, oldUid, existingRowId, currentUser, action || 'update', newValues, old); }
+  try { afterWrite_(sheetName, { dbId: dbId, sheetName: sheetName, recordUid: oldUid, recordId: existingRowId, user: currentUser, action: action || 'update', newValues: newValues, oldValues: old }); }
   catch (eHist) { try { Logger.log('AUDIT-SKIPPED update ' + sheetName + ': ' + (eHist && eHist.message)); } catch (eLg) {} }
   return { status: 'success', data: { record: newValues, rowId: existingRowId } };
 }
@@ -1908,13 +2335,15 @@ function approveRecordWithAudit_(sheetDbId, sheetName, rowId, approveMap, curren
     record_uid: oldUid
   });
   if (pk !== 'id') merged[pk] = rowId;
-  const ok = updateRowByCriteria_(sheet, pk, rowId, merged);
+  var __curVerAp = checkRowVersion_(old, approveMap && (approveMap.version !== undefined ? approveMap.version : approveMap.Version));
+  merged.version = __curVerAp + 1;
+  const ok = patchRowByCriteria_(sheet, pk, rowId, merged);
   if (!ok) return { status: 'error', message: 'Row not found for approve: ' + rowId };
   /* [RT-1b] Same asymmetry, same fix, same reason as the update branch below:
-   * updateRowByCriteria_ has already committed the approval by the time this
+   * patchRowByCriteria_ has already committed the approval by the time this
    * line runs, so an audit failure here must not be reported as a failed
    * approve. */
-  try { logHistory_(dbId, sheetName, oldUid, rowId, currentUser, 'approve', merged, old); }
+  try { afterWrite_(sheetName, { dbId: dbId, sheetName: sheetName, recordUid: oldUid, recordId: rowId, user: currentUser, action: 'approve', newValues: merged, oldValues: old }); }
   catch (eHist) { try { Logger.log('AUDIT-SKIPPED approve ' + sheetName + ': ' + (eHist && eHist.message)); } catch (eLg) {} }
   return { status: 'success', data: { record: merged, rowId: rowId } };
 }
@@ -1932,5 +2361,307 @@ function deleteRecordWithAudit_(sheetDbId, sheetName, rowId, currentUser, auditC
   logHistory_(dbId, sheetName, oldUid, rowId, currentUser, 'delete', null, old);
   const removed = deleteRowsByCriteria_(sheet, pk, rowId);
   return { status: 'success', removed: removed };
+}
+
+/* ══ Phase 6 — approvals as DATA + Valley-parity idempotency guard ═══
+ *
+ * (1) APPROVAL_CHAINS. Every approval step in the system is one row here:
+ *     { docType, step, role, required } plus the write routing the engine
+ *     needs (sheet, keyColumn, kind, versioned). ADDING A STEP = ONE TABLE
+ *     ROW — e.g. to add a second TopLight sales approver, append
+ *       { docType: 'tl_sales', step: 'second', role: 'tl_manager',
+ *         required: true, sheet: 'top_light_sales_invoices',
+ *         keyColumn: 'invoice_unique_id', kind: 'standard', versioned: true }
+ *     and call approveStep_('tl_sales', id, 'second', user, { dbId: dbId }).
+ *     There is deliberately NO if/switch on docType anywhere below:
+ *     getApprovalChain_/requestApprove_/approveStep_ FILTER this table, and
+ *     the column patch is chosen by a map lookup on the row's `kind` field.
+ *     If you are about to write `if (docType === ...)` here, add a row
+ *     instead. No sheet, column, or migration is involved — this table lives
+ *     in code, so approval routing changes without touching data.
+ *
+ * (2) requestDedupeExecute_ + REQUEST_DEDUPE_PROBE_COLUMNS_. The Valley pattern
+ *     (liveDedupe_ on unique_id) as a reusable guard for the TC/TL large
+ *     multi-step saves that still mint a fresh id on every call: callers
+ *     accept an incoming request_key/unique_id, probe with this helper, and
+ *     return the committed row on replay instead of writing a second
+ *     document. Probes are null-safe when a column does not exist
+ *     (findRowByColumn_ returns null), so no schema change is required.
+ */
+var APPROVAL_CHAINS = [
+  { docType: 'tl_purchasing', step: 'approve', role: 'tl_approver', required: true, sheet: 'top_light_purchasing_costing', keyColumn: 'unique_id', kind: 'standard', versioned: true, missingMsg: 'الفاتورة غير موجودة' },
+  { docType: 'tl_sales', step: 'approve', role: 'tl_approver', required: true, sheet: 'top_light_sales_invoices', keyColumn: 'invoice_unique_id', kind: 'standard', versioned: true, missingMsg: 'الفاتورة غير موجودة' },
+  { docType: 'tl_cash', step: 'approve', role: 'tl_approver', required: true, sheet: 'top_light_cash_bank_movement', keyColumn: 'transaction_id', kind: 'cash', versioned: true, missingMsg: 'الحركة غير موجودة' },
+  { docType: 'tl_sales_offer', step: 'approve', role: 'tl_approver', required: true, sheet: 'top_light_sales_offer', keyColumn: 'invoice_unique_id', kind: 'standard', versioned: true, missingMsg: 'العرض غير موجود' },
+  { docType: 'valley_purchasing', step: 'approve', role: 'valley_approver', required: true, sheet: 'valley_purchasing_costing', keyColumn: 'Code', kind: 'standard', versioned: false, missingMsg: 'عملية الشراء غير موجودة' },
+  { docType: 'valley_purchasing', step: 'quality', role: 'valley_quality', required: true, sheet: 'valley_purchasing_costing', keyColumn: 'Code', kind: 'quality', versioned: false, missingMsg: 'عملية الشراء غير موجودة' }
+];
+
+/* Patch builders keyed by the row's `kind` — a data lookup, not a branch
+ * on docType. `standard` mirrors the TL purchase/sales/offer approvers,
+ * `cash` mirrors approveCash_ ({approved,user}), `quality` mirrors the
+ * Valley quality approver. */
+var APPROVAL_PATCH_KINDS_ = {
+  standard: function (email) { return { approval_status: 'Approved', approval: email, approval_time: new Date() }; },
+  cash: function (email) { return { approved: true, user: email }; },
+  quality: function (email) { return { quality_approval_status: 'Approved', quality_approval: email, quality_approval_time: new Date() }; }
+};
+
+/* All steps registered for a docType, in table order. Read-only. */
+function getApprovalChain_(docType) {
+  return APPROVAL_CHAINS.filter(function (r) { return String(r.docType) === String(docType); });
+}
+
+/* What must still approve this document — read-only, no write. Clients use
+ * it to render approval buttons; the write itself is approveStep_. */
+function requestApprove_(docType, id, user, opts) {
+  var steps = getApprovalChain_(docType);
+  if (!steps.length) throw new Error('Unknown approval docType: ' + docType);
+  return {
+    status: 'success',
+    docType: String(docType),
+    id: (id == null ? '' : id),
+    requested_by: (user && user.email) || '',
+    steps: steps.map(function (s) { return { step: s.step, role: s.role, required: !!s.required }; })
+  };
+}
+
+/* Advance one table-driven approval step. Resolves sheet/key/patch from the
+ * APPROVAL_CHAINS row and delegates the write to the generic stamper
+ * approveRecordWithAudit_ — this function contains no per-document logic. */
+function approveStep_(docType, id, step, user, opts) {
+  var o = opts || {};
+  var key = String(id == null ? '' : id).trim();
+  if (!key) throw new Error('Approval id is required');
+  var entry = null;
+  APPROVAL_CHAINS.some(function (r) {
+    if (String(r.docType) === String(docType) && String(r.step) === String(step)) { entry = r; return true; }
+    return false;
+  });
+  if (!entry) throw new Error('Unknown approval step: ' + docType + '/' + step);
+  var email = (user && user.email) || '';
+  var build = APPROVAL_PATCH_KINDS_[String(entry.kind || 'standard')] || APPROVAL_PATCH_KINDS_.standard;
+  var approveMap = build(email);
+  if (entry.versioned) {
+    approveMap.version = (o.version !== undefined ? o.version : o.Version);
+  } else {
+    /* Unversioned legacy steps (both Valley steps): these approvers never
+     * took a client version, so asserting the CURRENT version keeps the
+     * shared stamper's check a no-op while the counter still advances —
+     * exactly today's behaviour, enforced optimistic locking not added. */
+    var db0 = o.dbId || CONFIG.AUTH_SPREADSHEET_ID;
+    var old0 = null;
+    try {
+      old0 = getAllRecords_(db0, entry.sheet).find(function (r) { return String(r[entry.keyColumn]) === String(key); }) || null;
+    } catch (eRead) { old0 = null; }
+    approveMap.version = getRowVersion_(old0);
+  }
+  var out = approveRecordWithAudit_(o.dbId, entry.sheet, key, approveMap, email, null, null, null, entry.keyColumn);
+  if (!out || out.status !== 'success') {
+    /* Preserve each wrapper's legacy not-found message from the row's own
+     * `missingMsg` — still data, still no docType branch. */
+    var mOut = String((out && out.message) || '');
+    if (mOut.indexOf('Row not found') !== -1) throw new Error(entry.missingMsg || ('Row not found for approve: ' + key));
+    throw new Error(mOut || (entry.missingMsg || 'Approve failed'));
+  }
+  return out;
+}
+
+/* Columns probed, in order, by requestDedupeExecute_. Documents intent only:
+ * findRowByColumn_ returns null for a column a sheet does not have, so
+ * sheets without request_key simply skip that probe — no migration.
+ * NOTE: formerly named requestGuardExecute_/REQUEST_RECEIPT_HEADERS_, which
+ * collided with the receipt-ledger guard of the same names in Code.js (one
+ * global scope: the last definition silently won and the 4-arg probe call
+ * sites received the wrong function). Renamed so each guard resolves
+ * deterministically. */
+var REQUEST_DEDUPE_PROBE_COLUMNS_ = ['request_key', 'unique_id', 'invoice_unique_id', 'created_at', 'user'];
+
+/* Valley-parity exactly-once guard for queueable multi-step saves.
+ * Query form requestDedupeExecute_(dbId, sheet, requestKey, uniqueId) returns
+ * the already-committed row or null. Wrap form with a trailing fn executes
+ * fn() once per key and returns liveDedupeReply_ on replay. */
+function requestDedupeExecute_(dbId, sheetName, requestKey, uniqueId, fn) {
+  var key = String(requestKey == null ? '' : requestKey).trim() || String(uniqueId == null ? '' : uniqueId).trim();
+  var dup = null;
+  if (key) {
+    try { dup = liveDedupe_(dbId, sheetName, key); } catch (e1) { dup = null; }
+    if (!dup) { try { dup = findRowByColumn_(dbId, sheetName, 'request_key', key); } catch (e2) { dup = null; } }
+    if (!dup) { try { dup = findRowByColumn_(dbId, sheetName, 'invoice_unique_id', key); } catch (e3) { dup = null; } }
+  }
+  if (typeof fn === 'function') {
+    if (dup) return liveDedupeReply_(dup);
+    return fn();
+  }
+  return dup;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * Phase 2 — central document status machine + pre-write validation gate.
+ * Static only: no migration, no backfill, no data changes. Existing statuses
+ * in sheets are untouched; this only gates FUTURE transitions/validations.
+ * ══════════════════════════════════════════════════════════════════════════
+ *
+ * DOC_STATUS_TRANSITIONS covers (keys lowercased; lookup is case-insensitive):
+ *   tl_purchasing / tl_sales / tl_offer : Pending->Approved, Approved terminal
+ *   tl_cash (approved bool)             : false->true, true terminal (one-way)
+ *   tc_legal_cash (toggle)              : false<->true (both ways)
+ *   vf_purchasing (dual legs)           : Pending->Approved each, Approved terminal;
+ *                                         edit-blocked if either leg Approved —
+ *                                         enforced via pseudo-target 'edit'
+ *                                         (Pending->edit allowed, Approved->edit blocked)
+ *   vf_mfg_order                        : Draft->In Progress->Locked->In Progress
+ *   vf_mfg_agree                        : draft/active/completed + *->cancelled,
+ *                                         cancelled terminal
+ *   vf_sales_inv                        : Pending<->Approved + Approved delete-block —
+ *                                         enforced via pseudo-target 'delete'
+ *                                         (Pending->delete allowed, Approved->delete blocked)
+ *   att_batch                           : active->reverted, reverted terminal
+ *   payroll_month                       : open->closed, closed terminal (via insert)
+ *
+ * Pseudo-targets 'edit'/'delete' are NOT sheet values; they let edit/delete
+ * guards route through the same table instead of keeping inline if(cur...) checks.
+ */
+var DOC_STATUS_TRANSITIONS = {
+  tl_purchasing: { 'pending': ['approved'], 'approved': [] },
+  tl_sales: { 'pending': ['approved'], 'approved': [] },
+  tl_offer: { 'pending': ['approved'], 'approved': [] },
+  tl_sales_offer: { 'pending': ['approved'], 'approved': [] },
+  tl_cash: { 'false': ['true'], 'true': [] },
+  tc_legal_cash: { 'false': ['true'], 'true': ['false'] },
+  vf_purchasing: { 'pending': ['approved', 'edit'], 'approved': [] },
+  vf_purchasing_quality: { 'pending': ['approved', 'edit'], 'approved': [] },
+  vf_mfg_order: { 'draft': ['in progress'], 'in progress': ['locked'], 'locked': ['in progress'] },
+  vf_mfg_agree: { 'draft': ['active', 'completed', 'cancelled'], 'active': ['completed', 'cancelled'], 'completed': ['cancelled'], 'cancelled': [] },
+  vf_sales_inv: { 'pending': ['approved', 'delete'], 'approved': ['pending'] },
+  att_batch: { 'active': ['reverted'], 'reverted': [] },
+  vf_att_batch: { 'active': ['reverted'], 'reverted': [] },
+  attendance_batch: { 'active': ['reverted'], 'reverted': [] },
+  payroll_month: { 'open': ['closed'], 'closed': [] },
+  payroll: { 'open': ['closed'], 'closed': [] },
+  tc_payroll_month: { 'open': ['closed'], 'closed': [] }
+};
+
+function normDocStatus_(v) {
+  if (v === true) return 'true';
+  if (v === false) return 'false';
+  var s = String(v == null ? '' : v).trim().toLowerCase();
+  if (s === 'true' || s === 'false') return s;
+  return s;
+}
+
+function normDocType_(docType) {
+  var dt = String(docType == null ? '' : docType).trim().toLowerCase();
+  if (dt === 'tl_sales_offer') return 'tl_offer';
+  if (dt === 'vf_att_batch' || dt === 'attendance_batch') return 'att_batch';
+  if (dt === 'payroll' || dt === 'tc_payroll_month') return 'payroll_month';
+  if (dt === 'vf_purchasing_quality') return 'vf_purchasing';
+  return dt;
+}
+
+/* Bool-returning gate. Unknown docType -> false (fail-closed). */
+function canTransition(docType, from, to) {
+  var dt = normDocType_(docType);
+  var table = DOC_STATUS_TRANSITIONS[dt];
+  if (!table) return false;
+  var f = normDocStatus_(from);
+  var t = normDocStatus_(to);
+  var allowed = table[f];
+  if (!allowed) return false;
+  for (var i = 0; i < allowed.length; i++) {
+    if (String(allowed[i]).toLowerCase() === t) return true;
+  }
+  return false;
+}
+
+/* Throwing helper. Throws on illegal transition; returns true otherwise.
+ * A refused transition is a deterministic pre-mutation check, so the error is
+ * marked notApplied: the request-guard ledger records a confirmed failure
+ * (safe to correct and retry), never an uncertain outcome. */
+function assertTransition_(docType, from, to, message) {
+  if (!canTransition(docType, from, to)) {
+    var _err = new Error(message || ('Invalid status transition: ' + docType + ' ' + from + ' -> ' + to));
+    _err.notApplied = true; _err.code = 'REQUEST_NOT_APPLIED';
+    throw _err;
+  }
+  return true;
+}
+
+/* ── validateBeforeWrite wiring ──────────────────────────────────────────
+ * DOC_ACTION_TO_DOCTYPE_ maps module_action (lowercased) -> docType for the
+ * Phase 2 commit paths. STATUS_ONLY_ACTIONS_ marks approve_/toggle_/cancel_/
+ * revert_/close_/delete_ paths as status-only: they explicitly SKIP field
+ * validation (documented choice) because their payloads carry only an id/code
+ * + version, not header+lines. They remain gated on status via
+ * canTransition/assertTransition_ in their handlers. Field validation runs
+ * only on add_/edit_/save_ paths via registered validators (no logic duplicated
+ * here — DOC_VALIDATORS_ entries call the existing company validators).
+ */
+var DOC_ACTION_TO_DOCTYPE_ = {
+  'add_purchasing': 'tl_purchasing', 'edit_purchasing': 'tl_purchasing', 'delete_purchasing': 'tl_purchasing', 'approve_purchasing': 'tl_purchasing',
+  'add_sales': 'tl_sales', 'edit_sales': 'tl_sales', 'delete_sales': 'tl_sales', 'approve_sales': 'tl_sales',
+  'add_sales_offer': 'tl_offer', 'edit_sales_offer': 'tl_offer', 'delete_sales_offer': 'tl_offer', 'approve_sales_offer': 'tl_offer',
+  'add_cash': 'tl_cash', 'edit_cash': 'tl_cash', 'delete_cash': 'tl_cash', 'approve_cash': 'tl_cash', 'add_transfer': 'tl_cash',
+  'add_legal_costing': 'tc_costing', 'add_legal_costing_bundle': 'tc_costing', 'edit_legal_costing_bundle': 'tc_costing', 'delete_legal_costing': 'tc_costing',
+  'add_legal_cash': 'tc_legal_cash', 'toggle_legal_cash_approved': 'tc_legal_cash',
+  'close_payroll_month': 'payroll_month',
+  'save_valley_purchasing_header_checkpoint': 'vf_purchasing', 'save_valley_purchasing_lines_checkpoint': 'vf_purchasing',
+  'save_valley_purchasing_costing': 'vf_purchasing', 'delete_valley_purchasing_costing': 'vf_purchasing',
+  'approve_valley_purchasing_costing': 'vf_purchasing', 'quality_approve_valley_purchasing_costing': 'vf_purchasing',
+  'change_valley_mfg_status': 'vf_mfg_order', 'save_valley_mfg_order': 'vf_mfg_order',
+  'save_valley_mfg_agreement': 'vf_mfg_agree', 'cancel_valley_mfg_agreement': 'vf_mfg_agree',
+  'save_valley_invoice': 'vf_sales_inv', 'approve_valley_invoice': 'vf_sales_inv', 'delete_valley_invoice': 'vf_sales_inv',
+  'commit_attendance_import': 'att_batch', 'revert_attendance_import': 'att_batch'
+};
+
+var STATUS_ONLY_ACTIONS_ = {
+  'approve_purchasing': true, 'approve_sales': true, 'approve_sales_offer': true, 'approve_cash': true,
+  'approve_valley_purchasing_costing': true, 'quality_approve_valley_purchasing_costing': true,
+  'change_valley_mfg_status': true, 'cancel_valley_mfg_agreement': true,
+  'approve_valley_invoice': true, 'delete_valley_invoice': true,
+  'toggle_legal_cash_approved': true, 'revert_attendance_import': true, 'close_payroll_month': true,
+  'delete_purchasing': true, 'delete_sales': true, 'delete_sales_offer': true, 'delete_cash': true,
+  'delete_legal_costing': true, 'delete_valley_purchasing_costing': true
+};
+
+var DOC_VALIDATORS_ = {};
+
+function registerDocValidator_(docType, fn) {
+  DOC_VALIDATORS_[normDocType_(docType)] = fn;
+}
+
+function docTypeForAction_(action) {
+  return DOC_ACTION_TO_DOCTYPE_[String(action == null ? '' : action).trim().toLowerCase()] || null;
+}
+
+function isStatusOnlyAction_(action) {
+  return !!STATUS_ONLY_ACTIONS_[String(action == null ? '' : action).trim().toLowerCase()];
+}
+
+/* Central field-validation gate. docType + payload (full {module_action,data}
+ * or raw data) + dbId. Status-only actions skip field validation explicitly;
+ * all other known docTypes delegate to registered company validators. Unknown
+ * docTypes / reads pass through. Validation errors are marked notApplied (safe
+ * to correct and retry — thrown before any mutation). */
+function validateBeforeWrite(docType, payload, dbId) {
+  var action = null;
+  var data = payload;
+  if (payload && typeof payload === 'object' && ('module_action' in payload || 'data' in payload)) {
+    action = payload.module_action || null;
+    data = (payload.data !== undefined ? payload.data : payload);
+  }
+  if (!docType && action) docType = docTypeForAction_(action);
+  if (action && isStatusOnlyAction_(action)) return true;
+  var dt = docType ? normDocType_(docType) : (action ? normDocType_(docTypeForAction_(action) || '') : '');
+  if (!dt) return true;
+  var fn = DOC_VALIDATORS_[dt];
+  if (typeof fn !== 'function') return true;
+  try {
+    fn(data, dbId);
+  } catch (e) {
+    if (e && e.notApplied === undefined) { try { e.notApplied = true; } catch (e2) {} }
+    throw e;
+  }
+  return true;
 }
 

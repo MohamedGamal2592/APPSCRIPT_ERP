@@ -51,12 +51,12 @@ function systemFindCompat_(tableName, fieldName, value) {
 }
 function storagePatchCompat_(tableName, fieldName, value, changes) {
   if (typeof systemPatchByBusinessKey_ === 'function') return systemPatchByBusinessKey_(tableName, fieldName, value, changes);
-  return updateRowByCriteria_(getSheet_(tableName, CONFIG.AUTH_SPREADSHEET_ID), fieldName, value, changes);
+  return patchRowByCriteria_(getSheet_(tableName, CONFIG.AUTH_SPREADSHEET_ID), fieldName, value, changes);
 }
 function storagePatchFieldsCompat_(tableName, filters, changes) {
   if (typeof systemPatchByFields_ === 'function') return systemPatchByFields_(tableName, filters, changes);
   if (!filters || !filters.length) return false;
-  return updateRowByCriteria_(getSheet_(tableName, CONFIG.AUTH_SPREADSHEET_ID), filters[0].field, filters[0].value, changes);
+  return patchRowByCriteria_(getSheet_(tableName, CONFIG.AUTH_SPREADSHEET_ID), filters[0].field, filters[0].value, changes);
 }
 
 // ==========================================
@@ -661,6 +661,35 @@ function getCompanySpreadsheetId_(companyName) {
   const record = assertCompanyEnabled_(companyName);
   try { cache.put(cacheKey, JSON.stringify(record), CONFIG.CACHE_GENERAL_SECONDS); } catch (putErr) {}
   return record.spreadsheetId;
+}
+
+// ==========================================
+// Phase 3: central dbId resolution + tenant assertion
+// Single source of truth for which spreadsheet a company request may touch.
+// resolveDbId_ derives the tenant from identity (a super-admin may target
+// payload.target_system; everyone else is pinned to their own company) and
+// asserts the result matches that company's spreadsheet. assertDbIdBelongsToCompany_
+// is the Valley-style double-check reused by dispatch_ layers.
+// ==========================================
+function assertDbIdBelongsToCompany_(dbId, company) {
+  if (!company) throw new Error(ERP_MESSAGES.NOT_AUTHORIZED);
+  if (!dbId || String(dbId) !== String(getCompanySpreadsheetId_(company))) throw new Error(ERP_MESSAGES.NOT_AUTHORIZED);
+  return String(dbId);
+}
+
+function resolveDbId_(authUser, payload) {
+  if (!authUser) throw new Error(ERP_MESSAGES.NOT_AUTHORIZED);
+  if (authUser.isSuperAdmin) {
+    const target = payload && payload.target_system;
+    if (!target) throw new Error(ERP_MESSAGES.NOT_AUTHORIZED);
+    const dbId = getCompanySpreadsheetId_(target);
+    return assertDbIdBelongsToCompany_(dbId, target);
+  }
+  const company = authUser.company;
+  if (!company) throw new Error(ERP_MESSAGES.NOT_AUTHORIZED);
+  if (payload && payload.target_system && payload.target_system !== company) throw new Error(ERP_MESSAGES.NOT_AUTHORIZED);
+  const dbId = getCompanySpreadsheetId_(company);
+  return assertDbIdBelongsToCompany_(dbId, company);
 }
 
 // ==========================================

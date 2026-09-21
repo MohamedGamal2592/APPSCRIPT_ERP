@@ -6,7 +6,7 @@
  *
  * UIC._dtRowHtml puts `class="num"` on every money and numeric cell on every
  * page, but the rule that styled it existed only inside the two bespoke company
- * themes in 03_Security.js. ValleyFoods takes the generic theme path, so its
+ * themes in Code.js. ValleyFoods takes the generic theme path, so its
  * numeric columns were rendered in the body font, right-aligned and
  * non-tabular — figures did not line up.
  *
@@ -68,9 +68,9 @@ Object.keys(WAS).forEach(function (prop) {
 });
 
 /* ── 2. The duplicates are gone from both bespoke themes ────────────────── */
-const sec = S.read('03_Security.js') + '\n' + S.read('Theme_Builders.js');
+const sec = S.read('Code.js') + '\n' + S.read('Company_TopLight_Actions.js') + '\n' + S.read('Company_TopChemical_Actions.js');
 ok(!/'\.num \{/.test(sec) && !/\.num\s*\{[^}]*font-variant-numeric/.test(sec),
-  '03_Security.js no longer defines .num anywhere');
+  'Code.js no longer defines .num anywhere');
 /* Count DEFINITIONS, not mentions — the replacement comment names the token. */
 const monoDefs = (sec.match(/--font-mono:\s*\\?'Consolas/g) || []).length;
 ok(monoDefs === 2,

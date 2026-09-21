@@ -51,6 +51,15 @@ const ValleyFoods = (function () {
 
   const COMPANY_UID = '9940659bd83035d7';
 
+  /* add_upload_file is shared by these HR tables. Keep this authorization
+     routing inside the dispatcher scope; the upload implementation and its
+     folder metadata live in ValleyFoodsHRModules, a separate IIFE. */
+  const UPLOAD_PAGE_BY_SHEET = {
+    'valley_emp_deductions': 'vf_hr_deductions',
+    'valley_emp_overtime': 'vf_hr_overtime',
+    'valley_employee_vacations': 'vf_hr_vacations'
+  };
+
   const HR_EMPLOYEES_SHEET = 'vf_hr_employees';
   const CURRENCY_SHEET = 'ERP_currency_exchange';
 
@@ -178,6 +187,9 @@ const ValleyFoods = (function () {
      'delete_valley_purchasing_costing': { page: 'vf_purchasing', access: 'full' },
     'approve_valley_purchasing_costing': { page: 'vf_purchasing', access: 'write' },
     'quality_approve_valley_purchasing_costing': { page: 'vf_purchasing', access: 'write' },
+    /* Admin-only uncertain-receipt reconciliation (dry-run by default). Full
+       access on the purchasing page; the handler re-checks super-admin. */
+    'reconcile_valley_purchasing_receipts': { page: 'vf_purchasing', access: 'full' },
 
     // المالية — المبيعات
     'get_valley_sales_bootstrap': { page: 'vf_sales', access: 'read' },
@@ -207,6 +219,8 @@ const ValleyFoods = (function () {
     'change_valley_mfg_status': { page: 'vf_mfg_orders', access: 'write' },
     'get_valley_recipe_plan': { page: 'vf_mfg_orders', access: 'read' },
     'get_valley_mfg_order_detail': { page: 'vf_mfg_orders', access: 'read' },
+    'get_valley_mfg_request_diagnosis': { page: 'vf_mfg_orders', access: 'read' },
+    'get_valley_mfg_client_report': { page: 'vf_mfg_orders', access: 'read' },
     'get_valley_product_batches_multi': { page: 'vf_sales', access: 'read' },
 
     // صفحة تفاصيل أمر التصنيع (مسار منفصل)
@@ -335,6 +349,7 @@ const ValleyFoods = (function () {
     'change_valley_mfg_status': 'valley_manufacture_header',
     'get_valley_recipe_plan': 'valley_product_recipe',
     'get_valley_mfg_order_detail': 'valley_manufacture_header',
+    'get_valley_mfg_client_report': 'valley_manufacture_header',
     'get_valley_product_batches_multi': 'valley_current_products',
 
     'vf_mfg_order': 'valley_manufacture_header',
@@ -432,24 +447,62 @@ const ValleyFoods = (function () {
     return ACTION_TABLES[action] || '';
   }
 
-  function guard_(user, action) {
-    if (!user || user.isSuperAdmin) return;
+  // Phase 3: FAIL-CLOSED. An action not listed in PAGE_ACCESS is denied, not
+  // allowed. Super-admin bypass preserved. get_page_versions is the sole
+  // exception: it gates itself on the page asked about (see getPageVersions_).
+  /* Access denials are deterministic pre-mutation refusals: nothing has been
+     written, so they are marked notApplied and the request-guard ledger
+     records a confirmed failure instead of an uncertain outcome. */
+  function denyNotApplied_(message) {
+    var e = new Error(message);
+    e.notApplied = true; e.code = 'REQUEST_NOT_APPLIED';
+    throw e;
+  }
+  function guard_(user, action, data) {
+    if (user && user.isSuperAdmin) return;
+    if (action === 'get_page_versions') return;
+    /* Uploads are shared by several HR pages, so their permission cannot be
+       represented by one static PAGE_ACCESS entry. Resolve the owning page
+       from this dispatcher's own server-controlled sheet allowlist. */
+    if (action === 'add_upload_file') {
+      const uploadSheet = String((data && data.sheet) || '').trim();
+      const uploadPage = UPLOAD_PAGE_BY_SHEET[uploadSheet];
+      if (!uploadPage || !unifiedCheck_(user, COMPANY_UID, uploadPage, 'write')) {
+        denyNotApplied_(ERP_MESSAGES.NOT_AUTHORIZED);
+      }
+      return;
+    }
     const req = PAGE_ACCESS[action];
-    if (!req) return;
-    if (!unifiedCheck_(user, '9940659bd83035d7', req.page, req.access)) {
-      throw new Error(ERP_MESSAGES.NOT_AUTHORIZED);
+    if (!req) denyNotApplied_(ERP_MESSAGES.NOT_AUTHORIZED);
+    if (!unifiedCheck_(user, COMPANY_UID, req.page, req.access)) {
+      denyNotApplied_(ERP_MESSAGES.NOT_AUTHORIZED);
     }
   }
 
-  function dispatch_(payload, user, dbId) {
+  // Phase 3: tenant double-check (matches ValleyFoodsFinancialReporting.authorize_
+  // pattern): dbId must be this company's own spreadsheet before any sheet read.
+  function authorize_(user, dbId) {
+    if (!user || (!user.isSuperAdmin && user.company !== COMPANY_UID) || !dbId || String(dbId) !== String(getCompanySpreadsheetId_(COMPANY_UID))) denyNotApplied_(ERP_MESSAGES.NOT_AUTHORIZED);
+  }
+
+  function dispatch_(payload, user, dbId, guardCtx) {
     const action = payload.module_action;
-    if (!actions[action]) throw new Error('Unknown Valley Foods action: ' + action);
-    guard_(user, action);
-    return actions[action](payload.data, user, dbId);
+    if (!actions[action]) denyNotApplied_('Unknown Valley Foods action: ' + action);
+    guard_(user, action, payload.data);
+    authorize_(user, dbId);
+    /* Phase 2: defensive gate so direct dispatch also validates. Status-only
+     * paths skip field validation inside validateBeforeWrite; handlers still
+     * enforce status via canTransition/assertTransition_. */
+    if (typeof validateBeforeWrite === 'function' && typeof docTypeForAction_ === 'function') {
+      var __dt = docTypeForAction_(action);
+      if (__dt) validateBeforeWrite(__dt, payload, dbId);
+    }
+    return actions[action](payload.data, user, dbId, guardCtx || {});
   }
 
   // ---- generic helpers (mirror Top Light / Top Chemical) ----
-  function num0_(v) { return Math.max(0, Number(v) || 0); }
+  /* Phase 5 compat: delegates to shared sharedNum0_ (Code.js). */
+  function num0_(v) { return (typeof sharedNum0_ === 'function') ? sharedNum0_(v) : Math.max(0, Number(v) || 0); }
 
   function parseDate_(v) {
     if (v == null || v === '') return '';
@@ -531,7 +584,16 @@ const ValleyFoods = (function () {
   }
   register('get_kpi_data', getKpiData_);
 
-  return { dispatch_: dispatch_, pageForAction_: pageForAction_, tableForAction_: tableForAction_, register: register };
+  /* Actions whose business records can reconcile a lost response without
+   * replaying a destructive mutation. */
+  function requestRecovery_(action) {
+    return action === 'add_upload_file' ||
+      action === 'save_valley_purchasing_costing' ||
+      action === 'save_valley_purchasing_header_checkpoint' ||
+      action === 'save_valley_purchasing_lines_checkpoint' ||
+      action === 'save_valley_mfg_order' ? 'request-id' : '';
+  }
+  return { dispatch_: dispatch_, pageForAction_: pageForAction_, tableForAction_: tableForAction_, requestRecovery_: requestRecovery_, register: register };
 })();
 
 
@@ -615,7 +677,7 @@ const ValleyFoodsHREmp = (function () {
     return pad(d.getHours()) + ':' + pad(d.getMinutes());
   }
 
-  /* writeFormula_ lives at GLOBAL scope in 02_DataAccess.js (shared by all IIFE namespaces). */
+  /* writeFormula_ lives at GLOBAL scope in Code.js (shared by all IIFE namespaces). */
 
   /** Map of emp_code -> { status_type, date } keeping the latest status record. */
   function getLatestStatusMap_(dbId, statusesArg) {
@@ -808,7 +870,7 @@ const ValleyFoodsHREmp = (function () {
   function getEmpStatusData_(data, user, dbId) {
     ensureSheet_(dbId, EMP_STATUS_SHEET, EMP_STATUS_HEADERS);
     const _allSt = getAllRecords_(dbId, EMP_STATUS_SHEET);
-    const limit = Number(data && data.limit) || 10;
+    const limit = Number(data && data.limit) || 20;
     var statuses = _allSt.slice().reverse();
     const total = _allSt.length;
     if (!data || !data.loadAll) statuses = statuses.slice(0, limit);
@@ -905,7 +967,7 @@ const ValleyFoodsHREmp = (function () {
       ['shift_unique_id', 'shift_name', 'shift_type', 'shift_start_time', 'shift_end_time']);
 
     const _allAssign = getAllRecords_(dbId, SHIFT_ASSIGN_SHEET);
-    const limit = Number(data && data.limit) || 10;
+    const limit = Number(data && data.limit) || 20;
     var assignments = _allAssign.slice().reverse();
     const total = _allAssign.length;
     if (!data || !data.loadAll) assignments = assignments.slice(0, limit);
@@ -1037,7 +1099,7 @@ const ValleyFoodsHREmp = (function () {
   function getSalaryData_(data, user, dbId) {
     ensureSheet_(dbId, SALARY_SHEET, SALARY_HEADERS);
     const _allSal = getAllRecords_(dbId, SALARY_SHEET);
-    const limit = Number(data && data.limit) || 10;
+    const limit = Number(data && data.limit) || 20;
     var salaries = _allSal.slice().reverse();
     const total = _allSal.length;
     if (!data || !data.loadAll) salaries = salaries.slice(0, limit);
@@ -1104,9 +1166,13 @@ const ValleyFoodsHREmp = (function () {
   }
 
   function getValleyHrPage_(data, user, dbId) {
-    const er = getEmployeesData_(data, user, dbId);
-    const sr = getEmpStatusData_(data, user, dbId);
-    const shr = getShiftAssignmentData_(data, user, dbId);
+    /* Master-data page: employees, status history and assignments are all
+       small reference sets, and the page renders them with no truncation
+       notice — so the aggregate always loads the full sets. (The standalone
+       Shift page keeps its own 20-row window + عرض الكل toggle.) */
+    const er = getEmployeesData_({ loadAll: true }, user, dbId);
+    const sr = getEmpStatusData_({ loadAll: true }, user, dbId);
+    const shr = getShiftAssignmentData_({ loadAll: true }, user, dbId);
     /* salaries intentionally excluded: راتب الموظف lives on its own page
        (vf_hr_salary, served by get_salary_data). Serving them here would hand
        the salary dataset to anyone granted only the employees list. */
@@ -1170,6 +1236,7 @@ const ValleyFoodsHREmp = (function () {
  * intact; global helpers and action names remain unchanged.
  */
 const ValleyFoodsHRModules = (function () {
+  const COMPANY_UID                 = '9940659bd83035d7';
   const EMP_DEDUCTIONS_SHEET       = 'valley_emp_deductions';
   const EMP_CONTRACTS_SHEET        = 'valley_employee_contracts';
   const VACATION_ALLOC_SHEET       = 'valley_employee_vacation_allocation';
@@ -1259,7 +1326,15 @@ const ValleyFoodsHRModules = (function () {
       var roles = getAllRecords_(dbId, OVERTIME_ROLES_SHEET);
       return roles.filter(function (r) { return r.is_active !== false; })
         .map(function (r) {
-          return { value: r.overtime_rule_unique_id, label: r.overtime_type, rate: Number(r.overtime_rate) || 1, moneyRelated: !!r.money_related, vacationDays: !!r.vacation_days };
+          var moneyFlag = String(r.money_related == null ? '' : r.money_related).trim().toLowerCase();
+          var vacationFlag = String(r.vacation_days == null ? '' : r.vacation_days).trim().toLowerCase();
+          return {
+            value: r.overtime_rule_unique_id,
+            label: r.overtime_type,
+            rate: Number(r.overtime_rate) || 1,
+            moneyRelated: r.money_related === true || r.money_related === 1 || moneyFlag === 'true' || moneyFlag === '1',
+            vacationDays: r.vacation_days === true || r.vacation_days === 1 || vacationFlag === 'true' || vacationFlag === '1'
+          };
         });
     } catch (e) { return []; }
   }
@@ -1624,7 +1699,7 @@ const ValleyFoodsHRModules = (function () {
     var roleMap = {};
     roles.forEach(function (r) { roleMap[r.value] = r; });
     var _allRows = getAllRecords_(dbId, EMP_DEDUCTIONS_SHEET);
-    var limit = Number(data && data.limit) || 10;
+    var limit = Number(data && data.limit) || 20;
     // Phase 12 — same transformation as 7.1: order is computed on an index array
     // first, so reverse().slice(0, limit) keeps its exact semantics while only the
     // visible rows are mapped. The slice stays ON THE INDEX ARRAY, which is what
@@ -1919,7 +1994,7 @@ const ValleyFoodsHRModules = (function () {
   function getVacationAllocData_(data, user, dbId) {
     ensureSheet_(dbId, VACATION_ALLOC_SHEET, ['unique_id','id','emp_id','employee_name','vacation_type','vacation_alloc_start_Date','vacation_alloc_end_Date','number_of_days','used_days','user','created_at']);
     var _allVacAlloc = getAllRecords_(dbId, VACATION_ALLOC_SHEET);
-    var limit = Number(data && data.limit) || 10;
+    var limit = Number(data && data.limit) || 20;
     var rows = _allVacAlloc.slice().reverse();
     var vacIndexRows = [];
     try { vacIndexRows = getAllRecords_(dbId, VACATIONS_INDEX_SHEET); } catch (e) {}
@@ -2066,7 +2141,7 @@ const ValleyFoodsHRModules = (function () {
     });
 
     var _allVac = getAllRecords_(dbId, VACATIONS_SHEET);
-    var limit = Number(data && data.limit) || 10;
+    var limit = Number(data && data.limit) || 20;
     var rows = _allVac.slice().reverse();
 
     // Enrich rows with vacation_type name
@@ -2085,6 +2160,78 @@ const ValleyFoodsHRModules = (function () {
     if (isNaN(d.getTime())) return String(v);
     var pad = function (n) { return n < 10 ? '0' + n : '' + n; };
     return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+  }
+
+  /* As-stored wall-date contract (READ path only — never alters sheet values).
+   * Sheet date-only cells arrive via getValues() as Date at midnight script-TZ;
+   * serializing that Date as UTC ISO shifts it a day back for +02/+03 zones.
+   * These helpers collapse Date / serial / text into wall strings using the
+   * script timezone, so the browser can display them opaquely. */
+  function vfDateStr_(v) {
+    if (v === '' || v === null || v === undefined) return '';
+    try {
+      if (Object.prototype.toString.call(v) === '[object Date]' && !isNaN(v.getTime())) {
+        return Utilities.formatDate(v, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+      }
+    } catch (e) { /* fall through to string handling */ }
+    if (typeof v === 'number' && isFinite(v)) {
+      try {
+        var dSer = serialToDate_(v);
+        return Utilities.formatDate(dSer, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+      } catch (e2) { return String(v); }
+    }
+    var s = String(v).trim();
+    var m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+    if (m) {
+      var mm = ('0' + m[2]).slice(-2), dd = ('0' + m[3]).slice(-2);
+      return m[1] + '-' + mm + '-' + dd;
+    }
+    m = s.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+    if (m) {
+      var dd2 = ('0' + m[1]).slice(-2), mm2 = ('0' + m[2]).slice(-2);
+      return m[3] + '-' + mm2 + '-' + dd2;
+    }
+    return s;
+  }
+
+  function vfDateTimeStr_(v) {
+    if (v === '' || v === null || v === undefined) return '';
+    try {
+      if (Object.prototype.toString.call(v) === '[object Date]' && !isNaN(v.getTime())) {
+        return Utilities.formatDate(v, Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm');
+      }
+    } catch (e) { /* fall through */ }
+    if (typeof v === 'number' && isFinite(v)) {
+      try {
+        return Utilities.formatDate(serialToDate_(v), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm');
+      } catch (e2) { return String(v); }
+    }
+    var s = String(v).trim();
+    var m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})[T ](\d{1,2}):(\d{2})/);
+    if (m) {
+      var mm = ('0' + m[2]).slice(-2), dd = ('0' + m[3]).slice(-2);
+      var hh = ('0' + m[4]).slice(-2);
+      return m[1] + '-' + mm + '-' + dd + ' ' + hh + ':' + m[5];
+    }
+    return s;
+  }
+
+  function vfTimeStr_(v) {
+    if (v === '' || v === null || v === undefined) return '';
+    try {
+      if (Object.prototype.toString.call(v) === '[object Date]' && !isNaN(v.getTime())) {
+        return Utilities.formatDate(v, Session.getScriptTimeZone(), 'HH:mm');
+      }
+    } catch (e) { /* fall through */ }
+    if (typeof v === 'number' && isFinite(v)) {
+      try {
+        return Utilities.formatDate(serialToDate_(v), Session.getScriptTimeZone(), 'HH:mm');
+      } catch (e2) { return String(v); }
+    }
+    var s = String(v).trim();
+    var m = s.match(/(\d{1,2}):(\d{2})/);
+    if (m) return ('0' + m[1]).slice(-2) + ':' + m[2];
+    return s;
   }
 
   /* Allocation balance: number_of_days and consumed = SUM(duration_days of
@@ -2428,7 +2575,7 @@ const ValleyFoodsHRModules = (function () {
     var roleMap = {};
     roles.forEach(function (r) { roleMap[r.value] = r; });
     var _allOT = getAllRecords_(dbId, EMP_OVERTIME_SHEET);
-    var limit = Number(data && data.limit) || 10;
+    var limit = Number(data && data.limit) || 20;
     // Phase 12 — slice before mapping; see getDeductionsData_.
     var _order = [];
     for (var _i = _allOT.length - 1; _i >= 0; _i--) _order.push(_i);
@@ -2633,6 +2780,7 @@ const ValleyFoodsHRModules = (function () {
       }
       attachmentIdOT = requireAttachmentBinding_(newRef, attachmentIdOT, 'overtime_attachement');
     }
+    if (!newRef) throw new Error('المرفق مطلوب');
     try { if (typeof ensureAttachmentColumn_ === 'function') ensureAttachmentColumn_(dbId, EMP_OVERTIME_SHEET, 'overtime_attachement_id'); } catch (e3) {}
 
     var map = {};
@@ -2687,7 +2835,7 @@ const ValleyFoodsHRModules = (function () {
     }
     // totals computed BEFORE capping
     var totalAll = list.reduce(function (s, r) { return s + (Number(r.net_salary) || 0); }, 0);
-    var limit = Number(data && data.limit) || 15;
+    var limit = Number(data && data.limit) || 20;
     var rows = list.slice().reverse();
     var totalForCalc = totalAll;
     if (!data || !data.loadAll) rows = rows.slice(0, limit);
@@ -2886,7 +3034,7 @@ const ValleyFoodsHRModules = (function () {
 
     var lim = (d.loadAll || fromSerial !== null || toSerial !== null)
       ? null
-      : ((d.limit != null) ? Number(d.limit) : 10);
+      : ((d.limit != null) ? Number(d.limit) : 20);
     var sp = vfPage_(rows, { limit: lim, offset: d.offset || 0 });
     return { status: 'success', sessions: sp.rows, total: sp.total };
   }
@@ -2972,7 +3120,7 @@ const ValleyFoodsHRModules = (function () {
     // sort newest first before paging
     rows = rows.slice().reverse();
     var totalBeforeCap = rows.length;
-    var limit = Number(data && data.limit) || 10;
+    var limit = Number(data && data.limit) || 20;
     var ap;
     /* D-05. A single day is bounded by definition — a session cannot hold more
        punches than the company has employees times their punches that day — so
@@ -3216,7 +3364,7 @@ const ValleyFoodsHRModules = (function () {
         };
       }
 
-      updateRowByCriteria_(sheet, 'review_id', reviewId, updates);
+      patchRowByCriteria_(sheet, 'review_id', reviewId, updates);
       try {
         logHistory_(dbId, ATT_REVIEW_SHEET, 'resolve_' + ATT_REVIEW_SHEET + '_' + reviewId, reviewId,
           (user && user.email) || '', 'update', updates, { review_status: 'open' });
@@ -3347,8 +3495,9 @@ const ValleyFoodsHRModules = (function () {
         if (String(b.batch_id || '').trim() === batchId) batch = b;
       });
       if (!batch) throw new Error('عملية الرفع غير موجودة');
-      var wasStatus = String(batch.batch_status || '').trim();
-      if (wasStatus === 'reverted') throw new Error('تم التراجع عن عملية الرفع هذه من قبل');
+      var wasStatus = String(batch.batch_status || 'active').trim();
+      /* Phase 2: active->reverted only, reverted terminal — via table (no inline cur check). */
+      assertTransition_('att_batch', wasStatus || 'active', 'reverted', 'تم التراجع عن عملية الرفع هذه من قبل');
 
       var punchesDeleted = deleteRowsByCriteria_(attSheet, 'import_batch_id', batchId);
 
@@ -3383,7 +3532,7 @@ const ValleyFoodsHRModules = (function () {
         }
       } catch (e) { /* the review sheet need not exist */ }
 
-      updateRowByCriteria_(batchSheet, 'batch_id', batchId, {
+      patchRowByCriteria_(batchSheet, 'batch_id', batchId, {
         batch_status: 'reverted',
         reverted_by: (user && user.email) || '',
         reverted_at: new Date()
@@ -3473,7 +3622,7 @@ const ValleyFoodsHRModules = (function () {
 
     /* vfPage_ reads limit:null as unlimited; note that limit:0 would mean an
        EMPTY page, not an unlimited one, so loadAll goes through null. */
-    var lim = (data && data.loadAll) ? null : ((data && data.limit != null) ? Number(data.limit) : 10);
+    var lim = (data && data.loadAll) ? null : ((data && data.limit != null) ? Number(data.limit) : 20);
     var p = vfPage_(rows, { limit: lim, offset: (data && data.offset) || 0 }, 'uploaded_at');
     return { status: 'success', batches: p.rows, total: p.total };
   }
@@ -3676,7 +3825,7 @@ const ValleyFoodsHRModules = (function () {
         rows_flagged: (Number(batch && batch.rows_flagged) || 0) + flaggedCount,
         sessions_created: (Number(batch && batch.sessions_created) || 0) + sessionsCreated
       };
-      updateRowByCriteria_(batchSheet, 'batch_id', batchId, totals);
+      patchRowByCriteria_(batchSheet, 'batch_id', batchId, totals);
 
       /* ONE history entry per batch, written when the batch closes — not one
          per row, which is fine for 40 rows and fatal for 40 000. */
@@ -3901,10 +4050,16 @@ const ValleyFoodsHRModules = (function () {
     throw new Error('تعذر إنشاء مجلد Google Drive — تأكد من تفعيل Google Drive API في Cloud Console ثم أعد نشر التطبيق');
   }
 
-  function uploadDriveFileRest_(folderId, blob, fileName) {
+  function uploadDriveFileRest_(folderId, blob, fileName, requestId) {
+    /* Tag every upload with its durable request ID. A retry can then recover
+       the exact file from this folder without relying on a mutable filename. */
+    var reqProps = (/^[A-Za-z0-9_-]{16,100}$/.test(String(requestId || '')))
+      ? { erpRequestId: String(requestId) } : null;
     try {
       if (typeof Drive !== 'undefined' && Drive.Files && Drive.Files.create) {
-        var created = Drive.Files.create({ name: fileName, parents: [folderId] }, blob);
+        var resource = { name: fileName, parents: [folderId] };
+        if (reqProps) resource.appProperties = reqProps;
+        var created = Drive.Files.create(resource, blob);
         if (created && created.id) return created;
       }
     } catch (advErr) {}
@@ -3914,7 +4069,9 @@ const ValleyFoodsHRModules = (function () {
     var close_delim = "\r\n--" + boundary + "--";
     var contentType = blob.getContentType() || 'application/octet-stream';
     var base64Data = Utilities.base64Encode(blob.getBytes());
-    var body = delimiter + 'Content-Type: application/json; charset=UTF-8\r\n\r\n' + JSON.stringify({ name: fileName, parents: [folderId] }) +
+    var metadata = { name: fileName, parents: [folderId] };
+    if (reqProps) metadata.appProperties = reqProps;
+    var body = delimiter + 'Content-Type: application/json; charset=UTF-8\r\n\r\n' + JSON.stringify(metadata) +
       delimiter + 'Content-Type: ' + contentType + '\r\nContent-Transfer-Encoding: base64\r\n\r\n' + base64Data + close_delim;
     var response = UrlFetchApp.fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
       method: 'post', contentType: 'multipart/related; boundary=' + boundary,
@@ -3929,32 +4086,51 @@ const ValleyFoodsHRModules = (function () {
     return map[(ext || '').toLowerCase()] || 'application/octet-stream';
   }
 
-  function addUploadFile_(data, user, dbId) {
+  function addUploadFile_(data, user, dbId, ctx) {
     var sheet = String((data && data.sheet) || '').trim();
     var cfg = UPLOAD_META[sheet];
-    if (!cfg) throw new Error('الجدول غير معروف');
-    if (!(user && user.isSuperAdmin)) {
-      var grants = ((user && user.authorizedPages) || {})[cfg.page] || [];
-      if (grants.indexOf('write') === -1) {
-        throw new Error('لا يوجد صلاحية لإضافة سجلات في هذه الصفحة');
-      }
+    var requestId = String((ctx && ctx.requestId) || '').trim();
+    /* These checks happen before any Drive mutation, so the request ledger can
+       safely record a confirmed failure instead of an uncertain outcome. */
+    var notApplied = function (message) {
+      var e = new Error(message);
+      e.notApplied = true; e.code = 'REQUEST_NOT_APPLIED';
+      throw e;
+    };
+    if (!cfg) notApplied('الجدول غير معروف');
+    if (!(user && user.isSuperAdmin) && !unifiedCheck_(user, COMPANY_UID, cfg.page, 'write')) {
+      notApplied('لا يوجد صلاحية لإضافة سجلات في هذه الصفحة');
     }
     var filename = String((data && data.filename) || '').trim();
-    if (!filename) throw new Error('اسم الملف مطلوب');
+    if (!filename) notApplied('اسم الملف مطلوب');
     var dot = filename.lastIndexOf('.');
     var ext = (dot > 0 ? filename.slice(dot + 1) : '').toLowerCase();
     var allowedExt = ['pdf', 'doc', 'docx', 'png', 'jpg', 'jpeg'];
-    if (allowedExt.indexOf(ext) === -1) throw new Error('نوع الملف غير مسموح (pdf, word, png, jpg فقط)');
+    if (allowedExt.indexOf(ext) === -1) notApplied('نوع الملف غير مسموح (pdf, word, png, jpg فقط)');
     var b64 = String((data && data.base64) || '').replace(/\s/g, '');
-    if (!b64) throw new Error('لا يوجد ملف');
-    var bytes = Utilities.base64Decode(b64);
-    if (bytes.length > 10 * 1024 * 1024) throw new Error('حجم الملف يتجاوز 10 ميجابايت');
+    if (!b64) notApplied('لا يوجد ملف');
+    var bytes;
+    try { bytes = Utilities.base64Decode(b64); }
+    catch (decodeErr) { notApplied('بيانات الملف غير صالحة'); }
+    if (bytes.length > 10 * 1024 * 1024) notApplied('حجم الملف يتجاوز 10 ميجابايت');
     var folderId = ensureDriveFolderId_(cfg.folder);
+    /* A retry after a timeout or lost response uses the same request ID. If
+       Drive already contains its tagged file, return that binding and never
+       create a duplicate. The lookup is restricted to the trusted folder. */
+    if (/^[A-Za-z0-9_-]{16,100}$/.test(requestId) && typeof findDriveFileByRequestId_ === 'function') {
+      var prior = null;
+      try { prior = findDriveFileByRequestId_(folderId, requestId); } catch (priorErr) { prior = null; }
+      if (prior && prior.id) {
+        var priorRef = cfg.folder + '/' + (prior.name || filename);
+        try { CacheService.getScriptCache().put('attid_' + priorRef, prior.id, 21600); } catch (cacheErr) {}
+        return { status: 'success', reference: priorRef, fileId: prior.id, recovered: true };
+      }
+    }
     var ts = Utilities.getUuid().replace(/-/g, '').slice(0, 8);
     var cleanName = (filename.replace(/[\\/:*?"<>|]/g, '_').replace(/\.[^.]+$/, '') || 'file');
     var newName = cleanName + '.' + ts + '.' + ext;
     var blob = Utilities.newBlob(bytes, mimeForExt_(ext), newName);
-    var created = uploadDriveFileRest_(folderId, blob, newName);
+    var created = uploadDriveFileRest_(folderId, blob, newName, requestId);
     var fileId = (created && created.id) ? String(created.id) : '';
     var reference = cfg.folder + '/' + newName;
     if (!fileId) throw new Error('تم رفع الملف دون معرف Drive قابل للحفظ؛ لم يتم إنشاء ارتباط بالسجل.');
@@ -4083,7 +4259,7 @@ const ValleyFoodsHRModules = (function () {
 
     if (key) {
       var _oldOT = rows.find(function(r){ return String(r[keyHeader])===String(key); }) || null;
-      if (!updateRowByCriteria_(sheet, keyHeader, key, map)) throw new Error('السجل غير موجود');
+      if (!patchRowByCriteria_(sheet, keyHeader, key, map)) throw new Error('السجل غير موجود');
       try{ var _newOT = Object.assign({}, _oldOT||{}, map); logHistory_(dbId, OVERTIME_ROLES_SHEET, _oldOT&&_oldOT.record_uid ? _oldOT.record_uid : ('update_'+OVERTIME_ROLES_SHEET+'_'+key), key, (user&&user.email)||'', 'update', _newOT, _oldOT) }catch(e){}
       return { status: 'success', message: 'تم تحديث النوع' };
     }
@@ -4104,7 +4280,7 @@ const ValleyFoodsHRModules = (function () {
     rows.forEach(function (r) { if (String(r.overtime_rule_unique_id) === key) row = r; });
     if (!row) throw new Error('السجل غير موجود');
     var newValue = (row.is_active === false || String(row.is_active).toLowerCase() === 'false');
-    if (!updateRowByCriteria_(sheet, 'overtime_rule_unique_id', key, { is_active: newValue })) throw new Error('تعذر التحديث');
+    if (!patchRowByCriteria_(sheet, 'overtime_rule_unique_id', key, { is_active: newValue })) throw new Error('تعذر التحديث');
     try{ logHistory_(dbId, OVERTIME_ROLES_SHEET, row.record_uid || ('update_'+OVERTIME_ROLES_SHEET+'_'+key), key, (user&&user.email)||'', 'update', { is_active: newValue }, row) }catch(e){}
     return { status: 'success', message: newValue ? 'تم تفعيل النوع' : 'تم إيقاف النوع', is_active: newValue };
   }
@@ -4165,7 +4341,7 @@ const ValleyFoodsHRModules = (function () {
 
     if (key) {
       var _oldDR = rows.find(function(r){ return String(r[keyHeader])===String(key); }) || null;
-      if (!updateRowByCriteria_(sheet, keyHeader, key, map)) throw new Error('السجل غير موجود');
+      if (!patchRowByCriteria_(sheet, keyHeader, key, map)) throw new Error('السجل غير موجود');
       try{ var _newDR = Object.assign({}, _oldDR||{}, map); logHistory_(dbId, DEDUCTION_ROLES_SHEET, _oldDR&&_oldDR.record_uid ? _oldDR.record_uid : ('update_'+DEDUCTION_ROLES_SHEET+'_'+key), key, (user&&user.email)||'', 'update', _newDR, _oldDR) }catch(e){}
       return { status: 'success', message: 'تم تحديث الخصم' };
     }
@@ -4186,7 +4362,7 @@ const ValleyFoodsHRModules = (function () {
     rows.forEach(function (r) { if (String(r.rule_unique_id) === key) row = r; });
     if (!row) throw new Error('السجل غير موجود');
     var newValue = (row.is_active === false || String(row.is_active).toLowerCase() === 'false');
-    if (!updateRowByCriteria_(sheet, 'rule_unique_id', key, { is_active: newValue })) throw new Error('تعذر التحديث');
+    if (!patchRowByCriteria_(sheet, 'rule_unique_id', key, { is_active: newValue })) throw new Error('تعذر التحديث');
     try{ logHistory_(dbId, DEDUCTION_ROLES_SHEET, row.record_uid || ('update_'+DEDUCTION_ROLES_SHEET+'_'+key), key, (user&&user.email)||'', 'update', { is_active: newValue }, row) }catch(e){}
     return { status: 'success', message: newValue ? 'تم تفعيل الخصم' : 'تم إيقاف الخصم', is_active: newValue };
   }
@@ -4242,7 +4418,7 @@ const ValleyFoodsHRModules = (function () {
 
     if (d._editing === true || d._editing === 'true') {
       var _oldVI = rows.find(function(r){ return String(r.id)===String(vacId); }) || null;
-      if (!updateRowByCriteria_(sheet, 'id', vacId, map)) throw new Error('السجل غير موجود');
+      if (!patchRowByCriteria_(sheet, 'id', vacId, map)) throw new Error('السجل غير موجود');
       try{ var _newVI = Object.assign({}, _oldVI||{}, map); logHistory_(dbId, VACATIONS_INDEX_SHEET, _oldVI&&_oldVI.record_uid ? _oldVI.record_uid : ('update_'+VACATIONS_INDEX_SHEET+'_'+vacId), vacId, (user&&user.email)||'', 'update', _newVI, _oldVI) }catch(e){}
       return { status: 'success', message: 'تم تحديث نوع الإجازة' };
     }
@@ -4262,7 +4438,7 @@ const ValleyFoodsHRModules = (function () {
     rows.forEach(function (r) { if (String(r.id) === key) row = r; });
     if (!row) throw new Error('السجل غير موجود');
     var newValue = (row.is_active === false || String(row.is_active).toLowerCase() === 'false');
-    if (!updateRowByCriteria_(sheet, 'id', key, { is_active: newValue })) throw new Error('تعذر التحديث');
+    if (!patchRowByCriteria_(sheet, 'id', key, { is_active: newValue })) throw new Error('تعذر التحديث');
     try{ logHistory_(dbId, VACATIONS_INDEX_SHEET, row.record_uid || ('update_'+VACATIONS_INDEX_SHEET+'_'+key), key, (user&&user.email)||'', 'update', { is_active: newValue }, row) }catch(e){}
     return { status: 'success', message: newValue ? 'تم تفعيل النوع' : 'تم إيقاف النوع', is_active: newValue };
   }
@@ -4319,7 +4495,7 @@ const ValleyFoodsHRModules = (function () {
 
     if (key) {
       var _oldSS = rows.find(function(r){ return String(r[keyHeader])===String(key); }) || null;
-      if (!updateRowByCriteria_(sheet, keyHeader, key, map)) throw new Error('السجل غير موجود');
+      if (!patchRowByCriteria_(sheet, keyHeader, key, map)) throw new Error('السجل غير موجود');
       try{ var _newSS = Object.assign({}, _oldSS||{}, map); logHistory_(dbId, SETTINGS_SHIFT_SCHEDULE_SHEET, _oldSS&&_oldSS.record_uid ? _oldSS.record_uid : ('update_'+SETTINGS_SHIFT_SCHEDULE_SHEET+'_'+key), key, (user&&user.email)||'', 'update', _newSS, _oldSS) }catch(e){}
       return { status: 'success', message: 'تم تحديث الوردية' };
     }
@@ -4340,7 +4516,7 @@ const ValleyFoodsHRModules = (function () {
     rows.forEach(function (r) { if (String(r.shift_unique_id) === key) row = r; });
     if (!row) throw new Error('السجل غير موجود');
     var newValue = (row.is_active === false || String(row.is_active).toLowerCase() === 'false');
-    if (!updateRowByCriteria_(sheet, 'shift_unique_id', key, { is_active: newValue })) throw new Error('تعذر التحديث');
+    if (!patchRowByCriteria_(sheet, 'shift_unique_id', key, { is_active: newValue })) throw new Error('تعذر التحديث');
     try{ logHistory_(dbId, SETTINGS_SHIFT_SCHEDULE_SHEET, row.record_uid || ('update_'+SETTINGS_SHIFT_SCHEDULE_SHEET+'_'+key), key, (user&&user.email)||'', 'update', { is_active: newValue }, row) }catch(e){}
     return { status: 'success', message: newValue ? 'تم تفعيل الوردية' : 'تم إيقاف الوردية', is_active: newValue };
   }
@@ -4665,7 +4841,7 @@ const ValleyFoodsHRModules = (function () {
 
     if (editing) {
       var _oldProd = rows.find(function(r){ return Number(r.id)===Number(d.id); }) || null;
-      if (!updateRowByCriteria_(sheet, 'id', Number(d.id), map)) throw new Error('تعذر تحديث المنتج');
+      if (!patchRowByCriteria_(sheet, 'id', Number(d.id), map)) throw new Error('تعذر تحديث المنتج');
       try{ var _newProd = Object.assign({}, _oldProd||{}, map); logHistory_(dbId, FIN_PRODUCTS_SHEET, _oldProd&&_oldProd.record_uid ? _oldProd.record_uid : ('update_'+FIN_PRODUCTS_SHEET+'_'+d.id), Number(d.id), (user&&user.email)||'', 'update', _newProd, _oldProd) }catch(e){}
       return { status: 'success', message: 'تم تحديث المنتج' };
     }
@@ -4845,7 +5021,20 @@ const ValleyFoodsHRModules = (function () {
     'movement_type', 'sales_qty', 'sales_value', 'sales_value_amount', 'unit_cost', 'invoice_date',
     'registration_number', 'Analysis certificate, if available', 'Agricultural Release License', 'Release photo',
     'Registration image', 'Production date', 'Expiry date', 'user', 'currency', 'exchange_rate',
-    'cost_currency', 'Related valley_product_technicals', 'purchase_unit_cost'];
+    'cost_currency', 'Related valley_product_technicals', 'purchase_unit_cost',
+    /* Durable request markers (uncertain-request recovery). Appended — never
+       reordered — so settingsEnsureSheet_ adds them without touching existing
+       columns, data, or formulas. Readers must treat only the header's
+       active_line_generation as authoritative; rows without a generation are
+       the legacy initial generation. Internal IDs are stripped from
+       user-facing responses, never shown in tables. */
+    'request_id', 'line_generation', 'generation_hash'];
+  /* Header-side markers for the same design. last_request_id binds the last
+     successful mutation to its request; operation_hash binds that request to
+     its exact payload; operation_state is in_progress|complete. */
+  PURCHASING_COSTING_HEADERS.push('last_request_id', 'active_line_generation', 'operation_state', 'operation_hash');
+  var PURCHASING_HEADER_MARKERS_ = ['last_request_id', 'active_line_generation', 'operation_state', 'operation_hash'];
+  var PURCHASING_LINE_MARKERS_ = ['request_id', 'line_generation', 'generation_hash'];
   var PURCHASING_CURRENCIES = [
     { value: 'EGP', label: 'جنيه مصري', rate: 1 },
     { value: 'USD', label: 'دولار أمريكي', rate: '' },
@@ -4882,13 +5071,13 @@ const ValleyFoodsHRModules = (function () {
    * server-side sort only decides WHICH rows the limit keeps, not their order.
    */
   function getValleyPurchasingCosting_(data, user, dbId) {
-    var limit = Number(data && data.limit) || 10;
+    var limit = Number(data && data.limit) || 20;
     settingsEnsureSheet_(dbId, PURCHASING_COSTING_SHEET, PURCHASING_COSTING_HEADERS);
     settingsEnsureSheet_(dbId, PURCHASING_LINE_SHEET, PURCHASING_LINE_HEADERS);
     var rows = getAllRecords_(dbId, PURCHASING_COSTING_SHEET);
     rows.sort(function (a, b) { return (Number(b.id) || 0) - (Number(a.id) || 0); });
-    /* The from/to range narrows the set BEFORE the newest-10 slice, so the 10
-       rows the list shows are the newest 10 inside the range. */
+    /* The from/to range narrows the set BEFORE the newest-20 slice, so the 20
+       rows the list shows are the newest 20 inside the range. */
     rows = vfBoundRows_(rows, data, 'Reciept Date');
     if (!data || !data.loadAll) rows = rows.slice(0, limit);
     /* U-46. Whole sheet rows, so every landed-cost column rides along. Code,
@@ -4896,6 +5085,17 @@ const ValleyFoodsHRModules = (function () {
        which is what the list needs to stay navigable and approvable. */
     var _purCost = vfCanSeeCost_(user);
     if (!_purCost) vfStripCostAll_(rows, VF_COST_KEYS.pur_header);
+    /* Internal request markers never leave the server: strip them from every
+       user-facing row (ordinary tables, edit form, reports). */
+    rows.forEach(function (r) { purchasingStripHeaderInternal_(r); });
+    /* As-stored wall dates: canonicalize Date/serial cells to 'yyyy-MM-dd'
+     * strings so the browser never UTC-shifts them (2026-09-19 -> 2026-09-18).
+     * Applied AFTER vfBoundRows_ so range filtering still sees real Dates. */
+    rows.forEach(function (r) {
+      r['Reciept Date'] = vfDateStr_(r['Reciept Date']);
+      if (r.quality_approval_time) r.quality_approval_time = vfDateTimeStr_(r.quality_approval_time);
+      if (r.approval_time) r.approval_time = vfDateTimeStr_(r.approval_time);
+    });
     var out = {
       status: 'success',
       headers: rows,
@@ -4943,8 +5143,20 @@ const ValleyFoodsHRModules = (function () {
           String(prodMap[String(l.product)] || '') !== product) return false;
       return true;
     }
-    /* Lines date-bounded first, so the range applies to inlines as well. */
-    var boundLines = vfBoundRows_(lines, data, 'receipt_date').filter(lineMatches_);
+    /* Lines date-bounded first, so the range applies to inlines as well. Only
+       the authoritative generation per document counts: staged leftovers from
+       an interrupted replacement must never inflate report totals. Headerless
+       (orphan) lines stay visible rather than silently disappearing. */
+    var headerByCode = {};
+    rows.forEach(function (r) { headerByCode[String(r.Code)] = r; });
+    function lineIsAuthoritative_(l) {
+      var h = headerByCode[String(l.code)];
+      if (!h) return true;
+      var active = String(h.active_line_generation || '');
+      var gen = String(l.line_generation || '');
+      return active ? gen === active : gen === '';
+    }
+    var boundLines = vfBoundRows_(lines, data, 'receipt_date').filter(lineMatches_).filter(lineIsAuthoritative_);
     var codesWithProduct = {};
     if (product) boundLines.forEach(function (l) { codesWithProduct[String(l.code)] = true; });
 
@@ -4954,7 +5166,7 @@ const ValleyFoodsHRModules = (function () {
         Code: r.Code,
         supplier_name: supMap[String(r['Supplier Name'])] || r['Supplier Name'] || '-',
         supplier_ref: (r['Supplier Name'] == null || r['Supplier Name'] === '') ? '' : String(r['Supplier Name']),
-        receipt_date: r['Reciept Date'],
+        receipt_date: vfDateStr_(r['Reciept Date']),
         approval_status: r.approval_status || 'Pending',
         total_costs: canCost ? Math.round(cost * 100) / 100 : 0,
         'مسلسل': i + 1
@@ -4989,7 +5201,7 @@ const ValleyFoodsHRModules = (function () {
         vendor: supMap[String(l.vendor)] || l.vendor || '-',
         product: prodMap[String(l.product)] || l.product || '-',
         product_category: l.product_category || '',
-        receipt_date: l.receipt_date || '',
+        receipt_date: vfDateStr_(l.receipt_date) || '',
         qty: Number(l.qty) || 0,
         unit_price: Number(l.unit_price) || 0,
         other_cost: Number(l.other_cost) || 0,
@@ -5086,9 +5298,11 @@ const ValleyFoodsHRModules = (function () {
   function getValleyPurchasingLines_(data, user, dbId) {
     var code = String((data && data.code) || '').trim();
     settingsEnsureSheet_(dbId, PURCHASING_LINE_SHEET, PURCHASING_LINE_HEADERS);
-    var rows = getAllRecords_(dbId, PURCHASING_LINE_SHEET).filter(function (r) {
-      return String(r.code) === code;
-    });
+    /* Authoritative generation only; internal markers stripped. */
+    var header = getAllRecords_(dbId, PURCHASING_COSTING_SHEET).filter(function (r) {
+      return String(r.Code) === code;
+    })[0] || null;
+    var rows = purchasingActiveLines_(getAllRecords_(dbId, PURCHASING_LINE_SHEET), code, header);
     /* U-46. product, vendor, qty, lot, dates, currency and movement type stay;
        the per-line money columns go. See the save guard in
        saveValleyPurchasingCosting_ — this endpoint feeds the edit form as well
@@ -5096,35 +5310,384 @@ const ValleyFoodsHRModules = (function () {
        the blanks it was given back over the stored figures. */
     var _plCost = vfCanSeeCost_(user);
     if (!_plCost) vfStripCostAll_(rows, VF_COST_KEYS.pur_line);
+    rows.forEach(function (r) { purchasingStripLineInternal_(r); });
+    /* As-stored wall dates for the edit/view form date inputs. */
+    rows.forEach(function (r) {
+      r.receipt_date = vfDateStr_(r.receipt_date);
+      r.invoice_date = vfDateStr_(r.invoice_date);
+      if (r['Production date']) r['Production date'] = vfDateStr_(r['Production date']);
+      if (r['Expiry date']) r['Expiry date'] = vfDateStr_(r['Expiry date']);
+    });
     return { status: 'success', lines: rows, can_see_cost: _plCost };
   }
 
   /* Section checkpoints share the final-save rules but persist one section at
    * a time: header checkpoints never touch child rows, and lines checkpoints
-   * never rewrite the header. */
-  function purchasingCheckpointHeader_(data, user, dbId) {
+   * never rewrite the header.
+   *
+   * Pre-mutation refusals below throw via notApplied_: deterministic checks
+   * evaluated before the handler's first sheet write, so the request-guard
+   * ledger records a confirmed failure (REQUEST_NOT_APPLIED) instead of an
+   * uncertain outcome. Throws raised after a write attempt stay plain. */
+  function vfNotApplied_(message) {
+    var e = new Error(message);
+    e.notApplied = true; e.code = 'REQUEST_NOT_APPLIED';
+    throw e;
+  }
+  /* ── Durable recovery primitives (staged line generations) ──────────────
+   * A receipt row alone cannot prove what the business tables hold: the
+   * mutation may have succeeded while receipt finalization failed. Every
+   * purchasing mutation therefore stamps its request identity onto the
+   * business rows, and line replacement is staged:
+   *   1. the complete new line set is written under a deterministic
+   *      generation derived from the request ID;
+   *   2. the row count and a canonical hash are verified;
+   *   3. only then does the header's active_line_generation switch;
+   *   4. inactive generations are cleaned up afterwards, bounded.
+   * The previously active set is never deleted before its replacement is
+   * verified, so an interruption always leaves a complete authoritative set
+   * behind, and a retry can detect, resume, or replay without duplicating. */
+  var PURCHASING_LINE_WRITE_CAP_ = 2000;
+  function purchasingNormValue_(v) {
+    if (v === null || v === undefined) return '';
+    if (v instanceof Date) {
+      var t = v.getTime();
+      if (isNaN(t)) return '';
+      try { return Utilities.formatDate(v, Session.getScriptTimeZone(), 'yyyy-MM-dd'); }
+      catch (fmtErr) { return v.toISOString().slice(0, 10); }
+    }
+    if (typeof v === 'number') {
+      if (isNaN(v)) return '';
+      return String(Math.round(v * 1000000) / 1000000);
+    }
+    return String(v);
+  }
+  var PURCHASING_OP_LINE_KEYS_ = ['product', 'qty', 'unit_price', 'other_cost', 'total_cost',
+    'movement_type', 'lot_identification', 'receipt_date', 'invoice_date',
+    'Production date', 'Expiry date', 'sales_qty', 'sales_value', 'sales_value_amount',
+    'unit_cost', 'currency', 'exchange_rate', 'vendor'];
+  /* Stable canonical hash of the normalized purchasing payload. Excludes
+     transport-only fields (__request_id/__request_owner) and server-assigned
+     identity (unique_id/id/user/version/markers/approvals) so equal business
+     intent hashes equal. Line order is preserved (meaningful). */
+  function purchasingOperationHash_(d) {
+    var src = d || {}, hdr = src.header || {}, lines = src.lines || [];
+    var skip = { __request_id: 1, __request_owner: 1, unique_id: 1, id: 1, user: 1, user_name: 1,
+      version: 1, record_uid: 1, approval_status: 1, approval: 1, approval_time: 1,
+      quality_approval_status: 1, quality_approval: 1, quality_approval_time: 1,
+      'Related valley_product_purchasings': 1, code_identification: 1,
+      last_request_id: 1, active_line_generation: 1, operation_state: 1, operation_hash: 1 };
+    var nh = {};
+    Object.keys(hdr).forEach(function (k) {
+      if (skip[k]) return;
+      nh[k] = purchasingNormValue_(hdr[k]);
+    });
+    var nl = (Array.isArray(lines) ? lines : []).map(function (l) {
+      var m = {};
+      PURCHASING_OP_LINE_KEYS_.forEach(function (k) { m[k] = purchasingNormValue_(l ? l[k] : ''); });
+      return m;
+    });
+    return stableHash64_(stableCanonical_({ header: nh, lines: nl }));
+  }
+  /* Deterministic generation ID for a request: retries find their own staged
+     rows instead of appending duplicates. */
+  function purchasingGenerationId_(requestId) {
+    return 'g_' + String(requestId || '').replace(/[^A-Za-z0-9]/g, '').slice(0, 24);
+  }
+  /* True when the live line sheet carries the marker columns (post-migration).
+     Legacy sheets fall back to the pre-generation write path. */
+  function purchasingLineMarkersReady_(lineHeaders) {
+    var names = (lineHeaders || []).map(function (h) { return String(h).trim().toLowerCase(); });
+    return names.indexOf('line_generation') !== -1 && names.indexOf('request_id') !== -1 &&
+      names.indexOf('generation_hash') !== -1;
+  }
+  /* Header whose last successful mutation carries this request ID. Scanned
+     (recovery path only); Code is not consulted so renames stay recoverable. */
+  function purchasingFindHeaderByRequest_(dbId, requestId) {
+    var want = String(requestId || '');
+    if (!want) return null;
+    var rows = getAllRecords_(dbId, PURCHASING_COSTING_SHEET);
+    for (var i = 0; i < rows.length; i++) {
+      if (String(rows[i].last_request_id || '') === want) return rows[i];
+    }
+    return null;
+  }
+  /* Authoritative lines for a document: the header's active generation, or —
+     for legacy documents never rewritten — rows without a generation. */
+  function purchasingActiveLines_(allLines, code, header) {
+    var active = header ? String(header.active_line_generation || '') : '';
+    return (allLines || []).filter(function (r) {
+      if (String(r.code) !== String(code)) return false;
+      var gen = String(r.line_generation || '');
+      return active ? gen === active : gen === '';
+    });
+  }
+  /* Row-by-row business comparison of authoritative lines vs a payload. */
+  function purchasingLineRowsMatch_(savedRows, lines) {
+    var keys = ['product', 'qty', 'unit_price', 'other_cost', 'total_cost', 'movement_type',
+      'lot_identification', 'receipt_date', 'invoice_date', 'Production date', 'Expiry date'];
+    if (!Array.isArray(lines) || (savedRows || []).length !== lines.length) return false;
+    for (var i = 0; i < savedRows.length; i++) {
+      for (var j = 0; j < keys.length; j++) {
+        var k = keys[j];
+        if (!purchasingSameValue_(savedRows[i][k], lines[i] && lines[i][k])) return false;
+      }
+    }
+    return true;
+  }
+  /* Internal request markers never leave the server. Both strippers delete in
+     place (and return the row) so they work as forEach callbacks on live
+     record objects. */
+  function purchasingStripLineInternal_(row) {
+    if (!row || typeof row !== 'object') return row;
+    PURCHASING_LINE_MARKERS_.forEach(function (k) { delete row[k]; });
+    Object.keys(row).forEach(function (k) {
+      if (String(k).toLowerCase() === 'request_id') delete row[k];
+    });
+    return row;
+  }
+  function purchasingStripHeaderInternal_(rec) {
+    if (!rec || typeof rec !== 'object') return rec;
+    PURCHASING_HEADER_MARKERS_.forEach(function (k) { delete rec[k]; });
+    Object.keys(rec).forEach(function (k) {
+      if (String(k).toLowerCase() === 'last_request_id') delete rec[k];
+    });
+    return rec;
+  }
+  /* Formula-column helpers shared by the staged and legacy line writers:
+     movement_code and product_category are spreadsheet formulas addressing the
+     row's own cells, so they are rebuilt per row from live header positions. */
+  function formulaCols_(lineHeaders) {
+    function col(name) { var i = (lineHeaders || []).findIndex(function (h) { return String(h).trim().toLowerCase() === name; }); if (i < 0) return null; var n = i + 1, s = ''; while (n) { var m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26); } return s; }
+    return { id: col('id'), code: col('code'), product: col('product'), receipt: col('receipt_date') };
+  }
+  function canFormulaFor_(lineHeaders) {
+    var cc = formulaCols_(lineHeaders);
+    return !!(cc.id && cc.code && cc.product && cc.receipt);
+  }
+  /* Rows already staged under (code, generation). */
+  function purchasingStagedRows_(dbId, code, generation) {
+    return getAllRecords_(dbId, PURCHASING_LINE_SHEET).filter(function (r) {
+      return String(r.code) === String(code) && String(r.line_generation || '') === String(generation);
+    });
+  }
+  /* Bounded delete of staged rows for one (code, generation). Only ever
+     targets a non-authoritative generation: callers activate first. */
+  function purchasingDeleteStaged_(lineSheet, lineHeaders, code, generation) {
+    var codeIdx = -1, genIdx = -1;
+    for (var i = 0; i < lineHeaders.length; i++) {
+      var n = String(lineHeaders[i]).trim().toLowerCase();
+      if (n === 'code') codeIdx = i;
+      if (n === 'line_generation') genIdx = i;
+    }
+    if (codeIdx === -1 || genIdx === -1) return 0;
+    var values = lineSheet.getDataRange().getValues();
+    var runs = [], runStart = -1, deleted = 0;
+    for (var r = values.length - 1; r >= 1; r--) {
+      var hit = String(values[r][codeIdx]) === String(code) && String(values[r][genIdx] || '') === String(generation);
+      if (hit) {
+        deleted++;
+        if (deleted > PURCHASING_LINE_WRITE_CAP_) throw new Error('Staged cleanup exceeds the bounded cap');
+        if (runStart === -1) runStart = r + 1;
+      } else if (runStart !== -1) {
+        lineSheet.deleteRows(r + 2, runStart - (r + 2) + 1);
+        runStart = -1;
+      }
+    }
+    if (runStart !== -1) lineSheet.deleteRows(2, runStart - 1);
+    if (deleted) noteMutation_(lineSheet);
+    return deleted;
+  }
+  /* Switch authority to a verified generation, stamp the request, and clean
+     up superseded generations (bounded, best-effort: cleanup failure never
+     fails an otherwise complete operation). opts: {criteria} is the header's
+     current Code (the final save renames the header before activating, so its
+     criteria is the new code; checkpoints never rename, so theirs is the
+     stored code); {cleanupOld} removes a renamed-away line set only after the
+     new generation is authoritative. */
+  function purchasingActivateGeneration_(dbId, code, generation, requestId, opHash, opts) {
+    var o = opts || {};
+    var crit = o.criteria || code;
+    var sheet = getSheet_(PURCHASING_COSTING_SHEET, dbId);
+    var patch = { active_line_generation: generation, last_request_id: requestId,
+      operation_hash: opHash, operation_state: 'complete' };
+    if (code !== crit) patch.Code = code;
+    if (!patchRowByCriteria_(sheet, 'Code', crit, patch)) throw new Error('عملية الشراء غير موجودة');
+    try { purchasingCleanupInactiveGenerations_(dbId, code, generation, o.cleanupOld || ''); }
+    catch (cleanupErr) { try { console.log('purchasing generation cleanup deferred: ' + cleanupErr.message); } catch (ignore) {} }
+    return true;
+  }
+  /* Delete non-authoritative line rows for a document (older generations and,
+     once a generation is active, legacy unmarked rows), bounded. Also used by
+     the admin maintenance path. Never touches the active generation. */
+  function purchasingCleanupInactiveGenerations_(dbId, code, activeGeneration, oldCode) {
+    var lineSheet = getSheet_(PURCHASING_LINE_SHEET, dbId);
+    var headers = getHeaders_(lineSheet);
+    if (!purchasingLineMarkersReady_(headers)) return 0;
+    var active = String(activeGeneration || '');
+    if (!active) return 0;
+    var values = lineSheet.getDataRange().getValues();
+    var codeIdx = -1, genIdx = -1;
+    for (var i = 0; i < headers.length; i++) {
+      var n = String(headers[i]).trim().toLowerCase();
+      if (n === 'code') codeIdx = i;
+      if (n === 'line_generation') genIdx = i;
+    }
+    if (codeIdx === -1) return 0;
+    var total = 0, runStart = -1;
+    function flush(runEndExclusive, at) {
+      if (runStart === -1) return;
+      lineSheet.deleteRows(at, runEndExclusive - at);
+      runStart = -1;
+    }
+    for (var r = values.length - 1; r >= 1; r--) {
+      var rowCode = String(values[r][codeIdx]);
+      var inScope = rowCode === String(code) || (oldCode && rowCode === String(oldCode));
+      var stale = inScope && String(values[r][genIdx] || '') !== active;
+      if (stale) {
+        total++;
+        if (total > PURCHASING_LINE_WRITE_CAP_) throw new Error('Generation cleanup exceeds the bounded cap');
+        if (runStart === -1) runStart = r + 1;
+      } else if (runStart !== -1) { flush(runStart + 1, r + 2); }
+    }
+    if (runStart !== -1) flush(runStart + 1, 2);
+    if (total) { noteMutation_(lineSheet); vfFlush_(); }
+    return total;
+  }
+  /* Recovery is deliberately conservative.  It never replays a destructive
+   * line replacement merely because a receipt is old.  A request is proven
+   * applied only when the stored header/lines equal the original payload; an
+   * absent create may be safely resumed, while a conflicting partial write is
+   * left uncertain for review. */
+  function purchasingSameValue_(a, b) {
+    if (a instanceof Date) a = Utilities.formatDate(a, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+    if (b instanceof Date) b = Utilities.formatDate(b, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+    if (a == null || a === '') return b == null || b === '';
+    if (b == null || b === '') return false;
+    var na = Number(a), nb = Number(b);
+    if (String(a).trim() !== '' && String(b).trim() !== '' && !isNaN(na) && !isNaN(nb)) return Math.abs(na - nb) <= 0.000001;
+    return String(a).slice(0, 10) === String(b).slice(0, 10);
+  }
+  function purchasingHeaderMatches_(hdr, rec) {
+    var ok = true;
+    Object.keys(hdr || {}).forEach(function (k) { if (ok && rec[k] !== undefined && !purchasingSameValue_(rec[k], hdr[k])) ok = false; });
+    return ok;
+  }
+  function purchasingRecoveryUncertain_(message) { var e = new Error(message); throw e; }
+  /* Marker-bound recovery proof. Never infers success from a matching Code
+   * alone: only a header stamped with THIS request ID and the SAME operation
+   * hash counts as evidence. Returns a success result when application is
+   * proven (the guard finalizes the receipt as done with it), throws
+   * vfNotApplied_ for proven non-application, throws a plain error when human
+   * review is required, and returns null when the ordinary handler must run —
+   * that path is resume-capable (idempotent replay, staged lines), so falling
+   * through is a safe resume, never a blind replay. */
+  function purchasingRecoverRequest_(action, data, dbId, guardCtx) {
+    var reqId = (guardCtx && guardCtx.requestId) || '';
+    var d = data || {}, hdr = d.header || {}, code = String(hdr.Code || d.code || '').trim();
+    if (!code) vfNotApplied_('لا يمكن مطابقة الطلب المؤجل بدون Code');
+    /* Hash and compare the same canonical business Code used by the original
+       write. This is still the user's value (including case/leading zeros),
+       never the request ID. */
+    if (d.header && typeof d.header === 'object') hdr.Code = code;
+    else d.code = code;
+    if (!reqId) return null;
+    /* A transport failure can occur before the first handler read, so the
+       business sheets may not exist yet.  Creating their declared schemas is
+       setup, not a replay of the business mutation. */
+    settingsEnsureSheet_(dbId, PURCHASING_COSTING_SHEET, PURCHASING_COSTING_HEADERS);
+    settingsEnsureSheet_(dbId, PURCHASING_LINE_SHEET, PURCHASING_LINE_HEADERS);
+    var markerRec = purchasingFindHeaderByRequest_(dbId, reqId);
+    if (action === 'save_valley_purchasing_header_checkpoint') {
+      var opHashH = purchasingOperationHash_({ header: hdr, lines: [] });
+      if (markerRec && String(markerRec.operation_hash || '') === opHashH &&
+          purchasingHeaderMatches_(hdr, markerRec)) {
+        return { status: 'success', message: 'تم حفظ بيانات العملية', code: String(markerRec.Code || code), checkpoint: 'header', recovered: true };
+      }
+      if (markerRec && String(markerRec.operation_hash || '') === opHashH) {
+        purchasingRecoveryUncertain_('REQUEST_REVIEW_REQUIRED: بيانات الرأس المطابقة للطلب تغيرت بعد الحفظ');
+      }
+      if (markerRec) purchasingRecoveryUncertain_('REQUEST_REVIEW_REQUIRED: رقم الطلب مستخدم لبيانات مختلفة');
+      return null; // no marker: the ordinary path decides (create resumes, duplicate refuses)
+    }
+    if (action === 'save_valley_purchasing_lines_checkpoint') {
+      var lines = d.lines || [];
+      var opHashL = purchasingOperationHash_({ header: { Code: code }, lines: lines });
+      if (markerRec && String(markerRec.operation_hash || '') === opHashL &&
+          purchasingLineRowsMatch_(purchasingActiveLines_(getAllRecords_(dbId, PURCHASING_LINE_SHEET), code, markerRec), lines)) {
+        return { status: 'success', message: 'تم حفظ الأصناف', code: code, checkpoint: 'lines', line_count: lines.length, recovered: true };
+      }
+      if (markerRec && String(markerRec.operation_hash || '') === opHashL) {
+        return null; // staged resume continues in the ordinary path (version re-check skipped for our own marker)
+      }
+      if (markerRec) purchasingRecoveryUncertain_('REQUEST_REVIEW_REQUIRED: رقم الطلب مستخدم لبيانات مختلفة');
+      return null;
+    }
+    if (action === 'save_valley_purchasing_costing') {
+      var opHashF = purchasingOperationHash_({ header: hdr, lines: d.lines || [] });
+      if (markerRec && String(markerRec.operation_hash || '') === opHashF &&
+          purchasingHeaderMatches_(hdr, markerRec) &&
+          purchasingLineRowsMatch_(purchasingActiveLines_(getAllRecords_(dbId, PURCHASING_LINE_SHEET), String(markerRec.Code || code), markerRec), d.lines || [])) {
+        return { status: 'success', message: 'تمت مطابقة الحفظ السابق', code: String(markerRec.Code || code), recovered: true, record: purchasingStripHeaderInternal_(markerRec) };
+      }
+      if (markerRec && String(markerRec.operation_hash || '') === opHashF) {
+        return null; // partial application resumes in the ordinary path
+      }
+      if (markerRec) purchasingRecoveryUncertain_('REQUEST_REVIEW_REQUIRED: رقم الطلب مستخدم لبيانات مختلفة');
+      return null;
+    }
+    return null;
+  }
+  function purchasingCheckpointHeader_(data, user, dbId, guardCtx) {
+    var reqId = (guardCtx && guardCtx.requestId) || '';
+    if (guardCtx && guardCtx.recovering) {
+      var recovered = purchasingRecoverRequest_('save_valley_purchasing_header_checkpoint', data, dbId, guardCtx);
+      if (recovered) return recovered;
+    }
     var d = data || {}, hdr = d.header || {};
     var code = String(hdr.Code != null ? hdr.Code : '').trim();
-    if (!code) throw new Error('الكود (Code) مطلوب');
-    if (!String(hdr.Type != null ? hdr.Type : '').trim()) throw new Error('النوع مطلوب');
-    if (!String(hdr['Shipping Type'] != null ? hdr['Shipping Type'] : '').trim()) throw new Error('نوع الشحن مطلوب');
-    if (!vfCanSeeCost_(user)) throw new Error('لا تملك صلاحية عرض أو تعديل التكاليف (valley_cost_view) — لا يمكن حفظ عملية شراء.');
+    if (!code) vfNotApplied_('الكود (Code) مطلوب');
+    if (!String(hdr.Type != null ? hdr.Type : '').trim()) vfNotApplied_('النوع مطلوب');
+    if (!String(hdr['Shipping Type'] != null ? hdr['Shipping Type'] : '').trim()) vfNotApplied_('نوع الشحن مطلوب');
+    if (!vfCanSeeCost_(user)) vfNotApplied_('لا تملك صلاحية عرض أو تعديل التكاليف (valley_cost_view) — لا يمكن حفظ عملية شراء.');
     var originalCode = String(d.originalCode != null ? d.originalCode : '').trim();
+    if (originalCode && code !== originalCode) {
+      vfNotApplied_('كود عملية الشراء ثابت بعد الإنشاء ولا يمكن تغييره.');
+    }
+    /* Store one canonical user-entered value in both header.Code and every
+       line.code. This preserves case and leading zeros; only accidental edge
+       whitespace is removed. Request IDs never replace the business Code. */
+    hdr.Code = code;
     settingsEnsureSheet_(dbId, PURCHASING_COSTING_SHEET, PURCHASING_COSTING_HEADERS);
+    /* Request markers bind this mutation to its request so a retry replays
+       instead of duplicating. Without a request ID (internal callers) the
+       legacy unmarked path applies. */
+    var opHash = reqId ? purchasingOperationHash_({ header: hdr, lines: [] }) : '';
     var sheet = getSheet_(PURCHASING_COSTING_SHEET, dbId), rows = getAllRecords_(dbId, PURCHASING_COSTING_SHEET);
     var existing = originalCode ? rows.find(function (r) { return String(r.Code) === originalCode; }) : null;
     var duplicate = rows.some(function (r) { return String(r.Code) === code && (!existing || String(r.Code) !== originalCode); });
-    if (duplicate) throw new Error('الكود (Code) مكرر — يجب أن يكون فريداً');
+    if (duplicate) vfNotApplied_('الكود (Code) مكرر — يجب أن يكون فريداً');
     if (existing) {
-      if (String(existing.approval_status || '').toLowerCase() === 'approved' || String(existing.quality_approval_status || '').toLowerCase() === 'approved') throw new Error('لا يمكن تعديل عملية شراء معتمدة. يلزم إجراء إعادة فتح مصرح به خارج الحفظ العادي.');
+      /* Phase 2: dual-approved edit-block routed through transition table (no inline cur check).
+       * 'edit' pseudo-target: Pending->edit allowed, Approved->edit blocked. */
+      assertTransition_('vf_purchasing', String(existing.approval_status || 'Pending'), 'edit', 'لا يمكن تعديل عملية شراء معتمدة. يلزم إجراء إعادة فتح مصرح به خارج الحفظ العادي.');
+      assertTransition_('vf_purchasing', String(existing.quality_approval_status || 'Pending'), 'edit', 'لا يمكن تعديل عملية شراء معتمدة. يلزم إجراء إعادة فتح مصرح به خارج الحفظ العادي.');
+      /* Idempotent replay: the same request already patched this header. */
+      if (reqId && String(existing.last_request_id || '') === reqId && String(existing.operation_hash || '') === opHash) {
+        return { status: 'success', message: 'تم حفظ بيانات العملية', code: code, checkpoint: 'header', recovered: true };
+      }
       var updates = {};
       PURCHASING_COSTING_HEADERS.forEach(function (col) {
         if (['id', 'unique_id', 'user', 'user_name', 'approval_status', 'approval', 'approval_time', 'quality_approval_status', 'quality_approval', 'quality_approval_time', 'Related valley_product_purchasings', 'code_identification'].indexOf(col) !== -1) return;
+        if (PURCHASING_HEADER_MARKERS_.indexOf(col) !== -1) return;
         if (hdr[col] !== undefined && hdr[col] !== null) updates[col] = hdr[col];
       });
       PURCHASING_NUMERIC.forEach(function (c) { if (updates[c] !== '' && updates[c] !== undefined) updates[c] = Number(updates[c]); });
       if (code !== originalCode) updates.Code = code;
-      if (!updateRowByCriteria_(sheet, 'Code', originalCode, updates)) throw new Error('عملية الشراء غير موجودة');
+      var __hdrVer = checkRowVersion_(existing, (d.version !== undefined ? d.version : hdr.version));
+      updates.version = __hdrVer + 1;
+      if (reqId) { updates.last_request_id = reqId; updates.operation_hash = opHash; updates.operation_state = 'in_progress'; }
+      if (!patchRowByCriteria_(sheet, 'Code', originalCode, updates)) throw new Error('عملية الشراء غير موجودة');
       try { logHistory_(dbId, PURCHASING_COSTING_SHEET, existing.record_uid || ('checkpoint_update_' + originalCode), code, (user && user.email) || '', 'update', Object.assign({}, existing, updates), existing); } catch (e) {}
       vfFlush_();
       return { status: 'success', message: 'تم حفظ بيانات العملية', code: code, checkpoint: 'header' };
@@ -5132,34 +5695,91 @@ const ValleyFoodsHRModules = (function () {
     var record = {};
     PURCHASING_COSTING_HEADERS.forEach(function (col) {
       if (['id', 'unique_id', 'user', 'user_name', 'approval_status', 'approval', 'approval_time', 'quality_approval_status', 'quality_approval', 'quality_approval_time', 'Related valley_product_purchasings', 'code_identification'].indexOf(col) !== -1) return;
+      if (PURCHASING_HEADER_MARKERS_.indexOf(col) !== -1) return;
       var v = hdr[col]; record[col] = v === undefined || v === null ? '' : v;
     });
     PURCHASING_NUMERIC.forEach(function (c) { if (record[c] !== '' && record[c] !== undefined) record[c] = Number(record[c]); });
     record.unique_id = uid16_(); record.user = (user && user.email) || ''; record.user_name = (user && user.name) || (user && user.email) || '';
+    if (reqId) { record.last_request_id = reqId; record.operation_hash = opHash; record.operation_state = 'in_progress'; record.active_line_generation = ''; }
     addRecord_(dbId, PURCHASING_COSTING_SHEET, record, ['Code']);
     try { logHistory_(dbId, PURCHASING_COSTING_SHEET, 'checkpoint_create_' + code, code, (user && user.email) || '', 'create', record, null); } catch (e) {}
     vfFlush_();
     return { status: 'success', message: 'تم حفظ بيانات العملية', code: code, checkpoint: 'header' };
   }
 
-  function purchasingCheckpointLines_(data, user, dbId) {
+  function purchasingCheckpointLines_(data, user, dbId, guardCtx) {
+    var reqId = (guardCtx && guardCtx.requestId) || '';
+    if (guardCtx && guardCtx.recovering) {
+      var recovered = purchasingRecoverRequest_('save_valley_purchasing_lines_checkpoint', data, dbId, guardCtx);
+      if (recovered) return recovered;
+    }
     var d = data || {}, code = String(d.code || '').trim(), originalCode = String(d.originalCode || '').trim(), lines = d.lines || [];
-    if (!code) throw new Error('الكود (Code) مطلوب');
-    if (!Array.isArray(lines) || !lines.length) throw new Error('يجب إضافة صنف واحد على الأقل');
+    if (!code) vfNotApplied_('الكود (Code) مطلوب');
+    if (originalCode && code !== originalCode) {
+      vfNotApplied_('كود عملية الشراء ثابت بعد الإنشاء ولا يمكن تغييره.');
+    }
+    if (!Array.isArray(lines) || !lines.length) vfNotApplied_('يجب إضافة صنف واحد على الأقل');
     var missing = []; lines.forEach(function (l, i) { if (!String((l && l.movement_type) || '').trim()) missing.push(i + 1); });
-    if (missing.length) throw new Error('نوع الحركة مطلوب لكل صنف — الأصناف رقم: ' + missing.join('، '));
-    if (!vfCanSeeCost_(user)) throw new Error('لا تملك صلاحية عرض أو تعديل التكاليف (valley_cost_view) — لا يمكن حفظ عملية شراء.');
-    settingsEnsureSheet_(dbId, PURCHASING_COSTING_SHEET, PURCHASING_COSTING_HEADERS); settingsEnsureSheet_(dbId, PURCHASING_LINE_SHEET, PURCHASING_LINE_HEADERS);
+    if (missing.length) vfNotApplied_('نوع الحركة مطلوب لكل صنف — الأصناف رقم: ' + missing.join('، '));
+    if (!vfCanSeeCost_(user)) vfNotApplied_('لا تملك صلاحية عرض أو تعديل التكاليف (valley_cost_view) — لا يمكن حفظ عملية شراء.');
+    settingsEnsureSheet_(dbId, PURCHASING_COSTING_SHEET, PURCHASING_LINE_HEADERS); settingsEnsureSheet_(dbId, PURCHASING_LINE_SHEET, PURCHASING_LINE_HEADERS);
     var headers = getAllRecords_(dbId, PURCHASING_COSTING_SHEET), header = headers.find(function (r) { return String(r.Code) === code; });
-    if (!header) throw new Error('عملية الشراء غير موجودة — احفظ البيانات الأساسية أولاً');
-    if (String(header.approval_status || '').toLowerCase() === 'approved' || String(header.quality_approval_status || '').toLowerCase() === 'approved') throw new Error('لا يمكن تعديل عملية شراء معتمدة. يلزم إجراء إعادة فتح مصرح به خارج الحفظ العادي.');
-    var lineSheet = getSheet_(PURCHASING_LINE_SHEET, dbId); deleteRowsByCriteria_(lineSheet, 'code', originalCode && originalCode !== code ? originalCode : code);
+    if (!header) vfNotApplied_('عملية الشراء غير موجودة — احفظ البيانات الأساسية أولاً');
+    /* Phase 2: dual-approved edit-block routed through transition table (no inline cur check). */
+    assertTransition_('vf_purchasing', String(header.approval_status || 'Pending'), 'edit', 'لا يمكن تعديل عملية شراء معتمدة. يلزم إجراء إعادة فتح مصرح به خارج الحفظ العادي.');
+    assertTransition_('vf_purchasing', String(header.quality_approval_status || 'Pending'), 'edit', 'لا يمكن تعديل عملية شراء معتمدة. يلزم إجراء إعادة فتح مصرح به خارج الحفظ العادي.');
+    var opHash = reqId ? purchasingOperationHash_({ header: { Code: code }, lines: lines }) : '';
+    /* Idempotent replay: this request already made these lines authoritative. */
+    if (reqId && String(header.last_request_id || '') === reqId && String(header.operation_hash || '') === opHash &&
+        purchasingLineRowsMatch_(purchasingActiveLines_(getAllRecords_(dbId, PURCHASING_LINE_SHEET), code, header), lines)) {
+      return { status: 'success', message: 'تم حفظ الأصناف', code: code, checkpoint: 'lines', line_count: lines.length, recovered: true };
+    }
+    /* Resuming our own interrupted attempt: the version was already bumped, so
+       checking the client version again would falsely refuse. */
+    var ownInFlight = !!(reqId && String(header.last_request_id || '') === reqId);
+    var __linesHdrVer = checkRowVersion_(header, ownInFlight ? getRowVersion_(header) : d.version);
+    var lineSheet = getSheet_(PURCHASING_LINE_SHEET, dbId);
+    var lineHeaders = getHeaders_(lineSheet);
+    var useStaged = !!(reqId && purchasingLineMarkersReady_(lineHeaders));
+    var generation = useStaged ? purchasingGenerationId_(reqId) : '';
+    if (!useStaged) {
+      try { patchRowByCriteria_(getSheet_(PURCHASING_COSTING_SHEET, dbId), 'Code', code, { version: __linesHdrVer + 1 }); } catch (eVer) {}
+      deleteRowsByCriteria_(lineSheet, 'code', originalCode && originalCode !== code ? originalCode : code);
+    } else if (!ownInFlight || String(header.operation_hash || '') !== opHash) {
+      /* First touch of this request: bump the version and stamp ownership. A
+         resumed attempt skips both — they already happened. */
+      try { patchRowByCriteria_(getSheet_(PURCHASING_COSTING_SHEET, dbId), 'Code', code, { version: __linesHdrVer + 1, last_request_id: reqId, operation_hash: opHash }); } catch (eVer) {}
+    }
     var shippingType = header['Shipping Type'] || '', receiptDateStr = header['Reciept Date'] || '', expiryDateStr = '', rd = receiptDateStr ? new Date(receiptDateStr) : null;
     if (rd && !isNaN(rd.getTime())) { rd.setDate(rd.getDate() + 720); expiryDateStr = Utilities.formatDate(rd, Session.getScriptTimeZone(), 'yyyy-MM-dd'); }
     var maps = lines.map(function (l) {
       var place = (shippingType === 'CIF' || shippingType === 'FOB' || shippingType === 'C&F') ? 'مستورد' : (shippingType === 'محلي' ? 'محلي' : ''), qty = Number(l.qty) || 0, unit = Number(l.unit_price) || 0;
-      return { unique_id: uid16_(), code: code, product: l.product || '', product_category: '', vendor: header['Supplier Name'] || l.vendor || '', lot_identification: l.lot_identification || '', qty: qty, unit_price: unit, other_cost: Number(l.other_cost) || 0, total_cost: Number(l.total_cost) || 0, sales_qty: Number(l.sales_qty) || 0, sales_value: Number(l.sales_value) || 0, sales_value_amount: Number(l.sales_value_amount) || 0, unit_cost: Number(l.unit_cost) || 0, movement_type: l.movement_type || '', movement_place: place, receipt_date: l.receipt_date || receiptDateStr, invoice_date: l.invoice_date || receiptDateStr, 'Production date': l['Production date'] || receiptDateStr, 'Expiry date': l['Expiry date'] || expiryDateStr, currency: l.currency || header.Currency || '', exchange_rate: Number(l.exchange_rate) || Number(header['Exchange rate']) || 0, cost_currency: unit * qty, user: (user && user.email) || '' };
+      /* Phase 5: shared calcLineNet_ is source of truth for line net. */
+      var _cc = (typeof calcLineNet_ === 'function') ? calcLineNet_(qty, unit) : unit * qty;
+      return { unique_id: uid16_(), code: code, product: l.product || '', product_category: '', vendor: header['Supplier Name'] || l.vendor || '', lot_identification: l.lot_identification || '', qty: qty, unit_price: unit, other_cost: Number(l.other_cost) || 0, total_cost: Number(l.total_cost) || 0, sales_qty: Number(l.sales_qty) || 0, sales_value: Number(l.sales_value) || 0, sales_value_amount: Number(l.sales_value_amount) || 0, unit_cost: Number(l.unit_cost) || 0, movement_type: l.movement_type || '', movement_place: place, receipt_date: l.receipt_date || receiptDateStr, invoice_date: l.invoice_date || receiptDateStr, 'Production date': l['Production date'] || receiptDateStr, 'Expiry date': l['Expiry date'] || expiryDateStr, currency: l.currency || header.Currency || '', exchange_rate: Number(l.exchange_rate) || Number(header['Exchange rate']) || 0, cost_currency: _cc, user: (user && user.email) || '' };
     });
+    if (useStaged) {
+      /* Staged replacement: the active set is untouched until the complete new
+         generation is written and verified, then authority switches. */
+      for (var mi = 0; mi < maps.length; mi++) {
+        maps[mi].request_id = reqId; maps[mi].line_generation = generation; maps[mi].generation_hash = opHash;
+      }
+      var stagedDone = purchasingStagedRows_(dbId, code, generation).filter(function (r) { return String(r.generation_hash || '') === opHash; });
+      if (stagedDone.length !== maps.length) {
+        purchasingDeleteStaged_(lineSheet, lineHeaders, code, generation);
+        var startId = getNextIdBatch_(dbId, PURCHASING_LINE_SHEET, maps.length), startRow = lineSheet.getLastRow() + 1;
+        var matrix = maps.map(function (m, i) { var row = startRow + i; if (canFormulaFor_(lineHeaders)) { var cc = formulaCols_(lineHeaders); m.movement_code = '=CONCATENATE(' + cc.id + row + ',"-",' + cc.code + row + ',"-",vlookup(' + cc.product + row + ',valley_products!$A:$F,2,0),"-",TEXT(' + cc.receipt + row + ',"DD/MM/YYYY"))'; m.product_category = '=vlookup(VLOOKUP(' + cc.product + row + ',valley_products!A:N,14,0),valley_categories!A:B,2,0)'; } return lineHeaders.map(function (h) { var n = String(h).trim(); if (n.toLowerCase() === 'id') return startId + i; if (m[n] !== undefined) return m[n]; var low = n.toLowerCase(); return m[low] !== undefined ? m[low] : ''; }); });
+        lineSheet.getRange(startRow, 1, matrix.length, lineHeaders.length).setValues(matrix); noteMutation_(lineSheet);
+        var stagedVerify = purchasingStagedRows_(dbId, code, generation);
+        var stagedOk = stagedVerify.length === maps.length;
+        if (stagedOk) stagedVerify.forEach(function (r) { if (String(r.generation_hash || '') !== opHash) stagedOk = false; });
+        if (!stagedOk) throw new Error('تعذر تأكيد كتابة الأصناف — توقفت العملية قبل التفعيل والأصناف السابقة ما زالت سارية');
+      }
+      purchasingActivateGeneration_(dbId, code, generation, reqId, opHash, { criteria: code, cleanupOld: originalCode && originalCode !== code ? originalCode : '' });
+      vfFlush_();
+      try { logHistory_(dbId, PURCHASING_LINE_SHEET, 'checkpoint_lines_' + code, code, (user && user.email) || '', 'update', { code: code, line_count: maps.length }, null); } catch (e) {}
+      return { status: 'success', message: 'تم حفظ الأصناف', code: code, checkpoint: 'lines', line_count: maps.length };
+    }
     var lineHeaders = getHeaders_(lineSheet), startId = getNextIdBatch_(dbId, PURCHASING_LINE_SHEET, maps.length), startRow = lineSheet.getLastRow() + 1;
     function col(name) { var i = lineHeaders.findIndex(function (h) { return String(h).trim().toLowerCase() === name; }); if (i < 0) return null; var n = i + 1, s = ''; while (n) { var m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26); } return s; }
     var CL = { id: col('id'), code: col('code'), product: col('product'), receipt: col('receipt_date') }, canFormula = CL.id && CL.code && CL.product && CL.receipt;
@@ -5169,8 +5789,8 @@ const ValleyFoodsHRModules = (function () {
     return { status: 'success', message: 'تم حفظ الأصناف', code: code, checkpoint: 'lines', line_count: matrix.length };
   }
 
-  function saveValleyPurchasingHeaderCheckpoint_(data, user, dbId) { return purchasingCheckpointHeader_(data, user, dbId); }
-  function saveValleyPurchasingLinesCheckpoint_(data, user, dbId) { return purchasingCheckpointLines_(data, user, dbId); }
+  function saveValleyPurchasingHeaderCheckpoint_(data, user, dbId, guardCtx) { return purchasingCheckpointHeader_(data, user, dbId, guardCtx); }
+  function saveValleyPurchasingLinesCheckpoint_(data, user, dbId, guardCtx) { return purchasingCheckpointLines_(data, user, dbId, guardCtx); }
 
   /* Read-only fast path for the final commit. When both checkpoints already
    * match the submitted payload, return the existing record without rewriting
@@ -5194,27 +5814,34 @@ const ValleyFoodsHRModules = (function () {
     var headerMatches = true;
     Object.keys(hdr).forEach(function (k) { if (headerMatches && rec[k] !== undefined && !same(rec[k], hdr[k])) headerMatches = false; });
     if (!headerMatches) return null;
-    var saved = getAllRecords_(dbId, PURCHASING_LINE_SHEET).filter(function (r) { return String(r.code) === code; });
+    /* Only the authoritative generation counts: staged leftovers from an
+       interrupted attempt must not satisfy the fast path. */
+    var saved = purchasingActiveLines_(getAllRecords_(dbId, PURCHASING_LINE_SHEET), code, rec);
     if (saved.length !== d.lines.length) return null;
     var keys = ['product', 'qty', 'unit_price', 'other_cost', 'total_cost', 'movement_type', 'lot_identification', 'receipt_date', 'invoice_date', 'Production date', 'Expiry date'];
     for (var i = 0; i < saved.length; i++) for (var j = 0; j < keys.length; j++) { var k = keys[j]; if (!same(saved[i][k], d.lines[i][k])) return null; }
-    return rec;
+    return purchasingStripHeaderInternal_(rec);
   }
 
-  function saveValleyPurchasingCosting_(data, user, dbId) {
+  function saveValleyPurchasingCosting_(data, user, dbId, guardCtx) {
     var d = data || {};
     var hdr = d.header || {};
     var lines = d.lines || [];
     var code = String(hdr.Code != null ? hdr.Code : '').trim();
-    if (!code) throw new Error('الكود (Code) مطلوب');
-    if (!String(hdr['Type'] != null ? hdr['Type'] : '').trim()) throw new Error('النوع مطلوب');
+    var reqId = (guardCtx && guardCtx.requestId) || '';
+    if (guardCtx && guardCtx.recovering) {
+      var recovered = purchasingRecoverRequest_('save_valley_purchasing_costing', data, dbId, guardCtx);
+      if (recovered) return recovered;
+    }
+    if (!code) vfNotApplied_('الكود (Code) مطلوب');
+    if (!String(hdr['Type'] != null ? hdr['Type'] : '').trim()) vfNotApplied_('النوع مطلوب');
     if (!String(hdr['Shipping Type'] != null ? hdr['Shipping Type'] : '').trim()) {
-      throw new Error('نوع الشحن مطلوب');
+      vfNotApplied_('نوع الشحن مطلوب');
     }
     /* A purchase with no lines has no cost to distribute and no stock movement
        to make, so it is refused rather than stored as an empty document. */
     if (!Array.isArray(lines) || !lines.length) {
-      throw new Error('يجب إضافة صنف واحد على الأقل');
+      vfNotApplied_('يجب إضافة صنف واحد على الأقل');
     }
     /* movement_type drives the stock movement each line becomes, so a blank one
        is not a default — it is a line that does nothing. Checked server-side as
@@ -5224,7 +5851,7 @@ const ValleyFoodsHRModules = (function () {
       if (!String((l && l.movement_type) != null ? l.movement_type : '').trim()) _missingMovement.push(i + 1);
     });
     if (_missingMovement.length) {
-      throw new Error('نوع الحركة مطلوب لكل صنف — الأصناف رقم: ' + _missingMovement.join('، '));
+      vfNotApplied_('نوع الحركة مطلوب لكل صنف — الأصناف رقم: ' + _missingMovement.join('، '));
     }
 
     /* U-46 + U-47's lesson, applied to purchasing.
@@ -5247,9 +5874,13 @@ const ValleyFoodsHRModules = (function () {
      * first role — until then the fail-open guard makes vfCanSeeCost_ true for
      * everyone. Recorded in VALLEYFOODS_RESULTS.md and NEXT_STEPS_OWNER.md. */
     if (!vfCanSeeCost_(user)) {
-      throw new Error('لا تملك صلاحية عرض أو تعديل التكاليف (valley_cost_view) — لا يمكن حفظ عملية شراء.');
+      vfNotApplied_('لا تملك صلاحية عرض أو تعديل التكاليف (valley_cost_view) — لا يمكن حفظ عملية شراء.');
     }
     var originalCode = String(d.originalCode != null ? d.originalCode : '').trim();
+    if (originalCode && code !== originalCode) {
+      vfNotApplied_('كود عملية الشراء ثابت بعد الإنشاء ولا يمكن تغييره.');
+    }
+    hdr.Code = code;
 
     settingsEnsureSheet_(dbId, PURCHASING_COSTING_SHEET, PURCHASING_COSTING_HEADERS);
     settingsEnsureSheet_(dbId, PURCHASING_LINE_SHEET, PURCHASING_LINE_HEADERS);
@@ -5262,6 +5893,9 @@ const ValleyFoodsHRModules = (function () {
     var existingMatch = rows.filter(function (r) { return String(r.Code) === code; });
     var isEdit = originalCode !== '' && rows.some(function (r) { return String(r.Code) === originalCode; });
     var existingRecord = isEdit ? rows.find(function (r) { return String(r.Code) === originalCode; }) : null;
+    /* Request identity for this mutation. Without it (internal callers) the
+       legacy unmarked path applies. */
+    var opHash = reqId ? purchasingOperationHash_({ header: hdr, lines: lines }) : '';
 
     /* Approval is a server-side business lock, never just a disabled client
      * button. Reopen is intentionally absent because the current schema has no
@@ -5270,14 +5904,38 @@ const ValleyFoodsHRModules = (function () {
       var financialApproval = String(existingRecord.approval_status || '').trim().toLowerCase();
       var qualityApproval = String(existingRecord.quality_approval_status || '').trim().toLowerCase();
       if (financialApproval === 'approved' || qualityApproval === 'approved') {
-        throw new Error('لا يمكن تعديل عملية شراء معتمدة. يلزم إجراء إعادة فتح مصرح به خارج الحفظ العادي.');
+        vfNotApplied_('لا يمكن تعديل عملية شراء معتمدة. يلزم إجراء إعادة فتح مصرح به خارج الحفظ العادي.');
+      }
+      /* Idempotent replay: this request already completed this exact document —
+         return it without bumping versions or rewriting rows. */
+      if (reqId && String(existingRecord.last_request_id || '') === reqId && String(existingRecord.operation_hash || '') === opHash) {
+        var replayLines = purchasingActiveLines_(getAllRecords_(dbId, PURCHASING_LINE_SHEET), isEdit && code !== originalCode ? code : originalCode, existingRecord);
+        if (purchasingLineRowsMatch_(replayLines, lines)) {
+          var replayRec = rows.find(function (r) { return String(r.Code) === code; }) || existingRecord;
+          return { status: 'success', message: isEdit ? 'تم تحديث عملية الشراء' : 'تمت إضافة عملية الشراء', code: code, record: purchasingStripHeaderInternal_(replayRec), recovered: true };
+        }
+        /* Header already patched by this request; resume with the lines only. */
+        var resumeEditHeader = true;
       }
     }
 
     if (!isEdit) {
-      if (existingMatch.length) throw new Error('الكود (Code) مكرر — يجب أن يكون فريداً');
+      if (existingMatch.length) {
+        if (reqId && existingMatch[0] && String(existingMatch[0].last_request_id || '') === reqId &&
+            String(existingMatch[0].operation_hash || '') === opHash) {
+          /* This request created the header but the lines may never have
+             landed: success only when the authoritative lines match, otherwise
+             resume below without recreating the header. */
+          if (purchasingLineRowsMatch_(purchasingActiveLines_(getAllRecords_(dbId, PURCHASING_LINE_SHEET), code, existingMatch[0]), lines)) {
+            return { status: 'success', message: 'تمت إضافة عملية الشراء', code: code, record: purchasingStripHeaderInternal_(existingMatch[0]), recovered: true };
+          }
+          var resumeCreateHeader = existingMatch[0];
+        } else {
+          vfNotApplied_('الكود (Code) مكرر — يجب أن يكون فريداً');
+        }
+      }
     } else if (code !== originalCode && existingMatch.length) {
-      throw new Error('الكود (Code) مكرر — يُستخدم بالفعل لعملية أخرى');
+      vfNotApplied_('الكود (Code) مكرر — يُستخدم بالفعل لعملية أخرى');
     }
 
     var record = {};
@@ -5285,6 +5943,8 @@ const ValleyFoodsHRModules = (function () {
       if (['id', 'unique_id', 'user', 'user_name', 'approval_status', 'approval', 'approval_time',
         'quality_approval_status', 'quality_approval', 'quality_approval_time',
         'Related valley_product_purchasings', 'code_identification'].indexOf(col) !== -1) return;
+      /* Request markers are server-stamped below, never copied from the client. */
+      if (PURCHASING_HEADER_MARKERS_.indexOf(col) !== -1) return;
       var v = hdr[col];
       record[col] = (v === undefined || v === null) ? '' : v;
     });
@@ -5301,11 +5961,17 @@ const ValleyFoodsHRModules = (function () {
     var incomingTotal = 0;
     (lines || []).forEach(function (l) { incomingTotal += Number(l.total_cost) || 0; });
     if ((lines || []).length > 0 && Math.abs(incomingTotal - headerTotal) > 0.01) {
-      throw new Error('مجموع تكاليف الأصناف (' + incomingTotal.toFixed(2) + ') لا يساوي إجمالي التكاليف (' + headerTotal.toFixed(2) + ')');
+      vfNotApplied_('مجموع تكاليف الأصناف (' + incomingTotal.toFixed(2) + ') لا يساوي إجمالي التكاليف (' + headerTotal.toFixed(2) + ')');
     }
 
     var _oldPur = null;
-    if (isEdit) {
+    if (typeof resumeCreateHeader !== 'undefined' && resumeCreateHeader) {
+      /* Header already created by this request; lines resume below. */
+      _oldPur = resumeCreateHeader;
+    } else if (typeof resumeEditHeader !== 'undefined' && resumeEditHeader) {
+      /* Header already patched by this request; lines resume below. */
+      _oldPur = existingRecord;
+    } else if (isEdit) {
       _oldPur = rows.find(function(r){ return String(r.Code)===String(originalCode); }) || null;
       /* Row-edit repair (5.4): formula-safe patch for the purchase header. */
       patchRowByCriteria_(sheet, 'Code', originalCode, record);
@@ -5314,6 +5980,7 @@ const ValleyFoodsHRModules = (function () {
       record.unique_id = uid16_();
       record.user = (user && user.email) || '';
       record.user_name = (user && user.name) || (user && user.email) || '';
+      if (reqId) { record.last_request_id = reqId; record.operation_hash = opHash; record.operation_state = 'in_progress'; record.active_line_generation = ''; }
       addRecord_(dbId, PURCHASING_COSTING_SHEET, record, ['Code']);
       try{ logHistory_(dbId, PURCHASING_COSTING_SHEET, record.record_uid || ('create_'+PURCHASING_COSTING_SHEET+'_'+code), code, (user&&user.email)||'', 'create', record, null) }catch(e){}
     }
@@ -5334,8 +6001,16 @@ const ValleyFoodsHRModules = (function () {
     }
 
     var lineSheet = getSheet_(PURCHASING_LINE_SHEET, dbId);
+    var lineHeadersLive = getHeaders_(lineSheet);
+    /* Staged replacement when the request carries identity and the sheet is
+       migrated; otherwise the legacy delete-then-insert path (also used by
+       internal callers without a request ID). */
+    var useStaged = !!(reqId && purchasingLineMarkersReady_(lineHeadersLive));
+    var generation = useStaged ? purchasingGenerationId_(reqId) : '';
     var lineKey = (isEdit && code !== originalCode) ? originalCode : code;
-    deleteRowsByCriteria_(lineSheet, 'code', lineKey);
+    if (!useStaged) {
+      deleteRowsByCriteria_(lineSheet, 'code', lineKey);
+    }
     var lineMaps = [];
     (lines || []).forEach(function (l) {
       var qty = Number(l.qty) || 0;
@@ -5379,6 +6054,46 @@ const ValleyFoodsHRModules = (function () {
       };
       lineMaps.push(lm);
     });
+
+    if (useStaged && lineMaps.length) {
+      /* Staged replacement: verify the complete new generation first, switch
+         authority second. A retry reuses its already-staged rows. */
+      for (var smi = 0; smi < lineMaps.length; smi++) {
+        lineMaps[smi].request_id = reqId; lineMaps[smi].line_generation = generation; lineMaps[smi].generation_hash = opHash;
+      }
+      var stagedHit = purchasingStagedRows_(dbId, code, generation).filter(function (r) { return String(r.generation_hash || '') === opHash; });
+      if (stagedHit.length !== lineMaps.length) {
+        purchasingDeleteStaged_(lineSheet, lineHeadersLive, code, generation);
+        var sStartId = getNextIdBatch_(dbId, PURCHASING_LINE_SHEET, lineMaps.length), sStartRow = lineSheet.getLastRow() + 1;
+        var sMatrix = lineMaps.map(function (lm, i) {
+          var rowNo = sStartRow + i;
+          if (canFormulaFor_(lineHeadersLive)) {
+            var cc = formulaCols_(lineHeadersLive);
+            lm.movement_code = '=CONCATENATE(' + cc.id + rowNo + ',"-",' + cc.code + rowNo +
+              ',"-",vlookup(' + cc.product + rowNo + ',valley_products!$A:$F,2,0),"-",TEXT(' +
+              cc.receipt + rowNo + ',"DD/MM/YYYY"))';
+            lm.product_category = '=vlookup(VLOOKUP(' + cc.product + rowNo +
+              ',valley_products!A:N,14,0),valley_categories!A:B,2,0)';
+          }
+          return lineHeadersLive.map(function (h) {
+            var name = String(h).trim();
+            if (name.toLowerCase() === 'id') return sStartId + i;
+            if (lm[name] !== undefined) return lm[name];
+            var lower = name.toLowerCase();
+            return lm[lower] !== undefined ? lm[lower] : '';
+          });
+        });
+        lineSheet.getRange(sStartRow, 1, sMatrix.length, lineHeadersLive.length).setValues(sMatrix);
+        noteMutation_(lineSheet);
+        var stagedCheck = purchasingStagedRows_(dbId, code, generation);
+        var stagedComplete = stagedCheck.length === lineMaps.length;
+        if (stagedComplete) stagedCheck.forEach(function (r) { if (String(r.generation_hash || '') !== opHash) stagedComplete = false; });
+        if (!stagedComplete) throw new Error('تعذر تأكيد كتابة الأصناف — توقفت العملية قبل التفعيل والأصناف السابقة ما زالت سارية');
+      }
+      purchasingActivateGeneration_(dbId, code, generation, reqId, opHash, { criteria: code, cleanupOld: (isEdit && code !== originalCode) ? originalCode : '' });
+      vfFlush_();   /* the balance the client reads back must include this write */
+      return { status: 'success', message: isEdit ? 'تم تحديث عملية الشراء' : 'تمت إضافة عملية الشراء', code: code };
+    }
 
     /* PERF — the reason this save used to take minutes.
      *
@@ -5460,8 +6175,8 @@ const ValleyFoodsHRModules = (function () {
 
   function deleteValleyPurchasingCosting_(data, user, dbId) {
     var code = String((data && data.code) || '').trim();
-    if (!code) throw new Error('الكود (Code) مطلوب');
-    if (!(user && user.isSuperAdmin)) throw new Error('حذف عمليات الشراء من صلاحيات مدير النظام فقط');
+    if (!code) vfNotApplied_('الكود (Code) مطلوب');
+    if (!(user && user.isSuperAdmin)) vfNotApplied_('حذف عمليات الشراء من صلاحيات مدير النظام فقط');
     settingsEnsureSheet_(dbId, PURCHASING_COSTING_SHEET, PURCHASING_COSTING_HEADERS);
     settingsEnsureSheet_(dbId, PURCHASING_LINE_SHEET, PURCHASING_LINE_HEADERS);
     var _oldDelPur = getAllRecords_(dbId, PURCHASING_COSTING_SHEET).find(function(r){ return String(r.Code)===String(code); }) || null;
@@ -5474,38 +6189,28 @@ const ValleyFoodsHRModules = (function () {
   }
 
   function approveValleyPurchasingCosting_(data, user, dbId) {
+    /* Phase 6: thin wrapper — step 'approve' of docType 'valley_purchasing'
+     * in APPROVAL_CHAINS (Code.js). Unversioned row preserves this
+     * approver's legacy no-version-check behaviour. */
     var code = String((data && data.code) || '').trim();
-    if (!code) throw new Error('الكود (Code) مطلوب');
-    settingsEnsureSheet_(dbId, PURCHASING_COSTING_SHEET, PURCHASING_COSTING_HEADERS);
-    var sheet = getSheet_(PURCHASING_COSTING_SHEET, dbId);
-    var rows = getAllRecords_(dbId, PURCHASING_COSTING_SHEET);
-    if (!rows.some(function (r) { return String(r.Code) === code; })) throw new Error('عملية الشراء غير موجودة');
-    var _oldAppPur = rows.find(function(r){ return String(r.Code)===String(code); }) || null;
-    /* Row-edit repair (5.4): formula-safe patch for purchase approval. */
-    patchRowByCriteria_(sheet, 'Code', code, {
-      approval_status: 'Approved',
-      approval: (user && user.email) || '',
-      approval_time: new Date()
-    });
-    try{ var _newAppPur = { approval_status: 'Approved', approval: (user&&user.email)||'', approval_time: new Date() }; logHistory_(dbId, PURCHASING_COSTING_SHEET, _oldAppPur&&_oldAppPur.record_uid ? _oldAppPur.record_uid : ('approve_'+PURCHASING_COSTING_SHEET+'_'+code), code, (user&&user.email)||'', 'approve', _newAppPur, _oldAppPur) }catch(e){}
+    if (!code) vfNotApplied_('الكود (Code) مطلوب');
+    /* Phase 2: Pending->Approved each leg, Approved terminal — via table (no inline cur check). */
+    var __curAppr = null; try { __curAppr = getAllRecords_(dbId, PURCHASING_COSTING_SHEET).find(function(r){ return String(r.Code)===String(code); }) || null; } catch(eRead){}
+    if (__curAppr) assertTransition_('vf_purchasing', __curAppr.approval_status || 'Pending', 'Approved', 'لا يمكن اعتماد عملية الشراء من هذه الحالة');
+    var res = approveStep_('valley_purchasing', code, 'approve', user, { dbId: dbId });
+    if (!res || res.status !== 'success') throw new Error((res && res.message) || 'عملية الشراء غير موجودة');
     return { status: 'success', message: 'تم اعتماد عملية الشراء' };
   }
 
   function qualityApproveValleyPurchasingCosting_(data, user, dbId) {
+    /* Phase 6: thin wrapper — step 'quality' of the same chain. */
     var code = String((data && data.code) || '').trim();
-    if (!code) throw new Error('الكود (Code) مطلوب');
-    settingsEnsureSheet_(dbId, PURCHASING_COSTING_SHEET, PURCHASING_COSTING_HEADERS);
-    var sheet = getSheet_(PURCHASING_COSTING_SHEET, dbId);
-    var rows = getAllRecords_(dbId, PURCHASING_COSTING_SHEET);
-    if (!rows.some(function (r) { return String(r.Code) === code; })) throw new Error('عملية الشراء غير موجودة');
-    var _oldQAppPur = rows.find(function(r){ return String(r.Code)===String(code); }) || null;
-    /* Row-edit repair (5.4): formula-safe patch for purchase quality approval. */
-    patchRowByCriteria_(sheet, 'Code', code, {
-      quality_approval_status: 'Approved',
-      quality_approval: (user && user.email) || '',
-      quality_approval_time: new Date()
-    });
-    try{ var _newQAppPur = { quality_approval_status: 'Approved', quality_approval: (user&&user.email)||'', quality_approval_time: new Date() }; logHistory_(dbId, PURCHASING_COSTING_SHEET, _oldQAppPur&&_oldQAppPur.record_uid ? _oldQAppPur.record_uid : ('approve_'+PURCHASING_COSTING_SHEET+'_'+code), code, (user&&user.email)||'', 'approve', _newQAppPur, _oldQAppPur) }catch(e){}
+    if (!code) vfNotApplied_('الكود (Code) مطلوب');
+    /* Phase 2: Pending->Approved each leg, Approved terminal — via table. */
+    var __curQ = null; try { __curQ = getAllRecords_(dbId, PURCHASING_COSTING_SHEET).find(function(r){ return String(r.Code)===String(code); }) || null; } catch(eRead){}
+    if (__curQ) assertTransition_('vf_purchasing', __curQ.quality_approval_status || 'Pending', 'Approved', 'لا يمكن اعتماد الجودة من هذه الحالة');
+    var res = approveStep_('valley_purchasing', code, 'quality', user, { dbId: dbId });
+    if (!res || res.status !== 'success') throw new Error((res && res.message) || 'عملية الشراء غير موجودة');
     return { status: 'success', message: 'تم اعتماد الجودة' };
   }
 
@@ -5519,6 +6224,85 @@ const ValleyFoodsHRModules = (function () {
   ValleyFoods.register('delete_valley_purchasing_costing', deleteValleyPurchasingCosting_);
   ValleyFoods.register('approve_valley_purchasing_costing', approveValleyPurchasingCosting_);
   ValleyFoods.register('quality_approve_valley_purchasing_costing', qualityApproveValleyPurchasingCosting_);
+  ValleyFoods.register('reconcile_valley_purchasing_receipts', reconcileValleyPurchasingReceipts_);
+
+  /* Administrator-only reconciliation of pending/uncertain purchasing receipts.
+   * Dry-run by default. For each receipt it reports request ID, user, action,
+   * age, and state, then applies exactly one of:
+   *  - done: a header stamped with THIS request ID exists, and — for actions
+   *    that write lines — the header's authoritative generation holds rows
+   *    stamped with the same request. The reconstructed response is stored.
+   *  - manual review: everything else. Legacy receipts (no markers) can never
+   *    be auto-proven and stay manual; failed is never inferred.
+   * Never deletes receipt rows, purchases, or lines. Every applied decision is
+   * audit-logged. Bounded: at most 50 receipts per run. */
+  var PURCHASING_RECONCILE_ACTIONS_ = ['save_valley_purchasing_header_checkpoint',
+    'save_valley_purchasing_lines_checkpoint', 'save_valley_purchasing_costing'];
+  function reconcileValleyPurchasingReceipts_(data, user, dbId) {
+    if (!(user && user.isSuperAdmin)) vfNotApplied_('تسوية الإيصالات غير المؤكدة من صلاحيات مدير النظام فقط');
+    var opts = data || {};
+    var dryRun = opts.dry_run === false ? false : true;
+    var maxAgeDays = Number(opts.max_age_days) || 0;
+    var limit = Math.min(Number(opts.limit) || 50, 50);
+    settingsEnsureSheet_(dbId, PURCHASING_COSTING_SHEET, PURCHASING_COSTING_HEADERS);
+    settingsEnsureSheet_(dbId, PURCHASING_LINE_SHEET, PURCHASING_LINE_HEADERS);
+    var receipts = [];
+    try { receipts = getAllRecords_(dbId, 'ERP_Request_Receipts'); } catch (e) { receipts = []; }
+    var now = new Date().getTime(), out = { reviewed: 0, marked_done: [], manual_review: [] };
+    for (var i = 0; i < receipts.length && out.reviewed < limit; i++) {
+      var r = receipts[i] || {};
+      if (PURCHASING_RECONCILE_ACTIONS_.indexOf(String(r.module_action || '')) === -1) continue;
+      if (String(r.state) !== 'pending' && String(r.state) !== 'uncertain') continue;
+      var created = new Date(r.created_at).getTime();
+      var ageDays = isNaN(created) ? -1 : (now - created) / 86400000;
+      if (maxAgeDays > 0 && (ageDays < 0 || ageDays > maxAgeDays)) continue;
+      out.reviewed++;
+      var requestId = String(r.request_id || '');
+      var entry = { request_id: requestId, user: String(r.user_email || ''), action: String(r.module_action || ''),
+        state: String(r.state), age_days: ageDays < 0 ? null : Math.round(ageDays * 10) / 10, evidence: '' };
+      var markerRec = requestId ? purchasingFindHeaderByRequest_(dbId, requestId) : null;
+      var proof = null;
+      if (markerRec) {
+        var hCode = String(markerRec.Code || '');
+        if (String(r.module_action) === 'save_valley_purchasing_header_checkpoint') {
+          proof = 'header Code=' + hCode + ' stamped with this request';
+        } else {
+          var active = String(markerRec.active_line_generation || '');
+          var auth = active ? getAllRecords_(dbId, PURCHASING_LINE_SHEET).filter(function (l) {
+            return String(l.code) === hCode && String(l.line_generation || '') === active &&
+              String(l.request_id || '') === requestId;
+          }) : [];
+          if (active && auth.length) proof = 'header Code=' + hCode + ' with ' + auth.length + ' authoritative lines of this request (gen ' + active + ')';
+          else entry.evidence = 'header stamped but no authoritative lines of this request';
+        }
+      } else {
+        entry.evidence = 'no purchase stamped with this request ID';
+      }
+      if (proof) {
+        entry.evidence = proof;
+        var response = { status: 'success', reconciled: true, code: String((markerRec && markerRec.Code) || '') };
+        if (String(r.module_action) === 'save_valley_purchasing_header_checkpoint') {
+          response.message = 'تم حفظ بيانات العملية'; response.checkpoint = 'header';
+        } else if (String(r.module_action) === 'save_valley_purchasing_lines_checkpoint') {
+          response.message = 'تم حفظ الأصناف'; response.checkpoint = 'lines';
+        } else {
+          response.message = 'تمت مطابقة الحفظ السابق'; response.record = purchasingStripHeaderInternal_(markerRec);
+        }
+        if (!dryRun) {
+          try {
+            if (patchRowByCriteria_(getSheet_('ERP_Request_Receipts', dbId), 'request_key', String(r.request_key || ''), { state: 'done', response_json: JSON.stringify(response) })) {
+              try { logHistory_(dbId, 'ERP_Request_Receipts', String(r.request_key || requestId), requestId, (user && user.email) || '', 'reconcile', { receipt: requestId, decision: 'done', evidence: proof }, null); } catch (auditErr) {}
+              entry.decision = 'done';
+            } else { entry.evidence += '؛ تعذر تحديث الإيصال'; }
+          } catch (applyErr) { entry.evidence += '؛ تعذر تحديث الإيصال'; }
+        } else { entry.decision = 'would-mark-done'; }
+        out.marked_done.push(entry);
+      } else {
+        out.manual_review.push(entry);
+      }
+    }
+    return { status: 'success', dry_run: dryRun, reviewed: out.reviewed, marked_done: out.marked_done, manual_review: out.manual_review };
+  }
 
   function getValleyParties_(data, user, dbId) {
     settingsEnsureSheet_(dbId, FIN_PARTIES_SHEET, FIN_PARTIES_HEADERS);
@@ -5610,7 +6394,7 @@ const ValleyFoodsHRModules = (function () {
 
     if (editing) {
       var _oldParty = rows.find(function(r){ return Number(r.id)===Number(d.id); }) || null;
-      if (!updateRowByCriteria_(sheet, 'id', Number(d.id), map)) throw new Error('تعذر تحديث السجل');
+      if (!patchRowByCriteria_(sheet, 'id', Number(d.id), map)) throw new Error('تعذر تحديث السجل');
       try{ var _newParty = Object.assign({}, _oldParty||{}, map); logHistory_(dbId, FIN_PARTIES_SHEET, _oldParty&&_oldParty.record_uid ? _oldParty.record_uid : ('update_'+FIN_PARTIES_SHEET+'_'+d.id), Number(d.id), (user&&user.email)||'', 'update', _newParty, _oldParty) }catch(e){}
       return { status: 'success', message: 'تم تحديث السجل' };
     }
@@ -5729,7 +6513,8 @@ const ValleyFoodsHRModules = (function () {
         sort_key: (dp.iso ? new Date(dp.iso).getTime() : 0) + 1,
         doc_id: String(p.id || 'N/A'),
         desc_ar: 'مشتريات خامات وتوريدات مستلمة منه',
-        value: qty * price,
+        /* Phase 5: shared calcLineNet_ is source of truth for line net. */
+        value: (typeof calcLineNet_ === 'function') ? calcLineNet_(qty, price) : qty * price,
         sub_rows: [{ doc_id: String(p.id || 'N/A'), name: productName[prodRef] || 'خامات مستلمة', details: '', qty: qty, price: price }]
       });
     });
@@ -5925,9 +6710,9 @@ const ValleyFoodsHRModules = (function () {
 
     var uid = String(d.unique_id || '').trim();
     var status = String(d.status || 'draft').trim().toLowerCase();
-    if (['draft', 'active', 'completed'].indexOf(status) === -1) {
-      throw new Error('الحالة غير صالحة');
-    }
+    /* Phase 2: draft/active/completed + *->cancelled, cancelled terminal — via table.
+     * Create allows draft/active/completed only (cancelled only via cancel handler). */
+    if (!DOC_STATUS_TRANSITIONS['vf_mfg_agree'] || !DOC_STATUS_TRANSITIONS['vf_mfg_agree'][status] || status === 'cancelled') throw new Error('الحالة غير صالحة');
 
     var result;
     executeWithLock_(function () {
@@ -5938,13 +6723,13 @@ const ValleyFoodsHRModules = (function () {
         var existing = null;
         rows.forEach(function (r) { if (String(r.unique_id) === uid) existing = r; });
         if (!existing) throw new Error('السجل غير موجود');
-        if (String(existing.status || '').trim().toLowerCase() === 'cancelled') {
-          throw new Error('السجل ملغي ولا يمكن تعديله');
-        }
+        /* Phase 2: cancelled terminal + forward transitions via table (no inline cur check). */
+        assertTransition_('vf_mfg_agree', String(existing.status || 'draft'), status, 'السجل ملغي ولا يمكن تعديله');
         if (String(existing.client_id == null ? '' : existing.client_id).trim() !== clientId) {
           throw new Error('السجل لا يتبع هذا العميل');
         }
         mfgAgreeCheckProduct_(dbId, clientId, productId);
+        var __agreeVer = checkRowVersion_(existing, d.version);
         var updates = {
           product_id: productId,
           qty: money.qty,
@@ -5952,9 +6737,10 @@ const ValleyFoodsHRModules = (function () {
           total: total,
           status: status,
           updated_by: actor,
-          updated_at: new Date()
+          updated_at: new Date(),
+          version: __agreeVer + 1
         };
-        if (!updateRowByCriteria_(sheet, 'unique_id', uid, updates)) throw new Error('تعذر حفظ السجل');
+        if (!patchRowByCriteria_(sheet, 'unique_id', uid, updates)) throw new Error('تعذر حفظ السجل');
         try { logHistory_(dbId, MFG_AGREE_SHEET, existing.record_uid || ('update_' + MFG_AGREE_SHEET + '_' + uid), uid, actor, 'update', updates, existing); } catch (e) {}
         result = uid;
       } else {
@@ -6025,12 +6811,11 @@ const ValleyFoodsHRModules = (function () {
       var existing = null;
       rows.forEach(function (r) { if (String(r.unique_id) === uid) existing = r; });
       if (!existing) throw new Error('السجل غير موجود');
-      if (String(existing.status || '').trim().toLowerCase() === 'cancelled') {
-        throw new Error('السجل ملغي بالفعل');
-      }
+      /* Phase 2: *->cancelled, cancelled terminal — via table (no inline cur check). */
+      assertTransition_('vf_mfg_agree', String(existing.status || 'draft'), 'cancelled', 'السجل ملغي بالفعل');
       clientId = String(existing.client_id == null ? '' : existing.client_id).trim();
       var updates = { status: 'cancelled', updated_by: actor, updated_at: new Date(), cancelled_by: actor, cancelled_at: new Date() };
-      if (!updateRowByCriteria_(sheet, 'unique_id', uid, updates)) throw new Error('تعذر إلغاء السجل');
+      if (!patchRowByCriteria_(sheet, 'unique_id', uid, updates)) throw new Error('تعذر إلغاء السجل');
       try { logHistory_(dbId, MFG_AGREE_SHEET, existing.record_uid || ('cancel_' + MFG_AGREE_SHEET + '_' + uid), uid, actor, 'cancel', updates, existing); } catch (e) {}
     });
     var productName = {}, productMeta = {};
@@ -6159,26 +6944,37 @@ const ValleyFoodsHRModules = (function () {
   }
 
   function getValleyMfgOrderDetail_(data, user, dbId) {
-    settingsEnsureSheet_(dbId, MFG_ORDER_SHEET, MFG_ORDER_HEADERS);
-    settingsEnsureSheet_(dbId, MFG_ORDER_PRODUCTS_SHEET, MFG_OUTPUT_HEADERS);
-    settingsEnsureSheet_(dbId, MFG_CONSUMPTION_SHEET, MFG_CONSUMPTION_HEADERS);
+    /* MO reads are schema-read-only. Opening an order must never append a
+       missing column and turn a pre-existing layout problem into a different
+       layout problem. The MO-only compatibility gate allows safe trailing
+       columns, but protects the formula-addressed canonical prefix. */
+    mfgAssertMfgSchema_(dbId, MFG_DETAIL_SCOPE_);
     var opts = getValleyOptionSets_(dbId);
     var moUid = String((data && data.mo_uid) || '').trim();
     if (!moUid) {
-      return { status: 'success', is_new: true, recipe_options: opts.recipe_options, product_options: opts.product_options, work_center_options: opts.work_center_options, enums: opts.enums, can_see_cost: vfCanSeeCost_(user) };
+      return { status: 'success', is_new: true, recipe_options: opts.recipe_options, product_options: opts.product_options, work_center_options: opts.work_center_options, enums: opts.enums, can_see_cost: vfCanSeeCost_(user), edit_token: '', save_scope: MFG_DETAIL_SCOPE_.slice() };
     }
     var full = getValleyMfgOrderFull_(data, user, dbId);
     var ops = getValleyMfgWorkOps_({ mo_uid: moUid }, user, dbId);
-    var bps = getValleyMfgByproducts_({ mo_uid: moUid }, user, dbId);
-    var outputs = (full.outputs || []).map(function (o) {
-      var batches = [];
-      try { var br = getValleyProductBatches_({ product_id: o.product_id, mo_uid: moUid }, user, dbId); batches = br.batches || []; } catch (e) {}
-      return Object.assign({}, o, { batches: batches });
-    });
+    /* loadAll: the save path deletes by-product rows missing from the payload,
+       so the detail must carry the FULL set — the default limit:15 slice would
+       otherwise orphan-delete everything past the first 15 on resave. */
+    var bps = getValleyMfgByproducts_({ mo_uid: moUid, loadAll: true }, user, dbId);
+    /* Do not embed every available stock batch in the initial MO response.
+       A newly-created draft can contain materials with hundreds of historical
+       batches; composing all of them made google.script.run collapse the whole
+       detail reply to null. The detail page loads a material's batches through
+       get_valley_product_batches only when its allocation UI needs them.
+       Persisted footer allocations remain on each output. */
+    var outputs = full.outputs || [];
     return {
       status: 'success', is_new: false,
       recipe_options: opts.recipe_options, product_options: opts.product_options, work_center_options: opts.work_center_options, enums: opts.enums,
       order: full.order, outputs: outputs, workops: ops.workops || [], byproducts: bps.byproducts || [],
+      /* Schema-free edit token for this editor's scope (detail page). The
+         client returns both as base_token/save_scope on edit. */
+      edit_token: mfgEditToken_(dbId, moUid, MFG_DETAIL_SCOPE_),
+      save_scope: MFG_DETAIL_SCOPE_.slice(),
       /* U-46. One flag for the whole page; every composed part above was
          stripped by its own endpoint through the same gate. */
       can_see_cost: vfCanSeeCost_(user)
@@ -6203,9 +6999,278 @@ const ValleyFoodsHRModules = (function () {
     return { status: 'success', batches_by_product: map };
   }
 
+  /* ---------- Client manufacturing report (vf_mfg_client_report) ----------
+   * Read-only period summary for one RPC: per (client, produced product) MO
+   * counts and produced quantities pivoted by operation_type, materials used
+   * (valley_manufacture_header_products) and by-products
+   * (valley_manufacture_by_product) summed per item. All reads are single
+   * getAllRecords_ calls (request-memoised); joins are exact in-memory maps.
+   *
+   * Filters (all optional; empty = all): client_ids[], product_ids[],
+   * op_types[], statuses[] (default ['Locked']), from/to (ISO date-only,
+   * inclusive, on manufacture_date). Unknown ids never match. Rows with a
+   * blank/unparseable manufacture_date are excluded — they cannot belong to
+   * any period. Money is rounded once at the end (qty 3dp, cost 2dp); cost
+   * keys are stripped server-side for users without the valley_cost_view
+   * grant (VF_COST_KEYS.mfg_output / mfg_bp — deleted, never zeroed). */
+  function getValleyMfgClientReport_(data, user, dbId) {
+    var d = data || {};
+    /* Local mirror of the save flow's BP_SHEET (function-local there):
+       by-products live in valley_manufacture_by_product. */
+    var BP_SHEET_R = 'valley_manufacture_by_product';
+    function idSet(v) {
+      var out = {};
+      ((Array.isArray(v) ? v : (v == null || v === '' ? [] : [v])) || []).forEach(function (x) {
+        var k = String(x == null ? '' : x).trim();
+        if (k) out[k] = true;
+      });
+      return out;
+    }
+    var fClients = idSet(d.client_ids !== undefined ? d.client_ids : d.client_id);
+    var fProducts = idSet(d.product_ids !== undefined ? d.product_ids : d.product_id);
+    var fOps = idSet(d.op_types !== undefined ? d.op_types : d.operation_type);
+    var fStatus = idSet(d.statuses !== undefined ? d.statuses : d.mo_status);
+    if (!Object.keys(fStatus).length) fStatus = { 'Locked': true };
+    var from = vfDateBound_(d.from, false);
+    var to = vfDateBound_(d.to, true);
+    if (from && to && from > to) throw new Error('«من تاريخ» بعد «إلى تاريخ»');
+
+    var products = {};
+    try {
+      getAllRecords_(dbId, FIN_PRODUCTS_SHEET).forEach(function (p) {
+        var pid = String(p.id == null ? '' : p.id).trim();
+        if (!pid || products[pid]) return;
+        products[pid] = {
+          name: String(p.name_ar || ('#' + pid)),
+          unit: String(p.unit || '').trim(),
+          client_id: String(p.client_id == null ? '' : p.client_id).trim()
+        };
+      });
+    } catch (e) {}
+    var partyNames = {};
+    var partyDir = {};
+    try {
+      getAllRecords_(dbId, FIN_PARTIES_SHEET).forEach(function (p) {
+        var pid = String(p.id == null ? '' : p.id).trim();
+        if (!pid || partyNames[pid]) return;
+        partyNames[pid] = String(p.name || ('#' + pid));
+        partyDir[pid] = String(p.customer_direction || '').trim();
+      });
+    } catch (e) {}
+    /* Filter dropdowns list only what actually exists in the manufacture
+       header table — not every master product/client. Distinct produced
+       products across ALL header rows (any status/date), so the lists are
+       stable while the user changes period/status filters. */
+    var hdrRows = [];
+    try { hdrRows = getAllRecords_(dbId, MFG_ORDER_SHEET); } catch (e) {}
+    var headerPids = {};
+    hdrRows.forEach(function (r) {
+      var pid = String(r.produced_product == null ? '' : r.produced_product).trim();
+      if (pid) headerPids[pid] = true;
+    });
+    var clientOptions = [];
+    var seenClients = {};
+    Object.keys(headerPids).forEach(function (pid) {
+      var cid = products[pid] ? products[pid].client_id : '';
+      if (!cid || seenClients[cid]) return;
+      if (partyDir[cid] !== 'عميل') return;
+      seenClients[cid] = true;
+      clientOptions.push({ value: cid, label: partyNames[cid] || ('#' + cid) });
+    });
+    clientOptions.sort(function (a, b) { return String(a.label).localeCompare(String(b.label), 'ar'); });
+    var productOptions = Object.keys(headerPids).map(function (pid) {
+      var pr = products[pid] || { name: '#' + pid, unit: '', client_id: '' };
+      return { value: pid, label: pr.name, unit: pr.unit, client_id: pr.client_id };
+    }).sort(function (a, b) { return String(a.label).localeCompare(String(b.label), 'ar'); });
+
+    function inPeriod(mdate) {
+      if (!mdate) return false;
+      var t = String(mdate).trim();
+      if (!t) return false;
+      var dt = (/^\d{4}-\d{2}-\d{2}$/.test(t)) ? new Date(t + 'T00:00:00.000') : new Date(t);
+      if (isNaN(dt.getTime())) return false;
+      if (from && dt < from) return false;
+      if (to && dt > to) return false;
+      return true;
+    }
+
+    /* MOs in scope, keyed by unique_id. hdrRows was already read above. */
+    var moByUid = {};
+    var moList = [];
+    try {
+      hdrRows.forEach(function (r) {
+        var uid = String(r.unique_id || '').trim();
+        if (!uid || moByUid[uid]) return;
+        var st = String(r.mo_status || 'Draft').trim() || 'Draft';
+        if (!fStatus[st]) return;
+        if (!inPeriod(r.manufacture_date)) return;
+        var pid = String(r.produced_product == null ? '' : r.produced_product).trim();
+        var prod = products[pid] || { name: pid ? ('#' + pid) : '-', unit: '', client_id: '' };
+        if (Object.keys(fProducts).length && !fProducts[pid]) return;
+        if (Object.keys(fClients).length && !fClients[prod.client_id]) return;
+        var op = String(r.operation_type || '').trim();
+        if (Object.keys(fOps).length && !fOps[op]) return;
+        var mo = { uid: uid, op: op, status: st, pid: pid, client_id: prod.client_id,
+          qty: Math.round((Number(r.actual_qty) || 0) * 1000) / 1000,
+          cost: Math.round((Number(r.total_batch_cost) || 0) * 100) / 100 };
+        moByUid[uid] = mo;
+        moList.push(mo);
+      });
+    } catch (e) {}
+
+    function roundQty(n) { return Math.round((Number(n) || 0) * 1000) / 1000; }
+    function roundMoney(n) { return Math.round((Number(n) || 0) * 100) / 100; }
+    function blankOpSplit() {
+      var o = {};
+      MFG_OP_TYPES.forEach(function (t) { o[t] = { mo_count: 0, produced_qty: 0, batch_cost: 0 }; });
+      return o;
+    }
+    var rows = {};
+    function rowFor(mo) {
+      var key = mo.client_id + '|' + mo.pid;
+      var row = rows[key];
+      if (!row) {
+        var prod = products[mo.pid] || { name: mo.pid ? ('#' + mo.pid) : '-', unit: '' };
+        row = { client_id: mo.client_id, client_name: partyNames[mo.client_id] || (mo.client_id ? ('#' + mo.client_id) : 'بدون عميل'),
+          product_id: mo.pid, product_name: prod.name, unit: prod.unit,
+          mo_count: 0, produced_qty: 0, batch_cost: 0, by_op: blankOpSplit(), materials: {}, byproducts: {}, byproducts_by_op: {} };
+        rows[key] = row;
+      }
+      return row;
+    }
+    moList.forEach(function (mo) {
+      var row = rowFor(mo);
+      row.mo_count++;
+      row.produced_qty = roundQty(row.produced_qty + mo.qty);
+      row.batch_cost = roundMoney(row.batch_cost + mo.cost);
+      if (!row.by_op[mo.op]) row.by_op[mo.op] = { mo_count: 0, produced_qty: 0, batch_cost: 0 };
+      row.by_op[mo.op].mo_count++;
+      row.by_op[mo.op].produced_qty = roundQty(row.by_op[mo.op].produced_qty + mo.qty);
+      row.by_op[mo.op].batch_cost = roundMoney(row.by_op[mo.op].batch_cost + mo.cost);
+    });
+
+    /* Materials used, per (client, product, material item). Unit resolves via
+       the products map when the material is a known product, else blank. */
+    try {
+      getAllRecords_(dbId, MFG_ORDER_PRODUCTS_SHEET).forEach(function (l) {
+        var mo = moByUid[String(l.valley_manufacture_header_id || '').trim()];
+        if (!mo) return;
+        var itemPid = String(l.product_id == null ? '' : l.product_id).trim();
+        var itemKey = itemPid || String(l.product_name || '').trim() || '-';
+        var row = rowFor(mo);
+        var m = row.materials[itemKey] || { item: String(l.product_name || itemKey),
+          unit: (products[itemPid] && products[itemPid].unit) || '', qty: 0, total_cost: 0 };
+        m.qty = roundQty(m.qty + Number(l.product_qty));
+        m.total_cost = roundMoney(m.total_cost + Number(l.total_cost));
+        row.materials[itemKey] = m;
+      });
+    } catch (e) {}
+    /* By-products, per (client, product, item) — kept both as a flat list
+       and grouped by the parent MO's operation_type, so each op-type section
+       renders its own by-products directly under its production table.
+       The by-product qty is also added to the parent MO's operation_type
+       produced sum (row split + row total; grand totals derive from rows),
+       so each op-type total reflects everything that op produced. */
+    try {
+      getAllRecords_(dbId, BP_SHEET_R).forEach(function (b) {
+        var mo = moByUid[String(b.valley_manufacture_header_id || '').trim()];
+        if (!mo) return;
+        var itemKey = String(b.item || '').trim() || '-';
+        var bq = roundQty(Number(b.qty));
+        /* itemKey is a valley_products numeric id — resolve its name_ar here;
+           unknown/deleted products fall back to the raw id. */
+        var bpName = (products[itemKey] && products[itemKey].name) || itemKey;
+        var row = rowFor(mo);
+        var m = row.byproducts[itemKey] || { item: itemKey, product_name: bpName, qty: 0, total_cost: 0 };
+        m.qty = roundQty(m.qty + bq);
+        m.total_cost = roundMoney(m.total_cost + Number(b.total_cost));
+        row.byproducts[itemKey] = m;
+        var ob = row.byproducts_by_op[mo.op] || (row.byproducts_by_op[mo.op] = {});
+        var g = ob[itemKey] || (ob[itemKey] = { item: itemKey, product_name: bpName, qty: 0, total_cost: 0 });
+        g.qty = roundQty(g.qty + bq);
+        g.total_cost = roundMoney(g.total_cost + Number(b.total_cost));
+        if (!row.by_op[mo.op]) row.by_op[mo.op] = { mo_count: 0, produced_qty: 0, batch_cost: 0 };
+        row.by_op[mo.op].produced_qty = roundQty(row.by_op[mo.op].produced_qty + bq);
+        row.produced_qty = roundQty(row.produced_qty + bq);
+      });
+    } catch (e) {}
+
+    var canCost = vfCanSeeCost_(user);
+    var outRows = Object.keys(rows).map(function (k) { return rows[k]; }).sort(function (a, b) {
+      var c = String(a.client_name).localeCompare(String(b.client_name), 'ar');
+      return c !== 0 ? c : String(a.product_name).localeCompare(String(b.product_name), 'ar');
+    });
+    var totals = { mo_count: 0, produced_qty: 0, batch_cost: 0, by_op: blankOpSplit() };
+    outRows.forEach(function (row) {
+      row.materials = Object.keys(row.materials).map(function (k) { return row.materials[k]; })
+        .sort(function (a, b) { return String(a.item).localeCompare(String(b.item), 'ar'); });
+      row.byproducts = Object.keys(row.byproducts).map(function (k) { return row.byproducts[k]; })
+        .sort(function (a, b) { return String(a.item).localeCompare(String(b.item), 'ar'); });
+      Object.keys(row.byproducts_by_op).forEach(function (t) {
+        row.byproducts_by_op[t] = Object.keys(row.byproducts_by_op[t]).map(function (k) { return row.byproducts_by_op[t][k]; })
+          .sort(function (a, b) { return String(a.item).localeCompare(String(b.item), 'ar'); });
+      });
+      totals.mo_count += row.mo_count;
+      totals.produced_qty = roundQty(totals.produced_qty + row.produced_qty);
+      totals.batch_cost = roundMoney(totals.batch_cost + row.batch_cost);
+      Object.keys(row.by_op).forEach(function (t) {
+        if (!totals.by_op[t]) totals.by_op[t] = { mo_count: 0, produced_qty: 0, batch_cost: 0 };
+        totals.by_op[t].mo_count += row.by_op[t].mo_count;
+        totals.by_op[t].produced_qty = roundQty(totals.by_op[t].produced_qty + row.by_op[t].produced_qty);
+        totals.by_op[t].batch_cost = roundMoney(totals.by_op[t].batch_cost + (Number(row.by_op[t].batch_cost) || 0));
+      });
+      if (!canCost) {
+        vfStripCostAll_(row.materials, VF_COST_KEYS.mfg_output);
+        vfStripCostAll_(row.byproducts, VF_COST_KEYS.mfg_bp);
+        Object.keys(row.byproducts_by_op).forEach(function (t) {
+          vfStripCostAll_(row.byproducts_by_op[t], VF_COST_KEYS.mfg_bp);
+        });
+        /* total_batch_cost is a cost field: without the grant it must not
+           reach the client at all (deleted, never zeroed). */
+        delete row.batch_cost;
+        Object.keys(row.by_op).forEach(function (t) { delete row.by_op[t].batch_cost; });
+      }
+    });
+    if (!canCost) {
+      delete totals.batch_cost;
+      Object.keys(totals.by_op).forEach(function (t) { delete totals.by_op[t].batch_cost; });
+    }
+
+    return {
+      status: 'success',
+      can_see_cost: canCost,
+      filters: { from: d.from || '', to: d.to || '' },
+      filter_options: {
+        clients: clientOptions,
+        products: productOptions,
+        op_types: MFG_OP_TYPES.slice(),
+        statuses: ['Draft', 'In Progress', 'Locked']
+      },
+      rows: outRows,
+      totals: totals
+    };
+  }
+
   function getValleyMfgOrders_(data, user, dbId) {
-    settingsEnsureSheet_(dbId, MFG_ORDER_SHEET, MFG_ORDER_HEADERS);
+    mfgAssertMfgSchema_(dbId, ['header']);
+    /* Category values in valley_manufacture_header are stored as IDs. Keep
+       the raw ID for filtering, but expose the human label from
+       valley_categories to the list page. Missing/legacy category rows fall
+       back to the stored value so existing orders remain visible. */
+    var categoryLabels = {};
+    try {
+      getAllRecords_(dbId, FIN_CATEGORIES_SHEET).forEach(function (c) {
+        var cid = String(c.id == null ? '' : c.id).trim();
+        if (!cid || categoryLabels[cid]) return;
+        categoryLabels[cid] = String(c.name || c.name_ar || cid).trim() || cid;
+      });
+    } catch (eCat) {}
+    function categoryLabel_(id) {
+      var key = String(id == null ? '' : id).trim();
+      return categoryLabels[key] || key;
+    }
     var rows = getAllRecords_(dbId, MFG_ORDER_SHEET).map(function (r) {
+      var rawCategory = r.product_category == null ? '' : String(r.product_category).trim();
       return {
         unique_id: r.unique_id,
         id: r.id,
@@ -6214,6 +7279,9 @@ const ValleyFoodsHRModules = (function () {
         shift: r.shift || '',
         manufacture_date: r.manufacture_date,
         produced_product: r.produced_product,
+        product_category: categoryLabel_(rawCategory),
+        _product_category_id: rawCategory,
+        manufacture_batch: r.manufacture_batch || '',
         manufactured_qty: r.manufactured_qty,
         expected_qty: r.expected_qty,
         actual_qty: r.actual_qty,
@@ -6223,6 +7291,63 @@ const ValleyFoodsHRModules = (function () {
         recipe_id: r.recipe_id || ''
       };
     }).sort(function (a, b) { return Number(b.id || 0) - Number(a.id || 0); });
+    var allHeaderProductIds = {};
+    rows.forEach(function (r) {
+      var pid = String(r.produced_product == null ? '' : r.produced_product).trim();
+      if (pid) allHeaderProductIds[pid] = true;
+    });
+
+    /* List filters (vf_mfg_orders filter bar). Every dimension is exact-match
+       and optional: blank/missing means no constraint, so a blank filter set
+       returns everything. Applied before vfPage_ so totals and paging reflect
+       the filter. Dates are additionally honored inside vfPage_. */
+    function normF_(v) { return String(v === undefined || v === null ? '' : v).trim(); }
+    /* Distinct dropdown values, always computed from the unfiltered set so a
+       narrowed filter never shrinks the other dropdowns. Stored values are
+       already display labels, except produced_product (joined client-side via
+       product_options, as before). */
+    function distinctLabels_(arr, key) {
+      var seen = {}, out = [];
+      arr.forEach(function (r) {
+        var v = normF_(r[key]);
+        if (!v || seen[v]) return;
+        seen[v] = true;
+        out.push(v);
+      });
+      out.sort();
+      return out;
+    }
+    var filterOptions = {
+      shift: MFG_SHIFTS.slice(),
+      operation_types: MFG_OP_TYPES.slice(),
+      categories: (function () {
+        var seen = {}, out = [];
+        rows.forEach(function (r) {
+          var id = normF_(r._product_category_id);
+          if (!id || seen[id]) return;
+          seen[id] = true;
+          out.push({ value: id, label: normF_(r.product_category) || id });
+        });
+        out.sort(function (a, b) { return String(a.label).localeCompare(String(b.label), 'ar'); });
+        return out;
+      }()),
+      batches: distinctLabels_(rows, 'manufacture_batch')
+    };
+    var fOp = normF_(data.operation_type);
+    var fShift = normF_(data.shift);
+    var fProd = normF_(data.produced_product);
+    var fCat = normF_(data.product_category);
+    var fBatch = normF_(data.manufacture_batch);
+    if (fOp || fShift || fProd || fCat || fBatch) {
+      rows = rows.filter(function (r) {
+        if (fOp && normF_(r.operation_type) !== fOp) return false;
+        if (fShift && normF_(r.shift) !== fShift) return false;
+        if (fProd && String(r.produced_product) !== fProd) return false;
+        if (fCat && normF_(r._product_category_id) !== fCat && normF_(r.product_category) !== fCat) return false;
+        if (fBatch && normF_(r.manufacture_batch) !== fBatch) return false;
+        return true;
+      });
+    }
 
     var recipes = [];
     try { recipes = getAllRecords_(dbId, MFG_RECIPE_SHEET); } catch (e) {}
@@ -6232,10 +7357,22 @@ const ValleyFoodsHRModules = (function () {
     }).filter(function (o) { return o.value; });
 
     var mfgPage = vfPage_(rows, data, 'manufacture_date');
+    mfgPage.rows.forEach(function (r) { delete r._product_category_id; });
+    rows.forEach(function (r) { delete r._product_category_id; });
+    var filterProductOptions = [];
+    try {
+      filterProductOptions = getAllRecords_(dbId, FIN_PRODUCTS_SHEET).map(function (p) {
+        var pid = String(p.id == null ? '' : p.id).trim();
+        if (!pid || !allHeaderProductIds[pid]) return null;
+        return { value: p.id, label: String(p.name_ar || ('#' + pid)) };
+      }).filter(Boolean).sort(function (a, b) { return a.label.localeCompare(b.label, 'ar'); });
+    } catch (eFilterProducts) {}
     return {
       status: 'success',
       orders: mfgPage.rows,
       total: mfgPage.total,
+      filter_options: filterOptions,
+      filter_product_options: filterProductOptions,
       recipe_options: recipeOptions,
       product_options: finRefsCached_(dbId, 'vf_products_opts_sorted', function () {
         return getAllRecords_(dbId, FIN_PRODUCTS_SHEET).map(function (p) {
@@ -6372,9 +7509,465 @@ const ValleyFoodsHRModules = (function () {
       writeRowFormulas_(_bpSheet, getHeaders_(_bpSheet), r, byproductFormulaMap_(r));
     }
 
-    function saveValleyMfgOrder_(data, user, dbId) {
+    /* ---------- Uncertain-save repair (script-only, no schema change) ----------
+     * Tokens, deterministic IDs, checkpoints and recovery for
+     * save_valley_mfg_order. Uses only the existing UID columns and the
+     * existing ERP_Request_Receipts.response_json cell. No version column, no
+     * marker column, no new sheet, no migration. */
+    var MFG_SAVE_SCOPE_ALLOW_ = ['header', 'outputs', 'consumption', 'work_ops', 'byproducts'];
+    var MFG_LIST_SCOPE_ = ['header', 'outputs', 'consumption'];
+    var MFG_DETAIL_SCOPE_ = ['header', 'outputs', 'consumption', 'work_ops', 'byproducts'];
+    var MFG_WORKOP_HEADERS = ['unique_id','id','valley_manufacture_header_id','work_center_sequence','recipe_id','operation_status','start_time','end_time','notes','actual_hours','work_center_cost','total_cost','last_pause_time','total_pause_duration','user','created_at'];
+    var MFG_BYPRODUCT_HEADERS = ['unique_id','id','valley_manufacture_header_id','code','manufacture_date','transaction_code','item','qty','total_cost','manufacture_internal_batch','user','created_at'];
+    function mfgScopeFor_(d) {
+      var dflt = MFG_LIST_SCOPE_;
+      if (d && Array.isArray(d.save_scope) && d.save_scope.length) {
+        var out = [];
+        d.save_scope.forEach(function (s) {
+          s = String(s || '').trim();
+          if (MFG_SAVE_SCOPE_ALLOW_.indexOf(s) !== -1 && out.indexOf(s) === -1) out.push(s);
+        });
+        if (out.length) return out;
+      }
+      /* Legacy clients send no scope: list page never sends work_ops /
+         byproducts keys, detail page always does. */
+      var s2 = ['header', 'outputs', 'consumption'];
+      if (d && Array.isArray(d.work_ops)) s2.push('work_ops');
+      if (d && Array.isArray(d.byproducts)) s2.push('byproducts');
+      return s2;
+    }
+    /* Explicit deletion contract for this MO only. Absence from a client
+       array is never sufficient evidence to delete a persisted child row. */
+    function mfgDeletedUids_(d, section) {
+      var src = d && d.deleted_uids && Array.isArray(d.deleted_uids[section]) ? d.deleted_uids[section] : [];
+      var seen = {}, out = [];
+      src.forEach(function (v) {
+        var u = String(v || '').trim();
+        if (u && !seen[u]) { seen[u] = true; out.push(u); }
+      });
+      return out;
+    }
+    function mfgNormQty_(v) {
+      if (v === '' || v === null || v === undefined) return '';
+      var n = Number(v);
+      if (!isFinite(n)) return '';
+      return Math.round(n * 1000) / 1000;
+    }
+    function mfgNormDateKey_(v) {
+      var d = null;
+      try { d = parseDate_(v); } catch (e) { d = null; }
+      if (!d || isNaN(d.getTime())) return '';
+      return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2);
+    }
+    function mfgNormPid_(v) {
+      var s = String(v == null ? '' : v).trim();
+      if (!s) return '';
+      var n = Number(s);
+      return (s !== '' && isFinite(n)) ? n : s;
+    }
+    function mfgHash_(s) {
+      try {
+        if (typeof requestGuardHash_ === 'function') return requestGuardHash_(String(s));
+      } catch (e) {}
+      var h1 = 0x811c9dc5, h2 = 0x01000193;
+      var str = String(s), i, c;
+      for (i = 0; i < str.length; i++) {
+        c = str.charCodeAt(i);
+        h1 = Math.imul(h1 ^ c, 16777619) >>> 0;
+        h2 = Math.imul(h2 ^ (c + 31), 16777619) >>> 0;
+      }
+      var hex = function (x) { return ('0000000' + x.toString(16)).slice(-8); };
+      return (hex(h1) + hex(h2) + hex(h1 ^ h2) + hex(h2 ^ 0x9e3779b9)).slice(0, 64);
+    }
+    function mfgCanonical_(v) {
+      try {
+        if (typeof requestGuardCanonical_ === 'function') return requestGuardCanonical_(v);
+      } catch (e) {}
+      return JSON.stringify(v);
+    }
+    /* Deterministic 16-hex UID in the existing UID shape, derived from
+     * SHA-256(requestId | moUid | section | index). A same-request retry
+     * recomputes the identical UID and patches the same row. */
+    function mfgDeterministicUid_(requestId, moUid, section, idx) {
+      return String(mfgHash_([String(requestId || ''), String(moUid || ''), String(section || ''), String(idx)].join('|'))).slice(0, 16).toLowerCase();
+    }
+    function mfgNewUid_(requestId, moUid, section, idx) {
+      if (requestId) return mfgDeterministicUid_(requestId, moUid, section, idx);
+      return uid16Hex_();
+    }
+    /* Server-owned positive integer ID for new Valley Foods MO rows. The
+       allocator already runs under the outer save lock and returns max+1;
+       this boundary rejects a non-integer instead of persisting a malformed
+       business ID. Existing-row updates never touch `id`. */
+    function mfgNextIntegerId_(dbId, sheetName) {
+      var raw = getNextIdUnderLock_(dbId, sheetName, 'id');
+      var n = Number(raw);
+      if (!isFinite(n) || n < 1 || Math.floor(n) !== n) {
+        vfNotApplied_('تعذر توليد رقم id صحيح ومتزايد لجدول ' + sheetName + ' — راجع المسؤول');
+      }
+      return n;
+    }
+    /* Valley Foods MO-only schema compatibility assertion. The formulas in
+     * this module deliberately address operational columns by letter, so that
+     * formula-addressed prefix must remain byte-identical. The MO header's
+     * audit/status/approval/recipe tail is different: every one of those fields
+     * is read and written by header name, so their order is not a write-safety
+     * constraint. This matters for the live sheet, where recipe_id predates the
+     * later status/approval columns. Missing, duplicated or blank required
+     * columns still remain a proven pre-mutation refusal with an actionable
+     * diff, as does any reorder inside a formula-addressed prefix.
+     *
+     * `scope` also keeps a list-page read/save independent of optional work-op
+     * or by-product sheets that it does not own. No sheet/header is created or
+     * mutated here. */
+    function mfgAssertMfgSchema_(dbId, scope) {
+      scope = Array.isArray(scope) && scope.length ? scope : MFG_DETAIL_SCOPE_;
+      var expected = {};
+      expected[MFG_ORDER_SHEET] = MFG_ORDER_HEADERS;
+      if (scope.indexOf('outputs') !== -1 || scope.indexOf('consumption') !== -1) {
+        expected[MFG_ORDER_PRODUCTS_SHEET] = MFG_OUTPUT_HEADERS;
+        expected[MFG_CONSUMPTION_SHEET] = MFG_CONSUMPTION_HEADERS;
+      }
+      if (scope.indexOf('work_ops') !== -1) expected[MFG_WORKOPS_SHEET] = MFG_WORKOP_HEADERS;
+      if (scope.indexOf('byproducts') !== -1) expected[MFG_BYPRODUCT_SHEET] = MFG_BYPRODUCT_HEADERS;
+      var positionalPrefix = {};
+      /* Preserve only the columns addressed positionally by formulas. Audit
+         timestamps/users after those blocks are name-mapped and may appear in
+         either order on legacy live sheets. */
+      positionalPrefix[MFG_ORDER_SHEET] = 20;
+      positionalPrefix[MFG_ORDER_PRODUCTS_SHEET] = 8;
+      positionalPrefix[MFG_CONSUMPTION_SHEET] = 8;
+      positionalPrefix[MFG_WORKOPS_SHEET] = 12;
+      positionalPrefix[MFG_BYPRODUCT_SHEET] = 10;
+      Object.keys(expected).forEach(function (name) {
+        var sheet;
+        try { sheet = getSheet_(name, dbId); } catch (e) { vfNotApplied_('البنية الأساسية ناقصة (الشيت ' + name + ' غير موجود) — حدّث الصفحة وأعد المحاولة'); }
+        var have = getHeaders_(sheet).map(function (h) { return String(h).trim(); });
+        /* Google Sheets can retain a physically-used but unnamed trailing
+           column after an old edit/import. It is not part of the table
+           contract and is harmless to the name-mapped reads/writes below.
+           Ignore only blank cells at the very end; an interior blank remains
+           a hard schema error because it can shift positional formulas. */
+        while (have.length && !have[have.length - 1]) have.pop();
+        var want = expected[name];
+        var seen = {}, duplicates = [], blanks = [];
+        have.forEach(function (h, i) {
+          if (!h) blanks.push(String(i + 1));
+          if (h && seen[h] && duplicates.indexOf(h) === -1) duplicates.push(h);
+          if (h) seen[h] = true;
+        });
+        var missing = want.filter(function (h) { return have.indexOf(h) === -1; });
+        var misplaced = [];
+        var strictLength = positionalPrefix[name] || want.length;
+        want.slice(0, strictLength).forEach(function (h, i) { if (have[i] !== h) misplaced.push(h + '@' + (i + 1)); });
+        var prefixOk = have.length >= strictLength && !misplaced.length;
+        if (!prefixOk || missing.length || duplicates.length || blanks.length) {
+          var details = [];
+          if (missing.length) details.push('ناقص: ' + missing.join(', '));
+          if (misplaced.length) details.push('موضع غير صحيح: ' + misplaced.slice(0, 6).join(', '));
+          if (duplicates.length) details.push('مكرر: ' + duplicates.join(', '));
+          if (blanks.length) details.push('عناوين فارغة: ' + blanks.join(', '));
+          vfNotApplied_('البنية الأساسية غير متطابقة (أعمدة ' + name + ') — ' + details.join('؛ ') + ' — راجع المسؤول قبل الحفظ');
+        }
+        if (have.length > want.length) {
+          try { Logger.log('VF-MFG schema: safe trailing columns in ' + name + ': ' + have.slice(want.length).join(', ')); } catch (eLog) {}
+        }
+      });
+    }
+    /* Normalized persisted projection for one MO (scope-filtered). Shared by
+     * the edit token and the desired-state comparator. Formulas, costs,
+     * display labels, transport fields and volatile timestamps excluded. */
+    function mfgCurrentMfgState_(dbId, moUid, scope) {
+      var rows = [];
+      try { rows = getAllRecords_(dbId, MFG_ORDER_SHEET); } catch (e) { rows = []; }
+      var header = null;
+      rows.forEach(function (r) { if (String(r.unique_id || '').trim() === String(moUid)) header = r; });
+      if (!header) return null;
+      var st = {
+        header: {
+          manufacture_date: mfgNormDateKey_(header.manufacture_date),
+          operation_type: String(header.operation_type || '').trim(),
+          shift: String(header.shift || '').trim(),
+          produced_product: mfgNormPid_(header.produced_product),
+          manufactured_qty: mfgNormQty_(header.manufactured_qty),
+          actual_qty: (header.actual_qty === '' || header.actual_qty == null) ? 0 : mfgNormQty_(header.actual_qty),
+          recipe_id: String(header.recipe_id || '').trim(),
+          manufacture_batch: String(header.manufacture_batch == null ? '' : header.manufacture_batch).trim(),
+          mo_status: String(header.mo_status || 'Draft')
+        },
+        outputs: []
+      };
+      if (scope.indexOf('outputs') !== -1 || scope.indexOf('consumption') !== -1) {
+        var outs = [];
+        try {
+          getAllRecords_(dbId, MFG_ORDER_PRODUCTS_SHEET).forEach(function (o) {
+            if (String(o.valley_manufacture_header_id || '').trim() === String(moUid)) outs.push(o);
+          });
+        } catch (e) {}
+        var footByParent = {};
+        try {
+          getAllRecords_(dbId, MFG_CONSUMPTION_SHEET).forEach(function (cm) {
+            var ref = String(cm.valley_manufacture_header_product_id || '').trim();
+            if (!ref) return;
+            if (!footByParent[ref]) footByParent[ref] = [];
+            footByParent[ref].push(cm);
+          });
+        } catch (e) {}
+        outs.forEach(function (o) {
+          var ouid = String(o.unique_id || '').trim();
+          var feet = (footByParent[ouid] || []).map(function (f) {
+            return { uid: String(f.unique_id || '').trim(), item: String(f.item || '').trim(), qty: mfgNormQty_(f.qty) };
+          }).sort(function (a, b) { return a.uid < b.uid ? -1 : (a.uid > b.uid ? 1 : 0); });
+          st.outputs.push({ uid: ouid, product_id: String(o.product_id == null ? '' : o.product_id).trim(), qty: mfgNormQty_(o.product_qty), footers: feet });
+        });
+        st.outputs.sort(function (a, b) { return a.uid < b.uid ? -1 : (a.uid > b.uid ? 1 : 0); });
+      }
+      if (scope.indexOf('work_ops') !== -1) {
+        var wops = [];
+        try {
+          getAllRecords_(dbId, MFG_WORKOPS_SHEET).forEach(function (r) {
+            if (String(r.valley_manufacture_header_id || '').trim() === String(moUid)) {
+              wops.push({ uid: String(r.unique_id || '').trim(), wc: String(r.recipe_id == null ? '' : r.recipe_id).trim(), st: String(r.operation_status || 'Pending').trim(), notes: String(r.notes || '').trim(), hrs: (r.actual_hours === '' || r.actual_hours == null) ? '' : mfgNormQty_(r.actual_hours) });
+            }
+          });
+        } catch (e) {}
+        wops.sort(function (a, b) { return a.uid < b.uid ? -1 : (a.uid > b.uid ? 1 : 0); });
+        st.work_ops = wops;
+      }
+      if (scope.indexOf('byproducts') !== -1) {
+        var bps = [];
+        try {
+          getAllRecords_(dbId, MFG_BYPRODUCT_SHEET).forEach(function (r) {
+            if (String(r.valley_manufacture_header_id || '').trim() === String(moUid)) {
+              bps.push({ uid: String(r.unique_id || '').trim(), item: String(r.item || '').trim(), qty: mfgNormQty_(r.qty) });
+            }
+          });
+        } catch (e) {}
+        bps.sort(function (a, b) { return a.uid < b.uid ? -1 : (a.uid > b.uid ? 1 : 0); });
+        st.byproducts = bps;
+      }
+      return st;
+    }
+    /* Schema-free edit token: hash of the canonical persisted projection. No
+     * version stored in any business sheet. */
+    function mfgEditToken_(dbId, moUid, scope) {
+      var st = mfgCurrentMfgState_(dbId, moUid, scope);
+      if (!st) return '';
+      return mfgHash_(mfgCanonical_({ scope: scope.slice().sort(), state: st }));
+    }
+    /* Resolve every payload row to its authoritative UID: supplied existing
+     * UIDs kept, genuinely new rows mapped to deterministic UIDs when the
+     * request ID is known. The SAME enumerator feeds the comparator and the
+     * mutation so a retry converges on identical rows. */
+    function mfgAssignDesiredUids_(d, moUid, requestId, scope) {
+      var req = String(requestId || '');
+      var outputs = (Array.isArray(d.outputs) ? d.outputs : [])
+        .filter(function (o) { return o && String(o.product_id || '').trim(); })
+        .map(function (o) { return o; });
+      var nOut = 0, nFoot = 0;
+      var outList = outputs.map(function (o) {
+        var ouid = String(o.uid || '').trim();
+        if (!ouid && req) ouid = mfgDeterministicUid_(req, moUid, 'output', nOut);
+        if (!ouid) nOut++;
+        else if (!String(o.uid || '').trim()) nOut++;
+        var feet = (Array.isArray(o.footers) ? o.footers : [])
+          .filter(function (f) { return f && String(f.item || '').trim(); })
+          .map(function (f) {
+            var fuid = String(f.uid || '').trim();
+            if (!fuid && req) fuid = mfgDeterministicUid_(req, moUid, 'footer', nFoot);
+            nFoot++;
+            return { uid: fuid, item: String(f.item || '').trim(), qty: mfgNormQty_(f.qty) };
+          })
+          .sort(function (a, b) { return a.uid < b.uid ? -1 : (a.uid > b.uid ? 1 : 0); });
+        return { uid: ouid, product_id: String(o.product_id || '').trim(), qty: mfgNormQty_(o.qty), footers: feet };
+      });
+      outList.sort(function (a, b) { return a.uid < b.uid ? -1 : (a.uid > b.uid ? 1 : 0); });
+      var want = {
+        header: {
+          manufacture_date: mfgNormDateKey_(d.manufacture_date),
+          operation_type: String(d.operation_type || '').trim(),
+          shift: String(d.shift || '').trim(),
+          produced_product: mfgNormPid_(d.produced_product_id),
+          manufactured_qty: mfgNormQty_(d.manufactured_qty),
+          actual_qty: (d.actual_qty === '' || d.actual_qty == null) ? 0 : mfgNormQty_(d.actual_qty),
+          recipe_id: String(d.recipe_id || '').trim(),
+          manufacture_batch: String(d.manufacture_batch == null ? '' : d.manufacture_batch).trim(),
+          mo_status: String(d.mo_status || 'Draft')
+        },
+        outputs: (scope.indexOf('outputs') !== -1 || scope.indexOf('consumption') !== -1) ? outList : []
+      };
+      if (scope.indexOf('work_ops') !== -1 && Array.isArray(d.work_ops)) {
+        var nWo = 0;
+        want.work_ops = d.work_ops.map(function (w) {
+          var u = String((w && w.uid) || '').trim();
+          if (!u && req) u = mfgDeterministicUid_(req, moUid, 'work_op', nWo);
+          nWo++;
+          return { uid: u, wc: String((w && w.work_center_id) || '').trim(), st: String((w && w.operation_status) || 'Pending').trim(), notes: String((w && w.notes) || '').trim(), hrs: (w && (w.actual_hours === '' || w.actual_hours == null)) ? '' : mfgNormQty_(w && w.actual_hours) };
+        }).sort(function (a, b) { return a.uid < b.uid ? -1 : (a.uid > b.uid ? 1 : 0); });
+      }
+      if (scope.indexOf('byproducts') !== -1 && Array.isArray(d.byproducts)) {
+        var nBp = 0;
+        want.byproducts = d.byproducts.map(function (b) {
+          var u = String((b && b.uid) || '').trim();
+          if (!u && req) u = mfgDeterministicUid_(req, moUid, 'by_product', nBp);
+          nBp++;
+          return { uid: u, item: String((b && b.item) || '').trim(), qty: mfgNormQty_(b && b.qty) };
+        }).sort(function (a, b) { return a.uid < b.uid ? -1 : (a.uid > b.uid ? 1 : 0); });
+      }
+      return want;
+    }
+    /* Exact server-authoritative desired-state comparison for the supplied
+     * scope. Formula results and client costs never compared. */
+    function mfgDesiredMatches_(dbId, moUid, d, scope, requestId) {
+      var cur = mfgCurrentMfgState_(dbId, moUid, scope);
+      if (!cur) return { match: false, reason: 'missing' };
+      var want = mfgAssignDesiredUids_(d, moUid, requestId, scope);
+      var keys = ['manufacture_date', 'operation_type', 'shift', 'produced_product', 'manufactured_qty', 'actual_qty', 'recipe_id', 'manufacture_batch', 'mo_status'];
+      for (var ki = 0; ki < keys.length; ki++) {
+        var k = keys[ki];
+        if (String(cur.header[k]) !== String(want.header[k])) return { match: false, reason: 'header.' + k };
+      }
+      var cmpOut = function (a, b) {
+        if (a.uid !== b.uid || a.product_id !== b.product_id || String(a.qty) !== String(b.qty)) return false;
+        if ((a.footers || []).length !== (b.footers || []).length) return false;
+        for (var i = 0; i < a.footers.length; i++) {
+          var fa = a.footers[i], fb = b.footers[i];
+          if (fa.uid !== fb.uid || fa.item !== fb.item || String(fa.qty) !== String(fb.qty)) return false;
+        }
+        return true;
+      };
+      if ((cur.outputs || []).length !== (want.outputs || []).length) return { match: false, reason: 'outputs.count' };
+      for (var oi = 0; oi < want.outputs.length; oi++) {
+        if (!cmpOut(cur.outputs[oi], want.outputs[oi])) return { match: false, reason: 'outputs.' + oi };
+      }
+      if (want.work_ops) {
+        var cw = cur.work_ops || [];
+        if (cw.length !== want.work_ops.length) return { match: false, reason: 'work_ops.count' };
+        for (var wi = 0; wi < want.work_ops.length; wi++) {
+          var wa = cw[wi], wb = want.work_ops[wi];
+          if (wa.uid !== wb.uid || wa.wc !== wb.wc || wa.st !== wb.st || wa.notes !== wb.notes || String(wa.hrs) !== String(wb.hrs)) return { match: false, reason: 'work_ops.' + wi };
+        }
+      }
+      if (want.byproducts) {
+        var cb = cur.byproducts || [];
+        if (cb.length !== want.byproducts.length) return { match: false, reason: 'byproducts.count' };
+        for (var bi = 0; bi < want.byproducts.length; bi++) {
+          var ba = cb[bi], bb = want.byproducts[bi];
+          if (ba.uid !== bb.uid || ba.item !== bb.item || String(ba.qty) !== String(bb.qty)) return { match: false, reason: 'byproducts.' + bi };
+        }
+      }
+      return { match: true, reason: 'exact' };
+    }
+    /* Plain (uncertain, NOT notApplied) refusal carrying recovery evidence.
+     * Used only after the not-applied gate has passed or when state is
+     * genuinely ambiguous: zero business writes must have happened. */
+    function mfgReviewRequired_(message, recovery) {
+      var e = new Error(message);
+      e.recovery = recovery || null;
+      throw e;
+    }
+    /* Same-request recovery entry. Returns a recovered-success response, or
+     * null when the repeat-safe mutation path must run. Throws (notApplied
+     * for proven refusals, plain review-required for ambiguity) with zero
+     * business writes in all refusal paths. */
+    function mfgRecoverSameRequest_(data, user, dbId, guard, d, scope, editing, targetUid) {
+      var reqId = String((guard && guard.requestId) || '');
+      var prior = (guard && guard.priorRecovery) || null;
+      if (targetUid && guard && typeof guard.findOpenEntity === 'function') {
+        var other = '';
+        try { other = guard.findOpenEntity('save_valley_mfg_order', targetUid); } catch (e) { other = ''; }
+        if (other) vfNotApplied_('يوجد طلب آخر غير مؤكد لنفس أمر التصنيع (' + other + '). راجع السجل قبل إعادة الحفظ.');
+      }
+      if (!prior) {
+        /* Legacy receipt (pre-checkpoint code, incl. the reported request):
+           recover only on exact desired-state proof, else stay review-required
+           with no business write. */
+        if (editing) {
+          var cmp;
+          try { cmp = mfgDesiredMatches_(dbId, targetUid, d, scope, reqId); } catch (e) { cmp = { match: false, reason: 'read' }; }
+          if (cmp.match) return { status: 'success', message: 'تمت مطابقة الحفظ السابق', mo_uid: targetUid, recovered: true };
+        }
+        mfgReviewRequired_('نتيجة الطلب غير مؤكدة وتتطلب مراجعة المسؤول. لا تنشئ طلبًا بديلًا؛ رقم الطلب: ' + reqId, null);
+      }
+      if (String(prior.type || '') !== 'vf_mfg_order_save_v1') mfgReviewRequired_('بيانات الاسترداد غير صالحة — يلزم مراجعة المسؤول. رقم الطلب: ' + reqId, prior);
+      if (String(prior.request_id || '') !== reqId) mfgReviewRequired_('بيانات الاسترداد لا تخص هذا الطلب — يلزم مراجعة المسؤول. رقم الطلب: ' + reqId, prior);
+      if (guard && guard.payloadHash && prior.payload_hash && String(prior.payload_hash) !== String(guard.payloadHash)) mfgReviewRequired_('بيانات الاسترداد لا تطابق محتوى الطلب — يلزم مراجعة المسؤول. رقم الطلب: ' + reqId, prior);
+      if (String(prior.mo_uid || '') !== String(targetUid)) mfgReviewRequired_('بيانات الاسترداد تخص أمر تصنيع مختلف — يلزم مراجعة المسؤول. رقم الطلب: ' + reqId, prior);
+      var cmp2;
+      try { cmp2 = mfgDesiredMatches_(dbId, targetUid, d, scope, reqId); } catch (e) { cmp2 = { match: false, reason: 'read' }; }
+      if (cmp2.match) return { status: 'success', message: 'تمت مطابقة الحفظ السابق', mo_uid: targetUid, recovered: true };
+      return null;
+    }
+    /* Super-admin read-only diagnostic: receipt + envelope + current token +
+     * child counts/duplicates/parent links + formula/total checks +
+     * classification. Never mutates. */
+    function getValleyMfgRequestDiagnosis_(data, user, dbId) {
+      requireSuperAdmin_(user);
+      var d = data || {};
+      var reqId = String(d.request_id || '').trim();
+      var moUid = String(d.mo_uid || '').trim();
+      if (!reqId) throw new Error('request_id مطلوب');
+      var receipts = [];
+      try { receipts = getAllRecords_(dbId, 'ERP_Request_Receipts'); } catch (e) { receipts = []; }
+      var found = null;
+      receipts.forEach(function (r) {
+        if (String(r.request_id || '') === reqId && String(r.module_action || '') === 'save_valley_mfg_order') found = r;
+      });
+      var envelope = null, receiptInfo = null;
+      if (found) {
+        receiptInfo = { request_id: String(found.request_id || ''), user_email: String(found.user_email || ''), module_action: String(found.module_action || ''), payload_hash: String(found.payload_hash || ''), state: String(found.state || ''), created_at: String(found.created_at || ''), updated_at: String(found.updated_at || '') };
+        try {
+          var body = JSON.parse(String(found.response_json || ''));
+          if (body && body.recovery && typeof body.recovery === 'object') envelope = body.recovery;
+        } catch (e) {}
+      }
+      var scope = MFG_DETAIL_SCOPE_;
+      var token = moUid ? mfgEditToken_(dbId, moUid, scope) : '';
+      var counts = { outputs: 0, footers: 0, workops: 0, byproducts: 0, dupUid: 0, orphanFooter: 0 };
+      var seen = {};
+      if (moUid) {
+        try {
+          var outUids = {};
+          getAllRecords_(dbId, MFG_ORDER_PRODUCTS_SHEET).forEach(function (o) {
+            if (String(o.valley_manufacture_header_id || '').trim() !== moUid) return;
+            counts.outputs++;
+            var u = String(o.unique_id || '').trim();
+            if (!u || seen['o' + u]) counts.dupUid++;
+            seen['o' + u] = true;
+            outUids[u] = true;
+          });
+          getAllRecords_(dbId, MFG_CONSUMPTION_SHEET).forEach(function (cm) {
+            var ref = String(cm.valley_manufacture_header_product_id || '').trim();
+            if (!ref || (ref !== moUid && !outUids[ref])) return;
+            counts.footers++;
+            var u2 = String(cm.unique_id || '').trim();
+            if (!u2 || seen['c' + u2]) counts.dupUid++;
+            seen['c' + u2] = true;
+            if (!outUids[ref] && ref !== moUid) counts.orphanFooter++;
+          });
+          getAllRecords_(dbId, MFG_WORKOPS_SHEET).forEach(function (r) {
+            if (String(r.valley_manufacture_header_id || '').trim() === moUid) counts.workops++;
+          });
+          getAllRecords_(dbId, MFG_BYPRODUCT_SHEET).forEach(function (r) {
+            if (String(r.valley_manufacture_header_id || '').trim() === moUid) counts.byproducts++;
+          });
+        } catch (e) {}
+      }
+      var classification = 'manual_review';
+      if (!found) classification = 'unknown_request';
+      else if (String(found.state) === 'done') classification = 'completed';
+      else if (String(found.state) === 'failed') classification = 'not_applied';
+      else if (envelope) classification = 'resumable';
+      return { status: 'success', receipt: receiptInfo, recovery: envelope, edit_token: token, save_scope: scope, counts: counts, classification: classification };
+    }
+
+    function saveValleyMfgOrder_(data, user, dbId, guardCtx) {
 
     var d = data || {};
+    var guard = guardCtx || {};
+    var reqId = String(guard.requestId || '');
+    var scope = mfgScopeFor_(d);
+    var recoveredResp = null;
     var isSuperAdmin = !!(user && user.isSuperAdmin);
     var editing = !!(d.mo_uid && String(d.mo_uid).trim());
     /* declared here, not inside executeWithLock_: the success return below needs it */
@@ -6382,38 +7975,55 @@ const ValleyFoodsHRModules = (function () {
     /* POLICY: add = page-write authority; edit existing = any writer, UNLESS the MO is Locked
        (Locked MOs are immutable and require super-admin unlock — enforced below at save time). */
 
-    /* ALL header fields are mandatory. */
-    if (!d.manufacture_date) throw new Error('تاريخ التصنيع مطلوب');
+    /* Pre-mutation validation. Every refusal below happens before any
+       business-row write, so each is a proven not-applied outcome (failed
+       receipt: safe to correct and retry), never an uncertain trap. */
+    if (!d.manufacture_date) vfNotApplied_('تاريخ التصنيع مطلوب');
     var moDate = parseDate_(d.manufacture_date);
-    if (!moDate) throw new Error('تاريخ التصنيع غير صالح');
+    if (!moDate) vfNotApplied_('تاريخ التصنيع غير صالح');
     moDate = new Date(moDate.getFullYear(), moDate.getMonth(), moDate.getDate()); /* date-only, strip time component */
     var opType = String(d.operation_type || '').trim();
-    if (MFG_OP_TYPES.indexOf(opType) === -1) throw new Error('نوع العملية مطلوب');
+    if (MFG_OP_TYPES.indexOf(opType) === -1) vfNotApplied_('نوع العملية مطلوب');
     var shift = String(d.shift || '').trim();
-    if (MFG_SHIFTS.indexOf(shift) === -1) throw new Error('الوردية مطلوبة');
+    if (MFG_SHIFTS.indexOf(shift) === -1) vfNotApplied_('الوردية مطلوبة');
     var producedPid = String(d.produced_product_id || '').trim();
-    if (!producedPid) throw new Error('المنتج المنتج مطلوب');
+    if (!producedPid) vfNotApplied_('المنتج المنتج مطلوب');
     var MFG_YIELD_FACTOR = 0.65;
     var manufacturedQty = Number(d.manufactured_qty);
-    if (d.manufactured_qty === '' || d.manufactured_qty == null || isNaN(manufacturedQty) || manufacturedQty < 0) throw new Error('كمية الخام الداخلة مطلوبة');
+    if (d.manufactured_qty === '' || d.manufactured_qty == null || isNaN(manufacturedQty) || manufacturedQty < 0) vfNotApplied_('كمية الخام الداخلة مطلوبة');
     var expectedQty = Math.round(manufacturedQty * MFG_YIELD_FACTOR * 1000) / 1000;
-    if (!isFinite(expectedQty) || expectedQty <= 0) throw new Error('كمية الخام الداخلة يجب أن تكون أكبر من صفر (الكمية المتوقعة = الخام × 0.65)');
+    if (!isFinite(expectedQty) || expectedQty <= 0) vfNotApplied_('كمية الخام الداخلة يجب أن تكون أكبر من صفر (الكمية المتوقعة = الخام × 0.65)');
     var recipeUid = String(d.recipe_id || '').trim();
     var outputs = Array.isArray(d.outputs) ? d.outputs.filter(function (o) { return o && String(o.product_id || '').trim(); }) : [];
+    /* UI "add" buttons create temporary placeholder rows. A stale or older
+       client may still submit one without a selected work centre/product;
+       normalize those placeholders out before recovery comparison, ownership
+       checks or persistence so they can never become null business rows. The
+       array keys remain present, preserving the detail page's explicit section
+       scope and remove-all semantics. */
+    if (Array.isArray(d.work_ops)) {
+      d.work_ops = d.work_ops.filter(function (w) { return w && String(w.work_center_id || '').trim(); });
+    }
+    if (Array.isArray(d.byproducts)) {
+      d.byproducts = d.byproducts.filter(function (b) { return b && String(b.item || '').trim(); });
+    }
+    var deletedOutUids = mfgDeletedUids_(d, 'outputs');
+    var deletedConsUids = mfgDeletedUids_(d, 'consumption');
+    var deletedWoUids = mfgDeletedUids_(d, 'work_ops');
+    var deletedBpUids = mfgDeletedUids_(d, 'byproducts');
     try { Logger.log('MFGTRACE payload: outputs_raw=' + (Array.isArray(d.outputs) ? d.outputs.length : 'NA') + ' outputs_kept=' + outputs.length + ' consumption_raw=' + (Array.isArray(d.consumption) ? d.consumption.length : 'NA') + ' work_ops=' + (Array.isArray(d.work_ops) ? d.work_ops.length : 'NA') + ' byproducts=' + (Array.isArray(d.byproducts) ? d.byproducts.length : 'NA') + ' mo_uid=' + String(d.mo_uid || '')); } catch (eLg) {}
-    if (!outputs.length) throw new Error('أضف منتج ناتج واحد على الأقل');
+    if (!outputs.length) vfNotApplied_('أضف منتج ناتج واحد على الأقل');
       var consumption = Array.isArray(d.consumption) ? d.consumption.filter(function (cm) { return cm && String(cm.batch_uid || '').trim() && Number(cm.qty || 0) > 0; }) : [];
       var hasFooters = outputs.some(function (o) { return Array.isArray(o.footers) && o.footers.some(function (f) { return String(f.item || '').trim(); }); });
-      if (!consumption.length && !hasFooters) throw new Error('خصص استهلاك الخامات من الدفعات أولاً');
+      if (!consumption.length && !hasFooters) vfNotApplied_('خصص استهلاك الخامات من الدفعات أولاً');
 
-    /* The three tabs exist before the guard runs, not just before the write: the
-       guard resolves footer ownership against them, and a missing tab there would
-       silently turn every already-committed quantity into an ignorable orphan. */
-    settingsEnsureSheet_(dbId, MFG_ORDER_SHEET, MFG_ORDER_HEADERS);
-    settingsEnsureSheet_(dbId, MFG_ORDER_PRODUCTS_SHEET, MFG_OUTPUT_HEADERS);
-    settingsEnsureSheet_(dbId, MFG_CONSUMPTION_SHEET, MFG_CONSUMPTION_HEADERS);
+    /* Read-only, scope-aware schema gate for this Valley Foods MO save. It
+       requires the canonical positional prefix and permits safe trailing
+       columns. It never creates schema; a missing/misplaced header is a proven
+       pre-mutation refusal. Runs inside the lock before any business write. */
 
     executeWithLock_(function () {
+      mfgAssertMfgSchema_(dbId, scope);
       /* Defensive: requested batch qty may not exceed the balance in
          valley_current_products, which is now the ONLY guard on the batch. It runs
          INSIDE the lock: outside it, two concurrent saves both read the same
@@ -6439,7 +8049,7 @@ const ValleyFoodsHRModules = (function () {
             .map(function (f) { return { batch: String(f.item).trim(), qty: Math.round((Number(f.qty) || 0) * 1000) / 1000 }; });
           var paySum = Math.round(rows.reduce(function (t, r) { return t + r.qty; }, 0) * 1000) / 1000;
           if (Math.abs(paySum - payQty) > 0.01) {
-            throw new Error('مجموع الدفعات للصنف (' + (nameMap[opid] || opid || '?') + ') يجب أن يساوي كمية البند. مجموع الدفعات: ' + paySum + '، الكمية: ' + payQty);
+            vfNotApplied_('مجموع الدفعات للصنف (' + (nameMap[opid] || opid || '?') + ') يجب أن يساوي كمية البند. مجموع الدفعات: ' + paySum + '، الكمية: ' + payQty);
           }
           /* numbers are stored exactly as sent — no rounding-up into any row */
           rows.forEach(function (r) { need_(r.batch, r.qty, true); });
@@ -6469,7 +8079,7 @@ const ValleyFoodsHRModules = (function () {
                 });
               });
             } catch (eLbl) {}
-            throw new Error('الكمية المطلوبة من الدفعة (' + label + ') تتجاوز المتاح. المطلوب: ' + needByBatch[buid] + ' (مخرجات: ' + (needOutByBatch[buid] || 0) + ' + استهلاك: ' + (needConsByBatch[buid] || 0) + ')، المتاح: ' + avail);
+            vfNotApplied_('الكمية المطلوبة من الدفعة (' + label + ') تتجاوز المتاح. المطلوب: ' + needByBatch[buid] + ' (مخرجات: ' + (needOutByBatch[buid] || 0) + ' + استهلاك: ' + (needConsByBatch[buid] || 0) + ')، المتاح: ' + avail);
           }
         });
       })();
@@ -6490,17 +8100,165 @@ const ValleyFoodsHRModules = (function () {
             moNumberId = Number(moDataAll[r0][idIdx]);
             /* M4: Locked orders are immutable for everyone — unlock first (lines sync only when not Locked) */
             if (stIdxG !== -1 && String(moDataAll[r0][stIdxG]).trim() === 'Locked') {
-              throw new Error('أمر التصنيع مقفل — قم بفتح القفل أولاً');
+              vfNotApplied_('أمر التصنيع مقفل — قم بفتح القفل أولاً');
             }
             break;
           }
         }
-        if (!moNumberId) throw new Error('أمر التصنيع غير موجود');
+        if (!moNumberId) vfNotApplied_('أمر التصنيع غير موجود');
       } else {
-        moUid = uid16Hex_();
-        moNumberId = getNextIdUnderLock_(dbId, MFG_ORDER_SHEET, 'id'); /* M5 canonical */
+        /* Genuinely new MO: the UID is deterministic per request ID, so a
+           same-request retry re-binds the same row instead of duplicating it. */
+        moUid = reqId ? mfgDeterministicUid_(reqId, 'new', 'mo', 0) : uid16Hex_();
+        moNumberId = null;
+        for (var r0n = 1; r0n < moDataAll.length; r0n++) {
+          if (String(moDataAll[r0n][uidIdx]).trim() === moUid) {
+            moNumberId = Number(moDataAll[r0n][idIdx]);
+            editing = true;
+            break;
+          }
+        }
+        if (!moNumberId) moNumberId = mfgNextIntegerId_(dbId, MFG_ORDER_SHEET);
       }
       try { Logger.log('MFGTRACE resolved: moUid=' + moUid + ' editing=' + editing + ' dbId=' + String(dbId).slice(0, 8) + '…'); } catch (eLg2) {}
+
+      var ckpt_ = function (stage) {
+        if (guard.checkpoint) guard.checkpoint({ type: 'vf_mfg_order_save_v1', mo_uid: moUid, base_token: String(d.base_token || ''), scope: scope, stage: stage });
+      };
+
+      /* Same-request recovery: reconciles without a business write when the
+         desired state is already present, else falls through to the
+         repeat-safe mutation below. Refusals here write nothing. */
+      if (guard.recovering) {
+        var recResp = mfgRecoverSameRequest_(data, user, dbId, guard, d, scope, editing, moUid);
+        if (recResp) { recoveredResp = recResp; return; }
+      }
+
+      /* Schema-free optimistic concurrency on existing-MO edits. Skipped for
+         new MOs and for recovery resumes (the envelope + desired-state
+         comparison govern there). A mismatch is proven pre-mutation. */
+      if (editing && !guard.recovering) {
+        var baseToken = String(d.base_token || '').trim();
+        if (!baseToken) vfNotApplied_('الجلسة قديمة — حدّث الصفحة وأعد تحميل أمر التصنيع قبل الحفظ');
+        var curTok = mfgEditToken_(dbId, moUid, scope);
+        if (curTok && baseToken !== curTok) {
+          var ve = new Error('تغيّرت بيانات أمر التصنيع على الخادم — حدّث الصفحة وراجع تعديلاتك قبل الحفظ');
+          ve.notApplied = true; ve.code = 'VERSION_CONFLICT';
+          throw ve;
+        }
+      }
+
+      /* Child-ownership gate: every supplied existing UID must already belong
+         to this MO. Explicit deletion UIDs obey the same rule on the first
+         attempt. During a validated recovery they may already be absent (or a
+         footer may be orphaned because its explicitly deleted parent output
+         was removed before the interruption), but a UID currently owned by a
+         different MO is still always refused. */
+      (function assertMfgOwnership_() {
+        var wantOut = {}, wantFoot = {}, wantWo = {}, wantBp = {};
+        outputs.forEach(function (o) {
+          var u = String(o.uid || '').trim();
+          if (u) wantOut[u] = true;
+          (Array.isArray(o.footers) ? o.footers : []).forEach(function (f) {
+            var fu = String(f.uid || '').trim();
+            if (fu) wantFoot[fu] = true;
+          });
+        });
+        (Array.isArray(d.work_ops) ? d.work_ops : []).forEach(function (w) {
+          var u = String((w && w.uid) || '').trim();
+          if (u) wantWo[u] = true;
+        });
+        (Array.isArray(d.byproducts) ? d.byproducts : []).forEach(function (b) {
+          var u = String((b && b.uid) || '').trim();
+          if (u) wantBp[u] = true;
+        });
+        if (!Object.keys(wantOut).length && !Object.keys(wantFoot).length && !Object.keys(wantWo).length && !Object.keys(wantBp).length &&
+            !deletedOutUids.length && !deletedConsUids.length && !deletedWoUids.length && !deletedBpUids.length) return;
+        var haveOut = {}, haveFoot = {}, haveWo = {}, haveBp = {};
+        var allOutOwner = {}, allFootOwner = {}, allFootOrphan = {}, allWoOwner = {}, allBpOwner = {};
+        try {
+          getAllRecords_(dbId, MFG_ORDER_PRODUCTS_SHEET).forEach(function (r) {
+            var u = String(r.unique_id || '').trim();
+            var owner = String(r.valley_manufacture_header_id || '').trim();
+            if (!u) return;
+            allOutOwner[u] = owner;
+            if (owner === moUid) haveOut[u] = true;
+          });
+        } catch (e) {}
+        try {
+          getAllRecords_(dbId, MFG_CONSUMPTION_SHEET).forEach(function (r) {
+            var u = String(r.unique_id || '').trim();
+            var ref = String(r.valley_manufacture_header_product_id || '').trim();
+            if (!u) return;
+            var owner = ref === moUid ? moUid : String(allOutOwner[ref] || '');
+            allFootOwner[u] = owner;
+            allFootOrphan[u] = !!(ref && ref !== moUid && !allOutOwner[ref]);
+            if (owner === moUid) haveFoot[u] = true;
+          });
+        } catch (e) {}
+        try {
+          getAllRecords_(dbId, MFG_WORKOPS_SHEET).forEach(function (r) {
+            var u = String(r.unique_id || '').trim();
+            var owner = String(r.valley_manufacture_header_id || '').trim();
+            if (!u) return;
+            allWoOwner[u] = owner;
+            if (owner === moUid) haveWo[u] = true;
+          });
+        } catch (e) {}
+        try {
+          getAllRecords_(dbId, MFG_BYPRODUCT_SHEET).forEach(function (r) {
+            var u = String(r.unique_id || '').trim();
+            var owner = String(r.valley_manufacture_header_id || '').trim();
+            if (!u) return;
+            allBpOwner[u] = owner;
+            if (owner === moUid) haveBp[u] = true;
+          });
+        } catch (e) {}
+        Object.keys(wantOut).forEach(function (u) { if (!haveOut[u]) vfNotApplied_('بند ناتج غير تابع لأمر التصنيع — حدّث الصفحة وأعد المحاولة'); });
+        Object.keys(wantFoot).forEach(function (u) { if (!haveFoot[u]) vfNotApplied_('بند استهلاك غير تابع لأمر التصنيع — حدّث الصفحة وأعد المحاولة'); });
+        Object.keys(wantWo).forEach(function (u) { if (!haveWo[u]) vfNotApplied_('عملية تشغيل غير تابعة لأمر التصنيع — حدّث الصفحة وأعد المحاولة'); });
+        Object.keys(wantBp).forEach(function (u) { if (!haveBp[u]) vfNotApplied_('منتج ثانوي غير تابع لأمر التصنيع — حدّث الصفحة وأعد المحاولة'); });
+        function assertDelete_(uids, owned, allOwner, message, orphanMap) {
+          uids.forEach(function (u) {
+            if (owned[u]) return;
+            /* mfgRecoverSameRequest_ has already authenticated the persisted
+               request/payload/MO envelope before this point. */
+            if (guard.recovering && (!Object.prototype.hasOwnProperty.call(allOwner, u) || (orphanMap && orphanMap[u]))) return;
+            vfNotApplied_(message);
+          });
+        }
+        assertDelete_(deletedOutUids, haveOut, allOutOwner, 'بند ناتج غير تابع لأمر التصنيع — حدّث الصفحة وأعد المحاولة');
+        assertDelete_(deletedConsUids, haveFoot, allFootOwner, 'بند استهلاك غير تابع لأمر التصنيع — حدّث الصفحة وأعد المحاولة', allFootOrphan);
+        assertDelete_(deletedWoUids, haveWo, allWoOwner, 'عملية تشغيل غير تابعة لأمر التصنيع — حدّث الصفحة وأعد المحاولة');
+        assertDelete_(deletedBpUids, haveBp, allBpOwner, 'منتج ثانوي غير تابع لأمر التصنيع — حدّث الصفحة وأعد المحاولة');
+        outputs.forEach(function (o) {
+          var ou = String(o.uid || '').trim();
+          if (ou && deletedOutUids.indexOf(ou) !== -1) vfNotApplied_('لا يمكن تحديث وحذف بند الناتج نفسه في طلب واحد');
+          (Array.isArray(o.footers) ? o.footers : []).forEach(function (f) {
+            var fu = String(f.uid || '').trim();
+            if (fu && deletedConsUids.indexOf(fu) !== -1) vfNotApplied_('لا يمكن تحديث وحذف بند الدفعة نفسه في طلب واحد');
+          });
+        });
+        (Array.isArray(d.work_ops) ? d.work_ops : []).forEach(function (w) {
+          var wu = String((w && w.uid) || '').trim();
+          if (wu && deletedWoUids.indexOf(wu) !== -1) vfNotApplied_('لا يمكن تحديث وحذف عملية التشغيل نفسها في طلب واحد');
+        });
+        (Array.isArray(d.byproducts) ? d.byproducts : []).forEach(function (b) {
+          var bu = String((b && b.uid) || '').trim();
+          if (bu && deletedBpUids.indexOf(bu) !== -1) vfNotApplied_('لا يمكن تحديث وحذف المنتج الثانوي نفسه في طلب واحد');
+        });
+      })();
+
+      /* A different unresolved request for this MO blocks before mutation. */
+      if (!guard.recovering && guard.findOpenEntity) {
+        var otherReq = '';
+        try { otherReq = guard.findOpenEntity('save_valley_mfg_order', moUid); } catch (e) { otherReq = ''; }
+        if (otherReq) vfNotApplied_('يوجد طلب غير مؤكد لنفس أمر التصنيع (' + otherReq + ') — راجع السجل قبل إعادة الحفظ');
+      }
+
+      /* Validated checkpoint BEFORE the first business-row write: a checkpoint
+         failure here still means zero business writes. */
+      ckpt_('validated');
 
       var catId = mfgProductCategory_(dbId, producedPid);
       var map = {};
@@ -6532,13 +8290,25 @@ const ValleyFoodsHRModules = (function () {
           if (String(moDataAll[rr][uidIdx]).trim() === moUid) {
             var oldObj = {};
             moHeaders.forEach(function (h, hi) { oldObj[String(h).trim()] = moDataAll[rr][hi]; });
-            rowVals = moHeaders.map(function (h, hi) {
-              var k = String(h).trim();
-              return map[k] !== undefined ? map[k] : moDataAll[rr][hi];
+            /* Formula-safe, name-based patch. Never rewrite the full row:
+               doing so converts unknown trailing formulas to values. Identity
+               and creation fields are immutable for an existing MO. */
+            var headerPatch = {};
+            Object.keys(map).forEach(function (k) {
+              if (k === 'unique_id' || k === 'id' || k === 'created_at') return;
+              headerPatch[k] = map[k];
             });
-            sheetMo.getRange(rr + 1, 1, 1, rowVals.length).setValues([rowVals]);
-            noteMutation_(sheetMo);
-            var newObj = Object.assign({}, oldObj, map);
+            try {
+              if (typeof _stampExistingAuditCols_ === 'function') {
+                _stampExistingAuditCols_(sheetMo, headerPatch, {
+                  user: (user && user.email) || '',
+                  updated_by: (user && user.email) || '',
+                  updated_at: new Date()
+                });
+              }
+            } catch (eStamp) {}
+            if (!patchRowByCriteria_(sheetMo, 'unique_id', moUid, headerPatch)) vfNotApplied_('أمر التصنيع غير موجود');
+            var newObj = Object.assign({}, oldObj, headerPatch);
             var oldUid = oldObj.record_uid || ('upd_' + MFG_ORDER_SHEET + '_' + moUid);
             try { logHistory_(dbId, MFG_ORDER_SHEET, oldUid, moUid, (user && user.email) || '', 'update', newObj, oldObj); } catch (eHist) {}
             newRow = rr + 1;
@@ -6546,9 +8316,26 @@ const ValleyFoodsHRModules = (function () {
           }
         }
       } else {
+        /* Already inside the MO save lock and `moNumberId` is the validated
+           max+1 integer. Do not route through addRecord_, which owns a second
+           allocator and would skip an ID. */
         map['record_uid'] = 'rec_' + Utilities.getUuid();
-        var moRes = saveRecordWithAudit_(dbId, MFG_ORDER_SHEET, null, map, 'create', (user && user.email) || '', null, null, null, 'unique_id');
-        newRow = moRes.data.newRowNumber;
+        try {
+          if (typeof _stampExistingAuditCols_ === 'function') {
+            _stampExistingAuditCols_(sheetMo, map, {
+              user: (user && user.email) || '',
+              created_by: (user && user.email) || '', created_at: map['created_at'],
+              updated_by: (user && user.email) || '', updated_at: map['created_at'],
+              record_uid: map['record_uid']
+            });
+          }
+        } catch (eStampNew) {}
+        rowVals = moHeaders.map(function (h) { var k = String(h).trim(); return map[k] !== undefined ? map[k] : ''; });
+        newRow = sheetMo.getLastRow() + 1;
+        ensureGridRows_(sheetMo, newRow);
+        sheetMo.getRange(newRow, 1, 1, moHeaders.length).setValues([rowVals]);
+        noteMutation_(sheetMo);
+        try { logHistory_(dbId, MFG_ORDER_SHEET, map.record_uid, moUid, (user && user.email) || '', 'create', map, null); } catch (eHistNew) {}
       }
 
       /* derived columns are SHEET FORMULAS (auto-adjust to the row) */
@@ -6562,80 +8349,119 @@ const ValleyFoodsHRModules = (function () {
       // sheet and headers already in scope. The row exists on both the edit
       // and the create path, so nothing here needs the lock.
       writeRowFormulas_(sheetMo, moHeaders, fx, mfgOrderFormulaMap_(fx));
+      ckpt_('header');
 
-      /* gather this MO's existing output UIDs BEFORE deleting outputs (needed to scope footer deletion) */
-      var existingOutUids = [];
+      /* STABLE UPSERT outputs: a row the client sends back with its uid is
+         patched in place (id/unique_id/created_at never touched — even a blank
+         id stays blank); a row without uid is created with fresh uid + max+1
+         id; persisted rows are deleted only through deleted_uids. */
+      var existingOutByUid = {};
       try {
         getAllRecords_(dbId, MFG_ORDER_PRODUCTS_SHEET).forEach(function (eo) {
-          if (String(eo.valley_manufacture_header_id || '').trim() === moUid) existingOutUids.push(String(eo.unique_id).trim());
+          if (String(eo.valley_manufacture_header_id || '').trim() === moUid) existingOutByUid[String(eo.unique_id).trim()] = eo;
         });
       } catch (e) {}
-
-      /* rewrite outputs */
+      var existingOutUids = Object.keys(existingOutByUid);
       var sheetOut = getSheet_(MFG_ORDER_PRODUCTS_SHEET, dbId);
-      deleteRowsByCriteria_(sheetOut, 'valley_manufacture_header_id', moUid);
       var outHeaders = getHeaders_(sheetOut);
       var prodNameMap = {};
       try {
         getAllRecords_(dbId, FIN_PRODUCTS_SHEET).forEach(function (p) { prodNameMap[String(p.id)] = String(p.name_ar || ''); });
       } catch (e5) {}
       var outputUidMap = {};
-      var outStart = sheetOut.getLastRow() + 1;
-      var outRows = outputs.map(function (o, oi) {
-        var outUid = uid16Hex_();
-        outputUidMap[oi] = outUid;
-        var m6 = {};
-        m6['unique_id'] = outUid;
-        m6['valley_manufacture_header_id'] = moUid;
-        m6['product_id'] = String(o.product_id).trim();
-        m6['product_name'] = prodNameMap[String(o.product_id)] || '';
-        m6['product_qty'] = Math.round((Number(o.qty) || 0) * 1000) / 1000;
-        m6['cost_unit'] = o.cost_unit != null ? o.cost_unit : '';
-        m6['total_cost'] = o.total_cost != null ? o.total_cost : '';
-        m6['user'] = (user && user.email) || '';
-        m6['created_at'] = new Date();
-        return outHeaders.map(function (h) {
-          var k = String(h).trim();
-          return m6[k] !== undefined ? m6[k] : '';
-        });
+      var keepOutUids = [];
+      var outNewRows = [];
+      /* nOutNew enumerates uid-less outputs in payload order — the identical
+         enumeration mfgAssignDesiredUids_ uses, so a retry recomputes the same
+         deterministic UID for the same row. */
+      var nOutNew = 0;
+      outputs.forEach(function (o, oi) {
+        var suppliedUid = String(o.uid || '').trim();
+        var ouid = suppliedUid;
+        var oldOut = ouid ? existingOutByUid[ouid] : null;
+        var detIdx = -1;
+        if (!suppliedUid) detIdx = nOutNew++;
+        if (!oldOut && detIdx !== -1 && reqId) {
+          var detO = mfgDeterministicUid_(reqId, moUid, 'output', detIdx);
+          if (existingOutByUid[detO]) { ouid = detO; oldOut = existingOutByUid[detO]; }
+        }
+        if (oldOut) {
+          var m6u = {};
+          m6u['product_id'] = String(o.product_id).trim();
+          m6u['product_name'] = prodNameMap[String(o.product_id)] || '';
+          m6u['product_qty'] = Math.round((Number(o.qty) || 0) * 1000) / 1000;
+          m6u['user'] = (user && user.email) || '';
+          /* cost columns are sheet formulas — patchRowByCriteria_ preserves
+             live formula cells; only fill plain cells when the client sent one */
+          if (o.cost_unit !== '' && o.cost_unit != null) m6u['cost_unit'] = o.cost_unit;
+          if (o.total_cost !== '' && o.total_cost != null) m6u['total_cost'] = o.total_cost;
+          patchRowByCriteria_(sheetOut, 'unique_id', ouid, m6u);
+          outputUidMap[oi] = ouid;
+          keepOutUids.push(ouid);
+        } else {
+          var outUid = (detIdx !== -1 && reqId) ? mfgDeterministicUid_(reqId, moUid, 'output', detIdx) : uid16Hex_();
+          outputUidMap[oi] = outUid;
+          var m6 = {};
+          m6['unique_id'] = outUid;
+          m6['id'] = mfgNextIntegerId_(dbId, MFG_ORDER_PRODUCTS_SHEET);
+          m6['valley_manufacture_header_id'] = moUid;
+          m6['product_id'] = String(o.product_id).trim();
+          m6['product_name'] = prodNameMap[String(o.product_id)] || '';
+          m6['product_qty'] = Math.round((Number(o.qty) || 0) * 1000) / 1000;
+          m6['cost_unit'] = o.cost_unit != null ? o.cost_unit : '';
+          m6['total_cost'] = o.total_cost != null ? o.total_cost : '';
+          m6['user'] = (user && user.email) || '';
+          m6['created_at'] = new Date();
+          outNewRows.push(outHeaders.map(function (h) {
+            var k = String(h).trim();
+            return m6[k] !== undefined ? m6[k] : '';
+          }));
+          keepOutUids.push(outUid);
+        }
       });
-      try { Logger.log('MFGTRACE outputs: rows=' + outRows.length + ' tab=' + sheetOut.getName() + ' startRow=' + outStart + ' cols=' + outHeaders.length); } catch (eLg3) {}
-      if (outRows.length) {
+      var outStart = sheetOut.getLastRow() + 1;
+      try { Logger.log('MFGTRACE outputs upsert: kept=' + keepOutUids.length + ' new=' + outNewRows.length + ' explicit_delete=' + deletedOutUids.length + ' tab=' + sheetOut.getName()); } catch (eLg3) {}
+      if (outNewRows.length) {
         /* Phase 8 (F-04): was one setValues followed by 2 writeFormula_ PER ROW.
          * The formulas are merged into the same block write, so a 5-output order
          * goes from 11 round trips to 1.
          *
-         * The start row is now recomputed under the script lock. It was already
-         * a precomputed target range rather than appendRow, so two concurrent
-         * saves could compute the same start row and one would silently
-         * overwrite the other; the lock closes that, and ensureGridRows_ grows
-         * the grid the way appendRow used to implicitly. Row numbers are
-         * unchanged: output i still lands at getLastRow()+1+i. (outStart is
-         * reassigned here, after the trace above has already logged its
-         * pre-lock value.) */
-        executeWithLock_(function () {
-          outStart = sheetOut.getLastRow() + 1;
-          ensureGridRows_(sheetOut, outStart + outRows.length - 1);
-          outRows.forEach(function (rv, oi2) {
-            applyRowFormulas_(rv, outHeaders, mfgOutputFormulaMap_(outStart + oi2));
-          });
-          sheetOut.getRange(outStart, 1, outRows.length, outHeaders.length).setValues(outRows);
-          noteMutation_(sheetOut);
+         * Already under the outer save lock: no nested executeWithLock_ here
+         * (the script lock is non-reentrant). Row numbers are unchanged. */
+        outStart = sheetOut.getLastRow() + 1;
+        ensureGridRows_(sheetOut, outStart + outNewRows.length - 1);
+        outNewRows.forEach(function (rv, oi2) {
+          applyRowFormulas_(rv, outHeaders, mfgOutputFormulaMap_(outStart + oi2));
         });
+        sheetOut.getRange(outStart, 1, outNewRows.length, outHeaders.length).setValues(outNewRows);
+        noteMutation_(sheetOut);
       }
+      /* Delete only rows the editor explicitly removed. A missing client row
+         is not deletion evidence (it may be a stale/partial UI state). */
+      deleteRowsWhereIn_(sheetOut, 'unique_id', deletedOutUids);
+      ckpt_('outputs');
 
-      /* rewrite raw-material batch consumption — per-product footers + legacy consumption */
+      /* STABLE UPSERT consumption: footer rows are keyed by their own uid
+         (parented by the output uid, kept or new). Matched rows are patched in
+         place — id/unique_id/created_at untouched; new rows receive fresh uid
+         + max+1 id; deletion requires explicit deleted_uids evidence. */
       var sheetCons = getSheet_(MFG_CONSUMPTION_SHEET, dbId);
-      /* footers are linked by the OUTPUT uid, not the MO uid — delete this MO's old output footers */
-      /* ONE read for all of this MO's outputs. Per-output deletion re-read the
-         whole consumption sheet once per output. */
-      deleteRowsWhereIn_(sheetCons, 'valley_manufacture_header_product_id', existingOutUids);
-      /* …and the rows an earlier save parented on the MO uid itself through the
-         `outUid || moUid` fallback below. They are unambiguously ours, and left
-         behind they would be rewritten alongside, double-counting the batch. */
-      deleteRowsByCriteria_(sheetCons, 'valley_manufacture_header_product_id', moUid);
       var consHeaders = getHeaders_(sheetCons);
-      var consRows = [];
+      /* scope = every consumption row parented by this MO's outputs (old uids)
+         or by the MO uid itself (earlier `outUid || moUid` fallback rows) */
+      var existingConsByUid = {};
+      try {
+        getAllRecords_(dbId, MFG_CONSUMPTION_SHEET).forEach(function (cm) {
+          var refId = String(cm.valley_manufacture_header_product_id || '').trim();
+          if (refId && (existingOutByUid[refId] || refId === moUid)) existingConsByUid[String(cm.unique_id).trim()] = cm;
+        });
+      } catch (e) {}
+      var keepConsUids = [];
+      var consNewRows = [];
+      /* nFootNew enumerates uid-less footers in payload order across all
+         outputs — mirrored by mfgAssignDesiredUids_. */
+      var nFootNew = 0;
+      var nConsNew = 0;
 
       /* U-47. The authoritative unit cost of a batch, keyed by batch uid, read
        * from valley_current_products — the SAME source and the same lookup the
@@ -6659,61 +8485,118 @@ const ValleyFoodsHRModules = (function () {
         var outUid = outputUidMap[oi];
         var footers = (Array.isArray(o.footers) ? o.footers : []).filter(function (f) { return f && String(f.item || '').trim(); });
         footers.forEach(function (f) {
-          var m7 = {};
-          m7['unique_id'] = uid16Hex_();
-          m7['valley_manufacture_header_product_id'] = outUid || moUid;
-          m7['item'] = String(f.item || '').trim();
-          m7['item_code'] = String(f.item_code || '');
-          m7['qty'] = Math.round((Number(f.qty) || 0) * 1000) / 1000;
-          /* U-47: server-resolved, never f.unit_cost. */
-          m7['cost_unit'] = footerBatchCost[m7['item']] || 0;
-          m7['created_at'] = new Date();
-          m7['user'] = (user && user.email) || '';
-          consRows.push(consHeaders.map(function (h) {
-            var k = String(h).trim();
-            return m7[k] !== undefined ? m7[k] : '';
-          }));
+          var suppliedFuid = String(f.uid || '').trim();
+          var fuid = suppliedFuid;
+          var oldF = fuid ? existingConsByUid[fuid] : null;
+          var detFIdx = -1;
+          if (!suppliedFuid) detFIdx = nFootNew++;
+          if (!oldF && detFIdx !== -1 && reqId) {
+            var detF = mfgDeterministicUid_(reqId, moUid, 'footer', detFIdx);
+            if (existingConsByUid[detF]) { fuid = detF; oldF = existingConsByUid[detF]; }
+          }
+          var fqty = Math.round((Number(f.qty) || 0) * 1000) / 1000;
+          if (oldF) {
+            var m7u = {};
+            m7u['valley_manufacture_header_product_id'] = outUid || moUid;
+            m7u['item'] = String(f.item || '').trim();
+            if (String(f.item_code || '') !== '') m7u['item_code'] = String(f.item_code);
+            m7u['qty'] = fqty;
+            m7u['user'] = (user && user.email) || '';
+            patchRowByCriteria_(sheetCons, 'unique_id', fuid, m7u);
+            keepConsUids.push(fuid);
+          } else {
+            var m7 = {};
+            var newFUid = (detFIdx !== -1 && reqId) ? mfgDeterministicUid_(reqId, moUid, 'footer', detFIdx) : uid16Hex_();
+            m7['unique_id'] = newFUid;
+            m7['id'] = mfgNextIntegerId_(dbId, MFG_CONSUMPTION_SHEET);
+            m7['valley_manufacture_header_product_id'] = outUid || moUid;
+            m7['item'] = String(f.item || '').trim();
+            m7['item_code'] = String(f.item_code || '');
+            m7['qty'] = fqty;
+            /* U-47: server-resolved, never f.unit_cost. */
+            m7['cost_unit'] = footerBatchCost[m7['item']] || 0;
+            m7['created_at'] = new Date();
+            m7['user'] = (user && user.email) || '';
+            consNewRows.push(consHeaders.map(function (h) {
+              var k = String(h).trim();
+              return m7[k] !== undefined ? m7[k] : '';
+            }));
+            keepConsUids.push(newFUid);
+          }
         });
       });
 
-      /* 2) Legacy recipe-driven consumption (shared) — linked to first output */
-      if (!consRows.length && consumption.length) {
-        var firstOutputUid = outputUidMap[0] || moUid;
-        consRows = consumption.map(function (cm) {
-          var m7 = {};
-          m7['unique_id'] = uid16Hex_();
-          m7['valley_manufacture_header_product_id'] = firstOutputUid;
-          m7['item'] = String(cm.item_pid || '').trim();
-          m7['item_code'] = String(cm.lot || '');
-          m7['qty'] = Math.round((Number(cm.qty) || 0) * 1000) / 1000;
-          m7['created_at'] = new Date();
-          m7['user'] = (user && user.email) || '';
-          return consHeaders.map(function (h) {
+      /* 2) Legacy recipe-driven consumption (shared) — ONLY when no footers
+         exist for this save (same gate as before: footers and legacy must
+         never double-count the same batch). Matched by parent+item so
+         unchanged rows keep their id; linked to first output as before */
+      var firstOutputUid = outputUidMap[0] || moUid;
+      if (!keepConsUids.length && (Array.isArray(consumption) ? consumption : []).length) {
+      var legacyByItem = {};
+      Object.keys(existingConsByUid).forEach(function (cu) {
+        var cm = existingConsByUid[cu];
+        if (String(cm.valley_manufacture_header_product_id || '').trim() === firstOutputUid) {
+          var ik = String(cm.item || '').trim();
+          if (ik && !legacyByItem[ik]) legacyByItem[ik] = cu;
+        }
+      });
+      (Array.isArray(consumption) ? consumption : []).forEach(function (cm) {
+        var cmItem = String(cm.item_pid || '').trim();
+        if (!cmItem) return;
+        var cmQty = Math.round((Number(cm.qty) || 0) * 1000) / 1000;
+        var oldC = legacyByItem[cmItem] || null;
+        if (oldC && keepConsUids.indexOf(oldC) === -1) {
+          var m7l = { qty: cmQty, user: (user && user.email) || '' };
+          if (String(cm.lot || '') !== '') m7l['item_code'] = String(cm.lot);
+          patchRowByCriteria_(sheetCons, 'unique_id', oldC, m7l);
+          keepConsUids.push(oldC);
+        } else if (!oldC) {
+          var m7c = {};
+          var newCUid = reqId ? mfgDeterministicUid_(reqId, moUid, 'consumption', nConsNew++) : uid16Hex_();
+          m7c['unique_id'] = newCUid;
+          m7c['id'] = mfgNextIntegerId_(dbId, MFG_CONSUMPTION_SHEET);
+          m7c['valley_manufacture_header_product_id'] = firstOutputUid;
+          m7c['item'] = cmItem;
+          m7c['item_code'] = String(cm.lot || '');
+          m7c['qty'] = cmQty;
+          m7c['created_at'] = new Date();
+          m7c['user'] = (user && user.email) || '';
+          consNewRows.push(consHeaders.map(function (h) {
             var k = String(h).trim();
-            return m7[k] !== undefined ? m7[k] : '';
-          });
-        });
-      }
+            return m7c[k] !== undefined ? m7c[k] : '';
+          }));
+          keepConsUids.push(newCUid);
+        }
+      });
+      } /* end legacy-only gate */
 
-      try { Logger.log('MFGTRACE consumption: rows=' + consRows.length + ' tab=' + sheetCons.getName() + ' consumption_in=' + consumption.length); } catch (eLg4) {}
-      if (consRows.length) {
+      try { Logger.log('MFGTRACE consumption upsert: kept=' + keepConsUids.length + ' new=' + consNewRows.length + ' tab=' + sheetCons.getName()); } catch (eLg4) {}
+      if (consNewRows.length) {
         /* Phase 8 (F-04): one setValues + 2 writeFormula_ per row -> 1 write.
-         * Locked and grid-grown for the same reason as the outputs block. */
-        executeWithLock_(function () {
-          var consStart2 = sheetCons.getLastRow() + 1;
-          ensureGridRows_(sheetCons, consStart2 + consRows.length - 1);
-          consRows.forEach(function (rv, ci) {
-            applyRowFormulas_(rv, consHeaders, mfgConsumptionFormulaMap_(consStart2 + ci));
-          });
-          sheetCons.getRange(consStart2, 1, consRows.length, consHeaders.length).setValues(consRows);
-          noteMutation_(sheetCons);
+         * Already under the outer save lock: no nested executeWithLock_. */
+        var consStart2 = sheetCons.getLastRow() + 1;
+        ensureGridRows_(sheetCons, consStart2 + consNewRows.length - 1);
+        consNewRows.forEach(function (rv, ci) {
+          applyRowFormulas_(rv, consHeaders, mfgConsumptionFormulaMap_(consStart2 + ci));
         });
+        sheetCons.getRange(consStart2, 1, consNewRows.length, consHeaders.length).setValues(consNewRows);
+        noteMutation_(sheetCons);
       }
+      /* Explicit footer deletes, plus the children of an explicitly deleted
+         output (the parent deletion is itself the user's deletion evidence). */
+      var cascadeConsDeletes = deletedConsUids.slice();
+      Object.keys(existingConsByUid).forEach(function (u) {
+        var parent = String(existingConsByUid[u].valley_manufacture_header_product_id || '').trim();
+        if (deletedOutUids.indexOf(parent) !== -1 && cascadeConsDeletes.indexOf(u) === -1) cascadeConsDeletes.push(u);
+      });
+      deleteRowsWhereIn_(sheetCons, 'unique_id', cascadeConsDeletes);
+      ckpt_('consumption');
 
+      if (scope.indexOf('work_ops') !== -1) {
       /* ---- rewrite work-center rows (valley_manufacture_work_center, inline of header) ---- */
       var WC_SHEET = 'valley_manufacture_work_center';
       var WC_HEADERS = ['unique_id','id','valley_manufacture_header_id','work_center_sequence','recipe_id','operation_status','start_time','end_time','notes','actual_hours','work_center_cost','total_cost','last_pause_time','total_pause_duration','user','created_at'];
-      settingsEnsureSheet_(dbId, WC_SHEET, WC_HEADERS);
+      /* Schema already asserted by mfgAssertMfgSchema_ above: no setup here. */
       var sheetWC = getSheet_(WC_SHEET, dbId);
       var wcHeaders = getHeaders_(sheetWC);
       var existingWC = [];
@@ -6746,7 +8629,7 @@ const ValleyFoodsHRModules = (function () {
        *
        * What holds now: getNextIdUnderLock_ floors every answer at
        * max(live table max, highest id handed out this execution) + 1 — the
-       * _idHighWater_ memo in 02_DataAccess.js. So the second iteration returns one
+       * _idHighWater_ memo in Code.js. So the second iteration returns one
        * more than the first even though the first row has not landed, and the ids
        * this loop produces are consecutive and distinct in exactly the order the
        * batched setValues writes them. Deferring the appends is therefore still
@@ -6759,9 +8642,17 @@ const ValleyFoodsHRModules = (function () {
        * Locked and grid-grown because a precomputed start row, unlike appendRow, is
        * not safe against a concurrent append. */
       var wcNewRows = [];
+      var nWoNew = 0;
       (Array.isArray(d.work_ops) ? d.work_ops : []).forEach(function (w, wi) {
-        var editingUid = String(w.uid || '').trim();
+        var suppliedWuid = String(w.uid || '').trim();
+        var editingUid = suppliedWuid;
         var old = editingUid ? existingWCByUid[editingUid] : null;
+        var detWIdx = -1;
+        if (!suppliedWuid) detWIdx = nWoNew++;
+        if (!old && detWIdx !== -1 && reqId) {
+          var detW = mfgDeterministicUid_(reqId, moUid, 'work_op', detWIdx);
+          if (existingWCByUid[detW]) { editingUid = detW; old = existingWCByUid[detW]; }
+        }
         var m = {};
         var wcId = String(w.work_center_id || '').trim();
         m['work_center_sequence'] = old ? old.work_center_sequence : (wcSeqMap[wcId] !== undefined && wcSeqMap[wcId] !== '' ? wcSeqMap[wcId] : (wi + 1));
@@ -6779,7 +8670,7 @@ const ValleyFoodsHRModules = (function () {
           patchRowByCriteria_(sheetWC, 'unique_id', editingUid, m);
           keepWcUids.push(editingUid);
         } else {
-          m['unique_id'] = uid16Hex_();
+          m['unique_id'] = (detWIdx !== -1 && reqId) ? mfgDeterministicUid_(reqId, moUid, 'work_op', detWIdx) : uid16Hex_();
           m['id'] = getNextIdUnderLock_(dbId, WC_SHEET, 'id');
           m['valley_manufacture_header_id'] = moUid;
           m['user'] = (user && user.email) || '';
@@ -6790,17 +8681,13 @@ const ValleyFoodsHRModules = (function () {
         }
       });
       if (wcNewRows.length) {
-        executeWithLock_(function () {
-          var wcStart = sheetWC.getLastRow() + 1;
-          ensureGridRows_(sheetWC, wcStart + wcNewRows.length - 1);
-          sheetWC.getRange(wcStart, 1, wcNewRows.length, wcHeaders.length).setValues(wcNewRows);
-          noteMutation_(sheetWC);
-        });
+        /* Already under the outer save lock: no nested executeWithLock_. */
+        var wcStart = sheetWC.getLastRow() + 1;
+        ensureGridRows_(sheetWC, wcStart + wcNewRows.length - 1);
+        sheetWC.getRange(wcStart, 1, wcNewRows.length, wcHeaders.length).setValues(wcNewRows);
+        noteMutation_(sheetWC);
       }
-      /* ONE read for every dropped work op, not one per op. */
-      deleteRowsWhereIn_(sheetWC, 'unique_id', existingWC
-        .filter(function (r) { return keepWcUids.indexOf(String(r.unique_id)) === -1; })
-        .map(function (r) { return String(r.unique_id); }));
+      deleteRowsWhereIn_(sheetWC, 'unique_id', deletedWoUids);
       try { Logger.log('MFGTRACE workops: in=' + (Array.isArray(d.work_ops) ? d.work_ops.length : 0) + ' kept=' + keepWcUids.length + ' tab=' + sheetWC.getName()); } catch (eLg5) {}
 
       /* work-center cost columns are SHEET FORMULAS */
@@ -6816,45 +8703,85 @@ const ValleyFoodsHRModules = (function () {
           }
         }
       });
+      ckpt_('work_ops');
+      }
 
-      /* ---- rewrite by-products (valley_manufacture_by_product, inline of header) ---- */
+      if (scope.indexOf('byproducts') !== -1) {
+      /* ---- upsert by-products (valley_manufacture_by_product, inline of header) ---- */
       var BP_SHEET = 'valley_manufacture_by_product';
       var BP_HEADERS = ['unique_id','id','valley_manufacture_header_id','code','manufacture_date','transaction_code','item','qty','total_cost','manufacture_internal_batch','user','created_at'];
-      settingsEnsureSheet_(dbId, BP_SHEET, BP_HEADERS);
+      /* Schema already asserted by mfgAssertMfgSchema_ above: no setup here. */
+      /* STABLE UPSERT by-products: matched rows patched in place
+         (id/unique_id/created_at/manufacture_date untouched; total_cost is a
+         sheet formula so the client's value is never written back over it);
+         new rows created with fresh uid + max+1 id; orphans deleted. */
       var sheetBP = getSheet_(BP_SHEET, dbId);
       var bpHeaders = getHeaders_(sheetBP);
-      deleteRowsByCriteria_(sheetBP, 'valley_manufacture_header_id', moUid);
-      var bpRows = (Array.isArray(d.byproducts) ? d.byproducts : []).map(function (b) {
-        var m = {};
-        m['unique_id'] = uid16Hex_();
-        m['id'] = getNextIdUnderLock_(dbId, BP_SHEET, 'id');
-        m['valley_manufacture_header_id'] = moUid;
-        m['item'] = String(b.item || '').trim();
-        m['qty'] = Number(b.qty) || 0;
-        m['transaction_code'] = String(b.transaction_code || '').trim();
-        m['total_cost'] = Number(b.total_cost || 0);
-        m['manufacture_date'] = new Date();
-        m['user'] = (user && user.email) || '';
-        m['created_at'] = new Date();
-        return bpHeaders.map(function (h) { var k = String(h).trim(); return m[k] !== undefined ? m[k] : ''; });
+      var existingBPByUid = {};
+      try {
+        getAllRecords_(dbId, BP_SHEET).forEach(function (r) {
+          if (String(r.valley_manufacture_header_id || '').trim() === moUid) existingBPByUid[String(r.unique_id).trim()] = r;
+        });
+      } catch (e) {}
+      var keepBpUids = [];
+      var bpNewRows = [];
+      var nBpNew = 0;
+      (Array.isArray(d.byproducts) ? d.byproducts : []).forEach(function (b) {
+        var suppliedBuid = String(b.uid || '').trim();
+        var buid = suppliedBuid;
+        var oldB = buid ? existingBPByUid[buid] : null;
+        var detBIdx = -1;
+        if (!suppliedBuid) detBIdx = nBpNew++;
+        if (!oldB && detBIdx !== -1 && reqId) {
+          var detB = mfgDeterministicUid_(reqId, moUid, 'by_product', detBIdx);
+          if (existingBPByUid[detB]) { buid = detB; oldB = existingBPByUid[detB]; }
+        }
+        if (oldB) {
+          patchRowByCriteria_(sheetBP, 'unique_id', buid, {
+            item: String(b.item || '').trim(),
+            qty: Number(b.qty) || 0,
+            transaction_code: String(b.transaction_code || '').trim(),
+            user: (user && user.email) || ''
+          });
+          keepBpUids.push(buid);
+        } else {
+          var m = {};
+          var newBUid = (detBIdx !== -1 && reqId) ? mfgDeterministicUid_(reqId, moUid, 'by_product', detBIdx) : uid16Hex_();
+          m['unique_id'] = newBUid;
+          m['id'] = mfgNextIntegerId_(dbId, BP_SHEET);
+          m['valley_manufacture_header_id'] = moUid;
+          m['item'] = String(b.item || '').trim();
+          m['qty'] = Number(b.qty) || 0;
+          m['transaction_code'] = String(b.transaction_code || '').trim();
+          m['total_cost'] = Number(b.total_cost || 0);
+          m['manufacture_date'] = new Date();
+          m['user'] = (user && user.email) || '';
+          m['created_at'] = new Date();
+          bpNewRows.push(bpHeaders.map(function (h) { var k = String(h).trim(); return m[k] !== undefined ? m[k] : ''; }));
+          keepBpUids.push(newBUid);
+        }
       });
-      if (bpRows.length) {
+      if (bpNewRows.length) {
         /* Phase 8 (F-04): the worst site in the file — writeByproductFormulas_
          * issued FOUR writeFormula_ calls per row, each with its own getSheet_ +
          * getHeaders_ + setFormula. Merged into the block write: a 4-by-product
-         * order goes from 17 round trips to 1. Locked and grid-grown as above. */
-        executeWithLock_(function () {
-          var bpStart = sheetBP.getLastRow() + 1;
-          ensureGridRows_(sheetBP, bpStart + bpRows.length - 1);
-          bpRows.forEach(function (rv, bi) {
-            applyRowFormulas_(rv, bpHeaders, byproductFormulaMap_(bpStart + bi));
-          });
-          sheetBP.getRange(bpStart, 1, bpRows.length, bpHeaders.length).setValues(bpRows);
-          noteMutation_(sheetBP);
+         * order goes from 17 round trips to 1. Already under the outer save
+         * lock: no nested executeWithLock_. */
+        var bpStart = sheetBP.getLastRow() + 1;
+        ensureGridRows_(sheetBP, bpStart + bpNewRows.length - 1);
+        bpNewRows.forEach(function (rv, bi) {
+          applyRowFormulas_(rv, bpHeaders, byproductFormulaMap_(bpStart + bi));
         });
+        sheetBP.getRange(bpStart, 1, bpNewRows.length, bpHeaders.length).setValues(bpNewRows);
+        noteMutation_(sheetBP);
       }
+      deleteRowsWhereIn_(sheetBP, 'unique_id', deletedBpUids);
+      ckpt_('byproducts');
+      }
+      ckpt_('complete');
     });
 
+    if (recoveredResp) return recoveredResp;
     finBustRefs_(dbId);
     vfFlush_();   /* the balance the client reads back must include this write */
     return { status: 'success', message: editing ? 'تم تحديث أمر التصنيع' : 'تم إنشاء أمر التصنيع', mo_uid: moUid };
@@ -6874,7 +8801,18 @@ const ValleyFoodsHRModules = (function () {
       var dataU = sheetU.getDataRange().getValues();
       for (var ru = 1; ru < dataU.length; ru++) {
         if (String(dataU[ru][uidIdxU]).trim() === moUid) {
-          var _oldU = getAllRecords_(dbId, MFG_ORDER_SHEET).find(function(r){ return String(r.unique_id)===String(moUid); }) || null;
+          /* OPT-3: history snapshot from the row just located — same
+             trimmed-header mapping buildRecordsFromRaw_ applies — instead of
+             a second full read of this sheet. */
+          var _oldU = null;
+          try {
+            var _oldURec = {};
+            headersU.forEach(function (h, ci) {
+              var _uv = dataU[ru][ci];
+              _oldURec[String(h).trim()] = _uv !== undefined ? _uv : '';
+            });
+            _oldU = _oldURec;
+          } catch (e) { _oldU = null; }
           sheetU.getRange(ru + 1, stIdxU + 1).setValue('In Progress');
           noteMutation_(sheetU);
           try{ var _newU = Object.assign({}, _oldU||{}, { mo_status: 'In Progress' }); logHistory_(dbId, MFG_ORDER_SHEET, _oldU&&_oldU.record_uid ? _oldU.record_uid : ('update_'+MFG_ORDER_SHEET+'_'+moUid), moUid, (user&&user.email)||'', 'update', _newU, _oldU) }catch(e){}
@@ -6897,16 +8835,32 @@ const ValleyFoodsHRModules = (function () {
       if (String(dataAll[r][uidIdx]).trim() === moUid) {
         var oldObj = {};
         headers.forEach(function (h, hi) { oldObj[String(h).trim()] = dataAll[r][hi]; });
+        /* OPT-4: one contiguous range write per approval pair when the live
+           layout keeps the pair adjacent — verified from the headers just
+           read, never assumed. Same cells, same values. Otherwise the
+           original single-cell writes run verbatim. */
+        var _mfgEmail = (user && user.email) || '';
+        var _mfgTime = new Date();
         if (kind === 'production') {
-          sheet.getRange(r + 1, paIdx + 1).setValue((user && user.email) || '');
-          noteMutation_(sheet);
-          sheet.getRange(r + 1, patIdx + 1).setValue(new Date());
-          noteMutation_(sheet);
+          if (paIdx !== -1 && patIdx === paIdx + 1) {
+            sheet.getRange(r + 1, paIdx + 1, 1, 2).setValues([[_mfgEmail, _mfgTime]]);
+            noteMutation_(sheet);
+          } else {
+            sheet.getRange(r + 1, paIdx + 1).setValue(_mfgEmail);
+            noteMutation_(sheet);
+            sheet.getRange(r + 1, patIdx + 1).setValue(_mfgTime);
+            noteMutation_(sheet);
+          }
         } else {
-          sheet.getRange(r + 1, qaIdx + 1).setValue((user && user.email) || '');
-          noteMutation_(sheet);
-          sheet.getRange(r + 1, qatIdx + 1).setValue(new Date());
-          noteMutation_(sheet);
+          if (qaIdx !== -1 && qatIdx === qaIdx + 1) {
+            sheet.getRange(r + 1, qaIdx + 1, 1, 2).setValues([[_mfgEmail, _mfgTime]]);
+            noteMutation_(sheet);
+          } else {
+            sheet.getRange(r + 1, qaIdx + 1).setValue(_mfgEmail);
+            noteMutation_(sheet);
+            sheet.getRange(r + 1, qatIdx + 1).setValue(_mfgTime);
+            noteMutation_(sheet);
+          }
         }
         /* auto-lock when both approvals exist */
         var hasProd = kind === 'production' || (paIdx !== -1 && String(dataAll[r][paIdx]).trim() !== '');
@@ -6961,18 +8915,27 @@ const ValleyFoodsHRModules = (function () {
     var dataAll = sheet.getDataRange().getValues();
     var cur = null;
     for (var r = 1; r < dataAll.length; r++) {
-      if (String(dataAll[r][uidIdx]).trim() === moUid) { cur = String(dataAll[r][stIdx]).trim(); break; }
+      if (String(dataAll[r][uidIdx]).trim() === moUid) {
+        cur = String(dataAll[r][stIdx]).trim();
+        /* Status values are displayed/stored as these English labels, but
+           legacy sheets can differ only by case/spacing. Canonicalize them
+           before routing the transition so a real Locked order can always be
+           reopened by the super-admin unlock action. */
+        var curNorm = (typeof normDocStatus_ === 'function') ? normDocStatus_(cur) : cur.toLowerCase();
+        if (curNorm === 'draft') cur = 'Draft';
+        else if (curNorm === 'in progress') cur = 'In Progress';
+        else if (curNorm === 'locked') cur = 'Locked';
+        break;
+      }
     }
     if (cur === null) throw new Error('أمر التصنيع غير موجود');
 
     var next;
     if (kind === 'start') {
-      if (cur !== 'Draft') throw new Error('يمكن البدء فقط من حالة مسودة');
       next = 'In Progress';
     } else if (kind === 'lock') {
       var canLock = !!(user && (user.isSuperAdmin || unifiedCheck_(user, '9940659bd83035d7', 'vf_mfg_orders', 'write')));
       if (!canLock) throw new Error('القفل يتطلب صلاحية الكتابة على أوامر التصنيع');
-      if (cur !== 'In Progress') throw new Error('يمكن القفل فقط من حالة قيد التنفيذ');
       var fullLock = getValleyMfgOrderFull_({ mo_uid: moUid }, user, dbId);
       (fullLock.outputs || []).forEach(function (o) {
         var pq = Math.round((Number(o.product_qty) || 0) * 1000) / 1000;
@@ -6984,18 +8947,21 @@ const ValleyFoodsHRModules = (function () {
       next = 'Locked';
     } else { /* unlock */
       requireSuperAdmin_(user);
-      if (cur !== 'Locked') throw new Error('الأمر ليس مقفلاً');
       next = 'In Progress';
     }
+    /* Phase 2: strict Draft->In Progress->Locked->In Progress routed through
+       the policy table. The three canonical pairs are also guarded locally
+       so valid status actions keep working if a stale deployment has not
+       loaded the centralized policy object yet. */
+    var exactStatusTransition =
+      (cur === 'Draft' && next === 'In Progress') ||
+      (cur === 'In Progress' && next === 'Locked') ||
+      (cur === 'Locked' && next === 'In Progress');
+    if (!exactStatusTransition) assertTransition_('vf_mfg_order', cur, next, 'تحويل حالة أمر التصنيع غير صالح من الحالة الحالية');
     var _oldMfgSt = getAllRecords_(dbId, MFG_ORDER_SHEET).find(function(r){ return String(r.unique_id)===String(moUid); }) || null;
+    var __mfgStVer = checkRowVersion_(_oldMfgSt, data && data.version);
     executeWithLock_(function () {
-      for (var r2 = 1; r2 < dataAll.length; r2++) {
-        if (String(dataAll[r2][uidIdx]).trim() === moUid) {
-          sheet.getRange(r2 + 1, stIdx + 1).setValue(next);
-          noteMutation_(sheet);
-          break;
-        }
-      }
+      if (!patchRowByCriteria_(sheet, 'unique_id', moUid, { mo_status: next, version: __mfgStVer + 1 })) throw new Error('أمر التصنيع غير موجود');
     });
     try{ var _newMfgSt = Object.assign({}, _oldMfgSt||{}, { mo_status: next }); logHistory_(dbId, MFG_ORDER_SHEET, _oldMfgSt&&_oldMfgSt.record_uid ? _oldMfgSt.record_uid : ('update_'+MFG_ORDER_SHEET+'_'+moUid), moUid, (user&&user.email)||'', 'update', _newMfgSt, _oldMfgSt) }catch(e){}
     vfFlush_();   /* the balance the client reads back must include this write */
@@ -7156,6 +9122,7 @@ const ValleyFoodsHRModules = (function () {
   function getValleyMfgOrderFull_(data, user, dbId) {
     var moUid = String((data && data.mo_uid) || '').trim();
     if (!moUid) throw new Error('معرّف أمر التصنيع مطلوب');
+    mfgAssertMfgSchema_(dbId, MFG_LIST_SCOPE_);
     var order = null;
     var moRow = vfFindRowByUid_(dbId, MFG_ORDER_SHEET, 'unique_id', moUid);
     if (moRow) {
@@ -7231,7 +9198,11 @@ const ValleyFoodsHRModules = (function () {
       status: 'success',
       order: order,
       outputs: outputs,
-      consumption: legacyConsumption
+      consumption: legacyConsumption,
+      /* Schema-free edit token for this editor's scope (list page). The
+         client returns both as base_token/save_scope on edit. */
+      edit_token: mfgEditToken_(dbId, moUid, MFG_LIST_SCOPE_),
+      save_scope: MFG_LIST_SCOPE_.slice()
     };
   }
 
@@ -7290,8 +9261,7 @@ const ValleyFoodsHRModules = (function () {
     var qty = Number(d.qty);
     if (!isFinite(qty) || qty <= 0) throw new Error('الكمية يجب أن تكون أكبر من صفر');
 
-    settingsEnsureSheet_(dbId, MFG_BYPRODUCT_SHEET,
-      ['unique_id','id','valley_manufacture_header_id','code','manufacture_date','transaction_code','item','qty','total_cost','manufacture_internal_batch','user','created_at']);
+    mfgAssertMfgSchema_(dbId, ['byproducts']);
 
     var _savedBP = null;
     executeWithLock_(function () {
@@ -7300,7 +9270,7 @@ const ValleyFoodsHRModules = (function () {
       var dataAll = sheet.getDataRange().getValues();
       var m8 = {};
       m8['unique_id'] = uid16Hex_();
-      m8['id'] = getNextIdUnderLock_(dbId, MFG_BYPRODUCT_SHEET, 'id'); /* M5 */
+      m8['id'] = mfgNextIntegerId_(dbId, MFG_BYPRODUCT_SHEET);
       m8['valley_manufacture_header_id'] = moUid;
       m8['item'] = Number(pid) || pid;
       m8['qty'] = qty;
@@ -7794,7 +9764,7 @@ const ValleyFoodsHRModules = (function () {
       var _oldPlan = editing ? (getAllRecords_(dbId, PLANS_SHEET).find(function(r){ return String(r.plan_unique_id)===String(d.plan_unique_id); }) || null) : null;
       if (editing) {
         map['user'] = (user && user.email) || '';
-        if (!updateRowByCriteria_(sheet, 'plan_unique_id', String(d.plan_unique_id).trim(), map)) throw new Error('الخطة غير موجودة');
+        if (!patchRowByCriteria_(sheet, 'plan_unique_id', String(d.plan_unique_id).trim(), map)) throw new Error('الخطة غير موجودة');
         try{ var _newPlan = Object.assign({}, _oldPlan||{}, map); logHistory_(dbId, PLANS_SHEET, _oldPlan&&_oldPlan.record_uid ? _oldPlan.record_uid : ('update_'+PLANS_SHEET+'_'+d.plan_unique_id), String(d.plan_unique_id).trim(), (user&&user.email)||'', 'update', _newPlan, _oldPlan) }catch(e){}
       } else {
         executeWithLock_(function () {
@@ -8760,7 +10730,7 @@ const ValleyFoodsHRModules = (function () {
     if (!row) throw new Error('الحركة غير موجودة');
     var isApproved = !(row.approved === false || String(row.approved).toLowerCase() === 'no' || row.approved === '');
     var newValue = !isApproved;
-    if (!updateRowByCriteria_(sheet, 'transaction_id', key, { approved: newValue })) throw new Error('تعذر التحديث');
+    if (!patchRowByCriteria_(sheet, 'transaction_id', key, { approved: newValue })) throw new Error('تعذر التحديث');
     var oldUid = row ? (row.record_uid || ('upd_' + FIN_CASH_SHEET + '_' + key)) : ('upd_' + FIN_CASH_SHEET + '_' + key);
     logHistory_(dbId, FIN_CASH_SHEET, oldUid, key, (user && user.email) || '', 'approve', { approved: newValue }, row);
     return { status: 'success', message: newValue ? 'تم اعتماد الحركة' : 'تم إلغاء اعتماد الحركة', approved: newValue };
@@ -8936,15 +10906,29 @@ const ValleyFoodsHRModules = (function () {
     return batches;
   }
 
-  /* unit of a batch, falling back to valley_products.unit via product_id */
-  function whBatchUnit_(dbId, batch) {
+  /* unit of a batch, falling back to valley_products.unit via product_id.
+   * OPT-3: when the caller passes a prebuilt unitByProductId map (exact
+   * trimmed-string keys, first match wins — the same rows the old .find()
+   * returned), no sheet is touched. Without it the original single lookup
+   * runs, so standalone callers are unaffected. */
+  function whBatchUnit_(dbId, batch, unitByProductId) {
     var unit = String((batch && batch.unit) || '').trim();
     if (unit || !batch || !batch.product_id) return unit;
     try {
-      var p = getAllRecords_(dbId, FIN_PRODUCTS_SHEET).find(function (x) {
-        return String(x.id == null ? '' : x.id).trim() === batch.product_id;
-      });
-      if (p) unit = String(p.unit || '').trim();
+      if (unitByProductId) {
+        // The legacy predicate was String(stored id).trim() === input. Keep
+        // its typed/case-sensitive behavior; object lookup also avoids names
+        // such as "toString" being inherited from Object.prototype.
+        if (typeof batch.product_id === 'string' && Object.prototype.hasOwnProperty.call(unitByProductId, batch.product_id)) {
+          var hit = unitByProductId[batch.product_id];
+          if (hit !== undefined) return hit;
+        }
+      } else {
+        var p = getAllRecords_(dbId, FIN_PRODUCTS_SHEET).find(function (x) {
+          return String(x.id == null ? '' : x.id).trim() === batch.product_id;
+        });
+        if (p) unit = String(p.unit || '').trim();
+      }
     } catch (e) {}
     return unit;
   }
@@ -9150,8 +11134,22 @@ const ValleyFoodsHRModules = (function () {
     var availability = whBatchAvailability_(dbId);
     var sectionLabels = whSectionNames_(dbId).labels;
     var vendorNames = whVendorNames_(dbId);
+    /* Product units are a fallback only. Build the exact, case-sensitive,
+     * first-wins index on the first unit-less row that actually needs it. */
+    var productUnits = null;
+    var ensureProductUnits_ = function () {
+      if (productUnits !== null) return productUnits;
+      productUnits = Object.create(null);
+      try {
+        getAllRecords_(dbId, FIN_PRODUCTS_SHEET).forEach(function (x) {
+          var pk = String(x.id == null ? '' : x.id).trim();
+          if (pk && productUnits[pk] === undefined) productUnits[pk] = String(x.unit || '').trim();
+        });
+      } catch (e) {}
+      return productUnits;
+    }
 
-    /* How much each batch has already been drawn down by EARLIER ROWS IN THIS
+    /* How much each batch has already been been drawn down by EARLIER ROWS IN THIS
        SAME SUBMISSION. Without this, two rows issuing from one batch would each
        be checked against the same starting figure and together overdraw it. An
        inbound row credits the batch, so a return followed by an issue works. */
@@ -9205,12 +11203,13 @@ const ValleyFoodsHRModules = (function () {
         drawn[batchUid] = used - qty;
       }
 
+      if (!String(batch.unit || '').trim() && batch.product_id) ensureProductUnits_();
       var map = {};
       map['unique_id'] = uid16Hex_();
       map['warehouse'] = WH_WAREHOUSE;          /* constant, never rendered or edited */
       map['vendor'] = vendor;
       map['item'] = batchUid;
-      map['unit'] = whBatchUnit_(dbId, batch);
+      map['unit'] = whBatchUnit_(dbId, batch, productUnits);
       map['qty'] = qty;
       /* amount is a server-computed snapshot, stored as a static value — never a
          formula, never a number the client sent. */
@@ -9545,30 +11544,30 @@ const ValleyFoodsHRModules = (function () {
    * (the old lock-held full scan), then incremented atomically in
    * PropertiesService. MUST be called while already holding executeWithLock_. */
   function nextInvoiceSeq_(dbId, year, taxSystem) {
-    var props = PropertiesService.getScriptProperties();
-    var key = 'vf_inv_seq_' + String(dbId) + '_' + year + '_' + (taxSystem ? '1' : '0');
-    var cur = Number(props.getProperty(key));
-    if (!cur || cur <= 0) {
-      var sheetInv = getSheet_(FIN_SALES_INV_SHEET, dbId);
-      var invHeaders = getHeaders_(sheetInv);
-      var dataAll = sheetInv.getDataRange().getValues();
-      var numIdx = invHeaders.findIndex(function (h) { return String(h).trim() === 'رقم الفاتورة'; });
-      var dateIdx = invHeaders.findIndex(function (h) { return String(h).trim() === 'تاريخ الفاتورة'; });
-      var tsIdx = invHeaders.findIndex(function (h) { return String(h).trim().toLowerCase() === 'tax_system'; });
-      var maxSeq = 0;
-      for (var r = 1; r < dataAll.length; r++) {
-        var rowDate = dataAll[r][dateIdx] ? new Date(dataAll[r][dateIdx]) : null;
-        var sameYear = rowDate && !isNaN(rowDate.getTime()) && rowDate.getFullYear() === year;
-        var sameTs = String(dataAll[r][tsIdx]).trim().toLowerCase() === String(taxSystem);
-        if (!(sameYear && sameTs)) continue;
-        var n2 = parseInt(String(dataAll[r][numIdx] || '').split('-')[0], 10);
-        if (!isNaN(n2) && n2 > maxSeq) maxSeq = n2;
+    /* Phase 1: thin wrapper over the shared locked counter. Format unchanged:
+     * integer seq; the caller builds `seq + '-' + year`. MUST be called while
+     * holding executeWithLock_ (saveValleyInvoice_ opens it). */
+    return nextDocumentNumber_(dbId, 'vf_sales_inv', year, {
+      taxSystem: taxSystem,
+      seedScanner: function () {
+        var sheetInv = getSheet_(FIN_SALES_INV_SHEET, dbId);
+        var invHeaders = getHeaders_(sheetInv);
+        var dataAll = sheetInv.getDataRange().getValues();
+        var numIdx = invHeaders.findIndex(function (h) { return String(h).trim() === 'رقم الفاتورة'; });
+        var dateIdx = invHeaders.findIndex(function (h) { return String(h).trim() === 'تاريخ الفاتورة'; });
+        var tsIdx = invHeaders.findIndex(function (h) { return String(h).trim().toLowerCase() === 'tax_system'; });
+        var maxSeq = 0;
+        for (var r = 1; r < dataAll.length; r++) {
+          var rowDate = dataAll[r][dateIdx] ? new Date(dataAll[r][dateIdx]) : null;
+          var sameYear = rowDate && !isNaN(rowDate.getTime()) && rowDate.getFullYear() === year;
+          var sameTs = String(dataAll[r][tsIdx]).trim().toLowerCase() === String(taxSystem);
+          if (!(sameYear && sameTs)) continue;
+          var n2 = parseInt(String(dataAll[r][numIdx] || '').split('-')[0], 10);
+          if (!isNaN(n2) && n2 > maxSeq) maxSeq = n2;
+        }
+        return maxSeq;
       }
-      cur = maxSeq;
-    }
-    var next = cur + 1;
-    props.setProperty(key, String(next));
-    return next;
+    });
   }
 
   function saveValleyInvoice_(data, user, dbId) {
@@ -9602,19 +11601,23 @@ const ValleyFoodsHRModules = (function () {
     settingsEnsureSheet_(dbId, FIN_SALES_LINES_SHEET, FIN_SALES_LINE_HEADERS);
 
     var partyName = '';
-    vfRefsCached_(dbId, 'parties_raw', function () { return getAllRecords_(dbId, FIN_PARTIES_SHEET); }).forEach(function (p) {
-      if (String(p.id) === partyId) partyName = String(p.name || partyId);
-    });
+    try {
+      var _partyRowsInv = vfRefsCached_(dbId, 'parties_raw', function () { return getAllRecords_(dbId, FIN_PARTIES_SHEET); });
+      var _partyIdxInv = indexById(_partyRowsInv, 'id');
+      var _partyKeyInv = String(partyId).trim();
+      var _partyHitInv = _partyIdxInv.get(_partyKeyInv) || _partyIdxInv.get(_partyKeyInv.toLowerCase()) || null;
+      if (_partyHitInv) partyName = String(_partyHitInv.name || partyId);
+    } catch (e) {}
 
     var net = 0, taxVal = 0;
     var cleanLines = [];
-    var prodIds = {};
+    var _prodIdxInv = new Map();
     try {
-      vfRefsCached_(dbId, 'products_raw', function () { return getAllRecords_(dbId, FIN_PRODUCTS_SHEET); }).forEach(function (p) { prodIds[String(p.id)] = true; });
+      _prodIdxInv = indexById(vfRefsCached_(dbId, 'products_raw', function () { return getAllRecords_(dbId, FIN_PRODUCTS_SHEET); }), 'id');
     } catch (e) {}
     lines.forEach(function (ln, idx) {
       var pid = String(ln.product_id || '').trim();
-      if (!pid || !prodIds[pid]) throw new Error('البند ' + (idx + 1) + ': اختر منتجاً صحيحاً');
+      if (!pid || (!_prodIdxInv.has(pid) && !_prodIdxInv.has(pid.toLowerCase()))) throw new Error('البند ' + (idx + 1) + ': اختر منتجاً صحيحاً');
       var qty = Number(ln.qty);
       if (!isFinite(qty) || qty <= 0) throw new Error('البند ' + (idx + 1) + ': الكمية يجب أن تكون أكبر من صفر');
       var price = Number(ln.price);
@@ -9628,7 +11631,8 @@ const ValleyFoodsHRModules = (function () {
           throw new Error('المنتج مكرر في أكثر من بند — يمنع الحفظ (المنتج: ' + pid + ')');
         }
       }
-      var lineNet = qty * price;
+      /* Phase 5: shared totals lib (calcLineNet_) is source of truth. No rounding — raw preserved. */
+      var lineNet = (typeof calcLineNet_ === 'function') ? calcLineNet_(qty, price) : qty * price;
       var lineTaxVal = lineNet * tax;
       net += lineNet;
       taxVal += lineTaxVal;
@@ -9644,7 +11648,12 @@ const ValleyFoodsHRModules = (function () {
         total: lineNet + lineTaxVal
       });
     });
+    /* Phase 5: header totals from shared calcTotals_ (single calc, no parallel). */
     var total = net + taxVal;
+    if (typeof calcTotals_ === 'function') {
+      var _st = calcTotals_(cleanLines.map(function (cl) { return { qty: cl.qty, price: cl.price, tax: cl.tax }; }));
+      net = _st.net; taxVal = _st.tax; total = _st.total;
+    }
 
     /* ---- P2: batch allocations validation ----
      * Each line must fully allocate its qty across that product's batches.
@@ -9757,6 +11766,12 @@ const ValleyFoodsHRModules = (function () {
         }
         // keep original رقم الفاتورة on edit
         map['رقم الفاتورة'] = dataAll[rowNum - 1][numIdx];
+        var __invVerIdx = invHeaders.findIndex(function (h) { return String(h).trim().toLowerCase() === 'version'; });
+        var __invOldForVer = {};
+        if (__invVerIdx !== -1) __invOldForVer.version = dataAll[rowNum - 1][__invVerIdx];
+        var __invVer = checkRowVersion_(__invOldForVer, d.version);
+        map.version = __invVer + 1;
+        map['version'] = __invVer + 1;
         var rowVals = invHeaders.map(function (h, hi) {
           var k = String(h).trim();
           /* created_at is stamped once at creation and preserved on edit */
@@ -9769,6 +11784,8 @@ const ValleyFoodsHRModules = (function () {
       } else {
         map['رقم الفاتورة'] = invoiceNumber;
         map['approval_status'] = 'Pending';
+        map['version'] = 0;
+        map.version = 0;
         map['invoice_label'] = invoiceNumber + ' - ' + partyName + ' - ' + invDate.toISOString().slice(0, 10) + ' - ' + net;
         var uid = uid16_();
         map['invoice_unique_id'] = uid;
@@ -10199,17 +12216,48 @@ const ValleyFoodsHRModules = (function () {
     var apIdx = headers.findIndex(function (h) { return String(h).trim() === 'approval'; });
     var atIdx = headers.findIndex(function (h) { return String(h).trim() === 'approval_time'; });
     var dataAll = sheet.getDataRange().getValues();
+    /* OPT-3: hoisted out of the row loop — one findIndex per request, not per
+       row. A missing header still yields -1, so the miss behavior below (no
+       row matches, throw 'not found') is unchanged. */
+    var invUidIdx = headers.findIndex(function (h) { return String(h).trim() === 'invoice_unique_id'; });
     for (var r = 1; r < dataAll.length; r++) {
-      if (String(dataAll[r][headers.findIndex(function (h) { return String(h).trim() === 'invoice_unique_id'; })]).trim() === uid) {
-        var cur = String(dataAll[r][stIdx]).trim();
+      if (String(dataAll[r][invUidIdx]).trim() === uid) {
+        var cur = String(dataAll[r][stIdx]).trim() || 'Pending';
         var next = cur === 'Approved' ? 'Pending' : 'Approved';
-        var _oldInvA = getAllRecords_(dbId, FIN_SALES_INV_SHEET).find(function(rr){ return String(rr.invoice_unique_id)===String(uid); }) || null;
-        sheet.getRange(r + 1, stIdx + 1).setValue(next);
-        noteMutation_(sheet);
-        sheet.getRange(r + 1, apIdx + 1).setValue(next === 'Approved' ? ((user && user.email) || '') : '');
-        noteMutation_(sheet);
-        sheet.getRange(r + 1, atIdx + 1).setValue(next === 'Approved' ? new Date() : '');
-        noteMutation_(sheet);
+        /* Phase 2: Pending<->Approved toggle via table (no inline cur check retained). */
+        assertTransition_('vf_sales_inv', cur, next, 'تحويل حالة الفاتورة غير صالح');
+        /* OPT-3: the history snapshot comes from the row just located, with
+           the same trimmed-header mapping buildRecordsFromRaw_ applies —
+           instead of a second full read of this sheet. A matched row always
+           carries the uid in a non-blank cell, so the blank-row filter would
+           have kept it too; duplicate headers collapse last-wins, identically. */
+        var _oldInvA = null;
+        try {
+          var _oldRec = {};
+          headers.forEach(function (h, ci) {
+            var _cv = dataAll[r][ci];
+            _oldRec[String(h).trim()] = _cv !== undefined ? _cv : '';
+          });
+          _oldInvA = _oldRec;
+        } catch (e) { _oldInvA = null; }
+        var _apprEmail = next === 'Approved' ? ((user && user.email) || '') : '';
+        var _apprTime = next === 'Approved' ? new Date() : '';
+        /* OPT-4: one contiguous range write when the live layout keeps the
+           three approval columns adjacent — verified from the headers just
+           read, never assumed. Same cells, same values, one noteMutation_.
+           Otherwise the three original single-cell writes run verbatim,
+           preserving even their failure behavior on a drifted layout. */
+        if (stIdx !== -1 && apIdx === stIdx + 1 && atIdx === apIdx + 1) {
+          sheet.getRange(r + 1, stIdx + 1, 1, 3).setValues([[next, _apprEmail, _apprTime]]);
+          noteMutation_(sheet);
+        } else {
+          sheet.getRange(r + 1, stIdx + 1).setValue(next);
+          noteMutation_(sheet);
+          sheet.getRange(r + 1, apIdx + 1).setValue(_apprEmail);
+          noteMutation_(sheet);
+          sheet.getRange(r + 1, atIdx + 1).setValue(_apprTime);
+          noteMutation_(sheet);
+        }
         try{ var _newInvA = Object.assign({}, _oldInvA||{}, { approval_status: next, approval: (next==='Approved' ? ((user&&user.email)||'') : ''), approval_time: (next==='Approved' ? new Date() : '') }); logHistory_(dbId, FIN_SALES_INV_SHEET, _oldInvA&&_oldInvA.record_uid ? _oldInvA.record_uid : ('approve_'+FIN_SALES_INV_SHEET+'_'+uid), uid, (user&&user.email)||'', 'approve', _newInvA, _oldInvA) }catch(e){}
         return { status: 'success', message: next === 'Approved' ? 'تم اعتماد الفاتورة' : 'تم إرجاع الفاتورة لقيد الانتظار', approval_status: next };
       }
@@ -10221,13 +12269,14 @@ const ValleyFoodsHRModules = (function () {
     requireSuperAdmin_(user);
     var uid = String((data && data.invoice_unique_id) || '').trim();
     if (!uid) throw new Error('معرّف الفاتورة مطلوب');
-    /* S2: approved invoices cannot be deleted — revert first (BEFORE deletion) */
+    /* Phase 2 S2: Approved delete-block routed through table (no inline cur check).
+     * 'delete' pseudo-target: Pending->delete allowed, Approved->delete blocked. */
     var invRows = getReadOnlyRecords_(dbId, FIN_SALES_INV_SHEET);
+    var __delCur = null;
     for (var vi = 0; vi < invRows.length; vi++) {
-      if (String(invRows[vi].invoice_unique_id).trim() === uid && String(invRows[vi].approval_status || '').trim() === 'Approved') {
-        throw new Error('لا يمكن حذف فاتورة معتمدة — أرجعها لقيد الانتظار أولاً');
-      }
+      if (String(invRows[vi].invoice_unique_id).trim() === uid) { __delCur = String(invRows[vi].approval_status || 'Pending'); break; }
     }
+    if (__delCur !== null) assertTransition_('vf_sales_inv', __delCur, 'delete', 'لا يمكن حذف فاتورة معتمدة — أرجعها لقيد الانتظار أولاً');
     var _oldDelInv = invRows.find(function(r){ return String(r.invoice_unique_id)===String(uid); }) || null;
     var _oldDelUid = _oldDelInv ? (_oldDelInv.record_uid || ('del_'+FIN_SALES_INV_SHEET+'_'+uid)) : ('del_'+FIN_SALES_INV_SHEET+'_'+uid);
     try{ logHistory_(dbId, FIN_SALES_INV_SHEET, _oldDelUid, uid, (user&&user.email)||'', 'delete', null, _oldDelInv) }catch(e){}
@@ -10794,6 +12843,8 @@ const ValleyFoodsHRModules = (function () {
     ValleyFoods.register('change_valley_mfg_status',  changeValleyMfgStatus_);
     ValleyFoods.register('get_valley_recipe_plan',    getValleyRecipePlan_);
     ValleyFoods.register('get_valley_mfg_order_detail', getValleyMfgOrderDetail_);
+    ValleyFoods.register('get_valley_mfg_request_diagnosis', getValleyMfgRequestDiagnosis_);
+    ValleyFoods.register('get_valley_mfg_client_report', getValleyMfgClientReport_);
     ValleyFoods.register('get_valley_product_batches_multi', getValleyProductBatchesMulti_);
 
     ValleyFoods.register('get_valley_mfg_byproducts', getValleyMfgByproducts_);
@@ -10845,6 +12896,18 @@ const ValleyFoodsHRModules = (function () {
     return { status: 'success' };
   }
   ValleyFoods.register('prefetch_refs', prefetchRefs_);
+
+  /* Phase 2: register field validators for validateBeforeWrite (no logic duplicated —
+   * each entry calls the existing validators). Status-only paths skip via STATUS_ONLY_ACTIONS_. */
+  try {
+    if (typeof registerDocValidator_ === 'function') {
+      registerDocValidator_('vf_mfg_agree', function(payloadData, dbId){
+        var d = payloadData || {};
+        mfgAgreeCheckProduct_(dbId, String(d.client_id == null ? '' : d.client_id).trim(), String(d.product_id == null ? '' : d.product_id).trim());
+        mfgAgreeCheckMoney_(d.qty, d.unit_price);
+      });
+    }
+  } catch(eRegVF){}
   }
 
   return {
@@ -11134,3 +13197,44 @@ var ValleyFoodsFinancialReporting = (function () {
 if (typeof ValleyFoods !== 'undefined' && ValleyFoods.register) {
   ValleyFoods.register('get_valley_income_statement', ValleyFoodsFinancialReporting.reportAction_);
 }
+
+ValleyFoods.approvalPolicy_ = {
+  aliases: { vf_purchasing_quality: 'vf_purchasing', vf_att_batch: 'att_batch', attendance_batch: 'att_batch' },
+  chains: [
+    { docType: 'valley_purchasing', step: 'approve', role: 'valley_approver', required: true, sheet: 'valley_purchasing_costing', keyColumn: 'Code', kind: 'standard', versioned: false, missingMsg: 'عملية الشراء غير موجودة' },
+    { docType: 'valley_purchasing', step: 'quality', role: 'valley_quality', required: true, sheet: 'valley_purchasing_costing', keyColumn: 'Code', kind: 'quality', versioned: false, missingMsg: 'عملية الشراء غير موجودة' }
+  ],
+  transitions: {
+    vf_purchasing: { pending: ['approved', 'edit'], approved: [] },
+    vf_purchasing_quality: { pending: ['approved', 'edit'], approved: [] },
+    vf_mfg_order: { draft: ['in progress'], 'in progress': ['locked'], locked: ['in progress'] },
+    vf_mfg_agree: { draft: ['active', 'completed', 'cancelled'], active: ['completed', 'cancelled'], completed: ['cancelled'], cancelled: [] },
+    vf_sales_inv: { pending: ['approved', 'delete'], approved: ['pending'] },
+    att_batch: { active: ['reverted'], reverted: [] },
+    vf_att_batch: { active: ['reverted'], reverted: [] },
+    attendance_batch: { active: ['reverted'], reverted: [] }
+  },
+  actionToDocType: {
+    save_valley_purchasing_header_checkpoint: 'vf_purchasing', save_valley_purchasing_lines_checkpoint: 'vf_purchasing',
+    save_valley_purchasing_costing: 'vf_purchasing', delete_valley_purchasing_costing: 'vf_purchasing',
+    approve_valley_purchasing_costing: 'vf_purchasing', quality_approve_valley_purchasing_costing: 'vf_purchasing',
+    change_valley_mfg_status: 'vf_mfg_order', save_valley_mfg_order: 'vf_mfg_order',
+    save_valley_mfg_agreement: 'vf_mfg_agree', cancel_valley_mfg_agreement: 'vf_mfg_agree',
+    save_valley_invoice: 'vf_sales_inv', approve_valley_invoice: 'vf_sales_inv', delete_valley_invoice: 'vf_sales_inv',
+    commit_attendance_import: 'att_batch', revert_attendance_import: 'att_batch'
+  },
+  statusOnly: {
+    approve_valley_purchasing_costing: true, quality_approve_valley_purchasing_costing: true,
+    change_valley_mfg_status: true, cancel_valley_mfg_agreement: true,
+    approve_valley_invoice: true, delete_valley_invoice: true,
+    revert_attendance_import: true, delete_valley_purchasing_costing: true
+  }
+};
+ValleyFoods.themeCss_ = function () { return getGenericCompanyThemeCSS_('9940659bd83035d7'); };
+ValleyFoods.blockTheme_ = function () { return { from: '#054719', to: '#16a34a' }; };
+ValleyFoods.attachmentPolicy_ = function () { return {
+  vf_hr_deductions: { company: '9940659bd83035d7', sheet: 'valley_emp_deductions', idField: 'unique_id', fileFields: ['deduction_attachement'], folder: 'valley_emp_deductions_Files_' },
+  vf_hr_overtime: { company: '9940659bd83035d7', sheet: 'valley_emp_overtime', idField: 'unique_id', fileFields: ['overtime_attachement'], folder: 'valley_emp_overtime_Files_' },
+  vf_hr_vacations: { company: '9940659bd83035d7', sheet: 'valley_employee_vacations', idField: 'unique_id', fileFields: ['attachment'], folder: 'valley_employee_vacations_Files_' }
+}; };
+ValleyFoods.artifactHandlers_ = {};

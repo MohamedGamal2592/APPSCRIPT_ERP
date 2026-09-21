@@ -141,6 +141,7 @@ const TopChemical = (function () {
     'get_legal_invoices': { page: 'tc_budget_invoices', access: 'read' },
     'add_legal_invoice': { page: 'tc_budget_invoices', access: 'write' },
     'make_collection_from_invoice': { page: 'tc_budget_invoices', access: 'full' },
+    'make_collections_from_invoices': { page: 'tc_budget_invoices', access: 'full' },
     'get_legal_cash': { page: 'tc_budget_cash', access: 'read' },
     'add_legal_cash': { page: 'tc_budget_cash', access: 'write' },
     'toggle_legal_cash_approved': { page: 'tc_budget_cash', access: 'full' },
@@ -179,7 +180,15 @@ const TopChemical = (function () {
     // ── products live table (tc_products_live / اصناف النظام الرئيسي) ──
     'get_products_live':    { page: 'tc_products_live', access: 'read' },
     'save_product_live':    { page: 'tc_products_live', access: 'write' },
-    'delete_product_live':  { page: 'tc_products_live', access: 'write' }
+    'delete_product_live':  { page: 'tc_products_live', access: 'write' },
+    'get_exec_sales':       { page: 'tc_exec_sales', access: 'read' },
+    'get_sales_view':       { page: 'tc_exec_sales', access: 'read' },
+    'get_sales_charts':     { page: 'tc_exec_sales', access: 'read' },
+    'get_date_sales_monthly':  { page: 'tc_exec_sales', access: 'read' },
+    'get_date_sales_products': { page: 'tc_exec_sales', access: 'read' },
+    'get_box_daily_monthly':  { page: 'tc_exec_sales', access: 'read' },
+    'get_box_daily_accounts': { page: 'tc_exec_sales', access: 'read' },
+    'get_exec_box':         { page: 'tc_exec_sales', access: 'read' }
   };
 
   /** page for a module_action, reused for both access-control and logging. */
@@ -213,6 +222,7 @@ const TopChemical = (function () {
     'get_legal_invoices': LEGAL_INVOICES_SHEET,
     'add_legal_invoice': LEGAL_INVOICES_SHEET,
     'make_collection_from_invoice': LEGAL_CASH_SHEET,
+    'make_collections_from_invoices': LEGAL_CASH_SHEET,
     'get_legal_cash': LEGAL_CASH_SHEET,
     'add_legal_cash': LEGAL_CASH_SHEET,
     'toggle_legal_cash_approved': LEGAL_CASH_SHEET,
@@ -302,7 +312,15 @@ const TopChemical = (function () {
     'get_manufacture_refs':     'mysql:manufacture_headers',
     'get_products_live':   'mysql:products',
     'save_product_live':   'mysql:products',
-    'delete_product_live': 'mysql:products'
+    'delete_product_live': 'mysql:products',
+    'get_exec_sales': 'mysql:sales_product_qty_value',
+    'get_sales_view': 'mysql:sales_product_qty_value',
+    'get_sales_charts': 'mysql:sales_product_qty_value',
+    'get_date_sales_monthly': 'mysql:date_sales_product_qty_value',
+    'get_date_sales_products': 'mysql:date_sales_product_qty_value',
+    'get_box_daily_monthly': 'mysql:box_movement_daily_revise',
+    'get_box_daily_accounts': 'mysql:box_movement_daily_revise',
+    'get_exec_box': 'mysql:regular_box_movement'
   };
 
   function tableForAction_(action) {
@@ -367,19 +385,69 @@ const TopChemical = (function () {
     };
   }
 
-  function guard_(user, action) {
-    if (!user || user.isSuperAdmin) return;
+  // Phase 3: FAIL-CLOSED. An action not listed in PAGE_ACCESS is denied, not
+  // allowed. Super-admin bypass preserved. get_page_versions is the sole
+  // exception: it gates itself on the page asked about (see getPageVersions_).
+  // tc_box_analysis is explicitly listed above (get_box_analysis,
+  // get_box_item_history, update_box_movement, revise_box_movement,
+  // get_box_alerts, save_box_item_alias) — no hole.
+  function uploadDenied_(message) {
+    const e = new Error(message);
+    e.notApplied = true; e.code = 'REQUEST_NOT_APPLIED';
+    throw e;
+  }
+  function guard_(user, action, data) {
+    if (user && user.isSuperAdmin) return;
+    if (action === 'get_page_versions') return;
+    /* One upload action serves every registered attachment table. Authorize
+       against the page owning the submitted sheet rather than a static page. */
+    if (action === 'add_upload_file') {
+      const uploadSheet = String((data && data.sheet) || '').trim();
+      const uploadCfg = UPLOAD_META[uploadSheet];
+      if (!uploadCfg || !unifiedCheck_(user, COMPANY_UID, uploadCfg.page, 'write')) {
+        uploadDenied_(ERP_MESSAGES.NOT_AUTHORIZED);
+      }
+      return;
+    }
+    /* Shared budget references are used by every tc_budget_* page. They cannot
+       be represented by one PAGE_ACCESS page without making the reference
+       request either too narrow or too broad, so authorize it against the
+       caller's actual budget-page grants. */
+    if (action === 'get_budget_refs') {
+      const pages = (typeof COMPANY_REGISTRY !== 'undefined' && COMPANY_REGISTRY[COMPANY_UID] && COMPANY_REGISTRY[COMPANY_UID].pages) || [];
+      const allowed = pages.some(function (p) {
+        const pageId = String(p && p.action || '').trim();
+        return /^tc_budget_/.test(pageId) && unifiedCheck_(user, COMPANY_UID, pageId, 'read');
+      });
+      if (!allowed) throw new Error(ERP_MESSAGES.NOT_AUTHORIZED);
+      return;
+    }
     const req = PAGE_ACCESS[action];
-    if (!req) return;
-    if (!unifiedCheck_(user, '3fe1b5cb67b7223e', req.page, req.access)) {
+    if (!req) throw new Error(ERP_MESSAGES.NOT_AUTHORIZED);
+    if (!unifiedCheck_(user, COMPANY_UID, req.page, req.access)) {
       throw new Error(ERP_MESSAGES.NOT_AUTHORIZED);
     }
+  }
+
+  // Phase 3: Valley-style tenant double-check. dbId must be this company's own
+  // spreadsheet; a mismatched dbId (cross-tenant routing fault) is denied
+  // before any sheet read.
+  function authorize_(user, dbId) {
+    if (!user || (!user.isSuperAdmin && user.company !== COMPANY_UID) || !dbId || String(dbId) !== String(getCompanySpreadsheetId_(COMPANY_UID))) throw new Error(ERP_MESSAGES.NOT_AUTHORIZED);
   }
 
   function dispatch_(payload, user, dbId, ctx) {
     const action = payload.module_action;
     if (!actions[action]) throw new Error('Unknown Top Chemical action: ' + action);
-    guard_(user, action);
+    guard_(user, action, payload.data);
+    authorize_(user, dbId);
+    /* Phase 2: defensive gate so direct dispatch also validates. Status-only
+     * paths skip field validation inside validateBeforeWrite; handlers still
+     * enforce status via canTransition/assertTransition_. */
+    if (typeof validateBeforeWrite === 'function' && typeof docTypeForAction_ === 'function') {
+      var __dt = docTypeForAction_(action);
+      if (__dt) validateBeforeWrite(__dt, payload, dbId);
+    }
     return actions[action](payload.data, user, dbId, ctx);
   }
 
@@ -392,7 +460,8 @@ const TopChemical = (function () {
     return REQUEST_RECOVERABLE_ACTIONS_[String(action || '')] || '';
   }
 
-  function num0_(v) { return Math.max(0, Number(v) || 0); }
+  /* Phase 5 compat: delegates to shared sharedNum0_ (Code.js). */
+  function num0_(v) { return (typeof sharedNum0_ === 'function') ? sharedNum0_(v) : Math.max(0, Number(v) || 0); }
 
   function parseDate_(v) {
     if (v == null || v === '') return '';
@@ -581,7 +650,16 @@ const TopChemical = (function () {
     });
   }
 
-  /** employee_info: emp_id -> name_ar map + [{value,label}] options for ref selects. */
+  /** employee_info: emp_id -> name_ar map + [{value,label}] options for ref selects.
+   * OPT-2: cached under its own projected kind (never mixed with raw shapes).
+   * Invalidation: the ONLY employee_info writer is addEmployee_, which calls
+   * bustTcRefs_ after a successful append; status writes do not touch the
+   * name map (getEmployeeStatus_ still reads EMP_STATUS_SHEET fresh). 600s TTL
+   * bounds hand-edit visibility, as with every other tcRefs_ family. */
+  /** employee_info: emp_id -> name_ar map + [{value,label}] options for ref selects.
+   * This accessor deliberately reads fresh. There is no approved freshness
+   * budget or reliable invalidation signal for manual/external employee edits,
+   * so a ten-minute cache would change the established read contract. */
   function employeeRefs_(dbId) {
     const map = {};
     const rows = getAllRecords_(dbId, EMPLOYEE_SHEET);
@@ -597,11 +675,6 @@ const TopChemical = (function () {
     };
   }
 
-  /**
-   * AppSheet barcode data: CONCATENATE([id], TEXT(production_date,"YY"),
-   * [emp_id], TEXT(production_date,"MM"), [production_id],
-   * TEXT(production_date,"DD"), [system_id]) using the LOCAL calendar date.
-   */
   function buildBarcodeData_(rec) {
     const d = parseDate_(rec.production_date);
     const sysId = String(rec.system_id == null ? '' : rec.system_id).trim();
@@ -934,7 +1007,7 @@ const TopChemical = (function () {
     if (!Number.isInteger(id) || id <= 0) throw new Error('المعرف مطلوب (رقم صحيح موجب)');
     const nameAr = String(data.name_ar || '').trim();
     if (!nameAr) throw new Error('الاسم مطلوب');
-    const exists = tcClientsRaw_(dbId).some(function(c){ return Number(c.id) === id; });
+    const exists = (function () { var _idx = indexById(tcClientsRaw_(dbId), 'id'); var _k = String(id).trim(); return _idx.has(_k) || _idx.has(_k.toLowerCase()); })();
     if (exists) throw new Error('المعرف مستخدم بالفعل: ' + id);
     var rec = {
       id: id,
@@ -948,6 +1021,9 @@ const TopChemical = (function () {
     var res = appendRow_(dbId, CLIENTS_SHEET, rec);
     try { logHistory_(dbId, CLIENTS_SHEET, rec.record_uid || ('create_'+CLIENTS_SHEET+'_'+id), String(id), (user&&user.email)||'', 'create', rec, null); } catch(e){}
     try { bustTcRefs_(dbId); } catch(e){}
+    try { invalidateRefsCache_(dbId, 'tc_clients_raw'); } catch(e2){}
+    try { invalidateRefsCache_(dbId, 'tc_clients_opts'); } catch(e3){}
+    try { invalidateRefsCache_(dbId, 'tc_clients_refs'); } catch(e4){}
     res.record = rec;
     res.data = { assignedId: id };
     return res;
@@ -967,15 +1043,18 @@ const TopChemical = (function () {
     if (data.google_maps !== undefined) updates['google_maps'] = String(data.google_maps || '').trim();
     if (data.notes !== undefined) updates['notes'] = String(data.notes || '').trim();
     if (data.tax_id !== undefined) updates['tax_id'] = String(data.tax_id || '').trim();
-    var _oldClientVendor = null; try { _oldClientVendor = getAllRecords_(dbId, CLIENTS_SHEET).find(function(r){ return String(r.id)===String(id); }) || null; } catch(e2){}
+    var _oldClientVendor = null; try { var _ocvRows = getAllRecords_(dbId, CLIENTS_SHEET); var _ocvIdx = indexById(_ocvRows, 'id'); var _ocvKey = String(id).trim(); _oldClientVendor = _ocvIdx.get(_ocvKey) || _ocvIdx.get(_ocvKey.toLowerCase()) || null; } catch(e2){}
     const sheet = getSheet_(CLIENTS_SHEET, dbId);
-    if (!updateRowByCriteria_(sheet, 'id', id, updates)) throw new Error('العميل غير موجود');
+    if (!patchRowByCriteria_(sheet, 'id', id, updates)) throw new Error('العميل غير موجود');
     var savedRecord = { id: id };
     Object.keys(updates).forEach(function(k){ savedRecord[k]=updates[k]; });
     // fill missing from existing
-    try { var existing = tcClientsRaw_(dbId).find(function(c){ return Number(c.id)===id; }); if(existing){ Object.keys(existing).forEach(function(k){ if(savedRecord[k]===undefined) savedRecord[k]=existing[k]; }); } } catch(e){}
+    try { var _exRows = tcClientsRaw_(dbId); var _exIdx = indexById(_exRows, 'id'); var _exKey = String(id).trim(); var existing = _exIdx.get(_exKey) || _exIdx.get(_exKey.toLowerCase()) || null; if(existing){ Object.keys(existing).forEach(function(k){ if(savedRecord[k]===undefined) savedRecord[k]=existing[k]; }); } } catch(e){}
     try { var _uidCV = _oldClientVendor && _oldClientVendor.record_uid ? _oldClientVendor.record_uid : 'create_'+CLIENTS_SHEET+'_'+id; var _newCV = {}; if(_oldClientVendor) Object.keys(_oldClientVendor).forEach(function(k){ _newCV[k]=_oldClientVendor[k]; }); Object.keys(updates).forEach(function(k){ _newCV[k]=updates[k]; }); if(!Object.keys(_newCV).length) _newCV = savedRecord; logHistory_(dbId, CLIENTS_SHEET, _uidCV, String(id), (user&&user.email)||'', 'update', _newCV, _oldClientVendor); } catch(e){}
     try { bustTcRefs_(dbId); } catch(e){}
+    try { invalidateRefsCache_(dbId, 'tc_clients_raw'); } catch(e2){}
+    try { invalidateRefsCache_(dbId, 'tc_clients_opts'); } catch(e3){}
+    try { invalidateRefsCache_(dbId, 'tc_clients_refs'); } catch(e4){}
     return { status: 'success', message: 'تم تحديث العميل', record: savedRecord, data: { assignedId: id } };
   }
 
@@ -1005,9 +1084,10 @@ const TopChemical = (function () {
       const g = grouped[cid];
       return { client_id: g.client_id, client_name: g.client_name, debit: g.debit, credit: g.credit, net: g.debit - g.credit };
     }).sort(function (a, b) { return String(a.client_name).localeCompare(String(b.client_name), 'ar'); });
-    // cap after summary computed from FULL
-    var limit = Number(data && data.limit) || 10;
-    if (!data || !data.loadAll) summary = summary.slice(0, limit);
+    // No cap: one row per client, the set is small, and the page totals the
+    // visible summary — slicing it would silently drop clients AND their
+    // amounts from the grand total. (Per-client drill-down via getArApClient_
+    // keeps the shared 20-row window.) `limit`/`loadAll` accepted, ignored.
     return {
       status: 'success',
       summary: summary,
@@ -1044,7 +1124,7 @@ const TopChemical = (function () {
         };
       })
       .sort(function (a, b) { return String(b.date).localeCompare(String(a.date)); });
-    var limit = Number(data && data.limit) || 10;
+    var limit = Number(data && data.limit) || 20;
     if (!data || !data.loadAll) rows = rows.slice(0, limit);
     return {
       status: 'success',
@@ -1158,7 +1238,7 @@ const TopChemical = (function () {
     const cats = tcCategoryNames_(dbId);
     if (cats.indexOf(category) === -1) throw new Error('الفئة غير موجودة في جدول الفئات');
 
-    const exists = tcProductsRaw_(dbId).some(function(p){ return Number(p.id) === id; });
+    const exists = (function () { var _idx = indexById(tcProductsRaw_(dbId), 'id'); var _k = String(id).trim(); return _idx.has(_k) || _idx.has(_k.toLowerCase()); })();
     if (exists) throw new Error('المعرف مستخدم بالفعل: ' + id);
 
     var recP = {
@@ -1180,6 +1260,8 @@ const TopChemical = (function () {
     var resP = appendRow_(dbId, PRODUCTS_SHEET, recP);
     try { logHistory_(dbId, PRODUCTS_SHEET, recP.record_uid || ('create_'+PRODUCTS_SHEET+'_'+id), String(id), (user&&user.email)||'', 'create', recP, null); } catch(e){}
     try { bustTcRefs_(dbId); } catch(e){}
+    try { invalidateRefsCache_(dbId, 'tc_products_raw'); } catch(e2){}
+    try { invalidateRefsCache_(dbId, 'tc_products_refs'); } catch(e3){}
     resP.record = recP;
     resP.data = { assignedId: id };
     return resP;
@@ -1231,14 +1313,16 @@ const TopChemical = (function () {
         try { if (typeof ensureAttachmentColumn_ === 'function') ensureAttachmentColumn_(dbId, PRODUCTS_SHEET, 'print_file_id'); } catch (e3) {}
       }
     }
-    var _oldProd = null; try { _oldProd = getAllRecords_(dbId, PRODUCTS_SHEET).find(function(r){ return String(r.id)===String(id); }) || null; } catch(e2){}
+    var _oldProd = null; try { var _opRows = getAllRecords_(dbId, PRODUCTS_SHEET); var _opIdx = indexById(_opRows, 'id'); var _opKey = String(id).trim(); _oldProd = _opIdx.get(_opKey) || _opIdx.get(_opKey.toLowerCase()) || null; } catch(e2){}
     const sheet = getSheet_(PRODUCTS_SHEET, dbId);
-    if (!updateRowByCriteria_(sheet, 'id', id, updates)) throw new Error('المنتج غير موجود');
+    if (!patchRowByCriteria_(sheet, 'id', id, updates)) throw new Error('المنتج غير موجود');
     try { var _uidProd = _oldProd && _oldProd.record_uid ? _oldProd.record_uid : 'create_'+PRODUCTS_SHEET+'_'+id; var _newProd = {}; if(_oldProd) Object.keys(_oldProd).forEach(function(k){ _newProd[k]=_oldProd[k]; }); Object.keys(updates).forEach(function(k){ _newProd[k]=updates[k]; }); logHistory_(dbId, PRODUCTS_SHEET, _uidProd, String(id), (user&&user.email)||'', 'update', _newProd, _oldProd); } catch(e){}
     try { bustTcRefs_(dbId); } catch(e){}
+    try { invalidateRefsCache_(dbId, 'tc_products_raw'); } catch(e2b){}
+    try { invalidateRefsCache_(dbId, 'tc_products_refs'); } catch(e3b){}
     var savedRecProd = { id: id };
     Object.keys(updates).forEach(function(k){ savedRecProd[k]=updates[k]; });
-    try { var exP = tcProductsRaw_(dbId).find(function(p){ return Number(p.id)===id; }); if(exP){ Object.keys(exP).forEach(function(k){ if(savedRecProd[k]===undefined) savedRecProd[k]=exP[k]; }); } } catch(e){}
+    try { var _exPRows = tcProductsRaw_(dbId); var _exPIdx = indexById(_exPRows, 'id'); var _exPKey = String(id).trim(); var exP = _exPIdx.get(_exPKey) || _exPIdx.get(_exPKey.toLowerCase()) || null; if(exP){ Object.keys(exP).forEach(function(k){ if(savedRecProd[k]===undefined) savedRecProd[k]=exP[k]; }); } } catch(e){}
     return { status: 'success', message: 'تم تحديث المنتج', record: savedRecProd, data: { assignedId: id } };
   }
 
@@ -1256,7 +1340,7 @@ const TopChemical = (function () {
     var order = [];
     for (var i = 0; i < raw.length; i++) order.push(i);
     order.sort(function (a, b) { return Number(raw[b].id) - Number(raw[a].id); });
-    var limit = Number(data && data.limit) || 10;
+    var limit = Number(data && data.limit) || 20;
     if (!data || !data.loadAll) order = order.slice(0, limit);
     var rows = order.map(function (idx) {
       var r = raw[idx];
@@ -1366,7 +1450,7 @@ const TopChemical = (function () {
     // Phase 12 — slice before mapping; see getImportFollow_.
     var order = [];
     for (var i = rows.length - 1; i >= 0; i--) order.push(i);
-    var limit = Number(data && data.limit) || 10;
+    var limit = Number(data && data.limit) || 20;
     if (!data || !data.loadAll) order = order.slice(0, limit);
     var papers = order.map(function (idx) {
         var r = rows[idx];
@@ -1596,7 +1680,7 @@ const TopChemical = (function () {
         };
       })
       .sort(function (a, b) { return String(b.date).localeCompare(String(a.date)); });
-    var limit = Number(data && data.limit) || 10;
+    var limit = Number(data && data.limit) || 20;
     if (!data || !data.loadAll) rows = rows.slice(0, limit);
     return { status: 'success', account: acct, movements: rows };
   }
@@ -1732,16 +1816,27 @@ const TopChemical = (function () {
       }
     }
     rows = rows.reverse();
-    var limit = Number(data && data.limit) || 10;
+    var limit = Number(data && data.limit) || 20;
     if (!data || !data.loadAll) rows = rows.slice(0, limit);
     return { status: 'success', stock: rows, product_options: products.options };
   }
 
-  /** جرد دوري مخازن باركود — bootstrap for the scan page: product options only,
-   *  no full stock_revision history scan (the accounting list already does that
-   *  in getStockRevision_; the scan screen never needs it). */
+  /** جرد دوري مخازن باركود — bootstrap for the scan page: product options
+   *  (id, name, per-container qty) straight from the MySQL products master —
+   *  the same source of truth as tc_products_live — not the sheets copy.
+   *  number_of_cartons_bags rides along as per_unit so the count form can
+   *  pre-fill الكمية بالعبوة الواحدة for the picked product. */
   function getStockScanOptions_(data, user, dbId) {
-    return { status: 'success', product_options: productRefs_(dbId).options };
+    const res = dbStockScanProducts_(data || {}, user);
+    const productOptions = (res && res.products ? res.products : []).map(function (p) {
+      const pid = Number(p.value);
+      return {
+        value: Number.isInteger(pid) && pid > 0 ? pid : p.value,
+        label: p.label,
+        per_unit: p.per_unit
+      };
+    });
+    return { status: 'success', product_options: productOptions };
   }
 
   /** Same semantics as the retired difference formula:
@@ -1986,7 +2081,7 @@ const TopChemical = (function () {
     });
     var order = [];
     for (var i = rows.length - 1; i >= 0; i--) order.push(i);
-    var limit = Number(data && data.limit) || 10;
+    var limit = Number(data && data.limit) || 20;
     if (!data || !data.loadAll) order = order.slice(0, limit);
     var transactions = order.map(function (idx) {
       const r = rows[idx];
@@ -2156,7 +2251,7 @@ const TopChemical = (function () {
     const vendorNames = vendorNameMap_(dbId);
     const itemNames = itemNameMap_(dbId);
     const raw = getAllRecords_(dbId, PURCHASE_SHEET);
-    var limit = Number(data && data.limit) || 10;
+    var limit = Number(data && data.limit) || 20;
 
     var order = [];
     for (var i = raw.length - 1; i >= 0; i--) order.push(i);
@@ -2223,11 +2318,20 @@ const TopChemical = (function () {
     const receiptDate = data.receipt_date ? parseDate_(data.receipt_date) : new Date();
 
     return executeWithLock_(function () {
+      /* Phase 6 — Valley parity: honor the caller's request_key/unique_id so
+       * a replay converges on one row; otherwise mint exactly as before.
+       * Guard runs before id allocation so a replay burns no counter value. */
+      const _reqKeyPI = String(data.request_key || data.unique_id || '').trim();
+      if (_reqKeyPI) {
+        var _seenPI = null;
+        try { _seenPI = requestDedupeExecute_(dbId, PURCHASE_SHEET, _reqKeyPI, _reqKeyPI); } catch (eGuardPI) { _seenPI = null; }
+        if (_seenPI) return liveDedupeReply_(_seenPI, 'تمت إضافة التوريد');
+      }
       const id = getNextIdUnderLock_(dbId, PURCHASE_SHEET);
       const sheet = getSheet_(PURCHASE_SHEET, dbId);
       const headers = getHeaders_(sheet);
       const rec = {
-        unique_id: uid16_(),
+        unique_id: _reqKeyPI || uid16_(),
         id: id,
         vendor: vendor,
         invoice_no: invoiceNo,
@@ -2335,7 +2439,7 @@ const TopChemical = (function () {
     var raw = getAllRecords_(dbId, IMPORT_FOLLOW_SHEET);
     var order = [];
     for (var i = raw.length - 1; i >= 0; i--) order.push(i);
-    var limit = Number(data && data.limit) || 10;
+    var limit = Number(data && data.limit) || 20;
     if (!data || !data.loadAll) order = order.slice(0, limit);
     var rows = order.map(function (idx) {
       var r = raw[idx];
@@ -2489,7 +2593,7 @@ const TopChemical = (function () {
     Object.keys(_impFIds).forEach(function (k) { updates[k] = _impFIds[k]; });
     var _oldImpFiles = null; try { _oldImpFiles = getAllRecords_(dbId, IMPORT_FOLLOW_SHEET).find(function(r){ return String(r.id)===String(id); }) || null; } catch(e2){}
     const sheet = getSheet_(IMPORT_FOLLOW_SHEET, dbId);
-    if (!updateRowByCriteria_(sheet, 'id', id, updates)) throw new Error('السجل غير موجود');
+    if (!patchRowByCriteria_(sheet, 'id', id, updates)) throw new Error('السجل غير موجود');
     try { var _uidImpF = _oldImpFiles && _oldImpFiles.record_uid ? _oldImpFiles.record_uid : 'create_'+IMPORT_FOLLOW_SHEET+'_'+id; var _newImpF = {}; if(_oldImpFiles) Object.keys(_oldImpFiles).forEach(function(k){ _newImpF[k]=_oldImpFiles[k]; }); Object.keys(updates).forEach(function(k){ _newImpF[k]=updates[k]; }); logHistory_(dbId, IMPORT_FOLLOW_SHEET, _uidImpF, String(id), (user&&user.email)||'', 'update', _newImpF, _oldImpFiles); } catch(e){}
     return { status: 'success', message: 'تم تحديث الملفات' };
   }
@@ -2549,7 +2653,7 @@ const TopChemical = (function () {
     });
     var order = [];
     for (var i = raw.length - 1; i >= 0; i--) order.push(i);
-    var limit = Number(data && data.limit) || 10;
+    var limit = Number(data && data.limit) || 20;
     if (!data || !data.loadAll) order = order.slice(0, limit);
     var rows = order.map(function (idx) {
       var r = raw[idx];
@@ -2660,7 +2764,7 @@ const TopChemical = (function () {
     Object.keys(_csFIds).forEach(function (k) { updates[k] = _csFIds[k]; });
     var _oldCarton = null; try { _oldCarton = getAllRecords_(dbId, CARTON_SIZES_SHEET).find(function(r){ return String(r.id)===String(id); }) || null; } catch(e2){}
     const sheet = getSheet_(CARTON_SIZES_SHEET, dbId);
-    if (!updateRowByCriteria_(sheet, 'id', id, updates)) throw new Error('السجل غير موجود');
+    if (!patchRowByCriteria_(sheet, 'id', id, updates)) throw new Error('السجل غير موجود');
     try { var _uidCarton = _oldCarton && _oldCarton.record_uid ? _oldCarton.record_uid : 'create_'+CARTON_SIZES_SHEET+'_'+id; var _newCarton = {}; if(_oldCarton) Object.keys(_oldCarton).forEach(function(k){ _newCarton[k]=_oldCarton[k]; }); Object.keys(updates).forEach(function(k){ _newCarton[k]=updates[k]; }); logHistory_(dbId, CARTON_SIZES_SHEET, _uidCarton, String(id), (user&&user.email)||'', 'update', _newCarton, _oldCarton); } catch(e){}
     return { status: 'success', message: 'تم تحديث المستند' };
   }
@@ -2789,7 +2893,7 @@ const TopChemical = (function () {
     }).filter(function (r) {
       return (r.employee_code !== '' && r.employee_code != null) || (r.status_type !== '' && r.status_type != null);
     }).slice(-300).reverse();
-    var limit = Number(data && data.limit) || 10;
+    var limit = Number(data && data.limit) || 20;
     if (!data || !data.loadAll) rows = rows.slice(0, limit);
     return {
       status: 'success',
@@ -2849,7 +2953,7 @@ const TopChemical = (function () {
         user: r.user, created_at: r.created_at
       };
     });
-    var limit = Number(data && data.limit) || 10;
+    var limit = Number(data && data.limit) || 20;
     if (!data || !data.loadAll) rows = rows.slice(0, limit);
     return {
       status: 'success',
@@ -2914,7 +3018,7 @@ const TopChemical = (function () {
         details: r.details, user: r.user, created_at: r.created_at
       };
     });
-    var limit = Number(data && data.limit) || 10;
+    var limit = Number(data && data.limit) || 20;
     if (!data || !data.loadAll) rows = rows.slice(0, limit);
     return {
       status: 'success',
@@ -2984,7 +3088,7 @@ const TopChemical = (function () {
         start_time: r.start_time, end_time: r.end_time, total_minutes: r.total_minutes
       };
     });
-    var limit = Number(data && data.limit) || 10;
+    var limit = Number(data && data.limit) || 20;
     if (!data || !data.loadAll) rows = rows.slice(0, limit);
     return {
       status: 'success',
@@ -3047,7 +3151,7 @@ const TopChemical = (function () {
         user: r.user, created_at: r.created_at
       };
     });
-    var limit = Number(data && data.limit) || 10;
+    var limit = Number(data && data.limit) || 20;
     if (!data || !data.loadAll) rows = rows.slice(0, limit);
     return {
       status: 'success',
@@ -3148,7 +3252,7 @@ const TopChemical = (function () {
       };
     });
     var _fullTotal = rows.reduce(function (s, r) { return s + (Number(r.net_salary) || 0); }, 0);
-    var limit = Number(data && data.limit) || 10;
+    var limit = Number(data && data.limit) || 20;
     if (!data || !data.loadAll) rows = rows.slice(0, limit);
 
     const closedMap = {};
@@ -3355,7 +3459,11 @@ const TopChemical = (function () {
         }
       }
       if (rowNum === -1) throw new Error('السجل غير موجود');
-      var _oldDel = null; try { _oldDel = getAllRecords_(dbId, EMP_SALARIES_SHEET).find(function(r){ return Number(r.emp_id)===Number(empId) && Number(r.month)===Number(month) && Number(r.year)===Number(year); })||null; } catch(e2){}
+      /* OPT-3: history snapshot from the row just located (same trimmed-header
+         mapping buildRecordsFromRaw_ applies) instead of a second full read.
+         The located row matched numerically, so it carries non-blank cells
+         and the blank-row filter would have kept it too. */
+      var _oldDel = null; try { _oldDel = {}; headers.forEach(function (h, ci) { var _dv = values[rowNum - 1][ci]; _oldDel[String(h).trim()] = _dv !== undefined ? _dv : ''; }); } catch(e2){ _oldDel = null; }
       try { var _uidDel = _oldDel && _oldDel.record_uid ? _oldDel.record_uid : 'create_'+EMP_SALARIES_SHEET+'_'+empId+'_'+month+'_'+year; logHistory_(dbId, EMP_SALARIES_SHEET, _uidDel, String(empId), (user&&user.email)||'', 'delete', null, _oldDel); } catch(e){}
       sheet.deleteRow(rowNum);
       noteMutation_(sheet);
@@ -3386,7 +3494,9 @@ const TopChemical = (function () {
         }
       }
       if (rowNum === -1) throw new Error('السجل غير موجود');
-      var _oldRec = null; try { _oldRec = getAllRecords_(dbId, EMP_SALARIES_SHEET).find(function(r){ return Number(r.emp_id)===Number(empId) && Number(r.month)===Number(month) && Number(r.year)===Number(year); })||null; } catch(e2){}
+      /* OPT-3: history snapshot from the row just located (same mapping as
+         above) instead of a second full read of the salaries sheet. */
+      var _oldRec = null; try { _oldRec = {}; headers.forEach(function (h, ci) { var _rv = values[rowNum - 1][ci]; _oldRec[String(h).trim()] = _rv !== undefined ? _rv : ''; }); } catch(e2){ _oldRec = null; }
       sheet.getRange(rowNum, receiptIdx + 1).setValue(true);
       noteMutation_(sheet);
       try { var _uidRec = _oldRec && _oldRec.record_uid ? _oldRec.record_uid : 'create_'+EMP_SALARIES_SHEET+'_'+empId+'_'+month+'_'+year; var _newRec = {}; if(_oldRec) Object.keys(_oldRec).forEach(function(k){ _newRec[k]=_oldRec[k]; }); _newRec.receipt=true; logHistory_(dbId, EMP_SALARIES_SHEET, _uidRec, String(empId), (user&&user.email)||'', 'update', _newRec, _oldRec); } catch(e){}
@@ -3425,11 +3535,13 @@ const TopChemical = (function () {
     return executeWithLock_(function () {
       const closeRows = getAllRecords_(dbId, EMP_SALARIES_CLOSE_SHEET);
       const dup = closeRows.some(function (r) { return Number(r.month) === month && Number(r.year) === year; });
-      if (dup) throw new Error('هذا الشهر مغلق مسبقاً');
+      /* Phase 2: open->closed via insert, closed terminal — via table (no inline dup check retained). */
+      assertTransition_('payroll_month', dup ? 'closed' : 'open', 'closed', 'هذا الشهر مغلق مسبقاً');
       const salaryRows = getAllRecords_(dbId, EMP_SALARIES_SHEET).filter(function (r) {
         return Number(r.month) === month && Number(r.year) === year;
       });
-      const total = salaryRows.reduce(function (s, r) { return s + (Number(r.net_salary) || 0); }, 0);
+      /* Phase 5: shared num0_ is source of truth for the sum (no parallel calc). */
+      const total = salaryRows.reduce(function (s, r) { return s + num0_(r.net_salary); }, 0);
       const id = getNextIdUnderLock_(dbId, EMP_SALARIES_CLOSE_SHEET);
       const sheet = getSheet_(EMP_SALARIES_CLOSE_SHEET, dbId);
       const headers = getHeaders_(sheet);
@@ -3501,19 +3613,28 @@ const TopChemical = (function () {
 
   /** Next invoice number for a year: "{seq}-{year}" with seq = max+1 (resets yearly). */
   function nextInvoiceNumber_(dbId, year) {
-    let maxSeq = 0;
-    getAllRecords_(dbId, LEGAL_INVOICES_SHEET).forEach(function (r) {
-      const m = String(r['رقم الفاتورة'] || '').trim().match(/^(\d+)\s*-\s*(\d+)$/);
-      if (!m) return;
-      if (Number(m[2]) !== Number(year)) return;
-      const seq = Number(m[1]);
-      if (seq > maxSeq) maxSeq = seq;
+    /* Phase 1: delegates to the shared locked counter. Format identical.
+     * MUST be called while holding executeWithLock_. */
+    var seq = nextDocumentNumber_(dbId, 'tc_legal_inv', year, {
+      seedScanner: function () {
+        var maxSeq = 0;
+        getAllRecords_(dbId, LEGAL_INVOICES_SHEET).forEach(function (r) {
+          var m = String(r['رقم الفاتورة'] || '').trim().match(/^(\d+)\s*-\s*(\d+)$/);
+          if (!m) return;
+          if (Number(m[2]) !== Number(year)) return;
+          var s = Number(m[1]);
+          if (s > maxSeq) maxSeq = s;
+        });
+        return maxSeq;
+      }
     });
-    return (maxSeq + 1) + '-' + year;
+    return seq + '-' + year;
   }
 
-  /** Manufacture total_cost — faithful to the operator's formula (kept as sent,
-   *  incl. the movement-part qty multipliers T×M and T×N). */
+  /** Phase 5: Sheet-formula version is display-only. JS shared calcManufactureTotal_
+   *  (Code.js) is the source of truth for server-side totals; this keeps
+   *  returning the operator's formula text (incl. T×M and T×N multipliers) only so
+   *  the sheet cell keeps calculating for display. No rounding — raw preserved. */
   function buildManufactureTotalCost_(r) {
     const pairs = [
       { item: 'G', qty: 'O' }, { item: 'H', qty: 'P' }, { item: 'I', qty: 'Q' },
@@ -3529,6 +3650,19 @@ const TopChemical = (function () {
       );
     });
     return '=' + parts.join('+');
+  }
+
+  /** Phase 5: JS path for manufacture total — calls shared lib (source of truth).
+   *  Components are resolved numbers [{qty, unitCost[, mult]}]; mult covers T×M/T×N. */
+  function calcManufactureTotalCostJS_(components) {
+    if (typeof calcManufactureTotal_ === 'function') return calcManufactureTotal_(components);
+    var t = 0;
+    (components || []).forEach(function (c) {
+      var m = (c && c.mult !== undefined && c.mult !== null && c.mult !== '') ? Number(c.mult) : 1;
+      if (!isFinite(m)) m = 1;
+      t += num0_(c ? c.qty : 0) * num0_(c ? (c.unitCost !== undefined ? c.unitCost : c.price) : 0) * m;
+    });
+    return t;
   }
 
   /** Combined reference data for the budget forms (one call per page). */
@@ -3594,7 +3728,7 @@ const TopChemical = (function () {
     const name = String(data.name || '').trim();
     if (!name) throw new Error('الاسم مطلوب');
     if (!String(data.tax_id || '').trim()) throw new Error('الرقم الضريبي مطلوب');
-    const exists = tcLegalPartiesRaw_(dbId).some(function (p) { return Number(p.id) === id; });
+    const exists = (function () { var _idx = indexById(tcLegalPartiesRaw_(dbId), 'id'); var _k = String(id).trim(); return _idx.has(_k) || _idx.has(_k.toLowerCase()); })();
     if (exists) throw new Error('المعرف مستخدم بالفعل: ' + id);
     const rec = {};
     Object.keys(data).forEach(function (k) { rec[k.trim().toLowerCase()] = data[k]; });
@@ -3602,6 +3736,8 @@ const TopChemical = (function () {
     var resLP = appendRow_(dbId, LEGAL_PARTIES_SHEET, rec);
     try { logHistory_(dbId, LEGAL_PARTIES_SHEET, rec.record_uid || ('create_'+LEGAL_PARTIES_SHEET+'_'+id), String(id), (user&&user.email)||'', 'create', rec, null); } catch(e){}
     try { bustTcRefs_(dbId); } catch(e){}
+    try { invalidateRefsCache_(dbId, 'tc_legal_parties_raw'); } catch(e2){}
+    try { invalidateRefsCache_(dbId, 'tc_legal_parties_opts'); } catch(e3){}
     var savedLP = {}; Object.keys(rec).forEach(function(k){ savedLP[k]=rec[k]; });
     resLP.record = savedLP;
     resLP.data = { assignedId: id };
@@ -3879,6 +4015,8 @@ const TopChemical = (function () {
     const cert = String(header['رقم الشهاده'] || header['الرقم'] || '').trim();
     if (!cert) throw new Error('رقم الشهادة مطلوب');
     validateBudgetMonth_(header['تم_الاقرار_شهر']);
+    var __oldCostBundle = null; try { __oldCostBundle = getAllRecords_(dbId, LEGAL_COSTING_SHEET).find(function(r){ return getCertNo_(r)===cert; }) || null; } catch(eVb){}
+    var __costVer = checkRowVersion_(__oldCostBundle, header.version !== undefined ? header.version : (data && data.version));
     const sheet = getSheet_(LEGAL_COSTING_SHEET, dbId);
     const headers = getHeaders_(sheet);
     const formulaKeys = ['اجمالي التكاليف', 'المبيعات', 'نوع الضريبة', 'ضريبة المبيعات', 'الشهر', 'العام'].map(function (k) { return String(k).toLowerCase(); });
@@ -3888,6 +4026,7 @@ const TopChemical = (function () {
       if (formulaKeys.indexOf(key) !== -1) return;
       updates[key] = header[k];
     });
+    updates.version = __costVer + 1;
     const values = sheet.getDataRange().getValues();
     let rowIndex = -1;
     for (let i = 1; i < values.length; i++) {
@@ -3954,7 +4093,7 @@ const TopChemical = (function () {
 
   function getLegalManufacture_(data, user, dbId) {
     var items = getAllRecords_(dbId, LEGAL_MANUFACTURE_SHEET).slice().reverse();
-    var limit = Number(data && data.limit) || 10;
+    var limit = Number(data && data.limit) || 20;
     if (!data || !data.loadAll) items = items.slice(0, limit);
     return { status: 'success', items: items };
   }
@@ -4040,6 +4179,8 @@ const TopChemical = (function () {
       map[key] = merged[k];
     });
     Object.keys(fileIds).forEach(function (k) { map[k] = fileIds[k]; });
+    var __manfVer = checkRowVersion_(oldRow, data.version !== undefined ? data.version : merged.version);
+    map.version = __manfVer + 1;
     var result;
     executeWithLock_(function () {
       if (!patchRowByCriteria_(sheet, 'transaction_code', originalCode, map)) throw new Error('السجل غير موجود');
@@ -4081,10 +4222,14 @@ const TopChemical = (function () {
       });
     }
     if (search) {
+      var normSearch = String(data.search || '').trim().toLowerCase().replace(/[\s\-_/.]+/g, '');
       rows = rows.filter(function (r) {
+        var invRaw = String(r['رقم الفاتورة'] || '').toLowerCase();
+        var invNorm = String(r['رقم الفاتورة'] || '').trim().toLowerCase().replace(/[\s\-_/.]+/g, '');
+        var invMatch = invRaw.indexOf(search) !== -1 || (normSearch && invNorm.indexOf(normSearch) !== -1);
         return String(r['اسم العميل'] || '').toLowerCase().indexOf(search) !== -1 ||
           String(r['إسم المنتج'] || '').toLowerCase().indexOf(search) !== -1 ||
-          String(r['رقم الفاتورة'] || '').toLowerCase().indexOf(search) !== -1;
+          invMatch;
       });
     }
     rows = rows.slice().sort(function (a, b) {
@@ -4109,6 +4254,8 @@ const TopChemical = (function () {
   }
 
   function addLegalInvoice_(data, user, dbId) {
+    /* Phase 1: numbering via the shared locked counter must hold the lock. */
+    return executeWithLock_(function () {
     const cust = String(data['اسم العميل'] || '').trim();
     if (!cust) throw new Error('اسم العميل مطلوب');
     const code = String(data['كود المعاملة المباعة'] || '').trim();
@@ -4118,6 +4265,17 @@ const TopChemical = (function () {
     if (!(Number(data['كمية المنتج']) > 0)) throw new Error('كمية المنتج يجب أن تكون أكبر من صفر');
     const year = Number(data['العام']) || (parseDate_(dateStr).getFullYear()) || new Date().getFullYear();
     if (!Number.isInteger(year) || year < 2000) throw new Error('العام غير صحيح');
+    /* Phase 6 — Valley parity: replay guard before numbering, so a retried
+     * save returns the committed row instead of allocating a second invoice
+     * number. Fires when the client sends request_key/unique_id AND the
+     * sheet carries the key (probes are null-safe otherwise); persisting a
+     * request_key column is deferred — no schema change this phase. */
+    const _reqKeyLI = String(data['request_key'] || data['unique_id'] || '').trim();
+    if (_reqKeyLI) {
+      var _seenLI = null;
+      try { _seenLI = requestDedupeExecute_(dbId, LEGAL_INVOICES_SHEET, _reqKeyLI, _reqKeyLI); } catch (eGuardLI) { _seenLI = null; }
+      if (_seenLI) return liveDedupeReply_(_seenLI, 'تمت إضافة الفاتورة');
+    }
     const valueMap = {};
     Object.keys(data).forEach(function (k) { valueMap[k.trim().toLowerCase()] = data[k]; });
     var invNo = nextInvoiceNumber_(dbId, year);
@@ -4127,6 +4285,7 @@ const TopChemical = (function () {
     valueMap['نوع البيان (سلعة 3/خدمة 4/تسويات 5)'] = 3;
     valueMap['نوع السلعة (محلي 1/صادرات 2/آلات ومعدات 5/أجزاء آلات 6/إعفاءات 7 /  سلع الجدول  مراجعة الإرشادات )'] = 14;
     valueMap['user'] = (user && user.email) || '';
+    valueMap['version'] = 0;
     const formulaMap = {
       'رقم التسجيل الضريبي للعميل': '=IFERROR(INDEX(legal_customer_vendor!E:E,MATCH(F{r},legal_customer_vendor!B:B,0)),"")',
       'إسم المنتج': '=IFERROR(VLOOKUP(A{r},legal_current_products!$A:$B,2,0),"")',
@@ -4163,6 +4322,7 @@ const TopChemical = (function () {
     Object.keys(data).forEach(function(k){ savedRecord[k] = data[k]; });
     savedRecord['رقم الفاتورة'] = invNo;
     return { status: 'success', message: 'تمت إضافة الفاتورة', record: savedRecord, data: { assignedId: invNo } };
+    });
   }
 
   function getLegalCash_(data, user, dbId) {
@@ -4244,17 +4404,64 @@ const valueMap = {};
     });
   }
 
+  var COLLECTION_FORMULA_MAP = {
+    'balance_amount': '=IF(K{r}="Debit Note",J{r}*-1,IF(K{r}="Credit",J{r}*-1,J{r}))',
+    'chart_account_main': '=VLOOKUP(N{r},chart_of_accounts!N:O,2,0)'
+  };
+
+  function buildCollectionValueMap_(invoice, transactionId, user) {
+    var customerName = String(invoice['اسم العميل'] || invoice['العميل'] || '').trim();
+    var rawInvDate = invoice['تاريخ الفاتورة'] || invoice['تاريخ'];
+    var invDate = normalizeDateStr_(rawInvDate) || budgetDateStr_(new Date());
+    var netAmount = Number(invoice['المبلغ الصافي'] || invoice['الصافي'] || invoice['إجمالي'] || 0) || 0;
+    var invNo = String(invoice['رقم الفاتورة'] || '').trim();
+    return {
+      'transaction_id': transactionId,
+      'invoice_id': invNo,
+      'name': customerName,
+      'transaction_details': 'تحصيلات مبيعات',
+      'transaction_date': invDate,
+      'transaction_amount': netAmount,
+      'total_discount': 0,
+      'taxes': 0,
+      'net_amount': netAmount,
+      'total': netAmount,
+      'transaction_type': 'Debit',
+      'related_box': '111102',
+      'chart_code': 'ايرادات المبيعات-411101-ايرادات مبيعات المخزون التام',
+      'transaction_method': 'Cash',
+      'approved': true,
+      'company': 'توب كيميكال',
+      'user': (user && user.email) || ''
+    };
+  }
+
+  function collectedInvoiceIdSet_(dbId) {
+    var set = {};
+    try {
+      getAllRecords_(dbId, LEGAL_CASH_SHEET).forEach(function (r) {
+        var k = String(r.invoice_id || r['invoice_id'] || '').trim();
+        if (k) set[k] = true;
+      });
+    } catch (e) {}
+    return set;
+  }
+
+  function findInvoiceById_(invoices, invId) {
+    return invoices.find(function (i) {
+      return String(i['رقم الفاتورة'] || '').trim() === invId ||
+             String(i.unique_id || '').trim() === invId ||
+             String(i.id || '').trim() === invId;
+    });
+  }
+
   function makeCollectionFromInvoice_(data, user, dbId) {
     const invId = String((data && (data.invoice_id || data.id || data.unique_id)) || '').trim();
     if (!invId) throw new Error('معرف أو رقم الفاتورة مطلوب');
 
     // Get all invoice records to find the target invoice
     const invoices = getAllRecords_(dbId, LEGAL_INVOICES_SHEET);
-    const invoice = invoices.find(function (i) {
-      return String(i['رقم الفاتورة'] || '').trim() === invId ||
-             String(i.unique_id || '').trim() === invId ||
-             String(i.id || '').trim() === invId;
-    });
+    const invoice = findInvoiceById_(invoices, invId);
 
     if (!invoice) throw new Error('الفاتورة غير موجودة برقم: ' + invId);
 
@@ -4269,6 +4476,8 @@ const valueMap = {};
     const invNo = String(invoice['رقم الفاتورة'] || invId).trim();
 
     return executeWithLock_(function () {
+      const collected = collectedInvoiceIdSet_(dbId);
+      if (collected[invNo]) throw new Error('تم تحصيل هذه الفاتورة مسبقاً: ' + invNo);
       const rows = getAllRecords_(dbId, LEGAL_CASH_SHEET);
       let maxId = 0;
       rows.forEach(function (r) {
@@ -4276,34 +4485,75 @@ const valueMap = {};
         if (Number.isInteger(n) && n > maxId) maxId = n;
       });
 
-      const valueMap = {
-        'transaction_id': maxId + 1,
-        'invoice_id': invNo,
-        'name': customerName,
-        'transaction_details': 'تحصيلات مبيعات',
-        'transaction_date': invDate,
-        'transaction_amount': netAmount,
-        'total_discount': 0,
-        'taxes': 0,
-        'net_amount': netAmount,
-        'total': netAmount,
-        'transaction_type': 'Debit',
-        'related_box': '111102',
-        'chart_code': 'ايرادات المبيعات-411101-ايرادات مبيعات المخزون التام',
-        'transaction_method': 'Cash',
-        'approved': true,
-        'company': 'توب كيميكال',
-        'user': (user && user.email) || ''
-      };
+      const valueMap = buildCollectionValueMap_(invoice, maxId + 1, user);
 
-      const formulaMap = {
-        'balance_amount': '=IF(K{r}="Debit Note",J{r}*-1,IF(K{r}="Credit",J{r}*-1,J{r}))',
-        'chart_account_main': '=VLOOKUP(N{r},chart_of_accounts!N:O,2,0)'
-      };
+      const formulaMap = COLLECTION_FORMULA_MAP;
 
       writeBudgetRow_(dbId, LEGAL_CASH_SHEET, valueMap, formulaMap);
       try { logHistory_(dbId, LEGAL_CASH_SHEET, valueMap.record_uid || ('create_'+LEGAL_CASH_SHEET+'_'+(maxId+1)), String(maxId+1), (user&&user.email)||'', 'create', valueMap, null); } catch(e){}
       return { status: 'success', message: 'تم إنشاء عملية التحصيل بنجاح برقم حركة: ' + (maxId + 1), data: { transaction_id: maxId + 1 } };
+    });
+  }
+
+  function makeCollectionsFromInvoices_(data, user, dbId) {
+    var raw = data ? (data.invoice_ids || data.invoiceIds || data.ids) : null;
+    var ids = [];
+    if (Object.prototype.toString.call(raw) === '[object Array]') {
+      ids = raw.map(function (v) { return String(v == null ? '' : v).trim(); }).filter(Boolean);
+    } else if (typeof raw === 'string' && raw.trim()) {
+      ids = raw.split(',').map(function (v) { return String(v || '').trim(); }).filter(Boolean);
+    } else {
+      var single = String((data && (data.invoice_id || data.id || data.unique_id)) || '').trim();
+      if (single) ids = [single];
+    }
+    // De-dupe while preserving order.
+    var seen = {};
+    ids = ids.filter(function (v) { if (seen[v]) return false; seen[v] = true; return true; });
+    if (!ids.length) throw new Error('اختر فاتورة واحدة على الأقل');
+    if (ids.length > 500) throw new Error('الحد الأقصى 500 فاتورة في العملية الواحدة');
+
+    return executeWithLock_(function () {
+      var invoices = getAllRecords_(dbId, LEGAL_INVOICES_SHEET);
+      var cashRows = getAllRecords_(dbId, LEGAL_CASH_SHEET);
+      var collected = {};
+      cashRows.forEach(function (r) {
+        var k = String(r.invoice_id || '').trim();
+        if (k) collected[k] = true;
+      });
+      var maxId = 0;
+      cashRows.forEach(function (r) {
+        var n = Number(r.transaction_id);
+        if (Number.isInteger(n) && n > maxId) maxId = n;
+      });
+      var collectedOut = [];
+      var skipped = [];
+      var failed = [];
+      ids.forEach(function (invId) {
+        if (collected[invId]) { skipped.push({ id: invId, reason: 'تم تحصيله مسبقاً' }); return; }
+        var invoice = findInvoiceById_(invoices, invId);
+        if (!invoice) { failed.push({ id: invId, reason: 'الفاتورة غير موجودة' }); return; }
+        var invNo = String(invoice['رقم الفاتورة'] || invId).trim();
+        if (collected[invNo]) { skipped.push({ id: invNo, reason: 'تم تحصيله مسبقاً' }); return; }
+        var customerName = String(invoice['اسم العميل'] || invoice['العميل'] || '').trim();
+        if (!customerName) { failed.push({ id: invNo, reason: 'اسم العميل غير موجود في الفاتورة' }); return; }
+        var netAmount = Number(invoice['المبلغ الصافي'] || invoice['الصافي'] || invoice['إجمالي'] || 0) || 0;
+        if (!(netAmount > 0)) { failed.push({ id: invNo, reason: 'المبلغ الصافي يجب أن يكون أكبر من الصفر' }); return; }
+        maxId += 1;
+        var valueMap = buildCollectionValueMap_(invoice, maxId, user);
+        try {
+          writeBudgetRow_(dbId, LEGAL_CASH_SHEET, valueMap, COLLECTION_FORMULA_MAP);
+          try { logHistory_(dbId, LEGAL_CASH_SHEET, valueMap.record_uid || ('create_'+LEGAL_CASH_SHEET+'_'+maxId), String(maxId), (user && user.email) || '', 'create', valueMap, null); } catch (e) {}
+          collected[invNo] = true;
+          collectedOut.push(invNo);
+        } catch (e) {
+          maxId -= 1;
+          failed.push({ id: invNo, reason: (e && e.message) || 'فشل الحفظ' });
+        }
+      });
+      var msg = 'تم تحصيل ' + collectedOut.length + ' فاتورة';
+      if (skipped.length) msg += '، وتجاوز ' + skipped.length + ' محصلة مسبقاً';
+      if (failed.length) msg += '، وفشل ' + failed.length;
+      return { status: 'success', message: msg, data: { collected: collectedOut, skipped: skipped, failed: failed } };
     });
   }
 
@@ -4317,56 +4567,432 @@ const valueMap = {};
     if (!current) throw new Error('الحركة غير موجودة: ' + id);
     const val = String(current.approved || '').trim().toUpperCase();
     const next = val === 'TRUE' ? false : true;
-    updateRowByCriteria_(sheet, 'transaction_id', id, { approved: next });
+    /* Phase 2: boolean toggle false<->true via table (no inline cur check retained). */
+    assertTransition_('tc_legal_cash', val === 'TRUE' ? 'true' : 'false', next ? 'true' : 'false', 'تحويل حالة الاعتماد غير صالح');
+    var __cashVer = checkRowVersion_(current, data && data.version);
+    patchRowByCriteria_(sheet, 'transaction_id', id, { approved: next, version: __cashVer + 1 });
     try { var _uidCashAp = current && current.record_uid ? current.record_uid : 'create_'+LEGAL_CASH_SHEET+'_'+id; var _newCashAp = {}; if(current) Object.keys(current).forEach(function(k){ _newCashAp[k]=current[k]; }); _newCashAp.approved = next; logHistory_(dbId, LEGAL_CASH_SHEET, _uidCashAp, String(id), (user&&user.email)||'', 'approve', _newCashAp, current); } catch(e){}
     return { status: 'success', message: next ? 'تم اعتماد الحركة' : 'تم إلغاء الاعتماد' };
   }
 
+  // legal_employee_info schema (AppSheet truth source):
+  // Employee_Code(Number,Key,autoincrement) Employee_name(Name) title(Ref title_index)
+  // section(Ref dept_section_index) gross_salary/allow(Decimal) Hiring_Date/Birth_Date(Date,TODAY())
+  // National_ID/Insusrance_number/insurance_place(Number) Address(Address)
+  // age(Decimal,ReadOnly,sheet fn round((TODAY()-Birth_Date)/365,2))
+  // Military_status(Text->enum dropdown) Insurance_Status(Yes/No)
+  // Vacation_Limit(Enum 21/30) Gender(Enum Male/Female) status(Enum يعمل بالشركة/استقالة/معاش/الوفاة)
+  const LEGAL_EMP_GENDER_OPTS = ['Male', 'Female'];
+  const LEGAL_EMP_GENDER_AR = { 'ذكر': 'Male', 'أنثى': 'Female', 'Male': 'Male', 'Female': 'Female' };
+  const LEGAL_EMP_STATUS_OPTS = ['يعمل بالشركة', 'استقالة', 'معاش', 'الوفاة'];
+  const LEGAL_EMP_VACATION_OPTS = ['21', '30'];
+  const LEGAL_EMP_MILITARY_OPTS = ['أدى الخدمة', 'إعفاء', 'مؤجل', 'معاف', 'لم يحدد'];
+  const LEGAL_EMP_INSURANCE_OPTS = [{ value: 'TRUE', label: 'مؤمن' }, { value: 'FALSE', label: 'غير مؤمن' }];
+
+  function legalEmployeeAge_(birthVal) {
+    var d = parseDate_(birthVal);
+    if (!(d instanceof Date) || isNaN(d.getTime())) return '';
+    var today = new Date(); today.setHours(0, 0, 0, 0); d.setHours(0, 0, 0, 0);
+    var age = (today.getTime() - d.getTime()) / (365 * 24 * 60 * 60 * 1000);
+    return Math.round(age * 100) / 100;
+  }
+
+  function legalSectionOptions_(dbId) {
+    return tcRefs_(dbId, 'tc_legal_sections_opts', function () {
+      var seen = {};
+      try {
+        getAllRecords_(dbId, 'dept_section_index').forEach(function (r) {
+          var s = String(r.section != null ? r.section : (r['القسم'] != null ? r['القسم'] : '')).trim();
+          if (s) seen[s] = true;
+        });
+      } catch (e) {}
+      try {
+        titleOptions_(dbId).forEach(function (o) { if (o.section) seen[String(o.section).trim()] = true; });
+      } catch (e) {}
+      return Object.keys(seen).map(function (s) { return { value: s, label: s }; })
+        .sort(function (a, b) { return String(a.label).localeCompare(String(b.label), 'ar'); });
+    });
+  }
+
+  // Normalise mixed-case AppSheet column headers (e.g. "Employee_Code" -> "employee_code")
+  // so the client can use consistent lowercase key access everywhere.
+  function legalNormalizeKeys_(records) {
+    return records.map(function (e) {
+      var norm = {};
+      Object.keys(e).forEach(function (k) { norm[k.trim().toLowerCase()] = e[k]; });
+      return norm;
+    });
+  }
+
   function getLegalHr_(data, user, dbId) {
-    return { status: 'success', employees: getAllRecords_(dbId, LEGAL_EMPLOYEES_SHEET) };
+    var nextCode = null;
+    try { nextCode = peekNextId_(dbId, LEGAL_EMPLOYEES_SHEET, 'employee_code'); } catch (e) {}
+    var employees = legalNormalizeKeys_(getAllRecords_(dbId, LEGAL_EMPLOYEES_SHEET));
+    // Collect unique non-empty insurance_place values from existing records.
+    var ipSeen = {};
+    employees.forEach(function (e) {
+      var v = String(e.insurance_place != null ? e.insurance_place : '').trim();
+      if (v) ipSeen[v] = true;
+    });
+    var insurancePlaceOpts = Object.keys(ipSeen).sort(function (a, b) {
+      return String(a).localeCompare(String(b), 'ar');
+    }).map(function (v) { return { value: v, label: v }; });
+    return {
+      status: 'success',
+      employees: employees,
+      title_options: titleOptions_(dbId),
+      section_options: legalSectionOptions_(dbId),
+      next_code: nextCode,
+      gender_options: [{ value: 'ذكر', label: 'ذكر' }, { value: 'أنثى', label: 'أنثى' }],
+      status_options: LEGAL_EMP_STATUS_OPTS.map(function (v) { return { value: v, label: v }; }),
+      vacation_options: LEGAL_EMP_VACATION_OPTS.map(function (v) { return { value: v, label: v }; }),
+      military_options: LEGAL_EMP_MILITARY_OPTS.map(function (v) { return { value: v, label: v }; }),
+      insurance_options: LEGAL_EMP_INSURANCE_OPTS,
+      insurance_place_options: insurancePlaceOpts
+    };
   }
 
   function addLegalEmployee_(data, user, dbId) {
-    const code = Number(data.employee_code);
-    if (!Number.isInteger(code) || code <= 0) throw new Error('كود الموظف مطلوب');
-    const name = String(data.employee_name || '').trim();
+    data = data || {};
+    const name = String(data.Employee_name || data.employee_name || '').trim();
     if (!name) throw new Error('اسم الموظف مطلوب');
-    const exists = getAllRecords_(dbId, LEGAL_EMPLOYEES_SHEET).some(function (e) { return Number(e.employee_code) === code; });
-    if (exists) throw new Error('الكود مستخدم بالفعل: ' + code);
-    const rec = {};
-    Object.keys(data).forEach(function (k) { rec[k.trim().toLowerCase()] = data[k]; });
-    var resLE = appendRow_(dbId, LEGAL_EMPLOYEES_SHEET, rec);
-    try { logHistory_(dbId, LEGAL_EMPLOYEES_SHEET, rec.record_uid || ('create_'+LEGAL_EMPLOYEES_SHEET+'_'+code), String(code), (user&&user.email)||'', 'create', rec, null); } catch(e){}
-    var savedLE = {}; Object.keys(rec).forEach(function(k){ savedLE[k]=rec[k]; });
-    savedLE['employee_code']=code; savedLE['employee_name']=name;
-    resLE.record = savedLE;
-    resLE.data = { assignedId: code };
-    return resLE;
+
+    const title = String(data.title || '').trim();
+    if (!title) throw new Error('المسمى الوظيفي مطلوب');
+
+    var section = String(data.section || '').trim();
+    if (title && !section) {
+      try {
+        var hit = titleOptions_(dbId).filter(function (x) { return String(x.value) === title; })[0];
+        if (hit && hit.section) section = String(hit.section);
+      } catch (e) {}
+    }
+    if (!section) throw new Error('القسم مطلوب');
+
+    if (data.gross_salary === '' || data.gross_salary == null || isNaN(Number(data.gross_salary))) throw new Error('الراتب الأساسي مطلوب ويجب أن يكون رقماً');
+    const gross = Number(data.gross_salary);
+
+    if (data.allow === '' || data.allow == null || isNaN(Number(data.allow))) throw new Error('البدلات مطلوبة ويجب أن تكون رقماً');
+    const allow = Number(data.allow);
+
+    const hireRaw = data.Hiring_Date != null ? data.Hiring_Date : data.hiring_date;
+    if (!hireRaw) throw new Error('تاريخ التعيين مطلوب');
+
+    const natId = String(data.National_ID != null ? data.National_ID : (data.national_id != null ? data.national_id : '')).trim();
+    if (!/^\d{14}$/.test(natId)) throw new Error('الرقم القومي مطلوب ويجب أن يتكون من 14 رقماً بالضبط');
+
+    const address = String(data.Address || data.address || '').trim();
+    if (!address) throw new Error('العنوان مطلوب');
+
+    const birthRaw = data.Birth_Date != null ? data.Birth_Date : data.birth_date;
+    if (!birthRaw) throw new Error('تاريخ الميلاد مطلوب');
+
+    const insNum = String(data.Insusrance_number != null ? data.Insusrance_number : (data.insusrance_number != null ? data.insusrance_number : (data.insurance_number != null ? data.insurance_number : ''))).trim();
+    if (!insNum || !/^\d+$/.test(insNum)) throw new Error('رقم التأمين مطلوب ويجب أن يكون رقماً صحيحاً');
+
+    const insPlace = String(data.insurance_place || '').trim();
+    if (!insPlace) throw new Error('جهة التأمين مطلوبة');
+
+    const mil = String(data.Military_status != null ? data.Military_status : (data.military_status != null ? data.military_status : '')).trim();
+    if (!mil) throw new Error('حالة التجنيد مطلوبة');
+
+    const genderAr = String(data.Gender != null ? data.Gender : (data.gender != null ? data.gender : '')).trim();
+    if (!genderAr) throw new Error('النوع مطلوب');
+    const gender = LEGAL_EMP_GENDER_AR[genderAr] || genderAr;
+
+    const status = String(data.status || '').trim();
+    if (!status) throw new Error('الحالة الوظيفية مطلوبة');
+    if (LEGAL_EMP_STATUS_OPTS.indexOf(status) === -1) throw new Error('الحالة الوظيفية غير صالحة');
+
+    const vac = String(data.Vacation_Limit != null ? data.Vacation_Limit : (data.vacation_limit != null ? data.vacation_limit : '')).trim();
+    if (!vac || !/^\d+$/.test(vac)) throw new Error('رصيد الإجازات مطلوب ويجب أن يكون رقماً صحيحاً');
+
+    var insRaw = String(data.Insurance_Status != null ? data.Insurance_Status : (data.insurance_status != null ? data.insurance_status : '')).trim();
+    var insBool = hrBool_(data.Insurance_Status != null ? data.Insurance_Status : data.insurance_status);
+    if (/^(مؤمن|TRUE|true|1|yes)$/i.test(insRaw)) insBool = true;
+    else if (/^(غير مؤمن|غير_مؤمن|FALSE|false|0|no)$/i.test(insRaw)) insBool = false;
+
+    return executeWithLock_(function () {
+      const code = getNextIdUnderLock_(dbId, LEGAL_EMPLOYEES_SHEET, 'employee_code');
+      var age = legalEmployeeAge_(birthRaw);
+
+      const rec = {};
+      Object.keys(data).forEach(function (k) { rec[k.trim().toLowerCase()] = data[k]; });
+      rec['employee_code'] = code;
+      rec['employee_name'] = name;
+      rec['title'] = title;
+      rec['section'] = section;
+      rec['gross_salary'] = gross;
+      rec['allow'] = allow;
+      rec['hiring_date'] = hireRaw;
+      rec['national_id'] = natId;
+      rec['address'] = address;
+      rec['birth_date'] = birthRaw;
+      rec['age'] = age;
+      rec['insusrance_number'] = parseInt(insNum, 10);
+      rec['insurance_number'] = parseInt(insNum, 10);
+      rec['military_status'] = mil;
+      rec['insurance_status'] = insBool;
+      rec['vacation_limit'] = parseInt(vac, 10);
+      rec['gender'] = gender;
+      rec['status'] = status;
+      rec['insurance_place'] = insPlace;
+
+      var resLE = appendRow_(dbId, LEGAL_EMPLOYEES_SHEET, rec);
+      try { logHistory_(dbId, LEGAL_EMPLOYEES_SHEET, rec.record_uid || ('create_' + LEGAL_EMPLOYEES_SHEET + '_' + code), String(code), (user && user.email) || '', 'create', rec, null); } catch (e) {}
+      try { bustTcRefs_(dbId); } catch (e) {}
+      var savedLE = {}; Object.keys(rec).forEach(function (k) { savedLE[k] = rec[k]; });
+      savedLE['employee_code'] = code; savedLE['employee_name'] = name;
+      resLE.record = savedLE;
+      resLE.data = { assignedId: code };
+      return resLE;
+    });
+  }
+
+  const LEGAL_MONTH_ARABIC = ['', 'يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو', 'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر'];
+
+  function legalSalaryTax_(pool) {
+    pool = Number(pool) || 0;
+    if (pool <= 0) return 0;
+    if (pool <= 21000) return 0;
+    if (pool <= 30000) return 0;
+    if (pool <= 45000) return Math.round((pool - 30000) * 0.10 * 100) / 100;
+    if (pool <= 60000) return Math.round(((pool - 45000) * 0.15 + 1500) * 100) / 100;
+    if (pool <= 200000) return Math.round(((pool - 60000) * 0.20 + 3750) * 100) / 100;
+    if (pool <= 400000) return Math.round(((pool - 200000) * 0.225 + 31750) * 100) / 100;
+    if (pool <= 600000) return Math.round(((pool - 400000) * 0.25 + 76750) * 100) / 100;
+    if (pool <= 700000) return Math.round(((pool - 400000) * 0.25 + 77500) * 100) / 100;
+    if (pool <= 800000) return Math.round(((pool - 400000) * 0.25 + 79750) * 100) / 100;
+    if (pool <= 900000) return Math.round(((pool - 400000) * 0.25 + 82000) * 100) / 100;
+    if (pool <= 1200000) return Math.round(((pool - 400000) * 0.25 + 90000) * 100) / 100;
+    return Math.round(((pool - 1200000) * 0.275 + 300000) * 100) / 100;
+  }
+
+  function deptClassificationMap_(dbId) {
+    return tcRefs_(dbId, 'tc_dept_classification_map', function () {
+      var map = {};
+      try {
+        getAllRecords_(dbId, 'dept_section_index').forEach(function (r) {
+          var s = String(r.section != null ? r.section : (r['القسم'] != null ? r['القسم'] : (r.id != null ? r.id : ''))).trim();
+          var c = String(r.department != null ? r.department : (r.classification != null ? r.classification : (r['تصنيف_القسم'] || r['الإدارة'] || ''))).trim();
+          if (s && c) map[s] = c;
+        });
+      } catch (e) {}
+      return map;
+    });
+  }
+
+  function legalMonthOptions_(dbId) {
+    return tcRefs_(dbId, 'tc_legal_month_opts', function () {
+      var map = {};
+      try {
+        getAllRecords_(dbId, 'data_validation_hr').forEach(function (r) {
+          var num = Number(r.month_number != null ? r.month_number : (r['رقم_الشهر'] != null ? r['رقم_الشهر'] : r.A));
+          var name = String(r.month_arabic_name != null ? r.month_arabic_name : (r.month_name != null ? r.month_name : (r['اسم_الشهر'] || ''))).trim();
+          if (num >= 1 && num <= 12 && name) map[num] = name;
+        });
+      } catch (e) {}
+      return [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map(function (n) {
+        return { value: n, label: map[n] || LEGAL_MONTH_ARABIC[n] };
+      });
+    });
+  }
+
+  function legalMonthArabicName_(monthNum, dbId) {
+    monthNum = Number(monthNum);
+    if (dbId) {
+      try {
+        var opts = legalMonthOptions_(dbId);
+        var hit = opts.find(function (o) { return Number(o.value) === monthNum; });
+        if (hit && hit.label) return hit.label;
+      } catch (e) {}
+    }
+    return LEGAL_MONTH_ARABIC[monthNum] || '';
+  }
+
+  function legalSalaryCompute_(emp, inputs, dbId) {
+    emp = emp || {};
+    inputs = inputs || {};
+    var code = Number(emp.employee_code || inputs.employee_code);
+    var name = String(emp.employee_name || inputs.employee_name || '').trim();
+    var gross = Number(emp.gross_salary != null ? emp.gross_salary : inputs.gross_salary) || 0;
+    var allow = Number(emp.allow != null ? emp.allow : (emp.emp_allow != null ? emp.emp_allow : inputs.emp_allow)) || 0;
+    var dept = String(emp.section || emp.employee_dept || inputs.employee_dept || '').trim();
+
+    var insVal = emp.insurance_status != null ? emp.insurance_status : emp.Insurance_Status;
+    var isInsured = (insVal === true || insVal === 'TRUE' || insVal === 'true' || insVal === 'مؤمن' || insVal === 1 || insVal === '1');
+
+    var age = (emp.age != null && emp.age !== '') ? Number(emp.age) : (emp.birth_date ? legalEmployeeAge_(emp.birth_date) : 0);
+
+    var type = String(inputs.transaction_type || 'salaries').trim();
+    if (type !== 'salaries' && type !== 'Bonus') type = 'salaries';
+
+    var compIns = 0;
+    var empIns = 0;
+    if (type === 'Bonus') {
+      compIns = 0;
+      empIns = 0;
+    } else if (isInsured) {
+      if (age > 60) {
+        compIns = Math.round(gross * 0.0475 * 100) / 100;
+        empIns = Math.round(gross * 0.01 * 100) / 100;
+      } else {
+        compIns = Math.round(gross * 0.1875 * 100) / 100;
+        empIns = Math.round(gross * 0.11 * 100) / 100;
+      }
+    }
+
+    var loan = Number(inputs.emp_loan) || 0;
+    var others = Number(inputs.emp_others) || 0;
+    var penalties = Number(inputs.emp_penalties) || 0;
+
+    var taxPool = Math.round((gross + allow - empIns - 1250) * 12 * 100) / 100;
+    var tax = legalSalaryTax_(taxPool);
+
+    var net = Math.round((gross + allow - loan - empIns - tax - others - penalties) * 100) / 100;
+
+    var month = Number(inputs.payroll_month);
+    var year = Number(inputs.payroll_year);
+    var monthStr = month < 10 ? '0' + month : String(month);
+    var payrollDate = year + '-' + monthStr + '-28';
+
+    var monthAr = legalMonthArabicName_(month, dbId);
+
+    var classification = '';
+    if (dbId && dept) {
+      try {
+        var map = deptClassificationMap_(dbId);
+        classification = map[dept] || '';
+      } catch (e) {}
+    }
+
+    return {
+      employee_code: code,
+      employee_name: name,
+      gross_salary: gross,
+      comp_insurance: compIns,
+      emp_insurance: empIns,
+      emp_allow: allow,
+      emp_loan: loan,
+      tax_pool: taxPool,
+      emp_tax: tax,
+      emp_others: others,
+      emp_penalties: penalties,
+      emp_net_salary: net,
+      month_arabic_name: monthAr,
+      payroll_month: month,
+      payroll_year: year,
+      payroll_date: payrollDate,
+      employee_dept: dept,
+      dept_classification: classification,
+      transaction_type: type,
+      tax_period: 'period 5'
+    };
   }
 
   function getLegalSalaries_(data, user, dbId) {
+    data = data || {};
     const month = Number(data.payroll_month);
     const year = Number(data.payroll_year);
-    let rows = getAllRecords_(dbId, LEGAL_SALARIES_SHEET);
+    // Normalize mixed-case AppSheet headers on salary rows (e.g. "Employee_Code" -> "employee_code").
+    let rows = legalNormalizeKeys_(getAllRecords_(dbId, LEGAL_SALARIES_SHEET));
     if (Number.isInteger(month) && month >= 1 && month <= 12) rows = rows.filter(r => Number(r.payroll_month) === month);
     if (Number.isInteger(year) && year >= 2000) rows = rows.filter(r => Number(r.payroll_year) === year);
-    return { status: 'success', items: rows };
+
+    // Normalize mixed-case AppSheet headers before processing employee fields.
+    var employees = legalNormalizeKeys_(getAllRecords_(dbId, LEGAL_EMPLOYEES_SHEET));
+    var deptMap = deptClassificationMap_(dbId);
+    var empOpts = employees.map(function (e) {
+      var code = Number(e.employee_code);
+      var gross = Number(e.gross_salary) || 0;
+      var allow = Number(e.allow != null ? e.allow : (e.emp_allow != null ? e.emp_allow : 0));
+      var dept = String(e.section || e.employee_dept || '').trim();
+      var insVal = e.insurance_status;
+      var isIns = (insVal === true || insVal === 'TRUE' || insVal === 'true' || insVal === 'مؤمن' || insVal === 1 || insVal === '1');
+      var age = (e.age != null && e.age !== '') ? Number(e.age) : (e.birth_date ? legalEmployeeAge_(e.birth_date) : 0);
+      return {
+        value: code,
+        label: String(code) + ' - ' + (e.employee_name || ''),
+        employee_code: code,
+        employee_name: e.employee_name || '',
+        gross_salary: gross,
+        emp_allow: allow,
+        section: dept,
+        employee_dept: dept,
+        dept_classification: deptMap[dept] || '',
+        insurance_status: isIns,
+        age: age,
+        birth_date: e.birth_date || ''
+      };
+    });
+
+    var monthOpts = legalMonthOptions_(dbId);
+
+    return {
+      status: 'success',
+      items: rows,
+      month_options: monthOpts,
+      transaction_options: [
+        { value: 'salaries', label: 'salaries' },
+        { value: 'Bonus', label: 'Bonus' }
+      ],
+      employee_options: empOpts
+    };
   }
 
   function addLegalSalary_(data, user, dbId) {
-    if (!(Number(data.employee_code) > 0)) throw new Error('كود الموظف مطلوب');
+    data = data || {};
+    const code = Number(data.employee_code);
+    if (!code || code <= 0) throw new Error('كود الموظف مطلوب');
     const month = Number(data.payroll_month);
     const year = Number(data.payroll_year);
     if (!Number.isInteger(month) || month < 1 || month > 12) throw new Error('شهر المرتب مطلوب');
     if (!Number.isInteger(year) || year < 2000) throw new Error('سنة المرتب مطلوبة');
-    const rec = {};
-    Object.keys(data).forEach(function (k) { rec[k.trim().toLowerCase()] = data[k]; });
-    var resLS = appendRow_(dbId, LEGAL_SALARIES_SHEET, rec);
-    try { var _codeLS = String(data.employee_code); logHistory_(dbId, LEGAL_SALARIES_SHEET, rec.record_uid || ('create_'+LEGAL_SALARIES_SHEET+'_'+_codeLS+'_'+Date.now()), String(_codeLS), (user&&user.email)||'', 'create', rec, null); } catch(e){}
-    var savedLS = {}; Object.keys(rec).forEach(function(k){ savedLS[k]=rec[k]; });
-    resLS.record = savedLS;
-    resLS.data = { assignedId: data.employee_code };
-    return resLS;
+    var type = String(data.transaction_type || 'salaries').trim();
+    if (type !== 'salaries' && type !== 'Bonus') {
+      if (type === 'مرتب شهري') type = 'salaries';
+      else if (type === 'مكافأة') type = 'Bonus';
+      else throw new Error('نوع المعاملة يجب أن يكون salaries أو Bonus');
+    }
+
+    var employees = legalNormalizeKeys_(getAllRecords_(dbId, LEGAL_EMPLOYEES_SHEET));
+    var emp = employees.find(function (e) { return Number(e.employee_code) === code; });
+    if (!emp) throw new Error('الموظف غير موجود');
+
+    return executeWithLock_(function () {
+      if (type === 'salaries') {
+        var existing = legalNormalizeKeys_(getAllRecords_(dbId, LEGAL_SALARIES_SHEET));
+        var dup = existing.some(function (r) {
+          return Number(r.employee_code) === code &&
+                 Number(r.payroll_month) === month &&
+                 Number(r.payroll_year) === year &&
+                 String(r.transaction_type || 'salaries') === 'salaries';
+        });
+        if (dup) throw new Error('تم تسجيل مرتب هذا الشهر للموظف مسبقاً');
+      }
+
+      var computed = legalSalaryCompute_(emp, {
+        employee_code: code,
+        payroll_month: month,
+        payroll_year: year,
+        transaction_type: type,
+        emp_loan: Number(data.emp_loan) || 0,
+        emp_others: Number(data.emp_others) || 0,
+        emp_penalties: Number(data.emp_penalties) || 0
+      }, dbId);
+
+      const rec = {};
+      Object.keys(computed).forEach(function (k) { rec[k.trim().toLowerCase()] = computed[k]; });
+      var resLS = appendRow_(dbId, LEGAL_SALARIES_SHEET, rec);
+      try {
+        var _codeLS = String(code);
+        logHistory_(dbId, LEGAL_SALARIES_SHEET, rec.record_uid || ('create_' + LEGAL_SALARIES_SHEET + '_' + _codeLS + '_' + Date.now()), String(_codeLS), (user && user.email) || '', 'create', rec, null);
+      } catch (e) {}
+      var savedLS = {}; Object.keys(rec).forEach(function (k) { savedLS[k] = rec[k]; });
+      resLS.record = savedLS;
+      resLS.data = { assignedId: code };
+      return resLS;
+    });
   }
 
   function getIncomeStatement_(data, user, dbId) {
@@ -4632,11 +5258,8 @@ const valueMap = {};
        that marker. */
     const notApplied = function (message) { const e = new Error(message); e.notApplied = true; e.code = 'REQUEST_NOT_APPLIED'; throw e; };
     if (!cfg) notApplied('الجدول غير معروف');
-    if (!(user && user.isSuperAdmin)) {
-      const grants = ((user && user.authorizedPages) || {})[cfg.page] || [];
-      if (grants.indexOf('write') === -1) {
-        notApplied('لا يوجد صلاحية لإضافة سجلات في هذه الصفحة');
-      }
+    if (!(user && user.isSuperAdmin) && !unifiedCheck_(user, COMPANY_UID, cfg.page, 'write')) {
+      notApplied('لا يوجد صلاحية لإضافة سجلات في هذه الصفحة');
     }
     const filename = String((data && data.filename) || '').trim();
     if (!filename) notApplied('اسم الملف مطلوب');
@@ -5003,6 +5626,7 @@ const valueMap = {};
   register('add_legal_salary', addLegalSalary_);
   register('get_income_statement', getIncomeStatement_);
   register('make_collection_from_invoice', makeCollectionFromInvoice_);
+  register('make_collections_from_invoices', makeCollectionsFromInvoices_);
 
   function prefetchRefs_(data, user, dbId) {
     // Phase 7.2 — one warm per reference sheet, each in a shape a reader
@@ -5107,6 +5731,178 @@ const valueMap = {};
   register('get_manufacture_refs',    getManufactureRefs_);
 
   // ─── products live table (tc_products_live / اصناف النظام الرئيسي) ──
+  // Restored into the live bundle: the old standalone connector root file
+  // is no longer deployed (see .clasp.json filePushOrder), so these run
+  // here. Behavior matches the archived implementation, plus an optional
+  // `search` term applied to BOTH the COUNT and the SELECT via bound LIKE
+  // parameters (name_ar / name_en / code / id). Empty search is byte-identical
+  // to the old no-filter behavior, including the cache key.
+  var DB_PRODUCTS_LIVE_TTL = 90;
+  var DB_PRODUCTS_LIVE_PAGE_MAX = 200;
+  var DB_PRODUCTS_LIVE_ALL_MAX = 1000;
+  var DB_PRODUCTS_LIVE_VER_KEY = 'dblive_products_ver';
+
+  function dbProductsLiveVer_() {
+    try {
+      var v = CacheService.getScriptCache().get(DB_PRODUCTS_LIVE_VER_KEY);
+      return v || '0';
+    } catch (e) { return '0'; }
+  }
+
+  function dbProductsLiveBust_() {
+    try { CacheService.getScriptCache().put(DB_PRODUCTS_LIVE_VER_KEY, String(Date.now()), 21600); } catch (e) {}
+  }
+
+  function dbProductsLiveCacheGet_(key) {
+    try {
+      if (typeof getChunkedCache_ === 'function') return getChunkedCache_(key);
+      var raw = CacheService.getScriptCache().get(key);
+      return raw ? JSON.parse(raw) : null;
+    } catch (e) { return null; }
+  }
+
+  function dbProductsLiveCachePut_(key, value) {
+    try {
+      if (typeof putChunkedCache_ === 'function') { putChunkedCache_(key, value, DB_PRODUCTS_LIVE_TTL); return; }
+      CacheService.getScriptCache().put(key, JSON.stringify(value), DB_PRODUCTS_LIVE_TTL);
+    } catch (e) {}
+  }
+
+  /* Normalized search term: trimmed, capped at 40 chars. '' means no filter. */
+  function dbProductsLiveSearch_(data) {
+    var raw = '';
+    if (data) {
+      if (data.search !== undefined && data.search !== null) raw = String(data.search);
+      else if (data.q !== undefined && data.q !== null) raw = String(data.q);
+    }
+    return raw.trim().slice(0, 40);
+  }
+
+  function dbProductsLiveList_(data, user) {
+    data = data || {};
+    var loadAll = !!(data.loadAll === true || data.loadAll === 'true' || data.loadAll === '1' || data.loadAll === 1);
+    var limit = loadAll ? DB_PRODUCTS_LIVE_ALL_MAX : Math.min(Math.max(Number(data.limit) || 50, 1), DB_PRODUCTS_LIVE_PAGE_MAX);
+    var offset = Math.max(Number(data.offset) || 0, 0);
+    var q = dbProductsLiveSearch_(data);
+    var cacheKey = 'dblive_products_v' + dbProductsLiveVer_() + '_l' + limit + '_o' + offset +
+      (q ? '_q' + q.replace(/\s+/g, ' ') : '');
+    var cached = dbProductsLiveCacheGet_(cacheKey);
+    if (cached && cached.status === 'ok' && Array.isArray(cached.rows)) return cached;
+    var where = 'WHERE `p`.`deleted_at` IS NULL';
+    var likeParams = null;
+    if (q) {
+      where += ' AND (`p`.`name_ar` LIKE ? ESCAPE \'\\\\\' OR `p`.`name_en` LIKE ? ESCAPE \'\\\\\' OR `p`.`code` LIKE ? ESCAPE \'\\\\\' OR CAST(`p`.`id` AS CHAR) LIKE ? ESCAPE \'\\\\\')';
+      var esc = q.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_');
+      likeParams = ['%' + esc + '%', '%' + esc + '%', '%' + esc + '%', '%' + esc + '%'];
+    }
+    var conn, countStmt, countRs, stmt, rs;
+    try {
+      conn = dbGetConnection_();
+      countStmt = conn.prepareStatement('SELECT COUNT(*) AS cnt FROM `products` `p` ' + where);
+      if (likeParams) dbBindParams_(countStmt, likeParams);
+      countRs = countStmt.executeQuery();
+      var total = countRs.next() ? countRs.getInt('cnt') : 0;
+      stmt = conn.prepareStatement(
+        'SELECT `p`.*, `q`.`current_qty` AS `live_quantity` FROM `products` `p`' +
+        ' LEFT JOIN `product_current_quantity` `q` ON `q`.`id` = `p`.`id` ' +
+        where +
+        ' ORDER BY `p`.`id` DESC LIMIT ' + limit + ' OFFSET ' + offset
+      );
+      if (likeParams) dbBindParams_(stmt, likeParams);
+      rs = stmt.executeQuery();
+      var md = rs.getMetaData();
+      var colCount = md.getColumnCount();
+      var columns = [];
+      for (var c = 1; c <= colCount; c++) { columns.push(md.getColumnLabel(c) || md.getColumnName(c)); }
+      var rows = [];
+      while (rs.next()) {
+        var row = {};
+        for (var i = 1; i <= colCount; i++) { var v = rs.getObject(i); row[columns[i-1]] = v !== null ? String(v) : null; }
+        rows.push(row);
+      }
+      var out = { status: 'ok', columns: columns, rows: rows, total: total, limit: limit, offset: offset, loadedAll: loadAll, search: q };
+      dbProductsLiveCachePut_(cacheKey, out);
+      return out;
+    } catch (err) {
+      Logger.log('dbProductsLiveList_ error: ' + err.message);
+      throw err;
+    } finally {
+      if (rs) rs.close();
+      if (stmt) stmt.close();
+      if (countRs) countRs.close();
+      if (countStmt) countStmt.close();
+      if (conn) conn.close();
+    }
+  }
+
+  /**
+   * UPDATE one products row by id. Everything is editable except the PK,
+   * server-managed timestamps, and quantity — quantity is read-only live data
+   * from the product_current_quantity view (see dbProductsLiveList_).
+   */
+  function dbProductsLiveUpdate_(data, user) {
+    data = data || {};
+    var id = String(data.id !== undefined && data.id !== null ? data.id : '').trim();
+    if (!id) throw new Error('id is required');
+    var readOnlyCols = { 'id': true, 'created_at': true, 'updated_at': true, 'quantity': true, 'live_quantity': true };
+    var updates = [], params = [];
+    for (var key in data) {
+      if (!Object.prototype.hasOwnProperty.call(data, key)) continue;
+      if (readOnlyCols[key]) continue;
+      if (key.charAt(0) === '_') continue;
+      var safeCol = dbSanitizeIdentifier_(key);
+      var rawVal = data[key];
+      updates.push(safeCol + ' = ?');
+      params.push(rawVal === null || rawVal === undefined || rawVal === '' ? null : rawVal);
+    }
+    if (updates.length === 0) throw new Error('لا توجد حقول للتحديث');
+    params.push(id);
+    var conn, stmt;
+    try {
+      conn = dbGetConnection_();
+      stmt = conn.prepareStatement('UPDATE `products` SET ' + updates.join(', ') + ' WHERE `id` = ?');
+      dbBindParams_(stmt, params);
+      var affected = stmt.executeUpdate();
+      dbProductsLiveBust_();
+      return { status: 'ok', affected: affected, id: id };
+    } catch (err) {
+      Logger.log('dbProductsLiveUpdate_ error: ' + err.message);
+      throw err;
+    } finally {
+      if (stmt) stmt.close();
+      if (conn) conn.close();
+    }
+  }
+
+  /**
+   * Soft-delete one products row: SET deleted_at = NOW().
+   * data: { id }.
+   */
+  function dbProductsLiveDelete_(data, user) {
+    data = data || {};
+    var id = String(data.id !== undefined && data.id !== null ? data.id : '').trim();
+    if (!id) throw new Error('id is required');
+    var conn, stmt;
+    try {
+      conn = dbGetConnection_();
+      stmt = conn.prepareStatement(
+        'UPDATE `products` SET `deleted_at` = NOW(), `updated_at` = NOW()' +
+        ' WHERE `id` = ? AND `deleted_at` IS NULL'
+      );
+      stmt.setObject(1, id);
+      var affected = stmt.executeUpdate();
+      if (affected === 0) throw new Error('الصنف غير موجود أو محذوف مسبقاً');
+      dbProductsLiveBust_();
+      return { status: 'ok', affected: affected, id: id };
+    } catch (err) {
+      Logger.log('dbProductsLiveDelete_ error: ' + err.message);
+      throw err;
+    } finally {
+      if (stmt) stmt.close();
+      if (conn) conn.close();
+    }
+  }
+
   function getProductsLive_(data, user, dbId) {
     return dbProductsLiveList_(data || {}, user);
   }
@@ -5126,13 +5922,229 @@ const valueMap = {};
   register('save_product_live', saveProductLive_);
   register('delete_product_live', deleteProductLive_);
 
+  // ─── Executive sales analytics (tc_exec_sales) ──
+  // House rule (cf. get_main_review / get_box_analysis): ONE small MySQL hit
+  // per action. The old combined get_exec_sales ran the sales view scan + a
+  // multi-year box scan + the 20k chart labels in a single execution and blew
+  // past the Apps Script time limit. Now: get_exec_sales = sales view only,
+  // get_exec_box = box nets + labels. Each result cached 10 min in CacheService.
+  var EXEC_SALES_TTL = 600;
+  function execNormMonths_(v) {
+    var months = [];
+    if (v === undefined || v === null || v === '') return months;
+    var src = Array.isArray(v) ? v : [v];
+    for (var i = 0; i < src.length; i++) {
+      var m = Number(src[i]);
+      if (!Number.isInteger(m) || m < 1 || m > 12) throw new Error('شهر غير صحيح: ' + src[i]);
+      if (months.indexOf(m) === -1) months.push(m);
+    }
+    months.sort(function (a, b) { return a - b; });
+    return months;
+  }
+  function numExec_(v) { var n = Number(v); return isFinite(n) ? n : 0; }
+  function buildExecSales_(data, user) {
+    var sales = dbTcExecSalesRows_(data, user);
+    var rows = sales.rows || [];
+    function egpOf(r) { var ratio = parseFloat(r.currency_ratio); if (!isFinite(ratio) || ratio === 0) ratio = 1; return numExec_(r.net_value) * ratio; }
+    function metricOf(r) { var div = parseFloat(r.product_unit_metric); if (!isFinite(div) || div === 0) div = 1; return numExec_(r.net_qty) / div; }
+    var years = sales.years || [];
+    var maxY = years.length ? years[years.length - 1] : 0;
+    var prevY = maxY - 1;
+    var netValue = 0, netQty = 0, netQtyMetric = 0, netValuePrev = 0;
+    var retQtySum = 0, totQtySum = 0;
+    var monthMap = {}, prodMap = {};
+    rows.forEach(function (r) {
+      var y = Number(r.sales_year) || 0, mo = Number(r.sales_month) || 0;
+      var egp = egpOf(r), met = metricOf(r);
+      var q = numExec_(r.net_qty), tq = numExec_(r.total_qty), rq = numExec_(r.return_qty);
+      netValue += egp; netQty += q; netQtyMetric += met;
+      retQtySum += rq; totQtySum += tq;
+      if (y === prevY) netValuePrev += egp;
+      var mk = y + '-' + mo;
+      if (!monthMap[mk]) monthMap[mk] = { year: y, month: mo, net_value_egp: 0, net_qty_metric: 0 };
+      monthMap[mk].net_value_egp += egp;
+      monthMap[mk].net_qty_metric += met;
+      var pid = String(r.product_id);
+      if (!prodMap[pid]) prodMap[pid] = { product_id: pid, name_ar: r.name_ar || ('#' + pid), net_qty: 0, metric_divisor: parseFloat(r.product_unit_metric) || 1, net_qty_metric: 0, net_value_egp: 0, total_qty: 0, return_qty: 0, prev_egp: 0, cur_egp: 0 };
+      var p = prodMap[pid];
+      p.net_qty += q; p.net_qty_metric += met; p.net_value_egp += egp;
+      p.total_qty += tq; p.return_qty += rq;
+      if (y === prevY) p.prev_egp += egp;
+      if (y === maxY) p.cur_egp += egp;
+    });
+    var yoy = netValuePrev ? ((netValue - netValuePrev) / Math.abs(netValuePrev)) * 100 : 0;
+    var returnRate = totQtySum ? (retQtySum / Math.abs(totQtySum)) * 100 : 0;
+    var monthly = Object.keys(monthMap).map(function (k) { return monthMap[k]; }).sort(function (a, b) { return (a.year - b.year) || (a.month - b.month); });
+    var byProduct = Object.keys(prodMap).map(function (k) {
+      var p = prodMap[k];
+      return {
+        product_id: p.product_id, name_ar: p.name_ar, net_qty: p.net_qty,
+        metric_divisor: p.metric_divisor, net_qty_metric: p.net_qty_metric,
+        net_value_egp: p.net_value_egp,
+        share_pct: netValue ? (p.net_value_egp / netValue) * 100 : 0,
+        yoy_pct: p.prev_egp ? ((p.cur_egp - p.prev_egp) / Math.abs(p.prev_egp)) * 100 : 0, return_rate_pct: p.total_qty ? (p.return_qty / Math.abs(p.total_qty)) * 100 : 0
+      };
+    }).sort(function (a, b) { return b.net_value_egp - a.net_value_egp; });
+    return {
+      status: 'ok',
+      filters: { years: years, months: sales.months || [] },
+      truncated: sales.truncated === true,
+      totals: { net_value_egp: netValue, net_value_prev_egp: netValuePrev, yoy_pct: yoy, net_qty: netQty, net_qty_metric: netQtyMetric, return_rate_pct: returnRate, active_products: byProduct.length },
+      monthly: monthly, by_product: byProduct
+    };
+  }
+  function getExecSales_(data, user, dbId) {
+    data = data || {};
+    var years = dbTcExecSalesValidateYears_(data.years);
+    var months = execNormMonths_(data.months);
+    var search = String(data.search !== undefined && data.search !== null ? data.search : '').trim().slice(0, 40);
+    var limit = Math.min(Math.max(Number(data.limit) || 3000, 1), 5000);
+    var key = 'exec_sales_v1_y' + years.join('-') + '_m' + (months.join('-') || 'all') +
+      '_q' + search.replace(/[^a-zA-Z0-9_\u0600-\u06FF]/g, '').slice(0, 30) + '_l' + limit;
+    var probe = { years: years, months: months, search: search, limit: limit, offset: 0 };
+    var out;
+    if (data.refresh) {
+      out = buildExecSales_(probe, user);
+      try { putChunkedCache_('refs_' + BOX_CACHE_SCOPE + '_' + key, out, EXEC_SALES_TTL); } catch (e) { Logger.log('getExecSales_ cache write skipped: ' + e.message); }
+    } else {
+      out = getRefsCached_(BOX_CACHE_SCOPE, key, EXEC_SALES_TTL, function () { return buildExecSales_(probe, user); });
+    }
+    out.cached = !data.refresh;
+    return out;
+  }
+  register('get_exec_sales', getExecSales_);
+  // ─── View-only first iteration: thin paginated pass-through, same as getMainReview_ ──
+  // Sanitization mirrors dbTcSalesViewWhere_ (years validated server-side,
+  // search trimmed + capped at 40, limit 1..200 default 50, offset >= 0).
+  function salesViewParams_(data) {
+    data = data || {};
+    var search = String(data.search !== undefined && data.search !== null ? data.search : '').trim().slice(0, 40);
+    var limit = Math.min(Math.max(Number(data.limit) || 50, 1), 200);
+    var offset = Math.max(Number(data.offset) || 0, 0);
+    return { years: data.years, search: search, limit: limit, offset: offset, refresh: data.refresh };
+  }
+  function getSalesView_(data, user, dbId) {
+    var params = salesViewParams_(data);
+    try {
+      var out = dbTcSalesViewList_(params, user);
+      Logger.log('get_sales_view ok: years=' + JSON.stringify((out && out.years) || params.years) + ' total=' + ((out && out.total) || 0) + ' rows=' + ((out && out.rows && out.rows.length) || 0));
+      return out;
+    } catch (err) {
+      Logger.log('get_sales_view error: ' + err.message + ' | years=' + JSON.stringify(params.years) + ' search=' + params.search + ' limit=' + params.limit + ' offset=' + params.offset);
+      throw err;
+    }
+  }
+  register('get_sales_view', getSalesView_);
+  function getSalesCharts_(data, user, dbId) {
+    var params = salesViewParams_(data);
+    try {
+      var out = dbTcSalesCharts_({ years: params.years, search: params.search, refresh: params.refresh }, user);
+      Logger.log('get_sales_charts ok: years=' + JSON.stringify((out && out.years) || params.years) + ' monthly=' + ((out && out.monthly && out.monthly.length) || 0) + ' products=' + ((out && out.products && out.products.length) || 0) + ' yearly=' + ((out && out.products_yearly && out.products_yearly.length) || 0));
+      return out;
+    } catch (err) {
+      Logger.log('get_sales_charts error: ' + err.message + ' | years=' + JSON.stringify(params.years) + ' search=' + params.search);
+      throw err;
+    }
+  }
+  register('get_sales_charts', getSalesCharts_);
+  function getDateSalesMonthly_(data, user, dbId) {
+    var params;
+    try {
+      params = dbTcDateSalesParams_(data);
+    } catch (err) {
+      Logger.log('get_date_sales_monthly params error: ' + err.message);
+      throw err;
+    }
+    try {
+      var out = dbTcDateSalesMonthly_(params, user);
+      Logger.log('get_date_sales_monthly ok: from=' + params.from + ' to=' + params.to +
+        ' product=' + (params.product_id || 'all') + ' rows=' + ((out && out.rows && out.rows.length) || 0));
+      return out;
+    } catch (err) {
+      Logger.log('get_date_sales_monthly error: ' + err.message + ' | from=' + params.from + ' to=' + params.to);
+      throw err;
+    }
+  }
+  register('get_date_sales_monthly', getDateSalesMonthly_);
+  function getDateSalesProducts_(data, user, dbId) {
+    try {
+      var out = dbTcDateSalesProducts_(data || {}, user);
+      Logger.log('get_date_sales_products ok: products=' + ((out && out.products && out.products.length) || 0));
+      return out;
+    } catch (err) {
+      Logger.log('get_date_sales_products error: ' + err.message);
+      throw err;
+    }
+  }
+  register('get_date_sales_products', getDateSalesProducts_);
+  function getBoxDailyMonthly_(data, user, dbId) {
+    var params;
+    try {
+      params = dbBoxDailyParams_(data);
+    } catch (err) {
+      Logger.log('get_box_daily_monthly params error: ' + err.message);
+      throw err;
+    }
+    try {
+      var out = dbBoxDailyMonthly_(params, user);
+      Logger.log('get_box_daily_monthly ok: from=' + params.from + ' to=' + params.to +
+        ' acct=' + (params.chart_of_accounts || 'all') + ' rows=' + ((out && out.rows && out.rows.length) || 0));
+      return out;
+    } catch (err) {
+      Logger.log('get_box_daily_monthly error: ' + err.message + ' | from=' + params.from + ' to=' + params.to);
+      throw err;
+    }
+  }
+  register('get_box_daily_monthly', getBoxDailyMonthly_);
+  function getBoxDailyAccounts_(data, user, dbId) {
+    try {
+      var out = dbBoxDailyAccounts_(data || {}, user);
+      Logger.log('get_box_daily_accounts ok: accounts=' + ((out && out.accounts && out.accounts.length) || 0));
+      return out;
+    } catch (err) {
+      Logger.log('get_box_daily_accounts error: ' + err.message);
+      throw err;
+    }
+  }
+  register('get_box_daily_accounts', getBoxDailyAccounts_);
+  function getExecBox_(data, user, dbId) {
+    data = data || {};
+    var years = dbTcExecSalesValidateYears_(data.years);
+    var months = execNormMonths_(data.months);
+    var key = 'exec_box_v1_y' + years.join('-') + '_m' + (months.join('-') || 'all');
+    var probe = { years: years, months: months };
+    var out;
+    var build = function () {
+      var box = dbTcExecBoxNet_(probe, user);
+      var labels = {};
+      try {
+        var lbl = boxAccountLabels_(user);
+        labels = (lbl && lbl.labels) || {};
+      } catch (e) { Logger.log('getExecBox_ labels unavailable: ' + e.message); }
+      var accounts = (box.accounts || []).map(function (a) {
+        return { account: a.account, label: labels[a.account] || a.account, debit_sum: a.debit_sum, credit_sum: a.credit_sum, net_amount: a.net_amount, moves: a.moves };
+      });
+      var totalNet = accounts.reduce(function (s, a) { return s + (Number(a.net_amount) || 0); }, 0);
+      return { status: 'ok', from: box.from, to: box.to, total_net: totalNet, accounts: accounts };
+    };
+    if (data.refresh) {
+      out = build();
+      try { putChunkedCache_('refs_' + BOX_CACHE_SCOPE + '_' + key, out, EXEC_SALES_TTL); } catch (e) { Logger.log('getExecBox_ cache write skipped: ' + e.message); }
+    } else {
+      out = getRefsCached_(BOX_CACHE_SCOPE, key, EXEC_SALES_TTL, build);
+    }
+    out.cached = !data.refresh;
+    return out;
+  }
+  register('get_exec_box', getExecBox_);
+
   // ─── تحليل حركة الخزنة العادية (live MySQL regular_box_movement) ──
   //
   // Thin wrappers: authority is enforced by guard_() via PAGE_ACCESS above,
   // exactly as get_main_review does it. There is no second permission
   // mechanism here and there must not be one.
   //
-  // The parsing, matching and rules all run SERVER-SIDE, in Box_Analysis_Engine.js.
+  // The parsing, matching and rules all run SERVER-SIDE, in this Actions file.
   // That is not an optimisation — the engine is a server .js file, and the only
   // way the page could run it in the browser would be to keep a second copy of
   // it inside an HTML include. Two copies of a parser diverge, and the one that
@@ -5155,6 +6167,9 @@ const valueMap = {};
       return { labels: r.labels, duplicate_ids: r.duplicate_ids, count: r.count, truncated: r.truncated };
     });
   }
+
+  // Box-daily readers live in the exec-sales DB layer below, next to
+  // dbTcDateSalesMonthly_ (single GROUP BY over box_movement_daily_revise).
 
   function boxTodayIso_() {
     return Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd');
@@ -5881,8 +6896,5083 @@ const valueMap = {};
   register('revise_box_movement', reviseBoxMovement_);
   register('save_box_item_alias', saveBoxItemAlias_);
 
+  /* Phase 2: register field validators for validateBeforeWrite (no logic duplicated —
+   * each entry calls the existing validator). Status-only paths skip via STATUS_ONLY_ACTIONS_. */
+  try {
+    if (typeof registerDocValidator_ === 'function') {
+      registerDocValidator_('tc_costing', function(payloadData, dbId){
+        var h = (payloadData && payloadData.header) || payloadData || {};
+        return validateBudgetMonth_(h['تم_الاقرار_شهر']);
+      });
+    }
+  } catch(eRegTC){}
+
+
+  /**
+   * Company_TopChemical_Actions.js
+   * RESPONSIBILITY: the pure analysis core for تحليل حركة الخزنة العادية
+   * (page tc_box_analysis) — parsing `transaction_details`, matching item texts
+   * across rows, and the fraud/anomaly rules.
+   *
+   * EVERY FUNCTION IN THIS FILE IS PURE. No SpreadsheetApp, no Jdbc, no DriveApp,
+   * no CacheService, no Logger. That is not stylistic: it is the only reason any
+   * of this can be verified at all. There is no browser and no database reachable
+   * from the machine this was written on, so the parser, the matcher and every
+   * rule are tested under plain `node` against
+   * tools/verify/fixtures/box_details.json. Reach for a Google service here and
+   * that verification stops working.
+   *
+   * I/O lives in this Actions file (SQL) and Company_TopChemical_Actions.js
+   * (Drive audit log, cache, session user).
+   *
+   * Loaded by Apps Script as a plain global script file; also `require`-able from
+   * tools/verify/ via the module.exports block at the bottom.
+   *
+   * ARABIC IN REGEXES IS WRITTEN AS \uXXXX, ALWAYS. This file is edited in a
+   * left-to-right editor, where a literal Arabic character class reorders on
+   * screen and cannot be reviewed reliably — a range that reads correctly may not
+   * be the range that was written. Arabic in plain string literals (the
+   * dictionaries, the Arabic reason texts) stays literal, because those are read
+   * as words rather than as ranges.
+   *
+   * Plan: BOX_ANALYSIS_PLAN.md §4 (parser), §5 (matcher), §7 (rules).
+   */
+  
+  var BoxEngine = (function () {
+    'use strict';
+  
+    // ═══════════════════════════════════════════════════════════════════════
+    // §4.1  Normalization
+    // ═══════════════════════════════════════════════════════════════════════
+  
+    /* Codepoints, named once so the folds below read as intentions. */
+    var AR = {
+      INDIC_0: 0x0660,          /* ٠ .. ٩            U+0660–U+0669 */
+      EXT_INDIC_0: 0x06F0,      /* ۰ .. ۹            U+06F0–U+06F9 */
+      ALEF: 'ا',           /* ا */
+      HEH: 'ه',            /* ه */
+      YEH: 'ي',            /* ي */
+      WAW: 'و'             /* و */
+    };
+  
+    var RE_INDIC_DIGITS = /[٠-٩]/g;
+    var RE_EXT_INDIC_DIGITS = /[۰-۹]/g;
+    var RE_ARABIC_DECIMAL_SEP = /٫/g;      /* ٫ */
+    var RE_ARABIC_THOUSANDS_SEP = /٬/g;    /* ٬ */
+    var RE_TASHKEEL = /[ً-ٰٕ]/g; /* harakat + superscript alef */
+    var RE_TATWEEL = /ـ/g;                 /* ـ */
+    var RE_ALEF_FORMS = /[آأإٱ]/g;  /* آ أ إ ٱ */
+    var RE_TEH_MARBUTA = /ة/g;             /* ة */
+    var RE_ALEF_MAQSURA = /ى/g;            /* ى */
+    var RE_WAW_HAMZA = /ؤ/g;               /* ؤ */
+    var RE_YEH_HAMZA = /ئ/g;               /* ئ */
+    /* Keep: Arabic letters U+0621–U+064A, Latin letters, digits, '.', the segment
+       separator '+', and the alternate price marker '='. */
+    var RE_NOISE = /[^ء-ي0-9a-zA-Z.+=\s]/g;
+  
+    /**
+     * Fold Arabic orthographic variation away so that two spellings of the same
+     * purchase compare equal before any fuzzy scoring runs.
+     *
+     * Order matters. Digits are converted BEFORE punctuation is stripped, because
+     * the Arabic decimal separator ٫ (U+066B) is punctuation and would otherwise
+     * be deleted, silently turning ٩٢٥٫٥٠ into 92550.
+     *
+     * The consecutive-duplicate-token collapse at the end is not defensive
+     * programming: the one real sample string we have literally contains
+     * "نص كيلو  كيلو سلك لحام زهر". Repeated adjacent identical tokens in this
+     * data are keying noise, never meaningful repetition.
+     */
+    function normAr(s) {
+      if (s === null || s === undefined) return '';
+      var t = String(s);
+  
+      t = t.replace(RE_INDIC_DIGITS, function (d) { return String(d.charCodeAt(0) - AR.INDIC_0); });
+      t = t.replace(RE_EXT_INDIC_DIGITS, function (d) { return String(d.charCodeAt(0) - AR.EXT_INDIC_0); });
+      t = t.replace(RE_ARABIC_DECIMAL_SEP, '.').replace(RE_ARABIC_THOUSANDS_SEP, '');
+  
+      /* Stripping tatweel is what makes "بـ 700" parse: بـ is ب + U+0640, and
+         after this line it is just ب. */
+      t = t.replace(RE_TASHKEEL, '').replace(RE_TATWEEL, '');
+  
+      t = t.replace(RE_ALEF_FORMS, AR.ALEF);
+      t = t.replace(RE_TEH_MARBUTA, AR.HEH);
+      t = t.replace(RE_ALEF_MAQSURA, AR.YEH);
+      t = t.replace(RE_WAW_HAMZA, AR.WAW);
+      t = t.replace(RE_YEH_HAMZA, AR.YEH);
+  
+      /* Punctuation becomes a space, so tokens either side of a comma or a
+         bracket do not fuse into one. */
+      t = t.replace(RE_NOISE, ' ');
+      t = t.replace(/\s+/g, ' ').trim();
+  
+      if (!t) return '';
+      var toks = t.split(' ');
+      var out = [];
+      for (var i = 0; i < toks.length; i++) {
+        if (i === 0 || toks[i] !== toks[i - 1]) out.push(toks[i]);
+      }
+      return out.join(' ');
+    }
+  
+    // ═══════════════════════════════════════════════════════════════════════
+    // §4.2  Dictionaries
+    // ═══════════════════════════════════════════════════════════════════════
+  
+    /* Written in their natural spelling and normalized once at load, so the
+       dictionary and the input are folded by exactly the same function. Writing
+       'طبه' here by hand instead would work today and break the first time normAr
+       learns another fold. */
+    var QUANTITY_WORDS_RAW = {
+      'نص': 0.5, 'نصف': 0.5, 'النص': 0.5,
+      'ربع': 0.25, 'الربع': 0.25,
+      'تلت': 1 / 3, 'ثلث': 1 / 3,
+      'تلتين': 2 / 3, 'ثلثين': 2 / 3,
+      'تمن': 0.125, 'ثمن': 0.125,
+      'واحد': 1, 'واحدة': 1,
+      'اتنين': 2, 'اثنين': 2,
+      'تلاتة': 3, 'ثلاثة': 3,
+      'أربعة': 4, 'خمسة': 5, 'ستة': 6, 'سبعة': 7, 'ثمانية': 8, 'تسعة': 9, 'عشرة': 10
+    };
+  
+    var UNIT_WORDS_RAW = [
+      'كيلو', 'كجم', 'كج', 'جرام', 'جم', 'طن',
+      'لتر', 'مللي', 'جالون', 'برميل', 'صفيحة', 'جردل',
+      'متر', 'سم', 'مم', 'لفة', 'رول', 'شريط',
+      'طبة', 'علبة', 'عبوة', 'زجاجة', 'شكارة', 'كيس', 'باكو', 'بوكس',
+      'كرتونة', 'كرتون', 'شنطة', 'صندوق',
+      'قطعة', 'عدد', 'حتة', 'لوح', 'صاج', 'اسطوانة', 'دستة', 'درزن'
+    ];
+  
+    var QUANTITY_WORDS = (function () {
+      var m = {};
+      for (var k in QUANTITY_WORDS_RAW) {
+        if (Object.prototype.hasOwnProperty.call(QUANTITY_WORDS_RAW, k)) m[normAr(k)] = QUANTITY_WORDS_RAW[k];
+      }
+      return m;
+    })();
+  
+    var UNIT_WORDS = (function () {
+      var m = {};
+      for (var i = 0; i < UNIT_WORDS_RAW.length; i++) m[normAr(UNIT_WORDS_RAW[i])] = true;
+      return m;
+    })();
+  
+    function round_(v, dp) {
+      var f = Math.pow(10, dp === undefined ? 2 : dp);
+      return Math.round((Number(v) + Number.EPSILON) * f) / f;
+    }
+  
+    function tokens_(s) {
+      var t = String(s || '').trim();
+      return t ? t.split(' ') : [];
+    }
+  
+    // ═══════════════════════════════════════════════════════════════════════
+    // §4.2  Segment parsing
+    // ═══════════════════════════════════════════════════════════════════════
+  
+    /* The price marker must be a STANDALONE ب (U+0628) or '=', followed by
+       digits. A ب that merely begins a word must never be read as a price marker,
+       or "2 لتر بويه بيضا ب 240" (white paint) reads its own item name as a
+       number. */
+    var PRICE_AT_END = /(?:^|\s)(?:ب|=)\s*(\d+(?:\.\d+)?)\s*$/;
+    var PRICE_ANYWHERE = /(?:^|\s)(?:ب|=)\s*(\d+(?:\.\d+)?)/g;
+  
+    /**
+     * Pull the price off a normalized segment.
+     * Returns { price, rest } or null when the segment carries no price at all.
+     *
+     * There is deliberately NO "trailing bare number" fallback. A segment such as
+     * "طبة حديد" with no price must be reported as a failure — guessing a price
+     * out of some other number in the text is exactly how the sum check would
+     * come to agree with a description that does not account for the money.
+     */
+    function takePrice(seg) {
+      var s = String(seg || '').trim();
+      if (!s) return null;
+      var m = s.match(PRICE_AT_END);
+      if (m) return { price: Number(m[1]), rest: s.slice(0, m.index).trim() };
+  
+      PRICE_ANYWHERE.lastIndex = 0;
+      var last = null, x;
+      while ((x = PRICE_ANYWHERE.exec(s)) !== null) last = x;
+      if (!last) return null;
+      var rest = (s.slice(0, last.index) + ' ' + s.slice(last.index + last[0].length))
+        .replace(/\s+/g, ' ').trim();
+      return { price: Number(last[1]), rest: rest };
+    }
+  
+    /**
+     * Take a leading quantity — numeric ("5", "0.5") or a word ("نص", "ربع",
+     * "تلت"). Word quantities resolve to numbers so that unit prices from
+     * differently-worded rows are comparable at all.
+     * Returns { value, rest }; value is null when there is no quantity.
+     */
+    function takeQuantity(text) {
+      var s = String(text || '').trim();
+      if (!s) return { value: null, rest: '' };
+      var toks = tokens_(s);
+  
+      if (/^\d+(?:\.\d+)?$/.test(toks[0])) {
+        return { value: Number(toks[0]), rest: toks.slice(1).join(' ') };
+      }
+      if (Object.prototype.hasOwnProperty.call(QUANTITY_WORDS, toks[0])) {
+        return { value: QUANTITY_WORDS[toks[0]], rest: toks.slice(1).join(' ') };
+      }
+      return { value: null, rest: s };
+    }
+  
+    /**
+     * Take a leading unit token. Returns { value, rest }; value is null when the
+     * first token is not a known unit.
+     */
+    function takeUnit(text) {
+      var s = String(text || '').trim();
+      if (!s) return { value: null, rest: '' };
+      var toks = tokens_(s);
+      if (Object.prototype.hasOwnProperty.call(UNIT_WORDS, toks[0])) {
+        return { value: toks[0], rest: toks.slice(1).join(' ') };
+      }
+      return { value: null, rest: s };
+    }
+  
+    /**
+     * The Egyptian "كيلو ونص" shape, where the fraction FOLLOWS the unit instead
+     * of preceding it. Handled here rather than inside takeQuantity because it
+     * can only be recognised once the unit has been consumed.
+     * Returns { value, rest } — value null when the pattern is absent.
+     */
+    function takeTrailingFraction(text) {
+      var s = String(text || '').trim();
+      if (!s) return { value: null, rest: '' };
+      var toks = tokens_(s);
+      var t = toks[0];
+      if (t && t.length > 1 && t.charAt(0) === AR.WAW) {
+        var word = t.slice(1);
+        if (Object.prototype.hasOwnProperty.call(QUANTITY_WORDS, word)) {
+          return { value: QUANTITY_WORDS[word], rest: toks.slice(1).join(' ') };
+        }
+      }
+      if (t === AR.WAW && toks.length > 1 &&
+          Object.prototype.hasOwnProperty.call(QUANTITY_WORDS, toks[1])) {
+        return { value: QUANTITY_WORDS[toks[1]], rest: toks.slice(2).join(' ') };
+      }
+      return { value: null, rest: s };
+    }
+  
+    /**
+     * Order-invariant identity for an item text: its tokens, deduped and sorted.
+     * This is what makes flipped wording ("معجون شروخ" / "شروخ معجون") match for
+     * free, before a single fuzzy score has been computed.
+     */
+    function itemKey(itemNorm) {
+      var seen = {}, out = [];
+      tokens_(itemNorm).forEach(function (t) {
+        if (!t || Object.prototype.hasOwnProperty.call(seen, t)) return;
+        seen[t] = true;
+        out.push(t);
+      });
+      out.sort();
+      return out.join(' ');
+    }
+  
+    /**
+     * How much to trust one parsed segment. Not a probability — a rank, used to
+     * sort the "needs a human" list and to damp the price rules on shaky parses.
+     */
+    function scoreParse(qty, unit, itemNorm) {
+      var c = 1;
+      if (qty === null || qty === undefined) c -= 0.2;
+      if (!unit) c -= 0.15;
+      var toks = tokens_(itemNorm);
+      if (toks.length <= 1) c -= 0.05;
+      if (/\d/.test(itemNorm)) c -= 0.15;   /* stray digits left in the item name */
+      if (c < 0) c = 0;
+      if (c > 1) c = 1;
+      return round_(c, 3);
+    }
+  
+    /**
+     * Parse one `transaction_details` value into line items.
+     *
+     *   record  := segment ("+" segment)*
+     *   segment := [qty] [unit] item ("ب"|"=") price
+     *
+     * A segment that cannot be parsed comes back in `failures`, NEVER dropped.
+     * Dropping it would make `sum` agree with `transaction_amount` on exactly the
+     * rows where the description does not account for the money — the rows a
+     * human most needs to see.
+     *
+     * An EMPTY segment (a trailing "+", a double separator) is skipped and is not
+     * a failure; otherwise every stray separator becomes a fake finding.
+     */
+    function parseDetails(text) {
+      var raw = (text === null || text === undefined) ? '' : String(text);
+      var norm = normAr(raw);
+      var parts = norm.split('+');
+      var items = [], failures = [], sum = 0, seq = 0;
+  
+      for (var i = 0; i < parts.length; i++) {
+        var seg = parts[i].trim();
+        if (!seg) continue;
+        seq++;
+  
+        var p = takePrice(seg);
+        if (!p) {
+          failures.push({ seq: seq, segment: seg, reason: 'NO_PRICE', reason_ar: 'لا يوجد سعر في هذا الجزء' });
+          continue;
+        }
+  
+        var q = takeQuantity(p.rest);
+        var u = takeUnit(q.rest);
+        var qty = q.value;
+        var rest = u.rest;
+  
+        if (u.value) {
+          var extra = takeTrailingFraction(rest);
+          if (extra.value !== null) {
+            qty = (qty === null ? 1 : qty) + extra.value;
+            rest = extra.rest;
+          }
+        }
+  
+        var itemNorm = String(rest || '').trim();
+        if (!itemNorm) {
+          failures.push({ seq: seq, segment: seg, reason: 'NO_ITEM', reason_ar: 'لا يوجد اسم صنف في هذا الجزء' });
+          continue;
+        }
+  
+        var unitPrice = (qty !== null && qty > 0) ? round_(p.price / qty, 4) : null;
+        items.push({
+          seq: seq,
+          qty: qty,
+          unit: u.value,
+          item_raw: itemNorm,
+          item_norm: itemNorm,
+          item_key: itemKey(itemNorm),
+          price: round_(p.price, 2),
+          unit_price: unitPrice,
+          confidence: scoreParse(qty, u.value, itemNorm)
+        });
+        sum += p.price;
+      }
+  
+      var total = items.length + failures.length;
+      return {
+        raw: raw,
+        norm: norm,
+        items: items,
+        failures: failures,
+        sum: round_(sum, 2),
+        parsed_count: items.length,
+        failed_count: failures.length,
+        segment_count: total,
+        coverage: total === 0 ? null : round_(items.length / total, 4)
+      };
+    }
+  
+    // ═══════════════════════════════════════════════════════════════════════
+    // §5  Item identity — the matcher
+    // ═══════════════════════════════════════════════════════════════════════
+  
+    /* Tuning lives here, in one object, because a threshold nobody can see is a
+       threshold nobody can tune. The verify run prints the score of every fixture
+       pair against these numbers; change one and the run tells you what moved. */
+    var MATCH = {
+      /* Weights sum to 1. Dice carries the most because whole shared tokens are
+         the strongest evidence in this vocabulary; the trigram cosine is second
+         because it is what separates a typo from a genuinely different product. */
+      W_DICE: 0.40,
+      W_LEV: 0.20,
+      W_TRIGRAM: 0.30,
+      W_UNIT: 0.10,
+      /* Chosen against tools/verify/fixtures/box_details.json — see the measured
+         score table printed by `node tools/verify/box_matcher.js --show`. It sits
+         between the hardest true pair (a one-character typo) and the hardest
+         false pair (سلك لحام زهر vs سلك لحام المونيوم, two of three tokens
+         shared, different metals, different prices). */
+      THRESHOLD: 0.58,
+      /* Blocking guards. A token appearing in more posting-list entries than this
+         is too common to block on — that is the IDF floor of plan §5.1, expressed
+         as the thing it actually controls. */
+      MAX_POSTING: 200,
+      RARE_STEMS: 2,
+      RARE_TRIGRAMS: 4,
+      MAX_CANDIDATES: 400,
+      /* Suffix stripping only when at least this much stem survives. Without it
+         "زيتون" stems to "زيت" and olives merge with oil, and "معجون" stems to
+         "معج". Both are real words in this vocabulary. */
+      MIN_STEM: 4
+    };
+  
+    var RE_AL_PREFIX = /^ال/;
+    var SUFFIXES = ['ات', 'ين', 'ون', 'ه'];
+  
+    /**
+     * Light Arabic stemming (plan §5.2): strip the definite article and a small
+     * set of suffixes. Deliberately not a real morphological stemmer — this
+     * vocabulary is workshop consumables, and an aggressive stemmer conflates
+     * more than it merges.
+     */
+    function stemAr(token) {
+      var t = String(token || '');
+      if (!t) return '';
+      if (RE_AL_PREFIX.test(t) && t.length - 2 >= 3) t = t.slice(2);
+      for (var i = 0; i < SUFFIXES.length; i++) {
+        var s = SUFFIXES[i];
+        if (t.length > s.length && t.slice(-s.length) === s && t.length - s.length >= MATCH.MIN_STEM) {
+          t = t.slice(0, t.length - s.length);
+          break;
+        }
+      }
+      return t;
+    }
+  
+    function stemTokens(itemNorm) {
+      var seen = {}, out = [];
+      tokens_(itemNorm).forEach(function (t) {
+        var s = stemAr(t);
+        if (!s || Object.prototype.hasOwnProperty.call(seen, s)) return;
+        seen[s] = true;
+        out.push(s);
+      });
+      return out;
+    }
+  
+    /** Order-invariant identity AFTER stemming — the second exact-match block. */
+    function stemKey(itemNorm) {
+      return stemTokens(itemNorm).slice().sort().join(' ');
+    }
+  
+    function tokenSetDice(aTokens, bTokens) {
+      if (!aTokens.length || !bTokens.length) return 0;
+      var set = {}, i;
+      for (i = 0; i < aTokens.length; i++) set[aTokens[i]] = true;
+      var shared = 0;
+      for (i = 0; i < bTokens.length; i++) {
+        if (Object.prototype.hasOwnProperty.call(set, bTokens[i])) shared++;
+      }
+      return (2 * shared) / (aTokens.length + bTokens.length);
+    }
+  
+    /** Levenshtein distance, two-row DP. Strings here are short item names. */
+    function levenshtein(a, b) {
+      a = String(a || ''); b = String(b || '');
+      if (a === b) return 0;
+      if (!a.length) return b.length;
+      if (!b.length) return a.length;
+      var prev = [], cur = [], i, j;
+      for (j = 0; j <= b.length; j++) prev[j] = j;
+      for (i = 1; i <= a.length; i++) {
+        cur[0] = i;
+        for (j = 1; j <= b.length; j++) {
+          var cost = a.charAt(i - 1) === b.charAt(j - 1) ? 0 : 1;
+          cur[j] = Math.min(cur[j - 1] + 1, prev[j] + 1, prev[j - 1] + cost);
+        }
+        for (j = 0; j <= b.length; j++) prev[j] = cur[j];
+      }
+      return prev[b.length];
+    }
+  
+    function normLevenshtein(a, b) {
+      var m = Math.max(String(a || '').length, String(b || '').length);
+      return m === 0 ? 0 : levenshtein(a, b) / m;
+    }
+  
+    /** Character 3-grams with a boundary pad, as a {gram: count} bag. */
+    function trigramBag(s) {
+      var t = '  ' + String(s || '') + '  ';
+      var m = {};
+      for (var i = 0; i + 3 <= t.length; i++) {
+        var g = t.substr(i, 3);
+        m[g] = (m[g] || 0) + 1;
+      }
+      return m;
+    }
+  
+    /**
+     * Cosine between two trigram bags, each component weighted by the gram's IDF.
+     *
+     * The IDF weighting is the part that earns its keep. "سلك" and "لحام" appear
+     * in most welding-wire rows, so their grams carry almost no weight; the grams
+     * that distinguish زهر from المونيوم carry nearly all of it. Unweighted, two
+     * different welding wires look nearly identical.
+     */
+    function idfTrigramCosine(bagA, bagB, idfOf) {
+      var dot = 0, na = 0, nb = 0, g, w;
+      for (g in bagA) {
+        if (!Object.prototype.hasOwnProperty.call(bagA, g)) continue;
+        w = idfOf(g);
+        na += (bagA[g] * w) * (bagA[g] * w);
+        if (Object.prototype.hasOwnProperty.call(bagB, g)) dot += (bagA[g] * w) * (bagB[g] * w);
+      }
+      for (g in bagB) {
+        if (!Object.prototype.hasOwnProperty.call(bagB, g)) continue;
+        w = idfOf(g);
+        nb += (bagB[g] * w) * (bagB[g] * w);
+      }
+      if (na === 0 || nb === 0) return 0;
+      return dot / (Math.sqrt(na) * Math.sqrt(nb));
+    }
+  
+    /* Units grouped by physical dimension. Two items measured in different
+       dimensions are not the same purchase however similar the words look. */
+    var UNIT_FAMILY_RAW = {
+      'كيلو': 'mass', 'كجم': 'mass', 'كج': 'mass', 'جرام': 'mass', 'جم': 'mass', 'طن': 'mass',
+      'لتر': 'volume', 'مللي': 'volume', 'جالون': 'volume', 'برميل': 'volume',
+      'صفيحة': 'volume', 'جردل': 'volume',
+      'متر': 'length', 'سم': 'length', 'مم': 'length', 'لفة': 'length', 'رول': 'length', 'شريط': 'length',
+      'طبة': 'count', 'علبة': 'count', 'عبوة': 'count', 'زجاجة': 'count', 'شكارة': 'count',
+      'كيس': 'count', 'باكو': 'count', 'بوكس': 'count', 'كرتونة': 'count', 'كرتون': 'count',
+      'شنطة': 'count', 'صندوق': 'count', 'قطعة': 'count', 'عدد': 'count', 'حتة': 'count',
+      'لوح': 'count', 'صاج': 'count', 'اسطوانة': 'count', 'دستة': 'count', 'درزن': 'count'
+    };
+  
+    var UNIT_FAMILY = (function () {
+      var m = {};
+      for (var k in UNIT_FAMILY_RAW) {
+        if (Object.prototype.hasOwnProperty.call(UNIT_FAMILY_RAW, k)) m[normAr(k)] = UNIT_FAMILY_RAW[k];
+      }
+      return m;
+    })();
+  
+    /**
+     * 1.0 same unit · 0.8 same dimension · 0.5 at least one unknown · 0 different
+     * dimension.
+     *
+     * An unknown unit scores 0.5, not 1.0, on purpose: "we do not know" is not
+     * evidence of compatibility, and roughly half this corpus carries no unit at
+     * all. Scoring it as agreement would hand every unitless pair a free 0.1.
+     */
+    function unitCompatible(unitA, unitB) {
+      var a = unitA ? normAr(unitA) : '';
+      var b = unitB ? normAr(unitB) : '';
+      if (!a || !b) return 0.5;
+      if (a === b) return 1;
+      var fa = UNIT_FAMILY[a], fb = UNIT_FAMILY[b];
+      if (fa && fb && fa === fb) return 0.8;
+      if (!fa || !fb) return 0.5;
+      return 0;
+    }
+  
+    /**
+     * Build the blocking + IDF index over a set of DISTINCT normalized item
+     * texts. Distinct texts, not occurrences: a thousand rows buying "معجون شروخ"
+     * are one node here, which is what keeps this inside the execution limit.
+     */
+    function buildMatchIndex(records) {
+      var nodes = [], byNorm = {};
+      (records || []).forEach(function (r) {
+        var norm = typeof r === 'string' ? r : (r && r.item_norm) || '';
+        var unit = (typeof r === 'string') ? null : (r && r.unit) || null;
+        if (!norm) return;
+        if (Object.prototype.hasOwnProperty.call(byNorm, norm)) {
+          var ex = nodes[byNorm[norm]];
+          ex.count++;
+          if (unit) ex.units[unit] = (ex.units[unit] || 0) + 1;
+          return;
+        }
+        var stems = stemTokens(norm);
+        byNorm[norm] = nodes.length;
+        var n = {
+          i: nodes.length,
+          norm: norm,
+          tokens: tokens_(norm),
+          stems: stems,
+          key: itemKey(norm),
+          stem_key: stems.slice().sort().join(' '),
+          tri: trigramBag(norm),
+          units: {},
+          count: 1
+        };
+        if (unit) n.units[unit] = 1;
+        nodes.push(n);
+      });
+  
+      var N = nodes.length;
+      var stemDf = {}, triDf = {}, byKey = {}, byStemKey = {}, postings = {}, triPostings = {};
+  
+      nodes.forEach(function (n) {
+        var seen = {};
+        n.stems.forEach(function (s) {
+          if (seen[s]) return;
+          seen[s] = true;
+          stemDf[s] = (stemDf[s] || 0) + 1;
+          (postings[s] = postings[s] || []).push(n.i);
+        });
+        var seenG = {};
+        for (var g in n.tri) {
+          if (!Object.prototype.hasOwnProperty.call(n.tri, g) || seenG[g]) continue;
+          seenG[g] = true;
+          triDf[g] = (triDf[g] || 0) + 1;
+          (triPostings[g] = triPostings[g] || []).push(n.i);
+        }
+        (byKey[n.key] = byKey[n.key] || []).push(n.i);
+        (byStemKey[n.stem_key] = byStemKey[n.stem_key] || []).push(n.i);
+      });
+  
+      function idfStem(t) { return Math.log(1 + N / (1 + (stemDf[t] || 0))); }
+      function idfTri(g) { return Math.log(1 + N / (1 + (triDf[g] || 0))); }
+  
+      /* The unit a text is most often bought in — used for unitCompatible when
+         scoring two texts rather than two individual occurrences. */
+      nodes.forEach(function (n) {
+        var best = null, bestN = 0;
+        for (var u in n.units) {
+          if (Object.prototype.hasOwnProperty.call(n.units, u) && n.units[u] > bestN) { best = u; bestN = n.units[u]; }
+        }
+        n.unit = best;
+      });
+  
+      return {
+        N: N, nodes: nodes, byNorm: byNorm,
+        byKey: byKey, byStemKey: byStemKey,
+        postings: postings, triPostings: triPostings,
+        stemDf: stemDf, triDf: triDf,
+        idfStem: idfStem, idfTri: idfTri
+      };
+    }
+  
+    /**
+     * Score two index nodes. Returns the total AND every component, because a
+     * merge an accountant disagrees with has to be explainable — "0.71" is not an
+     * answer to "why did you put these together".
+     */
+    function matchScore(a, b, idx) {
+      var dice = tokenSetDice(a.stems, b.stems);
+      var lev = 1 - normLevenshtein(a.stems.slice().sort().join(' '), b.stems.slice().sort().join(' '));
+      var tri = idx ? idfTrigramCosine(a.tri, b.tri, idx.idfTri) : 0;
+      var unit = unitCompatible(a.unit, b.unit);
+      var score = MATCH.W_DICE * dice + MATCH.W_LEV * lev + MATCH.W_TRIGRAM * tri + MATCH.W_UNIT * unit;
+      return {
+        score: round_(score, 4),
+        dice: round_(dice, 4),
+        lev: round_(lev, 4),
+        trigram: round_(tri, 4),
+        unit: round_(unit, 4)
+      };
+    }
+  
+    /**
+     * Candidate generation for one node (plan §5.1), cheapest block first:
+     *   1. identical item_key      — flipped word order, free
+     *   2. identical stem_key      — definite articles and plurals, free
+     *   3. rarest shared stems     — the IDF-weighted inverted index
+     *   4. rarest shared trigrams  — typos that share no whole token
+     * A posting list longer than MATCH.MAX_POSTING is skipped: a token that
+     * common cannot discriminate, and walking it would dominate the run.
+     */
+    function matchCandidates(node, idx) {
+      var out = {}, i;
+      function add(list) {
+        if (!list || list.length > MATCH.MAX_POSTING) return;
+        for (var k = 0; k < list.length; k++) if (list[k] !== node.i) out[list[k]] = true;
+      }
+      add(idx.byKey[node.key]);
+      add(idx.byStemKey[node.stem_key]);
+  
+      var stems = node.stems.slice().sort(function (x, y) { return idx.idfStem(y) - idx.idfStem(x); });
+      for (i = 0; i < Math.min(stems.length, MATCH.RARE_STEMS); i++) add(idx.postings[stems[i]]);
+  
+      var grams = Object.keys(node.tri).sort(function (x, y) { return idx.idfTri(y) - idx.idfTri(x); });
+      for (i = 0; i < Math.min(grams.length, MATCH.RARE_TRIGRAMS); i++) add(idx.triPostings[grams[i]]);
+  
+      var ids = Object.keys(out).map(Number);
+      return ids.length > MATCH.MAX_CANDIDATES ? ids.slice(0, MATCH.MAX_CANDIDATES) : ids;
+    }
+  
+    function makeDsu_(n) {
+      var p = [];
+      for (var i = 0; i < n; i++) p.push(i);
+      function find(x) { while (p[x] !== x) { p[x] = p[p[x]]; x = p[x]; } return x; }
+      function union(a, b) { a = find(a); b = find(b); if (a === b) return false; p[b] = a; return true; }
+      return { find: find, union: union };
+    }
+  
+    /**
+     * Cluster item texts into one group per real-world purchase.
+     *
+     * opts.aliases carries the human overrides from §5.3 — the reviewer's
+     * corrections, which always win over the score:
+     *   { merge: [[normA, normB], ...], split: [[normA, normB], ...] }
+     *
+     * A split is enforced by refusing any union that would put a forbidden pair
+     * in one component. That makes the result depend on the order unions are
+     * attempted, so pairs are processed in a fixed sorted order and the outcome
+     * is deterministic for a given input. It is not a general constrained
+     * clustering, and it does not pretend to be: it is "the reviewer said these
+     * two are different, so never merge them".
+     */
+    function clusterItems(records, opts) {
+      var o = opts || {};
+      var threshold = o.threshold === undefined ? MATCH.THRESHOLD : o.threshold;
+      var idx = o.index || buildMatchIndex(records);
+      var dsu = makeDsu_(idx.N);
+  
+      var forbidden = [];
+      ((o.aliases && o.aliases.split) || []).forEach(function (pair) {
+        var a = idx.byNorm[normAr(pair[0])], b = idx.byNorm[normAr(pair[1])];
+        if (a !== undefined && b !== undefined) forbidden.push([a, b]);
+      });
+  
+      function wouldViolate(a, b) {
+        var ra = dsu.find(a), rb = dsu.find(b);
+        for (var i = 0; i < forbidden.length; i++) {
+          var fa = dsu.find(forbidden[i][0]), fb = dsu.find(forbidden[i][1]);
+          if ((fa === ra && fb === rb) || (fa === rb && fb === ra)) return true;
+        }
+        return false;
+      }
+      function tryUnion(a, b) {
+        if (dsu.find(a) === dsu.find(b)) return false;
+        if (wouldViolate(a, b)) return false;
+        return dsu.union(a, b);
+      }
+  
+      /* Reviewer merges first: they are facts, not evidence. */
+      ((o.aliases && o.aliases.merge) || []).forEach(function (pair) {
+        var a = idx.byNorm[normAr(pair[0])], b = idx.byNorm[normAr(pair[1])];
+        if (a !== undefined && b !== undefined) tryUnion(a, b);
+      });
+  
+      /* Score every candidate pair once, then union in descending score order so
+         the strongest evidence is applied first and the result does not depend on
+         node ordering. */
+      var pairs = [], seenPair = {};
+      idx.nodes.forEach(function (n) {
+        matchCandidates(n, idx).forEach(function (j) {
+          var lo = Math.min(n.i, j), hi = Math.max(n.i, j);
+          var pk = lo + ':' + hi;
+          if (seenPair[pk]) return;
+          seenPair[pk] = true;
+          var s = matchScore(idx.nodes[lo], idx.nodes[hi], idx);
+          if (s.score >= threshold) pairs.push({ a: lo, b: hi, s: s.score });
+        });
+      });
+      pairs.sort(function (x, y) { return y.s - x.s || x.a - y.a || x.b - y.b; });
+      pairs.forEach(function (p) { tryUnion(p.a, p.b); });
+  
+      var groups = {};
+      idx.nodes.forEach(function (n) {
+        var r = dsu.find(n.i);
+        (groups[r] = groups[r] || []).push(n);
+      });
+  
+      var clusters = Object.keys(groups).map(function (r) {
+        var members = groups[r].slice().sort(function (x, y) { return y.count - x.count || (x.norm < y.norm ? -1 : 1); });
+        var total = 0;
+        members.forEach(function (m) { total += m.count; });
+        /* cluster_id is the lexicographically smallest MEMBER TEXT, not the
+           representative's item_key. item_key is order-invariant, so a reviewer
+           who splits "معجون شروخ" from "شروخ معجون" would get two clusters
+           carrying the SAME id — and every downstream lookup keyed by cluster id
+           would quietly merge them back, undoing the correction. Membership sets
+           are disjoint, so the smallest member text is unique by construction,
+           and it does not move when purchase counts shift. */
+        var ids = members.map(function (m) { return m.norm; }).sort();
+        return {
+          cluster_id: ids[0],
+          label: members[0].norm,              /* the most-used member — what a reviewer reads */
+          members: members.map(function (m) { return m.norm; }),
+          member_count: members.length,
+          occurrence_count: total
+        };
+      }).sort(function (x, y) { return y.occurrence_count - x.occurrence_count; });
+  
+      var byNormCluster = {};
+      clusters.forEach(function (c) {
+        c.members.forEach(function (m) { byNormCluster[m] = c.cluster_id; });
+      });
+  
+      return { clusters: clusters, byNorm: byNormCluster, index: idx, threshold: threshold };
+    }
+  
+    // ═══════════════════════════════════════════════════════════════════════
+    // §6  Account period windows
+    // ═══════════════════════════════════════════════════════════════════════
+  
+    /* Deliberately integer arithmetic on a YYYY-MM-DD string, with no Date
+       object anywhere. Apps Script runs in the script's timezone, the database
+       stores a bare DATE, and the browser is in the user's timezone; routing
+       these bounds through a Date is how a movement dated the 1st ends up
+       excluded from its own month. Strings in, strings out, no zone ever
+       consulted. */
+  
+    function daysInMonth(y, m) {
+      if (m === 2) return (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0 ? 29 : 28;
+      return [0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][m];
+    }
+  
+    function pad2_(n) { return (n < 10 ? '0' : '') + n; }
+    function iso_(y, m, d) { return y + '-' + pad2_(m) + '-' + pad2_(d); }
+  
+    function parseIsoDate(s) {
+      var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(s || '').trim());
+      if (!m) return null;
+      var y = Number(m[1]), mo = Number(m[2]), d = Number(m[3]);
+      if (mo < 1 || mo > 12) return null;
+      if (d < 1 || d > daysInMonth(y, mo)) return null;
+      return { y: y, m: mo, d: d };
+    }
+  
+    /**
+     * The first day of the month N months before refIso.
+     *
+     * Month arithmetic on a running month-index, not on a Date: subtracting 24
+     * months from September 2026 has to give September 2024 whatever the day of
+     * the month is, and has to cross a year boundary without a timezone getting
+     * an opinion.
+     */
+    function monthsBefore(refIso, n) {
+      var r = parseIsoDate(refIso);
+      if (!r) throw new Error('Invalid reference date (expected YYYY-MM-DD): ' + refIso);
+      var idx = r.y * 12 + (r.m - 1) - Math.max(0, Math.floor(Number(n) || 0));
+      var y = Math.floor(idx / 12);
+      var m = idx - y * 12 + 1;
+      return iso_(y, m, 1);
+    }
+  
+    /**
+     * The four spend windows of plan §6, anchored on a reference date D.
+     *
+     * Last month and last year are cut to the SAME DAY-OF-PERIOD as D, never to
+     * the whole period. Comparing 12 days of this month against 31 days of last
+     * month manufactures a decline on the 12th of every month, and someone will
+     * act on it.
+     *
+     * The day is clamped to the target month's length, so 31 March compares
+     * against 1–28 February and never asks the database for 31 February.
+     */
+    function accountWindows(refIso) {
+      var r = parseIsoDate(refIso);
+      if (!r) throw new Error('Invalid reference date (expected YYYY-MM-DD): ' + refIso);
+  
+      var pmY = r.m === 1 ? r.y - 1 : r.y;
+      var pmM = r.m === 1 ? 12 : r.m - 1;
+      var lmDay = Math.min(r.d, daysInMonth(pmY, pmM));
+      var lyDay = Math.min(r.d, daysInMonth(r.y - 1, r.m));
+  
+      return {
+        ref: iso_(r.y, r.m, r.d),
+        mtd: { from: iso_(r.y, r.m, 1), to: iso_(r.y, r.m, r.d), label_ar: 'الشهر الحالي' },
+        last_month: { from: iso_(pmY, pmM, 1), to: iso_(pmY, pmM, lmDay), label_ar: 'الشهر السابق (نفس المدة)' },
+        ytd: { from: iso_(r.y, 1, 1), to: iso_(r.y, r.m, r.d), label_ar: 'العام الحالي' },
+        last_ytd: { from: iso_(r.y - 1, 1, 1), to: iso_(r.y - 1, r.m, lyDay), label_ar: 'العام السابق (نفس المدة)' },
+        /* The outer bound the aggregate query needs: everything the four windows
+           can touch, and nothing else. */
+        span: { from: iso_(r.y - 1, 1, 1), to: iso_(r.y, r.m, r.d) }
+      };
+    }
+  
+    // ═══════════════════════════════════════════════════════════════════════
+    // Date/time arithmetic for the rules — still no Date object
+    // ═══════════════════════════════════════════════════════════════════════
+  
+    var CUM_DAYS = [0, 0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
+  
+    function isLeap_(y) { return (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0; }
+  
+    /** Days since 1970-01-01, as an integer. Pure, and free of any timezone. */
+    function dayNumber(y, m, d) {
+      var days = 365 * (y - 1970);
+      /* Leap days between 1970 and y, exclusive of y itself. */
+      days += Math.floor((y - 1969) / 4) - Math.floor((y - 1901) / 100) + Math.floor((y - 1601) / 400);
+      days += CUM_DAYS[m] + (m > 2 && isLeap_(y) ? 1 : 0);
+      return days + d - 1;
+    }
+  
+    /** Whole days from a to b (both 'YYYY-MM-DD'). Negative when b precedes a. */
+    function daysBetween(aIso, bIso) {
+      var a = parseIsoDate(aIso), b = parseIsoDate(bIso);
+      if (!a || !b) return null;
+      return dayNumber(b.y, b.m, b.d) - dayNumber(a.y, a.m, a.d);
+    }
+  
+    /** 0 = Sunday … 6 = Saturday. 1970-01-01 was a Thursday (4). */
+    function dayOfWeek(y, m, d) {
+      var n = dayNumber(y, m, d) + 4;
+      return ((n % 7) + 7) % 7;
+    }
+  
+    /**
+     * 'YYYY-MM-DD HH:MM:SS' (or with a 'T') → { y, m, d, hh, mm, ss, date }.
+     * Returns null for anything else, rather than guessing — a rule that fires on
+     * a misparsed timestamp is an accusation built on nothing.
+     */
+    function parseDateTime(s) {
+      var m = /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2}))?)?/.exec(String(s || '').trim());
+      if (!m) return null;
+      var d = parseIsoDate(m[1] + '-' + m[2] + '-' + m[3]);
+      if (!d) return null;
+      return {
+        y: d.y, m: d.m, d: d.d,
+        hh: m[4] === undefined ? null : Number(m[4]),
+        mm: m[5] === undefined ? null : Number(m[5]),
+        ss: m[6] === undefined ? 0 : Number(m[6]),
+        date: m[1] + '-' + m[2] + '-' + m[3]
+      };
+    }
+  
+    /** Percentile of a numeric array, linear interpolation. Sorts a copy. */
+    function percentile(values, p) {
+      var v = (values || []).filter(function (x) { return typeof x === 'number' && isFinite(x); })
+        .slice().sort(function (a, b) { return a - b; });
+      if (!v.length) return null;
+      if (v.length === 1) return v[0];
+      var idx = (v.length - 1) * p;
+      var lo = Math.floor(idx), hi = Math.ceil(idx);
+      if (lo === hi) return v[lo];
+      return v[lo] + (v[hi] - v[lo]) * (idx - lo);
+    }
+  
+    function median(values) { return percentile(values, 0.5); }
+  
+    // ═══════════════════════════════════════════════════════════════════════
+    // §8.5  The edit path — allowlist and validators
+    // ═══════════════════════════════════════════════════════════════════════
+  
+    /**
+     * The columns an edit may touch. A FIXED ALLOWLIST, never a sanitizer over a
+     * client-supplied column name: a sanitizer answers "is this string safe to
+     * put in SQL", and the question that matters is "is this a column a user is
+     * allowed to change at all".
+     *
+     * Absent on purpose, and each for its own reason:
+     *   id          the primary key the update targets
+     *   created_at  THE EVIDENCE. The backdating rules (BACKDATED, ODD_HOUR,
+     *               OUT_OF_SEQUENCE) all run on created_at. A page whose job is
+     *               to find tampering must not offer a field for editing the
+     *               timestamps it audits.
+     *   updated_at  server-set to NOW() on every edit, so EDITED_AFTER_REVIEW
+     *               cannot be defeated by writing an old value into it.
+     *
+     * Types come straight from the schema in plan §2, so the validation is exact
+     * rather than defensive: transaction_details is varchar(255) and MySQL would
+     * truncate or throw, so 256 characters is rejected HERE, with an Arabic
+     * message naming the column, rather than becoming a driver error or, worse,
+     * a silently shortened description.
+     */
+    var EDITABLE_COLUMNS = {
+      transaction_date:    { type: 'date',    label_ar: 'التاريخ' },
+      transaction_details: { type: 'text255', label_ar: 'التفاصيل', max: 255 },
+      transaction_amount:  { type: 'money',   label_ar: 'المبلغ' },
+      transaction_type:    { type: 'enum',    label_ar: 'النوع', values: ['credit', 'debit'],
+                             labels_ar: { credit: 'منصرف', debit: 'محصّل' } },
+      chart_of_accounts:   { type: 'digits',  label_ar: 'كود الحساب' },
+      responsible_person:  { type: 'text',    label_ar: 'المسؤول', max: 65535 },
+      box_code:            { type: 'int',     label_ar: 'كود الخزنة' },
+      client_id:           { type: 'intNull', label_ar: 'كود العميل' },
+      related_id:          { type: 'intNull', label_ar: 'الكود المرتبط' },
+      user_id:             { type: 'intNull', label_ar: 'كود المستخدم', max: 2147483647 },
+      is_revised:          { type: 'bool01',  label_ar: 'حالة المراجعة' }
+    };
+  
+    var LOCKED_COLUMNS = {
+      id: 'المفتاح الأساسي لا يمكن تعديله',
+      created_at: 'تاريخ الإنشاء دليل تدقيق ولا يمكن تعديله من هذه الصفحة',
+      updated_at: 'تاريخ آخر تعديل يضبطه الخادم تلقائياً'
+    };
+  
+    /* double(16,2): 16 significant digits with 2 after the point, so the largest
+       representable magnitude is 99999999999999.99. */
+    var MONEY_MAX = 99999999999999.99;
+  
+    function isEditableColumn(col) {
+      return Object.prototype.hasOwnProperty.call(EDITABLE_COLUMNS, String(col));
+    }
+  
+    /**
+     * Validate and coerce ONE column's value. Throws an Arabic Error naming the
+     * column when the value will not do.
+     *
+     * Returns the value in the form the prepared statement should bind: a string
+     * for text and dates, a Number for money and integers, or null for an empty
+     * nullable id. Returning the coerced value rather than a boolean is what
+     * keeps the caller from binding the raw client string by accident.
+     */
+    function validateColumn(col, value) {
+      var name = String(col);
+      if (Object.prototype.hasOwnProperty.call(LOCKED_COLUMNS, name)) {
+        throw new Error(LOCKED_COLUMNS[name]);
+      }
+      if (!isEditableColumn(name)) {
+        throw new Error('عمود غير مسموح بتعديله: ' + name);
+      }
+      var spec = EDITABLE_COLUMNS[name];
+      var raw = (value === undefined || value === null) ? '' : String(value);
+      var s = raw.trim();
+      var L = spec.label_ar;
+  
+      switch (spec.type) {
+        case 'date':
+          if (!s) throw new Error(L + ': التاريخ مطلوب');
+          if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) throw new Error(L + ': صيغة التاريخ غير صحيحة (المتوقع YYYY-MM-DD)');
+          /* Shape is not enough — 2026-02-31 has the right shape and is not a
+             day. MySQL would take it as a zero date or reject it depending on
+             sql_mode, and either way the row's date would no longer mean what it
+             says. */
+          if (!parseIsoDate(s)) throw new Error(L + ': تاريخ غير موجود في التقويم');
+          return s;
+  
+        case 'text255':
+          if (s.length > spec.max) {
+            throw new Error(L + ': الحد الأقصى ' + spec.max + ' حرفاً، والمُدخل ' + s.length +
+              ' — اختصر النص، فقاعدة البيانات ستقتطعه دون تنبيه');
+          }
+          return s;
+  
+        case 'text':
+          if (s.length > spec.max) throw new Error(L + ': الحد الأقصى ' + spec.max + ' حرفاً');
+          return s;
+  
+        case 'money': {
+          if (!s) throw new Error(L + ': القيمة مطلوبة');
+          if (!/^-?\d+(\.\d{1,2})?$/.test(s)) {
+            throw new Error(L + ': رقم بحد أقصى منزلتين عشريتين');
+          }
+          var n = Number(s);
+          if (!isFinite(n)) throw new Error(L + ': قيمة رقمية غير صالحة');
+          if (Math.abs(n) > MONEY_MAX) throw new Error(L + ': القيمة أكبر مما يتسع له الحقل');
+          return n;
+        }
+  
+        case 'enum':
+          if (spec.values.indexOf(s) === -1) {
+            throw new Error(L + ': القيمة يجب أن تكون ' + spec.values.join(' أو '));
+          }
+          return s;
+  
+        case 'digits':
+          if (!s) throw new Error(L + ': القيمة مطلوبة');
+          if (!/^\d{1,20}$/.test(s)) throw new Error(L + ': أرقام فقط');
+          return s;
+  
+        case 'int': {
+          if (!s) throw new Error(L + ': القيمة مطلوبة');
+          if (!/^-?\d{1,19}$/.test(s)) throw new Error(L + ': رقم صحيح فقط');
+          return s;                       /* bigint — kept as a string, never through a float */
+        }
+  
+        case 'intNull': {
+          if (!s) return null;            /* empty means NULL, which is the schema's default */
+          if (!/^-?\d{1,19}$/.test(s)) throw new Error(L + ': رقم صحيح أو فراغ');
+          if (spec.max !== undefined && Math.abs(Number(s)) > spec.max) {
+            throw new Error(L + ': القيمة خارج المدى المسموح');
+          }
+          return s;
+        }
+  
+        case 'bool01':
+          if (s !== '0' && s !== '1') throw new Error(L + ': القيمة يجب أن تكون 0 أو 1');
+          return Number(s);
+      }
+      throw new Error('نوع تحقق غير معروف للعمود: ' + name);
+    }
+  
+    /**
+     * Validate a whole change set. Returns { values, columns } with every value
+     * coerced, or throws on the first column that will not validate.
+     * Rejecting an EMPTY change set is deliberate: an update with nothing to set
+     * is a client bug, and letting it through would move updated_at — which the
+     * EDITED_AFTER_REVIEW rule reads — for no reason at all.
+     */
+    function validateChanges(changes) {
+      var out = {}, cols = [];
+      var src = changes || {};
+      for (var col in src) {
+        if (!Object.prototype.hasOwnProperty.call(src, col)) continue;
+        out[col] = validateColumn(col, src[col]);
+        cols.push(col);
+      }
+      if (!cols.length) throw new Error('لا توجد تغييرات');
+      cols.sort();                        /* deterministic SET order and audit order */
+      return { values: out, columns: cols };
+    }
+  
+    /** Is this account code inside the item engine's range? (plan §2.1) */
+    function inItemRange(code) {
+      var s = String(code === undefined || code === null ? '' : code).trim();
+      if (!/^\d+$/.test(s)) return false;
+      var n = Number(s);
+      return n >= 300000 && n <= 400000;
+    }
+  
+    /**
+     * Does this edit move the row across the 300000–400000 boundary? Worth
+     * saying out loud in the confirmation, because it silently changes WHICH
+     * ANALYSES APPLY to the row — the item parsing and every price rule are
+     * scoped to that range — and nothing else on screen would show it.
+     */
+    function crossesItemBoundary(oldCode, newCode) {
+      var a = inItemRange(oldCode), b = inItemRange(newCode);
+      if (a === b) return null;
+      return {
+        from_in_range: a,
+        to_in_range: b,
+        reason_ar: b
+          ? 'هذا التعديل يُدخل الحركة في نطاق تحليل البنود (300000–400000)، فتصبح خاضعة لتحليل الأسعار'
+          : 'هذا التعديل يُخرج الحركة من نطاق تحليل البنود (300000–400000)، فتتوقف عنها قواعد تحليل الأسعار'
+      };
+    }
+  
+    /**
+     * Which columns actually differ, comparing as the form would produce them.
+     * Only changed columns are sent, so an edit that touches one field does not
+     * rewrite ten and does not fill the audit log with lines saying nothing
+     * changed.
+     */
+    function diffChanges(original, edited) {
+      var out = {};
+      var src = edited || {};
+      for (var col in src) {
+        if (!Object.prototype.hasOwnProperty.call(src, col)) continue;
+        if (!isEditableColumn(col)) continue;
+        var before = (original || {})[col];
+        var a = (before === undefined || before === null) ? '' : String(before).trim();
+        var b = (src[col] === undefined || src[col] === null) ? '' : String(src[col]).trim();
+        /* Money compares by value, not by spelling: "725.00" and "725" are the
+           same amount, and an edit that changed neither must not be recorded as
+           one. */
+        if (EDITABLE_COLUMNS[col].type === 'money' && a !== '' && b !== '' &&
+            isFinite(Number(a)) && isFinite(Number(b))) {
+          if (Number(a) === Number(b)) continue;
+        } else if (a === b) {
+          continue;
+        }
+        out[col] = src[col];
+      }
+      return out;
+    }
+  
+  
+    // ═══════════════════════════════════════════════════════════════════════
+    // §7 Tier 1 — deterministic integrity rules
+    // ═══════════════════════════════════════════════════════════════════════
+    //
+    // The highest-precision findings in the whole feature, and the only tier that
+    // uses no statistics at all. Every one of them is a fact about the row or
+    // about a pair of rows, not an inference about a distribution.
+    //
+    // Every rule returns { rule_id, severity, row_id, evidence[], reason_ar }.
+    // reason_ar is a SENTENCE with the numbers in it, not a rule name: this
+    // output has to survive an accountant asking "why", and "SUM_MISMATCH" is not
+    // an answer to that question. evidence[] carries the rows the reader needs to
+    // see to check the claim themselves.
+    //
+    // Rules that need a population (BACKDATED needs a p95, STRUCTURING needs a
+    // histogram) REFUSE to fire below their minimum n and say so in `notes`.
+    // A finding is aimed at a named employee; "بيانات غير كافية" is the honest
+    // output when there is not enough data, and a weak verdict is not.
+  
+    var SEVERITY_AR = { high: 'مرتفع', medium: 'متوسط', low: 'منخفض' };
+  
+    var TIER1 = {
+      SUM_EPSILON: 1.00,          /* double(16,2) — below this is rounding */
+      DUP_WINDOW_DAYS: 7,
+      NEAR_DUP_SIMILARITY: 0.85,
+      NEAR_DUP_AMOUNT_PCT: 0.02,
+      BACKDATE_MIN_N: 30,         /* below this a p95 is noise */
+      BACKDATE_MIN_DAYS: 3,       /* never flag a lag this small, whatever p95 says */
+      WORK_START_HOUR: 8,
+      WORK_END_HOUR: 18,
+      WEEKEND_DAYS: [5, 6],       /* Friday, Saturday — the Egyptian week */
+      SEQUENCE_TOLERANCE_DAYS: 30,
+      STRUCTURING_CANDIDATES: [500, 1000, 2000, 5000, 10000, 20000, 50000],
+      STRUCTURING_BAND: 0.10,     /* "just below" = within 10% under the threshold */
+      STRUCTURING_MIN_RATIO: 3,   /* the spike must be this much taller than above */
+      STRUCTURING_MIN_COUNT: 5,   /* and this many rows, or it is not a spike */
+      STRUCTURING_WINDOW_DAYS: 2
+    };
+  
+    function flag_(ruleId, severity, rowId, reasonAr, evidence) {
+      return {
+        rule_id: ruleId,
+        severity: severity,
+        severity_ar: SEVERITY_AR[severity] || severity,
+        row_id: rowId === undefined || rowId === null ? null : String(rowId),
+        reason_ar: reasonAr,
+        evidence: evidence || []
+      };
+    }
+  
+    function amountOf_(row) {
+      var n = Number(row && row.transaction_amount);
+      return isFinite(n) ? n : null;
+    }
+  
+    function fmt2_(n) {
+      return (Math.round(Number(n) * 100) / 100).toFixed(2);
+    }
+  
+    /**
+     * Arabic numeral–noun agreement.
+     *
+     * Arabic does not pluralise the way English does, and getting it wrong is
+     * visible in every sentence this engine produces. "4 عملية" is simply
+     * incorrect; it has to be "4 عمليات". The rule that matters here:
+     *   1        → singular            عملية
+     *   2        → dual                عمليتان
+     *   3 – 10   → plural              عمليات
+     *   11 +     → singular (accusative) عملية
+     * so plural and singular ALTERNATE as the number grows, which is exactly the
+     * case a naive `n === 1 ? x : xs` gets wrong at 11 and again at 101.
+     *
+     * A findings page that an accountant is meant to act on cannot be written in
+     * broken Arabic; the reader stops trusting the arithmetic too.
+     */
+    var AR_NOUNS = {
+      op:       { one: 'عملية', two: 'عمليتان', few: 'عمليات', many: 'عملية' },
+      purchase: { one: 'عملية شراء', two: 'عمليتا شراء', few: 'عمليات شراء', many: 'عملية شراء' },
+      movement: { one: 'حركة', two: 'حركتان', few: 'حركات', many: 'حركة' },
+      day:      { one: 'يوم', two: 'يومان', few: 'أيام', many: 'يوماً' },
+      workday:  { one: 'يوم عمل', two: 'يوما عمل', few: 'أيام عمل', many: 'يوم عمل' },
+      month:    { one: 'شهر', two: 'شهران', few: 'أشهر', many: 'شهراً' },
+      item:     { one: 'بند', two: 'بندان', few: 'بنود', many: 'بنداً' },
+      amount:   { one: 'مبلغ', two: 'مبلغان', few: 'مبالغ', many: 'مبلغاً' }
+    };
+  
+    function arCount(n, kind) {
+      var forms = AR_NOUNS[kind];
+      if (!forms) return String(n);
+      var v = Math.abs(Number(n));
+      /* Agreement follows the last two digits: 111 behaves like 11, not like 1. */
+      var mod100 = v % 100;
+      var word;
+      if (v === 1) word = forms.one;
+      else if (v === 2) word = forms.two;
+      else if (mod100 >= 3 && mod100 <= 10) word = forms.few;
+      else if (mod100 === 1 || mod100 === 2 || mod100 === 0 || mod100 > 10) word = forms.many;
+      else word = forms.many;
+      /* 1 and 2 carry the count in the noun itself, so the digit is redundant. */
+      return (v === 1 || v === 2) ? word : (n + ' ' + word);
+    }
+  
+    /* ── SUM_MISMATCH ───────────────────────────────────────────────────────
+     * Σ parsed item prices against transaction_amount. Free, needs nothing but
+     * the parser, and it is the highest-precision signal in the feature: either
+     * the parse failed or the description does not account for the money, and
+     * both need a human.
+     *
+     * It does NOT fire when the row has no parsed items, and it does NOT fire
+     * when some segment failed to parse — in that case the sum is known to be
+     * incomplete, which is a different (and already reported) finding. Firing
+     * here too would blame the row for the parser's gap. */
+    function ruleSumMismatch(row) {
+      var p = row && row.parse;
+      if (!p || !p.items || !p.items.length) return null;
+      if (p.failed_count > 0) return null;
+      var amount = amountOf_(row);
+      if (amount === null) return null;
+      var diff = round_(p.sum - amount, 2);
+      if (Math.abs(diff) <= TIER1.SUM_EPSILON) return null;
+      return flag_('SUM_MISMATCH', 'high', row.id,
+        'مجموع أسعار البنود ' + fmt2_(p.sum) + ' لا يساوي المبلغ المسجل ' + fmt2_(amount) +
+        ' — الفرق ' + fmt2_(Math.abs(diff)) + ' ' +
+        (diff > 0 ? '(البنود أكبر من المبلغ)' : '(المبلغ أكبر من البنود)'),
+        [{ row_id: String(row.id), items_sum: p.sum, transaction_amount: amount, difference: diff }]);
+    }
+  
+    /* ── EXACT_DUP and NEAR_DUP ─────────────────────────────────────────────
+     * Double claiming. Both are pair rules, so both flag BOTH rows — a reader
+     * looking at either one needs to be told about the other. */
+    function ruleDuplicates(rows, opts) {
+      var o = opts || {};
+      var windowDays = o.dup_window_days || TIER1.DUP_WINDOW_DAYS;
+      var simThreshold = o.near_dup_similarity || TIER1.NEAR_DUP_SIMILARITY;
+      var amtPct = o.near_dup_amount_pct || TIER1.NEAR_DUP_AMOUNT_PCT;
+      var out = [];
+  
+      var list = (rows || []).filter(function (r) {
+        return r && r.transaction_date && amountOf_(r) !== null;
+      }).map(function (r) {
+        var norm = normAr(r.transaction_details);
+        /* NEAR_DUP compares WHAT WAS BOUGHT, not the raw details string.
+           Comparing the whole string puts the price digits in the token set, so
+           two rows that differ only in price — the exact shape a near-duplicate
+           claim takes — score LOWER than two unrelated rows that happen to share
+           a price. On the first run this cost the intended fixture pair 0.833
+           against a 0.85 threshold and the rule found nothing at all.
+           The amounts are compared separately, just below, so leaving them out of
+           the text similarity is not losing a signal; it is not counting the same
+           one twice. Rows whose details did not parse fall back to the full text,
+           which is the best available. */
+        var items = (r.parse && r.parse.items) || [];
+        var itemText = items.length
+          ? items.map(function (it) { return it.item_norm; }).join(' ')
+          : norm;
+        return {
+          row: r,
+          norm: norm,
+          stems: stemTokens(itemText),
+          amount: amountOf_(r),
+          box: String(r.box_code == null ? '' : r.box_code),
+          person: String(r.responsible_person == null ? '' : r.responsible_person).trim()
+        };
+      });
+  
+      for (var i = 0; i < list.length; i++) {
+        for (var j = i + 1; j < list.length; j++) {
+          var a = list[i], b = list[j];
+          var gap = daysBetween(a.row.transaction_date, b.row.transaction_date);
+          if (gap === null || Math.abs(gap) > windowDays) continue;
+          if (!a.norm && !b.norm) continue;
+  
+          if (a.norm === b.norm && a.amount === b.amount && a.box === b.box) {
+            var ev = [
+              { row_id: String(a.row.id), transaction_date: a.row.transaction_date, transaction_amount: a.amount, transaction_details: a.row.transaction_details },
+              { row_id: String(b.row.id), transaction_date: b.row.transaction_date, transaction_amount: b.amount, transaction_details: b.row.transaction_details }
+            ];
+            var msg = 'حركة مطابقة تماماً: نفس التفاصيل ونفس المبلغ ' + fmt2_(a.amount) +
+              ' ونفس الخزنة، بفارق ' + arCount(Math.abs(gap), 'day') + ' — الحركتان رقم ' +
+              a.row.id + ' و' + b.row.id;
+            out.push(flag_('EXACT_DUP', 'high', a.row.id, msg, ev));
+            out.push(flag_('EXACT_DUP', 'high', b.row.id, msg, ev));
+            continue;
+          }
+  
+          /* Near duplicate: similar wording AND a similar amount. Either alone is
+             ordinary — the same item bought twice at different prices, or two
+             unrelated purchases that happen to cost the same. */
+          var denom = Math.max(Math.abs(a.amount), Math.abs(b.amount));
+          var amtClose = denom === 0 ? (a.amount === b.amount)
+            : (Math.abs(a.amount - b.amount) / denom) <= amtPct;
+          if (!amtClose) continue;
+          var sim = tokenSetDice(a.stems, b.stems);
+          if (sim < simThreshold) continue;
+          if (a.norm === b.norm && a.amount === b.amount && a.box === b.box) continue;   /* already EXACT */
+  
+          var ev2 = [
+            { row_id: String(a.row.id), transaction_date: a.row.transaction_date, transaction_amount: a.amount, transaction_details: a.row.transaction_details },
+            { row_id: String(b.row.id), transaction_date: b.row.transaction_date, transaction_amount: b.amount, transaction_details: b.row.transaction_details }
+          ];
+          var msg2 = 'حركتان متقاربتان جداً: تشابه التفاصيل ' + Math.round(sim * 100) + '%' +
+            ' والمبلغان ' + fmt2_(a.amount) + ' و' + fmt2_(b.amount) +
+            ' بفارق ' + arCount(Math.abs(gap), 'day') + ' — الحركتان رقم ' + a.row.id + ' و' + b.row.id;
+          out.push(flag_('NEAR_DUP', 'medium', a.row.id, msg2, ev2));
+          out.push(flag_('NEAR_DUP', 'medium', b.row.id, msg2, ev2));
+        }
+      }
+      return out;
+    }
+  
+    /* ── BACKDATED ──────────────────────────────────────────────────────────
+     * created_at − transaction_date, against the p95 of THIS population rather
+     * than a number somebody picked. In an office where everything is keyed a
+     * week late, a week late is not evidence of anything.
+     *
+     * Refuses to fire below BACKDATE_MIN_N: a p95 over 12 rows is the second
+     * largest value, which is not a percentile, it is just the second largest
+     * value. */
+    function ruleBackdated(rows, opts) {
+      var o = opts || {};
+      var minN = o.backdate_min_n === undefined ? TIER1.BACKDATE_MIN_N : o.backdate_min_n;
+      var lags = [];
+      var perRow = [];
+  
+      (rows || []).forEach(function (r) {
+        if (!r || !r.transaction_date || !r.created_at) return;
+        var c = parseDateTime(r.created_at);
+        if (!c) return;
+        var lag = daysBetween(r.transaction_date, c.date);
+        if (lag === null) return;
+        lags.push(lag);
+        perRow.push({ row: r, lag: lag });
+      });
+  
+      if (lags.length < minN) {
+        return {
+          flags: [],
+          note: {
+            rule_id: 'BACKDATED',
+            status: 'insufficient_data',
+            n: lags.length,
+            required: minN,
+            reason_ar: 'بيانات غير كافية لحساب حد التأخير (المطلوب ' + arCount(minN, 'movement') +
+              ' على الأقل، والمتاح ' + lags.length + ')'
+          }
+        };
+      }
+  
+      var p95 = percentile(lags, 0.95);
+      var threshold = Math.max(p95, TIER1.BACKDATE_MIN_DAYS);
+      var flags = [];
+      perRow.forEach(function (x) {
+        if (x.lag <= threshold) return;
+        flags.push(flag_('BACKDATED', 'medium', x.row.id,
+          'أُدخلت الحركة بعد تاريخها بـ ' + arCount(x.lag, 'day') + '، وهو أعلى من الحد المحسوب من هذه المجموعة نفسها (' +
+          'الشريحة 95% = ' + fmt2_(p95) + ' يوم من ' + arCount(lags.length, 'movement') + ')',
+          [{ row_id: String(x.row.id), transaction_date: x.row.transaction_date,
+             created_at: x.row.created_at, lag_days: x.lag, p95_days: round_(p95, 2), n: lags.length }]));
+      });
+      return { flags: flags, note: null };
+    }
+  
+    /* ── ODD_HOUR ───────────────────────────────────────────────────────────
+     * Keyed outside working hours or at the weekend. Weekend here is Friday and
+     * Saturday.
+     *
+     * PUBLIC HOLIDAYS ARE NOT CHECKED — there is no holiday calendar in this
+     * system, and inventing one would produce confident nonsense twice a year.
+     * The severity is deliberately 'low': working late is not fraud, it is a
+     * detail that matters only next to something else. */
+    function ruleOddHour(row, opts) {
+      var o = opts || {};
+      var startH = o.work_start_hour === undefined ? TIER1.WORK_START_HOUR : o.work_start_hour;
+      var endH = o.work_end_hour === undefined ? TIER1.WORK_END_HOUR : o.work_end_hour;
+      var weekend = o.weekend_days || TIER1.WEEKEND_DAYS;
+      if (!row || !row.created_at) return null;
+      var c = parseDateTime(row.created_at);
+      if (!c || c.hh === null) return null;
+  
+      var dow = dayOfWeek(c.y, c.m, c.d);
+      var isWeekend = weekend.indexOf(dow) !== -1;
+      var outOfHours = c.hh < startH || c.hh >= endH;
+      if (!isWeekend && !outOfHours) return null;
+  
+      var names = ['الأحد', 'الاثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
+      var parts = [];
+      if (isWeekend) parts.push('يوم ' + names[dow] + ' (عطلة أسبوعية)');
+      if (outOfHours) parts.push('الساعة ' + (c.hh < 10 ? '0' : '') + c.hh + ':' +
+        (c.mm === null ? '00' : (c.mm < 10 ? '0' : '') + c.mm) +
+        ' خارج ساعات العمل ' + startH + ':00–' + endH + ':00');
+      return flag_('ODD_HOUR', 'low', row.id,
+        'أُدخلت الحركة ' + parts.join(' و') + ' (لا تُحتسب الأعياد الرسمية — لا يوجد تقويم إجازات في النظام)',
+        [{ row_id: String(row.id), created_at: row.created_at, day_of_week: dow }]);
+    }
+  
+    /* ── EDITED_AFTER_REVIEW ────────────────────────────────────────────────
+     * updated_at > created_at on a row marked reviewed.
+     *
+     * THIS IS WHY THE AUDIT LOG EXISTS. Without it, this rule fires on the
+     * page's own legitimate edits with no way to tell them from an outside
+     * change, and the feature spends its credibility flagging itself. With it,
+     * an edit made through this page is reported at LOW severity naming who made
+     * it, and only an unexplained change is reported at HIGH.
+     *
+     * auditIndex: { movement_id: [applied entries] } — built by the caller,
+     * because reading Drive is I/O and this file does none. */
+    function ruleEditedAfterReview(row, auditIndex) {
+      if (!row) return null;
+      if (String(row.is_revised) !== '1') return null;
+      if (!row.created_at || !row.updated_at) return null;
+      /* 'YYYY-MM-DD HH:MM:SS' compares correctly as a string. */
+      if (!(String(row.updated_at) > String(row.created_at))) return null;
+  
+      var entries = (auditIndex || {})[String(row.id)] || [];
+      if (entries.length) {
+        var last = entries[entries.length - 1];
+        var who = (last.user && (last.user.name || last.user.email)) || 'مستخدم غير معروف';
+        var cols = (last.changes || []).map(function (c) {
+          var spec = EDITABLE_COLUMNS[c.column];
+          return spec ? spec.label_ar : c.column;
+        });
+        return flag_('EDITED_AFTER_REVIEW', 'low', row.id,
+          'عُدِّلت الحركة بعد اعتماد مراجعتها — والتعديل مسجَّل في سجل التدقيق بواسطة ' + who +
+          (cols.length ? ' على: ' + cols.join('، ') : '') + ' بتاريخ ' + (last.when || '—'),
+          [{ row_id: String(row.id), created_at: row.created_at, updated_at: row.updated_at,
+             audit: last }]);
+      }
+  
+      return flag_('EDITED_AFTER_REVIEW', 'high', row.id,
+        'عُدِّلت الحركة بعد اعتماد مراجعتها ولا يوجد لها أي سجل تدقيق — أي أن التغيير لم يتم من خلال هذه الصفحة',
+        [{ row_id: String(row.id), created_at: row.created_at, updated_at: row.updated_at, audit: null }]);
+    }
+  
+    /* ── OUT_OF_SEQUENCE ────────────────────────────────────────────────────
+     * id order contradicting transaction_date order. ids are assigned on insert,
+     * so a much later id carrying a much earlier date is a row entered out of
+     * order.
+     *
+     * Tolerance is 30 days by default and deliberately generous. Petty cash is
+     * routinely keyed a few days late, so a small inversion is normal life; a
+     * tight tolerance here would flag half the table and the rule would be
+     * switched off within a week. It is also only meaningful over a CONTIGUOUS
+     * range of ids — on a filtered page the gaps are the filter's, not the
+     * data's — which is why the caller is told so in `notes`.
+     *
+     * IT FLAGS THE ODD ONE OUT, NOT EVERYTHING AFTER IT. The first version
+     * compared each row against the running maximum date, so a single row dated
+     * three months in the future flagged all twelve rows that followed it — one
+     * anomaly, twelve accusations, and an alerts tab nobody would read twice.
+     * A row is reported only when it is far from BOTH of its id-neighbours in the
+     * same direction, which is what "out of sequence" actually means. The first
+     * and last rows of the set have one neighbour each and are skipped: a
+     * one-sided comparison is exactly the thing that cascaded. */
+    function ruleOutOfSequence(rows, opts) {
+      var o = opts || {};
+      var tol = o.sequence_tolerance_days === undefined ? TIER1.SEQUENCE_TOLERANCE_DAYS : o.sequence_tolerance_days;
+      var list = (rows || []).filter(function (r) {
+        return r && r.transaction_date && r.id !== undefined && r.id !== null && /^\d+$/.test(String(r.id));
+      }).slice().sort(function (a, b) {
+        var x = String(a.id), y = String(b.id);
+        return x.length - y.length || (x < y ? -1 : x > y ? 1 : 0);   /* bigint-safe */
+      });
+  
+      var out = [];
+      for (var i = 1; i < list.length - 1; i++) {
+        var prev = list[i - 1], cur = list[i], next = list[i + 1];
+        var backGap = daysBetween(prev.transaction_date, cur.transaction_date);   /* cur − prev */
+        var fwdGap = daysBetween(next.transaction_date, cur.transaction_date);    /* cur − next */
+        if (backGap === null || fwdGap === null) continue;
+  
+        var ev = [
+          { row_id: String(prev.id), transaction_date: prev.transaction_date },
+          { row_id: String(cur.id), transaction_date: cur.transaction_date },
+          { row_id: String(next.id), transaction_date: next.transaction_date }
+        ];
+  
+        if (backGap < -tol && fwdGap < -tol) {
+          out.push(flag_('OUT_OF_SEQUENCE', 'medium', cur.id,
+            'ترتيب الإدخال يخالف التاريخ: الحركة رقم ' + cur.id + ' مسجَّلة بين الحركتين ' +
+            prev.id + ' و' + next.id + ' لكن تاريخها ' + cur.transaction_date +
+            ' أقدم من كلتيهما بـ ' + Math.abs(backGap) + ' و' + arCount(Math.abs(fwdGap), 'day') + '',
+            ev));
+        } else if (backGap > tol && fwdGap > tol) {
+          out.push(flag_('OUT_OF_SEQUENCE', 'medium', cur.id,
+            'ترتيب الإدخال يخالف التاريخ: الحركة رقم ' + cur.id + ' مسجَّلة بين الحركتين ' +
+            prev.id + ' و' + next.id + ' لكن تاريخها ' + cur.transaction_date +
+            ' أحدث من كلتيهما بـ ' + backGap + ' و' + arCount(fwdGap, 'day') + '',
+            ev));
+        }
+      }
+      return out;
+    }
+  
+    /* ── STRUCTURING ────────────────────────────────────────────────────────
+     * Several rows, same account and person, inside a short window, each just
+     * under a round threshold, summing above it.
+     *
+     * The thresholds are DERIVED, not guessed. For each candidate round number T
+     * the amount histogram is checked for a spike immediately below it: the count
+     * in [0.9T, T) against the count in [T, 1.1T). A real approval limit leaves a
+     * pile just under it and a hole just over it. A candidate with no such spike
+     * is not a limit in this organisation and is dropped, so the rule cannot flag
+     * people for being near a number that means nothing here.
+     *
+     * Below STRUCTURING_MIN_COUNT rows in the band there is no histogram to read
+     * and the rule reports insufficient data rather than a weak verdict. */
+    function detectStructuringThresholds(rows, opts) {
+      var o = opts || {};
+      var candidates = o.structuring_candidates || TIER1.STRUCTURING_CANDIDATES;
+      var band = o.structuring_band === undefined ? TIER1.STRUCTURING_BAND : o.structuring_band;
+      var minRatio = o.structuring_min_ratio === undefined ? TIER1.STRUCTURING_MIN_RATIO : o.structuring_min_ratio;
+      var minCount = o.structuring_min_count === undefined ? TIER1.STRUCTURING_MIN_COUNT : o.structuring_min_count;
+  
+      var amounts = (rows || []).map(amountOf_).filter(function (a) { return a !== null && a > 0; });
+      var active = [];
+      candidates.forEach(function (T) {
+        var below = 0, above = 0;
+        amounts.forEach(function (a) {
+          if (a >= T * (1 - band) && a < T) below++;
+          else if (a >= T && a < T * (1 + band)) above++;
+        });
+        var ratio = below / Math.max(1, above);
+        if (below >= minCount && ratio >= minRatio) {
+          active.push({ threshold: T, below: below, above: above, ratio: round_(ratio, 2) });
+        }
+      });
+      return { thresholds: active, n_amounts: amounts.length, band: band };
+    }
+  
+    function ruleStructuring(rows, opts) {
+      var o = opts || {};
+      var windowDays = o.structuring_window_days === undefined ? TIER1.STRUCTURING_WINDOW_DAYS : o.structuring_window_days;
+      var detected = detectStructuringThresholds(rows, o);
+  
+      if (!detected.thresholds.length) {
+        return {
+          flags: [],
+          detected: detected,
+          note: {
+            rule_id: 'STRUCTURING',
+            status: 'no_threshold_detected',
+            n: detected.n_amounts,
+            reason_ar: 'لم يظهر في توزيع المبالغ أي تكدّس أسفل رقم مستدير، فلا يوجد حد اعتماد يُستدل عليه من البيانات — ' +
+              'ولا تُطبَّق هذه القاعدة بحدود مفترضة'
+          }
+        };
+      }
+  
+      /* Group by account + person, then slide a window over each group's dates. */
+      var groups = {};
+      (rows || []).forEach(function (r) {
+        if (!r || !r.transaction_date) return;
+        var amt = amountOf_(r);
+        if (amt === null || amt <= 0) return;
+        var key = String(r.chart_of_accounts || '') + ' ' + String(r.responsible_person || '').trim();
+        (groups[key] = groups[key] || []).push(r);
+      });
+  
+      var out = [];
+      var seen = {};
+      Object.keys(groups).forEach(function (key) {
+        var g = groups[key].slice().sort(function (a, b) {
+          return a.transaction_date < b.transaction_date ? -1 : a.transaction_date > b.transaction_date ? 1 : 0;
+        });
+        detected.thresholds.forEach(function (t) {
+          var T = t.threshold;
+          var inBand = g.filter(function (r) {
+            var a = amountOf_(r);
+            return a >= T * (1 - detected.band) && a < T;
+          });
+          for (var i = 0; i < inBand.length; i++) {
+            var cluster = [inBand[i]];
+            var sum = amountOf_(inBand[i]);
+            for (var j = i + 1; j < inBand.length; j++) {
+              var gap = daysBetween(inBand[i].transaction_date, inBand[j].transaction_date);
+              if (gap === null || gap > windowDays) break;
+              cluster.push(inBand[j]);
+              sum += amountOf_(inBand[j]);
+            }
+            if (cluster.length < 2 || sum <= T) continue;
+  
+            var ids = cluster.map(function (r) { return String(r.id); });
+            var sig = ids.join(',') + '@' + T;
+            if (seen[sig]) continue;
+            seen[sig] = true;
+  
+            var ev = cluster.map(function (r) {
+              return { row_id: String(r.id), transaction_date: r.transaction_date,
+                       transaction_amount: amountOf_(r), responsible_person: r.responsible_person,
+                       chart_of_accounts: r.chart_of_accounts };
+            });
+            var msg = arCount(cluster.length, 'movement') + ' لنفس المسؤول ونفس الحساب خلال ' +
+              arCount(daysBetween(cluster[0].transaction_date, cluster[cluster.length - 1].transaction_date) || 0, 'day') +
+              '، كل منها أقل بقليل من ' + fmt2_(T) + ' ومجموعها ' + fmt2_(sum) +
+              ' أي أعلى منه. وحد الـ' + fmt2_(T) + ' مستنتج من البيانات نفسها: ' +
+              arCount(t.below, 'movement') + ' أسفله مقابل ' + t.above + ' فوقه.';
+            cluster.forEach(function (r) {
+              out.push(flag_('STRUCTURING', 'high', r.id, msg, ev));
+            });
+            i += cluster.length - 1;
+          }
+        });
+      });
+      return { flags: out, detected: detected, note: null };
+    }
+  
+    /**
+     * Run every Tier 1 rule over a set of movement rows.
+     *
+     * rows: movement rows, each optionally carrying `parse` from parseDetails.
+     * opts.auditIndex: { movement_id: [applied audit entries] }, built by the
+     *   caller — reading Drive is I/O and this file does none.
+     *
+     * Returns { flags, by_row, notes, structuring }.
+     * `notes` is where a rule says it did NOT run and why. That is not an
+     * implementation detail to hide: "no finding" and "could not look" are
+     * different answers, and only one of them is reassuring.
+     */
+    function runTier1(rows, opts) {
+      var o = opts || {};
+      var list = rows || [];
+      var flags = [];
+      var notes = [];
+  
+      list.forEach(function (row) {
+        var f;
+        f = ruleSumMismatch(row); if (f) flags.push(f);
+        f = ruleOddHour(row, o); if (f) flags.push(f);
+        f = ruleEditedAfterReview(row, o.auditIndex); if (f) flags.push(f);
+      });
+  
+      flags = flags.concat(ruleDuplicates(list, o));
+      flags = flags.concat(ruleOutOfSequence(list, o));
+  
+      var back = ruleBackdated(list, o);
+      flags = flags.concat(back.flags);
+      if (back.note) notes.push(back.note);
+  
+      var struct = ruleStructuring(list, o);
+      flags = flags.concat(struct.flags);
+      if (struct.note) notes.push(struct.note);
+  
+      if (list.length) {
+        notes.push({
+          rule_id: 'OUT_OF_SEQUENCE',
+          status: 'scope',
+          reason_ar: 'تُقارَن أرقام الحركات داخل المعروض فقط؛ إذا كانت الفلاتر تُخفي حركات بينها فقد ' +
+            'تظهر مخالفات ترتيب ليست في البيانات الأصلية'
+        });
+      }
+  
+      var byRow = {};
+      flags.forEach(function (f) {
+        if (f.row_id === null) return;
+        (byRow[f.row_id] = byRow[f.row_id] || []).push(f);
+      });
+  
+      return { flags: flags, by_row: byRow, notes: notes, structuring: struct.detected };
+    }
+  
+  
+    // ═══════════════════════════════════════════════════════════════════════
+    // §7 Tier 2 — price anomalies, per item cluster
+    // ═══════════════════════════════════════════════════════════════════════
+    //
+    // MEDIAN AND MAD, NEVER MEAN AND σ. This is not a style preference. These
+    // samples are small — a dozen purchases of one item is a good sample here —
+    // and the contamination is exactly what we are hunting. A mean is dragged
+    // toward the very rows it is supposed to expose: one inflated purchase raises
+    // the average, which raises the threshold, which makes that purchase look
+    // less unusual than it is. The median does not move, and the MAD does not
+    // move, so an outlier stays an outlier no matter how large it is.
+    //
+    // Every rule here refuses to run below a minimum n and says so. A price
+    // finding names an employee; "بيانات غير كافية" is the honest output when
+    // there is not enough history, and a weak verdict is not.
+  
+    var TIER2 = {
+      MIN_N: 6,                  /* below this, a median and a MAD say nothing */
+      Z_THRESHOLD: 3.5,          /* modified z-score, the conventional cut */
+      MAD_SCALE: 0.6745,         /* 0.6745 = Φ⁻¹(0.75); makes MAD comparable to σ */
+      MEANAD_SCALE: 1.253314,    /* used only when MAD is exactly 0 */
+      PEER_MIN_N: 3,             /* per side */
+      PEER_RATIO: 1.25,          /* 25% above the peer median */
+      RATCHET_MIN_N: 5,
+      RATCHET_TAU: 0.6,          /* Mann–Kendall τ for the person */
+      RATCHET_PEER_TAU: 0.3,     /* …while everyone else is flatter than this */
+      NEW_ITEM_MIN_ACCOUNT_N: 10,
+      NEW_ITEM_PERCENTILE: 0.9
+    };
+  
+    /** Median absolute deviation. */
+    function mad(values) {
+      var m = median(values);
+      if (m === null) return null;
+      return median(values.map(function (x) { return Math.abs(x - m); }));
+    }
+  
+    /**
+     * Robust dispersion summary. `scale` is what the modified z-score divides by:
+     * the MAD normally, and — only when the MAD is exactly zero, which happens
+     * whenever more than half the sample is one identical price — the mean
+     * absolute deviation instead. Without that fallback, a single different price
+     * against a pile of identical ones divides by zero and every rule downstream
+     * reports Infinity.
+     */
+    function robustStats(values) {
+      var v = (values || []).filter(function (x) { return typeof x === 'number' && isFinite(x); });
+      if (!v.length) return null;
+      var m = median(v);
+      var d = mad(v);
+      var scale = d, scaleKind = 'mad';
+      if (!d) {
+        var meanAd = v.reduce(function (a, x) { return a + Math.abs(x - m); }, 0) / v.length;
+        scale = meanAd * TIER2.MEANAD_SCALE;
+        scaleKind = meanAd ? 'meanad' : 'none';
+      }
+      return {
+        n: v.length,
+        median: round_(m, 4),
+        mad: d === null ? null : round_(d, 4),
+        scale: scale ? round_(scale, 6) : 0,
+        scale_kind: scaleKind,
+        min: round_(Math.min.apply(null, v), 4),
+        max: round_(Math.max.apply(null, v), 4),
+        p25: round_(percentile(v, 0.25), 4),
+        p75: round_(percentile(v, 0.75), 4)
+      };
+    }
+  
+    /** Modified z-score. Null when there is no dispersion to measure against. */
+    function modifiedZ(x, stats) {
+      if (!stats || !stats.scale) return null;
+      return round_(TIER2.MAD_SCALE * (x - stats.median) / stats.scale, 3);
+    }
+  
+    /**
+     * Mann–Kendall τ over a series already in time order. +1 is monotone
+     * increasing, −1 monotone decreasing, 0 no trend. Rank-based, so one wild
+     * value cannot manufacture a trend the way a least-squares slope can.
+     */
+    function mannKendallTau(series) {
+      var v = (series || []).filter(function (x) { return typeof x === 'number' && isFinite(x); });
+      var n = v.length;
+      if (n < 3) return null;
+      var s = 0;
+      for (var i = 0; i < n - 1; i++) {
+        for (var j = i + 1; j < n; j++) {
+          s += (v[j] > v[i]) ? 1 : (v[j] < v[i]) ? -1 : 0;
+        }
+      }
+      return round_(s / (n * (n - 1) / 2), 4);
+    }
+  
+    /**
+     * Per-cluster price statistics. This is both what Tier 2 reasons over and
+     * what tab 3 renders, so the number a reviewer reads and the number the rule
+     * fired on are the same number by construction.
+     *
+     * occurrences: [{ movement_id, transaction_date, item_norm, unit, qty,
+     *                 price, unit_price, responsible_person, chart_of_accounts }]
+     * byNorm: { item_norm: cluster_id } from clusterItems.
+     */
+    function clusterPriceStats(occurrences, byNorm) {
+      var buckets = {};
+      (occurrences || []).forEach(function (o) {
+        if (!o || o.unit_price === null || o.unit_price === undefined) return;
+        var cid = (byNorm || {})[o.item_norm];
+        if (cid === undefined) cid = o.item_norm;
+        var b = buckets[cid] = buckets[cid] || { cluster_id: cid, occurrences: [], labels: {} };
+        b.occurrences.push(o);
+        b.labels[o.item_norm] = (b.labels[o.item_norm] || 0) + 1;
+      });
+  
+      var out = {};
+      Object.keys(buckets).forEach(function (cid) {
+        var b = buckets[cid];
+        var prices = b.occurrences.map(function (o) { return Number(o.unit_price); });
+        var qtys = b.occurrences.map(function (o) { return Number(o.qty); })
+          .filter(function (q) { return isFinite(q); });
+        var label = Object.keys(b.labels).sort(function (x, y) { return b.labels[y] - b.labels[x]; })[0];
+  
+        var byPerson = {};
+        b.occurrences.forEach(function (o) {
+          var p = String(o.responsible_person || '').trim() || '(غير محدد)';
+          (byPerson[p] = byPerson[p] || []).push(Number(o.unit_price));
+        });
+        var people = {};
+        Object.keys(byPerson).forEach(function (p) {
+          people[p] = { n: byPerson[p].length, median: round_(median(byPerson[p]), 4) };
+        });
+  
+        out[cid] = {
+          cluster_id: cid,
+          label: label,
+          n: b.occurrences.length,
+          price: robustStats(prices),
+          qty: robustStats(qtys),
+          by_person: people,
+          occurrences: b.occurrences
+        };
+      });
+      return out;
+    }
+  
+    /* ── PRICE_OUTLIER ──────────────────────────────────────────────────────
+     * Modified z-score on unit_price within the item's own cluster. */
+    function rulePriceOutlier(stats, opts) {
+      var o = opts || {};
+      var minN = o.tier2_min_n === undefined ? TIER2.MIN_N : o.tier2_min_n;
+      var zCut = o.tier2_z === undefined ? TIER2.Z_THRESHOLD : o.tier2_z;
+      var flags = [], notes = [];
+  
+      Object.keys(stats).forEach(function (cid) {
+        var c = stats[cid];
+        if (c.n < minN) {
+          notes.push({ rule_id: 'PRICE_OUTLIER', status: 'insufficient_data', cluster_id: cid,
+            n: c.n, required: minN,
+            reason_ar: 'بيانات غير كافية لتحليل سعر «' + c.label + '» (المتاح ' + arCount(c.n, 'purchase') +
+              '، والمطلوب ' + minN + ')' });
+          return;
+        }
+        if (!c.price || !c.price.scale) {
+          notes.push({ rule_id: 'PRICE_OUTLIER', status: 'no_dispersion', cluster_id: cid, n: c.n,
+            reason_ar: 'كل عمليات شراء «' + c.label + '» بنفس سعر الوحدة، فلا يوجد تشتت يُقاس عليه' });
+          return;
+        }
+        c.occurrences.forEach(function (occ) {
+          var z = modifiedZ(Number(occ.unit_price), c.price);
+          if (z === null || Math.abs(z) <= zCut) return;
+          flags.push(flag_('PRICE_OUTLIER', Math.abs(z) > zCut * 2 ? 'high' : 'medium', occ.movement_id,
+            'سعر وحدة «' + c.label + '» في هذه الحركة ' + fmt2_(occ.unit_price) +
+            '، والوسيط التاريخي ' + fmt2_(c.price.median) + ' من ' + arCount(c.n, 'purchase') +
+            ' (المدى ' + fmt2_(c.price.min) + '–' + fmt2_(c.price.max) + ')' +
+            ' — درجة انحراف ' + z + ' مقياس مقاوم للقيم الشاذة (الوسيط والانحراف المطلق الوسيط، لا المتوسط)',
+            [{ row_id: String(occ.movement_id), transaction_date: occ.transaction_date,
+               item: occ.item_norm, unit_price: occ.unit_price,
+               cluster_median: c.price.median, cluster_n: c.n, modified_z: z,
+               responsible_person: occ.responsible_person }]));
+        });
+      });
+      return { flags: flags, notes: notes };
+    }
+  
+    /* ── PEER_GAP ───────────────────────────────────────────────────────────
+     * The same item, the same period: this person's median unit price against
+     * everyone else's. The single strongest petty-cash signal, because it holds
+     * the item constant and varies only who bought it. */
+    function rulePeerGap(stats, opts) {
+      var o = opts || {};
+      var minSide = o.peer_min_n === undefined ? TIER2.PEER_MIN_N : o.peer_min_n;
+      var ratioCut = o.peer_ratio === undefined ? TIER2.PEER_RATIO : o.peer_ratio;
+      var flags = [], notes = [];
+  
+      Object.keys(stats).forEach(function (cid) {
+        var c = stats[cid];
+        var people = Object.keys(c.by_person);
+        if (people.length < 2) return;
+  
+        people.forEach(function (person) {
+          var mine = [], theirs = [];
+          c.occurrences.forEach(function (occ) {
+            var p = String(occ.responsible_person || '').trim() || '(غير محدد)';
+            (p === person ? mine : theirs).push(Number(occ.unit_price));
+          });
+          if (mine.length < minSide || theirs.length < minSide) return;
+          var myMed = median(mine), theirMed = median(theirs);
+          if (!theirMed) return;
+          var ratio = myMed / theirMed;
+          if (ratio < ratioCut) return;
+  
+          var rows = c.occurrences.filter(function (occ) {
+            return (String(occ.responsible_person || '').trim() || '(غير محدد)') === person;
+          });
+          var msg = 'يشتري ' + person + ' صنف «' + c.label + '» بوسيط سعر وحدة ' + fmt2_(myMed) +
+            ' مقابل ' + fmt2_(theirMed) + ' لباقي المسؤولين — أي أعلى بنسبة ' +
+            Math.round((ratio - 1) * 100) + '% (' + arCount(mine.length, 'op') + ' مقابل ' + theirs.length + ')';
+          rows.forEach(function (occ) {
+            flags.push(flag_('PEER_GAP', ratio >= ratioCut * 1.6 ? 'high' : 'medium', occ.movement_id, msg,
+              rows.map(function (r) {
+                return { row_id: String(r.movement_id), transaction_date: r.transaction_date,
+                         item: r.item_norm, unit_price: r.unit_price, responsible_person: person };
+              }).concat([{ row_id: null, peer_median: round_(theirMed, 4), peer_n: theirs.length }])));
+          });
+        });
+      });
+      return { flags: flags, notes: notes };
+    }
+  
+    /* ── PRICE_RATCHET ──────────────────────────────────────────────────────
+     * One person's unit price for an item climbing monotonically while everyone
+     * else's stays flat. Mann–Kendall rather than a regression slope: it is
+     * rank-based, so a single large purchase cannot manufacture a trend. */
+    function rulePriceRatchet(stats, opts) {
+      var o = opts || {};
+      var minN = o.ratchet_min_n === undefined ? TIER2.RATCHET_MIN_N : o.ratchet_min_n;
+      var tauCut = o.ratchet_tau === undefined ? TIER2.RATCHET_TAU : o.ratchet_tau;
+      var peerTauCut = o.ratchet_peer_tau === undefined ? TIER2.RATCHET_PEER_TAU : o.ratchet_peer_tau;
+      var flags = [], notes = [];
+  
+      Object.keys(stats).forEach(function (cid) {
+        var c = stats[cid];
+        var people = Object.keys(c.by_person);
+        people.forEach(function (person) {
+          var mine = [], theirs = [];
+          c.occurrences.slice().sort(function (a, b) {
+            return a.transaction_date < b.transaction_date ? -1 : a.transaction_date > b.transaction_date ? 1 : 0;
+          }).forEach(function (occ) {
+            var p = String(occ.responsible_person || '').trim() || '(غير محدد)';
+            (p === person ? mine : theirs).push(occ);
+          });
+          if (mine.length < minN) return;
+  
+          var myTau = mannKendallTau(mine.map(function (x) { return Number(x.unit_price); }));
+          if (myTau === null || myTau < tauCut) return;
+          var theirTau = theirs.length >= 3
+            ? mannKendallTau(theirs.map(function (x) { return Number(x.unit_price); }))
+            : null;
+          if (theirTau !== null && theirTau >= peerTauCut) return;   /* everyone is rising — a market move */
+  
+          var first = Number(mine[0].unit_price), last = Number(mine[mine.length - 1].unit_price);
+          if (!(last > first)) return;
+  
+          var msg = 'سعر وحدة «' + c.label + '» لدى ' + person + ' في ارتفاع مطّرد: من ' +
+            fmt2_(first) + ' في ' + mine[0].transaction_date + ' إلى ' + fmt2_(last) + ' في ' +
+            mine[mine.length - 1].transaction_date + ' عبر ' + arCount(mine.length, 'op') + ' (معامل اتجاه ' +
+            myTau + ')' +
+            (theirTau === null
+              ? ' — ولا توجد بيانات كافية لباقي المسؤولين للمقارنة'
+              : '، بينما اتجاه باقي المسؤولين ' + theirTau + ' أي شبه ثابت');
+          mine.forEach(function (occ) {
+            flags.push(flag_('PRICE_RATCHET', 'medium', occ.movement_id, msg,
+              mine.map(function (r) {
+                return { row_id: String(r.movement_id), transaction_date: r.transaction_date,
+                         item: r.item_norm, unit_price: r.unit_price, responsible_person: person };
+              })));
+          });
+        });
+      });
+      return { flags: flags, notes: notes };
+    }
+  
+    /* ── NEW_ITEM_HIGH_VALUE ────────────────────────────────────────────────
+     * An item bought exactly once, at a price high for its account. Cheap to
+     * check and it is where a fabricated purchase tends to land: something that
+     * has no history to be compared against. */
+    function ruleNewItemHighValue(stats, occurrences, opts) {
+      var o = opts || {};
+      var minAcctN = o.new_item_min_account_n === undefined ? TIER2.NEW_ITEM_MIN_ACCOUNT_N : o.new_item_min_account_n;
+      var pct = o.new_item_percentile === undefined ? TIER2.NEW_ITEM_PERCENTILE : o.new_item_percentile;
+      var flags = [], notes = [];
+  
+      var byAccount = {};
+      (occurrences || []).forEach(function (occ) {
+        var a = String(occ.chart_of_accounts || '').trim();
+        if (!a) return;
+        (byAccount[a] = byAccount[a] || []).push(Number(occ.price));
+      });
+  
+      Object.keys(stats).forEach(function (cid) {
+        var c = stats[cid];
+        if (c.n !== 1) return;
+        var occ = c.occurrences[0];
+        var acct = String(occ.chart_of_accounts || '').trim();
+        var pop = byAccount[acct] || [];
+        if (pop.length < minAcctN) {
+          notes.push({ rule_id: 'NEW_ITEM_HIGH_VALUE', status: 'insufficient_data', cluster_id: cid,
+            n: pop.length, required: minAcctN,
+            reason_ar: 'بيانات غير كافية لحساب المعتاد لحساب ' + acct + ' (المتاح ' + arCount(pop.length, 'item') +
+              '، والمطلوب ' + minAcctN + ')' });
+          return;
+        }
+        var cut = percentile(pop, pct);
+        if (!(Number(occ.price) > cut)) return;
+        flags.push(flag_('NEW_ITEM_HIGH_VALUE', 'medium', occ.movement_id,
+          'صنف «' + c.label + '» لم يُشترَ من قبل في هذه الفترة، وسعره ' + fmt2_(occ.price) +
+          ' أعلى من ' + Math.round(pct * 100) + '% من بنود حساب ' + acct +
+          ' (الحد ' + fmt2_(cut) + ' من ' + arCount(pop.length, 'item') + ')',
+          [{ row_id: String(occ.movement_id), transaction_date: occ.transaction_date,
+             item: occ.item_norm, price: occ.price, account_cut: round_(cut, 2),
+             account_n: pop.length, responsible_person: occ.responsible_person }]));
+      });
+      return { flags: flags, notes: notes };
+    }
+  
+    /* ── QUANTITY_ANOMALY ───────────────────────────────────────────────────
+     * The unit price is entirely normal and the QUANTITY is not. Worth its own
+     * rule because a price check alone cannot see it: buying ten times the usual
+     * amount at the usual price passes every price rule in this tier. */
+    function ruleQuantityAnomaly(stats, opts) {
+      var o = opts || {};
+      var minN = o.tier2_min_n === undefined ? TIER2.MIN_N : o.tier2_min_n;
+      var zCut = o.tier2_z === undefined ? TIER2.Z_THRESHOLD : o.tier2_z;
+      var flags = [];
+  
+      Object.keys(stats).forEach(function (cid) {
+        var c = stats[cid];
+        if (c.n < minN || !c.qty || !c.qty.scale) return;
+        c.occurrences.forEach(function (occ) {
+          var q = Number(occ.qty);
+          if (!isFinite(q)) return;
+          var qz = modifiedZ(q, c.qty);
+          if (qz === null || qz <= zCut) return;               /* only unusually LARGE quantities */
+          var pz = c.price && c.price.scale ? modifiedZ(Number(occ.unit_price), c.price) : null;
+          if (pz !== null && Math.abs(pz) > zCut) return;       /* the price rule already has this row */
+          flags.push(flag_('QUANTITY_ANOMALY', 'medium', occ.movement_id,
+            'كمية «' + c.label + '» في هذه الحركة ' + fmt2_(q) + ' مقابل وسيط ' +
+            fmt2_(c.qty.median) + ' من ' + arCount(c.n, 'purchase') + '، مع أن سعر الوحدة طبيعي — ' +
+            'درجة انحراف الكمية ' + qz,
+            [{ row_id: String(occ.movement_id), transaction_date: occ.transaction_date,
+               item: occ.item_norm, qty: q, qty_median: c.qty.median, modified_z: qz,
+               unit_price: occ.unit_price, responsible_person: occ.responsible_person }]));
+        });
+      });
+      return { flags: flags, notes: [] };
+    }
+  
+    /**
+     * Run Tier 2 over parsed item occurrences.
+     *
+     * occurrences: as produced by getBoxItemHistory_.
+     * opts.byNorm: item_norm → cluster_id, from clusterItems. When absent, each
+     *   distinct text is its own cluster, which is strictly worse and is the
+     *   caller's choice to make knowingly.
+     *
+     * Returns { flags, by_row, notes, stats }.
+     */
+    function runTier2(occurrences, opts) {
+      var o = opts || {};
+      var byNorm = o.byNorm || null;
+      if (!byNorm) {
+        var clustered = clusterItems(occurrences || [], { aliases: o.aliases || null });
+        byNorm = clustered.byNorm;
+      }
+      var stats = clusterPriceStats(occurrences, byNorm);
+  
+      var flags = [], notes = [];
+      [rulePriceOutlier(stats, o),
+       rulePeerGap(stats, o),
+       rulePriceRatchet(stats, o),
+       ruleNewItemHighValue(stats, occurrences, o),
+       ruleQuantityAnomaly(stats, o)].forEach(function (r) {
+        flags = flags.concat(r.flags);
+        notes = notes.concat(r.notes || []);
+      });
+  
+      var byRow = {};
+      flags.forEach(function (f) {
+        if (f.row_id === null) return;
+        (byRow[f.row_id] = byRow[f.row_id] || []).push(f);
+      });
+      return { flags: flags, by_row: byRow, notes: notes, stats: stats };
+    }
+  
+  
+    // ═══════════════════════════════════════════════════════════════════════
+    // §7 Tier 3 — distributional and behavioural, per entity
+    // ═══════════════════════════════════════════════════════════════════════
+    //
+    // These rules describe a PERSON or an ACCOUNT, not a row, so their findings
+    // carry an `entity` and their `row_id` is null. That distinction matters on
+    // screen: "this movement is wrong" and "this person's spending has changed
+    // shape" are different claims and must not render as the same badge.
+    //
+    // Every one of them is gated on a minimum n, and Benford's is gated hard at
+    // 300. That gate is a CORRECTNESS REQUIREMENT, not a statistical nicety. A
+    // Benford verdict on forty rows is noise, and this page attaches it to a
+    // named employee. Below the gate the page must show "بيانات غير كافية" and
+    // nothing else — there is no such thing as a weak accusation.
+  
+    var TIER3 = {
+      BENFORD_MIN_N: 300,
+      BENFORD_MAD_MARGINAL: 0.012,   /* Nigrini's conformity bands, first digit */
+      BENFORD_MAD_NONCONFORM: 0.015,
+      ROUND_MIN_N: 30,
+      ROUND_Z: 3,
+      ROUND_DIVISORS: [100, 50],
+      VELOCITY_MIN_DAYS: 20,
+      VELOCITY_MIN_COUNT: 5,
+      VELOCITY_P: 0.001,
+      DRIFT_MIN_N: 30,               /* per side */
+      DRIFT_PSI: 0.25,               /* the conventional "significant shift" cut */
+      SEASON_MIN_MONTHS: 6,
+      SEASON_Z: 3.5
+    };
+  
+    function firstDigit_(v) {
+      var s = String(Math.abs(Number(v))).replace(/[^0-9]/g, '').replace(/^0+/, '');
+      return s.length ? Number(s.charAt(0)) : null;
+    }
+  
+    function secondDigit_(v) {
+      var s = String(Math.abs(Number(v))).replace(/[^0-9]/g, '').replace(/^0+/, '');
+      return s.length >= 2 ? Number(s.charAt(1)) : null;
+    }
+  
+    /**
+     * Benford's law on the leading digit.
+     *
+     * Returns { status, n, observed, expected, chi2, mad, verdict_ar } — or
+     * status 'insufficient_data' below the gate, with NO verdict of any kind.
+     * Returning a weak verdict here and letting the caller decide whether to
+     * show it would be the same mistake one layer up: the gate has to be where
+     * the number is computed.
+     */
+    function benfordFirstDigit(values, opts) {
+      var o = opts || {};
+      var minN = o.benford_min_n === undefined ? TIER3.BENFORD_MIN_N : o.benford_min_n;
+      var digits = (values || []).map(firstDigit_).filter(function (d) { return d >= 1 && d <= 9; });
+      var n = digits.length;
+      if (n < minN) {
+        return {
+          status: 'insufficient_data', n: n, required: minN,
+          reason_ar: 'بيانات غير كافية لتحليل بنفورد (المتاح ' + arCount(n, 'amount') + '، والمطلوب ' + minN +
+            ' على الأقل) — لا يصدر أي حكم دون ذلك'
+        };
+      }
+      var observed = [0, 0, 0, 0, 0, 0, 0, 0, 0];
+      digits.forEach(function (d) { observed[d - 1]++; });
+      var chi2 = 0, madSum = 0, expected = [];
+      for (var d = 1; d <= 9; d++) {
+        var p = Math.log(1 + 1 / d) / Math.LN10;
+        var e = p * n;
+        expected.push(round_(p, 6));
+        chi2 += ((observed[d - 1] - e) * (observed[d - 1] - e)) / e;
+        madSum += Math.abs(observed[d - 1] / n - p);
+      }
+      var madVal = madSum / 9;
+      var verdict = madVal < 0.006 ? 'مطابقة وثيقة'
+        : madVal < TIER3.BENFORD_MAD_MARGINAL ? 'مطابقة مقبولة'
+        : madVal < TIER3.BENFORD_MAD_NONCONFORM ? 'مطابقة حدية'
+        : 'عدم مطابقة';
+      return {
+        status: 'ok', n: n, observed: observed, expected: expected,
+        chi2: round_(chi2, 3), df: 8, mad: round_(madVal, 5),
+        conforms: madVal < TIER3.BENFORD_MAD_NONCONFORM,
+        verdict_ar: verdict
+      };
+    }
+  
+    /** Benford on the SECOND digit (0–9). Same gate, same refusal. */
+    function benfordSecondDigit(values, opts) {
+      var o = opts || {};
+      var minN = o.benford_min_n === undefined ? TIER3.BENFORD_MIN_N : o.benford_min_n;
+      var digits = (values || []).map(secondDigit_).filter(function (d) { return d !== null && d >= 0 && d <= 9; });
+      var n = digits.length;
+      if (n < minN) {
+        return { status: 'insufficient_data', n: n, required: minN,
+          reason_ar: 'بيانات غير كافية لتحليل بنفورد للرقم الثاني (المتاح ' + n + '، والمطلوب ' + minN + ')' };
+      }
+      var observed = [], expected = [], d, k;
+      for (d = 0; d <= 9; d++) observed.push(0);
+      digits.forEach(function (x) { observed[x]++; });
+      var chi2 = 0, madSum = 0;
+      for (d = 0; d <= 9; d++) {
+        var p = 0;
+        for (k = 1; k <= 9; k++) p += Math.log(1 + 1 / (10 * k + d)) / Math.LN10;
+        expected.push(round_(p, 6));
+        var e = p * n;
+        chi2 += ((observed[d] - e) * (observed[d] - e)) / e;
+        madSum += Math.abs(observed[d] / n - p);
+      }
+      var madVal = madSum / 10;
+      return { status: 'ok', n: n, observed: observed, expected: expected,
+        chi2: round_(chi2, 3), df: 9, mad: round_(madVal, 5),
+        conforms: madVal < TIER3.BENFORD_MAD_NONCONFORM };
+    }
+  
+    /**
+     * Benford per entity. Entities are built by the caller's grouping key so the
+     * same function serves "per person" and "per account".
+     */
+    function ruleBenford(rows, opts) {
+      var o = opts || {};
+      var keyFn = o.entity_key || function (r) { return String(r.responsible_person || '').trim(); };
+      var kind = o.entity_kind || 'المسؤول';
+      var groups = {};
+      (rows || []).forEach(function (r) {
+        var amt = amountOf_(r);
+        if (amt === null || amt <= 0) return;
+        var k = keyFn(r);
+        if (!k) return;
+        (groups[k] = groups[k] || []).push(r);
+      });
+  
+      var flags = [], notes = [];
+      Object.keys(groups).forEach(function (k) {
+        var rowsFor = groups[k];
+        var amounts = rowsFor.map(amountOf_);
+        var b = benfordFirstDigit(amounts, o);
+        if (b.status !== 'ok') {
+          notes.push({ rule_id: 'BENFORD', status: 'insufficient_data', entity: k, entity_kind: kind,
+            n: b.n, required: b.required, reason_ar: kind + ' ' + k + ': ' + b.reason_ar });
+          return;
+        }
+        if (b.conforms) return;
+        var f = flag_('BENFORD', 'medium', null,
+          'توزيع الرقم الأول لمبالغ ' + kind + ' ' + k + ' لا يطابق قانون بنفورد على ' + arCount(b.n, 'amount') +
+          ' (متوسط الانحراف المطلق ' + b.mad + '، كاي-تربيع ' + b.chi2 + ' بدرجات حرية 8) — ' +
+          b.verdict_ar + '. هذا مؤشر إحصائي على مستوى المجموعة، وليس اتهاماً لأي حركة بعينها؛ ' +
+          'يُستخدَم لترتيب أولوية المراجعة فقط',
+          rowsFor.slice(0, 20).map(function (r) {
+            return { row_id: String(r.id), transaction_date: r.transaction_date,
+                     transaction_amount: amountOf_(r) };
+          }));
+        f.entity = k;
+        f.entity_kind = kind;
+        f.detail = b;
+        flags.push(f);
+      });
+      return { flags: flags, notes: notes };
+    }
+  
+    /**
+     * ROUND_NUMBER_BIAS — a person producing far more round amounts than the
+     * population does. Estimated amounts cluster on round numbers; measured ones
+     * do not.
+     *
+     * The baseline is THIS POPULATION's own rate, not a textbook figure: in an
+     * organisation that mostly buys in round quantities, round totals are normal
+     * and a fixed expectation would flag everyone.
+     */
+    function ruleRoundNumberBias(rows, opts) {
+      var o = opts || {};
+      var minN = o.round_min_n === undefined ? TIER3.ROUND_MIN_N : o.round_min_n;
+      var zCut = o.round_z === undefined ? TIER3.ROUND_Z : o.round_z;
+      var divisors = o.round_divisors || TIER3.ROUND_DIVISORS;
+      var keyFn = o.entity_key || function (r) { return String(r.responsible_person || '').trim(); };
+      var kind = o.entity_kind || 'المسؤول';
+  
+      var all = (rows || []).filter(function (r) { return amountOf_(r) !== null && amountOf_(r) > 0; });
+      if (!all.length) return { flags: [], notes: [] };
+  
+      var flags = [], notes = [];
+      divisors.forEach(function (div) {
+        var isRound = function (r) { return Math.abs(amountOf_(r) % div) < 1e-9; };
+        var p0 = all.filter(isRound).length / all.length;
+        if (p0 <= 0 || p0 >= 1) return;
+  
+        var groups = {};
+        all.forEach(function (r) {
+          var k = keyFn(r);
+          if (!k) return;
+          (groups[k] = groups[k] || []).push(r);
+        });
+        Object.keys(groups).forEach(function (k) {
+          var g = groups[k];
+          if (g.length < minN) {
+            notes.push({ rule_id: 'ROUND_NUMBER_BIAS', status: 'insufficient_data', entity: k,
+              entity_kind: kind, n: g.length, required: minN,
+              reason_ar: kind + ' ' + k + ': بيانات غير كافية لاختبار الأرقام المستديرة (المتاح ' +
+                g.length + '، والمطلوب ' + minN + ')' });
+            return;
+          }
+          var hits = g.filter(isRound).length;
+          var pHat = hits / g.length;
+          var se = Math.sqrt(p0 * (1 - p0) / g.length);
+          if (!se) return;
+          var z = (pHat - p0) / se;
+          if (z < zCut) return;
+          var f = flag_('ROUND_NUMBER_BIAS', 'medium', null,
+            Math.round(pHat * 100) + '% من مبالغ ' + kind + ' ' + k + ' من مضاعفات ' + div +
+            ' (' + hits + ' من ' + g.length + ')، مقابل ' + Math.round(p0 * 100) +
+            '% في باقي البيانات — انحراف ' + round_(z, 2) + ' وحدة معيارية. ' +
+            'المبالغ المقدَّرة تتكدّس على الأرقام المستديرة، والمقيسة لا تفعل',
+            g.filter(isRound).slice(0, 20).map(function (r) {
+              return { row_id: String(r.id), transaction_date: r.transaction_date,
+                       transaction_amount: amountOf_(r) };
+            }));
+          f.entity = k;
+          f.entity_kind = kind;
+          f.detail = { divisor: div, rate: round_(pHat, 4), baseline: round_(p0, 4), z: round_(z, 3), n: g.length };
+          flags.push(f);
+        });
+      });
+      return { flags: flags, notes: notes };
+    }
+  
+    /** Poisson upper tail P(X >= k) for mean lambda. k is small here. */
+    function poissonTail(k, lambda) {
+      if (lambda <= 0) return k > 0 ? 0 : 1;
+      var cum = 0, term = Math.exp(-lambda);
+      for (var i = 0; i < k; i++) {
+        cum += term;
+        term = term * lambda / (i + 1);
+      }
+      var tail = 1 - cum;
+      return tail < 0 ? 0 : tail;
+    }
+  
+    /**
+     * VELOCITY_BURST — a person filing far more movements in one day than they
+     * normally do. Compared against THEIR OWN baseline, never against the busiest
+     * person in the office: a storekeeper who files twenty a day every day is
+     * doing their job, and a rule that cannot tell them apart from someone who
+     * suddenly files twenty after months of two is not measuring anything.
+     */
+    function ruleVelocityBurst(rows, opts) {
+      var o = opts || {};
+      var minDays = o.velocity_min_days === undefined ? TIER3.VELOCITY_MIN_DAYS : o.velocity_min_days;
+      var minCount = o.velocity_min_count === undefined ? TIER3.VELOCITY_MIN_COUNT : o.velocity_min_count;
+      var pCut = o.velocity_p === undefined ? TIER3.VELOCITY_P : o.velocity_p;
+      var keyFn = o.entity_key || function (r) { return String(r.responsible_person || '').trim(); };
+      var kind = o.entity_kind || 'المسؤول';
+  
+      var groups = {};
+      (rows || []).forEach(function (r) {
+        if (!r || !r.transaction_date) return;
+        var k = keyFn(r);
+        if (!k) return;
+        (groups[k] = groups[k] || []).push(r);
+      });
+  
+      var flags = [], notes = [];
+      Object.keys(groups).forEach(function (k) {
+        var byDay = {};
+        groups[k].forEach(function (r) { (byDay[r.transaction_date] = byDay[r.transaction_date] || []).push(r); });
+        var days = Object.keys(byDay);
+        if (days.length < minDays) {
+          notes.push({ rule_id: 'VELOCITY_BURST', status: 'insufficient_data', entity: k, entity_kind: kind,
+            n: days.length, required: minDays,
+            reason_ar: kind + ' ' + k + ': بيانات غير كافية لحساب المعدل اليومي المعتاد (المتاح ' +
+              arCount(days.length, 'workday') + '، والمطلوب ' + minDays + ')' });
+          return;
+        }
+        var counts = days.map(function (d) { return byDay[d].length; });
+        var lambda = median(counts);
+        if (!lambda || lambda <= 0) lambda = counts.reduce(function (a, b) { return a + b; }, 0) / counts.length;
+        if (!lambda || lambda <= 0) return;
+  
+        days.forEach(function (d) {
+          var kCount = byDay[d].length;
+          if (kCount < minCount) return;
+          var p = poissonTail(kCount, lambda);
+          if (p >= pCut) return;
+          var f = flag_('VELOCITY_BURST', 'medium', null,
+            'سجّل ' + kind + ' ' + k + ' عدد ' + arCount(kCount, 'movement') + ' في يوم ' + d +
+            '، والمعتاد له ' + round_(lambda, 2) + ' حركة في اليوم عبر ' + arCount(days.length, 'workday') +
+            ' — احتمال ذلك بالصدفة أقل من ' + (p < 0.0001 ? '0.01%' : round_(p * 100, 3) + '%'),
+            byDay[d].slice(0, 20).map(function (r) {
+              return { row_id: String(r.id), transaction_date: r.transaction_date,
+                       transaction_amount: amountOf_(r) };
+            }));
+          f.entity = k;
+          f.entity_kind = kind;
+          f.detail = { day: d, count: kCount, baseline: round_(lambda, 3), p: p, active_days: days.length };
+          flags.push(f);
+        });
+      });
+      return { flags: flags, notes: notes };
+    }
+  
+    /**
+     * ACCOUNT_MIX_DRIFT — the shape of a person's spending across accounts,
+     * compared with their OWN earlier history. Population Stability Index; > 0.25
+     * is the conventional "significant shift".
+     *
+     * This is what catches miscoding used to hide spend: the totals can look
+     * entirely normal while the mix moves.
+     */
+    function populationStabilityIndex(recent, baseline) {
+      var keys = {};
+      Object.keys(recent).forEach(function (k) { keys[k] = true; });
+      Object.keys(baseline).forEach(function (k) { keys[k] = true; });
+      var rTot = 0, bTot = 0;
+      Object.keys(recent).forEach(function (k) { rTot += recent[k]; });
+      Object.keys(baseline).forEach(function (k) { bTot += baseline[k]; });
+      if (!rTot || !bTot) return null;
+      var psi = 0, parts = [];
+      Object.keys(keys).forEach(function (k) {
+        /* A small floor keeps a category that is absent on one side from making
+           the index infinite; without it one new account code dominates. */
+        var a = Math.max((recent[k] || 0) / rTot, 0.0001);
+        var b = Math.max((baseline[k] || 0) / bTot, 0.0001);
+        var part = (a - b) * Math.log(a / b);
+        psi += part;
+        parts.push({ key: k, recent: round_(a, 4), baseline: round_(b, 4), contribution: round_(part, 4) });
+      });
+      parts.sort(function (x, y) { return y.contribution - x.contribution; });
+      return { psi: round_(psi, 4), parts: parts };
+    }
+  
+    function ruleAccountMixDrift(rows, opts) {
+      var o = opts || {};
+      var minN = o.drift_min_n === undefined ? TIER3.DRIFT_MIN_N : o.drift_min_n;
+      var psiCut = o.drift_psi === undefined ? TIER3.DRIFT_PSI : o.drift_psi;
+      var splitDate = o.drift_split_date || null;
+      var keyFn = o.entity_key || function (r) { return String(r.responsible_person || '').trim(); };
+      var kind = o.entity_kind || 'المسؤول';
+  
+      var groups = {};
+      (rows || []).forEach(function (r) {
+        if (!r || !r.transaction_date || !r.chart_of_accounts) return;
+        var k = keyFn(r);
+        if (!k) return;
+        (groups[k] = groups[k] || []).push(r);
+      });
+  
+      var flags = [], notes = [];
+      Object.keys(groups).forEach(function (k) {
+        var g = groups[k].slice().sort(function (a, b) {
+          return a.transaction_date < b.transaction_date ? -1 : a.transaction_date > b.transaction_date ? 1 : 0;
+        });
+        var recent = {}, baseline = {}, nR = 0, nB = 0;
+        if (splitDate) {
+          g.forEach(function (r) {
+            var t = r.transaction_date >= splitDate ? recent : baseline;
+            t[r.chart_of_accounts] = (t[r.chart_of_accounts] || 0) + 1;
+            if (t === recent) nR++; else nB++;
+          });
+        } else {
+          /* No split given: the most recent third against the rest. */
+          var cut = Math.floor(g.length * 2 / 3);
+          g.forEach(function (r, i) {
+            var t = i >= cut ? recent : baseline;
+            t[r.chart_of_accounts] = (t[r.chart_of_accounts] || 0) + 1;
+            if (t === recent) nR++; else nB++;
+          });
+        }
+        if (nR < minN || nB < minN) {
+          notes.push({ rule_id: 'ACCOUNT_MIX_DRIFT', status: 'insufficient_data', entity: k, entity_kind: kind,
+            n: Math.min(nR, nB), required: minN,
+            reason_ar: kind + ' ' + k + ': بيانات غير كافية لمقارنة توزيع الحسابات (' + nB +
+              ' سابقة و' + nR + ' حديثة، والمطلوب ' + minN + ' لكل جانب)' });
+          return;
+        }
+        var psi = populationStabilityIndex(recent, baseline);
+        if (!psi || psi.psi < psiCut) return;
+        var top = psi.parts.slice(0, 3).map(function (p) {
+          return 'حساب ' + p.key + ' من ' + Math.round(p.baseline * 100) + '% إلى ' + Math.round(p.recent * 100) + '%';
+        });
+        var f = flag_('ACCOUNT_MIX_DRIFT', 'medium', null,
+          'تغيّر توزيع مصروفات ' + kind + ' ' + k + ' بين الحسابات مقارنةً بسجله السابق ' +
+          '(مؤشر الاستقرار ' + psi.psi + '، والحد المعتاد ' + psiCut + ') — أبرز التحولات: ' +
+          top.join('، ') + '. الإجماليات قد تبدو طبيعية بينما يتغيّر التوزيع، وهو ما يُخفي المصروف بإعادة تصنيفه',
+          g.slice(-20).map(function (r) {
+            return { row_id: String(r.id), transaction_date: r.transaction_date,
+                     chart_of_accounts: r.chart_of_accounts, transaction_amount: amountOf_(r) };
+          }));
+        f.entity = k;
+        f.entity_kind = kind;
+        f.detail = { psi: psi.psi, parts: psi.parts.slice(0, 6), n_recent: nR, n_baseline: nB };
+        flags.push(f);
+      });
+      return { flags: flags, notes: notes };
+    }
+  
+    /**
+     * SEASONALITY — this month's spend for an account against its own trailing
+     * monthly distribution, on the median/MAD scale for the same reason Tier 2
+     * uses it. Needs at least SEASON_MIN_MONTHS complete prior months.
+     *
+     * The current (partial) month is EXCLUDED from its own baseline, and it is
+     * compared only when the caller supplies a completed-month figure — a partial
+     * month measured against complete ones is the same mistake the four windows
+     * were built to avoid.
+     */
+    function ruleSeasonality(rows, opts) {
+      var o = opts || {};
+      var minMonths = o.season_min_months === undefined ? TIER3.SEASON_MIN_MONTHS : o.season_min_months;
+      var zCut = o.season_z === undefined ? TIER3.SEASON_Z : o.season_z;
+      var currentMonth = o.current_month || null;    /* 'YYYY-MM'; required */
+      var flags = [], notes = [];
+      if (!currentMonth) {
+        notes.push({ rule_id: 'SEASONALITY', status: 'not_run',
+          reason_ar: 'لم يُحدَّد الشهر الحالي، فلا تُشغَّل مقارنة الموسمية' });
+        return { flags: flags, notes: notes };
+      }
+  
+      var byAccount = {};
+      (rows || []).forEach(function (r) {
+        var amt = amountOf_(r);
+        if (amt === null || !r.transaction_date || !r.chart_of_accounts) return;
+        if (String(r.transaction_type) === 'debit') return;      /* spend only */
+        var mon = String(r.transaction_date).slice(0, 7);
+        var a = String(r.chart_of_accounts);
+        var m = byAccount[a] = byAccount[a] || {};
+        m[mon] = (m[mon] || 0) + amt;
+      });
+  
+      Object.keys(byAccount).forEach(function (acct) {
+        var months = byAccount[acct];
+        var prior = Object.keys(months).filter(function (m) { return m < currentMonth; }).sort();
+        if (prior.length < minMonths) {
+          notes.push({ rule_id: 'SEASONALITY', status: 'insufficient_data', entity: acct,
+            entity_kind: 'الحساب', n: prior.length, required: minMonths,
+            reason_ar: 'حساب ' + acct + ': بيانات غير كافية لمقارنة الموسمية (المتاح ' +
+              arCount(prior.length, 'month') + ' مكتملة، والمطلوب ' + minMonths + ')' });
+          return;
+        }
+        if (months[currentMonth] === undefined) return;
+        var hist = prior.map(function (m) { return months[m]; });
+        var st = robustStats(hist);
+        var cur = months[currentMonth];
+        var z = modifiedZ(cur, st);
+  
+        /* A history with NO dispersion at all — the same figure every month —
+           makes every scale zero and the z-score undefined. That is not "no
+           signal": it is the strongest possible baseline. An account that spent
+           exactly the same for a year and then nine times that is precisely what
+           this rule is for, and the first version of it returned silence there.
+           So the departure is expressed as a direct ratio instead, and only a
+           large one counts — with no variance there is no noise floor to
+           calibrate against. `basis` reports which comparison was used. */
+        var reason = null, detail = null;
+        if (z !== null && Math.abs(z) > zCut) {
+          reason = 'مصروف حساب ' + acct + ' في شهر ' + currentMonth + ' بلغ ' + fmt2_(cur) +
+            ' مقابل وسيط ' + fmt2_(st.median) + ' عبر ' + arCount(prior.length, 'month') + ' سابقة (المدى ' +
+            fmt2_(st.min) + '–' + fmt2_(st.max) + ') — درجة انحراف ' + z +
+            (z > 0 ? ' بالزيادة' : ' بالنقصان');
+          detail = { month: currentMonth, value: round_(cur, 2), median: st.median,
+                     n_months: prior.length, modified_z: z, basis: 'modified_z' };
+        } else if (z === null && st.scale === 0 && st.median > 0 &&
+                   Math.abs(cur - st.median) / st.median >= (o.season_flat_ratio || 0.5)) {
+          var mult = round_(cur / st.median, 2);
+          reason = 'مصروف حساب ' + acct + ' في شهر ' + currentMonth + ' بلغ ' + fmt2_(cur) +
+            ' بينما كان ثابتاً عند ' + fmt2_(st.median) + ' في كل شهر من الـ' + prior.length +
+            ' شهراً السابقة دون أي تغيّر — أي ' + mult + ' ضعف' +
+            (cur > st.median ? ' بالزيادة' : ' بالنقصان') +
+            '. لا يوجد تشتت تاريخي تُحسب عليه درجة انحراف، فالمقارنة هنا نسبة مباشرة';
+          detail = { month: currentMonth, value: round_(cur, 2), median: st.median,
+                     n_months: prior.length, ratio: mult, basis: 'flat_history_ratio' };
+        }
+        if (!reason) return;
+  
+        var f = flag_('SEASONALITY', 'low', null, reason, []);
+        f.entity = acct;
+        f.entity_kind = 'الحساب';
+        f.detail = detail;
+        flags.push(f);
+      });
+      return { flags: flags, notes: notes };
+    }
+  
+    /**
+     * Run Tier 3. Findings are ENTITY-level: `row_id` is null, `entity` and
+     * `entity_kind` say who or what the finding is about, and `evidence` carries
+     * a sample of the contributing rows so a reader can start somewhere.
+     *
+     * opts.current_month ('YYYY-MM') enables SEASONALITY; without it that rule
+     * reports not_run rather than guessing which month is current.
+     */
+    function runTier3(rows, opts) {
+      var o = opts || {};
+      var flags = [], notes = [];
+      [ruleBenford(rows, o),
+       ruleRoundNumberBias(rows, o),
+       ruleVelocityBurst(rows, o),
+       ruleAccountMixDrift(rows, o),
+       ruleSeasonality(rows, o)].forEach(function (r) {
+        flags = flags.concat(r.flags);
+        notes = notes.concat(r.notes || []);
+      });
+  
+      var byEntity = {};
+      flags.forEach(function (f) {
+        var k = (f.entity_kind || '') + ':' + (f.entity || '');
+        (byEntity[k] = byEntity[k] || []).push(f);
+      });
+      return { flags: flags, by_entity: byEntity, notes: notes };
+    }
+  
+  
+    // ═══════════════════════════════════════════════════════════════════════
+    // §7 Scoring — risk ranking
+    // ═══════════════════════════════════════════════════════════════════════
+    //
+    // A row's risk is a SATURATING combination of the severities that fired, not
+    // a sum. Two reasons why:
+    //
+    //   - A sum is unbounded, so a row with nine low-severity notes outranks a
+    //     row with one confirmed integrity failure. That is backwards, and it is
+    //     what an unbounded score does every time.
+    //   - Saturation matches how the finding is actually used. The second
+    //     duplicate-detection flag on a row does not double the case for looking
+    //     at it; the first one already earned the look.
+    //
+    // The combination is 1 − Π(1 − wᵢ), the probability that at least one of a
+    // set of independent signals fires. The independence assumption is not
+    // literally true — SUM_MISMATCH and NEAR_DUP correlate — so the number is a
+    // RANKING, not a probability, and nothing here presents it as one.
+    //
+    // THE SCORE IS NEVER SHOWN ALONE. riskScore returns the flags that produced
+    // it, and the page renders them. A bare number with nothing behind it does
+    // not survive an accountant asking "why", which is the only conversation
+    // this output exists to have.
+  
+    var RISK = {
+      WEIGHT: { high: 0.70, medium: 0.35, low: 0.12 },
+      /* Bucket cuts on the 0–100 scale. 'high' is reachable by ONE high-severity
+         flag (70) so a single confirmed integrity failure ranks as high on its
+         own — it should not need corroboration from two weak notes. */
+      BUCKET_HIGH: 70,
+      BUCKET_MEDIUM: 35
+    };
+  
+    var RISK_LEVEL_AR = { high: 'مرتفع', medium: 'متوسط', low: 'منخفض', none: 'لا يوجد' };
+  
+    /**
+     * Combine a row's flags into a ranking score.
+     * Returns { score 0–100, level, level_ar, counts, flags } — always with the
+     * flags, so the caller cannot render the number without its reasons.
+     */
+    function riskScore(flags) {
+      var list = (flags || []).filter(function (f) { return f && f.severity; });
+      if (!list.length) {
+        return { score: 0, level: 'none', level_ar: RISK_LEVEL_AR.none,
+                 counts: { high: 0, medium: 0, low: 0 }, flags: [] };
+      }
+      var counts = { high: 0, medium: 0, low: 0 };
+      var product = 1;
+      list.forEach(function (f) {
+        var w = RISK.WEIGHT[f.severity];
+        if (w === undefined) return;
+        counts[f.severity]++;
+        product *= (1 - w);
+      });
+      var score = Math.round((1 - product) * 100);
+      var level = score >= RISK.BUCKET_HIGH ? 'high'
+        : score >= RISK.BUCKET_MEDIUM ? 'medium'
+        : score > 0 ? 'low' : 'none';
+  
+      /* Most severe first, so the reason a reader sees first is the reason the
+         row is ranked where it is. */
+      var order = { high: 0, medium: 1, low: 2 };
+      var sorted = list.slice().sort(function (a, b) {
+        return (order[a.severity] - order[b.severity]) ||
+               (a.rule_id < b.rule_id ? -1 : a.rule_id > b.rule_id ? 1 : 0);
+      });
+  
+      return {
+        score: score,
+        level: level,
+        level_ar: RISK_LEVEL_AR[level],
+        counts: counts,
+        flags: sorted
+      };
+    }
+  
+    /**
+     * Rank rows by risk. Rows with no flags are returned too, at score 0 — the
+     * alerts tab filters them out, but the caller needs every row scored so the
+     * movements tab can badge them without a second pass.
+     */
+    function rankRows(rows, byRow) {
+      var out = (rows || []).map(function (r) {
+        var risk = riskScore((byRow || {})[String(r.id)] || []);
+        return { row: r, risk: risk };
+      });
+      out.sort(function (a, b) {
+        if (b.risk.score !== a.risk.score) return b.risk.score - a.risk.score;
+        /* Stable, and newest-first within a score, which is the order a reviewer
+           works in. */
+        var da = String(a.row.transaction_date || ''), db = String(b.row.transaction_date || '');
+        if (da !== db) return da < db ? 1 : -1;
+        return String(b.row.id).localeCompare(String(a.row.id));
+      });
+      return out;
+    }
+  
+    // ═══════════════════════════════════════════════════════════════════════
+    // Public surface
+    // ═══════════════════════════════════════════════════════════════════════
+  
+    return {
+      normAr: normAr,
+      takePrice: takePrice,
+      takeQuantity: takeQuantity,
+      takeUnit: takeUnit,
+      takeTrailingFraction: takeTrailingFraction,
+      itemKey: itemKey,
+      scoreParse: scoreParse,
+      parseDetails: parseDetails,
+  
+      /* §5 — the matcher */
+      stemAr: stemAr,
+      stemTokens: stemTokens,
+      stemKey: stemKey,
+      tokenSetDice: tokenSetDice,
+      levenshtein: levenshtein,
+      normLevenshtein: normLevenshtein,
+      trigramBag: trigramBag,
+      idfTrigramCosine: idfTrigramCosine,
+      unitCompatible: unitCompatible,
+      buildMatchIndex: buildMatchIndex,
+      matchScore: matchScore,
+      matchCandidates: matchCandidates,
+      clusterItems: clusterItems,
+      MATCH: MATCH,
+  
+      /* §8.5 — the edit path */
+      EDITABLE_COLUMNS: EDITABLE_COLUMNS,
+      LOCKED_COLUMNS: LOCKED_COLUMNS,
+      isEditableColumn: isEditableColumn,
+      validateColumn: validateColumn,
+      validateChanges: validateChanges,
+      inItemRange: inItemRange,
+      crossesItemBoundary: crossesItemBoundary,
+      diffChanges: diffChanges,
+  
+      /* date/time arithmetic */
+      dayNumber: dayNumber,
+      daysBetween: daysBetween,
+      dayOfWeek: dayOfWeek,
+      parseDateTime: parseDateTime,
+      percentile: percentile,
+      median: median,
+  
+      arCount: arCount,
+  
+      /* §7 Tier 1 — deterministic integrity */
+      TIER1: TIER1,
+      SEVERITY_AR: SEVERITY_AR,
+      ruleSumMismatch: ruleSumMismatch,
+      ruleDuplicates: ruleDuplicates,
+      ruleBackdated: ruleBackdated,
+      ruleOddHour: ruleOddHour,
+      ruleEditedAfterReview: ruleEditedAfterReview,
+      ruleOutOfSequence: ruleOutOfSequence,
+      detectStructuringThresholds: detectStructuringThresholds,
+      ruleStructuring: ruleStructuring,
+      runTier1: runTier1,
+  
+      /* §7 Tier 2 — price anomalies, median/MAD */
+      TIER2: TIER2,
+      mad: mad,
+      robustStats: robustStats,
+      modifiedZ: modifiedZ,
+      mannKendallTau: mannKendallTau,
+      clusterPriceStats: clusterPriceStats,
+      rulePriceOutlier: rulePriceOutlier,
+      rulePeerGap: rulePeerGap,
+      rulePriceRatchet: rulePriceRatchet,
+      ruleNewItemHighValue: ruleNewItemHighValue,
+      ruleQuantityAnomaly: ruleQuantityAnomaly,
+      runTier2: runTier2,
+  
+      /* §7 Tier 3 — distributional / behavioural, per entity */
+      TIER3: TIER3,
+      benfordFirstDigit: benfordFirstDigit,
+      benfordSecondDigit: benfordSecondDigit,
+      poissonTail: poissonTail,
+      populationStabilityIndex: populationStabilityIndex,
+      ruleBenford: ruleBenford,
+      ruleRoundNumberBias: ruleRoundNumberBias,
+      ruleVelocityBurst: ruleVelocityBurst,
+      ruleAccountMixDrift: ruleAccountMixDrift,
+      ruleSeasonality: ruleSeasonality,
+      runTier3: runTier3,
+  
+      /* §7 — risk ranking */
+      RISK: RISK,
+      RISK_LEVEL_AR: RISK_LEVEL_AR,
+      riskScore: riskScore,
+      rankRows: rankRows,
+  
+      /* §6 — period windows */
+      daysInMonth: daysInMonth,
+      parseIsoDate: parseIsoDate,
+      monthsBefore: monthsBefore,
+      accountWindows: accountWindows,
+      /* Exposed for the verify harness and for the alias/override UI, which needs
+         to show a reviewer which tokens the engine recognises as units. */
+      _QUANTITY_WORDS: QUANTITY_WORDS,
+      _UNIT_WORDS: UNIT_WORDS,
+      _round: round_
+    };
+  })();
+  
+  
+  var DB_CLIENTS_AR_COLUMNS = [
+    'client_balance_sheet_id', 'client_id', 'name_ar', 'balance_amount',
+    'notes', 'payment_date', 'created_at', 'is_revised'
+  ];
+  
+  function dbClientsArValidateDate_(v) {
+    var s = String(v || '').trim();
+    if (!s) return '';
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) throw new Error('Invalid date format (expected YYYY-MM-DD): ' + s);
+    return s;
+  }
+  
+  function dbClientsArWhere_(data) {
+    // Returns { sql, params } — shared by COUNT and SELECT so both agree.
+    var conditions = [];
+    var params = [];
+    var from = dbClientsArValidateDate_(data.payment_from);
+    var to = dbClientsArValidateDate_(data.payment_to);
+    if (from) { conditions.push('`payment_date` >= ?'); params.push(from); }
+    if (to) { conditions.push('`payment_date` <= ?'); params.push(to); }
+    var rev = String(data.is_revised === undefined || data.is_revised === null ? '' : data.is_revised).trim();
+    if (rev === '0' || rev === '1') { conditions.push('`is_revised` = ?'); params.push(Number(rev)); }
+    else if (rev !== '') { throw new Error('Invalid is_revised filter (expected 0, 1, or empty)'); }
+    var sql = conditions.length > 0 ? ' WHERE ' + conditions.join(' AND ') : '';
+    return { sql: sql, params: params };
+  }
+  
+  /**
+   * Paginated list from the clients_AR view.
+   * data: { payment_from, payment_to, is_revised ('0'/'1'/''), limit, offset }
+   * Returns { status:'ok', columns, rows, total, limit, offset }.
+   * NULL payment_date rows never match a set date bound (standard SQL).
+   */
+  function dbClientsArList_(data, user) {
+    data = data || {};
+    var limit = Math.min(Math.max(Number(data.limit) || 50, 1), 200);
+    var offset = Math.max(Number(data.offset) || 0, 0);
+    var where = dbClientsArWhere_(data);
+    var cols = DB_CLIENTS_AR_COLUMNS.map(dbSanitizeIdentifier_).join(', ');
+    var isVendor = String(data.source || data.view || '').trim() === 'vendors_AP';
+    var conn, countStmt, countRs, stmt, rs;
+    try {
+      conn = dbGetConnection_();
+      countStmt = conn.prepareStatement(isVendor
+        ? 'SELECT COUNT(*) AS cnt FROM `vendors_AP`' + where.sql
+        : 'SELECT COUNT(*) AS cnt FROM `clients_AR`' + where.sql);
+      dbBindParams_(countStmt, where.params);
+      countRs = countStmt.executeQuery();
+      var total = countRs.next() ? countRs.getInt('cnt') : 0;
+      stmt = conn.prepareStatement(isVendor
+        ? 'SELECT ' + cols + ' FROM `vendors_AP`' + where.sql +
+          ' ORDER BY `payment_date` DESC, `client_balance_sheet_id` DESC' +
+          ' LIMIT ' + limit + ' OFFSET ' + offset
+        : 'SELECT ' + cols + ' FROM `clients_AR`' + where.sql +
+          ' ORDER BY `payment_date` DESC, `client_balance_sheet_id` DESC' +
+          ' LIMIT ' + limit + ' OFFSET ' + offset);
+      dbBindParams_(stmt, where.params);
+      rs = stmt.executeQuery();
+      var rows = [];
+      while (rs.next()) {
+        rows.push({
+          client_balance_sheet_id: rs.getObject(1) !== null ? String(rs.getObject(1)) : null,
+          client_id: rs.getObject(2) !== null ? String(rs.getObject(2)) : null,
+          name_ar: rs.getObject(3) !== null ? String(rs.getObject(3)) : null,
+          balance_amount: rs.getObject(4) !== null ? String(rs.getObject(4)) : null,
+          notes: rs.getObject(5) !== null ? String(rs.getObject(5)) : null,
+          payment_date: rs.getObject(6) !== null ? String(rs.getObject(6)).slice(0, 10) : null,
+          created_at: rs.getObject(7) !== null ? String(rs.getObject(7)) : null,
+          is_revised: rs.getObject(8) !== null ? String(rs.getObject(8)) : '0'
+        });
+      }
+      return { status: 'ok', columns: DB_CLIENTS_AR_COLUMNS.slice(), rows: rows, total: total, limit: limit, offset: offset, source: isVendor ? 'vendors_AP' : 'clients_AR' };
+    } catch (err) {
+      Logger.log('dbClientsArList_ error: ' + err.message);
+      throw err;
+    } finally {
+      if (rs) rs.close();
+      if (stmt) stmt.close();
+      if (countRs) countRs.close();
+      if (countStmt) countStmt.close();
+      if (conn) conn.close();
+    }
+  }
+  
+  /**
+   * Flip one row 0 -> 1. data: { client_balance_sheet_id, source }.
+   * NOTE: if clients_AR / vendors_AP is a non-updatable view (joins/aggregates) MySQL
+   * raises 1288/1353 — then retarget this UPDATE to the base table holding
+   * is_revised (find via SHOW CREATE VIEW clients_AR); SELECT stays on view.
+   */
+  function dbClientsArRevise_(data, user) {
+    data = data || {};
+    var id = String(data.client_balance_sheet_id === undefined || data.client_balance_sheet_id === null ? '' : data.client_balance_sheet_id).trim();
+    if (!id) throw new Error('client_balance_sheet_id is required');
+    var isVendor = String(data.source || data.view || '').trim() === 'vendors_AP';
+    var conn, stmt;
+    try {
+      conn = dbGetConnection_();
+      stmt = conn.prepareStatement(isVendor
+        ? 'UPDATE `vendors_AP` SET `is_revised` = 1 WHERE `client_balance_sheet_id` = ? AND (`is_revised` = 0 OR `is_revised` IS NULL)'
+        : 'UPDATE `clients_AR` SET `is_revised` = 1 WHERE `client_balance_sheet_id` = ? AND (`is_revised` = 0 OR `is_revised` IS NULL)');
+      stmt.setObject(1, id);
+      var affected = stmt.executeUpdate();
+      if (affected === 0) throw new Error('البند غير موجود أو تمت مراجعته مسبقاً');
+      return { status: 'ok', affected: affected, client_balance_sheet_id: id, is_revised: 1, source: isVendor ? 'vendors_AP' : 'clients_AR' };
+    } catch (err) {
+      Logger.log('dbClientsArRevise_ error: ' + err.message);
+      throw err;
+    } finally {
+      if (stmt) stmt.close();
+      if (conn) conn.close();
+    }
+  }
+  
+  // ─── client_balance_sheets (Top Chemical: tc_client_balance_sheets) ──
+  //
+  // Schema (16 columns): id (PK), client_id, admin_id, debit_currency_id,
+  // credit_currency_id, invoice_id, debit_amount, credit_amount, balance_amount,
+  // notes, payment_type, payment_date, created_at, updated_at, deleted_at, is_revised.
+  // Soft-deleted rows (deleted_at IS NOT NULL) are excluded from reads.
+  
+  /**
+   * Paginated or full list from the client_balance_sheets table.
+   * Default: last 20 rows (ORDER BY id DESC). Pass loadAll:true for up to 1000.
+   * Soft-deleted rows are excluded (WHERE deleted_at IS NULL).
+   */
+  function dbClientBalanceSheetsList_(data, user) {
+    data = data || {};
+    var loadAll = !!(data.loadAll === true || data.loadAll === 'true' || data.loadAll === '1' || data.loadAll === 1);
+    var limit = loadAll ? 1000 : Math.min(Math.max(Number(data.limit) || 20, 1), 1000);
+    var offset = Math.max(Number(data.offset) || 0, 0);
+  
+    var conn, countStmt, countRs, stmt, rs;
+    try {
+      conn = dbGetConnection_();
+      countStmt = conn.prepareStatement(
+        'SELECT COUNT(*) AS cnt FROM `client_balance_sheets` WHERE `deleted_at` IS NULL'
+      );
+      countRs = countStmt.executeQuery();
+      var total = countRs.next() ? countRs.getInt('cnt') : 0;
+  
+      stmt = conn.prepareStatement(
+        'SELECT * FROM `client_balance_sheets` WHERE `deleted_at` IS NULL' +
+        ' ORDER BY `id` DESC LIMIT ' + limit + ' OFFSET ' + offset
+      );
+      rs = stmt.executeQuery();
+  
+      var md = rs.getMetaData();
+      var colCount = md.getColumnCount();
+      var columns = [];
+      for (var c = 1; c <= colCount; c++) {
+        columns.push(md.getColumnLabel(c) || md.getColumnName(c));
+      }
+  
+      var rows = [];
+      while (rs.next()) {
+        var row = {};
+        for (var i = 1; i <= colCount; i++) {
+          var colName = columns[i - 1];
+          var val = rs.getObject(i);
+          row[colName] = val !== null ? String(val) : null;
+        }
+        rows.push(row);
+      }
+  
+      return {
+        status: 'ok',
+        columns: columns,
+        rows: rows,
+        total: total,
+        limit: limit,
+        offset: offset,
+        loadedAll: loadAll
+      };
+    } catch (err) {
+      Logger.log('dbClientBalanceSheetsList_ error: ' + err.message);
+      throw err;
+    } finally {
+      if (rs) rs.close();
+      if (stmt) stmt.close();
+      if (countRs) countRs.close();
+      if (countStmt) countStmt.close();
+      if (conn) conn.close();
+    }
+  }
+  
+  /**
+   * Update a single row in client_balance_sheets by the real PK `id`.
+   * Read-only / server-managed columns are stripped before building the SET clause.
+   */
+  function dbClientBalanceSheetsUpdate_(data, user) {
+    data = data || {};
+    var id = String(data.id !== undefined && data.id !== null ? data.id : '').trim();
+    if (!id) throw new Error('id is required');
+  
+    // Columns the client must not overwrite — PK and server-managed audit timestamps.
+    // deleted_at IS editable: it controls soft-delete and the admin may need to restore rows.
+    var readOnlyCols = {
+      'id':         true,
+      'created_at': true,
+      'updated_at': true
+    };
+  
+    var updates = [];
+    var params = [];
+  
+    for (var key in data) {
+      if (!Object.prototype.hasOwnProperty.call(data, key)) continue;
+      if (readOnlyCols[key]) continue;
+      // Skip internal/private keys (prefixed _)
+      if (key.charAt(0) === '_') continue;
+      var safeCol = dbSanitizeIdentifier_(key);
+      var rawVal = data[key];
+      updates.push(safeCol + ' = ?');
+      params.push(rawVal === null || rawVal === undefined || rawVal === '' ? null : rawVal);
+    }
+  
+    if (updates.length === 0) throw new Error('لا توجد حقول للتحديث');
+  
+    params.push(id);
+  
+    var conn, stmt;
+    try {
+      conn = dbGetConnection_();
+      var sql = 'UPDATE `client_balance_sheets` SET ' + updates.join(', ') + ' WHERE `id` = ?';
+      stmt = conn.prepareStatement(sql);
+      dbBindParams_(stmt, params);
+      var affected = stmt.executeUpdate();
+      return { status: 'ok', affected: affected, id: id };
+    } catch (err) {
+      Logger.log('dbClientBalanceSheetsUpdate_ error: ' + err.message);
+      throw err;
+    } finally {
+      if (stmt) stmt.close();
+      if (conn) conn.close();
+    }
+  }
+  
+  // ─── manufacture_headers / manufacture_footers (Top Chemical: tc_manufacture_orders) ──
+  //
+  // manufacture_headers (17 cols): id, user_id, user_type, name_ar,
+  //   expected_quantity, deliver_quantity, is_product, product_id, status,
+  //   manufacture_number, manufacture_delivery_number, admin_approved,
+  //   admin_approved_at, created_at, updated_at, deleted_at, is_revised.
+  // manufacture_footers (9 cols): id, manufacture_header_id, product_id,
+  //   product_code, productUnit, productQuantity, created_at, updated_at, warehouse_id.
+  
+  /**
+   * Paginated / full list of manufacture_headers.
+   * Soft-deleted rows (deleted_at IS NOT NULL) are excluded.
+   */
+  function dbManufactureList_(data, user) {
+    data = data || {};
+    var loadAll = !!(data.loadAll === true || data.loadAll === 'true' || data.loadAll === '1' || data.loadAll === 1);
+    var limit  = loadAll ? 1000 : Math.min(Math.max(Number(data.limit)  || 20, 1), 1000);
+    var offset = Math.max(Number(data.offset) || 0, 0);
+    var conn, countStmt, countRs, stmt, rs;
+    try {
+      conn = dbGetConnection_();
+      countStmt = conn.prepareStatement(
+        'SELECT COUNT(*) AS cnt FROM `manufacture_headers` WHERE `deleted_at` IS NULL'
+      );
+      countRs = countStmt.executeQuery();
+      var total = countRs.next() ? countRs.getInt('cnt') : 0;
+      // product_label lets the page show products.name_ar next to the raw product_id
+      // so the user can understand which item the order is for.
+      stmt = conn.prepareStatement(
+        'SELECT `h`.*, `p`.`name_ar` AS `product_label` FROM `manufacture_headers` `h`' +
+        ' LEFT JOIN `products` `p` ON `p`.`id` = `h`.`product_id`' +
+        ' WHERE `h`.`deleted_at` IS NULL' +
+        ' ORDER BY `h`.`id` DESC LIMIT ' + limit + ' OFFSET ' + offset
+      );
+      rs = stmt.executeQuery();
+      var md = rs.getMetaData();
+      var colCount = md.getColumnCount();
+      var columns = [];
+      for (var c = 1; c <= colCount; c++) { columns.push(md.getColumnLabel(c) || md.getColumnName(c)); }
+      var rows = [];
+      while (rs.next()) {
+        var row = {};
+        for (var i = 1; i <= colCount; i++) { var v = rs.getObject(i); row[columns[i-1]] = v !== null ? String(v) : null; }
+        rows.push(row);
+      }
+      return { status: 'ok', columns: columns, rows: rows, total: total, limit: limit, offset: offset, loadedAll: loadAll };
+    } catch (err) {
+      Logger.log('dbManufactureList_ error: ' + err.message);
+      throw err;
+    } finally {
+      if (rs) rs.close();
+      if (stmt) stmt.close();
+      if (countRs) countRs.close();
+      if (countStmt) countStmt.close();
+      if (conn) conn.close();
+    }
+  }
+  
+  /**
+   * Return all footers for one header. data: { manufacture_header_id }.
+   */
+  function dbManufactureGetFooters_(data, user) {
+    data = data || {};
+    var hid = String(data.manufacture_header_id !== null && data.manufacture_header_id !== undefined ? data.manufacture_header_id : '').trim();
+    if (!hid) throw new Error('manufacture_header_id is required');
+    var conn, stmt, rs;
+    try {
+      conn = dbGetConnection_();
+      // product_name_ar / product_code_ref / product_unit_ref come from the
+      // products master so every inline shows the Arabic name next to the id.
+      // (product_code / productUnit stay the stored snapshot on the footer row.)
+      stmt = conn.prepareStatement(
+        'SELECT `f`.*, `p`.`name_ar` AS `product_name_ar`,' +
+        ' `p`.`code` AS `product_code_ref`, `p`.`unit` AS `product_unit_ref`' +
+        ' FROM `manufacture_footers` `f`' +
+        ' LEFT JOIN `products` `p` ON `p`.`id` = `f`.`product_id`' +
+        ' WHERE `f`.`manufacture_header_id` = ? ORDER BY `f`.`id` ASC'
+      );
+      stmt.setObject(1, hid);
+      rs = stmt.executeQuery();
+      var md = rs.getMetaData();
+      var colCount = md.getColumnCount();
+      var columns = [];
+      for (var c = 1; c <= colCount; c++) { columns.push(md.getColumnLabel(c) || md.getColumnName(c)); }
+      var rows = [];
+      while (rs.next()) {
+        var row = {};
+        for (var i = 1; i <= colCount; i++) { var v = rs.getObject(i); row[columns[i-1]] = v !== null ? String(v) : null; }
+        rows.push(row);
+      }
+      return { status: 'ok', columns: columns, rows: rows, manufacture_header_id: hid };
+    } catch (err) {
+      Logger.log('dbManufactureGetFooters_ error: ' + err.message);
+      throw err;
+    } finally {
+      if (rs) rs.close();
+      if (stmt) stmt.close();
+      if (conn) conn.close();
+    }
+  }
+  
+  /**
+   * UPDATE one manufacture_headers row by id.
+   * read-only: id, created_at, updated_at.
+   */
+  function dbManufactureUpdateHeader_(data, user) {
+    data = data || {};
+    var id = String(data.id !== null && data.id !== undefined ? data.id : '').trim();
+    if (!id) throw new Error('id is required');
+    var RO = { 'id': true, 'created_at': true, 'updated_at': true };
+    var updates = [], params = [];
+    for (var key in data) {
+      if (!Object.prototype.hasOwnProperty.call(data, key)) continue;
+      if (RO[key]) continue;
+      if (key.charAt(0) === '_') continue;
+      var safeCol = dbSanitizeIdentifier_(key);
+      var rawVal = data[key];
+      updates.push(safeCol + ' = ?');
+      params.push(rawVal === null || rawVal === undefined || rawVal === '' ? null : rawVal);
+    }
+    if (updates.length === 0) throw new Error('لا توجد حقول للتحديث');
+    params.push(id);
+    var conn, stmt;
+    try {
+      conn = dbGetConnection_();
+      stmt = conn.prepareStatement('UPDATE `manufacture_headers` SET ' + updates.join(', ') + ' WHERE `id` = ?');
+      dbBindParams_(stmt, params);
+      var affected = stmt.executeUpdate();
+      return { status: 'ok', affected: affected, id: id };
+    } catch (err) {
+      Logger.log('dbManufactureUpdateHeader_ error: ' + err.message);
+      throw err;
+    } finally {
+      if (stmt) stmt.close();
+      if (conn) conn.close();
+    }
+  }
+  
+  /**
+   * Look up a product's code + unit from the products master.
+   * Returns { code, unit } (nullable strings) or null when not found.
+   * Caller must close the connection it opens — this helper takes an OPEN
+   * connection so updates/inserts stay on one connection.
+   */
+  function dbProductCodeUnit_(conn, productId) {
+    var stmt = null, rs = null;
+    try {
+      stmt = conn.prepareStatement(
+        'SELECT `code`, `unit` FROM `products` WHERE `id` = ? LIMIT 1'
+      );
+      stmt.setObject(1, productId);
+      rs = stmt.executeQuery();
+      if (rs.next()) {
+        var c = rs.getObject(1), u = rs.getObject(2);
+        return {
+          code: c !== null ? String(c) : null,
+          unit: u !== null ? String(u) : null
+        };
+      }
+      return null;
+    } finally {
+      if (rs) rs.close();
+      if (stmt) stmt.close();
+    }
+  }
+  
+  /**
+   * UPDATE one manufacture_footers row by id.
+   * read-only: id, manufacture_header_id, created_at, updated_at.
+   */
+  function dbManufactureUpdateFooter_(data, user) {
+    data = data || {};
+    var id = String(data.id !== null && data.id !== undefined ? data.id : '').trim();
+    if (!id) throw new Error('id is required');
+    var RO = { 'id': true, 'manufacture_header_id': true, 'created_at': true, 'updated_at': true };
+    var updates = [], params = [];
+    for (var key in data) {
+      if (!Object.prototype.hasOwnProperty.call(data, key)) continue;
+      if (RO[key]) continue;
+      if (key.charAt(0) === '_') continue;
+      // product_code / productUnit are withdrawn automatically from products —
+      // ignore client-sent values when product_id is being changed; the lookup
+      // below overwrites them authoritatively.
+      if ((key === 'product_code' || key === 'productUnit') && data.product_id) continue;
+      var safeCol = dbSanitizeIdentifier_(key);
+      var rawVal = data[key];
+      updates.push(safeCol + ' = ?');
+      params.push(rawVal === null || rawVal === undefined || rawVal === '' ? null : rawVal);
+    }
+    if (updates.length === 0 && !data.product_id) throw new Error('لا توجد حقول للتحديث');
+    params.push(id);
+    var conn, stmt;
+    try {
+      conn = dbGetConnection_();
+      // Authoritative auto-fill: changing product_id re-withdraws code/unit.
+      var newPid = data.product_id !== null && data.product_id !== undefined
+        ? String(data.product_id).trim() : '';
+      if (newPid) {
+        var ref = dbProductCodeUnit_(conn, newPid);
+        if (ref) {
+          updates.push('`product_code` = ?');
+          params.splice(params.length - 1, 0, ref.code);
+          updates.push('`productUnit` = ?');
+          params.splice(params.length - 1, 0, ref.unit);
+        }
+      }
+      if (updates.length === 0) throw new Error('لا توجد حقول للتحديث');
+      stmt = conn.prepareStatement('UPDATE `manufacture_footers` SET ' + updates.join(', ') + ' WHERE `id` = ?');
+      dbBindParams_(stmt, params);
+      var affected = stmt.executeUpdate();
+      return { status: 'ok', affected: affected, id: id };
+    } catch (err) {
+      Logger.log('dbManufactureUpdateFooter_ error: ' + err.message);
+      throw err;
+    } finally {
+      if (stmt) stmt.close();
+      if (conn) conn.close();
+    }
+  }
+  
+  /**
+   * INSERT a new manufacture_footers row (used for the copy-row feature).
+   * data: { manufacture_header_id, product_id, product_code, productUnit,
+   *         productQuantity, warehouse_id }
+   * Returns { status:'ok', id: newId, manufacture_header_id }
+   */
+  function dbManufactureInsertFooter_(data, user) {
+    data = data || {};
+    var hid = String(data.manufacture_header_id !== null && data.manufacture_header_id !== undefined ? data.manufacture_header_id : '').trim();
+    if (!hid) throw new Error('manufacture_header_id is required');
+  
+    var ALLOWED = ['manufacture_header_id', 'product_id', 'product_code', 'productUnit', 'productQuantity', 'warehouse_id'];
+    var insertCols = [], params = [];
+    ALLOWED.forEach(function (col) {
+      if (Object.prototype.hasOwnProperty.call(data, col)) {
+        insertCols.push(dbSanitizeIdentifier_(col));
+        var rawVal = data[col];
+        params.push(rawVal === null || rawVal === undefined || rawVal === '' ? null : rawVal);
+      }
+    });
+    if (!insertCols.length) throw new Error('لا توجد بيانات للإدراج');
+  
+    var conn, stmt, idStmt, idRs;
+    try {
+      conn = dbGetConnection_();
+      // Auto-withdraw code/unit from products when only product_id is supplied,
+      // and default warehouse_id to 1. created_at/updated_at are left to the
+      // DB CURRENT_TIMESTAMP defaults.
+      var pidForLookup = data.product_id !== null && data.product_id !== undefined
+        ? String(data.product_id).trim() : '';
+      if (pidForLookup) {
+        var ref = dbProductCodeUnit_(conn, pidForLookup);
+        if (ref) {
+          if (insertCols.indexOf('`product_code`') === -1) {
+            insertCols.push('`product_code`');
+            params.push(ref.code);
+          }
+          if (insertCols.indexOf('`productUnit`') === -1) {
+            insertCols.push('`productUnit`');
+            params.push(ref.unit);
+          }
+        }
+      }
+      if (insertCols.indexOf('`warehouse_id`') === -1) {
+        insertCols.push('`warehouse_id`');
+        params.push('1');
+      }
+      var sql = 'INSERT INTO `manufacture_footers` (' + insertCols.join(', ') + ') VALUES (' +
+                insertCols.map(function () { return '?'; }).join(', ') + ')';
+      stmt = conn.prepareStatement(sql);
+      dbBindParams_(stmt, params);
+      stmt.executeUpdate();
+      idStmt = conn.prepareStatement('SELECT LAST_INSERT_ID() AS new_id');
+      idRs   = idStmt.executeQuery();
+      var newId = idRs.next() ? String(idRs.getLong('new_id')) : null;
+      return { status: 'ok', id: newId, manufacture_header_id: hid };
+    } catch (err) {
+      Logger.log('dbManufactureInsertFooter_ error: ' + err.message);
+      throw err;
+    } finally {
+      if (idRs)   idRs.close();
+      if (idStmt) idStmt.close();
+      if (stmt)   stmt.close();
+      if (conn)   conn.close();
+    }
+  }
+  
+  /**
+   * Label lists for the manufacture-orders forms: product options, warehouse
+   * options, and the DISTINCT status values actually present in
+   * manufacture_headers. Every candidate query is attempted defensively — the
+   * products/warehouses table and column names are NOT guaranteed, so a miss
+   * yields an empty list (the page falls back to free-text inputs) instead of
+   * an error. Only the status list (known table + column) is required.
+   * Returns { status:'ok', products:[{value,label}], warehouses:[...], statuses:[...] }.
+   */
+  function dbManufactureRefs_(data, user) {
+    var products = [], productsFull = [], warehouses = [], statuses = [];
+    var conn;
+    try {
+      conn = dbGetConnection_();
+      products = tryLabelList_(conn, [
+        'SELECT `id`, `name_ar` AS `label` FROM `products` ORDER BY `id` ASC LIMIT 500',
+        'SELECT `id`, `name` AS `label` FROM `products` ORDER BY `id` ASC LIMIT 500'
+      ]);
+      // Full option rows so the page can auto-fill code/unit on product change
+      // and show the Arabic name next to raw product_id values.
+      productsFull = tryFullList_(conn, [
+        'SELECT `id`, `name_ar`, `code`, `unit` FROM `products` ORDER BY `id` ASC LIMIT 500'
+      ]);
+      warehouses = tryLabelList_(conn, [
+        'SELECT `id`, `name_ar` AS `label` FROM `warehouses` ORDER BY `id` ASC LIMIT 500',
+        'SELECT `id`, `name` AS `label` FROM `warehouses` ORDER BY `id` ASC LIMIT 500'
+      ]);
+      statuses = tryLabelList_(conn, [
+        'SELECT DISTINCT `status` AS `label` FROM `manufacture_headers` WHERE `status` IS NOT NULL ORDER BY `status` ASC'
+      ]);
+      statuses = statuses.map(function (s) { return { value: s.label, label: s.label }; });
+    } catch (err) {
+      Logger.log('dbManufactureRefs_ error: ' + err.message);
+      throw err;
+    } finally {
+      if (conn) conn.close();
+    }
+    return { status: 'ok', products: products, products_full: productsFull, warehouses: warehouses, statuses: statuses };
+  }
+  
+  /**
+   * Like tryLabelList_ but returns full rows { value, name_ar, code, unit } for
+   * the products master. Misses → [] (page falls back to the plain label list).
+   */
+  function tryFullList_(conn, candidates) {
+    for (var i = 0; i < candidates.length; i++) {
+      var stmt = null, rs = null;
+      try {
+        stmt = conn.prepareStatement(candidates[i]);
+        rs = stmt.executeQuery();
+        var out = [];
+        while (rs.next()) {
+          var v = rs.getObject(1), n = rs.getObject(2), c = rs.getObject(3), u = rs.getObject(4);
+          out.push({
+            value: v !== null ? String(v) : '',
+            label: (n !== null ? String(n) : '') || (v !== null ? String(v) : ''),
+            code: c !== null ? String(c) : '',
+            unit: u !== null ? String(u) : ''
+          });
+        }
+        return out;
+      } catch (e) {
+        /* candidate shape absent — try the next one */
+      } finally {
+        try { if (rs) rs.close(); } catch (e2) {}
+        try { if (stmt) stmt.close(); } catch (e3) {}
+      }
+    }
+    return [];
+  }
+  
+  /**
+   * Run each candidate SELECT in order; return rows of the first one that
+   * executes ({value, label} stringified). All misses → []. One statement and
+   * result set are open at a time and always closed, including on error paths.
+   */
+  function tryLabelList_(conn, candidates) {
+    for (var i = 0; i < candidates.length; i++) {
+      var stmt = null, rs = null;
+      try {
+        stmt = conn.prepareStatement(candidates[i]);
+        rs = stmt.executeQuery();
+        var md = rs.getMetaData();
+        var colCount = md.getColumnCount();
+        var out = [];
+        while (rs.next()) {
+          var v = rs.getObject(1), l = colCount > 1 ? rs.getObject(2) : rs.getObject(1);
+          out.push({
+            value: v !== null ? String(v) : '',
+            label: (l !== null ? String(l) : '') || (v !== null ? String(v) : '')
+          });
+        }
+        return out;
+      } catch (e) {
+        /* candidate table/columns absent — try the next shape */
+      } finally {
+        try { if (rs) rs.close(); } catch (e2) {}
+        try { if (stmt) stmt.close(); } catch (e3) {}
+      }
+    }
+    return [];
+  }
+  
+  // ─── manufacture soft-delete ──
+  //
+  // manufacture_headers HAS deleted_at → soft delete stores NOW() timestamp.
+  // manufacture_footers has NO deleted_at column (9 cols per schema) → footer
+  // lines are deleted with a real DELETE. Both are page-level authorized (no
+  // dbGuard_), exactly like the update/insert helpers above.
+  
+  /**
+   * Soft-delete one manufacture_headers row: SET deleted_at = NOW().
+   * data: { id }. Only touches rows not already deleted.
+   */
+  function dbManufactureSoftDeleteHeader_(data, user) {
+    data = data || {};
+    var id = String(data.id !== null && data.id !== undefined ? data.id : '').trim();
+    if (!id) throw new Error('id is required');
+    var conn, stmt;
+    try {
+      conn = dbGetConnection_();
+      stmt = conn.prepareStatement(
+        'UPDATE `manufacture_headers` SET `deleted_at` = NOW(), `updated_at` = NOW()' +
+        ' WHERE `id` = ? AND `deleted_at` IS NULL'
+      );
+      stmt.setObject(1, id);
+      var affected = stmt.executeUpdate();
+      if (affected === 0) throw new Error('السجل غير موجود أو محذوف مسبقاً');
+      return { status: 'ok', affected: affected, id: id };
+    } catch (err) {
+      Logger.log('dbManufactureSoftDeleteHeader_ error: ' + err.message);
+      throw err;
+    } finally {
+      if (stmt) stmt.close();
+      if (conn) conn.close();
+    }
+  }
+  
+  /**
+   * Delete one manufacture_footers row by id.
+   * NOTE: footers table has no deleted_at column, so this is a hard DELETE.
+   */
+  function dbManufactureDeleteFooter_(data, user) {
+    data = data || {};
+    var id = String(data.id !== null && data.id !== undefined ? data.id : '').trim();
+    if (!id) throw new Error('id is required');
+    var conn, stmt;
+    try {
+      conn = dbGetConnection_();
+      stmt = conn.prepareStatement('DELETE FROM `manufacture_footers` WHERE `id` = ?');
+      stmt.setObject(1, id);
+      var affected = stmt.executeUpdate();
+      if (affected === 0) throw new Error('البند غير موجود');
+      return { status: 'ok', affected: affected, id: id };
+    } catch (err) {
+      Logger.log('dbManufactureDeleteFooter_ error: ' + err.message);
+      throw err;
+    } finally {
+      if (stmt) stmt.close();
+      if (conn) conn.close();
+    }
+  }
+  
+  // ─── client_balance_sheets soft-delete (Top Chemical: tc_client_balance_sheets) ──
+  
+  /**
+   * Soft-delete one client_balance_sheets row: SET deleted_at = NOW().
+   * data: { id }. Reads already exclude deleted_at IS NOT NULL rows.
+   */
+  function dbClientBalanceSheetsDelete_(data, user) {
+    data = data || {};
+    var id = String(data.id !== undefined && data.id !== null ? data.id : '').trim();
+    if (!id) throw new Error('id is required');
+    var conn, stmt;
+    try {
+      conn = dbGetConnection_();
+      stmt = conn.prepareStatement(
+        'UPDATE `client_balance_sheets` SET `deleted_at` = NOW(), `updated_at` = NOW()' +
+        ' WHERE `id` = ? AND `deleted_at` IS NULL'
+      );
+      stmt.setObject(1, id);
+      var affected = stmt.executeUpdate();
+      if (affected === 0) throw new Error('السجل غير موجود أو محذوف مسبقاً');
+      return { status: 'ok', affected: affected, id: id };
+    } catch (err) {
+      Logger.log('dbClientBalanceSheetsDelete_ error: ' + err.message);
+      throw err;
+    } finally {
+      if (stmt) stmt.close();
+      if (conn) conn.close();
+    }
+  }
+  
+  // ─── products live table (Top Chemical: tc_products_live / اصناف النظام الرئيسي) ──
+  //
+  // products (17 cols): id, category_id, client_id, name_ar, name_en, code,
+  //   price, unit, quantity, number_of_cartons_bags, number_of_small_boxes,
+  //   product_unit_metric, active, manufacture_id, created_at, updated_at, deleted_at.
+  // Independent MySQL data beside the company sheets — same discipline as the
+  // client_balance_sheets block: paginated reads excluding soft-deleted rows,
+  // allowlist-free updates with read-only strip, soft-delete via NOW().
+  
+  /**
+   * Paginated or full list from the products table.
+   * Soft-deleted rows (deleted_at IS NOT NULL) are excluded.
+   *
+   * Perf (tc_products_live Show All): the page turns pages of 50-100 instead of
+   * pulling up to 1000 rows in one RPC. The whole response (rows + total) is
+   * cached for DB_PRODUCTS_LIVE_TTL seconds under a version-stamped key, so page
+   * turns inside the window cost zero JDBC round trips; any miss rebuilds from
+   * MySQL and never returns an empty success. Full column set is kept on purpose:
+   * the page's detail/edit modals render every column in S.columns.
+   */
+  var DB_PRODUCTS_LIVE_TTL = 90;
+  var DB_PRODUCTS_LIVE_PAGE_MAX = 200;
+  var DB_PRODUCTS_LIVE_ALL_MAX = 1000;
+  var DB_PRODUCTS_LIVE_VER_KEY = 'dblive_products_ver';
+  
+  function dbProductsLiveVer_() {
+    try {
+      var v = CacheService.getScriptCache().get(DB_PRODUCTS_LIVE_VER_KEY);
+      return v || '0';
+    } catch (e) { return '0'; }
+  }
+  
+  function dbProductsLiveBust_() {
+    try { CacheService.getScriptCache().put(DB_PRODUCTS_LIVE_VER_KEY, String(Date.now()), 21600); } catch (e) {}
+  }
+  
+  function dbProductsLiveCacheGet_(key) {
+    try {
+      if (typeof getChunkedCache_ === 'function') return getChunkedCache_(key);
+      var raw = CacheService.getScriptCache().get(key);
+      return raw ? JSON.parse(raw) : null;
+    } catch (e) { return null; }
+  }
+  
+  function dbProductsLiveCachePut_(key, value) {
+    try {
+      if (typeof putChunkedCache_ === 'function') { putChunkedCache_(key, value, DB_PRODUCTS_LIVE_TTL); return; }
+      CacheService.getScriptCache().put(key, JSON.stringify(value), DB_PRODUCTS_LIVE_TTL);
+    } catch (e) {}
+  }
+  
+  function dbProductsLiveList_(data, user) {
+    data = data || {};
+    var loadAll = !!(data.loadAll === true || data.loadAll === 'true' || data.loadAll === '1' || data.loadAll === 1);
+    var limit = loadAll ? DB_PRODUCTS_LIVE_ALL_MAX : Math.min(Math.max(Number(data.limit) || 50, 1), DB_PRODUCTS_LIVE_PAGE_MAX);
+    var offset = Math.max(Number(data.offset) || 0, 0);
+    var cacheKey = 'dblive_products_v' + dbProductsLiveVer_() + '_l' + limit + '_o' + offset;
+    var cached = dbProductsLiveCacheGet_(cacheKey);
+    if (cached && cached.status === 'ok' && Array.isArray(cached.rows)) return cached;
+    var conn, countStmt, countRs, stmt, rs;
+    try {
+      conn = dbGetConnection_();
+      countStmt = conn.prepareStatement(
+        'SELECT COUNT(*) AS cnt FROM `products` WHERE `deleted_at` IS NULL'
+      );
+      countRs = countStmt.executeQuery();
+      var total = countRs.next() ? countRs.getInt('cnt') : 0;
+      stmt = conn.prepareStatement(
+        'SELECT `p`.*, `q`.`current_qty` AS `live_quantity` FROM `products` `p`' +
+        ' LEFT JOIN `product_current_quantity` `q` ON `q`.`id` = `p`.`id`' +
+        ' WHERE `p`.`deleted_at` IS NULL' +
+        ' ORDER BY `p`.`id` DESC LIMIT ' + limit + ' OFFSET ' + offset
+      );
+      rs = stmt.executeQuery();
+      var md = rs.getMetaData();
+      var colCount = md.getColumnCount();
+      var columns = [];
+      for (var c = 1; c <= colCount; c++) { columns.push(md.getColumnLabel(c) || md.getColumnName(c)); }
+      var rows = [];
+      while (rs.next()) {
+        var row = {};
+        for (var i = 1; i <= colCount; i++) { var v = rs.getObject(i); row[columns[i-1]] = v !== null ? String(v) : null; }
+        rows.push(row);
+      }
+      var out = { status: 'ok', columns: columns, rows: rows, total: total, limit: limit, offset: offset, loadedAll: loadAll };
+      dbProductsLiveCachePut_(cacheKey, out);
+      return out;
+    } catch (err) {
+      Logger.log('dbProductsLiveList_ error: ' + err.message);
+      throw err;
+    } finally {
+      if (rs) rs.close();
+      if (stmt) stmt.close();
+      if (countRs) countRs.close();
+      if (countStmt) countStmt.close();
+      if (conn) conn.close();
+    }
+  }
+  
+  /**
+   * UPDATE one products row by id. Everything is editable except the PK,
+   * server-managed timestamps, and quantity — quantity is read-only live data
+   * from the product_current_quantity view (see dbProductsLiveList_).
+   */
+  function dbProductsLiveUpdate_(data, user) {
+    data = data || {};
+    var id = String(data.id !== undefined && data.id !== null ? data.id : '').trim();
+    if (!id) throw new Error('id is required');
+    var readOnlyCols = { 'id': true, 'created_at': true, 'updated_at': true, 'quantity': true, 'live_quantity': true };
+    var updates = [], params = [];
+    for (var key in data) {
+      if (!Object.prototype.hasOwnProperty.call(data, key)) continue;
+      if (readOnlyCols[key]) continue;
+      if (key.charAt(0) === '_') continue;
+      var safeCol = dbSanitizeIdentifier_(key);
+      var rawVal = data[key];
+      updates.push(safeCol + ' = ?');
+      params.push(rawVal === null || rawVal === undefined || rawVal === '' ? null : rawVal);
+    }
+    if (updates.length === 0) throw new Error('لا توجد حقول للتحديث');
+    params.push(id);
+    var conn, stmt;
+    try {
+      conn = dbGetConnection_();
+      stmt = conn.prepareStatement('UPDATE `products` SET ' + updates.join(', ') + ' WHERE `id` = ?');
+      dbBindParams_(stmt, params);
+      var affected = stmt.executeUpdate();
+      dbProductsLiveBust_();
+      return { status: 'ok', affected: affected, id: id };
+    } catch (err) {
+      Logger.log('dbProductsLiveUpdate_ error: ' + err.message);
+      throw err;
+    } finally {
+      if (stmt) stmt.close();
+      if (conn) conn.close();
+    }
+  }
+  
+  /**
+   * Soft-delete one products row: SET deleted_at = NOW().
+   * data: { id }.
+   */
+  function dbProductsLiveDelete_(data, user) {
+    data = data || {};
+    var id = String(data.id !== undefined && data.id !== null ? data.id : '').trim();
+    if (!id) throw new Error('id is required');
+    var conn, stmt;
+    try {
+      conn = dbGetConnection_();
+      stmt = conn.prepareStatement(
+        'UPDATE `products` SET `deleted_at` = NOW(), `updated_at` = NOW()' +
+        ' WHERE `id` = ? AND `deleted_at` IS NULL'
+      );
+      stmt.setObject(1, id);
+      var affected = stmt.executeUpdate();
+      if (affected === 0) throw new Error('الصنف غير موجود أو محذوف مسبقاً');
+      dbProductsLiveBust_();
+      return { status: 'ok', affected: affected, id: id };
+    } catch (err) {
+      Logger.log('dbProductsLiveDelete_ error: ' + err.message);
+      throw err;
+    } finally {
+      if (stmt) stmt.close();
+      if (conn) conn.close();
+    }
+  }
+  
+  /**
+   * Product options for the tc_stock_scan page: id, name_ar and the
+   * per-container quantity (number_of_cartons_bags) that pre-fills the count
+   * form's الكمية بالعبوة الواحدة field. Soft-deleted rows are excluded.
+   * Called via get_stock_scan_options, so page-level authority applies.
+   */
+  function dbStockScanProducts_(data, user) {
+    var conn, stmt, rs;
+    try {
+      conn = dbGetConnection_();
+      stmt = conn.prepareStatement(
+        'SELECT `id`, `name_ar`, `number_of_cartons_bags` FROM `products`' +
+        ' WHERE `deleted_at` IS NULL ORDER BY `id` ASC'
+      );
+      rs = stmt.executeQuery();
+      var products = [];
+      while (rs.next()) {
+        var id = rs.getObject(1);
+        var perUnit = rs.getObject(3);
+        products.push({
+          value: id !== null ? String(id) : null,
+          label: String(rs.getObject(2) || '').trim() || ('#' + id),
+          per_unit: perUnit !== null && perUnit !== undefined ? String(perUnit) : ''
+        });
+      }
+      return { status: 'ok', products: products };
+    } catch (err) {
+      Logger.log('dbStockScanProducts_ error: ' + err.message);
+      throw err;
+    } finally {
+      if (rs) rs.close();
+      if (stmt) stmt.close();
+      if (conn) conn.close();
+    }
+  }
+  
+  // ─── regular_box_movement analysis (Top Chemical: tc_box_analysis) ──
+  //
+  // Read path for the box-analysis page. Same discipline as the clients_AR block
+  // above: prepared statements, bound parameters, a shared WHERE builder so COUNT
+  // and SELECT can never disagree, clamped limits, and one `finally` that closes
+  // result set → statement → connection on every path including the error path.
+  //
+  // Called via TopChemical company actions (get_box_analysis / get_box_item_history
+  // / update_box_movement / revise_box_movement) so page-level authority applies;
+  // no dbGuard_ here, exactly as the clients_AR functions do it.
+  //
+  // NOTHING IN THIS FILE HAS EVER BEEN RUN. There is no MySQL client on the
+  // machine this was written on and the credentials live only in Script
+  // Properties. Every statement below was verified by reading it against the
+  // schema in BOX_ANALYSIS_PLAN.md §2, not by executing it. The first execution
+  // will be the owner's.
+  
+  var DB_BOX_TABLE = '`regular_box_movement`';
+  
+  var DB_BOX_COLUMNS = [
+    'id', 'transaction_date', 'transaction_details', 'client_id', 'related_id',
+    'transaction_type', 'transaction_amount', 'chart_of_accounts',
+    'responsible_person', 'box_code', 'user_id', 'created_at', 'updated_at',
+    'is_revised'
+  ];
+  
+  /* The item engine runs only on accounts numerically inside [300000, 400000]
+     (plan §2.1). `chart_of_accounts` is a `text` column holding a number, so the
+     comparison has to cast.
+  
+     NOT SARGABLE, ON PURPOSE, FOR NOW: CAST(...) around the column defeats any
+     index, and `text` cannot be indexed without a prefix index anyway. If the
+     codes in this family turn out to be uniformly 6 digits, the plain string
+     range `>= '300000' AND < '400000'` is exactly equivalent and CAN use a prefix
+     index — but that is a measurement nobody has been able to take yet, not an
+     assumption to build on. It is registered in NEXT_STEPS_OWNER.md.
+  
+     The REGEXP guard is not decoration: MySQL's CAST of a non-numeric string
+     yields 0 with a warning rather than an error, so without it every row whose
+     account code is blank or non-numeric would silently fall outside the range —
+     which is the right answer here, but by accident. Stating it makes the
+     intent survive the next edit. */
+  var DB_BOX_RANGE_SQL =
+    "(`chart_of_accounts` REGEXP '^[0-9]+$' AND CAST(`chart_of_accounts` AS UNSIGNED) BETWEEN 300000 AND 400000)";
+  
+  function dbBoxValidateDate_(v) {
+    var s = String(v === undefined || v === null ? '' : v).trim();
+    if (!s) return '';
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) throw new Error('صيغة التاريخ غير صحيحة (المتوقع YYYY-MM-DD): ' + s);
+    return s;
+  }
+  
+  function dbBoxValidateAccount_(v) {
+    var s = String(v === undefined || v === null ? '' : v).trim();
+    if (!s) return '';
+    if (!/^\d{1,20}$/.test(s)) throw new Error('كود الحساب يجب أن يكون أرقاماً فقط: ' + s);
+    return s;
+  }
+  
+  function dbBoxValidateType_(v) {
+    var s = String(v === undefined || v === null ? '' : v).trim().toLowerCase();
+    if (!s) return '';
+    if (s !== 'credit' && s !== 'debit') throw new Error("نوع الحركة يجب أن يكون credit أو debit: " + v);
+    return s;
+  }
+  
+  /** Integer or '' (meaning "no filter"). Rejects anything else rather than coercing. */
+  function dbBoxValidateInt_(v, label) {
+    var s = String(v === undefined || v === null ? '' : v).trim();
+    if (!s) return '';
+    if (!/^-?\d{1,19}$/.test(s)) throw new Error((label || 'القيمة') + ' يجب أن تكون رقماً صحيحاً: ' + v);
+    return s;
+  }
+  
+  /**
+   * Shared WHERE builder — used by BOTH the COUNT and the SELECT in dbBoxList_,
+   * so the pager total can never describe a different set of rows than the page
+   * shows. Same reason dbClientsArWhere_ exists.
+   *
+   * data: { date_from, date_to, chart_of_accounts, responsible_person, box_code,
+   *         transaction_type, is_revised, items_only }
+   * Returns { sql, params }.
+   *
+   * NULL transaction_date rows never match a set date bound (standard SQL), the
+   * same behaviour the clients_AR list already has.
+   */
+  function dbBoxWhere_(data) {
+    var conditions = [];
+    var params = [];
+  
+    var from = dbBoxValidateDate_(data.date_from);
+    var to = dbBoxValidateDate_(data.date_to);
+    if (from && to && from > to) throw new Error('تاريخ "من" يجب أن يكون قبل تاريخ "إلى"');
+    if (from) { conditions.push('`transaction_date` >= ?'); params.push(from); }
+    if (to) { conditions.push('`transaction_date` <= ?'); params.push(to); }
+  
+    var acct = dbBoxValidateAccount_(data.chart_of_accounts);
+    if (acct) { conditions.push('`chart_of_accounts` = ?'); params.push(acct); }
+  
+    /* responsible_person is free `text` and is typed inconsistently (plan §2
+       caveat), so an exact match would find nothing most of the time. LIKE with
+       both wildcards is a scan — acceptable because the date bound above already
+       limits the set, and because this is a filter a human typed, not something
+       the page issues on its own. */
+    var person = String(data.responsible_person === undefined || data.responsible_person === null ? '' : data.responsible_person).trim();
+    if (person) { conditions.push('`responsible_person` LIKE ?'); params.push('%' + person + '%'); }
+  
+    var box = dbBoxValidateInt_(data.box_code, 'كود الخزنة');
+    if (box) { conditions.push('`box_code` = ?'); params.push(box); }
+  
+    var type = dbBoxValidateType_(data.transaction_type);
+    if (type) { conditions.push('`transaction_type` = ?'); params.push(type); }
+  
+    var rev = String(data.is_revised === undefined || data.is_revised === null ? '' : data.is_revised).trim();
+    if (rev === '0' || rev === '1') { conditions.push('`is_revised` = ?'); params.push(Number(rev)); }
+    else if (rev !== '') throw new Error('قيمة حالة المراجعة غير صحيحة (المتوقع 0 أو 1 أو فراغ)');
+  
+    if (data.items_only === true || data.items_only === 'true' || data.items_only === 1 || data.items_only === '1') {
+      conditions.push(DB_BOX_RANGE_SQL);
+    }
+  
+    return {
+      sql: conditions.length > 0 ? ' WHERE ' + conditions.join(' AND ') : '',
+      params: params
+    };
+  }
+  
+  /** Every column of one result-set row, as strings (or null), in DB_BOX_COLUMNS order. */
+  function dbBoxReadRow_(rs) {
+    function s(i) { var v = rs.getObject(i); return v !== null ? String(v) : null; }
+    return {
+      id: s(1),
+      /* DATE comes back as 'YYYY-MM-DD'; slice defends against a driver that
+         appends a time, exactly as dbClientsArList_ does for payment_date. */
+      transaction_date: rs.getObject(2) !== null ? String(rs.getObject(2)).slice(0, 10) : null,
+      transaction_details: s(3),
+      client_id: s(4),
+      related_id: s(5),
+      transaction_type: s(6),
+      transaction_amount: s(7),
+      chart_of_accounts: s(8),
+      responsible_person: s(9),
+      box_code: s(10),
+      user_id: s(11),
+      created_at: s(12),
+      updated_at: s(13),
+      is_revised: rs.getObject(14) !== null ? String(rs.getObject(14)) : '0'
+    };
+  }
+  
+  /**
+   * Paginated list of movements.
+   * data: the dbBoxWhere_ filters, plus { limit, offset }.
+   * Returns { status:'ok', columns, rows, total, limit, offset }.
+   *
+   * Limits clamped exactly as dbClientsArList_ clamps them — nothing unbounded
+   * ever leaves the database. The clamped values are integers produced here, not
+   * client strings, which is why they can be concatenated into the SQL.
+   */
+  function dbBoxList_(data, user) {
+    data = data || {};
+    var limit = Math.min(Math.max(Number(data.limit) || 50, 1), 200);
+    var offset = Math.max(Number(data.offset) || 0, 0);
+    var where = dbBoxWhere_(data);
+    var cols = DB_BOX_COLUMNS.map(dbSanitizeIdentifier_).join(', ');
+    var conn, countStmt, countRs, stmt, rs;
+    try {
+      conn = dbGetConnection_();
+      countStmt = conn.prepareStatement('SELECT COUNT(*) AS cnt FROM ' + DB_BOX_TABLE + where.sql);
+      dbBindParams_(countStmt, where.params);
+      countRs = countStmt.executeQuery();
+      var total = countRs.next() ? countRs.getInt('cnt') : 0;
+  
+      stmt = conn.prepareStatement(
+        'SELECT ' + cols + ' FROM ' + DB_BOX_TABLE + where.sql +
+        ' ORDER BY `transaction_date` DESC, `id` DESC' +
+        ' LIMIT ' + limit + ' OFFSET ' + offset);
+      dbBindParams_(stmt, where.params);
+      rs = stmt.executeQuery();
+  
+      var rows = [];
+      while (rs.next()) rows.push(dbBoxReadRow_(rs));
+      return { status: 'ok', columns: DB_BOX_COLUMNS.slice(), rows: rows, total: total, limit: limit, offset: offset };
+    } catch (err) {
+      Logger.log('dbBoxList_ error: ' + err.message);
+      throw err;
+    } finally {
+      if (rs) rs.close();
+      if (stmt) stmt.close();
+      if (countRs) countRs.close();
+      if (countStmt) countStmt.close();
+      if (conn) conn.close();
+    }
+  }
+  
+  /**
+   * The four spend windows per chart_of_accounts, in ONE round trip (plan §6).
+   *
+   * data: { ref_date 'YYYY-MM-DD', chart_of_accounts (optional), limit }.
+   *
+   * credit = spend (منصرف), debit = collected (محصّل). They are returned in
+   * SEPARATE columns and are never netted: netting lets an inflow mask an
+   * outflow, which is the opposite of what this page is for.
+   *
+   * Last month and last year are cut to the same day-of-period as the reference
+   * date, computed by BoxEngine.accountWindows — a partial month measured against
+   * a complete one manufactures a decline every time.
+   *
+   * The bound parameters go in in the same order the CASE expressions consume
+   * them. That ordering is the one thing here a reader has to check by eye, so
+   * the window list and the SELECT are built from the SAME array below rather
+   * than written out twice.
+   */
+  function dbBoxAccountAggregates_(data, user) {
+    data = data || {};
+    var ref = dbBoxValidateDate_(data.ref_date);
+    if (!ref) throw new Error('ref_date is required (YYYY-MM-DD)');
+    var w = BoxEngine.accountWindows(ref);
+    var acct = dbBoxValidateAccount_(data.chart_of_accounts);
+    /* Without a single-account filter this groups the whole table's accounts, so
+       it is capped. With one, the cap is irrelevant — there is one group. */
+    var limit = Math.min(Math.max(Number(data.limit) || 300, 1), 1000);
+  
+    var WINDOWS = [
+      { key: 'mtd', w: w.mtd },
+      { key: 'last_month', w: w.last_month },
+      { key: 'ytd', w: w.ytd },
+      { key: 'last_ytd', w: w.last_ytd }
+    ];
+  
+    var selects = [];
+    var params = [];
+    WINDOWS.forEach(function (x) {
+      selects.push("SUM(CASE WHEN `transaction_type` = 'credit' AND `transaction_date` BETWEEN ? AND ? THEN `transaction_amount` ELSE 0 END) AS `spend_" + x.key + '`');
+      params.push(x.w.from, x.w.to);
+    });
+    WINDOWS.forEach(function (x) {
+      selects.push("SUM(CASE WHEN `transaction_type` = 'debit' AND `transaction_date` BETWEEN ? AND ? THEN `transaction_amount` ELSE 0 END) AS `collected_" + x.key + '`');
+      params.push(x.w.from, x.w.to);
+    });
+    WINDOWS.forEach(function (x) {
+      selects.push("COUNT(CASE WHEN `transaction_type` = 'credit' AND `transaction_date` BETWEEN ? AND ? THEN 1 END) AS `n_" + x.key + '`');
+      params.push(x.w.from, x.w.to);
+    });
+  
+    /* The outer bound is exactly the span the four windows can touch: 1 January
+       of last year through the reference date. Anything outside it contributes 0
+       to every CASE, so reading it would be pure cost. */
+    var whereSql = ' WHERE `transaction_date` BETWEEN ? AND ?';
+    params.push(w.span.from, w.span.to);
+    if (acct) { whereSql += ' AND `chart_of_accounts` = ?'; params.push(acct); }
+  
+    /* The page needs figures for exactly the accounts on the visible page —
+       rarely more than a dozen. Restricting to them keeps the GROUP BY off the
+       whole account tree and, more importantly, means the answer cannot depend on
+       the ORDER BY / LIMIT below: without it, an account on the page that is not
+       in the top N by YTD spend would come back with no figures at all and the
+       strip would read zero for a perfectly ordinary account.
+       The placeholders are generated from the validated list's LENGTH; the values
+       themselves bind. */
+    var list = [];
+    if (data.accounts && data.accounts.length) {
+      for (var ai = 0; ai < data.accounts.length; ai++) {
+        var one = dbBoxValidateAccount_(data.accounts[ai]);
+        if (one && list.indexOf(one) === -1) list.push(one);
+      }
+      if (list.length > 500) list = list.slice(0, 500);
+    }
+    if (list.length) {
+      var marks = [];
+      for (var mi = 0; mi < list.length; mi++) marks.push('?');
+      whereSql += ' AND `chart_of_accounts` IN (' + marks.join(', ') + ')';
+      for (var pi = 0; pi < list.length; pi++) params.push(list[pi]);
+    }
+  
+    var conn, stmt, rs;
+    try {
+      conn = dbGetConnection_();
+      stmt = conn.prepareStatement(
+        'SELECT `chart_of_accounts`, ' + selects.join(', ') +
+        ' FROM ' + DB_BOX_TABLE + whereSql +
+        ' GROUP BY `chart_of_accounts`' +
+        ' ORDER BY `spend_ytd` DESC' +
+        ' LIMIT ' + limit);
+      dbBindParams_(stmt, params);
+      rs = stmt.executeQuery();
+  
+      var rows = [];
+      while (rs.next()) {
+        var row = { chart_of_accounts: rs.getObject(1) !== null ? String(rs.getObject(1)) : null };
+        var i = 2;
+        WINDOWS.forEach(function (x) { row['spend_' + x.key] = Number(rs.getObject(i++)) || 0; });
+        WINDOWS.forEach(function (x) { row['collected_' + x.key] = Number(rs.getObject(i++)) || 0; });
+        WINDOWS.forEach(function (x) { row['n_' + x.key] = Number(rs.getObject(i++)) || 0; });
+        rows.push(row);
+      }
+      return { status: 'ok', ref_date: ref, windows: w, rows: rows, limit: limit };
+    } catch (err) {
+      Logger.log('dbBoxAccountAggregates_ error: ' + err.message);
+      throw err;
+    } finally {
+      if (rs) rs.close();
+      if (stmt) stmt.close();
+      if (conn) conn.close();
+    }
+  }
+  
+  /**
+   * Account code → Arabic label, from chart_of_accounts_main.
+   *
+   * DELIBERATELY NOT A JOIN. Whether `chart_of_accounts_main.id_5` is unique per
+   * row has not been confirmed against the data (plan §12 q.4), and a duplicated
+   * id_5 in a SQL join would fan out the aggregate rows and DOUBLE every account
+   * total on the page — a wrong number that looks entirely plausible. Labelling
+   * in JavaScript from a map cannot fan anything out: a duplicate can only make a
+   * label ambiguous, and `duplicate_ids` reports exactly which ones so the page
+   * can say so rather than pick one silently.
+   */
+  function dbChartAccountLabels_(data, user) {
+    data = data || {};
+    var limit = Math.min(Math.max(Number(data.limit) || 5000, 1), 20000);
+    var conn, stmt, rs;
+    try {
+      conn = dbGetConnection_();
+      stmt = conn.prepareStatement(
+        'SELECT `id_5`, `account_5_name` FROM `chart_of_accounts_main`' +
+        ' WHERE `id_5` IS NOT NULL LIMIT ' + limit);
+      rs = stmt.executeQuery();
+      var labels = {}, duplicates = {}, n = 0;
+      while (rs.next()) {
+        var id = rs.getObject(1) !== null ? String(rs.getObject(1)).trim() : '';
+        var name = rs.getObject(2) !== null ? String(rs.getObject(2)).trim() : '';
+        if (!id) continue;
+        n++;
+        if (Object.prototype.hasOwnProperty.call(labels, id)) {
+          if (labels[id] !== name) duplicates[id] = true;
+          continue;                       /* first spelling wins, and it is reported */
+        }
+        labels[id] = name;
+      }
+      return {
+        status: 'ok', labels: labels, count: n,
+        duplicate_ids: Object.keys(duplicates),
+        truncated: n >= limit
+      };
+    } catch (err) {
+      Logger.log('dbChartAccountLabels_ error: ' + err.message);
+      throw err;
+    } finally {
+      if (rs) rs.close();
+      if (stmt) stmt.close();
+      if (conn) conn.close();
+    }
+  }
+  
+  /**
+   * The rows the item engine needs: a bounded window of in-range movements, with
+   * only the columns parsing and price analysis actually consume.
+   *
+   * This is the ONE query that feeds the whole item index. It is never issued per
+   * row and never inside a loop — JDBC round trips are the entire cost of this
+   * page, and a per-row history query would turn one page load into fifty.
+   *
+   * Two hard bounds, both because Apps Script kills a script at six minutes:
+   *   months  — how far back to look, default 24, capped at 60
+   *   limit   — a hard row cap, capped at DB_BOX_HISTORY_MAX
+   * `truncated` tells the caller the window was cut, so the page can say
+   * "التحليل على أحدث N حركة" instead of quietly analysing a subset.
+   */
+  var DB_BOX_HISTORY_MAX = 20000;
+  
+  function dbBoxItemHistory_(data, user) {
+    data = data || {};
+    var ref = dbBoxValidateDate_(data.ref_date);
+    if (!ref) throw new Error('ref_date is required (YYYY-MM-DD)');
+    var months = Math.min(Math.max(Number(data.months) || 24, 1), 60);
+    var limit = Math.min(Math.max(Number(data.limit) || 5000, 1), DB_BOX_HISTORY_MAX);
+  
+    var fromIso = BoxEngine.monthsBefore(ref, months);
+  
+    var params = [fromIso, ref];
+    var whereSql = ' WHERE `transaction_date` BETWEEN ? AND ?' +
+      "  AND `transaction_type` = 'credit'" +      /* spend only; debit is collection */
+      ' AND ' + DB_BOX_RANGE_SQL;                  /* the item engine's scope, plan §2.1 */
+  
+    var acct = dbBoxValidateAccount_(data.chart_of_accounts);
+    if (acct) { whereSql += ' AND `chart_of_accounts` = ?'; params.push(acct); }
+  
+    var conn, stmt, rs;
+    try {
+      conn = dbGetConnection_();
+      stmt = conn.prepareStatement(
+        'SELECT `id`, `transaction_date`, `transaction_details`, `transaction_amount`,' +
+        ' `chart_of_accounts`, `responsible_person`, `box_code`, `created_at`, `is_revised`' +
+        ' FROM ' + DB_BOX_TABLE + whereSql +
+        ' ORDER BY `transaction_date` DESC, `id` DESC' +
+        ' LIMIT ' + limit);
+      dbBindParams_(stmt, params);
+      rs = stmt.executeQuery();
+  
+      var rows = [];
+      while (rs.next()) {
+        rows.push({
+          id: rs.getObject(1) !== null ? String(rs.getObject(1)) : null,
+          transaction_date: rs.getObject(2) !== null ? String(rs.getObject(2)).slice(0, 10) : null,
+          transaction_details: rs.getObject(3) !== null ? String(rs.getObject(3)) : null,
+          transaction_amount: rs.getObject(4) !== null ? String(rs.getObject(4)) : null,
+          chart_of_accounts: rs.getObject(5) !== null ? String(rs.getObject(5)) : null,
+          responsible_person: rs.getObject(6) !== null ? String(rs.getObject(6)) : null,
+          box_code: rs.getObject(7) !== null ? String(rs.getObject(7)) : null,
+          created_at: rs.getObject(8) !== null ? String(rs.getObject(8)) : null,
+          is_revised: rs.getObject(9) !== null ? String(rs.getObject(9)) : '0'
+        });
+      }
+      return {
+        status: 'ok', rows: rows, from: fromIso, to: ref,
+        months: months, limit: limit, truncated: rows.length >= limit
+      };
+    } catch (err) {
+      Logger.log('dbBoxItemHistory_ error: ' + err.message);
+      throw err;
+    } finally {
+      if (rs) rs.close();
+      if (stmt) stmt.close();
+      if (conn) conn.close();
+    }
+  }
+  
+  // ─── regular_box_movement: the ONE write path ───────────────────────────────
+  //
+  // This feature has exactly one write: one row, addressed by primary key, from a
+  // user who filled in a form, clicked Save, and then confirmed a dialog that
+  // named the change. There is no bulk correction here, no backfill, no
+  // "normalize the existing data" pass, and no DELETE. If the parser shows four
+  // hundred rows with malformed details, that is a number to report, not a job to
+  // run.
+  //
+  // Never executed against anything. Verified by reading, and by the invariants
+  // tools/verify/box_sql.js asserts over this text.
+  
+  /** Reads one row by id. Used for the before/after snapshots the audit needs. */
+  function dbBoxGetOne_(conn, id) {
+    var cols = DB_BOX_COLUMNS.map(dbSanitizeIdentifier_).join(', ');
+    var stmt, rs;
+    try {
+      stmt = conn.prepareStatement('SELECT ' + cols + ' FROM ' + DB_BOX_TABLE + ' WHERE `id` = ? LIMIT 1');
+      stmt.setObject(1, id);
+      rs = stmt.executeQuery();
+      return rs.next() ? dbBoxReadRow_(rs) : null;
+    } finally {
+      if (rs) rs.close();
+      if (stmt) stmt.close();
+    }
+  }
+  
+  /**
+   * Update ONE movement row.
+   *
+   * data: { id, changes: { column: value, ... } }
+   * Returns { status:'ok', id, changed:[cols], before:{row}, after:{row},
+   *           boundary:{...}|null }
+   *
+   * The column names in the SET clause come from BoxEngine.EDITABLE_COLUMNS — a
+   * fixed allowlist — and are re-derived here through dbSanitizeIdentifier_ so
+   * that even a bug in the allowlist cannot put arbitrary text into the
+   * statement. Values bind as parameters, every one of them.
+   *
+   * updated_at is set by the SERVER to NOW() and is not in the allowlist, so an
+   * edit cannot write an old timestamp into the column that the
+   * EDITED_AFTER_REVIEW rule reads.
+   *
+   * The caller (updateBoxMovement_) writes the audit trail. It is not done here
+   * because this file talks to MySQL and the audit lives in Drive, and mixing the
+   * two would make this function untestable in exactly the way the rest of the
+   * connector is.
+   */
+  function dbBoxUpdate_(data, user) {
+    data = data || {};
+    var id = dbBoxValidateInt_(data.id, 'رقم الحركة');
+    if (!id) throw new Error('رقم الحركة مطلوب');
+  
+    /* Allowlist + per-column validation, before a connection is even opened.
+       A change set that will not validate must not cost a round trip. */
+    var checked = BoxEngine.validateChanges(data.changes);
+  
+    var setParts = [];
+    var params = [];
+    checked.columns.forEach(function (col) {
+      setParts.push(dbSanitizeIdentifier_(col) + ' = ?');
+      params.push(checked.values[col]);
+    });
+    /* Server-set, always, and last in the SET list so it is impossible to read
+       the statement without seeing it. */
+    setParts.push('`updated_at` = NOW()');
+  
+    var conn, stmt;
+    try {
+      conn = dbGetConnection_();
+  
+      var before = dbBoxGetOne_(conn, id);
+      if (!before) throw new Error('البند غير موجود');
+  
+      stmt = conn.prepareStatement(
+        'UPDATE ' + DB_BOX_TABLE + ' SET ' + setParts.join(', ') + ' WHERE `id` = ?');
+      dbBindParams_(stmt, params);
+      stmt.setObject(params.length + 1, id);
+      var affected = stmt.executeUpdate();
+      if (affected === 0) throw new Error('البند غير موجود');
+  
+      var after = dbBoxGetOne_(conn, id);
+      return {
+        status: 'ok',
+        id: id,
+        affected: affected,
+        changed: checked.columns,
+        before: before,
+        after: after,
+        /* Crossing the 300000–400000 boundary changes which analyses apply to
+           this row and nothing else on screen would show it. */
+        boundary: checked.columns.indexOf('chart_of_accounts') !== -1
+          ? BoxEngine.crossesItemBoundary(before.chart_of_accounts, after ? after.chart_of_accounts : null)
+          : null
+      };
+    } catch (err) {
+      Logger.log('dbBoxUpdate_ error: ' + err.message);
+      throw err;
+    } finally {
+      if (stmt) stmt.close();
+      if (conn) conn.close();
+    }
+  }
+  
+  /**
+   * Flip one row's review flag 0 -> 1, mirroring dbClientsArRevise_.
+   *
+   * The `AND is_revised = 0 OR IS NULL` guard makes this idempotent-safe: a
+   * second click reports "already reviewed" rather than silently moving
+   * updated_at, which the EDITED_AFTER_REVIEW rule would then read as a post-hoc
+   * edit of a reviewed row. The rule this page ships would have fired on the
+   * page's own double-click.
+   */
+  function dbBoxRevise_(data, user) {
+    data = data || {};
+    var id = dbBoxValidateInt_(data.id, 'رقم الحركة');
+    if (!id) throw new Error('رقم الحركة مطلوب');
+    var conn, stmt;
+    try {
+      conn = dbGetConnection_();
+      stmt = conn.prepareStatement(
+        'UPDATE ' + DB_BOX_TABLE + ' SET `is_revised` = 1, `updated_at` = NOW()' +
+        ' WHERE `id` = ? AND (`is_revised` = 0 OR `is_revised` IS NULL)');
+      stmt.setObject(1, id);
+      var affected = stmt.executeUpdate();
+      if (affected === 0) throw new Error('البند غير موجود أو تمت مراجعته مسبقاً');
+      return { status: 'ok', affected: affected, id: id, is_revised: 1 };
+    } catch (err) {
+      Logger.log('dbBoxRevise_ error: ' + err.message);
+      throw err;
+    } finally {
+      if (stmt) stmt.close();
+      if (conn) conn.close();
+    }
+  }
+  
+  // ─── Wider reads for the alerts tab and the precomputed index ───────────────
+  //
+  // dbBoxList_ is the PAGE's read and is clamped to 200 rows, which is right for
+  // something a human scrolls. The behavioural rules in Tier 3 need a population
+  // rather than a page — Benford alone is gated at 300 amounts — so they get
+  // their own bounded scan rather than a raised clamp on the page query.
+  
+  var DB_BOX_SCAN_MAX = 8000;
+  
+  /**
+   * A bounded scan for the rules engine.
+   *
+   * data: { ref_date, months, limit, chart_of_accounts, responsible_person }
+   *
+   * ALL transaction types come back, unlike dbBoxItemHistory_: Tier 1 reasons
+   * about duplicates, sequence and edit timestamps, which apply to a collection
+   * exactly as much as to a payment. The rules that are about SPEND filter to
+   * credit themselves, close to where that decision matters.
+   *
+   * `truncated` says the window was cut, so the page can report what it actually
+   * analysed instead of implying it saw everything.
+   */
+  function dbBoxAnalysisScan_(data, user) {
+    data = data || {};
+    var ref = dbBoxValidateDate_(data.ref_date);
+    if (!ref) throw new Error('ref_date is required (YYYY-MM-DD)');
+    var months = Math.min(Math.max(Number(data.months) || 12, 1), 60);
+    var limit = Math.min(Math.max(Number(data.limit) || 3000, 1), DB_BOX_SCAN_MAX);
+    var fromIso = BoxEngine.monthsBefore(ref, months);
+  
+    var conditions = ['`transaction_date` BETWEEN ? AND ?'];
+    var params = [fromIso, ref];
+  
+    var acct = dbBoxValidateAccount_(data.chart_of_accounts);
+    if (acct) { conditions.push('`chart_of_accounts` = ?'); params.push(acct); }
+    var person = String(data.responsible_person === undefined || data.responsible_person === null ? '' : data.responsible_person).trim();
+    if (person) { conditions.push('`responsible_person` LIKE ?'); params.push('%' + person + '%'); }
+  
+    var cols = DB_BOX_COLUMNS.map(dbSanitizeIdentifier_).join(', ');
+    var conn, stmt, rs;
+    try {
+      conn = dbGetConnection_();
+      stmt = conn.prepareStatement(
+        'SELECT ' + cols + ' FROM ' + DB_BOX_TABLE +
+        ' WHERE ' + conditions.join(' AND ') +
+        ' ORDER BY `transaction_date` DESC, `id` DESC' +
+        ' LIMIT ' + limit);
+      dbBindParams_(stmt, params);
+      rs = stmt.executeQuery();
+      var rows = [];
+      while (rs.next()) rows.push(dbBoxReadRow_(rs));
+      return {
+        status: 'ok', rows: rows, from: fromIso, to: ref, months: months,
+        limit: limit, truncated: rows.length >= limit
+      };
+    } catch (err) {
+      Logger.log('dbBoxAnalysisScan_ error: ' + err.message);
+      throw err;
+    } finally {
+      if (rs) rs.close();
+      if (stmt) stmt.close();
+      if (conn) conn.close();
+    }
+  }
+  
+  /**
+   * MAX(updated_at) over the table — the cache key for the precomputed item
+   * index. Any insert or edit moves it, so a stale index can never be served as
+   * a fresh one, and nothing has to guess at a TTL.
+   */
+  function dbBoxMaxUpdatedAt_(data, user) {
+    var conn, stmt, rs;
+    try {
+      conn = dbGetConnection_();
+      stmt = conn.prepareStatement(
+        'SELECT MAX(`updated_at`) AS mx, COUNT(*) AS cnt FROM ' + DB_BOX_TABLE);
+      rs = stmt.executeQuery();
+      if (!rs.next()) return { status: 'ok', max_updated_at: null, count: 0 };
+      var mx = rs.getObject(1);
+      return {
+        status: 'ok',
+        max_updated_at: mx !== null ? String(mx) : null,
+        count: Number(rs.getObject(2)) || 0
+      };
+    } catch (err) {
+      Logger.log('dbBoxMaxUpdatedAt_ error: ' + err.message);
+      throw err;
+    } finally {
+      if (rs) rs.close();
+      if (stmt) stmt.close();
+      if (conn) conn.close();
+    }
+  }
+  
+  // ─── Top Chemical executive sales (tc_exec_sales) ──
+  //
+  // Reads the `sales_product_qty_value` view joined to `products` for the metric
+  // divisor, plus the box net over `regular_box_movement` for the same date span.
+  // Same discipline as dbBoxWhere_/dbBoxList_/dbBoxAccountAggregates_: prepared
+  // statements, bound params, clamped limits, close rs/stmt/conn in finally.
+  
+  function dbTcExecSalesValidateYears_(years) {
+    var out = [];
+    var src = years;
+    if (src === undefined || src === null) src = [];
+    if (!Array.isArray(src)) src = [src];
+    for (var i = 0; i < src.length; i++) {
+      var y = Number(src[i]);
+      if (!Number.isInteger(y) || y < 2000 || y > 2100) throw new Error('سنة غير صحيحة: ' + src[i]);
+      if (out.indexOf(y) === -1) out.push(y);
+    }
+    if (!out.length) throw new Error('السنوات مطلوبة (years[])');
+    out.sort(function (a, b) { return a - b; });
+    return out;
+  }
+  
+  function dbTcExecSalesRows_(data, user) {
+    data = data || {};
+    var years = dbTcExecSalesValidateYears_(data.years);
+    var months = [];
+    if (data.months !== undefined && data.months !== null && data.months !== '') {
+      var mSrc = Array.isArray(data.months) ? data.months : [data.months];
+      for (var mi = 0; mi < mSrc.length; mi++) {
+        var m = Number(mSrc[mi]);
+        if (!Number.isInteger(m) || m < 1 || m > 12) throw new Error('شهر غير صحيح: ' + mSrc[mi]);
+        if (months.indexOf(m) === -1) months.push(m);
+      }
+    }
+    var search = String(data.search !== undefined && data.search !== null ? data.search : '').trim();
+    var pids = [];
+    if (data.product_ids !== undefined && data.product_ids !== null && data.product_ids !== '') {
+      var pSrc = Array.isArray(data.product_ids) ? data.product_ids : [data.product_ids];
+      for (var pi = 0; pi < pSrc.length; pi++) {
+        var s = String(pSrc[pi]).trim();
+        if (!s) continue;
+        if (!/^\d{1,19}$/.test(s)) throw new Error('product_id غير صحيح: ' + pSrc[pi]);
+        if (pids.indexOf(s) === -1) pids.push(s);
+      }
+    }
+    var limit = Math.min(Math.max(Number(data.limit) || 3000, 1), 5000);
+    var offset = Math.max(Number(data.offset) || 0, 0);
+    var yearMarks = years.map(function () { return '?'; }).join(', ');
+    var sql = 'SELECT v.sales_year, v.sales_month, v.product_id, v.name_ar, v.total_qty, v.return_qty, v.net_qty, v.total_value, v.return_value, v.net_value, v.currency, v.currency_ratio, p.product_unit_metric' +
+      ' FROM sales_product_qty_value v LEFT JOIN products p ON p.id=v.product_id AND p.deleted_at IS NULL' +
+      ' WHERE v.sales_year IN (' + yearMarks + ')';
+    var params = years.slice();
+    if (months.length) {
+      sql += ' AND v.sales_month IN (' + months.map(function () { return '?'; }).join(', ') + ')';
+      for (var k = 0; k < months.length; k++) params.push(months[k]);
+    }
+    if (pids.length) {
+      sql += ' AND v.product_id IN (' + pids.map(function () { return '?'; }).join(', ') + ')';
+      for (var q = 0; q < pids.length; q++) params.push(pids[q]);
+    }
+    if (search) {
+      sql += ' AND (v.name_ar LIKE ? OR CAST(v.product_id AS CHAR) LIKE ?)';
+      params.push('%' + search + '%', '%' + search + '%');
+    }
+    sql += ' ORDER BY v.sales_year DESC, v.sales_month DESC, v.product_id DESC LIMIT ' + limit + ' OFFSET ' + offset;
+  
+    var conn, stmt, rs;
+    try {
+      conn = dbGetConnection_();
+      stmt = conn.prepareStatement(sql);
+      dbBindParams_(stmt, params);
+      rs = stmt.executeQuery();
+      var rows = [];
+      while (rs.next()) {
+        rows.push({
+          sales_year: rs.getObject(1) !== null ? String(rs.getObject(1)) : null,
+          sales_month: rs.getObject(2) !== null ? String(rs.getObject(2)) : null,
+          product_id: rs.getObject(3) !== null ? String(rs.getObject(3)) : null,
+          name_ar: rs.getObject(4) !== null ? String(rs.getObject(4)) : null,
+          total_qty: rs.getObject(5) !== null ? String(rs.getObject(5)) : null,
+          return_qty: rs.getObject(6) !== null ? String(rs.getObject(6)) : null,
+          net_qty: rs.getObject(7) !== null ? String(rs.getObject(7)) : null,
+          total_value: rs.getObject(8) !== null ? String(rs.getObject(8)) : null,
+          return_value: rs.getObject(9) !== null ? String(rs.getObject(9)) : null,
+          net_value: rs.getObject(10) !== null ? String(rs.getObject(10)) : null,
+          currency: rs.getObject(11) !== null ? String(rs.getObject(11)) : null,
+          currency_ratio: rs.getObject(12) !== null ? String(rs.getObject(12)) : null,
+          product_unit_metric: rs.getObject(13) !== null ? String(rs.getObject(13)) : null
+        });
+      }
+      return { status: 'ok', rows: rows, years: years, months: months, limit: limit, offset: offset, truncated: rows.length >= limit };
+    } catch (err) {
+      Logger.log('dbTcExecSalesRows_ error: ' + err.message + ' | years=' + JSON.stringify(years) + ' search=' + String(search || '').slice(0, 40) + ' limit=' + limit + ' offset=' + offset);
+      throw err;
+    } finally {
+      if (rs) rs.close();
+      if (stmt) stmt.close();
+      if (conn) conn.close();
+    }
+  }
+  
+  var DB_TC_SALES_VIEW_COLUMNS = [
+    'sales_year', 'sales_month', 'product_id', 'name_ar',
+    'total_qty', 'return_qty', 'net_qty',
+    'total_value', 'return_value', 'net_value',
+    'currency', 'currency_ratio', 'product_unit_metric'
+  ];
+  
+  /**
+   * Result caches for the tc_exec_sales split endpoints (permanent timeout fix).
+   * get_sales_charts runs two full-view GROUP BYs with per-row DECIMAL casts —
+   * recomputing them on every page view is what blew the 60s client budget, so
+   * aggregates keep the EXEC_SALES_TTL precedent (600s). The paged list keeps
+   * the DBLIVE-1 budget (90s). The view has no direct write path (it derives
+   * from invoices/returns), so freshness is TTL-bounded and documented; both
+   * endpoints honor opt-in data.refresh to force a rebuild. Chunked helpers are
+   * referenced only behind typeof guards — this file ships unordered relative
+   * to Code.js, same discipline as the products-live block.
+   */
+  var DB_TC_SALES_CHARTS_TTL = 600;
+  var DB_TC_SALES_VIEW_TTL = 90;
+  var DB_TC_SALES_VER_KEY = 'dblive_sales_ver';
+  
+  function dbTcSalesVer_() {
+    try {
+      var v = CacheService.getScriptCache().get(DB_TC_SALES_VER_KEY);
+      return v || '0';
+    } catch (e) { return '0'; }
+  }
+  
+  function dbTcSalesCacheGet_(key) {
+    try {
+      if (typeof getChunkedCache_ === 'function') return getChunkedCache_(key);
+      var raw = CacheService.getScriptCache().get(key);
+      return raw ? JSON.parse(raw) : null;
+    } catch (e) { return null; }
+  }
+  
+  function dbTcSalesCachePut_(key, value, ttl) {
+    try {
+      if (typeof putChunkedCache_ === 'function') { putChunkedCache_(key, value, ttl); return; }
+      CacheService.getScriptCache().put(key, JSON.stringify(value), ttl);
+    } catch (e) {}
+  }
+  
+  function dbTcSalesCacheKey_(kind, where, extra) {
+    var q = String(where.search || '').replace(/[^a-zA-Z0-9_\u0600-\u06FF]/g, '').slice(0, 30);
+    return 'dblive_sales_' + kind + '_v' + dbTcSalesVer_() +
+      '_y' + (where.years || []).join('-') + '_q' + q + extra;
+  }
+  
+  /**
+   * Paginated view-only reader for the tc_exec_sales first iteration.
+   * Copies the dbClientsArList_ discipline: one small COUNT + one small SELECT
+   * sharing the same WHERE, limit 1..200 (default 50). No aggregation here —
+   * the page renders exactly these rows plus per-row metric/EGP derivation.
+   * data: { years[], search, limit, offset }
+   * Returns { status:'ok', columns, rows, total, limit, offset }.
+   */
+  function dbTcSalesViewWhere_(data) {
+    data = data || {};
+    var years = dbTcExecSalesValidateYears_(data.years);
+    var search = String(data.search !== undefined && data.search !== null ? data.search : '').trim().slice(0, 40);
+    var conditions = ['v.sales_year IN (' + years.map(function () { return '?'; }).join(', ') + ')'];
+    var params = years.slice();
+    if (search) {
+      conditions.push('(v.name_ar LIKE ? OR CAST(v.product_id AS CHAR) LIKE ?)');
+      params.push('%' + search + '%', '%' + search + '%');
+    }
+    return { sql: ' WHERE ' + conditions.join(' AND '), params: params, years: years, search: search };
+  }
+  
+  function dbTcSalesViewList_(data, user) {
+    data = data || {};
+    var where = dbTcSalesViewWhere_(data);
+    var limit = Math.min(Math.max(Number(data.limit) || 50, 1), 200);
+    var offset = Math.max(Number(data.offset) || 0, 0);
+    var cacheKey = dbTcSalesCacheKey_('view', where, '_l' + limit + '_o' + offset);
+    if (!data.refresh) {
+      var hit = dbTcSalesCacheGet_(cacheKey);
+      if (hit && hit.status === 'ok' && Array.isArray(hit.rows)) return hit;
+    }
+    var cols = 'v.sales_year, v.sales_month, v.product_id, v.name_ar, v.total_qty, v.return_qty, v.net_qty, v.total_value, v.return_value, v.net_value, v.currency, v.currency_ratio, p.product_unit_metric';
+    var from = ' FROM sales_product_qty_value v LEFT JOIN products p ON p.id=v.product_id AND p.deleted_at IS NULL';
+    var conn, countStmt, countRs, stmt, rs;
+    try {
+      conn = dbGetConnection_();
+      countStmt = conn.prepareStatement('SELECT COUNT(*) AS cnt' + from + where.sql);
+      dbBindParams_(countStmt, where.params);
+      countRs = countStmt.executeQuery();
+      var total = countRs.next() ? countRs.getInt('cnt') : 0;
+      stmt = conn.prepareStatement('SELECT ' + cols + from + where.sql +
+        ' ORDER BY v.sales_year DESC, v.sales_month DESC, v.product_id DESC' +
+        ' LIMIT ' + limit + ' OFFSET ' + offset);
+      dbBindParams_(stmt, where.params);
+      rs = stmt.executeQuery();
+      var rows = [];
+      while (rs.next()) {
+        rows.push({
+          sales_year: rs.getObject(1) !== null ? String(rs.getObject(1)) : null,
+          sales_month: rs.getObject(2) !== null ? String(rs.getObject(2)) : null,
+          product_id: rs.getObject(3) !== null ? String(rs.getObject(3)) : null,
+          name_ar: rs.getObject(4) !== null ? String(rs.getObject(4)) : null,
+          total_qty: rs.getObject(5) !== null ? String(rs.getObject(5)) : null,
+          return_qty: rs.getObject(6) !== null ? String(rs.getObject(6)) : null,
+          net_qty: rs.getObject(7) !== null ? String(rs.getObject(7)) : null,
+          total_value: rs.getObject(8) !== null ? String(rs.getObject(8)) : null,
+          return_value: rs.getObject(9) !== null ? String(rs.getObject(9)) : null,
+          net_value: rs.getObject(10) !== null ? String(rs.getObject(10)) : null,
+          currency: rs.getObject(11) !== null ? String(rs.getObject(11)) : null,
+          currency_ratio: rs.getObject(12) !== null ? String(rs.getObject(12)) : null,
+          product_unit_metric: rs.getObject(13) !== null ? String(rs.getObject(13)) : null
+        });
+      }
+      var out = { status: 'ok', columns: DB_TC_SALES_VIEW_COLUMNS.slice(), rows: rows, total: total, limit: limit, offset: offset, years: where.years, search: where.search };
+      dbTcSalesCachePut_(cacheKey, out, DB_TC_SALES_VIEW_TTL);
+      return out;
+    } catch (err) {
+      Logger.log('dbTcSalesViewList_ error: ' + err.message + ' | years=' + JSON.stringify((where && where.years) || (data && data.years)) + ' search=' + String((where && where.search !== undefined ? where.search : data && data.search) || '').slice(0, 40) + ' limit=' + limit + ' offset=' + offset);
+      throw err;
+    } finally {
+      if (rs) rs.close();
+      if (stmt) stmt.close();
+      if (countRs) countRs.close();
+      if (countStmt) countStmt.close();
+      if (conn) conn.close();
+    }
+  }
+  
+  /**
+   * Full-scope aggregates for the exec-sales charts (one execution, three small
+   * GROUP BY queries, tiny payload). Reuses dbTcSalesViewWhere_ so charts always
+   * match the table filters (years + search). No LIMIT truncation: monthly is at
+   * most 12×years rows; products capped at top 50 by value; products_yearly is
+   * the per-product-per-year matrix for the YoY comparison, filtered to the
+   * same top 50. EGP mirrors the page math: net_value × currency_ratio
+   * (garbage/0/NULL → 1).
+   */
+  function dbTcSalesCharts_(data, user) {
+    data = data || {};
+    var where = dbTcSalesViewWhere_(data);
+    var cacheKey = dbTcSalesCacheKey_('charts', where, '');
+    if (!data.refresh) {
+      var hit = dbTcSalesCacheGet_(cacheKey);
+      if (hit && hit.status === 'ok' && Array.isArray(hit.monthly) && Array.isArray(hit.products) && Array.isArray(hit.products_yearly)) return hit;
+    }
+    var from = ' FROM sales_product_qty_value v LEFT JOIN products p ON p.id=v.product_id AND p.deleted_at IS NULL';
+    var rateSql = 'COALESCE(NULLIF(CAST(v.currency_ratio AS DECIMAL(19,6)),0),1)';
+    var conn, stmtM, rsM, stmtP, rsP, stmtY, rsY;
+    try {
+      conn = dbGetConnection_();
+      stmtM = conn.prepareStatement(
+        'SELECT v.sales_year, v.sales_month,' +
+        ' SUM(v.net_value * ' + rateSql + ') AS net_value_egp,' +
+        ' SUM(v.net_qty) AS net_qty' + from + where.sql +
+        ' GROUP BY v.sales_year, v.sales_month ORDER BY v.sales_year, v.sales_month');
+      dbBindParams_(stmtM, where.params);
+      rsM = stmtM.executeQuery();
+      var monthly = [];
+      while (rsM.next()) {
+        monthly.push({
+          year: Number(rsM.getObject(1)) || 0,
+          month: Number(rsM.getObject(2)) || 0,
+          net_value_egp: Number(rsM.getObject(3)) || 0,
+          net_qty: Number(rsM.getObject(4)) || 0
+        });
+      }
+      stmtP = conn.prepareStatement(
+        'SELECT v.product_id, MAX(v.name_ar) AS name_ar,' +
+        ' SUM(v.net_qty) AS net_qty,' +
+        ' SUM(v.net_value * ' + rateSql + ') AS net_value_egp,' +
+        ' MAX(p.product_unit_metric) AS metric_divisor' + from + where.sql +
+        ' GROUP BY v.product_id ORDER BY net_value_egp DESC LIMIT 50');
+      dbBindParams_(stmtP, where.params);
+      rsP = stmtP.executeQuery();
+      var products = [];
+      while (rsP.next()) {
+        products.push({
+          product_id: rsP.getObject(1) !== null ? String(rsP.getObject(1)) : null,
+          name_ar: rsP.getObject(2) !== null ? String(rsP.getObject(2)) : null,
+          net_qty: Number(rsP.getObject(3)) || 0,
+          net_value_egp: Number(rsP.getObject(4)) || 0,
+          metric_divisor: rsP.getObject(5) !== null ? String(rsP.getObject(5)) : null
+        });
+      }
+      // Per-year matrix for the YoY top-products comparison (same WHERE, same
+      // connection). Rows filtered to the top-50 above so the payload stays tiny.
+      var topIds = {};
+      for (var ti = 0; ti < products.length; ti++) { topIds[String(products[ti].product_id)] = true; }
+      stmtY = conn.prepareStatement(
+        'SELECT v.product_id, v.sales_year,' +
+        ' SUM(v.net_qty) AS net_qty,' +
+        ' SUM(v.net_value * ' + rateSql + ') AS net_value_egp' + from + where.sql +
+        ' GROUP BY v.product_id, v.sales_year');
+      dbBindParams_(stmtY, where.params);
+      rsY = stmtY.executeQuery();
+      var products_yearly = [];
+      while (rsY.next()) {
+        var ypid = rsY.getObject(1) !== null ? String(rsY.getObject(1)) : null;
+        if (!topIds[ypid]) continue;
+        products_yearly.push({
+          product_id: ypid,
+          year: Number(rsY.getObject(2)) || 0,
+          net_qty: Number(rsY.getObject(3)) || 0,
+          net_value_egp: Number(rsY.getObject(4)) || 0
+        });
+      }
+      var out = { status: 'ok', monthly: monthly, products: products, products_yearly: products_yearly, years: where.years, search: where.search };
+      dbTcSalesCachePut_(cacheKey, out, DB_TC_SALES_CHARTS_TTL);
+      return out;
+    } catch (err) {
+      Logger.log('dbTcSalesCharts_ error: ' + err.message + ' | years=' + JSON.stringify((where && where.years) || (data && data.years)) + ' search=' + String((where && where.search !== undefined ? where.search : data && data.search) || '').slice(0, 40));
+      throw err;
+    } finally {
+      if (rsM) rsM.close();
+      if (stmtM) stmtM.close();
+      if (rsP) rsP.close();
+      if (stmtP) stmtP.close();
+      if (rsY) rsY.close();
+      if (stmtY) stmtY.close();
+      if (conn) conn.close();
+    }
+  }
+  
+  /**
+   * Monthly aggregates for the overhauled tc_exec_sales page, sourced from the
+   * date_sales_product_qty_value MySQL view (same connection/cache discipline
+   * as dbTcSalesCharts_: one small GROUP BY per call, chunked cache with
+   * typeof guards, opt-in refresh). EGP mirrors the old chart math:
+   * net_value × currency_ratio (garbage/0/NULL → 1).
+   * params: { from, to (YYYY-MM-DD), product_id ('' = all), refresh }
+   * Returns { status:'ok', rows:[{ym, net_value_egp, net_qty, sales_metric_qty }], from, to, product_id }.
+   */
+  var DB_TC_DATE_SALES_TTL = 600;
+
+  function dbTcDateSalesParams_(data) {
+    data = data || {};
+    var from = String(data.from !== undefined && data.from !== null ? data.from : '').trim().slice(0, 10);
+    var to = String(data.to !== undefined && data.to !== null ? data.to : '').trim().slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) throw new Error('نطاق التاريخ مطلوب (YYYY-MM-DD)');
+    if (from > to) throw new Error('«من تاريخ» بعد «إلى تاريخ»');
+    var productId = String(data.product_id === undefined || data.product_id === null ? '' : data.product_id).trim().slice(0, 40);
+    return { from: from, to: to, product_id: productId, refresh: data.refresh };
+  }
+
+  function dbTcDateSalesMonthly_(params, user) {
+    params = params || {};
+    var conditions = ['v.sales_date >= ?', 'v.sales_date <= ?'];
+    var bind = [params.from, params.to];
+    if (params.product_id) {
+      conditions.push('CAST(v.product_id AS CHAR) = ?');
+      bind.push(params.product_id);
+    }
+    var whereSql = ' WHERE ' + conditions.join(' AND ');
+    var fromSql = ' FROM date_sales_product_qty_value v';
+    var rateSql = 'COALESCE(NULLIF(CAST(v.currency_ratio AS DECIMAL(19,6)),0),1)';
+    var pidKey = String(params.product_id || '').replace(/[^a-zA-Z0-9_]/g, '').slice(0, 30);
+    var cacheKey = 'dblive_date_sales_monthly_v' + dbTcSalesVer_() +
+      '_f' + params.from + '_t' + params.to + '_p' + pidKey;
+    if (!params.refresh) {
+      var hit = dbTcSalesCacheGet_(cacheKey);
+      if (hit && hit.status === 'ok' && Array.isArray(hit.rows)) return hit;
+    }
+    var conn, stmt, rs;
+    try {
+      conn = dbGetConnection_();
+      stmt = conn.prepareStatement(
+        'SELECT DATE_FORMAT(v.sales_date, \'%Y-%m\') AS ym,' +
+        ' SUM(v.net_value * ' + rateSql + ') AS net_value_egp,' +
+        ' SUM(v.net_qty) AS net_qty,' +
+        ' SUM(v.sales_metric_qty) AS sales_metric_qty' + fromSql + whereSql +
+        ' GROUP BY ym ORDER BY ym');
+      dbBindParams_(stmt, bind);
+      rs = stmt.executeQuery();
+      var rows = [];
+      while (rs.next()) {
+        rows.push({
+          ym: rs.getObject(1) !== null ? String(rs.getObject(1)) : null,
+          net_value_egp: Number(rs.getObject(2)) || 0,
+          net_qty: Number(rs.getObject(3)) || 0,
+          sales_metric_qty: Number(rs.getObject(4)) || 0
+        });
+      }
+      var out = { status: 'ok', rows: rows, from: params.from, to: params.to, product_id: params.product_id || '' };
+      dbTcSalesCachePut_(cacheKey, out, DB_TC_DATE_SALES_TTL);
+      return out;
+    } catch (err) {
+      Logger.log('dbTcDateSalesMonthly_ error: ' + err.message + ' | from=' + params.from + ' to=' + params.to + ' product=' + String(params.product_id || ''));
+      throw err;
+    } finally {
+      if (rs) rs.close();
+      if (stmt) stmt.close();
+      if (conn) conn.close();
+    }
+  }
+
+  /**
+   * Distinct product list for the exec-sales product dropdown. Same cache
+   * scope/TTL family as the monthly endpoint; opt-in refresh supported.
+   */
+  function dbTcDateSalesProducts_(data, user) {
+    data = data || {};
+    var cacheKey = 'dblive_date_sales_products_v' + dbTcSalesVer_();
+    if (!data.refresh) {
+      var hit = dbTcSalesCacheGet_(cacheKey);
+      if (hit && hit.status === 'ok' && Array.isArray(hit.products)) return hit;
+    }
+    var conn, stmt, rs;
+    try {
+      conn = dbGetConnection_();
+      stmt = conn.prepareStatement(
+        'SELECT v.product_id, MAX(v.name_ar) AS name_ar' +
+        ' FROM date_sales_product_qty_value v GROUP BY v.product_id ORDER BY name_ar');
+      rs = stmt.executeQuery();
+      var products = [];
+      while (rs.next()) {
+        products.push({
+          product_id: rs.getObject(1) !== null ? String(rs.getObject(1)) : null,
+          name_ar: rs.getObject(2) !== null ? String(rs.getObject(2)) : null
+        });
+      }
+      var out = { status: 'ok', products: products };
+      dbTcSalesCachePut_(cacheKey, out, DB_TC_DATE_SALES_TTL);
+      return out;
+    } catch (err) {
+      Logger.log('dbTcDateSalesProducts_ error: ' + err.message);
+      throw err;
+    } finally {
+      if (rs) rs.close();
+      if (stmt) stmt.close();
+      if (conn) conn.close();
+    }
+  }
+
+  /**
+   * Monthly aggregates for the second tc_exec_sales chart, sourced from the
+   * box_movement_daily_revise MySQL view (id, transaction_date,
+   * chart_of_accounts text NULL, transaction_details, income, outcome,
+   * created_at, record_date). chart_of_accounts is the filter dimension
+   * (exact match, '' = all accounts); income/outcome NULLs count as 0.
+   * Same discipline as dbTcDateSalesMonthly_: one small GROUP BY per call,
+   * chunked cache with typeof guards, opt-in refresh.
+   * params: { from, to (YYYY-MM-DD), chart_of_accounts ('' = all), refresh }
+   * Returns { status:'ok', rows:[{ym, income, outcome, net, moves}], from, to, chart_of_accounts }.
+   */
+  var DB_TC_BOX_DAILY_TTL = 600;
+  var DB_TC_BOX_ACCOUNTS_TTL = 21600;
+
+  function dbBoxDailyParams_(data) {
+    data = data || {};
+    var from = String(data.from !== undefined && data.from !== null ? data.from : '').trim().slice(0, 10);
+    var to = String(data.to !== undefined && data.to !== null ? data.to : '').trim().slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) throw new Error('نطاق التاريخ مطلوب (YYYY-MM-DD)');
+    if (from > to) throw new Error('«من تاريخ» بعد «إلى تاريخ»');
+    var acct = String(data.chart_of_accounts === undefined || data.chart_of_accounts === null ? '' : data.chart_of_accounts).trim().slice(0, 64);
+    return { from: from, to: to, chart_of_accounts: acct, refresh: !!data.refresh };
+  }
+
+  function dbBoxDailyMonthly_(params, user) {
+    var p = dbBoxDailyParams_(params);
+    var acctKey = String(p.chart_of_accounts || '').replace(/[^a-zA-Z0-9_]/g, '').slice(0, 48);
+    var cacheKey = 'dblive_box_daily_monthly_v' + dbTcSalesVer_() +
+      '_f' + p.from + '_t' + p.to + '_a' + acctKey;
+    if (!p.refresh) {
+      var hit = dbTcSalesCacheGet_(cacheKey);
+      if (hit && hit.status === 'ok' && Array.isArray(hit.rows)) return hit;
+    }
+    var conditions = ['v.transaction_date >= ?', 'v.transaction_date <= ?'];
+    var bind = [p.from, p.to];
+    if (p.chart_of_accounts) {
+      conditions.push('v.chart_of_accounts <=> ?');
+      bind.push(p.chart_of_accounts);
+    }
+    var conn, stmt, rs;
+    try {
+      conn = dbGetConnection_();
+      stmt = conn.prepareStatement(
+        'SELECT DATE_FORMAT(v.transaction_date, \'%Y-%m\') AS ym,' +
+        ' SUM(COALESCE(v.income,0)) AS income,' +
+        ' SUM(COALESCE(v.outcome,0)) AS outcome,' +
+        ' SUM(COALESCE(v.income,0) - COALESCE(v.outcome,0)) AS net,' +
+        ' COUNT(*) AS moves' +
+        ' FROM box_movement_daily_revise v WHERE ' + conditions.join(' AND ') +
+        ' GROUP BY ym ORDER BY ym');
+      dbBindParams_(stmt, bind);
+      rs = stmt.executeQuery();
+      var rows = [];
+      while (rs.next()) {
+        rows.push({
+          ym: rs.getObject(1) !== null ? String(rs.getObject(1)) : null,
+          income: Number(rs.getObject(2)) || 0,
+          outcome: Number(rs.getObject(3)) || 0,
+          net: Number(rs.getObject(4)) || 0,
+          moves: Number(rs.getObject(5)) || 0
+        });
+      }
+      var out = { status: 'ok', rows: rows, from: p.from, to: p.to, chart_of_accounts: p.chart_of_accounts };
+      dbTcSalesCachePut_(cacheKey, out, DB_TC_BOX_DAILY_TTL);
+      return out;
+    } catch (err) {
+      Logger.log('dbBoxDailyMonthly_ error: ' + err.message + ' | from=' + p.from + ' to=' + p.to + ' acct=' + String(p.chart_of_accounts || ''));
+      throw err;
+    } finally {
+      if (rs) rs.close();
+      if (stmt) stmt.close();
+      if (conn) conn.close();
+    }
+  }
+
+  /**
+   * Distinct chart_of_accounts list for the box account dropdown. Same cache
+   * scope/TTL family as the box monthly endpoint; opt-in refresh supported.
+   */
+  function dbBoxDailyAccounts_(data, user) {
+    data = data || {};
+    var cacheKey = 'dblive_box_daily_accounts_v' + dbTcSalesVer_();
+    if (!data.refresh) {
+      var hit = dbTcSalesCacheGet_(cacheKey);
+      if (hit && hit.status === 'ok' && Array.isArray(hit.accounts)) return hit;
+    }
+    var conn, stmt, rs;
+    try {
+      conn = dbGetConnection_();
+      stmt = conn.prepareStatement(
+        'SELECT DISTINCT v.chart_of_accounts AS code FROM box_movement_daily_revise v' +
+        ' WHERE v.chart_of_accounts IS NOT NULL AND TRIM(v.chart_of_accounts) <> \'\'' +
+        ' ORDER BY code LIMIT 500');
+      rs = stmt.executeQuery();
+      var accounts = [];
+      while (rs.next()) {
+        var c = rs.getObject(1) !== null ? String(rs.getObject(1)) : '';
+        if (c) accounts.push({ code: c, label: c });
+      }
+      var out = { status: 'ok', accounts: accounts };
+      dbTcSalesCachePut_(cacheKey, out, DB_TC_BOX_ACCOUNTS_TTL);
+      return out;
+    } catch (err) {
+      Logger.log('dbBoxDailyAccounts_ error: ' + err.message);
+      throw err;
+    } finally {
+      if (rs) rs.close();
+      if (stmt) stmt.close();
+      if (conn) conn.close();
+    }
+  }
+
+  function dbTcExecBoxNet_(data, user) {
+    data = data || {};
+    var years = dbTcExecSalesValidateYears_(data.years);
+    var months = [];
+    if (data.months !== undefined && data.months !== null && data.months !== '') {
+      var mSrc = Array.isArray(data.months) ? data.months : [data.months];
+      for (var mi = 0; mi < mSrc.length; mi++) {
+        var m = Number(mSrc[mi]);
+        if (!Number.isInteger(m) || m < 1 || m > 12) throw new Error('شهر غير صحيح: ' + mSrc[mi]);
+        if (months.indexOf(m) === -1) months.push(m);
+      }
+    }
+    var minY = years[0], maxY = years[years.length - 1];
+    var from, to;
+    if (months.length) {
+      var minM = Math.min.apply(null, months), maxM = Math.max.apply(null, months);
+      from = minY + '-' + ('0' + minM).slice(-2) + '-01';
+      var lastDay = new Date(maxY, maxM, 0).getDate();
+      to = maxY + '-' + ('0' + maxM).slice(-2) + '-' + ('0' + lastDay).slice(-2);
+    } else {
+      from = minY + '-01-01';
+      to = maxY + '-12-31';
+    }
+    var limit = Math.min(Math.max(Number(data.box_limit) || 300, 1), 1000);
+    var conn, stmt, rs;
+    try {
+      conn = dbGetConnection_();
+      stmt = conn.prepareStatement(
+        'SELECT chart_of_accounts,' +
+        " SUM(CASE WHEN transaction_type='debit' THEN transaction_amount WHEN transaction_type='credit' THEN -transaction_amount ELSE 0 END) AS net_amount," +
+        " SUM(CASE WHEN transaction_type='debit' THEN transaction_amount ELSE 0 END) AS debit_sum," +
+        " SUM(CASE WHEN transaction_type='credit' THEN transaction_amount ELSE 0 END) AS credit_sum," +
+        ' COUNT(*) AS moves FROM `regular_box_movement`' +
+        ' WHERE transaction_date BETWEEN ? AND ?' +
+        " AND chart_of_accounts REGEXP '^[0-9]+$'" +
+        ' AND CAST(chart_of_accounts AS UNSIGNED) BETWEEN 300000 AND 400000' +
+        ' GROUP BY chart_of_accounts ORDER BY ABS(net_amount) DESC LIMIT ' + limit);
+      dbBindParams_(stmt, [from, to]);
+      rs = stmt.executeQuery();
+      var accounts = [];
+      while (rs.next()) {
+        accounts.push({
+          account: rs.getObject(1) !== null ? String(rs.getObject(1)) : null,
+          net_amount: Number(rs.getObject(2)) || 0,
+          debit_sum: Number(rs.getObject(3)) || 0,
+          credit_sum: Number(rs.getObject(4)) || 0,
+          moves: Number(rs.getObject(5)) || 0
+        });
+      }
+      return { status: 'ok', from: from, to: to, accounts: accounts };
+    } catch (err) {
+      Logger.log('dbTcExecBoxNet_ error: ' + err.message + ' | years=' + JSON.stringify(years) + ' from=' + from + ' to=' + to + ' limit=' + limit);
+      throw err;
+    } finally {
+      if (rs) rs.close();
+      if (stmt) stmt.close();
+      if (conn) conn.close();
+    }
+  }
+  
+  
+  function topChemicalThemeCss_() {
+    return '' +
+      '<style>\n' +
+      ':root {\n' +
+      /* [UI-2.5 / D-1 / U-10] Same treatment as TopLight: canvas, surfaces,
+         borders and ink now come from CSS_Tokens.html. The page stops being
+         painted green; the brand lives in the topbar and the buttons. */
+      '  --font-sans: \'Cairo\', sans-serif;\n' +
+      '  --font-mono: \'Consolas\', \'Courier New\', monospace;\n' +
+      '  --success: #16a34a;\n' +
+      '  --success-bg: #f0fdf4;\n' +
+      '  --success-text: #16a34a;\n' +
+      '  --success-border: #bbf7d0;\n' +
+      '  --warning: #b45309;\n' +
+      '  --warning-bg: #fffbeb;\n' +
+      '  --warning-text: #b45309;\n' +
+      '  --warning-border: #fde68a;\n' +
+      '  --danger: #b91c1c;\n' +
+      '  --danger-bg: #fef2f2;\n' +
+      '  --danger-text: #b91c1c;\n' +
+      '  --danger-border: #fecaca;\n' +
+      '  --info: #0369a1;\n' +
+      '  --amber: #b45309;\n' +
+      '  --brand-primary: #16a34a;\n' +
+      '  --brand-primary-hover: #15803d;\n' +
+      '  --brand-subtle-bg: #dcfce7;\n' +
+      '  --brand-border: #16a34a;\n' +
+      '  --btn-text-color: #ffffff;\n' +
+      '  --shadow-brand: 0 4px 14px rgba(22, 163, 74, 0.25);\n' +
+      '}\n' +
+      /* The brand topbar: green with white ink. */
+      '.topbar { background: #15803d; border-bottom: 1px solid #14532d; }\n' +
+      '.topbar .nav-item { color: #ffffff; }\n' +
+      '.topbar .nav-item:hover, .topbar .nav-item.active { color: #15803d; background: #ffffff; }\n' +
+      '.topbar .nav-dropdown-toggle { color: #ffffff; }\n' +
+      '.topbar .nav-dropdown-toggle:hover, .topbar .nav-dropdown-toggle.open { color: #15803d; background: #ffffff; }\n' +
+      '.topbar .nav-dropdown-menu { background: #ffffff; border: 1px solid var(--border-color); }\n' +
+      '.topbar .nav-dropdown-item:hover { background: #dcfce7; color: #15803d; }\n' +
+      '/* Profile toggle must read without hovering: the shared .user-name rule\n' +
+      '   would otherwise paint it near-black on the green topbar. */\n' +
+      '.topbar .user-profile-toggle { border: 1px solid #ffffff; border-radius: 999px; padding: 4px 12px; }\n' +
+      '.topbar .user-profile-toggle .user-name { color: #ffffff; }\n' +
+      '.topbar .user-profile-toggle .nav-dropdown-caret { color: #ffffff; }\n' +
+      '.topbar .user-profile-toggle:hover, .topbar .user-profile-toggle.open { background: #ffffff; }\n' +
+      '.topbar .user-profile-toggle:hover .user-name, .topbar .user-profile-toggle.open .user-name,\n' +
+      '.topbar .user-profile-toggle:hover .nav-dropdown-caret, .topbar .user-profile-toggle.open .nav-dropdown-caret { color: #15803d; }\n' +
+      '.topbar .user-avatar { background: #ffffff; color: #15803d; }\n' +
+      '/* Mobile hamburger: dark bars are invisible on the green topbar. */\n' +
+      '.topbar-hamburger { border: 1px solid #ffffff; }\n' +
+      '.topbar-hamburger .hamburger-bar { background: #ffffff; }\n' +
+      /* Buttons keep the darker green they already used. */
+      '.btn-primary { background: #15803d; box-shadow: 0 4px 14px rgba(20, 83, 45, 0.3); }\n' +
+      '.btn-primary:hover { background: #14532d; box-shadow: 0 6px 16px rgba(20, 83, 45, 0.35); }\n' +
+      '.btn-outline:hover { background: #dcfce7; border-color: #15803d; color: #14532d; }\n' +
+      /* Documents keep a visible frame, but a hairline one rather than 2px green. */
+      '.invoice { background: #ffffff; border: 1px solid var(--border-color); }\n' +
+      /* [UI-7.2 / U-34] The blanket universal print-color-adjust:exact rule is
+         gone. It forced the browser to render EVERY background, so this
+         company's table header printed as a solid bar and a multi-page report
+         cost a cartridge of toner. UI_Components.html now applies print colour
+         deliberately, to the document header rule and the totals row only. */
+      '</style>\n';
+  }
+  
+  
+  
   return {
     dispatch_: dispatch_,
+    boxEngine_: BoxEngine,
+    themeCss_: topChemicalThemeCss_,
+    blockTheme_: function () { return { from: '#15803d', to: '#22c55e' }; },
     pageForAction_: pageForAction_,
     tableForAction_: tableForAction_,
     requestRecovery_: requestRecovery_,
@@ -6046,13 +12136,17 @@ function buildPayrollCardsHtml_(rows, monthName, year) {
 
   let currentSection = null;
   let bucket = [];
-  cards.forEach(function (c) {
+  /* OPT-3: cards[] holds map-built distinct objects, so indexOf(c) always
+     equals the iteration index — the O(n) scan per card only burned CPU in a
+     print path. Using ci directly is identical (no repeated references can
+     exist to change numbering). */
+  cards.forEach(function (c, ci) {
     if (currentSection !== null && c.section !== currentSection) {
       emitCards(bucket);
       bucket = [];
     }
     currentSection = c.section;
-    bucket.push(cardHtml[cards.indexOf(c)]);
+    bucket.push(cardHtml[ci]);
   });
   if (bucket.length) emitCards(bucket);
 
@@ -6704,3 +12798,375 @@ function kv_(k, v) {
   return '<tr><th>' + payrollEsc_(k) + '</th><td>' + payrollEsc_(v == null ? '' : v) + '</td></tr>';
 }
 
+TopChemical.attachmentPolicy_ = function () { return {
+  tc_products: { company: '3fe1b5cb67b7223e', sheet: 'products', idField: 'id', fileFields: ['print_file'], folder: 'products_Files_' },
+  tc_registration_papers: { company: '3fe1b5cb67b7223e', sheet: 'registration_papers', idField: 'document_number', fileFields: ['document_file'], folder: 'registration_papers 2_Files_', legacyFolders: ['registration_papers_Files_', 'registration_papers_Images', 'registration_papers 2_Images'], folderAliases: { registration_papers_Files_: 'registration_papers 2_Files_' } },
+  tc_carton_sizes: { company: '3fe1b5cb67b7223e', sheet: 'purchasing_support_data', idField: 'id', fileFields: ['document'], folder: 'purchasing_support_data_Images' },
+  tc_import_follow: { company: '3fe1b5cb67b7223e', sheet: 'legal_importation_follow', idField: 'id', fileFields: ['porforma_file', 'swift_file', 'approval_1', 'approval_2', 'approval_3'], folder: 'legal_importation_follow_Files_', folderByField: { approval_1: 'legal_importation_follow_Images', approval_2: 'legal_importation_follow_Images', approval_3: 'legal_importation_follow_Images' } },
+  tc_budget_inputs: { company: '3fe1b5cb67b7223e', sheet: 'legal_purchasing_costing', idField: 'رقم الشهاده', fileFields: ['invoice_swift'], folder: 'legal_purchasing_costing_Files_', altSheets: [{ sheet: 'legal_product_purchasing', idField: 'كود المعاملة', fileFields: ['شهادة_تحليل_ان_وجد', 'ترخيص_بالافراج_الزراعي', 'صورة الافراج', 'صورة التسجيل'], folder: 'legal_product_purchasing_Files_' }] },
+  tc_budget_manufacture: { company: '3fe1b5cb67b7223e', sheet: 'legal_manufacture', idField: 'transaction_code', fileFields: ['analysis_certificate', 'sales_permit', 'technical_permit', 'registration'], folder: 'legal_manufacture_Files_', folderByField: { analysis_certificate: 'manufacture_Images', sales_permit: 'manufacture_Images', technical_permit: 'manufacture_Images' } },
+  tc_customs_office: { company: '3fe1b5cb67b7223e', sheet: 'مكتب الجمارك', idField: '', fileFields: ['تكليف المطالبة', 'تخليص الشحنة'], folder: 'customs_office_Files_', legacyFolders: ['مكتب الجماركFiles'], folderByField: { 'تكليف المطالبة': 'customs_office_Files_', 'تخليص الشحنة': 'customs_office_Files_', claim_assignment: 'customs_office_Files_', shipment_clearance: 'customs_office_Files_' } }
+}; };
+TopChemical.artifactHandlers_ = {
+  printFile: function (params) { return servePrintFile_(params); },
+  printBarcode: function (params) { return servePrintBarcode_(params); },
+  printProductBarcode: function (params) { return servePrintProductBarcode_(params); },
+  payrollReport: function (params) { return servePayrollReport_(params); },
+  budgetPrint: function (params) { return serveBudgetPrint_(params); },
+  customsOfficePathRepair: function (payload, sessionToken, authUser) { return customsOfficePathRepair_(payload, sessionToken, authUser); }
+};
+TopChemical.approvalPolicy_ = TopChemical.approvalPolicy_ = {
+  aliases: { payroll: 'payroll_month', tc_payroll_month: 'payroll_month' },
+  chains: [],
+  transitions: {
+    tc_legal_cash: { false: ['true'], true: ['false'] },
+    payroll_month: { open: ['closed'], closed: [] },
+    payroll: { open: ['closed'], closed: [] },
+    tc_payroll_month: { open: ['closed'], closed: [] }
+  },
+  actionToDocType: {
+    add_legal_costing: 'tc_costing', add_legal_costing_bundle: 'tc_costing', edit_legal_costing_bundle: 'tc_costing', delete_legal_costing: 'tc_costing',
+    add_legal_cash: 'tc_legal_cash', toggle_legal_cash_approved: 'tc_legal_cash', close_payroll_month: 'payroll_month'
+  },
+  statusOnly: { toggle_legal_cash_approved: true, close_payroll_month: true, delete_legal_costing: true }
+};
+if (typeof module !== 'undefined' && module.exports) module.exports = TopChemical.boxEngine_;
+
+function servePrintFile_(params) {
+  const artifact = authorizeArtifact_(params, { company: '3fe1b5cb67b7223e', page: 'tc_products', access: 'read' });
+  const company = artifact.company;
+  const id = Number(params.id);
+  if (!Number.isInteger(id)) return ContentService.createTextOutput('Invalid id');
+
+  const dbId = getCompanySpreadsheetId_(company);
+  const product = (function () { var _idx = indexById(getAllRecords_(dbId, 'products'), 'id'); var _k = String(id).trim(); return _idx.get(_k) || _idx.get(_k.toLowerCase()) || null; })();
+  if (!product || (!product.print_file && !product.print_file_id)) return ContentService.createTextOutput('Not found');
+
+  var file;
+  try { file = attachmentOpenFile_(product, 'print_file', attachmentRegistry_().tc_products); }
+  catch (e) { return ContentService.createTextOutput(e.message || 'تعذر فتح المرفق.'); }
+
+  return dataUriDownloadHtml_(file.getName(), file.getBlob());
+}
+function servePrintBarcode_(params) {
+  const artifact = authorizeArtifact_(params, { company: '3fe1b5cb67b7223e', page: 'tc_barcode', access: 'read' });
+  const company = artifact.company;
+  const id = Number(params.id);
+  if (!Number.isInteger(id)) return ContentService.createTextOutput('Invalid id');
+
+  const dbId = getCompanySpreadsheetId_(company);
+  const row = (function () { var _idx = indexById(getAllRecords_(dbId, 'top_chemical_barcode_generator'), 'id'); var _k = String(id).trim(); return _idx.get(_k) || _idx.get(_k.toLowerCase()) || null; })();
+  if (!row) return ContentService.createTextOutput('Not found');
+
+  let data = '';
+  const m = String(row.display_barcode || '').match(/data=([^&]+)/);
+  if (m) { try { data = decodeURIComponent(m[1]); } catch (e) { data = m[1]; } }
+  if (!data) data = barcodeDataFromRecord_(row);
+
+  const imgUrl = 'https://barcode.tec-it.com/barcode.ashx?data=' +
+    encodeURIComponent(data) + '&code=Code128&dpi=300';
+  const esc = function (s) {
+    return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  };
+  const cell =
+    '<td style="width:33.33%;height:40mm;border:0.5px dashed #999;text-align:center;vertical-align:middle;padding:0.5mm;">' +
+    '<img src="' + esc(imgUrl) + '" alt="باركود" style="max-width:92%;max-height:27mm;height:auto;">' +
+    '<div style="margin-top:0.5mm;font-size:8.5pt;font-weight:700;letter-spacing:0.5px;word-break:break-all;line-height:1.2;">' + esc(data) + '</div>' +
+    '</td>';
+  let rowsHtml = '';
+  for (let r = 0; r < 6; r++) { rowsHtml += '<tr>' + cell + cell + cell + '</tr>'; }
+  const html =
+    '<!DOCTYPE html><html lang="ar"><head><meta charset="utf-8"><title>باركود الإنتاج #' + id + '</title>' +
+    '<style>' +
+    '@page{size:A4 portrait;margin:3mm;}' +
+    'html,body{margin:0;padding:0;font-family:sans-serif;}' +
+    'table.labels{width:100%;height:240mm;table-layout:fixed;border-collapse:collapse;}' +
+    'tr{page-break-inside:avoid;}' +
+    '</style></head>' +
+    '<body><table class="labels">' + rowsHtml + '</table>' +
+    '<script>window.onload=function(){setTimeout(function(){window.print();},300);};</script>' +
+    '</body></html>';
+  return _frame(HtmlService.createHtmlOutput(html)).setTitle('باركود الإنتاج #' + id);
+}
+
+/** Recomputed barcode data from a stored row (fallback when display_barcode missing). */
+function barcodeDataFromRecord_(rec) {
+  const pad = function (n) { return ('0' + n).slice(-2); };
+  let d = null;
+  const raw = rec.production_date;
+  if (raw instanceof Date) { d = raw; } else {
+    const s = String(raw || '').match(/^(\d{4})-(\d{2})-(\d{2})/);
+    d = s ? new Date(Number(s[1]), Number(s[2]) - 1, Number(s[3])) : (raw ? new Date(raw) : null);
+  }
+  if (!d || isNaN(d.getTime())) d = new Date();
+  const sysId = String(rec.system_id == null ? '' : rec.system_id).trim();
+  return String(rec.id) + pad(d.getFullYear() % 100) + String(rec.emp_id) +
+    pad(d.getMonth() + 1) + String(rec.production_id) + pad(d.getDate()) + sysId;
+}
+
+/**
+ * Print ONE product's warehouse barcode as a full A4 label sheet — the same
+ * 3×6 repeat grid as the production print (servePrintBarcode_ above), because
+ * both feed the same label paper: 18 identical labels of a single product,
+ * cut apart and stuck on that product's containers.
+ *
+ * Reached from a row action on tc_products. It replaces the one-label-per-
+ * product sheet that used to hang off tc_stock_scan — a whole-catalogue print
+ * is not what anyone needs at a shelf; relabelling one product is.
+ *
+ * The label carries NOTHING but the barcode and its number: no product name,
+ * not on the sticker and not in the document title either, because a browser
+ * printing with headers on would put that title straight onto the paper.
+ *
+ * Encoded is 'TCP-' + product id; printed underneath is the bare id. The two
+ * agree — handleScannedCode in Company_TopChemical_StockScan.html takes either
+ * form, so a scan and a hand-typed number land on the same product. The prefix
+ * stays in the encoded value on purpose: it is what marks a code as OUR label,
+ * so a supplier's numeric barcode on the same carton cannot be scanned during a
+ * count and silently resolve to some unrelated product id.
+ *
+ * The id is a pure function of the product, nothing is read from a stored
+ * barcode column because none exists.
+ *
+ * Params: download=print_product_barcode, id=<product id>,
+ * sessionToken=<valid token>, company=<uid> (optional).
+ */
+function servePrintProductBarcode_(params) {
+  const artifact = authorizeArtifact_(params, { company: '3fe1b5cb67b7223e', page: 'tc_products', access: 'read' });
+  const company = artifact.company;
+  const id = Number(params.id);
+  if (!Number.isInteger(id)) return ContentService.createTextOutput('Invalid id');
+
+  /* Nothing off the product row is printed any more, but it is still looked up:
+     it is the only thing standing between a mistyped id and a sheet of 18
+     labels for a product that does not exist. */
+  const dbId = getCompanySpreadsheetId_(company);
+  const product = (function () { var _idx = indexById(getAllRecords_(dbId, 'products'), 'id'); var _k = String(id).trim(); return _idx.get(_k) || _idx.get(_k.toLowerCase()) || null; })();
+  if (!product) return ContentService.createTextOutput('Not found');
+
+  const data = 'TCP-' + id;
+  /* hidehrt suppresses the generator's own caption. Left on, it draws the
+     encoded value — 'TCP-12' — under the bars, and the sticker would carry
+     that on top of the plain number printed below. The number is set here
+     instead so the label reads as digits and nothing else. */
+  const imgUrl = 'https://barcode.tec-it.com/barcode.ashx?data=' +
+    encodeURIComponent(data) + '&code=Code128&dpi=300&hidehrt=True';
+  const esc = function (s) {
+    return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  };
+  const human = String(id);
+  const cell =
+    '<td style="width:33.33%;height:40mm;border:0.5px dashed #999;text-align:center;vertical-align:middle;padding:0.5mm;">' +
+    '<img src="' + esc(imgUrl) + '" alt="باركود" style="max-width:92%;max-height:28mm;height:auto;">' +
+    '<div style="margin-top:0.5mm;font-size:10pt;font-weight:700;letter-spacing:1px;">' + esc(human) + '</div>' +
+    '</td>';
+  let rowsHtml = '';
+  for (let r = 0; r < 6; r++) { rowsHtml += '<tr>' + cell + cell + cell + '</tr>'; }
+  const title = 'باركود الصنف رقم ' + id;
+  const html =
+    '<!DOCTYPE html><html lang="ar"><head><meta charset="utf-8"><title>' + esc(title) + '</title>' +
+    '<style>' +
+    '@page{size:A4 portrait;margin:3mm;}' +
+    'html,body{margin:0;padding:0;font-family:sans-serif;}' +
+    'table.labels{width:100%;height:240mm;table-layout:fixed;border-collapse:collapse;}' +
+    'tr{page-break-inside:avoid;}' +
+    '</style></head>' +
+    '<body><table class="labels">' + rowsHtml + '</table>' +
+    '<script>window.onload=function(){setTimeout(function(){window.print();},300);};</script>' +
+    '</body></html>';
+  return _frame(HtmlService.createHtmlOutput(html)).setTitle(title);
+}
+
+function customsOfficePathPreview_(raw) {
+  var TARGET = 'customs_office_Files_';
+  var LEGACY_IMAGES = 'مكتب الجمارك_Images';
+  var LEGACY_FILES = 'مكتب الجمارك_Files_';
+  var s = raw == null ? '' : String(raw);
+  var t = s.replace(/^[\s\uFEFF]+|[\s\uFEFF]+$/g, '');
+  if (!t) return { action: 'blank', newRef: '', reason: 'blank' };
+  var c0 = t.charAt(0);
+  if (c0 === '=' || c0 === '+' || c0 === '-' || c0 === '@') return { action: 'malformed', newRef: '', reason: 'formula' };
+  if (t.indexOf('://') !== -1) return { action: 'skip', newRef: '', reason: 'url' };
+  if (/\/d\/[A-Za-z0-9_-]+/.test(t)) return { action: 'skip', newRef: '', reason: 'drive-id-url' };
+  if (/^[A-Za-z0-9_-]{20,}$/.test(t)) return { action: 'skip', newRef: '', reason: 'drive-id' };
+  if (t.indexOf('&#x20;') !== -1) return { action: 'malformed', newRef: '', reason: 'encoded-space' };
+  if (t.indexOf('customs_office_Files_/') === 0) {
+    var rest0 = t.slice('customs_office_Files_/'.length);
+    if (!rest0 || rest0.indexOf('/') !== -1 || rest0 === '.' || rest0 === '..') return { action: 'malformed', newRef: '', reason: 'bad-target-shape' };
+    return { action: 'already-correct', newRef: '', reason: 'already-correct' };
+  }
+  var slash = t.indexOf('/');
+  if (slash <= 0) return { action: 'malformed', newRef: '', reason: 'no-folder-prefix' };
+  var folder = t.slice(0, slash);
+  var filename = t.slice(slash + 1);
+  if (!filename || filename.indexOf('/') !== -1 || filename === '.' || filename === '..') return { action: 'malformed', newRef: '', reason: 'bad-path-shape' };
+  if (folder === LEGACY_IMAGES || folder === LEGACY_FILES) return { action: 'rewrite', newRef: TARGET + '/' + filename, reason: folder, filename: filename };
+  return { action: 'unexpected', newRef: '', reason: 'unknown-folder:' + folder };
+}
+function customsOfficePathRepair_(payload, sessionToken, authUser) {
+  payload = payload || {};
+  var user = authUser || null;
+  if (!user && sessionToken) { try { var a = authenticateSystemUser_(String(sessionToken).trim()); if (a && a.authorized) user = a.user; } catch (e) {} }
+  if (!(user && user.isSuperAdmin)) throw new Error('صلاحية غير كافية؛ يلزم تشغيل الترحيل من جلسة مدير النظام المصادق عليها.');
+  var dryRun = !(payload.dryRun === false || String(payload.dryRun).toLowerCase() === 'false');
+  var offset = Math.max(0, Number(payload.offset) || 0);
+  var limit = Math.max(1, Math.min(500, Number(payload.limit) || 500));
+  var TARGET = 'customs_office_Files_';
+  var FIELDS = ['تكليف المطالبة', 'تخليص الشحنة'];
+  var reg = attachmentRegistry_();
+  var cfg = reg['tc_customs_office'];
+  if (!cfg) throw new Error('missing tc_customs_office registry entry');
+  var stat = { sheet: cfg.sheet, targetFolder: TARGET, dryRun: dryRun, offset: offset, limit: limit, totalCells: 0, blank: 0, alreadyCorrect: 0, legacyImages: 0, legacyFiles: 0, wouldRewrite: 0, malformed: 0, unexpected: 0, skippedUrlOrId: 0, missingInTarget: 0, conflicts: 0, updated: 0, backupSheet: '', errors: [], exceptions: [], verification: null, nextOffset: null, blocked: false, blockReason: '' };
+  try {
+    var targetFolderId = findDriveFolderIdByName_(TARGET);
+    if (!targetFolderId) {
+      stat.blocked = true;
+      stat.blockReason = 'target Drive folder missing, duplicated or inaccessible: ' + TARGET;
+      stat.exceptions.push(stat.blockReason);
+      return { status: 'blocked', summary: stat };
+    }
+    var dbId = getCompanySpreadsheetId_(cfg.company);
+    var sheet = getSheet_(cfg.sheet, dbId);
+    var headers = getHeaders_(sheet).map(function (h) { return String(h == null ? '' : h).trim(); });
+    var lower = headers.map(function (h) { return String(h).toLowerCase(); });
+    var colIdx = {};
+    lower.forEach(function (h, i) { if (h && !(h in colIdx)) colIdx[h] = i; });
+    var fieldCols = [];
+    FIELDS.forEach(function (ff) {
+      var k = String(ff).toLowerCase();
+      if (!(k in colIdx)) stat.errors.push('source column missing: ' + ff);
+      else fieldCols.push({ field: ff, col: colIdx[k] });
+    });
+    if (stat.errors.length) { stat.blocked = true; stat.blockReason = 'required column missing'; return { status: 'blocked', summary: stat }; }
+    var idColKey = String(cfg.idField || 'customs_uid').toLowerCase();
+    var idCol = (idColKey in colIdx) ? colIdx[idColKey] : -1;
+    var values = sheet.getDataRange().getValues();
+    var startRow = 1 + offset;
+    var endRow = Math.min(values.length, startRow + limit);
+    var candidates = [];
+    for (var r = startRow; r < endRow; r++) {
+      for (var f = 0; f < fieldCols.length; f++) {
+        var fc = fieldCols[f];
+        var raw = values[r] ? values[r][fc.col] : '';
+        stat.totalCells++;
+        var prev = customsOfficePathPreview_(raw);
+        var keyVal = idCol >= 0 ? String(values[r][idCol] == null ? '' : values[r][idCol]).trim() : '';
+        if (prev.action === 'blank') { stat.blank++; continue; }
+        if (prev.action === 'already-correct') { stat.alreadyCorrect++; continue; }
+        if (prev.action === 'skip') { stat.skippedUrlOrId++; stat.exceptions.push('row ' + (r + 1) + ' ' + fc.field + ': skipped ' + prev.reason); continue; }
+        if (prev.action === 'malformed') { stat.malformed++; stat.exceptions.push('row ' + (r + 1) + ' ' + fc.field + ': malformed (' + prev.reason + ')'); continue; }
+        if (prev.action === 'unexpected') { stat.unexpected++; stat.exceptions.push('row ' + (r + 1) + ' ' + fc.field + ': ' + prev.reason); continue; }
+        if (prev.action === 'rewrite') {
+          if (prev.reason === 'مكتب الجمارك_Images') stat.legacyImages++;
+          else stat.legacyFiles++;
+          stat.wouldRewrite++;
+          var fileId = '';
+          try { fileId = findDriveFileIdInFolder_(targetFolderId, prev.filename); } catch (e) { fileId = ''; }
+          if (!fileId) {
+            stat.missingInTarget++;
+            stat.exceptions.push('row ' + (r + 1) + ' ' + fc.field + ': "' + prev.filename + '" not found exactly once in ' + TARGET);
+            continue;
+          }
+          candidates.push({ row: r + 1, col: fc.col + 1, field: fc.field, oldRef: String(raw == null ? '' : String(raw)).replace(/^[\s\uFEFF]+|[\s\uFEFF]+$/g, ''), newRef: prev.newRef, filename: prev.filename, keyValue: keyVal, fileId: fileId });
+        }
+      }
+    }
+    stat.nextOffset = endRow < values.length ? endRow - 1 : null;
+    if (!dryRun) {
+      if (stat.missingInTarget > 0) {
+        stat.blocked = true;
+        stat.blockReason = stat.missingInTarget + ' file(s) missing or ambiguous in ' + TARGET + '; refusing to rewrite. Resolve exceptions first.';
+        return { status: 'blocked', summary: stat };
+      }
+      if (!candidates.length) {
+        stat.verification = { legacyRemaining: 0, changedPrefixOk: true, filenamesIntact: true, note: 'nothing to apply in this batch' };
+        return { status: 'success', summary: stat };
+      }
+      var applied = executeWithLock_(function () {
+        var ss = null;
+        try { ss = sheet.getParent ? sheet.getParent() : null; } catch (e) { ss = null; }
+        var stamp = '';
+        try { stamp = Utilities.formatDate(new Date(), 'Africa/Cairo', 'yyyyMMdd_HHmmss'); } catch (e) { stamp = String(Date.now()); }
+        var backupName = String(payload.backupSheet || '').trim() || ('مكتب الجمارك_path_backup_' + stamp);
+        var backupLoc = '';
+        try {
+          var parent = ss;
+          if (!parent) {
+            var bk = { name: backupName, rows: [['row', 'customs_uid', 'field', 'oldRef', 'newRef']] };
+            candidates.forEach(function (c) { bk.rows.push([c.row, c.keyValue, c.field, c.oldRef, c.newRef]); });
+            try { CacheService.getScriptCache().put('customs_path_backup_' + stamp, JSON.stringify(bk).slice(0, 90000), 21600); } catch (e2) {}
+            backupLoc = 'cache:customs_path_backup_' + stamp;
+          } else {
+            var exists = null;
+            try { exists = parent.getSheetByName(backupName); } catch (e3) { exists = null; }
+            if (!exists) {
+              var nb = parent.insertSheet(backupName);
+              nb.appendRow(['row', 'customs_uid', 'field', 'oldRef', 'newRef', 'at']);
+              candidates.forEach(function (c) { nb.appendRow([c.row, c.keyValue, c.field, c.oldRef, c.newRef, new Date()]); });
+              try { noteMutation_(nb); } catch (e4) {}
+            }
+            backupLoc = 'sheet:' + backupName;
+          }
+        } catch (e5) { backupLoc = 'backup-failed:' + String((e5 && e5.message) || e5); }
+        stat.backupSheet = backupLoc;
+        var n = 0;
+        candidates.forEach(function (c) {
+          try {
+            var rowNow = sheet.getRange(c.row, 1, 1, headers.length).getValues()[0];
+            var curNow = String(rowNow[c.col - 1] == null ? '' : rowNow[c.col - 1]).replace(/^[\s\uFEFF]+|[\s\uFEFF]+$/g, '');
+            var keyNow = idCol >= 0 ? String(rowNow[idCol] == null ? '' : rowNow[idCol]).trim() : '';
+            if (curNow !== c.oldRef || (c.keyValue != null && keyNow !== c.keyValue)) { stat.conflicts++; stat.exceptions.push('row ' + c.row + ' ' + c.field + ': concurrent change, skipped'); return; }
+            sheet.getRange(c.row, c.col).setValue(c.newRef);
+            n++;
+          } catch (e6) { stat.errors.push('row ' + c.row + ' ' + c.field + ': ' + String((e6 && e6.message) || e6)); }
+        });
+        stat.updated = n;
+        try { if (n) noteMutation_(sheet); } catch (e7) {}
+        return n;
+      });
+      void applied;
+      var reValues = sheet.getDataRange().getValues();
+      var reEnd = Math.min(reValues.length, startRow + limit);
+      var legacyRemaining = 0;
+      var changedPrefixOk = true;
+      var filenamesIntact = true;
+      candidates.forEach(function (c) {
+        var cur = String(reValues[c.row - 1][c.col - 1] == null ? '' : reValues[c.row - 1][c.col - 1]).trim();
+        if (cur.indexOf('مكتب الجمارك_Images/') === 0 || cur.indexOf('مكتب الجمارك_Files_/') === 0) legacyRemaining++;
+        if (cur !== c.newRef) { changedPrefixOk = false; }
+        var base = cur.split('/').pop();
+        if (base !== c.filename) filenamesIntact = false;
+      });
+      for (var rr = startRow; rr < reEnd; rr++) {
+        for (var ff2 = 0; ff2 < fieldCols.length; ff2++) {
+          var v2 = String(reValues[rr][fieldCols[ff2].col] == null ? '' : reValues[rr][fieldCols[ff2].col]).trim();
+          if (v2.indexOf('مكتب الجمارك_Images/') === 0 || v2.indexOf('مكتب الجمارك_Files_/') === 0) legacyRemaining++;
+        }
+      }
+      var jpgOk = null;
+      var pdfOk = null;
+      try {
+        var pickJpg = null;
+        var pickPdf = null;
+        candidates.forEach(function (c) {
+          var ln = String(c.filename).toLowerCase();
+          if (!pickJpg && (ln.slice(-4) === '.jpg' || ln.slice(-5) === '.jpeg')) pickJpg = c;
+          if (!pickPdf && ln.slice(-4) === '.pdf') pickPdf = c;
+        });
+        if (pickJpg) {
+          var jid = findDriveFileIdInFolder_(targetFolderId, pickJpg.filename);
+          jpgOk = !!jid;
+        }
+        if (pickPdf) {
+          var pid = findDriveFileIdInFolder_(targetFolderId, pickPdf.filename);
+          pdfOk = !!pid;
+        }
+      } catch (e8) { stat.errors.push('open-check: ' + String((e8 && e8.message) || e8)); }
+      stat.verification = { legacyRemaining: legacyRemaining, changedPrefixOk: changedPrefixOk, filenamesIntact: filenamesIntact, jpgInTarget: jpgOk, pdfInTarget: pdfOk };
+    }
+    return { status: stat.blocked ? 'blocked' : 'success', summary: stat };
+  } catch (e) {
+    stat.errors.push(String((e && e.message) || e));
+    return { status: 'error', summary: stat };
+  }
+}

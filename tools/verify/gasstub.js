@@ -1,6 +1,6 @@
 /**
  * A deliberately small Apps Script stub, just large enough to let the REAL
- * server sources (00_Config.js, 02_DataAccess.js, 03_Security.js) be loaded and
+ * server sources (Code.js, Code.js, Code.js) be loaded and
  * executed under node.
  *
  * It is the same idea as domstub.js/pageharness.js, pointed at Google's services
@@ -34,7 +34,7 @@ const path = require('path');
 const vm = require('vm');
 
 const ROOT = path.resolve(__dirname, '..', '..');
-const SOURCES = ['00_Config.js', '02_DataAccess.js', '03_Security.js'];
+const SOURCES = ['Code.js'];
 const CACHE_MAX_TTL = 21600;
 const RealDate = Date;
 
@@ -225,6 +225,24 @@ function createHarness(opts) {
     if (sheetName === 'ERP_Users') { H.reads.users++; return H.users.map(function (u) { return Object.assign({}, u); }); }
     return [];
   };
+  /* Code.js now contains the Firestore-backed system store. Keep the
+     authority harness offline by replacing that leaf with the same fixtures
+     used by the legacy Sheets compatibility path. */
+  ctx.systemGetAllRecords_ = function (tableName) {
+    if (tableName === 'ERP_Users') { H.reads.users++; return H.users.map(function (u) { return Object.assign({}, u); }); }
+    if (tableName === 'ERP_Companies') return H.companies.map(function (c) { return Object.assign({}, c); });
+    if (tableName === 'ERP_Pages_Matrix') {
+      var matrix = ctx.getSheet_('ERP_Pages_Matrix');
+      var values = matrix.getDataRange().getValues();
+      var headers = values.shift() || [];
+      return values.map(function (row) {
+        var out = {};
+        headers.forEach(function (header, i) { out[String(header).trim()] = row[i]; });
+        return out;
+      });
+    }
+    return [];
+  };
   ctx.noteMutation_ = function () {};
   ctx.countSheetRead_ = function () {};
   ctx.ensureSystemWorkSheet_ = function () {
@@ -258,6 +276,13 @@ function createHarness(opts) {
    * and is not a property of the sandbox object. Reach it by evaluating. */
   H.config = function () { return vm.runInContext('CONFIG', ctx); };
   H.eval = function (code) { return vm.runInContext(code, ctx); };
+  /* Global function declarations in one canonical Code.js script keep their
+     lexical binding, whereas the legacy multi-file harness replaced a global
+     property. This bridge preserves the old test seam explicitly. */
+  H.override = function (name, fn) {
+    ctx.__codexOverride = fn;
+    vm.runInContext(String(name) + ' = globalThis.__codexOverride;', ctx);
+  };
 
   /** Replace SessionManager_.validate with a fixture. */
   H.setSession = function (v) { ctx.SessionManager_.validate = function () { return v; }; };

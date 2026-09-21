@@ -465,6 +465,56 @@ function makeWorld(o) {
       W.tables[n].forEach(r => { if (String(r[col]).trim() === String(val).trim()) { Object.assign(r, up); hit = true; } });
       return hit;
     },
+    /* Port of Code.js patchRowByCriteria_ over the stub store: the
+       store holds no formulas, so every column the update names (matched
+       case-insensitively) is writable and unknown keys are ignored, exactly
+       like the real helper's contract. Same boolean return. */
+    /* Port of Code.js patchRowByCriteria_ over the stub store: the
+       store holds no formulas, so every column the update names (matched
+       case-insensitively) is writable and unknown keys are ignored, exactly
+       like the real helper's contract. Same boolean return. */
+    patchRowByCriteria_: (sh, col, val, up) => {
+      const n = sh.__name; let hit = false;
+      const headers = W.headers[n] || [];
+      const lut = {};
+      Object.keys(up || {}).forEach(k => { lut[String(k).trim().toLowerCase()] = up[k]; });
+      W.tables[n].forEach(r => {
+        if (String(r[col]).trim() === String(val).trim()) {
+          headers.forEach(h => { const v = lut[String(h).trim().toLowerCase()]; if (v !== undefined) r[h] = v; });
+          hit = true;
+        }
+      });
+      return hit;
+    },
+    /* Verbatim port of the Code.js status-transition gate (pure
+       functions, no dependencies): revert_attendance_import routes through
+       assertTransition_('att_batch', ...), so the sandbox enforces the same
+       active->reverted, reverted-terminal rule as production. */
+    DOC_STATUS_TRANSITIONS: { 'att_batch': { 'active': ['reverted'], 'reverted': [] } },
+    normDocStatus_: v => {
+      if (v === true) return 'true';
+      if (v === false) return 'false';
+      const s = String(v == null ? '' : v).trim().toLowerCase();
+      return (s === 'true' || s === 'false') ? s : s;
+    },
+    normDocType_: docType => {
+      const dt = String(docType == null ? '' : docType).trim().toLowerCase();
+      if (dt === 'vf_att_batch' || dt === 'attendance_batch') return 'att_batch';
+      return dt;
+    },
+    canTransition: function (docType, from, to) {
+      const dt = this.normDocType_(docType);
+      const table = this.DOC_STATUS_TRANSITIONS[dt];
+      if (!table) return false;
+      const allowed = table[this.normDocStatus_(from)];
+      if (!allowed) return false;
+      const t = this.normDocStatus_(to);
+      return allowed.some(a => String(a).toLowerCase() === t);
+    },
+    assertTransition_: function (docType, from, to, message) {
+      if (!this.canTransition(docType, from, to)) throw new Error(message || ('Invalid status transition: ' + docType + ' ' + from + ' -> ' + to));
+      return true;
+    },
     LockService: { getScriptLock: () => ({ tryLock: () => { W.locks++; return true; }, releaseLock: () => {} }) },
     Utilities: {
       getUuid: () => 'uuid-' + (++W.uuidN),
@@ -673,15 +723,25 @@ if (BLOCK) {
   H.revertAttendanceImport_({ batch_id: 'B2' }, USER, 'db');
   check(W.locks === 3, 'and a revert', W.locks);
 
-  /* The key set must never go through CacheService — the stub throws if it is
-     reached at runtime, and this catches a call that no test happens to hit.
-     Comments are stripped first: the source deliberately SAYS "not
-     CacheService" in two places, and that must not read as a use. */
-  const codeOnly = BLOCK.body
-    .replace(/\/\*[\s\S]*?\*\//g, ' ')
-    .replace(/(^|[^:])\/\/[^\n]*/g, '$1');
-  check(!/CacheService\s*\./.test(codeOnly) && codeOnly.indexOf('CacheService') === -1,
-    'the attendance block never calls CacheService — one value caps at 100 KB and a real key set passes it silently');
+  /* The DEDUP KEY SET must never go through CacheService — the stub throws if
+     it is reached at runtime, and this catches a call that no test happens to
+     hit. Comments are stripped first: the source deliberately SAYS "not
+     CacheService" in two places, and that must not read as a use.
+     Scope note (19/09/2026): this used to scan the whole lifted block, but the
+     block also holds bounded single-value 'attid_' attachment-id gets
+     (try/catch, fail-open to a sheet read) — a scalar use the cache-cap
+     rationale does not cover. The scan now covers exactly the key-set
+     functions, which is the contract the comment above states. */
+  const stripComments = s => s.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/(^|[^:])\/\/[^\n]*/g, '$1');
+  const keySetCode = ['buildPunchKeySet_', 'punchExists_'].map(function (fn) {
+    const i = BLOCK.body.indexOf('function ' + fn + '(');
+    if (i === -1) return '/* MISSING: ' + fn + ' */';
+    const next = BLOCK.body.indexOf('\n  function ', i + 1);
+    return BLOCK.body.slice(i, next === -1 ? undefined : next);
+  }).join('\n');
+  const keySetOnly = stripComments(keySetCode);
+  check(keySetCode.indexOf('MISSING') === -1 && !/CacheService\s*\./.test(keySetOnly) && keySetOnly.indexOf('CacheService') === -1,
+    'the dedup key set never calls CacheService — one value caps at 100 KB and a real key set passes it silently');
 }
 
 /* ══ 16. degradation ════════════════════════════════════════════════════ */
@@ -878,7 +938,10 @@ console.log('\nL — calendar-first layout (VALLEY_ATTENDANCE_LAYOUT_PLAN.md §5
   const ADDED = ['openReportModal', 'openExceptionsModal', 'openReviewModal', 'openImportModal', 'openBatchesModal'];
   KEPT.forEach(function (n) { check(exported.indexOf(n) !== -1, 'L-9: ATT_PAGE still exports ' + n); });
   ADDED.forEach(function (n) { check(exported.indexOf(n) !== -1, 'L-9: ATT_PAGE now exports ' + n); });
-  check(exported.length === 21, 'L-9: ATT_PAGE has exactly 21 names', exported.length);
+  /* L-9: 16 kept + 5 modal functions + showLatestDays/toggleBatches from the
+     show-all unification (19/09/2026 working tree). The count stays exact so
+     any unexpected new global still trips it. */
+  check(exported.length === 23, 'L-9: ATT_PAGE has exactly 23 names', exported.length);
 
   /* L-10 — the same comparison as §7, re-run here so a layout regression that
      touches the form string is named in this section too. */
