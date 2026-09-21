@@ -8387,6 +8387,12 @@ const ValleyFoodsHRModules = (function () {
       var outputUidMap = {};
       var keepOutUids = [];
       var outNewRows = [];
+      /* MFG_BATCH_WRITES_: existing output rows are collected here and written
+         by ONE batched call after the loop, instead of one whole-sheet read per
+         row inside it. The rows written, their values and their order are
+         unchanged. */
+      var mfgFast = fastSaveOnFor_(MFG_BATCH_WRITES_);
+      var outPatches = {};
       /* nOutNew enumerates uid-less outputs in payload order — the identical
          enumeration mfgAssignDesiredUids_ uses, so a retry recomputes the same
          deterministic UID for the same row. */
@@ -8411,7 +8417,8 @@ const ValleyFoodsHRModules = (function () {
              live formula cells; only fill plain cells when the client sent one */
           if (o.cost_unit !== '' && o.cost_unit != null) m6u['cost_unit'] = o.cost_unit;
           if (o.total_cost !== '' && o.total_cost != null) m6u['total_cost'] = o.total_cost;
-          patchRowByCriteria_(sheetOut, 'unique_id', ouid, m6u);
+          if (mfgFast) outPatches[ouid] = m6u;
+          else patchRowByCriteria_(sheetOut, 'unique_id', ouid, m6u);
           outputUidMap[oi] = ouid;
           keepOutUids.push(ouid);
         } else {
@@ -8435,6 +8442,9 @@ const ValleyFoodsHRModules = (function () {
           keepOutUids.push(outUid);
         }
       });
+      if (mfgFast && Object.keys(outPatches).length) {
+        fsPatchRowsByKey_(dbId, sheetOut, 'unique_id', outPatches);
+      }
       var outStart = sheetOut.getLastRow() + 1;
       try { Logger.log('MFGTRACE outputs upsert: kept=' + keepOutUids.length + ' new=' + outNewRows.length + ' explicit_delete=' + deletedOutUids.length + ' tab=' + sheetOut.getName()); } catch (eLg3) {}
       if (outNewRows.length) {
@@ -8454,7 +8464,11 @@ const ValleyFoodsHRModules = (function () {
       }
       /* Delete only rows the editor explicitly removed. A missing client row
          is not deletion evidence (it may be a stale/partial UI state). */
-      deleteRowsWhereIn_(sheetOut, 'unique_id', deletedOutUids);
+      if (mfgFast) {
+        if (deletedOutUids.length) fsDeleteRowsByKeys_(dbId, sheetOut, 'unique_id', deletedOutUids);
+      } else {
+        deleteRowsWhereIn_(sheetOut, 'unique_id', deletedOutUids);
+      }
       ckpt_('outputs');
 
       /* STABLE UPSERT consumption: footer rows are keyed by their own uid
@@ -8465,6 +8479,9 @@ const ValleyFoodsHRModules = (function () {
       var consHeaders = getHeaders_(sheetCons);
       /* scope = every consumption row parented by this MO's outputs (old uids)
          or by the MO uid itself (earlier `outUid || moUid` fallback rows) */
+      /* MFG_BATCH_WRITES_: collected footer patches, written in one call after
+         both the footer loop and the legacy recipe loop have run. */
+      var consPatches = {};
       var existingConsByUid = {};
       try {
         getAllRecords_(dbId, MFG_CONSUMPTION_SHEET).forEach(function (cm) {
@@ -8518,7 +8535,8 @@ const ValleyFoodsHRModules = (function () {
             if (String(f.item_code || '') !== '') m7u['item_code'] = String(f.item_code);
             m7u['qty'] = fqty;
             m7u['user'] = (user && user.email) || '';
-            patchRowByCriteria_(sheetCons, 'unique_id', fuid, m7u);
+            if (mfgFast) consPatches[fuid] = m7u;
+            else patchRowByCriteria_(sheetCons, 'unique_id', fuid, m7u);
             keepConsUids.push(fuid);
           } else {
             var m7 = {};
@@ -8564,7 +8582,8 @@ const ValleyFoodsHRModules = (function () {
         if (oldC && keepConsUids.indexOf(oldC) === -1) {
           var m7l = { qty: cmQty, user: (user && user.email) || '' };
           if (String(cm.lot || '') !== '') m7l['item_code'] = String(cm.lot);
-          patchRowByCriteria_(sheetCons, 'unique_id', oldC, m7l);
+          if (mfgFast) consPatches[oldC] = m7l;
+          else patchRowByCriteria_(sheetCons, 'unique_id', oldC, m7l);
           keepConsUids.push(oldC);
         } else if (!oldC) {
           var m7c = {};
@@ -8587,6 +8606,9 @@ const ValleyFoodsHRModules = (function () {
       } /* end legacy-only gate */
 
       try { Logger.log('MFGTRACE consumption upsert: kept=' + keepConsUids.length + ' new=' + consNewRows.length + ' tab=' + sheetCons.getName()); } catch (eLg4) {}
+      if (mfgFast && Object.keys(consPatches).length) {
+        fsPatchRowsByKey_(dbId, sheetCons, 'unique_id', consPatches);
+      }
       if (consNewRows.length) {
         /* Phase 8 (F-04): one setValues + 2 writeFormula_ per row -> 1 write.
          * Already under the outer save lock: no nested executeWithLock_. */
@@ -8658,6 +8680,7 @@ const ValleyFoodsHRModules = (function () {
        * Locked and grid-grown because a precomputed start row, unlike appendRow, is
        * not safe against a concurrent append. */
       var wcNewRows = [];
+      var wcPatches = {};
       var nWoNew = 0;
       (Array.isArray(d.work_ops) ? d.work_ops : []).forEach(function (w, wi) {
         var suppliedWuid = String(w.uid || '').trim();
@@ -8683,7 +8706,8 @@ const ValleyFoodsHRModules = (function () {
         /* work_center_cost / total_cost are sheet-computed — written as formulas below */
         if (old) {
           /* Row-edit repair (5.4): formula-safe patch; formulas reinstalled below. */
-          patchRowByCriteria_(sheetWC, 'unique_id', editingUid, m);
+          if (mfgFast) wcPatches[editingUid] = m;
+          else patchRowByCriteria_(sheetWC, 'unique_id', editingUid, m);
           keepWcUids.push(editingUid);
         } else {
           m['unique_id'] = (detWIdx !== -1 && reqId) ? mfgDeterministicUid_(reqId, moUid, 'work_op', detWIdx) : uid16Hex_();
@@ -8696,6 +8720,9 @@ const ValleyFoodsHRModules = (function () {
           keepWcUids.push(m['unique_id']);
         }
       });
+      if (mfgFast && Object.keys(wcPatches).length) {
+        fsPatchRowsByKey_(dbId, sheetWC, 'unique_id', wcPatches);
+      }
       if (wcNewRows.length) {
         /* Already under the outer save lock: no nested executeWithLock_. */
         var wcStart = sheetWC.getLastRow() + 1;
@@ -8703,22 +8730,38 @@ const ValleyFoodsHRModules = (function () {
         sheetWC.getRange(wcStart, 1, wcNewRows.length, wcHeaders.length).setValues(wcNewRows);
         noteMutation_(sheetWC);
       }
-      deleteRowsWhereIn_(sheetWC, 'unique_id', deletedWoUids);
+      if (mfgFast) {
+        if (deletedWoUids.length) fsDeleteRowsByKeys_(dbId, sheetWC, 'unique_id', deletedWoUids);
+      } else {
+        deleteRowsWhereIn_(sheetWC, 'unique_id', deletedWoUids);
+      }
       try { Logger.log('MFGTRACE workops: in=' + (Array.isArray(d.work_ops) ? d.work_ops.length : 0) + ' kept=' + keepWcUids.length + ' tab=' + sheetWC.getName()); } catch (eLg5) {}
 
       /* work-center cost columns are SHEET FORMULAS */
-      var wcAll = sheetWC.getDataRange().getValues();
       var wcHdrs = getHeaders_(sheetWC);
-      var wcUidIdx = wcHdrs.findIndex(function (h) { return String(h).trim() === 'unique_id'; });
-      keepWcUids.forEach(function (uid) {
-        for (var wr = 1; wr < wcAll.length; wr++) {
-          if (String(wcAll[wr][wcUidIdx]).trim() === String(uid).trim()) {
-            var rN = wr + 1;
-            writeRowFormulas_(sheetWC, wcHdrs, rN, mfgWorkCenterFormulaMap_(rN));
-            break;
+      if (mfgFast) {
+        /* One key-column read locates every kept row; the legacy path reads the
+           WHOLE work-centre table with getDataRange() to find the same rows. */
+        var wcWanted = {};
+        keepWcUids.forEach(function (uid) { wcWanted[String(uid).trim()] = true; });
+        var wcLocated = fsKeyIndex_(sheetWC, 'unique_id', wcWanted);
+        keepWcUids.forEach(function (uid) {
+          var rN = wcLocated.map.get(String(uid).trim());
+          if (rN) writeRowFormulas_(sheetWC, wcHdrs, rN, mfgWorkCenterFormulaMap_(rN));
+        });
+      } else {
+        var wcAll = sheetWC.getDataRange().getValues();
+        var wcUidIdx = wcHdrs.findIndex(function (h) { return String(h).trim() === 'unique_id'; });
+        keepWcUids.forEach(function (uid) {
+          for (var wr = 1; wr < wcAll.length; wr++) {
+            if (String(wcAll[wr][wcUidIdx]).trim() === String(uid).trim()) {
+              var rN2 = wr + 1;
+              writeRowFormulas_(sheetWC, wcHdrs, rN2, mfgWorkCenterFormulaMap_(rN2));
+              break;
+            }
           }
-        }
-      });
+        });
+      }
       ckpt_('work_ops');
       }
 
@@ -8741,6 +8784,7 @@ const ValleyFoodsHRModules = (function () {
       } catch (e) {}
       var keepBpUids = [];
       var bpNewRows = [];
+      var bpPatches = {};
       var nBpNew = 0;
       (Array.isArray(d.byproducts) ? d.byproducts : []).forEach(function (b) {
         var suppliedBuid = String(b.uid || '').trim();
@@ -8753,12 +8797,14 @@ const ValleyFoodsHRModules = (function () {
           if (existingBPByUid[detB]) { buid = detB; oldB = existingBPByUid[detB]; }
         }
         if (oldB) {
-          patchRowByCriteria_(sheetBP, 'unique_id', buid, {
+          var bpPatch = {
             item: String(b.item || '').trim(),
             qty: Number(b.qty) || 0,
             transaction_code: String(b.transaction_code || '').trim(),
             user: (user && user.email) || ''
-          });
+          };
+          if (mfgFast) bpPatches[buid] = bpPatch;
+          else patchRowByCriteria_(sheetBP, 'unique_id', buid, bpPatch);
           keepBpUids.push(buid);
         } else {
           var m = {};
@@ -8791,7 +8837,14 @@ const ValleyFoodsHRModules = (function () {
         sheetBP.getRange(bpStart, 1, bpNewRows.length, bpHeaders.length).setValues(bpNewRows);
         noteMutation_(sheetBP);
       }
-      deleteRowsWhereIn_(sheetBP, 'unique_id', deletedBpUids);
+      if (mfgFast && Object.keys(bpPatches).length) {
+        fsPatchRowsByKey_(dbId, sheetBP, 'unique_id', bpPatches);
+      }
+      if (mfgFast) {
+        if (deletedBpUids.length) fsDeleteRowsByKeys_(dbId, sheetBP, 'unique_id', deletedBpUids);
+      } else {
+        deleteRowsWhereIn_(sheetBP, 'unique_id', deletedBpUids);
+      }
       ckpt_('byproducts');
       }
       ckpt_('complete');

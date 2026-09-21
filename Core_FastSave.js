@@ -188,7 +188,7 @@ function fsReadColumnValues_(sheet, headerName) {
  *
  * `wantedKeys` (optional) keeps only the rows the caller is about to touch, so
  * memory stays proportional to the document rather than to the table. */
-function fsKeyIndex_(sheet, keyHeaders, wantedKeys) {
+function fsKeyIndex_(sheet, keyHeaders, wantedKeys, collectAll) {
   var headers = getHeaders_(sheet);
   var idxs = Array.isArray(keyHeaders) ? fsHeaderIndices_(headers, keyHeaders) : [fsHeaderIndex_(headers, keyHeaders)];
   if (idxs[0] === -1) throw fsError_('FAST_SAVE_KEY_UNSUPPORTED', 'Header not found: ' + String(keyHeaders), { header: String(keyHeaders) });
@@ -217,7 +217,15 @@ function fsKeyIndex_(sheet, keyHeaders, wantedKeys) {
     if (!anyPart) continue;
     var key = fsKeyFromValues_(parts);
     if (wantedKeys && !wantedKeys[key]) continue;
-    map.set(key, r + 2);
+    if (collectAll) {
+      var hits = map.get(key);
+      if (hits) hits.push(r + 2);
+      else map.set(key, [r + 2]);
+    } else if (!map.has(key)) {
+      /* FIRST match wins, which is what the legacy locate-then-write scan does
+       * and what a patch of a duplicated key must therefore keep doing. */
+      map.set(key, r + 2);
+    }
   }
   return { map: map, indices: idxs, lastRow: lastRow, reads: 1 };
 }
@@ -630,12 +638,18 @@ function fsDeleteRowsByKeys_(dbId, sheet, keyHeaders, keys, opts) {
   });
   if (!list.length) return result;
 
-  var located = fsKeyIndex_(sheet, keyHeaders, wanted);
+  /* Deletion takes EVERY row carrying the key, which is what the legacy
+   * delete-every-match scan does — a duplicated key must not leave a row
+   * behind merely because a patch would have targeted the first one. */
+  var located = fsKeyIndex_(sheet, keyHeaders, wanted, true);
   result.keyReads = located.reads;
 
   var rows = [];
   list.forEach(function (k) {
-    if (located.map.has(k)) { rows.push(located.map.get(k)); result.deletedKeys.push(k); }
+    var hits = located.map.get(k);
+    if (!hits || !hits.length) return;
+    for (var i = 0; i < hits.length; i++) rows.push(hits[i]);
+    result.deletedKeys.push(k);
   });
   if (!rows.length) return result;
 
