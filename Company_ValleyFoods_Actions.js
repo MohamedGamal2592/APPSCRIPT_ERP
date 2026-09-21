@@ -12587,8 +12587,13 @@ const ValleyFoodsHRModules = (function () {
         var iVals = iSheet.getRange(ir, 1, 1, iSheet.getLastColumn()).getValues()[0];
         var s = {};
         iHeaders.forEach(function (h, ci) { s[String(h).trim()] = iVals[ci]; });
+        /* RV-1.1 (owner-approved defect fix, 2026-09-21): this read `uid`, which is
+           declared nowhere in this function — the local is `invUid`. The
+           ReferenceError was swallowed by the catch below, so `invInfo` stayed
+           null and the returns banner showed three dashes instead of the invoice
+           number, client and date. See READ_VIEW_MODULARIZATION_RESULTS.md. */
         invInfo = {
-          uid: uid,
+          uid: invUid,
           number: String(s['رقم الفاتورة'] || ''),
           client_name: String(s['اسم العميل'] || ''),
           date_display: (function () { var d = s['تاريخ الفاتورة'] ? new Date(s['تاريخ الفاتورة']) : null; return d && !isNaN(d.getTime()) ? pad2_(d.getDate()) + '/' + pad2_(d.getMonth() + 1) + '/' + d.getFullYear() : '-'; })()
