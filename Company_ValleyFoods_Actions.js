@@ -12292,14 +12292,15 @@ const ValleyFoodsHRModules = (function () {
 
   /* Per-response metrics travel with every fast read as ONE structured log
      line (G4): counts and outcomes only, never a value. */
-  function vfFastReadLog_(action, m) {
+  function vfFastReadLog_(action, m, ctx) {
     try {
       Logger.log(JSON.stringify({
         evt: 'vf_fast_read',
         action: String(action),
         serviceCalls: m.serviceCalls, rowsScanned: m.rowsScanned, colsRead: m.colsRead,
         cellsRead: m.cellsRead, bytesRead: m.bytesRead,
-        partial: !!m.partial, cacheOutcome: String(m.cacheOutcome || 'disabled')
+        partial: !!m.partial,
+        cacheOutcome: String((ctx && ctx.cacheOutcome) || m.cacheOutcome || 'disabled')
       }));
     } catch (e) {}
   }
@@ -12350,46 +12351,62 @@ const ValleyFoodsHRModules = (function () {
   function vfInvoiceForReturnFast_(data, user, dbId) {
     var invUid = String((data && data.invoice_unique_id) || '').trim();
     if (!invUid) throw new Error('اختر الفاتورة أولاً');
-    var ctx = frNewContext_({ deadlineMs: FR_DEADLINE_MS_ });
-
-    var doc = fastFetchDocument_({
-      dbId: dbId,
-      ctx: ctx,
-      parent: {
-        sheetName: FIN_SALES_INV_SHEET,
-        keyHeader: 'invoice_unique_id',
-        keyValue: invUid,
-        columns: ['invoice_unique_id', 'رقم الفاتورة', 'اسم العميل', 'تاريخ الفاتورة'],
-        dateColumns: ['تاريخ الفاتورة'],
-        strategy: 'PARENT_FK_INDEX_THEN_FETCH'
-      },
-      children: [
-        {
-          alias: 'sold',
-          sheetName: FIN_SALES_LINES_SHEET,
-          parentHeader: 'valley_sales_header_id',
-          parentKey: invUid,
-          columns: ['unique_id', 'product_id', 'product_details', 'product_price', 'product_qty'],
-          strategy: 'PARENT_SCAN'
-        },
-        {
-          alias: 'returns',
-          sheetName: FIN_RETURNS_SHEET,
-          parentHeader: 'valley_sales_products_id',
-          parentKey: '',
-          columns: ['valley_sales_products_id', 'valley_return_qty'],
-          strategy: 'FULL_SCAN'
-        },
-        {
-          alias: 'products',
-          sheetName: FIN_PRODUCTS_SHEET,
-          parentHeader: 'id',
-          parentKey: '',
-          columns: ['id', 'name_ar'],
-          strategy: 'FULL_SCAN'
-        }
-      ]
+    var ctx = frNewContext_({
+      deadlineMs: FR_DEADLINE_MS_,
+      /* The dirty-read window: an execution that has already written must not
+         read the cache (plan §5.5 rule 6). _recordCacheDisabled_ is the shared
+         layer's own "this request has written" flag. */
+      hasWritten: (typeof _recordCacheDisabled_ !== 'undefined' && _recordCacheDisabled_ === true)
     });
+
+    var cached = frCachedRead_({
+      ctx: ctx, dbId: dbId, scopeId: dbId,
+      kind: 'vf_invoice_for_return_doc', docKey: invUid,
+      tables: [FIN_SALES_INV_SHEET, FIN_SALES_LINES_SHEET, FIN_RETURNS_SHEET, FIN_PRODUCTS_SHEET],
+      ttlSeconds: 120, cache: true, payloadVersion: FR_CACHE_PAYLOAD_VERSION_,
+      build: function () {
+        return fastFetchDocument_({
+          dbId: dbId,
+          ctx: ctx,
+          parent: {
+            sheetName: FIN_SALES_INV_SHEET,
+            keyHeader: 'invoice_unique_id',
+            keyValue: invUid,
+            columns: ['invoice_unique_id', 'رقم الفاتورة', 'اسم العميل', 'تاريخ الفاتورة'],
+            dateColumns: ['تاريخ الفاتورة'],
+            strategy: 'PARENT_FK_INDEX_THEN_FETCH'
+          },
+          children: [
+            {
+              alias: 'sold',
+              sheetName: FIN_SALES_LINES_SHEET,
+              parentHeader: 'valley_sales_header_id',
+              parentKey: invUid,
+              columns: ['unique_id', 'product_id', 'product_details', 'product_price', 'product_qty'],
+              strategy: 'PARENT_SCAN'
+            },
+            {
+              alias: 'returns',
+              sheetName: FIN_RETURNS_SHEET,
+              parentHeader: 'valley_sales_products_id',
+              parentKey: '',
+              columns: ['valley_sales_products_id', 'valley_return_qty'],
+              strategy: 'FULL_SCAN'
+            },
+            {
+              alias: 'products',
+              sheetName: FIN_PRODUCTS_SHEET,
+              parentHeader: 'id',
+              parentKey: '',
+              columns: ['id', 'name_ar'],
+              strategy: 'FULL_SCAN'
+            }
+          ]
+        });
+      }
+    });
+    var doc = cached.value;
+    ctx.cacheOutcome = cached.cacheOutcome;
 
     var returnedByLine = {};
     vfSectionRowsToMaps_(doc, 'returns').forEach(function (r) {
@@ -12420,7 +12437,7 @@ const ValleyFoodsHRModules = (function () {
 
     var invInfo = null;
     if (doc.parent) invInfo = vfInvoiceHeaderFields_(doc.parent);
-    vfFastReadLog_('get_valley_invoice_for_return', doc.metrics.total);
+    vfFastReadLog_('get_valley_invoice_for_return', doc.metrics.total, ctx);
     return { status: 'success', invoice: invInfo || { uid: invUid, number: '-' }, lines: lines };
   }
 
@@ -12428,46 +12445,59 @@ const ValleyFoodsHRModules = (function () {
   function vfInvoiceFullFast_(data, user, dbId) {
     var uid = String((data && data.invoice_unique_id) || '').trim();
     if (!uid) throw new Error('معرّف الفاتورة مطلوب');
-    var ctx = frNewContext_({ deadlineMs: FR_DEADLINE_MS_ });
-
-    var doc = fastFetchDocument_({
-      dbId: dbId,
-      ctx: ctx,
-      parent: {
-        sheetName: FIN_SALES_INV_SHEET,
-        keyHeader: 'invoice_unique_id',
-        keyValue: uid,
-        columns: FIN_SALES_INV_HEADERS,
-        dateColumns: ['تاريخ الفاتورة'],
-        strategy: 'PARENT_FK_INDEX_THEN_FETCH'
-      },
-      children: [
-        {
-          alias: 'lines',
-          sheetName: FIN_SALES_LINES_SHEET,
-          parentHeader: 'valley_sales_header_id',
-          parentKey: uid,
-          columns: ['unique_id', 'product_id', 'product_details', 'product_tax', 'product_qty', 'product_price'],
-          strategy: 'PARENT_SCAN'
-        },
-        {
-          alias: 'products',
-          sheetName: FIN_PRODUCTS_SHEET,
-          parentHeader: 'id',
-          parentKey: '',
-          columns: ['id', 'name_ar'],
-          strategy: 'FULL_SCAN'
-        },
-        {
-          alias: 'allocations',
-          sheetName: 'valley_sales_product_stock',
-          parentHeader: 'valley_sales_products_id',
-          parentKey: '',
-          columns: ['unique_id', 'valley_sales_products_id', 'product_unique_id', 'product_transaction_code', 'product_qty'],
-          strategy: 'FULL_SCAN'
-        }
-      ]
+    var ctx = frNewContext_({
+      deadlineMs: FR_DEADLINE_MS_,
+      hasWritten: (typeof _recordCacheDisabled_ !== 'undefined' && _recordCacheDisabled_ === true)
     });
+
+    var cached = frCachedRead_({
+      ctx: ctx, dbId: dbId, scopeId: dbId,
+      kind: 'vf_invoice_full_doc', docKey: uid,
+      tables: [FIN_SALES_INV_SHEET, FIN_SALES_LINES_SHEET, FIN_PRODUCTS_SHEET, 'valley_sales_product_stock'],
+      ttlSeconds: 120, cache: true, payloadVersion: FR_CACHE_PAYLOAD_VERSION_,
+      build: function () {
+        return fastFetchDocument_({
+          dbId: dbId,
+          ctx: ctx,
+          parent: {
+            sheetName: FIN_SALES_INV_SHEET,
+            keyHeader: 'invoice_unique_id',
+            keyValue: uid,
+            columns: FIN_SALES_INV_HEADERS,
+            dateColumns: ['تاريخ الفاتورة'],
+            strategy: 'PARENT_FK_INDEX_THEN_FETCH'
+          },
+          children: [
+            {
+              alias: 'lines',
+              sheetName: FIN_SALES_LINES_SHEET,
+              parentHeader: 'valley_sales_header_id',
+              parentKey: uid,
+              columns: ['unique_id', 'product_id', 'product_details', 'product_tax', 'product_qty', 'product_price'],
+              strategy: 'PARENT_SCAN'
+            },
+            {
+              alias: 'products',
+              sheetName: FIN_PRODUCTS_SHEET,
+              parentHeader: 'id',
+              parentKey: '',
+              columns: ['id', 'name_ar'],
+              strategy: 'FULL_SCAN'
+            },
+            {
+              alias: 'allocations',
+              sheetName: 'valley_sales_product_stock',
+              parentHeader: 'valley_sales_products_id',
+              parentKey: '',
+              columns: ['unique_id', 'valley_sales_products_id', 'product_unique_id', 'product_transaction_code', 'product_qty'],
+              strategy: 'FULL_SCAN'
+            }
+          ]
+        });
+      }
+    });
+    var doc = cached.value;
+    ctx.cacheOutcome = cached.cacheOutcome;
 
     if (!doc.parent) throw new Error('الفاتورة غير موجودة');
 
@@ -12509,7 +12539,7 @@ const ValleyFoodsHRModules = (function () {
       var key = String(h).trim();
       invoice[key] = doc.parent[key] !== undefined ? doc.parent[key] : '';
     });
-    vfFastReadLog_('get_valley_invoice_full', doc.metrics.total);
+    vfFastReadLog_('get_valley_invoice_full', doc.metrics.total, ctx);
     return { status: 'success', invoice: invoice, lines: lines };
   }
 

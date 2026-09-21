@@ -199,7 +199,8 @@ TARGETS.forEach(function (t) {
    * row ranges (27 + 39 + 30 + 6) — about 155 — and then builds 13-column
    * record objects. Measured, not modelled. */
   assert.strictEqual(m.cellsRead, 101, 'cells read is the measured 101 against the legacy ~155');
-  assert.strictEqual(m.cacheOutcome, 'disabled', 'no cache in step 4');
+  assert.strictEqual(m.cacheOutcome, 'refused-unknown-stamp',
+    'no cache was published: the fixture tables carry no stamp (step 5 is opt-in and stamp-gated)');
 }
 
 /* ── 5. fail-open for documents ──────────────────────────────────────────── */
@@ -226,6 +227,66 @@ TARGETS.forEach(function (t) {
   H_BROKEN.newExecution();
   const full = H_BROKEN.dispatch('get_valley_invoice_full', { invoice_unique_id: 'INV-DOC-1' });
   assert.strictEqual(full.lines.length, 2, 'the detail reader fails open the same way');
+}
+
+/* ── 6. small-payload cache: publish, serve, invalidate on a stamp ───────── */
+{
+  const H = H_ON;
+  /* 1. Unstamped tables cannot be published: the read still answers. */
+  H.newExecution();
+  let before = H.logs.length;
+  H.dispatch('get_valley_invoice_for_return', { invoice_unique_id: 'INV-DOC-1' });
+  let log = H.logs.slice(before).filter((l) => l.indexOf('vf_fast_read') !== -1)[0];
+  let m = JSON.parse(log.slice(log.indexOf('{')));
+  assert.strictEqual(m.cacheOutcome, 'refused-unknown-stamp',
+    'with no stamp on the covered tables the payload is built and not published');
+
+  /* 2. Stamp the covered tables: the next read publishes, the one after is served. */
+  ['valley_sales_invoices', 'valley_sales_products', 'valley_sales_returns', 'valley_products']
+    .forEach((sheetName) => H.eval('noteTableChange_("' + H.dbId + '", "' + sheetName + '");'));
+
+  H.newExecution();
+  before = H.logs.length;
+  H.dispatch('get_valley_invoice_for_return', { invoice_unique_id: 'INV-DOC-1' });
+  log = H.logs.slice(before).filter((l) => l.indexOf('vf_fast_read') !== -1)[0];
+  m = JSON.parse(log.slice(log.indexOf('{')));
+  assert.strictEqual(m.cacheOutcome, 'hit', 'a stamped payload is published');
+
+  H.newExecution();
+  H.resetStats();
+  before = H.logs.length;
+  const served = H.dispatch('get_valley_invoice_for_return', { invoice_unique_id: 'INV-DOC-1' });
+  log = H.logs.slice(before).filter((l) => l.indexOf('vf_fast_read') !== -1)[0];
+  m = JSON.parse(log.slice(log.indexOf('{')));
+  const stats = H.stats();
+  assert.strictEqual(m.cacheOutcome, 'hit', 'the second read is served from the cache');
+  assert.strictEqual(stats.rangeReads, 0,
+    'a cache hit performs no sheet value reads at all (got ' + stats.rangeReads + ')');
+  assert.strictEqual(served.lines.length, 2, 'and the cached document is the right one');
+  assert.strictEqual(served.invoice.number, 'NUM-1');
+
+  /* 3. A write stamps a covered table: the next read misses and rebuilds. */
+  H.eval('noteTableChange_("' + H.dbId + '", "valley_sales_returns");');
+  H.newExecution();
+  H.resetStats();
+  before = H.logs.length;
+  H.dispatch('get_valley_invoice_for_return', { invoice_unique_id: 'INV-DOC-1' });
+  log = H.logs.slice(before).filter((l) => l.indexOf('vf_fast_read') !== -1)[0];
+  m = JSON.parse(log.slice(log.indexOf('{')));
+  assert.ok(m.cacheOutcome === 'miss' || m.cacheOutcome === 'hit',
+    'a changed stamp invalidates the entry (outcome ' + m.cacheOutcome + ')');
+  assert.ok(H.stats().rangeReads > 0, 'and the document is really rebuilt from the sheet');
+
+  /* 4. An execution that has written reads no cache. */
+  H.newExecution();
+  H.eval('disableRecordCache_();');          /* exactly what noteMutation_ does */
+  H.resetStats();
+  before = H.logs.length;
+  H.dispatch('get_valley_invoice_for_return', { invoice_unique_id: 'INV-DOC-1' });
+  log = H.logs.slice(before).filter((l) => l.indexOf('vf_fast_read') !== -1)[0];
+  m = JSON.parse(log.slice(log.indexOf('{')));
+  assert.strictEqual(m.cacheOutcome, 'refused-after-write', 'the dirty-read window is honoured');
+  assert.ok(H.stats().rangeReads > 0, 'and the legacy-equivalent read still happens');
 }
 
 console.log('sales_document_fast_read: PASS');

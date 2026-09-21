@@ -984,6 +984,256 @@ function frFetchSection_(dbId, sheetName, keyHeader, keyValue, columns, strategy
   throw frError_('FR_STRATEGY_UNSUPPORTED', 'Unknown document strategy: ' + strategy);
 }
 
+/* ── small-payload cache (plan §5.4, §5.5) ─────────────────────────────────
+ * A cache entry is a MANIFEST plus immutable generation-specific chunks, under
+ * one stable logical key. The protocol, adopted exactly from the existing
+ * chunked-cache helper (Code.js:1595, 1702-1735):
+ *
+ *   1. logical key is fully hashed: fr1_<sha256(scope+kind+docKey+version)>,
+ *      truncated to 160 bits. Never a 32-bit hash, never the raw document key.
+ *   2. chunks carry a fresh generation id; the manifest is written AFTER the
+ *      chunks exist; the previous generation is removed only after publication.
+ *   3. the manifest carries an identity fingerprint AND the table stamp
+ *      signature. EVERY hit verifies both; a mismatch or a missing stamp is a
+ *      miss. There is no "probably still valid".
+ *   4. publication requires the pre-read and post-read stamp signatures to be
+ *      identical and to cover every table the payload came from.
+ *   5. no cache read in an execution that has written (the dirty-read window).
+ *   6. ≤5 chunks (~450 KB) per entry. Anything larger is refused, not truncated.
+ *
+ * What may be cached is raw, authorization-neutral data (rows), never a DTO:
+ * projection and redaction run after authorization on every request (G8). */
+
+function frCacheLogicalKey_(scopeId, kind, docKey, payloadVersion) {
+  var text = [String(scopeId || ''), String(kind || ''), String(docKey || ''), String(payloadVersion || '')].join('\u0001');
+  return 'fr1_' + frCacheDigest_(text);
+}
+
+/* SHA-256 when the platform provides it, truncated to 40 hex characters (160
+ * bits) — the same digest helper the shared cache uses, so the namespace is
+ * consistent with the rest of the project. */
+function frCacheDigest_(text) {
+  try {
+    if (typeof Utilities !== 'undefined' && Utilities.computeDigest && Utilities.DigestAlgorithm && Utilities.Charset) {
+      return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(text), Utilities.Charset.UTF_8)
+        .map(function (b) { var n = b < 0 ? b + 256 : b; return ('0' + n.toString(16)).slice(-2); }).join('').slice(0, 40);
+    }
+  } catch (e) {}
+  /* Offline: two independent 32-bit hashes over the text, repeated, so the
+   * namespace still isolates documents. Never a single 32-bit value. */
+  var parts = [];
+  for (var round = 0; round < 5; round++) {
+    var h = 2166136261 ^ (round * 2654435761);
+    for (var i = 0; i < String(text).length; i++) { h ^= String(text).charCodeAt(i) + round; h = (h * 16777619) >>> 0; }
+    parts.push(('00000000' + h.toString(16)).slice(-8));
+  }
+  return parts.join('');
+}
+
+function frCacheBase_(logicalKey) {
+  /* The manifest key comes from the SHARED key builder, not from string
+   * concatenation: it sanitizes and digests the logical key, and a second
+   * implementation here would be a second namespace. */
+  return chunkedCacheKeys_(logicalKey).manifest;
+}
+
+/* Current stamp signature for a set of tables: ONE cache round trip, zero sheet
+ * reads. A table with no stamp is reported as absent, and absence means the
+ * payload cannot be validated — which is a miss, never a hit. */
+function frStampSig_(scopeId, sheetNames, ctx) {
+  var names = (sheetNames || []).filter(Boolean).slice().sort();
+  if (!scopeId || !names.length) return { sig: '', missing: names.slice(), stamps: {} };
+  frCheckDeadline_(ctx);
+  var stamps = {};
+  try {
+    stamps = readTableVersions_(scopeId, names) || {};
+  } catch (e) {
+    return { sig: '', missing: names.slice(), stamps: {} };
+  }
+  var missing = [];
+  var parts = [];
+  names.forEach(function (n) {
+    var v = stamps[n];
+    if (!v) { missing.push(n); return; }
+    parts.push(n + '=' + v);
+  });
+  return { sig: parts.join('&'), missing: missing, stamps: stamps };
+}
+
+function frCacheManifest_(logicalKey) {
+  var raw = null;
+  try { raw = CacheService.getScriptCache().get(frCacheBase_(logicalKey)); } catch (e) { return null; }
+  if (!raw) return null;
+  try {
+    var parsed = JSON.parse(raw);
+    if (!parsed || !parsed.g || !parsed.id || !parsed.n) return null;
+    return parsed;
+  } catch (e) { return null; }
+}
+
+/* Read one entry. `guard` = { identity, stampSig, ctx }. Any mismatch, any
+ * missing chunk, any integrity failure is a MISS — never a partial value. */
+function frCacheGet_(logicalKey, guard) {
+  var g = guard || {};
+  var out = { value: null, outcome: 'miss' };
+  if (g.ctx && g.ctx.hasWritten) { out.outcome = 'refused-after-write'; return out; }
+  var manifest = frCacheManifest_(logicalKey);
+  if (!manifest) return out;
+  if (Number(manifest.v || 0) !== Number(g.payloadVersion || FR_CACHE_PAYLOAD_VERSION_)) return out;
+  if (String(manifest.id || '') !== String(g.identity || '')) return out;
+  var sig = g.stampSig ? String(g.stampSig.sig || '') : '';
+  var missing = (g.stampSig && g.stampSig.missing) || [];
+  if (!sig || missing.length) { out.outcome = 'refused-unknown-stamp'; return out; }
+  if (String(manifest.stamp || '') !== sig) return out;
+
+  var n = Number(manifest.n) || 0;
+  if (n < 1 || n > FR_CACHE_MAX_CHUNKS_) return out;
+  var keys = [];
+  for (var i = 0; i < n; i++) keys.push(chunkedCacheKeys_(logicalKey, manifest.g).prefix + i);
+  var got = null;
+  try { got = CacheService.getScriptCache().getAll(keys); } catch (e) { return out; }
+  if (!got) return out;
+  var text = '';
+  for (var k = 0; k < n; k++) {
+    var part = got[keys[k]];
+    if (part === undefined || part === null) return out;   /* partial eviction is a miss */
+    text += part;
+  }
+  if (frCacheDigest_(text) !== String(manifest.h || '')) return out;   /* integrity */
+  try { out.value = JSON.parse(text); } catch (e) { return out; }
+  out.outcome = 'hit';
+  return out;
+}
+
+/* Publish one entry. Refuses (without writing) when: the execution has written,
+ * the payload needs more chunks than the ceiling, the stamp signature is absent
+ * or the two stamp reads disagree. On success the previous generation is removed
+ * AFTER the manifest points at the new one, so a reader can never see a torn
+ * payload. Returns the outcome string. */
+function frCachePut_(logicalKey, value, guard) {
+  var g = guard || {};
+  if (g.ctx && g.ctx.hasWritten) return 'refused-after-write';
+  var before = g.stampSigBefore ? String(g.stampSigBefore.sig || '') : '';
+  var after = g.stampSigAfter ? String(g.stampSigAfter.sig || '') : '';
+  var missing = ((g.stampSigBefore && g.stampSigBefore.missing) || []).concat((g.stampSigAfter && g.stampSigAfter.missing) || []);
+  if (!before || !after || before !== after || missing.length) return 'refused-unknown-stamp';
+
+  var payload;
+  try { payload = JSON.stringify(value); } catch (e) { return 'refused-size'; }
+  var chunkSize = Number((typeof CONFIG !== 'undefined' && CONFIG.TABLE_CACHE_CHUNK_SIZE) || 90000);
+  var chunks = utf8Chunks_(payload, chunkSize);
+  if (!chunks.length || chunks.length > FR_CACHE_MAX_CHUNKS_) return 'refused-size';
+  var bytes = frUtf8ByteLength_(payload);
+  if (frCacheDigest_(payload) !== frCacheDigest_(chunks.join(''))) return 'refused-size';
+
+  if (g.ctx && (g.ctx.cacheWrites || 0) >= FR_MAX_CACHE_WRITES_PER_EXECUTION_) return 'refused-size';
+
+  var base = frCacheBase_(logicalKey);
+  var cache = CacheService.getScriptCache();
+  var generation = chunkedCacheGeneration_();
+  var keys = chunkedCacheKeys_(logicalKey, generation);
+  var oldGeneration = null;
+  try {
+    var oldRaw = cache.get(base);
+    if (oldRaw) { try { oldGeneration = JSON.parse(oldRaw).g || null; } catch (e) {} }
+  } catch (e) {}
+
+  var put = {};
+  chunks.forEach(function (c, i) { put[keys.prefix + i] = c; });
+  try { cache.putAll(put, g.ttlSeconds); } catch (e) { return 'refused-size'; }
+
+  var published = false;
+  try {
+    published = withChunkedCacheLock_(function () {
+      cache.put(base, JSON.stringify({
+        v: Number(g.payloadVersion || FR_CACHE_PAYLOAD_VERSION_),
+        g: generation, n: chunks.length, bytes: bytes, h: frCacheDigest_(payload),
+        id: String(g.identity || ''), stamp: after, ts: new Date().getTime()
+      }), g.ttlSeconds);
+      return true;
+    });
+  } catch (e) { published = false; }
+  if (!published) return 'refused-unknown-stamp';
+
+  if (oldGeneration && oldGeneration !== generation) {
+    try { removeChunkedPublication_(cache, chunkedCacheKeys_(logicalKey, oldGeneration), FR_CACHE_MAX_CHUNKS_); } catch (e) {}
+  }
+  /* No trailing-chunk cleanup is needed within the new generation: it is fresh,
+   * so nothing at a higher index can exist under it. (A cleanup that swept
+   * indices 0..n-1 would delete the chunks just written.) */
+
+  if (g.ctx) g.ctx.cacheWrites = (g.ctx.cacheWrites || 0) + 1;
+  return 'hit';
+}
+
+function frCacheDrop_(logicalKey) {
+  try { removeChunkedCache_(logicalKey); return true; } catch (e) { return false; }
+}
+
+function frCacheDiagnostics_(logicalKey) {
+  var logical = String(logicalKey);
+  var base = frCacheBase_(logical);
+  var raw = null;
+  try { raw = CacheService.getScriptCache().get(base); } catch (e) { return { present: false }; }
+  if (!raw) return { present: false };
+  var manifest = null;
+  try { manifest = JSON.parse(raw); } catch (e) { return { present: false, unreadable: true }; }
+  if (!manifest) return { present: false, unreadable: true };
+  var ageMs = Math.max(0, new Date().getTime() - Number(manifest.ts || 0));
+  return {
+    present: true,
+    key: base,
+    chunkCount: Number(manifest.n) || 0,
+    bytes: Number(manifest.bytes) || 0,
+    ageMs: ageMs,
+    generation: String(manifest.g || ''),
+    hasIdentity: !!manifest.id,
+    hasStamp: !!manifest.stamp,
+    payloadVersion: Number(manifest.v) || 0
+  };
+}
+
+/* Opt-in cached read for a bounded payload. The caller supplies a stable
+ * document key and the tables the payload is built from; the engine validates
+ * the stamp signature before and after the build and publishes only when the
+ * two agree. A miss, a refusal or a build failure always still returns a value:
+ * caching is an optimisation, never a reason a user sees nothing. */
+function frCachedRead_(spec) {
+  var s = spec || {};
+  var ctx = s.ctx || frNewContext_();
+  var out = { value: null, cacheOutcome: 'disabled' };
+  var enabled = s.cache === true && s.kind && (s.docKey !== undefined && s.docKey !== null) && (s.tables || []).length;
+  if (!enabled) { out.cacheOutcome = 'disabled'; out.value = s.build(); return out; }
+
+  var logicalKey = frCacheLogicalKey_(s.scopeId || s.dbId, s.kind, s.docKey, s.payloadVersion || FR_CACHE_PAYLOAD_VERSION_);
+  var identity = frCacheDigest_([
+    String(s.scopeId || s.dbId || ''), String(s.kind), String(s.docKey),
+    String(s.payloadVersion || FR_CACHE_PAYLOAD_VERSION_), String(s.identity || '')
+  ].join('\u0001'));
+
+  var stampBefore = frStampSig_(s.scopeId || s.dbId, s.tables, ctx);
+  var hit = frCacheGet_(logicalKey, {
+    ctx: ctx, identity: identity, stampSig: stampBefore,
+    payloadVersion: s.payloadVersion || FR_CACHE_PAYLOAD_VERSION_
+  });
+  out.cacheOutcome = hit.outcome;
+  out.identity = identity;
+  out.logicalKey = logicalKey;
+  if (hit.outcome === 'hit') { out.value = hit.value; return out; }
+
+  var built = s.build();
+  out.value = built;
+
+  if (s.cacheWrite === false) return out;
+  var stampAfter = frStampSig_(s.scopeId || s.dbId, s.tables, ctx);
+  out.cacheOutcome = frCachePut_(logicalKey, built, {
+    ctx: ctx, identity: identity,
+    stampSigBefore: stampBefore, stampSigAfter: stampAfter,
+    ttlSeconds: s.ttlSeconds || 600
+  });
+  return out;
+}
+
 /* ── shadow comparison (plan §3.2 G2 + §7.5) ───────────────────────────────
  * Runs both readers, projects BOTH through the same canonicalizer, diffs the
  * projected values, and returns the legacy result so every user is unaffected

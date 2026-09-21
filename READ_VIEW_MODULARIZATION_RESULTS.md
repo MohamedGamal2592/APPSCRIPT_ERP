@@ -27,7 +27,7 @@ Field names, hashes, types, counts, line numbers and bounded summaries only.
 | 2 | `Core_FastRead.js` primitives + metrics + parity guard | `FAST_READ_CORE_` (false) | **DONE** — engine committed inert (`RV-2.1`, TR-16/TR-17); no callers; one DoD row NOT MET with reason (document read call floor) |
 | 3 | Sales list (`NARROW_SCAN_PAGE` / `KEYSET`, no caching) | `SALES_FAST_READ_` | **DONE** — fast reader + admin shadow compare (`RV-3.1`, TR-19); flag `false`; `bytesOut` unchanged (endpoint was already slimmed), cells 299 vs 351 measured |
 | 4 | Sales document reads | `SALES_FAST_READ_` | **DONE** — both invoice readers behind declared document strategies (`RV-4.1`, TR-20); flag `false`; calls 17 vs ~14 legacy measured (win is cells 101 vs ~155), recorded as a trade-off |
-| 5 | Small-payload cache (stable key, stamp in manifest, pre/post validation) | `FAST_READ_CORE_` | NOT STARTED |
+| 5 | Small-payload cache (stable key, stamp in manifest, pre/post validation) | `FAST_READ_CORE_` | **DONE** — `frCachedRead_` protocol + full chunk/identity/stamp suite (`RV-5.1`, TR-21/TR-22); adopted by both Sales document readers behind the flags |
 | 6 | DTO projection + permission tests | `FAST_VIEW_CORE_` | NOT STARTED |
 | 7 | MFG list + view (separate query design) | `MFG_FAST_READ_` | NOT STARTED |
 | 8 | Client phase | separate approval | OUT OF SCOPE |
@@ -673,6 +673,61 @@ review finding rather than a surprise.
     healthy — the page still has to work.
 - Test runs: TR-20.
 
+### RV-5.1 — Small-payload cache: publication contract, identity and stamp guard
+- Date / Commit: 2026-09-21 / identified by message — `feat(rv-5): small-payload cache with
+  identity+stamp guard (FAST_READ_CORE_ off)`.
+- Step: 5.
+- Files (with line anchors):
+  - `Core_FastRead.js`: `frCacheLogicalKey_` (160-bit digest), `frCacheDigest_`,
+    `frCacheBase_` (shared key builder), `frStampSig_`, `frCacheGet_`, `frCachePut_`,
+    `frCacheDrop_`, `frCacheDiagnostics_`, `frCachedRead_` (the opt-in wrapper).
+  - `Company_ValleyFoods_Actions.js`: both Sales document readers wrap their document build in
+    `frCachedRead_` (kind + invoice uid as the document key, four covered tables, 120 s TTL);
+    the context is seeded with the shared layer's dirty-read flag (`_recordCacheDisabled_`);
+    `vfFastReadLog_` now reports the context's `cacheOutcome` rather than the metrics default.
+  - `tools/verify/fast_read_cache.js` (new); `tools/verify/gasstub.js` (the stub digest now
+    returns 32 bytes like the real service, which is what makes key-length assertions real).
+  - `READ_VIEW_MODULARIZATION_RESULTS.md` (this record, TR-21/TR-22).
+- What changed (behaviour terms): with either switch false nothing changes. With both true, a
+  document read first asks the cache; a hit is served without touching a sheet; a miss builds
+  and publishes **only** when the covered tables' stamp signature is present and identical
+  before and after the build. A write in the execution suppresses both the read and the write.
+- Why: plan §7 step 5, §5.4 (cache model), §5.5 (consistency protocol), §3.2 G6/G8.
+- Flag state before → after: no flag changed. `FAST_READ_CORE_` and `SALES_FAST_READ_` remain
+  `false`; the cache is reachable only from a fast path, which requires both.
+- What is cached and what is not (a deliberate choice, recorded):
+  - **Cached**: single documents — the raw rows of one invoice (`parent` + `children`) for each
+    of the two Sales document readers. Raw rows are authorization-neutral; projection happens
+    after authorization on every request (G8).
+  - **Not cached**: the invoice *list*. Its natural key would be the paging payload
+    (from/to/offset/limit), whose cardinality is bound only by user behaviour — exactly the
+    "unbounded distinct keys" risk §5.4 retracts a claim about. Caching the list is refused by
+    design rather than by accident.
+  - Reference bundles (parties/products/enums) are **not** re-cached here: they already have a
+    stamp-versioned chunked cache (`finRefsCached_`/`getRefsCached_`), and layering a second
+    cache over it would add an entry without removing a read. Recorded so the "reference
+    bundles first" ordering is not silently skipped.
+- Behaviour if reverted: L1 flips the module flag (or `FAST_READ_CORE_`) back to `false` — the
+  cache then never runs; L2 `git revert <sha>`. L3: entries are namespaced `fr1_*` and expire
+  on their TTL; a specific entry can be dropped with `frCacheDrop_(logicalKey)`.
+- Retraction recipe: L1 as above; L2 `git revert <sha>`; L3 `frCacheDrop_` for one key, and
+  nothing else to restore (cache is derived).
+- Metrics observed (with baseline, measured by TR-22): a stamped read publishes
+  (`cacheOutcome: hit`), the following read is served with **0 sheet value reads** against the
+  measured 17 service calls / 101 cells of a build; a stamp bump forces a rebuild; an
+  execution that has written reports `refused-after-write` and reads the sheet.
+- Residual risk (what this does NOT prove):
+  - Eviction is an accepted performance risk and is not detectable: the engine reports `miss`
+    and never claims to distinguish eviction from expiry.
+  - Concurrency: the suite proves a reader cannot combine generations and that a late
+    publication after an invalidation is rejected; it cannot prove anything about CacheService
+    eviction under production load.
+  - The stamps are best-effort by construction (`Code.js:822-830`): manual edits, imports,
+    formulas and raw writers are invisible. The engine claims exactly what the stamp system
+    sees, no more.
+  - The 120 s TTL is a first value, not a measured optimum.
+- Test runs: TR-21, TR-22.
+
 ---
 
 ## 5. Test-run records
@@ -982,6 +1037,44 @@ review finding rather than a surprise.
   is printed by the run and reproduced in RV-4.1.
 - Not covered: live data; and the reader's real cost on a large table, which is step 5's
   measurement.
+
+### TR-21 — Cache publication contract in the `fr1_` namespace
+- When: 2026-09-21
+- Environment: VM harness (no data); the stub cache honours TTL against a controllable clock
+- Command: `node tools/verify/fast_read_cache.js`
+- Purpose (claim under test): the engine's cache keeps the existing publication contract —
+  stable hashed key, immutable generation, manifest after chunks, previous generation removed —
+  and adds an identity fingerprint plus a stamp signature that **every** hit verifies.
+- Result: **PASS** — exit 0, `fast_read_cache: PASS`. Asserted: `fr1_` + 160-bit digest key that
+  changes with the document and the payload version but not between calls; publish→hit with the
+  value intact; misses for a different identity, a changed stamp, a missing stamp, an empty
+  signature and a payload-version bump (the last two with the documented
+  `refused-unknown-stamp` outcome); `refused-after-write` for both read and write in a dirty
+  execution; `refused-size` for a >5-chunk payload with nothing left behind; shrink to a new
+  generation with the old generation's chunks gone and exactly one new chunk present;
+  interleaved publication yielding either a miss or the complete old value; partial eviction and
+  corrupted text as misses; and `frCachedRead_` publishing only under a valid stamp, serving a
+  later read with no rebuild, rebuilding after a stamp bump, honouring the dirty-read window,
+  and answering with a build whenever caching is off or refuses.
+- Evidence: `tools/verify/fast_read_cache.js`; exit code 0 observed.
+- Not covered: production CacheService behaviour (eviction, item limits, cross-execution races);
+  the engine reports `miss` and never diagnoses a cause.
+
+### TR-22 — Cache adoption by the Sales document readers
+- When: 2026-09-21
+- Environment: VM harness (no data); on-flag harness (in-memory source patch)
+- Command: `node tools/verify/sales_document_fast_read.js` (§6 of that file)
+- Purpose (claim under test): the two invoice readers publish under a valid stamp, serve a
+  repeat read with no sheet reads, rebuild after a stamp change, and never read the cache in an
+  execution that has written.
+- Result: **PASS** — exit 0. With unstamped covered tables the read answers and reports
+  `refused-unknown-stamp`; after `noteTableChange_` on all four covered tables the read publishes;
+  the next read reports `cacheOutcome: hit` with **0** range reads in the workbook stub and the
+  right document; a stamp bump on `valley_sales_returns` forces a rebuild (`rangeReads > 0`); with
+  `disableRecordCache_()` called (exactly what a write does) the read reports
+  `refused-after-write` and reads the sheet.
+- Evidence: `tools/verify/sales_document_fast_read.js`; exit code 0 observed.
+- Not covered: live data; TTL expiry timing (unit-covered in TR-21, not re-run here).
 
 ---
 

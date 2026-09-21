@@ -178,10 +178,22 @@ function createHarness(opts) {
     },
     Utilities: {
       getUuid: function () { return 'uuid-' + (H.now++); },
+      /* A 32-byte digest, like the real service returns for SHA_256. The bytes
+       * are derived from a rolling FNV over the text and the byte index, which
+       * is deterministic and collision-resistant enough for harness keys — the
+       * LENGTH matters, because production code truncates and asserts on it. */
       computeDigest: function (alg, s) {
-        let h = 0; const str = String(s);
-        for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) | 0;
-        return [(h >> 24) & 255, (h >> 16) & 255, (h >> 8) & 255, h & 255];
+        const text = String(alg) + '|' + String(s);
+        const out = [];
+        for (let i = 0; i < 32; i++) {
+          let h = (2166136261 ^ ((i + 1) * 2654435761)) >>> 0;
+          for (let j = 0; j < text.length; j++) {
+            h ^= text.charCodeAt(j) + i;
+            h = Math.imul(h, 16777619) >>> 0;
+          }
+          out.push((h >>> 24) & 255, (h >>> 16) & 255, (h >>> 8) & 255, h & 255);
+        }
+        return out.slice(0, 32);
       },
       DigestAlgorithm: { SHA_256: 'SHA_256' },
       Charset: { UTF_8: 'UTF_8' },
