@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="ar" dir="rtl">
 <head>
   <meta charset="utf-8">
@@ -246,9 +246,9 @@
       var canAct = IS_SUPER_ADMIN || CAN_WRITE;
       return UIC.actionBtns([
         { label: 'فتح', onclick: 'MFG_PAGE.openDetail(\'' + esc(uid) + '\')' },
-        canAct && st === 'Draft' ? { label: '▶️ بدء', onclick: 'MFG_PAGE.changeStatus(\'' + esc(uid) + '\',\'start\')' } : null,
-        canAct && isInProgress ? { label: '🏁 إنهاء', color: '#b45309', onclick: 'MFG_PAGE.changeStatus(\'' + esc(uid) + '\',\'lock\')' } : null,
-        canAct && isLocked && IS_SUPER_ADMIN ? { label: '🔓 فتح القفل', color: '#b45309', onclick: 'MFG_PAGE.changeStatus(\'' + esc(uid) + '\',\'unlock\')' } : null,
+        canAct && st === 'Draft' ? { label: 'بدء', onclick: 'MFG_PAGE.changeStatus(\'' + esc(uid) + '\',\'start\')' } : null,
+        canAct && isInProgress ? { label: ' إنهاء', color: '#b45309', onclick: 'MFG_PAGE.changeStatus(\'' + esc(uid) + '\',\'lock\')' } : null,
+        canAct && isLocked && IS_SUPER_ADMIN ? { label: ' فتح القفل', color: '#b45309', onclick: 'MFG_PAGE.changeStatus(\'' + esc(uid) + '\',\'unlock\')' } : null,
         IS_SUPER_ADMIN ? { label: 'حذف', color: '#dc2626', onclick: 'MFG_PAGE.remove(\'' + esc(uid) + '\')' } : null
       ].filter(Boolean));
     }
@@ -298,15 +298,15 @@
         '</form>' +
         /* Tab bar (Odoo-style child tables) */
         '<div style="display:flex;gap:4px;border-bottom:2px solid #16a34a;margin-bottom:0;flex-wrap:wrap;">' +
-          MFG_PAGE.tabBtn('tab-outputs', '📦 المنتجات والمواد', true) +
-          MFG_PAGE.tabBtn('tab-main-extra', '📋 إضافي') +
-          MFG_PAGE.tabBtn('tab-cons', '🧪 استهلاك الخامات') +
-          MFG_PAGE.tabBtn('tab-workops', '⚙️ ورديات التشغيل') +
-          MFG_PAGE.tabBtn('tab-byproducts', '♻️ منتجات ثانوية') +
+          MFG_PAGE.tabBtn('tab-outputs', 'المنتجات والمواد', true) +
+          MFG_PAGE.tabBtn('tab-main-extra', ' إضافي') +
+          MFG_PAGE.tabBtn('tab-cons', 'استهلاك الخامات') +
+          MFG_PAGE.tabBtn('tab-workops', 'ورديات التشغيل') +
+          MFG_PAGE.tabBtn('tab-byproducts', 'منتجات ثانوية') +
         '</div>' +
         '<div id="tab-outputs" class="mfg-tab-pane">' +
           '<div style="display:flex;justify-content:space-between;align-items:center;margin:10px 0 8px;">' +
-            '<b style="color:#166534;font-size:13px;">📦 منتجات الناتج + المواد المستهلكة لكل منتج</b>' +
+            '<b style="color:#166534;font-size:13px;"> منتجات الناتج + المواد المستهلكة لكل منتج</b>' +
             (CAN_WRITE ? '<button type="button" class="btn btn-outline" onclick="MFG_PAGE.addOutput()">+ منتج ناتج</button>' : '') +
           '</div>' +
           '<div id="outputs-body"></div>' +
@@ -451,7 +451,7 @@
           '</div>' +
           '<div style="padding:8px 10px;border-top:1px dashed var(--border-color, #e5e7eb);background:var(--bg-subtle, #fafafa);">' +
             '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">' +
-              '<span style="font-size:11px;color:var(--text-muted, #6b7280);">🧪 المواد المستهلكة لهذا المنتج</span>' +
+              '<span style="font-size:11px;color:var(--text-muted, #6b7280);"> المواد المستهلكة لهذا المنتج</span>' +
               (CAN_WRITE ? '<button type="button" class="btn btn-outline" style="padding:1px 6px;font-size:10px;" onclick="MFG_PAGE.addFooterRow(' + i + ')">+ صنف</button>' : '') +
             '</div>' +
             (footerRows.length ?
@@ -527,7 +527,7 @@
       var html = '';
       CONSUMPTION_DRAFT.forEach(function (c, i) {
         html += '<div style="border-bottom:1px dashed var(--border-color, #e5e7eb);padding:8px 0;">' +
-          '<div style="font-weight:700;font-size:13px;margin-bottom:6px;">🧪 ' + esc(c.raw_name || c.item_pid) +
+          '<div style="font-weight:700;font-size:13px;margin-bottom:6px;"> ' + esc(c.raw_name || c.item_pid) +
           ' — المطلوب: <span style="direction:ltr;display:inline-block;">' + Number(c.required).toLocaleString('en-US', { maximumFractionDigits: 2 }) + '</span>' +
           ' <span id="cons-sum-' + i + '" style="font-weight:800;"></span></div>' +
           '<div id="cons-batches-' + i + '">جاري تحميل الدفعات...</div>' +
@@ -830,24 +830,24 @@
             var buttons = '';
             if (CAN_WRITE && w.operation_status !== 'Done') {
               if (w.operation_status === 'Pending') {
-                buttons = '<button class="btn btn-primary" style="padding:2px 8px;font-size:10px;" onclick="MFG_PAGE.startWorkOp(\'' + esc(w.unique_id) + '\')">▶️ بدء</button>';
+                buttons = '<button class="btn btn-primary" style="padding:2px 8px;font-size:10px;" onclick="MFG_PAGE.startWorkOp(\'' + esc(w.unique_id) + '\')">بدء</button>';
               } else if (w.operation_status === 'In Progress') {
-                buttons = '<button class="btn btn-outline" style="padding:2px 8px;font-size:10px;color:#d97706;" onclick="MFG_PAGE.pauseWorkOp(\'' + esc(w.unique_id) + '\')">⏸️ إيقاف مؤقت</button> ' +
-                  '<button class="btn btn-outline" style="padding:2px 8px;font-size:10px;color:var(--danger, #dc2626);" onclick="MFG_PAGE.stopWorkOp(\'' + esc(w.unique_id) + '\')">⏹️ إنهاء</button>';
+                buttons = '<button class="btn btn-outline" style="padding:2px 8px;font-size:10px;color:#d97706;" onclick="MFG_PAGE.pauseWorkOp(\'' + esc(w.unique_id) + '\')">إيقاف مؤقت</button> ' +
+                  '<button class="btn btn-outline" style="padding:2px 8px;font-size:10px;color:var(--danger, #dc2626);" onclick="MFG_PAGE.stopWorkOp(\'' + esc(w.unique_id) + '\')">إنهاء</button>';
               } else if (w.operation_status === 'Paused') {
-                buttons = '<button class="btn btn-primary" style="padding:2px 8px;font-size:10px;" onclick="MFG_PAGE.resumeWorkOp(\'' + esc(w.unique_id) + '\')">▶️ استئناف</button> ' +
-                  '<button class="btn btn-outline" style="padding:2px 8px;font-size:10px;color:var(--danger, #dc2626);" onclick="MFG_PAGE.stopWorkOp(\'' + esc(w.unique_id) + '\')">⏹️ إنهاء</button>';
+                buttons = '<button class="btn btn-primary" style="padding:2px 8px;font-size:10px;" onclick="MFG_PAGE.resumeWorkOp(\'' + esc(w.unique_id) + '\')">استئناف</button> ' +
+                  '<button class="btn btn-outline" style="padding:2px 8px;font-size:10px;color:var(--danger, #dc2626);" onclick="MFG_PAGE.stopWorkOp(\'' + esc(w.unique_id) + '\')">إنهاء</button>';
               }
             }
             var timerCell = '';
             if (w.operation_status === 'In Progress' && w.start_time) {
               timerCell = '<span id="timer-' + esc(w.unique_id) + '" class="timer-live" data-start="' + esc(w.start_time) + '" data-pause="' + esc(w.last_pause_time || '') + '" data-pause-dur="' + num0(w.total_pause_duration) + '"></span>';
             } else if (w.operation_status === 'Paused') {
-              timerCell = '<span style="color:#d97706;font-weight:700;">⏸ موقوف</span>';
+              timerCell = '<span style="color:#d97706;font-weight:700;">موقوف</span>';
             }
             var manualBtn = '';
             if (CAN_WRITE && w.operation_status !== 'Done') {
-              manualBtn = '<button class="btn btn-outline" style="padding:2px 6px;font-size:9px;" onclick="MFG_PAGE.toggleWorkOpManualEdit(\'' + esc(w.unique_id) + '\')">✏️</button>';
+              manualBtn = '<button class="btn btn-outline" style="padding:2px 6px;font-size:9px;" onclick="MFG_PAGE.toggleWorkOpManualEdit(\'' + esc(w.unique_id) + '\')">تعديل</button>';
             }
             return '<tr id="wo-row-' + esc(w.unique_id) + '">' +
               '<td>' + Number(w.work_center_sequence || 0) + '</td>' +
@@ -855,6 +855,7 @@
               '<td>' + pill + '</td>' +
               '<td class="wo-start-cell" style="direction:ltr;font-size:11px;">' + esc(fmtDateTime_(w.start_time)) + ' ' + manualBtn + '</td>' +
               '<td class="wo-end-cell" style="direction:ltr;font-size:11px;">' + esc(fmtDateTime_(w.end_time)) + '</td>' +
+              '<td class="wo-pause-cell" style="direction:ltr;font-size:11px;">' + num0(w.total_pause_duration) + '</td>' +
               '<td class="num">' + timerCell + (w.actual_hours !== '' && w.actual_hours != null ? ' ' + esc(w.actual_hours) + 'h' : '') + '</td>' +
               '<td style="font-size:11px;">' + esc(w.notes || '-') + '</td>' +
               '<td>' + buttons + '</td>' +
@@ -864,7 +865,7 @@
             UIC.combo({ key: 'wo-wc', label: 'مركز العمل', required: true, options: window.__WC_OPTIONS, placeholder: 'اكتب للبحث…' }) +
             UIC.field({ key: 'wo-notes', label: 'ملاحظات', type: 'text' }) +
             '</div><input type="hidden" id="wo-mo-uid" value="' + esc(moUid) + '"></form>' : '';
-          holder.innerHTML = '<div class="table-wrap"><table class="table" style="min-width:900px;"><thead><tr><th>#</th><th>مركز العمل</th><th>الحالة</th><th>البداية</th><th>النهاية</th><th>الساعات</th><th>ملاحظات</th><th></th></tr></thead><tbody>' +
+          holder.innerHTML = '<div class="table-wrap"><table class="table" style="min-width:900px;"><thead><tr><th>#</th><th>مركز العمل</th><th>الحالة</th><th>البداية</th><th>النهاية</th><th>التوقف (ساعات)</th><th>الساعات</th><th>ملاحظات</th><th></th></tr></thead><tbody>' +
             (rowsHtml || '<tr><td colspan="8" style="text-align:center;color:#94a3b8;">لا توجد عمليات تشغيل</td></tr>') +
             '</tbody></table></div>' + form;
           UIC.autoColumns(holder);
@@ -911,15 +912,32 @@
       if (!row) return;
       var startCell = row.querySelector('.wo-start-cell');
       var endCell = row.querySelector('.wo-end-cell');
+      var pauseCell = row.querySelector('.wo-pause-cell');
       if (!startCell || !endCell) return;
       if (startCell.querySelector('input')) {
         var sv = startCell.querySelector('input').value;
         var ev = endCell.querySelector('input').value;
-        /* Row-edit repair (5.2): manual corrections send only times. Status
-           transitions belong to control_valley_mfg_workop_, hours/costs are
-           sheet formulas the server reinstalls, and notes stay stored because
-           this editor has no notes input (an absent key preserves the column). */
-        var payload = { workop_uid: uid, mo_uid: getHid_('wo-mo-uid'), start_time: sv, end_time: ev };
+        var pv = (pauseCell && pauseCell.querySelector('input')) ? pauseCell.querySelector('input').value : '';
+        /* Row-edit repair (5.2): manual corrections send the times and, now,
+           the pause. Status transitions belong to control_valley_mfg_workop_,
+           hours/costs are sheet formulas the server reinstalls, and notes stay
+           stored because this editor has no notes input (an absent key
+           preserves the column).
+           Refused here when the pause exceeds the worked span: the sheet
+           formula would otherwise store a negative actual_hours. The server
+           refuses the same thing independently. */
+        var pauseNum = (pv === '' || pv == null) ? 0 : Number(pv);
+        if (!isFinite(pauseNum) || pauseNum < 0) { UIC.toast('مدة التوقف يجب أن تكون صفراً أو أكبر', 'error'); return; }
+        var stMs = sv ? new Date(sv).getTime() : NaN;
+        var etMs = ev ? new Date(ev).getTime() : NaN;
+        if (!isNaN(stMs) && !isNaN(etMs)) {
+          var spanHrs = (etMs - stMs) / 3600000;
+          if (pauseNum > spanHrs + 0.0001) {
+            UIC.toast('مدة التوقف (' + pauseNum + ' ساعة) أكبر من زمن التشغيل (' + (Math.round(spanHrs * 100) / 100) + ' ساعة)', 'error');
+            return;
+          }
+        }
+        var payload = { workop_uid: uid, mo_uid: getHid_('wo-mo-uid'), start_time: sv, end_time: ev, total_pause_duration: pauseNum };
         UI.showSpinner();
         companyCall('save_valley_mfg_workop', payload)
           .then(function (r) { UIC.toast('تم الحفظ', 'success'); loadWorkOpsTab(getHid_('wo-mo-uid')); })
@@ -930,6 +948,10 @@
         var origEnd = endCell.textContent.trim();
         startCell.innerHTML = '<input type="datetime-local" class="input" value="' + toLocalDT_(origStart) + '" style="font-size:11px;">';
         endCell.innerHTML = '<input type="datetime-local" class="input" value="' + toLocalDT_(origEnd) + '" style="font-size:11px;">';
+        if (pauseCell) {
+          var origPause = String(pauseCell.textContent || '').trim();
+          pauseCell.innerHTML = '<input type="number" min="0" step="0.01" inputmode="decimal" class="input" value="' + esc(origPause === '-' ? '0' : origPause) + '" style="font-size:11px;max-width:90px;">';
+        }
       }
     }
 
