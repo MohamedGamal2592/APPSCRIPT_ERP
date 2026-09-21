@@ -90,6 +90,67 @@ reduction); any schema/header/sheet change; any change to the write path
 | G6 | **Invalidation** | Stamp-in-manifest, not stamp-in-key; unknown or changed stamp ⇒ miss; no cache read in an execution that has written (`_recordCacheDisabled_`, `Code.js:619-620`); publication requires pre/post stamp equality (§5.5). |
 | G7 | **Privacy** | No raw values in logs, diagnostics or shadow-compare output. Hashes, field names, types, counts and bounded summaries only. |
 | G8 | **Authorization boundary** | The cache stores raw, authorization-neutral data only. Projection, redaction and cost-gating run **after** authorization on every request. If a DTO is ever cached, its key must include a stable audience/permission fingerprint — not planned in this revision. |
+| G9 | **Documented and retractable** | No modification — code, config, flag or document — exists until it has a **Change Record** in `READ_VIEW_MODULARIZATION_RESULTS.md` with its retraction recipe and its test-run evidence. A step without a record is not done. Details in §3.3. |
+
+### 3.3 Change ledger, retraction and test-run documentation (mandatory per modification)
+
+Every modification in this programme ships with a **Change Record**. The record is written in
+the same commit as the change (or precedes it for owner actions), is appended to
+`READ_VIEW_MODULARIZATION_RESULTS.md`, and is never edited in place afterwards — a correction
+is a new record that references the old one.
+
+**Change Record — required fields**
+
+| Field | Content |
+|---|---|
+| `ID` | `RV-<step>.<n>` (e.g. `RV-3.2`) |
+| `Date` + `Commit` | ISO date and the commit SHA (or `OWNER-ACTION` with the date it was performed) |
+| `Step` | The §7 step it belongs to |
+| `Files` | Every file touched, with line anchors for the substantive edits |
+| `What changed` | One paragraph, in behaviour terms, not implementation terms |
+| `Why` | The finding or requirement it serves (link to the review item or plan section) |
+| `Flag state before → after` | e.g. `SALES_FAST_READ_: false → true`; `not applicable` for docs |
+| `Behaviour if reverted` | What the user-visible effect of retraction is |
+| `Retraction recipe` | Exact level-1/2/3 actions from the table below, copy-pasteable |
+| `Test runs` | One row per run (§3.3.2) |
+| `Metrics observed` | `serviceCalls` / `rowsScanned` / `cellsRead` / `bytesOut` / `cacheOutcome` as applicable, with the comparison baseline |
+| `Residual risk` | What the record does **not** prove |
+
+**3.3.1 Retraction levels**
+
+| Level | Action | Scope | Reversible how |
+|---|---|---|---|
+| L1 — runtime | Set the module flag (or master flag) back to `false` | One module, no deploy of source | Flip the flag again; the legacy path was never modified |
+| L2 — source | `git revert <sha>` on the change commit, or `git revert <first>..<last>` for a step's range | Source only | `git revert` of the revert, or re-apply the original commit |
+| L3 — cache | Cache entries are namespaced (`fr1_…`). They expire on their own TTL; a specific key can be dropped with `frCacheDrop_(logicalKey)` when the key is known | Cache only, never stored data | Nothing to restore — cache is derived |
+
+**There is no data-side retraction** because D3 forbids schema and data changes and this plan
+performs none: no migration, no backfill, no row rewrite. If a record cannot state that
+plainly, the change does not belong in this programme.
+
+**3.3.2 Test-run documentation (required for every run, including runs with no result)**
+
+| Field | Content |
+|---|---|
+| `When` | ISO date and time |
+| `Environment` | `VM harness (no data)` / `staging copy` / `production, read-only` / `production` — the last only for owner-executed steps |
+| `Command` | The exact command or action performed, copy-pasteable |
+| `Purpose` | The claim being tested |
+| `Result` | `PASS` / `FAIL` / `NOT RUN` with a one-line reason |
+| `Evidence` | Where the raw output lives (file path, commit SHA, or `Stackdriver <timestamp>`) |
+| `Not covered` | What this run explicitly did not establish |
+
+Rules: **"NOT RUN" is recorded honestly and never upgraded to "passed"**; a run against
+production that was never performed is recorded as `NOT RUN` even when its absence is
+inconvenient; and **no record contains raw business values** — G7 applies to the ledger
+exactly as it applies to logs (field names, hashes, types, counts and bounded summaries only).
+
+**3.3.3 Where the records live**
+
+`READ_VIEW_MODULARIZATION_RESULTS.md` — one section per step, one record per commit, with a
+programme status table at the top and the pre-existing audit-phase runs already recorded.
+Cross-references to the write-side programme (`FAST_SAVE_ENGINE_MULTI_MODULE_EXECUTION_PLAN.md`)
+are kept there so a reader can trace the whole read+write programme from one place.
 
 ---
 
@@ -339,16 +400,22 @@ All of the above are prerequisites of a separately approved client phase.
 
 Revised to the reviewed order. Each step is independently flag-gated and revertible.
 
-| Step | Deliverable | Flag | Notes |
-|---|---|---|---|
-| 1 | **Freeze canonical response contracts** for the target endpoints; fix or document the known legacy anomalies (§4.6, §9) | — | No engine code. Establishes the diff basis. |
-| 2 | `Core_FastRead.js` primitives with the honest metrics contract (§5.1) and the parity guard (§5.7) | `FAST_READ_CORE_` remains false for callers | Inert until a module flag is on |
-| 3 | **Sales list** migrated with `NARROW_SCAN_PAGE` / `KEYSET`, **no cross-request caching** | `SALES_FAST_READ_` | Proves the strategies before caching is introduced |
-| 4 | **Sales document reads** (`getValleyInvoiceForReturn_` baseline first per §9, then the invoice detail) | `SALES_FAST_READ_` | `fastFetchDocument_` |
-| 5 | **Small-payload cache** for documents and reference bundles only: stable key, stamp in manifest, pre/post validation, ≤5 chunks | `FAST_READ_CORE_` + module flag | First step where caching exists at all |
-| 6 | **DTO projection** for the migrated endpoints plus permission tests | `FAST_VIEW_CORE_` | Projection after authorization |
-| 7 | **MFG list and view as a separate query design** | `MFG_FAST_READ_` | Its filters and option generation need whole-set knowledge (§4.4, §5.2 `FULL_SCAN`); it is not a copy of the Sales migration |
-| 8 | Client phase (store, deferred sections, option transmission) | separate approval | Out of scope here |
+| Step | Deliverable | Flag | Change Record | Notes |
+|---|---|---|---|---|
+| 1 | **Freeze canonical response contracts** for the target endpoints; fix or document the known legacy anomalies (§4.6, §9) | — | `RV-1.*` | No engine code. Establishes the diff basis. |
+| 2 | `Core_FastRead.js` primitives with the honest metrics contract (§5.1) and the parity guard (§5.7) | `FAST_READ_CORE_` remains false for callers | `RV-2.*` | Inert until a module flag is on |
+| 3 | **Sales list** migrated with `NARROW_SCAN_PAGE` / `KEYSET`, **no cross-request caching** | `SALES_FAST_READ_` | `RV-3.*` | Proves the strategies before caching is introduced |
+| 4 | **Sales document reads** (`getValleyInvoiceForReturn_` baseline first per §9, then the invoice detail) | `SALES_FAST_READ_` | `RV-4.*` | `fastFetchDocument_` |
+| 5 | **Small-payload cache** for documents and reference bundles only: stable key, stamp in manifest, pre/post validation, ≤5 chunks | `FAST_READ_CORE_` + module flag | `RV-5.*` | First step where caching exists at all |
+| 6 | **DTO projection** for the migrated endpoints plus permission tests | `FAST_VIEW_CORE_` | `RV-6.*` | Projection after authorization |
+| 7 | **MFG list and view as a separate query design** | `MFG_FAST_READ_` | `RV-7.*` | Its filters and option generation need whole-set knowledge (§4.4, §5.2 `FULL_SCAN`); it is not a copy of the Sales migration |
+| 8 | Client phase (store, deferred sections, option transmission) | separate approval | — | Out of scope here |
+
+**Step completion rule (G9)**: a step is complete only when (a) the code is committed with its
+flag in the documented state, (b) its Change Record exists in
+`READ_VIEW_MODULARIZATION_RESULTS.md`, and (c) every run it claims is recorded with its
+environment and result. A step whose record is missing or whose runs are unrecorded stays
+`IN PROGRESS` regardless of what the code does.
 
 ### 7.4 Acceptance — Definition of Done
 
