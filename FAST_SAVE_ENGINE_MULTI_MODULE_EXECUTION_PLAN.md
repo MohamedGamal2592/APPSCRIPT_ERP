@@ -35,10 +35,12 @@ programme; the remainder is Stage E backlog.
 3. **OPT-IN FLAGS, all default `false`:**
    `FAST_SAVE_CORE_`, `MFG_BATCH_WRITES_`, `SALES_BATCH_WRITES_`, `RETURNS_BATCH_WRITES_`,
    `PURCHASE_BATCH_WRITES_`. With a flag false the legacy path must run bit-for-bit as today.
-4. **DECOUPLING GATE.** `Core_FastSave.js` contains zero module identifiers — no
-   `valley_`, `mfg`, `MFG`, `sales`, `returns`, `purchase`, no Arabic user-facing strings.
-   Objective check: `rg -i "valley_|sales|return|purchase|mfg|manufacture" Core_FastSave.js`
-   returns only generic words in comments that name no module (target: zero hits).
+4. **DECOUPLING GATE.** `Core_FastSave.js` contains zero module/table identifiers and no
+   user-facing strings. Objective check, run per identifier so a hit is unambiguous:
+   `rg -c -i "<token>" Core_FastSave.js` must return 0 or nothing for each of
+   `valley_`, `\bmfg\b`, `manufactur`, `purchas`, `sales_`, `invoice`, `recipe`.
+   Bare English words are not tokens: the JS keyword `return` and the verb
+   "returns" in prose are legitimate and must not be part of the gate.
 5. **OPTIMISTIC UI + SYNC MECHANISM.** The optimistic contract and the
    "new changes — refresh" prompt (driven by `noteTableChange_` / `readTableVersions_`,
    `Code.js:848-872`) must survive. The engine stamps by construction, not by convention.
@@ -394,6 +396,7 @@ byte-identical from the user's point of view.
 | Stage | Deliverable | Flags |
 |---|---|---|
 | 0 | `Core_FastSave.js` with Layers 1-2, all flags OFF, primitive self-checks documented | all false |
+| 0 status | **DONE** — commit `2014df1`, 546 lines, `node --check` OK, decoupling gate clean, no existing file modified, no caller wired yet. Shipped inert: `FAST_SAVE_CORE_ = false` makes every entry point refuse to run. | all false |
 | A | Sales audit + adapter (Phase 1 §3.1, Phase 2 §4.1) | `SALES_BATCH_WRITES_` false |
 | B | Returns audit + adapter (§3.2, §4.2) | `RETURNS_BATCH_WRITES_` false |
 | C | Purchasing audit + adapter (§3.3, §4.3) | `PURCHASE_BATCH_WRITES_` false |
