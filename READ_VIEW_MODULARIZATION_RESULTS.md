@@ -1283,3 +1283,62 @@ session that delivered it): `node --check` PASS on `Core_FastSave.js`, `Code.js`
 `getDataRange`, `appendRow(`, `deleteRow(`); no staging or production execution of any save
 was performed. Runtime acceptance for the write side remains **NOT RUN** pending the owner
 runbook.
+
+---
+
+## 7. Programme closure (steps 0-7 executed in one run)
+
+### RV-7.2 — Run closure: steps 0-7 complete, every flag still false, nothing deployed
+- Date / Commit: 2026-09-21 / identified by message — `docs(rv-7): close the run (all steps
+  done, flags false, nothing deployed)`.
+- Files: `READ_VIEW_MODULARIZATION_RESULTS.md` (this section, the §1 status table, the flag
+  note).
+- What changed (behaviour terms): nothing at runtime. What this record states is the state of
+  the programme after the run.
+- Status of every step (see §1 for the authoritative table): 0 DONE (pre-existing), 1 DONE,
+  2 DONE with one DoD row NOT MET (document read's 1-call floor), 3 DONE, 4 DONE with the
+  measured call trade-off recorded, 5 DONE, 6 DONE, 7 DONE with recorded shortfalls (detail
+  shadow target not registered; work ops / by-products / edit token remain legacy reads).
+  8 (client phase) OUT OF SCOPE.
+- Flags: `FAST_READ_CORE_`, `SALES_FAST_READ_`, `FAST_VIEW_CORE_`, `MFG_FAST_READ_` all
+  `false`; the four write-side module flags and `FAST_SAVE_CORE_` all `false`. **No flag was
+  flipped by this run.**
+- Deliverable and deployment: the deliverable is the **local commits** on
+  `feat/sales-and-saves`. Nothing was pushed (the remote tracking ref for this branch does not
+  exist), no `clasp push`/`deploy` was run, no trigger, script property or `appsscript.json`
+  change was made, and no business row, column, header or sheet was written. Every write in
+  this run was a `CacheService` entry inside an in-process stub, or a file in the repository.
+- Executable evidence inventory (all green at the time of writing, exit 0 each):
+
+  | Harness | Covers |
+  |---|---|
+  | `tools/verify/rv11_vm_invoice_return.js` | RV-1.1 defect regression, VM execution |
+  | `tools/verify/rv11_invoice_return_contract.js` | the pre-existing static contract guard |
+  | `tools/verify/sales_response_contracts.js` | frozen Sales contracts, executed |
+  | `tools/verify/fast_read_primitives.js` | strategies, budgets, refusals, type fidelity, shadow compare |
+  | `tools/verify/fast_read_parity.js` | decoupling gate + engine parity guard |
+  | `tools/verify/module_flag_scope.js` | flags reachable from every referencing IIFE |
+  | `tools/verify/sales_list_fast_read.js` | list equivalence, on-flag equality, fail-open |
+  | `tools/verify/sales_document_fast_read.js` | document equivalence, cache adoption, fail-open |
+  | `tools/verify/fast_read_cache.js` | cache publication contract in the `fr1_` namespace |
+  | `tools/verify/view_projection.js` | projection, measured bytes, permission boundary |
+  | `tools/verify/mfg_fast_read.js` | MFG list/detail equality, token byte-equality, fail-open |
+  | `tools/verify/s16_realtime_authority.js`, `js_simplification_snapshot.js`, `optimization_chunk_cache.js` | pre-existing suites re-run after the `gasstub.js` extension |
+
+- What remains the **owner's** action (nothing here is performed by this programme):
+  1. read this ledger and `Plan_MFG_Read_Design.md`;
+  2. run the admin shadow comparisons against live data
+     (`fr_shadow_compare` with `target: 'vf_sales_list' | 'vf_invoice_for_return' |
+     'vf_invoice_full' | 'vf_mfg_orders'`) and confirm zero diffs;
+  3. flip a flag only after that (`FAST_READ_CORE_` + the module flag);
+  4. push and deploy — and note that `MFG_FAST_READ_`'s detail endpoint has **no** admin
+     shadow target yet, so it is not recommended for a flip without one.
+- Residual risks carried forward (aggregated): the write-side runtime acceptance is still
+  NOT RUN (its runbook lives in `FAST_SAVE_ENGINE_MULTI_MODULE_EXECUTION_PLAN.md`); no staging
+  or production execution was performed for any read path; `KEYSET` has not been latency-measured
+  on live data and therefore must not be declared by a module; the shared script cache is a
+  scarce resource and eviction is an accepted, undetectable performance risk; the MFG edit
+  token is protected only by the legacy computation it still uses.
+- Test runs: the table above is the run inventory; each harness's own record is in §5.
+
+---
