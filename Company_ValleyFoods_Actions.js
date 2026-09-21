@@ -7697,10 +7697,35 @@ const ValleyFoodsHRModules = (function () {
    * actual_hours, work_center_cost and total_cost are adjacent in WC_HEADERS,
    * so writeRowFormulas_ collapses all three into one setValues.
    */
-  function mfgWorkCenterFormulaMap_(rN) {
+  /* 1-based column index -> A1 letter. */
+  function mfgColLetter_(idx) {
+    var n = Number(idx) + 1, s = '';
+    while (n > 0) { var m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26); }
+    return s;
+  }
+  /* Resolve a column letter by HEADER NAME. total_pause_duration sits outside
+     the 12-column positional prefix the MO schema asserts, so its position is
+     not guaranteed and must never be hardcoded. Returns '' when absent, which
+     makes the caller fall back to the pause-free formula. */
+  function mfgHeaderColLetter_(headers, name) {
+    var want = String(name == null ? '' : name).trim().toLowerCase();
+    if (!want || !headers) return '';
+    for (var i = 0; i < headers.length; i++) {
+      if (String(headers[i]).trim().toLowerCase() === want) return mfgColLetter_(i);
+    }
+    return '';
+  }
+  /* actual_hours = (end - start) hours - pause hours, rounded to 2dp.
+     N(cell) coerces a blank or text pause cell to 0 so a legacy row can never
+     turn the whole column into #VALUE!. The pause term is omitted entirely
+     when the column is missing, so this degrades to the previous behaviour
+     rather than producing a broken formula. */
+  function mfgWorkCenterFormulaMap_(rN, headers) {
+    var pauseCol = mfgHeaderColLetter_(headers, 'total_pause_duration');
+    var pauseTerm = pauseCol ? '-N(' + pauseCol + rN + ')' : '';
     return {
       'work_center_cost': '=INDEX(valley_work_centers!$H:$H,MATCH(E' + rN + ',valley_work_centers!$A:$A,0))',
-      'actual_hours': '=(H' + rN + '-G' + rN + ')*24',
+      'actual_hours': '=ROUND((H' + rN + '-G' + rN + ')*24' + pauseTerm + ',2)',
       'total_cost': '=K' + rN + '*J' + rN
     };
   }
@@ -8203,6 +8228,28 @@ const ValleyFoodsHRModules = (function () {
        scope and remove-all semantics. */
     if (Array.isArray(d.work_ops)) {
       d.work_ops = d.work_ops.filter(function (w) { return w && String(w.work_center_id || '').trim(); });
+    }
+    /* Pause may never exceed the worked span: actual_hours must not go negative.
+       Refused here, in the pre-mutation phase, so the outcome is a proven
+       not-applied (safe to correct and retry) rather than a half-written save.
+       A row without both times is not judged — a Pending operation has no span
+       to compare against, and its pause is legitimately zero. */
+    if (Array.isArray(d.work_ops)) {
+      d.work_ops.forEach(function (w, wi) {
+        var pauseHrs = (w && w.total_pause_duration !== '' && w.total_pause_duration != null) ? Number(w.total_pause_duration) : 0;
+        if (!isFinite(pauseHrs) || pauseHrs < 0) {
+          vfNotApplied_('الوردية ' + (wi + 1) + ': مدة التوقف يجب أن تكون صفراً أو أكبر');
+        }
+        var wSt = null, wEt = null;
+        try { wSt = w && w.start_time ? parseDate_(w.start_time) : null; } catch (eSt) { wSt = null; }
+        try { wEt = w && w.end_time ? parseDate_(w.end_time) : null; } catch (eEt) { wEt = null; }
+        if (wSt && wEt && !isNaN(wSt.getTime()) && !isNaN(wEt.getTime())) {
+          var spanHrs = (wEt.getTime() - wSt.getTime()) / 3600000;
+          if (pauseHrs > spanHrs + 0.0001) {
+            vfNotApplied_('الوردية ' + (wi + 1) + ': مدة التوقف (' + pauseHrs + ' ساعة) أكبر من زمن التشغيل (' + (Math.round(spanHrs * 100) / 100) + ' ساعة) — صحّح القيم قبل الحفظ');
+          }
+        }
+      });
     }
     if (Array.isArray(d.byproducts)) {
       d.byproducts = d.byproducts.filter(function (b) { return b && String(b.item || '').trim(); });
@@ -8863,10 +8910,15 @@ const ValleyFoodsHRModules = (function () {
        * the batch starts at the same getLastRow() + 1 and lands in the same order.
        * Locked and grid-grown because a precomputed start row, unlike appendRow, is
        * not safe against a concurrent append. */
-      var wcNewRows = [];
-      var wcPatches = {};
-      var nWoNew = 0;
-      (Array.isArray(d.work_ops) ? d.work_ops : []).forEach(function (w, wi) {
+var wcNewRows = [];
+var wcPatches = {};
+/* Only rows whose FORMULA INPUTS actually changed get their cost formulas
+   reinstalled. A row nobody touched keeps its stored formula and its stored
+   value, so re-saving an order no longer silently recalculates every work-op
+   row it happens to contain. New rows always need the formulas. */
+var wcDirty = {};
+var nWoNew = 0;
+(Array.isArray(d.work_ops) ? d.work_ops : []).forEach(function (w, wi) {
         var suppliedWuid = String(w.uid || '').trim();
         var editingUid = suppliedWuid;
         var old = editingUid ? existingWCByUid[editingUid] : null;
@@ -8888,22 +8940,35 @@ const ValleyFoodsHRModules = (function () {
         m['last_pause_time'] = w.last_pause_time ? parseDate_(w.last_pause_time) : '';
         m['total_pause_duration'] = (w.total_pause_duration !== '' && w.total_pause_duration != null) ? Number(w.total_pause_duration) : (old ? Number(old.total_pause_duration || 0) : 0);
         /* work_center_cost / total_cost are sheet-computed — written as formulas below */
-        if (old) {
-          /* Row-edit repair (5.4): formula-safe patch; formulas reinstalled below. */
-          if (mfgFast) wcPatches[editingUid] = m;
-          else patchRowByCriteria_(sheetWC, 'unique_id', editingUid, m);
-          keepWcUids.push(editingUid);
-        } else {
-          m['unique_id'] = (detWIdx !== -1 && reqId) ? mfgDeterministicUid_(reqId, moUid, 'work_op', detWIdx) : uid16Hex_();
-          m['id'] = getNextIdUnderLock_(dbId, WC_SHEET, 'id');
-          m['valley_manufacture_header_id'] = moUid;
-          m['user'] = (user && user.email) || '';
-          m['created_at'] = new Date();
-          var vals = wcHeaders.map(function (h) { var k = String(h).trim(); return m[k] !== undefined ? m[k] : ''; });
-          wcNewRows.push(vals);
-          keepWcUids.push(m['unique_id']);
-        }
-      });
+if (old) {
+/* Row-edit repair (5.4): formula-safe patch; formulas reinstalled below. */
+if (mfgFast) wcPatches[editingUid] = m;
+else patchRowByCriteria_(sheetWC, 'unique_id', editingUid, m);
+keepWcUids.push(editingUid);
+/* Dirty test: the three cells actual_hours reads (G, H, pause) plus the work
+   centre that work_center_cost is matched on. Anything else about the row can
+   change without touching a formula. */
+var _msOf = function (v) { if (!v) return 0; var dd = (v instanceof Date) ? v : new Date(v); return isNaN(dd.getTime()) ? 0 : dd.getTime(); };
+var _pauseNew = (m['total_pause_duration'] != null && isFinite(Number(m['total_pause_duration']))) ? Number(m['total_pause_duration']) : 0;
+var _pauseOld = Number(old.total_pause_duration || 0);
+if (String(wcId) !== String(old.recipe_id == null ? '' : old.recipe_id).trim()
+    || _msOf(m['start_time']) !== _msOf(old.start_time)
+    || _msOf(m['end_time']) !== _msOf(old.end_time)
+    || Math.abs(_pauseNew - (isFinite(_pauseOld) ? _pauseOld : 0)) > 0.0001) {
+  wcDirty[editingUid] = true;
+}
+} else {
+m['unique_id'] = (detWIdx !== -1 && reqId) ? mfgDeterministicUid_(reqId, moUid, 'work_op', detWIdx) : uid16Hex_();
+m['id'] = getNextIdUnderLock_(dbId, WC_SHEET, 'id');
+m['valley_manufacture_header_id'] = moUid;
+m['user'] = (user && user.email) || '';
+m['created_at'] = new Date();
+var vals = wcHeaders.map(function (h) { var k = String(h).trim(); return m[k] !== undefined ? m[k] : ''; });
+wcNewRows.push(vals);
+keepWcUids.push(m['unique_id']);
+wcDirty[m['unique_id']] = true;
+}
+});
       if (mfgFast && Object.keys(wcPatches).length) {
         fsPatchRowsByKey_(dbId, sheetWC, 'unique_id', wcPatches);
       }
@@ -8921,26 +8986,28 @@ const ValleyFoodsHRModules = (function () {
       }
       try { Logger.log('MFGTRACE workops: in=' + (Array.isArray(d.work_ops) ? d.work_ops.length : 0) + ' kept=' + keepWcUids.length + ' tab=' + sheetWC.getName()); } catch (eLg5) {}
 
-      /* work-center cost columns are SHEET FORMULAS */
+      /* work-center cost columns are SHEET FORMULAS — reinstalled for the rows
+         whose inputs changed this save, and only those (wcDirty). */
       var wcHdrs = getHeaders_(sheetWC);
+      var wcFormulaUids = Object.keys(wcDirty);
       if (mfgFast) {
-        /* One key-column read locates every kept row; the legacy path reads the
+        /* One key-column read locates every dirty row; the legacy path reads the
            WHOLE work-centre table with getDataRange() to find the same rows. */
         var wcWanted = {};
-        keepWcUids.forEach(function (uid) { wcWanted[String(uid).trim()] = true; });
+        wcFormulaUids.forEach(function (uid) { wcWanted[String(uid).trim()] = true; });
         var wcLocated = fsKeyIndex_(sheetWC, 'unique_id', wcWanted);
-        keepWcUids.forEach(function (uid) {
+        wcFormulaUids.forEach(function (uid) {
           var rN = wcLocated.map.get(String(uid).trim());
-          if (rN) writeRowFormulas_(sheetWC, wcHdrs, rN, mfgWorkCenterFormulaMap_(rN));
+          if (rN) writeRowFormulas_(sheetWC, wcHdrs, rN, mfgWorkCenterFormulaMap_(rN, wcHdrs));
         });
       } else {
         var wcAll = sheetWC.getDataRange().getValues();
         var wcUidIdx = wcHdrs.findIndex(function (h) { return String(h).trim() === 'unique_id'; });
-        keepWcUids.forEach(function (uid) {
+        wcFormulaUids.forEach(function (uid) {
           for (var wr = 1; wr < wcAll.length; wr++) {
             if (String(wcAll[wr][wcUidIdx]).trim() === String(uid).trim()) {
               var rN2 = wr + 1;
-              writeRowFormulas_(sheetWC, wcHdrs, rN2, mfgWorkCenterFormulaMap_(rN2));
+              writeRowFormulas_(sheetWC, wcHdrs, rN2, mfgWorkCenterFormulaMap_(rN2, wcHdrs));
               break;
             }
           }
@@ -9744,6 +9811,21 @@ const ValleyFoodsHRModules = (function () {
       if (!_oldWO) throw new Error('السجل غير موجود');
       if (String(_oldWO.valley_manufacture_header_id || '').trim() !== moUid) throw new Error('السجل غير موجود');
     }
+    /* Manual corrections may also carry the pause. Pause may never exceed the
+       worked span: actual_hours must not go negative. Checked before the write,
+       against the times this request will actually leave stored. */
+    var _pauseIn = (d.total_pause_duration !== undefined && d.total_pause_duration !== null && d.total_pause_duration !== '')
+      ? Number(d.total_pause_duration)
+      : (_oldWO ? Number(_oldWO.total_pause_duration || 0) : 0);
+    if (!isFinite(_pauseIn) || _pauseIn < 0) throw new Error('مدة التوقف يجب أن تكون صفراً أو أكبر');
+    var _effSt = d.start_time ? parseDate_(d.start_time) : (_oldWO ? parseDate_(_oldWO.start_time) : null);
+    var _effEt = d.end_time ? parseDate_(d.end_time) : (_oldWO ? parseDate_(_oldWO.end_time) : null);
+    if (_effSt && _effEt && !isNaN(_effSt.getTime()) && !isNaN(_effEt.getTime())) {
+      var _spanHrs = (_effEt.getTime() - _effSt.getTime()) / 3600000;
+      if (_pauseIn > _spanHrs + 0.0001) {
+        throw new Error('مدة التوقف (' + _pauseIn + ' ساعة) أكبر من زمن التشغيل (' + (Math.round(_spanHrs * 100) / 100) + ' ساعة) — صحّح القيم');
+      }
+    }
     executeWithLock_(function () {
       var map = {};
       map['operation_status'] = status;
@@ -9764,6 +9846,11 @@ const ValleyFoodsHRModules = (function () {
           end_time: map['end_time']
         };
         if (d.notes !== undefined && d.notes !== null) editMap['notes'] = String(d.notes).trim();
+        /* Pause is editable here too (the list page's manual time editor), so
+           both entry points behave the same way. Absent key = preserve stored. */
+        if (d.total_pause_duration !== undefined && d.total_pause_duration !== null && d.total_pause_duration !== '') {
+          editMap['total_pause_duration'] = Math.round(Number(d.total_pause_duration) * 100) / 100;
+        }
         if (!patchRowByCriteria_(sheet, 'unique_id', editingUid, editMap)) throw new Error('السجل غير موجود');
         try {
           var _freshWO = getAllRecords_(dbId, MFG_WORKOPS_SHEET);
@@ -9772,7 +9859,7 @@ const ValleyFoodsHRModules = (function () {
                with a header row, so index+2 locates the edited row for the
                trusted formula reinstall. */
             if (String(_freshWO[_wi].unique_id) === String(editingUid)) {
-              writeRowFormulas_(sheet, headers, _wi + 2, mfgWorkCenterFormulaMap_(_wi + 2));
+              writeRowFormulas_(sheet, headers, _wi + 2, mfgWorkCenterFormulaMap_(_wi + 2, headers));
               break;
             }
           }
@@ -9861,13 +9948,19 @@ const ValleyFoodsHRModules = (function () {
         pauseDur += pauseMsStop / 3600000;
         map['total_pause_duration'] = Math.round(pauseDur * 100) / 100;
       }
-      var startTime = manualDone ? manualStart : parseDt_(found.row.start_time);
-      if (startTime && !isNaN(startTime.getTime())) {
-        var totalMs = endTime.getTime() - startTime.getTime();
-        var totalHours = (totalMs / 3600000) - pauseDur;
-        map['actual_hours'] = Math.round(totalHours * 100) / 100;
-      }
-    }
+var startTime = manualDone ? manualStart : parseDt_(found.row.start_time);
+if (startTime && !isNaN(startTime.getTime())) {
+var totalMs = endTime.getTime() - startTime.getTime();
+var spanHours = totalMs / 3600000;
+/* Pause may never exceed the worked span: actual_hours must not go negative.
+   Refused before the write, matching this handler's other pre-write refusals. */
+if (pauseDur > spanHours + 0.0001) {
+throw new Error('مدة التوقف (' + (Math.round(pauseDur * 100) / 100) + ' ساعة) أكبر من زمن التشغيل (' + (Math.round(spanHours * 100) / 100) + ' ساعة) — صحّح الأوقات');
+}
+var totalHours = spanHours - pauseDur;
+map['actual_hours'] = Math.round(totalHours * 100) / 100;
+}
+}
 
     executeWithLock_(function () {
       /* Row-edit repair (5.4): formula-safe patch with a checked result — a
