@@ -45,6 +45,74 @@ function vfRefsCached_(dbId, kind, builder) {
   return getRefsCached_(dbId, kind + '_v' + vfRefsVersion_(dbId), FIN_REF_TTL_G, builder);
 }
 
+/* ── FILTERED VIEW CONTRACTS — FROZEN 2026-09-21 (RV-1.4) ───────────────────
+ * Read & View Modularization step 1: the canonical response contract for each
+ * migrated Sales endpoint, as an ORDERED FIELD WHITELIST. Nothing reads this
+ * yet; it exists so the shadow comparison (plan §6.1) has one declared basis —
+ * the legacy response and the future fast reader are both projected through it
+ * before they are compared or served.
+ *
+ * Rules this table encodes (frozen; a change needs a new RV record):
+ *   - Field order is the order the client receives. The projection emits keys
+ *     in this order, and a key absent from the list is NOT part of the contract:
+ *     adding one is a contract change, dropping one is a behaviour change.
+ *   - `invoice: '*'` means "every column of that sheet, keyed by its trimmed
+ *     header name, in sheet column order" — the legacy detail response is
+ *     lossless over the header row and the contract says so honestly instead of
+ *     inventing a subset. (The Sales page consumes a named subset; the server
+ *     does not, and shadow compare must not see a difference the client never
+ *     asked for.)
+ *   - Types / nullability / date representation are declared in the ledger
+ *     (READ_VIEW_MODULARIZATION_RESULTS.md, RV-1.4) and asserted executably by
+ *     tools/verify/sales_response_contracts.js against this table.
+ *   - Dates: the server-side canonical representation is a Date object
+ *     (transported as an ISO-8601 UTC string by jsonSafe_/stringify); the
+ *     display form is the dd/MM/yyyy string the returns banner reads.
+ * Business tokens are allowed here because this is the module, not the engine
+ * (Core_ViewEngine.js stays business-agnostic by contract). */
+var VF_SALES_VIEW_CONTRACTS_ = {
+  version: 1,
+  contracts: {
+    'vf_invoice_for_return_v1': {
+      endpoint: 'get_valley_invoice_for_return',
+      top: ['status', 'invoice', 'lines'],
+      invoice: ['uid', 'number', 'client_name', 'date_display'],
+      line: ['line_uid', 'product_name', 'details', 'price', 'sold_qty', 'returned_qty', 'returnable']
+    },
+    'vf_invoices_list_v1': {
+      endpoint: 'get_valley_sales_list',
+      top: ['status', 'invoices', 'total'],
+      invoice: ['invoice_unique_id', 'رقم الفاتورة', 'اسم العميل', 'تاريخ الفاتورة',
+        'المبلغ الصافي', 'قيمة الضريبة', 'إجمالي', 'tax_system', 'approval_status', 'مسلسل']
+    },
+    'vf_sales_page_v1': {
+      endpoint: 'get_valley_sales_page',
+      top: ['status', 'parties', 'products', 'enums', 'invoices', 'total'],
+      party: ['value', 'label', 'tax_id', 'address', 'phone'],
+      product: ['value', 'label'],
+      enums: ['class_tax', 'class_schedule', 'class_statement', 'class_goods', 'line_tax'],
+      invoice: ['invoice_unique_id', 'رقم الفاتورة', 'اسم العميل', 'تاريخ الفاتورة',
+        'المبلغ الصافي', 'قيمة الضريبة', 'إجمالي', 'tax_system', 'approval_status', 'مسلسل']
+    },
+    'vf_invoice_full_v1': {
+      endpoint: 'get_valley_invoice_full',
+      top: ['status', 'invoice', 'lines'],
+      invoice: '*',
+      line: ['unique_id', 'product_id', 'product_name', 'product_details', 'product_tax',
+        'product_qty', 'product_price', 'allocations'],
+      allocation: ['alloc_uid', 'batch_uid', 'lot', 'qty']
+    }
+  }
+};
+
+/** The frozen contract for one name, or null. Returns a deep copy so a caller
+ *  cannot mutate the frozen table. */
+function vfViewContract_(name) {
+  var spec = VF_SALES_VIEW_CONTRACTS_.contracts[String(name)];
+  if (!spec) return null;
+  return JSON.parse(JSON.stringify(spec));
+}
+
 const ValleyFoods = (function () {
   const actions = {};
   function register(name, fn) { actions[name] = fn; }

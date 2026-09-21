@@ -23,7 +23,7 @@ Field names, hashes, types, counts, line numbers and bounded summaries only.
 | Step | Deliverable | Flag | Status |
 |---|---|---|---|
 | 0 | Audit (read-only) | — | **DONE** — records in §4 |
-| 1 | Freeze canonical response contracts; resolve/document anomalies | — | **IN PROGRESS** — `RV-1.1` applied (`815c6c7`) and **closed with VM execution evidence** (`RV-1.2`, TR-12/TR-13; staging still NOT RUN); DTO contracts not started |
+| 1 | Freeze canonical response contracts; resolve/document anomalies | — | **DONE** — `RV-1.1` fixed and closed with VM evidence (`RV-1.2`/`RV-1.3`, TR-12/TR-13); canonical contracts frozen (`RV-1.4`, TR-15); staging/live execution NOT RUN |
 | 2 | `Core_FastRead.js` primitives + metrics + parity guard | `FAST_READ_CORE_` (false) | NOT STARTED |
 | 3 | Sales list (`NARROW_SCAN_PAGE` / `KEYSET`, no caching) | `SALES_FAST_READ_` | NOT STARTED |
 | 4 | Sales document reads | `SALES_FAST_READ_` | NOT STARTED |
@@ -339,6 +339,116 @@ building the VM harness for VF server actions. Recon completed this session:
   is not a correctness defect (the value displayed is exactly the cell's value).
 - Test runs: TR-12 asserts the verbatim behaviour explicitly.
 
+### RV-1.4 — Canonical response contracts frozen for the migrated Sales endpoints
+- Date / Commit: 2026-09-21 / identified by message — `feat(rv-1): freeze canonical Sales
+  response contracts (step 1)`.
+- Step: 1 (second action: the DTO contracts; RV-1.1 is closed by RV-1.2, the harness by
+  RV-1.2/TR-14).
+- Files (with line anchors):
+  - `Company_ValleyFoods_Actions.js` — top-level `VF_SALES_VIEW_CONTRACTS_` +
+    `vfViewContract_(name)`, inserted after `vfRefsCached_` (was `:44-46`); **no caller
+    anywhere**, no flag, no behaviour change. The table names business fields, which is why
+    it lives in the module and not in the engine (plan §3.1 generic-core rule).
+  - `tools/verify/sales_response_contracts.js` (new) — executes every contract against the
+    real legacy handler in the VM harness.
+  - `READ_VIEW_MODULARIZATION_RESULTS.md` (this record, TR-15).
+- What changed (behaviour terms): nothing at runtime. A declared, ordered field whitelist per
+  migrated endpoint now exists, together with an executable proof that the current legacy
+  responses match it. This is the basis plan §6.1 requires: shadow compare projects the
+  legacy and the modern response through the *same* contract before diffing, so a diff is a
+  real difference and not a projection artefact.
+- Why: plan §7 step 1 (freeze contracts); §6.1 (both readers served through one contract);
+  §7.5 (executable verification).
+- Flag state before → after: no flag is involved and none was added. All existing flags
+  (`FAST_SAVE_CORE_`, the four `*_BATCH_WRITES_`) remain `false`; the read/view flags still do
+  not exist (introduced in steps 2/3/6).
+- Behaviour if reverted: L2 only. `git revert <sha>` — the table disappears and the test with
+  it; nothing in the running system changes.
+- Retraction recipe: L2 only (commit-message grep above). L1 not applicable (no flag). L3 not
+  applicable (no cache).
+- Metrics observed (with baseline): none — this is a contract declaration plus an executable
+  conformance check. `bytesOut` baselines are recorded here for the later ≥40 % target:
+  measured by `tools/verify/sales_response_contracts.js` on its fixtures (see TR-15), not from
+  production.
+- Residual risk (what this does NOT prove):
+  - The contracts were derived from source plus client-consumption inspection (below), not
+    from live responses. A live invoice whose cells hold a shape the fixtures do not cover
+    (a string date, a null, a duplicated header) could still behave differently; the union
+    types declare where that is possible.
+  - Producer ≠ grader: this record and the test were written by the same author. The test
+    asserts the *contract*, and it is the contract itself that a reviewer must check against
+    the pages — the field-by-field client evidence is quoted below for that purpose.
+  - It does not bind the future readers: it only declares what "equal" will mean when they are
+    compared (step 3/4).
+
+**Frozen contracts (field list, types, nullability, date representation).** `string` means a
+JS string; `number` a finite number; `Date` the server-side object (`jsonSafe_`, `Code.js:6528`,
+serialises it to an ISO-8601 UTC string on the wire); the client's own `fmtDate` accepts either.
+
+`vf_invoice_for_return_v1` — `get_valley_invoice_for_return`:
+
+| Field | Type | Nullability / rules | Client evidence |
+|---|---|---|---|
+| `status` | string | always `'success'` | `Company_ValleyFoods_SalesReturns.html:176-196` |
+| `invoice` | object | present; **found case** `{uid, number, client_name, date_display}`; **missing case** `{uid, number: '-'}` (client_name/date_display absent) | reads `.number`, `.client_name`, `.date_display`; falls back to `'-'` per field |
+| `invoice.uid` | string | always | not read by the client |
+| `invoice.number` | string | the trimmed-header cell **verbatim** (`String(cell \|\| '')`); `'-'` in the missing case (see RV-1.3) | banner |
+| `invoice.client_name` | string | as above; absent when the invoice is missing | banner |
+| `invoice.date_display` | string | `dd/MM/yyyy` from the header date, `'-'` when blank/unparseable; absent when the invoice is missing | banner |
+| `lines` | array | always (empty when nothing matches) | not read by this page (it re-reads via the list) |
+| `lines[].line_uid` | string | trimmed `unique_id` | — |
+| `lines[].product_name` | string | `valley_products.name_ar` by `product_id`, else the raw `product_id` | — |
+| `lines[].details` | string | `product_details` or `''` | — |
+| `lines[].price` / `sold_qty` / `returned_qty` / `returnable` | number | `Number(…) \|\| 0`; `returnable = max(0, sold − returned)` | — |
+
+`vf_invoices_list_v1` — `get_valley_sales_list` (and the same row shape inside
+`vf_sales_page_v1`):
+
+| Field | Type | Nullability / rules | Client evidence |
+|---|---|---|---|
+| `status` / `total` | string / integer | `total` = rows matching the date filter, **before** offset/limit | `Company_ValleyFoods_Sales.html:128` paging, `:198-204` cells |
+| `invoices[].invoice_unique_id` | string | raw cell (trimmed by the reader's key handling only at match time) | returns page selector `Company_ValleyFoods_SalesReturns.html:113-114` |
+| `invoices[]['رقم الفاتورة']` | string | raw cell | `Sales.html:199` |
+| `invoices[]['اسم العميل']` | string | raw cell — a client **id**, resolved through the parties bundle | `Sales.html:200` via `partyLabel` |
+| `invoices[]['تاريخ الفاتورة']` | Date | **server-side Date object**; ISO string on the wire; a text cell stays text | `Sales.html:201` `fmtDate` |
+| `invoices[]['المبلغ الصافي']`, `['قيمة الضريبة']`, `['إجمالي']` | number | `Number(…) \|\| 0` | `Sales.html:202-204` |
+| `invoices[].tax_system` | string | `String(cell \|\| '').trim().toLowerCase()` — `'true'` for a TRUE cell, **`''` for a FALSE cell** (`false \|\| ''` is `''`); the client only tests for `'true'` | `Sales.html:321` |
+| `invoices[].approval_status` | string | defaulted to `'Pending'` when the cell is blank; `'Approved'` gates the edit/delete affordances | `Sales.html:190` |
+| `invoices[]['مسلسل']` | integer | 1-based index over the **unfiltered, pre-paging** sheet order | `Sales.html:198` |
+
+`vf_sales_page_v1` — `get_valley_sales_page` = the list above **plus** the bootstrap bundle:
+
+| Field | Type | Nullability / rules |
+|---|---|---|
+| `parties[]` | array of `{value, label, tax_id, address, phone}` | `value`/`label` strings; `tax_id`/`address`/`phone` are the cell value or `''`; rows with a blank `value` are dropped |
+| `products[]` | array of `{value, label}` | sellable products only (asset types excluded), sorted by Arabic label |
+| `enums` | object of the five declared option arrays | `class_*` are `{value: number, label: string}`; `line_tax` is an array of numbers |
+
+`vf_invoice_full_v1` — `get_valley_invoice_full`:
+
+| Field | Type | Nullability / rules | Client evidence |
+|---|---|---|---|
+| `invoice` | object | **lossless over the header row**: every column of `valley_sales_invoices`, keyed by its trimmed header name, in sheet column order (`invoice: '*'` in the table). A missing invoice is a thrown error, never a null invoice | `Sales.html:244`, `:320-327` (a named subset) |
+| `lines[].unique_id` | string | — | `Sales.html:247` |
+| `lines[].product_id` | string \| number | cell value; `''` when the cell is null/undefined | `Sales.html:248` `String(...)` |
+| `lines[].product_name` | string | `valley_products.name_ar` by `product_id`, else `''` | not read by the page (it renders from the product bundle) |
+| `lines[].product_details` | string | `''` when blank | `Sales.html:249` |
+| `lines[].product_tax` / `product_qty` / `product_price` | number | `Number(…) \|\| 0` | `Sales.html:250-252` |
+| `lines[].allocations` | array | **always an array**, empty when none | `Sales.html:259` |
+| `allocations[].alloc_uid` / `batch_uid` / `lot` | string | trimmed; `alloc_uid` deliberately not carried by the client | `Sales.html:256-261` |
+| `allocations[].qty` | number | `Number(…) \|\| 0` | `Sales.html:260` |
+
+**Frozen precondition (not part of the DTO).** `get_valley_sales_list` and
+`get_valley_returns_list` call `settingsEnsureSheet_` before reading
+(`Company_ValleyFoods_Actions.js:4175`), which can **add missing canonical columns** and
+`insertSheet` when the tab is absent. Today those tabs exist, so it is a metadata-only no-op —
+but a migrated reader that skips it changes behaviour if a tab is ever missing, and the
+difference is invisible to a shadow compare of response bodies. The migration must call it
+exactly as the legacy path does (steps 3-4), and this is recorded here so that omission is a
+review finding rather than a surprise.
+
+- Test runs: TR-15.
+
 ---
 
 ## 5. Test-run records
@@ -520,6 +630,30 @@ building the VM harness for VF server actions. Recon completed this session:
 - Evidence: exit codes 0/0/0 observed; this record.
 - Not covered: the rest of `tools/verify/*` was not executed (only the three files that
   `require` gasstub). New harnesses for steps 2-7 must be run on their own record.
+
+### TR-15 — Frozen Sales response contracts executed against the legacy handlers
+- When: 2026-09-21
+- Environment: VM harness (no data)
+- Command: `node tools/verify/sales_response_contracts.js`
+- Purpose (claim under test): `VF_SALES_VIEW_CONTRACTS_` (RV-1.4) describes the **real**
+  responses of the four Sales read endpoints — top-level keys, nested keys, types, the
+  nullability/presence rules and the date representation — so the contract can be the basis
+  shadow compare projects both readers through.
+- Result: **PASS** — exit 0, `sales_response_contracts: PASS`. Asserted for
+  `get_valley_sales_list`, `get_valley_sales_page`, `get_valley_invoice_full` and
+  `get_valley_invoice_for_return`: exact key sets at every level (an undeclared field fails
+  the run), the empty-`allocations`-never-undefined rule, the `approval_status → 'Pending'`
+  default, the `tax_system` TRUE → `'true'` / FALSE → `''` rule, `مسلسل` 1-based over
+  unfiltered sheet order, `total` = filtered count
+  before paging, `تاريخ الفاتورة` as a server-side `Date`, and the missing-invoice fallback as
+  a two-field object. Two earlier runs failed and are part of the evidence: the first on
+  cross-realm array comparison in the test helper (test defect, fixed), the second on the
+  `tax_system` assertion — the fixture proved that a FALSE cell yields `''`, not `'false'`,
+  so the contract was corrected rather than the code.
+- Evidence: `tools/verify/sales_response_contracts.js`; exit code 0 observed.
+- Not covered: live data (fixtures again); the client-consumption quotes in RV-1.4 were read
+  from the page sources, not executed in a browser; and the contract does not yet bind any
+  reader — steps 3/4 must project through it.
 
 ---
 
