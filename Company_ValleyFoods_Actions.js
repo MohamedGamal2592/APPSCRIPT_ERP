@@ -137,6 +137,20 @@ var PURCHASE_BATCH_WRITES_ = false;
  * error falls back to the legacy body below it — bounded fail-open, §3.2 G1. */
 var SALES_FAST_READ_ = false;
 
+/* MFG read-engine opt-in (Read & View Modularization, step 7b). Same contract
+ * as SALES_FAST_READ_: both this and FAST_READ_CORE_ must be true, and a raised
+ * engine error falls back to the legacy body for that request. See
+ * Plan_MFG_Read_Design.md, committed before this code. */
+var MFG_FAST_READ_ = false;
+
+/* True only when the read engine is loaded AND the module flag AND the master
+ * switch agree. The typeof guard is deliberate: the engine file can be reverted
+ * while a module keeps its flag, and a read flag must never be able to break the
+ * legacy path it sits in front of. */
+function vfFastReadEnabled_(flag) {
+  return typeof fastReadOnFor_ === 'function' && fastReadOnFor_(flag) === true;
+}
+
 const ValleyFoods = (function () {
   const actions = {};
   function register(name, fn) { actions[name] = fn; }
@@ -7388,7 +7402,46 @@ const ValleyFoodsHRModules = (function () {
     };
   }
 
+  /* ── MFG list: the fast header read (step 7b) ─────────────────────────────
+   * Declared strategy: NARROW_SCAN_PAGE over the 16 columns the list projects
+   * or filters on. The endpoint needs whole-set knowledge by its own contract
+   * (unfiltered dropdown values, `total` before paging, offset paging), so the
+   * scan is declared and priced rather than avoided; the win is reading 16
+   * columns instead of every column of every row. */
+  var VF_MFG_HEADER_READ_COLUMNS_ = ['unique_id', 'id', 'transaction_code', 'operation_type', 'shift',
+    'manufacture_date', 'produced_product', 'product_category', 'manufacture_batch', 'manufactured_qty',
+    'expected_qty', 'actual_qty', 'mo_status', 'production_approval', 'quality_approval', 'recipe_id'];
+
+  function vfMfgHeaderRowsLegacy_(dbId) {
+    return getAllRecords_(dbId, MFG_ORDER_SHEET);
+  }
+
+  function vfMfgHeaderRowsFast_(dbId) {
+    var ctx = frNewContext_({ deadlineMs: FR_DEADLINE_MS_ });
+    var sheet = getSheet_(MFG_ORDER_SHEET, dbId);
+    var headers = getHeaders_(sheet);
+    var out = fastFetchList_({
+      dbId: dbId,
+      sheetName: MFG_ORDER_SHEET,
+      strategy: 'NARROW_SCAN_PAGE',
+      headers: headers,
+      filterColumns: VF_MFG_HEADER_READ_COLUMNS_,
+      columns: VF_MFG_HEADER_READ_COLUMNS_,
+      ctx: ctx
+    });
+    vfFastReadLog_('get_valley_mfg_orders', out.metrics, ctx, null);
+    return out.rows;
+  }
+
   function getValleyMfgOrders_(data, user, dbId) {
+    return vfMfgOrdersCore_(data, user, dbId,
+      vfFastReadEnabled_(MFG_FAST_READ_) ? vfMfgHeaderRowsFast_ : vfMfgHeaderRowsLegacy_);
+  }
+
+  /** The list, with the header-row source injected. The source is a function of
+   *  dbId so the shadow comparison can pair the legacy source and the fast
+   *  source inside one execution without either knowing about a flag. */
+  function vfMfgOrdersCore_(data, user, dbId, headerRowsSource) {
     mfgAssertMfgSchema_(dbId, ['header']);
     /* Category values in valley_manufacture_header are stored as IDs. Keep
        the raw ID for filtering, but expose the human label from
@@ -7406,7 +7459,17 @@ const ValleyFoodsHRModules = (function () {
       var key = String(id == null ? '' : id).trim();
       return categoryLabels[key] || key;
     }
-    var rows = getAllRecords_(dbId, MFG_ORDER_SHEET).map(function (r) {
+    /* Bounded fail-open even though the source is chosen here: an engine error
+       raised while the source runs falls back to the legacy source for this
+       request, logged with a code and no values. */
+    var rawRows;
+    try { rawRows = headerRowsSource(dbId); }
+    catch (e) {
+      if (headerRowsSource === vfMfgHeaderRowsLegacy_) throw e;
+      vfFastReadFallback_('get_valley_mfg_orders', e);
+      rawRows = vfMfgHeaderRowsLegacy_(dbId);
+    }
+    var rows = rawRows.map(function (r) {
       var rawCategory = r.product_category == null ? '' : String(r.product_category).trim();
       return {
         unique_id: r.unique_id,
@@ -9309,27 +9372,85 @@ const ValleyFoodsHRModules = (function () {
     return { rows: filtered, total: total };
   }
 
-  function getValleyMfgOrderFull_(data, user, dbId) {
-    var moUid = String((data && data.mo_uid) || '').trim();
-    if (!moUid) throw new Error('معرّف أمر التصنيع مطلوب');
-    mfgAssertMfgSchema_(dbId, MFG_LIST_SCOPE_);
-    var order = null;
-    var moRow = vfFindRowByUid_(dbId, MFG_ORDER_SHEET, 'unique_id', moUid);
-    if (moRow) {
-      var moSheet = getSheet_(MFG_ORDER_SHEET, dbId);
-      var moHeaders = getHeaders_(moSheet);
-      var moVals = moSheet.getRange(moRow, 1, 1, moSheet.getLastColumn()).getValues()[0];
-      order = {};
-      moHeaders.forEach(function (h, ci) { order[String(h).trim()] = moVals[ci]; });
-    }
-    if (!order) throw new Error('أمر التصنيع غير موجود');
-    var outputs = [];
-    try {
-      getAllRecords_(dbId, MFG_ORDER_PRODUCTS_SHEET).forEach(function (o) {
-        if (String(o.valley_manufacture_header_id || '').trim() === moUid) outputs.push(o);
-      });
-    } catch (e) {}
+  /* ── MFG: one fast document read for the three big sections (step 7b) ─────
+   * Declared per section in Plan_MFG_Read_Design.md §3:
+   *   header       PARENT_FK_INDEX_THEN_FETCH over every header column (the
+   *                response carries `order` losslessly)
+   *   outputs      PARENT_FK_INDEX_THEN_FETCH over every output column (the
+   *                response carries the rows as records)
+   *   consumption  FULL_SCAN over the five used columns, because footer rows
+   *                are keyed by OUTPUT uid (and one legacy branch by the MO
+   *                uid), so the parent set is not known before the outputs are
+   *                read.
+   * Work ops and by-products stay on their legacy readers in this revision
+   * (separate handlers, small tables) — recorded in RV-7.1, not hidden. */
+  function vfMfgOrderFullFast_(dbId, moUid) {
+    var ctx = frNewContext_({ deadlineMs: FR_DEADLINE_MS_ });
+    var moSheet = getSheet_(MFG_ORDER_SHEET, dbId);
+    var moHeaders = getHeaders_(moSheet);
+    var outSheet = getSheet_(MFG_ORDER_PRODUCTS_SHEET, dbId);
+    var outHeaders = getHeaders_(outSheet);
 
+    var doc = fastFetchDocument_({
+      dbId: dbId,
+      ctx: ctx,
+      parent: {
+        sheetName: MFG_ORDER_SHEET,
+        keyHeader: 'unique_id',
+        keyValue: moUid,
+        columns: moHeaders,
+        /* Declared so the date cells of a batched read come back as the same
+           Dates Range.getValues() would have produced (type fidelity). */
+        dateColumns: ['manufacture_date', 'created_at', 'production_approval_time', 'quality_approval_time'],
+        strategy: 'PARENT_FK_INDEX_THEN_FETCH'
+      },
+      children: [
+        {
+          alias: 'outputs',
+          sheetName: MFG_ORDER_PRODUCTS_SHEET,
+          parentHeader: 'valley_manufacture_header_id',
+          parentKey: moUid,
+          columns: outHeaders,
+          dateColumns: ['created_at'],
+          strategy: 'PARENT_FK_INDEX_THEN_FETCH'
+        },
+        {
+          alias: 'consumption',
+          sheetName: MFG_CONSUMPTION_SHEET,
+          parentHeader: 'valley_manufacture_header_product_id',
+          parentKey: '',
+          columns: ['unique_id', 'valley_manufacture_header_product_id', 'item', 'item_code', 'qty'],
+          strategy: 'FULL_SCAN'
+        }
+      ]
+    });
+
+    vfFastReadLog_('get_valley_mfg_order_full', doc.metrics.total, ctx, null);
+    if (!doc.parent) return null;
+    var order = {};
+    moHeaders.forEach(function (h) {
+      var key = String(h).trim();
+      order[key] = doc.parent[key] !== undefined ? doc.parent[key] : '';
+    });
+    /* The engine marks each fetched row with __row (and scanned rows with
+     * __ordinal); the legacy records never had them, so they are removed here
+     * rather than travelled into the response. */
+    var outputs = (doc.children.outputs || []).map(function (o) {
+      var copy = {};
+      Object.keys(o).forEach(function (k) { if (k !== '__row' && k !== '__ordinal') copy[k] = o[k]; });
+      return copy;
+    });
+    return {
+      order: order,
+      outputs: outputs,
+      consumption: doc.children.consumption || []
+    };
+  }
+
+  /* Assembles the detail response from already-read rows. Shared by the legacy
+   * and the fast path so the footer attachment, the product-name join, the cost
+   * strip and the edit token cannot drift between them. */
+  function mfgAssembleOrderFull_(dbId, moUid, user, order, outputs, consumptionRows) {
     /* batch unit-cost lookup for footer totals */
     var batchCost = {};
     try { vfCurrentProducts_(dbId).forEach(function (r) { var u = String(r.unique_id || '').trim(); if (u) batchCost[u] = Number(r.unit_cost) || 0; }); } catch (e) {}
@@ -9338,7 +9459,7 @@ const ValleyFoodsHRModules = (function () {
     var footersByOutput = {};
     var legacyConsumption = [];
     try {
-      getAllRecords_(dbId, MFG_CONSUMPTION_SHEET).forEach(function (cm) {
+      (consumptionRows || []).forEach(function (cm) {
         var refId = String(cm.valley_manufacture_header_product_id || '').trim();
         if (!refId) return;
         var isForThisMo = false;
@@ -9390,10 +9511,49 @@ const ValleyFoodsHRModules = (function () {
       outputs: outputs,
       consumption: legacyConsumption,
       /* Schema-free edit token for this editor's scope (list page). The
-         client returns both as base_token/save_scope on edit. */
+         client returns both as base_token/save_scope on edit. Kept on the
+         LEGACY state computation in this revision: the token is compared by
+         the SAVE path, and moving it onto a different read path is a
+         write-path change until byte-equality is proven on real data
+         (Plan_MFG_Read_Design.md §5, RV-7.1). */
       edit_token: mfgEditToken_(dbId, moUid, MFG_LIST_SCOPE_),
       save_scope: MFG_LIST_SCOPE_.slice()
     };
+  }
+
+  function getValleyMfgOrderFull_(data, user, dbId) {
+    var moUid = String((data && data.mo_uid) || '').trim();
+    if (!moUid) throw new Error('معرّف أمر التصنيع مطلوب');
+    mfgAssertMfgSchema_(dbId, MFG_LIST_SCOPE_);
+
+    if (vfFastReadEnabled_(MFG_FAST_READ_)) {
+      try {
+        var fastDoc = vfMfgOrderFullFast_(dbId, moUid);
+        if (!fastDoc) throw new Error('أمر التصنيع غير موجود');
+        return mfgAssembleOrderFull_(dbId, moUid, user, fastDoc.order, fastDoc.outputs, fastDoc.consumption);
+      } catch (e) { vfFastReadFallback_('get_valley_mfg_order_full', e); }
+    }
+
+    var order = null;
+    var moRow = vfFindRowByUid_(dbId, MFG_ORDER_SHEET, 'unique_id', moUid);
+    if (moRow) {
+      var moSheet = getSheet_(MFG_ORDER_SHEET, dbId);
+      var moHeaders = getHeaders_(moSheet);
+      var moVals = moSheet.getRange(moRow, 1, 1, moSheet.getLastColumn()).getValues()[0];
+      order = {};
+      moHeaders.forEach(function (h, ci) { order[String(h).trim()] = moVals[ci]; });
+    }
+    if (!order) throw new Error('أمر التصنيع غير موجود');
+    var outputs = [];
+    try {
+      getAllRecords_(dbId, MFG_ORDER_PRODUCTS_SHEET).forEach(function (o) {
+        if (String(o.valley_manufacture_header_id || '').trim() === moUid) outputs.push(o);
+      });
+    } catch (e) {}
+
+    var consumptionRows = [];
+    try { consumptionRows = getAllRecords_(dbId, MFG_CONSUMPTION_SHEET); } catch (e) {}
+    return mfgAssembleOrderFull_(dbId, moUid, user, order, outputs, consumptionRows);
   }
 
   /* ---------- PC: BY-PRODUCTS / WORK OPS / PRODUCTION PLANS ---------- */
@@ -12701,8 +12861,7 @@ const ValleyFoodsHRModules = (function () {
       }
     },
     'vf_invoice_full': {
-      projection: 'vf_invoice_full_v1',
-      legacy: function (payload, user, dbId) { return vfInvoiceFullLegacy_(payload, user, dbId); },
+      projection: 'vf_invoice_full_v1',      legacy: function (payload, user, dbId) { return vfInvoiceFullLegacy_(payload, user, dbId); },
       modern: function (payload, user, dbId) { return vfInvoiceFullFast_(payload, user, dbId); },
       canonicalize: function (res) {
         return {
@@ -12718,6 +12877,28 @@ const ValleyFoodsHRModules = (function () {
               })
             };
           })
+        };
+      }
+    },
+    'vf_mfg_orders': {
+      /* Both sides run the SAME assembling function over different header-row
+       * sources, so a difference can only come from the read itself. No
+       * projection: the endpoint's own response is already a plain projection
+       * and step 6 did not adopt MFG. */
+      legacy: function (payload, user, dbId) { return vfMfgOrdersCore_(payload, user, dbId, vfMfgHeaderRowsLegacy_); },
+      modern: function (payload, user, dbId) { return vfMfgOrdersCore_(payload, user, dbId, vfMfgHeaderRowsFast_); },
+      canonicalize: function (res) {
+        return {
+          status: res.status,
+          total: res.total,
+          orders: res.orders,
+          filter_options: res.filter_options,
+          filter_product_options: res.filter_product_options,
+          recipe_options: res.recipe_options,
+          product_options: res.product_options,
+          work_center_options: res.work_center_options,
+          enums: res.enums,
+          can_see_cost: res.can_see_cost
         };
       }
     }

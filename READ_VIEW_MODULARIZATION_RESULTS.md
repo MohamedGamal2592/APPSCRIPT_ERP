@@ -29,17 +29,18 @@ Field names, hashes, types, counts, line numbers and bounded summaries only.
 | 4 | Sales document reads | `SALES_FAST_READ_` | **DONE** — both invoice readers behind declared document strategies (`RV-4.1`, TR-20); flag `false`; calls 17 vs ~14 legacy measured (win is cells 101 vs ~155), recorded as a trade-off |
 | 5 | Small-payload cache (stable key, stamp in manifest, pre/post validation) | `FAST_READ_CORE_` | **DONE** — `frCachedRead_` protocol + full chunk/identity/stamp suite (`RV-5.1`, TR-21/TR-22); adopted by both Sales document readers behind the flags |
 | 6 | DTO projection + permission tests | `FAST_VIEW_CORE_` | **DONE** — `Core_ViewEngine.js` + projection adopted by all three Sales readers (`RV-6.1`, TR-23); flag `false`; measured 69.3 % header / 50 % whole-response reduction |
-| 7 | MFG list + view (separate query design) | `MFG_FAST_READ_` | **IN PROGRESS** — sub-plan `Plan_MFG_Read_Design.md` committed first (`RV-7.0`); implementation not yet written |
+| 7 | MFG list + view (separate query design) | `MFG_FAST_READ_` | **DONE (with recorded shortfalls)** — sub-plan `Plan_MFG_Read_Design.md` committed first (`RV-7.0`); list + detail implemented behind the flag (`RV-7.1`, TR-24); edit token stays legacy-computed; admin shadow target exists for the list only |
 | 8 | Client phase | separate approval | OUT OF SCOPE |
 
 Flag states as of the last commit:
 
-- **Read/view flags:** `FAST_READ_CORE_` **exists and is `false`** (introduced by RV-2.1).
-  `SALES_FAST_READ_`, `FAST_VIEW_CORE_` and `MFG_FAST_READ_` do not exist yet (steps 3, 6, 7);
-  when introduced, each must default to `false` and this table must be updated in the same
-  commit that introduces it.
+- **Read/view flags:** `FAST_READ_CORE_`, `SALES_FAST_READ_`, `FAST_VIEW_CORE_` and
+  `MFG_FAST_READ_` **all exist and are `false`** (introduced by RV-2.1, RV-3.1, RV-6.1 and
+  RV-7.1 respectively). No module serves a read from the engine, and no response is projected,
+  while they are false. Flipping any of them is an owner action, not part of this programme.
 - Write-side flags (`FAST_SAVE_CORE_`, `MFG_BATCH_WRITES_`, `SALES_BATCH_WRITES_`,
-  `RETURNS_BATCH_WRITES_`, `PURCHASE_BATCH_WRITES_`): **all `false`**.
+  `RETURNS_BATCH_WRITES_`, `PURCHASE_BATCH_WRITES_`): **all `false`**. The four module flags are
+  now file-top-level `var`s (RV-2.2) so every referencing IIFE can see them.
 
 ---
 
@@ -802,6 +803,52 @@ review finding rather than a surprise.
   are not re-cached. Both are asserted in RV-7.1's test runs.
 - Test runs: none (a document; `node --check` is not applicable to Markdown).
 
+### RV-7.1 — MFG list and detail reads behind `MFG_FAST_READ_`
+- Date / Commit: 2026-09-21 / identified by message — `feat(rv-7b): MFG list and detail fast
+  reads (MFG_FAST_READ_ off)`.
+- Step: 7b (implementation follows the committed sub-plan `Plan_MFG_Read_Design.md`).
+- Files (with line anchors):
+  - `Company_ValleyFoods_Actions.js`: `MFG_FAST_READ_` (top level, `false`) and the shared
+    `vfFastReadEnabled_` guard; `VF_MFG_HEADER_READ_COLUMNS_`, `vfMfgHeaderRowsLegacy_`,
+    `vfMfgHeaderRowsFast_`; `getValleyMfgOrders_` becomes a dispatcher and the list body moves
+    to `vfMfgOrdersCore_(data, user, dbId, headerRowsSource)` with bounded fail-open on the
+    source; `vfMfgOrderFullFast_` (one `fastFetchDocument_`, three sections) and
+    `mfgAssembleOrderFull_` (the downstream assembly extracted verbatim, shared by both paths);
+    the `vf_mfg_orders` shadow target registered in `VF_SHADOW_TARGETS_`.
+  - `tools/verify/mfg_fast_read.js` (new).
+  - `READ_VIEW_MODULARIZATION_RESULTS.md` (this record, TR-24).
+- What changed (behaviour terms): with `MFG_FAST_READ_` false (shipped) both endpoints are
+  byte-identical to before — the legacy reads run. With both switches true the list reads 16
+  declared columns instead of whole rows, and the detail assembles `order`/`outputs`/footers
+  from one declared-strategy document read; any engine error falls back to the legacy reads for
+  that request.
+- Why: `Plan_MFG_Read_Design.md` (committed as RV-7.0), plan §7 step 7 and §1.1 DEC-4.
+- Flag state before → after: `MFG_FAST_READ_` **introduced and `false`**; every other flag
+  unchanged (`FAST_READ_CORE_`, `SALES_FAST_READ_`, `FAST_VIEW_CORE_`, the four write flags).
+- Behaviour if reverted: L1 sets `MFG_FAST_READ_ = false` (one line + owner deploy); L2
+  `git revert <sha>`. The legacy reads are intact in both paths.
+- Retraction recipe: L1 as above. L2 `git revert <sha>`. L3 not applicable (the MFG paths open
+  no cache of their own).
+- Metrics observed (with baseline, VM fixtures of 3 orders / 3 outputs / 4 footers):
+  - list: `serviceCalls ≤ 3`, `rowsScanned` = 3 (table rows), 16 declared columns instead of the
+    whole-row record build; `cacheOutcome: disabled` (the list deliberately opens no cache).
+  - detail (`MO-B`): `rowsScanned ≥ 6` across the three sections, each reporting its table rows;
+    the sections fetch every column of the matched header/output rows because the response is
+    lossless over them.
+- Residual risk (what this does NOT prove) — including two recorded shortfalls:
+  - **The admin shadow target is registered for the list only.** The detail's legacy body is
+    inline in its handler; registering a target for it needs the same source-injection refactor
+    the list got, deferred. The detail's evidence is the VM cross-harness equality (TR-24) —
+    which is why **the flag is not described as ready to flip**.
+  - **Work ops and by-products still use their legacy readers** (separate handlers, small
+    tables). The design says so; they are not migrated in this revision.
+  - The edit token remains on the legacy `mfgCurrentMfgState_` computation by design (§5 of the
+    sub-plan). Consequence: the detail still pays the token's whole-table reads. Moving the
+    token onto fast reads is a write-path change and needs the owner plus its own record.
+  - Fixtures only; no staging/production run. The design's §6 evidence plan is met in the VM
+    half only.
+- Test runs: TR-24.
+
 ---
 
 ## 5. Test-run records
@@ -1171,6 +1218,34 @@ review finding rather than a surprise.
 - Evidence: `tools/verify/view_projection.js`; exit code 0; the byte line is reproduced in RV-6.1.
 - Not covered: live traffic; the browser behaviour of the absent-vs-empty change (checked by
   reading the page, not by executing it).
+
+### TR-24 — MFG fast reads: list/detail equality, token byte-equality, fail-open
+- When: 2026-09-21
+- Environment: VM harness (no data); on-flag harness (in-memory source patch); the fixtures use
+  the module's canonical MFG header lists because the schema gate is positional over the first
+  20 header columns
+- Command: `node tools/verify/mfg_fast_read.js`
+- Purpose (claim under test): the list and the detail are identical to their legacy responses on
+  representative documents, the edit token is byte-identical, the metrics are honest, and engine
+  aborts fail open.
+- Result: **PASS** — exit 0, `mfg_fast_read: PASS`. List: JSON-identical for nine payloads (no
+  filters, each filter dimension, date range, paging, no-match) plus the unfiltered dropdown
+  values, newest-first ordering and category labelling; the admin shadow target `vf_mfg_orders`
+  reports `diffCount: 0`. Detail: JSON-identical for an order with children and one without,
+  with `edit_token` and `save_scope` equal on both paths and stable across repeat calls; an
+  unknown uid refuses with the same message on both paths. Metrics: list `rowsScanned` 3 and
+  `serviceCalls ≤ 3`; detail reporting every section's scan. Fail-open: forced engine aborts
+  answer from the legacy reads and log `FR_BUDGET_EXCEEDED` with no business value.
+  Defects found and fixed during the run (part of the evidence): the first detail comparison
+  exposed (a) `__row` markers leaking into `outputs` and (b) MFG date cells arriving as serial
+  numbers because the sections had not declared `dateColumns` — both fixed in the read path, not
+  worked around in the test; and the list's fail-open initially had no catch around the injected
+  row source, so an engine abort escaped to the user — fixed with a fallback to the legacy
+  source.
+- Evidence: `tools/verify/mfg_fast_read.js`; exit code 0 observed.
+- Not covered: live data; the detail's admin shadow target (not registered — see RV-7.1); the
+  four non-MFG `*_FAST_READ_` consumers the plan lists (purchasing/returns) are out of this
+  programme's step list.
 
 ---
 
