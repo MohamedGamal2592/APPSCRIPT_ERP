@@ -100,17 +100,33 @@ was agreed, and are labelled accordingly. None of them wrote anything.
 - Test runs: TR-1 … TR-8
 
 ### RV-0.2 — Documentation & retraction protocol adopted (this section's origin)
-- Date / Commit: `<this commit>`
+- Date / Commit: 2026-09-21 / `50fdee8` (SHA resolved by RV-0.3)
 - Files: `Plan_Read_View_Modularization.md` (§3.2 G9, §3.3, §7 step table),
   `READ_VIEW_MODULARIZATION_RESULTS.md` (new)
 - What changed: every modification in this programme must now ship with a Change Record and
   recorded test runs; a step without a record is `IN PROGRESS` regardless of code state.
 - Why: owner instruction — steps must be retractable and test runs documented.
 - Flag state: n/a (documentation)
-- Behaviour if reverted: `git revert <this commit>` removes the requirement document; the
-  code is unaffected.
-- Retraction recipe: L2 only.
+- Behaviour if reverted: `git revert 50fdee8` removes the requirement document; the code is
+  unaffected.
+- Retraction recipe: L2 only: `git revert 50fdee8`.
 - Residual risk: compliance depends on discipline; the protocol cannot enforce itself.
+
+### RV-0.3 — Resolve RV-0.2's commit reference (first append-only correction)
+- Date: 2026-09-21
+- Commit: identified by **message**, not SHA — this record's own commit is the one whose
+  message begins `docs(read-view): resolve RV-0.2 commit reference`. A record cannot contain
+  its own SHA before it is committed, and guessing one would be worse than describing it.
+  `git log --oneline --grep="resolve RV-0.2 commit reference"` resolves it.
+- Files: `READ_VIEW_MODULARIZATION_RESULTS.md`
+- What changed: RV-0.2's placeholder `<this commit>` replaced with `50fdee8`; no other change.
+- Why: the placeholder cannot be resolved within its own commit. The pattern for any future
+  record with the same problem: leave the placeholder, resolve it in a follow-up record, and
+  identify that follow-up by its commit message rather than chaining further SHAs.
+- Flag state: n/a (documentation)
+- Behaviour if reverted: no runtime effect.
+- Retraction recipe: L2 only (`git revert <sha of the RV-0.3 commit, resolved by the grep above>`).
+- Residual risk: none beyond the grep being the lookup mechanism.
 
 ---
 
