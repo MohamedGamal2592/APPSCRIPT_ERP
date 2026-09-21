@@ -128,6 +128,43 @@ was agreed, and are labelled accordingly. None of them wrote anything.
 - Retraction recipe: L2 only (`git revert <sha of the RV-0.3 commit, resolved by the grep above>`).
 - Residual risk: none beyond the grep being the lookup mechanism.
 
+### RV-0.4 — Plan finalised as Rev 3 (owner decisions recorded)
+- Date: 2026-09-21
+- Commit: identified by message — `docs(read-view): finalise plan as Rev 3 with owner
+  decisions` (`git log --oneline --grep="finalise plan as Rev 3"`); this is the same
+  message-identified pattern RV-0.3 established, used because a record cannot contain its own
+  SHA.
+- Files: `Plan_Read_View_Modularization.md` (status line, review order, §1.1 new, §3.2 G1/G2,
+  §7 steps 1 and 7, §9 rewritten), `READ_VIEW_MODULARIZATION_RESULTS.md` (this record + TR-9)
+- What changed: the owner's four decisions (DEC-1 … DEC-4) are recorded with their
+  consequences; no open decision remains; the review order for implementation is stated at the
+  top of the plan; step 7 is reclassified from a step to a reviewed sub-plan
+  (`Plan_MFG_Read_Design.md`) scheduled after step 5's measurements; production sampling for
+  shadow compare is deleted from the plan entirely; the G1 deadline is fixed at 120 s checked
+  per service call.
+- Why: owner answers to the four open items; review requirement that decisions be explicit
+  before implementation.
+- Flag state: unchanged — every read/view and write-side flag remains `false`. No code touched.
+- Behaviour if reverted: `git revert <sha>` (resolved by the grep above) returns the plan to
+  Rev 2 (four open decisions) with no runtime effect.
+- Retraction recipe: L2 only.
+- Retraction caveat: reverting the plan does **not** revert any decision the owner has already
+  acted on outside this repository (e.g. a clasp deployment). Nothing has been deployed.
+- Metrics observed: n/a (documentation)
+- Residual risk: this record documents intent; it cannot prove the implementation will honour
+  it. Enforcement is by review at each step's Change Record (G9).
+- Test runs: TR-9
+
+### RV-0.5 — Queued (NOT DONE): first implementation action
+- ID: `RV-1.1` (will be written when step 1 starts)
+- Scope: fix the unresolved `uid` reference at `Company_ValleyFoods_Actions.js:12591` →
+  construct `invInfo` from the function's own `invUid`
+- Owner decision: DEC-1, option A (fix first)
+- Status: **QUEUED — not written, not executed.** No code has been modified for this
+  programme. Expected user-visible effect: the returns page banner
+  (`Company_ValleyFoods_SalesReturns.html:176-196`) starts showing invoice number, client and
+  date instead of three dashes.
+
 ---
 
 ## 5. Test-run records
@@ -215,6 +252,21 @@ was agreed, and are labelled accordingly. None of them wrote anything.
 - Result: PASS — 10 commits listed with their touched files
 - Evidence: §6 table
 - Not covered: n/a
+
+### TR-9 — Rev 3 consistency check
+- When: 2026-09-21
+- Environment: local document, read-only
+- Command: `rg -n "DEC-1|DEC-2|DEC-3|DEC-4|FR_DEADLINE_MS_|Plan_MFG_Read_Design|1-in-50|production sampling|Open decisions" Plan_Read_View_Modularization.md`
+- Purpose: confirm every decision is present where it must be, and that no withdrawn clause
+  survives as an instruction
+- Result: PASS — the four DEC rows exist in §1.1 and are referenced from §3.2 (G1, G2), §7
+  (steps 1 and 7) and §9; `FR_DEADLINE_MS_ = 120000` appears in §1.1 and G1; the MFG sub-plan
+  name appears in §1.1, §7 and §9; the only surviving mentions of `1-in-50` / production
+  sampling are in the §0 closure table (quoting the rejected Rev 1 text) and in §1.1/§3.2 G2
+  as explicit deletions
+- Evidence: this commit; `node --check` is not applicable (Markdown)
+- Not covered: it cannot prove the implementation will honour the decisions — that is the
+  per-step Change Record's job (G9)
 
 ---
 

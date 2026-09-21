@@ -1,9 +1,21 @@
 # Plan — Read & View Modularization (`Core_FastRead.js` + `Core_ViewEngine.js`)
 
-**Revision 2** — revised after review. Rev 1 was rejected; every blocking finding is closed
-below and the revised position is stated where the original claim was wrong.
+**Revision 3 — FINALISED.** Rev 1 was rejected in review; Rev 2 closed every blocking and
+major finding; Rev 3 records the owner's four decisions (§1.1) and closes the open items
+(§9). No decision remains outstanding, so implementation may begin on the review order below.
 
-Status: **plan only, no code written.** Implementation is gated on owner approval of this revision.
+Status: **plan approved for implementation.** No code has been written for this programme yet;
+the only code in the repository relating to it is `Core_FastSave.js` from the separate
+write-side programme. Implementation starts at §7 step 1.
+
+**Review order before implementation** (owner-facing):
+
+1. `Plan_Read_View_Modularization.md` — this document, in full.
+2. `READ_VIEW_MODULARIZATION_RESULTS.md` — the change ledger: retraction protocol, the eight
+   audit test-run records, and the write-side commit cross-reference.
+3. `FAST_SAVE_ENGINE_MULTI_MODULE_EXECUTION_PLAN.md` §7.1-7.2 — the write-side status and the
+   pending owner runbook, because the read migration touches the same handlers and shares the
+   same flag discipline.
 
 Related documents: `Core_FastSave.js` (the write-side engine this work does **not** depend on)
 and `FAST_SAVE_ENGINE_MULTI_MODULE_EXECUTION_PLAN.md` (its plan, status, runbook).
@@ -48,6 +60,15 @@ errors mapped by the module, unknown-stamp-as-miss, and Sales-first rollout.
 | D8 | List reads declare a query strategy and report honest metrics; a query that cannot be satisfied by its strategy is refused, never answered partially (§5.2) |
 | D9 | No write-through cache patching, ever (§5.5) |
 
+### 1.1 Decisions taken at finalisation (owner, Rev 3)
+
+| # | Question | Answer | Consequence in this plan |
+|---|---|---|---|
+| **DEC-1** | The `uid: uid` defect in `getValleyInvoiceForReturn_` (`Company_ValleyFoods_Actions.js:12591`): fix first or freeze? | **Fix first (option A)** | Step 1 begins by fixing the unresolved reference as a **standalone defect commit with its own Change Record (`RV-1.1`)**, verified against the returns page banner (`Company_ValleyFoods_SalesReturns.html:176-196`). Only then is the canonical DTO contract for that endpoint frozen — describing the fixed behaviour. The returns banner will start showing invoice number, client and date instead of three dashes; this deliberate, owner-approved behaviour change is recorded in the DTO contract and in the defect's Change Record. |
+| **DEC-2** | Shadow-compare trigger policy | **Follow the recommendation** | Admin-triggered action only (`fr_shadow_compare`), plus **staging-copy comparisons for the heavy endpoints** where doubling a whole-set scan is expensive. **All production sampling is deleted from the plan** — no 1-in-N clause exists anywhere, not even disabled. |
+| **DEC-3** | G1 fail-open deadline | **120 s**, checked before each service call (finest granularity proposed) | Constant `FR_DEADLINE_MS_ = 120000`, per-module overridable. Every firing is logged and counted in diagnostics, so an over-tight budget shows up as data rather than as a guess. |
+| **DEC-4** | MFG step 7 scheduling and its query design | **Own design document + owner review, scheduled after step 5 measurements** (option B, sequenced by option C's timing) | Step 7 is no longer a plain step in this plan. It becomes a **reviewed sub-plan** (`Plan_MFG_Read_Design.md`) written after step 5's measured numbers exist, covering: per-endpoint strategy declarations, the filter/option-bundle decision (`FULL_SCAN` over narrow columns vs a narrowed/cached read) and the **frozen input list for `mfgCurrentMfgState_`** — because that state feeds the edit token the write path depends on. |
+
 ---
 
 ## 2. Scope and non-goals
@@ -82,8 +103,8 @@ reduction); any schema/header/sheet change; any change to the write path
 
 | # | Guardrail | Revised implementation |
 |---|---|---|
-| G1 | **Bounded fail-open** | Ordinary engine exceptions fall back to legacy **when sufficient execution time remains**. The engine takes a deadline at entry (execution start + configurable budget, default 120 s), checks it before each service call, and aborts the modern path with `FR_BUDGET_EXCEEDED` rather than risking the 6-minute limit. A hard timeout is acknowledged as a failure mode the fallback cannot always cover. |
-| G2 | **Shadow compare — admin/staging only** | `frShadowCompare_({label, legacy, modern, canonicalize})` runs both readers, applies the **same canonical DTO contract** to both results, diffs them, and returns the legacy result. Never sampled on user requests. Logs field names, types, hashes and counts — **never raw values** (G7). |
+| G1 | **Bounded fail-open** | Ordinary engine exceptions fall back to legacy **when sufficient execution time remains**. The engine takes a deadline at entry and checks it **before every service call**, aborting the modern path with `FR_BUDGET_EXCEEDED` rather than risking the 6-minute limit. **DEC-3: `FR_DEADLINE_MS_ = 120000`** (owner-approved, per-module overridable); every firing is logged and counted in diagnostics. A hard timeout is acknowledged as a failure mode the fallback cannot always cover. |
+| G2 | **Shadow compare — admin/staging only** | `frShadowCompare_({label, legacy, modern, canonicalize})` runs both readers, applies the **same canonical DTO contract** to both results, diffs them, and returns the legacy result. **DEC-2: invoked by an admin action only, never on a user request; production sampling is deleted from this plan entirely.** Staging-copy comparisons are permitted for the heavy endpoints. Logs field names, types, hashes and counts — **never raw values** (G7). |
 | G3 | **Diagnostics — implementable surface** | (a) every response carries per-request metrics; (b) structured `Logger` lines for historical aggregation; (c) `frDiagnostics_(logicalKey)` inspects one explicitly supplied key (chunk count, bytes, manifest age, stampSig present/absent, generation). No key enumeration, no eviction statistics, and "miss" is reported instead of "eviction observed" — CacheService cannot distinguish them. |
 | G4 | **Honest budget reporting** | Primitives return `serviceCalls`, `rowsScanned`, `colsRead`, `cellsRead`, `bytesRead`, and `cacheOutcome`. "Read count" alone is not an acceptable budget unit (§5.1). |
 | G5 | **Typed errors** | `FR_*` codes only; the module maps them to its existing Arabic messages. In production they are non-fatal by G1; in staging/diagnostic mode they surface. |
@@ -402,13 +423,13 @@ Revised to the reviewed order. Each step is independently flag-gated and reverti
 
 | Step | Deliverable | Flag | Change Record | Notes |
 |---|---|---|---|---|
-| 1 | **Freeze canonical response contracts** for the target endpoints; fix or document the known legacy anomalies (§4.6, §9) | — | `RV-1.*` | No engine code. Establishes the diff basis. |
+| 1 | **Fix the `uid: uid` defect (`RV-1.1`, DEC-1)**, then **freeze canonical response contracts** for the target endpoints; document any remaining legacy anomalies | — | `RV-1.*` | No engine code beyond the one-line defect fix. Establishes the diff basis against fixed behaviour. |
 | 2 | `Core_FastRead.js` primitives with the honest metrics contract (§5.1) and the parity guard (§5.7) | `FAST_READ_CORE_` remains false for callers | `RV-2.*` | Inert until a module flag is on |
 | 3 | **Sales list** migrated with `NARROW_SCAN_PAGE` / `KEYSET`, **no cross-request caching** | `SALES_FAST_READ_` | `RV-3.*` | Proves the strategies before caching is introduced |
 | 4 | **Sales document reads** (`getValleyInvoiceForReturn_` baseline first per §9, then the invoice detail) | `SALES_FAST_READ_` | `RV-4.*` | `fastFetchDocument_` |
 | 5 | **Small-payload cache** for documents and reference bundles only: stable key, stamp in manifest, pre/post validation, ≤5 chunks | `FAST_READ_CORE_` + module flag | `RV-5.*` | First step where caching exists at all |
 | 6 | **DTO projection** for the migrated endpoints plus permission tests | `FAST_VIEW_CORE_` | `RV-6.*` | Projection after authorization |
-| 7 | **MFG list and view as a separate query design** | `MFG_FAST_READ_` | `RV-7.*` | Its filters and option generation need whole-set knowledge (§4.4, §5.2 `FULL_SCAN`); it is not a copy of the Sales migration |
+| 7 | **MFG list and view — a reviewed sub-plan, not a step** (DEC-4): write `Plan_MFG_Read_Design.md` **after step 5's measurements exist**, covering per-endpoint strategies, the filter/option-bundle decision, and the frozen `mfgCurrentMfgState_` input list | `MFG_FAST_READ_` | `RV-7.*` | Its filters and option generation need whole-set knowledge (§4.4, §5.2 `FULL_SCAN`); its state hash feeds the edit token the **write** path depends on, so it must not be improvised |
 | 8 | Client phase (store, deferred sections, option transmission) | separate approval | — | Out of scope here |
 
 **Step completion rule (G9)**: a step is complete only when (a) the code is committed with its
@@ -467,14 +488,33 @@ environment and result. A step whose record is missing or whose runs are unrecor
 
 ---
 
-## 9. Open decisions (required before step 1 completes)
+## 9. Decisions — resolved
 
-1. **`getValleyInvoiceForReturn_` anomaly** (`Company_ValleyFoods_Actions.js:12591`): fix the
-   unresolved `uid` reference as a separate defect, or freeze today's behaviour
-   (`invInfo === null`) as the baseline for that endpoint? Until this is chosen, "zero diff"
-   has no meaning there.
-2. **Shadow compare**: admin-triggered action only (proposed), confirm no production sampling
-   is ever wanted.
-3. **Deadline budget for G1**: proposed default 120 s of the 6-minute limit.
-4. Whether step 7 (MFG) should be scheduled immediately after step 6, given that its option
-   and filter design is materially different from Sales.
+**No open decisions remain.** All four are answered in §1.1 and applied throughout; this
+section is retained as the index so a reader can see what was asked and where it landed.
+
+| Was | Answer | Applied at |
+|---|---|---|
+| Fix or freeze the `uid: uid` defect? | **Fix first** (DEC-1) | §1.1, §7 step 1 (`RV-1.1`), §4.6 |
+| Shadow-compare trigger policy | **Admin action only + staging for heavy endpoints; production sampling deleted** (DEC-2) | §1.1, §3.2 G2 |
+| G1 deadline budget | **120 s, checked per service call** (DEC-3) | §1.1, §3.2 G1 |
+| MFG step 7 scheduling and design | **Own reviewed sub-plan, written after step 5 measurements** (DEC-4) | §1.1, §7 step 7 |
+
+### 9.1 What is still genuinely unknown (not a decision — an outcome to be measured)
+
+These are not blocking; they are the numbers step 0-5 exist to produce:
+
+1. Cold-cache latency of a document fetch on the largest tables, which will tell us whether the
+   120 s deadline ever fires in normal use.
+2. Whether the MFG filter/option bundle is affordable as a per-request `FULL_SCAN` over narrow
+   columns, or needs a narrower projection — the input to DEC-4's sub-plan.
+3. Whether any cached payload ever approaches the 5-chunk ceiling at the declared volumes; if
+   it does, the ceiling is wrong and we will see it in the diagnostics counters rather than
+   discover it as a failure.
+
+### 9.2 Immediate next actions on approval
+
+1. Owner reviews the three documents in the order listed at the top of this file.
+2. Implementation begins at §7 step 1: the `RV-1.1` defect fix, then the canonical DTO
+   contracts for the Sales endpoints. No flag is turned on until a step's Change Record and
+   shadow-compare evidence exist (G9).
