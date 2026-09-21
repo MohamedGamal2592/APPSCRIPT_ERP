@@ -160,12 +160,13 @@
         var attr = '';
         if (opts.min != null) attr += ' min="' + opts.min + '"';
         if (opts.step != null) attr += ' step="' + opts.step + '"';
+        if (opts.inputmode) attr += ' inputmode="' + opts.inputmode + '"';
         if (opts.disabled) attr += ' disabled';
         return '<input id="' + id + '" class="odoo-input" type="' + (type || 'text') + '" value="' + esc(value) + '"' + (onChange ? ' onchange="' + onChange + '"' : '') + attr + '>';
       }
       function statusPill(s) {
         var cls = s === 'Locked' ? 'Locked' : (s === 'In Progress' ? 'InProgress' : 'Draft');
-        var label = s === 'Locked' ? 'مقفل 🔒' : (s === 'In Progress' ? 'قيد التنفيذ' : 'مسودة');
+        var label = s === 'Locked' ? 'مقفل' : (s === 'In Progress' ? 'قيد التنفيذ' : 'مسودة');
         return '<span class="odoo-pill ' + cls + '">' + label + '</span>';
       }
 
@@ -230,7 +231,9 @@
                  arrive from the server. They may be absent when the user has no
                  cost grant, so keep them undefined rather than defaulting to 0 —
                  the table tells the two cases apart. */
-              return { uid: w.unique_id || '', work_center_id: String(w.work_center_id || ''), operation_status: w.operation_status || 'Pending', notes: w.notes || '', start_time: w.start_time || '', last_pause_time: w.last_pause_time || '', end_time: w.end_time || '', actual_hours: w.actual_hours != null ? w.actual_hours : '', work_center_cost: w.work_center_cost, total_cost: w.total_cost };
+              /* total_pause_duration rides along now: it is editable in the row,
+                 and dropping it here made the value invisible after a reload. */
+              return { uid: w.unique_id || '', work_center_id: String(w.work_center_id || ''), operation_status: w.operation_status || 'Pending', notes: w.notes || '', start_time: w.start_time || '', last_pause_time: w.last_pause_time || '', end_time: w.end_time || '', actual_hours: w.actual_hours != null ? w.actual_hours : '', total_pause_duration: w.total_pause_duration != null && w.total_pause_duration !== '' ? Number(w.total_pause_duration) || 0 : 0, work_center_cost: w.work_center_cost, total_cost: w.total_cost };
             }).filter(function (w) {
               if (w.work_center_id) return true;
               rememberDeleted_('work_ops', w.uid);
@@ -294,9 +297,9 @@
           '</form></div></div>';
 
         var notebook = '<div class="odoo-nb">' +
-          '<button class="odoo-tab active" onclick="MFGVIEW_PAGE.switchTab(\'tab-products\')">📦 الخامات الداخلة</button>' +
-          '<button class="odoo-tab" onclick="MFGVIEW_PAGE.switchTab(\'tab-work\')">⚙️ ورديات التشغيل</button>' +
-          '<button class="odoo-tab" onclick="MFGVIEW_PAGE.switchTab(\'tab-byproduct\')">♻️ المنتجات الثانوية</button>' +
+          '<button class="odoo-tab active" onclick="MFGVIEW_PAGE.switchTab(\'tab-products\')">الخامات الداخلة</button>' +
+          '<button class="odoo-tab" onclick="MFGVIEW_PAGE.switchTab(\'tab-work\')">ورديات التشغيل</button>' +
+          '<button class="odoo-tab" onclick="MFGVIEW_PAGE.switchTab(\'tab-byproduct\')">المنتجات الثانوية</button>' +
           '</div>' +
           '<div id="tab-products" class="odoo-pane active"><div id="outputs-body"></div></div>' +
           '<div id="tab-work" class="odoo-pane"><div id="workops-body"></div></div>' +
@@ -345,12 +348,12 @@
         /* U-46. The quantity tile stays; the four cost tiles go. */
         host.innerHTML = '<div style="display:flex;gap:18px;flex-wrap:wrap;align-items:center;font-size:13px;">' +
           (canCost()
-            ? '<div>🧪 تكلفة الخامات: <b>' + fmtMoney(inv) + '</b></div>' +
-              '<div>⚙️ تكلفة التشغيل: <b>' + (IS_NEW ? 'تُحسب بعد الحفظ' : fmtMoney(other)) + '</b></div>' +
-              '<div>📦 تكلفة الدفعة: <b>' + fmtMoney(batch) + '</b></div>'
+            ? '<div>تكلفة الخامات: <b>' + fmtMoney(inv) + '</b></div>' +
+              '<div>تكلفة التشغيل: <b>' + (IS_NEW ? 'تُحسب بعد الحفظ' : fmtMoney(other)) + '</b></div>' +
+              '<div>تكلفة الدفعة: <b>' + fmtMoney(batch) + '</b></div>'
             : '') +
-          '<div>⚖️ الكمية الفعلية: <b>' + fmt3(actual) + '</b></div>' +
-          (canCost() ? '<div>💰 تكلفة الوحدة: <b>' + (actual > 0 ? fmtMoney(unit) : '—') + '</b></div>' : '') +
+          '<div>الكمية الفعلية: <b>' + fmt3(actual) + '</b></div>' +
+          (canCost() ? '<div>تكلفة الوحدة: <b>' + (actual > 0 ? fmtMoney(unit) : '—') + '</b></div>' : '') +
           '</div>';
       }
 
@@ -433,9 +436,9 @@
         if (IS_NEW) return '';
         var s = MO_STATUS, btns = '';
         if (!editable() && s !== 'Locked') return '';
-        if (s === 'Locked') return IS_SUPER_ADMIN ? '<button class="btn btn-outline" style="color:#b45309;" onclick="MFGVIEW_PAGE.changeStatus(\'unlock\')">🔓 فتح القفل</button>' : '';
-        if (s === 'Draft') btns += '<button class="btn btn-primary" onclick="MFGVIEW_PAGE.changeStatus(\'start\')">▶️ بدء الإنتاج</button>';
-        if (s === 'In Progress' && editable()) btns += '<button class="btn btn-primary" onclick="MFGVIEW_PAGE.changeStatus(\'lock\')">🏁 إنهاء الأمر</button>';
+        if (s === 'Locked') return IS_SUPER_ADMIN ? '<button class="btn btn-outline" style="color:#b45309;" onclick="MFGVIEW_PAGE.changeStatus(\'unlock\')">فتح القفل</button>' : '';
+        if (s === 'Draft') btns += '<button class="btn btn-primary" onclick="MFGVIEW_PAGE.changeStatus(\'start\')">بدء الإنتاج</button>';
+        if (s === 'In Progress' && editable()) btns += '<button class="btn btn-primary" onclick="MFGVIEW_PAGE.changeStatus(\'lock\')">إنهاء الأمر</button>';
         return btns;
       }
       function changeStatus(kind) {
@@ -471,7 +474,7 @@
         if (typeof UIC === 'undefined' || !UIC.openModal) { navSelf_(moUrl_(uid)); return; }
         UIC.openModal('mo-created', {
           size: 'sm',
-          title: '✅ تم إنشاء أمر التصنيع',
+          title: 'تم إنشاء أمر التصنيع',
           body:
             '<div style="text-align:center;line-height:1.9;">' +
               '<div style="font-size:14px;margin-bottom:10px;">تم حفظ أمر التصنيع بنجاح.</div>' +
@@ -649,7 +652,7 @@
         if (!st) return '';
         var head = 'مجموع الدفعات: ' + fmt3(st.sum) + ' من ' + fmt3(st.qty);
         if (st.matched) {
-          return '<span style="color:var(--success,#0a7a34);font-weight:700;">✔ ' + head + '</span>' +
+          return '<span style="color:var(--success,#0a7a34);font-weight:700;">' + head + '</span>' +
             (st.over.length ? '<div class="odoo-neg" style="margin-top:4px;">⚠ تجاوز المتاح في ' + st.over.length +
               ' دفعة — المتاح المعروض تقديري، والخادم يتحقق منه مقابل أرصدة الدفعات الفعلية عند الحفظ.</div>' : '');
         }
@@ -669,7 +672,7 @@
          from 600px up and on paper they are invisible. */
       var BATCH_COLS = ['الدفعة', 'المتاح', 'المخصص', 'المتبقي', 'تكلفة الوحدة', 'الإجمالي'];
       var FOOTER_COLS = ['الدفعة', 'المتاح', 'المخصص', 'المتبقي', 'إجمالي التكلفة', ''];
-      var WORKOP_COLS = ['مركز العمل', 'الحالة', 'ملاحظات', 'بدء / إنهاء', 'الساعات الفعلية', 'تكلفة المركز', 'الإجمالي', ''];
+      var WORKOP_COLS = ['مركز العمل', 'الحالة', 'بدء', 'إنهاء', 'التوقف (ساعات)', 'الساعات الفعلية', 'ملاحظات', 'تكلفة المركز', 'الإجمالي', 'أدوات', ''];
       var BYPROD_COLS = ['المنتج الثانوي', 'الكمية', 'كود الدفعة', 'التكلفة', ''];
 
       function batchModalRowsHtml_() {
@@ -885,7 +888,7 @@
         var footers = OUTPUT_FOOTERS[i] || [];
         var outTotal = footers.reduce(function (t, f) { return t + (Number(f.unit_cost) || 0) * (Number(f.qty) || 0); }, 0);
         var badge = st.state === 'ok'
-          ? '<span style="color:var(--success,#0a7a34);font-weight:700;">✔ الدفعات مطابقة</span>'
+          ? '<span style="color:var(--success,#0a7a34);font-weight:700;">الدفعات مطابقة</span>'
           : st.state === 'short'
             ? '<span class="odoo-neg" style="font-weight:700;">✖ ينقص ' + fmt3(Math.abs(st.diff)) + '</span>'
             : st.state === 'over'
@@ -957,7 +960,7 @@
             '</div>' +
             (ready
               ? '<div class="odoo-sub">' +
-                  '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;"><span class="odoo-ro">🧪 المواد المستهلكة (الدفعات)</span>' + (editable() ? '<button class="btn btn-outline" style="padding:2px 8px;font-size:11px;" onclick="MFGVIEW_PAGE.openBatchModal(' + i + ')">+ دفعة</button>' : '') + '</div>' +
+                  '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;"><span class="odoo-ro">المواد المستهلكة (الدفعات)</span>' + (editable() ? '<button class="btn btn-outline" style="padding:2px 8px;font-size:11px;" onclick="MFGVIEW_PAGE.openBatchModal(' + i + ')">+ دفعة</button>' : '') + '</div>' +
                   footerTable +
                 '</div>'
               : '') +
@@ -1006,7 +1009,7 @@
         var mfgQty = Number(getV_('f-manufactured')) || 0;
         if (!MFG_OUTPUTS.length) {
           if (!mfgQty) {
-            tb.innerHTML = '<div class="odoo-card"><div class="odoo-card-b" style="padding:14px;color:var(--text-muted, #666);">🧪 أدخل «كمية الخام الداخلة» أولاً لعرض المواد المستهلكة وتخصيص الدفعات.</div></div>'
+            tb.innerHTML = '<div class="odoo-card"><div class="odoo-card-b" style="padding:14px;color:var(--text-muted, #666);">أدخل «كمية الخام الداخلة» أولاً لعرض المواد المستهلكة وتخصيص الدفعات.</div></div>'
               + (editable() ? '<button class="btn btn-outline" onclick="MFGVIEW_PAGE.addOutput()">+ خامة داخلة</button>' : '');
             return;
           }
@@ -1074,7 +1077,57 @@
         drawWorkOps();
       }
       function removeWorkOp(i) { rememberDeleted_('work_ops', (MFG_WORKOPS[i] || {}).uid); MFG_WORKOPS.splice(i, 1); drawWorkOps(); }
-      function setWorkOp(i, field, val) { MFG_WORKOPS[i][field] = val; }
+      /* Mirrors the sheet formula exactly: (end - start) hours - pause hours,
+         rounded to 2dp. This is a PREVIEW — the sheet recomputes on save and
+         remains the authority — but it is the same arithmetic, so the number
+         on screen and the number stored cannot disagree.
+         Returns the validation state so the row can show an inline error when
+         the pause exceeds the worked span. */
+      function workOpHours_(w) {
+        var st = w && w.start_time ? new Date(w.start_time) : null;
+        var et = w && w.end_time ? new Date(w.end_time) : null;
+        var pause = Number(w && w.total_pause_duration) || 0;
+        if (!st || !et || isNaN(st.getTime()) || isNaN(et.getTime())) {
+          return { ok: true, hours: '', span: null, pause: pause };
+        }
+        var span = (et.getTime() - st.getTime()) / 3600000;
+        var hours = Math.round((span - pause) * 100) / 100;
+        var spanR = Math.round(span * 100) / 100;
+        if (pause > span + 0.0001) {
+          return { ok: false, hours: hours, span: spanR, pause: pause,
+            message: 'مدة التوقف (' + pause + ' ساعة) أكبر من زمن التشغيل (' + spanR + ' ساعة)' };
+        }
+        return { ok: true, hours: hours, span: spanR, pause: pause };
+      }
+      /* Recompute one row IN PLACE. Deliberately does not redraw the table: a
+         redraw would steal focus mid-edit and break Tab navigation. */
+      function recalcWorkOpHours_(i) {
+        var w = MFG_WORKOPS[i];
+        if (!w) return;
+        var r = workOpHours_(w);
+        w._hours_error = r.ok ? '' : r.message;
+        if (r.hours !== '') w.actual_hours = r.hours;
+        var hCell = document.getElementById('wo-hours-' + i);
+        if (hCell) hCell.textContent = (r.hours === '' ? '—' : fmt3(r.hours));
+        var eCell = document.getElementById('wo-err-' + i);
+        if (eCell) eCell.textContent = w._hours_error;
+      }
+      function setWorkOp(i, field, val) {
+        MFG_WORKOPS[i][field] = val;
+        if (field === 'start_time' || field === 'end_time' || field === 'total_pause_duration') {
+          recalcWorkOpHours_(i);
+        }
+      }
+      /* True when any editable row would produce a negative actual_hours. */
+      function workOpValidationError_() {
+        for (var i = 0; i < MFG_WORKOPS.length; i++) {
+          var w = MFG_WORKOPS[i];
+          if (!String((w && w.work_center_id) || '').trim()) continue;
+          var r = workOpHours_(w);
+          if (!r.ok) return 'الوردية ' + (i + 1) + ': ' + r.message;
+        }
+        return '';
+      }
       function clockWorkOp(i, command) {
         var w = MFG_WORKOPS[i];
         if (!w) return;
@@ -1092,7 +1145,9 @@
                 MFG_WORKOPS[i].actual_hours = up.actual_hours != null ? up.actual_hours : MFG_WORKOPS[i].actual_hours;
               }
               UI.toast && UI.toast((r && r.message) || 'تم', 'success');
-              drawWorkOps();
+              /* A redraw drops focus to the body, which is what made Tab feel
+                 broken after a clock action. Put the caret back where it was. */
+              redrawWorkOpsKeepingFocus_();
             })
             .catch(function (e) { UI.toast && UI.toast((e && e.message) || 'فشل', 'error'); })
             .finally(function () { hideLoading(); });
@@ -1112,8 +1167,15 @@
               w.actual_hours = Math.round((ms / 3600000 - pause) * 100) / 100;
             }
           }
-          drawWorkOps();
+          redrawWorkOpsKeepingFocus_();
         }
+      }
+      /* Redraw the work-op table without losing the user's place: remember the
+         focused element's id and restore it after the redraw. */
+      function redrawWorkOpsKeepingFocus_() {
+        var id = (document.activeElement && document.activeElement.id) || '';
+        drawWorkOps();
+        if (id) { var el = document.getElementById(id); if (el && el.focus) el.focus(); }
       }
       /* U-45. The two sheet-computed cost columns of the work-ops table.
          Kept as small helpers so the cost gate (S6) has one place to switch. */
@@ -1136,35 +1198,50 @@
         function rowBtns(i, w, canClock) {
           if (!canClock) return '';
           var st = w.operation_status;
+          /* Text-only labels: the glyphs were decorative and read as clutter. */
           if (st === 'Pending') return (w.start_time && w.end_time)
-            ? '<button class="btn btn-primary" style="padding:3px 10px;font-size:11px;" onclick="MFGVIEW_PAGE.clockWorkOp(' + i + ',\'stop\')">✔ إنهاء</button>'
-            : '<button class="btn btn-primary" style="padding:3px 10px;font-size:11px;" onclick="MFGVIEW_PAGE.clockWorkOp(' + i + ',\'start\')">▶ بدء</button>';
-          if (st === 'In Progress') return '<button class="btn btn-outline" style="padding:3px 10px;font-size:11px;" onclick="MFGVIEW_PAGE.clockWorkOp(' + i + ',\'pause\')">⏸ إيقاف مؤقت</button> <button class="btn btn-outline" style="padding:3px 10px;font-size:11px;" onclick="MFGVIEW_PAGE.clockWorkOp(' + i + ',\'stop\')">⏹ إنهاء</button>';
-          if (st === 'Paused') return '<button class="btn btn-outline" style="padding:3px 10px;font-size:11px;" onclick="MFGVIEW_PAGE.clockWorkOp(' + i + ',\'resume\')">▶ استئناف</button> <button class="btn btn-outline" style="padding:3px 10px;font-size:11px;" onclick="MFGVIEW_PAGE.clockWorkOp(' + i + ',\'stop\')">⏹ إنهاء</button>';
+            ? '<button class="btn btn-primary" style="padding:3px 10px;font-size:11px;" onclick="MFGVIEW_PAGE.clockWorkOp(' + i + ',\'stop\')">إنهاء</button>'
+            : '<button class="btn btn-primary" style="padding:3px 10px;font-size:11px;" onclick="MFGVIEW_PAGE.clockWorkOp(' + i + ',\'start\')">بدء</button>';
+          if (st === 'In Progress') return '<button class="btn btn-outline" style="padding:3px 10px;font-size:11px;" onclick="MFGVIEW_PAGE.clockWorkOp(' + i + ',\'pause\')">إيقاف مؤقت</button> <button class="btn btn-outline" style="padding:3px 10px;font-size:11px;" onclick="MFGVIEW_PAGE.clockWorkOp(' + i + ',\'stop\')">إنهاء</button>';
+          if (st === 'Paused') return '<button class="btn btn-outline" style="padding:3px 10px;font-size:11px;" onclick="MFGVIEW_PAGE.clockWorkOp(' + i + ',\'resume\')">استئناف</button> <button class="btn btn-outline" style="padding:3px 10px;font-size:11px;" onclick="MFGVIEW_PAGE.clockWorkOp(' + i + ',\'stop\')">إنهاء</button>';
           return '';
         }
         function toDtInput(v) { if (!v) return ''; var d = (v instanceof Date) ? v : new Date(v); if (isNaN(d.getTime())) return ''; var p = function (n) { return n < 10 ? '0' + n : '' + n; }; return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + 'T' + p(d.getHours()) + ':' + p(d.getMinutes()); }
         var rows = MFG_WORKOPS.map(function (w, i) {
           var canClock = editable() || IS_SUPER_ADMIN;
-          var timing = '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:4px;">' +
-              inputHtml('wo-start-' + i, toDtInput(w.start_time), 'datetime-local', 'MFGVIEW_PAGE.setWorkOp(' + i + ',\'start_time\',this.value)', { disabled: !editable() }) +
-              inputHtml('wo-end-' + i, toDtInput(w.end_time), 'datetime-local', 'MFGVIEW_PAGE.setWorkOp(' + i + ',\'end_time\',this.value)', { disabled: !editable() }) +
-            '</div>' + rowBtns(i, w, canClock);
+          /* ONE LINE PER WORK CENTRE. Every field is its own cell, in the order
+             the header declares, so DOM order == visual order and Tab walks the
+             row left to right: work centre -> start -> end -> pause -> notes ->
+             tools -> remove. The pause cell carries the inline validation error,
+             which is why no extra row is injected (it would break the one-line
+             shape). */
+          var hoursState = workOpHours_(w);
+          w._hours_error = hoursState.ok ? '' : hoursState.message;
           return '<tr>' +
             '<td data-label="' + WORKOP_COLS[0] + '">' + selHtml('wo-wc-' + i, WORKCENTER_OPTIONS, w.work_center_id, 'MFGVIEW_PAGE.setWorkOp(' + i + ',\'work_center_id\',this.value)', 'اختر مركز العمل', disOpt()) + '</td>' +
             '<td data-label="' + WORKOP_COLS[1] + '"><span class="odoo-pill ' + (w.operation_status === 'Done' ? 'Done' : (w.operation_status === 'Paused' ? 'Paused' : (w.operation_status === 'In Progress' ? 'InProgress' : 'Draft'))) + '">' + statusLabel(w.operation_status) + '</span></td>' +
-            '<td data-label="' + WORKOP_COLS[2] + '">' + inputHtml('wo-notes-' + i, w.notes, 'text', 'MFGVIEW_PAGE.setWorkOp(' + i + ',\'notes\',this.value)', disOpt()) + '</td>' +
-            '<td style="min-width:240px;" data-label="' + WORKOP_COLS[3] + '">' + timing + '</td>' +
-            '<td class="odoo-ro" data-label="' + WORKOP_COLS[4] + '">' + fmt3(w.actual_hours) + '<div style="font-size:10px;color:#888;">توقف: ' + fmt3(w.total_pause_duration) + '</div></td>' +
+            '<td data-label="' + WORKOP_COLS[2] + '">' + inputHtml('wo-start-' + i, toDtInput(w.start_time), 'datetime-local', 'MFGVIEW_PAGE.setWorkOp(' + i + ',\'start_time\',this.value)', { disabled: !editable() }) + '</td>' +
+            '<td data-label="' + WORKOP_COLS[3] + '">' + inputHtml('wo-end-' + i, toDtInput(w.end_time), 'datetime-local', 'MFGVIEW_PAGE.setWorkOp(' + i + ',\'end_time\',this.value)', { disabled: !editable() }) + '</td>' +
+            '<td data-label="' + WORKOP_COLS[4] + '">' + inputHtml('wo-pause-' + i, (w.total_pause_duration != null ? w.total_pause_duration : 0), 'number', 'MFGVIEW_PAGE.setWorkOp(' + i + ',\'total_pause_duration\',this.value)', { disabled: !editable(), min: 0, step: 0.01, inputmode: 'decimal' }) +
+              '<div id="wo-err-' + i + '" style="color:#dc2626;font-size:10px;">' + esc(w._hours_error || '') + '</div></td>' +
+            '<td class="odoo-ro" data-label="' + WORKOP_COLS[5] + '"><span id="wo-hours-' + i + '">' + (hoursState.hours === '' ? '—' : fmt3(hoursState.hours)) + '</span></td>' +
+            '<td data-label="' + WORKOP_COLS[6] + '">' + inputHtml('wo-notes-' + i, w.notes, 'text', 'MFGVIEW_PAGE.setWorkOp(' + i + ',\'notes\',this.value)', disOpt()) + '</td>' +
             /* U-45: read-only, sheet-computed. An unsaved row has no cost yet —
                the formulas run on save — so it shows a dash, not a false zero. */
             wcCostCells(w) +
-            (editable() ? '<td data-label="' + WORKOP_COLS[7] + '"><button class="btn btn-ghost" style="padding:2px 6px;font-size:11px;" onclick="MFGVIEW_PAGE.removeWorkOp(' + i + ')">✕</button></td>' : '<td data-label="' + WORKOP_COLS[7] + '"></td>') +
+            '<td data-label="' + WORKOP_COLS[9] + '">' + rowBtns(i, w, canClock) + '</td>' +
+            (editable() ? '<td data-label="' + WORKOP_COLS[10] + '"><button class="btn btn-ghost" style="padding:2px 6px;font-size:11px;" onclick="MFGVIEW_PAGE.removeWorkOp(' + i + ')">✕</button></td>' : '<td data-label="' + WORKOP_COLS[10] + '"></td>') +
             '</tr>';
         }).join('');
         var addBtn = editable() ? '<button class="btn btn-outline" style="margin-top:8px;" onclick="MFGVIEW_PAGE.addWorkOp()">+ عملية تشغيل</button>' : '';
         tb.innerHTML = (MFG_WORKOPS.length
-          ? '<table class="odoo-table card-table"><thead><tr><th>مركز العمل</th><th>الحالة</th><th>ملاحظات</th><th>بدء / إنهاء (توقيت يدوي)</th><th>الساعات الفعلية</th>' + wcCostHeaders() + '<th></th></tr></thead><tbody>' + rows + '</tbody></table>'
+          ? '<table class="odoo-table card-table"><thead><tr>' +
+              '<th>' + WORKOP_COLS[0] + '</th><th>' + WORKOP_COLS[1] + '</th>' +
+              '<th>' + WORKOP_COLS[2] + '</th><th>' + WORKOP_COLS[3] + '</th>' +
+              '<th>' + WORKOP_COLS[4] + '</th><th>' + WORKOP_COLS[5] + '</th>' +
+              '<th>' + WORKOP_COLS[6] + '</th>' + wcCostHeaders() +
+              '<th>' + WORKOP_COLS[9] + '</th><th>' + WORKOP_COLS[10] + '</th>' +
+            '</tr></thead><tbody>' + rows + '</tbody></table>'
           : '<div class="odoo-ro">لا توجد ورديات تشغيل</div>') + addBtn;
       }
 
@@ -1291,6 +1368,17 @@
           return { uid: o.uid || '', product_id: pid, qty: o.qty, footers: footers };
         }).filter(function (o) { return o.product_id && num0(o.qty) > 0; });
         if (!outputs.length) { UI.toast && UI.toast('أضف خامة داخلة واحدة على الأقل', 'error'); return; }
+        /* Refuse a save whose work-op pause exceeds its worked span: the sheet
+           formula would otherwise produce a negative actual_hours. The server
+           refuses the same thing independently — this is the fast, friendly
+           half of the same rule, and it names the row. */
+        var _woErr = workOpValidationError_();
+        if (_woErr) {
+          try { switchTab('tab-work'); } catch (eTab) {}
+          drawWorkOps();
+          UI.toast && UI.toast(_woErr + ' — صحّح القيم قبل الحفظ', 'error');
+          return;
+        }
         for (var si = 0; si < outputs.length; si++) {
           var sq = Math.round((Number(outputs[si].qty) || 0) * 1000) / 1000;
           var ss = Math.round(outputs[si].footers.reduce(function (t, f) { return t + (Number(f.qty) || 0); }, 0) * 1000) / 1000;
