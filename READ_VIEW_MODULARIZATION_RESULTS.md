@@ -169,6 +169,43 @@ was agreed, and are labelled accordingly. None of them wrote anything.
 - The queued first implementation action was written as RV-1.1 below. This record is kept so
   the queue item does not silently disappear.
 
+### RV-0.6 — Session kickoff prompt written; step-1 harness recon recorded
+- Date: 2026-09-21
+- Commit: identified by message — `docs(read-view): add session kickoff prompt and record
+  step-1 harness recon (RV-0.6)`.
+- Files: `CORE_READ_VIEW_EXECUTION_PROMPT.md` (new), `READ_VIEW_MODULARIZATION_RESULTS.md`
+- What changed: the execution prompt for a fresh session was written to
+  `CORE_READ_VIEW_EXECUTION_PROMPT.md`, with **MFG implementation inside the same uninterrupted
+  run** (sub-plan 7a committed before MFG code 7b). The recon below was recorded so a new
+  session does not have to rediscover the dispatch path.
+- Why: owner instruction to open a new session and start the plan without per-phase approval.
+- Flag state: unchanged (no flags exist yet for read/view; write-side flags all `false`).
+- Behaviour if reverted: `git revert <sha>` removes the prompt file; no runtime effect.
+- Retraction recipe: L2 only.
+- Residual risk: the prompt cannot be executed by the assistant that wrote it — the tooling in
+  this session could not dispatch a subagent (model resolution fails) and the assistant cannot
+  open a session. It is a handoff artifact for the owner to paste.
+
+**Sub-task carried forward (this is where step 1 stands).** The remaining step-1 action is
+building the VM harness for VF server actions. Recon completed this session:
+
+- The module's dispatch surface is `ValleyFoods.dispatch_(payload, user, dbId, guardCtx)` at
+  `Company_ValleyFoods_Actions.js:504`, exported with `pageForAction_`, `tableForAction_`,
+  `requestRecovery_`, `register` at `:612`. It resolves `actions[payload.module_action]` and
+  calls the handler as `(payload.data, user, dbId, guardCtx || {})`.
+- `executeCompanyAction_` (`Code.js:6337`) is the production entry; a harness should bypass it
+  and call `dispatch_` directly with an explicit `dbId`, because the auth/tenant layers need
+  live state a VM cannot provide.
+- Loading gotchas found: `Company_ValleyFoods_Actions.js` declares `const ValleyFoods = (…)()`
+  at top level, which in a `vm` context lives in the global **lexical** scope — a later
+  `vm.runInContext('ValleyFoods', ctx)` reaches it, but it is not a property of `globalThis`.
+  `gasstub.js` already stubs CacheService/PropertiesService/Utilities/LockService/Session, but
+  its fake sheet (built for the chunk-cache tests) does not obviously implement `getLastColumn`,
+  `getSheetId` or `getParent`, all of which `getHeaders_`/`getSheet_` use.
+- Therefore the harness needs either an extended `gasstub` sheet or its own fake workbook;
+  `tools/verify/gasstub.js` is test-only and may be extended (report the diff if so).
+- No harness code has been written. **This is the first action of the next session.**
+
 ---
 
 ## 4.1 Implementation records (step 1 onward)
