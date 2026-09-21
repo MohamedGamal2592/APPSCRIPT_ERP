@@ -37,6 +37,14 @@
 
 var FAST_SAVE_CORE_ = false;
 
+/* Per-module opt-in switches live with the modules themselves (see the flag
+ * block in Company_ValleyFoods_Actions.js): they name modules, and this file
+ * must not. A module changes behaviour only when its switch AND this master
+ * switch are both true, which is exactly what this helper answers. */
+function fastSaveOnFor_(flag) {
+  return flag === true && FAST_SAVE_CORE_ === true;
+}
+
 /* Google Sheets epoch: serial 0 = 1899-12-30. Same constant the ValleyFoods
  * attendance helpers use (Company_ValleyFoods_Actions.js:1564) — duplicated
  * here because that one is private to its IIFE and this file is global. */
@@ -51,6 +59,10 @@ var FS_MAX_DELETE_REQUESTS_PER_BATCH_ = 100;
  * per written column instead of as one rectangle, so a scattered patch can
  * never turn the probe into a whole-sheet read. */
 var FS_MAX_FORMULA_RECT_CELLS_ = 200000;
+
+/* Cells in a parent-scoped read block. Above this the columns are read one at
+ * a time instead of as one rectangle, for the same reason. */
+var FS_MAX_BLOCK_CELLS_ = 400000;
 
 /* Per-section allowance enforced by fastSaveSections_. */
 var FS_BUDGET_KEY_READS_PER_SECTION_ = 1;
@@ -208,6 +220,118 @@ function fsKeyIndex_(sheet, keyHeaders, wantedKeys) {
     map.set(key, r + 2);
   }
   return { map: map, indices: idxs, lastRow: lastRow, reads: 1 };
+}
+
+/* ── Layer 1: block read of named columns ──────────────────────────────────
+ * The whole of a named column set, as records keyed by the sheet's own header
+ * spelling, each carrying __row. One bounded block read normally; one read per
+ * column above the block cap. Used where a caller must scan a child table
+ * against a SET of parent keys rather than a single one — the legacy code did
+ * that by materializing every column of every row, which is what this avoids. */
+function fsReadBlockRows_(sheet, columns) {
+  var headers = getHeaders_(sheet);
+  var idxs = [];
+  (columns || []).forEach(function (c) {
+    var i = fsHeaderIndex_(headers, c);
+    if (i !== -1 && idxs.indexOf(i) === -1) idxs.push(i);
+  });
+  var out = { rows: [], reads: 0 };
+  if (!idxs.length) return out;
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 2) return out;
+  var minIdx = Math.min.apply(null, idxs);
+  var maxIdx = Math.max.apply(null, idxs);
+
+  if ((lastRow - 1) * (maxIdx - minIdx + 1) <= FS_MAX_BLOCK_CELLS_) {
+    countSheetRead_();
+    out.reads = 1;
+    var block = sheet.getRange(2, minIdx + 1, lastRow - 1, maxIdx - minIdx + 1).getValues();
+    for (var r = 0; r < block.length; r++) {
+      var rec = { __row: r + 2 };
+      for (var k = 0; k < idxs.length; k++) rec[String(headers[idxs[k]]).trim()] = block[r][idxs[k] - minIdx];
+      out.rows.push(rec);
+    }
+    return out;
+  }
+
+  var recs = new Array(lastRow - 1);
+  idxs.forEach(function (i) {
+    countSheetRead_();
+    out.reads++;
+    var col = sheet.getRange(2, i + 1, lastRow - 1, 1).getValues();
+    var name = String(headers[i]).trim();
+    for (var r2 = 0; r2 < col.length; r2++) {
+      if (!recs[r2]) recs[r2] = { __row: r2 + 2 };
+      recs[r2][name] = col[r2][0];
+    }
+  });
+  for (var q = 0; q < recs.length; q++) if (recs[q]) out.rows.push(recs[q]);
+  return out;
+}
+
+/* ── Layer 1: parent-scoped row read ───────────────────────────────────────
+ * "Give me the child rows that belong to this parent" without materializing
+ * the table. One bounded block read spanning the parent column and the wanted
+ * columns; when that span would be too wide the columns are read one at a time
+ * and only the matching rows are kept, so the memory cost stays proportional
+ * to the document, never to the table.
+ *
+ * Each returned row carries its own sheet row number in __row, and its values
+ * keyed by the sheet's own header spelling (trimmed), which is what the
+ * callers' sheets look like — including non-Latin headers. */
+function fsReadRowsByParent_(sheet, parentHeader, parentValue, columns) {
+  var headers = getHeaders_(sheet);
+  var pIdx = fsHeaderIndex_(headers, parentHeader);
+  if (pIdx === -1) throw fsError_('FAST_SAVE_KEY_UNSUPPORTED', 'Header not found: ' + String(parentHeader), { header: String(parentHeader) });
+  var wantIdx = [];
+  (columns || []).forEach(function (c) {
+    var i = fsHeaderIndex_(headers, c);
+    if (i !== -1 && wantIdx.indexOf(i) === -1) wantIdx.push(i);
+  });
+
+  var lastRow = sheet.getLastRow();
+  var out = { rows: [], reads: 0 };
+  if (lastRow < 2) return out;
+  var want = String(parentValue == null ? '' : parentValue).trim();
+
+  var minIdx = pIdx;
+  var maxIdx = pIdx;
+  wantIdx.forEach(function (i) {
+    if (i < minIdx) minIdx = i;
+    if (i > maxIdx) maxIdx = i;
+  });
+
+  var spanCells = (lastRow - 1) * (maxIdx - minIdx + 1);
+  if (spanCells <= FS_MAX_BLOCK_CELLS_) {
+    countSheetRead_();
+    out.reads = 1;
+    var block = sheet.getRange(2, minIdx + 1, lastRow - 1, maxIdx - minIdx + 1).getValues();
+    for (var r = 0; r < block.length; r++) {
+      if (fsNormalizeKeyPart_(block[r][pIdx - minIdx]) !== want) continue;
+      var rec = { __row: r + 2 };
+      wantIdx.forEach(function (i) { rec[String(headers[i]).trim()] = block[r][i - minIdx]; });
+      out.rows.push(rec);
+    }
+    return out;
+  }
+
+  var fk = fsReadColumnValues_(sheet, headers[pIdx]);
+  out.reads += fk.reads;
+  var byRow = new Map();
+  fk.values.forEach(function (v, i) {
+    if (fsNormalizeKeyPart_(v) === want) byRow.set(i + 2, { __row: i + 2 });
+  });
+  if (!byRow.size) return out;
+  wantIdx.forEach(function (i) {
+    countSheetRead_();
+    out.reads++;
+    var col = sheet.getRange(2, i + 1, lastRow - 1, 1).getValues();
+    var name = String(headers[i]).trim();
+    byRow.forEach(function (rec, rowNum) { rec[name] = col[rowNum - 2][0]; });
+  });
+  byRow.forEach(function (rec) { out.rows.push(rec); });
+  out.rows.sort(function (a, b) { return a.__row - b.__row; });
+  return out;
 }
 
 /* ── Layer 1: batched multi-row patch ──────────────────────────────────────

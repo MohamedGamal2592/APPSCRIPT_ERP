@@ -51,6 +51,22 @@ const ValleyFoods = (function () {
 
   const COMPANY_UID = '9940659bd83035d7';
 
+  /* ── Fast-save opt-ins ────────────────────────────────────────────────────
+   * The generic engine (Core_FastSave.js) does nothing until its master switch
+   * FAST_SAVE_CORE_ is true. These four say WHICH module may use it. They live
+   * here, not in the engine, because they name modules and the engine is
+   * business-agnostic by contract.
+   *
+   * A module switches only when its own flag AND the master flag are true
+   * (fastSaveOnFor_). All five are false as shipped, so deploying this file
+   * changes no behaviour at all. Turn them on one at a time, and turn one off
+   * to roll that module back instantly — there is no data migration and no
+   * schema change, so the legacy path is always still intact underneath. */
+  const MFG_BATCH_WRITES_ = false;
+  const SALES_BATCH_WRITES_ = false;
+  const RETURNS_BATCH_WRITES_ = false;
+  const PURCHASE_BATCH_WRITES_ = false;
+
   /* add_upload_file is shared by these HR tables. Keep this authorization
      routing inside the dispatcher scope; the upload implementation and its
      folder metadata live in ValleyFoodsHRModules, a separate IIFE. */
@@ -12401,7 +12417,226 @@ const ValleyFoodsHRModules = (function () {
     return { status: 'success', invoice: invInfo || { uid: invUid, number: '-' }, lines: lines };
   }
 
+  /* ── Fast-save path for sales returns (RETURNS_BATCH_WRITES_) ─────────────
+   * Append-only module: two insert sections, no patching and no deletion.
+   * What changes versus the legacy path is the READING, not the writing:
+   *
+   *   legacy                                          this path
+   *   getAllRecords_(returns)  x2 (same table twice)   1 column read (id) + 1 two-column block
+   *   getAllRecords_(lines)     full 13-col objects   1 four-column block for this invoice
+   *   getAllRecords_(stock)     full 8-col objects    1 four-column block
+   *   getAllRecords_(returns_stock) INSIDE items loop 1 two-column block, hoisted out
+   *   getAllRecords_(invoices)  full 26-col objects   1 parent-scoped read of one column
+   *
+   * Every validation, every error message, the group serial, the FIFO restore
+   * arithmetic and the history entry are identical to the legacy path. The
+   * writes go through the engine's insert section, which is one contiguous
+   * write per table plus the table-version stamp that drives the client's
+   * refresh prompt. The legacy function is left untouched beneath this one. */
+  function saveValleyReturnFast_(data, user, dbId) {
+    var d = data || {};
+    var invUid = String(d.invoice_unique_id || '').trim();
+    if (!invUid) throw new Error('الفاتورة مطلوبة');
+    if (!d.date) throw new Error('تاريخ المرتجع مطلوب');
+    var retDate = parseDate_(d.date);
+    if (!retDate) throw new Error('تاريخ المرتجع غير صالح');
+    var items = Array.isArray(d.items) ? d.items.filter(function (x) { return x && Number(x.qty) > 0; }) : [];
+    if (!items.length) throw new Error('أدخل كمية مرتجعة لبند واحد على الأقل');
+
+    settingsEnsureSheet_(dbId, FIN_RETURNS_SHEET,
+      ['unique_id','id','valley_sales_invoices_id','valley_sales_invoices_client','valley_return_date','valley_sales_products_id','valley_return_qty','valley_return_value','user','created_at']);
+    settingsEnsureSheet_(dbId, FIN_RETURNS_STOCK_SHEET,
+      ['unique_id','id','valley_sales_returns_id','product_unique_id','product_transaction_code','product_qty','user','created_at']);
+
+    executeWithLock_(function () {
+      var sheetRet = getSheet_(FIN_RETURNS_SHEET, dbId);
+      var retHeaders = getHeaders_(sheetRet);
+      var sheetStock = getSheet_(FIN_RETURNS_STOCK_SHEET, dbId);
+      var stockHeaders = getHeaders_(sheetStock);
+
+      /* group serial — the max id, read from the id column alone */
+      var nextNum = 1;
+      fsReadColumnValues_(sheetRet, 'id').values.forEach(function (v) {
+        var n = Number(v);
+        if (Number.isInteger(n) && n >= nextNum) nextNum = n + 1;
+      });
+      var groupId = nextNum;
+
+      /* Line ownership, so an item naming another invoice's line still gets the
+         legacy "does not belong to this invoice" refusal rather than a generic
+         "line not found". Two narrow reads, no full-table object build. */
+      var lineOwner = {};
+      try {
+        fsReadBlockRows_(getSheet_(FIN_SALES_LINES_SHEET, dbId), ['unique_id', 'valley_sales_header_id']).rows
+          .forEach(function (l) {
+            var lu = String(l.unique_id || '').trim();
+            if (lu) lineOwner[lu] = String(l.valley_sales_header_id || '').trim();
+          });
+      } catch (eOwner) {}
+
+      /* this invoice's own lines */
+      var lineUids = {};
+      var allocByLine = {};
+      try {
+        fsReadRowsByParent_(getSheet_(FIN_SALES_LINES_SHEET, dbId), 'valley_sales_header_id', invUid,
+          ['unique_id', 'product_price', 'product_qty']).rows.forEach(function (l) {
+            var lu = String(l.unique_id || '').trim();
+            lineUids[lu] = {
+              belongs: true,
+              price: Number(l.product_price || 0),
+              qty: Number(l.product_qty || 0)
+            };
+            allocByLine[lu] = [];
+          });
+      } catch (eLines) {}
+
+      /* every line's allocations: one block on the set-membership columns */
+      var restoredEver = {};
+      try {
+        fsReadBlockRows_(getSheet_('valley_sales_product_stock', dbId),
+          ['valley_sales_products_id', 'unique_id', 'product_transaction_code', 'product_qty']).rows
+          .forEach(function (a) {
+            var lu = String(a.valley_sales_products_id || '').trim();
+            if (!allocByLine[lu]) return;
+            allocByLine[lu].push({
+              alloc_uid: String(a.unique_id || ''),
+              lot: String(a.product_transaction_code || ''),
+              qty: Number(a.product_qty || 0)
+            });
+            restoredEver[String(a.unique_id || '')] = 0;
+          });
+      } catch (eStock) {}
+
+      /* already returned, per line */
+      var returnedByLine = {};
+      fsReadBlockRows_(sheetRet, ['valley_sales_products_id', 'valley_return_qty']).rows.forEach(function (r) {
+        var lu = String(r.valley_sales_products_id || '').trim();
+        if (!lu) return;
+        returnedByLine[lu] = (returnedByLine[lu] || 0) + Number(r.valley_return_qty || 0);
+      });
+
+      /* restored so far, per allocation — hoisted out of the item loop */
+      fsReadBlockRows_(sheetStock, ['product_unique_id', 'product_qty']).rows.forEach(function (rs) {
+        var au = String(rs.product_unique_id || '').trim();
+        if (au && restoredEver[au] !== undefined) restoredEver[au] += Number(rs.product_qty || 0);
+      });
+
+      var retRowsToWrite = [];
+      var stockRowsToWrite = [];
+      var nowStamp = new Date();
+      var email = (user && user.email) || '';
+
+      items.forEach(function (it, idx) {
+        var lu = String(it.line_uid || '').trim();
+        var info = lineUids[lu];
+        if (!info) {
+          if (lineOwner[lu] !== undefined) throw new Error('البند ' + (idx + 1) + ': البند لا ينتمي لهذه الفاتورة');
+          throw new Error('البند ' + (idx + 1) + ': بند غير موجود');
+        }
+        var qty = Number(it.qty);
+        if (!isFinite(qty) || qty <= 0) throw new Error('البند ' + (idx + 1) + ': الكمية يجب أن تكون أكبر من صفر');
+        var alreadyReturned = returnedByLine[lu] || 0;
+        var returnable = info.qty - alreadyReturned;
+        if (qty > returnable + 0.0001) {
+          throw new Error('البند ' + (idx + 1) + ': الكمية المرتجعة تتجاوز المسموح (' + returnable + ')');
+        }
+        var value = qty * info.price;
+
+        var rowUuid = uid16_();
+        retRowsToWrite.push(retHeaders.map(function (h) {
+          var k = String(h).trim();
+          var m = {
+            unique_id: rowUuid,
+            id: groupId,
+            valley_sales_invoices_id: invUid,
+            valley_sales_invoices_client: '',
+            valley_return_date: retDate,
+            valley_sales_products_id: lu,
+            valley_return_qty: qty,
+            valley_return_value: value,
+            user: email,
+            created_at: nowStamp
+          };
+          return m[k] !== undefined ? m[k] : '';
+        }));
+
+        /* FIFO restore across the line's original allocations. The restored
+           figure is the SHEET state, deliberately never mutated by this
+           request: the legacy path re-derived it per item, so reproducing that
+           exactly keeps the accepted/refused quantities identical. */
+        var remainingRestore = qty;
+        for (var ai = 0; ai < allocByLine[lu].length && remainingRestore > 0.0001; ai++) {
+          var al = allocByLine[lu][ai];
+          var capacity = al.qty - (restoredEver[al.alloc_uid] || 0);
+          if (capacity <= 0.0001) continue;
+          var take = Math.min(capacity, remainingRestore);
+          stockRowsToWrite.push(stockHeaders.map(function (h) {
+            var k = String(h).trim();
+            var m4 = {
+              unique_id: uid16_(),
+              id: groupId,
+              valley_sales_returns_id: rowUuid,
+              product_unique_id: al.alloc_uid,
+              product_transaction_code: al.lot,
+              product_qty: take,
+              user: email,
+              created_at: nowStamp
+            };
+            return m4[k] !== undefined ? m4[k] : '';
+          }));
+          remainingRestore -= take;
+        }
+        if (remainingRestore > 0.0001) {
+          throw new Error('البند ' + (idx + 1) + ': تعذر توزيع الكمية المرتجعة على دفعات الفاتورة');
+        }
+      });
+
+      /* client id from the invoice header — one parent-scoped read */
+      var clientId = '';
+      try {
+        var invRows = fsReadRowsByParent_(getSheet_(FIN_SALES_INV_SHEET, dbId), 'invoice_unique_id', invUid, ['اسم العميل']).rows;
+        if (invRows.length) clientId = String(invRows[0]['اسم العميل'] || '');
+      } catch (eInv) {}
+      var ci = retHeaders.findIndex(function (h) { return String(h).trim() === 'valley_sales_invoices_client'; });
+      retRowsToWrite = retRowsToWrite.map(function (row) {
+        row[ci >= 0 ? ci : 3] = clientId;
+        return row;
+      });
+
+      var sections = [];
+      if (retRowsToWrite.length) sections.push({ sheetName: FIN_RETURNS_SHEET, mode: 'insert', insertRows: retRowsToWrite });
+      if (stockRowsToWrite.length) sections.push({ sheetName: FIN_RETURNS_STOCK_SHEET, mode: 'insert', insertRows: stockRowsToWrite });
+      if (sections.length) fastSaveSections_({ scopeId: dbId, lock: false, sections: sections });
+
+      if (retRowsToWrite.length) {
+        try {
+          var _uidIx = retHeaders.findIndex(function (h) { return String(h).trim() === 'unique_id'; });
+          var _qtyIx = retHeaders.findIndex(function (h) { return String(h).trim() === 'valley_return_qty'; });
+          logHistoryMany_(retRowsToWrite.map(function (r) {
+            var _uid = r[_uidIx];
+            return {
+              dbId: dbId, sheetName: FIN_RETURNS_SHEET,
+              recordUid: 'create_' + FIN_RETURNS_SHEET + '_' + _uid,
+              recordId: _uid, user: (user && user.email) || '',
+              action: 'create',
+              newValues: {
+                unique_id: _uid, id: groupId, valley_sales_invoices_id: invUid,
+                valley_return_qty: r[_qtyIx], valley_return_date: retDate
+              },
+              oldValues: null
+            };
+          }));
+        } catch (e) {}
+      }
+    });
+
+    finBustRefs_(dbId);
+    vfFlush_();
+    return { status: 'success', message: 'تم تسجيل المرتجع بنجاح' };
+  }
+
   function saveValleyReturn_(data, user, dbId) {
+    if (fastSaveOnFor_(RETURNS_BATCH_WRITES_)) return saveValleyReturnFast_(data, user, dbId);
     var d = data || {};
     var invUid = String(d.invoice_unique_id || '').trim();
     if (!invUid) throw new Error('الفاتورة مطلوبة');
