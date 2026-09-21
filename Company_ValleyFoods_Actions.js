@@ -12304,6 +12304,215 @@ const ValleyFoodsHRModules = (function () {
     } catch (e) {}
   }
 
+  /* ── Sales document reads — fast readers (SALES_FAST_READ_, step 4) ────────
+   * Both invoice readers are documents: one parent header row plus child
+   * sections. Declared strategies (plan §5.3), chosen per section and stated
+   * because the cost model depends on them:
+   *
+   *   parent header  PARENT_FK_INDEX_THEN_FETCH — one read of the key column,
+   *                  then the matched row(s) by batched fetch. rowsScanned is
+   *                  the table, honestly.
+   *   sold lines     PARENT_SCAN over the columns the response uses (the legacy
+   *                  reader materializes all 13 columns of every row).
+   *   returns        FULL_SCAN over two narrow columns: the aggregate is keyed
+   *                  by LINE, and the line set is not known before the lines
+   *                  are read, so this is declared whole-set work, priced as
+   *                  such rather than hidden (§5.2 rule 4).
+   *   products       FULL_SCAN over two narrow columns (id -> name lookup).
+   *   allocations    FULL_SCAN over the allocated columns, grouped by line.
+   *
+   * Nothing here claims matched-row-only scanning: every section reports
+   * rowsScanned = its table rows and the metrics line carries the numbers. */
+
+  function vfInvoiceHeaderFields_(s) {
+    /* The returns banner's four fields, from a trimmed-header map. The field
+     * names are the CONTRACT's names; the sheet's are the headers below. */
+    var d = s['تاريخ الفاتورة'] ? new Date(s['تاريخ الفاتورة']) : null;
+    return {
+      uid: String(s.invoice_unique_id == null ? '' : s.invoice_unique_id),
+      number: String(s['رقم الفاتورة'] || ''),
+      client_name: String(s['اسم العميل'] || ''),
+      date_display: (d && !isNaN(d.getTime()))
+        ? pad2_(d.getDate()) + '/' + pad2_(d.getMonth() + 1) + '/' + d.getFullYear()
+        : '-'
+    };
+  }
+
+  function vfSectionRowsToMaps_(doc, alias) {
+    return (doc.children[alias] || []).map(function (r) {
+      var keyed = {};
+      Object.keys(r).forEach(function (k) { if (k !== '__row') keyed[k] = r[k]; });
+      return keyed;
+    });
+  }
+
+  /* get_valley_invoice_for_return, fast path. */
+  function vfInvoiceForReturnFast_(data, user, dbId) {
+    var invUid = String((data && data.invoice_unique_id) || '').trim();
+    if (!invUid) throw new Error('اختر الفاتورة أولاً');
+    var ctx = frNewContext_({ deadlineMs: FR_DEADLINE_MS_ });
+
+    var doc = fastFetchDocument_({
+      dbId: dbId,
+      ctx: ctx,
+      parent: {
+        sheetName: FIN_SALES_INV_SHEET,
+        keyHeader: 'invoice_unique_id',
+        keyValue: invUid,
+        columns: ['invoice_unique_id', 'رقم الفاتورة', 'اسم العميل', 'تاريخ الفاتورة'],
+        dateColumns: ['تاريخ الفاتورة'],
+        strategy: 'PARENT_FK_INDEX_THEN_FETCH'
+      },
+      children: [
+        {
+          alias: 'sold',
+          sheetName: FIN_SALES_LINES_SHEET,
+          parentHeader: 'valley_sales_header_id',
+          parentKey: invUid,
+          columns: ['unique_id', 'product_id', 'product_details', 'product_price', 'product_qty'],
+          strategy: 'PARENT_SCAN'
+        },
+        {
+          alias: 'returns',
+          sheetName: FIN_RETURNS_SHEET,
+          parentHeader: 'valley_sales_products_id',
+          parentKey: '',
+          columns: ['valley_sales_products_id', 'valley_return_qty'],
+          strategy: 'FULL_SCAN'
+        },
+        {
+          alias: 'products',
+          sheetName: FIN_PRODUCTS_SHEET,
+          parentHeader: 'id',
+          parentKey: '',
+          columns: ['id', 'name_ar'],
+          strategy: 'FULL_SCAN'
+        }
+      ]
+    });
+
+    var returnedByLine = {};
+    vfSectionRowsToMaps_(doc, 'returns').forEach(function (r) {
+      var lu = String(r.valley_sales_products_id == null ? '' : r.valley_sales_products_id).trim();
+      if (!lu) return;
+      returnedByLine[lu] = (returnedByLine[lu] || 0) + Number(r.valley_return_qty || 0);
+    });
+
+    var productNames = {};
+    vfSectionRowsToMaps_(doc, 'products').forEach(function (p) {
+      productNames[String(p.id)] = String(p.name_ar || '');
+    });
+
+    var lines = vfSectionRowsToMaps_(doc, 'sold').map(function (l) {
+      var lu = String(l.unique_id == null ? '' : l.unique_id).trim();
+      var sold = Number(l.product_qty || 0);
+      var returned = returnedByLine[lu] || 0;
+      return {
+        line_uid: lu,
+        product_name: productNames[String(l.product_id)] || String(l.product_id),
+        details: l.product_details || '',
+        price: Number(l.product_price || 0),
+        sold_qty: sold,
+        returned_qty: returned,
+        returnable: Math.max(0, sold - returned)
+      };
+    });
+
+    var invInfo = null;
+    if (doc.parent) invInfo = vfInvoiceHeaderFields_(doc.parent);
+    vfFastReadLog_('get_valley_invoice_for_return', doc.metrics.total);
+    return { status: 'success', invoice: invInfo || { uid: invUid, number: '-' }, lines: lines };
+  }
+
+  /* get_valley_invoice_full, fast path. */
+  function vfInvoiceFullFast_(data, user, dbId) {
+    var uid = String((data && data.invoice_unique_id) || '').trim();
+    if (!uid) throw new Error('معرّف الفاتورة مطلوب');
+    var ctx = frNewContext_({ deadlineMs: FR_DEADLINE_MS_ });
+
+    var doc = fastFetchDocument_({
+      dbId: dbId,
+      ctx: ctx,
+      parent: {
+        sheetName: FIN_SALES_INV_SHEET,
+        keyHeader: 'invoice_unique_id',
+        keyValue: uid,
+        columns: FIN_SALES_INV_HEADERS,
+        dateColumns: ['تاريخ الفاتورة'],
+        strategy: 'PARENT_FK_INDEX_THEN_FETCH'
+      },
+      children: [
+        {
+          alias: 'lines',
+          sheetName: FIN_SALES_LINES_SHEET,
+          parentHeader: 'valley_sales_header_id',
+          parentKey: uid,
+          columns: ['unique_id', 'product_id', 'product_details', 'product_tax', 'product_qty', 'product_price'],
+          strategy: 'PARENT_SCAN'
+        },
+        {
+          alias: 'products',
+          sheetName: FIN_PRODUCTS_SHEET,
+          parentHeader: 'id',
+          parentKey: '',
+          columns: ['id', 'name_ar'],
+          strategy: 'FULL_SCAN'
+        },
+        {
+          alias: 'allocations',
+          sheetName: 'valley_sales_product_stock',
+          parentHeader: 'valley_sales_products_id',
+          parentKey: '',
+          columns: ['unique_id', 'valley_sales_products_id', 'product_unique_id', 'product_transaction_code', 'product_qty'],
+          strategy: 'FULL_SCAN'
+        }
+      ]
+    });
+
+    if (!doc.parent) throw new Error('الفاتورة غير موجودة');
+
+    var nameMap = {};
+    vfSectionRowsToMaps_(doc, 'products').forEach(function (p) { nameMap[String(p.id)] = String(p.name_ar || ''); });
+
+    var allocsByLine = {};
+    vfSectionRowsToMaps_(doc, 'allocations').forEach(function (a) {
+      var lu = String(a.valley_sales_products_id == null ? '' : a.valley_sales_products_id).trim();
+      if (!lu) return;
+      if (!allocsByLine[lu]) allocsByLine[lu] = [];
+      allocsByLine[lu].push({
+        alloc_uid: String(a.unique_id || ''),
+        batch_uid: String(a.product_unique_id || ''),
+        lot: String(a.product_transaction_code || ''),
+        qty: Number(a.product_qty || 0)
+      });
+    });
+
+    var lines = vfSectionRowsToMaps_(doc, 'lines').map(function (l) {
+      var out = {
+        unique_id: l.unique_id,
+        product_id: l.product_id != null ? l.product_id : '',
+        product_name: '',
+        product_details: l.product_details || '',
+        product_tax: Number(l.product_tax || 0),
+        product_qty: Number(l.product_qty || 0),
+        product_price: Number(l.product_price || 0)
+      };
+      out.product_name = nameMap[out.product_id] || '';
+      out.allocations = allocsByLine[String(out.unique_id)] || [];
+      return out;
+    });
+
+    /* The detail header is lossless over the sheet's columns, projected through
+     * the frozen contract: each column keyed by its trimmed header name. */
+    var invoice = {};
+    FIN_SALES_INV_HEADERS.forEach(function (h) {
+      var key = String(h).trim();
+      invoice[key] = doc.parent[key] !== undefined ? doc.parent[key] : '';
+    });
+    vfFastReadLog_('get_valley_invoice_full', doc.metrics.total);
+    return { status: 'success', invoice: invoice, lines: lines };
+  }
+
   /* Bounded fail-open (G1): an engine failure is logged without raw values and
      the legacy body answers the request. The engine's own deadline abort lands
      here too — the fallback then runs with whatever execution time is left, and
@@ -12387,6 +12596,42 @@ const ValleyFoodsHRModules = (function () {
           })
         };
       }
+    },
+    'vf_invoice_for_return': {
+      legacy: function (payload, user, dbId) { return vfInvoiceForReturnLegacy_(payload, user, dbId); },
+      modern: function (payload, user, dbId) { return vfInvoiceForReturnFast_(payload, user, dbId); },
+      canonicalize: function (res) {
+        return {
+          status: res.status,
+          invoice: res.invoice,
+          lines: (res.lines || []).map(function (l) {
+            return {
+              line_uid: l.line_uid, product_name: l.product_name, details: l.details,
+              price: l.price, sold_qty: l.sold_qty, returned_qty: l.returned_qty, returnable: l.returnable
+            };
+          })
+        };
+      }
+    },
+    'vf_invoice_full': {
+      legacy: function (payload, user, dbId) { return vfInvoiceFullLegacy_(payload, user, dbId); },
+      modern: function (payload, user, dbId) { return vfInvoiceFullFast_(payload, user, dbId); },
+      canonicalize: function (res) {
+        return {
+          status: res.status,
+          invoice: res.invoice,
+          lines: (res.lines || []).map(function (l) {
+            return {
+              unique_id: l.unique_id, product_id: l.product_id, product_name: l.product_name,
+              product_details: l.product_details, product_tax: l.product_tax,
+              product_qty: l.product_qty, product_price: l.product_price,
+              allocations: (l.allocations || []).map(function (a) {
+                return { alloc_uid: a.alloc_uid, batch_uid: a.batch_uid, lot: a.lot, qty: a.qty };
+              })
+            };
+          })
+        };
+      }
     }
   };
 
@@ -12414,6 +12659,7 @@ const ValleyFoodsHRModules = (function () {
       diffs: report ? report.diffs.slice(0, 20) : [],
       leftBytes: report ? report.leftBytes : 0,
       rightBytes: report ? report.rightBytes : 0,
+      legacyError: (report && report.legacyError) || null,
       modernError: (report && report.modernError) || null
     };
   }
@@ -12591,6 +12837,15 @@ const ValleyFoodsHRModules = (function () {
   }
 
   function getValleyInvoiceFull_(data, user, dbId) {
+    if (typeof fastReadOnFor_ === 'function' && fastReadOnFor_(SALES_FAST_READ_)) {
+      try { return vfInvoiceFullFast_(data, user, dbId); }
+      catch (e) { vfFastReadFallback_('get_valley_invoice_full', e); }
+    }
+    return vfInvoiceFullLegacy_(data, user, dbId);
+  }
+
+  /* The legacy body, verbatim, beneath the dispatch above. */
+  function vfInvoiceFullLegacy_(data, user, dbId) {
     var uid = String((data && data.invoice_unique_id) || '').trim();
     if (!uid) throw new Error('معرّف الفاتورة مطلوب');
     var invoice = null;
@@ -12782,6 +13037,15 @@ const ValleyFoodsHRModules = (function () {
   }
 
   function getValleyInvoiceForReturn_(data, user, dbId) {
+    if (typeof fastReadOnFor_ === 'function' && fastReadOnFor_(SALES_FAST_READ_)) {
+      try { return vfInvoiceForReturnFast_(data, user, dbId); }
+      catch (e) { vfFastReadFallback_('get_valley_invoice_for_return', e); }
+    }
+    return vfInvoiceForReturnLegacy_(data, user, dbId);
+  }
+
+  /* The legacy body, verbatim, beneath the dispatch above. */
+  function vfInvoiceForReturnLegacy_(data, user, dbId) {
     var invUid = String((data && data.invoice_unique_id) || '').trim();
     if (!invUid) throw new Error('اختر الفاتورة أولاً');
 

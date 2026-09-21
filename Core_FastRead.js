@@ -923,16 +923,32 @@ function fastFetchDocument_(spec) {
   return out;
 }
 
-/* One section: a key column + a projection, under a declared strategy.
- *   PARENT_SCAN                  one narrow read of key+projection over the table
+/* One section under a declared strategy.
+ *   PARENT_SCAN                  one narrow read of key+projection over the table,
+ *                                filtered to the parent key
  *   PARENT_FK_INDEX_THEN_FETCH   key column first, then the matched rows by batch
- *   FULL_SCAN                    declared fallback: key + projection read, whole table
+ *   FULL_SCAN                    the declared whole-set fallback: the declared
+ *                                columns for EVERY row, no parent filter (the
+ *                                caller aggregates or filters), priced as such
  * rowsScanned is a table scan for all three; only cellsRead differs. */
 function frFetchSection_(dbId, sheetName, keyHeader, keyValue, columns, strategy, ctx, m, orderBy, providedHeaders, dateColumns) {
-  if (!keyHeader) throw frError_('FR_BAD_SPEC', 'Section needs a key header');
   if (!columns || !columns.length) throw frError_('FR_BAD_SPEC', 'Section needs declared columns');
 
-  if (strategy === 'PARENT_SCAN' || strategy === 'FULL_SCAN') {
+  if (strategy === 'FULL_SCAN') {
+    var fullSheet = frSheet_(sheetName, dbId, ctx);
+    var block = frReadBlockRows_(fullSheet, columns, m, providedHeaders);
+    var fullRows = block.rows.map(function (rec) {
+      var out = {};
+      columns.forEach(function (c) { out[c] = rec[String(c).trim()]; });
+      return out;
+    });
+    if (orderBy) fullRows.sort(function (a, b) { return frCompareRows_(a, b, orderBy.column, orderBy.direction); });
+    return { rows: fullRows, rowsScanned: m.rowsScanned };
+  }
+
+  if (!keyHeader) throw frError_('FR_BAD_SPEC', 'Section needs a key header');
+
+  if (strategy === 'PARENT_SCAN') {
     var sheet = frSheet_(sheetName, dbId, ctx);
     var hit = frReadRowsByParent_(sheet, keyHeader, keyValue, columns, m, providedHeaders);
     var rows = hit.rows.map(function (rec) {
@@ -980,21 +996,23 @@ function frFetchSection_(dbId, sheetName, keyHeader, keyValue, columns, strategy
 function frShadowCompare_(spec) {
   var s = spec || {};
   var label = String(s.label || 'shadow');
-  var legacy = typeof s.legacy === 'function' ? s.legacy() : s.legacy;
-  var modernError = null;
+  var legacy = null;
   var modern = null;
+  var legacyError = null;
+  var modernError = null;
+  try { legacy = typeof s.legacy === 'function' ? s.legacy() : s.legacy; }
+  catch (e) { legacyError = e; }
   try { modern = typeof s.modern === 'function' ? s.modern() : s.modern; }
   catch (e) { modernError = e; }
 
-  if (modernError) {
-    var failure = { label: label, ok: false, modernError: { code: modernError.code || '', name: modernError.name || 'Error' }, diffs: [], diffCount: 0 };
-    if (typeof s.onResult === 'function') s.onResult(failure);
-    return legacy;
-  }
-
   var canonicalize = typeof s.canonicalize === 'function' ? s.canonicalize : function (v) { return v; };
-  var left = canonicalize(legacy);
-  var right = canonicalize(modern);
+  /* An error path is behaviour too: a reader that throws where the other
+   * answered is a difference. Errors are compared as a shape — name, code and a
+   * hash of the message — so an identical refusal on both sides is not a diff
+   * (and the message itself never enters the report). */
+  var left = legacyError ? frErrorShape_(legacyError) : canonicalize(legacy);
+  var right = modernError ? frErrorShape_(modernError) : canonicalize(modern);
+
   var diffs = [];
   var maxDiffs = Number(s.maxDiffs || 50) || 50;
   frDiffValues_(left, right, '', diffs, maxDiffs);
@@ -1006,10 +1024,22 @@ function frShadowCompare_(spec) {
     truncated: diffs.truncated === true,
     diffs: diffs.slice(0, maxDiffs),
     leftBytes: frValueBytes_(left),
-    rightBytes: frValueBytes_(right)
+    rightBytes: frValueBytes_(right),
+    legacyError: legacyError ? { code: String(legacyError.code || ''), name: String(legacyError.name || 'Error') } : null,
+    modernError: modernError ? { code: String(modernError.code || ''), name: String(modernError.name || 'Error') } : null
   };
   if (typeof s.onResult === 'function') s.onResult(report);
-  return legacy;
+  return legacyError ? legacy : legacy;
+}
+
+/* A comparable shape for a thrown error: identifiers and a message hash. */
+function frErrorShape_(e) {
+  return {
+    __error: true,
+    name: String((e && e.name) || 'Error'),
+    code: String((e && e.code) || ''),
+    messageHash: frValueHash_(String((e && e.message) || ''))
+  };
 }
 
 function frValueHash_(v) {

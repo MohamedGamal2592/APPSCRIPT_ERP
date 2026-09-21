@@ -26,7 +26,7 @@ Field names, hashes, types, counts, line numbers and bounded summaries only.
 | 1 | Freeze canonical response contracts; resolve/document anomalies | — | **DONE** — `RV-1.1` fixed and closed with VM evidence (`RV-1.2`/`RV-1.3`, TR-12/TR-13); canonical contracts frozen (`RV-1.4`, TR-15); staging/live execution NOT RUN |
 | 2 | `Core_FastRead.js` primitives + metrics + parity guard | `FAST_READ_CORE_` (false) | **DONE** — engine committed inert (`RV-2.1`, TR-16/TR-17); no callers; one DoD row NOT MET with reason (document read call floor) |
 | 3 | Sales list (`NARROW_SCAN_PAGE` / `KEYSET`, no caching) | `SALES_FAST_READ_` | **DONE** — fast reader + admin shadow compare (`RV-3.1`, TR-19); flag `false`; `bytesOut` unchanged (endpoint was already slimmed), cells 299 vs 351 measured |
-| 4 | Sales document reads | `SALES_FAST_READ_` | NOT STARTED |
+| 4 | Sales document reads | `SALES_FAST_READ_` | **DONE** — both invoice readers behind declared document strategies (`RV-4.1`, TR-20); flag `false`; calls 17 vs ~14 legacy measured (win is cells 101 vs ~155), recorded as a trade-off |
 | 5 | Small-payload cache (stable key, stamp in manifest, pre/post validation) | `FAST_READ_CORE_` | NOT STARTED |
 | 6 | DTO projection + permission tests | `FAST_VIEW_CORE_` | NOT STARTED |
 | 7 | MFG list + view (separate query design) | `MFG_FAST_READ_` | NOT STARTED |
@@ -615,6 +615,64 @@ review finding rather than a surprise.
     shadow compare is the instrument that would surface it.
 - Test runs: TR-19.
 
+### RV-4.1 — Sales document reads served from `Core_FastRead` behind `SALES_FAST_READ_`
+- Date / Commit: 2026-09-21 / identified by message — `feat(rv-4): Sales document fast readers
+  and error-path shadow compare (SALES_FAST_READ_ off)`.
+- Step: 4.
+- Files (with line anchors):
+  - `Company_ValleyFoods_Actions.js`: `vfInvoiceHeaderFields_`, `vfSectionRowsToMaps_`,
+    `vfInvoiceForReturnFast_`, `vfInvoiceFullFast_` (new);
+    `getValleyInvoiceForReturn_` / `getValleyInvoiceFull_` become dispatchers and their legacy
+    bodies move verbatim to `vfInvoiceForReturnLegacy_` / `vfInvoiceFullLegacy_`;
+    `VF_SHADOW_TARGETS_` gains `vf_invoice_for_return` and `vf_invoice_full`.
+  - `Core_FastRead.js`: `FULL_SCAN` document sections no longer require a parent key (they read
+    the declared columns for every row and the caller aggregates) — that is what the returns and
+    allocations sections need; and shadow compare now compares **error paths** as behaviour
+    (`frErrorShape_`: name, code, message hash — never the message itself).
+  - `tools/verify/sales_document_fast_read.js` (new).
+  - `READ_VIEW_MODULARIZATION_RESULTS.md` (this record, TR-20).
+- What changed (behaviour terms): with either switch false, both invoice readers behave exactly
+  as before (same values, same thrown errors, same fallback object). With both switches true the
+  returns reader and the detail reader are assembled from declared-strategy sections, and any
+  engine error falls back to the legacy body for that request.
+- Why: plan §7 step 4 ("document reads … baseline first, then the invoice detail"), §5.3
+  (per-section strategy declarations, honest `rowsScanned`), §7.4 (document fetch budgets).
+- Flag state before → after: `SALES_FAST_READ_` remains `false`; `FAST_READ_CORE_` remains
+  `false`. No flag was flipped.
+- Declared strategies (per section, stated because the cost model depends on them):
+  | section | strategy | service calls | rowsScanned | cellsRead (fixture) |
+  |---|---|---|---|---|
+  | parent header (returns reader) | `PARENT_FK_INDEX_THEN_FETCH` | 3 (2 header + index read) + 1 batch | table (2) | 14 |
+  | parent header (detail reader) | same, `FIN_SALES_INV_HEADERS` | same | table (2) | 12 + header 27 |
+  | sold lines / detail lines | `PARENT_SCAN` over 5–6 columns | 2 | table (3) | 24 |
+  | returns aggregate | `FULL_SCAN` over 2 columns | 2 | table (3) | 6 |
+  | products lookup | `FULL_SCAN` over 2 columns | 2 | table (2) | 4 |
+  | allocations | `FULL_SCAN` over 5 columns | 2 | table (3) | 6 |
+- Behaviour if reverted: L1 flips `SALES_FAST_READ_` to `false` (source edit + owner deploy);
+  L2 `git revert <sha>`. Both readers keep the legacy body intact beneath the dispatch.
+- Retraction recipe: L1 as above. L2 `git revert <sha>`. L3 not applicable (no cache).
+- Metrics observed (with baseline, VM fixtures of 2 invoices / 3 lines / 3 returns / 2 products):
+  `get_valley_invoice_for_return` — **17 service calls, 10 rows scanned, 66 columns, 101 cells,
+  1290 bytes**, `partial false`, `cacheOutcome disabled`. The legacy reader on the same fixture
+  pays 4 header reads (53 cells) plus four whole-row ranges (102 cells: 27 + 39 + 30 + 6) ≈
+  **155 cells**, and builds 13-column record objects.
+- Residual risk (what this does NOT prove) — and one honest trade-off:
+  - **The fast document reader does NOT reduce service calls on this endpoint** (17 vs ~14
+    measured). Four sheets cost a header read each; the header reads are 53 of the 101 cells and
+    are work the legacy path also does. The measured win is cells (101 vs ~155), the absence of
+    13-column record materialization, and a declared, refusable strategy. This is stated rather
+    than presented as a speed-up; step 5's cache is the step that addresses repeated header and
+    reference reads.
+  - The returns aggregate and the allocations section are whole-set reads **by declaration**
+    (`FULL_SCAN` over narrow columns). The plan's step 5/7 measurements decide whether a cache
+    makes them cheaper; nothing here hides them.
+  - Fixtures only: no staging/production run. The live zero-diff is the owner's admin action.
+  - **Error paths are now compared as behaviour** (name + code + message hash). Two readers can
+    therefore be declared equivalent while both fail; that is the intent (the legacy behaviour is
+    the specification), but it means a shadow report alone does not prove the endpoint is
+    healthy — the page still has to work.
+- Test runs: TR-20.
+
 ---
 
 ## 5. Test-run records
@@ -897,6 +955,33 @@ review finding rather than a surprise.
 - Evidence: `tools/verify/sales_list_fast_read.js`; exit code 0 observed.
 - Not covered: live data. The zero-diff claim is a VM claim; the owner's staging/admin run is
   still the production gate for flipping `SALES_FAST_READ_`.
+
+### TR-20 — Sales document readers: equivalence, on-flag equality, error paths, fail-open
+- When: 2026-09-21
+- Environment: VM harness (no data); the on-flag harness patches the source in memory only
+- Command: `node tools/verify/sales_document_fast_read.js`
+- Purpose (claim under test): `get_valley_invoice_for_return` and `get_valley_invoice_full` are
+  equal to their legacy bodies for found / childless / missing invoices, through the admin
+  shadow action with the flags off and as the served response with the flags on; the declared
+  strategies report honest metrics; engine aborts fail open.
+- Result: **PASS** — exit 0, `sales_document_fast_read: PASS`. Zero diffs through
+  `fr_shadow_compare` for both readers over found-with-children and found-without-children, and
+  for the missing-invoice payload where the returns reader degrades to `{uid, number: '-'}` and
+  the detail reader throws the legacy `الفاتورة غير موجودة` (now compared as an error shape, so a
+  matched refusal is not a diff); on-flag responses JSON-identical to the legacy responses in a
+  separate harness; values asserted directly (returns summed per line, `returnable` floor,
+  allocations in sheet order, empty allocations as `[]`, the detail header lossless over all 27
+  columns with a real `Date`); metrics pinned to the measured `serviceCalls 17 / rowsScanned 10
+  / cellsRead 101`; forced engine aborts answered from the legacy body with one
+  `vf_fast_read_fallback` log. Failures during development that are part of the evidence: the
+  first shadow run reported the returns banner's three fields as empty (the projection helper
+  read contract names from a header-keyed map) and the date as a serial number (the parent
+  section needed `dateColumns` declared); the missing-invoice run exposed that shadow compare
+  let a legacy throw escape — fixed in the engine rather than worked around in the test.
+- Evidence: `tools/verify/sales_document_fast_read.js`; exit code 0 observed; the metrics line
+  is printed by the run and reproduced in RV-4.1.
+- Not covered: live data; and the reader's real cost on a large table, which is step 5's
+  measurement.
 
 ---
 
