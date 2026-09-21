@@ -354,64 +354,63 @@ function fsReadRowsByParent_(sheet, parentHeader, parentValue, columns) {
  *                     table version that drives the client's refresh prompt.
  *                     Never turn this off for a business table.
  *   valueInputOption  default 'RAW'; the engine writes date serials itself. */
-function fsPatchRowsByKey_(dbId, sheet, keyHeaders, updatesByKey, opts) {
+function fsPatchRowsByNumber_(dbId, sheet, updatesByRow, opts) {
   fsAssertOn_();
   var o = opts || {};
   var preserveFormulas = o.preserveFormulas !== false;
   var skipProbe = o.skipFormulaProbe === true;
   var overwrite = {};
   (o.overwriteColumns || []).forEach(function (c) { overwrite[String(c).trim().toLowerCase()] = true; });
-  var missingKey = o.missingKey === 'skip' ? 'skip' : 'throw';
   var stamp = o.stamp !== false;
   var valueInputOption = o.valueInputOption === 'USER_ENTERED' ? 'USER_ENTERED' : 'RAW';
 
-  var keys = Object.keys(updatesByKey || {});
-  var result = { writtenByKey: {}, writtenRows: [], cellCount: 0, ignoredColumns: [], protectedCells: [],
-    keyReads: 0, formulaReads: 0, writeCalls: 0, missingKeys: [], insertedKeys: [] };
-  if (!keys.length) return result;
+  var result = { writtenRows: [], cellCount: 0, ignoredColumns: [], protectedCells: [],
+    formulaReads: 0, writeCalls: 0 };
+
+  /* Row numbers are only trustworthy when they came from a read taken in the
+   * same locked execution, and a number past the sheet's last row is refused
+   * rather than written into whatever now occupies it. */
+  var rowNumbers = [];
+  Object.keys(updatesByRow || {}).forEach(function (k) {
+    var n = Number(k);
+    if (isFinite(n) && Math.floor(n) === n && n >= 2) rowNumbers.push(n);
+  });
+  if (!rowNumbers.length) return result;
+  rowNumbers.sort(function (a, b) { return a - b; });
 
   var headers = getHeaders_(sheet);
-  var wanted = {};
-  keys.forEach(function (k) { wanted[k] = true; });
-
-  var located = fsKeyIndex_(sheet, keyHeaders, wanted);
-  result.keyReads = located.reads;
-
-  var resolvedKeys = [];
-  var missing = [];
-  keys.forEach(function (k) {
-    if (located.map.has(k)) resolvedKeys.push(k);
-    else { missing.push(k); if (missingKey === 'throw') result.missingKeys.push(k); }
+  var lastRow = sheet.getLastRow();
+  rowNumbers.forEach(function (n) {
+    if (n > lastRow) {
+      throw fsError_('FAST_SAVE_ROW_OUT_OF_RANGE',
+        'Target row ' + n + ' is past the last row (' + lastRow + ') of ' + sheet.getName(),
+        { sheetName: sheet.getName(), row: n, lastRow: lastRow });
+    }
   });
-  if (missing.length && missingKey === 'throw') {
-    throw fsError_('FAST_SAVE_MISSING_KEY', 'Row not found for key: ' + missing.join(', '),
-      { sheetName: sheet.getName(), keys: missing });
-  }
-  if (!resolvedKeys.length) return result;
 
   /* Field resolution. Unknown update keys are ignored, exactly as
    * patchRowByCriteria_ ignores them (Code.js:1385). */
   var fieldCols = [];
   var ignored = {};
-  var perKey = {};
-  resolvedKeys.forEach(function (k) {
-    var upd = updatesByKey[k];
+  var perRow = {};
+  rowNumbers.forEach(function (n) {
+    var upd = updatesByRow[n] || updatesByRow[String(n)] || {};
     var row = {};
-    Object.keys(upd || {}).forEach(function (field) {
+    Object.keys(upd).forEach(function (field) {
       var idx = fsHeaderIndex_(headers, field);
       if (idx === -1) { ignored[String(field)] = true; return; }
       row[idx] = upd[field];
     });
-    perKey[k] = row;
+    perRow[n] = row;
     Object.keys(row).forEach(function (idxStr) {
       if (fieldCols.indexOf(Number(idxStr)) === -1) fieldCols.push(Number(idxStr));
     });
   });
   result.ignoredColumns = Object.keys(ignored);
+  if (!fieldCols.length) return result;
 
-  var rowNumbers = resolvedKeys.map(function (k) { return located.map.get(k); });
-  var minRow = Math.min.apply(null, rowNumbers);
-  var maxRow = Math.max.apply(null, rowNumbers);
+  var minRow = rowNumbers[0];
+  var maxRow = rowNumbers[rowNumbers.length - 1];
 
   /* Formula probe. Only the columns about to be written are examined, and only
    * across the span the target rows actually occupy. */
@@ -458,10 +457,8 @@ function fsPatchRowsByKey_(dbId, sheet, keyHeaders, updatesByKey, opts) {
   }
 
   var data = [];
-  result.writtenByKey = {};
-  resolvedKeys.forEach(function (k) {
-    var rowNum = located.map.get(k);
-    var row = perKey[k];
+  rowNumbers.forEach(function (rowNum) {
+    var row = perRow[rowNum];
     var cols = Object.keys(row).map(Number).filter(function (c) {
       return !(protectedByRow[rowNum] && protectedByRow[rowNum][c]);
     }).sort(function (a, b) { return a - b; });
@@ -482,7 +479,6 @@ function fsPatchRowsByKey_(dbId, sheet, keyHeaders, updatesByKey, opts) {
     });
     flush();
 
-    result.writtenByKey[k] = rowNum;
     result.writtenRows.push(rowNum);
   });
 
@@ -494,6 +490,51 @@ function fsPatchRowsByKey_(dbId, sheet, keyHeaders, updatesByKey, opts) {
     }
     if (stamp) noteMutation_(sheet);
   }
+  return result;
+}
+
+/* Locate by key, then patch by row number. The wrapper exists so a caller that
+ * holds only keys (the common case) pays exactly one column read for the
+ * location and never needs a row number of its own. */
+function fsPatchRowsByKey_(dbId, sheet, keyHeaders, updatesByKey, opts) {
+  fsAssertOn_();
+  var o = opts || {};
+  var missingKey = o.missingKey === 'skip' ? 'skip' : 'throw';
+  var keys = Object.keys(updatesByKey || {});
+  var result = { writtenByKey: {}, writtenRows: [], cellCount: 0, ignoredColumns: [], protectedCells: [],
+    keyReads: 0, formulaReads: 0, writeCalls: 0, missingKeys: [] };
+  if (!keys.length) return result;
+
+  var wanted = {};
+  keys.forEach(function (k) { wanted[k] = true; });
+  var located = fsKeyIndex_(sheet, keyHeaders, wanted);
+  result.keyReads = located.reads;
+
+  var missing = [];
+  var byRow = {};
+  keys.forEach(function (k) {
+    if (located.map.has(k)) {
+      var rowNum = located.map.get(k);
+      byRow[rowNum] = updatesByKey[k];
+      result.writtenByKey[k] = rowNum;
+    } else {
+      missing.push(k);
+    }
+  });
+  if (missing.length && missingKey === 'throw') {
+    result.missingKeys = missing;
+    throw fsError_('FAST_SAVE_MISSING_KEY', 'Row not found for key: ' + missing.join(', '),
+      { sheetName: sheet.getName(), keys: missing });
+  }
+  if (!Object.keys(byRow).length) return result;
+
+  var core = fsPatchRowsByNumber_(dbId, sheet, byRow, opts);
+  result.writtenRows = core.writtenRows;
+  result.cellCount = core.cellCount;
+  result.ignoredColumns = core.ignoredColumns;
+  result.protectedCells = core.protectedCells;
+  result.formulaReads = core.formulaReads;
+  result.writeCalls = core.writeCalls;
   return result;
 }
 
@@ -529,27 +570,19 @@ function fsAppendRowsBlock_(sheet, matrix, opts) {
  * Rows are merged into contiguous runs and the requests are issued in
  * DESCENDING start index so an earlier deletion can never shift a later one —
  * the same bottom-up discipline deleteRowsWhereIn_ documents (Code.js:1518). */
-function fsDeleteRowsByKeys_(dbId, sheet, keyHeaders, keys, opts) {
+function fsDeleteRows_(dbId, sheet, rowNumbers, opts) {
   fsAssertOn_();
   var o = opts || {};
   var stamp = o.stamp !== false;
-  var result = { deletedKeys: [], deletedRows: [], runs: [], keyReads: 0, writeCalls: 0 };
-  var wanted = {};
-  var list = [];
-  (keys || []).forEach(function (k) {
-    var key = String(k == null ? '' : k).trim();
-    if (!key || wanted[key]) return;
-    wanted[key] = true;
-    list.push(key);
-  });
-  if (!list.length) return result;
+  var result = { deletedRows: [], runs: [], writeCalls: 0 };
 
-  var located = fsKeyIndex_(sheet, keyHeaders, wanted);
-  result.keyReads = located.reads;
-
+  var seen = {};
   var rows = [];
-  list.forEach(function (k) {
-    if (located.map.has(k)) { rows.push(located.map.get(k)); result.deletedKeys.push(k); }
+  (rowNumbers || []).forEach(function (n) {
+    var v = Number(n);
+    if (!isFinite(v) || Math.floor(v) !== v || v < 2 || seen[v]) return;
+    seen[v] = true;
+    rows.push(v);
   });
   if (!rows.length) return result;
   rows.sort(function (a, b) { return a - b; });
@@ -573,16 +606,43 @@ function fsDeleteRowsByKeys_(dbId, sheet, keyHeaders, keys, opts) {
       startIndex: runs[r].start - 1, endIndex: runs[r].end
     } } });
   }
-  var issued = [];
   for (var j = 0; j < requests.length; j += FS_MAX_DELETE_REQUESTS_PER_BATCH_) {
     var chunk = requests.slice(j, j + FS_MAX_DELETE_REQUESTS_PER_BATCH_);
     Sheets.Spreadsheets.batchUpdate({ requests: chunk }, dbId);
     result.writeCalls++;
-    issued = issued.concat(chunk);
   }
   result.deletedRows = rows;
   result.runs = runs;
   if (stamp) noteMutation_(sheet);
+  return result;
+}
+
+function fsDeleteRowsByKeys_(dbId, sheet, keyHeaders, keys, opts) {
+  fsAssertOn_();
+  var result = { deletedKeys: [], deletedRows: [], runs: [], keyReads: 0, writeCalls: 0 };
+  var wanted = {};
+  var list = [];
+  (keys || []).forEach(function (k) {
+    var key = String(k == null ? '' : k).trim();
+    if (!key || wanted[key]) return;
+    wanted[key] = true;
+    list.push(key);
+  });
+  if (!list.length) return result;
+
+  var located = fsKeyIndex_(sheet, keyHeaders, wanted);
+  result.keyReads = located.reads;
+
+  var rows = [];
+  list.forEach(function (k) {
+    if (located.map.has(k)) { rows.push(located.map.get(k)); result.deletedKeys.push(k); }
+  });
+  if (!rows.length) return result;
+
+  var core = fsDeleteRows_(dbId, sheet, rows, opts);
+  result.deletedRows = core.deletedRows;
+  result.runs = core.runs;
+  result.writeCalls = core.writeCalls;
   return result;
 }
 

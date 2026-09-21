@@ -11586,6 +11586,70 @@ const ValleyFoodsHRModules = (function () {
     });
   }
 
+  /* ── Fast-save path for the sales allocation table (SALES_BATCH_WRITES_) ──
+   * valley_sales_product_stock is the one hot spot in the invoice save: the
+   * legacy reconciliation reads the whole table with getDataRange() and then
+   * pays a setValue round trip per changed cell and a deleteRow round trip per
+   * dropped allocation. This does the same reconciliation as one block read of
+   * the four columns it needs, one batched patch and one batched delete.
+   *
+   * Semantics are deliberately identical to the legacy loop it replaces:
+   *   - rows belonging to another invoice are skipped outright;
+   *   - the first row of a (line, batch) pair wins and duplicates are dropped;
+   *   - the user cell is written only when the quantity changes;
+   *   - the lot is refreshed only when the stored one is empty;
+   *   - row identity (unique_id) and created_at survive an in-place update.
+   * preserveFormulas is false here because the legacy path writes these cells
+   * with setValue() and this table is script-owned, so there is nothing to
+   * protect and no formula probe to pay for. */
+  function salesFastReconcileAllocations_(dbId, allocSheet, allocHeaders, invLineUids, wanted, batchCurrent, user) {
+    var emailNow = (user && user.email) || '';
+    var read = fsReadBlockRows_(allocSheet,
+      ['valley_sales_products_id', 'product_unique_id', 'product_qty', 'product_transaction_code']);
+    var patches = {};
+    var dropRows = [];
+    read.rows.forEach(function (a) {
+      var luA = String(a.valley_sales_products_id || '').trim();
+      if (!luA || !invLineUids[luA]) return;                  /* another invoice's row — never read further */
+      var aKey = luA + '|' + String(a.product_unique_id || '').trim();
+      var want = wanted[aKey];
+      if (!want) { dropRows.push(a.__row); return; }
+      var patch = null;
+      if (Math.abs(Number(a.product_qty || 0) - want.qty) > 0.0000001) {
+        patch = { product_qty: want.qty, user: emailNow };
+      }
+      if (!String(a.product_transaction_code || '').trim()) {
+        var lotFix = (batchCurrent[want.batch_uid] || {}).lot || '';
+        if (lotFix) { if (!patch) patch = {}; patch.product_transaction_code = lotFix; }
+      }
+      if (patch) patches[a.__row] = patch;
+      delete wanted[aKey];                                    /* this pair already has its row */
+    });
+    if (Object.keys(patches).length) {
+      fsPatchRowsByNumber_(dbId, allocSheet, patches, { preserveFormulas: false });
+    }
+    if (dropRows.length) fsDeleteRows_(dbId, allocSheet, dropRows);
+
+    var allocRows = [];
+    Object.keys(wanted).forEach(function (wk) {
+      var w = wanted[wk];
+      var binfo = batchCurrent[w.batch_uid] || {};
+      var m3 = {};
+      m3['unique_id'] = uid16_();
+      m3['valley_sales_products_id'] = w.line_uid;
+      m3['product_unique_id'] = w.batch_uid;
+      m3['product_transaction_code'] = binfo.lot || '';
+      m3['product_qty'] = w.qty;
+      m3['user'] = emailNow;
+      m3['created_at'] = new Date();
+      allocRows.push(allocHeaders.map(function (h) {
+        var k = String(h).trim();
+        return m3[k] !== undefined ? m3[k] : '';
+      }));
+    });
+    if (allocRows.length) fsAppendRowsBlock_(allocSheet, allocRows);
+  }
+
   function saveValleyInvoice_(data, user, dbId) {
     var d = data || {};
     var isSuperAdmin = !!(user && user.isSuperAdmin);
@@ -11822,14 +11886,28 @@ const ValleyFoodsHRModules = (function () {
          are still there. A line the user removed is not in cleanLines, so
          without this its allocations would survive and hold their batches. */
       var priorLineUids = [];
-      if (editing) {
+      if (editing && fastSaveOnFor_(SALES_BATCH_WRITES_)) {
+        /* One parent-scoped read of the invoice's own lines, then delete exactly
+           those rows. The legacy pair below reads the whole table once to learn
+           the uids and a second time inside deleteRowsByCriteria_ to find the
+           rows again. */
+        var _priorRows = [];
+        try {
+          fsReadRowsByParent_(sheetLines, 'valley_sales_header_id', existingUid, ['unique_id']).rows
+            .forEach(function (l) {
+              priorLineUids.push(String(l.unique_id || '').trim());
+              _priorRows.push(l.__row);
+            });
+        } catch (ePl) {}
+        if (_priorRows.length) fsDeleteRows_(dbId, sheetLines, _priorRows);
+      } else if (editing) {
         try {
           getAllRecords_(dbId, FIN_SALES_LINES_SHEET).forEach(function (l) {
             if (String(l.valley_sales_header_id || '').trim() === existingUid) priorLineUids.push(String(l.unique_id || '').trim());
           });
         } catch (ePl) {}
+        deleteRowsByCriteria_(sheetLines, 'valley_sales_header_id', existingUid);
       }
-      if (editing) deleteRowsByCriteria_(sheetLines, 'valley_sales_header_id', existingUid);
       var startLineRow = sheetLines.getLastRow() + 1;
       var lineRows = cleanLines.map(function (ln, i2) {
         var m2 = {};
@@ -11873,7 +11951,6 @@ const ValleyFoodsHRModules = (function () {
         ['unique_id','id','valley_sales_products_id','product_unique_id','product_transaction_code','product_qty','user','created_at']);
       var allocSheet = getSheet_('valley_sales_product_stock', dbId);
       var allocHeaders = getHeaders_(allocSheet);
-      var aData = allocSheet.getDataRange().getValues();
       var allocIdxOf = function (name) {
         return allocHeaders.findIndex(function (h) { return String(h).trim() === name; });
       };
@@ -11904,6 +11981,17 @@ const ValleyFoodsHRModules = (function () {
         });
       });
 
+      if (fastSaveOnFor_(SALES_BATCH_WRITES_)) {
+        /* Fast path: the same reconciliation, done as one block read plus one
+           batched patch and one batched delete. It returns from the lock
+           callback; the shared tail (refs bust, flush, response) still runs. */
+        salesFastReconcileAllocations_(dbId, allocSheet, allocHeaders, invLineUids, wanted, batchCurrent, user);
+        return;
+      }
+
+      /* The whole-table read the legacy reconciliation needs, taken here so the
+         fast path above never pays for it. */
+      var aData = allocSheet.getDataRange().getValues();
       var dropRows = [];
       for (var ad = 1; ad < aData.length; ad++) {
         var luA = String(aData[ad][aLineIdx] || '').trim();
