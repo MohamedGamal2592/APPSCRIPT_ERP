@@ -1,8 +1,14 @@
 # Read & View Modularization — Change Ledger & Test-Run Records
 
-Companion to `Plan_Read_View_Modularization.md` (Rev 2). This file is the **only** place
-change records and test-run records for this programme live. It is append-only: a correction
-is a new record that references the old one, never an edit in place.
+Companion to `Plan_Read_View_Modularization.md` (currently **Rev 4**). This file is the
+**only** place change records and test-run records for this programme live.
+
+**Append-only scope, precisely:** *completed* Change Records (§4, and future RV-1.x records)
+and *completed* Test Records (§5, TR-n) are immutable — a correction is a new record that
+references the old one. The header, the programme-status table (§1), the templates (§2) and
+the retraction recipes (§3) **are updateable**, because the status table would otherwise never
+be able to advance and a wrong recipe could never be fixed. An update to those sections is
+itself recorded when it changes a documented contract.
 
 Owner: the reviewer/owner named in the plan. Assistant records every modification it makes
 here in the same commit as the modification (guardrail G9, plan §3.3).
@@ -17,7 +23,7 @@ Field names, hashes, types, counts, line numbers and bounded summaries only.
 | Step | Deliverable | Flag | Status |
 |---|---|---|---|
 | 0 | Audit (read-only) | — | **DONE** — records in §4 |
-| 1 | Freeze canonical response contracts; resolve/document anomalies | — | NOT STARTED |
+| 1 | Freeze canonical response contracts; resolve/document anomalies | — | **IN PROGRESS** — `RV-1.1` applied (`815c6c7`); VM/staging evidence outstanding; DTO contracts not started |
 | 2 | `Core_FastRead.js` primitives + metrics + parity guard | `FAST_READ_CORE_` (false) | NOT STARTED |
 | 3 | Sales list (`NARROW_SCAN_PAGE` / `KEYSET`, no caching) | `SALES_FAST_READ_` | NOT STARTED |
 | 4 | Sales document reads | `SALES_FAST_READ_` | NOT STARTED |
@@ -26,9 +32,13 @@ Field names, hashes, types, counts, line numbers and bounded summaries only.
 | 7 | MFG list + view (separate query design) | `MFG_FAST_READ_` | NOT STARTED |
 | 8 | Client phase | separate approval | OUT OF SCOPE |
 
-Flag states as of the last commit: **all read/view flags are `false`.**
-Write-side flags (`FAST_SAVE_CORE_`, `MFG_BATCH_WRITES_`, `SALES_BATCH_WRITES_`,
-`RETURNS_BATCH_WRITES_`, `PURCHASE_BATCH_WRITES_`) are also **all `false`**.
+Flag states as of the last commit:
+
+- **Read/view flags: not yet defined.** They do not exist in the source yet (they are introduced
+  in step 2/3), so they are *absent*, not `false`. When introduced, each must default to
+  `false`, and this table must be updated in the same commit that introduces it.
+- Write-side flags (`FAST_SAVE_CORE_`, `MFG_BATCH_WRITES_`, `SALES_BATCH_WRITES_`,
+  `RETURNS_BATCH_WRITES_`, `PURCHASE_BATCH_WRITES_`): **all `false`**.
 
 ---
 
@@ -155,15 +165,70 @@ was agreed, and are labelled accordingly. None of them wrote anything.
   it. Enforcement is by review at each step's Change Record (G9).
 - Test runs: TR-9
 
-### RV-0.5 — Queued (NOT DONE): first implementation action
-- ID: `RV-1.1` (will be written when step 1 starts)
-- Scope: fix the unresolved `uid` reference at `Company_ValleyFoods_Actions.js:12591` →
-  construct `invInfo` from the function's own `invUid`
-- Owner decision: DEC-1, option A (fix first)
-- Status: **QUEUED — not written, not executed.** No code has been modified for this
-  programme. Expected user-visible effect: the returns page banner
-  (`Company_ValleyFoods_SalesReturns.html:176-196`) starts showing invoice number, client and
-  date instead of three dashes.
+### RV-0.5 — Superseded by RV-1.1
+- The queued first implementation action was written as RV-1.1 below. This record is kept so
+  the queue item does not silently disappear.
+
+---
+
+## 4.1 Implementation records (step 1 onward)
+
+### RV-1.1 — Fix the unresolved `uid` reference in `getValleyInvoiceForReturn_`
+- Date / Commit: 2026-09-21 / **`815c6c7`** — one file, 6 insertions, 1 deletion. **No engine
+  file, no flag, and no other handler was touched in that commit** (approval condition).
+- Step: 1 (first action; DEC-1 option A).
+- Files: `Company_ValleyFoods_Actions.js` — `invInfo` construction inside
+  `getValleyInvoiceForReturn_` (was `:12591`, now `:12590-12596` plus the explanatory comment).
+- What changed: `invInfo = { uid: uid, … }` → `invInfo = { uid: invUid, … }`, with a comment
+  naming the defect and pointing at this ledger. `invUid` is the handler's own inbound invoice
+  identity and the value the row was located by, so the field now carries the intended value.
+- Why: the identifier `uid` is declared nowhere in that function; the statement threw a
+  `ReferenceError`, the surrounding `try { … } catch (e) {}` swallowed it, `invInfo` stayed
+  `null`, and the handler fell through to its existing fallback
+  `invoice: invInfo || { uid: invUid, number: '-' }`. The returns banner therefore rendered
+  three dashes for number, client and date on **every** invoice, always.
+- **Intentional defect correction — NOT legacy equivalence** (owner-approved, DEC-1). This
+  record deliberately does not claim a zero-diff result: producing the previously-missing data
+  *is* the change.
+- Expected contract after the fix — found-invoice case:
+  | field | value |
+  |---|---|
+  | `uid` | the inbound `invUid` (the `invoice_unique_id` the row was found by) |
+  | `number` | the invoice header `رقم الفاتورة`, as a trimmed string (`''` when blank) |
+  | `client_name` | the invoice header `اسم العميل`, as a trimmed string (`''` when blank) |
+  | `date_display` | `dd/MM/yyyy` from the header `تاريخ الفاتورة`, or `'-'` when blank/unparseable |
+- Expected contract — missing-invoice case: unchanged. `invInfo` stays `null` and the handler
+  returns `invoice: { uid: invUid, number: '-' }`; the banner shows `-` for number, client and
+  date, exactly as it does today for every invoice. The fix does not alter this path.
+- Client consumption confirmed: `Company_ValleyFoods_SalesReturns.html:176-196` reads
+  `res.invoice.number`, `res.invoice.client_name` and `res.invoice.date_display` in the green
+  invoice banner; it also reads `res.invoice` nowhere else.
+- Scope audit: the same defect exists **nowhere else**. A repo-wide search for the pattern
+  returns one real instance (the one fixed) plus two `batch_uid: uid` field assignments whose
+  `uid` is a genuine local, and one `uid: uid` in `getValleyMfgClientReport_` where
+  `var uid = String(r.unique_id …)` is declared immediately above it.
+- Flag state before → after: none involved. **No flag exists for this change and none was
+  added** (approval condition: no engine or flag changes in the same commit).
+- Behaviour if reverted: `git revert 815c6c7` restores the silent failure — three dashes in
+  the returns banner. Nothing else changes; no data or schema is affected.
+- Retraction recipe: L2 only: `git revert 815c6c7`. L1 does not apply (no flag). L3 does not
+  apply (this path reads no cache of its own beyond the existing `vfFindRowByUid_` index,
+  which is unaffected).
+- Metrics observed: n/a — the handler is not on a measured hot path; the change is a
+  correctness fix, not a performance change.
+- **Approval condition — evidence**: a VM harness is **NOT RUN**. No VM scaffolding exists for
+  VF server actions (`tools/verify/gasstub.js` loads `Code.js` only; `s11_sales_returns.js` is
+  a page harness), and building it is a separate deliverable. Partial evidence is the
+  executable contract guard in §5 (TR-10, TR-11). **Because the required VM/staging evidence is
+  outstanding, RV-1.1 is applied but this record is not closed and step 1 remains IN PROGRESS
+  (G9).**
+- Residual risk (what this does NOT prove): that the handler executes without error at
+  runtime — the guard proves the source no longer contains the unresolved reference and that
+  the field contract matches the client, not that the Apps Script runtime agrees. It also does
+  not prove the invoice header columns hold the expected values on live data. Both are the
+  remaining VM/staging evidence.
+- Test runs: TR-10 (guard passes on the fixed source), TR-11 (guard fails on the pre-fix
+  source, i.e. the guard catches the defect it exists for).
 
 ---
 
@@ -268,6 +333,32 @@ was agreed, and are labelled accordingly. None of them wrote anything.
 - Not covered: it cannot prove the implementation will honour the decisions — that is the
   per-step Change Record's job (G9)
 
+### TR-10 — RV-1.1 contract regression guard (fixed source)
+- When: 2026-09-21
+- Environment: local source, **executable** node script (no data, no VM, no writes)
+- Command: `node tools/verify/rv11_invoice_return_contract.js`
+- Purpose: prove the fix is present and the server/client field contract holds
+- Result: **PASS** — 63-line server region; fields asserted `uid, number, client_name,
+  date_display`; client fields asserted `number, client_name, date_display`
+- Evidence: commit `815c6c7` + the guard file (added in the same commit as this record)
+- Not covered: it does not execute the handler. It is a static contract guard, explicitly not
+  a VM harness — the VM/staging condition of RV-1.1 remains NOT RUN
+
+### TR-11 — RV-1.1 guard proven to catch the defect ("test the test")
+- When: 2026-09-21
+- Environment: local source, executable; the pre-fix source was exported to a temp path — **no
+  repository file was modified to run this**
+- Command:
+  `git show "815c6c7^:Company_ValleyFoods_Actions.js" > <temp>/rv11_old_vf.js` then
+  `RV11_SERVER=<temp>/rv11_old_vf.js node tools/verify/rv11_invoice_return_contract.js`
+- Purpose: prove the guard fails on the defective source, so TR-10's PASS means something
+- Result: **PASS (guard behaved correctly)** — assertion
+  `RV-1.1 regression: 'uid: uid,' (an unresolved reference) is present again`, exit code 1
+- Evidence: this record; exit code 1 observed against the pre-fix file
+- Not covered: it proves the guard detects this specific defect, not that it detects other
+  future server/client contract drifts (the other assertions in the guard cover those
+  individually)
+
 ---
 
 ## 6. Cross-reference — write-side programme (pre-G9, summarised)
@@ -278,7 +369,7 @@ predate G9 and therefore have no Change Records; the runbook and status for them
 
 | Commit | Files | Flag state | Retraction |
 |---|---|---|---|
-| `a5f51db` | pre-migration backup (193 files) | n/a | reference point: `git reset --hard a5f51db` (destructive, owner only) |
+| `a5f51db` | pre-migration backup (193 files) | n/a | **historical comparison point only** — inspect with `git diff a5f51db -- <path>` or `git show a5f51db:<path>`. It is *not* a recommended `git reset --hard` target: a hard reset would discard every later commit, including the read/view work |
 | `2014df1` | `Core_FastSave.js` | `FAST_SAVE_CORE_` false | L2 revert |
 | `f439f58` | `Core_FastSave.js`, `Company_ValleyFoods_Actions.js` | all false | L1/L2 |
 | `869443b` | `Company_ValleyFoods_Actions.js`, `Core_FastSave.js` | all false | L1/L2 |
@@ -286,9 +377,17 @@ predate G9 and therefore have no Change Records; the runbook and status for them
 | `e4a2f0f` | `Company_ValleyFoods_Actions.js` | all false | L1/L2 |
 | `2dd89a1`, `567dd19` | `FAST_SAVE_ENGINE_MULTI_MODULE_EXECUTION_PLAN.md` | n/a | L2 |
 
-**Reverting the write-side code as a whole:** `git revert 2014df1^..e4a2f0f` (excluding the
-doc commits) restores the pre-engine state; the flags being `false` already means the legacy
-path is what runs today.
+**Reverting the write-side engine code** (newest first, so each revert applies cleanly and no
+documentation commit is touched):
+
+```
+git revert e4a2f0f 4e4877e 869443b f439f58 2014df1
+```
+
+This restores the pre-engine source state. The flags being `false` already means the legacy
+path is what runs today, so the revert is almost never necessary — it exists so the option is
+unambiguous. The two documentation commits (`2dd89a1`, `567dd19`) are deliberately **not** in
+the list.
 
 **Verification already performed on the write side** (recorded here for completeness, from the
 session that delivered it): `node --check` PASS on `Core_FastSave.js`, `Code.js` and

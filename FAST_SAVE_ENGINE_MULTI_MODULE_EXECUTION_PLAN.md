@@ -352,11 +352,11 @@ byte-identical from the user's point of view.
 
 - Engine stamps per section via `noteSheetChange_(sheet)` (`Code.js:848-851`), which derives
   `(spreadsheetId, sheetName)` from the live Sheet object and calls
-  `noteTableChange_` → the `vt_*` keys read by `readTableVersions_` (`Code.js:854-872`).
+  `noteTableChange_` → the `tv_*` keys read by `readTableVersions_` (`Code.js:834-872`).
 - This is why the engine is the right home for it: a per-module implementation is exactly
   how a stamp gets forgotten. Manifest field `stamped:true` makes it auditable.
 - Static audit step: after each adapter lands, list every `sheetName` it writes and prove
-  the corresponding `vt_<dbId>_<sheetName>` stamp is produced on the write path.
+  the corresponding `tv_<dbId>_<sheetName>` stamp is produced on the write path.
 - Regression guard for the UI: with a flag ON, the client's existing poll must still show
   the refresh prompt after a save from a second browser session. Recorded as NOT RUN in
   production; executable only in staging.
@@ -466,7 +466,7 @@ flag back to `false`; there is no data migration and no schema change.
    consumption line and a by-product, save; then resave unchanged (must produce no writes
    beyond the header) and confirm the detail reload shows the same numbers.
 6. **After each step**, check: the "new changes — click to refresh" prompt still appears
-   in a second browser session (the `vt_*` stamp), and `ERP_Perf_Log` shows lower
+   in a second browser session (the `tv_*` stamp), and `ERP_Perf_Log` shows lower
    `sheet_reads` with no error-rate change.
 7. **Rollback** at any point: set the module flag (or `FAST_SAVE_CORE_`) back to `false`.
    The legacy path underneath was never modified.

@@ -1,17 +1,18 @@
 # Plan — Read & View Modularization (`Core_FastRead.js` + `Core_ViewEngine.js`)
 
-**Revision 3 — FINALISED.** Rev 1 was rejected in review; Rev 2 closed every blocking and
-major finding; Rev 3 records the owner's four decisions (§1.1) and closes the open items
-(§9). No decision remains outstanding, so implementation may begin on the review order below.
+**Revision 4 — review round 2 incorporated.** Rev 3 recorded the owner's decisions. Rev 4
+closes the three remaining architecture blockers (document-read cost model, chunk-generation
+concurrency, noncontiguous reads and cache identity) and the documentation corrections listed
+in §0.2.
 
-Status: **plan approved for implementation.** No code has been written for this programme yet;
-the only code in the repository relating to it is `Core_FastSave.js` from the separate
-write-side programme. Implementation starts at §7 step 1.
+Status: **RV-1.1 (isolated defect fix) approved and applied. RV-2 onward NOT approved.**
+Nothing downstream of RV-1.1 may start until the flags and engines in this plan are reviewed
+against Rev 4.
 
 **Review order before implementation** (owner-facing):
 
 1. `Plan_Read_View_Modularization.md` — this document, in full.
-2. `READ_VIEW_MODULARIZATION_RESULTS.md` — the change ledger: retraction protocol, the eight
+2. `READ_VIEW_MODULARIZATION_RESULTS.md` — the change ledger: retraction protocol, the nine
    audit test-run records, and the write-side commit cross-reference.
 3. `FAST_SAVE_ENGINE_MULTI_MODULE_EXECUTION_PLAN.md` §7.1-7.2 — the write-side status and the
    pending owner runbook, because the read migration touches the same handlers and shares the
@@ -43,6 +44,25 @@ and `FAST_SAVE_ENGINE_MULTI_MODULE_EXECUTION_PLAN.md` (its plan, status, runbook
 
 Unchanged and retained: generic business-agnostic cores, all flags default `false`, typed
 errors mapped by the module, unknown-stamp-as-miss, and Sales-first rollout.
+
+### 0.1 What changed from Rev 3 (review round 2 closure)
+
+| # | Finding | Verdict | Rev 4 position |
+|---|---|---|---|
+| B1 | §5.3 claimed a child section costs one call and scans only the matched rows | **Impossible without an index.** `fsReadRowsByParent_` reads `getRange(2, …, lastRow-1, …)` and filters in memory (`Core_FastSave.js:311-312`) | A declared **`PARENT_SCAN` document strategy** with full-table `rowsScanned` and real `cellsRead`; §5.3 rewritten; DoD corrected (§5.3, §7.4) |
+| B2 | Stable chunk keys with no generation suffix | **Reintroduces torn reads.** The real helper publishes immutable generation-specific chunks before switching the manifest pointer (`Code.js:1595`, `1711-1732`), proven by `optimization_chunk_cache.js:49` | Adopt the existing contract exactly: stable logical key, **fresh immutable generation per publication**, generation recorded in the manifest, old generation removed after publication, existing concurrency/integrity tests retained (§5.4) |
+| B3 | Noncontiguous page reads and cache identity underspecified | **Correct.** Per-row `getValues()` would blow the budget; the hash was ambiguous | `NARROW_SCAN_PAGE` must use `Sheets.Spreadsheets.Values.batchGet` or coalesced contiguous spans, with type normalisation documented (§5.2); cache identity is **SHA-256 truncated to ≥128 bits** plus a manifest identity fingerprint verified on every hit (§5.4) |
+
+### 0.2 Documentation corrections applied in Rev 4
+
+| Correction | Where |
+|---|---|
+| L1 retraction requires a deploy (flags live in source), matching the ledger | §3.3.1 |
+| The "legacy paths are never modified" rule gains an explicit, owner-approved exception for RV-1.1 | §3.1 rule 4 |
+| RV-1.1 needs a focused defect regression test, **not** zero-diff shadow evidence; and shadow compare's invocation of the modern reader while flags are `false` is specified so evidence-before-enablement is not circular | §7.5 |
+| Stamp prefix is `tv_`, not `vt_` | §5.5, §3.2 G6 |
+| KEYSET is experimental until measured, with strict preconditions and a latency comparison against one narrow-column scan | §5.2 |
+| Entry-storm claim retracted: per-execution write limits do not bound concurrent executions or distinct document keys; eviction is an accepted performance risk and the first cache targets bounded-cardinality reference bundles | §5.4 |
 
 ---
 
@@ -96,6 +116,9 @@ reduction); any schema/header/sheet change; any change to the write path
 3. Flags, all default `false`: `FAST_READ_CORE_`, `FAST_VIEW_CORE_`, and one per module
    (`SALES_FAST_READ_`, `MFG_FAST_READ_`, `PURCHASE_FAST_READ_`, `RETURNS_FAST_READ_`).
 4. Legacy paths are never modified; a flag off selects legacy. Rollback is a flag flip.
+   **Explicit exception: RV-1.1** (DEC-1) is an owner-approved, intentional defect correction
+   in a legacy handler. It is not a read migration, it carries no flag, and it is documented
+   as a behaviour change in its own Change Record — not as legacy equivalence.
 5. No production writes during development or verification; measurements come from existing
    `ERP_Perf_Log` history and read-only diagnostics.
 
@@ -141,7 +164,7 @@ is a new record that references the old one.
 
 | Level | Action | Scope | Reversible how |
 |---|---|---|---|
-| L1 — runtime | Set the module flag (or master flag) back to `false` | One module, no deploy of source | Flip the flag again; the legacy path was never modified |
+| L1 — runtime | Set the module flag (or master flag) back to `false`. **This is a source edit plus a deploy** — the flags live in source in this project, so L1 is not deploy-free; it is merely the smallest possible change | One module | Flip the flag again and redeploy; the legacy path was never modified |
 | L2 — source | `git revert <sha>` on the change commit, or `git revert <first>..<last>` for a step's range | Source only | `git revert` of the revert, or re-apply the original commit |
 | L3 — cache | Cache entries are namespaced (`fr1_…`). They expire on their own TTL; a specific key can be dropped with `frCacheDrop_(logicalKey)` when the key is known | Cache only, never stored data | Nothing to restore — cache is derived |
 
@@ -288,8 +311,8 @@ Independent file (D1), `fr*` prefix, no business tokens, no Arabic, never `getDa
 | Strategy | Mechanism | Applies when | Honest cost |
 |---|---|---|---|
 | `APPEND_WINDOW` | read the last `limit` rows by **row position** (`getLastRow()`), never reading the id column | table is proven append-ordered, no filters, no offset beyond the end, page 1 only | `serviceCalls` 1-2; `rowsScanned` ≈ limit. **This is the only strategy where a page reads a page.** |
-| `NARROW_SCAN_PAGE` | one narrow read of the sort/filter columns → compute matching row numbers → one read of the page's rows in those positions | filtered lists, arbitrary offsets, totals | `serviceCalls` 2-3; `rowsScanned` = table rows; `cellsRead` ≈ rows × narrowCols + limit × pageCols |
-| `KEYSET` | cursor is the last `id`; locate it with a binary search over the id column (bounded single-cell reads), then read forward | large offsets, newest-first, monotonic id | `serviceCalls` ≈ 2·log₂(rows) + 1; `cellsRead` small; **preferred over offset paging for deep pages** |
+| `NARROW_SCAN_PAGE` | one narrow read of the sort/filter columns → compute matching row numbers → fetch the page's rows. **Noncontiguous matches MUST be fetched with `Sheets.Spreadsheets.Values.batchGet` (one call, many ranges) or coalesced into contiguous spans; per-row `getValues()` calls are forbidden** — they would violate the budget | filtered lists, arbitrary offsets, totals | `serviceCalls` 2-3 (1 narrow scan + 1 `batchGet`; a span-coalescing fallback may need one per span and must report it); `rowsScanned` = table rows; `cellsRead` ≈ rows × narrowCols + limit × pageCols |
+| `KEYSET` (**experimental until measured**) | cursor is the last `id`; locate it by binary search over the id column, then read forward. **Preconditions: the row order is strictly monotonic by `id`, duplicate and blank `id` behaviour is defined and tested, and a measured latency comparison against a single narrow-column scan shows it wins** — at 50 000 rows it is ~33 single-cell service calls, which may be worse than one scan | large offsets, newest-first, monotonic id | `serviceCalls` ≈ 2·log₂(rows) + 1; `cellsRead` small; **not default** — the strategy declaration must justify it with a measurement |
 | `FULL_SCAN` | declared fallback: read everything, filter in memory | unsupported queries, option/dropdown generation, totals over rare filters | `serviceCalls` ≥ 1; `rowsScanned` = all rows; declared, measured, never silent |
 
 Rules:
@@ -301,36 +324,56 @@ Rules:
 3. Totals are computed from the strategy's scan, and reported as `rowsScanned` — a
    `FULL_SCAN` total is honest about its cost.
 4. The MFG filter-option bundle is explicitly classified `FULL_SCAN` over narrow columns
-   (see §7.7): it needs whole-set knowledge and will be priced as such, not hidden.
+   (see §7 step 7): it needs whole-set knowledge and will be priced as such, not hidden.
+5. **Type normalisation.** A value read through the Advanced Sheets API can arrive as a date
+   serial where `Range.getValues()` returns a `Date` object (and vice versa). Every strategy
+   that mixes the two APIs must normalise to the endpoint's canonical contract type before
+   comparison or projection, and the canonical contract (§6.1) declares which representation
+   is authoritative. This is a correctness requirement, not a formatting preference: it is
+   also the exact place where a shadow-compare diff would otherwise be pure noise.
 
 ### 5.3 Document fetcher
 
 ```js
 fastFetchDocument_({
   scopeId,
-  parent:   { sheetName, keyHeader, keyValue, columns },
-  children: [ { alias, sheetName, parentHeader, parentKey, columns, orderBy } ]
-}) -> { parent, children: { alias: rows }, metrics, stampSig }
+  parent:   { sheetName, keyHeader, keyValue, columns, strategy },
+  children: [ { alias, sheetName, parentHeader, parentKey, columns, orderBy, strategy } ]
+}) -> { parent, children: { alias: rows }, metrics, stampSig, identity }
 ```
 
-- `serviceCalls` = 1 per section (parent + each child); child rows are read by host range, so
-  `rowsScanned` is the matched rows, not the table.
+**Document-read strategies (closes blocker B1).** A sheet range cannot locate rows by foreign
+key without scanning something, and no persisted index exists under D3/D7. Every section must
+therefore declare one of:
+
+| Strategy | Mechanism | Honest cost |
+|---|---|---|
+| `PARENT_SCAN` (default) | one narrow projection read of the FK column plus the wanted columns over rows 2..lastRow, filtered in memory. This is what `fsReadRowsByParent_` already does (`Core_FastSave.js:311-312`) | `serviceCalls` 1; **`rowsScanned` = table rows**; `cellsRead` = rows × (FK + projected columns) |
+| `PARENT_FK_INDEX_THEN_FETCH` | read the FK column only, compute matching row numbers, then fetch those rows in **coalesced contiguous spans** (one `batchGet` per span) | `serviceCalls` 2 (1 + one per contiguous span); `rowsScanned` still = table rows; `cellsRead` smaller (FK column + matched rows only) |
+| `FULL_SCAN` | declared fallback, whole table, filtered in memory | declared and measured |
+
+Rules:
+
+- **No strategy claims matched-row-only scanning.** Until a real index exists, `rowsScanned` is
+  a table scan for every strategy; only `cellsRead` differs. The metrics must say so.
 - Ordering is applied in memory over rows already fetched.
-- No cache parameter in this revision: caching is opt-in per endpoint only after the
-  sequence in §7 reaches step 5.
+- No cache parameter in this revision: caching is opt-in per endpoint only after the sequence
+  in §7 reaches step 5.
 
 ### 5.4 Cache model (closes findings 2 and 4)
 
 | Item | Rev 2 |
 |---|---|
-| Logical key | **Stable and fully hashed**: `fr1_<hash32(scopeId|kind|docKey|payloadVersion)>`, short and fixed-length, well inside the 250-character key limit |
+| Logical key | **Stable, fully hashed**: `fr1_<sha256(scopeId + kind + docKey + payloadVersion) truncated to ≥128 bits>` (hex, fixed length, well inside the 250-character key limit). A 32-bit hash is **not** acceptable for tenant/document isolation |
 | `stampSig` | **Inside the manifest**, never in the key — a mutation must not mint a new logical entry |
-| Generation | **Stable generation** (no generation suffix), so a rewrite reuses the same chunk keys and overwrites the previous value |
+| Generation | **Fresh, immutable generation per publication**, exactly as the existing helper does (`chunkedCacheGeneration_` → `chunkedCacheKeys_(key, generation)`, `Code.js:1711-1732`). A stable logical key with generation-specific chunk keys is what makes publication atomic. **Never overwrite a live chunk key in place** — that is the torn-read bug this contract exists to prevent |
+| Identity | the manifest carries an **identity fingerprint** over scopeId, kind, document key and payload version, in addition to the existing `g`/`n`/`bytes`/`h` fields. **Every hit verifies identity and stamp, not just the stamp**; a mismatch is a miss |
 | Publication | chunks first, then the manifest (`putChunkedCache_`, `Code.js:1702-1735`); then a best-effort removal of chunk indices ≥ the new chunk count, so a smaller generation cannot leave stale trailing chunks |
 | Size ceiling | **≤5 chunks (~450 KB)** per entry. Anything larger is refused (`cache: 'refused-size'`, `FR_CACHE_TOO_LARGE`) and read directly. Multi-megabyte payloads are out of scope by design |
-| What may be cached | reference bundles and single documents only. **Table-sized indexes are explicitly not cached** (they are computed per request with `NARROW_SCAN`, or avoided by strategy) |
-| Capacity discipline | the engine never writes more than 8 cache entries per execution, and never caches a payload whose own size exceeds the ceiling — an entry storm cannot exhaust the shared script cache |
-| Item budget | treated as scarce: Google documents ~1 000 items, 100 KB per key, and expiry only as a suggestion. With ≤5 chunks an entry costs ≤6 items; a bounded number of live logical keys keeps the engine far below the cap while leaving room for the `vt_*` table stamps that share the same cache |
+| What may be cached | **bounded-cardinality reference bundles first** (option lists, small reference maps). Single documents come later, at step 5, and only while they fit the ceiling. Table-sized indexes are never cached |
+| Capacity discipline | the engine bounds its own work (≤8 cache writes per execution), but **per-execution limits do not bound concurrent executions or the number of distinct document keys**. The earlier claim that "an entry storm cannot exhaust the cache" is **retracted**. Eviction is an accepted performance risk; the mitigation is caching the smallest, most-reused payloads first |
+| Item budget | treated as scarce: Google documents ~1 000 items, 100 KB per key, and expiry only as a suggestion. The `tv_*` table stamps share this cache and must not be crowded out |
+| Concurrency tests | the existing interleaving, invalidation-during-build, shrink, integrity and partial-eviction tests in `tools/verify/optimization_chunk_cache.js` are retained and extended to cover the read engine's key namespace |
 | No write-through patching | **removed.** A write stamps; the next read misses and rebuilds (§5.5) |
 
 ### 5.5 Consistency protocol (closes finding 3)
@@ -344,8 +387,9 @@ exactly that — never "guaranteed identical".
 4. Publish the cache entry **only if** both reads succeeded, are identical, and cover every
    table in the payload. Any mismatch or missing stamp ⇒ no publication, and the payload is
    returned as fresh, uncached data with `cacheOutcome: 'refused-unknown-stamp'`.
-5. A read checks the cached manifest's `stampSig` against the current stamps; mismatch or
-   missing ⇒ **miss**.
+5. A read checks the cached manifest's **identity fingerprint** (scopeId, kind, document key,
+   payload version) **and** its `stampSig` against the current stamps; either mismatch, or a
+   missing stamp, ⇒ **miss**.
 6. No cache read in an execution that has already written (`_recordCacheDisabled_`,
    `Code.js:619-620`) — the dirty-read window.
 7. Documented residual risks, stated in the file header: manual sheet edits, formulas,
@@ -445,7 +489,7 @@ environment and result. A step whose record is missing or whose runs are unrecor
 | `APPEND_WINDOW` page (unfiltered, append-ordered) | `serviceCalls` ≤ 2; `rowsScanned` ≤ limit + small constant |
 | `NARROW_SCAN_PAGE` page | `serviceCalls` ≤ 3; `cellsRead` declared and ≤ rows × narrowCols + limit × pageCols |
 | `KEYSET` deep page | `serviceCalls` ≤ 2·log₂(rows) + 1 |
-| Document fetch | `serviceCalls` = 1 per section; `rowsScanned` = matched rows |
+| Document fetch | Per the declared strategy (§5.3): `PARENT_SCAN` = 1 `serviceCalls` with **`rowsScanned` = table rows** and `cellsRead` = rows × (FK + projected columns); `PARENT_FK_INDEX_THEN_FETCH` = 2+ calls with the same `rowsScanned` but smaller `cellsRead`. Matched-row-only scanning is **not** claimed |
 | Cache | small payloads only; ≤5 chunks; refused-size and refused-unknown-stamp paths exercised by tests |
 | Consistency | publication requires pre/post stamp equality; a write in the execution blocks cache reads; unknown stamp ⇒ miss |
 | Payload | measured `bytesOut`; ≥40 % reduction on migrated endpoints against the canonical contract |
@@ -467,6 +511,18 @@ environment and result. A step whose record is missing or whose runs are unrecor
   sufficient on their own for the items above.
 - Production acceptance remains **NOT RUN** until the owner runs it; live execution only on a
   staging copy with explicit authorisation.
+- **Evidence-before-enablement is not circular.** `fr_shadow_compare` invokes the modern reader
+  **directly, by function reference**, for the duration of the comparison — it does not depend
+  on the module flag being on. The module flag only decides which reader serves *users*. So a
+  comparison can prove the modern reader correct while every user still runs the legacy path,
+  and only then is the flag turned on.
+- **RV-1.1 is different by construction.** It is an intentional defect correction, so a
+  zero-diff comparison against the legacy behaviour is the wrong instrument (the diff is the
+  point). Its evidence is a **focused defect regression test**: the found-invoice case
+  (all four fields populated) and the missing-invoice case (`invoice` stays null and the page
+  degrades exactly as before), asserted against the *new* canonical contract, plus a
+  confirmation that the client consumes those fields
+  (`Company_ValleyFoods_SalesReturns.html:176-196`).
 
 ---
 
