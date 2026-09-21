@@ -1249,6 +1249,106 @@ review finding rather than a surprise.
 
 ---
 
+## 5.1 Workstream: MO work-op pause and row shape (owner-requested, not read/view migration)
+
+Appended here by owner instruction. Same record discipline (G9): change records, test
+records, retraction recipes, no raw business values.
+
+### WO-1.1 — pause-aware `actual_hours`, editable pause, flat one-line work-op rows
+- Date / Commits:
+  - `e2d7086` — server: formula + dirty-row recalc + refusals (+ `tools/verify/mo_workop_pause_formula.js`)
+  - `d7f4a0e` — MO view page: flat rows, editable pause, live preview, inline error, focus, icons
+  - `…` (list page commit, message: `feat(mo-list): pause column and editable pause in the manual time editor`)
+- Files (anchors are function names, not line numbers, because the file moves):
+  - `Company_ValleyFoods_Actions.js`: `mfgWorkCenterFormulaMap_`, new `mfgColLetter_` /
+    `mfgHeaderColLetter_`; `saveValleyMfgOrder_` (pre-mutation validation block, work-op loop
+    `wcDirty`, formula reinstall loops); `saveValleyMfgWorkOp_` (pause validation + edit map);
+    `controlValleyMfgWorkOp_` (stop branch).
+  - `Company_ValleyFoods_MfgOrderView.html`: load map, `workOpHours_`, `recalcWorkOpHours_`,
+    `setWorkOp`, `workOpValidationError_`, `drawWorkOps`, `redrawWorkOpsKeepingFocus_`,
+    `WORKOP_COLS`, save-time guard, tab labels, cost tiles, status labels.
+  - `Company_ValleyFoods_MfgOrders.html`: work-op table header + row, `toggleWorkOpManualEdit`.
+- What changed (behaviour terms):
+  1. `actual_hours` is now `ROUND((end − start) × 24 − pause, 2)` — the same arithmetic the
+     clock path already used, so the sheet, the clock and the screen finally agree.
+  2. The pause is **editable** on the MO view page (decimal hours, 2dp, `step 0.01`,
+     `inputmode=decimal`) and in the list page's manual time editor. It was previously
+     display-only, and was dropped from the view page's reload map entirely.
+  3. The work-op row is **one line per work centre**: work centre | status | start | end |
+     pause | actual hours | notes | cost | total | tools | remove. Tab walks it left to right.
+  4. A pause greater than the worked span is **refused with an inline message** on the view
+     page (and blocked before save), refused by the server in both save paths and in the clock
+     stop path. Never a negative `actual_hours`.
+  5. **Only rows whose formula inputs changed** (start, end, pause, work centre) have their
+     cost formulas reinstalled; new rows always do. Re-saving an order no longer recalculates
+     every work-op row it contains.
+  6. Decorative glyphs removed from both pages (gear, box, recycle, flask, scale, money, lock,
+     check, play/pause/stop, pencil, clipboard). `✕` on the remove button is retained and
+     remains keyboard-reachable, per the owner's confirmation.
+- Why: owner request — the pause could not be entered, the auto-calculated hours ignored it,
+  the row shape was confusing, Tab did not flow, and the icons looked unprofessional.
+- Flag state before → after: none involved. This workstream adds no flag and changes no
+  `*_BATCH_WRITES_` / `FAST_*` switch; all remain `false`.
+- **Write-path freeze exception (owner-approved).** This changes `mfgWorkCenterFormulaMap_`,
+  which the read/view plan had frozen. Recorded here as an explicit exception, authorised by
+  the owner in the same message that requested the feature.
+- Behaviour if reverted: `git revert` of the three commits restores the pause-free formula
+  (`=(H−G)*24`), the display-only pause, the stacked row, and the icons. Rows already
+  recalculated by the new formula keep their stored values (a revert does not recompute
+  them) — that is the one non-symmetrical part of a revert.
+- Retraction recipe: L2 per commit, newest first:
+  `git revert <list-page> d7f4a0e e2d7086`. L1 does not apply (no flag). L3 does not apply
+  (no cache is involved).
+- Metrics observed: not performance work; no read/byte counters apply. Correctness metrics:
+  the generated formula string and the dirty-row set are asserted by TR-12.
+- Residual risk (what this does NOT prove):
+  - The save path itself is not executed by any harness (no VM harness exists for the MO
+    save); its refusals and dirty-row logic are source-asserted only.
+  - Rows whose stored times are blank cause the save to write `new Date()` for the missing
+    side (pre-existing behaviour), which makes such a row count as dirty on every save.
+  - Historical rows are untouched until edited, by design — so the sheet will contain both
+    formula generations for a while, and an old row's stored hours remain pause-free until
+    someone edits it. This is the owner's chosen semantics (answer 6), not an oversight.
+- Test runs: TR-12 (executable formula-generator test), TR-13 (both pages' inline scripts
+  parse after the edits).
+
+### TR-12 — Work-op formula generator (executable)
+- When: 2026-09-21
+- Environment: local source, **executable** node script (no data, no VM harness for the save)
+- Command: `node tools/verify/mo_workop_pause_formula.js`
+- Purpose: prove the generated formula subtracts the pause, rounds to 2dp, derives the pause
+  column from the header (not hardcoded), and degrades safely when the column is absent
+- Result: **PASS** — `=ROUND((H7-G7)*24-N(N7),2)` on the live header order; `=ROUND((H3-G3)*24-N(M3),2)`
+  when the same header sits in a different column; `=ROUND((H9-G9)*24,2)` when absent;
+  column letters `A/N/Z/AA` correct; the save path is asserted to contain the refusal and the
+  `wcDirty`/`wcFormulaUids` logic
+- Evidence: commit `e2d7086`
+- Not covered: the save path's runtime behaviour (no VM harness), and the client's arithmetic
+  (mirrored by hand, not executed)
+
+### TR-13 — Page inline scripts parse after the edits
+- When: 2026-09-21
+- Environment: local source, syntax-only
+- Command: extract each `<script>` block, neutralise `<?…?>` template scriptlets, `node --check`
+- Purpose: catch a broken edit in either page's inline JS
+- Result: **PASS** — `Company_ValleyFoods_MfgOrderView.html` and `Company_ValleyFoods_MfgOrders.html`
+- Evidence: this record's commit; also a mojibake scan (0 replacement characters) and a BOM
+  check on both files, because one edit pass used a file-level replace
+- Not covered: rendering, Tab behaviour, and the inline error's appearance — those need the
+  owner's staging pass
+
+### TR-14 — Owner staging pass (NOT RUN)
+- Environment: staging copy, owner-executed
+- Purpose: create a new MO with two work ops, enter start/end on both, edit one, and confirm
+  (a) the pause is editable and the hours update live, (b) saving stores
+  `(end−start)×24 − pause` for the edited row only, (c) the untouched row keeps its previous
+  formula and value, (d) a pause larger than the span shows the inline message and blocks the
+  save, (e) Tab flows across the row and the ✕ remains reachable
+- Result: **NOT RUN** — requires the owner's staging copy; nothing has been deployed
+- Not covered: everything above
+
+---
+
 ## 6. Cross-reference — write-side programme (pre-G9, summarised)
 
 Recorded here so the whole read+write programme is traceable from one file. These commits
