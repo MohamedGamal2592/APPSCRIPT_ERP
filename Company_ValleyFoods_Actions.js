@@ -5528,7 +5528,21 @@ const ValleyFoodsHRModules = (function () {
     var patch = { active_line_generation: generation, last_request_id: requestId,
       operation_hash: opHash, operation_state: 'complete' };
     if (code !== crit) patch.Code = code;
-    if (!patchRowByCriteria_(sheet, 'Code', crit, patch)) throw new Error('عملية الشراء غير موجودة');
+    if (fastSaveOnFor_(PURCHASE_BATCH_WRITES_)) {
+      /* The engine throws a typed FAST_SAVE_MISSING_KEY instead of returning
+         false, so the refusal is translated back into this operation's own
+         message — the user sees exactly what they saw before. */
+      var _genPatch = {};
+      _genPatch[String(crit)] = patch;
+      try {
+        fsPatchRowsByKey_(dbId, sheet, 'Code', _genPatch);
+      } catch (eGen) {
+        if (eGen && eGen.code === 'FAST_SAVE_MISSING_KEY') throw new Error('عملية الشراء غير موجودة');
+        throw eGen;
+      }
+    } else if (!patchRowByCriteria_(sheet, 'Code', crit, patch)) {
+      throw new Error('عملية الشراء غير موجودة');
+    }
     try { purchasingCleanupInactiveGenerations_(dbId, code, generation, o.cleanupOld || ''); }
     catch (cleanupErr) { try { console.log('purchasing generation cleanup deferred: ' + cleanupErr.message); } catch (ignore) {} }
     return true;
@@ -5759,8 +5773,18 @@ const ValleyFoodsHRModules = (function () {
     var useStaged = !!(reqId && purchasingLineMarkersReady_(lineHeaders));
     var generation = useStaged ? purchasingGenerationId_(reqId) : '';
     if (!useStaged) {
-      try { patchRowByCriteria_(getSheet_(PURCHASING_COSTING_SHEET, dbId), 'Code', code, { version: __linesHdrVer + 1 }); } catch (eVer) {}
-      deleteRowsByCriteria_(lineSheet, 'code', originalCode && originalCode !== code ? originalCode : code);
+      try {
+        if (fastSaveOnFor_(PURCHASE_BATCH_WRITES_)) {
+          var _verPatch = {};
+          _verPatch[String(code)] = { version: __linesHdrVer + 1 };
+          fsPatchRowsByKey_(dbId, getSheet_(PURCHASING_COSTING_SHEET, dbId), 'Code', _verPatch);
+        } else {
+          patchRowByCriteria_(getSheet_(PURCHASING_COSTING_SHEET, dbId), 'Code', code, { version: __linesHdrVer + 1 });
+        }
+      } catch (eVer) {}
+      var _lineKeyDrop = originalCode && originalCode !== code ? originalCode : code;
+      if (fastSaveOnFor_(PURCHASE_BATCH_WRITES_)) fsDeleteRowsByKeys_(dbId, lineSheet, 'code', [_lineKeyDrop]);
+      else deleteRowsByCriteria_(lineSheet, 'code', _lineKeyDrop);
     } else if (!ownInFlight || String(header.operation_hash || '') !== opHash) {
       /* First touch of this request: bump the version and stamp ownership. A
          resumed attempt skips both — they already happened. */
@@ -5990,7 +6014,15 @@ const ValleyFoodsHRModules = (function () {
     } else if (isEdit) {
       _oldPur = rows.find(function(r){ return String(r.Code)===String(originalCode); }) || null;
       /* Row-edit repair (5.4): formula-safe patch for the purchase header. */
-      patchRowByCriteria_(sheet, 'Code', originalCode, record);
+      if (fastSaveOnFor_(PURCHASE_BATCH_WRITES_)) {
+        /* One key-column read instead of re-reading all 46 columns of the
+           costing sheet to locate the row. */
+        var _hdrPatch = {};
+        _hdrPatch[String(originalCode)] = record;
+        fsPatchRowsByKey_(dbId, sheet, 'Code', _hdrPatch);
+      } else {
+        patchRowByCriteria_(sheet, 'Code', originalCode, record);
+      }
       try{ var _newPur = Object.assign({}, _oldPur||{}, record); logHistory_(dbId, PURCHASING_COSTING_SHEET, _oldPur&&_oldPur.record_uid ? _oldPur.record_uid : ('update_'+PURCHASING_COSTING_SHEET+'_'+originalCode), originalCode, (user&&user.email)||'', 'update', _newPur, _oldPur) }catch(e){}
     } else {
       record.unique_id = uid16_();
@@ -6023,10 +6055,11 @@ const ValleyFoodsHRModules = (function () {
        internal callers without a request ID). */
     var useStaged = !!(reqId && purchasingLineMarkersReady_(lineHeadersLive));
     var generation = useStaged ? purchasingGenerationId_(reqId) : '';
-    var lineKey = (isEdit && code !== originalCode) ? originalCode : code;
-    if (!useStaged) {
-      deleteRowsByCriteria_(lineSheet, 'code', lineKey);
-    }
+      var lineKey = (isEdit && code !== originalCode) ? originalCode : code;
+      if (!useStaged) {
+        if (fastSaveOnFor_(PURCHASE_BATCH_WRITES_)) fsDeleteRowsByKeys_(dbId, lineSheet, 'code', [lineKey]);
+        else deleteRowsByCriteria_(lineSheet, 'code', lineKey);
+      }
     var lineMaps = [];
     (lines || []).forEach(function (l) {
       var qty = Number(l.qty) || 0;
@@ -6198,8 +6231,16 @@ const ValleyFoodsHRModules = (function () {
     var _oldDelPur = getAllRecords_(dbId, PURCHASING_COSTING_SHEET).find(function(r){ return String(r.Code)===String(code); }) || null;
     var _oldDelUid = _oldDelPur ? (_oldDelPur.record_uid || ('del_'+PURCHASING_COSTING_SHEET+'_'+code)) : ('del_'+PURCHASING_COSTING_SHEET+'_'+code);
     try{ logHistory_(dbId, PURCHASING_COSTING_SHEET, _oldDelUid, code, (user&&user.email)||'', 'delete', null, _oldDelPur) }catch(e){}
-    deleteRowsByCriteria_(getSheet_(PURCHASING_COSTING_SHEET, dbId), 'Code', code);
-    deleteRowsByCriteria_(getSheet_(PURCHASING_LINE_SHEET, dbId), 'code', code);
+    if (fastSaveOnFor_(PURCHASE_BATCH_WRITES_)) {
+      /* Each legacy call re-reads the whole table to find its rows; these
+         resolve from one column read and delete every matching row in one
+         Sheets batch call. */
+      fsDeleteRowsByKeys_(dbId, getSheet_(PURCHASING_COSTING_SHEET, dbId), 'Code', [code]);
+      fsDeleteRowsByKeys_(dbId, getSheet_(PURCHASING_LINE_SHEET, dbId), 'code', [code]);
+    } else {
+      deleteRowsByCriteria_(getSheet_(PURCHASING_COSTING_SHEET, dbId), 'Code', code);
+      deleteRowsByCriteria_(getSheet_(PURCHASING_LINE_SHEET, dbId), 'code', code);
+    }
     vfFlush_();   /* the balance the client reads back must include this write */
     return { status: 'success', message: 'تم حذف عملية الشراء' };
   }
