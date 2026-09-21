@@ -396,16 +396,80 @@ byte-identical from the user's point of view.
 | Stage | Deliverable | Flags |
 |---|---|---|
 | 0 | `Core_FastSave.js` with Layers 1-2, all flags OFF, primitive self-checks documented | all false |
-| 0 status | **DONE** — commit `2014df1`, 546 lines, `node --check` OK, decoupling gate clean, no existing file modified, no caller wired yet. Shipped inert: `FAST_SAVE_CORE_ = false` makes every entry point refuse to run. | all false |
+| 0 status | **DONE** — commit `2014df1`, 546 lines, `node --check` OK, decoupling gate clean, no existing file modified. Shipped inert: `FAST_SAVE_CORE_ = false` makes every entry point refuse to run. | all false |
 | A | Sales audit + adapter (Phase 1 §3.1, Phase 2 §4.1) | `SALES_BATCH_WRITES_` false |
 | B | Returns audit + adapter (§3.2, §4.2) | `RETURNS_BATCH_WRITES_` false |
 | C | Purchasing audit + adapter (§3.3, §4.3) | `PURCHASE_BATCH_WRITES_` false |
 | D | MFG adapter on the same engine (`MFG_BATCH_WRITES_`) | false |
 | E | Backlog: class B single-record sites, TopChemical/TopLight modules | — |
 
-Stage 0 is a prerequisite for A-D. A, B and C are independent of each other and may be
-executed in any order, but the recommended order is Returns → Sales → Purchasing because
-risk increases with patch/delete/composite-key complexity.
+## 7.1 Implementation status (as built)
+
+All four adapters are written, committed and shipped **with every flag false**. Nothing
+below changes behaviour until an owner flips flags.
+
+| Stage | Commit | What was actually migrated |
+|---|---|---|
+| 0 engine | `2014df1` | `Core_FastSave.js`: Layer 1 (`fsReadColumnValues_`, `fsKeyIndex_`, `fsReadBlockRows_`, `fsReadRowsByParent_`, `fsPatchRowsByNumber_`, `fsPatchRowsByKey_`, `fsAppendRowsBlock_`, `fsDeleteRows_`, `fsDeleteRowsByKeys_`) and Layer 2 (`fastSaveSections_`) |
+| flag block | `f439f58` | The four module switches plus `FAST_SAVE_CORE_`, all in the module file / engine respectively |
+| A sales | `869443b` | Invoice line-lookup + delete in one parent-scoped read and one batch delete; the whole `valley_sales_product_stock` reconciliation (block read, batched patch, batched delete, block append). Helpers: `salesFastReconcileAllocations_` |
+| B returns | `f439f58` | Full fast path `saveValleyReturnFast_`: 6 full-table object builds + one read *inside the item loop* become six narrow reads; the two appends go through `fastSaveSections_` |
+| C purchasing | `e4a2f0f` | `deleteValleyPurchasingCosting_` (both tables), the header patch, the `!useStaged` delete, the version-bump patch + line delete, and `purchasingActivateGeneration_` (typed-error → legacy message) |
+| D MFG | `4e4877e` | Outputs, consumption (both patch sites), work-ops, by-products: per-row patches become one batched patch per table; all four deletes become batched; the work-centre formula reinstall locates rows with one key-column read instead of `getDataRange()` |
+
+### Deliberately NOT migrated (recorded, not hidden)
+
+- **`reconcileValleyPurchasingReceipts_`** still patches one receipt per iteration
+  (bounded at 50, super-admin only, `dry_run` by default). Batching it would collapse the
+  per-receipt failure reporting into one call; the failure-path rewrite was not worth the
+  risk in this pass.
+- **Work-ops / by-products appends** stay on their existing Phase-8 block writes — they
+  were already one call per table, so the engine adds nothing.
+- **MFG receipt/uncertain-save machinery, generation protocol, deterministic UIDs, history
+  and cost stripping are untouched.** The engine only replaced the locate-and-write calls.
+- Class B single-record sites and the TopChemical/TopLight modules (Stage E backlog).
+
+### Equivalence notes that matter during review
+
+- The engine's key index is **first-match-wins** for patches (what the legacy
+  locate-then-write scan does) and **all-matches** for deletes (what the legacy
+  delete-every-match scan does). A hand-made duplicate key therefore behaves exactly as
+  it did before.
+- Sales and Returns read child rows with `fsReadRowsByParent_` / `fsReadBlockRows_`, so
+  no path materialises a whole table into record objects any more.
+- `preserveFormulas` is left at its default (true) everywhere the legacy path used
+  `patchRowByCriteria_`, and is explicitly `false` for the allocation table where the
+  legacy path wrote with `setValue()` and the table is script-owned.
+- Dates handed to a batched write are converted to the same local-wall-clock serial
+  `Range.setValues` stores, so a batched cell holds an identical value.
+
+## 7.2 How to test it (owner runbook)
+
+Nothing below has been executed by the assistant. Every step is reversible by setting the
+flag back to `false`; there is no data migration and no schema change.
+
+1. **Deploy** `Core_FastSave.js` and the updated `Company_ValleyFoods_Actions.js`
+   (clasp, by the owner). All flags false → expect **zero** behaviour change. Run the
+   normal flows once and confirm nothing regressed.
+2. **Returns first** (`RETURNS_BATCH_WRITES_ = true` together with `FAST_SAVE_CORE_ = true`).
+   Record one return, then a second on the same invoice that exhausts the remaining
+   quantity (the FIFO split), and one that should be refused for over-returning. The
+   refusal text and the refusal itself must be unchanged.
+3. **Sales** (`SALES_BATCH_WRITES_ = true`). Edit an invoice: change one allocation
+   quantity, add a batch, remove a batch, delete a line. Check: `unique_id` and
+   `created_at` of surviving allocation rows are unchanged, the changed quantity is
+   written, removed rows are gone, and the balance shown after save matches the sheet.
+4. **Purchasing** (`PURCHASE_BATCH_WRITES_ = true`). Save a new purchase, edit one,
+   delete one, and (super admin) run the reconciliator with `dry_run: false` on a single
+   old pending receipt.
+5. **MFG** (`MFG_BATCH_WRITES_ = true`). Open an order, change a quantity, add/remove a
+   consumption line and a by-product, save; then resave unchanged (must produce no writes
+   beyond the header) and confirm the detail reload shows the same numbers.
+6. **After each step**, check: the "new changes — click to refresh" prompt still appears
+   in a second browser session (the `vt_*` stamp), and `ERP_Perf_Log` shows lower
+   `sheet_reads` with no error-rate change.
+7. **Rollback** at any point: set the module flag (or `FAST_SAVE_CORE_`) back to `false`.
+   The legacy path underneath was never modified.
 
 ---
 
