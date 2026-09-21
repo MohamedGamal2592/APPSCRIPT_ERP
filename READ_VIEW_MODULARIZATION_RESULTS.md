@@ -29,7 +29,7 @@ Field names, hashes, types, counts, line numbers and bounded summaries only.
 | 4 | Sales document reads | `SALES_FAST_READ_` | **DONE** — both invoice readers behind declared document strategies (`RV-4.1`, TR-20); flag `false`; calls 17 vs ~14 legacy measured (win is cells 101 vs ~155), recorded as a trade-off |
 | 5 | Small-payload cache (stable key, stamp in manifest, pre/post validation) | `FAST_READ_CORE_` | **DONE** — `frCachedRead_` protocol + full chunk/identity/stamp suite (`RV-5.1`, TR-21/TR-22); adopted by both Sales document readers behind the flags |
 | 6 | DTO projection + permission tests | `FAST_VIEW_CORE_` | **DONE** — `Core_ViewEngine.js` + projection adopted by all three Sales readers (`RV-6.1`, TR-23); flag `false`; measured 69.3 % header / 50 % whole-response reduction |
-| 7 | MFG list + view (separate query design) | `MFG_FAST_READ_` | NOT STARTED |
+| 7 | MFG list + view (separate query design) | `MFG_FAST_READ_` | **IN PROGRESS** — sub-plan `Plan_MFG_Read_Design.md` committed first (`RV-7.0`); implementation not yet written |
 | 8 | Client phase | separate approval | OUT OF SCOPE |
 
 Flag states as of the last commit:
@@ -779,6 +779,28 @@ review finding rather than a surprise.
   - No deferred sections and no option-transmission claims exist in this step (§6.5): nothing
     here reduces what the client sends.
 - Test runs: TR-23.
+
+### RV-7.0 — MFG read sub-plan committed before any MFG code (DEC-4)
+- Date / Commit: 2026-09-21 / identified by message — `docs(rv-7): MFG read design sub-plan
+  (before any MFG code)`.
+- Step: 7a.
+- Files: `Plan_MFG_Read_Design.md` (new), `READ_VIEW_MODULARIZATION_RESULTS.md` (this record).
+- What changed (behaviour terms): nothing at runtime. The sub-plan now exists and is committed
+  **before** the MFG read code, which is what DEC-4 and the session prompt require.
+- Why: plan §1.1 DEC-4 and §7 step 7 (a reviewed sub-plan, not a step), because MFG's filters and
+  option bundles need whole-set knowledge and its state hash feeds the edit token the **write**
+  path depends on.
+- Flag state before → after: no flag exists yet for MFG; `MFG_FAST_READ_` is introduced by
+  RV-7.1. All existing flags remain `false`.
+- Behaviour if reverted: L2 only — the design document disappears; no runtime effect.
+- Retraction recipe: L2 `git revert <sha>`.
+- Metrics observed: none — the plan cites only measured numbers from earlier steps
+  (step 5: 0 sheet reads on a hit vs 17 calls / 101 cells cold).
+- Residual risk (what this does NOT prove): the plan is a design; it cannot prove the
+  implementation will honour it. Two commitments it makes are checkable and are recorded so they
+  can be audited: (a) the edit token stays legacy-computed in rev 1, and (b) the option bundles
+  are not re-cached. Both are asserted in RV-7.1's test runs.
+- Test runs: none (a document; `node --check` is not applicable to Markdown).
 
 ---
 
