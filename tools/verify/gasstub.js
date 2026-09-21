@@ -42,10 +42,17 @@ const RealDate = Date;
  * @param {object} [opts]
  * @param {number}  [opts.now]           starting clock, ms since epoch
  * @param {boolean} [opts.stubRefsCache] replace the real getRefsCached_
+ * @param {string[]} [opts.sources]      extra project files to load after Code.js
+ * @param {object} [opts.workbook]       a workbook stub from vf_workbook_stub.js.
+ *        When supplied, the REAL getSheet_/getSpreadsheet_/getHeaders_/
+ *        getAllRecords_ run against it (they need getParent/getSheetId/
+ *        getLastColumn, which the fixtures below do not implement), and the
+ *        sheet-touching leaf replacements are not installed.
  * @return {object} the harness
  */
 function createHarness(opts) {
   opts = opts || {};
+  const sources = SOURCES.concat(opts.sources || []);
 
   const H = {
     now: typeof opts.now === 'number' ? opts.now : 1700000000000,
@@ -177,54 +184,62 @@ function createHarness(opts) {
       Charset: { UTF_8: 'UTF_8' },
       sleep: function () {}
     },
-    LockService: { getScriptLock: function () { return { tryLock: function () { return true; }, releaseLock: function () {} }; } },
-    SpreadsheetApp: { openById: function () { throw new Error('stub: no spreadsheet'); } },
+    LockService: { getScriptLock: function () { return { tryLock: function () { return true; }, waitLock: function () {}, releaseLock: function () {} }; } },
+    SpreadsheetApp: opts.workbook ? opts.workbook.SpreadsheetApp : { openById: function () { throw new Error('stub: no spreadsheet'); } },
+    Sheets: opts.workbook ? opts.workbook.Sheets : undefined,
     ScriptApp: { getProjectTriggers: function () { return []; } },
-    Session: { getActiveUser: function () { return { getEmail: function () { return ''; } }; } }
+    Session: { getActiveUser: function () { return { getEmail: function () { return ''; } }; } },
+    Logger: { log: function () { H.logs.push(['logger'].concat(Array.prototype.slice.call(arguments)).join(' ')); } }
   };
   sandbox.globalThis = sandbox;
   const ctx = vm.createContext(sandbox);
   H.ctx = ctx;
 
   /* ── load the real sources ─────────────────────────────────────────────── */
-  SOURCES.forEach(function (f) {
-    const src = fs.readFileSync(path.join(ROOT, f), 'utf8');
+  sources.forEach(function (f) {
+    const p = path.isAbsolute(f) ? f : path.join(ROOT, f);
+    const src = fs.readFileSync(p, 'utf8');
     vm.runInContext(src, ctx, { filename: f });
   });
 
-  /* ── replace only the leaves that would touch a spreadsheet ────────────── */
-  function companiesSheet() {
-    const headers = ['company_unique_id', 'company_name_ar', 'company_name_en', 'company_sheet_link', 'enabled'];
-    const rows = H.companies.map(function (c) { return headers.map(function (h) { return c[h]; }); });
-    return {
-      __headers: headers.slice(),
-      getName: function () { return 'ERP_Companies'; },
-      getDataRange: function () { return { getValues: function () { return [headers.slice()].concat(rows.map(function (r) { return r.slice(); })); } }; }
+  /* ── replace only the leaves that would touch a spreadsheet ──────────────
+   * In workbook mode the real data layer runs instead: the workbook stub is
+   * complete enough for getSheet_/getHeaders_/getAllRecords_, and replacing
+   * them would hide exactly the code a harness exists to execute. */
+  if (!opts.workbook) {
+    function companiesSheet() {
+      const headers = ['company_unique_id', 'company_name_ar', 'company_name_en', 'company_sheet_link', 'enabled'];
+      const rows = H.companies.map(function (c) { return headers.map(function (h) { return c[h]; }); });
+      return {
+        __headers: headers.slice(),
+        getName: function () { return 'ERP_Companies'; },
+        getDataRange: function () { return { getValues: function () { return [headers.slice()].concat(rows.map(function (r) { return r.slice(); })); } }; }
+      };
+    }
+
+    function matrixSheet() {
+      H.reads.matrix++;
+      return {
+        __headers: H.matrix.headers.slice(),
+        getName: function () { return 'ERP_Pages_Matrix'; },
+        getDataRange: function () {
+          return { getValues: function () { return [H.matrix.headers.slice()].concat(H.matrix.rows.map(function (r) { return r.slice(); })); } };
+        }
+      };
+    }
+
+    ctx.getSheet_ = function (sheetName) {
+      if (sheetName === 'ERP_Companies') return companiesSheet();
+      if (sheetName === 'ERP_Pages_Matrix') return matrixSheet();
+      throw new Error('stub: getSheet_ has no fixture for ' + sheetName);
+    };
+    ctx.getSpreadsheet_ = function () { throw new Error('stub: getSpreadsheet_ is not available'); };
+    ctx.getHeaders_ = function (sheet) { return (sheet && sheet.__headers) ? sheet.__headers.slice() : []; };
+    ctx.getAllRecords_ = function (dbId, sheetName) {
+      if (sheetName === 'ERP_Users') { H.reads.users++; return H.users.map(function (u) { return Object.assign({}, u); }); }
+      return [];
     };
   }
-
-  function matrixSheet() {
-    H.reads.matrix++;
-    return {
-      __headers: H.matrix.headers.slice(),
-      getName: function () { return 'ERP_Pages_Matrix'; },
-      getDataRange: function () {
-        return { getValues: function () { return [H.matrix.headers.slice()].concat(H.matrix.rows.map(function (r) { return r.slice(); })); } };
-      }
-    };
-  }
-
-  ctx.getSheet_ = function (sheetName) {
-    if (sheetName === 'ERP_Companies') return companiesSheet();
-    if (sheetName === 'ERP_Pages_Matrix') return matrixSheet();
-    throw new Error('stub: getSheet_ has no fixture for ' + sheetName);
-  };
-  ctx.getSpreadsheet_ = function () { throw new Error('stub: getSpreadsheet_ is not available'); };
-  ctx.getHeaders_ = function (sheet) { return (sheet && sheet.__headers) ? sheet.__headers.slice() : []; };
-  ctx.getAllRecords_ = function (dbId, sheetName) {
-    if (sheetName === 'ERP_Users') { H.reads.users++; return H.users.map(function (u) { return Object.assign({}, u); }); }
-    return [];
-  };
   /* Code.js now contains the Firestore-backed system store. Keep the
      authority harness offline by replacing that leaf with the same fixtures
      used by the legacy Sheets compatibility path. */
@@ -244,7 +259,9 @@ function createHarness(opts) {
     return [];
   };
   ctx.noteMutation_ = function () {};
-  ctx.countSheetRead_ = function () {};
+  /* The real counter is kept in workbook mode: harnesses report the project's
+   * own sheet-read metric, not a stub's approximation of it. */
+  if (!opts.workbook) ctx.countSheetRead_ = function () {};
   ctx.ensureSystemWorkSheet_ = function () {
     if (H.ensureThrows) throw new Error('stub: ensureSystemWorkSheet_ failed');
     return { getName: function () { return 'ERP_system_work'; } };

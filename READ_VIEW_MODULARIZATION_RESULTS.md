@@ -23,7 +23,7 @@ Field names, hashes, types, counts, line numbers and bounded summaries only.
 | Step | Deliverable | Flag | Status |
 |---|---|---|---|
 | 0 | Audit (read-only) | — | **DONE** — records in §4 |
-| 1 | Freeze canonical response contracts; resolve/document anomalies | — | **IN PROGRESS** — `RV-1.1` applied (`815c6c7`); VM/staging evidence outstanding; DTO contracts not started |
+| 1 | Freeze canonical response contracts; resolve/document anomalies | — | **IN PROGRESS** — `RV-1.1` applied (`815c6c7`) and **closed with VM execution evidence** (`RV-1.2`, TR-12/TR-13; staging still NOT RUN); DTO contracts not started |
 | 2 | `Core_FastRead.js` primitives + metrics + parity guard | `FAST_READ_CORE_` (false) | NOT STARTED |
 | 3 | Sales list (`NARROW_SCAN_PAGE` / `KEYSET`, no caching) | `SALES_FAST_READ_` | NOT STARTED |
 | 4 | Sales document reads | `SALES_FAST_READ_` | NOT STARTED |
@@ -267,6 +267,78 @@ building the VM harness for VF server actions. Recon completed this session:
 - Test runs: TR-10 (guard passes on the fixed source), TR-11 (guard fails on the pre-fix
   source, i.e. the guard catches the defect it exists for).
 
+### RV-1.2 — VM harness for VF server actions; RV-1.1 closed with executable evidence
+- Date / Commit: 2026-09-21 / identified by message — `feat(rv-1): VM action harness and
+  RV-1.1 runtime regression test` (the RV-0.3 pattern: a record cannot contain its own SHA).
+- Step: 1 (harness, the step's first remaining action per the RV-0.6 carried-forward note).
+- Files (with line anchors):
+  - `tools/verify/vf_workbook_stub.js` (new) — fake workbook, sheets, ranges, A1 parsing and
+    the `Sheets.Spreadsheets.Values.batchGet/batchUpdate` and
+    `Sheets.Spreadsheets.batchUpdate` surfaces; every read/write/metadata/API call counted.
+  - `tools/verify/vf_action_harness.js` (new) — loads `Code.js` + `Core_FastSave.js` +
+    `Company_ValleyFoods_Actions.js` into one VM, seeds fixtures, dispatches through the
+    module's own `ValleyFoods.dispatch_` (`Company_ValleyFoods_Actions.js:504`).
+  - `tools/verify/gasstub.js` — extended only: `opts.sources` (extra sources, absolute paths
+    allowed), `opts.workbook` (when given, the REAL `getSheet_`/`getHeaders_`/
+    `getAllRecords_`/`countSheetRead_` run instead of the legacy fixture leaves), a
+    `waitLock` on the lock stub, and a `Logger` stub. Default behaviour with no options is
+    unchanged.
+  - `tools/verify/rv11_vm_invoice_return.js` (new) — the RV-1.1 defect regression test.
+  - `READ_VIEW_MODULARIZATION_RESULTS.md` (this record, RV-1.3, TR-12…TR-14).
+- What changed (behaviour terms): none, in production. A test-only harness now *executes*
+  a VF server action — real header resolution, real `getRange` reads, real record building,
+  real `getSheet_`/`getAllRecords_` — against fixture rows in-process, with no spreadsheet,
+  no network and no production data. With it, `get_valley_invoice_for_return` was executed
+  for both the found-invoice and missing-invoice cases.
+- Why: plan §7.5 (D6) makes executable evidence the standard for chunk publication, stamp
+  races, filtering, type fidelity and permission boundaries; RV-0.6 recorded that no harness
+  for VF server actions existed and that building it is the first action of step 1.
+- Flag state before → after: not applicable — no flag, no engine, no production source.
+- Behaviour if reverted: L2 only. `git revert <sha>` deletes the harness and the test; nothing
+  in the running system changes either way.
+- Retraction recipe: L2 only: `git revert <sha>` (resolved by the commit-message grep above).
+  L1 not applicable. L3 not applicable (the harness's cache is in-process).
+- Metrics observed (with baseline): harness-only counters, no business metric. The RV-1.1
+  runs reported workbook value-reads and the project's own `getSheetsReadCount_() > 0`, which
+  is what "the handler really ran" means here. Baseline for steps 3-7 is unchanged by this
+  record.
+- Residual risk (what this does NOT prove):
+  - It runs fixtures, not live data: it cannot show that the live invoice header columns hold
+    the expected values, nor that the live dispatch entry (`executeCompanyAction_`) reaches
+    the handler with the same payload shape. **Staging/live evidence remains NOT RUN.**
+  - The workbook stub is deliberately partial: formatting, protection, UI and the Advanced
+    API's typed envelope are unimplemented and throw rather than approximate. A future
+    harness that needs them must extend this file (reported as a diff when it does).
+  - `noteMutation_` is a no-op in the harness, so no stamp is written; the harness therefore
+    cannot yet prove stamp semantics (that is step 5's evidence, on the real helpers).
+- Test runs: TR-12, TR-13, TR-14.
+- **RV-1.1 closure**: the RV-1.1 record's approval condition ("a VM harness is **NOT RUN**")
+  is now satisfied in its VM half. The handler executes and both cases assert against the
+  canonical contract; the "VM/staging NOT RUN" caveat is therefore dropped **for the VM part
+  only**, and RV-1.1 is closed. Staging/live execution was not performed and is recorded as
+  NOT RUN in TR-12's "not covered" field.
+
+### RV-1.3 — Correction to RV-1.1's `number` field description (append-only)
+- Date / Commit: 2026-09-21 / same commit as RV-1.2 (message-identified above).
+- Step: 1.
+- Files: `READ_VIEW_MODULARIZATION_RESULTS.md` (this record only).
+- What changed: RV-1.1's contract table described `number` as "the invoice header
+  `رقم الفاتورة`, **as a trimmed string**". The committed code is
+  `String(s['رقم الفاتورة'] || '')` — it does **not** trim. The VM run made the difference
+  observable (a padded fixture value came back padded), so the frozen contract is the
+  **verbatim header value**, and RV-1.1's word "trimmed" is corrected here rather than by
+  re-editing a completed record or by making a second unapproved edit to a legacy handler.
+- Why: ledger §2 rule — completed records are immutable; corrections are appended and
+  reference the old record. Making the code trim would be a new behaviour change to a legacy
+  handler, which needs its own approval outside this programme (§3.1 rule 4).
+- Flag state before → after: not applicable.
+- Behaviour if reverted: no runtime effect — documentation correction only.
+- Retraction recipe: L2 only (same commit as RV-1.2).
+- Metrics observed: n/a.
+- Residual risk: whether the returns page *should* trim is a product question left open; it
+  is not a correctness defect (the value displayed is exactly the cell's value).
+- Test runs: TR-12 asserts the verbatim behaviour explicitly.
+
 ---
 
 ## 5. Test-run records
@@ -395,6 +467,59 @@ building the VM harness for VF server actions. Recon completed this session:
 - Not covered: it proves the guard detects this specific defect, not that it detects other
   future server/client contract drifts (the other assertions in the guard cover those
   individually)
+
+### TR-12 — RV-1.1 defect regression, VM execution (found + missing invoice)
+- When: 2026-09-21
+- Environment: VM harness (no data) — `vf_action_harness.js` + `vf_workbook_stub.js`
+- Command: `node tools/verify/rv11_vm_invoice_return.js`
+- Purpose (claim under test): after the RV-1.1 fix, `get_valley_invoice_for_return` — executed
+  through the module's own dispatcher — returns all four invoice fields populated for a found
+  invoice, and degrades to `{ uid, number: '-' }` with its lines intact for a missing invoice.
+- Result: **PASS** — exit 0, `rv11_vm_invoice_return: PASS`. Asserted: `uid` = inbound
+  identity; `number` = header value **verbatim** (see RV-1.3); `client_name` from the header
+  row; `date_display` `dd/MM/yyyy`; per-line `sold_qty`/`returned_qty`/`returnable` and the
+  product-name join; the missing-invoice fallback has exactly two fields and an empty line
+  set; workbook value-reads and `getSheetsReadCount_()` both advanced, so the handler really
+  executed rather than being inspected; unknown actions and an empty invoice id are refused by
+  the real code paths.
+- Evidence: `tools/verify/rv11_vm_invoice_return.js`; this record; exit code 0 observed.
+- Not covered: live data. The run uses invented fixture rows, so it does not establish that
+  the live invoice header columns hold the expected values, nor that the production request
+  entry reaches dispatch with the same payload shape. **Staging and production remain NOT RUN.**
+
+### TR-13 — RV-1.1 VM test proven to catch the defect ("test the test")
+- When: 2026-09-21
+- Environment: VM harness (no data); the pre-fix module was exported to a temp path with
+  `git show 815c6c7^:Company_ValleyFoods_Actions.js` — **no repository file was modified**
+- Command: `$env:RV11_SERVER=<temp>\rv11_old_vf.js; node tools/verify/rv11_vm_invoice_return.js`
+  (PowerShell; the env var is the harness seam described in RV-1.2)
+- Purpose (claim under test): prove that TR-12's PASS is meaningful — the same assertions must
+  fail against the defective source, and fail *at the defect* (the fallback dash), not for an
+  unrelated reason.
+- Result: **PASS** — exit 1 with
+  `AssertionError: number is the header value, verbatim — actual '-', expected <the padded fixture value>`,
+  i.e. the pre-fix handler returned the `{ uid, number: '-' }` fallback because `invInfo` was
+  never populated. This is exactly the production anomaly RV-1.1 describes, observed at runtime.
+- Evidence: this record; exit code 1 observed against the pre-fix file.
+- Not covered: it proves the harness and these assertions detect this defect, not that they
+  detect other future contract drift (the remaining assertions in the test cover their own
+  fields individually).
+
+### TR-14 — Backward compatibility of the extended `gasstub.js`
+- When: 2026-09-21
+- Environment: VM harness (no data)
+- Command: `node tools/verify/s16_realtime_authority.js`, `node tools/verify/js_simplification_snapshot.js`,
+  `node tools/verify/rv11_invoice_return_contract.js`
+- Purpose (claim under test): the `gasstub.js` extension (optional `opts.sources` /
+  `opts.workbook`, `waitLock`, `Logger`) must not change behaviour for its existing three
+  consumers.
+- Result: **PASS** — all three exit 0. (An intermediate state during the edit did fail
+  `s16_realtime_authority` on four assertions — the non-workbook fixture helpers had been
+  dropped when the overrides were re-scoped; this was caught by this run, fixed by restoring
+  the helpers inside the `if (!opts.workbook)` branch, and the run repeated.)
+- Evidence: exit codes 0/0/0 observed; this record.
+- Not covered: the rest of `tools/verify/*` was not executed (only the three files that
+  `require` gasstub). New harnesses for steps 2-7 must be run on their own record.
 
 ---
 
