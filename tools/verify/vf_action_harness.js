@@ -40,6 +40,10 @@ const EXTRA_SOURCES = ['Core_FastSave.js', 'Core_FastRead.js', 'Company_ValleyFo
  *        Core_FastSave.js + Company_ValleyFoods_Actions.js). Paths may be
  *        absolute, which is how a "test the test" run loads a historical
  *        revision of the module from a temp file without touching the repo.
+ * @param {Array<{file: string, find: string, replace: string}>} [opts.sourcePatches]
+ *        in-memory source edits applied while loading (e.g. simulating the
+ *        module flag being flipped by the owner). No file is written; a patch
+ *        whose `find` text is absent throws, so a silent no-op is impossible.
  * @return {object} harness
  */
 function createVfHarness(opts) {
@@ -48,10 +52,24 @@ function createVfHarness(opts) {
   const workbook = workbookStub.createWorkbookStub();
   workbook.createSpreadsheet(dbId, []);
 
+  const patches = opts.sourcePatches || [];
+  const transformSource = patches.length ? function (file, src) {
+    const base = path.basename(String(file));
+    patches.forEach(function (p) {
+      if (String(p.file) !== base) return;
+      if (src.indexOf(p.find) === -1) {
+        throw new Error('harness: source patch target not found in ' + base + ': ' + p.find);
+      }
+      src = src.split(p.find).join(p.replace);
+    });
+    return src;
+  } : undefined;
+
   const H = gasstub.createHarness({
     workbook: workbook,
     sources: opts.sources || EXTRA_SOURCES,
-    now: opts.now
+    now: opts.now,
+    transformSource: transformSource
   });
 
   /* The tenant double-check in `authorize_` compares the dispatched dbId with

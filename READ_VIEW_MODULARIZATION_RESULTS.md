@@ -25,7 +25,7 @@ Field names, hashes, types, counts, line numbers and bounded summaries only.
 | 0 | Audit (read-only) | — | **DONE** — records in §4 |
 | 1 | Freeze canonical response contracts; resolve/document anomalies | — | **DONE** — `RV-1.1` fixed and closed with VM evidence (`RV-1.2`/`RV-1.3`, TR-12/TR-13); canonical contracts frozen (`RV-1.4`, TR-15); staging/live execution NOT RUN |
 | 2 | `Core_FastRead.js` primitives + metrics + parity guard | `FAST_READ_CORE_` (false) | **DONE** — engine committed inert (`RV-2.1`, TR-16/TR-17); no callers; one DoD row NOT MET with reason (document read call floor) |
-| 3 | Sales list (`NARROW_SCAN_PAGE` / `KEYSET`, no caching) | `SALES_FAST_READ_` | NOT STARTED |
+| 3 | Sales list (`NARROW_SCAN_PAGE` / `KEYSET`, no caching) | `SALES_FAST_READ_` | **DONE** — fast reader + admin shadow compare (`RV-3.1`, TR-19); flag `false`; `bytesOut` unchanged (endpoint was already slimmed), cells 299 vs 351 measured |
 | 4 | Sales document reads | `SALES_FAST_READ_` | NOT STARTED |
 | 5 | Small-payload cache (stable key, stamp in manifest, pre/post validation) | `FAST_READ_CORE_` | NOT STARTED |
 | 6 | DTO projection + permission tests | `FAST_VIEW_CORE_` | NOT STARTED |
@@ -516,6 +516,105 @@ review finding rather than a surprise.
     not by a live latency measurement — that is why no module may declare `KEYSET` yet.
 - Test runs: TR-16, TR-17.
 
+### RV-2.2 — Module opt-in flags were out of scope in sibling IIFEs (owner-approved fix)
+- Date / Commit: 2026-09-21 / identified by message — `fix(rv-2): hoist module opt-in flags to
+  file top level (out-of-scope ReferenceError)`.
+- Step: not a step of this programme. Found during step 3 while wiring `SALES_FAST_READ_`; the
+  owner approved the fix after being shown the evidence (escalation §2: a regression in the
+  area being touched). It touches the **write path**, which the plan freezes, which is why it
+  was raised rather than fixed silently.
+- Files: `Company_ValleyFoods_Actions.js` — the five flags moved from inside the `ValleyFoods`
+  IIFE (was `:133-145`) to file top level as `var` (now `:116-136`), with a comment naming the
+  mistake and pointing at the guard.
+- What changed (behaviour terms): **nothing that was working changes.** A handler that reached
+  one of the flag checks used to die with `ReferenceError: … is not defined` before doing
+  anything; now it evaluates the flag (`false`) and runs its legacy path exactly as designed.
+- Why: the four write flags were declared `const` inside the `ValleyFoods` IIFE and referenced
+  from `ValleyFoodsHRModules` — a **separate** IIFE — at ten sites (`:5612`, `:5858`, `:5867`,
+  `:6098`, `:6141`, `:6315`, `:8516`, `:12064`, `:12159`, `:13069`). Introduced by the
+  write-side programme (`f439f58` declared them; `869443b`, `4e4877e`, `e4a2f0f` reference
+  them). `node --check` passes such a file — scope is not syntax — which is how it survived the
+  write-side verification. If the current source had been pushed to the live app, saves for
+  returns, purchasing, MFG and the sales-allocation path would have failed for every user.
+  Evidence: `save_valley_return` executed in the VM harness threw
+  `ReferenceError: RETURNS_BATCH_WRITES_ is not defined`.
+- Flag state before → after: all five flags remain `false`; they are now `var` at file scope
+  instead of `const` inside one IIFE. **No flag was flipped.**
+- Behaviour if reverted: `git revert <sha>` restores the out-of-scope declarations and the
+  `ReferenceError` with them. There is no other effect — the flags were never reachable from
+  the referencing scopes either way.
+- Retraction recipe: L2 only (commit-message grep above). L1 not applicable (no flag value
+  changed). L3 not applicable.
+- Metrics observed: n/a — a scope correction, not a performance change.
+- Residual risk (what this does NOT prove):
+  - It fixes the flags, not the class of defect. `tools/verify/module_flag_scope.js` now guards
+    the flag class specifically (static top-level declaration + VM resolution + representative
+    handler dispatch); another identifier declared in the wrong IIFE would still be invisible
+    to `node --check`. A general scope linter is not in this programme's scope.
+  - The fix was verified in the VM, never on live data; the write-side programme's own runtime
+    acceptance remains NOT RUN (its runbook lives in `FAST_SAVE_ENGINE_MULTI_MODULE_EXECUTION_PLAN.md`).
+- Test runs: TR-18.
+
+### RV-3.1 — Sales list served from `Core_FastRead` behind `SALES_FAST_READ_`
+- Date / Commit: 2026-09-21 / identified by message — `feat(rv-3): Sales list fast reader and
+  admin shadow compare (SALES_FAST_READ_ off)`.
+- Step: 3.
+- Files (with line anchors):
+  - `Company_ValleyFoods_Actions.js`: `SALES_FAST_READ_` (top level, `false`);
+    `VF_SALES_LIST_COLUMNS_`, `vfSalesListFast_`, `vfFastReadLog_` (new); `getValleySalesList_`
+    becomes a 5-line dispatcher (`:12324`); the legacy body moves verbatim to
+    `vfSalesListLegacy_`; `VF_SHADOW_TARGETS_` + `frShadowCompareAction_` (new),
+    `'fr_shadow_compare'` registered (`:13533`) and added to `PAGE_ACCESS`
+    (`:327`, write-level + super-admin inside the handler).
+  - `Core_FastRead.js`: `__ordinal` (position among non-blank rows before filtering) and the
+    shared reader's blank-row rule (`frBlankCell_`/`frBlankRow_`) in the narrow-scan branch.
+  - `tools/verify/vf_action_harness.js`: `opts.sourcePatches` (in-memory source edits for flag
+    simulation; a missing target throws). `tools/verify/sales_list_fast_read.js` (new).
+  - `READ_VIEW_MODULARIZATION_RESULTS.md` (this record, TR-19).
+- What changed (behaviour terms): with `SALES_FAST_READ_` false (shipped) and
+  `FAST_READ_CORE_` false, the user-visible behaviour is **identical** — `get_valley_sales_list`
+  and `get_valley_sales_page` call the legacy body. With both switches true the list is read by
+  one declared-strategy scan of the nine projected columns and the response is the frozen
+  contract; any engine error falls back to the legacy body for that request. A new
+  super-admin-only action `fr_shadow_compare` can compare the two readers on demand and returns
+  a difference report (paths/types/hashes/counts, never values).
+- Why: plan §7 step 3 (list first, no caching), §5.2 (`NARROW_SCAN_PAGE` declared), §7.4
+  (shadow compare before a flag is left on), DEC-2 (admin-triggered only).
+- Flag state before → after: `SALES_FAST_READ_` **introduced and `false`**; `FAST_READ_CORE_`
+  unchanged (`false`). All write flags `false`.
+- Declared strategy and why: `NARROW_SCAN_PAGE` over `VF_SALES_LIST_COLUMNS_`. `APPEND_WINDOW`
+  is refused by the endpoint's own contract (the global serial `مسلسل` is the position in the
+  **unfiltered** set and the page may carry a date range), and `KEYSET` is refused by paging by
+  offset rather than cursor. `rowsScanned` is the table, reported.
+- Behaviour if reverted: L1 flips `SALES_FAST_READ_` back to `false` (a source edit plus the
+  owner's deploy); L2 `git revert <sha>` removes the reader and the action. Either way the
+  legacy body is intact and no data or schema is affected.
+- Retraction recipe: L1 — set `var SALES_FAST_READ_ = false;` and deploy. L2 — `git revert <sha>`.
+  L3 — not applicable (no cache in this step).
+- Metrics observed (with baseline, VM fixtures of 13 rows/12 invoices):
+  | | legacy | fast |
+  |---|---|---|
+  | service calls (values) | 1 whole-row read + per-request memo bookkeeping | 1 metadata + 1 rectangle read |
+  | rows scanned | 13 | 13 (declared, never claimed as matched-only) |
+  | cells read | 13 x 27 = 351 | 13 x 23 = 299 (the projection spans columns 0..22) |
+  | objects built | 13 records x 27 fields | 9-field rows only |
+  | `bytesOut` | unchanged | unchanged (this endpoint was already slimmed by the legacy path) |
+- Residual risk (what this does NOT prove):
+  - **`bytesOut` does not improve on this endpoint** — the legacy reader already projects the
+    same ten fields, so the plan's ≥40 % payload target applies to the detail endpoint
+    (step 6), not here. Recorded so the target is not quietly re-scoped.
+  - The measured cell saving is 15 % (351 → 299), not 67 %, because the projected columns are
+    scattered across the sheet. A narrower projection or a different column order would save
+    more; changing the sheet layout is a schema change and out of scope.
+  - Fixtures again: no staging/production run. Shadow compare against live data remains the
+    owner's action, and this record does not claim a live zero-diff.
+  - `fr_shadow_compare` is a **new server action**; it is registered, super-admin-only and
+    read-only, but it is new surface area and is listed here so reviewers see it.
+  - The blank-row rule is applied over the *read* columns (the shared reader applies it over
+    all surviving columns). A row whose only content lies outside the projection would differ;
+    shadow compare is the instrument that would surface it.
+- Test runs: TR-19.
+
 ---
 
 ## 5. Test-run records
@@ -759,6 +858,45 @@ review finding rather than a surprise.
 - Not covered: the gate is textual (a token inside a string literal would count); and the
   guard compares only the contracts listed in RV-5.7 of the plan, not every conceivable
   duplication.
+
+### TR-18 — Module flag scope guard (and the regression it was written for)
+- When: 2026-09-21
+- Environment: VM harness (no data) + static source inspection
+- Command: `node tools/verify/module_flag_scope.js`
+- Purpose (claim under test): every `*_BATCH_WRITES_` / `*_FAST_READ_` identifier referenced in
+  `Company_ValleyFoods_Actions.js` is declared at file top level and resolves from the scopes
+  that use it; representative write handlers reach their flag check without a `ReferenceError`.
+- Result: **PASS** — exit 0, `module_flag_scope: PASS`. Before the fix the same probe failed:
+  dispatching `save_valley_return` threw `ReferenceError: RETURNS_BATCH_WRITES_ is not defined`
+  (captured in RV-2.2). Static part: five flags, each declared `^var` at top level and absent as
+  an IIFE `const`. VM part: each name is a boolean from the global scope; `save_valley_return`,
+  `save_valley_invoice` and `save_valley_mfg_order` each refuse an empty payload with a
+  validation error and no scope error.
+- Evidence: `tools/verify/module_flag_scope.js`; exit code 0 observed after the fix.
+- Not covered: it guards the flag class specifically. Another identifier declared in the wrong
+  IIFE is still invisible to `node --check` and to this test.
+
+### TR-19 — Sales list: shadow-compare equivalence, on-flag equality, fail-open, metrics
+- When: 2026-09-21
+- Environment: VM harness (no data); the on-flag harness patches the source **in memory only**
+- Command: `node tools/verify/sales_list_fast_read.js`
+- Purpose (claim under test): with both flags false the fast and legacy readers agree under the
+  admin shadow action; with the flags on the registered action serves a response identical to
+  the legacy reader's; the metrics are honest; an engine abort fails open to legacy; the action
+  is super-admin only.
+- Result: **PASS** — exit 0, `sales_list_fast_read: PASS`. Seven payload shapes (full list, page
+  window, deep offset, date range, range+page, empty result, zero limit) report
+  `diffCount: 0` through `fr_shadow_compare`; the on-flag response is JSON-identical to the
+  legacy response in a separate harness for all seven; the metrics line reports
+  `serviceCalls 2`, `rowsScanned 13`, `cellsRead 299`, `cacheOutcome disabled`, `partial false`
+  and contains no fixture value; a forced engine abort produces the legacy answer plus one
+  `vf_fast_read_fallback` log naming `FR_BUDGET_EXCEEDED`; a normal user is refused and an
+  unknown target is refused. Two earlier runs failed: one on the Arabic test fixture being
+  corrupted by a PowerShell round-trip (test-file defect, rewritten in UTF-8 — the ledger is
+  unaffected), one on `مسلسل` being read from a mangled key name.
+- Evidence: `tools/verify/sales_list_fast_read.js`; exit code 0 observed.
+- Not covered: live data. The zero-diff claim is a VM claim; the owner's staging/admin run is
+  still the production gate for flipping `SALES_FAST_READ_`.
 
 ---
 

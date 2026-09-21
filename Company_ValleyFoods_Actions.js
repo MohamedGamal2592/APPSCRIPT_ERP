@@ -113,27 +113,35 @@ function vfViewContract_(name) {
   return JSON.parse(JSON.stringify(spec));
 }
 
+/* ── MODULE OPT-INS (top level, deliberately) ──────────────────────────────
+ * The fast-save and fast-read engines are business-agnostic, so the switches
+ * that name modules live in this file. They are `var` at FILE TOP LEVEL, not
+ * inside the ValleyFoods IIFE, because the handlers that read them live in the
+ * sibling IIFEs (ValleyFoodsHREmp, ValleyFoodsHRModules) and a `const` inside
+ * one IIFE is invisible to the others. That mistake shipped once (four write
+ * flags declared inside ValleyFoods while referenced from ValleyFoodsHRModules):
+ * every handler that reached one threw `ReferenceError: … is not defined`
+ * before doing anything. tools/verify/module_flag_scope.js guards it now.
+ *
+ * All five are false as shipped: deploying this file changes no behaviour.
+ * A module switches only when its own switch AND the engine's master switch
+ * (FAST_SAVE_CORE_ / FAST_READ_CORE_) are both true. */
+var MFG_BATCH_WRITES_ = false;
+var SALES_BATCH_WRITES_ = false;
+var RETURNS_BATCH_WRITES_ = false;
+var PURCHASE_BATCH_WRITES_ = false;
+
+/* Read-engine opt-in (Read & View Modularization, step 3). SALES_FAST_READ_
+ * says this module may serve its list reads from Core_FastRead.js. Unlike the
+ * write switches, it is checked at the top of the handler and a raised engine
+ * error falls back to the legacy body below it — bounded fail-open, §3.2 G1. */
+var SALES_FAST_READ_ = false;
+
 const ValleyFoods = (function () {
   const actions = {};
   function register(name, fn) { actions[name] = fn; }
 
   const COMPANY_UID = '9940659bd83035d7';
-
-  /* ── Fast-save opt-ins ────────────────────────────────────────────────────
-   * The generic engine (Core_FastSave.js) does nothing until its master switch
-   * FAST_SAVE_CORE_ is true. These four say WHICH module may use it. They live
-   * here, not in the engine, because they name modules and the engine is
-   * business-agnostic by contract.
-   *
-   * A module switches only when its own flag AND the master flag are true
-   * (fastSaveOnFor_). All five are false as shipped, so deploying this file
-   * changes no behaviour at all. Turn them on one at a time, and turn one off
-   * to roll that module back instantly — there is no data migration and no
-   * schema change, so the legacy path is always still intact underneath. */
-  const MFG_BATCH_WRITES_ = false;
-  const SALES_BATCH_WRITES_ = false;
-  const RETURNS_BATCH_WRITES_ = false;
-  const PURCHASE_BATCH_WRITES_ = false;
 
   /* add_upload_file is shared by these HR tables. Keep this authorization
      routing inside the dispatcher scope; the upload implementation and its
@@ -316,6 +324,10 @@ const ValleyFoods = (function () {
     'get_valley_invoice_lines': { page: 'vf_sales', access: 'read' },
     'save_valley_invoice': { page: 'vf_sales', access: 'write' },
     'get_valley_sales_list': { page: 'vf_sales', access: 'read' },
+    /* Read & View Modularization: admin-triggered shadow comparison only
+       (DEC-2). Super-admin is demanded inside the handler as well; this entry
+       exists because the dispatcher denies any action absent from this table. */
+    'fr_shadow_compare': { page: 'vf_sales', access: 'write' },
     'get_valley_invoice_full': { page: 'vf_sales', access: 'read' },
 
     // المالية — مرتجعات المبيعات
@@ -12220,7 +12232,106 @@ const ValleyFoodsHRModules = (function () {
     return { status: 'success', message: editing ? 'تم تحديث الفاتورة' : 'تم إنشاء الفاتورة' };
   }
 
+  /* ── Sales list — fast reader (SALES_FAST_READ_, step 3) ───────────────────
+   * Declared strategy: NARROW_SCAN_PAGE over the nine projected columns.
+   *   Why not APPEND_WINDOW: the query is not page 1, may carry a date range,
+   *   and the response's global serial (مسلسل) is the position in the
+   *   UNFILTERED set, so whole-set knowledge is genuinely required (plan §4.4).
+   *   Why not KEYSET: paging is by offset, not by cursor.
+   *   Cost: 1 metadata + 1 rectangle read of 9 columns per request (the legacy
+   *   reader materializes all 27 columns of every row through the record cache);
+   *   rowsScanned = table rows, reported by the engine, never claimed as
+   *   matched-rows-only.
+   * The response is projected to the frozen contract (VF_SALES_VIEW_CONTRACTS_
+   * 'vf_invoices_list_v1'). */
+  var VF_SALES_LIST_COLUMNS_ = ['invoice_unique_id', 'رقم الفاتورة', 'اسم العميل', 'تاريخ الفاتورة',
+    'المبلغ الصافي', 'قيمة الضريبة', 'إجمالي', 'tax_system', 'approval_status'];
+
+  function vfSalesListFast_(data, user, dbId) {
+    var payload = data || {};
+    var ctx = frNewContext_({ deadlineMs: FR_DEADLINE_MS_ });
+    /* The legacy path's pre-read precondition is preserved, not skipped: it can
+       add missing columns when a tab has drifted (see the ledger, RV-1.4). */
+    settingsEnsureSheet_(dbId, FIN_SALES_INV_SHEET, FIN_SALES_INV_HEADERS);
+    var sheet = getSheet_(FIN_SALES_INV_SHEET, dbId);
+    var headers = getHeaders_(sheet);
+    var out = fastFetchList_({
+      dbId: dbId,
+      sheetName: FIN_SALES_INV_SHEET,
+      strategy: 'NARROW_SCAN_PAGE',
+      headers: headers,
+      filterColumns: VF_SALES_LIST_COLUMNS_,
+      columns: VF_SALES_LIST_COLUMNS_,
+      dateColumns: ['تاريخ الفاتورة'],
+      range: {
+        column: 'تاريخ الفاتورة',
+        from: vfDateBound_(payload.from, false),
+        to: vfDateBound_(payload.to, true)
+      },
+      offset: payload.offset,
+      limit: payload.limit,
+      ctx: ctx
+    });
+    vfFastReadLog_('get_valley_sales_list', out.metrics);
+    var invoices = out.rows.map(function (r) {
+      return {
+        invoice_unique_id: r.invoice_unique_id,
+        'رقم الفاتورة': r['رقم الفاتورة'],
+        'اسم العميل': r['اسم العميل'],
+        'تاريخ الفاتورة': r['تاريخ الفاتورة'],
+        'المبلغ الصافي': Number(r['المبلغ الصافي']) || 0,
+        'قيمة الضريبة': Number(r['قيمة الضريبة']) || 0,
+        'إجمالي': Number(r['إجمالي']) || 0,
+        tax_system: String(r.tax_system || '').trim().toLowerCase(),
+        approval_status: r.approval_status || 'Pending',
+        'مسلسل': r.__ordinal
+      };
+    });
+    return { status: 'success', invoices: invoices, total: out.total };
+  }
+
+  /* Per-response metrics travel with every fast read as ONE structured log
+     line (G4): counts and outcomes only, never a value. */
+  function vfFastReadLog_(action, m) {
+    try {
+      Logger.log(JSON.stringify({
+        evt: 'vf_fast_read',
+        action: String(action),
+        serviceCalls: m.serviceCalls, rowsScanned: m.rowsScanned, colsRead: m.colsRead,
+        cellsRead: m.cellsRead, bytesRead: m.bytesRead,
+        partial: !!m.partial, cacheOutcome: String(m.cacheOutcome || 'disabled')
+      }));
+    } catch (e) {}
+  }
+
+  /* Bounded fail-open (G1): an engine failure is logged without raw values and
+     the legacy body answers the request. The engine's own deadline abort lands
+     here too — the fallback then runs with whatever execution time is left, and
+     the 6-minute hard limit remains a failure mode this cannot always cover. */
+  function vfFastReadFallback_(action, e) {
+    try {
+      Logger.log(JSON.stringify({
+        evt: 'vf_fast_read_fallback',
+        action: String(action),
+        code: String((e && e.code) || 'ERROR'),
+        name: String((e && e.name) || 'Error')
+      }));
+    } catch (e2) {}
+  }
+
   function getValleySalesList_(data, user, dbId) {
+    if (typeof fastReadOnFor_ === 'function' && fastReadOnFor_(SALES_FAST_READ_)) {
+      try { return vfSalesListFast_(data, user, dbId); }
+      catch (e) { vfFastReadFallback_('get_valley_sales_list', e); }
+    }
+    return vfSalesListLegacy_(data, user, dbId);
+  }
+
+  /* The legacy body, verbatim, beneath the dispatch above (the write-side
+     programme's shape: a flag selects the reader, the legacy path is never
+     rewritten). Shadow compare calls THIS function directly so evidence does
+     not depend on the flag's state. */
+  function vfSalesListLegacy_(data, user, dbId) {
     settingsEnsureSheet_(dbId, FIN_SALES_INV_SHEET, FIN_SALES_INV_HEADERS);
     var rows = getReadOnlyRecords_(dbId, FIN_SALES_INV_SHEET);
     /* Slim + newest-first: only the columns the list displays. */
@@ -12242,6 +12353,69 @@ const ValleyFoodsHRModules = (function () {
       };
     });    const sp = vfPage_(slim, data, 'تاريخ الفاتورة');
     return { status: 'success', invoices: sp.rows, total: sp.total };
+  }
+
+  /* ── Admin shadow comparison (DEC-2, plan §3.2 G2 / §7.5) ──────────────────
+   * Runs the legacy reader and the fast reader over the SAME payload, projects
+   * both through the frozen canonical contract, reports the difference and
+   * answers with the comparison report (not with the data). Super-admin only,
+   * never invoked on a user request, and the modern reader is called by direct
+   * function reference so the comparison does not depend on any flag — which is
+   * what lets evidence exist before the flag is ever turned on.
+   * No raw values leave this action: field paths, types, hashes and counts. */
+  var VF_SHADOW_TARGETS_ = {
+    'vf_sales_list': {
+      legacy: function (payload, user, dbId) { return vfSalesListLegacy_(payload, user, dbId); },
+      modern: function (payload, user, dbId) { return vfSalesListFast_(payload, user, dbId); },
+      canonicalize: function (res) {
+        return {
+          status: res.status,
+          total: res.total,
+          invoices: (res.invoices || []).map(function (r) {
+            return {
+              invoice_unique_id: r.invoice_unique_id,
+              'رقم الفاتورة': r['رقم الفاتورة'],
+              'اسم العميل': r['اسم العميل'],
+              'تاريخ الفاتورة': r['تاريخ الفاتورة'],
+              'المبلغ الصافي': r['المبلغ الصافي'],
+              'قيمة الضريبة': r['قيمة الضريبة'],
+              'إجمالي': r['إجمالي'],
+              tax_system: r.tax_system,
+              approval_status: r.approval_status,
+              'مسلسل': r['مسلسل']
+            };
+          })
+        };
+      }
+    }
+  };
+
+  function frShadowCompareAction_(data, user, dbId) {
+    requireSuperAdmin_(user);
+    if (typeof frShadowCompare_ !== 'function') throw new Error('محرك القراءة غير محمّل');
+    var target = String((data && data.target) || '').trim();
+    var spec = VF_SHADOW_TARGETS_[target];
+    if (!spec) throw new Error('هدف المقارنة غير معروف: ' + target);
+    var payload = (data && data.payload) || {};
+    var report = null;
+    frShadowCompare_({
+      label: 'vf:' + target,
+      legacy: function () { return spec.legacy(payload, user, dbId); },
+      modern: function () { return spec.modern(payload, user, dbId); },
+      canonicalize: spec.canonicalize,
+      onResult: function (r) { report = r; }
+    });
+    return {
+      status: 'success',
+      target: target,
+      ok: !!(report && report.ok),
+      diffCount: report ? report.diffCount : 0,
+      truncated: !!(report && report.truncated),
+      diffs: report ? report.diffs.slice(0, 20) : [],
+      leftBytes: report ? report.leftBytes : 0,
+      rightBytes: report ? report.rightBytes : 0,
+      modernError: (report && report.modernError) || null
+    };
   }
 
   function getValleySalesPage_(data, user, dbId) {
@@ -13356,6 +13530,7 @@ const ValleyFoodsHRModules = (function () {
     ValleyFoods.register('get_valley_sales_page',      getValleySalesPage_);
     ValleyFoods.register('get_valley_invoice_full',   getValleyInvoiceFull_);
     ValleyFoods.register('get_valley_sales_report',   getValleySalesReport_);
+    ValleyFoods.register('fr_shadow_compare',         frShadowCompareAction_);
 
   // بيانات تجريبية
   ValleyFoods.register('get_test_data',     getTestData_);

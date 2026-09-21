@@ -1,7 +1,7 @@
 ﻿'use strict';
 
 /**
- * TR: Core_FastRead.js primitives â€” executable behaviour and honest metrics.
+ * TR: Core_FastRead.js primitives — executable behaviour and honest metrics.
  *
  * WHAT THIS PROVES (plan آ§5.1-آ§5.3, آ§7.4)
  *   - Every list strategy produces the right rows AND the published budget:
@@ -112,7 +112,7 @@ function metrics(m) { return m; }
   assert.ok(out.metrics.serviceCalls <= 3, 'NARROW_SCAN_PAGE budget: serviceCalls <= 3 (got ' + out.metrics.serviceCalls + ')');
   assert.strictEqual(out.metrics.rowsScanned, 40, 'rowsScanned is the table rows, never a matched-row claim');
   /* cellsRead: the narrow set here is NON-contiguous (id at column 0, amount at
-   * column 3), so the engine reads the enclosing rectangle â€” 4 columns â€” rather
+   * column 3), so the engine reads the enclosing rectangle — 4 columns — rather
    * than paying a service call per column. The published bound (rows x
    * narrowCols + limit x pageCols) is the contiguous case, asserted separately
    * below; what matters here is that the cost is declared and bounded, not

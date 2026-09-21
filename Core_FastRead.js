@@ -624,6 +624,22 @@ function frMatchFilter_(value, filter) {
   }
 }
 
+/* The shared reader's blank-row rule, exactly: a cell counts as EMPTY only when
+ * it is '' or undefined. A null is NOT empty there (`String(null)` is 'null'),
+ * which real Sheets never produces but the rule must match rather than
+ * "improve". A row whose read cells are all empty is not part of the result set
+ * and does not advance the ordinal. */
+function frBlankCell_(v) {
+  return v === '' || v === undefined;
+}
+
+function frBlankRow_(line, names) {
+  for (var i = 0; i < names.length; i++) {
+    if (!frBlankCell_(line[names[i]])) return false;
+  }
+  return true;
+}
+
 function frMatchRow_(row, filterSpec) {
   var filters = (filterSpec && filterSpec.filters) || [];
   for (var i = 0; i < filters.length; i++) {
@@ -726,10 +742,17 @@ function fastFetchList_(spec) {
     m.rowsScanned += block2.length;
 
     var matched = [];
+    var ordinal = 0;
     for (var r2 = 0; r2 < block2.length; r2++) {
       var line = {};
       narrowNames.forEach(function (c) { line[c] = block2[r2][frHeaderIndex_(hdr, c) - minIdx]; });
       line.__row = r2 + 2;
+      /* A row with no value in any read column is not a record: the shared
+       * reader skips it, so skipping it here is parity, not an optimisation.
+       * __ordinal is the position among the non-blank rows BEFORE filtering,
+       * which is what a global serial column means. */
+      if (frBlankRow_(line, narrowNames)) continue;
+      line.__ordinal = ++ordinal;
       if (!frMatchRow_(line, { filters: s.filters, range: s.range })) continue;
       matched.push(line);
     }
@@ -744,7 +767,7 @@ function fastFetchList_(spec) {
     var needFetch = (s.columns || []).some(function (c) { return narrowNames.indexOf(c) === -1; });
     if (!needFetch) {
       out.rows = matched.map(function (row) {
-        var rec = { __row: row.__row };
+        var rec = { __row: row.__row, __ordinal: row.__ordinal };
         (s.columns || []).forEach(function (c) { rec[c] = row[c]; });
         return rec;
       });
@@ -755,7 +778,7 @@ function fastFetchList_(spec) {
     var byRow = {};
     matched.forEach(function (row) { byRow[row.__row] = row; });
     out.rows = fetched.rows.map(function (f) {
-      var rec = { __row: f.__row };
+      var rec = { __row: f.__row, __ordinal: byRow[f.__row] ? byRow[f.__row].__ordinal : null };
       (s.columns || []).forEach(function (c, i) { rec[c] = f.values[i]; });
       return rec;
     }).filter(function (rec) { return !!byRow[rec.__row]; });

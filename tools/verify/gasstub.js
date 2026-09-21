@@ -48,6 +48,9 @@ const RealDate = Date;
  *        getAllRecords_ run against it (they need getParent/getSheetId/
  *        getLastColumn, which the fixtures below do not implement), and the
  *        sheet-touching leaf replacements are not installed.
+ * @param {function} [opts.transformSource] (filename, source) => source, applied
+ *        while loading. A harness uses it to simulate a source edit — a flag
+ *        flip, say — in memory. No file is ever written.
  * @return {object} the harness
  */
 function createHarness(opts) {
@@ -198,7 +201,8 @@ function createHarness(opts) {
   /* ── load the real sources ─────────────────────────────────────────────── */
   sources.forEach(function (f) {
     const p = path.isAbsolute(f) ? f : path.join(ROOT, f);
-    const src = fs.readFileSync(p, 'utf8');
+    const loaded = fs.readFileSync(p, 'utf8');
+    const src = typeof opts.transformSource === 'function' ? opts.transformSource(f, loaded) : loaded;
     vm.runInContext(src, ctx, { filename: f });
   });
 
