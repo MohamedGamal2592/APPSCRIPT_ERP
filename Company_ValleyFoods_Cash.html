@@ -168,6 +168,7 @@
           '<span data-sort="' + esc(h.date_edit || '') + '">' + esc(h.date_display || '-') + '</span>',
           esc(h.party_name || '-'),
           esc(h.transaction_details || '-'),
+          attChipsHtml_(attList_(h.attachment, h.attachment_id)) || '-',
           esc(h.transaction_type),
           esc(h.transaction_method || '-'),
           '<span class="num" data-num="' + num0(h.transaction_amount) + '">' + num0(h.transaction_amount).toLocaleString('en-US') + '</span>',
@@ -219,6 +220,7 @@
           headers: ['رقم', 'التاريخ',
                     { label: 'الطرف', col: 'text' },
                     { label: 'البيان', col: 'prose', min: '30ch' },
+                    { label: 'المرفقات', col: 'text' },
                     'النوع', 'طريقة الدفع',
                     { label: 'المبلغ', numeric: true }, 'الصندوق', 'كود الحساب', 'المستخدم',
                     { label: 'الرصيد', numeric: true },
@@ -276,6 +278,12 @@
         UIC.field({ key: 'f-items', label: 'أصناف المشتريات (اختياري — اكتب قيماً جديدة لإضافتها)', type: 'text', list: datalistId, value: record ? (record.transaction_purchasing_items || '') : '' }) +
         '{{DATALIST}}' +
         checkboxField('f-tax-system', 'خاضع للنظام الضريبي', record && (record.tax_system === true || String(record.tax_system).toLowerCase() === 'yes')) +
+        '<div class="form-field" style="margin-top:6px;">' +
+          '<label class="form-label">المرفقات (اختياري — حتى 5 ملفات: PDF، Word، صور)</label>' +
+          '<div id="cash-att-list"></div>' +
+          '<div id="cash-att-slots"></div>' +
+          '<button type="button" class="btn btn-outline" style="margin-top:6px;" onclick="CASH_PAGE.addAttSlot()">+ إضافة ملف</button>' +
+        '</div>' +
       '</form>';
 
       var dl = '<datalist id="' + datalistId + '">' +
@@ -315,6 +323,10 @@
         if (el) el.addEventListener('input', updateCalcPreview);
         if (el) el.addEventListener('change', updateCalcPreview);
       });
+      ATT_KEPT = record ? attList_(record.attachment, record.attachment_id) : [];
+      ATT_SLOT_SEQ = 0;
+      renderAttList();
+      addAttSlot();
       updateCalcPreview();
     }
 
@@ -326,6 +338,55 @@
     function grayedField(id, label) {
       return '<div><div style="font-size:10px;color:var(--text-muted, #6b7280);margin-bottom:3px;">' + esc(label) + '</div>' +
         '<input id="' + id + '" class="input" type="text" readonly value="0.00" style="background:var(--bg-subtle, #f3f4f6);color:var(--text-muted, #6b7280);cursor:not-allowed;direction:ltr;text-align:left;font-family:monospace;"></div>';
+    }
+
+    /* ---------- ATTACHMENTS (one cell pair, up to 5 files) ---------- */
+    var ATT_MAX = 5;
+    var ATT_KEPT = [];
+    var ATT_SLOT_SEQ = 0;
+
+    function attList_(refs, ids) {
+      var r = String(refs || '').split('\n').map(function (s) { return s.trim(); }).filter(Boolean);
+      var d = String(ids || '').split('\n').map(function (s) { return s.trim(); });
+      return r.map(function (ref, i) { return { ref: ref, id: d[i] || '' }; });
+    }
+    function attName_(ref) { var p = String(ref || '').split('/'); return p[p.length - 1] || String(ref || ''); }
+    function attArg_(s) { return esc(String(s == null ? '' : s)).replace(/'/g, "\\'"); }
+    function openAtt(ref, id) {
+      if (!ref) return;
+      UIC.openDownload(scriptUrl + '?download=attachment&page=vf_cash&ref=' + encodeURIComponent(ref || '') + ((id != null && String(id) !== '') ? '&id=' + encodeURIComponent(id) : '') + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN), 'فتح المرفق');
+    }
+    function attChipsHtml_(list) {
+      return (list || []).map(function (a) {
+        return '<button type="button" class="btn btn-outline" style="padding:2px 8px;font-size:11px;margin:1px;" onclick="CASH_PAGE.openAtt(\'' + attArg_(a.ref) + '\',\'' + attArg_(a.id) + '\')">📎 ' + esc(attName_(a.ref)) + '</button>';
+      }).join(' ');
+    }
+    function renderAttList() {
+      var host = document.getElementById('cash-att-list');
+      if (!host) return;
+      host.innerHTML = ATT_KEPT.map(function (a, i) {
+        return '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">' +
+          '<button type="button" class="btn btn-outline" style="padding:3px 8px;font-size:11px;" onclick="CASH_PAGE.openAtt(\'' + attArg_(a.ref) + '\',\'' + attArg_(a.id) + '\')">📎 ' + esc(attName_(a.ref)) + '</button>' +
+          '<button type="button" class="btn btn-ghost" style="padding:2px 6px;font-size:11px;" onclick="CASH_PAGE.removeAtt(' + i + ')">✕</button>' +
+          '</div>';
+      }).join('');
+    }
+    function addAttSlot() {
+      var slots = document.getElementById('cash-att-slots');
+      if (!slots) return;
+      if (slots.querySelectorAll('input[type=file]').length + ATT_KEPT.length >= ATT_MAX) { UIC.toast('الحد الأقصى ' + ATT_MAX + ' ملفات', 'error'); return; }
+      ATT_SLOT_SEQ++;
+      slots.insertAdjacentHTML('beforeend', UIC.fileField({ key: 'cash-att-' + ATT_SLOT_SEQ, label: '', accept: '.pdf,.doc,.docx,.png,.jpg,.jpeg', instant: true, sheet: 'valley_cash_bank_movement', field: 'attachment', formModalId: 'cash-modal' }));
+    }
+    function removeAtt(i) { ATT_KEPT.splice(i, 1); renderAttList(); }
+    function collectAttachments_() {
+      var refs = [], ids = [];
+      ATT_KEPT.forEach(function (a) { refs.push(a.ref); ids.push(a.id || ''); });
+      document.querySelectorAll('#cash-att-slots input[type=file]').forEach(function (input) {
+        var bound = (UIC.UploadSet && UIC.UploadSet.getBound) ? UIC.UploadSet.getBound(input) : null;
+        if (bound && bound.ref) { refs.push(bound.ref); ids.push(bound.id || ''); }
+      });
+      return { refs: refs, ids: ids };
     }
 
     /* Live grayed previews mirroring the sheet formulas:
@@ -369,6 +430,9 @@
         transaction_purchasing_items: getVal_('f-items').trim(),
         tax_system: readCheckbox('f-tax-system')
       };
+      var att = collectAttachments_();
+      payload.attachment = att.refs.join('\n');
+      payload.attachment_id = att.ids.join('\n');
       /* The row is drawn from what the user typed, immediately, and the
          request stops being the thing they wait for. The box balance cards are
          server-computed, so a QUIET refresh corrects them a moment later
@@ -422,6 +486,8 @@
         chart_name: '',
         transaction_purchasing_items: p.transaction_purchasing_items,
         tax_system: p.tax_system,
+        attachment: p.attachment || '',
+        attachment_id: p.attachment_id || '',
         balance_amount: isCredit ? total * -1 : total,
         user: (existing && existing.user) || '',
         approved_bool: existing ? existing.approved_bool : false
@@ -592,6 +658,9 @@
       approve: approve,
       remove: remove,
       setBoxFilter: function (box) { BOX_FILTER = box; renderList(); },
+      openAtt: openAtt,
+      removeAtt: removeAtt,
+      addAttSlot: addAttSlot,
       /* Both go back to the server: the range is applied to the full ledger,
          not to the slice already in the browser. */
       applyDateFilter: function () {

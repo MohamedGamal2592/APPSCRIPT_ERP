@@ -49,7 +49,6 @@ function registerTopChemical_() {
       { action: 'tc_emp_salaries_close', template: 'Company_TopChemical_EmpSalariesClose', title: 'غلق المرتبات الشهرية', nav: false },
       { action: 'tc_budget_parties', template: 'Company_TopChemical_BudgetParties', title: 'عملاء وموردون قانونيون', nav: false },
       { action: 'tc_budget_stock_balance', template: 'Company_TopChemical_BudgetStockBalance', title: 'رصيد أصناف الميزانية', nav: false },
-      { action: 'tc_budget_stock_movement', template: 'Company_TopChemical_BudgetStockMovement', title: 'حركة الأصناف (دفتر الجرد)', nav: false },
       { action: 'tc_budget_inputs', template: 'Company_TopChemical_BudgetInputs', title: 'المدخلات - اصول ومخزون', nav: false },
       { action: 'tc_budget_manufacture', template: 'Company_TopChemical_BudgetManufacture', title: 'تصنيع الميزانية', nav: false },
       { action: 'tc_budget_invoices', template: 'Company_TopChemical_BudgetInvoices', title: 'الفواتير الضريبية', nav: false },

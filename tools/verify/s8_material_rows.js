@@ -188,7 +188,7 @@ async function boot(canSeeCost, outputs) {
     const s = await boot(true);
     s.MFGVIEW_PAGE.addOutput();
     const bodyBefore = s.html('outputs-body');
-    s.MFGVIEW_PAGE.openBatchModal(0);
+    await s.MFGVIEW_PAGE.openBatchModal(0);
     s.MFGVIEW_PAGE.batchModalSet(0, 100);
     s.MFGVIEW_PAGE.batchModalSet(1, 50);
     s.MFGVIEW_PAGE.batchModalConfirm();

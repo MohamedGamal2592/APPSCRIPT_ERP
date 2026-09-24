@@ -137,7 +137,7 @@ function originalFifo(batches, qty) {
   console.log('\nS7 — on open with nothing allocated: FIFO proposed, oldest first\n');
   {
     const s1 = await boot(true, []);
-    s1.MFGVIEW_PAGE.openBatchModal(0);
+    await s1.MFGVIEW_PAGE.openBatchModal(0);
     const body = s1.html('vf-batch-modal');
     check(body.length > 0, 'the modal opened');
     check(body.indexOf('class="modal modal-lg"') !== -1, 'it is UIC.openModal with size lg');
@@ -152,7 +152,8 @@ function originalFifo(batches, qty) {
     check(/bm-qty-1[^>]*value="50"/.test(body), 'batch 2 proposed 50 (the shortfall)');
     check(/bm-qty-2[^>]*value=""/.test(body) || /bm-qty-2[^>]*value="0"/.test(body), 'batch 3 proposed nothing');
     check(body.indexOf('مجموع الدفعات: 150.000 من 150.000') !== -1, 'running total reads X من Y');
-    check(body.indexOf('✔') !== -1, 'green tick when matched');
+    check(body.indexOf('color:var(--success,#0a7a34);font-weight:700;">مجموع الدفعات') !== -1,
+      'matched total is drawn in the success colour (the tick glyph was retired)');
     check(s1.html('vf-batch-modal').indexOf('id="bm-confirm"') !== -1 &&
       !/id="bm-confirm"[^>]*disabled/.test(body), 'confirm is enabled while matched');
   }
@@ -162,7 +163,7 @@ function originalFifo(batches, qty) {
     /* The user hand-picked 40 from the THIRD (newest) batch. FIFO must keep it
        and fill only the 110 shortfall from the oldest batches. */
     const s2 = await boot(true, [{ item: 'B-003', item_code: 'LOT-C', qty: 40, unit_cost: 9, saved: true }]);
-    s2.MFGVIEW_PAGE.openBatchModal(0);
+    await s2.MFGVIEW_PAGE.openBatchModal(0);
     const body = s2.html('vf-batch-modal');
     const st = s2.exported('batchModalState_')();
     check(/bm-qty-2[^>]*value="40"/.test(body), 'the hand-picked batch keeps its 40');
@@ -174,7 +175,7 @@ function originalFifo(batches, qty) {
   console.log('\nS7 — confirm is disabled until the total matches\n');
   {
     const s3 = await boot(true, []);
-    s3.MFGVIEW_PAGE.openBatchModal(0);
+    await s3.MFGVIEW_PAGE.openBatchModal(0);
     const stateOf = s3.exported('batchModalState_');
 
     s3.MFGVIEW_PAGE.batchModalSet(1, 40);   /* 100 + 40 = 140, short by 10 */
@@ -202,7 +203,7 @@ function originalFifo(batches, qty) {
   console.log('\nS7 — over-allocation is flagged, and the server is named as the authority\n');
   {
     const s4 = await boot(true, []);
-    s4.MFGVIEW_PAGE.openBatchModal(0);
+    await s4.MFGVIEW_PAGE.openBatchModal(0);
     s4.MFGVIEW_PAGE.batchModalSet(0, 120);   /* only 100 available */
     s4.MFGVIEW_PAGE.batchModalSet(1, 30);    /* 120 + 30 = 150, matched but over on row 0 */
     const st = s4.exported('batchModalState_')();
@@ -217,7 +218,7 @@ function originalFifo(batches, qty) {
     const existing = [{ item: 'B-003', item_code: 'LOT-C', qty: 40, unit_cost: 9, saved: true }];
     const s5 = await boot(true, existing);
     const before = JSON.stringify(s5.exported('footers')()[0]);
-    s5.MFGVIEW_PAGE.openBatchModal(0);
+    await s5.MFGVIEW_PAGE.openBatchModal(0);
     s5.MFGVIEW_PAGE.batchModalSet(0, 999);
     s5.MFGVIEW_PAGE.batchModalCancel();
     const after = JSON.stringify(s5.exported('footers')()[0]);
@@ -228,7 +229,7 @@ function originalFifo(batches, qty) {
   console.log('\nS7 — confirm writes back and re-renders\n');
   {
     const s6 = await boot(true, []);
-    s6.MFGVIEW_PAGE.openBatchModal(0);
+    await s6.MFGVIEW_PAGE.openBatchModal(0);
     s6.MFGVIEW_PAGE.batchModalSet(0, 90);
     s6.MFGVIEW_PAGE.batchModalSet(1, 60);
     s6.MFGVIEW_PAGE.batchModalConfirm();
@@ -246,7 +247,7 @@ function originalFifo(batches, qty) {
   console.log('\nS7 — a mismatched confirm cannot be forced through\n');
   {
     const s7 = await boot(true, []);
-    s7.MFGVIEW_PAGE.openBatchModal(0);
+    await s7.MFGVIEW_PAGE.openBatchModal(0);
     s7.MFGVIEW_PAGE.batchModalSet(0, 10);   /* 10 + 50 = 60, well short */
     s7.MFGVIEW_PAGE.batchModalSet(1, 0);
     const before = JSON.stringify(s7.exported('footers')()[0]);
@@ -258,10 +259,10 @@ function originalFifo(batches, qty) {
   console.log('\nS7 — cost columns only with the grant\n');
   {
     const sWith = await boot(true, []);
-    sWith.MFGVIEW_PAGE.openBatchModal(0);
+    await sWith.MFGVIEW_PAGE.openBatchModal(0);
     const bWith = sWith.html('vf-batch-modal');
     const sNo = await boot(false, []);
-    sNo.MFGVIEW_PAGE.openBatchModal(0);
+    await sNo.MFGVIEW_PAGE.openBatchModal(0);
     const bNo = sNo.html('vf-batch-modal');
     check(bWith.indexOf('تكلفة الوحدة') !== -1, 'with the grant: unit cost column present');
     check(bWith.indexOf('12.500') !== -1, 'with the grant: the unit cost is shown');

@@ -22,7 +22,9 @@
   var CURRENT_ACTION = '<?!= currentAction ?>';
   var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
   var CAN_WRITE = UIC.canAdd_(); var CAN_FULL = UIC.canFull_();
-  var FILTER = { target: '', search: '', view: 'all' };
+  var FILTER = { category: '', search: '', view: 'all' };
+  var MONTHS = ['', 'يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو', 'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر'];
+  var BALANCE = { products: [], assetCodeOptions: [], systemQtyError: false, unmatchedCount: 0, duplicateNames: [] };
 
   function companyCall(moduleAction, data) {
     return API.call('company_action', {
@@ -46,48 +48,147 @@
 
   function fetchBalance() {
     UIC.readSkeleton('stock-balance-content');
-    companyCall('get_legal_current_products')
-      .then(function (r) { renderBalance(r.items || []); })
+    companyCall('get_legal_stock_balance')
+      .then(function (r) {
+        BALANCE.products = (r && r.products) || [];
+        BALANCE.assetCodeOptions = (r && r.asset_code_options) || [];
+        BALANCE.systemQtyError = !!(r && r.system_qty_error);
+        BALANCE.unmatchedCount = Number(r && r.unmatched_count) || 0;
+        BALANCE.duplicateNames = (r && r.duplicate_names) || [];
+        renderBalance();
+      })
       .catch(function (e) { showError(e); })
       .finally(function () { UI.hideSpinner(); try{schedulePrefetch();}catch(e){} });
   }
 
-  function renderBalance(list) {
-    window.__balance = list;
-    var targets = [];
-    list.forEach(function (r) { var t = String(r.product_target || '').trim(); if (t && targets.indexOf(t) === -1) targets.push(t); });
-    targets.sort();
-    var targetOpts = targets.map(function (t) {
-      return '<option value="' + FMT.escape(t) + '"' + (FILTER.target === t ? ' selected' : '') + '>' + FMT.escape(t) + '</option>';
+  function hasSystemQty(p) {
+    return p.system_qty !== null && p.system_qty !== undefined && p.system_qty !== '';
+  }
+
+  function viewMatch(p) {
+    var qty = Number(p.current_qty) || 0;
+    if (FILTER.view === 'hide_zero') return qty !== 0;
+    if (FILTER.view === 'hide_no_system') return hasSystemQty(p);
+    if (FILTER.view === 'both') return qty !== 0 && hasSystemQty(p);
+    return true;
+  }
+
+  function numCell(v) {
+    if (v === null || v === undefined || v === '') return '-';
+    var n = Number(v) || 0;
+    return '<span data-num="' + n + '">' + FMT.number(n) + '</span>';
+  }
+
+  function diffCell(v) {
+    if (v === null || v === undefined || v === '') return '-';
+    var n = Number(v) || 0;
+    var color = n < 0 ? '#b91c1c' : (n > 0 ? '#166534' : '#4b5563');
+    return '<span data-num="' + n + '" style="font-weight:600;color:' + color + ';">' + FMT.number(n) + '</span>';
+  }
+
+  function noteChip(text) {
+    return '<div style="margin-bottom:10px;padding:8px 12px;border-radius:8px;background:#fef3c7;color:#92400e;font-size:13px;">' +
+      FMT.escape(text) + '</div>';
+  }
+
+  function renderBalance() {
+    var list = BALANCE.products;
+    var cats = [];
+    list.forEach(function (p) { var c = String(p.category || '').trim(); if (c && cats.indexOf(c) === -1) cats.push(c); });
+    cats.sort();
+    var catOpts = cats.map(function (c) {
+      return '<option value="' + FMT.escape(c) + '"' + (FILTER.category === c ? ' selected' : '') + '>' + FMT.escape(c) + '</option>';
     }).join('');
 
-    var rows = list.filter(function (r) {
-      if (FILTER.target && String(r.product_target || '').trim() !== FILTER.target) return false;
-      if ((FILTER.view === 'blank' || FILTER.view === 'both') && !String(r.product || '').trim()) return false;
-      if ((FILTER.view === 'zero' || FILTER.view === 'both') && !(Number(r.current_qty) || 0)) return false;
+    var rows = list.filter(function (p) {
+      if (FILTER.category && String(p.category || '').trim() !== FILTER.category) return false;
+      if (!viewMatch(p)) return false;
       if (FILTER.search) {
         var q = FILTER.search.toLowerCase();
-        return String(r.product || '').toLowerCase().indexOf(q) !== -1 ||
-          String(r.transaction_code || '').toLowerCase().indexOf(q) !== -1 ||
-          String(r.code || '').toLowerCase().indexOf(q) !== -1;
+        return String(p.name_ar || '').toLowerCase().indexOf(q) !== -1 ||
+          String(p.id == null ? '' : p.id).toLowerCase().indexOf(q) !== -1 ||
+          String(p.asset_code || '').toLowerCase().indexOf(q) !== -1 ||
+          String(p.asset_code_name || '').toLowerCase().indexOf(q) !== -1 ||
+          String(p.category || '').toLowerCase().indexOf(q) !== -1;
       }
       return true;
-    }).map(function (r) {
+    }).map(function (p) {
       return {
-        transaction_code: FMT.escape(r.transaction_code || '-'),
-        product: FMT.escape(r.product || '-'),
-        unit: FMT.escape(r.unit || '-'),
-        current_qty: Number(r.current_qty) || 0,
-        total_cost_sign: Number(r.total_cost_sign) || 0,
-        total_sales_value: Number(r.total_sales_value) || 0,
-        sales_per_qty: Number(r.sales_per_qty) || 0,
-        product_target: FMT.escape(r.product_target || '-')
+        id: FMT.escape(String(p.id == null ? '' : p.id)),
+        name_ar: FMT.escape(String(p.name_ar || '-')),
+        unit: FMT.escape(String(p.unit || '-')),
+        category: FMT.escape(String(p.category || '-')),
+        asset_code_name: FMT.escape(String(p.asset_code_name || p.asset_code || '-')),
+        lines_count: Number(p.lines_count) || 0,
+        current_qty: numCell(p.current_qty),
+        total_cost_sign: Number(p.total_cost_sign) || 0,
+        system_qty: numCell(p.system_qty),
+        difference: diffCell(p.difference),
+        _key: String(p.id == null ? '' : p.id)
       };
     });
 
+    var notes = '';
+    if (BALANCE.systemQtyError) {
+      notes += noteChip('تعذر جلب رصيد السيستم من قاعدة البيانات — عمود رصيد السيستم فارغ حالياً.');
+    }
+    if (BALANCE.unmatchedCount > 0) {
+      notes += noteChip('يوجد ' + FMT.number(BALANCE.unmatchedCount) + ' حركة في legal_current_products لا تطابق اسم أي صنف قانوني.');
+    }
+    if (BALANCE.duplicateNames.length) {
+      notes += noteChip('أسماء أصناف مكررة في legal_products (' + BALANCE.duplicateNames.join('، ') + ') — الحركات محتسبة على الصنف صاحب الكود الأقل.');
+    }
+
     var headers = [
+      { key: 'id', label: 'كود الصنف' },
+      { key: 'name_ar', label: 'الصنف' },
+      { key: 'unit', label: 'الوحدة' },
+      { key: 'category', label: 'التصنيف' },
+      { key: 'asset_code_name', label: 'حساب الأصل (المستوى الخامس)' },
+      { key: 'lines_count', label: 'عدد الحركات', numeric: true },
+      { key: 'current_qty', label: 'إجمالي الكمية الحالية', numeric: true },
+      { key: 'total_cost_sign', label: 'إجمالي قيمة التكلفة', money: true },
+      { key: 'system_qty', label: 'رصيد السيستم', numeric: true },
+      { key: 'difference', label: 'الفرق', numeric: true }
+    ];
+    document.getElementById('stock-balance-content').innerHTML =
+      '<div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:12px;">' +
+        '<select id="bal-category" class="input" style="width:auto;min-width:170px;" onchange="setCategory(this.value)">' +
+          '<option value="">كل التصنيفات</option>' + catOpts + '</select>' +
+        '<input id="bal-search" class="input" style="width:auto;min-width:200px;" type="search" placeholder="بحث بكود أو اسم الصنف..." onkeyup="setSearch(this.value)">' +
+        '<select id="bal-view" class="input" style="width:auto;min-width:190px;" onchange="setView(this.value)">' +
+          '<option value="all"' + (FILTER.view === 'all' ? ' selected' : '') + '>كل الأصناف</option>' +
+          '<option value="hide_zero"' + (FILTER.view === 'hide_zero' ? ' selected' : '') + '>إخفاء الأصناف الصفرية</option>' +
+          '<option value="hide_no_system"' + (FILTER.view === 'hide_no_system' ? ' selected' : '') + '>إخفاء بلا رصيد سيستم</option>' +
+          '<option value="both"' + (FILTER.view === 'both' ? ' selected' : '') + '>الاثنان معاً</option>' +
+        '</select>' +
+        '<span style="font-size:13px;color:#374151;">عدد الأصناف المعروضة: <b>' + FMT.number(rows.length) + '</b></span>' +
+      '</div>' +
+      notes +
+      UIC.dataTable('stock-balance-table', {
+        title: 'رصيد أصناف الميزانية',
+        headers: headers,
+        rows: rows,
+        searchable: false,
+        emptyText: 'لا توجد بيانات',
+        rowClick: function (rec) { if (rec && rec._key !== undefined) openProductModal(rec._key); }
+      });
+    UIC.initTableSort('stock-balance-table');
+  }
+
+  function setCategory(v) { FILTER.category = v; renderBalance(); }
+  function setSearch(v) { FILTER.search = v.trim(); renderBalance(); }
+  function setView(v) { FILTER.view = v; renderBalance(); }
+
+  function openProductModal(key) {
+    var p = null;
+    (BALANCE.products || []).forEach(function (x) { if (String(x.id) === String(key)) p = x; });
+    if (!p) { UIC.toast('لم يتم العثور على الصنف — تم تحديث القائمة', 'error'); fetchBalance(); return; }
+    var lines = p.lines || [];
+    var lineHeaders = [
       { key: 'transaction_code', label: 'كود المعاملة' },
-      { key: 'product', label: 'الصنف' },
+      { key: 'transaction_name', label: 'اسم المعاملة' },
+      { key: 'code', label: 'الكود' },
       { key: 'unit', label: 'الوحدة' },
       { key: 'current_qty', label: 'الكمية الحالية', numeric: true },
       { key: 'total_cost_sign', label: 'قيمة التكلفة', money: true },
@@ -95,26 +196,192 @@
       { key: 'sales_per_qty', label: 'سعر البيع/الوحدة', money: true },
       { key: 'product_target', label: 'التصنيف' }
     ];
-    document.getElementById('stock-balance-content').innerHTML =
-      '<div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:12px;">' +
-        '<select id="bal-target" class="input" style="width:auto;min-width:170px;" onchange="setTarget(this.value)">' +
-          '<option value="">كل التصنيفات</option>' + targetOpts + '</select>' +
-        '<input id="bal-search" class="input" style="width:auto;min-width:200px;" type="search" placeholder="بحث عن صنف..." onkeyup="setSearch(this.value)">' +
-        '<select id="bal-view" class="input" style="width:auto;min-width:190px;" onchange="setView(this.value)">' +
-          '<option value="all"' + (FILTER.view === 'all' ? ' selected' : '') + '>كل الأصناف</option>' +
-          '<option value="blank"' + (FILTER.view === 'blank' ? ' selected' : '') + '>إخفاء الأصناف الفارغة</option>' +
-          '<option value="zero"' + (FILTER.view === 'zero' ? ' selected' : '') + '>إخفاء الصفرية</option>' +
-          '<option value="both"' + (FILTER.view === 'both' ? ' selected' : '') + '>الاثنان معاً</option>' +
-        '</select>' +
-        '<span style="font-size:13px;color:#374151;">عدد الأصناف المعروضة: <b>' + FMT.number(rows.length) + '</b></span>' +
+    var lineRows = lines.map(function (l) {
+      return {
+        transaction_code: FMT.escape(String(l.transaction_code || '-')),
+        transaction_name: FMT.escape(String(l.transaction_name || '-')),
+        code: FMT.escape(String(l.code || '-')),
+        unit: FMT.escape(String(l.unit || '-')),
+        current_qty: Number(l.current_qty) || 0,
+        total_cost_sign: Number(l.total_cost_sign) || 0,
+        total_sales_value: Number(l.total_sales_value) || 0,
+        sales_per_qty: Number(l.sales_per_qty) || 0,
+        product_target: FMT.escape(String(l.product_target || '-'))
+      };
+    });
+    var body =
+      '<div style="display:flex;flex-wrap:wrap;gap:14px;margin-bottom:10px;font-size:13px;color:#374151;">' +
+        '<span>كود الصنف: <b>' + FMT.escape(String(p.id == null ? '' : p.id)) + '</b></span>' +
+        '<span>إجمالي الكمية: <b>' + FMT.number(Number(p.current_qty) || 0) + '</b></span>' +
+        '<span>إجمالي قيمة التكلفة: <b>' + FMT.currency(Number(p.total_cost_sign) || 0) + '</b></span>' +
+        '<span>رصيد السيستم: <b>' + (hasSystemQty(p) ? FMT.number(Number(p.system_qty)) : '—') + '</b></span>' +
+        '<span>عدد الحركات: <b>' + FMT.number(lines.length) + '</b></span>' +
       '</div>' +
-      UIC.dataTable('stock-balance-table', { title: 'رصيد أصناف الميزانية', headers: headers, rows: rows, emptyText: 'لا توجد بيانات' });
-    UIC.initTableSort('stock-balance-table');
+      assetEditorHtml(p) +
+      '<h4 style="margin:14px 0 8px;font-size:14px;color:var(--brand-primary);border-bottom:1px solid var(--border-color);padding-bottom:4px;">الحركات الحالية (legal_current_products)</h4>' +
+      UIC.dataTable('bal-lines-table', {
+        title: 'حركات الصنف',
+        headers: lineHeaders,
+        rows: lineRows,
+        searchable: lineRows.length > 12,
+        exportXlsx: false,
+        printable: false,
+        emptyText: 'لا توجد حركات مرتبطة بهذا الصنف'
+      }) +
+      '<h4 style="margin:18px 0 8px;font-size:14px;color:var(--brand-primary);border-bottom:1px solid var(--border-color);padding-bottom:4px;">حركة دفتر الجرد (legal_products_movement)</h4>' +
+      '<div id="bal-movement-area"><div style="font-size:13px;color:#6b7280;padding:8px 0;">جارٍ تحميل حركة الصنف...</div></div>';
+    window.__balModalProduct = p;
+    UIC.openModal('bal-lines-modal', {
+      size: 'xl',
+      title: FMT.escape(String(p.name_ar || '')) + ' — كود ' + FMT.escape(String(p.id == null ? '' : p.id)),
+      body: body,
+      footer: '<button type="button" class="btn btn-outline" onclick="UIC.closeModal(\'bal-lines-modal\')">إغلاق</button>'
+    });
+    UIC.initTableSort('bal-lines-table');
+    loadProductMovement(p);
   }
 
-  function setTarget(v) { FILTER.target = v; renderBalance(window.__balance || []); }
-  function setSearch(v) { FILTER.search = v.trim(); renderBalance(window.__balance || []); }
-  function setView(v) { FILTER.view = v; renderBalance(window.__balance || []); }
+  /* asset_code is a reference into chart_of_accounts level-5: the stored value
+     is المستوى الخامس and the label is اسم المستوى الخامس. Writers get the
+     select; everyone else sees the resolved name. */
+  function assetEditorHtml(p) {
+    var current = String(p.asset_code == null ? '' : p.asset_code).trim();
+    if (!CAN_WRITE) {
+      return '<div style="font-size:13px;color:#374151;margin:12px 0 4px;">حساب الأصل (المستوى الخامس): <b>' +
+        FMT.escape(String(p.asset_code_name || current || '—')) + '</b>' +
+        (current && p.asset_code_name ? ' <span style="color:#6b7280;">(' + FMT.escape(current) + ')</span>' : '') + '</div>';
+    }
+    var opts = '<option value=""' + (current ? '' : ' selected') + '>بدون</option>' +
+      (BALANCE.assetCodeOptions || []).map(function (o) {
+        var v = String(o.value == null ? '' : o.value);
+        return '<option value="' + FMT.escape(v) + '"' + (v === current ? ' selected' : '') + '>' + FMT.escape(String(o.label || v)) + '</option>';
+      }).join('');
+    return '<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;margin:12px 0 4px;">' +
+        '<div style="flex:1;min-width:240px;max-width:460px;">' +
+          '<label for="bal-asset-code" style="font-size:12px;font-weight:700;color:var(--text-muted);display:block;margin-bottom:4px;">حساب الأصل — المستوى الخامس (من شجرة الحسابات)</label>' +
+          '<select id="bal-asset-code" class="input">' + opts + '</select>' +
+        '</div>' +
+        '<button type="button" class="btn btn-primary" onclick="saveProductAssetCode()">حفظ كود الأصل</button>' +
+      '</div>';
+  }
+
+  function saveProductAssetCode() {
+    var p = window.__balModalProduct;
+    var el = document.getElementById('bal-asset-code');
+    if (!p || !el) return;
+    var code = String(el.value || '').trim();
+    companyCall('update_legal_product', { id: p.id, asset_code: code })
+      .then(function () {
+        UIC.toast('تم تحديث كود الأصل', 'success');
+        UIC.closeModal('bal-lines-modal');
+        fetchBalance();
+      })
+      .catch(function (e) { UIC.toast((e && e.message) || 'تعذر حفظ كود الأصل', 'error'); });
+  }
+
+  /* ── Movement ledger for one product — the report the retired
+     tc_budget_stock_movement page used to show, now a section of this modal.
+     Dates arrive pre-formatted as transaction_date_display, so a sheet date
+     cell never renders as its UTC ISO string. ── */
+  function loadProductMovement(p) {
+    var area = document.getElementById('bal-movement-area');
+    if (!area) return;
+    var name = String(p.name_ar || '').trim();
+    if (!name) {
+      area.innerHTML = '<div style="font-size:13px;color:#92400e;padding:8px 0;">لا يمكن جلب الحركة — الصنف بلا اسم مطابق في legal_products.</div>';
+      return;
+    }
+    area.innerHTML = '<div style="font-size:13px;color:#6b7280;padding:8px 0;">جارٍ تحميل حركة الصنف...</div>';
+    companyCall('get_legal_products_movement', { product: name, limit: 500 })
+      .then(function (r) {
+        var el = document.getElementById('bal-movement-area');
+        if (!el) return;
+        renderMovementSection(el, (r && r.items) || [], Number(r && r.total) || 0);
+      })
+      .catch(function (e) {
+        var el = document.getElementById('bal-movement-area');
+        if (!el) return;
+        el.innerHTML = '<div style="font-size:13px;color:#b91c1c;padding:8px 0;">تعذر جلب حركة الصنف — ' +
+          FMT.escape((e && e.message) || 'خطأ غير متوقع') + '</div>' +
+          '<button type="button" class="btn btn-outline" onclick="retryProductMovement()">إعادة المحاولة</button>';
+      });
+  }
+
+  function retryProductMovement() {
+    if (window.__balModalProduct) loadProductMovement(window.__balModalProduct);
+  }
+
+  function printProductMovement() {
+    var p = window.__balModalProduct;
+    if (!p) return;
+    var name = String(p.name_ar || '').trim();
+    if (!name) return;
+    UIC.openDownload(scriptUrl + '?download=budget_print&type=movement&id=' + encodeURIComponent(name) +
+      '&sessionToken=' + encodeURIComponent(SESSION_TOKEN), 'فتح التقرير');
+  }
+
+  function renderMovementSection(el, items, total) {
+    var headers = [
+      { key: 'transaction_code', label: 'كود المعاملة' },
+      { key: 'transaction_name', label: 'اسم المعاملة' },
+      { key: 'transaction_type', label: 'النوع' },
+      { key: 'transaction_date', label: 'التاريخ' },
+      { key: 'qty', label: 'الكمية', numeric: true },
+      { key: 'total_cost_sign', label: 'إجمالي التكلفة', money: true },
+      { key: 'total_sales_value', label: 'قيمة المبيعات', money: true },
+      { key: 'cost_per_qty', label: 'تكلفة/الوحدة', money: true },
+      { key: 'sales_per_qty', label: 'بيع/الوحدة', money: true },
+      { key: 'tax_type', label: 'الضريبة' },
+      { key: 'month', label: 'الشهر' },
+      { key: 'year', label: 'السنة' }
+    ];
+    var rows = items.map(function (m) {
+      return {
+        transaction_code: FMT.escape(String(m.transaction_code || '-')),
+        transaction_name: FMT.escape(String(m.transaction_name || '-')),
+        transaction_type: FMT.escape(String(m.transaction_type || '-')),
+        transaction_date: FMT.escape(String(m.transaction_date_display || m.transaction_date || '-')),
+        qty: Number(m.qty) || 0,
+        total_cost_sign: Number(m.total_cost_sign) || 0,
+        total_sales_value: Number(m.total_sales_value) || 0,
+        cost_per_qty: Number(m.cost_per_qty) || 0,
+        sales_per_qty: Number(m.sales_per_qty) || 0,
+        tax_type: FMT.escape(String(m.tax_type || '-')),
+        month: FMT.escape(String(MONTHS[Number(m.month)] || m.month || '-')),
+        year: FMT.escape(String(m.year || '-'))
+      };
+    });
+    var inQty = 0, outQty = 0;
+    items.forEach(function (m) {
+      var q = Math.abs(Number(m.qty) || 0);
+      var s = Number(m.transaction_sign);
+      if (s > 0) inQty += q; else if (s < 0) outQty += q;
+    });
+    var truncatedNote = total > items.length
+      ? '<div style="font-size:12px;color:#92400e;margin-bottom:6px;">يتم عرض أحدث ' + FMT.number(items.length) +
+        ' حركة من إجمالي ' + FMT.number(total) + ' — اطبع التقرير لعرض الكل.</div>'
+      : '';
+    el.innerHTML =
+      '<div style="display:flex;flex-wrap:wrap;gap:14px;align-items:center;justify-content:space-between;margin-bottom:8px;">' +
+        '<div style="display:flex;flex-wrap:wrap;gap:14px;font-size:13px;color:#374151;">' +
+          '<span>عدد الحركات: <b>' + FMT.number(total) + '</b></span>' +
+          '<span>إجمالي الوارد: <b style="color:#166534;">' + FMT.number(inQty) + '</b></span>' +
+          '<span>إجمالي الصادر: <b style="color:#b91c1c;">' + FMT.number(outQty) + '</b></span>' +
+        '</div>' +
+        '<button type="button" class="btn btn-outline" onclick="printProductMovement()">طباعة التقرير</button>' +
+      '</div>' +
+      truncatedNote +
+      UIC.dataTable('bal-movement-table', {
+        title: 'حركة دفتر الجرد',
+        headers: headers,
+        rows: rows,
+        searchable: rows.length > 12,
+        exportXlsx: false,
+        printable: false,
+        emptyText: 'لا توجد حركة مسجلة لهذا الصنف في دفتر الجرد'
+      });
+    UIC.initTableSort('bal-movement-table');
+  }
 
   function showError(e) {
     UIC.toast((e && e.message) || 'خطأ غير متوقع', 'error');
@@ -124,4 +391,3 @@
 </script>
 </body>
 </html>
-

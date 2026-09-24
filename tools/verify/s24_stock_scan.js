@@ -189,6 +189,31 @@ check(/download=print_product_barcode/.test(productsPage) && /function printProd
 check(/label: 'طباعة باركود'/.test(productsPage),
   'the print is a row action on the product, not a page-level button');
 
+/* ══ 4b. the scan flow: one commit action, complete notes, revision datetime ══ */
+console.log('\n4b — تأكيد الكمية is the one commit; notes and revision datetime\n');
+
+check(!/id="confirm-save-btn"/.test(scanPage) && !/تأكيد الحفظ/.test(scanPage),
+  'the second save button (تأكيد الحفظ) is gone');
+check(/function applyAvail\(failed\)[\s\S]{0,700}confirmSave\(\)/.test(scanPage),
+  'the record is saved automatically once رصيد السيستم loads');
+check(/function renderSavedStep\(\)/.test(scanPage) && /تم تسجيل الجرد/.test(scanPage),
+  'the next page is a result view of the recorded count and current stock');
+check(/مسح صنف آخر/.test(scanPage), 'the result view offers «مسح صنف آخر»');
+check(/نوع العبوة: ' \+ data\.container_type[\s\S]{0,400}الكمية بالعبوة[\s\S]{0,400}عدد العبوات[\s\S]{0,400}الكمية الفرط[\s\S]{0,300}الإجمالي/.test(scanPage),
+  'notes records all four count fields, labelled, plus the total');
+check(/pendingEntry\.available_amount = currentAvail/.test(scanPage) && /get_stock_scan_qty/.test(scanPage),
+  'available_amount is the MySQL current_qty from get_stock_scan_qty');
+check(/var saveInFlight = false;/.test(scanPage) && /if \(saveInFlight\) return;/.test(scanPage),
+  'a save-in-flight guard prevents a double filing on retry');
+
+/* Server: a date-only entry stores the moment of the revision, not midnight. */
+check(/let date = data\.date \? parseDate_\(data\.date\) : new Date\(\);/.test(fnBody),
+  'addStockRevision_ starts from the parsed picked date');
+check(/date\.setHours\(now\.getHours\(\), now\.getMinutes\(\), now\.getSeconds\(\), now\.getMilliseconds\(\)\)/.test(fnBody),
+  'a date-only value is stamped with the current time');
+check(/if \(date\.getHours\(\) === 0 && date\.getMinutes\(\) === 0 && date\.getSeconds\(\) === 0\)/.test(fnBody),
+  'a value that already carries a time is left alone');
+
 /* ══ 5. Valley Foods dashboard — the nav-visibility gap, fixed ═══════════════ */
 console.log('\n5 — Valley Foods dashboard: IS_SUPER_ADMIN/USER_PAGES no longer missing\n');
 

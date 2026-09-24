@@ -6,9 +6,9 @@
  * tools/ui_check.js check C9 fails while this file is out of date, so the
  * design preview can never quietly show something the source no longer says.
  */
-window.__PREVIEW_FINGERPRINT__ = '1fdb01c8d9bf0a3b';
+window.__PREVIEW_FINGERPRINT__ = '92b4d239b54b83f5';
 window.__PREVIEW_SOURCES__ = {
- "generated": "2026-09-20T16:07:36.906Z",
+ "generated": "2026-09-24T12:16:37.469Z",
  "watched": [
   "CSS_Tokens.html",
   "UI_Components.html",

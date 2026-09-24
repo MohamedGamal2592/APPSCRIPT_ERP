@@ -58,7 +58,7 @@ const DOWNLOAD_SITES = [
   ['Company_TopChemical_BudgetInputs.html', ['attachment', 'budget_print']],
   ['Company_TopChemical_BudgetInvoices.html', ['budget_print']],
   ['Company_TopChemical_BudgetManufacture.html', ['attachment', 'budget_print']],
-  ['Company_TopChemical_BudgetStockMovement.html', ['budget_print']],
+  ['Company_TopChemical_BudgetStockBalance.html', ['budget_print']],
   ['Company_TopChemical_CartonSizes.html', ['doc_file']],
   ['Company_TopChemical_EmpSalaries.html', ['payroll_report']],
   ['Company_TopChemical_ImportFollow.html', ['doc_file']],

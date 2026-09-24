@@ -76,7 +76,7 @@
     function hideLoading() { try { UIC.hidePageLoading(true); } catch (e) {} }
 
     function tabBtn(paneId, label, active) {
-      return '<button type="button" class="btn ' + (active ? 'btn-primary' : 'btn-outline') + '" style="padding:6px 16px;font-size:12px;" onclick="MFG_PAGE.switchTab(\'' + paneId + '\')">' + label + '</button>';
+      return '<button type="button" class="btn ' + (active ? 'btn-primary' : 'btn-outline') + '" style="padding:10px 20px;font-size:14px;" onclick="MFG_PAGE.switchTab(\'' + paneId + '\')">' + label + '</button>';
     }
     MFG_PAGE_tabSwitch = function (paneId) {
       ['tab-main-extra', 'tab-cons', 'tab-workops', 'tab-byproducts'].forEach(function (id) {
@@ -160,7 +160,7 @@
               esc(prodLabel(o.produced_product)),
               esc(o.product_category || '-'),
               esc(o.operation_type),
-              esc(o.shift),
+              esc(o.shift_name || o.shift),
               fmtDate(o.manufacture_date),
               '<span class="num">' + fmt3(o.expected_qty) + '</span>',
               '<span class="num">' + fmt3(o.manufactured_qty) + '</span>',
@@ -202,7 +202,7 @@
       if (sig === FILTERS_SIG) return;
       FILTERS_SIG = sig;
       FILTER_OPTIONS = { shift: shifts, operation_types: operationTypes, categories: cats, batches: batches };
-      var pairs = function(vs){ return (vs || []).map(function(v){ return [v, v]; }); };
+      var pairs = function(vs){ return (vs || []).map(function(v){ return (v && typeof v === 'object') ? v : [v, v]; }); };
       filterCombo_('ff-shift-wrap', 'ff-shift', labeledOpts_(pairs(shifts)), F.shift);
       filterCombo_('ff-operation-wrap', 'ff-operation', labeledOpts_(pairs(operationTypes)), F.operation_type);
       filterCombo_('ff-product-wrap', 'ff-product', labeledOpts_(FILTER_PRODUCT_OPTIONS), F.produced_product);
@@ -298,11 +298,11 @@
         '</form>' +
         /* Tab bar (Odoo-style child tables) */
         '<div style="display:flex;gap:4px;border-bottom:2px solid #16a34a;margin-bottom:0;flex-wrap:wrap;">' +
-          MFG_PAGE.tabBtn('tab-outputs', 'المنتجات والمواد', true) +
-          MFG_PAGE.tabBtn('tab-main-extra', ' إضافي') +
-          MFG_PAGE.tabBtn('tab-cons', 'استهلاك الخامات') +
-          MFG_PAGE.tabBtn('tab-workops', 'ورديات التشغيل') +
-          MFG_PAGE.tabBtn('tab-byproducts', 'منتجات ثانوية') +
+          MFG_PAGE.tabBtn('tab-outputs', '🧺 المنتجات والمواد', true) +
+          MFG_PAGE.tabBtn('tab-main-extra', '➕ إضافي') +
+          MFG_PAGE.tabBtn('tab-cons', '🧾 استهلاك الخامات') +
+          MFG_PAGE.tabBtn('tab-workops', '⚙️ ورديات التشغيل') +
+          MFG_PAGE.tabBtn('tab-byproducts', '♻️ منتجات ثانوية') +
         '</div>' +
         '<div id="tab-outputs" class="mfg-tab-pane">' +
           '<div style="display:flex;justify-content:space-between;align-items:center;margin:10px 0 8px;">' +
@@ -381,7 +381,7 @@
       });
     }
 
-    function selList_(list) { return (list || []).map(function (v) { return { value: v, label: v }; }); }
+    function selList_(list) { return (list || []).map(function (v) { return (v && typeof v === 'object') ? v : { value: v, label: v }; }); }
     function getV_(id) { var el = document.getElementById(id); return el ? el.value.trim() : ''; }
     function checkboxField(key, label, checked) {
       return '<label style="display:flex;align-items:center;gap:8px;margin-top:22px;font-size:14px;">' +
@@ -762,16 +762,14 @@
           var rowsHtml = (r.byproducts || []).map(function (b) {
             var nm = '';
             window.__BP_OPTIONS.forEach(function (o) { if (String(o.value) === String(b.item)) nm = o.label; });
-            return '<tr><td>' + esc(nm || b.item) + '</td><td class="num">' + Number(b.qty || 0).toLocaleString('en-US') + '</td><td>' + esc(b.transaction_code || '-') + '</td>' + (canCost() ? '<td class="num">' + Number(b.total_cost || 0).toLocaleString('en-US') + '</td>' : '') + '</tr>';
+            return '<tr><td>' + esc(nm || b.item) + '</td><td class="num">' + Number(b.qty || 0).toLocaleString('en-US') + '</td></tr>';
           }).join('');
           var form = CAN_WRITE ? '<form id="bp-form"><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;align-items:flex-end;">' +
             UIC.combo({ key: 'bp-item', label: 'المنتج الثانوي', required: true, options: window.__BP_OPTIONS, placeholder: 'اكتب للبحث…' }) +
             UIC.field({ key: 'bp-qty', label: 'الكمية', type: 'number', required: true, min: '0.01', step: '0.01' }) +
-            UIC.field({ key: 'bp-lot', label: 'كود الدفعة', type: 'text' }) +
-            (canCost() ? UIC.field({ key: 'bp-cost', label: 'التكلفة', type: 'number', min: '0', step: '0.01' }) : '') +
             '</div><input type="hidden" id="bp-mo-uid" value="' + esc(moUid) + '"></form>' : '';
-          holder.innerHTML = '<div class="table-wrap"><table class="table" style="min-width:560px;"><thead><tr><th>المنتج</th><th>الكمية</th><th>الدفعة</th>' + (canCost() ? '<th>التكلفة</th>' : '') + '</tr></thead><tbody>' +
-            (rowsHtml || '<tr><td colspan="' + (canCost() ? 4 : 3) + '" style="text-align:center;color:#94a3b8;">لا يوجد منتجات ثانوية</td></tr>') +
+          holder.innerHTML = '<div class="table-wrap"><table class="table" style="min-width:560px;"><thead><tr><th>المنتج</th><th>الكمية</th></tr></thead><tbody>' +
+            (rowsHtml || '<tr><td colspan="2" style="text-align:center;color:#94a3b8;">لا يوجد منتجات ثانوية</td></tr>') +
             '</tbody></table></div>' + form;
           UIC.autoColumns(holder);
         })
@@ -781,7 +779,7 @@
     function addByproduct() {
       if (!UIC.validateForm('bp-form')) return;
       UI.showSpinner();
-      companyCall('add_valley_mfg_byproduct', { mo_uid: getHid_('bp-mo-uid'), item: getCombo_('bp-item'), qty: getVal_('bp-qty'), batch_code: getV_('bp-lot'), total_cost: canCost() ? getV_('bp-cost') : '' })
+      companyCall('add_valley_mfg_byproduct', { mo_uid: getHid_('bp-mo-uid'), item: getCombo_('bp-item'), qty: getV_('bp-qty') })
         .then(function (r) {
           UIC.toast((r && r.message) || 'تمت الإضافة', 'success');
           if (r && r.record) {
@@ -796,7 +794,7 @@
                 var holder = document.getElementById('byproducts-body');
                 if (holder && holder.querySelector('tbody')) {
                   var nm = r.record.product_name || r.record.item;
-                  var newRow = '<tr><td>' + nm + '</td><td class="num">' + (r.record.qty||0) + '</td><td>' + (r.record.transaction_code||'-') + '</td>' + (canCost() ? '<td class="num">' + (r.record.total_cost||0) + '</td>' : '') + '</tr>';
+                  var newRow = '<tr><td>' + nm + '</td><td class="num">' + (r.record.qty||0) + '</td></tr>';
                   var tbody = holder.querySelector('tbody');
                   if (tbody) tbody.insertAdjacentHTML('afterbegin', newRow);
                   // remove last if exceeds 15
@@ -825,6 +823,7 @@
       companyCall('get_valley_mfg_workops', { mo_uid: moUid })
         .then(function (r) {
           window.__WC_OPTIONS = r.work_center_options || [];
+          window.__WORKOPS_CACHE = r.workops || [];
           var rowsHtml = (r.workops || []).map(function (w) {
             var pill = UIC.statusPill(w.operation_status, w.operation_status === 'Done' ? 'success' : 'neutral');
             var buttons = '';
@@ -857,7 +856,7 @@
               '<td class="wo-end-cell" style="direction:ltr;font-size:11px;">' + esc(fmtDateTime_(w.end_time)) + '</td>' +
               '<td class="wo-pause-cell" style="direction:ltr;font-size:11px;">' + num0(w.total_pause_duration) + '</td>' +
               '<td class="num">' + timerCell + (w.actual_hours !== '' && w.actual_hours != null ? ' ' + esc(w.actual_hours) + 'h' : '') + '</td>' +
-              '<td style="font-size:11px;">' + esc(w.notes || '-') + '</td>' +
+              '<td><button type="button" class="btn ' + (w.notes ? 'btn-primary' : 'btn-outline') + '" style="padding:2px 8px;font-size:11px;" onclick="MFG_PAGE.openWorkOpNotes(\'' + esc(w.unique_id) + '\')">ملاحظات' + (w.notes ? ' •' : '') + '</button></td>' +
               '<td>' + buttons + '</td>' +
               '</tr>';
           }).join('');
@@ -906,6 +905,17 @@
     function pauseWorkOp(uid) { controlWorkOp_(uid, 'pause'); }
     function resumeWorkOp(uid) { controlWorkOp_(uid, 'resume'); }
     function stopWorkOp(uid) { if (!confirm('إنهاء العملية؟')) return; controlWorkOp_(uid, 'stop'); }
+
+    function openWorkOpNotes(uid) {
+      var w = (window.__WORKOPS_CACHE || []).filter(function (x) { return String(x.unique_id) === String(uid); })[0];
+      if (!w) { UIC.toast('لم يتم العثور على العملية', 'error'); return; }
+      var wc = wcLabel_(w.work_center_id);
+      UIC.openModal('mfg-workop-notes', {
+        title: 'ملاحظات مركز العمل — ' + esc(wc),
+        body: '<div style="white-space:pre-wrap;font-size:13px;min-height:60px;">' + (esc(w.notes) || '<span style="color:#94a3b8;">لا توجد ملاحظات</span>') + '</div>',
+        footer: '<button type="button" class="btn btn-outline" onclick="UIC.closeModal(\'mfg-workop-notes\')">إغلاق</button>'
+      });
+    }
 
     function toggleWorkOpManualEdit(uid) {
       var row = document.getElementById('wo-row-' + uid);
@@ -1009,7 +1019,7 @@
         });
       },
       addByproduct: addByproduct,
-      addWorkOp: addWorkOp,
+      addWorkOp: addWorkOp, openWorkOpNotes: openWorkOpNotes,
       startWorkOp: startWorkOp, pauseWorkOp: pauseWorkOp, resumeWorkOp: resumeWorkOp, stopWorkOp: stopWorkOp,
       toggleWorkOpManualEdit: toggleWorkOpManualEdit, saveWorkOpManual: saveWorkOpManual,
       addOutput: addOutput, removeOutput: removeOutput,

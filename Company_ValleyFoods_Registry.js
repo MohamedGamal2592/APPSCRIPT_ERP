@@ -85,6 +85,14 @@ function registerValleyFoods_() {
       { action: 'vf_asset_technical', template: 'Company_ValleyFoods_AssetTechnical', title: 'الأصول والماكينات', label: 'الأصول والماكينات', nav: false },
       { action: 'vf_work_center_assets', template: 'Company_ValleyFoods_WorkCenterAssets', title: 'أصول خطوط الإنتاج', label: 'أصول خطوط الإنتاج', nav: false },
 
+      // ----- الجودة -----
+      { action: 'vf_quality_sops', template: 'Company_ValleyFoods_QualitySops', title: 'الجودة — إجراءات العمل (SOP)', label: 'إجراءات العمل', nav: false },
+      { action: 'vf_quality_my_acks', template: 'Company_ValleyFoods_QualityMyAcks', title: 'الجودة — إقراراتي', label: 'إقراراتي', nav: false },
+      { action: 'vf_quality_ncr', template: 'Company_ValleyFoods_QualityNcr', title: 'الجودة — عدم المطابقة و CAPA', label: 'عدم المطابقة (NCR)', nav: false },
+      { action: 'vf_quality_dashboard', template: 'Company_ValleyFoods_QualityDashboard', title: 'الجودة — لوحة المؤشرات', label: 'لوحة الجودة', nav: true },
+      { action: 'vf_quality_audits', template: 'Company_ValleyFoods_QualityAudits', title: 'الجودة — التدقيق الداخلي', label: 'التدقيق الداخلي', nav: false },
+
+
       // ----- صلاحيات (رموز صلاحية، ليست صفحات) -----
       // U-46. valley_cost_view is a PERMISSION TOKEN, not a page. It has no
       // template on purpose: it exists so it appears in "صفحات النظام" and can

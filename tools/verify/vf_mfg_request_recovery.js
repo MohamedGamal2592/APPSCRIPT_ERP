@@ -199,6 +199,7 @@ function makeWorld() {
   SS.insertSheet('valley_current_products', ['unique_id', 'product_id', 'product', 'unit', 'transaction_date', 'transaction_code', 'current_qty', 'unit_cost']);
   SS.insertSheet('valley_products', ['id', 'name_ar', 'category']);
   SS.insertSheet('valley_product_recipe_footer', ['valley_product_recipe_id', 'work_center_id', 'sequence']);
+  SS.insertSheet('valley_employee_shift_schedule', ['shift_unique_id', 'shift_name', 'shift_type', 'shift_start_time', 'shift_end_time', 'is_active']);
   let uuidN = 0;
   const sb = {
     console, JSON, Math, String, Number, Boolean, Object, Array, Error, RegExp, Date,
@@ -291,10 +292,13 @@ function seedWorld(W) {
   seedRow(W.SS, 'valley_current_products', { unique_id: 'BATCH-A', product_id: 'RM1', product: 'خامة', unit: 'كجم', transaction_date: '2026-09-01', transaction_code: 'LOT-A', current_qty: 1000, unit_cost: 5 });
   seedRow(W.SS, 'valley_products', { id: 'P1', name_ar: 'صنف 1', category: 'CAT' });
   seedRow(W.SS, 'valley_product_recipe_footer', { valley_product_recipe_id: 'R1', work_center_id: 'WC1', sequence: 1 });
+  seedRow(W.SS, 'valley_employee_shift_schedule', { shift_unique_id: 'SH-1', shift_name: 'وردية الاختبار 1', shift_type: 'Fixed Shift', shift_start_time: '08:00', shift_end_time: '16:00', is_active: true });
+  seedRow(W.SS, 'valley_employee_shift_schedule', { shift_unique_id: 'SH-2', shift_name: 'وردية الاختبار 2', shift_type: 'Variable Shift', shift_start_time: '16:00', shift_end_time: '00:00', is_active: true });
+  seedRow(W.SS, 'valley_employee_shift_schedule', { shift_unique_id: 'SH-3', shift_name: 'وردية موقوفة', shift_type: 'Fixed Shift', shift_start_time: '00:00', shift_end_time: '08:00', is_active: false });
 }
 function basePayload(over) {
   const d = {
-    manufacture_date: '2026-09-10', operation_type: 'تصنيع وتعبئة', shift: 'وردية 1',
+    manufacture_date: '2026-09-10', operation_type: 'تصنيع وتعبئة', shift: 'SH-1',
     produced_product_id: 'P1', manufactured_qty: 100, actual_qty: 90, recipe_id: 'R1',
     manufacture_batch: 'B-1', mo_status: 'Draft',
     outputs: [{ product_id: 'P1', qty: 10, footers: [{ item: 'BATCH-A', qty: 10 }] }],
@@ -524,6 +528,16 @@ const REQ = (c) => String(c).repeat(24);
   const bad2 = basePayload({ outputs: [{ product_id: 'P1', qty: 10, footers: [{ item: 'BATCH-A', qty: 4 }] }] });
   const r2 = invoke(W, 'save', bad2, USER, guardCtx(W, REQ('h'), bad2));
   check(r2.error && r2.error.notApplied === true, 'footer-sum mismatch is proven not-applied', r2.error && r2.error.message);
+  const badShift = basePayload({ shift: 'SH-9' });
+  const rs = invoke(W, 'save', badShift, USER, guardCtx(W, REQ('h2'), badShift));
+  check(rs.error && rs.error.notApplied === true && /غير مسجلة أو غير مفعّلة/.test(rs.error.message), 'unknown shift ref is proven not-applied', rs.error && rs.error.message);
+  const legacyShift = basePayload({ shift: 'وردية 1' });
+  const rl = invoke(W, 'save', legacyShift, USER, guardCtx(W, REQ('h3'), legacyShift));
+  check(rl.error && rl.error.notApplied === true, 'legacy free-text shift is refused (ref required)', rl.error && rl.error.message);
+  const offShift = basePayload({ shift: 'SH-3' });
+  const ro = invoke(W, 'save', offShift, USER, guardCtx(W, REQ('h4'), offShift));
+  check(ro.error && ro.error.notApplied === true, 'inactive schedule row is refused', ro.error && ro.error.message);
+  check(JSON.stringify(counts(W)) === JSON.stringify({ header: 0, outputs: 0, cons: 0, wo: 0, bp: 0 }), 'shift refusals write nothing');
 })();
 
 (function () {
@@ -861,27 +875,29 @@ const REQ = (c) => String(c).repeat(24);
     produced_product: pid, product_category: cat, manufacture_batch: batch,
     manufactured_qty: 100, expected_qty: 65, actual_qty: 90, mo_status: 'Draft',
   });
-  mo('MO-A', 1, 'وردية 1', 'P1', 'CAT-A', 'B-1', '2026-09-05');
-  mo('MO-B', 2, 'وردية 2', 'P2', 'CAT-B', 'B-2', '2026-09-20');
-  mo('MO-C', 3, 'وردية 1', 'P1', 'CAT-A', 'B-3', '2026-08-10');
+  mo('MO-A', 1, 'SH-1', 'P1', 'CAT-A', 'B-1', '2026-09-05');
+  mo('MO-B', 2, 'SH-2', 'P2', 'CAT-B', 'B-2', '2026-09-20');
+  mo('MO-C', 3, 'SH-1', 'P1', 'CAT-A', 'B-3', '2026-08-10');
   const ids = (r) => (r.result.orders || []).map((o) => o.unique_id).sort().join(',');
   const all = invoke(W, 'orders', {}, USER, {});
   check(all.result && all.result.status === 'success' && all.result.total === 3, 'blank filters return all data', JSON.stringify(all.error && all.error.message));
   check(all.result.orders[0].unique_id === 'MO-C' && all.result.orders[0].product_category === 'فئة أ' && all.result.orders[0].manufacture_batch === 'B-3', 'projection carries category label + batch (newest first)');
+  check(all.result.orders[1].shift === 'SH-2' && all.result.orders[1].shift_name === 'وردية الاختبار 2', 'rows carry the stored shift id plus the resolved shift_name');
   const fo = all.result.filter_options || {};
-  check(Array.isArray(fo.shift) && fo.shift.length === 3, 'shift dropdown options served');
+  check(Array.isArray(fo.shift) && JSON.stringify(fo.shift.map(function (o) { return { value: o.value, label: o.label }; })) === JSON.stringify([{ value: 'SH-1', label: 'وردية الاختبار 1' }, { value: 'SH-2', label: 'وردية الاختبار 2' }]), 'shift dropdown serves schedule ids with names');
+  check(fo.shift[0].start === '08:00' && fo.shift[0].end === '16:00' && fo.shift[1].start === '16:00' && fo.shift[1].end === '00:00', 'shift options carry start/end times for the work-op prefill');
   check(JSON.stringify(fo.categories) === JSON.stringify([{ value: 'CAT-A', label: 'فئة أ' }, { value: 'CAT-B', label: 'فئة ب' }]), 'category dropdown labels served');
   check(JSON.stringify(fo.operation_types) === JSON.stringify(['تصنيع وتعبئة', 'تصنيع (كميات)', 'اعادة تعبئة']), 'operation-type dropdown served');
   check(JSON.stringify(all.result.filter_product_options) === JSON.stringify([{ value: 'P1', label: 'صنف 1' }, { value: 'P2', label: 'صنف 2' }]), 'product filter only lists products used by manufacturing headers');
   check(JSON.stringify(fo.batches) === JSON.stringify(['B-1', 'B-2', 'B-3']), 'batch dropdown labels served');
-  check(ids(invoke(W, 'orders', { shift: 'وردية 1' }, USER, {})) === 'MO-A,MO-C', 'shift filter narrows');
+  check(ids(invoke(W, 'orders', { shift: 'SH-1' }, USER, {})) === 'MO-A,MO-C', 'shift filter narrows');
   check(ids(invoke(W, 'orders', { operation_type: 'تصنيع وتعبئة' }, USER, {})) === 'MO-A,MO-B,MO-C', 'operation-type filter narrows');
   check(ids(invoke(W, 'orders', { produced_product: 'P2' }, USER, {})) === 'MO-B', 'product filter narrows by id');
   check(ids(invoke(W, 'orders', { product_category: 'CAT-B' }, USER, {})) === 'MO-B', 'category filter narrows');
   check(ids(invoke(W, 'orders', { manufacture_batch: 'B-3' }, USER, {})) === 'MO-C', 'batch filter narrows');
   check(ids(invoke(W, 'orders', { from: '2026-09-01', to: '2026-09-30' }, USER, {})) === 'MO-A,MO-B', 'date range narrows');
-  check(ids(invoke(W, 'orders', { shift: 'وردية 1', product_category: 'CAT-A', from: '2026-09-01', to: '2026-09-30' }, USER, {})) === 'MO-A', 'combined filters intersect');
-  const none = invoke(W, 'orders', { shift: 'وردية 9' }, USER, {});
+  check(ids(invoke(W, 'orders', { shift: 'SH-1', product_category: 'CAT-A', from: '2026-09-01', to: '2026-09-30' }, USER, {})) === 'MO-A', 'combined filters intersect');
+  const none = invoke(W, 'orders', { shift: 'SH-9' }, USER, {});
   check(none.result && none.result.total === 0 && none.result.orders.length === 0, 'unknown value is honest empty, not an error');
   const stillAll = invoke(W, 'orders', { shift: '', produced_product: '', product_category: '', manufacture_batch: '', from: '', to: '' }, USER, {});
   check(stillAll.result && stillAll.result.total === 3, 'explicit blanks return all data');

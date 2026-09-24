@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Valley Foods — الجودة — لوحة المؤشرات</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_ValleyFoods_Nav'); ?>
+  <?!= getCompanyThemeCSS_('9940659bd83035d7') ?>
+  <style>
+    .vf-kpi-row { display: grid; grid-template-columns: 1fr; gap: var(--space-3); }
+    @media (min-width: 600px) { .vf-kpi-row { grid-template-columns: 1fr 1fr; } }
+    @media (min-width: 900px) { .vf-kpi-row { grid-template-columns: repeat(4, 1fr); } }
+  </style>
+</head>
+<body>
+  <div id="vf-root"></div>
+
+  <script>
+    var params = new URLSearchParams(window.location.search);
+    var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+    var scriptUrl = window.scriptUrl || '/';
+    var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+    var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('9940659bd83035d7') ?>';
+    var COMPANY_PAGES = <?!= companyPages ?>;
+    var CURRENT_ACTION = '<?!= currentAction ?>';
+    var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+    var CAN_WRITE = UIC.canAdd_(); var CAN_FULL = UIC.canFull_();
+
+    function companyCall(moduleAction, data) {
+      return API.call('company_action', {
+        target_system: '9940659bd83035d7',
+        module_action: moduleAction,
+        data: data || {}
+      }, SESSION_TOKEN);
+    }
+    function esc(v) { return FMT.escape(v); }
+    function fmtDate(v) {
+      if (!v) return '—';
+      var d = (v instanceof Date) ? v : new Date(v);
+      if (isNaN(d.getTime())) return String(v);
+      var p = function (n) { return n < 10 ? '0' + n : '' + n; };
+      return p(d.getDate()) + '/' + p(d.getMonth() + 1) + '/' + d.getFullYear();
+    }
+    function fmtDateTime(v) {
+      if (!v) return '—';
+      var d = (v instanceof Date) ? v : new Date(v);
+      if (isNaN(d.getTime())) return String(v);
+      var p = function (n) { return n < 10 ? '0' + n : '' + n; };
+      return p(d.getDate()) + '/' + p(d.getMonth() + 1) + '/' + d.getFullYear() + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+    }
+  </script>
+
+  <script>
+  (function () {
+    'use strict';
+
+    var STATE = { KPIS: {}, SOPS: [], CAPAS: [], NCRS: [], AUDITS: [], GENERATED: '' };
+
+    var SEVERITY_AR = { Minor: 'ثانوية', Major: 'جسيمة/كبرى', Critical: 'حرجة', Low: 'منخفضة', Medium: 'متوسطة', High: 'عالية' };
+    var SEVERITY_TONE = { Minor: 'neutral', Major: 'warning', Critical: 'danger', Low: 'neutral', Medium: 'warning', High: 'danger' };
+    var NCR_STATUS_AR = { Open: 'مفتوح', 'In Review': 'قيد المراجعة', 'CAPA Assigned': 'إجراءات مُعيّنة', Implemented: 'منفّذ', Verified: 'متحقّق', Closed: 'مغلق', Cancelled: 'ملغى', Rejected: 'مرفوض' };
+    var NCR_STATUS_TONE = { Open: 'warning', 'In Review': 'neutral', 'CAPA Assigned': 'neutral', Implemented: 'neutral', Verified: 'success', Closed: 'success', Cancelled: 'neutral', Rejected: 'danger' };
+    var AUDIT_STATUS_AR = { Planned: 'مخططة', 'In Progress': 'قيد التنفيذ', Completed: 'مكتملة', Closed: 'مغلقة' };
+    var AUDIT_STATUS_TONE = { Planned: 'neutral', 'In Progress': 'warning', Completed: 'success', Closed: 'neutral' };
+
+    function num(v) { var n = Number(v); return isNaN(n) ? 0 : n; }
+    function truncate(s, n) { var v = String(s == null ? '' : s); return v.length > n ? v.slice(0, n) + '…' : v; }
+    function severityLabel(s) { return SEVERITY_AR[s] || s || '—'; }
+    function severityPill(s) { return UIC.statusPill(esc(severityLabel(s)), SEVERITY_TONE[s] || 'neutral'); }
+    function ncrStatusPill(s) { return UIC.statusPill(esc(NCR_STATUS_AR[s] || s || '—'), NCR_STATUS_TONE[s] || 'neutral'); }
+    function auditStatusPill(s) { return UIC.statusPill(esc(AUDIT_STATUS_AR[s] || s || '—'), AUDIT_STATUS_TONE[s] || 'neutral'); }
+    function compliancePill(pct) {
+      if (pct === undefined || pct === null || pct === '') return '—';
+      var n = Number(pct);
+      if (isNaN(n)) return '—';
+      return UIC.statusPill(FMT.number(n) + '%', n >= 90 ? 'success' : (n >= 70 ? 'warning' : 'danger'));
+    }
+    function kpiValue(key) { return FMT.number(num(STATE.KPIS[key])); }
+    function kpiTone(key, tone) { return num(STATE.KPIS[key]) > 0 ? tone : 'default'; }
+    function complianceValue() {
+      var v = STATE.KPIS.acks_compliance_pct;
+      if (v === undefined || v === null || v === '') return '—';
+      var n = Number(v);
+      if (isNaN(n)) return '—';
+      return FMT.number(n) + '%';
+    }
+    function complianceTone() {
+      var n = Number(STATE.KPIS.acks_compliance_pct);
+      if (isNaN(n)) return 'default';
+      if (n >= 90) return 'success';
+      if (n >= 70) return 'warning';
+      return 'danger';
+    }
+    function tile(label, value, icon, tone) {
+      return UIC.statCard({ label: label, value: value, icon: UIC.icon(icon, { size: 24 }), tone: tone });
+    }
+    function section(title, tiles) {
+      return '<div class="vf-card" style="margin-bottom:16px;">' +
+        '<div class="vf-card-header"><h3>' + title + '</h3></div>' +
+        '<div class="vf-card-body"><div class="vf-kpi-row">' + tiles + '</div></div>' +
+      '</div>';
+    }
+    function tableCard(title, containerId) {
+      return '<div class="vf-card" style="margin-bottom:16px;">' +
+        '<div class="vf-card-header"><h3>' + title + '</h3></div>' +
+        '<div class="vf-card-body"><div id="' + containerId + '"></div></div>' +
+      '</div>';
+    }
+
+    function renderApp() {
+      UIC.appShell('vf-root', {
+        companyLogoUrl: COMPANY_LOGO_URL,
+        companyLogoHref: scriptUrl + '?action=vf_dashboard&sessionToken=' + SESSION_TOKEN,
+        companyLogoTitle: 'Valley Foods',
+        breadcrumb: 'Valley Foods / الجودة / لوحة الجودة',
+        contentId: 'vf-quality-content',
+        menuGroups: (window.VALLEYFOODS_MENU || [])
+      });
+      document.getElementById('vf-quality-content').innerHTML =
+        '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px;">' +
+          '<div id="qd-generated" style="font-size:12px;color:var(--text-muted, #6b7280);"></div>' +
+          '<button type="button" class="btn btn-outline" onclick="VF_QUALITY_DASHBOARD_PAGE.refresh()">تحديث</button>' +
+        '</div>' +
+        '<div id="qd-kpis"></div>' +
+        '<div id="qd-tables"></div>';
+      load();
+      UIC.Live.watchPage({
+        call: companyCall,
+        page: 'vf_quality_dashboard',
+        onChange: function () { UIC.Live.arrive(function () { load(true); }); }
+      });
+    }
+
+    function load(quiet) {
+      if (!quiet) UIC.readSkeleton('qd-kpis', { kind: 'card' });
+      if (!quiet) UIC.readSkeleton('qd-tables');
+      return companyCall('get_quality_dashboard')
+        .then(function (res) {
+          res = res || {};
+          STATE.KPIS = res.kpis || {};
+          STATE.SOPS = res.sops || [];
+          STATE.CAPAS = res.capas_overdue_list || [];
+          STATE.NCRS = res.ncrs_recent || [];
+          STATE.AUDITS = res.audits_recent || [];
+          STATE.GENERATED = res.generated_at || '';
+          renderAll();
+        })
+        .catch(function (e) { if (!quiet) UIC.toast((e && e.message) || 'خطأ في تحميل البيانات', 'error'); })
+        .finally(function () { if (!quiet) { try { UI.hideSpinner(); } catch (e) {} } });
+    }
+
+    function renderAll() {
+      renderKpis();
+      renderTables();
+      renderGenerated();
+    }
+
+    function renderGenerated() {
+      var host = document.getElementById('qd-generated');
+      if (!host) return;
+      host.textContent = STATE.GENERATED ? ('آخر تحديث: ' + fmtDateTime(STATE.GENERATED)) : '';
+    }
+
+    function renderKpis() {
+      var host = document.getElementById('qd-kpis');
+      if (!host) return;
+      host.innerHTML =
+        section('الإجراءات (SOPs)',
+          tile('إجمالي الإجراءات', kpiValue('sops_total'), 'file', 'default') +
+          tile('إجراءات سارية', kpiValue('sops_effective'), 'check-circle', 'success') +
+          tile('إصدارات قيد المراجعة', kpiValue('sops_in_review'), 'clock', 'default') +
+          tile('مراجعات متأخرة', kpiValue('sops_review_overdue'), 'alert', kpiTone('sops_review_overdue', 'danger'))
+        ) +
+        section('الإقرارات',
+          tile('بالانتظار', kpiValue('acks_pending'), 'clock', kpiTone('acks_pending', 'warning')) +
+          tile('مقروءة', kpiValue('acks_read'), 'eye', 'default') +
+          tile('موقّعة', kpiValue('acks_signed'), 'check-circle', 'success') +
+          tile('نسبة الالتزام', complianceValue(), 'chart', complianceTone())
+        ) +
+        section('عدم المطابقة و CAPA',
+          tile('NCRs مفتوحة', kpiValue('ncrs_open'), 'alert', kpiTone('ncrs_open', 'warning')) +
+          tile('جسيمة/كبرى', kpiValue('ncrs_open_major'), 'alert', kpiTone('ncrs_open_major', 'danger')) +
+          tile('حرجة', kpiValue('ncrs_open_critical'), 'alert', kpiTone('ncrs_open_critical', 'danger')) +
+          tile('ثانوية', kpiValue('ncrs_open_minor'), 'info', 'default') +
+          tile('NCRs مغلقة', kpiValue('ncrs_closed'), 'check-circle', 'success') +
+          tile('CAPA مفتوحة', kpiValue('capas_open'), 'clock', kpiTone('capas_open', 'warning')) +
+          tile('CAPA متأخرة', kpiValue('capas_overdue'), 'alert', kpiTone('capas_overdue', 'danger')) +
+          tile('CAPA منتهية', kpiValue('capas_done'), 'check-circle', 'success')
+        ) +
+        section('التدقيق',
+          tile('مخططة', kpiValue('audits_planned'), 'calendar', 'default') +
+          tile('قيد التنفيذ', kpiValue('audits_in_progress'), 'clock', kpiTone('audits_in_progress', 'warning')) +
+          tile('مكتملة', kpiValue('audits_completed'), 'check-circle', 'success') +
+          tile('ملاحظات مفتوحة', kpiValue('findings_open'), 'alert', kpiTone('findings_open', 'danger'))
+        );
+    }
+
+    function renderTables() {
+      var host = document.getElementById('qd-tables');
+      if (!host) return;
+      host.innerHTML =
+        tableCard('التزام الإقرارات حسب الإجراء', 'qd-sops') +
+        tableCard('إجراءات تصحيحية متأخرة', 'qd-capas') +
+        tableCard('أحدث حالات عدم المطابقة', 'qd-ncrs') +
+        tableCard('أحدث التدقيقات', 'qd-audits');
+      renderSops();
+      renderCapas();
+      renderNcrs();
+      renderAudits();
+    }
+
+    function renderSops() {
+      var container = document.getElementById('qd-sops');
+      if (!container) return;
+      var rows = STATE.SOPS.map(function (s) {
+        return [
+          '<b>' + esc(s.sop_code || '') + '</b>',
+          esc(s.title_ar || ''),
+          esc(s.current_effective_version || '—'),
+          esc(fmtDate(s.next_review_date)),
+          esc(FMT.number(num(s.acks_pending))),
+          esc(FMT.number(num(s.acks_signed))),
+          compliancePill(s.compliance_pct)
+        ];
+      });
+      container.innerHTML = UIC.dataTable('qd-sops-table', {
+        emptyState: { title: 'لا توجد إجراءات عمل', body: 'ستظهر هنا نسب التزام الإقرارات لكل إجراء عمل.' },
+        headers: ['الكود', 'العنوان', 'الإصدار الساري', 'المراجعة القادمة', 'بالانتظار', 'موقّع', 'نسبة الالتزام'],
+        rows: rows
+      });
+    }
+
+    function renderCapas() {
+      var container = document.getElementById('qd-capas');
+      if (!container) return;
+      var rows = STATE.CAPAS.map(function (c) {
+        return [
+          '<b>' + esc(c.capa_code || '') + '</b>',
+          esc(c.ncr_code || '—'),
+          esc(c.owner_email || '—'),
+          esc(fmtDate(c.due_date)),
+          UIC.statusPill('متأخر ' + FMT.number(num(c.days_overdue)) + ' يوم', 'danger')
+        ];
+      });
+      container.innerHTML = UIC.dataTable('qd-capas-table', {
+        emptyState: { title: 'لا توجد إجراءات تصحيحية متأخرة', body: 'كل الإجراءات التصحيحية ضمن موعد الاستحقاق.' },
+        headers: ['الكود', 'NCR', 'المسؤول', 'تاريخ الاستحقاق', 'أيام التأخير'],
+        rows: rows
+      });
+    }
+
+    function renderNcrs() {
+      var container = document.getElementById('qd-ncrs');
+      if (!container) return;
+      var rows = STATE.NCRS.map(function (n) {
+        return [
+          '<b>' + esc(n.ncr_code || '') + '</b>',
+          esc(fmtDate(n.ncr_date)),
+          severityPill(n.severity),
+          ncrStatusPill(n.status),
+          esc(truncate(n.description, 80)) || '—'
+        ];
+      });
+      container.innerHTML = UIC.dataTable('qd-ncrs-table', {
+        emptyState: { title: 'لا توجد حالات عدم مطابقة', body: 'لم تُسجَّل حالات عدم مطابقة حديثة.' },
+        headers: ['الكود', 'التاريخ', 'الخطورة', 'الحالة', 'الوصف'],
+        rows: rows
+      });
+    }
+
+    function renderAudits() {
+      var container = document.getElementById('qd-audits');
+      if (!container) return;
+      var rows = STATE.AUDITS.map(function (a) {
+        var open = num(a.findings_open);
+        return [
+          '<b>' + esc(a.audit_code || '') + '</b>',
+          esc(fmtDate(a.audit_date)),
+          esc(a.audit_type || '—'),
+          esc(a.area || '—'),
+          auditStatusPill(a.status),
+          open > 0 ? UIC.statusPill(FMT.number(open), 'danger') : '0'
+        ];
+      });
+      container.innerHTML = UIC.dataTable('qd-audits-table', {
+        emptyState: { title: 'لا توجد تدقيقات', body: 'ستظهر هنا أحدث عمليات التدقيق الداخلي.' },
+        headers: ['الكود', 'التاريخ', 'النوع', 'المجال', 'الحالة', 'ملاحظات مفتوحة'],
+        rows: rows
+      });
+    }
+
+    function refresh() { return load(true); }
+
+    window.VF_QUALITY_DASHBOARD_PAGE = {
+      refresh: refresh
+    };
+
+    document.addEventListener('DOMContentLoaded', renderApp);
+  })();
+  </script>
+</body>
+</html>

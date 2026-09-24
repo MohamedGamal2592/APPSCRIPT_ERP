@@ -11,37 +11,6 @@
   <?!= include('Company_TopChemical_Nav'); ?>
   <?!= getCompanyThemeCSS_('3fe1b5cb67b7223e') ?>
   <style>
-    .master-card {
-      border: 1px solid var(--border-color);
-      border-radius: var(--radius-lg);
-      margin-bottom: 12px;
-      background: var(--bg-surface);
-      box-shadow: var(--shadow-sm);
-      overflow: hidden;
-      transition: border-color 0.2s, box-shadow 0.2s;
-    }
-    .master-card:hover {
-      border-color: var(--brand-primary);
-      box-shadow: var(--shadow-md);
-    }
-    .master-head {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 12px;
-      align-items: center;
-      padding: 14px 16px;
-      cursor: pointer;
-      background: var(--bg-surface);
-      border-bottom: 1px solid transparent;
-      transition: background 0.15s;
-    }
-    .master-head:hover {
-      background: var(--brand-subtle-bg);
-    }
-    .master-head.is-open {
-      border-bottom-color: var(--border-color);
-      background: var(--bg-subtle);
-    }
     .badge-tag {
       display: inline-flex;
       align-items: center;
@@ -58,11 +27,6 @@
       color: var(--brand-primary);
       border-color: var(--brand-border);
       font-weight: 700;
-    }
-    .nested-table-wrap {
-      padding: 16px;
-      background: var(--bg-primary);
-      border-top: 1px solid var(--border-color);
     }
     .line-card-editor {
       border: 1px solid var(--border-color);
@@ -297,7 +261,44 @@
       return '<option value="' + escHtml(t) + '"' + (CFILTER.itemType === t ? ' selected' : '') + '>' + escHtml(t) + '</option>';
     }).join('');
 
-    var html =
+    var rows = list.map(function (r) {
+      var cert = getCertNo(r);
+      var lines = certLines(cert);
+      var pending = !!r.__pending;
+      var certSafe = escHtml(cert).replace(/'/g, "\\'");
+      var actions = pending
+        ? '<span style="color:var(--text-muted);font-size:12px;">جارٍ الحفظ...</span>'
+        : UIC.actionBtns(
+            [{ label: '🖨️ طباعة', onclick: 'printCosting(\'' + certSafe + '\')' }].concat(IS_SUPER_ADMIN ? [
+              { label: '✏️ تعديل', onclick: 'openCostingModal(\'' + certSafe + '\')' },
+              { label: '🗑️ حذف', color: 'var(--danger)', onclick: 'deleteCosting(\'' + certSafe + '\')' }
+            ] : [])
+          );
+      return {
+        _cert: cert,
+        cert: '<b>' + escHtml(cert || 'بدون رقم') + '</b>',
+        release_date: escHtml(fmtDateSmart(r['تاريخ الافراج']) || '-'),
+        item: escHtml(r['الصنف'] || '-'),
+        supplier: escHtml(r['اسم_المورد'] || '-'),
+        cert_type: escHtml(r['نوع الشهادة'] || '-'),
+        ship_type: escHtml(r['نوع الشحن'] || '-'),
+        lines_count: lines.length,
+        total_cost: pending ? '—' : moneyCell(Number(r['اجمالي التكاليف']) || 0),
+        actions: actions
+      };
+    });
+    var headers = [
+      { key: 'cert', label: 'رقم الشهادة' },
+      { key: 'release_date', label: 'تاريخ الإفراج' },
+      { key: 'item', label: 'الصنف' },
+      { key: 'supplier', label: 'المورد' },
+      { key: 'cert_type', label: 'نوع الشهادة' },
+      { key: 'ship_type', label: 'نوع الشحن' },
+      { key: 'lines_count', label: 'عدد البنود', numeric: true },
+      { key: 'total_cost', label: 'إجمالي التكاليف', numeric: true },
+      { key: 'actions', label: 'إجراءات' }
+    ];
+    var filterBar =
       '<div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:16px;background:var(--bg-surface);padding:14px 16px;border:1px solid var(--border-color);border-radius:var(--radius-lg);box-shadow:var(--shadow-sm);">' +
         '<div style="display:flex;flex-direction:column;gap:3px;">' +
           '<label style="font-size:11px;font-weight:700;color:var(--text-muted);" for="cf-from-date">من تاريخ (الإفراج/الدخول):</label>' +
@@ -328,134 +329,26 @@
           '<button class="btn btn-outline" style="min-height:36px;padding:6px 14px;font-size:13px;background:var(--success-bg);color:var(--success-text);border-color:var(--success-border);" onclick="exportVatPurchasingXlsx()" title="تحميل شيت Excel المعتمد لضريبة القيمة المضافة مع لوحة المؤشرات (RTL)">📊 تصدير Excel الضريبي (VAT)</button>' +
           (CAN_WRITE ? '<button class="btn btn-primary" style="min-height:36px;padding:6px 14px;font-size:13px;" onclick="openCostingModal()">+ إضافة شهادة وبنودها</button>' : '') +
         '</div>' +
-      '</div>' +
+      '</div>';
+
+    document.getElementById('inputs-table-area').innerHTML =
+      filterBar +
       '<div style="margin-bottom:12px;font-size:13px;color:var(--text-muted);display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">' +
-        '<span>إجمالي الشهادات المعروضة: <strong>' + list.length + '</strong> شهادة</span>' +
-        '<span style="font-size:12px;">(اضغط على كود أو سطر الشهادة لعرض/إخفاء البنود والمنتجات المرتبطة بها)</span>' +
+        '<span>إجمالي الشهادات المعروضة: <strong>' + FMT.number(list.length) + '</strong> شهادة</span>' +
+        '<span style="font-size:12px;">(اضغط على أي سطر لعرض بيانات الشهادة وبنودها)</span>' +
       '</div>' +
-      (list.length ? '' : '<div class="empty-state"><span>لا توجد بيانات مطابقة لخيارات البحث المحددة.</span></div>');
-
-    list.forEach(function (r, i) {
-      var cert = getCertNo(r);
-      /* Tier A: a __pending card shows «—» where the server has not answered
-         yet (اجمالي التكاليف and the computed detail cells are sheet
-         formulas) and offers no actions — print/edit/delete would name a
-         cert the server has never seen. */
-      var pending = !!r.__pending;
-      
-      // Filter child lines in legal_product_purchasing linked to this cert
-      var lines = LINES.filter(function (l) {
-        return getCertNo(l) === cert;
+      UIC.dataTable('inputs-table', {
+        title: 'شهادات التسعير',
+        headers: headers,
+        rows: rows,
+        searchable: false,
+        emptyText: 'لا توجد بيانات مطابقة لخيارات البحث المحددة.',
+        rowClick: function (rec, tr) {
+          if (tr && tr.querySelector && tr.querySelector('.action-dropdown.open')) return;
+          if (rec && rec._cert !== undefined) openInputModal(rec._cert);
+        }
       });
-
-      var materials = lines.map(function (l) { return String(l['المادة'] || '').trim(); }).filter(Boolean);
-      var matText = materials.length
-        ? materials.slice(0, 3).join('، ') + (materials.length > 3 ? ' … و' + (materials.length - 3) + ' أخرى' : '')
-        : 'لا توجد مواد مسجلة';
-
-      var totalLineQty = 0;
-      var totalLineCost = 0;
-      var totalLineSales = 0;
-
-      var lineRows = lines.map(function (l, li) {
-        var q = Number(l['الكمية']) || 0;
-        var c = Number(l['قيمة التكلفة']) || 0;
-        var s = Number(l['سعر البيع']) || Number(l['قيمة البيع']) || 0;
-        var unitCost = q > 0 ? (c / q) : (Number(l['تكلفة الوحدة']) || 0);
-        totalLineQty += q;
-        totalLineCost += c;
-        totalLineSales += s;
-
-        var uploadsHtml = UPLOAD_KEYS.map(function (u) {
-          var ref = l[u.key];
-          if (!ref) return '';
-          return '<button class="btn btn-outline" style="padding:2px 6px;font-size:11px;margin-inline-end:4px;" onclick="viewAttachment(\'' + escHtml(ref).replace(/\'/g, "\\\'") + '\',\'' + escHtml(l['كود المعاملة'] || '').replace(/\'/g, "\\\'") + '\',\'legal_product_purchasing\',\'' + escHtml(u.key).replace(/\'/g, "\\\'") + '\')" title="' + u.label + '">📎 ' + u.label.split(' ')[0] + ' / View</button>';
-        }).filter(Boolean).join('');
-
-        return '<tr>' +
-          '<td><span class="badge-tag badge-primary">' + escHtml(l['كود المعاملة'] || (cert + '-' + (li + 1))) + '</span></td>' +
-          '<td><strong>' + escHtml(l['المادة'] || '-') + '</strong></td>' +
-          '<td>' + escHtml(l['تفاصيل بند'] || r['اسم_المورد'] || '-') + '</td>' +
-          '<td><span class="badge-tag">' + escHtml(l['نوع البند'] || (r['نوع الشحن'] === 'محلي' ? 'محلي' : 'مستورد')) + '</span></td>' +
-          '<td>' + escHtml(l['المعاملة'] || 'مشتريات') + '</td>' +
-          '<td style="text-align:center;font-weight:600;">' + FMT.number(q) + '</td>' +
-          '<td style="text-align:left;color:var(--brand-primary);">' + FMT.currency(unitCost) + '</td>' +
-          '<td style="text-align:left;font-weight:700;">' + FMT.currency(c) + '</td>' +
-          '<td style="text-align:left;">' + FMT.currency(s) + '</td>' +
-          '<td>' + escHtml(l['تاريخ الانتاج'] || '-') + '</td>' +
-          '<td>' + escHtml(l['تاريخ الانتهاء'] || '-') + '</td>' +
-          '<td>' + (uploadsHtml || '<span style="color:var(--text-muted);font-size:11px;">-</span>') + '</td>' +
-          '</tr>';
-      }).join('');
-
-      var lineTable = lines.length ? (
-        '<div class="table-wrap"><table class="table" style="min-width:960px;">' +
-          '<thead><tr>' +
-            '<th>كود المعاملة</th><th>المادة</th><th>تفاصيل البند</th><th>نوع البند</th><th>المعاملة</th><th>الكمية</th><th>تكلفة الوحدة</th><th>قيمة التكلفة</th><th>سعر البيع</th><th>تاريخ الإنتاج</th><th>تاريخ الانتهاء</th><th>المرفقات</th>' +
-          '</tr></thead>' +
-          '<tbody>' + lineRows + '</tbody>' +
-          '<tfoot><tr style="background:var(--bg-subtle);font-weight:700;">' +
-            '<td colspan="5">الإجمالي الكلي لبنود الشهادة (' + lines.length + ' بند)</td>' +
-            '<td style="text-align:center;">' + FMT.number(totalLineQty) + '</td>' +
-            '<td>-</td>' +
-            '<td style="text-align:left;color:var(--brand-primary);">' + FMT.currency(totalLineCost) + '</td>' +
-            '<td style="text-align:left;">' + FMT.currency(totalLineSales) + '</td>' +
-            '<td colspan="3"></td>' +
-          '</tr></tfoot>' +
-        '</table></div>'
-      ) : (
-        '<div class="empty-state" style="padding:24px;">' +
-          '<span>لا توجد بنود منتجات مرتبطة بهذه الشهادة في جدول (legal_product_purchasing).</span><br>' +
-          (CAN_WRITE && !pending ? '<button class="btn btn-outline" style="margin-top:10px;" onclick="event.stopPropagation();openCostingModal(\'' + escHtml(cert) + '\')">+ إضافة وتعديل بنود المنتجات</button>' : '') +
-        '</div>'
-      );
-
-      html +=
-        '<div class="master-card" id="master-card-' + i + '">' +
-          '<div class="master-head" onclick="toggleExpand(' + i + ')">' +
-            '<span id="exp-arrow-' + i + '" style="color:var(--brand-primary);font-size:14px;font-weight:700;width:16px;">▶</span>' +
-            '<span class="badge-tag badge-primary" style="font-size:13px;padding:4px 10px;">' + escHtml(cert || 'بدون رقم') + '</span>' +
-            '<strong style="font-size:14px;color:var(--text-main);">' + escHtml(r['الصنف'] || '-') + '</strong>' +
-            '<span class="badge-tag">' + escHtml(r['نوع الشهادة'] || '-') + '</span>' +
-            '<span class="badge-tag">' + escHtml(r['نوع الشحن'] || '-') + '</span>' +
-            '<span style="color:var(--text-muted);font-size:13px;">المورد: <strong style="color:var(--text-main);">' + escHtml(r['اسم_المورد'] || '-') + '</strong></span>' +
-            '<span style="color:var(--text-muted);font-size:13px;">المواد: ' + escHtml(matText) + '</span>' +
-            '<span class="badge-tag" style="background:var(--success-bg);color:var(--success-text);">' + lines.length + ' بنود منتجات</span>' +
-            '<span style="flex:1;"></span>' +
-            '<div style="text-align:left;margin-left:8px;">' +
-              '<div style="font-size:11px;color:var(--text-muted);">إجمالي التكاليف</div>' +
-              '<div style="font-size:14px;font-weight:700;color:var(--brand-primary);">' + (pending ? '—' : FMT.currency(Number(r['اجمالي التكاليف']) || 0)) + '</div>' +
-            '</div>' +
-            '<div style="display:flex;gap:6px;" onclick="event.stopPropagation();">' +
-              (pending ? '…' :
-                '<button class="btn btn-outline" style="min-height:36px;padding:6px 12px;font-size:13px;" onclick="printCosting(\'' + escHtml(cert) + '\')" title="طباعة الشهادة وبنودها">🖨️ طباعة</button>' +
-                (IS_SUPER_ADMIN
-                  ? '<button class="btn btn-outline" style="min-height:36px;padding:6px 12px;font-size:13px;" onclick="openCostingModal(\'' + escHtml(cert) + '\')">✏️ تعديل</button>' +
-                    '<button class="btn btn-danger" style="min-height:36px;padding:6px 12px;font-size:13px;" onclick="deleteCosting(\'' + escHtml(cert) + '\')">🗑️ حذف</button>'
-                  : '')) +
-            '</div>' +
-          '</div>' +
-          '<div id="exp-body-' + i + '" style="display:none;" class="nested-table-wrap">' +
-            '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,180px),1fr));gap:10px;margin-bottom:14px;background:var(--bg-surface);padding:12px;border-radius:var(--radius-md);border:1px solid var(--border-color);font-size:13px;">' +
-              '<div><span style="color:var(--text-muted);">تاريخ الإفراج:</span> <strong>' + escHtml(r['تاريخ الافراج'] || '-') + '</strong></div>' +
-              '<div><span style="color:var(--text-muted);">البنك المرتبط:</span> <strong>' + escHtml(r['البنك المرتبط'] || '-') + '</strong></div>' +
-              '<div><span style="color:var(--text-muted);">شهر الإقرار:</span> <strong>' + escHtml(r['تم_الاقرار_شهر'] || '-') + '</strong></div>' +
-              '<div><span style="color:var(--text-muted);">سعر الصرف:</span> <strong>' + escHtml(r['سعر الصرف'] || '-') + '</strong></div>' +
-              '<div><span style="color:var(--text-muted);">القيمة بالدولار:</span> <strong>' + FMT.currency(Number(r['القيمه بالدولار']) || 0) + '</strong></div>' +
-              '<div><span style="color:var(--text-muted);">القيمة بالسعر المعلن:</span> <strong>' + (pending ? '—' : FMT.currency(Number(r['القيمه بالسعر المعلن']) || 0)) + '</strong></div>' +
-              '<div><span style="color:var(--text-muted);">المبيعات:</span> <strong>' + (pending ? '—' : FMT.currency(Number(r['المبيعات']) || 0)) + '</strong></div>' +
-              '<div><span style="color:var(--text-muted);">رقم الفاتورة:</span> <strong>' + escHtml(r['invoice_number'] || '-') + '</strong></div>' +
-              '<div><span style="color:var(--text-muted);">تاريخ الفاتورة:</span> <strong>' + escHtml(r['invoice_date'] || '-') + '</strong></div>' +
-            '</div>' +
-            '<div style="overflow-x:auto;-webkit-overflow-scrolling:touch;">' +
-              lineTable +
-            '</div>' +
-          '</div>' +
-        '</div>';
-    });
-
-    document.getElementById('inputs-table-area').innerHTML = html;
-    UIC.autoColumnsAll('inputs-table-area');
+    UIC.initTableSort('inputs-table');
     /* Restore search caret if the user was typing (or a quiet background
        refresh rebuilt the DOM mid-typing). Only restores when cf-search had
        focus before the rebuild, so select/date changes are unaffected. */
@@ -468,15 +361,141 @@
     }
   }
 
-  function toggleExpand(i) {
-    var body = document.getElementById('exp-body-' + i);
-    var arrow = document.getElementById('exp-arrow-' + i);
-    var head = document.querySelector('#master-card-' + i + ' .master-head');
-    if (!body || !arrow) return;
-    var open = body.style.display !== 'none';
-    body.style.display = open ? 'none' : '';
-    arrow.textContent = open ? '▶' : '▼';
-    if (head) head.classList.toggle('is-open', !open);
+  function certLines(cert) {
+    return LINES.filter(function (l) { return getCertNo(l) === cert; });
+  }
+
+  function certTotals(lines) {
+    var qty = 0, cost = 0, sales = 0;
+    (lines || []).forEach(function (l) {
+      qty += Number(l['الكمية']) || 0;
+      cost += Number(l['قيمة التكلفة']) || 0;
+      sales += Number(l['سعر البيع']) || Number(l['قيمة البيع']) || 0;
+    });
+    return { qty: qty, cost: cost, sales: sales };
+  }
+
+  /* Wall date a user can read: date-only strings stay opaque; a Date or an
+     ISO datetime is rendered with local getters, so a sheet date cell never
+     shows its UTC '2026-05-05T21:00:00.000Z' form. */
+  function fmtDateSmart(v) {
+    if (v === null || v === undefined || v === '') return '';
+    if (v instanceof Date) {
+      if (isNaN(v.getTime())) return '';
+      return dateWithOptionalTime(v);
+    }
+    var s = String(v).trim();
+    if (!s) return '';
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+    var d = new Date(s);
+    if (isNaN(d.getTime())) return s;
+    return dateWithOptionalTime(d);
+  }
+
+  function dateWithOptionalTime(d) {
+    var p = function (n) { return ('0' + n).slice(-2); };
+    var day = d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+    var hasTime = d.getHours() || d.getMinutes();
+    return hasTime ? day + ' ' + p(d.getHours()) + ':' + p(d.getMinutes()) : day;
+  }
+
+  function moneyCell(n) {
+    var v = Number(n) || 0;
+    return '<span data-num="' + v + '">' + FMT.currency(v) + '</span>';
+  }
+
+  function statCell(label, val) {
+    return '<div><span style="color:var(--text-muted);">' + label + ':</span> <strong>' + val + '</strong></div>';
+  }
+
+  function openInputModal(cert) {
+    var h = COSTING.find(function (c) { return getCertNo(c) === cert; });
+    if (!h) { UIC.toast('لم يتم العثور على الشهادة — تم تحديث القائمة', 'error'); fetchInputs(true); return; }
+    var lines = certLines(cert);
+    var totals = certTotals(lines);
+    var pending = !!h.__pending;
+    var certSafe = escHtml(cert).replace(/'/g, "\\'");
+    var lineHeaders = [
+      { key: 'transaction_code', label: 'كود المعاملة' },
+      { key: 'item', label: 'المادة' },
+      { key: 'details', label: 'تفاصيل البند' },
+      { key: 'item_type', label: 'نوع البند' },
+      { key: 'deal', label: 'المعاملة' },
+      { key: 'qty', label: 'الكمية', numeric: true },
+      { key: 'unit_cost', label: 'تكلفة الوحدة', money: true },
+      { key: 'cost', label: 'قيمة التكلفة', money: true },
+      { key: 'sales', label: 'سعر البيع', money: true },
+      { key: 'prod_date', label: 'تاريخ الإنتاج' },
+      { key: 'exp_date', label: 'تاريخ الانتهاء' },
+      { key: 'attachments', label: 'المرفقات' }
+    ];
+    var lineRows = lines.map(function (l, li) {
+      var q = Number(l['الكمية']) || 0;
+      var c = Number(l['قيمة التكلفة']) || 0;
+      var s = Number(l['سعر البيع']) || Number(l['قيمة البيع']) || 0;
+      var unitCost = q > 0 ? (c / q) : (Number(l['تكلفة الوحدة']) || 0);
+      var uploadsHtml = UPLOAD_KEYS.map(function (u) {
+        var ref = l[u.key];
+        if (!ref) return '';
+        return '<button class="btn btn-outline" style="padding:2px 6px;font-size:11px;margin-inline-end:4px;" onclick="event.stopPropagation();viewAttachment(\'' + escHtml(ref).replace(/\'/g, "\\\'") + '\',\'' + escHtml(l['كود المعاملة'] || '').replace(/\'/g, "\\\'") + '\',\'legal_product_purchasing\',\'' + escHtml(u.key).replace(/\'/g, "\\\'") + '\')" title="' + u.label + '">📎 ' + u.label.split(' ')[0] + '</button>';
+      }).filter(Boolean).join('');
+      return {
+        transaction_code: '<span class="badge-tag badge-primary">' + escHtml(l['كود المعاملة'] || (cert + '-' + (li + 1))) + '</span>',
+        item: '<strong>' + escHtml(l['المادة'] || '-') + '</strong>',
+        details: escHtml(l['تفاصيل بند'] || h['اسم_المورد'] || '-'),
+        item_type: '<span class="badge-tag">' + escHtml(l['نوع البند'] || (h['نوع الشحن'] === 'محلي' ? 'محلي' : 'مستورد')) + '</span>',
+        deal: escHtml(l['المعاملة'] || 'مشتريات'),
+        qty: q,
+        unit_cost: unitCost,
+        cost: c,
+        sales: s,
+        prod_date: escHtml(fmtDateSmart(l['تاريخ الانتاج']) || '-'),
+        exp_date: escHtml(fmtDateSmart(l['تاريخ الانتهاء']) || '-'),
+        attachments: uploadsHtml || '<span style="color:var(--text-muted);font-size:11px;">-</span>'
+      };
+    });
+    var body =
+      '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,180px),1fr));gap:10px;margin-bottom:12px;background:var(--bg-surface);padding:12px;border-radius:var(--radius-md);border:1px solid var(--border-color);font-size:13px;">' +
+        statCell('تاريخ الإفراج', escHtml(fmtDateSmart(h['تاريخ الافراج']) || '-')) +
+        statCell('البنك المرتبط', escHtml(h['البنك المرتبط'] || '-')) +
+        statCell('شهر الإقرار', escHtml(h['تم_الاقرار_شهر'] || '-')) +
+        statCell('سعر الصرف', escHtml(h['سعر الصرف'] || '-')) +
+        statCell('القيمة بالدولار', FMT.currency(Number(h['القيمه بالدولار']) || 0)) +
+        statCell('القيمة بالسعر المعلن', pending ? '—' : FMT.currency(Number(h['القيمه بالسعر المعلن']) || 0)) +
+        statCell('المبيعات', pending ? '—' : FMT.currency(Number(h['المبيعات']) || 0)) +
+        statCell('رقم الفاتورة', escHtml(h['invoice_number'] || '-')) +
+        statCell('تاريخ الفاتورة', escHtml(fmtDateSmart(h['invoice_date']) || '-')) +
+      '</div>' +
+      '<div style="display:flex;flex-wrap:wrap;gap:14px;font-size:13px;color:#374151;margin-bottom:10px;">' +
+        '<span>عدد البنود: <b>' + FMT.number(lines.length) + '</b></span>' +
+        '<span>إجمالي الكمية: <b>' + FMT.number(totals.qty) + '</b></span>' +
+        '<span>إجمالي التكلفة: <b>' + FMT.currency(totals.cost) + '</b></span>' +
+        '<span>إجمالي البيع: <b>' + FMT.currency(totals.sales) + '</b></span>' +
+      '</div>' +
+      UIC.dataTable('input-lines-table', {
+        title: 'بنود الشهادة',
+        headers: lineHeaders,
+        rows: lineRows,
+        searchable: lineRows.length > 12,
+        exportXlsx: false,
+        printable: false,
+        emptyText: 'لا توجد بنود منتجات مرتبطة بهذه الشهادة في جدول (legal_product_purchasing).'
+      }) +
+      (CAN_WRITE && !pending
+        ? '<div style="margin-top:10px;"><button type="button" class="btn btn-outline" onclick="UIC.closeModal(\'input-detail-modal\');openCostingModal(\'' + certSafe + '\')">+ إضافة وتعديل بنود المنتجات</button></div>'
+        : '');
+    UIC.openModal('input-detail-modal', {
+      size: 'xl',
+      title: 'شهادة تسعير رقم ' + FMT.escape(cert),
+      body: body,
+      footer: '<button type="button" class="btn btn-outline" onclick="UIC.closeModal(\'input-detail-modal\')">إغلاق</button>' +
+        (pending ? '' :
+          '<button type="button" class="btn btn-outline" onclick="printCosting(\'' + certSafe + '\')">🖨️ طباعة</button>' +
+          (IS_SUPER_ADMIN
+            ? '<button type="button" class="btn btn-primary" onclick="UIC.closeModal(\'input-detail-modal\');openCostingModal(\'' + certSafe + '\')">✏️ تعديل</button>'
+            : ''))
+    });
+    UIC.initTableSort('input-lines-table');
   }
 
   var __cfSearchTimer = null;

@@ -370,50 +370,54 @@ assert.strictEqual(historyCalls[0][6].record_uid, 'ru-S1', 'history new keeps th
 
 
 
-// ── 5. TopLight editPurchasing_: one raw read supplies row location + history ─
+// ── 5. TopLight editPurchasing_: key-addressed patch, no full-sheet scan ─────
+const gasstub = require('./gasstub');
+const workbookStub = require('./vf_workbook_stub');
 const tlSource = fs.readFileSync(path.join(ROOT, 'Company_TopLight_Actions.js'), 'utf8');
-const TL_HEADERS = ['unique_id', 'code', 'receipt date', 'approval_status', 'value', 'exchange rate'];
-let tlReads = 0;
-let tlGrid = [TL_HEADERS.slice(), ['PU-1', 'OLD-CODE', '2026-09-01', 'Pending', 10, 1]];
-let tlHistory = [];
-const tlSheet = {
-  __headers: TL_HEADERS.slice(),
-  getDataRange: () => ({ getValues: () => { tlReads++; return tlGrid.map(r => r.slice()); } }),
-  getRange: (r, c, nr, nc) => ({ setValues: values => { tlGrid[r - 1] = values[0].slice(); } }),
-  getLastRow: () => tlGrid.length,
-  getLastColumn: () => TL_HEADERS.length
-};
-const tlctx = {
-  console,
-  PURCHASING_SHEET: 'top_light_purchasing_costing',
-  validatePurchasingHeader_: () => {},
-  getSheet_: () => tlSheet,
-  getHeaders_: sheet => sheet.__headers.slice(),
-  getAllRecords_: () => { throw new Error('OPT-6: editPurchasing_ must not re-read history after the raw scan'); },
-  deleteLines_: () => {},
-  buildHeaderValues_: (headers, uid, header) => headers.map(h => h === 'unique_id' ? uid : (header[h] === undefined ? '' : header[h])),
-  applyHeaderFormulas_: () => {},
-  noteMutation_: () => {},
-  writeLines_: () => {},
-  logHistory_: (...args) => tlHistory.push(args),
-  bustTopLightCaches_: () => {},
-  partyRefs_: () => [],
-  parseDate_: v => v ? new Date(v) : null,
-  num0_: v => Number(v) || 0
-};
-vm.createContext(tlctx);
-const tlStart = tlSource.indexOf('  function editPurchasing_(');
-const tlEnd = tlSource.indexOf('\n  function ', tlStart + 10);
-assert(tlStart >= 0 && tlEnd > tlStart, 'editPurchasing_ body located');
-const tlBody = tlSource.slice(tlStart, tlEnd);
-vm.runInContext(tlBody, tlctx, { filename: 'TopLight edit slice' });
-const edited = tlctx.editPurchasing_({ header: { unique_id: 'PU-1', code: 'NEW-CODE', receipt_date: '2026-09-02', value: 12, exchange_rate: 1 }, lines: [] }, { email: 'user@test' }, 'db');
-assert.strictEqual(edited.status, 'success');
-assert.strictEqual(tlReads, 1, 'edit location and history snapshot share one raw values read');
+const TL_DB = 'tl-opt-reads-db';
+const tlWorkbook = workbookStub.createWorkbookStub();
+tlWorkbook.createSpreadsheet(TL_DB, []);
+const tlHarness = gasstub.createHarness({ workbook: tlWorkbook, sources: ['Company_TopLight_Actions.js'] });
+tlHarness.override('getCompanySpreadsheetId_', () => TL_DB);
+const tlBook = tlWorkbook.openById(TL_DB);
+assert.ok(tlSource.indexOf('applyHeaderFormulas_') === -1 && tlSource.indexOf('appendCashRow_') === -1,
+  'Top Light has no formula-writing write path left');
+const PU_HEADERS = ['unique_id', 'code', 'reciept date', 'type', 'value', 'exchange rate', 'total costs', 'value based on invoice', 'month', 'year', 'tax type', 'sales value', 'sales tax amount', 'approval_status'];
+tlBook.addSheet('top_light_purchasing_costing').__setRows([
+  PU_HEADERS.slice(),
+  ['PU-1', 'OLD-CODE', '2026-09-01', 'شراء', 10, 1, '', '', '', '', '', '', '', 'Pending']
+]);
+tlBook.addSheet('top_light_product_purchasing').__setRows([
+  ['unique_id', 'id', 'top_light_purchasing_costing_id', 'product', 'qty', 'unit_price', 'other_cost', 'exchange_rate', 'receipt_date', 'total_cost', 'unit_cost', 'sales_value_amount', 'sales_qty', 'cost_currency']
+]);
+tlBook.addSheet('top_light_products').__setRows([
+  ['id', 'name_ar', 'name_en', 'category', 'unit', 'carton', 'sales_tax', 'asset_code', 'user', 'created_at']
+]);
+tlBook.addSheet('top_light_customer_vendor').__setRows([
+  ['id', 'name', 'customer_direction', 'type', 'country', 'region', 'registration_number', 'tax_id', 'name_en', 'telephone', 'address', 'user', 'created_at']
+]);
+const tlHistory = [];
+tlHarness.override('logHistory_', function () { tlHistory.push(Array.prototype.slice.call(arguments)); });
+const tlEdited = tlHarness.eval('TopLight').dispatch_({
+  module_action: 'edit_purchasing',
+  data: {
+    header: { unique_id: 'PU-1', code: 'NEW-CODE', receipt_date: '2026-09-02', type: 'شراء', value: 12, exchange_rate: 1 },
+    lines: [{ product: 1, qty: 12, unit_price: 1, other_cost: 0, exchange_rate: 1, sales_value: 0, movement_type: 'شراء' }]
+  }
+}, { isSuperAdmin: true, email: 'user@test' }, TL_DB);
+assert.strictEqual(tlEdited.status, 'success');
+const puRows = tlHarness.call('getAllRecords_', TL_DB, 'top_light_purchasing_costing');
+assert.strictEqual(puRows.length, 1, 'edit keeps the physical header row (no delete + re-append)');
+assert.strictEqual(puRows[0].code, 'NEW-CODE', 'patched column lands on the located row');
+assert.strictEqual(Number(puRows[0]['total costs']), 12, 'derived total costs is refreshed as a value');
 assert.strictEqual(tlHistory.length, 1);
-assert.strictEqual(tlHistory[0][7].code, 'OLD-CODE', 'history old snapshot comes from the located physical row');
-assert.strictEqual(tlHistory[0][7].unique_id, 'PU-1');
-assert.ok(tlBody.indexOf('getAllRecords_') === -1, 'editPurchasing_ has no second full history read');
+assert.strictEqual(tlHistory[0][7].code, 'OLD-CODE', 'history old snapshot comes from the patch, pre-write');
+assert.ok(tlWorkbook.operations().every(op => op.indexOf('deleteRows:top_light_purchasing_costing') === -1),
+  'no physical delete on the document header');
+const lineRows = tlHarness.call('getAllRecords_', TL_DB, 'top_light_product_purchasing');
+assert.strictEqual(lineRows.length, 1, 'replacement lines are appended as values');
+assert.strictEqual(lineRows[0].top_light_purchasing_costing_id, 'PU-1');
+assert.strictEqual(Number(lineRows[0].total_cost), 12, 'line total_cost derived in script');
 
 
 

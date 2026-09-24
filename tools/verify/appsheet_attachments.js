@@ -194,7 +194,8 @@ const builders = [
   ['Company_TopChemical_ImportFollow.html', 'downloadRef', null, 'swift_file'],
   ['Company_ValleyFoods_Deductions.html', 'viewAttachment'],
   ['Company_ValleyFoods_Overtime.html', 'viewAttachment'],
-  ['Company_ValleyFoods_Vacations.html', 'viewAttachment']
+  ['Company_ValleyFoods_Vacations.html', 'viewAttachment'],
+  ['Company_ValleyFoods_Cash.html', 'openAtt']
 ];
 for (const [file, name, sheet, fieldName] of builders) {
   let opened = '';

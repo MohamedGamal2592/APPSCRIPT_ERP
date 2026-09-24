@@ -1,0 +1,798 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Valley Foods — الجودة — إجراءات العمل (SOP)</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_ValleyFoods_Nav'); ?>
+  <?!= getCompanyThemeCSS_('9940659bd83035d7') ?>
+  <style>
+    #sop-modal .modal { width: min(96vw, 1180px); max-width: 1180px; }
+    #sop-modal .modal-body { max-height: 78vh; overflow-y: auto; }
+    .vf-sop-pane { padding-top: 4px; }
+    .vf-sop-toolbar { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+    .vf-sop-toolbar .btn { padding: 4px 10px; font-size: 12px; }
+    .vf-sop-editor { min-height: 220px; padding: 10px 12px; border: 1px solid var(--border-color, #e5e7eb); border-radius: 8px; background: var(--bg-surface, #fff); overflow-y: auto; font-size: 14px; line-height: 1.7; }
+    .vf-sop-editor:focus { outline: 2px solid var(--primary, #16a34a); outline-offset: 1px; }
+    .vf-sop-content-view { padding: 10px 12px; border: 1px dashed var(--border-color, #e5e7eb); border-radius: 8px; background: var(--bg-subtle, #f8fafc); max-height: 340px; overflow: auto; font-size: 14px; line-height: 1.7; }
+    .vf-sop-chip { flex: 1 1 140px; text-align: center; border: 1px solid var(--border-color, #e5e7eb); border-radius: 8px; padding: 8px 14px; background: var(--bg-subtle, #f8fafc); }
+    .vf-sop-event { display: flex; gap: 10px; padding: 8px 4px; border-bottom: 1px dashed var(--border-color, #e5e7eb); font-size: 13px; }
+    .vf-sop-event:last-child { border-bottom: none; }
+  </style>
+</head>
+<body>
+  <div id="vf-root"></div>
+
+  <script>
+    var params = new URLSearchParams(window.location.search);
+    var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+    var scriptUrl = window.scriptUrl || '/';
+    var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+    var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('9940659bd83035d7') ?>';
+    var COMPANY_PAGES = <?!= companyPages ?>;
+    var CURRENT_ACTION = '<?!= currentAction ?>';
+    var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+    var CAN_WRITE = UIC.canAdd_(); var CAN_FULL = UIC.canFull_();
+
+    function companyCall(moduleAction, data) {
+      return API.call('company_action', {
+        target_system: '9940659bd83035d7',
+        module_action: moduleAction,
+        data: data || {}
+      }, SESSION_TOKEN);
+    }
+    function esc(v) { return FMT.escape(v); }
+    function todayStr() { return new Date().toISOString().slice(0, 10); }
+    function fmtDate(v) {
+      if (!v) return '—';
+      var d = (v instanceof Date) ? v : new Date(v);
+      if (isNaN(d.getTime())) return String(v);
+      var p = function (n) { return n < 10 ? '0' + n : '' + n; };
+      return p(d.getDate()) + '/' + p(d.getMonth() + 1) + '/' + d.getFullYear();
+    }
+    function fmtDateTime(v) {
+      if (!v) return '—';
+      var d = (v instanceof Date) ? v : new Date(v);
+      if (isNaN(d.getTime())) return String(v);
+      var p = function (n) { return n < 10 ? '0' + n : '' + n; };
+      return p(d.getDate()) + '/' + p(d.getMonth() + 1) + '/' + d.getFullYear() + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+    }
+  </script>
+
+  <script>
+  (function () {
+    'use strict';
+
+    var STATE = { SOPS: [], VERSIONS: [], FORMS: [], EVENTS: [], ACKS: [], CATEGORIES: [] };
+    var CURRENT = null;
+    var EDIT_MODE = 'view';
+    var DOC = { mode: 'view', version: null, readOnly: null };
+    var ACTIVE_TAB = 'sop-tab-doc';
+    var FORM_DRAFT = [];
+    var REMOVED_FORM_UIDS = [];
+
+    var STATUS_AR = { Draft: 'مسودة', 'In Review': 'قيد المراجعة', Approved: 'معتمد', Rejected: 'مرفوض', Effective: 'ساري', Obsolete: 'متقادم' };
+    var STATUS_TONE = { Draft: 'neutral', 'In Review': 'warning', Approved: 'success', Rejected: 'danger', Effective: 'success', Obsolete: 'neutral' };
+    var EVENT_AR = { Created: 'إنشاء', Edited: 'تعديل', Submitted: 'إرسال', Approved: 'اعتماد', Rejected: 'رفض', 'Made Effective': 'سريان', Obsolete: 'إلغاء', 'New Version': 'إصدار جديد', 'Acks Launched': 'إطلاق إقرارات', 'Form Added': 'إضافة نموذج', 'Form Removed': 'حذف نموذج' };
+    var ACK_AR = { Pending: 'بالانتظار', Read: 'مقروء', Signed: 'موقّع', Superseded: 'ملغى' };
+    var FORM_TYPE_OPTIONS = [
+      { value: 'Doc', label: 'مستند' },
+      { value: 'Sheet', label: 'جدول' },
+      { value: 'Form', label: 'نموذج' },
+      { value: 'PDF', label: 'PDF' },
+      { value: 'ERP page', label: 'صفحة ERP' }
+    ];
+
+    function getV(id) { var el = document.getElementById(id); return el ? String(el.value == null ? '' : el.value).trim() : ''; }
+    function getChecked(id) { var el = document.getElementById(id); return !!(el && el.checked); }
+    function statusLabel(s) { return STATUS_AR[s] || s || '—'; }
+    function statusPillOf(s) { return UIC.statusPill(statusLabel(s), STATUS_TONE[s] || 'neutral'); }
+    function formTypeLabel(t) {
+      for (var i = 0; i < FORM_TYPE_OPTIONS.length; i++) if (FORM_TYPE_OPTIONS[i].value === t) return FORM_TYPE_OPTIONS[i].label;
+      return t || '—';
+    }
+    function categoryOptions() {
+      return STATE.CATEGORIES.map(function (c) { return { value: c.code, label: c.label }; });
+    }
+    function plusYear() {
+      var d = new Date();
+      d.setFullYear(d.getFullYear() + 1);
+      return d.toISOString().slice(0, 10);
+    }
+    function actionBtn(label, onclick, primary, color) {
+      return '<button type="button" class="btn ' + (primary ? 'btn-primary' : 'btn-outline') + '" style="padding:8px 16px;' + (color ? 'color:' + color + ';' : '') + '" onclick="' + onclick + '">' + label + '</button>';
+    }
+    function fmtBtn(label, title, js) {
+      return '<button type="button" class="btn btn-outline" title="' + title + '" onmousedown="event.preventDefault();' + js + '">' + label + '</button>';
+    }
+    function staticField(label, value) {
+      return '<div class="form-field"><label class="form-label">' + label + '</label>' +
+        '<div style="padding:8px 0;font-size:14px;border-bottom:1px dashed var(--border-color, #e5e7eb);">' +
+        (value ? esc(value) : '<span class="vf-text-muted">—</span>') + '</div></div>';
+    }
+
+    function sanitizeHtml(html) {
+      var host = document.createElement('div');
+      host.innerHTML = String(html == null ? '' : html);
+      var BAD = { SCRIPT: 1, STYLE: 1, IFRAME: 1, OBJECT: 1, EMBED: 1, LINK: 1, META: 1, BASE: 1, FORM: 1 };
+      var nodes;
+      try { nodes = host.querySelectorAll('*'); } catch (e) { nodes = []; }
+      for (var i = nodes.length - 1; i >= 0; i--) {
+        var el = nodes[i];
+        if (BAD[String(el.tagName || '').toUpperCase()]) {
+          if (el.parentNode) el.parentNode.removeChild(el);
+          continue;
+        }
+        var attrs = el.attributes || [];
+        for (var j = attrs.length - 1; j >= 0; j--) {
+          var name = String(attrs[j].name || '');
+          var val = String(attrs[j].value || '');
+          if (/^on/i.test(name)) el.removeAttribute(name);
+          else if (/^(href|src|xlink:href)$/i.test(name) && /^\s*javascript:/i.test(val)) el.removeAttribute(name);
+          else if (name === 'style' && /expression\s*\(|url\s*\(\s*['"]?\s*javascript:/i.test(val)) el.removeAttribute(name);
+        }
+      }
+      return host.innerHTML;
+    }
+
+    function matchesId(rowValue, sop) {
+      return String(rowValue) === String(sop.unique_id) || String(rowValue) === String(sop.id);
+    }
+    function sopKey(sop) { return String((sop && (sop.unique_id || sop.id)) || ''); }
+    function findSop(id) {
+      var want = String(id == null ? '' : id);
+      for (var i = 0; i < STATE.SOPS.length; i++) {
+        var s = STATE.SOPS[i];
+        if (String(s.unique_id) === want || String(s.id) === want) return s;
+      }
+      return null;
+    }
+    function versionsOf(sop) {
+      return STATE.VERSIONS.filter(function (v) { return matchesId(v.sop_id, sop); })
+        .sort(function (a, b) { return (Number(b.version) || 0) - (Number(a.version) || 0); });
+    }
+    function formsOf(sop) { return STATE.FORMS.filter(function (f) { return matchesId(f.sop_id, sop); }); }
+    function eventsOf(sop) { return STATE.EVENTS.filter(function (e) { return matchesId(e.sop_id, sop); }); }
+    function acksOf(sop) { return STATE.ACKS.filter(function (a) { return matchesId(a.sop_id, sop); }); }
+    function catLabel(code) {
+      if (code == null || code === '') return '—';
+      for (var i = 0; i < STATE.CATEGORIES.length; i++) {
+        if (String(STATE.CATEGORIES[i].code) === String(code)) return STATE.CATEGORIES[i].label;
+      }
+      return String(code);
+    }
+    function docState(sop) {
+      var all = versionsOf(sop);
+      var eff = null, work = null, i;
+      if (sop.current_effective_version != null && String(sop.current_effective_version) !== '') {
+        for (i = 0; i < all.length; i++) if (String(all[i].version) === String(sop.current_effective_version)) { eff = all[i]; break; }
+      }
+      if (!eff) for (i = 0; i < all.length; i++) if (all[i].status === 'Effective') { eff = all[i]; break; }
+      if (sop.draft_version != null && String(sop.draft_version) !== '') {
+        for (i = 0; i < all.length; i++) if (String(all[i].version) === String(sop.draft_version)) { work = all[i]; break; }
+      }
+      if (!work) for (i = 0; i < all.length; i++) if (all[i].status === 'Draft' || all[i].status === 'Rejected') { work = all[i]; break; }
+      if (!work) work = all[0] || null;
+      return { all: all, effective: eff, work: work, latest: all[0] || null };
+    }
+    function sopStatus(sop) {
+      var st = docState(sop);
+      if (st.work) return st.work.status;
+      if (st.effective) return 'Effective';
+      return '';
+    }
+    function activeVersion() {
+      if (DOC.mode === 'view') return DOC.readOnly || null;
+      return DOC.version || null;
+    }
+
+    function renderApp() {
+      UIC.appShell('vf-root', {
+        companyLogoUrl: COMPANY_LOGO_URL,
+        companyLogoHref: scriptUrl + '?action=vf_dashboard&sessionToken=' + SESSION_TOKEN,
+        companyLogoTitle: 'Valley Foods',
+        breadcrumb: 'Valley Foods / الجودة / إجراءات العمل (SOP)',
+        contentId: 'vf-quality-content',
+        menuGroups: (window.VALLEYFOODS_MENU || [])
+      });
+      document.getElementById('vf-quality-content').innerHTML =
+        '<div class="vf-card"><div class="vf-card-header"><h3>إجراءات العمل (SOP)</h3>' +
+          (CAN_WRITE ? '<button class="btn btn-primary" onclick="VF_QUALITY_SOPS_PAGE.openNew()">+ إجراء جديد</button>' : '') +
+        '</div><div class="vf-card-body">' +
+          '<div id="sop-list"></div>' +
+        '</div></div>';
+      load();
+      UIC.Live.watchPage({
+        call: companyCall,
+        page: 'vf_quality_sops',
+        onChange: function () { UIC.Live.arrive(function () { load(true); }); }
+      });
+    }
+
+    function load(quiet) {
+      if (!quiet) UIC.readSkeleton('sop-list');
+      return companyCall('get_quality_sops')
+        .then(function (res) {
+          res = res || {};
+          STATE.SOPS = res.sops || [];
+          STATE.VERSIONS = res.versions || [];
+          STATE.FORMS = res.forms || [];
+          STATE.EVENTS = res.events || [];
+          STATE.ACKS = res.acks || [];
+          STATE.CATEGORIES = res.categories || [];
+          renderList();
+          if (CURRENT) {
+            var fresh = findSop(sopKey(CURRENT));
+            if (fresh) { CURRENT = fresh; renderModal(fresh); }
+            else { UIC.closeModal('sop-modal'); CURRENT = null; }
+          }
+        })
+        .catch(function (e) { if (!quiet) UIC.toast((e && e.message) || 'خطأ في تحميل البيانات', 'error'); })
+        .finally(function () { if (!quiet) { try { UI.hideSpinner(); } catch (e) {} } });
+    }
+
+    function renderList() {
+      var container = document.getElementById('sop-list');
+      if (!container) return;
+      var rows = STATE.SOPS.map(function (s) {
+        var st = docState(s);
+        return [
+          '<b data-sop="' + esc(sopKey(s)) + '">' + esc(s.sop_code || '') + '</b>',
+          esc(s.title_ar || ''),
+          esc(catLabel(s.category)),
+          esc(s.current_effective_version || '—'),
+          statusPillOf(sopStatus(s)),
+          esc(s.owner_email || '—'),
+          st.effective ? fmtDate(st.effective.next_review_date) : '—'
+        ];
+      });
+      container.innerHTML = UIC.dataTable('sop-table', {
+        emptyState: { title: 'لا توجد إجراءات عمل', body: 'ابدأ بإنشاء إجراء عمل جديد من زر «إجراء جديد».' },
+        headers: ['الكود', 'العنوان', 'التصنيف', 'الإصدار الساري', 'الحالة', 'المالك', 'المراجعة القادمة'],
+        rows: rows,
+        rowClick: function (rec, tr) {
+          var el = (tr && tr.querySelector) ? tr.querySelector('[data-sop]') : null;
+          if (el) openSop(el.getAttribute('data-sop'));
+        }
+      });
+    }
+
+    function tabBtn(paneId, label, active) {
+      return '<button type="button" class="btn ' + (active ? 'btn-primary' : 'btn-outline') + '" style="padding:10px 20px;font-size:14px;" onclick="VF_QUALITY_SOPS_PAGE.switchTab(\'' + paneId + '\')">' + label + '</button>';
+    }
+    function switchTab(paneId) {
+      ACTIVE_TAB = paneId;
+      ['sop-tab-doc', 'sop-tab-forms', 'sop-tab-history', 'sop-tab-acks'].forEach(function (id) {
+        var el = document.getElementById(id);
+        if (el) el.style.display = (id === paneId) ? '' : 'none';
+      });
+    }
+
+    function openNew() {
+      if (!CAN_WRITE) { UIC.toast('غير مصرح', 'error'); return; }
+      CURRENT = null;
+      EDIT_MODE = 'new';
+      renderModal(null);
+    }
+    function openSop(id) {
+      var sop = findSop(id);
+      if (!sop) { UIC.toast('لم يتم العثور على الإجراء — تم تحديث القائمة', 'error'); load(true); return; }
+      CURRENT = sop;
+      EDIT_MODE = 'view';
+      renderModal(sop);
+    }
+    function newVersion() {
+      if (!CAN_WRITE) { UIC.toast('غير مصرح', 'error'); return; }
+      EDIT_MODE = 'newversion';
+      if (CURRENT) renderModal(CURRENT);
+    }
+
+    function renderModal(sop) {
+      var isNew = !sop;
+      var title = isNew
+        ? 'إجراء عمل جديد'
+        : esc(sop.title_ar || '') + ' <span style="font-size:13px;font-weight:600;color:var(--text-muted, #6b7280);">' + esc(sop.sop_code || '') + '</span> ' + statusPillOf(sopStatus(sop));
+      UIC.openModal('sop-modal', {
+        size: 'xl',
+        title: title,
+        body: isNew ? renderNewSopBody() : renderSopBody(sop),
+        footer: '<button type="button" class="btn btn-outline" onclick="UIC.closeModal(\'sop-modal\')">إغلاق</button>'
+      });
+      var overlay = document.getElementById('sop-modal');
+      if (overlay) {
+        overlay.setAttribute('data-modal-open', 'true');
+        var box = overlay.querySelector ? overlay.querySelector('.modal') : null;
+        if (box && box.style) box.style.maxWidth = '1180px';
+      }
+      if (!isNew) {
+        try { UIC.autoColumnsAll('sop-forms-body'); } catch (e) {}
+      }
+    }
+
+    function renderNewSopBody() {
+      return '<form id="sop-new-form" class="form-grid">' +
+        UIC.field({ key: 'sop-f-title-ar', label: 'العنوان العربي', type: 'text', required: true, value: '' }) +
+        UIC.field({ key: 'sop-f-title-en', label: 'العنوان الإنجليزي', type: 'text', value: '' }) +
+        UIC.combo({ key: 'sop-f-category', label: 'التصنيف', options: categoryOptions(), value: '', placeholder: 'اختر التصنيف…' }) +
+        UIC.field({ key: 'sop-f-dept', label: 'الإدارة المعنية', type: 'text', value: '' }) +
+        UIC.field({ key: 'sop-f-role', label: 'الدور المعني', type: 'text', value: '' }) +
+        UIC.field({ key: 'sop-f-owner', label: 'المالك (البريد الإلكتروني)', type: 'email', value: '' }) +
+      '</form>' +
+      '<div style="display:flex;justify-content:flex-end;gap:10px;margin-top:12px;">' +
+        actionBtn('💾 حفظ', 'VF_QUALITY_SOPS_PAGE.saveNewSop()', true) +
+      '</div>';
+    }
+
+    function renderSopBody(sop) {
+      var st = docState(sop);
+      var editableWork = st.work && (st.work.status === 'Draft' || st.work.status === 'Rejected') && CAN_WRITE;
+      var mode;
+      if (EDIT_MODE === 'newversion') mode = 'newversion';
+      else if (editableWork) mode = 'edit';
+      else if (!st.all.length && CAN_WRITE) mode = 'new';
+      else mode = 'view';
+      var readOnly = (mode === 'view') ? (st.work || st.effective || st.latest) : null;
+      DOC = { mode: mode, version: (mode === 'edit' ? st.work : null), prefill: (mode === 'newversion' ? st.effective : null), readOnly: readOnly };
+
+      var headerEditable = (mode === 'edit' || mode === 'new');
+      var html = '<div id="sop-modal-alert"></div>';
+      html += '<div class="form-grid" style="margin-bottom:12px;">';
+      if (headerEditable) {
+        html += UIC.field({ key: 'sop-f-title-ar', label: 'العنوان العربي', type: 'text', required: true, value: esc(sop.title_ar || '') });
+        html += UIC.field({ key: 'sop-f-title-en', label: 'العنوان الإنجليزي', type: 'text', value: esc(sop.title_en || '') });
+        html += UIC.combo({ key: 'sop-f-category', label: 'التصنيف', options: categoryOptions(), value: sop.category || '', placeholder: 'اختر التصنيف…' });
+        html += UIC.field({ key: 'sop-f-dept', label: 'الإدارة المعنية', type: 'text', value: esc(sop.applicability_dept || '') });
+        html += UIC.field({ key: 'sop-f-role', label: 'الدور المعني', type: 'text', value: esc(sop.applicability_role || '') });
+        html += UIC.field({ key: 'sop-f-owner', label: 'المالك (البريد الإلكتروني)', type: 'email', value: esc(sop.owner_email || '') });
+      } else {
+        html += staticField('العنوان العربي', sop.title_ar);
+        html += staticField('العنوان الإنجليزي', sop.title_en);
+        html += staticField('التصنيف', catLabel(sop.category));
+        html += staticField('الإدارة المعنية', sop.applicability_dept);
+        html += staticField('الدور المعني', sop.applicability_role);
+        html += staticField('المالك', sop.owner_email);
+      }
+      html += '</div>';
+      html += '<div style="display:flex;gap:4px;border-bottom:2px solid var(--primary, #16a34a);margin-bottom:0;flex-wrap:wrap;">' +
+        tabBtn('sop-tab-doc', '📄 الوثيقة', ACTIVE_TAB === 'sop-tab-doc') +
+        tabBtn('sop-tab-forms', '🧾 النماذج', ACTIVE_TAB === 'sop-tab-forms') +
+        tabBtn('sop-tab-history', '🕘 السجل', ACTIVE_TAB === 'sop-tab-history') +
+        tabBtn('sop-tab-acks', '✅ الإقرارات', ACTIVE_TAB === 'sop-tab-acks') +
+      '</div>';
+      html += '<div id="sop-tab-doc" class="vf-sop-pane" style="display:' + (ACTIVE_TAB === 'sop-tab-doc' ? '' : 'none') + ';">' + renderDocPane(sop, st, mode, readOnly) + '</div>';
+      html += '<div id="sop-tab-forms" class="vf-sop-pane" style="display:' + (ACTIVE_TAB === 'sop-tab-forms' ? '' : 'none') + ';">' + renderFormsPane(sop) + '</div>';
+      html += '<div id="sop-tab-history" class="vf-sop-pane" style="display:' + (ACTIVE_TAB === 'sop-tab-history' ? '' : 'none') + ';">' + renderHistoryPane(sop) + '</div>';
+      html += '<div id="sop-tab-acks" class="vf-sop-pane" style="display:' + (ACTIVE_TAB === 'sop-tab-acks' ? '' : 'none') + ';">' + renderAcksPane(sop) + '</div>';
+      return html;
+    }
+
+    function renderDocPane(sop, st, mode, readOnly) {
+      var html = '';
+      var badge = readOnly ? statusPillOf(readOnly.status) : (DOC.version ? statusPillOf(DOC.version.status) : UIC.statusPill('مسودة', 'neutral'));
+      var label;
+      if (mode === 'view') label = readOnly ? ('الإصدار ' + esc(String(readOnly.version || ''))) : 'لا يوجد محتوى';
+      else if (mode === 'newversion') label = 'إصدار جديد';
+      else if (mode === 'new') label = 'الإصدار الأول';
+      else label = 'مسودة الإصدار ' + esc(String((DOC.version && DOC.version.version) || ''));
+      html += '<div style="display:flex;align-items:center;gap:10px;margin:12px 0 8px;">' +
+        '<b style="color:var(--success-text, #166534);font-size:13px;">' + label + '</b>' + badge +
+      '</div>';
+
+      if (mode === 'view') {
+        var content = readOnly ? sanitizeHtml(readOnly.content_html || '') : '';
+        html += '<div class="vf-sop-content-view">' + (content || '<span class="vf-text-muted">لا يوجد محتوى بعد.</span>') + '</div>';
+        if (readOnly && readOnly.pdf_ref) {
+          html += '<div style="margin-top:10px;"><a class="btn btn-primary" href="' + esc(readOnly.pdf_ref) + '" target="_blank" rel="noopener">📄 عرض ملف PDF</a></div>';
+        }
+        if (readOnly && readOnly.reject_comment) {
+          html += '<div style="margin-top:10px;font-size:13px;color:var(--danger-text, #b91c1c);">سبب الرفض: ' + esc(readOnly.reject_comment) + '</div>';
+        }
+        var viewActions = [];
+        var inFlight = readOnly && (readOnly.status === 'In Review' || readOnly.status === 'Approved');
+        if (st.effective && CAN_WRITE && !inFlight) viewActions.push(actionBtn('＋ إصدار جديد', 'VF_QUALITY_SOPS_PAGE.newVersion()', false));
+        if (readOnly && readOnly.status === 'In Review' && CAN_FULL) {
+          viewActions.push(actionBtn('اعتماد', 'VF_QUALITY_SOPS_PAGE.approveVersion()', true));
+          viewActions.push(actionBtn('رفض', 'VF_QUALITY_SOPS_PAGE.openReject()', false, 'var(--danger, #dc2626)'));
+        }
+        if (viewActions.length) {
+          html += '<div style="display:flex;justify-content:flex-end;gap:10px;margin-top:12px;">' + viewActions.join('') + '</div>';
+        }
+        if (readOnly && readOnly.status === 'Approved' && CAN_FULL) {
+          html += '<div class="form-grid" style="margin-top:12px;background:var(--bg-subtle, #f8fafc);border:1px solid var(--border-color, #e5e7eb);border-radius:8px;padding:12px;">' +
+            UIC.field({ key: 'sop-f-effective-date', label: 'تاريخ السريان', type: 'date', required: true, value: todayStr() }) +
+            UIC.field({ key: 'sop-f-next-review', label: 'المراجعة القادمة', type: 'date', value: plusYear() }) +
+            '<div class="form-field" style="align-self:end;">' + actionBtn('جعلها سارية', 'VF_QUALITY_SOPS_PAGE.makeEffective()', true) + '</div>' +
+          '</div>';
+        }
+        return html;
+      }
+
+      var initial = '';
+      if (mode === 'edit' && DOC.version) initial = sanitizeHtml(DOC.version.content_html || '');
+      else if (mode === 'newversion' && DOC.prefill) initial = sanitizeHtml(DOC.prefill.content_html || '');
+      html += '<div class="form-field"><label class="form-label">محتوى الإجراء</label>' +
+        '<div class="vf-sop-toolbar">' +
+          fmtBtn('B', 'عريض', "VF_QUALITY_SOPS_PAGE.execFmt('bold')") +
+          fmtBtn('I', 'مائل', "VF_QUALITY_SOPS_PAGE.execFmt('italic')") +
+          fmtBtn('U', 'تسطير', "VF_QUALITY_SOPS_PAGE.execFmt('underline')") +
+          fmtBtn('• قائمة', 'قائمة نقطية', "VF_QUALITY_SOPS_PAGE.execFmt('insertUnorderedList')") +
+          fmtBtn('1. قائمة', 'قائمة رقمية', "VF_QUALITY_SOPS_PAGE.execFmt('insertOrderedList')") +
+          fmtBtn('H2', 'عنوان فرعي', "VF_QUALITY_SOPS_PAGE.execFmt('formatBlock', 'H2')") +
+          fmtBtn('مسح التنسيق', 'إزالة التنسيق', "VF_QUALITY_SOPS_PAGE.execFmt('removeFormat')") +
+        '</div>' +
+        '<div id="sop-content-editor" class="vf-sop-editor" contenteditable="true">' + initial + '</div>' +
+      '</div>';
+      html += '<div class="form-grid" style="margin-top:10px;">';
+      if (mode === 'newversion') {
+        html += UIC.field({ key: 'sop-f-change-type', label: 'نوع التغيير', type: 'select', combo: false, required: true,
+          options: [{ value: 'Major', label: 'رئيسي' }, { value: 'Minor', label: 'ثانوي' }], value: 'Minor' });
+      }
+      html += UIC.field({ key: 'sop-f-change-summary', label: 'ملخص التغيير', type: 'text', value: esc((DOC.version && DOC.version.change_summary) || '') });
+      html += '</div>';
+      var bar = [];
+      if (CAN_WRITE) bar.push(actionBtn('💾 حفظ المسودة', 'VF_QUALITY_SOPS_PAGE.saveDraft()', true));
+      if (mode === 'edit' && DOC.version && DOC.version.status === 'Draft' && CAN_WRITE) {
+        bar.push(actionBtn('إرسال للمراجعة', 'VF_QUALITY_SOPS_PAGE.submitVersion()', false));
+      }
+      html += '<div style="display:flex;justify-content:flex-end;gap:10px;margin-top:12px;">' + bar.join('') + '</div>';
+      return html;
+    }
+
+    function formsTableHtml() {
+      var head = '<thead><tr><th>كود النموذج</th><th>العنوان</th><th>النوع</th><th>الرابط / المعرّف</th><th>المراجعة</th><th>مطلوب</th>' + (CAN_WRITE ? '<th></th>' : '') + '</tr></thead>';
+      var body = '';
+      FORM_DRAFT.forEach(function (f, i) {
+        body += '<tr>';
+        if (CAN_WRITE) {
+          body += '<td><input id="sop-form-code-' + i + '" class="input" type="text" value="' + esc(f.form_code) + '"></td>' +
+            '<td><input id="sop-form-title-' + i + '" class="input" type="text" value="' + esc(f.title) + '"></td>' +
+            '<td><select id="sop-form-type-' + i + '" class="input">' + FORM_TYPE_OPTIONS.map(function (o) {
+              return '<option value="' + esc(o.value) + '"' + (o.value === f.form_type ? ' selected' : '') + '>' + o.label + '</option>';
+            }).join('') + '</select></td>' +
+            '<td><input id="sop-form-link-' + i + '" class="input" type="text" value="' + esc(f.link_or_id) + '"></td>' +
+            '<td><input id="sop-form-rev-' + i + '" class="input" type="text" value="' + esc(f.revision) + '"></td>' +
+            '<td style="text-align:center;"><input id="sop-form-req-' + i + '" type="checkbox"' + (f.is_required ? ' checked' : '') + '></td>' +
+            '<td><button type="button" class="btn btn-outline" style="padding:2px 8px;color:var(--danger, #dc2626);" onclick="VF_QUALITY_SOPS_PAGE.removeFormRow(' + i + ')">✕</button></td>';
+        } else {
+          body += '<td>' + esc(f.form_code) + '</td><td>' + esc(f.title) + '</td><td>' + esc(formTypeLabel(f.form_type)) + '</td>' +
+            '<td>' + esc(f.link_or_id) + '</td><td>' + esc(f.revision) + '</td><td>' + (f.is_required ? 'نعم' : 'لا') + '</td>';
+        }
+        body += '</tr>';
+      });
+      if (!FORM_DRAFT.length) {
+        body = '<tr><td colspan="' + (CAN_WRITE ? 7 : 6) + '" style="text-align:center;color:var(--text-muted, #6b7280);">لا توجد نماذج مرتبطة</td></tr>';
+      }
+      return '<div class="table-wrap"><table class="table">' + head + '<tbody>' + body + '</tbody></table></div>';
+    }
+
+    function renderFormsPane(sop) {
+      FORM_DRAFT = formsOf(sop).map(function (f) {
+        return {
+          unique_id: f.unique_id || '',
+          form_code: f.form_code || '',
+          title: f.title || '',
+          form_type: f.form_type || 'Doc',
+          link_or_id: f.link_or_id || '',
+          revision: f.revision || '',
+          is_required: f.is_required === true || String(f.is_required).toLowerCase() === 'true'
+        };
+      });
+      REMOVED_FORM_UIDS = [];
+      var html = '<div style="display:flex;justify-content:space-between;align-items:center;margin:12px 0 8px;">' +
+        '<b style="color:var(--success-text, #166534);font-size:13px;">النماذج المرتبطة بالإجراء</b>' +
+        (CAN_WRITE ? '<button type="button" class="btn btn-outline" onclick="VF_QUALITY_SOPS_PAGE.addFormRow()">+ إضافة نموذج</button>' : '') +
+      '</div><div id="sop-forms-body">' + formsTableHtml() + '</div>';
+      if (CAN_WRITE) {
+        html += '<div style="display:flex;justify-content:flex-end;gap:10px;margin-top:12px;">' +
+          actionBtn('💾 حفظ النماذج', 'VF_QUALITY_SOPS_PAGE.saveForms()', true) + '</div>';
+      }
+      return html;
+    }
+
+    function redrawForms() {
+      var host = document.getElementById('sop-forms-body');
+      if (!host) return;
+      host.innerHTML = formsTableHtml();
+      try { UIC.autoColumnsAll('sop-forms-body'); } catch (e) {}
+    }
+    function collectFormsFromDom() {
+      for (var i = 0; i < FORM_DRAFT.length; i++) {
+        if (!document.getElementById('sop-form-code-' + i)) continue;
+        FORM_DRAFT[i].form_code = getV('sop-form-code-' + i);
+        FORM_DRAFT[i].title = getV('sop-form-title-' + i);
+        FORM_DRAFT[i].form_type = getV('sop-form-type-' + i) || 'Doc';
+        FORM_DRAFT[i].link_or_id = getV('sop-form-link-' + i);
+        FORM_DRAFT[i].revision = getV('sop-form-rev-' + i);
+        FORM_DRAFT[i].is_required = getChecked('sop-form-req-' + i);
+      }
+    }
+    function addFormRow() {
+      if (!CAN_WRITE) return;
+      collectFormsFromDom();
+      FORM_DRAFT.push({ unique_id: '', form_code: '', title: '', form_type: 'Doc', link_or_id: '', revision: '', is_required: false });
+      redrawForms();
+    }
+    function removeFormRow(i) {
+      if (!CAN_WRITE) return;
+      collectFormsFromDom();
+      var f = FORM_DRAFT[i];
+      if (f && f.unique_id) REMOVED_FORM_UIDS.push(f.unique_id);
+      FORM_DRAFT.splice(i, 1);
+      redrawForms();
+    }
+    function saveForms() {
+      if (!CAN_WRITE) { UIC.toast('غير مصرح', 'error'); return Promise.resolve(); }
+      if (!CURRENT) return Promise.resolve();
+      collectFormsFromDom();
+      var sopId = sopKey(CURRENT);
+      var rows = FORM_DRAFT.filter(function (f) { return f.form_code || f.title; });
+      var removals = REMOVED_FORM_UIDS.slice();
+      UI.showSpinner();
+      var chain = Promise.resolve();
+      removals.forEach(function (uid) {
+        chain = chain.then(function () { return companyCall('save_quality_sop_forms', { sop_id: sopId, unique_id: uid, remove: true }); });
+      });
+      rows.forEach(function (f) {
+        chain = chain.then(function () {
+          return companyCall('save_quality_sop_forms', {
+            sop_id: sopId, unique_id: f.unique_id || '', form_code: f.form_code, title: f.title,
+            form_type: f.form_type, link_or_id: f.link_or_id, revision: f.revision, is_required: f.is_required
+          });
+        });
+      });
+      return chain
+        .then(function () { UIC.toast('تم حفظ النماذج', 'success'); return load(true); })
+        .catch(function (e) { UIC.toast((e && e.message) || 'فشل حفظ النماذج', 'error'); })
+        .finally(function () { UI.hideSpinner(); });
+    }
+
+    function renderHistoryPane(sop) {
+      var evs = eventsOf(sop).sort(function (a, b) { return new Date(b.at).getTime() - new Date(a.at).getTime(); });
+      var html = '<b style="color:var(--success-text, #166534);font-size:13px;display:block;margin:12px 0 8px;">سجل الأحداث</b>';
+      if (!evs.length) return html + '<div class="empty-state"><span>لا توجد أحداث مسجلة</span></div>';
+      html += '<div style="border:1px solid var(--border-color, #e5e7eb);border-radius:8px;padding:4px 12px;">';
+      evs.forEach(function (e) {
+        html += '<div class="vf-sop-event">' +
+          '<div style="min-width:110px;"><b>' + esc(EVENT_AR[e.event_type] || e.event_type || '') + '</b></div>' +
+          '<div style="flex:1;">' +
+            '<div>' + esc(e.actor_email || '') +
+              ((e.from_status || e.to_status) ? ' — ' + esc(statusLabel(e.from_status)) + ' ← ' + esc(statusLabel(e.to_status)) : '') +
+            '</div>' +
+            (e.comment ? '<div style="color:var(--text-muted, #6b7280);font-size:12px;">' + esc(e.comment) + '</div>' : '') +
+          '</div>' +
+          '<div style="white-space:nowrap;color:var(--text-muted, #6b7280);font-size:12px;">' + esc(fmtDateTime(e.at)) + '</div>' +
+        '</div>';
+      });
+      html += '</div>';
+      return html;
+    }
+
+    function ackChip(label, value) {
+      return '<div class="vf-sop-chip"><div style="font-size:11px;color:var(--text-muted, #6b7280);font-weight:700;">' + label + '</div>' +
+        '<div style="font-size:17px;font-weight:800;">' + value + '</div></div>';
+    }
+    function renderAcksPane(sop) {
+      var acks = acksOf(sop);
+      var counts = { Pending: 0, Read: 0, Signed: 0, Superseded: 0 };
+      acks.forEach(function (a) { if (counts[a.status] != null) counts[a.status]++; });
+      var ver = sop.current_effective_version || '';
+      var html = '<b style="color:var(--success-text, #166534);font-size:13px;display:block;margin:12px 0 8px;">ملخص الإقرارات</b>' +
+        '<div style="display:flex;flex-wrap:wrap;gap:12px;margin-bottom:12px;">' +
+          ackChip(ACK_AR.Pending, counts.Pending) +
+          ackChip(ACK_AR.Read, counts.Read) +
+          ackChip(ACK_AR.Signed, counts.Signed) +
+          ackChip(ACK_AR.Superseded, counts.Superseded) +
+          ackChip('الإجمالي', acks.length) +
+        '</div>' +
+        '<div style="font-size:13px;color:var(--text-muted, #6b7280);margin-bottom:12px;">' +
+          (ver ? 'تُطلق الإقرارات على الإصدار الساري: <b>' + esc(ver) + '</b>' : 'لا يوجد إصدار ساري لإطلاق الإقرارات عليه بعد.') +
+        '</div>';
+      if (CAN_FULL) {
+        html += '<div style="display:flex;justify-content:flex-end;">' +
+          '<button type="button" class="btn btn-primary"' + (ver ? '' : ' disabled') + ' onclick="VF_QUALITY_SOPS_PAGE.launchAcks()">🚀 إطلاق الإقرارات</button>' +
+        '</div>';
+      }
+      return html;
+    }
+
+    function showPdfLink(pdf) {
+      var host = document.getElementById('sop-modal-alert');
+      if (!host || !pdf) return;
+      host.innerHTML = '<div style="background:var(--success-bg, #f0fdf4);border:1px solid var(--success-border, #a7f0ba);border-radius:8px;padding:10px;margin-bottom:10px;font-size:13px;">' +
+        'تم إنشاء ملف PDF للإصدار — <a href="' + esc(pdf) + '" target="_blank" rel="noopener">عرض ملف PDF</a></div>';
+    }
+
+    function headerPayloadFromFormOrRow() {
+      var hasForm = !!document.getElementById('sop-f-title-ar');
+      if (hasForm) {
+        return {
+          title_ar: getV('sop-f-title-ar'),
+          title_en: getV('sop-f-title-en'),
+          category: getV('sop-f-category'),
+          applicability_dept: getV('sop-f-dept'),
+          applicability_role: getV('sop-f-role'),
+          owner_email: getV('sop-f-owner')
+        };
+      }
+      return {
+        title_ar: (CURRENT && CURRENT.title_ar) || '',
+        title_en: (CURRENT && CURRENT.title_en) || '',
+        category: (CURRENT && CURRENT.category) || '',
+        applicability_dept: (CURRENT && CURRENT.applicability_dept) || '',
+        applicability_role: (CURRENT && CURRENT.applicability_role) || '',
+        owner_email: (CURRENT && CURRENT.owner_email) || ''
+      };
+    }
+
+    function saveNewSop() {
+      if (!CAN_WRITE) { UIC.toast('غير مصرح', 'error'); return Promise.resolve(); }
+      if (!UIC.validateForm('sop-new-form')) return Promise.resolve();
+      var payload = {
+        title_ar: getV('sop-f-title-ar'),
+        title_en: getV('sop-f-title-en'),
+        category: getV('sop-f-category'),
+        applicability_dept: getV('sop-f-dept'),
+        applicability_role: getV('sop-f-role'),
+        owner_email: getV('sop-f-owner')
+      };
+      if (!payload.title_ar) { UIC.toast('العنوان العربي مطلوب', 'error'); return Promise.resolve(); }
+      UI.showSpinner();
+      return companyCall('save_quality_sop', payload)
+        .then(function (r) {
+          UIC.toast('تم إنشاء الإجراء', 'success');
+          EDIT_MODE = 'view';
+          var uid = (r && r.unique_id) || '';
+          CURRENT = { unique_id: uid, id: uid };
+          return load(true);
+        })
+        .catch(function (e) { UIC.toast((e && e.message) || 'فشل الحفظ', 'error'); })
+        .finally(function () { UI.hideSpinner(); });
+    }
+
+    function saveDraft() {
+      if (!CAN_WRITE) { UIC.toast('غير مصرح', 'error'); return Promise.resolve(); }
+      if (!CURRENT) return Promise.resolve();
+      if (DOC.mode === 'view') return Promise.resolve();
+      var payload = headerPayloadFromFormOrRow();
+      if (!payload.title_ar) { UIC.toast('العنوان العربي مطلوب', 'error'); return Promise.resolve(); }
+      var ed = document.getElementById('sop-content-editor');
+      var versionPayload = {
+        unique_id: (DOC.version && DOC.version.unique_id) || '',
+        sop_id: sopKey(CURRENT),
+        change_type: getV('sop-f-change-type') || (DOC.version && DOC.version.change_type) || 'Minor',
+        content_html: ed ? sanitizeHtml(ed.innerHTML) : '',
+        change_summary: getV('sop-f-change-summary')
+      };
+      payload.unique_id = CURRENT.unique_id || CURRENT.id;
+      UI.showSpinner();
+      return companyCall('save_quality_sop', payload)
+        .then(function () { return companyCall('save_quality_sop_version', versionPayload); })
+        .then(function () {
+          UIC.toast('تم حفظ المسودة', 'success');
+          EDIT_MODE = 'view';
+          return load(true);
+        })
+        .catch(function (e) { UIC.toast((e && e.message) || 'فشل الحفظ', 'error'); })
+        .finally(function () { UI.hideSpinner(); });
+    }
+
+    function submitVersion() {
+      if (!CAN_WRITE) { UIC.toast('غير مصرح', 'error'); return Promise.resolve(); }
+      var v = activeVersion();
+      if (!v) return Promise.resolve();
+      if (!confirm('سيتم تجميد المحتوى وتحويله إلى PDF وإرساله للمراجعة. متابعة؟')) return Promise.resolve();
+      UI.showSpinner();
+      return companyCall('submit_quality_sop_version', { unique_id: v.unique_id })
+        .then(function (r) {
+          UIC.toast('تم إرسال الإصدار للمراجعة', 'success');
+          EDIT_MODE = 'view';
+          return load(true).then(function () { showPdfLink((r && r.pdf_ref) || ''); });
+        })
+        .catch(function (e) { UIC.toast((e && e.message) || 'فشل الإرسال', 'error'); })
+        .finally(function () { UI.hideSpinner(); });
+    }
+
+    function approveVersion() {
+      if (!CAN_FULL) { UIC.toast('غير مصرح', 'error'); return Promise.resolve(); }
+      var v = activeVersion();
+      if (!v) return Promise.resolve();
+      if (!confirm('اعتماد الإصدار؟')) return Promise.resolve();
+      UI.showSpinner();
+      return companyCall('approve_quality_sop_version', { unique_id: v.unique_id })
+        .then(function () { UIC.toast('تم اعتماد الإصدار', 'success'); EDIT_MODE = 'view'; return load(true); })
+        .catch(function (e) { UIC.toast((e && e.message) || 'فشل الاعتماد', 'error'); })
+        .finally(function () { UI.hideSpinner(); });
+    }
+
+    function openReject() {
+      if (!CAN_FULL) { UIC.toast('غير مصرح', 'error'); return; }
+      var v = activeVersion();
+      if (!v) return;
+      UIC.openModal('sop-reject-modal', {
+        title: 'رفض الإصدار',
+        body: '<form id="sop-reject-form">' +
+          '<div class="form-field"><label class="form-label" for="sop-reject-comment">سبب الرفض <span class="req">*</span></label>' +
+          '<textarea id="sop-reject-comment" class="input" rows="3" required></textarea>' +
+          '<div class="field-error" id="err-sop-reject-comment"></div></div>' +
+          '<input type="hidden" id="sop-reject-uid" value="' + esc(v.unique_id) + '">' +
+        '</form>',
+        onSave: 'VF_QUALITY_SOPS_PAGE.confirmReject()'
+      });
+    }
+    function confirmReject() {
+      var uid = getV('sop-reject-uid');
+      var comment = getV('sop-reject-comment');
+      if (!comment) { UIC.toast('سبب الرفض مطلوب', 'error'); return Promise.resolve(); }
+      UI.showSpinner();
+      return companyCall('reject_quality_sop_version', { unique_id: uid, comment: comment })
+        .then(function () {
+          UIC.closeModal('sop-reject-modal');
+          UIC.toast('تم رفض الإصدار', 'success');
+          EDIT_MODE = 'view';
+          return load(true);
+        })
+        .catch(function (e) { UIC.toast((e && e.message) || 'فشل الرفض', 'error'); })
+        .finally(function () { UI.hideSpinner(); });
+    }
+
+    function makeEffective() {
+      if (!CAN_FULL) { UIC.toast('غير مصرح', 'error'); return Promise.resolve(); }
+      var v = activeVersion();
+      if (!v) return Promise.resolve();
+      var eff = getV('sop-f-effective-date');
+      var next = getV('sop-f-next-review');
+      if (!eff) { UIC.toast('تاريخ السريان مطلوب', 'error'); return Promise.resolve(); }
+      if (!confirm('جعل الإصدار سارياً من ' + eff + '؟')) return Promise.resolve();
+      UI.showSpinner();
+      return companyCall('make_effective_quality_sop_version', { unique_id: v.unique_id, effective_date: eff, next_review_date: next })
+        .then(function () { UIC.toast('تم جعل الإصدار سارياً', 'success'); EDIT_MODE = 'view'; return load(true); })
+        .catch(function (e) { UIC.toast((e && e.message) || 'فشل التنفيذ', 'error'); })
+        .finally(function () { UI.hideSpinner(); });
+    }
+
+    function launchAcks() {
+      if (!CAN_FULL) { UIC.toast('غير مصرح', 'error'); return; }
+      if (!CURRENT) return;
+      var ver = CURRENT.current_effective_version;
+      if (!ver) { UIC.toast('لا يوجد إصدار ساري', 'error'); return; }
+      if (!confirm('سيتم إطلاق الإقرارات على الإصدار الساري ' + ver + '. متابعة؟')) return;
+      UI.showSpinner();
+      companyCall('launch_quality_acks', { sop_id: sopKey(CURRENT), sop_version: ver })
+        .then(function () { UIC.toast('تم إطلاق الإقرارات', 'success'); return load(true); })
+        .catch(function (e) { UIC.toast((e && e.message) || 'فشل إطلاق الإقرارات', 'error'); })
+        .finally(function () { UI.hideSpinner(); });
+    }
+
+    function execFmt(cmd, val) {
+      var ed = document.getElementById('sop-content-editor');
+      if (ed && ed.focus) { try { ed.focus(); } catch (e) {} }
+      try { document.execCommand(cmd, false, val || null); } catch (e) {}
+    }
+
+    window.VF_QUALITY_SOPS_PAGE = {
+      openNew: openNew,
+      openSop: openSop,
+      switchTab: switchTab,
+      saveNewSop: saveNewSop,
+      saveDraft: saveDraft,
+      submitVersion: submitVersion,
+      approveVersion: approveVersion,
+      openReject: openReject,
+      confirmReject: confirmReject,
+      makeEffective: makeEffective,
+      newVersion: newVersion,
+      launchAcks: launchAcks,
+      addFormRow: addFormRow,
+      removeFormRow: removeFormRow,
+      saveForms: saveForms,
+      execFmt: execFmt
+    };
+
+    document.addEventListener('DOMContentLoaded', renderApp);
+  })();
+  </script>
+</body>
+</html>

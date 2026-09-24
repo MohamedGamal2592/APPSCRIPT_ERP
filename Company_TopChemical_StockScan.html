@@ -74,6 +74,7 @@
   var currentProduct = null;   // { id, label }
   var currentAvail = null;     // number | null (null = unknown / fetch failed)
   var pendingEntry = null;     // payload built at confirm time, resent on retry
+  var saveInFlight = false;    // one commit at a time; no double filing
   var qrReader = null;
   var cameraActive = false;
 
@@ -428,8 +429,13 @@
       return;
     }
     var loose = Number(data.loose_amount) || 0;
-    var notes = data.container_type + ' ' + data.unit_count + ' × ' + data.amount_per_unit +
-      (loose > 0 ? (' + فرط ' + loose) : '') + ' = ' + total;
+    /* Every count detail the operator typed is recorded in notes, labelled and
+       complete — including الكمية الفرط when it is zero. */
+    var notes = 'نوع العبوة: ' + data.container_type +
+      ' | الكمية بالعبوة: ' + data.amount_per_unit +
+      ' | عدد العبوات: ' + data.unit_count +
+      ' | الكمية الفرط: ' + loose +
+      ' | الإجمالي: ' + total;
     pendingEntry = {
       product: currentProduct.id,
       warehouse: data.warehouse,
@@ -443,8 +449,12 @@
     loadConfirmAvailability();
   }
 
-  /* ── System balance on the confirm step: loads AFTER تأكيد الكمية ────── */
+  /* ── System balance on the confirm step: loads AFTER تأكيد الكمية, and the
+     record is saved automatically once it lands. There is no second save
+     button — تأكيد الكمية is the one commit action, so the same count cannot
+     be filed twice. ── */
   function loadConfirmAvailability(forceRefresh) {
+    if (saveInFlight) return;
     renderAvailRow('loading');
     var pid = currentProduct && currentProduct.id;
     ensureSystemQty(forceRefresh).then(function (map) {
@@ -461,18 +471,16 @@
   function retryConfirmAvailability() { loadConfirmAvailability(true); }
 
   function applyAvail(failed) {
-    var saveBtn = document.getElementById('confirm-save-btn');
     if (currentAvail == null || isNaN(currentAvail)) {
       // add_stock_scan (addStockRevision_) requires a numeric available_amount,
-      // so the save stays locked until a balance is on screen.
+      // so nothing is saved until a balance is on screen.
       pendingEntry.available_amount = null;
       renderAvailRow(failed ? 'failed' : 'missing');
-      if (saveBtn) saveBtn.disabled = true;
       return;
     }
     pendingEntry.available_amount = currentAvail;
     renderAvailRow('loaded');
-    if (saveBtn && CAN_WRITE) saveBtn.disabled = false;
+    confirmSave();
   }
 
   function renderAvailRow(kind) {
@@ -507,9 +515,8 @@
       '<div class="confirm-row"><span class="label">التفاصيل</span><span class="val">' + esc(entry.notes) + '</span></div>' +
       '<div class="scan-actions">' +
         '<button type="button" class="btn btn-outline" id="confirm-back-btn" onclick="backToCount()">رجوع للتعديل</button>' +
-        '<button type="button" class="btn btn-primary" id="confirm-save-btn" onclick="confirmSave()" disabled>تأكيد الحفظ</button>' +
       '</div>' +
-      '<div id="save-status" class="save-status"></div>';
+      '<div id="save-status" class="save-status saving">سيتم تسجيل الجرد تلقائياً بعد تحميل رصيد السيستم...</div>';
     if (!CAN_WRITE) UIC.toast('غير مصرح بالحفظ', 'error');
   }
 
@@ -520,16 +527,11 @@
   function setSaveStatus(kind, msg) {
     var el = document.getElementById('save-status');
     var backBtn = document.getElementById('confirm-back-btn');
-    var saveBtn = document.getElementById('confirm-save-btn');
     if (!el) return;
     if (kind === 'saving') {
       el.className = 'save-status saving';
-      el.innerHTML = 'جارٍ الحفظ في الخلفية...';
+      el.innerHTML = 'جارٍ تسجيل الجرد...';
       if (backBtn) backBtn.disabled = true;
-      if (saveBtn) saveBtn.disabled = true;
-    } else if (kind === 'success') {
-      el.className = 'save-status success';
-      el.innerHTML = '✓ تم الحفظ';
     } else if (kind === 'error') {
       el.className = 'save-status error';
       el.innerHTML = '⚠ فشل الحفظ' + (msg ? (' — ' + esc(msg)) : '') +
@@ -541,29 +543,47 @@
     }
   }
 
+  /* The one commit action for the count. Called by applyAvail the moment
+     رصيد السيستم is on screen, and by the error state's إعادة المحاولة. */
   function confirmSave() {
     if (!CAN_WRITE || !pendingEntry) { UIC.toast('غير مصرح', 'error'); return; }
+    if (saveInFlight) return;
     if (pendingEntry.available_amount == null || isNaN(pendingEntry.available_amount)) {
       UIC.toast('لا يمكن الحفظ بدون رصيد السيستم — أعد المحاولة أعلاه', 'error');
       return;
     }
-    /* NOTE (save-rollout run): this page and its s24 suite belong to another
-       effort — its `companyCall('add_stock_scan', …)` shape is pinned by
-       s24_stock_scan.js ("the page calls all three new actions by name"), so
-       the Tier B conversion is deferred until that suite migrates to the
-       `action:` matching s19 uses. The save below is the page's own blocking
-       chain, unchanged apart from this note. */
+    saveInFlight = true;
     setSaveStatus('saving');
-    /* Fired without blocking the confirmation already on screen — every number
-       shown here was already computed client-side, so the operator does not
-       wait on this round trip to keep scanning. Failure stays visible with a
-       retry rather than being silently lost. */
     companyCall('add_stock_scan', pendingEntry)
       .then(function () {
-        setSaveStatus('success');
-        setTimeout(function () { currentProduct = null; currentAvail = null; pendingEntry = null; showStep('scan'); }, 1200);
+        saveInFlight = false;
+        renderSavedStep();
       })
-      .catch(function (e) { setSaveStatus('error', e && e.message); });
+      .catch(function (e) {
+        saveInFlight = false;
+        setSaveStatus('error', e && e.message);
+      });
+  }
+
+  /* The next page after تأكيد الكمية: the record is already filed, so this is
+     a result view showing the current stock — no save control remains. */
+  function renderSavedStep() {
+    var el = document.getElementById('confirm-step');
+    if (!el || !pendingEntry || !currentProduct) return;
+    var entry = pendingEntry;
+    var avail = (currentAvail == null || isNaN(currentAvail)) ? '—' : currentAvail;
+    var diff = diffText(entry.amount, currentAvail) || '—';
+    el.innerHTML =
+      '<div class="scan-product-header"><div class="name">' + esc(currentProduct.label) + '</div></div>' +
+      '<div class="save-status success" style="margin-bottom:12px;">✓ تم تسجيل الجرد</div>' +
+      '<div class="confirm-row"><span class="label">الكمية المسجلة</span><span class="val">' + esc(entry.amount) + '</span></div>' +
+      '<div class="confirm-row"><span class="label">رصيد السيستم</span><span class="val">' + esc(avail) + '</span></div>' +
+      '<div class="confirm-row"><span class="label">الفرق</span><span class="val">' + esc(diff) + '</span></div>' +
+      '<div class="confirm-row"><span class="label">المخزن</span><span class="val">' + esc(entry.warehouse) + '</span></div>' +
+      '<div class="confirm-row"><span class="label">التفاصيل</span><span class="val">' + esc(entry.notes) + '</span></div>' +
+      '<div class="scan-actions">' +
+        '<button type="button" class="btn btn-primary scan-big-btn" style="padding:12px;" onclick="cancelCount()">مسح صنف آخر</button>' +
+      '</div>';
   }
 
   /* Another device's balance change arrives quietly (system qty only — the

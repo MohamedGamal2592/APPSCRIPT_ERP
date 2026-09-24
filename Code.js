@@ -1043,6 +1043,19 @@ function getNextIdUnderLock_(dbId, tableName, idColumnName = 'id') {
   return next;
 }
 
+/* RFC 9562 UUIDv7: 48-bit Unix-ms timestamp + version/variant + 74 random bits.
+   Lexicographically sortable by creation time, so unique_id doubles as a
+   chronological index key. Canonical 36-char form (dashes) so Sheets never
+   coerces it to a number. */
+function uidV7_() {
+  var ms = Date.now();
+  var ts = ('000000000000' + ms.toString(16)).slice(-12);            // 48-bit ms → 12 hex
+  var r  = Utilities.getUuid().replace(/-/g, '');                    // 32 random hex (entropy)
+  var variant = ((parseInt(r.charAt(16), 16) & 0x3) | 0x8).toString(16); // variant 10xx
+  return ts.slice(0, 8) + '-' + ts.slice(8, 12) + '-7' + r.slice(13, 16) +
+         '-' + variant + r.slice(17, 20) + '-' + r.slice(20, 32);
+}
+
 /**
  * Canonical ID assignment. The ONLY public function that computes a new ID.
  * Lock-protected. Returns the current counter value and increments it.
@@ -4435,6 +4448,137 @@ function adminDeleteInvoice_(payload, sessionToken, authUser) {
   return { status: 'success', message: 'تم حذف الفاتورة' };
 }
 
+/* =========================================
+ * ERP Management — "حذف" clears the data on the row.
+ * Contract: delete blanks every data column of the matched row and keeps the
+ * physical row itself (and its numeric id) — it never deleteRow/remove's it.
+ * The four admin_delete_* handlers below are the only callers; the page
+ * filters rows whose key column was blanked out of every list.
+ * ========================================= */
+function erpClearUpdates_(headers) {
+  const updates = {};
+  (headers || []).forEach(function (h) {
+    const name = String(h).trim();
+    if (!name || name.toLowerCase() === 'id') return;
+    updates[name] = '';
+  });
+  return updates;
+}
+
+function erpClearSheetRow_(sheet, headers, rowNumber) {
+  const formulas = sheet.getRange(rowNumber, 1, 1, headers.length).getFormulas()[0];
+  const cells = [];
+  headers.forEach(function (h, colIdx) {
+    const name = String(h).trim().toLowerCase();
+    if (!name || name === 'id') return;
+    if (formulas[colIdx]) return; /* live formula: preserve, never overwrite */
+    cells.push(colIdx);
+  });
+  let run = [];
+  const flush = function () {
+    if (!run.length) return;
+    sheet.getRange(rowNumber, run[0] + 1, 1, run.length).setValues([run.map(function () { return ''; })]);
+    run = [];
+  };
+  cells.forEach(function (colIdx) {
+    if (run.length && colIdx !== run[run.length - 1] + 1) flush();
+    run.push(colIdx);
+  });
+  flush();
+  noteMutation_();
+}
+
+function erpClearRowByKey_(table, keyField, keyValue) {
+  if (systemStorageTarget_().backend === 'firestore') {
+    const rec = systemFindByBusinessKey_(table, keyField, keyValue);
+    if (!rec) return false;
+    const changes = {};
+    Object.keys(rec).forEach(function (k) {
+      if (k === 'id' || k === '_meta') return;
+      changes[k] = '';
+    });
+    systemPatchRecord_(table, rec._meta.documentId, changes, { expectedUpdateTime: rec._meta.updateTime });
+    return true;
+  }
+  const sheet = getSheet_(table, CONFIG.AUTH_SPREADSHEET_ID);
+  return patchRowByCriteria_(sheet, keyField, keyValue, erpClearUpdates_(getHeaders_(sheet)));
+}
+
+function adminDeleteCompany_(payload, sessionToken, authUser) {
+  requireSuperAdmin_(authUser);
+  const uid = String((payload && payload.company_unique_id) || '').trim();
+  if (!uid) throw new Error('معرف الشركة مطلوب');
+  const users = getAllRecords_(CONFIG.AUTH_SPREADSHEET_ID, 'ERP_Users');
+  if (users.some(function (u) { return String(u.company || '').trim() === uid; })) {
+    throw new Error('لا يمكن حذف الشركة: يوجد مستخدمون مرتبطون بها — غيّر شركتهم أولاً');
+  }
+  const pages = getAllRecords_(CONFIG.AUTH_SPREADSHEET_ID, 'ERP_System_Pages');
+  if (pages.some(function (p) { return String(p.page_company || '').trim() === uid; })) {
+    throw new Error('لا يمكن حذف الشركة: توجد صفحات نظام مرتبطة بها — عدّل الشركة في الصفحات أولاً');
+  }
+  if (!erpClearRowByKey_('ERP_Companies', 'company_unique_id', uid)) throw new Error('الشركة غير موجودة');
+  bumpVersion_('ERP_Companies');
+  return { status: 'success', message: 'تم حذف بيانات الشركة' };
+}
+
+function adminDeleteUser_(payload, sessionToken, authUser) {
+  requireSuperAdmin_(authUser);
+  const email = String((payload && payload.email) || '').trim().toLowerCase();
+  if (!email) throw new Error('البريد الإلكتروني مطلوب');
+  if (authUser && String(authUser.email || '').trim().toLowerCase() === email) {
+    throw new Error('لا يمكنك حذف حسابك الحالي');
+  }
+  if (!erpClearRowByKey_('ERP_Users', 'email', email)) throw new Error('المستخدم غير موجود');
+  bumpVersion_('ERP_Users');
+  return { status: 'success', message: 'تم حذف بيانات المستخدم' };
+}
+
+function adminDeleteMatrixRow_(payload, sessionToken, authUser) {
+  requireSuperAdmin_(authUser);
+  const role = String((payload && payload.role) || '').trim();
+  const pageId = String((payload && payload.page_id) || '').trim();
+  if (!role || !pageId) throw new Error('الدور والصفحة مطلوبان');
+  const rec = systemFindByFields_('ERP_Pages_Matrix', [{ field: 'role', value: role }, { field: 'page_id', value: pageId }]);
+  if (!rec || !String(rec.access_type || '').trim()) {
+    return { status: 'success', message: 'لا توجد صلاحية مخصصة لهذه الصفحة' };
+  }
+  if (systemStorageTarget_().backend === 'firestore') {
+    const changes = {};
+    Object.keys(rec).forEach(function (k) {
+      if (k === 'id' || k === '_meta') return;
+      changes[k] = '';
+    });
+    systemPatchRecord_('ERP_Pages_Matrix', rec._meta.documentId, changes, { expectedUpdateTime: rec._meta.updateTime });
+  } else {
+    const sheet = getSheet_('ERP_Pages_Matrix', CONFIG.AUTH_SPREADSHEET_ID);
+    const headers = getHeaders_(sheet);
+    const uid = String(rec.erp_pages_matrix_unique_id || '').trim();
+    if (!uid || !patchRowByCriteria_(sheet, 'erp_pages_matrix_unique_id', uid, erpClearUpdates_(headers))) {
+      const roleIdx = headers.findIndex(function (h) { return String(h).trim().toLowerCase() === 'role'; });
+      const pageIdx = headers.findIndex(function (h) { return String(h).trim().toLowerCase() === 'page_id'; });
+      const data = sheet.getDataRange().getValues();
+      for (let i = 1; i < data.length; i++) {
+        if (String(data[i][roleIdx]).trim().toLowerCase() === role.toLowerCase() &&
+            String(data[i][pageIdx]).trim().toLowerCase() === pageId.toLowerCase()) {
+          erpClearSheetRow_(sheet, headers, i + 1);
+          break;
+        }
+      }
+    }
+  }
+  bumpVersion_('ERP_Pages_Matrix');
+  return { status: 'success', message: 'تم حذف الصلاحية' };
+}
+
+function adminDeletePage_(payload, sessionToken, authUser) {
+  requireSuperAdmin_(authUser);
+  const pageId = String((payload && payload.page_id) || '').trim();
+  if (!pageId) throw new Error('معرف الصفحة مطلوب');
+  if (!erpClearRowByKey_('ERP_System_Pages', 'page_id', pageId)) throw new Error('الصفحة غير مسجلة');
+  bumpVersion_('ERP_System_Pages');
+  return { status: 'success', message: 'تم حذف بيانات الصفحة' };
+}
+
 function adminSaveInvoiceFirestore_(payload, authUser) {
   var p = payload || {}, invoiceNumber = String(p.invoice_number || '').trim(), invoiceDate = String(p.invoice_date || '').trim(), company = String(p.company || '').trim();
   if (!invoiceNumber || !invoiceDate || !company) throw new Error('رقم الفاتورة والتاريخ والشركة مطلوبة');
@@ -5847,6 +5991,10 @@ const ROUTES = {
   'admin_list_currency': { handler: adminListCurrency_, requireAuth: true },
   'admin_save_currency': { handler: adminSaveCurrency_, requireAuth: true },
   'admin_delete_currency': { handler: adminDeleteCurrency_, requireAuth: true },
+  'admin_delete_company': { handler: adminDeleteCompany_, requireAuth: true },
+  'admin_delete_user': { handler: adminDeleteUser_, requireAuth: true },
+  'admin_delete_matrix_row': { handler: adminDeleteMatrixRow_, requireAuth: true },
+  'admin_delete_page': { handler: adminDeletePage_, requireAuth: true },
   'admin_list_invoices': { handler: adminListInvoices_, requireAuth: true },
   'admin_save_invoice': { handler: adminSaveInvoice_, requireAuth: true },
   'admin_delete_invoice': { handler: adminDeleteInvoice_, requireAuth: true },

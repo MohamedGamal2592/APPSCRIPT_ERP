@@ -115,8 +115,27 @@ const STEPS = [
   ['optimization_chunk_cache.js', 'OPT-2 — chunked cache layout, byte limits, partial eviction and invalidation'],
   ['optimization_reads.js', 'OPT-3 — hoisted lookups: invoice approval scan/snapshot, movement unit map'],
   ['optimization_writes.js', 'OPT-4 — batched approval writes with layout-verified fallback'],
+  ['tl_sheetdb_contract.js', 'TL-DB — Top Light sheets-as-database: value-only writes, key-addressed patches, soft delete'],
   ['dblive_products_paging.js', 'DBLIVE-1 — tc_products_live paging: 50/page, cached total, bust on write'],
-  ['dblive_sales_cache.js', 'DBLIVE-2 — tc_exec_sales permanent fix: cached charts (600s) + cached view pages (90s)']
+  ['dblive_sales_cache.js', 'DBLIVE-2 — tc_exec_sales permanent fix: cached charts (600s) + cached view pages (90s)'],
+  ['tc_budget_stock_balance.js', 'TC-BALANCE — رصيد أصناف الميزانية: name_ar join aggregation, duplicate/unmatched policy, MySQL view join, page wiring'],
+  ['tc_budget_inputs_ui.js', 'TC-INPUTS — المدخلات: unified dataTable view, row details modal, preserved actions and formatted dates'],
+
+  /* ── Quality module (Phase 0) ── */
+  ['quality_uidv7.js', 'QUALITY-UID — RFC 9562 sortable ids: shape, uniqueness, timestamp round-trip'],
+  ['quality_action_tables.js', 'QUALITY-TABLES — ACTION_TABLES accepts arrays: flatten, join, legacy strings intact'],
+  /* ── Quality module (Phase 1 — SOP server) ── */
+  ['quality_sop_workflow.js', 'QUALITY-SOP — SOP lifecycle over the real block: refusals, PDF freeze, obsoletion, acks'],
+  ['quality_sop_permissions.js', 'QUALITY-SOP-ACL — page grants: full-only decisions, array tables cover five sheets'],
+  /* ── Quality module (Phase 2 — acknowledgements server) ── */
+  ['quality_acks.js', 'QUALITY-ACKS — launch applicability/idempotency/supersede, server-side email scoping, own-row signing, supervisor record'],
+  /* ── Quality module (Phase 3 — NCR/CAPA server) ── */
+  ['quality_ncr.js', 'QUALITY-NCR — NCR/CAPA lifecycle over the real block: zero-write refusals, annual codes, overdue rule, full-gated CAPA verification'],
+  /* ── Quality module (Phase 4 — dashboard + audits server) ── */
+  ['quality_dashboard.js', 'QUALITY-DASHBOARD — every KPI exact over fixtures, dashboard cached via vfRefsCached_ with zero writes, write-registration ref-bust chain'],
+  ['quality_audits.js', 'QUALITY-AUDITS — audit lifecycle and findings over the real block: AUD codes, zero-write refusals, Closed lockdown, escalation back-link and shared NCR allocator'],
+  /* ── Quality module (definition of done — end-to-end) ── */
+  ['quality_e2e.js', 'QUALITY-E2E — one shared state through the full SOP → Ack → NCR → CAPA → close → dashboard journey over the real handlers']
 ];
 
 /* Every listed check is part of this execution contract. A missing verifier is

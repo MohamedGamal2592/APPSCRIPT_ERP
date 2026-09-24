@@ -212,6 +212,522 @@ const TopLight = (function () {
     return out;
   })();
 
+  const TL_AUDIT_COLUMNS = ['deleted_at', 'deleted_by', 'version'];
+
+  const TL_SCHEMAS = (function () {
+    const schemas = {};
+    schemas[PRODUCTS_SHEET] = {
+      key: 'id',
+      required: ['name_ar'],
+      defaults: { name_en: '', category: '', unit: '', carton: '', sales_tax: '', asset_code: '' },
+      derived: null
+    };
+    schemas[CUSTOMERS_SHEET] = {
+      key: 'id',
+      required: ['name'],
+      defaults: { customer_direction: 'customer', type: '', country: '', region: '', registration_number: '', tax_id: '', name_en: '', telephone: '', address: '' },
+      derived: null
+    };
+    schemas[CATEGORIES_SHEET] = {
+      key: 'id',
+      required: ['name_ar'],
+      defaults: { name_eng: '' },
+      derived: null
+    };
+    schemas[PURCHASING_SHEET] = { key: 'unique_id', required: ['code'], derived: 'purchasing_header' };
+    schemas[PURCHASING_LINES_SHEET] = { key: 'unique_id', required: [], derived: 'purchasing_line' };
+    schemas[SALES_SHEET] = { key: 'invoice_unique_id', required: [], derived: 'sales_header' };
+    schemas[SALES_LINES_SHEET] = { key: 'unique_id', required: [], derived: 'sales_line' };
+    schemas[SALES_RETURNS_SHEET] = { key: 'unique_id', required: ['top_lightsales_invoices_id', 'top_lightsales_products_id'], derived: null };
+    schemas[OFFER_SHEET] = { key: 'invoice_unique_id', required: [], derived: 'sales_header' };
+    schemas[OFFER_LINES_SHEET] = { key: 'unique_id', required: [], derived: 'sales_line' };
+    schemas[CASH_SHEET] = { key: 'transaction_id', required: [], derived: 'cash' };
+    return schemas;
+  })();
+
+  function tlSchema_(table) {
+    return TL_SCHEMAS[table] || { key: 'unique_id', required: [], defaults: {}, derived: null };
+  }
+
+  function tlHeaderIndex_(headers, name) {
+    const wanted = String(name).trim();
+    let i = headers.findIndex(function (h) { return String(h).trim() === wanted; });
+    if (i === -1) i = headers.findIndex(function (h) { return String(h).trim().toLowerCase() === wanted.toLowerCase(); });
+    return i;
+  }
+
+  function tlRefreshHeaderCache_(sheet) {
+    try { delete _headerCache_[sheet.getParent().getId() + '_' + sheet.getSheetId()]; } catch (e) {}
+  }
+
+  function tlDbEnsureColumns_(sheet, headers, columns) {
+    const missing = (columns || []).filter(function (c) { return tlHeaderIndex_(headers, c) === -1; });
+    if (!missing.length) return headers;
+    sheet.getRange(1, headers.length + 1, 1, missing.length).setValues([missing]);
+    noteMutation_(sheet);
+    tlRefreshHeaderCache_(sheet);
+    return getHeaders_(sheet);
+  }
+
+  function tlDbRowRecord_(headers, row) {
+    const record = {};
+    headers.forEach(function (h, i) { record[String(h).trim()] = row[i] !== undefined ? row[i] : ''; });
+    return record;
+  }
+
+  function tlDbLowerMap_(payload) {
+    const byLower = {};
+    Object.keys(payload || {}).forEach(function (k) {
+      const key = String(k).trim().toLowerCase();
+      if (byLower[key] === undefined) byLower[key] = payload[k];
+    });
+    return byLower;
+  }
+
+  function tlDbApplyPayload_(table, payload, headers, opts) {
+    const schema = tlSchema_(table);
+    const byLower = tlDbLowerMap_(payload);
+    const row = headers.map(function () { return ''; });
+    headers.forEach(function (h, i) {
+      const name = String(h).trim();
+      if (payload[name] !== undefined) { row[i] = payload[name]; return; }
+      const lower = name.toLowerCase();
+      if (byLower[lower] !== undefined) { row[i] = byLower[lower]; return; }
+      if (schema.defaults && schema.defaults[lower] !== undefined) { row[i] = schema.defaults[lower]; return; }
+      if (lower === 'user') row[i] = (opts && opts.user && opts.user.email) || '';
+      if (lower === 'created_at') row[i] = new Date();
+      if (lower === 'deleted_at' || lower === 'deleted_by') row[i] = '';
+      if (lower === 'version') row[i] = 0;
+    });
+    return row;
+  }
+
+  function tlDbValidate_(table, payload) {
+    const schema = tlSchema_(table);
+    const byLower = tlDbLowerMap_(payload);
+    const missing = (schema.required || []).filter(function (f) {
+      const v = payload[f] !== undefined ? payload[f] : byLower[String(f).toLowerCase()];
+      return v === undefined || v === null || String(v).trim() === '';
+    });
+    if (missing.length) throw new Error('Missing required fields: ' + missing.join(', '));
+  }
+
+  function tlDbLocate_(sheet, keyIdx, keyValue) {
+    const lastRow = sheet.getLastRow();
+    if (lastRow < 2) return null;
+    const values = sheet.getRange(2, keyIdx + 1, lastRow - 1, 1).getValues();
+    const wanted = String(keyValue == null ? '' : keyValue).trim();
+    const wantedLower = wanted.toLowerCase();
+    let rowNumber = -1;
+    for (let i = 0; i < values.length; i++) {
+      if (String(values[i][0] == null ? '' : values[i][0]).trim() === wanted) { rowNumber = i + 2; break; }
+    }
+    if (rowNumber === -1) {
+      for (let i = 0; i < values.length; i++) {
+        if (String(values[i][0] == null ? '' : values[i][0]).trim().toLowerCase() === wantedLower) { rowNumber = i + 2; break; }
+      }
+    }
+    if (rowNumber === -1) return null;
+    const row = sheet.getRange(rowNumber, 1, 1, sheet.getLastColumn()).getValues()[0];
+    return { rowNumber: rowNumber, row: row };
+  }
+
+  function tlDbAppendRow_(sheet, row) {
+    const newRow = sheet.getLastRow() + 1;
+    if (newRow > sheet.getMaxRows()) sheet.insertRowsAfter(sheet.getMaxRows(), newRow - sheet.getMaxRows());
+    noteMutation_(sheet);
+    sheet.getRange(newRow, 1, 1, row.length).setValues([row]);
+    noteMutation_(sheet);
+    return newRow;
+  }
+
+  function tlDbCreate_(dbId, table, payload, opts) {
+    opts = opts || {};
+    tlDbValidate_(table, payload);
+    const sheet = getSheet_(table, dbId);
+    let headers = getHeaders_(sheet);
+    headers = tlDbEnsureColumns_(sheet, headers, TL_AUDIT_COLUMNS);
+    const schema = tlSchema_(table);
+    const row = tlDbApplyPayload_(table, payload, headers, opts);
+    const idIdx = tlHeaderIndex_(headers, 'id');
+    const keyIdx = tlHeaderIndex_(headers, schema.key);
+    if (keyIdx === -1) throw new Error('Missing key column "' + schema.key + '" in ' + table);
+    return executeWithLock_(function () {
+      if (idIdx !== -1 && String(row[idIdx]).trim() === '') row[idIdx] = getNextIdUnderLock_(dbId, table);
+      tlDbDeriveRow_(dbId, table, row, headers, {});
+      const rowNumber = tlDbAppendRow_(sheet, row);
+      const record = tlDbRowRecord_(headers, row);
+      return { status: 'success', rowNumber: rowNumber, record: record, assignedId: row[keyIdx] };
+    });
+  }
+
+  function tlDbAppendValues_(dbId, table, rowValues, opts) {
+    opts = opts || {};
+    const sheet = getSheet_(table, dbId);
+    let headers = getHeaders_(sheet);
+    headers = tlDbEnsureColumns_(sheet, headers, TL_AUDIT_COLUMNS);
+    const row = rowValues.slice();
+    while (row.length < headers.length) row.push('');
+    return executeWithLock_(function () {
+      tlDbDeriveRow_(dbId, table, row, headers, opts.ctx || {});
+      const rowNumber = tlDbAppendRow_(sheet, row);
+      return { rowNumber: rowNumber, record: tlDbRowRecord_(headers, row), headers: headers };
+    });
+  }
+
+  function tlDbAppendValuesBatch_(dbId, table, rows, opts) {
+    opts = opts || {};
+    if (!rows || !rows.length) return { startRow: 0, headers: [] };
+    const sheet = getSheet_(table, dbId);
+    let headers = getHeaders_(sheet);
+    headers = tlDbEnsureColumns_(sheet, headers, TL_AUDIT_COLUMNS);
+    const normalized = rows.map(function (r) {
+      const row = r.slice();
+      while (row.length < headers.length) row.push('');
+      return row;
+    });
+    return executeWithLock_(function () {
+      normalized.forEach(function (row) { tlDbDeriveRow_(dbId, table, row, headers, {}); });
+      const startRow = sheet.getLastRow() + 1;
+      const lastNeeded = startRow + normalized.length - 1;
+      if (lastNeeded > sheet.getMaxRows()) sheet.insertRowsAfter(sheet.getMaxRows(), lastNeeded - sheet.getMaxRows());
+      noteMutation_(sheet);
+      sheet.getRange(startRow, 1, normalized.length, headers.length).setValues(normalized);
+      noteMutation_(sheet);
+      return { startRow: startRow, headers: headers };
+    });
+  }
+
+  function tlDbPatch_(dbId, table, keyValue, changes, opts) {
+    opts = opts || {};
+    const schema = tlSchema_(table);
+    const keyField = opts.keyField || schema.key;
+    const sheet = getSheet_(table, dbId);
+    let headers = getHeaders_(sheet);
+    headers = tlDbEnsureColumns_(sheet, headers, TL_AUDIT_COLUMNS);
+    const keyIdx = tlHeaderIndex_(headers, keyField);
+    if (keyIdx === -1) throw new Error('Missing key column "' + keyField + '" in ' + table);
+    const located = tlDbLocate_(sheet, keyIdx, keyValue);
+    if (!located) return null;
+    const row = located.row.slice();
+    while (row.length < headers.length) row.push('');
+    const oldRecord = tlDbRowRecord_(headers, row);
+    const deletedIdx = tlHeaderIndex_(headers, 'deleted_at');
+    if (deletedIdx !== -1 && String(row[deletedIdx] == null ? '' : row[deletedIdx]).trim() !== '' && !opts.allowDeleted) {
+      throw new Error('Record is deleted: ' + table + '/' + keyValue);
+    }
+    const currentVersion = getRowVersion_(oldRecord);
+    if (opts.version !== undefined && opts.version !== null && opts.version !== '') {
+      checkRowVersion_(oldRecord, opts.version);
+    }
+    Object.keys(changes || {}).forEach(function (k) {
+      const i = tlHeaderIndex_(headers, k);
+      if (i !== -1) row[i] = changes[k];
+    });
+    const versionIdx = tlHeaderIndex_(headers, 'version');
+    if (versionIdx !== -1) row[versionIdx] = currentVersion + 1;
+    const updatedIdx = tlHeaderIndex_(headers, 'updated_at');
+    if (updatedIdx !== -1 && opts.touchUpdatedAt !== false) row[updatedIdx] = new Date();
+    tlDbDeriveRow_(dbId, table, row, headers, { rowNumber: located.rowNumber });
+    sheet.getRange(located.rowNumber, 1, 1, row.length).setValues([row]);
+    noteMutation_(sheet);
+    noteTableChange_(dbId, table);
+    const record = tlDbRowRecord_(headers, row);
+    return { record: record, oldRecord: oldRecord, rowNumber: located.rowNumber, version: versionIdx !== -1 ? record[String(headers[versionIdx]).trim()] : currentVersion };
+  }
+
+  function tlDbSoftDelete_(dbId, table, keyValue, opts) {
+    opts = opts || {};
+    return tlDbPatch_(dbId, table, keyValue, {
+      deleted_at: new Date(),
+      deleted_by: (opts.user && opts.user.email) || ''
+    }, Object.assign({}, opts, { allowDeleted: true, touchUpdatedAt: false }));
+  }
+
+  function tlDbSoftDeleteWhere_(dbId, table, keyField, keyValue, opts) {
+    opts = opts || {};
+    const sheet = getSheet_(table, dbId);
+    let headers = getHeaders_(sheet);
+    headers = tlDbEnsureColumns_(sheet, headers, TL_AUDIT_COLUMNS);
+    const keyIdx = tlHeaderIndex_(headers, keyField);
+    const delIdx = tlHeaderIndex_(headers, 'deleted_at');
+    const byIdx = tlHeaderIndex_(headers, 'deleted_by');
+    if (keyIdx === -1 || delIdx === -1) return 0;
+    const lastRow = sheet.getLastRow();
+    if (lastRow < 2) return 0;
+    const keys = sheet.getRange(2, keyIdx + 1, lastRow - 1, 1).getValues();
+    const wanted = String(keyValue == null ? '' : keyValue).trim();
+    let count = 0;
+    for (let i = 0; i < keys.length; i++) {
+      if (String(keys[i][0] == null ? '' : keys[i][0]).trim() !== wanted) continue;
+      const rowNumber = i + 2;
+      const row = sheet.getRange(rowNumber, 1, 1, headers.length).getValues()[0];
+      if (String(row[delIdx] == null ? '' : row[delIdx]).trim() !== '') continue;
+      row[delIdx] = new Date();
+      if (byIdx !== -1) row[byIdx] = (opts.user && opts.user.email) || '';
+      sheet.getRange(rowNumber, 1, 1, row.length).setValues([row]);
+      noteMutation_(sheet);
+      count++;
+    }
+    if (count) noteTableChange_(dbId, table);
+    return count;
+  }
+
+  function tlDbList_(dbId, table) {
+    const rows = getAllRecords_(dbId, table);
+    const out = [];
+    for (let i = 0; i < rows.length; i++) {
+      const deleted = rows[i].deleted_at;
+      if (deleted !== undefined && deleted !== null && String(deleted).trim() !== '') continue;
+      out.push(rows[i]);
+    }
+    return out;
+  }
+
+  function tlDbFind_(dbId, table, keyField, keyValue) {
+    const wanted = String(keyValue == null ? '' : keyValue).trim().toLowerCase();
+    const rows = tlDbList_(dbId, table);
+    for (let i = 0; i < rows.length; i++) {
+      const v = rows[i][keyField];
+      if (String(v == null ? '' : v).trim().toLowerCase() === wanted) return rows[i];
+    }
+    return null;
+  }
+
+  function tlDbDeriveRow_(dbId, table, row, headers, ctx) {
+    const schema = tlSchema_(table);
+    if (!schema.derived) return row;
+    const idx = {};
+    headers.forEach(function (h, i) { idx[String(h).trim().toLowerCase()] = i; });
+    if (schema.derived === 'purchasing_header') tlDerivePurchasingHeader_(row, idx);
+    else if (schema.derived === 'purchasing_line') tlDerivePurchasingLine_(dbId, row, idx);
+    else if (schema.derived === 'sales_header') tlDeriveSalesHeader_(row, idx);
+    else if (schema.derived === 'sales_line') tlDeriveSalesLine_(row, idx);
+    else if (schema.derived === 'cash') tlDeriveCash_(dbId, row, idx, ctx || {});
+    return row;
+  }
+
+  function tlDerivePurchasingHeader_(row, idx) {
+    const get = function (n) { return idx[n] !== undefined ? row[idx[n]] : undefined; };
+    const set = function (n, v) { if (idx[n] !== undefined) row[idx[n]] = v; };
+    const value = num0_(get('value'));
+    const rate = num0_(get('exchange rate'));
+    set('value based on invoice', value * rate);
+    const sumCols = ['value based on invoice', 'administrative expenses', 'customs expenses',
+      'unloading expenses', 'bank commission', 'customs clearance and port receipts',
+      'additional fees', 'clearance expenses', 'other expenses'];
+    let sum = 0;
+    sumCols.forEach(function (c) { sum += num0_(get(c)); });
+    const isSale = String(get('type') == null ? '' : get('type')).trim() === 'بيع';
+    const total = isSale ? sum : sum + num0_(get('internal cost adjustment')) + num0_(get('purchase tax'));
+    set('total costs', total);
+    const date = parseDate_(get('reciept date'));
+    if (date instanceof Date && !isNaN(date.getTime())) {
+      set('month', date.getMonth() + 1);
+      set('year', date.getFullYear());
+    }
+    const shipping = String(get('shipping type') == null ? '' : get('shipping type')).trim();
+    if (idx['cif insurance rate'] !== undefined) {
+      row[idx['cif insurance rate']] = (shipping === 'CIF' && value > 0)
+        ? (num0_(get('if shipping via cif, enter the insurance value.')) - value) / value
+        : '';
+    }
+    const denom = num0_(get('importation re-price')) + num0_(get('customs expenses'));
+    let taxType = '';
+    if (denom > 0) {
+      const ratio = num0_(get('purchase tax')) / denom;
+      taxType = ratio >= 0.08 ? 0.14 : ratio;
+    }
+    set('tax type', taxType);
+    const salesValue = isSale ? Math.round((total * 103 / 100) / 100) * 100 : 0;
+    set('sales value', salesValue);
+    set('sales tax amount', (typeof taxType === 'number' && taxType > 0.06) ? salesValue * 14 / 100 : 0);
+  }
+
+  function tlDerivePurchasingLine_(dbId, row, idx) {
+    const get = function (n) { return idx[n] !== undefined ? row[idx[n]] : undefined; };
+    const set = function (n, v) { if (idx[n] !== undefined) row[idx[n]] = v; };
+    const qty = num0_(get('qty'));
+    const unitPrice = num0_(get('unit_price'));
+    const rate = num0_(get('exchange_rate'));
+    const other = num0_(get('other_cost'));
+    const totalCost = qty * unitPrice * rate + other;
+    set('total_cost', totalCost);
+    set('unit_cost', qty > 0 ? totalCost / qty : 0);
+    set('sales_value_amount', num0_(get('sales_value')) * qty);
+    set('sales_qty', qty);
+    if (idx['cost_currency'] !== undefined) row[idx['cost_currency']] = qty * unitPrice + other / (rate || 1);
+    if (idx['movement_code'] !== undefined) {
+      const productId = String(get('product') == null ? '' : get('product')).trim();
+      let productName = '';
+      try {
+        productRefs_(dbId).forEach(function (p) { if (String(p.id) === productId) productName = p.name_ar || ''; });
+      } catch (e) {}
+      const date = parseDate_(get('receipt_date'));
+      const dateText = (date instanceof Date && !isNaN(date.getTime()))
+        ? ('0' + date.getDate()).slice(-2) + '/' + ('0' + (date.getMonth() + 1)).slice(-2) + '/' + date.getFullYear()
+        : '';
+      set('movement_code', String(get('movement_type') == null ? '' : get('movement_type')) + '-' + String(get('id') == null ? '' : get('id')) + '-' + productName + '-' + dateText);
+    }
+  }
+
+  function tlDeriveSalesHeader_(row, idx) {
+    const get = function (n) { return idx[n] !== undefined ? row[idx[n]] : undefined; };
+    const set = function (n, v) { if (idx[n] !== undefined) row[idx[n]] = v; };
+    const tax = num0_(get('قيمة الضريبة'));
+    const net = num0_(get('المبلغ الصافي'));
+    set('نوع سلع الجدول', net > 0 ? (Math.abs(tax / net - 0.05) < 1e-9 ? 1 : 0) : '');
+    const date = parseDate_(get('تاريخ الفاتورة'));
+    if (date instanceof Date && !isNaN(date.getTime())) {
+      set('الشهر', date.getMonth() + 1);
+      set('العام', date.getFullYear());
+    }
+  }
+
+  function tlDeriveSalesLine_(row, idx) {
+    const get = function (n) { return idx[n] !== undefined ? row[idx[n]] : undefined; };
+    const set = function (n, v) { if (idx[n] !== undefined) row[idx[n]] = v; };
+    const net = num0_(get('product_qty')) * num0_(get('product_price'));
+    const taxValue = net * num0_(get('product_tax'));
+    set('product_net_value', net);
+    set('product_tax_value', taxValue);
+    set('product_total_value', net - num0_(get('product_discount')) + taxValue);
+  }
+
+  function tlCashRowBalance_(record) {
+    const stored = record.balance_amount;
+    if (stored !== undefined && stored !== null && String(stored).trim() !== '') return Number(stored) || 0;
+    const amount = num0_(record.transaction_amount);
+    const discount = num0_(record.total_discount);
+    const taxes = num0_(record.taxes);
+    const rate = num0_(record.exchange_rate);
+    const total = ((amount - discount) * rate) + (taxes * rate);
+    return isCreditType_(record.transaction_type) ? -total : total;
+  }
+
+  function tlChartPositionalLookup_(dbId, chartCode) {
+    const wanted = String(chartCode == null ? '' : chartCode).trim();
+    if (!wanted) return { name: '', main: '' };
+    try {
+      const map = tlRefs_(dbId, 'chart_positional', function () {
+        const sheet = getSheet_(CHART_SHEET, dbId);
+        const values = sheet.getDataRange().getValues();
+        const out = {};
+        for (let i = 1; i < values.length; i++) {
+          const key = String(values[i][8] == null ? '' : values[i][8]).trim();
+          if (!key || out[key]) continue;
+          out[key] = { name: values[i][13] == null ? '' : values[i][13], main: values[i][14] == null ? '' : values[i][14] };
+        }
+        return out;
+      });
+      return map[wanted] || { name: '', main: '' };
+    } catch (e) {
+      return { name: '', main: '' };
+    }
+  }
+
+  function tlCashBoxBalanceBefore_(dbId, box, rowNumber) {
+    const wanted = String(box == null ? '' : box).trim();
+    if (!wanted) return 0;
+    try {
+      const sheet = getSheet_(CASH_SHEET, dbId);
+      const headers = getHeaders_(sheet);
+      const boxIdx = tlHeaderIndex_(headers, 'related_box');
+      const balIdx = tlHeaderIndex_(headers, 'balance_amount');
+      const delIdx = tlHeaderIndex_(headers, 'deleted_at');
+      if (boxIdx === -1) return 0;
+      const lastRow = sheet.getLastRow();
+      if (lastRow < 2) return 0;
+      const values = sheet.getRange(2, 1, lastRow - 1, headers.length).getValues();
+      let sum = 0;
+      for (let i = 0; i < values.length; i++) {
+        const physicalRow = i + 2;
+        if (rowNumber && physicalRow >= rowNumber) break;
+        const row = values[i];
+        if (delIdx !== -1 && String(row[delIdx] == null ? '' : row[delIdx]).trim() !== '') continue;
+        if (String(row[boxIdx] == null ? '' : row[boxIdx]).trim() !== wanted) continue;
+        if (balIdx !== -1 && String(row[balIdx] == null ? '' : row[balIdx]).trim() !== '') sum += Number(row[balIdx]) || 0;
+        else sum += tlCashRowBalance_(tlDbRowRecord_(headers, row));
+      }
+      return sum;
+    } catch (e) {
+      return 0;
+    }
+  }
+
+  function tlDeriveCash_(dbId, row, idx, ctx) {
+    const get = function (n) { return idx[n] !== undefined ? row[idx[n]] : undefined; };
+    const set = function (n, v) { if (idx[n] !== undefined) row[idx[n]] = v; };
+    const amount = num0_(get('transaction_amount'));
+    const discount = num0_(get('total_discount'));
+    const taxes = num0_(get('taxes'));
+    const rate = num0_(get('exchange_rate'));
+    const method = String(get('transaction_method') == null ? '' : get('transaction_method')).trim();
+    const netAmount = method === 'فودافون كاش' ? amount * rate : (amount - discount) * rate;
+    set('net_amount', netAmount);
+    const total = ((amount - discount) * rate) + (taxes * rate);
+    set('total', total);
+    const signed = isCreditType_(get('transaction_type')) ? -total : total;
+    set('balance_amount', signed);
+    if (idx['name_vendor'] !== undefined && idx['name'] !== undefined) {
+      const nameId = String(get('name') == null ? '' : get('name')).trim();
+      let name = '';
+      try {
+        partyRefs_(dbId).forEach(function (p) { if (String(p.id) === nameId) name = p.name || ''; });
+      } catch (e) {}
+      set('name_vendor', name);
+    }
+    if (idx['chart_name'] !== undefined || idx['chart_account_main'] !== undefined) {
+      const chart = tlChartPositionalLookup_(dbId, get('chart_code'));
+      if (idx['chart_name'] !== undefined) set('chart_name', chart.name);
+      if (idx['chart_account_main'] !== undefined) set('chart_account_main', chart.main);
+    }
+    if (idx['box_balance'] !== undefined) {
+      set('box_balance', tlCashBoxBalanceBefore_(dbId, get('related_box'), ctx.rowNumber) + signed);
+    }
+  }
+
+  function tlRecalcCashBoxBalances_(dbId, boxes) {
+    const wanted = {};
+    (boxes || []).forEach(function (b) { const k = String(b == null ? '' : b).trim(); if (k) wanted[k] = true; });
+    if (!Object.keys(wanted).length) return;
+    const sheet = getSheet_(CASH_SHEET, dbId);
+    const headers = getHeaders_(sheet);
+    const boxIdx = tlHeaderIndex_(headers, 'related_box');
+    const balIdx = tlHeaderIndex_(headers, 'box_balance');
+    const delIdx = tlHeaderIndex_(headers, 'deleted_at');
+    if (boxIdx === -1 || balIdx === -1) return;
+    const lastRow = sheet.getLastRow();
+    if (lastRow < 2) return;
+    const values = sheet.getRange(2, 1, lastRow - 1, headers.length).getValues();
+    const running = {};
+    const updates = [];
+    for (let i = 0; i < values.length; i++) {
+      const row = values[i];
+      const box = String(row[boxIdx] == null ? '' : row[boxIdx]).trim();
+      if (!wanted[box]) continue;
+      if (delIdx !== -1 && String(row[delIdx] == null ? '' : row[delIdx]).trim() !== '') continue;
+      running[box] = (running[box] || 0) + tlCashRowBalance_(tlDbRowRecord_(headers, row));
+      const current = row[balIdx];
+      if (String(current == null ? '' : current).trim() !== String(running[box])) {
+        updates.push({ rowNumber: i + 2, value: running[box] });
+      }
+    }
+    if (!updates.length) return;
+    let run = [];
+    const flush = function () {
+      if (!run.length) return;
+      sheet.getRange(run[0].rowNumber, balIdx + 1, run.length, 1).setValues(run.map(function (u) { return [u.value]; }));
+      run = [];
+    };
+    updates.forEach(function (u) {
+      if (run.length && u.rowNumber !== run[run.length - 1].rowNumber + 1) flush();
+      run.push(u);
+    });
+    flush();
+    noteMutation_(sheet);
+  }
+
   // Normalize customer_direction to 'customer' | 'vendor' (handles Arabic + English).
   function normalizeDirection_(val) {
     const v = String(val).trim().toLowerCase();
@@ -238,7 +754,7 @@ const TopLight = (function () {
   // this filter and let a blank-id category into the dropdown.
   function categoryOptions_(dbId) {
     return tlRefs_(dbId, 'categories_opts', function () {
-      return getAllRecords_(dbId, CATEGORIES_SHEET)
+      return tlDbList_(dbId, CATEGORIES_SHEET)
         .map(c => ({ id: c.id, name_ar: c.name_ar }))
         .filter(c => c.id !== undefined && c.id !== null && String(c.id).trim() !== '');
     });
@@ -278,31 +794,10 @@ const TopLight = (function () {
     return out;
   }
 
-  // Create a new top_light_categories row (inline add) and return its id.
   function createCategory_(dbId, nameAr, userEmail) {
-    const rows = getAllRecords_(dbId, CATEGORIES_SHEET);
-    let maxId = 0;
-    rows.forEach(c => { const n = Number(c.id); if (!isNaN(n) && n > maxId) maxId = n; });
-    const newId = maxId + 1;
-    const sheet = getSheet_(CATEGORIES_SHEET, dbId);
-    const headers = getHeaders_(sheet);
-    const rowValues = headers.map(h => {
-      const key = String(h).trim().toLowerCase();
-      if (key === 'id') return newId;
-      if (key === 'name_ar') return nameAr;
-      if (key === 'name_eng') return '';
-      if (key === 'user') return userEmail || '';
-      if (key === 'created_at') return new Date();
-      return '';
-    });
-    sheet.appendRow(rowValues);
-    noteMutation_(sheet);
-    // Phase 11 — this was invalidateRefsCache_(dbId, 'categories'), which dropped
-    // the unstamped key. Now that both category shapes live behind the version
-    // stamp, that key is never written and dropping it would invalidate nothing:
-    // this was the one mutation site in the file outside bustTopLightCaches_.
+    const created = tlDbCreate_(dbId, CATEGORIES_SHEET, { name_ar: nameAr, name_eng: '', user: userEmail || '' }, {});
     bumpTlRefsVersion_(dbId);
-    return newId;
+    return created.assignedId;
   }
 
   // Resolve product.category: existing id, or create a new category from the
@@ -342,7 +837,7 @@ const TopLight = (function () {
       const month = now.getMonth();
 
       const retNet = {};
-      getAllRecords_(dbId, SALES_RETURNS_SHEET).forEach(r => {
+      tlDbList_(dbId, SALES_RETURNS_SHEET).forEach(r => {
         const inv = String(r.top_lightsales_invoices_id);
         retNet[inv] = (retNet[inv] || 0) + (num0_(r.top_lightreturn_value) - num0_(r.top_lightreturn_discount));
       });
@@ -355,7 +850,7 @@ const TopLight = (function () {
       const byCustomer = {};
       let salesYtd = 0, salesMtd = 0;
 
-      getAllRecords_(dbId, SALES_SHEET).forEach(inv => {
+      tlDbList_(dbId, SALES_SHEET).forEach(inv => {
         const d = parseDate_(inv['تاريخ الفاتورة']);
         if (!(d instanceof Date)) return;
         const net = num0_(inv['المبلغ الصافي']);
@@ -385,7 +880,7 @@ const TopLight = (function () {
 
       let collectedCash = 0;
       const boxBal = {};
-      getAllRecords_(dbId, CASH_SHEET).forEach(r => {
+      tlDbList_(dbId, CASH_SHEET).forEach(r => {
         const rate = num0_(r.exchange_rate) || 1;
         const base = num0_(r.transaction_amount) * rate - num0_(r.total_discount) * rate + num0_(r.taxes) * rate;
         const type = String((r.transaction_type == null) ? '' : r.transaction_type).trim();
@@ -412,11 +907,11 @@ const TopLight = (function () {
   // Products — list / add / edit
   // =========================================
   function getProducts_(data, user, dbId) {
-    const rows = getAllRecords_(dbId, PRODUCTS_SHEET);
+    const rows = tlDbList_(dbId, PRODUCTS_SHEET);
     const catNames = {};
     categoryRefs_(dbId).forEach(c => { catNames[String(c.id)] = c.name_ar; });
     const stockMap = {};
-    getAllRecords_(dbId, CURRENT_PRODUCTS_SHEET).forEach(s => {
+    tlDbList_(dbId, CURRENT_PRODUCTS_SHEET).forEach(s => {
       stockMap[String(s.unique_id)] = { qty: num0_(s.current_qty), cost: num0_(s.total_cost_sign) };
     });
     const products = rows.map(p => {
@@ -449,10 +944,8 @@ const TopLight = (function () {
   function addProduct_(data, user, dbId) {
     const nameAr = String((data && data.name_ar) || '').trim();
     if (!nameAr) throw new Error('اسم المنتج مطلوب');
-    const id = getNextId_(dbId, PRODUCTS_SHEET);
     const resolvedCategory = resolveCategoryId_(data, user, dbId);
     var _prodNewVals = {
-      id: id,
       name_ar: nameAr,
       name_en: String((data && data.name_en) || '').trim(),
       category: resolvedCategory,
@@ -460,10 +953,11 @@ const TopLight = (function () {
       carton: (data && data.carton) || '',
       sales_tax: (data && data.sales_tax) || '',
       asset_code: String((data && data.asset_code) || '').trim(),
-      user: user.email,
-      created_at: new Date()
+      user: user.email
     };
-    const record = addRecord_(dbId, PRODUCTS_SHEET, _prodNewVals, ['name_ar']);
+    const created = tlDbCreate_(dbId, PRODUCTS_SHEET, _prodNewVals, { user: user });
+    const id = created.assignedId;
+    const record = created.record;
     try { var _uid = 'create_top_light_products_' + id; logHistory_(dbId, PRODUCTS_SHEET, _uid, String(id), (user&&user.email)||'', 'create', _prodNewVals, null); } catch(e){}
     bustTopLightCaches_(dbId, 'products');
     invalidateRefsCache_(dbId, 'products');
@@ -491,7 +985,6 @@ const TopLight = (function () {
     const id = Number((data && data.id));
     if (!id) throw new Error('معرف المنتج مطلوب');
     const resolvedCat = resolveCategoryId_(data, user, dbId);
-    var _editProdOld = null; try { var _editProdRows = getAllRecords_(dbId, PRODUCTS_SHEET); var _editProdIdx = indexById(_editProdRows, 'id'); var _editProdKey = String(id).trim(); _editProdOld = _editProdIdx.get(_editProdKey) || _editProdIdx.get(_editProdKey.toLowerCase()) || null; } catch(e){}
     var _editProdNewVals = {
       name_ar: String((data && data.name_ar) || '').trim(),
       name_en: String((data && data.name_en) || '').trim(),
@@ -499,19 +992,18 @@ const TopLight = (function () {
       unit: String((data && data.unit) || '').trim(),
       carton: (data && data.carton) || '',
       sales_tax: (data && data.sales_tax) || '',
-      asset_code: String((data && data.asset_code) || '').trim(),
-      updated_at: new Date()
+      asset_code: String((data && data.asset_code) || '').trim()
     };
-    const sheet = getSheet_(PRODUCTS_SHEET, dbId);
-    const updated = patchRowByCriteria_(sheet, 'id', id, _editProdNewVals);
-    if (!updated) throw new Error('المنتج غير موجود');
+    const patched = tlDbPatch_(dbId, PRODUCTS_SHEET, id, _editProdNewVals, { keyField: 'id', user: user, version: data && data.version });
+    if (!patched) throw new Error('المنتج غير موجود');
+    var _editProdOld = patched.oldRecord;
     try { var _uid = (_editProdOld && _editProdOld.record_uid) ? String(_editProdOld.record_uid) : 'update_top_light_products_' + id; logHistory_(dbId, PRODUCTS_SHEET, _uid, String(id), (user&&user.email)||'', 'update', _editProdNewVals, _editProdOld); } catch(e){}
     bustTopLightCaches_(dbId, 'products');
     invalidateRefsCache_(dbId, 'products');
     var catNames2 = {};
     try{ categoryRefs_(dbId).forEach(function(c){ catNames2[String(c.id)] = c.name_ar; }); }catch(e){}
     var stockMap2 = {};
-    try{ getAllRecords_(dbId, CURRENT_PRODUCTS_SHEET).forEach(function(s){ stockMap2[String(s.unique_id)] = { qty: num0_(s.current_qty), cost: num0_(s.total_cost_sign)}; }); }catch(e){}
+    try{ tlDbList_(dbId, CURRENT_PRODUCTS_SHEET).forEach(function(s){ stockMap2[String(s.unique_id)] = { qty: num0_(s.current_qty), cost: num0_(s.total_cost_sign)}; }); }catch(e){}
     var st = stockMap2[String(id)] || { qty: 0, cost: 0 };
     var savedRecord2 = {
       id: id,
@@ -535,7 +1027,7 @@ const TopLight = (function () {
   // Customers / Vendors — list / add / edit
   // =========================================
   function getParties_(data, user, dbId) {
-    const rows = getAllRecords_(dbId, CUSTOMERS_SHEET);
+    const rows = tlDbList_(dbId, CUSTOMERS_SHEET);
     const direction = data && data.direction ? String(data.direction).trim().toLowerCase() : '';
     const balMap = customerBalanceMap_(dbId);
     const parties = rows
@@ -566,10 +1058,8 @@ const TopLight = (function () {
   function addParty_(data, user, dbId) {
     const name = String((data && data.name) || '').trim();
     if (!name) throw new Error('الاسم مطلوب');
-    const id = getNextId_(dbId, CUSTOMERS_SHEET);
     const directionVal = String((data && data.customer_direction) || 'customer').trim();
     var _partyNewVals = {
-      id: id,
       name: name,
       customer_direction: directionVal,
       type: String((data && data.type) || '').trim(),
@@ -580,10 +1070,11 @@ const TopLight = (function () {
       name_en: String((data && data.name_en) || '').trim(),
       telephone: String((data && data.telephone) || '').trim(),
       address: String((data && data.address) || '').trim(),
-      user: user.email,
-      created_at: new Date()
+      user: user.email
     };
-    const record = addRecord_(dbId, CUSTOMERS_SHEET, _partyNewVals, ['name']);
+    const created = tlDbCreate_(dbId, CUSTOMERS_SHEET, _partyNewVals, { user: user });
+    const id = created.assignedId;
+    const record = created.record;
     try { var _uid = 'create_top_light_customer_vendor_' + id; logHistory_(dbId, CUSTOMERS_SHEET, _uid, String(id), (user&&user.email)||'', 'create', _partyNewVals, null); } catch(e){}
     bustTopLightCaches_(dbId, 'parties');
     invalidateRefsCache_(dbId, 'parties');
@@ -608,7 +1099,6 @@ const TopLight = (function () {
     const id = Number((data && data.id));
     if (!id) throw new Error('معرف الطرف مطلوب');
     const dirVal = String((data && data.customer_direction) || 'customer').trim();
-    var _editPartyOld = null; try { var _editPartyRows = getAllRecords_(dbId, CUSTOMERS_SHEET); var _editPartyIdx = indexById(_editPartyRows, 'id'); var _editPartyKey = String(id).trim(); _editPartyOld = _editPartyIdx.get(_editPartyKey) || _editPartyIdx.get(_editPartyKey.toLowerCase()) || null; } catch(e){}
     var _editPartyNewVals = {
       name: String((data && data.name) || '').trim(),
       customer_direction: dirVal,
@@ -619,12 +1109,11 @@ const TopLight = (function () {
       tax_id: String((data && data.tax_id) || '').trim(),
       name_en: String((data && data.name_en) || '').trim(),
       telephone: String((data && data.telephone) || '').trim(),
-      address: String((data && data.address) || '').trim(),
-      updated_at: new Date()
+      address: String((data && data.address) || '').trim()
     };
-    const sheet = getSheet_(CUSTOMERS_SHEET, dbId);
-    const updated = patchRowByCriteria_(sheet, 'id', id, _editPartyNewVals);
-    if (!updated) throw new Error('الطرف غير موجود');
+    const patched = tlDbPatch_(dbId, CUSTOMERS_SHEET, id, _editPartyNewVals, { keyField: 'id', user: user, version: data && data.version });
+    if (!patched) throw new Error('الطرف غير موجود');
+    var _editPartyOld = patched.oldRecord;
     try { var _uid = (_editPartyOld && _editPartyOld.record_uid) ? String(_editPartyOld.record_uid) : 'update_top_light_customer_vendor_' + id; logHistory_(dbId, CUSTOMERS_SHEET, _uid, String(id), (user&&user.email)||'', 'update', _editPartyNewVals, _editPartyOld); } catch(e){}
     bustTopLightCaches_(dbId, 'parties');
     invalidateRefsCache_(dbId, 'parties');
@@ -691,7 +1180,7 @@ const TopLight = (function () {
 
   function getPurchasingHeaders_(data, user, dbId) {
     var limit = Number(data && data.limit) || 20;
-    const rows = getAllRecords_(dbId, PURCHASING_SHEET);
+    const rows = tlDbList_(dbId, PURCHASING_SHEET);
     const vendorNames = {};
     partyRefs_(dbId).forEach(v => { vendorNames[String(v.id)] = v.name; });
     const pick = rows.length ? makeAliasPicker_(rows[0]) : function () { return ''; };
@@ -749,7 +1238,7 @@ const TopLight = (function () {
     const parentId = String((data && data.parent_id) || '');
     const prodNames = {};
     productRefs_(dbId).forEach(p => { prodNames[String(p.id)] = p.name_ar; });
-    const lines = getAllRecords_(dbId, PURCHASING_LINES_SHEET)
+    const lines = tlDbList_(dbId, PURCHASING_LINES_SHEET)
       .filter(r => String(r['top_light_purchasing_costing_id']) === parentId)
       .map(r => ({
         unique_id: r.unique_id,
@@ -775,7 +1264,7 @@ const TopLight = (function () {
 
     const vendorNames = {};
     partyRefs_(dbId).forEach(v => { vendorNames[String(v.id)] = v.name; });
-    const rec = getAllRecords_(dbId, PURCHASING_SHEET).find(function(r){ return String(r.unique_id).trim().toLowerCase() === uid.toLowerCase(); });
+    const rec = tlDbList_(dbId, PURCHASING_SHEET).find(function(r){ return String(r.unique_id).trim().toLowerCase() === uid.toLowerCase(); });
     if (!rec) throw new Error('العملية غير موجودة');
     const header = Object.assign({}, rec);
     // Normalize same aliases as list — Items as text, receipt typo, etc.
@@ -793,7 +1282,7 @@ const TopLight = (function () {
 
     const prodNames = {};
     productRefs_(dbId).forEach(p => { prodNames[String(p.id)] = p.name_ar; });
-    const lines = getAllRecords_(dbId, PURCHASING_LINES_SHEET)
+    const lines = tlDbList_(dbId, PURCHASING_LINES_SHEET)
       .filter(r => String(r['top_light_purchasing_costing_id']) === uid)
       .map(r => ({
         product_name: prodNames[String(r.product)] || '',
@@ -863,33 +1352,13 @@ const TopLight = (function () {
     if (!uid) throw new Error('معرف الفاتورة مطلوب');
     validatePurchasingHeader_(header, lines);
 
-    const sheet = getSheet_(PURCHASING_SHEET, dbId);
-    const headers = getHeaders_(sheet);
-    const uIdx = headers.findIndex(h => String(h).trim().toLowerCase() === 'unique_id');
-    const dataArr = sheet.getDataRange().getValues();
-    let rowNum = -1;
-    for (let i = 1; i < dataArr.length; i++) {
-      if (String(dataArr[i][uIdx]).trim() === uid) { rowNum = i + 1; break; }
-    }
-    if (rowNum === -1) throw new Error('الفاتورة غير موجودة');
+    const changes = purchasingHeaderDataMap_(header, user);
+    if (header.approval_status == null || header.approval_status === '') delete changes.approval_status;
+    const patched = tlDbPatch_(dbId, PURCHASING_SHEET, uid, changes, { user: user, version: header.version });
+    if (!patched) throw new Error('الفاتورة غير موجودة');
+    var _editPurchOld = patched.oldRecord;
 
-    var _editPurchOld = null;
-    try {
-      var oldRaw = dataArr[rowNum - 1] || [];
-      _editPurchOld = {};
-      headers.forEach(function (h, c) {
-        var k = String(h).trim();
-        _editPurchOld[k] = oldRaw[c] !== undefined ? oldRaw[c] : '';
-      });
-    } catch (e) { _editPurchOld = null; }
-    deleteLines_(dbId, uid);
-    const rowValues = buildHeaderValues_(headers, uid, header, user);
-    // Phase 3 (F-04): formulas merged into the same setValues that writes the
-    // values, instead of a second pass of up to 8 setFormula calls. The target
-    // row already exists and is located by unique_id, so no lock is needed here.
-    applyHeaderFormulas_(rowValues, headers, rowNum);
-    sheet.getRange(rowNum, 1, 1, rowValues.length).setValues([rowValues]);
-    noteMutation_(sheet);
+    deleteLines_(dbId, uid, user);
     writeLines_(dbId, uid, header, lines, user);
     try { var _uid = (_editPurchOld && _editPurchOld.record_uid) ? String(_editPurchOld.record_uid) : 'update_top_light_purchasing_costing_' + uid; logHistory_(dbId, PURCHASING_SHEET, _uid, String(uid), (user&&user.email)||'', 'update', header, _editPurchOld); } catch(e){}
     bustTopLightCaches_(dbId, 'purchasing');
@@ -923,15 +1392,10 @@ const TopLight = (function () {
   function deletePurchasing_(data, user, dbId) {
     const uid = String((data && data.unique_id) || '').trim();
     if (!uid) throw new Error('معرف الفاتورة مطلوب');
-    var _delPurchOld = null; try { _delPurchOld = getAllRecords_(dbId, PURCHASING_SHEET).find(function(r){ return String(r.unique_id)===String(uid); }) || null; } catch(e){}
-    deleteLines_(dbId, uid);
-    const sheet = getSheet_(PURCHASING_SHEET, dbId);
-    const headers = getHeaders_(sheet);
-    const uIdx = headers.findIndex(h => String(h).trim().toLowerCase() === 'unique_id');
-    const dataArr = sheet.getDataRange().getValues();
-    for (let i = dataArr.length - 1; i >= 1; i--) {
-      if (String(dataArr[i][uIdx]).trim() === uid) { sheet.deleteRow(i + 1); noteMutation_(sheet); break; }
-    }
+    const patched = tlDbSoftDelete_(dbId, PURCHASING_SHEET, uid, { user: user });
+    if (!patched) throw new Error('الفاتورة غير موجودة');
+    var _delPurchOld = patched.oldRecord;
+    deleteLines_(dbId, uid, user);
     try { var _uid = (_delPurchOld && _delPurchOld.record_uid) ? String(_delPurchOld.record_uid) : 'delete_top_light_purchasing_costing_' + uid; logHistory_(dbId, PURCHASING_SHEET, _uid, String(uid), (user&&user.email)||'', 'delete', null, _delPurchOld); } catch(e){}
     bustTopLightCaches_(dbId, 'purchasing');
     return { status: 'success', message: 'تم حذف عملية الشراء' };
@@ -944,7 +1408,7 @@ const TopLight = (function () {
     const uid = String((data && data.unique_id) || '').trim();
     if (!uid) throw new Error('معرف الفاتورة مطلوب');
     /* Phase 2: Pending->Approved only, Approved terminal — via table (no inline cur check). */
-    var __curPurch = null; try { __curPurch = getAllRecords_(dbId, PURCHASING_SHEET).find(function(r){ return String(r.unique_id)===String(uid); }) || null; } catch(eRead){}
+    var __curPurch = null; try { __curPurch = tlDbList_(dbId, PURCHASING_SHEET).find(function(r){ return String(r.unique_id)===String(uid); }) || null; } catch(eRead){}
     if (__curPurch) assertTransition_('tl_purchasing', __curPurch.approval_status || 'Pending', 'Approved', 'لا يمكن اعتماد عملية الشراء من هذه الحالة');
     const res = approveStep_('tl_purchasing', uid, 'approve', user, { dbId: dbId, version: data && data.version });
     if (!res || res.status !== 'success') throw new Error((res && res.message) || 'الفاتورة غير موجودة');
@@ -1032,6 +1496,40 @@ const TopLight = (function () {
     }
   }
 
+  function purchasingHeaderDataMap_(header, user) {
+    return {
+      code: header.code,
+      tax_system: header.tax_system === true || header.tax_system === 'true',
+      'reciept date': parseDate_(header.receipt_date),
+      items: header.items,
+      type: header.type,
+      'shipping type': header.shipping_type,
+      'if shipping via cif, enter the insurance value.': num0_(header.cif_insurance_value),
+      value: num0_(header.value),
+      currency: header.currency,
+      'exchange rate': num0_(header.exchange_rate),
+      'importation re-price': num0_(header.importation_reprice),
+      'tax declared value': num0_(header.tax_declared_value),
+      'administrative expenses': num0_(header.administrative_expenses),
+      'customs expenses': num0_(header.customs_expenses),
+      'unloading expenses': num0_(header.unloading_expenses),
+      'bank commission': num0_(header.bank_commission),
+      'customs clearance and port receipts': num0_(header.customs_clearance),
+      'additional fees': num0_(header.additional_fees),
+      'clearance expenses': num0_(header.clearance_expenses),
+      'other expenses': num0_(header.other_expenses),
+      'purchase tax': num0_(header.purchase_tax),
+      'income tax': num0_(header.income_tax),
+      'internal cost adjustment': num0_(header.internal_cost_adjustment),
+      'minimum differences': header.minimum_differences,
+      'supplier name': header.supplier_name,
+      'approved this month': header.approved_this_month,
+      'associated bank': header.associated_bank,
+      user: user ? user.email : '',
+      approval_status: (header.approval_status != null && header.approval_status !== '') ? header.approval_status : 'Pending'
+    };
+  }
+
   function buildHeaderValues_(headers, uid, header, user) {
     const idx = {};
     headers.forEach((h, i) => { idx[String(h).trim().toLowerCase()] = i; });
@@ -1039,132 +1537,17 @@ const TopLight = (function () {
     const set = (name, val) => { if (idx[name] !== undefined) rowValues[idx[name]] = val; };
 
     set('unique_id', uid);
-    set('code', header.code);
-    set('tax_system', header.tax_system === true || header.tax_system === 'true');
-    set('reciept date', parseDate_(header.receipt_date));
-    set('items', header.items);
-    set('type', header.type);
-    set('shipping type', header.shipping_type);
-    set('if shipping via cif, enter the insurance value.', num0_(header.cif_insurance_value));
-    set('value', num0_(header.value));
-    set('currency', header.currency);
-    set('exchange rate', num0_(header.exchange_rate));
-    set('importation re-price', num0_(header.importation_reprice));
-    set('tax declared value', num0_(header.tax_declared_value));
-    set('administrative expenses', num0_(header.administrative_expenses));
-    set('customs expenses', num0_(header.customs_expenses));
-    set('unloading expenses', num0_(header.unloading_expenses));
-    set('bank commission', num0_(header.bank_commission));
-    set('customs clearance and port receipts', num0_(header.customs_clearance));
-    set('additional fees', num0_(header.additional_fees));
-    set('clearance expenses', num0_(header.clearance_expenses));
-    set('other expenses', num0_(header.other_expenses));
-    set('purchase tax', num0_(header.purchase_tax));
-    set('income tax', num0_(header.income_tax));
-    set('internal cost adjustment', num0_(header.internal_cost_adjustment));
-    set('minimum differences', header.minimum_differences);
-    set('supplier name', header.supplier_name);
-    set('approved this month', header.approved_this_month);
-    set('associated bank', header.associated_bank);
-    set('user', user ? user.email : '');
-    set('approval_status', (header.approval_status != null && header.approval_status !== '') ? header.approval_status : 'Pending');
+    const data = purchasingHeaderDataMap_(header, user);
+    Object.keys(data).forEach(function (k) { set(k, data[k]); });
 
     return rowValues;
   }
 
-  /**
-   * Phase 3 (F-04). The formula strings for one purchasing-costing header row,
-   * as { columnIndex: formula }. Extracted VERBATIM from setHeaderFormulas_ so
-   * the same strings can be written as part of the row's own setValues() instead
-   * of as up to eight separate setFormula() round trips.
-   *
-   * setValues() treats a string beginning with '=' as a formula, exactly as
-   * appendRow() and setFormula() do, so the cells end up as formulas with
-   * identical text.
-   */
-  function headerFormulaMap_(headers, rowNum) {
-    const idx = {};
-    headers.forEach((h, i) => { idx[String(h).trim().toLowerCase()] = i; });
-    const L = (name) => colLetter_(idx[name]);
-    const out = {};
-
-    if (idx['value based on invoice'] !== undefined) {
-      out[idx['value based on invoice']] =
-        '=' + L('value') + rowNum + '*' + L('exchange rate') + rowNum;
-    }
-    if (idx['total costs'] !== undefined) {
-      const sumCols = ['value based on invoice', 'administrative expenses', 'customs expenses',
-        'unloading expenses', 'bank commission', 'customs clearance and port receipts',
-        'additional fees', 'clearance expenses', 'other expenses'];
-      const sum = sumCols.map(c => L(c) + rowNum).join('+');
-      const sumWithAdj = sum + '+' + L('internal cost adjustment') + rowNum + '+' + L('purchase tax') + rowNum;
-      out[idx['total costs']] =
-        '=IF(' + L('type') + rowNum + '="بيع",' + sum + ',' + sumWithAdj + ')';
-    }
-    if (idx['month'] !== undefined) {
-      out[idx['month']] = '=MONTH(' + L('reciept date') + rowNum + ')';
-    }
-    if (idx['year'] !== undefined) {
-      out[idx['year']] = '=YEAR(' + L('reciept date') + rowNum + ')';
-    }
-    if (idx['cif insurance rate'] !== undefined) {
-      out[idx['cif insurance rate']] =
-        '=IF(' + L('shipping type') + rowNum + '="CIF", (' + L('if shipping via cif, enter the insurance value.') + rowNum + '-' + L('value') + rowNum + ')/' + L('value') + rowNum + ', "")';
-    }
-    if (idx['tax type'] !== undefined) {
-      const ratio = L('purchase tax') + rowNum + '/(' + L('importation re-price') + rowNum + '+' + L('customs expenses') + rowNum + ')';
-      out[idx['tax type']] =
-        '=IFERROR(IF(' + ratio + ' >= 0.08, 0.14, ' + ratio + '), "")';
-    }
-    if (idx['sales value'] !== undefined) {
-      out[idx['sales value']] =
-        '=IF(' + L('type') + rowNum + '="بيع", ROUND(' + L('total costs') + rowNum + '*103/100,-2), 0)';
-    }
-    if (idx['sales tax amount'] !== undefined) {
-      out[idx['sales tax amount']] =
-        '=IFERROR(IF(' + L('tax type') + rowNum + '>0.06, ' + L('sales value') + rowNum + '*14/100, 0), "")';
-    }
-    return out;
-  }
-
-  /** Merges the header formulas for rowNum into an already-built value row. */
-  function applyHeaderFormulas_(rowValues, headers, rowNum) {
-    const fmap = headerFormulaMap_(headers, rowNum);
-    Object.keys(fmap).forEach(function (c) { rowValues[Number(c)] = fmap[c]; });
-    return rowValues;
-  }
-
-  /** Kept for compatibility — no longer on the write path. */
-  function setHeaderFormulas_(sheet, headers, rowNum) {
-    const fmap = headerFormulaMap_(headers, rowNum);
-    Object.keys(fmap).forEach(function (c) {
-      sheet.getRange(rowNum, Number(c) + 1).setFormula(fmap[c]);
-      noteMutation_(sheet);
-    });
-  }
-
-  /**
-   * Phase 3 (F-04): was appendRow + up to 8 setFormula = 9 round trips; now one
-   * setValues.
-   *
-   * Taken under the script lock: a precomputed target range is NOT safe against a
-   * concurrent append the way appendRow is, so without it two simultaneous saves
-   * could compute the same start row and one would overwrite the other.
-   * addRecord_ and getNextId_ already serialise on this same lock.
-   */
   function writeHeaderRow_(dbId, uid, header, user) {
     const sheet = getSheet_(PURCHASING_SHEET, dbId);
     const headers = getHeaders_(sheet);
     const rowValues = buildHeaderValues_(headers, uid, header, user);
-    return executeWithLock_(function () {
-      const newRow = sheet.getLastRow() + 1;
-      if (newRow > sheet.getMaxRows()) sheet.insertRowsAfter(sheet.getMaxRows(), newRow - sheet.getMaxRows());
-      noteMutation_(sheet);
-      applyHeaderFormulas_(rowValues, headers, newRow);
-      sheet.getRange(newRow, 1, 1, rowValues.length).setValues([rowValues]);
-      noteMutation_(sheet);
-      return newRow;
-    });
+    return tlDbAppendValues_(dbId, PURCHASING_SHEET, rowValues).rowNumber;
   }
 
   function writeLines_(dbId, headerUid, header, lines, user) {
@@ -1172,7 +1555,6 @@ const TopLight = (function () {
     const headers = getHeaders_(sheet);
     const idx = {};
     headers.forEach((h, i) => { idx[String(h).trim().toLowerCase()] = i; });
-    const L = (name) => colLetter_(idx[name]);
 
     const prodCat = {};
     productRefs_(dbId).forEach(p => { prodCat[String(p.id)] = p.category; });
@@ -1208,62 +1590,11 @@ const TopLight = (function () {
 
     if (!valueRows.length) return;
 
-    // Phase 3 (F-04): this was appendRow + up to 6 setFormula PER LINE, i.e. ~70
-    // Sheets round trips for a 10-line document. Now one setValues for the whole
-    // block. setValues treats a leading '=' as a formula, exactly as appendRow
-    // and setFormula do, so the cells are formulas with identical text.
-    //
-    // Under the script lock for the same reason as writeHeaderRow_: a
-    // precomputed target range is not safe against a concurrent append.
-    executeWithLock_(function () {
-      const startRow = sheet.getLastRow() + 1;
-      const lastNeeded = startRow + valueRows.length - 1;
-      if (lastNeeded > sheet.getMaxRows()) sheet.insertRowsAfter(sheet.getMaxRows(), lastNeeded - sheet.getMaxRows());
-      noteMutation_(sheet);
-
-      valueRows.forEach(function (rowValues, i) {
-        // Identical row numbers to the old loop: appendRow put line i at
-        // getLastRow()+1+i, which is exactly startRow+i.
-        const r = startRow + i;
-        if (idx['total_cost'] !== undefined) {
-          rowValues[idx['total_cost']] =
-            '=' + L('qty') + r + '*' + L('unit_price') + r + '*' + L('exchange_rate') + r + '+' + L('other_cost') + r;
-        }
-        if (idx['unit_cost'] !== undefined) {
-          rowValues[idx['unit_cost']] = '=' + L('total_cost') + r + '/' + L('qty') + r;
-        }
-        if (idx['movement_code'] !== undefined) {
-          rowValues[idx['movement_code']] =
-            '=CONCATENATE(' + L('movement_type') + r + ',"-",' + L('id') + r + ',"-",INDEX(top_light_products!$B:$B,MATCH(' + L('product') + r + ',top_light_products!$A:$A,0)),"-",TEXT(' + L('receipt_date') + r + ',"DD/MM/YYYY"))';
-        }
-        if (idx['sales_value_amount'] !== undefined) {
-          rowValues[idx['sales_value_amount']] =
-            '=' + L('sales_value') + r + '*' + L('qty') + r;
-        }
-        if (idx['sales_qty'] !== undefined) {
-          rowValues[idx['sales_qty']] = '=' + L('qty') + r;
-        }
-        if (idx['cost_currency'] !== undefined) {
-          rowValues[idx['cost_currency']] =
-            '=' + L('qty') + r + '*' + L('unit_price') + r + '+' + L('other_cost') + r + '/' + L('exchange_rate') + r;
-        }
-      });
-
-      sheet.getRange(startRow, 1, valueRows.length, headers.length).setValues(valueRows);
-      noteMutation_(sheet);
-    });
+    tlDbAppendValuesBatch_(dbId, PURCHASING_LINES_SHEET, valueRows);
   }
 
-  function deleteLines_(dbId, headerUid) {
-    const sheet = getSheet_(PURCHASING_LINES_SHEET, dbId);
-    const headers = getHeaders_(sheet);
-    const idx = headers.findIndex(h => String(h).trim().toLowerCase() === 'top_light_purchasing_costing_id');
-    if (idx === -1) return;
-    const data = sheet.getDataRange().getValues();
-    for (let i = data.length - 1; i >= 1; i--) {
-      if (String(data[i][idx]).trim() === headerUid) sheet.deleteRow(i + 1);
-      noteMutation_(sheet);
-    }
+  function deleteLines_(dbId, headerUid, user) {
+    tlDbSoftDeleteWhere_(dbId, PURCHASING_LINES_SHEET, 'top_light_purchasing_costing_id', headerUid, { user: user });
   }
 
   // =========================================
@@ -1288,18 +1619,18 @@ const TopLight = (function () {
    */
   function getSalesHeaders_(data, user, dbId) {
     var limit = Number(data && data.limit) || 20;
-    const rows = getAllRecords_(dbId, SALES_SHEET);
+    const rows = tlDbList_(dbId, SALES_SHEET);
     const custNames = {};
     partyRefs_(dbId).forEach(c => { custNames[String(c.id)] = c.name; });
 
     const stockMaps = cachedMap_('tl_sales_stock_' + dbId, 90, function () {
       const soldMap = {};
-      getAllRecords_(dbId, SALES_LINES_SHEET).forEach(l => {
+      tlDbList_(dbId, SALES_LINES_SHEET).forEach(l => {
         const k = String(l.top_lightsales_header_id);
         soldMap[k] = (soldMap[k] || 0) + num0_(l.product_qty);
       });
       const returnedMap = {};
-      getAllRecords_(dbId, SALES_RETURNS_SHEET).forEach(rt => {
+      tlDbList_(dbId, SALES_RETURNS_SHEET).forEach(rt => {
         const k = String(rt.top_lightsales_invoices_id);
         returnedMap[k] = (returnedMap[k] || 0) + num0_(rt.top_lightreturn_qty);
       });
@@ -1342,7 +1673,7 @@ const TopLight = (function () {
     const parentId = String((data && data.parent_id) || '');
     const prodNames = {};
     productRefs_(dbId).forEach(p => { prodNames[String(p.id)] = p.name_ar; });
-    const lines = getAllRecords_(dbId, SALES_LINES_SHEET)
+    const lines = tlDbList_(dbId, SALES_LINES_SHEET)
       .filter(r => String(r['top_lightsales_header_id']) === parentId)
       .map(r => ({
         unique_id: r.unique_id,
@@ -1366,14 +1697,14 @@ const TopLight = (function () {
 
     const custNames = {};
     partyRefs_(dbId).forEach(c => { custNames[String(c.id)] = c.name; });
-    const rec = getAllRecords_(dbId, SALES_SHEET).find(r => String(r.invoice_unique_id) === uid);
+    const rec = tlDbList_(dbId, SALES_SHEET).find(r => String(r.invoice_unique_id) === uid);
     if (!rec) throw new Error('الفاتورة غير موجودة');
     const header = Object.assign({}, rec);
     header.customer_name = custNames[String(rec['اسم العميل'])] || '';
 
     const prodNames = {};
     productRefs_(dbId).forEach(p => { prodNames[String(p.id)] = p.name_ar; });
-    const lines = getAllRecords_(dbId, SALES_LINES_SHEET)
+    const lines = tlDbList_(dbId, SALES_LINES_SHEET)
       .filter(r => String(r['top_lightsales_header_id']) === uid)
       .map(r => ({
         product_id: r.product_id,
@@ -1387,7 +1718,7 @@ const TopLight = (function () {
         product_total_value: r.product_total_value
       }));
 
-    const returns = getAllRecords_(dbId, SALES_RETURNS_SHEET)
+    const returns = tlDbList_(dbId, SALES_RETURNS_SHEET)
       .filter(r => String(r.top_lightsales_invoices_id) === uid)
       .map(r => ({
         product_id: r.top_lightsales_products_id,
@@ -1427,13 +1758,13 @@ const TopLight = (function () {
   function getSalesCosting_(data, user, dbId) {
     const uid = String((data && (data.sales_code || data.invoice_id)) || '').trim();
     if (!uid) throw new Error('معرف الفاتورة مطلوب');
-    const invoice = getAllRecords_(dbId, SALES_SHEET).find(r => String(r.invoice_unique_id) === uid);
+    const invoice = tlDbList_(dbId, SALES_SHEET).find(r => String(r.invoice_unique_id) === uid);
     if (!invoice) throw new Error('الفاتورة غير موجودة');
 
     const prodNames = {};
     productRefs_(dbId).forEach(p => { prodNames[String(p.id)] = p.name_ar; });
     const costMap = {};
-    getAllRecords_(dbId, CURRENT_PRODUCTS_SHEET).forEach(s => {
+    tlDbList_(dbId, CURRENT_PRODUCTS_SHEET).forEach(s => {
       const q = num0_(s.current_qty);
       costMap[String(s.unique_id)] = q > 0 ? num0_(s.total_cost_sign) / q : 0;
     });
@@ -1442,7 +1773,7 @@ const TopLight = (function () {
 
     const items = [];
     let totalInvoiceCostOriginal = 0;
-    getAllRecords_(dbId, SALES_LINES_SHEET)
+    tlDbList_(dbId, SALES_LINES_SHEET)
       .filter(r => String(r.top_lightsales_header_id) === uid)
       .forEach(l => {
         const pid = String(l.product_id);
@@ -1464,7 +1795,7 @@ const TopLight = (function () {
     const returns = [];
     let totalReturnsValue = 0;
     let totalReturnsCostCalculated = 0;
-    getAllRecords_(dbId, SALES_RETURNS_SHEET)
+    tlDbList_(dbId, SALES_RETURNS_SHEET)
       .filter(r => String(r.top_lightsales_invoices_id) === uid)
       .forEach(r => {
         const pid = String(r.top_lightsales_products_id);
@@ -1578,41 +1909,28 @@ const TopLight = (function () {
     if (!uid) throw new Error('معرف الفاتورة مطلوب');
     validateSales_(header, lines, dbId);
 
-    const sheet = getSheet_(SALES_SHEET, dbId);
-    const headers = getHeaders_(sheet);
-    const uIdx = headers.findIndex(h => String(h).trim().toLowerCase() === 'invoice_unique_id');
-    const invIdx = headers.findIndex(h => String(h).trim() === 'رقم الفاتورة');
-    const dataArr = sheet.getDataRange().getValues();
-    let rowNum = -1;
-    for (let i = 1; i < dataArr.length; i++) {
-      if (String(dataArr[i][uIdx]).trim() === uid) { rowNum = i + 1; break; }
-    }
-    if (rowNum === -1) throw new Error('الفاتورة غير موجودة');
-
-    var _editSalesOld = null; try { _editSalesOld = getAllRecords_(dbId, SALES_SHEET).find(function(r){ return String(r.invoice_unique_id)===String(uid); }) || null; } catch(e){}
+    var _editSalesOld = tlDbFind_(dbId, SALES_SHEET, 'invoice_unique_id', uid);
+    if (!_editSalesOld) throw new Error('الفاتورة غير موجودة');
     var __editSalesVer = checkRowVersion_(_editSalesOld, header.version);
-    header.version = __editSalesVer + 1;
     header.customer_tax_id = lookupCustomerField_(dbId, header.customer_id, 'tax_id');
     header.customer_telephone = lookupCustomerField_(dbId, header.customer_id, 'telephone');
     header.customer_address = lookupCustomerField_(dbId, header.customer_id, 'address');
-    header.invoice_number = (invIdx !== -1 && dataArr[rowNum - 1][invIdx] != null && String(dataArr[rowNum - 1][invIdx]).trim() !== '')
-      ? dataArr[rowNum - 1][invIdx] : nextInvoiceNumber_(dbId);
+    header.invoice_number = (_editSalesOld['رقم الفاتورة'] != null && String(_editSalesOld['رقم الفاتورة']).trim() !== '')
+      ? _editSalesOld['رقم الفاتورة'] : nextInvoiceNumber_(dbId);
     computeSalesTotals_(header, lines);
 
-    deleteSalesLines_(dbId, uid);
-    const rowValues = buildSalesHeaderValues_(headers, uid, header, user);
-    // Phase 3 (F-04): formulas merged into the same setValues. The row already
-    // exists and is located by unique_id; the outer executeWithLock_ covers the
-    // fallback numbering above (inner helpers are re-entrant).
-    applySalesHeaderFormulas_(rowValues, headers, rowNum);
-    sheet.getRange(rowNum, 1, 1, rowValues.length).setValues([rowValues]);
-    noteMutation_(sheet);
+    const changes = salesHeaderDataMap_(header, user);
+    changes.approval_status = header.approval_status || _editSalesOld.approval_status || 'Pending';
+    changes.version = __editSalesVer + 1;
+    const patched = tlDbPatch_(dbId, SALES_SHEET, uid, changes, { user: user, version: header.version });
+    if (!patched) throw new Error('الفاتورة غير موجودة');
+
+    deleteSalesLines_(dbId, uid, user);
     writeSalesLines_(dbId, uid, header, lines, user);
     try { var _uid = (_editSalesOld && _editSalesOld.record_uid) ? String(_editSalesOld.record_uid) : 'update_top_light_sales_invoices_' + uid; logHistory_(dbId, SALES_SHEET, _uid, String(uid), (user&&user.email)||'', 'update', header, _editSalesOld); } catch(e){}
     bustTopLightCaches_(dbId, 'sales');
     var custNamesSalesE = {};
     try{ partyRefs_(dbId).forEach(function(c){ custNamesSalesE[String(c.id)] = c.name; }); }catch(e){}
-    var approvalExisting = (headers.findIndex(function(h){ return String(h).trim().toLowerCase()==='approval_status';})!==-1) ? String(dataArr[rowNum-1][headers.findIndex(function(h){ return String(h).trim().toLowerCase()==='approval_status';})]||'Pending') : 'Pending';
     var savedSalesE = {
       invoice_unique_id: uid,
       'رقم الفاتورة': header.invoice_number,
@@ -1627,7 +1945,7 @@ const TopLight = (function () {
       'قيمة الضريبة': num0_(header.tax_amount),
       'إجمالي': num0_(header.total_amount),
       tax_system: header.tax_system === true || header.tax_system === 'true',
-      approval_status: header.approval_status || approvalExisting || 'Pending',
+      approval_status: changes.approval_status,
       customer_name: custNamesSalesE[String(header.customer_id)] || '',
       fully_returned: false,
       unique_id: uid
@@ -1639,15 +1957,10 @@ const TopLight = (function () {
   function deleteSales_(data, user, dbId) {
     const uid = String((data && data.unique_id) || '').trim();
     if (!uid) throw new Error('معرف الفاتورة مطلوب');
-    var _delSalesOld = null; try { _delSalesOld = getAllRecords_(dbId, SALES_SHEET).find(function(r){ return String(r.invoice_unique_id)===String(uid); }) || null; } catch(e){}
-    deleteSalesLines_(dbId, uid);
-    const sheet = getSheet_(SALES_SHEET, dbId);
-    const headers = getHeaders_(sheet);
-    const uIdx = headers.findIndex(h => String(h).trim().toLowerCase() === 'invoice_unique_id');
-    const dataArr = sheet.getDataRange().getValues();
-    for (let i = dataArr.length - 1; i >= 1; i--) {
-      if (String(dataArr[i][uIdx]).trim() === uid) { sheet.deleteRow(i + 1); noteMutation_(sheet); break; }
-    }
+    const patched = tlDbSoftDelete_(dbId, SALES_SHEET, uid, { user: user });
+    if (!patched) throw new Error('الفاتورة غير موجودة');
+    var _delSalesOld = patched.oldRecord;
+    deleteSalesLines_(dbId, uid, user);
     try { var _uid = (_delSalesOld && _delSalesOld.record_uid) ? String(_delSalesOld.record_uid) : 'delete_top_light_sales_invoices_' + uid; logHistory_(dbId, SALES_SHEET, _uid, String(uid), (user&&user.email)||'', 'delete', null, _delSalesOld); } catch(e){}
     bustTopLightCaches_(dbId, 'sales');
     return { status: 'success', message: 'تم حذف الفاتورة' };
@@ -1658,7 +1971,7 @@ const TopLight = (function () {
     const uid = String((data && data.unique_id) || '').trim();
     if (!uid) throw new Error('معرف الفاتورة مطلوب');
     /* Phase 2: Pending->Approved only, Approved terminal — via table. */
-    var __curSales = null; try { __curSales = getAllRecords_(dbId, SALES_SHEET).find(function(r){ return String(r.invoice_unique_id)===String(uid); }) || null; } catch(eRead){}
+    var __curSales = null; try { __curSales = tlDbList_(dbId, SALES_SHEET).find(function(r){ return String(r.invoice_unique_id)===String(uid); }) || null; } catch(eRead){}
     if (__curSales) assertTransition_('tl_sales', __curSales.approval_status || 'Pending', 'Approved', 'لا يمكن اعتماد الفاتورة من هذه الحالة');
     const res = approveStep_('tl_sales', uid, 'approve', user, { dbId: dbId, version: data && data.version });
     if (!res || res.status !== 'success') throw new Error((res && res.message) || 'الفاتورة غير موجودة');
@@ -1675,17 +1988,17 @@ const TopLight = (function () {
 
     const custNames = {};
     partyRefs_(dbId).forEach(c => { custNames[String(c.id)] = c.name; });
-    const invoice = getAllRecords_(dbId, SALES_SHEET).find(r => String(r.invoice_unique_id) === invoiceId);
+    const invoice = tlDbList_(dbId, SALES_SHEET).find(r => String(r.invoice_unique_id) === invoiceId);
     if (!invoice) throw new Error('الفاتورة غير موجودة');
 
     const prodNames = {};
     productRefs_(dbId).forEach(p => { prodNames[String(p.id)] = p.name_ar; });
 
-    const lines = getAllRecords_(dbId, SALES_LINES_SHEET)
+    const lines = tlDbList_(dbId, SALES_LINES_SHEET)
       .filter(r => String(r.top_lightsales_header_id) === invoiceId);
 
     const returnedMap = {};
-    getAllRecords_(dbId, SALES_RETURNS_SHEET)
+    tlDbList_(dbId, SALES_RETURNS_SHEET)
       .filter(r => String(r.top_lightsales_invoices_id) === invoiceId)
       .forEach(r => {
         const k = String(r.top_lightsales_products_id);
@@ -1706,7 +2019,7 @@ const TopLight = (function () {
       };
     });
 
-    const returns = getAllRecords_(dbId, SALES_RETURNS_SHEET)
+    const returns = tlDbList_(dbId, SALES_RETURNS_SHEET)
       .filter(r => String(r.top_lightsales_invoices_id) === invoiceId)
       .map(r => ({
         unique_id: r.unique_id,
@@ -1747,14 +2060,14 @@ const TopLight = (function () {
     if (!returnDate) throw new Error('تاريخ المرتجع مطلوب');
     if (returnQty <= 0) throw new Error('كمية المرتجع يجب أن تكون أكبر من صفر');
 
-    const invoice = getAllRecords_(dbId, SALES_SHEET).find(r => String(r.invoice_unique_id) === invoiceId);
+    const invoice = tlDbList_(dbId, SALES_SHEET).find(r => String(r.invoice_unique_id) === invoiceId);
     if (!invoice) throw new Error('الفاتورة غير موجودة');
 
-    const line = getAllRecords_(dbId, SALES_LINES_SHEET)
+    const line = tlDbList_(dbId, SALES_LINES_SHEET)
       .find(r => String(r.top_lightsales_header_id) === invoiceId && String(r.product_id) === productId);
     if (!line) throw new Error('المنتج غير موجود في هذه الفاتورة');
 
-    const alreadyReturned = getAllRecords_(dbId, SALES_RETURNS_SHEET)
+    const alreadyReturned = tlDbList_(dbId, SALES_RETURNS_SHEET)
       .filter(r => String(r.top_lightsales_invoices_id) === invoiceId && String(r.top_lightsales_products_id) === productId)
       .reduce((s, r) => s + num0_(r.top_lightreturn_qty), 0);
     const available = num0_(line.product_qty) - alreadyReturned;
@@ -1766,31 +2079,22 @@ const TopLight = (function () {
     const discountValue = num0_(invoice['قيمة الخصم']);
     const discount = net > 0 ? (discountValue / net) * value : 0;
 
-    const sheet = getSheet_(SALES_RETURNS_SHEET, dbId);
-    const headers = getHeaders_(sheet);
-    const idx = {};
-    headers.forEach((h, i) => { idx[String(h).trim().toLowerCase()] = i; });
-
-     const nextId = getNextId_(dbId, SALES_RETURNS_SHEET, 'id');
     var newUidRet = uid16_();
 
-    const rowValues = headers.map(() => '');
-    const set = (name, val) => { if (idx[name] !== undefined) rowValues[idx[name]] = val; };
-    set('unique_id', newUidRet);
-    set('id', nextId);
-    set('top_lightsales_invoices_id', invoiceId);
-    set('top_lightsales_invoices_client', numOrKeep_(invoice['اسم العميل']));
-    set('top_lightreturn_date', returnDate);
-    set('top_lightsales_products_id', numOrKeep_(productId));
-    set('top_lightreturn_qty', returnQty);
-    set('top_lightreturn_discount', discount);
-    set('top_lightreturn_price', price);
-    set('top_lightreturn_value', value);
-    set('user', user ? user.email : '');
-    set('created_at', new Date());
-    var _retNewVals = { unique_id: newUidRet, id: nextId, top_lightsales_invoices_id: invoiceId, top_lightsales_invoices_client: numOrKeep_(invoice['اسم العميل']), top_lightreturn_date: returnDate, top_lightsales_products_id: numOrKeep_(productId), top_lightreturn_qty: returnQty, top_lightreturn_discount: discount, top_lightreturn_price: price, top_lightreturn_value: value };
-    sheet.appendRow(rowValues);
-    noteMutation_(sheet);
+    var _retNewVals = {
+      unique_id: newUidRet,
+      top_lightsales_invoices_id: invoiceId,
+      top_lightsales_invoices_client: numOrKeep_(invoice['اسم العميل']),
+      top_lightreturn_date: returnDate,
+      top_lightsales_products_id: numOrKeep_(productId),
+      top_lightreturn_qty: returnQty,
+      top_lightreturn_discount: discount,
+      top_lightreturn_price: price,
+      top_lightreturn_value: value,
+      user: user ? user.email : ''
+    };
+    const createdRet = tlDbCreate_(dbId, SALES_RETURNS_SHEET, _retNewVals, { user: user });
+    const nextId = createdRet.record.id;
     try { var _uid = 'create_top_light_sales_returns_' + newUidRet; logHistory_(dbId, SALES_RETURNS_SHEET, _uid, String(newUidRet), (user&&user.email)||'', 'create', _retNewVals, null); } catch(e){}
     bustTopLightCaches_(dbId, 'sales');
     var prodNamesRet = {};
@@ -1819,14 +2123,9 @@ const TopLight = (function () {
   function deleteSalesReturn_(data, user, dbId) {
     const uid = String((data && data.unique_id) || '').trim();
     if (!uid) throw new Error('معرف المرتجع مطلوب');
-    var _delRetOld = null; try { _delRetOld = getAllRecords_(dbId, SALES_RETURNS_SHEET).find(function(r){ return String(r.unique_id)===String(uid); }) || null; } catch(e){}
-    const sheet = getSheet_(SALES_RETURNS_SHEET, dbId);
-    const headers = getHeaders_(sheet);
-    const uIdx = headers.findIndex(h => String(h).trim().toLowerCase() === 'unique_id');
-    const dataArr = sheet.getDataRange().getValues();
-    for (let i = dataArr.length - 1; i >= 1; i--) {
-      if (String(dataArr[i][uIdx]).trim() === uid) { sheet.deleteRow(i + 1); noteMutation_(sheet); break; }
-    }
+    const patched = tlDbSoftDelete_(dbId, SALES_RETURNS_SHEET, uid, { user: user });
+    if (!patched) throw new Error('المرتجع غير موجود');
+    var _delRetOld = patched.oldRecord;
     try { var _uid = (_delRetOld && _delRetOld.record_uid) ? String(_delRetOld.record_uid) : 'delete_top_light_sales_returns_' + uid; var _delId = (_delRetOld && _delRetOld.id) ? String(_delRetOld.id) : String(uid); logHistory_(dbId, SALES_RETURNS_SHEET, _uid, _delId, (user&&user.email)||'', 'delete', null, _delRetOld); } catch(e){}
     bustTopLightCaches_(dbId, 'sales');
     return { status: 'success', message: 'تم حذف المرتجع' };
@@ -1943,19 +2242,19 @@ const TopLight = (function () {
   // have no app-driven mutator at all — they are hand-edited only.
   // =========================================
   function partyRefs_(dbId) {
-    return tlRefs_(dbId, 'parties', function () { return getAllRecords_(dbId, CUSTOMERS_SHEET); });
+    return tlRefs_(dbId, 'parties', function () { return tlDbList_(dbId, CUSTOMERS_SHEET); });
   }
   function productRefs_(dbId) {
-    return tlRefs_(dbId, 'products', function () { return getAllRecords_(dbId, PRODUCTS_SHEET); });
+    return tlRefs_(dbId, 'products', function () { return tlDbList_(dbId, PRODUCTS_SHEET); });
   }
   function categoryRefs_(dbId) {
-    return tlRefs_(dbId, 'categories_raw', function () { return getAllRecords_(dbId, CATEGORIES_SHEET); });
+    return tlRefs_(dbId, 'categories_raw', function () { return tlDbList_(dbId, CATEGORIES_SHEET); });
   }
   function chartRefs_(dbId) {
-    return tlRefs_(dbId, 'chart_of_accounts', function () { return getAllRecords_(dbId, CHART_SHEET); });
+    return tlRefs_(dbId, 'chart_of_accounts', function () { return tlDbList_(dbId, CHART_SHEET); });
   }
   function boxRefs_(dbId) {
-    return tlRefs_(dbId, 'boxes', function () { return getAllRecords_(dbId, BOX_SHEET); });
+    return tlRefs_(dbId, 'boxes', function () { return tlDbList_(dbId, BOX_SHEET); });
   }
 
   function bustTopLightCaches_(dbId, type) {
@@ -1982,7 +2281,7 @@ const TopLight = (function () {
     // Phase 2.6 — version-stamped, 600s (was 90s).
     return tlCachedMap_(dbId, 'tl_qty_map_' + dbId, function () {
       const map = {};
-      getAllRecords_(dbId, CURRENT_PRODUCTS_SHEET).forEach(s => {
+      tlDbList_(dbId, CURRENT_PRODUCTS_SHEET).forEach(s => {
         map[String(s.unique_id)] = num0_(s.current_qty);
       });
       return map;
@@ -1996,7 +2295,7 @@ const TopLight = (function () {
     // purchasing-lines table to derive one price per product, every 90 seconds.
     return tlCachedMap_(dbId, 'tl_price_map_' + dbId, function () {
       const latest = {};
-      getAllRecords_(dbId, PURCHASING_LINES_SHEET).forEach(r => {
+      tlDbList_(dbId, PURCHASING_LINES_SHEET).forEach(r => {
         const pid = String((r.product == null) ? '' : r.product).trim();
         if (!pid) return;
         const d = parseDate_(r.receipt_date);
@@ -2055,7 +2354,7 @@ const TopLight = (function () {
     var seq = nextDocumentNumber_(dbId, 'tl_sales', year, {
       seedScanner: function () {
         var maxPrefix = 0;
-        getAllRecords_(dbId, SALES_SHEET).forEach(function (r) {
+        tlDbList_(dbId, SALES_SHEET).forEach(function (r) {
           var s = String((r['رقم الفاتورة'] == null) ? '' : r['رقم الفاتورة']).trim();
           var m = s.match(/^(\d+)-/);
           if (m) { var n = Number(m[1]); if (!isNaN(n) && n > maxPrefix) maxPrefix = n; }
@@ -2123,89 +2422,47 @@ const TopLight = (function () {
     return i;
   }
 
+  function salesHeaderDataMap_(header, user) {
+    return {
+      'ميزان حسابي': 5,
+      'نوع الضريبة': 2,
+      'رقم الفاتورة': header.invoice_number,
+      'اسم العميل': numOrKeep_(header.customer_id),
+      'رقم التسجيل الضريبي للعميل': header.customer_tax_id || '',
+      'العنوان': header.customer_address || '',
+      'رقم الموبيل': header.customer_telephone || '',
+      'تاريخ الفاتورة': parseDate_(header.invoice_date),
+      'نوع البيان': 3,
+      'نوع السلعة': 14,
+      'المبلغ الصافي': num0_(header.net_amount),
+      'نسبة الخصم': num0_(header.discount_percent),
+      'قيمة الخصم': num0_(header.discount_amount),
+      'قيمة الضريبة': num0_(header.tax_amount),
+      'إجمالي': num0_(header.total_amount),
+      tax_system: header.tax_system === true || header.tax_system === 'true',
+      user: user ? user.email : '',
+      approval_status: (header.approval_status != null && header.approval_status !== '') ? header.approval_status : 'Pending'
+    };
+  }
+
   function buildSalesHeaderValues_(headers, uid, header, user) {
     const rowValues = headers.map(() => '');
     const put = (key, val) => { const i = salesColIndex_(headers, key); if (i !== -1) rowValues[i] = val; };
 
     put('invoice_unique_id', uid);
-    put('ميزان حسابي', 5);
-    put('نوع الضريبة', 2);
-    put('رقم الفاتورة', header.invoice_number);
-    put('اسم العميل', numOrKeep_(header.customer_id));
-    put('رقم التسجيل الضريبي للعميل', header.customer_tax_id || '');
-    put('العنوان', header.customer_address || '');
-    put('رقم الموبيل', header.customer_telephone || '');
-    put('تاريخ الفاتورة', parseDate_(header.invoice_date));
-    put('نوع البيان', 3);
-    put('نوع السلعة', 14);
-    put('المبلغ الصافي', num0_(header.net_amount));
-    put('نسبة الخصم', num0_(header.discount_percent));
-    put('قيمة الخصم', num0_(header.discount_amount));
-    put('قيمة الضريبة', num0_(header.tax_amount));
-    put('إجمالي', num0_(header.total_amount));
-    put('tax_system', header.tax_system === true || header.tax_system === 'true');
-    put('user', user ? user.email : '');
+    const data = salesHeaderDataMap_(header, user);
+    Object.keys(data).forEach(function (k) { put(k, data[k]); });
     put('created_at', new Date());
-    put('approval_status', (header.approval_status != null && header.approval_status !== '') ? header.approval_status : 'Pending');
     put('version', header.version !== undefined ? header.version : 0);
 
     return rowValues;
   }
 
-  /** Phase 3 (F-04). Sales header formulas as { columnIndex: formula }, taken
-   *  verbatim from setSalesHeaderFormulas_. */
-  function salesHeaderFormulaMap_(headers, rowNum) {
-    const jIdx = salesColIndex_(headers, 'نوع سلع الجدول');
-    const tIdx = salesColIndex_(headers, 'تاريخ الفاتورة');
-    const rIdx = salesColIndex_(headers, 'قيمة الضريبة');
-    const oIdx = salesColIndex_(headers, 'المبلغ الصافي');
-    const mIdx = salesColIndex_(headers, 'الشهر');
-    const yIdx = salesColIndex_(headers, 'العام');
-    const out = {};
-
-    if (jIdx !== -1 && rIdx !== -1 && oIdx !== -1) {
-      out[jIdx] = '=IFERROR(IF(' + colLetter_(rIdx) + rowNum + '/' + colLetter_(oIdx) + rowNum + '=0.05,1,0),"")';
-    }
-    if (mIdx !== -1 && tIdx !== -1) {
-      out[mIdx] = '=MONTH(' + colLetter_(tIdx) + rowNum + ')';
-    }
-    if (yIdx !== -1 && tIdx !== -1) {
-      out[yIdx] = '=YEAR(' + colLetter_(tIdx) + rowNum + ')';
-    }
-    return out;
-  }
-
-  /** Merges the sales header formulas for rowNum into an already-built row. */
-  function applySalesHeaderFormulas_(rowValues, headers, rowNum) {
-    const fmap = salesHeaderFormulaMap_(headers, rowNum);
-    Object.keys(fmap).forEach(function (c) { rowValues[Number(c)] = fmap[c]; });
-    return rowValues;
-  }
-
-  /** Kept for compatibility — no longer on the write path. */
-  function setSalesHeaderFormulas_(sheet, headers, rowNum) {
-    const fmap = salesHeaderFormulaMap_(headers, rowNum);
-    Object.keys(fmap).forEach(function (c) {
-      sheet.getRange(rowNum, Number(c) + 1).setFormula(fmap[c]);
-      noteMutation_(sheet);
-    });
-  }
-
-  /** Phase 3 (F-04): appendRow + up to 3 setFormula -> one setValues, under the
-   *  script lock (a precomputed range is not append-safe). */
   function writeSalesHeaderRow_(dbId, uid, header, user) {
     const sheet = getSheet_(SALES_SHEET, dbId);
     const headers = getHeaders_(sheet);
     const rowValues = buildSalesHeaderValues_(headers, uid, header, user);
-    return executeWithLock_(function () {
-      const newRow = sheet.getLastRow() + 1;
-      if (newRow > sheet.getMaxRows()) sheet.insertRowsAfter(sheet.getMaxRows(), newRow - sheet.getMaxRows());
-      noteMutation_(sheet);
-      applySalesHeaderFormulas_(rowValues, headers, newRow);
-      sheet.getRange(newRow, 1, 1, rowValues.length).setValues([rowValues]);
-      noteMutation_(sheet);
-      return newRow;
-    });
+    return tlDbAppendValues_(dbId, SALES_SHEET, rowValues).rowNumber;
   }
 
   function writeSalesLines_(dbId, headerUid, header, lines, user) {
@@ -2213,7 +2470,6 @@ const TopLight = (function () {
     const headers = getHeaders_(sheet);
     const idx = {};
     headers.forEach((h, i) => { idx[String(h).trim().toLowerCase()] = i; });
-    const L = (name) => colLetter_(idx[name]);
 
     const baseId = getNextIdBatch_(dbId, SALES_LINES_SHEET, lines.length, 'id');
 
@@ -2237,45 +2493,11 @@ const TopLight = (function () {
 
     if (!valueRows.length) return;
 
-    // Phase 3 (F-04): was appendRow + up to 3 setFormula per line. Now one
-    // setValues for the whole block, under the script lock.
-    executeWithLock_(function () {
-      const startRow = sheet.getLastRow() + 1;
-      const lastNeeded = startRow + valueRows.length - 1;
-      if (lastNeeded > sheet.getMaxRows()) sheet.insertRowsAfter(sheet.getMaxRows(), lastNeeded - sheet.getMaxRows());
-      noteMutation_(sheet);
-
-      valueRows.forEach(function (rowValues, i) {
-        const r = startRow + i;   // identical to the old appendRow row numbers
-        if (idx['product_net_value'] !== undefined) {
-          rowValues[idx['product_net_value']] =
-            '=' + L('product_qty') + r + '*' + L('product_price') + r;
-        }
-        if (idx['product_tax_value'] !== undefined) {
-          rowValues[idx['product_tax_value']] =
-            '=' + L('product_net_value') + r + '*' + L('product_tax') + r;
-        }
-        if (idx['product_total_value'] !== undefined) {
-          rowValues[idx['product_total_value']] =
-            '=' + L('product_net_value') + r + '-' + L('product_discount') + r + '+' + L('product_tax_value') + r;
-        }
-      });
-
-      sheet.getRange(startRow, 1, valueRows.length, headers.length).setValues(valueRows);
-      noteMutation_(sheet);
-    });
+    tlDbAppendValuesBatch_(dbId, SALES_LINES_SHEET, valueRows);
   }
 
-  function deleteSalesLines_(dbId, headerUid) {
-    const sheet = getSheet_(SALES_LINES_SHEET, dbId);
-    const headers = getHeaders_(sheet);
-    const idx = headers.findIndex(h => String(h).trim().toLowerCase() === 'top_lightsales_header_id');
-    if (idx === -1) return;
-    const data = sheet.getDataRange().getValues();
-    for (let i = data.length - 1; i >= 1; i--) {
-      if (String(data[i][idx]).trim() === headerUid) sheet.deleteRow(i + 1);
-      noteMutation_(sheet);
-    }
+  function deleteSalesLines_(dbId, headerUid, user) {
+    tlDbSoftDeleteWhere_(dbId, SALES_LINES_SHEET, 'top_lightsales_header_id', headerUid, { user: user });
   }
 
   // =========================================
@@ -2283,7 +2505,7 @@ const TopLight = (function () {
   // =========================================
   function getCashHeaders_(data, user, dbId) {
     var limit = Number(data && data.limit) || 2000;
-    const rows = getAllRecords_(dbId, CASH_SHEET);
+    const rows = tlDbList_(dbId, CASH_SHEET);
     const boxNames = boxNameMap_(dbId);
     const boxes = boxBalanceSummary_(dbId, boxNames);
     const custNames = {};
@@ -2349,7 +2571,7 @@ const TopLight = (function () {
     const headers = getHeaders_(sheet);
     const nextId = getNextId_(dbId, CASH_SHEET, 'transaction_id');
     const rowValues = buildCashValues_(headers, nextId, rec, user);
-    appendCashRow_(sheet, headers, rowValues);   // Phase 3 (F-04): 8 round trips -> 1
+    tlDbAppendValues_(dbId, CASH_SHEET, rowValues);
     try { var _uid = 'create_top_light_cash_bank_movement_' + nextId; logHistory_(dbId, CASH_SHEET, _uid, String(nextId), (user&&user.email)||'', 'create', rec, null); } catch(e){}
     bustTopLightCaches_(dbId, 'cash');
     return { status: 'success', message: 'تمت إضافة الحركة', data: { assignedId: nextId } };
@@ -2360,22 +2582,10 @@ const TopLight = (function () {
     const id = Number(rec.transaction_id);
     if (!id) throw new Error('معرف الحركة مطلوب');
     validateCash_(rec);
-    var _editCashOld = null; try { _editCashOld = getAllRecords_(dbId, CASH_SHEET).find(function(r){ return String(r.transaction_id)===String(id); }) || null; } catch(e){}
-    const sheet = getSheet_(CASH_SHEET, dbId);
-    const headers = getHeaders_(sheet);
-    const idIdx = headers.findIndex(h => String(h).trim().toLowerCase() === 'transaction_id');
-    const dataArr = sheet.getDataRange().getValues();
-    let rowNum = -1;
-    for (let i = 1; i < dataArr.length; i++) {
-      if (Number(dataArr[i][idIdx]) === id) { rowNum = i + 1; break; }
-    }
-    if (rowNum === -1) throw new Error('الحركة غير موجودة');
-    const rowValues = buildCashValues_(headers, id, rec, user);
-    // Phase 3 (F-04): formulas merged into the same setValues. The row already
-    // exists and is located by transaction_id, so no lock is needed here.
-    applyCashFormulas_(rowValues, headers, rowNum);
-    sheet.getRange(rowNum, 1, 1, rowValues.length).setValues([rowValues]);
-    noteMutation_(sheet);
+    const patched = tlDbPatch_(dbId, CASH_SHEET, id, cashDataMap_(rec, user), { user: user, version: rec.version });
+    if (!patched) throw new Error('الحركة غير موجودة');
+    var _editCashOld = patched.oldRecord;
+    tlRecalcCashBoxBalances_(dbId, [_editCashOld.related_box, rec.related_box]);
     try { var _uid = (_editCashOld && _editCashOld.record_uid) ? String(_editCashOld.record_uid) : 'update_top_light_cash_bank_movement_' + id; logHistory_(dbId, CASH_SHEET, _uid, String(id), (user&&user.email)||'', 'update', rec, _editCashOld); } catch(e){}
     bustTopLightCaches_(dbId, 'cash');
     return { status: 'success', message: 'تم تحديث الحركة' };
@@ -2384,14 +2594,10 @@ const TopLight = (function () {
   function deleteCash_(data, user, dbId) {
     const id = Number(data && data.unique_id);
     if (!id) throw new Error('معرف الحركة مطلوب');
-    var _delCashOld = null; try { _delCashOld = getAllRecords_(dbId, CASH_SHEET).find(function(r){ return String(r.transaction_id)===String(id); }) || null; } catch(e){}
-    const sheet = getSheet_(CASH_SHEET, dbId);
-    const headers = getHeaders_(sheet);
-    const idIdx = headers.findIndex(h => String(h).trim().toLowerCase() === 'transaction_id');
-    const dataArr = sheet.getDataRange().getValues();
-    for (let i = dataArr.length - 1; i >= 1; i--) {
-      if (Number(dataArr[i][idIdx]) === id) { sheet.deleteRow(i + 1); noteMutation_(sheet); break; }
-    }
+    const patched = tlDbSoftDelete_(dbId, CASH_SHEET, id, { user: user });
+    if (!patched) throw new Error('الحركة غير موجودة');
+    var _delCashOld = patched.oldRecord;
+    tlRecalcCashBoxBalances_(dbId, [_delCashOld.related_box]);
     try { var _uid = (_delCashOld && _delCashOld.record_uid) ? String(_delCashOld.record_uid) : 'delete_top_light_cash_bank_movement_' + id; logHistory_(dbId, CASH_SHEET, _uid, String(id), (user&&user.email)||'', 'delete', null, _delCashOld); } catch(e){}
     bustTopLightCaches_(dbId, 'cash');
     return { status: 'success', message: 'تم حذف الحركة' };
@@ -2402,7 +2608,7 @@ const TopLight = (function () {
     const id = Number(data && data.unique_id);
     if (!id) throw new Error('معرف الحركة مطلوب');
     /* Phase 2: approved bool false->true only, true terminal — via table. */
-    var __curCash = null; try { __curCash = getAllRecords_(dbId, CASH_SHEET).find(function(r){ return String(r.transaction_id)===String(id); }) || null; } catch(eRead){}
+    var __curCash = null; try { __curCash = tlDbList_(dbId, CASH_SHEET).find(function(r){ return String(r.transaction_id)===String(id); }) || null; } catch(eRead){}
     if (__curCash) assertTransition_('tl_cash', __curCash.approved, 'true', 'لا يمكن اعتماد الحركة من هذه الحالة');
     const res = approveStep_('tl_cash', id, 'approve', user, { dbId: dbId, version: data && data.version });
     if (!res || res.status !== 'success') throw new Error((res && res.message) || 'الحركة غير موجودة');
@@ -2420,15 +2626,13 @@ const TopLight = (function () {
     if (fromBox === toBox) throw new Error('يجب اختيار صندوقين مختلفين');
     if (amount <= 0) throw new Error('المبلغ يجب أن يكون أكبر من صفر');
 
-    const sheet = getSheet_(CASH_SHEET, dbId);
-    const headers = getHeaders_(sheet);
     const nextId = getNextIdBatch_(dbId, CASH_SHEET, 2, 'transaction_id');
 
     const boxNames = boxNameMap_(dbId);
     const customDetails = String((data && data.details) || '').trim();
     const details = customDetails || 'تحويل صندوق إلى صندوق';
 
-    writeCashTransferRow_(sheet, headers, {
+    writeCashTransferRow_(dbId, {
       transaction_id: nextId,
       name: '',
       transaction_details: details,
@@ -2446,7 +2650,7 @@ const TopLight = (function () {
       temp_target_box: toBox
     }, user);
 
-    writeCashTransferRow_(sheet, headers, {
+    writeCashTransferRow_(dbId, {
       transaction_id: nextId + 1,
       name: '',
       transaction_details: details,
@@ -2533,7 +2737,7 @@ const TopLight = (function () {
 
   function boxBalanceSummary_(dbId, boxNames) {
     const map = {};
-    getAllRecords_(dbId, CASH_SHEET).forEach(r => {
+    tlDbList_(dbId, CASH_SHEET).forEach(r => {
       const box = String((r.related_box == null) ? '' : r.related_box).trim();
       if (!box) return;
       const t = num0_(r.total != null && r.total !== '' ? r.total : r.transaction_amount);
@@ -2556,6 +2760,28 @@ const TopLight = (function () {
     if (String((rec.transaction_type == null) ? '' : rec.transaction_type).trim() === '') throw new Error('نوع الحركة مطلوب');
   }
 
+  function cashDataMap_(rec, user) {
+    return {
+      invoice_id: rec.invoice_id != null ? rec.invoice_id : '',
+      name: numOrKeep_(rec.name),
+      transaction_purchasing_items: rec.transaction_purchasing_items != null ? rec.transaction_purchasing_items : '',
+      transaction_details: rec.transaction_details,
+      transaction_date: parseDate_(rec.transaction_date),
+      transaction_amount: num0_(rec.transaction_amount),
+      total_discount: num0_(rec.total_discount),
+      taxes: num0_(rec.taxes),
+      transaction_type: rec.transaction_type,
+      related_box: numOrKeep_(rec.related_box),
+      chart_code: numOrKeep_(rec.chart_code),
+      transaction_method: rec.transaction_method,
+      tax_system: rec.tax_system === true || rec.tax_system === 'true',
+      approved: rec.approved === true || rec.approved === 'true',
+      currency: rec.currency,
+      exchange_rate: num0_(rec.exchange_rate),
+      user: user ? user.email : ''
+    };
+  }
+
   function buildCashValues_(headers, transactionId, rec, user) {
     const idx = {};
     headers.forEach((h, i) => { idx[String(h).trim().toLowerCase()] = i; });
@@ -2563,29 +2789,16 @@ const TopLight = (function () {
     const set = (name, val) => { if (idx[name] !== undefined) rowValues[idx[name]] = val; };
 
     set('transaction_id', transactionId);
-    set('invoice_id', rec.invoice_id != null ? rec.invoice_id : '');
-    set('name', numOrKeep_(rec.name));
-    set('transaction_purchasing_items', rec.transaction_purchasing_items != null ? rec.transaction_purchasing_items : '');
-    set('transaction_details', rec.transaction_details);
-    set('transaction_date', parseDate_(rec.transaction_date));
-    set('transaction_amount', num0_(rec.transaction_amount));
-    set('total_discount', num0_(rec.total_discount));
-    set('taxes', num0_(rec.taxes));
-    set('transaction_type', rec.transaction_type);
-    set('related_box', numOrKeep_(rec.related_box));
-    set('chart_code', numOrKeep_(rec.chart_code));
-    set('transaction_method', rec.transaction_method);
-    set('tax_system', rec.tax_system === true || rec.tax_system === 'true');
-    set('approved', rec.approved === true || rec.approved === 'true');
-    set('currency', rec.currency);
-    set('exchange_rate', num0_(rec.exchange_rate));
-    set('user', user ? user.email : '');
+    const data = cashDataMap_(rec, user);
+    Object.keys(data).forEach(function (k) { set(k, data[k]); });
     set('created_at', new Date());
 
     return rowValues;
   }
 
-  function writeCashTransferRow_(sheet, headers, rec, user) {
+  function writeCashTransferRow_(dbId, rec, user) {
+    const sheet = getSheet_(CASH_SHEET, dbId);
+    const headers = getHeaders_(sheet);
     const idx = {};
     headers.forEach((h, i) => { idx[String(h).trim().toLowerCase()] = i; });
     const rowValues = headers.map(() => '');
@@ -2612,83 +2825,7 @@ const TopLight = (function () {
     set('created_at', new Date());
     set('temp_target_box', rec.temp_target_box);
 
-    appendCashRow_(sheet, headers, rowValues);   // Phase 3 (F-04): 8 round trips -> 1
-  }
-
-  /** Phase 3 (F-04). Cash-movement formulas as { columnIndex: formula }, taken
-   *  verbatim from setCashFormulas_. */
-  function cashFormulaMap_(headers, rowNum) {
-    const idx = {};
-    headers.forEach((h, i) => { idx[String(h).trim().toLowerCase()] = i; });
-    const col = (name) => (idx[name] !== undefined ? colLetter_(idx[name]) : undefined);
-    const M = col('transaction_type'), S = col('transaction_method'), H = col('transaction_amount'),
-          I = col('total_discount'), K = col('taxes'), AA = col('exchange_rate'),
-          N = col('net_amount'), B = col('balance_amount'), P = col('related_box');
-    const out = {};
-
-    if (idx['name_vendor'] !== undefined && idx['name'] !== undefined) {
-      out[idx['name_vendor']] =
-        '=IFERROR(VLOOKUP(' + col('name') + rowNum + ',top_light_customer_vendor!A:B,2,0),"")';
-    }
-    if (N !== undefined && H !== undefined && I !== undefined && S !== undefined && AA !== undefined) {
-      out[idx['net_amount']] =
-        '=IF(' + S + rowNum + '="فودافون كاش",' + H + rowNum + '*' + AA + rowNum + ',(' + H + rowNum + '-' + I + rowNum + ')*' + AA + rowNum + ')';
-    }
-    if (idx['total'] !== undefined && H !== undefined && I !== undefined && K !== undefined && AA !== undefined) {
-      out[idx['total']] =
-        '=((' + H + rowNum + '-' + I + rowNum + ')*' + AA + rowNum + ')+(' + K + rowNum + '*' + AA + rowNum + ')';
-    }
-    if (B !== undefined && M !== undefined && H !== undefined && I !== undefined && K !== undefined && AA !== undefined) {
-      const totExpr = '(((' + H + rowNum + '-' + I + rowNum + ')*' + AA + rowNum + ')+(' + K + rowNum + '*' + AA + rowNum + '))';
-      out[idx['balance_amount']] =
-        '=IF(' + M + rowNum + '="Credit",-1*' + totExpr + ',' + totExpr + ')';
-    }
-    if (B !== undefined && P !== undefined) {
-      out[idx['box_balance']] =
-        '=SUMIFS($' + B + '$2:' + B + rowNum + ',$' + P + '$2:' + P + rowNum + ',' + P + rowNum + ')';
-    }
-    if (idx['chart_name'] !== undefined && idx['chart_code'] !== undefined) {
-      out[idx['chart_name']] =
-        '=IFERROR(INDEX(top_light_chart_of_accounts!N:N,MATCH(' + col('chart_code') + rowNum + ',top_light_chart_of_accounts!I:I,0)),"")';
-    }
-    if (idx['chart_account_main'] !== undefined && idx['chart_code'] !== undefined) {
-      out[idx['chart_account_main']] =
-        '=IFERROR(INDEX(top_light_chart_of_accounts!O:O,MATCH(' + col('chart_code') + rowNum + ',top_light_chart_of_accounts!I:I,0)),"")';
-    }
-    return out;
-  }
-
-  /** Merges the cash formulas for rowNum into an already-built value row. */
-  function applyCashFormulas_(rowValues, headers, rowNum) {
-    const fmap = cashFormulaMap_(headers, rowNum);
-    Object.keys(fmap).forEach(function (c) { rowValues[Number(c)] = fmap[c]; });
-    return rowValues;
-  }
-
-  /** Kept for compatibility — no longer on the write path. */
-  function setCashFormulas_(sheet, headers, rowNum) {
-    const fmap = cashFormulaMap_(headers, rowNum);
-    Object.keys(fmap).forEach(function (c) {
-      sheet.getRange(rowNum, Number(c) + 1).setFormula(fmap[c]);
-      noteMutation_(sheet);
-    });
-  }
-
-  /**
-   * Phase 3 (F-04). Appends one cash row with its formulas in a single
-   * setValues, under the script lock (a precomputed range is not append-safe).
-   * Returns the row number written.
-   */
-  function appendCashRow_(sheet, headers, rowValues) {
-    return executeWithLock_(function () {
-      const newRow = sheet.getLastRow() + 1;
-      if (newRow > sheet.getMaxRows()) sheet.insertRowsAfter(sheet.getMaxRows(), newRow - sheet.getMaxRows());
-      noteMutation_(sheet);
-      applyCashFormulas_(rowValues, headers, newRow);
-      sheet.getRange(newRow, 1, 1, rowValues.length).setValues([rowValues]);
-      noteMutation_(sheet);
-      return newRow;
-    });
+    tlDbAppendValues_(dbId, CASH_SHEET, rowValues);
   }
 
   // =========================================
@@ -2700,8 +2837,8 @@ const TopLight = (function () {
     const movements = [];
 
     // Sales (debit +)
-    const invoices = getAllRecords_(dbId, SALES_SHEET);
-    const salesLines = getAllRecords_(dbId, SALES_LINES_SHEET);
+    const invoices = tlDbList_(dbId, SALES_SHEET);
+    const salesLines = tlDbList_(dbId, SALES_LINES_SHEET);
     const salesLineMap = {};
     salesLines.forEach(l => {
       const k = String(l.top_lightsales_header_id);
@@ -2739,7 +2876,7 @@ const TopLight = (function () {
     const invByUid = {};
     invoices.forEach(inv => { invByUid[String(inv.invoice_unique_id)] = inv; });
     const retGroups = {};
-    getAllRecords_(dbId, SALES_RETURNS_SHEET).forEach(r => {
+    tlDbList_(dbId, SALES_RETURNS_SHEET).forEach(r => {
       const customer = String((r.top_lightsales_invoices_client == null) ? '' : r.top_lightsales_invoices_client).trim();
       if (!customer) return;
       const key = String(r.unique_id);
@@ -2776,9 +2913,9 @@ const TopLight = (function () {
 
     // Purchases (credit -), grouped by header, amount = qty * unit_price * exchange_rate
     const purchHeaders = {};
-    getAllRecords_(dbId, PURCHASING_SHEET).forEach(h => { purchHeaders[String(h.unique_id)] = h; });
+    tlDbList_(dbId, PURCHASING_SHEET).forEach(h => { purchHeaders[String(h.unique_id)] = h; });
     const purchGroups = {};
-    getAllRecords_(dbId, PURCHASING_LINES_SHEET).forEach(l => {
+    tlDbList_(dbId, PURCHASING_LINES_SHEET).forEach(l => {
       const customer = String((l.vendor == null) ? '' : l.vendor).trim();
       if (!customer) return;
       const hid = String(l.top_light_purchasing_costing_id);
@@ -2794,7 +2931,7 @@ const TopLight = (function () {
     });
 
     // Cash: Debit = collection (credit -), Credit = payment (debit +)
-    getAllRecords_(dbId, CASH_SHEET).forEach(r => {
+    tlDbList_(dbId, CASH_SHEET).forEach(r => {
       const customer = String((r.name == null) ? '' : r.name).trim();
       if (!customer) return;
       const rate = num0_(r.exchange_rate) || 1;
@@ -2904,7 +3041,7 @@ const TopLight = (function () {
   // =========================================
   function getSalesOfferHeaders_(data, user, dbId) {
     var limit = Number(data && data.limit) || 20;
-    const rows = getAllRecords_(dbId, OFFER_SHEET);
+    const rows = tlDbList_(dbId, OFFER_SHEET);
     const custNames = {};
     partyRefs_(dbId).forEach(c => { custNames[String(c.id)] = c.name; });
     // Phase 12 — slice before mapping. The map was Object.assign({}, r) for every
@@ -2941,7 +3078,7 @@ const TopLight = (function () {
     const parentId = String((data && data.parent_id) || '');
     const prodNames = {};
     productRefs_(dbId).forEach(p => { prodNames[String(p.id)] = p.name_ar; });
-    const lines = getAllRecords_(dbId, OFFER_LINES_SHEET)
+    const lines = tlDbList_(dbId, OFFER_LINES_SHEET)
       .filter(r => String(r['top_lightsales_offer_id']) === parentId)
       .map(r => ({
         unique_id: r.unique_id,
@@ -2964,13 +3101,13 @@ const TopLight = (function () {
     if (!uid) throw new Error('معرف العرض مطلوب');
     const custNames = {};
     partyRefs_(dbId).forEach(c => { custNames[String(c.id)] = c.name; });
-    const rec = getAllRecords_(dbId, OFFER_SHEET).find(r => String(r.invoice_unique_id) === uid);
+    const rec = tlDbList_(dbId, OFFER_SHEET).find(r => String(r.invoice_unique_id) === uid);
     if (!rec) throw new Error('العرض غير موجود');
     const header = Object.assign({}, rec);
     header.customer_name = custNames[String(rec['اسم العميل'])] || '';
     const prodNames = {};
     productRefs_(dbId).forEach(p => { prodNames[String(p.id)] = p.name_ar; });
-    const lines = getAllRecords_(dbId, OFFER_LINES_SHEET)
+    const lines = tlDbList_(dbId, OFFER_LINES_SHEET)
       .filter(r => String(r['top_lightsales_offer_id']) === uid)
       .map(r => ({
         product_id: r.product_id,
@@ -3034,31 +3171,21 @@ const TopLight = (function () {
     if (!uid) throw new Error('معرف العرض مطلوب');
     validateSales_(header, lines, dbId, true);
 
-    const sheet = getSheet_(OFFER_SHEET, dbId);
-    const headers = getHeaders_(sheet);
-    const uIdx = headers.findIndex(h => String(h).trim().toLowerCase() === 'invoice_unique_id');
-    const invIdx = headers.findIndex(h => String(h).trim() === 'رقم الفاتورة');
-    const dataArr = sheet.getDataRange().getValues();
-    let rowNum = -1;
-    for (let i = 1; i < dataArr.length; i++) {
-      if (String(dataArr[i][uIdx]).trim() === uid) { rowNum = i + 1; break; }
-    }
-    if (rowNum === -1) throw new Error('العرض غير موجود');
-
+    var _editOfferOld = tlDbFind_(dbId, OFFER_SHEET, 'invoice_unique_id', uid);
+    if (!_editOfferOld) throw new Error('العرض غير موجود');
     header.customer_tax_id = lookupCustomerField_(dbId, header.customer_id, 'tax_id');
     header.customer_telephone = lookupCustomerField_(dbId, header.customer_id, 'telephone');
     header.customer_address = lookupCustomerField_(dbId, header.customer_id, 'address');
-    header.invoice_number = (invIdx !== -1 && dataArr[rowNum - 1][invIdx] != null && String(dataArr[rowNum - 1][invIdx]).trim() !== '')
-      ? dataArr[rowNum - 1][invIdx] : nextOfferNumber_(dbId);
+    header.invoice_number = (_editOfferOld['رقم الفاتورة'] != null && String(_editOfferOld['رقم الفاتورة']).trim() !== '')
+      ? _editOfferOld['رقم الفاتورة'] : nextOfferNumber_(dbId);
     computeSalesTotals_(header, lines);
 
-    var _editOfferOld = null; try { _editOfferOld = getAllRecords_(dbId, OFFER_SHEET).find(function(r){ return String(r.invoice_unique_id)===String(uid); }) || null; } catch(e){}
-    deleteOfferLines_(dbId, uid);
-    const rowValues = buildOfferHeaderValues_(headers, uid, header, user);
-    // Phase 3 (F-04): formulas merged into the same setValues.
-    applySalesHeaderFormulas_(rowValues, headers, rowNum);
-    sheet.getRange(rowNum, 1, 1, rowValues.length).setValues([rowValues]);
-    noteMutation_(sheet);
+    const changes = offerHeaderDataMap_(header, user);
+    if (header.approval_status == null || header.approval_status === '') changes.approval_status = _editOfferOld.approval_status || 'Pending';
+    const patched = tlDbPatch_(dbId, OFFER_SHEET, uid, changes, { user: user, version: header.version });
+    if (!patched) throw new Error('العرض غير موجود');
+
+    deleteOfferLines_(dbId, uid, user);
     writeOfferLines_(dbId, uid, lines, user);
     try { var _uid = (_editOfferOld && _editOfferOld.record_uid) ? String(_editOfferOld.record_uid) : 'update_top_light_sales_offer_' + uid; logHistory_(dbId, OFFER_SHEET, _uid, String(uid), (user&&user.email)||'', 'update', header, _editOfferOld); } catch(e){}
 
@@ -3075,7 +3202,7 @@ const TopLight = (function () {
       'قيمة الضريبة': num0_(header.tax_amount),
       'إجمالي': num0_(header.total_amount),
       tax_system: header.tax_system === true || header.tax_system === 'true',
-      approval_status: header.approval_status || 'Pending',
+      approval_status: changes.approval_status,
       customer_name: custNamesOfferE[String(header.customer_id)] || '',
       unique_id: uid
     };
@@ -3085,15 +3212,10 @@ const TopLight = (function () {
   function deleteSalesOffer_(data, user, dbId) {
     const uid = String((data && data.unique_id) || '').trim();
     if (!uid) throw new Error('معرف العرض مطلوب');
-    var _delOfferOld = null; try { _delOfferOld = getAllRecords_(dbId, OFFER_SHEET).find(function(r){ return String(r.invoice_unique_id)===String(uid); }) || null; } catch(e){}
-    deleteOfferLines_(dbId, uid);
-    const sheet = getSheet_(OFFER_SHEET, dbId);
-    const headers = getHeaders_(sheet);
-    const uIdx = headers.findIndex(h => String(h).trim().toLowerCase() === 'invoice_unique_id');
-    const dataArr = sheet.getDataRange().getValues();
-    for (let i = dataArr.length - 1; i >= 1; i--) {
-      if (String(dataArr[i][uIdx]).trim() === uid) { sheet.deleteRow(i + 1); noteMutation_(sheet); break; }
-    }
+    const patched = tlDbSoftDelete_(dbId, OFFER_SHEET, uid, { user: user });
+    if (!patched) throw new Error('العرض غير موجود');
+    var _delOfferOld = patched.oldRecord;
+    deleteOfferLines_(dbId, uid, user);
     try { var _uid = (_delOfferOld && _delOfferOld.record_uid) ? String(_delOfferOld.record_uid) : 'delete_top_light_sales_offer_' + uid; logHistory_(dbId, OFFER_SHEET, _uid, String(uid), (user&&user.email)||'', 'delete', null, _delOfferOld); } catch(e){}
     return { status: 'success', message: 'تم حذف العرض' };
   }
@@ -3103,7 +3225,7 @@ const TopLight = (function () {
     const uid = String((data && data.unique_id) || '').trim();
     if (!uid) throw new Error('معرف العرض مطلوب');
     /* Phase 2: Pending->Approved only, Approved terminal — via table. */
-    var __curOffer = null; try { __curOffer = getAllRecords_(dbId, OFFER_SHEET).find(function(r){ return String(r.invoice_unique_id)===String(uid); }) || null; } catch(eRead){}
+    var __curOffer = null; try { __curOffer = tlDbList_(dbId, OFFER_SHEET).find(function(r){ return String(r.invoice_unique_id)===String(uid); }) || null; } catch(eRead){}
     if (__curOffer) assertTransition_('tl_offer', __curOffer.approval_status || 'Pending', 'Approved', 'لا يمكن اعتماد العرض من هذه الحالة');
     const res = approveStep_('tl_sales_offer', uid, 'approve', user, { dbId: dbId, version: data && data.version });
     if (!res || res.status !== 'success') throw new Error((res && res.message) || 'العرض غير موجود');
@@ -3112,7 +3234,7 @@ const TopLight = (function () {
 
   function nextOfferNumber_(dbId) {
     let maxPrefix = 0;
-    getAllRecords_(dbId, OFFER_SHEET).forEach(r => {
+    tlDbList_(dbId, OFFER_SHEET).forEach(r => {
       const s = String((r['رقم الفاتورة'] == null) ? '' : r['رقم الفاتورة']).trim();
       const m = s.match(/^(\d+)-/);
       if (m) { const n = Number(m[1]); if (!isNaN(n) && n > maxPrefix) maxPrefix = n; }
@@ -3120,42 +3242,30 @@ const TopLight = (function () {
     return (maxPrefix + 1) + '-' + new Date().getFullYear();
   }
 
+  function offerHeaderDataMap_(header, user) {
+    const data = salesHeaderDataMap_(header, user);
+    delete data['ميزان حسابي'];
+    delete data['نوع الضريبة'];
+    delete data['نوع البيان'];
+    delete data['نوع السلعة'];
+    return data;
+  }
+
   function buildOfferHeaderValues_(headers, uid, header, user) {
     const rowValues = headers.map(() => '');
     const put = (key, val) => { const i = salesColIndex_(headers, key); if (i !== -1) rowValues[i] = val; };
     put('invoice_unique_id', uid);
-    put('رقم الفاتورة', header.invoice_number);
-    put('اسم العميل', numOrKeep_(header.customer_id));
-    put('رقم التسجيل الضريبي للعميل', header.customer_tax_id || '');
-    put('العنوان', header.customer_address || '');
-    put('رقم الموبيل', header.customer_telephone || '');
-    put('تاريخ الفاتورة', parseDate_(header.invoice_date));
-    put('المبلغ الصافي', num0_(header.net_amount));
-    put('نسبة الخصم', num0_(header.discount_percent));
-    put('قيمة الخصم', num0_(header.discount_amount));
-    put('قيمة الضريبة', num0_(header.tax_amount));
-    put('إجمالي', num0_(header.total_amount));
-    put('tax_system', header.tax_system === true || header.tax_system === 'true');
-    put('user', user ? user.email : '');
+    const data = offerHeaderDataMap_(header, user);
+    Object.keys(data).forEach(function (k) { put(k, data[k]); });
     put('created_at', new Date());
-    put('approval_status', (header.approval_status != null && header.approval_status !== '') ? header.approval_status : 'Pending');
     return rowValues;
   }
 
-  /** Phase 3 (F-04): appendRow + setFormula pass -> one setValues, under lock. */
   function writeOfferHeaderRow_(dbId, uid, header, user) {
     const sheet = getSheet_(OFFER_SHEET, dbId);
     const headers = getHeaders_(sheet);
     const rowValues = buildOfferHeaderValues_(headers, uid, header, user);
-    return executeWithLock_(function () {
-      const newRow = sheet.getLastRow() + 1;
-      if (newRow > sheet.getMaxRows()) sheet.insertRowsAfter(sheet.getMaxRows(), newRow - sheet.getMaxRows());
-      noteMutation_(sheet);
-      applySalesHeaderFormulas_(rowValues, headers, newRow);
-      sheet.getRange(newRow, 1, 1, rowValues.length).setValues([rowValues]);
-      noteMutation_(sheet);
-      return newRow;
-    });
+    return tlDbAppendValues_(dbId, OFFER_SHEET, rowValues).rowNumber;
   }
 
   function writeOfferLines_(dbId, headerUid, lines, user) {
@@ -3163,7 +3273,6 @@ const TopLight = (function () {
     const headers = getHeaders_(sheet);
     const idx = {};
     headers.forEach((h, i) => { idx[String(h).trim().toLowerCase()] = i; });
-    const L = (name) => colLetter_(idx[name]);
 
     const baseId = getNextIdBatch_(dbId, OFFER_LINES_SHEET, lines.length, 'id');
 
@@ -3185,41 +3294,11 @@ const TopLight = (function () {
 
     if (!valueRows.length) return;
 
-    // Phase 3 (F-04): one setValues for the whole block, under the script lock.
-    executeWithLock_(function () {
-      const startRow = sheet.getLastRow() + 1;
-      const lastNeeded = startRow + valueRows.length - 1;
-      if (lastNeeded > sheet.getMaxRows()) sheet.insertRowsAfter(sheet.getMaxRows(), lastNeeded - sheet.getMaxRows());
-      noteMutation_(sheet);
-
-      valueRows.forEach(function (rowValues, i) {
-        const r = startRow + i;   // identical to the old appendRow row numbers
-        if (idx['product_net_value'] !== undefined) {
-          rowValues[idx['product_net_value']] = '=' + L('product_qty') + r + '*' + L('product_price') + r;
-        }
-        if (idx['product_tax_value'] !== undefined) {
-          rowValues[idx['product_tax_value']] = '=' + L('product_net_value') + r + '*' + L('product_tax') + r;
-        }
-        if (idx['product_total_value'] !== undefined) {
-          rowValues[idx['product_total_value']] = '=' + L('product_net_value') + r + '-' + L('product_discount') + r + '+' + L('product_tax_value') + r;
-        }
-      });
-
-      sheet.getRange(startRow, 1, valueRows.length, headers.length).setValues(valueRows);
-      noteMutation_(sheet);
-    });
+    tlDbAppendValuesBatch_(dbId, OFFER_LINES_SHEET, valueRows);
   }
 
-  function deleteOfferLines_(dbId, headerUid) {
-    const sheet = getSheet_(OFFER_LINES_SHEET, dbId);
-    const headers = getHeaders_(sheet);
-    const idx = headers.findIndex(h => String(h).trim().toLowerCase() === 'top_lightsales_offer_id');
-    if (idx === -1) return;
-    const data = sheet.getDataRange().getValues();
-    for (let i = data.length - 1; i >= 1; i--) {
-      if (String(data[i][idx]).trim() === headerUid) sheet.deleteRow(i + 1);
-      noteMutation_(sheet);
-    }
+  function deleteOfferLines_(dbId, headerUid, user) {
+    tlDbSoftDeleteWhere_(dbId, OFFER_LINES_SHEET, 'top_lightsales_offer_id', headerUid, { user: user });
   }
 
   // =========================================
@@ -3234,7 +3313,7 @@ const TopLight = (function () {
     const custNames = {};
     partyRefs_(dbId).forEach(c => { custNames[String(c.id)] = c.name; });
     const retNet = {};
-    getAllRecords_(dbId, SALES_RETURNS_SHEET).forEach(r => {
+    tlDbList_(dbId, SALES_RETURNS_SHEET).forEach(r => {
       const inv = String(r.top_lightsales_invoices_id);
       retNet[inv] = (retNet[inv] || 0) + (num0_(r.top_lightreturn_value) - num0_(r.top_lightreturn_discount));
     });
@@ -3243,12 +3322,12 @@ const TopLight = (function () {
     let invByProduct = null;
     if (productId) {
       invByProduct = {};
-      getAllRecords_(dbId, SALES_LINES_SHEET).forEach(l => {
+      tlDbList_(dbId, SALES_LINES_SHEET).forEach(l => {
         if (String(l.product_id) === productId) invByProduct[String(l.top_lightsales_header_id)] = true;
       });
     }
 
-    const rows = getAllRecords_(dbId, SALES_SHEET)
+    const rows = tlDbList_(dbId, SALES_SHEET)
       .filter(inv => {
         if (customerId && String(inv['اسم العميل']) !== customerId) return false;
         if (productId && !invByProduct[String(inv.invoice_unique_id)]) return false;
@@ -3314,7 +3393,7 @@ const TopLight = (function () {
     const dateTo = parseDate_(data && data.date_to);
 
     const costMap = {};
-    getAllRecords_(dbId, CURRENT_PRODUCTS_SHEET).forEach(s => {
+    tlDbList_(dbId, CURRENT_PRODUCTS_SHEET).forEach(s => {
       const q = num0_(s.current_qty);
       costMap[String(s.unique_id)] = q > 0 ? num0_(s.total_cost_sign) / q : 0;
     });
@@ -3322,7 +3401,7 @@ const TopLight = (function () {
     partyRefs_(dbId).forEach(c => { custNames[String(c.id)] = c.name; });
 
     const lineAgg = {};
-    getAllRecords_(dbId, SALES_LINES_SHEET).forEach(l => {
+    tlDbList_(dbId, SALES_LINES_SHEET).forEach(l => {
       const inv = String(l.top_lightsales_header_id);
       const pid = String(l.product_id);
       const unitCost = costMap[pid] != null ? costMap[pid] : 0;
@@ -3331,7 +3410,7 @@ const TopLight = (function () {
     });
 
     const retAgg = {};
-    getAllRecords_(dbId, SALES_RETURNS_SHEET).forEach(r => {
+    tlDbList_(dbId, SALES_RETURNS_SHEET).forEach(r => {
       const inv = String(r.top_lightsales_invoices_id);
       const pid = String(r.top_lightsales_products_id);
       const unitCost = costMap[pid] != null ? costMap[pid] : 0;
@@ -3340,7 +3419,7 @@ const TopLight = (function () {
       retAgg[inv].retCost += num0_(r.top_lightreturn_qty) * unitCost;
     });
 
-    const rows = getAllRecords_(dbId, SALES_SHEET)
+    const rows = tlDbList_(dbId, SALES_SHEET)
       .filter(inv => {
         if (dateFrom || dateTo) {
           const d = parseDate_(inv['تاريخ الفاتورة']);
@@ -3435,7 +3514,7 @@ const TopLight = (function () {
 
     // Snapshot unit cost per product — identical to the costing page.
     const costMap = {};
-    getAllRecords_(dbId, CURRENT_PRODUCTS_SHEET).forEach(s => {
+    tlDbList_(dbId, CURRENT_PRODUCTS_SHEET).forEach(s => {
       const q = num0_(s.current_qty);
       costMap[String(s.unique_id)] = q > 0 ? num0_(s.total_cost_sign) / q : 0;
     });
@@ -3448,7 +3527,7 @@ const TopLight = (function () {
     const invDate = {};
     const invNum = {};
     const invCustomer = {};
-    getAllRecords_(dbId, SALES_SHEET).forEach(inv => {
+    tlDbList_(dbId, SALES_SHEET).forEach(inv => {
       const uid = String(inv.invoice_unique_id);
       invDate[uid] = timeOf_(inv['تاريخ الفاتورة']);
       invNum[uid] = inv['رقم الفاتورة'] || '';
@@ -3457,7 +3536,7 @@ const TopLight = (function () {
 
     // ---- Revenue block: same math as getSalesCostingAnalysis_ ----
     const lineAgg = {};
-    getAllRecords_(dbId, SALES_LINES_SHEET).forEach(l => {
+    tlDbList_(dbId, SALES_LINES_SHEET).forEach(l => {
       const inv = String(l.top_lightsales_header_id);
       const pid = String(l.product_id);
       const unitCost = costMap[pid] != null ? costMap[pid] : 0;
@@ -3473,7 +3552,7 @@ const TopLight = (function () {
     // opening stock quantity via the before-bucket below.
     const retAgg = {};
     const retQtyByDate = { before: {}, inPeriod: {} };
-    getAllRecords_(dbId, SALES_RETURNS_SHEET).forEach(r => {
+    tlDbList_(dbId, SALES_RETURNS_SHEET).forEach(r => {
       const pid = String(r.top_lightsales_products_id);
       const unitCost = costMap[pid] != null ? costMap[pid] : 0;
       // Quantity movement dated by top_lightreturn_date (independent of invoice date).
@@ -3492,7 +3571,7 @@ const TopLight = (function () {
 
     let gross = 0, netAmount = 0, discount = 0, tax = 0, returns = 0, net = 0, cost = 0, count = 0;
     const revRows = [];
-    getAllRecords_(dbId, SALES_SHEET).forEach(inv => {
+    tlDbList_(dbId, SALES_SHEET).forEach(inv => {
       const uid = String(inv.invoice_unique_id);
       const t = invDate[uid] || 0;
       if (!inPeriod_(t)) return;
@@ -3538,7 +3617,7 @@ const TopLight = (function () {
     let purchVal = 0;
     const startDetail = [];
     const purchDetail = [];
-    getAllRecords_(dbId, PURCHASING_LINES_SHEET).forEach(l => {
+    tlDbList_(dbId, PURCHASING_LINES_SHEET).forEach(l => {
       const pid = String((l.product == null) ? '' : l.product).trim();
       if (!pid) return;
       const t = timeOf_(l.receipt_date);
@@ -3553,7 +3632,7 @@ const TopLight = (function () {
       purchDetail.push({ product_id: pid, product_name: prodNames[pid] || ('#' + pid), qty: q, total_cost: num0_(l.total_cost), receipt_date: parseDate_(l.receipt_date) });
     });
     // Sales out dated by joined invoice date.
-    getAllRecords_(dbId, SALES_LINES_SHEET).forEach(l => {
+    tlDbList_(dbId, SALES_LINES_SHEET).forEach(l => {
       const pid = String(l.product_id);
       const t = invDate[String(l.top_lightsales_header_id)] || 0;
       const q = num0_(l.product_qty);
@@ -3599,7 +3678,7 @@ const TopLight = (function () {
     // ---- Direct expenses: chart_account_main = 'التكاليف', amount = `total` ----
     const expByName = {};
     let expensesTotal = 0, expenseLines = 0;
-    getAllRecords_(dbId, CASH_SHEET).forEach(r => {
+    tlDbList_(dbId, CASH_SHEET).forEach(r => {
       if (String((r.chart_account_main == null) ? '' : r.chart_account_main).trim() !== 'التكاليف') return;
       const t = timeOf_(r.transaction_date);
       if (!inPeriod_(t)) return;
@@ -3683,7 +3762,7 @@ const TopLight = (function () {
     productRefs_(dbId).forEach(p => { prodNames[String(p.id)] = p.name_ar; });
     let fixedAssets = 0;
     const fixedLines = [];
-    getAllRecords_(dbId, PURCHASING_LINES_SHEET).forEach(l => {
+    tlDbList_(dbId, PURCHASING_LINES_SHEET).forEach(l => {
       const mt = Number(String((l.movement_type == null) ? '' : l.movement_type).trim());
       if (!(mt >= 121100 && mt <= 211100)) return;
       if (!asofOk_(l.receipt_date)) return;
@@ -3706,7 +3785,7 @@ const TopLight = (function () {
     const boxNames = boxNameMap_(dbId);
     let cash = 0;
     const boxMap = {};
-    getAllRecords_(dbId, CASH_SHEET).forEach(r => {
+    tlDbList_(dbId, CASH_SHEET).forEach(r => {
       if (String((r.related_box == null) ? '' : r.related_box).trim() === '111103') return;
       if (!asofOk_(r.transaction_date)) return;
       const amt = Number(r.balance_amount) || 0;
@@ -3815,7 +3894,7 @@ const TopLight = (function () {
     const custNames = {};
     partyRefs_(dbId).forEach(c => { custNames[String(c.id)] = c.name; });
     const companyName = companyArabicName_();
-    const rows = getAllRecords_(dbId, CASH_SHEET)
+    const rows = tlDbList_(dbId, CASH_SHEET)
       .filter(r => {
         if (boxId && String(r.related_box) !== boxId) return false;
         if (typeId && String(r.transaction_type) !== typeId) return false;
@@ -3915,7 +3994,7 @@ const TopLight = (function () {
     const qtyMap = currentQtyMap_(dbId);
     // last purchase qty per product: qty of the purchasing line with max receipt_date
     const latest = {};
-    getAllRecords_(dbId, PURCHASING_LINES_SHEET).forEach(r => {
+    tlDbList_(dbId, PURCHASING_LINES_SHEET).forEach(r => {
       const pid = String((r.product == null) ? '' : r.product).trim();
       if (!pid) return;
       const d = parseDate_(r.receipt_date);
@@ -3960,7 +4039,7 @@ const TopLight = (function () {
     partyRefs_(dbId).forEach(c => { custNames[String(c.id)] = c.name; });
 
     const invMap = {};
-    getAllRecords_(dbId, SALES_SHEET).forEach(inv => {
+    tlDbList_(dbId, SALES_SHEET).forEach(inv => {
       invMap[String(inv.invoice_unique_id)] = {
         number: inv['رقم الفاتورة'] || '',
         customer: custNames[String(inv['اسم العميل'])] || '',
@@ -3972,8 +4051,8 @@ const TopLight = (function () {
 
     // Purchases (in) — from purchasing lines, reference = header code
     const headerMap = {};
-    getAllRecords_(dbId, PURCHASING_SHEET).forEach(h => { headerMap[String(h.unique_id)] = h; });
-    getAllRecords_(dbId, PURCHASING_LINES_SHEET).forEach(l => {
+    tlDbList_(dbId, PURCHASING_SHEET).forEach(h => { headerMap[String(h.unique_id)] = h; });
+    tlDbList_(dbId, PURCHASING_LINES_SHEET).forEach(l => {
       if (String(l.product) !== productId) return;
       const h = headerMap[String(l.top_light_purchasing_costing_id)] || {};
       movements.push({
@@ -3987,7 +4066,7 @@ const TopLight = (function () {
     });
 
     // Sales (out)
-    getAllRecords_(dbId, SALES_LINES_SHEET).forEach(l => {
+    tlDbList_(dbId, SALES_LINES_SHEET).forEach(l => {
       if (String(l.product_id) !== productId) return;
       const inv = invMap[String(l.top_lightsales_header_id)] || {};
       movements.push({
@@ -4001,7 +4080,7 @@ const TopLight = (function () {
     });
 
     // Returns (in)
-    getAllRecords_(dbId, SALES_RETURNS_SHEET).forEach(r => {
+    tlDbList_(dbId, SALES_RETURNS_SHEET).forEach(r => {
       if (String(r.top_lightsales_products_id) !== productId) return;
       const inv = invMap[String(r.top_lightsales_invoices_id)] || {};
       movements.push({
@@ -4220,7 +4299,22 @@ const TopLight = (function () {
   
   return { dispatch_: dispatch_,
     themeCss_: topLightThemeCss_,
-    blockTheme_: function () { return { from: '#b45309', to: '#f59e0b' }; }, pageForAction_: pageForAction_, tableForAction_: tableForAction_ };
+    blockTheme_: function () { return { from: '#b45309', to: '#f59e0b' }; }, pageForAction_: pageForAction_, tableForAction_: tableForAction_,
+    repo_: {
+      create: tlDbCreate_,
+      appendValues: tlDbAppendValues_,
+      appendValuesBatch: tlDbAppendValuesBatch_,
+      patch: tlDbPatch_,
+      softDelete: tlDbSoftDelete_,
+      softDeleteWhere: tlDbSoftDeleteWhere_,
+      list: tlDbList_,
+      find: tlDbFind_,
+      ensureColumns: tlDbEnsureColumns_,
+      deriveRow: tlDbDeriveRow_,
+      recalcCashBoxBalances: tlRecalcCashBoxBalances_,
+      schemas: TL_SCHEMAS,
+      auditColumns: TL_AUDIT_COLUMNS
+    } };
 })();
 
 TopLight.approvalPolicy_ = {

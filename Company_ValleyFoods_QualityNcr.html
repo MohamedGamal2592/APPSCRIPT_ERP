@@ -1,0 +1,773 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Valley Foods — الجودة — عدم المطابقة و CAPA</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_ValleyFoods_Nav'); ?>
+  <?!= getCompanyThemeCSS_('9940659bd83035d7') ?>
+  <style>
+    #ncr-modal .modal { width: min(96vw, 1180px); max-width: 1180px; }
+    #ncr-modal .modal-body { max-height: 78vh; overflow-y: auto; }
+    #capa-modal .modal { width: min(96vw, 980px); max-width: 980px; }
+    #capa-modal .modal-body { max-height: 78vh; overflow-y: auto; }
+    .vf-ncr-pane { padding-top: 4px; }
+    .vf-ncr-capa-row { display: flex; gap: 10px; align-items: center; padding: 8px 4px; border-bottom: 1px dashed var(--border-color, #e5e7eb); font-size: 13px; }
+    .vf-ncr-capa-row:last-child { border-bottom: none; }
+    .vf-ncr-inline-alert { background: var(--danger-bg, #fef2f2); border: 1px solid var(--danger-border, #fecaca); border-radius: 8px; padding: 8px 10px; margin-bottom: 10px; font-size: 13px; color: var(--danger-text, #b91c1c); }
+  </style>
+</head>
+<body>
+  <div id="vf-root"></div>
+
+  <script>
+    var params = new URLSearchParams(window.location.search);
+    var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+    var scriptUrl = window.scriptUrl || '/';
+    var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+    var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('9940659bd83035d7') ?>';
+    var COMPANY_PAGES = <?!= companyPages ?>;
+    var CURRENT_ACTION = '<?!= currentAction ?>';
+    var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+    var CAN_WRITE = UIC.canAdd_(); var CAN_FULL = UIC.canFull_();
+
+    function companyCall(moduleAction, data) {
+      return API.call('company_action', {
+        target_system: '9940659bd83035d7',
+        module_action: moduleAction,
+        data: data || {}
+      }, SESSION_TOKEN);
+    }
+    function esc(v) { return FMT.escape(v); }
+    function todayStr() { return new Date().toISOString().slice(0, 10); }
+    function fmtDate(v) {
+      if (!v) return '—';
+      var d = (v instanceof Date) ? v : new Date(v);
+      if (isNaN(d.getTime())) return String(v);
+      var p = function (n) { return n < 10 ? '0' + n : '' + n; };
+      return p(d.getDate()) + '/' + p(d.getMonth() + 1) + '/' + d.getFullYear();
+    }
+    function fmtDateTime(v) {
+      if (!v) return '—';
+      var d = (v instanceof Date) ? v : new Date(v);
+      if (isNaN(d.getTime())) return String(v);
+      var p = function (n) { return n < 10 ? '0' + n : '' + n; };
+      return p(d.getDate()) + '/' + p(d.getMonth() + 1) + '/' + d.getFullYear() + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+    }
+  </script>
+
+  <script>
+  (function () {
+    'use strict';
+
+    var STATE = { NCRS: [], CAPAS: [] };
+    var CURRENT_NCR = null;
+    var CURRENT_CAPA = null;
+    var CAPA_NCR_REF = '';
+    var ACTIVE_TAB = 'ncr-tab-ncr';
+
+    var NCR_STATUS_AR = { Open: 'مفتوح', 'In Review': 'قيد المراجعة', 'CAPA Assigned': 'إجراءات مُعيّنة', Implemented: 'منفّذ', Verified: 'متحقّق', Closed: 'مغلق', Cancelled: 'ملغى', Rejected: 'مرفوض' };
+    var NCR_STATUS_TONE = { Open: 'warning', 'In Review': 'neutral', 'CAPA Assigned': 'neutral', Implemented: 'neutral', Verified: 'success', Closed: 'success', Cancelled: 'neutral', Rejected: 'danger' };
+    var CAPA_STATUS_AR = { Assigned: 'مُعيّن', 'In Progress': 'قيد التنفيذ', Done: 'منتهٍ', Verified: 'متحقّق', Closed: 'مغلق' };
+    var CAPA_STATUS_TONE = { Assigned: 'warning', 'In Progress': 'neutral', Done: 'neutral', Verified: 'success', Closed: 'success' };
+    var CAPA_TYPE_AR = { Corrective: 'تصحيحي', Preventive: 'وقائي' };
+    var CAPA_TYPE_OPTIONS = [{ value: 'Corrective', label: 'تصحيحي' }, { value: 'Preventive', label: 'وقائي' }];
+    var SEVERITY_AR = { Low: 'منخفضة', Medium: 'متوسطة', High: 'عالية', Critical: 'حرجة' };
+    var SEVERITY_TONE = { Low: 'neutral', Medium: 'warning', High: 'danger', Critical: 'danger' };
+
+    function getV(id) { var el = document.getElementById(id); return el ? String(el.value == null ? '' : el.value).trim() : ''; }
+    function getChecked(id) { var el = document.getElementById(id); return !!(el && el.checked); }
+    function ncrStatusPill(s) { return UIC.statusPill(NCR_STATUS_AR[s] || s || '—', NCR_STATUS_TONE[s] || 'neutral'); }
+    function capaStatusPill(s) { return UIC.statusPill(CAPA_STATUS_AR[s] || s || '—', CAPA_STATUS_TONE[s] || 'neutral'); }
+    function capaTypeLabel(t) { return CAPA_TYPE_AR[t] || t || '—'; }
+    function severityLabel(s) { return SEVERITY_AR[s] || s || '—'; }
+    function severityPill(s) { return UIC.statusPill(severityLabel(s), SEVERITY_TONE[s] || 'neutral'); }
+    function truncate(s, n) { var v = String(s == null ? '' : s); return v.length > n ? v.slice(0, n) + '…' : v; }
+    function staticField(label, value) {
+      return '<div class="form-field"><label class="form-label">' + label + '</label>' +
+        '<div style="padding:8px 0;font-size:14px;border-bottom:1px dashed var(--border-color, #e5e7eb);">' +
+        (value ? esc(value) : '<span class="vf-text-muted">—</span>') + '</div></div>';
+    }
+    function actionBtn(label, onclick, primary, disabled) {
+      return '<button type="button" class="btn ' + (primary ? 'btn-primary' : 'btn-outline') + '"' + (disabled ? ' disabled' : '') +
+        ' style="padding:8px 16px;" onclick="' + onclick + '">' + label + '</button>';
+    }
+    function showAlert(hostId, msg) {
+      var host = document.getElementById(hostId);
+      if (host) host.innerHTML = '<div class="vf-ncr-inline-alert">' + esc(msg) + '</div>';
+    }
+    function clearAlert(hostId) { var host = document.getElementById(hostId); if (host) host.innerHTML = ''; }
+    function getBoundUpload(key) {
+      try { if (UIC.UploadSet && UIC.UploadSet.getBound) return UIC.UploadSet.getBound(key); } catch (e) {}
+      return null;
+    }
+
+    function matchesId(rowValue, rec) {
+      return String(rowValue) === String(rec.unique_id) || String(rowValue) === String(rec.id);
+    }
+    function findNcr(id) {
+      var want = String(id == null ? '' : id);
+      for (var i = 0; i < STATE.NCRS.length; i++) {
+        var n = STATE.NCRS[i];
+        if (String(n.unique_id) === want || String(n.id) === want) return n;
+      }
+      return null;
+    }
+    function findCapa(id) {
+      var want = String(id == null ? '' : id);
+      for (var i = 0; i < STATE.CAPAS.length; i++) {
+        var c = STATE.CAPAS[i];
+        if (String(c.unique_id) === want || String(c.id) === want) return c;
+      }
+      return null;
+    }
+    function capasOf(ncr) { return STATE.CAPAS.filter(function (c) { return matchesId(c.ncr_id, ncr); }); }
+    function ncrCodeById(id) {
+      var ncr = id ? findNcr(id) : null;
+      return ncr ? (ncr.ncr_code || '') : '';
+    }
+    function ncrRefOf(ncr) { return String((ncr && (ncr.unique_id || ncr.id)) || ''); }
+    function capaRefOf(capa) { return String((capa && (capa.unique_id || capa.id)) || ''); }
+
+    function tabBtn(paneId, label, active) {
+      return '<button type="button" class="btn ' + (active ? 'btn-primary' : 'btn-outline') + '" style="padding:10px 20px;font-size:14px;" onclick="VF_QUALITY_NCR_PAGE.switchTab(\'' + paneId + '\')">' + label + '</button>';
+    }
+    function switchTab(paneId) {
+      ACTIVE_TAB = paneId;
+      ['ncr-tab-ncr', 'ncr-tab-capa'].forEach(function (id) {
+        var el = document.getElementById(id);
+        if (el) el.style.display = (id === paneId) ? '' : 'none';
+      });
+    }
+
+    function renderApp() {
+      UIC.appShell('vf-root', {
+        companyLogoUrl: COMPANY_LOGO_URL,
+        companyLogoHref: scriptUrl + '?action=vf_dashboard&sessionToken=' + SESSION_TOKEN,
+        companyLogoTitle: 'Valley Foods',
+        breadcrumb: 'Valley Foods / الجودة / عدم المطابقة (NCR)',
+        contentId: 'vf-quality-content',
+        menuGroups: (window.VALLEYFOODS_MENU || [])
+      });
+      document.getElementById('vf-quality-content').innerHTML =
+        '<div class="vf-card"><div class="vf-card-header"><h3>عدم المطابقة (NCR) والإجراءات التصحيحية (CAPA)</h3></div>' +
+        '<div class="vf-card-body">' +
+          '<div style="display:flex;gap:4px;border-bottom:2px solid var(--primary, #16a34a);margin-bottom:0;flex-wrap:wrap;">' +
+            tabBtn('ncr-tab-ncr', 'عدم المطابقة (NCR)', ACTIVE_TAB === 'ncr-tab-ncr') +
+            tabBtn('ncr-tab-capa', 'الإجراءات التصحيحية (CAPA)', ACTIVE_TAB === 'ncr-tab-capa') +
+          '</div>' +
+          '<div id="ncr-tab-ncr" class="vf-ncr-pane" style="display:' + (ACTIVE_TAB === 'ncr-tab-ncr' ? '' : 'none') + ';">' +
+            '<div style="display:flex;justify-content:flex-end;margin:10px 0 8px;">' +
+              (CAN_WRITE ? '<button type="button" class="btn btn-primary" onclick="VF_QUALITY_NCR_PAGE.openNewNcr()">+ عدم مطابقة جديدة</button>' : '') +
+            '</div>' +
+            '<div id="ncr-list"></div>' +
+          '</div>' +
+          '<div id="ncr-tab-capa" class="vf-ncr-pane" style="display:' + (ACTIVE_TAB === 'ncr-tab-capa' ? '' : 'none') + ';">' +
+            '<div style="display:flex;justify-content:flex-end;margin:10px 0 8px;">' +
+              (CAN_WRITE ? '<button type="button" class="btn btn-primary" onclick="VF_QUALITY_NCR_PAGE.openNewCapa()">+ إجراء تصحيحي جديد</button>' : '') +
+            '</div>' +
+            '<div id="capa-list"></div>' +
+          '</div>' +
+        '</div></div>';
+      load();
+      UIC.Live.watchPage({
+        call: companyCall,
+        page: 'vf_quality_ncr',
+        onChange: function () { UIC.Live.arrive(function () { load(true); }); }
+      });
+    }
+
+    function load(quiet) {
+      if (!quiet) UIC.readSkeleton('ncr-list');
+      if (!quiet) UIC.readSkeleton('capa-list');
+      return companyCall('get_quality_ncr')
+        .then(function (res) {
+          res = res || {};
+          STATE.NCRS = res.ncrs || [];
+          STATE.CAPAS = res.capas || [];
+          renderAll();
+          refreshOpenModals();
+        })
+        .catch(function (e) { if (!quiet) UIC.toast((e && e.message) || 'خطأ في تحميل البيانات', 'error'); })
+        .finally(function () { if (!quiet) { try { UI.hideSpinner(); } catch (e) {} } });
+    }
+
+    function renderAll() {
+      renderNcrTable();
+      renderCapaTable();
+    }
+
+    function refreshOpenModals() {
+      if (CURRENT_NCR && !document.getElementById('ncr-modal')) CURRENT_NCR = null;
+      if (CURRENT_CAPA && !document.getElementById('capa-modal')) CURRENT_CAPA = null;
+      if (CURRENT_NCR) {
+        var fresh = findNcr(ncrRefOf(CURRENT_NCR));
+        if (fresh) { CURRENT_NCR = fresh; renderNcrModal(fresh); }
+        else { UIC.closeModal('ncr-modal'); CURRENT_NCR = null; }
+      }
+      if (CURRENT_CAPA) {
+        var freshC = findCapa(capaRefOf(CURRENT_CAPA));
+        if (freshC) { CURRENT_CAPA = freshC; renderCapaModal(freshC); }
+        else { UIC.closeModal('capa-modal'); CURRENT_CAPA = null; }
+      }
+    }
+
+    function renderNcrTable() {
+      var container = document.getElementById('ncr-list');
+      if (!container) return;
+      var rows = STATE.NCRS.map(function (n) {
+        var uid = ncrRefOf(n);
+        return [
+          '<b data-ncr="' + esc(uid) + '">' + esc(n.ncr_code || '') + '</b>',
+          esc(fmtDate(n.ncr_date)),
+          esc(n.source || '—'),
+          severityPill(n.severity),
+          esc(truncate(n.description, 60)) || '—',
+          esc(n.department || '—'),
+          ncrStatusPill(n.status),
+          n.attachment
+            ? '<button type="button" class="btn btn-outline" style="padding:4px 10px;font-size:12px;" data-ncr-att="' + esc(uid) + '" onclick="event.stopPropagation();VF_QUALITY_NCR_PAGE.openNcrAttachment(this.getAttribute(\'data-ncr-att\'))">📎 عرض</button>'
+            : '—',
+          '<button type="button" class="btn btn-outline" style="padding:4px 10px;font-size:12px;" data-ncr-open="' + esc(uid) + '" onclick="event.stopPropagation();VF_QUALITY_NCR_PAGE.openNcr(this.getAttribute(\'data-ncr-open\'))">فتح</button>'
+        ];
+      });
+      container.innerHTML = UIC.dataTable('ncr-table', {
+        emptyState: { title: 'لا توجد حالات عدم مطابقة', body: 'ابدأ بتسجيل حالة عدم مطابقة جديدة من زر «عدم مطابقة جديدة».' },
+        headers: ['الكود', 'التاريخ', 'المصدر', 'الخطورة', 'الوصف', 'القسم', 'الحالة', 'مرفق', 'إجراء'],
+        rows: rows,
+        rowClick: function (rec, tr) {
+          var el = (tr && tr.querySelector) ? tr.querySelector('[data-ncr]') : null;
+          if (el) openNcr(el.getAttribute('data-ncr'));
+        }
+      });
+    }
+
+    function renderCapaTable() {
+      var container = document.getElementById('capa-list');
+      if (!container) return;
+      var rows = STATE.CAPAS.map(function (c) {
+        var uid = capaRefOf(c);
+        var days = Number(c.days_overdue) || 0;
+        return [
+          '<b data-capa="' + esc(uid) + '">' + esc(c.capa_code || '') + '</b>',
+          esc(ncrCodeById(c.ncr_id) || 'مستقل'),
+          esc(capaTypeLabel(c.action_type)),
+          esc(truncate(c.description, 60)) || '—',
+          esc(c.owner_email || '—'),
+          esc(fmtDate(c.due_date)),
+          c.overdue === true ? UIC.statusPill('متأخر ' + days + ' يوم', 'danger') : '—',
+          capaStatusPill(c.status),
+          c.attachment
+            ? '<button type="button" class="btn btn-outline" style="padding:4px 10px;font-size:12px;" data-capa-att="' + esc(uid) + '" onclick="event.stopPropagation();VF_QUALITY_NCR_PAGE.openCapaAttachment(this.getAttribute(\'data-capa-att\'))">📎 عرض</button>'
+            : '—',
+          '<button type="button" class="btn btn-outline" style="padding:4px 10px;font-size:12px;" data-capa-open="' + esc(uid) + '" onclick="event.stopPropagation();VF_QUALITY_NCR_PAGE.openCapa(this.getAttribute(\'data-capa-open\'))">فتح</button>'
+        ];
+      });
+      container.innerHTML = UIC.dataTable('capa-table', {
+        emptyState: { title: 'لا توجد إجراءات تصحيحية', body: 'أضف إجراءً تصحيحياً جديداً، أو عيّن إجراءات من داخل حالة عدم مطابقة.' },
+        headers: ['الكود', 'مرتبط بـ', 'النوع', 'الوصف', 'المسؤول', 'تاريخ الاستحقاق', 'متأخر؟', 'الحالة', 'مرفق', 'إجراء'],
+        rows: rows,
+        rowClick: function (rec, tr) {
+          var el = (tr && tr.querySelector) ? tr.querySelector('[data-capa]') : null;
+          if (el) openCapa(el.getAttribute('data-capa'));
+        }
+      });
+    }
+
+    function openNcr(id) {
+      var ncr = findNcr(id);
+      if (!ncr) { UIC.toast('لم يتم العثور على السجل — تم تحديث القائمة', 'error'); load(true); return; }
+      CURRENT_NCR = ncr;
+      renderNcrModal(ncr);
+    }
+    function openNewNcr() {
+      if (!CAN_WRITE) { UIC.toast('غير مصرح', 'error'); return; }
+      CURRENT_NCR = null;
+      renderNcrModal(null);
+    }
+
+    function renderNcrModal(ncr) {
+      var isNew = !ncr;
+      var editable = isNew ? CAN_WRITE : (CAN_WRITE && (ncr.status === 'Open' || ncr.status === 'In Review'));
+      var title = isNew ? 'عدم مطابقة جديدة' : esc(ncr.ncr_code || '') + ' ' + ncrStatusPill(ncr.status);
+      var html = '<div id="ncr-modal-alert"></div>';
+      html += '<form id="ncr-form" class="form-grid">';
+      if (editable) {
+        html += UIC.field({ key: 'ncr-f-date', label: 'التاريخ', type: 'date', required: true, value: esc(isNew ? todayStr() : (ncr.ncr_date || '')) });
+        html += UIC.field({ key: 'ncr-f-source', label: 'المصدر', type: 'text', value: esc(ncr ? ncr.source : '') });
+        html += UIC.field({ key: 'ncr-f-severity', label: 'الخطورة', type: 'text', list: 'ncr-severity-list', value: esc(ncr ? ncr.severity : '') });
+        html += UIC.field({ key: 'ncr-f-description', label: 'الوصف', type: 'textarea', required: true, value: esc(ncr ? ncr.description : '') });
+        html += UIC.field({ key: 'ncr-f-product', label: 'المنتج', type: 'text', value: esc(ncr ? ncr.product_id : '') });
+        html += UIC.field({ key: 'ncr-f-batch', label: 'رقم التشغيلة', type: 'text', value: esc(ncr ? ncr.batch_code : '') });
+        html += UIC.field({ key: 'ncr-f-mo', label: 'أمر التصنيع', type: 'text', value: esc(ncr ? ncr.mo_uid : '') });
+        html += UIC.field({ key: 'ncr-f-dept', label: 'القسم', type: 'text', value: esc(ncr ? ncr.department : '') });
+      } else if (ncr) {
+        html += staticField('التاريخ', fmtDate(ncr.ncr_date));
+        html += staticField('المصدر', ncr.source);
+        html += staticField('الخطورة', severityLabel(ncr.severity));
+        html += staticField('المنتج', ncr.product_id);
+        html += staticField('رقم التشغيلة', ncr.batch_code);
+        html += staticField('أمر التصنيع', ncr.mo_uid);
+        html += staticField('القسم', ncr.department);
+        html += staticField('الوصف', ncr.description);
+      }
+      html += '</form>';
+      html += UIC.datalist('ncr-severity-list', ['Minor', 'Major', 'Critical']);
+
+      html += '<div class="form-field"><label class="form-label">المرفق</label>';
+      if (ncr && ncr.attachment) {
+        html += '<div style="margin-bottom:6px;">' +
+          '<button type="button" class="btn btn-outline" data-ncr-att="' + esc(ncrRefOf(ncr)) + '" onclick="VF_QUALITY_NCR_PAGE.openNcrAttachment(this.getAttribute(\'data-ncr-att\'))">📎 عرض المرفق</button>' +
+          '</div>';
+      }
+      if (editable) {
+        html += UIC.fileField({
+          key: 'ncr-f-att',
+          label: (ncr && ncr.attachment) ? 'استبدال المرفق (اختياري)' : 'إضافة مرفق (اختياري)',
+          accept: '.pdf,.doc,.docx,.png,.jpg,.jpeg',
+          instant: true, sheet: 'valley_quality_ncrs', field: 'attachment', formModalId: 'ncr-modal'
+        });
+      } else if (!ncr || !ncr.attachment) {
+        html += '<div class="vf-text-muted" style="font-size:13px;">لا يوجد مرفق</div>';
+      }
+      html += '</div>';
+
+      if (ncr) {
+        html += '<div class="form-grid" style="margin-top:12px;background:var(--bg-subtle, #f8fafc);border:1px solid var(--border-color, #e5e7eb);border-radius:8px;padding:12px;">' +
+          staticField('السبب الجذري', ncr.root_cause) +
+          staticField('التصرف (Disposition)', ncr.disposition) +
+          staticField('مبرر عدم الحاجة إلى CAPA', ncr.capa_justification) +
+          (ncr.closed_by ? staticField('أُغلق بواسطة', ncr.closed_by) : '') +
+          (ncr.closed_at ? staticField('تاريخ الإغلاق', fmtDateTime(ncr.closed_at)) : '') +
+        '</div>';
+      }
+
+      if (ncr) {
+        var linked = capasOf(ncr);
+        html += '<div style="margin-top:12px;"><b style="color:var(--success-text, #166534);font-size:13px;display:block;margin-bottom:8px;">الإجراءات المرتبطة (' + linked.length + ')</b>';
+        if (!linked.length) {
+          html += '<div class="vf-text-muted" style="font-size:13px;">لا توجد إجراءات مرتبطة بهذه الحالة.</div>';
+        } else {
+          html += '<div style="border:1px solid var(--border-color, #e5e7eb);border-radius:8px;padding:4px 12px;">';
+          linked.forEach(function (c) {
+            html += '<div class="vf-ncr-capa-row">' +
+              '<div style="min-width:110px;"><b>' + esc(c.capa_code || '') + '</b></div>' +
+              '<div style="flex:1;">' + esc(capaTypeLabel(c.action_type)) + ' — ' + esc(truncate(c.description, 80)) + '</div>' +
+              '<div>' + capaStatusPill(c.status) + '</div>' +
+              '<div style="white-space:nowrap;color:var(--text-muted, #6b7280);font-size:12px;">' + esc(fmtDate(c.due_date)) + '</div>' +
+              '<button type="button" class="btn btn-outline" style="padding:2px 8px;font-size:11px;" data-capa-link="' + esc(capaRefOf(c)) + '" onclick="VF_QUALITY_NCR_PAGE.openCapa(this.getAttribute(\'data-capa-link\'))">فتح</button>' +
+            '</div>';
+          });
+          html += '</div>';
+        }
+        html += '</div>';
+      }
+
+      html += renderNcrWorkflow(ncr);
+
+      UIC.openModal('ncr-modal', {
+        size: 'xl',
+        title: title,
+        body: html,
+        footer: '<button type="button" class="btn btn-outline" onclick="UIC.closeModal(\'ncr-modal\')">إغلاق</button>' +
+          (editable ? '<button type="button" class="btn btn-primary" onclick="VF_QUALITY_NCR_PAGE.saveNcr()">💾 حفظ</button>' : '')
+      });
+    }
+
+    function renderNcrWorkflow(ncr) {
+      if (!ncr) return '';
+      var st = ncr.status;
+      var html = '';
+      var btns = [];
+      if (st === 'In Review' && CAN_WRITE) {
+        var linkedCount = capasOf(ncr).length;
+        var capaReq = ncr.capa_required === true || String(ncr.capa_required).toLowerCase() === 'true';
+        html += '<div style="margin-top:12px;background:var(--bg-subtle, #f8fafc);border:1px solid var(--border-color, #e5e7eb);border-radius:8px;padding:12px;">' +
+          '<label style="display:flex;align-items:center;gap:8px;font-size:14px;margin-bottom:10px;">' +
+            '<input type="checkbox" id="ncr-f-capa-required"' + (capaReq ? ' checked' : '') + '> مطلوب إجراء تصحيحي (CAPA)' +
+          '</label>' +
+          UIC.field({ key: 'ncr-f-capa-just', label: 'مبرر التنفيذ بدون CAPA (مطلوب عند عدم التحديد)', type: 'textarea', value: esc(ncr.capa_justification || '') }) +
+          '<div style="display:flex;justify-content:flex-end;gap:10px;flex-wrap:wrap;">' +
+            actionBtn('+ إجراء تصحيحي', 'VF_QUALITY_NCR_PAGE.openNewCapaFor()', false) +
+            actionBtn('تعيين إجراءات', 'VF_QUALITY_NCR_PAGE.assignCapa()', true, linkedCount < 1) +
+            actionBtn('تنفيذ بدون CAPA', 'VF_QUALITY_NCR_PAGE.implementWithoutCapa()', false) +
+          '</div></div>';
+      }
+      if (st === 'Open' && CAN_WRITE) btns.push(actionBtn('بدء المراجعة', 'VF_QUALITY_NCR_PAGE.openReview()', true));
+      if (st === 'CAPA Assigned' && CAN_WRITE) btns.push(actionBtn('تم التنفيذ', 'VF_QUALITY_NCR_PAGE.markImplemented()', true));
+      if (st === 'Implemented' && CAN_WRITE) btns.push(actionBtn('تحقّق', 'VF_QUALITY_NCR_PAGE.verifyNcr()', true));
+      if (st === 'Verified' && CAN_FULL) btns.push(actionBtn('إغلاق', 'VF_QUALITY_NCR_PAGE.closeNcr()', true));
+      if (CAN_WRITE && (st === 'Open' || st === 'In Review' || st === 'CAPA Assigned' || st === 'Implemented')) {
+        btns.push(actionBtn('إلغاء', 'VF_QUALITY_NCR_PAGE.cancelNcr()', false));
+      }
+      if (CAN_WRITE && (st === 'Open' || st === 'In Review')) {
+        btns.push(actionBtn('رفض', 'VF_QUALITY_NCR_PAGE.openRejectNcr()', false));
+      }
+      if (btns.length) {
+        html += '<div style="display:flex;justify-content:flex-end;gap:10px;margin-top:12px;flex-wrap:wrap;">' + btns.join('') + '</div>';
+      }
+      return html;
+    }
+
+    function saveNcr() {
+      if (!CAN_WRITE) { UIC.toast('غير مصرح', 'error'); return Promise.resolve(); }
+      clearAlert('ncr-modal-alert');
+      if (!UIC.validateForm('ncr-form')) return Promise.resolve();
+      var isNew = !CURRENT_NCR;
+      var payload = {
+        ncr_date: getV('ncr-f-date'),
+        source: getV('ncr-f-source'),
+        severity: getV('ncr-f-severity'),
+        description: getV('ncr-f-description'),
+        product_id: getV('ncr-f-product'),
+        batch_code: getV('ncr-f-batch'),
+        mo_uid: getV('ncr-f-mo'),
+        department: getV('ncr-f-dept')
+      };
+      if (!payload.description) { UIC.toast('الوصف مطلوب', 'error'); return Promise.resolve(); }
+      if (!isNew) payload.unique_id = ncrRefOf(CURRENT_NCR);
+      var bound = getBoundUpload('ncr-f-att');
+      if (bound) {
+        payload.attachment = bound.ref;
+        payload.attachment_id = bound.id || '';
+      } else if (!isNew) {
+        payload.attachment = CURRENT_NCR.attachment || '';
+        payload.attachment_id = CURRENT_NCR.attachment_id || '';
+      }
+      UI.showSpinner();
+      return companyCall('save_quality_ncr', payload)
+        .then(function (r) {
+          UIC.toast(isNew ? 'تم إنشاء حالة عدم المطابقة' : 'تم حفظ التعديلات', 'success');
+          var uid = (r && r.unique_id) || '';
+          CURRENT_NCR = isNew ? { unique_id: uid, id: uid } : CURRENT_NCR;
+          return load(true);
+        })
+        .catch(function (e) {
+          var msg = (e && e.message) || 'فشل الحفظ';
+          showAlert('ncr-modal-alert', msg);
+          UIC.toast(msg, 'error');
+        })
+        .finally(function () { UI.hideSpinner(); });
+    }
+
+    function wfNcr(payload, msg) {
+      if (!CAN_WRITE) { UIC.toast('غير مصرح', 'error'); return Promise.resolve(); }
+      if (!CURRENT_NCR) return Promise.resolve();
+      clearAlert('ncr-modal-alert');
+      var data = { unique_id: ncrRefOf(CURRENT_NCR), to_status: payload.to_status };
+      ['root_cause', 'disposition', 'capa_required', 'capa_justification', 'comment'].forEach(function (k) {
+        if (payload[k] !== undefined) data[k] = payload[k];
+      });
+      UI.showSpinner();
+      return companyCall('change_quality_ncr_status', data)
+        .then(function () { UIC.toast(msg, 'success'); return load(true); })
+        .catch(function (e) {
+          var m = (e && e.message) || 'فشل تغيير الحالة';
+          showAlert('ncr-modal-alert', m);
+          UIC.toast(m, 'error');
+        })
+        .finally(function () { UI.hideSpinner(); });
+    }
+
+    function openReview() {
+      if (!CAN_WRITE || !CURRENT_NCR) return;
+      UIC.openModal('ncr-review-modal', {
+        size: 'sm',
+        title: 'بدء المراجعة',
+        body: '<form id="ncr-review-form">' +
+          UIC.field({ key: 'ncr-r-root-cause', label: 'السبب الجذري', type: 'textarea', required: true, value: '' }) +
+          UIC.field({ key: 'ncr-r-disposition', label: 'التصرف (Disposition)', type: 'text', required: true, value: '' }) +
+        '</form>',
+        onSave: 'VF_QUALITY_NCR_PAGE.confirmReview()'
+      });
+    }
+    function confirmReview() {
+      if (!CAN_WRITE) { UIC.toast('غير مصرح', 'error'); return Promise.resolve(); }
+      if (!UIC.validateForm('ncr-review-form')) return Promise.resolve();
+      var rc = getV('ncr-r-root-cause');
+      var disp = getV('ncr-r-disposition');
+      if (!rc || !disp) { UIC.toast('السبب الجذري والتصرف مطلوبان', 'error'); return Promise.resolve(); }
+      UIC.closeModal('ncr-review-modal');
+      return wfNcr({ to_status: 'In Review', root_cause: rc, disposition: disp }, 'تم بدء المراجعة');
+    }
+
+    function openRejectNcr() {
+      if (!CAN_WRITE || !CURRENT_NCR) return;
+      UIC.openModal('ncr-reject-modal', {
+        size: 'sm',
+        title: 'رفض حالة عدم المطابقة',
+        body: '<form id="ncr-reject-form">' +
+          UIC.field({ key: 'ncr-rj-comment', label: 'ملاحظة (اختياري)', type: 'textarea', value: '' }) +
+        '</form>',
+        onSave: 'VF_QUALITY_NCR_PAGE.confirmRejectNcr()'
+      });
+    }
+    function confirmRejectNcr() {
+      if (!CAN_WRITE) { UIC.toast('غير مصرح', 'error'); return Promise.resolve(); }
+      var comment = getV('ncr-rj-comment');
+      UIC.closeModal('ncr-reject-modal');
+      return wfNcr({ to_status: 'Rejected', comment: comment }, 'تم رفض الحالة');
+    }
+
+    function assignCapa() {
+      if (!CAN_WRITE || !CURRENT_NCR) return Promise.resolve();
+      if (capasOf(CURRENT_NCR).length < 1) { UIC.toast('أضف إجراءً تصحيحياً واحداً على الأقل أولاً', 'error'); return Promise.resolve(); }
+      return wfNcr({ to_status: 'CAPA Assigned', capa_required: true, capa_justification: getV('ncr-f-capa-just') }, 'تم تعيين الإجراءات');
+    }
+    function implementWithoutCapa() {
+      if (!CAN_WRITE || !CURRENT_NCR) return Promise.resolve();
+      if (getChecked('ncr-f-capa-required')) { UIC.toast('لا يمكن التنفيذ بدون CAPA عند تحديد «مطلوب إجراء تصحيحي»', 'error'); return Promise.resolve(); }
+      var just = getV('ncr-f-capa-just');
+      if (!just) { showAlert('ncr-modal-alert', 'مبرر التنفيذ بدون CAPA مطلوب'); UIC.toast('مبرر التنفيذ بدون CAPA مطلوب', 'error'); return Promise.resolve(); }
+      return wfNcr({ to_status: 'Implemented', capa_required: false, capa_justification: just }, 'تم تسجيل التنفيذ');
+    }
+    function markImplemented() { return wfNcr({ to_status: 'Implemented' }, 'تم تسجيل التنفيذ'); }
+    function verifyNcr() { return wfNcr({ to_status: 'Verified' }, 'تم التحقق من الحالة'); }
+
+    function cancelNcr() {
+      if (!CAN_WRITE || !CURRENT_NCR) return Promise.resolve();
+      return UIC.confirm({ title: 'إلغاء حالة عدم المطابقة', message: 'سيتم إلغاء الحالة. متابعة؟', confirmText: 'إلغاء الحالة', danger: true })
+        .then(function (ok) { if (ok) return wfNcr({ to_status: 'Cancelled' }, 'تم إلغاء الحالة'); });
+    }
+    function closeNcr() {
+      if (!CAN_FULL) { UIC.toast('غير مصرح', 'error'); return Promise.resolve(); }
+      if (!CURRENT_NCR) return Promise.resolve();
+      var uid = ncrRefOf(CURRENT_NCR);
+      return UIC.confirm({ title: 'إغلاق حالة عدم المطابقة', message: 'سيتم إغلاق الحالة نهائياً. متابعة؟', confirmText: 'إغلاق', danger: true })
+        .then(function (ok) {
+          if (!ok) return;
+          UI.showSpinner();
+          return companyCall('close_quality_ncr', { unique_id: uid })
+            .then(function () { UIC.toast('تم إغلاق الحالة', 'success'); return load(true); })
+            .catch(function (e) {
+              var m = (e && e.message) || 'فشل الإغلاق';
+              showAlert('ncr-modal-alert', m);
+              UIC.toast(m, 'error');
+            })
+            .finally(function () { UI.hideSpinner(); });
+        });
+    }
+
+    function openNewCapa() {
+      if (!CAN_WRITE) { UIC.toast('غير مصرح', 'error'); return; }
+      CAPA_NCR_REF = '';
+      CURRENT_CAPA = null;
+      renderCapaModal(null);
+    }
+    function openNewCapaFor() {
+      if (!CAN_WRITE) { UIC.toast('غير مصرح', 'error'); return; }
+      if (!CURRENT_NCR) return;
+      CAPA_NCR_REF = ncrRefOf(CURRENT_NCR);
+      CURRENT_CAPA = null;
+      renderCapaModal(null);
+    }
+    function openCapa(id) {
+      var capa = findCapa(id);
+      if (!capa) { UIC.toast('لم يتم العثور على السجل — تم تحديث القائمة', 'error'); load(true); return; }
+      CAPA_NCR_REF = capa.ncr_id || '';
+      CURRENT_CAPA = capa;
+      renderCapaModal(capa);
+    }
+
+    function renderCapaModal(capa) {
+      var isNew = !capa;
+      var editable = CAN_WRITE && (!capa || capa.status !== 'Closed');
+      var ncrRef = capa ? (capa.ncr_id || '') : CAPA_NCR_REF;
+      var title = isNew ? 'إجراء تصحيحي جديد' : esc(capa.capa_code || '') + ' ' + capaStatusPill(capa.status);
+      var html = '<div id="capa-modal-alert"></div>';
+      html += '<form id="capa-form" class="form-grid">';
+      if (editable) {
+        html += UIC.field({ key: 'capa-f-type', label: 'النوع', type: 'select', combo: false, required: true, options: CAPA_TYPE_OPTIONS, value: (capa && capa.action_type) || 'Corrective' });
+        html += UIC.field({ key: 'capa-f-description', label: 'الوصف', type: 'textarea', required: true, value: esc(capa ? capa.description : '') });
+        html += UIC.field({ key: 'capa-f-owner', label: 'المسؤول (البريد الإلكتروني)', type: 'email', value: esc(capa ? capa.owner_email : '') });
+        html += UIC.field({ key: 'capa-f-due', label: 'تاريخ الاستحقاق', type: 'date', value: esc(capa ? capa.due_date : '') });
+        html += UIC.field({ key: 'capa-f-eff-date', label: 'تاريخ فحص الفعالية', type: 'date', value: esc(capa ? capa.effectiveness_check_date : '') });
+      } else if (capa) {
+        html += staticField('النوع', capaTypeLabel(capa.action_type));
+        html += staticField('الوصف', capa.description);
+        html += staticField('المسؤول', capa.owner_email);
+        html += staticField('تاريخ الاستحقاق', fmtDate(capa.due_date));
+        html += staticField('تاريخ فحص الفعالية', fmtDate(capa.effectiveness_check_date));
+      }
+      html += '</form>';
+      if (ncrRef) html += '<div class="form-grid" style="margin-top:8px;">' + staticField('مرتبط بعدم المطابقة', ncrCodeById(ncrRef) || ncrRef) + '</div>';
+
+      html += '<div class="form-field"><label class="form-label">المرفق</label>';
+      if (capa && capa.attachment) {
+        html += '<div style="margin-bottom:6px;">' +
+          '<button type="button" class="btn btn-outline" data-capa-att="' + esc(capaRefOf(capa)) + '" onclick="VF_QUALITY_NCR_PAGE.openCapaAttachment(this.getAttribute(\'data-capa-att\'))">📎 عرض المرفق</button>' +
+          '</div>';
+      }
+      if (editable) {
+        html += UIC.fileField({
+          key: 'capa-f-att',
+          label: (capa && capa.attachment) ? 'استبدال المرفق (اختياري)' : 'إضافة مرفق (اختياري)',
+          accept: '.pdf,.doc,.docx,.png,.jpg,.jpeg',
+          instant: true, sheet: 'valley_quality_capas', field: 'attachment', formModalId: 'capa-modal'
+        });
+      } else if (!capa || !capa.attachment) {
+        html += '<div class="vf-text-muted" style="font-size:13px;">لا يوجد مرفق</div>';
+      }
+      html += '</div>';
+
+      if (capa && (capa.implemented_at || capa.verified_by || capa.verified_at || capa.effectiveness_notes)) {
+        html += '<div class="form-grid" style="margin-top:12px;background:var(--bg-subtle, #f8fafc);border:1px solid var(--border-color, #e5e7eb);border-radius:8px;padding:12px;">' +
+          (capa.implemented_at ? staticField('تاريخ التنفيذ', fmtDateTime(capa.implemented_at)) : '') +
+          (capa.verified_by ? staticField('تحقق بواسطة', capa.verified_by) : '') +
+          (capa.verified_at ? staticField('تاريخ التحقق', fmtDateTime(capa.verified_at)) : '') +
+          (capa.effectiveness_notes ? staticField('ملاحظات الفعالية', capa.effectiveness_notes) : '') +
+        '</div>';
+      }
+
+      if (capa && capa.status === 'Done' && CAN_FULL) {
+        html += '<div style="margin-top:12px;background:var(--bg-subtle, #f8fafc);border:1px solid var(--border-color, #e5e7eb);border-radius:8px;padding:12px;">' +
+          '<b style="color:var(--success-text, #166534);font-size:13px;display:block;margin-bottom:8px;">تحقق الفعالية</b>' +
+          UIC.field({ key: 'capa-f-verify-date', label: 'تاريخ فحص الفعالية', type: 'date', required: true, value: esc(capa.effectiveness_check_date || todayStr()) }) +
+          UIC.field({ key: 'capa-f-verify-notes', label: 'ملاحظات الفعالية', type: 'textarea', required: true, value: esc(capa.effectiveness_notes || '') }) +
+          '<div style="display:flex;justify-content:flex-end;">' + actionBtn('تحقق الفعالية', 'VF_QUALITY_NCR_PAGE.verifyCapa()', true) + '</div>' +
+        '</div>';
+      }
+
+      var btns = [];
+      if (capa) {
+        if (capa.status === 'Assigned' && CAN_WRITE) btns.push(actionBtn('بدء التنفيذ', 'VF_QUALITY_NCR_PAGE.startCapa()', true));
+        if (capa.status === 'In Progress' && CAN_WRITE) btns.push(actionBtn('إنهاء', 'VF_QUALITY_NCR_PAGE.finishCapa()', true));
+        if (capa.status === 'Verified' && CAN_FULL) btns.push(actionBtn('إغلاق', 'VF_QUALITY_NCR_PAGE.closeCapa()', true));
+      }
+      if (btns.length) html += '<div style="display:flex;justify-content:flex-end;gap:10px;margin-top:12px;flex-wrap:wrap;">' + btns.join('') + '</div>';
+
+      UIC.openModal('capa-modal', {
+        size: 'lg',
+        title: title,
+        body: html,
+        footer: '<button type="button" class="btn btn-outline" onclick="UIC.closeModal(\'capa-modal\')">إغلاق</button>' +
+          (editable ? '<button type="button" class="btn btn-primary" onclick="VF_QUALITY_NCR_PAGE.saveCapa()">💾 حفظ</button>' : '')
+      });
+    }
+
+    function saveCapa() {
+      if (!CAN_WRITE) { UIC.toast('غير مصرح', 'error'); return Promise.resolve(); }
+      clearAlert('capa-modal-alert');
+      if (!UIC.validateForm('capa-form')) return Promise.resolve();
+      var isNew = !CURRENT_CAPA;
+      var payload = {
+        action_type: getV('capa-f-type') || 'Corrective',
+        description: getV('capa-f-description'),
+        owner_email: getV('capa-f-owner'),
+        due_date: getV('capa-f-due'),
+        effectiveness_check_date: getV('capa-f-eff-date')
+      };
+      if (!payload.description) { UIC.toast('الوصف مطلوب', 'error'); return Promise.resolve(); }
+      if (isNew) {
+        if (CAPA_NCR_REF) payload.ncr_id = CAPA_NCR_REF;
+      } else {
+        payload.unique_id = capaRefOf(CURRENT_CAPA);
+        if (CURRENT_CAPA.ncr_id) payload.ncr_id = CURRENT_CAPA.ncr_id;
+      }
+      var bound = getBoundUpload('capa-f-att');
+      if (bound) {
+        payload.attachment = bound.ref;
+        payload.attachment_id = bound.id || '';
+      } else if (!isNew) {
+        payload.attachment = CURRENT_CAPA.attachment || '';
+        payload.attachment_id = CURRENT_CAPA.attachment_id || '';
+      }
+      UI.showSpinner();
+      return companyCall('save_quality_capa', payload)
+        .then(function (r) {
+          UIC.toast(isNew ? 'تم إنشاء الإجراء التصحيحي' : 'تم حفظ التعديلات', 'success');
+          var uid = (r && r.unique_id) || '';
+          CURRENT_CAPA = isNew ? { unique_id: uid, id: uid, ncr_id: CAPA_NCR_REF } : CURRENT_CAPA;
+          return load(true);
+        })
+        .catch(function (e) {
+          var msg = (e && e.message) || 'فشل الحفظ';
+          showAlert('capa-modal-alert', msg);
+          UIC.toast(msg, 'error');
+        })
+        .finally(function () { UI.hideSpinner(); });
+    }
+
+    function capaStatusChange(payload, msg) {
+      if (!CAN_WRITE) { UIC.toast('غير مصرح', 'error'); return Promise.resolve(); }
+      if (!CURRENT_CAPA) return Promise.resolve();
+      clearAlert('capa-modal-alert');
+      var data = { unique_id: capaRefOf(CURRENT_CAPA), status: payload.status };
+      ['effectiveness_check_date', 'effectiveness_notes'].forEach(function (k) {
+        if (payload[k] !== undefined) data[k] = payload[k];
+      });
+      UI.showSpinner();
+      return companyCall('save_quality_capa', data)
+        .then(function () { UIC.toast(msg, 'success'); return load(true); })
+        .catch(function (e) {
+          var m = (e && e.message) || 'فشل تحديث الإجراء';
+          showAlert('capa-modal-alert', m);
+          UIC.toast(m, 'error');
+        })
+        .finally(function () { UI.hideSpinner(); });
+    }
+
+    function startCapa() { return capaStatusChange({ status: 'In Progress' }, 'تم بدء التنفيذ'); }
+    function finishCapa() { return capaStatusChange({ status: 'Done' }, 'تم إنهاء الإجراء'); }
+    function verifyCapa() {
+      if (!CAN_FULL) { UIC.toast('غير مصرح', 'error'); return Promise.resolve(); }
+      if (!CURRENT_CAPA) return Promise.resolve();
+      var d = getV('capa-f-verify-date');
+      var notes = getV('capa-f-verify-notes');
+      if (!d || !notes) { showAlert('capa-modal-alert', 'تاريخ وملاحظات فحص الفعالية مطلوبان'); UIC.toast('تاريخ وملاحظات فحص الفعالية مطلوبان', 'error'); return Promise.resolve(); }
+      return capaStatusChange({ status: 'Verified', effectiveness_check_date: d, effectiveness_notes: notes }, 'تم التحقق من الفعالية');
+    }
+    function closeCapa() {
+      if (!CAN_FULL) { UIC.toast('غير مصرح', 'error'); return Promise.resolve(); }
+      if (!CURRENT_CAPA) return Promise.resolve();
+      return UIC.confirm({ title: 'إغلاق الإجراء التصحيحي', message: 'سيتم إغلاق الإجراء. متابعة؟', confirmText: 'إغلاق', danger: true })
+        .then(function (ok) { if (ok) return capaStatusChange({ status: 'Closed' }, 'تم إغلاق الإجراء'); });
+    }
+
+    function openNcrAttachment(uid) {
+      var ncr = findNcr(uid);
+      if (!ncr || !ncr.attachment) { UIC.toast('لا يوجد مرفق لهذا السجل', 'error'); return; }
+      UIC.openDownload(scriptUrl + '?download=attachment&page=vf_quality_ncr&ref=' + encodeURIComponent(ncr.attachment) + '&id=' + encodeURIComponent(ncrRefOf(ncr)) + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN), 'فتح المرفق');
+    }
+    function openCapaAttachment(uid) {
+      var capa = findCapa(uid);
+      if (!capa || !capa.attachment) { UIC.toast('لا يوجد مرفق لهذا السجل', 'error'); return; }
+      UIC.openDownload(scriptUrl + '?download=attachment&page=vf_quality_ncr&ref=' + encodeURIComponent(capa.attachment) + '&id=' + encodeURIComponent(capaRefOf(capa)) + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN), 'فتح المرفق');
+    }
+
+    window.VF_QUALITY_NCR_PAGE = {
+      switchTab: switchTab,
+      openNewNcr: openNewNcr,
+      openNcr: openNcr,
+      saveNcr: saveNcr,
+      openReview: openReview,
+      confirmReview: confirmReview,
+      openRejectNcr: openRejectNcr,
+      confirmRejectNcr: confirmRejectNcr,
+      assignCapa: assignCapa,
+      implementWithoutCapa: implementWithoutCapa,
+      markImplemented: markImplemented,
+      verifyNcr: verifyNcr,
+      cancelNcr: cancelNcr,
+      closeNcr: closeNcr,
+      openNewCapa: openNewCapa,
+      openNewCapaFor: openNewCapaFor,
+      openCapa: openCapa,
+      saveCapa: saveCapa,
+      startCapa: startCapa,
+      finishCapa: finishCapa,
+      verifyCapa: verifyCapa,
+      closeCapa: closeCapa,
+      openNcrAttachment: openNcrAttachment,
+      openCapaAttachment: openCapaAttachment,
+      refresh: function () { return load(true); }
+    };
+
+    document.addEventListener('DOMContentLoaded', renderApp);
+  })();
+  </script>
+</body>
+</html>

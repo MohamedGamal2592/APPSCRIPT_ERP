@@ -163,7 +163,12 @@ const ValleyFoods = (function () {
   const UPLOAD_PAGE_BY_SHEET = {
     'valley_emp_deductions': 'vf_hr_deductions',
     'valley_emp_overtime': 'vf_hr_overtime',
-    'valley_employee_vacations': 'vf_hr_vacations'
+    'valley_employee_vacations': 'vf_hr_vacations',
+    'valley_cash_bank_movement': 'vf_cash',
+    'valley_quality_sop_versions': 'vf_quality_sops',
+    'valley_quality_ncrs': 'vf_quality_ncr',
+    'valley_quality_capas': 'vf_quality_ncr',
+    'valley_quality_audits': 'vf_quality_audits'
   };
 
   const HR_EMPLOYEES_SHEET = 'vf_hr_employees';
@@ -361,6 +366,39 @@ const ValleyFoods = (function () {
     'save_valley_asset_technical': { page: 'vf_asset_technical', access: 'write' },
     'get_valley_work_center_assets': { page: 'vf_work_center_assets', access: 'read' },
     'save_valley_work_center_asset': { page: 'vf_work_center_assets', access: 'write' },
+
+    // الجودة — إجراءات العمل القياسية (SOP)
+    'get_quality_sops': { page: 'vf_quality_sops', access: 'read' },
+    'save_quality_sop': { page: 'vf_quality_sops', access: 'write' },
+    'save_quality_sop_version': { page: 'vf_quality_sops', access: 'write' },
+    'submit_quality_sop_version': { page: 'vf_quality_sops', access: 'write' },
+    /* الاعتماد والرفض والتنفيذ قرارات ضبط وثائقي: full فقط، فلا تكفيها صلاحية الكتابة. */
+    'approve_quality_sop_version': { page: 'vf_quality_sops', access: 'full' },
+    'reject_quality_sop_version': { page: 'vf_quality_sops', access: 'full' },
+    'make_effective_quality_sop_version': { page: 'vf_quality_sops', access: 'full' },
+    'save_quality_sop_forms': { page: 'vf_quality_sops', access: 'write' },
+    /* إطلاق الإقرارات قرار ضبط وثائقي جماعي: full. الإقرارات نفسها تُدار من
+       صفحة إقراراتي، وتوقيع الموظف محصور على صفه هو خادمياً. */
+    'launch_quality_acks': { page: 'vf_quality_sops', access: 'full' },
+    'get_quality_my_acks': { page: 'vf_quality_my_acks', access: 'read' },
+    'sign_quality_ack': { page: 'vf_quality_my_acks', access: 'write' },
+    'record_quality_ack': { page: 'vf_quality_my_acks', access: 'write' },
+    /* الجودة — عدم المطابقة والإجراءات التصحيحية (NCR/CAPA). الإغلاق قرار ضبط
+       نهائي: full فقط، أما اعتماد فعالية CAPA فيُفحص داخل المعالج نفسه لأن
+       الإجراء مسجَّل كتابةً. */
+    'get_quality_ncr': { page: 'vf_quality_ncr', access: 'read' },
+    'save_quality_ncr': { page: 'vf_quality_ncr', access: 'write' },
+    'save_quality_capa': { page: 'vf_quality_ncr', access: 'write' },
+    'change_quality_ncr_status': { page: 'vf_quality_ncr', access: 'write' },
+    'close_quality_ncr': { page: 'vf_quality_ncr', access: 'full' },
+    /* الجودة — لوحة المؤشرات والتدقيق الداخلي. اللوحة قراءة مُخبأة خادمياً،
+       وصفحة التدقيق كتابة عادية؛ التصعيد يستخدم معالجاً مستقلاً لأن له أثراً
+       مزدوجاً (ملاحظة + عدم مطابقة) ويُرفض كاملاً قبل أي كتابة عند الخطأ. */
+    'get_quality_dashboard': { page: 'vf_quality_dashboard', access: 'read' },
+    'get_quality_audits': { page: 'vf_quality_audits', access: 'read' },
+    'save_quality_audit': { page: 'vf_quality_audits', access: 'write' },
+    'save_quality_finding': { page: 'vf_quality_audits', access: 'write' },
+    'escalate_finding_to_ncr': { page: 'vf_quality_audits', access: 'write' },
     'prefetch_refs': { page: 'vf_dashboard', access: 'read' }
   };
 
@@ -491,6 +529,37 @@ const ValleyFoods = (function () {
     'save_valley_asset_technical': 'valley_product_technical',
     'get_valley_work_center_assets': 'valley_work_center_assets',
     'save_valley_work_center_asset': 'valley_work_center_assets',
+
+    /* الجودة — إجراءات العمل القياسية (SOP). Arrays: the history and
+     * acknowledgements tabs read the same page, so the page's watch set covers
+     * all five sheets. */
+    'get_quality_sops': ['valley_quality_sops', 'valley_quality_sop_versions', 'valley_quality_sop_forms', 'valley_quality_sop_events', 'valley_quality_acknowledgements'],
+    'save_quality_sop': ['valley_quality_sops', 'valley_quality_sop_versions', 'valley_quality_sop_events'],
+    'save_quality_sop_version': ['valley_quality_sop_versions', 'valley_quality_sop_events'],
+    'submit_quality_sop_version': ['valley_quality_sop_versions', 'valley_quality_sop_events'],
+    'approve_quality_sop_version': ['valley_quality_sop_versions', 'valley_quality_sop_events'],
+    'reject_quality_sop_version': ['valley_quality_sop_versions', 'valley_quality_sop_events'],
+    'make_effective_quality_sop_version': ['valley_quality_sops', 'valley_quality_sop_versions', 'valley_quality_sop_events', 'valley_quality_acknowledgements'],
+    'save_quality_sop_forms': ['valley_quality_sop_forms', 'valley_quality_sop_events'],
+    /* Phase 2 — الإقرارات: الإطلاق يقرأ جدول الموظفين لتطبيق أهلية القسم/الدور،
+       والعرض/التوقيع/التسجيل تعمل على الإقرارات مع قراءة الإصدارات للربط. */
+    'launch_quality_acks': ['valley_quality_acknowledgements', 'valley_quality_sops', 'valley_quality_sop_versions', 'valley_quality_sop_events', 'valley_employee_info'],
+    'get_quality_my_acks': ['valley_quality_acknowledgements', 'valley_quality_sop_versions', 'valley_quality_sops', 'valley_employee_info'],
+    'sign_quality_ack': ['valley_quality_acknowledgements'],
+    'record_quality_ack': ['valley_quality_acknowledgements', 'valley_quality_sop_versions', 'valley_employee_info'],
+    /* Phase 3 — NCR/CAPA: صفحة واحدة بجدولين، فكل إجراء يعلن كل جدول يقرؤه. */
+    'get_quality_ncr': ['valley_quality_ncrs', 'valley_quality_capas'],
+    'save_quality_ncr': ['valley_quality_ncrs'],
+    'save_quality_capa': ['valley_quality_capas', 'valley_quality_ncrs'],
+    'change_quality_ncr_status': ['valley_quality_ncrs', 'valley_quality_capas'],
+    'close_quality_ncr': ['valley_quality_ncrs'],
+    /* Phase 4 — اللوحة والتدقيق: اللوحة تقرأ جداول الجودة السبعة دفعة واحدة،
+       وصفحة التدقيق تعلن جداولها الثلاثة (تدقيق، ملاحظات، NCR للربط). */
+    'get_quality_dashboard': ['valley_quality_sops', 'valley_quality_sop_versions', 'valley_quality_acknowledgements', 'valley_quality_ncrs', 'valley_quality_capas', 'valley_quality_audits', 'valley_quality_audit_findings'],
+    'get_quality_audits': ['valley_quality_audits', 'valley_quality_audit_findings', 'valley_quality_ncrs'],
+    'save_quality_audit': ['valley_quality_audits'],
+    'save_quality_finding': ['valley_quality_audits', 'valley_quality_audit_findings', 'valley_quality_ncrs'],
+    'escalate_finding_to_ncr': ['valley_quality_audits', 'valley_quality_audit_findings', 'valley_quality_ncrs'],
     'prefetch_refs': 'valley_products'
   };
 
@@ -506,7 +575,8 @@ const ValleyFoods = (function () {
       const table = ACTION_TABLES[action];
       if (!page || !table) return;
       if (!byPage[page]) byPage[page] = {};
-      byPage[page][table] = true;
+      const tables = Array.isArray(table) ? table : [table];
+      tables.forEach(t => { if (t) byPage[page][t] = true; });
     });
     const out = {};
     Object.keys(byPage).forEach(function (p) { out[p] = Object.keys(byPage[p]); });
@@ -554,7 +624,8 @@ const ValleyFoods = (function () {
 
   /** Sheet/table touched by a module_action, for SystemLog Table column. */
   function tableForAction_(action) {
-    return ACTION_TABLES[action] || '';
+    const t = ACTION_TABLES[action];
+    return Array.isArray(t) ? t.join('،') : (t || '');
   }
 
   // Phase 3: FAIL-CLOSED. An action not listed in PAGE_ACCESS is denied, not
@@ -731,7 +802,7 @@ const ValleyFoodsHREmp = (function () {
   const EMP_INFO_HEADERS = [
     'emp_id', 'employee_type', 'name_ar', 'national_id', 'hiring_date', 'title', 'section',
     'category', 'insurance', 'gender', 'schedule_id', 'الحالة الوظيفية', 'emp_id_1',
-    'البطاقة صادرة من', 'العنوان بالبطاقة', 'user', 'created_at'
+    'البطاقة صادرة من', 'العنوان بالبطاقة', 'user', 'created_at', 'email'
   ];
   const EMP_STATUS_HEADERS = [
     'unique_id', 'Employee_Code', 'Status_Type', 'Status_Date', 'Employee_name', 'user', 'created_at'
@@ -4110,7 +4181,12 @@ const ValleyFoodsHRModules = (function () {
   var UPLOAD_META = {
     'valley_emp_deductions': { page: 'vf_hr_deductions', folder: 'valley_emp_deductions_Files_' },
     'valley_emp_overtime': { page: 'vf_hr_overtime', folder: 'valley_emp_overtime_Files_' },
-    'valley_employee_vacations': { page: 'vf_hr_vacations', folder: 'valley_employee_vacations_Files_' }
+    'valley_employee_vacations': { page: 'vf_hr_vacations', folder: 'valley_employee_vacations_Files_' },
+    'valley_cash_bank_movement': { page: 'vf_cash', folder: 'valley_cash_bank_movement_Files_' },
+    'valley_quality_sop_versions': { page: 'vf_quality_sops', folder: 'valley_quality_sop_versions_Files_' },
+    'valley_quality_ncrs': { page: 'vf_quality_ncr', folder: 'valley_quality_ncrs_Files_' },
+    'valley_quality_capas': { page: 'vf_quality_ncr', folder: 'valley_quality_capas_Files_' },
+    'valley_quality_audits': { page: 'vf_quality_audits', folder: 'valley_quality_audits_Files_' }
   };
 
   function ensureDriveFolderId_(folderName) {
@@ -4262,7 +4338,8 @@ const ValleyFoodsHRModules = (function () {
   const OVERTIME_ROLES_CANONICAL   = ['overtime_rule_unique_id','overtime_type','overtime_rate','money_related','vacation_days','is_active'];
   const DEDUCTION_ROLES_CANONICAL  = ['rule_unique_id','deduction_name','deduction_category','is_active','deduction_value','deduction_note','deduction_hours','deduction_days'];
   const VACATIONS_INDEX_CANONICAL  = ['id','vacation_name_ar','vacation_name_en','require_allocation','is_active'];
-  const SHIFT_SCHEDULE_CANONICAL   = ['shift_unique_id','shift_name','shift_type','shift_start_time','shift_end_time','is_active'];
+  const SHIFT_SCHEDULE_CANONICAL   = ['shift_unique_id','shift_name','shift_type','shift_start_time','shift_end_time','is_active','grace_period','weekend_day','shift_period','user'];
+  const SHIFT_TYPE_ENUM = ['Fixed Shift', 'Variable Shift'];
 
   /* Create the sheet if missing (canonical, formula-safe order); otherwise
    * append any missing headers AT THE END (never shifts existing positions). */
@@ -4561,6 +4638,17 @@ const ValleyFoodsHRModules = (function () {
     return String(v || '');
   }
 
+  /* Integer shift length in hours, overnight-aware: an end at or before the
+     start belongs to the next day. */
+  function shiftPeriodHours_(start, end) {
+    function mins(t) { var m = String(t || '').match(/^(\d{1,2}):(\d{2})/); return m ? (Number(m[1]) * 60 + Number(m[2])) : null; }
+    var a = mins(start), b = mins(end);
+    if (a == null || b == null) return 0;
+    var diff = b - a;
+    if (diff <= 0) diff += 24 * 60;
+    return Math.round(diff / 60);
+  }
+
   function getShiftScheduleSettings_(data, user, dbId) {
     settingsEnsureSheet_(dbId, SETTINGS_SHIFT_SCHEDULE_SHEET, SHIFT_SCHEDULE_CANONICAL);
     return vfRefsCached_(dbId, 'shift_schedule', function () {
@@ -4570,7 +4658,15 @@ const ValleyFoodsHRModules = (function () {
         r.shift_start_time_display = normalizeTimeStr_(r.shift_start_time);
         r.shift_end_time_display = normalizeTimeStr_(r.shift_end_time);
       });
-      return { status: 'success', rows: rows };
+      var weekdays = [];
+      try {
+        getAllRecords_(dbId, 'valley_weekday').forEach(function (w) {
+          var id = String(w.id == null ? '' : w.id).trim();
+          var nm = String(w.name_ar || '').trim();
+          if (id && nm) weekdays.push({ value: id, label: nm });
+        });
+      } catch (e) {}
+      return { status: 'success', rows: rows, weekday_options: weekdays };
     });
   }
 
@@ -4584,9 +4680,24 @@ const ValleyFoodsHRModules = (function () {
     if (key && !isSuperAdmin) throw new Error('تعديل الورديات الموجودة من صلاحيات مدير النظام فقط');
     var name = String(d.shift_name || '').trim();
     if (!name) throw new Error('اسم الوردية مطلوب');
+    var shiftType = String(d.shift_type || '').trim();
+    if (SHIFT_TYPE_ENUM.indexOf(shiftType) === -1) throw new Error('نوع الوردية يجب أن يكون Fixed Shift أو Variable Shift');
     var start = normalizeTimeStr_(d.shift_start_time);
     var end = normalizeTimeStr_(d.shift_end_time);
     if (!start || !end) throw new Error('وقت البداية والنهاية مطلوبان');
+    var grace = (d.grace_period === '' || d.grace_period == null) ? NaN : Number(d.grace_period);
+    if (!isFinite(grace) || Math.floor(grace) !== grace || grace < 0) throw new Error('فترة السماح مطلوبة ويجب أن تكون عدداً صحيحاً صفر أو أكبر');
+    var weekend = String(d.weekend_day == null ? '' : d.weekend_day).trim();
+    if (!weekend) throw new Error('يوم الراحة الأسبوعية مطلوب');
+    var weekendOk = false;
+    try {
+      getAllRecords_(dbId, 'valley_weekday').forEach(function (w) {
+        if (String(w.id == null ? '' : w.id).trim() === weekend) weekendOk = true;
+      });
+    } catch (eWeekday) { weekendOk = false; }
+    if (!weekendOk) throw new Error('يوم الراحة الأسبوعية غير مسجل في جدول أيام الأسبوع');
+    /* shift_period is always derived here — a client-sent value is ignored. */
+    var sp = shiftPeriodHours_(start, end);
 
     var sheet = getSheet_(SETTINGS_SHIFT_SCHEDULE_SHEET, dbId);
     var headers = getHeaders_(sheet);
@@ -4598,9 +4709,13 @@ const ValleyFoodsHRModules = (function () {
 
     var map = {
       shift_name: name,
-      shift_type: String(d.shift_type || '').trim(),
+      shift_type: shiftType,
       shift_start_time: start,
-      shift_end_time: end
+      shift_end_time: end,
+      grace_period: grace,
+      weekend_day: weekend,
+      shift_period: sp,
+      user: (user && user.email) || ''
     };
 
     if (key) {
@@ -7074,6 +7189,59 @@ const ValleyFoodsHRModules = (function () {
     return catId;
   }
 
+  /* MO shift ref: the valley_manufacture_header.shift column stores a
+     valley_employee_shift_schedule key (shift_unique_id) and is shown by
+     shift_name — the ref contract for analysis/connection.
+     Lives in this IIFE with the MFG code that consumes it (a same-named
+     helper in a sibling IIFE is invisible here). Legacy rows predate the ref
+     and hold plain text; they resolve to themselves so history keeps
+     displaying until the row is re-saved with a real ref. */
+  function mfgShiftOptions_(dbId) {
+    var out = [];
+    try {
+      /* Literal sheet name (not the SETTINGS_SHIFT_SCHEDULE_SHEET const): the
+         request-recovery harness evaluates only the manufacturing slice of this
+         file, and the const lives outside it. Same reason for the local time
+         normalizer below (it mirrors normalizeTimeStr_). */
+      getAllRecords_(dbId, 'valley_employee_shift_schedule').forEach(function (s) {
+        var id = String(s.shift_unique_id || '').trim();
+        var nm = String(s.shift_name || '').trim();
+        var on = !(s.is_active === false || String(s.is_active).toLowerCase() === 'false');
+        if (id && nm && on) out.push({ value: id, label: nm, start: mfgNormTime_(s.shift_start_time), end: mfgNormTime_(s.shift_end_time) });
+      });
+    } catch (e) {}
+    return out;
+  }
+  function mfgNormTime_(v) {
+    if (v instanceof Date) { var p = function (n) { return (n < 10 ? '0' : '') + n; }; return p(v.getHours()) + ':' + p(v.getMinutes()); }
+    var m = String(v || '').match(/^(\d{1,2}):(\d{2})/);
+    if (m) { var hh = Number(m[1]); return (hh < 10 ? '0' : '') + hh + ':' + m[2]; }
+    return String(v || '');
+  }
+  function mfgShiftMap_(dbId) {
+    var byId = {}, activeIds = {};
+    try {
+      getAllRecords_(dbId, 'valley_employee_shift_schedule').forEach(function (s) {
+        var id = String(s.shift_unique_id || '').trim();
+        if (!id) return;
+        var nm = String(s.shift_name || '').trim();
+        if (nm) byId[id] = nm;
+        var on = !(s.is_active === false || String(s.is_active).toLowerCase() === 'false');
+        if (on) activeIds[id] = true;
+      });
+    } catch (e) {}
+    return { byId: byId, activeIds: activeIds };
+  }
+  function mfgShiftName_(dbId, stored) {
+    var v = String(stored == null ? '' : stored).trim();
+    if (!v) return '';
+    try {
+      var byId = mfgShiftMap_(dbId).byId;
+      if (byId[v]) return byId[v];
+    } catch (e) {}
+    return v;
+  }
+
   function getValleyOptionSets_(dbId) {
     var recipes = [];
     try { recipes = getAllRecords_(dbId, MFG_RECIPE_SHEET); } catch (e) {}
@@ -7090,7 +7258,7 @@ const ValleyFoodsHRModules = (function () {
           .sort(function (a, b) { return a.label.localeCompare(b.label, 'ar'); });
       }),
       work_center_options: mfgWorkCenterOptions_(dbId),
-      enums: { operation_type: MFG_OP_TYPES, shift: MFG_SHIFTS }
+      enums: { operation_type: MFG_OP_TYPES, shift: mfgShiftOptions_(dbId) }
     };
   }
 
@@ -7106,6 +7274,7 @@ const ValleyFoodsHRModules = (function () {
       return { status: 'success', is_new: true, recipe_options: opts.recipe_options, product_options: opts.product_options, work_center_options: opts.work_center_options, enums: opts.enums, can_see_cost: vfCanSeeCost_(user), edit_token: '', save_scope: MFG_DETAIL_SCOPE_.slice() };
     }
     var full = getValleyMfgOrderFull_(data, user, dbId);
+    if (full && full.order) { try { full.order.shift_name = mfgShiftName_(dbId, full.order.shift); } catch (eShiftName) {} }
     var ops = getValleyMfgWorkOps_({ mo_uid: moUid }, user, dbId);
     /* loadAll: the save path deletes by-product rows missing from the payload,
        so the detail must carry the FULL set — the default limit:15 slice would
@@ -7469,6 +7638,9 @@ const ValleyFoodsHRModules = (function () {
       vfFastReadFallback_('get_valley_mfg_orders', e);
       rawRows = vfMfgHeaderRowsLegacy_(dbId);
     }
+    var mfgShiftOpts = mfgShiftOptions_(dbId);
+    var mfgShiftNames = {};
+    try { mfgShiftNames = mfgShiftMap_(dbId).byId; } catch (eMfgShifts) { mfgShiftNames = {}; }
     var rows = rawRows.map(function (r) {
       var rawCategory = r.product_category == null ? '' : String(r.product_category).trim();
       return {
@@ -7477,6 +7649,7 @@ const ValleyFoodsHRModules = (function () {
         transaction_code: r.transaction_code || '',
         operation_type: r.operation_type || '',
         shift: r.shift || '',
+        shift_name: mfgShiftNames[String(r.shift || '').trim()] || String(r.shift || '').trim() || '',
         manufacture_date: r.manufacture_date,
         produced_product: r.produced_product,
         product_category: categoryLabel_(rawCategory),
@@ -7518,7 +7691,7 @@ const ValleyFoodsHRModules = (function () {
       return out;
     }
     var filterOptions = {
-      shift: MFG_SHIFTS.slice(),
+      shift: mfgShiftOpts,
       operation_types: MFG_OP_TYPES.slice(),
       categories: (function () {
         var seen = {}, out = [];
@@ -7581,7 +7754,7 @@ const ValleyFoodsHRModules = (function () {
           .sort(function (a, b) { return a.label.localeCompare(b.label, 'ar'); });
       }),
       work_center_options: mfgWorkCenterOptions_(dbId),
-      enums: { operation_type: MFG_OP_TYPES, shift: MFG_SHIFTS },
+      enums: { operation_type: MFG_OP_TYPES, shift: mfgShiftOpts },
       /* U-46. The client gate. It must NOT be re-derived in the browser from
          authorizedPages: the browser cannot see the fail-open guard and would
          hide costs the server had deliberately sent. This flag is the server's
@@ -8210,7 +8383,10 @@ const ValleyFoodsHRModules = (function () {
     var opType = String(d.operation_type || '').trim();
     if (MFG_OP_TYPES.indexOf(opType) === -1) vfNotApplied_('نوع العملية مطلوب');
     var shift = String(d.shift || '').trim();
-    if (MFG_SHIFTS.indexOf(shift) === -1) vfNotApplied_('الوردية مطلوبة');
+    if (!shift) vfNotApplied_('الوردية مطلوبة');
+    var shiftOk = false;
+    try { shiftOk = !!mfgShiftMap_(dbId).activeIds[shift]; } catch (eShiftRef) { shiftOk = false; }
+    if (!shiftOk) vfNotApplied_('الوردية المختارة غير مسجلة أو غير مفعّلة في إعدادات الورديات');
     var producedPid = String(d.produced_product_id || '').trim();
     if (!producedPid) vfNotApplied_('المنتج المنتج مطلوب');
     var MFG_YIELD_FACTOR = 0.65;
@@ -10878,7 +11054,7 @@ map['actual_hours'] = Math.round(totalHours * 100) / 100;
 
   function getValleyCash_(data, user, dbId) {
     settingsEnsureSheet_(dbId, FIN_CASH_SHEET,
-      ['transaction_id','invoice_id','name','name_vendor','transaction_purchasing_items','transaction_details','transaction_date','transaction_amount','total_discount','net_amount','taxes','total','transaction_type','balance_amount','box_balance','related_box','chart_code','chart_name','transaction_method','tax_system','chart_account_main','approved','user','created_at','Temp_Target_Box']);
+      ['transaction_id','invoice_id','name','name_vendor','transaction_purchasing_items','transaction_details','transaction_date','transaction_amount','total_discount','net_amount','taxes','total','transaction_type','balance_amount','box_balance','related_box','chart_code','chart_name','transaction_method','tax_system','chart_account_main','approved','user','created_at','Temp_Target_Box','attachment','attachment_id']);
 
     var allRows = getAllRecords_(dbId, FIN_CASH_SHEET);
     var partyNames = {};
@@ -10974,6 +11150,8 @@ map['actual_hours'] = Math.round(totalHours * 100) / 100;
         chart_name: r.chart_name || '',
         user: r.user || '',
         tax_system_bool: !(r.tax_system === false || String(r.tax_system).toLowerCase() === 'no' || r.tax_system === ''),
+        attachment: r.attachment || '',
+        attachment_id: r.attachment_id || '',
         approved_bool: !(r.approved === false || String(r.approved).toLowerCase() === 'no' || r.approved === '')
       };
     });
@@ -11039,8 +11217,28 @@ map['actual_hours'] = Math.round(totalHours * 100) / 100;
     });
     if (!chartOk) throw new Error('كود الدليل المحاسبي غير موجود ضمن دليل الحسابات');
 
+    /* Attachments: one cell pair holding newline-joined ref/id lists (the page
+       caps at 5 files). Every ref must carry its Drive binding from the instant
+       upload — an unbound or mismatched id is rejected, never stored without a
+       verified file id. */
+    var attRefs = String(d.attachment || '').split('\n').map(function (s) { return s.trim(); }).filter(Boolean);
+    var attIds = String(d.attachment_id || '').split('\n').map(function (s) { return s.trim(); });
+    var attRefJoined = '', attIdJoined = '';
+    if (attRefs.length) {
+      var boundRefs = [], boundIds = [];
+      attRefs.forEach(function (ref, ix) {
+        var supplied = extractDriveId_(attIds[ix] || '');
+        var cached = extractDriveId_(attachmentCachedFileId_(ref));
+        var id = supplied ? (cached && cached === supplied ? supplied : '') : cached;
+        id = requireAttachmentBinding_(ref, id, 'attachment');
+        boundRefs.push(ref); boundIds.push(id);
+      });
+      attRefJoined = boundRefs.join('\n');
+      attIdJoined = boundIds.join('\n');
+    }
+
     settingsEnsureSheet_(dbId, FIN_CASH_SHEET,
-      ['transaction_id','invoice_id','name','name_vendor','transaction_purchasing_items','transaction_details','transaction_date','transaction_amount','total_discount','net_amount','taxes','total','transaction_type','balance_amount','box_balance','related_box','chart_code','chart_name','transaction_method','tax_system','chart_account_main','approved','user','created_at','Temp_Target_Box']);
+      ['transaction_id','invoice_id','name','name_vendor','transaction_purchasing_items','transaction_details','transaction_date','transaction_amount','total_discount','net_amount','taxes','total','transaction_type','balance_amount','box_balance','related_box','chart_code','chart_name','transaction_method','tax_system','chart_account_main','approved','user','created_at','Temp_Target_Box','attachment','attachment_id']);
     var sheet = getSheet_(FIN_CASH_SHEET, dbId);
     var headers = getHeaders_(sheet);
     var rows = getAllRecords_(dbId, FIN_CASH_SHEET);
@@ -11072,6 +11270,8 @@ map['actual_hours'] = Math.round(totalHours * 100) / 100;
       map['approved'] = false;
       map['user'] = (user && user.email) || '';
       map['created_at'] = new Date();
+      map['attachment'] = attRefJoined;
+      map['attachment_id'] = attIdJoined;
       var values = headers.map(function (h) {
         var k = String(h).trim().toLowerCase();
         return map[k] !== undefined ? map[k] : '';
@@ -11137,7 +11337,9 @@ map['actual_hours'] = Math.round(totalHours * 100) / 100;
         /* chart_name / chart_account_main: see setComputedFormulas_ */
         transaction_method: method,
         tax_system: !!(d.tax_system === true || d.tax_system === 'true' || d.tax_system === 'Yes'),
-        user: (user && user.email) || ''
+        user: (user && user.email) || '',
+        attachment: attRefJoined,
+        attachment_id: attIdJoined
       };
       var oldRow = rows.find(function (r) { return Number(r.transaction_id) === tidEdit; }) || null;
       /* Row-edit repair (5.4): formula-safe patch with a checked result — a
@@ -11206,7 +11408,7 @@ map['actual_hours'] = Math.round(totalHours * 100) / 100;
     var details = String(d.details || '').trim();
 
     settingsEnsureSheet_(dbId, FIN_CASH_SHEET,
-      ['transaction_id','invoice_id','name','name_vendor','transaction_purchasing_items','transaction_details','transaction_date','transaction_amount','total_discount','net_amount','taxes','total','transaction_type','balance_amount','box_balance','related_box','chart_code','chart_name','transaction_method','tax_system','chart_account_main','approved','user','created_at','Temp_Target_Box']);
+      ['transaction_id','invoice_id','name','name_vendor','transaction_purchasing_items','transaction_details','transaction_date','transaction_amount','total_discount','net_amount','taxes','total','transaction_type','balance_amount','box_balance','related_box','chart_code','chart_name','transaction_method','tax_system','chart_account_main','approved','user','created_at','Temp_Target_Box','attachment','attachment_id']);
     var sheet = getSheet_(FIN_CASH_SHEET, dbId);
     var headers = getHeaders_(sheet);
     var boxMap = finBoxMap_(dbId);
@@ -14054,6 +14256,1759 @@ map['actual_hours'] = Math.round(totalHours * 100) / 100;
     };
   }
 
+  // ===================== QUALITY MODULE (v2) =====================
+  /* نظام إجراءات العمل القياسية (SOP). كل كود الخادم لهذه الوحدة داخل هذا
+   * القسم الواحد المُعلَّم، حتى تستطيع أدوات الفحص (tools/verify) اقتطاعه
+   * وتشغيله مع بيئة بديلة. لا يعتمد إلا على دوال موجودة فعلاً في هذا النطاق أو
+   * في Code.js: ensureSheet_, getAllRecords_, safeRows_, addRecord_,
+   * patchRowByCriteria_, deleteRowsByCriteria_, getSheet_,
+   * settingsUniqueViolation_, ensureDriveFolderId_, executeWithLock_, uidV7_,
+   * vfNotApplied_, logHistory_. */
+  const QUALITY_SOP_SHEET = 'valley_quality_sops';
+  const QUALITY_SOP_VERSIONS_SHEET = 'valley_quality_sop_versions';
+  const QUALITY_SOP_EVENTS_SHEET = 'valley_quality_sop_events';
+  const QUALITY_SOP_FORMS_SHEET = 'valley_quality_sop_forms';
+  const QUALITY_SOP_ACKS_SHEET = 'valley_quality_acknowledgements';
+
+  /* ترتيب الأعمدة على نفس عرف الجداول الحالية: unique_id و id أولاً ثم أعمدة
+     العمل ثم user و created_at في النهاية. */
+  const QUALITY_SOP_HEADERS = [
+    'unique_id', 'id', 'sop_code', 'title_ar', 'title_en', 'category',
+    'applicability_dept', 'applicability_role', 'owner_email',
+    'current_effective_version', 'draft_version', 'user', 'created_at'
+  ];
+  const QUALITY_SOP_VERSION_HEADERS = [
+    'unique_id', 'id', 'sop_id', 'version', 'change_type', 'status',
+    'content_html', 'change_summary', 'pdf_ref', 'pdf_id', 'pdf_sha256',
+    'author_email', 'submitted_at', 'approved_by', 'approved_at',
+    'reject_comment', 'effective_date', 'next_review_date', 'user', 'created_at'
+  ];
+  const QUALITY_SOP_EVENT_HEADERS = [
+    'unique_id', 'id', 'sop_id', 'version', 'event_type', 'from_status',
+    'to_status', 'actor_email', 'at', 'comment', 'file_id', 'file_hash',
+    'user', 'created_at'
+  ];
+  const QUALITY_SOP_FORM_HEADERS = [
+    'unique_id', 'id', 'sop_id', 'form_code', 'title', 'form_type',
+    'link_or_id', 'revision', 'is_required', 'user', 'created_at'
+  ];
+  const QUALITY_SOP_ACK_HEADERS = [
+    'unique_id', 'id', 'sop_id', 'sop_version', 'emp_id', 'employee_name',
+    'status', 'read_at', 'signed_at', 'signature_note', 'recorded_by',
+    'user', 'created_at'
+  ];
+
+  const QUALITY_SOP_CATEGORIES = [
+    { code: 'GEN', label: 'عام' },
+    { code: 'QC', label: 'الجودة' },
+    { code: 'PROD', label: 'الإنتاج' },
+    { code: 'LAB', label: 'المختبر' },
+    { code: 'WH', label: 'المخازن' },
+    { code: 'MNT', label: 'الصيانة' },
+    { code: 'SAF', label: 'السلامة' },
+    { code: 'HR', label: 'الموارد البشرية' },
+    { code: 'PUR', label: 'المشتريات' },
+    { code: 'DIST', label: 'التوزيع' }
+  ];
+  const QUALITY_SOP_STATUSES = ['Draft', 'In Review', 'Approved', 'Rejected', 'Effective', 'Obsolete'];
+  const QUALITY_SOP_EVENT_TYPES = ['Created', 'Edited', 'Submitted', 'Approved', 'Rejected', 'Made Effective', 'Obsolete', 'New Version', 'Acks Launched', 'Form Added', 'Form Removed'];
+  const QUALITY_SOP_CHANGE_TYPES = ['Major', 'Minor'];
+  const QUALITY_SOP_FORM_TYPES = ['Doc', 'Sheet', 'Form', 'PDF', 'ERP page'];
+
+  // ---- helpers ----
+  function qSopActor_(user) { return String((user && user.email) || '').trim(); }
+
+  function qSopCategoryLabel_(code) {
+    for (var i = 0; i < QUALITY_SOP_CATEGORIES.length; i++) {
+      if (QUALITY_SOP_CATEGORIES[i].code === code) return QUALITY_SOP_CATEGORIES[i].label;
+    }
+    return '';
+  }
+
+  function qSopFindByUid_(rows, uid) {
+    var want = String(uid || '');
+    for (var i = 0; i < (rows || []).length; i++) {
+      if (String(rows[i].unique_id) === want) return rows[i];
+    }
+    return null;
+  }
+
+  /** unique_id من uidV7_ + user + created_at بصيغة ISO، كما تُكتب كل السجلات. */
+  function qSopStamp_(map, actor) {
+    map.unique_id = uidV7_();
+    map.user = actor || '';
+    map.created_at = new Date().toISOString();
+    return map;
+  }
+
+  /** سجل تاريخي هامشي: فشل التدقيق لا يُفشل الحفظ. */
+  function qSopLog_(dbId, sheetName, recordUid, recordId, actor, action, newValues, oldValues) {
+    try { logHistory_(dbId, sheetName, recordUid, recordId == null ? null : recordId, actor, action, newValues, oldValues); } catch (e) {}
+  }
+
+  function qSopAddEvent_(dbId, sopId, version, eventType, fromStatus, toStatus, user, comment, fileId, fileHash) {
+    var actor = qSopActor_(user);
+    var map = {
+      sop_id: String(sopId || ''),
+      version: version === '' || version == null ? '' : version,
+      event_type: eventType,
+      from_status: fromStatus || '',
+      to_status: toStatus || '',
+      actor_email: actor,
+      at: new Date().toISOString(),
+      comment: comment || '',
+      file_id: fileId || '',
+      file_hash: fileHash || ''
+    };
+    qSopStamp_(map, actor);
+    return addRecord_(dbId, QUALITY_SOP_EVENTS_SHEET, map, ['sop_id', 'event_type']);
+  }
+
+  /** اختبار "المحتوى غير فارغ" بعد إزالة الوسوم والمسافات. */
+  function qSopHasContent_(html) {
+    var text = String(html == null ? '' : html)
+      .replace(/<[^>]*>/g, ' ')
+      .replace(/&nbsp;/gi, ' ');
+    return text.trim() !== '';
+  }
+
+  function qSopToday_() {
+    var d = new Date();
+    var p = function (n) { return (n < 10 ? '0' : '') + n; };
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+  }
+
+  /**
+   * تجميد نسخة PDF للإصدار: HTML → Google Doc مؤقت → PDF في مجلد الوحدة.
+   * pdf_ref بمسار عرض الملف لأن مسار المرفقات يستخرج معرّف Drive منه.
+   * أي فشل يرمي vfNotApplied_ قبل أي كتابة على الشيتات.
+   */
+  function freezeSopVersionPdf_(dbId, sopRow, versionRow) {
+    var sopCode = String((sopRow && sopRow.sop_code) || '').trim();
+    var titleAr = String((sopRow && sopRow.title_ar) || '').trim();
+    var version = Number(versionRow && versionRow.version) || 0;
+    var contentHtml = String((versionRow && versionRow.content_html) || '');
+    var html = '<!doctype html><html dir="rtl" lang="ar"><head><meta charset="utf-8"><title>' +
+      sopCode + ' v' + version + '</title><style>body{font-family:Cairo,Arial,sans-serif;font-size:14px;line-height:1.9;padding:24px;direction:rtl}h1,h2{color:#0f5132}table{border-collapse:collapse}td,th{border:1px solid #999;padding:6px}</style></head><body>' +
+      contentHtml + '</body></html>';
+    var docId = '';
+    try {
+      var folderId = ensureDriveFolderId_('valley_quality_sop_versions_Files_');
+      var docName = sopCode + ' v' + version + ' — ' + titleAr;
+      var docBlob = Utilities.newBlob(html, 'text/html', docName + '.html');
+      var doc = Drive.Files.create({ name: docName, mimeType: 'application/vnd.google-apps.document', parents: [folderId] }, docBlob);
+      docId = doc && doc.id ? String(doc.id) : '';
+      if (!docId) throw new Error('Drive doc create returned no id');
+      var pdfBlob = Drive.Files.export(docId, 'application/pdf');
+      var hex = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, pdfBlob.getBytes()).map(function (b) {
+        return ('0' + (b & 255).toString(16)).slice(-2);
+      }).join('');
+      var pdfName = sopCode + '-v' + version + '-' + Date.now() + '.pdf';
+      var created = Drive.Files.create({ name: pdfName, mimeType: 'application/pdf', parents: [folderId] }, pdfBlob);
+      var pdfId = created && created.id ? String(created.id) : '';
+      if (!pdfId) throw new Error('Drive pdf create returned no id');
+      try { DriveApp.getFileById(docId).setTrashed(true); } catch (eTrash) {}
+      return {
+        pdf_ref: 'https://drive.google.com/file/d/' + pdfId + '/view',
+        pdf_id: pdfId,
+        pdf_sha256: hex
+      };
+    } catch (e) {
+      if (docId) { try { DriveApp.getFileById(docId).setTrashed(true); } catch (eTrash2) {} }
+      throw vfNotApplied_('تعذر تجهيز نسخة PDF للإصدار؛ لم يتم الإرسال');
+    }
+  }
+
+  // ---- 1) قراءة الصفحة كاملة ----
+  function getQualitySops_(data, user, dbId) {
+    ensureSheet_(dbId, QUALITY_SOP_SHEET, QUALITY_SOP_HEADERS);
+    ensureSheet_(dbId, QUALITY_SOP_VERSIONS_SHEET, QUALITY_SOP_VERSION_HEADERS);
+    ensureSheet_(dbId, QUALITY_SOP_FORMS_SHEET, QUALITY_SOP_FORM_HEADERS);
+    ensureSheet_(dbId, QUALITY_SOP_EVENTS_SHEET, QUALITY_SOP_EVENT_HEADERS);
+    ensureSheet_(dbId, QUALITY_SOP_ACKS_SHEET, QUALITY_SOP_ACK_HEADERS);
+    return {
+      status: 'success',
+      sops: safeRows_(dbId, QUALITY_SOP_SHEET),
+      versions: safeRows_(dbId, QUALITY_SOP_VERSIONS_SHEET),
+      forms: safeRows_(dbId, QUALITY_SOP_FORMS_SHEET),
+      events: safeRows_(dbId, QUALITY_SOP_EVENTS_SHEET),
+      acks: safeRows_(dbId, QUALITY_SOP_ACKS_SHEET),
+      categories: QUALITY_SOP_CATEGORIES
+    };
+  }
+
+  // ---- 2) إنشاء/تعديل بيانات الإجراء ----
+  function saveQualitySop_(data, user, dbId) {
+    var d = data || {};
+    var uid = String(d.unique_id || '').trim();
+    var titleAr = String(d.title_ar || '').trim();
+    if (!titleAr) vfNotApplied_('عنوان الإجراء بالعربية مطلوب');
+    var category = String(d.category || '').trim().toUpperCase();
+    if (!qSopCategoryLabel_(category)) vfNotApplied_('تصنيف الإجراء غير صالح');
+    var actor = qSopActor_(user);
+    ensureSheet_(dbId, QUALITY_SOP_SHEET, QUALITY_SOP_HEADERS);
+    ensureSheet_(dbId, QUALITY_SOP_VERSIONS_SHEET, QUALITY_SOP_VERSION_HEADERS);
+    ensureSheet_(dbId, QUALITY_SOP_EVENTS_SHEET, QUALITY_SOP_EVENT_HEADERS);
+    var result;
+    executeWithLock_(function () {
+      var sopSheet = getSheet_(QUALITY_SOP_SHEET, dbId);
+      var sopRows = getAllRecords_(dbId, QUALITY_SOP_SHEET);
+      var existing = uid ? qSopFindByUid_(sopRows, uid) : null;
+      var patch = {
+        title_ar: titleAr,
+        title_en: String(d.title_en || '').trim(),
+        category: category,
+        applicability_dept: String(d.applicability_dept || '').trim(),
+        applicability_role: String(d.applicability_role || '').trim(),
+        owner_email: String(d.owner_email || '').trim()
+      };
+      if (existing) {
+        /* بيانات الإجراء تُقفل بعد أول إرسال: أي إصدار خارج المسودة يمنع التعديل. */
+        var locked = getAllRecords_(dbId, QUALITY_SOP_VERSIONS_SHEET).some(function (v) {
+          return String(v.sop_id) === uid && String(v.status) !== 'Draft';
+        });
+        if (locked) vfNotApplied_('لا يمكن تعديل بيانات الإجراء بعد إرساله');
+        if (!patchRowByCriteria_(sopSheet, 'unique_id', uid, patch)) vfNotApplied_('الإجراء غير موجود');
+        qSopLog_(dbId, QUALITY_SOP_SHEET, uid, existing.id, actor, 'update', patch, existing);
+        result = { status: 'success', unique_id: uid, sop_code: String(existing.sop_code || '') };
+        return;
+      }
+      /* كود جديد: SOP-<CAT>-NNN حيث NNN = عدد إجراءات نفس التصنيف + 1، مع
+         مسح تفرد على الأكواد الموجودة (نمط settingsUniqueViolation_). */
+      var n = 0;
+      sopRows.forEach(function (r) {
+        if (String(r.category || '').trim().toUpperCase() === category) n++;
+      });
+      var sopCode = '';
+      do {
+        n++;
+        sopCode = 'SOP-' + category + '-' + ('00' + n).slice(-3);
+      } while (settingsUniqueViolation_(sopRows, 'sop_code', sopCode));
+      var sopMap = {
+        sop_code: sopCode,
+        title_ar: patch.title_ar,
+        title_en: patch.title_en,
+        category: category,
+        applicability_dept: patch.applicability_dept,
+        applicability_role: patch.applicability_role,
+        owner_email: patch.owner_email,
+        current_effective_version: '',
+        draft_version: '1'
+      };
+      var sopUid = qSopStamp_(sopMap, actor).unique_id;
+      var inserted = addRecord_(dbId, QUALITY_SOP_SHEET, sopMap, ['sop_code', 'title_ar', 'category']);
+      var versionMap = {
+        sop_id: sopUid,
+        version: 1,
+        change_type: 'Major',
+        status: 'Draft',
+        content_html: '',
+        change_summary: '',
+        pdf_ref: '',
+        pdf_id: '',
+        pdf_sha256: '',
+        author_email: actor,
+        submitted_at: '',
+        approved_by: '',
+        approved_at: '',
+        reject_comment: '',
+        effective_date: '',
+        next_review_date: ''
+      };
+      qSopStamp_(versionMap, actor);
+      addRecord_(dbId, QUALITY_SOP_VERSIONS_SHEET, versionMap, ['sop_id', 'version', 'status']);
+      qSopAddEvent_(dbId, sopUid, 1, 'Created', '', 'Draft', user, '', '', '');
+      qSopLog_(dbId, QUALITY_SOP_SHEET, sopUid, inserted.data.assignedId, actor, 'create', sopMap, null);
+      result = { status: 'success', unique_id: sopUid, sop_code: sopCode };
+    });
+    return result;
+  }
+
+  // ---- 3) حفظ محتوى إصدار (مسودة) أو إنشاء إصدار جديد ----
+  function saveQualitySopVersion_(data, user, dbId) {
+    var d = data || {};
+    var uid = String(d.unique_id || '').trim();
+    var sopId = String(d.sop_id || '').trim();
+    var changeTypeArg = String(d.change_type || '').trim();
+    if (changeTypeArg && QUALITY_SOP_CHANGE_TYPES.indexOf(changeTypeArg) === -1) vfNotApplied_('نوع التغيير غير صالح');
+    var contentHtml = d.content_html == null ? '' : String(d.content_html);
+    var changeSummary = String(d.change_summary == null ? '' : d.change_summary);
+    var actor = qSopActor_(user);
+    ensureSheet_(dbId, QUALITY_SOP_SHEET, QUALITY_SOP_HEADERS);
+    ensureSheet_(dbId, QUALITY_SOP_VERSIONS_SHEET, QUALITY_SOP_VERSION_HEADERS);
+    ensureSheet_(dbId, QUALITY_SOP_EVENTS_SHEET, QUALITY_SOP_EVENT_HEADERS);
+    var result;
+    executeWithLock_(function () {
+      var versionSheet = getSheet_(QUALITY_SOP_VERSIONS_SHEET, dbId);
+      var versions = getAllRecords_(dbId, QUALITY_SOP_VERSIONS_SHEET);
+      if (uid) {
+        var row = qSopFindByUid_(versions, uid);
+        if (!row) vfNotApplied_('الإصدار غير موجود');
+        var status = String(row.status || '');
+        if (status !== 'Draft' && status !== 'Rejected') vfNotApplied_('لا يمكن تعديل الإصدار في حالته الحالية');
+        var patch = {
+          change_type: changeTypeArg || String(row.change_type || '').trim() || 'Major',
+          content_html: contentHtml,
+          change_summary: changeSummary
+        };
+        /* المسودة المرفوضة تعود مسودةً عند أول تعديل، ويُمسح سبب الرفض القديم. */
+        if (status === 'Rejected') { patch.status = 'Draft'; patch.reject_comment = ''; }
+        if (!patchRowByCriteria_(versionSheet, 'unique_id', uid, patch)) vfNotApplied_('الإصدار غير موجود');
+        qSopAddEvent_(dbId, String(row.sop_id || ''), Number(row.version) || 0, 'Edited', status, patch.status || status, user, changeSummary, '', '');
+        qSopLog_(dbId, QUALITY_SOP_VERSIONS_SHEET, uid, row.id, actor, 'update', patch, row);
+        result = { status: 'success', unique_id: uid, version: Number(row.version) || 0, row_status: patch.status || status };
+        return;
+      }
+      if (!sopId) vfNotApplied_('الإجراء مطلوب');
+      var sopSheet = getSheet_(QUALITY_SOP_SHEET, dbId);
+      var sop = qSopFindByUid_(getAllRecords_(dbId, QUALITY_SOP_SHEET), sopId);
+      if (!sop) vfNotApplied_('الإجراء غير موجود');
+      var mine = versions.filter(function (v) { return String(v.sop_id) === sopId; });
+      if (mine.some(function (v) { return String(v.status) === 'Draft'; })) vfNotApplied_('توجد مسودة بالفعل');
+      var maxVersion = 0;
+      mine.forEach(function (v) { var n = Number(v.version) || 0; if (n > maxVersion) maxVersion = n; });
+      var nextVersion = maxVersion + 1;
+      var map = {
+        sop_id: sopId,
+        version: nextVersion,
+        change_type: changeTypeArg || 'Major',
+        status: 'Draft',
+        content_html: contentHtml,
+        change_summary: changeSummary,
+        pdf_ref: '',
+        pdf_id: '',
+        pdf_sha256: '',
+        author_email: actor,
+        submitted_at: '',
+        approved_by: '',
+        approved_at: '',
+        reject_comment: '',
+        effective_date: '',
+        next_review_date: ''
+      };
+      qSopStamp_(map, actor);
+      addRecord_(dbId, QUALITY_SOP_VERSIONS_SHEET, map, ['sop_id', 'version', 'status']);
+      if (!patchRowByCriteria_(sopSheet, 'unique_id', sopId, { draft_version: String(nextVersion) })) vfNotApplied_('الإجراء غير موجود');
+      qSopAddEvent_(dbId, sopId, nextVersion, 'New Version', '', 'Draft', user, changeSummary, '', '');
+      qSopLog_(dbId, QUALITY_SOP_VERSIONS_SHEET, map.unique_id, null, actor, 'create', map, null);
+      result = { status: 'success', unique_id: map.unique_id, version: nextVersion, row_status: 'Draft' };
+    });
+    return result;
+  }
+
+  // ---- 4) إرسال الإصدار للمراجعة (تجميد PDF أولاً) ----
+  function submitQualitySopVersion_(data, user, dbId) {
+    var uid = String((data || {}).unique_id || '').trim();
+    if (!uid) vfNotApplied_('معرف الإصدار مطلوب');
+    ensureSheet_(dbId, QUALITY_SOP_SHEET, QUALITY_SOP_HEADERS);
+    ensureSheet_(dbId, QUALITY_SOP_VERSIONS_SHEET, QUALITY_SOP_VERSION_HEADERS);
+    ensureSheet_(dbId, QUALITY_SOP_EVENTS_SHEET, QUALITY_SOP_EVENT_HEADERS);
+    var actor = qSopActor_(user);
+    var row = qSopFindByUid_(safeRows_(dbId, QUALITY_SOP_VERSIONS_SHEET), uid);
+    if (!row) vfNotApplied_('الإصدار غير موجود');
+    if (String(row.status || '') !== 'Draft') vfNotApplied_('يمكن إرسال المسودات فقط');
+    if (!qSopHasContent_(row.content_html)) vfNotApplied_('لا يمكن إرسال إصدار بدون محتوى');
+    var sop = qSopFindByUid_(safeRows_(dbId, QUALITY_SOP_SHEET), String(row.sop_id || ''));
+    if (!sop) vfNotApplied_('الإجراء غير موجود');
+    /* التجميد قبل القفل وقبل أي كتابة: أي فشل هنا لا يكتب صفاً ولا حدثاً. */
+    var frozen = freezeSopVersionPdf_(dbId, sop, row);
+    var result;
+    executeWithLock_(function () {
+      var rowSheet = getSheet_(QUALITY_SOP_VERSIONS_SHEET, dbId);
+      var fresh = qSopFindByUid_(getAllRecords_(dbId, QUALITY_SOP_VERSIONS_SHEET), uid);
+      if (!fresh) vfNotApplied_('الإصدار غير موجود');
+      if (String(fresh.status || '') !== 'Draft') vfNotApplied_('تغيرت حالة الإصدار أثناء الإرسال');
+      var patch = {
+        status: 'In Review',
+        submitted_at: new Date().toISOString(),
+        pdf_ref: frozen.pdf_ref,
+        pdf_id: frozen.pdf_id,
+        pdf_sha256: frozen.pdf_sha256
+      };
+      if (!patchRowByCriteria_(rowSheet, 'unique_id', uid, patch)) vfNotApplied_('الإصدار غير موجود');
+      qSopAddEvent_(dbId, String(fresh.sop_id || ''), Number(fresh.version) || 0, 'Submitted', 'Draft', 'In Review', user, '', frozen.pdf_id, frozen.pdf_sha256);
+      qSopLog_(dbId, QUALITY_SOP_VERSIONS_SHEET, uid, fresh.id, actor, 'update', patch, fresh);
+      result = { status: 'success', pdf_ref: frozen.pdf_ref, pdf_id: frozen.pdf_id, pdf_sha256: frozen.pdf_sha256 };
+    });
+    return result;
+  }
+
+  // ---- 5) اعتماد الإصدار ----
+  function approveQualitySopVersion_(data, user, dbId) {
+    var uid = String((data || {}).unique_id || '').trim();
+    if (!uid) vfNotApplied_('معرف الإصدار مطلوب');
+    ensureSheet_(dbId, QUALITY_SOP_VERSIONS_SHEET, QUALITY_SOP_VERSION_HEADERS);
+    ensureSheet_(dbId, QUALITY_SOP_EVENTS_SHEET, QUALITY_SOP_EVENT_HEADERS);
+    var actor = qSopActor_(user);
+    var result;
+    executeWithLock_(function () {
+      var sheet = getSheet_(QUALITY_SOP_VERSIONS_SHEET, dbId);
+      var row = qSopFindByUid_(getAllRecords_(dbId, QUALITY_SOP_VERSIONS_SHEET), uid);
+      if (!row) vfNotApplied_('الإصدار غير موجود');
+      if (String(row.status || '') !== 'In Review') vfNotApplied_('يمكن اعتماد الإصدارات قيد المراجعة فقط');
+      var author = String(row.author_email || '').trim().toLowerCase();
+      if (author && author === actor.toLowerCase()) vfNotApplied_('لا يمكن للمؤلف اعتماد إصداره');
+      var patch = { status: 'Approved', approved_by: actor, approved_at: new Date().toISOString() };
+      if (!patchRowByCriteria_(sheet, 'unique_id', uid, patch)) vfNotApplied_('الإصدار غير موجود');
+      qSopAddEvent_(dbId, String(row.sop_id || ''), Number(row.version) || 0, 'Approved', 'In Review', 'Approved', user, '', '', '');
+      qSopLog_(dbId, QUALITY_SOP_VERSIONS_SHEET, uid, row.id, actor, 'update', patch, row);
+      result = { status: 'success', unique_id: uid, row_status: 'Approved' };
+    });
+    return result;
+  }
+
+  // ---- 6) رفض الإصدار ----
+  function rejectQualitySopVersion_(data, user, dbId) {
+    var d = data || {};
+    var uid = String(d.unique_id || '').trim();
+    if (!uid) vfNotApplied_('معرف الإصدار مطلوب');
+    var comment = String(d.comment == null ? '' : d.comment).trim();
+    if (!comment) vfNotApplied_('سبب الرفض مطلوب');
+    ensureSheet_(dbId, QUALITY_SOP_VERSIONS_SHEET, QUALITY_SOP_VERSION_HEADERS);
+    ensureSheet_(dbId, QUALITY_SOP_EVENTS_SHEET, QUALITY_SOP_EVENT_HEADERS);
+    var actor = qSopActor_(user);
+    var result;
+    executeWithLock_(function () {
+      var sheet = getSheet_(QUALITY_SOP_VERSIONS_SHEET, dbId);
+      var row = qSopFindByUid_(getAllRecords_(dbId, QUALITY_SOP_VERSIONS_SHEET), uid);
+      if (!row) vfNotApplied_('الإصدار غير موجود');
+      if (String(row.status || '') !== 'In Review') vfNotApplied_('يمكن رفض الإصدارات قيد المراجعة فقط');
+      var patch = { status: 'Rejected', reject_comment: comment };
+      if (!patchRowByCriteria_(sheet, 'unique_id', uid, patch)) vfNotApplied_('الإصدار غير موجود');
+      qSopAddEvent_(dbId, String(row.sop_id || ''), Number(row.version) || 0, 'Rejected', 'In Review', 'Rejected', user, comment, '', '');
+      qSopLog_(dbId, QUALITY_SOP_VERSIONS_SHEET, uid, row.id, actor, 'update', patch, row);
+      result = { status: 'success', unique_id: uid, row_status: 'Rejected' };
+    });
+    return result;
+  }
+
+  // ---- 7) تنفيذ الإصدار (نسخة سارية) ----
+  function makeEffectiveQualitySopVersion_(data, user, dbId) {
+    var d = data || {};
+    var uid = String(d.unique_id || '').trim();
+    if (!uid) vfNotApplied_('معرف الإصدار مطلوب');
+    var effectiveDate = String(d.effective_date || '').trim() || qSopToday_();
+    var nextReviewDate = String(d.next_review_date || '').trim();
+    ensureSheet_(dbId, QUALITY_SOP_SHEET, QUALITY_SOP_HEADERS);
+    ensureSheet_(dbId, QUALITY_SOP_VERSIONS_SHEET, QUALITY_SOP_VERSION_HEADERS);
+    ensureSheet_(dbId, QUALITY_SOP_EVENTS_SHEET, QUALITY_SOP_EVENT_HEADERS);
+    ensureSheet_(dbId, QUALITY_SOP_ACKS_SHEET, QUALITY_SOP_ACK_HEADERS);
+    var actor = qSopActor_(user);
+    var result;
+    executeWithLock_(function () {
+      var versionSheet = getSheet_(QUALITY_SOP_VERSIONS_SHEET, dbId);
+      var versions = getAllRecords_(dbId, QUALITY_SOP_VERSIONS_SHEET);
+      var row = qSopFindByUid_(versions, uid);
+      if (!row) vfNotApplied_('الإصدار غير موجود');
+      if (String(row.status || '') !== 'Approved') vfNotApplied_('يمكن تنفيذ الإصدارات المعتمدة فقط');
+      var sopId = String(row.sop_id || '');
+      var versionNumber = Number(row.version) || 0;
+      /* الإصدار الساري السابق لنفس الإجراء يصبح ملغىً في اللحظة نفسها. */
+      versions.forEach(function (v) {
+        if (String(v.sop_id) !== sopId) return;
+        if (String(v.unique_id) === uid) return;
+        if (String(v.status) !== 'Effective') return;
+        if (!patchRowByCriteria_(versionSheet, 'unique_id', String(v.unique_id), { status: 'Obsolete' })) return;
+        qSopAddEvent_(dbId, sopId, Number(v.version) || 0, 'Obsolete', 'Effective', 'Obsolete', user, '', '', '');
+      });
+      var patch = { status: 'Effective', effective_date: effectiveDate, next_review_date: nextReviewDate };
+      if (!patchRowByCriteria_(versionSheet, 'unique_id', uid, patch)) vfNotApplied_('الإصدار غير موجود');
+      if (!patchRowByCriteria_(getSheet_(QUALITY_SOP_SHEET, dbId), 'unique_id', sopId, {
+        current_effective_version: String(versionNumber),
+        draft_version: ''
+      })) vfNotApplied_('الإجراء غير موجود');
+      /* أي إقرارات معلّقة لنفس الإجراء (أي إصدار) تُستبدل بالإصدار الجديد. */
+      var acks = safeRows_(dbId, QUALITY_SOP_ACKS_SHEET);
+      var ackSheet = null;
+      acks.forEach(function (a) {
+        if (String(a.sop_id) !== sopId) return;
+        if (String(a.status) !== 'Pending') return;
+        if (!ackSheet) ackSheet = getSheet_(QUALITY_SOP_ACKS_SHEET, dbId);
+        patchRowByCriteria_(ackSheet, 'unique_id', String(a.unique_id), { status: 'Superseded' });
+      });
+      qSopAddEvent_(dbId, sopId, versionNumber, 'Made Effective', 'Approved', 'Effective', user, '', '', '');
+      qSopLog_(dbId, QUALITY_SOP_VERSIONS_SHEET, uid, row.id, actor, 'update', patch, row);
+      result = {
+        status: 'success',
+        unique_id: uid,
+        version: versionNumber,
+        effective_date: effectiveDate,
+        next_review_date: nextReviewDate
+      };
+    });
+    return result;
+  }
+
+  // ---- 8) نماذج الإجراءات ----
+  function saveQualitySopForms_(data, user, dbId) {
+    var d = data || {};
+    var uid = String(d.unique_id || '').trim();
+    var sopId = String(d.sop_id || '').trim();
+    if (!sopId) vfNotApplied_('الإجراء مطلوب');
+    var remove = d.remove === true || String(d.remove).toLowerCase() === 'true';
+    var formType = String(d.form_type || '').trim();
+    if (!remove && formType && QUALITY_SOP_FORM_TYPES.indexOf(formType) === -1) vfNotApplied_('نوع النموذج غير صالح');
+    var actor = qSopActor_(user);
+    ensureSheet_(dbId, QUALITY_SOP_FORMS_SHEET, QUALITY_SOP_FORM_HEADERS);
+    ensureSheet_(dbId, QUALITY_SOP_EVENTS_SHEET, QUALITY_SOP_EVENT_HEADERS);
+    var result;
+    executeWithLock_(function () {
+      var sheet = getSheet_(QUALITY_SOP_FORMS_SHEET, dbId);
+      var existing = uid ? qSopFindByUid_(getAllRecords_(dbId, QUALITY_SOP_FORMS_SHEET), uid) : null;
+      if (remove) {
+        if (!uid) vfNotApplied_('معرف النموذج مطلوب');
+        if (!existing) vfNotApplied_('النموذج غير موجود');
+        if (!deleteRowsByCriteria_(sheet, 'unique_id', uid)) vfNotApplied_('النموذج غير موجود');
+        qSopAddEvent_(dbId, String(existing.sop_id || sopId), '', 'Form Removed', '', '', user, String(existing.form_code || ''), '', '');
+        qSopLog_(dbId, QUALITY_SOP_FORMS_SHEET, uid, existing.id, actor, 'delete', null, existing);
+        result = { status: 'success', unique_id: uid, removed: true };
+        return;
+      }
+      var map = {
+        sop_id: sopId,
+        form_code: String(d.form_code || '').trim(),
+        title: String(d.title || '').trim(),
+        form_type: formType || 'Doc',
+        link_or_id: String(d.link_or_id || '').trim(),
+        revision: String(d.revision || '').trim(),
+        is_required: !!(d.is_required === true || String(d.is_required).toLowerCase() === 'true')
+      };
+      if (existing) {
+        if (!patchRowByCriteria_(sheet, 'unique_id', uid, map)) vfNotApplied_('النموذج غير موجود');
+        qSopLog_(dbId, QUALITY_SOP_FORMS_SHEET, uid, existing.id, actor, 'update', map, existing);
+        result = { status: 'success', unique_id: uid };
+        return;
+      }
+      qSopStamp_(map, actor);
+      addRecord_(dbId, QUALITY_SOP_FORMS_SHEET, map, ['sop_id']);
+      qSopAddEvent_(dbId, sopId, '', 'Form Added', '', '', user, map.form_code, '', '');
+      qSopLog_(dbId, QUALITY_SOP_FORMS_SHEET, map.unique_id, null, actor, 'create', map, null);
+      result = { status: 'success', unique_id: map.unique_id };
+    });
+    return result;
+  }
+
+  /* ===================== QUALITY MODULE (v2) — PHASE 2: ACKNOWLEDGEMENTS =====================
+   * إقرارات قراءة الإجراءات: إطلاقها على الموظفين المستهدفين، عرض إقرارات
+   * صاحب الجلسة وحده، توقيعه بنفسه، وتسجيل المشرف نيابةً عن الموظفين بلا بريد.
+   * كل رفض يسبق أي كتابة (vfNotApplied_). إضافة إلى تبعيات القسم أعلاه يعتمد
+   * هذا القسم على: ensureAttachmentColumn_ و_headerCache_ (Code.js) لضمان عمود
+   * البريد على جدول الموظفين، unifiedCheck_ لقوائم المشرف، getNextIdBatch_
+   * للإدراج الدفعي، وgetLatestStatusMap_ (النطاق نفسه) لفلترة الموظف النشط. */
+  const QUALITY_EMP_INFO_SHEET = 'valley_employee_info';
+  const QUALITY_EMP_ACTIVE_STATUS = 'يعمل بالشركة';
+
+  function qAckNorm_(v) { return String(v == null ? '' : v).trim().toLowerCase(); }
+
+  function qAckCollapse_(v) { return String(v == null ? '' : v).replace(/\s+/g, ' ').trim(); }
+
+  /** مطابقة الاسم المكتوب: حرفياً للعربية، ودون حساسية لحالة الأحرف للاتينية. */
+  function qAckNameMatches_(typed, expected) {
+    if (typed === expected) return true;
+    if (/[A-Za-z]/.test(expected)) return typed.toLowerCase() === expected.toLowerCase();
+    return false;
+  }
+
+  /** موظف الجلسة: مطابقة بريد غير حساسة لحالة الأحرف، خادمياً فقط. */
+  function qAckFindEmpByEmail_(employees, email) {
+    var want = qAckNorm_(email);
+    if (!want) return null;
+    for (var i = 0; i < (employees || []).length; i++) {
+      if (qAckNorm_(employees[i].email) === want) return employees[i];
+    }
+    return null;
+  }
+
+  function qAckFindEmpById_(employees, empId) {
+    var want = String(empId == null ? '' : empId).trim();
+    if (!want) return null;
+    for (var i = 0; i < (employees || []).length; i++) {
+      if (String(employees[i].emp_id == null ? '' : employees[i].emp_id).trim() === want) return employees[i];
+    }
+    return null;
+  }
+
+  function qAckFindVersion_(versions, sopId, version) {
+    var wantSop = String(sopId == null ? '' : sopId).trim();
+    var wantVersion = String(version == null ? '' : version).trim();
+    for (var i = 0; i < (versions || []).length; i++) {
+      if (String(versions[i].sop_id == null ? '' : versions[i].sop_id).trim() !== wantSop) continue;
+      if (String(versions[i].version == null ? '' : versions[i].version).trim() !== wantVersion) continue;
+      return versions[i];
+    }
+    return null;
+  }
+
+  /** خريطة حالة الموظفين من منطق الوحدة نفسه؛ فشل القراءة = بلا فلترة حالة. */
+  function qAckActiveStatusMap_(dbId) {
+    try { return (typeof getLatestStatusMap_ === 'function') ? (getLatestStatusMap_(dbId) || {}) : {}; }
+    catch (e) { return {}; }
+  }
+
+  /** إدراج دفعة إقرارات: أرقام id دفعة واحدة ثم كتابة مصفوفة واحدة. */
+  function qAckInsertBatch_(dbId, maps) {
+    if (!maps.length) return 0;
+    var sheet = getSheet_(QUALITY_SOP_ACKS_SHEET, dbId);
+    var headers = getHeaders_(sheet);
+    var startId = getNextIdBatch_(dbId, QUALITY_SOP_ACKS_SHEET, maps.length);
+    var startRow = sheet.getLastRow() + 1;
+    var matrix = maps.map(function (m, i) {
+      return headers.map(function (h) {
+        var name = String(h).trim();
+        if (name.toLowerCase() === 'id') return startId + i;
+        if (m[name] !== undefined) return m[name];
+        var low = name.toLowerCase();
+        return m[low] !== undefined ? m[low] : '';
+      });
+    });
+    sheet.getRange(startRow, 1, matrix.length, headers.length).setValues(matrix);
+    noteMutation_(sheet);
+    return maps.length;
+  }
+
+  // ---- 9) إطلاق الإقرارات على الموظفين المستهدفين ----
+  function launchQualityAcks_(data, user, dbId) {
+    var d = data || {};
+    var sopId = String(d.sop_id || '').trim();
+    if (!sopId) vfNotApplied_('الإجراء مطلوب');
+    ensureSheet_(dbId, QUALITY_SOP_SHEET, QUALITY_SOP_HEADERS);
+    ensureSheet_(dbId, QUALITY_SOP_VERSIONS_SHEET, QUALITY_SOP_VERSION_HEADERS);
+    ensureSheet_(dbId, QUALITY_SOP_EVENTS_SHEET, QUALITY_SOP_EVENT_HEADERS);
+    ensureSheet_(dbId, QUALITY_SOP_ACKS_SHEET, QUALITY_SOP_ACK_HEADERS);
+    var actor = qSopActor_(user);
+    var result;
+    executeWithLock_(function () {
+      var sop = qSopFindByUid_(getAllRecords_(dbId, QUALITY_SOP_SHEET), sopId);
+      if (!sop) vfNotApplied_('الإجراء غير موجود');
+      var version = String(d.sop_version == null ? '' : d.sop_version).trim() || String(sop.current_effective_version == null ? '' : sop.current_effective_version).trim();
+      if (!version) vfNotApplied_('لا يوجد إصدار ساري');
+      var versionRow = qAckFindVersion_(getAllRecords_(dbId, QUALITY_SOP_VERSIONS_SHEET), sopId, version);
+      if (!versionRow || String(versionRow.status || '') !== 'Effective') vfNotApplied_('لا يوجد إصدار ساري');
+
+      /* عمود البريد على جدول الموظفين (يُضاف مرة واحدة)، ثم إبطال ذاكرة
+         الترويسات لنفس التنفيذة حتى يظهر العمود الجديد فوراً. */
+      ensureAttachmentColumn_(dbId, QUALITY_EMP_INFO_SHEET, 'email');
+      try {
+        var empSheet = getSheet_(QUALITY_EMP_INFO_SHEET, dbId);
+        delete _headerCache_[empSheet.getParent().getId() + '_' + empSheet.getSheetId()];
+      } catch (e) {}
+
+      var statusMap = qAckActiveStatusMap_(dbId);
+      var hasStatus = Object.keys(statusMap).length > 0;
+      var dept = qAckNorm_(sop.applicability_dept);
+      var role = qAckNorm_(sop.applicability_role);
+      var targets = safeRows_(dbId, QUALITY_EMP_INFO_SHEET).filter(function (e) {
+        var empId = String(e.emp_id == null ? '' : e.emp_id).trim();
+        if (!empId) return false;
+        if (hasStatus) {
+          var st = statusMap[String(empId)];
+          if (!st || String(st.status_type || '') !== QUALITY_EMP_ACTIVE_STATUS) return false;
+        }
+        if (dept && qAckNorm_(e.section) !== dept) return false;
+        if (role && qAckNorm_(e.title) !== role) return false;
+        return true;
+      });
+
+      var mine = getAllRecords_(dbId, QUALITY_SOP_ACKS_SHEET).filter(function (a) {
+        return String(a.sop_id == null ? '' : a.sop_id).trim() === sopId;
+      });
+      /* الإقرارات المعلّقة لإصدار أقدم تُستبدل، والموقّعة تبقى كما هي. */
+      var ackSheet = null;
+      var superseded = 0;
+      mine.forEach(function (a) {
+        if (String(a.status || '') !== 'Pending') return;
+        if (String(a.sop_version == null ? '' : a.sop_version).trim() === version) return;
+        if (!ackSheet) ackSheet = getSheet_(QUALITY_SOP_ACKS_SHEET, dbId);
+        if (patchRowByCriteria_(ackSheet, 'unique_id', String(a.unique_id), { status: 'Superseded' })) superseded++;
+      });
+      /* تكرار الإطلاق على الإصدار نفسه لا ينشئ أي صف جديد. */
+      var have = {};
+      mine.forEach(function (a) {
+        if (String(a.sop_version == null ? '' : a.sop_version).trim() !== version) return;
+        have[String(a.emp_id == null ? '' : a.emp_id).trim()] = true;
+      });
+      var maps = [];
+      targets.forEach(function (e) {
+        var empId = String(e.emp_id == null ? '' : e.emp_id).trim();
+        if (have[empId]) return;
+        var map = {
+          sop_id: sopId,
+          sop_version: version,
+          emp_id: empId,
+          employee_name: String(e.name_ar || ''),
+          status: 'Pending',
+          read_at: '',
+          signed_at: '',
+          signature_note: '',
+          recorded_by: ''
+        };
+        qSopStamp_(map, actor);
+        maps.push(map);
+      });
+      var created = maps.length;
+      if (created) {
+        if (typeof getNextIdBatch_ === 'function') qAckInsertBatch_(dbId, maps);
+        else maps.forEach(function (m) { addRecord_(dbId, QUALITY_SOP_ACKS_SHEET, m, ['sop_id', 'emp_id', 'status']); });
+      }
+      var skipped = targets.length - created;
+      qSopAddEvent_(dbId, sopId, Number(version) || 0, 'Acks Launched', '', '', user,
+        'أُنشئ: ' + created + '، تم تخطيهم: ' + skipped + '، استُبدل: ' + superseded, '', '');
+      qSopLog_(dbId, QUALITY_SOP_SHEET, sopId, sop.id, actor, 'update',
+        { acks_version: version, created: created, skipped: skipped, superseded: superseded }, null);
+      result = { status: 'success', created: created, skipped: skipped, superseded: superseded };
+    });
+    return result;
+  }
+
+  // ---- 10) إقرارات صاحب الجلسة ----
+  function getQualityMyAcks_(data, user, dbId) {
+    ensureSheet_(dbId, QUALITY_SOP_ACKS_SHEET, QUALITY_SOP_ACK_HEADERS);
+    ensureSheet_(dbId, QUALITY_SOP_VERSIONS_SHEET, QUALITY_SOP_VERSION_HEADERS);
+    ensureSheet_(dbId, QUALITY_SOP_SHEET, QUALITY_SOP_HEADERS);
+    var employees = safeRows_(dbId, QUALITY_EMP_INFO_SHEET);
+    var me = qAckFindEmpByEmail_(employees, qSopActor_(user));
+    var out = { status: 'success', linked: !!me, my: [] };
+    if (me) {
+      var empId = String(me.emp_id == null ? '' : me.emp_id).trim();
+      var versions = safeRows_(dbId, QUALITY_SOP_VERSIONS_SHEET);
+      var sops = safeRows_(dbId, QUALITY_SOP_SHEET);
+      out.my = safeRows_(dbId, QUALITY_SOP_ACKS_SHEET)
+        .filter(function (a) { return String(a.emp_id == null ? '' : a.emp_id).trim() === empId; })
+        .map(function (a) {
+          var v = qAckFindVersion_(versions, a.sop_id, a.sop_version);
+          var s = qSopFindByUid_(sops, String(a.sop_id == null ? '' : a.sop_id));
+          return {
+            ack: {
+              unique_id: a.unique_id, sop_id: a.sop_id, sop_version: a.sop_version,
+              emp_id: a.emp_id, employee_name: a.employee_name, status: a.status,
+              read_at: a.read_at, signed_at: a.signed_at,
+              signature_note: a.signature_note, recorded_by: a.recorded_by
+            },
+            version: v ? { unique_id: v.unique_id, version: v.version, status: v.status, pdf_ref: v.pdf_ref } : null,
+            sop: s ? { unique_id: s.unique_id, sop_code: s.sop_code, title_ar: s.title_ar } : null
+          };
+        });
+    }
+    /* قوائم نموذج المشرف تُرسل لصاحب صلاحية الكتابة على الصفحة فقط. */
+    if (unifiedCheck_(user, COMPANY_UID, 'vf_quality_my_acks', 'write')) {
+      out.employees = employees.map(function (e) {
+        return { emp_id: e.emp_id, name_ar: e.name_ar, section: e.section, title: e.title };
+      });
+      out.sops = safeRows_(dbId, QUALITY_SOP_SHEET).map(function (s) {
+        return { unique_id: s.unique_id, sop_code: s.sop_code, title_ar: s.title_ar, current_effective_version: s.current_effective_version };
+      });
+    }
+    return out;
+  }
+
+  // ---- 11) توقيع الإقرار: صاحبه فقط وبالاسم المكتوب ----
+  function signQualityAck_(data, user, dbId) {
+    var d = data || {};
+    var uid = String(d.unique_id || '').trim();
+    if (!uid) vfNotApplied_('معرف الإقرار مطلوب');
+    ensureSheet_(dbId, QUALITY_SOP_ACKS_SHEET, QUALITY_SOP_ACK_HEADERS);
+    var actor = qSopActor_(user);
+    var result;
+    executeWithLock_(function () {
+      var sheet = getSheet_(QUALITY_SOP_ACKS_SHEET, dbId);
+      var row = qSopFindByUid_(getAllRecords_(dbId, QUALITY_SOP_ACKS_SHEET), uid);
+      if (!row) vfNotApplied_('الإقرار غير موجود');
+      /* الهوية خادمية: بريد الجلسة يقابل صف الموظف، ولا يُقبل أي emp_id من العميل. */
+      var me = qAckFindEmpByEmail_(safeRows_(dbId, QUALITY_EMP_INFO_SHEET), actor);
+      if (!me || String(me.emp_id == null ? '' : me.emp_id).trim() !== String(row.emp_id == null ? '' : row.emp_id).trim()) {
+        vfNotApplied_('لا يمكنك توقيع إقرار غيرك');
+      }
+      var status = String(row.status || '');
+      if (status !== 'Pending' && status !== 'Read') vfNotApplied_('لا يمكن توقيع الإقرار في حالته الحالية');
+      var typed = qAckCollapse_(d.typed_name);
+      if (!typed) vfNotApplied_('الاسم المكتوب مطلوب');
+      if (!qAckNameMatches_(typed, qAckCollapse_(row.employee_name))) vfNotApplied_('الاسم المكتوب لا يطابق اسم الموظف');
+      var now = new Date().toISOString();
+      var patch = { status: 'Signed', signed_at: now, signature_note: typed, recorded_by: actor };
+      if (!String(row.read_at == null ? '' : row.read_at).trim()) patch.read_at = now;
+      if (!patchRowByCriteria_(sheet, 'unique_id', uid, patch)) vfNotApplied_('الإقرار غير موجود');
+      qSopLog_(dbId, QUALITY_SOP_ACKS_SHEET, uid, row.id, actor, 'update', patch, row);
+      result = { status: 'success', unique_id: uid, row_status: 'Signed' };
+    });
+    return result;
+  }
+
+  // ---- 12) تسجيل إقرار بواسطة المشرف (بدون دخول الموظف) ----
+  function recordQualityAck_(data, user, dbId) {
+    var d = data || {};
+    var uid = String(d.unique_id || '').trim();
+    var actor = qSopActor_(user);
+    ensureSheet_(dbId, QUALITY_SOP_ACKS_SHEET, QUALITY_SOP_ACK_HEADERS);
+    ensureSheet_(dbId, QUALITY_SOP_VERSIONS_SHEET, QUALITY_SOP_VERSION_HEADERS);
+    var result;
+    executeWithLock_(function () {
+      var ackSheet = getSheet_(QUALITY_SOP_ACKS_SHEET, dbId);
+      var acks = getAllRecords_(dbId, QUALITY_SOP_ACKS_SHEET);
+      var note = String(d.note == null ? '' : d.note).trim() || 'تسجيل بواسطة المشرف';
+      var row = null;
+      if (uid) {
+        row = qSopFindByUid_(acks, uid);
+        if (!row) vfNotApplied_('الإقرار غير موجود');
+        var st = String(row.status || '');
+        if (st !== 'Pending' && st !== 'Read') vfNotApplied_('لا يمكن تسجيل الإقرار في حالته الحالية');
+      } else {
+        var empId = String(d.emp_id == null ? '' : d.emp_id).trim();
+        if (!empId) vfNotApplied_('الموظف مطلوب');
+        var sopId = String(d.sop_id || '').trim();
+        if (!sopId) vfNotApplied_('الإجراء مطلوب');
+        var emp = qAckFindEmpById_(safeRows_(dbId, QUALITY_EMP_INFO_SHEET), empId);
+        if (!emp) vfNotApplied_('الموظف غير موجود');
+        var versions = getAllRecords_(dbId, QUALITY_SOP_VERSIONS_SHEET);
+        var version = String(d.sop_version == null ? '' : d.sop_version).trim();
+        if (!version) {
+          var maxEff = 0;
+          versions.forEach(function (v) {
+            if (String(v.sop_id == null ? '' : v.sop_id).trim() !== sopId) return;
+            if (String(v.status || '') !== 'Effective') return;
+            var n = Number(v.version) || 0;
+            if (n > maxEff) maxEff = n;
+          });
+          if (!maxEff) vfNotApplied_('لا يوجد إصدار ساري');
+          version = String(maxEff);
+        }
+        var versionRow = qAckFindVersion_(versions, sopId, version);
+        if (!versionRow || String(versionRow.status || '') !== 'Effective') vfNotApplied_('لا يوجد إصدار ساري');
+        var pending = null;
+        var alreadySigned = null;
+        acks.forEach(function (a) {
+          if (String(a.sop_id == null ? '' : a.sop_id).trim() !== sopId) return;
+          if (String(a.sop_version == null ? '' : a.sop_version).trim() !== version) return;
+          if (String(a.emp_id == null ? '' : a.emp_id).trim() !== empId) return;
+          if (String(a.status || '') === 'Pending' && !pending) pending = a;
+          if (String(a.status || '') === 'Signed' && !alreadySigned) alreadySigned = a;
+        });
+        if (pending) {
+          row = pending;
+        } else if (alreadySigned) {
+          /* تسجيل مكرر لنفس الإصدار لا يكرر الصف. */
+          result = { status: 'success', unique_id: String(alreadySigned.unique_id), row_status: 'Signed', created: false };
+          return;
+        } else {
+          var map = {
+            sop_id: sopId,
+            sop_version: version,
+            emp_id: empId,
+            employee_name: String(emp.name_ar || ''),
+            status: 'Signed',
+            read_at: '',
+            signed_at: new Date().toISOString(),
+            signature_note: note,
+            recorded_by: actor
+          };
+          qSopStamp_(map, actor);
+          var inserted = addRecord_(dbId, QUALITY_SOP_ACKS_SHEET, map, ['sop_id', 'emp_id', 'status']);
+          qSopLog_(dbId, QUALITY_SOP_ACKS_SHEET, map.unique_id, inserted.data.assignedId, actor, 'create', map, null);
+          result = { status: 'success', unique_id: map.unique_id, row_status: 'Signed', created: true };
+          return;
+        }
+      }
+      var now = new Date().toISOString();
+      var patch = { status: 'Signed', signed_at: now, recorded_by: actor, signature_note: note };
+      if (!patchRowByCriteria_(ackSheet, 'unique_id', String(row.unique_id), patch)) vfNotApplied_('الإقرار غير موجود');
+      qSopLog_(dbId, QUALITY_SOP_ACKS_SHEET, String(row.unique_id), row.id, actor, 'update', patch, row);
+      result = { status: 'success', unique_id: String(row.unique_id), row_status: 'Signed', created: false };
+    });
+    return result;
+  }
+
+  /* ===================== QUALITY MODULE (v2) — PHASE 3: NCR / CAPA =====================
+   * عدم المطابقات (NCR) والإجراءات التصحيحية/الوقائية (CAPA): إنشاء وتعديل، مسار
+   * حالات صارم (كل رفض عبر vfNotApplied_ قبل أي كتابة)، أكواد NCR-<YYYY>-NNN و
+   * CAPA-<YYYY>-NNN تُخصص داخل executeWithLock_ بمسح تفرد على الأكواد الموجودة
+   * (نمط settingsUniqueViolation_)، اعتماد فعالية CAPA (Done→Verified و
+   * Verified→Closed) يتطلب صلاحية كاملة تُفحص داخل المعالج عبر unifiedCheck_،
+   * وتثبيت المرفق عبر requireAttachmentBinding_. يعتمد أيضاً على qSopActor_ و
+   * qSopFindByUid_ و qSopStamp_ و qSopLog_ و qSopToday_ من قسم Phase 1 أعلاه. */
+  const QUALITY_NCR_SHEET = 'valley_quality_ncrs';
+  const QUALITY_CAPA_SHEET = 'valley_quality_capas';
+  const QUALITY_NCR_HEADERS = [
+    'unique_id', 'id', 'ncr_code', 'ncr_date', 'source', 'severity', 'description',
+    'product_id', 'batch_code', 'mo_uid', 'department', 'detected_by', 'disposition',
+    'capa_required', 'capa_justification', 'status', 'root_cause', 'closed_by',
+    'closed_at', 'attachment', 'attachment_id', 'user', 'created_at'
+  ];
+  const QUALITY_CAPA_HEADERS = [
+    'unique_id', 'id', 'capa_code', 'ncr_id', 'action_type', 'description',
+    'owner_email', 'due_date', 'effectiveness_check_date', 'status',
+    'implemented_at', 'verified_by', 'verified_at', 'effectiveness_notes',
+    'attachment', 'attachment_id', 'user', 'created_at'
+  ];
+  const QUALITY_NCR_STATUSES = ['Open', 'In Review', 'CAPA Assigned', 'Implemented', 'Verified', 'Closed', 'Cancelled', 'Rejected'];
+  const QUALITY_CAPA_STATUSES = ['Assigned', 'In Progress', 'Done', 'Verified', 'Closed'];
+  const QUALITY_CAPA_ACTION_TYPES = ['Corrective', 'Preventive'];
+  /* الحالات المنتهية: لا تُعدّ متأخرة مهما كان due_date ماضياً. */
+  const QUALITY_CAPA_DONE_STATUSES = ['Done', 'Verified', 'Closed'];
+
+  function qNcrBool_(v) {
+    if (v === true) return true;
+    var s = String(v == null ? '' : v).trim().toLowerCase();
+    return s === 'true' || s === '1';
+  }
+
+  /** راية الجداول: 'TRUE'/'FALSE' كما تُخزَّن رايات Phase 1. */
+  function qNcrFlag_(v) { return qNcrBool_(v) ? 'TRUE' : 'FALSE'; }
+
+  /** منتصف ليل UTC من 'YYYY-MM-DD' أو Date؛ 0 عند غياب تاريخ صالح. */
+  function qNcrDateMs_(v) {
+    if (v instanceof Date) {
+      if (isNaN(v.getTime())) return 0;
+      return Date.UTC(v.getUTCFullYear(), v.getUTCMonth(), v.getUTCDate());
+    }
+    var s = String(v == null ? '' : v).trim();
+    if (!s) return 0;
+    var m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s);
+    if (m) return Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+    var d = new Date(s);
+    return isNaN(d.getTime()) ? 0 : Date.UTC(d.getFullYear(), d.getMonth(), d.getDate());
+  }
+
+  function qNcrTodayMs_() {
+    var d = new Date();
+    return Date.UTC(d.getFullYear(), d.getMonth(), d.getDate());
+  }
+
+  /** متأخر = due_date < اليوم وحالته ليست منتهية؛ يُحسب مرة واحدة للصف. */
+  function qNcrOverdue_(capa, todayMs) {
+    if (QUALITY_CAPA_DONE_STATUSES.indexOf(String(capa.status || '')) !== -1) return { overdue: false, days_overdue: 0 };
+    var due = qNcrDateMs_(capa.due_date);
+    if (!due || due >= todayMs) return { overdue: false, days_overdue: 0 };
+    return { overdue: true, days_overdue: Math.round((todayMs - due) / 86400000) };
+  }
+
+  /** كود سنوي تسلسلي داخل القفل: <PREFIX>-<YYYY>-NNN مع مسح تفرد على الموجود. */
+  function qNcrNextCode_(rows, field, prefix) {
+    var year = String(new Date().getFullYear());
+    var re = new RegExp('^' + prefix + '-' + year + '-(\\d+)$');
+    var max = 0;
+    (rows || []).forEach(function (r) {
+      var m = re.exec(String(r[field] == null ? '' : r[field]).trim());
+      if (!m) return;
+      var n = Number(m[1]) || 0;
+      if (n > max) max = n;
+    });
+    var code = '';
+    do {
+      max++;
+      code = prefix + '-' + year + '-' + ('00' + max).slice(-3);
+    } while (settingsUniqueViolation_(rows, field, code));
+    return code;
+  }
+
+  function qNcrLinkedCapas_(capas, ncrUid) {
+    var want = String(ncrUid == null ? '' : ncrUid).trim();
+    return (capas || []).filter(function (c) { return String(c.ncr_id == null ? '' : c.ncr_id).trim() === want; });
+  }
+
+  function qNcrAllCapasDone_(capas) {
+    return (capas || []).every(function (c) {
+      return QUALITY_CAPA_DONE_STATUSES.indexOf(String(c.status || '')) !== -1;
+    });
+  }
+
+  /** حقل نصي اختياري: يُكتب فقط عندما يصل صراحةً ('' تمسح القيمة). */
+  function qNcrPatchText_(patch, d, field) {
+    if (d[field] !== undefined && d[field] !== null) patch[field] = String(d[field]).trim();
+  }
+
+  // ---- 13) قراءة عدم المطابقات والإجراءات التصحيحية مع التأخير ----
+  function getQualityNcr_(data, user, dbId) {
+    ensureSheet_(dbId, QUALITY_NCR_SHEET, QUALITY_NCR_HEADERS);
+    ensureSheet_(dbId, QUALITY_CAPA_SHEET, QUALITY_CAPA_HEADERS);
+    var todayMs = qNcrTodayMs_();
+    var capas = safeRows_(dbId, QUALITY_CAPA_SHEET).map(function (c) {
+      var out = {};
+      Object.keys(c).forEach(function (k) { out[k] = c[k]; });
+      var over = qNcrOverdue_(c, todayMs);
+      out.overdue = over.overdue;
+      out.days_overdue = over.days_overdue;
+      return out;
+    });
+    return { status: 'success', ncrs: safeRows_(dbId, QUALITY_NCR_SHEET), capas: capas };
+  }
+
+  // ---- 14) إنشاء/تعديل عدم مطابقة ----
+  function saveQualityNcr_(data, user, dbId) {
+    var d = data || {};
+    var uid = String(d.unique_id || '').trim();
+    var description = String(d.description == null ? '' : d.description).trim();
+    if (!description) vfNotApplied_('وصف عدم المطابقة مطلوب');
+    var actor = qSopActor_(user);
+    var attachment = String(d.attachment == null ? '' : d.attachment).trim();
+    /* التثبيت قبل أي كتابة: مرجع بلا معرّف Drive صالح يُرفض. */
+    var attachmentId = requireAttachmentBinding_(attachment, d.attachment_id, 'مرفق عدم المطابقة');
+    ensureSheet_(dbId, QUALITY_NCR_SHEET, QUALITY_NCR_HEADERS);
+    var result;
+    executeWithLock_(function () {
+      var sheet = getSheet_(QUALITY_NCR_SHEET, dbId);
+      var rows = getAllRecords_(dbId, QUALITY_NCR_SHEET);
+      var existing = uid ? qSopFindByUid_(rows, uid) : null;
+      if (uid && !existing) vfNotApplied_('عدم المطابقة غير موجود');
+      if (existing) {
+        var status = String(existing.status || '');
+        if (status !== 'Open' && status !== 'In Review') vfNotApplied_('لا يمكن تعديل عدم مطابقة بعد بدء التنفيذ');
+        var patch = {
+          ncr_date: String(d.ncr_date || '').trim() || String(existing.ncr_date || ''),
+          description: description
+        };
+        qNcrPatchText_(patch, d, 'source');
+        qNcrPatchText_(patch, d, 'severity');
+        qNcrPatchText_(patch, d, 'product_id');
+        qNcrPatchText_(patch, d, 'batch_code');
+        qNcrPatchText_(patch, d, 'mo_uid');
+        qNcrPatchText_(patch, d, 'department');
+        qNcrPatchText_(patch, d, 'detected_by');
+        if (d.attachment !== undefined || d.attachment_id !== undefined) {
+          patch.attachment = attachment;
+          patch.attachment_id = attachmentId;
+        }
+        if (!patchRowByCriteria_(sheet, 'unique_id', uid, patch)) vfNotApplied_('عدم المطابقة غير موجود');
+        qSopLog_(dbId, QUALITY_NCR_SHEET, uid, existing.id, actor, 'update', patch, existing);
+        result = { status: 'success', unique_id: uid, ncr_code: String(existing.ncr_code || ''), row_status: status };
+        return;
+      }
+      var code = qNcrNextCode_(rows, 'ncr_code', 'NCR');
+      var map = {
+        ncr_code: code,
+        ncr_date: String(d.ncr_date || '').trim() || qSopToday_(),
+        source: String(d.source || '').trim(),
+        severity: String(d.severity || '').trim(),
+        description: description,
+        product_id: String(d.product_id || '').trim(),
+        batch_code: String(d.batch_code || '').trim(),
+        mo_uid: String(d.mo_uid || '').trim(),
+        department: String(d.department || '').trim(),
+        detected_by: String(d.detected_by || '').trim() || actor,
+        disposition: '',
+        capa_required: qNcrFlag_(d.capa_required),
+        capa_justification: '',
+        status: 'Open',
+        root_cause: '',
+        closed_by: '',
+        closed_at: '',
+        attachment: attachment,
+        attachment_id: attachmentId
+      };
+      qSopStamp_(map, actor);
+      var inserted = addRecord_(dbId, QUALITY_NCR_SHEET, map, ['ncr_code', 'ncr_date', 'description', 'status']);
+      qSopLog_(dbId, QUALITY_NCR_SHEET, map.unique_id, inserted.data.assignedId, actor, 'create', map, null);
+      result = { status: 'success', unique_id: map.unique_id, ncr_code: code, row_status: 'Open' };
+    });
+    return result;
+  }
+
+  // ---- 15) إنشاء/تعديل إجراء تصحيحي/وقائي ----
+  function saveQualityCapa_(data, user, dbId) {
+    var d = data || {};
+    var uid = String(d.unique_id || '').trim();
+    var description = String(d.description == null ? '' : d.description).trim();
+    var actionType = String(d.action_type || '').trim();
+    var ncrId = String(d.ncr_id || '').trim();
+    var attachment = String(d.attachment == null ? '' : d.attachment).trim();
+    var attachmentId = requireAttachmentBinding_(attachment, d.attachment_id, 'مرفق الإجراء التصحيحي');
+    var actor = qSopActor_(user);
+    if (!uid) {
+      if (!description) vfNotApplied_('وصف الإجراء التصحيحي مطلوب');
+      if (QUALITY_CAPA_ACTION_TYPES.indexOf(actionType) === -1) vfNotApplied_('نوع الإجراء التصحيحي غير صالح');
+      var wantStatus = String(d.status || '').trim();
+      if (wantStatus && wantStatus !== 'Assigned') vfNotApplied_('يبدأ الإجراء التصحيحي بحالة مسند');
+    } else if (d.description !== undefined && !description) {
+      vfNotApplied_('وصف الإجراء التصحيحي مطلوب');
+    }
+    if (actionType && QUALITY_CAPA_ACTION_TYPES.indexOf(actionType) === -1) vfNotApplied_('نوع الإجراء التصحيحي غير صالح');
+    ensureSheet_(dbId, QUALITY_CAPA_SHEET, QUALITY_CAPA_HEADERS);
+    ensureSheet_(dbId, QUALITY_NCR_SHEET, QUALITY_NCR_HEADERS);
+    var result;
+    executeWithLock_(function () {
+      var sheet = getSheet_(QUALITY_CAPA_SHEET, dbId);
+      var rows = getAllRecords_(dbId, QUALITY_CAPA_SHEET);
+      var existing = uid ? qSopFindByUid_(rows, uid) : null;
+      if (uid && !existing) vfNotApplied_('الإجراء التصحيحي غير موجود');
+      if (ncrId && !qSopFindByUid_(getAllRecords_(dbId, QUALITY_NCR_SHEET), ncrId)) vfNotApplied_('عدم المطابقة غير موجود');
+      if (existing) {
+        var status = String(existing.status || '');
+        var toStatus = d.status !== undefined && d.status !== null ? String(d.status).trim() : '';
+        var changing = !!toStatus && toStatus !== status;
+        var editable = status === 'Assigned' || status === 'In Progress';
+        var patch = {};
+        if (changing) {
+          if (QUALITY_CAPA_STATUSES.indexOf(toStatus) === -1) vfNotApplied_('حالة الإجراء التصحيحي غير صالحة');
+          var legal = { 'Assigned': 'In Progress', 'In Progress': 'Done', 'Done': 'Verified', 'Verified': 'Closed' };
+          if (legal[status] !== toStatus) vfNotApplied_('انتقال حالة الإجراء التصحيحي غير مسموح');
+          /* اعتماد الفعالية قرار ضبط: كتابة الصفحة لا تكفي، لا بد من صلاحية كاملة. */
+          if (toStatus === 'Verified' || toStatus === 'Closed') {
+            if (!unifiedCheck_(user, COMPANY_UID, 'vf_quality_ncr', 'full')) vfNotApplied_('اعتماد الفعالية يتطلب صلاحية كاملة');
+          }
+          patch.status = toStatus;
+          if (toStatus === 'Done') {
+            patch.implemented_at = String(existing.implemented_at || '').trim() || String(d.implemented_at || '').trim() || new Date().toISOString();
+          }
+          if (toStatus === 'Verified') {
+            var effDate = String((d.effectiveness_check_date !== undefined && d.effectiveness_check_date !== null ? d.effectiveness_check_date : existing.effectiveness_check_date) || '').trim();
+            var effNotes = String((d.effectiveness_notes !== undefined && d.effectiveness_notes !== null ? d.effectiveness_notes : existing.effectiveness_notes) || '').trim();
+            if (!effDate || !effNotes) vfNotApplied_('تحقق الفعالية يتطلب تاريخ الفحص وملاحظات الفعالية');
+            patch.effectiveness_check_date = effDate;
+            patch.effectiveness_notes = effNotes;
+            patch.verified_by = actor;
+            patch.verified_at = new Date().toISOString();
+          }
+        } else if (!editable) {
+          var touched = ['action_type', 'description', 'owner_email', 'due_date', 'effectiveness_check_date', 'effectiveness_notes', 'attachment', 'attachment_id'].some(function (f) { return d[f] !== undefined; });
+          if (touched) vfNotApplied_('لا يمكن تعديل إجراء تصحيحي بعد اكتماله');
+        }
+        if (editable) {
+          if (actionType) patch.action_type = actionType;
+          if (d.description !== undefined && d.description !== null) patch.description = description;
+          qNcrPatchText_(patch, d, 'owner_email');
+          qNcrPatchText_(patch, d, 'due_date');
+          qNcrPatchText_(patch, d, 'effectiveness_check_date');
+          qNcrPatchText_(patch, d, 'effectiveness_notes');
+          if (d.attachment !== undefined || d.attachment_id !== undefined) {
+            patch.attachment = attachment;
+            patch.attachment_id = attachmentId;
+          }
+        }
+        if (!Object.keys(patch).length) {
+          result = { status: 'success', unique_id: uid, capa_code: String(existing.capa_code || ''), row_status: status };
+          return;
+        }
+        if (!patchRowByCriteria_(sheet, 'unique_id', uid, patch)) vfNotApplied_('الإجراء التصحيحي غير موجود');
+        qSopLog_(dbId, QUALITY_CAPA_SHEET, uid, existing.id, actor, 'update', patch, existing);
+        result = { status: 'success', unique_id: uid, capa_code: String(existing.capa_code || ''), row_status: patch.status || status };
+        return;
+      }
+      var code = qNcrNextCode_(rows, 'capa_code', 'CAPA');
+      var map = {
+        capa_code: code,
+        ncr_id: ncrId,
+        action_type: actionType,
+        description: description,
+        owner_email: String(d.owner_email || '').trim(),
+        due_date: String(d.due_date || '').trim(),
+        effectiveness_check_date: String(d.effectiveness_check_date || '').trim(),
+        status: 'Assigned',
+        implemented_at: '',
+        verified_by: '',
+        verified_at: '',
+        effectiveness_notes: String(d.effectiveness_notes || '').trim(),
+        attachment: attachment,
+        attachment_id: attachmentId
+      };
+      qSopStamp_(map, actor);
+      var inserted = addRecord_(dbId, QUALITY_CAPA_SHEET, map, ['capa_code', 'action_type', 'description', 'status']);
+      qSopLog_(dbId, QUALITY_CAPA_SHEET, map.unique_id, inserted.data.assignedId, actor, 'create', map, null);
+      result = { status: 'success', unique_id: map.unique_id, capa_code: code, row_status: 'Assigned' };
+    });
+    return result;
+  }
+
+  // ---- 16) تغيير حالة عدم المطابقة (انتقالات صارمة) ----
+  function changeQualityNcrStatus_(data, user, dbId) {
+    var d = data || {};
+    var uid = String(d.unique_id || '').trim();
+    if (!uid) vfNotApplied_('معرف عدم المطابقة مطلوب');
+    var toStatus = String(d.to_status || '').trim();
+    if (QUALITY_NCR_STATUSES.indexOf(toStatus) === -1) vfNotApplied_('حالة عدم المطابقة غير صالحة');
+    var actor = qSopActor_(user);
+    var comment = String(d.comment == null ? '' : d.comment).trim();
+    ensureSheet_(dbId, QUALITY_NCR_SHEET, QUALITY_NCR_HEADERS);
+    ensureSheet_(dbId, QUALITY_CAPA_SHEET, QUALITY_CAPA_HEADERS);
+    var result;
+    executeWithLock_(function () {
+      var sheet = getSheet_(QUALITY_NCR_SHEET, dbId);
+      var row = qSopFindByUid_(getAllRecords_(dbId, QUALITY_NCR_SHEET), uid);
+      if (!row) vfNotApplied_('عدم المطابقة غير موجود');
+      var from = String(row.status || '');
+      var patch = { status: toStatus };
+      var rootCause = String((d.root_cause !== undefined && d.root_cause !== null ? d.root_cause : row.root_cause) || '').trim();
+      var disposition = String((d.disposition !== undefined && d.disposition !== null ? d.disposition : row.disposition) || '').trim();
+      var capaRequired = (d.capa_required !== undefined && d.capa_required !== null) ? qNcrBool_(d.capa_required) : qNcrBool_(row.capa_required);
+      var justification = String((d.capa_justification !== undefined && d.capa_justification !== null ? d.capa_justification : row.capa_justification) || '').trim();
+      var linked = null;
+      function linkedCapas_() {
+        if (!linked) linked = qNcrLinkedCapas_(getAllRecords_(dbId, QUALITY_CAPA_SHEET), uid);
+        return linked;
+      }
+      if (toStatus === 'In Review') {
+        if (from !== 'Open') vfNotApplied_('انتقال حالة عدم المطابقة غير مسموح');
+        if (!rootCause || !disposition) vfNotApplied_('مراجعة عدم المطابقة تتطلب السبب الجذري والإجراء الفوري');
+        patch.root_cause = rootCause;
+        patch.disposition = disposition;
+        if (d.capa_required !== undefined) patch.capa_required = qNcrFlag_(capaRequired);
+      } else if (toStatus === 'CAPA Assigned') {
+        if (from !== 'In Review') vfNotApplied_('انتقال حالة عدم المطابقة غير مسموح');
+        if (!capaRequired) vfNotApplied_('حدد الحاجة إلى إجراء تصحيحي قبل الإسناد');
+        if (!linkedCapas_().length) vfNotApplied_('أضف إجراءً تصحيحياً واحداً على الأقل');
+        patch.capa_required = 'TRUE';
+      } else if (toStatus === 'Implemented') {
+        if (from === 'In Review') {
+          /* مسار الإكمال بلا إجراء تصحيحي: مبرر مكتوب إلزامي. */
+          if (capaRequired) vfNotApplied_('ألغِ الحاجة إلى إجراء تصحيحي أولاً');
+          if (!justification) vfNotApplied_('أدخل مبرر عدم الحاجة إلى إجراء تصحيحي');
+          patch.capa_required = 'FALSE';
+          patch.capa_justification = justification;
+        } else if (from === 'CAPA Assigned') {
+          var mine = linkedCapas_();
+          if (!mine.length) vfNotApplied_('أضف إجراءً تصحيحياً واحداً على الأقل');
+          if (!qNcrAllCapasDone_(mine)) vfNotApplied_('لا يمكن التنفيذ قبل إتمام جميع الإجراءات التصحيحية');
+        } else {
+          vfNotApplied_('انتقال حالة عدم المطابقة غير مسموح');
+        }
+      } else if (toStatus === 'Verified') {
+        if (from !== 'Implemented') vfNotApplied_('انتقال حالة عدم المطابقة غير مسموح');
+      } else if (toStatus === 'Cancelled') {
+        if (['Open', 'In Review', 'CAPA Assigned', 'Implemented'].indexOf(from) === -1) vfNotApplied_('انتقال حالة عدم المطابقة غير مسموح');
+      } else if (toStatus === 'Rejected') {
+        if (from !== 'Open' && from !== 'In Review') vfNotApplied_('انتقال حالة عدم المطابقة غير مسموح');
+      } else {
+        /* Open و Closed حالتان لا تُقصد مباشرةً: الإغلاق عبر close_quality_ncr. */
+        vfNotApplied_('انتقال حالة عدم المطابقة غير مسموح');
+      }
+      if (!patchRowByCriteria_(sheet, 'unique_id', uid, patch)) vfNotApplied_('عدم المطابقة غير موجود');
+      var logged = {};
+      Object.keys(patch).forEach(function (k) { logged[k] = patch[k]; });
+      if (comment) logged.comment = comment;
+      qSopLog_(dbId, QUALITY_NCR_SHEET, uid, row.id, actor, 'update', logged, { status: from });
+      result = { status: 'success', unique_id: uid, row_status: toStatus };
+    });
+    return result;
+  }
+
+  // ---- 17) إغلاق عدم المطابقة (قرار ضبط: الصفحة تطلب full) ----
+  function closeQualityNcr_(data, user, dbId) {
+    var uid = String((data || {}).unique_id || '').trim();
+    if (!uid) vfNotApplied_('معرف عدم المطابقة مطلوب');
+    ensureSheet_(dbId, QUALITY_NCR_SHEET, QUALITY_NCR_HEADERS);
+    var actor = qSopActor_(user);
+    var result;
+    executeWithLock_(function () {
+      var sheet = getSheet_(QUALITY_NCR_SHEET, dbId);
+      var row = qSopFindByUid_(getAllRecords_(dbId, QUALITY_NCR_SHEET), uid);
+      if (!row) vfNotApplied_('عدم المطابقة غير موجود');
+      if (String(row.status || '') !== 'Verified') vfNotApplied_('يمكن إغلاق عدم المطابقة بعد التحقق فقط');
+      var patch = { status: 'Closed', closed_by: actor, closed_at: new Date().toISOString() };
+      if (!patchRowByCriteria_(sheet, 'unique_id', uid, patch)) vfNotApplied_('عدم المطابقة غير موجود');
+      qSopLog_(dbId, QUALITY_NCR_SHEET, uid, row.id, actor, 'update', patch, row);
+      result = { status: 'success', unique_id: uid, row_status: 'Closed' };
+    });
+    return result;
+  }
+
+  /* ===================== QUALITY MODULE (v2) — PHASE 4: DASHBOARD + AUDITS =====================
+   * لوحة المؤشرات (قراءة دفعة واحدة عبر safeRows_، مُخبأة بمفتاح
+   * vfRefsCached_ kind 'quality_dashboard') والتدقيق الداخلي: تدقيق ← ملاحظات
+   * ← تصعيد إلى عدم مطابقة. كل رفض عبر vfNotApplied_ قبل أي كتابة، وكود
+   * التدقيق AUD-<YYYY>-NNN يُخصص داخل executeWithLock_ بمسح تفرد
+   * (qNcrNextCode_ نفسه المستخدم لأكواد NCR/CAPA)، والتصعيد يستخدم مُخصص
+   * أكواد NCR في Phase 3. أي كتابة جودة مسجَّلة بـ withRefBust_ فتُبطل طابع
+   * المراجع وتسقط اللوحة المخبأة. يعتمد أيضاً على qSopActor_ وqSopFindByUid_
+   * وqSopStamp_ وqSopLog_ وqSopToday_ وqNcrFlag_ وqNcrPatchText_ و
+   * qNcrNextCode_ وqNcrTodayMs_ وqNcrOverdue_ من الأقسام أعلاه. */
+  const QUALITY_AUDIT_SHEET = 'valley_quality_audits';
+  const QUALITY_AUDIT_FINDING_SHEET = 'valley_quality_audit_findings';
+  const QUALITY_AUDIT_HEADERS = [
+    'unique_id', 'id', 'audit_code', 'audit_date', 'audit_type', 'area',
+    'auditor_email', 'status', 'summary', 'attachment', 'attachment_id',
+    'user', 'created_at'
+  ];
+  const QUALITY_AUDIT_FINDING_HEADERS = [
+    'unique_id', 'id', 'audit_id', 'finding_no', 'finding_type', 'description',
+    'clause_ref', 'ncr_id', 'capa_required', 'status', 'user', 'created_at'
+  ];
+  const QUALITY_AUDIT_TYPES = [
+    { code: 'Internal', label: 'تدقيق داخلي' },
+    { code: 'Supplier', label: 'تدقيق موردين' },
+    { code: 'Customer', label: 'شكوى عميل' },
+    { code: 'Regulatory', label: 'جهة رقابية' }
+  ];
+  const QUALITY_AUDIT_STATUSES = ['Planned', 'In Progress', 'Completed', 'Closed'];
+  /* المسار الوحيد المسموح: Planned → In Progress → Completed → Closed. */
+  const QUALITY_AUDIT_LEGAL_NEXT = { 'Planned': 'In Progress', 'In Progress': 'Completed', 'Completed': 'Closed' };
+  const QUALITY_FINDING_TYPES = [
+    { code: 'Major', label: 'عدم مطابقة جوهرية' },
+    { code: 'Minor', label: 'عدم مطابقة ثانوية' },
+    { code: 'Observation', label: 'ملاحظة' }
+  ];
+  const QUALITY_FINDING_STATUSES = ['Open', 'Closed'];
+  /* تجميعات اللوحة: حالات NCR/CAPA المفتوحة وخريطة شدة التصعيد. */
+  const QUALITY_NCR_OPEN_STATUSES = ['Open', 'In Review', 'CAPA Assigned', 'Implemented'];
+  const QUALITY_CAPA_OPEN_STATUSES = ['Assigned', 'In Progress'];
+  const QUALITY_FINDING_ESCALATION_SEVERITY = { 'Major': 'Major', 'Minor': 'Minor', 'Observation': 'Minor' };
+
+  function qAudTypeLabel_(code) {
+    for (var i = 0; i < QUALITY_AUDIT_TYPES.length; i++) {
+      if (QUALITY_AUDIT_TYPES[i].code === code) return QUALITY_AUDIT_TYPES[i].label;
+    }
+    return '';
+  }
+
+  function qAudFindingTypeLabel_(code) {
+    for (var i = 0; i < QUALITY_FINDING_TYPES.length; i++) {
+      if (QUALITY_FINDING_TYPES[i].code === code) return QUALITY_FINDING_TYPES[i].label;
+    }
+    return '';
+  }
+
+  /** مفتاح 'YYYY-MM-DD' من قيمة تاريخ، للمقارنة النصية مع تاريخ اليوم. */
+  function qAudDateKey_(v) {
+    if (v instanceof Date && !isNaN(v.getTime())) {
+      var p = function (n) { return (n < 10 ? '0' : '') + n; };
+      return v.getFullYear() + '-' + p(v.getMonth() + 1) + '-' + p(v.getDate());
+    }
+    var s = String(v == null ? '' : v).trim();
+    var m = /^(\d{4}-\d{2}-\d{2})/.exec(s);
+    return m ? m[1] : s;
+  }
+
+  /** نسبة الالتزام بالإقرارات: تقريب صحيح، و100 عندما لا يوجد مقام. */
+  function qAudCompliancePct_(signed, denominator) {
+    return denominator ? Math.round(100 * signed / denominator) : 100;
+  }
+
+  /** أحدث الصفوف أولاً حسب حقل تاريخ، ثم الكود تنازلياً عند تساوي التاريخ. */
+  function qAudSortRecent_(rows, dateField, codeField) {
+    return (rows || []).slice().sort(function (a, b) {
+      var da = qAudDateKey_(a[dateField]);
+      var db = qAudDateKey_(b[dateField]);
+      if (da !== db) return da < db ? 1 : -1;
+      var ca = String(a[codeField] == null ? '' : a[codeField]);
+      var cb = String(b[codeField] == null ? '' : b[codeField]);
+      if (ca === cb) return 0;
+      return ca < cb ? 1 : -1;
+    });
+  }
+
+  // ---- 18) لوحة المؤشرات: قراءة واحدة مُخبأة بلا أي كتابة ----
+  function getQualityDashboard_(data, user, dbId) {
+    return vfRefsCached_(dbId, 'quality_dashboard', function () {
+      ensureSheet_(dbId, QUALITY_SOP_SHEET, QUALITY_SOP_HEADERS);
+      ensureSheet_(dbId, QUALITY_SOP_VERSIONS_SHEET, QUALITY_SOP_VERSION_HEADERS);
+      ensureSheet_(dbId, QUALITY_SOP_ACKS_SHEET, QUALITY_SOP_ACK_HEADERS);
+      ensureSheet_(dbId, QUALITY_NCR_SHEET, QUALITY_NCR_HEADERS);
+      ensureSheet_(dbId, QUALITY_CAPA_SHEET, QUALITY_CAPA_HEADERS);
+      ensureSheet_(dbId, QUALITY_AUDIT_SHEET, QUALITY_AUDIT_HEADERS);
+      ensureSheet_(dbId, QUALITY_AUDIT_FINDING_SHEET, QUALITY_AUDIT_FINDING_HEADERS);
+      var sops = safeRows_(dbId, QUALITY_SOP_SHEET);
+      var versions = safeRows_(dbId, QUALITY_SOP_VERSIONS_SHEET);
+      var acks = safeRows_(dbId, QUALITY_SOP_ACKS_SHEET);
+      var ncrs = safeRows_(dbId, QUALITY_NCR_SHEET);
+      var capas = safeRows_(dbId, QUALITY_CAPA_SHEET);
+      var audits = safeRows_(dbId, QUALITY_AUDIT_SHEET);
+      var findings = safeRows_(dbId, QUALITY_AUDIT_FINDING_SHEET);
+      var today = qSopToday_();
+      var todayMs = qNcrTodayMs_();
+
+      /* النسخة السارية لكل إجراء: الصف الفعلي فقط، لا مجرد رقم مخزَّن. */
+      var effectiveBySopVersion = {};
+      versions.forEach(function (v) {
+        if (String(v.status || '') !== 'Effective') return;
+        effectiveBySopVersion[String(v.sop_id == null ? '' : v.sop_id).trim() + '|' +
+          String(v.version == null ? '' : v.version).trim()] = v;
+      });
+      var sopsEffective = 0;
+      sops.forEach(function (s) {
+        var eff = String(s.current_effective_version == null ? '' : s.current_effective_version).trim();
+        if (!eff) return;
+        if (effectiveBySopVersion[String(s.unique_id == null ? '' : s.unique_id).trim() + '|' + eff]) sopsEffective++;
+      });
+      var sopsInReview = 0;
+      var sopsReviewOverdue = 0;
+      versions.forEach(function (v) {
+        var st = String(v.status || '');
+        if (st === 'In Review') sopsInReview++;
+        if (st !== 'Effective') return;
+        var review = String(v.next_review_date == null ? '' : v.next_review_date).trim();
+        if (review && qAudDateKey_(review) < today) sopsReviewOverdue++;
+      });
+
+      var acksPending = 0, acksRead = 0, acksSigned = 0, acksSuperseded = 0;
+      acks.forEach(function (a) {
+        var st = String(a.status || '');
+        if (st === 'Pending') acksPending++;
+        else if (st === 'Read') acksRead++;
+        else if (st === 'Signed') acksSigned++;
+        else if (st === 'Superseded') acksSuperseded++;
+      });
+
+      var ncrsOpen = 0, ncrsOpenMinor = 0, ncrsOpenMajor = 0, ncrsOpenCritical = 0, ncrsOpenOther = 0, ncrsClosed = 0;
+      ncrs.forEach(function (n) {
+        var st = String(n.status || '');
+        if (st === 'Closed') ncrsClosed++;
+        if (QUALITY_NCR_OPEN_STATUSES.indexOf(st) === -1) return;
+        ncrsOpen++;
+        var sev = String(n.severity == null ? '' : n.severity).trim().toLowerCase();
+        if (sev === 'minor') ncrsOpenMinor++;
+        else if (sev === 'major') ncrsOpenMajor++;
+        else if (sev === 'critical') ncrsOpenCritical++;
+        else ncrsOpenOther++;
+      });
+
+      var capasOpen = 0, capasOverdue = 0, capasDone = 0;
+      capas.forEach(function (c) {
+        var st = String(c.status || '');
+        if (QUALITY_CAPA_OPEN_STATUSES.indexOf(st) !== -1) capasOpen++;
+        if (QUALITY_CAPA_DONE_STATUSES.indexOf(st) !== -1) capasDone++;
+        if (qNcrOverdue_(c, todayMs).overdue) capasOverdue++;
+      });
+
+      var auditsPlanned = 0, auditsInProgress = 0, auditsCompleted = 0;
+      audits.forEach(function (a) {
+        var st = String(a.status || '');
+        if (st === 'Planned') auditsPlanned++;
+        else if (st === 'In Progress') auditsInProgress++;
+        else if (st === 'Completed') auditsCompleted++;
+      });
+      var findingsOpen = 0;
+      var findingsOpenByAudit = {};
+      findings.forEach(function (f) {
+        if (String(f.status || '') !== 'Open') return;
+        findingsOpen++;
+        var key = String(f.audit_id == null ? '' : f.audit_id).trim();
+        findingsOpenByAudit[key] = (findingsOpenByAudit[key] || 0) + 1;
+      });
+
+      /* إقرارات كل (إجراء، إصدار) مرة واحدة لصفوف الجدول. */
+      var ackStats = {};
+      acks.forEach(function (a) {
+        var key = String(a.sop_id == null ? '' : a.sop_id).trim() + '|' +
+          String(a.sop_version == null ? '' : a.sop_version).trim();
+        if (!ackStats[key]) ackStats[key] = { pending: 0, read: 0, signed: 0 };
+        var st = String(a.status || '');
+        if (st === 'Pending') ackStats[key].pending++;
+        else if (st === 'Read') ackStats[key].read++;
+        else if (st === 'Signed') ackStats[key].signed++;
+      });
+      var sopRows = [];
+      sops.forEach(function (s) {
+        var eff = String(s.current_effective_version == null ? '' : s.current_effective_version).trim();
+        if (!eff) return;
+        var key = String(s.unique_id == null ? '' : s.unique_id).trim() + '|' + eff;
+        var versionRow = effectiveBySopVersion[key];
+        if (!versionRow) return;
+        var stats = ackStats[key] || { pending: 0, read: 0, signed: 0 };
+        sopRows.push({
+          unique_id: s.unique_id,
+          sop_code: s.sop_code,
+          title_ar: s.title_ar,
+          current_effective_version: eff,
+          next_review_date: versionRow.next_review_date == null ? '' : versionRow.next_review_date,
+          acks_pending: stats.pending,
+          acks_signed: stats.signed,
+          compliance_pct: qAudCompliancePct_(stats.signed, stats.pending + stats.read + stats.signed)
+        });
+      });
+
+      var ncrCodeById = {};
+      ncrs.forEach(function (n) {
+        ncrCodeById[String(n.unique_id == null ? '' : n.unique_id).trim()] = String(n.ncr_code == null ? '' : n.ncr_code);
+      });
+      var ncrsRecent = qAudSortRecent_(ncrs, 'ncr_date', 'ncr_code').slice(0, 10).map(function (n) {
+        return {
+          ncr_code: n.ncr_code,
+          ncr_date: n.ncr_date,
+          severity: n.severity,
+          status: n.status,
+          description: String(n.description == null ? '' : n.description).slice(0, 120)
+        };
+      });
+      var capasOverdueList = capas.map(function (c) {
+        var over = qNcrOverdue_(c, todayMs);
+        if (!over.overdue) return null;
+        var ncrUid = String(c.ncr_id == null ? '' : c.ncr_id).trim();
+        return {
+          capa_code: c.capa_code,
+          ncr_code: (ncrUid && ncrCodeById[ncrUid]) ? ncrCodeById[ncrUid] : 'مستقل',
+          owner_email: c.owner_email,
+          due_date: c.due_date,
+          days_overdue: over.days_overdue
+        };
+      }).filter(Boolean).sort(function (a, b) { return b.days_overdue - a.days_overdue; });
+      var auditsRecent = qAudSortRecent_(audits, 'audit_date', 'audit_code').slice(0, 10).map(function (a) {
+        return {
+          audit_code: a.audit_code,
+          audit_date: a.audit_date,
+          audit_type: a.audit_type,
+          area: a.area,
+          status: a.status,
+          findings_open: findingsOpenByAudit[String(a.unique_id == null ? '' : a.unique_id).trim()] || 0
+        };
+      });
+
+      return {
+        status: 'success',
+        kpis: {
+          sops_total: sops.length,
+          sops_effective: sopsEffective,
+          sops_in_review: sopsInReview,
+          sops_review_overdue: sopsReviewOverdue,
+          acks_pending: acksPending,
+          acks_read: acksRead,
+          acks_signed: acksSigned,
+          acks_superseded: acksSuperseded,
+          acks_compliance_pct: qAudCompliancePct_(acksSigned, acksPending + acksRead + acksSigned),
+          ncrs_open: ncrsOpen,
+          ncrs_open_minor: ncrsOpenMinor,
+          ncrs_open_major: ncrsOpenMajor,
+          ncrs_open_critical: ncrsOpenCritical,
+          ncrs_open_other: ncrsOpenOther,
+          ncrs_closed: ncrsClosed,
+          capas_open: capasOpen,
+          capas_overdue: capasOverdue,
+          capas_done: capasDone,
+          audits_planned: auditsPlanned,
+          audits_in_progress: auditsInProgress,
+          audits_completed: auditsCompleted,
+          findings_open: findingsOpen
+        },
+        sops: sopRows,
+        ncrs_recent: ncrsRecent,
+        capas_overdue_list: capasOverdueList,
+        audits_recent: auditsRecent,
+        generated_at: new Date().toISOString()
+      };
+    });
+  }
+
+  // ---- 19) قراءة صفحة التدقيق: الجداول الثلاثة دفعة واحدة ----
+  function getQualityAudits_(data, user, dbId) {
+    ensureSheet_(dbId, QUALITY_AUDIT_SHEET, QUALITY_AUDIT_HEADERS);
+    ensureSheet_(dbId, QUALITY_AUDIT_FINDING_SHEET, QUALITY_AUDIT_FINDING_HEADERS);
+    ensureSheet_(dbId, QUALITY_NCR_SHEET, QUALITY_NCR_HEADERS);
+    return {
+      status: 'success',
+      audits: safeRows_(dbId, QUALITY_AUDIT_SHEET),
+      findings: safeRows_(dbId, QUALITY_AUDIT_FINDING_SHEET),
+      ncrs: safeRows_(dbId, QUALITY_NCR_SHEET).map(function (n) {
+        return { unique_id: n.unique_id, ncr_code: n.ncr_code, status: n.status };
+      }),
+      audit_types: QUALITY_AUDIT_TYPES,
+      finding_types: QUALITY_FINDING_TYPES
+    };
+  }
+
+  // ---- 20) إنشاء/تعديل تدقيق ----
+  function saveQualityAudit_(data, user, dbId) {
+    var d = data || {};
+    var uid = String(d.unique_id || '').trim();
+    var auditType = String(d.audit_type || '').trim();
+    if (auditType && !qAudTypeLabel_(auditType)) vfNotApplied_('نوع التدقيق غير صالح');
+    var actor = qSopActor_(user);
+    var attachment = String(d.attachment == null ? '' : d.attachment).trim();
+    /* التثبيت قبل أي كتابة: مرجع بلا معرّف Drive صالح يُرفض. */
+    var attachmentId = requireAttachmentBinding_(attachment, d.attachment_id, 'مرفق التدقيق');
+    ensureSheet_(dbId, QUALITY_AUDIT_SHEET, QUALITY_AUDIT_HEADERS);
+    var result;
+    executeWithLock_(function () {
+      var sheet = getSheet_(QUALITY_AUDIT_SHEET, dbId);
+      var rows = getAllRecords_(dbId, QUALITY_AUDIT_SHEET);
+      var existing = uid ? qSopFindByUid_(rows, uid) : null;
+      if (uid && !existing) vfNotApplied_('التدقيق غير موجود');
+      if (existing) {
+        var status = String(existing.status || '');
+        if (status === 'Closed') vfNotApplied_('لا يمكن تعديل تدقيق مغلق');
+        var toStatus = d.status !== undefined && d.status !== null ? String(d.status).trim() : '';
+        if (toStatus && toStatus !== status) {
+          if (QUALITY_AUDIT_STATUSES.indexOf(toStatus) === -1) vfNotApplied_('حالة التدقيق غير صالحة');
+          if (QUALITY_AUDIT_LEGAL_NEXT[status] !== toStatus) vfNotApplied_('انتقال حالة التدقيق غير مسموح');
+        }
+        var patch = {};
+        if (auditType) patch.audit_type = auditType;
+        qNcrPatchText_(patch, d, 'area');
+        qNcrPatchText_(patch, d, 'auditor_email');
+        qNcrPatchText_(patch, d, 'summary');
+        if (d.audit_date !== undefined && d.audit_date !== null) {
+          patch.audit_date = String(d.audit_date).trim() || String(existing.audit_date || '');
+        }
+        if (toStatus && toStatus !== status) patch.status = toStatus;
+        if (d.attachment !== undefined || d.attachment_id !== undefined) {
+          patch.attachment = attachment;
+          patch.attachment_id = attachmentId;
+        }
+        if (!Object.keys(patch).length) {
+          result = { status: 'success', unique_id: uid, audit_code: String(existing.audit_code || ''), row_status: status };
+          return;
+        }
+        if (!patchRowByCriteria_(sheet, 'unique_id', uid, patch)) vfNotApplied_('التدقيق غير موجود');
+        qSopLog_(dbId, QUALITY_AUDIT_SHEET, uid, existing.id, actor, 'update', patch, existing);
+        result = {
+          status: 'success',
+          unique_id: uid,
+          audit_code: String(existing.audit_code || ''),
+          row_status: patch.status || status
+        };
+        return;
+      }
+      if (!auditType) vfNotApplied_('نوع التدقيق مطلوب');
+      var wantStatus = String(d.status || '').trim();
+      if (wantStatus && wantStatus !== 'Planned') vfNotApplied_('يبدأ التدقيق بحالة مخطط');
+      var code = qNcrNextCode_(rows, 'audit_code', 'AUD');
+      var map = {
+        audit_code: code,
+        audit_date: String(d.audit_date || '').trim() || qSopToday_(),
+        audit_type: auditType,
+        area: String(d.area || '').trim(),
+        auditor_email: String(d.auditor_email || '').trim() || actor,
+        status: 'Planned',
+        summary: String(d.summary || '').trim(),
+        attachment: attachment,
+        attachment_id: attachmentId
+      };
+      qSopStamp_(map, actor);
+      var inserted = addRecord_(dbId, QUALITY_AUDIT_SHEET, map, ['audit_code', 'audit_date', 'audit_type', 'status']);
+      qSopLog_(dbId, QUALITY_AUDIT_SHEET, map.unique_id, inserted.data.assignedId, actor, 'create', map, null);
+      result = { status: 'success', unique_id: map.unique_id, audit_code: code, row_status: 'Planned' };
+    });
+    return result;
+  }
+
+  // ---- 21) إنشاء/تعديل/حذف ملاحظة تدقيق ----
+  function saveQualityFinding_(data, user, dbId) {
+    var d = data || {};
+    var uid = String(d.unique_id || '').trim();
+    var auditId = String(d.audit_id || '').trim();
+    var findingType = String(d.finding_type || '').trim();
+    if (findingType && !qAudFindingTypeLabel_(findingType)) vfNotApplied_('نوع الملاحظة غير صالح');
+    var remove = d.remove === true || String(d.remove).toLowerCase() === 'true';
+    var actor = qSopActor_(user);
+    ensureSheet_(dbId, QUALITY_AUDIT_SHEET, QUALITY_AUDIT_HEADERS);
+    ensureSheet_(dbId, QUALITY_AUDIT_FINDING_SHEET, QUALITY_AUDIT_FINDING_HEADERS);
+    var result;
+    executeWithLock_(function () {
+      var sheet = getSheet_(QUALITY_AUDIT_FINDING_SHEET, dbId);
+      var rows = getAllRecords_(dbId, QUALITY_AUDIT_FINDING_SHEET);
+      var existing = uid ? qSopFindByUid_(rows, uid) : null;
+      if (uid && !existing) vfNotApplied_('الملاحظة غير موجودة');
+      var auditUid = existing ? String(existing.audit_id == null ? '' : existing.audit_id).trim() : auditId;
+      if (!auditUid) vfNotApplied_('التدقيق مطلوب');
+      var audit = qSopFindByUid_(getAllRecords_(dbId, QUALITY_AUDIT_SHEET), auditUid);
+      if (!audit) vfNotApplied_('التدقيق غير موجود');
+      if (String(audit.status || '') === 'Closed') vfNotApplied_('لا يمكن تعديل تدقيق مغلق');
+      if (remove) {
+        if (!uid) vfNotApplied_('معرف الملاحظة مطلوب');
+        if (String(existing.ncr_id == null ? '' : existing.ncr_id).trim()) {
+          vfNotApplied_('لا يمكن حذف ملاحظة مرتبطة بعدم مطابقة');
+        }
+        if (!deleteRowsByCriteria_(sheet, 'unique_id', uid)) vfNotApplied_('الملاحظة غير موجودة');
+        qSopLog_(dbId, QUALITY_AUDIT_FINDING_SHEET, uid, existing.id, actor, 'delete', null, existing);
+        result = { status: 'success', unique_id: uid, finding_no: Number(existing.finding_no) || 0, removed: true };
+        return;
+      }
+      if (existing) {
+        var status = String(existing.status || '');
+        var toStatus = d.status !== undefined && d.status !== null ? String(d.status).trim() : '';
+        if (toStatus && QUALITY_FINDING_STATUSES.indexOf(toStatus) === -1) vfNotApplied_('حالة الملاحظة غير صالحة');
+        if (toStatus && toStatus !== status && !(status === 'Open' && toStatus === 'Closed')) {
+          vfNotApplied_('انتقال حالة الملاحظة غير مسموح');
+        }
+        var patch = {};
+        if (findingType) patch.finding_type = findingType;
+        if (d.description !== undefined && d.description !== null) {
+          var edited = String(d.description).trim();
+          if (!edited) vfNotApplied_('وصف الملاحظة مطلوب');
+          patch.description = edited;
+        }
+        qNcrPatchText_(patch, d, 'clause_ref');
+        if (d.capa_required !== undefined && d.capa_required !== null) patch.capa_required = qNcrFlag_(d.capa_required);
+        if (toStatus && toStatus !== status) patch.status = toStatus;
+        if (!Object.keys(patch).length) {
+          result = { status: 'success', unique_id: uid, finding_no: Number(existing.finding_no) || 0 };
+          return;
+        }
+        if (!patchRowByCriteria_(sheet, 'unique_id', uid, patch)) vfNotApplied_('الملاحظة غير موجودة');
+        qSopLog_(dbId, QUALITY_AUDIT_FINDING_SHEET, uid, existing.id, actor, 'update', patch, existing);
+        result = { status: 'success', unique_id: uid, finding_no: Number(existing.finding_no) || 0 };
+        return;
+      }
+      var description = String(d.description == null ? '' : d.description).trim();
+      if (!description) vfNotApplied_('وصف الملاحظة مطلوب');
+      if (!findingType) vfNotApplied_('نوع الملاحظة مطلوب');
+      /* الترقيم داخل القفل: أكبر رقم موجود لنفس التدقيق + 1. */
+      var maxNo = 0;
+      rows.forEach(function (f) {
+        if (String(f.audit_id == null ? '' : f.audit_id).trim() !== auditUid) return;
+        var n = Number(f.finding_no) || 0;
+        if (n > maxNo) maxNo = n;
+      });
+      var map = {
+        audit_id: auditUid,
+        finding_no: maxNo + 1,
+        finding_type: findingType,
+        description: description,
+        clause_ref: String(d.clause_ref || '').trim(),
+        ncr_id: '',
+        capa_required: qNcrFlag_(d.capa_required),
+        status: 'Open'
+      };
+      qSopStamp_(map, actor);
+      var inserted = addRecord_(dbId, QUALITY_AUDIT_FINDING_SHEET, map, ['audit_id', 'finding_no', 'finding_type', 'description', 'status']);
+      qSopLog_(dbId, QUALITY_AUDIT_FINDING_SHEET, map.unique_id, inserted.data.assignedId, actor, 'create', map, null);
+      result = { status: 'success', unique_id: map.unique_id, finding_no: map.finding_no };
+    });
+    return result;
+  }
+
+  // ---- 22) تصعيد ملاحظة إلى عدم مطابقة (رابط عكسي على الملاحظة) ----
+  function escalateFindingToNcr_(data, user, dbId) {
+    var uid = String((data || {}).unique_id || '').trim();
+    if (!uid) vfNotApplied_('معرف الملاحظة مطلوب');
+    var actor = qSopActor_(user);
+    ensureSheet_(dbId, QUALITY_AUDIT_SHEET, QUALITY_AUDIT_HEADERS);
+    ensureSheet_(dbId, QUALITY_AUDIT_FINDING_SHEET, QUALITY_AUDIT_FINDING_HEADERS);
+    ensureSheet_(dbId, QUALITY_NCR_SHEET, QUALITY_NCR_HEADERS);
+    var result;
+    executeWithLock_(function () {
+      var findingSheet = getSheet_(QUALITY_AUDIT_FINDING_SHEET, dbId);
+      var finding = qSopFindByUid_(getAllRecords_(dbId, QUALITY_AUDIT_FINDING_SHEET), uid);
+      if (!finding) vfNotApplied_('الملاحظة غير موجودة');
+      if (String(finding.ncr_id == null ? '' : finding.ncr_id).trim()) vfNotApplied_('تم تصعيد هذه الملاحظة مسبقاً');
+      var audit = qSopFindByUid_(getAllRecords_(dbId, QUALITY_AUDIT_SHEET), String(finding.audit_id == null ? '' : finding.audit_id).trim());
+      if (!audit) vfNotApplied_('التدقيق غير موجود');
+      if (String(audit.status || '') === 'Closed') vfNotApplied_('لا يمكن تعديل تدقيق مغلق');
+      var auditCode = String(audit.audit_code == null ? '' : audit.audit_code);
+      var clauseRef = String(finding.clause_ref == null ? '' : finding.clause_ref).trim();
+      var findingType = String(finding.finding_type || '').trim();
+      var ncrRows = getAllRecords_(dbId, QUALITY_NCR_SHEET);
+      var code = qNcrNextCode_(ncrRows, 'ncr_code', 'NCR');
+      var map = {
+        ncr_code: code,
+        ncr_date: qSopToday_(),
+        source: 'Audit',
+        severity: QUALITY_FINDING_ESCALATION_SEVERITY[findingType] || 'Minor',
+        description: 'تدقيق ' + auditCode + (clauseRef ? ' — بند ' + clauseRef : '') + ': ' +
+          String(finding.description == null ? '' : finding.description),
+        product_id: '',
+        batch_code: '',
+        mo_uid: '',
+        department: String(audit.area == null ? '' : audit.area).trim(),
+        detected_by: actor,
+        disposition: '',
+        capa_required: 'FALSE',
+        capa_justification: '',
+        status: 'Open',
+        root_cause: '',
+        closed_by: '',
+        closed_at: '',
+        attachment: '',
+        attachment_id: ''
+      };
+      qSopStamp_(map, actor);
+      /* الرابط العكسي أولاً: فشله يمنع إنشاء NCR يتيم بلا ملاحظة مصعَّدة. */
+      if (!patchRowByCriteria_(findingSheet, 'unique_id', uid, { ncr_id: map.unique_id })) {
+        vfNotApplied_('الملاحظة غير موجودة');
+      }
+      var inserted = addRecord_(dbId, QUALITY_NCR_SHEET, map, ['ncr_code', 'ncr_date', 'description', 'status']);
+      qSopLog_(dbId, QUALITY_NCR_SHEET, map.unique_id, inserted.data.assignedId, actor, 'create', map, null);
+      qSopLog_(dbId, QUALITY_AUDIT_FINDING_SHEET, uid, finding.id, actor, 'update', { ncr_id: map.unique_id }, finding);
+      result = { status: 'success', ncr_unique_id: map.unique_id, ncr_code: code };
+    });
+    return result;
+  }
+  // ===================== QUALITY MODULE END =====================
+
   // ===================== REGISTER =====================
   if (typeof ValleyFoods !== 'undefined' && typeof ValleyFoods.register === 'function') {
     ValleyFoods.register('get_deductions_data',       getDeductionsData_);
@@ -14177,6 +16132,34 @@ map['actual_hours'] = Math.round(totalHours * 100) / 100;
   ValleyFoods.register('save_valley_asset_technical', withRefBust_(saveValleyAssetTechnical_, ['asset_technicals']));
   ValleyFoods.register('get_valley_work_center_assets', getValleyWorkCenterAssets_);
   ValleyFoods.register('save_valley_work_center_asset', saveValleyWorkCenterAsset_);
+
+  // ===================== QUALITY MODULE (SOP) =====================
+  ValleyFoods.register('get_quality_sops', getQualitySops_);
+  ValleyFoods.register('save_quality_sop', withRefBust_(saveQualitySop_, ['quality_sops']));
+  ValleyFoods.register('save_quality_sop_version', withRefBust_(saveQualitySopVersion_, ['quality_sops']));
+  ValleyFoods.register('submit_quality_sop_version', withRefBust_(submitQualitySopVersion_, ['quality_sops']));
+  ValleyFoods.register('approve_quality_sop_version', withRefBust_(approveQualitySopVersion_, ['quality_sops']));
+  ValleyFoods.register('reject_quality_sop_version', withRefBust_(rejectQualitySopVersion_, ['quality_sops']));
+  ValleyFoods.register('make_effective_quality_sop_version', withRefBust_(makeEffectiveQualitySopVersion_, ['quality_sops']));
+  ValleyFoods.register('save_quality_sop_forms', withRefBust_(saveQualitySopForms_, ['quality_sops']));
+  /* Phase 2 — الإقرارات. القراءة بلا بست، والكتابة تُبطل مراجع الجودة بعدها. */
+  ValleyFoods.register('launch_quality_acks', withRefBust_(launchQualityAcks_, ['quality_sops']));
+  ValleyFoods.register('get_quality_my_acks', getQualityMyAcks_);
+  ValleyFoods.register('sign_quality_ack', withRefBust_(signQualityAck_, ['quality_sops']));
+  ValleyFoods.register('record_quality_ack', withRefBust_(recordQualityAck_, ['quality_sops']));
+  /* Phase 3 — NCR/CAPA. القراءة بلا بست، والكتابة تُبطل مراجع الجودة بعدها. */
+  ValleyFoods.register('get_quality_ncr', getQualityNcr_);
+  ValleyFoods.register('save_quality_ncr', withRefBust_(saveQualityNcr_, ['quality_ncr']));
+  ValleyFoods.register('save_quality_capa', withRefBust_(saveQualityCapa_, ['quality_ncr']));
+  ValleyFoods.register('change_quality_ncr_status', withRefBust_(changeQualityNcrStatus_, ['quality_ncr']));
+  ValleyFoods.register('close_quality_ncr', withRefBust_(closeQualityNcr_, ['quality_ncr']));
+  /* Phase 4 — اللوحة والتدقيق. اللوحة تُخبأ داخلياً بـ vfRefsCached_، وأي
+     كتابة هنا (أو في أي إجراء جودة آخر) تُبطل الطابع فتسقط اللوحة المخبأة. */
+  ValleyFoods.register('get_quality_dashboard', getQualityDashboard_);
+  ValleyFoods.register('get_quality_audits', getQualityAudits_);
+  ValleyFoods.register('save_quality_audit', withRefBust_(saveQualityAudit_, ['quality_audits']));
+  ValleyFoods.register('save_quality_finding', withRefBust_(saveQualityFinding_, ['quality_audits']));
+  ValleyFoods.register('escalate_finding_to_ncr', withRefBust_(escalateFindingToNcr_, ['quality_audits', 'quality_ncr']));
 
   function prefetchRefs_(data, user, dbId) {
     /* Phase 7.2 — this used to warm five kinds as RAW record arrays under the
@@ -14533,6 +16516,11 @@ ValleyFoods.blockTheme_ = function () { return { from: '#054719', to: '#16a34a' 
 ValleyFoods.attachmentPolicy_ = function () { return {
   vf_hr_deductions: { company: '9940659bd83035d7', sheet: 'valley_emp_deductions', idField: 'unique_id', fileFields: ['deduction_attachement'], folder: 'valley_emp_deductions_Files_' },
   vf_hr_overtime: { company: '9940659bd83035d7', sheet: 'valley_emp_overtime', idField: 'unique_id', fileFields: ['overtime_attachement'], folder: 'valley_emp_overtime_Files_' },
-  vf_hr_vacations: { company: '9940659bd83035d7', sheet: 'valley_employee_vacations', idField: 'unique_id', fileFields: ['attachment'], folder: 'valley_employee_vacations_Files_' }
+  vf_hr_vacations: { company: '9940659bd83035d7', sheet: 'valley_employee_vacations', idField: 'unique_id', fileFields: ['attachment'], folder: 'valley_employee_vacations_Files_' },
+  vf_cash: { company: '9940659bd83035d7', sheet: 'valley_cash_bank_movement', idField: 'transaction_id', fileFields: ['attachment'], folder: 'valley_cash_bank_movement_Files_' },
+  vf_quality_my_acks: { company: '9940659bd83035d7', sheet: 'valley_quality_sop_versions', idField: 'unique_id', fileFields: ['pdf_ref'], folder: 'valley_quality_sop_versions_Files_' },
+  vf_quality_ncr: { company: '9940659bd83035d7', sheet: 'valley_quality_ncrs', idField: 'unique_id', fileFields: ['attachment'], folder: 'valley_quality_ncrs_Files_',
+    altSheets: [{ sheet: 'valley_quality_capas', idField: 'unique_id', fileFields: ['attachment'] }] },
+  vf_quality_audits: { company: '9940659bd83035d7', sheet: 'valley_quality_audits', idField: 'unique_id', fileFields: ['attachment'], folder: 'valley_quality_audits_Files_' }
 }; };
 ValleyFoods.artifactHandlers_ = {};

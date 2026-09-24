@@ -223,11 +223,20 @@
           checkbox('f-alloc', 'يتطلب تخصيص رصيد قبل الاستخدام', row && (row.require_allocation === true || String(row.require_allocation).toLowerCase() === 'true')) +
           (isEdit ? '<input type="hidden" id="f-editing" value="1">' : '');
       } else {
+        var wdOpts = ((CACHE[CURRENT_TAB] || {}).weekday_options || []).map(function (w) { return { value: w.value, label: w.label }; });
+        var weekendField = wdOpts.length
+          ? UIC.field({ key: 'f-weekend', label: 'يوم الراحة الأسبوعية', type: 'select', combo: false, required: true, placeholder: 'اختر اليوم…', options: wdOpts, value: row ? (row.weekend_day == null ? '' : String(row.weekend_day)) : '' })
+          : '<div class="form-field"><label class="form-label">يوم الراحة الأسبوعية</label><div class="input" style="background:var(--bg-subtle,#f3f4f6);color:var(--text-muted,#6b7280);">جدول أيام الأسبوع (valley_weekday) غير موجود — أضفه أولاً</div></div>';
+        var activeOn = !row || !(row.is_active === false || String(row.is_active).toLowerCase() === 'false');
         body += '<input type="hidden" id="f-key" value="' + esc(row ? row.shift_unique_id : '') + '">' +
           UIC.field({ key: 'f-name', label: 'اسم الوردية', type: 'text', required: true, value: row ? row.shift_name : '' }) +
-          UIC.field({ key: 'f-type', label: 'النوع (اختياري)', type: 'text', value: row ? (row.shift_type || '') : '' }) +
+          UIC.field({ key: 'f-type', label: 'النوع', type: 'select', combo: false, required: true, placeholder: 'اختر النوع…', options: [{ value: 'Fixed Shift', label: 'Fixed Shift' }, { value: 'Variable Shift', label: 'Variable Shift' }], value: row ? (row.shift_type || '') : '' }) +
           UIC.field({ key: 'f-start', label: 'من', type: 'time', required: true, value: row ? (row.shift_start_time_display || '') : '08:00' }) +
-          UIC.field({ key: 'f-end', label: 'إلى', type: 'time', required: true, value: row ? (row.shift_end_time_display || '') : '16:00' });
+          UIC.field({ key: 'f-end', label: 'إلى', type: 'time', required: true, value: row ? (row.shift_end_time_display || '') : '16:00' }) +
+          UIC.field({ key: 'f-grace', label: 'فترة السماح (دقائق)', type: 'number', required: true, min: '0', step: '1', value: (row && row.grace_period !== '' && row.grace_period != null) ? row.grace_period : '' }) +
+          weekendField +
+          '<div class="form-field"><label class="form-label">مدة الوردية (ساعات — تُحسب تلقائياً)</label><div id="f-period-view" class="input" style="background:var(--bg-subtle,#f3f4f6);">-</div></div>' +
+          checkbox('f-active', 'مفعّلة', activeOn);
       }
 
       UIC.openModal('hr-settings-modal', {
@@ -235,6 +244,11 @@
         body: '<form id="hr-settings-form">' + body + '</form>',
         onSave: 'SETTINGS_PAGE.save()'
       });
+      var psEl = document.getElementById('f-start'), peEl = document.getElementById('f-end'), pvEl = document.getElementById('f-period-view');
+      var updPeriod = function () { if (pvEl) pvEl.textContent = shiftHoursPreview_(psEl && psEl.value, peEl && peEl.value); };
+      if (psEl) { psEl.addEventListener('input', updPeriod); psEl.addEventListener('change', updPeriod); }
+      if (peEl) { peEl.addEventListener('input', updPeriod); peEl.addEventListener('change', updPeriod); }
+      updPeriod();
     }
 
     function collectPayload() {
@@ -265,8 +279,25 @@
         p.shift_type = document.getElementById('f-type').value.trim();
         p.shift_start_time = document.getElementById('f-start').value;
         p.shift_end_time = document.getElementById('f-end').value;
+        var gEl = document.getElementById('f-grace');
+        p.grace_period = gEl ? gEl.value.trim() : '';
+        var wEl = document.getElementById('f-weekend');
+        p.weekend_day = wEl ? wEl.value : '';
+        p.is_active = readCheckbox('f-active');
       }
       return p;
+    }
+
+    /* Live shift-length preview (integer hours, overnight-aware: an end at or
+       before the start belongs to the next day — e.g. 18:00 → 04:00 = 10).
+       The server recomputes authoritatively on save. */
+    function shiftHoursPreview_(s, e) {
+      var m = function (t) { var mm = String(t || '').match(/^(\d{1,2}):(\d{2})/); return mm ? (Number(mm[1]) * 60 + Number(mm[2])) : null; };
+      var a = m(s), b = m(e);
+      if (a == null || b == null) return '-';
+      var d = b - a;
+      if (d <= 0) d += 24 * 60;
+      return String(Math.round(d / 60));
     }
 
     function save() {

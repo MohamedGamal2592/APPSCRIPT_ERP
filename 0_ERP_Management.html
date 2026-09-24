@@ -144,14 +144,17 @@
 
   function renderCompanies(list) {
     window.__companies = list;
-    var rows = list.map(function (c) {
+    var rows = list.filter(function (c) { return String(c.company_unique_id || '').trim(); }).map(function (c) {
       return {
         id: c.company_unique_id,
         name_ar: c.company_name_ar,
         name_en: c.company_name_en,
         enabled: UIC.statusPill(String(c.enabled).toLowerCase() === 'true' ? 'مفعّل' : 'معطّل', String(c.enabled).toLowerCase() === 'true' ? 'success' : 'neutral'),
         main_page: c.company_main_page || '-',
-        actions: UIC.actionBtns([{ label: 'تعديل', onclick: 'editCompany(\'' + FMT.escape(c.company_unique_id) + '\')' }])
+        actions: UIC.actionBtns([
+          { label: 'تعديل', onclick: 'editCompany(\'' + FMT.escape(c.company_unique_id) + '\')' },
+          { label: 'حذف', onclick: 'deleteCompany(\'' + FMT.escape(c.company_unique_id) + '\')', color: '#dc2626' }
+        ])
       };
     });
     var body = document.getElementById('tab-body');
@@ -221,6 +224,15 @@
       .finally(function () { UI.hideSpinner(); });
   }
 
+  function deleteCompany(uid) {
+    if (!confirm('هل تريد حذف بيانات هذه الشركة؟ سيتم تفريغ بيانات الصف.')) return;
+    UI.showSpinner('جاري الحذف...');
+    API.call('admin_delete_company', { company_unique_id: uid }, SESSION_TOKEN)
+      .then(function (r) { UIC.toast(r.message || 'تم الحذف', 'success'); loadCompanies(); })
+      .catch(function (e) { UIC.toast(e.message || 'خطأ', 'error'); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
   /* ---------- USERS ---------- */
   function loadUsers() {
     UIC.readSkeleton('tab-body');
@@ -236,7 +248,7 @@
 
   function renderUsers(list) {
     window.__users = list;
-    var rows = list.map(function (u) {
+    var rows = list.filter(function (u) { return String(u.email || '').trim(); }).map(function (u) {
       var active = String(u.status).toLowerCase() === 'active';
       return {
         name: u.name,
@@ -244,7 +256,10 @@
         role: u.role,
         company: u.company || '-',
         status: UIC.statusPill(active ? 'نشط' : 'معطّل', active ? 'success' : 'danger'),
-        actions: UIC.actionBtns([{ label: 'تعديل', onclick: 'openUserModal(\'' + FMT.escape(u.email) + '\')' }])
+        actions: UIC.actionBtns([
+          { label: 'تعديل', onclick: 'openUserModal(\'' + FMT.escape(u.email) + '\')' },
+          { label: 'حذف', onclick: 'deleteUser(\'' + FMT.escape(u.email) + '\')', color: '#dc2626' }
+        ])
       };
     });
     var body = document.getElementById('tab-body');
@@ -321,8 +336,17 @@
       .finally(function () { UI.hideSpinner(); });
   }
 
+  function deleteUser(email) {
+    if (!confirm('هل تريد حذف بيانات هذا المستخدم؟ سيتم تفريغ بيانات الصف.')) return;
+    UI.showSpinner('جاري الحذف...');
+    API.call('admin_delete_user', { email: email }, SESSION_TOKEN)
+      .then(function (r) { UIC.toast(r.message || 'تم الحذف', 'success'); loadUsers(); })
+      .catch(function (e) { UIC.toast(e.message || 'خطأ', 'error'); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
   /* ---------- ROLES MATRIX ---------- */
-  function loadMatrix() {
+  function loadMatrix(keepFilters) {
     UIC.readSkeleton('tab-body');
     API.call('admin_list_matrix', {}, SESSION_TOKEN)
       .then(function (r) {
@@ -332,9 +356,11 @@
         window.__matrixUserRoles = r.user_roles || [];
         window.__matrixCompanies = r.company_options || [];
         window.__matrixModules = r.module_options || [];
-        window.__selRole = '';
-        window.__selCompany = '';
-        window.__selModule = '';
+        if (!keepFilters) {
+          window.__selRole = '';
+          window.__selCompany = '';
+          window.__selModule = '';
+        }
         renderMatrix();
       })
       .catch(function (e) { showError(e); })
@@ -435,10 +461,12 @@
 
     var existing = {};
     (window.__matrixData || []).forEach(function (m) {
+      if (!String(m.access_type || '').trim()) return;
       if (String(m.role).toLowerCase() === role.toLowerCase()) existing[String(m.page_id)] = m;
     });
 
     var pages = (window.__matrixPages || []).filter(function (p) {
+      if (!String(p.page_id || '').trim()) return false;
       if (company && String(p.page_company || '') !== String(company)) return false;
       if (module && String(p.page_module || '').trim().toLowerCase() !== module.toLowerCase()) return false;
       return true;
@@ -456,11 +484,13 @@
         '<td><select class="input matrix-select" style="min-width:140px;" data-page="' + FMT.escape(p.page_id) + '" data-field="access_type">' +
         '<option value="Read"' + (acc === 'Read' ? ' selected' : '') + '>Read</option>' +
         '<option value="Write"' + (acc === 'Write' ? ' selected' : '') + '>Write</option>' +
+        '<option value="Full"' + (acc === 'Full' ? ' selected' : '') + '>Full</option>' +
         '</select></td>' +
         '<td><select class="input matrix-select" style="min-width:140px;" data-page="' + FMT.escape(p.page_id) + '" data-field="status">' +
         '<option value="Active"' + (st === 'Active' ? ' selected' : '') + '>Active</option>' +
         '<option value="InActive"' + (st === 'InActive' ? ' selected' : '') + '>InActive</option>' +
         '</select></td>' +
+        '<td>' + (existing[String(p.page_id)] ? '<button class="btn btn-ghost" style="padding:2px 8px;font-size:11px;" onclick="deleteMatrixRow(\'' + FMT.escape(role) + '\',\'' + FMT.escape(p.page_id) + '\')">✕</button>' : '') + '</td>' +
         '</tr>';
     }).join('');
 
@@ -472,6 +502,7 @@
       '<th data-col="text" data-min="110px" style="min-width:110px;">الوحدة</th>' +
       '<th data-col="text" data-min="140px" style="min-width:140px;width:150px;">نوع الوصول</th>' +
       '<th data-col="text" data-min="140px" style="min-width:140px;width:150px;">الحالة</th>' +
+      '<th data-col="text" data-min="60px" style="min-width:60px;width:70px;">حذف</th>' +
       '</tr></thead><tbody>' + rows + '</tbody></table></div>';
     UIC.autoColumns('perm-matrix-table');
   }
@@ -495,6 +526,15 @@
       .finally(function () { UI.hideSpinner(); });
   }
 
+  function deleteMatrixRow(role, pageId) {
+    if (!confirm('هل تريد حذف صلاحية هذه الصفحة لهذا الدور؟ سيتم تفريغ بيانات الصف.')) return;
+    UI.showSpinner('جاري الحذف...');
+    API.call('admin_delete_matrix_row', { role: role, page_id: pageId }, SESSION_TOKEN)
+      .then(function (r) { UIC.toast(r.message || 'تم الحذف', 'success'); loadMatrix(true); })
+      .catch(function (e) { UIC.toast(e.message || 'خطأ', 'error'); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
   /* ---------- SYSTEM PAGES ---------- */
   function loadPages() {
     UIC.readSkeleton('tab-body');
@@ -512,12 +552,13 @@
 
   function renderPages() {
     var list = window.__systemPages || [];
-    var rows = list.map(function (p) {
+    var rows = list.filter(function (p) { return String(p.page_id || '').trim(); }).map(function (p) {
       return {
         page_id: p.page_id,
         page_name: p.page_name || '-',
         page_module: p.page_module || '-',
-        page_company: pageCompanyLabel(p.page_company)
+        page_company: pageCompanyLabel(p.page_company),
+        actions: UIC.actionBtns([{ label: 'حذف', onclick: 'deletePage(\'' + FMT.escape(p.page_id) + '\')', color: '#dc2626' }])
       };
     });
     var body = document.getElementById('tab-body');
@@ -529,7 +570,8 @@
           { key: 'page_id', label: 'معرف الصفحة' },
           { key: 'page_name', label: 'اسم الصفحة' },
           { key: 'page_module', label: 'الوحدة' },
-          { key: 'page_company', label: 'الشركة' }
+          { key: 'page_company', label: 'الشركة' },
+          { key: 'actions', label: 'إجراءات' }
         ],
         rows: rows,
         emptyText: 'لا توجد صفحات مسجلة'
@@ -600,6 +642,15 @@
     UI.showSpinner('جاري الحفظ...');
     API.call('admin_save_pages', { pages: pages }, SESSION_TOKEN)
       .then(function (r) { UIC.closeModal('pages-matrix-modal'); UIC.toast(r.message || 'تم الحفظ', 'success'); loadPages(); })
+      .catch(function (e) { UIC.toast(e.message || 'خطأ', 'error'); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function deletePage(pageId) {
+    if (!confirm('هل تريد حذف بيانات هذه الصفحة؟ ستعود الصفحة لإعداداتها الافتراضية.')) return;
+    UI.showSpinner('جاري الحذف...');
+    API.call('admin_delete_page', { page_id: pageId }, SESSION_TOKEN)
+      .then(function (r) { UIC.toast(r.message || 'تم الحذف', 'success'); loadPages(); })
       .catch(function (e) { UIC.toast(e.message || 'خطأ', 'error'); })
       .finally(function () { UI.hideSpinner(); });
   }

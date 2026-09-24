@@ -128,7 +128,9 @@ const TopChemical = (function () {
     'add_legal_party': { page: 'tc_budget_parties', access: 'write' },
     'get_legal_products': { page: 'tc_budget_stock_balance', access: 'read' },
     'get_legal_current_products': { page: 'tc_budget_stock_balance', access: 'read' },
-    'get_legal_products_movement': { page: 'tc_budget_stock_movement', access: 'read' },
+    'get_legal_stock_balance': { page: 'tc_budget_stock_balance', access: 'read' },
+    'update_legal_product': { page: 'tc_budget_stock_balance', access: 'write' },
+    'get_legal_products_movement': { page: 'tc_budget_stock_balance', access: 'read' },
     'get_legal_inputs': { page: 'tc_budget_inputs', access: 'read' },
     'add_legal_costing': { page: 'tc_budget_inputs', access: 'write' },
     'add_legal_purchasing_line': { page: 'tc_budget_inputs', access: 'write' },
@@ -208,7 +210,9 @@ const TopChemical = (function () {
     'get_legal_parties': LEGAL_PARTIES_SHEET,
     'add_legal_party': LEGAL_PARTIES_SHEET,
     'get_legal_products': LEGAL_PRODUCTS_SHEET,
+    'update_legal_product': LEGAL_PRODUCTS_SHEET,
     'get_legal_current_products': LEGAL_CURRENT_SHEET,
+    'get_legal_stock_balance': LEGAL_PRODUCTS_SHEET + '/' + LEGAL_CURRENT_SHEET,
     'get_legal_products_movement': LEGAL_MOVEMENT_SHEET,
     'get_legal_inputs': LEGAL_COSTING_SHEET + '/' + LEGAL_PURCHASING_SHEET,
     'add_legal_costing': LEGAL_COSTING_SHEET,
@@ -613,6 +617,32 @@ const TopChemical = (function () {
       }).filter(function (c) { return c.code; });
     });
   }
+
+  /**
+   * chart_of_accounts level-5 accounts as { options, map }.
+   *
+   * legal_products.asset_code is a REFERENCE into this list: the stored value
+   * is المستوى الخامس (the level-5 code) and the shown label is اسم المستوى
+   * الخامس. One accessor serves both the select options and the id→name
+   * resolution, so a display and its editor can never disagree. chart_of_accounts
+   * has no app mutation path, which is what makes the tcRefs_ cache safe here.
+   */
+  function tcAssetCodeRefs_(dbId) {
+    return tcRefs_(dbId, 'tc_legal_asset_refs', function () {
+      const options = [];
+      const map = {};
+      getAllRecords_(dbId, LEGAL_CHART_SHEET).forEach(function (r) {
+        const code = String(r['المستوى الخامس'] == null ? '' : r['المستوى الخامس']).trim();
+        if (!code) return;
+        if (Object.prototype.hasOwnProperty.call(map, code)) return;
+        const name = String(r['اسم المستوى الخامس'] == null ? '' : r['اسم المستوى الخامس']).trim() || code;
+        map[code] = name;
+        options.push({ value: code, label: name });
+      });
+      return { options: options, map: map };
+    });
+  }
+
 
   /** Products: id -> name_ar map + [{value,label}] options for ref selects. */
   function productRefs_(dbId) {
@@ -1871,7 +1901,16 @@ const TopChemical = (function () {
     if (availRaw === '') throw new Error('رصيد السيستم مطلوب');
     const avail = Number(availRaw);
     if (isNaN(avail)) throw new Error('رصيد السيستم يجب أن يكون رقماً');
-    const date = data.date ? parseDate_(data.date) : new Date();
+    let date = data.date ? parseDate_(data.date) : new Date();
+    if (!(date instanceof Date) || isNaN(date.getTime())) date = new Date();
+    /* A date-only entry records WHEN the revision was taken, not midnight:
+       two counts of the same product on one day must be distinguishable, and
+       the cell is a real datetime in the sheet. A value that already carries a
+       time is kept as written. */
+    if (date.getHours() === 0 && date.getMinutes() === 0 && date.getSeconds() === 0) {
+      const now = new Date();
+      date.setHours(now.getHours(), now.getMinutes(), now.getSeconds(), now.getMilliseconds());
+    }
     const notes = String(data.notes || '').trim();
 
     const sheet = getSheet_(STOCK_SHEET, dbId);
@@ -3748,6 +3787,160 @@ const TopChemical = (function () {
     return { status: 'success', items: getAllRecords_(dbId, LEGAL_CURRENT_SHEET) };
   }
 
+  /**
+   * رصيد أصناف الميزانية — one row per legal_products record, not per
+   * legal_current_products transaction.
+   *
+   * legal_current_products.product is the product NAME as AppSheet wrote it,
+   * so the only key back to legal_products is the trimmed name_ar — and the
+   * page is a GROUP BY that name: the sums it shows are the sums of exactly
+   * the transaction lines the modal lists for that product. Two edge cases are
+   * surfaced rather than hidden. A name_ar duplicated in legal_products keeps
+   * its lines on the lowest id, so no quantity is summed twice and the copied
+   * name is reported in duplicate_names. Lines whose product matches no legal
+   * product (blank included) are counted in unmatched_count instead of
+   * silently disappearing from a report.
+   *
+   * The live balance is product_current_quantity.current_qty where
+   * legal_products.product_system_id is that view's id. A MySQL that is down
+   * must not blank the report: the aggregation still returns and
+   * system_qty_error says why the system column is empty.
+   */
+  function getLegalStockBalance_(data, user, dbId) {
+    const products = tcLegalProductsRaw_(dbId);
+    const current = getAllRecords_(dbId, LEGAL_CURRENT_SHEET);
+
+    const linesByName = {};
+    let blankNameLines = 0;
+    current.forEach(function (c) {
+      const name = String(c.product == null ? '' : c.product).trim();
+      if (!name) { blankNameLines++; return; }
+      if (!linesByName[name]) linesByName[name] = [];
+      linesByName[name].push({
+        transaction_code: String(c.transaction_code == null ? '' : c.transaction_code).trim(),
+        transaction_name: String(c.transaction_name == null ? '' : c.transaction_name).trim(),
+        code: String(c.code == null ? '' : c.code).trim(),
+        unit: String(c.unit == null ? '' : c.unit).trim(),
+        current_qty: Number(c.current_qty) || 0,
+        total_cost_sign: Number(c.total_cost_sign) || 0,
+        total_sales_value: Number(c.total_sales_value) || 0,
+        sales_per_qty: Number(c.sales_per_qty) || 0,
+        product_target: String(c.product_target == null ? '' : c.product_target).trim()
+      });
+    });
+
+    const claimed = {};
+    const duplicateNames = [];
+    const assetRefs = tcAssetCodeRefs_(dbId);
+    const rows = products.slice().sort(function (a, b) {
+      return (Number(a.id) || 0) - (Number(b.id) || 0);
+    }).map(function (p) {
+      const name = String(p.name_ar == null ? '' : p.name_ar).trim();
+      let lines = [];
+      if (name && !claimed[name]) {
+        claimed[name] = true;
+        lines = linesByName[name] || [];
+      } else if (name) {
+        if (duplicateNames.indexOf(name) === -1) duplicateNames.push(name);
+      }
+      let qty = 0, cost = 0, sales = 0;
+      lines.forEach(function (l) {
+        qty += l.current_qty;
+        cost += l.total_cost_sign;
+        sales += l.total_sales_value;
+      });
+      const assetCode = String(p.asset_code == null ? '' : p.asset_code).trim();
+      return {
+        id: p.id,
+        name_ar: name,
+        unit: String(p.unit == null ? '' : p.unit).trim(),
+        category: String(p.category == null ? '' : p.category).trim(),
+        product_type: String(p.product_type == null ? '' : p.product_type).trim(),
+        product_system_id: p.product_system_id == null ? '' : p.product_system_id,
+        asset_code: assetCode,
+        asset_code_name: assetRefs.map[assetCode] || '',
+        lines_count: lines.length,
+        current_qty: qty,
+        total_cost_sign: cost,
+        total_sales_value: sales,
+        system_qty: null,
+        difference: null,
+        lines: lines
+      };
+    });
+
+    let unmatchedCount = blankNameLines;
+    Object.keys(linesByName).forEach(function (name) {
+      if (!claimed[name]) unmatchedCount += linesByName[name].length;
+    });
+
+    let systemQty = {};
+    let systemQtyError = false;
+    try { systemQty = systemQtyMap_(); } catch (e) { systemQtyError = true; }
+    rows.forEach(function (r) {
+      const sid = Number(r.product_system_id);
+      if (!Number.isInteger(sid) || sid <= 0) return;
+      if (!Object.prototype.hasOwnProperty.call(systemQty, sid)) return;
+      r.system_qty = systemQty[sid];
+      r.difference = r.system_qty - r.current_qty;
+    });
+
+    return {
+      status: 'success',
+      products: rows,
+      asset_code_options: assetRefs.options,
+      system_qty_error: systemQtyError,
+      unmatched_count: unmatchedCount,
+      duplicate_names: duplicateNames
+    };
+  }
+
+  /**
+   * Set legal_products.asset_code for one product.
+   *
+   * asset_code is a reference into chart_of_accounts level-5: the value stored
+   * is المستوى الخامس and the label shown is اسم المستوى الخامس. The value is
+   * validated against that list here, so the sheet cannot be handed a code no
+   * account owns. Empty clears the reference. legal_products is served from the
+   * tcRefs_ cache, so a successful write busts it — otherwise the product list
+   * would keep showing the old account for up to the TTL.
+   */
+  function updateLegalProduct_(data, user, dbId) {
+    const id = Number(data && data.id);
+    if (!Number.isInteger(id) || id <= 0) throw new Error('معرف الصنف مطلوب');
+    const assetCode = String((data && data.asset_code) == null ? '' : data.asset_code).trim();
+    const refs = tcAssetCodeRefs_(dbId);
+    if (assetCode && !Object.prototype.hasOwnProperty.call(refs.map, assetCode)) {
+      throw new Error('كود الأصل غير موجود في شجرة الحسابات');
+    }
+    const sheet = getSheet_(LEGAL_PRODUCTS_SHEET, dbId);
+    const headers = getHeaders_(sheet);
+    const idCol = headers.findIndex(function (h) { return String(h).trim().toLowerCase() === 'id'; });
+    const codeCol = headers.findIndex(function (h) { return String(h).trim().toLowerCase() === 'asset_code'; });
+    if (idCol === -1 || codeCol === -1) throw new Error('أعمدة الجدول غير مكتملة');
+    const values = sheet.getDataRange().getValues();
+    let rowNum = -1;
+    for (let r = 1; r < values.length; r++) {
+      if (Number(values[r][idCol]) === id) { rowNum = r + 1; break; }
+    }
+    if (rowNum === -1) throw new Error('الصنف غير موجود');
+    const oldCode = String(values[rowNum - 1][codeCol] == null ? '' : values[rowNum - 1][codeCol]).trim();
+    executeWithLock_(function () {
+      sheet.getRange(rowNum, codeCol + 1).setValue(assetCode);
+      noteMutation_(sheet);
+    });
+    try {
+      logHistory_(dbId, LEGAL_PRODUCTS_SHEET, 'update_' + LEGAL_PRODUCTS_SHEET + '_' + id, String(id),
+        (user && user.email) || '', 'update', { id: id, asset_code: assetCode }, { id: id, asset_code: oldCode });
+    } catch (e) {}
+    try { bustTcRefs_(dbId); } catch (e) {}
+    return {
+      status: 'success',
+      message: 'تم تحديث كود الأصل',
+      record: { id: id, asset_code: assetCode, asset_code_name: refs.map[assetCode] || '' }
+    };
+  }
+
   function getLegalProductsMovement_(data, user, dbId) {
     const month = Number(data.month);
     const year = Number(data.year);
@@ -3774,7 +3967,17 @@ const TopChemical = (function () {
     });
     rows.sort(function (a, b) { return String(b.transaction_date || '').localeCompare(String(a.transaction_date || '')); });
     const total = rows.length;
-    return { status: 'success', items: rows.slice(offset, offset + limit), total: total, offset: offset, limit: limit };
+    /* transaction_date_display: the wall date/time a user can read. Raw
+       transaction_date stays on the row for sorting and existing consumers. */
+    const items = rows.slice(offset, offset + limit).map(function (r) {
+      const out = {};
+      Object.keys(r).forEach(function (k) { out[k] = r[k]; });
+      out.transaction_date_display = (typeof budgetDateDisplay_ === 'function')
+        ? budgetDateDisplay_(r.transaction_date)
+        : r.transaction_date;
+      return out;
+    });
+    return { status: 'success', items: items, total: total, offset: offset, limit: limit };
   }
 
   function getLegalInputs_(data, user, dbId) {
@@ -5605,6 +5808,8 @@ const valueMap = {};
   register('add_legal_party', addLegalParty_);
   register('get_budget_refs', getBudgetRefs_);
   register('get_legal_current_products', getLegalCurrentProducts_);
+  register('get_legal_stock_balance', getLegalStockBalance_);
+  register('update_legal_product', updateLegalProduct_);
   register('get_legal_products_movement', getLegalProductsMovement_);
   register('get_legal_inputs', getLegalInputs_);
   register('add_legal_costing', addLegalCosting_);
@@ -12294,7 +12499,7 @@ const BUDGET_PRINT_MONTH_NAMES = [
 
 function serveBudgetPrint_(params) {
   const type = String(params.type || '').trim();
-  const pages = { invoice: 'tc_budget_invoices', manufacture: 'tc_budget_manufacture', costing: 'tc_budget_inputs', cash: 'tc_budget_cash', movement: 'tc_budget_stock_movement' };
+  const pages = { invoice: 'tc_budget_invoices', manufacture: 'tc_budget_manufacture', costing: 'tc_budget_inputs', cash: 'tc_budget_cash', movement: 'tc_budget_stock_balance' };
   if (!pages[type]) return ContentService.createTextOutput('Invalid type');
   authorizeArtifact_(params, { company: '3fe1b5cb67b7223e', page: pages[type], access: 'read' });
   const id = decodeURIComponent(String(params.id || '')).trim();
@@ -12354,6 +12559,49 @@ function serveBudgetPrint_(params) {
 function budgetMoney_(n) {
   const v = Number(n) || 0;
   return v.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+}
+
+/**
+ * Normal display form for a date that may be a Date (a sheet cell), a
+ * date-only string, or a UTC ISO datetime string.
+ *
+ * A sheet date cell comes back from getValues() as a Date at midnight in the
+ * script timezone, which JSON-serialises to the previous day's 21:00Z — the
+ * "2026-05-05T21:00:00.000Z" a raw render shows. Formatting the Date in the
+ * script timezone recovers the wall date, and a value carrying a real time
+ * keeps it; a date-only value stays date-only.
+ */
+function budgetDateDisplay_(v) {
+  if (v === null || v === undefined || v === '') return '';
+  var tz = 'Africa/Cairo';
+  if (Object.prototype.toString.call(v) === '[object Date]') {
+    if (isNaN(v.getTime())) return '';
+    var dt = Utilities.formatDate(v, tz, 'HH:mm');
+    var dd = Utilities.formatDate(v, tz, 'yyyy-MM-dd');
+    return dt === '00:00' ? dd : dd + ' ' + dt;
+  }
+  var s = String(v).trim();
+  if (!s) return '';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  var m = s.match(/^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2})/);
+  if (m) {
+    /* A string that carries a zone is converted to the script timezone; a
+       naked local datetime is already the wall time and is kept as written. */
+    if (/(Z|[+-]\d{2}:?\d{2})$/.test(s)) {
+      var zoned = new Date(s);
+      if (!isNaN(zoned.getTime())) {
+        var zt = Utilities.formatDate(zoned, tz, 'HH:mm');
+        var zd = Utilities.formatDate(zoned, tz, 'yyyy-MM-dd');
+        return zt === '00:00' ? zd : zd + ' ' + zt;
+      }
+    }
+    return m[2] === '00:00' ? m[1] : m[1] + ' ' + m[2];
+  }
+  var d = new Date(s);
+  if (isNaN(d.getTime())) return s;
+  var t = Utilities.formatDate(d, tz, 'HH:mm');
+  var day = Utilities.formatDate(d, tz, 'yyyy-MM-dd');
+  return t === '00:00' ? day : day + ' ' + t;
 }
 
 function buildInvoicePrintHtml_(r) {
@@ -12683,7 +12931,7 @@ function buildMovementPrintHtml_(product, rows) {
     return '<tr>' +
       '<td>' + esc(r.transaction_code || '-') + '</td>' +
       '<td><strong>' + esc(r.transaction_type || '-') + '</strong></td>' +
-      '<td>' + esc(r.transaction_date || '-') + '</td>' +
+      '<td>' + esc(budgetDateDisplay_(r.transaction_date) || '-') + '</td>' +
       '<td style="color:#155724;font-weight:600;" >' + (inQty || 0) + '</td>' +
       '<td style="color:#dc3545;font-weight:600;" >' + (outQty || 0) + '</td>' +
       '</tr>';

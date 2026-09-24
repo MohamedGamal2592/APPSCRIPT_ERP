@@ -160,11 +160,13 @@ async function render(canSeeCost) {
   console.log('\nS6 — by-products table\n');
   const bpWith = withCost.html('byproducts-body');
   const bpNo = without.html('byproducts-body');
-  check(bpWith.indexOf('التكلفة') !== -1, 'with the grant: التكلفة column present');
+  /* Owner contract: the calculated columns are hidden in the form, with or
+     without the grant. The grant still gates cost everywhere else. */
+  check(bpWith.indexOf('التكلفة') === -1, 'calculated cost column hidden even with the grant');
   check(bpNo.indexOf('التكلفة') === -1, 'without: gone');
-  check(bpNo.indexOf('الكمية') !== -1 && bpNo.indexOf('كود الدفعة') !== -1,
-    'without: quantity and batch code stay');
-  check(countTh(bpWith) - countTh(bpNo) === 1, 'exactly one column disappears');
+  check(bpWith.indexOf('كود الدفعة') === -1, 'calculated batch-code column hidden even with the grant');
+  check(bpNo.indexOf('الكمية') !== -1, 'without: quantity stays');
+  check(countTh(bpWith) - countTh(bpNo) === 0, 'grant changes nothing in the by-products table');
 
   console.log('\nS6 — no cost value leaks into any rendered markup\n');
   const allNo = [wopNo, kpiNo, outNo, bpNo, without.html('vf-mo-view')].join('\n');
