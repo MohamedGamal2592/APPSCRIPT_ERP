@@ -76,6 +76,18 @@
           headers: ['رقم المرتجع', 'الفاتورة', 'العميل', 'التاريخ', 'عدد البنود', { label: 'قيمة المرتجع', numeric: true }],
           pageSize: 100,
           searchable: false,
+          /* Phase B2: the shared refresh control re-fetches the currently loaded
+             window and preserves the view state; deferred while a modal is open
+             or a save is in flight. */
+          refresh: {
+            blocked: function () {
+              try {
+                if (document.querySelector('.modal-backdrop, .uic-modal, [data-modal-open="true"]')) return 'أغلق النموذج المفتوح قبل تحديث القائمة';
+                if (typeof UIC.Live !== 'undefined' && UIC.Live.busy && UIC.Live.busy()) return 'هناك حفظ قيد التنفيذ — انتظر ثم أعد المحاولة';
+              } catch (e) {}
+              return null;
+            }
+          },
           onRendered: function (tid) { try { UIC.initTableSort(tid); } catch (e) {} },
           fetcher: function (offset, limit) {
             return companyCall('get_valley_returns_list', { offset: offset, limit: limit });

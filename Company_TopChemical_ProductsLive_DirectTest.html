@@ -1,0 +1,415 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>اختبار أصناف MySQL</title>
+  <?!= include('Client_Helpers'); ?>
+  <style>
+    body { margin: 0; padding: 20px; color: #182333; font: 16px system-ui, sans-serif; }
+    main { max-width: 1440px; margin: 0 auto; }
+    label { display: block; margin: 14px 0 6px; }
+    input, button { box-sizing: border-box; width: 100%; padding: 10px; font: inherit; }
+    .picker { position: relative; }
+    #product-picker { width: 100%; border: 1px solid #aeb9c6; border-radius: 6px; }
+    #product-options { position: absolute; z-index: 2; inset-inline: 0; top: 100%; max-height: 300px; overflow: auto; background: #fff; border: 1px solid #aeb9c6; box-shadow: 0 4px 12px #0002; }
+    #product-options[hidden] { display: none; }
+    #product-options [role="option"] { padding: 9px 10px; cursor: pointer; }
+    #product-options [role="option"]:hover, #product-options [role="option"].active { background: #eaf2fa; }
+    #status { min-height: 1.5em; margin-top: 12px; }
+    #timing { color: #526174; white-space: pre-wrap; }
+    #products-table-section { margin-top: 30px; border-top: 2px solid #d5dde6; padding-top: 18px; }
+    #products-table-wrap { overflow: auto; max-height: 68vh; border: 1px solid #cbd5e1; margin-top: 10px; }
+    #products-table { border-collapse: collapse; min-width: 100%; width: max-content; font-size: 13px; }
+    #products-table th, #products-table td { border: 1px solid #dbe2ea; padding: 7px 9px; max-width: 360px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: start; }
+    #products-table th { position: sticky; top: 0; background: #edf2f7; z-index: 1; }
+    #table-search { margin: 8px 0; }
+    .table-pager { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+    .table-pager button { width: auto; min-width: 92px; }
+    #table-page-label { flex: 1; text-align: center; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>اختبار مباشر من MySQL: products</h1>
+    <p>تظهر القائمة والجدول من النسخة المحلية فوراً إن توفرت، ثم يمكن تحديثهما من MySQL.</p>
+    <button id="reload" type="button">إعادة تحميل القائمة والجدول من MySQL</button>
+    <label for="product-picker">الصنف — ابحث بالاسم أو رقم الصنف داخل القائمة</label>
+    <div class="picker" id="product-picker-wrap">
+      <input id="product-picker" type="search" role="combobox" aria-autocomplete="list" aria-haspopup="listbox"
+        aria-expanded="false" aria-controls="product-options" autocomplete="off" placeholder="اكتب اسم الصنف أو رقمه">
+      <input id="product-id" name="product_id" type="hidden" value="">
+      <div id="product-options" role="listbox" aria-label="الأصناف" hidden></div>
+    </div>
+    <div id="status" role="status" aria-live="polite"></div>
+    <div id="matches"></div>
+    <div id="timing"></div>
+    <section id="products-table-section" aria-labelledby="products-table-title">
+      <h2 id="products-table-title">بيانات جدول products — عرض تجريبي للقراءة فقط</h2>
+      <p>يتم تحميل السجلات مرة واحدة؛ البحث يشمل كل السجلات وكل الأعمدة، وتقسيم الصفحات للعرض فقط (50 سجلًا في الصفحة).</p>
+      <label for="table-search">بحث في جميع السجلات والأعمدة</label>
+      <input id="table-search" type="search" autocomplete="off" placeholder="اكتب أي قيمة للبحث داخل كل البيانات">
+      <div id="table-status" role="status" aria-live="polite">جارٍ تحميل بيانات الجدول...</div>
+      <div id="products-table-wrap" role="region" aria-label="جدول بيانات products" tabindex="0">
+        <table id="products-table"><thead id="products-table-head"></thead><tbody id="products-table-body"></tbody></table>
+      </div>
+      <div class="table-pager" aria-label="التنقل بين صفحات بيانات المنتجات">
+        <button id="table-first" type="button">الأولى</button>
+        <button id="table-prev" type="button">السابقة</button>
+        <span id="table-page-label" aria-live="polite"></span>
+        <button id="table-next" type="button">التالية</button>
+        <button id="table-last" type="button">الأخيرة</button>
+      </div>
+    </section>
+  </main>
+  <script>
+  (function () {
+    'use strict';
+    var params = new URLSearchParams(window.location.search);
+    var token = params.get('sessionToken') || ((API.getSession() || {}).token || '');
+    var picker = document.getElementById('product-picker-wrap');
+    var input = document.getElementById('product-picker');
+    var selectedId = document.getElementById('product-id');
+    var options = document.getElementById('product-options');
+    var status = document.getElementById('status');
+    var matches = document.getElementById('matches');
+    var timing = document.getElementById('timing');
+    var reload = document.getElementById('reload');
+    var rows = [];
+    var tableColumns = [];
+    var tableRows = [];
+    var filteredTableRows = [];
+    var tablePage = 1;
+    var tablePageSize = 50;
+    var tableSearch = document.getElementById('table-search');
+    var tableStatus = document.getElementById('table-status');
+    var tableHead = document.getElementById('products-table-head');
+    var tableBody = document.getElementById('products-table-body');
+    var tablePageLabel = document.getElementById('table-page-label');
+    var tableFirst = document.getElementById('table-first');
+    var tablePrev = document.getElementById('table-prev');
+    var tableNext = document.getElementById('table-next');
+    var tableLast = document.getElementById('table-last');
+    var initialized = false;
+    var userKey = String(window.AUTH_USER_EMAIL || '').trim().toLowerCase();
+    var cacheKey = userKey ? 'tc_products_live_direct_test_v4:' + userKey : '';
+    var cachePaintMs = null;
+    var refreshStats = null;
+    var CACHE_FRESH_MS = 60000;
+    var expanded = false;
+    var activeIndex = -1;
+    var visibleOptions = [];
+
+    function afterPaint() {
+      return new Promise(function (resolve) {
+        if (typeof requestAnimationFrame === 'function') {
+          requestAnimationFrame(function () { requestAnimationFrame(resolve); });
+        } else setTimeout(resolve, 0);
+      });
+    }
+
+    function render() {
+      var term = String(input.value || '').trim().toLocaleLowerCase();
+      var fragment = document.createDocumentFragment();
+      var shown = 0, found = 0;
+      visibleOptions = [];
+      rows.forEach(function (row) {
+        var id = String(row[0] || '');
+        var name = String(row[1] || '');
+        if (term && (id.toLocaleLowerCase().indexOf(term) < 0 && name.toLocaleLowerCase().indexOf(term) < 0)) return;
+        found++;
+        if (!expanded || shown >= 100) return;
+        var option = document.createElement('div');
+        option.id = 'product-option-' + shown;
+        option.setAttribute('role', 'option');
+        option.setAttribute('aria-selected', 'false');
+        option.textContent = id + ' — ' + name;
+        option.addEventListener('mousedown', function (event) { event.preventDefault(); });
+        option.addEventListener('click', function () { chooseProduct(id, name); });
+        visibleOptions.push(option);
+        fragment.appendChild(option);
+        shown++;
+      });
+      options.replaceChildren(fragment);
+      options.hidden = !expanded || !rows.length;
+      input.setAttribute('aria-expanded', options.hidden ? 'false' : 'true');
+      if (activeIndex >= visibleOptions.length) activeIndex = visibleOptions.length - 1;
+      setActive(activeIndex);
+      matches.textContent = rows.length
+        ? 'المطابق: ' + found + ' | المعروض في القائمة: ' + Math.min(found, 100) + ' | الإجمالي المحمّل: ' + rows.length + (found > 100 ? ' — اكتب لتضييق النتائج' : '')
+        : 'لا توجد بيانات محمّلة.';
+    }
+
+    function setActive(index) {
+      activeIndex = index;
+      visibleOptions.forEach(function (option, i) {
+        var active = i === activeIndex;
+        option.className = active ? 'active' : '';
+        option.setAttribute('aria-selected', active ? 'true' : 'false');
+      });
+      if (activeIndex >= 0 && visibleOptions[activeIndex]) {
+        input.setAttribute('aria-activedescendant', visibleOptions[activeIndex].id);
+        try { visibleOptions[activeIndex].scrollIntoView({ block: 'nearest' }); } catch (e) {}
+      } else input.removeAttribute('aria-activedescendant');
+    }
+
+    function openPicker(clearSelection) {
+      if (clearSelection && selectedId.value) {
+        selectedId.value = '';
+        input.value = '';
+      }
+      expanded = true;
+      activeIndex = -1;
+      render();
+    }
+
+    function chooseProduct(id, name) {
+      selectedId.value = String(id);
+      input.value = String(id) + ' — ' + String(name);
+      expanded = false;
+      activeIndex = -1;
+      render();
+      status.textContent = 'رقم المنتج المحدد: ' + selectedId.value;
+    }
+
+    function readCache() {
+      if (!cacheKey) return null;
+      try {
+        var value = JSON.parse(localStorage.getItem(cacheKey) || 'null');
+        if (!value || !Array.isArray(value.columns) ||
+            !Array.isArray(value.rows) || !Number(value.savedAt)) return null;
+        return value;
+      } catch (e) { return null; }
+    }
+
+    function writeCache(metrics) {
+      if (!cacheKey) return;
+      try { localStorage.setItem(cacheKey, JSON.stringify({ savedAt: Date.now(),
+        columns: tableColumns, rows: tableRows, metrics: metrics || null })); }
+      catch (e) {}
+    }
+
+    function renderTable() {
+      var term = String(tableSearch.value || '').trim().toLocaleLowerCase();
+      filteredTableRows = term ? tableRows.filter(function (row) {
+        return tableColumns.some(function (column) {
+          var value = row[column];
+          return value != null && String(value).toLocaleLowerCase().indexOf(term) >= 0;
+        });
+      }) : tableRows.slice();
+      var pageCount = Math.max(1, Math.ceil(filteredTableRows.length / tablePageSize));
+      tablePage = Math.min(Math.max(tablePage, 1), pageCount);
+
+      var headRow = document.createElement('tr');
+      tableColumns.forEach(function (column) {
+        var th = document.createElement('th');
+        th.scope = 'col';
+        th.textContent = column;
+        headRow.appendChild(th);
+      });
+      tableHead.replaceChildren(headRow);
+
+      var fragment = document.createDocumentFragment();
+      var start = (tablePage - 1) * tablePageSize;
+      filteredTableRows.slice(start, start + tablePageSize).forEach(function (row) {
+        var tr = document.createElement('tr');
+        tableColumns.forEach(function (column) {
+          var td = document.createElement('td');
+          var value = row[column];
+          td.textContent = value == null ? '' : String(value);
+          td.title = value == null ? '' : String(value);
+          td.dir = 'auto';
+          tr.appendChild(td);
+        });
+        fragment.appendChild(tr);
+      });
+      tableBody.replaceChildren(fragment);
+      var from = filteredTableRows.length ? start + 1 : 0;
+      var to = Math.min(start + tablePageSize, filteredTableRows.length);
+      tableStatus.textContent = 'المطابق: ' + filteredTableRows.length + ' من إجمالي ' + tableRows.length +
+        ' | المعروض: ' + from + '–' + to + ' | الأعمدة: ' + tableColumns.length;
+      tablePageLabel.textContent = 'الصفحة ' + tablePage + ' من ' + pageCount;
+      tableFirst.disabled = tablePrev.disabled = tablePage <= 1;
+      tableNext.disabled = tableLast.disabled = tablePage >= pageCount;
+    }
+
+    function acceptTableData(result) {
+      if (!result || result.status !== 'ok' || !Array.isArray(result.columns) ||
+          !Array.isArray(result.rows) || Number(result.count) !== result.rows.length ||
+          result.columns.indexOf('id') < 0 || result.columns.indexOf('name_ar') < 0) {
+        throw new Error('استجابة بيانات جدول products غير صالحة');
+      }
+      tableColumns = result.columns.map(function (column) { return String(column); });
+      tableRows = result.rows.map(function (row) {
+        if (!row || typeof row !== 'object' || Array.isArray(row)) throw new Error('صف غير صالح في بيانات products');
+        var clean = {};
+        tableColumns.forEach(function (column) {
+          var value = row[column];
+          clean[column] = value == null ? null : String(value);
+        });
+        return clean;
+      });
+      tableRows.sort(function (a, b) { return compareProductIds(String(a.id || ''), String(b.id || '')); });
+      rows = dropdownPairsFromTable();
+      tablePage = 1;
+      render();
+      renderTable();
+    }
+
+    function dropdownPairsFromTable() {
+      return tableRows.filter(function (row) {
+        // Preserve the original picker contract: deleted products remain
+        // visible in the all-rows experiment table, but not in the dropdown.
+        return !Object.prototype.hasOwnProperty.call(row, 'deleted_at') || row.deleted_at == null || row.deleted_at === '';
+      }).map(function (row) {
+        return [String(row.id == null ? '' : row.id), String(row.name_ar == null ? '' : row.name_ar)];
+      });
+    }
+
+    function updateTiming() {
+      var parts = [];
+      if (cachePaintMs != null) parts.push('ظهور الجدول من الكاش: ' + cachePaintMs + ' ms');
+      if (refreshStats) {
+        var t = refreshStats.timing || {};
+        parts.push('سجلات الجدول: ' + refreshStats.count +
+          ' | الأعمدة: ' + refreshStats.columns +
+          ' | حجم بيانات الصفوف: ' + (refreshStats.payloadBytes == null ? '—' : refreshStats.payloadBytes + ' bytes') +
+          (refreshStats.fromCache ? ' | أرقام آخر تحديث MySQL محفوظة' :
+            ' | حتى ظهور تحديث MySQL: ' + refreshStats.visibleMs + ' ms' +
+            ' | RPC: ' + refreshStats.rpcMs + ' ms' +
+            ' | تجهيز ورسم الجدول والقائمة: ' + refreshStats.prepareMs + ' ms') +
+          ' | اتصال: ' + (t.connection == null ? '—' : t.connection + ' ms') +
+          ' | SQL: ' + (t.query == null ? '—' : t.query + ' ms') +
+          ' | قراءة الصفوف: ' + (t.read == null ? '—' : t.read + ' ms') +
+          ' | تحليل JSON على الخادم: ' + (t.parse == null ? '—' : t.parse + ' ms') +
+          ' | الخادم إجمالاً: ' + (t.server_total == null ? '—' : t.server_total + ' ms'));
+      }
+      timing.textContent = parts.join('\n');
+    }
+
+    function compareProductIds(left, right) {
+      var a = String(left), b = String(right);
+      if (/^\d+$/.test(a) && /^\d+$/.test(b)) {
+        a = a.replace(/^0+(?=\d)/, '');
+        b = b.replace(/^0+(?=\d)/, '');
+        if (a.length !== b.length) return a.length - b.length;
+        return a < b ? -1 : (a > b ? 1 : 0);
+      }
+      return a.localeCompare(b);
+    }
+
+    function load(forceMySql) {
+      var cacheShownAt = performance.now();
+      if (!initialized) {
+        initialized = true;
+        var cached = readCache();
+        if (cached) {
+          tableColumns = cached.columns.map(String);
+          tableRows = cached.rows;
+          tableRows.sort(function (a, b) { return compareProductIds(String(a.id || ''), String(b.id || '')); });
+          rows = dropdownPairsFromTable();
+          render();
+          renderTable();
+          if (cached.metrics) refreshStats = Object.assign({}, cached.metrics, { fromCache: true });
+          status.textContent = 'قائمة محفوظة من ' + new Date(cached.savedAt).toLocaleString() + ' — يتم تحديثها من MySQL الآن.';
+          afterPaint().then(function () {
+            cachePaintMs = Math.round(performance.now() - cacheShownAt);
+            updateTiming();
+          });
+          if (!forceMySql && Date.now() - cached.savedAt < CACHE_FRESH_MS) {
+            status.textContent = 'القائمة المحفوظة جاهزة من ' + new Date(cached.savedAt).toLocaleString() +
+              ' — اضغط إعادة التحميل لجلب الأحدث من MySQL.';
+            return;
+          }
+        }
+      }
+      reload.disabled = true;
+      refreshStats = null;
+      updateTiming();
+      if (!rows.length) {
+        input.placeholder = 'جارٍ الاتصال بـ MySQL...';
+        status.textContent = 'جارٍ الاتصال بـ MySQL...';
+      } else {
+        input.placeholder = 'اكتب اسم الصنف أو رقمه';
+        status.textContent = 'القائمة الحالية جاهزة — يتم تحديثها من MySQL في الخلفية.';
+      }
+      var started = performance.now(), rpcMs = 0;
+      API.call('company_action', {
+        target_system: '3fe1b5cb67b7223e',
+        module_action: 'get_products_live_direct_test',
+        data: {}
+      }, token).then(function (result) {
+        rpcMs = performance.now() - started;
+        var prepareStarted = performance.now();
+        acceptTableData(result);
+        var prepareMs = Math.round(performance.now() - prepareStarted);
+        return afterPaint().then(function () {
+          refreshStats = {
+            count: tableRows.length,
+            columns: tableColumns.length,
+            payloadBytes: Number.isFinite(Number(result.payload_bytes)) ? Number(result.payload_bytes) : null,
+            visibleMs: Math.round(performance.now() - started),
+            rpcMs: Math.round(rpcMs),
+            prepareMs: prepareMs,
+            timing: result.timing_ms || {}
+          };
+          writeCache(refreshStats);
+          status.textContent = 'اكتمل تحديث القائمة من MySQL.';
+          updateTiming();
+        });
+      }).catch(function (err) {
+        render();
+        tableStatus.textContent = tableRows.length
+          ? 'تعذر تحديث الجدول من MySQL؛ ما زالت البيانات المحفوظة معروضة.'
+          : String((err && err.message) || 'تعذر تحميل جدول products من MySQL');
+        status.textContent = rows.length
+          ? 'تعذر تحديث MySQL؛ ما زالت القائمة المحفوظة معروضة. ' + String((err && err.message) || '')
+          : String((err && err.message) || 'فشل الاتصال بـ MySQL');
+      }).finally(function () { reload.disabled = false; });
+    }
+
+    reload.addEventListener('click', function () { load(true); });
+    tableSearch.addEventListener('input', function () { tablePage = 1; renderTable(); });
+    tableFirst.addEventListener('click', function () { tablePage = 1; renderTable(); });
+    tablePrev.addEventListener('click', function () { tablePage--; renderTable(); });
+    tableNext.addEventListener('click', function () { tablePage++; renderTable(); });
+    tableLast.addEventListener('click', function () {
+      tablePage = Math.max(1, Math.ceil(filteredTableRows.length / tablePageSize));
+      renderTable();
+    });
+    input.addEventListener('focus', function () { openPicker(true); });
+    input.addEventListener('click', function () { if (!expanded) openPicker(true); });
+    input.addEventListener('input', function () {
+      selectedId.value = '';
+      expanded = true;
+      activeIndex = -1;
+      render();
+    });
+    input.addEventListener('keydown', function (event) {
+      if (event.key === 'ArrowDown') {
+        if (!expanded) openPicker(true);
+        if (visibleOptions.length) { event.preventDefault(); setActive(Math.min(activeIndex + 1, visibleOptions.length - 1)); }
+      } else if (event.key === 'ArrowUp') {
+        if (visibleOptions.length) { event.preventDefault(); setActive(Math.max(activeIndex - 1, 0)); }
+      } else if (event.key === 'Enter' && expanded && visibleOptions.length) {
+        event.preventDefault();
+        var choice = visibleOptions[activeIndex >= 0 ? activeIndex : 0];
+        choice.click();
+      } else if (event.key === 'Escape' && expanded) {
+        expanded = false;
+        activeIndex = -1;
+        render();
+      }
+    });
+    document.addEventListener('click', function (event) {
+      if (!picker.contains(event.target) && expanded) {
+        expanded = false;
+        activeIndex = -1;
+        render();
+      }
+    });
+    load(false);
+  })();
+  </script>
+</body>
+</html>

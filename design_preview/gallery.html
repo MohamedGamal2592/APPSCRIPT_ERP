@@ -275,6 +275,17 @@
     '</div>',
     'The combo list must not be clipped when the combo sits inside a table cell.');
 
+  section('calculator', 'Reusable quantity calculator — RTL host / LTR keypad',
+    '<div style="max-width:360px;direction:rtl;">' +
+      '<label class="form-label" for="gx_calc_unit">عدد العبوات (صحيح)</label>' +
+      '<div class="gx-row"><input id="gx_calc_unit" class="input" value="12" type="number" step="1">' +
+      '<button type="button" class="btn btn-outline" onclick="gxOpenCalc(\'gx_calc_unit\',true)">⌗</button></div>' +
+      '<label class="form-label" for="gx_calc_loose">الكمية الفرط (عشري)</label>' +
+      '<div class="gx-row"><input id="gx_calc_loose" class="input" value="0" type="number" step="0.01">' +
+      '<button type="button" class="btn btn-outline" onclick="gxOpenCalc(\'gx_calc_loose\',false)">⌗</button></div>' +
+    '</div>',
+    'Example of the shared UIC.Calculator API used by both stock-scan quantity fields; the dialog isolates its expression/keypad direction as LTR and keeps history session-local.');
+
   section('modal', 'Modal — all four sizes',
     '<div class="gx-row">' +
       '<button class="btn btn-outline" onclick="gxModal(\'sm\')">sm 420</button>' +
@@ -391,6 +402,11 @@
         '</tbody></table></div>',
       onSave: "UIC.closeModal('gx-modal')"
     });
+  };
+
+  window.gxOpenCalc = function (id, integerOnly) {
+    UIC.Calculator.open({ target: id, title: 'حاسبة المعاينة', precision: integerOnly ? 0 : 2,
+      integerOnly: integerOnly, min: 0 });
   };
 
   /* Tell the parent frame how tall the content is, so index.html can size the

@@ -56,8 +56,10 @@ function registerTopChemical_() {
       { action: 'tc_budget_hr', template: 'Company_TopChemical_BudgetHR', title: 'شؤون العاملين القانونية', nav: false },
       { action: 'tc_budget_income', template: 'Company_TopChemical_BudgetIncome', title: 'قائمة الدخل السنوية', nav: false },
       { action: 'tc_manufacture_orders', template: 'Company_TopChemical_ManufactureOrders', title: 'أوامر التصنيع', label: 'أوامر التصنيع', nav: false },
-      { action: 'tc_products_live', template: 'Company_TopChemical_ProductsLive', title: 'اصناف النظام الرئيسي', label: 'اصناف النظام الرئيسي', nav: false },
-      { action: 'tc_exec_sales', template: 'Company_TopChemical_ExecSales', title: 'التحليل التنفيذي للمبيعات', label: 'التحليل التنفيذي للمبيعات', nav: false }
+      { action: 'tc_production_capability', template: 'Company_TopChemical_ProductionCapability', title: 'تحليلات القدرات الانتاجية', label: 'تحليلات القدرات الانتاجية', nav: false },
+      { action: 'tc_sales_capacity', template: 'Company_TopChemical_SalesCapacity', title: 'تحليل القدرة الانتاجية للمبيعات', label: 'تحليل القدرة الانتاجية للمبيعات', nav: false },
+      { action: 'tc_products_live', template: 'Company_TopChemical_ProductsLive', title: 'اصناف النظام الرئيسي — products', label: 'اصناف النظام الرئيسي', nav: false },
+      { action: 'tc_financial_ratios', template: 'Company_TopChemical_FinancialRatios', title: 'تحليلات النسب المالية', label: 'تحليلات النسب المالية', nav: false }
     ]
   });
 }

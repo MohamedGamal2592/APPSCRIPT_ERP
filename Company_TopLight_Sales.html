@@ -60,12 +60,14 @@
      Called with no argument after a save or a delete, it keeps whichever view
       the user is in rather than silently dropping them back to 20. */
   var __loadedAll = false;
+  var __listGeneration = 0;
 
   function showAllSales() { renderList(true); }
   function showLatestSales() { renderList(false); }
 
   function renderList(loadAll, quiet) {
     __loadedAll = arguments.length ? !!loadAll : __loadedAll;
+    var generation = ++__listGeneration;
     if (!quiet) UIC.readSkeleton('tl-content', { message: [
       'جاري تحميل فواتير المبيعات...',
       'جاري استرجاع خيارات العملاء والأصناف...',
@@ -73,6 +75,7 @@
     ] });
     companyCall('get_sales_headers', __loadedAll ? { loadAll: true } : {})
       .then(function (r) {
+        if (generation !== __listGeneration) return;
         /* Phase 2.1: options no longer ride along with the list — see
          * ensureOptions(). Still honoured if a response happens to carry them. */
         if (r.options) {
@@ -82,8 +85,8 @@
         __headers = r.headers || [];
         renderHeadersTable(); try{schedulePrefetch();}catch(e){};
       })
-      .catch(function (e) { showError(e); })
-      .finally(function () { if (!quiet) UI.hideSpinner(); });
+      .catch(function (e) { if (generation === __listGeneration) showError(e); })
+      .finally(function () { if (!quiet && generation === __listGeneration) UI.hideSpinner(); });
   }
 
   function renderHeadersTable() {
@@ -244,8 +247,8 @@
       '</form>' +
       '<h3 style="margin-top:20px;">الأصناف</h3>' +
       '<div class="table-wrap">' +
-      '<table id="lines-table" class="table" style="min-width:900px;"><thead><tr>' +
-      '<th>المنتج</th><th>الكمية</th><th>السعر</th><th>نسبة الضريبة</th><th>الخصم</th><th>الإجمالي</th>' + (__canEdit ? '<th></th>' : '') +
+      '<table id="lines-table" class="table" style="min-width:980px;"><thead><tr>' +
+      '<th>المنتج</th><th>الكمية</th><th data-col="num" data-min="18ch">السعر</th><th data-col="atom" data-min="10ch">نسبة الضريبة</th><th data-col="num" data-min="16ch">الخصم</th><th>الإجمالي</th>' + (__canEdit ? '<th></th>' : '') +
       '</tr></thead><tbody id="lines-tbody"></tbody></table>' +
       '</div>' +
       (__canEdit ? '<div style="margin:12px 0;"><button class="btn btn-outline" onclick="addLine()">+ إضافة صنف</button></div>' : '') +
@@ -297,13 +300,13 @@
         '<td>' + UIC.combo({ key: 'product_id_' + i, options: opts.product_options || [], value: l.product_id != null ? l.product_id : '', placeholder: 'ابحث باسم الصنف...', inline: true }) + '</td>' +
         '<td><input class="input" type="number" min="0" step="any" value="' + (l.product_qty != null ? l.product_qty : '') + '" oninput="updateLineInput(' + i + ', \'product_qty\', this.value)">' +
         '<div id="avail_' + i + '" style="font-size:11px;color:var(--text-muted);">متاح: ' + availableQty(i) + '</div></td>' +
-        '<td><input id="product_price_' + i + '" class="input" type="number" min="0" step="any" value="' + (l.product_price != null ? l.product_price : '') + '" oninput="updateLineInput(' + i + ', \'product_price\', this.value)"></td>' +
-        '<td><select id="product_tax_' + i + '" class="input" onchange="updateLineSelect(' + i + ', \'product_tax\', this.value)">' +
+        '<td><input id="product_price_' + i + '" class="input" type="number" min="0" step="any" style="min-width:150px;" value="' + (l.product_price != null ? l.product_price : '') + '" oninput="updateLineInput(' + i + ', \'product_price\', this.value)"></td>' +
+        '<td><select id="product_tax_' + i + '" class="input" style="min-width:80px;" onchange="updateLineSelect(' + i + ', \'product_tax\', this.value)">' +
           (opts.product_tax_options || []).map(function (t) {
             return '<option value="' + FMT.escape(t.value) + '"' + (String(t.value) === String(l.product_tax) ? ' selected' : '') + '>' + FMT.escape(t.label) + '</option>';
           }).join('') +
           '</select></td>' +
-        '<td><input class="input" type="number" min="0" step="any" value="' + (l.product_discount != null ? l.product_discount : '') + '" oninput="updateLineInput(' + i + ', \'product_discount\', this.value)"></td>' +
+        '<td><input class="input" type="number" min="0" step="any" style="min-width:130px;" value="' + (l.product_discount != null ? l.product_discount : '') + '" oninput="updateLineInput(' + i + ', \'product_discount\', this.value)"></td>' +
         '<td id="line_total_' + i + '"></td>' +
         (__canEdit ? '<td><button class="btn btn-outline" style="padding:4px 10px;" onclick="removeLine(' + i + ')">حذف</button></td>' : '') +
         '</tr>';
@@ -402,7 +405,7 @@
       if (String(l.product_price == null ? '' : l.product_price).trim() === '') { UIC.toast('السعر مطلوب لكل صنف', 'error'); return false; }
       if (String(l.product_discount == null ? '' : l.product_discount).trim() === '') { UIC.toast('الخصم مطلوب لكل صنف', 'error'); return false; }
       if (num(l.product_qty) <= 0) { UIC.toast('الكمية يجب أن تكون أكبر من صفر', 'error'); return false; }
-      if (num(l.product_price) <= 0) { UIC.toast('السعر يجب أن يكون أكبر من صفر', 'error'); return false; }
+      if (num(l.product_price) < 0) { UIC.toast('السعر يجب أن يكون غير سالب', 'error'); return false; }
       var avail = availableQty(i);
       if (num(l.product_qty) > avail) { UIC.toast('الكمية تتجاوز الرصيد المتاح (المتاح: ' + avail + ')', 'error'); return false; }
     }
@@ -574,6 +577,5 @@
 </script>
 </body>
 </html>
-
 
 

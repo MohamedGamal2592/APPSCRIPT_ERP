@@ -127,6 +127,22 @@
         pageSize: PAGE_SIZE,
         searchable: true,
         emptyText: 'لا توجد حركات مخزن مسجلة',
+        /* Phase B2: the shared refresh control. The page's first-page memo must
+           never answer a refresh (that would label stale rows as refreshed), so
+           the refresh owns its request: the currently loaded window, re-read
+           from the server. */
+        refresh: {
+          load: function (ctx) {
+            return companyCall('get_valley_warehouse_movements', { offset: 0, limit: ctx.window });
+          },
+          blocked: function () {
+            try {
+              if (document.querySelector('.modal-backdrop, .uic-modal, [data-modal-open="true"]')) return 'أغلق النموذج المفتوح قبل تحديث القائمة';
+              if (typeof UIC.Live !== 'undefined' && UIC.Live.busy && UIC.Live.busy()) return 'هناك حفظ قيد التنفيذ — انتظر ثم أعد المحاولة';
+            } catch (e) {}
+            return null;
+          }
+        },
         onRendered: function (tid) { try { UIC.initTableSort(tid); } catch (e) {} },
         fetcher: function (offset, limit) {
           /* offset 0 was already fetched by load() */

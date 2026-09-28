@@ -23,6 +23,7 @@ function ok(cond, label, extra) {
 }
 
 const page = S.read('Company_TopChemical_BudgetInputs.html');
+const actions = S.read('Company_TopChemical_Actions.js');
 
 /* ── 1. the unified list ──────────────────────────────────────────────────── */
 console.log('\nUnified data view');
@@ -49,7 +50,13 @@ ok(page.indexOf("'add_legal_costing_bundle'") !== -1 &&
   'add/edit/delete actions are unchanged');
 ok(page.indexOf("UIC.openModal('costing-modal'") !== -1 && page.indexOf('function openCostingModal(') !== -1,
   'the add/edit modal is unchanged');
-ok(page.indexOf('export_vat_purchasing_xlsx') !== -1, 'the VAT Excel export is unchanged');
+ok(page.indexOf('export_vat_purchasing_xlsx') !== -1 &&
+  /\(CAN_WRITE \? '<button[^\n]*exportVatPurchasingXlsx\(\)[^\n]*: ''\)/.test(page),
+  'the VAT Excel export button is shown to write-authorized users');
+ok(/'export_vat_purchasing_xlsx': \{ page: 'tc_budget_inputs', access: 'write' \}/.test(actions),
+  'the server export endpoint requires write permission on tc_budget_inputs');
+ok(/if \(!unifiedCheck_\(user, COMPANY_UID, req\.page, req\.access\)\)/.test(actions),
+  'the export remains behind the shared server-side permission check');
 ok(page.indexOf('UIC.Live.save') !== -1 && page.indexOf('UIC.Live.watchPage') !== -1,
   'live save and the change watch are unchanged');
 ok(page.indexOf('function renderCosting(') !== -1, 'renderCosting keeps its name — the live-save callbacks still point at it');
@@ -88,6 +95,40 @@ ok(fd(new Date(2026, 4, 6, 0, 0)) === '2026-05-06', 'a midnight Date renders dat
 ok(fd(new Date(2026, 4, 6, 9, 5)) === '2026-05-06 09:05', 'a Date with a time keeps it');
 ok(fd('') === '' && fd(null) === '' && fd(undefined) === '', 'blank values render empty');
 ok(fd('2026-05-05T21:00:00.000Z').indexOf('T') === -1, 'an ISO datetime never leaks its T form');
+
+/* ── 4. pre-save costing preview ─────────────────────────────────────────── */
+console.log('\nPre-save costing preview');
+ok(page.indexOf('function costingPreviewHeaderRef(') !== -1 &&
+  page.indexOf('function calculateCostingPreview(') !== -1 &&
+  page.indexOf("modeEl.textContent = 'معاينة أولية قبل الحفظ'") !== -1 &&
+  page.indexOf('readonly aria-readonly="true"') !== -1 &&
+  page.indexOf('COSTING_FORMULA_KEYS') !== -1,
+  'the preview is driven by the purchase header reference');
+ok(page.indexOf('if (totalEl) totalEl.textContent = costingPreviewMoney(calc.totalCost);') !== -1 &&
+  page.indexOf("savedFormulaDisplay('اجمالي التكاليف')") === -1,
+  'total cost is rendered from the live sheet-formula calculation, not a saved inline formula display');
+const previewBody = fnBody(page, 'costingPreviewNumber') + '\n' + fnBody(page, 'calculateCostingPreview');
+const previewCtx = { Number, String, isFinite };
+vm.createContext(previewCtx);
+vm.runInContext(previewBody + '\nthis.__preview = calculateCostingPreview;', previewCtx, { filename: 'BudgetInputs#calculateCostingPreview' });
+const preview = previewCtx.__preview({ 'نوع الشهادة': 'مشتريات', 'القيمه بالدولار': '115500', 'سعر الصرف': '49.92', 'ض شراء': '0', 'اجمالي التكاليف': '0' }, 0);
+ok(preview.originalCurrency === 115500 && preview.exchangeRate === 49.92 &&
+  preview.advertised === 5765760 && preview.taxType === 807206.4 &&
+  preview.totalCost === 5765760 && preview.linesTotal === 0 && preview.headerTotal === 0,
+  'header reference produces the expected currency, exchange, tax, and formula total');
+const previewWithPurchaseTax = previewCtx.__preview({ 'نوع الشهادة': 'مشتريات', 'القيمه بالدولار': '115500', 'سعر الصرف': '49.92', 'ض شراء': '100', 'م اداريه': '50', 'اجمالي التكاليف': '0' }, 1250.5);
+ok(previewWithPurchaseTax.totalCost === 5765910 && previewWithPurchaseTax.linesTotal === 1250.5 && previewWithPurchaseTax.headerTotal === 0,
+  'non-sale formula includes header fees and purchase tax, independent of line markup');
+const salePreview = previewCtx.__preview({ 'نوع الشهادة': 'بيع', 'القيمه بالدولار': '115500', 'سعر الصرف': '49.92', 'ض شراء': '100' }, 0);
+ok(salePreview.totalCost === 5765760, 'sale formula excludes purchase tax exactly like the sheet');
+ok(actions.indexOf('function legalCostingFormulaMap_()') !== -1 &&
+  actions.indexOf("'القيمه بالسعر المعلن': '=H{r}*I{r}'") !== -1 &&
+  actions.indexOf("'اجمالي التكاليف': '=IF(D{r}=\"بيع\",J{r}+M{r}+N{r}+O{r}+P{r}+Q{r}+R{r}+S{r}+T{r},J{r}+M{r}+N{r}+O{r}+P{r}+Q{r}+R{r}+S{r}+T{r}+U{r})'") !== -1 &&
+  actions.indexOf("'المبيعات': '=IF(D{r}=\"بيع\",ROUND(Y{r}*103/100,-2),0)'") !== -1 &&
+  (actions.match(/legalCostingFormulaMap_\(\)/g) || []).length >= 3,
+  'create and edit paths write the shared formula map across legal_purchasing_costing');
+ok(page.indexOf('COSTING_FORMULA_KEYS.forEach(function (key) { delete data[key]; });') !== -1,
+  'calculated fields are excluded from the user save payload');
 
 /* ── 4. the script still parses ───────────────────────────────────────────── */
 console.log('\nTemplate');

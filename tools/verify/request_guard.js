@@ -4,9 +4,16 @@ const root=path.resolve(__dirname,'../..');
 const source=fs.readFileSync(path.join(root,'Code.js'),'utf8');
 assert(source.includes('window.AUTH_USER_EMAIL=') && source.includes('(authUser && authUser.email)'),
   'authenticated page render must inject the server-verified request owner');
-function grab(source,name){const start=source.indexOf('function '+name+'(');assert(start>=0,name);const end=source.indexOf('\nfunction ',start+10);return source.slice(start,end<0?source.length:end);}
+function grab(source,name){
+  const start=source.indexOf('function '+name+'(');assert(start>=0,name);
+  /* Match actual declarations, not prose in the guard's explanatory comments
+     that happens to contain the word "function". */
+  const nextFn=/\nfunction\s+[A-Za-z_$][\w$]*\s*\(/g; nextFn.lastIndex=start+10;
+  const m=nextFn.exec(source); const end=m ? m.index : -1;
+  return source.slice(start,end<0?source.length:end);
+}
 const names=['requestGuardIsWrite_','requestGuardCanonical_','requestGuardHash_','requestGuardReply_','requestGuardNotApplied_','requestGuardFailedReply_','requestGuardSheet_','requestGuardFind_','requestGuardExecute_','executeCompanyAction_'];
-function grabVar(source){const start=source.indexOf('var REQUEST_RECEIPT_HEADERS_');assert(start>=0,'receipt headers');const end=source.indexOf(';\n',start);return source.slice(start,end+1);}
+function grabVar(source){const start=source.indexOf('var REQUEST_RECEIPT_HEADERS_');assert(start>=0,'receipt headers');const re=/;\r?\n/g; re.lastIndex=start; const m=re.exec(source); const end=m ? m.index : -1; assert(end>=start,'receipt header terminator'); return source.slice(start,end+1);}
 const headerVar=grabVar(source);
 function server(shared){
   shared=shared||{sheets:{},business:[],fail:''};

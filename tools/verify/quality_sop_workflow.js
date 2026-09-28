@@ -88,7 +88,8 @@ function makeSheet(name, headers) {
   };
 }
 
-function makeWorld() {
+function makeWorld(opts) {
+  opts = opts || {};
   const sheets = {};
   const writes = { count: 0 };
   const history = [];
@@ -174,6 +175,47 @@ function makeWorld() {
   function logHistory_() { history.push(Array.prototype.slice.call(arguments)); }
   function vfNotApplied_(message) { const e = new Error(message); e.notApplied = true; e.code = 'REQUEST_NOT_APPLIED'; throw e; }
 
+  /* Reference-field fixtures. `emptyRefs` builds the world a missing index /
+     unavailable directory produces: no department sheet, no userDirectory_, so
+     the fail-open rule is exercised rather than assumed. */
+  if (!opts.emptyRefs) {
+    ensureSheet_('db-1', 'valley_dept_section_index', ['unique_id', 'section', 'section_type', 'department']);
+    const deptRows = opts.deptRows || [
+      { section: 'الإدارة', department: 'الجودة' },
+      { section: 'الإدارة', department: 'الإنتاج' },
+      { section: 'الإدارة', department: 'المخازن' }
+    ];
+    deptRows.forEach(function (d, i) {
+      sheets['valley_dept_section_index'].appendRow(['dept-' + i, d.section || '', d.section_type || '', d.department || '']);
+    });
+  }
+  /* The department-abbreviation registry is company-owned configuration, seeded
+     here exactly as an administrator would seed it. `noAbbr` builds the world
+     where nothing has been configured yet, which must block NEW allocation
+     without touching existing records. */
+  if (!opts.noAbbr) {
+    const abbrRows = opts.abbrRows || (opts.emptyRefs ? [] : [
+      { department: 'الجودة', abbrev: 'QA' },
+      { department: 'الإنتاج', abbrev: 'PROD' },
+      { department: 'المخازن', abbrev: 'WH' }
+    ]);
+    if (abbrRows.length) {
+      ensureSheet_('db-1', 'valley_quality_dept_abbr', ['unique_id', 'id', 'department', 'canonical', 'abbrev', 'user', 'created_at']);
+      abbrRows.forEach(function (a, i) {
+        sheets['valley_quality_dept_abbr'].appendRow(['abbr-' + i, i + 1, a.department || '', a.canonical || '', a.abbrev || '', '', '']);
+      });
+    }
+  }
+  const userDirectory = opts.emptyRefs ? undefined : function () {
+    return opts.userDirectory || {
+      'author@vf.test': { name: 'Author', company: '9940659bd83035d7', status: 'Active' },
+      'approver@vf.test': { name: 'Approver', company: '9940659bd83035d7', status: 'Active' },
+      'owner@vf.test': { name: 'Owner', company: '9940659bd83035d7', status: 'Active' },
+      'other@corp.test': { name: 'Other', company: 'OTHER-CO', status: 'Active' },
+      'gone@vf.test': { name: 'Gone', company: '9940659bd83035d7', status: 'Disabled' }
+    };
+  };
+
   const ctx = {
     console,
     JSON, Math, String, Number, Boolean, Object, Array, Error, RegExp, Date,
@@ -210,8 +252,10 @@ function makeWorld() {
     Logger: { log: () => {} },
     noteMutation_() {},
     vfBustRefs_() {},
+    COMPANY_UID: '9940659bd83035d7',
     ensureDriveFolderId_: () => 'folder-1',
     executeWithLock_: (fn) => fn(),
+    userDirectory_: userDirectory,
     uidV7_: () => 'uid-' + String(++uidSeq).padStart(4, '0'),
     getNextIdUnderLock_: nextId_,
     ensureSheet_, getSheet_, getHeaders_, getAllRecords_, safeRows_, addRecord_, patchRowByCriteria_, deleteRowsByCriteria_,
@@ -253,7 +297,7 @@ function expectRefusal(label, fn) {
   return err;
 }
 function createSop(title, category) {
-  return H.saveQualitySop_({ title_ar: title || 'إجراء اختبار', title_en: 'Test SOP', category: category || 'QC', applicability_dept: 'الجودة', applicability_role: '', owner_email: 'owner@vf.test' }, AUTHOR, DB);
+  return H.saveQualitySop_({ title_ar: title || 'إجراء اختبار', title_en: 'Test SOP', category: category || 'PROC', applicability_dept: 'الجودة', applicability_role: 'مدير الجودة', owner_email: 'owner@vf.test' }, AUTHOR, DB);
 }
 function saveDraftContent(uid, html) {
   return H.saveQualitySopVersion_({ unique_id: uid, change_type: 'Major', content_html: html || '<h1>محتوى</h1><p>خطوة</p>', change_summary: 'مسودة أولى' }, AUTHOR, DB);
@@ -265,8 +309,8 @@ function makeEffective(uid, user) {
 }
 
 /* ---- constants and lazy table creation ---- */
-check(H.QUALITY_SOP_CATEGORIES.length === 10 && H.QUALITY_SOP_CATEGORIES[1].code === 'QC' && H.QUALITY_SOP_CATEGORIES[1].label === 'الجودة',
-  'categories constant: 10 entries with QC = الجودة');
+check(H.QUALITY_SOP_CATEGORIES.length === 5 && H.QUALITY_SOP_CATEGORIES[1].code === 'PROC' && H.QUALITY_SOP_CATEGORIES[1].label === 'إجراء',
+  'categories constant: 5 document-level entries with PROC = إجراء');
 check(H.QUALITY_SOP_STATUSES.join('|') === 'Draft|In Review|Approved|Rejected|Effective|Obsolete', 'statuses constant matches the lifecycle');
 check(H.QUALITY_SOP_EVENT_TYPES.length === 11 && H.QUALITY_SOP_EVENT_TYPES.indexOf('Made Effective') !== -1, 'event types constant complete');
 
@@ -276,9 +320,11 @@ check(read.status === 'success' && Array.isArray(read.sops) && Array.isArray(rea
 check([H.QUALITY_SOP_SHEET, H.QUALITY_SOP_VERSIONS_SHEET, H.QUALITY_SOP_FORMS_SHEET, H.QUALITY_SOP_EVENTS_SHEET, H.QUALITY_SOP_ACKS_SHEET].every(n => !!W.sheets[n]),
   'get_quality_sops lazily creates all five sheets with headers');
 
-/* ---- create: SOP-<CAT>-NNN, version 1 Draft, Created event ---- */
-const created = createSop('إجراء الجودة الأول', 'qc');
-check(created.status === 'success' && created.sop_code === 'SOP-QC-001', 'create allocates SOP-QC-001 (uppercased category, zero-padded NNN)');
+/* ---- create: <CATEGORY_PREFIX>-<DEPT_ABBR>-<SEQUENCE> (4.7.1) ---- */
+const created = createSop('إجراء الجودة الأول', 'proc');
+check(created.status === 'success' && created.sop_code === 'PROC-QA-001',
+  'create allocates PROC-QA-001 (uppercased category prefix + department abbreviation + 3-digit sequence)');
+check(created.code_prefix === 'PROC' && created.dept_abbrev === 'QA', 'create returns the prefix/abbreviation snapshot it allocated from');
 check(!!created.unique_id, 'create returns the SOP unique_id');
 const sop1 = created.unique_id;
 check(sopRow(sop1).draft_version === '1' && sopRow(sop1).current_effective_version === '', 'header row: draft_version 1, no effective version');
@@ -289,13 +335,156 @@ check(v1rows.length === 1 && Number(v1rows[0].version) === 1 && v1rows[0].status
 check(v1rows[0].unique_id && v1rows[0].id !== '', 'version row has uidV7_-style unique_id and an integer id');
 check(eventsOf(sop1).length === 1 && eventsOf(sop1)[0].event_type === 'Created', 'Created event written for the new SOP');
 
-const second = createSop('إجراء ثان', 'QC');
-check(second.sop_code === 'SOP-QC-002', 'second SOP in the same category is SOP-QC-002');
-const otherCat = createSop('إجراء المخازن', 'WH');
-check(otherCat.sop_code === 'SOP-WH-001', 'first SOP in another category restarts the sequence');
+const second = createSop('إجراء ثان', 'PROC');
+check(second.sop_code === 'PROC-QA-002', 'second SOP for the same category+department is PROC-QA-002');
+const otherCat = createSop('إجراء المخازن', 'WI');
+check(otherCat.sop_code === 'WI-QA-001', 'another CATEGORY restarts its own sequence (WI-QA-001)');
+/* نموذج is stored as FRM but its visible code prefix is APP (4.7.1). */
+const formCat = createSop('نموذج الجودة', 'FRM');
+check(formCat.sop_code === 'APP-QA-001', 'نموذج (stored FRM) allocates an APP- code');
+check(sopRow(formCat.unique_id).category === 'FRM', 'the stored category stays FRM — no silent migration to APP');
+/* A different DEPARTMENT gets its own sequence, not a continuation. */
+const prodDoc = H.saveQualitySop_({
+  title_ar: 'إجراء الإنتاج', title_en: 'Prod SOP', category: 'PROC',
+  applicability_dept: 'الإنتاج', applicability_role: 'مشرف الإنتاج', owner_email: 'owner@vf.test'
+}, AUTHOR, DB);
+check(prodDoc.sop_code === 'PROC-PROD-001', 'a different department starts its own sequence (PROC-PROD-001)');
+
+/* ---- reference fields: department index + company users ---- */
+const readRefs = H.getQualitySops_({}, AUTHOR, DB);
+check(Array.isArray(readRefs.dept_options) && readRefs.dept_options.some(function (o) { return o.value === 'الجودة'; }),
+  'get_quality_sops returns the department options from valley_dept_section_index');
+check(Array.isArray(readRefs.owner_options) && readRefs.owner_options.some(function (o) { return o.value === 'owner@vf.test'; }) &&
+  readRefs.owner_options.every(function (o) { return o.value !== 'other@corp.test' && o.value !== 'gone@vf.test'; }),
+  'owner options are this company\'s active users only');
+/* 4.7.3 — owner NAMES are resolved in one batch, with honest fallbacks. */
+check(readRefs.owner_names['owner@vf.test'] && readRefs.owner_names['owner@vf.test'].name === 'Owner',
+  'owner_names resolves the company directory display name (not the email local part)');
+/* Historical owners are resolved INCLUDING inactive users, and the honest
+   fallbacks are asserted on rows injected straight into the sheet — a NEW
+   selection of an inactive owner is still refused by saveQualitySop_. */
+const histWorld = makeWorld({ userDirectory: {
+  'author@vf.test': { name: 'Author', company: '9940659bd83035d7', status: 'Active' },
+  'owner@vf.test': { name: '', company: '9940659bd83035d7', status: 'Active' },
+  'gone2@vf.test': { name: 'موظف سابق', company: '9940659bd83035d7', status: 'Disabled' }
+} });
+const HH = histWorld.ctx.__out;
+const histA = HH.saveQualitySop_(sopHeader({ owner_email: 'owner@vf.test' }), AUTHOR, DB);
+const histB = HH.saveQualitySop_(sopHeader({ title_ar: 'إجراء ثانٍ', owner_email: 'owner@vf.test' }), AUTHOR, DB);
+const histGrid = histWorld.sheets[HH.QUALITY_SOP_SHEET].__grid;
+const ownerIdx = histGrid[0].indexOf('owner_email');
+histGrid.forEach(function (row, i) {
+  if (i === 0) return;
+  if (String(row[0]) === histA.unique_id) row[ownerIdx] = 'gone2@vf.test';
+  if (String(row[0]) === histB.unique_id) row[ownerIdx] = 'vanished@vf.test';
+});
+const hNames = HH.getQualitySops_({}, AUTHOR, DB).owner_names;
+check(hNames['gone2@vf.test'] && hNames['gone2@vf.test'].name === 'موظف سابق',
+  'a historical (inactive) owner still resolves to the real directory name');
+check(hNames['vanished@vf.test'] && hNames['vanished@vf.test'].name === 'مستخدم غير متاح',
+  'an owner with no directory record reads «مستخدم غير متاح» and never the raw email');
+
+const noNameWorld = makeWorld({ userDirectory: {
+  'author@vf.test': { name: 'Author', company: '9940659bd83035d7', status: 'Active' },
+  'owner@vf.test': { name: '', company: '9940659bd83035d7', status: 'Active' }
+} });
+const HNN = noNameWorld.ctx.__out;
+HNN.saveQualitySop_(sopHeader({ owner_email: 'owner@vf.test' }), AUTHOR, DB);
+const nnNames = HNN.getQualitySops_({}, AUTHOR, DB).owner_names;
+check(nnNames['owner@vf.test'].name === 'اسم المستخدم غير مسجل', 'a user record with no name reads «اسم المستخدم غير مسجل»');
+check(readRefs.owner_choices.every(function (o) { return o.label.indexOf(' — ') === -1; }) &&
+  readRefs.owner_choices.some(function (o) { return o.value === 'owner@vf.test' && o.name === 'Owner'; }),
+  'owner_choices return a structured name (no combined "name — email" label)');
+/* 4.7.2 — الدور المعني is a server-owned validated catalog. */
+check(readRefs.roles && readRefs.roles.all_dept_value === '__ALL_DEPT__' && readRefs.roles.all_dept_label === 'جميع العاملين بالإدارة',
+  'the role catalog reserves __ALL_DEPT__ for «جميع العاملين بالإدارة»');
+check(readRefs.roles.recommended.length === 21 && readRefs.roles.recommended.some(function (r) { return r.value === 'مدير الجودة'; }),
+  'the role catalog exposes the 21 recommended values');
+/* 4.7.1 — the abbreviation registry is exposed as configuration, not code. */
+check(Array.isArray(readRefs.dept_abbr) && readRefs.dept_abbr.some(function (r) { return r.department === 'الجودة' && r.abbrev === 'QA'; }),
+  'get_quality_sops returns the configured department abbreviations');
+check(readRefs.template && readRefs.template.id === 'vf-controlled-document-v1' && readRefs.template.bodyHeadings.length === 8,
+  'get_quality_sops serves the shared versioned template definition with its eight body headings');
+function sopHeader(over) {
+  return Object.assign({
+    title_ar: 'إجراء مرجعي', title_en: 'Ref SOP', category: 'PROC',
+    applicability_dept: 'الجودة', applicability_role: 'مدير الجودة', owner_email: 'owner@vf.test'
+  }, over || {});
+}
+expectRefusal('unknown department', function () { return H.saveQualitySop_(sopHeader({ applicability_dept: 'إدارة غير موجودة' }), AUTHOR, DB); });
+expectRefusal('owner outside the company', function () { return H.saveQualitySop_(sopHeader({ owner_email: 'other@corp.test' }), AUTHOR, DB); });
+expectRefusal('inactive owner', function () { return H.saveQualitySop_(sopHeader({ owner_email: 'gone@vf.test' }), AUTHOR, DB); });
+expectRefusal('missing English title', function () { return H.saveQualitySop_(sopHeader({ title_en: '   ' }), AUTHOR, DB); });
+expectRefusal('missing department', function () { return H.saveQualitySop_(sopHeader({ applicability_dept: '' }), AUTHOR, DB); });
+expectRefusal('missing role', function () { return H.saveQualitySop_(sopHeader({ applicability_role: '' }), AUTHOR, DB); });
+expectRefusal('missing owner', function () { return H.saveQualitySop_(sopHeader({ owner_email: '' }), AUTHOR, DB); });
+
+/* Fail-open applies to REFERENCE VALUES, not to code allocation (4.7.1): with
+   no department index and no user directory the free-text department and any
+   owner are accepted, and a missing abbreviation is DERIVED and persisted
+   automatically instead of blocking the save (the row stays editable by full
+   users through the same registry the config action writes). */
+const W2 = makeWorld({ emptyRefs: true, noAbbr: true });
+const H2 = W2.ctx.__out;
+const beforeLoose = W2.writes.count;
+const looseAuto = H2.saveQualitySop_({ title_ar: 'إجراء بلا مراجع', title_en: 'Loose', category: 'PROC', applicability_dept: 'أي إدارة', applicability_role: 'مدير الجودة', owner_email: 'anyone@else.test' }, AUTHOR, DB);
+check(looseAuto.status === 'success' && looseAuto.sop_code === 'PROC-AA-001',
+  'no abbreviation configured — a NEW document is created with an auto-derived abbreviation (PROC-AA-001)');
+check(H2.getQualitySops_({}, AUTHOR, DB).dept_abbr.some(function (r) { return r.department === 'أي إدارة' && r.abbrev === 'AA'; }),
+  'the derived abbreviation is persisted in the registry so it stays editable');
+check(W2.writes.count > beforeLoose && H2.getQualitySops_({}, AUTHOR, DB).sops.length === 1,
+  'the auto-abbreviation path persists exactly one document');
+
+/* Long bodies are chunked across the content columns and re-joined on read:
+   the old single-cell 45k refusal is gone. */
+const WLong = makeWorld();
+const HLong = WLong.ctx.__out;
+const longBody = '<p>' + new Array(60001).join('ا') + '</p>';
+const longDoc = HLong.saveQualitySop_({
+  title_ar: 'وثيقة طويلة', title_en: 'Long', category: 'PROC', applicability_dept: 'الجودة',
+  applicability_role: 'مدير الجودة', owner_email: 'owner@vf.test',
+  version: { content_html: longBody, change_summary: 'محتوى طويل' }
+}, AUTHOR, DB);
+const longGrid = WLong.sheets[HLong.QUALITY_SOP_VERSIONS_SHEET].__grid;
+const longHead = longGrid[0];
+const longRead = HLong.getQualitySops_({}, AUTHOR, DB).versions.filter(function (v) { return v.sop_id === longDoc.unique_id; })[0];
+const longStored = String(longGrid[1][longHead.indexOf('content_html')]) + String(longGrid[1][longHead.indexOf('content_html_2')]);
+check(longRead && longRead.content_html === longStored && longRead.content_html.length > 45000,
+  'a >45k body round-trips through the chunk columns');
+check(longRead && longRead.content_html_2 === undefined, 'the client never receives the raw chunk columns');
+check(String(longGrid[1][longHead.indexOf('content_html')]).length === 45000 && String(longGrid[1][longHead.indexOf('content_html_2')]).length > 0,
+  'the body is stored as ordered chunks (first cell full, overflow in the second)');
+
+const W3 = makeWorld({ emptyRefs: true, abbrRows: [{ department: 'أي إدارة', abbrev: 'ANY' }] });
+const H3 = W3.ctx.__out;
+const loose = H3.saveQualitySop_({ title_ar: 'إجراء بلا مراجع', title_en: 'Loose', category: 'PROC', applicability_dept: 'أي إدارة', applicability_role: 'مدير الجودة', owner_email: 'anyone@else.test' }, AUTHOR, DB);
+check(loose.status === 'success' && loose.sop_code === 'PROC-ANY-001',
+  'an unavailable department index still creates once an abbreviation is configured (fail-open values, mapped code)');
+check(H3.getQualitySops_({}, AUTHOR, DB).sops.length === 1, 'the configured-abbreviation path persists exactly one document');
+let looseRoleErr = null;
+try {
+  H3.saveQualitySop_({ title_ar: 'إجراء بدور حر', title_en: 'Free role', category: 'PROC', applicability_dept: 'أي إدارة', applicability_role: 'أي دور', owner_email: 'anyone@else.test' }, AUTHOR, DB);
+} catch (e) { looseRoleErr = e; }
+check(!!looseRoleErr && looseRoleErr.notApplied === true,
+  'a role outside the catalog is refused even when the reference sources are unavailable');
+
+/* Legacy category: an existing row may keep its unchanged code, a new row may not. */
+const legacyWorld = makeWorld();
+const HL = legacyWorld.ctx.__out;
+const legacyCreated = HL.saveQualitySop_(sopHeader({ title_ar: 'إجراء قديم' }), AUTHOR, DB);
+const legacyGrid = legacyWorld.sheets[HL.QUALITY_SOP_SHEET].__grid;
+const legacyCatIdx = legacyGrid[0].indexOf('category');
+for (let li = 1; li < legacyGrid.length; li++) {
+  if (String(legacyGrid[li][0]) === legacyCreated.unique_id) legacyGrid[li][legacyCatIdx] = 'QC';
+}
+const legacyResaved = HL.saveQualitySop_(sopHeader({ unique_id: legacyCreated.unique_id, title_ar: 'إجراء قديم', category: 'QC' }), AUTHOR, DB);
+check(legacyResaved.status === 'success', 'an existing legacy category may be kept when the row is edited');
+let legacyNewErr = null;
+try { HL.saveQualitySop_(sopHeader({ title_ar: 'إجراء جديد بفئة قديمة', category: 'QC' }), AUTHOR, DB); } catch (e) { legacyNewErr = e; }
+check(!!legacyNewErr && legacyNewErr.notApplied === true, 'a NEW SOP may not use a legacy category');
 
 /* ---- illegal transitions: refused BEFORE any mutation ---- */
-const sopR = createSop('إجراء الرفض', 'LAB');
+const sopR = createSop('إجراء الرفض', 'FRM');
 const rVersion = rows(H.QUALITY_SOP_VERSIONS_SHEET).filter(r => String(r.sop_id) === sopR.unique_id)[0].unique_id;
 
 expectRefusal('approve from Draft', () => approve(rVersion, APPROVER));
@@ -317,7 +506,7 @@ check(versionRow(rVersion).status === 'Approved', 'approver other than the autho
 expectRefusal('reject from Approved', () => H.rejectQualitySopVersion_({ unique_id: rVersion, comment: 'متأخر' }, APPROVER, DB));
 
 /* a Rejected draft returns to Draft on the next edit, then blocks a new version */
-const sopRej = createSop('إجراء مرفوض', 'MNT');
+const sopRej = createSop('إجراء مرفوض', 'REC');
 const rejV = rows(H.QUALITY_SOP_VERSIONS_SHEET).filter(r => String(r.sop_id) === sopRej.unique_id)[0].unique_id;
 saveDraftContent(rejV);
 submit(rejV);
@@ -332,7 +521,7 @@ expectRefusal('new version while a Draft exists', () => H.saveQualitySopVersion_
 
 /* ---- freeze failure: vfNotApplied_ and zero writes ---- */
 function freezeFailureCase(label, setFault) {
-  const sopF = createSop('إجراء التجميد', 'SAF');
+  const sopF = createSop('إجراء التجميد', 'POL');
   const fv = rows(H.QUALITY_SOP_VERSIONS_SHEET).filter(r => String(r.sop_id) === sopF.unique_id)[0].unique_id;
   saveDraftContent(fv, '<p>محتوى للتجميد</p>');
   const eventsBefore = rows(H.QUALITY_SOP_EVENTS_SHEET).length;
@@ -354,7 +543,7 @@ freezeFailureCase('freeze: PDF create throws', v => { W.drive.failPdf = v; });
 check(W.drive.trashed.length === 2, 'freeze: doc is best-effort trashed after a PDF-create failure');
 
 /* ---- the legal path: Draft -> In Review -> Approved -> Effective ---- */
-const main = createSop('إجراء رئيسي', 'GEN');
+const main = createSop('إجراء رئيسي', 'PROC');
 const mainV1 = rows(H.QUALITY_SOP_VERSIONS_SHEET).filter(r => String(r.sop_id) === main.unique_id)[0].unique_id;
 expectRefusal('submit without content', () => submit(mainV1));
 saveDraftContent(mainV1);

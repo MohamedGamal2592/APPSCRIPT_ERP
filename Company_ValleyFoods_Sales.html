@@ -60,25 +60,134 @@
        first 100 rows. */
     var DATE_FROM = '', DATE_TO = '';
 
+    /* [i18n Stage B] Page catalog. Keys are semantic and stable; each Arabic
+       value is the exact string this file has always shown, so with the
+       prototype gate off t() returns the same bytes the literals did. */
+    I18N.registerPage('vf_sales', {
+      'vfSales.docTitle':       { ar: 'Valley Foods — المبيعات', en: 'Valley Foods — Sales' },
+      'vfSales.breadcrumb':     { ar: 'Valley Foods / الادارة المالية / المبيعات', en: 'Valley Foods / Finance / Sales' },
+      'vfSales.cardTitle':      { ar: 'فواتير المبيعات', en: 'Sales invoices' },
+      'vfSales.addInvoice':     { ar: '+ إضافة فاتورة', en: '+ Add invoice' },
+      'vfSales.invalidRange':   { ar: '«من تاريخ» بعد «إلى تاريخ»', en: '"From date" is after "To date"' },
+      'vfSales.loadFailed':     { ar: 'تعذر تحميل البيانات — أعد المحاولة', en: 'Could not load the data — try again' },
+      'vfSales.report':         { ar: '📊 تقرير المبيعات', en: '📊 Sales report' },
+      'vfSales.showLatest':     { ar: 'عرض الأحدث ({n})', en: 'Show latest ({n})' },
+      'vfSales.col.serial':     { ar: 'مسلسل', en: 'No.' },
+      'vfSales.col.invoiceNo':  { ar: 'رقم الفاتورة', en: 'Invoice No.' },
+      'vfSales.col.customer':   { ar: 'العميل', en: 'Customer' },
+      'vfSales.col.date':       { ar: 'التاريخ', en: 'Date' },
+      'vfSales.col.net':        { ar: 'الصافي', en: 'Net' },
+      'vfSales.col.tax':        { ar: 'الضريبة', en: 'Tax' },
+      'vfSales.col.total':      { ar: 'الإجمالي', en: 'Total' },
+      'vfSales.col.approval':   { ar: 'الاعتماد', en: 'Approval' },
+      'vfSales.emptyRange':     { ar: 'لا توجد فواتير في هذه الفترة', en: 'No invoices in this period' },
+      'vfSales.empty':          { ar: 'لا توجد فواتير', en: 'No invoices' },
+      'vfSales.action.print':   { ar: 'طباعة', en: 'Print' },
+      'vfSales.action.returnPending': { ar: 'إرجاع لقيد الانتظار', en: 'Return to pending' },
+      'vfSales.action.approve': { ar: 'اعتماد', en: 'Approve' },
+      'vfSales.status.approved': { ar: 'معتمد', en: 'Approved' },
+      'vfSales.status.pending': { ar: 'قيد الانتظار', en: 'Pending' },
+      'vfSales.loadInvoiceFailed': { ar: 'خطأ في تحميل الفاتورة', en: 'Could not load the invoice' },
+      'vfSales.field.customer': { ar: 'العميل', en: 'Customer' },
+      'vfSales.field.product':  { ar: 'المنتج', en: 'Product' },
+      'vfSales.searchProduct':  { ar: 'ابحث عن منتج…', en: 'Search for a product…' },
+      'vfSales.batches':        { ar: 'الدفعات', en: 'Batches' },
+      'vfSales.field.details':  { ar: 'تفاصيل', en: 'Details' },
+      'vfSales.field.qty':      { ar: 'الكمية', en: 'Quantity' },
+      'vfSales.field.price':    { ar: 'السعر', en: 'Price' },
+      'vfSales.field.tax':      { ar: 'الضريبة', en: 'Tax' },
+      'vfSales.field.total':    { ar: 'الإجمالي', en: 'Total' },
+      'vfSales.allocHeading':   { ar: 'تخصيص الدفعات', en: 'Batch allocation' },
+      'vfSales.allocMustEqual': { ar: '(يجب أن يساوي الكمية)', en: '(must equal the quantity)' },
+      'vfSales.allocPickProduct': { ar: 'اختر المنتج أولاً لعرض الدفعات المتاحة…', en: 'Pick a product first to see the available batches…' },
+      'vfSales.customerData':   { ar: 'بيانات العميل (تُجلب تلقائياً)', en: 'Customer details (fetched automatically)' },
+      'vfSales.field.date':     { ar: 'تاريخ الفاتورة', en: 'Invoice date' },
+      'vfSales.taxSystem':      { ar: 'خاضع للنظام الضريبي', en: 'Subject to the tax system' },
+      'vfSales.field.classTax': { ar: 'نوع الضريبة', en: 'Tax type' },
+      'vfSales.field.classSchedule': { ar: 'نوع سلع الجدول', en: 'Schedule goods type' },
+      'vfSales.field.classStatement': { ar: 'نوع البيان', en: 'Statement type' },
+      'vfSales.field.classGoods': { ar: 'نوع السلعة', en: 'Goods type' },
+      'vfSales.modalLines':     { ar: 'بنود الفاتورة', en: 'Invoice lines' },
+      'vfSales.allocateAll':    { ar: 'وزع الكل FIFO', en: 'Allocate all FIFO' },
+      'vfSales.addLine':        { ar: 'إضافة بند', en: 'Add line' },
+      'vfSales.modalAddTitle':  { ar: 'فاتورة مبيعات جديدة — الرقم يُعتمد تلقائياً', en: 'New sales invoice — the number is assigned automatically' },
+      'vfSales.modalEditTitle': { ar: 'تعديل فاتورة: {no}', en: 'Edit invoice: {no}' },
+      'vfSales.cancel':         { ar: 'إلغاء', en: 'Cancel' },
+      'vfSales.modalPrint':     { ar: 'طباعة', en: 'Print' },
+      'vfSales.modalSaveEdit':  { ar: 'حفظ التعديلات', en: 'Save changes' },
+      'vfSales.modalCreate':    { ar: 'إنشاء الفاتورة', en: 'Create invoice' },
+      'vfSales.partyTaxId':     { ar: 'الرقم الضريبي', en: 'Tax ID' },
+      'vfSales.partyAddress':   { ar: 'العنوان', en: 'Address' },
+      'vfSales.partyPhone':     { ar: 'الهاتف', en: 'Phone' },
+      'vfSales.noLines':        { ar: 'لا توجد بنود — اضغط «+ إضافة بند»', en: 'No lines — use “+ Add line”' },
+      'vfSales.dupProduct':     { ar: 'المنتج مكرر في أكثر من بند — يمنع الحفظ', en: 'The product is duplicated in more than one line — saving is blocked' },
+      'vfSales.dupBatch':       { ar: 'الدفعة {lot} مكررة في أكثر من بند — يمنع الحفظ', en: 'Batch {lot} is duplicated in more than one line — saving is blocked' },
+      'vfSales.shortageLine':   { ar: 'البند {line}: الكمية المطلوبة غير متوفرة — المتاح {available}', en: 'Line {line}: the requested quantity is unavailable — available {available}' },
+      'vfSales.pickCustomer':   { ar: 'اختر العميل', en: 'Pick a customer' },
+      'vfSales.saved':          { ar: 'تم الحفظ', en: 'Saved' },
+      'vfSales.saveFailed':     { ar: 'فشل الحفظ', en: 'Save failed' },
+      'vfSales.confirmDelete':  { ar: 'سيتم حذف الفاتورة وجميع بنودها نهائياً. متابعة؟', en: 'The invoice and all of its lines will be deleted permanently. Continue?' },
+      'vfSales.deleted':        { ar: 'تم الحذف', en: 'Deleted' },
+      'vfSales.deleteFailed':   { ar: 'فشل الحذف', en: 'Delete failed' },
+      'vfSales.fifoDone':       { ar: 'تم توزيع جميع البنود FIFO', en: 'All lines were allocated FIFO' },
+      'vfSales.loadingBatches': { ar: 'جاري تحميل الدفعات...', en: 'Loading batches...' },
+      'vfSales.noBatches':      { ar: 'لا توجد دفعات متاحة لهذا المنتج.', en: 'No batches are available for this product.' },
+      'vfSales.fifoOrdered':    { ar: 'الدفعات مرتبة FIFO (الأقدم أولاً)', en: 'Batches in FIFO order (oldest first)' },
+      'vfSales.fifoAuto':       { ar: 'توزيع FIFO تلقائي', en: 'Automatic FIFO allocation' },
+      'vfSales.thBatch':        { ar: 'الدفعة', en: 'Batch' },
+      'vfSales.thAvailable':    { ar: 'المتاح', en: 'Available' },
+      'vfSales.thBatchQty':     { ar: 'الكمية من الدفعة', en: 'Quantity from batch' },
+      'vfSales.pickProductCmb': { ar: 'اختر المنتج أولاً', en: 'Pick a product first' },
+      'vfSales.lineNo':         { ar: 'بند {n}', en: 'Line {n}' },
+      'vfSales.allocTitle':     { ar: '📦 دفعات البند — {name}', en: '📦 Line batches — {name}' },
+      'vfSales.doneMark':       { ar: 'تم ✓', en: 'Done ✓' },
+      'vfSales.saveFirst':      { ar: 'احفظ الفاتورة أولاً ثم اطبع', en: 'Save the invoice first, then print' },
+      'vfSales.busyHold':       { ar: 'هناك حفظ قيد التنفيذ — انتظر ثم أعد المحاولة', en: 'A save is in progress — wait, then try again' },
+      'vfSales.closeFormFirst': { ar: 'أغلق النموذج المفتوح قبل تحديث القائمة', en: 'Close the open form before refreshing the list' },
+      'vfSales.allocMismatch':  { ar: 'مجموع التخصيص ({sum}) لا يساوي الكمية ({need})', en: 'The allocation total ({sum}) does not equal the quantity ({need})' },
+      'vfSales.shortageStock':  { ar: 'الكمية المطلوبة غير متوفرة — المتاح {available}، العجز {shortage}', en: 'The requested quantity is unavailable — available {available}, shortage {shortage}' },
+      'vfSales.dupBatchLine':   { ar: 'الدفعة مكررة: {lot} في أكثر من بند', en: 'Duplicate batch: {lot} in more than one line' },
+      'vfSales.dupProductFooter': { ar: 'منتج مكرر — يمنع الحفظ', en: 'Duplicate product — saving is blocked' },
+      'vfSales.dupBatchFooter': { ar: 'دفعة مكررة — يمنع الحفظ', en: 'Duplicate batch — saving is blocked' },
+      'vfSales.statNet':        { ar: 'الصافي', en: 'Net' },
+      'vfSales.statTax':        { ar: 'الضريبة', en: 'Tax' },
+      'vfSales.statTotal':      { ar: 'الإجمالي', en: 'Total' },
+      'vfSales.egp':            { ar: 'ج.م', en: 'EGP' }
+    });
+
     function renderApp() {
       UIC.appShell('vf-root', {
         companyLogoUrl: COMPANY_LOGO_URL,
         companyLogoHref: scriptUrl + '?action=vf_dashboard&sessionToken=' + SESSION_TOKEN,
         companyLogoTitle: 'Valley Foods',
-        breadcrumb: 'Valley Foods / الادارة المالية / المبيعات',
+        breadcrumb: I18N.t('vfSales.breadcrumb'),
         contentId: 'vf-sales-content',
         menuGroups: (window.VALLEYFOODS_MENU || [])
       });
       document.getElementById('vf-sales-content').innerHTML =
-        '<div class="vf-card"><div class="vf-card-header"><h3>فواتير المبيعات</h3>' +
-          (CAN_WRITE ? '<button class="btn btn-primary" onclick="SALES_PAGE.openAdd()">+ إضافة فاتورة</button>' : '') +
+        '<div class="vf-card"><div class="vf-card-header"><h3>' + I18N.t('vfSales.cardTitle') + '</h3>' +
+          (CAN_WRITE ? '<button class="btn btn-primary" id="sales-add-btn" onclick="SALES_PAGE.openAdd()">' + I18N.t('vfSales.addInvoice') + '</button>' : '') +
         '</div><div class="vf-card-body">' +
           '<div id="sales-filter"></div>' +
           '<div id="sales-view-toggle"></div>' +
-          '<div id="sales-table"><p class="vf-text-muted">جاري التحميل...</p></div>' +
+          '<div id="sales-table"><p class="vf-text-muted" id="sales-loading">' + I18N.t('common.loading') + '</p></div>' +
         '</div></div>';
+      bindStaticLabels();
       renderFilter();
       load();
+    }
+
+    /* Registered once, after the shell and the card exist: title, breadcrumb
+       and the card's own labels. Flips rewrite these nodes in place. */
+    function bindStaticLabels() {
+      try {
+        I18N.bind(document.querySelector('title'), 'vfSales.docTitle');
+        I18N.bind(document.querySelector('#vf-root .breadcrumb'), 'vfSales.breadcrumb');
+        var content = document.getElementById('vf-sales-content');
+        if (content) I18N.bind(content.querySelector('.vf-card-header h3'), 'vfSales.cardTitle');
+        I18N.bind(document.getElementById('sales-add-btn'), 'vfSales.addInvoice');
+        I18N.bind(document.getElementById('sales-loading'), 'common.loading');
+      } catch (e) {}
     }
 
     function renderFilter() {
@@ -93,7 +202,7 @@
 
     function applyDateFilter() {
       var v = UIC.dateRangeValues('sales-date');
-      if (v.from && v.to && v.from > v.to) { UIC.toast('«من تاريخ» بعد «إلى تاريخ»', 'error'); return; }
+      if (v.from && v.to && v.from > v.to) { UIC.toast(I18N.t('vfSales.invalidRange'), 'error'); return; }
       DATE_FROM = v.from; DATE_TO = v.to;
       renderFilter();
       load();
@@ -111,6 +220,12 @@
        directly reachable, so no jump button is needed). */
     var SHOW_ALL = false;
     var PAGE_WINDOW = 100;
+    var LAST_TOTAL = 0;   /* exact filtered total of the last reply, for refresh */
+    /* Phase B candidate (Plan_Fast_Pages_Production_Safe.md): one server-side
+       latest-window request instead of count-then-page. FALSE as shipped, so
+       the existing two-call sequence below is what runs until an owner turns
+       it on. */
+    var SALES_ONE_REQUEST_ = false;
 
     function load(quiet) {
       if (!quiet) UIC.readSkeleton();
@@ -118,23 +233,39 @@
       if (!container) return;
       renderViewToggle();
       var base = { from: DATE_FROM, to: DATE_TO };
-      var first = SHOW_ALL
-        ? companyCall('get_valley_sales_page', base)
-        : companyCall('get_valley_sales_page', { offset: 0, limit: 1, from: DATE_FROM, to: DATE_TO })
+      var first;
+      if (SALES_ONE_REQUEST_ && !SHOW_ALL) {
+        first = companyCall('get_valley_sales_page', {
+          mode: 'latest_window', limit: PAGE_WINDOW, from: DATE_FROM, to: DATE_TO
+        });
+      } else if (SHOW_ALL) {
+        first = companyCall('get_valley_sales_page', base);
+      } else {
+        first = companyCall('get_valley_sales_page', { offset: 0, limit: 1, from: DATE_FROM, to: DATE_TO })
             .then(function (r0) {
               setRefs(r0);
               var total = Number(r0.total) || 0;
               var off = Math.max(0, total - PAGE_WINDOW);
               return companyCall('get_valley_sales_page', { offset: off, limit: PAGE_WINDOW, from: DATE_FROM, to: DATE_TO });
             });
+      }
       first
         .then(function (r) {
           setRefs(r);
+          /* The one-request reply already carries the bootstrap, so the
+             deferred ensureBootstrap() below resolves without a second RPC. */
+          if (SALES_ONE_REQUEST_ && (r && (r.parties || r.products || r.enums))) {
+            __bootstrapPromise = Promise.resolve({
+              parties: r.parties || [], products: r.products || [], enums: r.enums || {}
+            });
+          }
           renderInvoiceTable(r.invoices || []);
         })
         .catch(function (e) {
-          container.innerHTML = '<div class="empty-state"><span>تعذر تحميل البيانات — أعد المحاولة</span></div>';
-          UIC.toast('خطأ: ' + ((e && e.message) || e), 'error');
+          container.innerHTML = '<div class="empty-state"><span>' + I18N.t('vfSales.loadFailed') + '</span></div>';
+          /* Registered so a later flip relabels the failure text in place too. */
+          I18N.bind(container.querySelector('.empty-state span'), 'vfSales.loadFailed');
+          UIC.toast(I18N.t('common.errorPrefix') + ' ' + ((e && e.message) || e), 'error');
         })
         .finally(function () {
           if (!quiet) UI.hideSpinner();
@@ -147,6 +278,7 @@
       if (r.parties) PARTIES = r.parties;
       if (r.products) PRODUCTS = r.products;
       if (r.enums) ENUMS = r.enums;
+      if (r.total != null) LAST_TOTAL = Number(r.total) || 0;
     }
 
     function renderViewToggle() {
@@ -154,18 +286,71 @@
       if (!host) return;
       host.innerHTML =
         '<div style="display:flex;justify-content:flex-end;gap:8px;margin-bottom:8px;">' +
-          '<a class="btn btn-outline" target="_blank" rel="noopener" href="' + scriptUrl + '?action=vf_sales_report&sessionToken=' + encodeURIComponent(SESSION_TOKEN) + '">📊 تقرير المبيعات</a>' +
-          (SHOW_ALL ? '<button class="btn btn-outline" onclick="SALES_PAGE.showLatest()">عرض الأحدث (' + PAGE_WINDOW + ')</button>' : '') +
+          '<a class="btn btn-outline" target="_blank" rel="noopener" href="' + scriptUrl + '?action=vf_sales_report&sessionToken=' + encodeURIComponent(SESSION_TOKEN) + '">' + I18N.t('vfSales.report') + '</a>' +
+          (SHOW_ALL ? '<button class="btn btn-outline" onclick="SALES_PAGE.showLatest()">' + I18N.t('vfSales.showLatest', { n: PAGE_WINDOW }) + '</button>' : '') +
         '</div>';
+      /* Registered here, once per build: a flip rewrites this node in place. */
+      I18N.bind(host.querySelector('a.btn'), 'vfSales.report');
     }
 
     function showAll() { SHOW_ALL = true; load(); }
     function showLatest() { SHOW_ALL = false; load(); }
 
+    var LAST_INVOICES_ = [];   /* last raw reply, mapped straight into the rows below */
+
+    /* [State fix] One source of truth for this list's columns: the immutable
+       data key the dataTable has always used, plus the dictionary key that
+       names it. The header builder and the in-place relabeler both read it, so
+       a flip cannot desynchronise a column from its label. */
+    var INVOICE_COLS_ = [
+      { key: 'مسلسل', i18n: 'vfSales.col.serial', numeric: true },
+      { key: '__col1', i18n: 'vfSales.col.invoiceNo' },
+      { key: 'العميل', i18n: 'vfSales.col.customer', col: 'text' },
+      { key: '__col3', i18n: 'vfSales.col.date' },
+      { key: 'الصافي', i18n: 'vfSales.col.net', numeric: true },
+      { key: 'الضريبة', i18n: 'vfSales.col.tax', numeric: true },
+      { key: 'الإجمالي', i18n: 'vfSales.col.total', numeric: true },
+      { key: 'الاعتماد', i18n: 'vfSales.col.approval', col: 'atom' },
+      { key: '__col8', i18n: '' }
+    ];
+
+    var STATUS_COL_ = INVOICE_COLS_.map(function (c) { return c.key; }).indexOf('الاعتماد');
+
+    function invoiceHeaders_() {
+      return INVOICE_COLS_.map(function (c) {
+        return { key: c.key, label: c.i18n ? I18N.t(c.i18n) : '', numeric: c.numeric, col: c.col };
+      });
+    }
+
+    function colByKey_(key) {
+      for (var i = 0; i < INVOICE_COLS_.length; i++) {
+        if (INVOICE_COLS_[i].key === key) return INVOICE_COLS_[i];
+      }
+      return null;
+    }
+
+    /* The canonical approval value rides on the chip itself, so a flip maps it
+       back through the dictionary without re-reading or re-classifying a row. */
+    function statusPillHtml_(isApproved) {
+      return UIC.statusPill(
+        isApproved ? I18N.t('vfSales.status.approved') : I18N.t('vfSales.status.pending'),
+        isApproved ? 'success' : 'neutral'
+      ).replace('<span ', '<span data-approval="' + (isApproved ? 'Approved' : 'Pending') + '" ');
+    }
+
     function renderInvoiceTable(invoices) {
+      LAST_INVOICES_ = invoices || [];
+      renderInvoiceRows(LAST_INVOICES_.map(mapInvoiceRow));
+    }
+
+    /* [i18n Stage B] Header identity is `h.key || h.label`, frozen to exactly
+       what this table has always used — the Arabic label for the declared
+       columns and the positional `__col<i>` dataTable assigns to the string
+       ones — while the visible label resolves through I18N at render time.
+       Sorting, filtering, classification and erp_cols_* prefs see no change. */
+    function renderInvoiceRows(rows) {
       var container = document.getElementById('sales-table');
       if (!container) return;
-      var rows = (invoices || []).map(mapInvoiceRow);
       /* dataTable RETURNS html — it must be injected (PagedTable did
          host.innerHTML = UIC.dataTable(...); discarding it leaves the
          skeleton on screen forever). Inner id 'sales-dt' keeps every
@@ -175,11 +360,9 @@
            length varies by customer; declared text so it keeps a name's
            worth of room whichever page is on screen. الاعتماد is a status
            pill that inference reads as text and that needs an atom's width. */
-        headers: [{ label: 'مسلسل', numeric: true }, 'رقم الفاتورة', { label: 'العميل', col: 'text' }, 'التاريخ',
-          { label: 'الصافي', numeric: true }, { label: 'الضريبة', numeric: true }, { label: 'الإجمالي', numeric: true },
-          { label: 'الاعتماد', col: 'atom' }, ''],
+        headers: invoiceHeaders_(),
         rows: rows,
-        emptyText: (DATE_FROM || DATE_TO) ? 'لا توجد فواتير في هذه الفترة' : 'لا توجد فواتير',
+        emptyText: (DATE_FROM || DATE_TO) ? I18N.t('vfSales.emptyRange') : I18N.t('vfSales.empty'),
         truncated: !SHOW_ALL,
         showAll: SHOW_ALL ? null : 'SALES_PAGE.showAll()'
       });
@@ -189,12 +372,12 @@
     function mapInvoiceRow(inv) {
             var isApproved = inv.approval_status === 'Approved';
             var actions = IS_SUPER_ADMIN ? UIC.actionBtns([
-              { label: 'طباعة', onclick: 'SALES_PAGE.print(\'' + esc(inv.invoice_unique_id) + '\')' },
-              { label: isApproved ? 'إرجاع لقيد الانتظار' : 'اعتماد', onclick: 'SALES_PAGE.approve(\'' + esc(inv.invoice_unique_id) + '\')' },
-              isApproved ? null : { label: 'تعديل', onclick: 'SALES_PAGE.openEdit(\'' + esc(inv.invoice_unique_id) + '\')' },
-              isApproved ? null : { label: 'حذف', color: '#dc2626', onclick: 'SALES_PAGE.remove(\'' + esc(inv.invoice_unique_id) + '\')' }
+              { label: I18N.t('vfSales.action.print'), onclick: 'SALES_PAGE.print(\'' + esc(inv.invoice_unique_id) + '\')' },
+              { label: isApproved ? I18N.t('vfSales.action.returnPending') : I18N.t('vfSales.action.approve'), onclick: 'SALES_PAGE.approve(\'' + esc(inv.invoice_unique_id) + '\')' },
+              isApproved ? null : { label: I18N.t('common.edit'), onclick: 'SALES_PAGE.openEdit(\'' + esc(inv.invoice_unique_id) + '\')' },
+              isApproved ? null : { label: I18N.t('common.delete'), color: '#dc2626', onclick: 'SALES_PAGE.remove(\'' + esc(inv.invoice_unique_id) + '\')' }
             ].filter(Boolean)) : '';
-            return [
+            var cells = [
               '<span class="num" data-num="' + (inv['مسلسل'] || 0) + '" style="color:var(--text-muted, #64748b);white-space:nowrap;">' + (inv['مسلسل'] || '-') + '</span>',
               '<b>' + esc(inv['رقم الفاتورة'] || '-') + '</b>',
               esc(partyLabel(inv['اسم العميل'])),
@@ -202,9 +385,14 @@
               '<span class="num" data-num="' + num0(inv['المبلغ الصافي']) + '">' + num0(inv['المبلغ الصافي']).toLocaleString('en-US', { minimumFractionDigits: 2 }) + '</span>',
               '<span class="num" data-num="' + num0(inv['قيمة الضريبة']) + '">' + num0(inv['قيمة الضريبة']).toLocaleString('en-US', { minimumFractionDigits: 2 }) + '</span>',
               '<span class="num" style="font-weight:700;color:#0e623b;" data-num="' + num0(inv['إجمالي']) + '">' + num0(inv['إجمالي']).toLocaleString('en-US', { minimumFractionDigits: 2 }) + '</span>',
-              UIC.statusPill(isApproved ? 'معتمد' : 'قيد الانتظار', isApproved ? 'success' : 'neutral'),
+              statusPillHtml_(isApproved),
               actions
             ];
+            /* The canonical flag travels with the cached row (indexes are all
+               the search and the pager see), so a flip can re-label the chip
+               without re-parsing the stored markup. */
+            cells._approved = isApproved;
+            return cells;
     }
 
     function partyLabel(idRef) {
@@ -215,6 +403,8 @@
     /* ---------- ODOO-STYLE ENTRY MODAL ---------- */
     var DRAFT_LINES = [];
     var EDIT_UID = '';
+    var EDIT_NO = '';             /* the invoice number shown in an edit title */
+    var PARTY_CHIPS_UPDATE_ = null;   /* re-run by the language flip, values untouched */
 
     function openAdd() { DRAFT_LINES = []; openInvoiceModal(null); }
 
@@ -263,15 +453,15 @@
           });
           openInvoiceModal(inv);
         })
-        .catch(function (e) { UIC.toast((e && e.message) || 'خطأ في تحميل الفاتورة', 'error'); })
+        .catch(function (e) { UIC.toast((e && e.message) || I18N.t('vfSales.loadInvoiceFailed'), 'error'); })
         .finally(function () { UI.hideSpinner(); });
     }
 
     function partyFieldHtml(selected) {
-      return UIC.combo({ key: 'f-party', label: 'العميل', required: true, options: PARTIES, value: selected ? String(selected['اسم العميل'] || '') : '', placeholder: 'اكتب للبحث…' });
+      return UIC.combo({ key: 'f-party', label: I18N.t('vfSales.field.customer'), required: true, options: PARTIES, value: selected ? String(selected['اسم العميل'] || '') : '', placeholder: I18N.t('common.typeToSearch') });
     }
     function comboEnum(key, label, list, selected) {
-      return UIC.combo({ key: key, label: label, required: true, options: (list || []).map(function (o) { return { value: o.value, label: o.label }; }), value: selected != null ? selected : '', placeholder: 'اكتب للبحث…' });
+      return UIC.combo({ key: key, label: label, required: true, options: (list || []).map(function (o) { return { value: o.value, label: o.label }; }), value: selected != null ? selected : '', placeholder: I18N.t('common.typeToSearch') });
     }
 
     function onQtyChange(i) {
@@ -289,49 +479,50 @@
       var boxStyle = 'background:var(--bg-surface, #fff);border:1px solid var(--border-color, #e2e8f0);border-radius:8px;padding:10px 12px;min-width:130px;';
       var boxLabel = 'font-size:11px;font-weight:700;color:var(--text-muted, #64748b);margin-bottom:6px;';
       return '<tr id="line-' + i + '" data-idx="' + i + '">' +
-        '<td colspan="5">' + UIC.combo({ key: 'ln-prod-' + i, label: 'المنتج', required: true, options: prodOpts, value: ln.product_id ? String(ln.product_id) : '', placeholder: 'ابحث عن منتج…' }) + '</td>' +
-        '<td style="vertical-align:top;padding-top:26px;white-space:nowrap;"><button type="button" class="btn btn-outline" style="font-size:12px;" onclick="SALES_PAGE.openAllocModal(' + i + ')">📦 الدفعات (<span id="alloc-btn-sum-' + i + '">0</span> / ' + (ln.qty || 0) + ')</button></td>' +
+        '<td colspan="5">' + UIC.combo({ key: 'ln-prod-' + i, label: I18N.t('vfSales.field.product'), required: true, options: prodOpts, value: ln.product_id ? String(ln.product_id) : '', placeholder: I18N.t('vfSales.searchProduct') }) + '</td>' +
+        '<td style="vertical-align:top;padding-top:26px;white-space:nowrap;"><button type="button" class="btn btn-outline" style="font-size:12px;" onclick="SALES_PAGE.openAllocModal(' + i + ')">📦 <span data-i18n="vfSales.batches">' + I18N.t('vfSales.batches') + '</span> (<span id="alloc-btn-sum-' + i + '">0</span> / ' + (ln.qty || 0) + ')</button></td>' +
         '<td style="vertical-align:top;padding-top:26px;"><button class="btn btn-outline" style="padding:3px 10px;color:var(--danger, #dc2626);" onclick="SALES_PAGE.removeLine(' + i + ')">✕</button></td>' +
       '</tr>' +
       '<tr id="line-fields-' + i + '">' +
-        '<td><div style="' + boxStyle + '"><div style="' + boxLabel + '">تفاصيل</div><input id="ln-details-' + i + '" class="input" type="text" value="' + esc(ln.details) + '" placeholder="اختياري" style="width:100%;"></div></td>' +
-        '<td><div style="' + boxStyle + '"><div style="' + boxLabel + '">الكمية</div><input id="ln-qty-' + i + '" class="input" type="number" min="0.01" step="0.01" value="' + (ln.qty || '') + '" oninput="SALES_PAGE.onQtyChange(' + i + ')" style="width:100%;"></div></td>' +
-        '<td><div style="' + boxStyle + '"><div style="' + boxLabel + '">السعر</div><input id="ln-price-' + i + '" class="input" type="number" min="0" step="0.01" value="' + (ln.price !== '' ? ln.price : '') + '" oninput="SALES_PAGE.recalc()" style="width:100%;"></div></td>' +
-        '<td><div style="' + boxStyle + '"><div style="' + boxLabel + '">الضريبة</div>' + UIC.combo({ key: 'ln-tax-' + i, label: '', required: true, options: (ENUMS.line_tax || []).map(function (t) { return { value: t, label: (t * 100) + '%' }; }), value: String(ln.tax), placeholder: '%' }) + '</div></td>' +
-        '<td colspan="3"><div style="' + boxStyle + '"><div style="' + boxLabel + '">الإجمالي</div><div class="num" style="font-weight:700;font-size:15px;direction:ltr;" id="ln-total-' + i + '">' + rowTotal.toLocaleString('en-US', { minimumFractionDigits: 2 }) + '</div></div></td>' +
+        '<td><div style="' + boxStyle + '"><div style="' + boxLabel + '" data-i18n="vfSales.field.details">' + I18N.t('vfSales.field.details') + '</div><input id="ln-details-' + i + '" class="input" type="text" value="' + esc(ln.details) + '" placeholder="' + I18N.t('common.optional') + '" data-i18n-ph="common.optional" style="width:100%;"></div></td>' +
+        '<td><div style="' + boxStyle + '"><div style="' + boxLabel + '" data-i18n="vfSales.field.qty">' + I18N.t('vfSales.field.qty') + '</div><input id="ln-qty-' + i + '" class="input" type="number" min="0.01" step="0.01" value="' + (ln.qty || '') + '" oninput="SALES_PAGE.onQtyChange(' + i + ')" style="width:100%;"></div></td>' +
+        '<td><div style="' + boxStyle + '"><div style="' + boxLabel + '" data-i18n="vfSales.field.price">' + I18N.t('vfSales.field.price') + '</div><input id="ln-price-' + i + '" class="input" type="number" min="0" step="0.01" value="' + (ln.price !== '' ? ln.price : '') + '" oninput="SALES_PAGE.recalc()" style="width:100%;"></div></td>' +
+        '<td><div style="' + boxStyle + '"><div style="' + boxLabel + '" data-i18n="vfSales.field.tax">' + I18N.t('vfSales.field.tax') + '</div>' + UIC.combo({ key: 'ln-tax-' + i, label: '', required: true, options: (ENUMS.line_tax || []).map(function (t) { return { value: t, label: (t * 100) + '%' }; }), value: String(ln.tax), placeholder: '%' }) + '</div></td>' +
+        '<td colspan="3"><div style="' + boxStyle + '"><div style="' + boxLabel + '" data-i18n="vfSales.field.total">' + I18N.t('vfSales.field.total') + '</div><div class="num" style="font-weight:700;font-size:15px;direction:ltr;" id="ln-total-' + i + '">' + rowTotal.toLocaleString('en-US', { minimumFractionDigits: 2 }) + '</div></div></td>' +
       '</tr>' +
       /* P2: batch-allocation strip (hidden until product chosen) */
       '<tr id="alloc-row-' + i + '" style="display:none;"><td colspan="7" style="background:var(--bg-subtle, #f8fafc);padding:8px 14px;">' +
-        '<div style="font-size:12px;font-weight:700;color:#166534;margin-bottom:6px;">📦 تخصيص الدفعات <span class="num" style="color:#94a3b8;font-weight:400;">(يجب أن يساوي الكمية)</span> — <span id="alloc-sum-' + i + '">0</span> / <span id="alloc-need-' + i + '">' + (ln.qty || 0) + '</span></div>' +
-        '<div id="alloc-strip-' + i + '" style="color:#94a3b8;font-size:12px;">اختر المنتج أولاً لعرض الدفعات المتاحة…</div>' +
+        '<div style="font-size:12px;font-weight:700;color:#166534;margin-bottom:6px;">📦 <span data-i18n="vfSales.allocHeading">' + I18N.t('vfSales.allocHeading') + '</span> <span class="num" data-i18n="vfSales.allocMustEqual" style="color:#94a3b8;font-weight:400;">' + I18N.t('vfSales.allocMustEqual') + '</span> — <span id="alloc-sum-' + i + '">0</span> / <span id="alloc-need-' + i + '">' + (ln.qty || 0) + '</span></div>' +
+        '<div id="alloc-strip-' + i + '" style="color:#94a3b8;font-size:12px;" data-i18n="vfSales.allocPickProduct">' + I18N.t('vfSales.allocPickProduct') + '</div>' +
       '</td></tr>';
     }
 
     function openInvoiceModal(inv) {
       var isEdit = !!inv;
       EDIT_UID = isEdit ? String(inv.invoice_unique_id) : '';
+      EDIT_NO = isEdit ? String(inv['رقم الفاتورة'] || '') : '';
       /* Party auto-fill strip: tax id / address / phone from the party record */
       var autofill =
-        '<div class="form-field"><label class="form-label">بيانات العميل (تُجلب تلقائياً)</label>' +
+        '<div class="form-field"><label class="form-label" data-i18n="vfSales.customerData">' + I18N.t('vfSales.customerData') + '</label>' +
         '<div id="party-chips" class="input" readonly style="background:var(--bg-subtle, #f3f4f6);color:var(--text-muted, #6b7280);min-height:38px;display:flex;align-items:center;">—</div></div>';
       var body = '<form id="sales-form">' +
         '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-bottom:14px;">' +
           partyFieldHtml(inv) + autofill +
-          UIC.field({ key: 'f-date', label: 'تاريخ الفاتورة', type: 'date', required: true, value: inv ? fmtDate(inv['تاريخ الفاتورة']).split('/').reverse().join('-') : todayStr() }) +
-          checkboxField('f-tax-system', 'خاضع للنظام الضريبي', inv ? String(inv.tax_system).toLowerCase() === 'true' : false) +
+          UIC.field({ key: 'f-date', label: I18N.t('vfSales.field.date'), type: 'date', required: true, value: inv ? fmtDate(inv['تاريخ الفاتورة']).split('/').reverse().join('-') : todayStr() }) +
+          checkboxField('f-tax-system', I18N.t('vfSales.taxSystem'), inv ? String(inv.tax_system).toLowerCase() === 'true' : false, 'vfSales.taxSystem') +
         '</div>' +
         '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-bottom:14px;">' +
-          comboEnum('f-class-tax', 'نوع الضريبة', ENUMS.class_tax, inv ? Number(inv['نوع الضريبة (سلع عامة 1/سلع جدول 2)']) : 1) +
-          comboEnum('f-class-schedule', 'نوع سلع الجدول', ENUMS.class_schedule, inv ? Number(inv['نوع سلع الجدول (لايوجد 0/جدول أولا 1/جدول ثانيا 2)']) : 0) +
-          comboEnum('f-class-statement', 'نوع البيان', ENUMS.class_statement, inv ? Number(inv['نوع البيان (سلعة 3/خدمة 4/تسويات 5)']) : 3) +
-          comboEnum('f-class-goods', 'نوع السلعة', ENUMS.class_goods, inv ? Number(inv['نوع السلعة (محلي 1/صادرات 2/آلات ومعدات 5/أجزاء آلات 6/إعفاءات 7)']) : 1) +
+          comboEnum('f-class-tax', I18N.t('vfSales.field.classTax'), ENUMS.class_tax, inv ? Number(inv['نوع الضريبة (سلع عامة 1/سلع جدول 2)']) : 1) +
+          comboEnum('f-class-schedule', I18N.t('vfSales.field.classSchedule'), ENUMS.class_schedule, inv ? Number(inv['نوع سلع الجدول (لايوجد 0/جدول أولا 1/جدول ثانيا 2)']) : 0) +
+          comboEnum('f-class-statement', I18N.t('vfSales.field.classStatement'), ENUMS.class_statement, inv ? Number(inv['نوع البيان (سلعة 3/خدمة 4/تسويات 5)']) : 3) +
+          comboEnum('f-class-goods', I18N.t('vfSales.field.classGoods'), ENUMS.class_goods, inv ? Number(inv['نوع السلعة (محلي 1/صادرات 2/آلات ومعدات 5/أجزاء آلات 6/إعفاءات 7)']) : 1) +
         '</div>' +
         '<div style="background:var(--bg-subtle, #f8fafc);border:1px solid var(--border-color, #e5e7eb);border-radius:8px;padding:12px;">' +
           '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">' +
-            '<b style="color:#166534;">بنود الفاتورة</b>' +
+            '<b style="color:#166534;" data-i18n="vfSales.modalLines">' + I18N.t('vfSales.modalLines') + '</b>' +
             '<div style="display:flex;gap:8px;">' +
-              '<button type="button" class="btn btn-outline" style="font-size:12px;" onclick="SALES_PAGE.allocateAllFifo()">⟳ وزع الكل FIFO</button>' +
-              '<button type="button" class="btn btn-outline" onclick="SALES_PAGE.addLine()">+ إضافة بند</button>' +
+              '<button type="button" class="btn btn-outline" style="font-size:12px;" onclick="SALES_PAGE.allocateAllFifo()">⟳ <span data-i18n="vfSales.allocateAll">' + I18N.t('vfSales.allocateAll') + '</span></button>' +
+              '<button type="button" class="btn btn-outline" onclick="SALES_PAGE.addLine()">+ <span data-i18n="vfSales.addLine">' + I18N.t('vfSales.addLine') + '</span></button>' +
             '</div>' +
           '</div>' +
           '<div class="table-wrap"><table class="table" id="lines-table" style="min-width:900px;">' +
@@ -343,7 +534,7 @@
 
       /* wide modal */
       UIC.openModal('sales-modal', {
-        title: isEdit ? 'تعديل فاتورة: ' + (inv['رقم الفاتورة'] || '') : 'فاتورة مبيعات جديدة — الرقم يُعتمد تلقائياً',
+        title: isEdit ? I18N.t('vfSales.modalEditTitle', { no: EDIT_NO }) : I18N.t('vfSales.modalAddTitle'),
         body: body,
         footer: false
       });
@@ -355,10 +546,10 @@
       var foot = document.createElement('div');
       foot.style.cssText = 'display:flex;justify-content:flex-end;gap:10px;padding:14px 20px;border-top:1px solid var(--border-color, #e5e7eb);';
       foot.innerHTML =
-        '<button class="btn btn-outline" onclick="UIC.closeModal(\'sales-modal\')">إلغاء</button>' +
-        (isEdit ? '<button class="btn btn-outline" onclick="SALES_PAGE.print(EDIT_UID)">🖨️ طباعة</button>' : '') +
-        (isEdit ? '<button class="btn btn-primary" onclick="UI.submitOnce(this, SALES_PAGE.save)">💾 حفظ التعديلات</button>'
-                : '<button class="btn btn-primary" onclick="UI.submitOnce(this, SALES_PAGE.save)">💾 إنشاء الفاتورة</button>');
+        '<button class="btn btn-outline" onclick="UIC.closeModal(\'sales-modal\')"><span data-i18n="vfSales.cancel">' + I18N.t('vfSales.cancel') + '</span></button>' +
+        (isEdit ? '<button class="btn btn-outline" onclick="SALES_PAGE.print(EDIT_UID)">🖨️ <span data-i18n="vfSales.modalPrint">' + I18N.t('vfSales.modalPrint') + '</span></button>' : '') +
+        (isEdit ? '<button class="btn btn-primary" onclick="UI.submitOnce(this, SALES_PAGE.save)">💾 <span data-i18n="vfSales.modalSaveEdit">' + I18N.t('vfSales.modalSaveEdit') + '</span></button>'
+                : '<button class="btn btn-primary" onclick="UI.submitOnce(this, SALES_PAGE.save)">💾 <span data-i18n="vfSales.modalCreate">' + I18N.t('vfSales.modalCreate') + '</span></button>');
       modal.querySelector('.modal').appendChild(foot);
 
       drawLines();
@@ -374,15 +565,17 @@
         var val = getComboVal('f-party');
         var p = PARTIES.filter(function (o) { return String(o.value) === String(val); })[0];
         if (!p) { chips.textContent = '—'; return; }
-        chips.innerHTML = 'الرقم الضريبي: <b>' + esc(p.tax_id || '-') + '</b> &nbsp;·&nbsp; العنوان: <b>' + esc(p.address || '-') + '</b> &nbsp;·&nbsp; الهاتف: <b>' + esc(p.phone || '-') + '</b>';
+        chips.innerHTML = I18N.t('vfSales.partyTaxId') + ': <b>' + esc(p.tax_id || '-') + '</b> &nbsp;·&nbsp; ' + I18N.t('vfSales.partyAddress') + ': <b>' + esc(p.address || '-') + '</b> &nbsp;·&nbsp; ' + I18N.t('vfSales.partyPhone') + ': <b>' + esc(p.phone || '-') + '</b>';
       };
+      PARTY_CHIPS_UPDATE_ = update;
       if (inv) update(); /* pre-fill for edit */
       document.getElementById('f-party_display').addEventListener('input', update);
     }
 
-    function checkboxField(key, label, checked) {
+    function checkboxField(key, label, checked, i18nKey) {
       return '<label style="display:flex;align-items:center;gap:8px;margin-top:22px;font-size:14px;">' +
-        '<input type="checkbox" id="' + key + '"' + (checked ? ' checked' : '') + '> ' + label + '</label>';
+        '<input type="checkbox" id="' + key + '"' + (checked ? ' checked' : '') + '> ' +
+        (i18nKey ? '<span data-i18n="' + i18nKey + '">' + label + '</span>' : label) + '</label>';
     }
 
     /* Typed values live only in DOM inputs until save; a redraw from DRAFT_LINES
@@ -408,7 +601,7 @@
       if (!tb) return;
       syncDraftFromDom();
       tb.innerHTML = DRAFT_LINES.map(function (_, i) { return lineRowHtml(i, DRAFT_LINES[i]); }).join('') ||
-        '<tr><td colspan="7" style="text-align:center;color:#94a3b8;">لا توجد بنود — اضغط «+ إضافة بند»</td></tr>';
+        '<tr><td colspan="7" style="text-align:center;color:#94a3b8;" data-i18n="vfSales.noLines">' + I18N.t('vfSales.noLines') + '</td></tr>';
       UIC.autoColumns('lines-table');
       /* re-fetch batches for every line that already has a product */
       for (var i = 0; i < DRAFT_LINES.length; i++) {
@@ -490,13 +683,13 @@
           var totalAvail = batches.reduce(function(s,b){ return s + (Number(b.available)||0); }, 0);
           if (need > totalAvail + 0.0001) {
             shortEl.style.display = '';
-            shortEl.innerHTML = '<span style="color:var(--danger, #dc2626);font-weight:700;">⚠ الكمية المطلوبة غير متوفرة — المتاح ' + fmtNum2(totalAvail) + '، العجز ' + fmtNum2(need - totalAvail) + '</span>';
+            shortEl.innerHTML = '<span style="color:var(--danger, #dc2626);font-weight:700;">⚠ ' + I18N.t('vfSales.shortageStock', { available: fmtNum2(totalAvail), shortage: fmtNum2(need - totalAvail) }) + '</span>';
           } else if (mismatch && s2 > 0) {
             shortEl.style.display = '';
-            shortEl.innerHTML = '<span style="color:var(--danger, #dc2626);">⚠ مجموع التخصيص (' + fmtNum2(s2) + ') لا يساوي الكمية (' + fmtNum2(need) + ')</span>';
+            shortEl.innerHTML = '<span style="color:var(--danger, #dc2626);">⚠ ' + I18N.t('vfSales.allocMismatch', { sum: fmtNum2(s2), need: fmtNum2(need) }) + '</span>';
           } else if (dupBatch.dup) {
             shortEl.style.display = '';
-            shortEl.innerHTML = '<span style="color:var(--danger, #dc2626);">⚠ الدفعة مكررة: ' + esc(dupBatch.lot) + ' في أكثر من بند</span>';
+            shortEl.innerHTML = '<span style="color:var(--danger, #dc2626);">⚠ ' + I18N.t('vfSales.dupBatchLine', { lot: esc(dupBatch.lot) }) + '</span>';
           } else {
             shortEl.style.display = 'none'; shortEl.innerHTML = '';
           }
@@ -507,14 +700,14 @@
       }
       // footer duplicate warnings
       var footerDup = '';
-      if (dupProd.dup) footerDup += '<span style="color:var(--danger, #dc2626);margin-left:12px;">⚠ منتج مكرر — يمنع الحفظ</span>';
-      if (dupBatch.dup) footerDup += '<span style="color:var(--danger, #dc2626);">⚠ دفعة مكررة — يمنع الحفظ</span>';
+      if (dupProd.dup) footerDup += '<span style="color:var(--danger, #dc2626);margin-left:12px;">⚠ ' + I18N.t('vfSales.dupProductFooter') + '</span>';
+      if (dupBatch.dup) footerDup += '<span style="color:var(--danger, #dc2626);">⚠ ' + I18N.t('vfSales.dupBatchFooter') + '</span>';
       var total = net + taxV;
       document.getElementById('lines-footer').innerHTML =
         footerDup +
-        '<span>الصافي: <span style="direction:ltr;">' + net.toLocaleString('en-US', { minimumFractionDigits: 2 }) + '</span></span>' +
-        '<span>الضريبة: <span style="direction:ltr;">' + taxV.toLocaleString('en-US', { minimumFractionDigits: 2 }) + '</span></span>' +
-        '<span style="color:#166534;">الإجمالي: <span style="direction:ltr;font-size:17px;">' + total.toLocaleString('en-US', { minimumFractionDigits: 2 }) + ' ج.م</span></span>';
+        '<span>' + I18N.t('vfSales.statNet') + ': <span style="direction:ltr;">' + net.toLocaleString('en-US', { minimumFractionDigits: 2 }) + '</span></span>' +
+        '<span>' + I18N.t('vfSales.statTax') + ': <span style="direction:ltr;">' + taxV.toLocaleString('en-US', { minimumFractionDigits: 2 }) + '</span></span>' +
+        '<span style="color:#166534;">' + I18N.t('vfSales.statTotal') + ': <span style="direction:ltr;font-size:17px;">' + total.toLocaleString('en-US', { minimumFractionDigits: 2 }) + ' ' + I18N.t('vfSales.egp') + '</span></span>';
     }
 
     function addLine() {
@@ -536,9 +729,9 @@
       var lines = collectLines();
       // client-side duplicate guards (mirror server)
       var dupP = hasDuplicateProducts_(lines);
-      if (dupP.dup) { UIC.toast('المنتج مكرر في أكثر من بند — يمنع الحفظ', 'error'); return; }
+      if (dupP.dup) { UIC.toast(I18N.t('vfSales.dupProduct'), 'error'); return; }
       var dupB = hasDuplicateBatches_();
-      if (dupB.dup) { UIC.toast('الدفعة ' + (dupB.lot || dupB.batch) + ' مكررة في أكثر من بند — يمنع الحفظ', 'error'); return; }
+      if (dupB.dup) { UIC.toast(I18N.t('vfSales.dupBatch', { lot: dupB.lot || dupB.batch }), 'error'); return; }
       // shortage check: any line need > totalAvail
       for (var si = 0; si < lines.length; si++) {
         var pidS = String(lines[si].product_id || '').trim();
@@ -547,7 +740,7 @@
         var batchesS = BATCH_CACHE[keyS] || [];
         var totalAvailS = batchesS.reduce(function(s,b){ return s + (Number(b.available)||0); }, 0);
         var needS = Number(lines[si].qty || 0);
-        if (needS > totalAvailS + 0.0001) { UIC.toast('البند ' + (si+1) + ': الكمية المطلوبة غير متوفرة — المتاح ' + fmtNum2(totalAvailS), 'error'); return; }
+        if (needS > totalAvailS + 0.0001) { UIC.toast(I18N.t('vfSales.shortageLine', { line: si + 1, available: fmtNum2(totalAvailS) }), 'error'); return; }
       }
       var payload = {
         invoice_unique_id: EDIT_UID || '',
@@ -560,32 +753,32 @@
         class_goods: getComboVal('f-class-goods'),
         lines: lines
       };
-      if (!payload.party) { UIC.toast('اختر العميل', 'error'); return; }
+      if (!payload.party) { UIC.toast(I18N.t('vfSales.pickCustomer'), 'error'); return; }
       UI.showSpinner();
       companyCall('save_valley_invoice', payload)
         .then(function (r) {
           UIC.closeModal('sales-modal');
-          UIC.toast((r && r.message) || 'تم الحفظ', 'success');
+          UIC.toast((r && r.message) || I18N.t('vfSales.saved'), 'success');
           load(true);
         })
-        .catch(function (e) { UIC.toast((e && e.message) || 'فشل الحفظ', 'error'); })
+        .catch(function (e) { UIC.toast((e && e.message) || I18N.t('vfSales.saveFailed'), 'error'); })
         .finally(function () { UI.hideSpinner(); });
     }
 
     function approve(uid) {
       UI.showSpinner();
       companyCall('approve_valley_invoice', { invoice_unique_id: uid })
-        .then(function (r) { UIC.toast((r && r.message) || 'تم', 'success'); load(true); })
-        .catch(function (e) { UIC.toast((e && e.message) || 'فشل', 'error'); })
+        .then(function (r) { UIC.toast((r && r.message) || I18N.t('common.done'), 'success'); load(true); })
+        .catch(function (e) { UIC.toast((e && e.message) || I18N.t('common.failed'), 'error'); })
         .finally(function () { UI.hideSpinner(); });
     }
 
     function removeInv(uid) {
-      if (!confirm('سيتم حذف الفاتورة وجميع بنودها نهائياً. متابعة؟')) return;
+      if (!confirm(I18N.t('vfSales.confirmDelete'))) return;
       UI.showSpinner();
       companyCall('delete_valley_invoice', { invoice_unique_id: uid })
-        .then(function (r) { UIC.toast((r && r.message) || 'تم الحذف', 'success'); load(true); })
-        .catch(function (e) { UIC.toast((e && e.message) || 'فشل الحذف', 'error'); })
+        .then(function (r) { UIC.toast((r && r.message) || I18N.t('vfSales.deleted'), 'success'); load(true); })
+        .catch(function (e) { UIC.toast((e && e.message) || I18N.t('vfSales.deleteFailed'), 'error'); })
         .finally(function () { UI.hideSpinner(); });
     }
 
@@ -644,7 +837,7 @@
     function allocateAllSalesFifo_() {
       for (var i = 0; i < DRAFT_LINES.length; i++) autoAllocSalesFifo_(i);
       recalc();
-      UIC.toast('تم توزيع جميع البنود FIFO', 'success');
+      UIC.toast(I18N.t('vfSales.fifoDone'), 'success');
     }
 
     function hasDuplicateProducts_(lines) {
@@ -690,7 +883,7 @@
       /* the home row stays hidden while its strip lives in the modal */
       if (ALLOC_MODAL_LINE !== i) rowEl.style.display = '';
       var key = pid + '|' + (EDIT_UID || '');
-      strip.innerHTML = 'جاري تحميل الدفعات...';
+      strip.innerHTML = '<span data-i18n="vfSales.loadingBatches">' + I18N.t('vfSales.loadingBatches') + '</span>';
       var build = function () {
         var hasPrefill = !!(prefill && prefill.length);
         renderAllocStrip(i, pid, prefill || []);
@@ -706,7 +899,7 @@
             BATCH_CACHE[key] = r.batches || [];
             build();
           })
-          .catch(function (e) { strip.innerHTML = '<span style="color:red;">' + esc(e.message || 'خطأ') + '</span>'; });
+          .catch(function (e) { strip.innerHTML = '<span style="color:red;">' + esc(e.message || I18N.t('common.error')) + '</span>'; });
       }
     }
 
@@ -716,7 +909,7 @@
       var strip = document.getElementById('alloc-strip-' + i);
       if (!strip) return;
       if (!batches.length) {
-        strip.innerHTML = '<span style="color:#d97706;">لا توجد دفعات متاحة لهذا المنتج.</span>';
+        strip.innerHTML = '<span style="color:#d97706;" data-i18n="vfSales.noBatches">' + I18N.t('vfSales.noBatches') + '</span>';
         return;
       }
       var alloc = {};
@@ -724,10 +917,10 @@
       DRAFT_LINES[i].allocations = (prefill || []).map(function (a) { return { batch_uid: a.batch_uid, lot: a.lot || '', qty: Number(a.qty || 0) }; });
 
       var html = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">' +
-        '<span style="font-size:12px;color:#166534;">الدفعات مرتبة FIFO (الأقدم أولاً)</span>' +
-        '<label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;"><input type="checkbox" id="fifo-auto-' + i + '" checked> توزيع FIFO تلقائي</label>' +
+        '<span style="font-size:12px;color:#166534;" data-i18n="vfSales.fifoOrdered">' + I18N.t('vfSales.fifoOrdered') + '</span>' +
+        '<label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;"><input type="checkbox" id="fifo-auto-' + i + '" checked> <span data-i18n="vfSales.fifoAuto">' + I18N.t('vfSales.fifoAuto') + '</span></label>' +
         '</div>' +
-        '<div class="table-wrap"><table class="table" style="margin:0;"><thead><tr><th>الدفعة</th><th>المتاح</th><th style="width:140px;">الكمية من الدفعة</th></tr></thead><tbody>';
+        '<div class="table-wrap"><table class="table" style="margin:0;"><thead><tr><th data-i18n="vfSales.thBatch">' + I18N.t('vfSales.thBatch') + '</th><th data-i18n="vfSales.thAvailable">' + I18N.t('vfSales.thAvailable') + '</th><th style="width:140px;" data-i18n="vfSales.thBatchQty">' + I18N.t('vfSales.thBatchQty') + '</th></tr></thead><tbody>';
       batches.forEach(function (b, bi) {
         var preQ = alloc[b.batch_uid] || 0;
         html += '<tr>' +
@@ -760,23 +953,25 @@
        focus/values); تم syncs it back home. recalc() already syncs every
        keystroke into DRAFT, so ×/Escape/swipe can never lose typed splits. */
     var ALLOC_MODAL_LINE = -1;
+    var ALLOC_MODAL_LABEL = '';   /* product/line name shown in the alloc title */
 
     function openAllocModal(i) {
       var ln = DRAFT_LINES[i];
       if (!ln) return;
       var pidEl = document.getElementById('ln-prod-' + i);
       var pid = pidEl ? pidEl.value : (ln.product_id || '');
-      if (!pid) { UIC.toast('اختر المنتج أولاً', 'error'); return; }
+      if (!pid) { UIC.toast(I18N.t('vfSales.pickProductCmb'), 'error'); return; }
       ln.product_id = pid;
-      var prodLabel = 'بند ' + (i + 1);
+      var prodLabel = I18N.t('vfSales.lineNo', { n: i + 1 });
       for (var p = 0; p < PRODUCTS.length; p++) {
         if (String(PRODUCTS[p].value) === String(pid)) { prodLabel = PRODUCTS[p].label; break; }
       }
       ALLOC_MODAL_LINE = i;
+      ALLOC_MODAL_LABEL = prodLabel;
       UIC.openModal('alloc-modal', {
-        title: '📦 دفعات البند — ' + prodLabel,
+        title: I18N.t('vfSales.allocTitle', { name: prodLabel }),
         body: '<div id="alloc-modal-host"></div>',
-        footer: '<button class="btn btn-primary" onclick="SALES_PAGE.closeAllocModal(' + i + ')">تم ✓</button>'
+        footer: '<button class="btn btn-primary" onclick="SALES_PAGE.closeAllocModal(' + i + ')" data-i18n="vfSales.doneMark">' + I18N.t('vfSales.doneMark') + '</button>'
       });
       var host = document.getElementById('alloc-modal-host');
       var strip = document.getElementById('alloc-strip-' + i);
@@ -798,10 +993,176 @@
     }
 
     function printInvoice(uid) {
-      if (!uid) { UIC.toast('احفظ الفاتورة أولاً ثم اطبع', 'error'); return; }
+      if (!uid) { UIC.toast(I18N.t('vfSales.saveFirst'), 'error'); return; }
       var url = scriptUrl + '?action=vf_sales_print&invoice_unique_id=' + encodeURIComponent(uid) +
         '&sessionToken=' + encodeURIComponent(SESSION_TOKEN);
       window.open(url, '_blank');
+    }
+
+    /* ---------- [i18n Stage B] label-only language updates ----------
+       A flip touches label text and label attributes ONLY. It neither rebuilds
+       nor replaces the table, the filter bar, the view toggle or an input, so
+       focus, caret, typed values, search term, sort order, page, selection,
+       grouping and the scroll container all survive untouched. No load(),
+       ensureBootstrap, API.call, renderApp, renderInvoiceTable, renderFilter,
+       renderViewToggle or navigation call may appear below — see relabelPage. */
+    var __i18nOff = null;
+
+    function relabelMarkers(root) {
+      var nodes = root.querySelectorAll('[data-i18n]');
+      for (var i = 0; i < nodes.length; i++) nodes[i].textContent = I18N.t(nodes[i].getAttribute('data-i18n'));
+      var phs = root.querySelectorAll('[data-i18n-ph]');
+      for (var j = 0; j < phs.length; j++) phs[j].setAttribute('placeholder', I18N.t(phs[j].getAttribute('data-i18n-ph')));
+    }
+
+    /* Replace a label's own text node so a required marker or an icon inside
+       the same element survives. */
+    function setLabelText(el, text) {
+      if (!el) return;
+      var nodes = el.childNodes;
+      for (var i = 0; i < nodes.length; i++) {
+        if (nodes[i].nodeType === 3) { nodes[i].nodeValue = text + ' '; return; }
+      }
+      el.insertBefore(document.createTextNode(text + ' '), el.firstChild);
+    }
+
+    /* Combo and plain fields are addressed by their own data-field key, so a
+       new line (ln-prod-7) is covered without registering anything per open.
+       The tax combo is absent on purpose: its own label is empty and the box
+       above it carries the "الضريبة" label as a marker. */
+    var FIELD_LABELS_ = [
+      { field: 'f-party', label: 'vfSales.field.customer', ph: 'common.typeToSearch' },
+      { field: 'f-date', label: 'vfSales.field.date', ph: null },
+      { field: 'f-class-tax', label: 'vfSales.field.classTax', ph: 'common.typeToSearch' },
+      { field: 'f-class-schedule', label: 'vfSales.field.classSchedule', ph: 'common.typeToSearch' },
+      { field: 'f-class-statement', label: 'vfSales.field.classStatement', ph: 'common.typeToSearch' },
+      { field: 'f-class-goods', label: 'vfSales.field.classGoods', ph: 'common.typeToSearch' },
+      { field: 'ln-prod', label: 'vfSales.field.product', ph: 'vfSales.searchProduct' }
+    ];
+
+    function relabelFields(root) {
+      var fields = root.querySelectorAll('.form-field[data-field]');
+      for (var i = 0; i < fields.length; i++) {
+        var key = fields[i].getAttribute('data-field') || '';
+        var base = key.replace(/-\d+$/, '');
+        for (var m = 0; m < FIELD_LABELS_.length; m++) {
+          if (FIELD_LABELS_[m].field !== base) continue;
+          setLabelText(fields[i].querySelector('.form-label'), I18N.t(FIELD_LABELS_[m].label));
+          if (FIELD_LABELS_[m].ph) {
+            var input = document.getElementById(key + '_display');
+            if (input) input.setAttribute('placeholder', I18N.t(FIELD_LABELS_[m].ph));
+          }
+          break;
+        }
+      }
+    }
+
+    function relabelModal() {
+      var root = document.getElementById('sales-modal');
+      if (root) {
+        var title = root.querySelector('.modal-header h3');
+        if (title) title.textContent = EDIT_UID
+          ? I18N.t('vfSales.modalEditTitle', { no: EDIT_NO })
+          : I18N.t('vfSales.modalAddTitle');
+        relabelMarkers(root);
+        relabelFields(root);
+        if (PARTY_CHIPS_UPDATE_) { try { PARTY_CHIPS_UPDATE_(); } catch (e) {} }
+        try { recalc(); } catch (e) {}
+      }
+      var alloc = document.getElementById('alloc-modal');
+      if (alloc) {
+        var aTitle = alloc.querySelector('.modal-header h3');
+        if (aTitle) aTitle.textContent = I18N.t('vfSales.allocTitle', { name: ALLOC_MODAL_LABEL });
+        relabelMarkers(alloc);
+      }
+    }
+
+    /* [State fix] The table is relabelled where it stands: header label spans,
+       the mobile data-label attributes on the current rows and the status
+       chips. The row nodes, the search input, the pager and the sort listeners
+       are never replaced, so nothing that holds focus or view state moves. */
+    function relabelTable() {
+      var box = document.getElementById('sales-table');
+      if (!box) return;
+      var wrap = document.getElementById('sales-dt');
+      if (!wrap) {   /* empty reply: no table node, only the empty state */
+        var title = box.querySelector('.empty-state-title');
+        if (title) title.textContent = (DATE_FROM || DATE_TO) ? I18N.t('vfSales.emptyRange') : I18N.t('vfSales.empty');
+        return;
+      }
+      var ths = wrap.querySelectorAll('thead th[data-key]');
+      var rows = wrap.querySelectorAll('tbody tr');
+      for (var i = 0; i < ths.length; i++) {
+        var col = colByKey_(ths[i].getAttribute('data-key'));
+        var label = (col && col.i18n) ? I18N.t(col.i18n) : '';
+        /* data-key, aria-sort, tabindex and the sort listeners stay put. */
+        var span = ths[i].querySelector('.th-label');
+        if (span) span.textContent = label;
+        for (var r = 0; r < rows.length; r++) {
+          var cell = rows[r].children[i];
+          if (!cell) continue;
+          if (label) cell.setAttribute('data-label', label);
+          else cell.removeAttribute('data-label');
+        }
+      }
+      var chips = wrap.querySelectorAll('[data-approval]');
+      for (i = 0; i < chips.length; i++) {
+        chips[i].textContent = I18N.t(
+          chips[i].getAttribute('data-approval') === 'Approved'
+            ? 'vfSales.status.approved' : 'vfSales.status.pending');
+      }
+      syncStoreLabels();
+    }
+
+    /* Sorting, searching and paging re-render the body from the store's cached
+       row HTML and its header labels, so those two label sources are refreshed
+       as well. Strings and the canonical flag only — no order, page or
+       selection changes. Header labels are resolved by key, so a column hidden
+       at flip time is still correct when it is shown again. */
+    function syncStoreLabels() {
+      var st = (window.__dtStore || {})['sales-dt'];
+      if (!st) return;
+      var i;
+      for (i = 0; i < st.headers.length; i++) {
+        var col = colByKey_(st.headers[i].key);
+        if (col) st.headers[i].label = col.i18n ? I18N.t(col.i18n) : '';
+      }
+      var rows = st.originalRows || [];
+      for (i = 0; i < rows.length; i++) {
+        var row = rows[i];
+        if (row && typeof row._approved === 'boolean') row[STATUS_COL_] = statusPillHtml_(row._approved);
+      }
+    }
+
+    /* عرض الأحدث carries a {n} parameter, so it is not a static bind: its one
+       node is re-labelled where it stands. The report link is bound by
+       renderViewToggle and covered by I18N.apply above. */
+    function relabelViewToggle() {
+      var host = document.getElementById('sales-view-toggle');
+      if (!host) return;
+      var btn = host.querySelector('button.btn');
+      if (btn) btn.textContent = I18N.t('vfSales.showLatest', { n: PAGE_WINDOW });
+    }
+
+    function relabelPage() {
+      if (!window.I18N || !I18N.ENABLED) return;
+      try { I18N.apply(); } catch (e) {}
+      /* In-place only: no table, filter-bar, view-toggle or modal builder runs
+         here, so no typed value, caret, search, sort, page, selection or
+         scroll position can be disturbed. */
+      try { relabelTable(); } catch (e) {}
+      try { relabelViewToggle(); } catch (e) {}
+      try { relabelModal(); } catch (e) {}
+    }
+
+    function initI18nPage() {
+      if (!window.I18N || !I18N.ENABLED) return;
+      __i18nOff = I18N.onChange(relabelPage);
+      window.addEventListener('beforeunload', disposeI18nPage);
+    }
+
+    function disposeI18nPage() {
+      if (__i18nOff) { try { __i18nOff(); } catch (e) {} __i18nOff = null; }
     }
 
     window.SALES_PAGE = {
@@ -810,7 +1171,8 @@
       openAllocModal: openAllocModal, closeAllocModal: closeAllocModal,
       print: printInvoice,
       showAll: showAll, showLatest: showLatest,
-      applyDateFilter: applyDateFilter, clearDateFilter: clearDateFilter
+      applyDateFilter: applyDateFilter, clearDateFilter: clearDateFilter,
+      disposeI18n: disposeI18nPage
     };
 
     /* Another device's change to this page arrives on its own. The poll
@@ -824,7 +1186,42 @@
       });
     });
 
-    document.addEventListener('DOMContentLoaded', renderApp);
+    /* Phase B2: the shared refresh control for THIS list only. The loader
+       re-fetches the table's current query — the latest window, or the full
+       history while عرض الكل is active — and the shared component restores
+       search, sort, page, selection and scroll afterwards. It never reloads the
+       document, reruns the shell, or touches the other cards on the page. */
+    if (window.UIC && UIC.TableRefresh) {
+      UIC.TableRefresh.register('sales-dt', {
+        load: function () {
+          if (SHOW_ALL) return companyCall('get_valley_sales_page', { from: DATE_FROM, to: DATE_TO });
+          if (SALES_ONE_REQUEST_) {
+            return companyCall('get_valley_sales_page', { mode: 'latest_window', limit: PAGE_WINDOW, from: DATE_FROM, to: DATE_TO });
+          }
+          var off = Math.max(0, (LAST_TOTAL || 0) - PAGE_WINDOW);
+          return companyCall('get_valley_sales_page', { offset: off, limit: PAGE_WINDOW, from: DATE_FROM, to: DATE_TO });
+        },
+        apply: function (r) {
+          setRefs(r);
+          renderInvoiceTable((r && r.invoices) || []);
+        },
+        /* Preserve open forms and pending saves: refresh is deferred while a
+           save is in flight or an entry modal is open. */
+        blocked: function () {
+          try {
+            if (typeof UIC.Live !== 'undefined' && UIC.Live.busy && UIC.Live.busy()) {
+              return I18N.t('vfSales.busyHold');
+            }
+            if (document.querySelector('.modal-backdrop, .uic-modal, [data-modal-open="true"]')) {
+              return I18N.t('vfSales.closeFormFirst');
+            }
+          } catch (e) {}
+          return null;
+        }
+      });
+    }
+
+    document.addEventListener('DOMContentLoaded', function () { renderApp(); initI18nPage(); });
   })();
   </script>
 </body>

@@ -109,13 +109,31 @@
   /* ---- First-time password setup (modal, no page redirect) ---- */
   function openSetupModal() {
     var body = '<form id="setup-modal-form" onsubmit="return false;">' +
+      '<div class="form-field"><label class="form-label" for="ns-code">رمز التحقق المرسل إلى بريدك الإلكتروني</label>' +
+      '<input id="ns-code" class="input" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="••••••"></div>' +
+      '<div id="ns-code-status" class="form-hint" aria-live="polite"></div>' +
+      '<button type="button" class="btn btn-outline" style="margin-bottom:12px;" onclick="sendSetupCode()">إرسال / إعادة إرسال الرمز</button>' +
       '<div class="form-field"><label class="form-label" for="ns-pass1">كلمة المرور الجديدة</label>' +
-      '<input id="ns-pass1" class="input" type="password" placeholder="********" autocomplete="new-password" oninput="checkNewPass()"></div>' +
+      '<input id="ns-pass1" class="input" type="password" maxlength="256" placeholder="********" autocomplete="new-password" oninput="checkNewPass()"></div>' +
       '<div class="form-field"><label class="form-label" for="ns-pass2">تأكيد كلمة المرور</label>' +
-      '<input id="ns-pass2" class="input" type="password" placeholder="********" autocomplete="new-password" oninput="checkNewPass()"></div>' +
+      '<input id="ns-pass2" class="input" type="password" maxlength="256" placeholder="********" autocomplete="new-password" oninput="checkNewPass()"></div>' +
       '<div class="field-error" id="ns-error" style="min-height:20px;"></div>' +
       '</form>';
     UIC.openModal('setup-modal', { title: 'تعيين كلمة مرور جديدة', body: body, onSave: 'doSetupInline()' });
+    sendSetupCode();
+  }
+
+  function sendSetupCode() {
+    var email = document.getElementById('newuser-email').textContent.trim();
+    var status = document.getElementById('ns-code-status');
+    if (status) status.textContent = 'جاري إرسال رمز التحقق إلى بريدك الإلكتروني...';
+    API.call('request_password_setup_code', { email: email })
+      .then(function () {
+        if (status) status.textContent = 'إذا كان الحساب مؤهلاً، سيصل رمز التحقق إلى بريده المسجل خلال لحظات.';
+      })
+      .catch(function (e) {
+        if (status) status.textContent = e.message || 'تعذر إرسال الرمز. حاول لاحقاً أو تواصل مع مسؤول النظام.';
+      });
   }
 
   function checkNewPass() {
@@ -128,17 +146,19 @@
 
   function doSetupInline() {
     var email = document.getElementById('newuser-email').textContent.trim();
+    var code = document.getElementById('ns-code').value.trim();
     var p1 = document.getElementById('ns-pass1').value;
     var p2 = document.getElementById('ns-pass2').value;
     var err = document.getElementById('ns-error');
     if (!p1) { err.textContent = 'أدخل كلمة المرور الجديدة'; return; }
     if (p1.length < 8) { err.textContent = 'كلمة المرور يجب ألا تقل عن 8 أحرف'; return; }
     if (p1 !== p2) { err.textContent = 'كلمتا المرور غير متطابقتين'; return; }
+    if (!/^\d{6}$/.test(code)) { err.textContent = 'أدخل رمز التحقق المكوّن من 6 أرقام'; return; }
     // NOTE: no UI.submitOnce here — the modal footer Save button already wraps
     // onSave in submitOnce, and a nested call would no-op on the same button.
     try { if (window.ERPFlow) ERPFlow.start('جاري تعيين كلمة المرور...'); } catch(e){}
     UI.showSpinner('جاري تعيين كلمة المرور...');
-    API.call('setup_password', { email: email, password: p1, device: getDeviceInfo() })
+    API.call('setup_password', { email: email, verificationCode: code, password: p1, device: getDeviceInfo() })
       .then(function (r) {
         // Per UX spec: do NOT auto-login — discard the session token,
         // show loading, then offer a button back to login.

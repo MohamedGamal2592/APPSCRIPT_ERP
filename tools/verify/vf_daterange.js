@@ -93,7 +93,7 @@ const CASH_ROW = {
   balance_amount: 100, approved_bool: true
 };
 
-async function cashPage(savedView) {
+async function cashPage(savedView, boxes) {
   const s = bootPage({
     page: 'Company_ValleyFoods_Cash.html',
     isSuperAdmin: true,
@@ -104,7 +104,7 @@ async function cashPage(savedView) {
       if (action === 'get_valley_cash') {
         return {
           status: 'success', headers: [CASH_ROW],
-          boxes: [{ box: 'B1', name: 'الخزنة', balance: 100 }],
+          boxes: boxes || [{ box: 'B1', name: 'الخزنة', balance: 100 }],
           enums: { transaction_type: ['Debit', 'Credit'], transaction_method: ['نقدي'] },
           item_suggestions: [], next_id: 8,
           party_options: [], box_options: [{ value: 'B1', label: 'الخزنة' }], chart_options: []
@@ -128,6 +128,8 @@ async function cashPage(savedView) {
   const html = s.html('vf-cash-content');
   check(html.indexOf('id="cash-date-from"') !== -1 && html.indexOf('id="cash-date-to"') !== -1,
     'the list renders the range bar');
+  check((html.match(/class="stat-card"/g) || []).length === 1,
+    'the nonzero box balance renders as one KPI card');
   check(html.indexOf('CASH_PAGE.applyDateFilter()') !== -1, 'the inputs are wired to the page');
   check(html.indexOf('cash-table-id') !== -1, 'the movements table still renders alongside it');
 
@@ -155,6 +157,21 @@ async function cashPage(savedView) {
   check(s.__calls.length === before, 'from > to is refused without a round trip');
   check(s.toasts().some(t => String(t).indexOf('من تاريخ') !== -1), 'and the user is told why',
     JSON.stringify(s.toasts()));
+
+  const compact = await cashPage({}, [
+    { box: 'ZERO', name: 'صندوق صفر', balance: 0 },
+    { box: 'TINY', name: 'صفر بعد التقريب', balance: -0.004 },
+    { box: 'POS', name: 'صندوق موجب', balance: 12.5 },
+    { box: 'NEG', name: 'صندوق مدين', balance: -3 }
+  ]);
+  const compactHtml = compact.html('vf-cash-content');
+  check(!compactHtml.includes('صندوق صفر') && !compactHtml.includes('صفر بعد التقريب')
+    && compactHtml.includes('صندوق موجب') && compactHtml.includes('صندوق مدين')
+    && (compactHtml.match(/class="stat-card"/g) || []).length === 2,
+    'zero-valued box KPI cards are hidden while positive and negative balances remain visible');
+  const none = await cashPage({}, [{ box: 'ZERO', name: 'صندوق صفر', balance: 0 }]);
+  check((none.html('vf-cash-content').match(/class="stat-card"/g) || []).length === 0,
+    'the KPI strip is omitted when every box balance is zero');
 
   /* Clearing goes back to the whole ledger. */
   s.CASH_PAGE.clearDateFilter();

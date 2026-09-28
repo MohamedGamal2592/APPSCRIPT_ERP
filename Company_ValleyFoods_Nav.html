@@ -33,10 +33,16 @@ window.VALLEYFOODS_MENU = [
     { label: 'الأصول والماكينات', action: 'vf_asset_technical' },
     { label: 'أصول خطوط الإنتاج', action: 'vf_work_center_assets' }
   ] },
+  /* الجودة — the ONLY place vf_quality_dashboard and vf_quality_general are
+     linked. UIC.appShell filters every child by UIC.pageAuthorized_(action)
+     and hides the whole group when no child survives, so each entry follows
+     its own permission and no department menu is affected. */
   { label: 'الجودة', items: [
     { label: 'لوحة الجودة', action: 'vf_quality_dashboard' },
-    { label: 'إجراءات العمل (SOP)', action: 'vf_quality_sops' },
-    { label: 'إقراراتي', action: 'vf_quality_my_acks' },
+    { label: 'الجودة العامة', action: 'vf_quality_general' },
+    { label: 'السياسات والاجراءات SOPs', action: 'vf_quality_sops' },
+    /* إقراراتي (vf_quality_my_acks) hidden for now: the route and its actions
+       remain available by direct URL; only the nav entry is removed. */
     { label: 'عدم المطابقة (NCR)', action: 'vf_quality_ncr' },
     { label: 'التدقيق الداخلي', action: 'vf_quality_audits' }
   ] }

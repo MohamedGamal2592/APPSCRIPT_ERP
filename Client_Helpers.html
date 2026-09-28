@@ -15,12 +15,168 @@
  * dir="ltr" (verified), so there is nothing to opt out.
  *
  * Expect this to REVEAL small layout bugs that the wrong direction was masking.
- * Those are listed, not silently fixed — they are budgeted as step 3.7. */
-try { document.documentElement.setAttribute('dir', 'rtl'); } catch (e) {}
+ * Those are listed, not silently fixed — they are budgeted as step 3.7.
+ *
+ * [i18n Stage B] The forced RTL is now the DEFAULT of a small gated
+ * bootstrap. The preferred language lives in one validated erp_prefs key and
+ * is read ONCE here, before paint, so the root lang/dir are right on the
+ * first frame and a saved English choice cannot flash Arabic. With the
+ * prototype gate off, only the Arabic default is applied — exactly the
+ * direction guarantee this file always made. */
+try {
+  var __erpLangGate = /(?:^|[?&])langswitch=1(?:&|$)/.test(window.location.search) ||
+    localStorage.getItem('erp_lang_test') === '1';
+  var __erpLangPref = (JSON.parse(localStorage.getItem('erp_prefs') || '{}') || {}).language;
+  var __erpLang = (__erpLangGate && __erpLangPref === 'en') ? 'en' : 'ar';
+  document.documentElement.setAttribute('lang', __erpLang);
+  document.documentElement.setAttribute('dir', __erpLang === 'en' ? 'ltr' : 'rtl');
+} catch (e) { try { document.documentElement.setAttribute('dir', 'rtl'); } catch (e2) {} }
 
 window.API = window.API || {};
 window.FMT = window.FMT || {};
 window.UI  = window.UI  || {};
+
+/* ── [i18n Stage B] Shared language runtime (the gate governs behavior) ──
+ *
+ * Everything below is inert unless I18N.ENABLED is true: the header renders
+ * no switch, bind() registers nothing, setLang() no-ops and the page stays on
+ * the Arabic default. Enabled by ?langswitch=1 or erp_lang_test=1.
+ *
+ * Lookups are IN-MEMORY ONLY. There is no MutationObserver, no polling, no
+ * timer and no document-wide text walker: a label node is registered once
+ * with bind(), and setLang() rewrites just those nodes before notifying the
+ * page adapters. t() never throws — a missing key is returned as-is and
+ * counted in I18N._misses so coverage checks can list it. */
+window.I18N = window.I18N || {};
+
+(function (I18N) {
+  I18N.ENABLED = window.__erpLangGate === true;
+  I18N._misses = {};
+  I18N._dict = {};
+  I18N._pages = {};
+
+  var current = window.__erpLang === 'en' ? 'en' : 'ar';
+  var bindings = [];
+  var subscribers = [];
+
+  function entry_(key) {
+    var e = I18N._dict[key];
+    return (e && (e[current] != null || e.ar != null || e.en != null)) ? e : null;
+  }
+
+  function fill_(text, params) {
+    if (params == null) return String(text);
+    return String(text).replace(/\{(\w+)\}/g, function (m, name) {
+      return params[name] != null ? String(params[name]) : m;
+    });
+  }
+
+  function merge_(dict) {
+    if (!dict) return;
+    for (var k in dict) {
+      if (Object.prototype.hasOwnProperty.call(dict, k)) I18N._dict[k] = dict[k];
+    }
+  }
+
+  function isLive_(rec) {
+    var el = rec.el;
+    if (!el) return false;
+    try { if (typeof el.isConnected === 'boolean') return el.isConnected; } catch (e) {}
+    return true;   /* engines without isConnected are assumed live */
+  }
+
+  function applyRecord_(rec) {
+    if (!rec.el) return;
+    var value = I18N.t(rec.key);
+    try {
+      if (!rec.attr || rec.attr === 'text') rec.el.textContent = value;
+      else rec.el.setAttribute(rec.attr, value);
+    } catch (e) {}
+  }
+
+  /* Direct in-memory lookup with {name}/{0} substitution. A key with no target
+     language falls back to Arabic — the app stays readable, never blank. */
+  I18N.t = function (key, params) {
+    var e = entry_(key);
+    if (!e) {
+      I18N._misses[key] = (I18N._misses[key] || 0) + 1;
+      return key;
+    }
+    return fill_(e[current] != null ? e[current] : (e.ar != null ? e.ar : e.en), params);
+  };
+
+  I18N.lang = function () { return current; };
+
+  I18N.registerCommon = function (dict) { merge_(dict); };
+
+  I18N.registerPage = function (id, dict) {
+    if (!id || !dict) return;
+    I18N._pages[id] = dict;
+    merge_(dict);
+  };
+
+  I18N.bind = function (el, key, attr) {
+    if (!I18N.ENABLED || !el || !key) return null;
+    var rec = { el: el, key: key, attr: attr || 'text' };
+    bindings.push(rec);
+    applyRecord_(rec);
+    return rec;
+  };
+
+  I18N.apply = function () {
+    if (!I18N.ENABLED) return;
+    var live = [];
+    for (var i = 0; i < bindings.length; i++) {
+      if (!isLive_(bindings[i])) continue;   /* replaced node — drop the record */
+      applyRecord_(bindings[i]);
+      live.push(bindings[i]);
+    }
+    bindings = live;
+  };
+
+  I18N.onChange = function (fn) {
+    if (typeof fn !== 'function') return function () {};
+    subscribers.push(fn);
+    return function () {
+      var i = subscribers.indexOf(fn);
+      if (i !== -1) subscribers.splice(i, 1);
+    };
+  };
+
+  I18N.setLang = function (next) {
+    if (!I18N.ENABLED) return;                       /* gate governs behavior */
+    if (next !== 'ar' && next !== 'en') return;      /* validate only ar | en */
+    if (next === current) return;                    /* already selected */
+    current = next;
+    try {
+      var root = document.documentElement;
+      root.setAttribute('lang', current);
+      root.setAttribute('dir', current === 'en' ? 'ltr' : 'rtl');
+    } catch (e) {}
+    var sw = null;
+    try { sw = document.querySelector('.lang-switch'); } catch (e) {}
+    if (sw) sw.setAttribute('aria-checked', current === 'en' ? 'true' : 'false');
+    I18N.apply();
+    try { if (window.UIC && UIC.setPref) UIC.setPref('language', current); } catch (e) {}
+    for (var i = 0; i < subscribers.length; i++) {
+      try { subscribers[i](current); } catch (err) {}
+    }
+  };
+})(window.I18N);
+
+/* The labels shared by more than one page. Deliberately small — a page embeds
+ * only its own catalog through I18N.registerPage. */
+I18N.registerCommon({
+  'common.loading':      { ar: 'جاري التحميل...', en: 'Loading...' },
+  'common.edit':         { ar: 'تعديل', en: 'Edit' },
+  'common.delete':       { ar: 'حذف', en: 'Delete' },
+  'common.optional':     { ar: 'اختياري', en: 'Optional' },
+  'common.typeToSearch': { ar: 'اكتب للبحث…', en: 'Type to search…' },
+  'common.done':         { ar: 'تم', en: 'Done' },
+  'common.failed':       { ar: 'فشل', en: 'Failed' },
+  'common.error':        { ar: 'خطأ', en: 'Error' },
+  'common.errorPrefix':  { ar: 'خطأ:', en: 'Error:' }
+});
 
 /* Code.js include() now evaluates included files as templates and passes
  * scriptUrl + sessionToken, so these tokens ARE evaluated here. NOTE: the
@@ -208,17 +364,21 @@ API._requestGuard = (function () {
     return new Promise(function (resolve) {
       var settled = false;
       function done(v) { if (!settled) { settled = true; resolve(v); } }
+      /* [Phase C] The recovery poll is required user-facing waiting, so the
+         same probe records its queue/round trip and system-wait interval. */
+      var probe = (window.PERF && PERF._probe) ? PERF._probe('request_status', {}) : null;
       try {
+        if (probe) probe.sent();
         google.script.run
-          .withSuccessHandler(function (r) { done({ ok: true, body: r }); })
-          .withFailureHandler(function () { done({ ok: false }); })
+          .withSuccessHandler(function (r) { if (probe) probe.done(true); done({ ok: true, body: r }); })
+          .withFailureHandler(function () { if (probe) probe.done(false); done({ ok: false }); })
           .apiRouter({ action: 'request_status',
             payload: { target_system: meta.target_system, module_action: meta.module_action, request_id: meta.requestId },
             sessionToken: sessionToken });
         /* A status poll that never answers is evidence of nothing; treat it
            as a missed round and let the next attempt run. */
-        setTimeout(function () { done({ ok: false }); }, 10000);
-      } catch (e) { done({ ok: false }); }
+        setTimeout(function () { if (probe) probe.done(false); done({ ok: false }); }, 10000);
+      } catch (e) { if (probe) probe.done(false); done({ ok: false }); }
     });
   }
   function recoverAfterLoss(meta, sessionToken) {
@@ -250,9 +410,114 @@ API._requestGuard = (function () {
   return {prepare:prepare,finish:finish,formData:formData,recoverAfterLoss:recoverAfterLoss,pollDelays:RECOVER_POLL_MS_};
 })();
 
-API.call = function (action, payload, sessionToken) {
+/* ── [Phase F] The API facade and the request coordinator (flag, default off) ─
+ *
+ * API.call is the entry point pages already use. With UIC.REQ_COORD_CORE_
+ * false (the shipped default) it delegates straight to API._dispatch and the
+ * behaviour is exactly today's — no queue, no lanes, no coalescing. When the
+ * flag is on, the call is routed through the bounded priority queue in
+ * API._coord and the existing dispatcher runs unchanged at dequeue time.
+ *
+ * API._dispatch is the original body, renamed only; `opts` is the additive
+ * fourth argument used by the coordinator (never by existing callers, so
+ * existing call sites are untouched). */
+API._notifyCapabilityPickers = function (reason) {
+  try {
+    if (typeof window !== 'undefined' && window.UIC && UIC.TcCapabilityPicker && UIC.TcCapabilityPicker.invalidateAll) {
+      UIC.TcCapabilityPicker.invalidateAll(reason);
+    }
+  } catch (e) {}
+};
+API.call = function (action, payload, sessionToken, opts) {
+  if (API._mysqlReads) {
+    API._mysqlReads.scope(sessionToken, payload && payload.target_system);
+    if (API._mysqlReads.accepts(action, payload)) return API._mysqlReads.call(action, payload, sessionToken, opts);
+    if (action === 'company_action' && payload && /^(add_|save_|update_|delete_|revise_|edit_|close_|make_collection|toggle_)/.test(payload.module_action || '')) {
+      API._mysqlReads.clear();
+      /* Conservatively expire instant-picker catalogs at the mutation boundary. */
+      API._notifyCapabilityPickers('mutation');
+    }
+  }
+  var coord = null;
+  try { if (window.UIC && UIC.REQ_COORD_CORE_ === true) coord = API._coord || null; } catch (e) {}
+  if (!coord) return API._dispatch(action, payload, sessionToken, opts);
+  /* [Phase F] Queueing must not move synchronous target capture: UIC.Live.save
+     reads API._lastTarget immediately after the page's companyCall returns, so
+     the company of THIS call is recorded before it joins the queue. */
+  if (payload && payload.target_system) API._lastTarget = payload.target_system;
+  var laneOpts = opts || null;
+  if (!laneOpts) {
+    /* Reserved hint: UIC.Live tags its own poll for the background lane while
+       the coordinator is on. Consumed and cleared synchronously. */
+    try {
+      if (window.UIC && UIC._rpcLaneHint) { laneOpts = UIC._rpcLaneHint; UIC._rpcLaneHint = null; }
+    } catch (eHint) {}
+  }
+  return coord.submit(action, payload, sessionToken, laneOpts, API._dispatch);
+};
+
+/* Safe MySQL reads use the existing coordinator even when the general rollout
+ * flag is off. Deduplication includes in-flight calls; the coordinator timeout
+ * frees its local slot but cannot cancel an RPC already running on Apps Script. */
+API._mysqlReads = (function () {
+  var scopeKey = '', generation = 0, flights = {};
+  var reads = ('get_system_qty get_stock_scan_qty get_stock_scan_options get_stock_scan_catalog get_stock_scan_balances get_system_product_options get_products_live ' +
+    'get_main_review get_client_balance_sheets get_manufacture_headers get_manufacture_footers get_manufacture_refs ' +
+    'get_production_capability_catalog get_sales_capacity_catalog ' +
+    'get_box_analysis get_box_item_history get_box_alerts').split(' ');
+  function clear() { generation++; flights = {}; }
+  function scope(token, company) {
+    var next = JSON.stringify([token || '', company || 'viewer']);
+    if (next !== scopeKey) { scopeKey = next; clear(); }
+  }
+  function canonical(v, key) {
+    if (Array.isArray(v)) {
+      var a = v.map(function (x) { return canonical(x); });
+      return ['years','months','product_ids','chart_of_accounts_list','ids'].indexOf(key) < 0 ? a : a.sort();
+    }
+    if (v && typeof v === 'object') {
+      var out = {}; Object.keys(v).sort().forEach(function (k) { out[k] = canonical(v[k], k); }); return out;
+    }
+    return v;
+  }
+  function accepts(action, p) {
+    return ['db_list_tables','db_get_columns','db_query','db_aggregate'].indexOf(action) >= 0 ||
+      (action === 'company_action' && p && reads.indexOf(p.module_action) >= 0);
+  }
+  function call(action, payload, token, opts) {
+    var p = JSON.parse(JSON.stringify(payload || {})), gen = generation;
+    var key = JSON.stringify([scopeKey, action, canonical(p)]);
+    if (flights[key]) return flights[key];
+    var coordOpts = Object.assign({ lane: 'foreground' }, opts || {});
+    /* A MySQL read that never calls back must not occupy a coordinator slot
+       forever. The underlying RPC cannot be cancelled, but timing it out here
+       frees the slot, releases this in-flight dedupe entry, and lets the page
+       report the failure or retry. Writes never enter this read-only path. */
+    coordOpts.timeoutMs = 30000;
+    var request = API._coord.submit(action, p, token, coordOpts, API._dispatch);
+    var promise = request.then(function (value) {
+      if (gen !== generation) throw { code: 'MYSQL_SCOPE_CHANGED', message: 'Request scope changed' };
+      return value;
+    });
+    flights[key] = promise;
+    promise.then(function () { if (flights[key] === promise) delete flights[key]; }, function () { if (flights[key] === promise) delete flights[key]; });
+    return promise;
+  }
+  return { scope: scope, clear: clear, accepts: accepts, call: call };
+})();
+
+API._dispatch = function (action, payload, sessionToken, opts) {
   if (payload && payload.target_system) API._lastTarget = payload.target_system;
   payload = payload || {};
+  /* [Phase C] One no-op-able probe per call: queue delay (decision -> send)
+     and call -> callback. PERF._probe returns null unless a sampled journey is
+     open, so a closed measurement window costs two property reads.
+     [Phase F] With the coordinator active the queue wait is recorded by
+     API._coord through PERF.recordRpc at dispatch, so the probe is skipped
+     here to keep one RPC from being counted twice. With the flag off `opts`
+     is undefined and this is exactly the old expression. */
+  var __perfProbe = (opts && opts.coord === true) ? null
+    : ((window.PERF && PERF._probe) ? PERF._probe(action, payload) : null);
   var intent;
   try { intent = API._requestGuard.prepare(action, payload, sessionToken); } catch (e) { return Promise.reject(e); }
   if (intent && intent.promise) return intent.promise;
@@ -265,6 +530,7 @@ API.call = function (action, payload, sessionToken) {
     var recoverMeta = (intent && payload && payload.target_system && payload.module_action) ?
       { target_system: payload.target_system, module_action: payload.module_action, requestId: intent.id } : null;
     function uncertainFailure(message) {
+      try { if (window.PERF && PERF.setOutcome) PERF.setOutcome('transport-uncertain'); } catch (ePerfF) {}
       var failure = {
         status: 'error', transport: true, uncertain: !!intent,
         checkStatus: !!intent, requestId: intent ? intent.id : undefined,
@@ -284,9 +550,13 @@ API.call = function (action, payload, sessionToken) {
       }
       API._requestGuard.recoverAfterLoss(recoverMeta, sessionToken).then(function (rc) {
         if (rc.outcome === 'done') {
+          /* The poll proved the write committed: this is the authoritative
+             confirmation, so it may stage save_confirmed. */
+          try { if (window.PERF && PERF.stage) { PERF.stage('save_confirmed'); if (PERF.setOutcome) PERF.setOutcome('completed'); } } catch (ePerfG) {}
           API._requestGuard.finish(intent, rc.result, null);
           resolve(rc.result);
         } else {
+          try { if (window.PERF && PERF.setOutcome) PERF.setOutcome(PERF.classifyError(rc.error)); } catch (ePerfH) {}
           API._requestGuard.finish(intent, rc.error, null);
           reject(rc.error);
         }
@@ -306,11 +576,18 @@ API.call = function (action, payload, sessionToken) {
        without recovery support remain blocked by the server guard, so this
        can never turn into a blind second mutation. */
     function send() {
+      if (__perfProbe) __perfProbe.sent();
+      /* A guarded write is the save path: the pending-feedback clock starts at
+         dispatch. UIC.Live.save stages this earlier (setBusy) and the first
+         stage per journey wins, so both paths agree. */
+      try { if (intent && window.PERF && PERF.stage) PERF.stage('save_feedback'); } catch (ePerfA) {}
       google.script.run
         .withSuccessHandler(function (result) {
+        if (__perfProbe) __perfProbe.done(true);
         if (result && result.notApplied === true) {
           /* Server-confirmed non-mutation: release the retained request so a
              corrected save starts clean, then reject for the toast. */
+          try { if (intent && window.PERF && PERF.setOutcome) PERF.setOutcome('validation'); } catch (ePerfB) {}
           API._requestGuard.finish(intent, result, null);
           reject(result);
         } else if (result && result.status === 'error') {
@@ -323,6 +600,14 @@ API.call = function (action, payload, sessionToken) {
           } else if (result.code === 'SYSTEM_DISABLED') {
             if (window.UIC && UIC.navTo) UIC.navTo(null, _s + '?action=login&shutdown=1'); else window.location.href = _s + '?action=login&shutdown=1';
           }
+          /* Observed permission/session failures invalidate instant-picker
+           * catalogs; denial handling above still owns navigation. */
+          try {
+            var _denyCode = String(result.code || '');
+            if (/NOT_AUTHORIZED|UNAUTHORIZED|AUTHORIZATION|SESSION_EXPIRED|SYSTEM_DISABLED|ACCOUNT_DISABLED|FORBIDDEN|LOGIN_REQUIRED|OWNER_MISMATCH/i.test(_denyCode)) {
+              if (API._notifyCapabilityPickers) API._notifyCapabilityPickers('denial');
+            }
+          } catch (eDeny) {}
           if (result.code === 'REQUEST_IN_PROGRESS' && recoverMeta) {
             pollThenUncertain(result.message || 'الطلب قيد المعالجة.');
             return;
@@ -339,19 +624,31 @@ API.call = function (action, payload, sessionToken) {
             result.checkStatus = true;
             result.requestId = recoverMeta.requestId;
           }
+          try { if (intent && window.PERF && PERF.setOutcome) PERF.setOutcome(PERF.classifyError(result)); } catch (ePerfC) {}
           API._requestGuard.finish(intent, null, result);
           reject(result);
         } else {
+          /* Server-confirmed business success. Only a guarded write counts as
+             save_confirmed: queueing, a pending poll or an uncertain envelope
+             must never become success. */
+          try {
+            if (intent && window.PERF && PERF.stage) {
+              PERF.stage('save_confirmed');
+              if (PERF.setOutcome) PERF.setOutcome('completed');
+            }
+          } catch (ePerfD) {}
           API._requestGuard.finish(intent, result, null);
           resolve(result);
         }
         })
         .withFailureHandler(function (err) {
+        if (__perfProbe) __perfProbe.done(false);
         /* transport: true is set inside uncertainFailure below: ONLY this
          * failure handler marks a failure that never reached a handler, so
          * the retry decision stays exact — a handler that rejected is never
          * retried. The response can be lost AFTER commit; reuse the original
          * request ID via the bounded status poll. */
+          try { if (intent && window.PERF && PERF.setOutcome) PERF.setOutcome('transport-uncertain'); } catch (ePerfE) {}
           pollThenUncertain(intent ? 'انقطع الاتصال؛ قد يكون الطلب حُفظ. أعد المحاولة بنفس الطلب ولا تنشئ طلبًا بديلًا قبل التحقق.' : (err && err.message ? err.message : 'خطأ غير متوقع'));
         })
         .apiRouter(request);
@@ -364,6 +661,242 @@ API.call = function (action, payload, sessionToken) {
   });
   return wire;
 };
+
+/* ── [Phase F] API._coord — bounded request coordinator (default off) ───────
+ *
+ * Reachable ONLY when window.UIC.REQ_COORD_CORE_ === true, and only through
+ * the facade above. It wraps the RPC dispatch inside API.call; the dispatcher
+ * itself (API._dispatch) is unchanged.
+ *
+ * NO TIMER, OBSERVER OR POLLER is created here. The queue is pumped by two
+ * events only — a new submission, and a settled call — so an idle queue costs
+ * nothing. Already-dispatched calls cannot be cancelled; only entries still
+ * waiting in the queue may be reordered, coalesced or dropped.
+ *
+ * LANES, highest priority first:
+ *   foreground  user actions and authoritative checks — the default
+ *   background  Live refresh (get_page_versions)
+ *   prefetch    prefetch_refs and the like
+ * The lane comes from opts.lane when a caller states one, otherwise from the
+ * module_action, and an unrecognised action defaults to foreground: nothing
+ * is demoted to a low lane by accident.
+ *
+ * BUDGET: 6 concurrent calls (deliberately below the simultaneous-execution
+ * ceiling available to this app), with 2 of those slots reserved for
+ * foreground work. Background and prefetch may therefore use at most 4 at
+ * once, so a low-priority backlog can never occupy a slot a user action
+ * needs. The whole queue is capped; prefetch has its own tighter cap and is
+ * dropped outright while the tab is hidden — a prefetch is a bet on what the
+ * user will do next, and a hidden tab is not doing anything next.
+ *
+ * COALESCING: ONLY pending entries whose caller explicitly passed
+ * opts.coalesce === true, and only outside the foreground lane. Writes,
+ * saves and approvals are never coalesced, and a call already on the wire is
+ * never merged — it cannot be cancelled.
+ *
+ * BACKOFF: a transport or uncertain failure puts the LOW lanes on a jittered
+ * exponential cooldown; foreground work is never held back by it. Because
+ * there is no timer, an expired cooldown is observed at the next pump — and a
+ * pump always follows a settle, so a queue with work in it is never stranded. */
+API._coord = (function () {
+  'use strict';
+
+  var MAX_CONCURRENT = 6;            /* below the safe simultaneous-call budget */
+  var FOREGROUND_RESERVE = 2;        /* slots low-priority work may never take */
+  var MAX_PENDING = 24;              /* hard queue ceiling */
+  var MAX_PREFETCH_PENDING = 8;      /* prefetch is a bet, never a backlog */
+  var BACKOFF_BASE_MS = 8000;
+  var BACKOFF_MAX_MS = 120000;
+
+  var pending = [];
+  var active = 0;
+  var failures = 0;
+  var backoffUntil = 0;
+
+  var RANK = { foreground: 0, background: 1, prefetch: 2 };
+
+  function laneFor(action, payload, opts) {
+    var want = opts && opts.lane;
+    if (want === 'foreground' || want === 'background' || want === 'prefetch') return want;
+    var ma = String((payload && payload.module_action) || action || '');
+    if (/^prefetch_/.test(ma)) return 'prefetch';
+    if (ma === 'get_page_versions') return 'background';
+    return 'foreground';
+  }
+
+  function hidden() {
+    try { return document.visibilityState === 'hidden'; } catch (e) { return false; }
+  }
+
+  function rejectEntry(e, code, message) {
+    e.reject({ status: 'error', code: code, transport: false, message: message });
+  }
+
+  function coalesceKey(e) {
+    var body;
+    try { body = JSON.stringify(e.payload === undefined ? null : e.payload); }
+    catch (err) { return null; }         /* unstringifiable payloads never merge */
+    return e.action + '\u0000' + body;
+  }
+
+  function oldestPrefetchIndex() {
+    for (var i = 0; i < pending.length; i++) if (pending[i].lane === 'prefetch') return i;
+    return -1;
+  }
+
+  function notePerf(e, end, ok) {
+    try {
+      if (!(window.PERF && PERF.recordRpc)) return;
+      PERF.recordRpc({
+        action: String((e.payload && e.payload.module_action) || e.action || ''),
+        queueMs: Math.max(0, e.dispatchedAt - e.enqueuedAt),
+        roundtripMs: Math.max(0, end - e.dispatchedAt),
+        ok: ok !== false,
+        blocking: e.lane === 'foreground'
+      });
+    } catch (err) {}
+  }
+
+  function noteFailure(ok, err) {
+    if (ok) { failures = 0; backoffUntil = 0; return; }
+    if (!(err && (err.transport === true || err.uncertain === true || err.code === 'REQUEST_UNCERTAIN'))) return;
+    failures = Math.min(failures + 1, 6);
+    var wait = Math.min(BACKOFF_BASE_MS * Math.pow(2, failures - 1), BACKOFF_MAX_MS);
+    backoffUntil = Date.now() + Math.round(wait * (0.5 + Math.random() * 0.5));
+  }
+
+  function dispatch(e) {
+    e.dispatchedAt = Date.now();
+    active++;
+    var settled = false;
+    var timeout = null;
+    var done = function (ok, value, err) {
+      if (settled) return;
+      settled = true;
+      if (timeout) { clearTimeout(timeout); timeout = null; }
+      var end = Date.now();
+      active = Math.max(0, active - 1);
+      notePerf(e, end, ok);
+      noteFailure(ok, err);
+      if (ok) e.resolve(value); else e.reject(err);
+      pump();                              /* a slot just freed */
+    };
+    var p;
+    try {
+      p = e.dispatch(e.action, e.payload, e.sessionToken, { coord: true });
+    } catch (errSync) { done(false, null, errSync); return; }
+    if (e.timeoutMs > 0) {
+      timeout = setTimeout(function () {
+        done(false, null, {
+          status: 'error', code: 'RPC_TIMEOUT', transport: true,
+          message: 'انتهت مهلة انتظار استجابة الخادم لهذا الطلب.'
+        });
+      }, e.timeoutMs);
+    }
+    p.then(function (value) { done(true, value, null); },
+           function (err) { done(false, null, err); });
+  }
+
+  function pump() {
+    for (;;) {
+      var pick = -1;
+      for (var i = 0; i < pending.length; i++) {
+        /* a hidden tab is not about to use anything prefetched */
+        if (pending[i].lane === 'prefetch' && hidden()) {
+          var gone = pending.splice(i, 1)[0];
+          rejectEntry(gone, 'COORD_PREFETCH_HIDDEN', 'أُلغي التحميل المسبق أثناء إخفاء التبويب');
+          i = -1;
+          continue;
+        }
+        if (pick === -1 || RANK[pending[i].lane] < RANK[pending[pick].lane]) pick = i;
+      }
+      if (pick === -1) return;
+      var e = pending[pick];
+      var low = e.lane !== 'foreground';
+      if (low) {
+        /* reserve: low work stops two slots short of the ceiling */
+        if (Date.now() < backoffUntil) return;
+        if (active >= MAX_CONCURRENT - FOREGROUND_RESERVE) return;
+      } else if (active >= MAX_CONCURRENT) {
+        return;
+      }
+      pending.splice(pick, 1);
+      dispatch(e);                         /* foreground keeps FIFO order */
+    }
+  }
+
+  function submit(action, payload, sessionToken, opts, dispatcher) {
+    var lane = laneFor(action, payload, opts);
+    var e = {
+      lane: lane,
+      action: action,
+      payload: payload,
+      sessionToken: sessionToken,
+      dispatch: dispatcher,
+      enqueuedAt: Date.now(),
+      dispatchedAt: 0,
+      timeoutMs: Math.min(Math.max(Math.floor(Number(opts && opts.timeoutMs) || 0), 0), 120000),
+      coalesceKey: null,
+      resolve: null,
+      reject: null,
+      promise: null
+    };
+    e.promise = new Promise(function (resolve, reject) { e.resolve = resolve; e.reject = reject; });
+
+    if (lane === 'prefetch' && hidden()) {
+      rejectEntry(e, 'COORD_PREFETCH_HIDDEN', 'أُلغي التحميل المسبق أثناء إخفاء التبويب');
+      return e.promise;
+    }
+
+    /* Coalesce only explicitly-marked equivalent safe reads, never writes:
+       foreground entries are excluded because the foreground lane contains
+       every save and approval. Only PENDING entries are considered; a call
+       already on the wire cannot be cancelled. */
+    if (lane !== 'foreground' && opts && opts.coalesce === true) {
+      var key = coalesceKey(e);
+      if (key) {
+        for (var c = 0; c < pending.length; c++) {
+          if (pending[c].lane === lane && pending[c].coalesceKey === key) return pending[c].promise;
+        }
+        e.coalesceKey = key;
+      }
+    }
+
+    if (lane !== 'foreground') {
+      var oldest = oldestPrefetchIndex();
+      if (lane === 'prefetch') {
+        var pf = 0;
+        for (var p = 0; p < pending.length; p++) if (pending[p].lane === 'prefetch') pf++;
+        if (pf >= MAX_PREFETCH_PENDING) {
+          rejectEntry(e, 'COORD_QUEUE_FULL', 'تم رفض التحميل المسبق: طابور ممتلئ');
+          return e.promise;
+        }
+      }
+      if (pending.length >= MAX_PENDING) {
+        if (oldest !== -1) {
+          var victim = pending.splice(oldest, 1)[0];
+          rejectEntry(victim, 'COORD_QUEUE_FULL', 'أُسقط أقدم تحميل مسبق: طابور ممتلئ');
+        } else {
+          rejectEntry(e, 'COORD_QUEUE_FULL', 'تعذر جدولة الطلب: طابور ممتلئ');
+          return e.promise;
+        }
+      }
+    }
+    /* Foreground entries are never refused: a user action must reach the
+       wire, even at the queue ceiling. */
+
+    pending.push(e);
+    pump();
+    return e.promise;
+  }
+
+  return {
+    submit: submit,
+    _state: function () {
+      return { pending: pending.length, active: active, failures: failures, backoffUntil: backoffUntil };
+    }
+  };
+})();
 
 /* F-18: xlsx.full.min.js is ~900 KB and was a top-level <script> here, so all 83
  * pages that include Client_Helpers paid for it on every navigation while only
@@ -444,10 +977,14 @@ API.getSession = function () {
 };
 
 API.setSession = function (s) {
+  if (API._mysqlReads) API._mysqlReads.clear();
+  API._notifyCapabilityPickers('session');
   localStorage.setItem('erp_session', JSON.stringify(s || null));
 };
 
 API.clearSession = function () {
+  if (API._mysqlReads) API._mysqlReads.clear();
+  API._notifyCapabilityPickers('session');
   localStorage.removeItem('erp_session');
 };
 
@@ -815,25 +1352,10 @@ PERF.push = function (metric, value) {
   PERF._flushTimer = setTimeout(PERF.flush, 1500);
 };
 
-/** Ship whatever is queued, in ONE round trip. Safe to call repeatedly. */
-PERF.flush = function () {
-  if (!PERF.enabled() || !PERF._queue.length) return;
-  var marks = PERF._queue;
-  PERF._queue = [];
-  try { clearTimeout(PERF._flushTimer); } catch (e) {}
-  try {
-    google.script.run.apiRouter({
-      action: 'log_client_perf',
-      payload: {
-        page: (window.CURRENT_ACTION || document.title || '').toString().slice(0, 200),
-        url: location.href,
-        user: (API.getSession() && API.getSession().email) || '',
-        marks: marks
-      }
-    });
-    PERF._sent = true;
-  } catch (e) { /* a measurement that cannot be sent is never worth an error */ }
-};
+/* PERF.flush is defined by the Phase C facade below. It ships the legacy
+ * PERF_LOG mark queue AND the bounded RUM journey batch in ONE authenticated
+ * round trip. The old url/email fields are gone: the server ignores them, and
+ * a canonical page id plus sessionToken replace them. */
 
 /* Kept for callers outside this file: queue rather than send, so a page that
  * still calls PERF.send gets the batching without being edited. */
@@ -887,6 +1409,639 @@ if (PERF.enabled()) {
     if (document.visibilityState === 'hidden') PERF.flush();
   });
 }
+
+/* ── [Phase C] Shared metric contract — the universal journey facade ───────
+ *
+ * Contract (UNIVERSAL_DAILY_PERFORMANCE_PLAN.md §6). A fresh navigation id is
+ * taken per route transition and a fresh journey id per form/dialog opening —
+ * never one page-global first-render flag.
+ *
+ *   page_usable_ms        entry/click -> required authorized content/controls
+ *                         ready after a rendering opportunity. The double
+ *                         animation frame is an APPROXIMATION of visible
+ *                         readiness, not a formal paint timestamp.
+ *   form_editable_ms      open/edit -> first mandatory control visible+enabled
+ *   form_options_ready_ms open/edit -> references required for submission resolved
+ *   lookup_ready_ms       query/selection -> options or dependent fields usable;
+ *                         meta.cache is 'hit' or 'fresh'
+ *   input_feedback_ms     first keystroke on a registered critical input -> feedback painted
+ *   save_feedback_ms      save action -> visible pending feedback
+ *   save_confirmed_ms     save action -> authoritative success reconciled; queueing,
+ *                         polling or an uncertain envelope never counts as success
+ *   task_wall_ms          journey start -> completion/cancellation/rejection/unresolved end
+ *   task_active_ms        visible, engaged time; hidden and idle gaps excluded
+ *   system_wait_ms        UNION of intervals where required system work blocks the
+ *                         user — overlaps merged once, never summed
+ *   rpc_queue_ms          per RPC aggregate + per-call: dispatch decision -> send
+ *   rpc_roundtrip_ms      per RPC aggregate + per-call: call -> callback
+ *   list_usable_ms        journey-scoped successor to first_data_render (empty
+ *                         valid state counts; a failed load never stages)
+ *   upload_ready_ms / print_ready_ms  start -> usable result, byte buckets only
+ *
+ * Outcomes: completed | validation | authorization | conflict |
+ * transport-uncertain | cancelled | timed-out | abandoned-unobserved | runtime-error.
+ * Durations use performance.now() and only finite non-negative values are sent;
+ * a missing value is omitted, never reported as 0. The payload carries a
+ * canonical page id and sessionToken only — never URL, email, field text or
+ * record ids. Sampling is ONE uniform draw at journey start (window.PERF_RUM,
+ * window.PERF_RUM_RATE); unsampled journeys are not retained, while the verbose
+ * PERF_LOG diagnostics keep their existing behaviour. Overhead: guarded property
+ * reads on hot paths, one bounded flush timer, at most one small visible-minute
+ * batch, no observers, no polling, no per-keystroke scans.
+ */
+PERF.rumEnabled = function () { return window.PERF_RUM === true; };
+
+(function (PERF) {
+  var TASK_IDLE_MS = 60000;          /* reported in every payload as idle_ms */
+  var SAMPLE_FALLBACK = 0.10;
+  var BATCH_INTERVAL_MS = 60000;     /* at most one small batch per visible minute */
+  var MAX_BATCH_EVENTS = 5;
+  var MAX_BATCH_BYTES = 7000;        /* server cap is 8192 serialized bytes */
+  var MAX_ACTIVE_JOURNEYS = 4;
+  var MAX_RPC_DETAIL = 8;
+  var MAX_INPUT_TRACKERS = 2;
+  var FORM_ONLY = {
+    editable: 1, options_ready: 1, lookup_ready: 1, input_feedback: 1,
+    save_feedback: 1, save_confirmed: 1
+  };
+  var PAGE_ONLY = { page_usable: 1, list_usable: 1 };
+  var OUTCOMES = {
+    completed: 1, validation: 1, authorization: 1, conflict: 1,
+    'transport-uncertain': 1, cancelled: 1, 'timed-out': 1,
+    'abandoned-unobserved': 1, 'runtime-error': 1
+  };
+  /* Metrics the current server ingestion allowlist stores. The full set still
+   * travels in payload.rum.events.m; this filter only avoids invalid_marks noise. */
+  var SERVER_METRICS = {
+    page_usable_ms: 1, form_editable_ms: 1, form_options_ready_ms: 1,
+    lookup_ready_ms: 1, input_feedback_ms: 1, save_feedback_ms: 1, save_confirmed_ms: 1
+  };
+  /* Canonical page ids: curated aliases plus the server-injected action token
+   * shape. A raw path, query, email or free text can never match. */
+  var PAGE_IDS = {
+    ERPDashboard: 'ERPDashboard', login: 'login', session_expired: 'session_expired',
+    perf_dashboard: 'perf_dashboard', user_sessions: 'user_sessions',
+    vf_sales: 'vf_sales', vf_purchases: 'vf_purchases', vf_warehouse_movement: 'vf_warehouse_movement',
+    vf_mfg_orders: 'vf_mfg_orders', vf_quality_dashboard: 'vf_quality_dashboard',
+    tc_products: 'tc_products', tc_purchasing: 'tc_purchasing', tc_budget_stock_balance: 'tc_budget_stock_balance',
+    tl_dashboard: 'tl_dashboard', tl_kpi: 'tl_kpi', tl_products: 'tl_products'
+  };
+  var NONBLOCKING = /^(prefetch_|get_page_versions)$/;
+
+  var journeys = [];
+  var pending = [];
+  var dropped = 0;
+  var lastRumFlush = 0;
+  var rumFlushTimer = null;
+  var lifecycleWired = false;
+  var activityWired = false;
+  var inputTrackers = [];
+
+  function now() {
+    try { return performance.now(); } catch (e) { return Date.now(); }
+  }
+  function epoch() { return Date.now(); }
+  function enabled() { return PERF.rumEnabled() || PERF.enabled(); }
+  function newId() {
+    try { if (window.crypto && window.crypto.randomUUID) return window.crypto.randomUUID(); } catch (e) {}
+    var s = '', i;
+    try {
+      if (window.crypto && window.crypto.getRandomValues) {
+        var a = new Uint32Array(2);
+        window.crypto.getRandomValues(a);
+        for (i = 0; i < a.length; i++) s += ('00000000' + a[i].toString(16)).slice(-8);
+        return s;
+      }
+    } catch (e2) {}
+    for (i = 0; i < 16; i++) s += Math.floor(Math.random() * 16).toString(16);
+    return s;
+  }
+  function sampleRate() {
+    if (PERF.enabled() && !PERF.rumEnabled()) return 1;   /* verbose window retains all */
+    var r = Number(window.PERF_RUM_RATE);
+    return (isFinite(r) && r >= 0 && r <= 1) ? r : SAMPLE_FALLBACK;
+  }
+  function sampled_() {
+    if (PERF.enabled()) return true;                  /* verbose diagnostics retain all */
+    if (!PERF.rumEnabled()) return false;
+    var r = sampleRate();
+    if (r <= 0) return false;
+    if (r >= 1) return true;
+    return Math.random() < r;                         /* ONE uniform draw at journey start */
+  }
+  function currentAction() {
+    try { return String(window.CURRENT_ACTION || ''); } catch (e) { return ''; }
+  }
+  function canonicalPage(raw) {
+    var s = String(raw == null ? '' : raw).trim();
+    if (!s || s.length > 60) return 'unknown';
+    if (PAGE_IDS[s]) return PAGE_IDS[s];
+    if (s === currentAction() && /^[A-Za-z][A-Za-z0-9_]{0,60}$/.test(s)) return s;
+    return 'unknown';
+  }
+  function sessionToken() {
+    try { if (window.SESSION && SESSION.token) return SESSION.token(); } catch (e) {}
+    try { return String(window.SESSION_TOKEN || ''); } catch (e2) { return ''; }
+  }
+  function classifyError(r) {
+    var code = '';
+    try { code = String((r && (r.code || r.errorCode)) || ''); } catch (e) {}
+    if (r && r.notApplied === true) return 'validation';
+    if (/NOT_AUTHORIZED|UNAUTHORIZED|AUTHORIZATION|SESSION_EXPIRED|SYSTEM_DISABLED|ACCOUNT_DISABLED|FORBIDDEN|LOGIN_REQUIRED|OWNER_MISMATCH/i.test(code)) return 'authorization';
+    if (/CONFLICT|IN_PROGRESS|DUPLICATE|LOCKED|LOCK|STALE|VERSION/i.test(code)) return 'conflict';
+    if (/TIMEOUT|TIMED/i.test(code)) return 'timed-out';
+    if (/UNCERTAIN|TRANSPORT/i.test(code)) return 'transport-uncertain';
+    if (/VALID|REQUIRED|INVALID|REJECT|MISSING|FORMAT|EMPTY/i.test(code)) return 'validation';
+    if (r && r.uncertain === true) return 'transport-uncertain';
+    return 'runtime-error';
+  }
+
+  /* ── task_active_ms: hidden/idle gaps excluded with no per-frame timer. One
+     passive-capture activity listener updates a single timestamp. ── */
+  function resumeActive(j) {
+    if (!j.sampled || j.finished) return;
+    var hidden = false;
+    try { hidden = document.visibilityState === 'hidden'; } catch (e) {}
+    if (hidden) return;
+    j.activeSince = now();
+    j.lastSeen = j.activeSince;
+  }
+  function accountActive(j, endT) {
+    if (j.activeSince == null) return;
+    var close = Math.min(endT, (j.lastSeen || j.activeSince) + TASK_IDLE_MS);
+    if (close > j.activeSince) j.activeAccum += (close - j.activeSince);
+    j.activeSince = null;
+  }
+  function onActivity() {
+    var t = now();
+    for (var i = 0; i < journeys.length; i++) {
+      var j = journeys[i];
+      if (j.finished || !j.sampled) continue;
+      if (j.activeSince == null) {
+        var hidden = false;
+        try { hidden = document.visibilityState === 'hidden'; } catch (e) {}
+        if (!hidden) { j.activeSince = t; j.lastSeen = t; }
+      } else {
+        if (j.lastSeen && (t - j.lastSeen) > TASK_IDLE_MS) {
+          var close = j.lastSeen + TASK_IDLE_MS;
+          if (close > j.activeSince) j.activeAccum += (close - j.activeSince);
+          j.activeSince = t;
+        }
+        j.lastSeen = t;
+      }
+    }
+  }
+  function onVisibility() {
+    var hidden = false;
+    try { hidden = document.visibilityState === 'hidden'; } catch (e) {}
+    for (var i = 0; i < journeys.length; i++) {
+      var j = journeys[i];
+      if (j.finished || !j.sampled) continue;
+      if (hidden) accountActive(j, now()); else resumeActive(j);
+    }
+    if (hidden) flush(true);          /* best-effort hidden flush */
+  }
+  function wireLifecycle() {
+    if (lifecycleWired) return;
+    lifecycleWired = true;
+    try {
+      document.addEventListener('visibilitychange', onVisibility, { passive: true });
+      window.addEventListener('pagehide', function () {
+        /* undefined outcome: finishOne derives it (usable page = completed, a
+           pending save = transport-uncertain, otherwise abandoned-unobserved). */
+        finishAll(undefined);
+        flush(true);
+      });
+    } catch (e) {
+      try { document.addEventListener('visibilitychange', onVisibility); } catch (e2) {}
+    }
+    if (!activityWired) {
+      activityWired = true;
+      try {
+        document.addEventListener('pointerdown', onActivity, { passive: true, capture: true });
+        document.addEventListener('keydown', onActivity, { passive: true, capture: true });
+        document.addEventListener('focusin', onActivity, { passive: true, capture: true });
+      } catch (e) {}
+    }
+  }
+  function releaseInputs() {
+    for (var i = 0; i < inputTrackers.length; i++) {
+      try { inputTrackers[i].el.removeEventListener('input', inputTrackers[i].fn); } catch (e) {}
+    }
+    inputTrackers = [];
+  }
+  function trackCriticalInput(el) {
+    if (!enabled() || !el || inputTrackers.length >= MAX_INPUT_TRACKERS) return;
+    var openForm = findJourney('form');
+    if (!openForm || !openForm.sampled) return;
+    for (var i = 0; i < inputTrackers.length; i++) if (inputTrackers[i].el === el) return;
+    var t0 = null;
+    var fn = function () {
+      if (t0 == null) {
+        t0 = now();
+        /* input_feedback_ms is first keystroke -> feedback painted, so the
+           stage carries its own span rather than the journey-start delta. */
+        var after = function () { stage('input_feedback', { ms: Math.max(0, now() - t0) }); };
+        try {
+          if (window.requestAnimationFrame) window.requestAnimationFrame(function () { window.requestAnimationFrame(after); });
+          else setTimeout(after, 32);
+        } catch (e) { setTimeout(after, 32); }
+      }
+      try { el.removeEventListener('input', fn); } catch (e2) {}
+    };
+    try { el.addEventListener('input', fn, { passive: true }); }
+    catch (e3) { try { el.addEventListener('input', fn); } catch (e4) { return; } }
+    inputTrackers.push({ el: el, fn: fn });
+  }
+
+  /* ── journey lifecycle ──────────────────────────────────────────────────── */
+  function beginJourney(kind, pageId, opts) {
+    if (!enabled()) return null;
+    kind = (kind === 'form') ? 'form' : 'page';
+    var o = opts || {};
+    var page = canonicalPage(pageId || PERF._page || currentAction());
+    if (kind === 'page') {
+      /* One page journey at a time. A second boot for the SAME page reuses the
+         open journey (the shell and the router both boot it); a different page
+         closes the previous one. */
+      for (var i = journeys.length - 1; i >= 0; i--) {
+        if (journeys[i].kind === 'page' && !journeys[i].finished) {
+          if (o.reuse !== false && journeys[i].pageId === page) return journeys[i];
+          finishOne(journeys[i], undefined);
+        }
+      }
+    }
+    var j = {
+      navId: newId(), journeyId: newId(), kind: kind, pageId: page,
+      startedAt: o.entryZero ? 0 : now(),   /* hard boots measure from time origin */
+      stages: {}, rpcs: [], waits: [],
+      outcome: null, sampled: sampled_(), modalId: String(o.modalId || ''),
+      saving: false, finished: false,
+      activeSince: null, activeAccum: 0, lastSeen: 0
+    };
+    if (j.sampled) { wireLifecycle(); resumeActive(j); }
+    if (journeys.length >= MAX_ACTIVE_JOURNEYS) journeys.shift();
+    journeys.push(j);
+    return j;
+  }
+  function findJourney(kind, modalId) {
+    for (var i = journeys.length - 1; i >= 0; i--) {
+      var j = journeys[i];
+      if (j.finished) continue;
+      if (kind && j.kind !== kind) continue;
+      if (modalId && j.modalId !== modalId) continue;
+      return j;
+    }
+    return null;
+  }
+  function targetJourney(name) {
+    return findJourney(FORM_ONLY[name] ? 'form' : (PAGE_ONLY[name] ? 'page' : ''), '');
+  }
+  function stage(name, meta) {
+    if (!enabled()) return;
+    name = String(name || '');
+    if (!name) return;
+    var j = targetJourney(name);
+    if (!j || j.finished || !j.sampled || j.stages[name]) return;  /* first wins */
+    j.stages[name] = { at: now(), meta: meta || null };
+    if (name === 'save_confirmed') j.outcome = 'completed';
+  }
+  function setOutcome(name) {
+    if (!enabled() || !OUTCOMES[name]) return;
+    var j = findJourney('');
+    if (j && j.sampled) j.outcome = name;
+  }
+  function markSaving(modalId) {
+    if (!enabled()) return;
+    var j = findJourney('form', modalId);
+    if (j) j.saving = true;
+  }
+  function endModal(modalId) {
+    if (!enabled()) return;
+    releaseInputs();
+    var j = findJourney('form', modalId);
+    if (!j || j.saving) return;    /* a save settles the journey, not the close */
+    finishOne(j, 'cancelled');     /* the user closed the dialog without saving */
+  }
+  function settleModal(modalId, outcome) {
+    if (!enabled()) return;
+    var j = findJourney('form', modalId);
+    if (!j) return;
+    j.saving = false;
+    finishOne(j, outcome);
+  }
+  function finishOne(j, outcome) {
+    if (!j || j.finished) return;
+    j.finished = true;
+    if (outcome && OUTCOMES[outcome]) j.outcome = outcome;
+    if (!j.outcome) {
+      /* A save was pending at the unresolved end: unload loss must not be
+         recorded as user abandonment. */
+      if (j.kind === 'form' && j.stages.save_feedback && !j.stages.save_confirmed) {
+        j.outcome = 'transport-uncertain';
+      } else {
+        j.outcome = j.stages.page_usable ? 'completed' : 'abandoned-unobserved';
+      }
+    }
+    var idx = journeys.indexOf(j);
+    if (idx !== -1) journeys.splice(idx, 1);
+    if (!j.sampled) return;
+    accountActive(j, now());
+    enqueue(buildEvent(j));
+  }
+  function finishJourney(outcome, kind) {
+    if (!enabled()) return;
+    finishOne(findJourney(kind || ''), outcome);
+  }
+  function finishAll(outcome) {
+    var open = journeys.slice();
+    for (var i = 0; i < open.length; i++) finishOne(open[i], outcome);
+  }
+  function armPageUsable() {
+    if (!enabled()) return;
+    /* Double animation frame = an APPROXIMATION of the first opportunity the
+       browser had to show ready content; it is not a formal paint timestamp. */
+    var fire = function () { stage('page_usable'); };
+    try {
+      if (window.requestAnimationFrame) window.requestAnimationFrame(function () { window.requestAnimationFrame(fire); });
+      else setTimeout(fire, 32);
+    } catch (e) { try { setTimeout(fire, 32); } catch (e2) {} }
+  }
+  function armFormReadiness(root) {
+    if (!enabled() || !root || !root.querySelectorAll) return;
+    var openForm = findJourney('form');
+    if (!openForm || !openForm.sampled) return;
+    var fire = function () {
+      if (!findJourney('form')) return;
+      var control = null, required = false, i;
+      try {
+        var all = root.querySelectorAll('input:not([disabled]):not([type="hidden"]):not([type="file"]), select:not([disabled]), textarea:not([disabled])');
+        for (i = 0; i < all.length; i++) {
+          var c = all[i];
+          var req = !!(c.hasAttribute && c.hasAttribute('required'));
+          if (!control || (req && !required)) { control = c; required = req; }
+          if (required) break;
+        }
+      } catch (e) {}
+      if (!control) return;
+      var visible = true;
+      try { visible = !!(control.offsetParent || (control.getClientRects && control.getClientRects().length)); } catch (e2) {}
+      if (!visible) return;
+      stage('editable', { focused: document.activeElement === control });
+      var tracked = 0;
+      try {
+        var inputs = root.querySelectorAll('input:not([disabled]):not([type="hidden"]):not([type="file"]):not([type="checkbox"]):not([type="radio"]), textarea:not([disabled])');
+        for (i = 0; i < inputs.length && tracked < MAX_INPUT_TRACKERS; i++) {
+          var v = true;
+          try { v = !!(inputs[i].offsetParent || (inputs[i].getClientRects && inputs[i].getClientRects().length)); } catch (e3) {}
+          if (!v) continue;
+          trackCriticalInput(inputs[i]);
+          tracked++;
+        }
+      } catch (e4) {}
+    };
+    try {
+      if (window.requestAnimationFrame) window.requestAnimationFrame(function () { window.requestAnimationFrame(fire); });
+      else setTimeout(fire, 32);
+    } catch (e) { try { setTimeout(fire, 32); } catch (e2) {} }
+  }
+
+  /* ── metrics on finish ──────────────────────────────────────────────────── */
+  function metricSince(j, name) {
+    var s = j.stages[name];
+    if (!s) return null;
+    if (s.meta && typeof s.meta.ms === 'number' && isFinite(s.meta.ms) && s.meta.ms >= 0) return s.meta.ms;
+    var d = s.at - j.startedAt;
+    return (isFinite(d) && d >= 0) ? d : null;
+  }
+  function spanBetween(j, a, b) {
+    var sa = j.stages[a], sb = j.stages[b];
+    if (!sa || !sb) return null;
+    var d = sb.at - sa.at;
+    return (isFinite(d) && d >= 0) ? d : null;
+  }
+  function stats(values) {
+    if (!values.length) return null;
+    var v = values.slice().sort(function (a, b) { return a - b; });
+    var sum = 0, i;
+    for (i = 0; i < v.length; i++) sum += v[i];
+    var pick = function (p) { return v[Math.min(v.length - 1, Math.floor((v.length - 1) * p))]; };
+    return { n: v.length, min: Math.round(v[0]), p50: Math.round(pick(0.5)), max: Math.round(v[v.length - 1]), sum: Math.round(sum) };
+  }
+  function unionMs(list) {
+    if (!list || !list.length) return null;
+    var arr = list.slice().sort(function (a, b) { return a[0] - b[0]; });
+    var total = 0, s = arr[0][0], e = arr[0][1];
+    for (var i = 1; i < arr.length; i++) {
+      if (arr[i][0] > e) { total += e - s; s = arr[i][0]; e = arr[i][1]; }
+      else if (arr[i][1] > e) { e = arr[i][1]; }
+    }
+    total += e - s;
+    return (isFinite(total) && total >= 0) ? total : null;
+  }
+  function buildEvent(j) {
+    var m = {};
+    function put(name, value) {
+      if (typeof value === 'number' && isFinite(value) && value >= 0) m[name] = Math.round(value);
+    }
+    put('page_usable_ms', metricSince(j, 'page_usable'));
+    put('form_editable_ms', metricSince(j, 'editable'));
+    put('form_options_ready_ms', metricSince(j, 'options_ready'));
+    put('lookup_ready_ms', metricSince(j, 'lookup_ready'));
+    put('input_feedback_ms', metricSince(j, 'input_feedback'));
+    put('save_feedback_ms', metricSince(j, 'save_feedback'));
+    put('save_confirmed_ms', metricSince(j, 'save_confirmed'));
+    put('list_usable_ms', metricSince(j, 'list_usable'));
+    put('upload_ready_ms', spanBetween(j, 'upload_started', 'upload_ready'));
+    put('print_ready_ms', spanBetween(j, 'print_started', 'print_ready'));
+    put('task_wall_ms', now() - j.startedAt);
+    put('task_active_ms', j.activeAccum);
+    put('system_wait_ms', unionMs(j.waits));
+    var ev = { n: j.navId, j: j.journeyId, k: j.kind, p: j.pageId, o: j.outcome, m: m };
+    var lookup = j.stages.lookup_ready;
+    if (lookup && lookup.meta) ev.lookup = { cache: lookup.meta.cache || 'unknown', discards: lookup.meta.discards || 0 };
+    var q = [], r = [], detail = [], i;
+    for (i = 0; i < j.rpcs.length; i++) {
+      var call = j.rpcs[i];
+      q.push(call.q);
+      if (call.r != null) r.push(call.r);
+      if (detail.length < MAX_RPC_DETAIL) {
+        detail.push({ a: call.a, q: Math.round(call.q), r: call.r == null ? null : Math.round(call.r), ok: call.ok });
+      }
+    }
+    var qs = stats(q), rs = stats(r);
+    if (qs || rs) {
+      ev.rpc = {};
+      if (qs) ev.rpc.q = qs;
+      if (rs) ev.rpc.r = rs;
+      if (detail.length) ev.rpc.calls = detail;
+    }
+    return ev;
+  }
+
+  /* ── RPC recording ──────────────────────────────────────────────────────── */
+  function addRpc(j, label, t0, t1, t2, ok, blocking) {
+    if (!j || j.finished || !j.sampled) return;
+    var q = t1 - t0, r = t2 - t1;
+    j.rpcs.push({ a: String(label || '').slice(0, 40), q: (q >= 0 ? q : 0), r: (r >= 0 ? r : 0), ok: ok !== false });
+    if (blocking) j.waits.push([t1, t2]);   /* required work: user cannot advance */
+  }
+  function probe(action, payload) {
+    if (!enabled()) return null;
+    var j = findJourney('');
+    if (!j || j.finished || !j.sampled) return null;
+    var moduleAction = String((payload && payload.module_action) || action || '');
+    var blocking = !NONBLOCKING.test(moduleAction);
+    var t0 = now(), t1 = null;
+    return {
+      sent: function () { if (t1 == null) t1 = now(); },
+      done: function (ok) {
+        if (t1 == null) return;             /* never dispatched */
+        addRpc(j, moduleAction, t0, t1, now(), ok, blocking);
+        t1 = null;
+      }
+    };
+  }
+  function recordRpc(info) {
+    if (!enabled()) return;
+    info = info || {};
+    var j = findJourney('');
+    if (!j || j.finished || !j.sampled) return;
+    var q = Number(info.queueMs), r = Number(info.roundtripMs);
+    q = (isFinite(q) && q >= 0) ? q : 0;
+    r = (isFinite(r) && r >= 0) ? r : 0;
+    j.rpcs.push({ a: String(info.action || '').slice(0, 40), q: q, r: r, ok: info.ok !== false });
+    if (info.blocking !== false) { var t2 = now(); j.waits.push([t2 - r, t2]); }
+  }
+  function addSystemWait(start, end) {
+    if (!enabled()) return;
+    var s = Number(start), e = Number(end);
+    if (!isFinite(s) || !isFinite(e) || e < s) return;
+    var j = findJourney('');
+    if (!j || j.finished || !j.sampled) return;
+    j.waits.push([s, e]);
+  }
+
+  /* ── bounded, authenticated, fail-open flush ────────────────────────────── */
+  function eventsToMarks(events) {
+    var marks = [];
+    if (!events) return marks;
+    for (var i = 0; i < events.length; i++) {
+      var m = events[i].m || {};
+      for (var k in m) {
+        if (!Object.prototype.hasOwnProperty.call(m, k) || !SERVER_METRICS[k]) continue;
+        if (marks.length >= 12) return marks;
+        marks.push({ metric: k, ms: m[k] });
+      }
+    }
+    return marks;
+  }
+  function enqueue(ev) {
+    if (!ev) return;
+    if (pending.length >= MAX_BATCH_EVENTS) { pending.shift(); dropped++; }
+    pending.push(ev);
+    scheduleFlush();
+  }
+  function scheduleFlush() {
+    if (rumFlushTimer) return;
+    var delay = BATCH_INTERVAL_MS - (epoch() - lastRumFlush);
+    if (!(delay > 0) || delay > BATCH_INTERVAL_MS) delay = BATCH_INTERVAL_MS;
+    try {
+      rumFlushTimer = setTimeout(function () {
+        rumFlushTimer = null;
+        var hidden = false;
+        try { hidden = document.visibilityState === 'hidden'; } catch (e) {}
+        if (hidden) { scheduleFlush(); return; }   /* hidden: hide/pagehide flush only */
+        flush(false);
+      }, delay);
+    } catch (e) { rumFlushTimer = null; }
+  }
+  function flush(force) {
+    /* A pagehide/visibility event object arrives as the first argument from the
+       legacy listener; treat any non-true argument as a forced flush. */
+    if (force !== undefined && force !== true) force = true;
+    var legacy = PERF._queue || [];
+    PERF._queue = [];
+    try { clearTimeout(PERF._flushTimer); } catch (e) {}
+    var events = null;
+    if (pending.length) {
+      if (force === true || (epoch() - lastRumFlush) >= BATCH_INTERVAL_MS) {
+        events = pending;
+        pending = [];
+        lastRumFlush = epoch();
+      } else if (!rumFlushTimer) {
+        scheduleFlush();
+      }
+    }
+    if (!legacy.length && !(events && events.length)) return;
+    var payload = { page: PERF._page || canonicalPage(currentAction()), marks: legacy.slice(0, 20) };
+    var extra = eventsToMarks(events);
+    for (var i = 0; i < extra.length && payload.marks.length < 20; i++) payload.marks.push(extra[i]);
+    if (events && events.length) {
+      payload.rum = {
+        v: 1, sample_rate: sampleRate(), idle_ms: TASK_IDLE_MS,
+        dropped: dropped, event_count: events.length, events: events
+      };
+    }
+    payload.event_count = events ? events.length : 0;
+    var encoded = '';
+    try { encoded = JSON.stringify(payload); } catch (eEnc) { return; }
+    if (encoded.length > MAX_BATCH_BYTES && payload.rum) {
+      var keep = payload.rum.events.length;
+      while (keep > 1 && encoded.length > MAX_BATCH_BYTES) {
+        keep--;
+        payload.rum.events = payload.rum.events.slice(0, keep);
+        payload.rum.event_count = keep;
+        payload.event_count = keep;
+        try { encoded = JSON.stringify(payload); } catch (e2) { return; }
+      }
+      if (encoded.length > MAX_BATCH_BYTES) {
+        delete payload.rum;
+        payload.event_count = 0;
+        try { encoded = JSON.stringify(payload); } catch (e3) { return; }
+      }
+    }
+    if (encoded.length > MAX_BATCH_BYTES) return;   /* never send an oversized batch */
+    payload.bytes = encoded.length;
+    try { encoded = JSON.stringify(payload); } catch (e4) { return; }
+    try {
+      google.script.run.apiRouter({
+        action: 'log_client_perf',
+        payload: payload,
+        sessionToken: sessionToken()
+      });
+      PERF._sent = true;
+    } catch (eSend) { /* silent, fail-open: telemetry never touches a business call */ }
+  }
+
+  PERF._page = PERF._page || '';
+  PERF.beginJourney = beginJourney;
+  PERF.stage = stage;
+  PERF.setOutcome = setOutcome;
+  PERF.finishJourney = finishJourney;
+  PERF.recordRpc = recordRpc;
+  PERF.setPage = function (id) { PERF._page = canonicalPage(id); return PERF._page; };
+  PERF.addSystemWait = addSystemWait;
+  PERF.flush = flush;
+  PERF.classifyError = classifyError;
+  PERF.now = now;
+  PERF.byteBucket = function (n) {
+    n = Number(n) || 0;
+    if (n < 65536) return '<64k';
+    if (n < 1048576) return '<1m';
+    if (n < 5242880) return '<5m';
+    return '<10m';
+  };
+  /* Internal entry points for the shared UI adapters (UI_Components.html). */
+  PERF._probe = probe;
+  PERF._armPageUsable = armPageUsable;
+  PERF._armFormReadiness = armFormReadiness;
+  PERF._markSaving = markSaving;
+  PERF._endModal = endModal;
+  PERF._settleModal = settleModal;
+  PERF._trackCriticalInput = trackCriticalInput;
+  PERF._releaseInputs = releaseInputs;
+})(window.PERF);
 
 /* ── [RT-7] Prefetch on intent (M4), replacing the fixed two-second timer ──
  *

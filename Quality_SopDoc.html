@@ -1,0 +1,518 @@
+<script>
+/* ═══════════════════════════════════════════════════════════════════════════
+   Quality_SopDoc.html — محرّك الوثيقة المشترك (قالب الشركة المضبوط)
+
+   A shared PARTIAL, included by Company_ValleyFoods_QualitySops (SOP lifecycle)
+   and Company_ValleyFoods_QualityGeneral (general quality records). It owns the
+   things that must not drift apart between authoring, read-only preview and the
+   exported artifact:
+
+     VFDOC.TEMPLATE     the versioned template definition (served by the server
+                        and passed in; the literal here is only the fallback)
+     VFDOC.frameHtml    the repeated A4 frame: header table (metadata grid /
+                        centred title / company logo) and footer block
+     VFDOC.coverHtml    the cover page: prepared/reviewed rows, review schedule,
+                        issue/valid/copy/stamp block, deliberate whitespace
+     VFDOC.historyHtml  ONE change-history page (not two editable copies)
+     VFDOC.paginate     measured soft pagination over ONE continuous editable
+                        flow. Blocks that would straddle a page boundary are
+                        pushed to the next page; the canonical document is never
+                        split into several edit hosts, so selection, caret and
+                        undo survive pagination.
+     VFDOC.history      bound undo/redo across typing, formatting, paste, table
+                        changes and template application
+     VFDOC.sanitize     the client CLEANING pass. NOT the security boundary: the
+                        server validates the same content against its own
+                        allowlist before storage and again before export.
+
+   Deliberately absent (not present-and-broken): coauthoring, track changes,
+   comments, DOCX import/export, cryptographic signing, template designer.
+   ═══════════════════════════════════════════════════════════════════════════ */
+window.VFDOC = (function () {
+  'use strict';
+
+  /* ── the versioned template definition ─────────────────────────────────── */
+  var TEMPLATE = {
+    id: 'vf-controlled-document-v1',
+    version: 1,
+    paper: { widthMm: 210, heightMm: 297, orientation: 'portrait' },
+    frame: { insetMm: 9, rulePt: 0.5 },
+    header: { topMm: 13, widthMm: 184, minHeightMm: 34, metaPct: 30, titlePct: 34, logoPct: 36 },
+    body: { sideInsetMm: 18, gapBelowHeaderMm: 6, fontPt: 13, lineHeight: 1.4, headingPt: 16, coverTitlePt: 18 },
+    footer: { bottomMm: 15, heightMm: 10 },
+    fontStack: 'Times New Roman, Arial, Cairo, sans-serif',
+    bodyHeadings: [
+      'الغرض', 'مجال التطبيق', 'المسؤولية', 'التعريفات', 'النماذج المستخدمة',
+      'الإجراءات', 'المراجع', 'الحفظ والتسجيل'
+    ],
+    labels: {
+      docNumber: 'رقم الوثيقة', page: 'صفحة', issueDate: 'تاريخ الإصدار', version: 'رقم الإصدار',
+      copyNumber: 'رقم النسخة', stamp: 'ختم الوثيقة',
+      prepared: 'إعداد', reviewed: 'مراجعة', name: 'الاسم', position: 'الوظيفة', signature: 'التوقيع / التاريخ',
+      reviewNo: 'م', plannedReview: 'تاريخ المراجعة المخطط', actualReview: 'تاريخ المراجعة الفعلي',
+      reviewer: 'القائم بالمراجعة', reviewResult: 'نتيجة المراجعة',
+      issueDateField: 'تاريخ الإصدار', validDate: 'تاريخ السريان',
+      changeHistory: 'جدول وثيقة التعديل',
+      changePage: 'رقم الصفحة', changeDate: 'التاريخ', changeRevision: 'رقم التعديل / الإصدار', changeSummary: 'ملخص التعديل',
+      pending: '—'
+    },
+    coverReviewRows: 2,
+    coverReviewScheduleRows: 3,
+    /* 210mm at 96dpi. Pagination measurement uses the flow's real pixel width
+       when the browser gives one and falls back to this ratio on a stub. */
+    pxPerMm: 3.7795275591
+  };
+
+  function esc(s) {
+    var map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return map[c]; });
+  }
+
+  function defaultMeta(categoryLabel, tpl) {
+    tpl = tpl || TEMPLATE;
+    var reviewed = [];
+    for (var i = 0; i < (tpl.coverReviewRows || 2); i++) reviewed.push({ name: '', position: '' });
+    var schedule = [];
+    for (var j = 0; j < (tpl.coverReviewScheduleRows || 3); j++) schedule.push({ planned: '', actual: '', reviewer: '', result: '' });
+    return {
+      template_id: tpl.id || TEMPLATE.id,
+      template_version: tpl.version || TEMPLATE.version,
+      doc_type_label: String(categoryLabel || ''),
+      prepared_by: { name: '', position: '' },
+      prepared_date: '',
+      reviewed_by: reviewed,
+      review_schedule: schedule,
+      issue_date: '',
+      valid_date: '',
+      copy_number: '',
+      revision_rows: []
+    };
+  }
+
+  function parseMeta(raw) {
+    if (raw && typeof raw === 'object') return raw;
+    var s = String(raw == null ? '' : raw).trim();
+    if (!s) return {};
+    try { var p = JSON.parse(s); return (p && typeof p === 'object') ? p : {}; } catch (e) { return {}; }
+  }
+
+  /* ── client cleaning pass (usability; the server is the trust boundary) ─── */
+  var BAD_TAGS = { SCRIPT: 1, STYLE: 1, IFRAME: 1, OBJECT: 1, EMBED: 1, LINK: 1, META: 1, BASE: 1, FORM: 1, INPUT: 1, BUTTON: 1, SELECT: 1, TEXTAREA: 1, SVG: 1, MATH: 1, NOSCRIPT: 1, TEMPLATE: 1, APPLET: 1, FRAME: 1, FRAMESET: 1 };
+
+  function sanitize(html) {
+    var host = document.createElement('div');
+    host.innerHTML = String(html == null ? '' : html);
+    var nodes;
+    try { nodes = host.querySelectorAll('*'); } catch (e) { nodes = []; }
+    for (var i = nodes.length - 1; i >= 0; i--) {
+      var el = nodes[i];
+      if (BAD_TAGS[String(el.tagName || '').toUpperCase()]) {
+        if (el.parentNode) el.parentNode.removeChild(el);
+        continue;
+      }
+      var attrs = (el.attributes && el.attributes.length != null) ? el.attributes : [];
+      for (var j = attrs.length - 1; j >= 0; j--) {
+        var name = String(attrs[j].name || '');
+        var value = String(attrs[j].value || '');
+        if (/^on/i.test(name)) el.removeAttribute(name);
+        else if (/^(href|src|xlink:href)$/i.test(name) && /^\s*(javascript|vbscript|data):/i.test(value)) el.removeAttribute(name);
+        else if (name === 'style' && /expression\s*\(|url\s*\(|@import|behavior\s*:|-moz-binding/i.test(value)) el.removeAttribute(name);
+        else if (name === 'target' && value !== '_blank') el.removeAttribute(name);
+      }
+      if (String(el.tagName || '').toUpperCase() === 'A' && el.getAttribute && el.getAttribute('href')) {
+        el.setAttribute('rel', 'noopener noreferrer');
+      }
+    }
+    return host.innerHTML;
+  }
+
+  /* Guidance placeholders carry data-vfs-ph and are NOT submitted content. */
+  function substantive(html) {
+    var tmp = document.createElement('div');
+    tmp.innerHTML = String(html == null ? '' : html);
+    var ph = [];
+    try { ph = tmp.querySelectorAll('[data-vfs-ph]'); } catch (e) { ph = []; }
+    for (var i = 0; i < ph.length; i++) { if (ph[i].parentNode) ph[i].parentNode.removeChild(ph[i]); }
+    var cells = [];
+    try { cells = tmp.querySelectorAll('td,th'); } catch (e2) { cells = []; }
+    for (var k = 0; k < cells.length; k++) {
+      if (String(cells[k].textContent || '').replace(/[\s\u00A0]+/g, '') !== '') return true;
+    }
+    return String(tmp.textContent || '').replace(/[\s\u00A0]+/g, '') !== '';
+  }
+
+  function countWords(text) {
+    var t = String(text == null ? '' : text).replace(/[\s\u00A0]+/g, ' ').trim();
+    if (!t) return 0;
+    return t.split(' ').length;
+  }
+
+  /* Per-heading writing instructions. They are guidance placeholders
+     (`data-vfs-ph`), so they are NOT submitted content: a body that still
+     consists only of these hints can never be submitted as real content. */
+  var BODY_GUIDE = {
+    'الغرض': 'اكتب سبب وجود الوثيقة والهدف منها.',
+    'مجال التطبيق': 'حدّد الإدارات والأنشطة والمواقع التي تنطبق عليها هذه الوثيقة.',
+    'المسؤولية': 'بيّن الأدوار المسؤولة عن تنفيذ ومتابعة هذه الوثيقة.',
+    'التعريفات': 'اشرح المصطلحات والاختصارات المستخدمة في الوثيقة.',
+    'النماذج المستخدمة': 'اذكر النماذج والسجلات المرتبطة وأكوادها.',
+    'الإجراءات': 'اكتب خطوات الإجراء بترتيب التنفيذ، وحدّد المسؤول عن كل خطوة.',
+    'المراجع': 'أدرج الوثائق والمراجع ذات الصلة.',
+    'الحفظ والتسجيل': 'حدّد مدة الحفظ ومكانه والمسؤول عنه.'
+  };
+
+  function placeholderPara(heading) {
+    var guide = BODY_GUIDE[String(heading || '').trim()] || 'اكتب محتوى هذا القسم.';
+    return '<p dir="rtl" data-vfs-ph="1" class="vfs-placeholder">' + esc(guide) + '</p>';
+  }
+
+  function placeholderBody(headings) {
+    var out = '';
+    (headings || TEMPLATE.bodyHeadings).forEach(function (h) {
+      out += '<h2 dir="rtl">' + esc(h) + '</h2>' + placeholderPara(h);
+    });
+    return out;
+  }
+
+  /* ── the repeated frame: header table + footer, shared by every page ───── */
+  function frameHtml(o) {
+    var tpl = (o && o.template) || TEMPLATE;
+    var L = tpl.labels || TEMPLATE.labels;
+    var meta = parseMeta((o && o.meta) || {}) || {};
+    var typeLabel = String((meta && meta.doc_type_label) || (o && o.docTypeLabel) || '');
+    var titleAr = String((o && o.titleAr) || '');
+    var titleEn = String((o && o.titleEn) || '');
+    var code = String((o && o.code) || '');
+    var versionDisplay = String((o && o.version) == null ? '' : o.version);
+    while (versionDisplay.length < 3) versionDisplay = '0' + versionDisplay;
+    var logoUrl = String((o && o.logoUrl) || '');
+    var companyName = String((o && o.companyName) || '');
+    var h = '<table class="vfs-hdr-table"><tr>';
+    h += '<td style="width:' + tpl.header.metaPct + '%">' +
+      '<table class="vfs-meta-grid">' +
+        '<tr><td class="vfs-meta-key">' + L.docNumber + '</td><td><bdi dir="ltr">' + esc(code) + '</bdi></td></tr>' +
+        '<tr><td class="vfs-meta-key">' + L.page + '</td><td>' + L.pending + '</td></tr>' +
+        '<tr><td class="vfs-meta-key">' + L.issueDate + '</td><td>' + esc(meta.issue_date || '') + '</td></tr>' +
+        '<tr><td class="vfs-meta-key">' + L.version + '</td><td><bdi dir="ltr">' + esc(versionDisplay) + '</bdi></td></tr>' +
+      '</table></td>';
+    h += '<td style="width:' + tpl.header.titlePct + '%" class="vfs-hdr-title">' +
+      '<div><b>' + esc(typeLabel) + '</b></div><div><b>' + esc(titleAr) + '</b></div>' +
+      (titleEn ? '<div dir="ltr" style="font-size:10pt;">' + esc(titleEn) + '</div>' : '') +
+      '</td>';
+    h += '<td style="width:' + tpl.header.logoPct + '%" class="vfs-hdr-logo">' +
+      (logoUrl
+        ? '<img src="' + esc(logoUrl) + '" alt="شعار الشركة" decoding="async">'
+        : '<div style="font-weight:bold;">' + esc(companyName) + '</div>') +
+      '</td>';
+    h += '</tr></table>';
+    return h;
+  }
+
+  function footerHtml(meta, tpl) {
+    tpl = tpl || TEMPLATE;
+    var L = tpl.labels || TEMPLATE.labels;
+    meta = meta || {};
+    return '<table class="vfs-grid"><tr>' +
+      '<td style="width:50%;text-align:center;"><b>' + L.copyNumber + '</b><div class="vfs-stampbox"></div>' + esc(meta.copy_number || '') + '</td>' +
+      '<td style="width:50%;text-align:center;"><b>' + L.stamp + '</b><div class="vfs-stampbox"></div></td>' +
+      '</tr></table>';
+  }
+
+  /* ── cover (5.5): prepared/reviewed rows, review schedule, lower block ─── */
+  function coverHtml(o) {
+    var tpl = (o && o.template) || TEMPLATE;
+    var L = tpl.labels || TEMPLATE.labels;
+    var meta = parseMeta((o && o.meta) || {});
+    var titleAr = String((o && o.titleAr) || '');
+    var titleEn = String((o && o.titleEn) || '');
+    var prepared = meta.prepared_by || {};
+    var reviewed = Array.isArray(meta.reviewed_by) ? meta.reviewed_by : [];
+    var h = '<div class="vfs-cover-title">' + esc(titleAr) + '</div>';
+    if (titleEn) h += '<div class="vfs-cover-sub" dir="ltr">' + esc(titleEn) + '</div>';
+    h += '<div class="vfs-spacer"></div>';
+    h += '<table class="vfs-grid"><tr><th style="width:14%"></th><th>' + L.name + '</th><th>' + L.position + '</th><th>' + L.signature + '</th></tr>';
+    h += '<tr><td>' + L.prepared + '</td><td>' + esc(prepared.name || '') + '</td><td>' + esc(prepared.position || '') + '</td><td></td></tr>';
+    if (!reviewed.length) reviewed = [{}, {}];
+    reviewed.forEach(function (r) {
+      r = r || {};
+      h += '<tr><td>' + L.reviewed + '</td><td>' + esc(r.name || '') + '</td><td>' + esc(r.position || '') + '</td><td></td></tr>';
+    });
+    h += '</table><div class="vfs-spacer"></div>';
+    var schedule = Array.isArray(meta.review_schedule) ? meta.review_schedule.slice() : [];
+    while (schedule.length < (tpl.coverReviewScheduleRows || 3)) schedule.push({});
+    h += '<table class="vfs-grid"><tr><th style="width:8%">' + L.reviewNo + '</th><th>' + L.plannedReview + '</th><th>' + L.actualReview + '</th><th>' + L.reviewer + '</th><th>' + L.reviewResult + '</th></tr>';
+    schedule.forEach(function (r, i) {
+      r = r || {};
+      h += '<tr><td style="text-align:center;">' + (i + 1) + '</td><td>' + esc(r.planned || '') + '</td><td>' + esc(r.actual || '') +
+        '</td><td>' + esc(r.reviewer || '') + '</td><td>' + esc(r.result || '') + '</td></tr>';
+    });
+    h += '</table><div class="vfs-spacer"></div>';
+    h += footerHtml(meta, tpl);
+    return h;
+  }
+
+  /* The ONE logical change-history dataset, rendered once near the front. */
+  function historyHtml(o) {
+    var tpl = (o && o.template) || TEMPLATE;
+    var L = tpl.labels || TEMPLATE.labels;
+    var meta = parseMeta((o && o.meta) || {});
+    var rows = Array.isArray(meta.revision_rows) ? meta.revision_rows : [];
+    var h = '<div class="vfs-history-title">' + L.changeHistory + '</div><div class="vfs-spacer"></div>';
+    h += '<table class="vfs-grid"><tr><th style="width:12%">' + L.changePage + '</th><th style="width:16%">' + L.changeDate +
+      '</th><th style="width:16%">' + L.changeRevision + '</th><th>' + L.changeSummary + '</th></tr>';
+    if (!rows.length) {
+      h += '<tr><td colspan="4" style="text-align:center;">' + L.pending + '</td></tr>';
+    } else {
+      rows.forEach(function (r) {
+        r = r || {};
+        h += '<tr><td style="text-align:center;">' + esc(r.page || '') + '</td><td>' + esc(r.date || '') + '</td><td>' +
+          esc(r.revision || '') + '</td><td>' + esc(r.summary || '') + '</td></tr>';
+      });
+    }
+    return h + '</table>';
+  }
+
+  /* ── page layer: A4 backgrounds + repeated frame + honest page numbers ─── */
+  function sheetLayerHtml(pageCount, o) {
+    var n = Math.max(1, Number(pageCount) || 1);
+    var out = '';
+    var head = frameHtml(o || {});
+    var foot = footerHtml((o && o.meta) || {}, (o && o.template) || TEMPLATE);
+    for (var i = 0; i < n; i++) {
+      out += '<div class="vfs-sheet" aria-hidden="true">' +
+        '<div class="vfs-sheet-rules"></div>' +
+        '<div class="vfs-sheet-zone vfs-sheet-head">' + head + '</div>' +
+        '<div class="vfs-sheet-zone vfs-sheet-foot">' + foot + '</div>' +
+        '<div class="vfs-pagenum">صفحة ' + (i + 1) + ' من ' + n + '</div>' +
+      '</div>';
+    }
+    return out;
+  }
+
+  /* ── measured soft pagination ───────────────────────────────────────────
+     ONE pass from a clean state:
+       1. reset every previously applied push so measurement is not fed its own
+          output (that is what would cause a pagination loop),
+       2. measure each top-level block,
+       3. push a block that would cross a page boundary down to the next page.
+     Explicit page breaks always start a new page.
+     Returns the real page count.
+     ─────────────────────────────────────────────────────────────────────── */
+  function paginate(flow, opts) {
+    opts = opts || {};
+    var tpl = opts.template || TEMPLATE;
+    var paperMm = (tpl.paper && tpl.paper.heightMm) || 297;
+    var topMm = opts.topMm || 52;      /* flow padding-top in mm  */
+    var bottomMm = opts.bottomMm || 30;/* flow padding-bottom in mm */
+    var blocks = [];
+    var kids = (flow && flow.children) ? flow.children : [];
+    var i;
+    for (i = 0; i < kids.length; i++) {
+      var el = kids[i];
+      if (!el) continue;
+      if (el.getAttribute && el.getAttribute('data-vfs-push') !== null) {
+        el.style.marginTop = (el.getAttribute('data-vfs-base-margin') || '');
+        el.removeAttribute('data-vfs-push');
+      }
+      if (el.getAttribute && el.getAttribute('data-vfs-base-margin') === null) {
+        el.setAttribute('data-vfs-base-margin', (el.style && el.style.marginTop) || '');
+      }
+      blocks.push(el);
+    }
+    if (!blocks.length) return 1;
+
+    var pxPerMm = 0;
+    try {
+      var rect = flow.getBoundingClientRect ? flow.getBoundingClientRect() : null;
+      if (rect && rect.width) pxPerMm = rect.width / 210;
+      if (!pxPerMm && flow.offsetWidth) pxPerMm = flow.offsetWidth / 210;
+    } catch (e) { pxPerMm = 0; }
+    /* No layout information (headless harness, hidden container): report one
+       page rather than inventing boundaries. */
+    if (!pxPerMm) return 1;
+
+    var contentHeight = (paperMm - topMm - bottomMm) * pxPerMm;
+    if (contentHeight <= 0) return 1;
+
+    var page = 0;
+    var bottom = contentHeight;
+    for (i = 0; i < blocks.length; i++) {
+      var node = blocks[i];
+      var top = 0, height = 0;
+      try { top = node.offsetTop || 0; height = node.offsetHeight || 0; } catch (e2) { continue; }
+      if (!height) continue;
+      if (top + height > bottom && top > 0) {
+        page++;
+        bottom = contentHeight * (page + 1);
+        var baseMargin = (node.getAttribute && node.getAttribute('data-vfs-base-margin')) || '';
+        var desired = bottom - height - top;
+        if (desired > 0 && node.style) {
+          node.setAttribute('data-vfs-push', '1');
+          node.style.marginTop = (baseMargin ? baseMargin + ' ' : '') + 'calc(' + Math.round(desired) + 'px + 4px)';
+        }
+      }
+    }
+    var explicit = 0;
+    try { explicit = flow.querySelectorAll('.vfs-pagebreak').length; } catch (e3) { explicit = 0; }
+    return Math.max(1, page + 1 + explicit);
+  }
+
+  /* ── bound undo/redo over ONE flow, coherent across every operation ────── */
+  function makeHistory(flow, opts) {
+    opts = opts || {};
+    var limit = opts.limit || 100;
+    var coalesceMs = opts.coalesceMs || 800;
+    var undoStack = [], redoStack = [], lastAt = 0;
+
+    function caretOffset() {
+      try {
+        var sel = window.getSelection ? window.getSelection() : null;
+        if (!sel || !sel.rangeCount || !flow) return null;
+        var r = sel.getRangeAt(0);
+        if (flow.contains && !flow.contains(r.startContainer)) return null;
+        var pre = r.cloneRange();
+        pre.selectNodeContents(flow);
+        pre.setEnd(r.startContainer, r.startOffset);
+        return String(pre.toString()).length;
+      } catch (e) { return null; }
+    }
+    function restoreCaret(offset) {
+      if (offset === null || offset === undefined || !flow) return;
+      try {
+        var walker = document.createTreeWalker(flow, NodeFilter.SHOW_TEXT, null);
+        var remaining = offset, node = walker.nextNode();
+        while (node) {
+          var len = String(node.nodeValue || '').length;
+          if (remaining <= len) {
+            var r = document.createRange();
+            r.setStart(node, remaining); r.collapse(true);
+            var sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(r);
+            return;
+          }
+          remaining -= len; node = walker.nextNode();
+        }
+      } catch (e) {}
+    }
+    function push(force) {
+      if (!flow) return false;
+      var now = Date.now();
+      if (!force && undoStack.length && now - lastAt < coalesceMs) return false;
+      var html = flow.innerHTML;
+      if (undoStack.length && undoStack[undoStack.length - 1].html === html) return false;
+      undoStack.push({ html: html, caret: caretOffset() });
+      if (undoStack.length > limit) undoStack.shift();
+      redoStack.length = 0;
+      lastAt = now;
+      return true;
+    }
+    function undo() {
+      if (!flow || !undoStack.length) return false;
+      redoStack.push({ html: flow.innerHTML, caret: caretOffset() });
+      var prev = undoStack.pop();
+      flow.innerHTML = prev.html;
+      restoreCaret(prev.caret);
+      return true;
+    }
+    function redo() {
+      if (!flow || !redoStack.length) return false;
+      undoStack.push({ html: flow.innerHTML, caret: caretOffset() });
+      var next = redoStack.pop();
+      flow.innerHTML = next.html;
+      restoreCaret(next.caret);
+      return true;
+    }
+    return {
+      push: push, undo: undo, redo: redo,
+      canUndo: function () { return undoStack.length > 0; },
+      canRedo: function () { return redoStack.length > 0; },
+      depth: function () { return undoStack.length; }
+    };
+  }
+
+  /* ── table helpers (used by the toolbar) ──────────────────────────────── */
+  function tableHtml(rows, cols) {
+    var h = '<table dir="rtl"><tbody>';
+    for (var r = 0; r < rows; r++) {
+      h += '<tr>';
+      for (var c = 0; c < cols; c++) h += '<' + (r === 0 ? 'th' : 'td') + '></' + (r === 0 ? 'th' : 'td') + '>';
+      h += '</tr>';
+    }
+    return h + '</tbody></table><p><br></p>';
+  }
+
+  return {
+    TEMPLATE: TEMPLATE,
+    esc: esc,
+    defaultMeta: defaultMeta,
+    parseMeta: parseMeta,
+    sanitize: sanitize,
+    substantive: substantive,
+    countWords: countWords,
+    placeholderBody: placeholderBody,
+    placeholderPara: placeholderPara,
+    frameHtml: frameHtml,
+    footerHtml: footerHtml,
+    coverHtml: coverHtml,
+    historyHtml: historyHtml,
+    sheetLayerHtml: sheetLayerHtml,
+    paginate: paginate,
+    makeHistory: makeHistory,
+    tableHtml: tableHtml
+  };
+})();
+</script>
+
+<style>
+  /* ── الوثيقة: قواعد على ورق أبيض، ولا عناصر تطبيق داخل الورقة ────────── */
+  .vfs-canvas { flex: 1; min-width: 0; overflow: auto; padding: 18px 12px 40px; background: #dbe1e8; }
+  .vfs-canvas-inner { position: relative; }
+  .vfs-sheet { position: relative; width: 210mm; min-height: 297mm; background: #fff; box-shadow: 0 2px 10px rgba(15,23,42,.22); margin: 0 auto 14px; }
+  .vfs-sheet-rules { position: absolute; inset: 9mm; border: 0.5pt solid #000; pointer-events: none; }
+  .vfs-sheet-zone { position: absolute; right: 18mm; left: 18mm; pointer-events: none; overflow: hidden; }
+  .vfs-sheet-head { top: 13mm; max-height: 36mm; }
+  .vfs-sheet-foot { bottom: 15mm; max-height: 12mm; }
+  .vfs-pagenum { position: absolute; left: 18mm; bottom: 9mm; font-size: 9pt; color: #111; }
+  .vfs-flow-host { position: relative; }
+  .vfs-flow { width: 210mm; box-sizing: border-box; padding: 52mm 18mm 30mm; background: #fff; box-shadow: 0 2px 10px rgba(15,23,42,.22); font-family: 'Times New Roman', Arial, Cairo, sans-serif; font-size: 13pt; line-height: 1.45; color: #000; outline: none; direction: rtl; }
+  .vfs-flow:focus-visible { outline: 2px solid var(--primary, #16a34a); outline-offset: -2px; }
+  .vfs-flow h1 { font-size: 18pt; font-weight: bold; margin: 0 0 8pt; }
+  .vfs-flow h2 { font-size: 16pt; font-weight: bold; margin: 14pt 0 6pt; }
+  .vfs-flow h3 { font-size: 14pt; font-weight: bold; margin: 12pt 0 5pt; }
+  .vfs-flow h4 { font-size: 13pt; font-weight: bold; margin: 10pt 0 4pt; }
+  .vfs-flow p { margin: 0 0 6pt; }
+  .vfs-flow ul, .vfs-flow ol { margin: 0 0 6pt; padding-inline-start: 20pt; }
+  .vfs-flow table { border-collapse: collapse; width: 100%; margin: 0 0 8pt; }
+  .vfs-flow td, .vfs-flow th { border: 1px solid #000; padding: 4px 6px; vertical-align: top; font-size: 13pt; }
+  .vfs-flow blockquote { border-inline-start: 3px solid #999; margin: 0 0 6pt; padding-inline-start: 10pt; }
+  .vfs-flow a { color: #0b4f8a; }
+  .vfs-flow .vfs-pagebreak { border: 0; border-top: 1px dashed #9ca3af; margin: 10pt 0; }
+  .vfs-placeholder { color: #94a3b8; }
+  .vfs-find { background: #fde68a; }
+
+  .vfs-cover { position: relative; width: 210mm; box-sizing: border-box; background: #fff; box-shadow: 0 2px 10px rgba(15,23,42,.22); padding: 52mm 18mm 30mm; margin: 0 auto 14px; font-family: 'Times New Roman', Arial, Cairo, sans-serif; font-size: 13pt; color: #000; }
+  .vfs-cover-title { font-size: 18pt; font-weight: bold; text-align: center; }
+  .vfs-cover-sub { text-align: center; font-size: 11pt; }
+  .vfs-history-title { font-size: 16pt; font-weight: bold; text-align: center; }
+  .vfs-hdr-table, .vfs-meta-grid, .vfs-grid { width: 100%; border-collapse: collapse; }
+  .vfs-hdr-table > tbody > tr > td { border: 1px solid #000; padding: 3px 5px; vertical-align: middle; }
+  .vfs-meta-grid td { border: 1px solid #000; padding: 2px 4px; font-size: 9pt; white-space: nowrap; }
+  .vfs-meta-key { font-weight: bold; background: #f2f2f2; }
+  .vfs-hdr-title { text-align: center; font-size: 11pt; }
+  .vfs-hdr-logo { text-align: center; }
+  .vfs-hdr-logo img { max-width: 100%; max-height: 24mm; width: auto; height: auto; }
+  .vfs-grid td, .vfs-grid th { border: 1px solid #000; padding: 3px 5px; font-size: 10pt; vertical-align: top; }
+  .vfs-grid th { background: #f2f2f2; }
+  .vfs-stampbox { height: 14mm; }
+  .vfs-spacer { height: 6mm; }
+
+  /* The document surface stays white even when the surrounding ERP is dark. */
+  .vfs-dark .vfs-flow, .vfs-dark .vfs-cover, .vfs-dark .vfs-sheet { background: #fff; color: #000; }
+
+  @media print {
+    .vfs-topbar, .vfs-toolbar, .vfs-panel, .vfs-statusbar, .vfs-tabs, .vfs-findbar, .topbar, .breadcrumb, .control-panel, .mobile-drawer, .drawer-overlay { display: none !important; }
+    .vfs-canvas { overflow: visible; padding: 0; background: #fff; }
+    .vfs-sheet, .vfs-cover { box-shadow: none; page-break-after: always; }
+    .vfs-flow { box-shadow: none; padding: 0; }
+    body { background: #fff; }
+  }
+</style>

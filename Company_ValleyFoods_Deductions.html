@@ -51,7 +51,7 @@
     }
 
     var ROWS = [], EMP_OPTIONS = [], ROLE_OPTIONS = [];
-    var DED_SHOW_ALL = false, DED_TOTAL = 0;
+    var DED_SHOW_ALL = false, DED_TOTAL = 0, DED_TYPE_FILTER = '';
 
     function toggleDedAll() { DED_SHOW_ALL = !DED_SHOW_ALL; fetchDeductions(); }
 
@@ -84,70 +84,125 @@
         .finally(function () { if (!quiet) UI.hideSpinner(); });
     }
 
+    function deductionTypeFilterOptions() {
+      var byId = {};
+      ROLE_OPTIONS.forEach(function (r) {
+        if (r && r.value != null && String(r.value) !== '') byId[String(r.value)] = { label: String(r.label || r.value), category: r.category || '' };
+      });
+      ROWS.forEach(function (r) {
+        var id = String(r.deduction_type == null ? '' : r.deduction_type);
+        if (id && !byId[id]) byId[id] = { label: String(r.deduction_name || id), category: r.deduction_category || '' };
+      });
+      return Object.keys(byId).map(function (id) { return { value: id, label: byId[id].label, category: byId[id].category }; })
+        .sort(function (a, b) { return a.label.localeCompare(b.label, 'ar'); });
+    }
+
+    function deductionCategoryKind(category) {
+      var value = String(category || '').trim();
+      if (/تأخير|تاخير|حضور وانصراف/.test(value)) return 'delay';
+      if (/غياب/.test(value)) return 'absence';
+      if (/جزاء/.test(value)) return 'penalty';
+      if (/مالية مباشرة|مالي مباشر/.test(value)) return 'money';
+      return '';
+    }
+
+    function deductionCategoryForType(type, row) {
+      var role = ROLE_OPTIONS.find(function (r) { return String(r.value) === String(type); });
+      return (role && role.category) || (row && row.deduction_category) || '';
+    }
+
+    function setDeductionTypeFilter(value) {
+      DED_TYPE_FILTER = String(value || '');
+      renderDeductions();
+    }
+
+    function openFilteredDeductionModal() {
+      openAddModal({ type: DED_TYPE_FILTER });
+    }
+
     function renderDeductions() {
       var body = document.getElementById('vf-ded-content');
       if (!body) return;
-      var groups = {};
-      ROWS.forEach(function (r) {
-        var t = r.deduction_name || r.deduction_type || 'أخرى';
-        groups[t] = groups[t] || { dates: {} };
-        var d = fmtDate(r.date);
-        groups[t].dates[d] = groups[t].dates[d] || [];
-        groups[t].dates[d].push(r);
+      var options = deductionTypeFilterOptions();
+      var filterHtml = '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px;">' +
+        '<label for="vf-ded-type-filter" style="font-weight:700;">نوع الخصم:</label>' +
+        '<select id="vf-ded-type-filter" class="input" style="min-width:220px;max-width:100%;" onchange="setDeductionTypeFilter(this.value)">' +
+          '<option value="">كل الأنواع</option>' + options.map(function (o) {
+            return '<option value="' + esc(o.value) + '"' + (String(o.value) === DED_TYPE_FILTER ? ' selected' : '') + '>' + esc(o.label) + '</option>';
+          }).join('') +
+        '</select>' +
+        (CAN_WRITE ? '<button class="btn btn-primary" onclick="openFilteredDeductionModal()">+ تسجيل خصم</button>' : '') +
+      '</div>';
+      var visibleRows = ROWS.filter(function (r) {
+        return !DED_TYPE_FILTER || String(r.deduction_type || '') === DED_TYPE_FILTER;
       });
-      var order = Object.keys(groups).sort(function (a, b) {
-        return a.localeCompare(b, 'ar');
-      });
-      var html = (CAN_WRITE
-        ? '<div style="display:flex;justify-content:flex-end;margin-bottom:12px;"><button class="btn btn-primary" onclick="openAddModal()">+ تسجيل خصم</button></div>'
-        : '') +
-        UIC.showAllBar({ loadedAll: DED_SHOW_ALL, total: DED_TOTAL, showAll: 'toggleDedAll()', showLatest: 'toggleDedAll()' });
-      if (!order.length) {
-        html += '<div class="empty-state"><span>لا توجد خصومات</span></div>';
+      var selectedKind = deductionCategoryKind(deductionCategoryForType(DED_TYPE_FILTER));
+      var headers = [
+        { key: 'unique_id', label: 'كود السجل' },
+        { key: 'emp_id', label: 'كود الموظف' },
+        { key: 'name_ar', label: 'الاسم' },
+        { key: 'deduction_name', label: 'نوع الخصم' },
+        { key: 'date', label: 'التاريخ' }
+      ];
+      if (selectedKind === 'absence') {
+        headers.push({ key: 'number_of_days', label: 'عدد الأيام', numeric: true },
+          { key: 'abscence_type_days', label: 'أيام الغياب', numeric: true });
+      } else if (selectedKind === 'penalty') {
+        headers.push({ key: 'number_of_days', label: 'عدد الأيام', numeric: true },
+          { key: 'penalty_type_days', label: 'أيام الجزاءات', numeric: true });
+      } else if (selectedKind === 'money') {
+        headers.push({ key: 'penalty_value', label: 'قيمة الخصم', numeric: true });
+      } else if (selectedKind === 'delay') {
+        headers.push({ key: 'delay_type_minutes', label: 'دقائق التأخير', numeric: true });
       } else {
-        order.forEach(function (t, gi) {
-          var g = groups[t];
-          var dates = Object.keys(g.dates).sort(function (a, b) { return b.localeCompare(a); });
-          var count = dates.reduce(function (s, d) { return s + g.dates[d].length; }, 0);
-          html += '<div style="margin-bottom:14px;border:1px solid var(--border-subtle);border-radius:var(--radius-sm);overflow:hidden;">' +
-            '<div class="ded-group-head" style="display:flex;align-items:center;gap:10px;padding:10px 14px;background:#f2f4f7;cursor:pointer;user-select:none;" ' +
-            'onclick="toggleDedGroup(\'vf-ded-body-' + gi + '\')">' +
-            '<span style="transition:transform .2s;font-size:11px;" id="vf-ded-arrow-' + gi + '">▼</span>' +
-            '<b style="flex:1;">' + esc(t) + '</b>' +
-            '<span class="text-muted" style="font-size:12px;">' + count + ' سجل</span>' +
-            (CAN_WRITE ? '<button class="btn btn-outline" style="padding:4px 10px;font-size:12px;" onclick="event.stopPropagation();openAddModal({type:\'' + esc(t) + '\'})">+ إضافة</button>' : '') +
-            '</div>' +
-            '<div id="vf-ded-body-' + gi + '" class="ded-group-body">';
-          dates.forEach(function (d) {
-            html += '<div style="padding:8px 14px 4px;"><div style="display:flex;align-items:center;gap:10px;margin-bottom:4px;">' +
-              '<b style="flex:1;font-size:13px;">' + esc(d) + '</b>' +
-              '<span class="text-muted" style="font-size:12px;">' + g.dates[d].length + ' سجل</span>' +
-              (CAN_WRITE ? '<button class="btn btn-outline" style="padding:3px 8px;font-size:11px;" onclick="event.stopPropagation();openAddModal({type:\'' + esc(t) + '\',date:\'' + esc(d) + '\'})">+ في هذا التاريخ</button>' : '') +
-              '</div>' +
-              '<div class="table-wrap"><table class="table" style="font-size:13px;">' +
-              '<thead><tr><th>كود الموظف</th><th>الاسم</th><th>الأيام</th><th>الجزاء</th><th>خصم آخر</th><th>تفاصيل</th><th>المرفق</th><th>إجراءات / Actions</th></tr></thead><tbody>';
-            g.dates[d].forEach(function (r) {
-              var dedAtt = r.deduction_attachement || '';
-              var dedAttCell = dedAtt ? '<button class="btn btn-outline" style="padding:4px 10px;" onclick="viewAttachment(\'' + esc(dedAtt).replace(/\'/g, "\\\'") + '\',\'' + esc(r.unique_id).replace(/\'/g, "\\\'") + '\')">📎 عرض / View</button>' : '-';
-              var dedActions = UIC.actionBtns([
-                { label: '👁️ عرض / View', onclick: "viewDeduction('" + esc(r.unique_id).replace(/\'/g, "\\\'") + "')" },
-                dedAtt ? { label: '📎 عرض المرفق / View Attachment', onclick: "viewAttachment('" + esc(dedAtt).replace(/\'/g, "\\\'") + "','" + esc(r.unique_id).replace(/\'/g, "\\\'") + "')" } : null,
-                IS_SUPER_ADMIN ? { label: '✏️ تعديل / Edit', onclick: "openEditModal('" + esc(r.unique_id).replace(/\'/g, "\\\'") + "')" } : null,
-                IS_SUPER_ADMIN ? { label: '🗑️ حذف / Delete', color: '#dc2626', onclick: "deleteDeduction('" + esc(r.unique_id).replace(/\'/g, "\\\'") + "')" } : null
-              ].filter(Boolean));
-              html += '<tr><td>' + esc(r.emp_id) + '</td><td>' + esc(r.name_ar || '-') + '</td>' +
-                '<td>' + (r.number_of_days != null ? r.number_of_days : '') + '</td>' +
-                '<td>' + (r.penalty_value != null ? r.penalty_value : '') + '</td>' +
-                '<td>' + (r.deduction_value_other != null ? r.deduction_value_other : '') + '</td>' +
-                '<td>' + esc(r.details || '-') + '</td><td>' + dedAttCell + '</td><td>' + dedActions + '</td></tr>';
-            });
-            html += '</tbody></table></div></div>';
-          });
-          html += '</div></div>';
-        });
+        headers.push({ key: 'deduction_metrics', label: 'البيانات حسب النوع' });
       }
+      headers.push({ key: 'details', label: 'تفاصيل' }, { key: 'attachment', label: 'المرفق' },
+        { key: 'actions', label: 'إجراءات / Actions' });
+      var rows = visibleRows.map(function (r) {
+        var uid = esc(r.unique_id || '').replace(/'/g, "\\'");
+        var dedAtt = r.deduction_attachement || '';
+        var dedAttArg = esc(dedAtt).replace(/'/g, "\\'");
+        var rowKind = deductionCategoryKind(deductionCategoryForType(r.deduction_type, r));
+        var metrics = '';
+        if (rowKind === 'absence') metrics = 'عدد الأيام: ' + (r.number_of_days == null ? '' : r.number_of_days) + ' — أيام الغياب: ' + (r.abscence_type_days == null ? '' : r.abscence_type_days);
+        else if (rowKind === 'penalty') metrics = 'عدد الأيام: ' + (r.number_of_days == null ? '' : r.number_of_days) + ' — أيام الجزاءات: ' + (r.penalty_type_days == null ? '' : r.penalty_type_days);
+        else if (rowKind === 'money') metrics = 'قيمة الخصم: ' + (r.penalty_value == null ? '' : r.penalty_value);
+        else if (rowKind === 'delay') metrics = 'دقائق التأخير: ' + (r.delay_type_minutes == null ? '' : r.delay_type_minutes);
+        else metrics = [r.number_of_days, r.penalty_value].filter(function (v) { return v != null && v !== ''; }).join(' — ');
+        var attCell = dedAtt
+          ? '<button class="btn btn-outline" style="padding:4px 10px;" onclick="viewAttachment(\'' + dedAttArg + '\',\'' + uid + '\')">📎 عرض / View</button>'
+          : '-';
+        var actions = UIC.actionBtns([
+          { label: '👁️ عرض / View', onclick: "viewDeduction('" + uid + "')" },
+          dedAtt ? { label: '📎 عرض المرفق / View Attachment', onclick: "viewAttachment('" + dedAttArg + "','" + uid + "')" } : null,
+          IS_SUPER_ADMIN ? { label: '✏️ تعديل / Edit', onclick: "openEditModal('" + uid + "')" } : null,
+          IS_SUPER_ADMIN ? { label: '🗑️ حذف / Delete', color: '#dc2626', onclick: "deleteDeduction('" + uid + "')" } : null
+        ].filter(Boolean));
+        return {
+          unique_id: esc(r.unique_id), emp_id: esc(r.emp_id), name_ar: esc(r.name_ar || '-'),
+          deduction_name: esc(r.deduction_name || r.deduction_type || 'أخرى'),
+          deduction_type_id: esc(r.deduction_type), date: esc(fmtDate(r.date)),
+          number_of_days: r.number_of_days != null ? r.number_of_days : '',
+          penalty_value: r.penalty_value != null ? r.penalty_value : '',
+          penalty_type_days: r.penalty_type_days != null ? r.penalty_type_days : '',
+          abscence_type_days: r.abscence_type_days != null ? r.abscence_type_days : '',
+          delay_type_minutes: r.delay_type_minutes != null ? r.delay_type_minutes : '',
+          deduction_metrics: esc(metrics),
+          details: esc(r.details || '-'), attachment: attCell, actions: actions
+        };
+      });
+      var html = filterHtml + UIC.showAllBar({ loadedAll: DED_SHOW_ALL, total: DED_TOTAL,
+        showAll: 'toggleDedAll()', showLatest: 'toggleDedAll()' }) +
+        UIC.dataTable('vf-deductions-table', {
+          headers: headers, rows: rows,
+          emptyText: DED_TYPE_FILTER ? 'لا توجد خصومات من هذا النوع' : 'لا توجد خصومات',
+          truncated: !DED_SHOW_ALL && DED_TOTAL > ROWS.length,
+          searchScopeNote: 'البحث العام في السجلات المعروضة فقط',
+          showAll: 'toggleDedAll()'
+        });
       body.innerHTML = html;
-      UIC.autoColumnsAll('vf-ded-content');
+      UIC.initTableSort('vf-deductions-table');
     }
 
     function toggleDedGroup(id) {
@@ -180,7 +235,7 @@
       }
       var roles = (_dedRoles)().slice ? (_dedRoles)().slice() : ROLE_OPTIONS.slice();
       if (prefill.deduction_type && !roles.some(function (o) { return String(o.value) === String(prefill.deduction_type); })) {
-        roles.push({ value: prefill.deduction_type, label: (prefill.deduction_name || prefill.deduction_type) + ' (غير نشط)' });
+        roles.push({ value: prefill.deduction_type, label: (prefill.deduction_name || prefill.deduction_type) + ' (غير نشط)', category: prefill.deduction_category || '', deductionValue: prefill.penalty_value != null ? prefill.penalty_value : null });
       }
       var body =
         '<form id="vf-ded-form">' +
@@ -189,9 +244,8 @@
         UIC.field({ key: 'deduction_type', label: 'نوع الخصم', type: 'select', required: true,
           options: roles, placeholder: 'اختر النوع...', value: prefill.deduction_type || prefill.type || '' }) +
         UIC.field({ key: 'date', label: 'التاريخ', type: 'date', required: true, value: prefill.date || todayStr() }) +
-        UIC.field({ key: 'number_of_days', label: 'عدد الأيام', type: 'number', min: '0', step: '0.5', value: (prefill.number_of_days != null && prefill.number_of_days !== '' ? prefill.number_of_days : '0') }) +
-        UIC.field({ key: 'penalty_value', label: 'قيمة الجزاء', type: 'number', min: '0', step: '0.01', value: (prefill.penalty_value != null && prefill.penalty_value !== '' ? prefill.penalty_value : '') }) +
-        UIC.field({ key: 'deduction_value_other', label: 'خصم آخر', type: 'number', min: '0', step: '0.01', value: (prefill.deduction_value_other != null && prefill.deduction_value_other !== '' ? prefill.deduction_value_other : '') }) +
+        '<div id="ded-number-wrap">' + UIC.field({ key: 'number_of_days', label: 'عدد الأيام', type: 'number', min: '0', step: '0.5', value: (prefill.number_of_days != null && prefill.number_of_days !== '' ? prefill.number_of_days : '') }) + '</div>' +
+        '<div id="ded-penalty-wrap">' + UIC.field({ key: 'penalty_value', label: 'قيمة الخصم / الجزاء', type: 'number', min: '0', step: '0.01', value: (prefill.penalty_value != null && prefill.penalty_value !== '' ? prefill.penalty_value : (prefill.deduction_value_other != null ? prefill.deduction_value_other : '')) }) + '</div>' +
         '<div class="form-field" data-field="details"><label class="form-label" for="details">تفاصيل <span class="req">*</span></label>' +
         '<textarea id="details" class="input" data-field-name="details" rows="2" placeholder="وصف الخصم..." required>' + esc(prefill.details || '') + '</textarea>' +
         '<div class="field-error" id="err-details"></div></div>' +
@@ -239,6 +293,7 @@
         name_ar: r.name_ar,
         deduction_type: r.deduction_type,
         deduction_name: r.deduction_name,
+        deduction_category: r.deduction_category,
         date: fmtDate(r.date),
         number_of_days: r.number_of_days,
         penalty_value: r.penalty_value,
@@ -263,7 +318,6 @@
       var sel = document.getElementById('deduction_type');
       var days = document.getElementById('number_of_days');
       var penalty = document.getElementById('penalty_value');
-      var other = document.getElementById('deduction_value_other');
       if (!sel || !days) return;
       var selectedVal = sel.value;
       var _rl2 = _dedRoles();
@@ -271,20 +325,22 @@
       for (var i = 0; i < _rl2.length; i++) {
         if (String(_rl2[i].value) === String(selectedVal)) { role = _rl2[i]; break; }
       }
-      var isMoneyBased = role && role.deductionValue != null;
-      if (isMoneyBased) {
-        days.value = '0';
-        days.setAttribute('disabled', 'disabled');
-        days.removeAttribute('required');
-        if (penalty) { penalty.setAttribute('required', 'required'); }
-        clearFieldError('err-number_of_days');
-      } else {
-        days.removeAttribute('disabled');
-        if (penalty) { penalty.removeAttribute('required'); penalty.value = ''; }
-        clearFieldError('err-penalty_value');
+      var kind = deductionCategoryKind(role && role.category);
+      if (!kind && role && role.deductionValue != null) kind = 'money';
+      var showDays = kind === 'absence' || kind === 'penalty';
+      var showPenalty = kind === 'money';
+      var daysWrap = document.getElementById('ded-number-wrap');
+      var penaltyWrap = document.getElementById('ded-penalty-wrap');
+      if (daysWrap) daysWrap.style.display = showDays ? '' : 'none';
+      if (penaltyWrap) penaltyWrap.style.display = showPenalty ? '' : 'none';
+      days.disabled = !showDays;
+      if (showDays) days.setAttribute('required', 'required');
+      else { days.removeAttribute('required'); days.value = ''; clearFieldError('err-number_of_days'); }
+      if (penalty) {
+        penalty.disabled = !showPenalty;
+        if (showPenalty) penalty.setAttribute('required', 'required');
+        else { penalty.removeAttribute('required'); penalty.value = ''; clearFieldError('err-penalty_value'); }
       }
-      if (other) { other.removeAttribute('required'); }
-      clearFieldError('err-deduction_value_other');
     }
 
     function saveDeduction() {
@@ -295,8 +351,15 @@
       for (var i = 0; i < _rl3.length; i++) {
         if (String(_rl3[i].value) === String(selectedVal)) { role = _rl3[i]; break; }
       }
-      var isMoneyBased = role && role.deductionValue != null;
-      if (isMoneyBased) {
+      var kind = deductionCategoryKind(role && role.category);
+      if (!kind && role && role.deductionValue != null) kind = 'money';
+      if (kind === 'absence' || kind === 'penalty') {
+        var daysEl = document.getElementById('number_of_days');
+        if (daysEl && String(daysEl.value || '').trim() === '') {
+          setFieldError(daysEl, 'err-number_of_days', 'عدد الأيام مطلوب لهذا النوع');
+          return;
+        }
+      } else if (kind === 'money') {
         var penaltyEl = document.getElementById('penalty_value');
         if (penaltyEl && Number(penaltyEl.value) <= 0) {
           setFieldError(penaltyEl, 'err-penalty_value', 'قيمة الجزاء مطلوبة لهذا النوع');
@@ -304,6 +367,9 @@
         }
       }
       var data = UIC.collectForm('vf-ded-form');
+      if (kind === 'absence' || kind === 'penalty') data.penalty_value = '';
+      else if (kind === 'money') data.number_of_days = '';
+      else { data.number_of_days = ''; data.penalty_value = ''; }
       var formEl = document.getElementById('vf-ded-form');
       var doSaveDed = function () {
         /* Option A instant-upload: pre-bound ref from dataset/DED_EDIT. */

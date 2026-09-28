@@ -1,0 +1,591 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Valley Foods — الجودة — الجودة العامة</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Quality_SopDoc'); ?>
+  <?!= include('Company_ValleyFoods_Nav'); ?>
+  <?!= getCompanyThemeCSS_('9940659bd83035d7') ?>
+  <style>
+    .vfg-muted { color: var(--text-muted, #6b7280); }
+    .vfg-code { font-family: 'Courier New', monospace; direction: ltr; unicode-bidi: isolate; }
+    .vfg-bar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 10px; }
+    .vfg-bar .input { width: auto; }
+    .vfg-search { min-width: 240px; }
+    .vfg-tabs { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 10px; }
+    .vfg-editor { border: 1px solid var(--border-color, #e5e7eb); border-radius: 10px; background: var(--bg-surface, #fff); padding: 12px; }
+    .vfg-editor-grid { display: flex; gap: 14px; align-items: flex-start; flex-wrap: wrap; }
+    .vfg-editor-main { flex: 1 1 520px; min-width: 280px; }
+    .vfg-editor-side { flex: 0 1 300px; min-width: 240px; }
+    .vfg-flow { width: 100%; box-sizing: border-box; min-height: 320px; padding: 12px 14px; border: 1px solid var(--border-color, #e5e7eb); border-radius: 8px; background: #fff; color: #000; font-family: 'Times New Roman', Arial, Cairo, sans-serif; font-size: 13pt; line-height: 1.45; direction: rtl; outline: none; overflow: auto; }
+    .vfg-flow:focus-visible { outline: 2px solid var(--primary, #16a34a); outline-offset: 1px; }
+    .vfg-flow h2 { font-size: 15pt; font-weight: bold; margin: 12pt 0 5pt; }
+    .vfg-flow h3 { font-size: 13.5pt; font-weight: bold; margin: 10pt 0 4pt; }
+    .vfg-flow table { border-collapse: collapse; width: 100%; margin: 0 0 8pt; }
+    .vfg-flow td, .vfg-flow th { border: 1px solid #000; padding: 4px 6px; vertical-align: top; font-size: 13pt; }
+    .vfg-flow .vfg-placeholder { color: #94a3b8; }
+    .vfg-toolbar { display: flex; gap: 4px; flex-wrap: wrap; align-items: center; margin-bottom: 6px; }
+    .vfg-toolbar .btn { padding: 3px 9px; font-size: 12px; min-width: 30px; }
+    .vfg-toolbar-sep { width: 1px; height: 18px; background: var(--border-color, #e5e7eb); margin: 0 4px; }
+    .vfg-note { font-size: 12px; color: var(--warning-text, #92400e); }
+    .vfg-err { font-size: 12px; color: var(--danger-text, #b91c1c); font-weight: 700; }
+    .vfg-chips { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+    .vfg-chip { border: 1px solid var(--border-color, #e5e7eb); border-radius: 8px; padding: 6px 12px; background: var(--bg-subtle, #f8fafc); text-align: center; }
+    .vfg-chip b { display: block; font-size: 16px; }
+    .vfg-chip span { font-size: 11px; color: var(--text-muted, #6b7280); }
+    .vfg-links { display: flex; flex-direction: column; gap: 6px; }
+    .vfg-linkrow { display: flex; gap: 6px; align-items: center; }
+    .vfg-linkrow .input { flex: 1; }
+    .vfg-savestate { font-size: 12px; font-weight: 700; }
+    .vfg-savestate-idle { color: var(--warning-text, #92400e); }
+    .vfg-savestate-saving { color: var(--text-muted, #6b7280); }
+    .vfg-savestate-saved { color: var(--success-text, #166534); }
+    .vfg-savestate-error { color: var(--danger-text, #b91c1c); }
+
+    @media print {
+      .topbar, .breadcrumb, .control-panel, .mobile-drawer, .drawer-overlay, .vfg-bar, .vfg-tabs, .vfg-editor-side, .vfg-toolbar { display: none !important; }
+      .vfg-editor, .vfg-flow { border: 0; padding: 0; min-height: 0; overflow: visible; }
+    }
+  </style>
+</head>
+<body>
+  <div id="vf-root"></div>
+
+  <script>
+    var params = new URLSearchParams(window.location.search);
+    var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+    var scriptUrl = window.scriptUrl || '/';
+    var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+    var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('9940659bd83035d7') ?>';
+    var COMPANY_PAGES = <?!= companyPages ?>;
+    var CURRENT_ACTION = '<?!= currentAction ?>';
+    var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+    var CAN_WRITE = UIC.canAdd_(); var CAN_FULL = UIC.canFull_();
+
+    function companyCall(moduleAction, data) {
+      return API.call('company_action', {
+        target_system: '9940659bd83035d7',
+        module_action: moduleAction,
+        data: data || {}
+      }, SESSION_TOKEN);
+    }
+    function esc(v) { return FMT.escape(v); }
+    function fmtDate(v) {
+      if (!v) return '—';
+      var d = (v instanceof Date) ? v : new Date(v);
+      if (isNaN(d.getTime())) return String(v);
+      var p = function (n) { return n < 10 ? '0' + n : '' + n; };
+      return p(d.getDate()) + '/' + p(d.getMonth() + 1) + '/' + d.getFullYear();
+    }
+  </script>
+
+  <script>
+  (function () {
+    'use strict';
+
+    /* ══════════════════════════════════════════════════════════════════════
+       الجودة العامة — مساحة عمل الجودة العامة (4.5).
+
+       A records/document workspace for product specifications and general
+       quality activities. It reuses the shared controlled-document frame
+       (Quality_SopDoc) so the editor is the same editor, but it has its OWN
+       permission key (`vf_quality_general`), its own state (Draft / Active /
+       Archived) and its own handlers. It never creates SOP versions, events,
+       PDF freezes or acknowledgements: sharing the editor must not share the
+       SOP lifecycle.
+
+       `Active` here means an active general record. It is NOT an approval, a
+       conformity certificate or a controlled-document release, and the page
+       says so rather than implying otherwise.
+       ══════════════════════════════════════════════════════════════════════ */
+
+    var RECORDS = [], OWNER_CHOICES = [], PRODUCTS = [], TEMPLATE = null;
+    var TYPES = ['product_specification', 'quality_activity'];
+    var STATUSES = ['Draft', 'Active', 'Archived'];
+    var STATUS_AR = { Draft: 'مسودة', Active: 'نشط', Archived: 'مؤرشف' };
+    var STATUS_TONE = { Draft: 'neutral', Active: 'success', Archived: 'neutral' };
+    var TYPE_AR = { product_specification: 'مواصفات منتج', quality_activity: 'نشاط جودة' };
+    var SAVE_AR = {
+      idle: ['تغييرات غير محفوظة', 'vfg-savestate-idle'],
+      saving: ['جارٍ الحفظ…', 'vfg-savestate-saving'],
+      saved: ['تم الحفظ', 'vfg-savestate-saved'],
+      error: ['تعذر الحفظ', 'vfg-savestate-error']
+    };
+
+    var ED = null;   /* the open editor model, or null when the list is showing */
+    var UI_STATE = { tab: 'product_specification', search: '', status: '' };
+    var CONCLUSION_NOTE = 'السجل العام لا يعني اعتماداً أو مطابقة؛ إذا احتاجت المواصفة دليلاً معتمداً فاربطها بوثيقة ضبط وثائقي قائمة.';
+
+    function $(id) { var el = document.getElementById(id); return el || null; }
+    function val(id) { var el = $(id); return el ? String(el.value == null ? '' : el.value).trim() : ''; }
+    function setHtml(id, html) { var el = $(id); if (el) el.innerHTML = html; }
+    function setText(id, t) { var el = $(id); if (el) el.textContent = String(t == null ? '' : t); }
+    function isBlank(v) { return String(v == null ? '' : v).trim() === ''; }
+    function statusLabel(s) { return STATUS_AR[s] || s || '—'; }
+    function statusPill(s) { return UIC.statusPill(statusLabel(s), STATUS_TONE[s] || 'neutral'); }
+    function typeLabel(t) { return TYPE_AR[t] || t || '—'; }
+
+    function renderApp() {
+      UIC.appShell('vf-root', {
+        companyLogoUrl: COMPANY_LOGO_URL,
+        companyLogoHref: scriptUrl + '?action=vf_dashboard&sessionToken=' + SESSION_TOKEN,
+        companyLogoTitle: 'Valley Foods',
+        breadcrumb: 'Valley Foods / الجودة / الجودة العامة',
+        contentId: 'vfg-content',
+        menuGroups: (window.VALLEYFOODS_MENU || [])
+      });
+      setHtml('vfg-content', '<div id="vfg-host"><div class="vf-card"><div class="vf-card-body">جارٍ التحميل…</div></div></div>');
+      load();
+      UIC.Live.watchPage({
+        call: companyCall,
+        page: 'vf_quality_general',
+        onChange: function () { UIC.Live.arrive(function () { load(true); }); }
+      });
+    }
+
+    function load(quiet) {
+      /* A quiet live refresh must not draw over the screen the user is reading. */
+      if (!quiet) UIC.readSkeleton('vfg-host');
+      return companyCall('get_quality_general')
+        .then(function (res) {
+          res = res || {};
+          RECORDS = res.records || [];
+          OWNER_CHOICES = res.owner_choices || [];
+          PRODUCTS = res.products || [];
+          TEMPLATE = res.template || null;
+          if (ED) { renderEditor(); } else { renderList(); }
+        })
+        .catch(function (e) {
+          if (quiet) return;
+          setHtml('vfg-host', '<div class="vf-card"><div class="vf-card-body"><div class="vfg-err">' + esc((e && e.message) || 'خطأ في تحميل البيانات') + '</div></div></div>');
+        })
+        .finally(function () { try { UI.hideSpinner(); } catch (e2) {} });
+    }
+
+    /* ══ list ══════════════════════════════════════════════════════════════ */
+    function visibleRecords() {
+      var q = String(UI_STATE.search || '').trim().toLowerCase();
+      return RECORDS.filter(function (r) {
+        if (r.record_type !== UI_STATE.tab) return false;
+        if (UI_STATE.status && r.status !== UI_STATE.status) return false;
+        if (!q) return true;
+        return [r.title, r.spec_code, r.product_name_snapshot, r.activity_category, r.owner_name]
+          .some(function (v) { return String(v || '').toLowerCase().indexOf(q) !== -1; });
+      });
+    }
+    function tabCount(type) { return RECORDS.filter(function (r) { return r.record_type === type; }).length; }
+
+    function renderList() {
+      ED = null;
+      var host = $('vfg-host');
+      if (!host) return;
+      var rows = visibleRecords().map(function (r) {
+        return [
+          '<b data-rec="' + esc(r.unique_id) + '" class="vfg-code">' + esc(r.spec_code || '—') + '</b>',
+          esc(r.title || ''),
+          UI_STATE.tab === 'product_specification' ? esc(r.product_name_snapshot || '— (بلا صنف مرتبط)') : esc(r.activity_category || '—'),
+          esc(r.owner_name || '—'),
+          esc(r.record_date || '—'),
+          statusPill(r.status),
+          esc(r.due_date || '—')
+        ];
+      });
+      host.innerHTML =
+        '<div class="vf-card"><div class="vf-card-header"><h3>الجودة العامة</h3>' +
+          '<div class="vfg-bar" style="margin:0;">' +
+            (CAN_WRITE ? '<button type="button" class="btn btn-primary" onclick="VF_QUALITY_GENERAL_PAGE.newRecord()">سجل جديد</button>' : '') +
+          '</div>' +
+        '</div><div class="vf-card-body">' +
+          '<div class="vfg-note" style="margin-bottom:8px;">' + esc(CONCLUSION_NOTE) + '</div>' +
+          '<div class="vfg-tabs">' +
+            '<button type="button" class="btn ' + (UI_STATE.tab === 'product_specification' ? 'btn-primary' : 'btn-outline') + '" onclick="VF_QUALITY_GENERAL_PAGE.setTab(\'product_specification\')">مواصفات المنتجات (' + tabCount('product_specification') + ')</button>' +
+            '<button type="button" class="btn ' + (UI_STATE.tab === 'quality_activity' ? 'btn-primary' : 'btn-outline') + '" onclick="VF_QUALITY_GENERAL_PAGE.setTab(\'quality_activity\')">أنشطة الجودة (' + tabCount('quality_activity') + ')</button>' +
+          '</div>' +
+          '<div class="vfg-bar">' +
+            '<input id="vfg-search" class="input vfg-search" type="search" placeholder="بحث بالعنوان أو الكود أو المالك…" value="' + esc(UI_STATE.search) + '" oninput="VF_QUALITY_GENERAL_PAGE.setSearch(this.value)">' +
+            '<select class="input" onchange="VF_QUALITY_GENERAL_PAGE.setStatus(this.value)" aria-label="تصفية بالحالة">' +
+              '<option value="">كل الحالات</option>' +
+              STATUSES.map(function (s) { return '<option value="' + s + '"' + (UI_STATE.status === s ? ' selected' : '') + '>' + statusLabel(s) + '</option>'; }).join('') +
+            '</select>' +
+          '</div>' +
+          '<div id="vfg-list">' + listTableHtml() + '</div>' +
+        '</div></div>';
+    }
+    function listTableHtml() {
+      var rows = visibleRecords().map(function (r) {
+        return [
+          '<b data-rec="' + esc(r.unique_id) + '" class="vfg-code">' + esc(r.spec_code || '—') + '</b>',
+          esc(r.title || ''),
+          esc(r.record_type === 'product_specification' ? (r.product_name_snapshot || '— (بلا صنف مرتبط)') : (r.activity_category || '—')),
+          esc(r.owner_name || '—'),
+          esc(r.record_date || '—'),
+          statusPill(r.status),
+          esc(r.due_date || '—')
+        ];
+      });
+      return UIC.dataTable('vfg-table', {
+        emptyState: { title: 'لا توجد سجلات', body: 'ابدأ بسجل جديد من الزر أعلاه.' },
+        headers: ['الكود', 'العنوان', 'الصنف / التصنيف', 'المالك', 'التاريخ', 'الحالة', 'الاستحقاق'],
+        rows: rows,
+        rowClick: function (rec, tr) {
+          var el = (tr && tr.querySelector) ? tr.querySelector('[data-rec]') : null;
+          if (el) openRecord(el.getAttribute('data-rec'));
+        }
+      });
+    }
+    function setTab(t) { UI_STATE.tab = t; renderList(); }
+    function setSearch(v) { UI_STATE.search = String(v || ''); setHtml('vfg-list', listTableHtml()); }
+    function setStatus(v) { UI_STATE.status = String(v || ''); setHtml('vfg-list', listTableHtml()); }
+
+    function findRecord(uid) {
+      var want = String(uid == null ? '' : uid);
+      for (var i = 0; i < RECORDS.length; i++) if (String(RECORDS[i].unique_id) === want) return RECORDS[i];
+      return null;
+    }
+    function openRecord(uid) {
+      var r = findRecord(uid);
+      if (!r) { UIC.toast('لم يتم العثور على السجل', 'error'); load(true); return; }
+      ED = {
+        uid: r.unique_id, type: r.record_type, status: r.status,
+        readOnly: !CAN_WRITE || r.status === 'Archived',
+        body: VFDOC.sanitize(r.body_html || ''),
+        links: (r.links || []).slice(),
+        revision: String(r.revision || ''),
+        dirty: false, saveState: 'idle', saving: false, createToken: ''
+      };
+      UI_STATE.tab = r.record_type;
+      renderEditor();
+    }
+    function newRecord() {
+      if (!CAN_WRITE) { UIC.toast('غير مصرح', 'error'); return; }
+      var type = UI_STATE.tab || 'product_specification';
+      ED = {
+        uid: '', type: type, status: 'Draft', readOnly: false,
+        body: type === 'product_specification' ? specTemplate() : activityTemplate(),
+        links: [], revision: '', dirty: false, saveState: 'idle', saving: false,
+        createToken: 'cgt-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10)
+      };
+      renderEditor();
+    }
+    function specTemplate() {
+      /* A blank, structurally honest specification. Every limit, tolerance,
+         ingredient, allergen and shelf-life value starts EMPTY: the server and
+         the page never invent product facts or food-safety limits. */
+      function table(headers, rows) {
+        var h = '<table dir="rtl"><tbody><tr>' + headers.map(function (x) { return '<th>' + esc(x) + '</th>'; }).join('') + '</tr>';
+        for (var i = 0; i < rows; i++) h += '<tr>' + headers.map(function () { return '<td></td>'; }).join('') + '</tr>';
+        return h + '</tbody></table>';
+      }
+      return '<h2 dir="rtl">الوصف والغرض من الاستخدام</h2><p dir="rtl" data-vfs-ph="1" class="vfg-placeholder"><br></p>' +
+        '<h2 dir="rtl">المكونات والتركيب</h2><p dir="rtl" data-vfs-ph="1" class="vfg-placeholder"><br></p>' +
+        '<h2 dir="rtl">الخصائص الفيزيائية والحسية</h2>' + table(['الخاصية', 'الحد / المواصفة', 'طريقة الفحص'], 3) +
+        '<h2 dir="rtl">المعايير الكيميائية</h2>' + table(['البند', 'الحد الأدنى', 'الحد الأقصى', 'طريقة الفحص'], 2) +
+        '<h2 dir="rtl">المعايير الميكروبيولوجية</h2>' + table(['البند', 'الحد', 'طريقة الفحص'], 2) +
+        '<h2 dir="rtl">التعبئة والتغليف والبطاقة</h2><p dir="rtl" data-vfs-ph="1" class="vfg-placeholder"><br></p>' +
+        '<h2 dir="rtl">التخزين والنقل</h2><p dir="rtl" data-vfs-ph="1" class="vfg-placeholder"><br></p>' +
+        '<h2 dir="rtl">مدة الصلاحية</h2><p dir="rtl" data-vfs-ph="1" class="vfg-placeholder"><br></p>' +
+        '<h2 dir="rtl">المراجع</h2><p dir="rtl" data-vfs-ph="1" class="vfg-placeholder"><br></p>';
+    }
+    function activityTemplate() {
+      return '<h2 dir="rtl">الوصف</h2><p dir="rtl" data-vfs-ph="1" class="vfg-placeholder"><br></p>' +
+        '<h2 dir="rtl">الملاحظات</h2><p dir="rtl" data-vfs-ph="1" class="vfg-placeholder"><br></p>' +
+        '<h2 dir="rtl">المراجع</h2><p dir="rtl" data-vfs-ph="1" class="vfg-placeholder"><br></p>';
+    }
+    function backToList() {
+      if (ED && ED.dirty && !ED.readOnly && !window.confirm('توجد تغييرات غير محفوظة. الخروج بدون حفظ؟')) return;
+      ED = null;
+      renderList();
+    }
+
+    /* ══ editor ════════════════════════════════════════════════════════════ */
+    function renderEditor() {
+      var host = $('vfg-host');
+      if (!host || !ED) return;
+      var r = ED.uid ? findRecord(ED.uid) : null;
+      var isSpec = ED.type === 'product_specification';
+      var h = '';
+      h += '<div class="vf-card"><div class="vf-card-header">' +
+        '<h3>' + (ED.uid ? esc((r && r.title) || '') : (isSpec ? 'مواصفة منتج جديدة' : 'نشاط جودة جديد')) + '</h3>' +
+        '<div class="vfg-bar" style="margin:0;">' +
+          '<span class="vfg-savestate vfg-savestate-idle" id="vfg-save-state">تم الحفظ</span>' +
+          (ED.readOnly ? '' : '<button type="button" class="btn btn-primary" onclick="VF_QUALITY_GENERAL_PAGE.save()">حفظ</button>') +
+          (CAN_FULL && ED.uid ? (ED.status === 'Archived'
+            ? '<button type="button" class="btn btn-outline" onclick="VF_QUALITY_GENERAL_PAGE.setRecordStatus(\'Active\')">استعادة</button>'
+            : '<button type="button" class="btn btn-outline" onclick="VF_QUALITY_GENERAL_PAGE.setRecordStatus(\'Archived\')">أرشفة</button>') : '') +
+          '<button type="button" class="btn btn-outline" onclick="VF_QUALITY_GENERAL_PAGE.back()">→ القائمة</button>' +
+        '</div></div>' +
+        '<div class="vf-card-body">' +
+          (ED.readOnly ? '<div class="vfg-note">' + (ED.status === 'Archived' ? 'السجل مؤرشف: قراءة فقط حتى يُستعاد.' : 'لك صلاحية قراءة فقط على هذه الصفحة.') + '</div>' : '') +
+          '<div class="vfg-editor"><div class="vfg-editor-grid">' +
+            '<div class="vfg-editor-main">' +
+              '<div class="vfg-toolbar" role="toolbar" aria-label="شريط تنسيق السجل">' +
+                toolbarBtn('↶', 'تراجع', 'undo') + toolbarBtn('↷', 'إعادة', 'redo') +
+                '<span class="vfg-toolbar-sep"></span>' +
+                toolbarBtn('<b>B</b>', 'عريض', 'bold') + toolbarBtn('<i>I</i>', 'مائل', 'italic') + toolbarBtn('<u>U</u>', 'تسطير', 'underline') +
+                '<span class="vfg-toolbar-sep"></span>' +
+                toolbarBtn('•', 'قائمة نقطية', 'insertUnorderedList') + toolbarBtn('1.', 'قائمة رقمية', 'insertOrderedList') +
+                '<span class="vfg-toolbar-sep"></span>' +
+                toolbarBtn('RTL', 'اتجاه عربي', 'rtl') + toolbarBtn('LTR', 'اتجاه إنجليزي', 'ltr') +
+                toolbarBtn('جدول', 'إدراج جدول', 'table') + toolbarBtn('رابط', 'إدراج رابط', 'link') +
+              '</div>' +
+              '<div id="vfg-flow" class="vfg-flow" contenteditable="' + (ED.readOnly ? 'false' : 'true') + '" dir="rtl" spellcheck="true" aria-label="محتوى السجل"></div>' +
+              '<div class="vfg-muted" style="font-size:12px;margin-top:6px;">عدد الكلمات: <span id="vfg-words">0</span> — لا تُدرج حدوداً أو ادعاءات مطابقة غير موثّقة؛ اكتب الوقائع فقط.</div>' +
+            '</div>' +
+            '<div class="vfg-editor-side">' + editorSideHtml(r, isSpec) + '</div>' +
+          '</div></div>' +
+        '</div></div>';
+      host.innerHTML = h;
+      var flow = $('vfg-flow');
+      if (flow) flow.innerHTML = ED.body || '';
+      updateWords();
+      wireFlow();
+      refreshSaveState();
+    }
+    function toolbarBtn(label, title, op) {
+      var dis = (ED && ED.readOnly) ? ' disabled' : '';
+      return '<button type="button" class="btn btn-outline" title="' + title + '" aria-label="' + title + '"' + dis +
+        ' onmousedown="event.preventDefault();VF_QUALITY_GENERAL_PAGE.run(\'' + op + '\')">' + label + '</button>';
+    }
+    function editorSideHtml(r, isSpec) {
+      var dis = ED.readOnly ? ' disabled' : '';
+      var h = '';
+      h += '<div class="form-field"><label class="form-label" for="vfg-f-title">العنوان <span class="req">*</span></label>' +
+        '<input id="vfg-f-title" class="input" type="text" value="' + esc((r && r.title) || '') + '"' + dis + ' oninput="VF_QUALITY_GENERAL_PAGE.onChange()"></div>';
+      if (isSpec) {
+        h += '<div class="form-field"><label class="form-label" for="vfg-f-code">كود المواصفة / المرجع</label>' +
+          '<input id="vfg-f-code" class="input vfg-code" type="text" value="' + esc((r && r.spec_code) || '') + '"' + dis + ' oninput="VF_QUALITY_GENERAL_PAGE.onChange()"></div>';
+        h += '<div class="form-field"><label class="form-label" for="vfg-f-product">الصنف المرتبط (اختياري)</label>' +
+          '<select id="vfg-f-product" class="input"' + dis + ' onchange="VF_QUALITY_GENERAL_PAGE.onChange()">' +
+            '<option value="">— بلا صنف مرتبط —</option>' +
+            PRODUCTS.map(function (p) {
+              var label = (p.name || p.code || p.value) + (p.code && p.name ? (' (' + p.code + ')') : '');
+              return '<option value="' + esc(p.value) + '"' + (r && String(r.product_id) === String(p.value) ? ' selected' : '') + '>' + esc(label) + '</option>';
+            }).join('') +
+          '</select>' +
+          '<div class="vfg-muted" style="font-size:11.5px;">مسودة بلا صنف مرتبط مقبولة؛ لا تُنشئ صنفاً وهمياً لربطها.</div></div>';
+      } else {
+        h += '<div class="form-field"><label class="form-label" for="vfg-f-category">تصنيف النشاط (وصفي)</label>' +
+          '<input id="vfg-f-category" class="input" type="text" value="' + esc((r && r.activity_category) || '') + '"' + dis + ' oninput="VF_QUALITY_GENERAL_PAGE.onChange()"></div>';
+      }
+      h += '<div class="form-field"><label class="form-label" for="vfg-f-owner_display">المالك <span class="req">*</span></label>' +
+        UIC.combo({ key: 'vfg-f-owner', inline: true, required: true, options: OWNER_CHOICES.map(function (o) {
+          return { value: o.value, label: (o.name || 'اسم المستخدم غير مسجل') + '  ‹' + o.value + '›' };
+        }), value: String((r && r.owner_email) || '').toLowerCase(), placeholder: 'اختر المالك…' }) +
+        '<div class="field-error" id="err-vfg-f-owner"></div></div>';
+      h += '<div class="form-field"><label class="form-label" for="vfg-f-date">التاريخ</label>' +
+        '<input id="vfg-f-date" class="input" type="date" value="' + esc((r && r.record_date) || '') + '"' + dis + ' onchange="VF_QUALITY_GENERAL_PAGE.onChange()"></div>';
+      h += '<div class="form-field"><label class="form-label" for="vfg-f-due">تاريخ الاستحقاق (اختياري)</label>' +
+        '<input id="vfg-f-due" class="input" type="date" value="' + esc((r && r.due_date) || '') + '"' + dis + ' onchange="VF_QUALITY_GENERAL_PAGE.onChange()"></div>';
+      h += '<div class="form-field"><label class="form-label" for="vfg-f-status">الحالة</label>' +
+        '<select id="vfg-f-status" class="input"' + dis + ' onchange="VF_QUALITY_GENERAL_PAGE.onChange()">' +
+          STATUSES.map(function (s) { return '<option value="' + s + '"' + (ED.status === s ? ' selected' : '') + '>' + statusLabel(s) + '</option>'; }).join('') +
+        '</select><div class="vfg-muted" style="font-size:11.5px;">«نشط» تعني سجلاً عاماً نشطاً، وليست اعتماداً أو شهادة مطابقة.</div></div>';
+      h += '<h4 style="font-size:13px;margin:10px 0 6px;">روابط مرجعية آمنة</h4><div class="vfg-links" id="vfg-links">' + linksHtml() + '</div>';
+      if (!ED.readOnly) h += '<button type="button" class="btn btn-outline" style="margin-top:6px;" onclick="VF_QUALITY_GENERAL_PAGE.addLink()">+ إضافة رابط</button>';
+      h += '<h4 style="font-size:13px;margin:12px 0 6px;">وحدات الجودة</h4>' +
+        '<div class="vfg-muted" style="font-size:12px;">' +
+          (window.UIC.pageAuthorized_('vf_quality_ncr') ? '<a href="' + scriptUrl + '?action=vf_quality_ncr&sessionToken=' + encodeURIComponent(SESSION_TOKEN) + '" onclick="UIC.navTo(event,this.getAttribute(\'href\'))">عدم المطابقة (NCR)</a><br>' : '') +
+          (window.UIC.pageAuthorized_('vf_quality_audits') ? '<a href="' + scriptUrl + '?action=vf_quality_audits&sessionToken=' + encodeURIComponent(SESSION_TOKEN) + '" onclick="UIC.navTo(event,this.getAttribute(\'href\'))">التدقيق الداخلي</a><br>' : '') +
+          (window.UIC.pageAuthorized_('vf_quality_sops') ? '<a href="' + scriptUrl + '?action=vf_quality_sops&sessionToken=' + encodeURIComponent(SESSION_TOKEN) + '" onclick="UIC.navTo(event,this.getAttribute(\'href\'))">السياسات والاجراءات SOPs</a><br>' : '') +
+          /* إقراراتي (vf_quality_my_acks) hidden for now — route still works by URL. */
+        '</div>';
+      return h;
+    }
+    function linksHtml() {
+      if (!ED.links.length) return '<div class="vfg-muted" style="font-size:12px;">لا روابط.</div>';
+      return ED.links.map(function (l, i) {
+        if (ED.readOnly) {
+          return '<div class="vfg-linkrow"><a href="' + esc(l.url) + '" target="_blank" rel="noopener">' + esc(l.label || l.url) + '</a></div>';
+        }
+        return '<div class="vfg-linkrow">' +
+          '<input class="input" type="url" placeholder="https://…" value="' + esc(l.url || '') + '" data-link-i="' + i + '" data-link-k="url" oninput="VF_QUALITY_GENERAL_PAGE.onLinkChange(this)">' +
+          '<input class="input" type="text" placeholder="وصف" value="' + esc(l.label || '') + '" data-link-i="' + i + '" data-link-k="label" oninput="VF_QUALITY_GENERAL_PAGE.onLinkChange(this)">' +
+          '<button type="button" class="btn btn-outline" onclick="VF_QUALITY_GENERAL_PAGE.removeLink(' + i + ')">✕</button></div>';
+      }).join('');
+    }
+    function onLinkChange(input) {
+      var i = Number(input.getAttribute('data-link-i'));
+      var k = String(input.getAttribute('data-link-k') || '');
+      if (!ED.links[i] || (k !== 'url' && k !== 'label')) return;
+      ED.links[i][k] = String(input.value || '');
+      markDirty();
+    }
+    function addLink() {
+      if (!ED || ED.readOnly) return;
+      ED.links.push({ url: '', label: '' });
+      setHtml('vfg-links', linksHtml());
+      markDirty();
+    }
+    function removeLink(i) {
+      if (!ED || ED.readOnly) return;
+      ED.links.splice(i, 1);
+      setHtml('vfg-links', linksHtml());
+      markDirty();
+    }
+
+    function wireFlow() {
+      var flow = $('vfg-flow');
+      if (!flow || !flow.addEventListener) return;
+      flow.addEventListener('input', function () {
+        if (!ED || ED.readOnly) return;
+        updateWords();
+        markDirty();
+      });
+    }
+    function updateWords() {
+      var flow = $('vfg-flow');
+      setText('vfg-words', VFDOC.countWords(flow ? flow.textContent : ''));
+    }
+    function run(op) {
+      if (!ED || ED.readOnly) { UIC.toast('السجل للقراءة فقط', 'error'); return; }
+      var flow = $('vfg-flow');
+      if (!flow) return;
+      if (flow.focus) { try { flow.focus(); } catch (e) {} }
+      if (op === 'table') {
+        var rows = parseInt(window.prompt('عدد الصفوف:', '3') || '', 10);
+        var cols = parseInt(window.prompt('عدد الأعمدة:', '3') || '', 10);
+        if (!rows || !cols || rows < 1 || cols < 1 || rows > 50 || cols > 20) { UIC.toast('قيم الجدول غير صالحة', 'error'); return; }
+        exec('insertHTML', VFDOC.tableHtml(rows, cols));
+        markDirty(); return;
+      }
+      if (op === 'link') {
+        var url = window.prompt('أدخل الرابط (https://…):', 'https://');
+        if (!url) return;
+        if (!/^https?:\/\//i.test(url)) { UIC.toast('الرابط يجب أن يبدأ بـ https://', 'error'); return; }
+        exec('createLink', url);
+        markDirty(); return;
+      }
+      if (op === 'undo') { exec('undo'); markDirty(); return; }
+      if (op === 'redo') { exec('redo'); markDirty(); return; }
+      exec(op);
+      markDirty();
+    }
+    function exec(cmd, value) {
+      var flow = $('vfg-flow');
+      if (!flow || !ED || ED.readOnly) return;
+      try { document.execCommand(cmd, false, value === undefined ? null : value); } catch (e) {}
+    }
+
+    /* ══ save state ════════════════════════════════════════════════════════ */
+    function markDirty() {
+      if (!ED || ED.readOnly) return;
+      ED.dirty = true;
+      if (ED.saveState !== 'error') { ED.saveState = 'idle'; refreshSaveState(); }
+    }
+    function refreshSaveState() {
+      var el = $('vfg-save-state');
+      if (!el || !ED) return;
+      var s = SAVE_AR[ED.saveState] || SAVE_AR.idle;
+      el.className = 'vfg-savestate ' + s[1];
+      el.textContent = s[0];
+    }
+    function onChange() { markDirty(); }
+
+    function save() {
+      if (!ED || ED.readOnly) return Promise.resolve({ skipped: 'readonly' });
+      if (ED.saving) return Promise.resolve({ skipped: 'in-flight' });
+      var title = val('vfg-f-title');
+      if (isBlank(title)) {
+        var ownerBox = $('err-vfg-f-owner');
+        var warn = $('vfg-save-state');
+        if (warn) { warn.className = 'vfg-savestate vfg-savestate-error'; warn.textContent = 'العنوان مطلوب'; }
+        return Promise.resolve({ skipped: 'invalid' });
+      }
+      var owner = val('vfg-f-owner').toLowerCase();
+      setText('err-vfg-f-owner', owner ? '' : 'المالك مطلوب');
+      if (!owner) return Promise.resolve({ skipped: 'invalid' });
+      var flow = $('vfg-flow');
+      var body = VFDOC.sanitize(flow ? flow.innerHTML : ED.body || '');
+      if (body.length > 45000) {
+        var st = $('vfg-save-state');
+        if (st) { st.className = 'vfg-savestate vfg-savestate-error'; st.textContent = 'حجم المحتوى يتجاوز الحد المسموح'; }
+        return Promise.resolve({ skipped: 'oversize' });
+      }
+      var payload = {
+        record_type: ED.type,
+        title: title,
+        spec_code: val('vfg-f-code'),
+        product_id: val('vfg-f-product'),
+        activity_category: val('vfg-f-category'),
+        owner_email: owner,
+        record_date: val('vfg-f-date'),
+        due_date: val('vfg-f-due'),
+        status: val('vfg-f-status') || 'Draft',
+        body_html: body,
+        links: ED.links.filter(function (l) { return l.url; }),
+        expected_revision: String(ED.revision || '')
+      };
+      if (ED.uid) payload.unique_id = ED.uid;
+      else payload.create_token = ED.createToken;
+      ED.saving = true;
+      ED.saveState = 'saving';
+      refreshSaveState();
+      return companyCall('save_quality_general', payload)
+        .then(function (r) {
+          r = r || {};
+          ED.uid = String(r.unique_id || ED.uid || '');
+          ED.body = body;
+          if (r.revision) ED.revision = String(r.revision);
+          ED.dirty = false;
+          ED.saveState = 'saved';
+          refreshSaveState();
+          return load(true).then(function () { UIC.toast('تم الحفظ', 'success'); });
+        })
+        .catch(function (e) {
+          ED.dirty = true;
+          ED.saveState = 'error';
+          refreshSaveState();
+          UIC.toast((e && e.message) || 'فشل الحفظ', 'error');
+        })
+        .finally(function () { if (ED) ED.saving = false; });
+    }
+
+    function setRecordStatus(status) {
+      if (!CAN_FULL || !ED || !ED.uid) return;
+      if (status === 'Archived' && !window.confirm('أرشفة السجل؟ سيصبح للقراءة فقط حتى يُستعاد.')) return;
+      companyCall('set_quality_general_status', { unique_id: ED.uid, status: status, expected_revision: String(ED.revision || '') })
+        .then(function () { UIC.toast(status === 'Archived' ? 'تمت الأرشفة' : 'تمت الاستعادة', 'success'); return load(true); })
+        .catch(function (e) { UIC.toast((e && e.message) || 'فشل التحديث', 'error'); });
+    }
+
+    window.addEventListener('beforeunload', function (ev) {
+      if (ED && ED.dirty && !ED.readOnly) { ev.preventDefault(); ev.returnValue = ''; return ''; }
+      return undefined;
+    });
+
+    window.VF_QUALITY_GENERAL_PAGE = {
+      newRecord: newRecord,
+      setTab: setTab,
+      setSearch: setSearch,
+      setStatus: setStatus,
+      back: backToList,
+      save: save,
+      setRecordStatus: setRecordStatus,
+      run: run,
+      onChange: onChange,
+      addLink: addLink,
+      removeLink: removeLink,
+      onLinkChange: onLinkChange,
+      __test: {
+        boot: renderApp,
+        setRecords: function (r) { RECORDS = r; },
+        setOwners: function (o) { OWNER_CHOICES = o; },
+        setProducts: function (p) { PRODUCTS = p; },
+        setEditor: function (e) { ED = e; },
+        getEditor: function () { return ED; },
+        setUiState: function (s) { UI_STATE = s; },
+        setTemplate: function (t) { TEMPLATE = t; },
+        renderList: renderList, renderEditor: renderEditor, visibleRecords: visibleRecords,
+        specTemplate: specTemplate, activityTemplate: activityTemplate, save: save
+      }
+    };
+
+    document.addEventListener('DOMContentLoaded', renderApp);
+  })();
+  </script>
+</body>
+</html>

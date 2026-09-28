@@ -131,6 +131,24 @@ var SALES_BATCH_WRITES_ = false;
 var RETURNS_BATCH_WRITES_ = false;
 var PURCHASE_BATCH_WRITES_ = false;
 
+/* Planned-save candidate (plan §7, stages D/E). Inactive. When this AND
+ * FORM_CONTRACTS_CORE_ are both true, save_valley_mfg_order routes to
+ * saveValleyMfgOrderPlanned_: one document context (one bounded read per
+ * affected table), reused row-location maps, one numeric-id reservation per
+ * table, unchanged rows skipped, a complete write plan whose operation budget
+ * is checked BEFORE the first business write, and a reconciliation reply.
+ * Recovery, checkpoints, edit tokens, ownership, stock checks and formula
+ * protection are preserved by design. */
+var MFG_PLANNED_SAVE_ = false;
+
+/* True only when the contracts core is loaded AND the module flag AND the
+ * master switch agree. The typeof guard is deliberate: the core file can be
+ * reverted while this flag stays, and the candidate must never be able to
+ * break the legacy path it sits in front of. */
+function mfgPlannedSaveOn_() {
+  return typeof formContractsOnFor_ === 'function' && formContractsOnFor_(MFG_PLANNED_SAVE_) === true;
+}
+
 /* Read-engine opt-in (Read & View Modularization, step 3). SALES_FAST_READ_
  * says this module may serve its list reads from Core_FastRead.js. Unlike the
  * write switches, it is checked at the top of the handler and a raised engine
@@ -399,6 +417,15 @@ const ValleyFoods = (function () {
     'save_quality_audit': { page: 'vf_quality_audits', access: 'write' },
     'save_quality_finding': { page: 'vf_quality_audits', access: 'write' },
     'escalate_finding_to_ncr': { page: 'vf_quality_audits', access: 'write' },
+    /* الجودة — الجودة العامة (4.5): مفتاح صلاحية مستقل تماماً عن اللوحة وعن
+       السياسات. قراءة للعرض، كتابة للإنشاء/التعديل، full للأرشفة والاستعادة.
+       لا وراثة ضمنية ولا منح تلقائي لأي دور. */
+    'get_quality_general': { page: 'vf_quality_general', access: 'read' },
+    'save_quality_general': { page: 'vf_quality_general', access: 'write' },
+    'set_quality_general_status': { page: 'vf_quality_general', access: 'full' },
+    /* إعداد اختصارات الإدارات لأكواد الوثائق: قرار إعداد، full فقط، ومُسجَّل
+       صراحةً على صفحة السياسات (4.7.1). */
+    'save_quality_dept_abbr': { page: 'vf_quality_sops', access: 'full' },
     'prefetch_refs': { page: 'vf_dashboard', access: 'read' }
   };
 
@@ -560,6 +587,13 @@ const ValleyFoods = (function () {
     'save_quality_audit': ['valley_quality_audits'],
     'save_quality_finding': ['valley_quality_audits', 'valley_quality_audit_findings', 'valley_quality_ncrs'],
     'escalate_finding_to_ncr': ['valley_quality_audits', 'valley_quality_audit_findings', 'valley_quality_ncrs'],
+    /* Phase 5 — الجودة العامة: جدول واحد بنوع مميِّز، فلا نكرر خصائص الأصناف
+       ولا ننشئ نظام تخزين ثانياً. */
+    'get_quality_general': ['valley_quality_general'],
+    'save_quality_general': ['valley_quality_general'],
+    'set_quality_general_status': ['valley_quality_general'],
+    /* اختصارات الإدارات: إعداد الشركة الذي يقرأه تخصيص الأكواد. */
+    'save_quality_dept_abbr': ['valley_quality_dept_abbr'],
     'prefetch_refs': 'valley_products'
   };
 
@@ -772,7 +806,8 @@ const ValleyFoods = (function () {
       action === 'save_valley_purchasing_costing' ||
       action === 'save_valley_purchasing_header_checkpoint' ||
       action === 'save_valley_purchasing_lines_checkpoint' ||
-      action === 'save_valley_mfg_order' ? 'request-id' : '';
+      action === 'save_valley_mfg_order' ||
+      action === 'save_quality_sop' ? 'request-id' : '';
   }
   return { dispatch_: dispatch_, pageForAction_: pageForAction_, tableForAction_: tableForAction_, requestRecovery_: requestRecovery_, register: register };
 })();
@@ -914,6 +949,27 @@ const ValleyFoodsHREmp = (function () {
     return opts;
   }
 
+  /** ALL employees in valley_employee_info as combo options, regardless of
+   *  their latest status — including an employee with no status record at all.
+   *
+   *  Status entry and shift assignment must be able to name every employee who
+   *  exists in the table: a newly added employee has no status yet, so a
+   *  status-filtered picker excludes exactly the person the status is being
+   *  added for, and the page could never break that circle. The label shape is
+   *  identical to getActiveEmployeeOptions_ so callers need no other change.
+   *  Salary and the HR-module pages keep the active-only list on purpose.
+   *  Accepts an optional pre-loaded `employees` array. */
+  function getAllEmployeeOptions_(dbId, employees) {
+    const emps = employees || getAllRecords_(dbId, EMP_INFO_SHEET);
+    const opts = [];
+    emps.forEach(function (r) {
+      const eid = r.emp_id;
+      if (eid === undefined || eid === null || String(eid).trim() === '') return;
+      opts.push({ value: eid, label: (r.name_ar || String(eid)) });
+    });
+    return opts;
+  }
+
   /** title_index -> { options:[{value,label}], map:{ title: section } }. */
   function getTitleIndex_(dbId) {
     return vfRefsCached_(dbId, 'title_index', function () {
@@ -943,6 +999,10 @@ const ValleyFoodsHREmp = (function () {
     const rows = employees.map(function (r) {
       const st = statusMap[String(r.emp_id)];
       r['الحالة الوظيفية'] = st ? st.status_type : '';
+      /* has_status is computed for the response, not a sheet column: false
+       * means this employee has no status record at all, which the list shows
+       * as a note beside the name. */
+      r.has_status = !!st;
       return r;
     });
 
@@ -1057,9 +1117,12 @@ const ValleyFoodsHREmp = (function () {
     if (!data || !data.loadAll) statuses = statuses.slice(0, limit);
     // enrich employee_name
     var _empMapSt = {};
-    try { getAllRecords_(dbId, EMP_INFO_SHEET).forEach(function(e){ _empMapSt[String(e.emp_id)] = e.name_ar || String(e.emp_id); }); } catch(e){}
+    var _empListSt = [];
+    try { _empListSt = getAllRecords_(dbId, EMP_INFO_SHEET); _empListSt.forEach(function(e){ _empMapSt[String(e.emp_id)] = e.name_ar || String(e.emp_id); }); } catch(e){}
     statuses.forEach(function(r){ if (!r.employee_name) r.employee_name = _empMapSt[String(r.employee_code || r.Employee_Code)] || ''; });
-    const employeeOptions = getActiveEmployeeOptions_(dbId);
+    /* Every employee in valley_employee_info, status or not: the status added
+       here is usually the employee's first one. */
+    const employeeOptions = getAllEmployeeOptions_(dbId, _empListSt);
     return { status: 'success', statuses: statuses, total: total, employeeOptions: employeeOptions };
   }
 
@@ -1152,7 +1215,10 @@ const ValleyFoodsHREmp = (function () {
     var assignments = _allAssign.slice().reverse();
     const total = _allAssign.length;
     if (!data || !data.loadAll) assignments = assignments.slice(0, limit);
-    const employeeOptions = getActiveEmployeeOptions_(dbId);
+    /* Every employee in valley_employee_info, status or not — same reason as
+       the status page: an employee being assigned a shift may have no status
+       record yet. */
+    const employeeOptions = getAllEmployeeOptions_(dbId);
 
     const shifts = getAllRecords_(dbId, SHIFT_SCHEDULE_SHEET);
     const shiftOptions = shifts.map(function (s) {
@@ -1916,7 +1982,7 @@ const ValleyFoodsHRModules = (function () {
       var date = parseDate_(data.date);
       if (!date) throw new Error('التاريخ مطلوب');
       var days = Number(data.number_of_days) || 0;
-      var otherVal = Number(data.deduction_value_other) || 0;
+      var otherVal = Number(data.penalty_value != null ? data.penalty_value : data.deduction_value_other) || 0;
       var details = String(data.details || '').trim();
       var attachment = String(data.deduction_attachement || '').trim();
       var attachmentId = '';
@@ -1991,7 +2057,7 @@ const ValleyFoodsHRModules = (function () {
     var date = parseDate_(data.date);
     if (!date) throw new Error('التاريخ مطلوب');
     var days = Number(data.number_of_days) || 0;
-    var otherVal = Number(data.deduction_value_other) || 0;
+    var otherVal = Number(data.penalty_value != null ? data.penalty_value : data.deduction_value_other) || 0;
     var details = String(data.details || '').trim();
 
     var sheet = getSheet_(EMP_DEDUCTIONS_SHEET, dbId);
@@ -4333,10 +4399,10 @@ const ValleyFoodsHRModules = (function () {
   // no delete endpoints exist because deleting a role/type breaks every
   // historical record's formulas that reference it.
   const SETTINGS_SHIFT_SCHEDULE_SHEET = 'valley_employee_shift_schedule';
-  const SETTINGS_DEDUCTION_CATEGORIES = ['جزاءات', 'غياب', 'حضور وانصراف'];
+  const SETTINGS_DEDUCTION_CATEGORIES = ['جزاءات', 'غياب', 'حضور وانصراف', 'خصومات مالية مباشرة'];
 
-  const OVERTIME_ROLES_CANONICAL   = ['overtime_rule_unique_id','overtime_type','overtime_rate','money_related','vacation_days','is_active'];
-  const DEDUCTION_ROLES_CANONICAL  = ['rule_unique_id','deduction_name','deduction_category','is_active','deduction_value','deduction_note','deduction_hours','deduction_days'];
+  const OVERTIME_ROLES_CANONICAL   = ['overtime_rule_unique_id','overtime_type','overtime_rate','money_related','vacation_days','is_active','public_holiday','start_date','user','created_at'];
+  const DEDUCTION_ROLES_CANONICAL  = ['rule_unique_id','deduction_name','deduction_category','is_active','deduction_value','deduction_note','deduction_hours','deduction_days','min_minutes','max_minutes','deduction_type'];
   const VACATIONS_INDEX_CANONICAL  = ['id','vacation_name_ar','vacation_name_en','require_allocation','is_active'];
   const SHIFT_SCHEDULE_CANONICAL   = ['shift_unique_id','shift_name','shift_type','shift_start_time','shift_end_time','is_active','grace_period','weekend_day','shift_period','user'];
   const SHIFT_TYPE_ENUM = ['Fixed Shift', 'Variable Shift'];
@@ -4402,13 +4468,58 @@ const ValleyFoodsHRModules = (function () {
   }
 
   /* ---------- OVERTIME ROLES ---------- */
+  function overtimeRoleBoolean_(value, fallback, label) {
+    if (value === undefined || value === null || String(value).trim() === '') return fallback;
+    if (value === true || value === 1) return true;
+    if (value === false || value === 0) return false;
+    var normalized = String(value).trim().toLowerCase();
+    if (normalized === 'true' || normalized === '1' || normalized === 'yes') return true;
+    if (normalized === 'false' || normalized === '0' || normalized === 'no') return false;
+    throw new Error(label + ' يجب أن تكون true أو false');
+  }
+
+  function overtimeRoleDateString_(value) {
+    if (value === undefined || value === null || String(value).trim() === '') return '';
+    var text;
+    if (value instanceof Date && !isNaN(value.getTime())) {
+      text = Utilities.formatDate(value, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+    } else {
+      text = String(value).trim();
+      var match = text.match(/^(\d{4})-(\d{2})-(\d{2})(?:$|T)/);
+      if (!match) return '';
+      text = match[1] + '-' + match[2] + '-' + match[3];
+    }
+    var parts = text.split('-').map(Number);
+    var check = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2]));
+    return check.getUTCFullYear() === parts[0] && check.getUTCMonth() === parts[1] - 1 && check.getUTCDate() === parts[2] ? text : '';
+  }
+
+  function overtimeRoleDate_(value, fallback) {
+    var supplied = value !== undefined && value !== null && String(value).trim() !== '';
+    var dateText = supplied ? overtimeRoleDateString_(value) : fallback;
+    if (supplied && !dateText) throw new Error('تاريخ بداية العمل الإضافي غير صالح');
+    if (!dateText) dateText = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd');
+    var parts = dateText.split('-').map(Number);
+    var check = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2]));
+    if (check.getUTCFullYear() !== parts[0] || check.getUTCMonth() !== parts[1] - 1 || check.getUTCDate() !== parts[2]) {
+      throw new Error('تاريخ بداية العمل الإضافي غير صالح');
+    }
+    return new Date(parts[0], parts[1] - 1, parts[2]);
+  }
+
   function getOvertimeRolesSettings_(data, user, dbId) {
     settingsEnsureSheet_(dbId, OVERTIME_ROLES_SHEET, OVERTIME_ROLES_CANONICAL);
     return vfRefsCached_(dbId, 'overtime_roles', function () {
       var sheet = getSheet_(OVERTIME_ROLES_SHEET, dbId);
       var headers = getHeaders_(sheet);
       var rows = getAllRecords_(dbId, OVERTIME_ROLES_SHEET);
-      rows.forEach(function (r) { r.is_active = !(r.is_active === false || String(r.is_active).toLowerCase() === 'false'); });
+      rows.forEach(function (r) {
+        r.money_related = overtimeRoleBoolean_(r.money_related, false, 'money_related');
+        r.public_holiday = overtimeRoleBoolean_(r.public_holiday, false, 'public_holiday');
+        r.vacation_days = overtimeRoleBoolean_(r.vacation_days, false, 'vacation_days');
+        r.is_active = overtimeRoleBoolean_(r.is_active, true, 'is_active');
+        r.start_date_display = overtimeRoleDateString_(r.start_date);
+      });
       return {
         status: 'success',
         rows: rows,
@@ -4427,11 +4538,17 @@ const ValleyFoodsHRModules = (function () {
     if (key && !isSuperAdmin) throw new Error('تعديل الأنواع الموجودة من صلاحيات مدير النظام فقط');
     var name = String(d.overtime_type || '').trim();
     if (!name) throw new Error('اسم نوع العمل الإضافي مطلوب');
+    if (d.overtime_rate === undefined || d.overtime_rate === null || String(d.overtime_rate).trim() === '') throw new Error('المعدل مطلوب');
     var rate = Number(d.overtime_rate);
-    if (isNaN(rate) || rate < 0) throw new Error('المعدل يجب أن يكون رقماً صحيحاً');
+    if (!isFinite(rate) || rate < 0) throw new Error('المعدل يجب أن يكون رقماً عشرياً غير سالب');
+    settingsEnsureSheet_(dbId, OVERTIME_ROLES_SHEET, OVERTIME_ROLES_CANONICAL);
     var sheet = getSheet_(OVERTIME_ROLES_SHEET, dbId);
     var headers = getHeaders_(sheet);
     var rows = getAllRecords_(dbId, OVERTIME_ROLES_SHEET);
+    var oldRow = key ? rows.find(function (r) { return String(r[keyHeader]) === key; }) || null : null;
+    if (key && !oldRow) throw new Error('السجل غير موجود');
+    var actorEmail = String(user && user.email || '').trim();
+    if (!actorEmail) throw new Error('تعذر تحديد البريد الإلكتروني للمستخدم الحالي');
 
     if (settingsUniqueViolation_(rows, 'overtime_type', name, keyHeader, key)) {
       throw new Error('يوجد نوع عمل إضافي بنفس الاسم بالفعل');
@@ -4440,20 +4557,23 @@ const ValleyFoodsHRModules = (function () {
     var map = {
       overtime_type: name,
       overtime_rate: rate,
-      money_related: !!(d.money_related === true || String(d.money_related).toLowerCase() === 'true'),
-      vacation_days: !!(d.vacation_days === true || String(d.vacation_days).toLowerCase() === 'true')
+      money_related: overtimeRoleBoolean_(d.money_related, oldRow ? overtimeRoleBoolean_(oldRow.money_related, false, 'money_related') : false, 'money_related'),
+      public_holiday: overtimeRoleBoolean_(d.public_holiday, oldRow ? overtimeRoleBoolean_(oldRow.public_holiday, false, 'public_holiday') : false, 'public_holiday'),
+      vacation_days: overtimeRoleBoolean_(d.vacation_days, oldRow ? overtimeRoleBoolean_(oldRow.vacation_days, false, 'vacation_days') : false, 'vacation_days'),
+      is_active: overtimeRoleBoolean_(d.is_active, oldRow ? overtimeRoleBoolean_(oldRow.is_active, true, 'is_active') : true, 'is_active'),
+      start_date: overtimeRoleDate_(d.start_date, oldRow ? overtimeRoleDateString_(oldRow.start_date) : ''),
+      user: actorEmail,
+      created_at: oldRow && oldRow.created_at ? oldRow.created_at : new Date()
     };
 
     if (key) {
-      var _oldOT = rows.find(function(r){ return String(r[keyHeader])===String(key); }) || null;
       if (!patchRowByCriteria_(sheet, keyHeader, key, map)) throw new Error('السجل غير موجود');
-      try{ var _newOT = Object.assign({}, _oldOT||{}, map); logHistory_(dbId, OVERTIME_ROLES_SHEET, _oldOT&&_oldOT.record_uid ? _oldOT.record_uid : ('update_'+OVERTIME_ROLES_SHEET+'_'+key), key, (user&&user.email)||'', 'update', _newOT, _oldOT) }catch(e){}
+      try{ var _newOT = Object.assign({}, oldRow||{}, map); logHistory_(dbId, OVERTIME_ROLES_SHEET, oldRow&&oldRow.record_uid ? oldRow.record_uid : ('update_'+OVERTIME_ROLES_SHEET+'_'+key), key, actorEmail, 'update', _newOT, oldRow) }catch(e){}
       return { status: 'success', message: 'تم تحديث النوع' };
     }
     map[keyHeader] = uid16_();
-    map['is_active'] = true;
     settingsInsertRow_(sheet, headers, map);
-    try{ logHistory_(dbId, OVERTIME_ROLES_SHEET, map.record_uid || ('create_'+OVERTIME_ROLES_SHEET+'_'+map[keyHeader]), map[keyHeader], (user&&user.email)||'', 'create', map, null) }catch(e){}
+    try{ logHistory_(dbId, OVERTIME_ROLES_SHEET, map.record_uid || ('create_'+OVERTIME_ROLES_SHEET+'_'+map[keyHeader]), map[keyHeader], actorEmail, 'create', map, null) }catch(e){}
     return { status: 'success', message: 'تمت إضافة النوع' };
   }
 
@@ -4499,16 +4619,31 @@ const ValleyFoodsHRModules = (function () {
     if (key && !isSuperAdmin) throw new Error('تعديل قواعد الخصم الموجودة من صلاحيات مدير النظام فقط');
     var name = String(d.deduction_name || '').trim();
     if (!name) throw new Error('اسم الخصم مطلوب');
-    var category = String(d.deduction_category || '').trim();
+    var category = String(d.deduction_type || d.deduction_category || '').trim();
     if (SETTINGS_DEDUCTION_CATEGORIES.indexOf(category) === -1) {
       throw new Error('التصنيف يجب أن يكون أحد: ' + SETTINGS_DEDUCTION_CATEGORIES.join('، '));
     }
     var days = d.deduction_days === '' || d.deduction_days == null ? 0 : Number(d.deduction_days);
     var hours = d.deduction_hours === '' || d.deduction_hours == null ? 0 : Number(d.deduction_hours);
     var value = d.deduction_value === '' || d.deduction_value == null ? 0 : Number(d.deduction_value);
+    var minMinutes = d.min_minutes === '' || d.min_minutes == null ? 0 : Number(d.min_minutes);
+    var maxMinutes = d.max_minutes === '' || d.max_minutes == null ? 0 : Number(d.max_minutes);
     if (isNaN(days) || days < 0) throw new Error('أيام الخصم يجب أن تكون رقماً صحيحاً');
     if (isNaN(hours) || hours < 0) throw new Error('ساعات الخصم يجب أن تكون رقماً صحيحاً');
     if (isNaN(value) || value < 0) throw new Error('قيمة الخصم يجب أن تكون رقماً صحيحاً');
+    if (isNaN(minMinutes) || minMinutes < 0) throw new Error('أقل دقائق التأخير يجب أن تكون رقماً صحيحاً');
+    if (isNaN(maxMinutes) || maxMinutes < 0) throw new Error('أقصى دقائق التأخير يجب أن تكون رقماً صحيحاً');
+
+    if (category === 'حضور وانصراف') {
+      if (d.min_minutes === '' || d.min_minutes == null || d.max_minutes === '' || d.max_minutes == null || d.deduction_hours === '' || d.deduction_hours == null) {
+        throw new Error('أقل وأقصى دقائق التأخير وعدد ساعات الخصم مطلوبة لتصنيف حضور وانصراف');
+      }
+      if (maxMinutes < minMinutes) throw new Error('أقصى دقائق التأخير يجب أن تكون أكبر من أو تساوي أقل دقائق التأخير');
+    } else if (category === 'غياب' || category === 'جزاءات') {
+      if (d.deduction_days === '' || d.deduction_days == null) throw new Error('أيام الخصم مطلوبة لهذا التصنيف');
+    } else if (category === 'خصومات مالية مباشرة') {
+      if (d.deduction_value === '' || d.deduction_value == null) throw new Error('قيمة الخصم مطلوبة لتصنيف الخصومات المالية المباشرة');
+    }
 
     var sheet = getSheet_(DEDUCTION_ROLES_SHEET, dbId);
     var headers = getHeaders_(sheet);
@@ -4520,10 +4655,14 @@ const ValleyFoodsHRModules = (function () {
 
     var map = {
       deduction_name: name,
+      deduction_type: category,
       deduction_category: category,
       deduction_value: value,
       deduction_days: days,
-      deduction_hours: hours
+      deduction_hours: hours,
+      min_minutes: minMinutes,
+      max_minutes: maxMinutes,
+      is_active: d.is_active === undefined ? true : !(d.is_active === false || String(d.is_active).toLowerCase() === 'false')
     };
 
     if (key) {
@@ -7445,6 +7584,9 @@ const ValleyFoodsHRModules = (function () {
       MFG_OP_TYPES.forEach(function (t) { o[t] = { mo_count: 0, produced_qty: 0, batch_cost: 0 }; });
       return o;
     }
+    /* Headline KPIs intentionally exclude repacking.  The detail/export
+       tables below still expose every filtered operation type. */
+    var KPI_OP_TYPES = ['تصنيع وتعبئة', 'تصنيع (كميات)'];
     var rows = {};
     function rowFor(mo) {
       var key = mo.client_id + '|' + mo.pid;
@@ -7556,6 +7698,28 @@ const ValleyFoodsHRModules = (function () {
       Object.keys(totals.by_op).forEach(function (t) { delete totals.by_op[t].batch_cost; });
     }
 
+    /* Calculate the KPI view only after the period/client/product/status and
+       operation filters, plus by-product attribution, have been applied. */
+    var kpiTotals = { mo_count: 0, produced_qty: 0, batch_cost: 0, by_op: {} };
+    KPI_OP_TYPES.forEach(function (t) {
+      kpiTotals.by_op[t] = { mo_count: 0, produced_qty: 0, batch_cost: 0 };
+    });
+    outRows.forEach(function (row) {
+      KPI_OP_TYPES.forEach(function (t) {
+        var s = (row.by_op && row.by_op[t]) || { mo_count: 0, produced_qty: 0, batch_cost: 0 };
+        kpiTotals.mo_count += Number(s.mo_count) || 0;
+        kpiTotals.produced_qty = roundQty(kpiTotals.produced_qty + (Number(s.produced_qty) || 0));
+        kpiTotals.batch_cost = roundMoney(kpiTotals.batch_cost + (Number(s.batch_cost) || 0));
+        kpiTotals.by_op[t].mo_count += Number(s.mo_count) || 0;
+        kpiTotals.by_op[t].produced_qty = roundQty(kpiTotals.by_op[t].produced_qty + (Number(s.produced_qty) || 0));
+        kpiTotals.by_op[t].batch_cost = roundMoney(kpiTotals.by_op[t].batch_cost + (Number(s.batch_cost) || 0));
+      });
+    });
+    if (!canCost) {
+      delete kpiTotals.batch_cost;
+      KPI_OP_TYPES.forEach(function (t) { delete kpiTotals.by_op[t].batch_cost; });
+    }
+
     return {
       status: 'success',
       can_see_cost: canCost,
@@ -7567,7 +7731,9 @@ const ValleyFoodsHRModules = (function () {
         statuses: ['Draft', 'In Progress', 'Locked']
       },
       rows: outRows,
-      totals: totals
+      totals: totals,
+      kpi_operation_types: KPI_OP_TYPES.slice(),
+      kpi_totals: kpiTotals
     };
   }
 
@@ -7806,21 +7972,20 @@ const ValleyFoodsHRModules = (function () {
     }
 
     /* Sheet-computed columns of valley_manufacture_by_product
-       (B=id, C=header uid, D=code, E=mfg date, G=item).
+       (C=header uid, D=code, E=mfg date, G=item, H=qty, J=entered batch).
        created_at is intentionally left as a full datetime value. */
   /**
    * Phase 8 (F-04). The sheet-computed columns of valley_manufacture_by_product,
    * as { headerName: formula }. Extracted VERBATIM from writeByproductFormulas_
-   * so the same strings can be merged into the row's own setValues instead of
-   * costing four writeFormula_ round trips (each of which paid its own
+    * so the same strings can be merged into the row's own setValues instead of
+    * costing separate writeFormula_ round trips (each of which paid its own
    * getSheet_ + getHeaders_ + setFormula) per by-product row.
    */
   function byproductFormulaMap_(r) {
     return {
       'code': '=INDEX(valley_manufacture_header!E:E,MATCH(C' + r + ',valley_manufacture_header!A:A,0))',
-      'transaction_code': '=CONCATENATE(VLOOKUP(G' + r + ',valley_products!$A:$B,2,0),"-",D' + r + ',"-",G' + r + ',"-",TEXT(E' + r + ',"DD/MM/YYYY"))',
-      'total_cost': '=IF((INDEX(valley_products!$I:$I,MATCH(G' + r + ',valley_products!$A:$A,0))*(INDEX(valley_manufacture_header!$J:$J,MATCH(C' + r + ',valley_manufacture_header!$A:$A,0))+INDEX(valley_manufacture_header!$I:$I,MATCH(C' + r + ',valley_manufacture_header!$A:$A,0))) / (SUMIFS(valley_manufacture_header!I:I,valley_manufacture_header!A:A,C' + r + ')+SUMIFS(valley_manufacture_header!J:J,valley_manufacture_header!A:A,C' + r + '))) > 0.25, (INDEX(valley_products!$I:$I,MATCH(G' + r + ',valley_products!$A:$A,0))*(INDEX(valley_manufacture_header!$J:$J,MATCH(C' + r + ',valley_manufacture_header!$A:$A,0))+INDEX(valley_manufacture_header!$I:$I,MATCH(C' + r + ',valley_manufacture_header!$A:$A,0)))) / 2, (INDEX(valley_products!$I:$I,MATCH(G' + r + ',valley_products!$A:$A,0))*(INDEX(valley_manufacture_header!$J:$J,MATCH(C' + r + ',valley_manufacture_header!$A:$A,0))+INDEX(valley_manufacture_header!$I:$I,MATCH(C' + r + ',valley_manufacture_header!$A:$A,0)))))',
-      'manufacture_internal_batch': '=CONCATENATE(TEXT(E' + r + ',"YYMMDD"),B' + r + ',G' + r + ',D' + r + ')'
+      'transaction_code': '=CONCATENATE(VLOOKUP(G' + r + ',valley_products!$A:$B,2,0),"-",D' + r + ',"-",G' + r + ',"-",J' + r + ',"-",TEXT(E' + r + ',"DD/MM/YYYY"))',
+      'total_cost': '=LET(r,MATCH(C' + r + ',valley_manufacture_header!A:A,0),mainQty,INDEX(valley_manufacture_header!Q:Q,r),byQty,SUMIF($C:$C,C' + r + ',$H:$H),costPool,INDEX(valley_manufacture_header!I:I,r)+INDEX(valley_manufacture_header!J:J,r),IF(mainQty<=0,"Header actual_qty is missing",ROUND(costPool*H' + r + '/(mainQty+byQty),2)))'
     };
   }
 
@@ -8137,7 +8302,7 @@ const ValleyFoodsHRModules = (function () {
         try {
           getAllRecords_(dbId, MFG_BYPRODUCT_SHEET).forEach(function (r) {
             if (String(r.valley_manufacture_header_id || '').trim() === String(moUid)) {
-              bps.push({ uid: String(r.unique_id || '').trim(), item: String(r.item || '').trim(), qty: mfgNormQty_(r.qty) });
+              bps.push({ uid: String(r.unique_id || '').trim(), item: String(r.item || '').trim(), qty: mfgNormQty_(r.qty), batch: String(r.manufacture_internal_batch || '').trim() });
             }
           });
         } catch (e) {}
@@ -8209,7 +8374,7 @@ const ValleyFoodsHRModules = (function () {
           var u = String((b && b.uid) || '').trim();
           if (!u && req) u = mfgDeterministicUid_(req, moUid, 'by_product', nBp);
           nBp++;
-          return { uid: u, item: String((b && b.item) || '').trim(), qty: mfgNormQty_(b && b.qty) };
+          return { uid: u, item: String((b && b.item) || '').trim(), qty: mfgNormQty_(b && b.qty), batch: String((b && b.manufacture_internal_batch) || '').trim() };
         }).sort(function (a, b) { return a.uid < b.uid ? -1 : (a.uid > b.uid ? 1 : 0); });
       }
       return want;
@@ -8251,7 +8416,7 @@ const ValleyFoodsHRModules = (function () {
         if (cb.length !== want.byproducts.length) return { match: false, reason: 'byproducts.count' };
         for (var bi = 0; bi < want.byproducts.length; bi++) {
           var ba = cb[bi], bb = want.byproducts[bi];
-          if (ba.uid !== bb.uid || ba.item !== bb.item || String(ba.qty) !== String(bb.qty)) return { match: false, reason: 'byproducts.' + bi };
+          if (ba.uid !== bb.uid || ba.item !== bb.item || String(ba.qty) !== String(bb.qty) || ba.batch !== bb.batch) return { match: false, reason: 'byproducts.' + bi };
         }
       }
       return { match: true, reason: 'exact' };
@@ -8359,23 +8524,13 @@ const ValleyFoodsHRModules = (function () {
       return { status: 'success', receipt: receiptInfo, recovery: envelope, edit_token: token, save_scope: scope, counts: counts, classification: classification };
     }
 
-    function saveValleyMfgOrder_(data, user, dbId, guardCtx) {
-
-    var d = data || {};
-    var guard = guardCtx || {};
-    var reqId = String(guard.requestId || '');
-    var scope = mfgScopeFor_(d);
-    var recoveredResp = null;
-    var isSuperAdmin = !!(user && user.isSuperAdmin);
-    var editing = !!(d.mo_uid && String(d.mo_uid).trim());
-    /* declared here, not inside executeWithLock_: the success return below needs it */
-    var moUid;
-    /* POLICY: add = page-write authority; edit existing = any writer, UNLESS the MO is Locked
-       (Locked MOs are immutable and require super-admin unlock — enforced below at save time). */
-
-    /* Pre-mutation validation. Every refusal below happens before any
-       business-row write, so each is a proven not-applied outcome (failed
-       receipt: safe to correct and retry), never an uncertain trap. */
+    /* Pre-mutation validation + normalization for save_valley_mfg_order.
+     * Shared by the legacy body and the planned candidate (MFG_PLANNED_SAVE_),
+     * so the two can never disagree about what a valid submission is. It
+     * mutates `d` only by filtering placeholder work_ops/byproducts rows,
+     * exactly as the legacy path has always done. Every refusal throws
+     * vfNotApplied_ with zero business writes. */
+    function mfgNormalizeSaveInput_(d, dbId) {
     if (!d.manufacture_date) vfNotApplied_('تاريخ التصنيع مطلوب');
     var moDate = parseDate_(d.manufacture_date);
     if (!moDate) vfNotApplied_('تاريخ التصنيع غير صالح');
@@ -8439,6 +8594,54 @@ const ValleyFoodsHRModules = (function () {
       var consumption = Array.isArray(d.consumption) ? d.consumption.filter(function (cm) { return cm && String(cm.batch_uid || '').trim() && Number(cm.qty || 0) > 0; }) : [];
       var hasFooters = outputs.some(function (o) { return Array.isArray(o.footers) && o.footers.some(function (f) { return String(f.item || '').trim(); }); });
       if (!consumption.length && !hasFooters) vfNotApplied_('خصص استهلاك الخامات من الدفعات أولاً');
+      return {
+        moDate: moDate, opType: opType, shift: shift, producedPid: producedPid,
+        manufacturedQty: manufacturedQty, expectedQty: expectedQty, recipeUid: recipeUid,
+        outputs: outputs, consumption: consumption,
+        deletedOutUids: deletedOutUids, deletedConsUids: deletedConsUids,
+        deletedWoUids: deletedWoUids, deletedBpUids: deletedBpUids
+      };
+    }
+
+    function saveValleyMfgOrder_(data, user, dbId, guardCtx) {
+    var d = data || {};
+    if (typeof normDocStatus_ === 'function' ? normDocStatus_(d.mo_status) === 'locked' : String(d.mo_status || '').trim().toLowerCase() === 'locked') {
+      mfgAssertLockRequirements_(d.manufacture_batch, d.actual_qty);
+    }
+    /* Planned-save candidate (MFG_PLANNED_SAVE_ + FORM_CONTRACTS_CORE_). Both
+       default false, so as shipped the legacy body below runs exactly as
+       before, with no new service call and no persistent effect. */
+    if (mfgPlannedSaveOn_()) return saveValleyMfgOrderPlanned_(d, user, dbId, guardCtx);
+
+    var guard = guardCtx || {};
+    var reqId = String(guard.requestId || '');
+    var scope = mfgScopeFor_(d);
+    var recoveredResp = null;
+    var isSuperAdmin = !!(user && user.isSuperAdmin);
+    var editing = !!(d.mo_uid && String(d.mo_uid).trim());
+    /* declared here, not inside executeWithLock_: the success return below needs it */
+    var moUid;
+    /* POLICY: add = page-write authority; edit existing = any writer, UNLESS the MO is Locked
+       (Locked MOs are immutable and require super-admin unlock — enforced below at save time). */
+
+    /* Pre-mutation validation + normalization is shared with the planned
+       candidate (MFG_PLANNED_SAVE_): one normalizer, so the two paths can never
+       disagree about what a valid submission is. Every refusal inside it
+       happens before any business-row write (a proven not-applied outcome). */
+    var input = mfgNormalizeSaveInput_(d, dbId);
+    var moDate = input.moDate;
+    var opType = input.opType;
+    var shift = input.shift;
+    var producedPid = input.producedPid;
+    var manufacturedQty = input.manufacturedQty;
+    var expectedQty = input.expectedQty;
+    var recipeUid = input.recipeUid;
+    var outputs = input.outputs;
+    var consumption = input.consumption;
+    var deletedOutUids = input.deletedOutUids;
+    var deletedConsUids = input.deletedConsUids;
+    var deletedWoUids = input.deletedWoUids;
+    var deletedBpUids = input.deletedBpUids;
 
     /* Read-only, scope-aware schema gate for this Valley Foods MO save. It
        requires the canonical positional prefix and permits safe trailing
@@ -8506,6 +8709,41 @@ const ValleyFoodsHRModules = (function () {
           }
         });
       })();
+
+      /* Work-centre availability, before any business write. Per work centre:
+         other MOs' operations and the other rows of this same payload are
+         checked for active duplicates and overlapping frames. Two different
+         work centres may share the same frame. */
+      if (scope.indexOf('work_ops') !== -1 && Array.isArray(d.work_ops) && d.work_ops.length) {
+        var selfMoUid = String(d.mo_uid || '').trim();
+        var woSeen = [];
+        d.work_ops.forEach(function (w) {
+          var wcId = String((w && w.work_center_id) || '').trim();
+          if (!wcId) return;
+          var wUid = String((w && w.uid) || '').trim();
+          var wStart = mfgConflictDate_(w && w.start_time);
+          var wEnd = mfgConflictDate_(w && w.end_time);
+          var inStatus = String((w && w.operation_status) || 'Pending').trim();
+          var wantsActive = (inStatus === 'In Progress' || inStatus === 'Paused');
+          var dbConflict = mfgWorkOpConflict_(dbId, wcId, wStart, wEnd, [wUid], selfMoUid);
+          if (dbConflict) {
+            if (wantsActive && dbConflict.active) vfNotApplied_(mfgWorkOpConflictMessage_(dbId, wcId, dbConflict));
+            if (dbConflict.overlap) vfNotApplied_(mfgWorkOpConflictMessage_(dbId, wcId, dbConflict));
+          }
+          for (var j = 0; j < woSeen.length; j++) {
+            var seen = woSeen[j];
+            if (seen.wc !== wcId) continue;
+            var wcLabel = mfgWorkCenterLabel_(dbId, wcId) || wcId;
+            if (wantsActive && seen.active) {
+              vfNotApplied_('لا يمكن ضبط العملية كقيد التشغيل: مركز العمل «' + wcLabel + '» قيد التشغيل في عملية أخرى ضمن نفس أمر التصنيع');
+            }
+            if (mfgIntervalsOverlap_(wStart, wEnd, seen.start, seen.end)) {
+              vfNotApplied_('مركز العمل «' + wcLabel + '» محجوز في نفس الفترة في عملية أخرى ضمن نفس أمر التصنيع');
+            }
+          }
+          woSeen.push({ wc: wcId, start: wStart, end: wEnd, active: wantsActive });
+        });
+      }
 
       var sheetMo = getSheet_(MFG_ORDER_SHEET, dbId);
       var moHeaders = getHeaders_(sheetMo);
@@ -9212,6 +9450,7 @@ wcDirty[m['unique_id']] = true;
       var keepBpUids = [];
       var bpNewRows = [];
       var bpPatches = {};
+      var bpFormulaUids = [];
       var nBpNew = 0;
       (Array.isArray(d.byproducts) ? d.byproducts : []).forEach(function (b) {
         var suppliedBuid = String(b.uid || '').trim();
@@ -9227,12 +9466,13 @@ wcDirty[m['unique_id']] = true;
           var bpPatch = {
             item: String(b.item || '').trim(),
             qty: Number(b.qty) || 0,
-            transaction_code: String(b.transaction_code || '').trim(),
+            manufacture_internal_batch: String(b.manufacture_internal_batch || '').trim(),
             user: (user && user.email) || ''
           };
           if (mfgFast) bpPatches[buid] = bpPatch;
           else patchRowByCriteria_(sheetBP, 'unique_id', buid, bpPatch);
           keepBpUids.push(buid);
+          bpFormulaUids.push(buid);
         } else {
           var m = {};
           var newBUid = (detBIdx !== -1 && reqId) ? mfgDeterministicUid_(reqId, moUid, 'by_product', detBIdx) : uid16Hex_();
@@ -9241,7 +9481,7 @@ wcDirty[m['unique_id']] = true;
           m['valley_manufacture_header_id'] = moUid;
           m['item'] = String(b.item || '').trim();
           m['qty'] = Number(b.qty) || 0;
-          m['transaction_code'] = String(b.transaction_code || '').trim();
+          m['manufacture_internal_batch'] = String(b.manufacture_internal_batch || '').trim();
           m['total_cost'] = Number(b.total_cost || 0);
           m['manufacture_date'] = new Date();
           m['user'] = (user && user.email) || '';
@@ -9272,6 +9512,27 @@ wcDirty[m['unique_id']] = true;
       } else {
         deleteRowsWhereIn_(sheetBP, 'unique_id', deletedBpUids);
       }
+      /* Existing rows may still carry the old cost/batch-code formulas. Reinstall
+         only their formula columns after deletes have settled row positions. */
+      if (bpFormulaUids.length) {
+        var bpWanted = {};
+        bpFormulaUids.forEach(function (uid) { bpWanted[String(uid).trim()] = true; });
+        var bpRowsByUid = {};
+        if (mfgFast) {
+          var bpLocated = fsKeyIndex_(sheetBP, 'unique_id', bpWanted);
+          bpFormulaUids.forEach(function (uid) { bpRowsByUid[uid] = bpLocated.map.get(String(uid).trim()); });
+        } else {
+          var bpIds = sheetBP.getRange(2, bpHeaders.indexOf('unique_id') + 1, Math.max(0, sheetBP.getLastRow() - 1), 1).getValues();
+          bpIds.forEach(function (row, i) {
+            var uid = String(row[0] || '').trim();
+            if (bpWanted[uid] && !bpRowsByUid[uid]) bpRowsByUid[uid] = i + 2;
+          });
+        }
+        bpFormulaUids.forEach(function (uid) {
+          var bpRowNum = bpRowsByUid[uid];
+          if (bpRowNum) writeRowFormulas_(sheetBP, bpHeaders, bpRowNum, byproductFormulaMap_(bpRowNum));
+        });
+      }
       ckpt_('byproducts');
       }
       ckpt_('complete');
@@ -9281,6 +9542,899 @@ wcDirty[m['unique_id']] = true;
     finBustRefs_(dbId);
     vfFlush_();   /* the balance the client reads back must include this write */
     return { status: 'success', message: editing ? 'تم تحديث أمر التصنيع' : 'تم إنشاء أمر التصنيع', mo_uid: moUid };
+  }
+
+    /* ── Planned manufacturing save (stages D/E candidate) ─────────────────
+     * Same action, same payload, same response fields, same recovery protocol,
+     * same edit token, same ownership/stock/permission rules, same checkpoint
+     * stages and the same audit rows. What changes is the mechanism:
+     *
+     *   reads    one bounded read per affected table, reused for ownership,
+     *            conflict, calculation, planning and response construction,
+     *            instead of a whole-sheet read per patched row.
+     *   ids      one numeric-id reservation per table (one id-column scan)
+     *            instead of one scan per new row, reserved inside the same
+     *            outer save lock as the writes.
+     *   writes   only rows whose normalized writable fields actually differ
+     *            from the persisted state. Explicit deletion lists and section
+     *            omission semantics are unchanged.
+     *   order    the complete plan (patches, deletes, appends, formulas, row
+     *            coordinates, request size, operation budget) is checked
+     *            BEFORE the first business write. Per section the order is
+     *            patch -> delete -> append, so planned row numbers stay valid
+     *            and an appended row's formulas carry the row it really landed
+     *            on. The legacy path's append-before-delete order is preserved
+     *            where it is live; only this candidate changes it.
+     *   reply    the existing fields plus a versioned reconciliation section.
+     *
+     * Checkpoints are retained unchanged, in the same order and with the same
+     * stage names, so an interrupted candidate save is recoverable by the same
+     * recovery path that handles a legacy interruption.
+     *
+     * NOT VERIFIED: no runtime execution, benchmark or staging comparison has
+     * been performed for this path. It only runs when MFG_PLANNED_SAVE_ AND
+     * FORM_CONTRACTS_CORE_ are both true, and it also needs FAST_SAVE_CORE_
+     * true for its commit primitives (fcAssertEngine_ refuses otherwise rather
+     * than falling back to the legacy writer mid-request). */
+    function saveValleyMfgOrderPlanned_(data, user, dbId, guardCtx) {
+      var d = data || {};
+      var guard = guardCtx || {};
+      var reqId = String(guard.requestId || '');
+      var scope = mfgScopeFor_(d);
+      var input = mfgNormalizeSaveInput_(d, dbId);
+      var outputs = input.outputs;
+      var consumption = input.consumption;
+      var deletedOutUids = input.deletedOutUids;
+      var deletedConsUids = input.deletedConsUids;
+      var deletedWoUids = input.deletedWoUids;
+      var deletedBpUids = input.deletedBpUids;
+      var recoveredResp = null;
+      var isSuperAdmin = !!(user && user.isSuperAdmin);
+      var editing = !!(d.mo_uid && String(d.mo_uid).trim());
+      var created = !editing;
+      var moUid;
+      var userEmail = (user && user.email) || '';
+      var reconciliation = null;
+      var planManifest = null;
+      var cascadeConsDeletes = [];
+
+      executeWithLock_(function () {
+        mfgAssertMfgSchema_(dbId, scope);
+
+        /* ── one document context ─────────────────────────────────────── */
+        var ctx = fcDocContext_({ scopeId: dbId, label: 'save_valley_mfg_order' });
+        ctx.table({ name: 'mo', sheetName: MFG_ORDER_SHEET, keyColumn: 'unique_id', idColumn: 'id',
+          columns: MFG_ORDER_HEADERS.concat(['record_uid', 'created_by', 'updated_by', 'updated_at']),
+          fields: ['operation_type', 'shift', 'manufacture_date', 'produced_product', 'product_category', 'transaction_type',
+            'manufactured_qty', 'expected_qty', 'actual_qty', 'manufacture_batch', 'mo_status', 'recipe_id', 'user', 'created_at'],
+          formulaFields: ['by_product_nrv_value', 'total_inventory_cost', 'total_other_cost', 'total_batch_cost'],
+          /* The legacy header scan breaks on the FIRST matching row. */
+          duplicatePolicy: 'first' });
+        ctx.table({ name: 'outputs', sheetName: MFG_ORDER_PRODUCTS_SHEET, keyColumn: 'unique_id', parentColumn: 'valley_manufacture_header_id', idColumn: 'id',
+          columns: MFG_OUTPUT_HEADERS,
+          fields: ['valley_manufacture_header_id', 'product_id', 'product_name', 'product_qty', 'cost_unit', 'total_cost', 'user', 'created_at'],
+          formulaFields: ['cost_unit', 'total_cost'],
+          /* The legacy child maps are object assignments: LAST row wins. The
+           * rows are shared by ownership, planning and response construction,
+           * so they are frozen. */
+          duplicatePolicy: 'last', immutable: true });
+        ctx.table({ name: 'consumption', sheetName: MFG_CONSUMPTION_SHEET, keyColumn: 'unique_id', parentColumn: 'valley_manufacture_header_product_id', idColumn: 'id',
+          columns: MFG_CONSUMPTION_HEADERS,
+          fields: ['valley_manufacture_header_product_id', 'item', 'item_code', 'qty', 'cost_unit', 'total_cost', 'created_at', 'user'],
+          formulaFields: ['cost_unit', 'total_cost'],
+          duplicatePolicy: 'last', immutable: true });
+        ctx.table({ name: 'workops', sheetName: MFG_WORKOPS_SHEET, keyColumn: 'unique_id', parentColumn: 'valley_manufacture_header_id', idColumn: 'id',
+          columns: MFG_WORKOP_HEADERS,
+          fields: ['work_center_sequence', 'recipe_id', 'operation_status', 'start_time', 'end_time', 'notes', 'actual_hours',
+            'last_pause_time', 'total_pause_duration', 'user', 'created_at'],
+          formulaFields: ['work_center_cost', 'total_cost'],
+          duplicatePolicy: 'last', immutable: true });
+        ctx.table({ name: 'byproducts', sheetName: MFG_BYPRODUCT_SHEET, keyColumn: 'unique_id', parentColumn: 'valley_manufacture_header_id', idColumn: 'id',
+          columns: MFG_BYPRODUCT_HEADERS,
+          fields: ['code', 'manufacture_date', 'transaction_code', 'item', 'qty', 'total_cost', 'manufacture_internal_batch', 'user', 'created_at'],
+          formulaFields: ['code', 'transaction_code', 'total_cost'],
+          duplicatePolicy: 'last', immutable: true });
+        ctx.table({ name: 'products', sheetName: FIN_PRODUCTS_SHEET, keyColumn: 'id', columns: ['id', 'name_ar', 'category'] });
+        ctx.table({ name: 'recipeFooter', sheetName: MFG_RECIPE_FOOTER_SHEET, keyColumn: 'unique_id', parentColumn: 'valley_product_recipe_id',
+          columns: ['unique_id', 'valley_product_recipe_id', 'work_center_id', 'sequence'] });
+        /* The stock authority. A formula-derived table: it is declared as
+         * derived from the tables that feed it, and it is read with the
+         * context's own direct bounded read, never the request memo — the same
+         * freshness rule vfCurrentProducts_ applies. */
+        ctx.table({ name: 'currentProducts', sheetName: 'valley_current_products', keyColumn: 'unique_id',
+          columns: ['unique_id', 'current_qty', 'unit_cost', 'transaction_code', 'product'],
+          derivedFrom: ['mo', 'outputs', 'consumption'], immutable: true });
+
+        /* MO identity, lock state and the header row: ONE bounded read. */
+        ctx.readByKey('mo');
+        var moRow = null;
+        if (editing) {
+          moUid = String(d.mo_uid).trim();
+          moRow = ctx.rowFor('mo', moUid, true);
+          if (!moRow) vfNotApplied_('أمر التصنيع غير موجود');
+          if (String(moRow.mo_status || '').trim() === 'Locked') vfNotApplied_('أمر التصنيع مقفل — قم بفتح القفل أولاً');
+        } else {
+          moUid = reqId ? mfgDeterministicUid_(reqId, 'new', 'mo', 0) : uid16Hex_();
+          moRow = ctx.rowFor('mo', moUid, true);
+          if (moRow) { editing = true; created = false; }
+        }
+        var moNumberId = moRow ? Number(moRow.id) : 0;
+        if (editing && !moNumberId) vfNotApplied_('أمر التصنيع غير موجود');
+
+        /* Child rows: one bounded read per affected table. A genuinely new
+         * document has no child rows (no earlier request could reference an
+         * identity that did not exist), so those reads are skipped instead of
+         * being paid for an empty answer. */
+        var wantOutputs = scope.indexOf('outputs') !== -1 || scope.indexOf('consumption') !== -1;
+        var wantWorkOps = scope.indexOf('work_ops') !== -1;
+        var wantByproducts = scope.indexOf('byproducts') !== -1;
+        if (editing && wantOutputs) {
+          ctx.readAll('outputs');
+          ctx.buildChildIndex('outputs');
+          ctx.scopeChildren('outputs', [moUid]);
+          /* order uid -> outputs and output uid -> consumption rows come from
+           * the child index, which is built from the WHOLE table so a footer
+           * owned by another order can never be mistaken for this one's. */
+          ctx.readAll('consumption');
+          ctx.buildChildIndex('consumption');
+          var ownedOutUids = ctx.getChildren('outputs', moUid).map(function (r) { return String(r.unique_id || '').trim(); }).filter(Boolean);
+          ctx.scopeChildren('consumption', [moUid].concat(ownedOutUids));
+        } else {
+          ctx.markEmpty('outputs');
+          ctx.markEmpty('consumption');
+        }
+        if (editing && wantWorkOps) { ctx.readAll('workops'); ctx.buildChildIndex('workops'); ctx.scopeChildren('workops', [moUid]); } else { ctx.markEmpty('workops'); }
+        if (editing && wantByproducts) { ctx.readAll('byproducts'); ctx.buildChildIndex('byproducts'); ctx.scopeChildren('byproducts', [moUid]); } else { ctx.markEmpty('byproducts'); }
+        ctx.readAll('products');
+        if (wantWorkOps) ctx.readChildren('recipeFooter', recipeUid);
+
+        /* The stock authority, read ONCE for this document context: the guard
+         * below and the footer cost resolution share this snapshot. It is a
+         * direct bounded read of the declared columns — not the request memo —
+         * and it happens before the first write and inside the lock. */
+        ctx.readAll('currentProducts');
+        var currentProductsRows = ctx.tables.currentProducts.allRows;
+
+        /* Defensive batch-balance guard, preserved from the legacy path and
+         * computed from the context's own reads:
+         *   available(batch, document) = current_qty(batch) + held(document, batch)
+         * It runs before recovery and before any write, so a violation is a
+         * proven not-applied with no business write. A NEW order holds
+         * nothing and adds back nothing. */
+        (function assertFooterBalancesPlanned_() {
+          /* Null-prototype maps: every key here is a client-supplied batch uid.
+           * With a plain object, a uid spelled like an Object.prototype member
+           * would read back a prototype value instead of "no balance", which
+           * could turn a stock refusal into NaN and skip it. */
+          var needByBatch = Object.create(null);
+          var needOutByBatch = Object.create(null), needConsByBatch = Object.create(null);
+          function need_(buid, q, isOut) {
+            buid = String(buid || '').trim(); q = Number(q) || 0;
+            if (buid && q > 0) {
+              needByBatch[buid] = Math.round(((needByBatch[buid] || 0) + q) * 1000) / 1000;
+              var src = isOut ? needOutByBatch : needConsByBatch;
+              src[buid] = Math.round(((src[buid] || 0) + q) * 1000) / 1000;
+            }
+          }
+          var nameMap = Object.create(null);
+          (ctx.tables.products.allRows || []).forEach(function (p) { nameMap[String(p.id)] = String(p.name_ar || p.id); });
+          outputs.forEach(function (o) {
+            var opid = String(o.product_id || '').trim();
+            var payQty = Math.round((Number(o.qty) || 0) * 1000) / 1000;
+            var rows = (Array.isArray(o.footers) ? o.footers : []).filter(function (f) { return f && String(f.item || '').trim(); })
+              .map(function (f) { return { batch: String(f.item).trim(), qty: Math.round((Number(f.qty) || 0) * 1000) / 1000 }; });
+            var paySum = Math.round(rows.reduce(function (t, r) { return t + r.qty; }, 0) * 1000) / 1000;
+            if (Math.abs(paySum - payQty) > 0.01) {
+              vfNotApplied_('مجموع الدفعات للصنف (' + (nameMap[opid] || opid || '?') + ') يجب أن يساوي كمية البند. مجموع الدفعات: ' + paySum + '، الكمية: ' + payQty);
+            }
+            rows.forEach(function (r) { need_(r.batch, r.qty, true); });
+          });
+          (Array.isArray(consumption) ? consumption : []).forEach(function (cm) { need_(cm.batch_uid, cm.qty, false); });
+          var batchIds = Object.keys(needByBatch);
+          if (!batchIds.length) return;
+
+          /* held: this document's own committed footers, from the context's
+           * consumption rows (parented by an output uid or by the MO uid). */
+          var myUid = editing && moUid ? String(moUid) : '';
+          var held = Object.create(null);
+          if (myUid) {
+            var mine = Object.create(null);
+            mine[myUid] = true;
+            /* order uid -> outputs from the child index instead of a second
+             * full-table filter. */
+            ctx.getChildren('outputs', myUid).forEach(function (o) {
+              var u = String(o.unique_id || '').trim();
+              if (u) mine[u] = true;
+            });
+            (ctx.tables.consumption.allRows || []).forEach(function (cm) {
+              var ref = String(cm.valley_manufacture_header_product_id || '').trim();
+              if (!ref || !mine[ref]) return;
+              var bu = String(cm.item || '').trim();
+              if (bu) held[bu] = Math.round(((held[bu] || 0) + (Number(cm.qty) || 0)) * 1000) / 1000;
+            });
+          }
+          var balanceByBatch = Object.create(null);
+          currentProductsRows.forEach(function (r) {
+            var u = String(r.unique_id || '').trim();
+            if (!u) return;
+            balanceByBatch[u] = Math.round(((Number(r.current_qty) || 0) + (Number(held[u]) || 0)) * 1000) / 1000;
+          });
+          batchIds.forEach(function (buid) {
+            var avail = Math.round((balanceByBatch[buid] || 0) * 1000) / 1000;
+            if (needByBatch[buid] - avail > 0.001) {
+              var label = buid;
+              try {
+                outputs.forEach(function (o) {
+                  (o.footers || []).forEach(function (f) {
+                    if (String(f.item || '').trim() === buid && f.item_code) label = String(f.item_code);
+                  });
+                });
+              } catch (eLbl) {}
+              vfNotApplied_('الكمية المطلوبة من الدفعة (' + label + ') تتجاوز المتاح. المطلوب: ' + needByBatch[buid] + ' (مخرجات: ' + (needOutByBatch[buid] || 0) + ' + استهلاك: ' + (needConsByBatch[buid] || 0) + ')، المتاح: ' + avail);
+            }
+          });
+        })();
+
+        var ckpt_ = function (stage) {
+          if (guard.checkpoint) guard.checkpoint({ type: 'vf_mfg_order_save_v1', mo_uid: moUid, base_token: String(d.base_token || ''), scope: scope, stage: stage });
+        };
+
+        /* Same-request recovery, exactly as the legacy path. It keeps its own
+         * readers: the recovery comparison must stay byte-identical to the
+         * proven implementation, and it only runs when a receipt exists. */
+        if (guard.recovering) {
+          var recResp = mfgRecoverSameRequest_(data, user, dbId, guard, d, scope, editing, moUid);
+          if (recResp) { recoveredResp = recResp; return; }
+        }
+
+        /* Schema-free optimistic concurrency on existing-MO edits, using the
+         * SAME helper as the legacy path so the token stays identical. */
+        if (editing && !guard.recovering) {
+          var baseToken = String(d.base_token || '').trim();
+          if (!baseToken) vfNotApplied_('الجلسة قديمة — حدّث الصفحة وأعد تحميل أمر التصنيع قبل الحفظ');
+          var curTok = mfgEditToken_(dbId, moUid, scope);
+          if (curTok && baseToken !== curTok) {
+            var ve = new Error('تغيّرت بيانات أمر التصنيع على الخادم — حدّث الصفحة وراجع تعديلاتك قبل الحفظ');
+            ve.notApplied = true; ve.code = 'VERSION_CONFLICT';
+            throw ve;
+          }
+        }
+
+        /* Child-ownership gate from the context's own reads: identical rules
+         * to the legacy gate, zero extra reads. */
+        (function assertMfgOwnershipPlanned_() {
+          var wantOut = Object.create(null), wantFoot = Object.create(null), wantWo = Object.create(null), wantBp = Object.create(null);
+          outputs.forEach(function (o) {
+            var u = String(o.uid || '').trim();
+            if (u) wantOut[u] = true;
+            (Array.isArray(o.footers) ? o.footers : []).forEach(function (f) {
+              var fu = String(f.uid || '').trim();
+              if (fu) wantFoot[fu] = true;
+            });
+          });
+          (Array.isArray(d.work_ops) ? d.work_ops : []).forEach(function (w) {
+            var u = String((w && w.uid) || '').trim();
+            if (u) wantWo[u] = true;
+          });
+          (Array.isArray(d.byproducts) ? d.byproducts : []).forEach(function (b) {
+            var u = String((b && b.uid) || '').trim();
+            if (u) wantBp[u] = true;
+          });
+          if (!Object.keys(wantOut).length && !Object.keys(wantFoot).length && !Object.keys(wantWo).length && !Object.keys(wantBp).length &&
+              !deletedOutUids.length && !deletedConsUids.length && !deletedWoUids.length && !deletedBpUids.length) return;
+
+          /* Ownership is answered from the SCOPED byKey map (this document's
+           * rows) through the lookup API — the same answer the legacy
+           * haveOut/haveFoot/haveWo/haveBp accumulation produced, without a
+           * second scan. The all-owner maps below are a different question
+           * ("does this uid belong to another order?") and still need the
+           * whole-table rows. */
+          var allOutOwner = {}, allFootOwner = {}, allFootOrphan = {}, allWoOwner = {}, allBpOwner = {};
+          (ctx.tables.outputs.allRows || []).forEach(function (r) {
+            var u = String(r.unique_id || '').trim(); if (!u) return;
+            allOutOwner[u] = String(r.valley_manufacture_header_id || '').trim();
+          });
+          (ctx.tables.consumption.allRows || []).forEach(function (r) {
+            var u = String(r.unique_id || '').trim(); if (!u) return;
+            var ref = String(r.valley_manufacture_header_product_id || '').trim();
+            allFootOwner[u] = ref === moUid ? moUid : String(allOutOwner[ref] || '');
+            allFootOrphan[u] = !!(ref && ref !== moUid && !allOutOwner[ref]);
+          });
+          (ctx.tables.workops.allRows || []).forEach(function (r) {
+            var u = String(r.unique_id || '').trim(); if (!u) return;
+            allWoOwner[u] = String(r.valley_manufacture_header_id || '').trim();
+          });
+          (ctx.tables.byproducts.allRows || []).forEach(function (r) {
+            var u = String(r.unique_id || '').trim(); if (!u) return;
+            allBpOwner[u] = String(r.valley_manufacture_header_id || '').trim();
+          });
+          if (ctx.getManyByKeys('outputs', Object.keys(wantOut)).missing.length) {
+            vfNotApplied_('بند ناتج غير تابع لأمر التصنيع — حدّث الصفحة وأعد المحاولة');
+          }
+          if (ctx.getManyByKeys('consumption', Object.keys(wantFoot)).missing.length) {
+            vfNotApplied_('بند استهلاك غير تابع لأمر التصنيع — حدّث الصفحة وأعد المحاولة');
+          }
+          if (ctx.getManyByKeys('workops', Object.keys(wantWo)).missing.length) {
+            vfNotApplied_('عملية تشغيل غير تابعة لأمر التصنيع — حدّث الصفحة وأعد المحاولة');
+          }
+          if (ctx.getManyByKeys('byproducts', Object.keys(wantBp)).missing.length) {
+            vfNotApplied_('منتج ثانوي غير تابع لأمر التصنيع — حدّث الصفحة وأعد المحاولة');
+          }
+          function assertDeletePlanned_(table, uids, allOwner, message, orphanMap) {
+            uids.forEach(function (u) {
+              if (ctx.getByKey(table, u)) return;
+              if (guard.recovering && (!Object.prototype.hasOwnProperty.call(allOwner, u) || (orphanMap && orphanMap[u]))) return;
+              vfNotApplied_(message);
+            });
+          }
+          assertDeletePlanned_('outputs', deletedOutUids, allOutOwner, 'بند ناتج غير تابع لأمر التصنيع — حدّث الصفحة وأعد المحاولة');
+          assertDeletePlanned_('consumption', deletedConsUids, allFootOwner, 'بند استهلاك غير تابع لأمر التصنيع — حدّث الصفحة وأعد المحاولة', allFootOrphan);
+          assertDeletePlanned_('workops', deletedWoUids, allWoOwner, 'عملية تشغيل غير تابعة لأمر التصنيع — حدّث الصفحة وأعد المحاولة');
+          assertDeletePlanned_('byproducts', deletedBpUids, allBpOwner, 'منتج ثانوي غير تابع لأمر التصنيع — حدّث الصفحة وأعد المحاولة');
+          outputs.forEach(function (o) {
+            var ou = String(o.uid || '').trim();
+            if (ou && deletedOutUids.indexOf(ou) !== -1) vfNotApplied_('لا يمكن تحديث وحذف بند الناتج نفسه في طلب واحد');
+            (Array.isArray(o.footers) ? o.footers : []).forEach(function (f) {
+              var fu = String(f.uid || '').trim();
+              if (fu && deletedConsUids.indexOf(fu) !== -1) vfNotApplied_('لا يمكن تحديث وحذف بند الدفعة نفسه في طلب واحد');
+            });
+          });
+          (Array.isArray(d.work_ops) ? d.work_ops : []).forEach(function (w) {
+            var wu = String((w && w.uid) || '').trim();
+            if (wu && deletedWoUids.indexOf(wu) !== -1) vfNotApplied_('لا يمكن تحديث وحذف عملية التشغيل نفسها في طلب واحد');
+          });
+          (Array.isArray(d.byproducts) ? d.byproducts : []).forEach(function (b) {
+            var bu = String((b && b.uid) || '').trim();
+            if (bu && deletedBpUids.indexOf(bu) !== -1) vfNotApplied_('لا يمكن تحديث وحذف المنتج الثانوي نفسه في طلب واحد');
+          });
+        })();
+
+        /* A different unresolved request for this MO blocks before mutation. */
+        if (!guard.recovering && guard.findOpenEntity) {
+          var otherReq = '';
+          try { otherReq = guard.findOpenEntity('save_valley_mfg_order', moUid); } catch (eOther) { otherReq = ''; }
+          if (otherReq) vfNotApplied_('يوجد طلب غير مؤكد لنفس أمر التصنيع (' + otherReq + ') — راجع السجل قبل إعادة الحفظ');
+        }
+
+        /* ── the complete write plan (no writes yet) ──────────────────── */
+        var plan;
+        try {
+          plan = (function buildMfgWritePlan_() {
+          var prodNameMap = Object.create(null), catId = '';
+          var wcFormulaUidsOut = [];
+          var bpFormulaUidsOut = [];
+          var headerHistory = null;
+          (ctx.tables.products.allRows || []).forEach(function (p) {
+            prodNameMap[String(p.id)] = String(p.name_ar || '');
+            if (String(p.id) === String(producedPid)) catId = String(p.category || '');
+          });
+
+          function normStr(v) { return v === null || v === undefined ? '' : String(v).trim(); }
+          function normNum(v) {
+            if (v === '' || v === null || v === undefined) return '';
+            var n = Number(v);
+            return isFinite(n) ? String(Math.round(n * 1000) / 1000) : String(v);
+          }
+          function normTime(v) {
+            if (!v) return 0;
+            var dd = (v instanceof Date) ? v : new Date(v);
+            return isNaN(dd.getTime()) ? 0 : dd.getTime();
+          }
+          function sameField(oldVal, newVal, kind) {
+            if (kind === 'num') return normNum(oldVal) === normNum(newVal);
+            if (kind === 'time') return normTime(oldVal) === normTime(newVal);
+            return normStr(oldVal) === normStr(newVal);
+          }
+          function anyChanged(oldRow, patch, spec) {
+            for (var i = 0; i < spec.length; i++) {
+              var f = spec[i][0], kind = spec[i][1];
+              if (patch[f] === undefined) continue;
+              if (!sameField(oldRow[f], patch[f], kind)) return true;
+            }
+            return false;
+          }
+
+          /* Header */
+          var headerPatch = {
+            operation_type: opType,
+            shift: shift,
+            manufacture_date: moDate,
+            produced_product: Number(producedPid) || producedPid,
+            manufactured_qty: manufacturedQty,
+            actual_qty: (d.actual_qty !== '' && d.actual_qty != null) ? Number(d.actual_qty) : 0,
+            expected_qty: expectedQty,
+            recipe_id: recipeUid,
+            product_category: catId,
+            transaction_type: 'التصنيع الداخلي',
+            manufacture_batch: d.manufacture_batch !== undefined ? d.manufacture_batch : '',
+            mo_status: editing ? String(d.mo_status || 'Draft') : 'Draft',
+            user: userEmail
+          };
+          if (MFG_STATUSES.indexOf(headerPatch.mo_status) === -1) headerPatch.mo_status = 'Draft';
+          var headerOld = moRow ? Object.assign({}, moRow) : null;
+          if (headerOld) delete headerOld.__row;
+          if (editing) {
+            var headerChanged = anyChanged(headerOld || {}, headerPatch,
+              [['operation_type', 'str'], ['shift', 'str'], ['manufacture_date', 'time'], ['produced_product', 'str'],
+                ['manufactured_qty', 'num'], ['actual_qty', 'num'], ['expected_qty', 'num'], ['recipe_id', 'str'],
+                ['product_category', 'str'], ['manufacture_batch', 'str'], ['mo_status', 'str']]);
+            if (headerChanged) {
+              var sheetMo = getSheet_(MFG_ORDER_SHEET, dbId);
+              try {
+                if (typeof _stampExistingAuditCols_ === 'function') {
+                  _stampExistingAuditCols_(sheetMo, headerPatch, {
+                    user: userEmail, updated_by: userEmail, updated_at: new Date()
+                  });
+                }
+              } catch (eStamp) {}
+              ctx.addPatch('mo', moUid, headerPatch);
+              headerHistory = {
+                recordUid: (headerOld && headerOld.record_uid) || ('upd_' + MFG_ORDER_SHEET + '_' + moUid),
+                action: 'update',
+                newValues: Object.assign({}, headerOld || {}, headerPatch),
+                oldValues: headerOld
+              };
+            }
+          } else {
+            var moIdStart = ctx.reserveIds('mo', 1);
+            var moMap = {
+              unique_id: moUid, id: moIdStart, operation_type: opType, shift: shift,
+              manufacture_date: moDate, produced_product: Number(producedPid) || producedPid,
+              manufactured_qty: manufacturedQty, expected_qty: expectedQty,
+              actual_qty: headerPatch.actual_qty, recipe_id: recipeUid, product_category: catId,
+              transaction_type: 'التصنيع الداخلي',
+              manufacture_batch: d.manufacture_batch !== undefined ? d.manufacture_batch : '',
+              mo_status: 'Draft', user: userEmail, created_at: new Date(),
+              record_uid: 'rec_' + Utilities.getUuid()
+            };
+            try {
+              if (typeof _stampExistingAuditCols_ === 'function') {
+                _stampExistingAuditCols_(getSheet_(MFG_ORDER_SHEET, dbId), moMap, {
+                  user: userEmail, created_by: userEmail, created_at: moMap.created_at,
+                  updated_by: userEmail, updated_at: moMap.created_at, record_uid: moMap.record_uid
+                });
+              }
+            } catch (eStampNew) {}
+            var moHeadersLive = getHeaders_(getSheet_(MFG_ORDER_SHEET, dbId));
+            var moRowVals = moHeadersLive.map(function (h) {
+              var k = String(h).trim();
+              return moMap[k] !== undefined ? moMap[k] : '';
+            });
+            ctx.addAppend('mo', moRowVals, function (rN) { return mfgOrderFormulaMap_(rN); });
+            headerHistory = { recordUid: moMap.record_uid, action: 'create', newValues: moMap, oldValues: null };
+          }
+
+          /* Outputs: stable upsert; unchanged rows are not written. The
+           * existing-row lookup is the context's own map, not a second scan. */
+          var mapped = { outputs: {}, consumption: {}, work_ops: {}, byproducts: {} };
+          var outIdStart = 0, newOuts = [];
+          var nOutNew = 0;
+          outputs.forEach(function (o, oi) {
+            var suppliedUid = String(o.uid || '').trim();
+            var ouid = suppliedUid;
+            var oldOut = ouid ? ctx.getByKey('outputs', ouid) : null;
+            var detIdx = -1;
+            if (!suppliedUid) detIdx = nOutNew++;
+            if (!oldOut && detIdx !== -1 && reqId) {
+              var detO = mfgDeterministicUid_(reqId, moUid, 'output', detIdx);
+              var detORow = ctx.getByKey('outputs', detO);
+              if (detORow) { ouid = detO; oldOut = detORow; }
+            }
+            var pid = String(o.product_id).trim();
+            var pname = prodNameMap[String(o.product_id)] || '';
+            var qty = Math.round((Number(o.qty) || 0) * 1000) / 1000;
+            if (oldOut) {
+              var outPatch = { product_id: pid, product_name: pname, product_qty: qty, user: userEmail };
+              if (o.cost_unit !== '' && o.cost_unit != null) outPatch.cost_unit = o.cost_unit;
+              if (o.total_cost !== '' && o.total_cost != null) outPatch.total_cost = o.total_cost;
+              if (anyChanged(oldOut, outPatch, [['product_id', 'str'], ['product_name', 'str'], ['product_qty', 'num'], ['cost_unit', 'num'], ['total_cost', 'num']])) {
+                ctx.addPatch('outputs', ouid, outPatch);
+              }
+            } else {
+              var outUid = (detIdx !== -1 && reqId) ? mfgDeterministicUid_(reqId, moUid, 'output', detIdx) : uid16Hex_();
+              mapped.outputs[String(oi)] = outUid;
+              newOuts.push({
+                uid: outUid,
+                values: {
+                  unique_id: outUid, id: 0, valley_manufacture_header_id: moUid, product_id: pid,
+                  product_name: pname, product_qty: qty,
+                  cost_unit: o.cost_unit != null ? o.cost_unit : '',
+                  total_cost: o.total_cost != null ? o.total_cost : '',
+                  user: userEmail, created_at: new Date()
+                }
+              });
+            }
+          });
+          if (newOuts.length) {
+            outIdStart = ctx.reserveIds('outputs', newOuts.length);
+            var outHeadersLive = getHeaders_(getSheet_(MFG_ORDER_PRODUCTS_SHEET, dbId));
+            newOuts.forEach(function (n, i) {
+              n.values.id = outIdStart + i;
+              ctx.addAppend('outputs', outHeadersLive.map(function (h) {
+                var k = String(h).trim();
+                return n.values[k] !== undefined ? n.values[k] : '';
+              }), function (rN) { return mfgOutputFormulaMap_(rN); });
+            });
+          }
+
+          /* Consumption: per-product footers, then the legacy recipe form. */
+          var footerBatchCost = Object.create(null);
+          try {
+            currentProductsRows.forEach(function (r) {
+              var u = String(r.unique_id || '').trim();
+              if (u && footerBatchCost[u] === undefined) footerBatchCost[u] = Number(r.unit_cost) || 0;
+            });
+          } catch (eFbc) {}
+          var existingConsKeys = Object.keys(ctx.tables.consumption.byKey || {});
+          var keepConsUids = [];
+          var newCons = [];
+          var nFootNew = 0;
+          var footOrdinal = 0;   /* payload-order footer ordinal, for the reply map */
+          outputs.forEach(function (o, oi) {
+            var outUid = mapped.outputs[String(oi)] || String(o.uid || '').trim();
+            var footers = (Array.isArray(o.footers) ? o.footers : []).filter(function (f) { return f && String(f.item || '').trim(); });
+            footers.forEach(function (f) {
+              var suppliedFuid = String(f.uid || '').trim();
+              var fuid = suppliedFuid;
+              var oldF = fuid ? ctx.getByKey('consumption', fuid) : null;
+              var detFIdx = -1;
+              if (!suppliedFuid) detFIdx = nFootNew++;
+              var myFootOrdinal = footOrdinal++;
+              if (!oldF && detFIdx !== -1 && reqId) {
+                var detF = mfgDeterministicUid_(reqId, moUid, 'footer', detFIdx);
+                var detFRow = ctx.getByKey('consumption', detF);
+                if (detFRow) { fuid = detF; oldF = detFRow; }
+              }
+              var fqty = Math.round((Number(f.qty) || 0) * 1000) / 1000;
+              if (oldF) {
+                var fPatch = { valley_manufacture_header_product_id: outUid || moUid, item: String(f.item || '').trim(), qty: fqty, user: userEmail };
+                if (String(f.item_code || '') !== '') fPatch.item_code = String(f.item_code);
+                if (anyChanged(oldF, fPatch, [['valley_manufacture_header_product_id', 'str'], ['item', 'str'], ['qty', 'num'], ['item_code', 'str']])) {
+                  ctx.addPatch('consumption', fuid, fPatch);
+                }
+                keepConsUids.push(fuid);
+              } else {
+                var newFUid = (detFIdx !== -1 && reqId) ? mfgDeterministicUid_(reqId, moUid, 'footer', detFIdx) : uid16Hex_();
+                mapped.consumption[String(myFootOrdinal)] = newFUid;
+                newCons.push({
+                  values: {
+                    unique_id: newFUid, id: 0, valley_manufacture_header_product_id: outUid || moUid,
+                    item: String(f.item || '').trim(), item_code: String(f.item_code || ''), qty: fqty,
+                    cost_unit: footerBatchCost[String(f.item || '').trim()] || 0,
+                    created_at: new Date(), user: userEmail
+                  }
+                });
+                keepConsUids.push(newFUid);
+              }
+            });
+          });
+          /* Legacy recipe-driven consumption: only when no footers exist. */
+          var firstOutputUid = mapped.outputs['0'] || (outputs.length ? String(outputs[0].uid || '').trim() : '') || moUid;
+          if (!keepConsUids.length && consumption.length) {
+            var legacyByItem = Object.create(null);
+            existingConsKeys.forEach(function (cu) {
+              var cm = ctx.getByKey('consumption', cu);
+              if (String(cm.valley_manufacture_header_product_id || '').trim() === firstOutputUid) {
+                var ik = String(cm.item || '').trim();
+                if (ik && !legacyByItem[ik]) legacyByItem[ik] = cu;
+              }
+            });
+            var nConsNew = 0;
+            consumption.forEach(function (cm) {
+              var cmItem = String(cm.item_pid || '').trim();
+              if (!cmItem) return;
+              var cmQty = Math.round((Number(cm.qty) || 0) * 1000) / 1000;
+              var oldC = legacyByItem[cmItem] || null;
+              if (oldC && keepConsUids.indexOf(oldC) === -1) {
+                var cPatch = { qty: cmQty, user: userEmail };
+                if (String(cm.lot || '') !== '') cPatch.item_code = String(cm.lot);
+                if (anyChanged(ctx.getByKey('consumption', oldC), cPatch, [['qty', 'num'], ['item_code', 'str']])) {
+                  ctx.addPatch('consumption', oldC, cPatch);
+                }
+                keepConsUids.push(oldC);
+              } else if (!oldC) {
+                var newCUid = reqId ? mfgDeterministicUid_(reqId, moUid, 'consumption', nConsNew++) : uid16Hex_();
+                newCons.push({
+                  values: {
+                    unique_id: newCUid, id: 0, valley_manufacture_header_product_id: firstOutputUid,
+                    item: cmItem, item_code: String(cm.lot || ''), qty: cmQty,
+                    created_at: new Date(), user: userEmail
+                  }
+                });
+                keepConsUids.push(newCUid);
+              }
+            });
+          }
+          if (newCons.length) {
+            var consIdStart = ctx.reserveIds('consumption', newCons.length);
+            var consHeadersLive = getHeaders_(getSheet_(MFG_CONSUMPTION_SHEET, dbId));
+            newCons.forEach(function (n, i) {
+              n.values.id = consIdStart + i;
+              ctx.addAppend('consumption', consHeadersLive.map(function (h) {
+                var k = String(h).trim();
+                return n.values[k] !== undefined ? n.values[k] : '';
+              }), function (rN) { return mfgConsumptionFormulaMap_(rN); });
+            });
+          }
+
+          /* Work ops */
+          if (wantWorkOps) {
+            var wcSeqMap = Object.create(null);
+            (ctx.tables.recipeFooter.children || []).forEach(function (s) {
+              if (String(s.valley_product_recipe_id || '').trim() === String(recipeUid).trim()) {
+                wcSeqMap[String(s.work_center_id || '').trim()] = (s.sequence != null && s.sequence !== '' && !isNaN(Number(s.sequence))) ? Number(s.sequence) : '';
+              }
+            });
+            var newWo = [];
+            var wcDirty = {};
+            var nWoNew = 0;
+            (Array.isArray(d.work_ops) ? d.work_ops : []).forEach(function (w, wi) {
+              var suppliedWuid = String(w.uid || '').trim();
+              var editingUid = suppliedWuid;
+              var old = editingUid ? ctx.getByKey('workops', editingUid) : null;
+              var detWIdx = -1;
+              if (!suppliedWuid) detWIdx = nWoNew++;
+              if (!old && detWIdx !== -1 && reqId) {
+                var detW = mfgDeterministicUid_(reqId, moUid, 'work_op', detWIdx);
+                var detWRow = ctx.getByKey('workops', detW);
+                if (detWRow) { editingUid = detW; old = detWRow; }
+              }
+              var wcId = String(w.work_center_id || '').trim();
+              var m = {};
+              m.work_center_sequence = old ? old.work_center_sequence : (wcSeqMap[wcId] !== undefined && wcSeqMap[wcId] !== '' ? wcSeqMap[wcId] : (wi + 1));
+              m.recipe_id = wcId;
+              m.operation_status = String(w.operation_status || 'Pending').trim();
+              m.start_time = w.start_time ? parseDate_(w.start_time) : (old && old.start_time ? old.start_time : new Date());
+              m.end_time = w.end_time ? parseDate_(w.end_time) : (old && old.end_time ? old.end_time : new Date());
+              m.notes = String(w.notes || '').trim();
+              m.actual_hours = (w.actual_hours !== '' && w.actual_hours != null) ? Number(w.actual_hours) : '';
+              m.last_pause_time = w.last_pause_time ? parseDate_(w.last_pause_time) : '';
+              m.total_pause_duration = (w.total_pause_duration !== '' && w.total_pause_duration != null) ? Number(w.total_pause_duration) : (old ? Number(old.total_pause_duration || 0) : 0);
+              if (old) {
+                /* The legacy patch never writes the work-op `user` column on
+                 * an existing row (only on create), so this does not either. */
+                if (anyChanged(old, m, [['recipe_id', 'str'], ['operation_status', 'str'], ['start_time', 'time'], ['end_time', 'time'],
+                  ['notes', 'str'], ['actual_hours', 'num'], ['last_pause_time', 'time'], ['total_pause_duration', 'num']])) {
+                  ctx.addPatch('workops', editingUid, m);
+                  wcDirty[editingUid] = true;
+                }
+              } else {
+                var woUid = (detWIdx !== -1 && reqId) ? mfgDeterministicUid_(reqId, moUid, 'work_op', detWIdx) : uid16Hex_();
+                mapped.work_ops[String(wi)] = woUid;
+                var woMap = Object.assign({}, m, {
+                  unique_id: woUid, id: 0, valley_manufacture_header_id: moUid, user: userEmail, created_at: new Date()
+                });
+                newWo.push({ uid: woUid, values: woMap });
+                wcDirty[woUid] = true;
+              }
+            });
+            if (newWo.length) {
+              var woIdStart = ctx.reserveIds('workops', newWo.length);
+              var wcHeadersLive = getHeaders_(getSheet_(MFG_WORKOPS_SHEET, dbId));
+              newWo.forEach(function (n, i) {
+                n.values.id = woIdStart + i;
+                ctx.addAppend('workops', wcHeadersLive.map(function (h) {
+                  var k = String(h).trim();
+                  return n.values[k] !== undefined ? n.values[k] : '';
+                }), function (rN, headers) { return mfgWorkCenterFormulaMap_(rN, headers); });
+              });
+            }
+            /* Formula reinstall only for rows whose inputs changed. The dirty
+             * rows are already in the loaded map, so no scan is needed; the
+             * reinstall itself runs after this section commits. */
+            wcFormulaUidsOut = Object.keys(wcDirty);
+          }
+
+          /* By-products */
+          if (wantByproducts) {
+            var newBp = [];
+            var nBpNew = 0;
+            (Array.isArray(d.byproducts) ? d.byproducts : []).forEach(function (b, bi) {
+              var suppliedBuid = String(b.uid || '').trim();
+              var buid = suppliedBuid;
+              var oldB = buid ? ctx.getByKey('byproducts', buid) : null;
+              var detBIdx = -1;
+              if (!suppliedBuid) detBIdx = nBpNew++;
+              if (!oldB && detBIdx !== -1 && reqId) {
+                var detB = mfgDeterministicUid_(reqId, moUid, 'by_product', detBIdx);
+                var detBRow = ctx.getByKey('byproducts', detB);
+                if (detBRow) { buid = detB; oldB = detBRow; }
+              }
+              var bpPatch = {
+                item: String(b.item || '').trim(),
+                qty: Number(b.qty) || 0,
+                manufacture_internal_batch: String(b.manufacture_internal_batch || '').trim(),
+                user: userEmail
+              };
+              if (oldB) {
+                if (anyChanged(oldB, bpPatch, [['item', 'str'], ['qty', 'num'], ['manufacture_internal_batch', 'str']])) {
+                  ctx.addPatch('byproducts', buid, bpPatch);
+                }
+                bpFormulaUidsOut.push(buid);
+              } else {
+                var newBUid = (detBIdx !== -1 && reqId) ? mfgDeterministicUid_(reqId, moUid, 'by_product', detBIdx) : uid16Hex_();
+                mapped.byproducts[String(bi)] = newBUid;
+                newBp.push({
+                  values: {
+                    unique_id: newBUid, id: 0, valley_manufacture_header_id: moUid,
+                    item: String(b.item || '').trim(), qty: Number(b.qty) || 0,
+                    manufacture_internal_batch: String(b.manufacture_internal_batch || '').trim(),
+                    total_cost: Number(b.total_cost || 0), manufacture_date: new Date(),
+                    user: userEmail, created_at: new Date()
+                  }
+                });
+              }
+            });
+            if (newBp.length) {
+              var bpIdStart = ctx.reserveIds('byproducts', newBp.length);
+              var bpHeadersLive = getHeaders_(getSheet_(MFG_BYPRODUCT_SHEET, dbId));
+              newBp.forEach(function (n, i) {
+                n.values.id = bpIdStart + i;
+                ctx.addAppend('byproducts', bpHeadersLive.map(function (h) {
+                  var k = String(h).trim();
+                  return n.values[k] !== undefined ? n.values[k] : '';
+                }), function (rN) { return byproductFormulaMap_(rN); });
+              });
+            }
+          }
+
+          /* Deletes: explicit lists plus the children of an explicitly
+           * deleted output. */
+          deletedOutUids.forEach(function (u) { ctx.addDelete('outputs', u, { allowMissing: !!guard.recovering }); });
+          deletedWoUids.forEach(function (u) { ctx.addDelete('workops', u, { allowMissing: !!guard.recovering }); });
+          deletedBpUids.forEach(function (u) { ctx.addDelete('byproducts', u, { allowMissing: !!guard.recovering }); });
+          cascadeConsDeletes = deletedConsUids.slice();
+          existingConsKeys.forEach(function (u) {
+            var parent = String(ctx.getByKey('consumption', u).valley_manufacture_header_product_id || '').trim();
+            if (deletedOutUids.indexOf(parent) !== -1 && cascadeConsDeletes.indexOf(u) === -1) cascadeConsDeletes.push(u);
+          });
+          cascadeConsDeletes.forEach(function (u) { ctx.addDelete('consumption', u, { allowMissing: !!guard.recovering }); });
+
+          return { mapped: mapped, actualQty: headerPatch.actual_qty, wcFormulaUids: wcFormulaUidsOut, bpFormulaUids: bpFormulaUidsOut, headerHistory: headerHistory };
+          })();
+
+          /* Operation budget, shape, keys, formulas, row coordinates and
+           * request size are checked BEFORE the first business write and
+           * BEFORE the validated checkpoint, so a budget refusal leaves no
+           * write of any kind behind. */
+          planManifest = ctx.preflight({});
+        } catch (ePlan) {
+          /* Every FC_* refusal is raised during planning or preflight, before
+           * any write, so it is a proven not-applied outcome the receipt may
+           * record as safe to correct and retry. FC_ENGINE_DISABLED is a flag
+           * misconfiguration, not a user refusal, and is not converted. */
+          if (ePlan && /^FC_/.test(String(ePlan.code || '')) && ePlan.code !== 'FC_ENGINE_DISABLED') {
+            vfNotApplied_('تعذر تجهيز خطة الحفظ: ' + (ePlan.message || ''));
+          }
+          throw ePlan;
+        }
+        ckpt_('validated');
+
+        /* ── commit, section by section, with the same checkpoints ────── */
+        if (Object.keys(ctx.plan('mo').patchesByRow).length || ctx.plan('mo').appends.length) {
+          ctx.commitSection('mo');
+          /* Header date cell keeps its yyyy-MM-dd display, exactly as the
+           * legacy path formats it after writing the row. */
+          try {
+            var mdIdx = getHeaders_(getSheet_(MFG_ORDER_SHEET, dbId)).findIndex(function (h) { return String(h).trim() === 'manufacture_date'; });
+            var headerRowNum = moRow ? ctx.getRowLocation('mo', moUid) : ctx.plan('mo').startRow;
+            if (headerRowNum && mdIdx !== -1) getSheet_(MFG_ORDER_SHEET, dbId).getRange(headerRowNum, mdIdx + 1).setNumberFormat('yyyy-MM-dd');
+          } catch (eFmt) {}
+          /* Header audit row, after the business row it describes. */
+          if (plan.headerHistory) {
+            try {
+              logHistory_(dbId, MFG_ORDER_SHEET, plan.headerHistory.recordUid, moUid, userEmail,
+                plan.headerHistory.action, plan.headerHistory.newValues, plan.headerHistory.oldValues);
+            } catch (eHist) {}
+          }
+        }
+        ckpt_('header');
+        ctx.commitSection('outputs');
+        ckpt_('outputs');
+        ctx.commitSection('consumption');
+        ckpt_('consumption');
+        if (wantWorkOps) {
+          ctx.commitSection('workops');
+          /* Cost formulas are reinstalled only for rows whose inputs changed,
+           * at their already-known row numbers: no table scan. */
+          try {
+            var wcSheet = getSheet_(MFG_WORKOPS_SHEET, dbId);
+            var wcHdrs = getHeaders_(wcSheet);
+            var wcUids = plan.wcFormulaUids || [];
+            if (wcUids.length) {
+              /* Deletes in this section shift rows, so the dirty rows are
+               * re-located with ONE bounded key read AFTER the commit rather
+               * than trusting pre-delete row numbers. */
+              var wcLocated = ctx.relocateKeys('workops', wcUids);
+              wcUids.forEach(function (uid) {
+                var rN = wcLocated.map.get(String(uid).trim());
+                if (rN) writeRowFormulas_(wcSheet, wcHdrs, rN, mfgWorkCenterFormulaMap_(rN, wcHdrs));
+              });
+            }
+          } catch (eWcFx) {}
+          ckpt_('work_ops');
+        }
+        if (wantByproducts) {
+          ctx.commitSection('byproducts');
+          /* Keep edited pre-existing rows on the same formula version as new
+             rows. Deletes can shift them, so relocate by UID after commit. */
+          var bpUids = plan.bpFormulaUids || [];
+          if (bpUids.length) {
+            var bpSheet = getSheet_(MFG_BYPRODUCT_SHEET, dbId);
+            var bpHdrs = getHeaders_(bpSheet);
+            var bpRows = ctx.relocateKeys('byproducts', bpUids);
+            bpUids.forEach(function (uid) {
+              var bpRowNum = bpRows.map.get(String(uid).trim());
+              if (bpRowNum) writeRowFormulas_(bpSheet, bpHdrs, bpRowNum, byproductFormulaMap_(bpRowNum));
+            });
+          }
+          ckpt_('byproducts');
+        }
+        ckpt_('complete');
+        planManifest = ctx.manifest();
+
+        /* ── snapshot validity after the mutation ───────────────────────
+         * Every written table's snapshot is stale now: rows were patched,
+         * appended or deleted, and a delete shifts row numbers. The context
+         * must not answer a lookup or hand out a row location from pre-commit
+         * state to anything that follows. The formula-derived batch view is
+         * invalidated through its declared dependencies; it is NOT recomputed
+         * here — post-mutation balances are re-read by the read path, never
+         * patched into a snapshot from an assumption. */
+        ['mo', 'outputs', 'consumption', 'workops', 'byproducts'].forEach(function (n) {
+          if (ctx.tables[n]) ctx.invalidateTable(n);
+        });
+        ['mo', 'outputs', 'consumption'].forEach(function (n) {
+          if (ctx.tables[n]) ctx.invalidateDerivedDependencies(n);
+        });
+
+        /* Reconciliation: built from the plan and the commit manifest. The
+         * next token is recomputed by the SAME helper the legacy path uses,
+         * from committed state only. */
+        /* "Saved values that differ from the submitted values": only fields
+         * this server owns and normalizes are compared, and only a genuine
+         * difference is reported. Nothing here is guessed. */
+        var correctedHeader = {};
+        if (String(d.expected_qty == null ? '' : d.expected_qty) !== String(expectedQty)) correctedHeader.expected_qty = expectedQty;
+        var submittedActualRaw = d.actual_qty;
+        if (String(submittedActualRaw == null ? '' : submittedActualRaw) !== String(plan.actualQty)) correctedHeader.actual_qty = plan.actualQty;
+        var planTouchedChildren = Object.keys(ctx.plan('outputs').patchesByRow).length || ctx.plan('outputs').appends.length ||
+          Object.keys(ctx.plan('consumption').patchesByRow).length || ctx.plan('consumption').appends.length || cascadeConsDeletes.length;
+        var respBody = {
+          requestId: reqId,
+          documentId: moUid,
+          created: created,
+          mapped: plan.mapped,
+          removed: {
+            outputs: deletedOutUids.slice(),
+            consumption: cascadeConsDeletes.slice(),
+            work_ops: deletedWoUids.slice(),
+            byproducts: deletedBpUids.slice()
+          },
+          nextToken: mfgEditToken_(dbId, moUid, scope),
+          invalidations: planTouchedChildren ? ['batch_balances'] : [],
+          manifest: planManifest
+        };
+        if (Object.keys(correctedHeader).length) respBody.corrected = { header: correctedHeader };
+        reconciliation = fcResponse_(respBody);
+      });
+
+      if (recoveredResp) return recoveredResp;
+      finBustRefs_(dbId);
+      vfFlush_();   /* the balance the client reads back must include this write */
+      var resp = { status: 'success', message: editing ? 'تم تحديث أمر التصنيع' : 'تم إنشاء أمر التصنيع', mo_uid: moUid };
+      if (reconciliation) resp.reconciliation = reconciliation;
+      return resp;
+    }
+
+  function mfgAssertLockRequirements_(batchValue, actualValue) {
+    var batch = String(batchValue == null ? '' : batchValue).trim();
+    if (!batch) throw new Error('لا يمكن قفل أمر التصنيع: رقم التشغيلة مطلوب');
+    var actualText = String(actualValue == null ? '' : actualValue).trim();
+    var actual = Number(actualText.replace(/,/g, ''));
+    if (!actualText || !isFinite(actual) || actual <= 0) {
+      throw new Error('لا يمكن قفل أمر التصنيع: يجب أن تكون الكمية الفعلية المنتجة أكبر من صفر');
+    }
   }
 
   function approveValleyMfgOrder_(data, user, dbId) {
@@ -9326,11 +10480,22 @@ wcDirty[m['unique_id']] = true;
     var patIdx = headers.findIndex(function (h) { return String(h).trim() === 'production_approval_time'; });
     var qaIdx = headers.findIndex(function (h) { return String(h).trim() === 'quality_approval'; });
     var qatIdx = headers.findIndex(function (h) { return String(h).trim() === 'quality_approval_time'; });
+    var batchIdx = headers.findIndex(function (h) { return String(h).trim() === 'manufacture_batch'; });
+    var actualIdx = headers.findIndex(function (h) { return String(h).trim() === 'actual_qty'; });
     var dataAll = sheet.getDataRange().getValues();
     for (var r = 1; r < dataAll.length; r++) {
       if (String(dataAll[r][uidIdx]).trim() === moUid) {
         var oldObj = {};
         headers.forEach(function (h, hi) { oldObj[String(h).trim()] = dataAll[r][hi]; });
+        /* Approval may auto-lock when the other approval already exists.
+           Validate before writing either approval field so a rejected lock
+           cannot leave a partial approval behind. */
+        var hasProd = kind === 'production' || (paIdx !== -1 && String(dataAll[r][paIdx]).trim() !== '');
+        var hasQual = kind === 'quality' || (qaIdx !== -1 && String(dataAll[r][qaIdx]).trim() !== '');
+        if (hasProd && hasQual) {
+          if (batchIdx === -1 || actualIdx === -1) throw new Error('بنية أمر التصنيع لا تحتوي على رقم التشغيلة والكمية الفعلية');
+          mfgAssertLockRequirements_(dataAll[r][batchIdx], dataAll[r][actualIdx]);
+        }
         /* OPT-4: one contiguous range write per approval pair when the live
            layout keeps the pair adjacent — verified from the headers just
            read, never assumed. Same cells, same values. Otherwise the
@@ -9359,8 +10524,6 @@ wcDirty[m['unique_id']] = true;
           }
         }
         /* auto-lock when both approvals exist */
-        var hasProd = kind === 'production' || (paIdx !== -1 && String(dataAll[r][paIdx]).trim() !== '');
-        var hasQual = kind === 'quality' || (qaIdx !== -1 && String(dataAll[r][qaIdx]).trim() !== '');
         if (hasProd && hasQual && stIdx !== -1) {
           sheet.getRange(r + 1, stIdx + 1).setValue('Locked');
           noteMutation_(sheet);
@@ -9407,11 +10570,17 @@ wcDirty[m['unique_id']] = true;
     var headers = getHeaders_(sheet);
     var uidIdx = headers.findIndex(function (h) { return String(h).trim() === 'unique_id'; });
     var stIdx = headers.findIndex(function (h) { return String(h).trim() === 'mo_status'; });
+    var batchIdx = headers.findIndex(function (h) { return String(h).trim() === 'manufacture_batch'; });
+    var actualIdx = headers.findIndex(function (h) { return String(h).trim() === 'actual_qty'; });
     if (uidIdx === -1 || stIdx === -1) throw new Error('بنية الأمر غير صالحة');
     var dataAll = sheet.getDataRange().getValues();
     var cur = null;
     for (var r = 1; r < dataAll.length; r++) {
       if (String(dataAll[r][uidIdx]).trim() === moUid) {
+        if (kind === 'lock') {
+          if (batchIdx === -1 || actualIdx === -1) throw new Error('بنية أمر التصنيع لا تحتوي على رقم التشغيلة والكمية الفعلية');
+          mfgAssertLockRequirements_(dataAll[r][batchIdx], dataAll[r][actualIdx]);
+        }
         cur = String(dataAll[r][stIdx]).trim();
         /* Status values are displayed/stored as these English labels, but
            legacy sheets can differ only by case/spacing. Canonicalize them
@@ -9457,6 +10626,19 @@ wcDirty[m['unique_id']] = true;
     var _oldMfgSt = getAllRecords_(dbId, MFG_ORDER_SHEET).find(function(r){ return String(r.unique_id)===String(moUid); }) || null;
     var __mfgStVer = checkRowVersion_(_oldMfgSt, data && data.version);
     executeWithLock_(function () {
+      /* Recheck under the same write lock to close the gap between validating
+         the header above and applying the Locked status. */
+      if (next === 'Locked') {
+        var latestRows = sheet.getDataRange().getValues();
+        var foundLatest = false;
+        for (var lr = 1; lr < latestRows.length; lr++) {
+          if (String(latestRows[lr][uidIdx]).trim() !== moUid) continue;
+          foundLatest = true;
+          mfgAssertLockRequirements_(latestRows[lr][batchIdx], latestRows[lr][actualIdx]);
+          break;
+        }
+        if (!foundLatest) throw new Error('أمر التصنيع غير موجود');
+      }
       if (!patchRowByCriteria_(sheet, 'unique_id', moUid, { mo_status: next, version: __mfgStVer + 1 })) throw new Error('أمر التصنيع غير موجود');
     });
     try{ var _newMfgSt = Object.assign({}, _oldMfgSt||{}, { mo_status: next }); logHistory_(dbId, MFG_ORDER_SHEET, _oldMfgSt&&_oldMfgSt.record_uid ? _oldMfgSt.record_uid : ('update_'+MFG_ORDER_SHEET+'_'+moUid), moUid, (user&&user.email)||'', 'update', _newMfgSt, _oldMfgSt) }catch(e){}
@@ -9698,6 +10880,15 @@ wcDirty[m['unique_id']] = true;
     var batchCost = {};
     try { vfCurrentProducts_(dbId).forEach(function (r) { var u = String(r.unique_id || '').trim(); if (u) batchCost[u] = Number(r.unit_cost) || 0; }); } catch (e) {}
 
+    /* output uid -> owned, built ONCE. The legacy loop asked "is this footer's
+     * parent one of my outputs?" with an outputs.forEach INSIDE the
+     * consumption loop — O(consumption rows x outputs) per document load. The
+     * set answers the same question in O(1) per row. Key spelling is kept
+     * exactly: String(o.unique_id) untrimmed, matched against the trimmed
+     * refId, so a padded output uid behaves as it always has. */
+    var outputUidSet = Object.create(null);
+    outputs.forEach(function (o) { outputUidSet[String(o.unique_id)] = true; });
+
     /* load footer (consumption) rows grouped by output product UID */
     var footersByOutput = {};
     var legacyConsumption = [];
@@ -9705,9 +10896,7 @@ wcDirty[m['unique_id']] = true;
       (consumptionRows || []).forEach(function (cm) {
         var refId = String(cm.valley_manufacture_header_product_id || '').trim();
         if (!refId) return;
-        var isForThisMo = false;
-        outputs.forEach(function (o) { if (String(o.unique_id) === refId) isForThisMo = true; });
-        if (isForThisMo) {
+        if (outputUidSet[refId]) {
           if (!footersByOutput[refId]) footersByOutput[refId] = [];
           var _uc = batchCost[String(cm.item || '').trim()] || 0;
           footersByOutput[refId].push({
@@ -9818,6 +11007,7 @@ wcDirty[m['unique_id']] = true;
             item: r.item != null ? r.item : '',
             qty: Number(r.qty || 0),
             transaction_code: r.transaction_code || '',
+            manufacture_internal_batch: r.manufacture_internal_batch || '',
             total_cost: Number(r.total_cost || 0)
           });
         }
@@ -9867,7 +11057,7 @@ wcDirty[m['unique_id']] = true;
       m8['valley_manufacture_header_id'] = moUid;
       m8['item'] = Number(pid) || pid;
       m8['qty'] = qty;
-      m8['transaction_code'] = String(d.batch_code || '').trim();
+      m8['manufacture_internal_batch'] = String(d.manufacture_internal_batch != null ? d.manufacture_internal_batch : (d.batch_code || '')).trim();
       m8['total_cost'] = Number(d.total_cost || 0);
       m8['user'] = (user && user.email) || '';
       m8['created_at'] = new Date();
@@ -9875,7 +11065,7 @@ wcDirty[m['unique_id']] = true;
         var k = String(h).trim();
         return m8[k] !== undefined ? m8[k] : '';
       });
-      /* Phase 8 (F-04): appendRow + 4 writeFormula_ -> one setValues. Already
+      /* Phase 8 (F-04): appendRow + separate writeFormula_ calls -> one setValues. Already
        * inside executeWithLock_, so the precomputed row is safe; the row number
        * is identical to what appendRow produced (getLastRow()+1). */
       var _bpRow = sheet.getLastRow() + 1;
@@ -9888,7 +11078,7 @@ wcDirty[m['unique_id']] = true;
       _savedBP = {
         unique_id: m8['unique_id'], id: m8['id'], valley_manufacture_header_id: moUid,
         item: m8['item'], product_name: _prodNameBP || String(pid),
-        qty: qty, transaction_code: m8['transaction_code'], total_cost: m8['total_cost'],
+        qty: qty, transaction_code: '', manufacture_internal_batch: m8['manufacture_internal_batch'], total_cost: m8['total_cost'],
         user: m8['user'], created_at: m8['created_at']
       };
       try{ logHistory_(dbId, MFG_BYPRODUCT_SHEET, m8.record_uid || ('create_'+MFG_BYPRODUCT_SHEET+'_'+m8['unique_id']), m8['unique_id'], (user&&user.email)||'', 'create', m8, null) }catch(e){}
@@ -10062,13 +11252,106 @@ wcDirty[m['unique_id']] = true;
   }
 
   /** Timing control for work ops: start/pause/resume/stop */
+  /* ─────────── work-centre scheduling conflicts ───────────
+   * Scope is the WORK CENTRE only: two DIFFERENT work centres are independent
+   * and may run in the same time frame, even on the same MO. Within one work
+   * centre, no two operations may be active at once, and no two frames may
+   * overlap. A missing start/end is an open-ended side of the interval;
+   * touching endpoints (end == next start) are NOT an overlap. */
+  function mfgConflictDate_(v) {
+    if (v === undefined || v === null || v === '') return null;
+    var d = (v instanceof Date) ? v : new Date(v);
+    return isNaN(d.getTime()) ? null : d;
+  }
+  function mfgIntervalsOverlap_(aS, aE, bS, bE) {
+    var aStart = aS ? aS.getTime() : null, aEnd = aE ? aE.getTime() : null;
+    var bStart = bS ? bS.getTime() : null, bEnd = bE ? bE.getTime() : null;
+    var beforeOtherEnd = (bEnd === null) || (aStart === null) || (aStart < bEnd);
+    var afterOtherStart = (aEnd === null) || (bStart === null) || (bStart < aEnd);
+    return beforeOtherEnd && afterOtherStart;
+  }
+  function mfgFmtConflictDate_(d) {
+    if (!d) return '';
+    var p = function (n) { return n < 10 ? '0' + n : '' + n; };
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+  }
+  function mfgMoCode_(dbId, moUid) {
+    var uid = String(moUid || '').trim();
+    if (!uid) return '';
+    try {
+      var rows = getAllRecords_(dbId, MFG_ORDER_SHEET);
+      for (var i = 0; i < rows.length; i++) {
+        if (String(rows[i].unique_id || '').trim() === uid) return String(rows[i].transaction_code || '').trim() || uid;
+      }
+    } catch (e) {}
+    return uid;
+  }
+  function mfgWorkCenterLabel_(dbId, wcId) {
+    var id = String(wcId || '').trim();
+    if (!id) return '';
+    try {
+      var rows = getAllRecords_(dbId, WC_SHEET);
+      for (var i = 0; i < rows.length; i++) {
+        var r = rows[i];
+        if (String(r.unique_id || '').trim() === id || String(r.code || '').trim() === id || String(r.id || '').trim() === id) {
+          return String(r.name_ar || r.name_en || r.code || id).trim();
+        }
+      }
+    } catch (e) {}
+    return id;
+  }
+  /** Active + overlap conflicts for ONE work centre; excludes given work-op
+      uids and, optionally, every operation of one MO (the MO being replaced). */
+  function mfgWorkOpConflict_(dbId, workCenterId, startTime, endTime, excludeUids, excludeMoUid) {
+    var wc = String(workCenterId || '').trim();
+    if (!wc) return null;
+    var start = mfgConflictDate_(startTime), end = mfgConflictDate_(endTime);
+    var exclude = {};
+    (Object.prototype.toString.call(excludeUids) === '[object Array]' ? excludeUids : [excludeUids]).forEach(function (u) {
+      var s = String(u || '').trim();
+      if (s) exclude[s] = true;
+    });
+    var excludeMo = String(excludeMoUid || '').trim();
+    var rows = [];
+    try { rows = getAllRecords_(dbId, MFG_WORKOPS_SHEET); } catch (e) { rows = []; }
+    var active = null, overlap = null;
+    rows.forEach(function (r) {
+      var uid = String(r.unique_id || '').trim();
+      if (exclude[uid]) return;
+      var moUid = String(r.valley_manufacture_header_id || '').trim();
+      if (excludeMo && moUid === excludeMo) return;
+      if (String(r.recipe_id == null ? '' : r.recipe_id).trim() !== wc) return;
+      var st = String(r.operation_status || 'Pending').trim();
+      if (!active && (st === 'In Progress' || st === 'Paused')) {
+        active = { uid: uid, moUid: moUid, status: st };
+      }
+      if (!overlap) {
+        var oS = mfgConflictDate_(r.start_time), oE = mfgConflictDate_(r.end_time);
+        if (mfgIntervalsOverlap_(start, end, oS, oE)) overlap = { uid: uid, moUid: moUid, start: oS, end: oE };
+      }
+    });
+    return (active || overlap) ? { active: active, overlap: overlap } : null;
+  }
+  function mfgWorkOpConflictMessage_(dbId, wcId, conflict) {
+    if (!conflict) return '';
+    var label = mfgWorkCenterLabel_(dbId, wcId) || String(wcId || '');
+    if (conflict.active) {
+      return 'لا يمكن بدء العملية: مركز العمل «' + label + '» قيد التشغيل بالفعل في أمر التصنيع ' + (mfgMoCode_(dbId, conflict.active.moUid) || '') + ' — أوقفه أولاً';
+    }
+    if (conflict.overlap) {
+      var o = conflict.overlap;
+      return 'مركز العمل «' + label + '» محجوز في نفس الفترة (' + mfgFmtConflictDate_(o.start) + ' — ' + mfgFmtConflictDate_(o.end) + ') في أمر التصنيع ' + (mfgMoCode_(dbId, o.moUid) || '');
+    }
+    return '';
+  }
+
   function controlValleyMfgWorkOp_(data, user, dbId) {
     var d = data || {};
     var isSuperAdmin = !!(user && user.isSuperAdmin);
     var workopUid = String(d.workop_uid || '').trim();
     if (!workopUid) throw new Error('معرّف العملية مطلوب');
     var cmd = String(d.command || '').trim();
-    if (['start','pause','resume','stop'].indexOf(cmd) === -1) throw new Error('أمر غير صالح');
+    if (['start','pause','resume','stop','set_status'].indexOf(cmd) === -1) throw new Error('أمر غير صالح');
 
     settingsEnsureSheet_(dbId, MFG_WORKOPS_SHEET,
       ['unique_id','id','valley_manufacture_header_id','work_center_sequence','recipe_id','operation_status','start_time','end_time','notes','actual_hours','work_center_cost','total_cost','last_pause_time','total_pause_duration','user','created_at']);
@@ -10136,7 +11419,68 @@ throw new Error('مدة التوقف (' + (Math.round(pauseDur * 100) / 100) + '
 var totalHours = spanHours - pauseDur;
 map['actual_hours'] = Math.round(totalHours * 100) / 100;
 }
-}
+} else if (cmd === 'set_status') {
+  /* Bulk status assignment from the work-ops table. Any target status is
+     accepted (direct assignment); times are only filled when missing so the
+     hours/cost formulas can never go negative. */
+  var target = String(d.status || '').trim();
+  if (['Pending','In Progress','Paused','Done'].indexOf(target) === -1) throw new Error('حالة غير صالحة');
+  map['operation_status'] = target;
+  var startAt = parseDt_(found.row.start_time);
+  var manualStartAt = parseDt_(d.start_time);
+  if (target === 'In Progress' || target === 'Paused') {
+    if (!startAt && !manualStartAt) map['start_time'] = now;
+    else if (manualStartAt) map['start_time'] = manualStartAt;
+    map['last_pause_time'] = target === 'Paused' ? now : '';
+  } else if (target === 'Done') {
+    var endAt = parseDt_(d.end_time) || parseDt_(found.row.end_time) || now;
+    map['end_time'] = endAt;
+    if (curStatus === 'Paused' && lastPause) {
+      pauseDur += (endAt.getTime() - new Date(lastPause).getTime()) / 3600000;
+      map['total_pause_duration'] = Math.round(pauseDur * 100) / 100;
+    }
+    var startForHours = startAt || manualStartAt;
+    if (startForHours) {
+      var spanStatus = (endAt.getTime() - startForHours.getTime()) / 3600000;
+      if (pauseDur > spanStatus + 0.0001) throw new Error('مدة التوقف (' + (Math.round(pauseDur * 100) / 100) + ' ساعة) أكبر من زمن التشغيل (' + (Math.round(spanStatus * 100) / 100) + ' ساعة) — صحّح الأوقات');
+      map['actual_hours'] = Math.round((spanStatus - pauseDur) * 100) / 100;
+      if (!startAt) map['start_time'] = startForHours;
+    }
+  }
+    }
+
+    /* Work-centre scheduling guard: starting (or setting an active status) is
+       refused while the same centre is active elsewhere, and any command that
+       touches the frame is refused when the frame overlaps another operation
+       of that centre. Different centres are independent. */
+    (function assertWorkCenterAvailability_() {
+      var wcId = String(found.row.recipe_id == null ? '' : found.row.recipe_id).trim();
+      if (!wcId) return;
+      var wantsActive = false, effStart = null, effEnd = null;
+      if (cmd === 'start') {
+        wantsActive = true;
+        effStart = parseDt_(d.start_time) || now;
+        effEnd = parseDt_(found.row.end_time);
+      } else if (cmd === 'set_status') {
+        var targetStatus = String(d.status || '').trim();
+        if (targetStatus === 'In Progress' || targetStatus === 'Paused') {
+          wantsActive = true;
+          effStart = parseDt_(d.start_time) || parseDt_(found.row.start_time) || now;
+          effEnd = parseDt_(d.end_time) || parseDt_(found.row.end_time);
+        } else if (targetStatus === 'Done') {
+          effStart = parseDt_(d.start_time) || parseDt_(found.row.start_time);
+          effEnd = parseDt_(d.end_time) || parseDt_(found.row.end_time) || now;
+        }
+      } else if (cmd === 'stop') {
+        effStart = parseDt_(d.start_time) || parseDt_(found.row.start_time);
+        effEnd = parseDt_(d.end_time) || parseDt_(found.row.end_time) || now;
+      }
+      if (!wantsActive && effStart === null && effEnd === null) return;
+      var conflict = mfgWorkOpConflict_(dbId, wcId, effStart, effEnd, [workopUid], '');
+      if (!conflict) return;
+      if (wantsActive && conflict.active) throw new Error(mfgWorkOpConflictMessage_(dbId, wcId, conflict));
+      if (conflict.overlap) throw new Error(mfgWorkOpConflictMessage_(dbId, wcId, conflict));
+    })();
 
     executeWithLock_(function () {
       /* Row-edit repair (5.4): formula-safe patch with a checked result — a
@@ -13104,6 +14448,80 @@ map['actual_hours'] = Math.round(totalHours * 100) / 100;
     return { status: 'success', invoices: sp.rows, total: sp.total };
   }
 
+  /* ── Phase B: non-repairing read contract for the Sales list ──────────────
+   * settingsEnsureSheet_ is a read-path repair: it creates the sheet, or
+   * appends missing headers and invalidates the header cache. The candidate
+   * list path must never do that. This validates the canonical headers and
+   * reports a mismatch instead of repairing it. No write, no noteMutation_, no
+   * header-cache invalidation, no sheet creation. */
+  function vfAssertSalesReadSchema_(dbId) {
+    var sheet;
+    try { sheet = getSheet_(FIN_SALES_INV_SHEET, dbId); }
+    catch (e) {
+      throw new Error('البنية الأساسية ناقصة (الشيت ' + FIN_SALES_INV_SHEET + ' غير موجود) — راجع المسؤول قبل القراءة');
+    }
+    var have = getHeaders_(sheet).map(function (h) { return String(h).trim(); });
+    /* A physically-used but unnamed trailing column is not part of the contract
+       (the manufacturing gate applies the same rule). An interior blank stays a
+       hard error because it can shift positional formulas. */
+    while (have.length && !have[have.length - 1]) have.pop();
+    var missing = FIN_SALES_INV_HEADERS.filter(function (h) { return have.indexOf(h) === -1; });
+    var blanks = [];
+    have.forEach(function (h, i) { if (!h) blanks.push(String(i + 1)); });
+    if (missing.length || blanks.length) {
+      var details = [];
+      if (missing.length) details.push('ناقص: ' + missing.join('، '));
+      if (blanks.length) details.push('عناوين فارغة: ' + blanks.join('، '));
+      throw new Error('البنية الأساسية غير متطابقة (أعمدة ' + FIN_SALES_INV_SHEET + ') — ' +
+        details.join('؛ ') + ' — راجع المسؤول قبل القراءة');
+    }
+    return sheet;
+  }
+
+  /* Phase B candidate: ONE list request. Reads the invoice sheet once through
+   * the immutable read-only snapshot, projects once, then derives the latest
+   * window AND the exact total from that same materialized snapshot. vfPage_ is
+   * reused for both steps so the date-filter rule (including its deliberate
+   * retention of missing/invalid dates) and the global مسلسل numbering stay
+   * byte-identical to the legacy reader.
+   *
+   * Bounded storage reads: the sheet is still read in full here; only the
+   * RESPONSE is bounded. Reducing the read itself is Phase C work and is not
+   * claimed by this change. */
+  function vfSalesWindowLegacy_(data, user, dbId) {
+    var req = data || {};
+    vfAssertSalesReadSchema_(dbId);
+    var rows = getReadOnlyRecords_(dbId, FIN_SALES_INV_SHEET);
+    var slim = rows.map(function (r, i) {
+      return {
+        invoice_unique_id: r.invoice_unique_id,
+        'رقم الفاتورة': r['رقم الفاتورة'],
+        'اسم العميل': r['اسم العميل'],
+        'تاريخ الفاتورة': r['تاريخ الفاتورة'],
+        'المبلغ الصافي': Number(r['المبلغ الصافي']) || 0,
+        'قيمة الضريبة': Number(r['قيمة الضريبة']) || 0,
+        'إجمالي': Number(r['إجمالي']) || 0,
+        tax_system: String(r.tax_system || '').trim().toLowerCase(),
+        approval_status: r.approval_status || 'Pending',
+        'مسلسل': i + 1
+      };
+    });
+    var limit = Number(req.limit);
+    if (!isFinite(limit) || limit <= 0) limit = 100;
+    limit = Math.min(Math.max(Math.floor(limit), 1), 1000);
+    var bounds = { from: req.from, to: req.to };
+    var totalsOnly = vfPage_(slim, { from: bounds.from, to: bounds.to, offset: 0, limit: 0 }, 'تاريخ الفاتورة');
+    var total = totalsOnly.total;
+    var offset = Math.max(0, total - limit);
+    var win = vfPage_(slim, { from: bounds.from, to: bounds.to, offset: offset, limit: limit }, 'تاريخ الفاتورة');
+    return {
+      status: 'success',
+      invoices: win.rows,
+      total: total,
+      window: { offset: offset, limit: limit, total: total }
+    };
+  }
+
   /* ── Admin shadow comparison (DEC-2, plan §3.2 G2 / §7.5) ──────────────────
    * Runs the legacy reader and the fast reader over the SAME payload, projects
    * both through the frozen canonical contract, reports the difference and
@@ -13236,6 +14654,26 @@ map['actual_hours'] = Math.round(totalHours * 100) / 100;
   }
 
   function getValleySalesPage_(data, user, dbId) {
+    var req = data || {};
+    var mode = String(req.mode || req.window || '').trim();
+    if (mode === 'latest_window') {
+      /* Phase B candidate: ONE blocking business RPC. Bootstrap, the latest
+       * window and the exact total are derived from one list snapshot, so the
+       * client no longer needs a count-only precursor or a separate bootstrap
+       * call. The legacy shape below is untouched for existing callers. */
+      const b = getValleySalesBootstrap_(req, user, dbId);
+      const w = vfSalesWindowLegacy_(req, user, dbId);
+      return {
+        status: 'success',
+        parties: b.parties,
+        products: b.products,
+        enums: b.enums,
+        invoices: w.invoices,
+        total: w.total,
+        window: w.window,
+        mode: 'latest_window'
+      };
+    }
     const b = getValleySalesBootstrap_(data, user, dbId);
     const l = getValleySalesList_(data, user, dbId);
     return {
@@ -14272,16 +15710,103 @@ map['actual_hours'] = Math.round(totalHours * 100) / 100;
 
   /* ترتيب الأعمدة على نفس عرف الجداول الحالية: unique_id و id أولاً ثم أعمدة
      العمل ثم user و created_at في النهاية. */
+  /* Additive columns (4.7.1 / 8.1) are APPENDED, never inserted, so a populated
+     production sheet keeps its existing column order and every historical row
+     stays readable. qSopEnsureHeaders_ adds them in place on first use and is
+     idempotent; it never reorders, removes or rewrites a historical row.
+       code_prefix / dept_abbrev — the creation-time mapping snapshot: WHICH
+         prefix and abbreviation produced sop_code. Auditable, and deliberately
+         NOT recomputed from the current mapping (an abbr may be renamed later).
+       create_token — idempotency key for the initial create (8.2/8.3).
+       revision — optimistic-concurrency token for metadata+draft saves.
+       template_meta — versioned template/cover/revision-row snapshot (JSON). */
   const QUALITY_SOP_HEADERS = [
     'unique_id', 'id', 'sop_code', 'title_ar', 'title_en', 'category',
     'applicability_dept', 'applicability_role', 'owner_email',
-    'current_effective_version', 'draft_version', 'user', 'created_at'
+    'current_effective_version', 'draft_version', 'user', 'created_at',
+    'code_prefix', 'dept_abbrev', 'create_token', 'revision', 'template_meta',
+    'owner_name_snapshot'
   ];
   const QUALITY_SOP_VERSION_HEADERS = [
     'unique_id', 'id', 'sop_id', 'version', 'change_type', 'status',
     'content_html', 'change_summary', 'pdf_ref', 'pdf_id', 'pdf_sha256',
     'author_email', 'submitted_at', 'approved_by', 'approved_at',
-    'reject_comment', 'effective_date', 'next_review_date', 'user', 'created_at'
+    'reject_comment', 'effective_date', 'next_review_date', 'user', 'created_at',
+    'template_meta', 'revision'
+  ];
+  /* Fields added after the first release; the additive-header helper adds any
+     of these that a populated sheet is missing. */
+  /* The document body is stored in ordered chunks across sibling columns and
+     re-joined on read, so a long SOP is not capped at one spreadsheet cell.
+     Ten chunks (≈450k characters) is far beyond any realistic SOP while every
+     individual write stays well below the Sheets per-cell ceiling. */
+  const QUALITY_SOP_CONTENT_HEADERS = [
+    'content_html', 'content_html_2', 'content_html_3', 'content_html_4', 'content_html_5',
+    'content_html_6', 'content_html_7', 'content_html_8', 'content_html_9', 'content_html_10'
+  ];
+  const QUALITY_SOP_ADDITIVE_HEADERS = [
+    { sheet: QUALITY_SOP_SHEET, headers: ['code_prefix', 'dept_abbrev', 'create_token', 'revision', 'template_meta', 'owner_name_snapshot'] },
+    { sheet: QUALITY_SOP_VERSIONS_SHEET, headers: ['template_meta', 'revision'].concat(QUALITY_SOP_CONTENT_HEADERS.slice(1)) }
+  ];
+  /* A conservative per-cell ceiling for the Sheets storage path (8.1). The
+     reference point is 45,000 UTF-16 code units; Sheets allows 50,000 per cell.
+     Metadata above this is refused with an actionable Arabic error rather than
+     silently truncated. Content uses the chunk columns instead. */
+  const QUALITY_SOP_CELL_LIMIT = 45000;
+  const QUALITY_SOP_CONTENT_MAX = QUALITY_SOP_CELL_LIMIT * QUALITY_SOP_CONTENT_HEADERS.length;
+  /* Dedicated sheet for the general-quality workspace (4.5). One table, one
+     type discriminator — not a second ERP. */
+  const QUALITY_GEN_SHEET = 'valley_quality_general';
+  const QUALITY_GEN_HEADERS = [
+    'unique_id', 'id', 'record_type', 'title', 'spec_code', 'product_id', 'product_name',
+    'activity_category', 'owner_email', 'record_date', 'due_date', 'body_html',
+    'links_json', 'status', 'revision', 'user', 'created_at'
+  ];
+  const QUALITY_GEN_TYPES = ['product_specification', 'quality_activity'];
+  const QUALITY_GEN_STATUSES = ['Draft', 'Active', 'Archived'];
+  /* Department-abbreviation registry (4.7.1). The mapping is company-owned data,
+     not code: an administrator maintains it from the Quality page. `canonical`
+     is the normalized lookup key, `label` is the real stored/display label, and
+     `abbrev` must be unique per company across DISTINCT canonical departments. */
+  const QUALITY_DEPT_ABBR_SHEET = 'valley_quality_dept_abbr';
+  const QUALITY_DEPT_ABBR_HEADERS = [
+    'unique_id', 'id', 'department', 'canonical', 'abbrev', 'user', 'created_at'
+  ];
+  /* High-water sequence reservation (4.7.1). One row per
+     (company, category prefix, department abbreviation). `next_seq` is the next
+     value to allocate; it is only ever raised, never reset, so a rollback of a
+     rename or the archival of a document can never recycle a code. */
+  const QUALITY_SOP_SEQ_SHEET = 'valley_quality_sop_code_seq';
+  const QUALITY_SOP_SEQ_HEADERS = [
+    'unique_id', 'id', 'company', 'code_prefix', 'dept_abbrev', 'next_seq', 'user', 'created_at'
+  ];
+  /* New documents use <CATEGORY_PREFIX>-<DEPT_ABBR>-<SEQUENCE> (4.7.1). The
+     internal category key stays exactly what it was; only the visible code
+     prefix changes, and نموذج (FRM) is deliberately mapped to APP. */
+  const QUALITY_SOP_CATEGORY_PREFIX = { POL: 'POL', PROC: 'PROC', WI: 'WI', FRM: 'APP', REC: 'REC' };
+  const QUALITY_SOP_ABBR_RE = /^[A-Z][A-Z0-9]{1,11}$/;
+  /* Recommended abbreviation catalog (4.7.1). These are PROPOSED defaults for
+     the setup panel, never silently applied: a mapping only exists once an
+     administrator saves it. Lookup is by normalized label and stays
+     conservative — QC is distinct from QA and HSE from FS. */
+  const QUALITY_DEPT_ABBR_RECOMMENDED = [
+    { label: 'إدارة الصيانة', aliases: ['الصيانة'], abbrev: 'MAINT' },
+    { label: 'إدارة الموارد البشرية', aliases: ['الموارد البشرية'], abbrev: 'HR' },
+    { label: 'إدارة الجودة', aliases: ['الجودة'], abbrev: 'QA' },
+    { label: 'توكيد الجودة', aliases: ['ضمان الجودة'], abbrev: 'QA' },
+    { label: 'مراقبة الجودة', aliases: ['رقابة الجودة'], abbrev: 'QC' },
+    { label: 'الإنتاج', aliases: ['إدارة الإنتاج'], abbrev: 'PROD' },
+    { label: 'المخازن', aliases: ['إدارة المخازن'], abbrev: 'WH' },
+    { label: 'المشتريات', aliases: ['إدارة المشتريات'], abbrev: 'PUR' },
+    { label: 'المبيعات', aliases: ['إدارة المبيعات'], abbrev: 'SALES' },
+    { label: 'الإدارة المالية', aliases: ['المالية', 'الحسابات'], abbrev: 'FIN' },
+    { label: 'البحث والتطوير', aliases: [], abbrev: 'RD' },
+    { label: 'المعمل', aliases: ['المختبر'], abbrev: 'LAB' },
+    { label: 'السلامة والصحة المهنية', aliases: [], abbrev: 'HSE' },
+    { label: 'سلامة الغذاء', aliases: [], abbrev: 'FS' },
+    { label: 'تكنولوجيا المعلومات', aliases: ['تقنية المعلومات'], abbrev: 'IT' },
+    { label: 'الإدارة العامة', aliases: [], abbrev: 'MGMT' },
+    { label: 'اللوجستيات', aliases: ['النقل والتوزيع'], abbrev: 'LOG' }
   ];
   const QUALITY_SOP_EVENT_HEADERS = [
     'unique_id', 'id', 'sop_id', 'version', 'event_type', 'from_status',
@@ -14298,7 +15823,22 @@ map['actual_hours'] = Math.round(totalHours * 100) / 100;
     'user', 'created_at'
   ];
 
+  /* The SOP classification, by DOCUMENT LEVEL — deliberately NOT the
+     departments again: الإدارة المعنية is a separate, department-scoped field.
+     The codes keep the SOP-<CAT>-NNN document-number shape. */
   const QUALITY_SOP_CATEGORIES = [
+    { code: 'POL', label: 'سياسة' },
+    { code: 'PROC', label: 'إجراء' },
+    { code: 'WI', label: 'تعليمات عمل' },
+    { code: 'FRM', label: 'نموذج' },
+    { code: 'REC', label: 'سجل' }
+  ];
+
+  /* The pre-existing codes. They are no longer offered for a NEW SOP, but they
+     stay resolvable for display and an existing row may keep its unchanged
+     category when it is edited — no SOP code is renumbered and no in-flight
+     draft is blocked by the taxonomy change. */
+  const QUALITY_SOP_LEGACY_CATEGORIES = [
     { code: 'GEN', label: 'عام' },
     { code: 'QC', label: 'الجودة' },
     { code: 'PROD', label: 'الإنتاج' },
@@ -14314,6 +15854,20 @@ map['actual_hours'] = Math.round(totalHours * 100) / 100;
   const QUALITY_SOP_EVENT_TYPES = ['Created', 'Edited', 'Submitted', 'Approved', 'Rejected', 'Made Effective', 'Obsolete', 'New Version', 'Acks Launched', 'Form Added', 'Form Removed'];
   const QUALITY_SOP_CHANGE_TYPES = ['Major', 'Minor'];
   const QUALITY_SOP_FORM_TYPES = ['Doc', 'Sheet', 'Form', 'PDF', 'ERP page'];
+  /* الدور المعني catalog (4.7.2). A validated enum, owned by the server and
+     stored in the existing applicability_role column. `__ALL_DEPT__` is the
+     reserved machine value behind `جميع العاملين بالإدارة`; it is never
+     compared literally against an employee title. Stored values remain plain
+     exact job-title text so existing acknowledgement matching is unaffected. */
+  const QUALITY_SOP_ALL_DEPT = '__ALL_DEPT__';
+  const QUALITY_SOP_ROLE_LABEL_ALL_DEPT = 'جميع العاملين بالإدارة';
+  const QUALITY_SOP_ROLES_RECOMMENDED = [
+    'مدير المصنع', 'مدير الإدارة', 'رئيس القسم', 'مشرف الوردية', 'مشرف الإنتاج',
+    'مهندس إنتاج', 'مشغل خط إنتاج', 'عامل إنتاج', 'مدير الجودة',
+    'أخصائي توكيد الجودة', 'مراقب جودة', 'فني معمل', 'مسؤول سلامة الغذاء',
+    'مهندس صيانة', 'فني صيانة', 'أمين مخزن', 'أخصائي مشتريات',
+    'أخصائي موارد بشرية', 'محاسب', 'مسؤول السلامة والصحة المهنية', 'موظف إداري'
+  ];
 
   // ---- helpers ----
   function qSopActor_(user) { return String((user && user.email) || '').trim(); }
@@ -14322,7 +15876,69 @@ map['actual_hours'] = Math.round(totalHours * 100) / 100;
     for (var i = 0; i < QUALITY_SOP_CATEGORIES.length; i++) {
       if (QUALITY_SOP_CATEGORIES[i].code === code) return QUALITY_SOP_CATEGORIES[i].label;
     }
+    for (var j = 0; j < QUALITY_SOP_LEGACY_CATEGORIES.length; j++) {
+      if (QUALITY_SOP_LEGACY_CATEGORIES[j].code === code) return QUALITY_SOP_LEGACY_CATEGORIES[j].label;
+    }
     return '';
+  }
+
+  /* A NEW SOP must use the current classification; an existing row may keep the
+     legacy code it already carries, unchanged, so the taxonomy change cannot
+     strand a draft. */
+  function qSopCategoryAccepted_(code, existingCategory) {
+    for (var i = 0; i < QUALITY_SOP_CATEGORIES.length; i++) {
+      if (QUALITY_SOP_CATEGORIES[i].code === code) return true;
+    }
+    return !!code && String(existingCategory || '').trim().toUpperCase() === code;
+  }
+
+  /* الإدارة المعنية options come from valley_dept_section_index.department —
+     shown and stored as that value. The reader tolerates the header spelling
+     and falls back to `section` so the picker is never empty because of a
+     renamed column; an empty list is a valid answer (the page then falls back
+     to a free-text field and the server accepts the value as-is). */
+  function qSopDeptOptions_(dbId) {
+    var options = [], labels = {};
+    try {
+      getAllRecords_(dbId, 'valley_dept_section_index').forEach(function (r) {
+        var v = String(
+          r['department'] != null ? r['department'] :
+          (r['Department'] != null ? r['Department'] :
+          (r['الإدارة'] != null ? r['الإدارة'] :
+          (r['section'] != null ? r['section'] :
+          (r['Section'] != null ? r['Section'] : ''))))
+        ).trim();
+        if (!v || labels[v]) return;
+        labels[v] = true;
+        options.push({ value: v, label: v });
+      });
+    } catch (e) {}
+    options.sort(function (a, b) { return String(a.label).localeCompare(String(b.label), 'ar'); });
+    return { options: options, labels: labels };
+  }
+
+  /* المالك options: ERP_Users associated with THIS company, active only. The
+     directory is the same generation-cached map every page already uses, and
+     the typeof guard keeps the handler usable in an isolated harness. */
+  function qSopOwnerOptions_() {
+    var options = [], labels = {};
+    try {
+      if (typeof userDirectory_ !== 'function') return { options: options, labels: labels };
+      var dir = userDirectory_();
+      Object.keys(dir).forEach(function (em) {
+        var u = dir[em] || {};
+        if (String(u.company || '').trim() !== COMPANY_UID) return;
+        var st = String(u.status == null ? '' : u.status).trim().toLowerCase();
+        if (st && st !== 'active') return;
+        var email = String(em || '').trim().toLowerCase();
+        if (!email || labels[email]) return;
+        labels[email] = true;
+        var name = String(u.name || '').trim();
+        options.push({ value: email, label: name ? (name + ' — ' + email) : email });
+      });
+    } catch (e) {}
+    options.sort(function (a, b) { return String(a.label).localeCompare(String(b.label), 'ar'); });
+    return { options: options, labels: labels };
   }
 
   function qSopFindByUid_(rows, uid) {
@@ -14387,10 +16003,20 @@ map['actual_hours'] = Math.round(totalHours * 100) / 100;
     var sopCode = String((sopRow && sopRow.sop_code) || '').trim();
     var titleAr = String((sopRow && sopRow.title_ar) || '').trim();
     var version = Number(versionRow && versionRow.version) || 0;
-    var contentHtml = String((versionRow && versionRow.content_html) || '');
-    var html = '<!doctype html><html dir="rtl" lang="ar"><head><meta charset="utf-8"><title>' +
-      sopCode + ' v' + version + '</title><style>body{font-family:Cairo,Arial,sans-serif;font-size:14px;line-height:1.9;padding:24px;direction:rtl}h1,h2{color:#0f5132}table{border-collapse:collapse}td,th{border:1px solid #999;padding:6px}</style></head><body>' +
-      contentHtml + '</body></html>';
+    /* The frozen artifact is built from the STORED snapshot and re-sanitized on
+       the way out, so an unsafe fragment that predates the allowlist cannot
+       reach the exported document either. Legacy rows render exactly as they
+       always did, inside the same frame. */
+    var contentHtml = qSopSanitizeHtml_(qSopContentOf_(versionRow));
+    var brand = { companyName: 'Valley Foods', logoUrl: '' };
+    try {
+      if (typeof getCompanyLogoUrl_ === 'function') brand.logoUrl = String(getCompanyLogoUrl_(COMPANY_UID) || '');
+    } catch (eLogo) { brand.logoUrl = ''; }
+    try {
+      var cfgName = (typeof getCompanySetting_ === 'function') ? getCompanySetting_(COMPANY_UID, 'company_name_ar') : '';
+      if (cfgName) brand.companyName = String(cfgName);
+    } catch (eName) {}
+    var html = qSopRenderControlledDocHtml_(sopRow, versionRow, { brand: brand });
     var docId = '';
     try {
       var folderId = ensureDriveFolderId_('valley_quality_sop_versions_Files_');
@@ -14419,91 +16045,1500 @@ map['actual_hours'] = Math.round(totalHours * 100) / 100;
     }
   }
 
-  // ---- 1) قراءة الصفحة كاملة ----
-  function getQualitySops_(data, user, dbId) {
+  /* ═══════════ QUALITY SOP — schema, code, roles, owners, safety ═══════════
+   * Everything below is deliberate and self-contained so the offline harness
+   * can execute it unchanged. It assumes no browser DOM, no Node package and
+   * no Google service beyond the helpers Code.js already exposes.
+   */
+
+  /**
+   * Additive, idempotent header upgrade (8.1).
+   *
+   * `ensureSheet_` only writes a header row when it CREATES the sheet, so a
+   * populated production sheet would silently drop every new field: addRecord_
+   * drops keys the header row does not name. This appends the missing headers
+   * to the RIGHT of the last column — it never inserts, reorders or removes a
+   * column and never touches a data row, so repeated runs and populated legacy
+   * sheets are both safe. Returns the list of headers it actually added.
+   */
+  function qSopEnsureHeaders_(dbId, sheetName, allHeaders) {
+    var sheet = ensureSheet_(dbId, sheetName, allHeaders);
+    var added = [];
+    try {
+      var lastCol = sheet.getLastColumn ? sheet.getLastColumn() : 0;
+      var current = lastCol > 0 ? sheet.getRange(1, 1, 1, lastCol).getValues()[0].map(function (h) { return String(h).trim(); }) : [];
+      if (!current.length) return added;
+      var have = {};
+      current.forEach(function (h) { if (h) have[h.toLowerCase()] = true; });
+      var missing = [];
+      (allHeaders || []).forEach(function (h) {
+        if (h && !have[String(h).toLowerCase()]) missing.push(h);
+      });
+      if (!missing.length) return added;
+      sheet.getRange(1, current.length + 1, 1, missing.length).setValues([missing]);
+      if (typeof noteMutation_ === 'function') { try { noteMutation_(); } catch (eNote) {} }
+      /* getHeaders_ caches per sheet id; without this the new columns are
+         invisible to addRecord_/patchRowByCriteria_ for the rest of the run. */
+      try {
+        if (sheet.getParent && sheet.getSheetId && typeof _headerCache_ === 'object' && _headerCache_) {
+          delete _headerCache_[sheet.getParent().getId() + '_' + sheet.getSheetId()];
+        }
+      } catch (eBust) {}
+      added = missing;
+    } catch (e) {
+      /* A header read/write failure must not be silently treated as success. */
+      throw vfNotApplied_('تعذر تجهيز أعمدة وحدة الوثائق؛ لم يتم الحفظ');
+    }
+    return added;
+  }
+
+  /** Runs every additive upgrade for this module. Safe to call on every load.
+      A sheet that does not exist yet is created with its FULL header list, and
+      only then are the post-release columns appended, so a brand-new workbook
+      and a populated one converge on the same layout. */
+  function qSopEnsureSchema_(dbId) {
     ensureSheet_(dbId, QUALITY_SOP_SHEET, QUALITY_SOP_HEADERS);
     ensureSheet_(dbId, QUALITY_SOP_VERSIONS_SHEET, QUALITY_SOP_VERSION_HEADERS);
     ensureSheet_(dbId, QUALITY_SOP_FORMS_SHEET, QUALITY_SOP_FORM_HEADERS);
     ensureSheet_(dbId, QUALITY_SOP_EVENTS_SHEET, QUALITY_SOP_EVENT_HEADERS);
     ensureSheet_(dbId, QUALITY_SOP_ACKS_SHEET, QUALITY_SOP_ACK_HEADERS);
+    ensureSheet_(dbId, QUALITY_DEPT_ABBR_SHEET, QUALITY_DEPT_ABBR_HEADERS);
+    ensureSheet_(dbId, QUALITY_SOP_SEQ_SHEET, QUALITY_SOP_SEQ_HEADERS);
+    ensureSheet_(dbId, QUALITY_GEN_SHEET, QUALITY_GEN_HEADERS);
+    QUALITY_SOP_ADDITIVE_HEADERS.forEach(function (entry) {
+      qSopEnsureHeaders_(dbId, entry.sheet, entry.headers);
+    });
+  }
+
+  /* ─────────── normalized department lookup (4.7.1) ───────────
+   * Deliberately conservative: whitespace, optional leading إدارة/الإدارة,
+   * tatweel and zero-width marks are ignored for LOOKUP ONLY. Alef forms, ة/ه
+   * and ى/ي are NOT collapsed, because doing so can merge genuinely distinct
+   * organizational units. Anything beyond this needs an explicit admin mapping.
+   */
+  function qSopNormDept_(v) {
+    var s = String(v == null ? '' : v);
+    s = s.replace(/[\u0640\u200B-\u200F\uFEFF]/g, '');
+    s = s.replace(/\s+/g, ' ').trim();
+    s = s.replace(/^(الإدارة|الادارة|إدارة|ادارة)\s+/,'');
+    return s.toLowerCase();
+  }
+
+  function qSopDeptAbbrRows_(dbId) {
+    return safeRows_(dbId, QUALITY_DEPT_ABBR_SHEET).map(function (r) {
+      return {
+        unique_id: String(r.unique_id || ''),
+        id: r.id,
+        department: String(r.department || '').trim(),
+        canonical: String(r.canonical || '').trim() || qSopNormDept_(r.department),
+        abbrev: String(r.abbrev || '').trim().toUpperCase()
+      };
+    });
+  }
+
+  /* Recommended starting points for departments that have no explicit admin
+     mapping yet. They are shown in the setup panel only; nothing is allocated
+     from a recommendation. */
+  function qSopDeptAbbrRecommended_(dbId) {
+    var deptRefs = qSopDeptOptions_(dbId);
+    var real = {};
+    deptRefs.options.forEach(function (o) { real[o.value] = qSopNormDept_(o.value); });
+    var configured = {};
+    qSopDeptAbbrRows_(dbId).forEach(function (r) {
+      configured[r.canonical] = true;
+      configured[qSopNormDept_(r.department)] = true;
+    });
+    var out = [];
+    QUALITY_DEPT_ABBR_RECOMMENDED.forEach(function (rec) {
+      var names = [rec.label].concat(rec.aliases || []);
+      var matched = null;
+      for (var i = 0; i < names.length; i++) {
+        var norm = qSopNormDept_(names[i]);
+        if (matched) break;
+        if (real[norm] !== undefined) matched = norm;
+        else {
+          /* accept a real department whose normalized label equals the alias */
+          Object.keys(real).forEach(function (k) { if (!matched && real[k] === norm) matched = real[k]; });
+        }
+      }
+      out.push({
+        label: rec.label,
+        abbrev: rec.abbrev,
+        present: !!matched,
+        configured: !!(matched && configured[matched])
+      });
+    });
+    return out;
+  }
+
+  /**
+   * Resolves the abbreviation for a department label. Returns null when there
+   * is no explicit, unambiguous mapping — the caller must refuse NEW code
+   * allocation rather than invent one.
+   */
+  function qSopResolveAbbrev_(dbId, deptLabel) {
+    var norm = qSopNormDept_(deptLabel);
+    if (!norm) return null;
+    var rows = qSopDeptAbbrRows_(dbId);
+    var hits = rows.filter(function (r) {
+      return r.canonical === norm || qSopNormDept_(r.department) === norm;
+    });
+    if (!hits.length) return null;
+    var abbrs = {};
+    hits.forEach(function (r) { if (r.abbrev) abbrs[r.abbrev] = true; });
+    var keys = Object.keys(abbrs);
+    /* Two different abbreviations for the same canonical department is an
+       ambiguous configuration: refusing is the only safe answer. */
+    if (keys.length !== 1) return null;
+    var abbr = keys[0];
+    if (!QUALITY_SOP_ABBR_RE.test(abbr)) return null;
+    return { abbrev: abbr, canonical: hits[0].canonical };
+  }
+
+  /* ─────────── automatic department abbreviations (never block a save) ───────
+   * When a department has no explicit mapping the server derives one from the
+   * recommendation table, then from a compact Arabic→Latin transliteration,
+   * persists it as a normal registry row, and allocates the code. The row is
+   * the SAME one an admin edits in «اختصارات الإدارات», so editing stays the
+   * supported override and creation never fails for a missing abbreviation.
+   */
+  const QSOP_AR_LAT = {
+    'ا': 'A', 'أ': 'A', 'إ': 'A', 'آ': 'A', 'ب': 'B', 'ت': 'T', 'ث': 'TH', 'ج': 'J',
+    'ح': 'H', 'خ': 'KH', 'د': 'D', 'ذ': 'DH', 'ر': 'R', 'ز': 'Z', 'س': 'S', 'ش': 'SH',
+    'ص': 'S', 'ض': 'D', 'ط': 'T', 'ظ': 'Z', 'ع': 'A', 'غ': 'GH', 'ف': 'F', 'ق': 'Q',
+    'ك': 'K', 'ل': 'L', 'م': 'M', 'ن': 'N', 'ه': 'H', 'و': 'W', 'ي': 'Y', 'ى': 'Y',
+    'ة': 'H', 'ء': '', 'ئ': 'Y', 'ؤ': 'W'
+  };
+
+  function qSopAbbrFromDept_(deptLabel) {
+    var norm = qSopNormDept_(deptLabel);
+    var latin = '';
+    for (var i = 0; i < norm.length; i++) {
+      var ch = norm.charAt(i);
+      if (QSOP_AR_LAT[ch] !== undefined) latin += QSOP_AR_LAT[ch];
+      else if (/[a-z0-9]/i.test(ch)) latin += ch.toUpperCase();
+      else latin += '|';
+    }
+    var words = latin.split('|').filter(function (w) { return !!w; });
+    if (!words.length) return '';
+    var initials = words.map(function (w) { return w.charAt(0); }).join('');
+    var out = initials.length >= 2 ? initials : words.join('');
+    return out.slice(0, 4);
+  }
+
+  /** Picks a stable, unique abbreviation value for a department label. */
+  function qSopAutoAbbrevValue_(deptLabel, rows, skipUid) {
+    var norm = qSopNormDept_(deptLabel);
+    var base = '';
+    QUALITY_DEPT_ABBR_RECOMMENDED.forEach(function (rec) {
+      if (base) return;
+      var names = [rec.label].concat(rec.aliases || []);
+      for (var i = 0; i < names.length; i++) {
+        if (qSopNormDept_(names[i]) === norm) { base = rec.abbrev; return; }
+      }
+    });
+    if (!base) base = qSopAbbrFromDept_(deptLabel);
+    base = String(base || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+    if (!base) base = 'DEPT';
+    if (!/^[A-Z]/.test(base)) base = 'D' + base;
+    if (base.length < 2) base += 'X';
+    base = base.slice(0, 12);
+    var taken = {};
+    (rows || []).forEach(function (r) {
+      if (skipUid && String(r.unique_id) === String(skipUid)) return;
+      var a = String(r.abbrev || '').trim().toUpperCase();
+      if (a) taken[a] = true;
+    });
+    var abbr = base, n = 1;
+    while (taken[abbr] || !QUALITY_SOP_ABBR_RE.test(abbr)) {
+      n++;
+      if (n > 9999) return '';
+      abbr = base.slice(0, 12 - String(n).length) + String(n);
+    }
+    return abbr;
+  }
+
+  /** Creates (or repairs) the registry row for a department and returns it. */
+  function qSopAutoCreateAbbrev_(dbId, deptLabel, actor) {
+    var label = String(deptLabel || '').trim();
+    if (!label) vfNotApplied_('الإدارة المعنية مطلوبة');
+    var canonical = qSopNormDept_(label);
+    ensureSheet_(dbId, QUALITY_DEPT_ABBR_SHEET, QUALITY_DEPT_ABBR_HEADERS);
+    var rows = qSopDeptAbbrRows_(dbId);
+    var mine = rows.filter(function (r) {
+      return r.canonical === canonical || qSopNormDept_(r.department) === canonical;
+    });
+    if (mine.length === 1 && QUALITY_SOP_ABBR_RE.test(mine[0].abbrev)) {
+      return { abbrev: mine[0].abbrev, canonical: mine[0].canonical || canonical };
+    }
+    /* An ambiguous configuration (several rows for one department) must not
+       block a save either: use the first well-formed mapping instead of
+       rewriting the admin's rows. */
+    var firstValid = mine.filter(function (r) { return QUALITY_SOP_ABBR_RE.test(r.abbrev); })[0];
+    if (firstValid) return { abbrev: firstValid.abbrev, canonical: firstValid.canonical || canonical };
+    var existingUid = mine.length ? mine[0].unique_id : '';
+    var abbr = qSopAutoAbbrevValue_(label, rows, existingUid);
+    if (!abbr) vfNotApplied_('تعذر توليد اختصار لهذه الإدارة؛ اضبطه من إعداد اختصارات الإدارات');
+    if (mine.length) {
+      if (!patchRowByCriteria_(getSheet_(QUALITY_DEPT_ABBR_SHEET, dbId), 'unique_id', existingUid, { abbrev: abbr, canonical: canonical })) {
+        vfNotApplied_('تعذر تحديث اختصار الإدارة');
+      }
+      return { abbrev: abbr, canonical: canonical };
+    }
+    var map = { department: label, canonical: canonical, abbrev: abbr };
+    qSopStamp_(map, actor || '');
+    addRecord_(dbId, QUALITY_DEPT_ABBR_SHEET, map, ['department', 'abbrev']);
+    return { abbrev: abbr, canonical: canonical };
+  }
+
+  /** Recommended/derived abbreviation per real department, for the code preview. */
+  function qSopDeptAbbrAutoMap_(dbId) {
+    var refs = qSopDeptOptions_(dbId);
+    var configured = {};
+    qSopDeptAbbrRows_(dbId).forEach(function (r) {
+      configured[r.canonical] = true;
+      configured[qSopNormDept_(r.department)] = true;
+    });
+    var out = {};
+    refs.options.forEach(function (o) {
+      var n = qSopNormDept_(o.value);
+      if (!n || configured[n] || out[o.value]) return;
+      var hit = '';
+      QUALITY_DEPT_ABBR_RECOMMENDED.forEach(function (rec) {
+        if (hit) return;
+        var names = [rec.label].concat(rec.aliases || []);
+        for (var i = 0; i < names.length; i++) {
+          if (qSopNormDept_(names[i]) === n) { hit = rec.abbrev; return; }
+        }
+      });
+      out[o.value] = hit || qSopAbbrFromDept_(o.value);
+    });
+    return out;
+  }
+
+  /** Resolves a canonical key for a chosen label, using explicit mappings only. */
+  function qSopCanonicalKey_(dbId, deptLabel) {
+    var hit = qSopResolveAbbrev_(dbId, deptLabel);
+    if (hit) return hit.canonical;
+    return '';
+  }
+
+  /* ─────────── role catalog (4.7.2) ───────────
+   * Recommended values plus the ACTUAL distinct job titles in this company's
+   * employee data. Only company-scoped titles and their counts cross the wire;
+   * no employee identity leaves the server.
+   */
+  function qSopActualTitles_(dbId) {
+    var counts = {};
+    try {
+      safeRows_(dbId, QUALITY_EMP_INFO_SHEET).forEach(function (e) {
+        var t = String(e.title == null ? '' : e.title).trim();
+        if (!t) return;
+        counts[t] = (counts[t] || 0) + 1;
+      });
+    } catch (e) {}
+    var out = Object.keys(counts).map(function (t) { return { value: t, count: counts[t] }; });
+    out.sort(function (a, b) { return String(a.value).localeCompare(String(b.value), 'ar'); });
+    return out;
+  }
+
+  function qSopRoleLabel_(value) {
+    if (String(value || '') === QUALITY_SOP_ALL_DEPT) return QUALITY_SOP_ROLE_LABEL_ALL_DEPT;
+    return String(value || '');
+  }
+
+  function qSopRoleCatalog_(dbId) {
+    var titles = qSopActualTitles_(dbId);
+    var byTitle = {};
+    titles.forEach(function (t) { byTitle[t.value] = t.count; });
+    var recommended = QUALITY_SOP_ROLES_RECOMMENDED.map(function (label) {
+      return { value: label, label: label, employees: byTitle[label] || 0 };
+    });
     return {
-      status: 'success',
-      sops: safeRows_(dbId, QUALITY_SOP_SHEET),
-      versions: safeRows_(dbId, QUALITY_SOP_VERSIONS_SHEET),
-      forms: safeRows_(dbId, QUALITY_SOP_FORMS_SHEET),
-      events: safeRows_(dbId, QUALITY_SOP_EVENTS_SHEET),
-      acks: safeRows_(dbId, QUALITY_SOP_ACKS_SHEET),
-      categories: QUALITY_SOP_CATEGORIES
+      all_dept_value: QUALITY_SOP_ALL_DEPT,
+      all_dept_label: QUALITY_SOP_ROLE_LABEL_ALL_DEPT,
+      recommended: recommended,
+      titles: titles
     };
   }
 
-  // ---- 2) إنشاء/تعديل بيانات الإجراء ----
-  function saveQualitySop_(data, user, dbId) {
+  /** Server-side validation: the catalog plus the company's real titles. */
+  function qSopRoleAccepted_(dbId, role) {
+    var r = String(role || '').trim();
+    if (!r) return false;
+    if (r === QUALITY_SOP_ALL_DEPT) return true;
+    if (QUALITY_SOP_ROLES_RECOMMENDED.indexOf(r) !== -1) return true;
+    return qSopActualTitles_(dbId).some(function (t) { return t.value === r; });
+  }
+
+  /** Config write for the abbreviation registry — `full` access only. */
+  function saveQualityDeptAbbr_(data, user, dbId) {
     var d = data || {};
-    var uid = String(d.unique_id || '').trim();
-    var titleAr = String(d.title_ar || '').trim();
+    var remove = d.remove === true || String(d.remove).toLowerCase() === 'true';
+    var actor = qSopActor_(user);
+    qSopEnsureHeaders_(dbId, QUALITY_DEPT_ABBR_SHEET, QUALITY_DEPT_ABBR_HEADERS);
+    var result;
+    executeWithLock_(function () {
+      var sheet = getSheet_(QUALITY_DEPT_ABBR_SHEET, dbId);
+      var rows = safeRows_(dbId, QUALITY_DEPT_ABBR_SHEET);
+      var uid = String(d.unique_id || '').trim();
+      var existing = uid ? qSopFindByUid_(rows, uid) : null;
+      if (remove) {
+        if (!existing) vfNotApplied_('الاختصار غير موجود');
+        if (!deleteRowsByCriteria_(sheet, 'unique_id', uid)) vfNotApplied_('الاختصار غير موجود');
+        result = { status: 'success', unique_id: uid, removed: true };
+        return;
+      }
+      var label = String(d.department || '').trim();
+      if (!label) vfNotApplied_('الإدارة مطلوبة');
+      var abbrev = String(d.abbrev || '').trim().toUpperCase();
+      if (!QUALITY_SOP_ABBR_RE.test(abbrev)) vfNotApplied_('صيغة الاختصار غير صالحة (حرف كبير ثم حروف/أرقام، من 2 إلى 12)');
+      var canonical = String(d.canonical || '').trim() || qSopNormDept_(label);
+      if (!canonical) vfNotApplied_('تعذر تكوين مفتاح الإدارة');
+      /* One abbreviation per distinct canonical department inside the company,
+         and one canonical department cannot carry two abbreviations. */
+      var clash = rows.filter(function (r) {
+        if (existing && String(r.unique_id) === uid) return false;
+        var rCanon = String(r.canonical || '').trim() || qSopNormDept_(r.department);
+        var rAbbr = String(r.abbrev || '').trim().toUpperCase();
+        if (rCanon === canonical && rAbbr !== abbrev) return true;
+        return false;
+      });
+      if (clash.length) vfNotApplied_('هذه الإدارة مرتبطة باختصار آخر؛ عدّل السجل الموجود بدلاً من إضافة اختصار ثانٍ');
+      var sameAbbrElsewhere = rows.filter(function (r) {
+        if (existing && String(r.unique_id) === uid) return false;
+        var rCanon = String(r.canonical || '').trim() || qSopNormDept_(r.department);
+        return String(r.abbrev || '').trim().toUpperCase() === abbrev && rCanon !== canonical;
+      });
+      if (sameAbbrElsewhere.length) vfNotApplied_('الاختصار مستخدم بالفعل لإدارة أخرى');
+      var map = { department: label, canonical: canonical, abbrev: abbrev };
+      if (existing) {
+        if (!patchRowByCriteria_(sheet, 'unique_id', uid, map)) vfNotApplied_('الاختصار غير موجود');
+        result = { status: 'success', unique_id: uid };
+        return;
+      }
+      qSopStamp_(map, actor);
+      addRecord_(dbId, QUALITY_DEPT_ABBR_SHEET, map, ['department', 'abbrev']);
+      result = { status: 'success', unique_id: map.unique_id };
+    });
+    return result;
+  }
+
+  /**
+   * Sequence allocation (4.7.1). MUST run inside the caller's lock.
+   *
+   * The counter is a persisted high-water row per (company, prefix, abbrev).
+   * It is seeded from the maximum suffix already present in the company's SOP
+   * codes AND from the row's own previous value, then only ever raised — so a
+   * mapping rename or an archived document can never recycle a code, and gaps
+   * left by failed reservations are acceptable rather than reused.
+   *
+   * Formatting pads to at least three digits and never slices: 999 rolls to
+   * 1000 rather than back to 000.
+   */
+  function qSopAllocateCode_(dbId, category, deptLabel, sopRows, actor) {
+    var prefix = QUALITY_SOP_CATEGORY_PREFIX[String(category || '').trim().toUpperCase()];
+    if (!prefix) vfNotApplied_('تصنيف الإجراء غير صالح');
+    var resolved = qSopResolveAbbrev_(dbId, deptLabel);
+    if (!resolved) resolved = qSopAutoCreateAbbrev_(dbId, deptLabel, actor);
+    var abbr = resolved.abbrev;
+    var seqSheet = getSheet_(QUALITY_SOP_SEQ_SHEET, dbId);
+    var seqRows = safeRows_(dbId, QUALITY_SOP_SEQ_SHEET);
+    var codeHead = prefix + '-' + abbr + '-';
+    var row = null;
+    for (var i = 0; i < seqRows.length; i++) {
+      var r = seqRows[i];
+      if (String(r.company || '').trim() !== COMPANY_UID) continue;
+      if (String(r.code_prefix || '').trim().toUpperCase() !== prefix) continue;
+      if (String(r.dept_abbrev || '').trim().toUpperCase() !== abbr) continue;
+      row = r;
+      break;
+    }
+    var fromCounter = row ? (Number(row.next_seq) || 0) : 0;
+    var fromCodes = 0;
+    var used = {};
+    (sopRows || []).forEach(function (s) {
+      var code = String(s.sop_code || '').trim();
+      if (!code) return;
+      used[code] = true;
+      if (code.slice(0, codeHead.length).toUpperCase() !== codeHead.toUpperCase()) return;
+      var suffix = code.slice(codeHead.length);
+      if (!/^\d+$/.test(suffix)) return;
+      var n = Number(suffix) || 0;
+      if (n > fromCodes) fromCodes = n;
+    });
+    /* `next_seq` already IS "the next value to hand out"; the scanned suffix is
+       the last value USED. Taking the max of the two, rather than adding one to
+       each, is what makes the persisted counter authoritative and keeps the
+       allocation gap-safe across a failed reservation. */
+    var next = Math.max(fromCounter, fromCodes + 1);
+    if (next < 1) next = 1;
+    var code = '';
+    for (var guard = 0; guard < 100000; guard++) {
+      var pad = String(next);
+      while (pad.length < 3) pad = '0' + pad;
+      code = codeHead + pad;
+      if (!used[code] && !settingsUniqueViolation_(sopRows || [], 'sop_code', code)) break;
+      code = '';
+      next++;
+    }
+    if (!code) vfNotApplied_('تعذر تخصيص كود فريد؛ حاول مرة أخرى');
+    var nextVal = next + 1;
+    if (row) {
+      if (!patchRowByCriteria_(seqSheet, 'unique_id', String(row.unique_id), { next_seq: nextVal })) {
+        vfNotApplied_('تعذر تحديث عدّاد الأكواد');
+      }
+    } else {
+      var seqMap = {
+        company: COMPANY_UID,
+        code_prefix: prefix,
+        dept_abbrev: abbr,
+        next_seq: nextVal
+      };
+      qSopStamp_(seqMap, 'system');
+      addRecord_(dbId, QUALITY_SOP_SEQ_SHEET, seqMap, ['company', 'code_prefix', 'dept_abbrev', 'next_seq']);
+    }
+    return { code: code, code_prefix: prefix, dept_abbrev: abbr, seq: next };
+  }
+
+  /* ─────────── owner display names (4.7.3) ───────────
+   * Email stays the identity key; the NAME is a display value resolved in ONE
+   * company-scoped batch. Historical owners are resolved including inactive
+   * users so a name is never lost merely because someone left.
+   */
+  const QUALITY_OWNER_UNAVAILABLE = 'مستخدم غير متاح';
+  const QUALITY_OWNER_NO_NAME = 'اسم المستخدم غير مسجل';
+
+  function qSopOwnerNameMap_() {
+    var out = {};
+    try {
+      if (typeof userDirectory_ !== 'function') return out;
+      var dir = userDirectory_() || {};
+      Object.keys(dir).forEach(function (em) {
+        var u = dir[em] || {};
+        if (String(u.company || '').trim() !== COMPANY_UID) return;
+        var email = String(em || '').trim().toLowerCase();
+        if (!email) return;
+        out[email] = {
+          email: email,
+          name: String(u.name || '').trim(),
+          role: String(u.role || '').trim(),
+          status: String(u.status == null ? 'Active' : u.status).trim()
+        };
+      });
+    } catch (e) {}
+    return out;
+  }
+
+  /** Resolution for one email, with the documented honest fallbacks. */
+  function qSopOwnerDisplay_(dirMap, email, snapshotName) {
+    var em = String(email || '').trim().toLowerCase();
+    var rec = dirMap[em];
+    if (rec) {
+      if (rec.name) return { name: rec.name, state: 'ok' };
+      return { name: QUALITY_OWNER_NO_NAME, state: 'no_name' };
+    }
+    var snap = String(snapshotName || '').trim();
+    if (snap) return { name: snap, state: 'snapshot' };
+    return { name: QUALITY_OWNER_UNAVAILABLE, state: 'unavailable' };
+  }
+
+  /** Structured owner options for the chooser: name first, email secondary. */
+  function qSopOwnerChoices_(dirMap) {
+    var options = [], labels = {};
+    var dir = dirMap || qSopOwnerNameMap_();
+    Object.keys(dir).forEach(function (em) {
+      var u = dir[em];
+      var st = String(u.status || '').trim().toLowerCase();
+      if (st && st !== 'active') return;
+      if (labels[em]) return;
+      labels[em] = true;
+      options.push({
+        value: em,
+        name: u.name || '',
+        role: String(u.role || '').trim(),
+        label: u.name ? u.name : QUALITY_OWNER_NO_NAME,
+        email: em
+      });
+    });
+    options.sort(function (a, b) {
+      var an = a.name || '', bn = b.name || '';
+      var c = an.localeCompare(bn, 'ar');
+      return c !== 0 ? c : a.email.localeCompare(b.email);
+    });
+    return { options: options, labels: labels };
+  }
+
+  /* ─────────── server-side content allowlist (9) ───────────
+   * Apps Script has no browser DOM, so this is a real tokenizer, not a chain of
+   * regex replacements. It decodes the standard entities, then rebuilds the
+   * fragment from an explicit element/attribute allowlist. Unknown elements are
+   * DROPPED WITH THEIR CONTENT only for elements that can execute or hide
+   * content (script/style/etc); unknown harmless wrappers are unwrapped so
+   * legitimate Arabic text is never lost.
+   */
+  const QSOP_ALLOWED_TAGS = {
+    P: 1, DIV: 1, BR: 1, HR: 1, SPAN: 1, BDI: 1,
+    H1: 1, H2: 1, H3: 1, H4: 1, H5: 1, H6: 1,
+    UL: 1, OL: 1, LI: 1,
+    TABLE: 1, THEAD: 1, TBODY: 1, TFOOT: 1, TR: 1, TH: 1, TD: 1, CAPTION: 1, COLGROUP: 1, COL: 1,
+    STRONG: 1, B: 1, EM: 1, I: 1, U: 1, S: 1, STRIKE: 1, DEL: 1, INS: 1, SUB: 1, SUP: 1, MARK: 1,
+    BLOCKQUOTE: 1, PRE: 1, CODE: 1, A: 1, SECTION: 1, ARTICLE: 1, ADDRESS: 1
+  };
+  /* Dropped whole: these can execute, load a remote resource or masquerade as
+     application chrome. Their CONTENT is discarded too, because "unwrapping" a
+     <script> would emit its source as visible text. */
+  const QSOP_BANNED_TAGS = {
+    SCRIPT: 1, STYLE: 1, IFRAME: 1, OBJECT: 1, EMBED: 1, APPLET: 1, FORM: 1,
+    INPUT: 1, BUTTON: 1, SELECT: 1, OPTION: 1, TEXTAREA: 1, LABEL: 1, FIELDSET: 1,
+    LINK: 1, META: 1, BASE: 1, NOSCRIPT: 1, TEMPLATE: 1, SVG: 1, MATH: 1,
+    CANVAS: 1, AUDIO: 1, VIDEO: 1, SOURCE: 1, TRACK: 1, MAP: 1, AREA: 1,
+    FRAME: 1, FRAMESET: 1, PORTAL: 1, DIALOG: 1, SLOT: 1, XMP: 1, PLAINTEXT: 1
+  };
+  const QSOP_VOID_TAGS = { BR: 1, HR: 1, COL: 1 };
+  const QSOP_ALLOWED_ATTRS = {
+    dir: 1, align: 1, colspan: 1, rowspan: 1, scope: 1, headers: 1, role: 1,
+    href: 1, rel: 1, target: 1, title: 1, 'aria-label': 1, 'aria-hidden': 1,
+    'aria-level': 1, class: 1, id: 1, style: 1, 'data-vfd': 1, 'data-vfd-style': 1,
+    width: 1, height: 1, valign: 1, start: 1, type: 1
+  };
+  const QSOP_CLASS_RE = /^[A-Za-z0-9 _\-]{0,120}$/;
+  const QSOP_ID_RE = /^[A-Za-z0-9_\-]{0,64}$/;
+
+  function qSopDecodeEntities_(s) {
+    return String(s == null ? '' : s).replace(/&(#x?[0-9A-Fa-f]+|[A-Za-z]+);/g, function (all, body) {
+      var named = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: '\u00A0', shy: '\u00AD', mdash: '\u2014', ndash: '\u2013', hellip: '\u2026', laquo: '\u00AB', raquo: '\u00BB', times: '\u00D7', divide: '\u00F7', deg: '\u00B0', middot: '\u00B7', bull: '\u2022', lrm: '\u200E', rlm: '\u200F' };
+      var key = String(body).toLowerCase();
+      if (named[key] !== undefined) return named[key];
+      if (key.charAt(0) === '#') {
+        var num = key.charAt(1) === 'x' ? parseInt(key.slice(2), 16) : parseInt(key.slice(1), 10);
+        if (!isNaN(num) && num > 0 && num <= 0x10FFFF) {
+          try { return String.fromCodePoint(num); } catch (e) { return ''; }
+        }
+      }
+      return all;
+    });
+  }
+
+  /* Escapes the characters that could open markup, but leaves an ALREADY-VALID
+     entity alone. Decoding the whole fragment first is not an option: `&lt;`
+     would turn into a literal `<` and then be consumed as a tag opener, which
+     silently deletes legitimate text such as "x &lt; y". Escaping is therefore
+     idempotent and lossless for Arabic text, existing entities and `&nbsp;`. */
+  function qSopEscapeText_(s) {
+    return String(s == null ? '' : s)
+      .replace(/&(?![A-Za-z][A-Za-z0-9]{0,31};|#[0-9]{1,7};|#x[0-9A-Fa-f]{1,6};)/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/\u00A0/g, '&nbsp;');
+  }
+
+  function qSopEscapeAttr_(s) {
+    return qSopEscapeText_(s).replace(/"/g, '&quot;');
+  }
+
+  /** URL policy: explicit protocol allowlist, checked AFTER decoding. */
+  function qSopSafeUrl_(raw) {
+    var v = qSopDecodeEntities_(String(raw == null ? '' : raw));
+    v = v.replace(/[\u0000-\u0020\u007F\u200B-\u200F\uFEFF]/g, '').trim();
+    if (!v) return '';
+    if (/^(https?:|mailto:|tel:)/i.test(v)) return v;
+    if (/^#[A-Za-z0-9_\-:.]*$/.test(v)) return v;
+    if (/^\/(?!\/)/.test(v)) return v;
+    return '';
+  }
+
+  function qSopSafeStyle_(raw) {
+    var v = String(raw == null ? '' : raw);
+    if (/expression\s*\(|url\s*\(|@import|behavior\s*:|-moz-binding|javascript:|vbscript:|data:/i.test(v)) return '';
+    v = v.replace(/[\u0000-\u001F\u007F]/g, '');
+    return v.length > 400 ? '' : v;
+  }
+
+  /**
+   * Rebuilds a safe fragment from the raw string. Returns safe HTML using only
+   * allowlisted elements/attributes with escaped values.
+   */
+  function qSopSanitizeHtml_(raw) {
+    /* Parsed RAW on purpose — see qSopEscapeText_. Attribute values are decoded
+       only where a decision depends on them (URL policy), never as a whole-feed
+       pre-pass. */
+    var src = String(raw == null ? '' : raw);
+    var out = [];
+    var stack = [];
+    var bannedDepth = 0;
+    var i = 0;
+    var n = src.length;
+    while (i < n) {
+      var lt = src.indexOf('<', i);
+      if (lt === -1) {
+        if (!bannedDepth) out.push(qSopEscapeText_(src.slice(i)));
+        break;
+      }
+      if (lt > i) {
+        if (!bannedDepth) out.push(qSopEscapeText_(src.slice(i, lt)));
+      }
+      if (src.slice(lt, lt + 4) === '<!--') {
+        var endComment = src.indexOf('-->', lt);
+        i = endComment === -1 ? n : endComment + 3;
+        continue;
+      }
+      if (src.slice(lt, lt + 9).toUpperCase() === '<![CDATA[') {
+        var endCdata = src.indexOf(']]>', lt);
+        i = endCdata === -1 ? n : endCdata + 3;
+        continue;
+      }
+      var gt = src.indexOf('>', lt);
+      if (gt === -1) { if (!bannedDepth) out.push('&lt;'); i = lt + 1; continue; }
+      var inner = src.slice(lt + 1, gt);
+      i = gt + 1;
+      var closing = inner.charAt(0) === '/';
+      var body = closing ? inner.slice(1) : inner;
+      var selfClose = /\/$/.test(body);
+      if (selfClose) body = body.slice(0, -1);
+      var nameMatch = body.match(/^\s*([A-Za-z][A-Za-z0-9:_\-]*)/);
+      if (!nameMatch) continue;
+      var tag = nameMatch[1].toUpperCase();
+      if (QSOP_BANNED_TAGS[tag]) {
+        if (closing) { if (bannedDepth > 0) bannedDepth--; }
+        else if (!QSOP_VOID_TAGS[tag] && !selfClose) { bannedDepth++; }
+        continue;
+      }
+      if (!QSOP_ALLOWED_TAGS[tag]) {
+        /* Harmless unknown wrapper: unwrap (keep its children). */
+        continue;
+      }
+      if (closing) {
+        for (var s = stack.length - 1; s >= 0; s--) {
+          if (stack[s] === tag) {
+            var popped = stack.splice(s, stack.length - s);
+            popped.reverse().forEach(function (t) { if (!bannedDepth) out.push('</' + t + '>'); });
+            break;
+          }
+        }
+        continue;
+      }
+      var attrText = body.slice(nameMatch[0].length);
+      var attrRe = /([A-Za-z_:][A-Za-z0-9_:.\-]*)\s*(?:=\s*("([^"]*)"|'([^']*)'|([^\s"'>]+)))?/g;
+      var emitted = [];
+      var am;
+      while ((am = attrRe.exec(attrText)) !== null) {
+        var an = String(am[1]).toLowerCase();
+        if (an.indexOf('on') === 0) continue;
+        if (!QSOP_ALLOWED_ATTRS[an]) continue;
+        var av = am[3] !== undefined ? am[3] : (am[4] !== undefined ? am[4] : (am[5] !== undefined ? am[5] : ''));
+        if (an === 'href') {
+          var safeUrl = qSopSafeUrl_(av);
+          if (!safeUrl) continue;
+          emitted.push('href="' + qSopEscapeAttr_(safeUrl) + '"');
+          emitted.push('rel="noopener noreferrer"');
+          continue;
+        }
+        if (an === 'style') {
+          var st = qSopSafeStyle_(av);
+          if (!st) continue;
+          emitted.push('style="' + qSopEscapeAttr_(st) + '"');
+          continue;
+        }
+        if (an === 'class') {
+          var cls = String(av).replace(/\s+/g, ' ').trim();
+          if (!cls || !QSOP_CLASS_RE.test(cls)) continue;
+          emitted.push('class="' + qSopEscapeAttr_(cls) + '"');
+          continue;
+        }
+        if (an === 'id') {
+          var idv = String(av).trim();
+          if (!QSOP_ID_RE.test(idv)) continue;
+          emitted.push('id="' + qSopEscapeAttr_(idv) + '"');
+          continue;
+        }
+        if (an === 'dir') {
+          var dv = String(av).trim().toLowerCase();
+          if (dv !== 'rtl' && dv !== 'ltr' && dv !== 'auto') continue;
+        }
+        if (an === 'target') {
+          if (String(av).trim().toLowerCase() !== '_blank') continue;
+        }
+        if (an === 'colspan' || an === 'rowspan') {
+          var span = String(av).replace(/[^0-9]/g, '');
+          if (!span || Number(span) < 1 || Number(span) > 200) continue;
+          emitted.push(an + '="' + span + '"');
+          continue;
+        }
+        if (an === 'width' || an === 'height') {
+          var dim = String(av).replace(/[^0-9.]/g, '');
+          if (!dim) continue;
+          emitted.push(an + '="' + qSopEscapeAttr_(dim) + '"');
+          continue;
+        }
+        emitted.push(an + '="' + qSopEscapeAttr_(av) + '"');
+      }
+      if (!bannedDepth) {
+        out.push('<' + tag + (emitted.length ? ' ' + emitted.join(' ') : '') + '>');
+        if (!QSOP_VOID_TAGS[tag] && !selfClose) stack.push(tag);
+      }
+    }
+    for (var k = stack.length - 1; k >= 0; k--) out.push('</' + stack[k] + '>');
+    return out.join('');
+  }
+
+  /** Plain metadata must never become a spreadsheet formula. */
+  function qSopPlainText_(v) {
+    return String(v == null ? '' : v).replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '').trim();
+  }
+
+  /* ─────────── size limits (8.1) ─────────── */
+  function qSopCheckCellLimit_(label, value) {
+    var s = String(value == null ? '' : value);
+    if (s.length > QUALITY_SOP_CELL_LIMIT) {
+      vfNotApplied_('حجم ' + label + ' يتجاوز الحد المسموح (' + QUALITY_SOP_CELL_LIMIT + ' حرف)؛ اختصر المحتوى ثم أعد المحاولة');
+    }
+    return s;
+  }
+
+  /* ─────────── chunked document content ───────────
+   * The body is split into fixed-size chunks across content_html, content_html_2…10
+   * and re-joined on read. This removes the old single-cell 45k block: the only
+   * remaining ceiling is the total of the chunk columns (≈450k characters).
+   */
+  function qSopCheckContentSize_(label, value) {
+    var s = String(value == null ? '' : value);
+    if (s.length > QUALITY_SOP_CONTENT_MAX) {
+      vfNotApplied_('حجم ' + label + ' يتجاوز الحد الأقصى (' + QUALITY_SOP_CONTENT_MAX + ' حرف)؛ قسّم الوثيقة ثم أعد المحاولة');
+    }
+    return s;
+  }
+
+  function qSopContentChunks_(html) {
+    var s = String(html == null ? '' : html);
+    var out = {};
+    for (var i = 0; i < QUALITY_SOP_CONTENT_HEADERS.length; i++) {
+      out[QUALITY_SOP_CONTENT_HEADERS[i]] = s.slice(i * QUALITY_SOP_CELL_LIMIT, (i + 1) * QUALITY_SOP_CELL_LIMIT);
+    }
+    return out;
+  }
+
+  function qSopContentOf_(row) {
+    if (!row) return '';
+    var s = String(row.content_html == null ? '' : row.content_html);
+    for (var i = 1; i < QUALITY_SOP_CONTENT_HEADERS.length; i++) {
+      var part = row[QUALITY_SOP_CONTENT_HEADERS[i]];
+      if (part != null && part !== '') s += String(part);
+    }
+    return s;
+  }
+
+  /** Client-facing copy of a version row: joined content, no chunk columns. */
+  function qSopClientVersion_(row) {
+    var out = {};
+    Object.keys(row || {}).forEach(function (k) {
+      if (QUALITY_SOP_CONTENT_HEADERS.indexOf(k) === -1) out[k] = row[k];
+    });
+    out.content_html = qSopContentOf_(row);
+    return out;
+  }
+
+  /* ═══════════ shared controlled-document template (5) ═══════════
+   * ONE versioned definition used by authoring, read-only preview and export.
+   * The editor reads it from get_quality_sops; the exporter renders from it;
+   * neither keeps its own copy, so the three cannot drift apart.
+   */
+  const QUALITY_DOC_TEMPLATE_ID = 'vf-controlled-document-v1';
+  const QUALITY_DOC_TEMPLATE = {
+    id: QUALITY_DOC_TEMPLATE_ID,
+    version: 1,
+    paper: { widthMm: 210, heightMm: 297, orientation: 'portrait' },
+    frame: { insetMm: 9, rulePt: 0.5 },
+    header: { topMm: 13, widthMm: 184, minHeightMm: 34, metaPct: 30, titlePct: 34, logoPct: 36 },
+    body: { sideInsetMm: 18, gapBelowHeaderMm: 6, fontPt: 13, lineHeight: 1.4, headingPt: 16, coverTitlePt: 18 },
+    footer: { bottomMm: 15, heightMm: 10 },
+    fontStack: 'Times New Roman, Arial, Cairo, sans-serif',
+    /* The eight default body sections, in order (5.5). */
+    bodyHeadings: [
+      'الغرض', 'مجال التطبيق', 'المسؤولية', 'التعريفات', 'النماذج المستخدمة',
+      'الإجراءات', 'المراجع', 'الحفظ والتسجيل'
+    ],
+    /* Printed labels (5.4). Kept here so both renderers name a field once. */
+    labels: {
+      docNumber: 'رقم الوثيقة', page: 'صفحة', issueDate: 'تاريخ الإصدار', version: 'رقم الإصدار',
+      copyNumber: 'رقم النسخة', stamp: 'ختم الوثيقة',
+      prepared: 'إعداد', reviewed: 'مراجعة', name: 'الاسم', position: 'الوظيفة', signature: 'التوقيع / التاريخ',
+      reviewNo: 'م', plannedReview: 'تاريخ المراجعة المخطط', actualReview: 'تاريخ المراجعة الفعلي',
+      reviewer: 'القائم بالمراجعة', reviewResult: 'نتيجة المراجعة',
+      issueDateField: 'تاريخ الإصدار', validDate: 'تاريخ السريان',
+      changeHistory: 'جدول وثيقة التعديل',
+      changePage: 'رقم الصفحة', changeDate: 'التاريخ', changeRevision: 'رقم التعديل / الإصدار', changeSummary: 'ملخص التعديل',
+      pending: '—'
+    },
+    /* No template row is pre-filled with reference-document content: the PDF
+       sample's people, codes and dates are examples, never defaults (5.4). */
+    coverReviewRows: 2,
+    coverReviewScheduleRows: 3
+  };
+
+  /** Default per-version template metadata for a NEW version (5.4/5.5). */
+  function qSopDefaultTemplateMeta_(categoryLabel) {
+    var reviewed = [];
+    for (var i = 0; i < QUALITY_DOC_TEMPLATE.coverReviewRows; i++) reviewed.push({ name: '', position: '' });
+    var schedule = [];
+    for (var j = 0; j < QUALITY_DOC_TEMPLATE.coverReviewScheduleRows; j++) {
+      schedule.push({ planned: '', actual: '', reviewer: '', result: '' });
+    }
+    return {
+      template_id: QUALITY_DOC_TEMPLATE_ID,
+      template_version: QUALITY_DOC_TEMPLATE.version,
+      doc_type_label: String(categoryLabel || ''),
+      prepared_by: { name: '', position: '' },
+      prepared_date: '',
+      reviewed_by: reviewed,
+      review_schedule: schedule,
+      issue_date: '',
+      valid_date: '',
+      copy_number: '',
+      revision_rows: []
+    };
+  }
+
+  /** Parses a stored template_meta cell; a malformed value degrades to {} and is
+      never allowed to throw on a read path. */
+  function qSopParseTemplateMeta_(raw) {
+    if (raw && typeof raw === 'object') return raw;
+    var s = String(raw == null ? '' : raw).trim();
+    if (!s) return {};
+    try {
+      var parsed = JSON.parse(s);
+      return (parsed && typeof parsed === 'object') ? parsed : {};
+    } catch (e) { return {}; }
+  }
+
+  function qSopTplEsc_(v) { return qSopEscapeText_(v); }
+
+  function qSopTplText_(v, fallback) {
+    var s = String(v == null ? '' : v).trim();
+    return qSopTplEsc_(s || (fallback === undefined ? QUALITY_DOC_TEMPLATE.labels.pending : fallback));
+  }
+
+  /**
+   * Server-side controlled-document renderer (5.1/7).
+   *
+   * Builds the whole printable artifact from the SAME template definition the
+   * editor uses: frame, header table (logo / title / metadata grid), cover,
+   * the single change-history page and the flowing body. It composes the page
+   * from TABLES rather than CSS paged media, because the Drive HTML->Google Doc
+   * conversion does not honour `@page`/`@media print`; tables survive it.
+   *
+   * Deliberate limitation, reported rather than hidden: this path cannot obtain
+   * the real laid-out page count, so it never prints an invented "page X of Y".
+   * See Plan_Quality_SOPs_Word_Editor.md (Phase 5) for the outstanding item.
+   */
+  function qSopRenderControlledDocHtml_(sop, versionRow, opts) {
+    var o = opts || {};
+    var tpl = QUALITY_DOC_TEMPLATE;
+    var L = tpl.labels;
+    var brand = o.brand || {};
+    var companyName = String(brand.companyName || 'Valley Foods');
+    var logoUrl = String(brand.logoUrl || '');
+    var meta = qSopParseTemplateMeta_(versionRow && versionRow.template_meta);
+    var isTemplateDoc = !!(meta && meta.template_id);
+    var contentHtml = qSopContentOf_(versionRow);
+    var titleAr = String((sop && sop.title_ar) || '');
+    var titleEn = String((sop && sop.title_en) || '');
+    var sopCode = String((sop && sop.sop_code) || '');
+    var versionNo = Number(versionRow && versionRow.version) || 0;
+    var versionDisplay = String(versionNo);
+    while (versionDisplay.length < 3) versionDisplay = '0' + versionDisplay;
+    var catLabel = qSopCategoryLabel_(String((sop && sop.category) || '').trim().toUpperCase()) || '';
+    var typeLabel = String(meta.doc_type_label || catLabel || '');
+    var issueDate = String(meta.issue_date || '');
+    var validDate = String((versionRow && versionRow.effective_date) || '') || String(meta.valid_date || '');
+    var copyNumber = String(meta.copy_number || '');
+
+    var fs = tpl.body.fontPt + 'pt';
+    var css = [
+      'body{font-family:' + tpl.fontStack + ';font-size:' + fs + ';line-height:1.45;color:#000;margin:0;padding:0;direction:rtl}',
+      '.vfd-title{font-size:' + tpl.body.headingPt + 'pt;font-weight:bold;text-align:center}',
+      '.vfd-cover-title{font-size:' + tpl.body.coverTitlePt + 'pt;font-weight:bold;text-align:center}',
+      'table{border-collapse:collapse;width:100%}',
+      '.vfd-grid td,.vfd-grid th{border:1px solid #000;padding:4px 6px;vertical-align:top;font-size:' + fs + '}',
+      '.vfd-frame{border:1px solid #000;padding:' + tpl.frame.insetMm + 'mm}',
+      '.vfd-hdr td{border:1px solid #000;padding:4px 6px;vertical-align:middle}',
+      '.vfd-meta td{border:1px solid #000;padding:3px 5px;font-size:' + (tpl.body.fontPt - 1) + 'pt;white-space:nowrap}',
+      '.vfd-meta .k{font-weight:bold;background:#f2f2f2}',
+      '.vfd-logo{max-width:100%;max-height:26mm;width:auto;height:auto}',
+      '.vfd-body-h{font-size:' + tpl.body.headingPt + 'pt;font-weight:bold;margin:14pt 0 6pt;text-align:right}',
+      '.vfd-body p{margin:0 0 6pt;text-align:right}',
+      '.vfd-body ul,.vfd-body ol{margin:0 0 6pt;padding-inline-start:18pt}',
+      '.vfd-body table{border-collapse:collapse;width:100%;margin:0 0 8pt}',
+      '.vfd-body td,.vfd-body th{border:1px solid #000;padding:4px 6px;font-size:' + fs + '}',
+      '.vfd-pagebreak{page-break-after:always;border:0;margin:0}',
+      '.vfd-spacer{height:' + tpl.body.gapBelowHeaderMm + 'mm}',
+      '.vfd-foot td{border:1px solid #000;padding:4px 6px;text-align:center}',
+      'bdi{unicode-bidi:isolate}'
+    ].join('\n');
+
+    /* ── header: metadata grid | centered title | logo ── */
+    var headerCells = '';
+    headerCells += '<td style="width:' + tpl.header.metaPct + '%">' +
+      '<table class="vfd-meta">' +
+        '<tr><td class="k">' + L.docNumber + '</td><td><bdi dir="ltr">' + qSopTplText_(sopCode, '') + '</bdi></td></tr>' +
+        '<tr><td class="k">' + L.page + '</td><td>' + L.pending + '</td></tr>' +
+        '<tr><td class="k">' + L.issueDate + '</td><td>' + qSopTplText_(issueDate, '') + '</td></tr>' +
+        '<tr><td class="k">' + L.version + '</td><td><bdi dir="ltr">' + qSopTplEsc_(versionDisplay) + '</bdi></td></tr>' +
+      '</table></td>';
+    headerCells += '<td style="width:' + tpl.header.titlePct + '%;text-align:center">' +
+      '<div class="vfd-title">' + qSopTplEsc_(typeLabel) + '</div>' +
+      '<div class="vfd-title">' + qSopTplEsc_(titleAr) + '</div>' +
+      (titleEn ? '<div style="font-size:' + (tpl.body.fontPt - 1) + 'pt" dir="ltr">' + qSopTplEsc_(titleEn) + '</div>' : '') +
+      '</td>';
+    headerCells += '<td style="width:' + tpl.header.logoPct + '%;text-align:center">' +
+      (logoUrl
+        ? '<img class="vfd-logo" src="' + qSopEscapeAttr_(logoUrl) + '" alt="">'
+        : '<div style="font-size:' + (tpl.body.fontPt + 1) + 'pt;font-weight:bold">' + qSopTplEsc_(companyName) + '</div>') +
+      '</td>';
+
+    var parts = [];
+    parts.push('<!doctype html><html dir="rtl" lang="ar"><head><meta charset="utf-8">');
+    parts.push('<title>' + qSopTplEsc_(sopCode + ' — ' + titleAr) + '</title>');
+    parts.push('<style>' + css + '</style></head><body>');
+    parts.push('<div class="vfd-frame">');
+    parts.push('<table class="vfd-hdr"><tr>' + headerCells + '</tr></table>');
+    parts.push('<div class="vfd-spacer"></div>');
+
+    if (isTemplateDoc) {
+      /* ── cover ── */
+      var prepared = meta.prepared_by || {};
+      var reviewed = Array.isArray(meta.reviewed_by) ? meta.reviewed_by : [];
+      parts.push('<div class="vfd-cover-title">' + qSopTplEsc_(titleAr) + '</div>');
+      if (titleEn) parts.push('<div style="text-align:center" dir="ltr">' + qSopTplEsc_(titleEn) + '</div>');
+      parts.push('<div class="vfd-spacer"></div>');
+      parts.push('<table class="vfd-grid"><tr><th style="width:14%"></th><th>' + L.name + '</th><th>' + L.position + '</th><th>' + L.signature + '</th></tr>');
+      parts.push('<tr><td>' + L.prepared + '</td><td>' + qSopTplText_(prepared.name, '') + '</td><td>' + qSopTplText_(prepared.position, '') + '</td><td></td></tr>');
+      if (!reviewed.length) reviewed = [{}, {}];
+      reviewed.forEach(function (r) {
+        parts.push('<tr><td>' + L.reviewed + '</td><td>' + qSopTplText_(r && r.name, '') + '</td><td>' + qSopTplText_(r && r.position, '') + '</td><td></td></tr>');
+      });
+      parts.push('</table>');
+      parts.push('<div class="vfd-spacer"></div>');
+      /* Review schedule: THREE initial blank rows are a suitable default (3). */
+      var schedule = Array.isArray(meta.review_schedule) ? meta.review_schedule.slice() : [];
+      while (schedule.length < tpl.coverReviewScheduleRows) schedule.push({});
+      parts.push('<table class="vfd-grid"><tr><th style="width:8%">' + L.reviewNo + '</th><th>' + L.plannedReview + '</th><th>' + L.actualReview + '</th><th>' + L.reviewer + '</th><th>' + L.reviewResult + '</th></tr>');
+      schedule.forEach(function (r, i) {
+        r = r || {};
+        parts.push('<tr><td style="text-align:center">' + (i + 1) + '</td><td>' + qSopTplText_(r.planned, '') + '</td><td>' +
+          qSopTplText_(r.actual, '') + '</td><td>' + qSopTplText_(r.reviewer, '') + '</td><td>' + qSopTplText_(r.result, '') + '</td></tr>');
+      });
+      parts.push('</table>');
+      parts.push('<div class="vfd-spacer"></div>');
+      parts.push('<table class="vfd-foot"><tr><td style="width:25%"><div class="k"><b>' + L.issueDateField + '</b></div>' + qSopTplText_(issueDate, '') + '</td>' +
+        '<td style="width:25%"><div class="k"><b>' + L.validDate + '</b></div>' + qSopTplText_(validDate, '') + '</td>' +
+        '<td style="width:25%"><div class="k"><b>' + L.copyNumber + '</b></div>' + qSopTplText_(copyNumber, '') + '</td>' +
+        '<td style="width:25%"><div class="k"><b>' + L.stamp + '</b></div><div style="height:18mm"></div></td></tr></table>');
+      parts.push('<hr class="vfd-pagebreak">');
+
+      /* ── ONE revision-history page (implementation decision, 3) ── */
+      parts.push('<div class="vfd-title">' + L.changeHistory + '</div>');
+      parts.push('<div class="vfd-spacer"></div>');
+      var revRows = Array.isArray(meta.revision_rows) ? meta.revision_rows : [];
+      parts.push('<table class="vfd-grid"><tr><th style="width:12%">' + L.changePage + '</th><th style="width:16%">' + L.changeDate + '</th><th style="width:16%">' + L.changeRevision + '</th><th>' + L.changeSummary + '</th></tr>');
+      if (!revRows.length) {
+        parts.push('<tr><td colspan="4" style="text-align:center">' + L.pending + '</td></tr>');
+      } else {
+        revRows.forEach(function (r) {
+          r = r || {};
+          parts.push('<tr><td style="text-align:center">' + qSopTplText_(r.page, '') + '</td><td>' + qSopTplText_(r.date, '') + '</td><td>' +
+            qSopTplText_(r.revision, '') + '</td><td>' + qSopTplText_(r.summary, '') + '</td></tr>');
+        });
+      }
+      parts.push('</table>');
+      parts.push('<hr class="vfd-pagebreak">');
+    }
+
+    /* ── body: already-sanitized semantic HTML ── */
+    parts.push('<div class="vfd-body">' + contentHtml + '</div>');
+    parts.push('<div class="vfd-spacer"></div>');
+    parts.push('<table class="vfd-foot"><tr><td style="width:50%"><b>' + L.copyNumber + '</b></td><td style="width:50%"><b>' + L.stamp + '</b></td></tr></table>');
+    parts.push('</div></body></html>');
+    return parts.join('\n');
+  }
+
+  // ---- 1) قراءة الصفحة كاملة ----
+  function getQualitySops_(data, user, dbId) {
+    /* Header upgrades and lazy creation stay here, on the READ path, so a page
+       load can never write to a workbook as a side effect of a user action. */
+    qSopEnsureSchema_(dbId);
+    var sops = safeRows_(dbId, QUALITY_SOP_SHEET);
+    var dirMap = qSopOwnerNameMap_();
+    var ownerChoices = qSopOwnerChoices_(dirMap).options;
+    /* ONE batch resolution for every distinct owner in the list: no per-row
+       fetch, no directory dump, and a name snapshot kept for a frozen document
+       is preferred over the generic unavailable label. */
+    var ownerNames = {};
+    var seen = {};
+    sops.forEach(function (s) {
+      var em = String(s.owner_email || '').trim().toLowerCase();
+      if (!em || seen[em]) return;
+      seen[em] = true;
+      ownerNames[em] = qSopOwnerDisplay_(dirMap, em, s.owner_name_snapshot);
+    });
+    var legacyPreview = {};
+    sops.forEach(function (s) {
+      var r = qSopPlainText_(s.applicability_role);
+      if (!r || r === QUALITY_SOP_ALL_DEPT) return;
+      if (QUALITY_SOP_ROLES_RECOMMENDED.indexOf(r) !== -1) return;
+      legacyPreview[r] = true;
+    });
+    qSopActualTitles_(dbId).forEach(function (t) { delete legacyPreview[t.value]; });
+    return {
+      status: 'success',
+      sops: sops,
+      versions: safeRows_(dbId, QUALITY_SOP_VERSIONS_SHEET).map(function (r) { return qSopClientVersion_(r); }),
+      forms: safeRows_(dbId, QUALITY_SOP_FORMS_SHEET),
+      events: safeRows_(dbId, QUALITY_SOP_EVENTS_SHEET),
+      acks: safeRows_(dbId, QUALITY_SOP_ACKS_SHEET),
+      categories: QUALITY_SOP_CATEGORIES,
+      legacy_categories: QUALITY_SOP_LEGACY_CATEGORIES,
+      category_prefixes: QUALITY_SOP_CATEGORY_PREFIX,
+      dept_options: qSopDeptOptions_(dbId).options,
+      /* Kept for backward compatibility; the workspace uses owner_choices. */
+      owner_options: ownerChoices,
+      owner_choices: ownerChoices,
+      owner_names: ownerNames,
+      legacy_roles: Object.keys(legacyPreview),
+      roles: qSopRoleCatalog_(dbId),
+      dept_abbr: qSopDeptAbbrRows_(dbId),
+      dept_abbr_recommended: qSopDeptAbbrRecommended_(dbId),
+      dept_abbr_auto: qSopDeptAbbrAutoMap_(dbId),
+      template: QUALITY_DOC_TEMPLATE,
+      can_configure: !!(user && user.__canFull)
+    };
+  }
+
+  /** Optimistic-concurrency refusal. Same shape as vfNotApplied_ so callers
+      and tests that already distinguish "not applied" keep working, plus a
+      `conflict` flag the client uses to offer a review/retry flow instead of a
+      generic error. */
+  function qSopConflict_(message) {
+    var e = new Error(message);
+    e.notApplied = true;
+    e.code = 'CONFLICT';
+    e.conflict = true;
+    throw e;
+  }
+
+  /**
+   * Re-resolves المُعِد/المراجعون from the user directory using the transient
+   * selector key (`email`) the form submits, so the stored name/position are
+   * the user's real snapshots and never client-typed text. Eligibility matches
+   * the المالك chooser: active users of THIS company. The `email` key is not
+   * part of the stored metadata contract and is removed before writing.
+   * A meta without selector keys (historical snapshot) is left untouched.
+   */
+  function qSopResolveCoverPeople_(meta) {
+    if (!meta || typeof meta !== 'object') return meta;
+    var dir = (typeof userDirectory_ === 'function') ? (userDirectory_() || {}) : {};
+    var eligible = function (email) {
+      var em = String(email || '').trim().toLowerCase();
+      var u = dir[em];
+      if (!u) return null;
+      if (String(u.company || '').trim() !== COMPANY_UID) return null;
+      var st = String(u.status == null ? 'Active' : u.status).trim().toLowerCase();
+      if (st && st !== 'active') return null;
+      return u;
+    };
+    var prepared = meta.prepared_by;
+    if (prepared && typeof prepared === 'object' && prepared.email) {
+      var pu = eligible(prepared.email);
+      if (!pu) vfNotApplied_('المُعِد المحدد غير متاح أو غير نشط');
+      prepared.name = String(pu.name || '').trim();
+      prepared.position = String(pu.role || '').trim();
+      delete prepared.email;
+    }
+    if (Object.prototype.toString.call(meta.reviewed_by) === '[object Array]') {
+      meta.reviewed_by.forEach(function (r) {
+        if (!r || typeof r !== 'object' || !r.email) return;
+        var ru = eligible(r.email);
+        if (!ru) vfNotApplied_('المراجع المحدد غير متاح أو غير نشط');
+        r.name = String(ru.name || '').trim();
+        r.position = String(ru.role || '').trim();
+        delete r.email;
+      });
+    }
+    return meta;
+  }
+
+  /** Normalizes an optional template_meta payload; refuses an oversized one. */
+  function qSopNormalizeTemplateMeta_(raw, categoryLabel) {
+    var meta = qSopParseTemplateMeta_(raw);
+    if (!meta.template_id) meta = qSopDefaultTemplateMeta_(categoryLabel);
+    qSopResolveCoverPeople_(meta);
+    qSopCheckCellLimit_('بيانات القالب', JSON.stringify(meta));
+    return JSON.stringify(meta);
+  }
+
+  /**
+   * Combined metadata + draft-content save (8.3).
+   *
+   * Metadata and the editable draft body are written under ONE lock, so the UI
+   * can honestly report "تم الحفظ" only after the whole intended snapshot is
+   * persisted — replacing the old two-call sequence whose second half could
+   * fail after the first had already been reported as saved. A header-only call
+   * (no `version` object) keeps the exact legacy behaviour for compatibility.
+   */
+  /* A request-id recovery is allowed to write only a missing part of the
+     exact snapshot that the original request described.  If the durable rows
+     disagree with either the requested snapshot or the expected revision, the
+     result stays uncertain for review; it is never guessed or replayed. */
+  function qSopReviewRequired_(message, recovery) {
+    var e = new Error(message);
+    e.recovery = recovery || null;
+    throw e;
+  }
+
+  function qSopSame_(a, b) { return String(a == null ? '' : a) === String(b == null ? '' : b); }
+
+  function qSopFindEvent_(dbId, sopId, version, eventType, actor, comment) {
+    var rows = [];
+    try { rows = getAllRecords_(dbId, QUALITY_SOP_EVENTS_SHEET); } catch (e) { rows = []; }
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i];
+      if (String(r.sop_id || '') !== String(sopId || '')) continue;
+      if (String(r.version == null ? '' : r.version) !== String(version == null ? '' : version)) continue;
+      if (String(r.event_type || '') !== String(eventType || '')) continue;
+      if (actor != null && String(r.actor_email || '').toLowerCase() !== String(actor || '').toLowerCase()) continue;
+      if (comment != null && String(r.comment || '') !== String(comment || '')) continue;
+      return r;
+    }
+    return null;
+  }
+
+  function qSopRecoveryEnvelope_(guard, entityUid, createToken) {
+    var reqId = String((guard && guard.requestId) || '');
+    var prior = (guard && guard.priorRecovery) || null;
+    if (prior) {
+      if (String(prior.type || '') !== 'vf_quality_sop_save_v1' || String(prior.request_id || '') !== reqId) {
+        qSopReviewRequired_('بيانات استرداد وثيقة الجودة غير صالحة — يلزم مراجعة المسؤول. رقم الطلب: ' + reqId, prior);
+      }
+      if (guard.payloadHash && prior.payload_hash && String(prior.payload_hash) !== String(guard.payloadHash)) {
+        qSopReviewRequired_('بيانات الاسترداد لا تطابق محتوى وثيقة الجودة — يلزم مراجعة المسؤول. رقم الطلب: ' + reqId, prior);
+      }
+      var bound = String(prior.entity_uid || prior.mo_uid || prior.base_token || '');
+      var want = String(entityUid || '');
+      var alternate = String(createToken || '');
+      if (bound && want && bound !== want && (!alternate || bound !== alternate)) {
+        qSopReviewRequired_('بيانات الاسترداد تخص وثيقة جودة مختلفة — يلزم مراجعة المسؤول. رقم الطلب: ' + reqId, prior);
+      }
+    }
+    return prior;
+  }
+
+  function qSopCreateSnapshotMatches_(sop, d, category, dept, role, owner, templateMeta) {
+    return !!sop && qSopSame_(sop.create_token, d.create_token) &&
+      qSopSame_(sop.title_ar, d.title_ar) && qSopSame_(sop.title_en, d.title_en) &&
+      qSopSame_(sop.category, category) && qSopSame_(sop.applicability_dept, dept) &&
+      qSopSame_(sop.applicability_role, role) && qSopSame_(sop.owner_email, owner) &&
+      qSopSame_(sop.template_meta, templateMeta);
+  }
+
+  function qSopVersionSnapshotMatches_(version, content, summary, changeType, templateMeta, revision) {
+    return !!version && qSopSame_(qSopContentOf_(version), content) &&
+      qSopSame_(version.change_summary, summary) && qSopSame_(version.change_type, changeType) &&
+      qSopSame_(version.template_meta, templateMeta) &&
+      (revision == null || qSopSame_(version.revision, revision));
+  }
+
+  function qSopBuildCreateVersion_(sopId, content, summary, changeType, templateMeta, actor, uid) {
+    var map = {
+      sop_id: sopId, version: 1, change_type: changeType || 'Major', status: 'Draft',
+      change_summary: summary, pdf_ref: '', pdf_id: '', pdf_sha256: '', author_email: actor,
+      submitted_at: '', approved_by: '', approved_at: '', reject_comment: '', effective_date: '',
+      next_review_date: '', template_meta: templateMeta, revision: '1'
+    };
+    var chunks = qSopContentChunks_(content);
+    Object.keys(chunks).forEach(function (k) { map[k] = chunks[k]; });
+    if (uid) map.unique_id = uid;
+    if (!uid) qSopStamp_(map, actor); else { map.user = actor || ''; map.created_at = new Date().toISOString(); }
+    return map;
+  }
+
+  function qSopRecoverEdit_(dbId, data, user, guard, existing, targetV, patch, vIn, vContent, vSummary, vChangeType, vTemplateMeta, expectedRevision, actor) {
+    var reqId = String((guard && guard.requestId) || '');
+    qSopRecoveryEnvelope_(guard, String(existing.unique_id || ''), '');
+    var base = String(expectedRevision || '').trim();
+    if (!base) qSopReviewRequired_('لا يمكن مطابقة تعديل وثيقة الجودة بدون رقم مراجعة مؤكد. رقم الطلب: ' + reqId, guard.priorRecovery);
+    var next = String((Number(base) || 0) + 1);
+    var headerDesired = true;
+    Object.keys(patch).forEach(function (k) {
+      if (!qSopSame_(existing[k], patch[k])) headerDesired = false;
+    });
+    headerDesired = headerDesired && qSopSame_(existing.revision, next);
+    var versionDesired = true;
+    var desiredStatus = targetV && String(targetV.status || '') === 'Rejected' ? 'Draft' : (targetV && String(targetV.status || '') || 'Draft');
+    var versionNext = targetV ? String((Number(base) || 0) + 1) : '';
+    var needsEvent = !!(vIn && (qSopHasContent_(vContent) || vSummary));
+    if (targetV) {
+      versionDesired = qSopVersionSnapshotMatches_(targetV, vContent, vSummary,
+        vChangeType || String(targetV.change_type || '') || 'Major', vTemplateMeta, versionNext) &&
+        String(targetV.status || '') === desiredStatus;
+    } else if (vIn) {
+      versionDesired = false;
+    }
+    var event = targetV && needsEvent ? qSopFindEvent_(dbId, existing.unique_id, Number(targetV.version) || 0, 'Edited', actor, vSummary) : null;
+    if (headerDesired && versionDesired && (!needsEvent || event)) {
+      return { status: 'success', unique_id: String(existing.unique_id || ''), sop_code: String(existing.sop_code || ''), revision: next, recovered: true };
+    }
+    /* A row that moved past the expected or expected+1 revision is evidence of
+       another writer (or a different request).  Do not patch it. */
+    var currentHeaderRevision = String(existing.revision == null ? '' : existing.revision);
+    if (currentHeaderRevision !== base && currentHeaderRevision !== next) {
+      qSopReviewRequired_('تغيّرت وثيقة الجودة بأكثر من مراجعة أثناء الاسترداد — يلزم مراجعة المسؤول. رقم الطلب: ' + reqId, guard.priorRecovery);
+    }
+    if (targetV) {
+      var currentVersionRevision = String(targetV.revision == null ? '' : targetV.revision);
+      var versionBase = String(expectedRevision || '');
+      if (currentVersionRevision !== versionBase && currentVersionRevision !== versionNext) {
+        qSopReviewRequired_('تغيّر إصدار وثيقة الجودة أثناء الاسترداد — يلزم مراجعة المسؤول. رقم الطلب: ' + reqId, guard.priorRecovery);
+      }
+      if (currentVersionRevision === versionNext && !versionDesired) {
+        qSopReviewRequired_('الإصدار المحفوظ لا يطابق لقطة الطلب — يلزم مراجعة المسؤول. رقم الطلب: ' + reqId, guard.priorRecovery);
+      }
+    }
+    if (currentHeaderRevision === base && !headerDesired) {
+      if (!patchRowByCriteria_(getSheet_(QUALITY_SOP_SHEET, dbId), 'unique_id', String(existing.unique_id), patch)) {
+        vfNotApplied_('الإجراء غير موجود');
+      }
+      qSopLog_(dbId, QUALITY_SOP_SHEET, String(existing.unique_id), existing.id, actor, 'update', patch, existing);
+    }
+    if (targetV && String(targetV.revision == null ? '' : targetV.revision) === String(expectedRevision || '')) {
+      var vPatch = {
+        change_summary: vSummary,
+        template_meta: vTemplateMeta,
+        revision: versionNext
+      };
+      var desiredType = vChangeType || String(targetV.change_type || '') || 'Major';
+      vPatch.change_type = desiredType;
+      var chunks = qSopContentChunks_(vContent);
+      Object.keys(chunks).forEach(function (k) { vPatch[k] = chunks[k]; });
+      if (String(targetV.status || '') === 'Rejected') { vPatch.status = 'Draft'; vPatch.reject_comment = ''; }
+      if (!patchRowByCriteria_(getSheet_(QUALITY_SOP_VERSIONS_SHEET, dbId), 'unique_id', String(targetV.unique_id), vPatch)) {
+        vfNotApplied_('الإصدار غير موجود');
+      }
+      qSopLog_(dbId, QUALITY_SOP_VERSIONS_SHEET, String(targetV.unique_id), targetV.id, actor, 'update', vPatch, targetV);
+    }
+    if (targetV && needsEvent && !event) {
+      qSopAddEvent_(dbId, String(existing.unique_id), Number(targetV.version) || 0, 'Edited', String(targetV.status || ''), desiredStatus, user, vSummary, '', '');
+    }
+    var freshSop = qSopFindByUid_(getAllRecords_(dbId, QUALITY_SOP_SHEET), String(existing.unique_id));
+    var freshV = targetV ? qSopFindByUid_(getAllRecords_(dbId, QUALITY_SOP_VERSIONS_SHEET), String(targetV.unique_id)) : null;
+    var freshEvent = freshV && needsEvent ? qSopFindEvent_(dbId, String(existing.unique_id), Number(freshV.version) || 0, 'Edited', actor, vSummary) : null;
+    if (!freshSop || !qSopSame_(freshSop.revision, next) || !freshV && vIn ||
+        (freshV && (!qSopVersionSnapshotMatches_(freshV, vContent, vSummary, vChangeType || String(targetV.change_type || '') || 'Major', vTemplateMeta, versionNext) || String(freshV.status || '') !== desiredStatus)) ||
+        (needsEvent && !freshEvent)) {
+      qSopReviewRequired_('تمت كتابة جزء من لقطة وثيقة الجودة لكن تعذر إثبات اكتمالها — يلزم مراجعة المسؤول. رقم الطلب: ' + reqId, guard.priorRecovery);
+    }
+    return { status: 'success', unique_id: String(existing.unique_id || ''), sop_code: String(existing.sop_code || ''), revision: next, recovered: true };
+  }
+
+  function saveQualitySop_(data, user, dbId, guardCtx) {
+    var d = data || {};
+    var guard = guardCtx || {};
+    var uid = qSopPlainText_(d.unique_id);
+    var titleAr = qSopPlainText_(d.title_ar);
     if (!titleAr) vfNotApplied_('عنوان الإجراء بالعربية مطلوب');
+    var titleEn = qSopPlainText_(d.title_en);
+    if (!titleEn) vfNotApplied_('عنوان الإجراء بالإنجليزية مطلوب');
     var category = String(d.category || '').trim().toUpperCase();
     if (!qSopCategoryLabel_(category)) vfNotApplied_('تصنيف الإجراء غير صالح');
+    var dept = qSopPlainText_(d.applicability_dept);
+    if (!dept) vfNotApplied_('الإدارة المعنية مطلوبة');
+    var role = qSopPlainText_(d.applicability_role);
+    if (!role) vfNotApplied_('الدور المعني مطلوب');
+    var owner = String(d.owner_email || '').trim().toLowerCase();
+    if (!owner) vfNotApplied_('المالك مطلوب');
+    var createToken = qSopPlainText_(d.create_token);
+    /* Guarded legacy callers may not have a UI create token.  Binding the
+       initial row to the durable request ID gives recovery one safe identity
+       without changing the public action or route. */
+    if (!createToken && guard.requestId && !uid) createToken = 'req-' + String(guard.requestId);
+    if (createToken) d.create_token = createToken;
+    var expectedRevision = qSopPlainText_(d.expected_revision);
+    qSopCheckCellLimit_('العنوان العربي', titleAr);
+    qSopCheckCellLimit_('العنوان الإنجليزي', titleEn);
+    var vIn = (d.version && typeof d.version === 'object') ? d.version : null;
+    var vContent = '';
+    var vSummary = '';
+    var vChangeType = '';
+    var vUid = '';
+    var vTemplateMeta = '';
+    if (vIn) {
+      vUid = qSopPlainText_(vIn.unique_id);
+      vChangeType = String(vIn.change_type || '').trim();
+      if (vChangeType && QUALITY_SOP_CHANGE_TYPES.indexOf(vChangeType) === -1) vfNotApplied_('نوع التغيير غير صالح');
+      vContent = qSopSanitizeHtml_(qSopCheckContentSize_('محتوى الوثيقة', String(vIn.content_html == null ? '' : vIn.content_html)));
+      vSummary = qSopCheckCellLimit_('ملخص التغيير', qSopPlainText_(vIn.change_summary));
+      vTemplateMeta = qSopNormalizeTemplateMeta_(vIn.template_meta, qSopCategoryLabel_(category));
+    }
     var actor = qSopActor_(user);
-    ensureSheet_(dbId, QUALITY_SOP_SHEET, QUALITY_SOP_HEADERS);
-    ensureSheet_(dbId, QUALITY_SOP_VERSIONS_SHEET, QUALITY_SOP_VERSION_HEADERS);
-    ensureSheet_(dbId, QUALITY_SOP_EVENTS_SHEET, QUALITY_SOP_EVENT_HEADERS);
+    var dirMap = qSopOwnerNameMap_();
+    var ownerDisplay = qSopOwnerDisplay_(dirMap, owner, '');
+    qSopEnsureSchema_(dbId);
     var result;
     executeWithLock_(function () {
       var sopSheet = getSheet_(QUALITY_SOP_SHEET, dbId);
       var sopRows = getAllRecords_(dbId, QUALITY_SOP_SHEET);
+      /* Initial-create idempotency: a retried request carrying the SAME create
+         token returns the document it already created instead of allocating a
+         second one. The token is client-generated once per editor instance. */
+      if (!uid && createToken) {
+        var byToken = sopRows.filter(function (r) { return String(r.create_token || '').trim() === createToken; })[0];
+        if (byToken) {
+          if (guard.recovering) qSopRecoveryEnvelope_(guard, String(byToken.unique_id || ''), createToken);
+          var expectedCreateMeta = vTemplateMeta || String(byToken.template_meta || JSON.stringify(qSopDefaultTemplateMeta_(qSopCategoryLabel_(category))));
+          if (!qSopCreateSnapshotMatches_(byToken, {
+            create_token: createToken, title_ar: titleAr, title_en: titleEn
+          }, category, dept, role, owner, expectedCreateMeta)) {
+            qSopReviewRequired_('وجدت وثيقة مرتبطة بهذا الطلب لكن لقطتها لا تطابق البيانات المطلوبة — يلزم مراجعة المسؤول. رقم الطلب: ' + String(guard.requestId || ''), guard.priorRecovery);
+          }
+          var priorVersions = getAllRecords_(dbId, QUALITY_SOP_VERSIONS_SHEET);
+          var priorVersion = priorVersions.filter(function (v) {
+            return String(v.sop_id || '') === String(byToken.unique_id || '') && Number(v.version) === 1;
+          })[0] || null;
+          var expectedType = vChangeType || 'Major';
+          if (priorVersion && (String(priorVersion.status || '') !== 'Draft' ||
+              !qSopVersionSnapshotMatches_(priorVersion, vContent, vSummary, expectedType, expectedCreateMeta, '1'))) {
+            qSopReviewRequired_('الإصدار المرتبط بالطلب لا يطابق اللقطة المطلوبة — يلزم مراجعة المسؤول. رقم الطلب: ' + String(guard.requestId || ''), guard.priorRecovery);
+          }
+          if (!priorVersion) {
+            if (guard.checkpoint) guard.checkpoint({ type: 'vf_quality_sop_save_v1', entity_type: 'sop', entity_uid: String(byToken.unique_id || ''), mo_uid: String(byToken.unique_id || ''), base_token: createToken, scope: ['sop', 'version', 'event'], stage: 'sop' });
+            var resumedVersion = qSopBuildCreateVersion_(String(byToken.unique_id || ''), vContent, vSummary, expectedType, expectedCreateMeta, actor, '');
+            addRecord_(dbId, QUALITY_SOP_VERSIONS_SHEET, resumedVersion, ['sop_id', 'version', 'status']);
+            priorVersion = resumedVersion;
+          }
+          var createdEvent = qSopFindEvent_(dbId, String(byToken.unique_id || ''), 1, 'Created', actor, '');
+          if (!createdEvent) {
+            if (guard.checkpoint) guard.checkpoint({ type: 'vf_quality_sop_save_v1', entity_type: 'sop', entity_uid: String(byToken.unique_id || ''), mo_uid: String(byToken.unique_id || ''), base_token: createToken, scope: ['sop', 'version', 'event'], stage: 'version' });
+            qSopAddEvent_(dbId, String(byToken.unique_id || ''), 1, 'Created', '', 'Draft', user, '', '', '');
+          }
+          result = {
+            status: 'success', unique_id: String(byToken.unique_id || ''),
+            sop_code: String(byToken.sop_code || ''), revision: String(byToken.revision || ''),
+            idempotent: true, recovered: !!guard.recovering
+          };
+          return;
+        }
+      }
       var existing = uid ? qSopFindByUid_(sopRows, uid) : null;
+      if (uid && !existing) vfNotApplied_('الإجراء غير موجود');
+      /* Reference fields are validated against their lists when those lists
+         have values; an empty/unreadable reference source must not block SOP
+         creation (fail-open), which also keeps this handler usable in
+         isolation. */
+      if (!qSopCategoryAccepted_(category, existing && existing.category)) vfNotApplied_('تصنيف الإجراء غير صالح');
+      var deptRefs = qSopDeptOptions_(dbId);
+      if (deptRefs.options.length && !deptRefs.labels[dept]) vfNotApplied_('الإدارة المعنية غير موجودة في جدول الأقسام');
+      var ownerRefs = qSopOwnerChoices_(dirMap);
+      if (ownerRefs.options.length && !ownerRefs.labels[owner]) vfNotApplied_('المالك يجب أن يكون مستخدماً نشطاً في الشركة');
+      /* الدور المعني is a validated enum (4.7.2). A pre-existing record may
+         keep the value it already carries — the rule must not strand a draft or
+         rewrite history — but a NEW value must come from the catalog. */
+      var legacyRoleKept = !!(existing && role === String(existing.applicability_role || '').trim() && !qSopRoleAccepted_(dbId, role));
+      if (!qSopRoleAccepted_(dbId, role) && !legacyRoleKept) {
+        vfNotApplied_('الدور المعني يجب أن يكون من القائمة المعتمدة');
+      }
       var patch = {
         title_ar: titleAr,
-        title_en: String(d.title_en || '').trim(),
+        title_en: titleEn,
         category: category,
-        applicability_dept: String(d.applicability_dept || '').trim(),
-        applicability_role: String(d.applicability_role || '').trim(),
-        owner_email: String(d.owner_email || '').trim()
+        applicability_dept: dept,
+        applicability_role: role,
+        owner_email: owner,
+        owner_name_snapshot: ownerDisplay.state === 'ok' ? ownerDisplay.name : String(existing && existing.owner_name_snapshot || '')
       };
       if (existing) {
         /* بيانات الإجراء تُقفل بعد أول إرسال: أي إصدار خارج المسودة يمنع التعديل. */
-        var locked = getAllRecords_(dbId, QUALITY_SOP_VERSIONS_SHEET).some(function (v) {
-          return String(v.sop_id) === uid && String(v.status) !== 'Draft';
-        });
+        var versions = getAllRecords_(dbId, QUALITY_SOP_VERSIONS_SHEET);
+        var mine = versions.filter(function (v) { return String(v.sop_id) === uid; });
+        var locked = mine.some(function (v) { return String(v.status) !== 'Draft'; });
         if (locked) vfNotApplied_('لا يمكن تعديل بيانات الإجراء بعد إرساله');
+        /* Only a Draft/Rejected version may receive content, and only its own. */
+        var targetV = null;
+        if (vIn) {
+          targetV = vUid ? qSopFindByUid_(versions, vUid) : null;
+          if (!targetV) targetV = mine.filter(function (v) {
+            return String(v.status) === 'Draft' || String(v.status) === 'Rejected';
+          })[0] || null;
+          if (!targetV) vfNotApplied_('لا توجد مسودة قابلة للحفظ');
+          if (String(targetV.sop_id) !== uid) vfNotApplied_('الإصدار لا يخص هذا الإجراء');
+          var tvStatus = String(targetV.status || '');
+          if (tvStatus !== 'Draft' && tvStatus !== 'Rejected') vfNotApplied_('لا يمكن تعديل الإصدار في حالته الحالية');
+        }
+        if (expectedRevision && !guard.recovering) {
+          var curRev = String(existing.revision == null ? '' : existing.revision).trim();
+          if (curRev && curRev !== expectedRevision) {
+            qSopConflict_('تعارض في التعديلات: تغيّرت الوثيقة في جلسة أخرى. راجع المحتوى ثم أعد الحفظ');
+          }
+        }
+        var nextRev = String((Number(existing.revision) || 0) + 1);
+        patch.revision = (guard.recovering && expectedRevision)
+          ? String((Number(expectedRevision) || 0) + 1) : nextRev;
+        if (guard.recovering) {
+          result = qSopRecoverEdit_(dbId, d, user, guard, existing, targetV, patch, vIn, vContent, vSummary, vChangeType, vTemplateMeta, expectedRevision, actor);
+          return;
+        }
+        if (guard.checkpoint) guard.checkpoint({ type: 'vf_quality_sop_save_v1', entity_type: 'sop', entity_uid: uid, mo_uid: uid, base_token: expectedRevision || '', scope: ['sop', 'version', 'event'], stage: 'validated' });
         if (!patchRowByCriteria_(sopSheet, 'unique_id', uid, patch)) vfNotApplied_('الإجراء غير موجود');
+        if (guard.checkpoint) guard.checkpoint({ type: 'vf_quality_sop_save_v1', entity_type: 'sop', entity_uid: uid, mo_uid: uid, base_token: expectedRevision || '', scope: ['sop', 'version', 'event'], stage: 'sop' });
+        if (targetV) {
+          var vPatch = {
+            change_summary: vSummary,
+            template_meta: vTemplateMeta,
+            revision: String((Number(targetV.revision) || 0) + 1)
+          };
+          var vPatchChunks = qSopContentChunks_(vContent);
+          Object.keys(vPatchChunks).forEach(function (k) { vPatch[k] = vPatchChunks[k]; });
+          if (vChangeType) vPatch.change_type = vChangeType;
+          if (String(targetV.status) === 'Rejected') { vPatch.status = 'Draft'; vPatch.reject_comment = ''; }
+          if (!patchRowByCriteria_(getSheet_(QUALITY_SOP_VERSIONS_SHEET, dbId), 'unique_id', String(targetV.unique_id), vPatch)) {
+            vfNotApplied_('الإصدار غير موجود');
+          }
+          if (guard.checkpoint) guard.checkpoint({ type: 'vf_quality_sop_save_v1', entity_type: 'sop', entity_uid: uid, mo_uid: uid, base_token: expectedRevision || '', scope: ['sop', 'version', 'event'], stage: 'version' });
+          if (qSopHasContent_(vContent) || vSummary) {
+            qSopAddEvent_(dbId, uid, Number(targetV.version) || 0, 'Edited', String(targetV.status || ''), vPatch.status || String(targetV.status || ''), user, vSummary, '', '');
+          }
+        }
         qSopLog_(dbId, QUALITY_SOP_SHEET, uid, existing.id, actor, 'update', patch, existing);
-        result = { status: 'success', unique_id: uid, sop_code: String(existing.sop_code || '') };
+        result = { status: 'success', unique_id: uid, sop_code: String(existing.sop_code || ''), revision: nextRev };
         return;
       }
-      /* كود جديد: SOP-<CAT>-NNN حيث NNN = عدد إجراءات نفس التصنيف + 1، مع
-         مسح تفرد على الأكواد الموجودة (نمط settingsUniqueViolation_). */
-      var n = 0;
-      sopRows.forEach(function (r) {
-        if (String(r.category || '').trim().toUpperCase() === category) n++;
-      });
-      var sopCode = '';
-      do {
-        n++;
-        sopCode = 'SOP-' + category + '-' + ('00' + n).slice(-3);
-      } while (settingsUniqueViolation_(sopRows, 'sop_code', sopCode));
+      /* ---- NEW document: <CATEGORY_PREFIX>-<DEPT_ABBR>-<SEQUENCE> (4.7.1) ---- */
+      if (guard.checkpoint) guard.checkpoint({ type: 'vf_quality_sop_save_v1', entity_type: 'sop', entity_uid: createToken, mo_uid: createToken, base_token: createToken, scope: ['sop', 'version', 'event'], stage: 'validated' });
+      var alloc = qSopAllocateCode_(dbId, category, dept, sopRows, actor);
       var sopMap = {
-        sop_code: sopCode,
+        sop_code: alloc.code,
+        code_prefix: alloc.code_prefix,
+        dept_abbrev: alloc.dept_abbrev,
         title_ar: patch.title_ar,
         title_en: patch.title_en,
         category: category,
         applicability_dept: patch.applicability_dept,
         applicability_role: patch.applicability_role,
         owner_email: patch.owner_email,
+        owner_name_snapshot: patch.owner_name_snapshot,
         current_effective_version: '',
-        draft_version: '1'
+        draft_version: '1',
+        create_token: createToken,
+        revision: '1',
+        template_meta: vTemplateMeta || JSON.stringify(qSopDefaultTemplateMeta_(qSopCategoryLabel_(category)))
       };
       var sopUid = qSopStamp_(sopMap, actor).unique_id;
       var inserted = addRecord_(dbId, QUALITY_SOP_SHEET, sopMap, ['sop_code', 'title_ar', 'category']);
+      if (guard.checkpoint) guard.checkpoint({ type: 'vf_quality_sop_save_v1', entity_type: 'sop', entity_uid: sopUid, mo_uid: sopUid, base_token: createToken, scope: ['sop', 'version', 'event'], stage: 'sop' });
       var versionMap = {
         sop_id: sopUid,
         version: 1,
-        change_type: 'Major',
+        change_type: vChangeType || 'Major',
         status: 'Draft',
-        content_html: '',
-        change_summary: '',
+        change_summary: vSummary,
         pdf_ref: '',
         pdf_id: '',
         pdf_sha256: '',
@@ -14513,13 +17548,18 @@ map['actual_hours'] = Math.round(totalHours * 100) / 100;
         approved_at: '',
         reject_comment: '',
         effective_date: '',
-        next_review_date: ''
+        next_review_date: '',
+        template_meta: sopMap.template_meta,
+        revision: '1'
       };
+      var versionChunks = qSopContentChunks_(vContent);
+      Object.keys(versionChunks).forEach(function (k) { versionMap[k] = versionChunks[k]; });
       qSopStamp_(versionMap, actor);
       addRecord_(dbId, QUALITY_SOP_VERSIONS_SHEET, versionMap, ['sop_id', 'version', 'status']);
+      if (guard.checkpoint) guard.checkpoint({ type: 'vf_quality_sop_save_v1', entity_type: 'sop', entity_uid: sopUid, mo_uid: sopUid, base_token: createToken, scope: ['sop', 'version', 'event'], stage: 'version' });
       qSopAddEvent_(dbId, sopUid, 1, 'Created', '', 'Draft', user, '', '', '');
       qSopLog_(dbId, QUALITY_SOP_SHEET, sopUid, inserted.data.assignedId, actor, 'create', sopMap, null);
-      result = { status: 'success', unique_id: sopUid, sop_code: sopCode };
+      result = { status: 'success', unique_id: sopUid, sop_code: alloc.code, revision: '1', code_prefix: alloc.code_prefix, dept_abbrev: alloc.dept_abbrev };
     });
     return result;
   }
@@ -14531,9 +17571,15 @@ map['actual_hours'] = Math.round(totalHours * 100) / 100;
     var sopId = String(d.sop_id || '').trim();
     var changeTypeArg = String(d.change_type || '').trim();
     if (changeTypeArg && QUALITY_SOP_CHANGE_TYPES.indexOf(changeTypeArg) === -1) vfNotApplied_('نوع التغيير غير صالح');
-    var contentHtml = d.content_html == null ? '' : String(d.content_html);
-    var changeSummary = String(d.change_summary == null ? '' : d.change_summary);
+    /* Content is untrusted input: it is sanitized against the server allowlist
+       and size-checked BEFORE it can reach storage (8.1/9). An oversize payload
+       is refused with an actionable message; it is never truncated. */
+    var contentHtml = qSopSanitizeHtml_(qSopCheckContentSize_('محتوى الوثيقة', d.content_html == null ? '' : String(d.content_html)));
+    var changeSummary = qSopCheckCellLimit_('ملخص التغيير', String(d.change_summary == null ? '' : d.change_summary));
+    var expectedRevision = String(d.expected_revision || '').trim();
+    var templateMetaIn = d.template_meta;
     var actor = qSopActor_(user);
+    qSopEnsureSchema_(dbId);
     ensureSheet_(dbId, QUALITY_SOP_SHEET, QUALITY_SOP_HEADERS);
     ensureSheet_(dbId, QUALITY_SOP_VERSIONS_SHEET, QUALITY_SOP_VERSION_HEADERS);
     ensureSheet_(dbId, QUALITY_SOP_EVENTS_SHEET, QUALITY_SOP_EVENT_HEADERS);
@@ -14546,17 +17592,40 @@ map['actual_hours'] = Math.round(totalHours * 100) / 100;
         if (!row) vfNotApplied_('الإصدار غير موجود');
         var status = String(row.status || '');
         if (status !== 'Draft' && status !== 'Rejected') vfNotApplied_('لا يمكن تعديل الإصدار في حالته الحالية');
+        if (expectedRevision) {
+          var curRev = String(row.revision == null ? '' : row.revision).trim();
+          if (curRev && curRev !== expectedRevision) {
+            qSopConflict_('تعارض في التعديلات: تغيّر محتوى الإصدار في جلسة أخرى. راجع المحتوى ثم أعد الحفظ');
+          }
+        }
+        var nextType = changeTypeArg || String(row.change_type || '').trim() || 'Major';
+        var sameContent = qSopContentOf_(row) === contentHtml;
+        var sameSummary = String(row.change_summary == null ? '' : row.change_summary) === changeSummary;
+        /* An unchanged save must not write a row or manufacture an audit event. */
+        if (sameContent && sameSummary && status === 'Draft') {
+          result = {
+            status: 'success', unique_id: uid, version: Number(row.version) || 0,
+            row_status: status, revision: String(row.revision == null ? '' : row.revision), unchanged: true
+          };
+          return;
+        }
+        var nextRev = String((Number(row.revision) || 0) + 1);
         var patch = {
-          change_type: changeTypeArg || String(row.change_type || '').trim() || 'Major',
-          content_html: contentHtml,
-          change_summary: changeSummary
+          change_type: nextType,
+          change_summary: changeSummary,
+          revision: nextRev
         };
+        var editChunks = qSopContentChunks_(contentHtml);
+        Object.keys(editChunks).forEach(function (k) { patch[k] = editChunks[k]; });
+        if (templateMetaIn !== undefined) {
+          patch.template_meta = qSopNormalizeTemplateMeta_(templateMetaIn, qSopCategoryLabel_(String(row.category || '')));
+        }
         /* المسودة المرفوضة تعود مسودةً عند أول تعديل، ويُمسح سبب الرفض القديم. */
         if (status === 'Rejected') { patch.status = 'Draft'; patch.reject_comment = ''; }
         if (!patchRowByCriteria_(versionSheet, 'unique_id', uid, patch)) vfNotApplied_('الإصدار غير موجود');
         qSopAddEvent_(dbId, String(row.sop_id || ''), Number(row.version) || 0, 'Edited', status, patch.status || status, user, changeSummary, '', '');
         qSopLog_(dbId, QUALITY_SOP_VERSIONS_SHEET, uid, row.id, actor, 'update', patch, row);
-        result = { status: 'success', unique_id: uid, version: Number(row.version) || 0, row_status: patch.status || status };
+        result = { status: 'success', unique_id: uid, version: Number(row.version) || 0, row_status: patch.status || status, revision: nextRev };
         return;
       }
       if (!sopId) vfNotApplied_('الإجراء مطلوب');
@@ -14568,12 +17637,16 @@ map['actual_hours'] = Math.round(totalHours * 100) / 100;
       var maxVersion = 0;
       mine.forEach(function (v) { var n = Number(v.version) || 0; if (n > maxVersion) maxVersion = n; });
       var nextVersion = maxVersion + 1;
+      /* A new version inherits the parent's template metadata (structure, cover
+         rows, revision history) but NEVER a stale approval, signature or frozen
+         artifact: those columns are written blank below (4.4). */
+      var parentMeta = qSopParseTemplateMeta_(sop.template_meta);
+      if (!parentMeta.template_id) parentMeta = qSopDefaultTemplateMeta_(qSopCategoryLabel_(String(sop.category || '')));
       var map = {
         sop_id: sopId,
         version: nextVersion,
         change_type: changeTypeArg || 'Major',
         status: 'Draft',
-        content_html: contentHtml,
         change_summary: changeSummary,
         pdf_ref: '',
         pdf_id: '',
@@ -14584,8 +17657,12 @@ map['actual_hours'] = Math.round(totalHours * 100) / 100;
         approved_at: '',
         reject_comment: '',
         effective_date: '',
-        next_review_date: ''
+        next_review_date: '',
+        template_meta: templateMetaIn === undefined ? JSON.stringify(parentMeta) : qSopNormalizeTemplateMeta_(templateMetaIn, qSopCategoryLabel_(String(sop.category || ''))),
+        revision: '1'
       };
+      var newVersionChunks = qSopContentChunks_(contentHtml);
+      Object.keys(newVersionChunks).forEach(function (k) { map[k] = newVersionChunks[k]; });
       qSopStamp_(map, actor);
       addRecord_(dbId, QUALITY_SOP_VERSIONS_SHEET, map, ['sop_id', 'version', 'status']);
       if (!patchRowByCriteria_(sopSheet, 'unique_id', sopId, { draft_version: String(nextVersion) })) vfNotApplied_('الإجراء غير موجود');
@@ -14607,7 +17684,7 @@ map['actual_hours'] = Math.round(totalHours * 100) / 100;
     var row = qSopFindByUid_(safeRows_(dbId, QUALITY_SOP_VERSIONS_SHEET), uid);
     if (!row) vfNotApplied_('الإصدار غير موجود');
     if (String(row.status || '') !== 'Draft') vfNotApplied_('يمكن إرسال المسودات فقط');
-    if (!qSopHasContent_(row.content_html)) vfNotApplied_('لا يمكن إرسال إصدار بدون محتوى');
+    if (!qSopHasContent_(qSopContentOf_(row))) vfNotApplied_('لا يمكن إرسال إصدار بدون محتوى');
     var sop = qSopFindByUid_(safeRows_(dbId, QUALITY_SOP_SHEET), String(row.sop_id || ''));
     if (!sop) vfNotApplied_('الإجراء غير موجود');
     /* التجميد قبل القفل وقبل أي كتابة: أي فشل هنا لا يكتب صفاً ولا حدثاً. */
@@ -14896,7 +17973,14 @@ map['actual_hours'] = Math.round(totalHours * 100) / 100;
       var statusMap = qAckActiveStatusMap_(dbId);
       var hasStatus = Object.keys(statusMap).length > 0;
       var dept = qAckNorm_(sop.applicability_dept);
-      var role = qAckNorm_(sop.applicability_role);
+      var roleRaw = String(sop.applicability_role == null ? '' : sop.applicability_role).trim();
+      var allDept = roleRaw === QUALITY_SOP_ALL_DEPT;
+      var role = allDept ? '' : qAckNorm_(roleRaw);
+      /* `جميع العاملين بالإدارة` is a DEPARTMENT-scoped rule, never an
+         all-company shortcut: without a chosen department it is refused rather
+         than silently broadened (4.7.2). Ordinary values keep the exact-title
+         match they always had, including the legacy blank-role case. */
+      if (allDept && !dept) vfNotApplied_('الدور المعني «جميع العاملين بالإدارة» يتطلب تحديد الإدارة المعنية');
       var targets = safeRows_(dbId, QUALITY_EMP_INFO_SHEET).filter(function (e) {
         var empId = String(e.emp_id == null ? '' : e.emp_id).trim();
         if (!empId) return false;
@@ -14905,9 +17989,13 @@ map['actual_hours'] = Math.round(totalHours * 100) / 100;
           if (!st || String(st.status_type || '') !== QUALITY_EMP_ACTIVE_STATUS) return false;
         }
         if (dept && qAckNorm_(e.section) !== dept) return false;
-        if (role && qAckNorm_(e.title) !== role) return false;
+        if (!allDept && role && qAckNorm_(e.title) !== role) return false;
         return true;
       });
+      /* Zero recipients is an explicit outcome, never a claimed delivery. */
+      if (!targets.length) {
+        vfNotApplied_('لا يوجد موظفون مطابقون للإدارة/الدور المحدد؛ لم يتم إطلاق أي إقرار');
+      }
 
       var mine = getAllRecords_(dbId, QUALITY_SOP_ACKS_SHEET).filter(function (a) {
         return String(a.sop_id == null ? '' : a.sop_id).trim() === sopId;
@@ -16007,6 +19095,284 @@ map['actual_hours'] = Math.round(totalHours * 100) / 100;
     });
     return result;
   }
+
+  /* ===================== QUALITY MODULE — PHASE 5: الجودة العامة =====================
+   * A general-quality records workspace (4.5): product specifications and
+   * miscellaneous quality activities. ONE additive sheet with a type
+   * discriminator, its own permission key (`vf_quality_general`), its own
+   * Draft/Active/Archived state, and its own handlers.
+   *
+   * It deliberately does NOT create SOP versions, SOP events, PDF freezes or
+   * acknowledgements: sharing the editor must not share the SOP lifecycle.
+   * `Active` here means "an active general record" — it is NOT an approval, a
+   * conformity certificate or a controlled-document release.
+   */
+  const QUALITY_GEN_STATUS_AR = { Draft: 'مسودة', Active: 'نشط', Archived: 'مؤرشف' };
+
+  function qGenNormType_(v) { return String(v == null ? '' : v).trim().toLowerCase(); }
+
+  function qGenTypeAccepted_(v) { return QUALITY_GEN_TYPES.indexOf(qGenNormType_(v)) !== -1; }
+
+  /** Safe reference links: only http/https, capped in number and length. */
+  function qGenNormalizeLinks_(raw) {
+    var list = [];
+    if (Array.isArray(raw)) list = raw;
+    else {
+      var s = String(raw == null ? '' : raw).trim();
+      if (s) {
+        try {
+          var parsed = JSON.parse(s);
+          if (Array.isArray(parsed)) list = parsed;
+        } catch (e) { list = s.split(/[\n,]+/); }
+      }
+    }
+    var out = [], seen = {};
+    list.forEach(function (item) {
+      var url = '', label = '';
+      if (item && typeof item === 'object') { url = String(item.url || ''); label = String(item.label || ''); }
+      else url = String(item || '');
+      var safe = qSopSafeUrl_(url);
+      if (!safe || !/^https?:/i.test(safe)) return;
+      if (seen[safe]) return;
+      seen[safe] = true;
+      out.push({ url: qSopCheckCellLimit_('الرابط', safe), label: qSopPlainText_(label).slice(0, 200) });
+    });
+    if (out.length > 20) out = out.slice(0, 20);
+    return out;
+  }
+
+  /** Read-only company-scoped product projection: id/code/name ONLY.
+   *  No cost, price or margin field is read, and no product row is written, so
+   *  a specification can reference a product without granting `vf_products`
+   *  editing rights. */
+  function qGenProductOptions_(dbId) {
+    var out = [];
+    try {
+      safeRows_(dbId, 'valley_products').forEach(function (p) {
+        var id = String(p.id == null ? '' : p.id).trim();
+        if (!id) return;
+        out.push({
+          value: id,
+          code: String(p.code == null ? p.product_code == null ? '' : p.product_code : p.code).trim(),
+          name: String(p.name == null ? p.product_name == null ? '' : p.product_name : p.name).trim()
+        });
+      });
+    } catch (e) {}
+    out.sort(function (a, b) { return String(a.name || a.code).localeCompare(String(b.name || b.code), 'ar'); });
+    return out;
+  }
+
+  function qGenFindByUid_(rows, uid) { return qSopFindByUid_(rows, uid); }
+
+  function qGenRowTo_ (r, ownerNames) {
+    var em = String(r.owner_email || '').trim().toLowerCase();
+    var disp = ownerNames && ownerNames[em] ? ownerNames[em] : qSopOwnerDisplay_({}, em, '');
+    var links = [];
+    try {
+      var parsed = JSON.parse(String(r.links_json || '[]'));
+      if (Array.isArray(parsed)) links = parsed;
+    } catch (eLinks) {}
+    return {
+      unique_id: String(r.unique_id || ''),
+      record_type: qGenNormType_(r.record_type),
+      title: String(r.title || ''),
+      spec_code: String(r.spec_code || ''),
+      product_id: String(r.product_id || ''),
+      product_name_snapshot: String(r.product_name || ''),
+      activity_category: String(r.activity_category || ''),
+      owner_email: em,
+      owner_name: disp.name,
+      record_date: String(r.record_date || ''),
+      due_date: String(r.due_date || ''),
+      body_html: String(r.body_html || ''),
+      links: links,
+      status: String(r.status || 'Draft'),
+      revision: String(r.revision || ''),
+      created_at: String(r.created_at || ''),
+      user: String(r.user || '')
+    };
+  }
+
+  function getQualityGeneral_(data, user, dbId) {
+    qSopEnsureSchema_(dbId);
+    var dirMap = qSopOwnerNameMap_();
+    var ownerNames = {};
+    var rows = safeRows_(dbId, QUALITY_GEN_SHEET);
+    rows.forEach(function (r) {
+      var em = String(r.owner_email || '').trim().toLowerCase();
+      if (em && !ownerNames[em]) ownerNames[em] = qSopOwnerDisplay_(dirMap, em, '');
+    });
+    return {
+      status: 'success',
+      records: rows.map(function (r) { return qGenRowTo_(r, ownerNames); }),
+      owner_choices: qSopOwnerChoices_(dirMap).options,
+      types: QUALITY_GEN_TYPES,
+      statuses: QUALITY_GEN_STATUSES,
+      status_labels: QUALITY_GEN_STATUS_AR,
+      products: qGenProductOptions_(dbId),
+      template: QUALITY_DOC_TEMPLATE,
+      activity_note: 'السجل العام لا يعني اعتماداً أو مطابقة؛ اعتماد مواصفة يتم عبر وثيقة ضبط وثائقي مرجعية.'
+    };
+  }
+
+  /** A blank, EDITABLE product-specification body scaffold. Every limit,
+      tolerance, ingredient, allergen and shelf-life value is left empty: the
+      server never invents product facts or food-safety limits. */
+  function qGenSpecBodyTemplate_() {
+    return '<h2>الوصف والغرض من الاستخدام</h2><p></p>' +
+      '<h2>المكونات والتركيب</h2><p></p>' +
+      '<h2>الخصائص الفيزيائية والحسية</h2><table><tr><th>الخاصية</th><th>الحد / المواصفة</th><th>طريقة الفحص</th></tr>' +
+      '<tr><td>اللون</td><td></td><td></td></tr><tr><td>الرائحة</td><td></td><td></td></tr><tr><td>القوام</td><td></td><td></td></tr></table>' +
+      '<h2>المعايير الكيميائية</h2><table><tr><th>البند</th><th>الحد الأدنى</th><th>الحد الأقصى</th><th>طريقة الفحص</th></tr>' +
+      '<tr><td></td><td></td><td></td><td></td></tr></table>' +
+      '<h2>المعايير الميكروبيولوجية</h2><table><tr><th>البند</th><th>الحد</th><th>طريقة الفحص</th></tr>' +
+      '<tr><td></td><td></td><td></td></tr></table>' +
+      '<h2>التعبئة والتغليف والبطاقة</h2><p></p>' +
+      '<h2>التخزين والنقل</h2><p></p>' +
+      '<h2>مدة الصلاحية</h2><p></p>' +
+      '<h2>المراجع</h2><p></p>';
+  }
+
+  function qGenActivityBodyTemplate_() {
+    return '<h2>الوصف</h2><p></p><h2>الملاحظات</h2><p></p><h2>المراجع</h2><p></p>';
+  }
+
+  function saveQualityGeneral_(data, user, dbId) {
+    var d = data || {};
+    var recordType = qGenNormType_(d.record_type);
+    if (!qGenTypeAccepted_(recordType)) vfNotApplied_('نوع السجل غير صالح');
+    var title = qSopPlainText_(d.title);
+    if (!title) vfNotApplied_('عنوان السجل مطلوب');
+    qSopCheckCellLimit_('العنوان', title);
+    var specCode = qSopPlainText_(d.spec_code);
+    var activityCategory = qSopPlainText_(d.activity_category);
+    var owner = String(d.owner_email || '').trim().toLowerCase();
+    if (!owner) vfNotApplied_('المالك مطلوب');
+    var recordDate = qSopPlainText_(d.record_date);
+    var dueDate = qSopPlainText_(d.due_date);
+    var productId = qSopPlainText_(d.product_id);
+    var links = qGenNormalizeLinks_(d.links);
+    qSopCheckCellLimit_('الروابط', JSON.stringify(links));
+    var bodyHtml = qSopSanitizeHtml_(qSopCheckCellLimit_('المحتوى', d.body_html == null ? '' : String(d.body_html)));
+    var statusArg = String(d.status || '').trim() || 'Draft';
+    if (QUALITY_GEN_STATUSES.indexOf(statusArg) === -1) vfNotApplied_('حالة السجل غير صالحة');
+    var expectedRevision = qSopPlainText_(d.expected_revision);
+    var uid = qSopPlainText_(d.unique_id);
+    var createToken = qSopPlainText_(d.create_token);
+    var actor = qSopActor_(user);
+    var dirMap = qSopOwnerNameMap_();
+    var ownerDisplay = qSopOwnerDisplay_(dirMap, owner, '');
+    var ownerChoices = qSopOwnerChoices_(dirMap);
+    if (ownerChoices.options.length && !ownerChoices.labels[owner]) {
+      vfNotApplied_('المالك يجب أن يكون مستخدماً نشطاً في الشركة');
+    }
+    qSopEnsureSchema_(dbId);
+    var result;
+    executeWithLock_(function () {
+      var sheet = getSheet_(QUALITY_GEN_SHEET, dbId);
+      var rows = getAllRecords_(dbId, QUALITY_GEN_SHEET);
+      if (!uid && createToken) {
+        var byToken = rows.filter(function (r) { return String(r.create_token || '').trim() === createToken; })[0];
+        if (byToken) {
+          result = { status: 'success', unique_id: String(byToken.unique_id || ''), record: qGenRowTo_(byToken, null), idempotent: true };
+          return;
+        }
+      }
+      var existing = uid ? qGenFindByUid_(rows, uid) : null;
+      if (uid && !existing) vfNotApplied_('السجل غير موجود');
+      if (existing && String(existing.status || '') === 'Archived') {
+        vfNotApplied_('السجل مؤرشف وقابل للقراءة فقط حتى يُستعاد');
+      }
+      /* Product reference is READ-ONLY and optional: an unlinked draft is a
+         first-class record, so the page works before any product exists. */
+      var productName = '';
+      if (productId) {
+        var found = qGenProductOptions_(dbId).filter(function (p) { return p.value === productId; })[0];
+        if (!found) vfNotApplied_('الصنف المرتبط غير موجود');
+        productName = found.name || found.code || '';
+      }
+      if (existing) {
+        if (expectedRevision) {
+          var curRev = String(existing.revision == null ? '' : existing.revision).trim();
+          if (curRev && curRev !== expectedRevision) {
+            qSopConflict_('تعارض في التعديلات: تغيّر السجل في جلسة أخرى. راجع المحتوى ثم أعد الحفظ');
+          }
+        }
+        var patch = {
+          record_type: recordType,
+          title: title,
+          spec_code: specCode,
+          product_id: productId,
+          product_name: productName,
+          activity_category: activityCategory,
+          owner_email: owner,
+          record_date: recordDate,
+          due_date: dueDate,
+          body_html: bodyHtml,
+          links_json: JSON.stringify(links),
+          status: statusArg,
+          revision: String((Number(existing.revision) || 0) + 1)
+        };
+        if (!patchRowByCriteria_(sheet, 'unique_id', uid, patch)) vfNotApplied_('السجل غير موجود');
+        qSopLog_(dbId, QUALITY_GEN_SHEET, uid, existing.id, actor, 'update', patch, existing);
+        result = { status: 'success', unique_id: uid, revision: patch.revision };
+        return;
+      }
+      var map = {
+        record_type: recordType,
+        title: title,
+        spec_code: specCode,
+        product_id: productId,
+        product_name: productName,
+        activity_category: activityCategory,
+        owner_email: owner,
+        record_date: recordDate,
+        due_date: dueDate,
+        body_html: bodyHtml,
+        links_json: JSON.stringify(links),
+        status: statusArg,
+        revision: '1'
+      };
+      /* `create_token` is an internal column: it is not part of the public
+         header list, so it is appended by the additive upgrade before use. */
+      qSopEnsureHeaders_(dbId, QUALITY_GEN_SHEET, ['create_token', 'owner_name_snapshot']);
+      map.create_token = createToken;
+      map.owner_name_snapshot = ownerDisplay.state === 'ok' ? ownerDisplay.name : '';
+      qSopStamp_(map, actor);
+      var inserted = addRecord_(dbId, QUALITY_GEN_SHEET, map, ['record_type', 'title', 'status']);
+      qSopLog_(dbId, QUALITY_GEN_SHEET, map.unique_id, inserted.data.assignedId, actor, 'create', map, null);
+      result = { status: 'success', unique_id: map.unique_id, revision: '1', record: qGenRowTo_(map, null) };
+    });
+    return result;
+  }
+
+  /** Archive / restore. `full` access only; Archived is read-only until restored. */
+  function setQualityGeneralStatus_(data, user, dbId) {
+    var d = data || {};
+    var uid = qSopPlainText_(d.unique_id);
+    if (!uid) vfNotApplied_('معرف السجل مطلوب');
+    var status = String(d.status || '').trim();
+    if (status !== 'Archived' && status !== 'Active' && status !== 'Draft') vfNotApplied_('حالة السجل غير صالحة');
+    var expectedRevision = qSopPlainText_(d.expected_revision);
+    var actor = qSopActor_(user);
+    qSopEnsureSchema_(dbId);
+    var result;
+    executeWithLock_(function () {
+      var sheet = getSheet_(QUALITY_GEN_SHEET, dbId);
+      var rows = getAllRecords_(dbId, QUALITY_GEN_SHEET);
+      var existing = qGenFindByUid_(rows, uid);
+      if (!existing) vfNotApplied_('السجل غير موجود');
+      if (expectedRevision) {
+        var curRev = String(existing.revision == null ? '' : existing.revision).trim();
+        if (curRev && curRev !== expectedRevision) qSopConflict_('تعارض في التعديلات: تغيّر السجل في جلسة أخرى');
+      }
+      var patch = { status: status, revision: String((Number(existing.revision) || 0) + 1) };
+      if (!patchRowByCriteria_(sheet, 'unique_id', uid, patch)) vfNotApplied_('السجل غير موجود');
+      qSopLog_(dbId, QUALITY_GEN_SHEET, uid, existing.id, actor, 'update', patch, existing);
+      result = { status: 'success', unique_id: uid, row_status: status, revision: patch.revision };
+    });
+    return result;
+  }
   // ===================== QUALITY MODULE END =====================
 
   // ===================== REGISTER =====================
@@ -16160,6 +19526,15 @@ map['actual_hours'] = Math.round(totalHours * 100) / 100;
   ValleyFoods.register('save_quality_audit', withRefBust_(saveQualityAudit_, ['quality_audits']));
   ValleyFoods.register('save_quality_finding', withRefBust_(saveQualityFinding_, ['quality_audits']));
   ValleyFoods.register('escalate_finding_to_ncr', withRefBust_(escalateFindingToNcr_, ['quality_audits', 'quality_ncr']));
+
+  /* ===================== QUALITY MODULE (الجودة العامة) =====================
+     صفحة مستقلة تحت الجودة، بمفتاح صلاحية خاص وبلا أي أثر على دورة حياة
+     السياسات: لا إصدارات ولا تجميد PDF ولا إقرارات. */
+  ValleyFoods.register('get_quality_general', getQualityGeneral_);
+  ValleyFoods.register('save_quality_general', withRefBust_(saveQualityGeneral_, ['quality_general']));
+  ValleyFoods.register('set_quality_general_status', withRefBust_(setQualityGeneralStatus_, ['quality_general']));
+  /* إعداد اختصارات الإدارات لأكواد السياسات (4.7.1). */
+  ValleyFoods.register('save_quality_dept_abbr', withRefBust_(saveQualityDeptAbbr_, ['quality_sops']));
 
   function prefetchRefs_(data, user, dbId) {
     /* Phase 7.2 — this used to warm five kinds as RAW record arrays under the

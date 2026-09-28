@@ -84,7 +84,15 @@ const PAGE_ACCESS = wiringCtx.__out.PAGE_ACCESS;
 const qualityEntries = Object.keys(PAGE_ACCESS).filter(k => String((PAGE_ACCESS[k] || {}).page || '').indexOf('vf_quality') === 0);
 const qualityWrites = qualityEntries.filter(k => PAGE_ACCESS[k].access !== 'read');
 const qualityReads = qualityEntries.filter(k => PAGE_ACCESS[k].access === 'read');
-check(qualityWrites.length === 17, 'PAGE_ACCESS declares the 17 quality write actions (' + qualityWrites.length + ' found)');
+/* 17 original writes + the three added by the SOP-editor programme:
+   save_quality_dept_abbr (abbreviation configuration, full-only) and the
+   general-quality write/set-status pair on the new page. Each is asserted to be
+   wrapped in withRefBust_ below, so the count cannot grow silently. */
+check(qualityWrites.length === 20, 'PAGE_ACCESS declares the 20 quality write actions (' + qualityWrites.length + ' found)');
+check(qualityWrites.indexOf('save_quality_dept_abbr') !== -1 &&
+  qualityWrites.indexOf('save_quality_general') !== -1 &&
+  qualityWrites.indexOf('set_quality_general_status') !== -1,
+  'the three write actions added by the SOP-editor programme are present');
 ['save_quality_audit', 'save_quality_finding', 'escalate_finding_to_ncr'].forEach(function (a) {
   check(qualityWrites.indexOf(a) !== -1, a + ' is declared a quality write');
 });

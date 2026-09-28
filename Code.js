@@ -1581,6 +1581,10 @@ function deleteRowsWhereIn_(sheet, criteriaHeader, values) {
  *   actual (expensive) Sheets read when there's a cache miss.
  */
 function getRefsCached_(dbId, kind, ttlSeconds, builder) {
+  if (typeof _mysqlRequest_ !== 'undefined' && _mysqlRequest_ && String(dbId).indexOf('mysql_') === 0) return builder();
+  if (typeof _mysqlRequest_ !== 'undefined' && _mysqlRequest_ && String(dbId).indexOf('mysql_') === 0) return builder();
+  if (typeof _mysqlRequest_ !== 'undefined' && _mysqlRequest_ && String(dbId).indexOf('mysql_') === 0) return builder();
+  if (typeof _mysqlRequest_ !== 'undefined' && _mysqlRequest_ && String(dbId).indexOf('mysql_') === 0) return builder();
   const key = 'refs_' + String(dbId) + '_' + String(kind);
   try {
     const cached = getChunkedCache_(key);
@@ -3183,7 +3187,8 @@ function loginUser_(payload, sessionToken, authUser) {
 
   const storedHash = String(userRow.passwordhash || '').trim();
   if (storedHash === '') {
-    throw new Error('لم يتم تعيين كلمة مرور لهذا الحساب. يرجى طلب إعادة تعيين من مسؤول النظام.');
+    clearLoginFailures_(email);
+    return { status: 'setup_required', email: email };
   }
 
   if (!payload.password) throw new Error('كلمة المرور مطلوبة');
@@ -3214,10 +3219,131 @@ function loginUser_(payload, sessionToken, authUser) {
 }
 
 function setupFirstTimePassword_(payload, sessionToken, authUser) {
-  /* A known email address must never be enough to claim a pre-created account.
-   * Existing passwordhash/salt fields already support the super-admin reset flow
-   * in adminSaveUser_; a token workflow would require prohibited schema. */
-  throw new Error('تعيين كلمة المرور لأول مرة متوقف. اطلب من مسؤول النظام إعادة تعيين كلمة المرور.');
+  const p = payload || {};
+  const email = String(p.email || '').trim().toLowerCase();
+  const code = String(p.verificationCode || '').replace(/\s/g, '');
+  const password = String(p.password || '');
+  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('البريد الإلكتروني غير صالح');
+  if (!/^\d{6}$/.test(code)) throw new Error('أدخل رمز التحقق المكوّن من 6 أرقام');
+  if (password.length < 8 || password.length > 256) throw new Error('كلمة المرور يجب أن تكون بين 8 و256 حرفاً');
+
+  const cache = CacheService.getScriptCache();
+  const cacheKey = passwordSetupKey_(email);
+  const challenge = cache.get('pwsetup_code_' + cacheKey);
+  if (!challenge) throw new Error('انتهت صلاحية رمز التحقق. اطلب رمزاً جديداً.');
+  const attemptsKey = 'pwsetup_attempts_' + cacheKey;
+  const attempts = Number(cache.get(attemptsKey) || 0);
+  if (attempts >= 5) {
+    cache.remove('pwsetup_code_' + cacheKey);
+    throw new Error('تم تجاوز عدد المحاولات. اطلب رمز تحقق جديداً.');
+  }
+  cache.put(attemptsKey, String(attempts + 1), 600);
+  if (!passwordSetupConstantTimeEqual_(challenge, hashPassword_(code, email))) {
+    if (attempts + 1 >= 5) cache.remove('pwsetup_code_' + cacheKey);
+    throw new Error('رمز التحقق غير صحيح');
+  }
+
+  const userRow = findPasswordSetupUser_(email);
+  if (!userRow) throw new Error('تعذر التحقق من الحساب. راجع مسؤول النظام.');
+  if (String(userRow.status || 'active').trim().toLowerCase() !== 'active') {
+    cache.remove('pwsetup_code_' + cacheKey);
+    throw new Error('هذا الحساب غير مفعل، يرجى مراجعة الإدارة');
+  }
+  const company = String(userRow.company || '').trim();
+  const role = String(userRow.role || '').trim();
+  if (company) assertCompanyEnabled_(company);
+  else if (!/super\s*admin/i.test(role)) throw new Error('الحساب غير مرتبط بشركة مفعلة، يرجى مراجعة الإدارة');
+  if (String(userRow.passwordhash || '').trim()) {
+    cache.remove('pwsetup_code_' + cacheKey);
+    throw new Error('تم تعيين كلمة مرور لهذا الحساب بالفعل. سجل الدخول أو تواصل مع مسؤول النظام.');
+  }
+
+  const salt = generateSalt_();
+  const changes = {
+    passwordhash: hashPassword_(password, salt),
+    salt: salt,
+    sessiontoken: '',
+    sessionexpiry: '',
+    updated_at: new Date()
+  };
+  if (userRow._meta && userRow._meta.documentId) {
+    systemPatchRecord_('ERP_Users', userRow._meta.documentId, changes,
+      { expectedUpdateTime: userRow._meta.updateTime });
+  } else {
+    storagePatchCompat_('ERP_Users', 'email', email, changes);
+  }
+  bumpVersion_('ERP_Users');
+  cache.remove('pwsetup_code_' + cacheKey);
+  cache.remove(attemptsKey);
+  cache.remove('pwsetup_cooldown_' + cacheKey);
+  return { status: 'success', user: { email: email, name: userRow.name || '', role: role, company: company } };
+}
+
+function passwordSetupKey_(email) {
+  return requestGuardHash_(String(email || '').trim().toLowerCase()).slice(0, 40);
+}
+
+function findPasswordSetupUser_(email) {
+  const exact = systemFindByBusinessKey_('ERP_Users', 'email', email);
+  if (exact) return exact;
+  return systemRowsCompat_('ERP_Users').find(function (row) {
+    return String(row.email || '').trim().toLowerCase() === String(email || '').trim().toLowerCase();
+  }) || null;
+}
+
+function passwordSetupConstantTimeEqual_(left, right) {
+  left = String(left || ''); right = String(right || '');
+  if (left.length !== right.length) return false;
+  let diff = 0;
+  for (let i = 0; i < left.length; i++) diff |= left.charCodeAt(i) ^ right.charCodeAt(i);
+  return diff === 0;
+}
+
+function requestFirstTimePasswordCode_(payload) {
+  const email = String(payload && payload.email || '').trim().toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return { status: 'sent' };
+  const cache = CacheService.getScriptCache();
+  const key = passwordSetupKey_(email);
+  const cooldownKey = 'pwsetup_cooldown_' + key;
+  const countKey = 'pwsetup_count_' + key;
+  const userRow = findPasswordSetupUser_(email);
+  let codeToSend = '';
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(5000)) throw new Error('تعذر بدء طلب التحقق الآن. حاول بعد قليل.');
+  try {
+    if (cache.get(cooldownKey)) throw new Error('انتظر دقيقة قبل طلب رمز تحقق آخر');
+    const count = Number(cache.get(countKey) || 0);
+    if (count >= 5) throw new Error('تم تجاوز عدد طلبات التحقق لهذا الحساب. حاول لاحقاً.');
+    cache.put(cooldownKey, '1', 60);
+    cache.put(countKey, String(count + 1), 21600);
+  } finally {
+    lock.releaseLock();
+  }
+
+  if (userRow && String(userRow.status || 'active').trim().toLowerCase() === 'active' &&
+      !String(userRow.passwordhash || '').trim()) {
+    const company = String(userRow.company || '').trim();
+    const role = String(userRow.role || '').trim();
+    if (!company && !/super\s*admin/i.test(role)) return { status: 'sent' };
+    if (company) {
+      try { assertCompanyEnabled_(company); } catch (disabledCompany) { return { status: 'sent' }; }
+    }
+    const digits = Utilities.getUuid().replace(/-/g, '').slice(0, 8);
+    codeToSend = String((parseInt(digits, 16) % 900000) + 100000);
+    cache.put('pwsetup_code_' + key, hashPassword_(codeToSend, email), 600);
+    cache.put('pwsetup_attempts_' + key, '0', 600);
+  }
+  if (codeToSend) {
+    try {
+      MailApp.sendEmail(email, 'رمز إنشاء كلمة مرور النظام',
+        'رمز التحقق الخاص بإنشاء كلمة مرورك هو: ' + codeToSend + '\n\nتنتهي صلاحية الرمز خلال 10 دقائق. إذا لم تطلبه، تجاهل هذه الرسالة.');
+    } catch (mailError) {
+      cache.remove('pwsetup_code_' + key);
+      cache.remove('pwsetup_attempts_' + key);
+      throw new Error('تعذر إرسال رمز التحقق الآن. تواصل مع مسؤول النظام.');
+    }
+  }
+  return { status: 'sent' };
 }
 
 // ==========================================
@@ -3455,22 +3581,13 @@ function handleLoginWithDevice_(payload) {
   };
 }
 
+function handleRequestPasswordSetupCode_(payload) {
+  return requestFirstTimePasswordCode_(payload || {});
+}
+
 function handleSetupWithDevice_(payload) {
   const sr = setupFirstTimePassword_(payload, null, null);
-  if (sr.status !== 'success') return sr;
-  const email = sr.user.email;
-  const maxConcurrent = readMaxConcurrent_(email);
-  const deviceId = (payload.deviceId && String(payload.deviceId).trim()) || ('dev_' + Utilities.getUuid());
-  const deviceName = (payload.deviceName && String(payload.deviceName).trim()) || 'جهاز غير معروف';
-  const session = SessionManager_.create(email, sr.user.name, sr.user.role, sr.user.company, deviceId, deviceName, maxConcurrent);
-  return {
-    status: 'success',
-    token: session.token,
-    user: sr.user,
-    device_id: session.device_id,
-    requires_device_name: !payload.deviceName,
-    session_expires_at: session.expires_at
-  };
+  return sr;
 }
 
 // ==========================================
@@ -5308,6 +5425,203 @@ function setupMySqlCredentials_() {
  * Script Properties (MYSQL_USER / MYSQL_PASSWORD) — never hardcode them.
  */
 function dbGetConnection_() {
+  if (typeof _mysqlRequest_ !== 'undefined' && _mysqlRequest_) return mysqlConnection_();
+  const props = PropertiesService.getScriptProperties();
+  const host = props.getProperty(DBLIVE_CONFIG.props.host) || DBLIVE_CONFIG.host;
+  const port = props.getProperty(DBLIVE_CONFIG.props.port) || DBLIVE_CONFIG.port;
+  const db = props.getProperty(DBLIVE_CONFIG.props.database) || DBLIVE_CONFIG.database;
+  const user = (dbLiveProp_(props, DBLIVE_CONFIG.props.user, DBLIVE_CONFIG.legacyProps.user) || '').trim();
+  const pass = dbLiveProp_(props, DBLIVE_CONFIG.props.pass, DBLIVE_CONFIG.legacyProps.pass) || '';
+  var missingCreds = [];
+  if (!user) missingCreds.push('MYSQL_USER');
+  if (!pass) missingCreds.push('MYSQL_PASSWORD');
+  if (missingCreds.length > 0) throw new Error('MySQL credentials not configured (' + missingCreds.join(', ') + ' missing). Add them in Project Settings → Script properties of this script project — never put passwords in code.');
+  const url = 'jdbc:mysql://' + host + ':' + port + '/' + db;
+  return Jdbc.getConnection(url, user, pass);
+}
+
+/* Shared MySQL execution. Only server-owned definitions call mysqlRead_; there
+ * is deliberately no query-name/SQL browser route. A request owns its JDBC
+ * resources, and nested readers borrow the same lazy connection. */
+var _mysqlRequest_ = null;
+function mysqlCanonical_(value, key) {
+  if (Array.isArray(value)) {
+    var a = value.map(function (v) { return mysqlCanonical_(v); });
+    if (['years', 'months', 'product_ids', 'chart_of_accounts_list', 'ids'].indexOf(key) >= 0) {
+      a = a.filter(function (v, i) { return a.indexOf(v) === i; }).sort();
+    }
+    return a;
+  }
+  if (value && typeof value === 'object') {
+    var out = {};
+    Object.keys(value).sort().forEach(function (k) {
+      if (k !== 'refresh' && value[k] !== undefined) out[k] = mysqlCanonical_(value[k], k);
+    });
+    return out;
+  }
+  return value;
+}
+function mysqlDigest_(value) {
+  return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, JSON.stringify(value), Utilities.Charset.UTF_8)
+    .map(function (b) { return ('0' + ((b + 256) % 256).toString(16)).slice(-2); }).join('');
+}
+function mysqlDatabase_() {
+  var p = PropertiesService.getScriptProperties();
+  return mysqlDigest_([p.getProperty(DBLIVE_CONFIG.props.host) || DBLIVE_CONFIG.host,
+    p.getProperty(DBLIVE_CONFIG.props.port) || DBLIVE_CONFIG.port,
+    p.getProperty(DBLIVE_CONFIG.props.database) || DBLIVE_CONFIG.database]);
+}
+function mysqlEpoch_() {
+  // Durable epochs cannot revert to an old generation after cache eviction.
+  try { return PropertiesService.getScriptProperties().getProperty('MYSQL_READ_EPOCH') || '0'; }
+  catch (e) { try { return CacheService.getScriptCache().get('MYSQL_READ_EPOCH_FALLBACK') || '0'; } catch (e2) { return '0'; } }
+}
+function mysqlInvalidate_() {
+  var value = Utilities.getUuid(), done = false;
+  try { PropertiesService.getScriptProperties().setProperty('MYSQL_READ_EPOCH', value); done = true; } catch (e) {}
+  try { CacheService.getScriptCache().put('MYSQL_READ_EPOCH_FALLBACK', value, 21600); done = true; } catch (e2) {}
+  if (!done) Logger.log('MySQL cache invalidation unavailable; bounded cache expiry remains active');
+}
+function mysqlWithRequest_(scope, user, action, run) {
+  if (_mysqlRequest_) return run();
+  var r = { scope: scope, user: user, action: action, connection: null, resources: [], stack: [], errors: 0,
+    connectionMs: 0, sqlMs: 0, readMs: 0, jsonParseMs: 0, rows: 0 };
+  _mysqlRequest_ = r;
+  try { return run(); }
+  finally {
+    r.resources.reverse().forEach(function (resource) { try { resource.close(); } catch (e) {} });
+    try { if (r.connection) r.connection.close(); } catch (e) {}
+    _mysqlRequest_ = null;
+  }
+}
+function mysqlReading_(name) {
+  var r = _mysqlRequest_;
+  return !!(r && r.stack[r.stack.length - 1] === name);
+}
+function mysqlParams_(data) {
+  var p = Object.assign({}, data || {});
+  ['limit', 'offset', 'box_limit'].forEach(function (k) {
+    if (p[k] !== undefined && (!Number.isFinite(Number(p[k])) || Number(p[k]) < 0 || !Number.isInteger(Number(p[k])))) {
+      throw new Error('Invalid pagination');
+    }
+  });
+  if (p.offset !== undefined && Number(p.offset) > 1000000) throw new Error('Pagination offset exceeds the supported window');
+  return p;
+}
+function mysqlRead_(def, data, run) {
+  var r = _mysqlRequest_;
+  if (!r || !r.user) throw new Error('Authorized MySQL request required');
+  def.authorize(r); // Runs on hits as well as misses.
+  var p = def.normalize(data || {}), start = Date.now(), key = null, hit = null;
+  var before = [r.connectionMs, r.sqlMs, r.readMs, r.rows, r.errors, r.jsonParseMs || 0], ok = false;
+  try {
+    try {
+      key = 'mysql_' + mysqlDigest_([mysqlDatabase_(), r.scope, r.action,
+        // Entire authority object hashed, never logged; isolates changed grants.
+        mysqlCanonical_(r.user), def.name, def.version, def.dependencies, mysqlEpoch_(), mysqlCanonical_(p)]);
+      if (def.ttl && !p.refresh) hit = getChunkedCache_(key);
+    } catch (cacheError) { key = null; }
+    if (hit && hit.v === def.version && Date.now() - hit.at >= 0 && Date.now() - hit.at < def.ttl * 1000 && def.valid(hit.value)) {
+      ok = true;
+      if (hit.value.status === 'ok') hit.value._mysql = {
+        read_at: hit.at, expires_at: hit.at + def.ttl * 1000, cache_hit: true,
+        elapsed_ms: Date.now() - start,
+        connection_ms: r.connectionMs - before[0], sql_ms: r.sqlMs - before[1],
+        read_ms: r.readMs - before[2], json_parse_ms: (r.jsonParseMs || 0) - before[5],
+        rows_read: r.rows - before[3]
+      };
+      return hit.value;
+    }
+    hit = null;
+    r.stack.push(def.name);
+    var result;
+    try { result = run(p); } finally { r.stack.pop(); }
+    ok = def.valid(result);
+    if (ok && key && def.ttl && r.errors === before[4]) {
+      try { putChunkedCache_(key, { v: def.version, at: Date.now(), value: result }, def.ttl); } catch (cacheWriteError) {}
+    }
+    if (ok && result.status === 'ok') result._mysql = {
+      read_at: Date.now(), expires_at: Date.now() + def.ttl * 1000, cache_hit: false,
+      elapsed_ms: Date.now() - start,
+      connection_ms: r.connectionMs - before[0], sql_ms: r.sqlMs - before[1],
+      read_ms: r.readMs - before[2], json_parse_ms: (r.jsonParseMs || 0) - before[5],
+      rows_read: r.rows - before[3]
+    };
+    return result;
+  } finally {
+    try {
+      var totalMs = Date.now() - start, connectionMs = r.connectionMs - before[0];
+      var sqlMs = r.sqlMs - before[1], readMs = r.readMs - before[2], rowCount = r.rows - before[3];
+      if (typeof perfRecord_ === 'function' && typeof perfDiagnosticsEnabled_ === 'function' &&
+          perfDiagnosticsEnabled_() && (!ok || totalMs >= PERF_TELEMETRY_.SLOW_MS || Math.random() < 0.05)) {
+        perfRecord_({ action: 'mysql_read', company: String(r.scope || '').split(':')[0], page: 'mysql',
+          elapsed_ms: totalMs, status: ok ? 'SUCCESS' : 'FAILED', diagnostic: true, outcome: ok ? 'success' : 'error',
+          mysql_query: def.name, mysql_cache: hit ? 'hit' : 'miss', mysql_connection_ms: connectionMs,
+          mysql_sql_ms: sqlMs, mysql_result_read_ms: readMs, mysql_rows: rowCount });
+      }
+    } catch (telemetryError) {}
+  }
+}
+function mysqlResource_(raw, methods, timed) {
+  var r = _mysqlRequest_, closed = false, out = {};
+  out.close = function () { if (!closed) { closed = true; try { raw.close(); } catch (e) {} } };
+  methods.forEach(function (name) {
+    out[name] = function () {
+      var t = Date.now();
+      try {
+        var value = raw[name].apply(raw, arguments);
+        if (name === 'next' && value) r.rows++;
+        return value;
+      } finally { if (timed) r.readMs += Date.now() - t; }
+    };
+  });
+  r.resources.push(out);
+  return out;
+}
+function mysqlStatement_(raw) {
+  var r = _mysqlRequest_;
+  var s = mysqlResource_(raw, ['setObject', 'setString', 'setInt', 'setLong', 'setDouble', 'setBoolean', 'setNull'], false);
+  s.executeQuery = function () {
+    var t = Date.now(), rs;
+    try { rs = raw.executeQuery.apply(raw, arguments); }
+    catch (e) { r.errors++; throw new Error('MySQL read failed; query diagnostics contain no filter values.'); }
+    finally { r.sqlMs += Date.now() - t; }
+    return mysqlResource_(rs, ['next', 'getString', 'getObject', 'getInt', 'getLong', 'getDouble', 'getMetaData'], true);
+  };
+  s.executeUpdate = function () {
+    var value = raw.executeUpdate.apply(raw, arguments);
+    // Includes writes whose follow-up mapping fails: a committed mutation must
+    // invalidate even if the enclosing action cannot return a success envelope.
+    mysqlInvalidate_();
+    return value;
+  };
+  return s;
+}
+function mysqlConnection_() {
+  var r = _mysqlRequest_;
+  if (!r.connection) {
+    var t = Date.now();
+    try { r.connection = dbOpenConnection_(); } finally { r.connectionMs += Date.now() - t; }
+  }
+  return {
+    prepareStatement: function (sql) { return mysqlStatement_(r.connection.prepareStatement(sql)); },
+    createStatement: function () { return mysqlStatement_(r.connection.createStatement()); },
+    close: function () {} // Borrowed; the execution owner closes in finally.
+  };
+}
+function mysqlViewerRead_(name, data, user, run) {
+  dbGuard_(user);
+  return mysqlWithRequest_('viewer', user, name, function () {
+    return mysqlRead_({ name: name, version: 1, dependencies: ['mysql:*'],
+      ttl: /Columns|Tables/.test(name) ? 300 : 0,
+      normalize: mysqlParams_, authorize: function () { dbGuard_(user); },
+      columns: 'Existing administrator-selected schema', rowLimit: DBLIVE_CONFIG.maxRows,
+      valid: function (v) { return !!(v && v.status === 'ok'); }
+    }, data, run);
+  });
+}
+
+function dbOpenConnection_() {
   const props = PropertiesService.getScriptProperties();
   const host = props.getProperty(DBLIVE_CONFIG.props.host) || DBLIVE_CONFIG.host;
   const port = props.getProperty(DBLIVE_CONFIG.props.port) || DBLIVE_CONFIG.port;
@@ -5326,6 +5640,12 @@ function dbGetConnection_() {
  * Lists all tables in the database.
  */
 function dbListTables_(data, user) {
+  if (typeof mysqlRead_ === 'function' && !mysqlReading_('dbListTables_')) {
+    return mysqlViewerRead_('dbListTables_', data, user, function (p) { return dbListTables_(p, user); });
+  }
+  
+  
+  
   dbGuard_(user);
   let conn, stmt, rs;
   try {
@@ -5338,7 +5658,7 @@ function dbListTables_(data, user) {
     }
     return { status: 'ok', tables: tables };
   } catch (err) {
-    Logger.log('dbListTables_ error: ' + err.message);
+    Logger.log('dbListTables_ failed; private database details omitted');
     throw err;
   } finally {
     if (rs) rs.close();
@@ -5351,6 +5671,12 @@ function dbListTables_(data, user) {
  * Returns column info for a table: name, type, key, nullable, default.
  */
 function dbGetColumns_(data, user) {
+  if (typeof mysqlRead_ === 'function' && !mysqlReading_('dbGetColumns_')) {
+    return mysqlViewerRead_('dbGetColumns_', data, user, function (p) { return dbGetColumns_(p, user); });
+  }
+  
+  
+  
   dbGuard_(user);
   if (!data.table) throw new Error('table name required');
   const safeTable = dbSanitizeIdentifier_(data.table);
@@ -5372,7 +5698,7 @@ function dbGetColumns_(data, user) {
     }
     return { status: 'ok', columns: columns };
   } catch (err) {
-    Logger.log('dbGetColumns_ error: ' + err.message);
+    Logger.log('dbGetColumns_ failed; private database details omitted');
     throw err;
   } finally {
     if (rs) rs.close();
@@ -5386,10 +5712,16 @@ function dbGetColumns_(data, user) {
  * Returns { columns, rows, total }.
  */
 function dbQuery_(data, user) {
+  if (typeof mysqlRead_ === 'function' && !mysqlReading_('dbQuery_')) {
+    return mysqlViewerRead_('dbQuery_', data, user, function (p) { return dbQuery_(p, user); });
+  }
+  
+  
+  
   dbGuard_(user);
   if (!data.table) throw new Error('table name required');
   const safeTable = dbSanitizeIdentifier_(data.table);
-  const limit = Math.min(Number(data.limit) || DBLIVE_CONFIG.maxRows, DBLIVE_CONFIG.maxRows);
+  const limit = Math.min(Math.max(Math.floor(Number(data.limit)) || DBLIVE_CONFIG.maxRows, 1), DBLIVE_CONFIG.maxRows);
   const offset = Math.max(Number(data.offset) || 0, 0);
 
   let conn, stmt, rs, countStmt, countRs;
@@ -5448,7 +5780,7 @@ function dbQuery_(data, user) {
 
     return { status: 'ok', columns: columns, rows: rows, total: total, limit: limit, offset: offset };
   } catch (err) {
-    Logger.log('dbQuery_ error: ' + err.message);
+    Logger.log('dbQuery_ failed; private database details omitted');
     throw err;
   } finally {
     if (rs) rs.close();
@@ -5464,6 +5796,7 @@ function dbQuery_(data, user) {
  */
 function dbInsert_(data, user) {
   dbGuard_(user);
+  if (!_mysqlRequest_) return mysqlWithRequest_('viewer', user, 'dbInsert_', function () { return dbInsert_(data, user); });
   if (!data.table || !data.values || Object.keys(data.values).length === 0) {
     throw new Error('table and values required');
   }
@@ -5483,7 +5816,7 @@ function dbInsert_(data, user) {
     const affected = stmt.executeUpdate();
     return { status: 'ok', affected: affected };
   } catch (err) {
-    Logger.log('dbInsert_ error: ' + err.message);
+    Logger.log('dbInsert_ failed; private database details omitted');
     throw err;
   } finally {
     if (stmt) stmt.close();
@@ -5496,6 +5829,7 @@ function dbInsert_(data, user) {
  */
 function dbUpdate_(data, user) {
   dbGuard_(user);
+  if (!_mysqlRequest_) return mysqlWithRequest_('viewer', user, 'dbUpdate_', function () { return dbUpdate_(data, user); });
   if (!data.table || !data.where || !data.values || Object.keys(data.values).length === 0) {
     throw new Error('table, where, and values required');
   }
@@ -5529,7 +5863,7 @@ function dbUpdate_(data, user) {
     const affected = stmt.executeUpdate();
     return { status: 'ok', affected: affected };
   } catch (err) {
-    Logger.log('dbUpdate_ error: ' + err.message);
+    Logger.log('dbUpdate_ failed; private database details omitted');
     throw err;
   } finally {
     if (stmt) stmt.close();
@@ -5542,6 +5876,7 @@ function dbUpdate_(data, user) {
  */
 function dbDelete_(data, user) {
   dbGuard_(user);
+  if (!_mysqlRequest_) return mysqlWithRequest_('viewer', user, 'dbDelete_', function () { return dbDelete_(data, user); });
   if (!data.table || !data.where || Object.keys(data.where).length === 0) {
     throw new Error('table and where required');
   }
@@ -5565,7 +5900,7 @@ function dbDelete_(data, user) {
     const affected = stmt.executeUpdate();
     return { status: 'ok', affected: affected };
   } catch (err) {
-    Logger.log('dbDelete_ error: ' + err.message);
+    Logger.log('dbDelete_ failed; private database details omitted');
     throw err;
   } finally {
     if (stmt) stmt.close();
@@ -5577,6 +5912,12 @@ function dbDelete_(data, user) {
  * Aggregates a column: COUNT, SUM, AVG, MIN, MAX, optionally GROUP BY another column.
  */
 function dbAggregate_(data, user) {
+  if (typeof mysqlRead_ === 'function' && !mysqlReading_('dbAggregate_')) {
+    return mysqlViewerRead_('dbAggregate_', data, user, function (p) { return dbAggregate_(p, user); });
+  }
+  
+  
+  
   dbGuard_(user);
   if (!data.table || !data.column) throw new Error('table and column required');
   const safeTable = dbSanitizeIdentifier_(data.table);
@@ -5608,7 +5949,7 @@ function dbAggregate_(data, user) {
       return { status: 'ok', func: func, result: result };
     }
   } catch (err) {
-    Logger.log('dbAggregate_ error: ' + err.message);
+    Logger.log('dbAggregate_ failed; private database details omitted');
     throw err;
   } finally {
     if (rs) rs.close();
@@ -5793,6 +6134,12 @@ function doGet(e) {
                    .split('__APP_SESSION_TOKEN__').join(CURRENT_SESSION_TOKEN);
   var userNamesJson = '{}';
   try { userNamesJson = JSON.stringify(userNameMap_()).replace(/</g, '\\u003c'); } catch (eUN) {}
+  /* Phase C/D: the headline RUM switch and its uniform journey draw are read
+   * once here, next to the existing PERF_LOG injection. Both reads are
+   * fail-open: a throwing property service injects safe defaults (off / 0.10)
+   * instead of failing the page render, and no page behavior changes. */
+  var perfRumFlag = false, perfRumRate = 0.10;
+  try { perfRumFlag = perfRumEnabled_(); perfRumRate = perfRumRate_(); } catch (ePerfRum) {}
   var headInjection = '<meta name="app-web-url" content="' + scriptUrl + '">'
     + '<script>try{window.scriptUrl=document.querySelector(\'meta[name="app-web-url"]\').getAttribute(\'content\')||\'\';}catch(e){}</' + 'script>'
     /* The write request guard must not depend on localStorage for identity.
@@ -5803,7 +6150,11 @@ function doGet(e) {
     + '<script>window.USER_NAMES=' + userNamesJson + ';</' + 'script>'
     // Phase 0b: tells the client whether a measurement window is open, so page
     // timings cost nothing at all while it is closed.
-    + '<script>window.PERF_LOG=' + (perfLogReadsEnabled_() ? 'true' : 'false') + ';</' + 'script>';
+    // Phase C/D: PERF_RUM is the independent headline RUM switch (Phase B
+    // script property) and PERF_RUM_RATE its journey sample probability.
+    + '<script>window.PERF_LOG=' + (perfLogReadsEnabled_() ? 'true' : 'false')
+    + ';window.PERF_RUM=' + (perfRumFlag ? 'true' : 'false')
+    + ';window.PERF_RUM_RATE=' + (isFinite(perfRumRate) ? Number(perfRumRate) : 0.10) + ';</' + 'script>';
   rendered = rendered.replace('<head>', '<head>' + headInjection);
   // viewport-fit=cover opts the page into the display's safe-area insets. It
   // has no effect at all on Windows or on Android Chrome in a browser tab; on
@@ -5971,6 +6322,7 @@ function renderSystemShutdownAdminPage_(scriptUrl, sessionToken) {
 
 const ROUTES = {
   'login_user': { handler: handleLoginWithDevice_, requireAuth: false },
+  'request_password_setup_code': { handler: handleRequestPasswordSetupCode_, requireAuth: false },
   'setup_password': { handler: handleSetupWithDevice_, requireAuth: false },
   'ping': { handler: handlePing_, requireAuth: true },
   'get_dashboard_data': { handler: getDashboardData_, requireAuth: true },
@@ -6017,7 +6369,9 @@ const ROUTES = {
   'sys_download_backups': { handler: sysDownloadBackupsRoute_, requireAuth: true },
   'install_daily_backup_trigger': { handler: installDailyBackupTriggerRoute_, requireAuth: true },
   'log_client_error': { handler: logClientError_, requireAuth: false },
-  'log_client_perf': { handler: logClientPerf_, requireAuth: false },
+  /* Phase B: authenticated ingestion only. Identity and authority come from the
+     session; payload.user and payload.url are ignored, never stored. */
+  'log_client_perf': { handler: logClientPerf_, requireAuth: true },
   /* [RT-9] The soft-navigation body route. requireAuth is true and the handler
      ALSO runs checkPageAccessForUI_ on the page being asked for — being logged
      in is not the same as being allowed to see this page, and this endpoint
@@ -6025,6 +6379,7 @@ const ROUTES = {
   'get_page_body': { handler: getPageBody_, requireAuth: true },
   /* [RT-10] Super-admin only; the handler checks, not just the route. */
   'get_perf_dashboard': { handler: getPerfDashboard_, requireAuth: true },
+  'get_admin_performance': { handler: getAdminPerformance_, requireAuth: true },
   /* Read-only request-status lookup for the client recovery poll. Authenticated;
      the handler resolves the tenant from identity and never trusts a
      client-supplied database ID or email. Never mutates. */
@@ -6110,7 +6465,25 @@ function requestMayWrite_(request) {
   return !isReadAction_(a);
 }
 
+/* Phase B finalizer boundary. apiRouter_ measures the request and records
+ * EXACTLY ONE outcome for every return path — success, handler error, auth
+ * failure, kill switch, session expiry — via a wrapper whose returned business
+ * value passes through untouched. Telemetry is fully wrapped and fails open:
+ * it can neither change nor delay the response. */
 function apiRouter_(request) {
+  var perfCtx = perfBeginRequest_(request);
+  var result;
+  try {
+    result = apiRouterRequest_(request, perfCtx);
+  } catch (err) {
+    perfFinishRequest_(perfCtx, request, null, err);
+    throw err;
+  }
+  perfFinishRequest_(perfCtx, request, result, null);
+  return result;
+}
+
+function apiRouterRequest_(request, perfCtx) {
   // Request-scoped memoization for getAllRecords_() — start every invocation
   // with a fresh cache.
   //
@@ -6139,12 +6512,14 @@ function apiRouter_(request) {
   try {
     const route = ROUTES[request.action];
     if (!route) throw new Error('Invalid action: ' + request.action);
+    perfMarkAuthStart_(perfCtx);
 
     if (route.requireAuth) {
       const auth = authenticateSystemUser_(request.sessionToken);
       if (!auth.authorized) {
         status = 'FAILED';
         errorMessage = 'SESSION_EXPIRED';
+        perfMarkAuth_(perfCtx, null);
         return { status: 'error', code: 'SESSION_EXPIRED' };
       }
       authUser = auth.user;
@@ -6156,6 +6531,7 @@ function apiRouter_(request) {
       const optionalAuth = authenticateSystemUser_(request.sessionToken);
       if (optionalAuth.authorized) authUser = optionalAuth.user;
     }
+    perfMarkAuth_(perfCtx, authUser);
 
     // System kill switch — blocks EVERY action for EVERYONE once engaged,
     // with exactly one exception: an authenticated SUPER ADMIN calling
@@ -6173,13 +6549,12 @@ function apiRouter_(request) {
     // otherwise disable the memo for the whole request through noteMutation_ —
     // costing the handler its memo because of a write it does not care about.
     // Safe: the memo is empty here, so nothing in it can predate those writes.
+    perfMarkHandlerStart_(perfCtx);
     rearmRecordCache_();
     result = jsonSafe_(route.handler(request.payload, request.sessionToken, authUser));
     
     // Log successful operation
     try { logSystemAction_(request, authUser, result, status, errorMessage, startTime); } catch (loggingError) {}
-    /* [RT-10] One cache write, no sheet write. See perfRecord_. */
-    perfRecordRequest_(request, authUser, status, startTime);
 
     return result;
   } catch (err) {
@@ -6188,42 +6563,139 @@ function apiRouter_(request) {
     
     // Log failed operation
     logSystemAction_(request, authUser, null, status, errorMessage, startTime);
-    perfRecordRequest_(request, authUser, status, startTime);
 
     return { status: 'error', message: err.message };
   }
 }
 
 /**
- * [RT-10] Turn one request into one telemetry entry.
+ * Phase B — measurement integrity finalizer.
  *
- * Every field comes from something apiRouter_ already had: the action, the
- * company, the page (through the same resolveLogPage_ SystemLog uses), the
- * elapsed time and the sheet-read counter. Nothing is computed for telemetry
- * that was not already being computed for the request.
+ * Every field comes from something apiRouterRequest_ already had. The headline
+ * sample is ONE uniform draw taken at request start (perfBeginRequest_);
+ * requests that were not drawn but are slow or failed go to a separate
+ * diagnostic stream (diagnostic: true) only while PERF_LOG_READS is on.
+ * Diagnostic rows are excluded from headline distributions at read time.
  *
  * Wrapped whole. A telemetry path that can throw is a telemetry path that can
  * fail a save.
  */
-function perfRecordRequest_(request, authUser, status, startTime) {
+var PERF_SKIP_ACTIONS_ = {
+  log_client_perf: true,
+  get_admin_performance: true,
+  get_perf_dashboard: true,
+  get_erp_session_meta: true
+};
+
+function perfBeginRequest_(request) {
+  var ctx = { skip: true, action: '', module_action: '', sampled: false, sample_p: 0,
+              diagnostic_ok: false, enabled: false, t0: new Date(), auth_start: 0,
+              auth_at: 0, handler_at: 0, auth_user: null };
   try {
+    var action = String((request && request.action) || '');
+    ctx.action = action;
+    if (PERF_SKIP_ACTIONS_[action]) return ctx;
+    var rum = !!(PERF_TELEMETRY_.ENABLED && perfRumEnabled_());
+    var diagnostics = !!(PERF_TELEMETRY_.ENABLED && perfDiagnosticsEnabled_());
+    if (!rum && !diagnostics) return ctx;
     var payload = (request && request.payload) || {};
-    var action = String(request && request.action || '');
-    var moduleAction = String(payload.module_action || '');
+    ctx.module_action = String(payload.module_action || '');
+    ctx.skip = false;
+    ctx.enabled = rum;
+    ctx.diagnostic_ok = diagnostics;
+    ctx.sample_p = perfRumRate_();
+    ctx.sampled = rum && Math.random() < ctx.sample_p;
+  } catch (e) { ctx.skip = true; }
+  return ctx;
+}
+
+function perfMarkAuthStart_(ctx) {
+  try { if (ctx && !ctx.skip) ctx.auth_start = new Date().getTime(); } catch (e) {}
+}
+
+function perfMarkAuth_(ctx, authUser) {
+  try {
+    if (!ctx || ctx.skip) return;
+    ctx.auth_at = new Date().getTime();
+    ctx.auth_user = authUser || null;
+  } catch (e) {}
+}
+
+function perfMarkHandlerStart_(ctx) {
+  try { if (ctx && !ctx.skip) ctx.handler_at = new Date().getTime(); } catch (e) {}
+}
+
+function perfFinishRequest_(ctx, request, result, err) {
+  try {
+    if (!ctx || ctx.skip) return;
+    var nowMs = new Date().getTime();
+    var elapsed = nowMs - ctx.t0.getTime();
+    var outcome = perfClassifyOutcome_(result, err);
+    var diagnostic = false;
+    if (!ctx.sampled) {
+      var slowOrError = (outcome !== 'success') || elapsed >= PERF_TELEMETRY_.SLOW_MS;
+      if (!(ctx.diagnostic_ok && slowOrError)) return;
+      diagnostic = true;
+    }
+    var payload = (request && request.payload) || {};
+    var action = ctx.module_action || ctx.action;
     var companyID = String(payload.target_system || '');
-    var elapsed = startTime ? (new Date().getTime() - startTime.getTime()) : 0;
+    var user = ctx.auth_user;
     perfRecord_({
-      action: moduleAction || action,
+      action: action,
       company: companyID,
-      page: payload.page_id || resolveLogPage_(companyID, moduleAction || action),
+      page: payload.page_id || resolveLogPage_(companyID, action),
       elapsed_ms: elapsed,
-      sheet_reads: (typeof getSheetsReadCount_ === 'function') ? getSheetsReadCount_() : 0,
-      status: status,
-      user_email: (authUser && authUser.email) || '',
-      client_ms: Number(payload.client_ms) || 0,
-      isWrite: requestMayWrite_(request)
+      sheet_reads: (typeof getSheetsReadCount_ === 'function') ? getSheetsReadCount_() : '',
+      status: outcome === 'success' ? 'SUCCESS' : 'FAILED',
+      user_email: (user && user.email) || '',
+      client_ms: payload.client_ms,
+      diagnostic: diagnostic,
+      sample_p: ctx.sample_p,
+      outcome: outcome,
+      auth_ms: (ctx.auth_start && ctx.auth_at) ? Math.max(0, ctx.auth_at - ctx.auth_start) : '',
+      handler_ms: ctx.handler_at ? Math.max(0, nowMs - ctx.handler_at) : '',
+      resp_size: perfSizeBucket_(result)
     });
-  } catch (e) { /* never the reason a request fails */ }
+  } catch (e) {
+    /* Telemetry never changes the response and never throws into the request. */
+  }
+}
+
+/** Outcome taxonomy: success | validation | authorization | error | disabled |
+ *  session-expired, classified from the existing envelopes (status/ok/error/
+ *  code/message). The envelope itself is never modified. */
+function perfClassifyOutcome_(result, err) {
+  if (err) return 'error';
+  if (!result || typeof result !== 'object') return 'success';
+  var code = String(result.code || '').toUpperCase();
+  var status = String(result.status || '').toLowerCase();
+  var failed = (status === 'error') || (result.ok === false) || (result.success === false) || !!result.error;
+  if (!failed) return 'success';
+  if (code === 'SESSION_EXPIRED') return 'session-expired';
+  if (code === 'SYSTEM_DISABLED') return 'disabled';
+  if (/AUTH|PERMISSION|DENIED|FORBIDDEN|EXPIRED|ACCOUNT_|NOT_ALLOWED/.test(code)) return 'authorization';
+  if (/INVALID|REQUIRED|VALIDATION|MISMATCH|MISSING|DUPLICATE|CONFLICT/.test(code)) return 'validation';
+  var msg = String(result.message || result.error || '');
+  if (msg.indexOf('SESSION_EXPIRED') !== -1) return 'session-expired';
+  if (msg.indexOf('SYSTEM_DISABLED') !== -1 || msg.indexOf('عطل في السيستم') !== -1) return 'disabled';
+  if (/صلاحية|تسجيل الدخول|NOT_AUTHORIZED/i.test(msg)) return 'authorization';
+  if (/مطلوب|غير صالح|INVALID|REQUIRED/i.test(msg)) return 'validation';
+  return 'error';
+}
+
+/** Coarse response-size bucket. The payload itself is never recorded. */
+function perfSizeBucket_(value) {
+  try {
+    if (value === null || value === undefined) return '';
+    var size = (typeof value === 'string') ? value.length : JSON.stringify(value).length;
+    if (!isFinite(size) || size < 0) return '';
+    if (size < 4096) return '<4k';
+    if (size < 16384) return '<16k';
+    if (size < 65536) return '<64k';
+    if (size < 262144) return '<256k';
+    return '>=256k';
+  } catch (e) { return ''; }
 }
 
 function doPost(e) {
@@ -6384,13 +6856,21 @@ function requestGuardExecute_(payload, user, dbId, invoke, opts) {
           type: String(rec.type || ''),
           request_id: requestId,
           payload_hash: hash,
-          mo_uid: String(rec.mo_uid || ''),
+          /* `mo_uid` is the historic field used by manufacturing.  The
+           * additive entity fields let other request-id-recoverable modules
+           * bind the same receipt to their own durable record without
+           * changing the existing manufacturing envelope. */
+          mo_uid: String(rec.mo_uid || rec.entity_uid || rec.base_token || ''),
+          entity_type: String(rec.entity_type || ''),
+          entity_uid: String(rec.entity_uid || rec.mo_uid || rec.base_token || ''),
+          snapshot_hash: String(rec.snapshot_hash || ''),
           base_token: String(rec.base_token || ''),
           scope: Array.isArray(rec.scope) ? rec.scope.slice(0, 8).map(function (s) { return String(s); }) : [],
           stage: String(rec.stage || '')
         };
         if (!envelope.type || envelope.type.length > 64) throw new Error('Invalid recovery checkpoint');
-        if (!envelope.mo_uid || envelope.mo_uid.length > 64) throw new Error('Invalid recovery checkpoint');
+        if (!envelope.mo_uid || envelope.mo_uid.length > 128) throw new Error('Invalid recovery checkpoint');
+        if (envelope.entity_type.length > 32 || envelope.entity_uid.length > 128 || envelope.snapshot_hash.length > 128) throw new Error('Invalid recovery checkpoint');
         if (!envelope.stage || envelope.stage.length > 32) throw new Error('Invalid recovery checkpoint');
         var sized = JSON.stringify({ status: 'pending', recovery: envelope });
         if (sized.length > 5000) throw new Error('Recovery checkpoint too large');
@@ -7120,9 +7600,11 @@ function logClientError_(payload, sessionToken, authUser) {
 
 
 /* Phase 0b / [RT-2] — client-side timing. Sibling of logClientError_ so page
- * timings do not pollute the error log. Only writes when Script Property
- * PERF_LOG_READS is on; the client is told via window.PERF_LOG (injected in
- * doGet) so a disabled measurement window costs no round trip at all.
+ * timings do not pollute the error log. Accepted while PERF_RUM (headline) or
+ * PERF_LOG_READS (verbose diagnostics) is on; the client is told via
+ * window.PERF_LOG (injected in doGet) so a disabled window costs no round trip.
+ * Phase B: the route requires auth, identity is derived server-side, and the
+ * client-supplied email and URL are ignored.
  *
  * The client now batches a navigation's marks into ONE call — four to six
  * metrics arrive together in payload.marks — so this appends them in one
@@ -7137,9 +7619,81 @@ function logClientError_(payload, sessionToken, authUser) {
  * (nav_transfer_bytes, nav_decoded_bytes) travel in the `ms` column with the
  * unit in the metric name, because changing this sheet's columns is not what
  * this work is for. */
-function logClientPerf_(payload) {
+/* Phase B ingestion allowlist: names logClientPerf_ accepts and stores. The
+ * dashboard displays a strict subset of these (PERF_CLIENT_DISPLAY_METRICS_). */
+var PERF_CLIENT_METRICS_ = {
+  page_ready: true, page_load: true, first_data_render: true,
+  nav_server: true, nav_transfer: true, nav_parse: true,
+  nav_transfer_bytes: true, nav_decoded_bytes: true,
+  page_usable_ms: true, form_editable_ms: true, form_options_ready_ms: true,
+  lookup_ready_ms: true, save_feedback_ms: true, save_confirmed_ms: true,
+  input_feedback_ms: true
+};
+
+/* Phase E §9 — metric-name reconciliation, server side.
+ *
+ * ERP_Client_Perf has exactly six columns (ts, page, metric, ms, url,
+ * user_email) and none are added here. A metric therefore belongs on the
+ * dashboard only when it is a millisecond duration — that is what the `ms`
+ * column means. This display allowlist is a STRICT SUBSET of the ingestion
+ * allowlist above; anything else is dropped by the dashboard and counted in
+ * client.info.unmapped_rows, never repurposed into a column.
+ *
+ * MAPPING (client flush names read from Client_Helpers.html):
+ *   stored AND displayed — 13: page_ready, page_load, first_data_render,
+ *     nav_server, nav_transfer, nav_parse, page_usable_ms, form_editable_ms,
+ *     form_options_ready_ms, lookup_ready_ms, save_feedback_ms,
+ *     save_confirmed_ms, input_feedback_ms. All are ms durations.
+ *   stored, NOT displayed — 2: nav_transfer_bytes, nav_decoded_bytes. They are
+ *     byte counts, not milliseconds. logClientPerf_ keeps the documented legacy
+ *     "unit in the metric name" exception, so ingestion stays permissive, but
+ *     a byte count does not match the `ms` column's semantics and the
+ *     dashboard drops it. Amendment to display them: a byte-valued column (or
+ *     a generic value+unit metric table) is required; not done here.
+ *   dropped at ingestion/display — 6: list_usable_ms, upload_ready_ms,
+ *     print_ready_ms, task_wall_ms, task_active_ms, system_wait_ms. The RUM
+ *     client emits them (buildEvent) but filters them out of the marks batch
+ *     (SERVER_METRICS), and the server allowlist rejects them. They are
+ *     durations, so persisting them only needs both allowlists widened — but
+ *     correlating them to a task/journey additionally needs new columns
+ *     (journey id, task kind, outcome). Amendment required; not done here.
+ *   NOT instrumented — confirmed saves and task completion are COUNTS and
+ *     OUTCOMES; the flat metric/ms row cannot express either, so capabilities
+ *     reports them as 'not_instrumented' rather than inventing a proxy. */
+var PERF_CLIENT_DISPLAY_METRICS_ = {
+  page_ready: true, page_load: true, first_data_render: true,
+  nav_server: true, nav_transfer: true, nav_parse: true,
+  page_usable_ms: true, form_editable_ms: true, form_options_ready_ms: true,
+  lookup_ready_ms: true, save_feedback_ms: true, save_confirmed_ms: true,
+  input_feedback_ms: true
+};
+
+/** Allowlisted canonical route id, or '' — a raw client URL is never stored. */
+function perfCanonicalPage_(value) {
+  var page = String(value || '');
+  return /^[A-Za-z][A-Za-z0-9_]{0,79}$/.test(page) ? page : '';
+}
+
+/** Cheap per-session rate limit. Fails open: telemetry never blocks business. */
+function perfClientRateOk_(authUser) {
   try {
-    if (!perfLogReadsEnabled_()) return { status: 'success', skipped: true };
+    var key = 'perfci_' + perfUserHash_(authUser && authUser.email) + '_' + Math.floor(new Date().getTime() / 60000);
+    var cache = CacheService.getScriptCache();
+    var n = Number(cache.get(key)) || 0;
+    if (n >= PERF_TELEMETRY_.CLIENT_MAX_PER_MINUTE) return false;
+    cache.put(key, String(n + 1), 120);
+    return true;
+  } catch (e) { return true; }
+}
+
+function logClientPerf_(payload, sessionToken, authUser) {
+  /* Phase B: authenticated ingestion. Identity comes from the session; the
+   * client-supplied user/url are ignored and their columns stay blank. A
+   * rejection or failure here never changes a business outcome. */
+  try {
+    if (!PERF_TELEMETRY_.ENABLED || !perfClientIngestEnabled_()) return { status: 'success', skipped: true };
+    if (!authUser || !authUser.email) { perfHealthAdd_('rejected_client', 1); return { status: 'success', skipped: true }; }
+    if (!perfClientRateOk_(authUser)) { perfHealthAdd_('rate_limited_client', 1); return { status: 'success', skipped: true, rate_limited: true }; }
     payload = payload || {};
 
     var marks = Array.isArray(payload.marks) ? payload.marks : null;
@@ -7148,13 +7702,32 @@ function logClientPerf_(payload) {
       marks = [{ metric: payload.metric, ms: payload.ms }];
     }
     /* A runaway client must not be able to turn one request into a thousand
-     * rows; a navigation produces six marks at the most. */
-    marks = marks.slice(0, 20).filter(function (m) { return m && m.metric; });
-    if (!marks.length) return { status: 'success', skipped: true };
+     * rows; a navigation produces six marks at the most. Oversize batches are
+     * rejected whole and counted, never silently trimmed. */
+    if (marks.length > PERF_TELEMETRY_.CLIENT_MAX_MARKS) {
+      perfHealthAdd_('rejected_client', 1);
+      return { status: 'success', skipped: true, rejected: 'batch_too_large' };
+    }
+    var encoded = '';
+    try { encoded = JSON.stringify(payload); } catch (eEnc) { encoded = ''; }
+    if (!encoded || encoded.length > PERF_TELEMETRY_.CLIENT_MAX_BATCH_BYTES) {
+      perfHealthAdd_('rejected_client', 1);
+      return { status: 'success', skipped: true, rejected: 'batch_too_large' };
+    }
+
+    var page = perfCanonicalPage_(payload.page);
+    var clean = [];
+    marks.forEach(function (m) {
+      if (!m || !PERF_CLIENT_METRICS_[String(m.metric)]) { perfHealthAdd_('invalid_marks', 1); return; }
+      var ms = perfFiniteNumber_(m.ms);
+      if (ms === null) { perfHealthAdd_('invalid_marks', 1); return; }
+      clean.push({ metric: String(m.metric), ms: ms });
+    });
+    if (!clean.length) return { status: 'success', rows: 0 };
 
     if (systemStorageTarget_().backend === 'firestore') {
-      marks.forEach(function (m, i) { systemCreateRecord_('ERP_Client_Perf', { ts: new Date(), page: String(payload.page || '').slice(0, 200), metric: String(m.metric).slice(0, 60), ms: Number(m.ms) || 0, url: String(payload.url || '').slice(0, 1500), user_email: String(payload.user || '').slice(0, 200) }, { operationId: 'client-perf:' + String(payload.page || '') + ':' + String(m.metric) + ':' + String(new Date().getTime()) + ':' + i }); });
-      return { status: 'success', rows: marks.length };
+      clean.forEach(function (m, i) { systemCreateRecord_('ERP_Client_Perf', { ts: new Date(), page: page, metric: m.metric.slice(0, 60), ms: m.ms, url: '', user_email: '' }, { operationId: 'client-perf:' + page + ':' + m.metric + ':' + String(new Date().getTime()) + ':' + i }); });
+      return { status: 'success', rows: clean.length };
     }
 
     const ss = getSpreadsheet_(CONFIG.AUTH_SPREADSHEET_ID);
@@ -7166,17 +7739,15 @@ function logClientPerf_(payload) {
       noteMutation_(sh);
     }
     const ts = new Date().toISOString();
-    const page = String(payload.page || '').slice(0, 200);
-    const url = String(payload.url || '').slice(0, 1500);
-    const who = String(payload.user || '').slice(0, 200);
-    const rows = marks.map(function (m) {
-      return [ts, page, String(m.metric).slice(0, 60), Number(m.ms) || 0, url, who];
+    const rows = clean.map(function (m) {
+      return [ts, page, m.metric.slice(0, 60), m.ms, '', ''];
     });
     sh.getRange(sh.getLastRow() + 1, 1, rows.length, 6).setValues(rows);
     noteMutation_(sh);
     return { status: 'success', rows: rows.length };
   } catch (e) {
-    return { status: 'error', message: e.message };
+    /* Fail open: ingestion failure is never a business failure. */
+    return { status: 'success', skipped: true };
   }
 }
 
@@ -7229,6 +7800,36 @@ function perfLogReadsEnabled_() {
   }
   return _perfLogReads_;
 }
+
+/** Phase B: headline RUM sampling, independent of PERF_LOG_READS. Default OFF. */
+function perfRumEnabled_() {
+  if (_perfRum_ === null) {
+    _perfRum_ = false;
+    try {
+      const v = PropertiesService.getScriptProperties().getProperty('PERF_RUM');
+      _perfRum_ = (v === '1' || String(v).toLowerCase() === 'true');
+    } catch (e) {}
+  }
+  return _perfRum_;
+}
+
+/** Headline sample rate. Script Property PERF_RUM_RATE overrides (0..1). */
+function perfRumRate_() {
+  if (_perfRumRate_ === null) {
+    _perfRumRate_ = PERF_TELEMETRY_.SAMPLE_RATE;
+    try {
+      const v = Number(PropertiesService.getScriptProperties().getProperty('PERF_RUM_RATE'));
+      if (isFinite(v) && v >= 0 && v <= 1) _perfRumRate_ = v;
+    } catch (e) {}
+  }
+  return _perfRumRate_;
+}
+
+/** Verbose diagnostics stay gated by PERF_LOG_READS, unchanged. */
+function perfDiagnosticsEnabled_() { return perfLogReadsEnabled_(); }
+
+/** Client batch ingestion is accepted for either collection stream. */
+function perfClientIngestEnabled_() { return perfRumEnabled_() || perfLogReadsEnabled_(); }
 
 function ensureSystemLogSheet_() {
   try {
@@ -7286,7 +7887,7 @@ function logSystemAction_(request, authUser, result, status, errorMessage, start
     // Phase 0b: optionally log reads so they can be ranked. Never log the
     // credential-bearing actions, regardless of the flag.
     const src = String(sourceAction).toLowerCase();
-    const isCredentialAction = (src === 'login_user' || src === 'setup_password');
+    const isCredentialAction = (src === 'login_user' || src === 'request_password_setup_code' || src === 'setup_password');
     if (!perfLogReadsEnabled_() || isCredentialAction) return;
     classified = 'READ';
   }
@@ -8033,9 +8634,14 @@ function companyArtifactRoute_(payload, sessionToken, authUser) {
 var PERF_LOG_SHEET_ = 'ERP_Perf_Log';
 var PERF_WEEKLY_SHEET_ = 'ERP_Perf_Weekly';
 
-/* The nine columns from the plan, and deliberately not a tenth. */
+/* The original nine columns, then the Phase B additive columns appended at the
+ * END (never inserted in the middle). ensurePerfSheet_ migrates an existing
+ * sheet by adding only the missing headers, so old rows and indexes 0..8 are
+ * untouched and readers that ignore the new columns still work. */
 var PERF_LOG_HEADERS_ = [
-  'ts', 'action', 'company', 'page', 'elapsed_ms', 'sheet_reads', 'status', 'user_hash', 'client_ms'
+  'ts', 'action', 'company', 'page', 'elapsed_ms', 'sheet_reads', 'status', 'user_hash', 'client_ms',
+  'diagnostic', 'sample_p', 'outcome', 'auth_ms', 'handler_ms', 'resp_size',
+  'mysql_query', 'mysql_cache', 'mysql_connection_ms', 'mysql_sql_ms', 'mysql_result_read_ms', 'mysql_rows'
 ];
 var PERF_WEEKLY_HEADERS_ = [
   'week', 'action', 'count', 'p50_ms', 'p90_ms', 'p99_ms', 'error_rate', 'mean_sheet_reads'
@@ -8044,20 +8650,49 @@ var PERF_WEEKLY_HEADERS_ = [
 /** Everything tunable, in one place, so none of it is buried in a function. */
 var PERF_TELEMETRY_ = {
   ENABLED: true,
-  /* Fraction of FAST reads that are recorded. Writes and slow requests are
-   * always recorded regardless of this. */
+  /* Phase B headline policy: ONE uniform draw per request, taken at request
+   * start. 0.10 = 10%. Script Property PERF_RUM_RATE overrides it (clamped
+   * 0..1) and the probability is stored on every sampled row. */
+  SAMPLE_RATE: 0.10,
+  /* Legacy name: the dashboard's `fast_read_sample` field still reports it and
+   * it is no longer used for selection. Headline selection is the uniform draw
+   * above; slow/error rows that were NOT drawn go to the diagnostic stream. */
   READ_SAMPLE: 0.10,
-  /* Above this, a request is recorded whatever it is. */
+  /* Diagnostic threshold. A request that was not drawn is recorded as
+   * diagnostic ONLY while PERF_LOG_READS is on and it is at/over this or
+   * failed. Diagnostics are excluded from headline distributions at read time. */
   SLOW_MS: 1000,
   /* Raw rows kept this long; the weekly rollup is kept indefinitely because it
    * is tiny and it is the thing anybody actually reads. */
   RETAIN_DAYS: 90,
-  /* Guard against one runaway minute filling the buffer. */
-  MAX_PER_MINUTE: 500
+  /* Buffer caps. Row count is enforced per shard (4 shards x 125 = 500/min) AND
+   * in bytes, because one CacheService value is capped at 100 KB. */
+  MAX_PER_MINUTE: 500,
+  SHARDS: 4,
+  MAX_PER_SHARD: 125,
+  MAX_BUFFER_BYTES: 90000,
+  BUFFER_TTL_SECONDS: 600,
+  /* Short bounded lock around each shard read-modify-write; contention drops
+   * the record instead of blocking the business request. */
+  LOCK_MS: 25,
+  /* Drain takes exclusive ownership with a bounded wait; a skipped run retries
+   * on the next minute trigger. */
+  DRAIN_LOCK_MS: 1000,
+  DRAIN_LOOKBACK_MINUTES: 10,
+  /* Client batch ingestion limits (count, serialized bytes, batches/session/min). */
+  CLIENT_MAX_MARKS: 20,
+  CLIENT_MAX_BATCH_BYTES: 8192,
+  CLIENT_MAX_PER_MINUTE: 6
 };
 
+/* Legacy single-minute key: drained for one deploy window, never written. */
 function perfBufferKey_(minuteStamp) {
   return 'perfbuf_' + minuteStamp;
+}
+
+/* Deterministic shard key so the drain can enumerate every writer's buffer. */
+function perfShardKey_(minuteStamp, shard) {
+  return 'perfbuf_' + minuteStamp + '_' + shard;
 }
 
 /** The minute a timestamp falls in, as a stable string. */
@@ -8084,22 +8719,125 @@ function perfUserHash_(email) {
   return 'u' + (h >>> 0).toString(36);
 }
 
-/** Should this request be recorded at all? */
-function perfShouldSample_(isWrite, elapsedMs) {
-  if (!PERF_TELEMETRY_.ENABLED) return false;
-  if (isWrite) return true;
-  if (Number(elapsedMs) >= PERF_TELEMETRY_.SLOW_MS) return true;
-  return Math.random() < PERF_TELEMETRY_.READ_SAMPLE;
+/** Finite non-negative number, or null. Missing data stays missing — never 0. */
+function perfFiniteNumber_(value) {
+  if (value === '' || value === null || value === undefined) return null;
+  var n = Number(value);
+  return (isFinite(n) && n >= 0) ? n : null;
+}
+
+/** The same rule, rendered as '' for storage instead of null. */
+function perfNumberOrBlank_(value) {
+  var n = perfFiniteNumber_(value);
+  return n === null ? '' : n;
+}
+
+/** Is a persisted cell a diagnostic marker? Accepts boolean and 0/1. */
+function perfIsDiagnostic_(value) {
+  if (value === true) return true;
+  if (value === false || value === '' || value === null || value === undefined) return false;
+  return Number(value) === 1;
 }
 
 /**
- * Record one request. Called from apiRouter_, on the way out, and costs one
- * CacheService read plus one write — no sheet, no lock, no id allocation.
+ * Legacy selector, kept only for compatibility. Phase B decides headline
+ * inclusion with one uniform draw at request start (perfBeginRequest_); a
+ * request that was not drawn is a diagnostic candidate when it is slow or it
+ * failed, and only while the verbose diagnostics flag is on.
  */
-function perfRecord_(entry) {
+function perfShouldSample_(isWrite, elapsedMs) {
+  if (!PERF_TELEMETRY_.ENABLED || !perfDiagnosticsEnabled_()) return false;
+  if (isWrite) return true;
+  return Number(elapsedMs) >= PERF_TELEMETRY_.SLOW_MS;
+}
+
+/* ── Collection health: best-effort counters in a cache key, no new schema ── */
+var PERF_HEALTH_KEY_ = 'perfhealth_v1';
+var PERF_HEALTH_TTL_ = 21600;
+
+function perfHealthState_() {
   try {
-    if (!entry || !perfShouldSample_(!!entry.isWrite, entry.elapsed_ms)) return;
-    var key = perfBufferKey_(perfMinute_());
+    var raw = CacheService.getScriptCache().get(PERF_HEALTH_KEY_);
+    var state = raw ? JSON.parse(raw) : null;
+    if (state && typeof state === 'object') return state;
+  } catch (e) {}
+  return {};
+}
+
+function perfHealthAdd_(field, n) {
+  try {
+    var s = perfHealthState_();
+    s[field] = (Number(s[field]) || 0) + (Number(n) || 1);
+    s.updated_at = new Date().toISOString();
+    CacheService.getScriptCache().put(PERF_HEALTH_KEY_, JSON.stringify(s), PERF_HEALTH_TTL_);
+  } catch (e) {}
+}
+
+function perfHealthMarkDrain_(stats) {
+  try {
+    var s = perfHealthState_();
+    s.last_drain_at = new Date().toISOString();
+    s.last_drain_rows = stats.rows;
+    s.last_drain_failed = stats.failed;
+    s.buffer_age_ms = stats.age;
+    s.drained_rows_total = (Number(s.drained_rows_total) || 0) + stats.rows;
+    s.failed_rows_total = (Number(s.failed_rows_total) || 0) + stats.failed;
+    if (stats.error) s.last_drain_error = String(stats.error).slice(0, 200);
+    else delete s.last_drain_error;
+    s.updated_at = s.last_drain_at;
+    CacheService.getScriptCache().put(PERF_HEALTH_KEY_, JSON.stringify(s), PERF_HEALTH_TTL_);
+  } catch (e) {}
+}
+
+/** Aggregation-side view of collection health. Cache-only read of the
+ *  perfhealth_v1 counters, TTL unchanged. Coverage is 'unknown' because total
+ *  capture loss cannot be established from a sampling transport. `present`
+ *  distinguishes "nothing recorded yet" from real zeroes. */
+function perfCollectionHealth_() {
+  var s = perfHealthState_();
+  function n(k) { var v = Number(s[k]); return isFinite(v) ? v : 0; }
+  return {
+    present: !!s.updated_at,
+    headline_enabled: !!(PERF_TELEMETRY_.ENABLED && perfRumEnabled_()),
+    diagnostics_enabled: !!(PERF_TELEMETRY_.ENABLED && perfDiagnosticsEnabled_()),
+    sample_rate: perfRumRate_(),
+    sample_policy: 'uniform_request_start',
+    diagnostics_threshold_ms: PERF_TELEMETRY_.SLOW_MS,
+    shards: PERF_TELEMETRY_.SHARDS,
+    buffer_ttl_seconds: PERF_TELEMETRY_.BUFFER_TTL_SECONDS,
+    drained_rows: n('drained_rows_total'),
+    failed_rows: n('failed_rows_total'),
+    dropped_rows: n('dropped_rows'),
+    dropped_lock: n('dropped_lock'),
+    dropped_bytes: n('dropped_bytes'),
+    invalid_records: n('invalid_records'),
+    rejected_client: n('rejected_client'),
+    rate_limited_client: n('rate_limited_client'),
+    invalid_marks: n('invalid_marks'),
+    drain_skipped: n('drain_skipped'),
+    last_drain_at: s.last_drain_at || '',
+    last_drain_rows: n('last_drain_rows'),
+    last_drain_failed: n('last_drain_failed'),
+    buffer_age_ms: n('buffer_age_ms'),
+    coverage: 'unknown'
+  };
+}
+
+/**
+ * Write one already-validated row into a deterministic minute shard under a
+ * short bounded script lock. If the lock is unavailable, the record is DROPPED
+ * and counted; telemetry never blocks the business request.
+ */
+function perfWriteBuffer_(row) {
+  var shards = Number(PERF_TELEMETRY_.SHARDS) || 4;
+  var key = perfShardKey_(perfMinute_(), Math.floor(Math.random() * shards) % shards);
+  var lock = null, locked = false;
+  try {
+    lock = LockService.getScriptLock();
+    locked = lock.tryLock(PERF_TELEMETRY_.LOCK_MS);
+  } catch (eLock) { locked = false; }
+  if (!locked) { perfHealthAdd_('dropped_lock', 1); return; }
+  try {
     var cache = CacheService.getScriptCache();
     var buf = [];
     try {
@@ -8107,24 +8845,51 @@ function perfRecord_(entry) {
       if (raw) buf = JSON.parse(raw) || [];
     } catch (eRead) { buf = []; }
     if (!Array.isArray(buf)) buf = [];
-    if (buf.length >= PERF_TELEMETRY_.MAX_PER_MINUTE) return;
+    if (buf.length >= PERF_TELEMETRY_.MAX_PER_SHARD) { perfHealthAdd_('dropped_rows', 1); return; }
+    buf.push(row);
+    var encoded;
+    try { encoded = JSON.stringify(buf); } catch (eEnc) { perfHealthAdd_('invalid_records', 1); return; }
+    if (encoded.length > PERF_TELEMETRY_.MAX_BUFFER_BYTES) { perfHealthAdd_('dropped_bytes', 1); return; }
+    cache.put(key, encoded, PERF_TELEMETRY_.BUFFER_TTL_SECONDS);
+  } finally {
+    try { lock.releaseLock(); } catch (eRel) {}
+  }
+}
 
-    /* Exactly the nine values, in order. Nothing here is a payload, a record
-     * id or an email, and there is no branch that could make it one. */
-    buf.push([
+/**
+ * Record one request. The caller (perfFinishRequest_) has already decided the
+ * sample; this only validates and buffers. Malformed durations are rejected and
+ * counted, and missing numeric fields stay blank rather than becoming 0.
+ */
+function perfRecord_(entry) {
+  try {
+    if (!entry || !PERF_TELEMETRY_.ENABLED) return;
+    var elapsed = perfFiniteNumber_(entry.elapsed_ms);
+    if (elapsed === null) { perfHealthAdd_('invalid_records', 1); return; }
+    var row = [
       new Date().toISOString(),
       String(entry.action || '').slice(0, 80),
       String(entry.company || '').slice(0, 40),
       String(entry.page || '').slice(0, 60),
-      Number(entry.elapsed_ms) || 0,
-      Number(entry.sheet_reads) || 0,
+      elapsed,
+      perfNumberOrBlank_(entry.sheet_reads),
       String(entry.status || '').slice(0, 20),
       perfUserHash_(entry.user_email),
-      Number(entry.client_ms) || 0
-    ]);
-    /* Ten minutes: long enough for a one-minute drain to be late four times
-     * over, short enough that an undrained buffer is not a slow leak. */
-    cache.put(key, JSON.stringify(buf), 600);
+      perfNumberOrBlank_(entry.client_ms),
+      entry.diagnostic ? 1 : 0,
+      perfNumberOrBlank_(entry.sample_p),
+      String(entry.outcome || '').slice(0, 20),
+      perfNumberOrBlank_(entry.auth_ms),
+      perfNumberOrBlank_(entry.handler_ms),
+      String(entry.resp_size || '').slice(0, 12),
+      String(entry.mysql_query || '').slice(0, 100),
+      String(entry.mysql_cache || '').slice(0, 8),
+      perfNumberOrBlank_(entry.mysql_connection_ms),
+      perfNumberOrBlank_(entry.mysql_sql_ms),
+      perfNumberOrBlank_(entry.mysql_result_read_ms),
+      perfNumberOrBlank_(entry.mysql_rows)
+    ];
+    perfWriteBuffer_(row);
   } catch (e) {
     /* Telemetry must never be the reason a request fails. */
   }
@@ -8139,7 +8904,25 @@ function ensurePerfSheet_(name, headers) {
     sh.appendRow(headers);
     sh.setFrozenRows(1);
     noteMutation_(sh);
+    return sh;
   }
+  /* Existing sheet: migrate by APPENDING only missing headers at the end. The
+   * column order of what is already there is never touched. */
+  try {
+    if (sh.getLastRow() < 1 || sh.getLastColumn() < 1) {
+      sh.appendRow(headers);
+      sh.setFrozenRows(1);
+      noteMutation_(sh);
+      return sh;
+    }
+    var width = sh.getLastColumn();
+    var existing = sh.getRange(1, 1, 1, width).getValues()[0].map(function (h) { return String(h).trim().toLowerCase(); });
+    var missing = headers.filter(function (h) { return existing.indexOf(String(h).trim().toLowerCase()) === -1; });
+    if (missing.length) {
+      sh.getRange(1, width + 1, 1, missing.length).setValues([missing]);
+      noteMutation_(sh);
+    }
+  } catch (eMigrate) { /* A header migration failure must not fail the drain. */ }
   return sh;
 }
 
@@ -8147,46 +8930,121 @@ function ensurePerfSheet_(name, headers) {
  * Drain the finished minutes into ERP_Perf_Log. Installed as a one-minute
  * time-driven trigger.
  *
- * The CURRENT minute is deliberately left alone — draining it would race with
- * requests still writing into it, and losing the tail of every minute is a
- * worse answer than being sixty seconds behind.
+ * Phase B transport: deterministic minute shards, each read-modify-written by
+ * writers under a short bounded lock. The drain takes exclusive ownership with
+ * a bounded wait, persists FIRST and removes each shard ONLY after the write
+ * succeeded; a failed write keeps the rows for the next run. The CURRENT minute
+ * is deliberately left alone — draining it would race with requests still
+ * writing into it.
  */
 function drainPerfBuffer_() {
+  var stats = { rows: 0, failed: 0, age: 0, error: '' };
+  var lock = null, locked = false;
+  try {
+    lock = LockService.getScriptLock();
+    locked = lock.tryLock(PERF_TELEMETRY_.DRAIN_LOCK_MS);
+  } catch (eLock) { locked = false; }
+  if (!locked) {
+    perfHealthAdd_('drain_skipped', 1);
+    return { status: 'skipped', reason: 'locked' };
+  }
   try {
     var now = Number(perfMinute_());
     var cache = CacheService.getScriptCache();
-    var rows = [];
+    var rows = [], removeKeys = [];
     /* Ten minutes back, so a trigger that missed a few runs catches up rather
      * than silently dropping what it missed. */
-    for (var back = 1; back <= 10; back++) {
-      var key = perfBufferKey_(String(now - back));
-      var raw = null;
-      try { raw = cache.get(key); } catch (e) { raw = null; }
-      if (!raw) continue;
-      var buf = [];
-      try { buf = JSON.parse(raw) || []; } catch (e) { buf = []; }
-      if (buf.length) rows = rows.concat(buf);
-      /* Removed BEFORE the write. A duplicated telemetry row is worse than a
-       * lost one: it silently skews the percentiles this whole thing exists to
-       * produce, and nothing downstream could tell. The audit queue makes the
-       * opposite trade, on purpose. */
-      try { cache.remove(key); } catch (e) {}
+    for (var back = 1; back <= PERF_TELEMETRY_.DRAIN_LOOKBACK_MINUTES; back++) {
+      var minute = String(now - back);
+      var age = new Date().getTime() - (Number(minute) * 60000);
+      if (age > stats.age) stats.age = age;
+      for (var shard = 0; shard < PERF_TELEMETRY_.SHARDS; shard++) {
+        var key = perfShardKey_(minute, shard);
+        var parsed = perfReadBufferRows_(cache, key);
+        if (!parsed.length) continue;
+        stats.rows += parsed.length;
+        rows = rows.concat(parsed);
+        removeKeys.push(key);
+      }
+      /* Legacy unsharded key, so a deploy in the middle of a window does not
+       * strand the last buffered minute. */
+      var legacyKey = perfBufferKey_(minute);
+      var legacy = perfReadBufferRows_(cache, legacyKey);
+      if (legacy.length) {
+        stats.rows += legacy.length;
+        rows = rows.concat(legacy);
+        removeKeys.push(legacyKey);
+      }
     }
-    if (!rows.length) return { status: 'success', rows: 0 };
+    if (!rows.length) { perfHealthMarkDrain_(stats); return { status: 'success', rows: 0 }; }
 
+    /* WRITE FIRST. A row read here is not removed until the whole batch has
+     * persisted; a failure leaves it buffered for the next drain. */
     if (systemStorageTarget_().backend === 'firestore') {
-      rows.forEach(function (r, i) { systemCreateRecord_('ERP_Perf_Log', { ts: r[0], action: r[1], company: r[2], page: r[3], elapsed_ms: r[4], sheet_reads: r[5], status: r[6], user_hash: r[7], client_ms: r[8] }, { operationId: 'perf:' + String(r[0]) + ':' + String(r[1]) + ':' + i }); });
-      return { status: 'success', rows: rows.length, backend: 'firestore' };
+      rows.forEach(function (r, i) {
+        var record = perfRowToRecord_(r);
+        systemCreateRecord_('ERP_Perf_Log', record, { operationId: 'perf:' + String(record.ts) + ':' + String(record.action) + ':' + i });
+      });
+    } else {
+      var sh = ensurePerfSheet_(PERF_LOG_SHEET_, PERF_LOG_HEADERS_);
+      sh.getRange(sh.getLastRow() + 1, 1, rows.length, PERF_LOG_HEADERS_.length).setValues(rows);
+      noteMutation_(sh);
     }
 
-    var sh = ensurePerfSheet_(PERF_LOG_SHEET_, PERF_LOG_HEADERS_);
-    sh.getRange(sh.getLastRow() + 1, 1, rows.length, PERF_LOG_HEADERS_.length).setValues(rows);
-    noteMutation_(sh);
-    return { status: 'success', rows: rows.length };
+    /* Persisted. ONLY NOW is the buffer removed. */
+    removeKeys.forEach(function (k) { try { cache.remove(k); } catch (eR) {} });
+    perfHealthMarkDrain_(stats);
+    return { status: 'success', rows: rows.length, failed: 0, oldest_age_ms: stats.age };
   } catch (e) {
+    stats.failed = stats.rows;
+    stats.error = String(e.message || e);
+    perfHealthMarkDrain_(stats);
     try { console.error('drainPerfBuffer_: ' + e.message); } catch (eL) {}
-    return { status: 'error', message: e.message };
+    return { status: 'error', message: e.message, failed: stats.failed };
+  } finally {
+    try { lock.releaseLock(); } catch (eRel) {}
   }
+}
+
+/** Read and validate one buffer key. Malformed rows are counted and dropped. */
+function perfReadBufferRows_(cache, key) {
+  var raw = null;
+  try { raw = cache.get(key); } catch (e) { return []; }
+  if (!raw) return [];
+  var buf = [];
+  try { buf = JSON.parse(raw) || []; } catch (eParse) { perfHealthAdd_('invalid_records', 1); return []; }
+  if (!Array.isArray(buf)) return [];
+  var out = [];
+  buf.forEach(function (r) {
+    var normalized = perfNormalizeRow_(r);
+    if (normalized) out.push(normalized);
+    else perfHealthAdd_('invalid_records', 1);
+  });
+  return out;
+}
+
+/** Pad an old 9-value row (or a new 15-value row) to the current header width,
+ *  rejecting non-finite or negative durations. */
+function perfNormalizeRow_(r) {
+  if (!Array.isArray(r) || r.length < 9) return null;
+  var elapsed = perfFiniteNumber_(r[4]);
+  if (elapsed === null) return null;
+  var out = [];
+  for (var i = 0; i < PERF_LOG_HEADERS_.length; i++) out.push(r[i] === undefined ? '' : r[i]);
+  out[4] = elapsed;
+  return out;
+}
+
+/** Buffer row -> ERP_Perf_Log record. Same names as the sheet columns. */
+function perfRowToRecord_(row) {
+  return {
+    ts: row[0], action: row[1], company: row[2], page: row[3], elapsed_ms: row[4],
+    sheet_reads: row[5], status: row[6], user_hash: row[7], client_ms: row[8],
+    diagnostic: Number(row[9]) === 1, sample_p: row[10], outcome: row[11],
+    auth_ms: row[12], handler_ms: row[13], resp_size: row[14],
+    mysql_query: row[15], mysql_cache: row[16], mysql_connection_ms: row[17],
+    mysql_sql_ms: row[18], mysql_result_read_ms: row[19], mysql_rows: row[20]
+  };
 }
 
 /** p-th percentile of a sorted numeric array, nearest-rank. */
@@ -8219,6 +9077,9 @@ function rollupPerfWeekly_() {
     var groups = {};
     for (var i = 1; i < values.length; i++) {
       var r = values[i];
+      /* Phase B: diagnostics never enter the headline rollup. Old rows have no
+       * diagnostic cell (r[9] undefined) and stay included. */
+      if (perfIsDiagnostic_(r[9])) continue;
       var when = new Date(r[0]);
       if (isNaN(when.getTime())) continue;
       var key = perfWeekKey_(when) + '|' + String(r[1] || '');
@@ -8261,7 +9122,7 @@ function rollupPerfWeekly_() {
 function rollupPerfWeeklyFirestore_() {
   try {
     var values = systemGetAllRecords_('ERP_Perf_Log'), groups = {};
-    values.forEach(function (r) { var when = new Date(r.ts); if (isNaN(when.getTime())) return; var key = perfWeekKey_(when) + '|' + String(r.action || ''); if (!groups[key]) groups[key] = { ms: [], reads: 0, errors: 0, n: 0 }; var g = groups[key]; g.ms.push(Number(r.elapsed_ms) || 0); g.reads += Number(r.sheet_reads) || 0; if (String(r.status || '').toUpperCase() === 'FAILED') g.errors++; g.n++; });
+    values.forEach(function (r) { if (perfIsDiagnostic_(r.diagnostic)) return; var when = new Date(r.ts); if (isNaN(when.getTime())) return; var key = perfWeekKey_(when) + '|' + String(r.action || ''); if (!groups[key]) groups[key] = { ms: [], reads: 0, errors: 0, n: 0 }; var g = groups[key]; g.ms.push(Number(r.elapsed_ms) || 0); g.reads += Number(r.sheet_reads) || 0; if (String(r.status || '').toUpperCase() === 'FAILED') g.errors++; g.n++; });
     Object.keys(groups).forEach(function (key) { var g = groups[key], parts = key.split('|'); g.ms.sort(function (a, b) { return a - b; }); var data = { week: parts[0], action: parts[1], count: g.n, p50_ms: perfPercentile_(g.ms, 50), p90_ms: perfPercentile_(g.ms, 90), p99_ms: perfPercentile_(g.ms, 99), error_rate: g.n ? Number((g.errors / g.n).toFixed(4)) : 0, mean_sheet_reads: g.n ? Number((g.reads / g.n).toFixed(2)) : 0 }; systemCreateRecord_('ERP_Perf_Weekly', data, { operationId: 'perf-week:' + key }); });
     return { status: 'success', rows: Object.keys(groups).length, backend: 'firestore' };
   } catch (e) { return { status: 'error', message: e.message }; }
@@ -8297,7 +9158,7 @@ function prunePerfLog_() {
 }
 
 /** The ten slowest actions this week and last, for the dashboard page. */
-function getPerfDashboard_(data, user) {
+function getPerfDashboard_(data, sessionToken, user) {
   if (!(user && user.isSuperAdmin)) throw new Error(ERP_MESSAGES.NOT_AUTHORIZED);
   var out = { status: 'success', weeks: [], rows: [] };
   if (systemStorageTarget_().backend === 'firestore') {
@@ -8342,13 +9203,402 @@ function getPerfDashboard_(data, user) {
 /**
  * System audit log helpers
  */
+/* ── Phase E §9: bounded, resumable dashboard reads ───────────────────────
+ * The dashboard used to read one hard 1000-row newest window per source, so a
+ * busy period silently answered from a fraction of its rows. Reads are now
+ * chunked newest-first inside a per-open budget, a script-cache cursor resumes
+ * the older continuation on the next open, and every response states exactly
+ * how far it got (covered_through / truncated / complete / partial). All
+ * aggregation is recomputed from the sample each open; nothing is stored
+ * incrementally, so re-reading an overlap cannot double count. Existing schema
+ * only: ERP_Perf_Log and ERP_Client_Perf are read, never written or altered. */
+var PERFDASH_CHUNK_ROWS = 2000;
+var PERFDASH_MAX_ROWS_PER_OPEN = 6000;
+var PERFDASH_MAX_LOOKBACK_DAYS = 30;
+var PERFDASH_CURSOR_KEY_ = 'perfdash_cursor_v1';
+/* Short bounded TTL: a cursor only helps repeated opens in one sitting and
+ * must not pin a months-old continuation forever. */
+var PERFDASH_CURSOR_TTL_SECONDS = 1800;
+/* Display gates (heuristics, not SLOs). p95 is the ceiling this dashboard
+ * shows, so a summary below 100 observations is labeled insufficient. The
+ * 1,000-observation p99 gate applies to the weekly rollup review, which is
+ * deliberately left untouched. */
+var PERFDASH_MIN_OBS_P95 = 100;
+var PERFDASH_MIN_OBS_P99 = 1000;
+
+function perfDashboardFiniteMs_(value) {
+  if (value === null || value === undefined || value === '') return null;
+  var n = Number(value);
+  return (isFinite(n) && n > 0) ? n : null;
+}
+
+/** Persisted continuation for one source+backend. Best effort: a lost cursor
+ *  only means the next open restarts from the newest rows. */
+function perfDashboardCursorGet_(scope) {
+  try {
+    var raw = CacheService.getScriptCache().get(PERFDASH_CURSOR_KEY_ + ':' + scope);
+    if (!raw) return null;
+    var parsed = JSON.parse(raw);
+    return (parsed && typeof parsed === 'object') ? parsed : null;
+  } catch (e) { return null; }
+}
+
+function perfDashboardCursorSet_(scope, state) {
+  try {
+    CacheService.getScriptCache().put(PERFDASH_CURSOR_KEY_ + ':' + scope, JSON.stringify(state), PERFDASH_CURSOR_TTL_SECONDS);
+  } catch (e) {}
+}
+
+/** One coverage verdict for the whole response. `partial` is the single fact a
+ *  reader needs; a partial sample is never presented as complete. The oldest
+ *  `covered_through` wins because coverage only reaches as far back as the
+ *  least-covered source. */
+function perfDashboardCoverage_(serverInfo, clientInfo) {
+  var infos = [serverInfo || {}, clientInfo || {}];
+  var through = infos.map(function (info) { return info.covered_through || null; })
+    .filter(function (value) { return !!value; }).sort();
+  var complete = infos.every(function (info) { return info.complete === true; });
+  return {
+    scanned_rows: infos.reduce(function (sum, info) { return sum + (Number(info.scanned) || 0); }, 0),
+    covered_through: through.length ? through[0] : null,
+    truncated: infos.some(function (info) { return info.truncated === true; }),
+    cursor_used: infos.some(function (info) { return info.cursor_used === true; }),
+    complete: complete,
+    partial: !complete
+  };
+}
+
+/** Honest capability states derived from what the display allowlist actually
+ *  contains. `partial` means the dashboard shows the allowlisted browser
+ *  durations but cannot show dropped store/task metrics; `unavailable` means
+ *  the allowlist contains none. No capability is claimed that no column can
+ *  persist (see the reconciliation block at PERF_CLIENT_METRICS_). */
+function perfDashboardCapabilities_() {
+  var hasBrowser = Object.keys(PERF_CLIENT_DISPLAY_METRICS_).some(function (name) {
+    return /^(nav_|page_ready$|page_load$|first_data_render$)/.test(name);
+  });
+  return {
+    browser_metrics: hasBrowser ? 'partial' : 'unavailable',
+    confirmed_saves: 'not_instrumented',
+    task_completion: 'not_instrumented'
+  };
+}
+
+
+/** Settings dashboard: bounded reads of existing telemetry, never schema creation.
+ * Authentication is performed by apiRouter_; this boundary separately requires
+ * super-admin authority. Raw URLs, user identities and payloads never leave it.
+ * Legacy sampling is intentionally reported as diagnostics, not population SLOs.
+ */
+function getAdminPerformance_(data, sessionToken, user) {
+  if (!(user && user.isSuperAdmin)) throw new Error(ERP_MESSAGES.NOT_AUTHORIZED);
+  var input = data || {}, days = Number(input.days || 7);
+  if ([1, 7, 30].indexOf(days) === -1) throw new Error('INVALID_PERFORMANCE_RANGE');
+  var company = String(input.company || '').trim().slice(0, 80);
+  var today = Utilities.formatDate(new Date(), 'Africa/Cairo', 'yyyy-MM-dd');
+  var first = new Date(today + 'T12:00:00Z');
+  first.setUTCDate(first.getUTCDate() - days + 1);
+  var from = first.toISOString().slice(0, 10), backend = systemStorageTarget_().backend;
+  // Short-lived aggregate caching prevents refresh clicks from rereading logs.
+  // Authorization above always precedes cache access.
+  var cacheKey = 'admin_perf_v1:' + backend + ':' + today + ':' + days + ':' + encodeURIComponent(company);
+  try {
+    var cached = CacheService.getScriptCache().get(cacheKey);
+    if (cached) {
+      var cachedOut = JSON.parse(cached);
+      /* Health counters are live, so they are refreshed even on a cache hit. */
+      if (cachedOut && cachedOut.collection) cachedOut.collection.health = perfCollectionHealth_();
+      return cachedOut;
+    }
+  } catch (cacheError) { /* A cache miss is safe. */ }
+  /* Phase E §9: one bounded, resumable read per source. `from` is the Cairo
+   * day string used for grouping; its UTC midnight is the scan's stop line (a
+   * few hours of slack only means a slightly deeper read — grouping remains
+   * the authority), and the 30-day floor bounds how far a continuation walks. */
+  var maxRows = PERFDASH_MAX_ROWS_PER_OPEN;
+  var fromMs = Date.parse(from + 'T00:00:00Z');
+  var lookbackFloorMs = new Date().getTime() - PERFDASH_MAX_LOOKBACK_DAYS * 86400000;
+  var server = perfDashboardRead_('ERP_Perf_Log', backend, maxRows, { fromMs: fromMs, lookbackFloorMs: lookbackFloorMs, cursorScope: backend + ':ERP_Perf_Log' });
+  var client = perfDashboardRead_('ERP_Client_Perf', backend, maxRows, { fromMs: fromMs, lookbackFloorMs: lookbackFloorMs, cursorScope: backend + ':ERP_Client_Perf' });
+  server.info.diagnostic_rows = 0;
+  client.info.unmapped_rows = 0;
+  var out = {
+    status: 'success', generated_at: new Date().toISOString(), timezone: 'Africa/Cairo',
+    from: from, to: today, days: days, company: company, backend: backend,
+    collection: { server_enabled: !!PERF_TELEMETRY_.ENABLED, client_enabled: perfLogReadsEnabled_(),
+      fast_read_sample: PERF_TELEMETRY_.READ_SAMPLE, slow_threshold_ms: PERF_TELEMETRY_.SLOW_MS,
+      retention_days: PERF_TELEMETRY_.RETAIN_DAYS, coverage: 'unknown', biased_sample: false,
+      health: perfCollectionHealth_() },
+    coverage: perfDashboardCoverage_(server.info, client.info),
+    capabilities: perfDashboardCapabilities_(),
+    sources: { server: server.info, client: client.info }, companies: [], daily: [], actions: [], browser: []
+  };
+  var companies = Object.create(null), daily = Object.create(null), actions = Object.create(null);
+  var total = perfDashboardGroup_();
+  server.rows.forEach(function (row) {
+    var when = perfDashboardDate_(row.ts), ms = perfDashboardNumber_(row.elapsed_ms);
+    if (!when || ms === null) { server.info.invalid_rows++; return; }
+    /* Phase B: diagnostic rows are counted but never mixed into headline
+     * distributions. Old rows have no marker and stay included. */
+    if (perfIsDiagnostic_(row.diagnostic)) { server.info.diagnostic_rows++; return; }
+    if (!server.info.latest_at || when.toISOString() > server.info.latest_at) server.info.latest_at = when.toISOString();
+    var day = Utilities.formatDate(when, 'Africa/Cairo', 'yyyy-MM-dd');
+    if (day < from || day > today) return;
+    var action = String(row.action || '').slice(0, 80);
+    if (['get_admin_performance', 'get_perf_dashboard', 'log_client_perf'].indexOf(action) !== -1) return;
+    var co = String(row.company || '').trim().slice(0, 80);
+    if (co) companies[co] = true;
+    if (company && co !== company) return;
+    var page = String(row.page || '').slice(0, 80), key = JSON.stringify([co, page, action]);
+    if (!daily[day]) daily[day] = perfDashboardGroup_();
+    if (!actions[key]) { actions[key] = perfDashboardGroup_(); actions[key].company = co; actions[key].page = page; actions[key].action = action; }
+    [total, daily[day], actions[key]].forEach(function (g) {
+      g.ms.push(ms);
+      var status = String(row.status || '').toUpperCase();
+      if (status === 'FAILED' || status === 'ERROR') g.failures++;
+      var reads = perfDashboardNumber_(row.sheet_reads);
+      if (reads !== null) { g.reads += reads; g.readCount++; }
+    });
+  });
+  out.companies = Object.keys(companies).sort();
+  out.summary = perfDashboardSummary_(total);
+  for (var i = 0; i < days; i++) {
+    var date = new Date(first.getTime()); date.setUTCDate(date.getUTCDate() + i);
+    var dayKey = date.toISOString().slice(0, 10);
+    out.daily.push(Object.assign({ day: dayKey, partial: dayKey === today }, perfDashboardSummary_(daily[dayKey] || perfDashboardGroup_())));
+  }
+  out.actions = Object.keys(actions).map(function (key) {
+    var g = actions[key];
+    return Object.assign({ company: g.company, page: g.page, action: g.action }, perfDashboardSummary_(g));
+  }).sort(function (a, b) { return b.p95_ms - a.p95_ms; }).slice(0, 20);
+  // The legacy browser schema has no company dimension. Never infer ownership
+  // from the URL/title or show global measurements under a company-only filter.
+  var metrics = Object.create(null);
+  client.rows.forEach(function (row) {
+    var when = perfDashboardDate_(row.ts);
+    if (when && (!client.info.latest_at || when.toISOString() > client.info.latest_at)) client.info.latest_at = when.toISOString();
+    var ms = perfDashboardNumber_(row.ms), metric = String(row.metric || '');
+    if (!when || ms === null) { client.info.invalid_rows++; return; }
+    var day = Utilities.formatDate(when, 'Africa/Cairo', 'yyyy-MM-dd');
+    if (company || day < from || day > today) return;
+    /* Explicit display-side drop: stored names whose semantics do not match the
+     * `ms` column (byte counts) or that the display allowlist does not map.
+     * Counted, never repurposed — see the reconciliation block at
+     * PERF_CLIENT_METRICS_. */
+    if (!PERF_CLIENT_DISPLAY_METRICS_[metric]) { client.info.unmapped_rows++; return; }
+    // Legacy page can be a user-provided title; only return safe route-shaped IDs.
+    var page = String(row.page || '');
+    if (!/^[A-Za-z][A-Za-z0-9_]{0,79}$/.test(page)) page = '';
+    var key = JSON.stringify([page, metric]);
+    if (!metrics[key]) { metrics[key] = perfDashboardGroup_(); metrics[key].page = page; metrics[key].metric = metric; }
+    metrics[key].ms.push(ms);
+  });
+  out.browser = Object.keys(metrics).map(function (key) {
+    var g = metrics[key]; return Object.assign({ page: g.page, metric: g.metric }, perfDashboardSummary_(g));
+  }).sort(function (a, b) { return b.p95_ms - a.p95_ms; }).slice(0, 20);
+  out.browser_company_supported = false;
+  if (server.info.state === 'ready' && client.info.state === 'ready') {
+    try {
+      var serialized = JSON.stringify(out);
+      if (serialized.length < 20000) CacheService.getScriptCache().put(cacheKey, serialized, 60);
+    } catch (cacheError) { /* Cache failure does not hide measurements. */ }
+  }
+  return out;
+}
+
+function perfDashboardNumber_(value) {
+  if (value === null || value === undefined || value === '') return null;
+  var n = Number(value); return isFinite(n) && n >= 0 ? n : null;
+}
+
+function perfDashboardDate_(value) {
+  if (value === null || value === undefined || value === '') return null;
+  var d = new Date(value); return isNaN(d.getTime()) ? null : d;
+}
+
+function perfDashboardGroup_() { return { ms: [], failures: 0, reads: 0, readCount: 0 }; }
+
+/** Nearest-rank percentiles over the exact bounded sample; percentiles are
+ *  never averaged. p95 is the displayed ceiling, so `insufficient` labels a
+ *  sample below the heuristic display gate (100 observations) instead of
+ *  letting a handful of rows look like a population. The weekly rollup keeps
+ *  its own p50/p90/p99 columns and is deliberately untouched. */
+function perfDashboardSummary_(group) {
+  var ms = group.ms.slice().sort(function (a, b) { return a - b; });
+  var n = ms.length;
+  return { count: n,
+    p50_ms: n ? perfPercentile_(ms, 50) : null,
+    p75_ms: n ? perfPercentile_(ms, 75) : null,
+    p95_ms: n ? perfPercentile_(ms, 95) : null,
+    failures: group.failures,
+    failure_rate: n ? group.failures / n : null,
+    mean_sheet_reads: group.readCount ? group.reads / group.readCount : null,
+    insufficient: n < PERFDASH_MIN_OBS_P95,
+    p95_min_obs: PERFDASH_MIN_OBS_P95 };
+}
+
+/**
+ * Bounded newest-first read of one telemetry source. Read-only: no writes, no
+ * schema changes, no new store.
+ *
+ * Sheets — scan rows in PERFDASH_CHUNK_ROWS chunks from the newest row upward
+ * inside one PERFDASH_MAX_ROWS_PER_OPEN budget. A script-cache cursor records
+ * how far back the previous open reached so a repeated open continues with
+ * older rows. The newest rows are re-read each open (that is how newly
+ * appended rows are seen); because the aggregation is recomputed from this
+ * open's sample and never merged with a previous one, overlap cannot double
+ * count. Scanning stops at the budget, at the requested period start, or at
+ * the PERFDASH_MAX_LOOKBACK_DAYS floor.
+ *
+ * Firestore — newest-first pages through the existing systemStore_() query
+ * cursor. That cursor is inclusive on the boundary document, so the boundary
+ * row of the previous page is skipped. It is not persisted across opens: a
+ * document inserted after a persisted cursor would sort ABOVE it in the
+ * descending order and be missed, so every open must start from the newest
+ * document. The budget therefore bounds each open; if the period is not
+ * covered the source is marked truncated rather than presented as complete.
+ *
+ * `complete` means this open covered the requested period (or the lookback
+ * floor / the whole sheet); `truncated` means the budget ran out first.
+ */
+function perfDashboardRead_(table, backend, limit, opts) {
+  var options = opts || {};
+  var budget = Math.max(1, Number(limit) || PERFDASH_MAX_ROWS_PER_OPEN);
+  var fromMs = perfDashboardFiniteMs_(options.fromMs);
+  var lookbackFloorMs = perfDashboardFiniteMs_(options.lookbackFloorMs);
+  var out = {
+    rows: [],
+    info: {
+      state: 'ready', scanned: 0, capped: false, limit: budget, latest_at: null,
+      invalid_rows: 0, covered_through: null, truncated: false, cursor_used: false,
+      complete: false
+    }
+  };
+  try {
+    if (backend === 'firestore') {
+      var cursor = null, lastName = null, scanned = 0, oldestMs = null, complete = false, stalled = false;
+      var pageSize = Math.min(PERFDASH_CHUNK_ROWS, budget);
+      while (scanned < budget) {
+        var take = Math.min(pageSize, budget - scanned);
+        var result = systemStore_().query(table, {
+          orderBy: [{ field: 'ts', direction: 'DESCENDING' }],
+          /* +1 absorbs the inclusive startAt boundary document so each page
+           * still yields `take` genuinely new rows. */
+          limit: take + (cursor ? 1 : 0),
+          cursor: cursor || undefined,
+          maxRetries: 0
+        });
+        var records = result.records || [], added = 0;
+        records.forEach(function (record) {
+          var name = record.meta && record.meta.name;
+          if (lastName && name === lastName) return;   /* inclusive startAt boundary */
+          out.rows.push(record.data || {});
+          added++;
+          var when = perfDashboardDate_((record.data || {}).ts), at = when ? when.getTime() : null;
+          if (at !== null && (oldestMs === null || at < oldestMs)) oldestMs = at;
+        });
+        scanned += added;
+        if (records.length) lastName = (records[records.length - 1].meta || {}).name;
+        cursor = result.nextCursor;
+        if (!cursor) { complete = true; break; }
+        /* A page that added nothing cannot advance the position; stop instead
+         * of looping forever and report the sample as incomplete. */
+        if (!added) { stalled = true; break; }
+        if (oldestMs !== null && fromMs !== null && oldestMs <= fromMs) { complete = true; break; }
+        if (oldestMs !== null && lookbackFloorMs !== null && oldestMs < lookbackFloorMs) { complete = true; break; }
+      }
+      out.info.complete = complete;
+      out.info.truncated = !complete && (scanned >= budget || stalled);
+      out.info.capped = out.info.truncated;
+      if (oldestMs !== null) out.info.covered_through = new Date(oldestMs).toISOString();
+    } else {
+      var sheet = getSpreadsheet_(CONFIG.AUTH_SPREADSHEET_ID).getSheetByName(table);
+      if (!sheet) { out.info.state = 'missing'; out.info.complete = true; return out; }
+      var last = sheet.getLastRow(), width = Math.min(sheet.getLastColumn(), 20);
+      if (last < 2 || !width) { out.info.complete = true; return out; }
+      var headers = sheet.getRange(1, 1, 1, width).getValues()[0].map(function (h) { return String(h).trim().toLowerCase(); });
+      var required = table === 'ERP_Perf_Log' ? ['ts', 'elapsed_ms', 'action', 'company', 'page', 'status'] : ['ts', 'metric', 'ms', 'page'];
+      if (!required.every(function (key) { return headers.indexOf(key) !== -1; })) { out.info.state = 'schema_unavailable'; return out; }
+
+      /* Validate the persisted continuation. Pruning or sheet edits that leave
+       * row numbers outside the current sheet invalidate it; a lost cursor
+       * only costs a restart from the newest rows. */
+      var cursorState = options.cursorScope ? perfDashboardCursorGet_(options.cursorScope) : null;
+      if (cursorState && (cursorState.mode !== 'sheets' || !(cursorState.row >= 2) || cursorState.row > last ||
+          !(cursorState.latest_row >= 2) || cursorState.latest_row > last)) cursorState = null;
+      out.info.cursor_used = !!cursorState;
+      var topFloor = cursorState ? cursorState.latest_row + 1 : 2;
+      var scanned = 0, readBottom = null, oldestMs = null;
+      var tsCol = headers.indexOf('ts');
+      function pushChunk(lo, hi) {
+        var count = Math.min(PERFDASH_CHUNK_ROWS, hi - lo + 1, budget - scanned);
+        if (count <= 0) return 0;
+        var values = sheet.getRange(hi - count + 1, 1, count, width).getValues();
+        for (var i = 0; i < values.length; i++) {
+          var row = {};
+          for (var j = 0; j < headers.length; j++) row[headers[j]] = values[i][j];
+          out.rows.push(row);
+        }
+        readBottom = hi - count + 1;
+        scanned += count;
+        var when = tsCol === -1 ? null : perfDashboardDate_(values[0][tsCol]);
+        if (when) { var at = when.getTime(); if (oldestMs === null || at < oldestMs) oldestMs = at; }
+        return count;
+      }
+
+      /* Phase 1: newest rows down to the top of the previously covered window. */
+      var periodCovered = false, lookbackReached = false;
+      var pos = last;
+      while (pos >= topFloor && scanned < budget) {
+        if (!pushChunk(topFloor, pos)) break;
+        pos = readBottom - 1;
+        if (oldestMs !== null && fromMs !== null && oldestMs <= fromMs) { periodCovered = true; break; }
+        if (oldestMs !== null && lookbackFloorMs !== null && oldestMs < lookbackFloorMs) { lookbackReached = true; break; }
+      }
+      var topDone = pos < topFloor;
+      /* Phase 2: the older window below the previous cursor, when one exists. */
+      var olderDone = false, olderPos = null;
+      if (topDone && !periodCovered && !lookbackReached) {
+        var olderHi = cursorState ? cursorState.row - 1 : 1;
+        if (olderHi < 2) olderDone = true;
+        else if (scanned < budget) {
+          olderPos = olderHi;
+          while (olderPos >= 2 && scanned < budget) {
+            if (!pushChunk(2, olderPos)) break;
+            olderPos = readBottom - 1;
+          }
+          olderDone = olderPos < 2;
+        }
+      }
+
+      var complete = periodCovered || lookbackReached || (topDone && olderDone);
+      var newTop = last, newRow;
+      if (lookbackReached) newRow = 2;                        /* never walk past the floor */
+      else if (periodCovered) newRow = readBottom === null ? (cursorState ? cursorState.row : 2) : readBottom;
+      else if (topDone) newRow = olderDone ? 2 : (olderPos !== null ? readBottom : (cursorState ? cursorState.row : 2));
+      else if (cursorState) { newTop = cursorState.latest_row; newRow = cursorState.row; }
+      else newRow = readBottom === null ? 2 : readBottom;
+      if (options.cursorScope) perfDashboardCursorSet_(options.cursorScope, { mode: 'sheets', row: newRow, latest_row: newTop });
+      out.info.complete = complete;
+      out.info.truncated = !complete;
+      out.info.capped = out.info.truncated;
+      if (oldestMs !== null) out.info.covered_through = new Date(oldestMs).toISOString();
+    }
+    out.info.scanned = out.rows.length;
+  } catch (e) {
+    // Do not leak backend URLs/project details or misrepresent an error as no activity.
+    out.rows = []; out.info.state = 'unavailable'; out.info.complete = false;
+  }
+  return out;
+}
+
 function classifyAction_(action) {
   if (!action) return 'UNKNOWN';
   const actionStr = String(action).toLowerCase();
   
   // No log actions
-  if (actionStr.startsWith('get_') || actionStr === 'ping' || 
-      actionStr === 'login_user' || actionStr === 'setup_password') {
+  if (actionStr.startsWith('get_') || actionStr === 'ping' ||
+      actionStr === 'login_user' || actionStr === 'request_password_setup_code' || actionStr === 'setup_password') {
     return 'NO_LOG';
   }
   
@@ -8438,6 +9688,11 @@ const SYSTEM_LOG_HEADERS = [
  * leave on. Memoised per execution.
  */
 let _perfLogReads_ = null;
+
+/* Phase B per-execution flag memos. PERF_RUM gates headline sampling;
+ * PERF_RUM_RATE optionally overrides the 10% default (clamped 0..1). */
+let _perfRum_ = null;
+let _perfRumRate_ = null;
 
 
 

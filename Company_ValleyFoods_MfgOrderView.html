@@ -7,6 +7,7 @@
   <?!= include('CSS_Tokens'); ?>
   <?!= include('UI_Components'); ?>
   <?!= include('Client_Helpers'); ?>
+  <?!= include('Core_FormState'); ?>
   <?!= include('Company_ValleyFoods_Nav'); ?>
   <?!= getCompanyThemeCSS_('9940659bd83035d7') ?>
   <style>
@@ -105,12 +106,35 @@
       var OUTPUT_BATCH_PROMISES = []; /* one in-flight batch request per material */
       var OUTPUT_BATCHES_FETCHED = []; /* true once a fetch for that material finished, even when it returned none */
       var MFG_WORKOPS = [];      /* [{uid,work_center_id,operation_status,notes,start_time,last_pause_time,end_time,actual_hours,work_center_cost,total_cost}] */
-      var MFG_BYPRODUCTS = [];   /* [{uid,item,qty,transaction_code,total_cost}] */
+      var MFG_BYPRODUCTS = [];   /* [{uid,item,qty,manufacture_internal_batch,transaction_code,total_cost}] */
       var MFG_DELETED_UIDS = { outputs: [], consumption: [], work_ops: [], byproducts: [] };
       /* Schema-free edit token for the loaded MO (detail scope). Returned as
          base_token/save_scope so the server can reject stale editors. */
       var MFG_EDIT_TOKEN = '';
       var MFG_SAVE_SCOPE = ['header', 'outputs', 'consumption', 'work_ops', 'byproducts'];
+
+      /* Stage F candidate (plan §6): shared retained form state for this
+         editor. FALSE as shipped, and UIC.FormState.enabled() also requires the
+         shared FORM_STATE_CORE_ master switch, so with either false the editor
+         runs its existing path exactly as before. */
+      var MFG_FORMSTATE_CANDIDATE_ = false;
+      var MFG_FORM_ = null;
+      var LAZY_TAB_DRAWN_ = {};
+      function mfgFormStateOn_() {
+        return !!(window.UIC && UIC.FormState && UIC.FormState.enabled(MFG_FORMSTATE_CANDIDATE_));
+      }
+      function mfgFormState_() {
+        if (!mfgFormStateOn_()) return null;
+        if (!MFG_FORM_) {
+          MFG_FORM_ = UIC.FormState.create({
+            key: 'vf_mfg_order_view',
+            fields: ['manufacture_date', 'operation_type', 'shift', 'produced_product_id', 'manufactured_qty',
+              'actual_qty', 'recipe_id', 'mo_status', 'manufacture_batch'],
+            sections: ['outputs', 'work_ops', 'byproducts']
+          });
+        }
+        return MFG_FORM_;
+      }
 
       /* U-46. Whether this user may see cost figures. Set from the server's
          can_see_cost on every load, and deliberately NOT re-derived from
@@ -242,7 +266,7 @@
               return false;
             });
             MFG_BYPRODUCTS = (res.byproducts || []).map(function (b) {
-              return { uid: b.unique_id || '', item: String(b.item || ''), qty: b.qty || '', transaction_code: b.transaction_code || '', total_cost: b.total_cost || '' };
+              return { uid: b.unique_id || '', item: String(b.item || ''), qty: b.qty || '', manufacture_internal_batch: b.manufacture_internal_batch || '', transaction_code: b.transaction_code || '', total_cost: b.total_cost || '' };
             }).filter(function (b) {
               if (b.item) return true;
               rememberDeleted_('byproducts', b.uid);
@@ -309,9 +333,11 @@
 
         root().innerHTML = bar + '<div class="odoo-wrap">' + renderKpiShell() + headerCard + renderApprovals(order) + notebook + '</div>';
 
+        if (mfgFormStateOn_()) LAZY_TAB_DRAWN_ = {};
         drawOutputs();
-        drawWorkOps();
-        drawByproducts();
+        /* Candidate only: the inactive tabs are drawn when first opened, not
+           on every document render. Flag-off keeps the existing eager draw. */
+        if (!mfgFormStateOn_()) { drawWorkOps(); drawByproducts(); }
         renderKpi();
 
         if (!editable()) {
@@ -467,6 +493,20 @@
         return btns;
       }
       function changeStatus(kind) {
+        if (kind === 'lock') {
+          var batch = getV_('f-batch');
+          var actualText = getV_('f-actual');
+          var actual = Number(actualText);
+          if (!batch) { UI.toast && UI.toast('لا يمكن إنهاء الأمر: أدخل رقم التشغيلة أولاً', 'error'); return; }
+          if (!actualText || !isFinite(actual) || actual <= 0) {
+            UI.toast && UI.toast('لا يمكن إنهاء الأمر: يجب أن تكون الكمية الفعلية المنتجة أكبر من صفر', 'error'); return;
+          }
+          var savedBatch = String((CURRENT_ORDER && CURRENT_ORDER.manufacture_batch) || '').trim();
+          var savedActual = Number(CURRENT_ORDER && CURRENT_ORDER.actual_qty);
+          if (batch !== savedBatch || !isFinite(savedActual) || Math.abs(actual - savedActual) > 0.000001) {
+            UI.toast && UI.toast('احفظ رقم التشغيلة والكمية الفعلية أولاً، ثم أعد إنهاء الأمر', 'error'); return;
+          }
+        }
         if (kind === 'lock' && !confirm('قفل الأمر سيجعله غير قابل للتعديل إلا بصلاحية مدير النظام. متابعة؟')) return;
         if (kind === 'unlock' && !confirm('فتح القفل سيعيد الأمر إلى «قيد التنفيذ». متابعة؟')) return;
         showLoading();
@@ -519,6 +559,13 @@
           var p = document.getElementById(t); if (p) p.classList.toggle('active', t === id);
           var b = document.querySelector('.odoo-tab[onclick*="' + id + '"]'); if (b) b.classList.toggle('active', t === id);
         });
+        /* Candidate only: first open of an inactive tab draws it then. */
+        if (mfgFormStateOn_()) {
+          try {
+            if (id === 'tab-work' && !LAZY_TAB_DRAWN_['tab-work']) { LAZY_TAB_DRAWN_['tab-work'] = true; drawWorkOps(); }
+            if (id === 'tab-byproduct' && !LAZY_TAB_DRAWN_['tab-byproduct']) { LAZY_TAB_DRAWN_['tab-byproduct'] = true; drawByproducts(); }
+          } catch (eLazy) {}
+        }
       }
 
       /* ---------- OUTPUTS (valley_manufacture_header_products) ---------- */
@@ -698,7 +745,7 @@
       var BATCH_COLS = ['الدفعة', 'المتاح', 'المخصص', 'المتبقي', 'تكلفة الوحدة', 'الإجمالي'];
       var FOOTER_COLS = ['الدفعة', 'المتاح', 'المخصص', 'المتبقي', 'إجمالي التكلفة', ''];
       var WORKOP_COLS = ['مركز العمل', 'الحالة', 'بدء', 'إنهاء', 'التوقف (ساعات)', 'الساعات الفعلية', 'ملاحظات', 'تكلفة المركز', 'الإجمالي', 'أدوات', ''];
-      var BYPROD_COLS = ['المنتج الثانوي', 'الكمية', ''];
+      var BYPROD_COLS = ['المنتج الثانوي', 'الكمية', 'رقم التشغيلة الداخلية (اختياري)', ''];
 
       function batchModalRowsHtml_() {
         return BM.rows.map(function (r, ix) {
@@ -1115,6 +1162,130 @@
 
       /* ---------- WORK OPS (valley_manufacture_work_center) ---------- */
       var WO_STATUSES = ['Pending', 'In Progress', 'Paused', 'Done'];
+      /* Bulk selection + status. Selections are keyed by the current row index
+         and cleared whenever the row set changes (remove / autofill / apply). */
+      var WORKOP_SELECTED = {};
+      function workOpStatusLabel_(s) { return s === 'Done' ? 'منتهية' : (s === 'Paused' ? 'متوقف مؤقتاً' : (s === 'In Progress' ? 'قيد التشغيل' : 'بانتظار')); }
+      function woSelectedCount_() { var n = 0; Object.keys(WORKOP_SELECTED).forEach(function (k) { if (WORKOP_SELECTED[k]) n++; }); return n; }
+      function woSelectedIndexes_() { return Object.keys(WORKOP_SELECTED).filter(function (k) { return WORKOP_SELECTED[k]; }).map(Number); }
+      function updateWorkOpsBulkBar_() { var el = document.getElementById('wo-bulk-count'); if (el) el.textContent = woSelectedCount_() + ' محدد'; }
+      function toggleWorkOpSelect(i, checked) {
+        WORKOP_SELECTED[i] = !!checked;
+        var head = document.getElementById('wo-check-all');
+        if (head) head.checked = MFG_WORKOPS.length > 0 && woSelectedCount_() === MFG_WORKOPS.length;
+        updateWorkOpsBulkBar_();
+      }
+      function toggleAllWorkOps(checked) {
+        WORKOP_SELECTED = {};
+        if (checked) MFG_WORKOPS.forEach(function (w, i) { WORKOP_SELECTED[i] = true; });
+        drawWorkOps();
+      }
+      /* Mirrors the server's set_status semantics for rows that are not saved
+         yet, so the snapshot the MO save carries is identical. */
+      function applyWorkOpStatusLocally_(i, status) {
+        var w = MFG_WORKOPS[i];
+        if (!w) return;
+        w.operation_status = status;
+        if (status === 'In Progress' || status === 'Paused') {
+          if (!w.start_time) w.start_time = new Date();
+          w.last_pause_time = status === 'Paused' ? new Date() : '';
+        } else if (status === 'Done') {
+          if (!w.end_time) w.end_time = new Date();
+          recalcWorkOpHours_(i);
+        }
+      }
+      /* Local, same-MO mirror of the server rule (per work centre). Cross-MO
+         conflicts are only knowable server-side and are refused there. */
+      function workOpFrame_(w) {
+        var s = w && w.start_time ? new Date(w.start_time) : null;
+        var e = w && w.end_time ? new Date(w.end_time) : null;
+        return { s: (s && !isNaN(s.getTime())) ? s : null, e: (e && !isNaN(e.getTime())) ? e : null };
+      }
+      function workOpOverlap_(a, b) {
+        var as = a.s ? a.s.getTime() : null, ae = a.e ? a.e.getTime() : null;
+        var bs = b.s ? b.s.getTime() : null, be = b.e ? b.e.getTime() : null;
+        var c1 = (be === null) || (as === null) || (as < be);
+        var c2 = (ae === null) || (bs === null) || (bs < ae);
+        return c1 && c2;
+      }
+      function workOpEffectiveFrame_(w, nextStatus) {
+        var f = workOpFrame_(w);
+        if ((nextStatus === 'In Progress' || nextStatus === 'Paused') && !f.s) f.s = new Date();
+        if (nextStatus === 'Done' && !f.e) f.e = new Date();
+        return f;
+      }
+      function workOpLocalConflict_(i, nextStatus, frame) {
+        var w = MFG_WORKOPS[i];
+        var wc = String((w && w.work_center_id) || '').trim();
+        if (!wc) return '';
+        var wantsActive = (nextStatus === 'In Progress' || nextStatus === 'Paused');
+        for (var j = 0; j < MFG_WORKOPS.length; j++) {
+          if (j === i) continue;
+          var o = MFG_WORKOPS[j];
+          if (String((o && o.work_center_id) || '').trim() !== wc) continue;
+          var st = String((o && o.operation_status) || 'Pending');
+          if (wantsActive && (st === 'In Progress' || st === 'Paused')) {
+            return 'مركز العمل «' + (workCenterLabel_(wc) || wc) + '» قيد التشغيل بالفعل في عملية أخرى';
+          }
+          if (workOpOverlap_(frame, workOpFrame_(o))) {
+            return 'مركز العمل «' + (workCenterLabel_(wc) || wc) + '» محجوز في نفس الفترة في عملية أخرى';
+          }
+        }
+        return '';
+      }
+      function applyWorkOpsStatus() {
+        var sel = document.getElementById('wo-bulk-status');
+        var status = sel ? String(sel.value || '') : '';
+        if (WO_STATUSES.indexOf(status) === -1) { UI.toast && UI.toast('اختر الحالة أولاً', 'error'); return; }
+        var idx = woSelectedIndexes_();
+        if (!idx.length) { UI.toast && UI.toast('حدّد عملية واحدة على الأقل', 'error'); return; }
+        /* Local same-MO pre-check before anything is sent or applied. */
+        var wcUse = {};
+        for (var vi = 0; vi < idx.length; vi++) {
+          var vw = MFG_WORKOPS[idx[vi]];
+          if (!vw) continue;
+          if (status === 'In Progress' || status === 'Paused') {
+            var vwc = String(vw.work_center_id || '').trim();
+            if (vwc) {
+              if (wcUse[vwc]) { UI.toast && UI.toast('لا يمكن ضبط عمليتين لنفس مركز العمل كقيد التشغيل', 'error'); return; }
+              wcUse[vwc] = true;
+            }
+          }
+          var vConflict = workOpLocalConflict_(idx[vi], status, workOpEffectiveFrame_(vw, status));
+          if (vConflict) { UI.toast && UI.toast(vConflict, 'error'); return; }
+        }
+        var saved = idx.filter(function (i) { return MFG_WORKOPS[i] && MFG_WORKOPS[i].uid; });
+        var unsaved = idx.filter(function (i) { return !(MFG_WORKOPS[i] && MFG_WORKOPS[i].uid); });
+        function finish(failures) {
+          unsaved.forEach(function (i) { applyWorkOpStatusLocally_(i, status); });
+          WORKOP_SELECTED = {};
+          drawWorkOps();
+          if (failures && failures.length) UI.toast && UI.toast('تعذر تحديث بعض العمليات: ' + failures[0], 'error');
+          else UI.toast && UI.toast('تم تحديث العمليات المحددة', 'success');
+        }
+        if (!saved.length) { finish([]); return; }
+        showLoading();
+        var chain = Promise.resolve(), failures = [];
+        saved.forEach(function (i) {
+          chain = chain.then(function () {
+            var w = MFG_WORKOPS[i];
+            return companyCall('control_valley_mfg_workop', { workop_uid: w.uid, command: 'set_status', status: status })
+              .then(function (r) {
+                var up = r && r.workop;
+                if (up) {
+                  w.operation_status = up.operation_status || status;
+                  w.start_time = up.start_time || w.start_time;
+                  w.end_time = up.end_time || w.end_time;
+                  w.last_pause_time = up.last_pause_time || '';
+                  w.total_pause_duration = up.total_pause_duration != null ? up.total_pause_duration : w.total_pause_duration;
+                  w.actual_hours = up.actual_hours != null ? up.actual_hours : w.actual_hours;
+                }
+              })
+              .catch(function (e) { failures.push((e && e.message) || 'فشل تحديث إحدى العمليات'); });
+          });
+        });
+        chain.then(function () { hideLoading(); finish(failures); });
+      }
       function addWorkOp() {
         var mfgDate = getV_('f-date') || todayStr();
         var span = shiftSpanFor_(mfgShiftId_());
@@ -1150,7 +1321,7 @@
         var p = function (x) { return (x < 10 ? '0' : '') + x; };
         return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
       }
-      function removeWorkOp(i) { rememberDeleted_('work_ops', (MFG_WORKOPS[i] || {}).uid); MFG_WORKOPS.splice(i, 1); drawWorkOps(); }
+      function removeWorkOp(i) { rememberDeleted_('work_ops', (MFG_WORKOPS[i] || {}).uid); MFG_WORKOPS.splice(i, 1); WORKOP_SELECTED = {}; drawWorkOps(); }
       /* Mirrors the sheet formula exactly: (end - start) hours - pause hours,
          rounded to 2dp. This is a PREVIEW — the sheet recomputes on save and
          remains the authority — but it is the same arithmetic, so the number
@@ -1226,7 +1397,12 @@
             .catch(function (e) { UI.toast && UI.toast((e && e.message) || 'فشل', 'error'); })
             .finally(function () { hideLoading(); });
         } else {
-          /* unsaved op — apply locally; persists when the MO is saved */
+          /* unsaved op — apply locally; persists when the MO is saved. The same
+             per-work-centre rule is checked here so the local state cannot
+             promise something the server refuses at save time. */
+          var nextStatus = command === 'start' ? 'In Progress' : (command === 'pause' ? 'Paused' : (command === 'resume' ? 'In Progress' : 'Done'));
+          var localConflict = workOpLocalConflict_(i, nextStatus, workOpEffectiveFrame_(w, nextStatus));
+          if (localConflict) { UI.toast && UI.toast(localConflict, 'error'); return; }
           if (command === 'start') { w.operation_status = 'In Progress'; if (!w.start_time) w.start_time = new Date(); }
           else if (command === 'pause') { w.operation_status = 'Paused'; w.last_pause_time = new Date(); }
           else if (command === 'resume') { w.operation_status = 'In Progress'; w.last_pause_time = ''; }
@@ -1267,7 +1443,7 @@
       }
       function drawWorkOps() {
         var tb = document.getElementById('workops-body'); if (!tb) return;
-        function statusLabel(s) { return s === 'Done' ? 'منتهية' : (s === 'Paused' ? 'متوقف مؤقتاً' : (s === 'In Progress' ? 'قيد التشغيل' : 'بانتظار')); }
+        var statusLabel = workOpStatusLabel_;
         function dt(v) { return fmtDateTime(v); }
         function rowBtns(i, w, canClock) {
           if (!canClock) return '';
@@ -1281,8 +1457,10 @@
           return '';
         }
         function toDtInput(v) { if (!v) return ''; var d = (v instanceof Date) ? v : new Date(v); if (isNaN(d.getTime())) return ''; var p = function (n) { return n < 10 ? '0' + n : '' + n; }; return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + 'T' + p(d.getHours()) + ':' + p(d.getMinutes()); }
+        var canBulk = editable() || IS_SUPER_ADMIN;
+        var allChecked = MFG_WORKOPS.length > 0 && woSelectedCount_() === MFG_WORKOPS.length;
         var rows = MFG_WORKOPS.map(function (w, i) {
-          var canClock = editable() || IS_SUPER_ADMIN;
+          var canClock = canBulk;
           /* ONE LINE PER WORK CENTRE. Every field is its own cell, in the order
              the header declares, so DOM order == visual order and Tab walks the
              row left to right: work centre -> start -> end -> pause -> notes ->
@@ -1293,6 +1471,7 @@
           w._hours_error = hoursState.ok ? '' : hoursState.message;
           var wcLabel = workCenterLabel_(w.work_center_id);
           return '<tr>' +
+            (canBulk ? '<td data-label="تحديد"><input type="checkbox" class="wo-check" aria-label="تحديد العملية"' + (WORKOP_SELECTED[i] ? ' checked' : '') + ' onchange="MFGVIEW_PAGE.toggleWorkOpSelect(' + i + ',this.checked)"></td>' : '') +
             '<td data-label="' + WORKOP_COLS[0] + '"><button class="btn ' + (wcLabel ? 'btn-primary' : 'btn-outline') + '" style="padding:3px 10px;font-size:11px;" onclick="MFGVIEW_PAGE.openWorkOpWorkCenter(' + i + ')">' + esc(wcLabel || 'اختر مركز العمل') + '</button></td>' +
             '<td data-label="' + WORKOP_COLS[1] + '"><span class="odoo-pill ' + (w.operation_status === 'Done' ? 'Done' : (w.operation_status === 'Paused' ? 'Paused' : (w.operation_status === 'In Progress' ? 'InProgress' : 'Draft'))) + '">' + statusLabel(w.operation_status) + '</span></td>' +
             '<td data-label="' + WORKOP_COLS[2] + '">' + inputHtml('wo-start-' + i, toDtInput(w.start_time), 'datetime-local', 'MFGVIEW_PAGE.setWorkOp(' + i + ',\'start_time\',this.value)', { disabled: !editable() }) + '</td>' +
@@ -1309,14 +1488,28 @@
             '</tr>';
         }).join('');
         var addBtn = editable() ? '<button class="btn btn-outline" style="margin-top:8px;" onclick="MFGVIEW_PAGE.addWorkOp()">+ عملية تشغيل</button>' : '';
+        /* Bulk bar: pick one status, tick any rows (or the header tick for all)
+           and apply. Saved rows persist through control_valley_mfg_workop's
+           set_status; unsaved rows persist with the next MO save. */
+        var bulkBar = (MFG_WORKOPS.length && canBulk)
+          ? '<div id="wo-bulk-bar" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px;">' +
+              '<select id="wo-bulk-status" class="odoo-input" style="max-width:190px;">' +
+                WO_STATUSES.map(function (s) { return '<option value="' + s + '">' + statusLabel(s) + '</option>'; }).join('') +
+              '</select>' +
+              '<button class="btn btn-primary" style="padding:4px 12px;font-size:12px;" onclick="MFGVIEW_PAGE.applyWorkOpsStatus()">تطبيق الحالة على المحدد</button>' +
+              '<span id="wo-bulk-count" class="odoo-ro" style="font-size:12px;">' + woSelectedCount_() + ' محدد</span>' +
+            '</div>'
+          : '';
         tb.innerHTML = (MFG_WORKOPS.length
-          ? '<table class="odoo-table card-table"><thead><tr>' +
+          ? bulkBar + '<div style="overflow-x:auto;width:100%;">' +
+            '<table class="odoo-table card-table" style="min-width:1040px;"><thead><tr>' +
+              (canBulk ? '<th style="width:34px;"><input type="checkbox" id="wo-check-all" aria-label="تحديد الكل"' + (allChecked ? ' checked' : '') + ' onchange="MFGVIEW_PAGE.toggleAllWorkOps(this.checked)"></th>' : '') +
               '<th>' + WORKOP_COLS[0] + '</th><th>' + WORKOP_COLS[1] + '</th>' +
               '<th>' + WORKOP_COLS[2] + '</th><th>' + WORKOP_COLS[3] + '</th>' +
               '<th>' + WORKOP_COLS[4] + '</th><th>' + WORKOP_COLS[5] + '</th>' +
               '<th>' + WORKOP_COLS[6] + '</th>' + wcCostHeaders() +
               '<th>' + WORKOP_COLS[9] + '</th><th>' + WORKOP_COLS[10] + '</th>' +
-            '</tr></thead><tbody>' + rows + '</tbody></table>'
+            '</tr></thead><tbody>' + rows + '</tbody></table></div>'
           : '<div class="odoo-ro">لا توجد ورديات تشغيل</div>') + addBtn;
       }
 
@@ -1371,8 +1564,8 @@
         });
         var wcLabel = workCenterLabel_(w.work_center_id);
         var canEdit = editable();
-        UIC.openModal('vf-workop-wc', {
-          size: 'sm',
+        var overlay = UIC.openModal('vf-workop-wc', {
+          size: 'xl',
           title: 'مركز العمل' + (wcLabel ? ' — ' + wcLabel : ''),
           body: canEdit
             ? UIC.combo({ key: 'wo-wc-modal', options: options, value: w.work_center_id, placeholder: 'اكتب للبحث…' })
@@ -1382,6 +1575,23 @@
               UIC.button({ text: 'حفظ', onClick: 'MFGVIEW_PAGE.saveWorkOpWorkCenter(' + i + ')' })
             : UIC.button({ text: 'إغلاق', type: 'outline', onClick: 'MFGVIEW_PAGE.closeWorkOpWorkCenter()' })
         });
+        /* Give the searchable picker room to browse comfortably. Keep this
+           sizing local to this work-centre dialog; other modal layouts stay
+           on the shared ERP defaults. */
+        var dialog = overlay && overlay.querySelector('.modal');
+        if (dialog) {
+          dialog.style.display = 'flex';
+          dialog.style.flexDirection = 'column';
+          dialog.style.height = 'min(78dvh, 760px)';
+          var dialogBody = dialog.querySelector('.modal-body');
+          if (dialogBody) {
+            dialogBody.style.flex = '1 1 auto';
+            dialogBody.style.minHeight = '0';
+            dialogBody.style.overflow = 'visible';
+          }
+        }
+        var pickerList = document.getElementById('wo-wc-modal_list');
+        if (pickerList) pickerList.style.maxHeight = 'min(52dvh, 460px)';
       }
       function closeWorkOpWorkCenter() { try { UIC.closeModal('vf-workop-wc'); } catch (e) {} }
       function saveWorkOpWorkCenter(i) {
@@ -1393,7 +1603,7 @@
 
       /* ---------- BY-PRODUCTS (valley_manufacture_by_product) ---------- */
       function addByproduct() {
-        MFG_BYPRODUCTS.push({ uid: '', item: '', qty: '', transaction_code: '', total_cost: '' });
+        MFG_BYPRODUCTS.push({ uid: '', item: '', qty: '', manufacture_internal_batch: '', transaction_code: '', total_cost: '' });
         drawByproducts();
         renderKpi();
       }
@@ -1408,12 +1618,13 @@
           return '<tr>' +
             '<td data-label="' + BYPROD_COLS[0] + '">' + bpCell + '</td>' +
             '<td data-label="' + BYPROD_COLS[1] + '">' + inputHtml('bp-qty-' + i, b.qty, 'number', 'MFGVIEW_PAGE.setByproduct(' + i + ',\'qty\',this.value)', { min: '0', step: '0.01', disabled: !editable() }) + '</td>' +
-            (editable() ? '<td data-label="' + BYPROD_COLS[2] + '"><button class="btn btn-ghost" style="padding:2px 6px;font-size:11px;" onclick="MFGVIEW_PAGE.removeByproduct(' + i + ')">✕</button></td>' : '<td data-label="' + BYPROD_COLS[2] + '"></td>') +
+            '<td data-label="' + BYPROD_COLS[2] + '">' + inputHtml('bp-batch-' + i, b.manufacture_internal_batch || '', 'text', 'MFGVIEW_PAGE.setByproduct(' + i + ',\'manufacture_internal_batch\',this.value)', { disabled: !editable() }) + '</td>' +
+            (editable() ? '<td data-label="' + BYPROD_COLS[3] + '"><button class="btn btn-ghost" style="padding:2px 6px;font-size:11px;" onclick="MFGVIEW_PAGE.removeByproduct(' + i + ')">✕</button></td>' : '<td data-label="' + BYPROD_COLS[3] + '"></td>') +
             '</tr>';
         }).join('');
         var addBtn = editable() ? '<button class="btn btn-outline" style="margin-top:8px;" onclick="MFGVIEW_PAGE.addByproduct()">+ منتج ثانوي</button>' : '';
         tb.innerHTML = (MFG_BYPRODUCTS.length
-          ? '<table class="odoo-table card-table"><thead><tr><th>' + BYPROD_COLS[0] + '</th><th>' + BYPROD_COLS[1] + '</th><th></th></tr></thead><tbody>' + rows + '</tbody></table>'
+          ? '<table class="odoo-table card-table"><thead><tr><th>' + BYPROD_COLS[0] + '</th><th>' + BYPROD_COLS[1] + '</th><th>' + BYPROD_COLS[2] + '</th><th></th></tr></thead><tbody>' + rows + '</tbody></table>'
           : '<div class="odoo-ro">لا توجد منتجات ثانوية</div>') + addBtn;
         if (editable()) {
           MFG_BYPRODUCTS.forEach(function (bb, bi) {
@@ -1442,6 +1653,7 @@
         MFG_WORKOPS = (ops || []).map(function (op) {
           return { uid: '', work_center_id: String(op.work_center_id || ''), operation_status: 'Pending', notes: op.step_name || '', start_time: '', end_time: '', actual_hours: '' };
         });
+        WORKOP_SELECTED = {};
         drawWorkOps();
       }
       function autofillOutputs(materials) {
@@ -1552,7 +1764,7 @@
           outputs: outputs,
           work_ops: MFG_WORKOPS.filter(function (w) { return String((w && w.work_center_id) || '').trim(); })
             .map(function (w) { return { uid: w.uid, work_center_id: w.work_center_id, operation_status: w.operation_status, notes: w.notes, start_time: w.start_time, last_pause_time: w.last_pause_time, end_time: w.end_time, actual_hours: w.actual_hours, total_pause_duration: w.total_pause_duration }; }),
-          byproducts: MFG_BYPRODUCTS.map(function (b, bi) { return { uid: b.uid || '', item: b.item || getCombo_('bp-item-' + bi), qty: b.qty, transaction_code: b.transaction_code, total_cost: b.total_cost }; })
+          byproducts: MFG_BYPRODUCTS.map(function (b, bi) { return { uid: b.uid || '', item: b.item || getCombo_('bp-item-' + bi), qty: b.qty, manufacture_internal_batch: b.manufacture_internal_batch || '', total_cost: b.total_cost }; })
             .filter(function (b) { return String(b.item || '').trim(); }),
           consumption: [],
           deleted_uids: {
@@ -1563,6 +1775,24 @@
           }
         };
         try { console.log('[MFGVIEW][save] outgoing payload:', JSON.stringify(payload)); } catch (eLog) { console.log('[MFGVIEW][save] outgoing payload (raw):', payload); }
+        /* Stage F candidate: capture an immutable submission and hold the
+           editor (controls disabled, document visible) until the authoritative
+           reply arrives. Flag-off leaves this block inert. */
+        var fs = mfgFormState_();
+        var submission = null;
+        if (fs) {
+          ['manufacture_date', 'operation_type', 'shift', 'produced_product_id', 'manufactured_qty',
+            'actual_qty', 'recipe_id', 'mo_status', 'manufacture_batch'].forEach(function (k) {
+            if (payload[k] !== undefined) fs.setHeader(k, payload[k]);
+          });
+          try {
+            submission = fs.beginSubmit('', { payload: payload, token: MFG_EDIT_TOKEN });
+          } catch (eSub) {
+            UI.toast && UI.toast((eSub && eSub.message) || 'هناك طلب حفظ قيد التنفيذ', 'error');
+            return;
+          }
+          fs.setControlsEnabled('vf-root', false);
+        }
         showLoading();
         companyCall('save_valley_mfg_order', payload)
           .then(function (r) {
@@ -1573,10 +1803,53 @@
             OUTPUT_BATCHES = (MFG_OUTPUTS || []).map(function () { return []; });
             OUTPUT_BATCHES_FETCHED = (MFG_OUTPUTS || []).map(function () { return false; });
             if (IS_NEW && r && r.mo_uid) { onFirstSave(String(r.mo_uid)); return; }
+            /* Candidate: reconcile from the versioned reply instead of a full
+               document reload. The next edit token and the new child identities
+               come from the committed reply; the KPI is redrawn from local
+               preview data only. Anything the reply does not carry still falls
+               back to the existing quiet reload. */
+            if (fs && submission && r && r.reconciliation) {
+              var rec = r.reconciliation;
+              fs.settle(submission, {
+                saved: {},
+                token: rec.next_token || MFG_EDIT_TOKEN,
+                mapped: rec.mapped || {},
+                removed: rec.removed || {}
+              });
+              fs.setControlsEnabled('vf-root', true);
+              if (rec.next_token) MFG_EDIT_TOKEN = rec.next_token;
+              try {
+                var mapped = rec.mapped || {};
+                Object.keys(mapped.outputs || {}).forEach(function (i) { if (MFG_OUTPUTS[i]) MFG_OUTPUTS[i].uid = mapped.outputs[i]; });
+                Object.keys(mapped.work_ops || {}).forEach(function (i) { if (MFG_WORKOPS[i]) MFG_WORKOPS[i].uid = mapped.work_ops[i]; });
+                Object.keys(mapped.byproducts || {}).forEach(function (i) { if (MFG_BYPRODUCTS[i]) MFG_BYPRODUCTS[i].uid = mapped.byproducts[i]; });
+                var footIdx = 0;
+                MFG_OUTPUTS.forEach(function (o, oi) {
+                  (OUTPUT_FOOTERS[oi] || []).forEach(function (f) {
+                    var uid = (mapped.consumption || {})[String(footIdx)];
+                    if (uid) f.uid = uid;
+                    footIdx++;
+                  });
+                });
+                MFG_DELETED_UIDS = { outputs: [], consumption: [], work_ops: [], byproducts: [] };
+              } catch (eMap) {}
+              renderKpi();
+              if (window.confirm('تم الحفظ. هل تريد الانتقال إلى تبويب ورديات التشغيل (البدء/الإيقاف) الآن؟')) { switchTab('workops'); }
+              return;
+            }
+            if (fs && submission) fs.setControlsEnabled('vf-root', true);
             load(true);
             if (window.confirm('تم حفظ أمر التصنيع. هل تريد إدخال بيانات التشغيل (الخطوات/الدفعات) الآن؟')) { switchTab('workops'); }
           })
-          .catch(function (e) { try { console.error('[MFGVIEW][save] FAILED:', (e && e.message) || e); } catch (eLog3) {} UI.toast && UI.toast((e && e.code === 'VERSION_CONFLICT' ? (e.message + ' — أعد تحميل الصفحة') : ((e && e.message) || 'فشل الحفظ')), 'error'); })
+          .catch(function (e) { try { console.error('[MFGVIEW][save] FAILED:', (e && e.message) || e); } catch (eLog3) {}
+            /* Candidate: a rejection restores editability without discarding
+               entered values; an uncertain transport outcome is named as
+               uncertain and never reported as saved. */
+            if (fs && submission) {
+              fs.setControlsEnabled('vf-root', true);
+              if (e && e.uncertain) fs.markUncertain(e); else fs.markRejected(e);
+            }
+            UI.toast && UI.toast((e && e.code === 'VERSION_CONFLICT' ? (e.message + ' — أعد تحميل الصفحة') : ((e && e.message) || 'فشل الحفظ')), 'error'); })
           .finally(function () { hideLoading(); });
       }
 
@@ -1589,6 +1862,7 @@
         openBatchModal: openBatchModal, batchModalSet: batchModalSet,
         batchModalConfirm: batchModalConfirm, batchModalCancel: batchModalCancel,
         addWorkOp: addWorkOp, removeWorkOp: removeWorkOp, setWorkOp: setWorkOp, clockWorkOp: clockWorkOp,
+        toggleWorkOpSelect: toggleWorkOpSelect, toggleAllWorkOps: toggleAllWorkOps, applyWorkOpsStatus: applyWorkOpsStatus,
         openWorkOpNotes: openWorkOpNotes, closeWorkOpNotes: closeWorkOpNotes, saveWorkOpNotes: saveWorkOpNotes,
         openWorkOpWorkCenter: openWorkOpWorkCenter, closeWorkOpWorkCenter: closeWorkOpWorkCenter, saveWorkOpWorkCenter: saveWorkOpWorkCenter,
         addByproduct: addByproduct, removeByproduct: removeByproduct, setByproduct: setByproduct,

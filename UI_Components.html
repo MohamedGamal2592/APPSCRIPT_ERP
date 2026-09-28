@@ -545,6 +545,14 @@ UIC.openDownload = function (url, label) {
  * today the button does nothing and the document is simply unreachable. */
 UIC.printDoc = function (html, title, opts) {
   opts = opts || {};
+  /* [Phase D] start -> usable result; byte bucket only, never document text. */
+  var bucket = '';
+  try {
+    if (window.PERF && PERF.stage) {
+      bucket = PERF.byteBucket ? PERF.byteBucket(String(html || '').length) : '';
+      PERF.stage('print_started', { bytes: bucket });
+    }
+  } catch (ePerfPrint) {}
   var w = null;
   try {
     w = opts.features ? window.open('', '_blank', opts.features) : window.open('', '_blank');
@@ -554,9 +562,23 @@ UIC.printDoc = function (html, title, opts) {
     w.document.write(html);
     w.document.close();
     if (typeof opts.then === 'function') opts.then(w);
+    UIC._printReady(bucket);
     return true;
   }
-  return UIC._printDocOverlay(html, title);
+  var rendered = UIC._printDocOverlay(html, title);
+  UIC._printReady(bucket);
+  return rendered;
+};
+
+/* [Phase D] print_ready after a rendering opportunity (double-rAF fallback). */
+UIC._printReady = function (bucket) {
+  var fire = function () {
+    try { if (window.PERF && PERF.stage) PERF.stage('print_ready', { bytes: bucket }); } catch (e) {}
+  };
+  try {
+    if (window.requestAnimationFrame) window.requestAnimationFrame(function () { window.requestAnimationFrame(fire); });
+    else setTimeout(fire, 32);
+  } catch (e) { try { setTimeout(fire, 32); } catch (e2) {} }
 };
 
 /* The fallback of UIC.printDoc, reachable only when no window came back.
@@ -1176,6 +1198,274 @@ UIC._dtHeadRow = function (st) {
   }).join('') + '</tr>';
 };
 
+/* ══ Fixed table refresh — Phase B2 of Plan_Fast_Pages_Production_Safe.md ══
+ *
+ * One shared control, rendered in the table's own sticky toolbar, that
+ * re-fetches the CURRENT table only. It never reloads the document, reruns the
+ * shell, navigates, or touches unrelated cards/tabs/forms/tables, and it never
+ * falls back to location.reload().
+ *
+ * FLAG
+ * UIC.TABLE_REFRESH_ON_ ships false, so no page changes until an owner turns it
+ * on together with a page adapter. Registering an adapter while the flag is off
+ * is inert (no button, no state).
+ *
+ * ADAPTER (registered per stable table id by the page that owns the loader)
+ *   UIC.TableRefresh.register('sales-dt', {
+ *     load:    function (ctx) { return companyCall(...); },   // required
+ *     apply:   function (result, ctx) { ...; renderTable(result); }, // required
+ *     blocked: function () { return reasonOrNull; },           // optional
+ *     onError: function (err, ctx) {}                          // optional
+ *   });
+ *
+ * The shared component owns: the button and its fixed toolbar position, busy
+ * state, inline error/retry, single-flight coalescing, stale-reply rejection,
+ * and snapshot/restore of the view state (search, dates, sort, page, hidden
+ * columns, selection, scroll). The page owns: endpoint, query/window, row
+ * mapping and re-render. `apply` must end by rendering the table through
+ * UIC.dataTable/PagedTable under the same id, which is what restore() expects.
+ *
+ * Row identity for selection is the dataTable store's own key
+ * (UIC._dtRowKey); restore() re-applies the saved key set and the batch bar
+ * reconciles eligibility on the next render, so a selection whose record no
+ * longer exists is not retained as actionable.
+ */
+UIC.TABLE_REFRESH_ON_ = false;
+
+UIC.TableRefresh = (function () {
+  'use strict';
+  var adapters = Object.create(null);   /* tableId -> adapter */
+  var inflight = Object.create(null);   /* tableId -> {gen, promise} */
+  var gens = Object.create(null);       /* tableId -> generation */
+  var lastOk = Object.create(null);     /* tableId -> Date of last applied refresh */
+
+  function enabled() { return UIC.TABLE_REFRESH_ON_ === true; }
+  function has(id) { return !!adapters[id]; }
+  function adapterOf(id) { return adapters[id] || null; }
+  function generationOf(id) { return gens[id] || 0; }
+
+  function esc(v) { return (UIC.escHtml ? UIC.escHtml(v) : String(v == null ? '' : v)); }
+
+  function buttonHtml(id) {
+    return '<button type="button" class="btn btn-outline dt-refresh-btn" id="' + id + '_refresh"' +
+      ' title="تحديث البيانات" aria-label="تحديث البيانات"' +
+      ' onclick="UIC.TableRefresh.refresh(\'' + id + '\');return false;">' +
+      UIC.icon('refresh') + '<span>تحديث البيانات</span></button>' +
+      '<span class="dt-refresh-state" id="' + id + '_refresh_state" role="status" aria-live="polite"></span>';
+  }
+
+  /* Snapshot the view state the plan requires preserving. Taken BEFORE the
+     page re-renders, restored AFTER it. */
+  function snapshot(id) {
+    var st = (window.__dtStore || {})[id];
+    var wrap = document.getElementById(id);
+    if (!st) return null;
+    return {
+      searchTerm: st.searchTerm || '',
+      dateFrom: st.dateFrom || '',
+      dateTo: st.dateTo || '',
+      sortKey: st.sortKey || null,
+      sortDir: st.sortDir || null,
+      page: st.page || 1,
+      hidden: Object.assign({}, st.hidden || {}),
+      selected: Object.assign({}, st.selected || {}),
+      scrollTop: wrap ? (wrap.scrollTop || 0) : 0
+    };
+  }
+
+  /* Re-apply a snapshot onto the freshly rendered store. The page's apply()
+     has already replaced the rows; nothing here re-fetches. */
+  function restore(id, snap) {
+    var st = (window.__dtStore || {})[id];
+    if (!st || !snap) return;
+    st.searchTerm = snap.searchTerm || '';
+    st.dateFrom = snap.dateFrom || '';
+    st.dateTo = snap.dateTo || '';
+    st.sortKey = snap.sortKey || null;
+    st.sortDir = snap.sortDir || null;
+    st.hidden = Object.assign({}, snap.hidden || {});
+    st.selected = Object.assign({}, snap.selected || {});
+    var box = document.querySelector('#' + id + ' .table-toolbar input[type="search"]');
+    if (box) box.value = st.searchTerm;
+    var from = document.getElementById(id + '-from');
+    if (from) from.value = st.dateFrom;
+    var to = document.getElementById(id + '-to');
+    if (to) to.value = st.dateTo;
+    try { UIC._dtRebuildHead(id); } catch (e) {}
+    try { UIC._applyFilters(id); } catch (e) {}
+    /* _applyFilters resets to page 1; the saved page is applied afterwards and
+       clamped, so a page whose rows were deleted falls back to the nearest
+       valid page instead of showing an empty slice. */
+    if (st.pageSize > 0) {
+      var want = Math.min(Math.max(1, Number(snap.page) || 1), UIC._dtTotalPages(id));
+      if (want !== st.page) {
+        st.page = want;
+        try { UIC._dtRenderBody(id); UIC._dtRefreshPager(id); } catch (e) {}
+      }
+    }
+    try { UIC._dtRefreshBatchBar(id); } catch (e) {}
+    var wrap = document.getElementById(id);
+    if (wrap && snap.scrollTop) { try { wrap.scrollTop = snap.scrollTop; } catch (e) {} }
+  }
+
+  function setBusy(id, busy) {
+    var btn = document.getElementById(id + '_refresh');
+    if (btn) {
+      btn.disabled = !!busy;
+      btn.classList.toggle('is-busy', !!busy);
+      btn.setAttribute('aria-busy', busy ? 'true' : 'false');
+    }
+    var wrap = document.getElementById(id);
+    if (wrap) wrap.classList.toggle('dt-refreshing', !!busy);
+  }
+
+  function setState(id, kind, message) {
+    var el = document.getElementById(id + '_refresh_state');
+    if (!el) return;
+    el.className = 'dt-refresh-state dt-refresh-' + kind;
+    if (kind === 'loading') el.textContent = 'جارٍ التحديث…';
+    else if (kind === 'error') {
+      el.innerHTML = esc(message || 'تعذر تحديث البيانات') +
+        ' <button type="button" class="btn btn-outline" style="padding:2px 8px;font-size:12px;"' +
+        ' onclick="UIC.TableRefresh.refresh(\'' + id + '\')">إعادة المحاولة</button>';
+    } else if (kind === 'ok') {
+      var t = lastOk[id];
+      var hh = t ? ('0' + t.getHours()).slice(-2) : '--';
+      var mm = t ? ('0' + t.getMinutes()).slice(-2) : '--';
+      el.textContent = 'آخر تحديث ' + hh + ':' + mm;
+    } else if (kind === 'blocked') el.textContent = message || '';
+    else el.textContent = '';
+  }
+
+  /* Inject the button into an already-rendered table (registration can happen
+     after the first paint). Idempotent. */
+  function inject(id) {
+    if (!enabled() || !adapters[id]) return;
+    var wrap = document.getElementById(id);
+    if (!wrap) return;
+    if (document.getElementById(id + '_refresh')) return;
+    var bar = wrap.querySelector('.table-toolbar');
+    if (!bar) {
+      bar = document.createElement('div');
+      bar.className = 'table-toolbar dt-refresh-sticky';
+      wrap.insertBefore(bar, wrap.firstChild);
+    } else {
+      bar.classList.add('dt-refresh-sticky');
+    }
+    var tmp = document.createElement('div');
+    tmp.innerHTML = buttonHtml(id);
+    while (tmp.firstChild) bar.insertBefore(tmp.firstChild, bar.firstChild);
+  }
+
+  function remove(id) {
+    var btn = document.getElementById(id + '_refresh');
+    if (btn && btn.parentNode) btn.parentNode.removeChild(btn);
+    var state = document.getElementById(id + '_refresh_state');
+    if (state && state.parentNode) state.parentNode.removeChild(state);
+  }
+
+  function register(id, adapter) {
+    if (!id || !adapter || typeof adapter.load !== 'function' || typeof adapter.apply !== 'function') return false;
+    adapters[id] = adapter;
+    try { inject(id); } catch (e) {}
+    return true;
+  }
+
+  function unregister(id) {
+    delete adapters[id];
+    delete inflight[id];
+    gens[id] = (gens[id] || 0) + 1;   /* discard replies from the old adapter */
+    try { remove(id); } catch (e) {}
+  }
+
+  /* One refresh in flight per table; repeated clicks coalesce onto it. */
+  function refresh(id) {
+    var a = adapters[id];
+    if (!a) return Promise.reject({ code: 'NO_REFRESH_ADAPTER', message: 'لا يوجد محمّل تحديث لهذا الجدول' });
+    if (inflight[id]) return inflight[id].promise;
+    if (typeof a.blocked === 'function') {
+      var reason = null;
+      try { reason = a.blocked(); } catch (e) { reason = null; }
+      if (reason) { setState(id, 'blocked', reason); return Promise.reject({ code: 'REFRESH_BLOCKED', message: reason }); }
+    }
+    var gen = (gens[id] || 0) + 1;
+    gens[id] = gen;
+    var snap = snapshot(id);
+    setBusy(id, true);
+    setState(id, 'loading', '');
+    var entry = { gen: gen, promise: null };
+    inflight[id] = entry;
+    entry.promise = Promise.resolve()
+      .then(function () { return a.load({ tableId: id, generation: gen, reason: 'manual' }); })
+      .then(function (result) {
+        /* A stale generation, or a table no longer in the document, must not
+           paint: the page may have navigated or re-rendered under us. */
+        if (gens[id] !== gen || !document.getElementById(id)) return result;
+        a.apply(result, { tableId: id, generation: gen });
+        restore(id, snap);
+        lastOk[id] = new Date();
+        setBusy(id, false);
+        setState(id, 'ok', '');
+        return result;
+      })
+      .catch(function (err) {
+        if (gens[id] !== gen) return;
+        setBusy(id, false);
+        setState(id, 'error', (err && err.message) || 'تعذر تحديث البيانات');
+        if (typeof a.onError === 'function') { try { a.onError(err, { tableId: id, generation: gen }); } catch (e) {} }
+        throw err;
+      })
+      .finally(function () { if (inflight[id] === entry) delete inflight[id]; });
+    return entry.promise;
+  }
+
+  return {
+    enabled: enabled,
+    register: register,
+    unregister: unregister,
+    has: has,
+    adapterOf: adapterOf,
+    generationOf: generationOf,
+    refresh: refresh,
+    buttonHtml: buttonHtml,
+    snapshot: snapshot,
+    restore: restore,
+    _inject: inject,
+    _setState: setState,
+    _lastOk: lastOk
+  };
+})();
+
+/* ══ [Phase F] The request-coordinator switch — OFF until measured ═════════
+ *
+ * Client_Helpers.API.call consults this constant on every call. The shipped
+ * default, false, means no queue, no lanes and no coalescing exist on the
+ * hot path at all: API.call delegates straight to its original dispatcher.
+ * Turning it on routes dispatch through API._coord in Client_Helpers.
+ * Do not enable it anywhere before the post-prerequisite performance baseline
+ * exists; it is a plumbing preparation, not a measured optimization. */
+UIC.REQ_COORD_CORE_ = false;
+
+/* [Phase F] Cooperative yielder for FUTURE chunked renderers.
+ *
+ * scheduler.yield() hands control back at high priority where the browser has
+ * it; the setTimeout(0) fallback is deliberately a MACROTASK — a bare
+ * Promise.resolve() drains the microtask queue instead of letting a paint or
+ * an input event in, which is the entire point of yielding.
+ *
+ * NOT adopted by any renderer in this change: rewriting a render loop onto it
+ * changes paint timing, so adoption requires profiling against the
+ * post-prerequisite baseline first. It is exported now so that work starts
+ * from a measured loop rather than inventing a helper and then a loop. */
+UIC.yieldToMain = function () {
+  try {
+    if (window.scheduler && typeof window.scheduler.yield === 'function') {
+      return window.scheduler.yield();
+    }
+  } catch (e) {}
+  return new Promise(function (resolve) { setTimeout(resolve, 0); });
+};
+
 UIC.dataTable = function (containerId, opts) {
   const o = opts || {};
   const rawHeaders = o.headers || [];
@@ -1195,7 +1485,22 @@ UIC.dataTable = function (containerId, opts) {
     /* [UI-3.5 / U-22] `emptyText` keeps working exactly as before; a page can
        now also pass a richer `emptyState` object with an icon, an explanation
        and a create action. */
-    return UIC.emptyState(o.emptyState || { title: o.emptyText || 'لا توجد بيانات' });
+    var emptyHtml = UIC.emptyState(o.emptyState || { title: o.emptyText || 'لا توجد بيانات' });
+    /* Phase B2: an empty table still needs its refresh control — retrying after
+       a failed or empty read is exactly when it matters. A minimal store keeps
+       the registry's snapshot/restore able to run when rows arrive. */
+    if (UIC.TABLE_REFRESH_ON_ === true && UIC.TableRefresh.has(id)) {
+      window.__dtStore[id] = {
+        id: id, headers: headers, originalRows: [], rows: [], filtered: [],
+        pageSize: 0, page: 1, pageRows: null, fmtMoney: fmtMoney, opts: o,
+        searchTerm: '', dateFrom: '', dateTo: '', sortKey: null, sortDir: null,
+        hidden: {}, selectable: o.selectable === true, selected: {}, cols: {}
+      };
+      return '<div id="' + id + '" class="table-wrap">' +
+        '<div class="table-toolbar dt-refresh-sticky">' + UIC.TableRefresh.buttonHtml(id) + '</div>' +
+        emptyHtml + '</div>';
+    }
+    return emptyHtml;
   }
 
   const fmtMoney = function (n) {
@@ -1268,8 +1573,14 @@ UIC.dataTable = function (containerId, opts) {
   })(window.__dtStore[id]);
   UIC._dtLoadColumnPrefs(id);
 
-  /* ── Toolbar: search + date filter + Excel + Print ── */
+  /* ── Toolbar: refresh + search + date filter + Excel + Print ── */
+  var refreshOn = (UIC.TABLE_REFRESH_ON_ === true && UIC.TableRefresh.has(id));
   var toolbarParts = [];
+  if (refreshOn) {
+    /* Fixed position on every page: the refresh control is always the first
+       item in the table toolbar. */
+    toolbarParts.push(UIC.TableRefresh.buttonHtml(id));
+  }
   if (searchable) {
     toolbarParts.push('<input class="input" type="search" placeholder="بحث..." oninput="UIC._dtSearchInput(\'' + id + '\', this.value)">');
     /* [RT-1 / Phase 8 step 1] The search box filters `st.originalRows` and never
@@ -1307,7 +1618,7 @@ UIC.dataTable = function (containerId, opts) {
     toolbarParts.push('<button type="button" class="btn btn-outline" onclick="UIC.printTable(\'' + id + '\')">' + UIC.icon('print') + '<span>طباعة</span></button>');
   }
   var toolbarHtml = toolbarParts.length
-    ? '<div class="table-toolbar" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">' + toolbarParts.join('') + '</div>'
+    ? '<div class="table-toolbar' + (refreshOn ? ' dt-refresh-sticky' : '') + '" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">' + toolbarParts.join('') + '</div>'
     : '';
 
   // MIT/Harvard chunked: return skeleton, fill tbody chunked via rAF to keep 60fps
@@ -1327,6 +1638,20 @@ UIC.dataTable = function (containerId, opts) {
     '<tbody id="' + id + '_tbody"></tbody></table>' + pagerHtml + '</div>';
   // schedule chunked fill (75 rows per frame, 12ms budget) — Harvard windowed
   setTimeout(function(){ UIC._renderChunked(id, 0); }, 0);
+  if (refreshOn) {
+    /* After paint, reserve the sticky toolbar's height so the sticky column
+       header parks below it instead of underneath it. */
+    setTimeout(function () {
+      try {
+        var wrap = document.getElementById(id);
+        var bar = wrap && wrap.querySelector('.table-toolbar.dt-refresh-sticky');
+        if (wrap && bar) {
+          wrap.classList.add('dt-has-refresh');
+          wrap.style.setProperty('--dt-toolbar-h', bar.offsetHeight + 'px');
+        }
+      } catch (e) {}
+    }, 0);
+  }
   return html;
 };
 
@@ -1439,7 +1764,13 @@ UIC._renderChunked = function(id, offset){
        * The metric was specified in Phase 0 as "already exists; keep it" — in
        * fact PERF.mark existed and no page had ever called it, so the number
        * has never been produced. Marking it here gives every list page the
-       * metric without eighty-five separate edits. */
+       * metric without eighty-five separate edits.
+       *
+       * [Phase D] The journey-scoped successor runs first: PERF.stage attaches
+       * list_usable_ms to the OPEN page/form journey. This branch also runs for
+       * a zero-row body, so a valid empty state counts; a failed load never
+       * reaches this renderer at all. */
+      try { if (window.PERF && PERF.stage) PERF.stage('list_usable'); } catch (e) {}
       try { if (window.PERF && PERF.mark) PERF.mark('first_data_render'); } catch (e) {}
       /* [RT-7] Keep this paint, so returning to this page draws it instantly
        * next time instead of showing a shimmer for the length of a full
@@ -2515,6 +2846,8 @@ UIC.cacheOptions = function (key, arr, ttlMs) {
   try {
     localStorage.setItem('erp_opt_' + key, JSON.stringify({ t: Date.now(), ttl: ttlMs || 600000, v: arr }));
   } catch (e) {}
+  /* [Phase D] Fresh reference options just arrived from the server. */
+  try { if (window.PERF && PERF.stage) { PERF.stage('lookup_ready', { cache: 'fresh' }); PERF.stage('options_ready'); } } catch (ePerf) {}
 };
 UIC.getCachedOptions = function (key) {
   try {
@@ -2523,8 +2856,238 @@ UIC.getCachedOptions = function (key) {
     const p = JSON.parse(raw);
     if (!p || !p.v) return null;
     if (p.ttl && (Date.now() - p.t) > p.ttl) return null;
+    /* [Phase D] Reference-enum cache hit. */
+    try { if (window.PERF && PERF.stage) { PERF.stage('lookup_ready', { cache: 'hit' }); PERF.stage('options_ready'); } } catch (ePerf) {}
     return p.v;
   } catch (e) { return null; }
+};
+
+/* Opt-in cursor source for tables whose server can return bounded pages.
+ * A complete browser copy remains visible until its fresh replacement has
+ * hydrated. Search uses the server whenever that fresh set is incomplete. */
+UIC.ProgressiveRows = function (opts) {
+  var o = opts || {};
+  if (typeof o.fetch !== 'function' || typeof o.onChange !== 'function' || !o.rowKey) {
+    throw new Error('ProgressiveRows requires fetch, onChange and rowKey');
+  }
+  var pageSize = Math.min(Math.max(Math.floor(Number(o.pageSize) || 100), 1), 200);
+  var maxRows = Math.max(pageSize, Math.floor(Number(o.maxRows) || 1000));
+  var maxBytes = Math.max(16384, Math.floor(Number(o.maxBytes) || 1048576));
+  var maxAutoMs = Math.max(1000, Math.floor(Number(o.maxAutoMs) || 60000));
+  function lane() { return { rows: [], keys: Object.create(null), cursors: Object.create(null), cursor: '', snapshot: '',
+    version: '', total: null, hasMore: false, done: false, busy: false, serial: 0, error: null, bytes: 0, startedAt: 0 }; }
+  var base = lane(), found = lane(), columns = [], cacheRows = null, keepCacheUntilComplete = false;
+  var term = '', queryEpoch = 0, timer = null, nextTimer = null, disposed = false;
+  function keyOf(row) {
+    var value = typeof o.rowKey === 'function' ? o.rowKey(row) : row[o.rowKey];
+    return String(value == null ? '' : value).trim();
+  }
+  function objectRows(rows, names) {
+    return rows.map(function (row) {
+      if (!Array.isArray(row)) return row;
+      if (row.length !== names.length) throw new Error('Invalid progressive list row width');
+      var mapped = Object.create(null);
+      names.forEach(function (name, index) { mapped[name] = row[index]; });
+      return mapped;
+    });
+  }
+  function validate(raw, cursor, snapshot) {
+    if (!raw || raw.status !== 'ok' || raw.schema_version !== 1 ||
+        !Array.isArray(raw.columns) || !raw.columns.length || !Array.isArray(raw.rows) ||
+        raw.rows.length > pageSize || !raw.page || typeof raw.page.has_more !== 'boolean') {
+      throw new Error('Invalid progressive list response');
+    }
+    var names = Object.create(null);
+    raw.columns.forEach(function (name) {
+      if (typeof name !== 'string' || !name || names[name]) throw new Error('Invalid progressive list columns');
+      names[name] = true;
+    });
+    var rows = objectRows(raw.rows, raw.columns);
+    var pageKeys = Object.create(null);
+    rows.forEach(function (row) {
+      if (!row || typeof row !== 'object' || Array.isArray(row) || !keyOf(row) ||
+          !raw.columns.every(function (name) { return Object.prototype.hasOwnProperty.call(row, name); })) {
+        throw new Error('Invalid progressive list row');
+      }
+      var key = keyOf(row);
+      if (pageKeys[key]) throw new Error('Duplicate progressive list row');
+      pageKeys[key] = true;
+    });
+    var next = String(raw.page.next_cursor || '');
+    var stamp = String(raw.page.snapshot || '');
+    if (raw.page.has_more && (!next || !raw.rows.length || next === cursor || !stamp)) {
+      throw new Error('Invalid progressive list cursor');
+    }
+    if (snapshot && stamp !== snapshot) throw new Error('Progressive list snapshot changed');
+    if (raw.total_is_exact && (!Number.isInteger(Number(raw.total)) || Number(raw.total) < 0)) {
+      throw new Error('Invalid progressive list total');
+    }
+    return { next: next, stamp: stamp, rows: rows };
+  }
+  function merge(target, incoming) {
+    incoming.forEach(function (row) {
+      var key = keyOf(row);
+      if (target.keys[key] !== undefined) target.rows[target.keys[key]] = row;
+      else { target.keys[key] = target.rows.length; target.rows.push(row); }
+    });
+  }
+  function matchRows(rows, query) {
+    var match = o.localMatch || function (row, q) {
+      return JSON.stringify(row).toLowerCase().indexOf(q.toLowerCase()) >= 0;
+    };
+    return rows.filter(function (row) { return match(row, query); });
+  }
+  function emit() {
+    if (disposed) return;
+    var baseRows = cacheRows || base.rows;
+    var display = baseRows, scope = cacheRows ? 'cached' : (base.done ? 'complete' : 'loaded');
+    var count = base.total, more = base.hasMore, error = base.error, busy = base.busy;
+    if (term) {
+      if (base.done && !cacheRows) {
+        display = matchRows(base.rows, term); scope = 'complete'; count = display.length; more = false;
+      } else if (found.valid) {
+        display = found.rows; scope = 'global_page'; count = found.total; more = found.hasMore;
+      } else {
+        display = matchRows(baseRows, term); scope = cacheRows ? 'cached' : 'loaded'; count = null; more = true;
+      }
+      error = found.error; busy = found.busy;
+    }
+    var active = term ? found : base;
+    o.onChange(display.slice(), { columns: columns.slice(), baseRows: baseRows.slice(),
+      loaded: base.rows.length, total: count, has_more: more, scope: scope,
+      complete: !term && base.done && !cacheRows, query: term, error: error, busy: busy,
+      limit_reached: active.rows.length >= maxRows,
+      auto_paused: !!(active.startedAt && more && !busy && Date.now() - active.startedAt >= maxAutoMs) });
+  }
+  function schedule(which) {
+    if (disposed || !o.autoLoad || (typeof document !== 'undefined' && document.visibilityState === 'hidden')) return;
+    var target = which === 'search' ? found : base;
+    if (which === 'base' && term) return;
+    if (which === 'search' && !term) return;
+    if (!target.hasMore || target.busy || target.rows.length >= maxRows ||
+        (target.startedAt && Date.now() - target.startedAt >= maxAutoMs)) return;
+    clearTimeout(nextTimer);
+    nextTimer = setTimeout(function () { request(which, false, false); }, 60);
+  }
+  function request(which, first, refresh) {
+    var target = which === 'search' ? found : base;
+    if (disposed || (target.busy && !first) || (!first && (!target.hasMore || target.rows.length >= maxRows))) return Promise.resolve(null);
+    var query = which === 'search' ? term : '';
+    if (which === 'search' && !query) return Promise.resolve(null);
+    var epoch = queryEpoch, serial = ++target.serial;
+    var cursor = first ? '' : target.cursor, snapshot = first ? '' : target.snapshot;
+    var startedAt = Date.now();
+    var requestedLimit = first ? pageSize : Math.min(pageSize, maxRows - target.rows.length);
+    if (first) target.startedAt = startedAt;
+    target.busy = true; target.error = null; emit();
+    return Promise.resolve().then(function () {
+      return o.fetch({ query: query, cursor: cursor, snapshot: snapshot,
+        limit: requestedLimit, refresh: !!refresh });
+    }).then(function (raw) {
+      if (disposed || target.serial !== serial || (which === 'search' && epoch !== queryEpoch)) return null;
+      var page = validate(raw, cursor, snapshot);
+      if (!first && page.next && target.cursors[page.next]) {
+        throw new Error('Progressive list cursor repeated');
+      }
+      var pageJson = JSON.stringify(raw.rows);
+      var pageBytes = typeof Blob === 'function' ? new Blob([pageJson]).size : unescape(encodeURIComponent(pageJson)).length;
+      if (raw.rows.length > requestedLimit || (first ? 0 : target.bytes) + pageBytes > maxBytes) {
+        throw new Error('Progressive list page exceeded its bounds');
+      }
+      if (first) {
+        target.rows = []; target.keys = Object.create(null); target.cursors = Object.create(null);
+        target.bytes = 0;
+        if (which === 'base') {
+          if (cacheRows && columns.join('\u0001') !== raw.columns.join('\u0001')) cacheRows = null;
+          columns = raw.columns.slice();
+        } else if (!columns.length) columns = raw.columns.slice();
+      }
+      if (columns.join('\u0001') !== raw.columns.join('\u0001')) {
+        throw new Error('Progressive list columns changed during paging');
+      }
+      var version = String(raw.data_version == null ? '' : raw.data_version);
+      if (!first && target.version && version !== target.version) {
+        throw new Error('Progressive list source changed during paging');
+      }
+      merge(target, page.rows);
+      target.bytes += pageBytes;
+      target.cursor = page.next; target.snapshot = page.stamp;
+      if (page.next) target.cursors[page.next] = true;
+      target.version = version;
+      target.hasMore = raw.page.has_more; target.done = !target.hasMore;
+      target.total = raw.total_is_exact ? Number(raw.total) : null;
+      target.valid = true;
+      if (which === 'base' && (!keepCacheUntilComplete || target.done || target.rows.length >= maxRows)) cacheRows = null;
+      emit();
+      if (typeof o.onPage === 'function') o.onPage(raw, which, Date.now() - startedAt);
+      if (which === 'base' && target.done && typeof o.onComplete === 'function') {
+        o.onComplete(target.rows.slice(), columns.slice(), raw);
+      }
+      return raw;
+    }).catch(function (error) {
+      if (!disposed && target.serial === serial && (which !== 'search' || epoch === queryEpoch)) {
+        target.error = error; emit();
+        if (typeof o.onError === 'function') o.onError(error, which);
+      }
+      return null;
+    }).finally(function () {
+      if (target.serial === serial) {
+        target.busy = false; emit();
+        if (!target.error) schedule(which);
+      }
+    });
+  }
+  function search(value) {
+    term = String(value == null ? '' : value).trim().slice(0, 40);
+    queryEpoch++; found = lane(); clearTimeout(timer); clearTimeout(nextTimer); emit();
+    if (!term) { schedule('base'); return; }
+    if (base.done && !cacheRows) return;
+    timer = setTimeout(function () { request('search', true, false); }, 250);
+  }
+  function visibilityChanged() {
+    if (disposed || (typeof document !== 'undefined' && document.visibilityState === 'hidden')) return;
+    if (term) { if (found.valid) schedule('search'); }
+    else schedule('base');
+  }
+  if (typeof document !== 'undefined' && document.addEventListener) {
+    document.addEventListener('visibilitychange', visibilityChanged);
+  }
+  return {
+    start: function (seed, refresh) {
+      if (seed && typeof seed.complete === 'boolean' && Array.isArray(seed.rows) && Array.isArray(seed.columns) &&
+          seed.columns.length > 0 && seed.columns.every(function (name, index) {
+            return typeof name === 'string' && !!name && seed.columns.indexOf(name) === index;
+          }) && seed.rows.length <= maxRows) {
+        try {
+          var seededRows = objectRows(seed.rows, seed.columns);
+          var seededKeys = Object.create(null);
+          var validSeed = seededRows.every(function (row) {
+            if (!row || typeof row !== 'object' || !keyOf(row) || seededKeys[keyOf(row)] ||
+                !seed.columns.every(function (name) { return Object.prototype.hasOwnProperty.call(row, name); })) return false;
+            seededKeys[keyOf(row)] = true;
+            return true;
+          });
+          var encodedSeed = JSON.stringify(seed.rows);
+          var seedBytes = typeof Blob === 'function' ? new Blob([encodedSeed]).size :
+            unescape(encodeURIComponent(encodedSeed)).length;
+          if (validSeed && seedBytes <= maxBytes) {
+            cacheRows = seededRows; columns = seed.columns.slice();
+            keepCacheUntilComplete = seed.complete; emit();
+          }
+        } catch (ignoredInvalidSeed) {}
+      }
+      return request('base', true, refresh);
+    },
+    search: search,
+    loadMore: function () { return request(term ? 'search' : 'base', false, false); },
+    destroy: function () {
+      disposed = true; queryEpoch++; base.serial++; found.serial++;
+      clearTimeout(timer); clearTimeout(nextTimer);
+      if (typeof document !== 'undefined' && document.removeEventListener) {
+        document.removeEventListener('visibilitychange', visibilityChanged);
+      }
+    }
+  };
 };
 
 /* ── Server-paged table: loads one window at a time, "load more" appends ─────
@@ -2536,7 +3099,13 @@ UIC.PagedTable = function (opts) {
   try {
     var container = typeof opts.container === 'string' ? document.getElementById(opts.container) : opts.container;
     if (!container) return;
+    /* A page that rebuilds its PagedTable would otherwise leave the previous
+       host's refresh adapter (and its closures) registered forever. */
+    if (container.__ptHostId && UIC.TableRefresh) {
+      try { UIC.TableRefresh.unregister(container.__ptHostId); } catch (e) {}
+    }
     var hostId = 'pt_' + Math.random().toString(36).slice(2);
+    container.__ptHostId = hostId;
     var PAGE = opts.pageSize || 100;
     var offset = 0, total = 0, loading = false, done = false;
     var allRows = [];
@@ -2566,6 +3135,58 @@ UIC.PagedTable = function (opts) {
     function setCount() {
       if (!countEl) return;
       countEl.textContent = 'إجمالي ' + total + (offset > 0 && offset < total ? ' — معروض ' + offset : '');
+    }
+    /* ── Phase B2: the shared refresh control for load-more tables ──────────
+     * Refresh re-fetches the CURRENTLY LOADED window in ONE bounded request
+     * (pageSize × loaded pages), replaces every loaded row with the fresh set,
+     * and re-derives the continuation state from the new total. It never
+     * appends fresh rows onto an unmarked stale tail and never silently
+     * returns to the first page. */
+    if (opts.refresh) {
+      var refreshOpts = (typeof opts.refresh === 'object' && opts.refresh) ? opts.refresh : {};
+      UIC.TableRefresh.register(hostId, {
+        load: function () {
+          var pages = Math.max(1, Math.ceil(offset / PAGE));
+          var want = PAGE * pages;
+          /* A page may own the refresh request (e.g. its own first-page cache
+             must not answer a refresh with the earlier reply). Otherwise the
+             standard fetcher re-reads the currently loaded window. */
+          var pending = (typeof refreshOpts.load === 'function')
+            ? refreshOpts.load({ pages: pages, pageSize: PAGE, window: want })
+            : opts.fetcher(0, want);
+          return Promise.resolve(pending).then(function (raw) {
+            raw = raw || {};
+            var recs = (opts.getRows ? opts.getRows(raw)
+              : (raw.rows || raw.invoices || raw.returns || raw.orders || raw.sessions || raw.headers || [])) || [];
+            var freshRows = [], freshKeys = [];
+            recs.forEach(function (rec) {
+              try { freshRows.push(opts.mapRow(rec)); freshKeys.push(keyOfRec(rec)); } catch (e) {}
+            });
+            allRows = freshRows;
+            allKeys = freshKeys;
+            offset = recs.length;
+            total = (opts.getTotal ? opts.getTotal(raw) : (raw.total != null ? raw.total : offset));
+            done = offset >= total;
+            if (opts.onFirst) { try { opts.onFirst(raw); } catch (e) {} }
+            render();
+            if (opts.onRendered) { try { opts.onRendered(hostId); } catch (e) {} }
+            moreBtn.style.display = done ? 'none' : '';
+            setCount();
+            return raw;
+          });
+        },
+        /* render() already applied the rows; the shared control restores the
+           view state (search/sort/page/selection/scroll) afterwards. */
+        apply: function () {},
+        blocked: function () {
+          if (typeof refreshOpts.blocked === 'function') {
+            var pageReason = null;
+            try { pageReason = refreshOpts.blocked(); } catch (e) { pageReason = null; }
+            if (pageReason) return pageReason;
+          }
+          return loading ? 'جارٍ تحميل المزيد — انتظر ثم أعد المحاولة' : null;
+        }
+      });
     }
     function loadMore() {
       if (loading || done) return;
@@ -2864,7 +3485,21 @@ UIC.combo = function (o) {
   }).join('');
   const allowNew = o.allowNew ? ' data-allownew="1"' : '';
   window.__comboData = window.__comboData || {};
-  window.__comboData[key] = { opts: opts, allowNew: !!o.allowNew };
+  window.__comboData[key] = { opts: opts, allowNew: !!o.allowNew, onChange: typeof o.onChange === 'function' ? o.onChange : null };
+  /* [Phase D] Options exist now, so an open form journey gets
+     form_options_ready_ms and lookup_ready_ms. `o.cache` is an additive hint
+     ('hit'|'fresh'); an unknown caller keeps the previous markup byte for byte.
+     `o.loadMs` is an optional caller-measured query->options span. */
+  try {
+    if (window.PERF && PERF.stage) {
+      PERF.stage('lookup_ready', {
+        cache: o.cache === 'hit' ? 'hit' : 'fresh',
+        options: opts.length,
+        ms: (typeof o.loadMs === 'number' && isFinite(o.loadMs) && o.loadMs >= 0) ? o.loadMs : undefined
+      });
+      if (opts.length) PERF.stage('options_ready');
+    }
+  } catch (ePerfCombo) {}
   /* [UI-6.2 / U-31] The combo is a real ARIA combobox. Without this a screen
      reader announces it as a plain text box: no indication that a list exists,
      that it is open, or which option is highlighted. */
@@ -2968,7 +3603,10 @@ UIC.comboPick = function (key, i) {
   if (hidden) {
     const changed = String(hidden.value) !== op.value;
     hidden.value = op.value;
-    if (changed) hidden.dispatchEvent(new Event('change'));
+    if (changed) {
+      hidden.dispatchEvent(new Event('change'));
+      if (typeof data.onChange === 'function') { try { data.onChange(op.value, op); } catch (eOnPick) {} }
+    }
   }
   const cust = document.getElementById(key + '_custom');
   if (cust) { cust.style.display = 'none'; cust.removeAttribute('required'); cust.value = ''; }
@@ -3010,7 +3648,14 @@ UIC.comboBlur = function (key) {
   /* Blur is also a value change: clearing a selection or typing an exact
      option must notify pages that listen to the hidden input. Without this,
      report filters keep the previous value until another choice happens. */
-  if (oldValue !== String(hidden.value || '')) hidden.dispatchEvent(new Event('change'));
+  if (oldValue !== String(hidden.value || '')) {
+    hidden.dispatchEvent(new Event('change'));
+    if (typeof data.onChange === 'function') {
+      let picked = null;
+      data.opts.forEach(function (op) { if (String(op.value) === String(hidden.value || '')) picked = op; });
+      try { data.onChange(String(hidden.value || ''), picked); } catch (eOnBlur) {}
+    }
+  }
   const list = document.getElementById(key + '_list');
   if (list) { list.hidden = true; UIC._unanchor(list); }
   UIC._comboAria(key, false);
@@ -3274,6 +3919,7 @@ UIC.MODAL_SIZES = { sm: ' modal-sm', md: '', lg: ' modal-lg', xl: ' modal-xl' };
 
 UIC.openModal = function (modalId, opts) {
   const o = opts || {};
+  const dismissible = o.dismissible !== false;
   const existing = document.getElementById(modalId);
   if (existing) existing.remove();
 
@@ -3282,6 +3928,7 @@ UIC.openModal = function (modalId, opts) {
   const div = document.createElement('div');
   div.id = modalId;
   div.className = 'modal-overlay';
+  div._uicDismissible = dismissible;
   /* [UI-3.6 / U-40] The bottom-sheet drag handle is a CSS ::before on .modal,
      not an element. Keeping it out of the markup means every one of the 78
      existing call sites still renders byte-identically — which
@@ -3289,7 +3936,7 @@ UIC.openModal = function (modalId, opts) {
   div.innerHTML =
     '<div class="modal' + sizeClass + '" role="dialog" aria-modal="true">' +
       '<div class="modal-header"><h3>' + (o.title || '') + '</h3>' +
-        '<button class="btn-icon" onclick="UIC.closeModal(\'' + modalId + '\')" aria-label="إغلاق">' + UIC.icon('close', { size: 18 }) + '</button></div>' +
+        (dismissible ? '<button class="btn-icon" onclick="UIC.closeModal(\'' + modalId + '\')" aria-label="إغلاق">' + UIC.icon('close', { size: 18 }) + '</button>' : '') + '</div>' +
       '<div class="modal-body">' + (o.body || '') + '</div>' +
       (o.footer === false
         ? ''
@@ -3303,6 +3950,14 @@ UIC.openModal = function (modalId, opts) {
   document.body.classList.add('modal-open');
   try { UIC._initSheetSwipe(div, modalId); } catch (e) {}
   try { UIC._trapFocus(div, modalId); } catch (e) {}
+  /* [Phase D] A dialog is its own journey: fresh id, its own editable/options/
+     save/lookup stages, finished on close or when a save settles. */
+  try {
+    if (window.PERF && PERF.beginJourney) {
+      PERF.beginJourney('form', window.CURRENT_ACTION, { modalId: modalId });
+      if (PERF._armFormReadiness) PERF._armFormReadiness(div);
+    }
+  } catch (ePerfModal) {}
   return div;
 };
 
@@ -3338,6 +3993,7 @@ UIC._trapFocus = function (overlay, modalId) {
   overlay.addEventListener('keydown', function (e) {
     if (e.key === 'Escape') {
       e.stopPropagation();
+      if (overlay._uicDismissible === false) return;
       UIC.closeModal(modalId);
       return;
     }
@@ -3367,6 +4023,7 @@ UIC._trapFocus = function (overlay, modalId) {
 UIC._initSheetSwipe = function (overlayEl, modalId) {
   var sheet = overlayEl && overlayEl.querySelector ? overlayEl.querySelector('.modal') : null;
   if (!sheet) return;
+  if (overlayEl._uicDismissible === false) return;
   var startY = 0, dy = 0, dragging = false;
 
   sheet.addEventListener('touchstart', function (e) {
@@ -3399,8 +4056,9 @@ UIC._initSheetSwipe = function (overlayEl, modalId) {
   }, { passive: true });
 };
 
-UIC.closeModal = function (modalId) {
+UIC.closeModal = function (modalId, force) {
   const el = document.getElementById(modalId);
+  if (el && el._uicDismissible === false && force !== true) return false;
   if (el) el.remove();
   /* Only drop the body class when no dialog remains: a confirm opened ON TOP of
      a form dialog must not unlock the page behind both when it closes. */
@@ -3414,6 +4072,11 @@ UIC.closeModal = function (modalId) {
     if (back && back.focus && back.isConnected !== false) back.focus();
     if (UIC._focusReturn) delete UIC._focusReturn[modalId];
   } catch (e) {}
+  /* [Phase D] End the dialog journey unless a save is still in flight — that
+     save settles the journey (completed / transport-uncertain / rejected) and
+     a close must not turn a pending write into a cancellation. */
+  try { if (window.PERF && PERF._endModal) PERF._endModal(modalId); } catch (ePerfClose) {}
+  return true;
 };
 
 /* ── [UI-3.5 / U-22] Empty states ─────────────────────────────────────────
@@ -4122,6 +4785,16 @@ UIC._cpClearSearch = function (tableId) {
 
 UIC.appShell = function (containerId, o) {
   const opts = o || {};
+  /* [Phase D] Boot the page journey here: this is the shared shell hook every
+     hard-nav page and every router mount passes through. entryZero measures
+     page_usable_ms from the document time origin (hard navigation). A router
+     mount that already booted the same page reuses this journey. */
+  try {
+    if (window.PERF && PERF.beginJourney) {
+      PERF.setPage(window.CURRENT_ACTION);
+      PERF.beginJourney('page', window.CURRENT_ACTION, { entryZero: true });
+    }
+  } catch (ePerfShell) {}
   const navItems = opts.nav || buildCompanyNav_(window.CURRENT_ACTION);
 
   /* Build nav links for BOTH the topbar (desktop) and the mobile drawer */
@@ -4217,6 +4890,23 @@ UIC.appShell = function (containerId, o) {
   const skipLink = '<a class="skip-link" href="#' + (opts.contentId || 'app-content') + '">' +
     'تخطي إلى المحتوى</a>';
 
+  /* [i18n Stage B] One compact flip control, inserted only behind the gate.
+   * It sits immediately before the account control inside .topbar-right and
+   * calls the in-memory runtime directly — no re-render, no navigation, no
+   * request. The accessible name is stable and bilingual; aria-checked=true
+   * means English. With the gate off this is the empty string and the header
+   * markup is byte-identical to before. */
+  const langSwitchHtml = (window.I18N && I18N.ENABLED)
+    ? '<button type="button" class="lang-switch" role="switch" aria-checked="' +
+        (I18N.lang() === 'en' ? 'true' : 'false') +
+        '" aria-label="English interface / الواجهة الإنجليزية" ' +
+        'onclick="I18N.setLang(I18N.lang() === \'en\' ? \'ar\' : \'en\')">' +
+        '<span class="lang-switch-thumb" aria-hidden="true"></span>' +
+        '<span class="lang-switch-label lang-switch-label-ar">العربية</span>' +
+        '<span class="lang-switch-label lang-switch-label-en">EN</span>' +
+      '</button>'
+    : '';
+
   let html;
   try {
     const drawerHtml =
@@ -4232,10 +4922,10 @@ UIC.appShell = function (containerId, o) {
         '<div class="drawer-footer">' + (opts.userHtml || userBlock) + '</div>' +
       '</nav>';
     html = skipLink +
-      '<header class="topbar">' +
+      '<header class="topbar' + (langSwitchHtml ? ' has-lang-switch' : '') + '">' +
         '<div class="topbar-left">' + hamburger + logoTop + '</div>' +
         '<nav class="topbar-nav" aria-label="التنقل الرئيسي">' + navLinkHtml() + menuGroupsHtml(false) + '</nav>' +
-        '<div class="topbar-right">' + (opts.userHtml || userProfileBlock) + '</div>' +
+        '<div class="topbar-right' + (langSwitchHtml ? ' has-lang-switch' : '') + '">' + langSwitchHtml + (opts.userHtml || userProfileBlock) + '</div>' +
       '</header>' +
       drawerHtml +
       /* [UI-4.1 / U-13] The control panel replaces the plain breadcrumb strip
@@ -4255,6 +4945,9 @@ UIC.appShell = function (containerId, o) {
 
   const el = document.getElementById(containerId);
   if (el) el.innerHTML = html;
+  /* [Phase D] page_usable_ms after a rendering opportunity (double-rAF, an
+     approximation of visible readiness — not a formal paint timestamp). */
+  try { if (window.PERF && PERF._armPageUsable) PERF._armPageUsable(); } catch (ePerfUsable) {}
 
   /* Initialise drawer swipe-to-close after render */
   try { UIC._initDrawerSwipe(); } catch (e) {}
@@ -4568,6 +5261,25 @@ document.addEventListener('keydown', function (e) {
     max-height: 70dvh;
   }
   .table-toolbar { padding: var(--space-3); border-bottom: 1px solid var(--border-color); }
+  /* ── [Phase B2] The shared table-refresh control ────────────────────────
+   * The toolbar that carries «تحديث البيانات» sticks to the top of the table's
+   * own scrollport (.table-wrap), and the sticky column header is offset below
+   * it through --dt-toolbar-h (set after paint, because the toolbar wraps to
+   * two rows on narrow screens). z-index 3 sits above the header's 2 and below
+   * the sticky topbar (1000), so neither overlaps the other. */
+  .table-toolbar.dt-refresh-sticky {
+    position: sticky; top: 0; z-index: 3;
+    background: var(--bg-surface, #fff);
+  }
+  .table-wrap.dt-has-refresh .table thead th { top: var(--dt-toolbar-h, 0px); }
+  .dt-refresh-state {
+    font-size: 12px; color: var(--text-muted);
+    display: inline-flex; gap: 6px; align-items: center; flex-wrap: wrap;
+  }
+  .dt-refresh-state.dt-refresh-error { color: var(--danger, #b91c1c); }
+  .dt-refresh-state.dt-refresh-blocked { color: var(--warning, #92400e); }
+  .dt-refresh-btn.is-busy { opacity: .75; }
+  .dt-refresh-btn.is-busy .uic-icon { animation: erp-spin 1s linear infinite; }
   .table { width: 100%; border-collapse: collapse; font-size: var(--text-sm); }
   .table thead th {
     padding: 10px 12px; background: var(--bg-subtle); color: var(--text-muted);
@@ -5792,6 +6504,47 @@ document.addEventListener('keydown', function (e) {
 
   /* ── Screen reader only ──────────────────────────────────────────────── */
   .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+  /* ── [i18n Stage B] Header language switch (gated; absent otherwise) ──
+   * Direction-neutral inside: the control declares direction:ltr so the
+   * العربية / EN order and the thumb's travel are identical under either
+   * root direction. The control is only in the DOM when the prototype gate
+   * is on, so the placement rules key off .has-lang-switch and cannot move
+   * the header when it is off. */
+  .lang-switch {
+    position: relative; direction: ltr;
+    display: inline-flex; align-items: stretch;
+    width: 104px; min-height: 44px; flex-shrink: 0;
+    margin-inline-end: var(--space-2);
+    padding: 2px; border: 1px solid var(--border-color);
+    border-radius: 999px; background: var(--bg-subtle);
+    cursor: pointer; font-family: var(--font-sans);
+  }
+  .lang-switch:focus-visible { outline: 2px solid var(--brand-primary); outline-offset: 2px; }
+  .lang-switch-thumb {
+    position: absolute; top: 2px; left: 2px;
+    width: calc(50% - 2px); height: calc(100% - 4px);
+    border-radius: 999px; background: var(--brand-primary);
+    transition: transform 140ms ease;
+  }
+  .lang-switch[aria-checked="true"] .lang-switch-thumb { transform: translateX(100%); }
+  .lang-switch-label {
+    position: relative; z-index: 1; flex: 1 1 50%;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: var(--text-xs); font-weight: 700; color: var(--text-muted);
+  }
+  .lang-switch[aria-checked="false"] .lang-switch-label-ar,
+  .lang-switch[aria-checked="true"] .lang-switch-label-en { color: var(--btn-text-color); }
+  @media (prefers-reduced-motion: reduce) { .lang-switch-thumb { transition: none; } }
+
+  /* .topbar is a flex row. Under dir=ltr the DOM order would put the account
+     cluster on the physical right, so the row is reversed; under RTL it is
+     already left. Inside the cluster the switch precedes the account control
+     in the DOM, so row-reverse under RTL places it to the physical LEFT of
+     the account control; LTR already reads that way. Both rules require
+     .has-lang-switch, which only the enabled shell renders. */
+  html[dir="ltr"] .topbar.has-lang-switch { flex-direction: row-reverse; }
+  html[dir="rtl"] .topbar-right.has-lang-switch { flex-direction: row-reverse; }
   `;
   const style = document.createElement('style');
   style.textContent = css;
@@ -5988,6 +6741,9 @@ UIC.Router = (function () {
   var current = null;       /* the action currently mounted */
   var teardown = [];        /* what to undo before the next mount */
   var busy = false;
+  /* [Phase F] Soft-nav generation counter, TableRefresh style: a reply is
+   * applied only while it is still the newest navigation. */
+  var gens = { nav: 0 };
 
   /* ── Tracking what a mounted page starts ───────────────────────────────── */
 
@@ -6040,6 +6796,11 @@ UIC.Router = (function () {
      * run while its timers still exist rather than after they are gone. */
     teardown.forEach(function (fn) { try { fn(); } catch (e) {} });
     teardown = [];
+
+    /* [Phase D] Close the soft-navigation page journey after the page is down.
+       The journey facade adds no page-scoped observer, timer or listener of its
+       own, so there is nothing else to disconnect here. */
+    try { if (window.PERF && PERF.finishJourney) PERF.finishJourney(undefined, 'page'); } catch (ePerfTear) {}
 
     /* The change watch is page-scoped and is the leak that matters most: one
      * abandoned poll per page visited, each one a real Apps Script execution
@@ -6103,6 +6864,11 @@ UIC.Router = (function () {
     } catch (e) {}
 
     busy = true;
+    /* [Phase F] Stamp the dispatch generation before the request leaves.
+     * Rapid soft navigations and back/forward therefore can never paint an
+     * older body over a newer view: a reply whose token is no longer the
+     * newest is discarded below, on both the success and failure paths. */
+    var gen = (gens.nav = (gens.nav || 0) + 1);
     var host = document.querySelector('.app-content');
     if (!host) { busy = false; return false; }
 
@@ -6110,6 +6876,7 @@ UIC.Router = (function () {
 
     API.call('get_page_body', { action: action }, UIC.token())
       .then(function (r) {
+        if (gen !== gens.nav) return;   /* [Phase F] stale soft-nav reply discarded */
         if (!r || r.status !== 'success' || typeof r.html !== 'string') throw new Error('bad body');
 
         tearDown();
@@ -6165,11 +6932,16 @@ UIC.Router = (function () {
         var hooks = registered[action];
         if (hooks && typeof hooks.mount === 'function') hooks.mount(host);
         if (hooks && typeof hooks.unmount === 'function') teardown.push(hooks.unmount);
+        /* [Phase D] A fresh page journey per soft transition; appShell usually
+           booted it during mount and this reuses that one. Tear-down above has
+           already finished the previous journey. */
+        try { if (window.PERF && PERF.beginJourney) PERF.beginJourney('page', action); } catch (ePerfRoute) {}
 
         try { UIC.wireNavPrefetch(); } catch (e) {}
         busy = false;
       })
       .catch(function () {
+        if (gen !== gens.nav) return;   /* [Phase F] a superseded navigation owns nothing */
         /* THE SAFETY VALVE. Any failure at all — not authorized, offline, a
          * script that threw — and the user simply gets the navigation they
          * would have got before any of this existed. */
@@ -6223,19 +6995,98 @@ UIC.Cache = (function () {
   function put(k, v) { try { localStorage.setItem(k, v); return true; } catch (e) { return false; } }
   function drop(k) { try { localStorage.removeItem(k); } catch (e) {} }
 
-  /** A small, stable, order-independent hash of a payload. */
+  /** A stable serialisation of any JSON-shaped value: arrays keep order,
+   *  objects sort their keys at EVERY level. */
+  function stableString(value) {
+    if (value === null || typeof value !== 'object') return JSON.stringify(value === undefined ? null : value);
+    var out = [];
+    if (Array.isArray(value)) {
+      for (var i = 0; i < value.length; i++) out.push(stableString(value[i]));
+      return '[' + out.join(',') + ']';
+    }
+    var keys = Object.keys(value).sort();
+    for (var k = 0; k < keys.length; k++) {
+      out.push(JSON.stringify(keys[k]) + ':' + stableString(value[keys[k]]));
+    }
+    return '{' + out.join(',') + '}';
+  }
+
+  /** A small, stable, order-independent hash of a payload.
+   *
+   * [Phase F] The previous version passed Object.keys(obj).sort() as a
+   * JSON.stringify REPLACER ARRAY. A replacer array applies at EVERY level,
+   * so a nested filter object was serialised with only the top-level key
+   * names retained and every nested value dropped: {filter:{a:1}} and
+   * {filter:{a:2}} hashed identically. Two different filtered reads could
+   * therefore collide onto one cache entry — a correctness bug, because the
+   * cache answers before the fetch. stableString() sorts nested keys too.
+   * Cache-key values for nested payloads change; entries written under the
+   * old shape become unreachable and age out through the LRU. */
   function hash(obj) {
     var s;
-    try { s = JSON.stringify(obj === undefined ? null : obj, Object.keys(obj || {}).sort()); }
+    try { s = stableString(obj === undefined ? null : obj); }
     catch (e) { s = String(obj); }
     var h = 5381;
     for (var i = 0; i < s.length; i++) { h = ((h << 5) + h + s.charCodeAt(i)) | 0; }
     return (h >>> 0).toString(36);
   }
 
-  /** company + action + hash(payload) — the three things that identify a reply. */
-  function keyFor(company, action, payload) {
-    return PREFIX + String(company || '_') + '|' + String(action) + '|' + hash(payload);
+  /* ── [Phase F] Cache identity: company + principal + permissions + locale ─
+   *
+   * A localStorage entry outlives the document, the session and the company
+   * that wrote it: the store is per ORIGIN, and every company is served from
+   * the same origin. company+action+payload alone is therefore not an
+   * identity. The helpers below add the missing scopes. A scope that cannot
+   * be established safely disables the cache for that call rather than
+   * guessing a shared key — see swr(). */
+
+  function principalId() {
+    /* leak closed: without this, one signed-in user's cached reply could be
+       served to the next user on the same browser, because the key named no
+       principal. AUTH_USER_EMAIL is injected by the server only after doGet
+       authenticated the page. */
+    try {
+      var who = window.AUTH_USER_EMAIL || '';
+      if (!who && window.API && API.getSession) {
+        var s = API.getSession();
+        who = (s && ((s.user && s.user.email) || s.email)) || '';
+      }
+      return String(who).trim().toLowerCase();
+    } catch (e) { return ''; }
+  }
+
+  function localeId() {
+    /* leak closed: a list painted in Arabic must not be shown to an English
+       session (language switch is a prototype today, but the key must not
+       assume one language forever). */
+    try { if (window.I18N && I18N.lang) return String(I18N.lang() || 'ar'); } catch (e) {}
+    try { return String(document.documentElement.getAttribute('lang') || 'ar'); } catch (e2) {}
+    return 'ar';
+  }
+
+  function scopeOf(company) {
+    var c = String(company || '');
+    if (!c) {
+      /* leak closed: the company this tab last talked to is the only
+         company this document can legitimately cache for; unknown means the
+         caller must bypass rather than borrow another company's entry. */
+      try { c = String(window.CURRENT_COMPANY || (window.API && API._lastTarget) || ''); } catch (e) { c = ''; }
+    }
+    var p = principalId();
+    var perms = '';
+    try {
+      perms = (window.IS_SUPER_ADMIN === true ? 's' : '-') +
+              (window.CAN_FULL === true ? 'f' : '-') +
+              (window.CAN_WRITE === true ? 'w' : '-');
+    } catch (e2) {}
+    return { company: c, principal: p, perms: perms, locale: localeId(), ok: !!(c && p) };
+  }
+
+  /** company + principal + permissions + locale + action + version + hash(payload) */
+  function keyFor(company, action, payload, version) {
+    var s = scopeOf(company);
+    return PREFIX + s.company + '|' + s.principal + '|' + s.perms + '|' + s.locale + '|' +
+      String(action) + '|' + String(version || '') + '|' + hash(payload);
   }
 
   /* The index is what makes eviction possible: localStorage has no way to ask
@@ -6340,16 +7191,36 @@ UIC.Cache = (function () {
    */
   function swr(o) {
     o = o || {};
-    var key = keyFor(o.company, o.action, o.payload);
-    var cached = get(key, { maxAge: o.maxAge, version: o.version });
+    /* [Phase F] leak closed: the store is shared by every company and every
+       user on the origin; without a safe company+principal scope this call
+       bypasses the cache entirely (plain fetch, no read, no write) instead of
+       touching a key it cannot vouch for. */
+    var key = scopeOf(o.company).ok ? keyFor(o.company, o.action, o.payload, o.version) : null;
+    var cached = key ? get(key, { maxAge: o.maxAge, version: o.version }) : null;
+    /* [Phase D] The one place a rendered-data read knows hit vs fresh: stage
+       lookup_ready with the measured query->options span and options_ready for
+       an open form journey. */
+    var t0 = 0;
+    try { t0 = (window.PERF && PERF.now) ? PERF.now() : 0; } catch (eT0) {}
+    var noteReady = function (cache) {
+      try {
+        if (window.PERF && PERF.stage) {
+          var ms = t0 ? Math.max(0, PERF.now() - t0) : undefined;
+          PERF.stage('lookup_ready', { cache: cache, ms: ms });
+          PERF.stage('options_ready');
+        }
+      } catch (e) {}
+    };
     var fetch = function () {
       return o.call(o.action, o.payload).then(function (resp) {
-        set(key, resp, { version: o.version });
+        if (key) set(key, resp, { version: o.version });
+        noteReady('fresh');
         return resp;
       });
     };
-    if (cached === null) return fetch();
+    if (!key || cached === null) return fetch();
     /* Cached: answer NOW, and revalidate behind. */
+    noteReady('hit');
     fetch().then(function (fresh) {
       if (typeof o.onFresh !== 'function') return;
       try {
@@ -6376,27 +7247,248 @@ UIC.Cache = (function () {
    * The stale paint is a picture of what was there, not a list you can use, and
    * it is replaced by the real one a moment later. */
   function lastPaintKey() {
+    var s = scopeOf('');
+    /* [Phase F] leak closed: the entry used to be named by action alone, so
+       rendered rows (with record ids and action buttons) could be replayed
+       across sessions, users and companies. Unknown company or principal
+       means no shared last-paint entry is read OR written. */
+    if (!s.ok) return null;
     var action = '';
     try { action = window.CURRENT_ACTION || ''; } catch (e) {}
-    return PREFIX + 'lastpaint|' + action;
+    return PREFIX + 'lastpaint|' + s.company + '|' + s.principal + '|' + s.locale + '|' + action;
   }
   function saveLastPaint(html) {
     if (!html || html.length > 400000) return false;   /* not worth the quota */
-    return set(lastPaintKey(), html, {});
+    var k = lastPaintKey();
+    if (!k) return false;
+    return set(k, html, {});
   }
   function lastPaint() {
     /* Deliberately short: five minutes. Longer and the first thing a user sees
      * on a page they open every morning is yesterday's numbers. */
-    return get(lastPaintKey(), { maxAge: 5 * 60 * 1000 });
+    var k = lastPaintKey();
+    if (!k) return null;
+    return get(k, { maxAge: 5 * 60 * 1000 });
   }
 
   return {
-    key: keyFor, hash: hash,
+    key: keyFor, hash: hash, cacheable: function (company) { return scopeOf(company).ok; },
     get: get, set: set, remove: remove, bust: bust, clear: clear, swr: swr,
     saveLastPaint: saveLastPaint, lastPaint: lastPaint,
     _index: readIndex, _bytes: function () { return totalBytes(readIndex()); },
     MAX_BYTES: MAX_BYTES
   };
+})();
+
+/* ── UIC.Calculator — compact expression calculator for quantity fields ──
+ *
+ * API: UIC.Calculator.open({ target, title, precision, integerOnly, min,
+ *       onApply })
+ *
+ * Percent is deliberately postfix and context-free: `10%` is `0.1` wherever
+ * it appears. This avoids silently choosing one of the competing contextual
+ * percentage rules used by financial calculators. The parser is a small
+ * recursive-descent implementation; it never evaluates source text.
+ */
+UIC.Calculator = (function () {
+  'use strict';
+  var active = null;
+  var MAX_HISTORY = 8;
+
+  function esc(v) {
+    if (window.FMT && FMT.escape) return FMT.escape(v == null ? '' : String(v));
+    return String(v == null ? '' : v).replace(/[&<>"']/g, function (c) {
+      return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c];
+    });
+  }
+  function normalize(v) {
+    return String(v == null ? '' : v)
+      .replace(/[٠-٩]/g, function (c) { return String(c.charCodeAt(0) - 1632); })
+      .replace(/[۰-۹]/g, function (c) { return String(c.charCodeAt(0) - 1776); })
+      .replace(/[٫]/g, '.')
+      .replace(/[×xX]/g, '*').replace(/[÷]/g, '/').replace(/[−–—]/g, '-');
+  }
+  function pretty(v) { return normalize(v).replace(/\*/g, '×').replace(/\//g, '÷').replace(/-/g, '−'); }
+  function formatNumber(n, precision) {
+    if (!isFinite(n)) return '';
+    var p = Math.max(0, Math.min(8, Number(precision) || 0));
+    var s = p ? Number(n.toFixed(p)).toString() : String(Math.round(n));
+    return s === '-0' ? '0' : s;
+  }
+  function tokens(source) {
+    var s = normalize(source), out = [], i = 0, m;
+    while (i < s.length) {
+      if (/\s/.test(s[i])) { i++; continue; }
+      m = s.slice(i).match(/^(?:(?:\d+(?:\.\d*)?)|(?:\.\d+))/);
+      if (m) { out.push({ t: 'number', v: Number(m[0]) }); i += m[0].length; continue; }
+      if (/^[+\-*/()%]$/.test(s[i])) { out.push({ t: s[i], v: s[i] }); i++; continue; }
+      throw new Error('رمز غير معروف');
+    }
+    return out;
+  }
+  function evaluate(source) {
+    var ts;
+    try { ts = tokens(source); } catch (e) { return { valid: false, error: e.message || 'تعبير غير صالح' }; }
+    if (!ts.length) return { valid: false, incomplete: true, error: 'أدخل عملية حسابية' };
+    var i = 0;
+    function peek(t) { return ts[i] && (!t || ts[i].t === t); }
+    function primary() {
+      if (peek('+') || peek('-')) { var sign = ts[i++].t === '-' ? -1 : 1; return sign * primary(); }
+      if (peek('number')) return ts[i++].v;
+      if (peek('(')) { i++; var inside = add(); if (!peek(')')) throw new Error('قوس غير مكتمل'); i++; return inside; }
+      throw new Error('تعبير غير مكتمل');
+    }
+    function postfix() {
+      var value = primary();
+      while (peek('%')) { i++; value = value / 100; }
+      return value;
+    }
+    function multiply() {
+      var value = postfix();
+      while (peek('*') || peek('/')) {
+        var op = ts[i++].t, right = postfix();
+        if (op === '/' && right === 0) throw new Error('لا يمكن القسمة على صفر');
+        value = op === '*' ? value * right : value / right;
+        if (!isFinite(value)) throw new Error('النتيجة غير محدودة');
+      }
+      return value;
+    }
+    function add() {
+      var value = multiply();
+      while (peek('+') || peek('-')) {
+        var op = ts[i++].t, right = multiply();
+        value = op === '+' ? value + right : value - right;
+        if (!isFinite(value)) throw new Error('النتيجة غير محدودة');
+      }
+      return value;
+    }
+    try {
+      var result = add();
+      if (i !== ts.length) throw new Error('تعبير غير مكتمل');
+      if (!isFinite(result)) throw new Error('النتيجة غير محدودة');
+      return { valid: true, value: result };
+    } catch (e2) { return { valid: false, incomplete: /غير مكتمل/.test(e2.message || ''), error: e2.message || 'عملية غير صالحة' }; }
+  }
+  function targetOf(target) { return typeof target === 'string' ? document.getElementById(target) : target; }
+  function currentInput() { return document.getElementById('uic-calculator-expression'); }
+  function paint() {
+    if (!active) return;
+    var input = currentInput(), expr = document.getElementById('uic-calculator-expression-view');
+    var result = document.getElementById('uic-calculator-result');
+    var hint = document.getElementById('uic-calculator-hint');
+    var r = evaluate(active.expr);
+    if (input && document.activeElement !== input) input.value = pretty(active.expr);
+    if (expr) expr.textContent = pretty(active.expr) || '—';
+    if (result) result.textContent = r.valid ? formatNumber(r.value, active.precision) : '…';
+    if (hint) hint.textContent = r.valid ? 'معاينة النتيجة' : (r.error || 'اكتب تعبيراً صالحاً');
+    var history = document.getElementById('uic-calculator-history');
+    if (history) history.innerHTML = active.history.length ? active.history.map(function (h) {
+      return '<div class="uic-calculator-history-row"><span>' + esc(h.expression) + '</span><bdi>= ' + esc(h.result) + '</bdi></div>';
+    }).join('') : '<div class="uic-calculator-history-empty">لا توجد عمليات مكتملة بعد</div>';
+  }
+  function recordEvaluation() {
+    if (!active) return false;
+    var r = evaluate(active.expr);
+    if (!r.valid) { if (!r.incomplete && UIC.toast) UIC.toast(r.error, 'error'); paint(); return false; }
+    active.history.unshift({ expression: pretty(active.expr), result: formatNumber(r.value, active.precision) });
+    if (active.history.length > MAX_HISTORY) active.history.length = MAX_HISTORY;
+    paint();
+    return true;
+  }
+  function press(key) {
+    if (!active) return;
+    if (key === 'clear') { clear(); return; }
+    if (key === 'backspace') { backspace(); return; }
+    if (key === '=') { recordEvaluation(); return; }
+    var k = normalize(key), expr = active.expr, last = expr.slice(-1);
+    if (/^\d$/.test(k)) active.expr += k;
+    else if (k === '.') {
+      var part = expr.split(/[+\-*/()%]/).pop();
+      if (part.indexOf('.') < 0) active.expr += part ? '.' : '0.';
+    } else if (k === '(') active.expr += (last && /[\d)]/.test(last) ? '*' : '') + '(';
+    else if (k === ')') { if (last && /[\d)%]/.test(last)) active.expr += ')'; }
+    else if (k === '%') { if (last && /[\d)]/.test(last)) active.expr += '%'; }
+    else if (/^[+\-*/]$/.test(k)) {
+      if (!expr && k !== '-') active.expr = '0' + k;
+      else if (/[+*/]$/.test(expr) && k === '-') active.expr += k;
+      else if (/[+\-*/]$/.test(expr)) active.expr = expr.slice(0, -1) + k;
+      else active.expr += k;
+    }
+    paint();
+  }
+  function clear() { if (active) { active.expr = ''; paint(); } }
+  function backspace() { if (active) { active.expr = active.expr.slice(0, -1); paint(); } }
+  function close() {
+    if (!active) return;
+    var id = active.modalId;
+    active = null;
+    /* The calculator owns its modal lifecycle even though the dialog is
+     * non-dismissible to prevent accidental backdrop/Escape cancellation. */
+    try { UIC.closeModal(id, true); } catch (e) {}
+  }
+  function apply() {
+    if (!active) return;
+    var r = evaluate(active.expr), a = active;
+    if (!r.valid) { if (UIC.toast) UIC.toast(r.error || 'أدخل قيمة صالحة', 'error'); return; }
+    var value = r.value, p = Math.max(0, Math.min(8, Number(a.precision) || 0));
+    if (a.integerOnly && Math.floor(value) !== value) { if (UIC.toast) UIC.toast('هذه الخانة تقبل أعداداً صحيحة فقط', 'error'); return; }
+    if (a.min != null && value < Number(a.min)) { if (UIC.toast) UIC.toast('القيمة أقل من الحد المسموح', 'error'); return; }
+    if (a.max != null && value > Number(a.max)) { if (UIC.toast) UIC.toast('القيمة أكبر من الحد المسموح', 'error'); return; }
+    value = p ? Math.round((value + Number.EPSILON) * Math.pow(10, p)) / Math.pow(10, p) : value;
+    if (!isFinite(value)) { if (UIC.toast) UIC.toast('النتيجة غير صالحة', 'error'); return; }
+    var target = a.target;
+    if (target) {
+      target.value = formatNumber(value, p);
+      try { target.dispatchEvent(new Event('input', { bubbles: true })); target.dispatchEvent(new Event('change', { bubbles: true })); } catch (e) {}
+    }
+    if (typeof a.onApply === 'function' && a.onApply(value, a.target) === false) return;
+    close();
+  }
+  function keydown(e) {
+    if (!active) return;
+    if (e.key === 'Escape') { e.preventDefault(); close(); return; }
+    if (e.key === 'Enter') { e.preventDefault(); recordEvaluation(); return; }
+    if (e.key === 'Backspace') { e.preventDefault(); backspace(); return; }
+    var key = e.key;
+    if (/^[0-9.]$/.test(key) || /^[+\-*/()%]$/.test(key)) { e.preventDefault(); press(key); }
+  }
+  function open(opts) {
+    opts = opts || {};
+    var target = targetOf(opts.target);
+    if (!target) return;
+    close();
+    var initial = normalize(target.value || '');
+    if (initial === '0') initial = '';
+    active = { target: target, expr: initial, title: opts.title || 'الحاسبة',
+      precision: opts.precision == null ? 2 : opts.precision, integerOnly: !!opts.integerOnly,
+      min: opts.min, max: opts.max, onApply: opts.onApply, history: [], modalId: 'uic-calculator-modal' };
+    if (!document.getElementById('uic-calculator-style')) {
+      var style = document.createElement('style'); style.id = 'uic-calculator-style';
+      style.textContent = '.uic-calculator{direction:rtl}.uic-calculator-ltr{direction:ltr;text-align:left}.uic-calculator-expression{width:100%;box-sizing:border-box;font-size:21px;font-weight:700;padding:10px;border:1px solid var(--border-color);border-radius:8px}.uic-calculator-preview{margin:8px 0 12px;padding:8px 10px;background:var(--bg-muted,#f5f5f5);border-radius:8px}.uic-calculator-result{display:block;font-size:26px;font-weight:800}.uic-calculator-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:7px;direction:ltr}.uic-calculator-grid .btn{min-height:48px;padding:7px;font-size:18px;font-weight:700}.uic-calculator-history{margin-top:12px;max-height:112px;overflow:auto;font-size:12px}.uic-calculator-history-row{display:flex;justify-content:space-between;gap:8px;padding:5px 2px;border-bottom:1px solid var(--border-color);direction:ltr}.uic-calculator-history-empty{color:var(--text-muted);text-align:center}.uic-calculator-help{font-size:11px;color:var(--text-muted);margin-top:7px}';
+      document.head.appendChild(style);
+    }
+    var keys = [
+      ['7','7'], ['8','8'], ['9','9'], ['÷','/'],
+      ['4','4'], ['5','5'], ['6','6'], ['×','*'],
+      ['1','1'], ['2','2'], ['3','3'], ['−','-'],
+      ['(', '('], [')', ')'], ['0','0'], ['+','+'],
+      ['C','clear'], ['⌫','backspace'], ['%','%'], ['=','=']
+    ];
+    var body = '<div class="uic-calculator"><div class="uic-calculator-ltr">' +
+      '<input id="uic-calculator-expression" class="uic-calculator-expression" type="text" inputmode="decimal" autocomplete="off" aria-label="التعبير الحسابي">' +
+      '<div class="uic-calculator-preview"><span id="uic-calculator-expression-view"></span><span id="uic-calculator-result" class="uic-calculator-result">…</span><small id="uic-calculator-hint">معاينة النتيجة</small></div>' +
+      '<div class="uic-calculator-grid">' + keys.map(function (k) { return '<button type="button" class="btn btn-outline" onclick="UIC.Calculator.press(\'' + k[1] + '\')">' + k[0] + '</button>'; }).join('') +
+      '<button type="button" class="btn btn-primary" onclick="UIC.Calculator.apply()">إدخال</button></div></div>' +
+      '<div class="uic-calculator-help">% تعني قسمة العدد السابق على 100. إدخال يطبق النتيجة؛ = يعرضها ويسجلها فقط.</div>' +
+      '<div id="uic-calculator-history" class="uic-calculator-history"></div></div>';
+    UIC.openModal(active.modalId, { title: esc(active.title), size: 'sm', dismissible: false, body: body,
+      footer: '<button type="button" class="btn btn-outline" onclick="UIC.Calculator.close()">إلغاء</button>' });
+    var input = currentInput();
+    if (input) { input.addEventListener('input', function () { if (active) { active.expr = normalize(input.value); paint(); } }); input.addEventListener('keydown', keydown); }
+    paint();
+    setTimeout(function () { if (input) { input.focus(); input.setSelectionRange(input.value.length, input.value.length); } }, 0);
+  }
+  return { open: open, close: close, press: press, clear: clear, backspace: backspace, apply: apply, evaluate: evaluate };
 })();
 
 UIC.Live = (function () {
@@ -6472,6 +7564,7 @@ UIC.Live = (function () {
   var RETRY_MAX = 5;
   var queue = [];                 // [{v, target_system, action, data, message, tries, at}]
   var dead = [];                  // exhausted/refused replays, awaiting a human ack (§I6)
+  var liveBindings = Object.create(null); // same-session row adapters for queued confirmations
   var retryTimer = null;
   var tabId = String(Math.random()).slice(2) + Date.now();
 
@@ -6620,6 +7713,23 @@ UIC.Live = (function () {
     scheduleRetry();
   }
 
+  function reconcileQueued(entry, resp) {
+    var id = entry && entry.request_id, b = id && liveBindings[id];
+    if (!b) return;
+    var at = indexOfKey(b.list, b.key, b.draft[b.key]);
+    var rec = null;
+    try { rec = b.recordOf ? b.recordOf(resp) : (resp && (resp.record || (resp.data && resp.data.record))); } catch (e) { rec = null; }
+    if (rec && typeof rec === 'object') {
+      rec.__pending = false;
+      if (at !== -1) b.list[at] = rec; else b.list.unshift(rec);
+    } else if (at !== -1) {
+      delete b.list[at].__pending;
+    }
+    try { if (typeof b.render === 'function') b.render(); } catch (e2) {}
+    try { if (typeof b.onSuccess === 'function') b.onSuccess(resp); } catch (e3) {}
+    delete liveBindings[id];
+  }
+
   function scheduleRetry() {
     if (retryTimer || !queue.length) return;
     var tries = queue[0].tries || 0;
@@ -6655,6 +7765,7 @@ UIC.Live = (function () {
     persistQueue();
     send(entry.action, entry.data)
       .then(function () {
+        reconcileQueued(entry, arguments[0]);
         queue.shift();
         persistQueue();
         renderChip();
@@ -6741,6 +7852,16 @@ UIC.Live = (function () {
       try { o.render(); } catch (e) {}
     }
 
+    /* [Phase D] Mark the save BEFORE the optimistic close: otherwise the close
+       would finish the dialog journey as cancelled. save_feedback_ms starts at
+       the save action; save_confirmed_ms is staged only by the server-confirmed
+       paths (API.call / the recovery poll). */
+    try {
+      if (window.PERF) {
+        if (PERF._markSaving) PERF._markSaving(o.modal);
+        if (PERF.stage) PERF.stage('save_feedback');
+      }
+    } catch (ePerfSave) {}
     if (o.modal) { try { UIC.closeModal(o.modal); } catch (e) {} }
     /* A quiet indicator, not the blocking overlay: the point is that the user
        is free to carry on. */
@@ -6753,6 +7874,11 @@ UIC.Live = (function () {
      * the target of THIS call and not of whatever the page did next. An
      * explicit o.targetSystem (additive option) always wins. */
     var target = o.targetSystem || (window.API && API._lastTarget) || '';
+    var liveRequestId = o.data && o.data.__request_id ? String(o.data.__request_id) : '';
+    if (liveRequestId && canPatch) liveBindings[liveRequestId] = {
+      list: list, key: key, draft: draft, render: o.render,
+      recordOf: o.recordOf, onSuccess: o.onSuccess, onError: o.onError
+    };
 
     return wire
       .then(function (resp) {
@@ -6775,6 +7901,14 @@ UIC.Live = (function () {
         }
         try { UIC.toast((resp && resp.message) || o.message || 'تم الحفظ', 'success'); } catch (e) {}
         if (typeof o.onSuccess === 'function') o.onSuccess(resp);
+        if (liveRequestId) delete liveBindings[liveRequestId];
+        /* [Phase D] Server-confirmed success closes the dialog journey. */
+        try {
+          if (window.PERF) {
+            if (PERF.stage) PERF.stage('save_confirmed');
+            if (PERF._settleModal) PERF._settleModal(o.modal, 'completed');
+          }
+        } catch (ePerfOk) {}
         /* Nothing reloads here. That second round trip is what this replaces. */
         return resp;
       })
@@ -6813,11 +7947,15 @@ UIC.Live = (function () {
             target_system: target,
             action: o.action,
             data: o.data,
+            request_id: liveRequestId,
             message: o.message || 'تم الحفظ',
             tries: 0,
             at: Date.now()
           });
           try { UIC.toast('انقطع الاتصال — سنعيد التحقق من نفس الطلب دون إنشاء نسخة أخرى', 'error'); } catch (e) {}
+          /* [Phase D] Queueing is not success and not failure: the journey ends
+             as transport-uncertain at the unresolved boundary. */
+          try { if (window.PERF && PERF._settleModal) PERF._settleModal(o.modal, 'transport-uncertain'); } catch (ePerfQ) {}
           if (typeof o.onError === 'function') o.onError(err);
           throw err;
         }
@@ -6837,8 +7975,19 @@ UIC.Live = (function () {
             ? 'تعذر تأكيد نتيجة الطلب — قد يكون حُفظ. أعد المحاولة بنفس الطلب أو راجع السجل'
             : ((err && err.message) || 'تعذر الحفظ — لم يتم تسجيل التغيير'), 'error');
         } catch (e) {}
+        /* [Phase D] A rejection or uncertain terminal result keeps its own
+           outcome; it is never rewritten as success. */
+        try {
+          if (window.PERF && PERF._settleModal) {
+            var __perfOutcome = (err && err.transport)
+              ? 'transport-uncertain'
+              : (PERF.classifyError ? PERF.classifyError(err) : 'runtime-error');
+            PERF._settleModal(o.modal, __perfOutcome);
+          }
+        } catch (ePerfFail) {}
         if (typeof o.onError === 'function') o.onError(err);
         else if (!canPatch && typeof o.reload === 'function') o.reload();
+        if (liveRequestId) delete liveBindings[liveRequestId];
         throw err;
       })
       .finally(function () {
@@ -6957,6 +8106,10 @@ UIC.Live = (function () {
 
   /* ── change polling ──────────────────────────────────────────────────── */
   var watch = null;
+  /* [Phase F] Poll generation, TableRefresh style: a reply from a watch that
+   * has since been stopped or replaced is discarded instead of refreshing the
+   * wrong page or busting the cache for a view that is gone. */
+  var gens = { watch: 0 };
 
   /**
    * Poll for other devices' changes to the tables this page uses.
@@ -6980,6 +8133,7 @@ UIC.Live = (function () {
     if (!o.call || !o.page || typeof o.onChange !== 'function') return;
     unwatchPage();
 
+    var gen = (gens.watch = (gens.watch || 0) + 1);
     var interval = Math.max(MIN_INTERVAL, Number(o.intervalMs) || DEFAULT_INTERVAL);
     var seen = null;             // null until the first reply sets the baseline
     var lastActive = Date.now();
@@ -6993,12 +8147,12 @@ UIC.Live = (function () {
     });
 
     function schedule(ms) {
-      if (stopped) return;
+      if (stopped || gen !== gens.watch) return;
       timer = setTimeout(tick, ms);
     }
 
     function tick() {
-      if (stopped) return;
+      if (stopped || gen !== gens.watch) return;
       /* Do not poll a page nobody is looking at, and do not poll over a save
          that has not landed — the reply would undo the row the user just saw
          appear. */
@@ -7007,8 +8161,23 @@ UIC.Live = (function () {
         schedule(interval);
         return;
       }
-      o.call('get_page_versions', { page: o.page })
+      /* [Phase F] only with the coordinator on: hand this poll to the
+         background lane. API.call consumes the hint synchronously, which is
+         safe because the page's companyCall dispatches synchronously; if a
+         page ever made its call async the hint is ignored and the call stays
+         foreground, which is the safe direction. With the flag off this
+         branch is not taken and the call site is exactly as before. */
+      var pollCall;
+      if (window.UIC && UIC.REQ_COORD_CORE_ === true && window.API && API.call) {
+        UIC._rpcLaneHint = { lane: 'background', coalesce: true };
+        try { pollCall = o.call('get_page_versions', { page: o.page }); }
+        finally { UIC._rpcLaneHint = null; }
+      } else {
+        pollCall = o.call('get_page_versions', { page: o.page });
+      }
+      pollCall
         .then(function (resp) {
+          if (stopped || gen !== gens.watch) return;   /* [Phase F] stale poll reply discarded */
           failures = 0;
           var now = (resp && resp.versions) || {};
           if (seen === null) { seen = now; schedule(interval); return; }
@@ -7036,6 +8205,7 @@ UIC.Live = (function () {
           schedule(interval);
         })
         .catch(function () {
+          if (stopped || gen !== gens.watch) return;   /* [Phase F] stale poll failure discarded */
           /* Back off rather than hammer a system that is already unhappy. */
           failures++;
           schedule(Math.min(interval * Math.pow(2, Math.min(failures, 4)), 5 * 60 * 1000));
@@ -7580,6 +8750,12 @@ UIC.UploadSet = (function () {
     entry.pct = 5;
     if (input) { try { input.dataset.uploadStatus = 'uploading'; } catch (e) {} }
     renderRow(input, host, { file: entry.file, phase: 'uploading', statusTxt: 'جاري الرفع', showBar: true, pct: entry.pct, showRetry: false, entryKey: entry.key });
+    /* [Phase D] start -> usable result; byte bucket only, never file content. */
+    try {
+      if (window.PERF && PERF.stage) {
+        PERF.stage('upload_started', { bytes: PERF.byteBucket ? PERF.byteBucket(entry.file && entry.file.size) : '' });
+      }
+    } catch (ePerfUp) {}
     try {
       if (entry.pctTimer) clearInterval(entry.pctTimer);
       entry.pctTimer = setInterval(function () {
@@ -7644,6 +8820,12 @@ UIC.UploadSet = (function () {
             var h2 = input ? hostFor(input) : null;
             renderRow(input, h2, { file: entry.file, phase: 'bound', statusTxt: 'تم الربط', showBar: false, showRetry: false, entryKey: entry.key });
             if (entry.modalId) setBusy(entry.modalId, -1);
+            /* [Phase D] Bound = usable result; byte bucket only. */
+            try {
+              if (window.PERF && PERF.stage) {
+                PERF.stage('upload_ready', { bytes: PERF.byteBucket ? PERF.byteBucket(entry.file && entry.file.size) : '' });
+              }
+            } catch (ePerfUpOk) {}
             resolve({ reference: entry.ref, fileId: entry.fileId });
           } else if (res && res.notApplied === true) {
             finishFail(entry, (res && res.message) || 'تعذر الرفع');
@@ -7839,7 +9021,7 @@ UIC.UploadSet = (function () {
   } catch (e3) {}
   try {
     if (!UIC._closeModalOriginal) UIC._closeModalOriginal = UIC.closeModal;
-    UIC.closeModal = function (modalId) {
+    UIC.closeModal = function (modalId, force) {
       try {
         if (modalId && UIC.UploadSet && UIC.UploadSet.isBusy(modalId)) {
           UIC.confirm({
@@ -7851,12 +9033,12 @@ UIC.UploadSet = (function () {
           }).then(function (go) {
             if (!go) return;
             try { UIC.UploadSet.abortAll(modalId); } catch (e) {}
-            try { UIC._closeModalOriginal(modalId); } catch (e2) {}
+            try { UIC._closeModalOriginal(modalId, force); } catch (e2) {}
           });
           return;
         }
       } catch (e3) {}
-      try { return UIC._closeModalOriginal(modalId); } catch (e4) {}
+      try { return UIC._closeModalOriginal(modalId, force); } catch (e4) {}
     };
   } catch (e5) {}
   try {
@@ -7880,5 +9062,792 @@ UIC.UploadSet = (function () {
     }
   } catch (e6) {}
 })();
+
+/* TC_CAPABILITY_PICKER_BEGIN
+ * ── [TC-CAPABILITY] Instant product picker over a bounded catalog ──────
+ *
+ * One shared controller for the production-capability and sales-capacity
+ * product pickers (manuf_product_support_capability). Each page creates an
+ * instance with its own catalog/fallback actions, DOM references, selected-ID
+ * getter and selection callback; planning math and material rendering stay in
+ * the pages.
+ *
+ * Modes: with a fresh complete catalog, typing filters locally with zero RPC
+ * and no debounce. Overflow, invalid freshness metadata, transport errors or
+ * a disabled rollout flag use the existing bounded server search (280 ms
+ * debounce, limit 100) with a visible "البحث عبر الخادم" note. Permission or
+ * session denial clears data and never tries an alternate action.
+ *
+ * Freshness is memory-only per page instance. The server TTL is never
+ * restarted in the browser: localDeadline = monotonicRequestStart +
+ * clamp(expires_at - served_at, 0, 30000), so the whole RPC/queue time is
+ * charged against remaining freshness without synchronized clocks.
+ */
+UIC.TC_CAPABILITY_LOCAL_PICKER_FLAGS = UIC.TC_CAPABILITY_LOCAL_PICKER_FLAGS || {
+  tc_production_capability: true,
+  tc_sales_capacity: false
+};
+UIC.TcCapabilityPicker = (function () {
+  var CATALOG_TTL_MS = 30000;
+  var MAX_OPTIONS = 50;
+  var QUERY_MAX = 80;
+  var FALLBACK_DEBOUNCE_MS = 280;
+  var FALLBACK_LIMIT = 100;
+  var ID_RE = /^[1-9]\d{0,9}$/;
+  var DENIAL_RE = /NOT_AUTHORIZED|UNAUTHORIZED|AUTHORIZATION|SESSION_EXPIRED|SYSTEM_DISABLED|ACCOUNT_DISABLED|FORBIDDEN|LOGIN_REQUIRED|OWNER_MISMATCH|MYSQL_SCOPE_CHANGED/i;
+  var instances = [];
+
+  function normalizeName(s) {
+    return String(s == null ? '' : s)
+      .replace(/[\u064B-\u065F\u0670\u0640]/g, '')
+      .replace(/[\u0622\u0623\u0625]/g, '\u0627')
+      .replace(/\u0649/g, '\u064A')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .toLowerCase();
+  }
+  function isExactId(q) { return ID_RE.test(String(q)); }
+  function entryKey(p) {
+    if (!p) return '';
+    return p.key != null ? String(p.key) : normalizeName(p.name);
+  }
+  /* Pure local matching over a complete catalog. ASCII numeric queries match
+   * an exact string ID only; everything else is a normalized-name substring
+   * (empty matches all; Arabic-Indic digits stay name search). Server order is
+   * preserved; rendering caps at MAX_OPTIONS with the true total kept. */
+  function filterCatalog(products, query, limit) {
+    var max = Math.min(Math.max(Math.floor(Number(limit) || MAX_OPTIONS), 1), MAX_OPTIONS);
+    var q = String(query == null ? '' : query).trim().slice(0, QUERY_MAX);
+    var list = products || [];
+    var out = [], total = 0, i;
+    if (ID_RE.test(q)) {
+      for (i = 0; i < list.length; i++) {
+        if (String(list[i].id) === q) { out.push(list[i]); total = 1; break; }
+      }
+      return { matches: out, total: total };
+    }
+    var nq = normalizeName(q);
+    for (i = 0; i < list.length; i++) {
+      if (!nq || entryKey(list[i]).indexOf(nq) >= 0) {
+        total++;
+        if (out.length < max) out.push(list[i]);
+      }
+    }
+    return { matches: out, total: total };
+  }
+  /* Client-side acceptance mirrors the server contract. Malformed payloads can
+   * never become a ready catalog; overflow/invalid payloads fall back to
+   * server search. A complete empty catalog is valid no-results. */
+  function acceptCatalog(res) {
+    if (!res || res.status !== 'ok' || res.schema_version !== 1) return { ok: false, reason: 'invalid' };
+    if (!Array.isArray(res.products) || !Number.isInteger(res.count) || res.count !== res.products.length) return { ok: false, reason: 'invalid' };
+    if (res.count > 2000) return { ok: false, reason: 'invalid' };
+    if (typeof res.payload_bytes !== 'number' || !(res.payload_bytes >= 0) || res.payload_bytes > 262144) return { ok: false, reason: 'invalid' };
+    if (!res.complete || res.overflow || res.reason !== null) return { ok: false, reason: (res && res.reason) || 'overflow' };
+    var products = [], byId = {}, i, p, entry;
+    for (i = 0; i < res.products.length; i++) {
+      p = res.products[i];
+      if (!p || typeof p.id !== 'string' || typeof p.name !== 'string') return { ok: false, reason: 'invalid' };
+      entry = { id: p.id, name: p.name, key: normalizeName(p.name) };
+      products.push(entry);
+      byId[entry.id] = entry;
+    }
+    return { ok: true, products: products, byId: byId };
+  }
+  function catalogDeadline(requestStart, res) {
+    try {
+      var m = res && res._mysql;
+      var served = Number(res.served_at), exp = Number(m.expires_at), read = Number(m.read_at);
+      if (!Number.isFinite(served) || !Number.isFinite(exp) || !Number.isFinite(read) || exp < read) return -1;
+      var remaining = exp - served;
+      if (remaining < 0) remaining = 0;
+      if (remaining > CATALOG_TTL_MS) remaining = CATALOG_TTL_MS;
+      return requestStart + remaining;
+    } catch (e) { return -1; }
+  }
+  function isDenial(err) {
+    try { return DENIAL_RE.test(String((err && (err.code || err.message)) || '')); }
+    catch (e) { return false; }
+  }
+
+  function currentDoc() {
+    try { return (typeof document !== 'undefined') ? document : null; }
+    catch (e) { return null; }
+  }
+  function defaultDefer(fn) {
+    try {
+      if (typeof requestAnimationFrame === 'function') return requestAnimationFrame(fn);
+    } catch (e) {}
+    try {
+      if (typeof setTimeout === 'function') return setTimeout(fn, 0);
+    } catch (e2) {}
+    try { fn(); } catch (e3) {}
+    return 0;
+  }
+
+  function create(opts) {
+    var o = opts || {};
+    var enabledFn = (typeof o.enabled === 'function') ? o.enabled : function () { return o.enabled !== false; };
+    var nowFn = o.now || function () { return Date.now(); };
+    var deferFn = o.defer || defaultDefer;
+    var callFn = o.companyCall;
+    var escFn = o.escape || function (v) { return String(v == null ? '' : v); };
+    var visibleFn = o.isVisible || function () {
+      try {
+        var doc = currentDoc();
+        return !doc || doc.visibilityState !== 'hidden';
+      } catch (e) { return true; }
+    };
+    var els = {
+      input: o.input || null,
+      list: o.list || null,
+      status: o.statusEl || o.status || null,
+      selected: o.selectedEl || o.selected || null,
+      toggle: o.toggle || null,
+      wrap: o.wrap || null
+    };
+    var optionClass = o.optionClass || 'pc-option';
+    var noteClass = o.noteClass || 'pc-note';
+    var badClass = o.badClass || 'pc-bad';    var inst = {
+      _gen: 0, _queryGen: 0, _fallbackSeq: 0,
+      _catalog: null, _promise: null, _forceInFlight: false,
+      _state: 'idle', _fallback: false, _error: '',
+      _results: [], _total: 0, _active: -1,
+      _open: false, _composing: false, _destroyed: false,
+      _fallbackTimer: null, _lastQuery: '', _fallbackHasMore: false,
+      _rpcCatalog: 0, _rpcFallback: 0,
+      _bound: []
+    };
+
+    function currentText() {
+      try {
+        if (els.input && els.input.value != null) return String(els.input.value);
+      } catch (e) {}
+      return String(inst._lastQuery || '');
+    }
+    function fresh() {
+      return !!inst._catalog && inst._state === 'ready' && nowFn() < inst._catalog.deadline;
+    }
+    function expireIfNeeded() {
+      if (inst._catalog && !(nowFn() < inst._catalog.deadline)) {
+        inst._catalog = null;
+        inst._results = [];
+        inst._total = 0;
+        inst._active = -1;
+        if (inst._state === 'ready') inst._state = 'idle';
+      }
+    }
+    function selectedId() {
+      try { return String((typeof o.getSelectedId === 'function' ? o.getSelectedId() : '') || ''); }
+      catch (e) { return ''; }
+    }
+    function missingSelected() {
+      var id = selectedId();
+      return !!(id && inst._catalog && !inst._catalog.byId[id]);
+    }
+    function formatSelected() {
+      if (typeof o.formatSelected === 'function') {
+        try { return o.formatSelected(selectedId(), selectedName(), missingSelected()); }
+        catch (e) { return ''; }
+      }
+      return '';
+    }
+    function selectedName() {
+      /* Prefer the page's committed name; fall back to the current catalog. */
+      try {
+        if (typeof o.getSelectedName === 'function') {
+          var n = o.getSelectedName();
+          if (n != null && String(n) !== '') return String(n);
+        }
+      } catch (e) {}
+      try {
+        var id = selectedId();
+        if (id && inst._catalog && inst._catalog.byId[id]) return String(inst._catalog.byId[id].name || '');
+      } catch (e2) {}
+      return '';
+    }
+
+    function on(el, type, fn) {
+      if (!el || !el.addEventListener) return;
+      el.addEventListener(type, fn);
+      inst._bound.push({ el: el, type: type, fn: fn });
+    }
+    function renderOptions() {
+      if (!els.list) return;
+      var html = '', i, r, total = inst._total, shown = inst._results.length;
+      if (inst._state === 'loading') {
+        html = '<div class="' + noteClass + '">جارٍ تحميل المنتجات…</div>';
+      } else if (inst._state === 'error') {
+        html = '<div class="' + noteClass + '">تعذر تحميل الأصناف' +
+          (inst._error ? ' — ' + escFn(inst._error) : '') +
+          ' <button type="button" class="btn btn-outline" data-cap-retry="1">إعادة المحاولة</button></div>';
+      } else if (!inst._results.length) {
+        html = '<div class="' + noteClass + '">' +
+          (inst._state === 'fallback' && inst._fallbackSeq === 0 ? 'اكتب للبحث عبر الخادم.' : 'لا توجد نتائج مطابقة.') +
+          '</div>';
+      } else {
+        var sel = selectedId();
+        for (i = 0; i < inst._results.length; i++) {
+          r = inst._results[i];
+          html += '<button type="button" role="option" id="cap-opt-' + i + '" class="' + optionClass + '" data-cap-idx="' + i + '"' +
+            ' aria-selected="' + (String(r.id) === sel) + '"' +
+            (i === inst._active ? ' data-cap-active="1"' : '') +
+            '><span>' + escFn(r.name) + '</span><span class="' + noteClass + '">#' + escFn(r.id) + '</span></button>';
+        }
+      }
+      if (inst._state !== 'loading' && inst._state !== 'error' && total > shown) {
+        html += '<div class="' + noteClass + '">عرض ' + shown + ' من ' + total + ' — ضيّق البحث لعرض نتائج أدق</div>';
+      }
+      if (inst._state === 'fallback' && inst._fallback) {
+        html += '<div class="' + noteClass + '">البحث عبر الخادم</div>';
+      }
+      try { els.list.innerHTML = html; } catch (e) {}
+      try {
+        if (inst._open) els.list.classList.add('is-open');
+        else if (els.list.classList) els.list.classList.remove('is-open');
+      } catch (e2) {}
+      try {
+        if (els.input) els.input.setAttribute('aria-expanded', String(inst._open));
+        if (els.toggle) els.toggle.setAttribute('aria-expanded', String(inst._open));
+        if (els.input) {
+          if (inst._active >= 0) els.input.setAttribute('aria-activedescendant', 'cap-opt-' + inst._active);
+          else els.input.removeAttribute('aria-activedescendant');
+        }
+      } catch (e3) {}
+      var retry = null;
+      try { retry = els.list.querySelector('[data-cap-retry]'); } catch (e4) {}
+      if (retry && retry.addEventListener) {
+        retry.addEventListener('click', function (e) {
+          try { if (e && e.stopPropagation) e.stopPropagation(); } catch (e5) {}
+          retryNow();
+        });
+      }
+    }
+    function renderSelected() {
+      if (!els.selected) return;
+      try { els.selected.textContent = formatSelected(); } catch (e) {}
+    }
+    function renderStatus() {
+      if (!els.status) return;
+      var msg = '', err = false;
+      if (inst._state === 'loading') {
+        msg = inst._lastQuery ? 'جارٍ البحث…' : 'جارٍ تحميل المنتجات…';
+      } else if (inst._state === 'error') {
+        msg = 'تعذر قراءة قائمة المنتجات.' + (inst._error ? ' ' + inst._error : '');
+        err = true;
+      } else if (inst._state === 'fallback' || !enabledFn()) {
+        if (inst._fallbackHasMore) msg = 'نتائج البحث محدودة بـ100 منتج؛ أضف كلمات بحث.';
+        else if (!inst._results.length && inst._fallbackSeq > 0) msg = 'لا توجد نتائج مطابقة.';
+      } else if (inst._state === 'ready') {
+        if (!inst._results.length) msg = '';
+        else if (inst._total > inst._results.length) msg = '';
+      }
+      try {
+        els.status.innerHTML = msg
+          ? '<span' + (err ? ' class="' + badClass + '"' : '') + '>' + escFn(msg) + '</span>'
+          : '';
+      } catch (e) {}
+    }
+    function render() {
+      renderOptions();
+      renderSelected();
+      renderStatus();
+      try {
+        if (typeof o.onResults === 'function') {
+          o.onResults(inst._results.slice(), inst._total, {
+            state: inst._state,
+            fallback: inst._state === 'fallback' || !enabledFn(),
+            hasMore: !!inst._fallbackHasMore
+          });
+        }
+      } catch (e) {}
+    }
+
+    function applyLocal(text) {
+      if (!fresh()) return false;
+      var out = filterCatalog(inst._catalog.products, text, MAX_OPTIONS);
+      inst._results = out.matches;
+      inst._total = out.total;
+      inst._active = -1;
+      render();
+      return true;
+    }
+    function enterFallback(reason) {
+      inst._catalog = null;
+      inst._state = 'fallback';
+      inst._fallback = true;
+      inst._error = String(reason || '');
+      inst._active = -1;
+      render();
+      /* One current-query server request on entry; further typing debounces. */
+      fallbackFetch(currentText(), true, false);
+    }
+    function fetchCatalog(force) {
+      if (inst._destroyed || !enabledFn()) return null;
+      if (inst._promise && (!force || inst._forceInFlight)) return inst._promise;
+      var gen = ++inst._gen;
+      if (force) {
+        inst._catalog = null;
+        inst._fallback = false;
+        if (inst._state === 'fallback' || inst._state === 'error') inst._state = 'idle';
+      }
+      var start = nowFn();
+      inst._state = 'loading';
+      inst._error = '';
+      render();
+      if (typeof callFn !== 'function') {
+        enterFallback('transport');
+        return null;
+      }
+      inst._forceInFlight = !!force;
+      inst._rpcCatalog++;
+      var p;
+      try {
+        p = callFn(o.catalogAction, force ? { refresh: true } : {});
+      } catch (e) {
+        inst._promise = null;
+        inst._forceInFlight = false;
+        enterFallback('transport');
+        return null;
+      }
+      inst._promise = Promise.resolve(p).then(function (res) {
+        if (gen !== inst._gen || inst._destroyed) return null;
+        inst._promise = null;
+        inst._forceInFlight = false;
+        var acc = acceptCatalog(res);
+        if (!acc.ok) { enterFallback(acc.reason); return null; }
+        var deadline = catalogDeadline(start, res);
+        if (!(deadline > nowFn())) { enterFallback('stale'); return null; }
+        inst._catalog = { products: acc.products, byId: acc.byId, deadline: deadline };
+        inst._state = 'ready';
+        inst._fallback = false;
+        try { if (typeof o.onCatalog === 'function') o.onCatalog(inst._catalog); } catch (e) {}
+        /* Filter the latest query, not a captured old one. */
+        applyLocal(currentText());
+        return inst._catalog;
+      }, function (err) {
+        if (gen !== inst._gen || inst._destroyed) return null;
+        inst._promise = null;
+        inst._forceInFlight = false;
+        if (isDenial(err)) {
+          inst._catalog = null;
+          inst._state = 'error';
+          inst._error = (err && err.message) || '';
+          inst._results = [];
+          inst._total = 0;
+          inst._active = -1;
+          render();
+          try { if (typeof o.onDenied === 'function') o.onDenied(err); } catch (e) {}
+          return null;
+        }
+        enterFallback('transport');
+        return null;
+      });
+      return inst._promise;
+    }
+    function fallbackFetch(text, immediate, bypass) {
+      var run = function () {
+        if (inst._destroyed) return;
+        var gen = inst._gen;
+        var seq = ++inst._fallbackSeq;
+        var payload = { search: String(text == null ? '' : text), limit: FALLBACK_LIMIT };
+        if (bypass) payload.refresh = true;
+        if (typeof callFn !== 'function') return;
+        inst._rpcFallback++;
+        Promise.resolve(callFn(o.fallbackAction, payload)).then(function (res) {
+          /* Latest query wins on successes, failures AND cache-hit paths. */
+          if (seq !== inst._fallbackSeq || gen !== inst._gen || inst._destroyed) return;
+          if (!res || res.status !== 'ok') throw new Error('تعذر تحميل قائمة المنتجات');
+          var list = Array.isArray(res.products) ? res.products : [];
+          inst._results = list.map(function (p) {
+            return { id: String(p.id), name: String(p.name == null ? '' : p.name) };
+          });
+          inst._total = inst._results.length;
+          inst._fallbackHasMore = !!res.has_more;
+          inst._active = -1;
+          render();
+        }, function (err) {
+          if (seq !== inst._fallbackSeq || gen !== inst._gen || inst._destroyed) return;
+          if (isDenial(err)) {
+            inst._catalog = null;
+            inst._state = 'error';
+            inst._error = (err && err.message) || '';
+            inst._results = [];
+            inst._total = 0;
+            inst._active = -1;
+            render();
+            try { if (typeof o.onDenied === 'function') o.onDenied(err); } catch (e) {}
+            return;
+          }
+          inst._error = (err && err.message) || '';
+          inst._state = 'fallback';
+          render();
+        });
+      };
+      if (immediate) {
+        if (inst._fallbackTimer) {
+          try { clearTimeout(inst._fallbackTimer); } catch (e) {}
+          inst._fallbackTimer = null;
+        }
+        run();
+        return;
+      }
+      if (inst._fallbackTimer) {
+        try { clearTimeout(inst._fallbackTimer); } catch (e2) {}
+      }
+      try {
+        inst._fallbackTimer = setTimeout(function () {
+          inst._fallbackTimer = null;
+          run();
+        }, FALLBACK_DEBOUNCE_MS);
+      } catch (e3) { run(); }
+    }
+    function fallbackQuery(text) {
+      if (inst._state === 'error') { render(); return; }
+      fallbackFetch(text, false, false);
+    }
+
+    function open() {
+      if (inst._destroyed) return;
+      inst._open = true;
+      expireIfNeeded();
+      if (!enabledFn()) { render(); return; }
+      if (inst._state === 'error' || inst._state === 'fallback') { render(); return; }
+      if (fresh()) { applyLocal(currentText()); return; }
+      if (inst._state === 'loading') { render(); return; }
+      render();
+      if (visibleFn()) fetchCatalog(false);
+    }
+    function close() {
+      inst._open = false;
+      renderOptions();
+      try {
+        if (els.input) els.input.setAttribute('aria-expanded', 'false');
+        if (els.toggle) els.toggle.setAttribute('aria-expanded', 'false');
+      } catch (e) {}
+    }
+    function query(text) {
+      if (inst._destroyed) return;
+      inst._queryGen++;
+      inst._lastQuery = String(text == null ? '' : text);
+      try { if (typeof o.onQuery === 'function') o.onQuery(inst._lastQuery); } catch (e) {}
+      expireIfNeeded();
+      if (!enabledFn()) { fallbackQuery(inst._lastQuery); return; }
+      if (inst._state === 'error') { render(); return; }
+      if (inst._state === 'fallback') { fallbackQuery(inst._lastQuery); return; }
+      if (fresh()) {
+        /* Fresh catalog: filter immediately, zero RPC, no debounce. */
+        inst._open = true;
+        applyLocal(inst._lastQuery);
+        return;
+      }
+      render();
+      fetchCatalog(false);
+    }
+    function refresh() {
+      if (inst._destroyed) return null;
+      if (!enabledFn()) {
+        fallbackFetch(currentText(), true, true);
+        return null;
+      }
+      return fetchCatalog(true);
+    }
+    function retryNow() {
+      if (inst._destroyed) return null;
+      if (inst._state === 'fallback') {
+        fallbackFetch(currentText(), true, true);
+        return null;
+      }
+      return fetchCatalog(true);
+    }
+    function clear() {
+      inst._gen++;
+      inst._fallbackSeq++;
+      if (inst._fallbackTimer) {
+        try { clearTimeout(inst._fallbackTimer); } catch (e) {}
+        inst._fallbackTimer = null;
+      }
+      inst._promise = null;
+      inst._forceInFlight = false;
+      inst._catalog = null;
+      inst._results = [];
+      inst._total = 0;
+      inst._active = -1;
+      inst._fallbackHasMore = false;
+      if (inst._state !== 'error') inst._state = 'idle';
+      render();
+    }
+    function invalidate(reason) {
+      if (inst._destroyed) return;
+      inst._gen++;
+      inst._fallbackSeq++;
+      if (inst._fallbackTimer) {
+        try { clearTimeout(inst._fallbackTimer); } catch (e) {}
+        inst._fallbackTimer = null;
+      }
+      inst._promise = null;
+      inst._forceInFlight = false;
+      inst._catalog = null;
+      inst._results = [];
+      inst._total = 0;
+      inst._active = -1;
+      inst._fallbackHasMore = false;
+      inst._error = '';
+      if (inst._state !== 'fallback' || reason === 'session' || reason === 'denial') {
+        inst._state = 'idle';
+        inst._fallback = false;
+      }
+      try { if (typeof o.onInvalidate === 'function') o.onInvalidate(reason); } catch (e2) {}
+      render();
+      if (reason === 'mutation' && inst._open && visibleFn() && enabledFn() &&
+          inst._state !== 'fallback' && inst._state !== 'error') {
+        fetchCatalog(false);
+      }
+    }
+    function findInResults(id) {
+      var want = String(id == null ? '' : id);
+      for (var i = 0; i < inst._results.length; i++) {
+        if (String(inst._results[i].id) === want) return inst._results[i];
+      }
+      if (inst._catalog && inst._catalog.byId[want]) {
+        var e = inst._catalog.byId[want];
+        return { id: e.id, name: e.name };
+      }
+      return null;
+    }
+    function commitByIndex(idx) {
+      var r = inst._results[idx];
+      if (!r) return false;
+      var id = String(r.id);
+      try { if (typeof o.onSelect === 'function') o.onSelect(id, String(r.name == null ? '' : r.name)); } catch (e) {}
+      inst._active = -1;
+      close();
+      return true;
+    }
+    function commitActive() {
+      if (inst._composing) return false;
+      if (inst._active < 0 || inst._active >= inst._results.length) return false;
+      return commitByIndex(inst._active);
+    }
+    function moveActive(delta) {
+      if (!inst._results.length) return;
+      var next = inst._active + delta;
+      if (next < 0) next = 0;
+      if (next >= inst._results.length) next = inst._results.length - 1;
+      inst._active = next;
+      renderOptions();
+      try {
+        var doc = currentDoc();
+        var el = doc ? doc.getElementById('cap-opt-' + next) : null;
+        if (el && el.scrollIntoView) el.scrollIntoView({ block: 'nearest' });
+      } catch (e) {}
+    }
+    function selectionChanged() { renderOptions(); renderSelected(); }
+    function getState() {
+      return {
+        state: inst._state,
+        open: inst._open,
+        enabled: enabledFn(),
+        catalogSize: inst._catalog ? inst._catalog.products.length : 0,
+        fresh: fresh(),
+        total: inst._total,
+        rendered: inst._results.length,
+        active: inst._active,
+        queryGen: inst._queryGen,
+        rpcCatalog: inst._rpcCatalog,
+        rpcFallback: inst._rpcFallback,
+        fallback: inst._fallback,
+        error: inst._error
+      };
+    }
+    function destroy() {
+      inst._destroyed = true;
+      inst._gen++;
+      inst._fallbackSeq++;
+      if (inst._fallbackTimer) {
+        try { clearTimeout(inst._fallbackTimer); } catch (e) {}
+        inst._fallbackTimer = null;
+      }
+      inst._promise = null;
+      inst._bound.forEach(function (b) {
+        try { b.el.removeEventListener(b.type, b.fn); } catch (e2) {}
+      });
+      inst._bound = [];
+      for (var i = instances.length - 1; i >= 0; i--) {
+        if (instances[i] && instances[i]._destroy === destroy) instances.splice(i, 1);
+      }
+    }
+
+    /* DOM wiring: scoped listeners, cleaned up by destroy(). */
+    (function wire() {
+      if (els.input) {
+        on(els.input, 'input', function () {
+          var v = '';
+          try { v = String(els.input.value == null ? '' : els.input.value); } catch (e) {}
+          inst._open = true;
+          query(v);
+        });
+        on(els.input, 'paste', function () {
+          deferFn(function () {
+            if (inst._destroyed) return;
+            var v = '';
+            try { v = String(els.input.value == null ? '' : els.input.value); } catch (e) {}
+            inst._open = true;
+            query(v);
+          });
+        });
+        on(els.input, 'compositionstart', function () { inst._composing = true; });
+        on(els.input, 'compositionend', function () {
+          inst._composing = false;
+          var v = '';
+          try { v = String(els.input.value == null ? '' : els.input.value); } catch (e) {}
+          query(v);
+        });
+        on(els.input, 'focus', function () { open(); });
+        on(els.input, 'keydown', function (e) {
+          e = e || {};
+          var key = e.key || '';
+          if (key === 'Escape') { close(); return; }
+          if (key === 'ArrowDown') {
+            if (typeof e.preventDefault === 'function') e.preventDefault();
+            if (!inst._open) open();
+            moveActive(1);
+            return;
+          }
+          if (key === 'ArrowUp') {
+            if (typeof e.preventDefault === 'function') e.preventDefault();
+            moveActive(-1);
+            return;
+          }
+          if (key === 'Enter' && !inst._composing && inst._open) {
+            if (inst._active >= 0) {
+              if (typeof e.preventDefault === 'function') e.preventDefault();
+              commitActive();
+            }
+          }
+        });
+      }
+      if (els.toggle) {
+        on(els.toggle, 'click', function () {
+          if (inst._open) { close(); return; }
+          try { if (els.input && els.input.focus) els.input.focus(); } catch (e) {}
+          open();
+        });
+      }
+      if (els.list) {
+        /* Prevent blur from dropping a pointer selection. */
+        on(els.list, 'mousedown', function (e) {
+          try { if (e && e.preventDefault) e.preventDefault(); } catch (err) {}
+        });
+        var clickFn = function (e) {
+          var t = (e && (e.target || e.srcElement)) || null;
+          while (t && t !== els.list) {
+            try {
+              if (t.getAttribute && t.getAttribute('data-cap-idx') != null) {
+                var idx = Number(t.getAttribute('data-cap-idx'));
+                commitByIndex(idx);
+                return;
+              }
+            } catch (err) {}
+            t = t.parentNode || null;
+          }
+        };
+        on(els.list, 'click', clickFn);
+        /* Touch devices fire click; the mousedown guard above keeps focus. */
+        on(els.list, 'touchend', function (e) {
+          try { if (e && e.preventDefault) e.preventDefault(); } catch (err) {}
+          clickFn(e);
+        });
+      }
+      var doc = currentDoc();
+      if (doc && doc.addEventListener) {
+        var outside = function (e) {
+          if (!inst._open || inst._destroyed) return;
+          var t = (e && (e.target || e.srcElement)) || null;
+          var wrap = els.wrap || null;
+          try {
+            if (wrap && wrap.contains && t && wrap.contains(t)) return;
+          } catch (e2) {}
+          close();
+        };
+        doc.addEventListener('click', outside);
+        inst._bound.push({ el: doc, type: 'click', fn: outside });
+        var vis = function () {
+          if (inst._destroyed) return;
+          var hidden = false;
+          try { hidden = doc.visibilityState === 'hidden'; } catch (e) {}
+          if (hidden) return;
+          /* Timers may be delayed: recheck freshness on visibility resume. */
+          expireIfNeeded();
+          if (inst._open && enabledFn() && !fresh() &&
+              inst._state !== 'fallback' && inst._state !== 'error' && inst._state !== 'loading') {
+            fetchCatalog(false);
+          } else {
+            render();
+          }
+        };
+        doc.addEventListener('visibilitychange', vis);
+        inst._bound.push({ el: doc, type: 'visibilitychange', fn: vis });
+      }
+    })();
+
+    function bootFetch() {
+      if (inst._destroyed) return null;
+      if (!enabledFn()) {
+        fallbackFetch(currentText(), true, false);
+        return null;
+      }
+      return fetchCatalog(false);
+    }
+    var api = {
+      open: open,
+      close: close,
+      query: query,
+      refresh: refresh,
+      retry: retryNow,
+      clear: clear,
+      destroy: destroy,
+      invalidate: invalidate,
+      selectionChanged: selectionChanged,
+      findInResults: findInResults,
+      boot: bootFetch,
+      getQueryGen: function () { return inst._queryGen; },
+      isComposing: function () { return inst._composing; },
+      getState: getState,
+      _destroy: destroy
+    };
+    instances.push(api);
+    return api;
+  }
+  function boot(opts) {
+    var picker = create(opts);
+    picker.boot();
+    return picker;
+  }
+
+  function invalidateAll(reason) {
+    instances.slice().forEach(function (api) {
+      try { if (api && api.invalidate) api.invalidate(reason); } catch (e) {}
+    });
+  }
+
+  return {
+    create: create,
+    boot: boot,
+    invalidateAll: invalidateAll,
+    normalizeName: normalizeName,
+    isExactId: isExactId,
+    filterCatalog: filterCatalog,
+    acceptCatalog: acceptCatalog,
+    catalogDeadline: catalogDeadline,
+    isDenial: isDenial,
+    CATALOG_TTL_MS: CATALOG_TTL_MS,
+    MAX_OPTIONS: MAX_OPTIONS,
+    QUERY_MAX: QUERY_MAX,
+    FALLBACK_LIMIT: FALLBACK_LIMIT,
+    _instances: instances
+  };
+})();
+/* TC_CAPABILITY_PICKER_END */
 
 </script>

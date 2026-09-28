@@ -168,9 +168,11 @@
       var host = document.getElementById('qd-kpis');
       if (!host) return;
       host.innerHTML =
-        section('الإجراءات (SOPs)',
-          tile('إجمالي الإجراءات', kpiValue('sops_total'), 'file', 'default') +
-          tile('إجراءات سارية', kpiValue('sops_effective'), 'check-circle', 'success') +
+        /* 4.1 — the dashboard heading that refers to this module uses the exact
+           module name, with the Latin part direction-isolated. */
+        section('السياسات والاجراءات <bdi dir="ltr">SOPs</bdi>',
+          tile('إجمالي الوثائق', kpiValue('sops_total'), 'file', 'default') +
+          tile('وثائق سارية', kpiValue('sops_effective'), 'check-circle', 'success') +
           tile('إصدارات قيد المراجعة', kpiValue('sops_in_review'), 'clock', 'default') +
           tile('مراجعات متأخرة', kpiValue('sops_review_overdue'), 'alert', kpiTone('sops_review_overdue', 'danger'))
         ) +
@@ -202,7 +204,7 @@
       var host = document.getElementById('qd-tables');
       if (!host) return;
       host.innerHTML =
-        tableCard('التزام الإقرارات حسب الإجراء', 'qd-sops') +
+        tableCard('التزام الإقرارات حسب الوثيقة', 'qd-sops') +
         tableCard('إجراءات تصحيحية متأخرة', 'qd-capas') +
         tableCard('أحدث حالات عدم المطابقة', 'qd-ncrs') +
         tableCard('أحدث التدقيقات', 'qd-audits');

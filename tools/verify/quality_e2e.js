@@ -5,14 +5,14 @@
    "QUALITY MODULE (v2)" block (banner to banner) drive the whole journey with
    the REAL handlers, in order:
 
-     saveQualitySop_ (QC -> SOP-QC-001 + Draft v1)
+     saveQualitySop_ (PROC -> PROC-QA-001 + Draft v1)
      -> saveQualitySopVersion_ (v1 content_html)
      -> submitQualitySopVersion_ (freeze failure writes nothing, then the real
         PDF freeze -> In Review, 64-hex sha, pdf_ref /d/<pdf_id>)
      -> author self-approval refused (zero writes)
      -> approveQualitySopVersion_ by another full user -> Approved
      -> makeEffectiveQualitySopVersion_ -> Effective + current_effective_version
-     -> launchQualityAcks_ (empty applicability = every employee) -> Pending
+     -> launchQualityAcks_ (applicability matches the one employee) -> Pending
      -> signQualityAck_ as the employee's own session -> Signed
      -> saveQualityNcr_ (NCR-<YYYY>-001, Open)
      -> changeQualityNcrStatus_ (In Review with root_cause + disposition)
@@ -86,6 +86,24 @@ function makeWorld() {
   const cachedKinds = [];
   const drive = { created: [], exported: [], trashed: [], failDoc: false, failExport: false, failPdf: false };
   let uidSeq = 0, idSeq = 0, fileSeq = 0;
+
+  /* Department-abbreviation registry: company-owned configuration that a NEW
+     document code needs (4.7.1). Seeded exactly as an administrator would. */
+  ensureSheet_('db-1', 'valley_quality_dept_abbr', ['unique_id', 'id', 'department', 'canonical', 'abbrev', 'user', 'created_at']);
+  /* Written straight into the grid: fixture setup is not a production write and
+     must not appear in the journey's write ledger. */
+  sheets['valley_quality_dept_abbr'].__grid.push(['abbr-1', 1, '\u0627\u0644\u062c\u0648\u062f\u0629', '', 'QA', '', '']);
+  /* The version sheet already carries the chunked-content columns, so the
+     one-time additive-header migration is not part of the journey ledger. */
+  ensureSheet_('db-1', 'valley_quality_sop_versions', [
+    'unique_id', 'id', 'sop_id', 'version', 'change_type', 'status',
+    'content_html', 'content_html_2', 'content_html_3', 'content_html_4', 'content_html_5',
+    'content_html_6', 'content_html_7', 'content_html_8', 'content_html_9', 'content_html_10',
+    'change_summary', 'pdf_ref', 'pdf_id', 'pdf_sha256',
+    'author_email', 'submitted_at', 'approved_by', 'approved_at',
+    'reject_comment', 'effective_date', 'next_review_date', 'user', 'created_at',
+    'template_meta', 'revision'
+  ]);
 
   function makeSheet(name, headers) {
     const grid = [(headers || []).slice()];
@@ -371,14 +389,15 @@ function step(label, expectedWrites, fn) {
 /* ══ the journey ═════════════════════════════════════════════════════ */
 const employeeCount = rows(H.QUALITY_EMP_INFO_SHEET).length;
 
-/* ---- 1) create the SOP (category QC) ---- */
-const created = step('1. saveQualitySop_ creates the QC SOP', 3, () =>
+/* ---- 1) create the SOP (category PROC) ---- */
+/* 4 = the reserved sequence row + the SOP row + its Draft v1 row + Created. */
+const created = step('1. saveQualitySop_ creates the PROC SOP', 4, () =>
   H.saveQualitySop_({
-    title_ar: 'إجراء ضبط الجودة', title_en: 'Quality Control SOP', category: 'QC',
-    applicability_dept: '', applicability_role: '', owner_email: AUTHOR.email
+    title_ar: 'إجراء ضبط الجودة', title_en: 'Quality Control SOP', category: 'PROC',
+    applicability_dept: 'الجودة', applicability_role: 'فني جودة', owner_email: AUTHOR.email
   }, AUTHOR, DB));
 const sopUid = created.unique_id;
-check(created.status === 'success' && created.sop_code === 'SOP-QC-001', '1. sop_code is SOP-QC-001');
+check(created.status === 'success' && created.sop_code === 'PROC-QA-001', '1. sop_code is PROC-QA-001');
 const v1rows = rows(H.QUALITY_SOP_VERSIONS_SHEET);
 check(v1rows.length === 1 && String(v1rows[0].sop_id) === String(sopUid) && Number(v1rows[0].version) === 1 && v1rows[0].status === 'Draft',
   '1. a Draft v1 row exists and is linked to the SOP');
@@ -392,8 +411,14 @@ const edited = step('2. saveQualitySopVersion_ writes the v1 content_html', 2, (
     unique_id: versionUid, change_type: 'Major',
     content_html: '<h1>خطوات ضبط الجودة</h1><p>فحص العينات</p>', change_summary: 'المسودة الأولى'
   }, AUTHOR, DB));
-check(edited.row_status === 'Draft' && versionRow(versionUid).content_html === '<h1>خطوات ضبط الجودة</h1><p>فحص العينات</p>',
-  '2. content_html is stored while the version stays Draft');
+/* The stored value is the SANITIZED canonical form, so this asserts on the
+   semantic content (structure + text) instead of byte equality with the raw
+   client string. The allowlist is proven separately in quality_sop_doc_safety. */
+const storedV1 = String(versionRow(versionUid).content_html || '');
+check(edited.row_status === 'Draft' &&
+  /^<h1[^>]*>.*<\/h1><p[^>]*>.*<\/p>$/i.test(storedV1) &&
+  storedV1.replace(/<[^>]*>/g, '').indexOf('خطوات ضبط الجودة') !== -1,
+  '2. content_html is stored (sanitized semantic form) while the version stays Draft');
 
 /* ---- 3) freeze failure writes nothing, then submit freezes the PDF ---- */
 W.drive.failPdf = true;
@@ -433,8 +458,8 @@ check(effective.status === 'success' && versionRow(versionUid).status === 'Effec
 check(sopRow(sopUid).current_effective_version === '1' && sopRow(sopUid).draft_version === '',
   '5. sops.current_effective_version is updated to 1 and the draft is cleared');
 
-/* ---- 6) launch acks: empty applicability targets every employee ---- */
-const launched = step('6. launchQualityAcks_ with empty applicability', 2, () =>
+/* ---- 6) launch acks: the applicability matches the one employee ---- */
+const launched = step('6. launchQualityAcks_ with a matching applicability', 2, () =>
   H.launchQualityAcks_({ sop_id: sopUid }, MANAGER, DB));
 check(launched.status === 'success' && launched.created === employeeCount && launched.skipped === 0,
   '6. every employee (' + employeeCount + ') got a Pending row, none skipped');
@@ -554,7 +579,7 @@ const JOURNEY_KPIS = {
 Object.keys(JOURNEY_KPIS).forEach(function (k) {
   check(K[k] === JOURNEY_KPIS[k], '15. KPI ' + k + ' = ' + JOURNEY_KPIS[k] + ' (got ' + K[k] + ')');
 });
-check(Array.isArray(dash.sops) && dash.sops.length === 1 && dash.sops[0].sop_code === 'SOP-QC-001' &&
+check(Array.isArray(dash.sops) && dash.sops.length === 1 && dash.sops[0].sop_code === 'PROC-QA-001' &&
   String(dash.sops[0].current_effective_version) === '1' && dash.sops[0].acks_signed === 1 &&
   dash.sops[0].acks_pending === 0 && dash.sops[0].compliance_pct === 100,
   '15. sops[0] reflects the journey: effective v1, 1/1 signed, compliance_pct 100');
@@ -563,7 +588,7 @@ check(dash.ncrs_recent.length === 1 && dash.ncrs_recent[0].ncr_code === 'NCR-' +
 check(dash.capas_overdue_list.length === 0, '15. capas_overdue_list is empty');
 
 /* ---- no illegal-transition leakage: only the intended writes happened ---- */
-check(W.writes.count === 26, 'the write counter holds exactly the 26 intended writes, none leaked (got ' + W.writes.count + ')');
+check(W.writes.count === 27, 'the write counter holds exactly the 27 intended writes, none leaked (got ' + W.writes.count + ')');
 check(rows(H.QUALITY_SOP_SHEET).length === 1 && rows(H.QUALITY_SOP_VERSIONS_SHEET).length === 1 && rows(H.QUALITY_SOP_EVENTS_SHEET).length === 6,
   'exactly one SOP, one version and the six journey events exist');
 check(rows(H.QUALITY_SOP_ACKS_SHEET).length === 1 && rows(H.QUALITY_NCR_SHEET).length === 1 && rows(H.QUALITY_CAPA_SHEET).length === 1,

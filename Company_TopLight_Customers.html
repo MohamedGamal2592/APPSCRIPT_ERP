@@ -175,44 +175,41 @@
     UIC.openModal('party-modal', {
       title: p ? 'تعديل' : 'إضافة',
       body: body,
-      onSave: 'saveParty(\'' + (p ? p.id : '') + '\')'
+      onSave: 'return saveParty(\'' + (p ? p.id : '') + '\')'
     });
   }
 
   function saveParty(id) {
-    var btn = document.querySelector('#party-modal .btn-primary');
-    UI.submitOnce(btn, function () {
-      var data = UIC.collectForm('party-form');
-      if (!UIC.validateForm('party-form')) return Promise.reject();
-      ['type', 'country', 'region'].forEach(function (k) {
-        if (data[k] === '__new__') data[k] = data[k + '_custom'] || '';
-        delete data[k + '_custom'];
-      });
-      if (id) data.id = id;
-      /* [RT-4] Optimistic. The three rotating reassurance messages that used to
-         cover this wait are deleted rather than kept: they were the UI being
-         designed around the wait, and there is no wait to design around now. */
-      if (!window.__parties) window.__parties = [];
-      return UIC.Live.save({
-        call: companyCall,
-        action: id ? 'edit_party' : 'add_party',
-        data: data,
-        list: window.__parties,
-        key: 'id',
-        draft: Object.assign({}, data),
-        render: function () { renderParties(window.__parties); },
-        modal: 'party-modal',
-        message: 'تم الحفظ',
-        /* An add gets its id from the server; the reply carries it either on
-           the record or beside it, exactly as the hand-rolled patch read it. */
-        recordOf: function (r) {
-          var rec = (r && r.record) || null;
-          if (rec && !rec.id) rec.id = r.assignedId || r.unique_id;
-          return rec;
-        },
-        reload: fetchParties
-      }).catch(function () { /* Live.save has already toasted and rolled back */ });
+    var data = UIC.collectForm('party-form');
+    if (!UIC.validateForm('party-form')) return;
+    ['type', 'country', 'region'].forEach(function (k) {
+      if (data[k] === '__new__') data[k] = data[k + '_custom'] || '';
+      delete data[k + '_custom'];
     });
+    if (id) data.id = id;
+    /* [RT-4] Optimistic. The three rotating reassurance messages that used to
+       cover this wait are deleted rather than kept: they were the UI being
+       designed around the wait, and there is no wait to design around now. */
+    if (!window.__parties) window.__parties = [];
+    return UIC.Live.save({
+      call: companyCall,
+      action: id ? 'edit_party' : 'add_party',
+      data: data,
+      list: window.__parties,
+      key: 'id',
+      draft: Object.assign({}, data),
+      render: function () { renderParties(window.__parties); },
+      modal: 'party-modal',
+      message: 'تم الحفظ',
+      /* An add gets its id from the server; the reply carries it either on
+         the record or beside it, exactly as the hand-rolled patch read it. */
+      recordOf: function (r) {
+        var rec = (r && r.record) || null;
+        if (rec && !rec.id) rec.id = r.assignedId || r.unique_id;
+        return rec;
+      },
+      reload: fetchParties
+    }).catch(function () { /* Live.save has already toasted and rolled back */ });
   }
 
   function showError(e) {

@@ -52,6 +52,104 @@
       padding: 8px;
       background: var(--bg-subtle);
     }
+    #costing-modal .modal {
+      width: min(calc(100vw - 48px), 1500px);
+      max-width: 1500px;
+      max-height: 94vh;
+    }
+    #costing-modal .modal-body { padding: clamp(14px, 2vw, 28px); }
+    .costing-form-shell { display: flex; flex-direction: column; gap: 16px; }
+    .costing-section {
+      padding: 18px;
+      border: 1px solid var(--border-color);
+      border-radius: 14px;
+      background: var(--bg-surface);
+      box-shadow: var(--shadow-sm);
+    }
+    .costing-section-head {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin: 0 0 14px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid var(--border-color);
+      color: var(--text-main);
+      font-size: 15px;
+    }
+    .costing-section-toggle {
+      list-style: none;
+      cursor: pointer;
+      user-select: none;
+    }
+    .costing-section-toggle::-webkit-details-marker { display: none; }
+    .costing-section-toggle::after {
+      content: '＋';
+      margin-inline-start: auto;
+      color: var(--brand-primary);
+      font-size: 18px;
+      font-weight: 700;
+    }
+    .costing-collapsible[open] > .costing-section-toggle::after { content: '−'; }
+    .costing-collapsible > .costing-section-toggle { margin-bottom: 0; border-bottom: 0; }
+    .costing-collapsible[open] > .costing-section-toggle { margin-bottom: 14px; border-bottom: 1px solid var(--border-color); }
+    .costing-section-head .step {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 28px;
+      height: 28px;
+      flex: 0 0 28px;
+      border-radius: 50%;
+      background: var(--brand-subtle-bg);
+      color: var(--brand-primary);
+      font-size: 12px;
+      font-weight: 800;
+    }
+    .costing-header-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+    .costing-workspace { display: grid; grid-template-columns: minmax(0, 1fr) 310px; gap: 16px; align-items: start; }
+    .costing-main-stack { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+    .costing-numbers-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+    .costing-calculated-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-top: 12px; padding-top: 12px; border-top: 1px dashed var(--border-color); }
+    .costing-calculated-field .input { background: var(--bg-muted, #f5f5f5); color: var(--text-muted); cursor: not-allowed; }
+    .formula-readonly-badge { display: inline-block; margin-inline-start: 4px; padding: 2px 5px; border-radius: 5px; background: var(--brand-subtle-bg); color: var(--brand-primary); font-size: 10px; }
+    .costing-summary {
+      position: sticky;
+      top: 12px;
+      padding: 18px;
+      border: 1px solid var(--brand-border);
+      border-radius: 14px;
+      background: linear-gradient(160deg, var(--brand-subtle-bg), var(--bg-surface) 65%);
+    }
+    .costing-summary h4 { margin: 0 0 4px; color: var(--brand-primary); font-size: 15px; }
+    .costing-summary-note { margin: 0 0 12px; color: var(--text-muted); font-size: 11px; line-height: 1.6; }
+    .costing-total-row { display: flex; justify-content: space-between; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--border-color); font-size: 12px; }
+    .costing-total-row:last-child { border-bottom: 0; }
+    .costing-total-row strong { text-align: left; white-space: nowrap; }
+    .costing-total-row.is-primary { margin-top: 5px; color: var(--brand-primary); font-size: 14px; }
+    .costing-lines-section { scroll-margin-top: 12px; }
+    .line-card-editor { border-radius: 12px; padding: 14px; }
+    .line-card-editor .auto-badge-bar { background: var(--brand-subtle-bg); }
+    .line-saved-calculations { margin-top: 10px; padding: 10px 12px; border: 1px solid var(--border-color); border-radius: 9px; background: var(--bg-subtle); }
+    .line-saved-calculations > strong { display: block; margin-bottom: 7px; color: var(--text-muted); font-size: 11px; }
+    .line-saved-calculations > div { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+    .line-saved-calculations span { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+    .line-saved-calculations small { color: var(--text-muted); font-size: 10px; }
+    .line-saved-calculations b { overflow-wrap: anywhere; color: var(--text-main); font-size: 12px; }
+    @media (max-width: 1100px) {
+      .costing-workspace { grid-template-columns: minmax(0, 1fr) 270px; }
+      .costing-numbers-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .costing-calculated-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    }
+    @media (max-width: 760px) {
+      .costing-header-grid, .costing-workspace { grid-template-columns: 1fr; }
+      .costing-numbers-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .costing-calculated-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .costing-summary { position: static; }
+      .costing-section { padding: 14px; }
+      .line-saved-calculations > div { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+    @media (max-width: 599px) { #costing-modal .modal { width: 100%; max-width: none; } }
+    @media (max-width: 420px) { .costing-numbers-grid, .costing-calculated-grid { grid-template-columns: 1fr; } }
   </style>
 </head>
 <body>
@@ -72,6 +170,9 @@
   var LINES = [];
   var REFS = null;
   var PARTIES = [];
+  var COSTING_PREVIEW_SNAPSHOT = null;
+  var COSTING_PREVIEW_DIRTY = false;
+  var COSTING_PREVIEW_LOADING_LINES = false;
   var CFILTER = { month: '', year: '', search: '' };
   var LINELIST = [];
   var LINE_CTR = 0;
@@ -88,8 +189,18 @@
     'مصاريف تفريغ', 'عمولة بنكية', 'ايصالات تخليص وميناء', 'رسوم اضافية',
     'م تخليص', 'م اخري', 'ض شراء', 'ضريبة أ.ت.ص', 'تعديل_داخلي_للتكلفة', 'فروق الحد الادني'
   ];
-  var COSTING_NUM_LABELS = { 'القيمه بالدولار': 'القيمة بالعملة الأجنبية' };
+  var COSTING_NUM_LABELS = { 'القيمه بالدولار': 'القيمة بالعملة الأصلية' };
   var COSTING_CHOICE_KEYS = ['نوع الشهادة', 'نوع الشحن', 'اسم_المورد', 'البنك المرتبط'];
+  var COSTING_FORMULA_KEYS = ['القيمه بالسعر المعلن', 'اجمالي التكاليف', 'المبيعات', 'نوع الضريبة', 'ضريبة المبيعات', 'الشهر', 'العام'];
+  var COSTING_FORMULA_LABELS = {
+    'القيمه بالسعر المعلن': 'القيمة بالسعر المعلن',
+    'اجمالي التكاليف': 'إجمالي التكاليف',
+    'المبيعات': 'المبيعات المحسوبة',
+    'نوع الضريبة': 'نوع الضريبة المحسوب',
+    'ضريبة المبيعات': 'ضريبة المبيعات المحسوبة',
+    'الشهر': 'الشهر المحسوب',
+    'العام': 'العام المحسوب'
+  };
 
   function companyCall(moduleAction, data) {
     return API.call('company_action', {
@@ -326,7 +437,7 @@
         '</div>' +
         '<div style="display:flex;gap:6px;align-items:flex-end;margin-top:auto;">' +
           '<button class="btn btn-outline" style="min-height:36px;padding:6px 12px;font-size:13px;" onclick="resetCFilters()" title="إعادة تعيين كافة الفلاتر">مسح الفلاتر</button>' +
-          '<button class="btn btn-outline" style="min-height:36px;padding:6px 14px;font-size:13px;background:var(--success-bg);color:var(--success-text);border-color:var(--success-border);" onclick="exportVatPurchasingXlsx()" title="تحميل شيت Excel المعتمد لضريبة القيمة المضافة مع لوحة المؤشرات (RTL)">📊 تصدير Excel الضريبي (VAT)</button>' +
+          (CAN_WRITE ? '<button class="btn btn-outline" style="min-height:36px;padding:6px 14px;font-size:13px;background:var(--success-bg);color:var(--success-text);border-color:var(--success-border);" onclick="exportVatPurchasingXlsx()" title="تحميل شيت Excel المعتمد لضريبة القيمة المضافة مع لوحة المؤشرات (RTL)">📊 تصدير Excel الضريبي (VAT)</button>' : '') +
           (CAN_WRITE ? '<button class="btn btn-primary" style="min-height:36px;padding:6px 14px;font-size:13px;" onclick="openCostingModal()">+ إضافة شهادة وبنودها</button>' : '') +
         '</div>' +
       '</div>';
@@ -460,7 +571,7 @@
         statCell('البنك المرتبط', escHtml(h['البنك المرتبط'] || '-')) +
         statCell('شهر الإقرار', escHtml(h['تم_الاقرار_شهر'] || '-')) +
         statCell('سعر الصرف', escHtml(h['سعر الصرف'] || '-')) +
-        statCell('القيمة بالدولار', FMT.currency(Number(h['القيمه بالدولار']) || 0)) +
+        statCell('القيمة بالعملة الأصلية', FMT.currency(Number(h['القيمه بالدولار']) || 0)) +
         statCell('القيمة بالسعر المعلن', pending ? '—' : FMT.currency(Number(h['القيمه بالسعر المعلن']) || 0)) +
         statCell('المبيعات', pending ? '—' : FMT.currency(Number(h['المبيعات']) || 0)) +
         statCell('رقم الفاتورة', escHtml(h['invoice_number'] || '-')) +
@@ -613,14 +724,15 @@
   }
 
   function lineRowHtml(idx, l) {
+    var hasSavedLine = !!l;
     l = l || {};
     var dealOpts = [
       { value: 'مشتريات', label: 'مشتريات' },
       { value: 'اصول غير متداولة', label: 'اصول غير متداولة' }
     ];
     
-    var curProdDate = l['تاريخ الانتاج'] || todayStr();
-    var curExpDate = l['تاريخ الانتهاء'] || addYears(curProdDate, 3);
+    var curProdDate = normalizeDate(l['تاريخ الانتاج']) || todayStr();
+    var curExpDate = normalizeDate(l['تاريخ الانتهاء']) || addYears(curProdDate, 3);
     var curDeal = l['المعاملة'] || 'مشتريات';
 
     var uploads = UPLOAD_KEYS.map(function (u) {
@@ -634,6 +746,20 @@
         note +
         '</div>';
     }).join('');
+
+    var savedFormulaFields = [
+      { key: 'كود المعاملة', label: 'كود المعاملة' },
+      { key: 'قيمة البيع', label: 'قيمة البيع المحسوبة' },
+      { key: 'تسوية البيع', label: 'تسوية البيع' },
+      { key: 'تكلفة الوحدة', label: 'تكلفة الوحدة' }
+    ];
+    var savedFormulaHtml = hasSavedLine
+      ? '<div class="line-saved-calculations"><strong>قيم المعادلات الحالية (للقراءة فقط)</strong><div>' + savedFormulaFields.map(function (f) {
+          var value = l[f.key];
+          if (value instanceof Date) value = normalizeDate(value);
+          return '<span><small>' + escHtml(f.label) + '</small><b>' + escHtml(value == null || value === '' ? '—' : String(value)) + '</b></span>';
+        }).join('') + '</div></div>'
+      : '';
 
     return '<div class="line-card-editor" data-idx="' + idx + '">' +
       '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;border-bottom:1px solid var(--border-color);padding-bottom:6px;">' +
@@ -652,11 +778,12 @@
         UIC.combo({ key: 'line_idx_' + idx + '_المادة', label: 'المادة (اسم المنتج)', options: productOpts(), required: true, value: l['المادة'], placeholder: 'اختر المنتج من القائمة...' }) +
         UIC.field({ key: 'line_idx_' + idx + '_الكمية', label: 'الكمية', type: 'number', step: '0.001', min: '0.001', required: true, value: l['الكمية'] || '', placeholder: 'أدخل الكمية...' }) +
         UIC.field({ key: 'line_idx_' + idx + '_قيمة التكلفة', label: 'قيمة التكلفة', type: 'number', step: '0.01', min: '0.01', required: true, value: l['قيمة التكلفة'] || '', placeholder: 'أدخل قيمة التكلفة...' }) +
-        UIC.combo({ key: 'line_idx_' + idx + '_المعاملة', label: 'المعاملة', options: dealOpts, value: curDeal, placeholder: 'اختر المعاملة...' }) +
-        UIC.field({ key: 'line_idx_' + idx + '_سعر البيع', label: 'سعر البيع', type: 'number', step: '0.01', min: '0', value: l['سعر البيع'] || l['قيمة البيع'] || '', placeholder: 'سعر البيع الإجمالي...' }) +
+        UIC.combo({ key: 'line_idx_' + idx + '_المعاملة', label: 'المعاملة', options: dealOpts, required: true, value: curDeal, placeholder: 'اختر المعاملة...' }) +
+        UIC.field({ key: 'line_idx_' + idx + '_سعر البيع', label: 'سعر البيع', type: 'number', step: '0.01', min: '0', value: l['سعر البيع'] || '', placeholder: 'سعر البيع الإجمالي...' }) +
         UIC.field({ key: 'line_idx_' + idx + '_تاريخ الانتاج', label: 'تاريخ الإنتاج', type: 'date', value: curProdDate }) +
         UIC.field({ key: 'line_idx_' + idx + '_تاريخ الانتهاء', label: 'تاريخ الانتهاء (تلقائي +3 سنوات)', type: 'date', value: curExpDate }) +
       '</div>' +
+      savedFormulaHtml +
       '<div style="margin-top:12px;">' +
         '<label style="font-size:12px;font-weight:700;color:var(--text-main);margin-bottom:6px;display:block;">مرفقات البند (PDF, Word, صور JPG/PNG):</label>' +
         '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,180px),1fr));gap:8px;">' + uploads + '</div>' +
@@ -667,11 +794,40 @@
   function addLineRow(l) {
     var idx = LINE_CTR++;
     LINELIST.push(idx);
+    if (!COSTING_PREVIEW_LOADING_LINES) COSTING_PREVIEW_DIRTY = true;
     var container = document.getElementById('lines-container');
     if (container) {
       container.insertAdjacentHTML('beforeend', lineRowHtml(idx, l || null));
       bindLineAutoDates(idx);
+      syncConditionalSaleFields();
+      updateCostingPreview();
     }
+  }
+
+  function syncConditionalSaleFields() {
+    var certType = document.getElementById('نوع الشهادة');
+    var isSale = !!certType && String(certType.value || '').trim() === 'بيع';
+    LINELIST.forEach(function (idx) {
+      var input = document.getElementById('line_idx_' + idx + '_سعر البيع');
+      if (!input) return;
+      var field = input.closest('.form-field');
+      var label = field && field.querySelector('.form-label');
+      var marker = label && label.querySelector('.conditional-required');
+      if (isSale) {
+        input.setAttribute('required', 'required');
+        input.setAttribute('min', '0.01');
+        if (label && !marker) {
+          marker = document.createElement('span');
+          marker.className = 'req conditional-required';
+          marker.textContent = ' *';
+          label.appendChild(marker);
+        }
+      } else {
+        input.removeAttribute('required');
+        input.setAttribute('min', '0');
+        if (marker) marker.remove();
+      }
+    });
   }
 
   function bindLineAutoDates(idx) {
@@ -692,17 +848,194 @@
     var idx = Number(row.getAttribute('data-idx'));
     LINELIST = LINELIST.filter(function (x) { return x !== idx; });
     row.parentNode.removeChild(row);
+    COSTING_PREVIEW_DIRTY = true;
+    updateCostingPreview();
+  }
+
+  function costingInputNumber(key) {
+    var el = document.getElementById(key);
+    var n = el ? Number(String(el.value || '').replace(/,/g, '')) : 0;
+    return isFinite(n) ? n : 0;
+  }
+
+  function costingLineCostTotal() {
+    return LINELIST.reduce(function (sum, idx) {
+      var el = document.getElementById('line_idx_' + idx + '_قيمة التكلفة');
+      var n = el ? Number(String(el.value || '').replace(/,/g, '')) : 0;
+      return sum + (isFinite(n) ? n : 0);
+    }, 0);
+  }
+
+  /* The parent purchase header is the reference for the currency inputs. Do
+   * not read these values from saved formula cells or from product-line
+   * markup: while editing, the visible header fields are authoritative; when
+   * a field is not mounted yet, the server-loaded purchase header is the
+   * fallback reference. */
+  function costingPreviewHeaderRef() {
+    var ref = {};
+    ['نوع الشهادة', 'القيمه بالدولار', 'سعر الصرف', 'م اداريه', 'رسوم جمركيه', 'مصاريف تفريغ',
+      'عمولة بنكية', 'ايصالات تخليص وميناء', 'رسوم اضافية', 'م تخليص', 'م اخري', 'ض شراء',
+      'القيمه بالسعر المعلن', 'اجمالي التكاليف'].forEach(function (key) {
+      /* Calculated controls are rendered into the same form for visibility,
+       * but they must never become the reference for their own comparison. */
+      if (COSTING_FORMULA_KEYS.indexOf(key) !== -1) {
+        ref[key] = COSTING_PREVIEW_SNAPSHOT && COSTING_PREVIEW_SNAPSHOT[key] !== undefined
+          ? COSTING_PREVIEW_SNAPSHOT[key] : '';
+        return;
+      }
+      var el = document.getElementById(key);
+      if (el) ref[key] = el.value;
+      else if (COSTING_PREVIEW_SNAPSHOT && COSTING_PREVIEW_SNAPSHOT[key] !== undefined) ref[key] = COSTING_PREVIEW_SNAPSHOT[key];
+      else ref[key] = '';
+    });
+    return ref;
+  }
+
+  function costingPreviewNumber(ref, key) {
+    var raw = ref && ref[key] !== undefined ? ref[key] : '';
+    var n = Number(String(raw == null ? '' : raw).replace(/,/g, '').trim());
+    return isFinite(n) ? n : 0;
+  }
+
+  function calculateCostingPreview(headerRef, linesTotal) {
+    var originalCurrency = costingPreviewNumber(headerRef, 'القيمه بالدولار');
+    var exchangeRate = costingPreviewNumber(headerRef, 'سعر الصرف');
+    var advertised = originalCurrency * exchangeRate;
+    var purchaseTax = costingPreviewNumber(headerRef, 'ض شراء');
+    var formulaCosts = ['م اداريه', 'رسوم جمركيه', 'مصاريف تفريغ', 'عمولة بنكية',
+      'ايصالات تخليص وميناء', 'رسوم اضافية', 'م تخليص', 'م اخري'].reduce(function (sum, key) {
+        return sum + costingPreviewNumber(headerRef, key);
+      }, advertised);
+    /* Mirrors legal_purchasing_costing[اجمالي التكاليف]: J + M:T, with U
+     * (ض شراء) included for every certificate except بيع. */
+    var totalCost = String(headerRef && headerRef['نوع الشهادة'] || '').trim() === 'بيع'
+      ? formulaCosts : formulaCosts + purchaseTax;
+    var headerTotalRaw = headerRef && headerRef['اجمالي التكاليف'];
+    var headerTotal = headerTotalRaw === '' || headerTotalRaw === null || headerTotalRaw === undefined
+      ? null : Number(String(headerTotalRaw).replace(/,/g, '').trim());
+    return {
+      originalCurrency: originalCurrency,
+      exchangeRate: exchangeRate,
+      advertised: advertised,
+      purchaseTax: purchaseTax,
+      taxType: totalCost * 0.14,
+      totalCost: totalCost,
+      sales: String(headerRef && headerRef['نوع الشهادة'] || '').trim() === 'بيع'
+        ? Math.round((totalCost * 1.03) / 100) * 100 : 0,
+      salesTax: totalCost * 0.14 > 0.06
+        ? (String(headerRef && headerRef['نوع الشهادة'] || '').trim() === 'بيع'
+          ? Math.round((totalCost * 1.03) / 100) * 100 : 0) * 0.14 : 0,
+      linesTotal: Number(linesTotal) || 0,
+      headerTotal: isFinite(headerTotal) ? headerTotal : null
+    };
+  }
+
+  function costingPreviewMoney(value) {
+    var n = Number(value) || 0;
+    return FMT.currency ? FMT.currency(n) : n.toLocaleString('ar-EG', { maximumFractionDigits: 2 });
+  }
+
+  function costingPreviewRate(value) {
+    var n = Number(value) || 0;
+    return n.toLocaleString('ar-EG', { minimumFractionDigits: 0, maximumFractionDigits: 4 });
+  }
+
+  function costingCalculatedField(key, value) {
+    return '<div class="form-field costing-calculated-field" data-field="' + escHtml(key) + '">' +
+      '<label class="form-label" for="' + escHtml(key) + '">' + escHtml(COSTING_FORMULA_LABELS[key] || key) +
+      ' <span class="formula-readonly-badge">محسوب</span></label>' +
+      '<input id="' + escHtml(key) + '" class="input" type="text" value="' + escHtml(value == null ? '' : value) +
+      '" readonly aria-readonly="true" tabindex="-1">' +
+      '<div class="field-error" id="err-' + escHtml(key) + '"></div></div>';
+  }
+
+  function setCostingCalculatedField(key, value, money) {
+    var el = document.getElementById(key);
+    if (!el) return;
+    el.value = money ? costingPreviewMoney(value) : String(value == null ? '' : value);
+  }
+
+  function updateCostingPreview() {
+    var headerRef = costingPreviewHeaderRef();
+    var calc = calculateCostingPreview(headerRef, costingLineCostTotal());
+    var totalEl = document.getElementById('costing-preview-total');
+    var originalCurrencyEl = document.getElementById('costing-preview-original-currency');
+    var exchangeRateEl = document.getElementById('costing-preview-exchange-rate');
+    var advertisedEl = document.getElementById('costing-preview-advertised');
+    var purchaseTaxEl = document.getElementById('costing-preview-purchase-tax');
+    var taxEl = document.getElementById('costing-preview-tax');
+    var statusEl = document.getElementById('costing-preview-balance');
+    var modeEl = document.getElementById('costing-preview-mode');
+    if (totalEl) totalEl.textContent = costingPreviewMoney(calc.totalCost);
+    if (originalCurrencyEl) originalCurrencyEl.textContent = costingPreviewMoney(calc.originalCurrency);
+    if (exchangeRateEl) exchangeRateEl.textContent = costingPreviewRate(calc.exchangeRate);
+    if (advertisedEl) advertisedEl.textContent = costingPreviewMoney(calc.advertised);
+    if (purchaseTaxEl) purchaseTaxEl.textContent = costingPreviewMoney(calc.purchaseTax);
+    if (taxEl) taxEl.textContent = costingPreviewMoney(calc.taxType);
+    setCostingCalculatedField('القيمه بالسعر المعلن', calc.advertised, true);
+    setCostingCalculatedField('اجمالي التكاليف', calc.totalCost, true);
+    setCostingCalculatedField('المبيعات', calc.sales, true);
+    setCostingCalculatedField('نوع الضريبة', calc.taxType, true);
+    setCostingCalculatedField('ضريبة المبيعات', calc.salesTax, true);
+    var releaseDate = document.getElementById('تاريخ الافراج');
+    var releaseValue = releaseDate && releaseDate.value ? new Date(releaseDate.value) : null;
+    setCostingCalculatedField('الشهر', releaseValue && !isNaN(releaseValue.getTime()) ? releaseValue.getMonth() + 1 : '', false);
+    setCostingCalculatedField('العام', releaseValue && !isNaN(releaseValue.getTime()) ? releaseValue.getFullYear() : '', false);
+    if (modeEl) modeEl.textContent = 'معاينة أولية قبل الحفظ';
+    if (statusEl) {
+      if (COSTING_PREVIEW_SNAPSHOT && calc.headerTotal !== null && Math.abs(calc.headerTotal - calc.totalCost) > 0.005) {
+        statusEl.textContent = 'القيمة الحالية في الشيت تختلف عن معادلة إجمالي التكاليف بمقدار ' + costingPreviewMoney(calc.headerTotal - calc.totalCost);
+        statusEl.style.background = 'var(--warning-subtle,#fffbeb)';
+        statusEl.style.color = 'var(--warning,#a16207)';
+      } else if (COSTING_PREVIEW_SNAPSHOT && calc.headerTotal === null) {
+        statusEl.textContent = 'إجمالي التكاليف الحالي غير متاح في بيانات الشهادة';
+        statusEl.style.background = 'var(--warning-subtle,#fffbeb)';
+        statusEl.style.color = 'var(--warning,#a16207)';
+      } else {
+        statusEl.textContent = 'متطابق — الفرق ' + costingPreviewMoney(0);
+        statusEl.style.background = 'var(--success-subtle,#ecfdf5)';
+        statusEl.style.color = 'var(--success,#15803d)';
+      }
+    }
+    var linesHeaderTotal = document.getElementById('costing-lines-total');
+    if (linesHeaderTotal) linesHeaderTotal.textContent = costingPreviewMoney(calc.linesTotal);
   }
 
   function openCostingModal(cert) {
     var editMode = !!cert;
     var h = {};
     var existingLines = [];
+    var found = null;
     if (editMode) {
-      var found = COSTING.find(function (c) { return getCertNo(c) === cert; });
+      found = COSTING.find(function (c) { return getCertNo(c) === cert; });
+      if (!found) {
+        UIC.toast('تعذر تحميل بيانات الشهادة للتعديل. حدّث الصفحة وحاول مرة أخرى.', 'error');
+        return;
+      }
       if (found) h = found;
       existingLines = LINES.filter(function (l) { return getCertNo(l) === cert; });
     }
+    COSTING_PREVIEW_SNAPSHOT = editMode ? {
+      'نوع الشهادة': h['نوع الشهادة'],
+      'القيمه بالدولار': h['القيمه بالدولار'],
+      'سعر الصرف': h['سعر الصرف'],
+      'م اداريه': h['م اداريه'],
+      'رسوم جمركيه': h['رسوم جمركيه'],
+      'مصاريف تفريغ': h['مصاريف تفريغ'],
+      'عمولة بنكية': h['عمولة بنكية'],
+      'ايصالات تخليص وميناء': h['ايصالات تخليص وميناء'],
+      'رسوم اضافية': h['رسوم اضافية'],
+      'م تخليص': h['م تخليص'],
+      'م اخري': h['م اخري'],
+      'القيمه بالسعر المعلن': h['القيمه بالسعر المعلن'],
+      'اجمالي التكاليف': h['اجمالي التكاليف'],
+      'ض شراء': h['ض شراء'],
+      'نوع الضريبة': h['نوع الضريبة'],
+      'ضريبة المبيعات': h['ضريبة المبيعات'],
+      'الشهر': h['الشهر'],
+      'العام': h['العام']
+    } : null;
+    COSTING_PREVIEW_DIRTY = false;
     
     var certTypes = enumOptionsFrom(REFS.cert_types || []);
     var shipTypes = enumOptionsFrom(REFS.ship_types || [], ['FOB', 'CIF', 'C&F', 'محلي']);
@@ -710,18 +1043,31 @@
     var v = function (k) { return h[k] !== undefined ? h[k] : ''; };
 
     var headerBody =
-      '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,180px),1fr));gap:10px;">' +
+      '<div class="costing-header-grid">' +
         UIC.field({ key: 'رقم الشهاده', label: 'رقم الشهادة (المعرف الرئيسي)', required: true, value: getCertNo(h), placeholder: 'أدخل رقم الشهادة...' }) +
-        UIC.field({ key: 'تاريخ الافراج', label: 'تاريخ الإفراج', type: 'date', required: true, value: v('تاريخ الافراج') || todayStr() }) +
-        UIC.field({ key: 'الصنف', label: 'الصنف', required: true, value: v('الصنف'), placeholder: 'الصنف الرئيسي...' }) +
-        UIC.combo({ key: 'نوع الشهادة', label: 'نوع الشهادة', options: certTypes, required: true, allowNew: true, value: v('نوع الشهادة'), placeholder: 'اختر أو أضف نوع الشهادة...' }) +
+        UIC.field({ key: 'تاريخ الافراج', label: 'تاريخ الإفراج', type: 'date', required: true, value: normalizeDate(v('تاريخ الافراج')) || todayStr() }) +
+        UIC.field({ key: 'الصنف', label: 'أنواع الأصناف المشتراة (شرح مبسط)', required: true, value: v('الصنف'), placeholder: 'الصنف الرئيسي...' }) +
+        UIC.combo({ key: 'نوع الشهادة', label: 'نوع الشهادة', options: certTypes, required: true, allowNew: true, value: v('نوع الشهادة'), placeholder: 'اختر أو أضف نوع الشهادة...', onChange: function () { syncConditionalSaleFields(); COSTING_PREVIEW_DIRTY = true; updateCostingPreview(); } }) +
         UIC.combo({ key: 'نوع الشحن', label: 'نوع الشحن', options: shipTypes, required: true, allowNew: true, value: v('نوع الشحن'), placeholder: 'اختر نوع الشحن...' }) +
-        UIC.combo({ key: 'اسم_المورد', label: 'المورد', options: partyOpts(), allowNew: true, value: v('اسم_المورد'), placeholder: 'اختر أو اكتب اسم المورد...' }) +
+        UIC.combo({ key: 'اسم_المورد', label: 'المورد', options: partyOpts(), required: true, allowNew: true, value: v('اسم_المورد'), placeholder: 'اختر أو اكتب اسم المورد...' }) +
       '</div>';
 
     var numBody = COSTING_NUM_KEYS.map(function (k) {
-      return UIC.field({ key: k, label: COSTING_NUM_LABELS[k] || k, type: 'number', step: '0.01', min: '0', value: v(k) === '' ? '0' : v(k) });
+      var isCurrencyRequired = k === 'القيمه بالدولار' || k === 'سعر الصرف';
+      var currentValue = v(k);
+      return UIC.field({
+        key: k,
+        label: COSTING_NUM_LABELS[k] || k,
+        type: 'number',
+        step: '0.01',
+        min: isCurrencyRequired ? '0.01' : '0',
+        required: isCurrencyRequired,
+        value: isCurrencyRequired ? currentValue : (currentValue === '' ? '0' : currentValue)
+      });
     }).join('');
+    var calculatedBody = '<div class="costing-calculated-grid" aria-label="القيم المحسوبة تلقائياً">' +
+      COSTING_FORMULA_KEYS.map(function (key) { return costingCalculatedField(key, ''); }).join('') +
+      '</div>';
 
     var extraBody =
       '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,180px),1fr));gap:10px;">' +
@@ -729,7 +1075,7 @@
           ? UIC.combo({ key: 'البنك المرتبط', label: 'البنك المرتبط', options: banks, value: v('البنك المرتبط'), placeholder: 'اختر البنك...' })
           : UIC.field({ key: 'البنك المرتبط', label: 'البنك المرتبط', value: v('البنك المرتبط') })) +
         UIC.field({ key: 'تم_الاقرار_شهر', label: 'شهر الإقرار (0-12)', type: 'number', min: '0', max: '12', value: v('تم_الاقرار_شهر') }) +
-        UIC.field({ key: 'invoice_date', label: 'تاريخ الفاتورة', type: 'date', value: v('invoice_date') }) +
+        UIC.field({ key: 'invoice_date', label: 'تاريخ الفاتورة', type: 'date', value: normalizeDate(v('invoice_date')) }) +
         UIC.field({ key: 'invoice_number', label: 'رقم الفاتورة', value: v('invoice_number'), placeholder: 'رقم الفاتورة...' }) +
       '</div>' +
       '<div style="margin-top:10px;">' +
@@ -747,31 +1093,57 @@
           '<strong style="font-size:14px;color:var(--text-main);">بنود المنتجات المرتبطة بالشهادة</strong>' +
           '<div style="font-size:11px;color:var(--text-muted);">يتم ربط كل بند برقم الشهادة تلقائياً واشتقاق نوع البند والمورد وتاريخ الدخول.</div>' +
         '</div>' +
-        '<button type="button" class="btn btn-primary" style="min-height:36px;padding:6px 14px;font-size:13px;" onclick="addLineRow()">+ أضف بند منتج جديد</button>' +
+        '<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;justify-content:flex-end;">' +
+          '<span style="font-size:12px;color:var(--text-muted);">مجموع قيمة التكلفة: <strong id="costing-lines-total">0</strong></span>' +
+          '<button type="button" class="btn btn-primary" style="min-height:36px;padding:6px 14px;font-size:13px;" onclick="addLineRow()">+ أضف بند منتج جديد</button>' +
+        '</div>' +
       '</div>' +
       '<div id="lines-container"></div>';
 
-    var body = '<form id="costing-form">' +
-      '<div style="background:var(--brand-subtle-bg);padding:10px 14px;border-radius:var(--radius-md);border:1px solid var(--brand-border);margin-bottom:14px;">' +
-        '<h4 style="margin:0 0 4px;font-size:15px;color:var(--brand-primary);">1. بيانات الشهادة والتخليص (الجدول الرئيسي)</h4>' +
-        '<div style="font-size:12px;color:var(--text-muted);">رقم الشهادة هو المعرف الأساسي الذي يتم ربطه بجدول المنتجات (legal_product_purchasing.الرقم).</div>' +
+    var body = '<form id="costing-form" class="costing-form-shell">' +
+      '<section class="costing-section">' +
+        '<h4 class="costing-section-head"><span class="step">1</span><span>بيانات الشهادة والتخليص</span></h4>' +
+        '<div style="font-size:12px;color:var(--text-muted);margin:-5px 0 12px;">بيانات المستند الرئيسي، وسترتبط به بنود المنتجات أدناه.</div>' +
+        headerBody +
+      '</section>' +
+      '<div class="costing-workspace">' +
+        '<div class="costing-main-stack">' +
+          '<details class="costing-section costing-collapsible" open>' +
+            '<summary class="costing-section-head costing-section-toggle"><span class="step">2</span><span>القيم والتكاليف والرسوم</span></summary>' +
+            '<div class="costing-numbers-grid">' + numBody + '</div>' +
+            calculatedBody +
+          '</details>' +
+          '<section class="costing-section">' +
+            '<h4 class="costing-section-head"><span class="step">3</span><span>البنك والفواتير وشهر الإقرار</span></h4>' +
+            extraBody +
+          '</section>' +
+        '</div>' +
+        '<aside class="costing-summary" aria-live="polite">' +
+          '<h4 id="costing-preview-mode">معاينة أولية قبل الحفظ</h4>' +
+          '<p class="costing-summary-note">تتحدث قيم التكلفة تلقائياً قبل الحفظ. إجمالي التكاليف يحاكي معادلة عمود الشيت ويُحسب من رأس الشراء.</p>' +
+          '<div class="costing-total-row"><span>القيمة بالعملة الأصلية</span><strong id="costing-preview-original-currency">—</strong></div>' +
+          '<div class="costing-total-row"><span>سعر الصرف</span><strong id="costing-preview-exchange-rate">—</strong></div>' +
+          '<div class="costing-total-row"><span>القيمة بالسعر المعلن</span><strong id="costing-preview-advertised">—</strong></div>' +
+          '<div class="costing-total-row"><span>ض شراء</span><strong id="costing-preview-purchase-tax">—</strong></div>' +
+          '<div class="costing-total-row"><span>نوع الضريبة</span><strong id="costing-preview-tax">—</strong></div>' +
+          '<div class="costing-total-row is-primary"><span>إجمالي التكاليف</span><strong id="costing-preview-total">—</strong></div>' +
+          '<div id="costing-preview-balance" style="margin-top:10px;padding:8px;border-radius:8px;background:var(--success-subtle,#ecfdf5);color:var(--success,#15803d);font-size:11px;font-weight:700;">متطابق — الفرق 0</div>' +
+        '</aside>' +
       '</div>' +
-      headerBody +
-      '<h4 style="margin:16px 0 8px;font-size:14px;color:var(--brand-primary);border-bottom:1px solid var(--border-color);padding-bottom:4px;">2. عناصر القيم والتكاليف والرسوم</h4>' +
-      '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,180px),1fr));gap:8px;">' + numBody + '</div>' +
-      '<p style="font-size:12px;color:var(--text-muted);margin:8px 0 12px;">(إجمالي التكاليف، المبيعات، نوع الضريبة، ضريبة المبيعات، الشهر والعام تحتسب تلقائياً عبر معادلات النظام).</p>' +
-      '<h4 style="margin:16px 0 8px;font-size:14px;color:var(--brand-primary);border-bottom:1px solid var(--border-color);padding-bottom:4px;">3. البنك والفواتير وشهر الإقرار</h4>' +
-      extraBody +
-      '<h4 style="margin:20px 0 8px;font-size:14px;color:var(--brand-primary);border-bottom:1px solid var(--border-color);padding-bottom:4px;">4. تفاصيل بنود المنتجات (legal_product_purchasing)</h4>' +
-      linesBody +
+      '<section class="costing-section costing-lines-section">' +
+        '<h4 class="costing-section-head"><span class="step">4</span><span>بنود المنتجات</span></h4>' +
+        linesBody +
+      '</section>' +
       '</form>';
 
     UIC.openModal('costing-modal', {
       title: editMode ? ('تعديل شهادة تسعير رقم: ' + cert) : 'إضافة شهادة تسعير وبنودها',
       body: body,
+      size: 'xl',
       onSave: 'saveCosting()'
     });
 
+    COSTING_PREVIEW_LOADING_LINES = true;
     if (editMode) {
       var certEl = document.getElementById('رقم الشهاده');
       if (certEl) certEl.setAttribute('disabled', 'disabled');
@@ -783,6 +1155,14 @@
     } else {
       addLineRow(null);
     }
+    COSTING_PREVIEW_LOADING_LINES = false;
+    var costingForm = document.getElementById('costing-form');
+    if (costingForm) {
+      var markPreviewEdited = function () { syncConditionalSaleFields(); COSTING_PREVIEW_DIRTY = true; updateCostingPreview(); };
+      costingForm.addEventListener('input', markPreviewEdited);
+      costingForm.addEventListener('change', markPreviewEdited);
+    }
+    updateCostingPreview();
     try { UIC.trackDirty('costing-form'); } catch (e) {}
     try {
       if (UIC.UploadSet) {
@@ -829,6 +1209,7 @@
     var editMode = certEl ? certEl.disabled : false;
     var cert = String(data['رقم الشهاده'] || '').trim();
     if (!cert) { showError({ message: 'رقم الشهادة مطلوب' }); return; }
+    if (!String(data['اسم_المورد'] || '').trim()) { showError({ message: 'المورد مطلوب' }); return; }
 
     var mVal = String(data['تم_الاقرار_شهر'] == null ? '' : data['تم_الاقرار_شهر']).trim();
     if (mVal !== '') {
@@ -882,13 +1263,18 @@
       return;
     }
 
+    var isSaleCertificate = String(data['نوع الشهادة'] || '').trim() === 'بيع';
     var bad = lines.find(function (l) {
-      return !String(l['المادة'] || '').trim() || !(Number(l['الكمية']) > 0) || !(Number(l['قيمة التكلفة']) > 0);
+      return !String(l['المادة'] || '').trim() || !(Number(l['الكمية']) > 0) || !(Number(l['قيمة التكلفة']) > 0) || !String(l['المعاملة'] || '').trim() || (isSaleCertificate && !(Number(l['سعر البيع']) > 0));
     });
     if (bad) {
-      showError({ message: 'يرجى إكمال الحقول الإلزامية لكل بند: المادة، الكمية (> 0)، وقيمة التكلفة (> 0)' });
+      showError({ message: isSaleCertificate ? 'يرجى إكمال الحقول الإلزامية لكل بند: المادة، الكمية، قيمة التكلفة، المعاملة، وسعر البيع عند نوع الشهادة بيع' : 'يرجى إكمال الحقول الإلزامية لكل بند: المادة، الكمية، قيمة التكلفة، والمعاملة' });
       return;
     }
+
+    /* Formula-backed header columns are never submitted as user edits. The
+     * server writes their formulas for the actual sheet row. */
+    COSTING_FORMULA_KEYS.forEach(function (key) { delete data[key]; });
 
     var doSaveInputs = function () {
       /* Header swift pre-bound on selection. */

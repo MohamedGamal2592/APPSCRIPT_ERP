@@ -3,9 +3,11 @@
  *
  *   node tools/verify/dblive_products_paging.js
  *
- * Executes the real dbProductsLiveList_ from Company_TopChemical_Actions.js in a vm
+ * Executes the single dbProductsLiveList_ from Company_TopChemical_Actions.js in a vm
  * sandbox with a scripted fake JDBC layer (no MySQL anywhere) and a
- * Map-backed CacheService. Proves, behaviorally:
+ * Map-backed CacheService. Sections 1–9 cover the reader and its standalone
+ * fallback; section 10 exercises the registered handler through the real
+ * shared mysqlWithRequest_/mysqlRead_ wrapper used by dispatch_ in production.
  *   - default page is LIMIT 50 OFFSET 0; explicit limit/offset pass through;
  *   - limits clamp (200 max, junk/zero fall back to 50); loadAll caps at 1000;
  *   - the second identical call opens ZERO new connections (cache hit);
@@ -14,7 +16,8 @@
  *     reconnects exactly once;
  *   - a dead CacheService degrades to fresh reads, never to an error;
  *   - a corrupt cache entry rebuilds, never throws;
- *   - one connection serves COUNT + SELECT and closes on the success path.
+ *   - one connection serves COUNT + SELECT and closes on the success path;
+ *   - the product page is selected before joining live quantities.
  * Server-side search (section 9): the term reaches COUNT + SELECT as four
  * bound LIKE params (name_ar/name_en/code/id, wildcards escaped, capped at
  * 40 chars), the filtered COUNT drives the pager, each term is its own cache
@@ -24,8 +27,8 @@
  *     ships without them in some load orders; the plain-cache fallback holds);
  *   - update/delete paths call dbProductsLiveBust_();
  *   - SELECT p.* is kept deliberately (detail/edit modals render S.columns);
- *   - the page sends limit/offset, pages with gotoPage/setPageSize, and no
- *     longer references toggleLoadAll / showAll.
+ *   - the page starts with 50 rows, appends 200-row server windows on demand,
+ *     and keeps the shared table's search and pager on the loaded rows.
  */
 const fs = require('fs');
 const path = require('path');
@@ -169,6 +172,7 @@ vm.runInContext(
   grabFn(SRC, 'dbProductsLiveCacheGet_') + '\n' +
   grabFn(SRC, 'dbProductsLiveCachePut_') + '\n' +
   grabFn(SRC, 'dbProductsLiveSearch_') + '\n' +
+  grabFn(SRC, 'dbProductsLiveCountQuery_') + '\n' +
   grabFn(SRC, 'dbProductsLiveList_'),
   sb, { filename: 'Company_TopChemical_Actions.js (slice)' }
 );
@@ -247,6 +251,14 @@ console.log('6 — static discipline on the new code');
   ok(/typeof getChunkedCache_ === 'function'/.test(helpers) && /typeof putChunkedCache_ === 'function'/.test(helpers),
     'chunked helpers only behind typeof guards (connector ships unordered)');
   ok(/SELECT `p`\.\*/.test(fn), 'SELECT p.* kept deliberately — detail/edit modals render S.columns');
+  ok((SRC.match(/function dbProductsLiveList_\(/g) || []).length === 1,
+    'only one product reader declaration can be selected at runtime');
+  ok(/FROM \('\s*\+\s*' SELECT \* FROM `products` `p` '/.test(fn) &&
+    /LIMIT ' \+ limit \+ ' OFFSET ' \+ offset \+/.test(fn) &&
+    /\) `p` LEFT JOIN `product_current_quantity`/.test(fn),
+    'product window is limited before the live quantity join');
+  ok(/\) `p` LEFT JOIN `product_current_quantity`[\s\S]*ORDER BY `p`\.`id` DESC/.test(fn),
+    'final joined rows retain descending product ID order');
   ok(/DB_PRODUCTS_LIVE_TTL = 90/.test(SRC), 'TTL is the approved 90s budget');
   ok(/if \(rs\) rs\.close\(\);\s*\n\s*if \(stmt\) stmt\.close\(\);/.test(fn), 'rs → stmt still close in order');
   ok(/if \(conn\) conn\.close\(\);/.test(fn), 'connection still closes in finally');
@@ -256,19 +268,22 @@ console.log('6 — static discipline on the new code');
 }
 console.log('7 — the page works like tc_stock_revision now');
 {
-  ok(PAGE.indexOf('toggleLoadAll') === -1, 'no Show All toggle remains');
-  ok(/companyCall\('get_products_live', __loadedAll \? \{ loadAll: true \} : \{\}\)/.test(PAGE),
-    'fetchData loads newest-50 or the whole catalog');
-  ok(/function showAllProducts\(\)/.test(PAGE) && /function showLatestProducts\(\)/.test(PAGE),
-    'show-all / show-latest toggles exist');
-  ok(/function fetchData\(loadAll\)/.test(PAGE) && /if \(arguments\.length\) __loadedAll = !!loadAll;/.test(PAGE),
-    'no-arg re-fetch keeps the current view');
-  ok(/UIC\.showAllBar\(\{/.test(PAGE) && /latestN: 50/.test(PAGE),
-    'show-all bar renders above the table (latestN 50)');
-  ok(/truncated: !__loadedAll/.test(PAGE) && /showAll: 'showAllProducts\(\)'/.test(PAGE),
-    'scope notice stays honest: truncated until show-all');
-  ok(/autoPage:\s*false/.test(PAGE) === false && /onServerSearch/.test(PAGE) === false,
-    'no server pager, no server-search hook: shared client filter + pager own the view');
+  ok(PAGE.indexOf('toggleLoadAll') === -1, 'legacy Show All toggle is absent');
+  ok(/companyCall\('get_products_live', \{ limit: limit, offset: offset \}\)/.test(PAGE),
+    'the initial/full refresh path requests bounded server pages');
+  ok(/function showAllProducts\(\) \{ loadMoreProducts\(\); \}/.test(PAGE) && /function showLatestProducts\(\)/.test(PAGE),
+    'load-more and latest-view actions exist');
+  ok(/PRODUCTS_FIRST_LIMIT = 50/.test(PAGE) && /PRODUCTS_MORE_LIMIT = 200/.test(PAGE),
+    'first view is 50 rows and each later request is capped at 200');
+  ok(/function loadMoreProducts\(\)/.test(PAGE) && /offset: offset/.test(PAGE) && /appendProductsToTable\(newRows\)/.test(PAGE),
+    'later bounded windows append without replacing the loaded list');
+  ok(/pl-load-more-bar/.test(PAGE) && /تحميل المزيد/.test(PAGE) && /البحث يشمل الأصناف المحملة فقط/.test(PAGE),
+    'incremental control reports loaded count and search scope');
+  ok(!/loadAll:\s*true/.test(PAGE), 'the page never requests a 1,000-row full-catalog response');
+  ok(/function fetchData\(loadAll\)/.test(PAGE) && /function requestProductsWindow\(count\)/.test(PAGE),
+    'refresh rebuilds only the currently loaded bounded range');
+  ok(/autoPage:\s*false/.test(PAGE) === false && /UIC\.filterPaged\('pl-table'/.test(PAGE),
+    'the shared client filter and pager continue to own the loaded rows');
   ok(/function gotoPage\(p\)/.test(PAGE) === false && /function setPageSize\(n\)/.test(PAGE) === false && /function serverPagerHtml\(\)/.test(PAGE) === false,
     'custom server-paging controls are gone');
   ok(PAGE.indexOf('pl-header-card') === -1 && PAGE.indexOf('pl-table-card') === -1,
@@ -325,6 +340,81 @@ console.log('9 — server-side search spans all pages');
   jdbcLog.bind.length = 0;
   list({ search: '100%_قطعة' });
   ok(jdbcLog.bind.slice(-4).every(b => b.v === '%100\\%\\_قطعة%'), 'LIKE wildcards are escaped', JSON.stringify(jdbcLog.bind.slice(-4).map(b => b.v)));
+}
+
+console.log('10 — registered action through the shared MySQL wrapper');
+{
+  ok(/register\('get_products_live', getProductsLive_\);/.test(SRC),
+    'get_products_live is registered to this handler');
+  let grant = true, authChecks = 0;
+  sb.guard_ = () => { authChecks++; if (!grant) throw new Error('denied'); };
+  sb.mysqlDigest_ = value => JSON.stringify(value);
+  sb.getChunkedCache_ = key => cacheStore.get(key) || null;
+  sb.putChunkedCache_ = (key, value) => cacheStore.set(key, value);
+  vm.runInContext(
+    'var _mysqlRequest_ = null;\n' +
+    ['mysqlCanonical_', 'mysqlDatabase_', 'mysqlEpoch_', 'mysqlWithRequest_',
+      'mysqlReading_', 'mysqlParams_', 'mysqlRead_', 'mysqlResource_',
+      'mysqlStatement_', 'mysqlConnection_', 'dbOpenConnection_'].map(n => grabFn(SRC, n)).join('\n') + '\n' +
+    grabFn(SRC, 'mysqlTcDefinition_') + '\n' +
+    grabFn(SRC, 'getProductsLive_') + '\n' +
+    'var registered = {}; function register(name, fn) { registered[name] = fn; }\n' +
+    "register('get_products_live', getProductsLive_);",
+    sb, { filename: 'registered products action and shared MySQL wrapper' }
+  );
+  cacheStore.clear();
+  const user = { company: 'topchemical', grants: ['tc_products_live:read'] };
+  const dispatch = (data, authority = user) => vm.runInContext(
+    'mysqlWithRequest_("topchemical:tenant1", authority, "get_products_live", function () {' +
+      'return registered.get_products_live(data, authority, "tenant1"); })',
+    Object.assign(sb, { data, authority })
+  );
+  const before = jdbcLog.opens;
+  ok(vm.runInContext("mysqlTcDefinition_('dbProductsLiveList_').ttl", sb) === 90 &&
+    vm.runInContext("mysqlTcDefinition_('dbProductsLiveList_').version", sb) === 3,
+    'registered reader has the 90-second shared TTL and a new cache version');
+  const cold = dispatch({ limit: 50, offset: 0 });
+  ok(cold._mysql && cold._mysql.cache_hit === false && jdbcLog.opens === before + 1,
+    'registered action miss runs COUNT and page SQL through one shared connection');
+  ok(cold.total === TOTAL && cold.rows.length === DATA.length &&
+    cold.columns.join(',') === COLS.join(',') && cold.rows[1].live_quantity === null,
+    'registered action preserves total, detail fields, row count, and NULL quantity');
+  const warm = dispatch({ limit: 50, offset: 0 });
+  ok(warm._mysql && warm._mysql.cache_hit === true && jdbcLog.opens === before + 1,
+    'registered action hit avoids JDBC');
+  ok(authChecks === 3, 'shared wrapper authorizes list and count misses and the list hit');
+  const countsBefore = jdbcLog.sql.filter(sql => /COUNT\(\*\)/.test(sql)).length;
+  const nextPage = dispatch({ limit: 200, offset: 50 });
+  ok(nextPage.total === TOTAL && jdbcLog.opens === before + 2 &&
+    jdbcLog.sql.filter(sql => /COUNT\(\*\)/.test(sql)).length === countsBefore,
+    'a different page opens one connection but reuses the authorized 90-second total');
+  grant = false;
+  let denied = false;
+  try { dispatch({ limit: 50, offset: 0 }); } catch (e) { denied = /denied/.test(String(e)); }
+  ok(denied && jdbcLog.opens === before + 2, 'revoked read grant blocks a warm cache hit');
+  grant = true;
+  dispatch({ limit: 50, offset: 0 }, { company: 'topchemical', grants: ['other'] });
+  ok(jdbcLog.opens === before + 3, 'changed authority has a separate shared cache key');
+  const countsBeforeRefresh = jdbcLog.sql.filter(sql => /COUNT\(\*\)/.test(sql)).length;
+  dispatch({ limit: 50, offset: 0, refresh: true });
+  ok(jdbcLog.opens === before + 4 &&
+    jdbcLog.sql.filter(sql => /COUNT\(\*\)/.test(sql)).length === countsBeforeRefresh + 1,
+    'explicit refresh bypasses both list and total caches');
+  const countsBeforeEpoch = jdbcLog.sql.filter(sql => /COUNT\(\*\)/.test(sql)).length;
+  sb.mysqlEpoch_ = () => 'after-write';
+  dispatch({ limit: 50, offset: 0 });
+  ok(jdbcLog.opens === before + 5 &&
+    jdbcLog.sql.filter(sql => /COUNT\(\*\)/.test(sql)).length === countsBeforeEpoch + 1,
+    'a new shared write epoch invalidates both list and total');
+  const countsBeforeSearch = jdbcLog.sql.filter(sql => /COUNT\(\*\)/.test(sql)).length;
+  dispatch({ limit: 50, offset: 0, search: 'صنف' });
+  ok(jdbcLog.sql.filter(sql => /COUNT\(\*\)/.test(sql)).length === countsBeforeSearch + 1,
+    'a new search term gets its own filtered total');
+  const countsBeforeWindows = jdbcLog.sql.filter(sql => /COUNT\(\*\)/.test(sql)).length;
+  [{ limit: 200, offset: 0 }, { limit: 200, offset: 200 }, { limit: 50, offset: 400 }]
+    .forEach(data => dispatch(data));
+  ok(jdbcLog.sql.filter(sql => /COUNT\(\*\)/.test(sql)).length === countsBeforeWindows,
+    'a 450-row refresh reuses one total across its three distinct windows');
 }
 
 console.log(failures === 0

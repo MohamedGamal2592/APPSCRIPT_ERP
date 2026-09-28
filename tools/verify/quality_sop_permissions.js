@@ -101,11 +101,31 @@ check(SHEETS.every(s => union[s]) && Object.keys(union).length === SHEETS.length
   'the SOP page union is exactly the five sheets');
 /* Phase 2: launch_quality_acks lives on this page and reads the employee roster
    for applicability, so the watch set is the five SOP sheets PLUS
-   valley_employee_info. The five sheets must all still be covered. */
+   valley_employee_info.
+   4.7.1: the department-abbreviation registry is configured FROM this page by a
+   `full` user, so that table is a declared dependency of the page too (the
+   configuration action is deliberately named outside the `_quality_sop`
+   family, so the eight-action count above is unaffected). */
 const pageTables = (O.PAGE_TABLES[PAGE] || []).slice().sort();
-const expectedPageTables = SHEETS.concat(['valley_employee_info']).sort();
+const expectedPageTables = SHEETS.concat(['valley_employee_info', 'valley_quality_dept_abbr']).sort();
 check(JSON.stringify(pageTables) === JSON.stringify(expectedPageTables),
-  'PAGE_TABLES[' + PAGE + '] covers all five sheets (history + acks included) plus valley_employee_info (Phase 2 launch)');
+  'PAGE_TABLES[' + PAGE + '] covers all five sheets (history + acks included) plus valley_employee_info (launch) and the abbreviation registry (4.7.1 config)');
+/* ---- 4.7.1: the abbreviation configuration action is full-only ---- */
+check(O.PAGE_ACCESS['save_quality_dept_abbr'] && O.PAGE_ACCESS['save_quality_dept_abbr'].page === PAGE &&
+  O.PAGE_ACCESS['save_quality_dept_abbr'].access === 'full',
+  'save_quality_dept_abbr is a full-only configuration action on ' + PAGE);
+check(!allow('save_quality_dept_abbr', ['write']) && !allow('save_quality_dept_abbr', ['read']) && allow('save_quality_dept_abbr', ['full']),
+  'save_quality_dept_abbr: read and write grants are refused, full is admitted');
+/* ---- 4.5: the general-quality page is its own permission key ---- */
+check(O.PAGE_ACCESS['get_quality_general'].page === 'vf_quality_general' && O.PAGE_ACCESS['get_quality_general'].access === 'read' &&
+  O.PAGE_ACCESS['save_quality_general'].access === 'write' && O.PAGE_ACCESS['set_quality_general_status'].access === 'full',
+  'vf_quality_general declares read / write / full on its own page key');
+check(!allow('save_quality_general', ['read']) && !allow('set_quality_general_status', ['write']) &&
+  allow('set_quality_general_status', ['full']),
+  'vf_quality_general: a reader cannot write and a writer cannot archive/restore');
+check(!allow('get_quality_general', []), 'vf_quality_general: no grant is refused (fail closed)');
+check(JSON.stringify(O.PAGE_TABLES['vf_quality_general']) === JSON.stringify(['valley_quality_general']),
+  'PAGE_TABLES[vf_quality_general] is exactly its own single table');
 
 /* ---- the access hierarchy, against the real Code.js gate ---- */
 check(O.normalize('full access') === 'full' && O.normalize('view') === 'read' && O.normalize('Add') === 'write',

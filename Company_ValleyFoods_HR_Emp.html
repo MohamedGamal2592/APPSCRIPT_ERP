@@ -46,7 +46,7 @@
     var EMPLOYEES = [], STATUSES = [], ASSIGNMENTS = [];
     var TITLE_OPTIONS = [], TITLE_SECTION_MAP = {};
     var NEXT_EMP_IDS = {};
-    var ACTIVE_EMP_OPTIONS = [], SHIFT_OPTIONS = [];
+    var EMP_OPTIONS = [], SHIFT_OPTIONS = [];
     var EMP_MAP = {}, SHIFT_MAP = {};
 
     function esc(v) {
@@ -67,8 +67,17 @@
       return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
     }
     function rebuildMaps() {
-      EMP_MAP = {}; ACTIVE_EMP_OPTIONS.forEach(function (o) { EMP_MAP[o.value] = o.label; });
+      EMP_MAP = {}; EMP_OPTIONS.forEach(function (o) { EMP_MAP[o.value] = o.label; });
       SHIFT_MAP = {}; SHIFT_OPTIONS.forEach(function (o) { SHIFT_MAP[o.value] = o.label; });
+    }
+
+    /* Keep the status/shift pickers in step with a just-added employee: without
+       this the new row only becomes searchable after a full refetch. */
+    function addEmployeeOption_(rec) {
+      if (!rec || rec.emp_id === undefined || rec.emp_id === null || String(rec.emp_id).trim() === '') return;
+      var exists = EMP_OPTIONS.some(function (o) { return String(o.value) === String(rec.emp_id); });
+      if (!exists) EMP_OPTIONS.push({ value: rec.emp_id, label: rec.name_ar || String(rec.emp_id) });
+      rebuildMaps();
     }
 
     /* quiet: refresh in the background with no blocking overlay, for a
@@ -97,7 +106,7 @@
           TITLE_SECTION_MAP = er.titleSectionMap || {};
           NEXT_EMP_IDS = er.next_emp_ids || {};
           STATUSES = er.statuses || [];
-          ACTIVE_EMP_OPTIONS = er.employeeOptions || [];
+          EMP_OPTIONS = er.employeeOptions || [];
           ASSIGNMENTS = er.assignments || [];
           SHIFT_OPTIONS = er.shiftOptions || [];
           rebuildMaps();
@@ -161,10 +170,17 @@
         { key: 'العنوان بالبطاقة', label: 'العنوان بالبطاقة' }
       ];
       var rows = EMPLOYEES.map(function (r) {
+        /* No status record at all (not merely an empty label): the list says so
+           beside the name, so the missing status is visible without opening the
+           status tab. has_status is computed by the server; the Arabic-column
+           fallback keeps an older server's response working unchanged. */
+        var noStatus = (r.has_status === false) || (!r.has_status && !r['الحالة الوظيفية']);
         return {
           emp_id: esc(r.emp_id),
           employee_type: esc(r.employee_type),
-          name_ar: esc(r.name_ar),
+          name_ar: esc(r.name_ar) + (noStatus
+            ? ' <span style="color:var(--text-muted, #6b7280);font-size:12px;">— لا توجد حالة وظيفية مسجلة</span>'
+            : ''),
           national_id: esc(r.national_id),
           hiring_date: esc(fmtDate(r.hiring_date)),
           title: esc(r.title),
@@ -243,6 +259,9 @@
             if (EMPLOYEES.length>RECENT_LIMIT) EMPLOYEES.pop();
             // update next ids
             if (NEXT_EMP_IDS && r.record.employee_type) NEXT_EMP_IDS[r.record.employee_type] = Number(r.record.emp_id)+1;
+            /* The status/shift pickers must see the new employee immediately,
+               not after the next refetch. */
+            addEmployeeOption_(r.record);
             renderEmployees();
           } else { fetchAll(true); }
         } else UIC.toast('تعذر الحفظ', 'error');
@@ -278,7 +297,7 @@
 
     function openStatusModal() {
       var body = '<form id="status-form">' +
-        UIC.combo({ key: 'emp_id', label: 'الموظف', required: true, options: ACTIVE_EMP_OPTIONS }) +
+        UIC.combo({ key: 'emp_id', label: 'الموظف', required: true, options: EMP_OPTIONS }) +
         UIC.field({ key: 'status_type', label: 'نوع الحالة', type: 'select', required: true, options: EMP_STATUS_TYPES.map(function (t) { return { value: t, label: t }; }), placeholder: 'اختر الحالة' }) +
         UIC.field({ key: 'status_date', label: 'تاريخ الحالة', type: 'date', required: true, value: todayStr() }) +
       '</form>';
@@ -296,6 +315,11 @@
             var idxST = STATUSES.findIndex(function(x){ return String(x.unique_id)===String(r.record.unique_id); });
             if (idxST!==-1) STATUSES[idxST]=r.record; else STATUSES.unshift(r.record);
             if (STATUSES.length>RECENT_LIMIT) STATUSES.pop();
+            /* This save is exactly what clears the «no status» note on the
+               employees list, so update the local row now rather than leaving a
+               stale note until the next reload. */
+            var empRow = EMPLOYEES.find(function (x) { return String(x.emp_id) === String(r.record.employee_code); });
+            if (empRow) { empRow['الحالة الوظيفية'] = r.record.status_type || ''; empRow.has_status = true; }
             // also update employee status map if needed
             renderStatus();
           } else { fetchAll(true); }
@@ -332,7 +356,7 @@
 
     function openShiftModal() {
       var body = '<form id="shift-form">' +
-        UIC.combo({ key: 'emp_id', label: 'الموظف', required: true, options: ACTIVE_EMP_OPTIONS }) +
+        UIC.combo({ key: 'emp_id', label: 'الموظف', required: true, options: EMP_OPTIONS }) +
         UIC.combo({ key: 'shift_id', label: 'الوردية', required: true, options: SHIFT_OPTIONS }) +
         UIC.field({ key: 'shift_start_date', label: 'تاريخ بداية الوردية', type: 'date', required: true, value: todayStr() }) +
         UIC.field({ key: 'shift_end_date', label: 'تاريخ نهاية الوردية', type: 'date', required: true, value: todayStr() }) +

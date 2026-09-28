@@ -13,6 +13,7 @@ const path = require('path');
 
 const HERE = __dirname;
 const STEPS = [
+  ['mysql_unification.js', 'MySQL named query layer, cache scope, cleanup, invalidation, lookup coordination'],
   ['company_two_file_boundary.js', 'Company two-file deployment and ownership boundary'],
   ['company_registry_bootstrap.js', 'Company registry bootstrap survives merged source load order'],
   ['request_guard.js', 'Durable duplicate-request protection and lost-response recovery'],
@@ -28,6 +29,7 @@ const STEPS = [
   ['s0_modal_size.js', 'S0 — UIC.openModal size option is purely additive'],
   ['s1_save_cost.js', 'S1 — the save resolves cost_unit server-side'],
   ['s2_workops_cost.js', 'S2 — work-centre costs reach the client'],
+  ['mfg_workop_conflicts.js', 'MFG — per-work-centre scheduling conflicts: active + frame overlap'],
   ['s4_cost_page.js', 'S4 — valley_cost_view is grantable but unroutable'],
   ['s5_cost_strip.js', 'S5 — cost stripping, differential'],
   ['s5c_sales_audit.js', 'S5c — sales audit (and U-48)'],
@@ -57,6 +59,8 @@ const STEPS = [
   ['s23_page_params.js', 'S23 — URL parameters come from the server, not the iframe URL'],
   ['s18_table_columns.js', 'S18b — table column widths: the classifier and the contract'],
   ['s24_stock_scan.js', 'S24 — جرد دوري مخازن باركود + the USER_PAGES nav-visibility regression guard'],
+  ['tc_stock_scan_catalog.js', 'TC-SCAN-CATALOG — instant products dropdown: one bootstrap catalog, local filtering, product-level balances'],
+  ['tc_stock_scan_calculator.js', 'TC-SCAN-CALC — reusable LTR expression calculator and quantity-field adapters'],
   ['s25_stock_authority.js', 'S25 — رصيد الدفعات: one stock authority — available = current_qty + held(this document)'],
   ['s26_party_agreements.js', 'S26 — vf_parties كشف حساب: factory/agreements/packaging + balance-once'],
   ['s27_mfg_client_report.js', 'S27 — vf_mfg_client_report: client manufacturing pivot, filters, cost gating'],
@@ -117,9 +121,10 @@ const STEPS = [
   ['optimization_writes.js', 'OPT-4 — batched approval writes with layout-verified fallback'],
   ['tl_sheetdb_contract.js', 'TL-DB — Top Light sheets-as-database: value-only writes, key-addressed patches, soft delete'],
   ['dblive_products_paging.js', 'DBLIVE-1 — tc_products_live paging: 50/page, cached total, bust on write'],
-  ['dblive_sales_cache.js', 'DBLIVE-2 — tc_exec_sales permanent fix: cached charts (600s) + cached view pages (90s)'],
   ['tc_budget_stock_balance.js', 'TC-BALANCE — رصيد أصناف الميزانية: name_ar join aggregation, duplicate/unmatched policy, MySQL view join, page wiring'],
   ['tc_budget_inputs_ui.js', 'TC-INPUTS — المدخلات: unified dataTable view, row details modal, preserved actions and formatted dates'],
+  ['tc_production_capability.js', 'TC-CAPABILITY — live-view read contract, permissions, planning calculations, filters and stale responses'],
+  ['tc_capability_picker.js', 'TC-CAPABILITY-PICKER — instant catalog pickers: shared controller, freshness, races, fallback'],
 
   /* ── Quality module (Phase 0) ── */
   ['quality_uidv7.js', 'QUALITY-UID — RFC 9562 sortable ids: shape, uniqueness, timestamp round-trip'],
@@ -135,6 +140,9 @@ const STEPS = [
   ['quality_dashboard.js', 'QUALITY-DASHBOARD — every KPI exact over fixtures, dashboard cached via vfRefsCached_ with zero writes, write-registration ref-bust chain'],
   ['quality_audits.js', 'QUALITY-AUDITS — audit lifecycle and findings over the real block: AUD codes, zero-write refusals, Closed lockdown, escalation back-link and shared NCR allocator'],
   /* ── Quality module (definition of done — end-to-end) ── */
+  ['tc_financial_ratios.js', 'TC-FINANCIAL-RATIOS — selectable comparison periods, net sales/other income/expenses monthly charts, compact labels, account comparisons, expense ratio/order/cutoff, A4 PDF layout, read-only queries and route'],
+  ['quality_sop_codes_roles.js', 'QUALITY-SOP-CODES - readable <PREFIX>-<ABBR>-<SEQUENCE> codes, idempotent create, additive schema upgrade, combined save + concurrency, server allowlist, shared template renderer, general-quality handlers'],
+  ['quality_sop_workspace_ui.js', 'QUALITY-SOP-UI - the real page code: library, template workspace, metadata controls, combined save payload, read-only + legacy, general-quality page, Quality-only navigation'],
   ['quality_e2e.js', 'QUALITY-E2E — one shared state through the full SOP → Ack → NCR → CAPA → close → dashboard journey over the real handlers']
 ];
 
@@ -166,5 +174,3 @@ console.log(failed === 0
   ? 'All ' + ran + ' checks pass.'
   : failed + ' of ' + ran + ' checks FAILED.');
 process.exit(failed === 0 ? 0 : 1);
-
-

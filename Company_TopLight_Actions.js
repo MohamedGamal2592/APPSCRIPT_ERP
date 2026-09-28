@@ -2403,7 +2403,7 @@ const TopLight = (function () {
       if (isBlank_(l.product_price)) throw new Error('السعر مطلوب لكل صنف');
       if (isBlank_(l.product_discount)) throw new Error('الخصم مطلوب لكل صنف');
       if (num0_(l.product_qty) <= 0) throw new Error('الكمية يجب أن تكون أكبر من صفر');
-      if (num0_(l.product_price) <= 0) throw new Error('السعر يجب أن يكون أكبر من صفر');
+      if (num0_(l.product_price) < 0) throw new Error('السعر يجب أن يكون غير سالب');
       if (!allowOutOfStock) {
         const available = qtyMap[String(l.product_id)] != null ? qtyMap[String(l.product_id)] : 0;
         if (num0_(l.product_qty) > available) throw new Error('الكمية تتجاوز الرصيد المتاح للمنتج (المتاح: ' + available + ')');
@@ -2758,6 +2758,17 @@ const TopLight = (function () {
     if (num0_(rec.transaction_amount) <= 0) throw new Error('المبلغ يجب أن يكون أكبر من صفر');
     if (String((rec.transaction_method == null) ? '' : rec.transaction_method).trim() === '') throw new Error('طريقة الدفع مطلوبة');
     if (String((rec.transaction_type == null) ? '' : rec.transaction_type).trim() === '') throw new Error('نوع الحركة مطلوب');
+  }
+
+  // Transfer payload {from_box, to_box, transfer_date, amount} carries no
+  // counterparty / chart / method — those columns stay empty on both legs by
+  // design (see writeCashTransferRow_). Validated separately so the cash
+  // record validator never rejects a transfer for a missing name.
+  function validateTransfer_(d) {
+    if (String((d.from_box == null) ? '' : d.from_box).trim() === '') throw new Error('الصندوق المصدر مطلوب');
+    if (String((d.to_box == null) ? '' : d.to_box).trim() === '') throw new Error('الصندوق الهدف مطلوب');
+    if (String(d.from_box) === String(d.to_box)) throw new Error('يجب اختيار صندوقين مختلفين');
+    if (num0_(d.amount) <= 0) throw new Error('المبلغ يجب أن يكون أكبر من صفر');
   }
 
   function cashDataMap_(rec, user) {
@@ -3738,13 +3749,12 @@ const TopLight = (function () {
   //   exclusion as the cash KPIs); AR = positive as-of party balances
   //   (same engine as the tl_customers الرصيد column).
   // Liabilities & equity: AP = negative as-of party balances; capital is a
-  //   fixed 14,000,000; owner running account is 0 unless recalc_running is
+  //   fixed 13,904,527.63; owner running account is 0 unless recalc_running is
   //   set, in which case it is recomputed to balance the statement.
   // Single-pass aggregation per sheet — never per-party scans.
   // =========================================
-  // Fixed capital after the requested 294,512.99 adjustment.
-  var TL_CAPITAL_REDUCTION = 294512.99;
-  var TL_FIXED_CAPITAL = 14000000 - TL_CAPITAL_REDUCTION;
+  // Fixed capital.
+  var TL_FIXED_CAPITAL = 13904527.63;
 
   function getFinancialPosition_(data, user, dbId) {
     const dateFrom = parseDate_(data && data.date_from);
@@ -4213,7 +4223,7 @@ const TopLight = (function () {
       registerDocValidator_('tl_purchasing', function(payloadData, dbId){ var h=(payloadData&&payloadData.header)||{}; var l=(payloadData&&payloadData.lines)||[]; return validatePurchasingHeader_(h, l); });
       registerDocValidator_('tl_sales', function(payloadData, dbId){ var h=(payloadData&&payloadData.header)||{}; var l=(payloadData&&payloadData.lines)||[]; return validateSales_(h, l, dbId, false); });
       registerDocValidator_('tl_offer', function(payloadData, dbId){ var h=(payloadData&&payloadData.header)||{}; var l=(payloadData&&payloadData.lines)||[]; return validateSales_(h, l, dbId, true); });
-      registerDocValidator_('tl_cash', function(payloadData, dbId){ var r=(payloadData&&payloadData.record)||payloadData||{}; return validateCash_(r); });
+      registerDocValidator_('tl_cash', function(payloadData, dbId){ var d=payloadData||{}; if (d.from_box !== undefined || d.to_box !== undefined) return validateTransfer_(d); var r=d.record||d||{}; return validateCash_(r); });
     }
   } catch(eRegTL){}
 

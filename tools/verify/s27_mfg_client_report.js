@@ -133,6 +133,9 @@ console.log('\n1 — default call: Locked only, no bounds\n');
   check(p1.batch_cost === 1750 && p1.by_op['تصنيع وتعبئة'].batch_cost === 1750, 'C1/P1 batch cost 1000+500+250 (total_batch_cost)', p1.batch_cost);
   check(rowFor(res, 'C1', 'P2').by_op['اعادة تعبئة'].batch_cost === 300, 'repack batch cost carried per op');
   check(res.totals.batch_cost === 2050 && res.totals.by_op['تصنيع وتعبئة'].batch_cost === 1750 && res.totals.by_op['اعادة تعبئة'].batch_cost === 300, 'grand + per-op cost totals', res.totals.batch_cost);
+  check(res.kpi_operation_types.join('|') === 'تصنيع وتعبئة|تصنيع (كميات)', 'KPI scope is exactly the two manufacturing operations');
+  check(res.kpi_totals.produced_qty === 178 && res.kpi_totals.batch_cost === 1750 && !res.kpi_totals.by_op['اعادة تعبئة'], 'default KPIs exclude repacking while details retain it');
+  check(res.kpi_totals.by_op['تصنيع وتعبئة'].produced_qty === 178 && res.kpi_totals.by_op['تصنيع وتعبئة'].batch_cost === 1750, 'KPI per-operation quantity and cost include filtered by-products');
   const mat = {};
   p1.materials.forEach(m => { mat[m.item] = m; });
   check(mat['خامة أ'] && mat['خامة أ'].qty === 14 && mat['خامة أ'].total_cost === 140, 'MAT-A summed over MO1+MO2 (14 / 140)');
@@ -171,14 +174,17 @@ console.log('\n3 — explicit statuses, client/product/op filters, errors\n');
   check(!!p3 && p3.mo_count === 1 && p3.produced_qty === 200, 'opt-in statuses admit MO4');
   check(st.totals.mo_count === 5, 'totals admit it too');
   check(st.totals.produced_qty === 410, 'MO4 adds actual-only (no by-products on it)', st.totals.produced_qty);
+  check(st.kpi_totals.produced_qty === 378 && st.kpi_totals.batch_cost === 3750, 'filtered KPIs include manufacturing quantities only');
   const cf = ctx.getValleyMfgClientReport_({ client_ids: ['C2'], statuses: ['Locked', 'In Progress'] }, ADMIN, 'db');
   check(cf.rows.length === 1 && cf.rows[0].product_id === 'P3', 'client filter isolates C2');
   const pf = ctx.getValleyMfgClientReport_({ product_ids: ['P2'] }, ADMIN, 'db');
   check(pf.rows.length === 1 && pf.rows[0].product_id === 'P2', 'product filter isolates P2');
   const of = ctx.getValleyMfgClientReport_({ op_types: ['اعادة تعبئة'] }, ADMIN, 'db');
   check(of.rows.length === 1 && of.totals.mo_count === 1, 'op filter isolates the repack row');
+  check(of.kpi_totals.produced_qty === 0 && of.kpi_totals.batch_cost === 0, 'a repack-only filter produces empty manufacturing KPIs');
   const unk = ctx.getValleyMfgClientReport_({ client_ids: ['ZZ'] }, ADMIN, 'db');
   check(unk.rows.length === 0 && unk.totals.mo_count === 0, 'unknown ids match nothing, never error');
+  check(unk.kpi_totals.produced_qty === 0 && unk.kpi_totals.by_op['تصنيع وتعبئة'].mo_count === 0, 'empty filtered result has zero KPI totals');
   let threw = null;
   try { ctx.getValleyMfgClientReport_({ from: '2026-09-30', to: '2026-09-01' }, ADMIN, 'db'); } catch (e) { threw = e; }
   check(!!threw, 'reversed bounds throw in Arabic');
@@ -197,6 +203,7 @@ console.log('\n4 — cost gating\n');
   check(p1.mo_count === 3 && p1.produced_qty === 178, 'pivot sums (actual + by-products) unaffected by gating');
   check(!('batch_cost' in p1) && !('batch_cost' in res.totals), 'header batch costs deleted, never zeroed');
   check(Object.keys(p1.by_op).every(t => !('batch_cost' in p1.by_op[t])) && Object.keys(res.totals.by_op).every(t => !('batch_cost' in res.totals.by_op[t])), 'per-op batch costs deleted too');
+  check(!('batch_cost' in res.kpi_totals) && !('batch_cost' in res.kpi_totals.by_op['تصنيع وتعبئة']), 'KPI costs are also stripped without the cost grant');
   const cost = ctx.getValleyMfgClientReport_({}, ADMIN, 'db');
   check(rowFor(cost, 'C1', 'P1').materials.some(m => m.total_cost === 140), 'grant restores costs');
 }
@@ -227,6 +234,8 @@ console.log('\n5 — wiring scans\n');
   check(page.indexOf('byproducts_by_op') !== -1, 'by-products rendered per op, under their production table');
   check(page.indexOf('batch_cost') !== -1, 'per-op batch cost totals flow to KPIs and tables');
   check(page.indexOf('إجمالي التكلفة') !== -1, 'grand cost total rendered');
+  check(page.indexOf('kpi_totals') !== -1 && page.indexOf('kpi_operation_types') !== -1, 'page consumes the scoped KPI response');
+  check(page.indexOf('إجمالي المنتج (') !== -1 && page.indexOf('إجمالي التكلفة (') !== -1, 'KPI cards label their two-operation scope');
 }
 
 if (failed) { console.log('\ns27_mfg_client_report FAILED: ' + failed); process.exitCode = 1; }

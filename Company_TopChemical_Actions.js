@@ -14,6 +14,21 @@ const TopChemical = (function () {
   const actions = {};
   function register(name, fn) { actions[name] = fn; }
 
+  // MySQL timing metadata is operational diagnostics, not page data. Keep it
+  // in action results for super admins only; authorized users can otherwise
+  // inspect the full RPC result in their browser.
+  function readDiagnosticsForUser_(result, user) {
+    if (user && user.isSuperAdmin) return result;
+    if (!result || typeof result !== 'object' || Array.isArray(result)) return result;
+    var safe = Object.assign({}, result);
+    delete safe._mysql;
+    delete safe.timing_ms;
+    delete safe.payload_bytes;
+    delete safe.served_at;
+    delete safe.catalog_ttl_ms;
+    return safe;
+  }
+
   const COMPANY_UID = '3fe1b5cb67b7223e';
   const CLIENTS_SHEET = 'clients_vendors';
   const ARAP_SHEET = 'AR_AP';
@@ -88,7 +103,13 @@ const TopChemical = (function () {
        registered under separate action names below so the two pages can be
        granted independently instead of sharing one permission. */
     'get_stock_scan_options': { page: 'tc_stock_scan', access: 'read' },
+    'get_stock_scan_sheet_catalog': { page: 'tc_stock_scan', access: 'read' },
+    'get_stock_scan_history': { page: 'tc_stock_scan', access: 'read' },
     'get_stock_scan_qty': { page: 'tc_stock_scan', access: 'read' },
+    'get_stock_scan_warehouses': { page: 'tc_stock_scan', access: 'read' },
+    'get_stock_scan_balance': { page: 'tc_stock_scan', access: 'read' },
+    'get_stock_scan_catalog': { page: 'tc_stock_scan', access: 'read' },
+    'get_stock_scan_balances': { page: 'tc_stock_scan', access: 'read' },
     'add_stock_scan': { page: 'tc_stock_scan', access: 'write' },
     'get_customs_office': { page: 'tc_customs_office', access: 'read' },
     'add_customs_office': { page: 'tc_customs_office', access: 'write' },
@@ -129,9 +150,11 @@ const TopChemical = (function () {
     'get_legal_products': { page: 'tc_budget_stock_balance', access: 'read' },
     'get_legal_current_products': { page: 'tc_budget_stock_balance', access: 'read' },
     'get_legal_stock_balance': { page: 'tc_budget_stock_balance', access: 'read' },
+    'get_system_product_options': { page: 'tc_budget_stock_balance', access: 'read' },
     'update_legal_product': { page: 'tc_budget_stock_balance', access: 'write' },
     'get_legal_products_movement': { page: 'tc_budget_stock_balance', access: 'read' },
     'get_legal_inputs': { page: 'tc_budget_inputs', access: 'read' },
+    'export_vat_purchasing_xlsx': { page: 'tc_budget_inputs', access: 'write' },
     'add_legal_costing': { page: 'tc_budget_inputs', access: 'write' },
     'add_legal_purchasing_line': { page: 'tc_budget_inputs', access: 'write' },
     'add_legal_costing_bundle': { page: 'tc_budget_inputs', access: 'write' },
@@ -181,16 +204,23 @@ const TopChemical = (function () {
     'get_manufacture_refs':     { page: 'tc_manufacture_orders', access: 'read' },
     // ── products live table (tc_products_live / اصناف النظام الرئيسي) ──
     'get_products_live':    { page: 'tc_products_live', access: 'read' },
+    'get_product_live_warehouse_quantities': { page: 'tc_products_live', access: 'read' },
+    'get_products_live_direct_test': { page: 'tc_products_live', access: 'read' },
+    'add_product_live':     { page: 'tc_products_live', access: 'write' },
+    'get_production_capability_products': { page: 'tc_production_capability', access: 'read' },
+    'get_production_capability_rows': { page: 'tc_production_capability', access: 'read' },
+    'get_production_capability_catalog': { page: 'tc_production_capability', access: 'read' },
+    'get_sales_capacity_catalog': { page: 'tc_sales_capacity', access: 'read' },
+    'get_sales_capacity_products': { page: 'tc_sales_capacity', access: 'read' },
+    'get_sales_capacity_rows': { page: 'tc_sales_capacity', access: 'read' },
     'save_product_live':    { page: 'tc_products_live', access: 'write' },
     'delete_product_live':  { page: 'tc_products_live', access: 'write' },
-    'get_exec_sales':       { page: 'tc_exec_sales', access: 'read' },
-    'get_sales_view':       { page: 'tc_exec_sales', access: 'read' },
-    'get_sales_charts':     { page: 'tc_exec_sales', access: 'read' },
-    'get_date_sales_monthly':  { page: 'tc_exec_sales', access: 'read' },
-    'get_date_sales_products': { page: 'tc_exec_sales', access: 'read' },
-    'get_box_daily_monthly':  { page: 'tc_exec_sales', access: 'read' },
-    'get_box_daily_accounts': { page: 'tc_exec_sales', access: 'read' },
-    'get_exec_box':         { page: 'tc_exec_sales', access: 'read' }
+    'get_financial_sales_totals': { page: 'tc_financial_ratios', access: 'read' },
+    'get_financial_other_income': { page: 'tc_financial_ratios', access: 'read' },
+    'get_financial_expenses': { page: 'tc_financial_ratios', access: 'read' },
+    'get_financial_production': { page: 'tc_financial_ratios', access: 'read' },
+    'get_financial_used_materials': { page: 'tc_financial_ratios', access: 'read' },
+    'get_financial_used_materials_plan': { page: 'tc_financial_ratios', access: 'read' }
   };
 
   /** page for a module_action, reused for both access-control and logging. */
@@ -213,6 +243,7 @@ const TopChemical = (function () {
     'update_legal_product': LEGAL_PRODUCTS_SHEET,
     'get_legal_current_products': LEGAL_CURRENT_SHEET,
     'get_legal_stock_balance': LEGAL_PRODUCTS_SHEET + '/' + LEGAL_CURRENT_SHEET,
+    'get_system_product_options': 'mysql:products',
     'get_legal_products_movement': LEGAL_MOVEMENT_SHEET,
     'get_legal_inputs': LEGAL_COSTING_SHEET + '/' + LEGAL_PURCHASING_SHEET,
     'add_legal_costing': LEGAL_COSTING_SHEET,
@@ -256,6 +287,12 @@ const TopChemical = (function () {
     'get_stock_revision': STOCK_SHEET,
     'add_stock_revision': STOCK_SHEET,
     'get_stock_scan_options': PRODUCTS_SHEET,
+    'get_stock_scan_sheet_catalog': PRODUCTS_SHEET,
+    'get_stock_scan_history': STOCK_SHEET,
+    'get_stock_scan_warehouses': 'mysql:warehouse_locations',
+    'get_stock_scan_balance': 'mysql:product_current_qty_warehouses',
+    'get_stock_scan_catalog': 'mysql:products',
+    'get_stock_scan_balances': 'mysql:product_current_qty_warehouses',
     'add_stock_scan': STOCK_SHEET,
     'get_purchase_items': PURCHASE_SHEET,
     'get_purchase_options': PURCHASE_SHEET,
@@ -315,16 +352,23 @@ const TopChemical = (function () {
     'delete_manufacture_footer': 'mysql:manufacture_footers',
     'get_manufacture_refs':     'mysql:manufacture_headers',
     'get_products_live':   'mysql:products',
+    'get_product_live_warehouse_quantities': 'mysql:product_current_qty_warehouses',
+    'get_products_live_direct_test': 'mysql:products',
+    'add_product_live':    'mysql:products',
+    'get_production_capability_products': 'mysql:manuf_product_support_capability',
+    'get_production_capability_rows': 'mysql:manuf_product_support_capability',
+    'get_production_capability_catalog': 'mysql:manuf_product_support_capability',
+    'get_sales_capacity_catalog': 'mysql:manuf_product_support_capability',
+    'get_sales_capacity_products': 'mysql:manuf_product_support_capability',
+    'get_sales_capacity_rows': 'mysql:manuf_product_support_capability',
     'save_product_live':   'mysql:products',
     'delete_product_live': 'mysql:products',
-    'get_exec_sales': 'mysql:sales_product_qty_value',
-    'get_sales_view': 'mysql:sales_product_qty_value',
-    'get_sales_charts': 'mysql:sales_product_qty_value',
-    'get_date_sales_monthly': 'mysql:date_sales_product_qty_value',
-    'get_date_sales_products': 'mysql:date_sales_product_qty_value',
-    'get_box_daily_monthly': 'mysql:box_movement_daily_revise',
-    'get_box_daily_accounts': 'mysql:box_movement_daily_revise',
-    'get_exec_box': 'mysql:regular_box_movement'
+    'get_financial_sales_totals': 'mysql:invoice_headers,invoice_footers,item_returns',
+    'get_financial_other_income': 'mysql:expenses_income_report',
+    'get_financial_expenses': 'mysql:expenses_income_report',
+    'get_financial_production': 'mysql:manufacture_headers,products',
+    'get_financial_used_materials': 'mysql:manufacture_report_view,manufacture_headers,products',
+    'get_financial_used_materials_plan': 'mysql:manufacture_report_view,manufacture_headers,products'
   };
 
   function tableForAction_(action) {
@@ -452,7 +496,209 @@ const TopChemical = (function () {
       var __dt = docTypeForAction_(action);
       if (__dt) validateBeforeWrite(__dt, payload, dbId);
     }
-    return actions[action](payload.data, user, dbId, ctx);
+    return mysqlWithRequest_(COMPANY_UID + ':' + dbId, user, action, function () {
+      return actions[action](payload.data, user, dbId, ctx);
+    });
+  }
+
+  /* Server-owned query catalogue. SQL builders and result mapping stay in the
+   * named adapters below, preserving their columns, totals and permissions.
+   * A zero TTL deliberately preserves formerly uncached freshness. All reads
+   * depend conservatively on mysql:*; every application SQL write bumps its
+   * durable epoch. External writes become visible at the stated expiry. */
+  function mysqlTcDefinition_(name) {
+    var specs = {
+      systemQtyMap_: [120, 'id,current_qty', 'all current quantities'],
+      systemProductOptions_: [120, 'id,name_ar', 'all eligible products'],
+      dbProductsLiveCount_: [90, 'total', 1],
+      dbProductsLiveList_: [90, 'product columns except products.quantity; product_current_quantity.current_qty as quantity', 'existing page/loadAll caps'],
+      dbProductLiveWarehouseQuantities_: [0, 'product_current_qty_warehouses.warehouse_id,current_qty', 500],
+      dbProductionCapabilityProducts_: [30, 'manufacture_product_id,manufacture_product_name,name_count', 100],
+      dbProductionCapabilityRows_: [30, 'manufacture_order_count,required_qty_per_mo,required_qty_per_unit,required_qty_per_single_mo,products.product_unit_metric,products.unit,product_current_quantity.current_qty', 1000],
+      dbSalesCapacityProducts_: [30, 'manufacture_product_id,manufacture_product_name,name_count', 100],
+      dbSalesCapacityRows_: [30, 'manufacture_order_count,required_qty_per_mo,required_qty_per_unit,required_qty_per_single_mo,products.product_unit_metric,products.unit,product_current_quantity.current_qty', 1000],
+      dbCapabilityCatalog_: [30, 'manufacture_product_id,manufacture_product_name,catalog', 2001],
+      dbClientsArList_: [0, 'existing client/vendor view columns', 200],
+      dbClientBalanceSheetsList_: [0, 'existing balance columns', 200],
+      dbManufactureList_: [0, 'existing header columns', 200],
+      dbManufactureGetFooters_: [0, 'existing footer columns', 'all lines of one header'],
+      dbManufactureRefs_: [0, 'id,label,code,unit,status', '500 products/warehouses; all statuses'],
+      dbStockScanProducts_: [60, 'id,name_ar,number_of_cartons_bags,code', 'exact ID/code or bounded name-prefix search'],
+      dbStockScanWarehouses_: [300, 'id,location', 'warehouse labels'],
+      dbStockScanBalance_: [30, 'id,warehouse_id,current_qty', 'one product-warehouse pair'],
+      dbStockScanCatalog_: [30, 'id,name_ar,code,number_of_cartons_bags,catalog', 2001],
+      dbStockScanBalances_: [30, 'id,warehouse_id,current_qty', 'all warehouses of one product'],
+      dbBoxList_: [0, 'DB_BOX_COLUMNS', 'existing page cap'],
+      dbBoxAccountAggregates_: [0, 'account,debit,credit,net,moves', 'existing aggregation cap'],
+      dbChartAccountLabels_: [21600, 'id_5,account_5_name', 20000],
+      dbBoxItemHistory_: [0, 'existing history projection', 'existing date/window cap'],
+      dbBoxAnalysisScan_: [0, 'existing analysis projection', 'existing date/window cap'],
+      dbBoxMaxUpdatedAt_: [0, 'MAX(updated_at)', 1],
+      dbTcFinancialSalesTotals_: [0, 'sales_value,return_value,net_sales_value,monthly', 1200],
+      dbTcFinancialOtherIncome_: [0, 'account_5_name,net_amount,monthly', 1000],
+      dbTcFinancialExpenses_: [0, 'account_5_name,net_amount,monthly', 1000],
+      dbTcFinancialProduction_: [0, 'product_id,name_ar,expected_quantity,deliver_quantity,total,offset,limit,has_more', 31],
+      dbTcFinancialUsedMaterials_: [0, 'product_id,name_ar,unit,supposed_qty,used_qty,difference_qty,difference_ratio,total,offset,limit,has_more', 31],
+      dbTcFinancialProductionSnapshot_: [120, 'product_id,name_ar,expected_quantity,deliver_quantity,total,snapshot', 2000],
+      dbTcFinancialUsedMaterialsSnapshot_: [120, 'product_id,name_ar,unit,supposed_qty,used_qty,difference_qty,difference_ratio,total,snapshot', 2000]
+    };
+    var spec = specs[name];
+    if (!spec) throw new Error('Unknown MySQL definition');
+    return { name: 'tc.' + name, version: name === 'dbCapabilityCatalog_' || name === 'dbStockScanCatalog_' || name === 'dbStockScanBalances_' ? 1 : name === 'dbProductsLiveList_' ? 7 : name === 'dbProductsLiveCount_' ? 3 : name === 'dbStockScanProducts_' ? 4 : name === 'dbProductionCapabilityRows_' ? 5 : name === 'dbSalesCapacityRows_' ? 5 : 2, ttl: spec[0], columns: spec[1], rowLimit: spec[2],
+      dependencies: ['mysql:*'], builder: name, mapping: name,
+      normalize: function (data) {
+        var p = mysqlParams_(data);
+        if (name === 'dbTcFinancialSalesTotals_' || name === 'dbTcFinancialOtherIncome_' || name === 'dbTcFinancialExpenses_') return dbTcFinancialSalesParams_(p);
+        if (name === 'dbTcFinancialProductionSnapshot_' || name === 'dbTcFinancialUsedMaterialsSnapshot_') {
+          var snapRange = dbTcFinancialSalesParams_(p);
+          snapRange.refresh = p.refresh === true || p.refresh === 'true' || p.refresh === '1';
+          return snapRange;
+        }
+        if (name === 'dbTcFinancialProduction_') return dbTcFinancialProductionParams_(p);
+        if (name === 'dbTcFinancialUsedMaterials_') return dbTcFinancialUsedMaterialsParams_(p);
+        if (name === 'dbStockScanProducts_') {
+          p.id = p.id == null || p.id === '' ? '' : String(p.id).trim();
+          if (p.id && !/^[1-9]\d{0,19}$/.test(p.id)) throw new Error('Invalid product ID');
+          p.code = p.code == null || p.code === '' ? '' : String(p.code).trim().slice(0, 64);
+          p.search = String(p.search == null ? '' : p.search).trim().slice(0, 120);
+          p.mode = String(p.mode == null ? '' : p.mode).trim().toLowerCase();
+          if (!p.mode) p.mode = p.id ? 'id' : (p.code ? 'code' : 'name');
+          if (['id', 'code', 'name'].indexOf(p.mode) === -1) throw new Error('Invalid product search mode');
+          if (p.mode === 'id' && !p.id) throw new Error('Invalid product ID');
+          if (p.mode === 'code' && !p.code) throw new Error('Invalid product code');
+          p.limit = Math.min(Math.max(Math.floor(Number(p.limit) || 30), 1), 50);
+          p.offset = Math.max(0, Math.floor(Number(p.offset) || 0));
+          if (p.mode === 'id') { p.search = ''; p.code = ''; p.offset = 0; }
+          if (p.mode === 'code') { p.search = ''; p.id = ''; p.offset = 0; }
+          if (p.mode === 'name') { p.id = ''; p.code = ''; }
+          p.refresh = p.refresh === true || p.refresh === 'true' || p.refresh === '1';
+        }
+        if (name === 'dbStockScanWarehouses_') {
+          p.refresh = p.refresh === true || p.refresh === 'true' || p.refresh === '1';
+        }
+        if (name === 'dbStockScanBalance_') {
+          p.product_id = p.product_id == null || p.product_id === '' ? '' : String(p.product_id).trim();
+          p.warehouse_id = p.warehouse_id == null || p.warehouse_id === '' ? '' : String(p.warehouse_id).trim();
+          if (!/^[1-9]\d{0,19}$/.test(p.product_id)) throw new Error('Invalid product ID');
+          if (!/^[1-9]\d{0,19}$/.test(p.warehouse_id)) throw new Error('Invalid warehouse ID');
+          p.refresh = p.refresh === true || p.refresh === 'true' || p.refresh === '1';
+        }
+        if (name === 'dbStockScanCatalog_') {
+          return { refresh: p.refresh === true || p.refresh === 'true' || p.refresh === '1' };
+        }
+        if (name === 'dbStockScanBalances_') {
+          p.product_id = p.product_id == null || p.product_id === '' ? '' : String(p.product_id).trim();
+          if (!/^[1-9]\d{0,19}$/.test(p.product_id)) throw new Error('Invalid product ID');
+          p.refresh = p.refresh === true || p.refresh === 'true' || p.refresh === '1';
+        }
+        if (name === 'dbProductLiveWarehouseQuantities_') {
+          p.id = p.id == null || p.id === '' ? '' : String(p.id).trim();
+          if (!/^[1-9]\d{0,19}$/.test(p.id)) throw new Error('Invalid product ID');
+        }
+        if (name === 'dbCapabilityCatalog_') {
+          // Only the refresh boolean is a catalog input. Every other field
+          // (search text, client limits, …) is ignored so it can never affect
+          // the catalog cache key.
+          return { refresh: p.refresh === true || p.refresh === 'true' || p.refresh === '1' };
+        }
+        if (name === 'dbProductionCapabilityProducts_' || name === 'dbSalesCapacityProducts_') {
+          p.search = String(p.search == null ? '' : p.search).trim().slice(0, 80);
+          p.limit = Math.min(Math.max(Math.floor(Number(p.limit) || 100), 1), 100);
+          p.refresh = p.refresh === true || p.refresh === 'true' || p.refresh === '1';
+        }
+        if (name === 'dbProductionCapabilityRows_' || name === 'dbSalesCapacityRows_') {
+          p.id = String(p.id == null ? '' : p.id).trim();
+          if (!/^[1-9]\d{0,9}$/.test(p.id)) throw new Error('Invalid manufactured product ID');
+          p.refresh = p.refresh === true || p.refresh === 'true' || p.refresh === '1';
+        }
+        return p;
+      },
+      authorize: function (request) {
+        // dispatch_ already checked both tenant and current page grants; repeat
+        // the page check before cache access (including nested read helpers).
+        guard_(request.user, request.action, dataForGuard_());
+        function dataForGuard_() { return {}; }
+      },
+      valid: function (value) {
+        if (name === 'systemQtyMap_') return !!(value && typeof value === 'object' && !Array.isArray(value));
+        if (name === 'systemProductOptions_') return !!(value && Array.isArray(value.options) && value.map);
+        if (!value || value.status !== 'ok') return false;
+        if (name === 'dbTcFinancialOtherIncome_' || name === 'dbTcFinancialExpenses_') return Array.isArray(value.rows) && Array.isArray(value.monthly) && Number.isFinite(Number(value.total_net_amount));
+        if (name === 'dbTcFinancialProduction_') return Array.isArray(value.rows) && Number.isInteger(Number(value.total)) && Number.isInteger(Number(value.offset)) && Number.isInteger(Number(value.limit)) && typeof value.has_more === 'boolean';
+        if (name === 'dbTcFinancialUsedMaterials_') return Array.isArray(value.rows) && Number.isInteger(Number(value.total)) && Number.isInteger(Number(value.offset)) && Number.isInteger(Number(value.limit)) && typeof value.has_more === 'boolean';
+        if (name === 'dbTcFinancialProductionSnapshot_' || name === 'dbTcFinancialUsedMaterialsSnapshot_') return Array.isArray(value.rows) && Number.isInteger(Number(value.total)) && typeof value.truncated === 'boolean' && Number.isFinite(Number(value.snapshot_at));
+        if (name === 'dbProductsLiveCount_') return Number.isInteger(value.total) && value.total >= 0;
+        if (name === 'dbProductsLiveList_') {
+          if (!Array.isArray(value.columns) || !Array.isArray(value.rows) ||
+              !Number.isInteger(Number(value.total)) || Number(value.total) < 0) return false;
+          if (value.schema_version !== 1) return true; // Existing loadAll/offset/cursor envelopes.
+          if (!value.page || typeof value.page.has_more !== 'boolean' ||
+              typeof value.page.next_cursor !== 'string' || typeof value.page.snapshot !== 'string' ||
+              value.rows.length > Number(value.page.limit) || Number(value.page.limit) > 200 ||
+              typeof value.data_version !== 'string' || value.total_is_exact !== true) return false;
+          return value.rows.every(function (row) {
+            return row && typeof row.id === 'string' && /^[1-9]\d{0,19}$/.test(row.id);
+          });
+        }
+        if (name === 'dbCapabilityCatalog_') {
+          if (value.status !== 'ok' || value.schema_version !== 1) return false;
+          if (!Array.isArray(value.products) || !Number.isInteger(value.count)) return false;
+          if (value.count !== value.products.length) return false;
+          if (value.count > 2000) return false;
+          if (!Number.isFinite(Number(value.payload_bytes)) || Number(value.payload_bytes) > 262144) return false;
+          if (typeof value.complete !== 'boolean' || typeof value.overflow !== 'boolean') return false;
+          if (['row_limit', 'byte_limit', 'unsupported_id'].indexOf(value.reason) === -1 && value.reason !== null) return false;
+          if (value.complete && (value.overflow || value.reason !== null)) return false;
+          if (!value.complete && (!value.overflow || value.products.length !== 0 || value.count !== 0)) return false;
+          for (var ci = 0; ci < value.products.length; ci++) {
+            var cp = value.products[ci];
+            if (!cp || typeof cp.id !== 'string' || typeof cp.name !== 'string') return false;
+          }
+          return true;
+        }
+        if (name === 'dbProductionCapabilityProducts_' || name === 'dbSalesCapacityProducts_') return Array.isArray(value.products) && typeof value.has_more === 'boolean';
+        if (name === 'dbProductionCapabilityRows_' || name === 'dbSalesCapacityRows_') return Array.isArray(value.rows) && typeof value.truncated === 'boolean' &&
+          Object.prototype.hasOwnProperty.call(value, 'product_current_quantity') && Object.prototype.hasOwnProperty.call(value, 'product_unit_metric') &&
+          Object.prototype.hasOwnProperty.call(value, 'product_unit');
+        if (name === 'dbStockScanCatalog_') {
+          if (value.status !== 'ok' || value.schema_version !== 1) return false;
+          if (!Array.isArray(value.products) || !Number.isInteger(value.count)) return false;
+          if (value.count !== value.products.length) return false;
+          if (value.count > 2000) return false;
+          if (!Number.isFinite(Number(value.payload_bytes)) || Number(value.payload_bytes) > 262144) return false;
+          if (typeof value.complete !== 'boolean' || typeof value.overflow !== 'boolean') return false;
+          if (['row_limit', 'byte_limit', 'unsupported_id'].indexOf(value.reason) === -1 && value.reason !== null) return false;
+          if (value.complete && (value.overflow || value.reason !== null)) return false;
+          if (!value.complete && (!value.overflow || value.products.length !== 0 || value.count !== 0)) return false;
+          for (var sci = 0; sci < value.products.length; sci++) {
+            var sp = value.products[sci];
+            if (!sp || typeof sp.id !== 'string' || typeof sp.name_ar !== 'string') return false;
+          }
+          return true;
+        }
+        if (name === 'dbStockScanBalances_') {
+          if (!value || value.status !== 'ok') return false;
+          if (typeof value.product_id !== 'string' || !Array.isArray(value.balances)) return false;
+          for (var sbi = 0; sbi < value.balances.length; sbi++) {
+            var sb = value.balances[sbi];
+            if (!sb || typeof sb.warehouse_id !== 'string' || !Number.isFinite(Number(sb.current_qty))) return false;
+          }
+          return true;
+        }
+        if (name === 'dbProductLiveWarehouseQuantities_') {
+          if (typeof value.product_id !== 'string' || !Array.isArray(value.balances) || value.balances.length > 500) return false;
+          return value.balances.every(function (balance) {
+            return balance && typeof balance.warehouse_id === 'string' &&
+              (typeof balance.current_qty === 'string' || Number.isFinite(Number(balance.current_qty)));
+          });
+        }
+        if (name === 'dbStockScanProducts_') return Array.isArray(value.products) && typeof value.has_more === 'boolean';
+        if (name === 'dbStockScanWarehouses_') return Array.isArray(value.warehouses) && typeof value.truncated === 'boolean';
+        if (name === 'dbStockScanBalance_') return value && (value.state === 'ready' || value.state === 'missing') && Object.prototype.hasOwnProperty.call(value, 'product_id') && Object.prototype.hasOwnProperty.call(value, 'warehouse_id');
+        if (/Monthly_|List_|Rows_|Footers_|Scan_|History_/.test(name)) return Array.isArray(value.rows);
+        return true;
+      }
+    };
   }
 
   /* Request-scoped recovery allowlist: these handlers can locate an earlier
@@ -1788,7 +2034,13 @@ const TopChemical = (function () {
    * on a database on another host before it can paint.
    */
   function systemQtyMap_() {
-    const cached = getChunkedCache_(SYSTEM_QTY_KEY);
+    if (typeof mysqlRead_ === 'function' && !mysqlReading_('tc.systemQtyMap_')) {
+      return mysqlRead_(mysqlTcDefinition_('systemQtyMap_'), {}, function (p) { return systemQtyMap_(); });
+    }
+    
+    
+    
+    const cached = (typeof _mysqlRequest_ !== 'undefined' && _mysqlRequest_) ? null : getChunkedCache_(SYSTEM_QTY_KEY);
     if (cached) return cached;
     const map = {};
     let conn, stmt, rs;
@@ -1809,8 +2061,82 @@ const TopChemical = (function () {
       try { if (stmt) stmt.close(); } catch (e) {}
       try { if (conn) conn.close(); } catch (e) {}
     }
-    putChunkedCache_(SYSTEM_QTY_KEY, map, SYSTEM_QTY_TTL);
+    if (typeof _mysqlRequest_ === 'undefined' || !_mysqlRequest_) if (typeof _mysqlRequest_ === 'undefined' || !_mysqlRequest_) if (typeof _mysqlRequest_ === 'undefined' || !_mysqlRequest_) if (typeof _mysqlRequest_ === 'undefined' || !_mysqlRequest_) putChunkedCache_(SYSTEM_QTY_KEY, map, SYSTEM_QTY_TTL);
     return map;
+  }
+
+  /* Not a sheet either: the products table on the same live database, read for
+   * the two columns a picker needs. `id` is the value a legal product stores in
+   * product_system_id and `name_ar` is what it is shown by. Cached with the
+   * same short TTL as the balance view, and cleared when a products row is
+   * written on the products-live page, so a renamed product is not shown by its
+   * old name for the rest of the TTL. */
+  const SYSTEM_PRODUCT_OPTIONS_KEY = 'tc_system_product_options';
+  const SYSTEM_PRODUCT_OPTIONS_TTL = 120;
+
+  /* The cached bundle, or null. NEVER touches the database: callers that only
+   * want names (the balance report) must not pay a JDBC round trip for them. */
+  function systemProductOptionsCached_() {
+    try { if (typeof _mysqlRequest_ !== 'undefined' && _mysqlRequest_) return null; return getChunkedCache_(SYSTEM_PRODUCT_OPTIONS_KEY); } catch (e) { return null; }
+  }
+
+  function systemProductOptions_() {
+    if (typeof mysqlRead_ === 'function' && !mysqlReading_('tc.systemProductOptions_')) {
+      return mysqlRead_(mysqlTcDefinition_('systemProductOptions_'), {}, function (p) { return systemProductOptions_(); });
+    }
+    
+    
+    
+    const cached = systemProductOptionsCached_();
+    if (cached) return cached;
+    const options = [];
+    const map = {};
+    let conn, stmt, rs;
+    try {
+      conn = dbGetConnection_();
+      stmt = conn.createStatement();
+      rs = stmt.executeQuery('SELECT id, name_ar FROM products WHERE deleted_at IS NULL ORDER BY id');
+      while (rs.next()) {
+        const id = Number(rs.getString('id'));
+        if (!Number.isInteger(id) || id <= 0) continue;
+        const name = String(rs.getString('name_ar') == null ? '' : rs.getString('name_ar')).trim();
+        const key = String(id);
+        if (map[key] !== undefined) continue;
+        map[key] = name || key;
+        options.push({ value: key, label: name || key });
+      }
+    } finally {
+      try { if (rs) rs.close(); } catch (e) {}
+      try { if (stmt) stmt.close(); } catch (e) {}
+      try { if (conn) conn.close(); } catch (e) {}
+    }
+    const out = { options: options, map: map };
+    if (typeof _mysqlRequest_ === 'undefined' || !_mysqlRequest_) if (typeof _mysqlRequest_ === 'undefined' || !_mysqlRequest_) if (typeof _mysqlRequest_ === 'undefined' || !_mysqlRequest_) if (typeof _mysqlRequest_ === 'undefined' || !_mysqlRequest_) putChunkedCache_(SYSTEM_PRODUCT_OPTIONS_KEY, out, SYSTEM_PRODUCT_OPTIONS_TTL);
+    return out;
+  }
+
+  /* legal_products.product_system_id is a multi-choice column: one legal product
+   * may be linked to several system products. It is stored the way AppSheet
+   * stores an EnumList — a comma-separated list in one cell ('10,11,20') — so
+   * the sheet needs no new column and a single stored id keeps working exactly
+   * as before. Anything that is not a positive integer is dropped from the
+   * parsed list; the raw cell value is still returned by the read path so a
+   * malformed cell is visible rather than silently swallowed. */
+  function parseSystemIds_(v) {
+    const out = [];
+    const seen = {};
+    String(v == null ? '' : v).split(/[,،;\s]+/).forEach(function (part) {
+      const s = String(part == null ? '' : part).trim();
+      if (!s) return;
+      const n = Number(s);
+      if (!Number.isInteger(n) || n <= 0) return;
+      const key = String(n);
+      if (seen[key]) return;
+      seen[key] = true;
+      out.push(n);
+    });
+    out.sort(function (a, b) { return a - b; });
+    return out;
   }
 
   /**
@@ -1859,14 +2185,99 @@ const TopChemical = (function () {
   function getStockScanOptions_(data, user, dbId) {
     const res = dbStockScanProducts_(data || {}, user);
     const productOptions = (res && res.products ? res.products : []).map(function (p) {
-      const pid = Number(p.value);
+      const pid = String(p.id == null ? '' : p.id).trim();
       return {
-        value: Number.isInteger(pid) && pid > 0 ? pid : p.value,
-        label: p.label,
-        per_unit: p.per_unit
+        value: pid,
+        label: String(p.name_ar || ('#' + pid)),
+        per_unit: p.number_of_cartons_bags == null ? '' : String(p.number_of_cartons_bags),
+        code: p.code == null ? null : String(p.code)
       };
     });
-    return { status: 'success', product_options: productOptions };
+    return { status: 'success', mode: (res && res.mode) || String((data || {}).mode || ''), product_options: productOptions, has_more: !!(res && res.has_more), offset: Number((data || {}).offset) || 0 };
+  }
+  /** Stock Scan picker catalog from the same Google Sheets products source
+   * used by tc_barcode. This keeps the product-name picker independent of a
+   * potentially slow MySQL catalog read; balance and save authority remain on
+   * their existing MySQL paths. */
+  function getStockScanSheetCatalog_(data, user, dbId) {
+    data = data || {};
+    if (data.refresh === true) bustTcRefs_(dbId);
+    var rows = tcProductsRaw_(dbId);
+    var byId = Object.create(null);
+    (rows || []).forEach(function (p) {
+      var numericId = Number(p && p.id);
+      if (!Number.isInteger(numericId) || numericId <= 0) return;
+      var id = String(numericId);
+      byId[id] = {
+        id: id,
+        name_ar: String(p.name_ar || '').trim() || ('#' + id),
+        code: p.code == null || p.code === '' ? null : String(p.code),
+        per_unit: p.number_of_cartons_bags == null ? '' : String(p.number_of_cartons_bags)
+      };
+    });
+    var products = Object.keys(byId).map(function (id) { return byId[id]; });
+    products.sort(function (a, b) {
+      return String(a.name_ar).localeCompare(String(b.name_ar), 'ar') ||
+        (a.id < b.id ? -1 : (a.id > b.id ? 1 : 0));
+    });
+    return { status: 'ok', schema_version: 1, products: products, count: products.length,
+      complete: true, overflow: false, reason: null, catalog_ttl_ms: 600000 };
+  }
+  function getStockScanWarehouses_(data, user) {
+    return dbStockScanWarehouses_(data || {}, user);
+  }
+  function getStockScanBalance_(data, user) {
+    return dbStockScanBalance_(data || {}, user);
+  }
+
+  /** The scan page's independent history read. The normal revision list also
+   * builds a full product reference list; these rows already carry name_ar,
+   * so a scan history read needs only the stock_revision sheet. */
+  function getStockScanHistory_(data, user, dbId) {
+    var sheet = getSheet_(STOCK_SHEET, dbId);
+    var headers = getHeaders_(sheet);
+    var lastRow = sheet.getLastRow();
+    var loadAll = !!(data && data.loadAll === true);
+    var minimumDate = '2026-09-01';
+    var dateColumn = headers.indexOf('date');
+    var rows = [];
+    if (!headers.length || dateColumn < 0 || lastRow < 2) return { status: 'success', stock: rows, loadedAll: loadAll, from_date: minimumDate };
+    function checkedDateKey(year, month, day) {
+      var date = new Date(year, month - 1, day);
+      if (date.getFullYear() !== year || date.getMonth() !== month - 1 || date.getDate() !== day) return '';
+      return year + '-' + ('0' + month).slice(-2) + '-' + ('0' + day).slice(-2);
+    }
+    function dateKey(value) {
+      if (value instanceof Date && !isNaN(value.getTime())) {
+        return value.getFullYear() + '-' + ('0' + (value.getMonth() + 1)).slice(-2) + '-' + ('0' + value.getDate()).slice(-2);
+      }
+      var raw = String(value == null ? '' : value).trim();
+      var iso = raw.match(/^(\d{4})-(\d{2})-(\d{2})/);
+      if (iso) return checkedDateKey(Number(iso[1]), Number(iso[2]), Number(iso[3]));
+      var dmy = raw.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})$/);
+      if (dmy) return checkedDateKey(Number(dmy[3]), Number(dmy[2]), Number(dmy[1]));
+      return '';
+    }
+    var end = lastRow;
+    while (end >= 2 && (loadAll || rows.length < 20)) {
+      var start = loadAll ? 2 : Math.max(2, end - 49);
+      var values = sheet.getRange(start, 1, end - start + 1, headers.length).getValues();
+      for (var i = values.length - 1; i >= 0; i--) {
+        if (!values[i].some(function (v) { return String(v == null ? '' : v).trim() !== ''; })) continue;
+        var rowDate = dateKey(values[i][dateColumn]);
+        if (!rowDate || rowDate < minimumDate) continue;
+        var record = {};
+        headers.forEach(function (h, ci) { record[String(h).trim()] = values[i][ci] === undefined ? '' : values[i][ci]; });
+        /* Keep the actual sheet row: filtered/reversed history indexes are not
+           stable identities and cannot reconcile an optimistic save safely. */
+        record._sheetRow = start + i;
+        record.product_name = String(record.name_ar || '').trim() || ('#' + record.product);
+        rows.push(record);
+        if (!loadAll && rows.length === 20) break;
+      }
+      end = start - 1;
+    }
+    return { status: 'success', stock: rows, loadedAll: loadAll, from_date: minimumDate };
   }
 
   /** Same semantics as the retired difference formula:
@@ -1992,6 +2403,98 @@ const TopChemical = (function () {
       _sheetRow: rowNum
     };
     try { var _mapStock = { product: product, date: date, amount: amount, warehouse: warehouse, notes: notes, available_amount: avail, user: (user && user.email) || '', created_at: new Date() }; logHistory_(dbId, STOCK_SHEET, 'create_'+STOCK_SHEET+'_'+rowNum, String(rowNum), (user&&user.email)||'', 'create', _mapStock, null); } catch(e){}
+    return { status: 'success', message: 'تمت إضافة جرد المخزون', record: savedRecord, data: { assignedId: rowNum, rowNumber: rowNum } };
+  }
+
+  /* Scan-specific save: warehouse IDs are validated against warehouse_locations
+     (not the legacy hard-coded list shared with tc_stock_revision), and the
+     balance is re-read authoritatively for the same product+warehouse pair at
+     save time — the client's available_amount is never trusted. New rows
+     persist the warehouse ID; legacy text values in old rows are untouched. */
+  function addStockScan_(data, user, dbId) {
+    data = data || {};
+    var productRaw = String(data.product == null ? '' : data.product).trim();
+    if (!/^[1-9]\d{0,19}$/.test(productRaw)) throw new Error('المنتج مطلوب');
+    var product = Number(productRaw);
+    if (!productRefs_(dbId).map[product]) throw new Error('المنتج غير موجود');
+    var warehouseId = String(data.warehouse_id == null ? (data.warehouse == null ? '' : data.warehouse) : data.warehouse_id).trim();
+    if (!/^[1-9]\d{0,19}$/.test(warehouseId)) throw new Error('المخزن مطلوب');
+    var whList = dbStockScanWarehouses_({}, user);
+    var warehouseLocation = null;
+    (whList.warehouses || []).forEach(function (w) { if (String(w.value) === warehouseId) warehouseLocation = w.label; });
+    if (warehouseLocation == null) throw new Error('المخزن غير صحيح');
+    var amountRaw = String(data.amount == null ? '' : data.amount).trim();
+    if (amountRaw === '') throw new Error('الكمية مطلوبة');
+    var amount = Number(amountRaw);
+    if (isNaN(amount)) throw new Error('الكمية يجب أن تكون رقماً');
+    var balance = dbStockScanBalance_({ product_id: productRaw, warehouse_id: warehouseId, refresh: true }, user);
+    if (!balance || balance.state !== 'ready' || !Number.isFinite(Number(balance.current_qty))) throw new Error('لا يمكن الحفظ بدون رصيد سيستم متاح لهذا الصنف والمخزن');
+    var avail = Number(balance.current_qty);
+    var date = data.date ? parseDate_(data.date) : new Date();
+    if (!(date instanceof Date) || isNaN(date.getTime())) date = new Date();
+    if (date.getHours() === 0 && date.getMinutes() === 0 && date.getSeconds() === 0) {
+      var nowScan = new Date();
+      date.setHours(nowScan.getHours(), nowScan.getMinutes(), nowScan.getSeconds(), nowScan.getMilliseconds());
+    }
+    var notes = String(data.notes || '').trim();
+    var sheet = getSheet_(STOCK_SHEET, dbId);
+    var headers = getHeaders_(sheet);
+    var rowValues = headers.map(function (h) {
+      var key = String(h).trim().toLowerCase();
+      if (key === 'product') return product;
+      if (key === 'date') return date;
+      if (key === 'amount') return amount;
+      if (key === 'warehouse') return warehouseId;
+      if (key === 'notes') return notes;
+      if (key === 'available_amount') return avail;
+      if (key === 'user') return (user && user.email) || '';
+      if (key === 'created_at') return new Date();
+      return '';
+    });
+    var prodMapScan = productRefs_(dbId).map;
+    var nameArVal = prodMapScan[product] || '';
+    var categoryVal = '';
+    var unitVal = '';
+    try {
+      var prodRow = tcProductsRaw_(dbId).find(function (p) { return Number(p.id) === product; });
+      if (prodRow) { nameArVal = String(prodRow.name_ar || '').trim(); categoryVal = String(prodRow.category || '').trim(); unitVal = String(prodRow.unit || '').trim(); }
+    } catch (e) {}
+    var differenceVal = stockRevisionDifference_(amount, avail);
+    var percentageVal = stockRevisionPercentage_(amount, avail);
+    var rowNum;
+    executeWithLock_(function () {
+      rowNum = sheet.getLastRow() + 1;
+      headers.forEach(function (h, i) {
+        var key = String(h).trim().toLowerCase();
+        if (key === 'name_ar') rowValues[i] = nameArVal;
+        if (key === 'category') rowValues[i] = categoryVal;
+        if (key === 'unit') rowValues[i] = unitVal;
+        if (key === 'difference') rowValues[i] = differenceVal;
+        if (key === 'percentage') rowValues[i] = percentageVal;
+      });
+      ensureGridRows_(sheet, rowNum);
+      sheet.getRange(rowNum, 1, 1, rowValues.length).setValues([rowValues]);
+      noteMutation_(sheet);
+    });
+    var savedRecord = {
+      product: product,
+      product_name: nameArVal || ('#' + product),
+      name_ar: nameArVal,
+      category: categoryVal,
+      unit: unitVal,
+      date: date,
+      amount: amount,
+      warehouse: warehouseId,
+      warehouse_location: warehouseLocation,
+      notes: notes,
+      available_amount: avail,
+      difference: differenceVal,
+      percentage: percentageVal,
+      user: (user && user.email) || '',
+      created_at: new Date(),
+      _sheetRow: rowNum
+    };
+    try { var mapStock = { product: product, date: date, amount: amount, warehouse: warehouseId, notes: notes, available_amount: avail, user: (user && user.email) || '', created_at: new Date() }; logHistory_(dbId, STOCK_SHEET, 'create_' + STOCK_SHEET + '_' + rowNum, String(rowNum), (user && user.email) || '', 'create', mapStock, null); } catch (e) {}
     return { status: 'success', message: 'تمت إضافة جرد المخزون', record: savedRecord, data: { assignedId: rowNum, rowNumber: rowNum } };
   }
 
@@ -3650,6 +4153,21 @@ const TopChemical = (function () {
     SpreadsheetApp.flush();
   }
 
+  /* Formula columns of legal_purchasing_costing. The browser may calculate
+   * these values for a live preview, but the sheet remains the source of
+   * truth: every create/edit path writes the same formulas into the row. */
+  function legalCostingFormulaMap_() {
+    return {
+      'القيمه بالسعر المعلن': '=H{r}*I{r}',
+      'اجمالي التكاليف': '=IF(D{r}="بيع",J{r}+M{r}+N{r}+O{r}+P{r}+Q{r}+R{r}+S{r}+T{r},J{r}+M{r}+N{r}+O{r}+P{r}+Q{r}+R{r}+S{r}+T{r}+U{r})',
+      'المبيعات': '=IF(D{r}="بيع",ROUND(Y{r}*103/100,-2),0)',
+      'نوع الضريبة': '=Y{r}*14/100',
+      'ضريبة المبيعات': '=IF(AA{r}>0.06,Z{r}*14/100,0)',
+      'الشهر': '=MONTH(B{r})',
+      'العام': '=YEAR(B{r})'
+    };
+  }
+
   /** Next invoice number for a year: "{seq}-{year}" with seq = max+1 (resets yearly). */
   function nextInvoiceNumber_(dbId, year) {
     /* Phase 1: delegates to the shared locked counter. Format identical.
@@ -3788,6 +4306,20 @@ const TopChemical = (function () {
   }
 
   /**
+   * The system-products picker for the balance page: id + name_ar from the live
+   * `products` table. A MySQL that is down answers with an empty list and
+   * error:true instead of failing the request — the modal says why, and the
+   * page keeps working.
+   */
+  function getSystemProductOptions_(data, user, dbId) {
+    try {
+      return { status: 'success', options: systemProductOptions_().options };
+    } catch (e) {
+      return { status: 'success', options: [], error: true, message: 'تعذر جلب أصناف النظام من قاعدة البيانات' };
+    }
+  }
+
+  /**
    * رصيد أصناف الميزانية — one row per legal_products record, not per
    * legal_current_products transaction.
    *
@@ -3811,12 +4343,10 @@ const TopChemical = (function () {
     const current = getAllRecords_(dbId, LEGAL_CURRENT_SHEET);
 
     const linesByName = {};
-    let blankNameLines = 0;
+    const blankLines = [];
     current.forEach(function (c) {
       const name = String(c.product == null ? '' : c.product).trim();
-      if (!name) { blankNameLines++; return; }
-      if (!linesByName[name]) linesByName[name] = [];
-      linesByName[name].push({
+      const line = {
         transaction_code: String(c.transaction_code == null ? '' : c.transaction_code).trim(),
         transaction_name: String(c.transaction_name == null ? '' : c.transaction_name).trim(),
         code: String(c.code == null ? '' : c.code).trim(),
@@ -3826,7 +4356,10 @@ const TopChemical = (function () {
         total_sales_value: Number(c.total_sales_value) || 0,
         sales_per_qty: Number(c.sales_per_qty) || 0,
         product_target: String(c.product_target == null ? '' : c.product_target).trim()
-      });
+      };
+      if (!name) { blankLines.push(line); return; }
+      if (!linesByName[name]) linesByName[name] = [];
+      linesByName[name].push(line);
     });
 
     const claimed = {};
@@ -3856,7 +4389,11 @@ const TopChemical = (function () {
         unit: String(p.unit == null ? '' : p.unit).trim(),
         category: String(p.category == null ? '' : p.category).trim(),
         product_type: String(p.product_type == null ? '' : p.product_type).trim(),
+        /* raw cell kept for display/back-compat; the parsed list is the contract */
         product_system_id: p.product_system_id == null ? '' : p.product_system_id,
+        product_system_ids: parseSystemIds_(p.product_system_id),
+        product_system_names: [],
+        system_ids_missing: [],
         asset_code: assetCode,
         asset_code_name: assetRefs.map[assetCode] || '',
         lines_count: lines.length,
@@ -3869,7 +4406,61 @@ const TopChemical = (function () {
       };
     });
 
-    let unmatchedCount = blankNameLines;
+    /* The warning chips on the page are not just counts: each one can open the
+       problem VALUES. unmatched lists every legal_current_products product name
+       that matched no legal_products.name_ar (blank included), grouped by name
+       with its totals, so the sheet can be fixed from the screen. duplicates
+       lists every name_ar that appears more than once, its ids, and which id
+       actually claimed the lines (the lowest one — see the map above). */
+    function sumLines(lines) {
+      let qty = 0, cost = 0, sales = 0;
+      (lines || []).forEach(function (l) {
+        qty += l.current_qty;
+        cost += l.total_cost_sign;
+        sales += l.total_sales_value;
+      });
+      return { current_qty: qty, total_cost_sign: cost, total_sales_value: sales };
+    }
+    const unmatched = [];
+    if (blankLines.length) {
+      const sBlank = sumLines(blankLines);
+      unmatched.push({
+        product: '', lines_count: blankLines.length,
+        current_qty: sBlank.current_qty, total_cost_sign: sBlank.total_cost_sign, total_sales_value: sBlank.total_sales_value
+      });
+    }
+    Object.keys(linesByName).forEach(function (name) {
+      if (claimed[name]) return;
+      const s = sumLines(linesByName[name]);
+      unmatched.push({
+        product: name, lines_count: linesByName[name].length,
+        current_qty: s.current_qty, total_cost_sign: s.total_cost_sign, total_sales_value: s.total_sales_value
+      });
+    });
+    unmatched.sort(function (a, b) { return b.lines_count - a.lines_count; });
+
+    const groupsByName = {};
+    rows.forEach(function (r) {
+      if (!r.name_ar) return;
+      if (!groupsByName[r.name_ar]) groupsByName[r.name_ar] = [];
+      groupsByName[r.name_ar].push(r);
+    });
+    const duplicates = [];
+    Object.keys(groupsByName).forEach(function (name) {
+      const group = groupsByName[name];
+      if (group.length < 2) return;
+      const owner = group[0]; // rows are id-ascending, so this is the lowest id
+      duplicates.push({
+        name: name,
+        claimed_id: owner.id,
+        ids: group.map(function (r) { return r.id; }),
+        lines_count: owner.lines_count,
+        current_qty: owner.current_qty,
+        total_cost_sign: owner.total_cost_sign
+      });
+    });
+
+    let unmatchedCount = blankLines.length;
     Object.keys(linesByName).forEach(function (name) {
       if (!claimed[name]) unmatchedCount += linesByName[name].length;
     });
@@ -3877,12 +4468,38 @@ const TopChemical = (function () {
     let systemQty = {};
     let systemQtyError = false;
     try { systemQty = systemQtyMap_(); } catch (e) { systemQtyError = true; }
+    /* Names are a DISPLAY nicety and must never cost the report a database
+     * round trip, so this reads the picker's cache only and never opens a JDBC
+     * connection. The cache is populated by get_system_product_options (the
+     * modal picker, or the page's background prefetch), so the ids are shown
+     * until names are cached and the next render swaps them in. */
+    let systemNames = {};
+    try {
+      const cachedOptions = systemProductOptionsCached_();
+      if (cachedOptions && cachedOptions.map) systemNames = cachedOptions.map;
+    } catch (eNames) {}
     rows.forEach(function (r) {
-      const sid = Number(r.product_system_id);
-      if (!Number.isInteger(sid) || sid <= 0) return;
-      if (!Object.prototype.hasOwnProperty.call(systemQty, sid)) return;
-      r.system_qty = systemQty[sid];
-      r.difference = r.system_qty - r.current_qty;
+      const ids = r.product_system_ids || [];
+      r.product_system_names = ids.map(function (sid) { return systemNames[String(sid)] || String(sid); });
+      if (!ids.length) return;
+      /* A legal product may be linked to several system ids, so the balance is
+       * the SUM of the ids the view knows. An id the view does not know is
+       * reported in system_ids_missing rather than silently dropped, so a
+       * partial sum is never mistaken for a complete one. */
+      let sum = 0, found = 0;
+      const missing = [];
+      ids.forEach(function (sid) {
+        if (Object.prototype.hasOwnProperty.call(systemQty, sid)) {
+          sum += Number(systemQty[sid]) || 0;
+          found++;
+        } else {
+          missing.push(sid);
+        }
+      });
+      r.system_ids_missing = missing;
+      if (!found) return;
+      r.system_qty = Math.round(sum * 1000) / 1000;
+      r.difference = Math.round((r.system_qty - r.current_qty) * 1000) / 1000;
     });
 
     return {
@@ -3891,12 +4508,15 @@ const TopChemical = (function () {
       asset_code_options: assetRefs.options,
       system_qty_error: systemQtyError,
       unmatched_count: unmatchedCount,
-      duplicate_names: duplicateNames
+      unmatched: unmatched,
+      duplicate_names: duplicateNames,
+      duplicates: duplicates
     };
   }
 
   /**
-   * Set legal_products.asset_code for one product.
+   * Set legal_products.asset_code and/or legal_products.product_system_ids for
+   * one product.
    *
    * asset_code is a reference into chart_of_accounts level-5: the value stored
    * is المستوى الخامس and the label shown is اسم المستوى الخامس. The value is
@@ -3904,41 +4524,89 @@ const TopChemical = (function () {
    * account owns. Empty clears the reference. legal_products is served from the
    * tcRefs_ cache, so a successful write busts it — otherwise the product list
    * would keep showing the old account for up to the TTL.
+   *
+   * product_system_id is the multi-choice link to the live MySQL products
+   * table: the payload carries an array (or a comma string), every id is
+   * validated against that table, and the column stores the canonical
+   * comma-separated list. An empty list clears the link and needs no database;
+   * a non-empty list is refused when MySQL cannot confirm the ids rather than
+   * written unverified.
    */
   function updateLegalProduct_(data, user, dbId) {
-    const id = Number(data && data.id);
+    const d = data || {};
+    const id = Number(d.id);
     if (!Number.isInteger(id) || id <= 0) throw new Error('معرف الصنف مطلوب');
-    const assetCode = String((data && data.asset_code) == null ? '' : data.asset_code).trim();
-    const refs = tcAssetCodeRefs_(dbId);
-    if (assetCode && !Object.prototype.hasOwnProperty.call(refs.map, assetCode)) {
-      throw new Error('كود الأصل غير موجود في شجرة الحسابات');
+    const hasAsset = Object.prototype.hasOwnProperty.call(d, 'asset_code');
+    const hasSystem = Object.prototype.hasOwnProperty.call(d, 'product_system_ids');
+    if (!hasAsset && !hasSystem) throw new Error('لا توجد حقول للتحديث');
+
+    let assetCode = '';
+    let assetRefs = { options: [], map: {} };
+    if (hasAsset) {
+      assetCode = String(d.asset_code == null ? '' : d.asset_code).trim();
+      assetRefs = tcAssetCodeRefs_(dbId);
+      if (assetCode && !Object.prototype.hasOwnProperty.call(assetRefs.map, assetCode)) {
+        throw new Error('كود الأصل غير موجود في شجرة الحسابات');
+      }
     }
+
+    let systemIds = [];
+    let systemNameMap = {};
+    if (hasSystem) {
+      systemIds = parseSystemIds_(d.product_system_ids);
+      if (systemIds.length) {
+        let refs = null;
+        try { refs = systemProductOptions_(); } catch (eSysRefs) { refs = null; }
+        if (!refs) throw new Error('تعذر التحقق من أصناف النظام — قاعدة البيانات غير متاحة؛ لم يتم الحفظ');
+        const bad = systemIds.filter(function (sid) {
+          return !Object.prototype.hasOwnProperty.call(refs.map, String(sid));
+        });
+        if (bad.length) throw new Error('أصناف نظام غير موجودة: ' + bad.join('، '));
+        systemNameMap = refs.map;
+      }
+    }
+
     const sheet = getSheet_(LEGAL_PRODUCTS_SHEET, dbId);
     const headers = getHeaders_(sheet);
     const idCol = headers.findIndex(function (h) { return String(h).trim().toLowerCase() === 'id'; });
     const codeCol = headers.findIndex(function (h) { return String(h).trim().toLowerCase() === 'asset_code'; });
-    if (idCol === -1 || codeCol === -1) throw new Error('أعمدة الجدول غير مكتملة');
+    const sysCol = headers.findIndex(function (h) { return String(h).trim().toLowerCase() === 'product_system_id'; });
+    if (idCol === -1 || (hasAsset && codeCol === -1) || (hasSystem && sysCol === -1)) throw new Error('أعمدة الجدول غير مكتملة');
     const values = sheet.getDataRange().getValues();
     let rowNum = -1;
     for (let r = 1; r < values.length; r++) {
       if (Number(values[r][idCol]) === id) { rowNum = r + 1; break; }
     }
     if (rowNum === -1) throw new Error('الصنف غير موجود');
-    const oldCode = String(values[rowNum - 1][codeCol] == null ? '' : values[rowNum - 1][codeCol]).trim();
+    const oldCode = codeCol === -1 ? '' : String(values[rowNum - 1][codeCol] == null ? '' : values[rowNum - 1][codeCol]).trim();
+    const oldSystem = sysCol === -1 ? '' : String(values[rowNum - 1][sysCol] == null ? '' : values[rowNum - 1][sysCol]).trim();
+    const systemValue = systemIds.join(',');
+    const writes = [];
+    if (hasAsset) writes.push({ col: codeCol, value: assetCode });
+    if (hasSystem) writes.push({ col: sysCol, value: systemValue });
     executeWithLock_(function () {
-      sheet.getRange(rowNum, codeCol + 1).setValue(assetCode);
+      writes.forEach(function (w) { sheet.getRange(rowNum, w.col + 1).setValue(w.value); });
       noteMutation_(sheet);
     });
+    const oldValues = {}, newValues = {};
+    if (hasAsset) { oldValues.asset_code = oldCode; newValues.asset_code = assetCode; }
+    if (hasSystem) { oldValues.product_system_id = oldSystem; newValues.product_system_id = systemValue; }
     try {
       logHistory_(dbId, LEGAL_PRODUCTS_SHEET, 'update_' + LEGAL_PRODUCTS_SHEET + '_' + id, String(id),
-        (user && user.email) || '', 'update', { id: id, asset_code: assetCode }, { id: id, asset_code: oldCode });
+        (user && user.email) || '', 'update', Object.assign({ id: id }, newValues), Object.assign({ id: id }, oldValues));
     } catch (e) {}
     try { bustTcRefs_(dbId); } catch (e) {}
-    return {
-      status: 'success',
-      message: 'تم تحديث كود الأصل',
-      record: { id: id, asset_code: assetCode, asset_code_name: refs.map[assetCode] || '' }
-    };
+    const record = { id: id };
+    if (hasAsset) { record.asset_code = assetCode; record.asset_code_name = assetRefs.map[assetCode] || ''; }
+    if (hasSystem) {
+      record.product_system_id = systemValue;
+      record.product_system_ids = systemIds;
+      record.product_system_names = systemIds.map(function (sid) { return systemNameMap[String(sid)] || String(sid); });
+    }
+    const messages = [];
+    if (hasAsset) messages.push('تم تحديث كود الأصل');
+    if (hasSystem) messages.push('تم تحديث أصناف النظام');
+    return { status: 'success', message: messages.join(' و '), record: record };
   }
 
   function getLegalProductsMovement_(data, user, dbId) {
@@ -3996,20 +4664,14 @@ const TopChemical = (function () {
     if (!String(data['الصنف'] || '').trim()) throw new Error('الصنف مطلوب');
     if (!String(data['نوع الشهادة'] || '').trim()) throw new Error('نوع الشهادة مطلوب');
     if (!String(data['نوع الشحن'] || '').trim()) throw new Error('نوع الشحن مطلوب');
+    if (!String(data['اسم_المورد'] || '').trim()) throw new Error('المورد مطلوب');
     validateBudgetMonth_(data['تم_الاقرار_شهر']);
+    validateBudgetExchangeValues_(data);
     const valueMap = {};
     Object.keys(data).forEach(function (k) { valueMap[k.trim().toLowerCase()] = data[k]; });
     Object.keys(_costFileIds).forEach(function (k) { valueMap[k] = _costFileIds[k]; });
     valueMap['user'] = (user && user.email) || '';
-    const formulaMap = {
-      'القيمه بالسعر المعلن': '=G{r}*H{r}',
-      'اجمالي التكاليف': '=IF(D{r}="بيع",J{r}+M{r}+N{r}+O{r}+P{r}+Q{r}+R{r}+S{r}+T{r},J{r}+M{r}+N{r}+O{r}+P{r}+Q{r}+R{r}+S{r}+T{r}+U{r})',
-      'المبيعات': '=IF(D{r}="بيع",ROUND(X{r}*103/100,-2),0)',
-      'نوع الضريبة': '=Y{r}*14/100',
-      'ضريبة المبيعات': '=IF(Z{r}>0.06,Y{r}*14/100,0)',
-      'الشهر': '=MONTH(B{r})',
-      'العام': '=YEAR(B{r})'
-    };
+    const formulaMap = legalCostingFormulaMap_();
     var rowNum = writeBudgetRow_(dbId, LEGAL_COSTING_SHEET, valueMap, formulaMap);
     try { logHistory_(dbId, LEGAL_COSTING_SHEET, valueMap.record_uid || ('create_'+LEGAL_COSTING_SHEET+'_'+cert), String(cert), (user&&user.email)||'', 'create', valueMap, null); } catch(e){}
     var savedRecord = {};
@@ -4026,6 +4688,8 @@ const TopChemical = (function () {
     if (!item) throw new Error('المادة مطلوبة');
     if (!(Number(data['الكمية']) > 0)) throw new Error('الكمية مطلوبة (أكبر من صفر)');
     if (!(Number(data['قيمة التكلفة']) >= 0)) throw new Error('قيمة التكلفة مطلوبة');
+    if (!String(data['المعاملة'] || '').trim()) throw new Error('المعاملة مطلوبة');
+    if (String(data['نوع الشهادة'] || '').trim() === 'بيع' && !(Number(data['سعر البيع']) > 0)) throw new Error('سعر البيع مطلوب عندما يكون نوع الشهادة بيع');
     const valueMap = {};
     Object.keys(data).forEach(function (k) { valueMap[k.trim().toLowerCase()] = data[k]; });
     Object.keys(_lineFileIds).forEach(function (k) { valueMap[k] = _lineFileIds[k]; });
@@ -4097,6 +4761,30 @@ const TopChemical = (function () {
     if (!Number.isInteger(n) || n < 0 || n > 12) throw new Error('شهر الإقرار يجب أن يكون رقماً صحيحاً بين 0 و 12');
   }
 
+  function validateBudgetExchangeValues_(data) {
+    [
+      { key: 'القيمه بالدولار', label: 'القيمة بالعملة الأصلية' },
+      { key: 'سعر الصرف', label: 'سعر الصرف' }
+    ].forEach(function (field) {
+      var raw = data && data[field.key];
+      var value = raw == null ? NaN : Number(String(raw).replace(/,/g, '').trim());
+      if (!isFinite(value) || value <= 0) throw new Error(field.label + ' مطلوب ويجب أن يكون أكبر من صفر');
+    });
+  }
+
+  function validateBudgetCostingBundle_(header, lines) {
+    if (!String(header && header['اسم_المورد'] || '').trim()) throw new Error('المورد مطلوب');
+    if (!Array.isArray(lines) || !lines.length) throw new Error('أضف بند مشتريات واحداً على الأقل');
+    var isSale = String(header && header['نوع الشهادة'] || '').trim() === 'بيع';
+    lines.forEach(function (line) {
+      if (!String(line && line['المادة'] || '').trim()) throw new Error('المادة مطلوبة');
+      if (!(Number(line['الكمية']) > 0)) throw new Error('الكمية مطلوبة (أكبر من صفر)');
+      if (!(Number(line['قيمة التكلفة']) >= 0)) throw new Error('قيمة التكلفة مطلوبة');
+      if (!String(line['المعاملة'] || '').trim()) throw new Error('المعاملة مطلوبة');
+      if (isSale && !(Number(line['سعر البيع']) > 0)) throw new Error('سعر البيع مطلوب عندما يكون نوع الشهادة بيع');
+    });
+  }
+
   /** Helper to extract certificate number flexibly */
   function getCertNo_(r) {
     if (!r) return '';
@@ -4120,6 +4808,8 @@ const TopChemical = (function () {
     const ship = String(header['نوع الشحن'] || '').trim();
     const lm = {};
     Object.keys(line).forEach(function (k) { lm[k.trim().toLowerCase()] = line[k]; });
+    lm['قيمة التكلفة'] = Number(line['قيمة التكلفة']) || 0;
+    lm['الكمية'] = Number(line['الكمية']) || 0;
     lm['رقم الشهاده'] = cert;
     lm['الرقم'] = cert;
     lm['نوع البند'] = ship === 'محلي' ? 'محلي' : 'مستورد';
@@ -4158,28 +4848,21 @@ const TopChemical = (function () {
     if (!String(header['الصنف'] || '').trim()) throw new Error('الصنف مطلوب');
     if (!String(header['نوع الشهادة'] || '').trim()) throw new Error('نوع الشهادة مطلوب');
     if (!String(header['نوع الشحن'] || '').trim()) throw new Error('نوع الشحن مطلوب');
-    if (!lines.length) throw new Error('أضف بند مشتريات واحداً على الأقل');
+    validateBudgetCostingBundle_(header, lines);
     validateBudgetMonth_(header['تم_الاقرار_شهر']);
+    validateBudgetExchangeValues_(header);
     const exists = getAllRecords_(dbId, LEGAL_COSTING_SHEET).some(function (c) {
       return getCertNo_(c) === cert;
     });
     if (exists) throw new Error('رقم الشهادة مستخدم بالفعل: ' + cert);
+    ensureBudgetHeader_(dbId, LEGAL_PURCHASING_SHEET, 'الرقم');
+    ensureBudgetHeader_(dbId, LEGAL_PURCHASING_SHEET, 'رقم الشهاده');
     const valueMap = {};
     Object.keys(header).forEach(function (k) { valueMap[k.trim().toLowerCase()] = header[k]; });
     valueMap['رقم الشهاده'] = cert;
     valueMap['user'] = (user && user.email) || '';
-    const formulaMap = {
-      'القيمه بالسعر المعلن': '=G{r}*H{r}',
-      'اجمالي التكاليف': '=IF(D{r}="بيع",J{r}+M{r}+N{r}+O{r}+P{r}+Q{r}+R{r}+S{r}+T{r},J{r}+M{r}+N{r}+O{r}+P{r}+Q{r}+R{r}+S{r}+T{r}+U{r})',
-      'المبيعات': '=IF(D{r}="بيع",ROUND(X{r}*103/100,-2),0)',
-      'نوع الضريبة': '=Y{r}*14/100',
-      'ضريبة المبيعات': '=IF(Z{r}>0.06,Y{r}*14/100,0)',
-      'الشهر': '=MONTH(B{r})',
-      'العام': '=YEAR(B{r})'
-    };
+    const formulaMap = legalCostingFormulaMap_();
     var headerRow = writeBudgetRow_(dbId, LEGAL_COSTING_SHEET, valueMap, formulaMap);
-    ensureBudgetHeader_(dbId, LEGAL_PURCHASING_SHEET, 'الرقم');
-    ensureBudgetHeader_(dbId, LEGAL_PURCHASING_SHEET, 'رقم الشهاده');
     let saved = 0;
     var savedLines = [];
     lines.forEach(function (line) {
@@ -4217,12 +4900,16 @@ const TopChemical = (function () {
     const lines = (data && data.lines) || [];
     const cert = String(header['رقم الشهاده'] || header['الرقم'] || '').trim();
     if (!cert) throw new Error('رقم الشهادة مطلوب');
+    if (!String(header['اسم_المورد'] || '').trim()) throw new Error('المورد مطلوب');
+    validateBudgetCostingBundle_(header, lines);
     validateBudgetMonth_(header['تم_الاقرار_شهر']);
+    validateBudgetExchangeValues_(header);
     var __oldCostBundle = null; try { __oldCostBundle = getAllRecords_(dbId, LEGAL_COSTING_SHEET).find(function(r){ return getCertNo_(r)===cert; }) || null; } catch(eVb){}
     var __costVer = checkRowVersion_(__oldCostBundle, header.version !== undefined ? header.version : (data && data.version));
     const sheet = getSheet_(LEGAL_COSTING_SHEET, dbId);
     const headers = getHeaders_(sheet);
-    const formulaKeys = ['اجمالي التكاليف', 'المبيعات', 'نوع الضريبة', 'ضريبة المبيعات', 'الشهر', 'العام'].map(function (k) { return String(k).toLowerCase(); });
+    const formulaMap = legalCostingFormulaMap_();
+    const formulaKeys = Object.keys(formulaMap).map(function (k) { return String(k).toLowerCase(); });
     const updates = {};
     Object.keys(header).forEach(function (k) {
       const key = String(k).trim().toLowerCase();
@@ -4236,6 +4923,8 @@ const TopChemical = (function () {
       if (String(values[i][0] || '').trim() === cert) { rowIndex = i; break; }
     }
     if (rowIndex === -1) throw new Error('الشهادة غير موجودة: ' + cert);
+    ensureBudgetHeader_(dbId, LEGAL_PURCHASING_SHEET, 'الرقم');
+    ensureBudgetHeader_(dbId, LEGAL_PURCHASING_SHEET, 'رقم الشهاده');
     headers.forEach(function (h, col) {
       const key = String(h).trim().toLowerCase();
       if (formulaKeys.indexOf(key) === -1 && updates[key] !== undefined) {
@@ -4247,8 +4936,6 @@ const TopChemical = (function () {
     deletePurchasingLinesForCert_(dbId, cert);
     var savedLinesE = [];
     if (lines.length) {
-      ensureBudgetHeader_(dbId, LEGAL_PURCHASING_SHEET, 'الرقم');
-      ensureBudgetHeader_(dbId, LEGAL_PURCHASING_SHEET, 'رقم الشهاده');
       lines.forEach(function (line) {
         const item = String(line['المادة'] || '').trim();
         if (!item) throw new Error('المادة مطلوبة');
@@ -4267,6 +4954,14 @@ const TopChemical = (function () {
         savedLinesE.push(enrichedLineE);
       });
     }
+    headers.forEach(function (h, col) {
+      var formula = formulaMap[String(h).trim()];
+      if (formula) {
+        sheet.getRange(rowIndex + 1, col + 1).setFormula(formula.replace(/\{r\}/g, String(rowIndex + 1)));
+        noteMutation_(sheet);
+      }
+    });
+    SpreadsheetApp.flush();
     var savedHeaderE = {};
     Object.keys(header).forEach(function(k){ savedHeaderE[k]=header[k]; });
     savedHeaderE['رقم الشهاده'] = cert;
@@ -5767,9 +6462,31 @@ const valueMap = {};
   register('add_stock_revision', addStockRevision_);
   register('update_stock_revision', updateStockRevision_);
   register('get_system_qty', getSystemQty_);
-  register('get_stock_scan_options', getStockScanOptions_);
-  register('get_stock_scan_qty', getSystemQty_);
-  register('add_stock_scan', addStockRevision_);
+  register('get_stock_scan_options', function (data, user, dbId) {
+    return readDiagnosticsForUser_(getStockScanOptions_(data, user, dbId), user);
+  });
+  register('get_stock_scan_sheet_catalog', function (data, user, dbId) {
+    return readDiagnosticsForUser_(getStockScanSheetCatalog_(data, user, dbId), user);
+  });
+  register('get_stock_scan_warehouses', function (data, user) {
+    return readDiagnosticsForUser_(getStockScanWarehouses_(data, user), user);
+  });
+  register('get_stock_scan_balance', function (data, user) {
+    return readDiagnosticsForUser_(getStockScanBalance_(data, user), user);
+  });
+  register('get_stock_scan_catalog', function (data, user) {
+    return readDiagnosticsForUser_(getStockScanCatalog_(data, user), user);
+  });
+  register('get_stock_scan_balances', function (data, user) {
+    return readDiagnosticsForUser_(getStockScanBalances_(data, user), user);
+  });
+  register('get_stock_scan_history', function (data, user, dbId) {
+    return readDiagnosticsForUser_(getStockScanHistory_(data, user, dbId), user);
+  });
+  register('get_stock_scan_qty', function (data, user, dbId) {
+    return readDiagnosticsForUser_(getSystemQty_(data, user, dbId), user);
+  });
+  register('add_stock_scan', addStockScan_);
   register('get_customs_office', getCustomsOffice_);
   register('add_customs_office', addCustomsOffice_);
   register('get_purchase_items', getPurchaseItems_);
@@ -5809,6 +6526,7 @@ const valueMap = {};
   register('get_budget_refs', getBudgetRefs_);
   register('get_legal_current_products', getLegalCurrentProducts_);
   register('get_legal_stock_balance', getLegalStockBalance_);
+  register('get_system_product_options', getSystemProductOptions_);
   register('update_legal_product', updateLegalProduct_);
   register('get_legal_products_movement', getLegalProductsMovement_);
   register('get_legal_inputs', getLegalInputs_);
@@ -5956,9 +6674,11 @@ const valueMap = {};
 
   function dbProductsLiveBust_() {
     try { CacheService.getScriptCache().put(DB_PRODUCTS_LIVE_VER_KEY, String(Date.now()), 21600); } catch (e) {}
+    try { if (typeof removeChunkedCache_ === 'function') removeChunkedCache_(SYSTEM_PRODUCT_OPTIONS_KEY); } catch (e2) {}
   }
 
   function dbProductsLiveCacheGet_(key) {
+    if (typeof _mysqlRequest_ !== 'undefined' && _mysqlRequest_) return null;
     try {
       if (typeof getChunkedCache_ === 'function') return getChunkedCache_(key);
       var raw = CacheService.getScriptCache().get(key);
@@ -5967,6 +6687,7 @@ const valueMap = {};
   }
 
   function dbProductsLiveCachePut_(key, value) {
+    if (typeof _mysqlRequest_ !== 'undefined' && _mysqlRequest_) return;
     try {
       if (typeof putChunkedCache_ === 'function') { putChunkedCache_(key, value, DB_PRODUCTS_LIVE_TTL); return; }
       CacheService.getScriptCache().put(key, JSON.stringify(value), DB_PRODUCTS_LIVE_TTL);
@@ -5983,59 +6704,368 @@ const valueMap = {};
     return raw.trim().slice(0, 40);
   }
 
+  function dbProductsLiveCountQuery_(conn, where, likeParams, diagnose) {
+    var countStmt, countRs, phaseStart = 0, sqlMs = 0, readMs = 0;
+    try {
+      countStmt = conn.prepareStatement('SELECT COUNT(*) AS cnt FROM `products` `p` ' + where);
+      if (likeParams) dbBindParams_(countStmt, likeParams);
+      if (diagnose) phaseStart = Date.now();
+      countRs = countStmt.executeQuery();
+      if (diagnose) { sqlMs = Date.now() - phaseStart; phaseStart = Date.now(); }
+      var total = countRs.next() ? countRs.getInt('cnt') : 0;
+      if (diagnose) readMs = Date.now() - phaseStart;
+      return { status: 'ok', total: total, sql_ms: sqlMs, read_ms: readMs };
+    } finally {
+      if (countRs) countRs.close();
+      if (countStmt) countStmt.close();
+    }
+  }
+
   function dbProductsLiveList_(data, user) {
+    if (typeof mysqlRead_ === 'function' && !mysqlReading_('tc.dbProductsLiveList_')) {
+      return mysqlRead_(mysqlTcDefinition_('dbProductsLiveList_'), data, function (p) { return dbProductsLiveList_(p, user); });
+    }
+    
+    
+    
     data = data || {};
     var loadAll = !!(data.loadAll === true || data.loadAll === 'true' || data.loadAll === '1' || data.loadAll === 1);
-    var limit = loadAll ? DB_PRODUCTS_LIVE_ALL_MAX : Math.min(Math.max(Number(data.limit) || 50, 1), DB_PRODUCTS_LIVE_PAGE_MAX);
-    var offset = Math.max(Number(data.offset) || 0, 0);
+    /* The versioned cursor route is opt-in. Legacy offset and loadAll callers
+       keep their existing response and SQL paths until the page is validated. */
+    var cursorJson = data.pagination === 'cursor_json';
+    var cursorPaging = data.pagination === 'cursor' || cursorJson;
+    if (cursorPaging) loadAll = false;
+    var limit = loadAll ? DB_PRODUCTS_LIVE_ALL_MAX : Math.min(Math.max(Math.floor(Number(data.limit) || 50), 1), DB_PRODUCTS_LIVE_PAGE_MAX);
+    var offset = cursorPaging ? 0 : Math.max(Math.floor(Number(data.offset) || 0), 0);
+    if (!Number.isFinite(offset)) throw new Error('Invalid product offset');
     var q = dbProductsLiveSearch_(data);
+    var searchMode = String(data.search_mode || 'contains');
+    if (['contains', 'prefix', 'id', 'code'].indexOf(searchMode) === -1) throw new Error('Invalid product search mode');
+    if (q && searchMode === 'id' && !/^[1-9]\d{0,19}$/.test(q)) throw new Error('Invalid product ID');
+    var beforeId = cursorPaging && !cursorJson && data.before_id != null ? String(data.before_id).trim() : '';
+    var snapshotMaxId = cursorJson && data.snapshot_max_id != null ? String(data.snapshot_max_id).trim() : '';
+    if (cursorJson && data.cursor) {
+      var token = String(data.cursor);
+      if (token.length > 1024) throw new Error('Invalid product cursor');
+      var decoded;
+      try { decoded = JSON.parse(Utilities.newBlob(Utilities.base64DecodeWebSafe(token)).getDataAsString()); }
+      catch (cursorError) { throw new Error('Invalid product cursor'); }
+      if (!decoded || decoded.v !== 1 || decoded.q !== q || decoded.mode !== searchMode ||
+          !decoded.before || !decoded.snapshot ||
+          (snapshotMaxId && snapshotMaxId !== decoded.snapshot)) throw new Error('Product cursor scope changed');
+      beforeId = String(decoded.before);
+      snapshotMaxId = String(decoded.snapshot);
+    }
+    if (beforeId && !/^[1-9]\d{0,19}$/.test(beforeId)) throw new Error('Invalid product cursor');
+    if (snapshotMaxId && !/^[1-9]\d{0,19}$/.test(snapshotMaxId)) throw new Error('Invalid product snapshot');
+    if (cursorJson && beforeId && !snapshotMaxId) throw new Error('Product cursor requires a snapshot');
     var cacheKey = 'dblive_products_v' + dbProductsLiveVer_() + '_l' + limit + '_o' + offset +
-      (q ? '_q' + q.replace(/\s+/g, ' ') : '');
-    var cached = dbProductsLiveCacheGet_(cacheKey);
+      '_filter' + JSON.stringify(q ? [q, searchMode] : []) +
+      (cursorPaging ? '_seek' + beforeId : '') + (cursorJson ? '_json_snap' + snapshotMaxId : '');
+    var cached = data.refresh ? null : dbProductsLiveCacheGet_(cacheKey);
     if (cached && cached.status === 'ok' && Array.isArray(cached.rows)) return cached;
     var where = 'WHERE `p`.`deleted_at` IS NULL';
     var likeParams = null;
-    if (q) {
+    if (q && (searchMode === 'id' || searchMode === 'code')) {
+      where += searchMode === 'id' ? ' AND `p`.`id` = ?' : ' AND `p`.`code` = ?';
+      likeParams = [q];
+    } else if (q && searchMode === 'prefix') {
+      where += ' AND `p`.`name_ar` LIKE ? ESCAPE \'\\\\\'';
+      likeParams = [q.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_') + '%'];
+    } else if (q) {
       where += ' AND (`p`.`name_ar` LIKE ? ESCAPE \'\\\\\' OR `p`.`name_en` LIKE ? ESCAPE \'\\\\\' OR `p`.`code` LIKE ? ESCAPE \'\\\\\' OR CAST(`p`.`id` AS CHAR) LIKE ? ESCAPE \'\\\\\')';
       var esc = q.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_');
       likeParams = ['%' + esc + '%', '%' + esc + '%', '%' + esc + '%', '%' + esc + '%'];
     }
-    var conn, countStmt, countRs, stmt, rs;
+    var whereParams = (likeParams || []).slice();
+    if (snapshotMaxId) {
+      where += ' AND `p`.`id` <= ?';
+      whereParams.push(snapshotMaxId);
+    }
+    var conn, stmt, rs, schemaStmt, schemaRs;
+    var diagnose = typeof perfDiagnosticsEnabled_ === 'function' && perfDiagnosticsEnabled_();
+    var countSqlMs = 0, countReadMs = 0, productSqlMs = 0, productReadMs = 0, phaseStart = 0;
+    var aggregateLoad = (loadAll && !cursorPaging && offset === 0) || cursorJson;
     try {
-      conn = dbGetConnection_();
-      countStmt = conn.prepareStatement('SELECT COUNT(*) AS cnt FROM `products` `p` ' + where);
-      if (likeParams) dbBindParams_(countStmt, likeParams);
-      countRs = countStmt.executeQuery();
-      var total = countRs.next() ? countRs.getInt('cnt') : 0;
-      stmt = conn.prepareStatement(
-        'SELECT `p`.*, `q`.`current_qty` AS `live_quantity` FROM `products` `p`' +
-        ' LEFT JOIN `product_current_quantity` `q` ON `q`.`id` = `p`.`id` ' +
-        where +
-        ' ORDER BY `p`.`id` DESC LIMIT ' + limit + ' OFFSET ' + offset
-      );
-      if (likeParams) dbBindParams_(stmt, likeParams);
-      rs = stmt.executeQuery();
-      var md = rs.getMetaData();
-      var colCount = md.getColumnCount();
-      var columns = [];
-      for (var c = 1; c <= colCount; c++) { columns.push(md.getColumnLabel(c) || md.getColumnName(c)); }
-      var rows = [];
-      while (rs.next()) {
-        var row = {};
-        for (var i = 1; i <= colCount; i++) { var v = rs.getObject(i); row[columns[i-1]] = v !== null ? String(v) : null; }
-        rows.push(row);
+      var total, count = null;
+      if (!aggregateLoad) {
+        if (typeof _mysqlRequest_ !== 'undefined' && _mysqlRequest_) {
+          count = mysqlRead_(mysqlTcDefinition_('dbProductsLiveCount_'), { search: q, search_mode: searchMode, refresh: data.refresh }, function () {
+            return dbProductsLiveCountQuery_(dbGetConnection_(), where, whereParams, diagnose);
+          });
+        } else {
+          conn = dbGetConnection_();
+          count = dbProductsLiveCountQuery_(conn, where, whereParams, diagnose);
+        }
+        total = count.total;
+        if (diagnose && !(count._mysql && count._mysql.cache_hit)) {
+          countSqlMs = count.sql_ms; countReadMs = count.read_ms;
+        }
       }
-      var out = { status: 'ok', columns: columns, rows: rows, total: total, limit: limit, offset: offset, loadedAll: loadAll, search: q };
+      conn = conn || dbGetConnection_();
+      // Project the product schema dynamically, but deliberately exclude
+      // products.quantity. The page's quantity column is selected only from
+      // product_current_quantity.current_qty below.
+      schemaStmt = conn.prepareStatement('SELECT `p`.* FROM `products` `p` LIMIT 0');
+      schemaRs = schemaStmt.executeQuery();
+      var productMeta = schemaRs.getMetaData(), productColumnCount = productMeta.getColumnCount();
+      var productColumns = [], quantitySelect = [];
+      for (var pc = 1; pc <= productColumnCount; pc++) {
+        var productColumn = String(productMeta.getColumnLabel(pc) || productMeta.getColumnName(pc) || '');
+        if (!/^[A-Za-z0-9_$]+$/.test(productColumn)) throw new Error('Unsupported products column name');
+        if (productColumn === 'quantity') continue;
+        productColumns.push(productColumn);
+        quantitySelect.push('`p`.`' + productColumn.replace(/`/g, '``') + '`');
+      }
+      columns = productColumns.concat(['quantity']);
+      quantitySelect.push('`q`.`current_qty` AS `quantity`');
+      schemaRs.close(); schemaRs = null;
+      schemaStmt.close(); schemaStmt = null;
+      // Seek from the last displayed ID; COUNT remains for the entire search.
+      var pageWhere = where + (beforeId ? ' AND `p`.`id` < ?' : '');
+      var pageParams = whereParams.slice();
+      if (beforeId) pageParams.push(beforeId); // Keep BIGINT IDs as strings.
+      var pageLimit = cursorPaging ? limit + 1 : limit;
+      var rows = [];
+      if (aggregateLoad) {
+        // Match the proven direct-table experiment: MySQL builds one bounded
+        // JSON result so Apps Script does not make a JDBC call for every cell.
+        var jsonArgs = [];
+        for (var c = 0; c < columns.length; c++) {
+          var column = columns[c];
+          jsonArgs.push("'" + column.replace(/'/g, "''") + "'");
+          var ident = '`x`.`' + column.replace(/`/g, '``') + '`';
+          jsonArgs.push('CASE WHEN ' + ident + ' IS NULL THEN NULL ELSE CAST(' + ident + ' AS CHAR) END');
+        }
+        if (!columns.length) throw new Error('products table has no readable columns');
+        var aggregateSql =
+          'SELECT (SELECT COUNT(*) FROM `products` `p` ' + where + ') AS `total_count`, COUNT(*) AS `row_count`,' +
+          ' COALESCE(JSON_ARRAYAGG(JSON_OBJECT(' + jsonArgs.join(',') + ')), JSON_ARRAY()) AS `rows_json` FROM (' +
+          ' SELECT ' + quantitySelect.join(',') + ' FROM (' +
+          '  SELECT * FROM `products` `p` ' + pageWhere +
+          '  ORDER BY `p`.`id` DESC LIMIT ' + pageLimit + (cursorPaging ? '' : ' OFFSET ' + offset) +
+          ' ) `p` LEFT JOIN `product_current_quantity` `q` ON `q`.`id` = `p`.`id`' +
+          ') `x`';
+        stmt = conn.prepareStatement(aggregateSql);
+        var aggregateParams = whereParams.concat(pageParams);
+        if (aggregateParams.length) dbBindParams_(stmt, aggregateParams);
+        if (diagnose) phaseStart = Date.now();
+        rs = stmt.executeQuery();
+        if (diagnose) { productSqlMs = Date.now() - phaseStart; phaseStart = Date.now(); }
+        var aggregateCount = 0, rowsJson = '[]';
+        if (rs.next()) {
+          total = Number(rs.getString('total_count') || 0);
+          aggregateCount = Number(rs.getString('row_count') || 0);
+          rowsJson = String(rs.getString('rows_json') || '[]');
+        }
+        var parseStarted = Date.now();
+        var parsedRows = JSON.parse(rowsJson);
+        if (!Array.isArray(parsedRows) || parsedRows.length !== aggregateCount || parsedRows.length > pageLimit) {
+          throw new Error('MySQL products aggregate is invalid');
+        }
+        rows = parsedRows.map(function (item) {
+          if (!item || typeof item !== 'object' || Array.isArray(item)) throw new Error('MySQL products row is invalid');
+          var clean = {};
+          columns.forEach(function (key) { clean[key] = item[key] == null ? null : String(item[key]); });
+          return clean;
+        });
+        rows.sort(function (a, b) {
+          var left = String(a.id == null ? '' : a.id), right = String(b.id == null ? '' : b.id);
+          if (/^\d+$/.test(left) && /^\d+$/.test(right)) {
+            left = left.replace(/^0+(?=\d)/, ''); right = right.replace(/^0+(?=\d)/, '');
+            if (left.length !== right.length) return right.length - left.length;
+            return left < right ? 1 : (left > right ? -1 : 0);
+          }
+          return right.localeCompare(left);
+        });
+        if (cursorJson) {
+          for (var ri = 0; ri < rows.length; ri++) {
+            if (!/^[1-9]\d{0,19}$/.test(String(rows[ri].id || '')) ||
+                (ri > 0 && String(rows[ri - 1].id) === String(rows[ri].id))) {
+              throw new Error('Product cursor requires unique string IDs');
+            }
+          }
+        }
+        if (typeof _mysqlRequest_ !== 'undefined' && _mysqlRequest_) {
+          _mysqlRequest_.jsonParseMs = (_mysqlRequest_.jsonParseMs || 0) + Date.now() - parseStarted;
+        }
+      } else {
+        stmt = conn.prepareStatement(
+          'SELECT ' + quantitySelect.join(',') + ' FROM (' +
+          ' SELECT * FROM `products` `p` ' + pageWhere +
+          ' ORDER BY `p`.`id` DESC LIMIT ' + pageLimit + (cursorPaging ? '' : ' OFFSET ' + offset) +
+          ') `p` LEFT JOIN `product_current_quantity` `q` ON `q`.`id` = `p`.`id`' +
+          ' ORDER BY `p`.`id` DESC'
+        );
+        if (pageParams.length) dbBindParams_(stmt, pageParams);
+        if (diagnose) phaseStart = Date.now();
+        rs = stmt.executeQuery();
+        if (diagnose) { productSqlMs = Date.now() - phaseStart; phaseStart = Date.now(); }
+        var md = rs.getMetaData(), colCount = md.getColumnCount();
+        while (rs.next()) {
+          var row = {};
+          for (var i = 1; i <= colCount; i++) { var v = rs.getObject(i); row[columns[i-1]] = v !== null ? String(v) : null; }
+          rows.push(row);
+        }
+      }
+      if (columns.indexOf('quantity') < 0) throw new Error('Live quantity view column is missing');
+      if (diagnose) {
+        productReadMs = Date.now() - phaseStart;
+        try {
+          Logger.log('tc.products_live.read ' + JSON.stringify({ count_sql_ms: countSqlMs,
+            count_read_ms: countReadMs, product_sql_ms: productSqlMs,
+            product_read_ms: productReadMs, count_cache_hit: !!(count && count._mysql && count._mysql.cache_hit),
+            rows: rows.length, limit: limit }));
+        } catch (diagnosticError) {}
+      }
+      var hasMore = cursorPaging ? rows.length > limit : offset + rows.length < total;
+      if (cursorPaging) rows = rows.slice(0, limit);
+      var out = { status: 'ok', columns: columns, rows: rows, total: total, limit: limit, offset: offset, loadedAll: loadAll, search: q,
+        search_mode: searchMode, has_more: hasMore,
+        next_cursor: cursorPaging && hasMore && rows.length ? String(rows[rows.length - 1].id) : '' };
+      if (cursorJson) {
+        var firstId = rows.length ? String(rows[0].id) : '';
+        var pageSnapshot = snapshotMaxId || firstId;
+        if (hasMore && !pageSnapshot) throw new Error('Product page has no snapshot');
+        out.schema_version = 1;
+        out.total_is_exact = true;
+        out.data_version = dbProductsLiveVer_();
+        out.next_cursor = hasMore ? Utilities.base64EncodeWebSafe(JSON.stringify({
+          v: 1, before: out.next_cursor, snapshot: pageSnapshot, q: q, mode: searchMode
+        })) : '';
+        out.page = { limit: limit, has_more: hasMore, next_cursor: out.next_cursor,
+          snapshot: pageSnapshot };
+      }
       dbProductsLiveCachePut_(cacheKey, out);
       return out;
     } catch (err) {
-      Logger.log('dbProductsLiveList_ error: ' + err.message);
+      Logger.log('dbProductsLiveList_ MySQL adapter completed or failed; see named diagnostics');
       throw err;
     } finally {
       if (rs) rs.close();
       if (stmt) stmt.close();
-      if (countRs) countRs.close();
-      if (countStmt) countStmt.close();
+      if (schemaRs) schemaRs.close();
+      if (schemaStmt) schemaStmt.close();
+      if (conn) conn.close();
+    }
+  }
+
+  /* Warehouse-level quantity detail for the Products Live modal. MySQL emits
+   * one compact JSON row instead of Apps Script making JDBC calls per cell.
+   * This is read-only and uncached so opening the modal shows the view's
+   * current values. */
+  function dbProductLiveWarehouseQuantities_(data, user) {
+    if (typeof mysqlRead_ === 'function' && !mysqlReading_('tc.dbProductLiveWarehouseQuantities_')) {
+      return mysqlRead_(mysqlTcDefinition_('dbProductLiveWarehouseQuantities_'), data,
+        function (p) { return dbProductLiveWarehouseQuantities_(p, user); });
+    }
+    data = data || {};
+    var id = String(data.id == null ? '' : data.id).trim();
+    if (!/^[1-9]\d{0,19}$/.test(id)) throw new Error('Invalid product ID');
+    var conn, stmt, rs;
+    try {
+      conn = dbGetConnection_();
+      stmt = conn.prepareStatement(
+        'SELECT COUNT(*) AS `row_count`, COALESCE(JSON_ARRAYAGG(JSON_OBJECT(' +
+        "'warehouse_id', CASE WHEN `q`.`warehouse_id` IS NULL THEN NULL ELSE CAST(`q`.`warehouse_id` AS CHAR) END," +
+        "'current_qty', CASE WHEN `q`.`current_qty` IS NULL THEN NULL ELSE CAST(`q`.`current_qty` AS CHAR) END)), JSON_ARRAY()) AS `balances_json` " +
+        'FROM `product_current_qty_warehouses` `q` INNER JOIN `products` `p` ON `p`.`id` = `q`.`id` AND `p`.`deleted_at` IS NULL WHERE `q`.`id` = ?'
+      );
+      dbBindParams_(stmt, [id]);
+      rs = stmt.executeQuery();
+      if (!rs.next()) throw new Error('Warehouse balance query returned no result');
+      var count = Number(rs.getString('row_count') || 0);
+      if (!Number.isInteger(count) || count < 0 || count > 500) throw new Error('Too many warehouse balances for this product');
+      var balances = JSON.parse(String(rs.getString('balances_json') || '[]'));
+      if (!Array.isArray(balances) || balances.length !== count || balances.length > 500) throw new Error('Warehouse balance JSON is invalid');
+      var seen = Object.create(null);
+      balances = balances.map(function (item) {
+        if (!item || item.warehouse_id == null || String(item.warehouse_id) === '') throw new Error('Warehouse balance has no warehouse ID');
+        var warehouseId = String(item.warehouse_id);
+        if (seen[warehouseId]) throw new Error('Duplicate warehouse balance for product');
+        seen[warehouseId] = true;
+        return { warehouse_id: warehouseId, current_qty: item.current_qty == null ? null : String(item.current_qty) };
+      });
+      balances.sort(function (a, b) {
+        var x = a.warehouse_id, y = b.warehouse_id;
+        if (/^\d+$/.test(x) && /^\d+$/.test(y)) {
+          x = x.replace(/^0+(?=\d)/, ''); y = y.replace(/^0+(?=\d)/, '');
+          if (x.length !== y.length) return x.length - y.length;
+        }
+        return x < y ? -1 : (x > y ? 1 : 0);
+      });
+      return { status: 'ok', product_id: id, balances: balances };
+    } catch (err) {
+      Logger.log('dbProductLiveWarehouseQuantities_ MySQL read failed; see named diagnostics');
+      throw err;
+    } finally {
+      if (rs) rs.close();
+      if (stmt) stmt.close();
+      if (conn) conn.close();
+    }
+  }
+
+  /**
+   * INSERT a product using an explicit editable-column allowlist. IDs,
+   * quantity, foreign keys, timestamps, and delete state remain server-owned.
+   */
+  function dbProductsLiveInsert_(data, user) {
+    data = data || {};
+    function textValue(key, maxLength, required) {
+      var value = String(data[key] == null ? '' : data[key]).trim();
+      if (required && !value) throw new Error('الحقل مطلوب: ' + key);
+      if (value.length > maxLength) throw new Error('قيمة الحقل أطول من المسموح: ' + key);
+      return value || null;
+    }
+    function decimalValue(key, required) {
+      var value = String(data[key] == null ? '' : data[key]).trim();
+      if (!value) {
+        if (required) throw new Error('الحقل مطلوب: ' + key);
+        return null;
+      }
+      if (value.length > 40 || !/^(?:\d+)(?:\.\d+)?$/.test(value) || !Number.isFinite(Number(value))) {
+        throw new Error('قيمة رقمية غير صالحة: ' + key);
+      }
+      return value;
+    }
+
+    var columns = ['name_ar', 'code', 'unit', 'number_of_cartons_bags'];
+    var values = [
+      textValue('name_ar', 255, true),
+      textValue('code', 100, true),
+      textValue('unit', 80, true),
+      decimalValue('number_of_cartons_bags', true)
+    ];
+    // Omit blank optional columns so MySQL can apply a column default (and so
+    // NOT NULL fields with defaults are not accidentally sent an explicit NULL).
+    [
+      ['name_en', function () { return textValue('name_en', 255, false); }],
+      ['price', function () { return decimalValue('price', false); }],
+      ['number_of_small_boxes', function () { return decimalValue('number_of_small_boxes', false); }],
+      ['product_unit_metric', function () { return textValue('product_unit_metric', 80, false); }]
+    ].forEach(function (field) {
+      var value = field[1]();
+      if (value !== null) { columns.push(field[0]); values.push(value); }
+    });
+    columns.push('active', 'deleted_at');
+    values.push(1, null);
+    var conn, stmt;
+    try {
+      conn = dbGetConnection_();
+      stmt = conn.prepareStatement(
+        'INSERT INTO `products` (' + columns.map(function (c) { return '`' + c + '`'; }).join(',') +
+        ') VALUES (' + columns.map(function () { return '?'; }).join(',') + ')'
+      );
+      dbBindParams_(stmt, values);
+      var affected = stmt.executeUpdate();
+      if (affected !== 1) throw new Error('لم تتم إضافة الصنف');
+      dbProductsLiveBust_();
+      return { status: 'ok', affected: affected };
+    } catch (err) {
+      Logger.log('dbProductsLiveInsert_ MySQL adapter completed or failed; see named diagnostics');
+      throw err;
+    } finally {
+      if (stmt) stmt.close();
       if (conn) conn.close();
     }
   }
@@ -6071,7 +7101,7 @@ const valueMap = {};
       dbProductsLiveBust_();
       return { status: 'ok', affected: affected, id: id };
     } catch (err) {
-      Logger.log('dbProductsLiveUpdate_ error: ' + err.message);
+      Logger.log('dbProductsLiveUpdate_ MySQL adapter completed or failed; see named diagnostics');
       throw err;
     } finally {
       if (stmt) stmt.close();
@@ -6100,7 +7130,7 @@ const valueMap = {};
       dbProductsLiveBust_();
       return { status: 'ok', affected: affected, id: id };
     } catch (err) {
-      Logger.log('dbProductsLiveDelete_ error: ' + err.message);
+      Logger.log('dbProductsLiveDelete_ MySQL adapter completed or failed; see named diagnostics');
       throw err;
     } finally {
       if (stmt) stmt.close();
@@ -6109,13 +7139,276 @@ const valueMap = {};
   }
 
   function getProductsLive_(data, user, dbId) {
-    return dbProductsLiveList_(data || {}, user);
+    var result = dbProductsLiveList_(data || {}, user);
+    if (data && data.pagination === 'cursor_json' && result && result.status === 'ok') {
+      result = Object.assign({}, result, { request_id: Utilities.getUuid() });
+    }
+    return readDiagnosticsForUser_(result, user);
+  }
+  function getProductLiveWarehouseQuantities_(data, user, dbId) {
+    return dbProductLiveWarehouseQuantities_(data || {}, user);
+  }
+
+  // Isolated tc_products_live experiment: fetch the full products table once
+  // as a compact JSON aggregate. MySQL does the row serialization so Apps
+  // Script avoids the slow JDBC per-cell loop. The client derives its dropdown
+  // pairs from these rows and also exercises local search/pagination.
+  function getProductsLiveDirectTest_(data, user) {
+    if (!user || !user.isSuperAdmin) throw new Error('اختبار قياس جدول المنتجات متاح للمسؤول الأعلى فقط');
+    var started = Date.now(), tracker = _mysqlRequest_;
+    var before = tracker ? { connection: tracker.connectionMs, query: tracker.sqlMs, read: tracker.readMs } : null;
+    var conn, schemaStmt, schemaRs, stmt, rs;
+    try {
+      conn = dbGetConnection_();
+      schemaStmt = conn.prepareStatement('SELECT * FROM `products` LIMIT 0');
+      schemaRs = schemaStmt.executeQuery();
+      var md = schemaRs.getMetaData(), columns = [], jsonArgs = [];
+      for (var i = 1; i <= md.getColumnCount(); i++) {
+        var column = String(md.getColumnLabel(i) || md.getColumnName(i) || '');
+        // Names originate from MySQL schema metadata, but still constrain and
+        // quote them before using them as SQL identifiers or JSON keys.
+        if (!/^[A-Za-z0-9_$]+$/.test(column)) throw new Error('Unsupported products column name');
+        var ident = '`p`.`' + column.replace(/`/g, '``') + '`';
+        jsonArgs.push("'" + column.replace(/'/g, "''") + "'");
+        jsonArgs.push('CASE WHEN ' + ident + ' IS NULL THEN NULL ELSE CAST(' + ident + ' AS CHAR) END');
+        columns.push(column);
+      }
+      schemaRs.close(); schemaRs = null;
+      schemaStmt.close(); schemaStmt = null;
+      if (!columns.length) throw new Error('products table has no readable columns');
+
+      // Bound this experiment's response so a future table growth cannot turn
+      // this whole-catalog test into an unbounded Apps Script payload.
+      stmt = conn.prepareStatement(
+        'SELECT COUNT(*) AS `row_count`, COALESCE(JSON_ARRAYAGG(JSON_OBJECT(' + jsonArgs.join(',') +
+          ')), JSON_ARRAY()) AS `rows_json` FROM (' +
+          'SELECT * FROM `products` ORDER BY `id` ASC LIMIT 5001' +
+        ') AS `p`'
+      );
+      rs = stmt.executeQuery();
+      var rowCount = 0, productsJson = '[]';
+      if (rs.next()) {
+        rowCount = Number(rs.getString('row_count') || 0);
+        productsJson = String(rs.getString('rows_json') || '[]');
+      }
+      if (rowCount > 5000) throw new Error('products table exceeds the 5000-row test limit');
+      var payloadBytes = Utilities.newBlob(productsJson).getBytes().length;
+      if (payloadBytes > 5 * 1024 * 1024) {
+        throw new Error('products table exceeds the 5 MB test response limit');
+      }
+      var parseStarted = Date.now();
+      var parsed = JSON.parse(productsJson);
+      if (!Array.isArray(parsed) || parsed.length !== rowCount) throw new Error('MySQL products aggregate is invalid');
+      var rows = parsed.map(function (row) {
+        if (!row || typeof row !== 'object' || Array.isArray(row)) throw new Error('MySQL products row is invalid');
+        var clean = {};
+        columns.forEach(function (column) {
+          var value = row[column];
+          clean[column] = value == null ? null : String(value);
+        });
+        return clean;
+      });
+      var parseMs = Date.now() - parseStarted;
+      var timing = tracker && before ? {
+        connection: tracker.connectionMs - before.connection,
+        query: tracker.sqlMs - before.query,
+        read: tracker.readMs - before.read
+      } : { connection: null, query: null, read: null };
+      timing.parse = parseMs;
+      timing.server_total = Date.now() - started;
+      return readDiagnosticsForUser_({ status: 'ok', columns: columns, rows: rows, count: rows.length,
+        payload_bytes: payloadBytes,
+        timing_ms: timing }, user);
+    } catch (err) {
+      Logger.log('tc.products_live.direct_test failed; see MySQL diagnostics');
+      throw err;
+    } finally {
+      if (rs) rs.close();
+      if (stmt) stmt.close();
+      if (schemaRs) schemaRs.close();
+      if (schemaStmt) schemaStmt.close();
+      if (conn) conn.close();
+    }
+  }
+  register('get_products_live_direct_test', getProductsLiveDirectTest_);
+
+  // ─── read-only production-capability view ────────────────────────────────
+  // Rows are returned as supplied by the view. The adapter deliberately does
+  // not SUM or otherwise aggregate material relationships.
+  // MySQL JSON aggregates avoid Apps Script's slow row-by-row JDBC bridge.
+  // The aggregate itself has no guaranteed element order, so each item carries
+  // a SQL rank that is validated and restored after parsing.
+  function tcCapabilityParseRankedJson_(raw, expectedRows, maxRows, label) {
+    var parseStarted = Date.now();
+    var parsed = JSON.parse(String(raw || '[]'));
+    if (!Array.isArray(parsed) || parsed.length !== expectedRows || parsed.length > maxRows) {
+      throw new Error(label + ' MySQL aggregate is invalid');
+    }
+    parsed.sort(function (a, b) { return Number(a && a._row_num) - Number(b && b._row_num); });
+    for (var i = 0; i < parsed.length; i++) {
+      if (!parsed[i] || typeof parsed[i] !== 'object' || Array.isArray(parsed[i]) || Number(parsed[i]._row_num) !== i + 1) {
+        throw new Error(label + ' MySQL aggregate order is invalid');
+      }
+      delete parsed[i]._row_num;
+    }
+    if (typeof _mysqlRequest_ !== 'undefined' && _mysqlRequest_) {
+      _mysqlRequest_.jsonParseMs = (_mysqlRequest_.jsonParseMs || 0) + Date.now() - parseStarted;
+    }
+    return parsed;
+  }
+
+  function getProductionCapabilityProducts_(data, user) {
+    data = data || {};
+    if (typeof mysqlRead_ === 'function' && !mysqlReading_('tc.dbProductionCapabilityProducts_')) {
+      return mysqlRead_(mysqlTcDefinition_('dbProductionCapabilityProducts_'), data,
+        function (p) { return getProductionCapabilityProducts_(p, user); });
+    }
+    var search = String(data.search == null ? '' : data.search).trim().slice(0, 80);
+    var limit = Math.min(Math.max(Math.floor(Number(data.limit) || 100), 1), 100);
+    var conn, stmt, rs;
+    try {
+      conn = dbGetConnection_();
+      var numericSearch = /^[1-9]\d{0,9}$/.test(search);
+      var sql = 'SELECT COUNT(*) AS `row_count`, COALESCE(JSON_ARRAYAGG(JSON_OBJECT(' +
+        "'_row_num', `ranked`.`_row_num`, 'id', CASE WHEN `ranked`.`manufacture_product_id` IS NULL THEN NULL ELSE CAST(`ranked`.`manufacture_product_id` AS CHAR) END," +
+        "'name', `ranked`.`manufacture_product_name`)), JSON_ARRAY()) AS `products_json` FROM (" +
+        ' SELECT `page`.*, ROW_NUMBER() OVER (ORDER BY `page`.`manufacture_product_name`, `page`.`manufacture_product_id`) AS `_row_num` FROM (' +
+        ' SELECT DISTINCT `manufacture_product_id`, `manufacture_product_name`' +
+        ' FROM `manuf_product_support_capability` WHERE `manufacture_product_id` IS NOT NULL';
+      var bind = [];
+      if (search) {
+        if (numericSearch) { sql += ' AND `manufacture_product_id` = ?'; bind.push(Number(search)); }
+        else { sql += ' AND `manufacture_product_name` LIKE ?'; bind.push('%' + search.replace(/[%_\\]/g, '\\$&') + '%'); }
+      }
+      sql += ' ORDER BY `manufacture_product_name`, `manufacture_product_id` LIMIT ' + (limit + 1) +
+        ') AS `page`) AS `ranked`';
+      stmt = conn.prepareStatement(sql);
+      dbBindParams_(stmt, bind);
+      rs = stmt.executeQuery();
+      var rawCount = 0, productsJson = '[]';
+      if (rs.next()) {
+        rawCount = Number(rs.getString('row_count') || 0);
+        productsJson = String(rs.getString('products_json') || '[]');
+      }
+      var parsed = tcCapabilityParseRankedJson_(productsJson, rawCount, limit + 1, 'Production capability products');
+      var byId = {}, products = [];
+      parsed.forEach(function (item) {
+        var productId = item.id;
+        if (productId != null && !byId[String(productId)]) {
+          byId[String(productId)] = true;
+          products.push({ id: String(productId), name: item.name == null ? '' : String(item.name), name_count: 1 });
+        }
+      });
+      return { status: 'ok', products: products.slice(0, limit), has_more: products.length > limit };
+    } catch (err) {
+      Logger.log('getProductionCapabilityProducts_ MySQL adapter completed or failed; see named diagnostics');
+      throw err;
+    } finally {
+      try { if (rs) rs.close(); } finally { try { if (stmt) stmt.close(); } finally { if (conn) conn.close(); } }
+    }
+  }
+
+  function getProductionCapabilityRows_(data, user) {
+    data = data || {};
+    if (typeof mysqlRead_ === 'function' && !mysqlReading_('tc.dbProductionCapabilityRows_')) {
+      return mysqlRead_(mysqlTcDefinition_('dbProductionCapabilityRows_'), data,
+        function (p) { return getProductionCapabilityRows_(p, user); });
+    }
+    var id = String(data.id == null ? '' : data.id).trim();
+    if (!/^[1-9]\d{0,9}$/.test(id)) throw new Error('Invalid manufactured product ID');
+    var conn, stmt, rs, qtyStmt, qtyRs, metricStmt, metricRs;
+    var productCurrentQuantity = null, productUnitMetric = null, productUnit = null;
+    try {
+      conn = dbGetConnection_();
+      try {
+        qtyStmt = conn.prepareStatement('SELECT `current_qty` FROM `product_current_quantity` WHERE `id` = ? LIMIT 1');
+        dbBindParams_(qtyStmt, [Number(id)]);
+        qtyRs = qtyStmt.executeQuery();
+        var quantityValue = qtyRs.next() ? qtyRs.getObject('current_qty') : null;
+        productCurrentQuantity = quantityValue == null ? null : String(quantityValue);
+      } catch (quantityError) {
+        // The live balance is optional context; it must not block the BOM read.
+        Logger.log('getProductionCapabilityRows_ current quantity lookup failed; continuing without it');
+        productCurrentQuantity = null;
+      } finally {
+        try { if (qtyRs) qtyRs.close(); } catch (closeQtyResultError) {}
+        qtyRs = null;
+        try { if (qtyStmt) qtyStmt.close(); } catch (closeQtyStatementError) {}
+        qtyStmt = null;
+      }
+      try {
+        metricStmt = conn.prepareStatement('SELECT `product_unit_metric`, `unit` FROM `products` WHERE `id` = ? LIMIT 1');
+        dbBindParams_(metricStmt, [Number(id)]);
+        metricRs = metricStmt.executeQuery();
+        if (metricRs.next()) {
+          var metricValue = metricRs.getObject('product_unit_metric');
+          var unitValue = metricRs.getObject('unit');
+          productUnitMetric = metricValue == null ? null : String(metricValue);
+          productUnit = unitValue == null ? null : String(unitValue);
+        }
+      } catch (metricError) {
+        Logger.log('getProductionCapabilityRows_ product metric lookup failed; continuing without it');
+        productUnitMetric = null;
+        productUnit = null;
+      } finally {
+        try { if (metricRs) metricRs.close(); } catch (closeMetricResultError) {}
+        metricRs = null;
+        try { if (metricStmt) metricStmt.close(); } catch (closeMetricStatementError) {}
+        metricStmt = null;
+      }
+      var cols = ['manufacture_product_id','manufacture_product_name','total_produced','manufacture_order_count',
+        'used_product_id','used_product_name','used_product_category_id','used_product_category','total_used',
+        'required_qty_per_mo','required_qty_per_unit','required_qty_per_single_mo','current_stock','production_capability'];
+      var jsonArgs = ["'_row_num'", '`ranked`.`_row_num`'];
+      cols.forEach(function (col) {
+        var ident = '`ranked`.`' + col.replace(/`/g, '``') + '`';
+        jsonArgs.push("'" + col.replace(/'/g, "''") + "'");
+        jsonArgs.push('CASE WHEN ' + ident + ' IS NULL THEN NULL ELSE CAST(' + ident + ' AS CHAR) END');
+      });
+      stmt = conn.prepareStatement(
+        'SELECT COUNT(*) AS `row_count`, COALESCE(JSON_ARRAYAGG(JSON_OBJECT(' + jsonArgs.join(',') +
+        ')), JSON_ARRAY()) AS `rows_json` FROM (' +
+        ' SELECT `page`.*, ROW_NUMBER() OVER (ORDER BY `page`.`used_product_id`) AS `_row_num` FROM (' +
+        '  SELECT `manufacture_product_id`, `manufacture_product_name`, `total_produced`, `manufacture_order_count`,' +
+        '   `used_product_id`, `used_product_name`, `used_product_category_id`, `used_product_category`, `total_used`,' +
+        '   `required_qty_per_mo`, `required_qty_per_unit`, `required_qty_per_single_mo`,' +
+        '   `current_stock`, `production_capability`' +
+        '  FROM `manuf_product_support_capability` WHERE `manufacture_product_id` = ?' +
+        '  ORDER BY `used_product_id` LIMIT 1001' +
+        ' ) AS `page`' +
+        ') AS `ranked`'
+      );
+      dbBindParams_(stmt, [Number(id)]);
+      rs = stmt.executeQuery();
+      var rowCount = 0, rowsJson = '[]';
+      if (rs.next()) {
+        rowCount = Number(rs.getString('row_count') || 0);
+        rowsJson = String(rs.getString('rows_json') || '[]');
+      }
+      var parsedRows = tcCapabilityParseRankedJson_(rowsJson, rowCount, 1001, 'Production capability rows');
+      var rows = parsedRows.map(function (item) {
+        var row = {};
+        cols.forEach(function (col) { row[col] = item[col] == null ? null : String(item[col]); });
+        return row;
+      });
+      var truncated = rowCount > 1000;
+      return { status: 'ok', rows: rows.slice(0, 1000), truncated: truncated, product_current_quantity: productCurrentQuantity,
+        product_unit_metric: productUnitMetric, product_unit: productUnit };
+    } catch (err) {
+      Logger.log('getProductionCapabilityRows_ MySQL adapter completed or failed; see named diagnostics');
+      throw err;
+    } finally {
+      try { if (rs) rs.close(); } finally { try { if (stmt) stmt.close(); } finally { try { if (qtyRs) qtyRs.close(); } finally { try { if (qtyStmt) qtyStmt.close(); } finally { try { if (metricRs) metricRs.close(); } finally { try { if (metricStmt) metricStmt.close(); } finally { if (conn) conn.close(); } } } } } }
+    }
   }
   function saveProductLive_(data, user, dbId) {
     data = data || {};
     var id = String(data.id !== undefined && data.id !== null ? data.id : '').trim();
     if (!id) throw new Error('id is required for products update');
     return dbProductsLiveUpdate_(data, user);
+  }
+  function addProductLive_(data, user, dbId) {
+    return dbProductsLiveInsert_(data || {}, user);
   }
   function deleteProductLive_(data, user, dbId) {
     data = data || {};
@@ -6124,236 +7417,574 @@ const valueMap = {};
     return dbProductsLiveDelete_(data, user);
   }
   register('get_products_live', getProductsLive_);
+  register('get_product_live_warehouse_quantities', getProductLiveWarehouseQuantities_);
+  register('add_product_live', addProductLive_);
+  /* Capability catalog: the complete eligible ID/name list for local picker
+   * filtering. Bounded at 2,000 raw pairs / 256 KiB; anything beyond returns
+   * an explicit overflow shape that must never be filtered locally. */
+  var DB_CAPABILITY_CATALOG_ROW_CAP_ = 2000;
+  var DB_CAPABILITY_CATALOG_BYTE_CAP_ = 262144;
+
+  function tcUtf8Bytes_(s) {
+    var bytes = 0;
+    for (var i = 0; i < s.length; i++) {
+      var c = s.charCodeAt(i);
+      if (c < 0x80) bytes += 1;
+      else if (c < 0x800) bytes += 2;
+      else if (c >= 0xD800 && c <= 0xDBFF && i + 1 < s.length) {
+        var n = s.charCodeAt(i + 1);
+        if (n >= 0xDC00 && n <= 0xDFFF) { bytes += 4; i++; } else bytes += 3;
+      } else bytes += 3;
+    }
+    return bytes;
+  }
+
+  function dbCapabilityCatalogOverflow_(reason) {
+    return { status: 'ok', schema_version: 1, products: [], count: 0,
+      complete: false, overflow: true, reason: reason,
+      payload_bytes: tcUtf8Bytes_('[]') };
+  }
+
+  function dbCapabilityCatalog_(data, user) {
+    if (typeof mysqlRead_ === 'function' && !mysqlReading_('tc.dbCapabilityCatalog_')) {
+      return mysqlRead_(mysqlTcDefinition_('dbCapabilityCatalog_'), data,
+        function (p) { return dbCapabilityCatalog_(p, user); });
+    }
+    var conn, stmt, rs;
+    try {
+      conn = dbGetConnection_();
+      stmt = conn.prepareStatement(
+        'SELECT COUNT(*) AS `row_count`, COALESCE(JSON_ARRAYAGG(JSON_OBJECT(' +
+        "'_row_num', `ranked`.`_row_num`, 'id', CASE WHEN `ranked`.`manufacture_product_id` IS NULL THEN NULL ELSE CAST(`ranked`.`manufacture_product_id` AS CHAR) END," +
+        "'name', `ranked`.`manufacture_product_name`)), JSON_ARRAY()) AS `products_json` FROM (" +
+        ' SELECT `page`.*, ROW_NUMBER() OVER (ORDER BY `page`.`manufacture_product_name`, `page`.`manufacture_product_id`) AS `_row_num` FROM (' +
+        '  SELECT DISTINCT `manufacture_product_id`, `manufacture_product_name`' +
+        '  FROM `manuf_product_support_capability` WHERE `manufacture_product_id` IS NOT NULL' +
+        '  ORDER BY `manufacture_product_name`, `manufacture_product_id` LIMIT 2001' +
+        ' ) AS `page`' +
+        ') AS `ranked`');
+      rs = stmt.executeQuery();
+      var raw = 0, productsJson = '[]';
+      if (rs.next()) {
+        raw = Number(rs.getString('row_count') || 0);
+        productsJson = String(rs.getString('products_json') || '[]');
+      }
+      if (raw > DB_CAPABILITY_CATALOG_ROW_CAP_) return dbCapabilityCatalogOverflow_('row_limit');
+      var parsed = tcCapabilityParseRankedJson_(productsJson, raw, DB_CAPABILITY_CATALOG_ROW_CAP_, 'Production capability catalog');
+      var byId = {}, products = [], unsupported = false;
+      parsed.forEach(function (item) {
+        var productId = item.id;
+        var productName = item.name;
+        if (productId == null) return;
+        var idStr = String(productId);
+        if (!/^[1-9]\d{0,9}$/.test(idStr)) { unsupported = true; return; }
+        if (!byId[idStr]) {
+          byId[idStr] = true;
+          products.push({ id: idStr, name: productName == null ? '' : String(productName) });
+        }
+      });
+      if (unsupported) return dbCapabilityCatalogOverflow_('unsupported_id');
+      var payload = JSON.stringify(products);
+      if (tcUtf8Bytes_(payload) > DB_CAPABILITY_CATALOG_BYTE_CAP_) return dbCapabilityCatalogOverflow_('byte_limit');
+      return { status: 'ok', schema_version: 1, products: products, count: products.length,
+        complete: true, overflow: false, reason: null, payload_bytes: tcUtf8Bytes_(payload) };
+    } catch (err) {
+      Logger.log('dbCapabilityCatalog_ MySQL adapter completed or failed; see named diagnostics');
+      throw err;
+    } finally {
+      try { if (rs) rs.close(); } finally { try { if (stmt) stmt.close(); } finally { if (conn) conn.close(); } }
+    }
+  }
+
+  function withCatalogServedAt_(res) {
+    return { status: 'ok', schema_version: 1, products: res.products, count: res.count,
+      complete: res.complete, overflow: res.overflow, reason: res.reason,
+      payload_bytes: res.payload_bytes, served_at: Date.now(), _mysql: res._mysql };
+  }
+
+  function getProductionCapabilityCatalog_(data, user) {
+    var res;
+    if (typeof mysqlRead_ === 'function' && !mysqlReading_('tc.dbCapabilityCatalog_')) {
+      res = mysqlRead_(mysqlTcDefinition_('dbCapabilityCatalog_'), data,
+        function (p) { return dbCapabilityCatalog_(p, user); });
+    } else {
+      res = dbCapabilityCatalog_(data, user);
+    }
+    return withCatalogServedAt_(res);
+  }
+
+  function getSalesCapacityCatalog_(data, user) {
+    var res;
+    if (typeof mysqlRead_ === 'function' && !mysqlReading_('tc.dbCapabilityCatalog_')) {
+      res = mysqlRead_(mysqlTcDefinition_('dbCapabilityCatalog_'), data,
+        function (p) { return dbCapabilityCatalog_(p, user); });
+    } else {
+      res = dbCapabilityCatalog_(data, user);
+    }
+    return withCatalogServedAt_(res);
+  }
+
+  register('get_production_capability_products', getProductionCapabilityProducts_);
+  register('get_production_capability_rows', getProductionCapabilityRows_);
+  // Sales capacity (tc_sales_capacity) — same live view + planning math as
+  // tc_production_capability. Thin delegates so future sales factors can diverge
+  // without forking the SQL. Permission + cache isolation comes from the
+  // distinct action names (PAGE_ACCESS / r.action), not from duplicated SQL.
+  function getSalesCapacityProducts_(data, user) {
+    return getProductionCapabilityProducts_(data || {}, user);
+  }
+  function getSalesCapacityRows_(data, user) {
+    return getProductionCapabilityRows_(data || {}, user);
+  }
+  register('get_sales_capacity_products', getSalesCapacityProducts_);
+  register('get_sales_capacity_rows', getSalesCapacityRows_);
+  register('get_production_capability_catalog', getProductionCapabilityCatalog_);
+  register('get_sales_capacity_catalog', getSalesCapacityCatalog_);
   register('save_product_live', saveProductLive_);
   register('delete_product_live', deleteProductLive_);
 
-  // ─── Executive sales analytics (tc_exec_sales) ──
-  // House rule (cf. get_main_review / get_box_analysis): ONE small MySQL hit
-  // per action. The old combined get_exec_sales ran the sales view scan + a
-  // multi-year box scan + the 20k chart labels in a single execution and blew
-  // past the Apps Script time limit. Now: get_exec_sales = sales view only,
-  // get_exec_box = box nets + labels. Each result cached 10 min in CacheService.
-  var EXEC_SALES_TTL = 600;
-  function execNormMonths_(v) {
-    var months = [];
-    if (v === undefined || v === null || v === '') return months;
-    var src = Array.isArray(v) ? v : [v];
-    for (var i = 0; i < src.length; i++) {
-      var m = Number(src[i]);
-      if (!Number.isInteger(m) || m < 1 || m > 12) throw new Error('شهر غير صحيح: ' + src[i]);
-      if (months.indexOf(m) === -1) months.push(m);
-    }
-    months.sort(function (a, b) { return a - b; });
-    return months;
-  }
-  function numExec_(v) { var n = Number(v); return isFinite(n) ? n : 0; }
-  function buildExecSales_(data, user) {
-    var sales = dbTcExecSalesRows_(data, user);
-    var rows = sales.rows || [];
-    function egpOf(r) { var ratio = parseFloat(r.currency_ratio); if (!isFinite(ratio) || ratio === 0) ratio = 1; return numExec_(r.net_value) * ratio; }
-    function metricOf(r) { var div = parseFloat(r.product_unit_metric); if (!isFinite(div) || div === 0) div = 1; return numExec_(r.net_qty) / div; }
-    var years = sales.years || [];
-    var maxY = years.length ? years[years.length - 1] : 0;
-    var prevY = maxY - 1;
-    var netValue = 0, netQty = 0, netQtyMetric = 0, netValuePrev = 0;
-    var retQtySum = 0, totQtySum = 0;
-    var monthMap = {}, prodMap = {};
-    rows.forEach(function (r) {
-      var y = Number(r.sales_year) || 0, mo = Number(r.sales_month) || 0;
-      var egp = egpOf(r), met = metricOf(r);
-      var q = numExec_(r.net_qty), tq = numExec_(r.total_qty), rq = numExec_(r.return_qty);
-      netValue += egp; netQty += q; netQtyMetric += met;
-      retQtySum += rq; totQtySum += tq;
-      if (y === prevY) netValuePrev += egp;
-      var mk = y + '-' + mo;
-      if (!monthMap[mk]) monthMap[mk] = { year: y, month: mo, net_value_egp: 0, net_qty_metric: 0 };
-      monthMap[mk].net_value_egp += egp;
-      monthMap[mk].net_qty_metric += met;
-      var pid = String(r.product_id);
-      if (!prodMap[pid]) prodMap[pid] = { product_id: pid, name_ar: r.name_ar || ('#' + pid), net_qty: 0, metric_divisor: parseFloat(r.product_unit_metric) || 1, net_qty_metric: 0, net_value_egp: 0, total_qty: 0, return_qty: 0, prev_egp: 0, cur_egp: 0 };
-      var p = prodMap[pid];
-      p.net_qty += q; p.net_qty_metric += met; p.net_value_egp += egp;
-      p.total_qty += tq; p.return_qty += rq;
-      if (y === prevY) p.prev_egp += egp;
-      if (y === maxY) p.cur_egp += egp;
-    });
-    var yoy = netValuePrev ? ((netValue - netValuePrev) / Math.abs(netValuePrev)) * 100 : 0;
-    var returnRate = totQtySum ? (retQtySum / Math.abs(totQtySum)) * 100 : 0;
-    var monthly = Object.keys(monthMap).map(function (k) { return monthMap[k]; }).sort(function (a, b) { return (a.year - b.year) || (a.month - b.month); });
-    var byProduct = Object.keys(prodMap).map(function (k) {
-      var p = prodMap[k];
-      return {
-        product_id: p.product_id, name_ar: p.name_ar, net_qty: p.net_qty,
-        metric_divisor: p.metric_divisor, net_qty_metric: p.net_qty_metric,
-        net_value_egp: p.net_value_egp,
-        share_pct: netValue ? (p.net_value_egp / netValue) * 100 : 0,
-        yoy_pct: p.prev_egp ? ((p.cur_egp - p.prev_egp) / Math.abs(p.prev_egp)) * 100 : 0, return_rate_pct: p.total_qty ? (p.return_qty / Math.abs(p.total_qty)) * 100 : 0
-      };
-    }).sort(function (a, b) { return b.net_value_egp - a.net_value_egp; });
-    return {
-      status: 'ok',
-      filters: { years: years, months: sales.months || [] },
-      truncated: sales.truncated === true,
-      totals: { net_value_egp: netValue, net_value_prev_egp: netValuePrev, yoy_pct: yoy, net_qty: netQty, net_qty_metric: netQtyMetric, return_rate_pct: returnRate, active_products: byProduct.length },
-      monthly: monthly, by_product: byProduct
-    };
-  }
-  function getExecSales_(data, user, dbId) {
+  // Financial ratios page: shared selectable periods for sales, returns and
+  // the income-statement view; every query below is read-only.
+  function dbTcFinancialSalesParams_(data) {
     data = data || {};
-    var years = dbTcExecSalesValidateYears_(data.years);
-    var months = execNormMonths_(data.months);
-    var search = String(data.search !== undefined && data.search !== null ? data.search : '').trim().slice(0, 40);
-    var limit = Math.min(Math.max(Number(data.limit) || 3000, 1), 5000);
-    var key = 'exec_sales_v1_y' + years.join('-') + '_m' + (months.join('-') || 'all') +
-      '_q' + search.replace(/[^a-zA-Z0-9_\u0600-\u06FF]/g, '').slice(0, 30) + '_l' + limit;
-    var probe = { years: years, months: months, search: search, limit: limit, offset: 0 };
-    var out;
-    if (data.refresh) {
-      out = buildExecSales_(probe, user);
-      try { putChunkedCache_('refs_' + BOX_CACHE_SCOPE + '_' + key, out, EXEC_SALES_TTL); } catch (e) { Logger.log('getExecSales_ cache write skipped: ' + e.message); }
-    } else {
-      out = getRefsCached_(BOX_CACHE_SCOPE, key, EXEC_SALES_TTL, function () { return buildExecSales_(probe, user); });
+    function date_(key) {
+      var value = String(data[key] == null ? '' : data[key]).trim();
+      var parts = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+      if (!parts) throw new Error('تاريخ غير صحيح: ' + key);
+      var day = new Date(Date.UTC(Number(parts[1]), Number(parts[2]) - 1, Number(parts[3])));
+      if (day.getUTCFullYear() !== Number(parts[1]) || day.getUTCMonth() + 1 !== Number(parts[2]) || day.getUTCDate() !== Number(parts[3])) throw new Error('تاريخ غير صحيح: ' + key);
+      return value;
     }
-    out.cached = !data.refresh;
-    return out;
+    var p = { from: date_('from'), to: date_('to') };
+    if (p.from > p.to) throw new Error('تاريخ البداية يجب أن يسبق تاريخ النهاية');
+    return p;
   }
-  register('get_exec_sales', getExecSales_);
-  // ─── View-only first iteration: thin paginated pass-through, same as getMainReview_ ──
-  // Sanitization mirrors dbTcSalesViewWhere_ (years validated server-side,
-  // search trimmed + capped at 40, limit 1..200 default 50, offset >= 0).
-  function salesViewParams_(data) {
-    data = data || {};
-    var search = String(data.search !== undefined && data.search !== null ? data.search : '').trim().slice(0, 40);
-    var limit = Math.min(Math.max(Number(data.limit) || 50, 1), 200);
-    var offset = Math.max(Number(data.offset) || 0, 0);
-    return { years: data.years, search: search, limit: limit, offset: offset, refresh: data.refresh };
-  }
-  function getSalesView_(data, user, dbId) {
-    var params = salesViewParams_(data);
-    try {
-      var out = dbTcSalesViewList_(params, user);
-      Logger.log('get_sales_view ok: years=' + JSON.stringify((out && out.years) || params.years) + ' total=' + ((out && out.total) || 0) + ' rows=' + ((out && out.rows && out.rows.length) || 0));
-      return out;
-    } catch (err) {
-      Logger.log('get_sales_view error: ' + err.message + ' | years=' + JSON.stringify(params.years) + ' search=' + params.search + ' limit=' + params.limit + ' offset=' + params.offset);
-      throw err;
-    }
-  }
-  register('get_sales_view', getSalesView_);
-  function getSalesCharts_(data, user, dbId) {
-    var params = salesViewParams_(data);
-    try {
-      var out = dbTcSalesCharts_({ years: params.years, search: params.search, refresh: params.refresh }, user);
-      Logger.log('get_sales_charts ok: years=' + JSON.stringify((out && out.years) || params.years) + ' monthly=' + ((out && out.monthly && out.monthly.length) || 0) + ' products=' + ((out && out.products && out.products.length) || 0) + ' yearly=' + ((out && out.products_yearly && out.products_yearly.length) || 0));
-      return out;
-    } catch (err) {
-      Logger.log('get_sales_charts error: ' + err.message + ' | years=' + JSON.stringify(params.years) + ' search=' + params.search);
-      throw err;
-    }
-  }
-  register('get_sales_charts', getSalesCharts_);
-  function getDateSalesMonthly_(data, user, dbId) {
-    var params;
-    try {
-      params = dbTcDateSalesParams_(data);
-    } catch (err) {
-      Logger.log('get_date_sales_monthly params error: ' + err.message);
-      throw err;
-    }
-    try {
-      var out = dbTcDateSalesMonthly_(params, user);
-      Logger.log('get_date_sales_monthly ok: from=' + params.from + ' to=' + params.to +
-        ' product=' + (params.product_id || 'all') + ' rows=' + ((out && out.rows && out.rows.length) || 0));
-      return out;
-    } catch (err) {
-      Logger.log('get_date_sales_monthly error: ' + err.message + ' | from=' + params.from + ' to=' + params.to);
-      throw err;
-    }
-  }
-  register('get_date_sales_monthly', getDateSalesMonthly_);
-  function getDateSalesProducts_(data, user, dbId) {
-    try {
-      var out = dbTcDateSalesProducts_(data || {}, user);
-      Logger.log('get_date_sales_products ok: products=' + ((out && out.products && out.products.length) || 0));
-      return out;
-    } catch (err) {
-      Logger.log('get_date_sales_products error: ' + err.message);
-      throw err;
-    }
-  }
-  register('get_date_sales_products', getDateSalesProducts_);
-  function getBoxDailyMonthly_(data, user, dbId) {
-    var params;
-    try {
-      params = dbBoxDailyParams_(data);
-    } catch (err) {
-      Logger.log('get_box_daily_monthly params error: ' + err.message);
-      throw err;
-    }
-    try {
-      var out = dbBoxDailyMonthly_(params, user);
-      Logger.log('get_box_daily_monthly ok: from=' + params.from + ' to=' + params.to +
-        ' acct=' + (params.chart_of_accounts || 'all') + ' rows=' + ((out && out.rows && out.rows.length) || 0));
-      return out;
-    } catch (err) {
-      Logger.log('get_box_daily_monthly error: ' + err.message + ' | from=' + params.from + ' to=' + params.to);
-      throw err;
-    }
-  }
-  register('get_box_daily_monthly', getBoxDailyMonthly_);
-  function getBoxDailyAccounts_(data, user, dbId) {
-    try {
-      var out = dbBoxDailyAccounts_(data || {}, user);
-      Logger.log('get_box_daily_accounts ok: accounts=' + ((out && out.accounts && out.accounts.length) || 0));
-      return out;
-    } catch (err) {
-      Logger.log('get_box_daily_accounts error: ' + err.message);
-      throw err;
-    }
-  }
-  register('get_box_daily_accounts', getBoxDailyAccounts_);
-  function getExecBox_(data, user, dbId) {
-    data = data || {};
-    var years = dbTcExecSalesValidateYears_(data.years);
-    var months = execNormMonths_(data.months);
-    var key = 'exec_box_v1_y' + years.join('-') + '_m' + (months.join('-') || 'all');
-    var probe = { years: years, months: months };
-    var out;
-    var build = function () {
-      var box = dbTcExecBoxNet_(probe, user);
-      var labels = {};
-      try {
-        var lbl = boxAccountLabels_(user);
-        labels = (lbl && lbl.labels) || {};
-      } catch (e) { Logger.log('getExecBox_ labels unavailable: ' + e.message); }
-      var accounts = (box.accounts || []).map(function (a) {
-        return { account: a.account, label: labels[a.account] || a.account, debit_sum: a.debit_sum, credit_sum: a.credit_sum, net_amount: a.net_amount, moves: a.moves };
-      });
-      var totalNet = accounts.reduce(function (s, a) { return s + (Number(a.net_amount) || 0); }, 0);
-      return { status: 'ok', from: box.from, to: box.to, total_net: totalNet, accounts: accounts };
-    };
-    if (data.refresh) {
-      out = build();
-      try { putChunkedCache_('refs_' + BOX_CACHE_SCOPE + '_' + key, out, EXEC_SALES_TTL); } catch (e) { Logger.log('getExecBox_ cache write skipped: ' + e.message); }
-    } else {
-      out = getRefsCached_(BOX_CACHE_SCOPE, key, EXEC_SALES_TTL, build);
-    }
-    out.cached = !data.refresh;
-    return out;
-  }
-  register('get_exec_box', getExecBox_);
 
-  // ─── تحليل حركة الخزنة العادية (live MySQL regular_box_movement) ──
-  //
-  // Thin wrappers: authority is enforced by guard_() via PAGE_ACCESS above,
-  // exactly as get_main_review does it. There is no second permission
-  // mechanism here and there must not be one.
-  //
-  // The parsing, matching and rules all run SERVER-SIDE, in this Actions file.
-  // That is not an optimisation — the engine is a server .js file, and the only
-  // way the page could run it in the browser would be to keep a second copy of
-  // it inside an HTML include. Two copies of a parser diverge, and the one that
-  // matters is whichever the reviewer is not looking at.
+  // These stored value fields mirror sales_product_qty_value. EXISTS keeps a
+  // return linked to an invoice product from multiplying across repeated lines.
+  function dbTcFinancialSalesTotals_(data, user) {
+    if (typeof mysqlRead_ === 'function' && !mysqlReading_('tc.dbTcFinancialSalesTotals_')) {
+      return mysqlRead_(mysqlTcDefinition_('dbTcFinancialSalesTotals_'), data,
+        function (p) { return dbTcFinancialSalesTotals_(p, user); });
+    }
+    var p = dbTcFinancialSalesParams_(data);
+    var sql = 'SELECT' +
+      ' (SELECT COALESCE(SUM(f.productTotalMoney), 0)' +
+      ' FROM invoice_footers f JOIN invoice_headers h ON h.id = f.invoice_header_id' +
+      ' WHERE h.invoiceDate >= ? AND h.invoiceDate <= ?) AS sales_value,' +
+      ' (SELECT COALESCE(SUM(r.total_amount), 0)' +
+      ' FROM item_returns r JOIN invoice_headers h ON h.id = r.invoice_id' +
+      ' WHERE r.created_at >= ? AND r.created_at < DATE_ADD(?, INTERVAL 1 DAY)' +
+      ' AND EXISTS (SELECT 1 FROM invoice_footers f' +
+      ' WHERE f.invoice_header_id = r.invoice_id AND f.product_id = r.product_id)) AS return_value';
+    var conn, stmt, rs, monthRows = [];
+    try {
+      conn = dbGetConnection_();
+      stmt = conn.prepareStatement(sql);
+      dbBindParams_(stmt, [p.from, p.to, p.from, p.to]);
+      rs = stmt.executeQuery();
+      if (!rs.next()) throw new Error('تعذر قراءة إجمالي المبيعات');
+      var sales = Number(rs.getObject(1)) || 0;
+      var returns = Number(rs.getObject(2)) || 0;
+      rs.close(); rs = null;
+      stmt.close(); stmt = null;
+      var monthSql = 'SELECT monthly_events.month_key,' +
+        ' SUM(monthly_events.sales_value) AS sales_value,' +
+        ' SUM(monthly_events.return_value) AS return_value' +
+        ' FROM (' +
+          ' SELECT DATE_FORMAT(h.invoiceDate, \'%Y-%m\') AS month_key,' +
+          ' SUM(f.productTotalMoney) AS sales_value, 0 AS return_value' +
+          ' FROM invoice_footers f JOIN invoice_headers h ON h.id = f.invoice_header_id' +
+          ' WHERE h.invoiceDate >= ? AND h.invoiceDate <= ?' +
+          ' GROUP BY DATE_FORMAT(h.invoiceDate, \'%Y-%m\')' +
+          ' UNION ALL' +
+          ' SELECT DATE_FORMAT(r.created_at, \'%Y-%m\') AS month_key,' +
+          ' 0 AS sales_value, SUM(r.total_amount) AS return_value' +
+          ' FROM item_returns r JOIN invoice_headers h ON h.id = r.invoice_id' +
+          ' WHERE r.created_at >= ? AND r.created_at < DATE_ADD(?, INTERVAL 1 DAY)' +
+          ' AND EXISTS (SELECT 1 FROM invoice_footers f' +
+          ' WHERE f.invoice_header_id = r.invoice_id AND f.product_id = r.product_id)' +
+          ' GROUP BY DATE_FORMAT(r.created_at, \'%Y-%m\')' +
+        ') monthly_events GROUP BY monthly_events.month_key ORDER BY monthly_events.month_key';
+      stmt = conn.prepareStatement(monthSql);
+      dbBindParams_(stmt, [p.from, p.to, p.from, p.to]);
+      rs = stmt.executeQuery();
+      while (rs.next()) {
+        var monthSales = Number(rs.getObject(2)) || 0;
+        var monthReturns = Number(rs.getObject(3)) || 0;
+        monthRows.push({ month: String(rs.getString(1)), sales_value: monthSales,
+          return_value: monthReturns, net_sales_value: monthSales - monthReturns });
+      }
+      return { status: 'ok', filters: p, currency: 'EGP', sales_value: sales,
+        return_value: returns, net_sales_value: sales - returns, monthly: monthRows };
+    } finally {
+      if (rs) rs.close();
+      if (stmt) stmt.close();
+      if (conn) conn.close();
+    }
+  }
+
+  register('get_financial_sales_totals', function (data, user) {
+    return readDiagnosticsForUser_(dbTcFinancialSalesTotals_(data, user), user);
+  });
+
+  function dbTcFinancialOtherIncome_(data, user) {
+    if (typeof mysqlRead_ === 'function' && !mysqlReading_('tc.dbTcFinancialOtherIncome_')) {
+      return mysqlRead_(mysqlTcDefinition_('dbTcFinancialOtherIncome_'), data,
+        function (p) { return dbTcFinancialOtherIncome_(p, user); });
+    }
+    var p = dbTcFinancialSalesParams_(data);
+    var sql = 'SELECT account_5_name,' +
+      ' COALESCE(SUM(COALESCE(debit_sum, 0) - COALESCE(credit_sum, 0)), 0) AS net_amount' +
+      ' FROM expenses_income_report' +
+      ' WHERE transaction_date >= ? AND transaction_date <= ?' +
+      " AND TRIM(chart_of_accounts) REGEXP '^[0-9]+$'" +
+      ' AND CAST(TRIM(chart_of_accounts) AS DECIMAL(20,0)) > 412100' +
+      ' GROUP BY account_5_name ORDER BY account_5_name';
+    var conn, stmt, rs, rows = [], total = 0;
+    try {
+      conn = dbGetConnection_();
+      stmt = conn.prepareStatement(sql);
+      dbBindParams_(stmt, [p.from, p.to]);
+      rs = stmt.executeQuery();
+      while (rs.next()) {
+        var amount = Number(rs.getObject(2)) || 0;
+        rows.push({ account_5_name: rs.getString(1), net_amount: amount });
+        total += amount;
+      }
+      rs.close(); rs = null;
+      stmt.close(); stmt = null;
+      var monthlySql = 'SELECT DATE_FORMAT(transaction_date, \'%Y-%m\') AS month_key,' +
+        ' COALESCE(SUM(COALESCE(debit_sum, 0) - COALESCE(credit_sum, 0)), 0) AS net_amount' +
+        ' FROM expenses_income_report' +
+        ' WHERE transaction_date >= ? AND transaction_date <= ?' +
+        " AND TRIM(chart_of_accounts) REGEXP '^[0-9]+$'" +
+        ' AND CAST(TRIM(chart_of_accounts) AS DECIMAL(20,0)) > 412100' +
+        ' GROUP BY DATE_FORMAT(transaction_date, \'%Y-%m\') ORDER BY month_key';
+      stmt = conn.prepareStatement(monthlySql);
+      dbBindParams_(stmt, [p.from, p.to]);
+      rs = stmt.executeQuery();
+      var monthly = [];
+      while (rs.next()) monthly.push({ month: String(rs.getString(1)), net_amount: Number(rs.getObject(2)) || 0 });
+      return { status: 'ok', filters: p, rows: rows, total_net_amount: total, monthly: monthly };
+    } finally {
+      if (rs) rs.close();
+      if (stmt) stmt.close();
+      if (conn) conn.close();
+    }
+  }
+
+  register('get_financial_other_income', function (data, user) {
+    return readDiagnosticsForUser_(dbTcFinancialOtherIncome_(data, user), user);
+  });
+
+  function dbTcFinancialExpenses_(data, user) {
+    if (typeof mysqlRead_ === 'function' && !mysqlReading_('tc.dbTcFinancialExpenses_')) {
+      return mysqlRead_(mysqlTcDefinition_('dbTcFinancialExpenses_'), data,
+        function (p) { return dbTcFinancialExpenses_(p, user); });
+    }
+    var p = dbTcFinancialSalesParams_(data);
+    var sql = 'SELECT account_5_name,' +
+      ' COALESCE(SUM(COALESCE(debit_sum, 0) - COALESCE(credit_sum, 0)), 0) AS net_amount' +
+      ' FROM expenses_income_report' +
+      ' WHERE transaction_date >= ? AND transaction_date <= ?' +
+      " AND TRIM(chart_of_accounts) REGEXP '^[0-9]+$'" +
+      ' AND CAST(TRIM(chart_of_accounts) AS DECIMAL(20,0)) < 411100' +
+      ' GROUP BY account_5_name ORDER BY net_amount ASC, account_5_name';
+    var conn, stmt, rs, rows = [], total = 0;
+    try {
+      conn = dbGetConnection_();
+      stmt = conn.prepareStatement(sql);
+      dbBindParams_(stmt, [p.from, p.to]);
+      rs = stmt.executeQuery();
+      while (rs.next()) {
+        var amount = Number(rs.getObject(2)) || 0;
+        rows.push({ account_5_name: rs.getString(1), net_amount: amount });
+        total += amount;
+      }
+      rs.close(); rs = null;
+      stmt.close(); stmt = null;
+      var monthlySql = 'SELECT DATE_FORMAT(transaction_date, \'%Y-%m\') AS month_key,' +
+        ' COALESCE(SUM(COALESCE(debit_sum, 0) - COALESCE(credit_sum, 0)), 0) AS net_amount' +
+        ' FROM expenses_income_report' +
+        ' WHERE transaction_date >= ? AND transaction_date <= ?' +
+        " AND TRIM(chart_of_accounts) REGEXP '^[0-9]+$'" +
+        ' AND CAST(TRIM(chart_of_accounts) AS DECIMAL(20,0)) < 411100' +
+        ' GROUP BY DATE_FORMAT(transaction_date, \'%Y-%m\') ORDER BY month_key';
+      stmt = conn.prepareStatement(monthlySql);
+      dbBindParams_(stmt, [p.from, p.to]);
+      rs = stmt.executeQuery();
+      var monthly = [];
+      while (rs.next()) monthly.push({ month: String(rs.getString(1)), net_amount: Number(rs.getObject(2)) || 0 });
+      return { status: 'ok', filters: p, rows: rows, total_net_amount: total, monthly: monthly };
+    } finally {
+      if (rs) rs.close();
+      if (stmt) stmt.close();
+      if (conn) conn.close();
+    }
+  }
+
+  register('get_financial_expenses', function (data, user) {
+    return readDiagnosticsForUser_(dbTcFinancialExpenses_(data, user), user);
+  });
+
+  function dbTcFinancialProductionParams_(data) {
+    var p = dbTcFinancialSalesParams_(data);
+    var offset = data && data.offset !== undefined && data.offset !== '' ? Number(data.offset) : 0;
+    if (!Number.isInteger(offset) || offset < 0) throw new Error('صفحة الإنتاج غير صحيحة');
+    return { from: p.from, to: p.to, offset: Math.min(offset, 1000000), limit: 30,
+      refresh: data && (data.refresh === true || data.refresh === 'true' || data.refresh === '1') };
+  }
+
+  // Bounded report snapshots: one aggregation per normalized date range,
+  // served for 120s. Pages slice the snapshot without repeating the heavy
+  // GROUP BY. Filter changes use a different cache key, refresh:true bypasses
+  // the cached snapshot, and every application SQL write bumps the durable
+  // epoch (mysqlInvalidate_) so the next page recomputes. External writes
+  // become visible at expiry. Snapshot cap 2000 distinct products keeps the
+  // cached payload bounded; totals stay accurate via COUNT, rows beyond the
+  // cap set truncated:true.
+  var DB_TC_FINANCIAL_SNAPSHOT_TTL_ = 120;
+  var DB_TC_FINANCIAL_SNAPSHOT_LIMIT_ = 2000;
+
+  // MySQL's JSON aggregate avoids Apps Script's slow row-by-row JDBC bridge.
+  // JSON_ARRAYAGG does not promise element order, so each SQL row carries an
+  // explicit rank and we restore the report's stable SQL order after parsing.
+  function dbTcFinancialParseSnapshotJson_(raw, expectedRows) {
+    var parseStarted = Date.now();
+    var parsed = JSON.parse(String(raw || '[]'));
+    if (!Array.isArray(parsed) || parsed.length !== expectedRows || parsed.length > DB_TC_FINANCIAL_SNAPSHOT_LIMIT_ + 1) {
+      throw new Error('Financial report MySQL aggregate is invalid');
+    }
+    parsed.sort(function (a, b) { return Number(a && a._row_num) - Number(b && b._row_num); });
+    for (var i = 0; i < parsed.length; i++) {
+      if (!parsed[i] || typeof parsed[i] !== 'object' || Array.isArray(parsed[i]) || Number(parsed[i]._row_num) !== i + 1) {
+        throw new Error('Financial report MySQL aggregate order is invalid');
+      }
+      delete parsed[i]._row_num;
+    }
+    if (typeof _mysqlRequest_ !== 'undefined' && _mysqlRequest_) {
+      _mysqlRequest_.jsonParseMs = (_mysqlRequest_.jsonParseMs || 0) + Date.now() - parseStarted;
+    }
+    return parsed;
+  }
+
+  // Build the shared used-material query for both the report and its admin-only EXPLAIN.
+  function dbTcFinancialUsedMaterialsSnapshotSql_() {
+    var baseSql = ' FROM manufacture_headers h' +
+      ' STRAIGHT_JOIN manufacture_report_view v ON v.col1_id = CAST(h.id AS CHAR CHARACTER SET utf8mb4)' +
+      ' JOIN products pr ON pr.id = CAST(v.col2_prod_id AS UNSIGNED)' +
+      " WHERE v.sort_order = 3 AND h.status = 'delivered' AND h.deleted_at IS NULL" +
+      ' AND h.created_at >= ? AND h.created_at < DATE_ADD(?, INTERVAL 1 DAY)' +
+      ' AND pr.category_id NOT IN (3, 9, 10, 11, 13, 14, 15, 18, 19, 20, 21)';
+    var normalizedSql = 'SELECT CAST(v.col2_prod_id AS UNSIGNED) AS product_id,' +
+      ' MAX(pr.name_ar) AS name_ar, MAX(v.col4_expected) AS unit,' +
+      ' SUM(CASE' +
+        " WHEN TRIM(COALESCE(v.col6_deliv_ratio, '')) REGEXP '^[0-9]+([.][0-9]+)?$'" +
+        ' AND CAST(TRIM(v.col6_deliv_ratio) AS DECIMAL(18,4)) > 0' +
+        ' THEN SIGN(CAST(TRIM(v.col6_deliv_ratio) AS DECIMAL(18,4))) * CEIL(ABS(CAST(TRIM(v.col6_deliv_ratio) AS DECIMAL(18,4))))' +
+        " WHEN TRIM(COALESCE(v.col5_deliv_qty, '')) REGEXP '^-?[0-9]+([.][0-9]+)?$'" +
+        ' THEN SIGN(CAST(TRIM(v.col5_deliv_qty) AS DECIMAL(18,4))) * CEIL(ABS(CAST(TRIM(v.col5_deliv_qty) AS DECIMAL(18,4)))) ELSE 0 END) AS supposed_qty,' +
+      ' SUM(CASE WHEN TRIM(COALESCE(v.col7_manuf_num, \'\')) REGEXP \'^[0-9]+([.][0-9]+)?$\'' +
+        ' THEN CAST(TRIM(v.col7_manuf_num) AS DECIMAL(18,4)) ELSE 0 END) AS used_qty' + baseSql +
+      ' GROUP BY CAST(v.col2_prod_id AS UNSIGNED)';
+    return 'SELECT COUNT(*) AS row_count, COALESCE(MAX(total_count), 0) AS total_count,' +
+      ' COALESCE(JSON_ARRAYAGG(JSON_OBJECT(' +
+        "'_row_num', _row_num," +
+        "'product_id', CAST(product_id AS CHAR)," +
+        "'name_ar', name_ar," +
+        "'unit', unit," +
+        "'supposed_qty', supposed_qty," +
+        "'used_qty', used_qty," +
+        "'difference_qty', difference_qty," +
+        "'difference_ratio', difference_ratio" +
+      ')), JSON_ARRAY()) AS rows_json FROM (' +
+        'SELECT material_page.*,' +
+          ' ROW_NUMBER() OVER (ORDER BY used_qty DESC, product_id ASC) AS _row_num' +
+        ' FROM (' +
+          'SELECT product_id, name_ar, unit, supposed_qty, used_qty,' +
+            ' (used_qty - supposed_qty) AS difference_qty,' +
+            ' CASE WHEN supposed_qty = 0 THEN NULL ELSE ((used_qty - supposed_qty) / supposed_qty) * 100 END AS difference_ratio,' +
+            ' COUNT(*) OVER() AS total_count' +
+          ' FROM (' + normalizedSql + ') material_totals' +
+          ' ORDER BY used_qty DESC, product_id ASC' +
+          ' LIMIT ' + (DB_TC_FINANCIAL_SNAPSHOT_LIMIT_ + 1) +
+        ') material_page' +
+      ') material_ranked';
+  }
+
+  function dbTcFinancialProductionSnapshot_(data, user) {
+    if (typeof mysqlRead_ === 'function' && !mysqlReading_('tc.dbTcFinancialProductionSnapshot_')) {
+      return mysqlRead_(mysqlTcDefinition_('dbTcFinancialProductionSnapshot_'), data,
+        function (p) { return dbTcFinancialProductionSnapshot_(p, user); });
+    }
+    var p = dbTcFinancialSalesParams_(data);
+    var conn, stmt, rs, total = 0, rows = [];
+    var filterSql = ' FROM manufacture_headers h JOIN products p ON p.id = h.product_id' +
+      " WHERE h.status = 'delivered' AND h.deleted_at IS NULL AND h.product_id IS NOT NULL" +
+      ' AND h.created_at >= ? AND h.created_at < DATE_ADD(?, INTERVAL 1 DAY)';
+    try {
+      conn = dbGetConnection_();
+      stmt = conn.prepareStatement(
+        'SELECT COUNT(*) AS row_count, COALESCE(MAX(total_count), 0) AS total_count,' +
+        ' COALESCE(JSON_ARRAYAGG(JSON_OBJECT(' +
+          "'_row_num', _row_num," +
+          "'product_id', CAST(product_id AS CHAR)," +
+          "'name_ar', name_ar," +
+          "'expected_quantity', expected_quantity," +
+          "'deliver_quantity', deliver_quantity" +
+        ')), JSON_ARRAY()) AS rows_json FROM (' +
+          'SELECT production_page.*,' +
+            ' ROW_NUMBER() OVER (ORDER BY deliver_quantity DESC, product_id ASC) AS _row_num' +
+          ' FROM (' +
+            'SELECT production_totals.*, COUNT(*) OVER() AS total_count' +
+            ' FROM (' +
+              'SELECT h.product_id, MAX(p.name_ar) AS name_ar,' +
+                ' SUM(COALESCE(h.expected_quantity, 0)) AS expected_quantity,' +
+                ' SUM(COALESCE(h.deliver_quantity, 0)) AS deliver_quantity' + filterSql +
+                ' GROUP BY h.product_id' +
+            ') production_totals' +
+            ' ORDER BY deliver_quantity DESC, product_id ASC' +
+            ' LIMIT ' + (DB_TC_FINANCIAL_SNAPSHOT_LIMIT_ + 1) +
+          ') production_page' +
+        ') production_ranked');
+      dbBindParams_(stmt, [p.from, p.to]);
+      rs = stmt.executeQuery();
+      var rowCount = 0, rowsJson = '[]';
+      if (rs.next()) {
+        rowCount = Number(rs.getString('row_count') || 0);
+        total = Number(rs.getString('total_count') || 0);
+        rowsJson = String(rs.getString('rows_json') || '[]');
+      }
+      rows = dbTcFinancialParseSnapshotJson_(rowsJson, rowCount).map(function (row) {
+        return {
+          product_id: String(row.product_id == null ? '' : row.product_id),
+          name_ar: String(row.name_ar == null ? '' : row.name_ar),
+          expected_quantity: Number(row.expected_quantity) || 0,
+          deliver_quantity: Number(row.deliver_quantity) || 0
+        };
+      });
+      var truncated = rows.length > DB_TC_FINANCIAL_SNAPSHOT_LIMIT_;
+      if (truncated) rows = rows.slice(0, DB_TC_FINANCIAL_SNAPSHOT_LIMIT_);
+      return { status: 'ok', filters: { from: p.from, to: p.to }, rows: rows,
+        total: total, truncated: truncated, snapshot_at: Date.now(),
+        snapshot_ttl: DB_TC_FINANCIAL_SNAPSHOT_TTL_ };
+    } finally {
+      if (rs) rs.close();
+      if (stmt) stmt.close();
+      if (conn) conn.close();
+    }
+  }
+
+  function dbTcFinancialProduction_(data, user) {
+    if (typeof mysqlRead_ === 'function' && !mysqlReading_('tc.dbTcFinancialProduction_')) {
+      return mysqlRead_(mysqlTcDefinition_('dbTcFinancialProduction_'), data,
+        function (p) { return dbTcFinancialProduction_(p, user); });
+    }
+    var p = dbTcFinancialProductionParams_(data);
+    var snap = dbTcFinancialProductionSnapshot_({ from: p.from, to: p.to, refresh: p.refresh }, user);
+    var pageRows = snap.rows.slice(p.offset, p.offset + p.limit);
+    return { status: 'ok', filters: { from: p.from, to: p.to }, rows: pageRows,
+      total: snap.total, offset: p.offset, limit: p.limit, has_more: p.offset + pageRows.length < snap.total,
+      truncated: snap.truncated, snapshot_at: snap.snapshot_at, snapshot_ttl: snap.snapshot_ttl };
+  }
+
+  register('get_financial_production', function (data, user) {
+    return readDiagnosticsForUser_(dbTcFinancialProduction_(data, user), user);
+  });
+
+  function dbTcFinancialUsedMaterialsParams_(data) {
+    var p = dbTcFinancialProductionParams_(data);
+    return { from: p.from, to: p.to, offset: p.offset, limit: 30, refresh: p.refresh };
+  }
+
+  function dbTcFinancialUsedMaterialsSnapshot_(data, user) {
+    if (typeof mysqlRead_ === 'function' && !mysqlReading_('tc.dbTcFinancialUsedMaterialsSnapshot_')) {
+      return mysqlRead_(mysqlTcDefinition_('dbTcFinancialUsedMaterialsSnapshot_'), data,
+        function (p) { return dbTcFinancialUsedMaterialsSnapshot_(p, user); });
+    }
+    var p = dbTcFinancialSalesParams_(data);
+    var conn, stmt, rs, total = 0, rows = [];
+    try {
+      conn = dbGetConnection_();
+      stmt = conn.prepareStatement(dbTcFinancialUsedMaterialsSnapshotSql_());
+      dbBindParams_(stmt, [p.from, p.to]);
+      rs = stmt.executeQuery();
+      var rowCount = 0, rowsJson = '[]';
+      if (rs.next()) {
+        rowCount = Number(rs.getString('row_count') || 0);
+        total = Number(rs.getString('total_count') || 0);
+        rowsJson = String(rs.getString('rows_json') || '[]');
+      }
+      rows = dbTcFinancialParseSnapshotJson_(rowsJson, rowCount).map(function (row) {
+        return {
+          product_id: String(row.product_id == null ? '' : row.product_id),
+          name_ar: String(row.name_ar == null ? '' : row.name_ar),
+          unit: String(row.unit == null ? '' : row.unit),
+          supposed_qty: Number(row.supposed_qty) || 0,
+          used_qty: Number(row.used_qty) || 0,
+          difference_qty: Number(row.difference_qty) || 0,
+          difference_ratio: row.difference_ratio == null ? null : Number(row.difference_ratio)
+        };
+      });
+      var truncated = rows.length > DB_TC_FINANCIAL_SNAPSHOT_LIMIT_;
+      if (truncated) rows = rows.slice(0, DB_TC_FINANCIAL_SNAPSHOT_LIMIT_);
+      return { status: 'ok', filters: { from: p.from, to: p.to }, rows: rows,
+        total: total, truncated: truncated, snapshot_at: Date.now(),
+        snapshot_ttl: DB_TC_FINANCIAL_SNAPSHOT_TTL_ };
+    } finally {
+      if (rs) rs.close();
+      if (stmt) stmt.close();
+      if (conn) conn.close();
+    }
+  }
+
+  function dbTcFinancialUsedMaterials_(data, user) {
+    if (typeof mysqlRead_ === 'function' && !mysqlReading_('tc.dbTcFinancialUsedMaterials_')) {
+      return mysqlRead_(mysqlTcDefinition_('dbTcFinancialUsedMaterials_'), data,
+        function (p) { return dbTcFinancialUsedMaterials_(p, user); });
+    }
+    var p = dbTcFinancialUsedMaterialsParams_(data);
+    var snap = dbTcFinancialUsedMaterialsSnapshot_({ from: p.from, to: p.to, refresh: p.refresh }, user);
+    var pageRows = snap.rows.slice(p.offset, p.offset + p.limit);
+    return { status: 'ok', filters: { from: p.from, to: p.to }, rows: pageRows,
+      total: snap.total, offset: p.offset, limit: p.limit, has_more: p.offset + pageRows.length < snap.total,
+      truncated: snap.truncated, snapshot_at: snap.snapshot_at, snapshot_ttl: snap.snapshot_ttl };
+  }
+
+  register('get_financial_used_materials', function (data, user) {
+    return readDiagnosticsForUser_(dbTcFinancialUsedMaterials_(data, user), user);
+  });
+
+  function dbTcFinancialUsedMaterialsPlan_(data, user) {
+    if (!user || !user.isSuperAdmin) throw new Error(ERP_MESSAGES.NOT_AUTHORIZED);
+    var p = dbTcFinancialSalesParams_(data);
+    var tracker = typeof _mysqlRequest_ !== 'undefined' ? _mysqlRequest_ : null;
+    var before = tracker ? [tracker.connectionMs, tracker.sqlMs, tracker.readMs, tracker.rows] : null;
+    var started = Date.now(), conn, stmt, rs, plan = '';
+    try {
+      conn = dbGetConnection_();
+      stmt = conn.prepareStatement('EXPLAIN FORMAT=JSON ' + dbTcFinancialUsedMaterialsSnapshotSql_());
+      dbBindParams_(stmt, [p.from, p.to]);
+      rs = stmt.executeQuery();
+      if (rs.next()) plan = String(rs.getString(1) || '');
+      if (!plan) throw new Error('MySQL did not return an execution plan');
+      return { status: 'ok', filters: p, plan_json: plan, payload_bytes: tcUtf8Bytes_(plan),
+        _mysql: tracker ? {
+          elapsed_ms: Date.now() - started, cache_hit: false,
+          connection_ms: tracker.connectionMs - before[0], sql_ms: tracker.sqlMs - before[1],
+          read_ms: tracker.readMs - before[2], json_parse_ms: 0, rows_read: tracker.rows - before[3]
+        } : null };
+    } finally {
+      if (rs) rs.close();
+      if (stmt) stmt.close();
+      if (conn) conn.close();
+    }
+  }
+
+  register('get_financial_used_materials_plan', function (data, user) {
+    return readDiagnosticsForUser_(dbTcFinancialUsedMaterialsPlan_(data, user), user);
+  });
 
   const BOX_CACHE_SCOPE = 'mysql_topchemical';
   const BOX_LABEL_TTL = 21600;            /* 6h, per plan §10 */
@@ -6372,9 +8003,6 @@ const valueMap = {};
       return { labels: r.labels, duplicate_ids: r.duplicate_ids, count: r.count, truncated: r.truncated };
     });
   }
-
-  // Box-daily readers live in the exec-sales DB layer below, next to
-  // dbTcDateSalesMonthly_ (single GROUP BY over box_movement_daily_revise).
 
   function boxTodayIso_() {
     return Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd');
@@ -9955,6 +11583,12 @@ const valueMap = {};
    * NULL payment_date rows never match a set date bound (standard SQL).
    */
   function dbClientsArList_(data, user) {
+    if (typeof mysqlRead_ === 'function' && !mysqlReading_('tc.dbClientsArList_')) {
+      return mysqlRead_(mysqlTcDefinition_('dbClientsArList_'), data, function (p) { return dbClientsArList_(p, user); });
+    }
+    
+    
+    
     data = data || {};
     var limit = Math.min(Math.max(Number(data.limit) || 50, 1), 200);
     var offset = Math.max(Number(data.offset) || 0, 0);
@@ -9994,13 +11628,11 @@ const valueMap = {};
       }
       return { status: 'ok', columns: DB_CLIENTS_AR_COLUMNS.slice(), rows: rows, total: total, limit: limit, offset: offset, source: isVendor ? 'vendors_AP' : 'clients_AR' };
     } catch (err) {
-      Logger.log('dbClientsArList_ error: ' + err.message);
+      Logger.log('dbClientsArList_ MySQL adapter completed or failed; see named diagnostics');
       throw err;
     } finally {
       if (rs) rs.close();
       if (stmt) stmt.close();
-      if (countRs) countRs.close();
-      if (countStmt) countStmt.close();
       if (conn) conn.close();
     }
   }
@@ -10027,7 +11659,7 @@ const valueMap = {};
       if (affected === 0) throw new Error('البند غير موجود أو تمت مراجعته مسبقاً');
       return { status: 'ok', affected: affected, client_balance_sheet_id: id, is_revised: 1, source: isVendor ? 'vendors_AP' : 'clients_AR' };
     } catch (err) {
-      Logger.log('dbClientsArRevise_ error: ' + err.message);
+      Logger.log('dbClientsArRevise_ MySQL adapter completed or failed; see named diagnostics');
       throw err;
     } finally {
       if (stmt) stmt.close();
@@ -10048,6 +11680,12 @@ const valueMap = {};
    * Soft-deleted rows are excluded (WHERE deleted_at IS NULL).
    */
   function dbClientBalanceSheetsList_(data, user) {
+    if (typeof mysqlRead_ === 'function' && !mysqlReading_('tc.dbClientBalanceSheetsList_')) {
+      return mysqlRead_(mysqlTcDefinition_('dbClientBalanceSheetsList_'), data, function (p) { return dbClientBalanceSheetsList_(p, user); });
+    }
+    
+    
+    
     data = data || {};
     var loadAll = !!(data.loadAll === true || data.loadAll === 'true' || data.loadAll === '1' || data.loadAll === 1);
     var limit = loadAll ? 1000 : Math.min(Math.max(Number(data.limit) || 20, 1), 1000);
@@ -10096,7 +11734,7 @@ const valueMap = {};
         loadedAll: loadAll
       };
     } catch (err) {
-      Logger.log('dbClientBalanceSheetsList_ error: ' + err.message);
+      Logger.log('dbClientBalanceSheetsList_ MySQL adapter completed or failed; see named diagnostics');
       throw err;
     } finally {
       if (rs) rs.close();
@@ -10151,7 +11789,7 @@ const valueMap = {};
       var affected = stmt.executeUpdate();
       return { status: 'ok', affected: affected, id: id };
     } catch (err) {
-      Logger.log('dbClientBalanceSheetsUpdate_ error: ' + err.message);
+      Logger.log('dbClientBalanceSheetsUpdate_ MySQL adapter completed or failed; see named diagnostics');
       throw err;
     } finally {
       if (stmt) stmt.close();
@@ -10173,6 +11811,12 @@ const valueMap = {};
    * Soft-deleted rows (deleted_at IS NOT NULL) are excluded.
    */
   function dbManufactureList_(data, user) {
+    if (typeof mysqlRead_ === 'function' && !mysqlReading_('tc.dbManufactureList_')) {
+      return mysqlRead_(mysqlTcDefinition_('dbManufactureList_'), data, function (p) { return dbManufactureList_(p, user); });
+    }
+    
+    
+    
     data = data || {};
     var loadAll = !!(data.loadAll === true || data.loadAll === 'true' || data.loadAll === '1' || data.loadAll === 1);
     var limit  = loadAll ? 1000 : Math.min(Math.max(Number(data.limit)  || 20, 1), 1000);
@@ -10206,7 +11850,7 @@ const valueMap = {};
       }
       return { status: 'ok', columns: columns, rows: rows, total: total, limit: limit, offset: offset, loadedAll: loadAll };
     } catch (err) {
-      Logger.log('dbManufactureList_ error: ' + err.message);
+      Logger.log('dbManufactureList_ MySQL adapter completed or failed; see named diagnostics');
       throw err;
     } finally {
       if (rs) rs.close();
@@ -10221,6 +11865,12 @@ const valueMap = {};
    * Return all footers for one header. data: { manufacture_header_id }.
    */
   function dbManufactureGetFooters_(data, user) {
+    if (typeof mysqlRead_ === 'function' && !mysqlReading_('tc.dbManufactureGetFooters_')) {
+      return mysqlRead_(mysqlTcDefinition_('dbManufactureGetFooters_'), data, function (p) { return dbManufactureGetFooters_(p, user); });
+    }
+    
+    
+    
     data = data || {};
     var hid = String(data.manufacture_header_id !== null && data.manufacture_header_id !== undefined ? data.manufacture_header_id : '').trim();
     if (!hid) throw new Error('manufacture_header_id is required');
@@ -10251,7 +11901,7 @@ const valueMap = {};
       }
       return { status: 'ok', columns: columns, rows: rows, manufacture_header_id: hid };
     } catch (err) {
-      Logger.log('dbManufactureGetFooters_ error: ' + err.message);
+      Logger.log('dbManufactureGetFooters_ MySQL adapter completed or failed; see named diagnostics');
       throw err;
     } finally {
       if (rs) rs.close();
@@ -10289,7 +11939,7 @@ const valueMap = {};
       var affected = stmt.executeUpdate();
       return { status: 'ok', affected: affected, id: id };
     } catch (err) {
-      Logger.log('dbManufactureUpdateHeader_ error: ' + err.message);
+      Logger.log('dbManufactureUpdateHeader_ MySQL adapter completed or failed; see named diagnostics');
       throw err;
     } finally {
       if (stmt) stmt.close();
@@ -10371,7 +12021,7 @@ const valueMap = {};
       var affected = stmt.executeUpdate();
       return { status: 'ok', affected: affected, id: id };
     } catch (err) {
-      Logger.log('dbManufactureUpdateFooter_ error: ' + err.message);
+      Logger.log('dbManufactureUpdateFooter_ MySQL adapter completed or failed; see named diagnostics');
       throw err;
     } finally {
       if (stmt) stmt.close();
@@ -10436,7 +12086,7 @@ const valueMap = {};
       var newId = idRs.next() ? String(idRs.getLong('new_id')) : null;
       return { status: 'ok', id: newId, manufacture_header_id: hid };
     } catch (err) {
-      Logger.log('dbManufactureInsertFooter_ error: ' + err.message);
+      Logger.log('dbManufactureInsertFooter_ MySQL adapter completed or failed; see named diagnostics');
       throw err;
     } finally {
       if (idRs)   idRs.close();
@@ -10456,6 +12106,12 @@ const valueMap = {};
    * Returns { status:'ok', products:[{value,label}], warehouses:[...], statuses:[...] }.
    */
   function dbManufactureRefs_(data, user) {
+    if (typeof mysqlRead_ === 'function' && !mysqlReading_('tc.dbManufactureRefs_')) {
+      return mysqlRead_(mysqlTcDefinition_('dbManufactureRefs_'), data, function (p) { return dbManufactureRefs_(p, user); });
+    }
+    
+    
+    
     var products = [], productsFull = [], warehouses = [], statuses = [];
     var conn;
     try {
@@ -10478,7 +12134,7 @@ const valueMap = {};
       ]);
       statuses = statuses.map(function (s) { return { value: s.label, label: s.label }; });
     } catch (err) {
-      Logger.log('dbManufactureRefs_ error: ' + err.message);
+      Logger.log('dbManufactureRefs_ MySQL adapter completed or failed; see named diagnostics');
       throw err;
     } finally {
       if (conn) conn.close();
@@ -10576,7 +12232,7 @@ const valueMap = {};
       if (affected === 0) throw new Error('السجل غير موجود أو محذوف مسبقاً');
       return { status: 'ok', affected: affected, id: id };
     } catch (err) {
-      Logger.log('dbManufactureSoftDeleteHeader_ error: ' + err.message);
+      Logger.log('dbManufactureSoftDeleteHeader_ MySQL adapter completed or failed; see named diagnostics');
       throw err;
     } finally {
       if (stmt) stmt.close();
@@ -10601,7 +12257,7 @@ const valueMap = {};
       if (affected === 0) throw new Error('البند غير موجود');
       return { status: 'ok', affected: affected, id: id };
     } catch (err) {
-      Logger.log('dbManufactureDeleteFooter_ error: ' + err.message);
+      Logger.log('dbManufactureDeleteFooter_ MySQL adapter completed or failed; see named diagnostics');
       throw err;
     } finally {
       if (stmt) stmt.close();
@@ -10631,7 +12287,7 @@ const valueMap = {};
       if (affected === 0) throw new Error('السجل غير موجود أو محذوف مسبقاً');
       return { status: 'ok', affected: affected, id: id };
     } catch (err) {
-      Logger.log('dbClientBalanceSheetsDelete_ error: ' + err.message);
+      Logger.log('dbClientBalanceSheetsDelete_ MySQL adapter completed or failed; see named diagnostics');
       throw err;
     } finally {
       if (stmt) stmt.close();
@@ -10639,207 +12295,257 @@ const valueMap = {};
     }
   }
   
-  // ─── products live table (Top Chemical: tc_products_live / اصناف النظام الرئيسي) ──
-  //
-  // products (17 cols): id, category_id, client_id, name_ar, name_en, code,
-  //   price, unit, quantity, number_of_cartons_bags, number_of_small_boxes,
-  //   product_unit_metric, active, manufacture_id, created_at, updated_at, deleted_at.
-  // Independent MySQL data beside the company sheets — same discipline as the
-  // client_balance_sheets block: paginated reads excluding soft-deleted rows,
-  // allowlist-free updates with read-only strip, soft-delete via NOW().
-  
   /**
-   * Paginated or full list from the products table.
-   * Soft-deleted rows (deleted_at IS NOT NULL) are excluded.
-   *
-   * Perf (tc_products_live Show All): the page turns pages of 50-100 instead of
-   * pulling up to 1000 rows in one RPC. The whole response (rows + total) is
-   * cached for DB_PRODUCTS_LIVE_TTL seconds under a version-stamped key, so page
-   * turns inside the window cost zero JDBC round trips; any miss rebuilds from
-   * MySQL and never returns an empty success. Full column set is kept on purpose:
-   * the page's detail/edit modals render every column in S.columns.
+   * Exact positive-ID lookup or bounded name search for tc_stock_scan.
+   * Soft-deleted rows are excluded and the projection is limited to the three
+   * fields needed by the scanner/count form.
+   * Called via get_stock_scan_options, so page-level authority applies.
    */
-  var DB_PRODUCTS_LIVE_TTL = 90;
-  var DB_PRODUCTS_LIVE_PAGE_MAX = 200;
-  var DB_PRODUCTS_LIVE_ALL_MAX = 1000;
-  var DB_PRODUCTS_LIVE_VER_KEY = 'dblive_products_ver';
-  
-  function dbProductsLiveVer_() {
-    try {
-      var v = CacheService.getScriptCache().get(DB_PRODUCTS_LIVE_VER_KEY);
-      return v || '0';
-    } catch (e) { return '0'; }
-  }
-  
-  function dbProductsLiveBust_() {
-    try { CacheService.getScriptCache().put(DB_PRODUCTS_LIVE_VER_KEY, String(Date.now()), 21600); } catch (e) {}
-  }
-  
-  function dbProductsLiveCacheGet_(key) {
-    try {
-      if (typeof getChunkedCache_ === 'function') return getChunkedCache_(key);
-      var raw = CacheService.getScriptCache().get(key);
-      return raw ? JSON.parse(raw) : null;
-    } catch (e) { return null; }
-  }
-  
-  function dbProductsLiveCachePut_(key, value) {
-    try {
-      if (typeof putChunkedCache_ === 'function') { putChunkedCache_(key, value, DB_PRODUCTS_LIVE_TTL); return; }
-      CacheService.getScriptCache().put(key, JSON.stringify(value), DB_PRODUCTS_LIVE_TTL);
-    } catch (e) {}
-  }
-  
-  function dbProductsLiveList_(data, user) {
+  function dbStockScanProducts_(data, user) {
+    if (typeof mysqlRead_ === 'function' && !mysqlReading_('tc.dbStockScanProducts_')) {
+      return mysqlRead_(mysqlTcDefinition_('dbStockScanProducts_'), data, function (p) { return dbStockScanProducts_(p, user); });
+    }
+    
+    
+    
     data = data || {};
-    var loadAll = !!(data.loadAll === true || data.loadAll === 'true' || data.loadAll === '1' || data.loadAll === 1);
-    var limit = loadAll ? DB_PRODUCTS_LIVE_ALL_MAX : Math.min(Math.max(Number(data.limit) || 50, 1), DB_PRODUCTS_LIVE_PAGE_MAX);
-    var offset = Math.max(Number(data.offset) || 0, 0);
-    var cacheKey = 'dblive_products_v' + dbProductsLiveVer_() + '_l' + limit + '_o' + offset;
-    var cached = dbProductsLiveCacheGet_(cacheKey);
-    if (cached && cached.status === 'ok' && Array.isArray(cached.rows)) return cached;
-    var conn, countStmt, countRs, stmt, rs;
+    var mode = String(data.mode == null ? '' : data.mode).trim().toLowerCase();
+    var id = data.id == null || data.id === '' ? '' : String(data.id).trim();
+    var code = data.code == null || data.code === '' ? '' : String(data.code).trim().slice(0, 64);
+    if (!mode) mode = id ? 'id' : (code ? 'code' : 'name');
+    if (['id', 'code', 'name'].indexOf(mode) === -1) throw new Error('Invalid product search mode');
+    if (mode === 'id' && !/^[1-9]\d{0,19}$/.test(id)) throw new Error('Invalid product ID');
+    if (mode === 'code' && !code) throw new Error('Invalid product code');
+    var search = String(data.search == null ? '' : data.search).trim().slice(0, 120);
+    var limit = Math.min(Math.max(Math.floor(Number(data.limit) || 30), 1), 50);
+    var offset = Math.min(Math.max(0, Math.floor(Number(data.offset) || 0)), 10000000);
+    if (mode === 'id') { search = ''; code = ''; offset = 0; }
+    if (mode === 'code') { search = ''; id = ''; offset = 0; }
+    if (mode === 'name') { id = ''; code = ''; }
+    var conn, stmt, rs;
     try {
       conn = dbGetConnection_();
-      countStmt = conn.prepareStatement(
-        'SELECT COUNT(*) AS cnt FROM `products` WHERE `deleted_at` IS NULL'
-      );
-      countRs = countStmt.executeQuery();
-      var total = countRs.next() ? countRs.getInt('cnt') : 0;
-      stmt = conn.prepareStatement(
-        'SELECT `p`.*, `q`.`current_qty` AS `live_quantity` FROM `products` `p`' +
-        ' LEFT JOIN `product_current_quantity` `q` ON `q`.`id` = `p`.`id`' +
-        ' WHERE `p`.`deleted_at` IS NULL' +
-        ' ORDER BY `p`.`id` DESC LIMIT ' + limit + ' OFFSET ' + offset
-      );
-      rs = stmt.executeQuery();
-      var md = rs.getMetaData();
-      var colCount = md.getColumnCount();
-      var columns = [];
-      for (var c = 1; c <= colCount; c++) { columns.push(md.getColumnLabel(c) || md.getColumnName(c)); }
-      var rows = [];
-      while (rs.next()) {
-        var row = {};
-        for (var i = 1; i <= colCount; i++) { var v = rs.getObject(i); row[columns[i-1]] = v !== null ? String(v) : null; }
-        rows.push(row);
+      var sql = 'SELECT `id`, `name_ar`, `number_of_cartons_bags`, `code` FROM `products` WHERE `deleted_at` IS NULL';
+      var bind = [];
+      if (mode === 'id') { sql += ' AND `id` = ?'; bind.push(id); }
+      else if (mode === 'code') { sql += ' AND `code` = ?'; bind.push(code); }
+      else if (search) { sql += ' AND `name_ar` LIKE ?'; bind.push(search.replace(/[%_\\]/g, '\\$&') + '%'); }
+      sql += ' ORDER BY `name_ar` ASC, `id` ASC';
+      if (mode === 'name' || (mode === 'code')) sql += ' LIMIT ? OFFSET ?';
+      stmt = conn.prepareStatement(sql);
+      if (bind.length) dbBindParams_(stmt, bind);
+      // Apps Script's setObject may send JavaScript numbers as floating point.
+      // MySQL requires integer parameters for LIMIT/OFFSET.
+      if (mode === 'name' || mode === 'code') {
+        stmt.setInt(bind.length + 1, limit + 1);
+        stmt.setInt(bind.length + 2, offset);
       }
-      var out = { status: 'ok', columns: columns, rows: rows, total: total, limit: limit, offset: offset, loadedAll: loadAll };
-      dbProductsLiveCachePut_(cacheKey, out);
-      return out;
+      rs = stmt.executeQuery();
+      var products = [];
+      var exact = (mode === 'id');
+      while (rs.next() && (exact || products.length < limit + 1)) {
+        var productId = rs.getObject(1);
+        products.push({
+          id: productId !== null ? String(productId) : null,
+          name_ar: String(rs.getObject(2) || '').trim(),
+          number_of_cartons_bags: rs.getObject(3),
+          code: rs.getObject(4) == null ? null : String(rs.getObject(4))
+        });
+      }
+      return { status: 'ok', mode: mode, products: products.slice(0, exact ? 1 : limit), has_more: !exact && products.length > limit };
     } catch (err) {
-      Logger.log('dbProductsLiveList_ error: ' + err.message);
+      Logger.log('dbStockScanProducts_ MySQL adapter completed or failed; see named diagnostics');
       throw err;
     } finally {
       if (rs) rs.close();
       if (stmt) stmt.close();
-      if (countRs) countRs.close();
-      if (countStmt) countStmt.close();
       if (conn) conn.close();
     }
   }
-  
-  /**
-   * UPDATE one products row by id. Everything is editable except the PK,
-   * server-managed timestamps, and quantity — quantity is read-only live data
-   * from the product_current_quantity view (see dbProductsLiveList_).
-   */
-  function dbProductsLiveUpdate_(data, user) {
-    data = data || {};
-    var id = String(data.id !== undefined && data.id !== null ? data.id : '').trim();
-    if (!id) throw new Error('id is required');
-    var readOnlyCols = { 'id': true, 'created_at': true, 'updated_at': true, 'quantity': true, 'live_quantity': true };
-    var updates = [], params = [];
-    for (var key in data) {
-      if (!Object.prototype.hasOwnProperty.call(data, key)) continue;
-      if (readOnlyCols[key]) continue;
-      if (key.charAt(0) === '_') continue;
-      var safeCol = dbSanitizeIdentifier_(key);
-      var rawVal = data[key];
-      updates.push(safeCol + ' = ?');
-      params.push(rawVal === null || rawVal === undefined || rawVal === '' ? null : rawVal);
+
+  function dbStockScanWarehouses_(data, user) {
+    if (typeof mysqlRead_ === 'function' && !mysqlReading_('tc.dbStockScanWarehouses_')) {
+      return mysqlRead_(mysqlTcDefinition_('dbStockScanWarehouses_'), data,
+        function (p) { return dbStockScanWarehouses_(p, user); });
     }
-    if (updates.length === 0) throw new Error('لا توجد حقول للتحديث');
-    params.push(id);
-    var conn, stmt;
+    data = data || {};
+    var conn, stmt, rs;
     try {
       conn = dbGetConnection_();
-      stmt = conn.prepareStatement('UPDATE `products` SET ' + updates.join(', ') + ' WHERE `id` = ?');
-      dbBindParams_(stmt, params);
-      var affected = stmt.executeUpdate();
-      dbProductsLiveBust_();
-      return { status: 'ok', affected: affected, id: id };
+      stmt = conn.prepareStatement('SELECT `id`, `location` FROM `warehouse_locations` ORDER BY `location` ASC, `id` ASC LIMIT 501');
+      rs = stmt.executeQuery();
+      var warehouses = [];
+      while (rs.next() && warehouses.length < 501) {
+        var wid = rs.getObject(1);
+        warehouses.push({
+          value: wid !== null ? String(wid) : null,
+          label: String(rs.getObject(2) == null ? '' : rs.getObject(2)).trim()
+        });
+      }
+      var truncated = warehouses.length > 500;
+      return { status: 'ok', warehouses: warehouses.slice(0, 500), truncated: truncated };
     } catch (err) {
-      Logger.log('dbProductsLiveUpdate_ error: ' + err.message);
+      Logger.log('dbStockScanWarehouses_ MySQL adapter completed or failed; see named diagnostics');
       throw err;
     } finally {
+      if (rs) rs.close();
+      if (stmt) stmt.close();
+      if (conn) conn.close();
+    }
+  }
+
+  function dbStockScanBalance_(data, user) {
+    if (typeof mysqlRead_ === 'function' && !mysqlReading_('tc.dbStockScanBalance_')) {
+      return mysqlRead_(mysqlTcDefinition_('dbStockScanBalance_'), data,
+        function (p) { return dbStockScanBalance_(p, user); });
+    }
+    data = data || {};
+    var productId = String(data.product_id == null ? '' : data.product_id).trim();
+    var warehouseId = String(data.warehouse_id == null ? '' : data.warehouse_id).trim();
+    if (!/^[1-9]\d{0,19}$/.test(productId)) throw new Error('Invalid product ID');
+    if (!/^[1-9]\d{0,19}$/.test(warehouseId)) throw new Error('Invalid warehouse ID');
+    var conn, stmt, rs;
+    try {
+      conn = dbGetConnection_();
+      stmt = conn.prepareStatement('SELECT `id`, `warehouse_id`, `current_qty` FROM `product_current_qty_warehouses` WHERE `id` = ? AND `warehouse_id` = ? LIMIT 3');
+      dbBindParams_(stmt, [productId, warehouseId]);
+      rs = stmt.executeQuery();
+      var rows = [];
+      while (rs.next() && rows.length < 3) {
+        rows.push({ id: rs.getObject(1), warehouse_id: rs.getObject(2), current_qty: rs.getObject(3) });
+      }
+      if (rows.length > 1) throw new Error('بيانات المخزون مكررة لهذا الصنف والمخزن — راجع مسؤول النظام');
+      if (!rows.length) return { status: 'ok', state: 'missing', product_id: productId, warehouse_id: warehouseId, current_qty: null };
+      var qty = rows[0].current_qty;
+      if (qty === null || qty === undefined || String(qty).trim() === '') return { status: 'ok', state: 'missing', product_id: productId, warehouse_id: warehouseId, current_qty: null };
+      var n = Number(qty);
+      if (!Number.isFinite(n)) throw new Error('رصيد السيستم غير صالح');
+      return { status: 'ok', state: 'ready', product_id: productId, warehouse_id: warehouseId, current_qty: n };
+    } catch (err) {
+      Logger.log('dbStockScanBalance_ MySQL adapter completed or failed; see named diagnostics');
+      throw err;
+    } finally {
+      if (rs) rs.close();
       if (stmt) stmt.close();
       if (conn) conn.close();
     }
   }
   
-  /**
-   * Soft-delete one products row: SET deleted_at = NOW().
-   * data: { id }.
-   */
-  function dbProductsLiveDelete_(data, user) {
-    data = data || {};
-    var id = String(data.id !== undefined && data.id !== null ? data.id : '').trim();
-    if (!id) throw new Error('id is required');
-    var conn, stmt;
-    try {
-      conn = dbGetConnection_();
-      stmt = conn.prepareStatement(
-        'UPDATE `products` SET `deleted_at` = NOW(), `updated_at` = NOW()' +
-        ' WHERE `id` = ? AND `deleted_at` IS NULL'
-      );
-      stmt.setObject(1, id);
-      var affected = stmt.executeUpdate();
-      if (affected === 0) throw new Error('الصنف غير موجود أو محذوف مسبقاً');
-      dbProductsLiveBust_();
-      return { status: 'ok', affected: affected, id: id };
-    } catch (err) {
-      Logger.log('dbProductsLiveDelete_ error: ' + err.message);
-      throw err;
-    } finally {
-      if (stmt) stmt.close();
-      if (conn) conn.close();
+  /* Stock-scan instant catalog: the complete eligible products list for
+   * local picker filtering. Same contract as dbCapabilityCatalog_ (2,000 raw
+   * rows / 256 KiB, explicit overflow shape). Entries carry the fields the
+   * count form needs (per-unit quantity, code) so selection needs no lookup. */
+  function dbStockScanCatalog_(data, user) {
+    if (typeof mysqlRead_ === 'function' && !mysqlReading_('tc.dbStockScanCatalog_')) {
+      return mysqlRead_(mysqlTcDefinition_('dbStockScanCatalog_'), data,
+        function (p) { return dbStockScanCatalog_(p, user); });
     }
-  }
-  
-  /**
-   * Product options for the tc_stock_scan page: id, name_ar and the
-   * per-container quantity (number_of_cartons_bags) that pre-fills the count
-   * form's الكمية بالعبوة الواحدة field. Soft-deleted rows are excluded.
-   * Called via get_stock_scan_options, so page-level authority applies.
-   */
-  function dbStockScanProducts_(data, user) {
     var conn, stmt, rs;
     try {
       conn = dbGetConnection_();
       stmt = conn.prepareStatement(
-        'SELECT `id`, `name_ar`, `number_of_cartons_bags` FROM `products`' +
-        ' WHERE `deleted_at` IS NULL ORDER BY `id` ASC'
-      );
+        'SELECT COUNT(*) AS `row_count`, COALESCE(JSON_ARRAYAGG(JSON_OBJECT(' +
+        "'id', CASE WHEN `p`.`id` IS NULL THEN NULL ELSE CAST(`p`.`id` AS CHAR) END," +
+        "'name_ar', CASE WHEN `p`.`name_ar` IS NULL THEN '' ELSE CAST(`p`.`name_ar` AS CHAR) END," +
+        "'code', CASE WHEN `p`.`code` IS NULL THEN NULL ELSE CAST(`p`.`code` AS CHAR) END," +
+        "'per_unit', CASE WHEN `p`.`number_of_cartons_bags` IS NULL THEN '' ELSE CAST(`p`.`number_of_cartons_bags` AS CHAR) END" +
+        ')), JSON_ARRAY()) AS `products_json` FROM (' +
+        ' SELECT `id`, `name_ar`, `code`, `number_of_cartons_bags` FROM `products`' +
+        ' WHERE `deleted_at` IS NULL ORDER BY `name_ar` ASC, `id` ASC LIMIT 2001' +
+        ') `p`');
       rs = stmt.executeQuery();
-      var products = [];
-      while (rs.next()) {
-        var id = rs.getObject(1);
-        var perUnit = rs.getObject(3);
-        products.push({
-          value: id !== null ? String(id) : null,
-          label: String(rs.getObject(2) || '').trim() || ('#' + id),
-          per_unit: perUnit !== null && perUnit !== undefined ? String(perUnit) : ''
-        });
+      var raw = 0, productsJson = '[]';
+      if (rs.next()) {
+        raw = Number(rs.getString('row_count') || 0);
+        productsJson = String(rs.getString('products_json') || '[]');
       }
-      return { status: 'ok', products: products };
+      if (raw > DB_CAPABILITY_CATALOG_ROW_CAP_) return dbCapabilityCatalogOverflow_('row_limit');
+      var parseStarted = Date.now();
+      var parsed = JSON.parse(productsJson);
+      if (!Array.isArray(parsed) || parsed.length !== raw) throw new Error('MySQL products catalog aggregate is invalid');
+      var products = [], unsupported = false;
+      for (var i = 0; i < parsed.length; i++) {
+        var item = parsed[i];
+        var scanIdStr = item && item.id != null ? String(item.id).trim() : '';
+        if (!/^[1-9]\d{0,19}$/.test(scanIdStr)) { unsupported = true; continue; }
+        products.push({ id: scanIdStr, name_ar: String(item.name_ar == null ? '' : item.name_ar).trim(),
+          code: item.code == null ? null : String(item.code),
+          per_unit: item.per_unit == null ? '' : String(item.per_unit) });
+      }
+      if (typeof _mysqlRequest_ !== 'undefined' && _mysqlRequest_) {
+        _mysqlRequest_.jsonParseMs = (_mysqlRequest_.jsonParseMs || 0) + Date.now() - parseStarted;
+      }
+      if (unsupported) return dbCapabilityCatalogOverflow_('unsupported_id');
+      var scanPayload = JSON.stringify(products);
+      if (tcUtf8Bytes_(scanPayload) > DB_CAPABILITY_CATALOG_BYTE_CAP_) return dbCapabilityCatalogOverflow_('byte_limit');
+      return { status: 'ok', schema_version: 1, products: products, count: products.length,
+        complete: true, overflow: false, reason: null, payload_bytes: tcUtf8Bytes_(scanPayload) };
     } catch (err) {
-      Logger.log('dbStockScanProducts_ error: ' + err.message);
+      Logger.log('dbStockScanCatalog_ MySQL adapter completed or failed; see named diagnostics');
+      throw err;
+    } finally {
+      try { if (rs) rs.close(); } finally { try { if (stmt) stmt.close(); } finally { if (conn) conn.close(); } }
+    }
+  }
+  
+  /* All warehouse balances of one product in a single indexed read, so the
+   * count form can resolve every warehouse pair locally after one RPC.
+   * Absent warehouses stay missing (never zero); duplicate pairs are an
+   * explicit integrity error, same as the single-pair read. */
+  function dbStockScanBalances_(data, user) {
+    if (typeof mysqlRead_ === 'function' && !mysqlReading_('tc.dbStockScanBalances_')) {
+      return mysqlRead_(mysqlTcDefinition_('dbStockScanBalances_'), data,
+        function (p) { return dbStockScanBalances_(p, user); });
+    }
+    data = data || {};
+    var allProductId = String(data.product_id == null ? '' : data.product_id).trim();
+    if (!/^[1-9]\d{0,19}$/.test(allProductId)) throw new Error('Invalid product ID');
+    var conn, stmt, rs;
+    try {
+      conn = dbGetConnection_();
+      stmt = conn.prepareStatement('SELECT `warehouse_id`, `current_qty` FROM `product_current_qty_warehouses` WHERE `id` = ? LIMIT 501');
+      dbBindParams_(stmt, [allProductId]);
+      rs = stmt.executeQuery();
+      var seen = {}, balances = [];
+      while (rs.next()) {
+        var balWid = rs.getObject(1);
+        var balQty = rs.getObject(2);
+        if (balWid == null) continue;
+        var balWidStr = String(balWid);
+        if (seen[balWidStr]) throw new Error('بيانات المخزون مكررة لهذا الصنف والمخزن — راجع مسؤول النظام');
+        seen[balWidStr] = true;
+        if (balQty === null || balQty === undefined || String(balQty).trim() === '') continue;
+        var balN = Number(balQty);
+        if (!Number.isFinite(balN)) throw new Error('رصيد السيستم غير صالح');
+        balances.push({ warehouse_id: balWidStr, current_qty: balN });
+      }
+      balances.sort(function (a, b) { return a.warehouse_id < b.warehouse_id ? -1 : (a.warehouse_id > b.warehouse_id ? 1 : 0); });
+      return { status: 'ok', product_id: allProductId, balances: balances };
+    } catch (err) {
+      Logger.log('dbStockScanBalances_ MySQL adapter completed or failed; see named diagnostics');
       throw err;
     } finally {
       if (rs) rs.close();
       if (stmt) stmt.close();
       if (conn) conn.close();
     }
+  }
+  
+  function getStockScanCatalog_(data, user) {
+    var res;
+    if (typeof mysqlRead_ === 'function' && !mysqlReading_('tc.dbStockScanCatalog_')) {
+      res = mysqlRead_(mysqlTcDefinition_('dbStockScanCatalog_'), data,
+        function (p) { return dbStockScanCatalog_(p, user); });
+    } else {
+      res = dbStockScanCatalog_(data, user);
+    }
+    var catalog = withCatalogServedAt_(res);
+    catalog.catalog_ttl_ms = 30000;
+    return catalog;
+  }
+  
+  function getStockScanBalances_(data, user) {
+    return dbStockScanBalances_(data || {}, user);
   }
   
   // ─── regular_box_movement analysis (Top Chemical: tc_box_analysis) ──
@@ -11002,6 +12708,12 @@ const valueMap = {};
    * client strings, which is why they can be concatenated into the SQL.
    */
   function dbBoxList_(data, user) {
+    if (typeof mysqlRead_ === 'function' && !mysqlReading_('tc.dbBoxList_')) {
+      return mysqlRead_(mysqlTcDefinition_('dbBoxList_'), data, function (p) { return dbBoxList_(p, user); });
+    }
+    
+    
+    
     data = data || {};
     var limit = Math.min(Math.max(Number(data.limit) || 50, 1), 200);
     var offset = Math.max(Number(data.offset) || 0, 0);
@@ -11026,7 +12738,7 @@ const valueMap = {};
       while (rs.next()) rows.push(dbBoxReadRow_(rs));
       return { status: 'ok', columns: DB_BOX_COLUMNS.slice(), rows: rows, total: total, limit: limit, offset: offset };
     } catch (err) {
-      Logger.log('dbBoxList_ error: ' + err.message);
+      Logger.log('dbBoxList_ MySQL adapter completed or failed; see named diagnostics');
       throw err;
     } finally {
       if (rs) rs.close();
@@ -11056,6 +12768,12 @@ const valueMap = {};
    * than written out twice.
    */
   function dbBoxAccountAggregates_(data, user) {
+    if (typeof mysqlRead_ === 'function' && !mysqlReading_('tc.dbBoxAccountAggregates_')) {
+      return mysqlRead_(mysqlTcDefinition_('dbBoxAccountAggregates_'), data, function (p) { return dbBoxAccountAggregates_(p, user); });
+    }
+    
+    
+    
     data = data || {};
     var ref = dbBoxValidateDate_(data.ref_date);
     if (!ref) throw new Error('ref_date is required (YYYY-MM-DD)');
@@ -11140,7 +12858,7 @@ const valueMap = {};
       }
       return { status: 'ok', ref_date: ref, windows: w, rows: rows, limit: limit };
     } catch (err) {
-      Logger.log('dbBoxAccountAggregates_ error: ' + err.message);
+      Logger.log('dbBoxAccountAggregates_ MySQL adapter completed or failed; see named diagnostics');
       throw err;
     } finally {
       if (rs) rs.close();
@@ -11161,6 +12879,12 @@ const valueMap = {};
    * can say so rather than pick one silently.
    */
   function dbChartAccountLabels_(data, user) {
+    if (typeof mysqlRead_ === 'function' && !mysqlReading_('tc.dbChartAccountLabels_')) {
+      return mysqlRead_(mysqlTcDefinition_('dbChartAccountLabels_'), data, function (p) { return dbChartAccountLabels_(p, user); });
+    }
+    
+    
+    
     data = data || {};
     var limit = Math.min(Math.max(Number(data.limit) || 5000, 1), 20000);
     var conn, stmt, rs;
@@ -11188,7 +12912,7 @@ const valueMap = {};
         truncated: n >= limit
       };
     } catch (err) {
-      Logger.log('dbChartAccountLabels_ error: ' + err.message);
+      Logger.log('dbChartAccountLabels_ MySQL adapter completed or failed; see named diagnostics');
       throw err;
     } finally {
       if (rs) rs.close();
@@ -11214,6 +12938,12 @@ const valueMap = {};
   var DB_BOX_HISTORY_MAX = 20000;
   
   function dbBoxItemHistory_(data, user) {
+    if (typeof mysqlRead_ === 'function' && !mysqlReading_('tc.dbBoxItemHistory_')) {
+      return mysqlRead_(mysqlTcDefinition_('dbBoxItemHistory_'), data, function (p) { return dbBoxItemHistory_(p, user); });
+    }
+    
+    
+    
     data = data || {};
     var ref = dbBoxValidateDate_(data.ref_date);
     if (!ref) throw new Error('ref_date is required (YYYY-MM-DD)');
@@ -11261,7 +12991,7 @@ const valueMap = {};
         months: months, limit: limit, truncated: rows.length >= limit
       };
     } catch (err) {
-      Logger.log('dbBoxItemHistory_ error: ' + err.message);
+      Logger.log('dbBoxItemHistory_ MySQL adapter completed or failed; see named diagnostics');
       throw err;
     } finally {
       if (rs) rs.close();
@@ -11366,7 +13096,7 @@ const valueMap = {};
           : null
       };
     } catch (err) {
-      Logger.log('dbBoxUpdate_ error: ' + err.message);
+      Logger.log('dbBoxUpdate_ MySQL adapter completed or failed; see named diagnostics');
       throw err;
     } finally {
       if (stmt) stmt.close();
@@ -11398,7 +13128,7 @@ const valueMap = {};
       if (affected === 0) throw new Error('البند غير موجود أو تمت مراجعته مسبقاً');
       return { status: 'ok', affected: affected, id: id, is_revised: 1 };
     } catch (err) {
-      Logger.log('dbBoxRevise_ error: ' + err.message);
+      Logger.log('dbBoxRevise_ MySQL adapter completed or failed; see named diagnostics');
       throw err;
     } finally {
       if (stmt) stmt.close();
@@ -11429,6 +13159,12 @@ const valueMap = {};
    * analysed instead of implying it saw everything.
    */
   function dbBoxAnalysisScan_(data, user) {
+    if (typeof mysqlRead_ === 'function' && !mysqlReading_('tc.dbBoxAnalysisScan_')) {
+      return mysqlRead_(mysqlTcDefinition_('dbBoxAnalysisScan_'), data, function (p) { return dbBoxAnalysisScan_(p, user); });
+    }
+    
+    
+    
     data = data || {};
     var ref = dbBoxValidateDate_(data.ref_date);
     if (!ref) throw new Error('ref_date is required (YYYY-MM-DD)');
@@ -11462,7 +13198,7 @@ const valueMap = {};
         limit: limit, truncated: rows.length >= limit
       };
     } catch (err) {
-      Logger.log('dbBoxAnalysisScan_ error: ' + err.message);
+      Logger.log('dbBoxAnalysisScan_ MySQL adapter completed or failed; see named diagnostics');
       throw err;
     } finally {
       if (rs) rs.close();
@@ -11477,6 +13213,12 @@ const valueMap = {};
    * a fresh one, and nothing has to guess at a TTL.
    */
   function dbBoxMaxUpdatedAt_(data, user) {
+    if (typeof mysqlRead_ === 'function' && !mysqlReading_('tc.dbBoxMaxUpdatedAt_')) {
+      return mysqlRead_(mysqlTcDefinition_('dbBoxMaxUpdatedAt_'), data, function (p) { return dbBoxMaxUpdatedAt_(p, user); });
+    }
+    
+    
+    
     var conn, stmt, rs;
     try {
       conn = dbGetConnection_();
@@ -11491,7 +13233,7 @@ const valueMap = {};
         count: Number(rs.getObject(2)) || 0
       };
     } catch (err) {
-      Logger.log('dbBoxMaxUpdatedAt_ error: ' + err.message);
+      Logger.log('dbBoxMaxUpdatedAt_ MySQL adapter completed or failed; see named diagnostics');
       throw err;
     } finally {
       if (rs) rs.close();
@@ -11499,613 +13241,6 @@ const valueMap = {};
       if (conn) conn.close();
     }
   }
-  
-  // ─── Top Chemical executive sales (tc_exec_sales) ──
-  //
-  // Reads the `sales_product_qty_value` view joined to `products` for the metric
-  // divisor, plus the box net over `regular_box_movement` for the same date span.
-  // Same discipline as dbBoxWhere_/dbBoxList_/dbBoxAccountAggregates_: prepared
-  // statements, bound params, clamped limits, close rs/stmt/conn in finally.
-  
-  function dbTcExecSalesValidateYears_(years) {
-    var out = [];
-    var src = years;
-    if (src === undefined || src === null) src = [];
-    if (!Array.isArray(src)) src = [src];
-    for (var i = 0; i < src.length; i++) {
-      var y = Number(src[i]);
-      if (!Number.isInteger(y) || y < 2000 || y > 2100) throw new Error('سنة غير صحيحة: ' + src[i]);
-      if (out.indexOf(y) === -1) out.push(y);
-    }
-    if (!out.length) throw new Error('السنوات مطلوبة (years[])');
-    out.sort(function (a, b) { return a - b; });
-    return out;
-  }
-  
-  function dbTcExecSalesRows_(data, user) {
-    data = data || {};
-    var years = dbTcExecSalesValidateYears_(data.years);
-    var months = [];
-    if (data.months !== undefined && data.months !== null && data.months !== '') {
-      var mSrc = Array.isArray(data.months) ? data.months : [data.months];
-      for (var mi = 0; mi < mSrc.length; mi++) {
-        var m = Number(mSrc[mi]);
-        if (!Number.isInteger(m) || m < 1 || m > 12) throw new Error('شهر غير صحيح: ' + mSrc[mi]);
-        if (months.indexOf(m) === -1) months.push(m);
-      }
-    }
-    var search = String(data.search !== undefined && data.search !== null ? data.search : '').trim();
-    var pids = [];
-    if (data.product_ids !== undefined && data.product_ids !== null && data.product_ids !== '') {
-      var pSrc = Array.isArray(data.product_ids) ? data.product_ids : [data.product_ids];
-      for (var pi = 0; pi < pSrc.length; pi++) {
-        var s = String(pSrc[pi]).trim();
-        if (!s) continue;
-        if (!/^\d{1,19}$/.test(s)) throw new Error('product_id غير صحيح: ' + pSrc[pi]);
-        if (pids.indexOf(s) === -1) pids.push(s);
-      }
-    }
-    var limit = Math.min(Math.max(Number(data.limit) || 3000, 1), 5000);
-    var offset = Math.max(Number(data.offset) || 0, 0);
-    var yearMarks = years.map(function () { return '?'; }).join(', ');
-    var sql = 'SELECT v.sales_year, v.sales_month, v.product_id, v.name_ar, v.total_qty, v.return_qty, v.net_qty, v.total_value, v.return_value, v.net_value, v.currency, v.currency_ratio, p.product_unit_metric' +
-      ' FROM sales_product_qty_value v LEFT JOIN products p ON p.id=v.product_id AND p.deleted_at IS NULL' +
-      ' WHERE v.sales_year IN (' + yearMarks + ')';
-    var params = years.slice();
-    if (months.length) {
-      sql += ' AND v.sales_month IN (' + months.map(function () { return '?'; }).join(', ') + ')';
-      for (var k = 0; k < months.length; k++) params.push(months[k]);
-    }
-    if (pids.length) {
-      sql += ' AND v.product_id IN (' + pids.map(function () { return '?'; }).join(', ') + ')';
-      for (var q = 0; q < pids.length; q++) params.push(pids[q]);
-    }
-    if (search) {
-      sql += ' AND (v.name_ar LIKE ? OR CAST(v.product_id AS CHAR) LIKE ?)';
-      params.push('%' + search + '%', '%' + search + '%');
-    }
-    sql += ' ORDER BY v.sales_year DESC, v.sales_month DESC, v.product_id DESC LIMIT ' + limit + ' OFFSET ' + offset;
-  
-    var conn, stmt, rs;
-    try {
-      conn = dbGetConnection_();
-      stmt = conn.prepareStatement(sql);
-      dbBindParams_(stmt, params);
-      rs = stmt.executeQuery();
-      var rows = [];
-      while (rs.next()) {
-        rows.push({
-          sales_year: rs.getObject(1) !== null ? String(rs.getObject(1)) : null,
-          sales_month: rs.getObject(2) !== null ? String(rs.getObject(2)) : null,
-          product_id: rs.getObject(3) !== null ? String(rs.getObject(3)) : null,
-          name_ar: rs.getObject(4) !== null ? String(rs.getObject(4)) : null,
-          total_qty: rs.getObject(5) !== null ? String(rs.getObject(5)) : null,
-          return_qty: rs.getObject(6) !== null ? String(rs.getObject(6)) : null,
-          net_qty: rs.getObject(7) !== null ? String(rs.getObject(7)) : null,
-          total_value: rs.getObject(8) !== null ? String(rs.getObject(8)) : null,
-          return_value: rs.getObject(9) !== null ? String(rs.getObject(9)) : null,
-          net_value: rs.getObject(10) !== null ? String(rs.getObject(10)) : null,
-          currency: rs.getObject(11) !== null ? String(rs.getObject(11)) : null,
-          currency_ratio: rs.getObject(12) !== null ? String(rs.getObject(12)) : null,
-          product_unit_metric: rs.getObject(13) !== null ? String(rs.getObject(13)) : null
-        });
-      }
-      return { status: 'ok', rows: rows, years: years, months: months, limit: limit, offset: offset, truncated: rows.length >= limit };
-    } catch (err) {
-      Logger.log('dbTcExecSalesRows_ error: ' + err.message + ' | years=' + JSON.stringify(years) + ' search=' + String(search || '').slice(0, 40) + ' limit=' + limit + ' offset=' + offset);
-      throw err;
-    } finally {
-      if (rs) rs.close();
-      if (stmt) stmt.close();
-      if (conn) conn.close();
-    }
-  }
-  
-  var DB_TC_SALES_VIEW_COLUMNS = [
-    'sales_year', 'sales_month', 'product_id', 'name_ar',
-    'total_qty', 'return_qty', 'net_qty',
-    'total_value', 'return_value', 'net_value',
-    'currency', 'currency_ratio', 'product_unit_metric'
-  ];
-  
-  /**
-   * Result caches for the tc_exec_sales split endpoints (permanent timeout fix).
-   * get_sales_charts runs two full-view GROUP BYs with per-row DECIMAL casts —
-   * recomputing them on every page view is what blew the 60s client budget, so
-   * aggregates keep the EXEC_SALES_TTL precedent (600s). The paged list keeps
-   * the DBLIVE-1 budget (90s). The view has no direct write path (it derives
-   * from invoices/returns), so freshness is TTL-bounded and documented; both
-   * endpoints honor opt-in data.refresh to force a rebuild. Chunked helpers are
-   * referenced only behind typeof guards — this file ships unordered relative
-   * to Code.js, same discipline as the products-live block.
-   */
-  var DB_TC_SALES_CHARTS_TTL = 600;
-  var DB_TC_SALES_VIEW_TTL = 90;
-  var DB_TC_SALES_VER_KEY = 'dblive_sales_ver';
-  
-  function dbTcSalesVer_() {
-    try {
-      var v = CacheService.getScriptCache().get(DB_TC_SALES_VER_KEY);
-      return v || '0';
-    } catch (e) { return '0'; }
-  }
-  
-  function dbTcSalesCacheGet_(key) {
-    try {
-      if (typeof getChunkedCache_ === 'function') return getChunkedCache_(key);
-      var raw = CacheService.getScriptCache().get(key);
-      return raw ? JSON.parse(raw) : null;
-    } catch (e) { return null; }
-  }
-  
-  function dbTcSalesCachePut_(key, value, ttl) {
-    try {
-      if (typeof putChunkedCache_ === 'function') { putChunkedCache_(key, value, ttl); return; }
-      CacheService.getScriptCache().put(key, JSON.stringify(value), ttl);
-    } catch (e) {}
-  }
-  
-  function dbTcSalesCacheKey_(kind, where, extra) {
-    var q = String(where.search || '').replace(/[^a-zA-Z0-9_\u0600-\u06FF]/g, '').slice(0, 30);
-    return 'dblive_sales_' + kind + '_v' + dbTcSalesVer_() +
-      '_y' + (where.years || []).join('-') + '_q' + q + extra;
-  }
-  
-  /**
-   * Paginated view-only reader for the tc_exec_sales first iteration.
-   * Copies the dbClientsArList_ discipline: one small COUNT + one small SELECT
-   * sharing the same WHERE, limit 1..200 (default 50). No aggregation here —
-   * the page renders exactly these rows plus per-row metric/EGP derivation.
-   * data: { years[], search, limit, offset }
-   * Returns { status:'ok', columns, rows, total, limit, offset }.
-   */
-  function dbTcSalesViewWhere_(data) {
-    data = data || {};
-    var years = dbTcExecSalesValidateYears_(data.years);
-    var search = String(data.search !== undefined && data.search !== null ? data.search : '').trim().slice(0, 40);
-    var conditions = ['v.sales_year IN (' + years.map(function () { return '?'; }).join(', ') + ')'];
-    var params = years.slice();
-    if (search) {
-      conditions.push('(v.name_ar LIKE ? OR CAST(v.product_id AS CHAR) LIKE ?)');
-      params.push('%' + search + '%', '%' + search + '%');
-    }
-    return { sql: ' WHERE ' + conditions.join(' AND '), params: params, years: years, search: search };
-  }
-  
-  function dbTcSalesViewList_(data, user) {
-    data = data || {};
-    var where = dbTcSalesViewWhere_(data);
-    var limit = Math.min(Math.max(Number(data.limit) || 50, 1), 200);
-    var offset = Math.max(Number(data.offset) || 0, 0);
-    var cacheKey = dbTcSalesCacheKey_('view', where, '_l' + limit + '_o' + offset);
-    if (!data.refresh) {
-      var hit = dbTcSalesCacheGet_(cacheKey);
-      if (hit && hit.status === 'ok' && Array.isArray(hit.rows)) return hit;
-    }
-    var cols = 'v.sales_year, v.sales_month, v.product_id, v.name_ar, v.total_qty, v.return_qty, v.net_qty, v.total_value, v.return_value, v.net_value, v.currency, v.currency_ratio, p.product_unit_metric';
-    var from = ' FROM sales_product_qty_value v LEFT JOIN products p ON p.id=v.product_id AND p.deleted_at IS NULL';
-    var conn, countStmt, countRs, stmt, rs;
-    try {
-      conn = dbGetConnection_();
-      countStmt = conn.prepareStatement('SELECT COUNT(*) AS cnt' + from + where.sql);
-      dbBindParams_(countStmt, where.params);
-      countRs = countStmt.executeQuery();
-      var total = countRs.next() ? countRs.getInt('cnt') : 0;
-      stmt = conn.prepareStatement('SELECT ' + cols + from + where.sql +
-        ' ORDER BY v.sales_year DESC, v.sales_month DESC, v.product_id DESC' +
-        ' LIMIT ' + limit + ' OFFSET ' + offset);
-      dbBindParams_(stmt, where.params);
-      rs = stmt.executeQuery();
-      var rows = [];
-      while (rs.next()) {
-        rows.push({
-          sales_year: rs.getObject(1) !== null ? String(rs.getObject(1)) : null,
-          sales_month: rs.getObject(2) !== null ? String(rs.getObject(2)) : null,
-          product_id: rs.getObject(3) !== null ? String(rs.getObject(3)) : null,
-          name_ar: rs.getObject(4) !== null ? String(rs.getObject(4)) : null,
-          total_qty: rs.getObject(5) !== null ? String(rs.getObject(5)) : null,
-          return_qty: rs.getObject(6) !== null ? String(rs.getObject(6)) : null,
-          net_qty: rs.getObject(7) !== null ? String(rs.getObject(7)) : null,
-          total_value: rs.getObject(8) !== null ? String(rs.getObject(8)) : null,
-          return_value: rs.getObject(9) !== null ? String(rs.getObject(9)) : null,
-          net_value: rs.getObject(10) !== null ? String(rs.getObject(10)) : null,
-          currency: rs.getObject(11) !== null ? String(rs.getObject(11)) : null,
-          currency_ratio: rs.getObject(12) !== null ? String(rs.getObject(12)) : null,
-          product_unit_metric: rs.getObject(13) !== null ? String(rs.getObject(13)) : null
-        });
-      }
-      var out = { status: 'ok', columns: DB_TC_SALES_VIEW_COLUMNS.slice(), rows: rows, total: total, limit: limit, offset: offset, years: where.years, search: where.search };
-      dbTcSalesCachePut_(cacheKey, out, DB_TC_SALES_VIEW_TTL);
-      return out;
-    } catch (err) {
-      Logger.log('dbTcSalesViewList_ error: ' + err.message + ' | years=' + JSON.stringify((where && where.years) || (data && data.years)) + ' search=' + String((where && where.search !== undefined ? where.search : data && data.search) || '').slice(0, 40) + ' limit=' + limit + ' offset=' + offset);
-      throw err;
-    } finally {
-      if (rs) rs.close();
-      if (stmt) stmt.close();
-      if (countRs) countRs.close();
-      if (countStmt) countStmt.close();
-      if (conn) conn.close();
-    }
-  }
-  
-  /**
-   * Full-scope aggregates for the exec-sales charts (one execution, three small
-   * GROUP BY queries, tiny payload). Reuses dbTcSalesViewWhere_ so charts always
-   * match the table filters (years + search). No LIMIT truncation: monthly is at
-   * most 12×years rows; products capped at top 50 by value; products_yearly is
-   * the per-product-per-year matrix for the YoY comparison, filtered to the
-   * same top 50. EGP mirrors the page math: net_value × currency_ratio
-   * (garbage/0/NULL → 1).
-   */
-  function dbTcSalesCharts_(data, user) {
-    data = data || {};
-    var where = dbTcSalesViewWhere_(data);
-    var cacheKey = dbTcSalesCacheKey_('charts', where, '');
-    if (!data.refresh) {
-      var hit = dbTcSalesCacheGet_(cacheKey);
-      if (hit && hit.status === 'ok' && Array.isArray(hit.monthly) && Array.isArray(hit.products) && Array.isArray(hit.products_yearly)) return hit;
-    }
-    var from = ' FROM sales_product_qty_value v LEFT JOIN products p ON p.id=v.product_id AND p.deleted_at IS NULL';
-    var rateSql = 'COALESCE(NULLIF(CAST(v.currency_ratio AS DECIMAL(19,6)),0),1)';
-    var conn, stmtM, rsM, stmtP, rsP, stmtY, rsY;
-    try {
-      conn = dbGetConnection_();
-      stmtM = conn.prepareStatement(
-        'SELECT v.sales_year, v.sales_month,' +
-        ' SUM(v.net_value * ' + rateSql + ') AS net_value_egp,' +
-        ' SUM(v.net_qty) AS net_qty' + from + where.sql +
-        ' GROUP BY v.sales_year, v.sales_month ORDER BY v.sales_year, v.sales_month');
-      dbBindParams_(stmtM, where.params);
-      rsM = stmtM.executeQuery();
-      var monthly = [];
-      while (rsM.next()) {
-        monthly.push({
-          year: Number(rsM.getObject(1)) || 0,
-          month: Number(rsM.getObject(2)) || 0,
-          net_value_egp: Number(rsM.getObject(3)) || 0,
-          net_qty: Number(rsM.getObject(4)) || 0
-        });
-      }
-      stmtP = conn.prepareStatement(
-        'SELECT v.product_id, MAX(v.name_ar) AS name_ar,' +
-        ' SUM(v.net_qty) AS net_qty,' +
-        ' SUM(v.net_value * ' + rateSql + ') AS net_value_egp,' +
-        ' MAX(p.product_unit_metric) AS metric_divisor' + from + where.sql +
-        ' GROUP BY v.product_id ORDER BY net_value_egp DESC LIMIT 50');
-      dbBindParams_(stmtP, where.params);
-      rsP = stmtP.executeQuery();
-      var products = [];
-      while (rsP.next()) {
-        products.push({
-          product_id: rsP.getObject(1) !== null ? String(rsP.getObject(1)) : null,
-          name_ar: rsP.getObject(2) !== null ? String(rsP.getObject(2)) : null,
-          net_qty: Number(rsP.getObject(3)) || 0,
-          net_value_egp: Number(rsP.getObject(4)) || 0,
-          metric_divisor: rsP.getObject(5) !== null ? String(rsP.getObject(5)) : null
-        });
-      }
-      // Per-year matrix for the YoY top-products comparison (same WHERE, same
-      // connection). Rows filtered to the top-50 above so the payload stays tiny.
-      var topIds = {};
-      for (var ti = 0; ti < products.length; ti++) { topIds[String(products[ti].product_id)] = true; }
-      stmtY = conn.prepareStatement(
-        'SELECT v.product_id, v.sales_year,' +
-        ' SUM(v.net_qty) AS net_qty,' +
-        ' SUM(v.net_value * ' + rateSql + ') AS net_value_egp' + from + where.sql +
-        ' GROUP BY v.product_id, v.sales_year');
-      dbBindParams_(stmtY, where.params);
-      rsY = stmtY.executeQuery();
-      var products_yearly = [];
-      while (rsY.next()) {
-        var ypid = rsY.getObject(1) !== null ? String(rsY.getObject(1)) : null;
-        if (!topIds[ypid]) continue;
-        products_yearly.push({
-          product_id: ypid,
-          year: Number(rsY.getObject(2)) || 0,
-          net_qty: Number(rsY.getObject(3)) || 0,
-          net_value_egp: Number(rsY.getObject(4)) || 0
-        });
-      }
-      var out = { status: 'ok', monthly: monthly, products: products, products_yearly: products_yearly, years: where.years, search: where.search };
-      dbTcSalesCachePut_(cacheKey, out, DB_TC_SALES_CHARTS_TTL);
-      return out;
-    } catch (err) {
-      Logger.log('dbTcSalesCharts_ error: ' + err.message + ' | years=' + JSON.stringify((where && where.years) || (data && data.years)) + ' search=' + String((where && where.search !== undefined ? where.search : data && data.search) || '').slice(0, 40));
-      throw err;
-    } finally {
-      if (rsM) rsM.close();
-      if (stmtM) stmtM.close();
-      if (rsP) rsP.close();
-      if (stmtP) stmtP.close();
-      if (rsY) rsY.close();
-      if (stmtY) stmtY.close();
-      if (conn) conn.close();
-    }
-  }
-  
-  /**
-   * Monthly aggregates for the overhauled tc_exec_sales page, sourced from the
-   * date_sales_product_qty_value MySQL view (same connection/cache discipline
-   * as dbTcSalesCharts_: one small GROUP BY per call, chunked cache with
-   * typeof guards, opt-in refresh). EGP mirrors the old chart math:
-   * net_value × currency_ratio (garbage/0/NULL → 1).
-   * params: { from, to (YYYY-MM-DD), product_id ('' = all), refresh }
-   * Returns { status:'ok', rows:[{ym, net_value_egp, net_qty, sales_metric_qty }], from, to, product_id }.
-   */
-  var DB_TC_DATE_SALES_TTL = 600;
-
-  function dbTcDateSalesParams_(data) {
-    data = data || {};
-    var from = String(data.from !== undefined && data.from !== null ? data.from : '').trim().slice(0, 10);
-    var to = String(data.to !== undefined && data.to !== null ? data.to : '').trim().slice(0, 10);
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) throw new Error('نطاق التاريخ مطلوب (YYYY-MM-DD)');
-    if (from > to) throw new Error('«من تاريخ» بعد «إلى تاريخ»');
-    var productId = String(data.product_id === undefined || data.product_id === null ? '' : data.product_id).trim().slice(0, 40);
-    return { from: from, to: to, product_id: productId, refresh: data.refresh };
-  }
-
-  function dbTcDateSalesMonthly_(params, user) {
-    params = params || {};
-    var conditions = ['v.sales_date >= ?', 'v.sales_date <= ?'];
-    var bind = [params.from, params.to];
-    if (params.product_id) {
-      conditions.push('CAST(v.product_id AS CHAR) = ?');
-      bind.push(params.product_id);
-    }
-    var whereSql = ' WHERE ' + conditions.join(' AND ');
-    var fromSql = ' FROM date_sales_product_qty_value v';
-    var rateSql = 'COALESCE(NULLIF(CAST(v.currency_ratio AS DECIMAL(19,6)),0),1)';
-    var pidKey = String(params.product_id || '').replace(/[^a-zA-Z0-9_]/g, '').slice(0, 30);
-    var cacheKey = 'dblive_date_sales_monthly_v' + dbTcSalesVer_() +
-      '_f' + params.from + '_t' + params.to + '_p' + pidKey;
-    if (!params.refresh) {
-      var hit = dbTcSalesCacheGet_(cacheKey);
-      if (hit && hit.status === 'ok' && Array.isArray(hit.rows)) return hit;
-    }
-    var conn, stmt, rs;
-    try {
-      conn = dbGetConnection_();
-      stmt = conn.prepareStatement(
-        'SELECT DATE_FORMAT(v.sales_date, \'%Y-%m\') AS ym,' +
-        ' SUM(v.net_value * ' + rateSql + ') AS net_value_egp,' +
-        ' SUM(v.net_qty) AS net_qty,' +
-        ' SUM(v.sales_metric_qty) AS sales_metric_qty' + fromSql + whereSql +
-        ' GROUP BY ym ORDER BY ym');
-      dbBindParams_(stmt, bind);
-      rs = stmt.executeQuery();
-      var rows = [];
-      while (rs.next()) {
-        rows.push({
-          ym: rs.getObject(1) !== null ? String(rs.getObject(1)) : null,
-          net_value_egp: Number(rs.getObject(2)) || 0,
-          net_qty: Number(rs.getObject(3)) || 0,
-          sales_metric_qty: Number(rs.getObject(4)) || 0
-        });
-      }
-      var out = { status: 'ok', rows: rows, from: params.from, to: params.to, product_id: params.product_id || '' };
-      dbTcSalesCachePut_(cacheKey, out, DB_TC_DATE_SALES_TTL);
-      return out;
-    } catch (err) {
-      Logger.log('dbTcDateSalesMonthly_ error: ' + err.message + ' | from=' + params.from + ' to=' + params.to + ' product=' + String(params.product_id || ''));
-      throw err;
-    } finally {
-      if (rs) rs.close();
-      if (stmt) stmt.close();
-      if (conn) conn.close();
-    }
-  }
-
-  /**
-   * Distinct product list for the exec-sales product dropdown. Same cache
-   * scope/TTL family as the monthly endpoint; opt-in refresh supported.
-   */
-  function dbTcDateSalesProducts_(data, user) {
-    data = data || {};
-    var cacheKey = 'dblive_date_sales_products_v' + dbTcSalesVer_();
-    if (!data.refresh) {
-      var hit = dbTcSalesCacheGet_(cacheKey);
-      if (hit && hit.status === 'ok' && Array.isArray(hit.products)) return hit;
-    }
-    var conn, stmt, rs;
-    try {
-      conn = dbGetConnection_();
-      stmt = conn.prepareStatement(
-        'SELECT v.product_id, MAX(v.name_ar) AS name_ar' +
-        ' FROM date_sales_product_qty_value v GROUP BY v.product_id ORDER BY name_ar');
-      rs = stmt.executeQuery();
-      var products = [];
-      while (rs.next()) {
-        products.push({
-          product_id: rs.getObject(1) !== null ? String(rs.getObject(1)) : null,
-          name_ar: rs.getObject(2) !== null ? String(rs.getObject(2)) : null
-        });
-      }
-      var out = { status: 'ok', products: products };
-      dbTcSalesCachePut_(cacheKey, out, DB_TC_DATE_SALES_TTL);
-      return out;
-    } catch (err) {
-      Logger.log('dbTcDateSalesProducts_ error: ' + err.message);
-      throw err;
-    } finally {
-      if (rs) rs.close();
-      if (stmt) stmt.close();
-      if (conn) conn.close();
-    }
-  }
-
-  /**
-   * Monthly aggregates for the second tc_exec_sales chart, sourced from the
-   * box_movement_daily_revise MySQL view (id, transaction_date,
-   * chart_of_accounts text NULL, transaction_details, income, outcome,
-   * created_at, record_date). chart_of_accounts is the filter dimension
-   * (exact match, '' = all accounts); income/outcome NULLs count as 0.
-   * Same discipline as dbTcDateSalesMonthly_: one small GROUP BY per call,
-   * chunked cache with typeof guards, opt-in refresh.
-   * params: { from, to (YYYY-MM-DD), chart_of_accounts ('' = all), refresh }
-   * Returns { status:'ok', rows:[{ym, income, outcome, net, moves}], from, to, chart_of_accounts }.
-   */
-  var DB_TC_BOX_DAILY_TTL = 600;
-  var DB_TC_BOX_ACCOUNTS_TTL = 21600;
-
-  function dbBoxDailyParams_(data) {
-    data = data || {};
-    var from = String(data.from !== undefined && data.from !== null ? data.from : '').trim().slice(0, 10);
-    var to = String(data.to !== undefined && data.to !== null ? data.to : '').trim().slice(0, 10);
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) throw new Error('نطاق التاريخ مطلوب (YYYY-MM-DD)');
-    if (from > to) throw new Error('«من تاريخ» بعد «إلى تاريخ»');
-    var acct = String(data.chart_of_accounts === undefined || data.chart_of_accounts === null ? '' : data.chart_of_accounts).trim().slice(0, 64);
-    return { from: from, to: to, chart_of_accounts: acct, refresh: !!data.refresh };
-  }
-
-  function dbBoxDailyMonthly_(params, user) {
-    var p = dbBoxDailyParams_(params);
-    var acctKey = String(p.chart_of_accounts || '').replace(/[^a-zA-Z0-9_]/g, '').slice(0, 48);
-    var cacheKey = 'dblive_box_daily_monthly_v' + dbTcSalesVer_() +
-      '_f' + p.from + '_t' + p.to + '_a' + acctKey;
-    if (!p.refresh) {
-      var hit = dbTcSalesCacheGet_(cacheKey);
-      if (hit && hit.status === 'ok' && Array.isArray(hit.rows)) return hit;
-    }
-    var conditions = ['v.transaction_date >= ?', 'v.transaction_date <= ?'];
-    var bind = [p.from, p.to];
-    if (p.chart_of_accounts) {
-      conditions.push('v.chart_of_accounts <=> ?');
-      bind.push(p.chart_of_accounts);
-    }
-    var conn, stmt, rs;
-    try {
-      conn = dbGetConnection_();
-      stmt = conn.prepareStatement(
-        'SELECT DATE_FORMAT(v.transaction_date, \'%Y-%m\') AS ym,' +
-        ' SUM(COALESCE(v.income,0)) AS income,' +
-        ' SUM(COALESCE(v.outcome,0)) AS outcome,' +
-        ' SUM(COALESCE(v.income,0) - COALESCE(v.outcome,0)) AS net,' +
-        ' COUNT(*) AS moves' +
-        ' FROM box_movement_daily_revise v WHERE ' + conditions.join(' AND ') +
-        ' GROUP BY ym ORDER BY ym');
-      dbBindParams_(stmt, bind);
-      rs = stmt.executeQuery();
-      var rows = [];
-      while (rs.next()) {
-        rows.push({
-          ym: rs.getObject(1) !== null ? String(rs.getObject(1)) : null,
-          income: Number(rs.getObject(2)) || 0,
-          outcome: Number(rs.getObject(3)) || 0,
-          net: Number(rs.getObject(4)) || 0,
-          moves: Number(rs.getObject(5)) || 0
-        });
-      }
-      var out = { status: 'ok', rows: rows, from: p.from, to: p.to, chart_of_accounts: p.chart_of_accounts };
-      dbTcSalesCachePut_(cacheKey, out, DB_TC_BOX_DAILY_TTL);
-      return out;
-    } catch (err) {
-      Logger.log('dbBoxDailyMonthly_ error: ' + err.message + ' | from=' + p.from + ' to=' + p.to + ' acct=' + String(p.chart_of_accounts || ''));
-      throw err;
-    } finally {
-      if (rs) rs.close();
-      if (stmt) stmt.close();
-      if (conn) conn.close();
-    }
-  }
-
-  /**
-   * Distinct chart_of_accounts list for the box account dropdown. Same cache
-   * scope/TTL family as the box monthly endpoint; opt-in refresh supported.
-   */
-  function dbBoxDailyAccounts_(data, user) {
-    data = data || {};
-    var cacheKey = 'dblive_box_daily_accounts_v' + dbTcSalesVer_();
-    if (!data.refresh) {
-      var hit = dbTcSalesCacheGet_(cacheKey);
-      if (hit && hit.status === 'ok' && Array.isArray(hit.accounts)) return hit;
-    }
-    var conn, stmt, rs;
-    try {
-      conn = dbGetConnection_();
-      stmt = conn.prepareStatement(
-        'SELECT DISTINCT v.chart_of_accounts AS code FROM box_movement_daily_revise v' +
-        ' WHERE v.chart_of_accounts IS NOT NULL AND TRIM(v.chart_of_accounts) <> \'\'' +
-        ' ORDER BY code LIMIT 500');
-      rs = stmt.executeQuery();
-      var accounts = [];
-      while (rs.next()) {
-        var c = rs.getObject(1) !== null ? String(rs.getObject(1)) : '';
-        if (c) accounts.push({ code: c, label: c });
-      }
-      var out = { status: 'ok', accounts: accounts };
-      dbTcSalesCachePut_(cacheKey, out, DB_TC_BOX_ACCOUNTS_TTL);
-      return out;
-    } catch (err) {
-      Logger.log('dbBoxDailyAccounts_ error: ' + err.message);
-      throw err;
-    } finally {
-      if (rs) rs.close();
-      if (stmt) stmt.close();
-      if (conn) conn.close();
-    }
-  }
-
-  function dbTcExecBoxNet_(data, user) {
-    data = data || {};
-    var years = dbTcExecSalesValidateYears_(data.years);
-    var months = [];
-    if (data.months !== undefined && data.months !== null && data.months !== '') {
-      var mSrc = Array.isArray(data.months) ? data.months : [data.months];
-      for (var mi = 0; mi < mSrc.length; mi++) {
-        var m = Number(mSrc[mi]);
-        if (!Number.isInteger(m) || m < 1 || m > 12) throw new Error('شهر غير صحيح: ' + mSrc[mi]);
-        if (months.indexOf(m) === -1) months.push(m);
-      }
-    }
-    var minY = years[0], maxY = years[years.length - 1];
-    var from, to;
-    if (months.length) {
-      var minM = Math.min.apply(null, months), maxM = Math.max.apply(null, months);
-      from = minY + '-' + ('0' + minM).slice(-2) + '-01';
-      var lastDay = new Date(maxY, maxM, 0).getDate();
-      to = maxY + '-' + ('0' + maxM).slice(-2) + '-' + ('0' + lastDay).slice(-2);
-    } else {
-      from = minY + '-01-01';
-      to = maxY + '-12-31';
-    }
-    var limit = Math.min(Math.max(Number(data.box_limit) || 300, 1), 1000);
-    var conn, stmt, rs;
-    try {
-      conn = dbGetConnection_();
-      stmt = conn.prepareStatement(
-        'SELECT chart_of_accounts,' +
-        " SUM(CASE WHEN transaction_type='debit' THEN transaction_amount WHEN transaction_type='credit' THEN -transaction_amount ELSE 0 END) AS net_amount," +
-        " SUM(CASE WHEN transaction_type='debit' THEN transaction_amount ELSE 0 END) AS debit_sum," +
-        " SUM(CASE WHEN transaction_type='credit' THEN transaction_amount ELSE 0 END) AS credit_sum," +
-        ' COUNT(*) AS moves FROM `regular_box_movement`' +
-        ' WHERE transaction_date BETWEEN ? AND ?' +
-        " AND chart_of_accounts REGEXP '^[0-9]+$'" +
-        ' AND CAST(chart_of_accounts AS UNSIGNED) BETWEEN 300000 AND 400000' +
-        ' GROUP BY chart_of_accounts ORDER BY ABS(net_amount) DESC LIMIT ' + limit);
-      dbBindParams_(stmt, [from, to]);
-      rs = stmt.executeQuery();
-      var accounts = [];
-      while (rs.next()) {
-        accounts.push({
-          account: rs.getObject(1) !== null ? String(rs.getObject(1)) : null,
-          net_amount: Number(rs.getObject(2)) || 0,
-          debit_sum: Number(rs.getObject(3)) || 0,
-          credit_sum: Number(rs.getObject(4)) || 0,
-          moves: Number(rs.getObject(5)) || 0
-        });
-      }
-      return { status: 'ok', from: from, to: to, accounts: accounts };
-    } catch (err) {
-      Logger.log('dbTcExecBoxNet_ error: ' + err.message + ' | years=' + JSON.stringify(years) + ' from=' + from + ' to=' + to + ' limit=' + limit);
-      throw err;
-    } finally {
-      if (rs) rs.close();
-      if (stmt) stmt.close();
-      if (conn) conn.close();
-    }
-  }
-  
   
   function topChemicalThemeCss_() {
     return '' +
@@ -12797,7 +13932,7 @@ function buildCostingPrintHtml_(h, lines) {
     '<tr><td class="info-label">نوع الشهادة</td><td class="info-value">' + esc(h['نوع الشهادة'] || '-') + '</td></tr>' +
     '<tr><td class="info-label">نوع الشحن</td><td class="info-value">' + esc(h['نوع الشحن'] || '-') + '</td></tr>' +
     '<tr><td class="info-label">المورد</td><td class="info-value">' + esc(h['اسم_المورد'] || '-') + '</td></tr>' +
-    '<tr><td class="info-label">القيمة بالعملة الأجنبية</td><td class="info-value">' + budgetMoney_(h['القيمه بالدولار']) + '</td></tr>' +
+    '<tr><td class="info-label">القيمة بالعملة الأصلية</td><td class="info-value">' + budgetMoney_(h['القيمه بالدولار']) + '</td></tr>' +
     '<tr><td class="info-label">سعر الصرف</td><td class="info-value">' + esc(h['سعر الصرف'] || '-') + '</td></tr>' +
     '<tr><td class="info-label">القيمة بالسعر المعلن</td><td class="info-value">' + budgetMoney_(h['القيمه بالسعر المعلن']) + '</td></tr>' +
     '</table>' +

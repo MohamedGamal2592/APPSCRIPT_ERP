@@ -464,19 +464,23 @@
       if (!b) return;
       var rows = (DATA && DATA.rows) || [];
       var t = (DATA && DATA.totals) || { produced_qty: 0, batch_cost: 0, by_op: {} };
+      var kt = (DATA && DATA.kpi_totals) || { produced_qty: 0, batch_cost: 0, by_op: {} };
+      var kpiOps = (DATA && DATA.kpi_operation_types && DATA.kpi_operation_types.length)
+        ? DATA.kpi_operation_types : ['تصنيع وتعبئة', 'تصنيع (كميات)'];
       var canCost = !!(DATA && DATA.can_see_cost);
+      var kpiScope = 'تصنيع وتعبئة + تصنيع (كميات)';
       var kpis =
         '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:14px;">' +
-          kpi('إجمالي المنتج', qty(t.produced_qty)) +
-          opTypesInOrder().filter(function (ogn) {
-            var s = (t.by_op && t.by_op[ogn]) || { mo_count: 0 };
+          kpi('إجمالي المنتج (' + kpiScope + ')', qty(kt.produced_qty)) +
+          kpiOps.filter(function (ogn) {
+            var s = (kt.by_op && kt.by_op[ogn]) || { mo_count: 0 };
             return (Number(s.mo_count) || 0) > 0;
           }).map(function (ogn) {
-            var s = (t.by_op && t.by_op[ogn]) || { produced_qty: 0, batch_cost: 0 };
+            var s = (kt.by_op && kt.by_op[ogn]) || { produced_qty: 0, batch_cost: 0 };
             return kpi('منتج — ' + ogn, qty(s.produced_qty)) +
-              (canCost ? kpi('تكلفة — ' + ogn, money(s.batch_cost)) : '');
+              (canCost ? kpi('تكلفة — ' + ogn + ' (ضمن نطاق مؤشرات التصنيع)', money(s.batch_cost)) : '');
           }).join('') +
-          (canCost ? kpi('إجمالي التكلفة', money(t.batch_cost)) : '') +
+          (canCost ? kpi('إجمالي التكلفة (' + kpiScope + ')', money(kt.batch_cost)) : '') +
         '</div>';
 
       var hasFilter = DATE_FROM || DATE_TO || F_CLIENT || F_PRODUCT;

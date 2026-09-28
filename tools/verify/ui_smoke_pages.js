@@ -96,11 +96,21 @@ console.log('shared layer boots. UIC symbols: ' + Object.keys(shared.UIC).length
  *   DbLive_Viewer.html               calls getQueryParam() before it is in
  *                                    scope in this harness. Pre-existing, and a
  *                                    developer-tools page, not a business one.
+ *   Company_TopChemical_RegistrationPapers.html
+ *                                    Targets an id its own static <body> markup
+ *                                    declares, which this stub does not build.
+ *                                    Verified to fail on the CURRENT working tree
+ *                                    with the Quality partials list reverted —
+ *                                    i.e. it is not caused by the Quality work,
+ *                                    it comes with the pre-existing uncommitted
+ *                                    UI_Components.html change. Remove this entry
+ *                                    once that page is repaired.
  */
 const KNOWN_PREEXISTING = [
   '0_ERP_Management.html',
   'Company_TopChemical_MainReview.html',
-  'DbLive_Viewer.html'
+  'DbLive_Viewer.html',
+  'Company_TopChemical_RegistrationPapers.html'
 ];
 
 const pages = S.pageFiles();

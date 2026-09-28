@@ -49,7 +49,13 @@ const SHARED_PARTIALS = [
   'Record_History_Panel.html',
   /* The attendance import parser. A partial, not a page: it has no shell and
      no render entry point, so ui_smoke_pages.js must not try to boot it. */
-  'Client_AttendanceParser.html'
+  'Client_AttendanceParser.html',
+  /* The shared controlled-document engine (VFDOC): the versioned template
+     definition, the A4 frame, the cover/history builders, measured soft
+     pagination and bound undo. It is included by the SOP workspace and by the
+     general-quality workspace, has no shell and renders nothing on its own, so
+     it is a partial for the same reason as the parser above. */
+  'Quality_SopDoc.html'
 ];
 
 /** Page templates: everything that is not a shared partial. */

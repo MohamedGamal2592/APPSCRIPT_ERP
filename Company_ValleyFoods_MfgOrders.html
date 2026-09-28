@@ -7,6 +7,7 @@
   <?!= include('CSS_Tokens'); ?>
   <?!= include('UI_Components'); ?>
   <?!= include('Client_Helpers'); ?>
+  <?!= include('Core_FormState'); ?>
   <?!= include('Company_ValleyFoods_Nav'); ?>
   <?!= getCompanyThemeCSS_('9940659bd83035d7') ?>
 </head>
@@ -23,6 +24,24 @@
     var CURRENT_ACTION = '<?!= currentAction ?>';
     var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
     var CAN_WRITE = UIC.canAdd_(); var CAN_FULL = UIC.canFull_();
+    /* Stage F candidate (plan §6): retained pending state for the list editor.
+       FALSE as shipped, and UIC.FormState.enabled() also requires the shared
+       FORM_STATE_CORE_ master switch, so with either false this page runs its
+       existing path exactly as before. */
+    var MFG_LIST_FORMSTATE_CANDIDATE_ = false;
+    var MFG_LIST_FORM_ = null;
+    function mfgListFormState_() {
+      if (!(window.UIC && UIC.FormState && UIC.FormState.enabled(MFG_LIST_FORMSTATE_CANDIDATE_))) return null;
+      if (!MFG_LIST_FORM_) {
+        MFG_LIST_FORM_ = UIC.FormState.create({
+          key: 'vf_mfg_orders_list_editor',
+          fields: ['manufacture_date', 'operation_type', 'shift', 'produced_product_id', 'manufactured_qty',
+            'actual_qty', 'recipe_id', 'mo_status', 'manufacture_batch'],
+          sections: ['outputs', 'consumption']
+        });
+      }
+      return MFG_LIST_FORM_;
+    }
     /* U-46. Set from the server's can_see_cost, never derived from
        USER_PAGES — the browser cannot see the fail-open guard. */
     var CAN_SEE_COST = true;
@@ -136,6 +155,19 @@
                     { label: 'المتوقع', numeric: true }, { label: 'المصنع', numeric: true }, 'الحالة', ''],
           pageSize: 100,
           emptyText: 'لا توجد أوامر تصنيع',
+          /* Phase B2: the shared refresh control re-fetches the currently loaded
+             window with the SAME filters, replacing the loaded rows (no stale
+             tail) and preserving search/sort/page/selection/scroll. Deferred
+             while an entry modal is open or a save is in flight. */
+          refresh: {
+            blocked: function () {
+              try {
+                if (document.querySelector('.modal-backdrop, .uic-modal, [data-modal-open="true"]')) return 'أغلق النموذج المفتوح قبل تحديث القائمة';
+                if (typeof UIC.Live !== 'undefined' && UIC.Live.busy && UIC.Live.busy()) return 'هناك حفظ قيد التنفيذ — انتظر ثم أعد المحاولة';
+              } catch (e) {}
+              return null;
+            }
+          },
           onRendered: function (tid) { try { UIC.initTableSort(tid); } catch (e) {} },
           fetcher: function (offset, limit) {
             return companyCall('get_valley_mfg_orders', {
@@ -678,14 +710,39 @@
           }
         };
         try { console.log('[MFG][save] outgoing payload:', JSON.stringify({ outputs: outputs, consumption: consPayload })); } catch (eLog) {}
+        /* Stage F candidate: immutable submission + pending state; the modal
+           stays visible with its controls held until the reply arrives. */
+        var fs = mfgListFormState_();
+        var submission = null;
+        if (fs) {
+          Object.keys(payload).forEach(function (k) {
+            if (payload[k] !== undefined && typeof payload[k] !== 'object') fs.setHeader(k, payload[k]);
+          });
+          try {
+            submission = fs.beginSubmit('', { payload: payload, token: MFG_EDIT_TOKEN });
+          } catch (eSub) {
+            UIC.toast((eSub && eSub.message) || 'هناك طلب حفظ قيد التنفيذ', 'error');
+            return;
+          }
+          fs.setControlsEnabled('mfg-modal', false);
+        }
         UI.showSpinner();
       companyCall('save_valley_mfg_order', payload)
         .then(function (r) {
+          if (fs && submission) {
+            fs.settle(submission, { saved: {}, token: MFG_EDIT_TOKEN });
+            fs.setControlsEnabled('mfg-modal', true);
+            MFG_LIST_FORM_ = null;
+          }
           UIC.closeModal('mfg-modal');
           UIC.toast((r && r.message) || 'تم الحفظ بنجاح', 'success');
           load(true);
         })
         .catch(function (e) {
+          if (fs && submission) {
+            fs.setControlsEnabled('mfg-modal', true);
+            if (e && e.uncertain) fs.markUncertain(e); else fs.markRejected(e);
+          }
           /* Stale-editor conflict is a proven non-mutation: reload the list so
              the user reopens the order on fresh state instead of retrying. */
           if (e && e.code === 'VERSION_CONFLICT') { UIC.toast((e.message || 'تعارض') + ' — أعيد تحميل القائمة', 'error'); load(true); return; }
@@ -762,14 +819,15 @@
           var rowsHtml = (r.byproducts || []).map(function (b) {
             var nm = '';
             window.__BP_OPTIONS.forEach(function (o) { if (String(o.value) === String(b.item)) nm = o.label; });
-            return '<tr><td>' + esc(nm || b.item) + '</td><td class="num">' + Number(b.qty || 0).toLocaleString('en-US') + '</td></tr>';
+            return '<tr><td>' + esc(nm || b.item) + '</td><td class="num">' + Number(b.qty || 0).toLocaleString('en-US') + '</td><td>' + esc(b.manufacture_internal_batch || '') + '</td></tr>';
           }).join('');
           var form = CAN_WRITE ? '<form id="bp-form"><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;align-items:flex-end;">' +
             UIC.combo({ key: 'bp-item', label: 'المنتج الثانوي', required: true, options: window.__BP_OPTIONS, placeholder: 'اكتب للبحث…' }) +
             UIC.field({ key: 'bp-qty', label: 'الكمية', type: 'number', required: true, min: '0.01', step: '0.01' }) +
+            UIC.field({ key: 'bp-internal-batch', label: 'رقم التشغيلة الداخلية (اختياري)', type: 'text' }) +
             '</div><input type="hidden" id="bp-mo-uid" value="' + esc(moUid) + '"></form>' : '';
-          holder.innerHTML = '<div class="table-wrap"><table class="table" style="min-width:560px;"><thead><tr><th>المنتج</th><th>الكمية</th></tr></thead><tbody>' +
-            (rowsHtml || '<tr><td colspan="2" style="text-align:center;color:#94a3b8;">لا يوجد منتجات ثانوية</td></tr>') +
+          holder.innerHTML = '<div class="table-wrap"><table class="table" style="min-width:560px;"><thead><tr><th>المنتج</th><th>الكمية</th><th>رقم التشغيلة الداخلية</th></tr></thead><tbody>' +
+            (rowsHtml || '<tr><td colspan="3" style="text-align:center;color:#94a3b8;">لا يوجد منتجات ثانوية</td></tr>') +
             '</tbody></table></div>' + form;
           UIC.autoColumns(holder);
         })
@@ -779,7 +837,7 @@
     function addByproduct() {
       if (!UIC.validateForm('bp-form')) return;
       UI.showSpinner();
-      companyCall('add_valley_mfg_byproduct', { mo_uid: getHid_('bp-mo-uid'), item: getCombo_('bp-item'), qty: getV_('bp-qty') })
+      companyCall('add_valley_mfg_byproduct', { mo_uid: getHid_('bp-mo-uid'), item: getCombo_('bp-item'), qty: getV_('bp-qty'), manufacture_internal_batch: getV_('bp-internal-batch') })
         .then(function (r) {
           UIC.toast((r && r.message) || 'تمت الإضافة', 'success');
           if (r && r.record) {
@@ -794,7 +852,7 @@
                 var holder = document.getElementById('byproducts-body');
                 if (holder && holder.querySelector('tbody')) {
                   var nm = r.record.product_name || r.record.item;
-                  var newRow = '<tr><td>' + nm + '</td><td class="num">' + (r.record.qty||0) + '</td></tr>';
+                  var newRow = '<tr><td>' + esc(nm) + '</td><td class="num">' + (r.record.qty||0) + '</td><td>' + esc(r.record.manufacture_internal_batch || '') + '</td></tr>';
                   var tbody = holder.querySelector('tbody');
                   if (tbody) tbody.insertAdjacentHTML('afterbegin', newRow);
                   // remove last if exceeds 15

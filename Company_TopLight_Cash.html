@@ -471,8 +471,8 @@
     /* ---------- TRANSFER ---------- */
     function openTransfer() {
       var body = '<form id="transfer-form">' +
-        UIC.field({ key: 'tf-from', label: 'من صندوق / حساب *', type: 'select', required: true, options: refOpts(window.__cashBoxOptions), placeholder: 'اختر الصندوق المصدر' }) +
-        UIC.field({ key: 'tf-to', label: 'إلى صندوق / حساب *', type: 'select', required: true, options: refOpts(window.__cashBoxOptions), placeholder: 'اختر الصندوق الهدف' }) +
+        UIC.field({ key: 'tf-from', label: 'من صندوق / حساب *', type: 'select', required: true, value: '', options: (window.__cashBoxOptions || []), placeholder: 'اختر الصندوق المصدر' }) +
+        UIC.field({ key: 'tf-to', label: 'إلى صندوق / حساب *', type: 'select', required: true, value: '', options: (window.__cashBoxOptions || []), placeholder: 'اختر الصندوق الهدف' }) +
         UIC.field({ key: 'tf-date', label: 'تاريخ التحويل *', type: 'date', required: true, value: todayStr() }) +
         UIC.field({ key: 'tf-amount', label: 'المبلغ *', type: 'number', required: true, min: '0.01', step: '0.01' }) +
         UIC.field({ key: 'tf-details', label: 'ملاحظات', type: 'text', placeholder: 'تحويل صندوق إلى صندوق' }) +

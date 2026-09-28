@@ -197,6 +197,12 @@ vm.runInContext(
   grabFn(SRC, 'dbTcSalesViewList_') + '\n' +
   grabFn(SRC, 'dbTcSalesCharts_') + '\n' +
   grabScalar(SRC, 'DB_TC_DATE_SALES_TTL') + '\n' +
+  /* The multi-select comparison added DB_TC_MAX_FILTER_KEYS + the two key/bound
+     normalizers. The slice has to carry its dependencies or it would be running
+     a different program than the one that ships. */
+  grabScalar(SRC, 'DB_TC_MAX_FILTER_KEYS') + '\n' +
+  grabFn(SRC, 'dbTcKeyList_') + '\n' +
+  grabFn(SRC, 'dbTcAcctBound_') + '\n' +
   grabFn(SRC, 'dbTcDateSalesParams_') + '\n' +
   grabFn(SRC, 'dbTcDateSalesMonthly_') + '\n' +
   grabFn(SRC, 'dbTcDateSalesProducts_') + '\n' +
@@ -305,8 +311,8 @@ console.log('5 — static discipline');
     'three metric switch buttons present (value/qty/metric)');
   ok(PAGE.indexOf('exec-compare') !== -1 && PAGE.indexOf('مقارنة بالفترة السابقة') !== -1,
     'comparison toggle present in the filter bar');
-  ok(/function prevRange\(from, to\)/.test(PAGE) && /Promise\.all/.test(PAGE),
-    'previous equal-length period derived client-side, both ranges fetched together');
+  ok(/function prevRange\(from, to\)/.test(PAGE) && /payload\.previous = \{ from: prev\.from, to: prev\.to \}/.test(PAGE),
+    'previous equal-length period is derived client-side and included with its report request');
   ok(/الفترة السابقة/.test(PAGE) && /borderDash/.test(PAGE),
     'dashed previous-period dataset with legend');
   ok(/function fmtPct/.test(PAGE) && PAGE.indexOf('التغير') !== -1,

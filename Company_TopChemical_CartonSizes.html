@@ -7,6 +7,7 @@
   <?!= include('CSS_Tokens'); ?>
   <?!= include('UI_Components'); ?>
   <?!= include('Client_Helpers'); ?>
+  <?!= include('Core_FormState'); ?>
   <?!= include('Company_TopChemical_Nav'); ?>
   <?!= getCompanyThemeCSS_('3fe1b5cb67b7223e') ?>
 </head>
@@ -23,6 +24,24 @@
   var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
   var CAN_WRITE = UIC.canAdd_(); var CAN_FULL = UIC.canFull_();
   var NEW_TYPE_OPTION = '__new__';
+
+  /* Stage C candidate (plan §6): retained form state for this pilot form.
+   * FALSE as shipped, and UIC.FormState.enabled() also requires the shared
+   * FORM_STATE_CORE_ master switch, so with either false this page runs its
+   * existing path exactly as before. */
+  var CARTON_FS_CANDIDATE_ = false;
+  var CARTON_FORM_ = null;
+
+  function cartonFormState_() {
+    if (!(window.UIC && UIC.FormState && UIC.FormState.enabled(CARTON_FS_CANDIDATE_))) return null;
+    if (!CARTON_FORM_) {
+      CARTON_FORM_ = UIC.FormState.create({
+        key: 'tc_carton_size_add',
+        fields: ['product', 'common_vendor', 'type', 'length', 'width', 'height', 'other_details', 'document']
+      });
+    }
+    return CARTON_FORM_;
+  }
 
   function companyCall(moduleAction, data) {
     return API.call('company_action', {
@@ -163,6 +182,24 @@
       onSave: 'saveCartonSize()'
     });
     try { UIC.trackDirty('carton-size-form'); } catch (e) {}
+    /* Candidate only: refill a retained draft so a rejected or uncertain save
+       never silently discards what the user typed. With the switch off this
+       block does nothing and the modal opens exactly as before. */
+    var fs = cartonFormState_();
+    if (fs) {
+      try {
+        Object.keys(fs.values).forEach(function (k) {
+          if (k === 'new_type') return;
+          var el = document.querySelector('#carton-size-form [data-field-name="' + k + '"]') ||
+                   document.getElementById('size-' + String(k).replace(/_/g, '-'));
+          if (!el) return;
+          if (el.type === 'file') return;
+          var v = fs.values[k];
+          if (el.tagName === 'SELECT' && String(v) === NEW_TYPE_OPTION) return;
+          if (String(el.value) !== String(v == null ? '' : v)) el.value = v == null ? '' : v;
+        });
+      } catch (e) {}
+    }
     var sel = document.getElementById('size-type');
     if (sel) {
       sel.addEventListener('change', function () {
@@ -172,6 +209,10 @@
   }
 
   function saveCartonSize() {
+    /* Stage C candidate branch. Flag-off (either switch) runs the existing
+       UIC.Live.save path below unchanged. */
+    var fs = cartonFormState_();
+    if (fs) { saveCartonSizeRetained_(fs); return; }
     var formEl = document.getElementById('carton-size-form');
     var data = UIC.collectForm('carton-size-form');
     if (data.type === NEW_TYPE_OPTION) {
@@ -212,6 +253,76 @@
           renderSizes();
         }
       }).catch(function () { /* UIC.Live has toasted */ });
+    };
+    try {
+      if (window.UIC && UIC.UploadSet && UIC.UploadSet.isBusy('carton-modal')) {
+        UIC.toast('جاري رفع الملف... يرجى الانتظار', 'warning');
+        UIC.UploadSet.awaitPending('carton-modal').then(doSave);
+        return;
+      }
+    } catch (e2) {}
+    doSave();
+  }
+
+  /* Candidate path: same payload, same action, same server contract. The
+     differences are the retained state and explicit pending/rejected/uncertain
+     states — "تم الحفظ" is shown only after the authoritative reply, never when
+     a request was merely sent. */
+  function saveCartonSizeRetained_(fs) {
+    var formEl = document.getElementById('carton-size-form');
+    var data = UIC.collectForm('carton-size-form');
+    if (data.type === NEW_TYPE_OPTION) {
+      var newType = (document.getElementById('size-new-type') || {}).value || '';
+      newType = String(newType).trim();
+      if (!newType) { UIC.toast('اكتب النوع الجديد', 'error'); return; }
+      data.type = newType;
+    }
+    if (!UIC.validateForm('carton-size-form')) return;
+    if (String(data.type).trim() === '') { UIC.toast('النوع مطلوب', 'error'); return; }
+
+    var doSave = function () {
+      try {
+        var fileInput = formEl ? formEl.querySelector('input[data-field-name="document"]') : null;
+        var bound = (fileInput && UIC.UploadSet) ? UIC.UploadSet.getBound(fileInput) : null;
+        if (bound && bound.ref) {
+          data.document = bound.ref;
+          if (bound.id) data.document_id = bound.id;
+        } else if (fileInput) {
+          var dr = fileInput.getAttribute('data-ref') || '';
+          if (dr) data.document = dr;
+        }
+      } catch (e) {}
+      Object.keys(data).forEach(function (k) { fs.setHeader(k, data[k]); });
+      var submission;
+      try {
+        submission = fs.beginSubmit('', { values: data, token: '' });
+      } catch (eSub) {
+        UIC.toast((eSub && eSub.message) || 'هناك طلب حفظ قيد التنفيذ', 'error');
+        return;
+      }
+      fs.setControlsEnabled('carton-modal', false);
+      companyCall('add_carton_size', data)
+        .then(function (r) {
+          var rec = (r && r.record) ? r.record : null;
+          fs.settle(submission, { saved: rec || {}, token: '' });
+          fs.setControlsEnabled('carton-modal', true);
+          try { UIC.closeModal('carton-modal'); } catch (eC) {}
+          UIC.toast((r && r.message) || 'تم الحفظ', 'success');
+          if (rec) {
+            window.__sizes = window.__sizes || [];
+            window.__sizes.unshift(rec);
+            if (window.__sizes.length > 10) window.__sizes = window.__sizes.slice(0, 10);
+            renderSizes();
+          } else {
+            fetchSizes(true);
+          }
+          CARTON_FORM_ = null;   /* a confirmed save starts a clean draft */
+        })
+        .catch(function (e) {
+          fs.setControlsEnabled('carton-modal', true);
+          if (e && e.uncertain) fs.markUncertain(e); else fs.markRejected(e);
+          UIC.toast((e && e.message) || 'تعذر الحفظ — لم يتم تسجيل التغيير', 'error');
+        });
     };
     try {
       if (window.UIC && UIC.UploadSet && UIC.UploadSet.isBusy('carton-modal')) {
@@ -306,6 +417,31 @@
     page: 'tc_carton_sizes',
     onChange: function () { UIC.Live.arrive(function () { fetchSizes(true); }); }
   });
+
+  /* Phase B2: the shared refresh control for this list only. Re-fetches the
+     current view (newest-10 or the full list) and re-renders this table; the
+     shared component preserves search/sort/page/scroll. */
+  if (window.UIC && UIC.TableRefresh) {
+    UIC.TableRefresh.register('carton-table', {
+      load: function () {
+        return companyCall('get_carton_sizes', LOADED_ALL ? { loadAll: true } : {});
+      },
+      apply: function (r) {
+        window.__sizes = (r && r.sizes) || [];
+        window.__productOptions = (r && r.product_options) || [];
+        window.__vendorOptions = (r && r.vendor_options) || [];
+        window.__typeOptions = (r && r.type_options) || [];
+        renderSizes();
+      },
+      blocked: function () {
+        try {
+          if (document.querySelector('.modal-backdrop, .uic-modal, [data-modal-open="true"]')) return 'أغلق النموذج المفتوح قبل تحديث القائمة';
+          if (typeof UIC.Live !== 'undefined' && UIC.Live.busy && UIC.Live.busy()) return 'هناك حفظ قيد التنفيذ — انتظر ثم أعد المحاولة';
+        } catch (e) {}
+        return null;
+      }
+    });
+  }
 
   load();
 </script>

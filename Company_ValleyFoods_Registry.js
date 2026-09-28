@@ -20,7 +20,9 @@ function registerValleyFoods_() {
     themeCss: ValleyFoods.themeCss_,
     blockTheme: ValleyFoods.blockTheme_,
     approvalPolicy: ValleyFoods.approvalPolicy_,
-    attachmentPolicy: ValleyFoods.attachmentPolicy_,
+    // Resolve lazily: document-policy initialization may register companies
+    // before Company_ValleyFoods_Actions.js finishes defining this function.
+    attachmentPolicy: function () { return ValleyFoods.attachmentPolicy_(); },
     artifactHandlers: ValleyFoods.artifactHandlers_,
     // §2.1 Table Catalog — metadata only, no schema change
     tables: [
@@ -86,10 +88,18 @@ function registerValleyFoods_() {
       { action: 'vf_work_center_assets', template: 'Company_ValleyFoods_WorkCenterAssets', title: 'أصول خطوط الإنتاج', label: 'أصول خطوط الإنتاج', nav: false },
 
       // ----- الجودة -----
-      { action: 'vf_quality_sops', template: 'Company_ValleyFoods_QualitySops', title: 'الجودة — إجراءات العمل (SOP)', label: 'إجراءات العمل', nav: false },
+      /* لوحة الجودة and الجودة العامة are reachable ONLY through the الجودة
+         dropdown in Company_ValleyFoods_Nav.html. nav:false keeps them out of
+         the top-level company nav (Code.js builds that list from the pages
+         whose nav !== false); it is a PLACEMENT flag, never an access denial.
+         The action, template, title and permission key of the dashboard are
+         deliberately unchanged, so authorized deep links and grants keep
+         working exactly as before. */
+      { action: 'vf_quality_dashboard', template: 'Company_ValleyFoods_QualityDashboard', title: 'الجودة — لوحة المؤشرات', label: 'لوحة الجودة', nav: false },
+      { action: 'vf_quality_general', template: 'Company_ValleyFoods_QualityGeneral', title: 'الجودة — الجودة العامة', label: 'الجودة العامة', nav: false },
+      { action: 'vf_quality_sops', template: 'Company_ValleyFoods_QualitySops', title: 'الجودة — السياسات والاجراءات SOPs', label: 'السياسات والاجراءات SOPs', nav: false },
       { action: 'vf_quality_my_acks', template: 'Company_ValleyFoods_QualityMyAcks', title: 'الجودة — إقراراتي', label: 'إقراراتي', nav: false },
       { action: 'vf_quality_ncr', template: 'Company_ValleyFoods_QualityNcr', title: 'الجودة — عدم المطابقة و CAPA', label: 'عدم المطابقة (NCR)', nav: false },
-      { action: 'vf_quality_dashboard', template: 'Company_ValleyFoods_QualityDashboard', title: 'الجودة — لوحة المؤشرات', label: 'لوحة الجودة', nav: true },
       { action: 'vf_quality_audits', template: 'Company_ValleyFoods_QualityAudits', title: 'الجودة — التدقيق الداخلي', label: 'التدقيق الداخلي', nav: false },
 
 

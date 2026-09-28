@@ -135,8 +135,13 @@
 
     /* ---------- BOX BALANCE CARDS ---------- */
     function boxCardsHtml() {
+      var visibleBoxes = BOXES.filter(function (b) {
+        /* The card displays two decimals; hide balances that render as zero. */
+        return Math.round(Math.abs(num0(b.balance)) * 100) !== 0;
+      });
+      if (!visibleBoxes.length) return '';
       return '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:16px;">' +
-        BOXES.map(function (b) {
+        visibleBoxes.map(function (b) {
           var active = BOX_FILTER === b.box;
           return '<div class="stat-card" style="cursor:pointer;' + (active ? 'outline:2px solid #16a34a;' : '') + '" onclick="CASH_PAGE.setBoxFilter(\'' + esc(b.box) + '\')">' +
             '<div class="stat-body">' +
@@ -168,7 +173,7 @@
           '<span data-sort="' + esc(h.date_edit || '') + '">' + esc(h.date_display || '-') + '</span>',
           esc(h.party_name || '-'),
           esc(h.transaction_details || '-'),
-          attChipsHtml_(attList_(h.attachment, h.attachment_id)) || '-',
+          attChipsHtml_(attList_(h.attachment, h.attachment_id), h.transaction_id) || '-',
           esc(h.transaction_type),
           esc(h.transaction_method || '-'),
           '<span class="num" data-num="' + num0(h.transaction_amount) + '">' + num0(h.transaction_amount).toLocaleString('en-US') + '</span>',
@@ -323,6 +328,7 @@
         if (el) el.addEventListener('input', updateCalcPreview);
         if (el) el.addEventListener('change', updateCalcPreview);
       });
+      ATT_RECORD_ID = record ? record.transaction_id : '';
       ATT_KEPT = record ? attList_(record.attachment, record.attachment_id) : [];
       ATT_SLOT_SEQ = 0;
       renderAttList();
@@ -344,6 +350,7 @@
     var ATT_MAX = 5;
     var ATT_KEPT = [];
     var ATT_SLOT_SEQ = 0;
+    var ATT_RECORD_ID = '';
 
     function attList_(refs, ids) {
       var r = String(refs || '').split('\n').map(function (s) { return s.trim(); }).filter(Boolean);
@@ -354,11 +361,13 @@
     function attArg_(s) { return esc(String(s == null ? '' : s)).replace(/'/g, "\\'"); }
     function openAtt(ref, id) {
       if (!ref) return;
+      /* The viewer's `id` parameter is the owning transaction key, not the
+         Drive attachment ID stored in attachment_id. */
       UIC.openDownload(scriptUrl + '?download=attachment&page=vf_cash&ref=' + encodeURIComponent(ref || '') + ((id != null && String(id) !== '') ? '&id=' + encodeURIComponent(id) : '') + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN), 'فتح المرفق');
     }
-    function attChipsHtml_(list) {
+    function attChipsHtml_(list, recordId) {
       return (list || []).map(function (a) {
-        return '<button type="button" class="btn btn-outline" style="padding:2px 8px;font-size:11px;margin:1px;" onclick="CASH_PAGE.openAtt(\'' + attArg_(a.ref) + '\',\'' + attArg_(a.id) + '\')">📎 ' + esc(attName_(a.ref)) + '</button>';
+        return '<button type="button" class="btn btn-outline" style="padding:2px 8px;font-size:11px;margin:1px;" onclick="CASH_PAGE.openAtt(\'' + attArg_(a.ref) + '\',\'' + attArg_(recordId) + '\')">📎 ' + esc(attName_(a.ref)) + '</button>';
       }).join(' ');
     }
     function renderAttList() {
@@ -366,7 +375,7 @@
       if (!host) return;
       host.innerHTML = ATT_KEPT.map(function (a, i) {
         return '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">' +
-          '<button type="button" class="btn btn-outline" style="padding:3px 8px;font-size:11px;" onclick="CASH_PAGE.openAtt(\'' + attArg_(a.ref) + '\',\'' + attArg_(a.id) + '\')">📎 ' + esc(attName_(a.ref)) + '</button>' +
+          '<button type="button" class="btn btn-outline" style="padding:3px 8px;font-size:11px;" onclick="CASH_PAGE.openAtt(\'' + attArg_(a.ref) + '\',\'' + attArg_(ATT_RECORD_ID) + '\')">📎 ' + esc(attName_(a.ref)) + '</button>' +
           '<button type="button" class="btn btn-ghost" style="padding:2px 6px;font-size:11px;" onclick="CASH_PAGE.removeAtt(' + i + ')">✕</button>' +
           '</div>';
       }).join('');
@@ -677,4 +686,3 @@
   </script>
 </body>
 </html>
-

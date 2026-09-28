@@ -127,8 +127,9 @@ check(/vfBatchBalance_\(dbId, \{ mo_uid: myUid, include_empty: true \}\)/.test(S
   'the MO save guard reads its balance from the same function');
 check(/vfBatchBalance_\(dbId, \{\s*invoice_uid:/.test(SRC),
   'and so does the sales save baseline');
-check(/getValleyProductBatches_\(\{ product_id: o\.product_id, mo_uid: moUid \}/.test(SRC),
-  'getValleyMfgOrderDetail_ passes its mo_uid through');
+const MO_DETAIL = fnText('getValleyMfgOrderDetail_');
+check(!/getValleyProductBatches_\(/.test(MO_DETAIL) && /var outputs = full\.outputs \|\| \[\]/.test(MO_DETAIL),
+  'getValleyMfgOrderDetail_ leaves batch reads to the document-aware picker');
 check(/getValleyProductBatches_\(\{ product_id: pid, mo_uid: moUid, invoice_uid: invoiceUid \}/.test(SRC),
   'and so does getValleyProductBatchesMulti_');
 

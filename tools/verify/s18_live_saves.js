@@ -308,6 +308,31 @@ async function main() {
     sb.UIC.Live.unwatchPage();
   }
 
+  console.log('\n9 — a queued confirmation reconciles the original optimistic row\n');
+  {
+    const sb = freshSandbox();
+    const list = [];
+    let sends = 0;
+    const call = () => {
+      sends++;
+      return sends === 1
+        ? Promise.reject({ status: 'error', transport: true, uncertain: true, message: 'offline' })
+        : Promise.resolve({ status: 'success', record: { uid: 'server-row', amount: 17 } });
+    };
+    const p = sb.UIC.Live.save({
+      call: call, action: 'save_scan',
+      data: { __request_id: 'scan_request_123456' }, uid: '__request_id',
+      list: list, key: 'uid', draft: { uid: 'client-row', amount: 17 }, render: function () {}
+    }).catch(function () {});
+    await p;
+    check(list[0] && list[0].__pending === true && sb.UIC.Live.queued() === 1,
+      'transport uncertainty keeps exactly one pending row and queued request');
+    sb.UIC.Live.retryNow();
+    await settle(); await settle();
+    check(sends === 2 && list[0] && list[0].uid === 'server-row' && list[0].__pending === false,
+      'later same-request confirmation replaces the correct row, not merely the retry chip', JSON.stringify(list[0]));
+  }
+
   console.log('\n' + (failed === 0
     ? 'S18 — optimistic saves and change polling both check out.'
     : failed + ' check(s) FAILED.'));

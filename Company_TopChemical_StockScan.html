@@ -9,10 +9,14 @@
   <?!= include('Client_Helpers'); ?>
   <?!= include('Company_TopChemical_Nav'); ?>
   <?!= getCompanyThemeCSS_('3fe1b5cb67b7223e') ?>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
   <style>
-    .scan-wrap { max-width: 520px; margin: 0 auto; padding: 4px 4px 32px; }
+    .scan-wrap { max-width: 1200px; margin: 0 auto; padding: 4px 4px 32px; }
     .scan-card { background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: var(--radius-lg); padding: 20px; box-shadow: var(--shadow-sm); }
+    .scan-entry, #count-step, #confirm-step { max-width: 520px; margin-right: auto; margin-left: auto; }
+    .scan-history { margin-top: 24px; border-top: 1px solid var(--border-color); padding-top: 18px; }
+    .scan-history-title { margin: 0 0 12px; font-size: 17px; }
+    .scan-history-filters { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 12px 0; }
+    .scan-history-filters .input { width: 150px; }
     .scan-big-btn { width: 100%; padding: 16px; font-size: 16px; font-weight: 800; border-radius: 12px; }
     .scan-alt-btn { width: 100%; padding: 12px; font-size: 14px; font-weight: 700; border-radius: 12px; margin-top: 8px; }
     .scan-alt-btn.suggested { animation: scan-pulse 1.1s ease-in-out 3; }
@@ -21,14 +25,29 @@
     .scan-manual { display: flex; gap: 8px; margin-top: 12px; }
     .scan-manual input { flex: 1; font-size: 15px; padding: 12px; }
     .scan-hint { color: var(--text-muted); font-size: 12.5px; text-align: center; margin-top: 8px; }
+    .scan-catalog-metrics { margin-top: 6px; padding: 6px 8px; color: var(--text-muted); background: var(--bg-muted, #f5f5f5); border-radius: 6px; font-size: 10px; line-height: 1.6; overflow-wrap: anywhere; }
+    .scan-catalog-metrics button { display: inline-block; margin: 4px 0 0 6px; padding: 2px 7px; font: inherit; cursor: pointer; }
     .scan-product-header { text-align: center; margin-bottom: 14px; }
     .scan-product-header .name { font-size: 18px; font-weight: 800; color: var(--text-main); }
     .scan-product-header .unit { color: var(--text-muted); font-size: 13px; }
-    .scan-pick { margin-top: 14px; }
+    .scan-pick { position: relative; margin-top: 14px; }
+    .scan-product-toggle { width: 100%; display: flex; justify-content: space-between; align-items: center; text-align: right; }
+    .scan-product-menu { position: absolute; z-index: 20; top: 100%; right: 0; left: 0; margin-top: 4px; padding: 8px; background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: 10px; box-shadow: var(--shadow-md, 0 8px 24px rgba(0,0,0,.14)); }
+    .scan-product-menu[hidden], .scan-capture-actions { display: none !important; }
+    .scan-product-menu .input { width: 100%; box-sizing: border-box; margin-bottom: 6px; }
+    .scan-product-dropdown { max-height: 260px; overflow-y: auto; padding: 3px; }
+    .scan-product-option { display: block; width: 100%; padding: 10px 12px; border: 0; border-radius: 7px; background: transparent; color: var(--text-main); text-align: right; font: inherit; cursor: pointer; }
+    .scan-product-option:hover, .scan-product-option:focus { background: var(--bg-muted, #f5f5f5); }
     .scan-total-row { display: flex; justify-content: space-between; align-items: center; background: var(--bg-muted, #f5f5f5); border-radius: 10px; padding: 12px 14px; margin: 14px 0; font-weight: 800; }
     .scan-total-row .val { font-size: 20px; color: var(--brand-primary); }
     .scan-actions { display: flex; gap: 10px; margin-top: 16px; }
     .scan-actions .btn { flex: 1; }
+    .scan-calc-field { display: grid; grid-template-columns: minmax(0, 1fr) 48px; gap: 8px; align-items: end; }
+    .scan-calc-trigger { min-width: 48px; height: 44px; padding: 0; font-size: 21px; }
+    .scan-datetime[readonly] { background: var(--bg-muted, #f5f5f5); color: var(--text-muted); cursor: default; }
+    .scan-calc-display { width: 100%; padding: 12px; margin-bottom: 12px; text-align: left; direction: ltr; font-size: 24px; font-weight: 800; border: 1px solid var(--border-color); border-radius: 10px; background: var(--bg-muted, #f5f5f5); box-sizing: border-box; }
+    .scan-calc-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+    .scan-calc-grid .btn { min-height: 48px; padding: 8px; font-size: 18px; font-weight: 700; }
     .confirm-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--border-color); font-size: 14px; }
     .confirm-row:last-child { border-bottom: none; }
     .confirm-row .label { color: var(--text-muted); }
@@ -37,6 +56,13 @@
     .save-status.saving { color: var(--text-muted); }
     .save-status.success { color: #16a34a; }
     .save-status.error { color: #dc2626; }
+    .scan-pending-area { margin: 12px 0; padding: 10px; border: 1px solid var(--pending-border, #f0c36d); border-radius: 10px; background: var(--pending-bg, #fff8e7); }
+    .scan-pending-area h4 { margin: 0 0 8px; font-size: 14px; }
+    .scan-pending-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 0; border-top: 1px solid rgba(0,0,0,.08); }
+    .scan-pending-row:first-of-type { border-top: 0; }
+    .scan-pending-detail { color: var(--text-muted); font-size: 12px; margin-top: 4px; }
+    .scan-rejected-row { color: var(--danger, #b91c1c); }
+    .badge-pending { display: inline-block; white-space: nowrap; color: var(--pending-text, #8a5a00); font-size: 12px; font-weight: 700; }
   </style>
 </head>
 <body>
@@ -51,7 +77,6 @@
   var CURRENT_ACTION = '<?!= currentAction ?>';
   var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
   var CAN_WRITE = UIC.canAdd_(); var CAN_FULL = UIC.canFull_();
-  var WAREHOUSES = ['1', '2', '3', '4', '5', 'شبرا'];
   var CONTAINER_TYPES = ['شيكارة', 'كرتونة', 'برميل', 'بستلة', 'جونية'];
 
   function companyCall(moduleAction, data) {
@@ -61,24 +86,126 @@
       data: data || {}
     }, SESSION_TOKEN);
   }
+  function backgroundCompanyCall(moduleAction, data) {
+    var hint = null;
+    try {
+      if (window.UIC && UIC.REQ_COORD_CORE_ === true) {
+        hint = UIC._rpcLaneHint;
+        UIC._rpcLaneHint = { lane: 'background', coalesce: true };
+      }
+      return companyCall(moduleAction, data);
+    } finally {
+      try { if (window.UIC && UIC.REQ_COORD_CORE_ === true) UIC._rpcLaneHint = hint; } catch (e) {}
+    }
+  }
 
   function esc(s) { return FMT.escape(s == null ? '' : s); }
+  function scanNow_() { return IS_SUPER_ADMIN ? (window.performance && performance.now ? performance.now() : Date.now()) : 0; }
+  function scanUtf8Bytes_(value) {
+    var s = String(value == null ? '' : value);
+    try { return new Blob([s]).size; } catch (e) { return unescape(encodeURIComponent(s)).length; }
+  }
+  var scanCatalogLastMetrics = null;
+  var scanCatalogFilterLastMs = null;
+  var scanCatalogWaitTimer = null;
+  function renderScanCatalogMetrics_(metrics) {
+    if (!IS_SUPER_ADMIN) return;
+    if (metrics) scanCatalogLastMetrics = metrics;
+    var el = document.getElementById('scan-catalog-metrics-text');
+    var m = scanCatalogLastMetrics;
+    if (!el || !m) return;
+    function ms(v) { return v != null && v !== '' && Number.isFinite(Number(v)) ? Math.round(Number(v)) + ' ms' : '—'; }
+    var db = m.server || {};
+    var parts = ['قياس قائمة اختيار الصنف', m.source || ''];
+    if (m.count != null) parts.push('الأصناف: ' + m.count);
+    if (m.match_count != null) parts.push('المطابق: ' + m.match_count + ' | المعروض: ' + (m.visible_count || 0));
+    if (m.payload_bytes != null) parts.push('البيانات: ' + m.payload_bytes + ' bytes');
+    if (m.cache_age_ms != null) parts.push('عمر كاش المتصفح: ' + ms(m.cache_age_ms));
+    if (m.browser_cache_ms != null) parts.push('قراءة/عرض الكاش: ' + ms(m.browser_cache_ms));
+    if (m.rpc_ms != null) parts.push('RPC: ' + ms(m.rpc_ms));
+    if (m.accept_ms != null) parts.push('تحليل الكتالوج: ' + ms(m.accept_ms));
+    if (m.filter_ms != null) parts.push('البحث المحلي: ' + ms(m.filter_ms));
+    if (m.render_ms != null) parts.push('رسم النتائج: ' + ms(m.render_ms));
+    if (m.until_visible_ms != null) parts.push('حتى الظهور: ' + ms(m.until_visible_ms));
+    if (m.coordinator) parts.push('طلبات منسقة نشطة/انتظار: ' + m.coordinator.active + '/' + m.coordinator.pending);
+    if (m.rpc_ms != null || m.server) {
+      parts.push('كاش MySQL: ' + (db.cache_hit === true ? 'نعم' : (db.cache_hit === false ? 'لا' : '—')));
+      parts.push('اتصال: ' + ms(db.connection_ms));
+      parts.push('SQL: ' + ms(db.sql_ms));
+      parts.push('قراءة JDBC: ' + ms(db.read_ms));
+      parts.push('تحليل JSON بالخادم: ' + ms(db.json_parse_ms));
+      parts.push('MySQL إجمالاً: ' + ms(db.elapsed_ms));
+      if (db.rows_read != null) parts.push('صفوف JDBC: ' + db.rows_read);
+    }
+    if (m.error) parts.push('الحالة: ' + m.error);
+    el.textContent = parts.filter(Boolean).join(' | ');
+  }
   function pad(n) { return ('0' + n).slice(-2); }
-  function todayStr() {
+  function nowLocalDateTime() {
     var d = new Date();
-    return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+    return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) +
+      'T' + pad(d.getHours()) + ':' + pad(d.getMinutes());
   }
   function round2(n) { return Math.round((Number(n) || 0) * 100) / 100; }
 
   /* ── State ─────────────────────────────────────────────────────────────── */
-  var currentProduct = null;   // { id, label }
-  var currentAvail = null;     // number | null (null = unknown / fetch failed)
-  var pendingEntry = null;     // payload built at confirm time, resent on retry
-  var saveInFlight = false;    // one commit at a time; no double filing
+  var currentProduct = null;   // { id:String, label:String, perUnit:String, code:String|null }
+  var currentWarehouse = null; // { id:String, location:String }
+  var warehouses = [];         // [{ value:String, label:String }] from warehouse_locations
+  var warehouseById = Object.create(null);
+  var warehousesState = 'loading'; // loading | ready | error
+  var warehousesError = '';
+  var warehousesSequence = 0;
+  var balanceGen = 0;
+  var currentBalance = { state: 'idle', qty: null, productId: null, warehouseId: null, error: '', at: 0 }; // idle|loading|ready|missing|error
+  var recentQueries = Object.create(null); // bounded client reuse, 30s
+  var recentQueryKeys = [];
+  /* Instant catalog: one complete bounded products list, filtered locally.
+     SCAN_LOCAL_CATALOG_ENABLED=false restores pure server search (rollback). */
+  var SCAN_LOCAL_CATALOG_ENABLED = true;
+  var SCAN_CATALOG_FRESH_MS = 60000;
+  var SCAN_CATALOG_STALE_MAX_MS = 600000;
+  var SCAN_CATALOG_MAX_OPTIONS = 100;
+  var scanCatalog = null; // { products:[{id,name_ar,code,per_unit,key}], byId:{}, deadline }
+  var scanCatalogState = 'idle'; // idle|loading|ready|fallback|error
+  var scanCatalogError = '';
+  var scanCatalogGen = 0;
+  var scanCatalogPromise = null;
+  var scanCatalogFallback = false; // true once server search takes over
+  var scanCatalogStorageKey = '';
+  var productBalances = Object.create(null); // productId -> { at, map:{warehouseId:qty} }
+  var pendingEntry = null;     // current editable draft only; never used by saves after dispatch
+  var retainedWarehouseId = ''; // last explicit selection in this page session
+  var scanRejectedDrafts = [];
   var qrReader = null;
   var cameraActive = false;
+  var cameraStarting = false;
+  var productOptionsById = Object.create(null);
+  var productSearchTimer = null;
+  var productSearchSequence = 0;
+  var productSearchOffset = 0;
+  var productSearchText = '';
+  var productSearchHasMore = false;
+  var productSearchTotal = -1; // catalog-mode total matches; -1 means server mode
+  var productSearchBusy = false;
+  var productLoadingMore = false;
+  var productSearchRetryAppend = false;
+  var productSearchWire = 0;
+  var productSearchDeferred = null;
+  var productSearchResults = [];
+  var productDropdownOpen = false;
+  var scannerLibraryPromise = null;
+  var scanHistoryRows = [];
+  var scanHistoryLoadedAll = false;
+  var scanHistoryState = 'loading';
+  var scanHistoryError = '';
+  var scanHistorySequence = 0;
+  var scanHistoryFrom = '2026-09-01';
+  var scanHistoryTo = '';
+  var SCAN_HISTORY_START_DATE = '2026-09-01';
 
   function load() {
+    scanCatalogStorageKey = scanCatalogCacheKey_();
     UIC.appShell('tc-root', {
       companyLogoUrl: COMPANY_LOGO_URL,
       companyLogoHref: scriptUrl + '?action=tc_dashboard&sessionToken=' + SESSION_TOKEN,
@@ -87,32 +214,845 @@
       contentId: 'scan-content',
       menuGroups: (window.TOPCHEMICAL_MENU || [])
     });
-    fetchOptions();
+    renderShell();
+    showStep('scan');
+    loadWarehouses(false);
+    if (SCAN_LOCAL_CATALOG_ENABLED) {
+      // One bootstrap catalog request; typing filters locally with zero RPC.
+      renderProductResults('loading');
+      ensureScanCatalog(false);
+    } else {
+      searchProducts('', false);
+    }
+    // Give the controls a paint before starting the independent sheet read.
+    setTimeout(function () { loadScanHistory(); }, 0);
+    if (typeof document.addEventListener === 'function') {
+      document.addEventListener('click', function (e) {
+        var picker = document.getElementById('scan-product-picker');
+        if (picker && !picker.contains(e.target)) closeProductDropdown();
+      });
+      document.addEventListener('visibilitychange', function () {
+        if (isScanPageVisible() && productDropdownOpen && SCAN_LOCAL_CATALOG_ENABLED &&
+            scanCatalogState === 'ready' && !scanCatalogFresh()) ensureScanCatalog(false);
+      });
+      /* A successful product edit in another ERP tab removes this exact
+         browser cache key. Keep the old picker usable while fetching its
+         replacement; product selection still checks the server on save. */
+      window.addEventListener('storage', function (event) {
+        if (!SCAN_LOCAL_CATALOG_ENABLED || !scanCatalogStorageKey ||
+            event.key !== scanCatalogStorageKey || event.newValue !== null) return;
+        if (scanCatalog) scanCatalog.deadline = 0;
+        if (isScanPageVisible()) ensureScanCatalog(false);
+      });
+    }
   }
 
-  function fetchOptions() {
-    companyCall('get_stock_scan_options')
+  function isScanPageVisible() {
+    try { return !document || document.visibilityState !== 'hidden'; } catch (e) { return true; }
+  }
+  function syncProductDropdown() {
+    var menu = document.getElementById('scan-product-menu');
+    var toggle = document.getElementById('scan-product-toggle');
+    var input = document.getElementById('scan-product-search');
+    if (menu) menu.hidden = !productDropdownOpen;
+    if (toggle) toggle.setAttribute('aria-expanded', productDropdownOpen ? 'true' : 'false');
+    if (input) input.setAttribute('aria-expanded', productDropdownOpen ? 'true' : 'false');
+  }
+  function toggleProductDropdown() {
+    if (productDropdownOpen) { closeProductDropdown(); return; }
+    openProductDropdown();
+    var input = document.getElementById('scan-product-search');
+    if (input) { input.value = ''; productSearchText = ''; scheduleProductSearch(''); input.focus(); }
+  }
+  function openProductDropdown() {
+    productDropdownOpen = true; syncProductDropdown();
+    // Timers may be delayed: recheck freshness on opening.
+    if (SCAN_LOCAL_CATALOG_ENABLED && scanCatalog && !scanCatalogFresh() && isScanPageVisible()) {
+      ensureScanCatalog(false);
+    }
+  }
+  function closeProductDropdown() { productDropdownOpen = false; syncProductDropdown(); }
+  function handleProductSearchKey(e) {
+    if (e.key === 'Escape') {
+      closeProductDropdown();
+      var toggle = document.getElementById('scan-product-toggle'); if (toggle) toggle.focus();
+      return;
+    }
+    if (e.key === 'ArrowDown') {
+      var first = document.querySelector('#scan-product-results .scan-product-option');
+      if (first) { e.preventDefault(); first.focus(); }
+    }
+  }
+
+  function renderProductResults(state, message) {
+    var host = document.getElementById('scan-product-results');
+    if (!host) return;
+    if (state === 'loading') { host.innerHTML = '<div class="scan-hint">جارٍ تحميل الأصناف...</div>'; syncProductDropdown(); return; }
+    if (state === 'hint') {
+      host.innerHTML = '<div class="scan-hint" role="status">' + esc(message || 'أدخل قيمة البحث') + '</div>';
+      syncProductDropdown(); return;
+    }
+    if (state === 'error') {
+      var retry = '<button type="button" class="btn btn-outline" onclick="retryProductSearch()">إعادة المحاولة</button>';
+      host.innerHTML = (productSearchResults.length ? productSearchResults.map(function (o) {
+        return '<button type="button" class="scan-product-option" role="option" onclick="chooseScanProduct(\'' + esc(String(o.value)) + '\')">' +
+          esc(o.label) + ' <span class="scan-hint">#' + esc(String(o.value)) + '</span></button>';
+      }).join('') : '') + '<div class="scan-hint" role="status">تعذر تحميل الأصناف' + (message ? ' — ' + esc(message) : '') + ' ' + retry + '</div>';
+      syncProductDropdown(); return;
+    }
+    var html = productSearchResults.length ? productSearchResults.map(function (o) {
+      var codeSuffix = o.code ? ' <span class="scan-hint">(' + esc(o.code) + ')</span>' : '';
+      return '<button type="button" class="scan-product-option" role="option" onclick="chooseScanProduct(\'' +
+        esc(String(o.value)) + '\')">' + esc(o.label) + ' <span class="scan-hint">#' + esc(String(o.value)) + '</span>' + codeSuffix + '</button>';
+    }).join('') : '<div class="scan-hint">لا توجد أصناف مطابقة</div>';
+    if (productSearchTotal >= 0 && productSearchTotal > productSearchResults.length) {
+      html += '<div class="scan-hint">عرض ' + productSearchResults.length + ' من ' + productSearchTotal + ' — ضيّق البحث لعرض نتائج أدق</div>';
+    }
+    if (productSearchHasMore && !productLoadingMore) html += '<button type="button" class="scan-product-option" onclick="loadMoreProducts()">تحميل المزيد</button>';
+    if (productLoadingMore) html += '<div class="scan-hint">جارٍ تحميل المزيد...</div>';
+    if (scanCatalogFallback && scanCatalogState === 'fallback') html += '<div class="scan-hint">البحث عبر الخادم</div>';
+    host.innerHTML = html;
+    syncProductDropdown();
+  }
+
+  function recentQueryGet(key) {
+    var hit = recentQueries[key];
+    if (!hit) return null;
+    if (Date.now() - hit.at > 30000) { try { delete recentQueries[key]; } catch (e) {} return null; }
+    return hit.result;
+  }
+  function recentQueryPut(key, result) {
+    recentQueries[key] = { at: Date.now(), result: result };
+    recentQueryKeys.push(key);
+    while (recentQueryKeys.length > 20) {
+      var old = recentQueryKeys.shift();
+      try { delete recentQueries[old]; } catch (e) {}
+    }
+  }
+
+  /* Pure local matching over a complete catalog. No RPC, no SQL here:
+     id mode matches exact string IDs only, code mode exact codes only,
+     name mode matches normalized Arabic substrings (empty query matches all).
+     Same-name products with distinct IDs all survive; order is preserved. */
+  function normalizeScanName(s) {
+    return String(s == null ? '' : s)
+      .replace(/[\u064B-\u065F\u0670\u0640]/g, '')
+      .replace(/[\u0622\u0623\u0625]/g, 'ا')
+      .replace(/\u0649/g, 'ي')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .toLowerCase();
+  }
+  function isScanExactId(q) { return /^[1-9]\d{0,19}$/.test(String(q)); }
+  function compareScanProductIds(left, right) {
+    var a = String(left), b = String(right);
+    if (/^\d+$/.test(a) && /^\d+$/.test(b)) {
+      a = a.replace(/^0+(?=\d)/, ''); b = b.replace(/^0+(?=\d)/, '');
+      if (a.length !== b.length) return a.length - b.length;
+      return a < b ? -1 : (a > b ? 1 : 0);
+    }
+    return a.localeCompare(b);
+  }
+  function filterScanCatalog(products, mode, query, limit) {
+    var out = [], total = 0;
+    var max = Math.min(Math.max(Math.floor(Number(limit) || SCAN_CATALOG_MAX_OPTIONS), 1), SCAN_CATALOG_MAX_OPTIONS);
+    query = String(query == null ? '' : query).trim();
+    var list = products || [];
+    var i, p;
+    if (mode === 'id') {
+      if (!isScanExactId(query)) return { matches: out, total: 0 };
+      for (i = 0; i < list.length; i++) { if (String(list[i].id) === query) { out.push(list[i]); total = 1; break; } }
+      return { matches: out, total: total };
+    }
+    if (mode === 'code') {
+      if (!query || query.length > 64) return { matches: out, total: 0 };
+      for (i = 0; i < list.length; i++) {
+        p = list[i];
+        if (p.code != null && String(p.code) === query) { total++; if (out.length < max) out.push(p); }
+      }
+      return { matches: out, total: total };
+    }
+    var nq = normalizeScanName(query).slice(0, 80);
+    for (i = 0; i < list.length; i++) {
+      p = list[i];
+      if (!nq || String(p.id).toLowerCase().indexOf(String(query).toLowerCase()) >= 0 ||
+          (p.key != null ? p.key : normalizeScanName(p.name_ar)).indexOf(nq) >= 0) {
+        total++;
+        if (out.length < max) out.push(p);
+      }
+    }
+    return { matches: out, total: total };
+  }
+  function isScanDenial(e) {
+    var code = String((e && (e.code || e.message)) || '');
+    return /NOT_AUTHORIZED|UNAUTHORIZED|AUTHORIZATION|SESSION_EXPIRED|SYSTEM_DISABLED|ACCOUNT_DISABLED|FORBIDDEN|LOGIN_REQUIRED|OWNER_MISMATCH|MYSQL_SCOPE_CHANGED/i.test(code);
+  }
+
+  function productQueryKey(mode, query, offset) {
+    return String(mode) + '|' + String(query) + '|30|' + String(offset || 0);
+  }
+  function exactQueryValid(mode, query) {
+    if (mode === 'id') return /^[1-9]\d{0,19}$/.test(query);
+    if (mode === 'code') return !!query && query.length <= 64;
+    return true;
+  }
+  function invalidateProductSearch() {
+    if (productSearchTimer) clearTimeout(productSearchTimer);
+    productSearchTimer = null;
+    productSearchSequence++;
+    productSearchDeferred = null;
+    productLoadingMore = false;
+  }
+
+  function scanCatalogFresh() {
+    return !!scanCatalog && scanCatalogState === 'ready' && Date.now() < scanCatalog.deadline;
+  }
+  function scanCatalogCacheKey_() {
+    var session = API.getSession ? API.getSession() || {} : {};
+    var email = String(window.AUTH_USER_EMAIL || (session.user && session.user.email) || session.email || '').trim().toLowerCase();
+    return email ? 'erp:mysql-dropdown:3fe1b5cb67b7223e:tc_stock_scan:products:v2:' + encodeURIComponent(email) : '';
+  }
+  function readDirectTestCatalogCache_() {
+    var session = API.getSession ? API.getSession() || {} : {};
+    var email = String(window.AUTH_USER_EMAIL || (session.user && session.user.email) || session.email || '').trim().toLowerCase();
+    if (!email) return null;
+    try {
+      // Reuse the already-authorized browser cache produced by the products
+      // dropdown experiment; translate its full rows into the scan projection.
+      var saved = JSON.parse(localStorage.getItem('tc_products_live_direct_test_v4:' + email) || 'null');
+      var savedAt = Number(saved && saved.savedAt), age = Date.now() - savedAt;
+      if (!saved || !Number.isFinite(savedAt) || age < 0 || age > SCAN_CATALOG_STALE_MAX_MS ||
+          !Array.isArray(saved.columns) || !Array.isArray(saved.rows)) return null;
+      var columns = saved.columns.map(String);
+      if (columns.indexOf('id') < 0 || columns.indexOf('name_ar') < 0) return null;
+      var products = saved.rows.filter(function (row) {
+        return row && (row.deleted_at == null || row.deleted_at === '');
+      }).map(function (row) {
+        return { id: String(row.id == null ? '' : row.id), name_ar: String(row.name_ar == null ? '' : row.name_ar),
+          code: row.code == null ? null : String(row.code),
+          per_unit: row.number_of_cartons_bags == null ? '' : String(row.number_of_cartons_bags) };
+      }).filter(function (row) { return /^[1-9]\d{0,19}$/.test(row.id); });
+      var accepted = acceptScanCatalog({ status: 'ok', schema_version: 1, products: products,
+        count: products.length, complete: true, overflow: false, reason: null });
+      return accepted.ok ? { catalog: accepted.catalog, savedAt: savedAt } : null;
+    } catch (e) { return null; }
+  }
+  function readScanCatalogCache_() {
+    if (!scanCatalogStorageKey) return null;
+    try {
+      var saved = JSON.parse(localStorage.getItem(scanCatalogStorageKey) || 'null');
+      var savedAt = Number(saved && saved.savedAt);
+      var age = Date.now() - savedAt;
+      if (saved && saved.schemaVersion === 2 && Number.isFinite(savedAt) && age >= 0 &&
+          age <= SCAN_CATALOG_STALE_MAX_MS && Array.isArray(saved.products)) {
+        var accepted = acceptScanCatalog({ status: 'ok', schema_version: 1, products: saved.products,
+          count: saved.products.length, complete: true, overflow: false, reason: null });
+        if (accepted.ok) return { catalog: accepted.catalog, savedAt: savedAt };
+      }
+    } catch (e) { return null; }
+    return readDirectTestCatalogCache_();
+  }
+  function writeScanCatalogCache_(products) {
+    if (!scanCatalogStorageKey) return;
+    try {
+      localStorage.setItem(scanCatalogStorageKey, JSON.stringify({
+        schemaVersion: 2, savedAt: Date.now(), products: products
+      }));
+    } catch (e) { /* localStorage quota/privacy failures do not block the picker */ }
+  }
+  function removeScanCatalogCache_() {
+    try { if (scanCatalogStorageKey) localStorage.removeItem(scanCatalogStorageKey); } catch (e) {}
+  }
+  function installScanCatalog_(catalog, savedAt) {
+    catalog.deadline = savedAt + SCAN_CATALOG_FRESH_MS;
+    scanCatalog = catalog;
+    scanCatalogState = 'ready';
+    scanCatalogFallback = false;
+    applyCatalogQuery();
+  }
+  function acceptScanCatalog(r) {
+    // Client-side acceptance mirrors the server contract. Malformed payloads
+    // never become a ready catalog; overflow/invalid payloads use server search.
+    if (!r || r.status !== 'ok' || r.schema_version !== 1) return { ok: false, reason: 'invalid' };
+    if (!Array.isArray(r.products) || !Number.isInteger(r.count) || r.count !== r.products.length) return { ok: false, reason: 'invalid' };
+    if (r.count > 50000) return { ok: false, reason: 'invalid' };
+    if (!r.complete || r.overflow || r.reason !== null) return { ok: false, reason: r.reason || 'overflow' };
+    var products = [], byId = {};
+    for (var i = 0; i < r.products.length; i++) {
+      var p = r.products[i];
+      if (!p || typeof p.id !== 'string' || typeof p.name_ar !== 'string') return { ok: false, reason: 'invalid' };
+      var entry = { id: p.id, name_ar: p.name_ar, code: p.code == null ? null : String(p.code),
+        per_unit: p.per_unit == null ? '' : String(p.per_unit), key: normalizeScanName(p.name_ar) };
+      products.push(entry);
+      byId[entry.id] = entry;
+    }
+    products.sort(function (a, b) { return compareScanProductIds(a.id, b.id); });
+    return { ok: true, catalog: { products: products, byId: byId } };
+  }
+  function ensureScanCatalog(refresh) {
+    if (!SCAN_LOCAL_CATALOG_ENABLED) return null;
+    if (scanCatalogPromise && !refresh) return scanCatalogPromise;
+    if (!refresh && scanCatalogFresh()) return Promise.resolve(scanCatalog);
+    if (!refresh && !scanCatalog) {
+      var cacheStarted = scanNow_();
+      var cached = readScanCatalogCache_();
+      if (cached) {
+        var cacheReadMs = scanNow_() - cacheStarted;
+        scanCatalogFilterLastMs = null;
+        var cacheMetrics = {
+          source: Date.now() < cached.savedAt + SCAN_CATALOG_FRESH_MS ? 'كاش المتصفح حديث' : 'كاش المتصفح مع تحديث MySQL بالخلفية',
+          count: cached.catalog.products.length,
+          browser_cache_ms: cacheReadMs,
+          cache_age_ms: Date.now() - cached.savedAt
+        };
+        if (IS_SUPER_ADMIN) scanCatalogLastMetrics = cacheMetrics;
+        installScanCatalog_(cached.catalog, cached.savedAt);
+        cacheMetrics.filter_ms = scanCatalogFilterLastMs;
+        if (scanCatalogFresh()) {
+          (window.requestAnimationFrame || function (fn) { setTimeout(fn, 0); })(function () {
+            cacheMetrics.until_visible_ms = scanNow_() - cacheStarted;
+            renderScanCatalogMetrics_(cacheMetrics);
+          });
+          renderScanCatalogMetrics_(cacheMetrics);
+          return Promise.resolve(scanCatalog);
+        }
+        renderScanCatalogMetrics_(cacheMetrics);
+      }
+    }
+    var gen = ++scanCatalogGen;
+    if (refresh) scanCatalogFallback = false;
+    var requestStarted = scanNow_();
+    var hadUsableCatalog = !!scanCatalog;
+    scanCatalogState = 'loading';
+    if (!hadUsableCatalog) renderProductResults('loading');
+    renderScanCatalogMetrics_(Object.assign({}, scanCatalogLastMetrics || {}, {
+      source: hadUsableCatalog ? 'تحديث MySQL؛ النسخة الحالية ظاهرة' : 'بانتظار كتالوج MySQL'
+    }));
+    if (scanCatalogWaitTimer) clearInterval(scanCatalogWaitTimer);
+    var requestTimer = IS_SUPER_ADMIN ? setInterval(function () {
+      if (gen !== scanCatalogGen) { clearInterval(requestTimer); return; }
+      var coordinator = null;
+      try { coordinator = API._coord && API._coord._state ? API._coord._state() : null; } catch (eCoord) {}
+      renderScanCatalogMetrics_(Object.assign({}, scanCatalogLastMetrics || {}, {
+        source: hadUsableCatalog ? 'تحديث MySQL؛ النسخة الحالية ظاهرة' : 'بانتظار كتالوج MySQL',
+        rpc_ms: scanNow_() - requestStarted, coordinator: coordinator
+      }));
+    }, 1000) : null;
+    scanCatalogWaitTimer = requestTimer;
+    scanCatalogPromise = companyCall('get_stock_scan_catalog', refresh ? { refresh: true } : {})
       .then(function (r) {
-        window.__productOptions = r.product_options || [];
-        renderShell();
-        showStep('scan');
-      })
-      .catch(function (e) { showFatalError(e); });
+        clearInterval(requestTimer);
+        if (scanCatalogWaitTimer === requestTimer) scanCatalogWaitTimer = null;
+        if (gen !== scanCatalogGen) return null;
+        scanCatalogPromise = null;
+        var responseReceived = scanNow_();
+        var acc = acceptScanCatalog(r);
+        if (!acc.ok) {
+          renderScanCatalogMetrics_({ source: 'استجابة كتالوج غير مكتملة', rpc_ms: responseReceived - requestStarted,
+            count: r && r.count, payload_bytes: r && r.payload_bytes,
+            server: r && r._mysql, error: String(acc.reason || 'بيانات غير صالحة') });
+          enterCatalogFallback(acc.reason);
+          return null;
+        }
+        var acceptStarted = scanNow_();
+        var acceptMs = acceptStarted - responseReceived;
+        var paintStarted = scanNow_();
+        var measurement = {
+          source: 'تم التحديث من MySQL', count: acc.catalog.products.length,
+          payload_bytes: r.payload_bytes, rpc_ms: responseReceived - requestStarted,
+          accept_ms: acceptMs, server: r._mysql || null
+        };
+        if (IS_SUPER_ADMIN) scanCatalogLastMetrics = measurement;
+        scanCatalogFilterLastMs = null;
+        installScanCatalog_(acc.catalog, Date.now());
+        measurement.filter_ms = scanCatalogFilterLastMs;
+        measurement.render_ms = scanNow_() - paintStarted;
+        writeScanCatalogCache_(r.products);
+        renderScanCatalogMetrics_(measurement);
+        (window.requestAnimationFrame || function (fn) { setTimeout(fn, 0); })(function () {
+          measurement.until_visible_ms = scanNow_() - requestStarted;
+          renderScanCatalogMetrics_(measurement);
+        });
+        return scanCatalog;
+      }).catch(function (e) {
+        clearInterval(requestTimer);
+        if (scanCatalogWaitTimer === requestTimer) scanCatalogWaitTimer = null;
+        if (gen !== scanCatalogGen) return null;
+        scanCatalogPromise = null;
+        var coordinator = null;
+        try { coordinator = API._coord && API._coord._state ? API._coord._state() : null; } catch (eCoord) {}
+        renderScanCatalogMetrics_(Object.assign({}, scanCatalogLastMetrics || {}, {
+          source: scanCatalog ? 'فشل التحديث؛ كاش المتصفح ما زال معروضاً' : 'فشل طلب كتالوج MySQL',
+          count: scanCatalog ? scanCatalog.products.length : null,
+          rpc_ms: scanNow_() - requestStarted,
+          coordinator: coordinator,
+          server: null,
+          error: (e && (e.code || e.message)) || 'تعذر الطلب'
+        }));
+        if (isScanDenial(e)) {
+          scanCatalog = null;
+          scanCatalogState = 'error';
+          scanCatalogError = (e && e.message) || '';
+          removeScanCatalogCache_();
+          renderProductResults('error', scanCatalogError);
+          return null;
+        }
+        if (scanCatalog) {
+          // Keep the bounded same-user copy usable through a transient outage.
+          scanCatalogState = 'ready';
+          applyCatalogQuery();
+          return null;
+        }
+        enterCatalogFallback('transport');
+        return null;
+      });
+    return scanCatalogPromise;
+  }
+  function enterCatalogFallback(reason) {
+    scanCatalog = null;
+    scanCatalogState = 'fallback';
+    scanCatalogFallback = true;
+    scanCatalogError = String(reason || '');
+    // One current-query server request on entry; further typing debounces.
+    var input = document.getElementById('scan-product-search');
+    searchProducts(input ? String(input.value || '') : productSearchText, false);
+  }
+  function retryScanCatalog() { ensureScanCatalog(true); }
+  function applyCatalogQuery() {
+    if (!SCAN_LOCAL_CATALOG_ENABLED || !scanCatalog || ['ready', 'loading'].indexOf(scanCatalogState) < 0) return false;
+    var filterStarted = scanNow_();
+    var input = document.getElementById('scan-product-search');
+    var query = input ? String(input.value || '').trim() : String(productSearchText || '').trim();
+    productSearchText = query;
+    var out = filterScanCatalog(scanCatalog.products, 'name', query, SCAN_CATALOG_MAX_OPTIONS);
+    productSearchOffset = out.matches.length;
+    productSearchHasMore = false;
+    productSearchTotal = out.total;
+    productSearchResults = [];
+    productOptionsById = Object.create(null);
+    applyProductOptions(out.matches.map(function (p) {
+      return { value: p.id, label: p.name_ar || ('#' + p.id), per_unit: p.per_unit, code: p.code };
+    }), false, false);
+    if (IS_SUPER_ADMIN) scanCatalogFilterLastMs = scanNow_() - filterStarted;
+    if (scanCatalogLastMetrics) {
+      scanCatalogLastMetrics.filter_ms = scanCatalogFilterLastMs;
+      scanCatalogLastMetrics.match_count = out.total;
+      scanCatalogLastMetrics.visible_count = out.matches.length;
+      renderScanCatalogMetrics_();
+    }
+    return true;
   }
 
-  function showFatalError(e) {
-    var body = document.getElementById('scan-content');
-    if (body) body.innerHTML = '<div class="empty-state"><span>' + esc((e && e.message) || 'خطأ') + '</span></div>';
+  function searchProducts(query, append) {
+    query = String(query || '').trim();
+    // If catalog loading falls back to SQL, a numeric query means exact ID;
+    // otherwise search by product name. The normal complete-catalog path is local.
+    var mode = isScanExactId(query) ? 'id' : 'name';
+    if (append && (productSearchBusy || mode !== 'name')) return;
+    var seq = ++productSearchSequence;
+    var offset = append ? productSearchOffset : 0;
+    var cachedKey = productQueryKey(mode, query, offset);
+    if (!exactQueryValid(mode, query)) {
+      if (!append) {
+        productSearchText = query; productSearchOffset = 0; productSearchHasMore = false;
+        productSearchResults = []; productOptionsById = Object.create(null);
+        productSearchBusy = false; productLoadingMore = false;
+        renderProductResults('hint', mode === 'id' ? 'اكتب رقم صنف صحيحاً' : 'اكتب الكود كاملاً');
+      }
+      return;
+    }
+    /* A fresh exact-query hit is applied before the loading state clears the
+       current dropdown. Prefix results are never reused for a longer prefix. */
+    var cached = recentQueryGet(cachedKey);
+    if (cached) {
+      if (!append) { productSearchText = query; productSearchOffset = 0; productSearchResults = []; productOptionsById = Object.create(null); }
+      applyProductOptions(cached.product_options || [], cached.has_more, append);
+      productSearchBusy = false;
+      productLoadingMore = false;
+      return;
+    }
+    if (!append) {
+      productSearchText = query;
+      productSearchOffset = 0;
+      productSearchHasMore = false;
+      productSearchTotal = -1;
+      productLoadingMore = false;
+      productOptionsById = Object.create(null);
+      productSearchResults = [];
+      renderProductResults('loading');
+    } else { productLoadingMore = true; renderProductResults('ready'); }
+    var requestData;
+    if (mode === 'id') requestData = { mode: 'id', id: query };
+    else if (mode === 'code') requestData = { mode: 'code', code: query };
+    else requestData = { mode: 'name', search: query, limit: 30, offset: append ? productSearchOffset : 0 };
+    if (productSearchWire >= 2) {
+      productSearchDeferred = { query: query, append: !!append };
+      productSearchBusy = true;
+      return;
+    }
+    productSearchBusy = true;
+    productSearchWire++;
+    companyCall('get_stock_scan_options', requestData)
+      .then(function (r) {
+        if (seq !== productSearchSequence) return;
+        try { recentQueryPut(cachedKey, { product_options: r.product_options || [], has_more: !!r.has_more }); } catch (e) {}
+        applyProductOptions(r.product_options || [], !!r.has_more, append);
+      }).catch(function (e) {
+        if (seq === productSearchSequence) { productLoadingMore = false; productSearchRetryAppend = !!append; renderProductResults('error', e && e.message); }
+      }).then(function () {
+        productSearchWire = Math.max(0, productSearchWire - 1);
+        if (seq === productSearchSequence) productSearchBusy = false;
+        if (productSearchDeferred && productSearchWire < 2) {
+          var next = productSearchDeferred; productSearchDeferred = null;
+          setTimeout(function () { searchProducts(next.query, next.append); }, 0);
+        }
+      });
+  }
+
+  function applyProductOptions(options, hasMore, append) {
+    options.forEach(function (o) {
+      var key = String(o.value);
+      if (!productOptionsById[key]) productSearchResults.push({ value: key, label: o.label, per_unit: o.per_unit, code: o.code });
+      productOptionsById[key] = { value: key, label: o.label, per_unit: o.per_unit, code: o.code };
+    });
+    if (!append) productSearchOffset = options.length;
+    else productSearchOffset = productSearchOffset + options.length;
+    productSearchHasMore = hasMore;
+    productLoadingMore = false;
+    renderProductResults('ready');
+  }
+
+  function scheduleProductSearch(value) {
+    clearTimeout(productSearchTimer);
+    openProductDropdown();
+    // Hide the previous query's results immediately, including a response that
+    // arrives during the debounce window.
+    productSearchSequence++;
+    productSearchBusy = false;
+    var query = String(value || '').trim();
+    if (SCAN_LOCAL_CATALOG_ENABLED && scanCatalogState === 'error') {
+      // Permission/session denial: never try an alternate request.
+      renderProductResults('error', scanCatalogError);
+      return;
+    }
+    if (SCAN_LOCAL_CATALOG_ENABLED && scanCatalog) {
+      // Filter cached/current rows immediately. A stale copy remains visible
+      // while its one background refresh runs; typing never sends an RPC.
+      productSearchText = query;
+      applyCatalogQuery();
+      if (!scanCatalogFresh() && isScanPageVisible()) ensureScanCatalog(false);
+      return;
+    }
+    if (SCAN_LOCAL_CATALOG_ENABLED && scanCatalogState !== 'fallback' && scanCatalogState !== 'error') {
+      // No browser copy yet: share the single bootstrap request.
+      renderProductResults('loading');
+      ensureScanCatalog(false);
+      return;
+    }
+    var fallbackMode = isScanExactId(query) ? 'id' : 'name';
+    var cached = recentQueryGet(productQueryKey(fallbackMode, query, 0));
+    if (cached) {
+      productSearchText = query; productSearchOffset = 0; productSearchResults = []; productOptionsById = Object.create(null);
+      applyProductOptions(cached.product_options || [], cached.has_more, false);
+      return;
+    }
+    renderProductResults('loading');
+    productSearchTimer = setTimeout(function () { productSearchTimer = null; searchProducts(query, false); }, 250);
+  }
+  function retryProductSearch() {
+    if (SCAN_LOCAL_CATALOG_ENABLED && scanCatalogState === 'error') { retryScanCatalog(); return; }
+    searchProducts(productSearchText, productSearchRetryAppend);
+  }
+  function loadMoreProducts() {
+    if (productSearchTotal >= 0) return; // catalog mode caps at 50 with a count
+    if (productSearchHasMore && !productSearchBusy && !isScanExactId(productSearchText)) searchProducts(productSearchText, true);
+  }
+  function chooseScanProduct(pid) {
+    var key = String(pid == null ? '' : pid).trim();
+    var opt = productOptionsById[key];
+    if (opt) {
+      invalidateProductSearch();
+      productSearchText = '';
+      closeProductDropdown();
+      selectProduct(key, opt.label, opt.per_unit, opt.code);
+    }
+  }
+
+  /* ── Warehouses (warehouse_locations) — labels cached separately from balances ── */
+  function loadWarehouses(forceRefresh) {
+    var seq = ++warehousesSequence;
+    if (!forceRefresh && warehousesState === 'ready' && warehouses.length) return;
+    warehousesState = 'loading';
+    warehousesError = '';
+    renderWarehouseState();
+    companyCall('get_stock_scan_warehouses', forceRefresh ? { refresh: true } : {})
+      .then(function (r) {
+        if (seq !== warehousesSequence) return;
+        warehouses = (r.warehouses || []).map(function (w) {
+          return { value: String(w.value), label: String(w.label) };
+        });
+        warehouseById = Object.create(null);
+        warehouses.forEach(function (w) { warehouseById[w.value] = w; });
+        warehousesState = 'ready';
+        if (retainedWarehouseId && !warehouseById[retainedWarehouseId]) {
+          retainedWarehouseId = '';
+          currentWarehouse = null;
+          clearBalance('المخزن السابق لم يعد مصرحاً به');
+        } else if (retainedWarehouseId && currentProduct) {
+          currentWarehouse = { id: retainedWarehouseId, location: warehouseById[retainedWarehouseId].label };
+        }
+        renderWarehouseState();
+        renderScanHistory();
+      }).catch(function (e) {
+        if (seq !== warehousesSequence) return;
+        warehousesState = 'error';
+        warehousesError = (e && e.message) || '';
+        renderWarehouseState();
+      });
+  }
+  function retryWarehouses() { loadWarehouses(true); }
+  function renderWarehouseState() {
+    var host = document.getElementById('scan-warehouse-status');
+    if (host) {
+      if (warehousesState === 'loading') host.innerHTML = '<div class="scan-hint">جارٍ تحميل المخازن...</div>';
+      else if (warehousesState === 'error') host.innerHTML = '<div class="scan-hint" role="status">تعذر تحميل المخازن' +
+        (warehousesError ? ' — ' + esc(warehousesError) : '') +
+        ' <button type="button" class="btn btn-outline" onclick="retryWarehouses()">إعادة المحاولة</button></div>';
+      else host.innerHTML = '';
+    }
+    var sel = document.getElementById('warehouse');
+    if (sel && warehousesState === 'ready') {
+      var current = retainedWarehouseId || '';
+      try { if (sel.value) current = sel.value; } catch (e) {}
+      sel.innerHTML = '<option value="">اختر المخزن...</option>' + warehouses.map(function (w) {
+        return '<option value="' + esc(w.value) + '"' + (String(current) === w.value ? ' selected' : '') + '>' + esc(w.label) + '</option>';
+      }).join('');
+    }
+  }
+  function resolveWarehouseLabel(value) {
+    var key = String(value == null ? '' : value).trim();
+    if (key && warehouseById[key]) return warehouseById[key].label;
+    return String(value == null || value === '' ? '-' : value);
+  }
+
+  /* ── Pair balance state is kept for confirmation and save validation. ── */
+  function clearBalance(reason) {
+    balanceGen++;
+    currentBalance = { state: 'idle', qty: null, productId: null, warehouseId: null, error: reason || '', at: 0 };
+  }
+  /* ── Balances (product_current_qty_warehouses) — one indexed read per product,
+     cached 30s, so warehouse switches resolve locally with zero RPC. The save
+     path still re-reads its pair authoritatively; this cache is interactive. ── */
+  var balancePrefetchGen = 0;
+  function balanceMapFresh(pid) {
+    var hit = productBalances[pid];
+    return (hit && (Date.now() - hit.at < 30000)) ? hit.map : null;
+  }
+  function prefetchProductBalances(productId) {
+    productId = String(productId == null ? '' : productId).trim();
+    if (!productId || balanceMapFresh(productId)) return;
+    var gen = ++balancePrefetchGen;
+    companyCall('get_stock_scan_balances', { product_id: productId })
+      .then(function (r) {
+        if (gen !== balancePrefetchGen) return;
+        if (!r || r.status !== 'ok' || !Array.isArray(r.balances)) return;
+        var m = {};
+        r.balances.forEach(function (b) { m[String(b.warehouse_id)] = Number(b.current_qty); });
+        productBalances[productId] = { at: Date.now(), map: m };
+      }).catch(function () {});
+  }
+  function requestBalance(productId, warehouseId, opts) {
+    productId = String(productId == null ? '' : productId).trim();
+    warehouseId = String(warehouseId == null ? '' : warehouseId).trim();
+    var gen = ++balanceGen;
+    if (!productId || !warehouseId) {
+      currentBalance = { state: 'idle', qty: null, productId: productId, warehouseId: warehouseId, error: '', at: 0 };
+      return;
+    }
+    var refresh = !!(opts && opts.refresh);
+    var cached = !refresh ? balanceMapFresh(productId) : null;
+    if (cached) {
+      var local = Object.prototype.hasOwnProperty.call(cached, warehouseId)
+        ? { state: 'ready', qty: cached[warehouseId] }
+        : { state: 'missing', qty: null };
+      currentBalance = { state: local.state, qty: local.qty, productId: productId, warehouseId: warehouseId, error: '', at: Date.now() };
+      return;
+    }
+    currentBalance = { state: 'loading', qty: null, productId: productId, warehouseId: warehouseId, error: '', at: 0 };
+    companyCall('get_stock_scan_balances', { product_id: productId, refresh: refresh })
+      .then(function (r) {
+        if (gen !== balanceGen) return;
+        if (!currentProduct || String(currentProduct.id) !== productId) return;
+        if (!currentWarehouse || String(currentWarehouse.id) !== warehouseId) return;
+        if (!r || r.status !== 'ok' || !Array.isArray(r.balances)) throw new Error('تعذر قراءة الرصيد');
+        var m = {};
+        r.balances.forEach(function (b) { m[String(b.warehouse_id)] = Number(b.current_qty); });
+        productBalances[productId] = { at: Date.now(), map: m };
+        if (Object.prototype.hasOwnProperty.call(m, warehouseId)) {
+          currentBalance = { state: 'ready', qty: m[warehouseId], productId: productId, warehouseId: warehouseId, error: '', at: Date.now() };
+        } else {
+          currentBalance = { state: 'missing', qty: null, productId: productId, warehouseId: warehouseId, error: '', at: Date.now() };
+        }
+      }).catch(function (e) {
+        if (gen !== balanceGen) return;
+        if (!currentProduct || String(currentProduct.id) !== productId) return;
+        if (!currentWarehouse || String(currentWarehouse.id) !== warehouseId) return;
+        currentBalance = { state: 'error', qty: null, productId: productId, warehouseId: warehouseId, error: (e && e.message) || '', at: 0 };
+      });
+  }
+
+  function scanHistoryDate(v) {
+    if (v == null || v === '') return '';
+    var d = v instanceof Date ? v : new Date(v);
+    if (isNaN(d.getTime())) return String(v);
+    return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+  }
+
+  function scanHistoryPct(v) {
+    if (v == null || v === '') return '-';
+    var n = Number(v);
+    return isNaN(n) ? esc(v) : (n * 100).toFixed(2) + '%';
+  }
+
+  function loadScanHistory(loadAll) {
+    if (arguments.length) scanHistoryLoadedAll = !!loadAll;
+    var seq = ++scanHistorySequence;
+    scanHistoryState = 'loading';
+    scanHistoryError = '';
+    renderScanHistory();
+    backgroundCompanyCall('get_stock_scan_history', scanHistoryLoadedAll ? { loadAll: true } : {})
+      .then(function (r) {
+        if (seq !== scanHistorySequence) return;
+        mergeScanHistory(r.stock || []);
+        scanHistoryState = 'ready';
+        renderScanHistory();
+      }).catch(function (e) {
+        if (seq !== scanHistorySequence) return;
+        scanHistoryError = e && e.message || '';
+        scanHistoryState = 'error';
+        renderScanHistory();
+      });
+  }
+
+  /* Replace only the confirmed server window. Pending/uncertain rows remain in
+     the same live array used by UIC.Live, so an older response cannot erase a
+     submission that was already painted. */
+  function mergeScanHistory(serverRows) {
+    var live = scanHistoryRows, pending = live.filter(function (r) { return r && (r.__pending || r.__status === 'uncertain'); });
+    var localConfirmed = live.filter(function (r) { return r && r.__status === 'confirmed' && !r.__pending; });
+    var byKey = Object.create(null), merged = [];
+    (serverRows || []).forEach(function (r) {
+      var key = scanHistoryKey(r); if (key) r.__scanKey = key;
+      if (key) byKey[key] = r;
+      merged.push(r);
+    });
+    pending.forEach(function (r) {
+      var key = scanHistoryKey(r);
+      if (!key || !byKey[key]) merged.push(r);
+    });
+    localConfirmed.forEach(function (r) {
+      var sheetKey = r._sheetRow == null ? '' : 'row_' + String(r._sheetRow);
+      if (sheetKey && !byKey[sheetKey]) merged.push(r);
+    });
+    live.splice(0, live.length);
+    Array.prototype.push.apply(live, merged);
+  }
+
+  function filterScanHistory() {
+    var requestedFrom = (document.getElementById('scan-history-from') || {}).value || '';
+    scanHistoryFrom = requestedFrom < SCAN_HISTORY_START_DATE ? SCAN_HISTORY_START_DATE : requestedFrom;
+    scanHistoryTo = (document.getElementById('scan-history-to') || {}).value || '';
+    renderScanHistory();
+  }
+
+  function renderScanHistory() {
+    var host = document.getElementById('scan-history');
+    if (!host) return;
+    var title = '<h3 class="scan-history-title">سجلات جرد المخزون من 1 سبتمبر 2026</h3>';
+    var pendingHtml = renderPendingScanRows();
+    if (scanHistoryState === 'loading') {
+      host.innerHTML = title + pendingHtml + '<div class="scan-hint" role="status">جارٍ تحميل سجلات الجرد...</div>';
+      return;
+    }
+    if (scanHistoryState === 'error') {
+      host.innerHTML = title + pendingHtml + '<div class="scan-hint" role="status">تعذر تحميل سجلات الجرد' +
+        (scanHistoryError ? ' — ' + esc(scanHistoryError) : '') +
+        ' <button type="button" class="btn btn-outline" onclick="loadScanHistory()">إعادة المحاولة</button></div>';
+      return;
+    }
+    var list = scanHistoryRows.filter(function (s) {
+      if (s.__pending || s.__status === 'uncertain') return false;
+      if (!scanHistoryFrom && !scanHistoryTo) return true;
+      var date = scanHistoryDate(s.date);
+      return !!date && (!scanHistoryFrom || date >= scanHistoryFrom) && (!scanHistoryTo || date <= scanHistoryTo);
+    });
+    var rows = list.map(function (s) {
+      var d = s.date == null ? null : new Date(s.date);
+      return {
+        product: esc(s.product_name || ('#' + s.product)),
+        name_ar: esc(s.name_ar || '-'),
+        category: esc(s.category || '-'),
+        unit: esc(s.unit || '-'),
+        date: scanHistoryDate(s.date),
+        date_sort: d && !isNaN(d.getTime()) ? d.getFullYear() * 10000 + (d.getMonth() + 1) * 100 + d.getDate() : 0,
+        amount: s.amount,
+        warehouse: esc(resolveWarehouseLabel(s.warehouse)),
+        available_amount: s.available_amount,
+        difference: esc(s.difference || '-'),
+        percentage: scanHistoryPct(s.percentage),
+        actions: s.__pending ? '<span class="badge-pending">جاري الحفظ…</span>' : UIC.actionBtns([{ label: 'عرض', onclick: 'openScanHistoryDetail(\'' + esc(scanHistoryKey(s)) + '\')' }])
+      };
+    });
+    var headers = [
+      { key: 'product', label: 'المنتج' }, { key: 'name_ar', label: 'الاسم' },
+      { key: 'category', label: 'الفئة' }, { key: 'unit', label: 'الوحدة' },
+      { key: 'date', label: 'التاريخ', numeric: true, sortKey: 'date_sort' },
+      { key: 'amount', label: 'الكمية', numeric: true },
+      { key: 'warehouse', label: 'المخزن', numeric: true },
+      { key: 'available_amount', label: 'رصيد السيستم', numeric: true },
+      { key: 'difference', label: 'الفرق' }, { key: 'percentage', label: 'النسبة' },
+      { key: 'actions', label: 'إجراءات' }
+    ];
+    host.innerHTML = title + pendingHtml +
+      UIC.showAllBar({ loadedAll: scanHistoryLoadedAll, total: scanHistoryRows.length,
+        showAll: 'loadScanHistory(true)', showLatest: 'loadScanHistory(false)' }) +
+      '<div class="scan-history-filters">' +
+        '<label for="scan-history-from">من:</label><input id="scan-history-from" type="date" class="input" min="' + SCAN_HISTORY_START_DATE + '" value="' + esc(scanHistoryFrom) + '">' +
+        '<label for="scan-history-to">إلى:</label><input id="scan-history-to" type="date" class="input" value="' + esc(scanHistoryTo) + '">' +
+        '<button type="button" class="btn btn-outline" onclick="filterScanHistory()">فلتر</button>' +
+      '</div>' +
+      UIC.dataTable('scan-history-table', { truncated: !scanHistoryLoadedAll, showAll: 'loadScanHistory(true)',
+        title: 'جرد المخزون', headers: headers, rows: rows, emptyText: 'لا توجد جرد' });
+    UIC.initTableSort('scan-history-table');
+  }
+
+  function openScanHistoryDetail(key) {
+    var s = scanHistoryRows.filter(function (row) { return scanHistoryKey(row) === String(key); })[0];
+    if (!s) return;
+    var details = [
+      ['المنتج', s.product_name || ('#' + s.product)], ['الاسم', s.name_ar || '-'],
+      ['الفئة', s.category || '-'], ['الوحدة', s.unit || '-'],
+      ['التاريخ', scanHistoryDate(s.date)], ['الكمية', s.amount],
+      ['المخزن', resolveWarehouseLabel(s.warehouse)], ['ملاحظات', s.notes || '-'],
+      ['رصيد السيستم', s.available_amount], ['الفرق', s.difference || '-'],
+      ['النسبة', scanHistoryPct(s.percentage)], ['أضيف بواسطة', s.user || '-'],
+      ['وقت الإضافة', scanHistoryDate(s.created_at) || '-']
+    ];
+    UIC.openModal('scan-history-detail-modal', { title: 'تفاصيل الجرد',
+      body: details.map(function (item) {
+        return '<div class="form-field"><label class="form-label">' + esc(item[0]) + '</label>' +
+          '<div style="padding:8px 12px;background:var(--bg-subtle);border-radius:var(--radius-sm);font-size:13px;">' + esc(item[1]) + '</div></div>';
+      }).join(''), footer: false });
   }
 
   /* ── Shell: three steps, one visible at a time ───────────────────────────── */
   function renderShell() {
     var body = document.getElementById('scan-content');
+    if (!body) return;
     body.innerHTML =
       '<div class="scan-wrap">' +
         '<div id="scan-step" class="scan-card"></div>' +
         '<div id="count-step" class="scan-card" style="display:none;"></div>' +
-        '<div id="confirm-step" class="scan-card" style="display:none;"></div>' +
       '</div>';
   }
 
@@ -122,6 +1062,7 @@
       if (el) el.style.display = (s === name) ? '' : 'none';
     });
     if (name === 'scan') {
+      productDropdownOpen = false;
       renderScanStep();
       var input = document.getElementById('scan-input');
       if (input) { input.value = ''; input.focus(); }
@@ -138,23 +1079,33 @@
     var camBlocked = false;
     try { camBlocked = sessionStorage.getItem('tc_scan_cam_blocked') === '1'; } catch (e) {}
     el.innerHTML =
-      '<button type="button" class="btn btn-primary scan-big-btn" id="photo-scan-btn" onclick="pickScanPhoto()">🖼️ مسح من صورة</button>' +
-      (camBlocked ? '' : '<button type="button" class="btn btn-outline scan-alt-btn" onclick="startCamera()">📷 مسح بالكاميرا</button>') +
+      '<div class="scan-entry">' +
+      '<div class="scan-capture-actions" aria-hidden="true">' +
+        '<button type="button" class="btn btn-primary scan-big-btn" id="photo-scan-btn" onclick="pickScanPhoto()">🖼️ مسح من صورة</button>' +
+        (camBlocked ? '' : '<button type="button" class="btn btn-outline scan-alt-btn" onclick="startCamera()">📷 مسح بالكاميرا</button>') +
+      '</div>' +
       '<input type="file" id="scan-file" accept="image/*" capture="environment" style="display:none;">' +
       '<div id="scan-reader" class="scan-reader" style="display:none;"></div>' +
       '<div id="scan-file-reader" style="display:none;"></div>' +
       '<div class="scan-manual">' +
-        '<input id="scan-input" class="input" type="text" placeholder="أو امسح/اكتب كود الصنف ثم Enter" autofocus autocomplete="off">' +
+        '<input id="scan-input" class="input" type="text" placeholder="امسح أو اكتب كود الصنف ثم Enter" autofocus autocomplete="off">' +
       '</div>' +
-      '<div class="scan-pick">' +
-        UIC.combo({
-          key: 'product_pick',
-          label: 'اختيار صنف بالاسم',
-          placeholder: 'ابحث عن الصنف بالاسم...',
-          options: (window.__productOptions || []).map(function (o) { return { value: o.value, label: o.label }; })
-        }) +
+      '<div class="scan-pick" id="scan-product-picker">' +
+        '<label class="form-label" for="scan-product-toggle">اختيار صنف</label>' +
+        '<button id="scan-product-toggle" class="input scan-product-toggle" type="button" aria-haspopup="listbox" aria-expanded="false" onclick="toggleProductDropdown()">' +
+          '<span>' + esc(currentProduct ? currentProduct.id + ' — ' + currentProduct.label : 'اختر صنفاً من المنتجات...') + '</span><span aria-hidden="true">⌄</span></button>' +
+      '<div id="scan-product-menu" class="scan-product-menu" hidden>' +
+          '<input id="scan-product-search" class="input" type="search" role="combobox" aria-autocomplete="list" aria-controls="scan-product-results" aria-expanded="false" value="' + esc(productSearchText) + '" placeholder="ابحث باسم الصنف أو رقمه..." autocomplete="off" oninput="scheduleProductSearch(this.value)" onkeydown="handleProductSearchKey(event)">' +
+          '<div id="scan-product-results" class="scan-product-dropdown" role="listbox" aria-live="polite"><div class="scan-hint">جارٍ تحميل الأصناف...</div></div>' +
+        '</div>' +
       '</div>' +
-      '<div class="scan-hint">كود الصنف مطبوع أسفل الباركود أرقاماً فقط (مثال: 12)، والملصقات القديمة بصيغة TCP-12 تُقرأ أيضاً — قارئ الباركود المحمول أو لوحة المفاتيح يعملان في نفس الحقل.</div>';
+      (IS_SUPER_ADMIN ? '<div id="scan-catalog-metrics" class="scan-catalog-metrics" aria-live="off">' +
+        '<span id="scan-catalog-metrics-text"></span>' +
+        '<button type="button" class="btn btn-outline" title="تجاوز كاش الخادم وقياس قراءة جديدة" onclick="retryScanCatalog()">قياس تحديث MySQL</button>' +
+      '</div>' : '') +
+      '<div class="scan-hint">كود الصنف مطبوع أسفل الباركود أرقاماً فقط (مثال: 12)، والملصقات القديمة بصيغة TCP-12 تُقرأ أيضاً — قارئ الباركود المحمول أو لوحة المفاتيح يعملان في نفس الحقل.</div>' +
+      '</div>' +
+      '<section id="scan-history" class="scan-history" aria-live="polite"></section>';
     var input = document.getElementById('scan-input');
     if (input) {
       input.addEventListener('keydown', function (e) {
@@ -175,26 +1126,39 @@
         if (f) scanFromImage(f);
       });
     }
-    /* comboPick/comboBlur dispatch a change event on the combo's hidden input
-       (UI_Components.html) — the hook that turns a name search into a product
-       selection without touching the component itself. */
-    var pick = document.getElementById('product_pick');
-    if (pick) {
-      pick.addEventListener('change', function () {
-        var pid = Number(this.value);
-        if (!Number.isInteger(pid) || pid <= 0) return;
-        var opt = (window.__productOptions || []).find(function (o) { return Number(o.value) === pid; });
-        if (opt) selectProduct(pid, opt.label, opt.per_unit);
-      });
-    }
+    renderProductResults('ready');
+    renderScanCatalogMetrics_();
+    renderScanHistory();
   }
 
   /* ── Live camera — kept where the browser allows it ────────────────────── */
+  function loadScannerLibrary() {
+    if (typeof Html5Qrcode !== 'undefined' && typeof Html5QrcodeSupportedFormats !== 'undefined') return Promise.resolve();
+    if (scannerLibraryPromise) return scannerLibraryPromise;
+    scannerLibraryPromise = new Promise(function (resolve, reject) {
+      var script = document.createElement('script');
+      var settled = false;
+      var timer = setTimeout(function () { finish(new Error('timeout')); }, 12000);
+      function finish(err) {
+        if (settled) return;
+        settled = true; clearTimeout(timer);
+        if (err) { script.onerror = null; if (script.parentNode) script.parentNode.removeChild(script); reject(err); }
+        else resolve();
+      }
+      script.src = 'https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js';
+      script.async = true;
+      script.onload = function () {
+        if (typeof Html5Qrcode !== 'undefined' && typeof Html5QrcodeSupportedFormats !== 'undefined') finish();
+        else finish(new Error('invalid library'));
+      };
+      script.onerror = function () { finish(new Error('load failed')); };
+      document.head.appendChild(script);
+    }).catch(function (e) { scannerLibraryPromise = null; throw e; });
+    return scannerLibraryPromise;
+  }
+
   function startCamera() {
-    if (cameraActive || typeof Html5Qrcode === 'undefined') {
-      if (typeof Html5Qrcode === 'undefined') UIC.toast('تعذر تحميل مكتبة الكاميرا', 'error');
-      return;
-    }
+    if (cameraActive || cameraStarting) return;
     /* Secure-context / support pre-check: a browser without getUserMedia
        (or an insecure embedding) would only fail after a confusing round
        trip — steer the user to the permission-free photo path instead. */
@@ -206,17 +1170,11 @@
     }
     var readerEl = document.getElementById('scan-reader');
     if (!readerEl) return;
+    cameraStarting = true;
     readerEl.style.display = '';
-    try {
-      qrReader = new Html5Qrcode('scan-reader', {
-        formatsToSupport: [Html5QrcodeSupportedFormats.CODE_128]
-      });
-    } catch (e) {
-      UIC.toast(cameraErrorMessage(e), 'error');
-      readerEl.style.display = 'none';
-      return;
-    }
-    qrReader.start(
+    loadScannerLibrary().then(function () {
+      qrReader = new Html5Qrcode('scan-reader', { formatsToSupport: [Html5QrcodeSupportedFormats.CODE_128] });
+      return qrReader.start(
       { facingMode: 'environment' },
       { fps: 10, qrbox: { width: 260, height: 140 } },
       function onScanSuccess(decodedText) {
@@ -225,7 +1183,14 @@
         handleScannedCode(code);
       },
       function onScanFailure() { /* no code in this frame — expected continuously while aiming */ }
-    ).then(function () { cameraActive = true; }).catch(function (err) {
+      );
+    }).then(function () { cameraActive = true; cameraStarting = false; }).catch(function (err) {
+      cameraStarting = false;
+      if (!qrReader || !(err && err.message === 'timeout')) {
+        // Library load errors are distinct from camera permission errors and
+        // remain retryable from the camera button.
+        if (!qrReader) { UIC.toast('تعذر تحميل مكتبة الكاميرا — حاول مرة أخرى أو استخدم مسح الصورة', 'error'); readerEl.style.display = 'none'; return; }
+      }
       UIC.toast(cameraErrorMessage(err), 'error');
       readerEl.style.display = 'none';
     });
@@ -279,24 +1244,16 @@
 
   function scanFromImage(file) {
     if (!file) return;
-    if (typeof Html5Qrcode === 'undefined') {
-      UIC.toast('تعذر تحميل مكتبة قراءة الباركود', 'error');
-      return;
-    }
     var inst;
-    try {
-      inst = new Html5Qrcode('scan-file-reader', {
-        formatsToSupport: [Html5QrcodeSupportedFormats.CODE_128]
-      });
-    } catch (e) {
-      UIC.toast('تعذر تهيئة قارئ الصور: ' + ((e && e.message) || e), 'error');
-      return;
-    }
-    inst.scanFile(file, false)
+    loadScannerLibrary().then(function () {
+      inst = new Html5Qrcode('scan-file-reader', { formatsToSupport: [Html5QrcodeSupportedFormats.CODE_128] });
+      return inst.scanFile(file, false);
+    })
       .then(function (decodedText) {
         handleScannedCode(decodedText);
       })
-      .catch(function () {
+      .catch(function (err) {
+        if (!inst) { UIC.toast('تعذر تحميل مكتبة قراءة الباركود — حاول اختيار الصورة مرة أخرى', 'error'); return; }
         UIC.toast('لم يتم العثور على باركود واضح في الصورة — أعد التصوير بحيث يظهر الباركود كبيراً ومستقيماً وملامئاً للصورة', 'error');
       })
       .then(function () {
@@ -317,49 +1274,67 @@
   function handleScannedCode(code) {
     var raw = String(code || '').trim();
     var m = raw.match(/^TCP-(\d+)$/i);
-    var pid = m ? Number(m[1]) : Number(raw);
-    if (!Number.isInteger(pid) || pid <= 0) {
+    var digits = m ? m[1] : (/^[1-9]\d{0,19}$/.test(raw) ? raw : '');
+    if (!digits) {
       UIC.toast('كود غير صالح: ' + raw, 'error');
       return;
     }
-    var opt = (window.__productOptions || []).find(function (o) { return Number(o.value) === pid; });
-    if (!opt) {
-      UIC.toast('لم يتم العثور على صنف بهذا الكود', 'error');
+    // A ready catalog resolves barcodes locally with zero RPC.
+    if (SCAN_LOCAL_CATALOG_ENABLED && scanCatalogFresh()) {
+      var entry = scanCatalog.byId[digits];
+      if (entry) {
+        productOptionsById[digits] = { value: digits, label: entry.name_ar || ('#' + digits), per_unit: entry.per_unit, code: entry.code };
+        selectProduct(digits, entry.name_ar || ('#' + digits), entry.per_unit, entry.code);
+      } else {
+        UIC.toast('لم يتم العثور على صنف بهذا الكود', 'error');
+      }
       return;
     }
-    selectProduct(pid, opt.label, opt.per_unit);
-  }
-
-  /* ── System qty (رصيد السيستم) — one shared fetch, reused across scans ──── */
-  var systemQtyPromise = null;
-  function ensureSystemQty(forceRefresh) {
-    if (forceRefresh) systemQtyPromise = null;
-    if (!systemQtyPromise) {
-      systemQtyPromise = companyCall('get_stock_scan_qty').then(function (r) { return r.system_qty || {}; });
-    }
-    return systemQtyPromise;
+    companyCall('get_stock_scan_options', { mode: 'id', id: digits })
+      .then(function (r) {
+        var opt = (r.product_options || [])[0];
+        if (!opt) { UIC.toast('لم يتم العثور على صنف بهذا الكود', 'error'); return; }
+        var key = String(opt.value);
+        productOptionsById[key] = { value: key, label: opt.label, per_unit: opt.per_unit, code: opt.code };
+        selectProduct(key, opt.label, opt.per_unit, opt.code);
+      })
+      .catch(function () { UIC.toast('تعذر التحقق من كود الصنف — حاول مرة أخرى', 'error'); });
   }
 
   /* ── Step 2: count entry ──────────────────────────────────────────────── */
-  /* The system balance is NOT fetched here anymore — the operator counts
-     first and presses تأكيد الكمية; the balance loads on the confirm step
-     (loadConfirmAvailability_) so the count screen never waits on it. */
-  function selectProduct(pid, label, perUnit) {
-    currentProduct = { id: pid, label: label, perUnit: perUnit };
-    currentAvail = null;
+  /* Selecting a product never saves: it only opens the count form. The
+     warehouse balance loads per pair once both selections exist, and the
+     record is saved only from تأكيد الكمية. */
+  function selectProduct(pid, label, perUnit, code) {
+    var idStr = String(pid == null ? '' : pid).trim();
+    if (!/^[1-9]\d{0,19}$/.test(idStr)) return;
+    invalidateProductSearch();
+    currentProduct = { id: idStr, label: String(label == null ? '' : label), perUnit: perUnit, code: code == null ? null : String(code) };
+    currentWarehouse = retainedWarehouseId && warehouseById[retainedWarehouseId]
+      ? { id: retainedWarehouseId, location: warehouseById[retainedWarehouseId].label } : null;
+    clearBalance();
     showStep('count');
     renderCountStep();
-    /* Silent prefetch while the operator is still entering quantities:
-       ensureSystemQty caches ONE shared promise for the whole page, so the
-       fetch started here is awaited again on the confirm step — by the time
-       تأكيد الكمية is pressed the map is usually resolved and رصيد السيستم
-       appears instantly instead of spinning. No UI here: the loading state
-       belongs to the confirm step alone, and a prefetch failure surfaces
-       there too (loadConfirmAvailability re-awaits the same promise). */
-    ensureSystemQty().then(function (map) {
-      if (!currentProduct || currentProduct.id !== pid || currentAvail != null) return;
-      currentAvail = (map && map[pid] !== undefined) ? Number(map[pid]) : null;
-    }).catch(function () { /* prefetch failure is handled on the confirm step */ });
+    if (SCAN_LOCAL_CATALOG_ENABLED && scanCatalogState === 'ready' && !scanCatalogFresh()) {
+      ensureScanCatalog(false); // refresh in the background; the committed ID is stable
+    }
+    if (currentWarehouse) requestBalance(currentProduct.id, currentWarehouse.id, {});
+    else prefetchProductBalances(currentProduct.id);
+  }
+
+  function onWarehouseChange() {
+    var sel = document.getElementById('warehouse');
+    var val = sel ? String(sel.value || '').trim() : '';
+    if (!val) {
+      currentWarehouse = null;
+      retainedWarehouseId = '';
+      clearBalance();
+      return;
+    }
+    if (!warehouseById[val]) { currentWarehouse = null; retainedWarehouseId = ''; clearBalance('المخزن غير متاح'); return; }
+    retainedWarehouseId = val;
+    currentWarehouse = { id: val, location: resolveWarehouseLabel(val) };
+    if (currentProduct) requestBalance(currentProduct.id, val, {});
   }
 
   function renderCountStep() {
@@ -375,12 +1350,22 @@
         '<div class="name">' + esc(currentProduct.label) + '</div>' +
       '</div>' +
       '<form id="scan-form">' +
+        UIC.field({ key: 'warehouse', label: 'المخزن', type: 'select', required: true, options: warehouses, placeholder: 'اختر المخزن...' }) +
+        '<div id="scan-warehouse-status"></div>' +
         UIC.field({ key: 'container_type', label: 'نوع العبوات او الشكل الخارجي', type: 'select', required: true, options: CONTAINER_TYPES, placeholder: 'اختر نوع العبوة...' }) +
         UIC.field({ key: 'amount_per_unit', label: 'الكمية بالعبوة الواحدة او الشكل', type: 'number', step: '0.01', required: true, placeholder: 'مثال: 25', value: perUnitVal }) +
-        UIC.field({ key: 'unit_count', label: 'عدد العبوات او الشكل', type: 'number', step: '1', required: true, placeholder: 'مثال: 40' }) +
-        UIC.field({ key: 'loose_amount', label: 'الكمية الفرط', type: 'number', step: '0.01', value: '0', required: true }) +
-        UIC.field({ key: 'warehouse', label: 'المخزن', type: 'select', required: true, options: WAREHOUSES, placeholder: 'اختر المخزن...' }) +
-        UIC.field({ key: 'date', label: 'التاريخ', type: 'date', value: todayStr(), required: true }) +
+        '<div class="scan-calc-field">' +
+          UIC.field({ key: 'unit_count', label: 'عدد العبوات او الشكل', type: 'number', step: '1', required: true, placeholder: 'مثال: 40' }) +
+          '<button type="button" class="btn btn-outline scan-calc-trigger" aria-label="فتح حاسبة عدد العبوات او الشكل" title="الحاسبة" onclick="openScanCalculator(\'unit_count\')">⌗</button>' +
+        '</div>' +
+        '<div class="scan-calc-field">' +
+          UIC.field({ key: 'loose_amount', label: 'الكمية الفرط', type: 'number', step: '0.01', value: '0', required: true }) +
+          '<button type="button" class="btn btn-outline scan-calc-trigger" aria-label="فتح حاسبة الكمية الفرط" title="الحاسبة" onclick="openScanCalculator(\'loose_amount\')">⌗</button>' +
+        '</div>' +
+        '<div class="form-field" data-field="date">' +
+          '<label class="form-label" for="date">التاريخ</label>' +
+          '<input id="date" name="date" class="input scan-datetime" type="datetime-local" value="' + nowLocalDateTime() + '" readonly aria-readonly="true">' +
+        '</div>' +
       '</form>' +
       '<div class="scan-total-row"><span>الكمية الإجمالية</span><span id="total-preview" class="val">0</span></div>' +
       '<div class="scan-actions">' +
@@ -391,7 +1376,11 @@
       var input = document.getElementById(key);
       if (input) input.addEventListener('input', updateTotalPreview);
     });
+    var warehouseSel = document.getElementById('warehouse');
+    if (warehouseSel) warehouseSel.addEventListener('change', onWarehouseChange);
+    renderWarehouseState();
     updateTotalPreview();
+    if (warehouseSel) setTimeout(function () { try { warehouseSel.focus(); } catch (e) {} }, 0);
   }
 
   function computeTotal() {
@@ -406,13 +1395,31 @@
     if (t) t.textContent = computeTotal();
   }
 
+  function openScanCalculator(targetId) {
+    var target = document.getElementById(targetId);
+    if (!target || (targetId !== 'unit_count' && targetId !== 'loose_amount')) return;
+    UIC.Calculator.open({
+      target: target,
+      title: 'الحاسبة — ' + (targetId === 'unit_count' ? 'عدد العبوات' : 'الكمية الفرط'),
+      precision: targetId === 'unit_count' ? 0 : 2,
+      integerOnly: targetId === 'unit_count',
+      min: 0,
+      onApply: function () { updateTotalPreview(); }
+    });
+  }
+
   function cancelCount() {
     currentProduct = null;
-    currentAvail = null;
+    currentWarehouse = null;
+    clearBalance();
+    pendingEntry = null;
+    invalidateProductSearch();
     showStep('scan');
   }
 
-  /* ── Step 3: confirm, then save in the background ────────────────────── */
+  /* ── Optimistic single-record save ───────────────────────────────────────
+     The submitted object is captured once. Nothing below reads the mutable
+     count form, currentProduct or currentWarehouse after dispatch. */
   function diffText(amount, avail) {
     if (avail === '' || avail == null || isNaN(avail)) return '';
     var d = round2(Number(avail) - Number(amount));
@@ -422,10 +1429,24 @@
 
   function goToConfirm() {
     if (!UIC.validateForm('scan-form')) return;
+    if (!currentProduct) { UIC.toast('اختر الصنف أولاً', 'error'); return; }
+    if (!currentWarehouse) { UIC.toast('اختر المخزن أولاً', 'error'); return; }
     var data = UIC.collectForm('scan-form');
+    if (String(data.warehouse || '').trim() !== String(currentWarehouse.id)) {
+      onWarehouseChange();
+      UIC.toast('تغير المخزن — جارٍ تحميل رصيده قبل التأكيد', 'error');
+      return;
+    }
     var total = computeTotal();
     if (!(total > 0)) {
       UIC.toast('الكمية الإجمالية يجب أن تكون أكبر من صفر', 'error');
+      return;
+    }
+    if (!currentBalance || currentBalance.state !== 'ready' ||
+        String(currentBalance.productId) !== String(currentProduct.id) ||
+        String(currentBalance.warehouseId) !== String(currentWarehouse.id)) {
+      UIC.toast('رصيد هذا الصنف والمخزن غير متاح — انتظر تحميله أو أعد المحاولة', 'error');
+      requestBalance(currentProduct.id, currentWarehouse.id, { refresh: true });
       return;
     }
     var loose = Number(data.loose_amount) || 0;
@@ -436,162 +1457,124 @@
       ' | عدد العبوات: ' + data.unit_count +
       ' | الكمية الفرط: ' + loose +
       ' | الإجمالي: ' + total;
-    pendingEntry = {
-      product: currentProduct.id,
-      warehouse: data.warehouse,
+    var requestId = makeScanRequestId();
+    var entry = {
+      product: String(currentProduct.id),
+      warehouse_id: String(currentWarehouse.id),
+      warehouse_location: currentWarehouse.location,
       date: data.date,
       amount: total,
-      available_amount: null, // filled by loadConfirmAvailability once the system balance arrives
-      notes: notes
+      available_amount: currentBalance.qty,
+      balanceAt: currentBalance.at,
+      notes: notes,
+      unit_count: String(data.unit_count || ''),
+      amount_per_unit: String(data.amount_per_unit || ''),
+      loose_amount: String(data.loose_amount || ''),
+      container_type: String(data.container_type || ''),
+      __request_id: requestId,
+      __scanKey: 'scan_' + requestId,
+      product_name: currentProduct.label,
+      name_ar: currentProduct.label,
+      warehouse: String(currentWarehouse.id),
+      __draftProductLabel: currentProduct.label,
+      __draftWarehouseLabel: currentWarehouse.location
     };
-    showStep('confirm');
-    renderConfirmStep();
-    loadConfirmAvailability();
+    pendingEntry = entry;
+    confirmSave(entry);
+    pendingEntry = null;
+    currentProduct = null;
+    currentWarehouse = null;
+    clearBalance();
+    showStep('scan');
   }
 
-  /* ── System balance on the confirm step: loads AFTER تأكيد الكمية, and the
-     record is saved automatically once it lands. There is no second save
-     button — تأكيد الكمية is the one commit action, so the same count cannot
-     be filed twice. ── */
-  function loadConfirmAvailability(forceRefresh) {
-    if (saveInFlight) return;
-    renderAvailRow('loading');
-    var pid = currentProduct && currentProduct.id;
-    ensureSystemQty(forceRefresh).then(function (map) {
-      if (!currentProduct || currentProduct.id !== pid || !pendingEntry) return; // reset happened meanwhile
-      currentAvail = (map && map[pid] !== undefined) ? Number(map[pid]) : null;
-      applyAvail();
-    }).catch(function () {
-      if (!currentProduct || currentProduct.id !== pid || !pendingEntry) return;
-      currentAvail = null;
-      applyAvail(true);
+  var submittedScanKeys = Object.create(null);
+  function makeScanRequestId() {
+    return ('scan' + Date.now().toString(36) + Math.random().toString(36).slice(2, 14)).replace(/[^A-Za-z0-9_-]/g, '').slice(0, 48);
+  }
+  function scanHistoryKey(row) {
+    if (row && row.__scanKey) return String(row.__scanKey);
+    if (row && row._sheetRow != null && row._sheetRow !== '') return 'row_' + String(row._sheetRow);
+    return '';
+  }
+  function cloneScan(value) { return JSON.parse(JSON.stringify(value || {})); }
+  function pendingScanRows() { return scanHistoryRows.filter(function (r) { return r && (r.__pending || r.__status === 'uncertain'); }); }
+  function renderPendingScanRows() {
+    var rows = pendingScanRows();
+    if (!rows.length && !scanRejectedDrafts.length) return '';
+    var html = '<div class="scan-pending-area" aria-live="polite"><h4>عمليات الحفظ الحالية</h4>';
+    rows.forEach(function (r) {
+      var uncertain = r.__status === 'uncertain';
+      html += '<div class="scan-pending-row"><div><b>' + esc(r.product_name || ('#' + r.product)) + '</b> — ' + esc(r.__draftWarehouseLabel || resolveWarehouseLabel(r.warehouse)) +
+        '<div class="scan-pending-detail">العبوات: ' + esc(r.unit_count) + ' · الفرط: ' + esc(r.loose_amount) + ' · الإجمالي: ' + esc(r.amount) + '</div></div>' +
+        '<span class="badge-pending">' + (uncertain ? 'بانتظار التحقق' : 'جاري الحفظ…') + '</span></div>';
     });
+    scanRejectedDrafts.forEach(function (r) {
+      html += '<div class="scan-pending-row scan-rejected-row"><div><b>' + esc(r.draft.product_name) + '</b> — تعذر تسجيل الجرد</div>' +
+        '<button type="button" class="btn btn-outline" onclick="reopenScanDraft(\'' + esc(r.draft.__scanKey) + '\')">مراجعة وإعادة الإدخال</button></div>';
+    });
+    return html + '</div>';
+  }
+  function confirmSave(entry) {
+    if (!CAN_WRITE) { UIC.toast('غير مصرح بالحفظ', 'error'); return; }
+    if (!entry || !entry.__scanKey || submittedScanKeys[entry.__scanKey]) return;
+    submittedScanKeys[entry.__scanKey] = true;
+    var payload = {
+      product: entry.product, warehouse_id: entry.warehouse_id, warehouse_location: entry.warehouse_location,
+      date: entry.date, amount: entry.amount, available_amount: entry.available_amount, notes: entry.notes,
+      __request_id: entry.__request_id
+    };
+    var draft = cloneScan(entry);
+    draft.__pending = true; draft.__status = 'pending'; draft.__scanKey = entry.__scanKey;
+    UIC.Live.save({
+      call: companyCall, action: 'add_stock_scan', data: payload,
+      list: scanHistoryRows, key: '__scanKey', draft: draft, render: renderScanHistory,
+      uid: '__request_id', queueable: true, message: 'تم تسجيل الجرد',
+      recordOf: function (resp) {
+        var rec = cloneScan(resp && resp.record ? resp.record : {});
+        rec.__scanKey = entry.__scanKey; rec.__pending = false; rec.__status = 'confirmed';
+        rec.product_name = rec.product_name || entry.product_name;
+        rec.warehouse_location = rec.warehouse_location || entry.warehouse_location;
+        rec.__draftProductLabel = entry.product_name; rec.__draftWarehouseLabel = entry.warehouse_location;
+        return rec;
+      },
+      onSuccess: function () { renderScanHistory(); },
+      onError: function (err) {
+        var row = scanHistoryRows.filter(function (r) { return r.__scanKey === entry.__scanKey; })[0];
+        if (err && (err.transport || err.uncertain)) {
+          if (row) { row.__pending = true; row.__status = 'uncertain'; row.__error = err.message || ''; }
+        } else {
+          scanRejectedDrafts.unshift({ draft: draft, payload: payload, message: err && err.message || 'تعذر الحفظ' });
+          if (scanRejectedDrafts.length > 5) scanRejectedDrafts.length = 5;
+        }
+        renderScanHistory();
+      }
+    }).catch(function () {});
+  }
+  function reopenScanDraft(key) {
+    var at = -1, item;
+    scanRejectedDrafts.forEach(function (r, i) { if (r.draft.__scanKey === key) { at = i; item = r; } });
+    if (at < 0 || !item) return;
+    scanRejectedDrafts.splice(at, 1);
+    var d = item.draft;
+    currentProduct = { id: String(d.product), label: String(d.product_name || d.name_ar || ('#' + d.product)), perUnit: d.amount_per_unit, code: null };
+    retainedWarehouseId = String(d.warehouse_id || d.warehouse || '');
+    currentWarehouse = warehouseById[retainedWarehouseId] ? { id: retainedWarehouseId, location: warehouseById[retainedWarehouseId].label } : null;
+    showStep('count'); renderCountStep();
+    ['container_type','amount_per_unit','unit_count','loose_amount'].forEach(function (field) { var e = document.getElementById(field); if (e) e.value = d[field] == null ? '' : d[field]; });
+    var sel = document.getElementById('warehouse'); if (sel) { sel.value = retainedWarehouseId; onWarehouseChange(); }
+    updateTotalPreview();
   }
 
-  function retryConfirmAvailability() { loadConfirmAvailability(true); }
-
-  function applyAvail(failed) {
-    if (currentAvail == null || isNaN(currentAvail)) {
-      // add_stock_scan (addStockRevision_) requires a numeric available_amount,
-      // so nothing is saved until a balance is on screen.
-      pendingEntry.available_amount = null;
-      renderAvailRow(failed ? 'failed' : 'missing');
-      return;
-    }
-    pendingEntry.available_amount = currentAvail;
-    renderAvailRow('loaded');
-    confirmSave();
-  }
-
-  function renderAvailRow(kind) {
-    var availEl = document.getElementById('confirm-avail-val');
-    var diffEl = document.getElementById('confirm-diff-val');
-    if (!availEl) return;
-    if (kind === 'loading') {
-      availEl.innerHTML = 'جارٍ تحميل رصيد السيستم...';
-      if (diffEl) diffEl.textContent = '—';
-      return;
-    }
-    if (currentAvail == null || isNaN(currentAvail)) {
-      availEl.innerHTML = (kind === 'failed' ? 'تعذر جلب رصيد السيستم لهذا الصنف. ' : 'لا يوجد رصيد سيستم مسجل لهذا الصنف. ') +
-        '<button type="button" class="btn btn-outline" style="margin-inline-start:8px;" onclick="retryConfirmAvailability()">إعادة المحاولة</button>';
-      if (diffEl) diffEl.textContent = '—';
-      return;
-    }
-    availEl.textContent = currentAvail;
-    if (diffEl && pendingEntry) diffEl.textContent = diffText(pendingEntry.amount, currentAvail);
-  }
-
-  function renderConfirmStep() {
-    var el = document.getElementById('confirm-step');
-    if (!el) return;
-    var entry = pendingEntry;
-    el.innerHTML =
-      '<div class="scan-product-header"><div class="name">' + esc(currentProduct.label) + '</div></div>' +
-      '<div class="confirm-row"><span class="label">الكمية المدخلة</span><span class="val">' + esc(entry.amount) + '</span></div>' +
-      '<div class="confirm-row"><span class="label">رصيد السيستم</span><span class="val" id="confirm-avail-val">جارٍ تحميل رصيد السيستم...</span></div>' +
-      '<div class="confirm-row"><span class="label">الفرق</span><span class="val" id="confirm-diff-val">—</span></div>' +
-      '<div class="confirm-row"><span class="label">المخزن</span><span class="val">' + esc(entry.warehouse) + '</span></div>' +
-      '<div class="confirm-row"><span class="label">التفاصيل</span><span class="val">' + esc(entry.notes) + '</span></div>' +
-      '<div class="scan-actions">' +
-        '<button type="button" class="btn btn-outline" id="confirm-back-btn" onclick="backToCount()">رجوع للتعديل</button>' +
-      '</div>' +
-      '<div id="save-status" class="save-status saving">سيتم تسجيل الجرد تلقائياً بعد تحميل رصيد السيستم...</div>';
-    if (!CAN_WRITE) UIC.toast('غير مصرح بالحفظ', 'error');
-  }
-
-  /* count-step's markup is still in the DOM from when it was first entered
-     (showStep only re-renders the scan step); this just re-shows it. */
-  function backToCount() { showStep('count'); }
-
-  function setSaveStatus(kind, msg) {
-    var el = document.getElementById('save-status');
-    var backBtn = document.getElementById('confirm-back-btn');
-    if (!el) return;
-    if (kind === 'saving') {
-      el.className = 'save-status saving';
-      el.innerHTML = 'جارٍ تسجيل الجرد...';
-      if (backBtn) backBtn.disabled = true;
-    } else if (kind === 'error') {
-      el.className = 'save-status error';
-      el.innerHTML = '⚠ فشل الحفظ' + (msg ? (' — ' + esc(msg)) : '') +
-        '<div class="scan-actions" style="margin-top:8px;">' +
-          '<button type="button" class="btn btn-outline" onclick="cancelCount()">تجاهل والمسح التالي</button>' +
-          '<button type="button" class="btn btn-primary" onclick="confirmSave()">إعادة المحاولة</button>' +
-        '</div>';
-      if (backBtn) backBtn.disabled = false;
-    }
-  }
-
-  /* The one commit action for the count. Called by applyAvail the moment
-     رصيد السيستم is on screen, and by the error state's إعادة المحاولة. */
-  function confirmSave() {
-    if (!CAN_WRITE || !pendingEntry) { UIC.toast('غير مصرح', 'error'); return; }
-    if (saveInFlight) return;
-    if (pendingEntry.available_amount == null || isNaN(pendingEntry.available_amount)) {
-      UIC.toast('لا يمكن الحفظ بدون رصيد السيستم — أعد المحاولة أعلاه', 'error');
-      return;
-    }
-    saveInFlight = true;
-    setSaveStatus('saving');
-    companyCall('add_stock_scan', pendingEntry)
-      .then(function () {
-        saveInFlight = false;
-        renderSavedStep();
-      })
-      .catch(function (e) {
-        saveInFlight = false;
-        setSaveStatus('error', e && e.message);
-      });
-  }
-
-  /* The next page after تأكيد الكمية: the record is already filed, so this is
-     a result view showing the current stock — no save control remains. */
-  function renderSavedStep() {
-    var el = document.getElementById('confirm-step');
-    if (!el || !pendingEntry || !currentProduct) return;
-    var entry = pendingEntry;
-    var avail = (currentAvail == null || isNaN(currentAvail)) ? '—' : currentAvail;
-    var diff = diffText(entry.amount, currentAvail) || '—';
-    el.innerHTML =
-      '<div class="scan-product-header"><div class="name">' + esc(currentProduct.label) + '</div></div>' +
-      '<div class="save-status success" style="margin-bottom:12px;">✓ تم تسجيل الجرد</div>' +
-      '<div class="confirm-row"><span class="label">الكمية المسجلة</span><span class="val">' + esc(entry.amount) + '</span></div>' +
-      '<div class="confirm-row"><span class="label">رصيد السيستم</span><span class="val">' + esc(avail) + '</span></div>' +
-      '<div class="confirm-row"><span class="label">الفرق</span><span class="val">' + esc(diff) + '</span></div>' +
-      '<div class="confirm-row"><span class="label">المخزن</span><span class="val">' + esc(entry.warehouse) + '</span></div>' +
-      '<div class="confirm-row"><span class="label">التفاصيل</span><span class="val">' + esc(entry.notes) + '</span></div>' +
-      '<div class="scan-actions">' +
-        '<button type="button" class="btn btn-primary scan-big-btn" style="padding:12px;" onclick="cancelCount()">مسح صنف آخر</button>' +
-      '</div>';
-  }
-
-  /* Another device's balance change arrives quietly (system qty only — the
-     scan flow itself has no list to redraw). */
+  /* Another device's balance change arrives quietly: warehouses reload and the
+     visible pair balance revalidates (the scan flow itself has no list to redraw). */
   UIC.Live.watchPage({
     call: companyCall,
     page: 'tc_stock_scan',
-    onChange: function () { UIC.Live.arrive(function () { ensureSystemQty(true); }); }
+    onChange: function () { UIC.Live.arrive(function () {
+      loadWarehouses(true);
+      if (currentProduct && currentWarehouse) requestBalance(currentProduct.id, currentWarehouse.id, { refresh: true });
+    }); }
   });
 
   load();

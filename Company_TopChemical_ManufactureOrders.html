@@ -281,8 +281,11 @@
     columns:    [],   /* manufacture_headers columns, as returned from server */
     rows:       [],
     total:      0,
-    loadedAll:  false
+    loadedAll:  false,
+    loadingMore: false,
+    loadMoreError: ''
   };
+  var MO_FIRST_LIMIT = 20, MO_MORE_LIMIT = 200, MO_REQUEST_SEQ = 0, MO_MORE_SEQ = 0;
   /* dropdown refs — used only to resolve product names to Arabic labels */
   var REFS = { products: [], products_full: [], warehouses: [], statuses: [] };
 
@@ -409,26 +412,85 @@
 
   /* ══════════════════ DATA — headers ══════════════════ */
   function fetchHeaders(loadAll) {
-    if (loadAll !== undefined) H.loadedAll = !!loadAll;
-    /* RT1: reads draw skeletons, never the blocking overlay */
-    UIC.readSkeleton('mo-content', {
-      message: H.loadedAll ? 'جاري تحميل كامل البيانات...' : 'جاري تحميل آخر 20 سجل...'
+    if (loadAll === true) return loadMoreHeaders();
+    if (loadAll === false) {
+      MO_REQUEST_SEQ++;
+      H.loadingMore = false; MO_MORE_SEQ = 0; H.loadMoreError = '';
+      H.rows = []; H.columns = []; H.total = 0; H.loadedAll = false;
+    } else if (H.loadingMore) return Promise.resolve();
+    var requested = Math.max(H.rows.length, MO_FIRST_LIMIT);
+    var hasRows = H.rows.length > 0;
+    var requestSeq = ++MO_REQUEST_SEQ;
+    if (!hasRows) UIC.readSkeleton('mo-content', { message: 'جاري تحميل أوامر التصنيع...' });
+    else updateHeaderLoadControl('جاري تحديث البيانات...');
+    return requestHeaderWindow(requested).then(function (res) {
+      if (requestSeq !== MO_REQUEST_SEQ) return;
+      H.columns = res.columns || [];
+      H.rows = res.rows || [];
+      H.total = Number(res.total) || 0;
+      H.loadedAll = H.rows.length >= H.total;
+      renderPage();
+    }).catch(function (e) {
+      if (requestSeq !== MO_REQUEST_SEQ) return;
+      if (hasRows) updateHeaderLoadControl('تعذر تحديث البيانات. يمكنك إعادة المحاولة.');
+      else showHeaderLoadError(e);
+    }).finally(function () {
+      UI.hideSpinner();
+      try { schedulePrefetch(); } catch (e) {}
     });
-    companyCall('get_manufacture_headers', { loadAll: H.loadedAll })
-      .then(function (res) {
-        H.columns = res.columns || [];
-        H.rows    = res.rows    || [];
-        H.total   = res.total   || 0;
-        renderPage();
-      })
-      .catch(showError)
-      .finally(function () {
-        UI.hideSpinner();
-        try { schedulePrefetch(); } catch (e) {}
-      });
   }
 
-  function toggleLoadAll() { fetchHeaders(!H.loadedAll); }
+  function requestHeaderWindow(count) {
+    var rows = [], columns = [], total = 0, offset = 0;
+    var target = Math.max(Number(count) || MO_FIRST_LIMIT, MO_FIRST_LIMIT);
+    function next() {
+      if (offset >= target || (total && offset >= total)) return Promise.resolve({ columns: columns, rows: rows, total: total });
+      var limit = Math.min(MO_MORE_LIMIT, target - offset);
+      return companyCall('get_manufacture_headers', { limit: limit, offset: offset }).then(function (res) {
+        res = res || {};
+        if (!columns.length) columns = res.columns || [];
+        total = Number(res.total) || 0;
+        var batch = res.rows || [];
+        rows = rows.concat(batch); offset += batch.length;
+        if (!batch.length) return { columns: columns, rows: rows, total: total };
+        return next();
+      });
+    }
+    return next();
+  }
+
+  function loadMoreHeaders() {
+    if (H.loadingMore || H.loadedAll) return;
+    if (!H.rows.length) return fetchHeaders(false);
+    var offset = H.rows.length;
+    var requestSeq = ++MO_REQUEST_SEQ;
+    H.loadingMore = true; MO_MORE_SEQ = requestSeq; H.loadMoreError = '';
+    updateHeaderLoadControl('جاري تحميل المزيد...');
+    return companyCall('get_manufacture_headers', { limit: MO_MORE_LIMIT, offset: offset })
+      .then(function (res) {
+        if (requestSeq !== MO_REQUEST_SEQ) return;
+        res = res || {};
+        if (res.columns && res.columns.length) H.columns = res.columns;
+        var incoming = res.rows || [], seen = {}, added = [];
+        H.rows.forEach(function (r) { seen[String(r[H_PK])] = true; });
+        incoming.forEach(function (r) {
+          if (!seen[String(r[H_PK])]) { H.rows.push(r); added.push(r); seen[String(r[H_PK])] = true; }
+        });
+        H.total = Number(res.total) || H.total;
+        H.loadedAll = H.rows.length >= H.total || added.length === 0;
+        appendHeadersToTable(added);
+        updateHeaderLoadControl();
+      })
+      .catch(function () {
+        if (requestSeq === MO_REQUEST_SEQ) H.loadMoreError = 'تعذر تحميل المزيد. أعد المحاولة.';
+      })
+      .finally(function () {
+        if (requestSeq === MO_REQUEST_SEQ && MO_MORE_SEQ === requestSeq) {
+          H.loadingMore = false;
+          updateHeaderLoadControl();
+        }
+      });
+  }
 
   /* ══════════════════ DATA — dropdown refs ══════════════════
      Empty lists are NOT an error: selects degrade to free-text inputs. */
@@ -801,61 +863,99 @@
           '</div>' +
           '<div class="mo-badges">' +
             '<div class="mo-badge">الإجمالي: <b>' + FMT.number(H.total) + '</b></div>' +
-            '<div class="mo-badge">المُحمَّل: <b>' + FMT.number(H.rows.length) + '</b></div>' +
-            '<div class="mo-badge">الوضع: <b>' + (H.loadedAll ? 'عرض الكل' : 'آخر 20 سجل') + '</b></div>' +
+            '<div class="mo-badge">المُحمَّل: <b id="mo-loaded-count">' + FMT.number(H.rows.length) + '</b></div>' +
+            '<div class="mo-badge">الوضع: <b id="mo-load-mode">' + (H.loadedAll ? 'كل السجلات محمّلة' : 'تحميل تدريجي') + '</b></div>' +
           '</div>' +
         '</div>' +
         '<div class="mo-toolbar">' +
           '<div style="display:flex;gap:8px;flex-wrap:wrap;">' +
-            '<button class="btn btn-outline" onclick="fetchHeaders(H.loadedAll)">🔄 تحديث</button>' +
-            '<button class="btn ' + (H.loadedAll ? 'btn-secondary' : 'btn-primary') + '" onclick="toggleLoadAll()">' +
-              (H.loadedAll
-                ? '📄 عرض آخر 20 سجل فقط'
-                : '📊 عرض الكل (' + FMT.number(H.total) + ' سجل)') +
-            '</button>' +
+            '<button class="btn btn-outline" onclick="fetchHeaders()">🔄 تحديث</button>' +
+            '<div id="mo-load-more-control" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;"></div>' +
           '</div>' +
         '</div>' +
       '</div>' +
       '<div id="mo-table-host"></div>' +
       '</div>';
 
+    updateHeaderLoadControl();
     renderMoTable();
+  }
+
+  function updateHeaderLoadControl(message) {
+    var host = document.getElementById('mo-load-more-control');
+    var count = document.getElementById('mo-loaded-count');
+    var mode = document.getElementById('mo-load-mode');
+    if (count) count.textContent = FMT.number(H.rows.length);
+    if (mode) mode.textContent = H.loadedAll ? 'كل السجلات محمّلة' : 'تحميل تدريجي';
+    if (!host) return;
+    var status = message || H.loadMoreError || ('تم تحميل ' + H.rows.length + ' من ' + H.total + ' سجل');
+    host.innerHTML = '<span style="font-size:12px;color:var(--text-muted);">' + FMT.escape(status) +
+      ' — البحث يشمل السجلات المحملة فقط</span>' +
+      (!H.loadedAll ? '<button type="button" class="btn ' + (H.loadMoreError ? 'btn-outline' : 'btn-primary') + '" onclick="loadMoreHeaders()" ' +
+        (H.loadingMore ? 'disabled' : '') + '>' + (H.loadMoreError ? 'إعادة المحاولة' : 'تحميل المزيد') + '</button>' :
+        '<span class="mo-badge">تم تحميل كل السجلات</span>') +
+      (H.rows.length > MO_FIRST_LIMIT ? '<button type="button" class="btn btn-outline" onclick="showLatestHeaders()">عرض آخر 20 سجل</button>' : '');
+  }
+
+  function showLatestHeaders() { fetchHeaders(false); }
+
+  function showHeaderLoadError(err) {
+    var content = document.getElementById('mo-content');
+    var msg = (err && (err.message || err.error)) || 'تعذر تحميل أوامر التصنيع';
+    if (content) content.innerHTML = '<div class="empty-state"><span>' + FMT.escape(msg) +
+      '</span><button type="button" class="btn btn-outline" onclick="fetchHeaders(false)">إعادة المحاولة</button></div>';
+    UIC.toast(msg, 'error');
+  }
+
+  function mapHeaderRow(r) {
+    var pkVal = r[H_PK] !== undefined && r[H_PK] !== null ? String(r[H_PK]) : '';
+    var pname = productNameFor(r);
+    var rev = String(r.is_revised) === '1';
+    return {
+      id: (r.id !== null && r.id !== undefined) ? r.id : '',
+      name_ar: r.name_ar || '',
+      expected_quantity: (r.expected_quantity !== null && r.expected_quantity !== undefined) ? r.expected_quantity : '',
+      deliver_quantity: (r.deliver_quantity !== null && r.deliver_quantity !== undefined) ? r.deliver_quantity : '',
+      product: pname ? '<b>' + FMT.escape(pname) + '</b>' : '<span style="color:var(--text-muted);font-size:11px">—</span>',
+      status: (r.status !== null && r.status !== undefined && String(r.status) !== '') ? FMT.escape(String(r.status)) : '—',
+      manufacture_number: r.manufacture_number || '',
+      manufacture_delivery_number: r.manufacture_delivery_number || '',
+      is_revised: rev ? '✓ مراجع' : '⏳ غير مراجع',
+      actions: UIC.actionBtns(
+        [{ label: 'عرض البنود', onclick: "openFootersModal('" + FMT.escape(pkVal) + "')" }]
+        .concat(CAN_WRITE ? [
+          { label: 'تعديل', onclick: "openHeaderEdit('" + FMT.escape(pkVal) + "')" },
+          { label: 'حذف', color: '#d32f2f', onclick: "askDeleteHeader('" + FMT.escape(pkVal) + "')" }
+        ] : [])
+      )
+    };
+  }
+
+  function appendHeadersToTable(rows) {
+    if (!rows || !rows.length) return;
+    var st = window.__dtStore && window.__dtStore['mo-table'];
+    if (!st) { renderMoTable(); return; }
+    rows.forEach(function (r) { st.originalRows.push(mapHeaderRow(r)); });
+    st.rows = st.originalRows;
+    var page = st.page || 1;
+    UIC.filterPaged('mo-table', st.searchTerm || '');
+    st = window.__dtStore && window.__dtStore['mo-table'];
+    if (st && page > 1) {
+      st.page = Math.min(page, Math.max(1, Math.ceil(st.filtered.length / (st.pageSize || 50))));
+      UIC._dtRenderBody('mo-table');
+      UIC._dtRefreshPager('mo-table');
+    }
   }
 
   function renderMoTable() {
     var host = document.getElementById('mo-table-host');
     if (!host) return;
-
-    var rows = H.rows.map(function (r) {
-      var pkVal = r[H_PK] !== undefined && r[H_PK] !== null ? String(r[H_PK]) : '';
-      var pname = productNameFor(r);
-      var rev = String(r.is_revised) === '1';
-      return {
-        id: (r.id !== null && r.id !== undefined) ? r.id : '',
-        name_ar: r.name_ar || '',
-        expected_quantity: (r.expected_quantity !== null && r.expected_quantity !== undefined) ? r.expected_quantity : '',
-        deliver_quantity: (r.deliver_quantity !== null && r.deliver_quantity !== undefined) ? r.deliver_quantity : '',
-        /* single product column: Arabic name only, no id/label repetition */
-        product: pname ? '<b>' + FMT.escape(pname) + '</b>' : '<span style="color:var(--text-muted);font-size:11px">—</span>',
-        status: (r.status !== null && r.status !== undefined && String(r.status) !== '') ? FMT.escape(String(r.status)) : '—',
-        manufacture_number: r.manufacture_number || '',
-        manufacture_delivery_number: r.manufacture_delivery_number || '',
-        is_revised: rev ? '✓ مراجع' : '⏳ غير مراجع',
-        /* عرض البنود for every reader; تعديل/حذف for writers (super admin included via CAN_WRITE) */
-        actions: UIC.actionBtns(
-          [{ label: 'عرض البنود', onclick: "openFootersModal('" + FMT.escape(pkVal) + "')" }]
-          .concat(CAN_WRITE ? [
-            { label: 'تعديل', onclick: "openHeaderEdit('" + FMT.escape(pkVal) + "')" },
-            { label: 'حذف', color: '#d32f2f', onclick: "askDeleteHeader('" + FMT.escape(pkVal) + "')" }
-          ] : [])
-        )
-      };
-    });
+    var rows = H.rows.map(mapHeaderRow);
 
     host.innerHTML = UIC.dataTable('mo-table', {
-      /* the endpoint caps at the newest rows unless loadAll — the table says so */
-      truncated: !H.loadedAll,
-      showAll: 'toggleLoadAll()',
+      /* Later server windows append in place; this table searches and pages
+         over the rows loaded so far. */
+      truncated: false,
       title: 'أوامر التصنيع',
       headers: MO_HEADERS,
       rows: rows,
