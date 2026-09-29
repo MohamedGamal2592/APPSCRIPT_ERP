@@ -30,6 +30,13 @@ const ET = H.eval('ErpTest');
 H.override('noteMutation_', function () { try { H.ctx.resetRecordCache_(); } catch (e) {} });
 H.override('logHistory_', function () {});
 H.ctx.Utilities.getUuid = function () { return require('crypto').randomUUID(); };
+// Apps Script's advanced service is Values.batchGet(spreadsheetId, optionalArgs); the
+// shared stub takes (request, spreadsheetId). Accept both orders.
+(function () {
+  const V = H.ctx.Sheets.Spreadsheets.Values;
+  const orig = V.batchGet;
+  V.batchGet = function (a, b) { return typeof a === 'string' ? orig.call(V, b, a) : orig.call(V, a, b); };
+})();
 const tlBook = wb.openById(TL_DB);
 const etBook = wb.openById(ET_DB);
 
@@ -178,6 +185,18 @@ cases.forEach(function (c) {
   });
 });
 if (typeof ET.setFlag_ === 'function') ET.setFlag_('ET_SJS_READ', false);
+
+/* The flag-on runs must really read packs (values.batchGet), not the legacy path. */
+if (typeof ET.setFlag_ === 'function') {
+  let calls = 0;
+  const V = H.ctx.Sheets.Spreadsheets.Values, bg = V.batchGet;
+  V.batchGet = function (a, b) { calls++; return bg.call(V, a, b); };
+  ET.setFlag_('ET_SJS_READ', true); H.cacheStore.clear();
+  const viaPack = ET.dispatch_({ module_action: 'get_et_sales_headers', data: { loadAll: true } }, ETSU, ET_DB);
+  ET.setFlag_('ET_SJS_READ', false);
+  V.batchGet = bg;
+  ok(calls > 0 && viaPack.status === 'success', 'ET_SJS_READ=true serves reads from packs (values.batchGet calls: ' + calls + ')');
+}
 
 console.log('\n' + (failed ? failed + ' parity check(s) FAILED.' : 'erp_test parity passes.') + '\n');
 process.exit(failed ? 1 : 0);

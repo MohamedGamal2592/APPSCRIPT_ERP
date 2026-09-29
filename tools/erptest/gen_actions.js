@@ -370,6 +370,61 @@ replaceOnce("      const eq = sq + (purchQtyIn[pid] || 0) - (salesQtyIn[pid] || 
 replaceOnce("    const cogs = startVal + purchVal - endVal;", "    const cogs = startVal + purchVal + mfgExtra - endVal;");
 replaceOnce("        purchVal: purchVal,\n", "        purchVal: purchVal,\n        mfgExtra: mfgExtra,\n");
 
+// ---------- P9 — JSON read layer (flag ET_SJS_READ, default false) ----------
+replaceOnce("const ErpTest = (function () {\n",
+  "const ErpTest = (function () {\n  // P9-P11 feature flags (plan: all false until P12 turns them on).\n" +
+  "  var ET_SJS_READ = false;\n  var ET_SJS_WRITE = false;\n  var ET_CLIENT_PACKS = false;\n");
+replaceOnce("  function erpTestThemeCss_() {",
+  fs.readFileSync(path.join(__dirname, 'sjs_read.inc.js'), 'utf8') + "\n  function erpTestThemeCss_() {");
+// 9.4 — the one switch: tlDbList_ serves packs.
+replaceOnce("    if (table === CURRENT_PRODUCTS_SHEET) return etStockRows_(dbId);\n    const rows = etRecords_(dbId, table);",
+  "    if (table === CURRENT_PRODUCTS_SHEET) return etStockRows_(dbId);\n" +
+  "    if (ET_SJS_READ) return etRows_(dbId, table);\n" +
+  "    const rows = etRecords_(dbId, table);");
+// 9.5 — every legacy write invalidates packs: the cache-bust (end of each handler)
+// and every repository write inside the request (so a read after a write in the
+// same request never sees a stale pack).
+replaceOnce("  function bustTopLightCaches_(dbId, type) {\n    bumpTlRefsVersion_(dbId);",
+  "  function bustTopLightCaches_(dbId, type) {\n    bumpTlRefsVersion_(dbId);\n" +
+  "    if (ET_SJS_READ || ET_SJS_WRITE) {\n" +
+  "      const byType = {\n" +
+  "        products: [PRODUCTS_SHEET, CURRENT_PRODUCTS_SHEET, CATEGORIES_SHEET], sales: [SALES_SHEET, SALES_LINES_SHEET, SALES_RETURNS_SHEET, OFFER_SHEET, OFFER_LINES_SHEET],\n" +
+  "        purchasing: [PURCHASING_SHEET, PURCHASING_LINES_SHEET], cash: [CASH_SHEET], parties: [CUSTOMERS_SHEET], manufacture: [MFG_SHEET, MFG_LINES_SHEET]\n" +
+  "      };\n" +
+  "      etBumpHead_(dbId, byType[type] || [].concat(byType.products, byType.sales, byType.purchasing, byType.cash, byType.parties, byType.manufacture));\n" +
+  "    }");
+{
+  const n = (s.match(/^\s*noteMutation_\(sheet\);$/gm) || []).length;
+  if (n !== 8) problems.push('expected 8 noteMutation_(sheet) sites, found ' + n);
+  s = s.replace(/^(\s*)noteMutation_\(sheet\);$/gm, '$1noteMutation_(sheet); etPackTouched_(sheet);');
+}
+replaceOnce("  function etBumpHead_(dbId, tables) {",
+  "  function etPackTouched_(sheet) {\n" +
+  "    if (!ET_SJS_READ && !ET_SJS_WRITE) return;\n" +
+  "    try { etBumpHead_(sheet.getParent().getId(), [sheet.getName()]); } catch (e) {}\n" +
+  "  }\n  function etBumpHead_(dbId, tables) {");
+// 9.6 — aggregates cached per head; income statement memoised per request.
+[
+  ['currentQtyMap_', '(dbId)', 'null'],
+  ['latestSalesPriceMap_', '(dbId)', 'null'],
+  ['customerBalanceMap_', '(dbId)', 'null'],
+  ['dashboardKpis_', '(dbId)', 'null'],
+  ['boxBalanceSummary_', '(dbId, boxNames)', '[boxNames]'],
+].forEach(([fn, sig, args]) => {
+  const call = sig.replace(/[()]/g, '');
+  replaceOnce(`  function ${fn}${sig} {`,
+    `  function ${fn}${sig} { return etAgg_(dbId, '${fn}', ${args}, function () { return ${fn.replace(/_$/, 'Base_')}(${call}); }); }\n` +
+    `  function ${fn.replace(/_$/, 'Base_')}${sig} {`);
+});
+replaceOnce("  function incomeStatementCore_(dbId, dateFrom, dateTo) {",
+  "  function incomeStatementCore_(dbId, dateFrom, dateTo) {\n" +
+  "    if (!ET_SJS_READ) return incomeStatementCoreBase_(dbId, dateFrom, dateTo);\n" +
+  "    const k = dbId + '|' + etHead_(dbId) + '|' + (dateFrom instanceof Date ? dateFrom.getTime() : '') + '|' + (dateTo instanceof Date ? dateTo.getTime() : '');\n" +
+  "    if (!_etIsMemo[k]) _etIsMemo[k] = incomeStatementCoreBase_(dbId, dateFrom, dateTo);\n" +
+  "    return _etIsMemo[k];\n" +
+  "  }\n  function incomeStatementCoreBase_(dbId, dateFrom, dateTo) {");
+replaceOnce('    schemaCheck_: etSchemaCheck_,', '    schemaCheck_: etSchemaCheck_,\n    setFlag_: etSetFlag_,');
+
 // ---------- finalize ----------
 if (problems.length) {
   console.error('CODEMOD FAILED:\n' + problems.map((p) => '  - ' + p).join('\n'));
