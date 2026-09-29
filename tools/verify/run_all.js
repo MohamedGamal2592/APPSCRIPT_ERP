@@ -61,6 +61,8 @@ const STEPS = [
   ['s24_stock_scan.js', 'S24 — جرد دوري مخازن باركود + the USER_PAGES nav-visibility regression guard'],
   ['tc_stock_scan_catalog.js', 'TC-SCAN-CATALOG — instant products dropdown: one bootstrap catalog, local filtering, product-level balances'],
   ['tc_stock_scan_calculator.js', 'TC-SCAN-CALC — reusable LTR expression calculator and quantity-field adapters'],
+  ['vf_mfg_order_calculator.js', 'VF-MO-CALC — vf_mfg_order quantity calculators; الكمية الفعلية المنتجة shows the product’s carton'],
+  ['vf_mfg_order_batch_list.js', 'VF-MO-BATCH — رقم التشغيلة offers the batch numbers already in use and stays free text'],
   ['s25_stock_authority.js', 'S25 — رصيد الدفعات: one stock authority — available = current_qty + held(this document)'],
   ['s26_party_agreements.js', 'S26 — vf_parties كشف حساب: factory/agreements/packaging + balance-once'],
   ['s27_mfg_client_report.js', 'S27 — vf_mfg_client_report: client manufacturing pivot, filters, cost gating'],

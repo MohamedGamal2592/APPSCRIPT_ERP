@@ -224,7 +224,14 @@ DETAIL_PAYLOADS.forEach(function (c) {
   const detail = H_BROKEN.dispatch('get_valley_mfg_order_detail', { mo_uid: 'MO-B' });
   assert.strictEqual(detail.outputs.length, 2, 'the detail answers from the legacy read');
   const fallbacks = H_BROKEN.logs.slice(logsBefore).filter((l) => l.indexOf('vf_fast_read_fallback') !== -1);
-  assert.strictEqual(fallbacks.length, 2, 'both fallbacks are logged');
+  /* Three reads fell back here, not two: the detail endpoint performs a second
+     fast read of its own for the رقم التشغيلة reference list. Asserting the
+     names rather than the count says which reads those are, and a fallback that
+     did not report itself would be the one failure nobody sees. */
+  const actions = fallbacks.map((l) => JSON.parse(l.slice(l.indexOf('{'))).action).sort();
+  assert.deepStrictEqual(actions,
+    ['get_valley_mfg_order_detail', 'get_valley_mfg_order_full', 'get_valley_mfg_orders'],
+    'every fast read that fell back is logged, by name');
   assert.ok(fallbacks.every((l) => l.indexOf('FR_BUDGET_EXCEEDED') !== -1), 'with the engine code');
   assert.ok(fallbacks.every((l) => l.indexOf('MO-B') === -1), 'and no business value');
 }

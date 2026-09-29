@@ -7283,7 +7283,12 @@ UIC.Cache = (function () {
 /* ── UIC.Calculator — compact expression calculator for quantity fields ──
  *
  * API: UIC.Calculator.open({ target, title, precision, integerOnly, min,
- *       onApply })
+ *       onApply, note, noteValue })
+ *
+ * `note` is a read-only line above the keypad — a reference figure the caller
+ * wants in front of the user while they compute (e.g. the carton size of the
+ * chosen product). With `noteValue` the line also carries an insert button
+ * that pushes that number into the expression.
  *
  * Percent is deliberately postfix and context-free: `10%` is `0.1` wherever
  * it appears. This avoids silently choosing one of the competing contextual
@@ -7416,6 +7421,17 @@ UIC.Calculator = (function () {
     }
     paint();
   }
+  /* A reference figure is almost always the right-hand side of a product:
+   * "12 cartons × 20 per carton". Appending after a complete term therefore
+   * implies ×, exactly as the keypad's '(' already does. */
+  function insertValue() {
+    if (!active || active.noteValue == null) return;
+    var text = normalize(String(active.noteValue));
+    if (!/^[0-9]+(?:[.][0-9]+)?$/.test(text)) return;
+    var last = active.expr.slice(-1);
+    active.expr += (last && /[0-9)%]/.test(last) ? '*' : '') + text;
+    paint();
+  }
   function clear() { if (active) { active.expr = ''; paint(); } }
   function backspace() { if (active) { active.expr = active.expr.slice(0, -1); paint(); } }
   function close() {
@@ -7461,10 +7477,12 @@ UIC.Calculator = (function () {
     if (initial === '0') initial = '';
     active = { target: target, expr: initial, title: opts.title || 'الحاسبة',
       precision: opts.precision == null ? 2 : opts.precision, integerOnly: !!opts.integerOnly,
-      min: opts.min, max: opts.max, onApply: opts.onApply, history: [], modalId: 'uic-calculator-modal' };
+      min: opts.min, max: opts.max, onApply: opts.onApply, note: opts.note || '',
+      noteValue: (opts.noteValue === '' || opts.noteValue == null || !isFinite(Number(opts.noteValue))) ? null : Number(opts.noteValue),
+      history: [], modalId: 'uic-calculator-modal' };
     if (!document.getElementById('uic-calculator-style')) {
       var style = document.createElement('style'); style.id = 'uic-calculator-style';
-      style.textContent = '.uic-calculator{direction:rtl}.uic-calculator-ltr{direction:ltr;text-align:left}.uic-calculator-expression{width:100%;box-sizing:border-box;font-size:21px;font-weight:700;padding:10px;border:1px solid var(--border-color);border-radius:8px}.uic-calculator-preview{margin:8px 0 12px;padding:8px 10px;background:var(--bg-muted,#f5f5f5);border-radius:8px}.uic-calculator-result{display:block;font-size:26px;font-weight:800}.uic-calculator-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:7px;direction:ltr}.uic-calculator-grid .btn{min-height:48px;padding:7px;font-size:18px;font-weight:700}.uic-calculator-history{margin-top:12px;max-height:112px;overflow:auto;font-size:12px}.uic-calculator-history-row{display:flex;justify-content:space-between;gap:8px;padding:5px 2px;border-bottom:1px solid var(--border-color);direction:ltr}.uic-calculator-history-empty{color:var(--text-muted);text-align:center}.uic-calculator-help{font-size:11px;color:var(--text-muted);margin-top:7px}';
+      style.textContent = '.uic-calculator{direction:rtl}.uic-calculator-ltr{direction:ltr;text-align:left}.uic-calculator-expression{width:100%;box-sizing:border-box;font-size:21px;font-weight:700;padding:10px;border:1px solid var(--border-color);border-radius:8px}.uic-calculator-preview{margin:8px 0 12px;padding:8px 10px;background:var(--bg-muted,#f5f5f5);border-radius:8px}.uic-calculator-result{display:block;font-size:26px;font-weight:800}.uic-calculator-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:7px;direction:ltr}.uic-calculator-grid .btn{min-height:48px;padding:7px;font-size:18px;font-weight:700}.uic-calculator-history{margin-top:12px;max-height:112px;overflow:auto;font-size:12px}.uic-calculator-history-row{display:flex;justify-content:space-between;gap:8px;padding:5px 2px;border-bottom:1px solid var(--border-color);direction:ltr}.uic-calculator-history-empty{color:var(--text-muted);text-align:center}.uic-calculator-help{font-size:11px;color:var(--text-muted);margin-top:7px}.uic-calculator-note{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px;padding:8px 10px;border:1px dashed var(--border-color,#cbd5e1);border-radius:8px;font-size:13px;font-weight:600}.uic-calculator-note .btn{padding:4px 10px;font-size:12px}';
       document.head.appendChild(style);
     }
     var keys = [
@@ -7474,7 +7492,12 @@ UIC.Calculator = (function () {
       ['(', '('], [')', ')'], ['0','0'], ['+','+'],
       ['C','clear'], ['⌫','backspace'], ['%','%'], ['=','=']
     ];
-    var body = '<div class="uic-calculator"><div class="uic-calculator-ltr">' +
+    var noteHtml = active.note
+      ? '<div class="uic-calculator-note"><span>' + esc(active.note) + '</span>' +
+        (active.noteValue != null ? '<button type="button" class="btn btn-outline" onclick="UIC.Calculator.insertValue()">إدراج</button>' : '') +
+        '</div>'
+      : '';
+    var body = '<div class="uic-calculator">' + noteHtml + '<div class="uic-calculator-ltr">' +
       '<input id="uic-calculator-expression" class="uic-calculator-expression" type="text" inputmode="decimal" autocomplete="off" aria-label="التعبير الحسابي">' +
       '<div class="uic-calculator-preview"><span id="uic-calculator-expression-view"></span><span id="uic-calculator-result" class="uic-calculator-result">…</span><small id="uic-calculator-hint">معاينة النتيجة</small></div>' +
       '<div class="uic-calculator-grid">' + keys.map(function (k) { return '<button type="button" class="btn btn-outline" onclick="UIC.Calculator.press(\'' + k[1] + '\')">' + k[0] + '</button>'; }).join('') +
@@ -7488,7 +7511,7 @@ UIC.Calculator = (function () {
     paint();
     setTimeout(function () { if (input) { input.focus(); input.setSelectionRange(input.value.length, input.value.length); } }, 0);
   }
-  return { open: open, close: close, press: press, clear: clear, backspace: backspace, apply: apply, evaluate: evaluate };
+  return { open: open, close: close, press: press, clear: clear, backspace: backspace, apply: apply, evaluate: evaluate, insertValue: insertValue };
 })();
 
 UIC.Live = (function () {

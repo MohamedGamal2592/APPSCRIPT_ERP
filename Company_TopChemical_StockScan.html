@@ -1434,10 +1434,12 @@
   function openScanCalculator(targetId) {
     var target = document.getElementById(targetId);
     if (!target || (targetId !== 'unit_count' && targetId !== 'loose_amount')) return;
-    if (usesNativeMobileNumberKeyboard()) {
-      target.focus();
-      return;
-    }
+    /* One behaviour on every device. A phone used to be sent to the field and
+       its own number pad instead — that is plain number entry with no
+       arithmetic, which is the one thing this button exists to provide, so the
+       dialog now opens on a phone exactly as it does in a desktop browser. The
+       native pad is still one tap away: the field itself is untouched and
+       tapping it opens it. */
     UIC.Calculator.open({
       target: target,
       title: 'الحاسبة — ' + (targetId === 'unit_count' ? 'عدد العبوات' : 'الكمية الفرط'),
@@ -1446,15 +1448,6 @@
       min: 0,
       onApply: function () { updateTotalPreview(); }
     });
-  }
-
-  function usesNativeMobileNumberKeyboard() {
-    var ua = '';
-    try { ua = navigator.userAgent || ''; } catch (e) {}
-    if (/Android|iPhone|iPad|iPod|Mobile/i.test(ua)) return true;
-    try {
-      return !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches && window.innerWidth <= 900);
-    } catch (e2) { return false; }
   }
 
   function cancelCount() {

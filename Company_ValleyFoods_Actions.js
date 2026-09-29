@@ -7683,6 +7683,11 @@ const ValleyFoodsHRModules = (function () {
     return v;
   }
 
+  /* product_options carries `carton` (valley_products.carton, the packing
+     size) so the MO editor can show the chosen product's carton figure inside
+     its quantity calculator without a second round trip. The cache kind was
+     renamed with the shape change: entries written under the old kind hold the
+     old shape until their TTL expires and would arrive without carton. */
   function getValleyOptionSets_(dbId) {
     var recipes = [];
     try { recipes = getAllRecords_(dbId, MFG_RECIPE_SHEET); } catch (e) {}
@@ -7692,15 +7697,49 @@ const ValleyFoodsHRModules = (function () {
     }).filter(function (o) { return o.value; });
     return {
       recipe_options: recipeOptions,
-      product_options: finRefsCached_(dbId, 'vf_products_opts_sorted', function () {
+      product_options: finRefsCached_(dbId, 'vf_products_opts_sorted_carton', function () {
         return getAllRecords_(dbId, FIN_PRODUCTS_SHEET).map(function (p) {
-          return { value: p.id, label: String(p.name_ar || ('#' + p.id)) };
+          return { value: p.id, label: String(p.name_ar || ('#' + p.id)), carton: p.carton };
         }).filter(function (o) { return String(o.value).trim() !== ''; })
           .sort(function (a, b) { return a.label.localeCompare(b.label, 'ar'); });
       }),
       work_center_options: mfgWorkCenterOptions_(dbId),
       enums: { operation_type: MFG_OP_TYPES, shift: mfgShiftOptions_(dbId) }
     };
+  }
+
+  /* The reference list behind رقم التشغيلة in the MO editor: batch numbers
+     already used in valley_manufacture_header.manufacture_batch. The field
+     stays free text — this only spares the operator from retyping, or
+     mistyping, a number that already exists.
+
+     Rows are appended, so walking backwards yields most-recently-used first,
+     which is what an operator reaches for; an alphabetical sort would bury
+     this month's batches behind every batch ever used. Capped, because a
+     datalist is a convenience and not a browsing tool.
+
+     Cached like every other reference set: bounded by the refs TTL, and every
+     MO save already calls finBustRefs_, so a batch number saved a moment ago
+     is in the list the next time the editor opens. */
+  var MFG_BATCH_OPTIONS_LIMIT_ = 200;
+  function mfgBatchOptions_(dbId) {
+    return finRefsCached_(dbId, 'vf_mfg_batch_options', function () {
+      var rows = [];
+      try {
+        rows = vfFastReadEnabled_(MFG_FAST_READ_) ? vfMfgHeaderRowsFast_(dbId) : vfMfgHeaderRowsLegacy_(dbId);
+      } catch (e) {
+        vfFastReadFallback_('get_valley_mfg_order_detail', e);
+        try { rows = vfMfgHeaderRowsLegacy_(dbId); } catch (e2) { return []; }
+      }
+      var seen = {}, out = [];
+      for (var i = rows.length - 1; i >= 0 && out.length < MFG_BATCH_OPTIONS_LIMIT_; i--) {
+        var v = String((rows[i] && rows[i].manufacture_batch) == null ? '' : rows[i].manufacture_batch).trim();
+        if (!v || seen[v]) continue;
+        seen[v] = true;
+        out.push(v);
+      }
+      return out;
+    });
   }
 
   function getValleyMfgOrderDetail_(data, user, dbId) {
@@ -7712,7 +7751,7 @@ const ValleyFoodsHRModules = (function () {
     var opts = getValleyOptionSets_(dbId);
     var moUid = String((data && data.mo_uid) || '').trim();
     if (!moUid) {
-      return { status: 'success', is_new: true, recipe_options: opts.recipe_options, product_options: opts.product_options, work_center_options: opts.work_center_options, enums: opts.enums, can_see_cost: vfCanSeeCost_(user), fast_save_v2: mfgPlannedSaveOn_(), edit_token: '', edit_tokens_v2: {}, save_scope: MFG_DETAIL_SCOPE_.slice() };
+      return { status: 'success', is_new: true, recipe_options: opts.recipe_options, product_options: opts.product_options, work_center_options: opts.work_center_options, enums: opts.enums, batch_options: mfgBatchOptions_(dbId), can_see_cost: vfCanSeeCost_(user), fast_save_v2: mfgPlannedSaveOn_(), edit_token: '', edit_tokens_v2: {}, save_scope: MFG_DETAIL_SCOPE_.slice() };
     }
     var full = getValleyMfgOrderFull_(data, user, dbId);
     if (full && full.order) { try { full.order.shift_name = mfgShiftName_(dbId, full.order.shift); } catch (eShiftName) {} }
@@ -7731,6 +7770,7 @@ const ValleyFoodsHRModules = (function () {
     return {
       status: 'success', is_new: false,
       recipe_options: opts.recipe_options, product_options: opts.product_options, work_center_options: opts.work_center_options, enums: opts.enums,
+      batch_options: mfgBatchOptions_(dbId),
       order: full.order, outputs: outputs, workops: ops.workops || [], byproducts: bps.byproducts || [],
       /* Schema-free edit token for this editor's scope (detail page). The
          client returns both as base_token/save_scope on edit. */
@@ -8115,9 +8155,9 @@ const ValleyFoodsHRModules = (function () {
     var shiftNames = {};
     shiftOptions.forEach(function (s) { shiftNames[String(s.value)] = String(s.label || s.value); });
 
-    var allProducts = finRefsCached_(dbId, 'vf_products_opts_sorted', function () {
+    var allProducts = finRefsCached_(dbId, 'vf_products_opts_sorted_carton', function () {
       return getAllRecords_(dbId, FIN_PRODUCTS_SHEET).map(function (p) {
-        return { value: p.id, label: String(p.name_ar || ('#' + p.id)) };
+        return { value: p.id, label: String(p.name_ar || ('#' + p.id)), carton: p.carton };
       }).filter(function (o) { return String(o.value).trim() !== ''; })
         .sort(function (a, b) { return a.label.localeCompare(b.label, 'ar'); });
     });
@@ -8333,9 +8373,9 @@ const ValleyFoodsHRModules = (function () {
       filter_options: filterOptions,
       filter_product_options: filterProductOptions,
       recipe_options: recipeOptions,
-      product_options: finRefsCached_(dbId, 'vf_products_opts_sorted', function () {
+      product_options: finRefsCached_(dbId, 'vf_products_opts_sorted_carton', function () {
         return getAllRecords_(dbId, FIN_PRODUCTS_SHEET).map(function (p) {
-          return { value: p.id, label: String(p.name_ar || ('#' + p.id)) };
+          return { value: p.id, label: String(p.name_ar || ('#' + p.id)), carton: p.carton };
         }).filter(function (o) { return String(o.value).trim() !== ''; })
           .sort(function (a, b) { return a.label.localeCompare(b.label, 'ar'); });
       }),

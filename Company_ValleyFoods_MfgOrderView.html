@@ -39,6 +39,12 @@
       .odoo-table td{padding:7px 10px;border-bottom:1px solid #f1f5f9;vertical-align:middle;}
     }
     .odoo-ro{color:#94a3b8;font-size:12px;}
+    /* Quantity field with its calculator trigger beside it, as on tc_stock_scan.
+       A .form-field ends in a 16px .field-error line; discounting it puts the
+       button's bottom edge exactly on the input's, and 44px is .input's own
+       min-height, so the two read as one control at any text size. */
+    .mo-calc-field{display:grid;grid-template-columns:minmax(0,1fr) 44px;gap:8px;align-items:end;}
+    .mo-calc-trigger{min-width:44px;height:44px;padding:0;font-size:18px;line-height:1;margin-bottom:16px;}
     .odoo-sub{background:var(--bg-subtle, #fafafa);border:1px dashed var(--border-color, #e2e8f0);border-radius:8px;padding:8px 10px;margin-top:8px;}
     .btn{cursor:pointer;border:none;border-radius:8px;padding:8px 14px;font-size:13px;font-weight:600;}
     .btn-primary{background:#16a34a;color:#fff;}
@@ -100,6 +106,10 @@
       var MFG_YIELD_FACTOR = 0.65;
       var CURRENT_ORDER = {};
       var RECIPE_OPTIONS = [], PRODUCT_OPTIONS = [], ENUMS = {}, WORKCENTER_OPTIONS = [];
+      /* Batch numbers already in use, newest first — the reference list offered
+         under رقم التشغيلة. It is a suggestion list, never a constraint: the
+         field remains free text and a new batch number is typed straight in. */
+      var BATCH_OPTIONS = [];
       var MFG_OUTPUTS = [];      /* [{uid,product_id,qty,cost_unit,total_cost,product_name}] */
       var OUTPUT_FOOTERS = [];   /* [[{item,item_code,qty,unit_cost,total_cost}]] parallel to MFG_OUTPUTS */
       var OUTPUT_BATCHES = [];   /* [[batches]] parallel to MFG_OUTPUTS (lazy-loaded per material) */
@@ -152,6 +162,49 @@
       function canCost() { return CAN_SEE_COST !== false; }
 
       function editable() { return (IS_SUPER_ADMIN || CAN_WRITE) && MO_STATUS !== 'Locked'; }
+      function productOption_(productId) {
+        var id = String(productId == null ? '' : productId).trim();
+        if (!id) return null;
+        var found = null;
+        (PRODUCT_OPTIONS || []).forEach(function (o) { if (String(o.value) === id) found = o; });
+        return found;
+      }
+      /* valley_products.carton — the packing size, delivered on product_options.
+         null when the product is unchosen or its carton cell is blank/non-numeric,
+         which the calculator note reports instead of showing a misleading 0. */
+      function productCarton_(productId) {
+        var o = productOption_(productId);
+        if (!o || o.carton === '' || o.carton == null) return null;
+        var n = Number(o.carton);
+        return isNaN(n) ? null : n;
+      }
+      /* The quantity calculator (UIC.Calculator, as on tc_stock_scan). Applying a
+         result fires input/change on the target, so the expected-quantity recalc
+         and the KPI strip update through the listeners already bound in
+         renderDetail — this path adds no second write. */
+      function openCalc(targetId) {
+        if (!editable()) return;
+        var el = document.getElementById(targetId);
+        if (!el) return;
+        if (targetId === 'f-manufactured') {
+          UIC.Calculator.open({ target: el, title: 'الحاسبة — كمية الخام الداخلة', precision: 3, min: 0 });
+          return;
+        }
+        var carton = productCarton_(getCombo_('f-product'));
+        var prod = productOption_(getCombo_('f-product'));
+        UIC.Calculator.open({
+          target: el, title: 'الحاسبة — الكمية الفعلية المنتجة', precision: 2, min: 0,
+          note: carton == null
+            ? (prod ? 'لا توجد كرتونة او تغليف مسجلة لهذا المنتج' : 'اختر «المنتج المنتج» أولاً لعرض الكرتونة او التغليف')
+            : 'الكرتونة او التغليف — ' + (prod.label || '') + ': ' + carton,
+          noteValue: carton
+        });
+      }
+      function calcField_(fieldHtml, targetId, aria) {
+        if (!editable()) return fieldHtml;
+        return '<div class="mo-calc-field">' + fieldHtml +
+          '<button type="button" class="btn btn-outline mo-calc-trigger" id="calc-' + targetId + '" title="الحاسبة" aria-label="' + esc(aria) + '">⌗</button></div>';
+      }
       function rememberDeleted_(section, uid) {
         uid = String(uid || '').trim();
         if (!uid) return;
@@ -241,6 +294,7 @@
           CAN_SEE_COST = (res.can_see_cost !== false);
           RECIPE_OPTIONS = res.recipe_options || [];
           PRODUCT_OPTIONS = res.product_options || [];
+          BATCH_OPTIONS = res.batch_options || [];
           ENUMS = res.enums || {};
           WORKCENTER_OPTIONS = res.work_center_options || {};
           if (IS_NEW) {
@@ -331,10 +385,14 @@
             UIC.combo({ key: 'f-shift', label: 'الوردية', required: true, options: selList_(ENUMS.shift), value: order.shift || '', placeholder: 'اكتب للبحث…', disabled: !editable() }) +
             UIC.field({ key: 'f-date', label: 'تاريخ التصنيع', type: 'date', required: true, value: toInputDate(order.manufacture_date), disabled: !editable() }) +
             UIC.field({ key: 'f-expected', label: 'الكمية المتوقعة (تلقائي = الخام × 0.65)', type: 'number', required: true, min: '0', step: '0.001', value: num0(order.expected_qty), disabled: true }) +
-            UIC.field({ key: 'f-manufactured', label: 'كمية الخام الداخلة', type: 'number', required: true, min: '0', step: '0.001', value: num0(order.manufactured_qty), disabled: !editable() }) +
-            UIC.field({ key: 'f-batch', label: 'رقم التشغيلة', type: 'text', value: esc(order.manufacture_batch || ''), disabled: !editable() }) +
-            UIC.field({ key: 'f-actual', label: 'الكمية الفعلية المنتجة', type: 'number', min: '0', step: '0.01', value: order.actual_qty != null ? num0(order.actual_qty) : '', disabled: !editable() }) +
+            calcField_(UIC.field({ key: 'f-manufactured', label: 'كمية الخام الداخلة', type: 'number', required: true, min: '0', step: '0.001', value: num0(order.manufactured_qty), disabled: !editable() }), 'f-manufactured', 'حاسبة كمية الخام الداخلة') +
+            UIC.field({ key: 'f-batch', label: 'رقم التشغيلة', type: 'text', value: esc(order.manufacture_batch || ''), disabled: !editable(), list: 'f-batch-options' }) +
+            calcField_(UIC.field({ key: 'f-actual', label: 'الكمية الفعلية المنتجة', type: 'number', min: '0', step: '0.01', value: order.actual_qty != null ? num0(order.actual_qty) : '', disabled: !editable() }), 'f-actual', 'حاسبة الكمية الفعلية المنتجة') +
           '</div>' +
+          /* Kept outside .odoo-grid so every child of the grid is a field. A
+             datalist is invisible only because the UA stylesheet hides it, and
+             the column layout should not rest on that. */
+          UIC.datalist('f-batch-options', BATCH_OPTIONS) +
           '<div class="odoo-grid" style="margin-top:14px;">' +
             UIC.combo({ key: 'f-product', label: 'المنتج المنتج', required: true, options: PRODUCT_OPTIONS, value: String(order.produced_product || ''), placeholder: 'اكتب للبحث…', disabled: !editable() }) +
             UIC.combo({ key: 'f-recipe', label: 'الوصفة', required: false, options: RECIPE_OPTIONS.filter(function (o) { return o.active !== false; }), value: String(order.recipe_id || ''), placeholder: 'اختر الوصفة (اختياري)…', disabled: !editable() }) +
@@ -381,6 +439,10 @@
         if (aEl) { aEl.addEventListener('input', renderKpi); aEl.addEventListener('change', renderKpi); }
         var opEl = document.getElementById('f-op-type_display');
         if (opEl) { opEl.addEventListener('input', renderKpi); opEl.addEventListener('change', renderKpi); }
+        ['f-manufactured', 'f-actual'].forEach(function (targetId) {
+          var trigger = document.getElementById('calc-' + targetId);
+          if (trigger) trigger.addEventListener('click', function () { openCalc(targetId); });
+        });
         MFG_BASELINE_SIGNATURES = mfgSectionSignatures_(mfgCollectEditPayload_());
       }
 
@@ -2054,7 +2116,7 @@
         openWorkOpNotes: openWorkOpNotes, closeWorkOpNotes: closeWorkOpNotes, saveWorkOpNotes: saveWorkOpNotes,
         openWorkOpWorkCenter: openWorkOpWorkCenter, closeWorkOpWorkCenter: closeWorkOpWorkCenter, saveWorkOpWorkCenter: saveWorkOpWorkCenter,
         addByproduct: addByproduct, removeByproduct: removeByproduct, setByproduct: setByproduct,
-        approveMo: approveMo, printMo: printMo
+        approveMo: approveMo, printMo: printMo, openCalc: openCalc
       };
       document.addEventListener('DOMContentLoaded', load);
       /* Another device's change to this page arrives on its own. The poll

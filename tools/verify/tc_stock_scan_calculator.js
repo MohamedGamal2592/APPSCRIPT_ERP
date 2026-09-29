@@ -70,5 +70,16 @@ calc.apply();
 check(unit.value === '2.5', 'fractional package counts are rejected rather than truncated');
 calc.close();
 
+console.log('\n3 — one behaviour on every device\n');
+/* The trigger once bypassed the dialog on a phone and simply focused the field,
+   which is a bare number pad: number entry with no arithmetic, which is the one
+   thing the button exists to provide. The page must not branch on the device. */
+const PAGE = S.read('Company_TopChemical_StockScan.html');
+const opener = PAGE.slice(PAGE.indexOf('function openScanCalculator'), PAGE.indexOf('function cancelCount'));
+check(opener.indexOf('UIC.Calculator.open') !== -1, 'the trigger opens the shared calculator');
+check(!/navigator[.]userAgent|pointer: coarse|innerWidth|target[.]focus[(][)]/.test(opener),
+  'and reaches it without sniffing the device, exactly as in a desktop browser');
+check(!/usesNativeMobileNumberKeyboard/.test(PAGE), 'the phone bypass is gone from the page entirely');
+
 console.log('\n' + (failed ? failed + ' check(s) FAILED.' : 'Calculator checks pass.'));
 process.exit(failed ? 1 : 0);
