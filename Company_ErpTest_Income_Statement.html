@@ -242,6 +242,7 @@
     html += section(2, 'تكلفة البضاعة المباعة', money(s.cogs),
       row('مخزون أول المدة', money(s.startVal), '—', false, 'opening') +
       row('يضاف: المشتريات خلال الفترة', money(s.purchVal), '—', false, 'purchases') +
+      row('تكاليف تصنيع إضافية', money(s.mfgExtra || 0), '—', false) +
       row('يخصم: مخزون آخر المدة', money(s.endVal), '—', false, 'endstock') +
       row('<strong>تكلفة البضاعة المباعة</strong>', money(s.cogs), pct(s.cogs, s.net), true),
       'النسبة من صافي الإيراد');

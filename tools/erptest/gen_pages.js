@@ -49,6 +49,18 @@ PAGES.forEach((p) => {
   // Table names used by the history panel (e.g. SESSION.openHistory('top_light_cash_bank_movement', …)).
   B3_TABS.forEach((t) => { s = all(s, 'top_light_' + t, 'erp_test_' + t); });
   s = all(s, 'Company_TopLight_', 'Company_ErpTest_');
+  // P7.5 — manufacturing movement labels.
+  if (p === 'Product_Movement') {
+    const a = "    if (t === 'return') return 'مرتجع (وارد)';\n";
+    if (s.split(a).length !== 2) { console.error('STOP — Product_Movement label anchor not found once'); process.exit(1); }
+    s = s.replace(a, a + "    if (t === 'manufacture_in') return 'وارد تصنيع';\n    if (t === 'manufacture_out') return 'منصرف تصنيع';\n");
+  }
+  // P7.6 — extra manufacturing cost row, directly after the purchases row.
+  if (p === 'Income_Statement') {
+    const a = "      row('يضاف: المشتريات خلال الفترة', money(s.purchVal), '—', false, 'purchases') +\n";
+    if (s.split(a).length !== 2) { console.error('STOP — Income_Statement purchases row not found once'); process.exit(1); }
+    s = s.replace(a, a + "      row('تكاليف تصنيع إضافية', money(s.mfgExtra || 0), '—', false) +\n");
+  }
   fs.writeFileSync(`${ROOT}/Company_ErpTest_${p}.html`, s, 'utf8');
 });
 console.log('wrote ' + PAGES.length + ' Company_ErpTest_*.html pages');

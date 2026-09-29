@@ -14,7 +14,7 @@ function count(str, sub) { return str.split(sub).length - 1; }
 function replaceOnce(find, repl) {
   const n = count(s, find);
   if (n !== 1) { problems.push(`expected 1 of ${JSON.stringify(find.slice(0, 60))}, found ${n}`); return; }
-  s = s.replace(find, repl);
+  s = s.replace(find, () => repl);
 }
 function replaceExactCount(find, repl, expect) {
   const n = count(s, find);
@@ -198,9 +198,10 @@ const INSERT = `
 
   // --- OD-A: stock is computed live from transactions (no current_products sheet) ---
   //   qty = Σ purchases.qty − Σ sales.product_qty + Σ returns.return_qty (by product id)
-  //   unit_cost = first live purchase line's total_cost/qty (qty>0), per OD1
+  //     + Σ completed orders.produced_qty − Σ their lines.consumed_qty (P7.1)
+  //   unit_cost = latest completed order's unit_cost (by completion_date, then id), else
+  //               first live purchase line's total_cost/qty (qty>0), per OD1; else 0
   //   total_cost_sign = unit_cost × qty
-  //   NOTE (P7): manufacturing in/out is folded in when the manufacture tabs exist.
   function etStockMap_(dbId) {
     var qty = {}, firstCost = {};
     tlDbList_(dbId, PURCHASING_LINES_SHEET).forEach(function (r) {
@@ -216,8 +217,23 @@ const INSERT = `
       var p = String(r['top_lightsales_products_id'] == null ? '' : r['top_lightsales_products_id']).trim(); if (!p) return;
       qty[p] = (qty[p] || 0) + num0_(r['top_lightreturn_qty']);
     });
+    var mfg = mfgCompleted_(dbId), mfgLatest = {};
+    mfg.orders.forEach(function (o) {
+      var p = String(o.product_id == null ? '' : o.product_id).trim(); if (!p) return;
+      qty[p] = (qty[p] || 0) + num0_(o.produced_qty);
+      var d = parseDate_(o.completion_date), t = d instanceof Date ? d.getTime() : 0, id = Number(o.id) || 0;
+      var cur = mfgLatest[p];
+      if (!cur || t > cur.t || (t === cur.t && id > cur.id)) mfgLatest[p] = { t: t, id: id, unit_cost: num0_(o.unit_cost) };
+    });
+    mfg.lines.forEach(function (x) {
+      var p = String(x.line.product_id == null ? '' : x.line.product_id).trim(); if (!p) return;
+      qty[p] = (qty[p] || 0) - num0_(x.line.consumed_qty);
+    });
     var out = {};
-    Object.keys(qty).forEach(function (p) { var uc = firstCost[p] || 0; out[p] = { qty: qty[p], unit_cost: uc, cost: uc * qty[p] }; });
+    Object.keys(qty).forEach(function (p) {
+      var uc = mfgLatest[p] ? mfgLatest[p].unit_cost : (firstCost[p] || 0);
+      out[p] = { qty: qty[p], unit_cost: uc, cost: uc * qty[p] };
+    });
     return out;
   }
   function etStockRows_(dbId) {
@@ -231,12 +247,13 @@ const INSERT = `
     var missingRequired = [], missingOptional = [];
     Object.keys(ET_FIELD_INVENTORY).forEach(function (tab) {
       var physical = [];
-      try { physical = getHeaders_(getSheet_(tab, dbId)).map(function (h) { return String(h).trim(); }); } catch (e) { physical = []; }
+      // Case-insensitive, like tlHeaderIndex_ and the row builders that resolve these names.
+      try { physical = getHeaders_(getSheet_(tab, dbId)).map(function (h) { return String(h).trim().toLowerCase(); }); } catch (e) { physical = []; }
       var inv = ET_FIELD_INVENTORY[tab];
       ['R', 'W'].forEach(function (cls) {
         (inv[cls] || []).forEach(function (name) {
           var p = etToPhysical_(tab, name);
-          if (physical.indexOf(p) === -1) (cls === 'R' ? missingRequired : missingOptional).push({ tab: tab, name: name, physical: p });
+          if (physical.indexOf(String(p).trim().toLowerCase()) === -1) (cls === 'R' ? missingRequired : missingOptional).push({ tab: tab, name: name, physical: p });
         });
       });
     });
@@ -251,6 +268,107 @@ replaceOnce('return { dispatch_: dispatch_,', 'return { dispatch_: dispatch_,\n 
 s += `
 function etSchemaCheckRun_() { var r = ErpTest.schemaCheck_('1rdnnP3rMZTnoyyfG5V3X6w62AXatgIisZljkg0izJzE'); console.log(JSON.stringify(r)); return r; }
 `;
+
+// ---------- OD-E: offer replay dedupe. The shared probe looks for physical
+// unique_id / request_key / invoice_unique_id; the erp_test offer key is
+// offer_unique_id, so also look it up through the translation layer. ----------
+replaceOnce(
+  "try { _seenO = requestDedupeExecute_(dbId, OFFER_SHEET, _reqKeyO, _reqKeyO); } catch (eGuardO) { _seenO = null; }",
+  "try { _seenO = requestDedupeExecute_(dbId, OFFER_SHEET, _reqKeyO, _reqKeyO); } catch (eGuardO) { _seenO = null; }\n" +
+  "      if (!_seenO) { try { _seenO = tlDbFind_(dbId, OFFER_SHEET, 'invoice_unique_id', _reqKeyO); } catch (eGuardO2) { _seenO = null; } }");
+
+// ---------- P5.3.1 constants ----------
+replaceOnce("  const CURRENCY_SHEET = 'ERP_currency_exchange';",
+  "  const CURRENCY_SHEET = 'ERP_currency_exchange';\n  const MFG_SHEET = 'erp_test_manufacture_orders';\n  const MFG_LINES_SHEET = 'erp_test_manufacture_lines';");
+
+// ---------- P5.3.2 schemas ----------
+replaceOnce("    schemas[CASH_SHEET] = { key: 'transaction_id', required: [], derived: 'cash' };\n    return schemas;",
+  "    schemas[CASH_SHEET] = { key: 'transaction_id', required: [], derived: 'cash' };\n" +
+  "    schemas[MFG_SHEET] = { key: 'unique_id', required: [], derived: null };\n" +
+  "    schemas[MFG_LINES_SHEET] = { key: 'unique_id', required: [], derived: null };\n    return schemas;");
+
+// ---------- P5.3.4 ACTION_DEFINITIONS + register ----------
+const MFG_DEFS = [
+  ['get_et_manufacture_headers', 'getManufactureHeaders_', 'et_manufacture', 'read', 'MFG_SHEET'],
+  ['get_et_manufacture_options', 'getManufactureOptions_', 'et_manufacture', 'read', 'MFG_SHEET'],
+  ['get_et_manufacture_lines', 'getManufactureLines_', 'et_manufacture', 'read', 'MFG_LINES_SHEET'],
+  ['get_et_manufacture_template', 'getManufactureTemplate_', 'et_manufacture', 'read', 'MFG_LINES_SHEET'],
+  ['get_et_manufacture_print', 'getManufacturePrint_', 'et_manufacture_print', 'read', 'MFG_SHEET'],
+  ['add_et_manufacture', 'addManufacture_', 'et_manufacture', 'write', 'MFG_SHEET'],
+  ['edit_et_manufacture', 'editManufacture_', 'et_manufacture', 'full', 'MFG_SHEET'],
+  ['delete_et_manufacture', 'deleteManufacture_', 'et_manufacture', 'full', 'MFG_SHEET'],
+  ['approve_et_manufacture', 'approveManufacture_', 'et_manufacture', 'write', 'MFG_SHEET'],
+  ['complete_et_manufacture', 'completeManufacture_', 'et_manufacture', 'write', 'MFG_SHEET'],
+  ['cancel_et_manufacture', 'cancelManufacture_', 'et_manufacture', 'full', 'MFG_SHEET'],
+];
+replaceOnce("    'prefetch_refs': { handler: prefetchRefs_,",
+  MFG_DEFS.map(([a, h, p, acc, t]) => `    '${a}': { handler: ${h}, page: '${p}', access: '${acc}', primaryLogTable: ${t} },`).join('\n') +
+  "\n    'prefetch_refs': { handler: prefetchRefs_,");
+replaceOnce("  register('get_page_versions', getPageVersions_);",
+  "  register('get_page_versions', getPageVersions_);\n" + MFG_DEFS.map(([a, h]) => `  register('${a}', ${h});`).join('\n'));
+
+// ---------- P5.3.3 / 5.3.5 handlers (and P7 mfgCompleted_) ----------
+replaceOnce("  function erpTestThemeCss_() {",
+  fs.readFileSync(path.join(__dirname, 'mfg_block.inc.js'), 'utf8') + "\n  function erpTestThemeCss_() {");
+
+// ---------- P5.3.6 cache busting ----------
+replaceOnce("      if (!type || type === 'sales') { keys.push('et_qty_map_' + dbId); }",
+  "      if (!type || type === 'sales') { keys.push('et_qty_map_' + dbId); }\n" +
+  "      if (!type || type === 'manufacture') { keys.push('et_qty_map_' + dbId, 'et_price_map_' + dbId); }");
+
+// ---------- P5.3.7 validator ----------
+replaceOnce("      registerDocValidator_('et_cash',",
+  "      registerDocValidator_('et_manufacture', function(p, dbId){ var h=(p&&p.header)||{}; var l=(p&&p.lines)||[]; return validateManufacture_(h, l); });\n" +
+  "      registerDocValidator_('et_cash',");
+
+// ---------- P7.5 product movement ----------
+replaceOnce("    movements.sort(function (a, b) {\n      const ta = a.date",
+  `    // Manufacturing (P7.5): completed orders in, their consumed materials out.
+    const mfgMv = mfgCompleted_(dbId);
+    mfgMv.orders.forEach(o => {
+      if (String(o.product_id) !== productId) return;
+      movements.push({ date: parseDate_(o.completion_date), type: 'manufacture_in', reference: o.mo_number || '', customer: '', qty_in: num0_(o.produced_qty), qty_out: 0 });
+    });
+    mfgMv.lines.forEach(x => {
+      if (String(x.line.product_id) !== productId) return;
+      movements.push({ date: parseDate_(x.parent.completion_date), type: 'manufacture_out', reference: x.parent.mo_number || '', customer: '', qty_in: 0, qty_out: num0_(x.line.consumed_qty) });
+    });
+
+    movements.sort(function (a, b) {
+      const ta = a.date`);
+
+// ---------- P7.6 income statement ----------
+replaceOnce("    const startQty = {}, purchQtyIn = {}, salesQtyIn = {};",
+  "    const startQty = {}, purchQtyIn = {}, salesQtyIn = {};\n    const mfgQtyIn = {}, mfgQtyOut = {};\n    let mfgExtra = 0;");
+replaceOnce("    // Sales out dated by joined invoice date.\n",
+  `    // Manufacturing dated by completion_date (P7.6).
+    (function () {
+      const mfgIs = mfgCompleted_(dbId);
+      const linesByParent = {};
+      mfgIs.lines.forEach(x => { const k = String(x.parent.unique_id); (linesByParent[k] = linesByParent[k] || []).push(x.line); });
+      mfgIs.orders.forEach(o => {
+        const pid = String(o.product_id);
+        const t = timeOf_(o.completion_date);
+        const lines = linesByParent[String(o.unique_id)] || [];
+        if (fromT != null && t && t < fromT) {
+          startQty[pid] = (startQty[pid] || 0) + num0_(o.produced_qty);
+          lines.forEach(l => { const lp = String(l.product_id); startQty[lp] = (startQty[lp] || 0) - num0_(l.consumed_qty); });
+          return;
+        }
+        if (!inPeriod_(t)) return;
+        mfgQtyIn[pid] = (mfgQtyIn[pid] || 0) + num0_(o.produced_qty);
+        lines.forEach(l => { const lp = String(l.product_id); mfgQtyOut[lp] = (mfgQtyOut[lp] || 0) + num0_(l.consumed_qty); });
+        mfgExtra += num0_(o.extra_cost);
+      });
+    })();
+    // Sales out dated by joined invoice date.
+`);
+replaceOnce("    [startQty, purchQtyIn, salesQtyIn, retQtyIn, costMap].forEach(m => {",
+  "    [startQty, purchQtyIn, salesQtyIn, retQtyIn, mfgQtyIn, mfgQtyOut, costMap].forEach(m => {");
+replaceOnce("      const eq = sq + (purchQtyIn[pid] || 0) - (salesQtyIn[pid] || 0) + (retQtyIn[pid] || 0);",
+  "      const eq = sq + (purchQtyIn[pid] || 0) + (mfgQtyIn[pid] || 0) - (salesQtyIn[pid] || 0) - (mfgQtyOut[pid] || 0) + (retQtyIn[pid] || 0);");
+replaceOnce("    const cogs = startVal + purchVal - endVal;", "    const cogs = startVal + purchVal + mfgExtra - endVal;");
+replaceOnce("        purchVal: purchVal,\n", "        purchVal: purchVal,\n        mfgExtra: mfgExtra,\n");
 
 // ---------- finalize ----------
 if (problems.length) {
