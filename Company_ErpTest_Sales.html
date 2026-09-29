@@ -1,0 +1,581 @@
+<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Testing System — المبيعات</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_ErpTest_Nav'); ?>
+  <?!= getCompanyThemeCSS_('37fc50edf1424abd') ?>
+</head>
+<body>
+<div id="tl-root" dir="rtl"></div>
+<script>
+  var params = new URLSearchParams(window.location.search);
+  var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+  var scriptUrl = window.scriptUrl || '/';
+  var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+  var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+  var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('37fc50edf1424abd') ?>';
+  var COMPANY_PAGES = <?!= companyPages ?>;
+  var CURRENT_ACTION = '<?!= currentAction ?>';
+
+  var __options = {};
+  var __headers = [];
+  var __lines = [];
+  var __editingUid = '';
+  var __canEdit = false;
+
+  function companyCall(moduleAction, data) {
+    return API.call('company_action', {
+      target_system: '37fc50edf1424abd',
+      module_action: moduleAction,
+      data: data || {}
+    }, SESSION_TOKEN);
+  }
+
+  function num(v) { var n = Number(v); return isNaN(n) ? 0 : n; }
+  function getVal(id) { var el = document.getElementById(id); return el ? el.value : ''; }
+  function setText(id, t) { var el = document.getElementById(id); if (el) el.textContent = t; }
+
+  function load() {
+    var contentId = 'tl-content';
+    UIC.appShell('tl-root', {
+      menuGroups: window.ERPTEST_MENU || [],
+      companyLogoUrl: COMPANY_LOGO_URL,
+      companyLogoHref: scriptUrl + '?action=et_dashboard&sessionToken=' + SESSION_TOKEN,
+      companyLogoTitle: 'النظام التجريبي',
+      breadcrumb: 'النظام التجريبي / المبيعات',
+      contentId: contentId
+    });
+
+    renderList();
+  }
+
+  /* The list shows the 20 most recent by default (the server's default limit).
+     "عرض الكل" asks for every invoice; UIC.dataTable then paginates on its own
+     at 50 rows a page, so "all" never means one enormous table.
+     Called with no argument after a save or a delete, it keeps whichever view
+      the user is in rather than silently dropping them back to 20. */
+  var __loadedAll = false;
+  var __listGeneration = 0;
+
+  function showAllSales() { renderList(true); }
+  function showLatestSales() { renderList(false); }
+
+  function renderList(loadAll, quiet) {
+    __loadedAll = arguments.length ? !!loadAll : __loadedAll;
+    var generation = ++__listGeneration;
+    if (!quiet) UIC.readSkeleton('tl-content', { message: [
+      'جاري تحميل فواتير المبيعات...',
+      'جاري استرجاع خيارات العملاء والأصناف...',
+      'لحظة، جاري إعداد جدول الفواتير...'
+    ] });
+    companyCall('get_et_sales_headers', __loadedAll ? { loadAll: true } : {})
+      .then(function (r) {
+        if (generation !== __listGeneration) return;
+        /* Phase 2.1: options no longer ride along with the list — see
+         * ensureOptions(). Still honoured if a response happens to carry them. */
+        if (r.options) {
+          __options = r.options;
+          __options.next_invoice_number = r.next_invoice_number || '';
+        }
+        __headers = r.headers || [];
+        renderHeadersTable(); try{schedulePrefetch();}catch(e){};
+      })
+      .catch(function (e) { if (generation === __listGeneration) showError(e); })
+      .finally(function () { if (!quiet && generation === __listGeneration) UI.hideSpinner(); });
+  }
+
+  function renderHeadersTable() {
+    var content = document.getElementById('tl-content');
+    __headers.sort(function (a, b) {
+      return new Date(b['تاريخ الفاتورة']) - new Date(a['تاريخ الفاتورة']);
+    });
+    var rows = __headers.map(function (h) {
+      /* The actions cell is the shared row menu every other list uses (المشتريات
+         on both TopLight and ValleyFoods), not a bare <select>. Two reasons:
+         parity — one look for row actions across the app — and, for the items
+         that open another page, a menu entry is a real <button>, so the click
+         that reaches window.open carries a user gesture. A <select> change event
+         does not reliably, which is why مرتجعات could take the selection and
+         then open nothing at all. */
+      var uid = FMT.escape(String(h.invoice_unique_id || ''));
+      var item = function (label, action, color) {
+        return { label: label, color: color, onclick: "doAction('" + uid + "','" + action + "')" };
+      };
+      var btns = [
+        item('طباعة', 'print'),
+        item('تحليل التكلفة', 'costing'),
+        item('اذن صرف منتج', 'release')
+      ];
+      if (!h.fully_returned) btns.push(item('مرتجعات', 'returns'));
+      if (String(h.approval_status) !== 'Approved') {
+        btns.push(item('اعتماد', 'approve'));
+        if (UIC.canFull_()) {
+          btns.push(item('تعديل', 'edit'));
+          btns.push(item('حذف', 'delete', 'var(--danger)'));
+        } else {
+          btns.push(item('عرض', 'view'));
+        }
+      }
+      var actions = UIC.actionBtns(btns);
+      return {
+        invoice_number: h['رقم الفاتورة'] || '-',
+        customer_name: h.customer_name || '-',
+        invoice_date: h['تاريخ الفاتورة'] ? String(h['تاريخ الفاتورة']).slice(0, 10) : '-',
+        net: FMT.number(h['المبلغ الصافي']),
+        discount_percent: FMT.percent(h['نسبة الخصم']),
+        discount_amount: FMT.number(h['قيمة الخصم']),
+        total: FMT.number(h['إجمالي']),
+        approval_status: h.approval_status || '-',
+        actions: actions
+      };
+    });
+    content.innerHTML = UIC.showAllBar({ loadedAll: __loadedAll, total: __headers.length, showAll: 'showAllSales()', showLatest: 'showLatestSales()' }) +
+    '<div style="display:flex;justify-content:flex-end;align-items:center;margin-bottom:12px;gap:8px;flex-wrap:wrap;">' +
+      '<button class="btn btn-outline" onclick="openAnalysis()">تحليل المبيعات</button>' +
+      '<button class="btn btn-outline" onclick="openCostingAnalysis()">تحليل تكلفة المبيعات الاجمالية</button>' +
+      UIC.favouritesMenu('sales-table', 'et_sales') +
+      '<button class="btn btn-primary" onclick="openForm(\'\')">+ إضافة فاتورة بيع</button></div>' +
+      UIC.dataTable('sales-table', {
+        /* Phase 6 (opt): selectable wires the existing dt-sel bulk bar
+         * (export/print selection — read-only actions only) to this list;
+         * favouritesMenu above generalizes saved views beyond the Cash
+         * pages via the existing SESSION.saveCurrentView endpoint. */
+        selectable: true,
+        /* [RT-1] The list endpoint caps at the newest rows unless `loadAll` is
+           passed, and the search box filters only what is in memory — so the
+           table says which records the box actually searches. */
+        truncated: !__loadedAll,
+        showAll: 'showAllSales()',
+        title: 'المبيعات',
+        headers: [
+          { key: 'invoice_number', label: 'رقم الفاتورة' },
+          { key: 'customer_name', label: 'العميل' },
+          { key: 'invoice_date', label: 'تاريخ الفاتورة' },
+          { key: 'net', label: 'المبلغ الصافي', numeric: true },
+          { key: 'discount_percent', label: 'نسبة الخصم', numeric: true },
+          { key: 'discount_amount', label: 'قيمة الخصم', numeric: true },
+          { key: 'total', label: 'الإجمالي', numeric: true },
+          { key: 'approval_status', label: 'الحالة' },
+          { key: 'actions', label: 'إجراءات' }
+        ],
+        rows: rows,
+        pageSize: 50,
+        emptyText: 'لا توجد فواتير بيع'
+      });
+    UIC.initTableSort('sales-table');
+  }
+
+  /* Phase 2.1: the dropdown data used to ride along with every list render,
+   * costing three extra full sheet reads on the server for a form that may
+   * never open. It is now fetched once, on first open, and reused after that. */
+  var __optionsPromise = null;
+
+  function ensureOptions() {
+    if (__optionsPromise) return __optionsPromise;
+    __optionsPromise = companyCall('get_et_sales_options')
+      .then(function (r) {
+        __options = r.options || {};
+        __options.next_invoice_number = r.next_invoice_number || '';
+        return __options;
+      })
+      .catch(function (e) {
+        __optionsPromise = null;   // let the next open retry
+        throw e;
+      });
+    return __optionsPromise;
+  }
+
+  function openForm(uid) {
+    __editingUid = uid || '';
+    var record = null;
+    if (uid) {
+      record = __headers.find(function (h) { return String(h.invoice_unique_id) === String(uid); }) || null;
+      /* Row-edit repair (5.5): a requested record that no longer exists shows
+         a clear error and returns to the list — it must never silently render
+         the Add form. */
+      if (!record) { UIC.toast('السجل غير موجود — تم تحديث القائمة', 'error'); showList(); return; }
+    }
+    UIC.readSkeleton('tl-content', { message: ['جاري استرجاع خيارات العملاء والأصناف...'] });
+    ensureOptions()
+      .then(function () { renderForm(record); })
+      .catch(function (e) { showError(e); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function renderForm(record) {
+    var content = document.getElementById('tl-content');
+    __canEdit = !record || IS_SUPER_ADMIN;
+
+    var o = __options;
+    var custId = record ? String(record['اسم العميل']) : '';
+    var invoiceDate = record ? formatDate(record['تاريخ الفاتورة']) : formatDate(new Date());
+    var discount = record ? String(record['نسبة الخصم']) : '0';
+    var taxSystem = record ? String(record.tax_system) : 'false';
+    // Display-only number: actual on edit, expected next on add. Disabled so
+    // collectForm skips it; add_et_sales assigns the authoritative number anyway.
+    var invPreview = record ? String(record['رقم الفاتورة'] || '-') : String(o.next_invoice_number || '');
+
+    content.innerHTML =
+      '<div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;">' +
+      '<button class="btn btn-outline" onclick="showList()">← عودة</button>' +
+      '<h2 style="margin:0;">' + (record ? 'تعديل فاتورة بيع' : 'إضافة فاتورة بيع') + '</h2></div>' +
+      '<form id="sales-form">' +
+      '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:0 16px;padding:16px;background:var(--bg-surface);border:1px solid var(--border-color);border-radius:8px;margin-bottom:16px;">' +
+      '<div class="form-field"><label class="form-label">رقم الفاتورة المتوقع</label>' +
+      '<input class="input" value="' + FMT.escape(invPreview) + '" disabled style="background:var(--bg-subtle);color:var(--text-muted);"></div>' +
+      UIC.field({ key: 'customer_id', label: 'اسم العميل *', type: 'select', options: o.customer_options || [], value: custId, required: true, placeholder: 'اختر العميل...' }) +
+      UIC.field({ key: 'invoice_date', label: 'تاريخ الفاتورة *', type: 'date', value: invoiceDate, required: true }) +
+      UIC.field({ key: 'discount_percent', label: 'نسبة الخصم', type: 'select', options: o.discount_options || [], value: discount }) +
+      UIC.field({ key: 'tax_system', label: 'النظام الضريبي', type: 'select', options: [{ value: 'false', label: 'لا' }, { value: 'true', label: 'نعم' }], value: taxSystem }) +
+      '</div>' +
+      '<div id="customer_info" style="display:flex;flex-wrap:wrap;gap:16px;padding:10px 16px;background:var(--bg-subtle);border:1px solid var(--border-color);border-radius:8px;margin-bottom:16px;">' +
+      '<span>رقم التسجيل الضريبي: <strong id="c_tax_id">-</strong></span>' +
+      '<span>رقم الموبيل: <strong id="c_telephone">-</strong></span>' +
+      '<span>العنوان: <strong id="c_address">-</strong></span>' +
+      '</div>' +
+      '<div style="display:flex;flex-wrap:wrap;gap:24px;padding:16px;background:var(--bg-surface);border:1px solid var(--border-color);border-radius:8px;margin-bottom:16px;">' +
+      '<div>المبلغ الصافي: <strong id="net_display">0</strong></div>' +
+      '<div>قيمة الخصم: <strong id="discount_display">0</strong></div>' +
+      '<div>قيمة الضريبة: <strong id="tax_display">0</strong></div>' +
+      '<div>الإجمالي: <strong id="total_display">0</strong></div>' +
+      '</div>' +
+      '</form>' +
+      '<h3 style="margin-top:20px;">الأصناف</h3>' +
+      '<div class="table-wrap">' +
+      '<table id="lines-table" class="table" style="min-width:980px;"><thead><tr>' +
+      '<th>المنتج</th><th>الكمية</th><th data-col="num" data-min="18ch">السعر</th><th data-col="atom" data-min="10ch">نسبة الضريبة</th><th data-col="num" data-min="16ch">الخصم</th><th>الإجمالي</th>' + (__canEdit ? '<th></th>' : '') +
+      '</tr></thead><tbody id="lines-tbody"></tbody></table>' +
+      '</div>' +
+      (__canEdit ? '<div style="margin:12px 0;"><button class="btn btn-outline" onclick="addLine()">+ إضافة صنف</button></div>' : '') +
+      '<div style="margin:16px 0;">' + (__canEdit ? '<button class="btn btn-primary" onclick="saveSales()">حفظ</button> ' : '') +
+      '<button class="btn btn-outline" onclick="showList()">إلغاء</button></div>';
+
+    var custEl = document.getElementById('customer_id');
+    if (custEl) custEl.addEventListener('change', onCustomerChange);
+    var discEl = document.getElementById('discount_percent');
+    if (discEl) { discEl.addEventListener('change', recalc); discEl.addEventListener('input', recalc); }
+
+    if (custId) onCustomerChange();
+
+    __lines = [];
+    if (record) {
+      companyCall('get_et_sales_lines', { parent_id: record.invoice_unique_id })
+        .then(function (r) {
+          __lines = (r.lines || []).map(function (l) {
+            return { product_id: l.product_id, product_qty: l.product_qty, product_price: l.product_price, product_tax: l.product_tax, product_discount: l.product_discount };
+          });
+          renderLines();
+        })
+        .catch(function (e) { UIC.toast(e.message || 'خطأ', 'error'); });
+    } else {
+      renderLines();
+    }
+  }
+
+  function onCustomerChange() {
+    var sel = document.getElementById('customer_id');
+    if (!sel) return;
+    var opts = __options.customer_options || [];
+    var found = null;
+    for (var i = 0; i < opts.length; i++) {
+      if (String(opts[i].value) === String(sel.value)) { found = opts[i]; break; }
+    }
+    setText('c_tax_id', found && found.tax_id ? found.tax_id : '-');
+    setText('c_telephone', found && found.telephone ? found.telephone : '-');
+    setText('c_address', found && found.address ? found.address : '-');
+  }
+
+  function renderLines() {
+    var lines = __lines || [];
+    var opts = __options || {};
+    var html = '';
+    for (var i = 0; i < lines.length; i++) {
+      var l = lines[i];
+      html += '<tr>' +
+        '<td>' + UIC.combo({ key: 'product_id_' + i, options: opts.product_options || [], value: l.product_id != null ? l.product_id : '', placeholder: 'ابحث باسم الصنف...', inline: true }) + '</td>' +
+        '<td><input class="input" type="number" min="0" step="any" value="' + (l.product_qty != null ? l.product_qty : '') + '" oninput="updateLineInput(' + i + ', \'product_qty\', this.value)">' +
+        '<div id="avail_' + i + '" style="font-size:11px;color:var(--text-muted);">متاح: ' + availableQty(i) + '</div></td>' +
+        '<td><input id="product_price_' + i + '" class="input" type="number" min="0" step="any" style="min-width:150px;" value="' + (l.product_price != null ? l.product_price : '') + '" oninput="updateLineInput(' + i + ', \'product_price\', this.value)"></td>' +
+        '<td><select id="product_tax_' + i + '" class="input" style="min-width:80px;" onchange="updateLineSelect(' + i + ', \'product_tax\', this.value)">' +
+          (opts.product_tax_options || []).map(function (t) {
+            return '<option value="' + FMT.escape(t.value) + '"' + (String(t.value) === String(l.product_tax) ? ' selected' : '') + '>' + FMT.escape(t.label) + '</option>';
+          }).join('') +
+          '</select></td>' +
+        '<td><input class="input" type="number" min="0" step="any" style="min-width:130px;" value="' + (l.product_discount != null ? l.product_discount : '') + '" oninput="updateLineInput(' + i + ', \'product_discount\', this.value)"></td>' +
+        '<td id="line_total_' + i + '"></td>' +
+        (__canEdit ? '<td><button class="btn btn-outline" style="padding:4px 10px;" onclick="removeLine(' + i + ')">حذف</button></td>' : '') +
+        '</tr>';
+    }
+    var tbody = document.getElementById('lines-tbody');
+    if (tbody) tbody.innerHTML = html;
+    UIC.autoColumns('lines-table');
+    // Wire combo hidden inputs: UIC.comboPick dispatches change; blur-only
+    // matches do not, so saveSales() also syncs hidden values into __lines.
+    for (var ci = 0; ci < lines.length; ci++) {
+      (function (idx) {
+        var h = document.getElementById('product_id_' + idx);
+        if (h) h.addEventListener('change', function () { updateLineSelect(idx, 'product_id', h.value); });
+      })(ci);
+    }
+    recalc();
+  }
+
+  function addLine() {
+    __lines.push({ product_id: '', product_qty: 0, product_price: 0, product_tax: 0, product_discount: 0 });
+    renderLines();
+  }
+
+  function removeLine(i) {
+    __lines.splice(i, 1);
+    renderLines();
+  }
+
+  function updateLineInput(i, key, value) {
+    __lines[i][key] = value;
+    recalc();
+  }
+
+  function findProductOption(value) {
+    var opts = __options.product_options || [];
+    for (var k = 0; k < opts.length; k++) {
+      if (String(opts[k].value) === String(value)) return opts[k];
+    }
+    return null;
+  }
+
+  function availableQty(i) {
+    var opt = findProductOption(__lines[i].product_id);
+    return opt && opt.current_qty != null ? opt.current_qty : 0;
+  }
+
+  function updateLineSelect(i, key, value) {
+    // Keep any typed-but-unconfirmed combo pick before touching the row.
+    var _h = document.getElementById('product_id_' + i);
+    if (_h && key !== 'product_id') __lines[i].product_id = _h.value;
+    __lines[i][key] = value;
+    if (key === 'product_id') {
+      // In-place update only: never re-render here or the open combo (and
+      // mobile focus) is destroyed while the user is picking a product.
+      var opt = findProductOption(value);
+      if (opt) __lines[i].product_price = opt.default_price != null ? opt.default_price : 0;
+      var priceEl = document.getElementById('product_price_' + i);
+      if (priceEl) priceEl.value = __lines[i].product_price;
+      var avEl = document.getElementById('avail_' + i);
+      if (avEl) avEl.textContent = 'متاح: ' + availableQty(i);
+      recalc();
+      return;
+    }
+    renderLines();
+  }
+
+  function recalc() {
+    var discountPercent = num(getVal('discount_percent'));
+    var net = 0, lineDiscount = 0, tax = 0;
+    (__lines || []).forEach(function (l, i) {
+      var nv = num(l.product_qty) * num(l.product_price);
+      net += nv;
+      lineDiscount += num(l.product_discount);
+      tax += nv * num(l.product_tax);
+      setText('line_total_' + i, FMT.number(nv - num(l.product_discount) + nv * num(l.product_tax)));
+    });
+    var discountAmount = lineDiscount + net * discountPercent;
+    var total = net - discountAmount + tax;
+    setText('net_display', FMT.number(net));
+    setText('discount_display', FMT.number(discountAmount));
+    setText('tax_display', FMT.number(tax));
+    setText('total_display', FMT.number(total));
+  }
+
+  function validateSalesForm() {
+    var data = UIC.collectForm('sales-form');
+    if (!UIC.validateForm('sales-form')) return false;
+    if (String(data.customer_id || '').trim() === '') { UIC.toast('اسم العميل مطلوب', 'error'); return false; }
+    if (String(data.invoice_date || '').trim() === '') { UIC.toast('تاريخ الفاتورة مطلوب', 'error'); return false; }
+    if (!(__lines || []).length) { UIC.toast('يجب إضافة صنف واحد على الأقل', 'error'); return false; }
+    for (var i = 0; i < __lines.length; i++) {
+      var l = __lines[i];
+      if (String(l.product_id == null ? '' : l.product_id).trim() === '') { UIC.toast('المنتج مطلوب لكل صنف', 'error'); return false; }
+      if (String(l.product_tax == null ? '' : l.product_tax).trim() === '') { UIC.toast('نسبة الضريبة مطلوبة لكل صنف', 'error'); return false; }
+      if (String(l.product_qty == null ? '' : l.product_qty).trim() === '') { UIC.toast('الكمية مطلوبة لكل صنف', 'error'); return false; }
+      if (String(l.product_price == null ? '' : l.product_price).trim() === '') { UIC.toast('السعر مطلوب لكل صنف', 'error'); return false; }
+      if (String(l.product_discount == null ? '' : l.product_discount).trim() === '') { UIC.toast('الخصم مطلوب لكل صنف', 'error'); return false; }
+      if (num(l.product_qty) <= 0) { UIC.toast('الكمية يجب أن تكون أكبر من صفر', 'error'); return false; }
+      if (num(l.product_price) < 0) { UIC.toast('السعر يجب أن يكون غير سالب', 'error'); return false; }
+      var avail = availableQty(i);
+      if (num(l.product_qty) > avail) { UIC.toast('الكمية تتجاوز الرصيد المتاح (المتاح: ' + avail + ')', 'error'); return false; }
+    }
+    return true;
+  }
+
+  function saveSales() {
+    var btn = document.querySelector('#sales-form .btn-primary') || document.querySelector('.btn-primary');
+    UI.submitOnce(btn, function () {
+      // Sync combo hidden inputs into __lines: a typed exact-match confirmed
+      // by blur (no change event) would otherwise be lost on save.
+      (__lines || []).forEach(function (l, i) {
+        var h = document.getElementById('product_id_' + i);
+        if (h) l.product_id = h.value;
+      });
+      if (!validateSalesForm()) return Promise.reject();
+      var header = UIC.collectForm('sales-form');
+      var payload = { header: header, lines: __lines || [] };
+      var isEdit = __editingUid ? true : false;
+      if (isEdit) header.unique_id = __editingUid;
+
+      /* Tier B: the stock-availability guard (validateSales_ over the live
+         qtyMap, plus the client availableQty check above) can refuse for
+         reasons invisible in the form — another device may have consumed the
+         stock first. So NO draft is painted: canPatch stays false, only the
+         quiet corner hint shows, and the row is patched from the reply instead.
+         A refusal toasts exactly as before and never paints a row. No
+         validation is changed. queueable:false: I1 is unproven for
+         add/edit_et_sales, so a transport failure rolls back loudly. */
+      return UIC.Live.save({
+        call: companyCall,
+        action: isEdit ? 'edit_et_sales' : 'add_et_sales',
+        data: payload,
+        message: 'تم الحفظ',
+        queueable: false,
+        reload: function () { renderList(__loadedAll, true); },
+        onSuccess: function (r) {
+           var rec = r.record || null;
+           if (rec) {
+             var RECENT_LIMIT = 10;
+             var uid = rec.invoice_unique_id || r.unique_id || __editingUid;
+             rec.invoice_unique_id = uid;
+             if (rec.customer_name == null) {
+               var optsC = (__options.customer_options||[]);
+               for(var ci=0;ci<optsC.length;ci++){ if(String(optsC[ci].value)===String(header.customer_id)){ rec.customer_name=optsC[ci].label||''; break; } }
+             }
+             if (rec.fully_returned == null) rec.fully_returned = false;
+             if (isEdit) {
+               var idxS = __headers.findIndex(function(x){ return String(x.invoice_unique_id)===String(uid); });
+               if(idxS!==-1) __headers[idxS]=rec; else __headers.push(rec);
+             } else {
+               __headers.unshift(rec);
+               if (__headers.length > RECENT_LIMIT) __headers.pop();
+             }
+             renderHeadersTable();
+          } else {
+            showList();
+          }
+        }
+      }).catch(function () { /* UIC.Live has toasted */ });
+    });
+  }
+
+  /* Every one of these opens another screen of the app in a new tab. The tab is
+     what the sandbox may refuse: window.open returns null when a popup blocker
+     (or the Apps Script iframe) turns it down, and until now the action ended
+     there — the user picked مرتجعات and nothing happened, with no error to go on.
+     Falling back to navigating this frame means the page always opens; the user
+     comes back with the returns screen's own إغلاق button. */
+  function openSalesPage_(action, uid) {
+    var url = scriptUrl + '?action=' + encodeURIComponent(action) +
+      (uid ? '&purchase_code=' + encodeURIComponent(uid) : '') +
+      '&sessionToken=' + encodeURIComponent(SESSION_TOKEN);
+    var w = null;
+    try { w = window.open(url, '_blank'); } catch (e) { w = null; }
+    if (w) { try { w.focus(); } catch (e) {} return; }
+    if (window.UIC && UIC.navTo) UIC.navTo(null, url);
+    else window.location.href = url;
+  }
+
+  function printSales(uid) { openSalesPage_('et_sales_print', uid); }
+
+  function openReturns(uid) { openSalesPage_('et_sales_returns', uid); }
+
+  function openRelease(uid) { openSalesPage_('et_sales_release', uid); }
+
+  function openAnalysis() { openSalesPage_('et_sales_analysis'); }
+
+  function openCostingAnalysis() { openSalesPage_('et_sales_costing_analysis'); }
+
+  function openCosting(uid) { openSalesPage_('et_sales_costing_print', uid); }
+
+  function doAction(uid, action) {
+    if (action === 'print') printSales(uid);
+    else if (action === 'costing') openCosting(uid);
+    else if (action === 'release') openRelease(uid);
+    else if (action === 'returns') openReturns(uid);
+    else if (action === 'approve') approveSales(uid);
+    else if (action === 'edit' || action === 'view') openForm(uid);
+    else if (action === 'delete') deleteSales(uid);
+  }
+
+  function approveSales(uid) {
+    /* Tier B approve: no draft painted, so no draft/list/key/render. onSuccess
+       patches the in-memory row and re-renders locally; reload is the
+       error-path backstop. No overlay. queueable:false. */
+    UIC.Live.save({
+      call: companyCall,
+      action: 'approve_et_sales',
+      data: { unique_id: uid },
+      message: 'تم الاعتماد',
+      queueable: false,
+      reload: function () { renderList(__loadedAll, true); },
+      onSuccess: function () {
+        var item = (__headers || []).find(function (x) { return String(x.invoice_unique_id) === String(uid); });
+        if (item) item.approval_status = 'Approved';
+        renderHeadersTable();
+      }
+    }).catch(function () { /* UIC.Live has toasted */ });
+  }
+
+  function deleteSales(uid) {
+    if (!UIC.canFull_()) { UIC.toast('غير مصرح', 'error'); return; }
+    if (!confirm('هل تريد حذف هذه الفاتورة؟')) return;
+    /* Tier B delete: no optimistic paint (there is no record to draw — the row
+       is gone), so no draft/list/key/render. onSuccess splices the in-memory
+       list and re-renders locally; reload is the error-path backstop. No
+       overlay. queueable:false. */
+    UIC.Live.save({
+      call: companyCall,
+      action: 'delete_et_sales',
+      data: { unique_id: uid },
+      message: 'تم الحذف',
+      queueable: false,
+      reload: function () { renderList(__loadedAll, true); },
+      onSuccess: function () {
+        __headers = (__headers || []).filter(function (x) { return String(x.invoice_unique_id) !== String(uid); });
+        renderHeadersTable();
+      }
+    }).catch(function () { /* UIC.Live has toasted */ });
+  }
+
+  function showList() {
+    renderList();
+  }
+
+  /* Another device's change arrives quietly, keeping whichever view (latest 10
+     or all) the user is in. */
+  UIC.Live.watchPage({
+    call: companyCall,
+    page: 'et_sales',
+    onChange: function () { UIC.Live.arrive(function () { renderList(__loadedAll, true); }); }
+  });
+
+  function showError(e) {
+    var content = document.getElementById('tl-content');
+    if (content) content.innerHTML = '<div class="empty-state"><span>' + FMT.escape(e.message || 'خطأ') + '</span></div>';
+  }
+
+  function formatDate(v) {
+    if (!v) return '';
+    var d = new Date(v);
+    if (isNaN(d.getTime())) return String(v).slice(0, 10);
+    return d.toISOString().slice(0, 10);
+  }
+
+
+  load();
+</script>
+</body>
+</html>
+
+

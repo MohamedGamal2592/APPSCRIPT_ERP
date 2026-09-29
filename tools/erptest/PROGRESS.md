@@ -20,3 +20,5 @@
 | 2026-09-29 | P3.3.9-3.10 | DONE | Code.js: 2 insertions (registerErpTest_). .clasp.json: Schema, Actions, Registry after Company_TopLight_Registry.js. |
 | 2026-09-29 | P3.3.11 | DONE | tools/verify/erptest_clone_static.js. Allow-list notes: getHeaders_ expected 2 (etHeaders_ + etSchemaCheck_ per 3.12.1); ABSENT_GUARDED_WRITES name_vendor, نوع سلع الجدول (OD-C/OD-D, set() skips absent columns). |
 | 2026-09-29 | P3 DONE-CHECK (local) | PASS | erptest_clone_static: OK; company_registry_bootstrap: OK (test expectations extended with the 5th company 37fc50edf1424abd / et_dashboard). etSchemaCheckRun_ is OWNER RUNS after clasp push. |
+| 2026-09-29 | P4.4.1-4.2 | DONE | gen_pages.js -> 22 Company_ErpTest_*.html. Extra (needed for B3/B5): bare top_light_<tab> in history calls -> erp_test_<tab>; Company_TopLight_ -> Company_ErpTest_. |
+| 2026-09-29 | P4.4.3 / DONE-CHECK (local) | PASS | erptest_clone_static: OK (26 files); parse_pages: all parse. company_two_file_boundary and 2 ui_smoke regressions (TopChemical/0_ERPsetup) also fail on base 9995a62 — pre-existing, not from this work. clasp push + page walkthrough are OWNER RUNS. |

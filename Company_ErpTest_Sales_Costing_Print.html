@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>تحليل تكلفة الفاتورة</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= getCompanyThemeCSS_('37fc50edf1424abd') ?>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800&display=swap">
+  <style>
+    :root {
+      --cost-light-yellow: #fef08a;
+      --cost-primary-yellow: #fbbf24;
+      --cost-black: #111111;
+      --cost-sale-bg: #fffbeb;
+    }
+    body { font-family: 'Cairo', sans-serif; }
+    @media print {
+      .no-print { display: none !important; }
+      body { background: var(--bg-surface, #fff) !important; }
+      .cost-doc { border: none !important; border-radius: 0 !important; }
+    }
+    @page { size: A4 portrait; margin: 15mm 10mm; }
+    .cost-doc {
+      max-width: 900px; margin: 0 auto; padding: 16px; background: var(--bg-surface, #ffffff);
+      border: 3px solid #111111; border-radius: 12px;
+      -webkit-print-color-adjust: exact; print-color-adjust: exact;
+    }
+    .cost-doc * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .print-btn {
+      background: #111111; color: #fbbf24; border: none; border-radius: 8px;
+      padding: 10px 28px; font-family: 'Cairo', sans-serif; font-weight: 700;
+      font-size: 14px; cursor: pointer; margin-bottom: 16px;
+      /* [iPhone run] A 44px tap target. The button computes to about 40px
+         today, so this only ever grows it — nothing else moves. */
+      min-height: 44px;
+    }
+    .cost-title { text-align: center; margin: 0 0 4px; font-size: 22px; font-weight: 800; color: var(--text-main, #111111); }
+    .cost-subtitle { text-align: center; margin: 0 0 20px; font-size: 13px; font-weight: 600; color: #374151; }
+    .meta-grid {
+      display: grid; grid-template-columns: 1fr; gap: 10px 16px;
+      background: #fef08a; border: 2px solid #111111; border-radius: 8px;
+      padding: 14px 16px; margin-bottom: 20px; font-size: 13px;
+    }
+    .meta-grid .lbl { font-weight: 600; color: #374151; }
+    .meta-grid .val { font-weight: 800; color: var(--text-main, #111111); }
+    .cost-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 20px; }
+    .cost-table th, .cost-table td { border: 1px solid #111111; padding: 8px 10px; text-align: right; }
+    .cost-table thead th { background: #111111; color: #fbbf24; font-weight: 700; }
+    .cost-table td.c-name { font-weight: 700; }
+    .cost-table td.c-cost { color: var(--text-muted, #6b7280); font-variant-numeric: tabular-nums; }
+    .cost-table td.c-sale { font-weight: 800; color: var(--text-main, #111111); background: var(--warning-bg, #fffbeb); font-variant-numeric: tabular-nums; }
+    .cost-table td.num { font-variant-numeric: tabular-nums; }
+    .cost-table tr.ret-row { background: #fee2e2; }
+    .cost-table tr.ret-row td.c-name { color: var(--danger-text, #b91c1c); font-weight: 800; }
+    .cards-grid { display: grid; grid-template-columns: 1fr; gap: 12px; }
+    .acard { border-radius: 10px; padding: 14px 16px; border: 2px solid #111111; }
+    .acard.span2 { grid-column: auto; }
+    .acard .clbl { font-size: 13px; font-weight: 600; margin-bottom: 6px; }
+    .acard .cval { font-size: 20px; font-weight: 800; font-variant-numeric: tabular-nums; }
+    .acard.c-rev { background: #fef08a; }
+    .acard.c-disc { background: var(--danger-bg, #fef2f2); border-color: var(--danger, #ef4444); }
+    .acard.c-disc .cval { color: var(--danger, #ef4444); }
+    .acard.c-cost { background: var(--warning-bg, #fff7ed); border-color: #c2410c; }
+    .acard.c-cost .cval { color: #c2410c; }
+    .acard.c-profit-pos { background: var(--success-bg, #f0fdf4); border-color: #16a34a; }
+    .acard.c-profit-pos .cval { color: #16a34a; }
+    .acard.c-profit-neg { background: var(--danger-bg, #fef2f2); border-color: var(--danger, #ef4444); }
+    .acard.c-profit-neg .cval { color: var(--danger, #ef4444); }
+    .acard.c-margin { background: var(--bg-subtle, #f8fafc); }
+    /* [iPhone run] The base above is now genuinely narrow — one column, 16px
+       padding — so this block no longer restates its own base. It carries the
+       desktop values it always carried, unchanged, and from 600px up the page
+       renders exactly as it did before this run.
+
+       [UI-2.9b / U-48] Was a max-width:640 block, which is on no tier. The
+       narrow layout is now the base and the wide one is restored at tablet-p,
+       so the same two layouts survive, expressed additively. */
+    @media (min-width: 600px) {
+      .meta-grid { grid-template-columns: repeat(3, 1fr); }
+      .cards-grid { grid-template-columns: 1fr 1fr; }
+      .acard.span2 { grid-column: span 2; }
+      .cost-doc { padding: 30px; }
+    }
+  </style>
+</head>
+<body>
+<div id="costing-root" dir="rtl"></div>
+<script>
+  var params = new URLSearchParams(window.location.search);
+  var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+  var salesCode = '<?!= purchaseCode ?>';
+
+  function companyCall(moduleAction, data) {
+    return API.call('company_action', {
+      target_system: '37fc50edf1424abd',
+      module_action: moduleAction,
+      data: data || {}
+    }, SESSION_TOKEN);
+  }
+
+  function fmtEGP(n) {
+    var v = Number(n);
+    if (isNaN(v)) v = 0;
+    return 'EGP ' + v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+
+  function fmtNum(n, dec) {
+    var v = Number(n);
+    if (isNaN(v)) v = 0;
+    return v.toLocaleString('en-US', { minimumFractionDigits: dec, maximumFractionDigits: dec });
+  }
+
+  function fmtDate(v) {
+    if (!v) return '-';
+    if (v instanceof Date) return v.toISOString().slice(0, 10);
+    return String(v).slice(0, 10);
+  }
+
+  function load() {
+    UIC.readSkeleton('costing-root', { message: ['جاري تحميل تحليل تكلفة الفاتورة...', 'لحظة، جاري حساب الربحية...'] });
+    companyCall('get_et_sales_costing', { sales_code: salesCode })
+      .then(function (r) { renderDoc(r); })
+      .catch(function (e) {
+        document.getElementById('costing-root').innerHTML =
+          '<div class="empty-state"><span>' + FMT.escape(e.message || 'خطأ') + '</span></div>';
+      })
+      .finally(function () { UI.hideSpinner(); try{schedulePrefetch();}catch(e){} });
+  }
+
+  function rowHtml(it) {
+    var cls = it.isReturn ? ' class="ret-row"' : '';
+    return '<tr' + cls + '>' +
+      '<td class="c-name">' + FMT.escape(it.productName || '-') + '</td>' +
+      '<td class="num">' + fmtNum(it.qty, 2) + '</td>' +
+      '<td class="num">' + fmtNum(it.unitCost, 2) + '</td>' +
+      '<td class="num">' + fmtNum(it.price, 2) + '</td>' +
+      '<td class="c-cost num">' + fmtNum(it.totalCost, 2) + '</td>' +
+      '<td class="c-sale num">' + fmtNum(it.totalValue, 2) + '</td>' +
+      '</tr>';
+  }
+
+  function renderDoc(r) {
+    var root = document.getElementById('costing-root');
+    var m = r.meta || {};
+    var t = r.totals || {};
+    var allRows = (r.items || []).concat(r.returns || []);
+    var profitPos = Number(t.profit) >= 0;
+
+    root.innerHTML =
+      '<div style="max-width:900px;margin:0 auto;" class="no-print">' +
+        '<button class="print-btn" onclick="window.print()">طباعة التحليل</button>' +
+      '</div>' +
+      '<div class="cost-doc">' +
+        '<h1 class="cost-title">إذن تحليل تكلفة الفاتورة وبيان الربحية</h1>' +
+        '<p class="cost-subtitle">شركة النظام التجريبي | الإدارة المالية والمراقبة وبحوث العمليات</p>' +
+        '<div class="meta-grid">' +
+          '<div><span class="lbl">رقم السند المرجعي: </span><span class="val">' + FMT.escape(m.invoice_number || '-') + '</span></div>' +
+          '<div><span class="lbl">إسم العميل: </span><span class="val">' + FMT.escape(m.customer_name || '-') + '</span></div>' +
+          '<div><span class="lbl">تاريخ الحركة: </span><span class="val">' + FMT.escape(fmtDate(m.invoice_date)) + '</span></div>' +
+          '<div><span class="lbl">طبيعة المستند الفني: </span><span class="val" style="color:#0369a1;">بيان ربحية وتكلفة الفاتورة</span></div>' +
+          '<div><span class="lbl">إجمالي الخصم الممنوح للفاتورة: </span><span class="val" style="color:var(--danger-text, #b91c1c);">' + fmtEGP(m.discount_value) + '</span></div>' +
+          '<div><span class="lbl">حالة اعتماد المستند: </span><span class="val">' + FMT.escape(m.approval_status || '-') + '</span></div>' +
+        '</div>' +
+        '<div style="overflow-x:auto;"><table class="cost-table" style="min-width:760px;">' +
+          '<thead><tr>' +
+            '<th style="width:35%;">إسم ومواصفات المنتج الفنية</th>' +
+            '<th style="width:10%;">الكمية</th>' +
+            '<th style="width:12%;">تكلفة الوحدة</th>' +
+            '<th style="width:13%;">السعر المباع به</th>' +
+            '<th style="width:15%;">إجمالي التكلفة</th>' +
+            '<th style="width:15%;">الإجمالي البيعي الصافي</th>' +
+          '</tr></thead><tbody>' +
+            (allRows.length ? allRows.map(rowHtml).join('') : '<tr><td colspan="6" style="text-align:center;">لا توجد أصناف</td></tr>') +
+          '</tbody></table></div>' +
+        '<div class="cards-grid">' +
+          '<div class="acard c-rev"><div class="clbl">إجمالي صافي إيراد المبيعات (بعد الارتجاع)</div><div class="cval">' + fmtEGP(t.netInvoice) + '</div></div>' +
+          '<div class="acard c-disc"><div class="clbl">صافي قيمة الخصم العام المخصوم (عرض فقط)</div><div class="cval">' + fmtEGP(t.discountValue) + '</div></div>' +
+          '<div class="acard c-cost"><div class="clbl">إجمالي تكلفة الأصناف المستهلكة فعلياً</div><div class="cval">' + fmtEGP(t.netCost) + '</div></div>' +
+          '<div class="acard ' + (profitPos ? 'c-profit-pos' : 'c-profit-neg') + '"><div class="clbl">صافي ربح الفاتورة الفعلي (Profit)</div><div class="cval">' + fmtEGP(t.profit) + '</div></div>' +
+          '<div class="acard c-margin span2"><div class="clbl">هامش ربحية الفاتورة الصافي النهائي (Margin)</div><div class="cval">' + fmtNum(t.margin, 2) + ' %</div></div>' +
+        '</div>' +
+      '</div>';
+  }
+
+  load();
+</script>
+</body>
+</html>
