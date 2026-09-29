@@ -160,7 +160,8 @@ function ensureCompaniesRegistered_() {
     ['Top Light', typeof registerTopLight_ === 'function' ? registerTopLight_ : null],
     ['Top Chemical', typeof registerTopChemical_ === 'function' ? registerTopChemical_ : null],
     ['Valley Foods', typeof registerValleyFoods_ === 'function' ? registerValleyFoods_ : null],
-    ['Assessment Center', typeof registerAssessmentCenter_ === 'function' ? registerAssessmentCenter_ : null]
+    ['Assessment Center', typeof registerAssessmentCenter_ === 'function' ? registerAssessmentCenter_ : null],
+    ['Testing System', typeof registerErpTest_ === 'function' ? registerErpTest_ : null]
   ];
   const missing = registrations.filter(function (entry) { return !entry[1]; }).map(function (entry) { return entry[0]; });
   if (missing.length) throw new Error('Company registries are not loaded yet: ' + missing.join(', '));
@@ -174,6 +175,7 @@ function ensureCompaniesRegistered_() {
     registerTopChemical_();
     registerValleyFoods_();
     registerAssessmentCenter_();
+    registerErpTest_();
     _companiesInitialized_ = true;
   } catch (registrationError) {
     COMPANY_REGISTRY = previousRegistry;

@@ -98,6 +98,11 @@ B4.slice().sort((a, b) => b[0].length - a[0].length).forEach(([oldN, newN]) => {
   replaceAll(`'${oldN}'`, `'${newN}'`);
   replaceAll(`"${oldN}"`, `"${newN}"`);
 });
+// Remaining bare mentions of old action names live only in comments; rename them too
+// so the static checker's word-boundary scan (3.11.2) stays clean.
+B4.slice().sort((a, b) => b[0].length - a[0].length).forEach(([oldN, newN]) => {
+  s = s.replace(new RegExp('\\b' + oldN + '\\b', 'g'), newN);
+});
 
 // ---------- 3.3.7 tab renames (B3), quoted so FK names are untouched ----------
 const B3_TABS = [

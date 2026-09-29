@@ -19,6 +19,9 @@
     "Company_TopChemical_Registry.js",
     "Company_TopLight_Actions.js",
     "Company_TopLight_Registry.js",
+    "Company_ErpTest_Schema.js",
+    "Company_ErpTest_Actions.js",
+    "Company_ErpTest_Registry.js",
     "Company_ValleyFoods_Actions.js",
     "Company_ValleyFoods_Registry.js"
   ],

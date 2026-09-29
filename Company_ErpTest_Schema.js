@@ -1,0 +1,383 @@
+// GENERATED FILE — do not hand-edit.
+// Produced by tools/erptest/gen_schema.js from tools/erptest/header_map.json,
+// tools/erptest/header_map_overrides.json and tools/erptest/field_inventory.json.
+// Regenerate with: node tools/erptest/gen_schema.js
+
+var ET_HEADER_MAP = {
+  "erp_test_product_purchasing": {
+    "top_light_purchasing_costing_id": "erp_test_purchasing_costing_id"
+  },
+  "erp_test_sales_invoices": {
+    "رقم الفاتورة": "invoice_number",
+    "اسم العميل": "client_id",
+    "رقم التسجيل الضريبي للعميل": "tax_id",
+    "تاريخ الفاتورة": "invoice_date",
+    "المبلغ الصافي": "invoice_net_value",
+    "نسبة الخصم": "invoice_discount_percentage",
+    "قيمة الخصم": "invoice_discount_amount",
+    "قيمة الضريبة": "invoice_tax_value",
+    "إجمالي": "invoice_total_value"
+  },
+  "erp_test_sales_products": {
+    "top_lightsales_header_id": "erp_test_sales_header_id",
+    "top_lightsales_invoices_client": "erp_test_sales_invoices_client"
+  },
+  "erp_test_sales_returns": {
+    "top_lightsales_invoices_id": "erp_test_sales_invoices_id",
+    "top_lightsales_invoices_client": "erp_test_sales_invoices_client",
+    "top_lightreturn_date": "erp_test_return_date",
+    "top_lightsales_products_id": "erp_test_sales_products_id",
+    "top_lightreturn_qty": "erp_test_return_qty",
+    "top_lightreturn_discount": "erp_test_return_discount",
+    "top_lightreturn_price": "erp_test_return_price",
+    "top_lightreturn_value": "erp_test_return_value"
+  },
+  "erp_test_sales_offer": {
+    "invoice_unique_id": "offer_unique_id",
+    "رقم الفاتورة": "offer_number",
+    "اسم العميل": "client_id",
+    "رقم التسجيل الضريبي للعميل": "tax_id",
+    "تاريخ الفاتورة": "offer_date",
+    "المبلغ الصافي": "offer_net_value",
+    "نسبة الخصم": "offer_discount_percentage",
+    "قيمة الخصم": "offer_discount_amount",
+    "قيمة الضريبة": "offer_tax_value",
+    "إجمالي": "offer_total_value"
+  },
+  "erp_test_sales_offer_products": {
+    "top_lightsales_offer_id": "erp_test_sales_offer_id"
+  }
+};
+
+var ET_CHART_COLS = {
+  "key": "المستوى الخامس",
+  "name": "كود المستوى",
+  "main": "اسم الحساب الرئيسي"
+};
+
+var ET_FIELD_INVENTORY = {
+  "erp_test_products": {
+    "R": [
+      "id",
+      "name_ar",
+      "name_en",
+      "category",
+      "unit",
+      "carton",
+      "concentration",
+      "sales_tax",
+      "asset_code"
+    ],
+    "W": [
+      "user",
+      "created_at"
+    ]
+  },
+  "erp_test_categories": {
+    "R": [
+      "id",
+      "name_ar",
+      "name_eng"
+    ],
+    "W": [
+      "user",
+      "created_at"
+    ]
+  },
+  "erp_test_customer_vendor": {
+    "R": [
+      "id",
+      "name",
+      "customer_direction",
+      "type",
+      "country",
+      "region",
+      "registration_number",
+      "tax_id",
+      "name_en",
+      "telephone",
+      "address"
+    ],
+    "W": [
+      "user",
+      "created_at"
+    ]
+  },
+  "erp_test_chart_of_accounts": {
+    "R": [
+      "المستوى الخامس",
+      "كود المستوى",
+      "اسم الحساب الرئيسي"
+    ],
+    "W": []
+  },
+  "erp_test_box_account_codes": {
+    "R": [
+      "المستوى الخامس",
+      "اسم المستوى الخامس",
+      "اسم المستوى الرابع"
+    ],
+    "W": []
+  },
+  "erp_test_purchasing_costing": {
+    "R": [
+      "unique_id",
+      "code",
+      "tax_system",
+      "reciept date",
+      "items",
+      "type",
+      "shipping type",
+      "if shipping via cif, enter the insurance value.",
+      "value",
+      "currency",
+      "exchange rate",
+      "importation re-price",
+      "tax declared value",
+      "administrative expenses",
+      "customs expenses",
+      "unloading expenses",
+      "bank commission",
+      "customs clearance and port receipts",
+      "additional fees",
+      "clearance expenses",
+      "other expenses",
+      "purchase tax",
+      "income tax",
+      "internal cost adjustment",
+      "minimum differences",
+      "supplier name",
+      "approved this month",
+      "associated bank",
+      "total costs",
+      "approval_status",
+      "approval",
+      "approval_time"
+    ],
+    "W": [
+      "user",
+      "value based on invoice",
+      "month",
+      "year",
+      "cif insurance rate",
+      "tax type",
+      "sales value",
+      "sales tax amount"
+    ]
+  },
+  "erp_test_product_purchasing": {
+    "R": [
+      "unique_id",
+      "id",
+      "top_light_purchasing_costing_id",
+      "product",
+      "qty",
+      "unit_price",
+      "other_cost",
+      "sales_value",
+      "movement_type",
+      "vendor",
+      "receipt_date",
+      "exchange_rate",
+      "total_cost",
+      "unit_cost"
+    ],
+    "W": [
+      "invoice_date",
+      "currency",
+      "movement_place",
+      "product_category",
+      "user",
+      "sales_value_amount",
+      "sales_qty",
+      "cost_currency",
+      "movement_code"
+    ]
+  },
+  "erp_test_sales_invoices": {
+    "R": [
+      "invoice_unique_id",
+      "رقم الفاتورة",
+      "اسم العميل",
+      "رقم التسجيل الضريبي للعميل",
+      "تاريخ الفاتورة",
+      "المبلغ الصافي",
+      "نسبة الخصم",
+      "قيمة الخصم",
+      "قيمة الضريبة",
+      "إجمالي",
+      "approval_status",
+      "approval",
+      "approval_time"
+    ],
+    "W": [
+      "الشهر",
+      "العام",
+      "user",
+      "created_at"
+    ]
+  },
+  "erp_test_sales_products": {
+    "R": [
+      "unique_id",
+      "id",
+      "top_lightsales_header_id",
+      "product_id",
+      "product_tax",
+      "product_qty",
+      "product_price",
+      "product_discount",
+      "product_net_value",
+      "product_tax_value",
+      "product_total_value"
+    ],
+    "W": [
+      "top_lightsales_invoices_client",
+      "user",
+      "created_at"
+    ]
+  },
+  "erp_test_sales_returns": {
+    "R": [
+      "unique_id",
+      "id",
+      "top_lightsales_invoices_id",
+      "top_lightsales_invoices_client",
+      "top_lightreturn_date",
+      "top_lightsales_products_id",
+      "top_lightreturn_qty",
+      "top_lightreturn_discount",
+      "top_lightreturn_price",
+      "top_lightreturn_value"
+    ],
+    "W": [
+      "user",
+      "created_at"
+    ]
+  },
+  "erp_test_sales_offer": {
+    "R": [
+      "invoice_unique_id",
+      "رقم الفاتورة",
+      "اسم العميل",
+      "رقم التسجيل الضريبي للعميل",
+      "تاريخ الفاتورة",
+      "المبلغ الصافي",
+      "نسبة الخصم",
+      "قيمة الخصم",
+      "قيمة الضريبة",
+      "إجمالي",
+      "approval_status",
+      "approval",
+      "approval_time"
+    ],
+    "W": [
+      "الشهر",
+      "العام",
+      "user",
+      "created_at"
+    ]
+  },
+  "erp_test_sales_offer_products": {
+    "R": [
+      "unique_id",
+      "id",
+      "top_lightsales_offer_id",
+      "product_id",
+      "product_tax",
+      "product_qty",
+      "product_price",
+      "product_discount",
+      "product_net_value",
+      "product_tax_value",
+      "product_total_value"
+    ],
+    "W": [
+      "user",
+      "created_at"
+    ]
+  },
+  "erp_test_cash_bank_movement": {
+    "R": [
+      "transaction_id",
+      "name",
+      "transaction_details",
+      "transaction_date",
+      "transaction_amount",
+      "total_discount",
+      "taxes",
+      "transaction_type",
+      "related_box",
+      "chart_code",
+      "transaction_method",
+      "tax_system",
+      "approved",
+      "currency",
+      "exchange_rate",
+      "total",
+      "balance_amount",
+      "box_balance",
+      "chart_name",
+      "chart_account_main",
+      "user"
+    ],
+    "W": [
+      "invoice_id",
+      "transaction_purchasing_items",
+      "net_amount",
+      "temp_target_box",
+      "created_at"
+    ]
+  },
+  "erp_test_manufacture_orders": {
+    "R": [
+      "unique_id",
+      "id",
+      "mo_number",
+      "mo_date",
+      "product_id",
+      "planned_qty",
+      "produced_qty",
+      "materials_cost",
+      "extra_cost",
+      "total_cost",
+      "unit_cost",
+      "production_status",
+      "completion_date",
+      "completed_by",
+      "cancelled_at",
+      "cancelled_by",
+      "notes",
+      "approval_status",
+      "approval",
+      "approval_time",
+      "user",
+      "created_at",
+      "updated_at",
+      "deleted_at",
+      "deleted_by",
+      "version"
+    ],
+    "W": []
+  },
+  "erp_test_manufacture_lines": {
+    "R": [
+      "unique_id",
+      "id",
+      "mo_unique_id",
+      "product_id",
+      "planned_qty",
+      "consumed_qty",
+      "unit_cost",
+      "total_cost",
+      "notes",
+      "user",
+      "created_at",
+      "updated_at",
+      "deleted_at",
+      "deleted_by",
+      "version"
+    ],
+    "W": []
+  }
+};
