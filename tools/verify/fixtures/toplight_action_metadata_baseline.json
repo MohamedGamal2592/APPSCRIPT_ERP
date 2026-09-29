@@ -1,0 +1,366 @@
+[
+  {
+    "action": "add_product",
+    "handler": "addProduct_",
+    "page": "tl_products",
+    "access": "write",
+    "primaryLogTable": "PRODUCTS_SHEET"
+  },
+  {
+    "action": "delete_cash",
+    "handler": "deleteCash_",
+    "page": "tl_cash",
+    "access": "full",
+    "primaryLogTable": "CASH_SHEET"
+  },
+  {
+    "action": "delete_sales_offer",
+    "handler": "deleteSalesOffer_",
+    "page": "tl_sales_offer",
+    "access": "full",
+    "primaryLogTable": "OFFER_SHEET"
+  },
+  {
+    "action": "get_sales_headers",
+    "handler": "getSalesHeaders_",
+    "page": "tl_sales",
+    "access": "read",
+    "primaryLogTable": "SALES_SHEET"
+  },
+  {
+    "action": "add_purchasing",
+    "handler": "addPurchasing_",
+    "page": "tl_purchasing",
+    "access": "write",
+    "primaryLogTable": "PURCHASING_SHEET"
+  },
+  {
+    "action": "delete_purchasing",
+    "handler": "deletePurchasing_",
+    "page": "tl_purchasing",
+    "access": "full",
+    "primaryLogTable": "PURCHASING_SHEET"
+  },
+  {
+    "action": "get_sales_print",
+    "handler": "getSalesPrint_",
+    "page": "tl_sales_print",
+    "access": "read",
+    "primaryLogTable": "SALES_SHEET"
+  },
+  {
+    "action": "approve_purchasing",
+    "handler": "approvePurchasing_",
+    "page": "tl_purchasing",
+    "access": "write",
+    "primaryLogTable": "PURCHASING_SHEET"
+  },
+  {
+    "action": "get_dashboard_data",
+    "handler": "getDashboardData_",
+    "page": null,
+    "access": null,
+    "primaryLogTable": null
+  },
+  {
+    "action": "get_sales_offer_headers",
+    "handler": "getSalesOfferHeaders_",
+    "page": "tl_sales_offer",
+    "access": "read",
+    "primaryLogTable": "OFFER_SHEET"
+  },
+  {
+    "action": "get_sales_returns",
+    "handler": "getSalesReturns_",
+    "page": "tl_sales_returns",
+    "access": "read",
+    "primaryLogTable": "SALES_RETURNS_SHEET"
+  },
+  {
+    "action": "edit_cash",
+    "handler": "editCash_",
+    "page": "tl_cash",
+    "access": "full",
+    "primaryLogTable": "CASH_SHEET"
+  },
+  {
+    "action": "approve_cash",
+    "handler": "approveCash_",
+    "page": "tl_cash",
+    "access": "write",
+    "primaryLogTable": "CASH_SHEET"
+  },
+  {
+    "action": "edit_purchasing",
+    "handler": "editPurchasing_",
+    "page": "tl_purchasing",
+    "access": "full",
+    "primaryLogTable": "PURCHASING_SHEET"
+  },
+  {
+    "action": "get_purchasing_options",
+    "handler": "getPurchasingOptions_",
+    "page": "tl_purchasing",
+    "access": "read",
+    "primaryLogTable": "PURCHASING_SHEET"
+  },
+  {
+    "action": "get_product_movement",
+    "handler": "getProductMovement_",
+    "page": "tl_product_movement",
+    "access": "read",
+    "primaryLogTable": "CURRENT_PRODUCTS_SHEET"
+  },
+  {
+    "action": "delete_sales",
+    "handler": "deleteSales_",
+    "page": "tl_sales",
+    "access": "full",
+    "primaryLogTable": "SALES_SHEET"
+  },
+  {
+    "action": "edit_product",
+    "handler": "editProduct_",
+    "page": "tl_products",
+    "access": "full",
+    "primaryLogTable": "PRODUCTS_SHEET"
+  },
+  {
+    "action": "get_sales_options",
+    "handler": "getSalesOptions_",
+    "page": "tl_sales",
+    "access": "read",
+    "primaryLogTable": "SALES_SHEET"
+  },
+  {
+    "action": "get_cash_headers",
+    "handler": "getCashHeaders_",
+    "page": "tl_cash",
+    "access": "read",
+    "primaryLogTable": "CASH_SHEET"
+  },
+  {
+    "action": "get_page_versions",
+    "handler": "getPageVersions_",
+    "page": null,
+    "access": null,
+    "primaryLogTable": null
+  },
+  {
+    "action": "get_purchasing_lines",
+    "handler": "getPurchasingLines_",
+    "page": "tl_purchasing",
+    "access": "read",
+    "primaryLogTable": "PURCHASING_LINES_SHEET"
+  },
+  {
+    "action": "get_purchase_print",
+    "handler": "getPurchasePrint_",
+    "page": "tl_purchase_print",
+    "access": "read",
+    "primaryLogTable": "PURCHASING_SHEET"
+  },
+  {
+    "action": "get_customer_statement",
+    "handler": "getCustomerStatement_",
+    "page": "tl_customer_statement",
+    "access": "read",
+    "primaryLogTable": "CUSTOMERS_SHEET"
+  },
+  {
+    "action": "get_sales_offer_print",
+    "handler": "getSalesOfferPrint_",
+    "page": "tl_sales_offer_print",
+    "access": "read",
+    "primaryLogTable": "OFFER_SHEET"
+  },
+  {
+    "action": "add_sales_return",
+    "handler": "addSalesReturn_",
+    "page": "tl_sales_returns",
+    "access": "write",
+    "primaryLogTable": "SALES_RETURNS_SHEET"
+  },
+  {
+    "action": "approve_sales",
+    "handler": "approveSales_",
+    "page": "tl_sales",
+    "access": "write",
+    "primaryLogTable": "SALES_SHEET"
+  },
+  {
+    "action": "approve_sales_offer",
+    "handler": "approveSalesOffer_",
+    "page": "tl_sales_offer",
+    "access": "write",
+    "primaryLogTable": "OFFER_SHEET"
+  },
+  {
+    "action": "get_parties",
+    "handler": "getParties_",
+    "page": "tl_customers",
+    "access": "read",
+    "primaryLogTable": "CUSTOMERS_SHEET"
+  },
+  {
+    "action": "get_sales_costing_analysis",
+    "handler": "getSalesCostingAnalysis_",
+    "page": "tl_sales_costing_analysis",
+    "access": "read",
+    "primaryLogTable": "SALES_SHEET"
+  },
+  {
+    "action": "add_cash",
+    "handler": "addCash_",
+    "page": "tl_cash",
+    "access": "write",
+    "primaryLogTable": "CASH_SHEET"
+  },
+  {
+    "action": "add_party",
+    "handler": "addParty_",
+    "page": "tl_customers",
+    "access": "write",
+    "primaryLogTable": "CUSTOMERS_SHEET"
+  },
+  {
+    "action": "prefetch_refs",
+    "handler": "prefetchRefs_",
+    "page": "tl_dashboard",
+    "access": "read",
+    "primaryLogTable": "PRODUCTS_SHEET"
+  },
+  {
+    "action": "get_cash_report",
+    "handler": "getCashReport_",
+    "page": "tl_cash_report",
+    "access": "read",
+    "primaryLogTable": "CASH_SHEET"
+  },
+  {
+    "action": "add_sales_offer",
+    "handler": "addSalesOffer_",
+    "page": "tl_sales_offer",
+    "access": "write",
+    "primaryLogTable": "OFFER_SHEET"
+  },
+  {
+    "action": "get_purchase_needs",
+    "handler": "getPurchaseNeeds_",
+    "page": "tl_purchase_needs",
+    "access": "read",
+    "primaryLogTable": "PURCHASING_LINES_SHEET"
+  },
+  {
+    "action": "get_products",
+    "handler": "getProducts_",
+    "page": "tl_products",
+    "access": "read",
+    "primaryLogTable": "PRODUCTS_SHEET"
+  },
+  {
+    "action": "edit_party",
+    "handler": "editParty_",
+    "page": "tl_customers",
+    "access": "full",
+    "primaryLogTable": "CUSTOMERS_SHEET"
+  },
+  {
+    "action": "get_xlsx_export",
+    "handler": "getXlsxExport_",
+    "page": null,
+    "access": null,
+    "primaryLogTable": null
+  },
+  {
+    "action": "edit_sales",
+    "handler": "editSales_",
+    "page": "tl_sales",
+    "access": "full",
+    "primaryLogTable": "SALES_SHEET"
+  },
+  {
+    "action": "get_sales_costing",
+    "handler": "getSalesCosting_",
+    "page": "tl_sales_costing_print",
+    "access": "read",
+    "primaryLogTable": "SALES_SHEET"
+  },
+  {
+    "action": "add_sales",
+    "handler": "addSales_",
+    "page": "tl_sales",
+    "access": "write",
+    "primaryLogTable": "SALES_SHEET"
+  },
+  {
+    "action": "delete_sales_return",
+    "handler": "deleteSalesReturn_",
+    "page": "tl_sales_returns",
+    "access": "full",
+    "primaryLogTable": "SALES_RETURNS_SHEET"
+  },
+  {
+    "action": "get_kpi_data",
+    "handler": "getKpiData_",
+    "page": "tl_kpi",
+    "access": "read",
+    "primaryLogTable": null
+  },
+  {
+    "action": "get_purchasing_headers",
+    "handler": "getPurchasingHeaders_",
+    "page": "tl_purchasing",
+    "access": "read",
+    "primaryLogTable": "PURCHASING_SHEET"
+  },
+  {
+    "action": "edit_sales_offer",
+    "handler": "editSalesOffer_",
+    "page": "tl_sales_offer",
+    "access": "full",
+    "primaryLogTable": "OFFER_SHEET"
+  },
+  {
+    "action": "add_transfer",
+    "handler": "addTransfer_",
+    "page": "tl_cash",
+    "access": "write",
+    "primaryLogTable": "CASH_SHEET"
+  },
+  {
+    "action": "get_sales_lines",
+    "handler": "getSalesLines_",
+    "page": "tl_sales",
+    "access": "read",
+    "primaryLogTable": "SALES_LINES_SHEET"
+  },
+  {
+    "action": "get_sales_analysis",
+    "handler": "getSalesAnalysis_",
+    "page": "tl_sales_analysis",
+    "access": "read",
+    "primaryLogTable": "SALES_SHEET"
+  },
+  {
+    "action": "get_sales_offer_lines",
+    "handler": "getSalesOfferLines_",
+    "page": "tl_sales_offer",
+    "access": "read",
+    "primaryLogTable": "OFFER_LINES_SHEET"
+  },
+  {
+    "action": "get_income_statement",
+    "handler": "getIncomeStatement_",
+    "page": "tl_income_statement",
+    "access": "read",
+    "primaryLogTable": "SALES_SHEET"
+  },
+  {
+    "action": "get_financial_position",
+    "handler": "getFinancialPosition_",
+    "page": "tl_financial_position",
+    "access": "read",
+    "primaryLogTable": "CASH_SHEET"
+  }
+]

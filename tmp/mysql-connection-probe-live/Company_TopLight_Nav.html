@@ -1,0 +1,14 @@
+<script>
+/**
+ * Company_TopLight_Nav.html
+ * Single source of truth for the Top Light header dropdown groups.
+ * Items that have a real page are { label, action } (navigate via appShell,
+ * auto-hidden without a read grant); plain strings render nothing.
+ */
+window.TOPLIGHT_MENU = [
+  { label: 'الميزانية', items: [
+    { label: 'قائمة الدخل', action: 'tl_income_statement' },
+    { label: 'قائمة المركز المالي', action: 'tl_financial_position' }
+  ] }
+];
+</script>

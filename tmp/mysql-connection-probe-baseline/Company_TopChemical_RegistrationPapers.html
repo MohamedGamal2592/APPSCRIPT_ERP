@@ -1,0 +1,476 @@
+﻿<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>تصاريح وتراخيص</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_TopChemical_Nav'); ?>
+  <?!= getCompanyThemeCSS_('3fe1b5cb67b7223e') ?>
+  <style>
+    .filter-bar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: flex-end;
+      margin-bottom: 16px;
+      background: var(--bg-surface);
+      padding: 14px 16px;
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-lg);
+      box-shadow: var(--shadow-sm);
+    }
+    .filter-item {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .filter-label {
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--text-muted);
+    }
+  </style>
+</head>
+<body>
+<div id="tc-root" dir="rtl"></div>
+<script>
+  var params = new URLSearchParams(window.location.search);
+  var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+  var scriptUrl = window.scriptUrl || '/';
+  var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+  var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('3fe1b5cb67b7223e') ?>';
+  var COMPANY_PAGES = <?!= companyPages ?>;
+  var CURRENT_ACTION = '<?!= currentAction ?>';
+  var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+  var CAN_WRITE = UIC.canAdd_(); var CAN_FULL = UIC.canFull_();
+
+  function companyCall(moduleAction, data) {
+    return API.call('company_action', {
+      target_system: '3fe1b5cb67b7223e',
+      module_action: moduleAction,
+      data: data || {}
+    }, SESSION_TOKEN);
+  }
+
+  function pad(n) { return ('0' + n).slice(-2); }
+  function fmtDate(v) {
+    if (!v) return '';
+    var d = new Date(v);
+    if (isNaN(d.getTime())) return String(v);
+    return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+  }
+  function todayStr() {
+    var d = new Date();
+    return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+  }
+
+  function uploadSelectedFile(formEl, meta) {
+    try {
+      if (window.UIC && UIC.UploadSet) return Promise.resolve(null);
+    } catch (e) {}
+    var input = formEl.querySelector('input[type=file]');
+    if (!input || !input.files || !input.files[0]) return Promise.resolve(null);
+    var file = input.files[0];
+    return new Promise(function (resolve, reject) {
+      var reader = new FileReader();
+      reader.onerror = function () { reject(new Error('خطأ في قراءة الملف')); };
+      reader.onload = function () {
+        var b64 = String(reader.result || '').split(',')[1] || '';
+        var payload = { sheet: meta.sheet, filename: file.name, base64: b64 };
+        if (meta.id) payload.id = meta.id;
+        if (meta.name) payload.name = meta.name;
+        if (meta.field) payload.field = meta.field;
+        companyCall('add_upload_file', payload)
+          .then(function (res) {
+            if (res && res.status === 'success') resolve({ reference: res.reference, fileId: res.fileId || '' });
+            else reject(new Error((res && res.message) || 'خطأ في رفع الملف'));
+          })
+          .catch(function (err) {
+            reject(new Error((err && err.message) || 'خطأ في رفع الملف'));
+          });
+      };
+      reader.readAsDataURL(file);
+    });
+  }
+
+  function load() {
+    var contentId = 'papers-content';
+    UIC.appShell('tc-root', {
+      companyLogoUrl: COMPANY_LOGO_URL,
+      companyLogoHref: scriptUrl + '?action=tc_dashboard&sessionToken=' + SESSION_TOKEN,
+      companyLogoTitle: 'توب كيميكال',
+      breadcrumb: 'توب كيميكال / الترخيص / تصاريح وتراخيص',
+      contentId: contentId,
+      menuGroups: (window.TOPCHEMICAL_MENU || [])
+    });
+    document.getElementById('papers-content').innerHTML = filterBarHtml() + '<div class="loading" style="padding:16px;color:var(--text-muted);">جاري التحميل...</div>';
+    fetchPapers();
+  }
+
+  /* The list endpoint returns only the newest 20 papers unless `loadAll`
+     is passed. "عرض الكل" asks for the whole history; UIC.dataTable then
+     paginates on its own, so "all" never means one enormous table. Called with
+     no argument after a save or a delete, fetchPapers keeps whichever view the
+     user is in rather than silently dropping them back to the newest 20. */
+  var __loadedAll = false;
+
+  /* Client-side filters for tc_registration_papers. FILTER persists across
+     renders; renderPapers() reapplies it to window.__papers without refetch. */
+  var FILTER = { docType: '', fromDate: '', toDate: '' };
+
+  function filterBarHtml() {
+    var typeOptsHtml = '<option value="">كل الأنواع</option>' + (window.__docTypes || []).map(function (o) {
+      var v = (o && typeof o === 'object') ? (o.value != null ? o.value : o.label) : o;
+      var lbl = (o && typeof o === 'object') ? (o.label || o.value) : o;
+      var sel = String(v) === String(FILTER.docType) ? ' selected' : '';
+      return '<option value="' + FMT.escape(String(v == null ? '' : v)) + '"' + sel + '>' + FMT.escape(String(lbl == null ? '' : lbl)) + '</option>';
+    }).join('');
+    return '<div class="filter-bar">' +
+        '<div class="filter-item">' +
+          '<label class="filter-label" for="papers-filter-type">النوع:</label>' +
+          '<select id="papers-filter-type" class="input" style="width:auto;min-height:36px;">' + typeOptsHtml + '</select>' +
+        '</div>' +
+        '<div class="filter-item">' +
+          '<label class="filter-label" for="papers-filter-from">من:</label>' +
+          '<input id="papers-filter-from" class="input" type="date" style="width:auto;min-height:36px;" value="' + FMT.escape(FILTER.fromDate || '') + '">' +
+        '</div>' +
+        '<div class="filter-item">' +
+          '<label class="filter-label" for="papers-filter-to">إلى:</label>' +
+          '<input id="papers-filter-to" class="input" type="date" style="width:auto;min-height:36px;" value="' + FMT.escape(FILTER.toDate || '') + '">' +
+        '</div>' +
+        '<div style="display:flex;gap:6px;align-items:flex-end;">' +
+          '<button class="btn btn-primary" style="min-height:36px;padding:6px 14px;font-size:13px;" onclick="applyPaperFilters()">بحث/تصفية</button>' +
+          '<button class="btn btn-outline" style="min-height:36px;padding:6px 12px;font-size:13px;" onclick="resetPaperFilters()">مسح</button>' +
+        '</div>' +
+      '</div>';
+  }
+
+  function showAllPapers() { fetchPapers(true); }
+  function showLatestPapers() { fetchPapers(false); }
+
+  function applyPaperFilters() {
+    var t = ((document.getElementById('papers-filter-type') || {}).value || '');
+    var f = ((document.getElementById('papers-filter-from') || {}).value || '');
+    var to = ((document.getElementById('papers-filter-to') || {}).value || '');
+    if (f && to && f > to) { UIC.toast('تاريخ "من" يجب أن يكون قبل تاريخ "إلى"', 'error'); return; }
+    FILTER.docType = t;
+    FILTER.fromDate = f;
+    FILTER.toDate = to;
+    renderPapers();
+  }
+
+  function resetPaperFilters() {
+    FILTER.docType = '';
+    FILTER.fromDate = '';
+    FILTER.toDate = '';
+    renderPapers();
+  }
+
+  function fetchPapers(loadAll) {
+    __loadedAll = arguments.length ? !!loadAll : __loadedAll;
+    UIC.readSkeleton();
+    companyCall('get_registration_papers', __loadedAll ? { loadAll: true } : {})
+      .then(function (r) {
+        window.__docTypes = r.document_types || [];
+        window.__productOptions = r.product_options || [];
+        renderPapers(r.papers || []);
+      })
+      .catch(function (e) { showError(e); })
+      .finally(function () { UI.hideSpinner(); try{schedulePrefetch();}catch(e){} });
+  }
+
+  function viewPaper(idx){
+    var p = ((window.__filteredPapers || window.__papers)||[])[idx]; if(!p) return;
+    var attBtn = p.document_file ? '<button class="btn btn-outline" style="padding:6px 12px;" onclick="viewAttachment(\'' + FMT.escape(p.document_file).replace(/\'/g, "\\\'") + '\',\'' + FMT.escape(p.document_number).replace(/\'/g, "\\\'") + '\')">📎 عرض — ' + FMT.escape(String(p.document_file).split("/").pop()) + '</button>' : 'لا يوجد';
+    var body = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 16px;font-size:14px;">' +
+      '<div><b>العربي:</b> ' + FMT.escape(p.document_name_ar||'-') + '</div><div><b>EN:</b> ' + FMT.escape(p.document_name_en||'-') + '</div>' +
+      '<div><b>المنتج:</b> ' + FMT.escape(p.product_name|| (p.product_id? "#"+p.product_id : "-")) + '</div><div><b>الرقم:</b> ' + FMT.escape(p.document_number||'-') + '</div>' +
+      '<div><b>النوع:</b> ' + FMT.escape(p.document_type||'-') + '</div><div><b>من:</b> ' + fmtDate(p.document_start_date) + ' <b>إلى:</b> ' + fmtDate(p.document_end_date) + '</div>' +
+      '<div style="grid-column:1/-1;display:flex;gap:10px;align-items:center;"><b>المرفق:</b> ' + attBtn + '</div></div>';
+    UIC.openModal('paper-view-modal', { title: 'عرض السجل / View Record', body: body });
+  }
+  function printPaper(idx){ window.print(); }
+  function deletePaper(idx){
+    if(!UIC.canFull_()){ UIC.toast('غير مصرح','error'); return; }
+    if(!confirm('هل تريد حذف؟ / Delete?')) return;
+    var p=((window.__filteredPapers || window.__papers)||[])[idx]; if(!p) return;
+    UI.showSpinner(); companyCall('delete_registration_paper',{document_number: p.document_number}).then(function(r){ UIC.toast(r.message||'تم الحذف','success'); fetchPapers(); }).catch(function(e){ UIC.toast(e.message||'خطأ','error'); }).finally(function(){ UI.hideSpinner(); });
+  }
+  function renderPapers(list) {
+    if (list) window.__papers = list;
+    var source = window.__papers || [];
+    /* Date-range overlap: query window [from,to] overlaps document
+       [start,end] when doc_end >= from AND doc_start <= to. Empty dates
+       are ignored gracefully; rows with missing dates are kept. */
+    var filtered = source.filter(function (p) {
+      if (FILTER.docType && String(p.document_type || '') !== String(FILTER.docType)) return false;
+      var s = fmtDate(p.document_start_date) || '';
+      var e = fmtDate(p.document_end_date) || '';
+      if (FILTER.fromDate && e && e < FILTER.fromDate) return false;
+      if (FILTER.toDate && s && s > FILTER.toDate) return false;
+      return true;
+    });
+    window.__filteredPapers = filtered;
+    var filterBar = filterBarHtml();
+    var rows = filtered.map(function (p, idx) {
+      /* Tier A: a __pending row offers no actions — view/edit/delete name a
+         document_number the server has not confirmed yet. product_name is
+         resolved server-side, so it renders «—» until the reply fills it;
+         document_number itself is typed in the form, so it paints as-is. */
+      var pending = !!p.__pending;
+      var fileCell = p.document_file
+        ? '<button class="btn btn-outline" style="padding:4px 10px;" onclick="viewAttachment(\'' + FMT.escape(p.document_file).replace(/\'/g, "\\\'") + '\',\'' + FMT.escape(p.document_number).replace(/\'/g, "\\\'") + '\')">📎 عرض / View</button>'
+        : '-';
+      var hasAtt = !!p.document_file;
+      return {
+        document_name_ar: p.document_name_ar || '-',
+        document_name_en: p.document_name_en || '-',
+        product: pending ? '—' : (p.product_name || (p.product_id ? '#' + p.product_id : '-')),
+        document_number: p.document_number,
+        document_type: p.document_type || '-',
+        document_start_date: fmtDate(p.document_start_date),
+        document_end_date: fmtDate(p.document_end_date),
+        document_file: fileCell,
+        actions: pending ? '…' : UIC.actionBtns([
+          { label: '👁️ عرض / View', onclick: "viewPaper(" + idx + ")" },
+          hasAtt ? { label: '📎 عرض المرفق / View Attachment', onclick: "viewAttachment('" + FMT.escape(p.document_file).replace(/\'/g, "\\\'") + "','" + FMT.escape(p.document_number).replace(/\'/g, "\\\'") + "')" } : null,
+          { label: '🖨️ طباعة / Print', onclick: "printPaper(" + idx + ")" },
+          IS_SUPER_ADMIN ? { label: '✏️ تعديل / Edit', onclick: "openEditPaper('" + FMT.escape(p.document_number).replace(/\'/g, "\\\'") + "')" } : null,
+          IS_SUPER_ADMIN ? { label: '🗑️ حذف / Delete', color: '#dc2626', onclick: "deletePaper(" + idx + ")" } : null
+        ].filter(Boolean))
+      };
+    });
+    var headers = [
+      { key: 'document_name_ar', label: 'اسم المستند (عربي)' },
+      { key: 'document_name_en', label: 'اسم المستند (إنجليزي)' },
+      { key: 'product', label: 'المنتج' },
+      { key: 'document_number', label: 'رقم المستند' },
+      { key: 'document_type', label: 'النوع' },
+      { key: 'document_start_date', label: 'تاريخ البداية' },
+      { key: 'document_end_date', label: 'تاريخ النهاية' },
+      { key: 'document_file', label: 'الملف' },
+      { key: 'actions', label: 'إجراءات / Actions' }
+    ];
+    var body = document.getElementById('papers-content');
+    var isFiltered = (FILTER.docType || FILTER.fromDate || FILTER.toDate) ? true : false;
+    var countLabel = isFiltered
+      ? 'عرض ' + filtered.length + ' من ' + source.length + ' مستند (مفلتر)'
+      : (__loadedAll
+        ? 'عرض كل المستندات (' + source.length + ')'
+        : 'عرض أحدث ' + source.length + ' مستند');
+    body.innerHTML = (CAN_WRITE
+      ? '<div style="display:flex;justify-content:flex-end;margin-bottom:12px;"><button class="btn btn-primary" onclick="openPaperModal()">+ إضافة مستند</button></div>'
+      : '') +
+      filterBar +
+      '<div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap;">' +
+        '<span style="color:var(--text-muted);font-size:12px;">' + countLabel + '</span>' +
+        (__loadedAll
+          ? '<button class="btn btn-outline" onclick="showLatestPapers()">📄 عرض آخر 20 مستند فقط</button>'
+          : '<button id="papers-show-all" class="btn btn-outline" onclick="showAllPapers()">📊 عرض الكل</button>') +
+      '</div>' +
+      UIC.dataTable('papers-table', {
+        /* [RT-1] The list endpoint caps at the newest rows unless `loadAll` is
+           passed, and the search box filters only what is in memory — so the
+           table says which records the box actually searches. */
+        truncated: !__loadedAll,
+        showAll: 'showAllPapers()',
+        title: 'تصاريح وتراخيص',
+        headers: headers,
+        rows: rows,
+        emptyText: 'لا توجد مستندات مطابقة للفلاتر الحالية'
+      });
+    UIC.initTableSort('papers-table');
+  }
+
+  function viewAttachment(ref, id) {
+    if(!ref && (id == null || String(id) === '')) return;
+    UIC.openDownload(scriptUrl + '?download=attachment&page=tc_registration_papers&ref=' + encodeURIComponent(ref || '') + ((id != null && String(id) !== '') ? '&id=' + encodeURIComponent(id) : '') + '&field=' + encodeURIComponent('document_file') + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN),
+      'فتح المرفق');
+  }
+  function downloadDoc(ref, id) { return viewAttachment(ref, id); }
+
+  /* Row-edit repair (Stage 4): explicit create/edit mode. PAPER_EDIT.num holds
+     the original document_number, PAPER_EDIT.att the retained attachment pair;
+     both null in Add mode. */
+  var PAPER_EDIT = { num: null, att: null };
+
+  function openPaperModal(prefill, title) {
+    prefill = prefill || {};
+    PAPER_EDIT.num = (prefill._editMode && prefill._original_number != null) ? String(prefill._original_number) : null;
+    PAPER_EDIT.att = (prefill._editMode && prefill._att) ? prefill._att : null;
+    var prodOpts = (window.__productOptions || []).slice();
+    if (prefill.product != null && prefill.product !== '' && !prodOpts.some(function (o) { return String(o.value) === String(prefill.product); })) {
+      prodOpts.push({ value: prefill.product, label: (prefill.product_name || prefill.product) + ' (غير نشط)' });
+    }
+    var typeOpts = (window.__docTypes || []).slice();
+    if (prefill.document_type && !typeOpts.some(function (o) { return String((typeof o === 'object' ? o.value : o)) === String(prefill.document_type); })) {
+      typeOpts.push({ value: prefill.document_type, label: prefill.document_type + ' (غير نشط)' });
+    }
+    var body =
+      '<form id="paper-form">' +
+      UIC.field({ key: 'document_name_ar', label: 'اسم المستند بالعربية', required: true, value: (prefill.document_name_ar != null ? prefill.document_name_ar : '') }) +
+      UIC.field({ key: 'document_name_en', label: 'اسم المستند بالإنجليزية', value: (prefill.document_name_en != null ? prefill.document_name_en : '') }) +
+      UIC.enumSelect({ key: 'product', label: 'المنتج (اختياري)', options: prodOpts, placeholder: 'اختر المنتج...', value: (prefill.product != null ? prefill.product : '') }) +
+      UIC.field({ key: 'document_number', label: 'رقم المستند', type: 'number', required: true, placeholder: 'رقم صحيح', value: (prefill.document_number != null ? prefill.document_number : '') }) +
+      UIC.enumSelect({ key: 'document_type', label: 'نوع المستند', options: typeOpts, required: true, placeholder: 'اختر النوع...', value: (prefill.document_type || '') }) +
+      UIC.field({ key: 'document_start_date', label: 'تاريخ البداية', type: 'date', value: (prefill.document_start_date || todayStr()), required: true }) +
+      UIC.field({ key: 'document_end_date', label: 'تاريخ النهاية', type: 'date', value: (prefill.document_end_date || todayStr()), required: true }) +
+      UIC.fileField({ key: 'file', label: prefill._editMode ? 'استبدال ملف المستند (اختياري)' : 'ملف المستند (pdf, word, png, jpg)', accept: '.pdf,.doc,.docx,.png,.jpg,.jpeg', instant: true, sheet: 'registration_papers', field: 'document_file', formModalId: 'paper-modal' }) +
+      '</form>';
+    UIC.openModal('paper-modal', {
+      title: title || 'إضافة مستند / تصريح',
+      body: body,
+      onSave: 'savePaper()'
+    });
+    try { UIC.trackDirty('paper-form'); } catch (e) {}
+    try {
+      if (prefill._editMode && prefill._att && prefill._att.ref && UIC.UploadSet) UIC.UploadSet.setBound('file', prefill._att.ref, prefill._att.id || '');
+    } catch (e2) {}
+    if (prefill._editMode && prefill._attRef) {
+      try {
+        var host = document.getElementById('paper-form');
+        if (host) {
+          var note = document.createElement('div');
+          note.style.cssText = 'font-size:12px;color:var(--text-muted);margin-top:4px;';
+          note.textContent = 'المرفق الحالي: ' + String(prefill._attRef).split('/').pop() + ' — اترك حقل الملف فارغاً للاحتفاظ به';
+          host.appendChild(note);
+        }
+      } catch (e) {}
+    }
+  }
+
+  function openEditPaper(num) {
+    if (!UIC.canFull_()) { UIC.toast('غير مصرح', 'error'); return; }
+    var matches = (window.__papers || []).filter(function (p) { return String(p.document_number) === String(num); });
+    if (!matches.length) { UIC.toast('السجل غير موجود — تم تحديث القائمة', 'error'); fetchPapers(); return; }
+    if (matches.length > 1) { UIC.toast('رقم المستند مكرر — يلزم مراجعة السجل قبل التعديل', 'error'); return; }
+    var p = matches[0];
+    openPaperModal({
+      _editMode: true,
+      _original_number: p.document_number,
+      _attRef: p.document_file || '',
+      _att: { ref: p.document_file || '', id: p.document_file_id || '' },
+      document_name_ar: p.document_name_ar || '',
+      document_name_en: p.document_name_en || '',
+      product: (p.product_id != null && p.product_id !== '' ? p.product_id : (p.product || '')),
+      product_name: p.product_name || '',
+      document_number: p.document_number,
+      document_type: p.document_type || '',
+      document_start_date: fmtDate(p.document_start_date),
+      document_end_date: fmtDate(p.document_end_date)
+    }, 'تعديل مستند / تصريح');
+  }
+
+  function savePaper() {
+    if (!CAN_WRITE) { UIC.toast('غير مصرح', 'error'); return; }
+    var data = UIC.collectForm('paper-form');
+    if (!UIC.validateForm('paper-form')) return;
+    if (data.document_type === '__new__') { data.document_type = data.document_type_custom || ''; }
+    delete data.document_type_custom;
+    if (data.product === '__new__') { UIC.toast('اختر منتجاً موجوداً', 'error'); return; }
+    delete data.product_custom;
+    var formEl = document.getElementById('paper-form');
+    var doSave = function () {
+      /* Option A instant-upload: pre-bound ref from dataset/EDIT.att. */
+      try {
+        var input = formEl ? formEl.querySelector('input[type=file]') : null;
+        var bound = (input && UIC.UploadSet) ? UIC.UploadSet.getBound(input) : null;
+        if (bound && bound.ref) {
+          data.document_file = bound.ref;
+          if (bound.id) data.document_file_id = bound.id;
+        } else if (PAPER_EDIT.num && PAPER_EDIT.att) {
+          if (PAPER_EDIT.att.ref) data.document_file = PAPER_EDIT.att.ref;
+          if (PAPER_EDIT.att.id) data.document_file_id = PAPER_EDIT.att.id;
+        }
+      } catch (e) {}
+        if (PAPER_EDIT.num) {
+          /* Edit: no optimistic draft — the response record replaces the row
+             keyed by the ORIGINAL number (the number itself may change). */
+          var originalNum = PAPER_EDIT.num;
+          data.original_document_number = originalNum;
+          window.__papers = window.__papers || [];
+          return UIC.Live.save({
+            call: companyCall,
+            action: 'update_registration_paper',
+            data: data,
+            modal: 'paper-modal',
+            message: 'تم التحديث',
+            queueable: false,
+            reload: function () { fetchPapers(); },
+            onSuccess: function (res) {
+              var rec = (res && res.record) || null;
+              if (rec) {
+                var ix = window.__papers.findIndex(function (p) { return String(p.document_number) === String(originalNum); });
+                if (ix !== -1) window.__papers[ix] = Object.assign({}, window.__papers[ix], rec);
+                else fetchPapers();
+              } else { fetchPapers(); }
+              if (!__loadedAll && window.__papers.length > 10) window.__papers = window.__papers.slice(0, 10);
+              renderPapers(window.__papers);
+            }
+          }).catch(function () { /* UIC.Live has toasted and rolled back */ });
+        }
+        var draft = Object.assign({}, data);
+        window.__papers = window.__papers || [];
+        return UIC.Live.save({
+          call: companyCall,
+          action: 'add_registration_paper',
+          data: data,
+          list: window.__papers,
+          key: 'document_number',
+          draft: draft,
+          render: function () { renderPapers(window.__papers); },
+          modal: 'paper-modal',
+          message: 'تم الحفظ',
+          queueable: false,
+          reload: function () { fetchPapers(); },
+          recordOf: function (resp) {
+            var rec = Object.assign({}, draft, (resp && resp.record) || {});
+            if (resp && resp.unique_id) rec.unique_id = resp.unique_id;
+            if (resp && resp.id != null && resp.id !== '') rec.id = resp.id;
+            if (rec.document_number == null || rec.document_number === '') return null;
+            return rec;
+          },
+          onSuccess: function () {
+            /* Only the "newest 20" view keeps its cap; the full history keeps growing. */
+            if (!__loadedAll && window.__papers.length > 10) window.__papers = window.__papers.slice(0, 10);
+            renderPapers(window.__papers);
+          }
+        }).catch(function () { /* UIC.Live has toasted and rolled back */ });
+    };
+    try {
+      if (window.UIC && UIC.UploadSet && UIC.UploadSet.isBusy('paper-modal')) {
+        UIC.toast('جاري رفع الملف... يرجى الانتظار', 'warning');
+        UIC.UploadSet.awaitPending('paper-modal').then(doSave);
+        return;
+      }
+    } catch (e2) {}
+    doSave();
+  }
+
+  function showError(e) {
+    var body = document.getElementById('papers-content');
+    if (body) body.innerHTML = filterBarHtml() + '<div class="empty-state"><span>' + FMT.escape(e.message || 'خطأ') + '</span></div>';
+  }
+
+
+  /* Another device's change arrives quietly (keeps the loaded-all state).
+     NOTE: refreshes draw the skeleton here — a quiet variant would touch the
+     fetchPapers/loadAll lines that carry another effort's uncommitted work,
+     so it waits until that work lands. arrive() still defers while a save is
+     pending (B4 userIsBusy). */
+  UIC.Live.watchPage({
+    call: companyCall,
+    page: 'tc_registration_papers',
+    onChange: function () { UIC.Live.arrive(function () { fetchPapers(); }); }
+  });
+
+  load();
+</script>
+</body>
+</html>
+
+
+

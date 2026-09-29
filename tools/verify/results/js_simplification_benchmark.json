@@ -1,0 +1,97 @@
+{
+  "recordedAt": "2026-09-11T15:25:33.832Z",
+  "node": "v24.19.0",
+  "repetitions": 30,
+  "fixtures": [
+    "empty",
+    "small",
+    "representative",
+    "duplicate IDs",
+    "blank keys",
+    "Arabic text",
+    "delimiter values",
+    "mixed dates",
+    "wide-row-compatible projection"
+  ],
+  "variants": {
+    "baseline": {
+      "variant": "baseline",
+      "node": "v24.19.0",
+      "out": {
+        "0": {
+          "medianMs": 0.0036,
+          "p95Ms": 0.0225,
+          "comparisons": 0,
+          "projectedObjects": 0,
+          "retainedIndexEntries": 0,
+          "payloadBytes": 89,
+          "sampledHeapDeltaBytes": 513.0666666666667,
+          "sampledRssBytes": 34030523.733333334
+        },
+        "10": {
+          "medianMs": 0.0859,
+          "p95Ms": 0.3183,
+          "comparisons": 804,
+          "projectedObjects": 20,
+          "retainedIndexEntries": 0,
+          "payloadBytes": 6517,
+          "sampledHeapDeltaBytes": 23480.8,
+          "sampledRssBytes": 37777271.46666667
+        },
+        "1000": {
+          "medianMs": 46.8241,
+          "p95Ms": 83.1382,
+          "comparisons": 8349399,
+          "projectedObjects": 2000,
+          "retainedIndexEntries": 0,
+          "payloadBytes": 676534,
+          "sampledHeapDeltaBytes": 1399614.1333333333,
+          "sampledRssBytes": 75285572.26666667
+        }
+      }
+    },
+    "candidate": {
+      "variant": "candidate",
+      "node": "v24.19.0",
+      "out": {
+        "0": {
+          "medianMs": 0.4624,
+          "p95Ms": 0.8997,
+          "comparisons": 0,
+          "projectedObjects": 0,
+          "retainedIndexEntries": 0,
+          "payloadBytes": 89,
+          "sampledHeapDeltaBytes": 282.1333333333333,
+          "sampledRssBytes": 39445981.86666667
+        },
+        "10": {
+          "medianMs": 0.5684,
+          "p95Ms": 1.386,
+          "comparisons": 100,
+          "projectedObjects": 20,
+          "retainedIndexEntries": 18,
+          "payloadBytes": 6518,
+          "sampledHeapDeltaBytes": 16637.066666666666,
+          "sampledRssBytes": 48585796.266666666
+        },
+        "1000": {
+          "medianMs": 7.9755,
+          "p95Ms": 10.3285,
+          "comparisons": 10000,
+          "projectedObjects": 2000,
+          "retainedIndexEntries": 1715,
+          "payloadBytes": 676535,
+          "sampledHeapDeltaBytes": 360425.6,
+          "sampledRssBytes": 79650269.86666666
+        }
+      }
+    }
+  },
+  "differential": {
+    "pass": true,
+    "sampleSize": 17
+  },
+  "limitations": [
+    "local Node child-process measurements; no Apps Script service latency or heap claim"
+  ]
+}

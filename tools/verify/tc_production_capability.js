@@ -1,0 +1,93 @@
+'use strict';
+const fs=require('fs'),path=require('path'),vm=require('vm'),assert=require('assert');
+const root=path.resolve(__dirname,'../..');
+const server=fs.readFileSync(path.join(root,'Company_TopChemical_Actions.js'),'utf8');
+const page=fs.readFileSync(path.join(root,'Company_TopChemical_ProductionCapability.html'),'utf8');
+const ui=fs.readFileSync(path.join(root,'UI_Components.html'),'utf8');
+const registry=fs.readFileSync(path.join(root,'Company_TopChemical_Registry.js'),'utf8');
+const nav=fs.readFileSync(path.join(root,'Company_TopChemical_Nav.html'),'utf8');
+let checks=0;
+function ok(value,label){checks++;assert.ok(value,label);console.log('  PASS  '+label);}
+function extractFunction(src,name){const re=new RegExp('function\\s+'+name.replace(/[.*+?^${}()|[\\]\\]/g,'\\$&')+'\\s*\\('),m=re.exec(src);assert(m,'missing '+name);const start=m.index,open=src.indexOf('{',m.index);let d=0,q='',esc=false,line=false,block=false;for(let i=open;i<src.length;i++){const c=src[i],n=src[i+1];if(line){if(c==='\n')line=false;continue;}if(block){if(c==='*'&&n==='/'){block=false;i++;}continue;}if(q){if(esc)esc=false;else if(c==='\\')esc=true;else if(c===q)q='';continue;}if(c==='/'&&n==='/'){line=true;i++;continue;}if(c==='/'&&n==='*'){block=true;i++;continue;}if(c==='"'||c==="'"||c==='`'){q=c;continue;}if(c==='{')d++;else if(c==='}'&&--d===0)return src.slice(start,i+1);}throw Error('unterminated '+name);}
+function block(src,start){const at=src.indexOf(start);assert(at>=0,'missing block '+start);const open=src.indexOf('{',at);let d=0,q='',esc=false,line=false,comment=false;for(let i=open;i<src.length;i++){const c=src[i],n=src[i+1];if(line){if(c==='\n')line=false;continue;}if(comment){if(c==='*'&&n==='/'){comment=false;i++;}continue;}if(q){if(esc)esc=false;else if(c==='\\')esc=true;else if(c===q)q='';continue;}if(c==='/'&&n==='/'){line=true;i++;continue;}if(c==='/'&&n==='*'){comment=true;i++;continue;}if(c==='"'||c==="'"){q=c;continue;}if(c==='{')d++;else if(c==='}'&&--d===0)return src.slice(open,i+1);}throw Error('unterminated block');}
+
+const calc=extractFunction(page,'calculatePlan'),parse=extractFunction(page,'parseQty'),filter=extractFunction(page,'filterPlanItems'),isCurrent=extractFunction(page,'isCurrentDetailResponse'),categoryState=extractFunction(page,'categoriesForProductChange'),categoryChoices=extractFunction(page,'categoryChoices');
+const client={Number,Math,String,Array,Object,Number,Set};client.detailSeq=2;client.S={selectedId:'22',rows:[]};vm.createContext(client);vm.runInContext([parse,calc,filter,isCurrent,categoryState,categoryChoices].join('\n'),client);
+const row=(id,req,stock,cat,name)=>({used_product_id:String(id),required_qty_per_unit:req,current_stock:stock,used_product_category_id:cat==='A'?'10':cat==='B'?'20':null,used_product_category:cat,used_product_name:name||('M'+id)});
+console.log('\nCalculation behavior');
+let p=client.calculatePlan([row(1,'2.5','120')],'100',false);
+ok(p.items[0].needed===250&&p.items[0].shortfall===130&&p.capacity===48,'Q=100, requirement=2.5, stock=120 gives 250, 130, and capacity 48');
+p=client.calculatePlan([row(1,'2.5','120')],'0',false);
+ok(p.items[0].needed===0&&p.items[0].shortfall===0&&p.covered,'Q=0 has zero planned need and is covered');
+ok(!client.calculatePlan([],'0',false).covered&&!client.calculatePlan([],'0',false).confident,'empty product has an explicit non-feasible/unknown state');
+p=client.calculatePlan([row(1,null,'120')],'1',false);
+ok(p.unknown===1&&!p.covered&&!p.confident&&p.items[0].needed===null,'null per-unit requirement stays unknown and cannot claim feasibility');
+p=client.calculatePlan([row(1,'2','NaN')],'1',false);
+ok(p.invalid===1&&!p.covered,'non-finite stock is invalid');
+p=client.calculatePlan([row(1,'-2','20')],'1',false);
+ok(p.invalid===1&&!p.covered,'negative requirement is invalid');
+p=client.calculatePlan([row(1,'0','20')],'100',false);
+ok(p.zero===1&&p.capacity===null&&p.covered,'zero requirement is covered and non-limiting');
+p=client.calculatePlan([row(1,'1','10','A'),row(2,'2','8','B')],'5',false);
+const visible=client.filterPlanItems(p.items,['20']);
+ok(visible.length===1&&visible[0].row.used_product_id==='2'&&p.capacity===4&&p.bottleneck.id==='2','category multi-selection limits visible material IDs while overall bottleneck uses all rows');
+ok(client.filterPlanItems(p.items,['10','20']).length===2,'selecting multiple category IDs returns the union of their material IDs');
+ok(client.filterPlanItems(p.items,[],'2').length===1&&client.filterPlanItems(p.items,[],'2')[0].row.used_product_id==='2','material picker searches used_product_id/used_product_name locally');
+p=client.calculatePlan([row(1,'1','10','A'),row(1,'2','10','B')],'1',false);
+ok(p.ambiguous===1&&!p.confident&&p.capacity===null&&p.items.every(x=>x.capacity===null),'repeated material IDs do not double-count stock or produce confident capacity');
+p=client.calculatePlan([row(1,'1','10','A'),row(1,'2','11','B')],'1',false);
+ok(!p.confident&&p.ambiguous===1&&p.stockConflicts===1&&p.items.every(x=>x.state==='inconsistent'),'inconsistent stock for a repeated material ID is visibly distinguished');
+const uncategorized=client.filterPlanItems([{row:row(9,'1','3',null)}],['__UNCAT__']);
+ok(uncategorized.length===1,'null category has a selectable uncategorized bucket');
+client.S.rows=[row(3,'1','5',null)];const catChoices=client.categoryChoices();ok(catChoices.length===1&&catChoices[0].key==='__UNCAT__'&&catChoices[0].label==='غير مصنف','category dropdown shows an explicit uncategorized choice');
+ok(client.categoriesForProductChange(true,['A']).length===0&&client.categoriesForProductChange(false,['A'])[0]==='A','switching products resets filters while refresh retains them');
+ok(!client.calculatePlan([row(1,'1','2')],'',false).inputValid,'empty planned quantity has an invalid-input state');
+ok(client.isCurrentDetailResponse(1,'22')===false&&client.isCurrentDetailResponse(2,'22')===true,'late response from an earlier product request is discarded');
+const inline=(page.match(/<script>([\s\S]*?)<\/script>/i)||[])[1];assert(inline,'new page has an inline script');new vm.Script(inline.replace(/<\?[\s\S]*?\?>/g,''),{filename:'Company_TopChemical_ProductionCapability.html'});ok(true,'new page inline script parses after server scriptlet substitution');
+
+console.log('\nRead and permission contract');
+const access=vm.runInNewContext('('+block(server,'const PAGE_ACCESS =')+')');
+ok(access.get_production_capability_products.page==='tc_production_capability'&&access.get_production_capability_products.access==='read'&&access.get_production_capability_rows.access==='read','both named actions have an independent read grant');
+ok(/'get_production_capability_rows'\s*:\s*'mysql:manuf_product_support_capability'/.test(block(server,'const ACTION_TABLES =')),'audit table identifies the live MySQL view');
+ok(registry.includes("action: 'tc_production_capability', template: 'Company_TopChemical_ProductionCapability'")&&nav.includes("action: 'tc_production_capability'"),'dedicated route and navigation entry are registered');
+const guard=extractFunction(server,'guard_');const denied={PAGE_ACCESS:access,COMPANY_UID:'3fe1b5cb67b7223e',ERP_MESSAGES:{NOT_AUTHORIZED:'denied'},unifiedCheck_:()=>false};vm.createContext(denied);vm.runInContext(guard+'\nthis.call=guard_;',denied);
+assert.throws(()=>denied.call({},'get_production_capability_rows',{}),/denied/);ok(true,'unauthorized user is rejected before the data adapter');
+const productsFn=extractFunction(server,'getProductionCapabilityProducts_'),rowsFn=extractFunction(server,'getProductionCapabilityRows_');
+const sqlLog=[],bindLog=[],closeLog=[];
+function fakeContext(script){const c={mysqlRead_:undefined,mysqlReading_:()=>true,dbBindParams_:(s,p)=>{bindLog.push(p.slice());p.forEach((v,i)=>s.setObject(i+1,v));},dbGetConnection_:()=>({prepareStatement(sql){sqlLog.push(sql);return {setObject(i,v){this.params=this.params||[];this.params[i-1]=v;},executeQuery(){let pos=-1;const data=sql.includes('SELECT DISTINCT `manufacture_product_id`')?[{manufacture_product_id:'7',manufacture_product_name:'منتج <أ>'},{manufacture_product_id:'8',manufacture_product_name:'منتج <أ>'}]:[{manufacture_product_id:'7',manufacture_product_name:'أ',total_produced:null,manufacture_order_count:'3',used_product_id:'9007199254740993',used_product_name:'<مادة>',used_product_category_id:'4',used_product_category:null,total_used:'4',required_qty_per_mo:'5',required_qty_per_unit:'2.5',required_qty_per_single_mo:'2.5',current_stock:'120',production_capability:'999'}];return {next(){return ++pos<data.length;},getString(col){return String(data[pos][col]);},getObject(col){return data[pos][col];},close(){closeLog.push('rs');}};},close(){closeLog.push('stmt');}};},close(){closeLog.push('conn');}}),Logger:{log(){}}};vm.createContext(c);const name=/function\s+([^(]+)/.exec(script)[1];vm.runInContext(script+'\nthis.run='+name+';',c);return c;}
+let pc=fakeContext(productsFn),out=pc.run({search:'منتج',limit:100},{});
+ok(out.products.length===2&&out.products[0].id==='7'&&out.products[1].id==='8'&&sqlLog[0].includes('SELECT DISTINCT `manufacture_product_id`')&&sqlLog[0].includes('LIMIT 101')&&bindLog[0][0]==='%منتج%','picker keeps same-name products independently keyed by ID and binds bounded name search');
+sqlLog.length=0;bindLog.length=0;pc=fakeContext(productsFn);pc.run({search:'123',limit:100},{});
+ok(sqlLog[0].includes('`manufacture_product_id` = ?')&&!sqlLog[0].includes('LIKE')&&bindLog[0][0]===123,'numeric manufactured-product searches use an exact integer ID predicate');
+sqlLog.length=0;bindLog.length=0;closeLog.length=0;
+pc=fakeContext(rowsFn);out=pc.run({id:'7'},{});
+ok(out.rows.length===1&&out.rows[0].required_qty_per_unit==='2.5'&&out.rows[0].current_stock==='120'&&out.rows[0].used_product_id==='9007199254740993','detail preserves per-unit requirement source values and unsigned bigint IDs without numeric conversion');
+ok(sqlLog.some(function(s){return s.includes('WHERE `manufacture_product_id` = ?')&&s.includes('`used_product_category_id`')&&s.includes('LIMIT 1001');})&&bindLog.some(function(b){return b[0]===7;}),'detail query is exact-ID, bounded, binds the identifier and reads category IDs');
+ok(closeLog.filter(function(x){return x==='rs';}).length===3&&closeLog.filter(function(x){return x==='stmt';}).length===3&&closeLog.filter(function(x){return x==='conn';}).length===1,'JDBC results, statements, and connection all close');
+ok(!/\\b(?:INSERT|UPDATE|DELETE|REPLACE|CREATE|ALTER|DROP)\\b/i.test(sqlLog.join(' ')),'the named reads contain no write or DDL SQL');
+const def=extractFunction(server,'mysqlTcDefinition_');
+ok(def.includes('mysqlRead_')===false&&def.includes('dbProductionCapabilityRows_')&&def.includes('authorize: function (request)')&&def.includes('guard_(request.user, request.action'),'named read definition repeats server authorization before cache access');
+ok(page.includes('FMT.escape')&&page.includes('production_capability')&&page.includes('required_qty *')===false,'page escapes database values and derives need client-side without a view needed_qty field');
+ok(server.includes("search.replace(/[%_\\\\]/g, '\\\\$&')"),'picker escapes LIKE wildcards while preserving Arabic substring search');
+console.log('\nSelected-product identity');
+const selSrc=extractFunction(page,'selectedLabel');
+const selCtx={S:{selectedId:'8',selectedName:'منتج مميز',selectedProduct:{id:'8',name:'قديم'},products:[{id:'7',name:'منتج <أ>'}]},String};vm.createContext(selCtx);vm.runInContext(selSrc+'\nthis.label=selectedLabel();',selCtx);
+ok(selCtx.label==='منتج مميز','stored full name survives when the result list excludes the selected ID');
+selCtx.S={selectedId:'8',selectedName:'',selectedProduct:{id:'8',name:'قديم'},products:[{id:'8',name:'جديد'}]};vm.runInContext('this.label2=selectedLabel();',selCtx);
+ok(selCtx.label2==='قديم','authoritative selected object is preferred over a stale list entry');
+selCtx.S={selectedId:'9',selectedName:'',selectedProduct:{id:'8',name:'قديم'},products:[{id:'9',name:'تاسع'}]};vm.runInContext('this.label3=selectedLabel();',selCtx);
+ok(selCtx.label3==='تاسع','a new ID never displays the previous product name via the list');
+ok(page.includes('function selectedLabel()')&&page.includes("input.value = S.selectedName")&&page.includes('formatSelected: function (id, name, missing)')&&page.includes("المحدد: #' + id + ' (جارٍ تحميل الاسم…)"),'selection stores ID with full name, populates the input, and keeps the label');
+ok(page.includes('#pc-selected-product { overflow-wrap:anywhere'),'wrapping full-name label survives narrow screens');
+ok(page.includes('if (S.selectedId) selectProduct(S.selectedId, false'), 'saved selection restores by ID independently of the initial result list');
+ok(page.includes('fromDetail')&&page.includes('manufacture_product_name'),'matching detail response recovers the authoritative name');
+ok(page.includes('getQueryGen')&&page.includes('isCurrentDetailResponse(seq,id)'),'stale detail responses are discarded and late detail cannot repaint a newer query');
+ok(ui.includes('CATALOG_TTL_MS = 30000')&&page.includes('TcCapabilityPicker'),'complete catalog is cached client-side for 30s independently from live detail rows');
+ok(page.includes('onSelect: function (id, name) { selectProduct(id, true, name); }'),'click selection passes the full name immediately');
+ok(page.includes('role="combobox"')&&page.includes('aria-controls="pc-product-options"')&&page.includes('role="listbox"')&&ui.includes('role="option"')&&ui.includes('aria-selected'),'combobox/listbox/option roles and selection attributes are preserved');
+ok(page.includes('function filterPlanItems(items,selected,term)'),'material rows filter locally by ID or name without new queries');
+const scPage=fs.readFileSync(path.join(root,'Company_TopChemical_SalesCapacity.html'),'utf8');
+ok(scPage.includes('function selectedLabel()')&&scPage.includes("input.value = S.selectedName")&&scPage.includes('function filterPlanItems(items,selected,term)'),'sales-capacity picker shares the selection-identity fix without redesign');
+console.log('\ntc_production_capability: '+checks+' checks passed');
+
+

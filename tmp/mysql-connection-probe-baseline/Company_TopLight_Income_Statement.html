@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Top Light — قائمة الدخل</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_TopLight_Nav'); ?>
+  <?!= getCompanyThemeCSS_('8df5c89a117fe9a5') ?>
+  <style>
+    @media print {
+      .topbar, .breadcrumb, .no-print { display: none !important; }
+      body { background: var(--bg-surface, #ffffff) !important; }
+    }
+    .is-period { font-size: 0.8em; color: var(--text-muted); margin-bottom: 0.9em; }
+    .is-statement { font-size: 18px; max-width: 44em; margin-inline: auto; }
+    .is-section { margin-bottom: 1.1em; border: 2px solid #111111; border-radius: 8px; overflow: hidden; background: var(--bg-surface); }
+    .is-sec-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 0.55em 0.9em; background: var(--bg-subtle, #f3f4f6); border-bottom: 2px solid #111111; font-weight: 800; font-size: 1.12em; }
+    .is-sec-total { font-weight: 800; white-space: nowrap; }
+    .is-table { width: 100%; border-collapse: collapse; font-size: 1em; }
+    .is-table th, .is-table td { border-bottom: 1px solid var(--border-color, #e5e7eb); padding: 0.55em 1em; text-align: right; }
+    .is-table th { background: var(--bg-subtle, #f9fafb); font-size: 0.8em; color: var(--text-muted); }
+    .is-table tr:last-child td { border-bottom: 0; }
+    .is-table td.num, .is-table th.num { text-align: left; font-variant-numeric: tabular-nums; direction: ltr; width: 11em; white-space: nowrap; }
+    .is-subtotal td { font-weight: 800; font-size: 1.08em; background: #f0fdfa; border-top: 2px solid #111111; }
+    .is-grand { margin-top: 0.4em; padding: 0.7em 0.9em; background: #374151; color: #fff; border-radius: 8px; font-size: 1.35em; font-weight: 800; display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .is-grand .num { direction: ltr; }
+    .is-neg { color: #dc2626; }
+    .is-grand .is-neg { color: #fca5a5; }
+    .is-foot { margin-top: 0.9em; font-size: 0.8em; color: var(--text-muted); line-height: 2; }
+    @media (max-width: 600px) {
+      .is-statement { font-size: 16px; max-width: 100%; }
+    }
+    tr.is-link { cursor: pointer; }
+    tr.is-link:hover td { background: #f8fafc; }
+    .is-open-hint { color: #0369a1; font-weight: 800; margin-inline-end: 6px; }
+    @page { size: A4 portrait; margin: 10mm; }
+    @media print {
+      .is-statement { font-size: 10pt; max-width: 100%; }
+      .is-section { margin-bottom: 8px; break-inside: avoid; }
+      .is-table th, .is-table td { padding: 3px 10px; }
+      .is-table thead { display: table-header-group; }
+      .is-grand { padding: 6px 10px; }
+      .is-foot { font-size: 8pt; line-height: 1.6; }
+      .is-period { margin-bottom: 6px; }
+      .modal-overlay { display: none !important; }
+    }
+  </style>
+</head>
+<body>
+<div id="tl-root" dir="rtl"></div>
+<script>
+  var params = new URLSearchParams(window.location.search);
+  var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+  var scriptUrl = window.scriptUrl || '/';
+  var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+  var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+  var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('8df5c89a117fe9a5') ?>';
+  var COMPANY_PAGES = <?!= companyPages ?>;
+  var CURRENT_ACTION = '<?!= currentAction ?>';
+
+  function companyCall(moduleAction, data) {
+    return API.call('company_action', {
+      target_system: '8df5c89a117fe9a5',
+      module_action: moduleAction,
+      data: data || {}
+    }, SESSION_TOKEN);
+  }
+
+  function load() {
+    UIC.appShell('tl-root', {
+      menuGroups: window.TOPLIGHT_MENU || [],
+      companyLogoUrl: COMPANY_LOGO_URL,
+      companyLogoHref: scriptUrl + '?action=tl_dashboard&sessionToken=' + SESSION_TOKEN,
+      companyLogoTitle: 'القمة لايت',
+      breadcrumb: 'القمة لايت / قائمة الدخل',
+      contentId: 'tl-content'
+    });
+    fetchData();
+  }
+
+  function filterPayload() {
+    return {
+      date_from: document.getElementById('f_from') ? document.getElementById('f_from').value : '',
+      date_to: document.getElementById('f_to') ? document.getElementById('f_to').value : ''
+    };
+  }
+
+  var __filtersBuilt = false;
+  var __lastQuery = null;
+  var LAST = null;
+
+  function fetchData() {
+    UIC.readSkeleton('tl-content', { message: [
+      'جاري إعداد قائمة الدخل...',
+      'جاري حساب صافي الإيراد وحركة المخزون...',
+      'لحظة، جاري تجميع المصروفات المباشرة...'
+    ] });
+    __lastQuery = filterPayload();
+    companyCall('get_income_statement', __lastQuery)
+      .then(function (r) {
+        var content = document.getElementById('tl-content');
+        if (!__filtersBuilt) {
+          content.innerHTML = renderFilters() + '<div id="results"></div>';
+          __filtersBuilt = true;
+        }
+        renderStatement(r.summary || {}, r.expenses || []);
+        LAST = r || {};
+      })
+      .catch(function (e) { showError(e); })
+      .finally(function () { UI.hideSpinner(); try{schedulePrefetch();}catch(e){} });
+  }
+
+  function renderFilters() {
+    return '<div class="no-print" style="display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;margin-bottom:16px;padding:12px;background:var(--bg-surface);border:2px solid #111111;border-radius:8px;">' +
+      '<div class="form-field" style="margin:0;"><label class="form-label" for="f_from">من تاريخ</label><input id="f_from" class="input" type="date" onchange="fetchData()"></div>' +
+      '<div class="form-field" style="margin:0;"><label class="form-label" for="f_to">إلى تاريخ</label><input id="f_to" class="input" type="date" onchange="fetchData()"></div>' +
+      '<button class="btn btn-outline" onclick="window.print()">طباعة</button>' +
+      '</div>';
+  }
+
+  /* نسبة مالية بضابط القسمة على صفر — ترجع '—' بدل كسر مكسور */
+  function pct(num, den) {
+    num = Number(num) || 0;
+    den = Number(den) || 0;
+    if (den === 0) return '—';
+    return (num / den * 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' %';
+  }
+
+  function money(v) {
+    return '<span class="num">' + FMT.number(v) + '</span>';
+  }
+
+  function moneySigned(v, lightNeg) {
+    var n = Number(v) || 0;
+    var cls = n < 0 ? ' class="num is-neg"' : ' class="num"';
+    return '<span' + cls + '>' + FMT.number(v) + '</span>';
+  }
+
+  function row(label, valueHtml, ratioHtml, subtotal, modalKey) {
+    var clickable = !!modalKey;
+    var cls = (subtotal ? 'is-subtotal ' : '') + (clickable ? 'is-link' : '');
+    return '<tr' + (cls ? ' class="' + cls.trim() + '"' : '') + (clickable ? ' onclick="openLine(\'' + modalKey + '\')"' : '') + '><td>' +
+      (clickable ? '<span class="is-open-hint">‹</span>' : '') + label + '</td><td class="num">' + valueHtml + '</td><td class="num">' + (ratioHtml || '—') + '</td></tr>';
+  }
+
+  function fmtDate(v) {
+    if (!v) return '-';
+    var d = new Date(v);
+    if (isNaN(d.getTime())) return String(v).slice(0, 10);
+    return d.toLocaleDateString('en-GB');
+  }
+
+  function modalTable(heads, bodyRows) {
+    return '<div style="overflow:auto;"><table class="is-table"><thead><tr>' +
+      heads.map(function (h) { return '<th' + (h.num ? ' class="num"' : '') + '>' + h.label + '</th>'; }).join('') +
+      '</tr></thead><tbody>' + (bodyRows || '<tr><td colspan="7" style="text-align:center;color:var(--text-muted);">لا توجد بنود</td></tr>') + '</tbody></table></div>';
+  }
+
+  function openLine(key) {
+    var b = detailBuilders[key] ? detailBuilders[key]() : null;
+    if (!b) return;
+    UIC.openModal('is-line-modal', { title: b.title, body: b.body, size: 'lg', footer: false });
+  }
+
+  var detailBuilders = {
+    revenue: function () {
+      var rows = ((LAST && LAST.revenueRows) || []).map(function (r) {
+        return '<tr><td>' + FMT.escape(r.code || '-') + '</td><td>' + fmtDate(r.date) + '</td><td>' + FMT.escape(r.customer_name || '-') + '</td>' +
+          '<td class="num">' + FMT.number(r.gross) + '</td><td class="num">' + FMT.number(r.discount) + '</td>' +
+          '<td class="num">' + FMT.number(r.ret) + '</td><td class="num">' + FMT.number(r.net) + '</td></tr>';
+      }).join('');
+      return { title: 'تفاصيل الإيراد — فاتورة فاتورة', body: modalTable(
+        [{ label: 'الكود' }, { label: 'التاريخ' }, { label: 'العميل' }, { label: 'الإجمالي', num: 1 }, { label: 'الخصم', num: 1 }, { label: 'المرتجع', num: 1 }, { label: 'الصافي', num: 1 }], rows) };
+    },
+    opening: function () {
+      var s = (LAST && LAST.summary) || {};
+      var rows = ((LAST && LAST.startDetail) || []).map(function (l) {
+        return '<tr><td>' + FMT.escape(l.product_name || ('#' + l.product_id)) + '</td>' +
+          '<td class="num">' + Number(l.qty).toLocaleString('en-US') + '</td><td class="num">' + FMT.number(l.unit_cost) + '</td><td class="num">' + FMT.number(l.value) + '</td></tr>';
+      }).join('');
+      return { title: 'تفاصيل مخزون أول المدة (' + FMT.number(s.startVal) + ')', body: modalTable(
+        [{ label: 'الصنف' }, { label: 'الكمية', num: 1 }, { label: 'التكلفة', num: 1 }, { label: 'القيمة', num: 1 }], rows) };
+    },
+    purchases: function () {
+      var s = (LAST && LAST.summary) || {};
+      var rows = ((LAST && LAST.purchDetail) || []).map(function (l) {
+        return '<tr><td>' + FMT.escape(l.product_name || ('#' + l.product_id)) + '</td>' +
+          '<td class="num">' + Number(l.qty).toLocaleString('en-US') + '</td><td class="num">' + FMT.number(l.total_cost) + '</td><td>' + fmtDate(l.receipt_date) + '</td></tr>';
+      }).join('');
+      return { title: 'تفاصيل المشتريات (' + FMT.number(s.purchVal) + ')', body: modalTable(
+        [{ label: 'الصنف' }, { label: 'الكمية', num: 1 }, { label: 'التكلفة', num: 1 }, { label: 'التاريخ' }], rows) };
+    },
+    endstock: function () {
+      var s = (LAST && LAST.summary) || {};
+      var rows = ((LAST && LAST.stockDetail) || []).map(function (l) {
+        return '<tr><td>' + FMT.escape(l.product_name || ('#' + l.product_id)) + '</td>' +
+          '<td class="num">' + Number(l.qty).toLocaleString('en-US') + '</td><td class="num">' + FMT.number(l.unit_cost) + '</td><td class="num">' + FMT.number(l.value) + '</td></tr>';
+      }).join('');
+      return { title: 'تفاصيل مخزون آخر المدة (' + FMT.number(s.endVal) + ')', body: modalTable(
+        [{ label: 'الصنف' }, { label: 'الكمية', num: 1 }, { label: 'التكلفة', num: 1 }, { label: 'القيمة', num: 1 }], rows) };
+    },
+    expenses: function () {
+      var s = (LAST && LAST.summary) || {};
+      var rows = ((LAST && LAST.expenses) || []).map(function (e) {
+        return '<tr><td>' + FMT.escape(e.chart_name || '-') + '</td>' +
+          '<td class="num">' + FMT.number(e.amount) + '</td><td class="num">' + FMT.number(e.count) + '</td><td class="num">' + pct(e.amount, s.expensesTotal) + '</td></tr>';
+      }).join('');
+      return { title: 'تفاصيل المصروفات المباشرة (' + FMT.number(s.expensesTotal) + ')', body: modalTable(
+        [{ label: 'الحساب' }, { label: 'المبلغ', num: 1 }, { label: 'الحركات', num: 1 }, { label: 'النسبة', num: 1 }], rows) };
+    }
+  };
+
+  function section(idx, title, totalHtml, rowsHtml, cols) {
+    return '<div class="is-section">' +
+      '<div class="is-sec-head"><span>' + idx + ' - ' + FMT.escape(title) + '</span>' +
+      '<span class="is-sec-total">' + totalHtml + '</span></div>' +
+      '<table class="is-table"><thead><tr><th>البيان</th><th class="num">القيمة</th><th class="num">' + cols + '</th></tr></thead>' +
+      '<tbody>' + rowsHtml + '</tbody></table></div>';
+  }
+
+  function renderStatement(s, expenses) {
+    var el = document.getElementById('results');
+    if (!el) return;
+    var html = '<div class="is-statement">';
+
+    var q = __lastQuery || {};
+    html += '<div class="is-period">الفترة: <strong>' + FMT.escape(q.date_from || 'البداية') + '</strong> إلى <strong>' + FMT.escape(q.date_to || 'النهاية') + '</strong>' +
+      ' · عدد الفواتير: <strong class="num">' + FMT.number(s.count) + '</strong></div>';
+
+    /* 1 — صافي المبيعات */
+    html += section(1, 'صافي المبيعات', money(s.net),
+      row('إجمالي المبيعات', money(s.netAmount), '—', false, 'revenue') +
+      row('يخصم: الخصومات', money(s.discount), pct(s.discount, s.netAmount), false, 'revenue') +
+      row('يخصم: مرتجعات المبيعات', money(s.returns), pct(s.returns, s.gross), false, 'revenue') +
+      row('<strong>صافي الإيراد</strong>', money(s.net), '—', true, 'revenue'),
+      'النسبة');
+
+    /* 2 — تكلفة البضاعة المباعة */
+    html += section(2, 'تكلفة البضاعة المباعة', money(s.cogs),
+      row('مخزون أول المدة', money(s.startVal), '—', false, 'opening') +
+      row('يضاف: المشتريات خلال الفترة', money(s.purchVal), '—', false, 'purchases') +
+      row('يخصم: مخزون آخر المدة', money(s.endVal), '—', false, 'endstock') +
+      row('<strong>تكلفة البضاعة المباعة</strong>', money(s.cogs), pct(s.cogs, s.net), true),
+      'النسبة من صافي الإيراد');
+
+    /* 3 — مجمل الربح */
+    html += section(3, 'مجمل الربح', moneySigned(s.grossProfit),
+      row('<strong>مجمل الربح = صافي الإيراد − التكلفة</strong>', moneySigned(s.grossProfit), pct(s.grossProfit, s.net), true) +
+      row('هامش مجمل الربح (مجمل ÷ صافي الإيراد)', pct(s.grossProfit, s.net), '—') +
+      row('الربح على التكلفة (مجمل ÷ التكلفة)', pct(s.grossProfit, s.cogs), '—'),
+      'النسبة');
+
+    /* 4 — المصروفات المباشرة (التكاليف): سطر واحد + مودال التفاصيل */
+    html += section(4, 'المصروفات المباشرة (التكاليف)', money(s.expensesTotal),
+      row('التفاصيل حسب الحساب <span style="color:var(--text-muted);font-size:11px;">(' + FMT.number((expenses || []).length) + ' حساب)</span>', money(s.expensesTotal), pct(s.expensesTotal, s.net), false, 'expenses') +
+      row('<strong>إجمالي المصروفات المباشرة</strong>', money(s.expensesTotal), pct(s.expensesTotal, s.net), true),
+      'النسبة من الإجمالي / الإيراد');
+
+    /* صافي الربح */
+    html += '<div class="is-grand"><span>صافي الربح</span><span class="num">' + FMT.number(s.netProfit) + '</span>' +
+      '<span style="font-size:13px;font-weight:400;">هامش الصافي: ' + pct(s.netProfit, s.net) + '</span></div>';
+
+    html += '<div class="is-foot">بيانات تحقق: الضرائب ' + FMT.number(s.tax) +
+      ' · تكلفة المبيعات (تحقق) ' + FMT.number(s.cogsCheck) +
+      ' · فرق التكلفة ' + FMT.number(s.cogsDiff) +
+      ' · حركات المصروفات ' + FMT.number(s.expenseLines) + '</div>';
+
+    el.innerHTML = html + '</div>';
+  }
+
+  function showError(e) {
+    var content = document.getElementById('tl-content');
+    if (content) content.innerHTML = '<div class="empty-state"><span>' + FMT.escape(e.message || 'خطأ') + '</span></div>';
+  }
+
+  load();
+</script>
+</body>
+</html>

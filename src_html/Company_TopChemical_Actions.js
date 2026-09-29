@@ -2995,7 +2995,7 @@ const valueMap = {};
   // =========================================
   const UPLOAD_META = {
     'products': { uid: COMPANY_UID, page: 'tc_products', folder: 'products_Files_' },
-    'registration_papers': { uid: COMPANY_UID, page: 'tc_registration_papers', folder: 'registration_papers 2_Files_' },
+    'registration_papers': { uid: COMPANY_UID, page: 'tc_registration_papers', folder: 'registration_papers_Files_' },
     'purchasing_support_data': { uid: COMPANY_UID, page: 'tc_carton_sizes', folder: 'purchasing_support_data_Images' },
     'legal_importation_follow': {
       uid: COMPANY_UID,

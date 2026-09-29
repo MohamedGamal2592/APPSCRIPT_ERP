@@ -6,6 +6,9 @@
  * plain strings are placeholders (toast "قيد الإنشاء").
  */
 window.TOPCHEMICAL_MENU = [
+  { label: 'المتابعة التنفيذية', items: [
+    { label: 'المتابعة اليومية التنفيذية', action: 'tc_executive_followup' }
+  ] },
   { label: 'الحسابات', items: [
     { label: 'عملاء وموردين', action: 'tc_clients_vendors' },
     { label: 'مديونيات', action: 'tc_debts' },
@@ -19,7 +22,6 @@ window.TOPCHEMICAL_MENU = [
   { label: 'حسابات الميزانية', items: [
     { label: 'تصنيع الميزانية', action: 'tc_budget_manufacture' },
     { label: 'رصيد أصناف الميزانية', action: 'tc_budget_stock_balance' },
-    { label: 'حركة الأصناف (دفتر الجرد)', action: 'tc_budget_stock_movement' },
     { label: 'الفواتير الضريبية', action: 'tc_budget_invoices' },
     { label: 'المدخلات - اصول ومخزون', action: 'tc_budget_inputs' },
     { label: 'عملاء وموردون قانونيون', action: 'tc_budget_parties' },
@@ -31,6 +33,16 @@ window.TOPCHEMICAL_MENU = [
     { label: 'توريدات ومشتريات', action: 'tc_purchasing' }, { label: 'متابعة موافقات الاستيراد', action: 'tc_import_follow' }, { label: 'مقاسات الكراتين والعبوات', action: 'tc_carton_sizes' }
   ] },
   
+  { label: 'تحليلات النظام الرئيسي', items: [
+    { label: 'مراجعة مديونيات النظام الرئيسي', action: 'tc_main_review' },
+    { label: 'جدول مديونيات العملاء (client_balance_sheets)', action: 'tc_client_balance_sheets' },
+    { label: 'تحليل حركة الخزنة العادية', action: 'tc_box_analysis' },
+    { label: 'أوامر التصنيع', action: 'tc_manufacture_orders' },
+    { label: 'تحليلات القدرات الانتاجية', action: 'tc_production_capability' },
+    { label: 'تحليل القدرة الانتاجية للمبيعات', action: 'tc_sales_capacity' },
+    { label: 'اصناف النظام الرئيسي', action: 'tc_products_live' },
+    { label: 'تحليلات النسب المالية', action: 'tc_financial_ratios' }
+  ] },
   { label: 'شئون العاملين', items: [
     { label: 'تسجيل الموظفين', action: 'tc_employee_reg' },
     { label: 'حالة الموظف', action: 'tc_employee_status' },
@@ -40,6 +52,9 @@ window.TOPCHEMICAL_MENU = [
     { label: 'العمل الإضافي', action: 'tc_emp_overtime' },
     { label: 'صرف المرتبات الشهرية', action: 'tc_emp_salaries' },
     { label: 'غلق المرتبات الشهرية', action: 'tc_emp_salaries_close' }
+  ] },
+  { label: 'المخازن', items: [
+    { label: 'جرد دوري مخازن باركود', action: 'tc_stock_scan' }
   ] }
 ];
 </script>

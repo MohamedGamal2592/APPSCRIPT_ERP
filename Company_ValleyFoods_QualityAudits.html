@@ -1,0 +1,590 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Valley Foods — الجودة — التدقيق الداخلي</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_ValleyFoods_Nav'); ?>
+  <?!= getCompanyThemeCSS_('9940659bd83035d7') ?>
+  <style>
+    #audit-modal .modal { width: min(96vw, 1180px); max-width: 1180px; }
+    #audit-modal .modal-body { max-height: 78vh; overflow-y: auto; }
+    #audit-finding-modal .modal { width: min(96vw, 760px); max-width: 760px; }
+    #audit-finding-modal .modal-body { max-height: 78vh; overflow-y: auto; }
+    .vf-audit-inline-alert { background: var(--danger-bg, #fef2f2); border: 1px solid var(--danger-border, #fecaca); border-radius: 8px; padding: 8px 10px; margin-bottom: 10px; font-size: 13px; color: var(--danger-text, #b91c1c); }
+    .vf-audit-sec { margin-top: 12px; }
+  </style>
+</head>
+<body>
+  <div id="vf-root"></div>
+
+  <script>
+    var params = new URLSearchParams(window.location.search);
+    var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+    var scriptUrl = window.scriptUrl || '/';
+    var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+    var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('9940659bd83035d7') ?>';
+    var COMPANY_PAGES = <?!= companyPages ?>;
+    var CURRENT_ACTION = '<?!= currentAction ?>';
+    var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+    var CAN_WRITE = UIC.canAdd_(); var CAN_FULL = UIC.canFull_();
+
+    function companyCall(moduleAction, data) {
+      return API.call('company_action', {
+        target_system: '9940659bd83035d7',
+        module_action: moduleAction,
+        data: data || {}
+      }, SESSION_TOKEN);
+    }
+    function esc(v) { return FMT.escape(v); }
+    function todayStr() { return new Date().toISOString().slice(0, 10); }
+    function fmtDate(v) {
+      if (!v) return '—';
+      var d = (v instanceof Date) ? v : new Date(v);
+      if (isNaN(d.getTime())) return String(v);
+      var p = function (n) { return n < 10 ? '0' + n : '' + n; };
+      return p(d.getDate()) + '/' + p(d.getMonth() + 1) + '/' + d.getFullYear();
+    }
+    function fmtDateTime(v) {
+      if (!v) return '—';
+      var d = (v instanceof Date) ? v : new Date(v);
+      if (isNaN(d.getTime())) return String(v);
+      var p = function (n) { return n < 10 ? '0' + n : '' + n; };
+      return p(d.getDate()) + '/' + p(d.getMonth() + 1) + '/' + d.getFullYear() + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+    }
+  </script>
+
+  <script>
+  (function () {
+    'use strict';
+
+    var STATE = { AUDITS: [], FINDINGS: [], NCRS: [], SUPPLIERS: [], AUDIT_TYPES: [], FINDING_TYPES: [] };
+    var CURRENT_AUDIT = null;
+    var EDIT_FINDING = null;
+
+    var AUDIT_STATUS_AR = { Planned: 'مخطط', 'In Progress': 'قيد التنفيذ', Completed: 'مكتمل', Closed: 'مغلق' };
+    var AUDIT_STATUS_TONE = { Planned: 'warning', 'In Progress': 'neutral', Completed: 'success', Closed: 'success' };
+    var FINDING_STATUS_AR = { Open: 'مفتوحة', Closed: 'مغلقة' };
+    var FINDING_STATUS_TONE = { Open: 'warning', Closed: 'success' };
+    var FINDING_TYPES_FALLBACK = [
+      { code: 'Major', label: 'جوهري' },
+      { code: 'Minor', label: 'طفيف' },
+      { code: 'Observation', label: 'ملاحظة' }
+    ];
+
+    function getV(id) { var el = document.getElementById(id); return el ? String(el.value == null ? '' : el.value).trim() : ''; }
+    function getChecked(id) { var el = document.getElementById(id); return !!(el && el.checked); }
+    function auditStatusPill(s) { return UIC.statusPill(AUDIT_STATUS_AR[s] || s || '—', AUDIT_STATUS_TONE[s] || 'neutral'); }
+    function findingStatusPill(s) { return UIC.statusPill(FINDING_STATUS_AR[s] || s || '—', FINDING_STATUS_TONE[s] || 'neutral'); }
+    function truncate(s, n) { var v = String(s == null ? '' : s); return v.length > n ? v.slice(0, n) + '…' : v; }
+    function staticField(label, value) {
+      return '<div class="form-field"><label class="form-label">' + label + '</label>' +
+        '<div style="padding:8px 0;font-size:14px;border-bottom:1px dashed var(--border-color, #e5e7eb);">' +
+        (value ? esc(value) : '<span class="vf-text-muted">—</span>') + '</div></div>';
+    }
+    function actionBtn(label, onclick, primary, disabled) {
+      return '<button type="button" class="btn ' + (primary ? 'btn-primary' : 'btn-outline') + '"' + (disabled ? ' disabled' : '') +
+        ' style="padding:8px 16px;" onclick="' + onclick + '">' + label + '</button>';
+    }
+    function showAlert(hostId, msg) {
+      var host = document.getElementById(hostId);
+      if (host) host.innerHTML = '<div class="vf-audit-inline-alert">' + esc(msg) + '</div>';
+    }
+    function clearAlert(hostId) { var host = document.getElementById(hostId); if (host) host.innerHTML = ''; }
+    function getBoundUpload(key) {
+      try { if (UIC.UploadSet && UIC.UploadSet.getBound) return UIC.UploadSet.getBound(key); } catch (e) {}
+      return null;
+    }
+
+    function matchesId(rowValue, rec) {
+      return String(rowValue) === String(rec.unique_id) || String(rowValue) === String(rec.id);
+    }
+    function auditRefOf(a) { return String((a && (a.unique_id || a.id)) || ''); }
+    function findingRefOf(f) { return String((f && (f.unique_id || f.id)) || ''); }
+    function findAudit(id) {
+      var want = String(id == null ? '' : id);
+      for (var i = 0; i < STATE.AUDITS.length; i++) {
+        var a = STATE.AUDITS[i];
+        if (String(a.unique_id) === want || String(a.id) === want) return a;
+      }
+      return null;
+    }
+    function findFinding(id) {
+      var want = String(id == null ? '' : id);
+      for (var i = 0; i < STATE.FINDINGS.length; i++) {
+        var f = STATE.FINDINGS[i];
+        if (String(f.unique_id) === want || String(f.id) === want) return f;
+      }
+      return null;
+    }
+    function findNcr(id) {
+      var want = String(id == null ? '' : id);
+      for (var i = 0; i < STATE.NCRS.length; i++) {
+        var n = STATE.NCRS[i];
+        if (String(n.unique_id) === want || String(n.id) === want) return n;
+      }
+      return null;
+    }
+    function findingsOf(audit) { return STATE.FINDINGS.filter(function (f) { return matchesId(f.audit_id, audit); }); }
+    function openFindingsCount(audit) {
+      return findingsOf(audit).filter(function (f) { return f.status === 'Open'; }).length;
+    }
+    function ncrCodeById(id) {
+      var ncr = id ? findNcr(id) : null;
+      return ncr ? (ncr.ncr_code || '') : '';
+    }
+    function auditTypeLabel(code) {
+      if (!code) return '—';
+      for (var i = 0; i < STATE.AUDIT_TYPES.length; i++) {
+        if (String(STATE.AUDIT_TYPES[i].code) === String(code)) return String(STATE.AUDIT_TYPES[i].label || code);
+      }
+      return String(code) === 'Customer' ? 'شكوى عميل — تصنيف قديم، يُعالج خارج التدقيق' : String(code);
+    }
+    function findingTypeLabel(code) {
+      if (!code) return '—';
+      for (var i = 0; i < STATE.FINDING_TYPES.length; i++) {
+        if (String(STATE.FINDING_TYPES[i].code) === String(code)) return String(STATE.FINDING_TYPES[i].label || code);
+      }
+      for (var j = 0; j < FINDING_TYPES_FALLBACK.length; j++) {
+        if (FINDING_TYPES_FALLBACK[j].code === String(code)) return FINDING_TYPES_FALLBACK[j].label;
+      }
+      return String(code);
+    }
+    function auditTypeOptions(current) {
+      var opts = STATE.AUDIT_TYPES.map(function (t) { return { value: String(t.code), label: String(t.label || t.code) }; });
+      if (current && !opts.some(function (o) { return o.value === String(current); })) opts.push({ value: String(current), label: auditTypeLabel(current) });
+      return opts;
+    }
+    function supplierOptions(current, currentLabel) {
+      var opts = [{ value: '', label: '— غير محدد —' }].concat(STATE.SUPPLIERS || []);
+      var key = String(current == null ? '' : current);
+      if (key && !opts.some(function (o) { return String(o.value) === key; })) opts.push({ value: key, label: currentLabel || ('مورد قديم #' + key) });
+      return opts;
+    }
+    function findingTypeOptions(current) {
+      var src = (STATE.FINDING_TYPES && STATE.FINDING_TYPES.length) ? STATE.FINDING_TYPES : FINDING_TYPES_FALLBACK;
+      var opts = src.map(function (t) { return { value: String(t.code), label: String(t.label || t.code) }; });
+      if (current && !opts.some(function (o) { return o.value === String(current); })) opts.push({ value: String(current), label: String(current) });
+      return opts;
+    }
+
+    function renderApp() {
+      UIC.appShell('vf-root', {
+        companyLogoUrl: COMPANY_LOGO_URL,
+        companyLogoHref: scriptUrl + '?action=vf_dashboard&sessionToken=' + SESSION_TOKEN,
+        companyLogoTitle: 'Valley Foods',
+        breadcrumb: 'Valley Foods / الجودة / التدقيق الداخلي',
+        contentId: 'vf-quality-content',
+        menuGroups: (window.VALLEYFOODS_MENU || [])
+      });
+      document.getElementById('vf-quality-content').innerHTML =
+        '<div class="vf-card"><div class="vf-card-header"><h3>التدقيق الداخلي</h3></div>' +
+        '<div class="vf-card-body">' +
+          '<div style="display:flex;justify-content:flex-end;gap:8px;margin:10px 0 8px;flex-wrap:wrap;">' +
+            '<button type="button" class="btn btn-outline" onclick="VF_QUALITY_AUDITS_PAGE.refresh()">تحديث</button>' +
+            (CAN_WRITE ? '<button type="button" class="btn btn-primary" onclick="VF_QUALITY_AUDITS_PAGE.openNewAudit()">+ تدقيق جديد</button>' : '') +
+          '</div>' +
+          '<div id="audit-list"></div>' +
+        '</div></div>';
+      load();
+      UIC.Live.watchPage({
+        call: companyCall,
+        page: 'vf_quality_audits',
+        onChange: function () { UIC.Live.arrive(function () { load(true); }); }
+      });
+    }
+
+    function load(quiet) {
+      if (!quiet) UIC.readSkeleton('audit-list');
+      return companyCall('get_quality_audits')
+        .then(function (res) {
+          res = res || {};
+          STATE.AUDITS = res.audits || [];
+          STATE.FINDINGS = res.findings || [];
+          STATE.NCRS = res.ncrs || [];
+          STATE.SUPPLIERS = res.supplier_options || [];
+          STATE.AUDIT_TYPES = res.audit_types || [];
+          STATE.FINDING_TYPES = res.finding_types || [];
+          renderAuditTable();
+          refreshOpenModals();
+        })
+        .catch(function (e) { if (!quiet) UIC.toast((e && e.message) || 'خطأ في تحميل البيانات', 'error'); })
+        .finally(function () { if (!quiet) { try { UI.hideSpinner(); } catch (e) {} } });
+    }
+
+    function refreshOpenModals() {
+      if (document.getElementById('audit-finding-modal')) return;
+      if (CURRENT_AUDIT && !document.getElementById('audit-modal')) CURRENT_AUDIT = null;
+      if (CURRENT_AUDIT) {
+        var fresh = findAudit(auditRefOf(CURRENT_AUDIT));
+        if (fresh) { CURRENT_AUDIT = fresh; renderAuditModal(fresh); }
+        else { UIC.closeModal('audit-modal'); CURRENT_AUDIT = null; }
+      }
+    }
+
+    function renderAuditTable() {
+      var container = document.getElementById('audit-list');
+      if (!container) return;
+      var rows = STATE.AUDITS.map(function (a) {
+        var uid = auditRefOf(a);
+        var openCount = openFindingsCount(a);
+        return [
+          '<b data-audit="' + esc(uid) + '">' + esc(a.audit_code || '') + '</b>',
+          esc(fmtDate(a.audit_date)),
+          esc(auditTypeLabel(a.audit_type)),
+          esc(a.area || '—'),
+          esc(a.auditor_email || '—'),
+          auditStatusPill(a.status),
+          openCount > 0 ? UIC.statusPill(String(openCount), 'warning') : '0',
+          a.attachment
+            ? '<button type="button" class="btn btn-outline" style="padding:4px 10px;font-size:12px;" data-audit-att="' + esc(uid) + '" onclick="event.stopPropagation();VF_QUALITY_AUDITS_PAGE.openAuditAttachment(this.getAttribute(\'data-audit-att\'))">📎 عرض</button>'
+            : '—',
+          '<button type="button" class="btn btn-outline" style="padding:4px 10px;font-size:12px;" data-audit-open="' + esc(uid) + '" onclick="event.stopPropagation();VF_QUALITY_AUDITS_PAGE.openAudit(this.getAttribute(\'data-audit-open\'))">فتح</button>'
+        ];
+      });
+      container.innerHTML = UIC.dataTable('audit-table', {
+        emptyState: { title: 'لا توجد عمليات تدقيق', body: 'ابدأ بتسجيل تدقيق داخلي جديد من زر «تدقيق جديد».' },
+        headers: ['الكود', 'التاريخ', 'النوع', 'المنطقة', 'المدقق', 'الحالة', 'ملاحظات مفتوحة', 'مرفق', 'إجراء'],
+        rows: rows,
+        rowClick: function (rec, tr) {
+          var el = (tr && tr.querySelector) ? tr.querySelector('[data-audit]') : null;
+          if (el) openAudit(el.getAttribute('data-audit'));
+        }
+      });
+    }
+
+    function openAudit(id) {
+      var audit = findAudit(id);
+      if (!audit) { UIC.toast('لم يتم العثور على السجل — تم تحديث القائمة', 'error'); load(true); return; }
+      CURRENT_AUDIT = audit;
+      renderAuditModal(audit);
+    }
+    function openNewAudit() {
+      if (!CAN_WRITE) { UIC.toast('غير مصرح', 'error'); return; }
+      CURRENT_AUDIT = null;
+      renderAuditModal(null);
+    }
+
+    function findingRow(audit, f) {
+      var uid = findingRefOf(f);
+      var closed = audit.status === 'Closed';
+      var canEdit = CAN_WRITE && !closed;
+      var actions = '';
+      if (canEdit) {
+        actions += '<button type="button" class="btn btn-outline" style="padding:4px 10px;font-size:12px;" data-f-edit="' + esc(uid) + '" onclick="event.stopPropagation();VF_QUALITY_AUDITS_PAGE.openFinding(this.getAttribute(\'data-f-edit\'))">تعديل</button> ';
+        actions += '<button type="button" class="btn btn-outline" style="padding:4px 10px;font-size:12px;" data-f-del="' + esc(uid) + '" onclick="event.stopPropagation();VF_QUALITY_AUDITS_PAGE.removeFinding(this.getAttribute(\'data-f-del\'))">حذف</button> ';
+      }
+      var escalateOff = !!f.ncr_id || closed || !CAN_WRITE;
+      actions += '<button type="button" class="btn btn-outline" style="padding:4px 10px;font-size:12px;"' + (escalateOff ? ' disabled' : '') +
+        ' data-f-esc="' + esc(uid) + '" onclick="event.stopPropagation();VF_QUALITY_AUDITS_PAGE.escalateFinding(this.getAttribute(\'data-f-esc\'))">تصعيد إلى NCR</button>';
+      return [
+        esc(f.finding_no == null ? '' : String(f.finding_no)),
+        esc(findingTypeLabel(f.finding_type)),
+        esc(truncate(f.description, 60)) || '—',
+        esc(f.clause_ref || '—'),
+        findingStatusPill(f.status),
+        esc(ncrCodeById(f.ncr_id) || '—'),
+        actions
+      ];
+    }
+
+    function renderAuditModal(audit) {
+      var isNew = !audit;
+      var editable = isNew ? CAN_WRITE : (CAN_WRITE && audit.status !== 'Closed');
+      var title = isNew ? 'تدقيق جديد' : esc(audit.audit_code || '') + ' ' + auditStatusPill(audit.status);
+      var html = '<div id="audit-modal-alert"></div>';
+      html += '<form id="audit-form" class="form-grid">';
+      if (editable) {
+        html += UIC.field({ key: 'audit-f-date', label: 'التاريخ', type: 'date', value: esc(isNew ? todayStr() : (audit.audit_date || '')) });
+        html += UIC.field({ key: 'audit-f-type', label: 'النوع', type: 'select', combo: false, required: true, options: auditTypeOptions(isNew ? '' : audit.audit_type), value: isNew ? '' : (audit.audit_type || '') });
+        html += UIC.field({ key: 'audit-f-area', label: 'المنطقة', type: 'text', value: esc(isNew ? '' : (audit.area || '')) });
+        html += UIC.field({ key: 'audit-f-supplier', label: 'المورد المرتبط (من سجل الموردين)', type: 'select', combo: false,
+          options: supplierOptions(audit && audit.supplier_id, audit && audit.supplier_name), value: audit ? (audit.supplier_id || '') : '' });
+        html += UIC.field({ key: 'audit-f-auditor', label: 'المدقق (البريد الإلكتروني)', type: 'email', value: esc(isNew ? '' : (audit.auditor_email || '')) });
+        html += UIC.field({ key: 'audit-f-summary', label: 'الملخص', type: 'textarea', value: esc(isNew ? '' : (audit.summary || '')) });
+      } else if (audit) {
+        html += staticField('التاريخ', fmtDate(audit.audit_date));
+        html += staticField('النوع', auditTypeLabel(audit.audit_type));
+        html += staticField('المنطقة', audit.area);
+        html += staticField('المورد المرتبط', audit.supplier_name || audit.supplier_id);
+        html += staticField('المدقق', audit.auditor_email);
+        html += staticField('الملخص', audit.summary);
+      }
+      html += '</form>';
+
+      html += '<div class="form-field"><label class="form-label">المرفق</label>';
+      if (audit && audit.attachment) {
+        html += '<div style="margin-bottom:6px;">' +
+          '<button type="button" class="btn btn-outline" data-audit-att="' + esc(auditRefOf(audit)) + '" onclick="VF_QUALITY_AUDITS_PAGE.openAuditAttachment(this.getAttribute(\'data-audit-att\'))">📎 عرض المرفق</button>' +
+          '</div>';
+      }
+      if (editable) {
+        html += UIC.fileField({
+          key: 'audit-f-att',
+          label: (audit && audit.attachment) ? 'استبدال المرفق (اختياري)' : 'إضافة مرفق (اختياري)',
+          accept: '.pdf,.doc,.docx,.png,.jpg,.jpeg',
+          instant: true, sheet: 'valley_quality_audits', field: 'attachment', formModalId: 'audit-modal'
+        });
+      } else if (!audit || !audit.attachment) {
+        html += '<div class="vf-text-muted" style="font-size:13px;">لا يوجد مرفق</div>';
+      }
+      html += '</div>';
+
+      if (audit) {
+        var findings = findingsOf(audit);
+        var canAddFinding = CAN_WRITE && audit.status !== 'Closed';
+        html += '<div class="vf-audit-sec">' +
+          '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;">' +
+            '<b style="color:var(--success-text, #166534);font-size:13px;">الملاحظات (' + findings.length + ')</b>' +
+            (canAddFinding ? actionBtn('+ إضافة ملاحظة', 'VF_QUALITY_AUDITS_PAGE.openAddFinding()', false) : '') +
+          '</div>';
+        if (!findings.length) {
+          html += '<div class="vf-text-muted" style="font-size:13px;">لا توجد ملاحظات لهذا التدقيق.</div>';
+        } else {
+          html += UIC.dataTable('audit-findings-table', {
+            searchable: false,
+            emptyState: { title: 'لا توجد ملاحظات' },
+            headers: ['#', 'النوع', 'الوصف', 'البند', 'الحالة', 'NCR', 'إجراءات'],
+            rows: findings.map(function (f) { return findingRow(audit, f); }),
+            rowClick: function (rec, tr) {
+              var el = (tr && tr.querySelector) ? tr.querySelector('[data-f-edit]') : null;
+              if (el) openFinding(el.getAttribute('data-f-edit'));
+            }
+          });
+        }
+        html += '</div>';
+      }
+
+      if (audit && CAN_WRITE) {
+        var wf = [];
+        if (audit.status === 'Planned') wf.push(actionBtn('بدء التنفيذ', 'VF_QUALITY_AUDITS_PAGE.startAudit()', true));
+        if (audit.status === 'In Progress') wf.push(actionBtn('إكمال', 'VF_QUALITY_AUDITS_PAGE.completeAudit()', true));
+        if (audit.status === 'Completed') wf.push(actionBtn('إغلاق', 'VF_QUALITY_AUDITS_PAGE.closeAudit()', true));
+        if (wf.length) html += '<div style="display:flex;justify-content:flex-end;gap:10px;margin-top:12px;flex-wrap:wrap;">' + wf.join('') + '</div>';
+      }
+
+      UIC.openModal('audit-modal', {
+        size: 'xl',
+        title: title,
+        body: html,
+        footer: '<button type="button" class="btn btn-outline" onclick="UIC.closeModal(\'audit-modal\')">إغلاق</button>' +
+          (editable ? '<button type="button" class="btn btn-primary" onclick="VF_QUALITY_AUDITS_PAGE.saveAudit()">💾 حفظ</button>' : '')
+      });
+    }
+
+    function saveAudit() {
+      if (!CAN_WRITE) { UIC.toast('غير مصرح', 'error'); return Promise.resolve(); }
+      clearAlert('audit-modal-alert');
+      if (!UIC.validateForm('audit-form')) return Promise.resolve();
+      var isNew = !CURRENT_AUDIT;
+      var payload = {
+        audit_date: getV('audit-f-date'),
+        audit_type: getV('audit-f-type'),
+        area: getV('audit-f-area'),
+        auditor_email: getV('audit-f-auditor'),
+        summary: getV('audit-f-summary')
+      };
+      payload.supplier_id = getV('audit-f-supplier');
+      if (!payload.audit_type) { UIC.toast('النوع مطلوب', 'error'); return Promise.resolve(); }
+      if (!isNew) payload.unique_id = auditRefOf(CURRENT_AUDIT);
+      var bound = getBoundUpload('audit-f-att');
+      if (bound) {
+        payload.attachment = bound.ref;
+        payload.attachment_id = bound.id || '';
+      } else if (!isNew) {
+        payload.attachment = CURRENT_AUDIT.attachment || '';
+        payload.attachment_id = CURRENT_AUDIT.attachment_id || '';
+      }
+      UI.showSpinner();
+      return companyCall('save_quality_audit', payload)
+        .then(function (r) {
+          UIC.toast(isNew ? 'تم إنشاء التدقيق' : 'تم حفظ التعديلات', 'success');
+          var uid = (r && r.unique_id) || '';
+          CURRENT_AUDIT = isNew ? { unique_id: uid, id: uid } : CURRENT_AUDIT;
+          return load(true);
+        })
+        .catch(function (e) {
+          var msg = (e && e.message) || 'فشل الحفظ';
+          showAlert('audit-modal-alert', msg);
+          UIC.toast(msg, 'error');
+        })
+        .finally(function () { UI.hideSpinner(); });
+    }
+
+    function auditStatusChange(status, msg) {
+      if (!CAN_WRITE) { UIC.toast('غير مصرح', 'error'); return Promise.resolve(); }
+      if (!CURRENT_AUDIT) return Promise.resolve();
+      clearAlert('audit-modal-alert');
+      UI.showSpinner();
+      return companyCall('save_quality_audit', { unique_id: auditRefOf(CURRENT_AUDIT), status: status })
+        .then(function () { UIC.toast(msg, 'success'); return load(true); })
+        .catch(function (e) {
+          var m = (e && e.message) || 'فشل تغيير الحالة';
+          showAlert('audit-modal-alert', m);
+          UIC.toast(m, 'error');
+        })
+        .finally(function () { UI.hideSpinner(); });
+    }
+    function startAudit() { return auditStatusChange('In Progress', 'تم بدء تنفيذ التدقيق'); }
+    function completeAudit() { return auditStatusChange('Completed', 'تم إكمال التدقيق'); }
+    function closeAudit() {
+      if (!CAN_WRITE) { UIC.toast('غير مصرح', 'error'); return Promise.resolve(); }
+      if (!CURRENT_AUDIT) return Promise.resolve();
+      return UIC.confirm({ title: 'إغلاق التدقيق', message: 'سيتم إغلاق التدقيق نهائياً. متابعة؟', confirmText: 'إغلاق', danger: true })
+        .then(function (ok) { if (ok) return auditStatusChange('Closed', 'تم إغلاق التدقيق'); });
+    }
+
+    function openAddFinding() {
+      if (!CAN_WRITE) { UIC.toast('غير مصرح', 'error'); return; }
+      if (!CURRENT_AUDIT) return;
+      if (CURRENT_AUDIT.status === 'Closed') { UIC.toast('التدقيق مغلق — لا يمكن إضافة ملاحظات', 'error'); return; }
+      EDIT_FINDING = null;
+      renderFindingModal(null);
+    }
+    function openFinding(id) {
+      if (!CAN_WRITE) { UIC.toast('غير مصرح', 'error'); return; }
+      if (!CURRENT_AUDIT) return;
+      if (CURRENT_AUDIT.status === 'Closed') { UIC.toast('التدقيق مغلق — لا يمكن تعديل الملاحظات', 'error'); return; }
+      var f = findFinding(id);
+      if (!f) { UIC.toast('لم يتم العثور على الملاحظة — تم تحديث البيانات', 'error'); load(true); return; }
+      EDIT_FINDING = f;
+      renderFindingModal(f);
+    }
+
+    function renderFindingModal(finding) {
+      var isNew = !finding;
+      var title = isNew ? 'إضافة ملاحظة تدقيق' : 'تعديل الملاحظة #' + esc(finding.finding_no == null ? '' : String(finding.finding_no));
+      var html = '<div id="audit-finding-alert"></div>';
+      html += '<form id="audit-finding-form" class="form-grid">';
+      html += UIC.field({ key: 'audit-f-type', label: 'النوع', type: 'select', combo: false, required: true, options: findingTypeOptions(isNew ? '' : finding.finding_type), value: isNew ? '' : (finding.finding_type || '') });
+      html += UIC.field({ key: 'audit-f-desc', label: 'الوصف', type: 'textarea', required: true, value: esc(isNew ? '' : (finding.description || '')) });
+      html += UIC.field({ key: 'audit-f-clause', label: 'البند المرجعي', type: 'text', value: esc(isNew ? '' : (finding.clause_ref || '')) });
+      html += '<label style="display:flex;align-items:center;gap:8px;margin:10px 0;font-size:14px;">' +
+        '<input type="checkbox" id="audit-f-capa"' + (finding && (finding.capa_required === true || String(finding.capa_required).toLowerCase() === 'true') ? ' checked' : '') + '> مطلوب إجراء تصحيحي (CAPA)' +
+        '</label>';
+      html += UIC.field({ key: 'audit-f-capa-rationale', label: 'مبرر تغيير قرار CAPA', type: 'textarea', value: esc(finding ? finding.capa_decision_rationale : '') });
+      if (!isNew) {
+        html += UIC.field({ key: 'audit-f-status', label: 'الحالة', type: 'select', combo: false, options: [{ value: 'Open', label: 'مفتوحة' }, { value: 'Closed', label: 'مغلقة' }], value: finding.status || 'Open' });
+      }
+      html += '</form>';
+      UIC.openModal('audit-finding-modal', {
+        size: 'sm',
+        title: title,
+        body: html,
+        onSave: 'VF_QUALITY_AUDITS_PAGE.confirmFinding()'
+      });
+    }
+
+    function confirmFinding() {
+      if (!CAN_WRITE) { UIC.toast('غير مصرح', 'error'); return Promise.resolve(); }
+      if (!CURRENT_AUDIT) return Promise.resolve();
+      clearAlert('audit-finding-alert');
+      if (!UIC.validateForm('audit-finding-form')) return Promise.resolve();
+      var isNew = !EDIT_FINDING;
+      var payload = {
+        audit_id: auditRefOf(CURRENT_AUDIT),
+        finding_type: getV('audit-f-type'),
+        description: getV('audit-f-desc'),
+        clause_ref: getV('audit-f-clause'),
+        capa_required: getChecked('audit-f-capa'),
+        capa_decision_rationale: getV('audit-f-capa-rationale')
+      };
+      if (!payload.finding_type) { UIC.toast('النوع مطلوب', 'error'); return Promise.resolve(); }
+      if (!payload.description) { UIC.toast('الوصف مطلوب', 'error'); return Promise.resolve(); }
+      if (!isNew) {
+        payload.unique_id = findingRefOf(EDIT_FINDING);
+        payload.status = getV('audit-f-status');
+      }
+      UI.showSpinner();
+      return companyCall('save_quality_finding', payload)
+        .then(function () {
+          UIC.closeModal('audit-finding-modal');
+          EDIT_FINDING = null;
+          UIC.toast(isNew ? 'تمت إضافة الملاحظة' : 'تم حفظ الملاحظة', 'success');
+          return load(true);
+        })
+        .catch(function (e) {
+          var msg = (e && e.message) || 'فشل الحفظ';
+          showAlert('audit-finding-alert', msg);
+          UIC.toast(msg, 'error');
+        })
+        .finally(function () { UI.hideSpinner(); });
+    }
+
+    function removeFinding(id) {
+      if (!CAN_WRITE) { UIC.toast('غير مصرح', 'error'); return Promise.resolve(); }
+      if (!CURRENT_AUDIT) return Promise.resolve();
+      var f = findFinding(id);
+      if (!f) { UIC.toast('لم يتم العثور على الملاحظة — تم تحديث البيانات', 'error'); return Promise.resolve(); }
+      return UIC.confirm({ title: 'حذف الملاحظة', message: 'سيتم حذف الملاحظة. متابعة؟', confirmText: 'حذف', danger: true })
+        .then(function (ok) {
+          if (!ok) return;
+          clearAlert('audit-modal-alert');
+          UI.showSpinner();
+          return companyCall('save_quality_finding', { audit_id: auditRefOf(CURRENT_AUDIT), unique_id: findingRefOf(f), remove: true })
+            .then(function () { UIC.toast('تم حذف الملاحظة', 'success'); return load(true); })
+            .catch(function (e) {
+              var m = (e && e.message) || 'فشل الحذف';
+              showAlert('audit-modal-alert', m);
+              UIC.toast(m, 'error');
+            })
+            .finally(function () { UI.hideSpinner(); });
+        });
+    }
+
+    function escalateFinding(id) {
+      if (!CAN_WRITE) { UIC.toast('غير مصرح', 'error'); return Promise.resolve(); }
+      var f = findFinding(id);
+      if (!f) { UIC.toast('لم يتم العثور على الملاحظة — تم تحديث البيانات', 'error'); return Promise.resolve(); }
+      if (f.ncr_id) { UIC.toast('الملاحظة مرتبطة بحالة عدم مطابقة بالفعل', 'error'); return Promise.resolve(); }
+      if (CURRENT_AUDIT && CURRENT_AUDIT.status === 'Closed') { UIC.toast('التدقيق مغلق', 'error'); return Promise.resolve(); }
+      return UIC.confirm({ title: 'تصعيد الملاحظة إلى NCR', message: 'سيتم إنشاء حالة عدم مطابقة مرتبطة بهذه الملاحظة. متابعة؟', confirmText: 'تصعيد' })
+        .then(function (ok) {
+          if (!ok) return;
+          clearAlert('audit-modal-alert');
+          UI.showSpinner();
+          return companyCall('escalate_finding_to_ncr', { unique_id: findingRefOf(f) })
+            .then(function (r) {
+              var code = (r && r.ncr_code) || '';
+              UIC.toast('تم التصعيد إلى عدم المطابقة ' + code, 'success');
+              return load(true);
+            })
+            .catch(function (e) {
+              var m = (e && e.message) || 'فشل التصعيد';
+              showAlert('audit-modal-alert', m);
+              UIC.toast(m, 'error');
+            })
+            .finally(function () { UI.hideSpinner(); });
+        });
+    }
+
+    function openAuditAttachment(uid) {
+      var audit = findAudit(uid);
+      if (!audit || !audit.attachment) { UIC.toast('لا يوجد مرفق لهذا السجل', 'error'); return; }
+      UIC.openDownload(scriptUrl + '?download=attachment&page=vf_quality_audits&ref=' + encodeURIComponent(audit.attachment) + '&id=' + encodeURIComponent(auditRefOf(audit)) + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN), 'فتح المرفق');
+    }
+
+    window.VF_QUALITY_AUDITS_PAGE = {
+      refresh: function () { return load(true); },
+      openNewAudit: openNewAudit,
+      openAudit: openAudit,
+      saveAudit: saveAudit,
+      startAudit: startAudit,
+      completeAudit: completeAudit,
+      closeAudit: closeAudit,
+      openAuditAttachment: openAuditAttachment,
+      openAddFinding: openAddFinding,
+      openFinding: openFinding,
+      confirmFinding: confirmFinding,
+      removeFinding: removeFinding,
+      escalateFinding: escalateFinding
+    };
+
+    document.addEventListener('DOMContentLoaded', renderApp);
+  })();
+  </script>
+</body>
+</html>

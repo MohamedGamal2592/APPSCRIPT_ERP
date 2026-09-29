@@ -1,0 +1,21 @@
+{
+  "scope": "JS simplification offline acceptance fixtures",
+  "keyPolicies": [
+    {"name":"assessment.invitedBatchMembership", "key":"BatchID", "normalizer":"identity", "duplicate":"set membership", "ordering":"source order", "fallback":"scan"},
+    {"name":"assessment.firstScoreByQuestion", "key":"QuestionID", "normalizer":"identity", "duplicate":"first match", "ordering":"question order", "fallback":"scan"},
+    {"name":"valley.salesList", "key":"invoice_unique_id", "normalizer":"identity", "duplicate":"all rows", "ordering":"sheet order", "fallback":"full scan"},
+    {"name":"readOnly.snapshot", "key":"dbId|sheetName", "normalizer":"exact scoped tuple", "duplicate":"one snapshot", "ordering":"source order", "fallback":"legacy mutable read"}
+  ],
+  "cases": [
+    "empty inputs", "duplicate IDs", "mixed-case values", "blank keys", "delimiter-containing values", "Arabic text", "mixed dates", "wide rows", "skewed groups", "10x growth"
+  ],
+  "workflowContracts": [
+    "action/page/access/table metadata and page watches",
+    "assessment batch membership and first score duplicate semantics",
+    "Valley sales filtering, paging, totals and global serials",
+    "read-only snapshot invalidation and bounded fallback",
+    "theme output, telemetry keys/sheet headers and deployment source order",
+    "operational dry-run identity/date/header/collection semantics",
+    "SQL response shape, stable ordering, totals and LIMIT/OFFSET pagination"
+  ]
+}

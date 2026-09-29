@@ -1,0 +1,912 @@
+<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>اصناف النظام الرئيسي — products</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_TopChemical_Nav'); ?>
+  <?!= getCompanyThemeCSS_('3fe1b5cb67b7223e') ?>
+  <style>
+    /* NOTE: the list itself is rendered by the unified UIC.dataTable
+       (search + Excel + print toolbar, .table styling, phone cards, print
+       rules). No page-level table CSS here by design — visual overrides
+       would fork this list away from every other table in the system.
+       Numeric alignment reuses the shared .num class (numeric:true columns
+       already emit <td class="num">); do not add a local duplicate. */
+    .pl-form-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 14px;
+      padding: 6px 2px;
+    }
+    .pl-form-grid .form-field { margin: 0; }
+    .pl-form-full { grid-column: 1 / -1; }
+    .pl-load-state {
+      padding: 18px;
+      color: var(--text-muted, #64748b);
+      text-align: center;
+      background: var(--bg-card, #fff);
+      border: 1px solid var(--border, #e2e8f0);
+      border-radius: var(--radius-md, 10px);
+    }
+    .pl-measurement {
+      margin: 8px 0;
+      padding: 7px 10px;
+      color: var(--text-muted, #64748b);
+      background: var(--bg-subtle, #f8fafc);
+      border-radius: var(--radius-sm, 6px);
+      font-size: 11px;
+      line-height: 1.7;
+      direction: rtl;
+      overflow-wrap: anywhere;
+    }
+    .pl-measurement button { margin-right: 8px; padding: 3px 8px; font: inherit; color: var(--brand-primary, #15803d); cursor: pointer; }
+    .pl-progressive-tools { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
+    .pl-progressive-tools .input { flex: 1 1 280px; }
+    .pl-progressive-state { font-size: 12px; color: var(--text-muted, #64748b); margin: 5px 0 10px; }
+    .lbl-ro {
+      font-size: 11px;
+      background: var(--bg-subtle, #f1f5f9);
+      color: var(--text-muted, #64748b);
+      border-radius: 4px;
+      padding: 1px 5px;
+      font-weight: 600;
+      margin-right: 4px;
+    }
+  </style>
+</head>
+<body>
+<div id="tc-root" dir="rtl"></div>
+<script>
+  var params        = new URLSearchParams(window.location.search);
+  var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+  var scriptUrl     = window.scriptUrl || '/';
+  var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('3fe1b5cb67b7223e') ?>';
+  var COMPANY_PAGES    = <?!= companyPages ?>;
+  var CURRENT_ACTION   = '<?!= currentAction ?>';
+  var IS_SUPER_ADMIN   = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+  var USER_PAGES       = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+  var CAN_WRITE = UIC.canAdd_();
+  var CAN_FULL  = UIC.canFull_();
+
+  /* One bounded products table, warm-started from a user-scoped browser cache;
+     shared UIC.dataTable owns search and paging. */
+  var S = { columns: [], rows: [], has_more: false };
+  /* Candidate stays off until the cursor route and table interactions can be
+     checked in an isolated environment. The existing production path remains. */
+  var PL_PROGRESSIVE_READ_ = false;
+  var PL_PROGRESSIVE = null;
+  var PL_VISIBLE_ROWS = null;
+  var PL_PROGRESSIVE_SCOPE = '';
+  var PL_PROGRESSIVE_QUERY = '';
+  var PL_LAST_RENDER_QUERY = '';
+  var PL_PROGRESSIVE_CACHED = false;
+  var PL_PROGRESSIVE_EMPTY = 'لا توجد أصناف مطابقة';
+  var PL_LOAD_GEN = 0;
+  var PL_LOAD_TIMEOUT_MS = 30000;
+  var PL_CLIENT_CACHE_KEY = '';
+  var PL_CACHE_INFO = null;
+  var PL_CACHE_ROW_LIMIT = 1000;
+  var PL_CACHE_FRESH_MS = 60000;
+  (function initProductCacheKey_() {
+    var session = API.getSession ? API.getSession() || {} : {};
+    var email = String(window.AUTH_USER_EMAIL || (session.user && session.user.email) || session.email || '').trim().toLowerCase();
+    if (email) PL_CLIENT_CACHE_KEY = 'erp:mysql-table:3fe1b5cb67b7223e:tc_products_live:v2:' + encodeURIComponent(email);
+  })();
+
+  function plNow_() { return IS_SUPER_ADMIN ? (window.performance && performance.now ? performance.now() : Date.now()) : 0; }
+  function plUtf8Bytes_(value) {
+    var s = String(value == null ? '' : value);
+    try { return new Blob([s]).size; } catch (e) { return unescape(encodeURIComponent(s)).length; }
+  }
+  function plCompareIdsDesc_(left, right) {
+    var a = String(left == null ? '' : left), b = String(right == null ? '' : right);
+    if (/^\d+$/.test(a) && /^\d+$/.test(b)) {
+      a = a.replace(/^0+(?=\d)/, ''); b = b.replace(/^0+(?=\d)/, '');
+      if (a.length !== b.length) return b.length - a.length;
+      return a < b ? 1 : (a > b ? -1 : 0);
+    }
+    return b.localeCompare(a);
+  }
+  function plReadCache_() {
+    function parse(key) {
+      try {
+        var value = JSON.parse(localStorage.getItem(key) || 'null');
+        if (!value || value.quantity_source !== 'product_current_quantity.current_qty' ||
+            !Array.isArray(value.columns) || !value.columns.length ||
+            !Array.isArray(value.rows) || value.rows.length > PL_CACHE_ROW_LIMIT ||
+            !Number.isFinite(Number(value.savedAt)) || Number(value.savedAt) <= 0) return null;
+        if (value.rows.some(function (row) { return !row || typeof row !== 'object' || Array.isArray(row) || row.id == null; })) return null;
+        return value;
+      } catch (e) { return null; }
+    }
+    if (!PL_CLIENT_CACHE_KEY) return null;
+    var cached = parse(PL_CLIENT_CACHE_KEY);
+    if (cached) return cached;
+    // Older cache entries may contain products.quantity. Never treat them as
+    // current stock; wait for the versioned MySQL response instead.
+    return null;
+  }
+  function plWriteCache_(result) {
+    if (!PL_CLIENT_CACHE_KEY || !result) return;
+    try {
+      localStorage.setItem(PL_CLIENT_CACHE_KEY, JSON.stringify({ savedAt: Date.now(),
+        quantity_source: 'product_current_quantity.current_qty',
+        columns: S.columns, rows: S.rows, total: result.total, has_more: !!result.has_more }));
+    } catch (e) { /* Browser storage is an optional warm-start optimization. */ }
+  }
+  function plAfterPaint_() {
+    var raf = window.requestAnimationFrame || function (fn) { setTimeout(fn, 0); };
+    return new Promise(function (resolve) { raf(function () { raf(resolve); }); });
+  }
+
+  var PK_COL = 'id';
+
+  /* ── columns hidden from VIEW ONLY (never mapped into the data table,
+     so they never render, export or print; page performs no writes) ── */
+  var PL_HIDDEN = {
+    'active':         true,   /* نشط (0/1) */
+    'manufacture_id': true,   /* معرف التصنيع */
+    'created_at':     true,   /* تاريخ الإنشاء */
+    'updated_at':     true,   /* آخر تحديث */
+    'deleted_at':     true    /* تاريخ الحذف */
+  };
+
+  /* ── unified ERP table columns (UIC.dataTable contract) ── */
+  var PL_HEADERS = [
+    { key: 'id', label: '#', numeric: true },
+    { key: 'category_id', label: 'معرف الفئة', numeric: true },
+    { key: 'name_ar', label: 'الاسم (عربي)' },
+    { key: 'price', label: 'السعر', numeric: true },
+    { key: 'unit', label: 'الوحدة' },
+    { key: 'quantity', label: 'الكمية', numeric: true },
+    { key: 'number_of_cartons_bags', label: 'عدد الكراتين/الأجولة', numeric: true },
+    { key: 'number_of_small_boxes', label: 'عدد العبوات الصغيرة', numeric: true },
+    { key: 'product_unit_metric', label: 'مقياس الوحدة', numeric: true },
+    { key: 'actions', label: 'إجراءات' }
+  ];
+
+  var COL_LABELS = {
+    'id':                        '# المعرف (PK)',
+    'category_id':               'معرف الفئة',
+    'client_id':                 'معرف العميل',
+    'name_ar':                   'الاسم (عربي)',
+    'name_en':                   'الاسم (إنجليزي)',
+    'code':                      'الكود',
+    'price':                     'السعر',
+    'unit':                      'الوحدة',
+    'quantity':                  'الكمية',
+    'number_of_cartons_bags':    'عدد الكراتين/الأجولة',
+    'number_of_small_boxes':     'عدد العبوات الصغيرة',
+    'product_unit_metric':       'مقياس الوحدة',
+    'active':                    'نشط (0/1)',
+    'manufacture_id':            'معرف التصنيع',
+    'created_at':                'تاريخ الإنشاء',
+    'updated_at':                'آخر تحديث',
+    'deleted_at':                'تاريخ الحذف'
+  };
+
+  var NUMERIC_COLS = { category_id:1, client_id:1, price:1, quantity:1,
+    number_of_cartons_bags:1, number_of_small_boxes:1, product_unit_metric:1,
+    active:1, manufacture_id:1, id:1 };
+  var DATE_COLS = { created_at:1, updated_at:1, deleted_at:1 };
+
+  function colLabel(col) { return COL_LABELS[col] || col; }
+
+  /* The server replaces products.quantity with the live view value. */
+  function liveQtyOf(row) {
+    var q = row.quantity;
+    return (q !== null && q !== undefined) ? String(q) : '';
+  }
+
+  /* distinct existing values of a column across loaded rows (dropdown source) */
+  function distinctVals(col) {
+    var seen = {}, out = [];
+    S.rows.forEach(function (r) {
+      var v = r[col];
+      if (v === null || v === undefined || String(v) === '') return;
+      var k = String(v);
+      if (!seen[k]) { seen[k] = true; out.push(k); }
+    });
+    out.sort();
+    return out;
+  }
+
+  function companyCall(moduleAction, data) {
+    return API.call('company_action', {
+      target_system: '3fe1b5cb67b7223e',
+      module_action:  moduleAction,
+      data:           data || {}
+    }, SESSION_TOKEN);
+  }
+
+  /* ══════════════════ INIT ══════════════════ */
+  function load() {
+    UIC.appShell('tc-root', {
+      companyLogoUrl:   COMPANY_LOGO_URL,
+      companyLogoHref:  scriptUrl + '?action=tc_dashboard&sessionToken=' + SESSION_TOKEN,
+      companyLogoTitle: 'توب كيميكال',
+      breadcrumb: 'توب كيميكال / تحليلات النظام الرئيسي / اصناف النظام الرئيسي',
+      contentId: 'pl-content',
+      menuGroups: (window.TOPCHEMICAL_MENU || [])
+    });
+    ensureProductsShell();
+    if (PL_PROGRESSIVE_READ_) return plStartProgressive_(false);
+    var cacheRestored = restoreProductsCache_();
+    if (cacheRestored) {
+      var cacheFresh = Date.now() - PL_CACHE_INFO.savedAt < PL_CACHE_FRESH_MS;
+      if (IS_SUPER_ADMIN) {
+        var cacheMeasurement = PL_CACHE_INFO.measurement || {};
+        cacheMeasurement.source = cacheFresh ? 'الكاش حديث؛ عُرضت القائمة فوراً' : 'الكاش ظاهر؛ تحديث MySQL بالخلفية';
+        renderPlMeasurement(cacheMeasurement);
+      }
+      if (cacheFresh) return Promise.resolve(S.rows);
+    }
+    return fetchData(false);
+  }
+
+  /* Opt-in path: first bounded MySQL page, then one cursor page at a time.
+     The previous complete browser copy stays visible while it is refreshed. */
+  function plStartProgressive_(forceRefresh) {
+    ensureProductsShell();
+    if (!UIC.ProgressiveRows) {
+      renderProductsLoadState('error', { message: 'محرك تحميل المنتجات غير متاح' });
+      return Promise.resolve(null);
+    }
+    var previousRows = S.rows.slice(), previousColumns = S.columns.slice();
+    if (PL_PROGRESSIVE) PL_PROGRESSIVE.destroy();
+    PL_PROGRESSIVE = null;
+    PL_VISIBLE_ROWS = null;
+    PL_LAST_RENDER_QUERY = '';
+    var cached = plReadCache_();
+    var age = cached ? Date.now() - Number(cached.savedAt) : -1;
+    var completeCache = cached && !cached.migrated && cached.has_more === false &&
+      age >= 0 && age <= 86400000 && cached.rows.length === Number(cached.total) &&
+      cached.columns.map(String).indexOf('id') >= 0;
+    var seed = completeCache ? { rows: cached.rows, columns: cached.columns, complete: true } :
+      previousRows.length && previousColumns.length ?
+        { rows: previousRows, columns: previousColumns, complete: false } : null;
+    if (!seed) renderProductsLoadState('loading');
+    var source = UIC.ProgressiveRows({
+      rowKey: 'id', pageSize: 200, maxRows: 1000, maxBytes: 524288, maxAutoMs: 45000, autoLoad: true,
+      fetch: function (ctx) {
+        return companyCall('get_products_live', { pagination: 'cursor_json', limit: ctx.limit,
+          cursor: ctx.cursor, snapshot_max_id: ctx.snapshot,
+          search: ctx.query, search_mode: 'contains', refresh: !!ctx.refresh });
+      },
+      localMatch: function (row, query) {
+        var q = String(query || '').toLowerCase();
+        return ['id', 'name_ar', 'name_en', 'code'].some(function (key) {
+          return String(row[key] == null ? '' : row[key]).toLowerCase().indexOf(q) >= 0;
+        });
+      },
+      onChange: function (display, state) {
+        if (source !== PL_PROGRESSIVE) return;
+        S.columns = state.columns;
+        S.rows = state.baseRows;
+        PL_VISIBLE_ROWS = display;
+        PL_PROGRESSIVE_QUERY = state.query;
+        PL_PROGRESSIVE_SCOPE = state.scope;
+        PL_PROGRESSIVE_CACHED = state.scope === 'cached';
+        PL_PROGRESSIVE_EMPTY = state.query && state.scope !== 'global_page' && state.scope !== 'complete' ?
+          'جاري البحث في جميع الأصناف...' : 'لا توجد أصناف مطابقة';
+        plProgressiveStatus_(state, display.length);
+        if (!state.columns.length && !display.length) {
+          if (state.error) renderProductsLoadState('error', IS_SUPER_ADMIN ? state.error :
+            { message: 'تعذر تحميل المنتجات. يمكنك إعادة المحاولة.' });
+          else renderProductsLoadState('loading');
+        } else renderPlTable();
+      },
+      onComplete: function (rows, cols, raw) {
+        if (source !== PL_PROGRESSIVE || rows.length > PL_CACHE_ROW_LIMIT ||
+            !raw.total_is_exact || Number(raw.total) !== rows.length) return;
+        S.columns = cols; S.rows = rows;
+        plWriteCache_({ total: raw.total, has_more: false });
+      },
+      onPage: function (raw, which, rpcMs) {
+        if (!IS_SUPER_ADMIN || source !== PL_PROGRESSIVE) return;
+        renderPlMeasurement({ source: which === 'search' ? 'بحث شامل من MySQL' : 'صفحة منتجات من MySQL',
+          request_id: raw.request_id, rows: raw.rows.length, total: raw.total, columns: raw.columns.length,
+          payload_bytes: plUtf8Bytes_(JSON.stringify(raw.rows)), rpc_ms: rpcMs,
+          server: raw._mysql || null });
+      },
+      onError: function (error, which) {
+        if (source !== PL_PROGRESSIVE) return;
+        var code = String((error && (error.code || error.message)) || '');
+        if (/NOT_AUTHORIZED|UNAUTHORIZED|AUTHORIZATION|SESSION_EXPIRED|SYSTEM_DISABLED|ACCOUNT_DISABLED|FORBIDDEN|LOGIN_REQUIRED|OWNER_MISMATCH|MYSQL_SCOPE_CHANGED/i.test(code)) {
+          plInvalidateProductCaches_();
+          source.destroy(); PL_PROGRESSIVE = null;
+          S.columns = []; S.rows = []; PL_VISIBLE_ROWS = [];
+          renderProductsLoadState('error', { message: 'انتهت صلاحية الوصول إلى قائمة الأصناف' });
+          return;
+        }
+        if (IS_SUPER_ADMIN) renderPlMeasurement({ waiting_ms: 0,
+          error: (error && (error.code || error.message)) || 'تعذر الطلب' });
+        if (which === 'search') UIC.toast('تعذر إكمال البحث في كل الأصناف', 'error');
+      }
+    });
+    PL_PROGRESSIVE = source;
+    var firstPage = source.start(seed, !!forceRefresh);
+    var searchInput = document.getElementById('pl-global-search');
+    if (searchInput && searchInput.value) source.search(searchInput.value);
+    return firstPage;
+  }
+
+  function plProgressiveStatus_(state, shown) {
+    var el = document.getElementById('pl-progressive-state');
+    var more = document.getElementById('pl-load-more');
+    var retry = document.getElementById('pl-progressive-retry');
+    if (more) { more.hidden = !state.has_more || !!state.busy ||
+      (state.scope === 'cached' && !state.auto_paused) || state.limit_reached; more.disabled = !!state.busy; }
+    if (retry) retry.hidden = !state.error;
+    if (!el) return;
+    var count = state.total == null ? '' : ' من ' + state.total;
+    var label = state.scope === 'cached' ? 'نسخة محفوظة ظاهرة؛ جارٍ تحديثها من MySQL' :
+      state.scope === 'complete' ? 'البيانات مكتملة؛ البحث يشمل كل الأصناف' :
+      state.scope === 'global_page' ? 'نتائج بحث من MySQL' :
+      state.query ? 'جارٍ البحث في كل الأصناف؛ النتائج المحلية مؤقتة' : 'جارٍ تحميل بقية الأصناف بالخلفية';
+    el.textContent = label + ' | المعروض: ' + shown + count +
+      (state.auto_paused && state.has_more ? ' | توقف التحميل التلقائي بعد حد الوقت؛ اضغط تحميل المزيد' : '') +
+      (state.limit_reached && state.has_more ? ' | بلغ التحميل حد 1000 صنف؛ ابحث لتضييق النتائج' : '') +
+      ' | Excel والطباعة يشملان النتائج المحملة المعروضة فقط' +
+      (state.error ? ' | تعذر التحديث' + (IS_SUPER_ADMIN ? ': ' + String(state.error.message || state.error) : '') : '');
+  }
+  function plSearchProgressive_(value) { if (PL_PROGRESSIVE) PL_PROGRESSIVE.search(value); }
+  function plLoadMoreProgressive_() { if (PL_PROGRESSIVE) PL_PROGRESSIVE.loadMore(); }
+  function plRetryProgressive_() {
+    return plStartProgressive_(true);
+  }
+  function plFindRow_(pkVal) {
+    return (PL_VISIBLE_ROWS || []).concat(S.rows).find(function (r) { return String(r[PK_COL]) === String(pkVal); });
+  }
+  function plInvalidateProductCaches_() {
+    try { if (PL_CLIENT_CACHE_KEY) localStorage.removeItem(PL_CLIENT_CACHE_KEY); } catch (e) {}
+    var session = API.getSession ? API.getSession() || {} : {};
+    var email = String(window.AUTH_USER_EMAIL || (session.user && session.user.email) || session.email || '').trim().toLowerCase();
+    if (email) {
+      try { localStorage.removeItem('tc_products_live_direct_test_v4:' + email); } catch (e2) {}
+      try { localStorage.removeItem('erp:mysql-dropdown:3fe1b5cb67b7223e:tc_stock_scan:products:v2:' + encodeURIComponent(email)); } catch (e3) {}
+    }
+  }
+
+  function restoreProductsCache_() {
+    if (S.rows.length) return false;
+    var started = plNow_(), cached = plReadCache_();
+    if (!cached) return false;
+    S.columns = cached.columns.map(String);
+    S.rows = cached.rows.slice().sort(function (a, b) { return plCompareIdsDesc_(a.id, b.id); });
+    S.has_more = !!cached.has_more;
+    PL_CACHE_INFO = { savedAt: Number(cached.savedAt), migrated: !!cached.migrated };
+    if (IS_SUPER_ADMIN) PL_CACHE_INFO.age_ms = Math.max(0, Date.now() - Number(cached.savedAt));
+    renderPlTable();
+    if (IS_SUPER_ADMIN) {
+      var cacheMeasurement = { source: cached.migrated ? 'ظهور فوري من كاش تجربة المنتجات' : 'ظهور فوري من كاش المتصفح',
+        rows: S.rows.length, total: cached.total == null ? S.rows.length : Number(cached.total),
+        columns: S.columns.length, cache_age_ms: PL_CACHE_INFO.age_ms,
+        cache_paint_ms: plNow_() - started,
+        payload_bytes: plUtf8Bytes_(JSON.stringify({ columns: S.columns, rows: S.rows })) };
+      PL_CACHE_INFO.measurement = cacheMeasurement;
+      renderPlMeasurement(cacheMeasurement);
+      plAfterPaint_().then(function () {
+        if (!PL_CACHE_INFO || PL_CACHE_INFO.measurement !== cacheMeasurement) return;
+        cacheMeasurement.cache_paint_ms = plNow_() - started;
+        renderPlMeasurement(cacheMeasurement);
+      });
+    }
+    return true;
+  }
+
+  /* ══════════════════ DATA ══════════════════ */
+  function fetchData(forceRefresh) {
+    ensureProductsShell();
+    var gen = ++PL_LOAD_GEN;
+    var requestStarted = plNow_();
+    var host = document.getElementById('pl-table-host');
+    if (host && !S.rows.length) renderProductsLoadState('loading');
+    var settled = false;
+    var timeout = setTimeout(function () {
+      if (settled || gen !== PL_LOAD_GEN || S.rows.length) return;
+      renderProductsLoadState('timeout');
+      var coord = null;
+      if (IS_SUPER_ADMIN) {
+        try { coord = API._coord && API._coord._state ? API._coord._state() : null; } catch (e) {}
+        renderPlMeasurement({ waiting_ms: Math.round(plNow_() - requestStarted), coordinator: coord });
+      }
+    }, PL_LOAD_TIMEOUT_MS);
+    var measurementTimer = IS_SUPER_ADMIN ? setInterval(function () {
+      if (settled || gen !== PL_LOAD_GEN) { clearInterval(measurementTimer); return; }
+      var coord = null;
+      try { coord = API._coord && API._coord._state ? API._coord._state() : null; } catch (e) {}
+      renderPlMeasurement({ waiting_ms: Math.round(plNow_() - requestStarted), coordinator: coord });
+    }, 1000) : null;
+    return companyCall('get_products_live', { loadAll: true, refresh: !!forceRefresh })
+      .then(function (res) {
+        if (gen !== PL_LOAD_GEN) { clearTimeout(timeout); clearInterval(measurementTimer); return; }
+        if (!res || res.status !== 'ok' || !Array.isArray(res.rows)) throw new Error('تعذر تحميل المنتجات');
+        settled = true;
+        clearTimeout(timeout);
+        clearInterval(measurementTimer);
+        S.columns = res.columns || [];
+        S.rows = res.rows;
+        S.has_more = !!res.has_more;
+        plWriteCache_(res);
+        PL_CACHE_INFO = null;
+        renderPlTable(IS_SUPER_ADMIN ? {
+          source: 'تم التحديث من MySQL',
+          request_started: requestStarted,
+          response_received: plNow_(),
+          rpc_ms: plNow_() - requestStarted,
+          server: res._mysql || null,
+          total: res.total,
+          payload_bytes: plUtf8Bytes_(JSON.stringify({ columns: S.columns, rows: S.rows }))
+        } : null);
+        if (res.has_more) UIC.toast('عُرضت أول 1000 صنف فقط؛ البحث يشمل المعروض حالياً.', 'info');
+      })
+      .catch(function (err) {
+        if (gen !== PL_LOAD_GEN) { clearTimeout(timeout); clearInterval(measurementTimer); return; }
+        settled = true;
+        clearTimeout(timeout);
+        clearInterval(measurementTimer);
+        if (IS_SUPER_ADMIN) {
+          var coord = null;
+          try { coord = API._coord && API._coord._state ? API._coord._state() : null; } catch (e) {}
+          renderPlMeasurement({ waiting_ms: Math.round(plNow_() - requestStarted), coordinator: coord,
+            error: (err && (err.code || err.message)) || 'تعذر الطلب' });
+        }
+        if (!S.rows.length) renderProductsLoadState('error', err);
+        showError(err);
+      });
+  }
+
+  function renderProductsLoadState(state, err) {
+    var host = document.getElementById('pl-table-host');
+    if (!host) return;
+    if (state === 'loading') {
+      host.innerHTML = '<div class="pl-load-state" role="status" aria-live="polite">جاري تحميل المنتجات...</div>';
+      return;
+    }
+    if (state === 'timeout') {
+      host.innerHTML = '<div class="pl-load-state" role="status">الطلب ما زال ينتظر استجابة الخادم. يمكنك إعادة المحاولة.' +
+        '<div style="margin-top:12px;"><button type="button" class="btn btn-outline" onclick="' +
+        (PL_PROGRESSIVE_READ_ ? 'plRetryProgressive_()' : 'fetchData(true)') + '">إعادة المحاولة</button></div></div>';
+      return;
+    }
+    var message = (err && (err.message || err.error)) || 'تعذر تحميل المنتجات';
+    host.innerHTML = '<div class="pl-load-state" role="alert">' + FMT.escape(String(message)) +
+      '<div style="margin-top:12px;"><button type="button" class="btn btn-outline" onclick="' +
+      (PL_PROGRESSIVE_READ_ ? 'plRetryProgressive_()' : 'fetchData(false)') + '">إعادة المحاولة</button></div></div>';
+  }
+
+  function renderPlMeasurement(m) {
+    if (!IS_SUPER_ADMIN) return;
+    var el = document.getElementById('pl-measurement-text');
+    if (!el) return;
+    if (m && m.waiting_ms != null) {
+      var queue = m.coordinator ? ' | الطلبات النشطة: ' + m.coordinator.active + ' | المنتظرة: ' + m.coordinator.pending : '';
+      var cached = PL_CACHE_INFO ? ' | الجدول المحفوظ ظاهر؛ عمره: ' + Math.round((Date.now() - PL_CACHE_INFO.savedAt)) + ' ms' : '';
+      var current = !PL_CACHE_INFO && S.rows.length ? ' | الجدول الحالي ما زال ظاهراً: ' + S.rows.length + ' صنف' : '';
+      el.textContent = 'قياس تحميل جدول المنتجات | مدة الطلب: ' + Math.round(m.waiting_ms) + ' ms | الحالة: ' +
+        (m.error || 'بانتظار رد الخادم') + '؛ مراحل MySQL تظهر بعد وصول الرد.' + (cached || current) + queue;
+      return;
+    }
+    m = m || {};
+    var db = m.server || {};
+    function ms(v) { return v != null && v !== '' && Number.isFinite(Number(v)) ? Math.round(Number(v)) + ' ms' : '—'; }
+    el.textContent = 'قياس تحميل الجدول' + (m.source ? ' — ' + m.source : '') +
+      (m.request_id ? ' | الطلب: ' + String(m.request_id) : '') +
+      (m.cache_paint_ms == null ? '' : ' | ظهور الكاش: ' + ms(m.cache_paint_ms)) +
+      (m.cache_age_ms == null ? '' : ' | عمر الكاش: ' + ms(m.cache_age_ms)) +
+      ' | المعروض: ' + (m.rows || 0) + ' / الإجمالي: ' + (m.total == null ? '—' : m.total) +
+      ' | الأعمدة: ' + (m.columns || 0) +
+      ' | بيانات الصفوف: ' + (m.payload_bytes || 0) + ' bytes' +
+      ' | RPC: ' + ms(m.rpc_ms) +
+      ' | تجهيز الصفوف: ' + ms(m.prepare_ms) +
+      ' | رسم الجدول: ' + ms(m.render_ms) +
+      ' | حتى الظهور: ' + ms(m.until_visible_ms) +
+      ' | كاش MySQL: ' + (db.cache_hit === true ? 'نعم' : (db.cache_hit === false ? 'لا' : '—')) +
+      ' | اتصال: ' + ms(db.connection_ms) +
+      ' | SQL: ' + ms(db.sql_ms) +
+      ' | قراءة JDBC: ' + ms(db.read_ms) +
+      ' | تحليل JSON بالخادم: ' + ms(db.json_parse_ms) +
+      ' | MySQL إجمالاً: ' + ms(db.elapsed_ms) +
+      ' | صفوف JDBC: ' + (db.rows_read == null ? '—' : db.rows_read);
+  }
+
+  function runMysqlConnectionProbe_() {
+    if (!IS_SUPER_ADMIN) return Promise.resolve();
+    var button = document.getElementById('pl-connection-probe');
+    var output = document.getElementById('pl-measurement-text');
+    var started = plNow_();
+    if (button) button.disabled = true;
+    if (output) output.textContent = 'اختبار اتصال MySQL فقط — جارٍ الاتصال وتنفيذ SELECT 1...';
+    return companyCall('get_mysql_connection_probe', {}, SESSION_TOKEN)
+      .then(function (result) {
+        var rpcMs = plNow_() - started;
+        var t = (result && result.timing_ms) || {};
+        var rt = (result && result.router_timing_ms) || {};
+        var appServerMs = Number(rt.server_total_before_return);
+        var handlerMs = Number(rt.handler);
+        var googleTransportMs = Number.isFinite(appServerMs) ? Math.max(0, rpcMs - appServerMs) : null;
+        var appOverheadMs = Number.isFinite(appServerMs) && Number.isFinite(handlerMs)
+          ? Math.max(0, appServerMs - handlerMs) : null;
+        function ms(v) { return v != null && v !== '' && Number.isFinite(Number(v)) ? Math.round(Number(v)) + ' ms' : '—'; }
+        if (output) output.textContent =
+          'اختبار اتصال MySQL فقط' +
+          ' | الطلب: ' + String((result && result.probe_id) || '—') +
+          ' | RPC كامل: ' + ms(rpcMs) +
+          ' | Google/النقل: ' + ms(googleTransportMs) +
+          ' | Apps Script قبل/بعد الاختبار: ' + ms(appOverheadMs) +
+          ' | المصادقة والجلسة: ' + ms(rt.auth_and_session) +
+          ' | معالج الاختبار: ' + ms(rt.handler) +
+          ' | الخادم داخل الاختبار: ' + ms(t.server_total) +
+          ' | فتح الاتصال: ' + ms(t.connection) +
+          ' | SELECT 1: ' + ms(t.select_1_sql) +
+          ' | قراءة SELECT 1: ' + ms(t.select_1_read) +
+          ' | فحص TLS: ' + ms(Number(t.tls_check_sql || 0) + Number(t.tls_check_read || 0)) +
+          ' | TLS نشط: ' + (result && result.tls_active ? 'نعم' : 'لا') +
+          ' | SSL cipher: ' + String((result && result.ssl_cipher) || 'فارغ') +
+          ' | وقت داخلي غير مصنف: ' + ms(t.server_unaccounted);
+      })
+      .catch(function (err) {
+        if (output) output.textContent = 'فشل اختبار اتصال MySQL: ' + String((err && err.message) || err || 'خطأ غير معروف');
+        throw err;
+      })
+      .finally(function () { if (button) button.disabled = false; });
+  }
+
+  function ensureProductsShell() {
+    var content = document.getElementById('pl-content');
+    if (!content || content.getAttribute('data-products-ready') === 'true') return;
+    content.setAttribute('data-products-ready', 'true');
+    content.innerHTML =
+      (CAN_WRITE ? '<div style="display:flex;justify-content:flex-end;margin-bottom:10px;">' +
+        '<button type="button" class="btn btn-primary" onclick="openAddProduct()">' + UIC.icon('plus') + ' إضافة صنف</button></div>' : '') +
+      (IS_SUPER_ADMIN ? '<div class="pl-measurement"><span id="pl-measurement-text" aria-live="off">سيظهر قياس التحميل بعد وصول البيانات.</span>' +
+        '<button type="button" class="btn btn-outline" title="تجاوز كاش الخادم وقياس قراءة جديدة" onclick="' +
+        (PL_PROGRESSIVE_READ_ ? 'plStartProgressive_(true)' : 'fetchData(true)') + '">قياس تحديث MySQL</button>' +
+        '<button type="button" class="btn btn-outline" id="pl-connection-probe" title="قياس فتح الاتصال وSELECT 1 فقط" onclick="runMysqlConnectionProbe_()">اختبار الاتصال فقط</button></div>' : '') +
+      (PL_PROGRESSIVE_READ_ ? '<div class="pl-progressive-tools">' +
+        '<input type="search" class="input" id="pl-global-search" placeholder="بحث في كل الأصناف بالاسم أو الكود أو الرقم" aria-label="بحث في كل الأصناف بالاسم أو الكود أو الرقم" oninput="plSearchProgressive_(this.value)">' +
+        '<button type="button" class="btn btn-outline" id="pl-load-more" onclick="plLoadMoreProgressive_()" hidden>تحميل المزيد</button>' +
+        '<button type="button" class="btn btn-outline" id="pl-progressive-retry" onclick="plRetryProgressive_()" hidden>إعادة المحاولة</button></div>' +
+        '<div class="pl-progressive-state" id="pl-progressive-state" role="status" aria-live="polite"></div>' : '') +
+      '<div id="pl-table-host"><div class="pl-load-state" role="status" aria-live="polite">جاري تحميل المنتجات...</div></div>';
+  }
+
+  function openAddProduct() {
+    if (!CAN_WRITE) { UIC.toast('غير مصرح بإضافة الأصناف', 'error'); return; }
+    var unitOptions = distinctVals('unit').map(function (value) { return { value: value, label: value }; });
+    var metricOptions = distinctVals('product_unit_metric').map(function (value) { return { value: value, label: value }; });
+    var body = '<form id="pl-add-form"><div class="pl-form-grid">' +
+      UIC.field({ key: 'name_ar', label: 'الاسم (عربي)', required: true, maxlength: 255 }) +
+      UIC.field({ key: 'name_en', label: 'الاسم (إنجليزي)', maxlength: 255 }) +
+      UIC.field({ key: 'code', label: 'الكود', required: true, maxlength: 100, noCorrect: true }) +
+      UIC.field({ key: 'price', label: 'السعر', type: 'number', min: 0, step: 'any' }) +
+      UIC.combo({ key: 'unit', label: 'الوحدة', options: unitOptions, value: '', required: true,
+        placeholder: 'اختر وحدة أو اكتب وحدة جديدة', allowNew: true }) +
+      UIC.field({ key: 'number_of_cartons_bags', label: 'عدد الكراتين/الأجولة', type: 'number', min: 0, step: 'any', required: true }) +
+      UIC.field({ key: 'number_of_small_boxes', label: 'عدد العبوات الصغيرة', type: 'number', min: 0, step: 'any' }) +
+      UIC.combo({ key: 'product_unit_metric', label: 'مقياس الوحدة', options: metricOptions, value: '',
+        placeholder: 'اختر مقياساً أو اكتب قيمة', allowNew: true }) +
+      '</div></form>';
+    UIC.openModal('pl-add-modal', {
+      title: 'إضافة صنف إلى قاعدة بيانات المنتجات',
+      body: body,
+      saveLabel: 'إضافة الصنف',
+      onSave: 'saveNewProduct()'
+    });
+    try { UIC.trackDirty('pl-add-form'); } catch (e) {}
+  }
+
+  function saveNewProduct() {
+    if (!CAN_WRITE) { UIC.toast('غير مصرح بإضافة الأصناف', 'error'); return; }
+    if (!UIC.validateForm('pl-add-form')) return;
+    var payload = UIC.collectForm('pl-add-form');
+    ['unit', 'product_unit_metric'].forEach(function (key) {
+      if (payload[key] === '__new__') {
+        var custom = document.getElementById(key + '_custom');
+        payload[key] = custom ? String(custom.value || '').trim() : '';
+      }
+      delete payload[key + '_custom'];
+    });
+    if (!String(payload.name_ar || '').trim() || !String(payload.code || '').trim() ||
+        !String(payload.unit || '').trim() || !String(payload.number_of_cartons_bags || '').trim()) {
+      UIC.toast('أكمل الاسم العربي والكود والوحدة وعدد الكراتين', 'error');
+      return;
+    }
+    UI.showSpinner('جاري إضافة الصنف…');
+    companyCall('add_product_live', payload)
+      .then(function () {
+        UIC.toast('تمت إضافة الصنف بنجاح ✓', 'success');
+        UIC.closeModal('pl-add-modal');
+        plInvalidateProductCaches_();
+        return PL_PROGRESSIVE_READ_ ? plStartProgressive_(true) : fetchData(true);
+      })
+      .catch(showError)
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function renderPage() {
+    ensureProductsShell();
+    renderPlTable();
+  }
+
+  function mapProductRow(row) {
+    var pkVal = row[PK_COL] !== undefined && row[PK_COL] !== null ? String(row[PK_COL]) : '';
+    return {
+      id: (row.id !== null && row.id !== undefined) ? row.id : '',
+      category_id: (row.category_id !== null && row.category_id !== undefined) ? row.category_id : '',
+      name_ar: row.name_ar ? '<b>' + FMT.escape(String(row.name_ar)) + '</b>' : '—',
+      price: (row.price !== null && row.price !== undefined && String(row.price) !== '') ? row.price : '',
+      unit: row.unit ? FMT.escape(String(row.unit)) : '—',
+      quantity: liveQtyOf(row),
+      number_of_cartons_bags: (row.number_of_cartons_bags !== null && row.number_of_cartons_bags !== undefined) ? row.number_of_cartons_bags : '',
+      number_of_small_boxes: (row.number_of_small_boxes !== null && row.number_of_small_boxes !== undefined) ? row.number_of_small_boxes : '',
+      product_unit_metric: (row.product_unit_metric !== null && row.product_unit_metric !== undefined) ? row.product_unit_metric : '',
+      actions: UIC.actionBtns(
+        [
+          { label: 'عرض', onclick: "openDetail('" + FMT.escape(pkVal) + "')" },
+          { label: 'أرصدة المخازن', onclick: "openWarehouseQty('" + FMT.escape(pkVal) + "')" }
+        ]
+        .concat(CAN_WRITE && !PL_PROGRESSIVE_CACHED ? [
+          { label: 'تعديل', onclick: "openEdit('" + FMT.escape(pkVal) + "')" },
+          { label: 'حذف', color: '#d32f2f', onclick: "askDelete('" + FMT.escape(pkVal) + "')" }
+        ] : [])
+      )
+    };
+  }
+
+  function renderPlTable(measure) {
+    var host = document.getElementById('pl-table-host');
+    if (!host) return;
+    measure = measure || null;
+    var prepareStarted = plNow_();
+    var tableRows = (PL_PROGRESSIVE_READ_ && PL_VISIBLE_ROWS ? PL_VISIBLE_ROWS : S.rows).map(mapProductRow);
+    if (measure) {
+      measure.prepare_ms = plNow_() - prepareStarted;
+      measure.rows = tableRows.length;
+      measure.columns = S.columns.length;
+    }
+    var renderStarted = plNow_();
+    var measureFinished = false;
+    function finishMeasure() {
+      if (!measure || measureFinished) return;
+      measureFinished = true;
+      measure.render_ms = plNow_() - renderStarted;
+      measure.until_visible_ms = plNow_() - measure.request_started;
+      renderPlMeasurement(measure);
+    }
+    // In progressive mode the separate search field calls MySQL while a
+    // partial table is loading; the shared table still owns sort and display.
+    var view = PL_PROGRESSIVE_READ_ && UIC.TableRefresh && UIC.TableRefresh.snapshot ?
+      UIC.TableRefresh.snapshot('pl-table') : null;
+    if (PL_PROGRESSIVE_READ_ && PL_LAST_RENDER_QUERY !== PL_PROGRESSIVE_QUERY) view = null;
+    host.innerHTML = UIC.dataTable('pl-table', {
+      title: 'اصناف النظام الرئيسي',
+      headers: PL_HEADERS,
+      rows: tableRows, searchable: !PL_PROGRESSIVE_READ_,
+      truncated: !PL_PROGRESSIVE_READ_ && !!S.has_more,
+      searchScopeNote: 'البحث يشمل أول 1000 صنف معروض فقط',
+      emptyText: PL_PROGRESSIVE_READ_ ? PL_PROGRESSIVE_EMPTY : 'لا توجد أصناف مطابقة',
+      onRendered: finishMeasure
+    });
+    UIC.initTableSort('pl-table');
+    if (view && UIC.TableRefresh && UIC.TableRefresh.restore) UIC.TableRefresh.restore('pl-table', view);
+    PL_LAST_RENDER_QUERY = PL_PROGRESSIVE_QUERY;
+    if (!tableRows.length) finishMeasure();
+  }
+
+  /* ══════════════════ READ-ONLY DETAIL (all columns, incl. hidden) ══════════════════ */
+  function openDetail(pkVal) {
+    var row = PL_PROGRESSIVE_READ_ ? plFindRow_(pkVal) : (S.rows).find(function (r) { return String(r[PK_COL]) === String(pkVal); });
+    if (!row) { UIC.toast('الصنف غير موجود في الذاكرة', 'error'); return; }
+    var cols = S.columns.length ? S.columns : Object.keys(row);
+    var body = cols.map(function (c) {
+      if (c === 'live_quantity') return '';   /* merged into the quantity row */
+      var v = (c === 'quantity') ? liveQtyOf(row) : row[c];
+      var disp = (v === null || v === undefined || String(v) === '') ? '—'
+        : (c === 'active' ? (String(v) === '1' ? '✓ نشط' : '— غير نشط') : String(v));
+      return '<div class="form-field"><label class="form-label">' + FMT.escape(colLabel(c)) + '</label>' +
+        '<div style="padding:8px 12px;background:var(--bg-subtle);border-radius:var(--radius-sm);font-size:13px;">' + FMT.escape(disp) + '</div></div>';
+    }).join('');
+    UIC.openModal('pl-detail-modal', {
+      title: 'تفاصيل الصنف — #' + FMT.escape(String(pkVal)),
+      body: body,
+      footer: false
+    });
+  }
+
+  var PL_WAREHOUSE_MODAL_GEN = 0;
+  function openWarehouseQty(pkVal) {
+    var id = String(pkVal == null ? '' : pkVal).trim();
+    if (!/^[1-9]\d{0,19}$/.test(id)) { UIC.toast('معرف الصنف غير صالح', 'error'); return; }
+    var gen = ++PL_WAREHOUSE_MODAL_GEN;
+    UIC.openModal('pl-warehouse-qty-modal', {
+      title: 'أرصدة المخازن للصنف #' + FMT.escape(id),
+      body: '<div id="pl-warehouse-qty-body" style="padding:12px">جاري تحميل أرصدة المخازن...</div>',
+      footer: false
+    });
+    companyCall('get_product_live_warehouse_quantities', { id: id })
+      .then(function (res) {
+        if (gen !== PL_WAREHOUSE_MODAL_GEN) return;
+        var host = document.getElementById('pl-warehouse-qty-body');
+        if (!host) return;
+        if (!res || res.status !== 'ok' || !Array.isArray(res.balances)) throw new Error('تعذر تحميل أرصدة المخازن');
+        if (!res.balances.length) { host.textContent = 'لا توجد أرصدة مسجلة لهذا الصنف في المخازن.'; return; }
+        host.innerHTML = '<div style="overflow:auto"><table class="erp-table" style="width:100%"><thead><tr>' +
+          '<th>معرف المخزن</th><th>الكمية الحالية</th></tr></thead><tbody>' +
+          res.balances.map(function (item) {
+            return '<tr><td>' + FMT.escape(String(item.warehouse_id)) + '</td><td>' +
+              FMT.escape(item.current_qty == null ? '—' : String(item.current_qty)) + '</td></tr>';
+          }).join('') + '</tbody></table></div>';
+      })
+      .catch(function (err) {
+        if (gen !== PL_WAREHOUSE_MODAL_GEN) return;
+        var host = document.getElementById('pl-warehouse-qty-body');
+        if (host) host.textContent = err && err.message ? err.message : 'تعذر تحميل أرصدة المخازن';
+      });
+  }
+
+  /* ══════════════════ EDIT MODAL + SOFT DELETE (CAN_WRITE: super admin included) ══════════════════
+     Everything is editable except PK. created_at/updated_at are not shown at
+     all; quantity is display-only live data from product_current_quantity;
+     unit is a dropdown of existing table values; product_unit_metric
+     suggests existing values but accepts new ones. */
+  var PL_EDITING = null;
+  var READ_ONLY_COLS = { 'id': true };
+  /* Hidden from the edit form (never sent, so the server leaves them
+     untouched): server timestamps, the live view value, internal FK ids
+     and the active flag — all visible in the read-only detail modal. */
+  var PL_HIDE_EDIT = { 'created_at': true, 'updated_at': true, 'live_quantity': true, 'quantity': true,
+    'manufacture_id': true, 'category_id': true, 'client_id': true, 'active': true };
+
+  function openEdit(pkVal) {
+    if (PL_PROGRESSIVE_READ_ && PL_PROGRESSIVE_CACHED) { UIC.toast('انتظر تحديث الصنف قبل التعديل', 'info'); return; }
+    var row = PL_PROGRESSIVE_READ_ ? plFindRow_(pkVal) : (S.rows).find(function (r) { return String(r[PK_COL]) === String(pkVal); });
+    if (!row) { UIC.toast('الصنف غير موجود في الذاكرة', 'error'); return; }
+    PL_EDITING = pkVal;
+    var cols = S.columns.length ? S.columns : Object.keys(row);
+    var formHtml = '<form id="pl-edit-form"><div class="pl-form-grid">';
+    cols.forEach(function (col) {
+      if (PL_HIDE_EDIT[col]) return;   /* never shown in the edit form */
+      var val = row[col];
+      var label = colLabel(col);
+      if (col === 'quantity') {
+        /* uneditable live data from the product_current_quantity view */
+        var live = liveQtyOf(row);
+        formHtml += '<div class="form-field"><label class="form-label">' + FMT.escape(label) +
+          ' <span style="font-size:11px;background:var(--bg-subtle);color:var(--info);border-radius:4px;padding:1px 5px;">من النظام مباشرة</span></label>' +
+          '<input type="text" class="input num" value="' + FMT.escape(live) + '" disabled></div>';
+        return;
+      }
+      if (READ_ONLY_COLS[col]) {
+        formHtml += '<div class="form-field"><label class="form-label">' +
+          '<span class="lbl-ro">' + (col === PK_COL ? 'PK' : 'للقراءة فقط') + '</span> ' + FMT.escape(label) + '</label>' +
+          '<input type="text" class="input" value="' + FMT.escape(val !== null && val !== undefined ? String(val) : '') + '" disabled></div>';
+        return;
+      }
+      if (col === 'active') {
+        var on = String(val) === '1';
+        formHtml += '<div class="form-field"><label class="form-label">' + FMT.escape(label) + '</label>' +
+          '<select class="input" id="plf_' + col + '">' +
+          '<option value="0"' + (!on ? ' selected' : '') + '>0 — غير نشط</option>' +
+          '<option value="1"' + (on ? ' selected' : '') + '>1 — نشط</option></select></div>';
+      } else if (col === 'deleted_at') {
+        var dtv = val ? String(val).slice(0, 16).replace(' ', 'T') : '';
+        formHtml += '<div class="form-field"><label class="form-label">' + FMT.escape(label) +
+          ' <span style="font-size:11px;background:var(--warning-bg);color:var(--warning-text);border-radius:4px;padding:1px 5px;">تحكم بالحذف الناعم</span></label>' +
+          '<input type="datetime-local" class="input" id="plf_' + col + '" value="' + FMT.escape(dtv) + '">' +
+          '<div style="font-size:11px;color:var(--text-muted,#64748b);margin-top:3px;">اتركه فارغاً لاستعادة الصنف. ضع تاريخاً للحذف الناعم.</div></div>';
+      } else if (col === 'product_unit_metric') {
+        /* Guidance, not a restriction: existing values offered as suggestions
+           but a new value can be typed (allowNew renders the _custom input;
+           saveEdit reads it when the hidden value is __new__). */
+        var mopts = distinctVals(col).map(function (o) { return { value: o, label: o }; });
+        formHtml += '<div class="form-field"><label class="form-label">' + FMT.escape(label) + '</label>' +
+          UIC.combo({ key: 'plf_' + col, options: mopts,
+            value: (val !== null && val !== undefined ? String(val) : ''),
+            placeholder: '— اختر أو اكتب قيمة جديدة —', allowNew: true }) + '</div>';
+      } else if (col === 'unit') {
+        /* dropdown of values already existing in the table */
+        var opts = distinctVals(col);
+        if (PL_PROGRESSIVE_READ_ && val != null && String(val) && opts.indexOf(String(val)) < 0) opts.unshift(String(val));
+        if (opts.length) {
+          formHtml += '<div class="form-field"><label class="form-label">' + FMT.escape(label) + '</label>' +
+            '<select class="input" id="plf_' + col + '">' +
+            '<option value="">— اختر —</option>' +
+            opts.map(function (o) {
+              return '<option value="' + FMT.escape(o) + '"' + (String(val) === o ? ' selected' : '') + '>' + FMT.escape(o) + '</option>';
+            }).join('') + '</select></div>';
+        } else {
+          formHtml += '<div class="form-field"><label class="form-label">' + FMT.escape(label) + '</label>' +
+            '<input type="text" class="input" id="plf_' + col + '" value="' + FMT.escape(val !== null && val !== undefined ? String(val) : '') + '"></div>';
+        }
+      } else if (NUMERIC_COLS[col]) {
+        formHtml += '<div class="form-field"><label class="form-label">' + FMT.escape(label) + '</label>' +
+          '<input type="number" step="any" class="input num" id="plf_' + col + '" value="' + FMT.escape(val !== null && val !== undefined ? String(val) : '') + '"></div>';
+      } else {
+        formHtml += '<div class="form-field"><label class="form-label">' + FMT.escape(label) + '</label>' +
+          '<input type="text" class="input" id="plf_' + col + '" value="' + FMT.escape(val !== null && val !== undefined ? String(val) : '') + '"></div>';
+      }
+    });
+    formHtml += '</div></form>';
+    UIC.openModal('pl-edit-modal', {
+      title: 'تعديل صنف — #' + FMT.escape(String(pkVal)),
+      body: formHtml,
+      saveLabel: 'حفظ التعديلات',
+      onSave: 'saveEdit()'
+    });
+  }
+
+  function saveEdit() {
+    var pkVal = PL_EDITING;
+    if (!pkVal) { UIC.toast('لا يوجد سجل محدد', 'error'); return; }
+    var row = PL_PROGRESSIVE_READ_ ? plFindRow_(pkVal) : (S.rows).find(function (r) { return String(r[PK_COL]) === String(pkVal); });
+    if (!row) { UIC.toast('السجل غير موجود', 'error'); return; }
+    var cols = S.columns.length ? S.columns : Object.keys(row);
+    var payload = {};
+    payload[PK_COL] = pkVal;
+    cols.forEach(function (col) {
+      if (READ_ONLY_COLS[col] || PL_HIDE_EDIT[col] || col === 'quantity') return;
+      var el = document.getElementById('plf_' + col);
+      if (el) {
+        var v = el.value;
+        if (v === '__new__') {
+          /* allowNew combo: the typed value lives in the _custom input. */
+          var cust = document.getElementById('plf_' + col + '_custom');
+          v = cust ? cust.value : '';
+        }
+        payload[col] = v;
+      }
+    });
+    UI.showSpinner('جاري حفظ التعديلات…');
+    companyCall('save_product_live', payload)
+      .then(function () {
+        UIC.toast('تم الحفظ بنجاح ✓', 'success');
+        UIC.closeModal('pl-edit-modal');
+        plInvalidateProductCaches_();
+        return PL_PROGRESSIVE_READ_ ? plStartProgressive_(true) : fetchData();
+      })
+      .catch(showError)
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function askDelete(pkVal) {
+    if (PL_PROGRESSIVE_READ_ && PL_PROGRESSIVE_CACHED) { UIC.toast('انتظر تحديث الصنف قبل الحذف', 'info'); return; }
+    var row = PL_PROGRESSIVE_READ_ ? plFindRow_(pkVal) : (S.rows).find(function (r) { return String(r[PK_COL]) === String(pkVal); });
+    var label = (row && row.name_ar) ? ' — ' + row.name_ar : '';
+    UIC.openModal('pl-delete-modal', {
+      title: 'تأكيد الحذف الناعم',
+      body: '<p style="font-size:14px;line-height:1.9;">سيتم حذف الصنف <b>#' + FMT.escape(String(pkVal)) + FMT.escape(label) + '</b> حذفاً ناعماً ' +
+            '(تخزين الطابع الزمني الحالي في <code dir="ltr">deleted_at</code>) وسيختفي من القائمة.</p>',
+      saveLabel: '🗑️ تأكيد الحذف',
+      onSave: 'doDelete(\'' + FMT.escape(String(pkVal)) + '\')'
+    });
+  }
+
+  function doDelete(pkVal) {
+    UI.showSpinner('جاري الحذف الناعم…');
+    companyCall('delete_product_live', { id: pkVal })
+      .then(function () {
+        UIC.toast('تم الحذف الناعم ✓', 'success');
+        UIC.closeModal('pl-delete-modal');
+        plInvalidateProductCaches_();
+        return PL_PROGRESSIVE_READ_ ? plStartProgressive_(true) : fetchData(true);
+      })
+      .catch(showError)
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  /* ── error helper ── */
+  function showError(err) {
+    var msg = (err && (err.message || err.error)) || String(err || 'حدث خطأ غير متوقع');
+    UIC.toast(msg, 'error');
+  }
+
+  document.addEventListener('DOMContentLoaded', load);
+</script>
+</body>
+</html>

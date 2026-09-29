@@ -1,0 +1,225 @@
+﻿<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Valley Foods — تحديد الورديات</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_ValleyFoods_Nav'); ?>
+  <?!= getCompanyThemeCSS_('9940659bd83035d7') ?>
+</head>
+<body>
+  <div id="vf-root"></div>
+
+  <script>
+    var params = new URLSearchParams(window.location.search);
+    var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+    var scriptUrl = window.scriptUrl || '/';
+    var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+    var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('9940659bd83035d7') ?>';
+    var COMPANY_PAGES = <?!= companyPages ?>;
+    var CURRENT_ACTION = '<?!= currentAction ?>';
+    var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+    var CAN_WRITE = UIC.canAdd_(); var CAN_FULL = UIC.canFull_();
+
+    function companyCall(moduleAction, data) {
+      return API.call('company_action', {
+        target_system: '9940659bd83035d7',
+        module_action: moduleAction,
+        data: data || {}
+      }, SESSION_TOKEN);
+    }
+    function esc(v) { return FMT.escape(v); }
+    function todayStr() {
+      var d = new Date();
+      var p = function (n) { return n < 10 ? '0' + n : '' + n; };
+      return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+    }
+    function dmy(v) {
+      var m = String(v || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      return m ? m[3] + '/' + m[2] + '/' + m[1] : (v || '-');
+    }
+  </script>
+
+  <script>
+  (function () {
+    var ROWS = [];
+    var EMP_OPTIONS = [];
+    var SHIFT_OPTIONS = [];
+    var LOADED_ALL = false;
+
+    function renderApp() {
+      UIC.appShell('vf-root', {
+        companyLogoUrl: COMPANY_LOGO_URL,
+        companyLogoHref: scriptUrl + '?action=vf_dashboard&sessionToken=' + SESSION_TOKEN,
+        companyLogoTitle: 'Valley Foods',
+        breadcrumb: 'Valley Foods / الموارد البشرية / تحديد الورديات',
+        contentId: 'vf-shift-content',
+        menuGroups: (window.VALLEYFOODS_MENU || [])
+      });
+      document.getElementById('vf-shift-content').innerHTML =
+        '<div class="vf-card"><div class="vf-card-header"><h3>تحديد الورديات</h3>' +
+          '<div style="display:flex;gap:8px;align-items:center;">' +
+            (CAN_WRITE ? '<button class="btn btn-primary" onclick="SHIFT_PAGE.openAdd()">+ تعيين وردية</button>' : '') +
+          '</div>' +
+        '</div><div class="vf-card-body">' +
+          '<div id="shift-table"><p class="vf-text-muted">جاري التحميل...</p></div>' +
+        '</div></div>';
+      load();
+    }
+
+    /* quiet: refresh in the background with no blocking overlay, for a user who
+       has already seen the change and must not be interrupted to confirm it. */
+    function load(quiet) {
+      if (!quiet) UIC.readSkeleton('shift-table');
+      companyCall('get_shift_assignment_data', LOADED_ALL ? { loadAll: true } : {})
+        .then(function (r) {
+          ROWS = (r && r.assignments) || [];
+          EMP_OPTIONS = (r && r.employeeOptions) || [];
+          SHIFT_OPTIONS = (r && r.shiftOptions) || [];
+          renderTable(r && r.total);
+          try { schedulePrefetch(); } catch (e) {}
+        })
+        .catch(function (e) { UIC.toast((e && e.message) || 'خطأ', 'error'); })
+        .finally(function () { if (!quiet) UI.hideSpinner(); });
+    }
+
+    function loadAll() { LOADED_ALL = true; load(); }
+    function showLatest() { LOADED_ALL = false; load(); }
+    function toggleAll() { LOADED_ALL = !LOADED_ALL; load(); }
+
+    function renderTable(total) {
+      var c = document.getElementById('shift-table');
+      if (!c) return;
+      var rows = ROWS.map(function (r) {
+        return [
+          esc(r.emp_id),
+          esc(r.employee_name),
+          esc(r.shift_label),
+          dmy(r.shift_start_date),
+          dmy(r.shift_end_date),
+          esc(r.notes || '-'),
+          esc(r.user || '-')
+        ];
+      });
+      c.innerHTML = UIC.showAllBar({ loadedAll: LOADED_ALL, total: (total != null ? total : ROWS.length), showAll: 'SHIFT_PAGE.loadAll()', showLatest: 'SHIFT_PAGE.showLatest()' }) + UIC.dataTable('shift-tbl', {
+        /* [RT-1] The list endpoint caps at the newest rows unless `loadAll` is
+           passed, and the search box filters only what is in memory — so the
+           table says which records the box actually searches. */
+        truncated: !LOADED_ALL,
+        showAll: 'SHIFT_PAGE.loadAll()',
+        headers: ['كود الموظف', 'الموظف', 'الوردية', 'من تاريخ', 'إلى تاريخ', 'ملاحظات', 'أضيف بواسطة'],
+        rows: rows,
+        emptyText: 'لا توجد ورديات معيّنة بعد'
+      }) +
+        (!LOADED_ALL && total && total > ROWS.length
+          ? '<p class="vf-text-muted" style="margin-top:8px;">يعرض ' + ROWS.length + ' من ' + total +
+            ' — اضغط «عرض الكل» لعرض الباقي</p>'
+          : '');
+      UIC.initTableSort('shift-tbl');
+    }
+
+    function openAdd() {
+      var body = '<form id="shift-form">' +
+        '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px;">' +
+          UIC.combo({ key: 'f-emp', label: 'الموظف', required: true, options: EMP_OPTIONS, value: '',
+                      placeholder: 'ابحث بالكود أو الاسم…' }) +
+          UIC.combo({ key: 'f-shift', label: 'الوردية', required: true, options: SHIFT_OPTIONS, value: '',
+                      placeholder: 'ابحث باسم الوردية أو وقتها…' }) +
+          UIC.field({ key: 'f-start', label: 'تاريخ البداية', type: 'date', required: true, value: todayStr() }) +
+          UIC.field({ key: 'f-end', label: 'تاريخ النهاية', type: 'date', required: true, value: '' }) +
+        '</div>' +
+        UIC.field({ key: 'f-notes', label: 'ملاحظات', type: 'text', value: '', placeholder: 'اختياري' }) +
+        '<p id="shift-warn" style="color:#c5221f;margin:8px 0 0;font-size:13px;"></p>' +
+      '</form>';
+
+      UIC.openModal('shift-modal', {
+        title: 'تعيين وردية لموظف',
+        body: body,
+        size: 'lg',
+        footer: '<button class="btn btn-outline" onclick="UIC.closeModal(\'shift-modal\')">إلغاء</button>' +
+                '<button class="btn btn-primary" onclick="UI.submitOnce(this, SHIFT_PAGE.save)">💾 حفظ</button>'
+      });
+
+      /* Say it before the round trip: the same two rules the server enforces,
+         checked here so the user is told while the form is still in front of
+         them. The server remains the authority — it re-checks both. */
+      ['f-emp', 'f-start', 'f-end'].forEach(function (k) {
+        var el = document.getElementById(k);
+        if (el) el.addEventListener('change', warn);
+      });
+    }
+
+    function val(id) { var el = document.getElementById(id); return el ? String(el.value).trim() : ''; }
+
+    /** The clash this employee's new period would have with an existing one. */
+    function clashFor(empId, start, end) {
+      if (!empId || !start || !end) return null;
+      var found = null;
+      ROWS.forEach(function (r) {
+        if (found) return;
+        if (String(r.emp_id) !== String(empId)) return;
+        if (!r.shift_start_date || !r.shift_end_date) return;
+        /* Two periods overlap unless one ends before the other begins. */
+        if (!(end < r.shift_start_date || start > r.shift_end_date)) found = r;
+      });
+      return found;
+    }
+
+    function warn() {
+      var el = document.getElementById('shift-warn');
+      if (!el) return;
+      var start = val('f-start'), end = val('f-end'), emp = val('f-emp');
+      if (start && end && end <= start) {
+        el.textContent = 'تاريخ النهاية يجب أن يكون بعد تاريخ البداية';
+        return;
+      }
+      /* Only meaningful against the rows this page has actually loaded. */
+      var c = LOADED_ALL ? clashFor(emp, start, end) : null;
+      el.textContent = c
+        ? 'يوجد بالفعل وردية لهذا الموظف من ' + dmy(c.shift_start_date) + ' إلى ' + dmy(c.shift_end_date)
+        : '';
+    }
+
+    function save() {
+      if (!UIC.validateForm('shift-form')) { UIC.toast('أكمل الحقول المطلوبة', 'error'); return; }
+      var start = val('f-start'), end = val('f-end');
+      if (end <= start) { UIC.toast('تاريخ النهاية يجب أن يكون بعد تاريخ البداية', 'error'); return; }
+
+      UI.showSpinner();
+      companyCall('add_shift_assignment', {
+        emp_id: val('f-emp'),
+        shift_id: val('f-shift'),
+        shift_start_date: start,
+        shift_end_date: end,
+        notes: val('f-notes')
+      })
+        .then(function (r) {
+          UIC.closeModal('shift-modal');
+          UIC.toast((r && r.message) || 'تمت الإضافة', 'success');
+          load(true);
+        })
+        .catch(function (e) { UIC.toast((e && e.message) || 'فشل الحفظ', 'error'); })
+        .finally(function () { UI.hideSpinner(); });
+    }
+
+    window.SHIFT_PAGE = { openAdd: openAdd, save: save, loadAll: loadAll, toggleAll: toggleAll, showLatest: showLatest };
+
+    /* Another device's change to this page arrives on its own. The poll reads
+       timestamps from cache, never a spreadsheet, and stands down while the tab
+       is hidden or a save is in flight. */
+    document.addEventListener('DOMContentLoaded', function () {
+      UIC.Live.watchPage({
+        call: companyCall,
+        page: 'vf_hr_shifts',
+        onChange: function () { UIC.Live.arrive(function () { load(true); }); }
+      });
+    });
+
+    document.addEventListener('DOMContentLoaded', renderApp);
+  })();
+  </script>
+</body>
+</html>

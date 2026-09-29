@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="ar">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>معرض المكوّنات — ERP</title>
+<!--
+  The component gallery. Loaded inside an iframe by index.html, once per
+  breakpoint tier, so every component can be seen at 390 / 768 / 1024 / 1440 /
+  2560 at the same time. Never opened directly by a person — open index.html.
+
+  Query string:
+    ?theme=TopLight|TopChemical|ValleyFoods
+    &dir=rtl|ltr
+    &section=<id>        (optional — render one section only)
+
+  Everything it renders comes from design_preview/_sources.js, which is the
+  real bytes of CSS_Tokens.html, UI_Components.html, Client_Helpers.html and
+  03_Security.js. Regenerate with `node tools/build_preview.js`.
+-->
+<style>
+  /* Gallery chrome only — deliberately namespaced so it cannot leak into or be
+     mistaken for the design system under test. */
+  .gx-section { margin: 0 0 28px; }
+  .gx-h { font: 700 12px/1.4 ui-monospace, Consolas, monospace; letter-spacing: .08em;
+          text-transform: uppercase; color: #64748b; padding: 6px 0; margin-bottom: 10px;
+          border-bottom: 1px dashed #cbd5e1; }
+  .gx-note { font: 400 11px/1.6 ui-monospace, Consolas, monospace; color: #94a3b8; margin: 6px 0 0; }
+  .gx-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 10px; }
+  .gx-grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); }
+  .gx-pad { padding: 12px; }
+  .gx-boot-err { background: #7f1d1d; color: #fff; padding: 12px 14px; font: 13px/1.6 monospace;
+                 white-space: pre-wrap; direction: ltr; text-align: left; }
+</style>
+</head>
+<body>
+<div id="gx-root" class="gx-pad"></div>
+<script src="_sources.js"></script>
+<script>
+(function () {
+  'use strict';
+
+  var qs = new URLSearchParams(location.search);
+  var THEME = qs.get('theme') || 'TopLight';
+  var DIR = qs.get('dir') || 'rtl';
+  var ONLY = qs.get('section') || '';
+
+  var SRC = window.__PREVIEW_SOURCES__;
+  var root = document.getElementById('gx-root');
+
+  function fatal(msg) {
+    document.body.innerHTML = '<div class="gx-boot-err">' + msg + '</div>';
+  }
+  if (!SRC) {
+    fatal('design_preview/_sources.js did not load.\n\nRun:  node tools/build_preview.js');
+    return;
+  }
+
+  document.documentElement.setAttribute('dir', DIR);
+  document.documentElement.setAttribute('lang', 'ar');
+
+  /* ── Stubs for the two host objects the shared layer expects ───────────
+     google.script.run is Apps Script's server bridge; there is no server here,
+     so every call resolves to nothing. This is the only place the preview
+     departs from production, and it departs by doing LESS, never differently. */
+  window.google = {
+    script: {
+      run: (function () {
+        var chain = {};
+        ['withSuccessHandler', 'withFailureHandler', 'withUserObject'].forEach(function (m) {
+          chain[m] = function () { return chain; };
+        });
+        return new Proxy(chain, {
+          get: function (t, k) { return (k in t) ? t[k] : function () { return chain; }; }
+        });
+      })(),
+      host: { close: function () {}, setHeight: function () {} },
+      history: { push: function () {}, replace: function () {} }
+    }
+  };
+  window.scriptUrl = '#';
+  window.SESSION_TOKEN = 'preview-token';
+  window.CURRENT_ACTION = 'preview';
+  window.IS_SUPER_ADMIN = true;
+  window.COMPANY_LOGO_URL = '';
+  /* No SHEET global → UIC.HistorySide does not auto-fetch. Deliberate. */
+
+  /* ── 1. CSS_Tokens.html ─────────────────────────────────────────────── */
+  function addStyle(css, label) {
+    var s = document.createElement('style');
+    s.setAttribute('data-from', label);
+    s.textContent = css;
+    document.head.appendChild(s);
+    return s;
+  }
+  function addLinks(html) {
+    if (!html) return;
+    var box = document.createElement('div');
+    box.innerHTML = html;
+    [].slice.call(box.querySelectorAll('link')).forEach(function (l) {
+      document.head.appendChild(l);
+    });
+  }
+  addLinks(SRC.tokens.links);
+  addStyle(SRC.tokens.css, 'CSS_Tokens.html');
+
+  /* ── 2 & 3. UI_Components.html then Client_Helpers.html ──────────────
+     Same order as every page template: tokens, components, helpers, theme.
+     UI_Components injects its own stylesheet into <head> while it runs, which
+     is why the theme <style> below lands after it and wins ties — exactly as
+     it does in production. */
+  var bootErrors = [];
+  function run(js, label) {
+    try { (0, eval)(js); }
+    catch (e) { bootErrors.push(label + ': ' + (e && e.message)); }
+  }
+  run(SRC.componentsJs, 'UI_Components.html');
+  run(SRC.helpersJs, 'Client_Helpers.html');
+
+  /* The shared layer shows a loading overlay on boot and hides it on window
+     load. Inside an iframe that has usually already fired, so hide it now. */
+  try { UIC.hidePageLoading(); } catch (e) {}
+
+  /* ── 4. The company theme, last, as in the page templates ───────────── */
+  var theme = SRC.themes[THEME] || SRC.themes.TopLight;
+  addLinks(theme.links);
+  addStyle(theme.css, '03_Security.js → ' + THEME);
+
+  if (bootErrors.length) {
+    var b = document.createElement('div');
+    b.className = 'gx-boot-err';
+    b.textContent = 'Shared layer failed to boot:\n' + bootErrors.join('\n');
+    document.body.insertBefore(b, root);
+  }
+
+  /* ── Sample data ────────────────────────────────────────────────────── */
+  function rows(n) {
+    var out = [];
+    var names = ['زيت عباد الشمس', 'دقيق فاخر', 'سكر أبيض', 'ملح طعام', 'خميرة فورية',
+                 'عبوة بلاستيك 1ل', 'كرتونة 12 وحدة', 'ملصق منتج', 'حمض ستريك', 'نشا ذرة'];
+    for (var i = 0; i < n; i++) {
+      out.push({
+        code: 'MAT-' + String(1000 + i),
+        name: names[i % names.length],
+        qty: Math.round((i * 7.3 + 1) * 1000) / 1000,
+        price: Math.round((i * 3.17 + 5) * 100) / 100,
+        total: Math.round((i * 7.3 + 1) * (i * 3.17 + 5) * 100) / 100,
+        date: '2026-0' + (1 + (i % 9)) + '-1' + (i % 9),
+        status: ['معتمد', 'قيد المراجعة', 'مرفوض'][i % 3]
+      });
+    }
+    return out;
+  }
+  var HEADERS = [
+    { key: 'code', label: 'الكود' },
+    { key: 'name', label: 'الصنف' },
+    { key: 'qty', label: 'الكمية', numeric: true },
+    { key: 'price', label: 'سعر الوحدة', money: true },
+    { key: 'total', label: 'الإجمالي', money: true },
+    { key: 'date', label: 'التاريخ' },
+    { key: 'status', label: 'الحالة' }
+  ];
+
+  /* ── Sections ───────────────────────────────────────────────────────── */
+  var sections = [];
+  function section(id, title, html, note) {
+    sections.push({ id: id, title: title, html: html, note: note || '' });
+  }
+
+  section('shell', 'appShell — topbar, nav, drawer, breadcrumb, content',
+    '<div id="gx-shell"></div>',
+    'Below tablet-l the hamburger appears and the topbar nav hides. Tap it to open the drawer.');
+
+  section('buttons', 'Buttons',
+    '<div class="gx-row">' +
+      UIC.button({ text: 'حفظ', type: 'primary' }) +
+      UIC.button({ text: 'إلغاء', type: 'outline' }) +
+      UIC.button({ text: 'حذف', type: 'danger' }) +
+      UIC.button({ text: 'معطّل', type: 'primary', disabled: true }) +
+      UIC.button({ icon: '★', type: 'outline' }) +
+    '</div>',
+    'Every button is min-height var(--tap-min) = 48px at all widths.');
+
+  section('pills', 'Status pills',
+    '<div class="gx-row">' +
+      UIC.statusPill('معتمد', 'success') + UIC.statusPill('مرفوض', 'danger') +
+      UIC.statusPill('قيد المراجعة', 'warning') + UIC.statusPill('مسودة', 'neutral') +
+    '</div>');
+
+  section('table', 'dataTable — 60 rows, search, sort, 50-row pager',
+    '<div id="gx-table"></div>',
+    'Sort a column, page to 2, open a row action menu on the LAST row (U-01), ' +
+    'and scroll to check the header (U-05).');
+
+  section('table-empty', 'Empty state',
+    UIC.dataTable('gx-empty', { headers: HEADERS, rows: [] }));
+
+  /* ── [UI-9.1] The wide-table artboard ─────────────────────────────────
+   * A vf_cash-shaped table: thirteen columns, eleven of them atoms, and two
+   * holding the sentence that says what the row IS. This is the case the
+   * column-width contract exists for, and it is the ONLY thing in this repo
+   * that can show whether the contract works — there is no layout engine in
+   * the verify suite, so s18 proves the classes are right and this artboard
+   * is where the WIDTHS are checked, by eye, at the six device widths.
+   *
+   * What to look for, at each width:
+   *   البيان is at least four words wide on one line, and is the widest
+   *     column on the row;
+   *   التاريخ, رقم, كود الحساب and المبلغ are each about as wide as their
+   *     contents and no wider;
+   *   below about 1100px the table scrolls SIDEWAYS inside its box rather
+   *     than crushing البيان to one word per line — the scrollbar is the
+   *     intended outcome, not a regression;
+   *   below 600px the whole thing becomes a card per row and none of this
+   *     applies, because the phone tier hides the thead entirely. */
+  var WIDE_HEADERS = ['رقم', 'التاريخ',
+    { label: 'الطرف', col: 'text' },
+    { label: 'البيان', col: 'prose', min: '30ch' },
+    'النوع', 'طريقة الدفع',
+    { label: 'المبلغ', numeric: true }, 'الصندوق', 'كود الحساب', 'المستخدم',
+    { label: 'الرصيد', numeric: true },
+    { label: 'الاعتماد', col: 'atom' }, ''];
+
+  function wideRows(n) {
+    var details = [
+      'إيصال صرف نقدي (مدفوعات له) - حساب عين سولار ٧٦٠ لتر ٦٥٠ توصيل',
+      'سداد دفعة من حساب المورد عن فاتورة رقم ٢٦٧٩ بتاريخ اليوم',
+      'تحويل بين الصناديق - من الخزنة الرئيسية إلى خزنة المصنع',
+      'مصروفات نقل وشحن بضاعة من ميناء الإسكندرية إلى المخزن',
+      'إيصال استلام نقدية من العميل مقابل فاتورة مبيعات'
+    ];
+    var parties = ['شركة النور للتجارة', 'مؤسسة الأمل', 'محمد عبد الرحمن', 'شركة عين سولار'];
+    var out = [];
+    for (var i = 0; i < n; i++) {
+      out.push([
+        '<b>' + (2670 + i) + '</b>',
+        '<span data-sort="2025-10-' + (10 + (i % 20)) + '">' + (10 + (i % 20)) + '/10/2025</span>',
+        parties[i % parties.length],
+        details[i % details.length],
+        i % 2 ? 'صرف نقدي' : 'استلام',
+        i % 3 ? 'نقدي' : 'شيك',
+        '<span class="num" data-num="13950">' + (13950 + i * 37).toLocaleString('en-US') + '.00</span>',
+        i % 2 ? 'الخزنة الرئيسية' : 'خزنة المصنع',
+        '510' + (i % 9),
+        ['محمد', 'أحمد', 'سارة'][i % 3],
+        '<span class="num" data-num="-13950">(' + (13950 - i * 11).toLocaleString('en-US') + '.00)</span>',
+        UIC.statusPill(i % 2 ? 'معتمد' : 'غير معتمد', i % 2 ? 'success' : 'neutral'),
+        UIC.actionDropdown([
+          { label: 'تعديل', onclick: "UIC.toast('تعديل')" },
+          { label: 'حذف', onclick: "UIC.toast('حذف','error')", color: 'var(--danger)' }
+        ])
+      ]);
+    }
+    return out;
+  }
+
+  section('table-wide', 'The wide table — 13 columns, vf_cash shaped (UI-9.1)',
+    '<div id="gx-wide"></div>',
+    'البيان must be at least four words wide on ONE line and the widest column ' +
+    'on the row; التاريخ / رقم / كود الحساب must each be only as wide as their ' +
+    'contents. Narrow the window: the table scrolls sideways rather than ' +
+    'crushing البيان — the scrollbar is the intended outcome. Below 600px the ' +
+    'thead is hidden and every row becomes a card, so the contract is inert.');
+
+  section('skeleton', 'Loading skeleton',
+    '<div class="table-wrap gx-pad">' + UIC.tableSkeleton(HEADERS, 4) + '</div>');
+
+  section('forms', 'Form controls',
+    '<div id="gx-form" style="max-width:640px;">' +
+      UIC.field({ key: 'gx_name', label: 'الاسم', required: true, placeholder: 'أدخل الاسم' }) +
+      UIC.field({ key: 'gx_qty', label: 'الكمية', type: 'number', step: '0.001' }) +
+      UIC.field({ key: 'gx_date', label: 'التاريخ', type: 'date' }) +
+      UIC.combo({ key: 'gx_prod', label: 'الصنف', options: ['زيت', 'دقيق', 'سكر', 'ملح'], placeholder: 'ابحث…' }) +
+      UIC.field({ key: 'gx_note', label: 'ملاحظات', type: 'textarea' }) +
+    '</div>',
+    'The combo list must not be clipped when the combo sits inside a table cell.');
+
+  section('calculator', 'Reusable quantity calculator — RTL host / LTR keypad',
+    '<div style="max-width:360px;direction:rtl;">' +
+      '<label class="form-label" for="gx_calc_unit">عدد العبوات (صحيح)</label>' +
+      '<div class="gx-row"><input id="gx_calc_unit" class="input" value="12" type="number" step="1">' +
+      '<button type="button" class="btn btn-outline" onclick="gxOpenCalc(\'gx_calc_unit\',true)">⌗</button></div>' +
+      '<label class="form-label" for="gx_calc_loose">الكمية الفرط (عشري)</label>' +
+      '<div class="gx-row"><input id="gx_calc_loose" class="input" value="0" type="number" step="0.01">' +
+      '<button type="button" class="btn btn-outline" onclick="gxOpenCalc(\'gx_calc_loose\',false)">⌗</button></div>' +
+    '</div>',
+    'Example of the shared UIC.Calculator API used by both stock-scan quantity fields; the dialog isolates its expression/keypad direction as LTR and keeps history session-local.');
+
+  section('modal', 'Modal — all four sizes',
+    '<div class="gx-row">' +
+      '<button class="btn btn-outline" onclick="gxModal(\'sm\')">sm 420</button>' +
+      '<button class="btn btn-outline" onclick="gxModal()">md 560 (default)</button>' +
+      '<button class="btn btn-outline" onclick="gxModal(\'lg\')">lg 880</button>' +
+      '<button class="btn btn-outline" onclick="gxModal(\'xl\')">xl 1100</button>' +
+    '</div>',
+    'Title on the right, Cancel/Save on the left in RTL. Below 640px every size ' +
+    'is a full-width bottom sheet.');
+
+  section('toast', 'Toasts',
+    '<div class="gx-row">' +
+      '<button class="btn btn-outline" onclick="UIC.toast(\'تم الحفظ بنجاح\',\'success\')">success</button>' +
+      '<button class="btn btn-outline" onclick="UIC.toast(\'تعذّر الحفظ\',\'error\')">error</button>' +
+      '<button class="btn btn-outline" onclick="UIC.toast(\'تحقّق من البيانات\',\'warning\')">warning</button>' +
+    '</div>');
+
+  section('spinner', 'Loading overlays',
+    '<div class="gx-row">' +
+      '<button class="btn btn-outline" onclick="UIC.showPageLoading(\'جاري التحميل...\');setTimeout(UIC.hidePageLoading,1400)">UIC.showPageLoading</button>' +
+      '<button class="btn btn-outline" onclick="UI.showSpinner(\'جاري الحفظ...\');setTimeout(UI.hideSpinner,1400)">UI.showSpinner</button>' +
+    '</div>',
+    'U-24: these two should look identical. Today they do not.');
+
+  section('stats', 'Stat cards',
+    '<div class="gx-grid">' +
+      UIC.statCard({ icon: '📦', value: '1,284', label: 'أوامر التصنيع', tone: 'default' }) +
+      UIC.statCard({ icon: '✅', value: '96%', label: 'نسبة الاعتماد', tone: 'success' }) +
+      UIC.statCard({ icon: '⚠️', value: '12', label: 'أصناف تحت الحد', tone: 'warning' }) +
+      UIC.statCard({ icon: '❌', value: '3', label: 'مرتجعات', tone: 'danger' }) +
+    '</div>');
+
+  section('tiles', 'Company and module tiles',
+    '<div class="gx-grid">' +
+      UIC.companyTile({ name_ar: 'فالي فودز', name_en: 'ValleyFoods' }) +
+      UIC.moduleTile({ icon: '🏭', title: 'التصنيع', subtitle: 'أوامر التشغيل' }) +
+      UIC.moduleTile({ icon: '🛒', title: 'المشتريات', subtitle: 'أوامر الشراء' }) +
+      UIC.moduleTile({ icon: '🔒', title: 'مغلق', subtitle: 'غير متاح', disabled: true }) +
+    '</div>');
+
+  section('emptystate', 'Empty state block',
+    '<div class="empty-state"><span>لا توجد بيانات</span></div>');
+
+  /* ── Render ─────────────────────────────────────────────────────────── */
+  var pick = ONLY ? sections.filter(function (s) { return s.id === ONLY; }) : sections;
+  root.innerHTML = pick.map(function (s) {
+    return '<div class="gx-section" id="sec-' + s.id + '">' +
+      '<div class="gx-h">' + s.title + '</div>' + s.html +
+      (s.note ? '<p class="gx-note">' + s.note + '</p>' : '') +
+      '</div>';
+  }).join('');
+
+  /* appShell writes into its container, so it runs after the markup exists. */
+  if (document.getElementById('gx-shell')) {
+    try {
+      UIC.appShell('gx-shell', {
+        nav: [
+          { label: 'الرئيسية', active: true, href: '#' },
+          { label: 'الأصناف', href: '#' },
+          { label: 'المبيعات', href: '#' }
+        ],
+        menuGroups: [
+          { label: 'التصنيع', items: [{ action: 'a', label: 'أوامر التشغيل' }, { action: 'b', label: 'التركيبات' }] },
+          { label: 'المخزون', items: [{ action: 'c', label: 'الأرصدة' }, { action: 'd', label: 'الحركة' }] }
+        ],
+        breadcrumb: 'الرئيسية / التصنيع / أوامر التشغيل',
+        userName: 'مستخدم المعاينة',
+        contentId: 'gx-shell-content'
+      });
+      var c = document.getElementById('gx-shell-content');
+      if (c) c.innerHTML = '<p style="font-size:13px;color:var(--text-muted);">' +
+        'محتوى الصفحة يظهر هنا داخل <code>.app-content</code>.</p>';
+    } catch (e) {
+      bootErrors.push('appShell: ' + e.message);
+    }
+  }
+
+  if (document.getElementById('gx-wide')) {
+    document.getElementById('gx-wide').innerHTML = UIC.dataTable('gx-wide-dt', {
+      headers: WIDE_HEADERS,
+      rows: wideRows(40),
+      title: 'حركة الصناديق'
+    });
+  }
+
+  if (document.getElementById('gx-table')) {
+    document.getElementById('gx-table').innerHTML = UIC.dataTable('gx-dt', {
+      headers: HEADERS.concat([{ key: 'actions', label: '' }]),
+      rows: rows(60).map(function (r) {
+        r.actions = UIC.actionDropdown([
+          { label: 'تعديل', onclick: "UIC.toast('تعديل')" },
+          { label: 'طباعة', onclick: "UIC.toast('طباعة')" },
+          { label: 'حذف', onclick: "UIC.toast('حذف','error')", color: 'var(--danger)' }
+        ]);
+        return r;
+      }),
+      title: 'أصناف',
+      dateFilter: true
+    });
+    try { UIC.initTableSort('gx-dt'); } catch (e) {}
+  }
+
+  window.gxModal = function (size) {
+    UIC.openModal('gx-modal', {
+      title: 'تخصيص الدفعات' + (size ? ' — ' + size : ' — md'),
+      size: size,
+      body: '<p style="font-size:13px;margin-bottom:12px;">نص توضيحي داخل النافذة.</p>' +
+        UIC.field({ key: 'gx_m1', label: 'الكمية', type: 'number' }) +
+        '<div class="table-wrap"><table class="table"><thead><tr>' +
+        '<th>الدفعة</th><th>المتاح</th><th>المخصّص</th><th>المتبقي</th><th>سعر الوحدة</th><th>الإجمالي</th>' +
+        '</tr></thead><tbody>' +
+        '<tr><td>LOT-001</td><td class="num">120.000</td><td class="num">80.000</td><td class="num">40.000</td><td class="num">12.50</td><td class="num">1000.00</td></tr>' +
+        '<tr><td>LOT-002</td><td class="num">60.000</td><td class="num">20.000</td><td class="num">40.000</td><td class="num">13.10</td><td class="num">262.00</td></tr>' +
+        '</tbody></table></div>',
+      onSave: "UIC.closeModal('gx-modal')"
+    });
+  };
+
+  window.gxOpenCalc = function (id, integerOnly) {
+    UIC.Calculator.open({ target: id, title: 'حاسبة المعاينة', precision: integerOnly ? 0 : 2,
+      integerOnly: integerOnly, min: 0 });
+  };
+
+  /* Tell the parent frame how tall the content is, so index.html can size the
+     iframe without a scrollbar-inside-a-scrollbar. */
+  function report() {
+    try {
+      parent.postMessage({
+        gxHeight: document.documentElement.scrollHeight,
+        gxWidth: document.documentElement.clientWidth,
+        gxErrors: bootErrors
+      }, '*');
+    } catch (e) {}
+  }
+  setTimeout(report, 60);
+  setTimeout(report, 400);
+  window.addEventListener('resize', report);
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,860 @@
+<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>تحليلات النسب المالية</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_TopChemical_Nav'); ?>
+  <?!= getCompanyThemeCSS_('3fe1b5cb67b7223e') ?>
+  <style>
+    .fr-wrap { padding: 20px; max-width: 1200px; margin: 0 auto; }
+    .fr-intro { color: var(--text-muted); font-size: 14px; margin: 0 0 18px; }
+    .fr-filters { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-bottom: 14px; }
+    .fr-filter-card, .fr-panel, .fr-metric { background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: var(--radius-lg); box-shadow: var(--shadow-sm); padding: 18px; }
+    .fr-filter-card h2, .fr-panel h2 { font-size: 16px; margin: 0 0 5px; }
+    .fr-filter-card p, .fr-panel-note { color: var(--text-muted); font-size: 12px; margin: 0 0 14px; line-height: 1.7; }
+    .fr-dates { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+    .fr-dates .form-field { margin: 0; min-width: 0; }
+    .fr-dates .input { width: 100%; box-sizing: border-box; }
+    .fr-actions { display: flex; align-items: center; gap: 12px; margin: 0 0 18px; flex-wrap: wrap; }
+    .fr-error { color: #b91c1c; font-size: 13px; }
+    .fr-diagnostics { margin: 0 0 18px; padding: 12px 14px; border: 1px dashed var(--border-color); border-radius: var(--radius-md); background: var(--bg-muted, #f8fafc); color: var(--text-muted); font-size: 11px; line-height: 1.7; }
+    .fr-diagnostics strong { display: block; color: var(--text-primary, #17212b); margin-bottom: 5px; }
+    .fr-diagnostics pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; direction: rtl; }
+    .fr-report { color: var(--text-primary, #17212b); }
+    .fr-report-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 20px; padding: 0 0 16px; margin: 0 0 16px; border-bottom: 2px solid var(--border-color); }
+    .fr-report-header h1 { font-size: 23px; margin: 0 0 5px; }
+    .fr-company-name { color: var(--text-muted); font-size: 12px; }
+    .fr-range-summary { display: grid; gap: 4px; text-align: left; font-size: 12px; color: var(--text-muted); }
+    .fr-range-summary strong { color: var(--text-primary, #17212b); }
+    .fr-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 16px; }
+    .fr-metric { min-width: 0; padding: 14px; }
+    .fr-metric-label { font-size: 13px; font-weight: 700; color: var(--text-muted); margin-bottom: 10px; }
+    .fr-metric-line { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; font-size: 11px; color: var(--text-muted); margin-top: 6px; }
+    .fr-metric-line output { color: var(--text-primary, #17212b); font-size: 16px; font-weight: 800; direction: ltr; text-align: left; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+    .fr-metric-primary { border-color: var(--brand-primary, #0ea5b7); }
+    .fr-section { margin: 0 0 16px; }
+    .fr-section-title { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; margin-bottom: 10px; }
+    .fr-section-title h2 { font-size: 18px; margin: 0; }
+    .fr-section-title span { color: var(--text-muted); font-size: 11px; }
+    .fr-chart-panel { padding-bottom: 10px; }
+    .fr-chart-title { font-size: 14px; margin: 14px 0 4px; }
+    .fr-chart-wrap { width: 100%; overflow: hidden; }
+    .fr-chart-wrap svg { display: block; width: 100%; height: auto; min-height: 260px; }
+    .fr-legend { display: flex; flex-wrap: wrap; gap: 10px 18px; margin-top: 4px; color: var(--text-muted); font-size: 12px; }
+    .fr-legend-item { display: inline-flex; align-items: center; gap: 7px; }
+    .fr-legend-line { width: 22px; border-top: 3px solid var(--legend-color); }
+    .fr-legend-line.fr-dashed { border-top-style: dashed; }
+    .fr-table-wrap { overflow-x: auto; }
+    .fr-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    .fr-table th, .fr-table td { border-bottom: 1px solid var(--border-color); padding: 9px 8px; vertical-align: middle; }
+    .fr-table th { color: var(--text-muted); font-size: 11px; font-weight: 700; text-align: right; white-space: nowrap; }
+    .fr-table th.fr-number { direction: ltr; text-align: left; font-variant-numeric: tabular-nums; }
+    .fr-table td.fr-number { direction: ltr; text-align: left; font-variant-numeric: tabular-nums; white-space: nowrap; font-weight: 700; }
+    .fr-table td.fr-account { min-width: 120px; font-weight: 600; }
+    .fr-production-data-table { table-layout: fixed; font-size: 14px; }
+    .fr-production-data-table th, .fr-production-data-table td { box-sizing: border-box; height: 38px; padding: 4px 7px; line-height: 22px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .fr-production-data-table td.fr-account { min-width: 0; }
+    .fr-subvalue { display: block; color: var(--text-muted); font-weight: 500; font-size: 10px; margin-top: 3px; }
+    .fr-expense-ratio { display: inline-block; direction: ltr; background: #fff4c2; color: #704800; border: 1px solid #e5b93f; border-radius: 4px; padding: 2px 5px; font-size: 11px; font-weight: 800; }
+    .fr-expense-ratio-caption { color: var(--text-muted); font-size: 10px; margin-right: 3px; }
+    .fr-production-pager { display: flex; justify-content: center; align-items: center; gap: 12px; margin-top: 12px; }
+    .fr-production-page-label { color: var(--text-muted); font-size: 12px; min-width: 110px; text-align: center; }
+    .fr-production-error { color: #b91c1c; font-size: 12px; margin-top: 8px; }
+    .fr-print-only { display: none; }
+    .fr-table tfoot td { border-top: 2px solid var(--border-color); font-weight: 800; }
+    .fr-empty { color: var(--text-muted); padding: 14px 4px; font-size: 12px; }
+    .fr-negative { color: #b42318; }
+    @media (max-width: 850px) {
+      .fr-filters { grid-template-columns: 1fr; }
+      .fr-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+    @media (max-width: 540px) {
+      .fr-wrap { padding: 12px; }
+      .fr-dates { grid-template-columns: 1fr; }
+      .fr-report-header { display: block; }
+      .fr-range-summary { text-align: right; margin-top: 10px; }
+      .fr-table { min-width: 680px; }
+      .fr-production-data-table { min-width: 900px; }
+    }
+    @page { size: A4 portrait; margin: 12mm; }
+    @media print {
+      html, body { background: #fff !important; color: #111 !important; }
+      body * { visibility: hidden !important; }
+      #fr-report, #fr-report * { visibility: visible !important; }
+      .fr-screen-table { display: none !important; }
+      .fr-print-only { display: block !important; }
+      #fr-report { position: absolute; top: 0; right: 0; left: 0; width: 100%; max-width: none; margin: 0; padding: 0; color: #111 !important; background: #fff !important; }
+      .fr-panel, .fr-metric { background: #fff !important; box-shadow: none !important; border-color: #cbd5e1 !important; }
+      .fr-report-header, .fr-section-title, .fr-metrics, .fr-chart-panel { break-inside: avoid; page-break-inside: avoid; }
+      .fr-table { min-width: 0 !important; font-size: 8.5pt; }
+      .fr-table th, .fr-table td { padding: 5px 4px; }
+      .fr-production-data-table { min-width: 0 !important; font-size: 9pt; }
+      .fr-production-data-table th, .fr-production-data-table td { height: 27px; padding: 4px 3px; line-height: 15px; font-size: 9pt; }
+      .fr-table thead { display: table-header-group; }
+      .fr-table tfoot { display: table-row-group; }
+      .fr-table tfoot tr { break-inside: avoid; page-break-inside: avoid; }
+      .fr-table tr { break-inside: avoid; page-break-inside: avoid; }
+      .fr-table td.fr-account { min-width: 0; }
+      .fr-chart-wrap { overflow: visible; }
+      .fr-chart-wrap svg { min-height: 0; }
+      .fr-section { break-inside: auto; page-break-inside: auto; }
+      .fr-panel-note, .fr-company-name, .fr-range-summary, .fr-section-title span { color: #444 !important; }
+      .fr-expense-ratio { color: #111 !important; background: #fff !important; border: 1px solid #111 !important; }
+      .fr-expense-ratio-caption { color: #222 !important; }
+      a { color: inherit !important; text-decoration: none !important; }
+    }
+  </style>
+</head>
+<body>
+<div id="tc-fr-root" dir="rtl"></div>
+<script>
+  var params = new URLSearchParams(window.location.search);
+  var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+  var scriptUrl = window.scriptUrl || '/';
+  var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('3fe1b5cb67b7223e') ?>';
+  var COMPANY_PAGES = <?!= companyPages ?>;
+  var CURRENT_ACTION = '<?!= currentAction ?>';
+  var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+  var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+  var _requestSeq = 0;
+  var _frMeasurementEntries = [];
+  var _frReportStartedAt = 0, _frReportVisibleMs = null, _frReportCompleteMs = null, _frReportRenderMs = 0;
+  var _productionSeq = 0, _productionRange = null, _productionOffset = 0, _productionLimit = 30;
+  var _usedMaterialsSeq = 0, _usedMaterialsOffset = 0, _usedMaterialsLimit = 30;
+  var _productionSnapSeq = 0, _productionPages = {}, _productionSnapAt = 0;
+  var _usedMaterialsSnapSeq = 0, _usedMaterialsPages = {}, _usedMaterialsSnapAt = 0;
+  var FR_SNAPSHOT_TTL_MS = 120000;
+  function frSnapshotValid(snapAt) { return snapAt && (Date.now() - Number(snapAt) < FR_SNAPSHOT_TTL_MS); }
+  function frProductionCacheKey(offset) { return _productionRange ? _productionRange.from + '|' + _productionRange.to + '|' + _productionSnapSeq + '|' + offset : ''; }
+  function frUsedMaterialsCacheKey(offset) { return _productionRange ? _productionRange.from + '|' + _productionRange.to + '|' + _usedMaterialsSnapSeq + '|' + offset : ''; }
+
+  function dateString(d) {
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  }
+  function defaultRange() {
+    var today = new Date();
+    return { from: dateString(new Date(today.getFullYear(), 0, 1)), to: dateString(today) };
+  }
+  function shiftYear(iso, delta) {
+    var p = iso.split('-').map(Number), year = p[0] + delta, month = p[1];
+    var day = Math.min(p[2], new Date(year, month, 0).getDate());
+    return year + '-' + String(month).padStart(2, '0') + '-' + String(day).padStart(2, '0');
+  }
+  function companyCall(moduleAction, data) {
+    return API.call('company_action', {
+      target_system: '3fe1b5cb67b7223e', module_action: moduleAction, data: data
+    }, SESSION_TOKEN);
+  }
+  function frNow_() { return IS_SUPER_ADMIN ? (window.performance && performance.now ? performance.now() : Date.now()) : 0; }
+  function frMs_(value) { return value == null || !Number.isFinite(Number(value)) ? '—' : Math.round(Number(value)) + ' ms'; }
+  function frJsonBytes_(value) {
+    try { return new Blob([JSON.stringify(value)]).size; }
+    catch (e) { try { return unescape(encodeURIComponent(JSON.stringify(value))).length; } catch (ignored) { return null; } }
+  }
+  function frRenderMeasurement_() {
+    if (!IS_SUPER_ADMIN) return;
+    var el = document.getElementById('fr-measurement-text');
+    if (!el) return;
+    var summary = _frReportVisibleMs == null ? 'في انتظار أول ظهور لبيانات التقرير.' :
+      'التقرير الأخير — أول ظهور: ' + frMs_(_frReportVisibleMs) +
+      ' | اكتمال التقرير: ' + frMs_(_frReportCompleteMs) +
+      ' | مجموع رسم الأقسام: ' + frMs_(_frReportRenderMs);
+    var lines = _frMeasurementEntries.map(function (entry) {
+      var parts = [entry.label, entry.status, 'RPC: ' + frMs_(entry.rpc_ms)];
+      if (entry.rows != null) parts.push('الصفوف: ' + entry.rows);
+      if (entry.columns != null) parts.push('الأعمدة: ' + entry.columns);
+      if (entry.payload_bytes != null) parts.push('البيانات: ' + entry.payload_bytes + ' bytes');
+      if (entry.client_render_ms != null) parts.push('الرسم في المتصفح: ' + frMs_(entry.client_render_ms));
+      if (entry.server) {
+        var db = entry.server;
+        parts.push('MySQL: ' + frMs_(db.elapsed_ms) + ' | اتصال: ' + frMs_(db.connection_ms) +
+          ' | SQL: ' + frMs_(db.sql_ms) + ' | قراءة JDBC: ' + frMs_(db.read_ms) +
+          ' | JSON: ' + frMs_(db.json_parse_ms) + ' | كاش: ' +
+          (db.cache_hit === true ? 'نعم' : (db.cache_hit === false ? 'لا' : '—')) +
+          ' | صفوف JDBC: ' + (db.rows_read == null ? '—' : db.rows_read));
+      } else if (entry.status === 'نجح') parts.push('مراحل MySQL: غير متاحة');
+      if (entry.error) parts.push('الخطأ: ' + entry.error);
+      return parts.join(' | ');
+    });
+    el.textContent = [summary].concat(lines).join('\n');
+  }
+  function frRecordMeasurementCall_(label, action, startedAt, result, error) {
+    if (!IS_SUPER_ADMIN) return;
+    var rows = result && (Array.isArray(result.rows) ? result.rows : (Array.isArray(result.products) ? result.products : null));
+    _frMeasurementEntries.push({
+      label: label,
+      status: error ? 'فشل' : 'نجح',
+      action: action,
+      rpc_ms: frNow_() - startedAt,
+      rows: rows ? rows.length : null,
+      columns: result && Array.isArray(result.columns) ? result.columns.length : null,
+      payload_bytes: result ? frJsonBytes_(result) : null,
+      server: result && result._mysql ? result._mysql : null,
+      error: error ? String((error && error.message) || error) : ''
+    });
+    if (_frMeasurementEntries.length > 16) _frMeasurementEntries.shift();
+    frRenderMeasurement_();
+  }
+  function frMeasuredCall_(label, action, data) {
+    var startedAt = IS_SUPER_ADMIN ? frNow_() : 0;
+    return companyCall(action, data).then(function (result) {
+      frRecordMeasurementCall_(label, action, startedAt, result, null);
+      return result;
+    }, function (error) {
+      frRecordMeasurementCall_(label, action, startedAt, null, error);
+      throw error;
+    });
+  }
+  function runUsedMaterialsExplain_() {
+    if (!IS_SUPER_ADMIN) return;
+    var button = document.getElementById('fr-explain-materials');
+    var error = document.getElementById('fr-explain-materials-error');
+    var output = document.getElementById('fr-explain-materials-plan');
+    var filters;
+    try { filters = readFilters(); } catch (e) { error.textContent = e.message; return; }
+    button.disabled = true;
+    error.textContent = '';
+    output.textContent = 'جاري طلب خطة الاستعلام من MySQL…';
+    frMeasuredCall_('خطة SQL — المواد المستخدمة', 'get_financial_used_materials_plan', {
+      from: filters.current.from, to: filters.current.to
+    }).then(function (result) {
+      var raw = String(result && result.plan_json || '');
+      try { output.textContent = JSON.stringify(JSON.parse(raw), null, 2); }
+      catch (parseError) { output.textContent = raw || 'لم تُرجع MySQL خطة للاستعلام.'; }
+    }).catch(function (e) {
+      output.textContent = '';
+      error.textContent = 'تعذر قراءة خطة الاستعلام: ' + ((e && e.message) || 'خطأ في الطلب');
+    }).finally(function () { button.disabled = false; });
+  }
+  function frRecordClientRender_(label, startedAt) {
+    if (!IS_SUPER_ADMIN) return;
+    _frMeasurementEntries.push({ label: label, status: 'نجح', rpc_ms: null,
+      client_render_ms: frNow_() - startedAt });
+    if (_frMeasurementEntries.length > 16) _frMeasurementEntries.shift();
+    frRenderMeasurement_();
+  }
+  function frReportLabel_(period, key) {
+    var names = { sales: 'المبيعات', income: 'الإيرادات الأخرى', expenses: 'المصروفات',
+      production: 'الإنتاج', usedMaterials: 'المواد المستخدمة' };
+    return (names[key] || key) + ' — ' + (period === 'current' ? 'الفترة الحالية' : 'فترة المقارنة');
+  }
+  function frReportHasVisibleData_(state) {
+    return !!(state.current.sales || state.comparison.sales || state.current.income || state.comparison.income ||
+      state.current.expenses || state.comparison.expenses || state.current.production || state.current.usedMaterials);
+  }
+  function field(id, label, value) {
+    return '<div class="form-field"><label class="form-label" for="' + id + '">' + label + '</label>' +
+      '<input class="input" type="date" id="' + id + '" value="' + FMT.escape(value) + '" required></div>';
+  }
+  function metric(label, currentId, comparisonId, extra) {
+    return '<section class="fr-metric ' + (extra || '') + '"><div class="fr-metric-label">' + label + '</div>' +
+      '<div class="fr-metric-line"><span>الفترة الحالية</span><output id="' + currentId + '">—</output></div>' +
+      '<div class="fr-metric-line"><span>فترة المقارنة</span><output id="' + comparisonId + '">—</output></div></section>';
+  }
+  function load() {
+    UIC.appShell('tc-fr-root', {
+      companyLogoUrl: COMPANY_LOGO_URL,
+      companyLogoHref: scriptUrl + '?action=tc_dashboard&sessionToken=' + SESSION_TOKEN,
+      companyLogoTitle: 'توب كيميكال',
+      breadcrumb: 'توب كيميكال / تحليلات النظام الرئيسي / تحليلات النسب المالية',
+      contentId: 'tc-fr-content', menuGroups: (window.TOPCHEMICAL_MENU || [])
+    });
+    var current = defaultRange();
+    var comparison = { from: shiftYear(current.from, -1), to: shiftYear(current.to, -1) };
+    var content = document.getElementById('tc-fr-content');
+    if (!content) return;
+    content.innerHTML =
+      '<div class="fr-wrap"><p class="fr-intro">تقرير المبيعات والإيرادات الأخرى والمصروفات والإنتاج، مع مقارنة فترتين ماليتين.</p>' +
+      '<form id="fr-form"><div class="fr-filters">' +
+        '<section class="fr-filter-card"><h2>الفترة الحالية</h2><p>المبيعات حسب تاريخ الفاتورة، والمرتجعات حسب تاريخ إنشائها، وباقي البنود حسب تاريخ الحركة.</p><div class="fr-dates">' +
+          field('fr-from', 'من تاريخ', current.from) + field('fr-to', 'إلى تاريخ', current.to) +
+        '</div></section>' +
+        '<section class="fr-filter-card"><h2>فترة المقارنة</h2><p>تبدأ افتراضيًا بالفترة نفسها من العام السابق، ويمكن تغيير التاريخين.</p><div class="fr-dates">' +
+          field('fr-compare-from', 'من تاريخ المقارنة', comparison.from) + field('fr-compare-to', 'إلى تاريخ المقارنة', comparison.to) +
+        '</div></section>' +
+      '</div><div class="fr-actions"><button type="submit" class="btn btn-primary" id="fr-apply">عرض النتائج</button>' +
+        '<button type="button" class="btn btn-outline" id="fr-pdf">تنزيل التقرير PDF</button><span class="fr-error" id="fr-error" role="alert"></span></div></form>' +
+      (IS_SUPER_ADMIN ? '<section class="fr-diagnostics" aria-live="off"><strong>قياس تحميل التقرير — للمسؤول الأعلى فقط</strong>' +
+        '<pre id="fr-measurement-text">ستظهر أزمنة الطلبات وMySQL بعد تحميل التقرير.</pre>' +
+        '<div class="fr-actions" style="margin:8px 0 0"><button type="button" class="btn btn-outline" id="fr-explain-materials">تحليل خطة SQL للمواد المستخدمة</button>' +
+          '<span class="fr-error" id="fr-explain-materials-error" role="alert"></span></div>' +
+        '<pre id="fr-explain-materials-plan">استخدم الزر لعرض خطة MySQL للاستعلام نفسه، دون تنفيذ الاستعلام الكامل.</pre></section>' : '') +
+      '<main class="fr-report" id="fr-report" dir="rtl">' +
+        '<header class="fr-report-header"><div><h1>تحليلات النسب المالية</h1><div class="fr-company-name">مصنع توب كيميكال للمبيدات | TOP CHEMICAL FACTORY</div></div>' +
+          '<div class="fr-range-summary"><div>الفترة الحالية: <strong id="fr-current-range">—</strong></div><div>فترة المقارنة: <strong id="fr-comparison-range">—</strong></div></div></header>' +
+        '<section class="fr-section fr-sales-group" aria-labelledby="fr-sales-section-title"><div class="fr-section-title"><h2 id="fr-sales-section-title">المبيعات</h2></div>' +
+        '<div class="fr-metrics" aria-live="polite">' +
+          metric('المبيعات قبل المرتجعات', 'fr-sales', 'fr-compare-sales') +
+          metric('المرتجعات', 'fr-returns', 'fr-compare-returns') +
+          metric('صافي المبيعات', 'fr-net', 'fr-compare-net', 'fr-metric-primary') +
+          metric('إجمالي الإيرادات', 'fr-revenue', 'fr-compare-revenue', 'fr-metric-primary') +
+        '</div>' +
+        '<section class="fr-section fr-panel fr-chart-panel" aria-labelledby="fr-sales-chart-title"><div class="fr-section-title"><h2 id="fr-sales-chart-title">صافي المبيعات شهريًا</h2><span>مقارنة صافي المبيعات للفترتين</span></div>' +
+          '<div id="fr-sales-chart" class="fr-chart-wrap" aria-live="polite"><div class="fr-empty">جارٍ تحميل الرسم…</div></div>' +
+          '<div class="fr-legend" aria-label="مفتاح الرسم البياني">' +
+            '<span class="fr-legend-item"><i class="fr-legend-line" style="--legend-color:#1677d2"></i>الفترة الحالية</span>' +
+            '<span class="fr-legend-item"><i class="fr-legend-line fr-dashed" style="--legend-color:#7c3aed"></i>فترة المقارنة</span>' +
+          '</div><p class="fr-panel-note">صافي المبيعات الشهري = المبيعات − المرتجعات المنشأة في الشهر. الأشهر مرتبة حسب موقعها من بداية كل فترة.</p>' +
+        '</section>' +
+        '<section class="fr-section fr-panel" aria-labelledby="fr-income-title"><div class="fr-section-title"><h2 id="fr-income-title">إيرادات أخرى</h2><span>الحسابات التي يزيد رقمها عن 412100</span></div>' +
+          '<h3 class="fr-chart-title">الإيرادات الأخرى شهريًا</h3><div id="fr-income-chart" class="fr-chart-wrap" aria-live="polite"><div class="fr-empty">جارٍ تحميل الرسم…</div></div>' +
+          '<div class="fr-legend"><span class="fr-legend-item"><i class="fr-legend-line" style="--legend-color:#1677d2"></i>الفترة الحالية</span><span class="fr-legend-item"><i class="fr-legend-line fr-dashed" style="--legend-color:#7c3aed"></i>فترة المقارنة</span></div>' +
+          '<p class="fr-panel-note">صافي الحركة = المدين − الدائن. مجمّع حسب الحساب في الجدول أدناه.</p><div class="fr-table-wrap"><table class="fr-table"><thead><tr><th>الحساب</th><th id="fr-income-now-head">الفترة الحالية</th><th id="fr-income-comp-head">فترة المقارنة</th><th>التغير</th><th>نسبة التغير</th></tr></thead>' +
+          '<tbody id="fr-income-rows"><tr><td colspan="5" class="fr-empty">جارٍ التحميل…</td></tr></tbody><tfoot id="fr-income-total"></tfoot></table></div>' +
+        '</section>' +
+        '</section>' +
+        '<section class="fr-section fr-panel" aria-labelledby="fr-expenses-title"><div class="fr-section-title"><h2 id="fr-expenses-title">المصروفات</h2><span>الحسابات الأقل من 411100 مرتبة من الأعلى مصروفًا إلى الأقل</span></div>' +
+          '<h3 class="fr-chart-title">المصروفات شهريًا</h3><div id="fr-expenses-chart" class="fr-chart-wrap" aria-live="polite"><div class="fr-empty">جارٍ تحميل الرسم…</div></div>' +
+          '<div class="fr-legend"><span class="fr-legend-item"><i class="fr-legend-line" style="--legend-color:#1677d2"></i>الفترة الحالية</span><span class="fr-legend-item"><i class="fr-legend-line fr-dashed" style="--legend-color:#7c3aed"></i>فترة المقارنة</span></div>' +
+          '<p class="fr-panel-note">صافي المصروف = المدين − الدائن. إجمالي الإيرادات لكل فترة = صافي المبيعات + الإيرادات الأخرى. تُحسب النسبة لكل فترة إلى إجمالي إيراداتها.</p>' +
+          '<div class="fr-table-wrap"><table class="fr-table"><thead><tr><th>الحساب</th><th>المصروف الحالي</th><th>مصروف المقارنة</th><th>التغير</th><th>نسبة التغير</th></tr></thead>' +
+          '<tbody id="fr-expense-rows"><tr><td colspan="5" class="fr-empty">جارٍ التحميل…</td></tr></tbody><tfoot id="fr-expense-total"></tfoot></table></div>' +
+        '</section>' +
+        '<section class="fr-section fr-panel" aria-labelledby="fr-production-title"><div class="fr-section-title"><h2 id="fr-production-title">الإنتاج</h2><span>الحالة: تم التسليم، حسب تاريخ الإنشاء</span></div>' +
+          '<p class="fr-panel-note">تُجمّع الكميات حسب المنتج خلال الفترة الحالية. نسبة الفرق = (المسلمة − المتوقعة) ÷ المتوقعة. ترتيب المنتجات حسب الكمية المسلمة من الأكبر إلى الأقل. تُحسب اللقطة مرة واحدة لكل فترة (صلاحيتها دقيقتان) وتُسترجع الصفحات منها دون إعادة التجميع؛ تغيير الفترة يبدأ لقطة جديدة، وزر التحديث يطلب لقطة جديدة، وتُبطل الكتابة اللاحقة اللقطة تلقائيًا.</p>' +
+          '<div class="fr-screen-table"><div class="fr-table-wrap"><table class="fr-table fr-production-data-table"><thead><tr><th class="fr-number">رقم الصنف</th><th>اسم المنتج</th><th class="fr-number">الكمية المتوقعة</th><th class="fr-number">الكمية المسلمة</th><th class="fr-number">نسبة الفرق</th></tr></thead>' +
+          '<tbody id="fr-production-rows"><tr><td colspan="5" class="fr-empty">جارٍ تحميل بيانات الإنتاج…</td></tr></tbody></table></div>' +
+          '<div class="fr-production-pager"><button type="button" class="btn btn-outline" id="fr-production-prev" disabled>السابق</button>' +
+          '<span class="fr-production-page-label" id="fr-production-page-label">—</span><button type="button" class="btn btn-outline" id="fr-production-next" disabled>التالي</button><button type="button" class="btn btn-outline" id="fr-production-refresh">تحديث اللقطة</button></div>' +
+          '<div class="fr-production-error" id="fr-production-error" role="alert"></div><div class="fr-panel-note" id="fr-production-snapshot-note"></div></div>' +
+          '<div class="fr-print-only"><div class="fr-table-wrap"><table class="fr-table fr-production-data-table"><thead><tr><th class="fr-number">رقم الصنف</th><th>اسم المنتج</th><th class="fr-number">الكمية المتوقعة</th><th class="fr-number">الكمية المسلمة</th><th class="fr-number">نسبة الفرق</th></tr></thead><tbody id="fr-production-print-rows"></tbody></table></div></div>' +
+        '</section>' +
+        '<section class="fr-section fr-panel" aria-labelledby="fr-used-materials-title"><div class="fr-section-title"><h2 id="fr-used-materials-title">المواد المستخدمة في الإنتاج</h2><span>حسب تاريخ إنشاء أمر التصنيع المسلّم</span></div>' +
+          '<p class="fr-panel-note">الكمية المفترضة هي الكمية الأساسية، أو الكمية المتوسطة عند غيابها، بعد التقريب للأعلى لأقرب عدد صحيح. الفرق = المستخدم − المفترض، ونسبته إلى المفترض. المنتجات ذات الفئات المستثناة لا تظهر. اللقطة صلاحيتها دقيقتان وتُسترجع الصفحات منها؛ زر التحديث يطلب لقطة جديدة.</p>' +
+          '<div class="fr-screen-table"><div class="fr-table-wrap"><table class="fr-table fr-production-data-table"><thead><tr><th class="fr-number">رقم الصنف</th><th>اسم المنتج</th><th>الوحدة</th><th class="fr-number">الكمية المفترضة</th><th class="fr-number">الكمية المستخدمة</th><th class="fr-number">الفرق</th><th class="fr-number">نسبة الفرق</th></tr></thead>' +
+          '<tbody id="fr-used-materials-rows"><tr><td colspan="7" class="fr-empty">جارٍ تحميل المواد المستخدمة…</td></tr></tbody></table></div>' +
+          '<div class="fr-production-pager"><button type="button" class="btn btn-outline" id="fr-used-materials-prev" disabled>السابق</button>' +
+          '<span class="fr-production-page-label" id="fr-used-materials-page-label">—</span><button type="button" class="btn btn-outline" id="fr-used-materials-next" disabled>التالي</button><button type="button" class="btn btn-outline" id="fr-used-materials-refresh">تحديث اللقطة</button></div>' +
+          '<div class="fr-production-error" id="fr-used-materials-error" role="alert"></div><div class="fr-panel-note" id="fr-used-materials-snapshot-note"></div></div>' +
+          '<div class="fr-print-only"><div class="fr-table-wrap"><table class="fr-table fr-production-data-table"><thead><tr><th class="fr-number">رقم الصنف</th><th>اسم المنتج</th><th>الوحدة</th><th class="fr-number">الكمية المفترضة</th><th class="fr-number">الكمية المستخدمة</th><th class="fr-number">الفرق</th><th class="fr-number">نسبة الفرق</th></tr></thead><tbody id="fr-used-materials-print-rows"></tbody></table></div></div>' +
+        '</section>' +
+        '<p class="fr-panel-note">المبالغ بالجنيه المصري. مصدر الإيرادات الأخرى والمصروفات: expenses_income_report. تقرير للمراجعة والتحليل.</p>' +
+      '</main></div>';
+    document.getElementById('fr-form').addEventListener('submit', function (event) { event.preventDefault(); fetchReport(); });
+    document.getElementById('fr-pdf').addEventListener('click', prepareFullReportPrint);
+    if (IS_SUPER_ADMIN) document.getElementById('fr-explain-materials').addEventListener('click', runUsedMaterialsExplain_);
+    document.getElementById('fr-production-prev').addEventListener('click', function () {
+      fetchProductionPage(Math.max(0, _productionOffset - _productionLimit));
+    });
+    document.getElementById('fr-production-next').addEventListener('click', function () {
+      fetchProductionPage(_productionOffset + _productionLimit);
+    });
+    document.getElementById('fr-used-materials-prev').addEventListener('click', function () {
+      fetchUsedMaterialsPage(Math.max(0, _usedMaterialsOffset - _usedMaterialsLimit));
+    });
+    document.getElementById('fr-used-materials-next').addEventListener('click', function () {
+      fetchUsedMaterialsPage(_usedMaterialsOffset + _usedMaterialsLimit);
+    });
+    document.getElementById('fr-production-refresh').addEventListener('click', function () {
+      fetchProductionPage(_productionOffset, { refresh: true });
+    });
+    document.getElementById('fr-used-materials-refresh').addEventListener('click', function () {
+      fetchUsedMaterialsPage(_usedMaterialsOffset, { refresh: true });
+    });
+    updateRangeLabels(current, comparison);
+    fetchReport();
+  }
+  function validateRange(from, to, label) {
+    if (!from || !to) throw new Error('يرجى اختيار تاريخي ' + label);
+    if (from > to) throw new Error('تاريخ بداية ' + label + ' يجب أن يسبق تاريخ نهايته');
+    return { from: from, to: to };
+  }
+  function readFilters() {
+    return {
+      current: validateRange(document.getElementById('fr-from').value, document.getElementById('fr-to').value, 'الفترة الحالية'),
+      comparison: validateRange(document.getElementById('fr-compare-from').value, document.getElementById('fr-compare-to').value, 'فترة المقارنة')
+    };
+  }
+  function updateRangeLabels(current, comparison) {
+    document.getElementById('fr-current-range').textContent = current.from + ' — ' + current.to;
+    document.getElementById('fr-comparison-range').textContent = comparison.from + ' — ' + comparison.to;
+    document.getElementById('fr-income-now-head').textContent = 'الحالي (' + current.from + ' إلى ' + current.to + ')';
+    document.getElementById('fr-income-comp-head').textContent = 'المقارنة (' + comparison.from + ' إلى ' + comparison.to + ')';
+  }
+  function formatMoney(value) {
+    var n = Number(value);
+    if (!Number.isFinite(n)) return '—';
+    var body = Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    return n < 0 ? '(' + body + ')' : body;
+  }
+  function formatChange(current, comparison) {
+    var delta = Number(current || 0) - Number(comparison || 0);
+    if (Number(comparison || 0) === 0) return delta === 0 ? '0.00%' : '—';
+    var percent = delta / Math.abs(Number(comparison)) * 100;
+    var body = Math.abs(percent).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    return percent < 0 ? '(' + body + '%)' : body + '%';
+  }
+  function formatRatio(amount, revenue) {
+    var denominator = Number(revenue);
+    if (!Number.isFinite(denominator) || denominator === 0) return '—';
+    var percent = Number(amount || 0) / denominator * 100;
+    var body = Math.abs(percent).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    return percent < 0 ? '(' + body + '%)' : body + '%';
+  }
+  function resultTotal(result, key) { return result && Number.isFinite(Number(result[key])) ? Number(result[key]) : null; }
+  function getRows(result) { return result && Array.isArray(result.rows) ? result.rows : []; }
+  function namedMap(current, comparison) {
+    var map = Object.create(null);
+    getRows(current).concat(getRows(comparison)).forEach(function (row) {
+      var name = String(row.account_5_name == null ? '' : row.account_5_name) || 'غير محدد';
+      var key = '$' + name;
+      if (!map[key]) map[key] = { name: name, current: 0, comparison: 0 };
+    });
+    getRows(current).forEach(function (row) {
+      var name = String(row.account_5_name == null ? '' : row.account_5_name) || 'غير محدد';
+      map['$' + name].current = Number(row.net_amount) || 0;
+    });
+    getRows(comparison).forEach(function (row) {
+      var name = String(row.account_5_name == null ? '' : row.account_5_name) || 'غير محدد';
+      map['$' + name].comparison = Number(row.net_amount) || 0;
+    });
+    return Object.keys(map).map(function (key) { return map[key]; });
+  }
+  function renderIncome(current, comparison) {
+    var currentTotal = resultTotal(current, 'total_net_amount'), comparisonTotal = resultTotal(comparison, 'total_net_amount');
+    var rows = namedMap(current, comparison).sort(function (a, b) { return b.current - a.current || a.name.localeCompare(b.name, 'ar'); });
+    document.getElementById('fr-income-rows').innerHTML = rows.length ? rows.map(function (row) {
+      var delta = row.current - row.comparison;
+      return '<tr><td class="fr-account">' + FMT.escape(row.name) + '</td><td class="fr-number">' + formatMoney(row.current) + '</td>' +
+        '<td class="fr-number">' + formatMoney(row.comparison) + '</td><td class="fr-number">' + formatMoney(delta) + '</td>' +
+        '<td class="fr-number">' + formatChange(row.current, row.comparison) + '</td></tr>';
+    }).join('') : '<tr><td colspan="5" class="fr-empty">لا توجد إيرادات أخرى خلال الفترتين.</td></tr>';
+    document.getElementById('fr-income-total').innerHTML = '<tr><td>الإجمالي</td><td class="fr-number">' + formatMoney(currentTotal) +
+      '</td><td class="fr-number">' + formatMoney(comparisonTotal) + '</td><td class="fr-number">' + formatMoney((currentTotal || 0) - (comparisonTotal || 0)) +
+      '</td><td class="fr-number">' + formatChange(currentTotal || 0, comparisonTotal || 0) + '</td></tr>';
+  }
+  function renderExpenses(current, comparison, currentRevenue, comparisonRevenue) {
+    var currentTotal = resultTotal(current, 'total_net_amount'), comparisonTotal = resultTotal(comparison, 'total_net_amount');
+    var rows = namedMap(current, comparison).sort(function (a, b) { return a.current - b.current || a.name.localeCompare(b.name, 'ar'); });
+    document.getElementById('fr-expense-rows').innerHTML = rows.length ? rows.map(function (row) {
+      var delta = row.current - row.comparison;
+      return '<tr><td class="fr-account">' + FMT.escape(row.name) + '</td>' +
+        '<td class="fr-number">' + formatMoney(row.current) + '<span class="fr-subvalue"><strong class="fr-expense-ratio">' + formatRatio(row.current, currentRevenue) + '</strong><span class="fr-expense-ratio-caption">من الإيرادات</span></span></td>' +
+        '<td class="fr-number">' + formatMoney(row.comparison) + '<span class="fr-subvalue"><strong class="fr-expense-ratio">' + formatRatio(row.comparison, comparisonRevenue) + '</strong><span class="fr-expense-ratio-caption">من الإيرادات</span></span></td>' +
+        '<td class="fr-number">' + formatMoney(delta) + '</td><td class="fr-number">' + formatChange(row.current, row.comparison) + '</td></tr>';
+    }).join('') : '<tr><td colspan="5" class="fr-empty">لا توجد مصروفات خلال الفترتين.</td></tr>';
+    document.getElementById('fr-expense-total').innerHTML = '<tr><td>الإجمالي</td><td class="fr-number">' + formatMoney(currentTotal) +
+      '<span class="fr-subvalue"><strong class="fr-expense-ratio">' + formatRatio(currentTotal || 0, currentRevenue) + '</strong><span class="fr-expense-ratio-caption">من الإيرادات</span></span></td><td class="fr-number">' + formatMoney(comparisonTotal) +
+      '<span class="fr-subvalue"><strong class="fr-expense-ratio">' + formatRatio(comparisonTotal || 0, comparisonRevenue) + '</strong><span class="fr-expense-ratio-caption">من الإيرادات</span></span></td><td class="fr-number">' +
+      formatMoney((currentTotal || 0) - (comparisonTotal || 0)) + '</td><td class="fr-number">' + formatChange(currentTotal || 0, comparisonTotal || 0) + '</td></tr>';
+  }
+  function monthKeys(range) {
+    var start = range.from.split('-').map(Number), end = range.to.split('-').map(Number);
+    var cursor = new Date(Date.UTC(start[0], start[1] - 1, 1));
+    var last = Date.UTC(end[0], end[1] - 1, 1), keys = [];
+    while (cursor.getTime() <= last) {
+      keys.push(cursor.getUTCFullYear() + '-' + String(cursor.getUTCMonth() + 1).padStart(2, '0'));
+      cursor.setUTCMonth(cursor.getUTCMonth() + 1);
+    }
+    return keys;
+  }
+  function monthLabel(key) {
+    var d = new Date(key + '-01T00:00:00Z');
+    return new Intl.DateTimeFormat('ar-EG', { month: 'short', year: '2-digit', timeZone: 'UTC' }).format(d);
+  }
+  function monthlyValues(result, range, field) {
+    var map = Object.create(null);
+    (result && Array.isArray(result.monthly) ? result.monthly : []).forEach(function (row) { map[row.month] = row; });
+    return monthKeys(range).map(function (key) {
+      var row = map[key] || {};
+      var value = field === 'net_sales_value' ?
+        (row.net_sales_value == null ? (Number(row.sales_value) || 0) - (Number(row.return_value) || 0) : Number(row.net_sales_value) || 0) :
+        Number(row[field]) || 0;
+      return { key: key, value: value };
+    });
+  }
+  function compactChartValue(value) {
+    var number = Number(value) || 0;
+    if (Math.abs(number) < 1000) return String(Math.round(number));
+    var thousands = Math.abs(number) / 1000;
+    var rounded = String(Number(thousands.toFixed(1)));
+    return (number < 0 ? '-' : '') + rounded + 'k';
+  }
+  function renderMonthlyComparisonChart(current, comparison, currentRange, comparisonRange, field, targetId, title) {
+    var currentMonths = monthlyValues(current, currentRange, field), compareMonths = monthlyValues(comparison, comparisonRange, field);
+    var count = Math.max(currentMonths.length, compareMonths.length);
+    if (!count) { document.getElementById(targetId).innerHTML = '<div class="fr-empty">لا توجد بيانات للرسم خلال الفترتين.</div>'; return; }
+    var labels = [], currentValues = [], comparisonValues = [];
+    for (var i = 0; i < count; i++) {
+      labels.push((currentMonths[i] || compareMonths[i]).key);
+      currentValues.push(currentMonths[i] ? currentMonths[i].value : 0);
+      comparisonValues.push(compareMonths[i] ? compareMonths[i].value : 0);
+    }
+    var W = 960, H = 365, left = 76, right = 24, top = 22, bottom = 74;
+    var plotW = W - left - right, plotH = H - top - bottom;
+    var all = currentValues.concat(comparisonValues), min = Math.min(0, Math.min.apply(null, all)), max = Math.max(0, Math.max.apply(null, all));
+    if (max === min) max = min + 1;
+    var pad = (max - min) * 0.08; max += pad; min -= pad;
+    function x(i) { return count === 1 ? left + plotW / 2 : left + plotW * i / (count - 1); }
+    function y(v) { return top + plotH * (max - v) / (max - min); }
+    function points(values) { return values.map(function (v, i) { return x(i).toFixed(1) + ',' + y(v).toFixed(1); }).join(' '); }
+    var svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="' + FMT.escape(title) + '">' +
+      '<title>' + FMT.escape(title) + '</title><desc>الخط الأزرق للفترة الحالية، والخط البنفسجي المتقطع لفترة المقارنة. القيم المعروضة مختصرة بآلاف الجنيهات.</desc>';
+    for (var g = 0; g <= 4; g++) {
+      var v = min + (max - min) * g / 4, gy = y(v);
+      svg += '<line x1="' + left + '" y1="' + gy.toFixed(1) + '" x2="' + (W - right) + '" y2="' + gy.toFixed(1) + '" stroke="#e2e8f0" stroke-width="1"/>' +
+        '<text x="' + (left - 9) + '" y="' + (gy + 4).toFixed(1) + '" text-anchor="end" fill="#64748b" font-size="12">' + compactChartValue(v) + '</text>';
+    }
+    var stride = Math.max(1, Math.ceil(count / 12));
+    for (var t = 0; t < count; t += stride) {
+      svg += '<text x="' + x(t).toFixed(1) + '" y="' + (H - 34) + '" text-anchor="middle" fill="#64748b" font-size="11">' + FMT.escape(monthLabel(labels[t])) + '</text>';
+    }
+    [
+      { data: currentValues, color: '#1677d2', dash: '', labelOffset: -10 },
+      { data: comparisonValues, color: '#7c3aed', dash: ' stroke-dasharray="8 6"', labelOffset: 17 }
+    ].forEach(function (line) {
+      svg += '<polyline fill="none" stroke="' + line.color + '" stroke-width="3"' + line.dash + ' stroke-linejoin="round" stroke-linecap="round" points="' + points(line.data) + '"/>';
+      line.data.forEach(function (v, i) {
+        svg += '<circle cx="' + x(i).toFixed(1) + '" cy="' + y(v).toFixed(1) + '" r="3" fill="' + line.color + '"/>';
+        if (i % stride === 0 || i === line.data.length - 1) {
+          svg += '<text x="' + x(i).toFixed(1) + '" y="' + (y(v) + line.labelOffset).toFixed(1) + '" text-anchor="middle" fill="' + line.color + '" font-size="10" font-weight="700">' + compactChartValue(v) + '</text>';
+        }
+      });
+    });
+    svg += '</svg>';
+    document.getElementById(targetId).innerHTML = svg;
+  }
+  function formatQuantity(value) {
+    var n = Number(value);
+    if (!Number.isFinite(n)) return '—';
+    var body = Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+    return n < 0 ? '(' + body + ')' : body;
+  }
+  function renderProduction(result) {
+    var rows = result && Array.isArray(result.rows) ? result.rows : [];
+    var total = result && Number.isFinite(Number(result.total)) ? Number(result.total) : 0;
+    _productionOffset = result && Number.isFinite(Number(result.offset)) ? Number(result.offset) : 0;
+    _productionLimit = result && Number.isFinite(Number(result.limit)) ? Number(result.limit) : 30;
+    if (result && result.snapshot_at) _productionSnapAt = Number(result.snapshot_at) || _productionSnapAt;
+    var page = Math.floor(_productionOffset / _productionLimit) + 1;
+    var pages = Math.max(1, Math.ceil(total / _productionLimit));
+    document.getElementById('fr-production-rows').innerHTML = rows.length ? rows.map(function (row) {
+      return '<tr><td class="fr-number">' + FMT.escape(String(row.product_id || '')) + '</td>' +
+        '<td class="fr-account">' + FMT.escape(String(row.name_ar || '')) + '</td>' +
+        '<td class="fr-number">' + formatQuantity(row.expected_quantity) + '</td>' +
+        '<td class="fr-number">' + formatQuantity(row.deliver_quantity) + '</td>' +
+        '<td class="fr-number">' + formatChange(row.deliver_quantity, row.expected_quantity) + '</td></tr>';
+    }).join('') : '<tr><td colspan="5" class="fr-empty">لا توجد منتجات مسلّمة خلال الفترة المحددة.</td></tr>';
+    document.getElementById('fr-production-page-label').textContent = 'صفحة ' + page + ' من ' + pages + ' — ' + total + ' منتج';
+    document.getElementById('fr-production-prev').disabled = _productionOffset <= 0;
+    document.getElementById('fr-production-next').disabled = !(result && result.has_more);
+    document.getElementById('fr-production-error').textContent = '';
+    var note = document.getElementById('fr-production-snapshot-note');
+    if (note) {
+      var fresh = result && result.snapshot_at ? (frSnapshotValid(result.snapshot_at) ? 'لقطة محفوظة؛ قد تتأخر التغييرات الخارجية حتى دقيقتين.' : 'انتهت صلاحية اللقطة؛ استخدم تحديث اللقطة.') : '';
+      var trunc = result && result.truncated ? ' عُرض أول 2000 منتج فقط.' : '';
+      note.textContent = (fresh + trunc).trim();
+    }
+    if (_productionRange) {
+      try { _productionPages[frProductionCacheKey(_productionOffset)] = result; } catch (e) {}
+    }
+  }
+  function fetchProductionPage(offset, opts) {
+    if (!_productionRange) return;
+    var refresh = !!(opts && opts.refresh);
+    var seq = ++_productionSeq;
+    var snapSeq = _productionSnapSeq;
+    var range = { from: _productionRange.from, to: _productionRange.to };
+    offset = Math.max(0, Math.floor(Number(offset) || 0));
+    if (refresh) { _productionSnapSeq++; snapSeq = _productionSnapSeq; _productionPages = {}; }
+    var cached = !refresh ? _productionPages[range.from + '|' + range.to + '|' + snapSeq + '|' + offset] : null;
+    if (cached && snapSeq === _productionSnapSeq && range.from === _productionRange.from && range.to === _productionRange.to) {
+      var cachedRenderStarted = IS_SUPER_ADMIN ? frNow_() : 0;
+      renderProduction(cached);
+      frRecordClientRender_('رسم صفحة الإنتاج المحفوظة', cachedRenderStarted);
+      return;
+    }
+    document.getElementById('fr-production-error').textContent = 'جارٍ تحميل الصفحة…';
+    document.getElementById('fr-production-prev').disabled = true;
+    document.getElementById('fr-production-next').disabled = true;
+    frMeasuredCall_('الإنتاج — الصفحة ' + (Math.floor(offset / _productionLimit) + 1), 'get_financial_production', {
+      from: range.from, to: range.to, offset: offset, refresh: refresh
+    }).then(function (result) {
+      if (seq !== _productionSeq || snapSeq !== _productionSnapSeq) return;
+      if (range.from !== _productionRange.from || range.to !== _productionRange.to) return;
+      var renderStarted = IS_SUPER_ADMIN ? frNow_() : 0;
+      renderProduction(result);
+      frRecordClientRender_('رسم صفحة الإنتاج', renderStarted);
+    }).catch(function (error) {
+      if (seq !== _productionSeq || snapSeq !== _productionSnapSeq) return;
+      if (range.from !== _productionRange.from || range.to !== _productionRange.to) return;
+      document.getElementById('fr-production-error').textContent = (error && error.message) || 'تعذر تحميل بيانات الإنتاج';
+      document.getElementById('fr-production-prev').disabled = _productionOffset <= 0;
+    });
+  }
+  function formatPercent(value) {
+    var n = Number(value);
+    if (!Number.isFinite(n)) return '—';
+    var body = Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    return n < 0 ? '(' + body + '%)' : (n > 0 ? '+' : '') + body + '%';
+  }
+  function usedMaterialsRowHtml(row) {
+    return '<tr><td class="fr-number">' + FMT.escape(String(row.product_id || '')) + '</td>' +
+      '<td class="fr-account">' + FMT.escape(String(row.name_ar || '')) + '</td>' +
+      '<td>' + FMT.escape(String(row.unit || '')) + '</td>' +
+      '<td class="fr-number">' + formatQuantity(row.supposed_qty) + '</td>' +
+      '<td class="fr-number">' + formatQuantity(row.used_qty) + '</td>' +
+      '<td class="fr-number">' + formatQuantity(row.difference_qty) + '</td>' +
+      '<td class="fr-number">' + formatPercent(row.difference_ratio) + '</td></tr>';
+  }
+  function renderUsedMaterials(result) {
+    var rows = result && Array.isArray(result.rows) ? result.rows : [];
+    var total = result && Number.isFinite(Number(result.total)) ? Number(result.total) : 0;
+    _usedMaterialsOffset = result && Number.isFinite(Number(result.offset)) ? Number(result.offset) : 0;
+    _usedMaterialsLimit = result && Number.isFinite(Number(result.limit)) ? Number(result.limit) : 30;
+    if (result && result.snapshot_at) _usedMaterialsSnapAt = Number(result.snapshot_at) || _usedMaterialsSnapAt;
+    var page = Math.floor(_usedMaterialsOffset / _usedMaterialsLimit) + 1;
+    var pages = Math.max(1, Math.ceil(total / _usedMaterialsLimit));
+    document.getElementById('fr-used-materials-rows').innerHTML = rows.length ? rows.map(usedMaterialsRowHtml).join('') :
+      '<tr><td colspan="7" class="fr-empty">لا توجد مواد مستخدمة مطابقة خلال الفترة المحددة.</td></tr>';
+    document.getElementById('fr-used-materials-page-label').textContent = 'صفحة ' + page + ' من ' + pages + ' — ' + total + ' منتج';
+    document.getElementById('fr-used-materials-prev').disabled = _usedMaterialsOffset <= 0;
+    document.getElementById('fr-used-materials-next').disabled = !(result && result.has_more);
+    document.getElementById('fr-used-materials-error').textContent = '';
+    var note = document.getElementById('fr-used-materials-snapshot-note');
+    if (note) {
+      var fresh = result && result.snapshot_at ? (frSnapshotValid(result.snapshot_at) ? 'لقطة محفوظة؛ قد تتأخر التغييرات الخارجية حتى دقيقتين.' : 'انتهت صلاحية اللقطة؛ استخدم تحديث اللقطة.') : '';
+      var trunc = result && result.truncated ? ' عُرض أول 2000 منتج فقط.' : '';
+      note.textContent = (fresh + trunc).trim();
+    }
+    if (_productionRange) {
+      try { _usedMaterialsPages[frUsedMaterialsCacheKey(_usedMaterialsOffset)] = result; } catch (e) {}
+    }
+  }
+  function fetchUsedMaterialsPage(offset, opts) {
+    if (!_productionRange) return;
+    var refresh = !!(opts && opts.refresh);
+    var seq = ++_usedMaterialsSeq;
+    var snapSeq = _usedMaterialsSnapSeq;
+    var range = { from: _productionRange.from, to: _productionRange.to };
+    offset = Math.max(0, Math.floor(Number(offset) || 0));
+    if (refresh) { _usedMaterialsSnapSeq++; snapSeq = _usedMaterialsSnapSeq; _usedMaterialsPages = {}; }
+    var cached = !refresh ? _usedMaterialsPages[range.from + '|' + range.to + '|' + snapSeq + '|' + offset] : null;
+    if (cached && snapSeq === _usedMaterialsSnapSeq && range.from === _productionRange.from && range.to === _productionRange.to) {
+      var cachedRenderStarted = IS_SUPER_ADMIN ? frNow_() : 0;
+      renderUsedMaterials(cached);
+      frRecordClientRender_('رسم صفحة المواد المحفوظة', cachedRenderStarted);
+      return;
+    }
+    document.getElementById('fr-used-materials-error').textContent = 'جارٍ تحميل الصفحة…';
+    document.getElementById('fr-used-materials-prev').disabled = true;
+    document.getElementById('fr-used-materials-next').disabled = true;
+    frMeasuredCall_('المواد المستخدمة — الصفحة ' + (Math.floor(offset / _usedMaterialsLimit) + 1), 'get_financial_used_materials', {
+      from: range.from, to: range.to, offset: offset, refresh: refresh
+    }).then(function (result) {
+      if (seq !== _usedMaterialsSeq || snapSeq !== _usedMaterialsSnapSeq) return;
+      if (range.from !== _productionRange.from || range.to !== _productionRange.to) return;
+      var renderStarted = IS_SUPER_ADMIN ? frNow_() : 0;
+      renderUsedMaterials(result);
+      frRecordClientRender_('رسم صفحة المواد المستخدمة', renderStarted);
+    }).catch(function (error) {
+      if (seq !== _usedMaterialsSeq || snapSeq !== _usedMaterialsSnapSeq) return;
+      if (range.from !== _productionRange.from || range.to !== _productionRange.to) return;
+      document.getElementById('fr-used-materials-error').textContent = (error && error.message) || 'تعذر تحميل المواد المستخدمة';
+      document.getElementById('fr-used-materials-prev').disabled = _usedMaterialsOffset <= 0;
+    });
+  }
+  function fetchAllReportRows(action, range, label) {
+    var resultRows = [], offset = 0;
+    var frozen = { from: range.from, to: range.to };
+    function nextPage() {
+      return frMeasuredCall_(label + ' — صفحة ' + (Math.floor(offset / 30) + 1), action,
+        { from: frozen.from, to: frozen.to, offset: offset }).then(function (result) {
+        var rows = result && Array.isArray(result.rows) ? result.rows : [];
+        resultRows = resultRows.concat(rows);
+        if (result && result.has_more) {
+          var limit = Number(result.limit) || 30;
+          offset = (Number(result.offset) || 0) + limit;
+          return nextPage();
+        }
+        return resultRows;
+      });
+    }
+    return nextPage();
+  }
+  function prepareFullReportPrint() {
+    var button = document.getElementById('fr-pdf'), error = document.getElementById('fr-error');
+    if (!_productionRange) return;
+    var frozen = { from: _productionRange.from, to: _productionRange.to };
+    button.disabled = true;
+    error.textContent = 'جارٍ تحميل جميع صفحات بيانات الإنتاج للطباعة…';
+    Promise.all([
+      fetchAllReportRows('get_financial_production', frozen, 'طباعة الإنتاج'),
+      fetchAllReportRows('get_financial_used_materials', frozen, 'طباعة المواد المستخدمة')
+    ]).then(function (allRows) {
+      document.getElementById('fr-production-print-rows').innerHTML = allRows[0].length ? allRows[0].map(function (row) {
+        return '<tr><td class="fr-number">' + FMT.escape(String(row.product_id || '')) + '</td>' +
+          '<td class="fr-account">' + FMT.escape(String(row.name_ar || '')) + '</td>' +
+          '<td class="fr-number">' + formatQuantity(row.expected_quantity) + '</td>' +
+          '<td class="fr-number">' + formatQuantity(row.deliver_quantity) + '</td>' +
+          '<td class="fr-number">' + formatChange(row.deliver_quantity, row.expected_quantity) + '</td></tr>';
+      }).join('') : '<tr><td colspan="5" class="fr-empty">لا توجد منتجات مسلّمة خلال الفترة المحددة.</td></tr>';
+      document.getElementById('fr-used-materials-print-rows').innerHTML = allRows[1].length ? allRows[1].map(usedMaterialsRowHtml).join('') :
+        '<tr><td colspan="7" class="fr-empty">لا توجد مواد مستخدمة مطابقة خلال الفترة المحددة.</td></tr>';
+      error.textContent = '';
+      window.setTimeout(function () { window.print(); }, 100);
+    }).catch(function (e) {
+      error.textContent = 'تعذر تجهيز التقرير كاملًا للطباعة: ' + ((e && e.message) || 'خطأ في تحميل البيانات');
+    }).finally(function () { button.disabled = false; });
+  }
+  function fetchReport() {
+    var filters, error = document.getElementById('fr-error');
+    error.textContent = '';
+    try { filters = readFilters(); } catch (e) { error.textContent = e.message; return; }
+    updateRangeLabels(filters.current, filters.comparison);
+    var seq = ++_requestSeq, button = document.getElementById('fr-apply');
+    button.disabled = true;
+    var state = { current: {}, comparison: {} }, failures = [], pending = 8;
+    _frReportStartedAt = IS_SUPER_ADMIN ? frNow_() : 0;
+    _frReportVisibleMs = null;
+    _frReportCompleteMs = null;
+    _frReportRenderMs = 0;
+    _frMeasurementEntries = [];
+    frRenderMeasurement_();
+    _productionRange = filters.current;
+    _productionOffset = 0;
+    _productionSeq++;
+    _productionSnapSeq++;
+    _productionPages = {};
+    _productionSnapAt = 0;
+    _usedMaterialsOffset = 0;
+    _usedMaterialsSeq++;
+    _usedMaterialsSnapSeq++;
+    _usedMaterialsPages = {};
+    _usedMaterialsSnapAt = 0;
+    ['fr-sales', 'fr-returns', 'fr-net', 'fr-revenue', 'fr-compare-sales', 'fr-compare-returns', 'fr-compare-net', 'fr-compare-revenue'].forEach(function (id) {
+      document.getElementById(id).textContent = 'جارٍ التحميل…';
+    });
+    ['fr-sales-chart', 'fr-income-chart', 'fr-expenses-chart'].forEach(function (id) { document.getElementById(id).innerHTML = '<div class="fr-empty">جارٍ تحميل الرسم…</div>'; });
+    ['fr-income-rows', 'fr-expense-rows'].forEach(function (id) { document.getElementById(id).innerHTML = '<tr><td colspan="5" class="fr-empty">جارٍ التحميل…</td></tr>'; });
+    document.getElementById('fr-production-rows').innerHTML = '<tr><td colspan="5" class="fr-empty">جارٍ تحميل بيانات الإنتاج…</td></tr>';
+    document.getElementById('fr-production-page-label').textContent = '—';
+    document.getElementById('fr-production-prev').disabled = true;
+    document.getElementById('fr-production-next').disabled = true;
+    document.getElementById('fr-production-error').textContent = '';
+    document.getElementById('fr-used-materials-rows').innerHTML = '<tr><td colspan="7" class="fr-empty">جارٍ تحميل المواد المستخدمة…</td></tr>';
+    document.getElementById('fr-used-materials-page-label').textContent = '—';
+    document.getElementById('fr-used-materials-prev').disabled = true;
+    document.getElementById('fr-used-materials-next').disabled = true;
+    document.getElementById('fr-used-materials-error').textContent = '';
+    document.getElementById('fr-income-total').innerHTML = '';
+    document.getElementById('fr-expense-total').innerHTML = '';
+    function request(period, key, action, requestData) {
+      var prodSeqAtStart = (key === 'production') ? _productionSeq : 0;
+      var prodSnapAtStart = (key === 'production') ? _productionSnapSeq : 0;
+      var usedSeqAtStart = (key === 'usedMaterials') ? _usedMaterialsSeq : 0;
+      var usedSnapAtStart = (key === 'usedMaterials') ? _usedMaterialsSnapSeq : 0;
+      frMeasuredCall_(frReportLabel_(period, key), action, requestData || filters[period]).then(function (result) {
+        if (seq !== _requestSeq) return;
+        if (key === 'production' && (prodSeqAtStart !== _productionSeq || prodSnapAtStart !== _productionSnapSeq)) return;
+        if (key === 'usedMaterials' && (usedSeqAtStart !== _usedMaterialsSeq || usedSnapAtStart !== _usedMaterialsSnapSeq)) return;
+        state[period][key] = result;
+      }).catch(function (e) {
+        if (seq !== _requestSeq) return;
+        if (key === 'production' && (prodSeqAtStart !== _productionSeq || prodSnapAtStart !== _productionSnapSeq)) return;
+        if (key === 'usedMaterials' && (usedSeqAtStart !== _usedMaterialsSeq || usedSnapAtStart !== _usedMaterialsSnapSeq)) return;
+        failures.push((e && e.message) || 'تعذر تحميل بيانات التقرير');
+      }).finally(function () {
+        pending--;
+        if (seq !== _requestSeq) return;
+        var renderStarted = IS_SUPER_ADMIN ? frNow_() : 0;
+        renderReport(state, filters, pending === 0);
+        if (IS_SUPER_ADMIN) {
+          var renderedAt = frNow_();
+          _frReportRenderMs += renderedAt - renderStarted;
+          if (_frReportVisibleMs == null && frReportHasVisibleData_(state)) {
+            _frReportVisibleMs = renderedAt - _frReportStartedAt;
+          }
+          if (pending === 0) _frReportCompleteMs = renderedAt - _frReportStartedAt;
+          frRenderMeasurement_();
+        }
+        if (pending === 0) {
+          button.disabled = false;
+          if (failures.length) error.textContent = failures.filter(function (x, i, a) { return a.indexOf(x) === i; }).join(' — ');
+        }
+      });
+    }
+    request('current', 'sales', 'get_financial_sales_totals');
+    request('comparison', 'sales', 'get_financial_sales_totals');
+    request('current', 'income', 'get_financial_other_income');
+    request('comparison', 'income', 'get_financial_other_income');
+    request('current', 'expenses', 'get_financial_expenses');
+    request('comparison', 'expenses', 'get_financial_expenses');
+    request('current', 'production', 'get_financial_production', {
+      from: filters.current.from, to: filters.current.to, offset: 0
+    });
+    request('current', 'usedMaterials', 'get_financial_used_materials', {
+      from: filters.current.from, to: filters.current.to, offset: 0
+    });
+  }
+  function renderReport(state, filters, complete) {
+    var cur = state.current, cmp = state.comparison;
+    var rendered = state._rendered || (state._rendered = {});
+    function set(id, value) { document.getElementById(id).textContent = value == null ? '—' : value; }
+    if (cur.sales) {
+      set('fr-sales', formatMoney(cur.sales.sales_value)); set('fr-returns', formatMoney(cur.sales.return_value)); set('fr-net', formatMoney(cur.sales.net_sales_value));
+    }
+    if (cmp.sales) {
+      set('fr-compare-sales', formatMoney(cmp.sales.sales_value)); set('fr-compare-returns', formatMoney(cmp.sales.return_value)); set('fr-compare-net', formatMoney(cmp.sales.net_sales_value));
+    }
+    if (cur.sales && cmp.sales && !rendered.sales) {
+      renderMonthlyComparisonChart(cur.sales, cmp.sales, filters.current, filters.comparison, 'net_sales_value', 'fr-sales-chart', 'صافي المبيعات شهريًا');
+      rendered.sales = true;
+    } else if (complete && !rendered.sales) document.getElementById('fr-sales-chart').innerHTML = '<div class="fr-empty">تعذر تحميل بيانات المبيعات للفترتين.</div>';
+    var curIncome = resultTotal(cur.income, 'total_net_amount'), cmpIncome = resultTotal(cmp.income, 'total_net_amount');
+    var curNetSales = resultTotal(cur.sales, 'net_sales_value'), cmpNetSales = resultTotal(cmp.sales, 'net_sales_value');
+    var curRevenue = curIncome == null || curNetSales == null ? null : curIncome + curNetSales;
+    var cmpRevenue = cmpIncome == null || cmpNetSales == null ? null : cmpIncome + cmpNetSales;
+    if (curRevenue != null) set('fr-revenue', formatMoney(curRevenue));
+    else if (complete) set('fr-revenue', null);
+    if (cmpRevenue != null) set('fr-compare-revenue', formatMoney(cmpRevenue));
+    else if (complete) set('fr-compare-revenue', null);
+    if (cur.income && cmp.income && !rendered.income) {
+      renderMonthlyComparisonChart(cur.income, cmp.income, filters.current, filters.comparison, 'net_amount', 'fr-income-chart', 'الإيرادات الأخرى شهريًا');
+      renderIncome(cur.income, cmp.income);
+      rendered.income = true;
+    }
+    else if (complete && !rendered.income) {
+      document.getElementById('fr-income-chart').innerHTML = '<div class="fr-empty">تعذر تحميل بيانات الإيرادات الأخرى للفترتين.</div>';
+      document.getElementById('fr-income-rows').innerHTML = '<tr><td colspan="5" class="fr-empty">تعذر تحميل بيانات الإيرادات الأخرى للفترتين.</td></tr>';
+      document.getElementById('fr-income-total').innerHTML = '';
+    }
+    if (cur.expenses && cmp.expenses && curRevenue != null && cmpRevenue != null && !rendered.expenses) {
+      renderMonthlyComparisonChart(cur.expenses, cmp.expenses, filters.current, filters.comparison, 'net_amount', 'fr-expenses-chart', 'المصروفات شهريًا');
+      renderExpenses(cur.expenses, cmp.expenses, curRevenue, cmpRevenue);
+      rendered.expenses = true;
+    }
+    else if (complete && !rendered.expenses) {
+      document.getElementById('fr-expenses-chart').innerHTML = '<div class="fr-empty">تعذر تحميل بيانات المصروفات للفترتين.</div>';
+      document.getElementById('fr-expense-rows').innerHTML = '<tr><td colspan="5" class="fr-empty">تعذر تحميل بيانات المصروفات للفترتين.</td></tr>';
+      document.getElementById('fr-expense-total').innerHTML = '';
+    }
+    if (cur.production && Number(cur.production.offset || 0) === _productionOffset && !rendered.production) {
+      renderProduction(cur.production);
+      rendered.production = true;
+    }
+    else if (complete && !cur.production && !rendered.production) {
+      document.getElementById('fr-production-rows').innerHTML = '<tr><td colspan="5" class="fr-empty">تعذر تحميل بيانات الإنتاج.</td></tr>';
+      document.getElementById('fr-production-page-label').textContent = '—';
+      document.getElementById('fr-production-prev').disabled = true;
+      document.getElementById('fr-production-next').disabled = true;
+    }
+    if (cur.usedMaterials && Number(cur.usedMaterials.offset || 0) === _usedMaterialsOffset && !rendered.usedMaterials) {
+      renderUsedMaterials(cur.usedMaterials);
+      rendered.usedMaterials = true;
+    }
+    else if (complete && !cur.usedMaterials && !rendered.usedMaterials) {
+      document.getElementById('fr-used-materials-rows').innerHTML = '<tr><td colspan="7" class="fr-empty">تعذر تحميل المواد المستخدمة.</td></tr>';
+      document.getElementById('fr-used-materials-page-label').textContent = '—';
+      document.getElementById('fr-used-materials-prev').disabled = true;
+      document.getElementById('fr-used-materials-next').disabled = true;
+    }
+  }
+  load();
+</script>
+</body>
+</html>

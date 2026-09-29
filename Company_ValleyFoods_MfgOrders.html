@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="ar" dir="rtl">
 <head>
   <meta charset="utf-8">
@@ -7,8 +7,19 @@
   <?!= include('CSS_Tokens'); ?>
   <?!= include('UI_Components'); ?>
   <?!= include('Client_Helpers'); ?>
+  <?!= include('Core_FormState'); ?>
   <?!= include('Company_ValleyFoods_Nav'); ?>
   <?!= getCompanyThemeCSS_('9940659bd83035d7') ?>
+  <style>
+    .mfg-viewbar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:12px;padding:10px;border:1px solid var(--border-color,#e5e7eb);border-radius:12px;background:var(--bg-surface,#fff)}
+    .mfg-view-actions,.mfg-calendar-actions{display:flex;align-items:center;gap:7px;flex-wrap:wrap}.mfg-calendar-actions{direction:rtl}.mfg-calendar-title{min-width:190px;text-align:center;color:var(--text-main,#111827);font-weight:900;font-size:15px}.mfg-view-btn.active{background:var(--brand-primary);border-color:var(--brand-primary);color:#fff}.mfg-calendar-shell{border:1px solid var(--border-color,#e5e7eb);border-radius:12px;overflow:hidden;background:var(--bg-surface,#fff)}
+    .mfg-calendar-legend{display:flex;gap:12px;align-items:center;flex-wrap:wrap;padding:8px 11px;border-bottom:1px solid var(--border-color,#e5e7eb);color:var(--text-muted,#64748b);font-size:11px}.mfg-legend-dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-left:4px}.mfg-legend-dot.draft{background:#64748b}.mfg-legend-dot.progress{background:#d97706}.mfg-legend-dot.locked{background:#16a34a}
+    .mfg-week-scroll{max-height:70vh;overflow:auto;direction:ltr}.mfg-week-head{position:sticky;top:0;z-index:12;display:grid;grid-template-columns:68px repeat(7,minmax(145px,1fr));min-width:1080px;background:var(--bg-surface,#fff);border-bottom:1px solid var(--border-color,#e5e7eb)}.mfg-week-head>div{padding:9px 5px;text-align:center;border-left:1px solid var(--border-color,#e5e7eb);direction:rtl}.mfg-week-head .time-head{border-left:0;color:var(--text-muted,#64748b);font-size:10px}.mfg-day-head{font-size:11px;font-weight:800;color:var(--text-muted,#64748b)}.mfg-day-head strong{display:block;margin-top:2px;color:var(--text-main,#111827);font-size:17px}.mfg-day-head.today{background:#eff6ff;color:#1d4ed8}.mfg-day-head.today strong{color:#1d4ed8}
+    .mfg-week-body{display:grid;grid-template-columns:68px repeat(7,minmax(145px,1fr));min-width:1080px}.mfg-time-axis,.mfg-day-column{position:relative;height:1152px}.mfg-time-axis{background:var(--bg-surface,#fff)}.mfg-hour-label{position:absolute;left:0;right:7px;transform:translateY(-7px);text-align:right;color:var(--text-muted,#64748b);font-size:9px;direction:ltr}.mfg-day-column{border-left:1px solid var(--border-color,#e5e7eb);background:repeating-linear-gradient(to bottom,transparent 0,transparent 47px,var(--border-color,#e5e7eb) 48px)}.mfg-day-column.today{background-color:#f8fbff}.mfg-now-line{position:absolute;left:0;right:0;height:2px;background:#ef4444;z-index:8}.mfg-now-line:before{content:"";position:absolute;left:-4px;top:-3px;width:8px;height:8px;border-radius:50%;background:#ef4444}
+    .mfg-event{position:absolute;z-index:4;min-height:28px;padding:4px 6px;border:1px solid;border-right-width:4px;border-radius:7px;overflow:hidden;text-align:right;direction:rtl;cursor:pointer;box-shadow:0 1px 2px rgba(15,23,42,.08);font-size:9px;line-height:1.35}.mfg-event:hover{z-index:9;filter:brightness(.98);box-shadow:0 5px 14px rgba(15,23,42,.16)}.mfg-event.draft{border-color:#94a3b8;background:#f1f5f9;color:#334155}.mfg-event.progress{border-color:#f59e0b;background:#fffbeb;color:#92400e}.mfg-event.locked{border-color:#22c55e;background:#f0fdf4;color:#166534}.mfg-event-time{font-weight:900;direction:ltr;text-align:right}.mfg-event-title{font-weight:900;font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.mfg-event-meta{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;opacity:.82}.mfg-unscheduled{position:relative;margin:3px;padding:5px;border:1px dashed #94a3b8;border-radius:6px;background:#fff;color:#475569;cursor:pointer;font-size:9px;direction:rtl}.mfg-week-empty{padding:48px 12px;text-align:center;color:var(--text-muted,#64748b)}
+    .mfg-month-grid{display:grid;grid-template-columns:repeat(7,minmax(135px,1fr));min-width:950px;direction:ltr}.mfg-month-scroll{overflow:auto}.mfg-month-weekday{padding:8px;text-align:center;border-left:1px solid var(--border-color,#e5e7eb);border-bottom:1px solid var(--border-color,#e5e7eb);font-size:11px;font-weight:900;color:var(--text-muted,#64748b);direction:rtl}.mfg-month-day{min-height:145px;padding:6px;border-left:1px solid var(--border-color,#e5e7eb);border-bottom:1px solid var(--border-color,#e5e7eb);background:var(--bg-surface,#fff);direction:rtl}.mfg-month-day.outside{background:var(--bg-subtle,#f8fafc);opacity:.65}.mfg-month-day.today{box-shadow:inset 0 0 0 2px #3b82f6}.mfg-month-date{margin-bottom:5px;font-size:11px;font-weight:900;color:var(--text-main,#111827)}.mfg-month-event{margin-bottom:4px;padding:4px 5px;border-right:4px solid;border-radius:5px;cursor:pointer;font-size:9px;line-height:1.35}.mfg-month-event.draft{border-color:#64748b;background:#f1f5f9;color:#334155}.mfg-month-event.progress{border-color:#d97706;background:#fffbeb;color:#92400e}.mfg-month-event.locked{border-color:#16a34a;background:#f0fdf4;color:#166534}.mfg-month-event b{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.mfg-more{color:#2563eb;font-size:9px;font-weight:800}
+    @media(max-width:760px){.mfg-viewbar{align-items:stretch}.mfg-view-actions,.mfg-calendar-actions{width:100%;justify-content:center}.mfg-calendar-title{order:-1;width:100%}.mfg-week-scroll{max-height:64vh}}
+  </style>
 </head>
 <body>
   <div id="vf-root"></div>
@@ -23,6 +34,28 @@
     var CURRENT_ACTION = '<?!= currentAction ?>';
     var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
     var CAN_WRITE = UIC.canAdd_(); var CAN_FULL = UIC.canFull_();
+    /* Stage F candidate (plan §6): retained pending state for the list editor.
+       FALSE as shipped, and UIC.FormState.enabled() also requires the shared
+       FORM_STATE_CORE_ master switch, so with either false this page runs its
+       existing path exactly as before. */
+    var MFG_LIST_FORMSTATE_CANDIDATE_ = false;
+    var MFG_LIST_FORM_ = null;
+    function mfgListFormState_() {
+      if (!(window.UIC && UIC.FormState && UIC.FormState.enabled(MFG_LIST_FORMSTATE_CANDIDATE_))) return null;
+      if (!MFG_LIST_FORM_) {
+        MFG_LIST_FORM_ = UIC.FormState.create({
+          key: 'vf_mfg_orders_list_editor',
+          fields: ['manufacture_date', 'operation_type', 'shift', 'produced_product_id', 'manufactured_qty',
+            'actual_qty', 'recipe_id', 'mo_status', 'manufacture_batch'],
+          sections: ['outputs', 'consumption']
+        });
+      }
+      return MFG_LIST_FORM_;
+    }
+    /* U-46. Set from the server's can_see_cost, never derived from
+       USER_PAGES — the browser cannot see the fail-open guard. */
+    var CAN_SEE_COST = true;
+    function canCost() { return CAN_SEE_COST !== false; }
 
     function companyCall(moduleAction, data) {
       return API.call('company_action', {
@@ -32,15 +65,21 @@
       }, SESSION_TOKEN);
     }
     function esc(v) {
-      var s = (v === undefined || v === null) ? '' : String(v);
-      if (typeof FMT !== 'undefined' && FMT.escape) return FMT.escape(s);
-      return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+      /* [UI-2.8 / U-36] Delegates to the shared formatter. This body used to
+         carry its own replace-chain behind a `typeof FMT !== 'undefined'`
+         guard, but Client_Helpers.html defines FMT in <head> before any page
+         script runs, so that fallback was unreachable and the duplicate was
+         pure drift risk. Output is identical for every input — proved in
+         tools/verify/ui2_formatters.js. */
+      return FMT.escape(v);
     }
     function num0(v) { var n = Number(v); return isNaN(n) ? 0 : n; }
     function fmt3(v) { return Number(v || 0).toFixed(3); }
     function todayStr() { return new Date().toISOString().slice(0, 10); }
     function fmtDate(v) {
       if (!v) return '-';
+      var isoDay = String(v).trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      if (isoDay) return isoDay[3] + '/' + isoDay[2] + '/' + isoDay[1];
       var d = (v instanceof Date) ? v : new Date(v);
       if (isNaN(d.getTime())) return String(v);
       var p = function (n) { return n < 10 ? '0' + n : '' + n; };
@@ -50,27 +89,31 @@
 
   <script>
   (function () {
-    var ORDERS = [], RECIPE_OPTIONS = [], PRODUCT_OPTIONS = [], ENUMS = {};
+    var ORDERS = [], RECIPE_OPTIONS = [], PRODUCT_OPTIONS = [], FILTER_PRODUCT_OPTIONS = [], ENUMS = {};
+    /* List filters: blank means no constraint (all data). F persists across
+       table rebuilds, so save/delete/background refreshes keep the filter. */
+    var F = { from: '', to: '', shift: '', operation_type: '', produced_product: '', product_category: '', manufacture_batch: '' };
+    var FILTER_OPTIONS = { shift: [], operation_types: [], categories: [], batches: [] };
+    var FILTERS_SIG = '';
+    var VIEW = 'calendar';
+    var CAL_MODE = 'week';
+    var CAL_ANCHOR = new Date();
+    CAL_ANCHOR.setHours(0, 0, 0, 0);
+    var CAL_ORDERS = [], CAL_SHIFT_OPTIONS = [];
+    var HEADER_SNAPSHOT = null, HEADER_SNAPSHOT_PROMISE = null;
+    /* The live PagedTable handle, reassigned on every load(). Row actions patch
+       through it instead of refetching the page. */
+    var TABLE = null;
 
-    function showLoading(msg) {
-      var el = document.getElementById('vf-loading-overlay');
-      if (!el) {
-        el = document.createElement('div');
-        el.id = 'vf-loading-overlay';
-        el.style.cssText = 'position:fixed;inset:0;z-index:99999;display:none;align-items:center;justify-content:center;background:rgba(255,255,255,0.78);direction:rtl;';
-        el.innerHTML = '<div style="background:#fff;border:1px solid #e3e3e3;border-radius:12px;padding:22px 30px;box-shadow:0 6px 24px rgba(0,0,0,0.12);display:flex;flex-direction:column;align-items:center;gap:12px;">' +
-          '<div style="width:34px;height:34px;border:4px solid #eee;border-top-color:#875A7B;border-radius:50%;animation:vfspin 0.8s linear infinite;"></div>' +
-          '<div id="vf-loading-msg" style="font-family:Tahoma;color:#444;font-size:14px;">جاري التحميل…</div></div>';
-        var st = document.createElement('style'); st.textContent = '@keyframes vfspin{to{transform:rotate(360deg)}}'; document.head.appendChild(st);
-        document.body.appendChild(el);
-      }
-      var m = document.getElementById('vf-loading-msg'); if (m && msg) m.textContent = msg;
-      el.style.display = 'flex';
-    }
-    function hideLoading() { var el = document.getElementById('vf-loading-overlay'); if (el) el.style.display = 'none'; }
+    /* [UI-3.4 / U-24] Delegates to the one shared loading service. This was the
+       second of two page-local overlays in ValleyFoods, both with the same
+       hardcoded #875A7B spinner — a colour belonging to no company here. The
+       local names are kept so this page's call sites are untouched. */
+    function showLoading(msg) { try { UIC.showPageLoading(msg || 'جاري التحميل…'); } catch (e) {} }
+    function hideLoading() { try { UIC.hidePageLoading(true); } catch (e) {} }
 
     function tabBtn(paneId, label, active) {
-      return '<button type="button" class="btn ' + (active ? 'btn-primary' : 'btn-outline') + '" style="padding:6px 16px;font-size:12px;" onclick="MFG_PAGE.switchTab(\'' + paneId + '\')">' + label + '</button>';
+      return '<button type="button" class="btn ' + (active ? 'btn-primary' : 'btn-outline') + '" style="padding:10px 20px;font-size:14px;" onclick="MFG_PAGE.switchTab(\'' + paneId + '\')">' + label + '</button>';
     }
     MFG_PAGE_tabSwitch = function (paneId) {
       ['tab-main-extra', 'tab-cons', 'tab-workops', 'tab-byproducts'].forEach(function (id) {
@@ -90,62 +133,361 @@
       });
       document.getElementById('vf-mfg-content').innerHTML =
         '<div class="vf-card"><div class="vf-card-header"><h3>أوامر التصنيع</h3>' +
+          '<div class="no-print" style="display:flex;gap:8px;align-items:center;">' +
           (CAN_WRITE ? '<button class="btn btn-primary" onclick="MFG_PAGE.openNewPage()">اضافة امر تصنيع</button>' : '') +
+          '<a class="btn btn-outline" href="' + scriptUrl + '?action=vf_mfg_client_report&sessionToken=' + SESSION_TOKEN + '" onclick="UIC.navTo(event, this.getAttribute(\'href\'))">تقرير تصنيع العملاء</a>' +
+          '</div>' +
         '</div><div class="vf-card-body">' +
-          '<div id="mo-table"><p class="vf-text-muted">جاري التحميل...</p></div>' +
+          '<div class="mfg-viewbar no-print">' +
+            '<div class="mfg-view-actions"><button id="mfg-view-calendar" class="btn btn-outline mfg-view-btn active" onclick="MFG_PAGE.setView(\'calendar\')">التقويم</button><button id="mfg-view-list" class="btn btn-outline mfg-view-btn" onclick="MFG_PAGE.setView(\'list\')">القائمة</button></div>' +
+            '<div id="mfg-calendar-actions" class="mfg-calendar-actions"><button class="btn btn-outline" onclick="MFG_PAGE.moveCalendar(-1)">السابق ›</button><button class="btn btn-outline" onclick="MFG_PAGE.goToday()">اليوم</button><button class="btn btn-outline" onclick="MFG_PAGE.moveCalendar(1)">‹ التالي</button><span id="mfg-calendar-title" class="mfg-calendar-title"></span><button id="mfg-mode-week" class="btn btn-primary" onclick="MFG_PAGE.setCalendarMode(\'week\')">أسبوع</button><button id="mfg-mode-month" class="btn btn-outline" onclick="MFG_PAGE.setCalendarMode(\'month\')">شهر</button></div>' +
+          '</div>' +
+          '<div class="vf-filter-bar" style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;margin-bottom:12px;">' +
+            '<div class="form-field mfg-list-date-filter" style="margin:0;display:none;"><label class="form-label">من تاريخ</label><input type="date" id="ff-from" class="input" value=""></div>' +
+            '<div class="form-field mfg-list-date-filter" style="margin:0;display:none;"><label class="form-label">إلى تاريخ</label><input type="date" id="ff-to" class="input" value=""></div>' +
+            '<div class="form-field" style="margin:0;min-width:150px;"><label class="form-label">الوردية</label><span id="ff-shift-wrap"></span></div>' +
+            '<div class="form-field" style="margin:0;min-width:170px;"><label class="form-label">نوع العملية</label><span id="ff-operation-wrap"></span></div>' +
+            '<div class="form-field" style="margin:0;min-width:180px;"><label class="form-label">المنتج المنتج</label><span id="ff-product-wrap"></span></div>' +
+            '<div class="form-field" style="margin:0;min-width:150px;"><label class="form-label">فئة المنتج</label><span id="ff-category-wrap"></span></div>' +
+            '<div class="form-field" style="margin:0;min-width:150px;"><label class="form-label">التشغيلة</label><span id="ff-batch-wrap"></span></div>' +
+            '<div style="display:flex;gap:8px;">' +
+              '<button class="btn btn-primary" onclick="MFG_PAGE.applyFilters()">🔍 بحث</button>' +
+              '<button class="btn btn-outline" onclick="MFG_PAGE.clearFilters()">مسح</button>' +
+            '</div>' +
+          '</div>' +
+          '<div id="mo-calendar"><p class="vf-text-muted">جاري تحميل التقويم...</p></div>' +
+          '<div id="mo-table" style="display:none;"><p class="vf-text-muted">جاري التحميل...</p></div>' +
         '</div></div>';
       load();
     }
 
-    function load() {
-      showLoading('جاري تحميل أوامر التصنيع…');
-      var watchdog = setTimeout(function () { hideLoading(); UIC.toast('انتهت مهلة التحميل — تحقق من الاتصال وأعد المحاولة', 'error'); }, 25000);
-      var container = document.getElementById('mo-table');
-      if (container) {
-        UIC.PagedTable({
-          container: container,
-          headers: ['كود الأمر', 'المنتج المنتج', 'نوع العملية', 'الوردية', 'التاريخ',
-                    { label: 'المتوقع', numeric: true }, { label: 'المصنع', numeric: true }, 'الحالة', ''],
-          pageSize: 100,
-          emptyText: 'لا توجد أوامر تصنيع',
-          onRendered: function (tid) { try { UIC.initTableSort(tid); } catch (e) {} },
-          fetcher: function (offset, limit) {
-            return companyCall('get_valley_mfg_orders', { offset: offset, limit: limit });
-          },
-          onFirst: function (r) {
-            RECIPE_OPTIONS = r.recipe_options || [];
-            PRODUCT_OPTIONS = r.product_options || [];
-            ENUMS = r.enums || {};
-            try { clearTimeout(watchdog); hideLoading(); } catch (e) {}
-          },
-          mapRow: function (o) {
-            var isLocked = o.mo_status === 'Locked';
-            var isInProgress = o.mo_status === 'In Progress';
-            var actions = UIC.actionBtns([
-              { label: 'فتح', onclick: 'MFG_PAGE.openDetail(\'' + esc(o.unique_id) + '\')' },
-              (IS_SUPER_ADMIN || CAN_WRITE) && o.mo_status === 'Draft' ? { label: '▶️ بدء', onclick: 'MFG_PAGE.changeStatus(\'' + esc(o.unique_id) + '\',\'start\')' } : null,
-              (IS_SUPER_ADMIN || CAN_WRITE) && isInProgress && IS_SUPER_ADMIN ? { label: '🔒 قفل', color: '#b45309', onclick: 'MFG_PAGE.changeStatus(\'' + esc(o.unique_id) + '\',\'lock\')' } : null,
-              (IS_SUPER_ADMIN || CAN_WRITE) && isLocked && IS_SUPER_ADMIN ? { label: '🔓 فتق القفل', color: '#b45309', onclick: 'MFG_PAGE.changeStatus(\'' + esc(o.unique_id) + '\',\'unlock\')' } : null,
-              IS_SUPER_ADMIN ? { label: 'حذف', color: '#dc2626', onclick: 'MFG_PAGE.remove(\'' + esc(o.unique_id) + '\')' } : null
-            ].filter(Boolean));
-            var statusLabel = isLocked ? 'مقفل' : (isInProgress ? 'قيد التنفيذ' : 'مسودة');
-            return [
-              '<b>' + esc(o.transaction_code || o.id) + '</b>',
-              esc(prodLabel(o.produced_product)),
-              esc(o.operation_type),
-              esc(o.shift),
-              fmtDate(o.manufacture_date),
-              '<span class="num">' + fmt3(o.expected_qty) + '</span>',
-              '<span class="num">' + fmt3(o.manufactured_qty) + '</span>',
-              statusPill(statusLabel, isLocked ? 'success' : 'neutral'),
-              actions
-            ];
-          }
+    /* quiet: refresh in the background with no blocking overlay, for a
+       user who has already seen the change and must not be interrupted
+       to confirm it. */
+    function load(quiet) {
+      return VIEW === 'calendar' ? loadCalendar(quiet) : loadTable(quiet);
+    }
+
+    function loadTable(quiet) {
+      var container = document.getElementById('mo-table'); if (!container) return;
+      if (!quiet) showLoading('جاري تحميل أوامر التصنيع…');
+      loadHeaderSnapshot_(!!quiet).then(function () { renderHeaderTable_(); })
+        .catch(function (e) { container.innerHTML = '<div class="mfg-week-empty" style="color:#b91c1c;">تعذر تحميل أوامر التصنيع: ' + esc((e && e.message) || String(e)) + '</div>'; })
+        .finally(function () { if (!quiet) hideLoading(); });
+    }
+
+    function applyHeaderSnapshot_(snapshot) {
+      if (!snapshot || Number(snapshot.schema_version) !== 1 || !Array.isArray(snapshot.orders)) throw new Error('Manufacturing header JSON is invalid');
+      HEADER_SNAPSHOT = snapshot;
+      ORDERS = snapshot.orders.slice();
+      PRODUCT_OPTIONS = Array.isArray(snapshot.product_options) ? snapshot.product_options : [];
+      FILTER_PRODUCT_OPTIONS = PRODUCT_OPTIONS.slice();
+      CAL_SHIFT_OPTIONS = Array.isArray(snapshot.calendar_shift_options) ? snapshot.calendar_shift_options : [];
+      ENUMS = { operation_type: ((snapshot.filter_options || {}).operation_types || []).slice(), shift: CAL_SHIFT_OPTIONS.filter(function (s) { return !s || s.active !== false; }) };
+      buildFilterCombos(snapshot.filter_options || {});
+      return snapshot;
+    }
+    function loadHeaderSnapshot_(force) {
+      if (HEADER_SNAPSHOT && !force) return Promise.resolve(HEADER_SNAPSHOT);
+      if (HEADER_SNAPSHOT_PROMISE && !force) return HEADER_SNAPSHOT_PROMISE;
+      HEADER_SNAPSHOT_PROMISE = companyCall('get_valley_mfg_orders_headers_json', {}).then(function (r) {
+        var raw = r && r.data_json;
+        if (typeof raw !== 'string' || !raw) throw new Error('Manufacturing header JSON is missing');
+        var snapshot;
+        try { snapshot = JSON.parse(raw); } catch (e) { throw new Error('Manufacturing header JSON cannot be parsed'); }
+        return applyHeaderSnapshot_(snapshot);
+      }).finally(function () { HEADER_SNAPSHOT_PROMISE = null; });
+      return HEADER_SNAPSHOT_PROMISE;
+    }
+    function filteredHeaderOrders_(range) {
+      return (ORDERS || []).filter(function (o) {
+        var key = calendarOrderDate_(o.manufacture_date);
+        if (range && (!key || key < range.from || key > range.to)) return false;
+        if (!range && F.from && (!key || key < F.from)) return false;
+        if (!range && F.to && (!key || key > F.to)) return false;
+        if (F.shift && String(o.shift) !== String(F.shift)) return false;
+        if (F.operation_type && String(o.operation_type) !== String(F.operation_type)) return false;
+        if (F.produced_product && String(o.produced_product) !== String(F.produced_product)) return false;
+        if (F.product_category && String(o.product_category_id || o.product_category) !== String(F.product_category)) return false;
+        if (F.manufacture_batch && String(o.manufacture_batch) !== String(F.manufacture_batch)) return false;
+        return true;
+      });
+    }
+    function renderHeaderTable_() {
+      var container = document.getElementById('mo-table'); if (!container) return;
+      TABLE = null;
+      var rows = filteredHeaderOrders_(null).map(function (o) {
+        return [
+          '<b>' + esc(o.transaction_code || o.id) + '</b>', esc(prodLabel(o.produced_product)), esc(o.product_category || '-'),
+          esc(o.operation_type), esc(o.shift_name || o.shift), fmtDate(o.manufacture_date),
+          '<span class="num">' + fmt3(o.expected_qty) + '</span>', '<span class="num">' + fmt3(o.manufactured_qty) + '</span>',
+          statusCellOf(o.mo_status), actionsCellOf(o.unique_id, o.mo_status)
+        ];
+      });
+      container.innerHTML = UIC.dataTable('mo-header-json-table', {
+        headers: ['كود الأمر','المنتج المنتج','فئة المنتج','نوع العملية','الوردية','التاريخ',{ label:'المتوقع',numeric:true },{ label:'المصنع',numeric:true },'الحالة',''],
+        rows: rows, pageSize: 100, emptyText: 'لا توجد أوامر تصنيع مطابقة'
+      });
+      try { UIC.initTableSort('mo-header-json-table'); } catch (e) {}
+    }
+
+    /* ---------- MANUFACTURING CALENDAR ---------- */
+    function pad2_(n) { return n < 10 ? '0' + n : String(n); }
+    function dateKey_(d) { return d.getFullYear() + '-' + pad2_(d.getMonth() + 1) + '-' + pad2_(d.getDate()); }
+    function addDays_(d, n) { var x = new Date(d.getFullYear(), d.getMonth(), d.getDate()); x.setDate(x.getDate() + n); return x; }
+    function startOfWeek_(d) {
+      var x = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+      x.setDate(x.getDate() - ((x.getDay() - 6 + 7) % 7)); /* Saturday → Friday */
+      return x;
+    }
+    function calendarRange_() {
+      if (CAL_MODE === 'month') {
+        var first = new Date(CAL_ANCHOR.getFullYear(), CAL_ANCHOR.getMonth(), 1);
+        var start = startOfWeek_(first);
+        return { start: start, end: addDays_(start, 41), from: dateKey_(start), to: dateKey_(addDays_(start, 41)) };
+      }
+      var weekStart = startOfWeek_(CAL_ANCHOR);
+      return { start: weekStart, end: addDays_(weekStart, 6), from: dateKey_(weekStart), to: dateKey_(addDays_(weekStart, 6)) };
+    }
+    function calendarOrderDate_(value) {
+      if (!value) return '';
+      var raw = String(value).trim();
+      if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+      var d = value instanceof Date ? value : new Date(value);
+      return isNaN(d.getTime()) ? '' : dateKey_(d);
+    }
+    function calendarTitle_() {
+      var r = calendarRange_();
+      var monthFmt = new Intl.DateTimeFormat('ar-EG-u-nu-latn', { month: 'long', year: 'numeric' });
+      if (CAL_MODE === 'month') return monthFmt.format(new Date(CAL_ANCHOR.getFullYear(), CAL_ANCHOR.getMonth(), 1));
+      var shortFmt = new Intl.DateTimeFormat('ar-EG-u-nu-latn', { day: 'numeric', month: 'short' });
+      return shortFmt.format(r.start) + ' — ' + shortFmt.format(r.end) + ' ' + r.end.getFullYear();
+    }
+    function updateCalendarChrome_() {
+      var title = document.getElementById('mfg-calendar-title'); if (title) title.textContent = calendarTitle_();
+      var week = document.getElementById('mfg-mode-week'), month = document.getElementById('mfg-mode-month');
+      if (week) week.className = 'btn ' + (CAL_MODE === 'week' ? 'btn-primary' : 'btn-outline');
+      if (month) month.className = 'btn ' + (CAL_MODE === 'month' ? 'btn-primary' : 'btn-outline');
+    }
+    function setView(view) {
+      VIEW = view === 'list' ? 'list' : 'calendar';
+      var cal = document.getElementById('mo-calendar'), table = document.getElementById('mo-table'), actions = document.getElementById('mfg-calendar-actions');
+      if (cal) cal.style.display = VIEW === 'calendar' ? '' : 'none';
+      if (table) table.style.display = VIEW === 'list' ? '' : 'none';
+      if (actions) actions.style.display = VIEW === 'calendar' ? 'flex' : 'none';
+      document.querySelectorAll('.mfg-list-date-filter').forEach(function (el) { el.style.display = VIEW === 'list' ? '' : 'none'; });
+      var cb = document.getElementById('mfg-view-calendar'), lb = document.getElementById('mfg-view-list');
+      if (cb) cb.className = 'btn mfg-view-btn ' + (VIEW === 'calendar' ? 'btn-primary active' : 'btn-outline');
+      if (lb) lb.className = 'btn mfg-view-btn ' + (VIEW === 'list' ? 'btn-primary active' : 'btn-outline');
+      load();
+    }
+    function setCalendarMode(mode) { CAL_MODE = mode === 'month' ? 'month' : 'week'; updateCalendarChrome_(); loadCalendar(); }
+    function moveCalendar(delta) {
+      if (CAL_MODE === 'month') CAL_ANCHOR = new Date(CAL_ANCHOR.getFullYear(), CAL_ANCHOR.getMonth() + delta, 1);
+      else CAL_ANCHOR = addDays_(CAL_ANCHOR, delta * 7);
+      updateCalendarChrome_(); loadCalendar();
+    }
+    function goToday() { CAL_ANCHOR = new Date(); CAL_ANCHOR.setHours(0, 0, 0, 0); updateCalendarChrome_(); loadCalendar(); }
+    function loadCalendar(quiet) {
+      var container = document.getElementById('mo-calendar');
+      if (!container) return;
+      updateCalendarChrome_();
+      if (!quiet && !HEADER_SNAPSHOT) showLoading('جاري تحميل تقويم التصنيع…');
+      loadHeaderSnapshot_(!!quiet).then(function () {
+        var range = calendarRange_();
+        CAL_ORDERS = filteredHeaderOrders_(range);
+        renderCalendar_();
+      }).catch(function (e) {
+        container.innerHTML = '<div class="mfg-week-empty" style="color:#b91c1c;">تعذر تحميل تقويم التصنيع: ' + esc((e && e.message) || String(e)) + '</div>';
+      }).finally(function () { if (!quiet) hideLoading(); });
+    }
+    function timeMinutes_(value) {
+      var m = String(value || '').match(/^(\d{1,2}):(\d{2})/);
+      if (!m) return null;
+      var h = Number(m[1]), min = Number(m[2]);
+      return h >= 0 && h < 24 && min >= 0 && min < 60 ? h * 60 + min : null;
+    }
+    function shiftSpan_(order) {
+      var list = CAL_SHIFT_OPTIONS.length ? CAL_SHIFT_OPTIONS : ((ENUMS && ENUMS.shift) || []);
+      var raw = String(order.shift || '').trim(), name = String(order.shift_name || '').trim(), found = null;
+      list.some(function (s) {
+        if (!s || typeof s !== 'object') return false;
+        if (String(s.value || '').trim() === raw || String(s.label || '').trim() === raw || String(s.label || '').trim() === name) { found = s; return true; }
+        return false;
+      });
+      var start = found ? timeMinutes_(found.start) : null, end = found ? timeMinutes_(found.end) : null;
+      return { start: start, end: end, startText: found && found.start ? String(found.start).slice(0, 5) : '', endText: found && found.end ? String(found.end).slice(0, 5) : '', label: name || (found && found.label) || raw || 'وردية غير محددة' };
+    }
+    function statusClass_(status) { return status === 'Locked' ? 'locked' : (status === 'In Progress' ? 'progress' : 'draft'); }
+    function eventBaseHtml_(order, span, continuation) {
+      var time = span.startText && span.endText ? span.startText + '–' + span.endText + (span.end !== null && span.start !== null && span.end <= span.start ? ' (+1)' : '') : 'وقت غير محدد';
+      if (continuation) time = 'متابعة حتى ' + (span.endText || '');
+      return '<div class="mfg-event-time">' + esc(time) + ' · ' + esc(span.label) + '</div>' +
+        '<div class="mfg-event-title">' + esc(prodLabel(order.produced_product)) + '</div>' +
+        '<div class="mfg-event-meta">' + esc(order.transaction_code || order.id) + ' · متوقع ' + fmt3(order.expected_qty) + '</div>';
+    }
+    function assignLanes_(segments) {
+      segments.sort(function (a, b) { return a.start - b.start || a.end - b.end; });
+      var laneEnds = [];
+      segments.forEach(function (segment) {
+        var lane = 0;
+        while (lane < laneEnds.length && laneEnds[lane] > segment.start) lane++;
+        if (lane === laneEnds.length) laneEnds.push(segment.end); else laneEnds[lane] = segment.end;
+        segment.lane = lane;
+      });
+      segments.forEach(function (segment) { segment.laneCount = Math.max(1, laneEnds.length); });
+      return segments;
+    }
+    function weekSegmentsByDay_(range) {
+      var days = {}, unscheduled = {};
+      CAL_ORDERS.forEach(function (order) {
+        var key = calendarOrderDate_(order.manufacture_date), span = shiftSpan_(order);
+        if (!key) return;
+        if (span.start === null || span.end === null) { (unscheduled[key] = unscheduled[key] || []).push({ order: order, span: span }); return; }
+        var overnight = span.end <= span.start;
+        (days[key] = days[key] || []).push({ order: order, span: span, start: span.start, end: overnight ? 1440 : span.end, continuation: false });
+        if (overnight) {
+          var d = new Date(Number(key.slice(0,4)), Number(key.slice(5,7)) - 1, Number(key.slice(8,10)));
+          var nextKey = dateKey_(addDays_(d, 1));
+          if (nextKey >= range.from && nextKey <= range.to) (days[nextKey] = days[nextKey] || []).push({ order: order, span: span, start: 0, end: span.end, continuation: true });
+        }
+      });
+      Object.keys(days).forEach(function (key) { assignLanes_(days[key]); });
+      return { timed: days, unscheduled: unscheduled };
+    }
+    function legendHtml_(count) {
+      return '<div class="mfg-calendar-legend"><span><i class="mfg-legend-dot draft"></i>مسودة</span><span><i class="mfg-legend-dot progress"></i>قيد التنفيذ</span><span><i class="mfg-legend-dot locked"></i>مقفل</span><span>الأوامر المعروضة: <b>' + Number(count || 0).toLocaleString('en-US') + '</b></span><span>اضغط على الأمر لفتحه</span></div>';
+    }
+    function renderWeekCalendar_() {
+      var range = calendarRange_(), grouped = weekSegmentsByDay_(range), today = dateKey_(new Date());
+      var dayFmt = new Intl.DateTimeFormat('ar-EG-u-nu-latn', { weekday: 'short' });
+      var days = []; for (var i = 0; i < 7; i++) days.push(addDays_(range.start, i));
+      var head = '<div class="mfg-week-head"><div class="time-head">الوقت</div>' + days.map(function (d) {
+        var key = dateKey_(d); return '<div class="mfg-day-head ' + (key === today ? 'today' : '') + '">' + esc(dayFmt.format(d)) + '<strong>' + d.getDate().toLocaleString('en-US') + '</strong></div>';
+      }).join('') + '</div>';
+      var axis = '<div class="mfg-time-axis">';
+      for (var h = 0; h < 24; h++) axis += '<span class="mfg-hour-label" style="top:' + (h * 48) + 'px">' + pad2_(h) + ':00</span>';
+      axis += '</div>';
+      var now = new Date(), nowTop = (now.getHours() * 60 + now.getMinutes()) * .8;
+      var columns = days.map(function (d) {
+        var key = dateKey_(d), timed = grouped.timed[key] || [], unknown = grouped.unscheduled[key] || [];
+        var html = '<div class="mfg-day-column ' + (key === today ? 'today' : '') + '">';
+        if (key === today) html += '<div class="mfg-now-line" style="top:' + nowTop + 'px"></div>';
+        unknown.forEach(function (x) { html += '<div class="mfg-unscheduled" data-uid="' + esc(x.order.unique_id) + '" onclick="MFG_PAGE.openDetail(this.getAttribute(\'data-uid\'))"><b>' + esc(x.span.label) + '</b><br>' + esc(prodLabel(x.order.produced_product)) + '</div>'; });
+        timed.forEach(function (segment) {
+          var width = 100 / segment.laneCount, left = segment.lane * width;
+          var top = segment.start * .8, height = Math.max(28, (segment.end - segment.start) * .8 - 3);
+          html += '<div class="mfg-event ' + statusClass_(segment.order.mo_status) + '" data-uid="' + esc(segment.order.unique_id) + '" onclick="MFG_PAGE.openDetail(this.getAttribute(\'data-uid\'))" style="top:' + top + 'px;height:' + height + 'px;left:calc(' + left + '% + 3px);width:calc(' + width + '% - 6px)">' + eventBaseHtml_(segment.order, segment.span, segment.continuation) + '</div>';
         });
-      } else { try { clearTimeout(watchdog); hideLoading(); } catch (e) {} }
+        return html + '</div>';
+      }).join('');
+      return legendHtml_(CAL_ORDERS.length) + '<div class="mfg-week-scroll">' + head + '<div class="mfg-week-body">' + axis + columns + '</div></div>';
+    }
+    function renderMonthCalendar_() {
+      var range = calendarRange_(), today = dateKey_(new Date()), activeMonth = CAL_ANCHOR.getMonth(), byDay = {};
+      CAL_ORDERS.forEach(function (order) { var key = calendarOrderDate_(order.manufacture_date); if (key) (byDay[key] = byDay[key] || []).push(order); });
+      Object.keys(byDay).forEach(function (key) { byDay[key].sort(function (a, b) { var sa = shiftSpan_(a), sb = shiftSpan_(b); return (sa.start == null ? 2000 : sa.start) - (sb.start == null ? 2000 : sb.start); }); });
+      var dayFmt = new Intl.DateTimeFormat('ar-EG-u-nu-latn', { weekday: 'short' }), headers = [];
+      for (var h = 0; h < 7; h++) headers.push('<div class="mfg-month-weekday">' + esc(dayFmt.format(addDays_(range.start, h))) + '</div>');
+      var cells = [];
+      for (var i = 0; i < 42; i++) {
+        var d = addDays_(range.start, i), key = dateKey_(d), orders = byDay[key] || [];
+        var chips = orders.slice(0, 4).map(function (order) {
+          var span = shiftSpan_(order), time = span.startText ? span.startText + ' · ' : '';
+          return '<div class="mfg-month-event ' + statusClass_(order.mo_status) + '" data-uid="' + esc(order.unique_id) + '" onclick="MFG_PAGE.openDetail(this.getAttribute(\'data-uid\'))"><b>' + esc(time + prodLabel(order.produced_product)) + '</b><span>' + esc(span.label) + ' · ' + esc(order.transaction_code || order.id) + '</span></div>';
+        }).join('');
+        if (orders.length > 4) chips += '<div class="mfg-more">+' + (orders.length - 4).toLocaleString('en-US') + ' أوامر أخرى</div>';
+        cells.push('<div class="mfg-month-day ' + (d.getMonth() !== activeMonth ? 'outside ' : '') + (key === today ? 'today' : '') + '"><div class="mfg-month-date">' + d.getDate().toLocaleString('en-US') + '</div>' + chips + '</div>');
+      }
+      return legendHtml_(CAL_ORDERS.length) + '<div class="mfg-month-scroll"><div class="mfg-month-grid">' + headers.join('') + cells.join('') + '</div></div>';
+    }
+    function renderCalendar_() {
+      var container = document.getElementById('mo-calendar'); if (!container) return;
+      updateCalendarChrome_();
+      container.innerHTML = '<div class="mfg-calendar-shell">' + (CAL_MODE === 'month' ? renderMonthCalendar_() : renderWeekCalendar_()) + '</div>';
+      if (CAL_MODE === 'week') requestAnimationFrame(function () { var scroll = container.querySelector('.mfg-week-scroll'); if (scroll) scroll.scrollTop = 6 * 48; });
+    }
+
+    /* ---------- LIST FILTERS (blank = all data) ---------- */
+    function labeledOpts_(pairs) {
+      return [{ value: '', label: 'الكل' }].concat((pairs || []).map(function(o){
+        return Array.isArray(o) ? { value: o[0], label: o[1] } : o;
+      }));
+    }
+    function filterCombo_(wrapId, key, opts, current) {
+      var wrap = document.getElementById(wrapId);
+      if (!wrap) return;
+      if (window.UIC && UIC.combo) {
+        wrap.innerHTML = UIC.combo({ key: key, options: opts, value: current || '' });
+      } else {
+        wrap.innerHTML = '<select id="' + key + '" class="input">' + opts.map(function(o){
+          return '<option value="' + esc(String(o.value)) + '"' + (String(o.value) === String(current || '') ? ' selected' : '') + '>' + esc(o.label) + '</option>';
+        }).join('') + '</select>';
+      }
+    }
+    /* (Re)builds the four searchable dropdowns, preserving the active
+       selection. Skipped when the option set is unchanged so background
+       refreshes never clobber what the user picked. */
+    function buildFilterCombos(serverOpts) {
+      serverOpts = serverOpts || {};
+      var shifts = (serverOpts.shift && serverOpts.shift.length ? serverOpts.shift : ((ENUMS && ENUMS.shift) || [])).slice();
+      var operationTypes = serverOpts.operation_types || [];
+      var cats = serverOpts.categories || [];
+      var batches = serverOpts.batches || [];
+      var sig = JSON.stringify([shifts, operationTypes, cats, batches, FILTER_PRODUCT_OPTIONS]);
+      if (sig === FILTERS_SIG) return;
+      FILTERS_SIG = sig;
+      FILTER_OPTIONS = { shift: shifts, operation_types: operationTypes, categories: cats, batches: batches };
+      var pairs = function(vs){ return (vs || []).map(function(v){ return (v && typeof v === 'object') ? v : [v, v]; }); };
+      filterCombo_('ff-shift-wrap', 'ff-shift', labeledOpts_(pairs(shifts)), F.shift);
+      filterCombo_('ff-operation-wrap', 'ff-operation', labeledOpts_(pairs(operationTypes)), F.operation_type);
+      filterCombo_('ff-product-wrap', 'ff-product', labeledOpts_(FILTER_PRODUCT_OPTIONS), F.produced_product);
+      filterCombo_('ff-category-wrap', 'ff-category', labeledOpts_(cats), F.product_category);
+      filterCombo_('ff-batch-wrap', 'ff-batch', labeledOpts_(pairs(batches)), F.manufacture_batch);
+    }
+    function readFilterInputs() {
+      var g = function(id){ var el = document.getElementById(id); return el ? String(el.value || '').trim() : ''; };
+      F.from = g('ff-from'); F.to = g('ff-to');
+      F.shift = g('ff-shift'); F.operation_type = g('ff-operation'); F.produced_product = g('ff-product');
+      F.product_category = g('ff-category'); F.manufacture_batch = g('ff-batch');
+    }
+    function applyFilters() {
+      readFilterInputs();
+      if (F.from && F.to && F.from > F.to) { UIC.toast('«من تاريخ» بعد «إلى تاريخ» — صحّح النطاق.', 'error'); return; }
+      load();
+    }
+    function clearFilters() {
+      F = { from: '', to: '', shift: '', operation_type: '', produced_product: '', product_category: '', manufacture_batch: '' };
+      ['ff-from', 'ff-to'].forEach(function(id){ var el = document.getElementById(id); if (el) el.value = ''; });
+      FILTERS_SIG = '';
+      buildFilterCombos({ shift: FILTER_OPTIONS.shift, operation_types: FILTER_OPTIONS.operation_types, categories: FILTER_OPTIONS.categories, batches: FILTER_OPTIONS.batches });
+      load();
     }
 
     function statusPill(s, c) { return UIC.statusPill(s, c); }
+
+    /* The two cells a row action can change, built from mo_status alone.
+       mapRow above renders them, and changeStatus below re-renders exactly
+       these two on the row that changed — so the two can never drift into
+       showing different things for the same status. */
+    var COL_STATUS = 8, COL_ACTIONS = 9;
+    function statusCellOf(st) {
+      var isLocked = st === 'Locked';
+      var label = isLocked ? 'مقفل' : (st === 'In Progress' ? 'قيد التنفيذ' : 'مسودة');
+      return statusPill(label, isLocked ? 'success' : 'neutral');
+    }
+    function actionsCellOf(uid, st) {
+      var isLocked = st === 'Locked';
+      var isInProgress = st === 'In Progress';
+      var canAct = IS_SUPER_ADMIN || CAN_WRITE;
+      return UIC.actionBtns([
+        { label: 'فتح', onclick: 'MFG_PAGE.openDetail(\'' + esc(uid) + '\')' },
+        canAct && st === 'Draft' ? { label: 'بدء', onclick: 'MFG_PAGE.changeStatus(\'' + esc(uid) + '\',\'start\')' } : null,
+        canAct && isInProgress ? { label: ' إنهاء', color: '#b45309', onclick: 'MFG_PAGE.changeStatus(\'' + esc(uid) + '\',\'lock\')' } : null,
+        canAct && isLocked && IS_SUPER_ADMIN ? { label: ' فتح القفل', color: '#b45309', onclick: 'MFG_PAGE.changeStatus(\'' + esc(uid) + '\',\'unlock\')' } : null,
+        IS_SUPER_ADMIN ? { label: 'حذف', color: '#dc2626', onclick: 'MFG_PAGE.remove(\'' + esc(uid) + '\')' } : null
+      ].filter(Boolean));
+    }
 
     function prodLabel(idRef) {
       var f = PRODUCT_OPTIONS.filter(function (o) { return String(o.value) === String(idRef); })[0];
@@ -154,7 +496,7 @@
 
     /* ---------- ENTRY MODAL ---------- */
     function openEdit(uid) {
-      UI.showSpinner();
+      UIC.readSkeleton();
       Promise.all([
         companyCall('get_valley_mfg_orders'),
         companyCall('get_valley_mfg_order_full', { mo_uid: uid })
@@ -162,6 +504,8 @@
         .then(function (res) {
           ORDERS = res[0].orders || [];
           var order = res[1].order;
+          MFG_EDIT_TOKEN = res[1].edit_token || '';
+          MFG_SAVE_SCOPE = res[1].save_scope || ['header', 'outputs', 'consumption'];
           openModal(order, res[1].consumption, res[1].outputs);
         })
         .catch(function (e) { UIC.toast((e && e.message) || 'خطأ في تحميل الأمر', 'error'); })
@@ -190,15 +534,15 @@
         '</form>' +
         /* Tab bar (Odoo-style child tables) */
         '<div style="display:flex;gap:4px;border-bottom:2px solid #16a34a;margin-bottom:0;flex-wrap:wrap;">' +
-          MFG_PAGE.tabBtn('tab-outputs', '📦 المنتجات والمواد', true) +
-          MFG_PAGE.tabBtn('tab-main-extra', '📋 إضافي') +
-          MFG_PAGE.tabBtn('tab-cons', '🧪 استهلاك الخامات') +
+          MFG_PAGE.tabBtn('tab-outputs', '🧺 المنتجات والمواد', true) +
+          MFG_PAGE.tabBtn('tab-main-extra', '➕ إضافي') +
+          MFG_PAGE.tabBtn('tab-cons', '🧾 استهلاك الخامات') +
           MFG_PAGE.tabBtn('tab-workops', '⚙️ ورديات التشغيل') +
           MFG_PAGE.tabBtn('tab-byproducts', '♻️ منتجات ثانوية') +
         '</div>' +
         '<div id="tab-outputs" class="mfg-tab-pane">' +
           '<div style="display:flex;justify-content:space-between;align-items:center;margin:10px 0 8px;">' +
-            '<b style="color:#166534;font-size:13px;">📦 منتجات الناتج + المواد المستهلكة لكل منتج</b>' +
+            '<b style="color:#166534;font-size:13px;"> منتجات الناتج + المواد المستهلكة لكل منتج</b>' +
             (CAN_WRITE ? '<button type="button" class="btn btn-outline" onclick="MFG_PAGE.addOutput()">+ منتج ناتج</button>' : '') +
           '</div>' +
           '<div id="outputs-body"></div>' +
@@ -210,7 +554,7 @@
             checkboxField('f-tax-system-mo', 'خاضع للنظام الضريبي', isEdit ? String(order.tax_system || '').toLowerCase() === 'true' : false) +
           '</div>' +
           (isEdit ?
-            '<div style="margin-top:14px;padding-top:10px;border-top:1px dashed #e5e7eb;font-size:12.5px;color:#6b7280;">' +
+            '<div style="margin-top:14px;padding-top:10px;border-top:1px dashed var(--border-color, #e5e7eb);font-size:12.5px;color:var(--text-muted, #6b7280);">' +
               'اعتماد الإنتاج: <b>' + esc(order.production_approval || '—') + '</b> · اعتماد الجودة: <b>' + esc(order.quality_approval || '—') + '</b>' +
             '</div>' : '') +
         '</div>' +
@@ -234,7 +578,7 @@
       if (modal) { var box = modal.querySelector('.modal'); if (box) box.style.maxWidth = '1200px'; }
 
       var foot = document.createElement('div');
-      foot.style.cssText = 'display:flex;justify-content:flex-end;gap:10px;padding:14px 20px;border-top:1px solid #e5e7eb;';
+      foot.style.cssText = 'display:flex;justify-content:flex-end;gap:10px;padding:14px 20px;border-top:1px solid var(--border-color, #e5e7eb);';
       foot.innerHTML =
         '<button class="btn btn-outline" onclick="UIC.closeModal(\'mfg-modal\')">إلغاء</button>' +
         '<button class="btn btn-primary" onclick="UI.submitOnce(this, MFG_PAGE.save)">💾 حفظ</button>';
@@ -242,6 +586,8 @@
 
       MFG_OUTPUTS = [];
       OUTPUT_FOOTERS = {};
+      MFG_DELETED_UIDS = { outputs: [], consumption: [] };
+      if (!isEdit) { MFG_EDIT_TOKEN = ''; MFG_SAVE_SCOPE = ['header', 'outputs', 'consumption']; }
       CONSUMPTION_DRAFT = existingConsumption ? existingConsumption.slice() : [];
 
       /* load existing outputs with footers */
@@ -271,7 +617,7 @@
       });
     }
 
-    function selList_(list) { return (list || []).map(function (v) { return { value: v, label: v }; }); }
+    function selList_(list) { return (list || []).map(function (v) { return (v && typeof v === 'object') ? v : { value: v, label: v }; }); }
     function getV_(id) { var el = document.getElementById(id); return el ? el.value.trim() : ''; }
     function checkboxField(key, label, checked) {
       return '<label style="display:flex;align-items:center;gap:8px;margin-top:22px;font-size:14px;">' +
@@ -281,6 +627,19 @@
     /* ---------- OUTPUTS with footer child table ---------- */
     var MFG_OUTPUTS = [];
     var OUTPUT_FOOTERS = {};
+    var MFG_DELETED_UIDS = { outputs: [], consumption: [] };
+    /* Schema-free edit token for the loaded MO (list scope). Returned as
+       base_token/save_scope so the server can reject stale editors without a
+       version column. Reset for new orders. */
+    var MFG_EDIT_TOKEN = '';
+    var MFG_SAVE_SCOPE = ['header', 'outputs', 'consumption'];
+
+    function rememberDeleted_(section, uid) {
+      uid = String(uid || '').trim();
+      if (!uid) return;
+      var list = MFG_DELETED_UIDS[section] || (MFG_DELETED_UIDS[section] = []);
+      if (list.indexOf(uid) === -1) list.push(uid);
+    }
 
     function addOutput(pre) {
       pre = pre || {};
@@ -293,10 +652,17 @@
     }
 
     function removeOutput(i) {
+      rememberDeleted_('outputs', (MFG_OUTPUTS[i] || {}).uid);
+      (OUTPUT_FOOTERS[i] || []).forEach(function (f) { rememberDeleted_('consumption', f.unique_id || f.uid); });
       MFG_OUTPUTS.splice(i, 1);
-      delete OUTPUT_FOOTERS[i];
+      /* Reindex footer rows with the outputs: keys above the removed row shift
+         down by one, so saved UIDs stay attached to their own output. */
       var newF = {};
-      MFG_OUTPUTS.forEach(function (_, ni) { if (OUTPUT_FOOTERS[i + ni] !== undefined) newF[ni] = OUTPUT_FOOTERS[i + ni]; });
+      Object.keys(OUTPUT_FOOTERS).forEach(function (k) {
+        var ki = Number(k);
+        if (ki === i) return;
+        newF[ki > i ? ki - 1 : ki] = OUTPUT_FOOTERS[k];
+      });
       OUTPUT_FOOTERS = newF;
       drawOutputs();
     }
@@ -311,26 +677,27 @@
         var footerHtml = footerRows.map(function (f, fi) {
           return '<tr><td>' + UIC.combo({ key: 'ft-item-' + i + '-' + fi, options: PRODUCT_OPTIONS, value: f.item, placeholder: 'ابحث…' }) + '</td>' +
             '<td><input id="ft-qty-' + i + '-' + fi + '" class="input" type="number" min="0" step="0.01" value="' + (f.qty || '') + '" style="max-width:100px;"></td>' +
-            '<td><button type="button" class="btn btn-outline" style="padding:2px 6px;color:#dc2626;font-size:10px;" onclick="MFG_PAGE.removeFooterRow(' + i + ',' + fi + ')">✕</button></td></tr>';
+            '<td><button type="button" class="btn btn-outline" style="padding:2px 6px;color:var(--danger, #dc2626);font-size:10px;" onclick="MFG_PAGE.removeFooterRow(' + i + ',' + fi + ')">✕</button></td></tr>';
         }).join('');
-        html += '<div style="border:1px solid #e5e7eb;border-radius:8px;margin-bottom:8px;overflow:hidden;">' +
-          '<div style="display:grid;grid-template-columns:1fr 120px 40px;gap:8px;padding:10px;background:#f0fdf4;align-items:center;">' +
+        html += '<div style="border:1px solid var(--border-color, #e5e7eb);border-radius:8px;margin-bottom:8px;overflow:hidden;">' +
+          '<div style="display:grid;grid-template-columns:1fr 120px 40px;gap:8px;padding:10px;background:var(--success-bg, #f0fdf4);align-items:center;">' +
             '<div>' + UIC.combo({ key: 'out-prod-' + i, options: PRODUCT_OPTIONS, value: o.product_id, placeholder: 'ابحث عن منتج…' }) + '</div>' +
             '<div><input id="out-qty-' + i + '" class="input" type="number" min="0.01" step="0.01" value="' + (o.qty || '') + '" placeholder="الكمية" oninput="MFG_PAGE.recalc()"></div>' +
-            '<div><button type="button" class="btn btn-outline" style="padding:3px 8px;color:#dc2626;" onclick="MFG_PAGE.removeOutput(' + i + ')">✕</button></div>' +
+            '<div><button type="button" class="btn btn-outline" style="padding:3px 8px;color:var(--danger, #dc2626);" onclick="MFG_PAGE.removeOutput(' + i + ')">✕</button></div>' +
           '</div>' +
-          '<div style="padding:8px 10px;border-top:1px dashed #e5e7eb;background:#fafafa;">' +
+          '<div style="padding:8px 10px;border-top:1px dashed var(--border-color, #e5e7eb);background:var(--bg-subtle, #fafafa);">' +
             '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">' +
-              '<span style="font-size:11px;color:#6b7280;">🧪 المواد المستهلكة لهذا المنتج</span>' +
+              '<span style="font-size:11px;color:var(--text-muted, #6b7280);"> المواد المستهلكة لهذا المنتج</span>' +
               (CAN_WRITE ? '<button type="button" class="btn btn-outline" style="padding:1px 6px;font-size:10px;" onclick="MFG_PAGE.addFooterRow(' + i + ')">+ صنف</button>' : '') +
             '</div>' +
             (footerRows.length ?
-              '<table class="table" style="margin:0;font-size:12px;"><thead><tr><th>الصنف</th><th style="width:100px;">الكمية</th><th style="width:30px;"></th></tr></thead><tbody>' + footerHtml + '</tbody></table>' :
+              '<div class="table-wrap"><table class="table" style="margin:0;font-size:12px;"><thead><tr><th>الصنف</th><th style="width:100px;">الكمية</th><th style="width:30px;"></th></tr></thead><tbody>' + footerHtml + '</tbody></table></div>' :
               '<div style="text-align:center;color:#94a3b8;font-size:11px;padding:4px;">لا توجد أصناف مسجلة</div>') +
           '</div>' +
         '</div>';
       });
       tb.innerHTML = html;
+      UIC.autoColumnsAll('outputs-body');
     }
 
     function addFooterRow(outputIdx) {
@@ -340,7 +707,11 @@
     }
 
     function removeFooterRow(outputIdx, footerIdx) {
-      if (OUTPUT_FOOTERS[outputIdx]) OUTPUT_FOOTERS[outputIdx].splice(footerIdx, 1);
+      if (OUTPUT_FOOTERS[outputIdx]) {
+        var f = OUTPUT_FOOTERS[outputIdx][footerIdx] || {};
+        rememberDeleted_('consumption', f.unique_id || f.uid);
+        OUTPUT_FOOTERS[outputIdx].splice(footerIdx, 1);
+      }
       drawOutputs();
     }
 
@@ -391,8 +762,8 @@
       }
       var html = '';
       CONSUMPTION_DRAFT.forEach(function (c, i) {
-        html += '<div style="border-bottom:1px dashed #e5e7eb;padding:8px 0;">' +
-          '<div style="font-weight:700;font-size:13px;margin-bottom:6px;">🧪 ' + esc(c.raw_name || c.item_pid) +
+        html += '<div style="border-bottom:1px dashed var(--border-color, #e5e7eb);padding:8px 0;">' +
+          '<div style="font-weight:700;font-size:13px;margin-bottom:6px;"> ' + esc(c.raw_name || c.item_pid) +
           ' — المطلوب: <span style="direction:ltr;display:inline-block;">' + Number(c.required).toLocaleString('en-US', { maximumFractionDigits: 2 }) + '</span>' +
           ' <span id="cons-sum-' + i + '" style="font-weight:800;"></span></div>' +
           '<div id="cons-batches-' + i + '">جاري تحميل الدفعات...</div>' +
@@ -402,20 +773,21 @@
     }
 
     function loadBatchesForCons(i, consItem) {
-      companyCall('get_valley_product_batches', { product_id: consItem.item_pid, exclude_invoice_unique_id: '' })
+      companyCall('get_valley_product_batches', { product_id: consItem.item_pid, mo_uid: EDIT_MO_UID() })
         .then(function (r) {
           var holder = document.getElementById('cons-batches-' + i);
           if (!holder) return;
           var batches = (r.batches || []).filter(function (b) { return b.available > 0; });
           if (!batches.length) { holder.innerHTML = '<span style="color:#d97706;">لا توجد دفعات متاحة لهذه الخامة.</span>'; return; }
-          var html = '<table class="table" style="margin:0;"><thead><tr><th>الدفعة</th><th>المتاح</th><th style="width:140px;">الكمية المستهلكة</th></tr></thead><tbody>';
+          var html = '<div class="table-wrap"><table class="table" style="margin:0;"><thead><tr><th>الدفعة</th><th>المتاح</th><th style="width:140px;">الكمية المستهلكة</th></tr></thead><tbody>';
           batches.forEach(function (b, bi) {
             html += '<tr><td><b>' + esc(b.lot) + '</b></td>' +
               '<td class="num">' + Number(b.available).toLocaleString('en-US', { maximumFractionDigits: 2 }) + '</td>' +
               '<td><input id="cons-q-' + i + '-' + bi + '" class="input" type="number" min="0" max="' + b.available + '" step="0.01" data-buid="' + esc(b.batch_uid) + '" data-pid="' + esc(consItem.item_pid) + '" data-lot="' + esc(b.lot) + '" value="" oninput="MFG_PAGE.recalcCons()" style="max-width:130px;direction:ltr;"></td></tr>';
           });
-          html += '</tbody></table>';
+          html += '</tbody></table></div>';
           holder.innerHTML = html;
+          UIC.autoColumns(holder);
         })
         .catch(function () { holder.innerHTML = '<span style="color:red;">خطأ في تحميل الدفعات</span>'; });
     }
@@ -462,14 +834,69 @@
         var footers = (OUTPUT_FOOTERS[i] || []).map(function (f, fi) {
           var fItem = document.getElementById('ft-item-' + i + '-' + fi);
           var fQty = document.getElementById('ft-qty-' + i + '-' + fi);
-          return { item: fItem ? fItem.value : '', qty: fQty ? fQty.value : '' };
+          /* Preserve the loaded footer UID through redraws, FIFO changes,
+             validation failures and modal state: without it the server would
+             delete and replace an unchanged row. */
+          return { uid: f.unique_id || f.uid || '', item: fItem ? fItem.value : (f.item || ''), qty: fQty ? fQty.value : (f.qty || '') };
         }).filter(function (f) { return f.item; });
-        return { product_id: el ? el.value : '', qty: qEl ? qEl.value : '', footers: footers };
+        /* Preserve the loaded output UID (same reason as footers above). */
+        return { uid: o.uid || '', product_id: el ? el.value : (o.product_id || ''), qty: qEl ? qEl.value : (o.qty || ''), footers: footers };
       }).filter(function (o) { return o.product_id && num0(o.qty) > 0; });
       if (!outputs.length) { UIC.toast('أضف منتج ناتج واحد على الأقل', 'error'); return; }
 
+      var consPayload = collectConsumption();
+
+      /* Pre-flight: mirror the server guard (need = outputs footers +
+         consumption per batch) so a refusal names its source BEFORE the round
+         trip. Availability comes from the consumption inputs' max attributes —
+         the same figure the server checks. */
+      try {
+        (function preflightBatches_(outs) {
+          var need = {}, needOut = {}, needCons = {}, avail = {}, where = {};
+          var acc = function (b, q, isOut, place) {
+            b = String(b || '').trim(); q = Number(q) || 0;
+            if (!b || q <= 0) return;
+            need[b] = Math.round(((need[b] || 0) + q) * 1000) / 1000;
+            var src = isOut ? needOut : needCons;
+            src[b] = Math.round(((src[b] || 0) + q) * 1000) / 1000;
+            if (!where[b]) where[b] = place;
+          };
+          outs.forEach(function (o, oi) {
+            (o.footers || []).forEach(function (f) { acc(f.item, f.qty, true, 'بند المخرجات ' + (oi + 1)); });
+          });
+          consPayload.forEach(function (x) { acc(x.batch_uid, x.qty, false, 'بنود الاستهلاك'); });
+          for (var i = 0; i < 500; i++) {
+            var rowSeen = !!document.getElementById('cons-sum-' + i);
+            var anyIn = false;
+            for (var j = 0; ; j++) {
+              var el = document.getElementById('cons-q-' + i + '-' + j);
+              if (!el) break;
+              anyIn = true;
+              var bu = el.getAttribute('data-buid');
+              var mx = parseFloat(el.getAttribute('max'));
+              if (bu && !isNaN(mx) && avail[bu] === undefined) avail[bu] = mx;
+            }
+            if (!anyIn && !rowSeen) break;
+          }
+          var bad = Object.keys(need).filter(function (b) {
+            return avail[b] !== undefined && need[b] - avail[b] > 0.001;
+          });
+          if (!bad.length) return;
+          var b0 = bad[0];
+          UI.toast && UI.toast('الدفعة (' + b0 + ') تتجاوز المتاح قبل الحفظ. المطلوب: ' + need[b0] +
+            ' (مخرجات: ' + (needOut[b0] || 0) + ' + استهلاك: ' + (needCons[b0] || 0) + ')، المتاح: ' + avail[b0] +
+            (where[b0] ? ' — راجع ' + where[b0] : ''), 'error');
+          throw { preflight: true };
+        })(outputs);
+      } catch (ePre) {
+        if (ePre && ePre.preflight) return;
+        throw ePre;
+      }
+
       var payload = {
         mo_uid: EDIT_MO_UID(),
+        base_token: MFG_EDIT_TOKEN,
+        save_scope: MFG_SAVE_SCOPE,
         manufacture_date: getV_('f-date'),
         operation_type: getCombo_('f-op-type'),
         shift: getCombo_('f-shift'),
@@ -478,18 +905,53 @@
         manufactured_qty: getV_('f-manufactured'),
         actual_qty: getV_('f-actual'),
         recipe_id: getCombo_('f-recipe'),
-        mo_status: getHid_('f-status'),
-        outputs: outputs,
-        consumption: collectConsumption()
-      };
-      UI.showSpinner();
+          mo_status: getHid_('f-status'),
+          outputs: outputs,
+          consumption: consPayload,
+          deleted_uids: {
+            outputs: MFG_DELETED_UIDS.outputs.slice(),
+            consumption: MFG_DELETED_UIDS.consumption.slice()
+          }
+        };
+        try { console.log('[MFG][save] outgoing payload:', JSON.stringify({ outputs: outputs, consumption: consPayload })); } catch (eLog) {}
+        /* Stage F candidate: immutable submission + pending state; the modal
+           stays visible with its controls held until the reply arrives. */
+        var fs = mfgListFormState_();
+        var submission = null;
+        if (fs) {
+          Object.keys(payload).forEach(function (k) {
+            if (payload[k] !== undefined && typeof payload[k] !== 'object') fs.setHeader(k, payload[k]);
+          });
+          try {
+            submission = fs.beginSubmit('', { payload: payload, token: MFG_EDIT_TOKEN });
+          } catch (eSub) {
+            UIC.toast((eSub && eSub.message) || 'هناك طلب حفظ قيد التنفيذ', 'error');
+            return;
+          }
+          fs.setControlsEnabled('mfg-modal', false);
+        }
+        UI.showSpinner();
       companyCall('save_valley_mfg_order', payload)
         .then(function (r) {
+          if (fs && submission) {
+            fs.settle(submission, { saved: {}, token: MFG_EDIT_TOKEN });
+            fs.setControlsEnabled('mfg-modal', true);
+            MFG_LIST_FORM_ = null;
+          }
           UIC.closeModal('mfg-modal');
           UIC.toast((r && r.message) || 'تم الحفظ بنجاح', 'success');
-          load();
+          load(true);
         })
-        .catch(function (e) { UIC.toast((e && e.message) || 'فشل الحفظ', 'error'); })
+        .catch(function (e) {
+          if (fs && submission) {
+            fs.setControlsEnabled('mfg-modal', true);
+            if (e && e.uncertain) fs.markUncertain(e); else fs.markRejected(e);
+          }
+          /* Stale-editor conflict is a proven non-mutation: reload the list so
+             the user reopens the order on fresh state instead of retrying. */
+          if (e && e.code === 'VERSION_CONFLICT') { UIC.toast((e.message || 'تعارض') + ' — أعيد تحميل القائمة', 'error'); load(true); return; }
+          UIC.toast((e && e.message) || 'فشل الحفظ', 'error');
+        })
         .finally(function () { UI.hideSpinner(); });
     }
 
@@ -497,12 +959,15 @@
     function getCombo_(id) { var el = document.getElementById(id); return el ? el.value : ''; }
     function getHid_(id) { var el = document.getElementById(id); return el ? el.value.trim() : ''; }
 
+    /* [iPhone run 2] Both open an app page, so both go through UIC.openTab:
+       the same window.open(url, '_blank'), and this frame navigates there
+       only when the tab is refused. Android and Windows still get a tab. */
     function openDetail(moUid) {
-      window.open(scriptUrl + '?action=vf_mfg_order&mo=' + encodeURIComponent(moUid) + '&sessionToken=' + SESSION_TOKEN, '_blank');
+      UIC.openTab(scriptUrl + '?action=vf_mfg_order&mo=' + encodeURIComponent(moUid) + '&sessionToken=' + SESSION_TOKEN);
     }
 
     function openNewPage() {
-      window.open(scriptUrl + '?action=vf_mfg_order&new=1&sessionToken=' + SESSION_TOKEN, '_blank');
+      UIC.openTab(scriptUrl + '?action=vf_mfg_order&new=1&sessionToken=' + SESSION_TOKEN);
     }
 
     function changeStatus(moUid, kind) {
@@ -510,7 +975,24 @@
       if (kind === 'unlock' && !confirm('فتح القفل سيعيد الأمر إلى «قيد التنفيذ». متابعة؟')) return;
       UI.showSpinner();
       companyCall('change_valley_mfg_status', { mo_uid: moUid, kind: kind })
-        .then(function (r) { UIC.toast((r && r.message) || 'تم', 'success'); load(); })
+        .then(function (r) {
+          UIC.toast((r && r.message) || 'تم', 'success');
+          /* The status change touches ONE cell, and the server already told us
+             the new value — nothing here needs refetching. Patched from the
+             REPLY, never optimistically: `lock` runs a real server-side check
+             (every item's batch total must equal its quantity) and can refuse,
+             so painting the new status before the answer would show a state
+             that is often wrong and have to be taken back.
+             load(true) is the fallback for a row the table cannot address. */
+          var st = (r && r.mo_status) || '';
+          var patched = st && TABLE && TABLE.patchRow(moUid, (function () {
+            var cells = [];
+            cells[COL_STATUS] = statusCellOf(st);
+            cells[COL_ACTIONS] = actionsCellOf(moUid, st);
+            return cells;
+          })());
+          if (!patched) load(true);
+        })
         .catch(function (e) { UIC.toast((e && e.message) || 'فشل', 'error'); })
         .finally(function () { UI.hideSpinner(); });
     }
@@ -519,7 +1001,11 @@
       if (!confirm('سيتم حذف أمر التصنيع وبنوده واستهلاكاته نهائياً. متابعة؟')) return;
       UI.showSpinner();
       companyCall('delete_valley_mfg_order', { mo_uid: moUid })
-        .then(function (r) { UIC.toast((r && r.message) || 'تم الحذف', 'success'); load(); })
+        .then(function (r) {
+          UIC.toast((r && r.message) || 'تم الحذف', 'success');
+          /* Drop the row locally; the rest of the table is unaffected by it. */
+          if (!(TABLE && TABLE.removeRow(moUid))) load(true);
+        })
         .catch(function (e) { UIC.toast((e && e.message) || 'فشل الحذف', 'error'); })
         .finally(function () { UI.hideSpinner(); });
     }
@@ -532,21 +1018,22 @@
       if (!holder) return;
       companyCall('get_valley_mfg_byproducts', { mo_uid: moUid })
         .then(function (r) {
+          CAN_SEE_COST = (r && r.can_see_cost !== false);
           window.__BP_OPTIONS = (r.product_options || []).map(function (o) { return { value: String(o.value), label: o.label }; });
           var rowsHtml = (r.byproducts || []).map(function (b) {
             var nm = '';
             window.__BP_OPTIONS.forEach(function (o) { if (String(o.value) === String(b.item)) nm = o.label; });
-            return '<tr><td>' + esc(nm || b.item) + '</td><td class="num">' + Number(b.qty || 0).toLocaleString('en-US') + '</td><td>' + esc(b.transaction_code || '-') + '</td><td class="num">' + Number(b.total_cost || 0).toLocaleString('en-US') + '</td></tr>';
+            return '<tr><td>' + esc(nm || b.item) + '</td><td class="num">' + Number(b.qty || 0).toLocaleString('en-US') + '</td><td>' + esc(b.manufacture_internal_batch || '') + '</td></tr>';
           }).join('');
           var form = CAN_WRITE ? '<form id="bp-form"><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;align-items:flex-end;">' +
             UIC.combo({ key: 'bp-item', label: 'المنتج الثانوي', required: true, options: window.__BP_OPTIONS, placeholder: 'اكتب للبحث…' }) +
             UIC.field({ key: 'bp-qty', label: 'الكمية', type: 'number', required: true, min: '0.01', step: '0.01' }) +
-            UIC.field({ key: 'bp-lot', label: 'كود الدفعة', type: 'text' }) +
-            UIC.field({ key: 'bp-cost', label: 'التكلفة', type: 'number', min: '0', step: '0.01' }) +
+            UIC.field({ key: 'bp-internal-batch', label: 'رقم التشغيلة الداخلية (اختياري)', type: 'text' }) +
             '</div><input type="hidden" id="bp-mo-uid" value="' + esc(moUid) + '"></form>' : '';
-          holder.innerHTML = '<div style="overflow-x:auto;"><table class="table"><thead><tr><th>المنتج</th><th>الكمية</th><th>الدفعة</th><th>التكلفة</th></tr></thead><tbody>' +
-            (rowsHtml || '<tr><td colspan="4" style="text-align:center;color:#94a3b8;">لا يوجد منتجات ثانوية</td></tr>') +
+          holder.innerHTML = '<div class="table-wrap"><table class="table" style="min-width:560px;"><thead><tr><th>المنتج</th><th>الكمية</th><th>رقم التشغيلة الداخلية</th></tr></thead><tbody>' +
+            (rowsHtml || '<tr><td colspan="3" style="text-align:center;color:#94a3b8;">لا يوجد منتجات ثانوية</td></tr>') +
             '</tbody></table></div>' + form;
+          UIC.autoColumns(holder);
         })
         .catch(function () { holder.innerHTML = '<p style="color:red;">خطأ في التحميل</p>'; });
     }
@@ -554,7 +1041,7 @@
     function addByproduct() {
       if (!UIC.validateForm('bp-form')) return;
       UI.showSpinner();
-      companyCall('add_valley_mfg_byproduct', { mo_uid: getHid_('bp-mo-uid'), item: getCombo_('bp-item'), qty: getVal_('bp-qty'), batch_code: getV_('bp-lot'), total_cost: getV_('bp-cost') })
+      companyCall('add_valley_mfg_byproduct', { mo_uid: getHid_('bp-mo-uid'), item: getCombo_('bp-item'), qty: getV_('bp-qty'), manufacture_internal_batch: getV_('bp-internal-batch') })
         .then(function (r) {
           UIC.toast((r && r.message) || 'تمت الإضافة', 'success');
           if (r && r.record) {
@@ -569,7 +1056,7 @@
                 var holder = document.getElementById('byproducts-body');
                 if (holder && holder.querySelector('tbody')) {
                   var nm = r.record.product_name || r.record.item;
-                  var newRow = '<tr><td>' + nm + '</td><td class="num">' + (r.record.qty||0) + '</td><td>' + (r.record.transaction_code||'-') + '</td><td class="num">' + (r.record.total_cost||0) + '</td></tr>';
+                  var newRow = '<tr><td>' + esc(nm) + '</td><td class="num">' + (r.record.qty||0) + '</td><td>' + esc(r.record.manufacture_internal_batch || '') + '</td></tr>';
                   var tbody = holder.querySelector('tbody');
                   if (tbody) tbody.insertAdjacentHTML('afterbegin', newRow);
                   // remove last if exceeds 15
@@ -598,29 +1085,30 @@
       companyCall('get_valley_mfg_workops', { mo_uid: moUid })
         .then(function (r) {
           window.__WC_OPTIONS = r.work_center_options || [];
+          window.__WORKOPS_CACHE = r.workops || [];
           var rowsHtml = (r.workops || []).map(function (w) {
             var pill = UIC.statusPill(w.operation_status, w.operation_status === 'Done' ? 'success' : 'neutral');
             var buttons = '';
             if (CAN_WRITE && w.operation_status !== 'Done') {
               if (w.operation_status === 'Pending') {
-                buttons = '<button class="btn btn-primary" style="padding:2px 8px;font-size:10px;" onclick="MFG_PAGE.startWorkOp(\'' + esc(w.unique_id) + '\')">▶️ بدء</button>';
+                buttons = '<button class="btn btn-primary" style="padding:2px 8px;font-size:10px;" onclick="MFG_PAGE.startWorkOp(\'' + esc(w.unique_id) + '\')">بدء</button>';
               } else if (w.operation_status === 'In Progress') {
-                buttons = '<button class="btn btn-outline" style="padding:2px 8px;font-size:10px;color:#d97706;" onclick="MFG_PAGE.pauseWorkOp(\'' + esc(w.unique_id) + '\')">⏸️ إيقاف مؤقت</button> ' +
-                  '<button class="btn btn-outline" style="padding:2px 8px;font-size:10px;color:#dc2626;" onclick="MFG_PAGE.stopWorkOp(\'' + esc(w.unique_id) + '\')">⏹️ إنهاء</button>';
+                buttons = '<button class="btn btn-outline" style="padding:2px 8px;font-size:10px;color:#d97706;" onclick="MFG_PAGE.pauseWorkOp(\'' + esc(w.unique_id) + '\')">إيقاف مؤقت</button> ' +
+                  '<button class="btn btn-outline" style="padding:2px 8px;font-size:10px;color:var(--danger, #dc2626);" onclick="MFG_PAGE.stopWorkOp(\'' + esc(w.unique_id) + '\')">إنهاء</button>';
               } else if (w.operation_status === 'Paused') {
-                buttons = '<button class="btn btn-primary" style="padding:2px 8px;font-size:10px;" onclick="MFG_PAGE.resumeWorkOp(\'' + esc(w.unique_id) + '\')">▶️ استئناف</button> ' +
-                  '<button class="btn btn-outline" style="padding:2px 8px;font-size:10px;color:#dc2626;" onclick="MFG_PAGE.stopWorkOp(\'' + esc(w.unique_id) + '\')">⏹️ إنهاء</button>';
+                buttons = '<button class="btn btn-primary" style="padding:2px 8px;font-size:10px;" onclick="MFG_PAGE.resumeWorkOp(\'' + esc(w.unique_id) + '\')">استئناف</button> ' +
+                  '<button class="btn btn-outline" style="padding:2px 8px;font-size:10px;color:var(--danger, #dc2626);" onclick="MFG_PAGE.stopWorkOp(\'' + esc(w.unique_id) + '\')">إنهاء</button>';
               }
             }
             var timerCell = '';
             if (w.operation_status === 'In Progress' && w.start_time) {
               timerCell = '<span id="timer-' + esc(w.unique_id) + '" class="timer-live" data-start="' + esc(w.start_time) + '" data-pause="' + esc(w.last_pause_time || '') + '" data-pause-dur="' + num0(w.total_pause_duration) + '"></span>';
             } else if (w.operation_status === 'Paused') {
-              timerCell = '<span style="color:#d97706;font-weight:700;">⏸ موقوف</span>';
+              timerCell = '<span style="color:#d97706;font-weight:700;">موقوف</span>';
             }
             var manualBtn = '';
             if (CAN_WRITE && w.operation_status !== 'Done') {
-              manualBtn = '<button class="btn btn-outline" style="padding:2px 6px;font-size:9px;" onclick="MFG_PAGE.toggleWorkOpManualEdit(\'' + esc(w.unique_id) + '\')">✏️</button>';
+              manualBtn = '<button class="btn btn-outline" style="padding:2px 6px;font-size:9px;" onclick="MFG_PAGE.toggleWorkOpManualEdit(\'' + esc(w.unique_id) + '\')">تعديل</button>';
             }
             return '<tr id="wo-row-' + esc(w.unique_id) + '">' +
               '<td>' + Number(w.work_center_sequence || 0) + '</td>' +
@@ -628,18 +1116,20 @@
               '<td>' + pill + '</td>' +
               '<td class="wo-start-cell" style="direction:ltr;font-size:11px;">' + esc(fmtDateTime_(w.start_time)) + ' ' + manualBtn + '</td>' +
               '<td class="wo-end-cell" style="direction:ltr;font-size:11px;">' + esc(fmtDateTime_(w.end_time)) + '</td>' +
+              '<td class="wo-pause-cell" style="direction:ltr;font-size:11px;">' + num0(w.total_pause_duration) + '</td>' +
               '<td class="num">' + timerCell + (w.actual_hours !== '' && w.actual_hours != null ? ' ' + esc(w.actual_hours) + 'h' : '') + '</td>' +
-              '<td style="font-size:11px;">' + esc(w.notes || '-') + '</td>' +
+              '<td><button type="button" class="btn ' + (w.notes ? 'btn-primary' : 'btn-outline') + '" style="padding:2px 8px;font-size:11px;" onclick="MFG_PAGE.openWorkOpNotes(\'' + esc(w.unique_id) + '\')">ملاحظات' + (w.notes ? ' •' : '') + '</button></td>' +
               '<td>' + buttons + '</td>' +
               '</tr>';
           }).join('');
-          var form = CAN_WRITE ? '<form id="workops-form"><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;align-items:flex-end;background:#f8fafc;border-radius:8px;padding:12px;border:1px solid #e5e7eb;">' +
+          var form = CAN_WRITE ? '<form id="workops-form"><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;align-items:flex-end;background:var(--bg-subtle, #f8fafc);border-radius:8px;padding:12px;border:1px solid var(--border-color, #e5e7eb);">' +
             UIC.combo({ key: 'wo-wc', label: 'مركز العمل', required: true, options: window.__WC_OPTIONS, placeholder: 'اكتب للبحث…' }) +
             UIC.field({ key: 'wo-notes', label: 'ملاحظات', type: 'text' }) +
             '</div><input type="hidden" id="wo-mo-uid" value="' + esc(moUid) + '"></form>' : '';
-          holder.innerHTML = '<div style="overflow-x:auto;"><table class="table"><thead><tr><th>#</th><th>مركز العمل</th><th>الحالة</th><th>البداية</th><th>النهاية</th><th>الساعات</th><th>ملاحظات</th><th></th></tr></thead><tbody>' +
+          holder.innerHTML = '<div class="table-wrap"><table class="table" style="min-width:900px;"><thead><tr><th>#</th><th>مركز العمل</th><th>الحالة</th><th>البداية</th><th>النهاية</th><th>التوقف (ساعات)</th><th>الساعات</th><th>ملاحظات</th><th></th></tr></thead><tbody>' +
             (rowsHtml || '<tr><td colspan="8" style="text-align:center;color:#94a3b8;">لا توجد عمليات تشغيل</td></tr>') +
             '</tbody></table></div>' + form;
+          UIC.autoColumns(holder);
           startAllTimers();
         })
         .catch(function () { holder.innerHTML = '<p style="color:red;">خطأ في التحميل</p>'; });
@@ -678,16 +1168,48 @@
     function resumeWorkOp(uid) { controlWorkOp_(uid, 'resume'); }
     function stopWorkOp(uid) { if (!confirm('إنهاء العملية؟')) return; controlWorkOp_(uid, 'stop'); }
 
+    function openWorkOpNotes(uid) {
+      var w = (window.__WORKOPS_CACHE || []).filter(function (x) { return String(x.unique_id) === String(uid); })[0];
+      if (!w) { UIC.toast('لم يتم العثور على العملية', 'error'); return; }
+      var wc = wcLabel_(w.work_center_id);
+      UIC.openModal('mfg-workop-notes', {
+        title: 'ملاحظات مركز العمل — ' + esc(wc),
+        body: '<div style="white-space:pre-wrap;font-size:13px;min-height:60px;">' + (esc(w.notes) || '<span style="color:#94a3b8;">لا توجد ملاحظات</span>') + '</div>',
+        footer: '<button type="button" class="btn btn-outline" onclick="UIC.closeModal(\'mfg-workop-notes\')">إغلاق</button>'
+      });
+    }
+
     function toggleWorkOpManualEdit(uid) {
       var row = document.getElementById('wo-row-' + uid);
       if (!row) return;
       var startCell = row.querySelector('.wo-start-cell');
       var endCell = row.querySelector('.wo-end-cell');
+      var pauseCell = row.querySelector('.wo-pause-cell');
       if (!startCell || !endCell) return;
       if (startCell.querySelector('input')) {
         var sv = startCell.querySelector('input').value;
         var ev = endCell.querySelector('input').value;
-        var payload = { workop_uid: uid, mo_uid: getHid_('wo-mo-uid'), operation_status: 'In Progress', start_time: sv, end_time: ev, actual_hours: '', notes: '' };
+        var pv = (pauseCell && pauseCell.querySelector('input')) ? pauseCell.querySelector('input').value : '';
+        /* Row-edit repair (5.2): manual corrections send the times and, now,
+           the pause. Status transitions belong to control_valley_mfg_workop_,
+           hours/costs are sheet formulas the server reinstalls, and notes stay
+           stored because this editor has no notes input (an absent key
+           preserves the column).
+           Refused here when the pause exceeds the worked span: the sheet
+           formula would otherwise store a negative actual_hours. The server
+           refuses the same thing independently. */
+        var pauseNum = (pv === '' || pv == null) ? 0 : Number(pv);
+        if (!isFinite(pauseNum) || pauseNum < 0) { UIC.toast('مدة التوقف يجب أن تكون صفراً أو أكبر', 'error'); return; }
+        var stMs = sv ? new Date(sv).getTime() : NaN;
+        var etMs = ev ? new Date(ev).getTime() : NaN;
+        if (!isNaN(stMs) && !isNaN(etMs)) {
+          var spanHrs = (etMs - stMs) / 3600000;
+          if (pauseNum > spanHrs + 0.0001) {
+            UIC.toast('مدة التوقف (' + pauseNum + ' ساعة) أكبر من زمن التشغيل (' + (Math.round(spanHrs * 100) / 100) + ' ساعة)', 'error');
+            return;
+          }
+        }
+        var payload = { workop_uid: uid, mo_uid: getHid_('wo-mo-uid'), start_time: sv, end_time: ev, total_pause_duration: pauseNum };
         UI.showSpinner();
         companyCall('save_valley_mfg_workop', payload)
           .then(function (r) { UIC.toast('تم الحفظ', 'success'); loadWorkOpsTab(getHid_('wo-mo-uid')); })
@@ -698,6 +1220,10 @@
         var origEnd = endCell.textContent.trim();
         startCell.innerHTML = '<input type="datetime-local" class="input" value="' + toLocalDT_(origStart) + '" style="font-size:11px;">';
         endCell.innerHTML = '<input type="datetime-local" class="input" value="' + toLocalDT_(origEnd) + '" style="font-size:11px;">';
+        if (pauseCell) {
+          var origPause = String(pauseCell.textContent || '').trim();
+          pauseCell.innerHTML = '<input type="number" min="0" step="0.01" inputmode="decimal" class="input" value="' + esc(origPause === '-' ? '0' : origPause) + '" style="font-size:11px;max-width:90px;">';
+        }
       }
     }
 
@@ -747,6 +1273,8 @@
       tabBtn: tabBtn,
       openDetail: openDetail, openNewPage: openNewPage, save: save,
       changeStatus: changeStatus, remove: removeMo,
+      applyFilters: applyFilters, clearFilters: clearFilters,
+      setView: setView, setCalendarMode: setCalendarMode, moveCalendar: moveCalendar, goToday: goToday,
       switchTab: function (paneId) {
         ['tab-main-extra', 'tab-cons', 'tab-workops', 'tab-byproducts', 'tab-outputs'].forEach(function (id) {
           var el = document.getElementById(id);
@@ -754,7 +1282,7 @@
         });
       },
       addByproduct: addByproduct,
-      addWorkOp: addWorkOp,
+      addWorkOp: addWorkOp, openWorkOpNotes: openWorkOpNotes,
       startWorkOp: startWorkOp, pauseWorkOp: pauseWorkOp, resumeWorkOp: resumeWorkOp, stopWorkOp: stopWorkOp,
       toggleWorkOpManualEdit: toggleWorkOpManualEdit, saveWorkOpManual: saveWorkOpManual,
       addOutput: addOutput, removeOutput: removeOutput,
@@ -764,9 +1292,16 @@
     };
 
     document.addEventListener('DOMContentLoaded', renderApp);
+    /* Another device's change to this page arrives on its own. The poll
+       reads timestamps from cache, never a spreadsheet, and stands down
+       while the tab is hidden or a save is in flight. */
+    UIC.Live.watchPage({
+      call: companyCall,
+      page: 'vf_mfg_orders',
+      onChange: function () { UIC.Live.arrive(function () { load(true); }); }
+    });
+
   })();
   </script>
 </body>
 </html>
-
-

@@ -1,0 +1,472 @@
+{
+  "erp_test_products": {
+    "map": {
+      "id": "id",
+      "name_ar": "name_ar",
+      "name_en": "name_en",
+      "GPC": "GPC",
+      "unit": "unit",
+      "carton": "carton",
+      "cost_allocation_percentage": "cost_allocation_percentage",
+      "concentration": "concentration",
+      "asset_code": "asset_code",
+      "category": "category",
+      "sales_tax": "sales_tax",
+      "user": "user"
+    },
+    "extra": [],
+    "tlFormulaCols": {},
+    "etFormulaCols": {}
+  },
+  "erp_test_categories": {
+    "map": {
+      "id": "id",
+      "name_ar": "name_ar",
+      "name_eng": "name_eng",
+      "user": "user"
+    },
+    "extra": [],
+    "tlFormulaCols": {},
+    "etFormulaCols": {}
+  },
+  "erp_test_customer_vendor": {
+    "map": {
+      "id": "id",
+      "name": "name",
+      "customer_direction": "customer_direction",
+      "type": "type",
+      "registration_number": "registration_number",
+      "tax_id": "tax_id",
+      "name_en": "name_en",
+      "country": "country",
+      "region": "region",
+      "telephone": "telephone",
+      "address": "address",
+      "user": "user",
+      "deleted_at": "deleted_at",
+      "deleted_by": "deleted_by",
+      "version": "version"
+    },
+    "extra": [],
+    "tlFormulaCols": {},
+    "etFormulaCols": {}
+  },
+  "erp_test_chart_of_accounts": {
+    "map": {
+      "المستوى الاساسي": "المستوى الاساسي",
+      "اسم الحساب": "اسم الحساب",
+      "المستوى الثاني": "المستوى الثاني",
+      "اسم المستوى الثاني": "اسم المستوى الثاني",
+      "المستوى الثالث": "المستوى الثالث",
+      "اسم المستوى الثالث": "اسم المستوى الثالث",
+      "المستوى الرابع": "المستوى الرابع",
+      "اسم المستوى الرابع": "اسم المستوى الرابع",
+      "المستوى الخامس": "المستوى الخامس",
+      "اسم المستوى الخامس": "اسم المستوى الخامس",
+      "التاكيد": "التاكيد",
+      "ملاحظات": "ملاحظات",
+      "نوع الاحتساب": "نوع الاحتساب",
+      "كود المستوى": "كود المستوى",
+      "اسم الحساب الرئيسي": "اسم الحساب الرئيسي",
+      "اسم المستوى الثاني_1": "اسم المستوى الثاني_1"
+    },
+    "extra": [],
+    "tlFormulaCols": {
+      "كود المستوى": {
+        "count": 99,
+        "first": "=CONCATENATE(H2,\"-\",I2,\"-\",J2)"
+      },
+      "اسم الحساب الرئيسي": {
+        "count": 99,
+        "first": "=B2"
+      },
+      "اسم المستوى الثاني_1": {
+        "count": 99,
+        "first": "=D2"
+      }
+    },
+    "etFormulaCols": {
+      "كود المستوى": {
+        "count": 99,
+        "first": "=CONCATENATE(H2,\"-\",I2,\"-\",J2)"
+      },
+      "اسم الحساب الرئيسي": {
+        "count": 99,
+        "first": "=B2"
+      },
+      "اسم المستوى الثاني_1": {
+        "count": 99,
+        "first": "=D2"
+      }
+    }
+  },
+  "erp_test_purchasing_costing": {
+    "map": {
+      "unique_id": "unique_id",
+      "Code": "Code",
+      "tax_system": "tax_system",
+      "Reciept Date": "Reciept Date",
+      "Items": "Items",
+      "Type": "Type",
+      "Shipping Type": "Shipping Type",
+      "If shipping via CIF, enter the insurance value.": "If shipping via CIF, enter the insurance value.",
+      "CIF insurance rate": "CIF insurance rate",
+      "Value": "Value",
+      "Currency": "Currency",
+      "Exchange rate": "Exchange rate",
+      "Value Based on Invoice": "Value Based on Invoice",
+      "Importation Re-Price": "Importation Re-Price",
+      "Tax Declared Value": "Tax Declared Value",
+      "Administrative Expenses": "Administrative Expenses",
+      "Customs Expenses": "Customs Expenses",
+      "Unloading expenses": "Unloading expenses",
+      "bank commission": "bank commission",
+      "Customs clearance and port receipts": "Customs clearance and port receipts",
+      "Additional fees": "Additional fees",
+      "Clearance Expenses": "Clearance Expenses",
+      "Other Expenses": "Other Expenses",
+      "Purchase Tax": "Purchase Tax",
+      "Income Tax": "Income Tax",
+      "Internal cost adjustment": "Internal cost adjustment",
+      "Total costs": "Total costs",
+      "Sales Value": "Sales Value",
+      "Tax type": "Tax type",
+      "sales tax amount": "sales tax amount",
+      "Minimum differences": "Minimum differences",
+      "month": "month",
+      "Year": "Year",
+      "Supplier Name": "Supplier Name",
+      "Approved this month": "Approved this month",
+      "Associated bank": "Associated bank",
+      "user": "user",
+      "approval_status": "approval_status",
+      "approval": "approval",
+      "approval_time": "approval_time"
+    },
+    "extra": [],
+    "tlFormulaCols": {
+      "CIF insurance rate": {
+        "count": 1,
+        "first": "=IF(L2 = \"CIF\",(H2-J2)/J2,\"\")"
+      },
+      "Sales Value": {
+        "count": 2,
+        "first": "=IF(F2=\"بيع\", round(AA2*103/100,-2),0)"
+      },
+      "Tax type": {
+        "count": 1,
+        "first": "=iferror(IF(X2/(N2+Q2) >= 0.08, 0.14,X2/(N2+Q2)),\"\")"
+      },
+      "sales tax amount": {
+        "count": 1,
+        "first": "=iferror(IF(AC2>0.06,AB2*14/100,0),\"\")"
+      }
+    },
+    "etFormulaCols": {}
+  },
+  "erp_test_product_purchasing": {
+    "map": {
+      "unique_id": "unique_id",
+      "id": "id",
+      "movement_code": null,
+      "top_light_purchasing_costing_id": "erp_test_purchasing_costing_id",
+      "movement_place": "movement_place",
+      "vendor": "vendor",
+      "product": "product",
+      "product_category": "product_category",
+      "receipt_date": "receipt_date",
+      "qty": "qty",
+      "unit_price": "unit_price",
+      "other_cost": "other_cost",
+      "total_cost": "total_cost",
+      "movement_type": "movement_type",
+      "sales_qty": "sales_qty",
+      "sales_value": "sales_value",
+      "sales_value_amount": "sales_value_amount",
+      "unit_cost": "unit_cost",
+      "invoice_date": "invoice_date",
+      "registration_number": "registration_number",
+      "Analysis certificate, if available": "Analysis certificate, if available",
+      "Agricultural Release License": "Agricultural Release License",
+      "Release photo": "Release photo",
+      "Registration image": "Registration image",
+      "Production date": "Production date",
+      "Expiry date": "Expiry date",
+      "user": "user",
+      "currency": "currency",
+      "exchange_rate": "exchange_rate",
+      "cost_currency": "cost_currency"
+    },
+    "extra": [],
+    "tlFormulaCols": {
+      "movement_code": {
+        "count": 89,
+        "first": "=CONCATENATE(N2,\"-\",B2,\"-\",vlookup(G2,top_light_products!$A:$D,2,0),\"-\",TEXT(I2,\"DD/MM/YYYY\"))"
+      },
+      "other_cost": {
+        "count": 1,
+        "first": "=81022+24832"
+      },
+      "total_cost": {
+        "count": 88,
+        "first": "=J2*K2*AC2+L2"
+      },
+      "sales_qty": {
+        "count": 89,
+        "first": "=J2"
+      },
+      "sales_value_amount": {
+        "count": 89,
+        "first": "=P2*J2"
+      },
+      "unit_cost": {
+        "count": 89,
+        "first": "=M2/J2"
+      },
+      "cost_currency": {
+        "count": 89,
+        "first": "=J2*K2"
+      }
+    },
+    "etFormulaCols": {}
+  },
+  "erp_test_sales_invoices": {
+    "map": {
+      "invoice_unique_id": "invoice_unique_id",
+      "ميزان حسابي - 26 - 1": null,
+      "نوع الضريبة (سلع عامة 1/سلع جدول 2)": null,
+      "نوع سلع الجدول (لايوجد 0/جدول أولا 1/جدول ثانيا 2)": null,
+      "رقم الفاتورة": "invoice_number",
+      "اسم العميل": "client_id",
+      "رقم التسجيل الضريبي للعميل": "tax_id",
+      "رقم الملف الضريبي للعميل": null,
+      "العنوان": null,
+      "الرقم القومي / رقم جواز السفر": null,
+      "رقم الموبيل": null,
+      "تاريخ الفاتورة": "invoice_date",
+      "نوع البيان (سلعة 3/خدمة 4/تسويات 5)": null,
+      "نوع السلعة (محلي 1/صادرات 2/آلات ومعدات 5/أجزاء آلات 6/إعفاءات 7 /  سلع الجدول  مراجعة الإرشادات )": null,
+      "المبلغ الصافي": "invoice_net_value",
+      "نسبة الخصم": "invoice_discount_percentage",
+      "قيمة الخصم": "invoice_discount_amount",
+      "قيمة الضريبة": "invoice_tax_value",
+      "إجمالي": "invoice_total_value",
+      "الشهر": null,
+      "العام": null,
+      "tax_system": null,
+      "user": "user",
+      "created_at": "created_at",
+      "approval_status": "approval_status",
+      "approval": "approval",
+      "approval_time": "approval_time",
+      "deleted_at": "deleted_at",
+      "deleted_by": "deleted_by",
+      "version": null
+    },
+    "extra": [],
+    "tlFormulaCols": {
+      "نوع سلع الجدول (لايوجد 0/جدول أولا 1/جدول ثانيا 2)": {
+        "count": 171,
+        "first": "=iferror(IF(R2/O2=0.05,1,0),\"\")"
+      },
+      "الشهر": {
+        "count": 32,
+        "first": "=MONTH(L151)"
+      },
+      "العام": {
+        "count": 32,
+        "first": "=YEAR(L151)"
+      }
+    },
+    "etFormulaCols": {}
+  },
+  "erp_test_sales_products": {
+    "map": {
+      "unique_id": "unique_id",
+      "id": "id",
+      "top_lightsales_header_id": "erp_test_sales_header_id",
+      "top_lightsales_invoices_client": "erp_test_sales_invoices_client",
+      "product_id": "product_id",
+      "product_tax": "product_tax",
+      "product_qty": "product_qty",
+      "product_price": "product_price",
+      "product_discount": "product_discount",
+      "product_net_value": "product_net_value",
+      "product_tax_value": "product_tax_value",
+      "product_total_value": "product_total_value",
+      "user": "user",
+      "": "",
+      "deleted_at": "deleted_at",
+      "deleted_by": "deleted_by",
+      "version": "version"
+    },
+    "extra": [],
+    "tlFormulaCols": {},
+    "etFormulaCols": {}
+  },
+  "erp_test_sales_returns": {
+    "map": {
+      "unique_id": "unique_id",
+      "id": "id",
+      "top_lightsales_invoices_id": "erp_test_sales_invoices_id",
+      "top_lightsales_invoices_client": "erp_test_sales_invoices_client",
+      "top_lightreturn_date": "erp_test_return_date",
+      "top_lightsales_products_id": "erp_test_sales_products_id",
+      "top_lightreturn_qty": "erp_test_return_qty",
+      "top_lightreturn_discount": "erp_test_return_discount",
+      "top_lightreturn_price": "erp_test_return_price",
+      "top_lightreturn_value": "erp_test_return_value",
+      "user": "user",
+      "": null
+    },
+    "extra": [],
+    "tlFormulaCols": {},
+    "etFormulaCols": {}
+  },
+  "erp_test_sales_offer": {
+    "map": {
+      "invoice_unique_id": "offer_unique_id",
+      "ميزان حسابي - 26 - 1": null,
+      "نوع الضريبة (سلع عامة 1/سلع جدول 2)": null,
+      "نوع سلع الجدول (لايوجد 0/جدول أولا 1/جدول ثانيا 2)": null,
+      "رقم الفاتورة": "offer_number",
+      "اسم العميل": "client_id",
+      "رقم التسجيل الضريبي للعميل": "tax_id",
+      "رقم الملف الضريبي للعميل": null,
+      "العنوان": null,
+      "الرقم القومي / رقم جواز السفر": null,
+      "رقم الموبيل": null,
+      "تاريخ الفاتورة": "offer_date",
+      "نوع البيان (سلعة 3/خدمة 4/تسويات 5)": null,
+      "نوع السلعة (محلي 1/صادرات 2/آلات ومعدات 5/أجزاء آلات 6/إعفاءات 7 /  سلع الجدول  مراجعة الإرشادات )": null,
+      "المبلغ الصافي": "offer_net_value",
+      "نسبة الخصم": "offer_discount_percentage",
+      "قيمة الخصم": "offer_discount_amount",
+      "قيمة الضريبة": "offer_tax_value",
+      "إجمالي": "offer_total_value",
+      "الشهر": null,
+      "العام": null,
+      "tax_system": null,
+      "user": "user",
+      "approval_status": "approval_status",
+      "approval": "approval",
+      "approval_time": "approval_time"
+    },
+    "extra": [
+      "created_at",
+      "deleted_at",
+      "deleted_by"
+    ],
+    "tlFormulaCols": {
+      "نوع سلع الجدول (لايوجد 0/جدول أولا 1/جدول ثانيا 2)": {
+        "count": 4,
+        "first": "=IFERROR(IF(R28/O28=0.05,1,0),\"\")"
+      },
+      "الشهر": {
+        "count": 4,
+        "first": "=MONTH(L28)"
+      },
+      "العام": {
+        "count": 4,
+        "first": "=YEAR(L28)"
+      }
+    },
+    "etFormulaCols": {}
+  },
+  "erp_test_sales_offer_products": {
+    "map": {
+      "unique_id": "unique_id",
+      "id": "id",
+      "top_lightsales_offer_id": "erp_test_sales_offer_id",
+      "product_id": "product_id",
+      "product_tax": "product_tax",
+      "product_qty": "product_qty",
+      "product_price": "product_price",
+      "product_discount": "product_discount",
+      "product_net_value": "product_net_value",
+      "product_tax_value": "product_tax_value",
+      "product_total_value": "product_total_value",
+      "user": "user"
+    },
+    "extra": [],
+    "tlFormulaCols": {},
+    "etFormulaCols": {}
+  },
+  "erp_test_cash_bank_movement": {
+    "map": {
+      "transaction_id": "transaction_id",
+      "invoice_id": "invoice_id",
+      "name": "name",
+      "name_vendor": null,
+      "transaction_purchasing_items": "transaction_purchasing_items",
+      "transaction_details": "transaction_details",
+      "transaction_date": "transaction_date",
+      "transaction_amount": "transaction_amount",
+      "total_discount": "total_discount",
+      "net_amount": "net_amount",
+      "taxes": "taxes",
+      "total": "total",
+      "transaction_type": "transaction_type",
+      "balance_amount": "balance_amount",
+      "box_balance": "box_balance",
+      "related_box": "related_box",
+      "chart_code": "chart_code",
+      "chart_name": "chart_name",
+      "transaction_method": "transaction_method",
+      "tax_system": "tax_system",
+      "chart_account_main": "chart_account_main",
+      "approved": "approved",
+      "user": "user",
+      "created_at": "created_at",
+      "Temp_Target_Box": null,
+      "currency": "currency",
+      "exchange_rate": "exchange_rate",
+      "deleted_at": "deleted_at",
+      "deleted_by": "deleted_by",
+      "version": "version"
+    },
+    "extra": [],
+    "tlFormulaCols": {
+      "name_vendor": {
+        "count": 200,
+        "first": "=VLOOKUP(C2,top_light_customer_vendor!A:B,2,0)"
+      },
+      "net_amount": {
+        "count": 28,
+        "first": "=IF(S174=\"فودافون كاش\",H174*AA174,(H174-I174)*AA174)"
+      },
+      "total": {
+        "count": 28,
+        "first": "=((H174-I174)*AA174)+(K174*AA174)"
+      },
+      "balance_amount": {
+        "count": 29,
+        "first": "=9563279.04*-1"
+      },
+      "box_balance": {
+        "count": 197,
+        "first": "=SUMIFS($N$2:N2, $P$2:P2, P2)"
+      },
+      "chart_name": {
+        "count": 197,
+        "first": "=VLOOKUP(Q2,top_light_chart_of_accounts!I:N,6,0)"
+      },
+      "chart_account_main": {
+        "count": 197,
+        "first": "=VLOOKUP(Q2,top_light_chart_of_accounts!I:O,7,0)"
+      }
+    },
+    "etFormulaCols": {}
+  },
+  "erp_test_box_account_codes": {
+    "map": {
+      "المستوى الرابع": "المستوى الرابع",
+      "اسم المستوى الرابع": "اسم المستوى الرابع",
+      "المستوى الخامس": "المستوى الخامس",
+      "اسم المستوى الخامس": "اسم المستوى الخامس"
+    },
+    "extra": [],
+    "tlFormulaCols": {},
+    "etFormulaCols": {}
+  }
+}

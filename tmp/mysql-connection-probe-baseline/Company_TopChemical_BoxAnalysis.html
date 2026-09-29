@@ -1,0 +1,1207 @@
+<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>تحليل حركة الخزنة العادية</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_TopChemical_Nav'); ?>
+  <?!= getCompanyThemeCSS_('3fe1b5cb67b7223e') ?>
+  <style>
+    .filter-bar { display: flex; gap: 8px; flex-wrap: wrap; align-items: flex-end; margin-bottom: 12px; }
+    .filter-bar .form-field { margin: 0; min-width: 140px; }
+    .filter-bar .check-field { display: flex; align-items: center; gap: 6px; padding-bottom: 8px; }
+    .pager { display: flex; gap: 8px; align-items: center; justify-content: center; margin-top: 12px; flex-wrap: wrap; }
+    .pager .page-info { color: var(--text-muted); font-size: 13px; }
+    .pill { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; }
+    .pill-0 { background: #fef3c7; color: #92400e; }
+    .pill-1 { background: #dcfce7; color: #166534; }
+    .pill-warn { background: #fee2e2; color: #991b1b; }
+    .pill-info { background: #e0e7ff; color: #3730a3; }
+    .num { text-align: left; font-variant-numeric: tabular-nums; }
+
+    .row-toggle { background: none; border: 0; cursor: pointer; font-size: 15px; line-height: 1;
+                  color: var(--text-muted); padding: 2px 6px; }
+    .detail-cell { background: var(--surface-2, #f8fafc); padding: 12px 14px !important; }
+    .detail-grid { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start; }
+    .detail-block { flex: 1 1 320px; min-width: 280px; }
+    .detail-block h4 { margin: 0 0 6px; font-size: 13px; color: var(--text-muted); font-weight: 700; }
+
+    /* [iPhone run 2] Verbatim, but scoped: from 600px up and on paper this is
+       exactly the table it always was. Below 600px .card-table
+       (UI_Components) turns each row into a card, so none of this may reach
+       a phone unscoped. */
+    @media print, (min-width: 600px) {
+      .items-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+      .items-table th, .items-table td { padding: 4px 8px; border-bottom: 1px solid var(--border, #e5e7eb); }
+      .items-table th { color: var(--text-muted); font-weight: 700; text-align: right; }
+      .items-table tfoot td { font-weight: 700; border-top: 2px solid var(--border, #e5e7eb); border-bottom: 0; }
+    }
+
+    .parse-fail { background: #fef2f2; border: 1px solid #fecaca; border-radius: 6px;
+                  padding: 6px 10px; margin-top: 6px; font-size: 12.5px; color: #991b1b; }
+    .sum-bad { color: #991b1b; }
+    .sum-ok  { color: #166534; }
+
+    .win-strip { display: flex; flex-wrap: wrap; gap: 8px; }
+    .win-card { flex: 1 1 130px; min-width: 120px; border: 1px solid var(--border, #e5e7eb);
+                border-radius: 8px; padding: 8px 10px; background: var(--surface, #fff); }
+    .win-card .win-label { font-size: 11.5px; color: var(--text-muted); }
+    .win-card .win-value { font-size: 15px; font-weight: 700; font-variant-numeric: tabular-nums;
+                           direction: ltr; text-align: left; }
+    .win-card .win-sub { font-size: 11.5px; color: var(--text-muted); direction: ltr; text-align: left; }
+    .win-up { color: #b45309; }
+    .win-down { color: var(--text-muted); }
+    .win-note { font-size: 11.5px; color: var(--text-muted); margin-top: 6px; }
+
+    .notice { border-radius: 8px; padding: 8px 12px; margin-bottom: 10px; font-size: 13px; }
+    .notice-warn { background: #fffbeb; border: 1px solid #fde68a; color: #92400e; }
+
+    /* The confirmation for an edit carries ONE LINE PER CHANGED COLUMN, and
+       UIC.confirm renders `detail` as a single <p>, so newlines would collapse
+       into one run-on sentence and "المبلغ: 725.00 ← 900.00" would stop being
+       readable at a glance. Scoped to this page's stylesheet on purpose:
+       UI_Components is shared by 49 pages and additions to it must be purely
+       additive, so the shared rule is left exactly as it is. */
+    .uic-confirm-detail { white-space: pre-line; }
+
+    .risk-high { background: #fee2e2; color: #991b1b; }
+    .risk-med  { background: #ffedd5; color: #9a3412; }
+    .risk-low  { background: #e0f2fe; color: #075985; }
+    .risk-n { font-size: 11px; color: var(--text-muted); }
+
+    .flag { border-inline-start: 3px solid #d1d5db; padding: 6px 10px; margin: 6px 0;
+            background: var(--surface, #fff); border-radius: 0 6px 6px 0; }
+    .flag-high { border-inline-start-color: #dc2626; }
+    .flag-med  { border-inline-start-color: #ea580c; }
+    .flag-low  { border-inline-start-color: #0284c7; }
+    .flag-head { font-size: 11.5px; color: var(--text-muted); margin-bottom: 3px; }
+    .flag-head code { font-size: 11px; }
+    .flag-why { font-size: 13px; line-height: 1.7; }
+    .flag-ev { font-size: 11.5px; color: var(--text-muted); margin-top: 3px; }
+
+    .sec-title { font-size: 14px; margin: 18px 0 6px; }
+    .note-list { font-size: 12.5px; color: var(--text-muted); line-height: 1.9;
+                 margin: 0; padding-inline-start: 18px; }
+    .notice:not(.notice-warn) { background: var(--surface-2, #f8fafc);
+                                border: 1px solid var(--border, #e5e7eb); color: var(--text-muted); }
+
+    .edit-hint { font-size: 12px; color: var(--text-muted); margin: -4px 0 10px; }
+    .edit-locked { font-size: 12.5px; color: var(--text-muted); border-top: 1px dashed var(--border, #e5e7eb);
+                   margin-top: 10px; padding-top: 8px; line-height: 1.9; }
+  </style>
+</head>
+<body>
+<div id="tc-root" dir="rtl"></div>
+<script>
+  var params = new URLSearchParams(window.location.search);
+  var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+  var scriptUrl = window.scriptUrl || '/';
+  var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('3fe1b5cb67b7223e') ?>';
+  var COMPANY_PAGES = <?!= companyPages ?>;
+  var CURRENT_ACTION = '<?!= currentAction ?>';
+  var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+  var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+  var CAN_WRITE = UIC.canAdd_(); var CAN_FULL = UIC.canFull_();
+
+  /* ε for the sum check. transaction_amount is double(16,2), so a difference
+     below one currency unit is rounding, not a discrepancy. Plan §4.3. */
+  var SUM_EPSILON = 1.00;
+
+  var DEFAULT_FILTER = {
+    date_from: '', date_to: '', chart_of_accounts: '', responsible_person: '',
+    box_code: '', is_revised: '', items_only: false, offset: 0, limit: 50
+  };
+  var FILTER = Object.assign({}, DEFAULT_FILTER);
+  var LAST = {
+    total: 0, rows: [], aggregates: {}, labels: {}, windows: null,
+    ref_date: '', label_duplicate_ids: []
+  };
+  /* Accumulated across loads so the account datalist grows as the user browses.
+     It is deliberately NOT the whole chart of accounts: shipping thousands of
+     labels on every page load would dwarf the rows themselves. */
+  var KNOWN_ACCOUNTS = {};
+  var EXPANDED = {};
+
+  function companyCall(moduleAction, data) {
+    return API.call('company_action', {
+      target_system: '3fe1b5cb67b7223e',
+      module_action: moduleAction,
+      data: data || {}
+    }, SESSION_TOKEN);
+  }
+
+  /* The page's root normally comes from the static <body> markup above. It is
+     created here when it is missing so that a harness which builds the DOM
+     from script alone — the deployment smoke test does exactly that — gets a
+     rendered page instead of a null dereference. Costs nothing when the markup
+     is present, which is every real page load. */
+  function ensureRoot() {
+    var el = document.getElementById('tc-root');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'tc-root';
+      el.setAttribute('dir', 'rtl');
+      (document.body || document.documentElement).appendChild(el);
+    }
+    return el;
+  }
+
+  function load() {
+    ensureRoot();
+    UIC.appShell('tc-root', {
+      companyLogoUrl: COMPANY_LOGO_URL,
+      companyLogoHref: scriptUrl + '?action=tc_dashboard&sessionToken=' + SESSION_TOKEN,
+      companyLogoTitle: 'توب كيميكال',
+      breadcrumb: 'توب كيميكال / تحليلات النظام الرئيسي / تحليل حركة الخزنة العادية',
+      contentId: 'box-content',
+      menuGroups: (window.TOPCHEMICAL_MENU || [])
+    });
+    renderFilters();
+    fetchPage();
+  }
+
+  function esc(v) { return FMT.escape(v); }
+  function money(v) { return FMT.currency(v); }
+
+  /** A DOM-safe id fragment. Movement ids are bigint, but never trust that. */
+  function domId(v) { return String(v == null ? '' : v).replace(/[^0-9A-Za-z_-]/g, ''); }
+
+  function acctLabel(code) {
+    var c = String(code == null ? '' : code).trim();
+    if (!c) return '—';
+    var name = LAST.labels[c] || KNOWN_ACCOUNTS[c];
+    return name ? (name + ' (' + c + ')') : c;
+  }
+
+  function renderFilters() {
+    var body = document.getElementById('box-content');
+    if (!body) return;
+    /* The movements panel keeps exactly the markup it had; the other two are
+       added beside it rather than around it, so tab 1 renders and behaves the
+       same as it did before tabs existed. */
+    var movesPanel =
+      '<div class="filter-bar">' +
+        '<div class="form-field"><label class="form-label" for="f-from">من تاريخ</label>' +
+          '<input id="f-from" type="date" class="input" value="' + esc(FILTER.date_from) + '"></div>' +
+        '<div class="form-field"><label class="form-label" for="f-to">إلى تاريخ</label>' +
+          '<input id="f-to" type="date" class="input" value="' + esc(FILTER.date_to) + '"></div>' +
+        '<div class="form-field"><label class="form-label" for="f-acct">كود الحساب</label>' +
+          '<input id="f-acct" class="input" list="box-acct-list" inputmode="numeric" ' +
+          'autocapitalize="off" autocorrect="off" placeholder="مثال 310500" value="' + esc(FILTER.chart_of_accounts) + '">' +
+          '<datalist id="box-acct-list"></datalist></div>' +
+        '<div class="form-field"><label class="form-label" for="f-person">المسؤول</label>' +
+          '<input id="f-person" class="input" placeholder="جزء من الاسم" value="' + esc(FILTER.responsible_person) + '"></div>' +
+        '<div class="form-field"><label class="form-label" for="f-box">كود الخزنة</label>' +
+          '<input id="f-box" class="input" inputmode="numeric" value="' + esc(FILTER.box_code) + '"></div>' +
+        '<div class="form-field"><label class="form-label" for="f-rev">حالة المراجعة</label>' +
+          '<select id="f-rev" class="input">' +
+            '<option value="">الكل</option>' +
+            '<option value="0">غير مراجع</option>' +
+            '<option value="1">مراجع</option>' +
+          '</select></div>' +
+        '<div class="check-field">' +
+          '<input id="f-items" type="checkbox"' + (FILTER.items_only ? ' checked' : '') + '>' +
+          '<label for="f-items">البنود فقط (300000–400000)</label>' +
+        '</div>' +
+        '<button class="btn btn-primary" onclick="applyFilters()">بحث</button>' +
+        '<button class="btn btn-outline" onclick="resetFilters()">تصفير</button>' +
+      '</div>' +
+      '<div id="box-table"></div>' +
+      '<div id="box-pager" class="pager"></div>';
+
+    body.innerHTML =
+      '<div id="box-notices"></div>' +
+      UIC.notebook('box-tabs', [
+        { key: 'moves', label: 'الحركات', content: movesPanel },
+        { key: 'alerts', label: 'التنبيهات', content: alertsPanelHtml() },
+        { key: 'items', label: 'تحليل البنود', content: itemsPanelHtml() }
+      ], 'moves');
+
+    var rev = document.getElementById('f-rev');
+    if (rev) rev.value = FILTER.is_revised;
+    renderAccountDatalist();
+    wireTabs();
+  }
+
+  function renderAccountDatalist() {
+    var dl = document.getElementById('box-acct-list');
+    if (!dl) return;
+    var html = '';
+    Object.keys(KNOWN_ACCOUNTS).sort().forEach(function (code) {
+      html += '<option value="' + esc(code) + '">' + esc(KNOWN_ACCOUNTS[code]) + '</option>';
+    });
+    dl.innerHTML = html;
+  }
+
+  function applyFilters() {
+    var from = (document.getElementById('f-from') || {}).value || '';
+    var to = (document.getElementById('f-to') || {}).value || '';
+    if (from && to && from > to) { UIC.toast('تاريخ "من" يجب أن يكون قبل تاريخ "إلى"', 'error'); return; }
+    var acct = ((document.getElementById('f-acct') || {}).value || '').trim();
+    if (acct && !/^\d+$/.test(acct)) { UIC.toast('كود الحساب أرقام فقط', 'error'); return; }
+    var box = ((document.getElementById('f-box') || {}).value || '').trim();
+    if (box && !/^\d+$/.test(box)) { UIC.toast('كود الخزنة أرقام فقط', 'error'); return; }
+
+    FILTER.date_from = from;
+    FILTER.date_to = to;
+    FILTER.chart_of_accounts = acct;
+    FILTER.responsible_person = ((document.getElementById('f-person') || {}).value || '').trim();
+    FILTER.box_code = box;
+    FILTER.is_revised = (document.getElementById('f-rev') || {}).value || '';
+    FILTER.items_only = !!(document.getElementById('f-items') || {}).checked;
+    FILTER.offset = 0;
+    EXPANDED = {};
+    fetchPage();
+  }
+
+  function resetFilters() {
+    FILTER = Object.assign({}, DEFAULT_FILTER);
+    EXPANDED = {};
+    renderFilters();
+    fetchPage();
+  }
+
+  function fetchPage() {
+    UIC.readSkeleton('box-notices', { message: 'جاري تحميل الحركات...' });
+    companyCall('get_box_analysis', FILTER)
+      .then(function (r) {
+        LAST.total = r.total || 0;
+        LAST.rows = r.rows || [];
+        LAST.aggregates = r.aggregates || {};
+        LAST.labels = r.labels || {};
+        LAST.windows = r.windows || null;
+        LAST.ref_date = r.ref_date || '';
+        LAST.label_duplicate_ids = r.label_duplicate_ids || [];
+        Object.keys(LAST.labels).forEach(function (c) { KNOWN_ACCOUNTS[c] = LAST.labels[c]; });
+        renderNotices();
+        renderAccountDatalist();
+        renderTable();
+        renderPager();
+      })
+      .catch(function (e) { showError(e); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  /* A duplicated chart_of_accounts_main.id_5 makes a label ambiguous. It is
+     said out loud rather than resolved silently, because the same duplication
+     in a SQL JOIN would have doubled every figure on this page. */
+  function renderNotices() {
+    var el = document.getElementById('box-notices');
+    if (!el) return;
+    var html = '';
+    if (LAST.label_duplicate_ids && LAST.label_duplicate_ids.length) {
+      html += '<div class="notice notice-warn">أكواد حسابات لها أكثر من اسم في دليل الحسابات: ' +
+        esc(LAST.label_duplicate_ids.join('، ')) +
+        ' — الاسم المعروض هو أول اسم مسجل، والأرقام غير متأثرة.</div>';
+    }
+    el.innerHTML = html;
+  }
+
+  function revisePill(v) {
+    return String(v) === '1'
+      ? '<span class="pill pill-1">مراجع</span>'
+      : '<span class="pill pill-0">غير مراجع</span>';
+  }
+
+  /* Both actions are gated on the write grant. A reader sees the dash, not a
+     button that will refuse them — and the server refuses regardless, since
+     both actions require 'write' in PAGE_ACCESS. */
+  function rowActions(row) {
+    if (!CAN_WRITE) return '<span style="color:#9ca3af;">—</span>';
+    var id = domId(row.id);
+    var btns = [{ label: 'تعديل', onclick: "openEdit('" + id + "')" }];
+    if (String(row.is_revised) !== '1') {
+      btns.push({ label: 'مراجعة', onclick: "confirmRevise('" + id + "')", color: '#16a34a' });
+    }
+    return UIC.actionBtns(btns);
+  }
+
+  function typeLabel(t) {
+    return String(t) === 'debit'
+      ? '<span class="pill pill-info">محصّل</span>'
+      : '<span class="pill pill-0">منصرف</span>';
+  }
+
+  /** Σ parsed prices vs transaction_amount. Null when there is nothing to compare. */
+  function sumCheck(row) {
+    var p = row.parse;
+    if (!p || !p.items || !p.items.length) return null;
+    var amount = Number(row.transaction_amount);
+    if (!isFinite(amount)) return null;
+    var diff = p.sum - amount;
+    return { sum: p.sum, amount: amount, diff: diff, bad: Math.abs(diff) > SUM_EPSILON };
+  }
+
+  function renderTable() {
+    var el = document.getElementById('box-table');
+    if (!el) return;
+    if (!LAST.rows.length) {
+      el.innerHTML = UIC.emptyState({
+        icon: 'inbox',
+        title: 'لا توجد حركات مطابقة للفلاتر',
+        body: 'جرّب توسيع نطاق التاريخ أو إزالة فلتر الحساب أو المسؤول.'
+      });
+      return;
+    }
+    /* [iPhone run 2] MOVE_COLS builds the <th> row AND the data-labels. The
+       shared .table has been a card per row below 600px since UI-4.8, but
+       with no data-label those cards were a column of bare values. */
+    var html = '<div class="table-wrap"><table id="box-moves-table" class="table">' +
+      '<thead><tr>' +
+        '<th style="width:34px;"></th>' +
+        MOVE_COLS.slice(1).map(function (c) { return '<th>' + c + '</th>'; }).join('') +
+      '</tr></thead><tbody>';
+
+    LAST.rows.forEach(function (row) {
+      var id = domId(row.id);
+      var open = !!EXPANDED[id];
+      var chk = sumCheck(row);
+      var failed = row.parse && row.parse.failed_count > 0;
+
+      html += '<tr id="box-row-' + id + '">' +
+        '<td data-label="' + MOVE_COLS[0] + '"><button class="row-toggle" onclick="toggleRow(\'' + id + '\')" ' +
+          'aria-expanded="' + open + '" aria-controls="box-detail-' + id + '" ' +
+          'aria-label="تفاصيل الحركة رقم ' + esc(row.id) + '">' + (open ? '▾' : '▸') + '</button></td>' +
+        '<td data-label="' + MOVE_COLS[1] + '">' + esc(row.transaction_date || '—') + '</td>' +
+        '<td data-label="' + MOVE_COLS[2] + '">' + esc(row.transaction_details || '—') +
+          (failed ? ' <span class="pill pill-warn">تعذر تحليل التفاصيل</span>' : '') +
+          (chk && chk.bad ? ' <span class="pill pill-warn">فرق ' + esc(money(Math.abs(chk.diff))) + '</span>' : '') +
+        '</td>' +
+        '<td class="num" data-label="' + MOVE_COLS[3] + '">' + esc(money(row.transaction_amount)) + '</td>' +
+        '<td data-label="' + MOVE_COLS[4] + '">' + typeLabel(row.transaction_type) + '</td>' +
+        '<td data-label="' + MOVE_COLS[5] + '">' + esc(acctLabel(row.chart_of_accounts)) + '</td>' +
+        '<td data-label="' + MOVE_COLS[6] + '">' + esc(row.responsible_person || '—') + '</td>' +
+        '<td class="num" data-label="' + MOVE_COLS[7] + '">' + esc(row.box_code == null ? '—' : row.box_code) + '</td>' +
+        '<td data-label="' + MOVE_COLS[8] + '">' + revisePill(row.is_revised) + '</td>' +
+        '<td data-label="' + MOVE_COLS[9] + '">' + riskBadge(row.risk) + '</td>' +
+        '<td data-label="' + MOVE_COLS[10] + '">' + rowActions(row) + '</td>' +
+      '</tr>' +
+      '<tr id="box-detail-' + id + '"' + (open ? '' : ' hidden') + '>' +
+        '<td class="detail-cell" colspan="11" data-label="">' + (open ? detailHtml(row) : '') + '</td>' +
+      '</tr>';
+    });
+
+    html += '</tbody></table></div>';
+    el.innerHTML = html;
+    UIC.autoColumns('box-moves-table');
+  }
+
+  function toggleRow(id) {
+    var safe = domId(id);
+    EXPANDED[safe] = !EXPANDED[safe];
+    var tr = document.getElementById('box-detail-' + safe);
+    var btn = document.querySelector('#box-row-' + safe + ' .row-toggle');
+    if (!tr) return;
+    if (EXPANDED[safe]) {
+      var row = LAST.rows.find(function (x) { return domId(x.id) === safe; });
+      tr.firstChild.innerHTML = row ? detailHtml(row) : '';
+      tr.hidden = false;
+    } else {
+      tr.hidden = true;
+      tr.firstChild.innerHTML = '';
+    }
+    if (btn) {
+      btn.textContent = EXPANDED[safe] ? '▾' : '▸';
+      btn.setAttribute('aria-expanded', String(!!EXPANDED[safe]));
+    }
+  }
+
+  function detailHtml(row) {
+    return '<div class="detail-grid">' +
+      '<div class="detail-block">' +
+        '<h4>البنود المستخرجة من التفاصيل</h4>' + itemsHtml(row) +
+      '</div>' +
+      '<div class="detail-block">' +
+        '<h4>حركة الحساب ' + esc(acctLabel(row.chart_of_accounts)) + '</h4>' + windowsHtml(row) +
+      '</div>' +
+      /* The triggered rules render beside the evidence they are about, never as
+         a bare score somewhere else on the page. */
+      '<div class="detail-block" id="box-rules-' + domId(row.id) + '">' +
+        '<h4>الملاحظات على هذه الحركة</h4>' + flagsHtml(row.risk) +
+      '</div>' +
+    '</div>';
+  }
+
+  var MOVE_COLS = ['', 'التاريخ', 'التفاصيل', 'المبلغ', 'النوع',
+                    'الحساب', 'المسؤول', 'الخزنة', 'الحالة', 'الخطورة', 'إجراء'];
+  var ALERT_COLS = ['الخطورة', '#', 'التاريخ', 'التفاصيل', 'المبلغ',
+                     'الحساب', 'المسؤول', 'الأسباب'];
+  var CLUSTER_COLS = ['الصنف', 'عدد الشراء', 'وسيط سعر الوحدة', 'الأدنى', 'الأعلى',
+                       'التسميات المدمجة', 'تصحيح'];
+  var ITEM_COLS = ['الكمية', 'الوحدة', 'الصنف', 'السعر', 'سعر الوحدة'];
+
+  function itemsHtml(row) {
+    var p = row.parse;
+    if (!p) return '<div class="win-note">لم يتم تحليل التفاصيل.</div>';
+
+    var html = '';
+    if (p.items.length) {
+      /* [iPhone run 2] card-table is the shared opt-in in UI_Components: a
+         card per row below 600px, an ordinary table from 600px up and on
+         paper. ITEM_COLS builds the <th> row AND the data-labels, so a
+         column and its label cannot drift apart. */
+      html += '<table class="items-table card-table"><thead><tr>' +
+        ITEM_COLS.map(function (c) { return '<th>' + c + '</th>'; }).join('') +
+        '</tr></thead><tbody>';
+      p.items.forEach(function (it) {
+        html += '<tr>' +
+          '<td class="num" data-label="' + ITEM_COLS[0] + '">' + (it.qty == null ? '—' : esc(FMT.number(Math.round(it.qty * 10000) / 10000))) + '</td>' +
+          '<td data-label="' + ITEM_COLS[1] + '">' + esc(it.unit || '—') + '</td>' +
+          '<td data-label="' + ITEM_COLS[2] + '">' + esc(it.item_norm) + '</td>' +
+          '<td class="num" data-label="' + ITEM_COLS[3] + '">' + esc(money(it.price)) + '</td>' +
+          '<td class="num" data-label="' + ITEM_COLS[4] + '">' + (it.unit_price == null ? '—' : esc(money(it.unit_price))) + '</td>' +
+        '</tr>';
+      });
+      var chk = sumCheck(row);
+      html += '</tbody>';
+      if (chk) {
+        html += '<tfoot><tr>' +
+          '<td colspan="3" data-label="المطابقة">إجمالي البنود مقابل المبلغ المسجل</td>' +
+          '<td class="num ' + (chk.bad ? 'sum-bad' : 'sum-ok') + '" data-label="إجمالي البنود">' + esc(money(chk.sum)) + '</td>' +
+          '<td class="num ' + (chk.bad ? 'sum-bad' : 'sum-ok') + '" data-label="المبلغ المسجل">' + esc(money(chk.amount)) + '</td>' +
+        '</tr>';
+        if (chk.bad) {
+          html += '<tr><td colspan="5" class="sum-bad" data-label="نتيجة المطابقة">' +
+            'الفرق ' + esc(money(Math.abs(chk.diff))) + ' ' +
+            (chk.diff > 0 ? '(البنود أكبر من المبلغ المسجل)' : '(المبلغ المسجل أكبر من البنود)') +
+            '</td></tr>';
+        }
+        html += '</tfoot>';
+      }
+      html += '</table>';
+    }
+
+    /* Failures are shown, never dropped. A row whose details will not parse is
+       one a human needs to see — and a dropped segment would make the sum check
+       above agree with a description that does not account for the money. */
+    if (p.failures && p.failures.length) {
+      p.failures.forEach(function (f) {
+        html += '<div class="parse-fail">تعذر تحليل هذا الجزء: «' + esc(f.segment) + '» — ' + esc(f.reason_ar) + '</div>';
+      });
+    }
+    if (!p.items.length && !(p.failures || []).length) {
+      html += '<div class="win-note">لا توجد تفاصيل مسجلة لهذه الحركة.</div>';
+    }
+    return html;
+  }
+
+  function windowsHtml(row) {
+    var code = String(row.chart_of_accounts == null ? '' : row.chart_of_accounts).trim();
+    var a = LAST.aggregates[code];
+    var w = LAST.windows;
+    if (!a || !w) return '<div class="win-note">لا توجد أرقام مجمّعة لهذا الحساب.</div>';
+
+    function card(labelAr, value, prev, range) {
+      var sub = esc(range.from) + ' → ' + esc(range.to);
+      var d = '';
+      if (prev !== undefined) {
+        if (!prev) {
+          d = '<div class="win-sub">لا يوجد أساس للمقارنة</div>';
+        } else {
+          var pct = (value - prev) / prev;
+          var up = pct >= 0;
+          d = '<div class="win-sub ' + (up ? 'win-up' : 'win-down') + '">' +
+            (up ? '▲' : '▼') + ' ' + esc(FMT.percent(Math.abs(pct))) + '</div>';
+        }
+      }
+      return '<div class="win-card">' +
+        '<div class="win-label">' + esc(labelAr) + '</div>' +
+        '<div class="win-value">' + esc(money(value)) + '</div>' +
+        '<div class="win-sub">' + sub + '</div>' + d +
+      '</div>';
+    }
+
+    var html = '<div class="win-strip">' +
+      card(w.mtd.label_ar, a.spend_mtd, undefined, w.mtd) +
+      card(w.last_month.label_ar, a.spend_last_month, undefined, w.last_month) +
+      card(w.ytd.label_ar, a.spend_ytd, a.spend_last_ytd, w.ytd) +
+      card(w.last_ytd.label_ar, a.spend_last_ytd, undefined, w.last_ytd) +
+    '</div>';
+
+    /* MTD against last month is the comparison people actually make, so it is
+       stated explicitly rather than left for the reader to do in their head —
+       and the two ranges are printed on the cards so it is visible that both
+       cover the same number of days. */
+    if (a.spend_last_month) {
+      var pct = (a.spend_mtd - a.spend_last_month) / a.spend_last_month;
+      html += '<div class="win-note">الشهر الحالي مقابل نفس المدة من الشهر السابق: ' +
+        (pct >= 0 ? '+' : '−') + esc(FMT.percent(Math.abs(pct))) + '</div>';
+    }
+
+    /* Collections are shown beside spend and never inside it. Netting a
+       collection into a spend total lets an inflow mask an outflow. */
+    html += '<div class="win-note">محصّل (منفصل عن المنصرف) — ' +
+      esc(w.mtd.label_ar) + ': ' + esc(money(a.collected_mtd)) + ' · ' +
+      esc(w.ytd.label_ar) + ': ' + esc(money(a.collected_ytd)) + '</div>';
+    html += '<div class="win-note">عدد حركات المنصرف — ' +
+      esc(w.mtd.label_ar) + ': ' + esc(FMT.number(a.n_mtd)) + ' · ' +
+      esc(w.ytd.label_ar) + ': ' + esc(FMT.number(a.n_ytd)) + '</div>';
+    return html;
+  }
+
+
+  /* ── The edit path (plan §8.5) ─────────────────────────────────────────────
+   *
+   * EDIT_FIELDS mirrors BoxEngine.EDITABLE_COLUMNS. The engine is a SERVER file
+   * and cannot be reached from here, so a form definition on this side is
+   * unavoidable — but two lists that can drift apart is exactly how a column
+   * ends up editable in the form and rejected by the server, or worse, the
+   * other way round. tools/verify/box_edit.js asserts the two sets are equal,
+   * so the duplication cannot rot silently.
+   *
+   * id, created_at and updated_at are ABSENT, each for its own reason, and the
+   * form says so rather than just omitting them: created_at is the evidence the
+   * backdating rules run on, and a page that audits tampering must not offer a
+   * field for editing the timestamps it audits.
+   */
+  var EDIT_FIELDS = [
+    { col: 'transaction_date',    label: 'التاريخ',        type: 'date' },
+    { col: 'transaction_details', label: 'التفاصيل',       type: 'textarea', max: 255 },
+    { col: 'transaction_amount',  label: 'المبلغ',         type: 'money' },
+    { col: 'transaction_type',    label: 'النوع',          type: 'select',
+      options: [{ value: 'credit', label: 'منصرف (credit)' }, { value: 'debit', label: 'محصّل (debit)' }] },
+    { col: 'chart_of_accounts',   label: 'كود الحساب',     type: 'digits' },
+    { col: 'responsible_person',  label: 'المسؤول',        type: 'text' },
+    { col: 'box_code',            label: 'كود الخزنة',     type: 'int' },
+    { col: 'client_id',           label: 'كود العميل',     type: 'intNull' },
+    { col: 'related_id',          label: 'الكود المرتبط',  type: 'intNull' },
+    { col: 'user_id',             label: 'كود المستخدم',   type: 'intNull' },
+    { col: 'is_revised',          label: 'حالة المراجعة',  type: 'select',
+      options: [{ value: '0', label: 'غير مراجع' }, { value: '1', label: 'مراجع' }] }
+  ];
+
+  var EDIT_PREFIX = 'ed_';
+
+  function fieldFor(col) {
+    for (var i = 0; i < EDIT_FIELDS.length; i++) if (EDIT_FIELDS[i].col === col) return EDIT_FIELDS[i];
+    return null;
+  }
+
+  /* A courtesy copy of the server's rules, so the user is told about a bad
+     value before a round trip rather than after one. The SERVER's copy is the
+     rule; this one only ever refuses things the server would also refuse. */
+  function clientValidate(f, raw) {
+    var v = String(raw === undefined || raw === null ? '' : raw).trim();
+    switch (f.type) {
+      case 'date':
+        if (!v) return f.label + ': التاريخ مطلوب';
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) return f.label + ': صيغة التاريخ غير صحيحة';
+        return '';
+      case 'textarea':
+        /* Enforced here as well as on the server because MySQL would truncate
+           a varchar(255) silently — the user would save a description and get
+           back a shorter one with no error at all. */
+        if (v.length > f.max) return f.label + ': الحد الأقصى ' + f.max + ' حرفاً، والمُدخل ' + v.length;
+        return '';
+      case 'money':
+        if (!v) return f.label + ': القيمة مطلوبة';
+        if (!/^-?\d+(\.\d{1,2})?$/.test(v)) return f.label + ': رقم بحد أقصى منزلتين عشريتين';
+        return '';
+      case 'digits':
+        if (!v) return f.label + ': القيمة مطلوبة';
+        if (!/^\d{1,20}$/.test(v)) return f.label + ': أرقام فقط';
+        return '';
+      case 'int':
+        if (!v) return f.label + ': القيمة مطلوبة';
+        if (!/^-?\d{1,19}$/.test(v)) return f.label + ': رقم صحيح فقط';
+        return '';
+      case 'intNull':
+        if (!v) return '';
+        if (!/^-?\d{1,19}$/.test(v)) return f.label + ': رقم صحيح أو فراغ';
+        return '';
+      case 'select':
+        for (var i = 0; i < f.options.length; i++) if (f.options[i].value === v) return '';
+        return f.label + ': قيمة غير مسموحة';
+      default:
+        return '';
+    }
+  }
+
+  function rowById(id) {
+    var safe = domId(id);
+    return LAST.rows.find(function (x) { return domId(x.id) === safe; }) || null;
+  }
+
+  /** How a value reads in the confirmation dialog. */
+  function displayValue(col, v) {
+    var f = fieldFor(col);
+    var s = (v === undefined || v === null) ? '' : String(v);
+    if (!f) return s || '(فارغ)';
+    if (f.type === 'select') {
+      for (var i = 0; i < f.options.length; i++) {
+        if (f.options[i].value === s) return f.options[i].label;
+      }
+    }
+    if (f.type === 'money') return s === '' ? '(فارغ)' : money(s);
+    return s === '' ? '(فارغ)' : s;
+  }
+
+  function openEdit(id) {
+    if (!CAN_WRITE) { UIC.toast('غير مصرح بالتعديل', 'error'); return; }
+    var row = rowById(id);
+    if (!row) { UIC.toast('الحركة غير موجودة في هذه الصفحة', 'error'); return; }
+
+    var body = '<form id="box-edit-form">' +
+      '<div class="edit-hint">التعديل يُطبَّق على قاعدة البيانات مباشرة، صفاً واحداً، بعد تأكيد يذكر ما تغيّر.</div>';
+    EDIT_FIELDS.forEach(function (f) {
+      var cur = row[f.col];
+      var val = (cur === undefined || cur === null) ? '' : String(cur);
+      if (f.type === 'select') {
+        body += UIC.field({ key: EDIT_PREFIX + f.col, label: f.label, type: 'select',
+                            combo: false, options: f.options, value: val });
+      } else if (f.type === 'textarea') {
+        body += UIC.field({ key: EDIT_PREFIX + f.col, label: f.label + ' (بحد أقصى ' + f.max + ' حرفاً)',
+                            type: 'textarea', rows: 3, value: val });
+      } else if (f.type === 'date') {
+        body += UIC.field({ key: EDIT_PREFIX + f.col, label: f.label, type: 'date', value: val });
+      } else {
+        body += UIC.field({ key: EDIT_PREFIX + f.col, label: f.label, type: 'text',
+                            numeric: (f.type !== 'text'), noCorrect: (f.type !== 'text'), value: val });
+      }
+    });
+    body += '<div class="edit-locked">' +
+      'حقول غير قابلة للتعديل: <b>رقم الحركة</b> ' + esc(row.id) + ' · ' +
+      '<b>تاريخ الإنشاء</b> ' + esc(row.created_at || '—') + ' · ' +
+      '<b>آخر تعديل</b> ' + esc(row.updated_at || '—') + '<br>' +
+      'تاريخ الإنشاء دليل تدقيق تعتمد عليه قواعد كشف التلاعب، ولذلك لا يُعدَّل من هنا. ' +
+      'ويضبط الخادم تاريخ آخر تعديل تلقائياً عند كل حفظ.' +
+      '</div></form>';
+
+    UIC.openModal('box-edit-modal', {
+      title: 'تعديل حركة رقم ' + esc(row.id),
+      size: 'lg',
+      body: body,
+      onSave: "saveEdit('" + domId(row.id) + "')"
+    });
+    /* The dirty guard already wired in the shared layer covers navigating away
+       from a half-typed form; nothing new is needed for it. */
+    try { UIC.trackDirty('box-edit-form'); } catch (e) {}
+  }
+
+  /**
+   * Diff → validate → NAME THE CHANGE → confirm → save → re-read.
+   *
+   * UIC.confirm returns a Promise, so this cannot be written as a blocking
+   * `if`. Everything after the question lives inside .then, and a `false`
+   * answer — the Cancel button, Escape, or a click on the overlay — returns
+   * without touching anything.
+   */
+  function saveEdit(id) {
+    if (!CAN_WRITE) { UIC.toast('غير مصرح بالتعديل', 'error'); return; }
+    var row = rowById(id);
+    if (!row) { UIC.toast('الحركة غير موجودة', 'error'); return; }
+
+    var form = UIC._readForm('box-edit-form');
+    var changes = {}, details = [], firstError = '';
+
+    EDIT_FIELDS.forEach(function (f) {
+      var entered = form.data[EDIT_PREFIX + f.col];
+      if (entered === undefined) return;
+      var before = row[f.col];
+      var a = (before === undefined || before === null) ? '' : String(before).trim();
+      var b = String(entered).trim();
+
+      /* Money compares by VALUE, so re-typing 725 over 725.00 is not an edit
+         and does not move updated_at — which the EDITED_AFTER_REVIEW rule
+         reads — for no reason. */
+      if (f.type === 'money' && a !== '' && b !== '' && isFinite(Number(a)) && isFinite(Number(b))) {
+        if (Number(a) === Number(b)) return;
+      } else if (a === b) {
+        return;
+      }
+
+      var err = clientValidate(f, b);
+      if (err) { if (!firstError) firstError = err; UIC.setFieldError(EDIT_PREFIX + f.col, err); return; }
+      UIC.setFieldError(EDIT_PREFIX + f.col, '');
+
+      changes[f.col] = b;
+      /* One line per changed column, old on the right of the arrow because the
+         page is RTL and the arrow points from new back to old the way the user
+         reads it. This is the whole reason UIC.confirm takes a `detail`. */
+      details.push(f.label + ': ' + displayValue(f.col, b) + ' ← ' + displayValue(f.col, a));
+    });
+
+    if (firstError) { UIC.toast(firstError, 'error'); return; }
+    if (!Object.keys(changes).length) { UIC.toast('لا توجد تغييرات', 'warning'); return; }
+
+    /* Crossing 300000–400000 silently changes WHICH ANALYSES APPLY to this row.
+       Nothing else on screen would show that, so the dialog says it. */
+    if (Object.prototype.hasOwnProperty.call(changes, 'chart_of_accounts')) {
+      var wasIn = inRange(row.chart_of_accounts);
+      var willBe = inRange(changes.chart_of_accounts);
+      if (wasIn !== willBe) {
+        details.push(willBe
+          ? '⚠ هذا التعديل يُدخل الحركة في نطاق تحليل البنود (300000–400000)'
+          : '⚠ هذا التعديل يُخرج الحركة من نطاق تحليل البنود (300000–400000)');
+      }
+    }
+
+    UIC.confirm({
+      title: 'تأكيد التعديل',
+      message: 'سيتم حفظ التغييرات التالية مباشرة، وتسجيلها في سجل التدقيق.',
+      /* NAMING the record is the point. "هل أنت متأكد؟" is not a question
+         anyone can answer correctly. */
+      record: 'حركة رقم ' + row.id + ' — ' + (row.transaction_date || ''),
+      detail: details.join('\n'),
+      confirmText: 'تأكيد التعديل',
+      cancelText: 'إلغاء'
+    }).then(function (okd) {
+      if (!okd) return;                       /* Escape and the overlay are a "no". */
+      UI.showSpinner('جاري حفظ التعديل...');
+      companyCall('update_box_movement', { id: row.id, changes: changes })
+        .then(function (r) {
+          if (r && r.audit_error) {
+            /* The row changed but the audit line did not land. Saying "saved"
+               and nothing else would leave an edit the log cannot explain. */
+            UIC.alert({
+              title: 'تم الحفظ — لكن سجل التدقيق لم يكتمل',
+              danger: true,
+              message: 'تم تعديل الحركة رقم ' + row.id + ' فعلياً، ولكن تعذّر كتابة سطر التأكيد في سجل التدقيق.',
+              detail: 'أبلغ المسؤول: ' + r.audit_error
+            });
+          } else {
+            UIC.toast('تم حفظ التعديل', 'success');
+          }
+          if (r && r.boundary && r.boundary.reason_ar) UIC.toast(r.boundary.reason_ar, 'warning');
+          try { UIC.clearDirty('box-edit-form'); } catch (e) {}
+          UIC.closeModal('box-edit-modal');
+          /* Re-read rather than patching the row in place: the server sets
+             updated_at, and the parse and every flag have to be recomputed from
+             what is actually stored now. */
+          fetchPage();
+        })
+        .catch(function (e) { UIC.toast((e && e.message) || 'تعذّر حفظ التعديل', 'error'); })
+        .finally(function () { UI.hideSpinner(); });
+    });
+  }
+
+  function inRange(code) {
+    var s = String(code === undefined || code === null ? '' : code).trim();
+    if (!/^\d+$/.test(s)) return false;
+    var n = Number(s);
+    return n >= 300000 && n <= 400000;
+  }
+
+  function confirmRevise(id) {
+    if (!CAN_WRITE) { UIC.toast('غير مصرح', 'error'); return; }
+    var row = rowById(id);
+    if (!row) return;
+    UIC.confirm({
+      title: 'اعتماد المراجعة',
+      message: 'سيتم وضع علامة "مراجع" على هذه الحركة.',
+      record: 'حركة رقم ' + row.id + ' — ' + (row.transaction_date || ''),
+      detail: 'حالة المراجعة: مراجع ← غير مراجع\nالمبلغ: ' + money(row.transaction_amount),
+      confirmText: 'اعتماد المراجعة',
+      cancelText: 'إلغاء'
+    }).then(function (okd) {
+      if (!okd) return;
+      UI.showSpinner('جاري اعتماد المراجعة...');
+      companyCall('revise_box_movement', { id: row.id })
+        .then(function (r) {
+          if (r && r.audit_error) {
+            UIC.alert({ title: 'تم الاعتماد — لكن سجل التدقيق لم يكتمل', danger: true,
+              message: 'تمت مراجعة الحركة رقم ' + row.id + ' فعلياً، ولكن تعذّر كتابة سطر التأكيد في سجل التدقيق.',
+              detail: 'أبلغ المسؤول: ' + r.audit_error });
+          } else {
+            UIC.toast('تم اعتماد المراجعة', 'success');
+          }
+          fetchPage();
+        })
+        .catch(function (e) { UIC.toast((e && e.message) || 'خطأ', 'error'); })
+        .finally(function () { UI.hideSpinner(); });
+    });
+  }
+
+
+  /* ── Tabs 2 and 3 (plan §8) ───────────────────────────────────────────────
+   *
+   * Each tab costs its OWN query and is loaded on first activation, never with
+   * the page. The movements tab holds the three-query budget; the alerts tab
+   * needs a population rather than a page (Benford alone is gated at 300
+   * amounts) and the item tab needs the parsed history. Loading all three up
+   * front would triple the cost of opening the screen for a user who only
+   * wanted to look at yesterday's movements.
+   */
+  var TABS_LOADED = { alerts: false, items: false };
+  var ALERTS = { months: 12, data: null };
+  var ITEMS = { months: 24, data: null };
+
+  function riskBadge(risk) {
+    if (!risk || !risk.score) return '<span style="color:#9ca3af;">—</span>';
+    var cls = risk.level === 'high' ? 'risk-high' : risk.level === 'medium' ? 'risk-med' : 'risk-low';
+    /* The number never appears without its count of reasons beside it. */
+    var n = risk.flags.length;
+    return '<span class="pill ' + cls + '" title="' + esc(risk.flags.map(function (f) { return f.reason_ar; }).join(' | ')) + '">' +
+      esc(risk.level_ar) + ' · ' + risk.score + '</span>' +
+      ' <span class="risk-n">' + n + '</span>';
+  }
+
+  /** The triggered rules for a row, as Arabic sentences with their evidence. */
+  function flagsHtml(risk) {
+    if (!risk || !risk.flags || !risk.flags.length) {
+      return '<div class="win-note">لا توجد ملاحظات على هذه الحركة.</div>';
+    }
+    var html = '';
+    risk.flags.forEach(function (f) {
+      var cls = f.severity === 'high' ? 'flag-high' : f.severity === 'medium' ? 'flag-med' : 'flag-low';
+      html += '<div class="flag ' + cls + '">' +
+        '<div class="flag-head"><span class="pill ' +
+          (f.severity === 'high' ? 'risk-high' : f.severity === 'medium' ? 'risk-med' : 'risk-low') +
+          '">' + esc(f.severity_ar) + '</span> <code>' + esc(f.rule_id) + '</code></div>' +
+        '<div class="flag-why">' + esc(f.reason_ar) + '</div>';
+      var rows = (f.evidence || []).filter(function (e) { return e && e.row_id; });
+      if (rows.length) {
+        html += '<div class="flag-ev">الحركات المرتبطة: ' +
+          rows.map(function (e) { return esc(e.row_id); }).join('، ') + '</div>';
+      }
+      html += '</div>';
+    });
+    return html;
+  }
+
+  /* ── Tab 2 — التنبيهات ──────────────────────────────────────────────────── */
+
+  function alertsPanelHtml() {
+    return '<div class="filter-bar">' +
+        '<div class="form-field"><label class="form-label" for="a-months">الفترة (بالأشهر)</label>' +
+          '<input id="a-months" type="number" min="1" max="60" class="input" value="' + ALERTS.months + '"></div>' +
+        '<button class="btn btn-primary" onclick="fetchAlerts()">تحليل</button>' +
+      '</div>' +
+      '<div id="alerts-notices"></div>' +
+      '<div id="alerts-body"><div class="win-note">اضغط «تحليل» لفحص الفترة المحددة.</div></div>';
+  }
+
+  function fetchAlerts() {
+    var m = Number((document.getElementById('a-months') || {}).value) || 12;
+    ALERTS.months = Math.min(Math.max(m, 1), 60);
+    UIC.readSkeleton('alerts-body', { message: 'جاري تحليل الفترة...' });
+    companyCall('get_box_alerts', {
+      ref_date: LAST.ref_date, months: ALERTS.months,
+      chart_of_accounts: FILTER.chart_of_accounts,
+      responsible_person: FILTER.responsible_person
+    })
+      .then(function (r) { ALERTS.data = r; renderAlerts(); })
+      .catch(function (e) {
+        var el = document.getElementById('alerts-body');
+        if (el) el.innerHTML = UIC.emptyState({ icon: 'alert', title: 'تعذّر التحليل',
+          body: (e && e.message) || 'خطأ غير معروف' });
+      })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function renderAlerts() {
+    var r = ALERTS.data || {};
+    var notices = document.getElementById('alerts-notices');
+    if (notices) {
+      var n = '';
+      /* A partial analysis says so. Reporting fewer findings because the window
+         was cut, without saying the window was cut, reads as "all clear". */
+      if (r.truncated) n += '<div class="notice notice-warn">' + esc(r.truncated_message_ar) + '</div>';
+      if (r.timed_out) n += '<div class="notice notice-warn">' + esc(r.timed_out_message_ar) + '</div>';
+      notices.innerHTML = n;
+    }
+
+    var el = document.getElementById('alerts-body');
+    if (!el) return;
+    var alerts = r.alerts || [];
+    var html = '<div class="win-note">تم فحص ' + esc(FMT.number(r.rows_scanned || 0)) +
+      ' حركة من ' + esc(r.from || '') + ' إلى ' + esc(r.to || '') + '.</div>';
+
+    if (!alerts.length) {
+      html += UIC.emptyState({ icon: 'inbox', title: 'لا توجد تنبيهات في هذه الفترة',
+        body: 'لم تُطابق أي حركة قواعد الفحص. راجع الملاحظات أدناه لمعرفة القواعد التي لم تعمل ولماذا.' });
+    } else {
+      html += '<div class="table-wrap"><table id="box-alerts-table" class="table"><thead><tr>' +
+        ALERT_COLS.map(function (c) { return '<th>' + c + '</th>'; }).join('') +
+        '</tr></thead><tbody>';
+      alerts.forEach(function (a) {
+        html += '<tr>' +
+          '<td data-label="' + ALERT_COLS[0] + '">' + riskBadge(a.risk) + '</td>' +
+          '<td class="num" data-label="' + ALERT_COLS[1] + '">' + esc(a.id) + '</td>' +
+          '<td data-label="' + ALERT_COLS[2] + '">' + esc(a.transaction_date || '—') + '</td>' +
+          '<td data-label="' + ALERT_COLS[3] + '">' + esc(a.transaction_details || '—') + '</td>' +
+          '<td class="num" data-label="' + ALERT_COLS[4] + '">' + esc(money(a.transaction_amount)) + '</td>' +
+          '<td data-label="' + ALERT_COLS[5] + '">' + esc(acctLabel(a.chart_of_accounts)) + '</td>' +
+          '<td data-label="' + ALERT_COLS[6] + '">' + esc(a.responsible_person || '—') + '</td>' +
+          '<td data-label="' + ALERT_COLS[7] + '">' + flagsHtml(a.risk) + '</td>' +
+        '</tr>';
+      });
+      html += '</tbody></table></div>';
+    }
+
+    /* Entity-level findings render SEPARATELY from row alerts, because
+       "this person's amounts do not follow Benford" is not a claim about any
+       one movement and must not be shown as one. */
+    var ent = r.entity_findings || [];
+    if (ent.length) {
+      html += '<h3 class="sec-title">ملاحظات على مستوى المسؤولين والحسابات</h3>';
+      ent.forEach(function (f) {
+        html += '<div class="flag ' + (f.severity === 'high' ? 'flag-high' : f.severity === 'medium' ? 'flag-med' : 'flag-low') + '">' +
+          '<div class="flag-head"><span class="pill risk-med">' + esc(f.severity_ar) + '</span> ' +
+          '<code>' + esc(f.rule_id) + '</code> · ' + esc(f.entity_kind || '') + ' ' + esc(f.entity || '') + '</div>' +
+          '<div class="flag-why">' + esc(f.reason_ar) + '</div></div>';
+      });
+    }
+
+    /* The rules that did NOT run, and why. "No finding" and "could not look"
+       are different answers, and only one of them is reassuring. */
+    var notes = r.notes || [];
+    if (notes.length) {
+      html += '<h3 class="sec-title">قواعد لم تُطبَّق</h3><ul class="note-list">';
+      notes.slice(0, 40).forEach(function (n) {
+        html += '<li><code>' + esc(n.rule_id) + '</code> — ' + esc(n.reason_ar) + '</li>';
+      });
+      if (notes.length > 40) html += '<li>… و' + (notes.length - 40) + ' ملاحظة أخرى</li>';
+      html += '</ul>';
+    }
+    el.innerHTML = html;
+    UIC.autoColumns('box-alerts-table');
+  }
+
+  /* ── Tab 3 — تحليل البنود ───────────────────────────────────────────────── */
+
+  function itemsPanelHtml() {
+    return '<div class="filter-bar">' +
+        '<div class="form-field"><label class="form-label" for="i-months">الفترة (بالأشهر)</label>' +
+          '<input id="i-months" type="number" min="1" max="60" class="input" value="' + ITEMS.months + '"></div>' +
+        '<button class="btn btn-primary" onclick="fetchItems()">تحليل البنود</button>' +
+      '</div>' +
+      '<div id="items-notices"></div>' +
+      '<div id="items-body"><div class="win-note">اضغط «تحليل البنود» لبناء فهرس الأصناف للفترة المحددة.</div></div>';
+  }
+
+  function fetchItems() {
+    var m = Number((document.getElementById('i-months') || {}).value) || 24;
+    ITEMS.months = Math.min(Math.max(m, 1), 60);
+    UIC.readSkeleton('items-body', { message: 'جاري تحليل البنود...' });
+    companyCall('get_box_item_history', {
+      ref_date: LAST.ref_date, months: ITEMS.months,
+      chart_of_accounts: FILTER.chart_of_accounts
+    })
+      .then(function (r) { ITEMS.data = r; renderItems(); })
+      .catch(function (e) {
+        var el = document.getElementById('items-body');
+        if (el) el.innerHTML = UIC.emptyState({ icon: 'alert', title: 'تعذّر تحليل البنود',
+          body: (e && e.message) || 'خطأ غير معروف' });
+      })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function renderItems() {
+    var r = ITEMS.data || {};
+    var notices = document.getElementById('items-notices');
+    if (notices) {
+      var n = '';
+      if (r.truncated) {
+        n += '<div class="notice notice-warn">تم تحليل أحدث ' +
+          esc(FMT.number(r.row_count || 0)) + ' حركة فقط ضمن الفترة — النتائج لا تغطي الفترة كاملة.</div>';
+      }
+      var cov = r.coverage || {};
+      if (cov.rows_read) {
+        /* This is a REAL measurement against production text, unlike the
+           fixture figure in the verification suite. It is the number the owner
+           was asked to report. */
+        n += '<div class="notice">تغطية التحليل: ' + esc(FMT.number(cov.rows_with_items)) + ' من ' +
+          esc(FMT.number(cov.rows_read)) + ' حركة أمكن استخراج بنودها (' +
+          Math.round(100 * cov.rows_with_items / cov.rows_read) + '%) · ' +
+          esc(FMT.number(cov.failed_segments)) + ' جزء تعذّر تحليله · ' +
+          esc(FMT.number(cov.sum_mismatch_rows)) + ' حركة مجموع بنودها لا يطابق المبلغ.</div>';
+      }
+      notices.innerHTML = n;
+    }
+
+    var el = document.getElementById('items-body');
+    if (!el) return;
+    var clusters = r.clusters || [];
+    if (!clusters.length) {
+      el.innerHTML = UIC.emptyState({ icon: 'inbox', title: 'لا توجد بنود في هذه الفترة',
+        body: 'تحليل البنود يعمل على الحسابات في نطاق 300000–400000 وعلى حركات المنصرف فقط.' });
+      return;
+    }
+
+    var stats = r.stats || {};
+    var byRow = r.item_flags_by_row || {};
+    var html = '<div class="win-note">' + esc(FMT.number(clusters.length)) +
+      ' مجموعة صنف من ' + esc(FMT.number(r.row_count || 0)) + ' حركة · حد التطابق ' +
+      esc(String(r.threshold)) + '</div>';
+
+    if (r.aliases && (r.aliases.merge.length || r.aliases.split.length)) {
+      html += '<div class="win-note">تصحيحات يدوية مسجَّلة: ' + r.aliases.merge.length +
+        ' دمج و' + r.aliases.split.length + ' فصل' +
+        (r.aliases.updated_by ? ' — آخر تعديل بواسطة ' + esc(r.aliases.updated_by) : '') + '</div>';
+    }
+
+    html += '<div class="table-wrap"><table id="box-clusters-table" class="table"><thead><tr>' +
+      CLUSTER_COLS.map(function (c) { return '<th>' + c + '</th>'; }).join('') +
+      '</tr></thead><tbody>';
+
+    clusters.forEach(function (c) {
+      var st = stats[c.cluster_id];
+      var price = st && st.price ? st.price : null;
+      var flagged = (r.occurrences_by_cluster[c.cluster_id] || []).filter(function (o) {
+        return (byRow[String(o.movement_id)] || []).length;
+      }).length;
+      html += '<tr>' +
+        '<td data-label="' + CLUSTER_COLS[0] + '">' + esc(c.label) + (flagged ? ' <span class="pill pill-warn">' + flagged + ' ملاحظة</span>' : '') + '</td>' +
+        '<td class="num" data-label="' + CLUSTER_COLS[1] + '">' + esc(FMT.number(c.occurrence_count)) + '</td>' +
+        '<td class="num" data-label="' + CLUSTER_COLS[2] + '">' + (price ? esc(money(price.median)) : '—') + '</td>' +
+        '<td class="num" data-label="' + CLUSTER_COLS[3] + '">' + (price ? esc(money(price.min)) : '—') + '</td>' +
+        '<td class="num" data-label="' + CLUSTER_COLS[4] + '">' + (price ? esc(money(price.max)) : '—') + '</td>' +
+        '<td data-label="' + CLUSTER_COLS[5] + '">' + (c.members.length > 1
+            ? esc(c.members.slice(1).join('  |  '))
+            : '<span style="color:#9ca3af;">—</span>') + '</td>' +
+        '<td data-label="' + CLUSTER_COLS[6] + '">' + (CAN_WRITE
+            ? UIC.actionBtns([{ label: 'دمج/فصل', onclick: "openAliasDialog('" + esc(c.cluster_id).replace(/'/g, '') + "')" }])
+            : '<span style="color:#9ca3af;">—</span>') + '</td>' +
+      '</tr>';
+    });
+    html += '</tbody></table></div>';
+    el.innerHTML = html;
+    UIC.autoColumns('box-clusters-table');
+  }
+
+  /**
+   * The merge/split control of plan §5.3.
+   *
+   * The matcher will be wrong sometimes, and without a way to correct it
+   * permanently the reviewer argues with the algorithm every week and stops
+   * trusting the page. The correction is stored server-side and survives every
+   * rebuild — it is not a display toggle.
+   */
+  function openAliasDialog(clusterId) {
+    if (!CAN_WRITE) { UIC.toast('غير مصرح', 'error'); return; }
+    var r = ITEMS.data || {};
+    var cluster = (r.clusters || []).filter(function (c) { return c.cluster_id === clusterId; })[0];
+    if (!cluster) { UIC.toast('المجموعة غير موجودة', 'error'); return; }
+    var options = (r.clusters || []).filter(function (c) { return c.cluster_id !== clusterId; })
+      .slice(0, 300)
+      .map(function (c) { return { value: c.label, label: c.label + ' (' + c.occurrence_count + ')' }; });
+
+    var body = '<form id="box-alias-form">' +
+      '<div class="edit-hint">الصنف الحالي: <b>' + esc(cluster.label) + '</b></div>' +
+      UIC.field({ key: 'al_op', label: 'نوع التصحيح', type: 'select', combo: false,
+                  options: [{ value: 'merge', label: 'دمج مع صنف آخر (نفس المشتَرى)' },
+                            { value: 'split', label: 'فصل عن صنف آخر (مشتَرى مختلف)' }] }) +
+      UIC.field({ key: 'al_other', label: 'الصنف الآخر', type: 'select', combo: false,
+                  options: options, placeholder: 'اختر صنفاً' }) +
+      (cluster.members.length > 1
+        ? '<div class="edit-locked">التسميات المدمجة حالياً في هذه المجموعة: ' +
+          esc(cluster.members.join('  |  ')) + '</div>'
+        : '') +
+      '</form>';
+
+    UIC.openModal('box-alias-modal', {
+      title: 'تصحيح تجميع الأصناف',
+      size: 'md',
+      body: body,
+      onSave: "saveAlias('" + esc(cluster.label).replace(/'/g, '') + "')"
+    });
+  }
+
+  function saveAlias(label) {
+    var f = UIC._readForm('box-alias-form');
+    var op = f.data.al_op;
+    var other = f.data.al_other;
+    if (!other) { UIC.toast('اختر الصنف الآخر', 'error'); return; }
+    if (other === label) { UIC.toast('لا يمكن ربط الصنف بنفسه', 'error'); return; }
+
+    UIC.confirm({
+      title: op === 'merge' ? 'تأكيد الدمج' : 'تأكيد الفصل',
+      message: op === 'merge'
+        ? 'سيتم اعتبار الصنفين نفس المشتَرى في كل التحليلات القادمة.'
+        : 'سيتم منع دمج الصنفين نهائياً في كل التحليلات القادمة.',
+      record: label + '  ⇄  ' + other,
+      detail: (op === 'merge' ? 'دمج' : 'فصل') + ': ' + label + ' ⇄ ' + other +
+        '\nيُسجَّل التصحيح باسمك في سجل التدقيق ويبقى بعد كل إعادة بناء للفهرس.',
+      confirmText: op === 'merge' ? 'تأكيد الدمج' : 'تأكيد الفصل',
+      cancelText: 'إلغاء'
+    }).then(function (okd) {
+      if (!okd) return;
+      UI.showSpinner('جاري حفظ التصحيح...');
+      companyCall('save_box_item_alias', { op: op, a: label, b: other })
+        .then(function (res) {
+          if (res && res.audit_error) {
+            UIC.alert({ title: 'تم الحفظ — لكن سجل التدقيق لم يكتمل', danger: true,
+              message: 'حُفظ التصحيح، ولكن تعذّر كتابة سطر التأكيد في سجل التدقيق.',
+              detail: 'أبلغ المسؤول: ' + res.audit_error });
+          } else {
+            UIC.toast('تم حفظ التصحيح', 'success');
+          }
+          UIC.closeModal('box-alias-modal');
+          fetchItems();
+        })
+        .catch(function (e) { UIC.toast((e && e.message) || 'تعذّر الحفظ', 'error'); })
+        .finally(function () { UI.hideSpinner(); });
+    });
+  }
+
+  /* Tabs are lazily loaded on first activation. UIC.notebook wires its own
+     onclick to UIC.notebookSelect, so this listens on the tablist rather than
+     replacing that behaviour — the tab keeps working exactly as every other
+     notebook in the app does. */
+  function wireTabs() {
+    var tabs = document.querySelector('#box-tabs .nb-tabs');
+    if (!tabs) return;
+    tabs.addEventListener('click', function (ev) {
+      var btn = ev.target && ev.target.closest ? ev.target.closest('.nb-tab') : null;
+      if (!btn) return;
+      var key = String(btn.id || '').replace('box-tabs-tab-', '');
+      if (key === 'alerts' && !TABS_LOADED.alerts) { TABS_LOADED.alerts = true; fetchAlerts(); }
+      if (key === 'items' && !TABS_LOADED.items) { TABS_LOADED.items = true; fetchItems(); }
+    });
+  }
+
+  function renderPager() {
+    var el = document.getElementById('box-pager');
+    if (!el) return;
+    var pages = Math.max(1, Math.ceil(LAST.total / FILTER.limit));
+    var cur = Math.floor(FILTER.offset / FILTER.limit) + 1;
+    var from = LAST.total === 0 ? 0 : FILTER.offset + 1;
+    var to = Math.min(FILTER.offset + FILTER.limit, LAST.total);
+    el.innerHTML =
+      '<button class="btn btn-outline" onclick="gotoPage(' + (cur - 1) + ')" ' + (cur <= 1 ? 'disabled' : '') + '>السابق</button>' +
+      '<span class="page-info">صفحة ' + cur + ' من ' + pages + ' — عرض ' + from + ' إلى ' + to + ' من ' + LAST.total + '</span>' +
+      '<button class="btn btn-outline" onclick="gotoPage(' + (cur + 1) + ')" ' + (cur >= pages ? 'disabled' : '') + '>التالي</button>';
+  }
+
+  function gotoPage(p) {
+    var pages = Math.max(1, Math.ceil(LAST.total / FILTER.limit));
+    if (p < 1 || p > pages) return;
+    FILTER.offset = (p - 1) * FILTER.limit;
+    EXPANDED = {};
+    fetchPage();
+  }
+
+  function showError(e) {
+    var el = document.getElementById('box-table');
+    if (el) {
+      el.innerHTML = UIC.emptyState({
+        icon: 'alert',
+        title: 'تعذّر تحميل الحركات',
+        body: (e && e.message) || 'خطأ غير معروف',
+        action: { text: 'إعادة المحاولة', onClick: 'fetchPage()' }
+      });
+    }
+    var pg = document.getElementById('box-pager');
+    if (pg) pg.innerHTML = '';
+  }
+
+  /* Exposed so the offline design preview can drive the page without the
+     server, and so a future tab can re-render without reloading. */
+  window.BOXANALYSIS_PAGE = {
+    load: load,
+    fetchPage: fetchPage,
+    openEdit: openEdit,
+    fetchAlerts: fetchAlerts,
+    fetchItems: fetchItems,
+    EDIT_FIELDS: EDIT_FIELDS,
+    state: function () { return { FILTER: FILTER, LAST: LAST }; }
+  };
+
+  if (!window.__BOX_PREVIEW) load();
+</script>
+</body>
+</html>

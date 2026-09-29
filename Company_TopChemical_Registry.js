@@ -11,6 +11,11 @@ function registerTopChemical_() {
     dispatch: TopChemical.dispatch_,
     pageForAction: TopChemical.pageForAction_,
     tableForAction: TopChemical.tableForAction_,
+    themeCss: TopChemical.themeCss_,
+    blockTheme: TopChemical.blockTheme_,
+    approvalPolicy: TopChemical.approvalPolicy_,
+    attachmentPolicy: TopChemical.attachmentPolicy_,
+    artifactHandlers: TopChemical.artifactHandlers_,
     tables: [
       { id: 'tc_products_tbl', sheetName: 'top_chemical_products', pkColumn: 'id', labelAr: 'الأصناف', pageId: 'tc_products' },
       { id: 'tc_clients_tbl', sheetName: 'top_chemical_clients', pkColumn: 'id', labelAr: 'العملاء والموردون', pageId: 'tc_clients_vendors' },
@@ -18,7 +23,11 @@ function registerTopChemical_() {
     ],
     pages: [
       { action: 'tc_dashboard', template: 'Company_TopChemical_Dashboard', title: 'Top Chemical — Dashboard', label: 'لوحة التحكم' },
+      { action: 'tc_executive_followup', template: 'Company_TopChemical_ExecutiveFollowUp', title: 'المتابعة اليومية التنفيذية', label: 'المتابعة اليومية التنفيذية' },
       { action: 'tc_kpi', template: 'Company_TopChemical_KPI', title: 'Top Chemical — المؤشرات', label: 'المؤشرات' },
+      { action: 'tc_main_review', template: 'Company_TopChemical_MainReview', title: 'مراجعة مديونيات النظام الرئيسي', label: 'مراجعة مديونيات النظام الرئيسي', nav: false },
+      { action: 'tc_client_balance_sheets', template: 'Company_TopChemical_ClientBalanceSheets', title: 'جدول مديونيات العملاء (client_balance_sheets)', label: 'جدول مديونيات العملاء (client_balance_sheets)', nav: false },
+      { action: 'tc_box_analysis', template: 'Company_TopChemical_BoxAnalysis', title: 'تحليل حركة الخزنة العادية', label: 'تحليل حركة الخزنة العادية', nav: false },
       { action: 'tc_clients_vendors', template: 'Company_TopChemical_Clients', title: 'عملاء وموردين', nav: false },
       { action: 'tc_debts', template: 'Company_TopChemical_Debts', title: 'مديونيات', nav: false },
       { action: 'tc_products', template: 'Company_TopChemical_Products', title: 'الأصناف', nav: false },
@@ -26,6 +35,7 @@ function registerTopChemical_() {
       { action: 'tc_registration_papers', template: 'Company_TopChemical_RegistrationPapers', title: 'تصاريح وتراخيص', nav: false },
       { action: 'tc_trust', template: 'Company_TopChemical_Trust', title: 'عهد خاصة', nav: false },
       { action: 'tc_stock_revision', template: 'Company_TopChemical_StockRevision', title: 'جرد المخزون', nav: false },
+      { action: 'tc_stock_scan', template: 'Company_TopChemical_StockScan', title: 'جرد دوري مخازن باركود', nav: false },
       { action: 'tc_customs_office', template: 'Company_TopChemical_CustomsOffice', title: 'مكتب الجمارك', nav: false },
       { action: 'tc_purchasing', template: 'Company_TopChemical_Purchasing', title: 'توريدات ومشتريات', nav: false },
       { action: 'tc_import_follow', template: 'Company_TopChemical_ImportFollow', title: 'متابعة موافقات الاستيراد', nav: false },
@@ -40,13 +50,17 @@ function registerTopChemical_() {
       { action: 'tc_emp_salaries_close', template: 'Company_TopChemical_EmpSalariesClose', title: 'غلق المرتبات الشهرية', nav: false },
       { action: 'tc_budget_parties', template: 'Company_TopChemical_BudgetParties', title: 'عملاء وموردون قانونيون', nav: false },
       { action: 'tc_budget_stock_balance', template: 'Company_TopChemical_BudgetStockBalance', title: 'رصيد أصناف الميزانية', nav: false },
-      { action: 'tc_budget_stock_movement', template: 'Company_TopChemical_BudgetStockMovement', title: 'حركة الأصناف (دفتر الجرد)', nav: false },
       { action: 'tc_budget_inputs', template: 'Company_TopChemical_BudgetInputs', title: 'المدخلات - اصول ومخزون', nav: false },
       { action: 'tc_budget_manufacture', template: 'Company_TopChemical_BudgetManufacture', title: 'تصنيع الميزانية', nav: false },
       { action: 'tc_budget_invoices', template: 'Company_TopChemical_BudgetInvoices', title: 'الفواتير الضريبية', nav: false },
       { action: 'tc_budget_cash', template: 'Company_TopChemical_BudgetCash', title: 'تحركات صناديق الميزانية', nav: false },
       { action: 'tc_budget_hr', template: 'Company_TopChemical_BudgetHR', title: 'شؤون العاملين القانونية', nav: false },
-      { action: 'tc_budget_income', template: 'Company_TopChemical_BudgetIncome', title: 'قائمة الدخل السنوية', nav: false }
+      { action: 'tc_budget_income', template: 'Company_TopChemical_BudgetIncome', title: 'قائمة الدخل السنوية', nav: false },
+      { action: 'tc_manufacture_orders', template: 'Company_TopChemical_ManufactureOrders', title: 'أوامر التصنيع', label: 'أوامر التصنيع', nav: false },
+      { action: 'tc_production_capability', template: 'Company_TopChemical_ProductionCapability', title: 'تحليلات القدرات الانتاجية', label: 'تحليلات القدرات الانتاجية', nav: false },
+      { action: 'tc_sales_capacity', template: 'Company_TopChemical_SalesCapacity', title: 'تحليل القدرة الانتاجية للمبيعات', label: 'تحليل القدرة الانتاجية للمبيعات', nav: false },
+      { action: 'tc_products_live', template: 'Company_TopChemical_ProductsLive', title: 'اصناف النظام الرئيسي — products', label: 'اصناف النظام الرئيسي', nav: false },
+      { action: 'tc_financial_ratios', template: 'Company_TopChemical_FinancialRatios', title: 'تحليلات النسب المالية', label: 'تحليلات النسب المالية', nav: false }
     ]
   });
 }

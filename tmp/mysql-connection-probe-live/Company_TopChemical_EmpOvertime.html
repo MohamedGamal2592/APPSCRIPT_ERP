@@ -1,0 +1,380 @@
+﻿<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>العمل الإضافي</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_TopChemical_Nav'); ?>
+  <?!= getCompanyThemeCSS_('3fe1b5cb67b7223e') ?>
+  <style>
+    .ot-type-cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; margin:0 0 14px; }
+    .ot-type-card { appearance:none; width:100%; text-align:right; padding:14px 16px; border:1px solid var(--border-color); border-radius:var(--radius-md); background:var(--bg-surface); color:var(--text-main); cursor:pointer; transition:border-color .15s,box-shadow .15s,transform .15s; }
+    .ot-type-card:hover { border-color:var(--brand-primary); box-shadow:var(--shadow-sm); transform:translateY(-1px); }
+    .ot-type-card[aria-pressed="true"] { border-color:var(--brand-primary); box-shadow:0 0 0 2px var(--brand-border); }
+    .ot-type-card-label { display:block; font-size:13px; color:var(--text-muted); margin-bottom:8px; }
+    .ot-type-card-count { display:block; font-size:22px; font-weight:700; line-height:1.1; }
+    .ot-date-filter { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin:0 0 12px; padding:10px 12px; border:1px solid var(--border-color); border-radius:var(--radius-sm); background:var(--bg-surface); }
+    .ot-date-filter label { font-size:13px; font-weight:600; }
+    .ot-date-filter .input { width:160px; max-width:100%; }
+    @media(max-width:520px) { .ot-date-filter .input { flex:1; min-width:130px; } }
+  </style>
+</head>
+<body>
+<div id="tc-root" dir="rtl"></div>
+<script>
+  var params = new URLSearchParams(window.location.search);
+  var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+  var scriptUrl = window.scriptUrl || '/';
+  var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+  var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('3fe1b5cb67b7223e') ?>';
+  var COMPANY_PAGES = <?!= companyPages ?>;
+  var CURRENT_ACTION = '<?!= currentAction ?>';
+  var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+  var CAN_WRITE = UIC.canAdd_(); var CAN_FULL = UIC.canFull_();
+  var OT_TYPE_FILTER = '';
+  var OT_DATE_FROM = '';
+  var OT_DATE_TO = '';
+
+  function companyCall(moduleAction, data) {
+    return API.call('company_action', {
+      target_system: '3fe1b5cb67b7223e',
+      module_action: moduleAction,
+      data: data || {}
+    }, SESSION_TOKEN);
+  }
+
+  function esc(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  function fmtDate(v) {
+    if (v == null || v === '') return '';
+    var d = (v instanceof Date) ? v : new Date(v);
+    if (isNaN(d.getTime())) return String(v);
+    var p = function (n) { return ('0' + n).slice(-2); };
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+  }
+
+  function fmtTime(v) {
+    if (v == null || v === '') return '';
+    if (v instanceof Date) {
+      var p = function (n) { return ('0' + n).slice(-2); };
+      return p(v.getHours()) + ':' + p(v.getMinutes());
+    }
+    var s = String(v);
+    if (s.indexOf('T') !== -1) { var dt = new Date(s); if (!isNaN(dt.getTime())) return fmtTime(dt); }
+    return s;
+  }
+
+  function todayStr() {
+    var d = new Date();
+    var p = function (n) { return ('0' + n).slice(-2); };
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+  }
+
+  function load() {
+    var contentId = 'ot-content';
+    UIC.appShell('tc-root', {
+      companyLogoUrl: COMPANY_LOGO_URL,
+      companyLogoHref: scriptUrl + '?action=tc_dashboard&sessionToken=' + SESSION_TOKEN,
+      companyLogoTitle: 'توب كيميكال',
+      breadcrumb: 'توب كيميكال / شئون العاملين / العمل الإضافي',
+      contentId: contentId,
+      menuGroups: (window.TOPCHEMICAL_MENU || [])
+    });
+    fetchOvertime();
+  }
+
+  function fetchOvertime(quiet) {
+    if (!quiet) UI.showSpinner();
+    companyCall('get_emp_overtime', { loadAll: true })
+      .then(function (r) {
+        window.__rows = r.rows || [];
+        window.__empOptions = r.employee_options || [];
+        window.__otOptions = r.overtime_options || [];
+        renderOvertime();
+      })
+      .catch(function (e) { showError(e); })
+      .finally(function () { if (!quiet) UI.hideSpinner(); try{schedulePrefetch();}catch(e){} });
+  }
+
+  function renderOvertime() {
+    var body = document.getElementById('ot-content');
+    if (!body) return;
+    var allRows = window.__rows || [];
+    var options = window.__otOptions || [];
+    var typesByValue = {};
+    options.forEach(function (o) {
+      if (o && o.value != null && String(o.value) !== '') {
+        typesByValue[String(o.value)] = String(o.label || o.value);
+      }
+    });
+    allRows.forEach(function (r) {
+      var value = String(r.overtime_type || 'أخرى');
+      if (!typesByValue[value]) typesByValue[value] = value;
+    });
+    var types = Object.keys(typesByValue).sort(function (a, b) {
+      var order = ['عمل اضافي', 'مبيت', 'كونتر'];
+      var ia = order.indexOf(a), ib = order.indexOf(b);
+      if (ia !== -1 || ib !== -1) return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);
+      return typesByValue[a].localeCompare(typesByValue[b], 'ar');
+    });
+    var dateRows = allRows.filter(function (r) {
+      var date = fmtDate(r.date);
+      if (!date) return !OT_DATE_FROM && !OT_DATE_TO;
+      return (!OT_DATE_FROM || date >= OT_DATE_FROM) && (!OT_DATE_TO || date <= OT_DATE_TO);
+    });
+    var counts = {};
+    dateRows.forEach(function (r) {
+      var value = String(r.overtime_type || 'أخرى');
+      counts[value] = (counts[value] || 0) + 1;
+    });
+    var visibleRows = dateRows.filter(function (r) {
+      return !OT_TYPE_FILTER || String(r.overtime_type || 'أخرى') === OT_TYPE_FILTER;
+    });
+    var cards = [{ value: '', label: 'كل الأنواع', count: dateRows.length }].concat(types.map(function (value) {
+      return { value: value, label: typesByValue[value], count: counts[value] || 0 };
+    }));
+    var html = '<div class="ot-type-cards" aria-label="تصفية حسب النوع">' + cards.map(function (card) {
+      return '<button type="button" class="ot-type-card" data-ot-type="' + esc(card.value) + '" aria-pressed="' + (OT_TYPE_FILTER === card.value ? 'true' : 'false') + '">' +
+        '<span class="ot-type-card-label">' + esc(card.label) + '</span>' +
+        '<span class="ot-type-card-count">' + card.count + '</span>' +
+        '<span class="ot-type-card-label" style="margin:6px 0 0;">سجل</span></button>';
+    }).join('') + '</div>' +
+      '<div class="ot-date-filter" aria-label="تصفية حسب نطاق التاريخ">' +
+        '<label for="ot-date-from">من:</label><input id="ot-date-from" class="input" type="date" value="' + esc(OT_DATE_FROM) + '">' +
+        '<label for="ot-date-to">إلى:</label><input id="ot-date-to" class="input" type="date" value="' + esc(OT_DATE_TO) + '">' +
+        '<button type="button" class="btn btn-outline" id="ot-date-clear">مسح التاريخ</button>' +
+      '</div>' +
+      (CAN_WRITE ? '<div style="display:flex;justify-content:flex-end;margin-bottom:12px;"><button type="button" class="btn btn-primary" id="ot-add">+ تسجيل' + (OT_TYPE_FILTER ? ' — ' + esc(typesByValue[OT_TYPE_FILTER] || OT_TYPE_FILTER) : ' عمل إضافي') + '</button></div>' : '');
+    var rows = visibleRows.map(function (r) {
+      /* Tier A: name_ar/total_time/approved_amount are sheet formulas, so a
+         __pending row shows «—» there and never a guessed value. This page has
+         no row actions, so there is nothing to gate. */
+      var pending = !!r.__pending;
+      return {
+        emp_id: r.emp_id,
+        name_ar: pending ? '—' : esc(r.name_ar || '-'),
+        date: fmtDate(r.date),
+        start_time: fmtTime(r.start_time),
+        end_time: fmtTime(r.end_time),
+        total_time: pending ? '—' : r.total_time,
+        approved: r.approved === true ? 'true' : 'false',
+        overtime_type: esc(r.overtime_type || '-'),
+        amount: r.amount,
+        approved_amount: pending ? '—' : r.approved_amount
+      };
+    });
+    var headers = [
+      { key: 'emp_id', label: 'كود الموظف', numeric: true },
+      { key: 'name_ar', label: 'الاسم' },
+      { key: 'date', label: 'التاريخ' },
+      { key: 'start_time', label: 'من' },
+      { key: 'end_time', label: 'إلى' },
+      { key: 'total_time', label: 'الساعات', numeric: true },
+      { key: 'approved', label: 'المعتمد' },
+      { key: 'overtime_type', label: 'النوع' },
+      { key: 'amount', label: 'المبلغ', numeric: true },
+      { key: 'approved_amount', label: 'المبلغ المعتمد', numeric: true }
+    ];
+    html += UIC.dataTable('ot-table', {
+        title: 'العمل الإضافي',
+        headers: headers,
+        rows: rows,
+        emptyText: OT_TYPE_FILTER ? 'لا توجد سجلات من هذا النوع في الفترة المحددة' : 'لا توجد سجلات في الفترة المحددة'
+      });
+    body.innerHTML = html;
+    Array.prototype.forEach.call(body.querySelectorAll('[data-ot-type]'), function (card) {
+      card.addEventListener('click', function () {
+        OT_TYPE_FILTER = String(card.getAttribute('data-ot-type') || '');
+        renderOvertime();
+      });
+    });
+    var dateFrom = document.getElementById('ot-date-from');
+    var dateTo = document.getElementById('ot-date-to');
+    var clearDates = document.getElementById('ot-date-clear');
+    if (dateFrom) dateFrom.addEventListener('change', updateOtDateRange);
+    if (dateTo) dateTo.addEventListener('change', updateOtDateRange);
+    if (clearDates) clearDates.addEventListener('click', clearOtDateRange);
+    var add = document.getElementById('ot-add');
+    if (add) add.addEventListener('click', function () { openAddModal({ type: OT_TYPE_FILTER }); });
+    UIC.initTableSort('ot-table');
+  }
+
+  function updateOtDateRange() {
+    OT_DATE_FROM = (document.getElementById('ot-date-from') || {}).value || '';
+    OT_DATE_TO = (document.getElementById('ot-date-to') || {}).value || '';
+    if (OT_DATE_FROM && OT_DATE_TO && OT_DATE_FROM > OT_DATE_TO) {
+      var swap = OT_DATE_FROM;
+      OT_DATE_FROM = OT_DATE_TO;
+      OT_DATE_TO = swap;
+    }
+    renderOvertime();
+  }
+
+  function clearOtDateRange() {
+    OT_DATE_FROM = '';
+    OT_DATE_TO = '';
+    renderOvertime();
+  }
+
+  function openAddModal(prefill) {
+    prefill = prefill || {};
+    var lockedType = OT_TYPE_FILTER || prefill.type || '';
+    var allTypeOptions = window.__otOptions || [];
+    var formTypeOptions = lockedType
+      ? allTypeOptions.filter(function (o) { return String(o.value) === String(lockedType); })
+      : allTypeOptions;
+    if (lockedType && !formTypeOptions.length) formTypeOptions = [{ value: lockedType, label: lockedType }];
+    var body =
+      '<form id="ot-form">' +
+      UIC.field({ key: 'emp_id', label: 'الموظف', type: 'select', required: true,
+        options: window.__empOptions || [], placeholder: 'اختر الموظف...' }) +
+      UIC.field({ key: 'date', label: 'التاريخ', type: 'date', required: true, value: todayStr() }) +
+      UIC.field({ key: 'overtime_type', label: 'النوع', type: 'select', required: true,
+        options: formTypeOptions, placeholder: lockedType ? '' : 'اختر النوع...', value: lockedType }) +
+      '<div id="ot-time-fields">' +
+      UIC.field({ key: 'start_time', label: 'وقت البداية', type: 'time', value: '17:00' }) +
+      UIC.field({ key: 'end_time', label: 'وقت النهاية', type: 'time', value: '18:00' }) +
+      '</div>' +
+      '<div id="ot-amount-field">' +
+      UIC.field({ key: 'amount', label: 'المبلغ', type: 'number', min: '0', step: '0.01' }) +
+      '</div>' +
+      '<div class="form-field" data-field="approved"><label class="form-label">اعتماد</label>' +
+      '<label class="input" style="display:flex;align-items:center;gap:8px;"><input type="checkbox" id="approved" style="width:auto;" checked> <span>معتمد</span></label></div>' +
+      '<div class="form-field" data-field="details"><label class="form-label" for="details">تفاصيل <span class="req">*</span></label>' +
+      '<textarea id="details" class="input" data-field-name="details" rows="2" placeholder="وصف العمل..." required></textarea>' +
+      '<div class="field-error" id="err-details"></div></div>' +
+      '</form>';
+    UIC.openModal('ot-modal', {
+      title: lockedType ? 'تسجيل — ' + lockedType : 'تسجيل عمل إضافي',
+      body: body,
+      onSave: 'saveOvertime()'
+    });
+    var otSel = document.getElementById('overtime_type');
+    if (otSel) {
+      otSel.addEventListener('change', onOtTypeChange);
+      if (lockedType) {
+        otSel.setAttribute('aria-disabled', 'true');
+        otSel.setAttribute('title', 'النوع محدد من البطاقة المختارة');
+        otSel.tabIndex = -1;
+        otSel.style.pointerEvents = 'none';
+        otSel.style.background = 'var(--bg-subtle)';
+      }
+    }
+    onOtTypeChange();
+  }
+
+  function onOtTypeChange() {
+    var sel = document.getElementById('overtime_type');
+    var start = document.getElementById('start_time');
+    var end = document.getElementById('end_time');
+    var amount = document.getElementById('amount');
+    var timeFields = document.getElementById('ot-time-fields');
+    var amountField = document.getElementById('ot-amount-field');
+    if (!sel || !start || !end || !amount || !timeFields || !amountField) return;
+    var isExtra = sel.value === 'عمل اضافي';
+    timeFields.style.display = isExtra ? '' : 'none';
+    amountField.style.display = isExtra ? 'none' : '';
+    if (isExtra) {
+      if (!start.value) start.value = '17:00';
+      if (!end.value) end.value = '18:00';
+      start.setAttribute('required', 'required');
+      end.setAttribute('required', 'required');
+      amount.value = '0';
+      amount.removeAttribute('required');
+      clearOtFieldError('amount');
+    } else {
+      start.removeAttribute('required');
+      end.removeAttribute('required');
+      start.value = '';
+      end.value = '';
+      amount.setAttribute('required', 'required');
+      clearOtFieldError('start_time');
+      clearOtFieldError('end_time');
+    }
+  }
+
+  function clearOtFieldError(key) {
+    var err = document.getElementById('err-' + key);
+    if (err) err.textContent = '';
+    var input = document.getElementById(key);
+    var field = input && input.closest ? input.closest('.form-field') : null;
+    if (field) field.classList.remove('has-error');
+  }
+
+  function saveOvertime() {
+    if (!UIC.validateForm('ot-form')) return;
+    var sel = document.getElementById('overtime_type');
+    var amount = document.getElementById('amount');
+    if (sel && sel.value !== 'عمل اضافي' && Number(amount.value) <= 0) {
+      var err = document.getElementById('err-amount');
+      if (err) err.textContent = 'المبلغ مطلوب لهذا النوع';
+      var field = amount.closest ? amount.closest('.form-field') : null;
+      if (field) field.classList.add('has-error');
+      return;
+    }
+    var data = UIC.collectForm('ot-form');
+    data.approved = !!document.getElementById('approved').checked;
+    /* Tier A: the row is on screen before the request returns. These rows
+       carry no server-assigned id, so `key` names an absent field and the
+       machinery tracks the draft with its own __tmp_ value; recordOf replaces
+       it with the server's record. queueable:false: I1 is unproven for
+       add_emp_overtime, so a transport failure rolls back loudly. */
+    var draft = {
+      emp_id: data.emp_id,
+      date: data.date,
+      start_time: data.start_time,
+      end_time: data.end_time,
+      details: data.details,
+      approved: data.approved,
+      overtime_type: data.overtime_type,
+      amount: data.amount
+    };
+    window.__rows = window.__rows || [];
+    UIC.Live.save({
+      call: companyCall,
+      action: 'add_emp_overtime',
+      data: data,
+      list: window.__rows,
+      key: 'unique_id',
+      draft: draft,
+      render: renderOvertime,
+      modal: 'ot-modal',
+      message: 'تم الحفظ',
+      queueable: false,
+      reload: function () { fetchOvertime(true); },
+      recordOf: function (resp) {
+        if (!resp || !resp.record) return null;
+        var rec = Object.assign({}, draft, resp.record);
+        if (resp.unique_id) rec.unique_id = resp.unique_id;
+        if (resp.id != null && resp.id !== '') rec.id = resp.id;
+        return rec;
+      },
+      /* This page owns the full bounded list so card counts stay accurate. */
+      onSuccess: function () {
+        renderOvertime();
+      }
+    }).catch(function () { /* UIC.Live has toasted and rolled back */ });
+  }
+
+  function showError(e) {
+    var body = document.getElementById('ot-content');
+    if (body) body.innerHTML = '<div class="empty-state"><span>' + esc(e.message || 'خطأ') + '</span></div>';
+  }
+
+  /* Another device's change arrives quietly. */
+  UIC.Live.watchPage({
+    call: companyCall,
+    page: 'tc_emp_overtime',
+    onChange: function () { UIC.Live.arrive(function () { fetchOvertime(true); }); }
+  });
+
+  load();
+</script>
+</body>
+</html>

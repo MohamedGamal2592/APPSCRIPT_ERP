@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>مركز التقييم — تقييم</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_Assessment_Nav'); ?>
+  <?!= getCompanyThemeCSS_('32fafd256ccb7a1c') ?>
+  <style>
+    .ac-form-wrap { padding: 16px 20px 96px; max-width: 900px; margin: 0 auto; }
+    .ac-view-banner {
+      background: var(--bg-surface); border: 1px solid var(--border-color); border-inline-start: 4px solid var(--brand-primary);
+      border-radius: var(--radius-md); padding: 12px 16px; margin-bottom: var(--space-4);
+      display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+    }
+    .ac-view-banner-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    .ac-qcard {
+      background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: var(--radius-md);
+      padding: 14px 16px; margin-bottom: var(--space-3);
+    }
+    .ac-qcard-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+    .ac-qcard-num { font-weight: 700; color: var(--text-main); }
+    .ac-drag-handle { cursor: grab; color: var(--text-muted); }
+    .ac-options { margin-top: 10px; }
+    .ac-opt-row { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; }
+    .ac-opt-row .input { flex: 1; }
+    .ac-opt-trait { max-width: 160px; }
+    .ac-opt-view { padding: 6px 10px; border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: var(--bg-canvas); }
+    .ac-opt-correct { border-color: var(--brand-primary); }
+    .ac-opt-trait-tag { font-size: var(--text-xs); color: var(--text-muted); margin-inline-start: 8px; }
+    .ac-opt-correct-badge { color: var(--brand-primary); font-size: var(--text-xs); font-weight: 700; margin-inline-start: 8px; }
+    .ac-opt-add { display: flex; gap: 8px; margin-top: 6px; }
+    .ac-opt-add .input { flex: 1; }
+    .ac-view-text { padding: 8px 0; color: var(--text-main); white-space: pre-wrap; }
+    .ac-form-footer {
+      position: sticky; bottom: 0; background: var(--bg-surface); border-top: 1px solid var(--border-color);
+      padding: 12px 20px; display: flex; gap: 10px; justify-content: flex-end; margin-top: var(--space-4);
+    }
+    @media print {
+      .ac-qcard { break-inside: avoid; page-break-inside: avoid; }
+      .ac-form-footer, .ac-view-banner-actions { display: none !important; }
+    }
+  </style>
+</head>
+<body>
+  <div id="ac-root"></div>
+
+  <script>
+    /* See the note in Company_Assessment_Take.html: window.location.search is
+       empty inside the HtmlService iframe, so every parameter comes from the
+       server. sessionToken survived on its localStorage fallback; `id` had no
+       fallback, so opening an existing assessment always rendered as a new one. */
+    var PAGE_PARAMS = <?!= pageParams ?>;
+    var params = {
+      get: function (k) {
+        if (PAGE_PARAMS && PAGE_PARAMS[k] != null && PAGE_PARAMS[k] !== '') return String(PAGE_PARAMS[k]);
+        return (new URLSearchParams(window.location.search)).get(k);
+      }
+    };
+    var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+    var scriptUrl = window.scriptUrl || '/';
+    var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+    var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('32fafd256ccb7a1c') ?>';
+    var COMPANY_PAGES = <?!= companyPages ?>;
+    var CURRENT_ACTION = '<?!= currentAction ?>';
+    var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+    var CAN_WRITE = UIC.canAdd_(); var CAN_FULL = UIC.canFull_();
+
+    function companyCall(moduleAction, data) {
+      return API.call('company_action', {
+        target_system: '32fafd256ccb7a1c',
+        module_action: moduleAction,
+        data: data || {}
+      }, SESSION_TOKEN);
+    }
+    function esc(v) { return FMT.escape(v); }
+    function listUrl() { return scriptUrl + '?action=ac_assessments&sessionToken=' + encodeURIComponent(SESSION_TOKEN); }
+    function formUrl(id) {
+      var u = scriptUrl + '?action=ac_assessment_form&sessionToken=' + encodeURIComponent(SESSION_TOKEN);
+      if (id) u += '&id=' + encodeURIComponent(id);
+      return u;
+    }
+
+    var TYPE_LABELS = { MCQ: 'اختيار من متعدد', Likert: 'تقييم (Likert)', MostLeast: 'الأكثر والأقل شبهاً', OpenText: 'نص مفتوح' };
+    var CATEGORY_OPTIONS = [
+      { value: 'Technical', label: 'فني' }, { value: 'Psychometric', label: 'نفسي' },
+      { value: 'Situational', label: 'مواقف' }, { value: 'Language', label: 'لغة' }, { value: 'Competency', label: 'كفاءة' }
+    ];
+
+    var state = {
+      mode: 'create', id: null, attempts: 0,
+      header: { Title: '', Category: '', Description: '', TimeLimitMinutes: 30, PassScore: 60, IsActive: false },
+      questions: []
+    };
+
+    function loadView(quiet) {
+      var id = params.get('id') || state.id;
+      if (!id) return;
+      if (!quiet) UIC.readSkeleton('ac-form-content');
+      companyCall('get_ac_assessment', { id: id })
+        .then(function (res) {
+          state.header = res.assessment || {};
+          state.questions = (res.questions || []).map(function (q) {
+            return {
+              QuestionID: q.QuestionID, QuestionText: q.QuestionText, QuestionType: q.QuestionType,
+              Weight: q.Weight, Trait: q.Trait, CorrectAnswer: q.CorrectAnswer,
+              Options: q.Options || []
+            };
+          });
+          state.attempts = res.attempts || 0;
+          renderForm();
+          if (params.get('autoprint') === '1') setTimeout(function () { window.print(); }, 400);
+        })
+        .catch(function (err) {
+          UIC.toast(err.message || 'تعذر تحميل التقييم', 'error');
+          UIC.navTo(null, listUrl());
+        })
+        .finally(function () { if (!quiet) UI.hideSpinner(); });
+    }
+
+    function renderApp() {
+      UIC.appShell('ac-root', {
+        companyLogoUrl: COMPANY_LOGO_URL,
+        companyLogoHref: scriptUrl + '?action=ac_dashboard&sessionToken=' + SESSION_TOKEN,
+        companyLogoTitle: 'مركز التقييم',
+        breadcrumb: 'مركز التقييم / التقييمات / ' + (params.get('id') ? 'عرض تقييم' : 'تقييم جديد'),
+        contentId: 'ac-form-content',
+        menuGroups: (window.ASSESSMENT_MENU || [])
+      });
+
+      var id = params.get('id');
+      if (id) {
+        state.mode = 'view'; state.id = id;
+        loadView();
+      } else {
+        state.mode = 'create';
+        renderForm();
+      }
+    }
+
+    /* ── rendering ─────────────────────────────────────────────────────────── */
+
+    function renderForm() {
+      var el = document.getElementById('ac-form-content');
+      if (!el) return;
+      var editable = state.mode === 'create';
+      var html = '<div class="ac-form-wrap">';
+
+      if (state.mode === 'view') {
+        html += '<div class="ac-view-banner"><div>' +
+          'هذا التقييم للعرض فقط' + (state.attempts > 0 ? ' — له ' + state.attempts + ' محاولة/محاولات مسجلة' : '') +
+          '. استخدم «نسخة جديدة» لإنشاء نسخة قابلة للتعديل.' +
+          '</div><div class="ac-view-banner-actions">' +
+          (CAN_WRITE ? '<button type="button" class="btn btn-outline" onclick="duplicateAssessment()">نسخة جديدة</button>' : '') +
+          (CAN_FULL ? '<button type="button" class="btn btn-outline" onclick="toggleActive()">' + (state.header.IsActive ? 'إيقاف' : 'تفعيل') + '</button>' : '') +
+          '<button type="button" class="btn btn-outline" onclick="window.print()">طباعة</button>' +
+          '<button type="button" class="btn btn-outline" onclick="UIC.navTo(event, listUrl())">رجوع</button>' +
+          '</div></div>';
+      }
+
+      html += '<form id="ac-assess-form" onsubmit="return false;">';
+      html += headerHtml(editable);
+      html += '<div id="ac-questions">' + state.questions.map(function (q, i) { return questionCard(q, i, editable); }).join('') + '</div>';
+      if (editable) {
+        html += '<button type="button" class="btn btn-outline" onclick="addQuestion()">+ إضافة سؤال</button>';
+      }
+      html += '</form>';
+
+      if (editable) {
+        html += '<div class="ac-form-footer">' +
+          '<button type="button" class="btn btn-secondary" onclick="UIC.navTo(event, listUrl())">إلغاء</button>' +
+          '<button type="button" class="btn btn-primary" id="ac-save-btn" onclick="saveAssessment(this)">حفظ</button>' +
+          '</div>';
+      }
+
+      html += '</div>';
+      el.innerHTML = html;
+
+      if (editable) {
+        try { UIC.trackDirty('ac-assess-form', { label: 'التقييم' }); } catch (e) {}
+        try { UIC.registerShortcuts({ save: function () { saveAssessment(document.getElementById('ac-save-btn')); } }); } catch (e) {}
+      }
+    }
+
+    function headerHtml(editable) {
+      var h = state.header;
+      if (!editable) {
+        return '<div class="form-grid">' +
+          '<div class="form-field"><label class="form-label">العنوان</label><div class="ac-view-text">' + esc(h.Title) + '</div></div>' +
+          '<div class="form-field"><label class="form-label">الفئة</label><div class="ac-view-text">' + esc((CATEGORY_OPTIONS.filter(function (c) { return c.value === h.Category; })[0] || {}).label || h.Category) + '</div></div>' +
+          '<div class="form-field"><label class="form-label">المدة (دقيقة)</label><div class="ac-view-text">' + esc(h.TimeLimitMinutes) + '</div></div>' +
+          '<div class="form-field"><label class="form-label">نسبة النجاح %</label><div class="ac-view-text">' + esc(h.PassScore) + '</div></div>' +
+          '</div>' +
+          '<div class="form-field"><label class="form-label">الوصف / التعليمات</label><div class="ac-view-text">' + esc(h.Description || '—') + '</div></div>' +
+          '<div class="form-field"><label class="form-label">الحالة</label><div class="ac-view-text">' + (h.IsActive ? 'نشط' : 'موقوف') + '</div></div>';
+      }
+      return '<div class="form-grid">' +
+        UIC.field({ key: 'Title', label: 'العنوان', required: true, value: h.Title }) +
+        UIC.combo({ key: 'Category', label: 'الفئة', required: true, options: CATEGORY_OPTIONS, value: h.Category, placeholder: 'اختر الفئة' }) +
+        UIC.field({ key: 'TimeLimitMinutes', label: 'المدة (دقيقة)', type: 'number', required: true, min: 1, value: h.TimeLimitMinutes }) +
+        UIC.field({ key: 'PassScore', label: 'نسبة النجاح %', type: 'number', required: true, min: 0, step: 1, value: h.PassScore }) +
+        '</div>' +
+        UIC.field({ key: 'Description', label: 'الوصف / التعليمات', type: 'textarea', rows: 3, value: h.Description }) +
+        '<label class="form-field" style="display:flex;align-items:center;gap:8px;flex-direction:row;">' +
+        '<input type="checkbox" id="IsActive"' + (h.IsActive ? ' checked' : '') + '> <span class="form-label" style="margin:0;">نشط (متاح للتوزيع فور الإنشاء)</span></label>';
+    }
+
+    function questionCard(q, i, editable) {
+      var head = '<div class="ac-qcard-head">' +
+        (editable ? '<span class="ac-drag-handle" draggable="true" ondragstart="onQDragStart(event,' + i + ')" title="اسحب لإعادة الترتيب">' + UIC.icon('menu', { size: 16 }) + '</span>' : '') +
+        '<span class="ac-qcard-num">سؤال ' + (i + 1) + '</span>' +
+        (editable ? '<button type="button" class="btn btn-ghost" onclick="removeQuestion(' + i + ')">✕ حذف</button>' : '') +
+        '</div>';
+
+      var textField = editable
+        ? '<div class="form-field"><label class="form-label">نص السؤال <span class="req">*</span></label>' +
+          '<textarea class="input" rows="2" dir="auto" oninput="updateQ(' + i + ',\'QuestionText\',this.value)">' + esc(q.QuestionText) + '</textarea></div>'
+        : '<div class="form-field"><label class="form-label">نص السؤال</label><div class="ac-view-text" dir="auto">' + esc(q.QuestionText) + '</div></div>';
+
+      var typeField = editable
+        ? UIC.field({
+            key: 'qtype_' + i, label: 'النوع', type: 'select', combo: false, value: q.QuestionType,
+            options: Object.keys(TYPE_LABELS).map(function (k) { return { value: k, label: TYPE_LABELS[k] }; })
+          }).replace('<select id="qtype_' + i + '"', '<select onchange="updateQType(' + i + ',this.value)" id="qtype_' + i + '"')
+        : '<div class="form-field"><label class="form-label">النوع</label><div class="ac-view-text">' + esc(TYPE_LABELS[q.QuestionType] || q.QuestionType) + '</div></div>';
+
+      var weightField = editable
+        ? '<div class="form-field"><label class="form-label">الوزن</label><input class="input" type="number" step="0.5" min="0" value="' + esc(q.Weight) + '" oninput="updateQ(' + i + ',\'Weight\',Number(this.value)||0)"></div>'
+        : '<div class="form-field"><label class="form-label">الوزن</label><div class="ac-view-text">' + esc(q.Weight) + '</div></div>';
+
+      var showTrait = (q.QuestionType === 'Likert' || q.QuestionType === 'MostLeast');
+      var traitField = !showTrait ? '' : (editable
+        ? '<div class="form-field"><label class="form-label">السمة</label><input class="input" type="text" value="' + esc(q.Trait) + '" oninput="updateQ(' + i + ',\'Trait\',this.value)"></div>'
+        : '<div class="form-field"><label class="form-label">السمة</label><div class="ac-view-text">' + esc(q.Trait) + '</div></div>');
+
+      var optionsHtml = (q.QuestionType === 'OpenText') ? '' : optionsEditor(q, i, editable);
+
+      return '<div class="ac-qcard" data-idx="' + i + '" ondragover="onQDragOver(event)" ondrop="onQDrop(event,' + i + ')">' + head +
+        '<div class="form-grid">' + textField + typeField + weightField + traitField + '</div>' +
+        optionsHtml + '</div>';
+    }
+
+    function optionsEditor(q, i, editable) {
+      var showOptTrait = q.QuestionType === 'MostLeast';
+      var rows = (q.Options || []).map(function (o, oi) {
+        if (editable) {
+          return '<div class="ac-opt-row">' +
+            '<input class="input" type="text" dir="auto" value="' + esc(o.text) + '" placeholder="نص الخيار" oninput="updateOpt(' + i + ',' + oi + ',\'text\',this.value)">' +
+            (showOptTrait ? '<input class="input ac-opt-trait" type="text" value="' + esc(o.trait) + '" placeholder="السمة" oninput="updateOpt(' + i + ',' + oi + ',\'trait\',this.value)">' : '') +
+            '<button type="button" class="btn btn-ghost" onclick="removeOpt(' + i + ',' + oi + ')">✕</button>' +
+            '</div>';
+        }
+        var isCorrect = q.QuestionType === 'MCQ' && String(o.text) === String(q.CorrectAnswer);
+        return '<div class="ac-opt-row ac-opt-view' + (isCorrect ? ' ac-opt-correct' : '') + '" dir="auto">' +
+          '<span>' + esc(o.text) + '</span>' +
+          (showOptTrait && o.trait ? '<span class="ac-opt-trait-tag">' + esc(o.trait) + '</span>' : '') +
+          (isCorrect ? '<span class="ac-opt-correct-badge">✓ الإجابة الصحيحة</span>' : '') +
+          '</div>';
+      }).join('');
+
+      var addRow = !editable ? '' :
+        '<div class="ac-opt-add"><input class="input" type="text" dir="auto" id="newopt_' + i + '" placeholder="أضف خياراً واضغط Enter" ' +
+        'onkeydown="if(event.key===\'Enter\'){event.preventDefault();addOpt(' + i + ')}">' +
+        '<button type="button" class="btn btn-outline" onclick="addOpt(' + i + ')">إضافة</button></div>';
+
+      var correctCombo = '';
+      if (editable && q.QuestionType === 'MCQ') {
+        correctCombo = UIC.combo({
+          key: 'qcorrect_' + i, label: 'الإجابة الصحيحة', placeholder: 'اختر الإجابة الصحيحة',
+          options: (q.Options || []).map(function (o) { return { value: o.text, label: o.text }; }),
+          value: q.CorrectAnswer
+        });
+      }
+
+      return '<div class="ac-options"><div class="form-label">الخيارات</div>' + rows + addRow + correctCombo + '</div>';
+    }
+
+    /* ── question/option state mutation ───────────────────────────────────── */
+
+    function renderQuestions() {
+      var el = document.getElementById('ac-questions');
+      if (!el) return;
+      el.innerHTML = state.questions.map(function (q, i) { return questionCard(q, i, true); }).join('');
+    }
+
+    function addQuestion() {
+      state.questions.push({ QuestionText: '', QuestionType: 'MCQ', Weight: 1, Trait: '', CorrectAnswer: '', Options: [] });
+      renderQuestions();
+    }
+
+    function removeQuestion(i) {
+      UIC.confirm({ title: 'حذف السؤال', message: 'هل تريد حذف هذا السؤال؟', confirmText: 'حذف', danger: true }).then(function (ok) {
+        if (!ok) return;
+        state.questions.splice(i, 1);
+        renderQuestions();
+      });
+    }
+
+    function updateQ(i, field, value) { state.questions[i][field] = value; }
+    function updateOpt(i, oi, field, value) { state.questions[i].Options[oi][field] = value; }
+
+    function updateQType(i, newType) {
+      var q = state.questions[i];
+      q.QuestionType = newType;
+      if (newType === 'Likert') {
+        q.Options = ['1', '2', '3', '4', '5'].map(function (t) { return { text: t, trait: '' }; });
+        q.CorrectAnswer = '';
+      } else if (newType === 'OpenText') {
+        q.Options = []; q.CorrectAnswer = '';
+      } else if (newType === 'MostLeast') {
+        q.CorrectAnswer = '';
+        q.Options = (q.Options || []).map(function (o) { return { text: o.text, trait: o.trait || '' }; });
+      }
+      renderQuestions();
+    }
+
+    function addOpt(i) {
+      var input = document.getElementById('newopt_' + i);
+      var text = (input && input.value || '').trim();
+      if (!text) return;
+      state.questions[i].Options.push({ text: text, trait: '' });
+      renderQuestions();
+    }
+
+    function removeOpt(i, oi) {
+      state.questions[i].Options.splice(oi, 1);
+      renderQuestions();
+    }
+
+    var dragFromIndex = null;
+    function onQDragStart(e, i) { dragFromIndex = i; try { e.dataTransfer.setData('text/plain', String(i)); e.dataTransfer.effectAllowed = 'move'; } catch (err) {} }
+    function onQDragOver(e) { e.preventDefault(); try { e.dataTransfer.dropEffect = 'move'; } catch (err) {} }
+    function onQDrop(e, i) {
+      e.preventDefault();
+      var from = dragFromIndex;
+      dragFromIndex = null;
+      if (from === null || from === undefined || from === i) return;
+      var moved = state.questions.splice(from, 1)[0];
+      state.questions.splice(i, 0, moved);
+      renderQuestions();
+    }
+
+    /* ── save / actions ────────────────────────────────────────────────────── */
+
+    function saveAssessment(btn) {
+      if (!UIC.validateForm('ac-assess-form')) { UIC.toast('برجاء إكمال الحقول المطلوبة', 'error'); return; }
+      if (!state.questions.length) { UIC.toast('أضف سؤالاً واحداً على الأقل', 'error'); return; }
+      for (var i = 0; i < state.questions.length; i++) {
+        if (!String(state.questions[i].QuestionText || '').trim()) {
+          UIC.toast('نص السؤال رقم ' + (i + 1) + ' مطلوب', 'error'); return;
+        }
+      }
+      // Correct-answer combos are custom widgets; read their live DOM value
+      // rather than trusting stale state from before the last re-render.
+      state.questions.forEach(function (q, i) {
+        if (q.QuestionType === 'MCQ') {
+          var el = document.getElementById('qcorrect_' + i);
+          if (el) q.CorrectAnswer = el.value || '';
+        }
+      });
+
+      var form = UIC.collectForm('ac-assess-form');
+      var header = {
+        Title: form.Title, Category: form.Category, Description: form.Description,
+        TimeLimitMinutes: Number(form.TimeLimitMinutes) || 0, PassScore: Number(form.PassScore) || 0,
+        IsActive: !!(document.getElementById('IsActive') || {}).checked
+      };
+
+      // D-18/wire shape: the editor tracks every option as {text,trait} for a
+      // single unified UI, but only MostLeast's per-option trait is real
+      // (MCQ/Likert's trait lives on the QUESTION, never per-option — see
+      // acScore_). Sent as plain strings for MCQ/Likert, {text,trait} objects
+      // for MostLeast — mirrors acOptionsForWire_ server-side, so what ships
+      // over the wire already matches what lands in OptionsJSON.
+      var outQuestions = state.questions.map(function (q) {
+        var opts = (q.Options || []).map(function (o) {
+          return q.QuestionType === 'MostLeast' ? { text: o.text, trait: o.trait || '' } : o.text;
+        });
+        return Object.assign({}, q, { Options: opts });
+      });
+
+      UI.submitOnce(btn, function () {
+        /* Tier B: add_ac_assessment returns only data.assignedId (no record —
+           a create that also writes N question rows), so NO draft is painted:
+           canPatch stays false, only the quiet corner hint shows. A refusal
+           toasts and paints nothing, and the form stays for correction. On
+           success the new id navigates to the view, exactly as before. No
+           validation is changed. queueable:false: I1 is unproven. */
+        return UIC.Live.save({
+          call: companyCall,
+          action: 'add_ac_assessment',
+          data: Object.assign({}, header, { questions: outQuestions }),
+          message: 'تم الحفظ بنجاح',
+          queueable: false,
+          reload: function () { if (state.id) loadView(true); },
+          onSuccess: function (r) {
+            try { UIC.clearDirty('ac-assess-form'); } catch (e) {}
+            var newId = (r && r.data && r.data.assignedId) || (r && r.assignedId);
+            if (newId) UIC.navTo(null, formUrl(newId));
+          }
+        }).catch(function () { /* UIC.Live has toasted */ });
+      });
+    }
+
+    function duplicateAssessment() {
+      /* Tier B copy: returns only data.assignedId, so no draft is painted.
+         onSuccess navigates to the new copy; reload is the error-path
+         backstop. queueable:false. */
+      UIC.Live.save({
+        call: companyCall,
+        action: 'add_ac_assessment_copy',
+        data: { id: state.id },
+        message: 'تم إنشاء نسخة جديدة',
+        queueable: false,
+        reload: function () { if (state.id) loadView(true); },
+        onSuccess: function (r) {
+          var newId = (r && r.data && r.data.assignedId) || (r && r.assignedId);
+          if (newId) UIC.navTo(null, formUrl(newId));
+        }
+      }).catch(function () { /* UIC.Live has toasted */ });
+    }
+
+    function toggleActive() {
+      /* Tier B toggle: no draft painted, so no draft/list/key/render. onSuccess
+         patches the in-memory header and re-renders locally; reload is the
+         error-path backstop. No overlay. queueable:false. */
+      UIC.Live.save({
+        call: companyCall,
+        action: 'toggle_ac_assessment_active',
+        data: { id: state.id },
+        message: 'تم التحديث',
+        queueable: false,
+        reload: function () { if (state.id) loadView(true); },
+        onSuccess: function (r) {
+          var rec = r && r.data && r.data.record;
+          if (rec && rec.IsActive !== undefined) state.header.IsActive = rec.IsActive;
+          else state.header.IsActive = !state.header.IsActive;
+          renderForm();
+        }
+      }).catch(function () { /* UIC.Live has toasted */ });
+    }
+
+    /* Another device's change arrives quietly (view mode re-reads; create
+       mode has nothing to converge so the refresh is a no-op). */
+    UIC.Live.watchPage({
+      call: companyCall,
+      page: 'ac_assessments',
+      onChange: function () { UIC.Live.arrive(function () { loadView(true); }); }
+    });
+
+    document.addEventListener('DOMContentLoaded', renderApp);
+  </script>
+</body>
+</html>

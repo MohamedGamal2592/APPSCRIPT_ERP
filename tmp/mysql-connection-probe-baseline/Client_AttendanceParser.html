@@ -1,0 +1,707 @@
+<script>
+/**
+ * Client_AttendanceParser — the attendance import parser.
+ *
+ * A SHARED PARTIAL, not a page: it is pulled in by
+ * Company_ValleyFoods_Attendance.html with <?!= include(...) ?> and is listed
+ * in SHARED_PARTIALS (tools/lib/sources.js), so pageFiles() does not try to
+ * boot it as a page.
+ *
+ * Everything here is pure string and arithmetic work with no DOM and no
+ * network, which is the point: the file no longer crosses the wire to be
+ * analysed and then crosses it a second time to be imported. It is read once,
+ * in the browser, and only the parsed rows are sent.
+ *
+ * The serial helpers mirror Company_ValleyFoods_Actions.js exactly — same
+ * Sheets epoch, same UTC construction, same minute rounding — because the
+ * numbers produced here are stored verbatim and are compared against numbers
+ * the server produced from the same helpers.
+ */
+(function (global) {
+  'use strict';
+
+  /* ── serials: the canonical storage form ──────────────────────────────── */
+  var SHEETS_EPOCH_UTC = Date.UTC(1899, 11, 30);
+
+  function pad2(n) { return ('0' + n).slice(-2); }
+
+  function dateTimePartsToSerial(day, month, year, hours, minutes) {
+    return (Date.UTC(year, month - 1, day, hours || 0, minutes || 0, 0) - SHEETS_EPOCH_UTC) / 86400000;
+  }
+
+  function dateOnlyToSerial(day, month, year) {
+    return dateTimePartsToSerial(day, month, year, 0, 0);
+  }
+
+  /* Minute precision, as a Number. Never a string, never a Date. */
+  function toSerialInt(serial) {
+    return (serial === null || serial === undefined || !isFinite(serial)) ? null : Math.round(serial * 1440) / 1440;
+  }
+
+  function serialToDate(serial) {
+    return new Date(SHEETS_EPOCH_UTC + Math.round(serial * 86400000));
+  }
+
+  function serialDateDisplay(serial) {
+    if (serial === null || serial === undefined || !isFinite(serial)) return '';
+    var d = serialToDate(serial);
+    return pad2(d.getUTCDate()) + '/' + pad2(d.getUTCMonth() + 1) + '/' + d.getUTCFullYear();
+  }
+
+  function serialDateKey(serial) {
+    if (serial === null || serial === undefined || !isFinite(serial)) return '';
+    var d = serialToDate(serial);
+    return d.getUTCFullYear() + '-' + pad2(d.getUTCMonth() + 1) + '-' + pad2(d.getUTCDate());
+  }
+
+  var AR_MONTHS = ['يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو',
+    'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر'];
+
+  /** "12 سبتمبر 2026" — for the consequence cards, where a bare 12/09 is the
+      very ambiguity the user is being asked to resolve. */
+  function serialArabicDate(serial) {
+    if (serial === null || serial === undefined || !isFinite(serial)) return '';
+    var d = serialToDate(serial);
+    return d.getUTCDate() + ' ' + AR_MONTHS[d.getUTCMonth()] + ' ' + d.getUTCFullYear();
+  }
+
+  /* ── 1. reading the file (D-12) ───────────────────────────────────────── */
+  /* Attendance devices in Egypt export Windows-1256 as often as UTF-8, and the
+     old readAsText() assumed UTF-8 always. The tell was left behind in the
+     server: an AM/PM matcher for 'Õ' and 'ã', which are what 'ص' and 'م' look
+     like when cp1256 bytes are read as something else. */
+  var REPLACEMENT = '�';
+
+  function countChar(s, ch) {
+    var n = 0;
+    for (var i = 0; i < s.length; i++) if (s.charAt(i) === ch) n++;
+    return n;
+  }
+
+  function arabicLetterCount(s) {
+    var m = s.match(/[؀-ۿ]/g);
+    return m ? m.length : 0;
+  }
+
+  function stripBom(s) {
+    return s.charAt(0) === '﻿' ? s.slice(1) : s;
+  }
+
+  function decodeText(buffer, ctorOverride) {
+    var TD = ctorOverride || (typeof TextDecoder !== 'undefined' ? TextDecoder : null);
+    if (!TD) throw new Error('المتصفح لا يدعم قراءة الملفات بهذه الطريقة');
+    var utf8 = new TD('utf-8').decode(buffer);
+    var bad = countChar(utf8, REPLACEMENT);
+    var ratio = utf8.length ? bad / utf8.length : 0;
+    var chosen = { text: stripBom(utf8), encoding: 'utf-8', replacementRatio: ratio };
+    /* Below the threshold the file is UTF-8 and a stray replacement char is
+       just a stray replacement char. Above it, decode again and keep whichever
+       reading yields more Arabic and less damage. */
+    if (ratio > 0.005) {
+      var alt;
+      try { alt = new TD('windows-1256').decode(buffer); } catch (e) { alt = null; }
+      if (alt !== null) {
+        var altBad = countChar(alt, REPLACEMENT);
+        if (arabicLetterCount(alt) > arabicLetterCount(utf8) && altBad <= bad) {
+          chosen = {
+            text: stripBom(alt), encoding: 'windows-1256',
+            replacementRatio: alt.length ? altBad / alt.length : 0
+          };
+        }
+      }
+    }
+    return chosen;
+  }
+
+  /* ── 2. structure: delimiter and columns (D-11) ───────────────────────── */
+  var DELIMS = [',', '\t', ';', '|'];
+
+  function textLines(text) {
+    return String(text).split(/\r\n|\r|\n/).filter(function (l) { return l.trim() !== ''; });
+  }
+
+  /** Split one delimited line, honouring "quoted, fields". */
+  function splitLine(line, delim) {
+    var out = [];
+    var cur = '';
+    var inQ = false;
+    for (var i = 0; i < line.length; i++) {
+      var c = line.charAt(i);
+      if (inQ) {
+        if (c === '"') {
+          if (line.charAt(i + 1) === '"') { cur += '"'; i++; }
+          else inQ = false;
+        } else cur += c;
+      } else if (c === '"') {
+        inQ = true;
+      } else if (c === delim) {
+        out.push(cur); cur = '';
+      } else cur += c;
+    }
+    out.push(cur);
+    return out.map(function (s) { return s.trim(); });
+  }
+
+  /**
+   * The delimiter whose field count is most CONSISTENT across the first 50
+   * non-empty rows — not the most frequent one. A row of Arabic names is full
+   * of nothing in particular; a real delimiter produces the same field count
+   * every time.
+   */
+  function sniffDelimiter(text) {
+    var lines = textLines(text).slice(0, 50);
+    if (!lines.length) return null;
+    var best = null;
+    DELIMS.forEach(function (d) {
+      var counts = lines.map(function (l) { return splitLine(l, d).length; });
+      var maxFields = Math.max.apply(null, counts);
+      if (maxFields < 2) return;
+      var mode = {}, modeCount = 0, modeVal = 0;
+      counts.forEach(function (c) {
+        mode[c] = (mode[c] || 0) + 1;
+        if (mode[c] > modeCount) { modeCount = mode[c]; modeVal = c; }
+      });
+      var consistency = modeCount / counts.length;
+      var score = consistency * Math.min(modeVal, 6);
+      if (!best || score > best.score) best = { delim: d, score: score, fields: modeVal, consistency: consistency };
+    });
+    /* A fixed-width export has no delimiter at all; runs of >=2 spaces are. */
+    if (!best || best.consistency < 0.6) {
+      var wide = lines.map(function (l) { return l.split(/ {2,}/).length; });
+      var wideMax = Math.max.apply(null, wide);
+      if (wideMax >= 2) return { delim: /  +/, score: 0, fields: wideMax, consistency: 0, fixedWidth: true };
+    }
+    return best;
+  }
+
+  function splitRows(text, sniff) {
+    var lines = textLines(text);
+    if (!sniff) return lines.map(function (l) { return [l]; });
+    if (sniff.fixedWidth) {
+      return lines.map(function (l) {
+        return l.split(/ {2,}/).map(function (s) { return s.trim(); });
+      });
+    }
+    return lines.map(function (l) { return splitLine(l, sniff.delim); });
+  }
+
+  /* ── 3. shapes ────────────────────────────────────────────────────────── */
+  /* g1/g2/g3 plus the separator. A 4-digit FIRST group is the only shape where
+     the year comes first, and that shape is unambiguous, so it is the ISO
+     branch rather than a YMD hypothesis to weigh against the others. */
+  var SHAPE_RES = [
+    { shape: 'ISO', re: /(\d{4})([-\/.])(\d{1,2})\2(\d{1,2})/, iso: true },
+    { shape: 'SLASH4', re: /(\d{1,2})\/(\d{1,2})\/(\d{4})/ },
+    { shape: 'DASH', re: /(\d{1,2})-(\d{1,2})-(\d{4})/ },
+    { shape: 'DOT', re: /(\d{1,2})\.(\d{1,2})\.(\d{4})/ },
+    { shape: 'SLASH2', re: /(\d{1,2})\/(\d{1,2})\/(\d{2})(?!\d)/, shortYear: true }
+  ];
+
+  var TIME_RE = /(\d{1,2}):(\d{2})(?::(\d{2}))?\s*([^\s\d:،,]{1,4})?/;
+
+  /** -> { shape, a, b, y, raw } | null. `a`/`b` are the two ambiguous numbers. */
+  function classifyShape(s) {
+    var str = String(s == null ? '' : s);
+    for (var i = 0; i < SHAPE_RES.length; i++) {
+      var def = SHAPE_RES[i];
+      var m = str.match(def.re);
+      if (!m) continue;
+      if (def.iso) {
+        return { shape: 'ISO', a: Number(m[3]), b: Number(m[4]), y: Number(m[1]), raw: m[0], iso: true };
+      }
+      var y = Number(m[3]);
+      if (def.shortYear) y = y < 70 ? 2000 + y : 1900 + y;
+      return { shape: def.shape, a: Number(m[1]), b: Number(m[2]), y: y, raw: m[0] };
+    }
+    return null;
+  }
+
+  function looksLikeTime(s) {
+    var str = String(s == null ? '' : s);
+    var m = str.match(TIME_RE);
+    if (!m) return false;
+    var h = Number(m[1]);
+    return h >= 0 && h <= 23 && Number(m[2]) <= 59;
+  }
+
+  /* ── 4. column mapping ────────────────────────────────────────────────── */
+  var HEADER_HINT = /(code|id|emp|no|name|date|time|رقم|كود|اسم|تاريخ|وقت|بصمة|موظف)/i;
+
+  /**
+   * Score every column for each role over ALL rows, then take the best. The
+   * old code joined the whole row with spaces and let the first date-looking
+   * token win, which is how "1,أحمد,01/09/2026" imported an employee whose
+   * code was the string "1أحمد" — and never flagged it.
+   *
+   * date and time may resolve to the SAME column; a single "01/09/2026 08:00"
+   * cell is the common case.
+   */
+  function mapColumns(rows) {
+    if (!rows || !rows.length) {
+      return { dateCol: -1, timeCol: -1, codeCol: -1, hasHeader: false, lowConfidence: true };
+    }
+    var width = 0;
+    rows.forEach(function (r) { if (r.length > width) width = r.length; });
+
+    /* A header row is a first row with NO date in it that names its columns. */
+    var firstHasDate = rows[0].some(function (c) { return !!classifyShape(c); });
+    var hasHeader = !firstHasDate && rows[0].some(function (c) { return HEADER_HINT.test(String(c)); });
+    var body = hasHeader ? rows.slice(1) : rows;
+    if (!body.length) {
+      return { dateCol: -1, timeCol: -1, codeCol: -1, hasHeader: hasHeader, lowConfidence: true };
+    }
+
+    var stats = [];
+    for (var c = 0; c < width; c++) {
+      var dateHits = 0, timeHits = 0, filled = 0, digitish = 0, shortish = 0;
+      var distinct = {}, distinctN = 0;
+      for (var r = 0; r < body.length; r++) {
+        var v = String(body[r][c] == null ? '' : body[r][c]).trim();
+        if (!v) continue;
+        filled++;
+        if (classifyShape(v)) dateHits++;
+        if (looksLikeTime(v)) timeHits++;
+        if (/^\d{1,8}$/.test(v)) digitish++;
+        if (v.length <= 8) shortish++;
+        if (!distinct[v]) { distinct[v] = 1; distinctN++; }
+      }
+      var n = filled || 1;
+      stats.push({
+        index: c,
+        filled: filled,
+        dateScore: dateHits / n,
+        timeScore: timeHits / n,
+        /* A code column is short, almost entirely digits, and repeats: one row
+           per punch means far fewer distinct codes than rows. */
+        codeScore: (digitish / n) * 0.6 + (shortish / n) * 0.2 +
+          (1 - Math.min(distinctN / n, 1)) * 0.2
+      });
+    }
+
+    function bestBy(key, min, exclude) {
+      var best = -1, bestV = min;
+      stats.forEach(function (s) {
+        if (exclude && exclude.indexOf(s.index) !== -1) return;
+        if (s[key] > bestV) { bestV = s[key]; best = s.index; }
+      });
+      return best;
+    }
+
+    var dateCol = bestBy('dateScore', 0.5, null);
+    var timeCol = bestBy('timeScore', 0.5, null);
+    /* The code column must not be the date or time column — a date is digit-rich
+       too, and would otherwise win codeScore on a two-column file. */
+    var codeCol = bestBy('codeScore', 0.55, [dateCol, timeCol].filter(function (i) { return i !== -1; }));
+
+    return {
+      dateCol: dateCol,
+      timeCol: timeCol,
+      codeCol: codeCol,
+      hasHeader: hasHeader,
+      width: width,
+      stats: stats,
+      /* No identifiable date column: the caller falls back to the whole-row
+         regex and every row of the file is forced through the confirmation
+         card regardless of score. */
+      lowConfidence: dateCol === -1
+    };
+  }
+
+  /* ── 5. time, including the mojibake aliases (B.4) ────────────────────── */
+  /* 'Õ' and 'ã' are cp1256 'ص' and 'م' read as the wrong encoding. They are
+     kept as ALIASES now that there is a real decoder: a file that still
+     arrives that way is read, not rejected. They are not relied on. */
+  var AM_RE = /^(ص|Õ|am|a\.?m\.?|a)$/i;
+  var PM_RE = /^(م|ã|pm|p\.?m\.?|p)$/i;
+
+  function parseTime(s) {
+    var m = String(s == null ? '' : s).match(TIME_RE);
+    if (!m) return null;
+    var h = Number(m[1]);
+    var mi = Number(m[2]);
+    if (!(h >= 0 && h <= 23) || !(mi >= 0 && mi <= 59)) return null;
+    var token = (m[4] || '').trim();
+    if (token) {
+      if (AM_RE.test(token)) { if (h === 12) h = 0; }
+      else if (PM_RE.test(token)) { if (h < 12) h += 12; }
+    }
+    /* No token and an hour <= 23 is 24-hour, which is what devices export. */
+    return { hours: h, minutes: mi };
+  }
+
+  /* ── 6. the plausibility window ───────────────────────────────────────── */
+  /* Everything a fingerprint device can legitimately produce sits inside
+     [today - 3 years, today + 2 days]. Anything outside it is a misread, not a
+     record, and it is precisely what eliminates a wrong hypothesis when both
+     readings are calendar-valid. */
+  function plausibleWindow(today) {
+    var t = today instanceof Date ? today : (today ? new Date(today) : new Date());
+    var y = t.getFullYear(), m = t.getMonth() + 1, d = t.getDate();
+    return {
+      min: dateOnlyToSerial(d, m, y - 3),
+      max: dateOnlyToSerial(d, m, y) + 2
+    };
+  }
+
+  /** Real calendar date? Built in UTC and round-tripped, so 31 Feb fails. */
+  function isRealDate(day, month, year) {
+    if (!(month >= 1 && month <= 12) || !(day >= 1 && day <= 31)) return false;
+    var dt = new Date(Date.UTC(year, month - 1, day));
+    return dt.getUTCFullYear() === year && dt.getUTCMonth() === month - 1 && dt.getUTCDate() === day;
+  }
+
+  /* ── 7. format inference (D-13) ───────────────────────────────────────── */
+  var HYP = {
+    DMY: function (t) { return { day: t.a, month: t.b, year: t.y }; },
+    MDY: function (t) { return { day: t.b, month: t.a, year: t.y }; }
+  };
+
+  /**
+   * Eliminate, then corroborate.
+   *
+   * Today's analyzer asks one question — "is either number greater than 12?" —
+   * and gives up the moment the answer is no. That is the common case for the
+   * first twelve days of a month, which is exactly when an import is run.
+   *
+   * @param {Array} tokens  classifyShape() results, IN FILE ORDER
+   * @param {object} [opts] { sessionDates: ['yyyy-MM-dd'], today: Date }
+   */
+  function inferDateFormat(tokens, opts) {
+    opts = opts || {};
+    var sessionSet = {};
+    (opts.sessionDates || []).forEach(function (k) { sessionSet[String(k)] = true; });
+    var win = plausibleWindow(opts.today);
+
+    var usable = (tokens || []).filter(Boolean);
+    if (!usable.length) {
+      return { format: null, confidence: 'ambiguous', candidates: [], shapes: {}, reason: 'لا توجد تواريخ في الملف' };
+    }
+
+    var shapes = {};
+    usable.forEach(function (t) { shapes[t.shape] = (shapes[t.shape] || 0) + 1; });
+
+    /* An ISO file — or an XLSX serial, which never reaches here — carries its
+       own answer. No question is asked, no card is shown. */
+    if (usable.every(function (t) { return t.iso; })) {
+      return {
+        format: 'ISO', confidence: 'certain', candidates: [], shapes: shapes,
+        reason: 'التواريخ في الملف بصيغة سنة-شهر-يوم، ولا يوجد أي التباس'
+      };
+    }
+
+    var names = ['DMY', 'MDY'];
+    var candidates = names.map(function (name) {
+      var read = HYP[name];
+      var serials = [];
+      var eliminated = false, reason = '';
+      for (var i = 0; i < usable.length; i++) {
+        var p = read(usable[i]);
+        if (!isRealDate(p.day, p.month, p.year)) {
+          eliminated = true;
+          reason = 'التاريخ ' + usable[i].raw + ' غير موجود في التقويم بهذه القراءة';
+          break;
+        }
+        var s = dateOnlyToSerial(p.day, p.month, p.year);
+        if (s < win.min || s > win.max) {
+          eliminated = true;
+          reason = 'التاريخ ' + usable[i].raw + ' خارج الفترة المعقولة بهذه القراءة';
+          break;
+        }
+        serials.push(s);
+      }
+      if (eliminated) {
+        return {
+          format: name, eliminated: true, reason: reason, score: 0,
+          spanMin: null, spanMax: null, distinctDays: 0, punches: usable.length, sessionsMatching: 0,
+          monotonic: 0, compact: 0, dbMatch: 0
+        };
+      }
+
+      /* A device export is written in the order the punches happened. The
+         WRONG reading of a sorted file shatters that order — this is the
+         signal that resolves the case where every number is <= 12. */
+      var outOfOrder = 0;
+      for (var j = 1; j < serials.length; j++) if (serials[j] < serials[j - 1]) outOfOrder++;
+      var monotonic = serials.length > 1 ? 1 - (outOfOrder / (serials.length - 1)) : 1;
+
+      var distinct = {}, distinctN = 0, min = serials[0], max = serials[0];
+      serials.forEach(function (s) {
+        if (!distinct[s]) { distinct[s] = 1; distinctN++; }
+        if (s < min) min = s;
+        if (s > max) max = s;
+      });
+      /* 1.0 = a contiguous export. A month of days read the wrong way round
+         becomes the same weekday of twelve different months. */
+      var spanDays = (max - min) + 1;
+      var compact = spanDays > 0 ? Math.min(distinctN / spanDays, 1) : 1;
+
+      var matching = 0;
+      Object.keys(distinct).forEach(function (s) {
+        if (sessionSet[serialDateKey(Number(s))]) matching++;
+      });
+      var dbMatch = distinctN ? matching / distinctN : 0;
+
+      return {
+        format: name, eliminated: false, reason: '',
+        spanMin: min, spanMax: max,
+        spanMinDisplay: serialArabicDate(min), spanMaxDisplay: serialArabicDate(max),
+        distinctDays: distinctN, punches: usable.length, sessionsMatching: matching,
+        monotonic: monotonic, compact: compact, dbMatch: dbMatch,
+        score: 0.50 * monotonic + 0.30 * compact + 0.20 * dbMatch
+      };
+    });
+
+    var alive = candidates.filter(function (c) { return !c.eliminated; });
+
+    if (alive.length === 1) {
+      return {
+        format: alive[0].format, confidence: 'certain', candidates: candidates, shapes: shapes,
+        reason: 'قراءة واحدة فقط تعطي تواريخ حقيقية في فترة معقولة'
+      };
+    }
+    if (!alive.length) {
+      return {
+        format: null, confidence: 'ambiguous', candidates: candidates, shapes: shapes,
+        reason: 'لا توجد قراءة واحدة تصلح لكل صفوف الملف'
+      };
+    }
+
+    var sorted = alive.slice().sort(function (a, b) { return b.score - a.score; });
+    var top = sorted[0], runnerUp = sorted[1];
+    if ((top.score - runnerUp.score) >= 0.25 && top.score >= 0.60) {
+      return {
+        format: top.format, confidence: 'high', candidates: candidates, shapes: shapes,
+        reason: 'القراءة المرجحة تعطي فترة متصلة ومرتبة زمنياً'
+      };
+    }
+    return { format: null, confidence: 'ambiguous', candidates: candidates, shapes: shapes, reason: '' };
+  }
+
+  /* ── 8. the whole file ────────────────────────────────────────────────── */
+  var REASON_NO_DATE = 'تعذر استخراج التاريخ من هذا الصف';
+  var REASON_NO_TIME = 'تعذر استخراج الوقت من هذا الصف';
+  var REASON_NON_NUMERIC = 'كود الموظف غير رقمي';
+  var REASON_OUT_OF_RANGE = 'التاريخ خارج الفترة المعقولة';
+  var REASON_NOT_REAL = 'التاريخ غير موجود في التقويم';
+
+  /** The raw text of a row, for source_raw and for the review queue. */
+  function rowText(cells) {
+    return cells.join(' ').replace(/\s+/g, ' ').trim();
+  }
+
+  /**
+   * Pull one date token and one time out of a row, using the mapping when there
+   * is one and falling back to the whole row when there is not.
+   */
+  function tokenizeRow(cells, mapping) {
+    var dateCell = (mapping && mapping.dateCol >= 0) ? cells[mapping.dateCol] : null;
+    var timeCell = (mapping && mapping.timeCol >= 0) ? cells[mapping.timeCol] : null;
+    var whole = rowText(cells);
+    var token = classifyShape(dateCell != null && dateCell !== '' ? dateCell : whole);
+    var time = parseTime(timeCell != null && timeCell !== '' ? timeCell : whole);
+    return { token: token, time: time, whole: whole };
+  }
+
+  function readCode(cells, mapping, whole, token) {
+    var raw;
+    if (mapping && mapping.codeCol >= 0) {
+      raw = cells[mapping.codeCol];
+    } else if (token) {
+      /* No code column identified: everything before the date, as before — but
+         the numeric guard below still applies, so a bad split is FLAGGED
+         instead of being stored as a string. */
+      raw = String(whole).split(token.raw)[0];
+    } else {
+      raw = '';
+    }
+    var norm = String(raw == null ? '' : raw).trim().replace(/[^a-zA-Z0-9؀-ۿ-]/g, '');
+    return { raw: String(raw == null ? '' : raw).trim(), norm: norm, numeric: /^\d+$/.test(norm) ? Number(norm) : null };
+  }
+
+  /**
+   * Parse a whole decoded file.
+   *
+   * @return {{rows: Array, flagged: Array, mapping: object, inference: object,
+   *           dateMin: number|null, dateMax: number|null, sample: Array}}
+   *   rows    [[empId, serial, rawText], ...]      — the Phase C wire shape
+   *   flagged [[rawText, reason, empGuess, serialGuess], ...]
+   */
+  function parseFile(text, opts) {
+    opts = opts || {};
+    var sniff = sniffDelimiter(text);
+    var cells = splitRows(text, sniff);
+    var mapping = mapColumns(cells);
+    var body = mapping.hasHeader ? cells.slice(1) : cells;
+
+    var tokens = [];
+    var parsedRows = [];
+    body.forEach(function (row) {
+      var t = tokenizeRow(row, mapping);
+      parsedRows.push({ cells: row, token: t.token, time: t.time, whole: t.whole });
+      if (t.token) tokens.push(t.token);
+    });
+
+    var inference = inferDateFormat(tokens, opts);
+    var format = opts.forceFormat || inference.format;
+
+    var win = plausibleWindow(opts.today);
+    var rows = [];
+    var flagged = [];
+    var dateMin = null, dateMax = null;
+    var sample = [];
+
+    parsedRows.forEach(function (pr) {
+      var code = readCode(pr.cells, mapping, pr.whole, pr.token);
+      if (!pr.token) {
+        flagged.push([pr.whole, REASON_NO_DATE, code.raw, '']);
+        return;
+      }
+      if (sample.length < 8) sample.push({ raw: pr.whole, token: pr.token });
+      if (!pr.time) {
+        flagged.push([pr.whole, REASON_NO_TIME, code.raw, '']);
+        return;
+      }
+      /* D-10, enforced here AND again server-side: the server never trusts the
+         client's parse. */
+      if (code.numeric === null) {
+        flagged.push([pr.whole, REASON_NON_NUMERIC, code.raw, '']);
+        return;
+      }
+
+      var parts;
+      if (pr.token.iso) parts = { day: pr.token.b, month: pr.token.a, year: pr.token.y };
+      else if (format === 'MDY') parts = { day: pr.token.b, month: pr.token.a, year: pr.token.y };
+      else parts = { day: pr.token.a, month: pr.token.b, year: pr.token.y };
+
+      if (!isRealDate(parts.day, parts.month, parts.year)) {
+        flagged.push([pr.whole, REASON_NOT_REAL, code.raw, '']);
+        return;
+      }
+      var serial = toSerialInt(dateTimePartsToSerial(parts.day, parts.month, parts.year, pr.time.hours, pr.time.minutes));
+      var daySerial = dateOnlyToSerial(parts.day, parts.month, parts.year);
+      if (daySerial < win.min || daySerial > win.max) {
+        flagged.push([pr.whole, REASON_OUT_OF_RANGE, code.raw, serial]);
+        return;
+      }
+
+      rows.push([code.numeric, serial, pr.whole]);
+      if (dateMin === null || daySerial < dateMin) dateMin = daySerial;
+      if (dateMax === null || daySerial > dateMax) dateMax = daySerial;
+    });
+
+    return {
+      rows: rows, flagged: flagged, mapping: mapping, inference: inference,
+      delimiter: sniff, format: format, dateMin: dateMin, dateMax: dateMax, sample: sample
+    };
+  }
+
+  /**
+   * An Excel export is unambiguous by construction: the cell holds a number,
+   * not a rendering of one, so there is nothing to infer. cellDates:false keeps
+   * it that way — asking SheetJS for a Date would re-introduce the timezone
+   * question the raw serial does not have.
+   */
+  function parseWorkbook(workbook, opts) {
+    opts = opts || {};
+    var XLSXlib = opts.XLSX || global.XLSX;
+    if (!XLSXlib) throw new Error('مكتبة Excel غير محملة');
+    var sheetName = workbook.SheetNames[0];
+    var grid = XLSXlib.utils.sheet_to_json(workbook.Sheets[sheetName], { header: 1, raw: true, defval: '' });
+    var cells = grid.filter(function (r) {
+      return r && r.some(function (c) { return String(c == null ? '' : c).trim() !== ''; });
+    }).map(function (r) { return r.map(function (c) { return c; }); });
+
+    /* Find the column whose cells are numbers in the Sheets serial range for a
+       plausible date. Excel and Sheets share the 1899-12-30 epoch. */
+    var win = plausibleWindow(opts.today);
+    var body = cells.slice();
+    var hasHeader = body.length > 1 && body[0].every(function (c) { return typeof c !== 'number'; });
+    if (hasHeader) body = body.slice(1);
+
+    var width = 0;
+    body.forEach(function (r) { if (r.length > width) width = r.length; });
+    var dateCol = -1, dateHitsBest = 0;
+    for (var c = 0; c < width; c++) {
+      var hits = 0, filled = 0;
+      body.forEach(function (r) {
+        var v = r[c];
+        if (v === '' || v === null || v === undefined) return;
+        filled++;
+        if (typeof v === 'number' && v >= win.min && v <= win.max + 1) hits++;
+      });
+      if (filled && hits / filled > 0.5 && hits > dateHitsBest) { dateHitsBest = hits; dateCol = c; }
+    }
+
+    var codeCol = -1;
+    for (var c2 = 0; c2 < width; c2++) {
+      if (c2 === dateCol) continue;
+      var num = 0, tot = 0;
+      body.forEach(function (r) {
+        var v = r[c2];
+        if (v === '' || v === null || v === undefined) return;
+        tot++;
+        if (/^\d{1,8}$/.test(String(v).trim())) num++;
+      });
+      if (tot && num / tot > 0.8) { codeCol = c2; break; }
+    }
+
+    var rows = [], flagged = [], dateMin = null, dateMax = null;
+    body.forEach(function (r) {
+      var whole = r.map(function (c) { return String(c == null ? '' : c); }).join(' ').replace(/\s+/g, ' ').trim();
+      var v = dateCol >= 0 ? r[dateCol] : null;
+      if (typeof v !== 'number' || !isFinite(v)) { flagged.push([whole, REASON_NO_DATE, '', '']); return; }
+      var codeRaw = codeCol >= 0 ? String(r[codeCol]).trim() : '';
+      if (!/^\d+$/.test(codeRaw)) { flagged.push([whole, REASON_NON_NUMERIC, codeRaw, v]); return; }
+      var serial = toSerialInt(v);
+      var daySerial = Math.floor(serial);
+      if (daySerial < win.min || daySerial > win.max) { flagged.push([whole, REASON_OUT_OF_RANGE, codeRaw, serial]); return; }
+      rows.push([Number(codeRaw), serial, whole]);
+      if (dateMin === null || daySerial < dateMin) dateMin = daySerial;
+      if (dateMax === null || daySerial > dateMax) dateMax = daySerial;
+    });
+
+    return {
+      rows: rows, flagged: flagged,
+      mapping: { dateCol: dateCol, timeCol: dateCol, codeCol: codeCol, hasHeader: hasHeader, lowConfidence: dateCol === -1 },
+      inference: { format: 'XLSX', confidence: 'certain', candidates: [], shapes: { XLSX: rows.length }, reason: 'ملف Excel يحمل التاريخ كرقم، لا يحتاج أي تخمين' },
+      format: 'XLSX', dateMin: dateMin, dateMax: dateMax, sample: []
+    };
+  }
+
+  global.ATT_PARSER = {
+    /* serials */
+    dateTimePartsToSerial: dateTimePartsToSerial,
+    dateOnlyToSerial: dateOnlyToSerial,
+    toSerialInt: toSerialInt,
+    serialToDate: serialToDate,
+    serialDateDisplay: serialDateDisplay,
+    serialDateKey: serialDateKey,
+    serialArabicDate: serialArabicDate,
+    /* reading */
+    decodeText: decodeText,
+    sniffDelimiter: sniffDelimiter,
+    splitRows: splitRows,
+    splitLine: splitLine,
+    textLines: textLines,
+    /* structure */
+    mapColumns: mapColumns,
+    classifyShape: classifyShape,
+    parseTime: parseTime,
+    looksLikeTime: looksLikeTime,
+    /* decisions */
+    plausibleWindow: plausibleWindow,
+    isRealDate: isRealDate,
+    inferDateFormat: inferDateFormat,
+    /* whole files */
+    parseFile: parseFile,
+    parseWorkbook: parseWorkbook,
+    REASONS: {
+      noDate: REASON_NO_DATE,
+      noTime: REASON_NO_TIME,
+      nonNumeric: REASON_NON_NUMERIC,
+      outOfRange: REASON_OUT_OF_RANGE,
+      notReal: REASON_NOT_REAL
+    }
+  };
+})(typeof window !== 'undefined' ? window : this);
+</script>

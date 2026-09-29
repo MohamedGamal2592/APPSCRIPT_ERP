@@ -1,0 +1,3 @@
+verify: exit 1
+ui_check: exit 1
+preview: exit 0

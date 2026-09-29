@@ -1,0 +1,464 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Valley Foods — حركة المخزن</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_ValleyFoods_Nav'); ?>
+  <?!= getCompanyThemeCSS_('9940659bd83035d7') ?>
+</head>
+<body>
+  <div id="vf-root"></div>
+
+  <script>
+    var params = new URLSearchParams(window.location.search);
+    var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+    var scriptUrl = window.scriptUrl || '/';
+    var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+    var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('9940659bd83035d7') ?>';
+    var COMPANY_PAGES = <?!= companyPages ?>;
+    var CURRENT_ACTION = '<?!= currentAction ?>';
+    var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+    var CAN_WRITE = UIC.canAdd_(); var CAN_FULL = UIC.canFull_();
+    /* U-46. Set from the server's can_see_cost on every list load. NOT derived
+       from USER_PAGES: the browser cannot see the fail-open guard, which keeps
+       costs visible to everyone until the owner grants valley_cost_view to a
+       first role. Defaults to true so nothing changes before that.
+
+       This flag only decides whether a column is DRAWN. The enforcement is the
+       server deleting `amount` and `unit_cost` from the payload — a browser
+       that flips this to true still receives no cost figure to show. */
+    var CAN_SEE_COST = true;
+    function canCost() { return CAN_SEE_COST !== false; }
+
+    function companyCall(moduleAction, data) {
+      return API.call('company_action', {
+        target_system: '9940659bd83035d7',
+        module_action: moduleAction,
+        data: data || {}
+      }, SESSION_TOKEN);
+    }
+    function esc(v) {
+      /* [UI-2.8 / U-36] Delegates to the shared formatter, exactly as every
+         other Valley page does. Client_Helpers.html defines FMT in <head>
+         before any page script runs. */
+      return FMT.escape(v);
+    }
+    function todayStr() { return new Date().toISOString().slice(0, 10); }
+    function finFmt(n) { return Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+    function qtyFmt(n) { return Number(n || 0).toLocaleString('en-US', { maximumFractionDigits: 3 }); }
+  </script>
+
+  <script>
+  (function () {
+    var PAGE_SIZE = 100;
+
+    /* The list's first page, kept from the bootstrap call so building the table
+       with the right columns does not cost a second round trip. can_see_cost
+       has to be known BEFORE the header row is built, and UIC.PagedTable fixes
+       its headers at construction. */
+    var __firstPage = null;
+    /* batch uid -> the option the server offered, for the modal's live preview */
+    var __batchByUid = {};
+    var __options = null;
+    var __inType = 'وارد داخلي / مرتجع للمخزن';
+
+    function renderApp() {
+      UIC.appShell('vf-root', {
+        companyLogoUrl: COMPANY_LOGO_URL,
+        companyLogoHref: scriptUrl + '?action=vf_dashboard&sessionToken=' + SESSION_TOKEN,
+        companyLogoTitle: 'Valley Foods',
+        breadcrumb: 'Valley Foods / الادارة المالية / حركة المخزن',
+        contentId: 'vf-wm-content',
+        menuGroups: (window.VALLEYFOODS_MENU || [])
+      });
+      document.getElementById('vf-wm-content').innerHTML =
+        '<div class="vf-card"><div class="vf-card-header"><h3>حركة المخزن</h3>' +
+          (CAN_WRITE ? '<button class="btn btn-primary" onclick="WM_PAGE.openAdd()">+ إضافة حركة</button>' : '') +
+        '</div><div class="vf-card-body">' +
+          '<div id="wm-table"><p class="vf-text-muted">جاري التحميل...</p></div>' +
+        '</div></div>';
+      load();
+    }
+
+    /* ---------- LIST ---------- */
+    /* quiet: refresh in the background with no blocking overlay, for a
+       user who has already seen the change and must not be interrupted
+       to confirm it. */
+    function load(quiet) {
+      if (!quiet) UIC.readSkeleton('wm-table');
+      companyCall('get_valley_warehouse_movements', { offset: 0, limit: PAGE_SIZE })
+        .then(function (r) {
+          CAN_SEE_COST = (r && r.can_see_cost !== false);
+          if (r && r.in_type) __inType = r.in_type;
+          __firstPage = r;
+          buildTable();
+        })
+        .catch(function (e) {
+          var c = document.getElementById('wm-table');
+          if (c) c.innerHTML = '<p style="color:var(--danger, #dc2626);">' + esc((e && e.message) || 'تعذر تحميل الحركات') + '</p>';
+        })
+        .finally(function () {
+          if (!quiet) UI.hideSpinner();
+          /* warm the modal's option lists while the user reads the ledger,
+             so opening the form costs no round trip */
+          try { ensureOptions().catch(function () {}); } catch (e) {}
+        });
+    }
+
+    function buildTable() {
+      var container = document.getElementById('wm-table');
+      if (!container) return;
+
+      /* The القيمة column is built only when the server said this user may see
+         costs. Without the grant `amount` is absent from every row, so drawing
+         the column would leave a header hanging over empty cells. */
+      var headers = ['رقم', 'التاريخ', 'الدفعة / الصنف', 'الكود', 'المورد', 'الوحدة',
+        { label: 'الكمية', numeric: true }];
+      if (canCost()) headers.push({ label: 'القيمة', numeric: true });
+      headers = headers.concat(['نوع الحركة', 'المسؤول', 'ملاحظات']);
+
+      UIC.PagedTable({
+        container: container,
+        headers: headers,
+        pageSize: PAGE_SIZE,
+        searchable: true,
+        emptyText: 'لا توجد حركات مخزن مسجلة',
+        onRendered: function (tid) { try { UIC.initTableSort(tid); } catch (e) {} },
+        fetcher: function (offset, limit) {
+          /* offset 0 was already fetched by load() */
+          if (offset === 0 && __firstPage) { var f = __firstPage; __firstPage = null; return f; }
+          return companyCall('get_valley_warehouse_movements', { offset: offset, limit: limit });
+        },
+        mapRow: function (m) {
+          /* The sign is carried by colour, so the ledger reads at a glance
+             without a column of its own: منصرف out (red), وارد in (green). */
+          var isIn = String(m.movement_type || '') === __inType;
+          var colour = isIn ? 'var(--success, #16a34a)' : 'var(--danger, #dc2626)';
+          var sign = isIn ? '+' : '−';
+          var cells = [
+            '<b>' + esc(m.id) + '</b>',
+            esc(dateOnly(m.movement_date)),
+            esc(m.item_label || m.item || '-'),
+            esc(m.item_code || '-'),
+            esc(m.vendor_name || '-'),
+            esc(m.unit || '-'),
+            '<span class="num" style="font-weight:700;color:' + colour + ';" data-num="' + (Number(m.qty) || 0) + '">' +
+              sign + ' ' + qtyFmt(m.qty) + '</span>'
+          ];
+          if (canCost()) {
+            cells.push('<span class="num" data-num="' + (Number(m.amount) || 0) + '">' + finFmt(m.amount) + '</span>');
+          }
+          cells.push('<span style="color:' + colour + ';font-weight:600;">' + esc(m.movement_type || '-') + '</span>');
+          cells.push(esc(m.responsible_name || '-'));
+          cells.push(esc(m.notes || ''));
+          return cells;
+        }
+      });
+    }
+
+    function dateOnly(v) {
+      if (!v) return '-';
+      var d = new Date(v);
+      return isNaN(d.getTime()) ? String(v) : d.toISOString().slice(0, 10);
+    }
+
+    /* ---------- ADD MODAL (add-only: this ledger has no edit or delete path) ---------- */
+    /* The option lists are the same every time the modal opens, so they are
+       fetched once and kept, and warmed while the user reads the ledger. */
+    var __optionsPromise = null;
+    function ensureOptions() {
+      if (__optionsPromise) return __optionsPromise;
+      __optionsPromise = companyCall('get_valley_warehouse_move_options')
+        .catch(function (e) { __optionsPromise = null; throw e; });
+      return __optionsPromise;
+    }
+
+    function openAdd() {
+      UIC.readSkeleton();
+      ensureOptions()
+        .then(function (r) {
+          __options = r || {};
+          if (__options.in_type) __inType = __options.in_type;
+          __batchByUid = {};
+          (__options.batches || []).forEach(function (b) { __batchByUid[String(b.value)] = b; });
+          renderAddModal();
+        })
+        .catch(function (e) { UIC.toast((e && e.message) || 'تعذر تحميل بيانات النموذج', 'error'); })
+        .finally(function () { UI.hideSpinner(); });
+    }
+
+    /* Rows are keyed by a counter, not by their index, so removing one does not
+       renumber the others — which is what lets a row be removed without
+       re-rendering the rest and destroying a combo being typed into. */
+    var __rows = [];
+    var __rowKey = 0;
+
+    function newRow() { return { k: ++__rowKey, item: '', qty: '', notes: '' }; }
+    function rowByKey(k) {
+      for (var i = 0; i < __rows.length; i++) if (__rows[i].k === Number(k)) return __rows[i];
+      return null;
+    }
+
+    function batchOf(row) { return row && row.item ? (__batchByUid[String(row.item)] || null) : null; }
+
+    /* What this batch has left, given what the OTHER rows of this same form
+       already take from it. Mirrors the server's own cumulative check, so the
+       figure on screen is the figure that will be enforced. */
+    function remainingFor(row) {
+      var b = batchOf(row);
+      if (!b) return null;
+      var rem = Number(b.available) || 0;
+      var isIn = String(hid('wm-type')).trim() === __inType;
+      __rows.forEach(function (o) {
+        if (o.k === row.k || String(o.item) !== String(row.item)) return;
+        var q = parseFloat(o.qty) || 0;
+        rem += isIn ? q : -q;
+      });
+      return rem;
+    }
+
+    function rowHtml(row) {
+      var k = row.k;
+      return '' +
+        '<div class="wm-row" id="wm-row-' + k + '" style="display:grid;grid-template-columns:minmax(220px,2.2fr) minmax(90px,0.8fr) minmax(80px,0.6fr) minmax(90px,0.7fr) minmax(140px,1.2fr) 38px;gap:8px;align-items:end;padding:8px 0;border-bottom:1px solid var(--border-color,#e5e7eb);">' +
+          '<div>' +
+            UIC.combo({ key: 'wm-item-' + k, inline: true, required: true,
+              options: __options.batches || [], value: row.item || '',
+              placeholder: 'ابحث بكود الدفعة أو اسم الصنف…' }) +
+          '</div>' +
+          '<div><input id="wm-qty-' + k + '" class="input" type="number" min="0" step="0.001" ' +
+            'value="' + esc(row.qty) + '" placeholder="0" oninput="WM_PAGE.onQty(' + k + ')"></div>' +
+          '<div><input id="wm-unit-' + k + '" class="input" readonly value="" ' +
+            'style="background:var(--bg-muted,#f8fafc);" placeholder="—"></div>' +
+          '<div id="wm-avail-' + k + '" class="input" style="display:flex;align-items:center;background:var(--bg-muted,#f8fafc);">—</div>' +
+          '<div><input id="wm-notes-' + k + '" class="input" type="text" value="' + esc(row.notes) + '" ' +
+            'placeholder="ملاحظات" oninput="WM_PAGE.onNotes(' + k + ', this.value)"></div>' +
+          '<button class="btn btn-outline" style="color:#c5221f;border-color:#c5221f;padding:6px 10px;" ' +
+            'title="حذف السطر" onclick="WM_PAGE.removeRow(' + k + ')">✕</button>' +
+        '</div>';
+    }
+
+    function wireRow(row) {
+      var k = row.k;
+      var it = document.getElementById('wm-item-' + k);
+      if (it) it.addEventListener('change', function () { onItemPicked(k, it.value); });
+      refreshRow(row);
+    }
+
+    /* Update one row's read-only cells in place — never a re-render. */
+    function refreshRow(row) {
+      var b = batchOf(row);
+      var unitEl = document.getElementById('wm-unit-' + row.k);
+      var availEl = document.getElementById('wm-avail-' + row.k);
+      if (unitEl) unitEl.value = b ? (b.unit || '') : '';
+      if (availEl) {
+        var rem = remainingFor(row);
+        availEl.textContent = (rem === null)
+          ? '—'
+          : qtyFmt(rem) + (b && b.unit ? ' ' + b.unit : '');
+        availEl.style.color = (rem !== null && rem < 0) ? '#c5221f' : '';
+      }
+    }
+
+    /* Every row's remaining depends on every other row on the same batch. */
+    function refreshAll() {
+      __rows.forEach(refreshRow);
+      var total = 0;
+      __rows.forEach(function (o) {
+        var b = batchOf(o);
+        total += (b && b.unit_cost != null ? Number(b.unit_cost) : 0) * (parseFloat(o.qty) || 0);
+      });
+      var tv = document.getElementById('wm-total-value');
+      if (tv) tv.textContent = finFmt(total);
+      var tc = document.getElementById('wm-total-count');
+      if (tc) tc.textContent = String(__rows.length);
+    }
+
+    function onItemPicked(k, value) {
+      var row = rowByKey(k);
+      if (!row) return;
+      row.item = String(value || '').trim();
+      refreshAll();
+    }
+
+    function onQty(k) {
+      var row = rowByKey(k);
+      if (!row) return;
+      var el = document.getElementById('wm-qty-' + k);
+      row.qty = el ? el.value : '';
+
+      /* Ergonomics only. The server recomputes availability from the sheet and
+         refuses an over-issue on its own — this just stops the user filling in
+         a whole note for a quantity that was never going to be accepted. */
+      var b = batchOf(row);
+      var isIn = String(hid('wm-type')).trim() === __inType;
+      if (b && !isIn) {
+        var rem = remainingFor(row);
+        var q = parseFloat(row.qty) || 0;
+        if (rem !== null && q > rem) {
+          row.qty = rem;
+          if (el) el.value = rem;
+          UIC.toast('أقصى كمية متاحة الآن من هذه الدفعة: ' + qtyFmt(rem), 'error');
+        }
+      }
+      refreshAll();
+    }
+
+    function onNotes(k, v) {
+      var row = rowByKey(k);
+      if (row) row.notes = v;
+    }
+
+    function addRow() {
+      var row = newRow();
+      __rows.push(row);
+      var host = document.getElementById('wm-rows');
+      if (!host) return;
+      var empty = document.getElementById('wm-rows-empty');
+      if (empty) empty.remove();
+      host.insertAdjacentHTML('beforeend', rowHtml(row));
+      wireRow(row);
+      refreshAll();
+      var el = document.getElementById('wm-item-' + row.k + '_display');
+      if (el && el.focus) el.focus();
+    }
+
+    function removeRow(k) {
+      __rows = __rows.filter(function (o) { return o.k !== Number(k); });
+      var node = document.getElementById('wm-row-' + k);
+      if (node) node.remove();
+      if (!__rows.length) addRow();
+      refreshAll();
+    }
+
+    function renderAddModal() {
+      var typeOpts = (__options.movement_types || []).map(function (t) { return { value: t, label: t }; });
+
+      var body =
+        '<div id="wm-form">' +
+          /* The facts that are the same for every line of a delivery note are
+             entered once. A row only carries what actually differs. */
+          '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;">' +
+            UIC.combo({ key: 'wm-type', label: 'نوع الحركة', required: true, options: typeOpts, value: '', placeholder: 'اختر نوع الحركة…' }) +
+            UIC.field({ key: 'wm-date', label: 'تاريخ الحركة', type: 'date', required: true, value: todayStr() }) +
+            UIC.combo({ key: 'wm-responsible', label: 'المسؤول', required: true, options: __options.employees || [], value: '', placeholder: 'اختر الموظف المسؤول…' }) +
+            UIC.combo({ key: 'wm-vendor', label: 'المورد (اختياري)', options: __options.vendors || [], value: '', placeholder: 'اختر المورد…' }) +
+          '</div>' +
+
+          '<div style="display:flex;align-items:center;justify-content:space-between;margin:14px 0 6px;">' +
+            '<h4 style="margin:0;">الأصناف (<span id="wm-total-count">0</span>)</h4>' +
+            '<button class="btn btn-outline" onclick="WM_PAGE.addRow()">+ إضافة صنف</button>' +
+          '</div>' +
+          '<div style="display:grid;grid-template-columns:minmax(220px,2.2fr) minmax(90px,0.8fr) minmax(80px,0.6fr) minmax(90px,0.7fr) minmax(140px,1.2fr) 38px;gap:8px;padding-bottom:4px;font-size:12px;color:var(--text-muted);font-weight:700;">' +
+            '<div>الدفعة / الصنف</div><div>الكمية</div><div>الوحدة</div><div>المتاح</div><div>ملاحظات</div><div></div>' +
+          '</div>' +
+          '<div id="wm-rows"></div>' +
+        '</div>' +
+        (canCost()
+          ? '<div id="wm-value-box" style="display:flex;justify-content:flex-end;gap:16px;padding:10px;background:var(--bg-muted, #f8fafc);border-radius:8px;margin-top:10px;font-weight:800;">' +
+              '<span>إجمالي القيمة:</span><span id="wm-total-value" style="direction:ltr;">0.00</span></div>'
+          : '');
+
+      UIC.openModal('wm-modal', {
+        title: 'إضافة حركات مخزن',
+        body: body,
+        size: 'lg',
+        footer: '<button class="btn btn-outline" onclick="UIC.closeModal(\'wm-modal\')">إلغاء</button>' +
+                '<button class="btn btn-primary" onclick="UI.submitOnce(this, WM_PAGE.save)">💾 حفظ كل الحركات</button>'
+      });
+
+      /* Changing the type flips every row between issue and receipt, so the
+         remaining figures all have to be recomputed. */
+      var typeHidden = document.getElementById('wm-type');
+      if (typeHidden) typeHidden.addEventListener('change', refreshAll);
+
+      __rows = [];
+      __rowKey = 0;
+      addRow();
+    }
+
+    function save() {
+      if (!UIC.validateForm('wm-form')) {
+        UIC.toast('أكمل الحقول المطلوبة', 'error');
+        return;
+      }
+      var rows = __rows.filter(function (o) {
+        return String(o.item || '').trim() !== '' || String(o.qty || '').trim() !== '';
+      });
+      if (!rows.length) { UIC.toast('أضف صنفًا واحدًا على الأقل', 'error'); return; }
+
+      var bad = [];
+      rows.forEach(function (o, i) {
+        if (!String(o.item || '').trim()) bad.push('السطر ' + (i + 1) + ': اختر الدفعة');
+        else if (!(parseFloat(o.qty) > 0)) bad.push('السطر ' + (i + 1) + ': الكمية مطلوبة');
+      });
+      if (bad.length) { UIC.toast(bad[0], 'error'); return; }
+
+      /* amount, unit_cost and available are deliberately NOT sent: the server
+         computes the first from the batch and ignores anything a client claims
+         about the other two. */
+      var payload = {
+        movement_type: hid('wm-type'),
+        movement_date: hid('wm-date'),
+        responsible_person: hid('wm-responsible'),
+        vendor: hid('wm-vendor'),
+        rows: rows.map(function (o) {
+          return { item: o.item, qty: parseFloat(o.qty) || 0, notes: o.notes || '' };
+        })
+      };
+      /* Tier B: the batch-availability guard (whBatchAvailability_ over live
+         stock, plus the cumulative in-submission check) can refuse for reasons
+         invisible in the form — another device may have consumed the batch
+         first. So NO draft is painted: canPatch stays false, only the quiet
+         corner hint shows. The reply carries no record (count/id/row only),
+         so onSuccess falls back to the quiet refresh; a refusal toasts
+         exactly as before and paints nothing. queueable:false: I1 is unproven
+         for save_valley_warehouse_movement. */
+      return UIC.Live.save({
+        call: companyCall,
+        action: 'save_valley_warehouse_movement',
+        data: payload,
+        modal: 'wm-modal',
+        message: 'تم تسجيل الحركات',
+        queueable: false,
+        reload: function () { load(true); },
+        onSuccess: function () {
+          /* NEEDS-REPLY: the reply carries count/id/row, not the saved rows —
+             so the ledger converges via the quiet refresh. */
+          load(true);
+        }
+      }).catch(function () { /* UIC.Live has toasted */ });
+    }
+
+
+    function hid(id) { var el = document.getElementById(id); return el ? String(el.value).trim() : ''; }
+
+    window.WM_PAGE = {
+      openAdd: openAdd,
+      save: save,
+      addRow: addRow,
+      removeRow: removeRow,
+      onQty: onQty,
+      onNotes: onNotes
+    };
+
+    /* Another device's change to this page arrives on its own. The poll
+       reads timestamps from cache, never a spreadsheet, and stands down
+       while the tab is hidden or a save is in flight. */
+    document.addEventListener('DOMContentLoaded', function () {
+      UIC.Live.watchPage({
+        call: companyCall,
+        page: 'vf_warehouse_movement',
+        onChange: function () { UIC.Live.arrive(function () { load(true); }); }
+      });
+    });
+
+    document.addEventListener('DOMContentLoaded', renderApp);
+  })();
+  </script>
+</body>
+</html>

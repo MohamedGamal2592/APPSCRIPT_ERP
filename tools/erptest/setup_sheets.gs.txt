@@ -1,0 +1,54 @@
+// P2 — OWNER RUNS in the Apps Script editor (scratch file, then delete it).
+// Idempotent: only acts where needed. Adds audit columns to the business tabs,
+// creates the two manufacture tabs, and formats their id columns as plain text.
+// OD-A: erp_test_current_products is NOT created (stock is computed live).
+function etSetupSheets_() {
+  var SS_ID = '1rdnnP3rMZTnoyyfG5V3X6w62AXatgIisZljkg0izJzE';
+  var ss = SpreadsheetApp.openById(SS_ID);
+  var changes = [];
+
+  // Business tabs that get audit columns (B3 business tabs except chart, boxes, stock).
+  var auditTabs = [
+    'erp_test_products', 'erp_test_categories', 'erp_test_customer_vendor',
+    'erp_test_purchasing_costing', 'erp_test_product_purchasing',
+    'erp_test_sales_invoices', 'erp_test_sales_products', 'erp_test_sales_returns',
+    'erp_test_sales_offer', 'erp_test_sales_offer_products', 'erp_test_cash_bank_movement'
+  ];
+  var AUDIT = ['deleted_at', 'deleted_by', 'version'];
+  auditTabs.forEach(function (name) {
+    var sh = ss.getSheetByName(name);
+    if (!sh) { changes.push('SKIP (missing tab): ' + name); return; }
+    var lc = sh.getLastColumn();
+    var headers = lc ? sh.getRange(1, 1, 1, lc).getValues()[0].map(function (h) { return String(h).trim(); }) : [];
+    AUDIT.forEach(function (col) {
+      if (headers.indexOf(col) === -1) {
+        sh.getRange(1, sh.getLastColumn() + 1).setValue(col);
+        changes.push('added header "' + col + '" to ' + name);
+        headers.push(col);
+      }
+    });
+  });
+
+  // Manufacture tabs.
+  var MO_HEADERS = ['unique_id', 'id', 'mo_number', 'mo_date', 'product_id', 'planned_qty', 'produced_qty', 'materials_cost', 'extra_cost', 'total_cost', 'unit_cost', 'production_status', 'completion_date', 'completed_by', 'cancelled_at', 'cancelled_by', 'notes', 'approval_status', 'approval', 'approval_time', 'user', 'created_at', 'updated_at', 'deleted_at', 'deleted_by', 'version'];
+  var ML_HEADERS = ['unique_id', 'id', 'mo_unique_id', 'product_id', 'planned_qty', 'consumed_qty', 'unit_cost', 'total_cost', 'notes', 'user', 'created_at', 'updated_at', 'deleted_at', 'deleted_by', 'version'];
+
+  function ensureTab(name, headers, textCols) {
+    var sh = ss.getSheetByName(name);
+    if (sh) { changes.push('exists: ' + name); return sh; }
+    sh = ss.insertSheet(name);
+    sh.getRange(1, 1, 1, headers.length).setValues([headers]);
+    sh.setFrozenRows(1);
+    textCols.forEach(function (col) {
+      var idx = headers.indexOf(col);
+      if (idx !== -1) sh.getRange(1, idx + 1, sh.getMaxRows(), 1).setNumberFormat('@');
+    });
+    changes.push('created tab ' + name + ' with ' + headers.length + ' headers');
+    return sh;
+  }
+  ensureTab('erp_test_manufacture_orders', MO_HEADERS, ['unique_id', 'mo_number']);
+  ensureTab('erp_test_manufacture_lines', ML_HEADERS, ['unique_id', 'mo_unique_id']);
+
+  console.log(JSON.stringify({ changes: changes }, null, 2));
+  return changes;
+}

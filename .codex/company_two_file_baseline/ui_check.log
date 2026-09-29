@@ -1,0 +1,84 @@
+
+> ui_check
+> node tools/ui_check.js
+
+ui_check — 2026-09-20 10:20:59
+========================================================================
+[PASS] C1  node --check on every .js file
+        30 files parse
+
+[PASS] C2  inline <script> of every .html template parses
+        120 templates, 150 script blocks parse
+
+[PASS] C3  public contracts — UIC/API/FMT/UI/ERPModal/ERPFlow/SESSION
+        undefined namespaced symbols: 0  (baseline 0)
+        4993 references, all resolve
+
+[PASS] C4  anchor ids the pages depend on still exist
+        13 critical ids present; 852 distinct ids across the tree
+
+[FAIL] C5  CSS classes used by pages are defined somewhere (U-08)
+          .app-logo-main  ← 1 file(s): UI_Components.html
+          .btn-secondary  ← 3 file(s): Company_Assessment_AssessmentForm.html, Company_Assessment_Take.html
+          .btn-sm  ← 2 file(s): Company_TopChemical_ClientBalanceSheets.html, Company_TopChemical_ManufactureOrders.html
+          .btn-success  ← 1 file(s): DbLive_Viewer.html
+          .card-actions  ← 2 file(s): User_Sessions.html, User_Views.html
+          .card-main  ← 2 file(s): User_Sessions.html, User_Views.html
+          .date-range-bar  ← 1 file(s): UI_Components.html
+          .ded-group-body  ← 2 file(s): Company_TopChemical_EmpDeductions.html, Company_ValleyFoods_Deductions.html
+          .ded-group-head  ← 2 file(s): Company_TopChemical_EmpDeductions.html, Company_ValleyFoods_Deductions.html
+          .erp-kebab-menu  ← 1 file(s): UI_Components.html
+          .form-control  ← 1 file(s): Company_ValleyFoods_Overtime.html
+          .form-input  ← 1 file(s): DbLive_Viewer.html
+          .is-batch-row  ← 1 file(s): Company_ValleyFoods_IncomeStatement.html
+          .loading  ← 1 file(s): Company_TopChemical_RegistrationPapers.html
+          .mfg-tab-pane  ← 1 file(s): Company_ValleyFoods_MfgOrders.html
+          .modal-content  ← 1 file(s): DbLive_Viewer.html
+          .pt-count  ← 1 file(s): UI_Components.html
+          .pt-foot  ← 1 file(s): UI_Components.html
+          .rep-detail  ← 2 file(s): Company_ValleyFoods_PurchasingReport.html, Company_ValleyFoods_SalesReport.html
+          .stat-body  ← 6 file(s): Company_Assessment_Dashboard.html, Company_TopLight_Cash.html
+          .stat-val  ← 1 file(s): DbLive_Viewer.html
+          .text-muted  ← 3 file(s): Company_TopChemical_Barcode.html, Company_TopChemical_EmpDeductions.html
+          .timer-live  ← 1 file(s): Company_ValleyFoods_MfgOrders.html
+          .tx-loading  ← 1 file(s): Company_TopChemical_Debts.html
+          .vf-btn  ← 1 file(s): Company_ValleyFoods_MonthlySalaries.html
+          … and 17 more
+        unclassified orphan classes: is-batch-row, loading, rep-detail
+        unclassified used-but-undefined classes: 3  (no baseline yet — recorded)
+
+[INFO] C6  token discipline — hardcoded colours vs tokens (U-07)
+        colour literals, all occurrences: 1242 (1175 hex, 67 rgb/rgba)
+        colour literals NOT inside a var() fallback: 812   <- the real number
+        var(--token) uses: 1626
+        token share (vs bare literals): 66.7%
+        heaviest files, by bare literals: CSS_Tokens.html(99), UI_Components.html(82), Company_ValleyFoods_Attendance.html(57), Company_ValleyFoods_Parties.html(42), Company_ValleyFoods_MfgOrderView.html(40), Company_TopChemical_BoxAnalysis.html(32), Company_TopLight_Customer_Statement.html(23), Company_TopLight_Sales_Costing_Print.html(22)
+
+[FAIL] C7  breakpoint scale conformance (§0.4 / U-48)
+          max-width:600  × 2 file(s): Company_TopLight_Financial_Position.html, Company_TopLight_Income_Statement.html
+          max-width:650  × 1 file(s): Company_ValleyFoods_IncomeStatement.html
+          max-width:900  × 1 file(s): Company_TopChemical_BudgetInvoices.html
+        total width queries: 33, on-scale min-width: 29, max-width: 4
+        off-scale width queries: 4  — WORSE than baseline 0
+
+[PASS] C8  DOM nodes per rendered table row
+        6-column row → 7 element(s), 279 bytes
+        3-item action cell → 6 element(s), 1186 bytes
+        at the 50-row page size that is 650 elements per rendered page (row + action cell)
+
+[PASS] C9  design preview harness is current
+        preview bundle matches the live shared layer (ccaa19aa5fe69520)
+
+[PASS] C10 every component builds without throwing
+        19 components build from the preview bundle
+
+[PASS] C11 template-literal CSS hazards (backticks, octal escapes)
+        no stray backticks or octal escapes in template-literal CSS
+
+[PASS] C12 raw page tables: wrapped, and typed by the column contract
+        untyped: Company_Assessment_Take.html ×1 of 1; Company_ValleyFoods_MfgClientReport.html ×4 of 4; Company_ValleyFoods_PurchasingReport.html ×2 of 2; Company_ValleyFoods_SalesReport.html ×2 of 2
+        raw .table with no .table-wrap: 0  (baseline 23, improved)
+        raw .table no autoColumns call types: 9  (baseline 30, improved)
+
+========================================================================
+ui_check: 2 of 12 checks FAILED — C5, C7

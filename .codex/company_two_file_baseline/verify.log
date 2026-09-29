@@ -1,0 +1,670 @@
+
+> verify
+> node tools/verify/run_all.js
+
+── Durable duplicate-request protection and lost-response recovery
+   OK
+
+── Registration upload idempotency: request-ID recovery, confirmed failures, physical folder
+   OK
+
+── Valley Foods HR upload idempotency: request-ID recovery and Drive tagging
+   OK
+
+── Attachment identity and migration contracts
+   FAILED
+
+node:assert:885
+    throw err;
+    ^
+
+AssertionError [ERR_ASSERTION]: customs save must persist both IDs and server identity
+    at Object.<anonymous> (D:\Work\Script\tools\verify\attachment_download.js:105:8)
+    at Module._compile (node:internal/modules/cjs/loader:1872:14)
+    at Object..js (node:internal/modules/cjs/loader:2003:10)
+    at Module.load (node:internal/modules/cjs/loader:1594:32)
+    at Module._load (node:internal/modules/cjs/loader:1396:12)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:255:19)
+    at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5)
+    at node:internal/main/run_main_module:33:47 {
+  generatedMessage: false,
+  code: 'ERR_ASSERTION',
+  actual: '/**\n' +
+    ' * Company_TopChemical_Actions.js\n' +
+    ' * RESPONSIBILITY: Top Chemical business logic, IIFE-namespaced to TopChemical.\n' +
+    ' * Modules so far: dashboard (placeholder), عملاء وموردين (clients_vendors),\n' +
+    ' * مديونيات (AR_AP), الأصناف (products with Drive print_file). More modules added\n' +
+    ' * as pages are built.\n' +
+    ' * Action logic stays inside the IIFE namespace (the only global is TopChemical).\n' +
+    ' * The payroll print reports (كشف الكروت / كشف الأقسام) live at the bottom of\n' +
+    ' * this file at global scope because Code.js routes download=payroll_report\n' +
+    ' * straight to servePayrollReport_().\n' +
+    ' */\n' +
+    '\n' +
+    'const TopChemical = (function () {\n' +
+    '  const actions = {};\n' +
+    '  function register(name, fn) { actions[name] = fn; }\n' +
+    '\n' +
+    "  const COMPANY_UID = '3fe1b5cb67b7223e';\n" +
+    "  const CLIENTS_SHEET = 'clients_vendors';\n" +
+    "  const ARAP_SHEET = 'AR_AP';\n" +
+    "  const PRODUCTS_SHEET = 'products';\n" +
+    "  const CATEGORIES_SHEET = 'product_categories';\n" +
+    "  const CURRENCY_SHEET = 'ERP_currency_exchange';\n" +
+    "  const BARCODE_SHEET = 'top_chemical_barcode_generator';\n" +
+    "  const REGISTRATION_SHEET = 'registration_papers';\n" +
+    "  const TRUST_SHEET = 'عهد وحسابات خاصة';\n" +
+    "  const EMPLOYEE_SHEET = 'employee_info';\n" +
+    "  const STOCK_SHEET = 'stock_revision';\n" +
+    "  const CUSTOMS_OFFICE_SHEET = 'مكتب الجمارك';\n" +
+    "  const VENDORS_SHEET = 'top_chemical_vendors';\n" +
+    "  const ITEMS_SHEET = 'top_chemical_items';\n" +
+    "  const PURCHASE_SHEET = 'top_chemical_purchase_items';\n" +
+    "  const IMPORT_FOLLOW_SHEET = 'legal_importation_follow';\n" +
+    "  const CUSTOMER_VENDOR_SHEET = 'legal_customer_vendor';\n" +
+    "  const CARTON_SIZES_SHEET = 'purchasing_support_data';\n" +
+    "  const EMP_STATUS_SHEET = 'employee_status';\n" +
+    "  const EMP_SALARY_SHEET = 'employee_salary';\n" +
+    "  const EMP_DEDUCTIONS_SHEET = 'emp_deductions';\n" +
+    "  const EMP_PERMITS_SHEET = 'emp_permits';\n" +
+    "  const EMP_OVERTIME_SHEET = 'emp_overtime';\n" +
+    "  const EMP_SALARIES_SHEET = 'emp_salaries';\n" +
+    "  const EMP_SALARIES_CLOSE_SHEET = 'emp_salaries_close';\n" +
+    "  const TITLE_INDEX_SHEET = 'title_index';\n" +
+    '  // حسابات الميزانية (legal budget) — used AS-IS, no schema changes.\n' +
+    "  const LEGAL_PRODUCTS_SHEET = 'legal_products';\n" +
+    "  const LEGAL_PARTIES_SHEET = 'legal_customer_vendor';\n" +
+    "  const LEGAL_COSTING_SHEET = 'legal_purchasing_costing';\n" +
+    "  const LEGAL_PURCHASING_SHEET = 'legal_product_purchasing';\n" +
+    "  const LEGAL_INVOICES_SHEET = 'legal_invoices';\n" +
+    "  const LEGAL_CASH_SHEET = 'legal_cash_bank_movement';\n" +
+    "  const LEGAL_MANUFACTURE_SHEET = 'legal_manufacture';\n" +
+    "  const LEGAL_EMPLOYEES_SHEET = 'legal_employee_info';\n" +
+    "  const LEGAL_SALARIES_SHEET = 'legal_salaries';\n" +
+    "  const LEGAL_CURRENT_SHEET = 'legal_current_products';\n" +
+    "  const LEGAL_MOVEMENT_SHEET = 'legal_products_movement';\n" +
+    "  const LEGAL_INCOME_SHEET = 'income_statement_yearly';\n" +
+    "  const LEGAL_BANK_SHEET = 'bank_index';\n" +
+    "  const LEGAL_BOX_SHEET = 'box_account_codes';\n" +
+    "  const LEGAL_CHART_SHEET = 'chart_of_accounts';\n" +
+    '\n' +
+    '  /**\n' +
+    "   * Page-level access requirements per action. 'read' actions need any grant\n" +
+    "   * (read or write) on the page; 'write' actions need the 'write' grant.\n" +
+    '   * Edit actions are not listed: they stay Super Admin only (canCompanyAction_).\n' +
+    '   */\n' +
+    '  const PAGE_ACCESS = {\n' +
+    "    'get_dashboard_data': { page: 'tc_dashboard', access: 'read' },\n" +
+    "    'get_clients_vendors': { page: 'tc_clients_vendors', access: 'read' },\n" +
+    "    'add_client_vendor': { page: 'tc_clients_vendors', access: 'write' },\n" +
+    "    'get_ar_ap': { page: 'tc_debts', access: 'read' },\n" +
+    "    'get_ar_ap_client': { page: 'tc_debts', access: 'read' },\n" +
+    "    'add_ar_ap': { page: 'tc_debts', access: 'write' },\n" +
+    "    'get_products': { page: 'tc_products', access: 'read' },\n" +
+    "    'add_product': { page: 'tc_products', access: 'write' },\n" +
+    "    'get_barcode': { page: 'tc_barcode', access: 'read' },\n" +
+    "    'add_barcode': { page: 'tc_barcode', access: 'write' },\n" +
+    "    'get_registration_papers': { page: 'tc_registration_papers', access: 'read' },\n" +
+    "    'add_registration_paper': { page: 'tc_registration_papers', access: 'write' },\n" +
+    "    'update_registration_paper': { page: 'tc_registration_papers', access: 'write' },\n" +
+    "    'get_trust_accounts': { page: 'tc_trust', access: 'read' },\n" +
+    "    'get_trust_movements': { page: 'tc_trust', access: 'read' },\n" +
+    "    'add_trust_movement': { page: 'tc_trust', access: 'write' },\n" +
+    "    'get_stock_revision': { page: 'tc_stock_revision', access: 'read' },\n" +
+    "    'add_stock_revision': { page: 'tc_stock_revision', access: 'write' },\n" +
+    "    'update_stock_revision': { page: 'tc_stock_revision', access: 'full' },\n" +
+    "    'get_system_qty': { page: 'tc_stock_revision', access: 'read' },\n" +
+    '    /* جرد دوري مخازن باركود — the floor-facing scan screen. Same underlying\n' +
+    '       sheet and mostly the same handlers as tc_stock_revision (accounting),\n' +
+    '       registered under separate action names below so the two pages can be\n' +
+    '       granted independently instead of sharing one permission. */\n' +
+    "    'get_stock_scan_options': { page: 'tc_stock_scan', access: 'read' },\n" +
+    "    'get_stock_scan_qty': { page: 'tc_stock_scan', access: 'read' },\n" +
+    "    'add_stock_scan': { page: 'tc_stock_scan', access: 'write' },\n" +
+    "    'get_customs_office': { page: 'tc_customs_office', access: 'read' },\n" +
+    "    'add_customs_office': { page: 'tc_customs_office', access: 'write' },\n" +
+    "    'get_purchase_items': { page: 'tc_purchasing', access: 'read' },\n" +
+    "    'get_purchase_options': { page: 'tc_purchasing', access: 'read' },\n" +
+    "    'add_purchase_item': { page: 'tc_purchasing', access: 'write' },\n" +
+    "    'add_vendor': { page: 'tc_purchasing', access: 'write' },\n" +
+    "    'add_item': { page: 'tc_purchasing', access: 'write' },\n" +
+    "    'get_import_follow': { page: 'tc_import_follow', access: 'read' },\n" +
+    "    'add_import_follow': { page: 'tc_import_follow', access: 'write' },\n" +
+    "    'add_import_follow_files': { page: 'tc_import_follow', access: 'write' },\n" +
+    "    'update_import_follow_status': { page: 'tc_import_follow', access: 'full' },\n" +
+    "    'get_carton_sizes': { page: 'tc_carton_sizes', access: 'read' },\n" +
+    "    'add_carton_size': { page: 'tc_carton_sizes', access: 'write' },\n" +
+    "    'add_carton_size_files': { page: 'tc_carton_sizes', access: 'write' },\n" +
+    "    'get_employees': { page: 'tc_employee_reg', access: 'read' },\n" +
+    "    'add_employee': { page: 'tc_employee_reg', access: 'write' },\n" +
+    "    'get_employee_status': { page: 'tc_employee_status', access: 'read' },\n" +
+    "    'add_employee_status': { page: 'tc_employee_status', access: 'write' },\n" +
+    "    'get_employee_salary': { page: 'tc_employee_salary', access: 'read' },\n" +
+    "    'add_employee_salary': { page: 'tc_employee_salary', access: 'write' },\n" +
+    "    'get_emp_deductions': { page: 'tc_emp_deductions', access: 'read' },\n" +
+    "    'add_emp_deduction': { page: 'tc_emp_deductions', access: 'write' },\n" +
+    "    'get_emp_permits': { page: 'tc_emp_permits', access: 'read' },\n" +
+    "    'add_emp_permit': { page: 'tc_emp_permits', access: 'write' },\n" +
+    "    'get_emp_overtime': { page: 'tc_emp_overtime', access: 'read' },\n" +
+    "    'add_emp_overtime': { page: 'tc_emp_overtime', access: 'write' },\n" +
+    "    'get_emp_salaries': { page: 'tc_emp_salaries', access: 'read' },\n" +
+    "    'add_emp_salaries': { page: 'tc_emp_salaries', access: 'write' },\n" +
+    "    'edit_emp_salary': { page: 'tc_emp_salaries', access: 'full' },\n" +
+    "    'delete_emp_salary': { page: 'tc_emp_salaries', access: 'full' },\n" +
+    "    'update_emp_salary_receipt': { page: 'tc_emp_salaries', access: 'full' },\n" +
+    "    'get_payroll_months': { page: 'tc_emp_salaries_close', access: 'read' },\n" +
+    "    'close_payroll_month': { page: 'tc_emp_salaries_close', access: 'full' },\n" +
+    '    // حسابات الميزانية (legal budget) pages\n' +
+    "    'get_legal_parties': { page: 'tc_budget_parties', access: 'read' },\n" +
+    "    'add_legal_party': { page: 'tc_budget_parties', access: 'write' },\n" +
+    "    'get_legal_products': { page: 'tc_budget_stock_balance', access: 'read' },\n" +
+    "    'get_legal_current_products': { page: 'tc_budget_stock_balance', access: 'read' },\n" +
+    "    'get_legal_products_movement': { page: 'tc_budget_stock_movement', access: 'read' },\n" +
+    "    'get_legal_inputs': { page: 'tc_budget_inputs', access: 'read' },\n" +
+    "    'add_legal_costing': { page: 'tc_budget_inputs', access: 'write' },\n" +
+    "    'add_legal_purchasing_line': { page: 'tc_budget_inputs', access: 'write' },\n" +
+    "    'add_legal_costing_bundle': { page: 'tc_budget_inputs', access: 'write' },\n" +
+    "    'edit_legal_costing_bundle': { page: 'tc_budget_inputs', access: 'full' },\n" +
+    "    'delete_legal_costing': { page: 'tc_budget_inputs', access: 'full' },\n" +
+    "    'get_legal_manufacture': { page: 'tc_budget_manufacture', access: 'read' },\n" +
+    "    'add_legal_manufacture': { page: 'tc_budget_manufacture', access: 'write' },\n" +
+    "    'update_legal_manufacture': { page: 'tc_budget_manufacture', access: 'write' },\n" +
+    "    'get_legal_invoices': { page: 'tc_budget_invoices', access: 'read' },\n" +
+    "    'add_legal_invoice': { page: 'tc_budget_invoices', access: 'write' },\n" +
+    "    'make_collection_from_invoice': { page: 'tc_budget_invoices', access: 'full' },\n" +
+    "    'make_collections_from_invoices': { page: 'tc_budget_invoices', access: 'full' },\n" +
+    "    'get_legal_cash': { page: 'tc_budget_cash', access: 'read' },\n" +
+    "    'add_legal_cash': { page: 'tc_budget_cash', access: 'write' },\n" +
+    "    'toggle_legal_cash_approved': { page: 'tc_budget_cash', access: 'full' },\n" +
+    "    'get_legal_hr': { page: 'tc_budget_hr', access: 'read' },\n" +
+    "    'add_legal_employee': { page: 'tc_budget_hr', access: 'write' },\n" +
+    "    'get_legal_salaries': { page: 'tc_budget_hr', access: 'read' },\n" +
+    "    'add_legal_salary': { page: 'tc_budget_hr', access: 'write' },\n" +
+    "    'get_income_statement': { page: 'tc_budget_income', access: 'read' },\n" +
+    "    'get_kpi_data': { page: 'tc_kpi', access: 'read' },\n" +
+    "    'prefetch_refs': { page: 'tc_dashboard', access: 'read' },\n" +
+    "    'get_main_review': { page: 'tc_main_review', access: 'read' },\n" +
+    "    'revise_main_review': { page: 'tc_main_review', access: 'write' },\n" +
+    "    'get_client_balance_sheets': { page: 'tc_client_balance_sheets', access: 'read' },\n" +
+    "    'save_client_balance_sheet': { page: 'tc_client_balance_sheets', access: 'write' },\n" +
+    "    'delete_client_balance_sheet': { page: 'tc_client_balance_sheets', access: 'write' },\n" +
+    '    // تحليل حركة الخزنة العادية — live MySQL regular_box_movement.\n' +
+    '    // Listing an action here is what makes it FAIL CLOSED: guard_ returns\n' +
+    '    // early for anything it does not find, '... 357145 more characters,
+  expected: /claimAssignmentId[\s\S]*shipmentClearanceId[\s\S]*customsUid/,
+  operator: 'match',
+  diff: 'simple'
+}
+
+Node.js v24.19.0
+
+── AppSheet paths across all attachment tables
+   FAILED
+
+node:assert:152
+  throw new AssertionError(obj);
+  ^
+
+AssertionError [ERR_ASSERTION]: Company_TopChemical_CustomsOffice.html must preserve record identity
+
+null !== 'key/1'
+
+    at Object.<anonymous> (D:\Work\Script\tools\verify\appsheet_attachments.js:180:10)
+    at Module._compile (node:internal/modules/cjs/loader:1872:14)
+    at Object..js (node:internal/modules/cjs/loader:2003:10)
+    at Module.load (node:internal/modules/cjs/loader:1594:32)
+    at Module._load (node:internal/modules/cjs/loader:1396:12)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:255:19)
+    at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5)
+    at node:internal/main/run_main_module:33:47 {
+  generatedMessage: false,
+  code: 'ERR_ASSERTION',
+  actual: null,
+  expected: 'key/1',
+  operator: 'strictEqual',
+  diff: 'simple'
+}
+
+Node.js v24.19.0
+
+── Firestore configuration, preflight and router-safe secondary reporting
+   OK
+
+── Firestore storage adapter contract — typed REST, retries, pagination, preconditions
+   OK
+
+── inline <script> of every template touched
+   OK
+
+── Phase 2 — Top Light action metadata differential
+   OK
+
+── Phase 4 — bounded read-only snapshot lifecycle
+   OK
+
+── S0 — UIC.openModal size option is purely additive
+   OK
+
+── S1 — the save resolves cost_unit server-side
+   OK
+
+── S2 — work-centre costs reach the client
+   OK
+
+── S4 — valley_cost_view is grantable but unroutable
+   OK
+
+── S5 — cost stripping, differential
+   OK
+
+── S5c — sales audit (and U-48)
+   OK
+
+── S6 — client gating, manufacturing
+   FAILED
+
+S6 — the page picked the flag up
+
+  PASS  load() sets CAN_SEE_COST from the server response
+  PASS  it defaults to true, so a response without the flag behaves as today
+  PASS  it is NOT re-derived from USER_PAGES (which cannot see the fail-open guard)
+
+S6 — work-ops table
+
+  PASS  with the grant: تكلفة المركز column present
+  PASS  with the grant: the real figure 37.500 is rendered
+  PASS  with the grant: the total 150.000 is rendered
+  PASS  without: the column header is gone
+  PASS  without: no cost figure anywhere in the markup
+  PASS  without: no stray 0.000 standing in for a hidden cost
+  PASS  without: الساعات الفعلية still shown
+  PASS  without: the hours figure 4.000 still shown
+
+S6 — column counts stay consistent
+
+  PASS  with the grant: 8 headers = 8 cells
+  PASS  without: 6 headers = 6 cells
+  PASS  exactly two columns disappear
+
+S6 — KPI tiles
+
+  PASS  with the grant: tile "تكلفة الخامات" present
+  PASS  without: tile "تكلفة الخامات" gone
+  PASS  with the grant: tile "تكلفة التشغيل" present
+  PASS  without: tile "تكلفة التشغيل" gone
+  PASS  with the grant: tile "تكلفة الدفعة" present
+  PASS  without: tile "تكلفة الدفعة" gone
+  PASS  with the grant: tile "تكلفة الوحدة" present
+  PASS  without: tile "تكلفة الوحدة" gone
+  PASS  without: the quantity tile stays
+
+S6 — materials / consumed-batches table
+
+  PASS  with the grant: إجمالي التكلفة column present
+  PASS  without: that column is gone
+  PASS  without: available / allocated / remaining all still there
+  PASS  without: the row summary still shows quantity and batch count
+  PASS  without: but not the cost total
+  PASS  exactly one column disappears from the batch table
+
+S6 — by-products table
+
+  PASS  with the grant: التكلفة column present
+  PASS  without: gone
+  PASS  without: quantity and batch code stay
+  PASS  exactly one column disappears
+
+S6 — no cost value leaks into any rendered markup
+
+  PASS  the figure 37.5 appears nowhere
+  PASS  the figure 150.000 appears nowhere
+  PASS  the figure 12.500 appears nowhere
+  PASS  the figure 7.250 appears nowhere
+  PASS  the figure 1975 appears nowhere
+  PASS  the figure 88.25 appears nowhere
+  PASS  the figure 290 appears nowhere
+  PASS  the figure 19.75 appears nowhere
+
+S6 — the print inherits the gate
+
+  PASS  print work-ops columns gated
+  PASS  print totals line gated
+  PASS  print by-products column gated
+
+S6 — the save payload no longer carries unit_cost
+
+  FAIL  footers are sent without unit_cost (S1 resolves it server-side)
+  PASS  the old payload shape is gone
+
+S6 FAILED: 1
+
+── S6b — client gating, list pages
+   OK
+
+── S7 — the FIFO batch modal
+   OK
+
+── S8 — material entry ergonomics
+   OK
+
+── Purchasing form/lines UX + tl_sales pagination
+   OK
+
+── tl_sales row menu + مرتجعات opens the returns page
+   OK
+
+── S12 — حركة المخزن: 17 columns, both formulas, add-only
+   OK
+
+── S13 — forms readability (F1/A1/F2/F4a) + vf_products and vf_parties filters
+   OK
+
+── S14 — iPhone: openTab/closeOrBack fallbacks, .inv-table three states, >=600px unchanged
+   OK
+
+── S15 — iPhone: printDoc/openDownload fallbacks, .card-table, >=600px unchanged
+   OK
+
+── S16 — authority generation: kill switch, matrix and role are one-refresh
+   OK
+
+── S16b — الحضور: invariants, date inference, batch undo
+   OK
+
+── S17 — vf_purchasing save: batched lines, batched delete
+   OK
+
+── VF-GUARD — uncertain-result safeguard: confirmed failures, no duplicate execution, collision-free guards
+   OK
+
+── VF-RECOVERY — durable reconciliation: staged generations, markers, status route, reconcile utility
+   OK
+
+── S18 — UIC.Live: optimistic saves, rollback, change polling
+   OK
+
+── S19 — the UIC.Live rollout, page by page
+   OK
+
+── S20 — quiet refresh: scope, watches, no blocking reload
+   OK
+
+── S21 — الورديات: overlap rule; المصروفات: report maths
+   OK
+
+── S22 — a registered page with no HTML file fails as a page
+   OK
+
+── S23 — URL parameters come from the server, not the iframe URL
+   OK
+
+── S18b — table column widths: the classifier and the contract
+   OK
+
+── S24 — جرد دوري مخازن باركود + the USER_PAGES nav-visibility regression guard
+   OK
+
+── S25 — رصيد الدفعات: one stock authority — available = current_qty + held(this document)
+   OK
+
+── S26 — vf_parties كشف حساب: factory/agreements/packaging + balance-once
+   OK
+
+── S27 — vf_mfg_client_report: client manufacturing pivot, filters, cost gating
+   OK
+
+── Valley Foods IFRS income-statement financial acceptance groups
+   OK
+
+── UI-1.2 — popups escape the table clip box (U-01)
+   OK
+
+── UI-1.3 — tri-state sort, load order preserved (U-03)
+   OK
+
+── UI-1.4 — .num shared across all three companies (U-04)
+   OK
+
+── UI-1.5 — sticky table header and its scroll range (U-05)
+   OK
+
+── UI-2.4/2.5/2.6 — neutral canvas, brand topbar, per company
+   OK
+
+── UI-2.9b — the five-tier breakpoint scale (U-48)
+   FAILED
+
+  PASS  --bp-phone is 599px
+  PASS  --bp-tablet-p is 600px
+  PASS  --bp-tablet-l is 900px
+  PASS  --bp-desktop is 1280px
+  PASS  --bp-wide is 1920px
+  PASS  the tokens carry the note that a media query cannot read a custom property
+  PASS  width queries were found at all (33)
+  FAIL  all 33 width queries are min-width on one of the five tiers  — Company_TopChemical_BudgetInvoices.html: max-width:900 | Company_TopLight_Financial_Position.html: max-width:600 | Company_TopLight_Income_Statement.html: max-width:600 | Company_ValleyFoods_IncomeStatement.html: max-width:650
+  PASS  a tablet-p (600px) block exists
+  PASS  a tablet-l (900px) block exists
+  PASS  a wide (1920px) block exists
+  PASS  the hamburger is hidden at tablet-l, NOT at 768 — so the drawer survives on a portrait iPad
+  PASS  the hamburger is NOT hidden at tablet-p
+  PASS  the topbar nav appears at tablet-l
+  PASS  the hamburger is shown by default (mobile-first base)
+  PASS  the topbar nav is hidden by default (mobile-first base)
+  PASS  dialogs stop being bottom sheets at tablet-p
+  PASS  the modal-sm width moved into the tablet-p tier with the rest
+  PASS  the modal-lg width moved into the tablet-p tier with the rest
+  PASS  the modal-xl width moved into the tablet-p tier with the rest
+  PASS  the off-scale 640px dialog query is gone
+  PASS  app-content unclamps from 1200px at the wide tier
+  PASS  the home FAB no longer uses a max-width:768 query that fought the shell switch
+  PASS  the FAB grows at tablet-p, mobile-first
+  PASS  pointer affordances are gated on (hover: none), not on width
+  PASS  the 48px / 44px tap-target tokens still exist
+  PASS  tier tablet-p does not shrink a tap target below 44px
+  PASS  tier tablet-l does not shrink a tap target below 44px
+  PASS  tier wide does not shrink a tap target below 44px
+  PASS  the page body still cannot scroll horizontally at any width (plan §0.4 rule 6)
+  PASS  wide tables scroll inside their own container instead
+
+1 assertion(s) FAILED
+
+── UI-2.8 — formatter consolidation, differential (D-4)
+   OK
+
+── UI-3.3 — the row action kebab (U-20)
+   OK
+
+── UI-3.4 — one loading overlay, UI.toast/UI.alert (U-24)
+   OK
+
+── UI-3.8 — the persistent home button (U-42)
+   OK
+
+── UI-4.1 — the control panel (U-13)
+   OK
+
+── UI-4.5/4.6/4.8 — columns, selection, phone cards
+   OK
+
+── UI-4.4/4.7 — group-by, aggregates, skeleton loads
+   OK
+
+── UI-4.9 — PagedTable row patching: a row action costs one round trip
+   OK
+
+── UI-5.1/5.2/5.3 — dirty guard, styled confirm, validation
+   OK
+
+── vf_cash/vf_sales/vf_purchasing — the من/إلى date range filter
+   OK
+
+── deployment smoke — every page template boots
+   FAILED
+
+shared layer boots. UIC symbols: 206, FMT: 10, UI: 5
+
+page templates: 113
+  booted with no error : 109
+  no inline script     : 0
+  THREW                : 4
+
+  known (also fails at Phase 0)  0_ERP_Management.html  — Cannot set properties of null (setting 'innerHTML')
+  known (also fails at Phase 0)  Company_TopChemical_MainReview.html  — Cannot set properties of null (setting 'innerHTML')
+  known (also fails at Phase 0)  DbLive_Viewer.html  — getQueryParam is not defined
+  REGRESSION  Company_TopChemical_RegistrationPapers.html  block 0 (line 39)
+              Cannot set properties of null (setting 'innerHTML')
+
+1 page(s) newly throw while booting.
+
+── B1 — transaction_details parser, over the fixture corpus
+   OK
+
+── B2 — item matcher: stemming, blocking, scores, clusters
+   OK
+
+── B3 — the four account windows and the month-end clamp
+   OK
+
+── B3 — SQL discipline: additive, no DDL, closes, binds, credit
+   OK
+
+── Phase 6 — bounded operational scripts and SQL access path
+   OK
+
+── B4 — access gate, registration, nav, query budget
+   FAILED
+
+the guard — an unlisted action is an unguarded action
+  FAIL  guard_ implementation is present
+registration
+  FAIL  dispatch_ still calls guard_ before the action
+one gate, not two
+no route exemption
+registry and nav
+  FAIL  the group now has five items (tc_main_review + tc_client_balance_sheets + tc_box_analysis + tc_manufacture_orders + tc_products_live)  — tc_main_review, tc_client_balance_sheets, tc_box_analysis, tc_manufacture_orders, tc_products_live, tc_exec_sales
+tc_main_review is untouched
+the query budget
+the template exists
+the design preview matches the real engine
+the precompute is written but NOT installed
+the six-minute limit
+
+3 wiring check(s) FAILED.
+
+── B6 — edit path: allowlist, validators, named confirm, audit
+   OK
+
+── B7 — rules engine, run against fixtures both ways
+   OK
+
+── AC1 — registry, PAGE_ACCESS cross-ref, PUBLIC_ACTIONS/actions separation (D-14/T-2)
+   OK
+
+── AC2 — the §5.4 scoring engine, OptionsJSON parser, candidate projection
+   OK
+
+── AC3 — assessments list + full-page form, wire shapes, view-mode lockdown
+   OK
+
+── AC4 — acInsert_/acUpdate_ header-case contract (T-3/T-4) + batches (§5.2)
+   OK
+
+── AC5 — the public candidate page and its three PUBLIC_ACTIONS (T-1/T-2/T-5/T-9)
+   OK
+
+── AC6 — results list, grading, the trait chart, print
+   OK
+
+── AC7 — Phase 8 Tier B (D-2): B-1/B-2, with AND without the columns
+   OK
+
+── RT0 — one batched perf round trip per navigation, inert when off
+   OK
+
+── RT1 — reads draw skeletons; the overlay is for writes only
+   OK
+
+── RT2a — every write action returns its record or declares why not
+   OK
+
+── RT2b — a refused save rolls back exactly; a dropped one is queued
+   OK
+
+── RT3 — every direct sheet write bumps the version a watcher reads
+   OK
+
+── RT4 — cache-first with revalidation; a hostile store degrades to a fetch
+   OK
+
+── RT5 — the minified bundle is smaller and provably equivalent
+   FAILED
+
+  PASS  minifyInclude_ is in Code.js, where include() can reach it
+  PASS  the minifier does not claim to rename anything
+  PASS  UI_Components.html: the minified file parses and runs
+  PASS  UI_Components.html: the same namespaces are defined
+  PASS  UI_Components.html: all 204 exported symbol(s) survive, byte for byte
+  PASS  UI_Components.html: every Arabic literal in code survives byte-identical
+  PASS  Client_Helpers.html: the minified file parses and runs
+  PASS  Client_Helpers.html: the same namespaces are defined
+  PASS  Client_Helpers.html: all 243 exported symbol(s) survive, byte for byte
+  PASS  Client_Helpers.html: every Arabic literal in code survives byte-identical
+  PASS  CSS_Tokens.html: the minified file parses and runs
+  PASS  CSS_Tokens.html: the same namespaces are defined
+  PASS  CSS_Tokens.html: all 243 exported symbol(s) survive, byte for byte
+  PASS  CSS_Tokens.html: every Arabic literal in code survives byte-identical
+  ..    minified: UI_Components 366K→225K (38%), Client_Helpers 46K→26K (44%), CSS_Tokens 13K→5K (59%)
+  ..    117 page(s); median 271 KB after minify, budget 180 KB
+  ..    heaviest: Company_ValleyFoods_Attendance at 378 KB
+  ..    109 page(s) over budget — every one of them because
+        UI_Components is 225 KB on its own after minification. The four-way split is the
+        fix and is a separate run; see REALTIME_FEEL_RESULTS.md.
+  PASS  the shared bundle is smaller on the wire than it is on disk
+  PASS  the median page is smaller than the 317880 bytes recorded at R0
+  FAIL  no page exceeds the 340 KB ceiling — the heaviest page today is 378 KB
+        Company_ValleyFoods_Attendance 378 KB
+  PASS  only the three shared files are minified — a page template cannot be run through it by accident
+  PASS  the cache key is a hash of the CONTENT, so a deploy misses once instead of serving the previous release
+  PASS  and it uses the CHUNKED cache — a 195 KB value does not fit in CacheService's 100 KB limit
+  PASS  a minifier that throws serves the unminified file rather than taking the page down
+  PASS  ?nominify=1 turns it off without a deploy
+  PASS  the ~900 KB xlsx library is still fetched on first export, not on every page load
+  PASS  and the chart library on first chart
+  PASS  neither is a top-level script tag
+
+1 check(s) FAILED.
+
+── RT6 — soft nav: the same gate, a hard fallback, nothing left running
+   OK
+
+── RT10 — telemetry costs one cache write and names nobody
+   OK
+
+── RT9 — the audit queue: nothing lost, nothing duplicated
+   OK
+
+── RT8 — no search box over a truncated list stays silent about it
+   OK
+
+── Customs-office path repair: مكتب الجمارك prefix preview contract
+   OK
+
+── OPT-1 — PK memo lifecycle, index matching contract, blank rows and snapshot ownership
+   OK
+
+── OPT-2 — chunked cache layout, byte limits, partial eviction and invalidation
+   OK
+
+── OPT-3 — hoisted lookups: invoice approval scan/snapshot, movement unit map
+   OK
+
+── OPT-4 — batched approval writes with layout-verified fallback
+   OK
+
+── DBLIVE-1 — tc_products_live paging: 50/page, cached total, bust on write
+   OK
+
+── DBLIVE-2 — tc_exec_sales permanent fix: cached charts (600s) + cached view pages (90s)
+   OK
+
+7 of 93 checks FAILED.

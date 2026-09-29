@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Valley Foods — تقرير المشتريات</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_ValleyFoods_Nav'); ?>
+  <?!= getCompanyThemeCSS_('9940659bd83035d7') ?>
+</head>
+<body>
+  <div id="vf-root"></div>
+
+  <script>
+    var params = new URLSearchParams(window.location.search);
+    var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+    var scriptUrl = window.scriptUrl || '/';
+    var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+    var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('9940659bd83035d7') ?>';
+    var COMPANY_PAGES = <?!= companyPages ?>;
+    var CURRENT_ACTION = '<?!= currentAction ?>';
+    var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+
+    function companyCall(moduleAction, data) {
+      return API.call('company_action', {
+        target_system: '9940659bd83035d7',
+        module_action: moduleAction,
+        data: data || {}
+      }, SESSION_TOKEN);
+    }
+    function esc(v) { return FMT.escape(v); }
+    function money(n) {
+      return Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    }
+    function fmtDate(v) {
+      if (!v) return '-';
+      var d = (v instanceof Date) ? v : new Date(v);
+      if (isNaN(d.getTime())) return String(v);
+      var p = function (n) { return n < 10 ? '0' + n : '' + n; };
+      return p(d.getDate()) + '/' + p(d.getMonth() + 1) + '/' + d.getFullYear();
+    }
+  </script>
+
+  <script>
+  (function () {
+    var DATA = null;
+    var DATE_FROM = '', DATE_TO = '';
+
+    function renderApp() {
+      UIC.appShell('vf-root', {
+        companyLogoUrl: COMPANY_LOGO_URL,
+        companyLogoHref: scriptUrl + '?action=vf_dashboard&sessionToken=' + SESSION_TOKEN,
+        companyLogoTitle: 'Valley Foods',
+        breadcrumb: 'Valley Foods / المشتريات / تقرير المشتريات',
+        contentId: 'vf-rep-content',
+        menuGroups: (window.VALLEYFOODS_MENU || [])
+      });
+      document.getElementById('vf-rep-content').innerHTML =
+        '<div class="vf-card">' +
+          '<div class="vf-card-header">' +
+            '<h3>تقرير المشتريات — عملية بعملية</h3>' +
+            '<div style="display:flex;gap:8px;align-items:center;">' +
+              '<button class="btn btn-outline" onclick="REP_PAGE.exportExcel()">⬇ تصدير</button>' +
+              '<a class="btn btn-outline" href="' + scriptUrl + '?action=vf_purchasing&sessionToken=' + SESSION_TOKEN + '">↩ المشتريات</a>' +
+            '</div>' +
+          '</div>' +
+          '<div class="vf-card-body">' +
+            '<div id="rep-filter"></div>' +
+            '<div id="rep-body"><p class="vf-text-muted">جاري التحميل...</p></div>' +
+          '</div>' +
+        '</div>';
+      renderFilter();
+      load();
+    }
+
+    function renderFilter() {
+      var host = document.getElementById('rep-filter');
+      if (!host) return;
+      host.innerHTML = UIC.dateRangeBar('rep-date', {
+        from: DATE_FROM, to: DATE_TO,
+        onchange: 'REP_PAGE.applyDateFilter()',
+        onclear: 'REP_PAGE.clearDateFilter()'
+      });
+    }
+
+    function applyDateFilter() {
+      var v = UIC.dateRangeValues('rep-date');
+      if (v.from && v.to && v.from > v.to) { UIC.toast('«من تاريخ» بعد «إلى تاريخ»', 'error'); return; }
+      DATE_FROM = v.from; DATE_TO = v.to;
+      renderFilter();
+      load();
+    }
+
+    function clearDateFilter() { DATE_FROM = ''; DATE_TO = ''; renderFilter(); load(); }
+
+    /* quiet: refresh in the background with no blocking overlay, for a user who
+       has already seen the change and must not be interrupted to confirm it. */
+    function load(quiet) {
+      if (!quiet) UIC.readSkeleton('rep-body');
+      companyCall('get_valley_purchasing_report', { from: DATE_FROM, to: DATE_TO })
+        .then(function (r) {
+          DATA = r;
+          renderReport();
+          try { schedulePrefetch(); } catch (e) {}
+        })
+        .catch(function (e) {
+          var b = document.getElementById('rep-body');
+          if (b) b.innerHTML = '<div class="empty-state"><span>' + esc((e && e.message) || 'خطأ') + '</span></div>';
+        })
+        .finally(function () { if (!quiet) UI.hideSpinner(); });
+    }
+
+    function renderReport() {
+      var b = document.getElementById('rep-body');
+      if (!b) return;
+      var rows = DATA.rows || [];
+      var t = DATA.totals || { operations: 0, total_costs: 0 };
+
+      var kpis =
+        '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:14px;">' +
+          kpi('عدد العمليات', String(t.operations)) +
+          kpi('إجمالي التكاليف', money(t.total_costs)) +
+        '</div>';
+
+      var body = rows.map(function (r) {
+        return [
+          '<span class="num" style="color:var(--text-muted, #64748b);white-space:nowrap;">' + (r['مسلسل'] || '-') + '</span>',
+          '<b>' + esc(r.Code || '-') + '</b>',
+          esc(r.supplier_name || '-'),
+          fmtDate(r.receipt_date),
+          '<span class="num">' + money(r.total_costs) + '</span>',
+          UIC.statusPill(r.approval_status === 'Approved' ? 'معتمد' : 'قيد الانتظار', r.approval_status === 'Approved' ? 'success' : 'neutral')
+        ];
+      });
+
+      var table = UIC.dataTable('rep-tbl', {
+        headers: [{ label: 'مسلسل', numeric: true }, 'الكود', { label: 'المورد', col: 'text' }, 'التاريخ',
+          { label: 'إجمالي التكاليف', numeric: true }, { label: 'الاعتماد', col: 'atom' }],
+        rows: body.concat(body.length ? [[
+          '', '', '', 'الإجمالي (' + t.operations + ')',
+          money(t.total_costs), ''
+        ]] : []),
+        emptyText: (DATE_FROM || DATE_TO) ? 'لا توجد عمليات في هذه الفترة' : 'لا توجد عمليات',
+        title: 'تقرير المشتريات',
+        autoPage: false
+      });
+
+      b.innerHTML = kpis + table +
+        (DATA.can_see_cost === false
+          ? '<p class="vf-text-muted" style="margin-top:14px;font-size:12px;">الأرقام مخفية — يلزم صلاحية رؤية التكاليف.</p>'
+          : '');
+      UIC.initTableSort('rep-tbl');
+    }
+
+    function kpi(label, value) {
+      return '<div style="padding:12px 14px;border:1px solid var(--border-color,#e5e7eb);border-radius:10px;background:var(--bg-muted,#f8fafc);">' +
+        '<div style="font-size:12px;color:var(--text-muted);margin-bottom:4px;">' + label + '</div>' +
+        '<div style="font-size:20px;font-weight:800;direction:ltr;text-align:right;">' + value + '</div>' +
+      '</div>';
+    }
+
+    /* UIC.exportExcel reads the rendered table's own store, so the sheet it
+       writes is exactly the table on screen — including the totals row. */
+    function exportExcel() { UIC.exportExcel('rep-tbl'); }
+
+    window.REP_PAGE = {
+      applyDateFilter: applyDateFilter,
+      clearDateFilter: clearDateFilter,
+      exportExcel: exportExcel
+    };
+
+    /* Another device's change to the purchasing ledger arrives on its own. The
+       poll reads timestamps from cache, never a spreadsheet, and stands down
+       while the tab is hidden. */
+    document.addEventListener('DOMContentLoaded', function () {
+      UIC.Live.watchPage({
+        call: companyCall,
+        page: 'vf_purchasing',
+        onChange: function () { UIC.Live.arrive(function () { load(true); }); }
+      });
+    });
+
+    document.addEventListener('DOMContentLoaded', renderApp);
+  })();
+  </script>
+</body>
+</html>

@@ -1,0 +1,42 @@
+# F-23 — keep non-source files out of the Apps Script push set.
+#
+# .clasp.json sets rootDir "" with htmlExtensions [".html"], so every root-level
+# .html file was in scope. appsheet_old_project.html alone is 14,450,230 bytes —
+# roughly 50x the entire rest of the project — and was being uploaded on every
+# push, consuming project quota and slowing every deploy.
+#
+# clasp applies these as ignore patterns; anything not matched is still pushed.
+# NOTHING IS DELETED by this file. The archive stays on disk; it just stops
+# being deployed. Removing this file restores the previous behaviour exactly.
+
+# Legacy AppSheet export kept for reference only — never referenced by any route,
+# template or include (verified: no include('appsheet_old_project') anywhere).
+appsheet_old_project.html
+appsheet_old_project_files/**
+
+# Backups and scratch copies of source
+*.bak
+Code.js.bak
+
+# Documentation — useful in git, meaningless in the Apps Script project
+*.md
+
+# Directories already excluded by "skipSubdirectories": true, listed so the
+# intent survives if that setting is ever changed.
+src_html/**
+Backup/**
+assessment center/**
+
+# Local tooling
+.git/**
+.gitignore
+.claspignore
+.clasp.staging.json
+node_modules/**
+Fire base json key/**
+
+# Offline verification harness and design previews. Both are local-only: the
+# preview pages are opened by double-clicking them on disk and the node scripts
+# never run inside Apps Script. Neither may ever be pushed.
+tools/**
+design_preview/**

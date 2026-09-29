@@ -1,0 +1,365 @@
+﻿<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>الغياب والخصومات</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_TopChemical_Nav'); ?>
+  <?!= getCompanyThemeCSS_('3fe1b5cb67b7223e') ?>
+  <style>
+    .ded-type-cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; margin:0 0 14px; }
+    .ded-type-card { appearance:none; width:100%; text-align:right; padding:14px 16px; border:1px solid var(--border-color); border-radius:var(--radius-md); background:var(--bg-surface); color:var(--text-main); cursor:pointer; transition:border-color .15s,box-shadow .15s,transform .15s; }
+    .ded-type-card:hover { border-color:var(--brand-primary); box-shadow:var(--shadow-sm); transform:translateY(-1px); }
+    .ded-type-card[aria-pressed="true"] { border-color:var(--brand-primary); box-shadow:0 0 0 2px var(--brand-border); }
+    .ded-type-card-label { display:block; font-size:13px; color:var(--text-muted); margin-bottom:8px; }
+    .ded-type-card-count { display:block; font-size:22px; font-weight:700; line-height:1.1; }
+    .ded-date-filter { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin:0 0 12px; padding:10px 12px; border:1px solid var(--border-color); border-radius:var(--radius-sm); background:var(--bg-surface); }
+    .ded-date-filter label { font-size:13px; font-weight:600; }
+    .ded-date-filter .input { width:160px; max-width:100%; }
+    @media(max-width:520px) { .ded-date-filter .input { flex:1; min-width:130px; } }
+  </style>
+</head>
+<body>
+<div id="tc-root" dir="rtl"></div>
+<script>
+  var params = new URLSearchParams(window.location.search);
+  var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+  var scriptUrl = window.scriptUrl || '/';
+  var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+  var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('3fe1b5cb67b7223e') ?>';
+  var COMPANY_PAGES = <?!= companyPages ?>;
+  var CURRENT_ACTION = '<?!= currentAction ?>';
+  var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+  var CAN_WRITE = UIC.canAdd_(); var CAN_FULL = UIC.canFull_();
+  var DED_TYPE_FILTER = '';
+  var DED_DATE_FROM = '';
+  var DED_DATE_TO = '';
+
+  function companyCall(moduleAction, data) {
+    return API.call('company_action', {
+      target_system: '3fe1b5cb67b7223e',
+      module_action: moduleAction,
+      data: data || {}
+    }, SESSION_TOKEN);
+  }
+
+  function esc(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  function fmtDate(v) {
+    if (v == null || v === '') return '';
+    var d = (v instanceof Date) ? v : new Date(v);
+    if (isNaN(d.getTime())) return String(v);
+    var p = function (n) { return ('0' + n).slice(-2); };
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+  }
+
+  function todayStr() {
+    var d = new Date();
+    var p = function (n) { return ('0' + n).slice(-2); };
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+  }
+
+  function load() {
+    var contentId = 'ded-content';
+    UIC.appShell('tc-root', {
+      companyLogoUrl: COMPANY_LOGO_URL,
+      companyLogoHref: scriptUrl + '?action=tc_dashboard&sessionToken=' + SESSION_TOKEN,
+      companyLogoTitle: 'توب كيميكال',
+      breadcrumb: 'توب كيميكال / شئون العاملين / الغياب والخصومات',
+      contentId: contentId,
+      menuGroups: (window.TOPCHEMICAL_MENU || [])
+    });
+    fetchDeductions();
+  }
+
+  function fetchDeductions(quiet) {
+    if (!quiet) UI.showSpinner();
+    /* Small reference set, custom grouped render with no truncation notice —
+       always load the full set (server keeps a last-300 safety window). */
+    companyCall('get_emp_deductions', { loadAll: true })
+      .then(function (r) {
+        window.__rows = r.rows || [];
+        window.__empOptions = r.employee_options || [];
+        window.__dedOptions = r.deduction_options || [];
+        renderDeductions(); try{schedulePrefetch();}catch(e){};
+      })
+      .catch(function (e) { showError(e); })
+      .finally(function () { if (!quiet) UI.hideSpinner(); });
+  }
+
+  function renderDeductions() {
+    var body = document.getElementById('ded-content');
+    if (!body) return;
+    var allRows = window.__rows || [];
+    var options = window.__dedOptions || [];
+    var typesByValue = {};
+    options.forEach(function (o) {
+      if (o && o.value != null && String(o.value) !== '') {
+        typesByValue[String(o.value)] = String(o.label || o.value);
+      }
+    });
+    allRows.forEach(function (r) {
+      var value = String(r.deduction_type || 'أخرى');
+      if (!typesByValue[value]) typesByValue[value] = value;
+    });
+    var types = Object.keys(typesByValue).sort(function (a, b) {
+      var order = ['سلف', 'غياب', 'جزاء'];
+      var ia = order.indexOf(a), ib = order.indexOf(b);
+      if (ia !== -1 || ib !== -1) return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);
+      return typesByValue[a].localeCompare(typesByValue[b], 'ar');
+    });
+    function isInDateRange(r) {
+      var date = fmtDate(r.date);
+      if (!date) return !DED_DATE_FROM && !DED_DATE_TO;
+      return (!DED_DATE_FROM || date >= DED_DATE_FROM) && (!DED_DATE_TO || date <= DED_DATE_TO);
+    }
+    var dateRows = allRows.filter(isInDateRange);
+    var counts = {};
+    dateRows.forEach(function (r) {
+      var value = String(r.deduction_type || 'أخرى');
+      counts[value] = (counts[value] || 0) + 1;
+    });
+    var visibleRows = dateRows.filter(function (r) {
+      return !DED_TYPE_FILTER || String(r.deduction_type || 'أخرى') === DED_TYPE_FILTER;
+    }).slice().sort(function (a, b) {
+      return fmtDate(b.date).localeCompare(fmtDate(a.date));
+    });
+    var cards = [{ value: '', label: 'كل الأنواع', count: dateRows.length }].concat(types.map(function (value) {
+      return { value: value, label: typesByValue[value], count: counts[value] || 0 };
+    }));
+    var html = '<div class="ded-type-cards" aria-label="تصفية حسب نوع الخصم">' + cards.map(function (card) {
+      return '<button type="button" class="ded-type-card" data-ded-type="' + esc(card.value) + '" aria-pressed="' + (DED_TYPE_FILTER === card.value ? 'true' : 'false') + '">' +
+        '<span class="ded-type-card-label">' + esc(card.label) + '</span>' +
+        '<span class="ded-type-card-count">' + card.count + '</span>' +
+        '<span class="ded-type-card-label" style="margin:6px 0 0;">سجل</span></button>';
+    }).join('') + '</div>' +
+      '<div class="ded-date-filter" aria-label="تصفية بالتاريخ">' +
+        '<label for="ded-date-from">من:</label><input id="ded-date-from" class="input" type="date" value="' + esc(DED_DATE_FROM) + '">' +
+        '<label for="ded-date-to">إلى:</label><input id="ded-date-to" class="input" type="date" value="' + esc(DED_DATE_TO) + '">' +
+        '<button type="button" class="btn btn-outline" id="ded-date-apply">تطبيق</button>' +
+        '<button type="button" class="btn btn-outline" id="ded-date-clear">مسح التاريخ</button>' +
+        (CAN_WRITE ? '<button type="button" class="btn btn-primary" id="ded-add">+ تسجيل خصم' + (DED_TYPE_FILTER ? ' — ' + esc(typesByValue[DED_TYPE_FILTER] || DED_TYPE_FILTER) : '') + '</button>' : '') +
+      '</div>';
+    var rows = visibleRows.map(function (r) {
+      var pending = !!r.__pending;
+      return {
+        emp_id: esc(pending ? '—' : (r.emp_id == null ? '' : r.emp_id)),
+        name_ar: pending ? '—' : esc(r.name_ar || '-'),
+        deduction_type: esc(r.deduction_type || 'أخرى'),
+        date: esc(fmtDate(r.date)),
+        number_of_days: r.number_of_days != null ? r.number_of_days : '',
+        penalty_value: pending ? '—' : (r.penalty_value != null ? r.penalty_value : ''),
+        deduction_value_other: r.deduction_value_other != null ? r.deduction_value_other : '',
+        details: esc(r.details || '-')
+      };
+    });
+    var headers = [
+      { key: 'emp_id', label: 'كود الموظف', numeric: true },
+      { key: 'name_ar', label: 'الاسم' },
+      { key: 'deduction_type', label: 'نوع الخصم' },
+      { key: 'date', label: 'التاريخ' },
+      { key: 'number_of_days', label: 'عدد الأيام', numeric: true },
+      { key: 'penalty_value', label: 'الجزاء', numeric: true },
+      { key: 'deduction_value_other', label: 'قيمة الخصم (سلف وغيرها)', numeric: true },
+      { key: 'details', label: 'تفاصيل' }
+    ];
+    html += UIC.dataTable('deductions-table', {
+      title: 'سجل الغياب والخصومات',
+      headers: headers,
+      rows: rows,
+      dateFilter: false,
+      emptyText: DED_TYPE_FILTER ? 'لا توجد خصومات من هذا النوع في الفترة المحددة' : 'لا توجد خصومات في الفترة المحددة'
+    });
+    body.innerHTML = html;
+    Array.prototype.forEach.call(body.querySelectorAll('[data-ded-type]'), function (card) {
+      card.addEventListener('click', function () { setDeductionTypeFilter(card.getAttribute('data-ded-type')); });
+    });
+    var from = document.getElementById('ded-date-from');
+    var to = document.getElementById('ded-date-to');
+    var applyDate = document.getElementById('ded-date-apply');
+    var clearDate = document.getElementById('ded-date-clear');
+    var add = document.getElementById('ded-add');
+    if (applyDate) applyDate.addEventListener('click', setDeductionDateFilter);
+    if (clearDate) clearDate.addEventListener('click', clearDeductionDateFilter);
+    if (from) from.addEventListener('keydown', onDedDateEnter);
+    if (to) to.addEventListener('keydown', onDedDateEnter);
+    if (add) add.addEventListener('click', function () { openAddModal({ type: DED_TYPE_FILTER }); });
+  }
+
+  function setDeductionTypeFilter(value) {
+    DED_TYPE_FILTER = String(value || '');
+    renderDeductions();
+  }
+
+  function setDeductionDateFilter() {
+    DED_DATE_FROM = (document.getElementById('ded-date-from') || {}).value || '';
+    DED_DATE_TO = (document.getElementById('ded-date-to') || {}).value || '';
+    if (DED_DATE_FROM && DED_DATE_TO && DED_DATE_FROM > DED_DATE_TO) {
+      var swap = DED_DATE_FROM;
+      DED_DATE_FROM = DED_DATE_TO;
+      DED_DATE_TO = swap;
+    }
+    renderDeductions();
+  }
+
+  function clearDeductionDateFilter() {
+    DED_DATE_FROM = '';
+    DED_DATE_TO = '';
+    renderDeductions();
+  }
+
+  function onDedDateEnter(event) {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      setDeductionDateFilter();
+    }
+  }
+
+  function openAddModal(prefill) {
+    prefill = prefill || {};
+    var lockedType = DED_TYPE_FILTER || prefill.type || '';
+    var allTypeOptions = window.__dedOptions || [];
+    var formTypeOptions = lockedType
+      ? allTypeOptions.filter(function (o) { return String(o.value) === String(lockedType); })
+      : allTypeOptions;
+    if (lockedType && !formTypeOptions.length) formTypeOptions = [{ value: lockedType, label: lockedType }];
+    var body =
+      '<form id="ded-form">' +
+      UIC.field({ key: 'emp_id', label: 'الموظف', type: 'select', required: true,
+        options: window.__empOptions || [], placeholder: 'اختر الموظف...' }) +
+      UIC.field({ key: 'deduction_type', label: 'نوع الخصم', type: 'select', required: true,
+        options: formTypeOptions, placeholder: lockedType ? '' : 'اختر النوع...', value: lockedType }) +
+      UIC.field({ key: 'date', label: 'التاريخ', type: 'date', required: true, value: prefill.date || todayStr() }) +
+      UIC.field({ key: 'number_of_days', label: 'عدد الأيام', type: 'number', min: '0', step: '0.5', value: '1' }) +
+      '<div id="deduction-value-other-wrap">' + UIC.field({ key: 'deduction_value_other', label: 'قيمة الخصم (سلف وغيرها)', type: 'number', min: '0', step: '0.01' }) + '</div>' +
+      '<div class="form-field" data-field="details"><label class="form-label" for="details">تفاصيل <span class="req">*</span></label>' +
+      '<textarea id="details" class="input" data-field-name="details" rows="2" placeholder="وصف الخصم..." required></textarea>' +
+      '<div class="field-error" id="err-details"></div></div>' +
+      '</form>';
+    UIC.openModal('ded-modal', {
+      title: 'تسجيل غياب / خصم',
+      body: body,
+      onSave: 'saveDeduction()'
+    });
+    var sel = document.getElementById('deduction_type');
+    if (sel) sel.addEventListener('change', onDedTypeChange);
+    onDedTypeChange();
+  }
+
+  function clearFieldError(id) {
+    var e = document.getElementById(id);
+    if (e) e.textContent = '';
+  }
+
+  function setFieldError(input, errId, message) {
+    var e = document.getElementById(errId);
+    if (e) e.textContent = message;
+    var field = input.closest ? input.closest('.form-field') : null;
+    if (field) field.classList.add('has-error');
+  }
+
+  function onDedTypeChange() {
+    var sel = document.getElementById('deduction_type');
+    var days = document.getElementById('number_of_days');
+    var other = document.getElementById('deduction_value_other');
+    var otherWrap = document.getElementById('deduction-value-other-wrap');
+    if (!sel || !days || !other || !otherWrap) return;
+    var t = sel.value;
+    otherWrap.style.display = t === 'سلف' ? '' : 'none';
+    if (t === 'غياب' || t === 'جزاء') {
+      days.setAttribute('required', 'required');
+      other.removeAttribute('required');
+      other.value = '';
+      clearFieldError('err-deduction_value_other');
+    } else if (t === 'سلف') {
+      days.removeAttribute('required');
+      other.setAttribute('required', 'required');
+      clearFieldError('err-number_of_days');
+    } else {
+      days.removeAttribute('required');
+      other.removeAttribute('required');
+      other.value = '';
+      clearFieldError('err-number_of_days');
+      clearFieldError('err-deduction_value_other');
+    }
+  }
+
+  function saveDeduction() {
+    if (!UIC.validateForm('ded-form')) return;
+    var t = document.getElementById('deduction_type').value;
+    var days = document.getElementById('number_of_days');
+    var other = document.getElementById('deduction_value_other');
+    if ((t === 'غياب' || t === 'جزاء') && Number(days.value) <= 0) {
+      setFieldError(days, 'err-number_of_days', 'عدد الأيام مطلوب لهذا النوع');
+      return;
+    }
+    if (t === 'سلف' && Number(other.value) <= 0) {
+      setFieldError(other, 'err-deduction_value_other', 'قيمة الخصم مطلوبة لهذا النوع');
+      return;
+    }
+    var data = UIC.collectForm('ded-form');
+    /* Tier A: the row is on screen before the request returns. The deduction
+       record carries no stable server identity, so the draft carries a
+       client-side __draft key that recordOf copies onto the server record —
+       NEEDS-REPLY: addEmpDeduction_ needs a stable row id. penalty_value is
+       a sheet formula, so renderDeductions shows «—» for it while __pending.
+       queueable:false: I1 is unproven for add_emp_deduction, so a transport
+       failure rolls back loudly instead of queueing. */
+    var draft = {
+      emp_id: data.emp_id,
+      deduction_type: data.deduction_type,
+      date: data.date,
+      number_of_days: data.number_of_days,
+      deduction_value_other: data.deduction_value_other,
+      details: data.details,
+      __draft: 'tmp_' + Math.random().toString(36).slice(2, 10)
+    };
+    window.__rows = window.__rows || [];
+    UIC.Live.save({
+      call: companyCall,
+      action: 'add_emp_deduction',
+      data: data,
+      list: window.__rows,
+      key: '__draft',
+      draft: draft,
+      render: renderDeductions,
+      modal: 'ded-modal',
+      message: 'تم الحفظ',
+      queueable: false,
+      reload: function () { fetchDeductions(true); },
+      recordOf: function (resp) {
+        if (!(resp && resp.record)) return null;
+        var rec = Object.assign({}, resp.record);
+        rec.__draft = draft.__draft;
+        return rec;
+      },
+      /* The list is loaded in full, so there is nothing to trim back to:
+         the optimistic row simply stays until the quiet reload confirms it. */
+      onSuccess: function () {
+        renderDeductions();
+      }
+    }).catch(function () { /* UIC.Live has toasted and rolled back */ });
+  }
+
+  function showError(e) {
+    var body = document.getElementById('ded-content');
+    if (body) body.innerHTML = '<div class="empty-state"><span>' + esc(e.message || 'خطأ') + '</span></div>';
+  }
+
+  /* Another device's change arrives quietly. */
+  UIC.Live.watchPage({
+    call: companyCall,
+    page: 'tc_emp_deductions',
+    onChange: function () { UIC.Live.arrive(function () { fetchDeductions(true); }); }
+  });
+
+  load();
+</script>
+</body>
+</html>

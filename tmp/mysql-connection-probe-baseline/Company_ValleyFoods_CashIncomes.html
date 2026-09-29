@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Valley Foods — تقرير الايرادات الاخرى</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_ValleyFoods_Nav'); ?>
+  <?!= getCompanyThemeCSS_('9940659bd83035d7') ?>
+  <style>
+    @media print {
+      .no-print { display: none !important; }
+      body { background: #fff !important; }
+    }
+  </style>
+</head>
+<body>
+  <div id="vf-root"></div>
+
+  <script>
+    var params = new URLSearchParams(window.location.search);
+    var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+    var scriptUrl = window.scriptUrl || '/';
+    var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+    var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('9940659bd83035d7') ?>';
+    var COMPANY_PAGES = <?!= companyPages ?>;
+    var CURRENT_ACTION = '<?!= currentAction ?>';
+    var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+
+    function companyCall(moduleAction, data) {
+      return API.call('company_action', {
+        target_system: '9940659bd83035d7',
+        module_action: moduleAction,
+        data: data || {}
+      }, SESSION_TOKEN);
+    }
+    function esc(v) { return FMT.escape(v); }
+    function money(n) {
+      return Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    }
+    function pctText(n) { return (Number(n || 0)).toFixed(2) + '%'; }
+  </script>
+
+  <script>
+  (function () {
+    var DATA = null;
+    var DATE_FROM = '', DATE_TO = '', RANGE_DIRTY = false;
+
+    function renderApp() {
+      UIC.appShell('vf-root', {
+        companyLogoUrl: COMPANY_LOGO_URL,
+        companyLogoHref: scriptUrl + '?action=vf_dashboard&sessionToken=' + SESSION_TOKEN,
+        companyLogoTitle: 'Valley Foods',
+        breadcrumb: 'Valley Foods / المالية / تقرير الايرادات الاخرى',
+        contentId: 'vf-inc-content',
+        menuGroups: (window.VALLEYFOODS_MENU || [])
+      });
+      document.getElementById('vf-inc-content').innerHTML =
+        '<div class="vf-card">' +
+          '<div class="vf-card-header">' +
+            '<h3>تقرير الايرادات الاخرى</h3>' +
+            '<div class="no-print" style="display:flex;gap:8px;align-items:center;">' +
+              '<button class="btn btn-outline" onclick="window.print()">🖨 طباعة</button>' +
+              '<button class="btn btn-outline" onclick="INC_PAGE.exportExcel()">⬇ تصدير</button>' +
+              '<a class="btn btn-outline" href="' + scriptUrl + '?action=vf_cash&sessionToken=' + SESSION_TOKEN + '" onclick="UIC.navTo(event, this.getAttribute(\'href\'))">↩ حركة النقدية</a>' +
+            '</div>' +
+          '</div>' +
+          '<div class="vf-card-body">' +
+            '<div id="inc-filter" class="no-print"></div>' +
+            '<div id="inc-body"><p class="vf-text-muted">جاري التحميل...</p></div>' +
+          '</div>' +
+        '</div>';
+      renderFilter();
+      load();
+    }
+
+    function renderFilter() {
+      var host = document.getElementById('inc-filter');
+      if (!host) return;
+      /* Replacing the bar while its date input (or clear button) holds focus
+         throws NotFoundError in Chrome — drop focus first. */
+      if (host.contains(document.activeElement)) { try { document.activeElement.blur(); } catch (e) {} }
+      host.innerHTML = UIC.dateRangeBar('inc-date', {
+        from: DATE_FROM, to: DATE_TO,
+        onchange: 'INC_PAGE.applyDateFilter()',
+        onclear: 'INC_PAGE.clearDateFilter()'
+      });
+    }
+
+    function applyDateFilter() {
+      var v = UIC.dateRangeValues('inc-date');
+      if (v.from && v.to && v.from > v.to) { UIC.toast('«من تاريخ» بعد «إلى تاريخ»', 'error'); return; }
+      DATE_FROM = v.from; DATE_TO = v.to; RANGE_DIRTY = true;
+      renderFilter();
+      load();
+    }
+
+    function clearDateFilter() {
+      DATE_FROM = ''; DATE_TO = ''; RANGE_DIRTY = true;
+      renderFilter();
+      load();
+    }
+
+    /* quiet: refresh in the background with no blocking overlay, for a user who
+       has already seen the change and must not be interrupted to confirm it. */
+    function load(quiet) {
+      if (!quiet) UIC.readSkeleton('inc-body');
+      /* First load sends no keys so the server defaults to month-to-date;
+         afterwards the keys are always explicit (empty = unbounded). */
+      var payload = RANGE_DIRTY ? { from: DATE_FROM, to: DATE_TO } : {};
+      companyCall('get_valley_cash_income_report', payload)
+        .then(function (r) {
+          DATA = r;
+          var rg = (r && r.range) || {};
+          if (!RANGE_DIRTY) { DATE_FROM = rg.from || ''; DATE_TO = rg.to || ''; renderFilter(); }
+          renderReport();
+          try { schedulePrefetch(); } catch (e) {}
+        })
+        .catch(function (e) {
+          var b = document.getElementById('inc-body');
+          if (b) b.innerHTML = '<div class="empty-state"><span>' + esc((e && e.message) || 'خطأ') + '</span></div>';
+        })
+        .finally(function () { if (!quiet) UI.hideSpinner(); });
+    }
+
+    function rangeLabel() {
+      var rg = (DATA && DATA.range) || {};
+      var a = rg.from ? fmtDate(rg.from) : 'البداية';
+      var b = rg.to ? fmtDate(rg.to) : 'اليوم';
+      return a + ' — ' + b;
+    }
+
+    function fmtDate(v) {
+      if (!v) return '-';
+      var d = (v instanceof Date) ? v : new Date(v);
+      if (isNaN(d.getTime())) return String(v);
+      var p = function (n) { return n < 10 ? '0' + n : '' + n; };
+      return p(d.getDate()) + '/' + p(d.getMonth() + 1) + '/' + d.getFullYear();
+    }
+
+    function renderReport() {
+      var b = document.getElementById('inc-body');
+      if (!b) return;
+      var rows = DATA.rows || [];
+      var t = DATA.totals || { range_amount: 0, prev_amount: 0, range_moves: 0 };
+
+      var kpis =
+        '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:14px;">' +
+          kpi('إيرادات الفترة (' + esc(rangeLabel()) + ')', money(t.range_amount)) +
+          kpi('الفترة السابقة', money(t.prev_amount)) +
+          kpi('عدد حسابات الإيرادات', String(rows.length)) +
+          kpi('عدد حركات الفترة', String(t.range_moves || 0)) +
+        '</div>';
+
+      var body = rows.map(function (r) {
+        return [
+          esc(r.label),
+          esc(r.chart_code),
+          money(r.range_amount),
+          pctText(r.range_pct),
+          money(r.prev_amount),
+          pctText(r.prev_pct)
+        ];
+      });
+
+      var table = UIC.dataTable('inc-tbl', {
+        headers: ['الحساب', 'الكود', 'إيراد الفترة', '% من الفترة',
+                  'الفترة السابقة', '% من السابقة'],
+        rows: body.concat(body.length ? [[
+          'الإجمالي', '', money(t.range_amount), pctText(100), money(t.prev_amount), pctText(100)
+        ]] : []),
+        emptyText: (DATE_FROM || DATE_TO) ? 'لا توجد إيرادات أخرى في هذه الفترة' : 'لا توجد إيرادات أخرى',
+        title: 'تقرير الايرادات الاخرى ' + rangeLabel(),
+        autoPage: false
+      });
+
+      b.innerHTML = kpis + table +
+        '<p class="vf-text-muted" style="margin-top:14px;font-size:12px;">' +
+          'يشمل التقرير حركات النقدية من نوع Debit التي يقع كود الدليل فيها بين 411102 و 421201 ' +
+          '(' + DATA.accounts_considered + ' حساب). القيمة هي إجمالي الحركة بعد الخصم ومع الضرائب. ' +
+          'الفترة السابقة = نفس طول الفترة مباشرة قبل بدايتها.' +
+        '</p>';
+      UIC.initTableSort('inc-tbl');
+    }
+
+    function kpi(label, value) {
+      return '<div style="padding:12px 14px;border:1px solid var(--border-color,#e5e7eb);border-radius:10px;background:var(--bg-muted,#f8fafc);">' +
+        '<div style="font-size:12px;color:var(--text-muted);margin-bottom:4px;">' + label + '</div>' +
+        '<div style="font-size:20px;font-weight:800;direction:ltr;text-align:right;">' + value + '</div>' +
+      '</div>';
+    }
+
+    /* UIC.exportExcel reads the rendered table's own store, so the sheet it
+       writes is exactly the table on screen — including the totals row. */
+    function exportExcel() { UIC.exportExcel('inc-tbl'); }
+
+    window.INC_PAGE = {
+      applyDateFilter: applyDateFilter,
+      clearDateFilter: clearDateFilter,
+      exportExcel: exportExcel
+    };
+
+    /* Another device's change to the cash ledger arrives on its own. The poll
+       reads timestamps from cache, never a spreadsheet, and stands down while
+       the tab is hidden. */
+    document.addEventListener('DOMContentLoaded', function () {
+      UIC.Live.watchPage({
+        call: companyCall,
+        page: 'vf_cash',
+        onChange: function () { UIC.Live.arrive(function () { load(true); }); }
+      });
+    });
+
+    document.addEventListener('DOMContentLoaded', renderApp);
+  })();
+  </script>
+</body>
+</html>

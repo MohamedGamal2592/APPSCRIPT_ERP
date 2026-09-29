@@ -1,0 +1,390 @@
+{
+  "_about": {
+    "purpose": "Test corpus for the transaction_details parser in Company_TopChemical_Actions.js (BOX_ANALYSIS_PLAN.md §4).",
+    "READ_THIS_FIRST": "Exactly ONE entry in this file is a real production string (origin: 'real'). Every other entry is SYNTHETIC — written by hand to exercise a documented failure mode. A parser that scores 100% here has proved that it handles the failure modes somebody imagined, and nothing at all about production text. The real coverage number can only come from running the page over live rows; that measurement is a blocked-on-owner item in NEXT_STEPS_OWNER.md.",
+    "origin_values": {
+      "real": "Observed in the production table regular_box_movement.",
+      "synthetic": "Invented for this corpus. Proves nothing about production frequency."
+    },
+    "expect": "What parseDetails() must return. 'items' entries are compared field by field; null means the field must be null/absent. 'sum' is the sum of parsed item prices only — a failed segment contributes nothing, which is exactly why failures must be surfaced and never dropped."
+  },
+
+  "cases": [
+    {
+      "id": "real-01",
+      "origin": "real",
+      "note": "The one real string we have. Carries four segments, a word quantity (نص), a duplicated unit token (كيلو كيلو), a unit used with no quantity (طبة), and a double space.",
+      "text": "5 كيلو معجون شروخ ب 700 + طبة حديد ب 25 + نص سلك لحام المونيوم ب 875 + نص كيلو  كيلو سلك لحام زهر ب 925",
+      "expect": {
+        "parsed_count": 4,
+        "failed_count": 0,
+        "sum": 2525,
+        "items": [
+          { "qty": 5,   "unit": "كيلو", "item_norm": "معجون شروخ",        "price": 700, "unit_price": 140 },
+          { "qty": null, "unit": "طبه", "item_norm": "حديد",               "price": 25,  "unit_price": null },
+          { "qty": 0.5, "unit": null,   "item_norm": "سلك لحام المونيوم", "price": 875, "unit_price": 1750 },
+          { "qty": 0.5, "unit": "كيلو", "item_norm": "سلك لحام زهر",      "price": 925, "unit_price": 1850 }
+        ]
+      }
+    },
+
+    {
+      "id": "syn-flipped-order",
+      "origin": "synthetic",
+      "failure_mode": "flipped word order — must produce the same item_key as real-01 item 1",
+      "text": "5 كيلو شروخ معجون ب 700",
+      "expect": {
+        "parsed_count": 1,
+        "failed_count": 0,
+        "sum": 700,
+        "items": [ { "qty": 5, "unit": "كيلو", "item_norm": "شروخ معجون", "price": 700, "unit_price": 140 } ]
+      }
+    },
+
+    {
+      "id": "syn-alef-hamza",
+      "origin": "synthetic",
+      "failure_mode": "أ/إ/آ → ا",
+      "text": "نص سلك لحام الأمونيوم ب 875",
+      "expect": {
+        "parsed_count": 1,
+        "failed_count": 0,
+        "sum": 875,
+        "items": [ { "qty": 0.5, "unit": null, "item_norm": "سلك لحام الامونيوم", "price": 875, "unit_price": 1750 } ]
+      }
+    },
+
+    {
+      "id": "syn-alef-plain",
+      "origin": "synthetic",
+      "failure_mode": "the un-hamzated twin of syn-alef-hamza — the two must normalize identically",
+      "text": "نص سلك لحام الامونيوم ب 875",
+      "expect": {
+        "parsed_count": 1,
+        "failed_count": 0,
+        "sum": 875,
+        "items": [ { "qty": 0.5, "unit": null, "item_norm": "سلك لحام الامونيوم", "price": 875, "unit_price": 1750 } ]
+      }
+    },
+
+    {
+      "id": "syn-teh-marbuta",
+      "origin": "synthetic",
+      "failure_mode": "ة → ه, in a UNIT token — the unit dictionary must be normalized too or طبة never matches",
+      "text": "طبة حديد ب 25",
+      "expect": {
+        "parsed_count": 1,
+        "failed_count": 0,
+        "sum": 25,
+        "items": [ { "qty": null, "unit": "طبه", "item_norm": "حديد", "price": 25, "unit_price": null } ]
+      }
+    },
+
+    {
+      "id": "syn-heh",
+      "origin": "synthetic",
+      "failure_mode": "the ه-spelled twin of syn-teh-marbuta",
+      "text": "طبه حديد ب 25",
+      "expect": {
+        "parsed_count": 1,
+        "failed_count": 0,
+        "sum": 25,
+        "items": [ { "qty": null, "unit": "طبه", "item_norm": "حديد", "price": 25, "unit_price": null } ]
+      }
+    },
+
+    {
+      "id": "syn-alef-maqsura",
+      "origin": "synthetic",
+      "failure_mode": "ى → ي",
+      "text": "3 لتر تنر صناعى ب 120",
+      "expect": {
+        "parsed_count": 1,
+        "failed_count": 0,
+        "sum": 120,
+        "items": [ { "qty": 3, "unit": "لتر", "item_norm": "تنر صناعي", "price": 120, "unit_price": 40 } ]
+      }
+    },
+
+    {
+      "id": "syn-yeh",
+      "origin": "synthetic",
+      "failure_mode": "the ي-spelled twin of syn-alef-maqsura",
+      "text": "3 لتر تنر صناعي ب 120",
+      "expect": {
+        "parsed_count": 1,
+        "failed_count": 0,
+        "sum": 120,
+        "items": [ { "qty": 3, "unit": "لتر", "item_norm": "تنر صناعي", "price": 120, "unit_price": 40 } ]
+      }
+    },
+
+    {
+      "id": "syn-arabic-indic-digits",
+      "origin": "synthetic",
+      "failure_mode": "Arabic-Indic digits ٠-٩ in both the quantity and the price",
+      "text": "٥ كيلو معجون شروخ ب ٧٠٠",
+      "expect": {
+        "parsed_count": 1,
+        "failed_count": 0,
+        "sum": 700,
+        "items": [ { "qty": 5, "unit": "كيلو", "item_norm": "معجون شروخ", "price": 700, "unit_price": 140 } ]
+      }
+    },
+
+    {
+      "id": "syn-duplicate-unit",
+      "origin": "synthetic",
+      "failure_mode": "duplicated unit token with no quantity in front of it",
+      "text": "كيلو كيلو معجون شروخ ب 700",
+      "expect": {
+        "parsed_count": 1,
+        "failed_count": 0,
+        "sum": 700,
+        "items": [ { "qty": null, "unit": "كيلو", "item_norm": "معجون شروخ", "price": 700, "unit_price": null } ]
+      }
+    },
+
+    {
+      "id": "syn-missing-quantity",
+      "origin": "synthetic",
+      "failure_mode": "no quantity at all — parses, but unit_price is unknowable and confidence must drop",
+      "text": "معجون شروخ ب 700",
+      "expect": {
+        "parsed_count": 1,
+        "failed_count": 0,
+        "sum": 700,
+        "items": [ { "qty": null, "unit": null, "item_norm": "معجون شروخ", "price": 700, "unit_price": null } ],
+        "max_confidence": 0.8
+      }
+    },
+
+    {
+      "id": "syn-missing-unit",
+      "origin": "synthetic",
+      "failure_mode": "quantity with no unit — unit_price is computable but not unit-comparable",
+      "text": "5 معجون شروخ ب 700",
+      "expect": {
+        "parsed_count": 1,
+        "failed_count": 0,
+        "sum": 700,
+        "items": [ { "qty": 5, "unit": null, "item_norm": "معجون شروخ", "price": 700, "unit_price": 140 } ]
+      }
+    },
+
+    {
+      "id": "syn-ba-tatweel",
+      "origin": "synthetic",
+      "failure_mode": "بـ instead of ب — the tatweel U+0640 must be stripped before the price regex runs",
+      "text": "5 كيلو معجون شروخ بـ 700",
+      "expect": {
+        "parsed_count": 1,
+        "failed_count": 0,
+        "sum": 700,
+        "items": [ { "qty": 5, "unit": "كيلو", "item_norm": "معجون شروخ", "price": 700, "unit_price": 140 } ]
+      }
+    },
+
+    {
+      "id": "syn-ba-no-space",
+      "origin": "synthetic",
+      "failure_mode": "ب glued to the price with no space",
+      "text": "5 كيلو معجون شروخ ب700",
+      "expect": {
+        "parsed_count": 1,
+        "failed_count": 0,
+        "sum": 700,
+        "items": [ { "qty": 5, "unit": "كيلو", "item_norm": "معجون شروخ", "price": 700, "unit_price": 140 } ]
+      }
+    },
+
+    {
+      "id": "syn-decimal-price",
+      "origin": "synthetic",
+      "failure_mode": "decimal price with a Latin dot",
+      "text": "نص كيلو سلك لحام زهر ب 925.50",
+      "expect": {
+        "parsed_count": 1,
+        "failed_count": 0,
+        "sum": 925.5,
+        "items": [ { "qty": 0.5, "unit": "كيلو", "item_norm": "سلك لحام زهر", "price": 925.5, "unit_price": 1851 } ]
+      }
+    },
+
+    {
+      "id": "syn-decimal-arabic-sep",
+      "origin": "synthetic",
+      "failure_mode": "Arabic decimal separator ٫ (U+066B) with Arabic-Indic digits",
+      "text": "نص كيلو سلك لحام زهر ب ٩٢٥٫٥٠",
+      "expect": {
+        "parsed_count": 1,
+        "failed_count": 0,
+        "sum": 925.5,
+        "items": [ { "qty": 0.5, "unit": "كيلو", "item_norm": "سلك لحام زهر", "price": 925.5, "unit_price": 1851 } ]
+      }
+    },
+
+    {
+      "id": "syn-equals-marker",
+      "origin": "synthetic",
+      "failure_mode": "= used as the price marker instead of ب",
+      "text": "5 كيلو معجون شروخ = 700",
+      "expect": {
+        "parsed_count": 1,
+        "failed_count": 0,
+        "sum": 700,
+        "items": [ { "qty": 5, "unit": "كيلو", "item_norm": "معجون شروخ", "price": 700, "unit_price": 140 } ]
+      }
+    },
+
+    {
+      "id": "syn-segment-without-price",
+      "origin": "synthetic",
+      "failure_mode": "one segment carries no price at all. It MUST be reported as a failure, never dropped — a dropped segment makes the sum check silently agree with a description that does not account for the money.",
+      "text": "5 كيلو معجون شروخ ب 700 + طبة حديد",
+      "expect": {
+        "parsed_count": 1,
+        "failed_count": 1,
+        "sum": 700,
+        "items": [ { "qty": 5, "unit": "كيلو", "item_norm": "معجون شروخ", "price": 700, "unit_price": 140 } ],
+        "failures": [ { "reason": "NO_PRICE" } ]
+      }
+    },
+
+    {
+      "id": "syn-prose",
+      "origin": "synthetic",
+      "failure_mode": "free prose, not a list at all. Nothing parses; the whole row lands in the 'تعذر تحليل التفاصيل' bucket, which is itself a finding.",
+      "text": "تم صرف مبلغ نقدي لصالح الورشة بمعرفة الاستاذ محمود",
+      "expect": {
+        "parsed_count": 0,
+        "failed_count": 1,
+        "sum": 0,
+        "failures": [ { "reason": "NO_PRICE" } ]
+      }
+    },
+
+    {
+      "id": "syn-tashkeel-tatweel",
+      "origin": "synthetic",
+      "failure_mode": "tashkeel (U+064B–U+0652) and tatweel (U+0640) inside the item text",
+      "text": "5 كيلو مَعْجُون شـــروخ ب 700",
+      "expect": {
+        "parsed_count": 1,
+        "failed_count": 0,
+        "sum": 700,
+        "items": [ { "qty": 5, "unit": "كيلو", "item_norm": "معجون شروخ", "price": 700, "unit_price": 140 } ]
+      }
+    },
+
+    {
+      "id": "syn-qty-and-a-half",
+      "origin": "synthetic",
+      "failure_mode": "the Egyptian 'كيلو ونص' phrasing — the fraction follows the unit rather than preceding it",
+      "text": "كيلو ونص معجون شروخ ب 1050",
+      "expect": {
+        "parsed_count": 1,
+        "failed_count": 0,
+        "sum": 1050,
+        "items": [ { "qty": 1.5, "unit": "كيلو", "item_norm": "معجون شروخ", "price": 1050, "unit_price": 700 } ]
+      }
+    },
+
+    {
+      "id": "syn-third",
+      "origin": "synthetic",
+      "failure_mode": "تلت = 1/3, a non-terminating quantity",
+      "text": "تلت كيلو زيت ب 30",
+      "expect": {
+        "parsed_count": 1,
+        "failed_count": 0,
+        "sum": 30,
+        "items": [ { "qty": 0.3333333333333333, "unit": "كيلو", "item_norm": "زيت", "price": 30, "unit_price": 90 } ]
+      }
+    },
+
+    {
+      "id": "syn-trailing-separator",
+      "origin": "synthetic",
+      "failure_mode": "trailing + with nothing after it. An empty segment is skipped, NOT counted as a failure — otherwise every trailing separator becomes a fake finding.",
+      "text": "5 كيلو معجون شروخ ب 700 + ",
+      "expect": {
+        "parsed_count": 1,
+        "failed_count": 0,
+        "sum": 700,
+        "items": [ { "qty": 5, "unit": "كيلو", "item_norm": "معجون شروخ", "price": 700, "unit_price": 140 } ]
+      }
+    },
+
+    {
+      "id": "syn-empty",
+      "origin": "synthetic",
+      "failure_mode": "empty details. Not a failure — there is nothing to fail at. The SUM_MISMATCH rule must not fire on a row with no parsed items at all.",
+      "text": "",
+      "expect": { "parsed_count": 0, "failed_count": 0, "sum": 0 }
+    },
+
+    {
+      "id": "syn-mixed-partial",
+      "origin": "synthetic",
+      "failure_mode": "two of three segments parse. Coverage is a per-segment figure, not a per-row boolean.",
+      "text": "2 كيلو مسمار ب 90 + شريط لحام + 4 لتر تنر ب 160",
+      "expect": {
+        "parsed_count": 2,
+        "failed_count": 1,
+        "sum": 250,
+        "items": [
+          { "qty": 2, "unit": "كيلو", "item_norm": "مسمار", "price": 90,  "unit_price": 45 },
+          { "qty": 4, "unit": "لتر",  "item_norm": "تنر",   "price": 160, "unit_price": 40 }
+        ]
+      }
+    },
+
+    {
+      "id": "syn-price-word-lookalike",
+      "origin": "synthetic",
+      "failure_mode": "an item word that STARTS with ب (بويه = paint). The price marker must be a standalone ب, or every paint purchase parses as a price.",
+      "text": "2 لتر بويه بيضا ب 240",
+      "expect": {
+        "parsed_count": 1,
+        "failed_count": 0,
+        "sum": 240,
+        "items": [ { "qty": 2, "unit": "لتر", "item_norm": "بويه بيضا", "price": 240, "unit_price": 120 } ]
+      }
+    },
+
+    {
+      "id": "syn-punctuation-noise",
+      "origin": "synthetic",
+      "failure_mode": "commas, parentheses and an Arabic comma between segments",
+      "text": "5 كيلو (معجون شروخ) ب 700 ، + 2 لتر تنر، ب 80",
+      "expect": {
+        "parsed_count": 2,
+        "failed_count": 0,
+        "sum": 780,
+        "items": [
+          { "qty": 5, "unit": "كيلو", "item_norm": "معجون شروخ", "price": 700, "unit_price": 140 },
+          { "qty": 2, "unit": "لتر",  "item_norm": "تنر",        "price": 80,  "unit_price": 40 }
+        ]
+      }
+    }
+  ],
+
+  "_match_about": "Pairs for the B2 matcher. 'same': true means the two item texts MUST land in one cluster; false means they must NOT. Every pair here is synthetic except where marked — they are derived from the vocabulary of the one real string, but the pairings themselves were invented.",
+
+  "match_pairs": [
+    { "id": "m-flip",        "a": "معجون شروخ",         "b": "شروخ معجون",           "same": true,  "why": "flipped word order — must match on item_key alone, before any scoring" },
+    { "id": "m-hamza",       "a": "سلك لحام الأمونيوم", "b": "سلك لحام الامونيوم",   "same": true,  "why": "أ → ا, identical after normAr" },
+    { "id": "m-maqsura",     "a": "تنر صناعى",          "b": "تنر صناعي",             "same": true,  "why": "ى → ي, identical after normAr" },
+    { "id": "m-teh",         "a": "علبة سيليكون",       "b": "علبه سيليكون",          "same": true,  "why": "ة → ه, identical after normAr" },
+    { "id": "m-typo",        "a": "معجون شروخ",         "b": "معجون شروق",            "same": true,  "why": "one-character typo — needs the fuzzy pass, blocking on shared token معجون" },
+    { "id": "m-al-prefix",   "a": "سلك لحام زهر",       "b": "السلك اللحام الزهر",    "same": true,  "why": "definite article on every token — light stemming strips ال" },
+    { "id": "m-plural",      "a": "صامولة",             "b": "صامولات",               "same": true,  "why": "ات suffix — light stemming" },
+    { "id": "m-extra-token",  "a": "سلك لحام زهر",      "b": "سلك لحام زهر كبير",     "same": true,  "why": "one extra descriptive token on an otherwise identical item" },
+
+    { "id": "m-diff-metal",  "a": "سلك لحام زهر",       "b": "سلك لحام المونيوم",     "same": false, "why": "THE HARD ONE. Two of three tokens shared, but cast-iron and aluminium welding wire are different purchases at different prices. If the matcher merges these, every price rule downstream is comparing two products." },
+    { "id": "m-diff-item",   "a": "معجون شروخ",         "b": "سلك لحام زهر",          "same": false, "why": "nothing in common — the easy negative" },
+    { "id": "m-diff-unit",   "a": "تنر",                "b": "تنر صناعي ممتاز درجة اولى", "same": false, "why": "a bare generic token against a heavily qualified one" },
+    { "id": "m-diff-short",  "a": "زيت",                "b": "زيت",                   "same": true,  "why": "identical single token — the degenerate positive, included so a threshold tuned to reject short strings is caught" }
+  ]
+}

@@ -1362,10 +1362,29 @@ document.addEventListener('keydown', function (e) {
     overflow-y: auto;
     -webkit-overflow-scrolling: touch;
   }
-  .nav-dropdown-menu.open { display: block; }
-  .nav-dropdown-item { display: flex; align-items: center; padding: 10px 12px; font-size: 13px; color: var(--text-main); text-decoration: none; border-radius: var(--radius-sm); cursor: pointer; white-space: nowrap; min-height: 40px; transition: background-color 0.15s, color 0.15s; }
+  .nav-dropdown-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    text-align: start;
+    background: transparent;
+    border: 0;
+    font: inherit;
+    line-height: inherit;
+    padding: 10px 12px;
+    font-size: 13px;
+    color: var(--text-main);
+    text-decoration: none;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    white-space: nowrap;
+    min-height: 44px;
+    transition: background-color 0.15s, color 0.15s;
+  }
   .nav-dropdown-item:hover { background: var(--brand-subtle-bg); color: var(--brand-primary); }
   .nav-dropdown-item-active { background: var(--brand-subtle-bg); color: var(--brand-primary); font-weight: 700; }
+  .nav-dropdown-item:focus-visible { outline: 2px solid var(--brand-primary); outline-offset: -2px; }
 
   /* ── Breadcrumb & content area ───────────────────────────────────────── */
   .breadcrumb { padding: var(--space-3) var(--space-4); font-size: 13px; color: var(--text-muted); overflow-x: auto; white-space: nowrap; }

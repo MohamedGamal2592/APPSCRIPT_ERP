@@ -1,0 +1,2282 @@
+{
+  "erp_test": {
+    "title": "ERP Test",
+    "tz": "Africa/Cairo",
+    "sheets": [
+      {
+        "name": "system_error_logs",
+        "hidden": true,
+        "lastRow": 40,
+        "lastCol": 3,
+        "headers": [
+          "Timestamp",
+          "Error Message",
+          "Execution Context"
+        ],
+        "formulaCols": {},
+        "sample": [
+          [
+            "5/30/2026, 2:07:36 PM",
+            "Web App runtime exception: sheet.setRTL is not a function",
+            "Web App GET Request"
+          ],
+          [
+            "5/30/2026, 7:03:13 PM",
+            "Web App download stream exception: Cannot read properties of",
+            "Web App Stream GET"
+          ]
+        ]
+      },
+      {
+        "name": "ERP_Request_Receipts",
+        "hidden": true,
+        "lastRow": 83,
+        "lastCol": 9,
+        "headers": [
+          "request_key",
+          "request_id",
+          "user_email",
+          "module_action",
+          "payload_hash",
+          "state",
+          "response_json",
+          "created_at",
+          "updated_at"
+        ],
+        "formulaCols": {},
+        "sample": [
+          [
+            "bb590972ca1ebacf4e7502c03bf336b36bd40fb5354326eb8b59edf6ee44",
+            "9ee8e434-d99c-4558-899c-2cdfc1eae102",
+            "ahmedrehab0711@gmail.com",
+            "add_sales",
+            "1c84fd9c9c60ce4205e6ef44357465d3fe67a0066e7a422e2bd9c82fba00",
+            "done",
+            "{\"status\":\"success\",\"message\":\"تمت إضافة الفاتورة\",\"unique_i",
+            "9/14/2026",
+            "9/14/2026"
+          ],
+          [
+            "0f2edbde7a28c9d154ee68f4033260c02fe93a485745ba3442794073351e",
+            "eece5481-f63c-48ba-8d94-92fc686d1870",
+            "ahmedrehab0711@gmail.com",
+            "add_cash",
+            "d3a0284b2c10383cd24aed852fd06afc090ef78f57045434f02f12dafcd2",
+            "done",
+            "{\"status\":\"success\",\"message\":\"تمت إضافة الحركة\",\"data\":{\"as",
+            "9/14/2026",
+            "9/14/2026"
+          ]
+        ]
+      },
+      {
+        "name": "ID_Counter",
+        "hidden": true,
+        "lastRow": 8,
+        "lastCol": 2,
+        "headers": [
+          "sheet_name",
+          "next_id"
+        ],
+        "formulaCols": {},
+        "sample": [
+          [
+            "erp_test_products",
+            "97"
+          ],
+          [
+            "erp_test_customer_vendor",
+            "35"
+          ]
+        ]
+      },
+      {
+        "name": "_id_counters",
+        "hidden": true,
+        "lastRow": 2,
+        "lastCol": 2,
+        "headers": [
+          "table_name",
+          "last_id"
+        ],
+        "formulaCols": {},
+        "sample": [
+          [
+            "erp_test_current_products",
+            "1"
+          ]
+        ]
+      },
+      {
+        "name": "data_validation_finance",
+        "hidden": true,
+        "lastRow": 52,
+        "lastCol": 4,
+        "headers": [
+          "id",
+          "main",
+          "sub_main_1",
+          "sub_main_2"
+        ],
+        "formulaCols": {},
+        "sample": [
+          [
+            "1",
+            "حـ/ مدينون وحسابات مدينة اخرى",
+            "الاصول الغير متداولة",
+            ""
+          ],
+          [
+            "2",
+            "حـ/ مشروعات تحت التنفيذ",
+            "الاصول الغير متداولة",
+            ""
+          ]
+        ]
+      },
+      {
+        "name": "erp_test_box_account_codes",
+        "hidden": true,
+        "lastRow": 5,
+        "lastCol": 4,
+        "headers": [
+          "المستوى الرابع",
+          "اسم المستوى الرابع",
+          "المستوى الخامس",
+          "اسم المستوى الخامس"
+        ],
+        "formulaCols": {},
+        "sample": [
+          [
+            "1111",
+            "النقدية في الصناديق",
+            "111101",
+            "صندوق الادارة"
+          ],
+          [
+            "1111",
+            "النقدية في الصناديق",
+            "111102",
+            ""
+          ]
+        ]
+      },
+      {
+        "name": "erp_test_chart_of_accounts",
+        "hidden": false,
+        "lastRow": 100,
+        "lastCol": 16,
+        "headers": [
+          "المستوى الاساسي",
+          "اسم الحساب",
+          "المستوى الثاني",
+          "اسم المستوى الثاني",
+          "المستوى الثالث",
+          "اسم المستوى الثالث",
+          "المستوى الرابع",
+          "اسم المستوى الرابع",
+          "المستوى الخامس",
+          "اسم المستوى الخامس",
+          "التاكيد",
+          "ملاحظات",
+          "نوع الاحتساب",
+          "كود المستوى",
+          "اسم الحساب الرئيسي",
+          "اسم المستوى الثاني_1"
+        ],
+        "formulaCols": {
+          "كود المستوى": {
+            "count": 99,
+            "first": "=CONCATENATE(H2,\"-\",I2,\"-\",J2)"
+          },
+          "اسم الحساب الرئيسي": {
+            "count": 99,
+            "first": "=B2"
+          },
+          "اسم المستوى الثاني_1": {
+            "count": 99,
+            "first": "=D2"
+          }
+        },
+        "sample": [
+          [
+            "1",
+            "الاصول",
+            "11",
+            "الاصول المتداولة",
+            "111",
+            "النقدية وشبة النقدية",
+            "1111",
+            "النقدية في الصناديق",
+            "111101",
+            "صندوق الادارة",
+            "TRUE",
+            "",
+            "مدين",
+            "النقدية في الصناديق-111101-صندوق الادارة",
+            "الاصول",
+            "الاصول المتداولة"
+          ],
+          [
+            "1",
+            "الاصول",
+            "11",
+            "الاصول المتداولة",
+            "111",
+            "النقدية وشبة النقدية",
+            "1111",
+            "النقدية في الصناديق",
+            "111102",
+            "",
+            "TRUE",
+            "",
+            "مدين",
+            "النقدية في الصناديق-111102-",
+            "الاصول",
+            "الاصول المتداولة"
+          ]
+        ]
+      },
+      {
+        "name": "erp_test_customer_vendor",
+        "hidden": false,
+        "lastRow": 1,
+        "lastCol": 15,
+        "headers": [
+          "id",
+          "name",
+          "customer_direction",
+          "type",
+          "registration_number",
+          "tax_id",
+          "name_en",
+          "country",
+          "region",
+          "telephone",
+          "address",
+          "user",
+          "deleted_at",
+          "deleted_by",
+          "version"
+        ],
+        "formulaCols": {},
+        "sample": []
+      },
+      {
+        "name": "erp_test_products",
+        "hidden": false,
+        "lastRow": 1,
+        "lastCol": 12,
+        "headers": [
+          "id",
+          "name_ar",
+          "name_en",
+          "GPC",
+          "unit",
+          "carton",
+          "cost_allocation_percentage",
+          "concentration",
+          "asset_code",
+          "category",
+          "sales_tax",
+          "user"
+        ],
+        "formulaCols": {},
+        "sample": []
+      },
+      {
+        "name": "erp_test_categories",
+        "hidden": true,
+        "lastRow": 1,
+        "lastCol": 4,
+        "headers": [
+          "id",
+          "name_ar",
+          "name_eng",
+          "user"
+        ],
+        "formulaCols": {},
+        "sample": []
+      },
+      {
+        "name": "erp_test_purchasing_costing",
+        "hidden": false,
+        "lastRow": 1,
+        "lastCol": 40,
+        "headers": [
+          "unique_id",
+          "Code",
+          "tax_system",
+          "Reciept Date",
+          "Items",
+          "Type",
+          "Shipping Type",
+          "If shipping via CIF, enter the insurance value.",
+          "CIF insurance rate",
+          "Value",
+          "Currency",
+          "Exchange rate",
+          "Value Based on Invoice",
+          "Importation Re-Price",
+          "Tax Declared Value",
+          "Administrative Expenses",
+          "Customs Expenses",
+          "Unloading expenses",
+          "bank commission",
+          "Customs clearance and port receipts",
+          "Additional fees",
+          "Clearance Expenses",
+          "Other Expenses",
+          "Purchase Tax",
+          "Income Tax",
+          "Internal cost adjustment",
+          "Total costs",
+          "Sales Value",
+          "Tax type",
+          "sales tax amount",
+          "Minimum differences",
+          "month",
+          "Year",
+          "Supplier Name",
+          "Approved this month",
+          "Associated bank",
+          "user",
+          "approval_status",
+          "approval",
+          "approval_time"
+        ],
+        "formulaCols": {},
+        "sample": []
+      },
+      {
+        "name": "erp_test_product_purchasing",
+        "hidden": false,
+        "lastRow": 1,
+        "lastCol": 29,
+        "headers": [
+          "unique_id",
+          "id",
+          "erp_test_purchasing_costing_id",
+          "movement_place",
+          "vendor",
+          "product",
+          "product_category",
+          "receipt_date",
+          "qty",
+          "unit_price",
+          "other_cost",
+          "total_cost",
+          "movement_type",
+          "sales_qty",
+          "sales_value",
+          "sales_value_amount",
+          "unit_cost",
+          "invoice_date",
+          "registration_number",
+          "Analysis certificate, if available",
+          "Agricultural Release License",
+          "Release photo",
+          "Registration image",
+          "Production date",
+          "Expiry date",
+          "user",
+          "currency",
+          "exchange_rate",
+          "cost_currency"
+        ],
+        "formulaCols": {},
+        "sample": []
+      },
+      {
+        "name": "erp_test_cash_bank_movement",
+        "hidden": false,
+        "lastRow": 1,
+        "lastCol": 28,
+        "headers": [
+          "transaction_id",
+          "invoice_id",
+          "name",
+          "transaction_purchasing_items",
+          "transaction_details",
+          "transaction_date",
+          "transaction_amount",
+          "total_discount",
+          "net_amount",
+          "taxes",
+          "total",
+          "transaction_type",
+          "balance_amount",
+          "box_balance",
+          "related_box",
+          "chart_code",
+          "chart_name",
+          "transaction_method",
+          "tax_system",
+          "chart_account_main",
+          "approved",
+          "user",
+          "created_at",
+          "currency",
+          "exchange_rate",
+          "deleted_at",
+          "deleted_by",
+          "version"
+        ],
+        "formulaCols": {},
+        "sample": []
+      },
+      {
+        "name": "erp_test_sales_invoices",
+        "hidden": false,
+        "lastRow": 1,
+        "lastCol": 17,
+        "headers": [
+          "invoice_unique_id",
+          "invoice_number",
+          "client_id",
+          "tax_id",
+          "invoice_date",
+          "invoice_net_value",
+          "invoice_discount_percentage",
+          "invoice_discount_amount",
+          "invoice_tax_value",
+          "invoice_total_value",
+          "user",
+          "created_at",
+          "approval_status",
+          "approval",
+          "approval_time",
+          "deleted_at",
+          "deleted_by"
+        ],
+        "formulaCols": {},
+        "sample": []
+      },
+      {
+        "name": "erp_test_Transfer_Helper",
+        "hidden": true,
+        "lastRow": 1,
+        "lastCol": 14,
+        "headers": [
+          "Helper_ID",
+          "Credit_Box",
+          "Debit_Box",
+          "invoice_id",
+          "name",
+          "transaction_purchasing_items",
+          "transaction_details",
+          "transaction_date",
+          "transaction_amount",
+          "total_discount",
+          "taxes",
+          "chart_code",
+          "transaction_method",
+          "tax_system"
+        ],
+        "formulaCols": {},
+        "sample": []
+      },
+      {
+        "name": "erp_test_sales_products",
+        "hidden": false,
+        "lastRow": 1,
+        "lastCol": 17,
+        "headers": [
+          "unique_id",
+          "id",
+          "erp_test_sales_header_id",
+          "erp_test_sales_invoices_client",
+          "product_id",
+          "product_tax",
+          "product_qty",
+          "product_price",
+          "product_discount",
+          "product_net_value",
+          "product_tax_value",
+          "product_total_value",
+          "user",
+          "",
+          "deleted_at",
+          "deleted_by",
+          "version"
+        ],
+        "formulaCols": {},
+        "sample": []
+      },
+      {
+        "name": "erp_test_sales_returns",
+        "hidden": false,
+        "lastRow": 1,
+        "lastCol": 11,
+        "headers": [
+          "unique_id",
+          "id",
+          "erp_test_sales_invoices_id",
+          "erp_test_sales_invoices_client",
+          "erp_test_return_date",
+          "erp_test_sales_products_id",
+          "erp_test_return_qty",
+          "erp_test_return_discount",
+          "erp_test_return_price",
+          "erp_test_return_value",
+          "user"
+        ],
+        "formulaCols": {},
+        "sample": []
+      },
+      {
+        "name": "erp_test_sales_offer",
+        "hidden": false,
+        "lastRow": 1,
+        "lastCol": 17,
+        "headers": [
+          "offer_unique_id",
+          "offer_number",
+          "client_id",
+          "tax_id",
+          "offer_date",
+          "offer_net_value",
+          "offer_discount_percentage",
+          "offer_discount_amount",
+          "offer_tax_value",
+          "offer_total_value",
+          "user",
+          "created_at",
+          "approval_status",
+          "approval",
+          "approval_time",
+          "deleted_at",
+          "deleted_by"
+        ],
+        "formulaCols": {},
+        "sample": []
+      },
+      {
+        "name": "erp_test_sales_offer_products",
+        "hidden": false,
+        "lastRow": 1,
+        "lastCol": 12,
+        "headers": [
+          "unique_id",
+          "id",
+          "erp_test_sales_offer_id",
+          "product_id",
+          "product_tax",
+          "product_qty",
+          "product_price",
+          "product_discount",
+          "product_net_value",
+          "product_tax_value",
+          "product_total_value",
+          "user"
+        ],
+        "formulaCols": {},
+        "sample": []
+      },
+      {
+        "name": "erp_test_islamic_sales_invoices",
+        "hidden": true,
+        "lastRow": 1,
+        "lastCol": 26,
+        "headers": [
+          "invoice_unique_id",
+          "ميزان حسابي - 26 - 1",
+          "نوع الضريبة (سلع عامة 1/سلع جدول 2)",
+          "نوع سلع الجدول (لايوجد 0/جدول أولا 1/جدول ثانيا 2)",
+          "رقم الفاتورة",
+          "اسم العميل",
+          "رقم التسجيل الضريبي للعميل",
+          "رقم الملف الضريبي للعميل",
+          "العنوان",
+          "الرقم القومي / رقم جواز السفر",
+          "رقم الموبيل",
+          "تاريخ الفاتورة",
+          "نوع البيان (سلعة 3/خدمة 4/تسويات 5)",
+          "نوع السلعة (محلي 1/صادرات 2/آلات ومعدات 5/أجزاء آلات 6/إعفاءات 7 /  سلع الجدول  مراجعة الإرشادات ) ",
+          "المبلغ الصافي",
+          "نسبة الخصم",
+          "قيمة الخصم",
+          "قيمة الضريبة",
+          "إجمالي",
+          "الشهر",
+          "العام",
+          "tax_system",
+          "user",
+          "approval_status",
+          "approval",
+          "approval_time"
+        ],
+        "formulaCols": {},
+        "sample": []
+      },
+      {
+        "name": "erp_test_islamic_sales_products",
+        "hidden": true,
+        "lastRow": 1,
+        "lastCol": 13,
+        "headers": [
+          "unique_id",
+          "id",
+          "erp_testsales_header_id",
+          "erp_test_islamic_sales_invoices_client",
+          "product_id",
+          "product_tax",
+          "product_qty",
+          "product_price",
+          "product_discount",
+          "product_net_value",
+          "product_tax_value",
+          "product_total_value",
+          "user"
+        ],
+        "formulaCols": {},
+        "sample": []
+      },
+      {
+        "name": "erp_test_islamic_sales_returns",
+        "hidden": true,
+        "lastRow": 1,
+        "lastCol": 11,
+        "headers": [
+          "unique_id",
+          "id",
+          "erp_test_islamic__invoices_id",
+          "erp_testsales_invoices_client",
+          "erp_testreturn_date",
+          "erp_testsales_products_id",
+          "erp_testreturn_qty",
+          "erp_testreturn_discount",
+          "erp_testreturn_price",
+          "erp_testreturn_value",
+          "user"
+        ],
+        "formulaCols": {},
+        "sample": []
+      },
+      {
+        "name": "erp_test_islamic_current_products_",
+        "hidden": true,
+        "lastRow": 1,
+        "lastCol": 9,
+        "headers": [
+          "unique_id",
+          "product",
+          "unit",
+          "current_qty",
+          "unit_cost",
+          "total_cost_sign",
+          "transaction_chart_code",
+          "transaction_chart_name",
+          "code"
+        ],
+        "formulaCols": {},
+        "sample": []
+      }
+    ]
+  },
+  "top_light": {
+    "title": "top_light_erp",
+    "tz": "Africa/Cairo",
+    "sheets": [
+      {
+        "name": "system_error_logs",
+        "hidden": true,
+        "lastRow": 40,
+        "lastCol": 3,
+        "headers": [
+          "Timestamp",
+          "Error Message",
+          "Execution Context"
+        ],
+        "formulaCols": {},
+        "sample": [
+          [
+            "5/30/2026, 2:07:36 PM",
+            "Web App runtime exception: sheet.setRTL is not a function",
+            "Web App GET Request"
+          ],
+          [
+            "5/30/2026, 7:03:13 PM",
+            "Web App download stream exception: Cannot read properties of",
+            "Web App Stream GET"
+          ]
+        ]
+      },
+      {
+        "name": "ERP_Request_Receipts",
+        "hidden": true,
+        "lastRow": 84,
+        "lastCol": 9,
+        "headers": [
+          "request_key",
+          "request_id",
+          "user_email",
+          "module_action",
+          "payload_hash",
+          "state",
+          "response_json",
+          "created_at",
+          "updated_at"
+        ],
+        "formulaCols": {},
+        "sample": [
+          [
+            "bb590972ca1ebacf4e7502c03bf336b36bd40fb5354326eb8b59edf6ee44",
+            "9ee8e434-d99c-4558-899c-2cdfc1eae102",
+            "ahmedrehab0711@gmail.com",
+            "add_sales",
+            "1c84fd9c9c60ce4205e6ef44357465d3fe67a0066e7a422e2bd9c82fba00",
+            "done",
+            "{\"status\":\"success\",\"message\":\"تمت إضافة الفاتورة\",\"unique_i",
+            "9/14/2026",
+            "9/14/2026"
+          ],
+          [
+            "0f2edbde7a28c9d154ee68f4033260c02fe93a485745ba3442794073351e",
+            "eece5481-f63c-48ba-8d94-92fc686d1870",
+            "ahmedrehab0711@gmail.com",
+            "add_cash",
+            "d3a0284b2c10383cd24aed852fd06afc090ef78f57045434f02f12dafcd2",
+            "done",
+            "{\"status\":\"success\",\"message\":\"تمت إضافة الحركة\",\"data\":{\"as",
+            "9/14/2026",
+            "9/14/2026"
+          ]
+        ]
+      },
+      {
+        "name": "ID_Counter",
+        "hidden": true,
+        "lastRow": 8,
+        "lastCol": 2,
+        "headers": [
+          "sheet_name",
+          "next_id"
+        ],
+        "formulaCols": {},
+        "sample": [
+          [
+            "top_light_products",
+            "97"
+          ],
+          [
+            "top_light_customer_vendor",
+            "35"
+          ]
+        ]
+      },
+      {
+        "name": "_id_counters",
+        "hidden": true,
+        "lastRow": 2,
+        "lastCol": 2,
+        "headers": [
+          "table_name",
+          "last_id"
+        ],
+        "formulaCols": {},
+        "sample": [
+          [
+            "top_light_current_products",
+            "1"
+          ]
+        ]
+      },
+      {
+        "name": "data_validation_finance",
+        "hidden": true,
+        "lastRow": 52,
+        "lastCol": 4,
+        "headers": [
+          "id",
+          "main",
+          "sub_main_1",
+          "sub_main_2"
+        ],
+        "formulaCols": {},
+        "sample": [
+          [
+            "1",
+            "حـ/ مدينون وحسابات مدينة اخرى",
+            "الاصول الغير متداولة",
+            ""
+          ],
+          [
+            "2",
+            "حـ/ مشروعات تحت التنفيذ",
+            "الاصول الغير متداولة",
+            ""
+          ]
+        ]
+      },
+      {
+        "name": "top_light_box_account_codes",
+        "hidden": true,
+        "lastRow": 5,
+        "lastCol": 4,
+        "headers": [
+          "المستوى الرابع",
+          "اسم المستوى الرابع",
+          "المستوى الخامس",
+          "اسم المستوى الخامس"
+        ],
+        "formulaCols": {},
+        "sample": [
+          [
+            "1111",
+            "النقدية في الصناديق",
+            "111101",
+            "صندوق الادارة"
+          ],
+          [
+            "1111",
+            "النقدية في الصناديق",
+            "111102",
+            "صندوق المحل"
+          ]
+        ]
+      },
+      {
+        "name": "top_light_chart_of_accounts",
+        "hidden": false,
+        "lastRow": 100,
+        "lastCol": 16,
+        "headers": [
+          "المستوى الاساسي",
+          "اسم الحساب",
+          "المستوى الثاني",
+          "اسم المستوى الثاني",
+          "المستوى الثالث",
+          "اسم المستوى الثالث",
+          "المستوى الرابع",
+          "اسم المستوى الرابع",
+          "المستوى الخامس",
+          "اسم المستوى الخامس",
+          "التاكيد",
+          "ملاحظات",
+          "نوع الاحتساب",
+          "كود المستوى",
+          "اسم الحساب الرئيسي",
+          "اسم المستوى الثاني_1"
+        ],
+        "formulaCols": {
+          "كود المستوى": {
+            "count": 99,
+            "first": "=CONCATENATE(H2,\"-\",I2,\"-\",J2)"
+          },
+          "اسم الحساب الرئيسي": {
+            "count": 99,
+            "first": "=B2"
+          },
+          "اسم المستوى الثاني_1": {
+            "count": 99,
+            "first": "=D2"
+          }
+        },
+        "sample": [
+          [
+            "1",
+            "الاصول",
+            "11",
+            "الاصول المتداولة",
+            "111",
+            "النقدية وشبة النقدية",
+            "1111",
+            "النقدية في الصناديق",
+            "111101",
+            "صندوق الادارة",
+            "TRUE",
+            "",
+            "مدين",
+            "النقدية في الصناديق-111101-صندوق الادارة",
+            "الاصول",
+            "الاصول المتداولة"
+          ],
+          [
+            "1",
+            "الاصول",
+            "11",
+            "الاصول المتداولة",
+            "111",
+            "النقدية وشبة النقدية",
+            "1111",
+            "النقدية في الصناديق",
+            "111102",
+            "صندوق المحل",
+            "TRUE",
+            "",
+            "مدين",
+            "النقدية في الصناديق-111102-صندوق المحل",
+            "الاصول",
+            "الاصول المتداولة"
+          ]
+        ]
+      },
+      {
+        "name": "top_light_customer_vendor",
+        "hidden": false,
+        "lastRow": 31,
+        "lastCol": 15,
+        "headers": [
+          "id",
+          "name",
+          "customer_direction",
+          "type",
+          "registration_number",
+          "tax_id",
+          "name_en",
+          "country",
+          "region",
+          "telephone",
+          "address",
+          "user",
+          "deleted_at",
+          "deleted_by",
+          "version"
+        ],
+        "formulaCols": {},
+        "sample": [
+          [
+            "1",
+            "مصنع توب كيميكال (محدث)",
+            "عميل",
+            "محلي - عميل مباشر",
+            "",
+            "611501007",
+            "Top Chemical For Pesticedes and Specialized Chemicals",
+            "مصر",
+            "الاسكندرية",
+            "\"01003792448",
+            "قطع 13 و 14 و 15 بلوك 8 امتداد المنطقة الصناعية الرابعة",
+            "m.gamal2363@gmail.com",
+            "",
+            "",
+            ""
+          ],
+          [
+            "2",
+            "وينزو فابو للتكنولوجيا الكهربية",
+            "مورد",
+            "مورد - خارجي",
+            "0",
+            "92330301",
+            "",
+            "الصين",
+            "زيجانج",
+            "0000",
+            "00000",
+            "m.gamal2363@gmail.com",
+            "",
+            "",
+            ""
+          ]
+        ]
+      },
+      {
+        "name": "top_light_products",
+        "hidden": false,
+        "lastRow": 91,
+        "lastCol": 12,
+        "headers": [
+          "id",
+          "name_ar",
+          "name_en",
+          "GPC",
+          "unit",
+          "carton",
+          "cost_allocation_percentage",
+          "concentration",
+          "asset_code",
+          "category",
+          "sales_tax",
+          "user"
+        ],
+        "formulaCols": {},
+        "sample": [
+          [
+            "1",
+            "منتج تجريبي داخلي",
+            "",
+            "",
+            "قطعة",
+            "",
+            "",
+            "",
+            "114101",
+            "1",
+            "14.00%",
+            "m.gamal2363@gmail.com"
+          ],
+          [
+            "2",
+            "وش كهرباء",
+            "",
+            "",
+            "قطعة",
+            "10",
+            "0.00%",
+            "",
+            "114101",
+            "1",
+            "14.00%",
+            "m.gamal2363@gmail.com"
+          ]
+        ]
+      },
+      {
+        "name": "top_light_categories",
+        "hidden": true,
+        "lastRow": 4,
+        "lastCol": 4,
+        "headers": [
+          "id",
+          "name_ar",
+          "name_eng",
+          "user"
+        ],
+        "formulaCols": {},
+        "sample": [
+          [
+            "1",
+            "إكسسوارات ومستهلكات كهربائية",
+            "Electrical accessories and consumables",
+            "m.gamal2363@gmail.com"
+          ],
+          [
+            "2",
+            "قطع غيار أجهزة صغيرة",
+            "Small appliance spare parts",
+            "m.gamal2363@gmail.com"
+          ]
+        ]
+      },
+      {
+        "name": "top_light_purchasing_costing",
+        "hidden": false,
+        "lastRow": 3,
+        "lastCol": 40,
+        "headers": [
+          "unique_id",
+          "Code",
+          "tax_system",
+          "Reciept Date",
+          "Items",
+          "Type",
+          "Shipping Type",
+          "If shipping via CIF, enter the insurance value.",
+          "CIF insurance rate",
+          "Value",
+          "Currency",
+          "Exchange rate",
+          "Value Based on Invoice",
+          "Importation Re-Price",
+          "Tax Declared Value",
+          "Administrative Expenses",
+          "Customs Expenses",
+          "Unloading expenses",
+          "bank commission",
+          "Customs clearance and port receipts",
+          "Additional fees",
+          "Clearance Expenses",
+          "Other Expenses",
+          "Purchase Tax",
+          "Income Tax",
+          "Internal cost adjustment",
+          "Total costs",
+          "Sales Value",
+          "Tax type",
+          "sales tax amount",
+          "Minimum differences",
+          "month",
+          "Year",
+          "Supplier Name",
+          "Approved this month",
+          "Associated bank",
+          "user",
+          "approval_status",
+          "approval",
+          "approval_time"
+        ],
+        "formulaCols": {
+          "CIF insurance rate": {
+            "count": 1,
+            "first": "=IF(L2 = \"CIF\",(H2-J2)/J2,\"\")"
+          },
+          "Sales Value": {
+            "count": 2,
+            "first": "=IF(F2=\"بيع\", round(AA2*103/100,-2),0)"
+          },
+          "Tax type": {
+            "count": 1,
+            "first": "=iferror(IF(X2/(N2+Q2) >= 0.08, 0.14,X2/(N2+Q2)),\"\")"
+          },
+          "sales tax amount": {
+            "count": 1,
+            "first": "=iferror(IF(AC2>0.06,AB2*14/100,0),\"\")"
+          }
+        },
+        "sample": [
+          [
+            "4abee5a7c81490d1",
+            "304435",
+            "FALSE",
+            "2026-06-15",
+            "مستلزمات كهربية",
+            "بيع",
+            "CIF",
+            "",
+            "",
+            "1,240,182.72",
+            "CNY",
+            "7.0000",
+            "8,681,279.04",
+            "0.00",
+            "0.00",
+            "0.00",
+            "0.00",
+            "0.00",
+            "0.00",
+            "0.00",
+            "0.00",
+            "0.00",
+            "5,117,531.22",
+            "0.00",
+            "0.00",
+            "0.00",
+            "13,798,810.26",
+            "14,212,800.000",
+            "",
+            "1,989,792.00",
+            "",
+            "6",
+            "2026",
+            "2",
+            "",
+            "المصرف المتحد",
+            "m.gamal2363@gmail.com",
+            "Approved",
+            "m.gamal2363@gmail.com",
+            "8/15/2026 20:06:39"
+          ],
+          [
+            "9e3832175cb349e4",
+            "105860",
+            "FALSE",
+            "8/23/2026",
+            "مستلزمات كهربية",
+            "بيع",
+            "C&F",
+            "$0.00",
+            "",
+            "3,222.00",
+            "CNY",
+            "7.4782",
+            "24,094.73",
+            "0.00",
+            "0.00",
+            "0.00",
+            "0.00",
+            "0.00",
+            "0.00",
+            "22,022.00",
+            "0.00",
+            "0.00",
+            "59,000.00",
+            "0.00",
+            "0.00",
+            "0.00",
+            "105,116.73",
+            "108,300.000",
+            "",
+            "6,650.00",
+            "",
+            "8",
+            "2026",
+            "2",
+            "",
+            "",
+            "m.gamal2363@gmail.com",
+            "Approved",
+            "m.gamal2363@gmail.com",
+            "9/4/2026 16:48:24"
+          ]
+        ]
+      },
+      {
+        "name": "top_light_product_purchasing",
+        "hidden": false,
+        "lastRow": 90,
+        "lastCol": 30,
+        "headers": [
+          "unique_id",
+          "id",
+          "movement_code",
+          "top_light_purchasing_costing_id",
+          "movement_place",
+          "vendor",
+          "product",
+          "product_category",
+          "receipt_date",
+          "qty",
+          "unit_price",
+          "other_cost",
+          "total_cost",
+          "movement_type",
+          "sales_qty",
+          "sales_value",
+          "sales_value_amount",
+          "unit_cost",
+          "invoice_date",
+          "registration_number",
+          "Analysis certificate, if available",
+          "Agricultural Release License",
+          "Release photo",
+          "Registration image",
+          "Production date",
+          "Expiry date",
+          "user",
+          "currency",
+          "exchange_rate",
+          "cost_currency"
+        ],
+        "formulaCols": {
+          "movement_code": {
+            "count": 89,
+            "first": "=CONCATENATE(N2,\"-\",B2,\"-\",vlookup(G2,top_light_products!$A:$D,2,0),\"-\",TEXT(I2,\"DD/MM/YYYY\"))"
+          },
+          "other_cost": {
+            "count": 1,
+            "first": "=81022+24832"
+          },
+          "total_cost": {
+            "count": 88,
+            "first": "=J2*K2*AC2+L2"
+          },
+          "sales_qty": {
+            "count": 89,
+            "first": "=J2"
+          },
+          "sales_value_amount": {
+            "count": 89,
+            "first": "=P2*J2"
+          },
+          "unit_cost": {
+            "count": 89,
+            "first": "=M2/J2"
+          },
+          "cost_currency": {
+            "count": 89,
+            "first": "=J2*K2"
+          }
+        },
+        "sample": [
+          [
+            "44435f7cd9f20bec",
+            "1",
+            "114101-1-مفتاح مفرد - ابيض-15/06/2026",
+            "4abee5a7c81490d1",
+            "مستورد",
+            "2",
+            "3",
+            "1",
+            "2026-06-15",
+            "32400",
+            "1.62",
+            "168,520.46",
+            "535,936.46",
+            "114101",
+            "32400",
+            "50.00",
+            "1,620,000.00",
+            "16.54",
+            "2026-01-20",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "June 28, 2026",
+            "June 28, 2026",
+            "m.gamal2363@gmail.com",
+            "CNY",
+            "7",
+            "52488"
+          ],
+          [
+            "c7a61fc6e2c5da57",
+            "2",
+            "114101-2-مفتاح ديفاتير - ابيض-15/06/2026",
+            "4abee5a7c81490d1",
+            "مستورد",
+            "2",
+            "4",
+            "1",
+            "2026-06-15",
+            "2520",
+            "1.75",
+            "13,713.08",
+            "44,583.08",
+            "114101",
+            "2520",
+            "85.00",
+            "214,200.00",
+            "17.69",
+            "2026-01-20",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "m.gamal2363@gmail.com",
+            "CNY",
+            "7",
+            "4410"
+          ]
+        ]
+      },
+      {
+        "name": "top_light_cash_bank_movement",
+        "hidden": false,
+        "lastRow": 232,
+        "lastCol": 30,
+        "headers": [
+          "transaction_id",
+          "invoice_id",
+          "name",
+          "name_vendor",
+          "transaction_purchasing_items",
+          "transaction_details",
+          "transaction_date",
+          "transaction_amount",
+          "total_discount",
+          "net_amount",
+          "taxes",
+          "total",
+          "transaction_type",
+          "balance_amount",
+          "box_balance",
+          "related_box",
+          "chart_code",
+          "chart_name",
+          "transaction_method",
+          "tax_system",
+          "chart_account_main",
+          "approved",
+          "user",
+          "created_at",
+          "Temp_Target_Box",
+          "currency",
+          "exchange_rate",
+          "deleted_at",
+          "deleted_by",
+          "version"
+        ],
+        "formulaCols": {
+          "name_vendor": {
+            "count": 200,
+            "first": "=VLOOKUP(C2,top_light_customer_vendor!A:B,2,0)"
+          },
+          "net_amount": {
+            "count": 28,
+            "first": "=IF(S174=\"فودافون كاش\",H174*AA174,(H174-I174)*AA174)"
+          },
+          "total": {
+            "count": 28,
+            "first": "=((H174-I174)*AA174)+(K174*AA174)"
+          },
+          "balance_amount": {
+            "count": 29,
+            "first": "=9563279.04*-1"
+          },
+          "box_balance": {
+            "count": 197,
+            "first": "=SUMIFS($N$2:N2, $P$2:P2, P2)"
+          },
+          "chart_name": {
+            "count": 197,
+            "first": "=VLOOKUP(Q2,top_light_chart_of_accounts!I:N,6,0)"
+          },
+          "chart_account_main": {
+            "count": 197,
+            "first": "=VLOOKUP(Q2,top_light_chart_of_accounts!I:O,7,0)"
+          }
+        },
+        "sample": [
+          [
+            "1",
+            "0",
+            "6",
+            "تامر ابو عدس",
+            "",
+            "مدفوع تحت الحساب 50 الف",
+            "2026-06-29",
+            "50,000.00",
+            "0.00",
+            "50,000.00",
+            "0.00",
+            "50,000.00",
+            "Debit",
+            "50,000.00",
+            "50,000.00",
+            "111101",
+            "411101",
+            "ايرادات المبيعات-411101-ايرادات مبيعات المخزون التام",
+            "نقدي",
+            "FALSE",
+            "الايرادات",
+            "TRUE",
+            "ahmedrehab0711@gmail.com",
+            "",
+            "",
+            "EGP",
+            "1",
+            "",
+            "",
+            ""
+          ],
+          [
+            "2",
+            "",
+            "2",
+            "وينزو فابو للتكنولوجيا الكهربية",
+            "",
+            "تسوية مديونيت المورد",
+            "2026-06-29",
+            "1,366,182.72",
+            "0.00",
+            "1,366,182.72",
+            "0.00",
+            "9,563,279.04",
+            "Credit",
+            "(9,563,279.04)",
+            "(9,563,279.04)",
+            "111103",
+            "211102",
+            "الموردون-211102-موردون خارجيون",
+            "نقدي",
+            "FALSE",
+            "الالتزامات",
+            "TRUE",
+            "m.gamal2363@gmail.com",
+            "",
+            "",
+            "CNY",
+            "7",
+            "",
+            "",
+            ""
+          ]
+        ]
+      },
+      {
+        "name": "top_light_sales_invoices",
+        "hidden": false,
+        "lastRow": 193,
+        "lastCol": 30,
+        "headers": [
+          "invoice_unique_id",
+          "ميزان حسابي - 26 - 1",
+          "نوع الضريبة (سلع عامة 1/سلع جدول 2)",
+          "نوع سلع الجدول (لايوجد 0/جدول أولا 1/جدول ثانيا 2)",
+          "رقم الفاتورة",
+          "اسم العميل",
+          "رقم التسجيل الضريبي للعميل",
+          "رقم الملف الضريبي للعميل",
+          "العنوان",
+          "الرقم القومي / رقم جواز السفر",
+          "رقم الموبيل",
+          "تاريخ الفاتورة",
+          "نوع البيان (سلعة 3/خدمة 4/تسويات 5)",
+          "نوع السلعة (محلي 1/صادرات 2/آلات ومعدات 5/أجزاء آلات 6/إعفاءات 7 /  سلع الجدول  مراجعة الإرشادات ) ",
+          "المبلغ الصافي",
+          "نسبة الخصم",
+          "قيمة الخصم",
+          "قيمة الضريبة",
+          "إجمالي",
+          "الشهر",
+          "العام",
+          "tax_system",
+          "user",
+          "created_at",
+          "approval_status",
+          "approval",
+          "approval_time",
+          "deleted_at",
+          "deleted_by",
+          "version"
+        ],
+        "formulaCols": {
+          "نوع سلع الجدول (لايوجد 0/جدول أولا 1/جدول ثانيا 2)": {
+            "count": 171,
+            "first": "=iferror(IF(R2/O2=0.05,1,0),\"\")"
+          },
+          "الشهر": {
+            "count": 32,
+            "first": "=MONTH(L151)"
+          },
+          "العام": {
+            "count": 32,
+            "first": "=YEAR(L151)"
+          }
+        },
+        "sample": [
+          [
+            "39167645025ad988",
+            "5",
+            "2",
+            "0",
+            "1-2026",
+            "5",
+            "",
+            "",
+            "مدينة المعلمين",
+            "0",
+            "01008134179",
+            "2026-06-29",
+            "3",
+            "14",
+            "83,110.00",
+            "45.00%",
+            "37,399.50",
+            "0.00",
+            "45,710.50",
+            "6",
+            "2026",
+            "FALSE",
+            "ahmedrehab0711@gmail.com",
+            "",
+            "Approved",
+            "",
+            "",
+            "",
+            "",
+            ""
+          ],
+          [
+            "0ae09b43e566fc74",
+            "5",
+            "2",
+            "0",
+            "2-2026",
+            "5",
+            "",
+            "",
+            "مدينة المعلمين",
+            "",
+            "01008134179",
+            "2026-06-29",
+            "3",
+            "14",
+            "139,830.00",
+            "40.00%",
+            "55,932.00",
+            "0.00",
+            "83,898.00",
+            "6",
+            "2026",
+            "FALSE",
+            "ahmedrehab0711@gmail.com",
+            "",
+            "Approved",
+            "",
+            "",
+            "",
+            "",
+            ""
+          ]
+        ]
+      },
+      {
+        "name": "top_light_Transfer_Helper",
+        "hidden": true,
+        "lastRow": 27,
+        "lastCol": 14,
+        "headers": [
+          "Helper_ID",
+          "Credit_Box",
+          "Debit_Box",
+          "invoice_id",
+          "name",
+          "transaction_purchasing_items",
+          "transaction_details",
+          "transaction_date",
+          "transaction_amount",
+          "total_discount",
+          "taxes",
+          "chart_code",
+          "transaction_method",
+          "tax_system"
+        ],
+        "formulaCols": {},
+        "sample": [
+          [
+            "03e8d6cca45e8259",
+            "111101",
+            "111104",
+            "0000",
+            "19",
+            "",
+            "تحويل لحساب البنك",
+            "8/10/2026",
+            "1000",
+            "0",
+            "0",
+            "111101",
+            "Bank Transfer",
+            "FALSE"
+          ],
+          [
+            "cc2c5a78b7020ac0",
+            "111101",
+            "111104",
+            "000",
+            "19",
+            "",
+            "تحويل لحساب البنك",
+            "8/10/2026",
+            "1000",
+            "0",
+            "0",
+            "111101",
+            "تحويل بنكي",
+            "FALSE"
+          ]
+        ]
+      },
+      {
+        "name": "top_light_sales_products",
+        "hidden": false,
+        "lastRow": 1728,
+        "lastCol": 17,
+        "headers": [
+          "unique_id",
+          "id",
+          "top_lightsales_header_id",
+          "top_lightsales_invoices_client",
+          "product_id",
+          "product_tax",
+          "product_qty",
+          "product_price",
+          "product_discount",
+          "product_net_value",
+          "product_tax_value",
+          "product_total_value",
+          "user",
+          "",
+          "deleted_at",
+          "deleted_by",
+          "version"
+        ],
+        "formulaCols": {},
+        "sample": [
+          [
+            "d37fa390294ca880",
+            "1",
+            "39167645025ad988",
+            "5",
+            "22",
+            "0.00%",
+            "150",
+            "80.00",
+            "0",
+            "12,000.00",
+            "0.00",
+            "12,000.00",
+            "ahmedrehab0711@gmail.com",
+            "",
+            "",
+            "",
+            ""
+          ],
+          [
+            "1e47725d501caa78",
+            "2",
+            "39167645025ad988",
+            "5",
+            "10",
+            "0.00%",
+            "180",
+            "50.00",
+            "0",
+            "9,000.00",
+            "0.00",
+            "9,000.00",
+            "ahmedrehab0711@gmail.com",
+            "",
+            "",
+            "",
+            ""
+          ]
+        ]
+      },
+      {
+        "name": "top_light_sales_returns",
+        "hidden": false,
+        "lastRow": 266,
+        "lastCol": 12,
+        "headers": [
+          "unique_id",
+          "id",
+          "top_lightsales_invoices_id",
+          "top_lightsales_invoices_client",
+          "top_lightreturn_date",
+          "top_lightsales_products_id",
+          "top_lightreturn_qty",
+          "top_lightreturn_discount",
+          "top_lightreturn_price",
+          "top_lightreturn_value",
+          "user",
+          ""
+        ],
+        "formulaCols": {},
+        "sample": [
+          [
+            "6e5e58635f8142e5",
+            "1",
+            "3765210f529a6d68",
+            "10",
+            "7/1/2026",
+            "61",
+            "600",
+            "10500",
+            "50",
+            "30,000.00",
+            "ahmedrehab0711@gmail.com",
+            ""
+          ],
+          [
+            "2b4fbac35f28e56b",
+            "2",
+            "3765210f529a6d68",
+            "10",
+            "7/1/2026",
+            "68",
+            "600",
+            "10500",
+            "50",
+            "30,000.00",
+            "ahmedrehab0711@gmail.com",
+            ""
+          ]
+        ]
+      },
+      {
+        "name": "top_light_sales_offer",
+        "hidden": false,
+        "lastRow": 33,
+        "lastCol": 26,
+        "headers": [
+          "invoice_unique_id",
+          "ميزان حسابي - 26 - 1",
+          "نوع الضريبة (سلع عامة 1/سلع جدول 2)",
+          "نوع سلع الجدول (لايوجد 0/جدول أولا 1/جدول ثانيا 2)",
+          "رقم الفاتورة",
+          "اسم العميل",
+          "رقم التسجيل الضريبي للعميل",
+          "رقم الملف الضريبي للعميل",
+          "العنوان",
+          "الرقم القومي / رقم جواز السفر",
+          "رقم الموبيل",
+          "تاريخ الفاتورة",
+          "نوع البيان (سلعة 3/خدمة 4/تسويات 5)",
+          "نوع السلعة (محلي 1/صادرات 2/آلات ومعدات 5/أجزاء آلات 6/إعفاءات 7 /  سلع الجدول  مراجعة الإرشادات ) ",
+          "المبلغ الصافي",
+          "نسبة الخصم",
+          "قيمة الخصم",
+          "قيمة الضريبة",
+          "إجمالي",
+          "الشهر",
+          "العام",
+          "tax_system",
+          "user",
+          "approval_status",
+          "approval",
+          "approval_time"
+        ],
+        "formulaCols": {
+          "نوع سلع الجدول (لايوجد 0/جدول أولا 1/جدول ثانيا 2)": {
+            "count": 4,
+            "first": "=IFERROR(IF(R28/O28=0.05,1,0),\"\")"
+          },
+          "الشهر": {
+            "count": 4,
+            "first": "=MONTH(L28)"
+          },
+          "العام": {
+            "count": 4,
+            "first": "=YEAR(L28)"
+          }
+        },
+        "sample": [
+          [
+            "d954202db52e8d81",
+            "",
+            "",
+            "",
+            "1-2026",
+            "1",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "2026-07-03",
+            "",
+            "",
+            "4,750.00",
+            "30.00%",
+            "1,425.00",
+            "0.00",
+            "3,325.00",
+            "7",
+            "2026",
+            "",
+            "m.gamal2363@gmail.com",
+            "",
+            "",
+            ""
+          ],
+          [
+            "d30c90fbc15a4033",
+            "",
+            "",
+            "",
+            "2-2026",
+            "6",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "2026-07-06",
+            "",
+            "",
+            "268,800.00",
+            "45.00%",
+            "120,960.00",
+            "0.00",
+            "147,840.00",
+            "7",
+            "2026",
+            "",
+            "ahmedrehab0711@gmail.com",
+            "",
+            "",
+            ""
+          ]
+        ]
+      },
+      {
+        "name": "top_light_sales_offer_products",
+        "hidden": false,
+        "lastRow": 458,
+        "lastCol": 12,
+        "headers": [
+          "unique_id",
+          "id",
+          "top_lightsales_offer_id",
+          "product_id",
+          "product_tax",
+          "product_qty",
+          "product_price",
+          "product_discount",
+          "product_net_value",
+          "product_tax_value",
+          "product_total_value",
+          "user"
+        ],
+        "formulaCols": {},
+        "sample": [
+          [
+            "a5d37ccffcd84b9b",
+            "411",
+            "d954202db52e8d81",
+            "3",
+            "0.00%",
+            "10",
+            "50.00",
+            "0",
+            "500.00",
+            "0.00",
+            "500.00",
+            "m.gamal2363@gmail.com"
+          ],
+          [
+            "40b227cb4e6b6457",
+            "411",
+            "d954202db52e8d81",
+            "4",
+            "0.00%",
+            "50",
+            "85.00",
+            "0",
+            "4,250.00",
+            "0.00",
+            "4,250.00",
+            "m.gamal2363@gmail.com"
+          ]
+        ]
+      },
+      {
+        "name": "top_light_current_products",
+        "hidden": false,
+        "lastRow": 1000,
+        "lastCol": 9,
+        "headers": [
+          "unique_id",
+          "product",
+          "unit",
+          "current_qty",
+          "unit_cost",
+          "total_cost_sign",
+          "transaction_chart_code",
+          "transaction_chart_name",
+          "code"
+        ],
+        "formulaCols": {
+          "unique_id": {
+            "count": 1,
+            "first": "=SORT(UNIQUE(TOCOL({\n  top_light_product_purchasing!G2:G;\n  top_light_sales_returns!F2:F;\n  top_light_sales_products!E2:E\n}, 1)))"
+          },
+          "product": {
+            "count": 200,
+            "first": "=iferror(VLOOKUP(A2,top_light_products!A:E,2,0),\"\")"
+          },
+          "unit": {
+            "count": 200,
+            "first": "=iferror(DGET(top_light_products!$A:$J,top_light_products!$E$1,{top_light_products!$B$1;B2}),\"\")"
+          },
+          "current_qty": {
+            "count": 1,
+            "first": "=ARRAYFORMULA(\n  IF(A2:A = \"\", \"\",\n    (\n      IFERROR(VLOOKUP(A2:A, QUERY({top_light_product_purchasing!G2:G, top_light_product_purchasing!J2:J}, \"SELECT Col1, SUM(Col2) WHERE Col1 IS NOT NULL GROUP BY Col1 LABEL SUM(Col2) ''\"), 2, FALSE), 0) +\n      IFERROR(VLOOKUP(A2:A, QUERY({top_light_sales_returns!F2:F, top_light_sales_returns!G2:G}, \"SELECT Col1, SUM(Col2) WHERE Col1 IS NOT NULL GROUP BY Col1 LABEL SUM(Col2) ''\"), 2, FALSE), 0)\n    )\n    -\n    (\n      IFERROR(VLOOKUP(A2:A, QUERY({top_light_sales_products!E2:E, top_light_sales_products!G2:G}, \"SELECT Col1, SUM(Col2) WHERE Col1 IS NOT NULL GROUP BY Col1 LABEL SUM(Col2) ''\"), 2, FALSE), 0)\n    )\n  )\n)"
+          },
+          "unit_cost": {
+            "count": 200,
+            "first": "=IFERROR(\n  VLOOKUP(A2, top_light_product_purchasing!G:Y, 7, 0)/VLOOKUP(A2, top_light_product_purchasing!G:Y, 4, 0), \n  0\n)"
+          },
+          "total_cost_sign": {
+            "count": 200,
+            "first": "=E2*D2"
+          },
+          "transaction_chart_code": {
+            "count": 200,
+            "first": "=IFERROR(\n  VLOOKUP(A2, top_light_product_purchasing!G:Y, 8, 0), \n  IFERROR(\n    VLOOKUP(A2, top_light_products!A:R, 9, 0), \"\"\n\n  )\n)"
+          },
+          "transaction_chart_name": {
+            "count": 200,
+            "first": "=iferror(VLOOKUP(G2,top_light_chart_of_accounts!I:J,2,0),\"\")"
+          },
+          "code": {
+            "count": 200,
+            "first": "=IFERROR(\n  VLOOKUP(A2, top_light_product_purchasing!A:Y, 4, 0)\n)"
+          }
+        },
+        "sample": [
+          [
+            "1",
+            "منتج تجريبي داخلي",
+            "قطعة",
+            "0",
+            "0.00",
+            "0.00",
+            "114101",
+            "مخزون إكسسوارات ومستهلكات كهربائية",
+            ""
+          ],
+          [
+            "3",
+            "مفتاح مفرد - ابيض",
+            "قطعة",
+            "25,857",
+            "16.54",
+            "427,707.07",
+            "114101",
+            "مخزون إكسسوارات ومستهلكات كهربائية",
+            ""
+          ]
+        ]
+      },
+      {
+        "name": "top_light_islamic_sales_invoices",
+        "hidden": true,
+        "lastRow": 4,
+        "lastCol": 26,
+        "headers": [
+          "invoice_unique_id",
+          "ميزان حسابي - 26 - 1",
+          "نوع الضريبة (سلع عامة 1/سلع جدول 2)",
+          "نوع سلع الجدول (لايوجد 0/جدول أولا 1/جدول ثانيا 2)",
+          "رقم الفاتورة",
+          "اسم العميل",
+          "رقم التسجيل الضريبي للعميل",
+          "رقم الملف الضريبي للعميل",
+          "العنوان",
+          "الرقم القومي / رقم جواز السفر",
+          "رقم الموبيل",
+          "تاريخ الفاتورة",
+          "نوع البيان (سلعة 3/خدمة 4/تسويات 5)",
+          "نوع السلعة (محلي 1/صادرات 2/آلات ومعدات 5/أجزاء آلات 6/إعفاءات 7 /  سلع الجدول  مراجعة الإرشادات ) ",
+          "المبلغ الصافي",
+          "نسبة الخصم",
+          "قيمة الخصم",
+          "قيمة الضريبة",
+          "إجمالي",
+          "الشهر",
+          "العام",
+          "tax_system",
+          "user",
+          "approval_status",
+          "approval",
+          "approval_time"
+        ],
+        "formulaCols": {},
+        "sample": [
+          [
+            "979f8b91148cd8d2",
+            "5",
+            "2",
+            "",
+            "1-2026",
+            "13",
+            "",
+            "",
+            "كفر  الزيات",
+            "",
+            "01211151805",
+            "2026-07-09",
+            "3",
+            "14",
+            "130,270.00",
+            "45.00%",
+            "58,621.50",
+            "0.00",
+            "71,648.50",
+            "7",
+            "2026",
+            "FALSE",
+            "ahmedrehab0711@gmail.com",
+            "Approved",
+            "",
+            ""
+          ],
+          [
+            "9663b1b61872e1da",
+            "5",
+            "2",
+            "",
+            "2-2026",
+            "13",
+            "",
+            "",
+            "كفر  الزيات",
+            "",
+            "01211151805",
+            "2026-07-09",
+            "3",
+            "14",
+            "158,590.00",
+            "45.00%",
+            "71,365.50",
+            "0.00",
+            "87,224.50",
+            "7",
+            "2026",
+            "FALSE",
+            "ahmedrehab0711@gmail.com",
+            "Approved",
+            "",
+            ""
+          ]
+        ]
+      },
+      {
+        "name": "top_light_islamic_sales_products",
+        "hidden": true,
+        "lastRow": 50,
+        "lastCol": 13,
+        "headers": [
+          "unique_id",
+          "id",
+          "top_lightsales_header_id",
+          "top_light_islamic_sales_invoices_client",
+          "product_id",
+          "product_tax",
+          "product_qty",
+          "product_price",
+          "product_discount",
+          "product_net_value",
+          "product_tax_value",
+          "product_total_value",
+          "user"
+        ],
+        "formulaCols": {},
+        "sample": [
+          [
+            "9f3e7b772dec6983",
+            "1",
+            "979f8b91148cd8d2",
+            "13",
+            "51",
+            "0.00%",
+            "300",
+            "80.00",
+            "0",
+            "24,000.00",
+            "0.00",
+            "24,000.00",
+            "ahmedrehab0711@gmail.com"
+          ],
+          [
+            "4bbb2f8acc1a918c",
+            "2",
+            "979f8b91148cd8d2",
+            "13",
+            "32",
+            "0.00%",
+            "360",
+            "50.00",
+            "0",
+            "18,000.00",
+            "0.00",
+            "18,000.00",
+            "ahmedrehab0711@gmail.com"
+          ]
+        ]
+      },
+      {
+        "name": "top_light_islamic_sales_returns",
+        "hidden": true,
+        "lastRow": 1,
+        "lastCol": 11,
+        "headers": [
+          "unique_id",
+          "id",
+          "top_light_islamic__invoices_id",
+          "top_lightsales_invoices_client",
+          "top_lightreturn_date",
+          "top_lightsales_products_id",
+          "top_lightreturn_qty",
+          "top_lightreturn_discount",
+          "top_lightreturn_price",
+          "top_lightreturn_value",
+          "user"
+        ],
+        "formulaCols": {},
+        "sample": []
+      },
+      {
+        "name": "top_light_islamic_current_products_",
+        "hidden": true,
+        "lastRow": 1000,
+        "lastCol": 9,
+        "headers": [
+          "unique_id",
+          "product",
+          "unit",
+          "current_qty",
+          "unit_cost",
+          "total_cost_sign",
+          "transaction_chart_code",
+          "transaction_chart_name",
+          "code"
+        ],
+        "formulaCols": {
+          "unique_id": {
+            "count": 1,
+            "first": "=SORT(UNIQUE(TOCOL({\n  FILTER(top_light_sales_returns!E2:E, top_light_sales_returns!D2:D = 3);\n  FILTER(top_light_sales_products!E2:E, top_light_sales_products!D2:D = 3);\n  top_light_islamic_sales_products!E2:E;\n  top_light_islamic_sales_products!F2:F;\n  top_light_islamic_sales_returns!E2:E;\n  top_light_islamic_sales_returns!F2:F\n}, 1)))"
+          },
+          "product": {
+            "count": 200,
+            "first": "=iferror(VLOOKUP(A2,top_light_products!A:E,2,0),\"\")"
+          },
+          "unit": {
+            "count": 200,
+            "first": "=iferror(DGET(top_light_products!$A:$J,top_light_products!$E$1,{top_light_products!$B$1;B2}),\"\")"
+          },
+          "current_qty": {
+            "count": 1,
+            "first": "=ARRAYFORMULA(\n  IF(A2:A = \"\", \"\",\n    IFERROR(VLOOKUP(A2:A, QUERY({top_light_sales_products!E2:E, top_light_sales_products!G2:G, top_light_sales_products!D2:D}, \"SELECT Col1, SUM(Col2) WHERE Col1 IS NOT NULL AND Col3 = 3 GROUP BY Col1 LABEL SUM(Col2) ''\"), 2, FALSE), 0)\n    -\n    IFERROR(VLOOKUP(A2:A, QUERY({top_light_sales_returns!F2:F, top_light_sales_returns!G2:G, top_light_sales_returns!D2:D}, \"SELECT Col1, SUM(Col2) WHERE Col1 IS NOT NULL AND Col3 = 3 GROUP BY Col1 LABEL SUM(Col2) ''\"), 2, FALSE), 0)\n    -\n    IFERROR(VLOOKUP(A2:A, QUERY({top_light_islamic_sales_products!E2:E, top_light_islamic_sales_products!G2:G, top_light_islamic_sales_products!D2:D}, \"SELECT Col1, SUM(Col2) WHERE Col1 IS NOT NULL GROUP BY Col1 LABEL SUM(Col2) ''\"), 2, FALSE), 0)\n    +\n    IFERROR(VLOOKUP(A2:A, QUERY({top_light_islamic_sales_returns!F2:F, top_light_islamic_sales_returns!G2:G, top_light_islamic_sales_returns!D2:D}, \"SELECT Col1, SUM(Col2) WHERE Col1 IS NOT NULL GROUP BY Col1 LABEL SUM(Col2) ''\"), 2, FALSE), 0)\n  )\n)"
+          },
+          "unit_cost": {
+            "count": 200,
+            "first": "=IFERROR(\n  VLOOKUP(A2, top_light_product_purchasing!G:Y, 7, 0)/VLOOKUP(A2, top_light_product_purchasing!G:Y, 4, 0), \n  0\n)"
+          },
+          "total_cost_sign": {
+            "count": 200,
+            "first": "=E2*D2"
+          },
+          "transaction_chart_code": {
+            "count": 200,
+            "first": "=IFERROR(\n  VLOOKUP(A2, top_light_product_purchasing!G:Y, 8, 0), \n  IFERROR(\n    VLOOKUP(A2, top_light_products!A:R, 9, 0), \"\"\n\n  )\n)"
+          },
+          "transaction_chart_name": {
+            "count": 200,
+            "first": "=iferror(VLOOKUP(G2,top_light_chart_of_accounts!I:J,2,0),\"\")"
+          },
+          "code": {
+            "count": 200,
+            "first": "=IFERROR(\n  VLOOKUP(A2, top_light_product_purchasing!A:Y, 4, 0)\n)"
+          }
+        },
+        "sample": [
+          [
+            "0.00%",
+            "",
+            "",
+            "0",
+            "0.00",
+            "0.00",
+            "",
+            "",
+            ""
+          ],
+          [
+            "3",
+            "مفتاح مفرد - ابيض",
+            "قطعة",
+            "1,345",
+            "16.54",
+            "22,247.98",
+            "114101",
+            "مخزون إكسسوارات ومستهلكات كهربائية",
+            ""
+          ]
+        ]
+      }
+    ]
+  },
+  "erp_test_box_values": [
+    [
+      "المستوى الرابع",
+      "اسم المستوى الرابع",
+      "المستوى الخامس",
+      "اسم المستوى الخامس"
+    ],
+    [
+      "1111",
+      "النقدية في الصناديق",
+      "111101",
+      "صندوق الادارة"
+    ],
+    [
+      "1111",
+      "النقدية في الصناديق",
+      "111102",
+      ""
+    ],
+    [
+      "1111",
+      "النقدية في الصناديق",
+      "111103",
+      ""
+    ],
+    [
+      "1111",
+      "النقدية في البنوك",
+      "111104",
+      ""
+    ]
+  ]
+}

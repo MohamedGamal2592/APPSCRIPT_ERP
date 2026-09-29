@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>تحليلات القدرات الانتاجية</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_TopChemical_Nav'); ?>
+  <?!= getCompanyThemeCSS_('3fe1b5cb67b7223e') ?>
+  <style>
+    .pc-toolbar,.pc-cards,.pc-filter-head { display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end; }
+    .pc-toolbar .form-field { margin:0; flex:1 1 220px; }
+    .pc-cards { align-items:stretch; margin:12px 0; }
+    .pc-card { flex:1 1 160px; min-width:145px; background:var(--surface,#fff); border:1px solid var(--border,#e5e7eb); border-radius:10px; padding:12px; }
+    .pc-label { color:var(--text-muted,#64748b); font-size:12px; }
+    .pc-value { font-size:19px; font-weight:700; margin-top:5px; overflow-wrap:anywhere; }
+    .pc-note { color:var(--text-muted,#64748b); font-size:12px; line-height:1.8; }
+    #pc-selected-product { overflow-wrap:anywhere; white-space:normal; word-break:break-word; line-height:1.8; }
+    .pc-state { padding:12px; border-radius:8px; margin:10px 0; background:var(--surface-2,#f8fafc); }
+    .pc-report-tools { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin:14px 0 8px; }
+    .pc-report { border:1px solid var(--border,#dbe3ec); border-radius:12px; padding:18px; background:var(--surface,#fff); box-shadow:0 4px 18px rgba(15,23,42,.06); }
+    .pc-report-header { display:flex; justify-content:space-between; gap:12px; align-items:flex-start; margin-bottom:14px; }
+    .pc-report-title { font-size:20px; font-weight:800; }
+    .pc-summary-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:10px; }
+    .pc-summary-item { min-width:0; border:1px solid var(--border,#e5e7eb); border-radius:10px; padding:14px; background:var(--surface-2,#f8fafc); }
+    .pc-summary-label { color:var(--text-muted,#64748b); font-size:12px; }
+    .pc-summary-value { font-size:22px; font-weight:800; margin-top:7px; overflow-wrap:anywhere; }
+    .pc-summary-sub { margin-top:3px; }
+    .pc-kpi-title { font-size:16px; font-weight:800; margin:18px 0 4px; }
+    .pc-export-status { min-height:1.5em; }
+    .pc-warn { background:#fffbeb; border:1px solid #fde68a; color:#92400e; }
+    .pc-good { color:#166534; }
+    .pc-bad { color:#991b1b; }
+    .pc-filter { margin:10px 0; }
+    .pc-filter label { display:inline-flex; gap:5px; margin:4px 10px 4px 0; align-items:center; }
+    .pc-picker { position:relative; }
+    .pc-picker-input { display:flex; gap:5px; }
+    .pc-picker-input .input { flex:1; min-width:0; }
+    .pc-options { display:none; position:absolute; z-index:30; inset-inline:0; top:calc(100% + 3px); max-height:240px; overflow:auto; border:1px solid var(--border,#e5e7eb); border-radius:7px; background:var(--surface,#fff); box-shadow:0 8px 22px rgba(15,23,42,.16); }
+    .pc-options.is-open { display:block; }
+    .pc-option { display:flex; width:100%; justify-content:space-between; gap:12px; padding:7px 10px; border:0; border-bottom:1px solid var(--border,#e5e7eb); background:transparent; text-align:right; cursor:pointer; color:inherit; }
+    .pc-option:hover,.pc-option[aria-selected="true"] { background:var(--surface-2,#f8fafc); }
+    .pc-table-wrap { overflow:auto; }
+    .pc-table { width:100%; border-collapse:collapse; min-width:1180px; }
+    .pc-table th,.pc-table td { padding:8px; text-align:right; border-bottom:1px solid var(--border,#e5e7eb); vertical-align:top; }
+    .pc-table th { background:var(--surface-2,#f8fafc); color:var(--text-muted,#64748b); position:sticky; top:0; }
+    .pc-num { direction:ltr; text-align:left!important; font-variant-numeric:tabular-nums; white-space:nowrap; }
+    .pc-status { font-weight:700; }
+    .pc-exclude-btn { margin-inline-start:8px; padding:2px 7px; font-size:11px; }
+    .pc-excluded-item { display:inline-flex; gap:7px; align-items:center; margin:4px; padding:4px 8px; border:1px solid var(--border,#dbe3ec); border-radius:7px; background:var(--surface,#fff); }
+    .pc-excluded-list { margin-top:8px; }
+    @media(max-width:600px) { .pc-toolbar .form-field { flex-basis:100%; } .pc-value { font-size:17px; } }
+    @media(max-width:700px) { .pc-summary-grid { grid-template-columns:1fr; } .pc-report { padding:12px; } }
+    @media print {
+      @page { size:A4 landscape; margin:12mm; }
+      body * { visibility:hidden !important; }
+      #pc-management-report,#pc-management-report * { visibility:visible !important; }
+      #pc-management-report { position:absolute; inset:0 auto auto 0; width:100%; border:0; box-shadow:none; padding:0; color:#111827; }
+      #pc-management-report .pc-cards { display:flex; flex-wrap:wrap; }
+      #pc-management-report .pc-card { min-width:28%; background:#fff; }
+      #pc-management-report .pc-summary-item { background:#fff; break-inside:avoid; }
+      #pc-management-report .pc-filter { display:none !important; }
+      .pc-exclude-btn { display:none !important; }
+      #pc-management-report .pc-table-wrap { overflow:visible; }
+      #pc-management-report .pc-table { min-width:0; }
+      #pc-management-report .pc-table th { position:static; }
+      #pc-management-report .pc-table thead { display:table-header-group; }
+      #pc-management-report .pc-table tr { break-inside:avoid; }
+    }
+  </style>
+</head>
+<body>
+<div id="tc-root" dir="rtl"></div>
+<script>
+  var params = new URLSearchParams(window.location.search);
+  var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+  var scriptUrl = window.scriptUrl || '/';
+  var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('3fe1b5cb67b7223e') ?>';
+  var STATE_KEY = 'tc.productionCapability.v1';
+  var saved = {};
+  try { saved = JSON.parse(localStorage.getItem(STATE_KEY) || '{}') || {}; } catch (e) {}
+  var S = { products:[], search:String(saved.search || ''), selectedId:String(saved.selectedId || ''),
+    /* Legacy saved labels are not authoritative: a saved ID restores with an
+     * ID-only label until the current catalog/detail resolves its name. */
+    selectedName:'',
+    pickerMessage:'',
+    q:saved.q == null ? '0' : String(saved.q), categories:Array.isArray(saved.categories) ? saved.categories : [],
+    rows:[], loading:false, error:'', truncated:false, selectedProduct:null, productCurrentQuantity:null,
+    productUnitMetric:null, productUnit:null, excludedByProduct:saved.excludedByProduct&&typeof saved.excludedByProduct==='object'?saved.excludedByProduct:{},
+    excludedMaterialIds:Array.isArray(saved.excludedByProduct&&saved.excludedByProduct[String(saved.selectedId)])?saved.excludedByProduct[String(saved.selectedId)].map(String):[] };
+  var detailSeq = 0, picker = null;
+  function esc(v) { return FMT.escape(v == null ? '' : String(v)); }
+  function companyCall(action,data) { return API.call('company_action',{target_system:'3fe1b5cb67b7223e',module_action:action,data:data||{}},SESSION_TOKEN); }
+  function persist() { try { if(S.selectedId)S.excludedByProduct[S.selectedId]=(S.excludedMaterialIds||[]).map(String);localStorage.setItem(STATE_KEY,JSON.stringify({search:S.search,selectedId:S.selectedId,selectedName:S.selectedName,q:S.q,categories:S.categories,excludedByProduct:S.excludedByProduct})); } catch(e) {} }
+  function selectedLabel() {
+    if (!S.selectedId) return '';
+    if (S.selectedName) return S.selectedName;
+    if (S.selectedProduct && String(S.selectedProduct.id) === S.selectedId && S.selectedProduct.name) return S.selectedProduct.name;
+    var p = (S.products || []).find(function (x) { return String(x.id) === S.selectedId; });
+    return p ? p.name : '';
+  }
+  function load() {
+    UIC.appShell('tc-root',{companyLogoUrl:COMPANY_LOGO_URL,companyLogoHref:scriptUrl+'?action=tc_dashboard&sessionToken='+encodeURIComponent(SESSION_TOKEN),
+      companyLogoTitle:'توب كيميكال',breadcrumb:'توب كيميكال / تحليلات النظام الرئيسي / تحليلات القدرات الانتاجية',
+      contentId:'pc-content',menuGroups:(window.TOPCHEMICAL_MENU||[])});
+    renderShell();
+    /* Saved-ID detail loads in parallel with the catalog bootstrap. */
+    if (S.selectedId) selectProduct(S.selectedId, false, null);
+  }
+  function renderShell() {
+    var root=document.getElementById('pc-content'); if(!root)return;
+    root.innerHTML='<div class="pc-toolbar">'+
+      '<div class="form-field"><label class="form-label" for="pc-search">بحث عن المنتج المصنع</label><div class="pc-picker" id="pc-product-picker"><div class="pc-picker-input"><input id="pc-search" class="input" value="'+esc(S.search)+'" placeholder="ابحث بالاسم أو اكتب معرف التصنيع" autocomplete="off" role="combobox" aria-controls="pc-product-options" aria-expanded="false"><button id="pc-product-toggle" type="button" class="btn btn-outline" aria-label="عرض قائمة المنتجات" aria-expanded="false">▾</button></div><div id="pc-product-options" class="pc-options" role="listbox"></div></div><div id="pc-selected-product" class="pc-note"></div><div id="pc-picker-status" class="pc-note" role="status"></div></div>'+
+      '<div class="form-field"><label class="form-label" for="pc-q">كمية الإنتاج المخططة</label><input id="pc-q" class="input" type="number" min="0" step="any" value="'+esc(S.q)+'"></div>'+
+      '<button id="pc-refresh" class="btn btn-outline" type="button">تحديث البيانات</button></div>'+
+      '<div class="pc-note">مصدر البيانات MySQL. قد تتأخر التغييرات الخارجية حتى 30 ثانية. زر التحديث يطلب قراءة جديدة. بحث المعرف يستخدم manufacture_product_id، والمواد تظهر بمعرف used_product_id واسم used_product_name. السجلات التي بلا manufacture_product_id لا يمكن اختيارها بأمان. لا تعرض البيانات وحدات قياس أو مخزوناً محجوزاً أو طاقة آلات/فترة زمنية.</div>'+
+      '<div id="pc-content-panels"></div>';
+    createPicker();
+    document.getElementById('pc-q').addEventListener('input',function(){S.q=this.value;persist();renderPanels();});
+    document.getElementById('pc-refresh').addEventListener('click',function(){if(picker)picker.refresh();if(S.selectedId)loadRows(S.selectedId,true);});
+    renderPanels();
+  }
+  function createPicker() {
+    picker = UIC.TcCapabilityPicker.create({
+      enabled: function () { try { return !!(UIC.TC_CAPABILITY_LOCAL_PICKER_FLAGS && UIC.TC_CAPABILITY_LOCAL_PICKER_FLAGS.tc_production_capability); } catch (e) { return false; } },
+      catalogAction: 'get_production_capability_catalog',
+      fallbackAction: 'get_production_capability_products',
+      companyCall: companyCall,
+      input: document.getElementById('pc-search'),
+      list: document.getElementById('pc-product-options'),
+      statusEl: document.getElementById('pc-picker-status'),
+      selectedEl: document.getElementById('pc-selected-product'),
+      toggle: document.getElementById('pc-product-toggle'),
+      wrap: document.getElementById('pc-product-picker'),
+      optionClass: 'pc-option',
+      noteClass: 'pc-note',
+      badClass: 'pc-bad',
+      escape: esc,
+      getSelectedId: function () { return S.selectedId; },
+      getSelectedName: function () { return S.selectedName; },
+      onQuery: function (text) { S.search = text; persist(); },
+      onSelect: function (id, name) { selectProduct(id, true, name); },
+      onResults: function (results, total, info) {
+        S.products = results.map(function (r) { return { id: String(r.id), name: String(r.name) }; });
+        if (info && info.hasMore) S.pickerMessage = 'نتائج البحث محدودة بـ100 منتج؛ أضف كلمات بحث.';
+        else S.pickerMessage = '';
+        if (!S.selectedId) renderPanels();
+      },
+      onCatalog: function (cat) {
+        /* A current catalog name fills an ID-only label; the detail response
+         * stays authoritative once it resolves. */
+        if (S.selectedId && !S.selectedName && cat.byId[S.selectedId]) {
+          S.selectedName = String(cat.byId[S.selectedId].name || '');
+          S.selectedProduct = { id: S.selectedId, name: S.selectedName };
+          persist();
+          renderPanels();
+        }
+        if (picker) picker.selectionChanged();
+      },
+      onDenied: function () { detailSeq++; S.products = []; S.selectedName = ''; S.selectedProduct = null; renderPanels(); },
+      onInvalidate: function () { detailSeq++; S.products = []; S.selectedName = ''; S.selectedProduct = null; renderPanels(); },
+      formatSelected: function (id, name, missing) {
+        if (!id) return '';
+        if (name) return 'المحدد: ' + name + ' (#' + id + ')' + (missing ? ' — غير متاح في الكتالوج الحالي' : '');
+        return 'المحدد: #' + id + ' (جارٍ تحميل الاسم…)';
+      }
+    });
+    /* One bootstrap catalog request (or server search when the flag is off);
+     * saved-ID detail already loads in parallel from load(). */
+    picker.boot();
+  }
+  function selectProduct(id,save,knownName) {
+    var nextId=String(id||''), changed=nextId!==S.selectedId;
+    S.selectedId=nextId; S.rows=[]; S.error=''; S.truncated=false; S.productCurrentQuantity=null;S.productUnitMetric=null;S.productUnit=null;
+    S.selectedProduct = null; S.selectedName = '';
+    if (nextId) {
+      var fromList = picker ? picker.findInResults(nextId) : null;
+      if (!fromList) fromList = (S.products || []).filter(function (x) { return String(x.id) === nextId; })[0] || null;
+      var resolved = (knownName != null && String(knownName).trim() !== '') ? String(knownName) : (fromList ? String(fromList.name || '') : '');
+      S.selectedName = resolved || '';
+      if (resolved) S.selectedProduct = { id: nextId, name: resolved };
+    }
+    S.excludedMaterialIds=(S.excludedByProduct[nextId]||[]).map(String);
+    S.categories=categoriesForProductChange(changed,S.categories); if(save!==false)persist();
+    var input = document.getElementById('pc-search');
+    /* Typing never clears the committed selection; restoring a saved ID never
+     * rewrites the user's query text. */
+    if (input && save !== false) { input.value = S.selectedName || ''; S.search = input.value; persist(); }
+    if (picker) picker.selectionChanged();
+    renderPanels(); if(S.selectedId)loadRows(S.selectedId,false);
+  }
+  function loadRows(id,refresh) {
+    var seq=++detailSeq; var qgen = picker ? picker.getQueryGen() : 0; S.loading=true;S.error='';renderPanels();
+    companyCall('get_production_capability_rows',{id:id,refresh:!!refresh}).then(function(res){
+      if(!isCurrentDetailResponse(seq,id))return;
+      if(!res||res.status!=='ok')throw new Error('تعذر تحميل المواد');
+      S.rows=res.rows||[];S.truncated=!!res.truncated;S.productCurrentQuantity=res.product_current_quantity==null?null:String(res.product_current_quantity);
+      S.productUnitMetric=res.product_unit_metric==null?null:String(res.product_unit_metric);S.productUnit=res.product_unit==null?null:String(res.product_unit);S.loading=false;
+      var fromDetail=null;
+      (res.rows||[]).forEach(function(r){ if(!fromDetail && String(r.manufacture_product_id)===String(id) && r.manufacture_product_name != null && String(r.manufacture_product_name).trim()!=='') fromDetail=String(r.manufacture_product_name); });
+      var fromList=(S.products||[]).filter(function(p){return String(p.id)===String(id);})[0]||null;
+      /* The current detail name wins over older catalog/saved labels. */
+      var recovered = fromDetail || (fromList ? fromList.name : (S.selectedProduct && String(S.selectedProduct.id)===String(id) ? S.selectedProduct.name : S.selectedName));
+      if (recovered) { S.selectedName = recovered; S.selectedProduct = { id: String(id), name: recovered }; }
+      else { S.selectedProduct = fromList || S.selectedProduct; }
+      var input=document.getElementById('pc-search');
+      /* A current detail response may replace the query text only when the
+       * user has not edited since selection and IME is inactive: select A,
+       * type B, resolve A — the query and results stay B. */
+      var queryUntouched = ((picker ? picker.getQueryGen() : 0) === qgen) && !(picker && picker.isComposing());
+      if(input && S.selectedName && queryUntouched && input.value!==S.selectedName) { input.value=S.selectedName; S.search=input.value; }
+      var available=categoryChoices().map(function(c){return c.key;});
+      S.categories=S.categories.filter(function(c){return available.indexOf(c)>=0;});
+      persist(); if (picker) picker.selectionChanged(); renderPanels();
+    }).catch(function(e){if(!isCurrentDetailResponse(seq,id))return;S.loading=false;S.error=e.message||'تعذر قراءة البيانات';renderPanels();});
+  }
+  function categoryChoices() {
+    var seen={}; S.rows.forEach(function(r){var id=r.used_product_category_id,raw=r.used_product_category,name=raw==null?'':String(raw).trim(),hasId=id!=null&&String(id).trim()!=='';var key=hasId?String(id):name?'__CATNAME__:'+name:'__UNCAT__',label=name||'غير مصنف';if(!seen[key])seen[key]={key:key,label:label};});
+    return Object.keys(seen).map(function(k){return seen[k];}).sort(function(a,b){return a.key==='__UNCAT__'?-1:b.key==='__UNCAT__'?1:a.label.localeCompare(b.label,'ar');});
+  }
+  function categoriesForProductChange(changed,selected) { return changed?[]:(selected||[]).slice(); }
+  function filterPlanItems(items,selected,term) { var q=term==null?'':String(term).trim().toLowerCase(); return (items||[]).filter(function(it){var r=it.row,id=r.used_product_category_id,category=r.used_product_category==null?'':String(r.used_product_category).trim(),k=id!=null&&String(id).trim()!==''?String(id):category?'__CATNAME__:'+category:'__UNCAT__';if(selected&&selected.length&&selected.indexOf(k)<0)return false;if(!q)return true;var pid=String(r.used_product_id==null?'':r.used_product_id).toLowerCase(),pname=String(r.used_product_name==null?'':r.used_product_name).toLowerCase();return pid.indexOf(q)>=0||pname.indexOf(q)>=0;}); }
+  function withoutExcludedItems(items) { var excluded={};(S.excludedMaterialIds||[]).forEach(function(id){excluded[String(id)]=true;});return (items||[]).filter(function(it){return !excluded[String(it.row.used_product_id==null?'':it.row.used_product_id)];}); }
+  function toggleExcludedMaterial(id) { id=String(id);if(S.excludedMaterialIds.indexOf(id)>=0)S.excludedMaterialIds=S.excludedMaterialIds.filter(function(value){return value!==id;});else S.excludedMaterialIds.push(id);S.excludedByProduct[S.selectedId]=S.excludedMaterialIds.slice();persist();renderPanels(); }
+  function currentQtyMetric() { var qty=parseQty(S.productCurrentQuantity),metric=parseQty(S.productUnitMetric);return qty.kind==='valid'&&metric.kind==='valid'&&metric.value>0?qty.value/metric.value:null; }
+  function productMetricUnit() { var u=String(S.productUnit||'').trim(),lower=u.toLowerCase();if(/\b(l|lt|liter|litre|liters|litres)\b/.test(lower)||/لتر/.test(u))return 'لتر';if(/\b(kg|kgs|kilogram|kilograms|g|gram|grams|ton|tons)\b/.test(lower)||/كجم|كيلو|جرام|طن/.test(u))return 'كجم';return 'مقياس'; }
+  function metricCapacity(v) { var cap=parseQty(v),metric=parseQty(S.productUnitMetric);return cap.kind==='valid'&&metric.kind==='valid'&&metric.value>0?cap.value/metric.value:null; }
+  function isCurrentDetailResponse(seq,id) { return seq===detailSeq&&String(id)===S.selectedId; }
+  function parseQty(v) { if(v===null||v===undefined||String(v).trim()==='')return {kind:'unknown'};var n=Number(v);return Number.isFinite(n)?{kind:n<0?'invalid':'valid',value:n}:{kind:'invalid'}; }
+  function calculatePlan(rows,qRaw,truncated) {
+    var q=parseQty(qRaw); if(q.kind==='unknown')return {inputValid:false,reason:'أدخل كمية إنتاج غير سالبة ومنتهية.'};
+    if(q.kind==='invalid')return {inputValid:false,reason:'الكمية المدخلة سالبة أو غير صالحة.'};
+    var byId={},unknown=0,invalid=0,zero=0,shortages=0,candidates=[],ambiguous=0,stockConflicts=0,items=[];
+    (rows||[]).forEach(function(r,i){var id=String(r.used_product_id==null?'':r.used_product_id);(byId[id]||(byId[id]=[])).push(i);});
+    var inconsistent={};Object.keys(byId).forEach(function(id){var group=byId[id],stocks=[];group.forEach(function(i){var s=parseQty(rows[i].current_stock);if(s.kind==='valid'&&stocks.indexOf(s.value)<0)stocks.push(s.value);});if(stocks.length>1){inconsistent[id]=true;stockConflicts++;}if(group.length>1)ambiguous+=1;});
+    (rows||[]).forEach(function(r,i){var req=parseQty(r.required_qty_per_unit),stock=parseQty(r.current_stock),dup=byId[String(r.used_product_id==null?'':r.used_product_id)].length>1;
+      var item={row:r,needed:null,shortfall:null,capacity:null,state:'valid'};
+      if(req.kind==='unknown'||stock.kind==='unknown'){unknown++;item.state='unknown';}
+      else if(req.kind==='invalid'||stock.kind==='invalid'){invalid++;item.state='invalid';}
+      else {var needed=q.value*req.value;if(!Number.isFinite(needed)){invalid++;item.state='invalid';}
+        else {item.needed=needed;item.shortfall=Math.max(0,needed-stock.value);if(item.shortfall>0)shortages++;
+          if(req.value===0)zero++;
+          else if(inconsistent[String(r.used_product_id)])item.state='inconsistent';
+          else if(dup)item.state='ambiguous';
+          else {var cap=stock.value/req.value;if(!Number.isFinite(cap)){invalid++;item.state='invalid';}else{item.capacity=cap;candidates.push({capacity:item.capacity,name:r.used_product_name,id:r.used_product_id});}}
+        }
+      } items.push(item);
+    });
+    candidates.sort(function(a,b){return a.capacity-b.capacity;});
+    var reasons=[];if(!items.length)reasons.push('لا توجد مواد مرتبطة بهذا المنتج');if(unknown)reasons.push(unknown+' صفوف بها متطلبات أو مخزون غير معروف');if(invalid)reasons.push(invalid+' صفوف بها قيم غير صالحة');if(ambiguous)reasons.push(ambiguous+' معرف مادة مكرر؛ لم نجمع المخزون');if(stockConflicts)reasons.push(stockConflicts+' معرف مادة له قيم مخزون مختلفة');if(truncated)reasons.push('قائمة المواد تجاوزت حد القراءة');
+    return {inputValid:true,q:q.value,items:items,unknown:unknown,invalid:invalid,zero:zero,shortages:shortages,ambiguous:ambiguous,stockConflicts:stockConflicts,capacity:candidates.length?candidates[0].capacity:null,bottleneck:candidates.length?candidates[0]:null,
+      confident:items.length>0&&!unknown&&!invalid&&!ambiguous&&!truncated,covered:items.length>0&&!unknown&&!invalid&&!ambiguous&&!truncated&&shortages===0,reasons:reasons};
+  }
+  function fmt(v) { return v==null?'—':new Intl.NumberFormat('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}).format(Number(v)); }
+  function displayQty(v) { var parsed=parseQty(v);return parsed.kind==='unknown'?'غير معروف':parsed.kind==='invalid'?'غير صالح ('+esc(v)+')':fmt(parsed.value); }
+  function sourceValues(field,rows) { var vals=[];(rows||S.rows||[]).forEach(function(r){var v=r[field];var k=v==null?'(فارغ)':String(v);if(vals.indexOf(k)<0)vals.push(k);});function display(v){var n=Number(v);return v!=='(فارغ)'&&v.trim()!==''&&Number.isFinite(n)?fmt(n):v==='(فارغ)'?'—':esc(v);}return vals.length>1?'قيم مختلفة: '+vals.map(display).join('، '):(vals.length?display(vals[0]):'—'); }
+  function renderPanels() {
+    var host=document.getElementById('pc-content-panels');if(!host)return;
+    if(!S.selectedId){host.innerHTML='<div class="pc-state">اختر منتجاً مصنعاً لعرض علاقات المواد وتخطيط الكمية.</div>'+(S.pickerMessage?'<div class="pc-state pc-warn">'+esc(S.pickerMessage)+'</div>':'');return;}
+    if(S.loading){host.innerHTML='<div class="pc-state">جاري البحث عن الصنف...</div>';return;}
+    if(S.error){host.innerHTML='<div class="pc-state pc-warn">تعذر قراءة بيانات المنتج: '+esc(S.error)+' <button id="pc-retry-rows" class="btn btn-outline" type="button">إعادة المحاولة</button></div>';var retryRows=document.getElementById('pc-retry-rows');if(retryRows)retryRows.addEventListener('click',function(){loadRows(S.selectedId,true);});return;}
+    var choices=categoryChoices(), selected=S.categories;
+    var filteredRows=withoutExcludedItems(filterPlanItems((S.rows||[]).map(function(r){return {row:r};}),selected)).map(function(it){return it.row;});
+    var plan=calculatePlan(filteredRows,S.q,S.truncated);if(!plan.inputValid){host.innerHTML='<div class="pc-state pc-warn">'+esc(plan.reason)+'</div>';return;}
+    var visible=plan.items;
+    var statusText=!plan.items.length?'لا توجد مواد لاحتساب الخطة':plan.covered?'الخطة مغطاة وفق البيانات المعروفة':plan.confident?'المخزون الحالي لا يغطي الخطة':'لا يمكن تأكيد التغطية — توجد بيانات غير مكتملة أو ملتبسة';
+    var status=!plan.items.length?'<span class="pc-bad">'+statusText+'</span>':plan.covered?'<span class="pc-good">'+statusText+'</span>':'<span class="pc-bad">'+statusText+'</span>';
+    var productName=selectedLabel()||('المنتج #'+S.selectedId);
+    var warnings=plan.reasons.length?'<div class="pc-state pc-warn">'+plan.reasons.map(esc).join('، ')+'</div>':'';
+    var filter='<div class="pc-filter pc-state"><div class="pc-filter-head"><strong>فئة المادة (used_product_category_id)</strong><button type="button" class="btn btn-outline" id="pc-clear-cats">الكل / إعادة الضبط</button><span>المحدد: '+fmt(selected.length)+' من '+fmt(choices.length)+'</span></div><input id="pc-category-search" class="input" placeholder="ابحث بمعرف الفئة أو اسمها" autocomplete="off"><div id="pc-category-options">'+choices.map(function(c,i){return '<label data-category-label="'+esc((c.label+' '+c.key).toLowerCase())+'"><input type="checkbox" data-cat-index="'+i+'"'+(selected.indexOf(c.key)>=0?' checked':'')+'> '+esc(c.label)+' <span class="pc-note">'+(c.key.indexOf('__')===0?'':'#'+esc(c.key))+'</span></label>';}).join('')+'</div></div>';
+    var excludedRows={};(S.rows||[]).forEach(function(r){if(S.excludedMaterialIds.indexOf(String(r.used_product_id))>=0)excludedRows[String(r.used_product_id)]=r;});
+    var excludeUi='<div class="pc-filter pc-state"><div class="pc-filter-head"><strong>استبعاد مواد من العرض والحساب</strong><span>المستبعد: '+fmt(S.excludedMaterialIds.length)+'</span>'+(S.excludedMaterialIds.length?'<button type="button" class="btn btn-outline" id="pc-restore-all">إعادة كل المواد</button>':'')+'</div><div class="pc-note">اضغط «استبعاد» بجانب المادة في الجدول؛ يظل الاستبعاد محفوظاً لهذا المنتج.</div><div class="pc-excluded-list">'+S.excludedMaterialIds.map(function(id){var r=excludedRows[id];return '<span class="pc-excluded-item">'+esc(r?r.used_product_name:'مادة')+' #'+esc(id)+' <button type="button" class="btn btn-outline pc-restore-material" data-material-id="'+esc(id)+'">إعادة</button></span>';}).join('')+'</div></div>';
+    var rows=visible.map(function(it){var r=it.row,capacityNote=it.state==='ambiguous'?'ملتبس بسبب تكرار المعرف':it.state==='inconsistent'?'ملتبس بسبب اختلاف قيم المخزون':'—',metricCap=metricCapacity(it.capacity);return '<tr><td>'+esc(r.used_product_name||'—')+' <span class="pc-note">#'+esc(r.used_product_id)+'</span><button type="button" class="btn btn-outline pc-exclude-btn" data-exclude-id="'+esc(r.used_product_id)+'">استبعاد</button></td><td>'+esc(r.used_product_category==null||String(r.used_product_category).trim()===''?'غير مصنف':r.used_product_category)+'</td><td class="pc-num">'+displayQty(r.current_stock)+'</td><td class="pc-num">'+(it.needed==null?'غير محسوب':fmt(it.needed))+'</td><td class="pc-num">'+(it.shortfall==null?'غير محسوب':fmt(it.shortfall))+'</td><td class="pc-num">'+(it.capacity==null?capacityNote:fmt(it.capacity))+'</td><td class="pc-num">'+(metricCap==null?'غير متاحة':fmt(metricCap)+' '+esc(productMetricUnit()))+'</td></tr>';}).join('');
+    host.innerHTML='<div class="pc-report-tools"><button id="pc-print-report" type="button" class="btn btn-outline">طباعة الملخص</button><button id="pc-copy-report-image" type="button" class="btn btn-outline">نسخ الملخص كصورة</button><span id="pc-export-status" class="pc-note pc-export-status" role="status"></span></div>'+
+      '<section id="pc-management-report" class="pc-report"><div class="pc-report-header"><div><div class="pc-report-title">ملخص القدرة الإنتاجية</div><div class="pc-note">توب كيميكال · '+esc(new Date().toLocaleDateString('en-GB'))+'</div></div><div class="pc-note">تقرير للإدارة</div></div>'+ 
+      '<div class="pc-summary-grid"><div class="pc-summary-item"><div class="pc-summary-label">المنتج المصنع</div><div class="pc-summary-value">'+esc(productName)+'</div><div class="pc-note pc-summary-sub">معرف التصنيع: #'+esc(S.selectedId)+'</div></div><div class="pc-summary-item"><div class="pc-summary-label">كمية الإنتاج المخططة</div><div class="pc-summary-value pc-num">'+fmt(plan.q)+'</div></div><div class="pc-summary-item"><div class="pc-summary-label">الحد الأقصى المتاح وفق مخزون المواد</div><div class="pc-summary-value pc-num">'+(plan.capacity==null?'غير متاحة':fmt(plan.capacity))+'</div><div class="pc-note pc-summary-sub">بالعبوة · '+(plan.confident?'قدرة نظرية حسب البيانات الحالية':'تقدير مؤقت؛ راجع حالة الخطة')+'</div></div><div class="pc-summary-item"><div class="pc-summary-label">الكمية الحالية ('+esc(S.productUnit||'عبوة')+')</div><div class="pc-summary-value pc-num">'+(S.productCurrentQuantity==null?'غير متاحة':fmt(S.productCurrentQuantity))+'</div><div class="pc-note pc-summary-sub">product_current_quantity.current_qty</div></div><div class="pc-summary-item"><div class="pc-summary-label">الكمية الحالية بالمقياس ('+esc(productMetricUnit())+')</div><div class="pc-summary-value pc-num">'+(currentQtyMetric()==null?'غير متاحة':fmt(currentQtyMetric()))+'</div><div class="pc-note pc-summary-sub">current_qty ÷ product_unit_metric ('+(S.productUnitMetric==null?'غير متاح':esc(S.productUnitMetric))+')</div></div></div>'+ 
+      '<div class="pc-kpi-title">المؤشرات الرئيسية</div><div class="pc-cards">'+card('الكمية المخططة',fmt(plan.q))+card('حالة الخطة',status)+card('الكمية الحالية بالمقياس ('+esc(productMetricUnit())+')',currentQtyMetric()==null?'غير متاحة':fmt(currentQtyMetric()),'current_qty ÷ product_unit_metric')+'</div>'+filter+excludeUi+
+      '<div class="pc-filter-head"><strong>جدول المواد بعد التصفية</strong><span>الصفوف الظاهرة: '+fmt(visible.length)+' من '+fmt(plan.items.length)+'</span></div>'+
+      '<div class="pc-table-wrap"><table class="pc-table"><thead><tr><th>المادة</th><th>الفئة</th><th>المخزون المتاح</th><th>احتياج الخطة</th><th>العجز</th><th>القدرة (عبوة)</th><th>القدرة بالمقياس ('+esc(productMetricUnit())+')</th></tr></thead><tbody>'+(rows||'<tr><td colspan="7">لا توجد مواد لهذا المنتج.</td></tr>')+'</tbody></table></div></section>'+warnings+
+      '<div class="pc-state"><strong>بيانات مصدرية من العرض</strong><br>الإنتاج التاريخي: '+sourceValues('total_produced',filteredRows)+' · الاستخدام التاريخي: '+sourceValues('total_used',filteredRows)+' · production_capability كما وفرها العرض: '+sourceValues('production_capability',filteredRows)+'<div class="pc-note">يُحسب احتياج الخطة من required_qty_per_unit. القدرة بالمقياس = القدرة بالعبوة ÷ product_unit_metric. لا يتضمن الحساب حجز مخزون أو قيود تشغيل.</div></div>'+ 
+      (S.truncated?'<div class="pc-state pc-warn">عُرض أول 1000 صف فقط؛ النتائج والقدرة غير مكتملتين.</div>':'');
+    var printButton=document.getElementById('pc-print-report');if(printButton)printButton.addEventListener('click',function(){window.print();});
+    var imageButton=document.getElementById('pc-copy-report-image');if(imageButton)imageButton.addEventListener('click',function(){copyManagementReportImage(plan,statusText,productName);});
+    var clear=document.getElementById('pc-clear-cats');if(clear)clear.addEventListener('click',function(){S.categories=[];persist();renderPanels();});
+    var restoreAll=document.getElementById('pc-restore-all');if(restoreAll)restoreAll.addEventListener('click',function(){S.excludedMaterialIds=[];S.excludedByProduct[S.selectedId]=[];persist();renderPanels();});
+    host.querySelectorAll('[data-exclude-id]').forEach(function(button){button.addEventListener('click',function(){toggleExcludedMaterial(this.getAttribute('data-exclude-id'));});});
+    host.querySelectorAll('.pc-restore-material').forEach(function(button){button.addEventListener('click',function(){toggleExcludedMaterial(this.getAttribute('data-material-id'));});});
+    var categorySearch=document.getElementById('pc-category-search');if(categorySearch)categorySearch.addEventListener('input',function(){var term=this.value.trim().toLowerCase();host.querySelectorAll('[data-category-label]').forEach(function(el){el.style.display=!term||el.getAttribute('data-category-label').indexOf(term)>=0?'':'none';});});
+    host.querySelectorAll('input[data-cat-index]').forEach(function(el){el.addEventListener('change',function(){var c=choices[Number(this.getAttribute('data-cat-index'))];if(this.checked){if(S.categories.indexOf(c.key)<0)S.categories.push(c.key);}else S.categories=S.categories.filter(function(k){return k!==c.key;});persist();renderPanels();});});
+  }
+  function copyManagementReportImage(plan,statusText,productName) {
+    var imageRows=plan.items.slice(0,40), tableTop=435, headerHeight=42, rowHeight=42;
+    var canvas=document.createElement('canvas');canvas.width=1400;canvas.height=tableTop+headerHeight+Math.max(1,imageRows.length)*rowHeight+76;
+    var ctx=canvas.getContext('2d');if(!ctx){setExportStatus('تعذر إنشاء الصورة.');return;}
+    ctx.fillStyle='#f3f6fa';ctx.fillRect(0,0,canvas.width,canvas.height);
+    ctx.direction='rtl';ctx.textAlign='right';ctx.textBaseline='top';
+    ctx.fillStyle='#102a43';ctx.font='bold 34px Arial';ctx.fillText('ملخص القدرة الإنتاجية',1320,28);
+    ctx.fillStyle='#526579';ctx.font='18px Arial';ctx.fillText('توب كيميكال · '+new Date().toLocaleDateString('en-GB'),1320,73);
+    function drawCard(x,y,w,h,label,value,sub,fontSize) {
+      ctx.fillStyle='#ffffff';ctx.strokeStyle='#d8e1eb';ctx.lineWidth=2;ctx.beginPath();if(ctx.roundRect)ctx.roundRect(x,y,w,h,16);else ctx.rect(x,y,w,h);ctx.fill();ctx.stroke();
+      ctx.fillStyle='#526579';ctx.font='20px Arial';drawWrapped(ctx,label,x+w-22,y+18,w-44,2,20);
+      ctx.fillStyle='#102a43';ctx.font='bold '+(fontSize||29)+'px Arial';drawWrapped(ctx,String(value),x+w-22,y+57,w-44,Math.max(1,fontSize&&fontSize<24?3:2),fontSize||29);
+      if(sub){ctx.fillStyle='#526579';ctx.font='17px Arial';drawWrapped(ctx,String(sub),x+w-22,y+h-52,w-44,2,17);}
+    }
+    drawCard(1080,112,230,132,'المنتج المصنع',productName,'معرف التصنيع: #'+S.selectedId,22);
+    drawCard(830,112,230,132,'كمية الإنتاج المخططة (عبوة)',fmt(plan.q),'',25);
+    drawCard(580,112,230,132,'الحد الأقصى المتاح (عبوة)',plan.capacity==null?'غير متاحة':fmt(plan.capacity),plan.confident?'حسب مخزون المواد':'تقدير مؤقت',23);
+    drawCard(330,112,230,132,'الكمية الحالية ('+(S.productUnit||'عبوة')+')',S.productCurrentQuantity==null?'غير متاحة':fmt(S.productCurrentQuantity),'product_current_quantity.current_qty',23);
+    var qtyMetric=currentQtyMetric(),metricUnit=productMetricUnit();
+    drawCard(80,112,230,132,'الكمية الحالية بالمقياس ('+metricUnit+')',qtyMetric==null?'غير متاحة':fmt(qtyMetric),'current_qty ÷ product_unit_metric',22);
+    ctx.fillStyle='#102a43';ctx.font='bold 23px Arial';ctx.fillText('المؤشرات الرئيسية',1320,272);
+    drawCard(900,310,410,100,'الكمية المخططة',fmt(plan.q),'',28);
+    drawCard(480,310,400,100,'حالة الخطة',statusText,'',statusText.length>30?20:25);
+    drawCard(60,310,400,100,'الكمية الحالية بالمقياس ('+metricUnit+')',qtyMetric==null?'غير متاحة':fmt(qtyMetric),'current_qty ÷ product_unit_metric',23);
+    ctx.fillStyle='#102a43';ctx.font='bold 23px Arial';ctx.fillText('جدول المواد بعد التصفية',1320,tableTop-34);
+    var columns=[
+      {key:'material',label:'المادة',width:300},{key:'category',label:'الفئة',width:180},
+      {key:'stock',label:'المخزون',width:165},{key:'needed',label:'احتياج الخطة',width:185},
+      {key:'shortfall',label:'العجز',width:160},{key:'capacity',label:'القدرة (عبوة)',width:180},
+      {key:'capacityMetric',label:'القدرة بالمقياس ('+metricUnit+')',width:180}
+    ];
+    var right=1350,left=1350-columns.reduce(function(sum,col){return sum+col.width;},0);
+    ctx.fillStyle='#dce6f0';ctx.fillRect(left,tableTop,1350-left,headerHeight);
+    var cursor=right;columns.forEach(function(col){cursor-=col.width;drawImageCell(ctx,col.label,cursor,tableTop,col.width,headerHeight,true);});
+    imageRows.forEach(function(it,index){
+      var r=it.row,capacityNote=it.state==='ambiguous'?'ملتبس: معرف مكرر':it.state==='inconsistent'?'ملتبس: مخزون مختلف':'—';
+      var capMetric=metricCapacity(it.capacity);
+      var values={material:String(r.used_product_name||'—')+'  #'+String(r.used_product_id==null?'':r.used_product_id),category:r.used_product_category==null||String(r.used_product_category).trim()===''?'غير مصنف':String(r.used_product_category),stock:displayQty(r.current_stock),needed:it.needed==null?'غير محسوب':fmt(it.needed),shortfall:it.shortfall==null?'غير محسوب':fmt(it.shortfall),capacity:it.capacity==null?capacityNote:fmt(it.capacity),capacityMetric:capMetric==null?'غير متاحة':fmt(capMetric)+' '+metricUnit};
+      var y=tableTop+headerHeight+index*rowHeight;ctx.fillStyle=index%2?'#ffffff':'#f8fafc';ctx.fillRect(left,y,1350-left,rowHeight);ctx.strokeStyle='#d8e1eb';ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(left,y+rowHeight);ctx.lineTo(1350,y+rowHeight);ctx.stroke();
+      var x=right;columns.forEach(function(col){x-=col.width;drawImageCell(ctx,values[col.key],x,y,col.width,rowHeight,false);});
+    });
+    if(!imageRows.length){ctx.fillStyle='#ffffff';ctx.fillRect(left,tableTop+headerHeight,1350-left,rowHeight);drawImageCell(ctx,'لا توجد مواد مطابقة للتصفية',left,tableTop+headerHeight,1350-left,rowHeight,false);}
+    var shown=imageRows.length,total=plan.items.length,footer=shown<total?'الصورة تعرض أول '+fmt(shown)+' من '+fmt(total)+' صف؛ الطباعة تتضمن جميع الصفوف.':'إجمالي الصفوف بعد التصفية: '+fmt(total);
+    ctx.fillStyle='#526579';ctx.font='16px Arial';ctx.fillText(footer,1320,tableTop+headerHeight+Math.max(1,imageRows.length)*rowHeight+24);
+    canvas.toBlob(function(blob){
+      if(!blob){setExportStatus('تعذر إنشاء الصورة.');return;}
+      var canCopy=navigator.clipboard&&navigator.clipboard.write&&window.ClipboardItem;
+      var done=imageRows.length<plan.items.length?'تم نسخ الصورة؛ الطباعة تعرض جميع الصفوف.':'تم نسخ الملخص كصورة.';
+      if(canCopy){navigator.clipboard.write([new window.ClipboardItem({'image/png':blob})]).then(function(){setExportStatus(done);}).catch(function(){downloadReportImage(canvas);});}
+      else downloadReportImage(canvas);
+    },'image/png');
+  }
+  function drawImageCell(ctx,value,x,y,w,h,header) {
+    ctx.font=(header?'bold ':'')+'15px Arial';ctx.fillStyle=header?'#243b53':'#102a43';ctx.textAlign='right';ctx.textBaseline='middle';
+    var text=String(value==null?'':value),maxWidth=w-18;
+    while(text.length>1&&ctx.measureText(text).width>maxWidth)text=text.slice(0,-2)+'…';
+    ctx.fillText(text,x+w-9,y+h/2,maxWidth);
+  }
+  function drawWrapped(ctx,text,rightX,y,maxWidth,maxLines,fontSize) {
+    ctx.font='bold '+fontSize+'px Arial';var words=text.split(/\s+/),lines=[],line='';
+    words.forEach(function(word){var next=line?line+' '+word:word;if(line&&ctx.measureText(next).width>maxWidth){lines.push(line);line=word;}else line=next;});if(line)lines.push(line);
+    if(lines.length>maxLines){lines=lines.slice(0,maxLines);var last=lines[maxLines-1];while(last.length&&ctx.measureText(last+'…').width>maxWidth)last=last.slice(0,-1);lines[maxLines-1]=last+'…';}
+    lines.forEach(function(value,i){ctx.fillText(value,rightX,y+i*(fontSize+7));});
+  }
+  function setExportStatus(message){var el=document.getElementById('pc-export-status');if(el)el.textContent=message;}
+  function downloadReportImage(canvas){var link=document.createElement('a'),url=canvas.toDataURL('image/png');link.href=url;link.download='production-capability-summary-'+new Date().toISOString().slice(0,10)+'.png';link.click();setExportStatus('تم تنزيل الملخص كصورة PNG؛ يمكنك إرفاقها أو نسخها.');}
+  function card(label,value,sub) { return '<div class="pc-card"><div class="pc-label">'+label+'</div><div class="pc-value">'+value+'</div>'+(sub?'<div class="pc-note">'+esc(sub)+'</div>':'')+'</div>'; }
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',load);else load();
+</script>
+</body>
+</html>

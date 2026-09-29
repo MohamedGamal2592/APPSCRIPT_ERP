@@ -1,0 +1,554 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Valley Foods — تقرير تصنيع العملاء</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_ValleyFoods_Nav'); ?>
+  <?!= getCompanyThemeCSS_('9940659bd83035d7') ?>
+  <style>
+    @media print {
+      .no-print { display: none !important; }
+      body { background: #fff !important; }
+    }
+    @media print, (min-width: 600px) {
+      .rep-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 14px; table-layout: fixed; }
+      .rep-table th, .rep-table td { border: 1px solid var(--border-color, #e5e7eb); padding: 8px 10px; text-align: right; }
+      .rep-table th { background: var(--bg-subtle, #f8fafc); font-weight: 600; }
+      .rep-table th.grp { text-align: center; }
+      /* Data columns win over the client name: client stays narrow with
+         ellipsis, product gets the room, numbers never wrap. */
+      .rep-table .c-client { width: 92px; max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .rep-table .c-product { min-width: 210px; }
+      .rep-table .c-unit { width: 52px; }
+      .rep-table td.num, .rep-table th.num { white-space: nowrap; }
+    }
+    .rep-filters { display: flex; flex-wrap: wrap; gap: 0 12px; align-items: flex-end; }
+    .rep-filters > div { flex: 1; min-width: 200px; }
+    .rep-checks { display: flex; flex-wrap: wrap; gap: 4px 16px; align-items: center; padding-bottom: 12px; }
+    .rep-checks .grp-label { font-size: 13px; color: var(--text-muted, #6b7280); font-weight: 600; }
+    .rep-checks label { display: flex; align-items: center; gap: 6px; font-size: 14px; }
+  </style>
+</head>
+<body>
+  <div id="vf-root"></div>
+
+  <script>
+    var params = new URLSearchParams(window.location.search);
+    var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+    var scriptUrl = window.scriptUrl || '/';
+    /* [S23] Filter state comes from the server's copy of the query string:
+       window.location.search is empty inside the Apps Script iframe. */
+    var PAGE_PARAMS = <?!= pageParams ?>;
+    var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+    var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('9940659bd83035d7') ?>';
+    var COMPANY_PAGES = <?!= companyPages ?>;
+    var CURRENT_ACTION = '<?!= currentAction ?>';
+    var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+
+    function companyCall(moduleAction, data) {
+      return API.call('company_action', {
+        target_system: '9940659bd83035d7',
+        module_action: moduleAction,
+        data: data || {}
+      }, SESSION_TOKEN);
+    }
+    function esc(v) { return FMT.escape(v); }
+    function money(n) {
+      return Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    }
+    function qty(n) {
+      return Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 3 });
+    }
+    function fmtDate(v) {
+      if (!v) return '-';
+      var d = (v instanceof Date) ? v : new Date(v);
+      if (isNaN(d.getTime())) return String(v);
+      var p = function (n) { return n < 10 ? '0' + n : '' + n; };
+      return p(d.getDate()) + '/' + p(d.getMonth() + 1) + '/' + d.getFullYear();
+    }
+  </script>
+
+  <script>
+  (function () {
+    var DATA = null;
+    var OPTS = { clients: [], products: [], op_types: [], statuses: [] };
+    /* [S23] Initial filters from PAGE_PARAMS (server), never window.location. */
+    var F_CLIENT = pageParam_('client'), F_PRODUCT = pageParam_('product');
+    var DATE_FROM = pageParam_('from'), DATE_TO = pageParam_('to');
+    var F_OPS = {}, F_STATUS = {};
+    var LOAD_SEQ = 0;
+    /* Filter-bar rebuild guard: rebuilding #rep-filter on every data load
+       destroys the focused input and closes open combo/date popups mid-typing.
+       The bar re-renders only when the option lists themselves change. */
+    var FILTER_SIG = null;
+
+    function pageParam_(k) {
+      try {
+        var pp = (typeof PAGE_PARAMS !== 'undefined' && PAGE_PARAMS) || {};
+        var v = pp[k];
+        return (v === undefined || v === null) ? '' : String(v);
+      } catch (e) { return ''; }
+    }
+
+    function syncFilterUrl() {
+      try {
+        var q = new URLSearchParams(window.location.search);
+        [['from', DATE_FROM], ['to', DATE_TO], ['client', F_CLIENT], ['product', F_PRODUCT]].forEach(function (pair) {
+          if (pair[1]) q.set(pair[0], pair[1]); else q.delete(pair[0]);
+        });
+        var next = window.location.pathname + (q.toString() ? '?' + q.toString() : '') + window.location.hash;
+        history.replaceState(history.state || {}, '', next);
+      } catch (e) {}
+    }
+
+    function resolveOption(options, value) {
+      var wanted = String(value || '').trim().toLowerCase();
+      if (!wanted) return '';
+      for (var i = 0; i < (options || []).length; i++) {
+        var o = options[i] || {};
+        var v = String(o.value == null ? '' : o.value).trim();
+        var l = String(o.label == null ? '' : o.label).trim();
+        if (v.toLowerCase() === wanted || l.toLowerCase() === wanted) return v;
+      }
+      return '';
+    }
+
+    function normOpts(list) {
+      return (list || []).map(function (p) {
+        if (p && typeof p === 'object') {
+          var v = (p.value != null && p.value !== '') ? p.value : (p.id != null ? p.id : '');
+          return { value: v, label: String(p.label || p.name_ar || p.name || v) };
+        }
+        return { value: p, label: String(p) };
+      }).filter(function (o) { return String(o.value).trim() !== ''; });
+    }
+
+    function renderApp() {
+      UIC.appShell('vf-root', {
+        companyLogoUrl: COMPANY_LOGO_URL,
+        companyLogoHref: scriptUrl + '?action=vf_dashboard&sessionToken=' + SESSION_TOKEN,
+        companyLogoTitle: 'Valley Foods',
+        breadcrumb: 'Valley Foods / الإنتاج / تقرير تصنيع العملاء',
+        contentId: 'vf-rep-content',
+        menuGroups: (window.VALLEYFOODS_MENU || [])
+      });
+      document.getElementById('vf-rep-content').innerHTML =
+        '<div class="vf-card">' +
+          '<div class="vf-card-header">' +
+            '<h3>تقرير تصنيع العملاء — ملخص الفترة</h3>' +
+            '<div class="no-print" style="display:flex;gap:8px;align-items:center;">' +
+              '<button class="btn btn-outline" onclick="MFGREP_PAGE.printReport()">🖨 طباعة</button>' +
+              '<button class="btn btn-outline" onclick="MFGREP_PAGE.exportExcel()">⬇ تصدير</button>' +
+              '<a class="btn btn-outline" href="' + scriptUrl + '?action=vf_mfg_orders&sessionToken=' + SESSION_TOKEN + '" onclick="UIC.navTo(event, this.getAttribute(\'href\'))">↩ أوامر التصنيع</a>' +
+            '</div>' +
+          '</div>' +
+          '<div class="vf-card-body">' +
+            '<div id="rep-filter" class="no-print"></div>' +
+            '<div id="rep-body"><p class="vf-text-muted">جاري التحميل...</p></div>' +
+          '</div>' +
+        '</div>';
+      loadReport();
+    }
+
+    function checkedValues(name) {
+      var out = [];
+      try {
+        var boxes = document.querySelectorAll('input[data-mfgrep-check="' + name + '"]');
+        for (var i = 0; i < boxes.length; i++) if (boxes[i].checked) out.push(boxes[i].value);
+      } catch (e) {}
+      return out;
+    }
+
+    function currentFilters() {
+      return {
+        from: DATE_FROM, to: DATE_TO,
+        client_ids: F_CLIENT ? [F_CLIENT] : [],
+        product_ids: F_PRODUCT ? [F_PRODUCT] : [],
+        op_types: checkedValues('op'),
+        statuses: checkedValues('st')
+      };
+    }
+
+    function renderFilter() {
+      var host = document.getElementById('rep-filter');
+      if (!host) return;
+      /* Remember who had focus (and caret) so a rebuild never strands the
+         user mid-typing in a combo search or date field. */
+      var focusBack = null;
+      try {
+        var ae = document.activeElement;
+        if (ae && host.contains(ae) && ae.id) {
+          focusBack = { id: ae.id, s: ae.selectionStart, e: ae.selectionEnd };
+        }
+      } catch (e) {}
+      var opBoxes = (OPTS.op_types || []).map(function (t) {
+        return '<label><input type="checkbox" data-mfgrep-check="op" value="' + esc(t) + '"' +
+          (F_OPS[t] === false ? '' : ' checked') + '> ' + esc(t) + '</label>';
+      }).join('');
+      var stBoxes = (OPTS.statuses || []).map(function (s) {
+        return '<label><input type="checkbox" data-mfgrep-check="st" value="' + esc(s) + '"' +
+          (F_STATUS[s] ? ' checked' : '') + '> ' + esc(s) + '</label>';
+      }).join('');
+      host.innerHTML = UIC.dateRangeBar('rep-date', {
+        label: 'فترة أوامر التصنيع',
+        from: DATE_FROM, to: DATE_TO,
+        onchange: 'MFGREP_PAGE.applyDateFilter()',
+        onclear: 'MFGREP_PAGE.clearDateFilter()'
+      }) +
+      '<div class="rep-filters">' +
+        '<div>' + UIC.combo({ key: 'rep-client', label: 'العميل', options: OPTS.clients, value: F_CLIENT, placeholder: 'كل العملاء' }) + '</div>' +
+        '<div>' + UIC.combo({ key: 'rep-product', label: 'الصنف المنتج', options: OPTS.products, value: F_PRODUCT, placeholder: 'كل الأصناف' }) + '</div>' +
+        '<div style="flex:0 0 auto;padding-bottom:12px;"><button class="btn btn-outline" onclick="MFGREP_PAGE.clearPartyFilters()">✕ مسح العميل/الصنف</button></div>' +
+      '</div>' +
+      '<div class="rep-filters">' +
+        '<div class="rep-checks"><span class="grp-label">نوع العملية:</span>' + opBoxes + '</div>' +
+        '<div class="rep-checks"><span class="grp-label">الحالة:</span>' + stBoxes + '</div>' +
+      '</div>';
+      /* UIC.comboPick dispatches change on the hidden input when a choice is picked. */
+      ['rep-client', 'rep-product'].forEach(function (id) {
+        var el = document.getElementById(id);
+        if (el) el.addEventListener('change', onPartyFilterChange);
+      });
+      var boxes = host.querySelectorAll('input[data-mfgrep-check]');
+      for (var i = 0; i < boxes.length; i++) boxes[i].addEventListener('change', onCheckFilterChange);
+      if (focusBack) {
+        try {
+          var back = document.getElementById(focusBack.id);
+          if (back) {
+            back.focus();
+            if (focusBack.s != null && back.setSelectionRange) {
+              try { back.setSelectionRange(focusBack.s, focusBack.e); } catch (e2) {}
+            }
+          }
+        } catch (e3) {}
+      }
+    }
+
+    /* First paint keeps every op-type on; statuses default to Locked only
+       (completed manufacturing truth — drafts would inflate client totals). */
+    function seedCheckState() {
+      (OPTS.op_types || []).forEach(function (t) { if (F_OPS[t] === undefined) F_OPS[t] = true; });
+      if (!OPTS.statuses) return;
+      var anySt = OPTS.statuses.some(function (s) { return F_STATUS[s]; });
+      if (!anySt) OPTS.statuses.forEach(function (s) { F_STATUS[s] = (s === 'Locked'); });
+    }
+
+    function onPartyFilterChange() {
+      var c = document.getElementById('rep-client');
+      var p = document.getElementById('rep-product');
+      var nc = c ? String(c.value || '') : '';
+      var np = p ? String(p.value || '') : '';
+      if (nc === F_CLIENT && np === F_PRODUCT) return;
+      F_CLIENT = nc; F_PRODUCT = np;
+      syncFilterUrl();
+      load();
+    }
+
+    function onCheckFilterChange() {
+      var ops = checkedValues('op'), sts = checkedValues('st');
+      F_OPS = {}; F_STATUS = {};
+      ops.forEach(function (t) { F_OPS[t] = true; });
+      sts.forEach(function (s) { F_STATUS[s] = true; });
+      load();
+    }
+
+    function applyDateFilter() {
+      var v = UIC.dateRangeValues('rep-date');
+      if (v.from && v.to && v.from > v.to) { UIC.toast('«من تاريخ» بعد «إلى تاريخ»', 'error'); return; }
+      DATE_FROM = v.from; DATE_TO = v.to;
+      syncFilterUrl();
+      renderFilter();
+      load();
+    }
+
+    function clearDateFilter() { DATE_FROM = ''; DATE_TO = ''; syncFilterUrl(); renderFilter(); load(); }
+
+    function clearPartyFilters() {
+      if (!F_CLIENT && !F_PRODUCT) return;
+      F_CLIENT = ''; F_PRODUCT = '';
+      syncFilterUrl();
+      renderFilter(); load();
+    }
+
+    /* quiet: refresh in the background with no blocking overlay. */
+    function load(quiet) {
+      var requestId = ++LOAD_SEQ;
+      if (!quiet) UIC.readSkeleton('rep-body');
+      companyCall('get_valley_mfg_client_report', currentFilters())
+        .then(function (r) {
+          if (requestId !== LOAD_SEQ) return;
+          DATA = r;
+          var fo = (r && r.filter_options) || {};
+          var sig = JSON.stringify([fo.clients, fo.products, fo.op_types, fo.statuses]);
+          if (FILTER_SIG === null || sig !== FILTER_SIG) {
+            FILTER_SIG = sig;
+            OPTS.clients = normOpts(fo.clients || []);
+            OPTS.products = normOpts(fo.products || []);
+            OPTS.op_types = (fo.op_types || []).slice();
+            OPTS.statuses = (fo.statuses || []).slice();
+            F_CLIENT = resolveOption(OPTS.clients, F_CLIENT);
+            F_PRODUCT = resolveOption(OPTS.products, F_PRODUCT);
+            seedCheckState();
+            renderFilter();
+          }
+          renderReport();
+        })
+        .catch(function (e) {
+          if (requestId !== LOAD_SEQ) return;
+          var b = document.getElementById('rep-body');
+          if (b) b.innerHTML = '<div class="empty-state"><span>' + esc((e && e.message) || 'خطأ') + '</span></div>';
+        })
+        .finally(function () { if (requestId === LOAD_SEQ && !quiet) UI.hideSpinner(); });
+    }
+
+    function loadReport() { load(); }
+
+    function kpi(label, value) {
+      return '<div style="padding:12px 14px;border:1px solid var(--border-color,#e5e7eb);border-radius:10px;background:var(--bg-muted,#f8fafc);">' +
+        '<div style="font-size:12px;color:var(--text-muted);margin-bottom:4px;">' + label + '</div>' +
+        '<div style="font-size:20px;font-weight:800;direction:ltr;text-align:right;">' + value + '</div>' +
+      '</div>';
+    }
+
+    /* By-product slot is always shown under these two production tables,
+       even when empty; other op types get one only when lines exist. */
+    var BP_PINNED_OPS = ['تصنيع وتعبئة', 'تصنيع (كميات)'];
+
+    function opTypesInOrder() { return (OPTS.op_types && OPTS.op_types.length ? OPTS.op_types : []); }
+
+    function rowsForOp(t) {
+      return ((DATA && DATA.rows) || []).filter(function (r) {
+        var s = (r.by_op && r.by_op[t]) || { mo_count: 0 };
+        return (Number(s.mo_count) || 0) > 0;
+      });
+    }
+
+    function opProductionTable(t, orows) {
+      var canCost = !!(DATA && DATA.can_see_cost);
+      var body = orows.map(function (r) {
+        var s = (r.by_op && r.by_op[t]) || { produced_qty: 0, batch_cost: 0 };
+        return '<tr>' +
+          '<td class="c-product" data-label="الصنف المنتج">' + esc(r.product_name || '-') + '</td>' +
+          '<td class="c-unit" data-label="الوحدة">' + esc(r.unit || '-') + '</td>' +
+          '<td class="num" data-label="منتج" data-num="' + (Number(s.produced_qty) || 0) + '">' + qty(s.produced_qty) + '</td>' +
+          (canCost ? '<td class="num" data-label="التكلفة" data-num="' + (Number(s.batch_cost) || 0) + '">' + money(s.batch_cost) + '</td>' : '') + '</tr>';
+      }).join('');
+      var tt = ((DATA && DATA.totals && DATA.totals.by_op && DATA.totals.by_op[t]) || { produced_qty: 0, batch_cost: 0 });
+      var foot = '<tr><td colspan="2" data-label="">الإجمالي</td>' +
+        '<td class="num" data-label="منتج" data-num="' + (Number(tt.produced_qty) || 0) + '">' + qty(tt.produced_qty) + '</td>' +
+        (canCost ? '<td class="num" data-label="التكلفة" data-num="' + (Number(tt.batch_cost) || 0) + '">' + money(tt.batch_cost) + '</td>' : '') + '</tr>';
+      return '<div class="table-wrap"><table class="table rep-table"><thead><tr>' +
+        '<th class="c-product">الصنف المنتج</th><th class="c-unit">الوحدة</th>' +
+        '<th class="num">منتج</th>' + (canCost ? '<th class="num">التكلفة</th>' : '') + '</tr></thead>' +
+        '<tbody>' + body + foot + '</tbody></table></div>';
+    }
+
+    function opByproductsHtml(t, orows) {
+      var canCost = !!(DATA && DATA.can_see_cost);
+      var lines = [];
+      orows.forEach(function (r) {
+        var grp = (r.byproducts_by_op && r.byproducts_by_op[t]) || [];
+        grp.forEach(function (m) {
+          lines.push({ client: r.client_name, product: r.product_name, item: m.item, item_name: m.product_name || m.item, qty: m.qty, cost: m.total_cost });
+        });
+      });
+      var pinned = BP_PINNED_OPS.indexOf(t) !== -1;
+      if (!lines.length && !pinned) return '';
+      var totQ = 0, totC = 0;
+      lines.forEach(function (l) { totQ += Number(l.qty) || 0; totC += Number(l.cost) || 0; });
+      var inner = lines.length
+        ? '<div class="table-wrap"><table class="table rep-table"><thead><tr>' +
+          '<th class="c-client">العميل</th><th class="c-product">الصنف المنتج</th>' +
+          '<th class="num">الكمية</th>' +
+          (canCost ? '<th class="num">التكلفة</th>' : '') + '</tr></thead><tbody>' +
+          lines.map(function (l) {
+            return '<tr>' +
+              '<td class="c-client" data-label="العميل" title="' + esc(l.client || '-') + '">' + esc(l.client || '-') + '</td>' +
+              '<td class="c-product" data-label="الصنف المنتج">' + esc(l.item_name || l.item || '-') + '</td>' +
+              '<td class="num" data-label="الكمية" data-num="' + (Number(l.qty) || 0) + '">' + qty(l.qty) + '</td>' +
+              (canCost ? '<td class="num" data-label="التكلفة" data-num="' + (Number(l.cost) || 0) + '">' + money(l.cost) + '</td>' : '') +
+            '</tr>';
+          }).join('') +
+          '<tr><td colspan="2" data-label="">الإجمالي</td>' +
+          '<td class="num" data-label="الكمية" data-num="' + totQ + '">' + qty(totQ) + '</td>' +
+          (canCost ? '<td class="num" data-label="التكلفة" data-num="' + totC + '">' + money(totC) + '</td>' : '') + '</tr>' +
+          '</tbody></table></div>'
+        : '<p class="vf-text-muted">لا توجد منتجات ثانوية.</p>';
+      return '<div style="margin-top:12px;"><h4 style="margin:0 0 8px;">المنتجات الثانوية — ' + esc(t) + '</h4>' + inner + '</div>';
+    }
+
+    /* One production table per operation type, each followed by its own
+       by-products table; then the sum of the tables. */
+    function opSectionsHtml() {
+      var rows = (DATA && DATA.rows) || [];
+      if (!rows.length) return '';
+      return opTypesInOrder().map(function (t) {
+        var orows = rowsForOp(t);
+        if (!orows.length) return '';
+        return '<div class="vf-card" style="margin-bottom:14px;"><div class="vf-card-header"><h3>الإنتاج — ' + esc(t) + '</h3></div>' +
+          '<div class="vf-card-body">' + opProductionTable(t, orows) + opByproductsHtml(t, orows) + '</div></div>';
+      }).join('');
+    }
+
+    function tablesSumHtml() {
+      var canCost = !!(DATA && DATA.can_see_cost);
+      var t = (DATA && DATA.totals) || { produced_qty: 0, batch_cost: 0, by_op: {} };
+      var ops = opTypesInOrder().filter(function (ogn) {
+        var s = (t.by_op && t.by_op[ogn]) || { mo_count: 0 };
+        return (Number(s.mo_count) || 0) > 0;
+      });
+      if (!ops.length) return '';
+      var body = ops.map(function (ogn) {
+        var s = (t.by_op && t.by_op[ogn]) || { produced_qty: 0, batch_cost: 0 };
+        return '<tr><td data-label="نوع العملية">' + esc(ogn) + '</td>' +
+          '<td class="num" data-label="منتج" data-num="' + (Number(s.produced_qty) || 0) + '">' + qty(s.produced_qty) + '</td>' +
+          (canCost ? '<td class="num" data-label="التكلفة" data-num="' + (Number(s.batch_cost) || 0) + '">' + money(s.batch_cost) + '</td>' : '') + '</tr>';
+      }).join('');
+      var foot = '<tr><td data-label="">الإجمالي العام (مجموع الجداول)</td>' +
+        '<td class="num" data-label="منتج" data-num="' + (Number(t.produced_qty) || 0) + '">' + qty(t.produced_qty) + '</td>' +
+        (canCost ? '<td class="num" data-label="التكلفة" data-num="' + (Number(t.batch_cost) || 0) + '">' + money(t.batch_cost) + '</td>' : '') + '</tr>';
+      return '<div class="vf-card" style="margin-bottom:14px;"><div class="vf-card-header"><h3>مجموع الجداول</h3></div>' +
+        '<div class="vf-card-body"><div class="table-wrap"><table class="table rep-table"><thead><tr>' +
+        '<th>نوع العملية</th><th class="num">منتج</th>' + (canCost ? '<th class="num">التكلفة</th>' : '') + '</tr></thead>' +
+        '<tbody>' + body + foot + '</tbody></table></div></div></div>';
+    }
+
+    function materialsHtml() {
+      var rows = (DATA && DATA.rows) || [];
+      var canCost = !!(DATA && DATA.can_see_cost);
+      var lines = [];
+      rows.forEach(function (r) {
+        ((r && r.materials) || []).forEach(function (m) {
+          lines.push({ client: r.client_name, product: r.product_name, item: m.item, unit: m.unit, qty: m.qty, cost: m.total_cost });
+        });
+      });
+      if (!lines.length) return '';
+      /* Aggregate per material item (unit-aware): one row per خامة with
+         summed qty and cost across all clients/products. */
+      var agg = {};
+      lines.forEach(function (l) {
+        var k = String(l.item || '-') + '|' + String(l.unit || '');
+        var a = agg[k] || (agg[k] = { item: l.item, unit: l.unit, qty: 0, cost: 0 });
+        a.qty += Number(l.qty) || 0;
+        a.cost += Number(l.cost) || 0;
+      });
+      var aggLines = Object.keys(agg).map(function (k) { return agg[k]; }).sort(function (a, b) {
+        return String(a.item || '').localeCompare(String(b.item || ''), 'ar');
+      });
+      var totQ = 0, totC = 0;
+      aggLines.forEach(function (a) { totQ += a.qty; totC += a.cost; });
+      var body = aggLines.map(function (a) {
+        return '<tr>' +
+          '<td class="c-product" data-label="الخامة">' + esc(a.item || '-') + '</td>' +
+          '<td class="c-unit" data-label="الوحدة">' + esc(a.unit || '-') + '</td>' +
+          '<td class="num" data-label="الكمية" data-num="' + a.qty + '">' + qty(a.qty) + '</td>' +
+          (canCost ? '<td class="num" data-label="التكلفة" data-num="' + a.cost + '">' + money(a.cost) + '</td>' : '') +
+        '</tr>';
+      }).join('');
+      return '<div class="vf-card" style="margin-bottom:14px;"><div class="vf-card-header"><h3>الخامات المستخدمة</h3></div>' +
+        '<div class="vf-card-body"><div class="table-wrap"><table class="table rep-table"><thead><tr>' +
+        '<th class="c-product">الخامة</th><th class="c-unit">الوحدة</th><th class="num">الكمية</th>' +
+        (canCost ? '<th class="num">التكلفة</th>' : '') + '</tr></thead><tbody>' + body +
+        '<tr><td colspan="2" data-label="">الإجمالي</td>' +
+        '<td class="num" data-label="الكمية" data-num="' + totQ + '">' + qty(totQ) + '</td>' +
+        (canCost ? '<td class="num" data-label="التكلفة" data-num="' + totC + '">' + money(totC) + '</td>' : '') + '</tr>' +
+        '</tbody></table></div></div></div>';
+    }
+
+    function renderReport() {
+      var b = document.getElementById('rep-body');
+      if (!b) return;
+      var rows = (DATA && DATA.rows) || [];
+      var t = (DATA && DATA.totals) || { produced_qty: 0, batch_cost: 0, by_op: {} };
+      var kt = (DATA && DATA.kpi_totals) || { produced_qty: 0, batch_cost: 0, by_op: {} };
+      var kpiOps = (DATA && DATA.kpi_operation_types && DATA.kpi_operation_types.length)
+        ? DATA.kpi_operation_types : ['تصنيع وتعبئة', 'تصنيع (كميات)'];
+      var canCost = !!(DATA && DATA.can_see_cost);
+      var kpiScope = 'تصنيع وتعبئة + تصنيع (كميات)';
+      var kpis =
+        '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:14px;">' +
+          kpi('إجمالي المنتج (' + kpiScope + ')', qty(kt.produced_qty)) +
+          kpiOps.filter(function (ogn) {
+            var s = (kt.by_op && kt.by_op[ogn]) || { mo_count: 0 };
+            return (Number(s.mo_count) || 0) > 0;
+          }).map(function (ogn) {
+            var s = (kt.by_op && kt.by_op[ogn]) || { produced_qty: 0, batch_cost: 0 };
+            return kpi('منتج — ' + ogn, qty(s.produced_qty)) +
+              (canCost ? kpi('تكلفة — ' + ogn + ' (ضمن نطاق مؤشرات التصنيع)', money(s.batch_cost)) : '');
+          }).join('') +
+          (canCost ? kpi('إجمالي التكلفة (' + kpiScope + ')', money(kt.batch_cost)) : '') +
+        '</div>';
+
+      var hasFilter = DATE_FROM || DATE_TO || F_CLIENT || F_PRODUCT;
+      var emptyText = hasFilter ? 'لا توجد أوامر مطابقة' : 'لا توجد أوامر';
+      var main = rows.length
+        ? opSectionsHtml() + tablesSumHtml() + materialsHtml()
+        : '<div class="empty-state"><span>' + esc(emptyText) + '</span></div>';
+
+      /* Hidden per-(client, product, op) table: the Excel export source.
+         Toolbar off — never seen. */
+      var xhead = [{ label: 'العميل', col: 'text' }, { label: 'الصنف المنتج', col: 'text' }, 'الوحدة',
+        { label: 'نوع العملية', col: 'text' }, { label: 'منتج', numeric: true }];
+      if (canCost) xhead.push({ label: 'التكلفة', numeric: true });
+      var opTypes = opTypesInOrder();
+      var xbody = [];
+      rows.forEach(function (r) {
+        opTypes.forEach(function (ogn) {
+          var s = (r.by_op && r.by_op[ogn]) || { mo_count: 0, produced_qty: 0, batch_cost: 0 };
+          if (!(Number(s.mo_count) > 0)) return;
+          var line = [esc(r.client_name || '-'), esc(r.product_name || '-'), esc(r.unit || '-'), esc(ogn),
+            '<span class="num">' + qty(s.produced_qty) + '</span>'];
+          if (canCost) line.push('<span class="num">' + money(s.batch_cost) + '</span>');
+          xbody.push(line);
+        });
+      });
+      var hidden = rows.length ? '<div style="display:none;">' + UIC.dataTable('mfgrep-tbl', {
+        headers: xhead, rows: xbody, emptyText: emptyText, title: 'تقرير تصنيع العملاء',
+        autoPage: false, searchable: false, exportXlsx: false, printable: false
+      }) + '</div>' : '';
+
+      b.innerHTML = kpis + main + hidden +
+        '<p class="vf-text-muted" style="margin-top:14px;font-size:12px;">' +
+          'الكمية المنتجة = مجموع actual_qty لأوامر الحالة المحددة في الفترة. الخامات من بنود أوامر التصنيع. ' +
+          'التكاليف تظهر فقط للمصرح لهم بإظهار التكاليف.' +
+        '</p>';
+    }
+
+    function printReport() { window.print(); }
+
+    /* UIC.exportExcel reads the hidden table's store, so the sheet it writes
+       is exactly the pivot table — including the totals row. */
+    function exportExcel() {
+      var st = (window.__dtStore || {})['mfgrep-tbl'];
+      if (!st || !(st.rows || []).length) { UIC.toast('لا توجد بيانات للتصدير', 'error'); return; }
+      UIC.exportExcel('mfgrep-tbl');
+    }
+
+    window.MFGREP_PAGE = {
+      applyDateFilter: applyDateFilter,
+      clearDateFilter: clearDateFilter,
+      clearPartyFilters: clearPartyFilters,
+      printReport: printReport,
+      exportExcel: exportExcel
+    };
+
+    /* Another device's change to the manufacturing ledger arrives on its own.
+       The poll reads timestamps from cache, never a spreadsheet, and stands
+       down while the tab is hidden. */
+    document.addEventListener('DOMContentLoaded', function () {
+      UIC.Live.watchPage({
+        call: companyCall,
+        page: 'vf_mfg_orders',
+        onChange: function () { UIC.Live.arrive(function () { load(true); }); }
+      });
+    });
+
+    document.addEventListener('DOMContentLoaded', renderApp);
+  })();
+  </script>
+</body>
+</html>
