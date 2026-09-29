@@ -1,0 +1,125 @@
+// P8 parity proof (clone == Top Light) — OWNER RUNS in the Apps Script editor after
+// `clasp push` (scratch file, run etParity_, then delete the file).
+//
+// It never writes to the Top Light spreadsheet: it makes a Drive COPY, renames the
+// copy's tabs/headers to the erp_test names, runs every read action on both sides
+// with the same inputs (Appendix 3) and diffs the JSON. The copy is trashed at the end.
+//
+// P9 extension: when ErpTest exposes setFlag_, every ErpTest call is made twice on
+// the copy — ET_SJS_READ=false and ET_SJS_READ=true — and both must equal Top Light.
+//
+// Expected, explained differences (report them, do not "fix" them):
+//  * OD-A: erp_test stock is computed live and skips soft-deleted transaction rows;
+//    Top Light's current_products formula counts every row. On a sheet with no
+//    soft-deleted purchase/sales/return rows there is no difference.
+//  * P8 exception: get_*product_movement / get_*income_statement may differ only by
+//    the manufacturing key mfgExtra: 0 (also get_*financial_position, which embeds
+//    the income-statement summary per plan 7.7).
+
+var ET_PARITY_TL_ID = '1xIGriBRv61Mvchv5xezQkxi7pnS64yH5ITwZrk3DjJ4';
+var ET_PARITY_IGNORE = { now: true, created_at: true, asof: true };
+var ET_PARITY_TABS = ['products', 'categories', 'customer_vendor', 'chart_of_accounts', 'current_products', 'purchasing_costing',
+  'product_purchasing', 'sales_invoices', 'sales_products', 'sales_returns', 'sales_offer', 'sales_offer_products',
+  'cash_bank_movement', 'box_account_codes'];
+
+function etParity_() {
+  var copy = DriveApp.getFileById(ET_PARITY_TL_ID).makeCopy('ET_PARITY_' + Date.now());
+  var copyId = copy.getId();
+  try {
+    var ss = SpreadsheetApp.openById(copyId);
+    // 1. rename tabs (B3) and row-1 headers (ET_HEADER_MAP: TL header -> ET header)
+    ET_PARITY_TABS.forEach(function (t) {
+      var sh = ss.getSheetByName('top_light_' + t);
+      if (!sh) return;
+      sh.setName('erp_test_' + t);
+      var map = ET_HEADER_MAP['erp_test_' + t] || {};
+      var lc = sh.getLastColumn();
+      if (!lc || !Object.keys(map).length) return;
+      var hdr = sh.getRange(1, 1, 1, lc).getValues()[0];
+      var changed = hdr.map(function (h) { var k = String(h).trim(); return map[k] !== undefined ? map[k] : h; });
+      sh.getRange(1, 1, 1, lc).setValues([changed]);
+    });
+    // 2. empty manufacture tabs (as P2)
+    [['erp_test_manufacture_orders', ['unique_id', 'id', 'mo_number', 'mo_date', 'product_id', 'planned_qty', 'produced_qty', 'materials_cost', 'extra_cost', 'total_cost', 'unit_cost', 'production_status', 'completion_date', 'completed_by', 'cancelled_at', 'cancelled_by', 'notes', 'approval_status', 'approval', 'approval_time', 'user', 'created_at', 'updated_at', 'deleted_at', 'deleted_by', 'version']],
+     ['erp_test_manufacture_lines', ['unique_id', 'id', 'mo_unique_id', 'product_id', 'planned_qty', 'consumed_qty', 'unit_cost', 'total_cost', 'notes', 'user', 'created_at', 'updated_at', 'deleted_at', 'deleted_by', 'version']]
+    ].forEach(function (d) { if (!ss.getSheetByName(d[0])) ss.insertSheet(d[0]).getRange(1, 1, 1, d[1].length).setValues([d[1]]); });
+    SpreadsheetApp.flush();
+
+    var su = { email: 'parity@local', isSuperAdmin: true, company: '37fc50edf1424abd' };
+    var tlSu = { email: 'parity@local', isSuperAdmin: true, company: '8df5c89a117fe9a5' };
+    // "first" ids, read from Top Light at the start of the run (Appendix 3)
+    var tl = SpreadsheetApp.openById(ET_PARITY_TL_ID);
+    function firstOf(tab, col) {
+      var sh = tl.getSheetByName(tab); var v = sh.getDataRange().getValues(); var i = v[0].map(String).indexOf(col);
+      return v.length > 1 && i !== -1 ? v[1][i] : '';
+    }
+    var firstPurchase = firstOf('top_light_purchasing_costing', 'unique_id');
+    var firstInvoice = firstOf('top_light_sales_invoices', 'invoice_unique_id');
+    var firstParty = firstOf('top_light_customer_vendor', 'id');
+    var firstProduct = firstOf('top_light_products', 'id');
+    var period = { date_from: '2025-01-01', date_to: '2025-12-31' };
+    var cases = [
+      ['get_products', {}], ['get_parties', {}], ['get_parties', { direction: 'customer' }],
+      ['get_purchasing_headers', { loadAll: true }], ['get_purchasing_options', {}],
+      ['get_purchasing_lines', { parent_id: firstPurchase }], ['get_purchase_print', { purchase_code: firstPurchase }],
+      ['get_sales_headers', { loadAll: true }], ['get_sales_options', {}],
+      ['get_sales_lines', { parent_id: firstInvoice }], ['get_sales_print', { sales_code: firstInvoice }],
+      ['get_sales_costing', { sales_code: firstInvoice }], ['get_sales_returns', { invoice_id: firstInvoice }],
+      ['get_cash_headers', { loadAll: true }], ['get_customer_statement', { customer_id: firstParty }],
+      ['get_sales_offer_headers', { loadAll: true }],
+      ['get_sales_analysis', period], ['get_sales_costing_analysis', period], ['get_income_statement', period],
+      ['get_financial_position', period], ['get_cash_report', {}], ['get_purchase_needs', {}],
+      ['get_product_movement', { product_id: firstProduct }], ['get_kpi_data', {}]
+    ];
+    var modes = (typeof ErpTest.setFlag_ === 'function') ? [false, true] : [false];
+    var diffs = [];
+    cases.forEach(function (c) {
+      var oldName = c[0], newName = c[0].replace(/^(get|add|edit|delete|approve)_/, '$1_et_');
+      var a, aErr = '';
+      try { a = jsonSafe_(TopLight.dispatch_({ module_action: oldName, data: c[1] }, tlSu, ET_PARITY_TL_ID)); } catch (e) { aErr = String(e.message); }
+      modes.forEach(function (flag) {
+        if (typeof ErpTest.setFlag_ === 'function') ErpTest.setFlag_('ET_SJS_READ', flag);
+        var b, bErr = '';
+        try { b = jsonSafe_(ErpTest.dispatch_({ module_action: newName, data: c[1] }, su, copyId)); } catch (e) { bErr = String(e.message); }
+        var tag = newName + ' ' + JSON.stringify(c[1]) + (modes.length > 1 ? ' [ET_SJS_READ=' + flag + ']' : '');
+        if (aErr || bErr) { if (aErr !== bErr) diffs.push({ action: tag, path: '(error)', tl: aErr, et: bErr }); return; }
+        etParityDiff_(a, b, '', tag, diffs, /movement|income_statement|financial_position/.test(newName));
+      });
+    });
+    if (typeof ErpTest.setFlag_ === 'function') ErpTest.setFlag_('ET_SJS_READ', false);
+    var out = { pass: diffs.length === 0, count: diffs.length, diffs: diffs.slice(0, 50) };
+    console.log(JSON.stringify(out));
+    return out;
+  } finally {
+    DriveApp.getFileById(copyId).setTrashed(true);
+  }
+}
+
+function etParityDiff_(a, b, path, action, out, allowMfg) {
+  if (out.length > 200) return;
+  var ta = Object.prototype.toString.call(a), tb = Object.prototype.toString.call(b);
+  if (ta !== tb) { out.push({ action: action, path: path, tl: a, et: b }); return; }
+  if (ta === '[object Array]') {
+    if (a.length !== b.length) out.push({ action: action, path: path + '.length', tl: a.length, et: b.length });
+    for (var i = 0; i < Math.min(a.length, b.length); i++) etParityDiff_(a[i], b[i], path + '[' + i + ']', action, out, allowMfg);
+    return;
+  }
+  if (ta === '[object Object]') {
+    var keys = {};
+    Object.keys(a).forEach(function (k) { keys[k] = true; });
+    Object.keys(b).forEach(function (k) { keys[k] = true; });
+    Object.keys(keys).forEach(function (k) {
+      if (ET_PARITY_IGNORE[k]) return;
+      if (allowMfg && k === 'mfgExtra' && !(k in a) && Number(b[k]) === 0) return;
+      etParityDiff_(a[k], b[k], path + '.' + k, action, out, allowMfg);
+    });
+    return;
+  }
+  if (typeof a === 'string' && typeof b === 'string') {
+    // Names rewritten by the clone (page ids, brand, uid) are not business data.
+    var na = a.replace(/tl_/g, 'et_').replace(/Top Light/g, 'Testing System').replace(/8df5c89a117fe9a5/g, '37fc50edf1424abd');
+    if (na === b) return;
+  }
+  if (typeof a === 'number' && typeof b === 'number' && Math.abs(a - b) < 1e-9) return;
+  if (a !== b) out.push({ action: action, path: path, tl: a, et: b });
+}
