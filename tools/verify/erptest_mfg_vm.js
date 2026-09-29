@@ -141,6 +141,16 @@ const before = rows('erp_test_manufacture_orders').length;
 const replay = call('add_et_manufacture', { request_key: k1, header: { mo_date: '2023-03-01', product_id: F, planned_qty: 5 }, lines: [{ product_id: A, planned_qty: 4 }, { product_id: B, planned_qty: 2 }] });
 ok(replay.status === 'success' && replay.deduped === true && rows('erp_test_manufacture_orders').length === before, 'T-MFG 9: replay returns the committed order, no new row');
 
+/* ── edit then complete: a re-written line generation is completable ── */
+const add3 = call('add_et_manufacture', { request_key: 'MO-KEY-3', header: { mo_date: '2023-03-05', product_id: F, planned_qty: 1 }, lines: [{ product_id: B, planned_qty: 1 }] });
+const l3 = call('get_et_manufacture_lines', { parent_id: 'MO-KEY-3' }).lines;
+const ed3 = call('edit_et_manufacture', { header: { unique_id: 'MO-KEY-3', version: 0, mo_date: '2023-03-05', product_id: F, planned_qty: 1 }, lines: [{ unique_id: l3[0].unique_id, product_id: B, planned_qty: 2 }] });
+ok(add3.status === 'success' && ed3.status === 'success', 'edit an open order');
+const l3b = call('get_et_manufacture_lines', { parent_id: 'MO-KEY-3' }).lines;
+ok(l3b.length === 1 && Number(l3b[0].planned_qty) === 2 && l3b[0].unique_id !== l3[0].unique_id, 'edit replaces the line generation with fresh line ids');
+ok(call('cancel_et_manufacture', { unique_id: 'MO-KEY-3', version: 1 }).status === 'success', 'cancel the edited order (keeps T-STOCK quantities unchanged)');
+throwsWith(function () { call('approve_et_manufacture', { unique_id: 'MO-KEY-2', version: 1 }); }, 'لا يمكن اعتماد', 'approving an already-approved order is refused by the transition table');
+
 /* ── T-STOCK ── */
 qm = call('get_et_manufacture_options', {}).options.product_options;
 ok(qtyOf(qm, A) === 6 && qtyOf(qm, B) === 8 && qtyOf(qm, F) === 5, 'T-STOCK: A = 6, B = 8, F = 5');

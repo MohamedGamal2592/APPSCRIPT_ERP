@@ -96,7 +96,9 @@
     const now = new Date();
     const rows = pricedLines.map(function (l, i) {
       return mfgRowValues_(headers, {
-        unique_id: l.unique_id || uid16_(),
+        // Always a fresh id: edit soft-deletes the previous line generation, and a
+        // reused id would make the key lookup (first match) land on the deleted row.
+        unique_id: uid16_(),
         id: baseId + i,
         mo_unique_id: uid,
         product_id: l.product_id,

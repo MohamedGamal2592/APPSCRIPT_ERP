@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Testing System — التصنيع</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_ErpTest_Nav'); ?>
+  <?!= getCompanyThemeCSS_('37fc50edf1424abd') ?>
+</head>
+<body>
+<div id="tl-root" dir="rtl"></div>
+<script>
+  var params = new URLSearchParams(window.location.search);
+  var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+  var scriptUrl = window.scriptUrl || '/';
+  var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+  var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+  var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('37fc50edf1424abd') ?>';
+  var COMPANY_PAGES = <?!= companyPages ?>;
+  var CURRENT_ACTION = '<?!= currentAction ?>';
+
+  var __options = {};
+  var __headers = [];
+  var __lines = [];
+  var __editingUid = '';
+  var __editingVersion = 0;
+  var __canEdit = false;
+
+  function companyCall(moduleAction, data) {
+    return API.call('company_action', {
+      target_system: '37fc50edf1424abd',
+      module_action: moduleAction,
+      data: data || {}
+    }, SESSION_TOKEN);
+  }
+
+  function num(v) { var n = Number(v); return isNaN(n) ? 0 : n; }
+  function getVal(id) { var el = document.getElementById(id); return el ? el.value : ''; }
+  function setText(id, t) { var el = document.getElementById(id); if (el) el.textContent = t; }
+  function newRequestKey_() {
+    var s = '';
+    for (var i = 0; i < 16; i++) s += Math.floor(Math.random() * 16).toString(16);
+    return s;
+  }
+
+  function load() {
+    UIC.appShell('tl-root', {
+      menuGroups: window.ERPTEST_MENU || [],
+      companyLogoUrl: COMPANY_LOGO_URL,
+      companyLogoHref: scriptUrl + '?action=et_dashboard&sessionToken=' + SESSION_TOKEN,
+      companyLogoTitle: 'النظام التجريبي',
+      breadcrumb: 'النظام التجريبي / التصنيع',
+      contentId: 'tl-content'
+    });
+    renderList();
+  }
+
+  var LOADED_ALL = false;
+  function toggleLoadAll() { LOADED_ALL = !LOADED_ALL; renderList(); }
+
+  function renderList(quiet) {
+    if (!quiet) UIC.readSkeleton('tl-content', { message: [
+      'جاري تحميل أوامر التصنيع...',
+      'لحظة، جاري تجهيز جدول التصنيع...'
+    ] });
+    companyCall('get_et_manufacture_headers', LOADED_ALL ? { loadAll: true } : {})
+      .then(function (r) { __headers = r.headers || []; renderHeadersTable(); })
+      .catch(function (e) { showError(e); })
+      .finally(function () { if (!quiet) UI.hideSpinner(); });
+  }
+
+  function dateOnly(v) { return v ? String(v).slice(0, 10) : '-'; }
+  function isPending(h) { return String(h.approval_status || 'Pending') === 'Pending'; }
+  function isOpen(h) { return String(h.production_status || 'Open') === 'Open'; }
+
+  function renderHeadersTable() {
+    var content = document.getElementById('tl-content');
+    var rows = __headers.map(function (h) {
+      var uid = FMT.escape(h.unique_id || '');
+      var btns = [{ label: '🖨️ طباعة / Print', onclick: "doAction('" + uid + "','print')" }];
+      if (isPending(h) && isOpen(h)) btns.push({ label: '✅ اعتماد / Approve', onclick: "doAction('" + uid + "','approve')" });
+      if (isPending(h) && isOpen(h) && UIC.canFull_()) {
+        btns.push({ label: '✏️ تعديل / Edit', onclick: "doAction('" + uid + "','edit')" });
+        btns.push({ label: '🗑️ حذف / Delete', color: '#dc2626', onclick: "doAction('" + uid + "','delete')" });
+      } else {
+        btns.push({ label: '👁️ عرض / View', onclick: "doAction('" + uid + "','view')" });
+      }
+      if (!isPending(h) && isOpen(h)) btns.push({ label: '🏭 إكمال الإنتاج / Complete', onclick: "doAction('" + uid + "','complete')" });
+      if (isOpen(h) && UIC.canFull_()) btns.push({ label: '⛔ إلغاء / Cancel', color: '#dc2626', onclick: "doAction('" + uid + "','cancel')" });
+      return {
+        mo_number: FMT.escape(String(h.mo_number || '-')),
+        mo_date: dateOnly(h.mo_date),
+        product_name: FMT.escape(String(h.product_name || '-')),
+        planned_qty: FMT.number(h.planned_qty),
+        produced_qty: h.produced_qty === '' || h.produced_qty == null ? '-' : FMT.number(h.produced_qty),
+        total_cost: FMT.number(h.total_cost),
+        unit_cost: FMT.number(h.unit_cost),
+        approval_status: FMT.escape(String(h.approval_status || '-')),
+        production_status: FMT.escape(String(h.production_status || '-')),
+        actions: UIC.actionBtns(btns)
+      };
+    });
+    content.innerHTML = '<div style="display:flex;justify-content:flex-end;margin-bottom:12px;">' +
+      '<button class="btn btn-primary" onclick="openForm(\'\')">+ إضافة أمر تصنيع</button></div>' +
+      UIC.showAllBar({ loadedAll: LOADED_ALL, showAll: 'toggleLoadAll()', showLatest: 'toggleLoadAll()' }) +
+      UIC.dataTable('manufacture-table', {
+        truncated: !LOADED_ALL,
+        showAll: 'toggleLoadAll()',
+        title: 'التصنيع',
+        headers: [
+          { key: 'mo_number', label: 'رقم الأمر' },
+          { key: 'mo_date', label: 'التاريخ' },
+          { key: 'product_name', label: 'المنتج التام' },
+          { key: 'planned_qty', label: 'الكمية المخططة' },
+          { key: 'produced_qty', label: 'الكمية المنتجة' },
+          { key: 'total_cost', label: 'إجمالي التكلفة' },
+          { key: 'unit_cost', label: 'تكلفة الوحدة' },
+          { key: 'approval_status', label: 'الاعتماد' },
+          { key: 'production_status', label: 'حالة الإنتاج' },
+          { key: 'actions', label: 'إجراءات / Actions' }
+        ],
+        rows: rows,
+        emptyText: 'لا توجد أوامر تصنيع'
+      });
+    UIC.initTableSort('manufacture-table');
+  }
+
+  var __optionsPromise = null;
+  function ensureOptions() {
+    if (__optionsPromise) return __optionsPromise;
+    __optionsPromise = companyCall('get_et_manufacture_options')
+      .then(function (r) { __options = r.options || {}; return __options; })
+      .catch(function (e) { __optionsPromise = null; throw e; });
+    return __optionsPromise;
+  }
+
+  function productOptions() { return __options.product_options || []; }
+  function productById(pid) {
+    var list = productOptions();
+    for (var i = 0; i < list.length; i++) if (String(list[i].value) === String(pid)) return list[i];
+    return null;
+  }
+
+  function openForm(uid) {
+    __editingUid = uid || '';
+    var record = null;
+    if (uid) {
+      record = __headers.find(function (h) { return String(h.unique_id) === String(uid); }) || null;
+      if (!record) { UIC.toast('السجل غير موجود — تم تحديث القائمة', 'error'); showList(); return; }
+    }
+    UIC.readSkeleton('tl-content', { message: ['جاري استرجاع المنتجات والأرصدة...'] });
+    ensureOptions()
+      .then(function () { renderForm(record); })
+      .catch(function (e) { showError(e); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function renderForm(record) {
+    var content = document.getElementById('tl-content');
+    __canEdit = !record || (isPending(record) && isOpen(record) && UIC.canFull_());
+    __editingVersion = record ? num(record.version) : 0;
+    var today = new Date().toISOString().slice(0, 10);
+    var prodOpts = productOptions().map(function (p) { return { value: p.value, label: p.label }; });
+    content.innerHTML =
+      '<div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;">' +
+      '<button class="btn btn-outline" onclick="showList()">← عودة</button>' +
+      '<h2 style="margin:0;">' + (record ? (__canEdit ? 'تعديل أمر تصنيع' : 'عرض أمر تصنيع') : 'إضافة أمر تصنيع') + '</h2></div>' +
+      '<form id="manufacture-form">' +
+      '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:0 16px;padding:16px;background:var(--bg-surface);border:1px solid var(--border-color);border-radius:8px;margin-bottom:16px;">' +
+      UIC.field({ key: 'mo_date', label: 'تاريخ الأمر *', type: 'date', value: record ? dateOnly(record.mo_date) : today, required: true }) +
+      UIC.field({ key: 'product_id', label: 'المنتج التام *', type: 'select', options: prodOpts, value: record ? record.product_id : '' }) +
+      UIC.field({ key: 'planned_qty', label: 'الكمية المخططة *', type: 'number', value: record ? record.planned_qty : '', required: true, min: 0, step: 'any' }) +
+      UIC.field({ key: 'extra_cost', label: 'تكاليف إضافية', type: 'number', value: record ? num(record.extra_cost) : 0, min: 0, step: 'any' }) +
+      UIC.field({ key: 'notes', label: 'ملاحظات', type: 'text', value: record ? (record.notes || '') : '' }) +
+      '</div>' +
+      '</form>' +
+      '<div style="display:flex;align-items:center;gap:12px;margin-top:20px;">' +
+      '<h3 style="margin:0;">الخامات</h3>' +
+      (__canEdit ? '<button class="btn btn-outline" onclick="loadTemplate()">تحميل خامات آخر أمر</button>' : '') +
+      '</div>' +
+      '<div class="table-wrap">' +
+      '<table id="lines-table" class="table" style="min-width:600px;"><thead><tr>' +
+      '<th>الخامة</th><th>الرصيد المتاح</th><th>الكمية المخططة</th>' + (__canEdit ? '<th></th>' : '') +
+      '</tr></thead><tbody id="lines-tbody"></tbody></table>' +
+      '</div>' +
+      (__canEdit ? '<div style="margin:12px 0;"><button class="btn btn-outline" onclick="addLine()">+ إضافة خامة</button></div>' : '') +
+      '<div style="padding:12px 16px;background:var(--bg-surface);border:1px solid var(--border-color);border-radius:8px;margin:12px 0;">' +
+      'عدد الخامات: <strong id="materials_count_display">0</strong>' +
+      ' <span style="color:var(--text-muted);">— التكاليف تُحسب على الخادم عند الحفظ</span></div>' +
+      '<div style="margin:16px 0;">' + (__canEdit ? '<button class="btn btn-primary" onclick="saveManufacture()">حفظ</button> ' : '') +
+      '<button class="btn btn-outline" onclick="showList()">إلغاء</button></div>';
+
+    __lines = [];
+    if (record) {
+      companyCall('get_et_manufacture_lines', { parent_id: record.unique_id })
+        .then(function (r) {
+          __lines = (r.lines || []).map(function (l) { return { unique_id: l.unique_id, product_id: l.product_id, planned_qty: l.planned_qty }; });
+          renderLines();
+        })
+        .catch(function (e) { UIC.toast(e.message || 'خطأ', 'error'); });
+    } else {
+      renderLines();
+    }
+  }
+
+  function availableProducts(excludeIndex) {
+    var chosen = {};
+    (__lines || []).forEach(function (l, i) { if (i !== excludeIndex && l.product_id) chosen[String(l.product_id)] = true; });
+    var finished = getVal('product_id');
+    return productOptions().filter(function (p) { return !chosen[String(p.value)] && String(p.value) !== String(finished); });
+  }
+
+  function renderLines() {
+    var html = '';
+    (__lines || []).forEach(function (l, i) {
+      var p = productById(l.product_id);
+      var cell = __canEdit
+        ? '<select class="input" onchange="updateLine(' + i + ', \'product_id\', this.value, true)"><option value="">اختر...</option>' +
+            availableProducts(i).map(function (o) {
+              return '<option value="' + FMT.escape(String(o.value)) + '"' + (String(o.value) === String(l.product_id) ? ' selected' : '') + '>' + FMT.escape(o.label) + '</option>';
+            }).join('') + '</select>'
+        : FMT.escape(p ? p.label : String(l.product_id || '-'));
+      var qty = __canEdit
+        ? '<input class="input" type="number" min="0" step="any" value="' + (l.planned_qty != null ? l.planned_qty : '') + '" oninput="updateLine(' + i + ', \'planned_qty\', this.value, false)">'
+        : FMT.number(l.planned_qty);
+      html += '<tr><td>' + cell + '</td><td>' + FMT.number(p ? p.current_qty : 0) + '</td><td>' + qty + '</td>' +
+        (__canEdit ? '<td><button class="btn btn-outline" style="padding:4px 10px;" onclick="removeLine(' + i + ')">حذف</button></td>' : '') + '</tr>';
+    });
+    var tbody = document.getElementById('lines-tbody');
+    if (tbody) tbody.innerHTML = html;
+    setText('materials_count_display', (__lines || []).filter(function (l) { return l.product_id; }).length);
+  }
+
+  function addLine() { __lines.push({ product_id: '', planned_qty: '' }); renderLines(); }
+  function removeLine(i) { __lines.splice(i, 1); renderLines(); }
+  function updateLine(i, key, value, rerender) { __lines[i][key] = value; if (rerender) renderLines(); else setText('materials_count_display', (__lines || []).filter(function (l) { return l.product_id; }).length); }
+
+  function loadTemplate() {
+    var pid = getVal('product_id');
+    if (!pid) { UIC.toast('اختر المنتج التام أولاً', 'error'); return; }
+    companyCall('get_et_manufacture_template', { product_id: pid })
+      .then(function (r) {
+        var lines = r.lines || [];
+        if (!lines.length) { UIC.toast('لا يوجد أمر سابق لهذا المنتج', 'info'); return; }
+        __lines = lines.map(function (l) { return { product_id: l.product_id, planned_qty: l.planned_qty }; });
+        renderLines();
+      })
+      .catch(function (e) { UIC.toast(e.message || 'خطأ', 'error'); });
+  }
+
+  function saveManufacture() {
+    var btn = document.querySelector('.btn-primary');
+    UI.submitOnce(btn, function () {
+      if (!UIC.validateForm('manufacture-form')) return Promise.reject();
+      var data = UIC.collectForm('manufacture-form');
+      var isEdit = !!__editingUid;
+      var header = {
+        mo_date: data.mo_date, product_id: data.product_id, planned_qty: data.planned_qty,
+        extra_cost: data.extra_cost, notes: data.notes
+      };
+      if (isEdit) { header.unique_id = __editingUid; header.version = __editingVersion; }
+      var lines = (__lines || []).filter(function (l) { return l.product_id; })
+        .map(function (l) { return { unique_id: l.unique_id || '', product_id: l.product_id, planned_qty: l.planned_qty }; });
+      var requestKey = isEdit ? '' : newRequestKey_();
+      return UIC.Live.save({
+        call: companyCall,
+        action: isEdit ? 'edit_et_manufacture' : 'add_et_manufacture',
+        data: { header: header, lines: lines, request_key: requestKey },
+        message: 'تم الحفظ',
+        queueable: false,
+        reload: function () { renderList(true); },
+        onSuccess: function () { renderList(true); }
+      }).catch(function () { /* UIC.Live has toasted */ });
+    });
+  }
+
+  function doAction(uid, action) {
+    if (action === 'print') printManufacture(uid);
+    else if (action === 'approve') approveManufacture(uid);
+    else if (action === 'edit' || action === 'view') openForm(uid);
+    else if (action === 'delete') deleteManufacture(uid);
+    else if (action === 'complete') openCompleteDialog(uid);
+    else if (action === 'cancel') cancelManufacture(uid);
+  }
+
+  function printManufacture(uid) {
+    UIC.openTab(scriptUrl + '?action=et_manufacture_print&mo_code=' + encodeURIComponent(uid) + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN));
+  }
+
+  function headerOf(uid) { return (__headers || []).find(function (x) { return String(x.unique_id) === String(uid); }) || {}; }
+
+  function approveManufacture(uid) {
+    UIC.Live.save({
+      call: companyCall,
+      action: 'approve_et_manufacture',
+      data: { unique_id: uid, version: num(headerOf(uid).version) },
+      onSuccess: function () { renderList(true); },
+      message: 'تم الاعتماد',
+      queueable: false,
+      reload: function () { renderList(true); }
+    }).catch(function () {});
+  }
+
+  function deleteManufacture(uid) {
+    if (!UIC.canFull_()) { UIC.toast('غير مصرح', 'error'); return; }
+    if (!confirm('هل تريد حذف أمر التصنيع؟')) return;
+    UIC.Live.save({
+      call: companyCall,
+      action: 'delete_et_manufacture',
+      data: { unique_id: uid, version: num(headerOf(uid).version) },
+      onSuccess: function () {
+        __headers = (__headers || []).filter(function (x) { return String(x.unique_id) !== String(uid); });
+        renderHeadersTable();
+      },
+      message: 'تم الحذف',
+      queueable: false,
+      reload: function () { renderList(true); }
+    }).catch(function () {});
+  }
+
+  function cancelManufacture(uid) {
+    if (!UIC.canFull_()) { UIC.toast('غير مصرح', 'error'); return; }
+    if (!confirm('هل تريد إلغاء أمر التصنيع؟')) return;
+    UIC.Live.save({
+      call: companyCall,
+      action: 'cancel_et_manufacture',
+      data: { unique_id: uid, version: num(headerOf(uid).version) },
+      onSuccess: function () { renderList(true); },
+      message: 'تم الإلغاء',
+      queueable: false,
+      reload: function () { renderList(true); }
+    }).catch(function () {});
+  }
+
+  var __completeUid = '';
+  var __completeLines = [];
+  function openCompleteDialog(uid) {
+    var h = headerOf(uid);
+    __completeUid = uid;
+    Promise.all([ensureOptions(), companyCall('get_et_manufacture_lines', { parent_id: uid })])
+      .then(function (res) {
+        __completeLines = res[1].lines || [];
+        var today = new Date().toISOString().slice(0, 10);
+        var body =
+          '<form id="complete-form">' +
+          UIC.field({ key: 'produced_qty', label: 'الكمية المنتجة *', type: 'number', value: h.planned_qty, required: true, min: 0, step: 'any' }) +
+          UIC.field({ key: 'completion_date', label: 'تاريخ الإكمال *', type: 'date', value: today, required: true }) +
+          '</form>' +
+          '<div class="table-wrap"><table class="table"><thead><tr><th>الخامة</th><th>مخطط</th><th>الرصيد المتاح</th><th>الكمية المستهلكة</th></tr></thead><tbody>' +
+          __completeLines.map(function (l, i) {
+            var p = productById(l.product_id);
+            return '<tr><td>' + FMT.escape(l.product_name || '-') + '</td><td>' + FMT.number(l.planned_qty) + '</td><td>' +
+              FMT.number(p ? p.current_qty : 0) + '</td><td><input class="input" id="consumed_' + i + '" type="number" min="0" step="any" value="' + num(l.planned_qty) + '"></td></tr>';
+          }).join('') +
+          '</tbody></table></div>';
+        UIC.openModal('complete-modal', { title: 'إكمال الإنتاج — ' + FMT.escape(h.mo_number || ''), body: body, size: 'lg', onSave: 'return submitComplete();' });
+      })
+      .catch(function (e) { UIC.toast(e.message || 'خطأ', 'error'); });
+  }
+
+  function submitComplete() {
+    if (!UIC.validateForm('complete-form')) return Promise.reject();
+    var data = UIC.collectForm('complete-form');
+    var h = headerOf(__completeUid);
+    var lines = __completeLines.map(function (l, i) { return { unique_id: l.unique_id, consumed_qty: getVal('consumed_' + i) }; });
+    return UIC.Live.save({
+      call: companyCall,
+      action: 'complete_et_manufacture',
+      data: { unique_id: __completeUid, version: num(h.version), produced_qty: data.produced_qty, completion_date: data.completion_date, lines: lines },
+      message: 'تم إكمال الإنتاج',
+      queueable: false,
+      reload: function () { renderList(true); },
+      onSuccess: function () { UIC.closeModal('complete-modal', true); __optionsPromise = null; renderList(true); }
+    }).catch(function () {});
+  }
+
+  function showList() { renderList(); }
+
+  UIC.Live.watchPage({
+    call: companyCall,
+    page: 'et_manufacture',
+    onChange: function () { UIC.Live.arrive(function () { renderList(true); }); }
+  });
+
+  function showError(e) {
+    var content = document.getElementById('tl-content');
+    if (content) content.innerHTML = '<div class="empty-state"><span>' + FMT.escape(e.message || 'خطأ') + '</span></div>';
+  }
+
+  load();
+</script>
+</body>
+</html>
