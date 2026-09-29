@@ -7,7 +7,7 @@
  */
 
 const ErpTest = (function () {
-  // P9-P11 feature flags (plan: all false until P12 turns them on).
+  // P9-P11 feature flags, from tools/erptest/flags.json (P12 turns them on in order).
   var ET_SJS_READ = false;
   var ET_SJS_WRITE = false;
   var ET_CLIENT_PACKS = false;

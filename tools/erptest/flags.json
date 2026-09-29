@@ -1,0 +1,6 @@
+{
+  "_note": "P12 rollout. Change one flag, run `node tools/erptest/gen_actions.js`, then `clasp push`. Order: ET_SJS_READ (watch 3 days) -> ET_SJS_WRITE (watch 7 days) -> ET_CLIENT_PACKS. Rollback: set it back to false, regenerate, push.",
+  "ET_SJS_READ": false,
+  "ET_SJS_WRITE": false,
+  "ET_CLIENT_PACKS": false
+}

@@ -35,7 +35,10 @@
 <script>
   var params = new URLSearchParams(window.location.search);
   var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
-  var moCode = params.get('mo_code') || '';
+  /* The iframe URL carries no query string in production; doGet hands the real
+     one over as pageParams. */
+  var PAGE_PARAMS = <?!= pageParams ?>;
+  var moCode = String((PAGE_PARAMS && PAGE_PARAMS.mo_code) || '');
   var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('37fc50edf1424abd') ?>';
 
   function backUrl_() {

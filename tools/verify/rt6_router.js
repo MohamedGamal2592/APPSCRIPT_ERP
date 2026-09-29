@@ -153,7 +153,10 @@ function loadUIC() {
 
 /* ── 4. Only the two pilot pages, and they declare what they hold ────────── */
 
-const PILOTS = ['Company_TopLight_Dashboard.html', 'Company_TopLight_KPI.html'];
+/* The Testing System pages are verbatim clones of the Top Light pilots (erp_test
+   plan P4), so they carry the same registration. */
+const PILOTS = ['Company_TopLight_Dashboard.html', 'Company_TopLight_KPI.html',
+  'Company_ErpTest_Dashboard.html', 'Company_ErpTest_KPI.html'];
 /* UI_Components.html DEFINES register; it does not call it. */
 const SHARED = ['UI_Components.html', 'Client_Helpers.html', 'CSS_Tokens.html'];
 const registeredPages = fs.readdirSync(ROOT)

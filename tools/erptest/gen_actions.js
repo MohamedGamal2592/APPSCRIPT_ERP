@@ -380,9 +380,13 @@ replaceOnce("        purchVal: purchVal,\n", "        purchVal: purchVal,\n     
 }
 
 // ---------- P9 — JSON read layer (flag ET_SJS_READ, default false) ----------
+const FLAGS = JSON.parse(fs.readFileSync(path.join(__dirname, 'flags.json'), 'utf8'));
+['ET_SJS_READ', 'ET_SJS_WRITE', 'ET_CLIENT_PACKS'].forEach((f) => { if (typeof FLAGS[f] !== 'boolean') problems.push('flags.json: ' + f + ' must be true/false'); });
+if (FLAGS.ET_SJS_WRITE && !FLAGS.ET_SJS_READ) problems.push('flags.json: ET_SJS_WRITE needs ET_SJS_READ (P12 order)');
+if (FLAGS.ET_CLIENT_PACKS && !FLAGS.ET_SJS_WRITE) problems.push('flags.json: ET_CLIENT_PACKS needs ET_SJS_WRITE (P12 order)');
 replaceOnce("const ErpTest = (function () {\n",
-  "const ErpTest = (function () {\n  // P9-P11 feature flags (plan: all false until P12 turns them on).\n" +
-  "  var ET_SJS_READ = false;\n  var ET_SJS_WRITE = false;\n  var ET_CLIENT_PACKS = false;\n");
+  "const ErpTest = (function () {\n  // P9-P11 feature flags, from tools/erptest/flags.json (P12 turns them on in order).\n" +
+  "  var ET_SJS_READ = " + FLAGS.ET_SJS_READ + ";\n  var ET_SJS_WRITE = " + FLAGS.ET_SJS_WRITE + ";\n  var ET_CLIENT_PACKS = " + FLAGS.ET_CLIENT_PACKS + ";\n");
 replaceOnce("  function erpTestThemeCss_() {",
   fs.readFileSync(path.join(__dirname, 'sjs_read.inc.js'), 'utf8') + "\n  function erpTestThemeCss_() {");
 // 9.4 — the one switch: tlDbList_ serves packs.
