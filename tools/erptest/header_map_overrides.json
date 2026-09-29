@@ -1,0 +1,43 @@
+{
+  "_note": "Manual TL-logical -> ET-physical mappings the auto algorithm cannot infer (Arabic->English renames, underscore/prefix differences). Proposed by the agent 2026-09-29, pending owner confirmation. Applied by build_header_map.js on top of the auto map.",
+  "erp_test_sales_products": {
+    "top_lightsales_header_id": "erp_test_sales_header_id",
+    "top_lightsales_invoices_client": "erp_test_sales_invoices_client"
+  },
+  "erp_test_sales_returns": {
+    "top_lightsales_invoices_id": "erp_test_sales_invoices_id",
+    "top_lightsales_invoices_client": "erp_test_sales_invoices_client",
+    "top_lightreturn_date": "erp_test_return_date",
+    "top_lightsales_products_id": "erp_test_sales_products_id",
+    "top_lightreturn_qty": "erp_test_return_qty",
+    "top_lightreturn_discount": "erp_test_return_discount",
+    "top_lightreturn_price": "erp_test_return_price",
+    "top_lightreturn_value": "erp_test_return_value"
+  },
+  "erp_test_sales_offer_products": {
+    "top_lightsales_offer_id": "erp_test_sales_offer_id"
+  },
+  "erp_test_sales_invoices": {
+    "رقم الفاتورة": "invoice_number",
+    "اسم العميل": "client_id",
+    "رقم التسجيل الضريبي للعميل": "tax_id",
+    "تاريخ الفاتورة": "invoice_date",
+    "المبلغ الصافي": "invoice_net_value",
+    "نسبة الخصم": "invoice_discount_percentage",
+    "قيمة الخصم": "invoice_discount_amount",
+    "قيمة الضريبة": "invoice_tax_value",
+    "إجمالي": "invoice_total_value"
+  },
+  "erp_test_sales_offer": {
+    "invoice_unique_id": "offer_unique_id",
+    "رقم الفاتورة": "offer_number",
+    "اسم العميل": "client_id",
+    "رقم التسجيل الضريبي للعميل": "tax_id",
+    "تاريخ الفاتورة": "offer_date",
+    "المبلغ الصافي": "offer_net_value",
+    "نسبة الخصم": "offer_discount_percentage",
+    "قيمة الخصم": "offer_discount_amount",
+    "قيمة الضريبة": "offer_tax_value",
+    "إجمالي": "offer_total_value"
+  }
+}
