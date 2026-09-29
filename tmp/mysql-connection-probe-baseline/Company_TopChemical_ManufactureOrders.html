@@ -1,0 +1,984 @@
+<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>أوامر التصنيع — manufacture_headers</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_TopChemical_Nav'); ?>
+  <?!= getCompanyThemeCSS_('3fe1b5cb67b7223e') ?>
+  <style>
+    .mo-wrapper {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      padding: 4px 0;
+    }
+
+    /* ── header card ── */
+    .mo-header-card {
+      background: var(--bg-surface, #fff);
+      border: 1px solid var(--border-color, #e2e8f0);
+      border-radius: 12px;
+      padding: 16px 20px;
+      box-shadow: 0 1px 3px rgba(0,0,0,.06);
+    }
+    .mo-header-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+    .mo-heading {
+      font-size: 17px;
+      font-weight: 700;
+      color: var(--text-primary, #0f172a);
+      margin: 0 0 4px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .mo-subheading {
+      font-size: 12px;
+      color: var(--text-muted, #64748b);
+      margin: 0;
+    }
+    .mo-badges {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+    .mo-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 3px 10px;
+      border-radius: 8px;
+      font-size: 12px;
+      background: var(--bg-subtle, #f8fafc);
+      border: 1px solid var(--border-color, #e2e8f0);
+      color: var(--text-secondary, #334155);
+    }
+    .mo-badge b { color: var(--brand-primary, #0284c7); }
+
+    /* ── toolbar ── */
+    .mo-toolbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 10px;
+      padding-top: 14px;
+      border-top: 1px solid var(--border-color, #e2e8f0);
+    }
+    .mo-search-box {
+      position: relative;
+      flex: 1;
+      min-width: 220px;
+      max-width: 380px;
+    }
+    .mo-search-input {
+      width: 100%;
+      padding: 8px 12px 8px 30px;
+      border: 1px solid var(--border-color, #cbd5e1);
+      border-radius: 8px;
+      font-size: 13px;
+      background: var(--bg-surface, #fff);
+      color: var(--text-primary, #0f172a);
+      outline: none;
+      transition: border-color .2s, box-shadow .2s;
+    }
+    .mo-search-input:focus {
+      border-color: var(--brand-primary, #0284c7);
+      box-shadow: 0 0 0 2px rgba(2,132,199,.12);
+    }
+    .mo-search-clear {
+      position: absolute;
+      left: 9px;
+      top: 50%;
+      transform: translateY(-50%);
+      cursor: pointer;
+      color: var(--text-muted, #94a3b8);
+      font-size: 13px;
+      display: none;
+    }
+
+    /* ── table card ── */
+    .mo-table-card {
+      background: var(--bg-surface, #fff);
+      border: 1px solid var(--border-color, #e2e8f0);
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 1px 3px rgba(0,0,0,.06);
+    }
+    .mo-table-scroll {
+      width: 100%;
+      overflow-x: auto;
+    }
+    .mo-tbl {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+      white-space: nowrap;
+    }
+    .mo-tbl thead th {
+      background: var(--bg-subtle, #f1f5f9);
+      color: var(--text-secondary, #334155);
+      font-weight: 700;
+      padding: 9px 13px;
+      border-bottom: 2px solid var(--border-color, #cbd5e1);
+      text-align: right;
+      position: sticky;
+      top: 0;
+      z-index: 2;
+    }
+    .mo-tbl tbody tr {
+      border-bottom: 1px solid var(--border-color, #f1f5f9);
+      transition: background .12s;
+    }
+    .mo-tbl tbody tr:hover { background: var(--brand-subtle-bg, #f0f9ff); }
+    .mo-tbl td {
+      padding: 9px 13px;
+      color: var(--text-primary, #0f172a);
+      vertical-align: middle;
+    }
+
+    /* ── inline footer sub-table ── */
+    .mo-foot-row td {
+      background: var(--bg-subtle, #f8fafc);
+      padding: 0;
+    }
+    .mo-foot-wrap { padding: 10px 14px 14px; }
+    .mo-foot-title {
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--text-secondary, #334155);
+      margin: 4px 0 8px;
+    }
+    .mo-foot-tbl {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+      background: var(--bg-surface, #fff);
+      border: 1px solid var(--border-color, #e2e8f0);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .mo-foot-tbl th {
+      background: var(--bg-subtle, #f1f5f9);
+      padding: 7px 10px;
+      text-align: right;
+      font-weight: 700;
+      border-bottom: 1px solid var(--border-color, #e2e8f0);
+    }
+    .mo-foot-tbl td {
+      padding: 6px 10px;
+      border-bottom: 1px solid var(--border-color, #f1f5f9);
+    }
+    .mo-foot-tbl tr.mo-draft-row td { background: #fffbeb; }
+    .mo-inline-input {
+      width: 100%;
+      min-width: 90px;
+      padding: 5px 8px;
+      border: 1px solid var(--border-color, #cbd5e1);
+      border-radius: 6px;
+      font-size: 12px;
+      background: var(--bg-surface, #fff);
+      color: var(--text-primary, #0f172a);
+    }
+    select.mo-inline-input { min-width: 120px; }
+
+    /* ── cell helpers ── */
+    .cell-num {
+      text-align: left;
+      font-variant-numeric: tabular-nums;
+      font-family: monospace;
+      font-weight: 600;
+      direction: ltr;
+    }
+    .cell-date {
+      font-family: monospace;
+      direction: ltr;
+      text-align: left;
+    }
+    .badge-pk {
+      padding: 2px 7px;
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 700;
+      background: #e0f2fe;
+      color: #0369a1;
+      font-family: monospace;
+    }
+    .badge-status {
+      padding: 2px 8px;
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 700;
+      background: var(--bg-subtle, #f1f5f9);
+      color: var(--text-secondary, #334155);
+    }
+
+    /* ── edit form grid ── */
+    .mo-form-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 14px;
+      padding: 6px 2px;
+    }
+    .mo-form-grid .form-field { margin: 0; }
+    .mo-form-full { grid-column: 1 / -1; }
+
+    .mo-empty {
+      text-align: center;
+      padding: 40px 20px;
+      color: var(--text-muted, #64748b);
+      font-size: 14px;
+    }
+
+    /* label — PK / read-only indicator */
+    .lbl-pk {
+      font-size: 11px;
+      background: #e0f2fe;
+      color: #0369a1;
+      border-radius: 4px;
+      padding: 1px 5px;
+      font-weight: 600;
+      margin-right: 4px;
+    }
+    .lbl-ro {
+      font-size: 11px;
+      background: #f1f5f9;
+      color: #64748b;
+      border-radius: 4px;
+      padding: 1px 5px;
+      font-weight: 600;
+      margin-right: 4px;
+    }
+  </style>
+</head>
+<body>
+<div id="tc-root" dir="rtl"></div>
+<script>
+  var params        = new URLSearchParams(window.location.search);
+  var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+  var scriptUrl     = window.scriptUrl || '/';
+  var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('3fe1b5cb67b7223e') ?>';
+  var COMPANY_PAGES    = <?!= companyPages ?>;
+  var CURRENT_ACTION   = '<?!= currentAction ?>';
+  var IS_SUPER_ADMIN   = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+  var USER_PAGES       = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+  var CAN_WRITE = UIC.canAdd_();
+  var CAN_FULL  = UIC.canFull_();
+
+  /* ── state (VIEW-ONLY page: no add / edit / delete here) ── */
+  var H = {
+    columns:    [],   /* manufacture_headers columns, as returned from server */
+    rows:       [],
+    total:      0,
+    loadedAll:  false,
+    loadingMore: false,
+    loadMoreError: ''
+  };
+  var MO_FIRST_LIMIT = 20, MO_MORE_LIMIT = 200, MO_REQUEST_SEQ = 0, MO_MORE_SEQ = 0;
+  /* dropdown refs — used only to resolve product names to Arabic labels */
+  var REFS = { products: [], products_full: [], warehouses: [], statuses: [] };
+
+  /* ── real PK column — confirmed from schema ── */
+  var H_PK = 'id';
+
+  /* ── columns hidden from VIEW ONLY (never mapped into the data table,
+     so they never render, export or print; page performs no writes) ── */
+  var MO_HIDDEN = {
+    'user_id': true,            /* معرف المستخدم */
+    'user_type': true,          /* نوع المستخدم */
+    'is_product': true,         /* منتج؟ (0/1) */
+    'admin_approved': true,     /* اعتماد الإدارة (0/1) */
+    'admin_approved_at': true,  /* تاريخ اعتماد الإدارة */
+    'created_at': true,         /* تاريخ الإنشاء */
+    'updated_at': true,         /* آخر تحديث */
+    'deleted_at': true          /* تاريخ الحذف */
+  };
+
+  /* ── unified ERP table columns (UIC.dataTable contract) ──
+     ONE product column showing the Arabic name — the raw product_id and the
+     joined product_label are never separate columns (no repetition). */
+  var MO_HEADERS = [
+    { key: 'id', label: '#', numeric: true },
+    { key: 'name_ar', label: 'الاسم (عربي)' },
+    { key: 'expected_quantity', label: 'الكمية المتوقعة', numeric: true },
+    { key: 'deliver_quantity', label: 'كمية التسليم', numeric: true },
+    { key: 'product', label: 'الصنف' },
+    { key: 'status', label: 'الحالة' },
+    { key: 'manufacture_number', label: 'رقم أمر التصنيع' },
+    { key: 'manufacture_delivery_number', label: 'رقم تسليم التصنيع' },
+    { key: 'is_revised', label: 'مراجَع' },
+    { key: 'actions', label: 'إجراءات' }
+  ];
+
+  /* ── human-readable Arabic labels (footer modal) ── */
+  var F_LABELS = {
+    'id':                   '# المعرف',
+    'manufacture_header_id': 'معرف الأمر',
+    'product_id':           'الصنف/المنتج',
+    'product_name_ar':      'اسم الصنف',
+    'product_code':         'كود الصنف',
+    'product_code_ref':     'كود الصنف (مرجع)',
+    'productUnit':          'الوحدة',
+    'product_unit_ref':     'الوحدة (مرجع)',
+    'productQuantity':      'الكمية',
+    'warehouse_id':         'المخزن',
+    'created_at':           'تاريخ الإنشاء',
+    'updated_at':           'آخر تحديث'
+  };
+
+  function fLabel(col) { return F_LABELS[col] || col; }
+
+  /* ── edit support (super admin via CAN_WRITE; view stays unified) ──
+     The edit modal iterates the FULL server column set, so hidden-from-view
+     columns remain editable by the super admin. Server strips PK/timestamps. */
+  var H_READ_ONLY = { 'id': true, 'created_at': true, 'updated_at': true };
+  var F_READ_ONLY = { 'id': true, 'manufacture_header_id': true, 'created_at': true, 'updated_at': true };
+  /* Joined ref columns render as text inside the editable footer grid. */
+  var F_DISPLAY_ONLY = { 'product_name_ar': true, 'product_code_ref': true, 'product_unit_ref': true };
+  /* Hidden from the footers view: audit timestamps + warehouse. */
+  var F_HIDE_VIEW = { 'created_at': true, 'updated_at': true, 'warehouse_id': true };
+  var H_NUMERIC = { user_id:1, expected_quantity:1, deliver_quantity:1, is_product:1,
+                    product_id:1, admin_approved:1, is_revised:1, id:1 };
+  var F_NUMERIC = { manufacture_header_id:1, product_id:1, productQuantity:1,
+                    warehouse_id:1, id:1 };
+  var H_DATES = { admin_approved_at:1, created_at:1, updated_at:1, deleted_at:1 };
+  var H_FLAGS = { is_product:1, admin_approved:1, is_revised:1 };
+  var H_LABELS = {
+    'id': 'المعرف', 'user_id': 'معرف المستخدم', 'user_type': 'نوع المستخدم',
+    'name_ar': 'الاسم (عربي)', 'expected_quantity': 'الكمية المتوقعة',
+    'deliver_quantity': 'كمية التسليم', 'is_product': 'منتج؟ (0/1)',
+    'product_id': 'معرف الصنف', 'product_label': 'الصنف (اسم)',
+    'status': 'الحالة', 'manufacture_number': 'رقم أمر التصنيع',
+    'manufacture_delivery_number': 'رقم تسليم التصنيع',
+    'admin_approved': 'اعتماد الإدارة (0/1)',
+    'admin_approved_at': 'تاريخ اعتماد الإدارة',
+    'created_at': 'تاريخ الإنشاء', 'updated_at': 'آخر تحديث',
+    'deleted_at': 'تاريخ الحذف', 'is_revised': 'مراجَع (0/1)'
+  };
+  function hLabel(col) { return H_LABELS[col] || col; }
+
+  /* Header product -> Arabic name. Prefers the server-joined product_label,
+     then the footer-joined product_name_ar, falls back to the REFS lookup,
+     then to the raw id. */
+  function productNameFor(row) {
+    if (row.product_label !== null && row.product_label !== undefined && String(row.product_label) !== '') {
+      return String(row.product_label);
+    }
+    if (row.product_name_ar !== null && row.product_name_ar !== undefined && String(row.product_name_ar) !== '') {
+      return String(row.product_name_ar);
+    }
+    var pid = row.product_id;
+    if (pid === null || pid === undefined || String(pid) === '') return '';
+    var list = REFS.products_full.length ? REFS.products_full : REFS.products;
+    for (var i = 0; i < list.length; i++) {
+      if (String(list[i].value) === String(pid)) return list[i].label;
+    }
+    return '#' + pid;
+  }
+
+  /* ── company API call helper ── */
+  function companyCall(moduleAction, data) {
+    return API.call('company_action', {
+      target_system: '3fe1b5cb67b7223e',
+      module_action:  moduleAction,
+      data:           data || {}
+    }, SESSION_TOKEN);
+  }
+
+  /* ══════════════════ INIT ══════════════════ */
+  function load() {
+    UIC.appShell('tc-root', {
+      companyLogoUrl:   COMPANY_LOGO_URL,
+      companyLogoHref:  scriptUrl + '?action=tc_dashboard&sessionToken=' + SESSION_TOKEN,
+      companyLogoTitle: 'توب كيميكال',
+      breadcrumb: 'توب كيميكال / تحليلات النظام الرئيسي / أوامر التصنيع (manufacture_headers)',
+      contentId: 'mo-content',
+      menuGroups: (window.TOPCHEMICAL_MENU || [])
+    });
+    fetchRefs();
+    fetchHeaders(false);
+  }
+
+  /* ══════════════════ DATA — headers ══════════════════ */
+  function fetchHeaders(loadAll) {
+    if (loadAll === true) return loadMoreHeaders();
+    if (loadAll === false) {
+      MO_REQUEST_SEQ++;
+      H.loadingMore = false; MO_MORE_SEQ = 0; H.loadMoreError = '';
+      H.rows = []; H.columns = []; H.total = 0; H.loadedAll = false;
+    } else if (H.loadingMore) return Promise.resolve();
+    var requested = Math.max(H.rows.length, MO_FIRST_LIMIT);
+    var hasRows = H.rows.length > 0;
+    var requestSeq = ++MO_REQUEST_SEQ;
+    if (!hasRows) UIC.readSkeleton('mo-content', { message: 'جاري تحميل أوامر التصنيع...' });
+    else updateHeaderLoadControl('جاري تحديث البيانات...');
+    return requestHeaderWindow(requested).then(function (res) {
+      if (requestSeq !== MO_REQUEST_SEQ) return;
+      H.columns = res.columns || [];
+      H.rows = res.rows || [];
+      H.total = Number(res.total) || 0;
+      H.loadedAll = H.rows.length >= H.total;
+      renderPage();
+    }).catch(function (e) {
+      if (requestSeq !== MO_REQUEST_SEQ) return;
+      if (hasRows) updateHeaderLoadControl('تعذر تحديث البيانات. يمكنك إعادة المحاولة.');
+      else showHeaderLoadError(e);
+    }).finally(function () {
+      UI.hideSpinner();
+      try { schedulePrefetch(); } catch (e) {}
+    });
+  }
+
+  function requestHeaderWindow(count) {
+    var rows = [], columns = [], total = 0, offset = 0;
+    var target = Math.max(Number(count) || MO_FIRST_LIMIT, MO_FIRST_LIMIT);
+    function next() {
+      if (offset >= target || (total && offset >= total)) return Promise.resolve({ columns: columns, rows: rows, total: total });
+      var limit = Math.min(MO_MORE_LIMIT, target - offset);
+      return companyCall('get_manufacture_headers', { limit: limit, offset: offset }).then(function (res) {
+        res = res || {};
+        if (!columns.length) columns = res.columns || [];
+        total = Number(res.total) || 0;
+        var batch = res.rows || [];
+        rows = rows.concat(batch); offset += batch.length;
+        if (!batch.length) return { columns: columns, rows: rows, total: total };
+        return next();
+      });
+    }
+    return next();
+  }
+
+  function loadMoreHeaders() {
+    if (H.loadingMore || H.loadedAll) return;
+    if (!H.rows.length) return fetchHeaders(false);
+    var offset = H.rows.length;
+    var requestSeq = ++MO_REQUEST_SEQ;
+    H.loadingMore = true; MO_MORE_SEQ = requestSeq; H.loadMoreError = '';
+    updateHeaderLoadControl('جاري تحميل المزيد...');
+    return companyCall('get_manufacture_headers', { limit: MO_MORE_LIMIT, offset: offset })
+      .then(function (res) {
+        if (requestSeq !== MO_REQUEST_SEQ) return;
+        res = res || {};
+        if (res.columns && res.columns.length) H.columns = res.columns;
+        var incoming = res.rows || [], seen = {}, added = [];
+        H.rows.forEach(function (r) { seen[String(r[H_PK])] = true; });
+        incoming.forEach(function (r) {
+          if (!seen[String(r[H_PK])]) { H.rows.push(r); added.push(r); seen[String(r[H_PK])] = true; }
+        });
+        H.total = Number(res.total) || H.total;
+        H.loadedAll = H.rows.length >= H.total || added.length === 0;
+        appendHeadersToTable(added);
+        updateHeaderLoadControl();
+      })
+      .catch(function () {
+        if (requestSeq === MO_REQUEST_SEQ) H.loadMoreError = 'تعذر تحميل المزيد. أعد المحاولة.';
+      })
+      .finally(function () {
+        if (requestSeq === MO_REQUEST_SEQ && MO_MORE_SEQ === requestSeq) {
+          H.loadingMore = false;
+          updateHeaderLoadControl();
+        }
+      });
+  }
+
+  /* ══════════════════ DATA — dropdown refs ══════════════════
+     Empty lists are NOT an error: selects degrade to free-text inputs. */
+  function fetchRefs() {
+    companyCall('get_manufacture_refs', {})
+      .then(function (res) {
+        REFS.products   = res.products   || [];
+        REFS.products_full = res.products_full || [];
+        REFS.warehouses = res.warehouses || [];
+        REFS.statuses   = res.statuses   || [];
+      })
+      .catch(function () { REFS = { products: [], products_full: [], warehouses: [], statuses: [] }; });
+  }
+
+  /* ══════════════════ FOOTERS modal (view for all, edit for CAN_WRITE) ══════════════════
+     The modal opens instantly with a loading note so the user understands the
+     lines are being withdrawn, then fills in when the server replies. */
+  var FOOTMOD = { hid: null, columns: [], rows: [], draft: null };
+  var MO_EDITING = null;
+
+  function openFootersModal(hid) {
+    FOOTMOD = { hid: String(hid), columns: [], rows: [], draft: null };
+    UIC.openModal('mo-foot-modal', {
+      title: '📦 بنود الأمر #' + FMT.escape(String(hid)),
+      body: '<div class="mo-empty">⏳ جاري سحب البنود من قاعدة البيانات…</div>',
+      footer: false,
+      size: 'xl'
+    });
+    companyCall('get_manufacture_footers', { manufacture_header_id: String(hid) })
+      .then(function (res) {
+        FOOTMOD.columns = res.columns || [];
+        FOOTMOD.rows = res.rows || [];
+        paintFootModal();
+      })
+      .catch(function (err) {
+        var host = document.querySelector('#mo-foot-modal .modal-body');
+        if (host) host.innerHTML = '<div class="mo-empty">تعذر تحميل البنود</div>';
+        showError(err);
+      });
+  }
+
+  function footModCols() {
+    return FOOTMOD.columns.length ? FOOTMOD.columns
+      : ['product_id', 'product_name_ar', 'product_code', 'productUnit', 'productQuantity', 'warehouse_id'];
+  }
+
+  function paintFootModal() {
+    var host = document.querySelector('#mo-foot-modal .modal-body');
+    if (!host) return;
+    host.innerHTML = buildFootersView(FOOTMOD.columns, FOOTMOD.rows);
+  }
+
+  function buildFootersView(cols, rows) {
+    if (!rows.length && !FOOTMOD.draft) return '<div class="mo-empty">لا توجد بنود لهذا الأمر</div>';
+    if (!cols.length && rows[0]) cols = Object.keys(rows[0]);
+    /* manufacture_header_id is implied by the modal title; single editable
+       product column (product_id select bound to products.id, label name_ar).
+       Display-only product_name_ar is hidden from the grid to avoid duplication.
+       Read-only renders product_id via productNameFor(). Audit/warehouse hidden. */
+    var skip = { 'manufacture_header_id': true, 'product_name_ar': true };
+    for (var hk in F_HIDE_VIEW) { if (Object.prototype.hasOwnProperty.call(F_HIDE_VIEW, hk)) skip[hk] = true; }
+    var html = '<table class="mo-foot-tbl"><thead><tr>';
+    if (CAN_WRITE) html += '<th style="width:150px;">إجراءات</th>';
+    cols.forEach(function (c) {
+      if (skip[c]) return;
+      html += '<th>' + FMT.escape(fLabel(c)) + '</th>';
+    });
+    html += '</tr></thead><tbody>';
+    rows.forEach(function (row) {
+      var fid = row.id !== undefined && row.id !== null ? String(row.id) : '';
+      html += '<tr>';
+      if (CAN_WRITE) {
+        html += '<td style="white-space:nowrap;">' +
+          '<button class="btn btn-sm btn-outline" onclick="saveFooterInline(\'' + FMT.escape(fid) + '\')">💾 حفظ</button> ' +
+          '<button class="btn btn-sm" style="background:#fef2f2;border:1px solid #fecaca;color:#b91c1c;" onclick="askDeleteFooter(\'' + FMT.escape(fid) + '\')">🗑️</button></td>';
+      }
+      cols.forEach(function (c) {
+        if (skip[c]) return;
+        if (CAN_WRITE && !F_READ_ONLY[c] && !F_DISPLAY_ONLY[c]) {
+          html += '<td>' + footerInput(fid, c, row[c]) + '</td>';
+          return;
+        }
+        var v = row[c];
+        var cell;
+        if (v === null || v === undefined || String(v) === '') {
+          cell = '<span style="color:var(--text-muted);font-size:11px">—</span>';
+        } else if (c === 'product_name_ar') {
+          cell = '<b>' + FMT.escape(String(v)) + '</b>';
+        } else if (c === 'product_id') {
+          var nm = productNameFor(row);
+          cell = '<b>' + FMT.escape(nm || String(v)) + '</b>';
+        } else if (c === 'productQuantity' || c === 'id' || c === 'warehouse_id') {
+          cell = '<span class="cell-num">' + FMT.escape(String(v)) + '</span>';
+        } else {
+          cell = FMT.escape(String(v));
+        }
+        html += '<td>' + cell + '</td>';
+      });
+      html += '</tr>';
+    });
+    /* blank new inline (writers only): warehouse defaults to 1 */
+    if (CAN_WRITE) {
+      if (FOOTMOD.draft) {
+        html += '<tr class="mo-draft-row"><td style="white-space:nowrap;">' +
+          '<button class="btn btn-sm btn-primary" onclick="saveFooterDraft()">💾 حفظ البند</button> ' +
+          '<button class="btn btn-sm btn-outline" onclick="cancelFooterDraft()">إلغاء</button></td>';
+        footModCols().forEach(function (c) {
+          if (skip[c] || F_READ_ONLY[c]) return;
+          if (F_DISPLAY_ONLY[c]) { html += '<td><span style="color:var(--text-muted);font-size:11px">—</span></td>'; return; }
+          html += '<td>' + footerInput('new', c, FOOTMOD.draft[c]) + '</td>';
+        });
+        html += '</tr>';
+      } else {
+        html += '<tr><td colspan="' + (cols.length + 1) + '" style="text-align:center;">' +
+          '<button class="btn btn-sm btn-outline" onclick="newFooterRow()">➕ بند جديد</button></td></tr>';
+      }
+    }
+    html += '</tbody></table>';
+    return html;
+  }
+
+  /* editable control per footer column; selects fall back to REFS labels */
+  function footerInput(fid, col, val) {
+    var hid = FOOTMOD.hid;
+    var v = (val !== null && val !== undefined) ? String(val) : '';
+    var id = 'mof_' + hid + '_' + fid + '_' + col;
+    if (col === 'product_id') {
+      if (!REFS.products || !REFS.products.length) {
+        return '<select class="input mo-inline-input" id="' + id + '" disabled>' +
+          '<option value="">لا توجد أصناف – حدّث المراجع</option>' +
+        '</select>';
+      }
+      return '<select class="input mo-inline-input" id="' + id + '" onchange="onFooterProductChange(\'' + FMT.escape(String(fid)) + '\')">' +
+        '<option value="">— اختر الصنف —</option>' +
+        REFS.products.map(function (o) {
+          return '<option value="' + FMT.escape(o.value) + '"' + (String(o.value) === v ? ' selected' : '') + '>' + FMT.escape(o.label) + '</option>';
+        }).join('') +
+      '</select>';
+    }
+    if (col === 'warehouse_id' && REFS.warehouses.length) {
+      return '<select class="input mo-inline-input" id="' + id + '">' +
+        '<option value="">— اختر المخزن —</option>' +
+        REFS.warehouses.map(function (o) {
+          return '<option value="' + FMT.escape(o.value) + '"' + (String(o.value) === v ? ' selected' : '') + '>' + FMT.escape(o.label) + '</option>';
+        }).join('') +
+      '</select>';
+    }
+    if (F_NUMERIC[col]) {
+      return '<input type="number" step="any" class="input mo-inline-input cell-num" id="' + id + '" value="' + FMT.escape(v) + '">';
+    }
+    return '<input type="text" class="input mo-inline-input" id="' + id + '" value="' + FMT.escape(v) + '">';
+  }
+
+  function footVal(fid, col) {
+    var el = document.getElementById('mof_' + FOOTMOD.hid + '_' + fid + '_' + col);
+    return el ? el.value : '';
+  }
+
+  function productRef(pid) {
+    for (var i = 0; i < REFS.products_full.length; i++) {
+      if (String(REFS.products_full[i].value) === String(pid)) return REFS.products_full[i];
+    }
+    return null;
+  }
+
+  /* changing the inline product auto-withdraws code/unit from products */
+  function onFooterProductChange(fid) {
+    var pid = footVal(fid, 'product_id');
+    var ref = pid ? productRef(pid) : null;
+    var codeEl = document.getElementById('mof_' + FOOTMOD.hid + '_' + fid + '_product_code');
+    var unitEl = document.getElementById('mof_' + FOOTMOD.hid + '_' + fid + '_productUnit');
+    if (codeEl) codeEl.value = ref ? ref.code : '';
+    if (unitEl) unitEl.value = ref ? ref.unit : '';
+  }
+
+  function saveFooterInline(fid) {
+    var row = null;
+    FOOTMOD.rows.forEach(function (r) { if (String(r.id) === String(fid)) row = r; });
+    if (!row) { UIC.toast('البند غير موجود', 'error'); return; }
+    var payload = { id: fid };
+    footModCols().forEach(function (col) {
+      if (F_READ_ONLY[col] || F_DISPLAY_ONLY[col] || F_HIDE_VIEW[col]) return;
+      payload[col] = footVal(fid, col);
+    });
+    UI.showSpinner('جاري حفظ البند…');
+    companyCall('save_manufacture_footer', payload)
+      .then(function () {
+        UIC.toast('تم حفظ البند ✓', 'success');
+        Object.keys(payload).forEach(function (k) { row[k] = payload[k]; });
+        paintFootModal();
+      })
+      .catch(showError)
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function newFooterRow() {
+    FOOTMOD.draft = { product_id: '', product_code: '', productUnit: '', productQuantity: '', warehouse_id: '1' };
+    paintFootModal();
+  }
+
+  function cancelFooterDraft() {
+    FOOTMOD.draft = null;
+    paintFootModal();
+  }
+
+  function saveFooterDraft() {
+    if (!FOOTMOD.draft) return;
+    var payload = { manufacture_header_id: String(FOOTMOD.hid) };
+    footModCols().forEach(function (col) {
+      if (F_READ_ONLY[col] || F_DISPLAY_ONLY[col] || F_HIDE_VIEW[col]) return;
+      payload[col] = footVal('new', col);
+    });
+    /* warehouse stays at its default 1 — hidden from view, server fills it. */
+    UI.showSpinner('جاري إضافة البند…');
+    companyCall('add_manufacture_footer', payload)
+      .then(function (res) {
+        UIC.toast('تمت إضافة البند ✓', 'success');
+        var newRow = { id: (res && res.id) || null, manufacture_header_id: String(FOOTMOD.hid) };
+        Object.keys(payload).forEach(function (k) { if (k !== 'manufacture_header_id') newRow[k] = payload[k]; });
+        FOOTMOD.rows.push(newRow);
+        FOOTMOD.draft = null;
+        paintFootModal();
+      })
+      .catch(showError)
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function askDeleteFooter(fid) {
+    UIC.openModal('mo-delete-modal', {
+      title: 'تأكيد حذف البند',
+      body: '<p style="font-size:14px;line-height:1.9;">سيتم حذف البند <b>#' + FMT.escape(String(fid)) + '</b> من الأمر <b>#' + FMT.escape(String(FOOTMOD.hid)) + '</b> ' +
+            '<b>نهائياً</b> (جدول البنود لا يحتوي على عمود حذف ناعم).</p>',
+      saveLabel: '🗑️ حذف نهائي',
+      onSave: 'doDeleteFooter(\'' + FMT.escape(String(fid)) + '\')'
+    });
+  }
+
+  function doDeleteFooter(fid) {
+    UI.showSpinner('جاري حذف البند…');
+    companyCall('delete_manufacture_footer', { id: fid })
+      .then(function () {
+        UIC.toast('تم حذف البند ✓', 'success');
+        UIC.closeModal('mo-delete-modal');
+        FOOTMOD.rows = FOOTMOD.rows.filter(function (r) { return String(r.id) !== String(fid); });
+        paintFootModal();
+      })
+      .catch(showError)
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  /* ══════════════════ HEADER EDIT + SOFT DELETE (CAN_WRITE) ══════════════════ */
+  function openHeaderEdit(pkVal) {
+    var row = (H.rows).find(function (r) { return String(r[H_PK]) === String(pkVal); });
+    if (!row) { UIC.toast('السجل غير موجود في الذاكرة', 'error'); return; }
+    MO_EDITING = pkVal;
+    /* full server column set — hidden-from-view columns stay editable here */
+    var cols = H.columns.length ? H.columns : Object.keys(row);
+    var formHtml = '<form id="mo-edit-form"><div class="mo-form-grid">';
+    cols.forEach(function (col) {
+      if (col === 'product_label') return;   /* joined display-only, not a real column */
+      var val = row[col];
+      var label = hLabel(col);
+      if (H_READ_ONLY[col]) {
+        formHtml += '<div class="form-field"><label class="form-label">' +
+          '<span class="lbl-ro">' + (col === H_PK ? 'PK' : 'للقراءة فقط') + '</span> ' + FMT.escape(label) + '</label>' +
+          '<input type="text" class="input" value="' + FMT.escape(val !== null && val !== undefined ? String(val) : '') + '" disabled></div>';
+        return;
+      }
+      if (col === 'status' && REFS.statuses.length) {
+        formHtml += '<div class="form-field"><label class="form-label">' + FMT.escape(label) + '</label>' +
+          '<select class="input" id="mof_' + col + '"><option value="">— لم يحدد —</option>' +
+          REFS.statuses.map(function (o) {
+            return '<option value="' + FMT.escape(o.value) + '"' + (String(val) === String(o.value) ? ' selected' : '') + '>' + FMT.escape(o.label) + '</option>';
+          }).join('') + '</select></div>';
+      } else if (H_FLAGS[col]) {
+        var on = String(val) === '1';
+        formHtml += '<div class="form-field"><label class="form-label">' + FMT.escape(label) + '</label>' +
+          '<select class="input" id="mof_' + col + '">' +
+          '<option value="0"' + (!on ? ' selected' : '') + '>0 — لا</option>' +
+          '<option value="1"' + (on ? ' selected' : '') + '>1 — نعم</option></select></div>';
+      } else if (col === 'product_id' && REFS.products.length) {
+        formHtml += '<div class="form-field"><label class="form-label">' + FMT.escape(label) + '</label>' +
+          '<select class="input" id="mof_' + col + '"><option value="">— اختر الصنف —</option>' +
+          REFS.products.map(function (o) {
+            return '<option value="' + FMT.escape(o.value) + '"' + (String(o.value) === String(val !== null && val !== undefined ? val : '') ? ' selected' : '') + '>' + FMT.escape(o.label) + '</option>';
+          }).join('') + '</select></div>';
+      } else if (H_DATES[col]) {
+        var dtv = val ? String(val).slice(0, 16).replace(' ', 'T') : '';
+        formHtml += '<div class="form-field"><label class="form-label">' + FMT.escape(label) + '</label>' +
+          '<input type="datetime-local" class="input" id="mof_' + col + '" value="' + FMT.escape(dtv) + '"></div>';
+      } else if (H_NUMERIC[col]) {
+        formHtml += '<div class="form-field"><label class="form-label">' + FMT.escape(label) + '</label>' +
+          '<input type="number" step="any" class="input cell-num" id="mof_' + col + '" value="' + FMT.escape(val !== null && val !== undefined ? String(val) : '') + '"></div>';
+      } else {
+        formHtml += '<div class="form-field"><label class="form-label">' + FMT.escape(label) + '</label>' +
+          '<input type="text" class="input" id="mof_' + col + '" value="' + FMT.escape(val !== null && val !== undefined ? String(val) : '') + '"></div>';
+      }
+    });
+    formHtml += '</div></form>';
+    UIC.openModal('mo-edit-modal', {
+      title: 'تعديل أمر تصنيع — #' + pkVal,
+      body: formHtml,
+      saveLabel: 'حفظ التعديلات',
+      onSave: 'saveHeaderEdit()'
+    });
+  }
+
+  function saveHeaderEdit() {
+    var pkVal = MO_EDITING;
+    if (!pkVal) { UIC.toast('لا يوجد سجل محدد', 'error'); return; }
+    var row = (H.rows).find(function (r) { return String(r[H_PK]) === String(pkVal); });
+    if (!row) { UIC.toast('السجل غير موجود', 'error'); return; }
+    var cols = H.columns.length ? H.columns : Object.keys(row);
+    var payload = {};
+    payload[H_PK] = pkVal;
+    cols.forEach(function (col) {
+      if (H_READ_ONLY[col] || col === 'product_label') return;
+      var el = document.getElementById('mof_' + col);
+      if (el) payload[col] = el.value;
+    });
+    UI.showSpinner('جاري حفظ التعديلات…');
+    companyCall('save_manufacture_header', payload)
+      .then(function () {
+        UIC.toast('تم الحفظ بنجاح ✓', 'success');
+        UIC.closeModal('mo-edit-modal');
+        Object.keys(payload).forEach(function (k) { row[k] = payload[k]; });
+        renderPage();
+      })
+      .catch(showError)
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function askDeleteHeader(pkVal) {
+    UIC.openModal('mo-delete-modal', {
+      title: 'تأكيد الحذف الناعم',
+      body: '<p style="font-size:14px;line-height:1.9;">سيتم حذف أمر التصنيع <b>#' + FMT.escape(String(pkVal)) + '</b> حذفاً ناعماً ' +
+            '(تخزين الطابع الزمني الحالي في <code dir="ltr">deleted_at</code>) وسيختفي من القائمة.</p>',
+      saveLabel: '🗑️ تأكيد الحذف',
+      onSave: 'doDeleteHeader(\'' + FMT.escape(String(pkVal)) + '\')'
+    });
+  }
+
+  function doDeleteHeader(pkVal) {
+    UI.showSpinner('جاري الحذف الناعم…');
+    companyCall('delete_manufacture_header', { id: pkVal })
+      .then(function () {
+        UIC.toast('تم الحذف الناعم ✓', 'success');
+        UIC.closeModal('mo-delete-modal');
+        H.rows = H.rows.filter(function (r) { return String(r[H_PK]) !== String(pkVal); });
+        H.total = Math.max(0, H.total - 1);
+        renderPage();
+      })
+      .catch(showError)
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  /* ══════════════════ RENDER — unified table ══════════════════ */
+  function renderPage() {
+    var content = document.getElementById('mo-content');
+    if (!content) return;
+
+    /* header card (badges + refresh; search/pager/export live inside the table) */
+    content.innerHTML =
+      '<div class="mo-wrapper">' +
+      '<div class="mo-header-card">' +
+        '<div class="mo-header-top">' +
+          '<div>' +
+            '<h2 class="mo-heading">🏭 أوامر التصنيع <span style="font-size:13px;font-weight:400;color:var(--text-muted)">(manufacture_headers)</span></h2>' +
+            '<p class="mo-subheading">جدول قاعدة البيانات المباشر — ' + H.total + ' سجل إجمالاً (الحذف الناعم مُطبَّق)</p>' +
+          '</div>' +
+          '<div class="mo-badges">' +
+            '<div class="mo-badge">الإجمالي: <b>' + FMT.number(H.total) + '</b></div>' +
+            '<div class="mo-badge">المُحمَّل: <b id="mo-loaded-count">' + FMT.number(H.rows.length) + '</b></div>' +
+            '<div class="mo-badge">الوضع: <b id="mo-load-mode">' + (H.loadedAll ? 'كل السجلات محمّلة' : 'تحميل تدريجي') + '</b></div>' +
+          '</div>' +
+        '</div>' +
+        '<div class="mo-toolbar">' +
+          '<div style="display:flex;gap:8px;flex-wrap:wrap;">' +
+            '<button class="btn btn-outline" onclick="fetchHeaders()">🔄 تحديث</button>' +
+            '<div id="mo-load-more-control" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;"></div>' +
+          '</div>' +
+        '</div>' +
+      '</div>' +
+      '<div id="mo-table-host"></div>' +
+      '</div>';
+
+    updateHeaderLoadControl();
+    renderMoTable();
+  }
+
+  function updateHeaderLoadControl(message) {
+    var host = document.getElementById('mo-load-more-control');
+    var count = document.getElementById('mo-loaded-count');
+    var mode = document.getElementById('mo-load-mode');
+    if (count) count.textContent = FMT.number(H.rows.length);
+    if (mode) mode.textContent = H.loadedAll ? 'كل السجلات محمّلة' : 'تحميل تدريجي';
+    if (!host) return;
+    var status = message || H.loadMoreError || ('تم تحميل ' + H.rows.length + ' من ' + H.total + ' سجل');
+    host.innerHTML = '<span style="font-size:12px;color:var(--text-muted);">' + FMT.escape(status) +
+      ' — البحث يشمل السجلات المحملة فقط</span>' +
+      (!H.loadedAll ? '<button type="button" class="btn ' + (H.loadMoreError ? 'btn-outline' : 'btn-primary') + '" onclick="loadMoreHeaders()" ' +
+        (H.loadingMore ? 'disabled' : '') + '>' + (H.loadMoreError ? 'إعادة المحاولة' : 'تحميل المزيد') + '</button>' :
+        '<span class="mo-badge">تم تحميل كل السجلات</span>') +
+      (H.rows.length > MO_FIRST_LIMIT ? '<button type="button" class="btn btn-outline" onclick="showLatestHeaders()">عرض آخر 20 سجل</button>' : '');
+  }
+
+  function showLatestHeaders() { fetchHeaders(false); }
+
+  function showHeaderLoadError(err) {
+    var content = document.getElementById('mo-content');
+    var msg = (err && (err.message || err.error)) || 'تعذر تحميل أوامر التصنيع';
+    if (content) content.innerHTML = '<div class="empty-state"><span>' + FMT.escape(msg) +
+      '</span><button type="button" class="btn btn-outline" onclick="fetchHeaders(false)">إعادة المحاولة</button></div>';
+    UIC.toast(msg, 'error');
+  }
+
+  function mapHeaderRow(r) {
+    var pkVal = r[H_PK] !== undefined && r[H_PK] !== null ? String(r[H_PK]) : '';
+    var pname = productNameFor(r);
+    var rev = String(r.is_revised) === '1';
+    return {
+      id: (r.id !== null && r.id !== undefined) ? r.id : '',
+      name_ar: r.name_ar || '',
+      expected_quantity: (r.expected_quantity !== null && r.expected_quantity !== undefined) ? r.expected_quantity : '',
+      deliver_quantity: (r.deliver_quantity !== null && r.deliver_quantity !== undefined) ? r.deliver_quantity : '',
+      product: pname ? '<b>' + FMT.escape(pname) + '</b>' : '<span style="color:var(--text-muted);font-size:11px">—</span>',
+      status: (r.status !== null && r.status !== undefined && String(r.status) !== '') ? FMT.escape(String(r.status)) : '—',
+      manufacture_number: r.manufacture_number || '',
+      manufacture_delivery_number: r.manufacture_delivery_number || '',
+      is_revised: rev ? '✓ مراجع' : '⏳ غير مراجع',
+      actions: UIC.actionBtns(
+        [{ label: 'عرض البنود', onclick: "openFootersModal('" + FMT.escape(pkVal) + "')" }]
+        .concat(CAN_WRITE ? [
+          { label: 'تعديل', onclick: "openHeaderEdit('" + FMT.escape(pkVal) + "')" },
+          { label: 'حذف', color: '#d32f2f', onclick: "askDeleteHeader('" + FMT.escape(pkVal) + "')" }
+        ] : [])
+      )
+    };
+  }
+
+  function appendHeadersToTable(rows) {
+    if (!rows || !rows.length) return;
+    var st = window.__dtStore && window.__dtStore['mo-table'];
+    if (!st) { renderMoTable(); return; }
+    rows.forEach(function (r) { st.originalRows.push(mapHeaderRow(r)); });
+    st.rows = st.originalRows;
+    var page = st.page || 1;
+    UIC.filterPaged('mo-table', st.searchTerm || '');
+    st = window.__dtStore && window.__dtStore['mo-table'];
+    if (st && page > 1) {
+      st.page = Math.min(page, Math.max(1, Math.ceil(st.filtered.length / (st.pageSize || 50))));
+      UIC._dtRenderBody('mo-table');
+      UIC._dtRefreshPager('mo-table');
+    }
+  }
+
+  function renderMoTable() {
+    var host = document.getElementById('mo-table-host');
+    if (!host) return;
+    var rows = H.rows.map(mapHeaderRow);
+
+    host.innerHTML = UIC.dataTable('mo-table', {
+      /* Later server windows append in place; this table searches and pages
+         over the rows loaded so far. */
+      truncated: false,
+      title: 'أوامر التصنيع',
+      headers: MO_HEADERS,
+      rows: rows,
+      emptyText: 'لا توجد أوامر تصنيع'
+    });
+    UIC.initTableSort('mo-table');
+  }
+
+  /* ══════════════════ (view-only: no inline editing, search lives in the table) ══════════════════ */
+
+  /* ══════════════════ (view-only: header edit modal removed) ══════════════════ */
+
+  /* ══════════════════ (view-only: footer writes removed) ══════════════════ */
+
+  /* ══════════════════ (view-only: deletes removed) ══════════════════ */
+
+  /* ── error helper ── */
+  function showError(err) {
+    var msg = (err && (err.message || err.error)) || String(err || 'حدث خطأ غير متوقع');
+    UIC.toast(msg, 'error');
+  }
+
+  document.addEventListener('DOMContentLoaded', load);
+</script>
+</body>
+</html>

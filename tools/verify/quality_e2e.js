@@ -523,7 +523,7 @@ const capaProgress = step('10. CAPA Assigned -> In Progress', 1, () =>
   H.saveQualityCapa_({ unique_id: capaUid, status: 'In Progress' }, AUTHOR, DB));
 check(capaProgress.row_status === 'In Progress' && capaRow(capaUid).status === 'In Progress', '10. the CAPA moves to In Progress');
 const capaDone = step('10. CAPA In Progress -> Done', 1, () =>
-  H.saveQualityCapa_({ unique_id: capaUid, status: 'Done' }, AUTHOR, DB));
+  H.saveQualityCapa_({ unique_id: capaUid, status: 'Done', implementation_evidence: 'أمر الصيانة ونتيجة فحص ما بعد التنفيذ' }, AUTHOR, DB));
 check(capaDone.row_status === 'Done' && String(capaRow(capaUid).implemented_at).trim() !== '',
   '10. Done stamps implemented_at');
 
@@ -541,13 +541,14 @@ check(implemented.row_status === 'Implemented' && ncrRow(ncrUid).status === 'Imp
 
 /* ---- 12) CAPA: Done -> Verified -> Closed (full grant) ---- */
 expectRefusal('12. CAPA Done -> Verified is refused for a write-only user', () =>
-  H.saveQualityCapa_({ unique_id: capaUid, status: 'Verified', effectiveness_check_date: '2026-09-01', effectiveness_notes: 'فعال' }, AUTHOR, DB));
+  H.saveQualityCapa_({ unique_id: capaUid, status: 'Verified', effectiveness_check_date: '2026-09-01', effectiveness_notes: 'فعال', effectiveness_criteria: 'مطابقة نتيجة الفحص', monitoring_period: 'الفترة المعتمدة', effectiveness_outcome: 'Effective', recurrence_result: 'No recurrence', effectiveness_evidence: 'سجل فحص موثق' }, AUTHOR, DB));
 const capaVerified = step('12. CAPA Done -> Verified by a FULL user', 1, () =>
-  H.saveQualityCapa_({ unique_id: capaUid, status: 'Verified', effectiveness_check_date: '2026-09-01', effectiveness_notes: 'لا تكرار خلال أسبوعين' }, MANAGER, DB));
+  H.saveQualityCapa_({ unique_id: capaUid, status: 'Verified', effectiveness_check_date: '2026-09-01', effectiveness_notes: 'لا تكرار', effectiveness_criteria: 'مطابقة نتيجة الفحص', monitoring_period: 'الفترة المعتمدة', effectiveness_outcome: 'Effective', recurrence_result: 'No recurrence', effectiveness_evidence: 'سجل فحص موثق' }, MANAGER, DB));
 check(capaVerified.row_status === 'Verified' && capaRow(capaUid).verified_by === MANAGER.email &&
   String(capaRow(capaUid).verified_at).trim() !== '' && capaRow(capaUid).effectiveness_check_date === '2026-09-01' &&
-  capaRow(capaUid).effectiveness_notes === 'لا تكرار خلال أسبوعين',
-  '12. verified_by/verified_at and the effectiveness evidence are stamped');
+  capaRow(capaUid).effectiveness_notes === 'لا تكرار' && capaRow(capaUid).implementation_evidence === 'أمر الصيانة ونتيجة فحص ما بعد التنفيذ' &&
+  capaRow(capaUid).effectiveness_outcome === 'Effective' && capaRow(capaUid).recurrence_result === 'No recurrence',
+  '12. implementation evidence, effectiveness evidence and full-user verification are stored separately');
 const capaClosed = step('12. CAPA Verified -> Closed by the FULL user', 1, () =>
   H.saveQualityCapa_({ unique_id: capaUid, status: 'Closed' }, MANAGER, DB));
 check(capaClosed.row_status === 'Closed' && capaRow(capaUid).status === 'Closed', '12. the CAPA is Closed');
@@ -574,7 +575,7 @@ check(W.cachedKinds.length === 1 && W.cachedKinds[0].dbId === DB && W.cachedKind
 const K = dash.kpis || {};
 const JOURNEY_KPIS = {
   sops_total: 1, sops_effective: 1, acks_signed: 1, acks_pending: 0, acks_compliance_pct: 100,
-  ncrs_open: 0, ncrs_closed: 1, capas_done: 1, capas_overdue: 0, findings_open: 0
+  ncrs_open: 0, ncrs_verified_pending_close: 0, ncrs_closed: 1, capas_done: 1, capas_overdue: 0, findings_open: 0
 };
 Object.keys(JOURNEY_KPIS).forEach(function (k) {
   check(K[k] === JOURNEY_KPIS[k], '15. KPI ' + k + ' = ' + JOURNEY_KPIS[k] + ' (got ' + K[k] + ')');

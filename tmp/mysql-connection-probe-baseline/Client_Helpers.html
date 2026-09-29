@@ -1,0 +1,2213 @@
+<script>
+
+/* [UI-1.1 / U-02] Guarantee the document direction on every page.
+ *
+ * Only 24 of the 85 page templates set dir="rtl" on their own <html> element.
+ * The other 61 render left-to-right, so every component that positions itself
+ * against the document direction — modals, toasts, spinners, the drawer, the
+ * combo list, `margin-inline-*` on anything — comes out mirrored. The page
+ * *content* still looked right because the text is Arabic and CSS_Tokens sets
+ * `[dir="rtl"] body { text-align: right }`, which is why this survived so long.
+ *
+ * Client_Helpers is included by 82 of the 85 templates, in <head>, before any
+ * paint, so one assignment fixes all of them. It is idempotent: the 24 pages
+ * that already declare dir="rtl" are unaffected. No page in the tree declares
+ * dir="ltr" (verified), so there is nothing to opt out.
+ *
+ * Expect this to REVEAL small layout bugs that the wrong direction was masking.
+ * Those are listed, not silently fixed — they are budgeted as step 3.7.
+ *
+ * [i18n Stage B] The forced RTL is now the DEFAULT of a small gated
+ * bootstrap. The preferred language lives in one validated erp_prefs key and
+ * is read ONCE here, before paint, so the root lang/dir are right on the
+ * first frame and a saved English choice cannot flash Arabic. With the
+ * prototype gate off, only the Arabic default is applied — exactly the
+ * direction guarantee this file always made. */
+try {
+  var __erpLangGate = /(?:^|[?&])langswitch=1(?:&|$)/.test(window.location.search) ||
+    localStorage.getItem('erp_lang_test') === '1';
+  var __erpLangPref = (JSON.parse(localStorage.getItem('erp_prefs') || '{}') || {}).language;
+  var __erpLang = (__erpLangGate && __erpLangPref === 'en') ? 'en' : 'ar';
+  document.documentElement.setAttribute('lang', __erpLang);
+  document.documentElement.setAttribute('dir', __erpLang === 'en' ? 'ltr' : 'rtl');
+} catch (e) { try { document.documentElement.setAttribute('dir', 'rtl'); } catch (e2) {} }
+
+window.API = window.API || {};
+window.FMT = window.FMT || {};
+window.UI  = window.UI  || {};
+
+/* ── [i18n Stage B] Shared language runtime (the gate governs behavior) ──
+ *
+ * Everything below is inert unless I18N.ENABLED is true: the header renders
+ * no switch, bind() registers nothing, setLang() no-ops and the page stays on
+ * the Arabic default. Enabled by ?langswitch=1 or erp_lang_test=1.
+ *
+ * Lookups are IN-MEMORY ONLY. There is no MutationObserver, no polling, no
+ * timer and no document-wide text walker: a label node is registered once
+ * with bind(), and setLang() rewrites just those nodes before notifying the
+ * page adapters. t() never throws — a missing key is returned as-is and
+ * counted in I18N._misses so coverage checks can list it. */
+window.I18N = window.I18N || {};
+
+(function (I18N) {
+  I18N.ENABLED = window.__erpLangGate === true;
+  I18N._misses = {};
+  I18N._dict = {};
+  I18N._pages = {};
+
+  var current = window.__erpLang === 'en' ? 'en' : 'ar';
+  var bindings = [];
+  var subscribers = [];
+
+  function entry_(key) {
+    var e = I18N._dict[key];
+    return (e && (e[current] != null || e.ar != null || e.en != null)) ? e : null;
+  }
+
+  function fill_(text, params) {
+    if (params == null) return String(text);
+    return String(text).replace(/\{(\w+)\}/g, function (m, name) {
+      return params[name] != null ? String(params[name]) : m;
+    });
+  }
+
+  function merge_(dict) {
+    if (!dict) return;
+    for (var k in dict) {
+      if (Object.prototype.hasOwnProperty.call(dict, k)) I18N._dict[k] = dict[k];
+    }
+  }
+
+  function isLive_(rec) {
+    var el = rec.el;
+    if (!el) return false;
+    try { if (typeof el.isConnected === 'boolean') return el.isConnected; } catch (e) {}
+    return true;   /* engines without isConnected are assumed live */
+  }
+
+  function applyRecord_(rec) {
+    if (!rec.el) return;
+    var value = I18N.t(rec.key);
+    try {
+      if (!rec.attr || rec.attr === 'text') rec.el.textContent = value;
+      else rec.el.setAttribute(rec.attr, value);
+    } catch (e) {}
+  }
+
+  /* Direct in-memory lookup with {name}/{0} substitution. A key with no target
+     language falls back to Arabic — the app stays readable, never blank. */
+  I18N.t = function (key, params) {
+    var e = entry_(key);
+    if (!e) {
+      I18N._misses[key] = (I18N._misses[key] || 0) + 1;
+      return key;
+    }
+    return fill_(e[current] != null ? e[current] : (e.ar != null ? e.ar : e.en), params);
+  };
+
+  I18N.lang = function () { return current; };
+
+  I18N.registerCommon = function (dict) { merge_(dict); };
+
+  I18N.registerPage = function (id, dict) {
+    if (!id || !dict) return;
+    I18N._pages[id] = dict;
+    merge_(dict);
+  };
+
+  I18N.bind = function (el, key, attr) {
+    if (!I18N.ENABLED || !el || !key) return null;
+    var rec = { el: el, key: key, attr: attr || 'text' };
+    bindings.push(rec);
+    applyRecord_(rec);
+    return rec;
+  };
+
+  I18N.apply = function () {
+    if (!I18N.ENABLED) return;
+    var live = [];
+    for (var i = 0; i < bindings.length; i++) {
+      if (!isLive_(bindings[i])) continue;   /* replaced node — drop the record */
+      applyRecord_(bindings[i]);
+      live.push(bindings[i]);
+    }
+    bindings = live;
+  };
+
+  I18N.onChange = function (fn) {
+    if (typeof fn !== 'function') return function () {};
+    subscribers.push(fn);
+    return function () {
+      var i = subscribers.indexOf(fn);
+      if (i !== -1) subscribers.splice(i, 1);
+    };
+  };
+
+  I18N.setLang = function (next) {
+    if (!I18N.ENABLED) return;                       /* gate governs behavior */
+    if (next !== 'ar' && next !== 'en') return;      /* validate only ar | en */
+    if (next === current) return;                    /* already selected */
+    current = next;
+    try {
+      var root = document.documentElement;
+      root.setAttribute('lang', current);
+      root.setAttribute('dir', current === 'en' ? 'ltr' : 'rtl');
+    } catch (e) {}
+    var sw = null;
+    try { sw = document.querySelector('.lang-switch'); } catch (e) {}
+    if (sw) sw.setAttribute('aria-checked', current === 'en' ? 'true' : 'false');
+    I18N.apply();
+    try { if (window.UIC && UIC.setPref) UIC.setPref('language', current); } catch (e) {}
+    for (var i = 0; i < subscribers.length; i++) {
+      try { subscribers[i](current); } catch (err) {}
+    }
+  };
+})(window.I18N);
+
+/* The labels shared by more than one page. Deliberately small — a page embeds
+ * only its own catalog through I18N.registerPage. */
+I18N.registerCommon({
+  'common.loading':      { ar: 'جاري التحميل...', en: 'Loading...' },
+  'common.edit':         { ar: 'تعديل', en: 'Edit' },
+  'common.delete':       { ar: 'حذف', en: 'Delete' },
+  'common.optional':     { ar: 'اختياري', en: 'Optional' },
+  'common.typeToSearch': { ar: 'اكتب للبحث…', en: 'Type to search…' },
+  'common.done':         { ar: 'تم', en: 'Done' },
+  'common.failed':       { ar: 'فشل', en: 'Failed' },
+  'common.error':        { ar: 'خطأ', en: 'Error' },
+  'common.errorPrefix':  { ar: 'خطأ:', en: 'Error:' }
+});
+
+/* Code.js include() now evaluates included files as templates and passes
+ * scriptUrl + sessionToken, so these tokens ARE evaluated here. NOTE: the
+ * Apps Script template scriptlet context has no JSON global, so use a plain
+ * force-print scriptlets — both values are strings (URL / token). */
+window.SESSION_TOKEN = '__APP_SESSION_TOKEN__';
+
+/* Surface any uncaught error as a visible banner instead of a silent blank page. */
+window.addEventListener('error', function (e) {
+  try {
+    var b = document.getElementById('app-error-banner');
+    if (!b) {
+      b = document.createElement('div');
+      b.id = 'app-error-banner';
+      b.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:99999;background:#7f1d1d;color:#fff;font:13px/1.5 Segoe UI,Tahoma,Arial;padding:10px 14px;white-space:pre-wrap;direction:ltr;text-align:left;';
+      (document.body || document.documentElement).appendChild(b);
+    }
+    b.textContent = 'JS Error: ' + (e.message || e.error || e) + (e.filename ? ' @ ' + e.filename + ':' + e.lineno : '');
+  } catch (err) {}
+  try { if (window.UIC && UIC.reportError) UIC.reportError((e && e.message) || e, { stack: (e && e.error && e.error.stack) || '' }); } catch (er) {}
+});
+
+window.addEventListener('unhandledrejection', function (e) {
+  try {
+    if (window.UIC && UIC.reportError) UIC.reportError('Unhandled Promise Rejection: ' + ((e && e.reason && (e.reason.message || e.reason)) || e), { stack: (e && e.reason && e.reason.stack) || '' });
+  } catch (er) {}
+});
+
+(function initVhPolyfill() {
+  function setVh() {
+    var vh = window.innerHeight * 0.01;
+    document.documentElement.style.setProperty('--vh', vh + 'px');
+  }
+  setVh();
+  window.addEventListener('resize', setVh, { passive: true });
+  window.addEventListener('orientationchange', function () {
+
+    setTimeout(setVh, 300);
+  });
+})();
+
+(function initKeyboardDetection() {
+  var vv = window.visualViewport;
+  if (!vv) return;
+
+  function onViewportChange() {
+    var keyboardHeight = Math.max(0, window.innerHeight - vv.height);
+    var isOpen = keyboardHeight > 150; // 150px threshold avoids false positives
+    document.documentElement.style.setProperty('--keyboard-height', keyboardHeight + 'px');
+    document.documentElement.classList.toggle('keyboard-open', isOpen);
+  }
+
+  vv.addEventListener('resize', onViewportChange, { passive: true });
+  vv.addEventListener('scroll', onViewportChange, { passive: true });
+})();
+
+(function initInputAutoScroll() {
+  document.addEventListener('focusin', function (e) {
+    var el = e.target;
+    if (!el || !['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName)) return;
+    setTimeout(function () {
+      try {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      } catch (_) {
+        el.scrollIntoView();
+      }
+    }, 350);
+  }, { passive: true });
+})();
+
+/* [RT-4b] The last company this tab talked to.
+ *
+ * UIC.Live's retry queue has to survive a reload, and after a reload it has to
+ * be able to REBUILD the request. Every page's companyCall is a closure over a
+ * `target_system` literal, so the queue cannot see it and JSON.stringify cannot
+ * carry it — which is exactly why a queued entry could never drain in a new
+ * session. Recording it here costs one assignment and needs no page to change:
+ * companyCall calls API.call synchronously, so by the time UIC.Live.save has
+ * its promise back, this is already the target of that very call.
+ *
+ * Read-only from the outside. Nothing decides anything from it except the queue
+ * entry it stamps at save time, and an entry with no stamp is not queued. */
+/* A save keeps its request ID through transport failures, queue replays and
+ * reloads in this tab. No payload contents or session tokens are persisted here.
+ * A completed save is removed from the pending index, allowing a NEW form with
+ * identical values to be a separate legitimate transaction.
+ */
+API._requestGuard = (function () {
+  var STORAGE_KEY = 'erp_pending_write_requests_v1';
+  var flights = Object.create(null), forms = Object.create(null);
+  function canonical(value) {
+    if (value === null || typeof value !== 'object') return JSON.stringify(value);
+    if (Array.isArray(value)) return '[' + value.map(canonical).join(',') + ']';
+    return '{' + Object.keys(value).sort().map(function (k) { return JSON.stringify(k) + ':' + canonical(value[k]); }).join(',') + '}';
+  }
+  function hash(text) {
+    var a = 2166136261, b = 5381;
+    for (var i = 0; i < text.length; i++) { a = Math.imul(a ^ text.charCodeAt(i), 16777619); b = Math.imul(b, 33) ^ text.charCodeAt(i); }
+    return (a >>> 0).toString(16) + '_' + (b >>> 0).toString(16);
+  }
+  function read() {
+    try {
+      var value = JSON.parse(window.sessionStorage.getItem(STORAGE_KEY) || '{}');
+      if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid pending-request index');
+      return value;
+    } catch (e) { throw { status: 'error', code: 'REQUEST_STORAGE_UNAVAILABLE', message: 'تعذر حفظ رقم الطلب في المتصفح. فعّل تخزين الجلسة قبل الحفظ لتجنب التكرار.' }; }
+  }
+  function persist(value) {
+    try { window.sessionStorage.setItem(STORAGE_KEY, JSON.stringify(value)); }
+    catch (e) { throw { status: 'error', code: 'REQUEST_STORAGE_UNAVAILABLE', message: 'تعذر حفظ رقم الطلب؛ لم يُرسل الطلب. تحقق من مساحة تخزين المتصفح.' }; }
+  }
+  function id() {
+    if (window.crypto && window.crypto.randomUUID) return window.crypto.randomUUID();
+    var values = new Uint32Array(4);
+    if (window.crypto && window.crypto.getRandomValues) window.crypto.getRandomValues(values);
+    else for (var i = 0; i < values.length; i++) values[i] = Math.floor(Math.random() * 4294967296);
+    return Array.prototype.map.call(values, function (v) { return ('00000000' + v.toString(16)).slice(-8); }).join('');
+  }
+  function formData(form, data) {
+    if (!form || !data) return data;
+    var stamp = hash(canonical(JSON.parse(JSON.stringify(data))));
+    if (!form.__erpWriteIntent || form.__erpWriteIntent.stamp !== stamp) form.__erpWriteIntent = {stamp:stamp,id:id()};
+    var formId = form.__erpWriteIntent.id;
+    forms[formId] = form;
+    Object.defineProperty(data, '__request_form_id', {value:formId,enumerable:false});
+    return data;
+  }
+  function prepare(action, payload, sessionToken) {
+    if (action !== 'company_action' || /^(get_|list_|prefetch_|preview_|search_|check_|validate_|export_|lookup_|ping$)/.test(String(payload.module_action || ''))) return null;
+    var data = payload.data || (payload.data = {});
+    if (!data || typeof data !== 'object' || Array.isArray(data)) throw { status:'error', message:'Invalid write payload' };
+    var clean = JSON.parse(JSON.stringify(data)); delete clean.__request_id; delete clean.__request_owner;
+    var session = API.getSession ? API.getSession() || {} : {};
+    /* AUTH_USER_EMAIL is injected only after doGet has authenticated the page.
+     * Prefer it over browser storage: on iPhone the Apps Script iframe can have
+     * the valid URL session but no access to the login page's localStorage. */
+    var who = String(window.AUTH_USER_EMAIL || (session.user && session.user.email) || session.email || '').trim().toLowerCase();
+    if (!who) throw {status:'error',code:'REQUEST_LOGIN_REQUIRED',message:'أعد تسجيل الدخول لتثبيت هوية الطلب قبل الحفظ.'};
+    if (data.__request_owner && data.__request_owner !== who) throw {status:'error',code:'REQUEST_OWNER_MISMATCH',uncertain:true,message:'هذا الطلب المؤجل يخص مستخدمًا آخر. سجّل الدخول بالحساب الأصلي لمراجعته.'};
+    var signature = hash(JSON.stringify([who,payload.target_system,payload.module_action])) + ':' + hash(canonical(clean));
+    var pending = read(), existing = pending[signature];
+    var requestId = data.__request_id || (existing && existing.id) || data.__request_form_id || id();
+    if (!/^[A-Za-z0-9_-]{16,100}$/.test(String(requestId))) throw {status:'error',message:'Invalid request ID'};
+    var flightKey = signature + ':' + requestId;
+    data.__request_id = requestId; data.__request_owner = who;
+    if (flights[flightKey]) return flights[flightKey];
+    if (!existing && Object.keys(pending).length >= 500) throw {status:'error',message:'يوجد عدد كبير من الطلبات غير المؤكدة؛ راجعها مع المسؤول قبل إضافة طلبات أخرى.'};
+    pending[signature] = {id:requestId}; persist(pending);
+    var entry = {key:flightKey,signature:signature,id:requestId,formId:data.__request_form_id,promise:null};
+    flights[flightKey] = entry;
+    return entry;
+  }
+  function finish(entry, result, error) {
+    if (!entry) return;
+    delete flights[entry.key];
+    // Even an auth rejection may follow an earlier attempt whose reply was lost.
+    // The retained intent is released only when the server confirms success or
+    // explicitly confirms that no mutation occurred (notApplied).
+    if (error) return;
+    if (result && result.notApplied === true) {
+      try {
+        var pending = read();
+        if (pending[entry.signature] && pending[entry.signature].id === entry.id) { delete pending[entry.signature]; persist(pending); }
+      } catch (e) { /* Keeping a receipt after success is safer than losing an uncertain one. */ }
+      return;
+    }
+    if (entry.formId && forms[entry.formId]) {
+      var form = forms[entry.formId];
+      if (form.__erpWriteIntent && form.__erpWriteIntent.id === entry.formId) delete form.__erpWriteIntent;
+      delete forms[entry.formId];
+    }
+    try {
+      var pending = read();
+      if (pending[entry.signature] && pending[entry.signature].id === entry.id) { delete pending[entry.signature]; persist(pending); }
+    } catch (e) { /* Keeping a receipt after success is safer than losing an uncertain one. */ }
+  }
+  /* Bounded recovery poll after a lost response. Keeps the SAME request ID and
+   * asks the server for its receipt state (request_status route — read-only,
+   * never a mutation). Resolves {outcome:'done'|'failed', ...} when the server
+   * proves an outcome, rejects {outcome:'unknown'|'review'} when the budget is
+   * exhausted. Never mints a new ID, never advises a replacement request.
+   * pollDelays is exposed so verify suites can shrink the backoff. */
+  var RECOVER_POLL_MS_ = [700, 1300, 2500];
+  function statusCall(meta, sessionToken) {
+    return new Promise(function (resolve) {
+      var settled = false;
+      function done(v) { if (!settled) { settled = true; resolve(v); } }
+      /* [Phase C] The recovery poll is required user-facing waiting, so the
+         same probe records its queue/round trip and system-wait interval. */
+      var probe = (window.PERF && PERF._probe) ? PERF._probe('request_status', {}) : null;
+      try {
+        if (probe) probe.sent();
+        google.script.run
+          .withSuccessHandler(function (r) { if (probe) probe.done(true); done({ ok: true, body: r }); })
+          .withFailureHandler(function () { if (probe) probe.done(false); done({ ok: false }); })
+          .apiRouter({ action: 'request_status',
+            payload: { target_system: meta.target_system, module_action: meta.module_action, request_id: meta.requestId },
+            sessionToken: sessionToken });
+        /* A status poll that never answers is evidence of nothing; treat it
+           as a missed round and let the next attempt run. */
+        setTimeout(function () { if (probe) probe.done(false); done({ ok: false }); }, 10000);
+      } catch (e) { if (probe) probe.done(false); done({ ok: false }); }
+    });
+  }
+  function recoverAfterLoss(meta, sessionToken) {
+    var delays = RECOVER_POLL_MS_;
+    try {
+      if (window.UIC && UIC.toast) UIC.toast('جاري التحقق من نتيجة الحفظ…', 'info');
+    } catch (e) {}
+    return new Promise(function (resolve, reject) {
+      var attempt = 0;
+      function next() {
+        statusCall(meta, sessionToken).then(function (r) {
+          var b = (r && r.ok && r.body) || null;
+          var st = b && b.status;
+          if (st === 'done' && b.result) { resolve({ outcome: 'done', result: b.result }); return; }
+          if (st === 'failed' && b.error) { resolve({ outcome: 'failed', error: b.error }); return; }
+          if (st === 'review_required') { reject({ outcome: 'review', requestId: meta.requestId }); return; }
+          /* pending, unknown, or a lost poll round: keep checking inside the
+             budget, then hand back an actionable uncertain outcome. */
+          if (attempt < delays.length) {
+            setTimeout(next, delays[attempt++]);
+          } else {
+            reject({ outcome: 'unknown', requestId: meta.requestId });
+          }
+        });
+      }
+      next();
+    });
+  }
+  return {prepare:prepare,finish:finish,formData:formData,recoverAfterLoss:recoverAfterLoss,pollDelays:RECOVER_POLL_MS_};
+})();
+
+/* ── [Phase F] The API facade and the request coordinator (flag, default off) ─
+ *
+ * API.call is the entry point pages already use. With UIC.REQ_COORD_CORE_
+ * false (the shipped default) it delegates straight to API._dispatch and the
+ * behaviour is exactly today's — no queue, no lanes, no coalescing. When the
+ * flag is on, the call is routed through the bounded priority queue in
+ * API._coord and the existing dispatcher runs unchanged at dequeue time.
+ *
+ * API._dispatch is the original body, renamed only; `opts` is the additive
+ * fourth argument used by the coordinator (never by existing callers, so
+ * existing call sites are untouched). */
+API._notifyCapabilityPickers = function (reason) {
+  try {
+    if (typeof window !== 'undefined' && window.UIC && UIC.TcCapabilityPicker && UIC.TcCapabilityPicker.invalidateAll) {
+      UIC.TcCapabilityPicker.invalidateAll(reason);
+    }
+  } catch (e) {}
+};
+API.call = function (action, payload, sessionToken, opts) {
+  if (API._mysqlReads) {
+    API._mysqlReads.scope(sessionToken, payload && payload.target_system);
+    if (API._mysqlReads.accepts(action, payload)) return API._mysqlReads.call(action, payload, sessionToken, opts);
+    if (action === 'company_action' && payload && /^(add_|save_|update_|delete_|revise_|edit_|close_|make_collection|toggle_)/.test(payload.module_action || '')) {
+      API._mysqlReads.clear();
+      /* Conservatively expire instant-picker catalogs at the mutation boundary. */
+      API._notifyCapabilityPickers('mutation');
+    }
+  }
+  var coord = null;
+  try { if (window.UIC && UIC.REQ_COORD_CORE_ === true) coord = API._coord || null; } catch (e) {}
+  if (!coord) return API._dispatch(action, payload, sessionToken, opts);
+  /* [Phase F] Queueing must not move synchronous target capture: UIC.Live.save
+     reads API._lastTarget immediately after the page's companyCall returns, so
+     the company of THIS call is recorded before it joins the queue. */
+  if (payload && payload.target_system) API._lastTarget = payload.target_system;
+  var laneOpts = opts || null;
+  if (!laneOpts) {
+    /* Reserved hint: UIC.Live tags its own poll for the background lane while
+       the coordinator is on. Consumed and cleared synchronously. */
+    try {
+      if (window.UIC && UIC._rpcLaneHint) { laneOpts = UIC._rpcLaneHint; UIC._rpcLaneHint = null; }
+    } catch (eHint) {}
+  }
+  return coord.submit(action, payload, sessionToken, laneOpts, API._dispatch);
+};
+
+/* Safe MySQL reads use the existing coordinator even when the general rollout
+ * flag is off. Deduplication includes in-flight calls; the coordinator timeout
+ * frees its local slot but cannot cancel an RPC already running on Apps Script. */
+API._mysqlReads = (function () {
+  var scopeKey = '', generation = 0, flights = {};
+  var reads = ('get_system_qty get_stock_scan_qty get_stock_scan_options get_stock_scan_catalog get_stock_scan_balances get_system_product_options get_products_live ' +
+    'get_main_review get_client_balance_sheets get_manufacture_headers get_manufacture_footers get_manufacture_refs ' +
+    'get_production_capability_catalog get_sales_capacity_catalog ' +
+    'get_box_analysis get_box_item_history get_box_alerts').split(' ');
+  function clear() { generation++; flights = {}; }
+  function scope(token, company) {
+    var next = JSON.stringify([token || '', company || 'viewer']);
+    if (next !== scopeKey) { scopeKey = next; clear(); }
+  }
+  function canonical(v, key) {
+    if (Array.isArray(v)) {
+      var a = v.map(function (x) { return canonical(x); });
+      return ['years','months','product_ids','chart_of_accounts_list','ids'].indexOf(key) < 0 ? a : a.sort();
+    }
+    if (v && typeof v === 'object') {
+      var out = {}; Object.keys(v).sort().forEach(function (k) { out[k] = canonical(v[k], k); }); return out;
+    }
+    return v;
+  }
+  function accepts(action, p) {
+    return ['db_list_tables','db_get_columns','db_query','db_aggregate'].indexOf(action) >= 0 ||
+      (action === 'company_action' && p && reads.indexOf(p.module_action) >= 0);
+  }
+  function call(action, payload, token, opts) {
+    var p = JSON.parse(JSON.stringify(payload || {})), gen = generation;
+    var key = JSON.stringify([scopeKey, action, canonical(p)]);
+    if (flights[key]) return flights[key];
+    var coordOpts = Object.assign({ lane: 'foreground' }, opts || {});
+    /* A MySQL read that never calls back must not occupy a coordinator slot
+       forever. The underlying RPC cannot be cancelled, but timing it out here
+       frees the slot, releases this in-flight dedupe entry, and lets the page
+       report the failure or retry. Writes never enter this read-only path. */
+    coordOpts.timeoutMs = 30000;
+    var request = API._coord.submit(action, p, token, coordOpts, API._dispatch);
+    var promise = request.then(function (value) {
+      if (gen !== generation) throw { code: 'MYSQL_SCOPE_CHANGED', message: 'Request scope changed' };
+      return value;
+    });
+    flights[key] = promise;
+    promise.then(function () { if (flights[key] === promise) delete flights[key]; }, function () { if (flights[key] === promise) delete flights[key]; });
+    return promise;
+  }
+  return { scope: scope, clear: clear, accepts: accepts, call: call };
+})();
+
+API._dispatch = function (action, payload, sessionToken, opts) {
+  if (payload && payload.target_system) API._lastTarget = payload.target_system;
+  payload = payload || {};
+  /* [Phase C] One no-op-able probe per call: queue delay (decision -> send)
+     and call -> callback. PERF._probe returns null unless a sampled journey is
+     open, so a closed measurement window costs two property reads.
+     [Phase F] With the coordinator active the queue wait is recorded by
+     API._coord through PERF.recordRpc at dispatch, so the probe is skipped
+     here to keep one RPC from being counted twice. With the flag off `opts`
+     is undefined and this is exactly the old expression. */
+  var __perfProbe = (opts && opts.coord === true) ? null
+    : ((window.PERF && PERF._probe) ? PERF._probe(action, payload) : null);
+  var intent;
+  try { intent = API._requestGuard.prepare(action, payload, sessionToken); } catch (e) { return Promise.reject(e); }
+  if (intent && intent.promise) return intent.promise;
+  var wire = new Promise(function (resolve, reject) {
+    var request = { action: action, payload: intent ? JSON.parse(JSON.stringify(payload)) : payload }; 
+    if (sessionToken) request.sessionToken = sessionToken;
+    var reconcileReplayUsed = false;
+    /* Recovery metadata for a guarded write: the poll reuses this exact
+       identity and never invents another one. */
+    var recoverMeta = (intent && payload && payload.target_system && payload.module_action) ?
+      { target_system: payload.target_system, module_action: payload.module_action, requestId: intent.id } : null;
+    function uncertainFailure(message) {
+      try { if (window.PERF && PERF.setOutcome) PERF.setOutcome('transport-uncertain'); } catch (ePerfF) {}
+      var failure = {
+        status: 'error', transport: true, uncertain: !!intent,
+        checkStatus: !!intent, requestId: intent ? intent.id : undefined,
+        message: message
+      };
+      API._requestGuard.finish(intent, null, failure);
+      reject(failure);
+    }
+    /* A transport loss or an in-progress reply starts the bounded status poll
+       before surfacing anything destructive. The red uncertain message is the
+       last resort, and it carries the request ID plus a check-status flag so
+       the UI can offer reconciliation instead of a replacement request. */
+    function pollThenUncertain(fallbackMessage) {
+      if (!recoverMeta) {
+        uncertainFailure(fallbackMessage);
+        return;
+      }
+      API._requestGuard.recoverAfterLoss(recoverMeta, sessionToken).then(function (rc) {
+        if (rc.outcome === 'done') {
+          /* The poll proved the write committed: this is the authoritative
+             confirmation, so it may stage save_confirmed. */
+          try { if (window.PERF && PERF.stage) { PERF.stage('save_confirmed'); if (PERF.setOutcome) PERF.setOutcome('completed'); } } catch (ePerfG) {}
+          API._requestGuard.finish(intent, rc.result, null);
+          resolve(rc.result);
+        } else {
+          try { if (window.PERF && PERF.setOutcome) PERF.setOutcome(PERF.classifyError(rc.error)); } catch (ePerfH) {}
+          API._requestGuard.finish(intent, rc.error, null);
+          reject(rc.error);
+        }
+      }, function (rc) {
+        var msg = (rc && rc.outcome === 'review')
+          ? 'تعذر تأكيد نتيجة الطلب — بانتظار مراجعة المسؤول. لا تنشئ طلبًا بديلًا؛ رقم الطلب: ' + recoverMeta.requestId
+          : fallbackMessage;
+        uncertainFailure(msg);
+      });
+    }
+
+    /* A server-side uncertain result is different from a lost response: the
+       receipt is already durable and marked uncertain. Re-submit the exact
+       same envelope once so actions that explicitly support request-id
+       recovery can inspect their business markers and either return the
+       original success or safely finish an interrupted staged write. Actions
+       without recovery support remain blocked by the server guard, so this
+       can never turn into a blind second mutation. */
+    function send() {
+      if (__perfProbe) __perfProbe.sent();
+      /* A guarded write is the save path: the pending-feedback clock starts at
+         dispatch. UIC.Live.save stages this earlier (setBusy) and the first
+         stage per journey wins, so both paths agree. */
+      try { if (intent && window.PERF && PERF.stage) PERF.stage('save_feedback'); } catch (ePerfA) {}
+      google.script.run
+        .withSuccessHandler(function (result) {
+        if (__perfProbe) __perfProbe.done(true);
+        if (result && result.notApplied === true) {
+          /* Server-confirmed non-mutation: release the retained request so a
+             corrected save starts clean, then reject for the toast. */
+          try { if (intent && window.PERF && PERF.setOutcome) PERF.setOutcome('validation'); } catch (ePerfB) {}
+          API._requestGuard.finish(intent, result, null);
+          reject(result);
+        } else if (result && result.status === 'error') {
+          /* Redirect targets MUST be absolute: inside the HtmlService sandbox
+           * the executing origin is a *.googleusercontent.com iframe, so a
+           * relative '/' would land on Google Drive's error page. */
+          var _s = window.scriptUrl || '/';
+          if (result.code === 'SESSION_EXPIRED') {
+            if (window.UIC && UIC.navTo) UIC.navTo(null, _s + '?action=session_expired'); else window.location.href = _s + '?action=session_expired';
+          } else if (result.code === 'SYSTEM_DISABLED') {
+            if (window.UIC && UIC.navTo) UIC.navTo(null, _s + '?action=login&shutdown=1'); else window.location.href = _s + '?action=login&shutdown=1';
+          }
+          /* Observed permission/session failures invalidate instant-picker
+           * catalogs; denial handling above still owns navigation. */
+          try {
+            var _denyCode = String(result.code || '');
+            if (/NOT_AUTHORIZED|UNAUTHORIZED|AUTHORIZATION|SESSION_EXPIRED|SYSTEM_DISABLED|ACCOUNT_DISABLED|FORBIDDEN|LOGIN_REQUIRED|OWNER_MISMATCH/i.test(_denyCode)) {
+              if (API._notifyCapabilityPickers) API._notifyCapabilityPickers('denial');
+            }
+          } catch (eDeny) {}
+          if (result.code === 'REQUEST_IN_PROGRESS' && recoverMeta) {
+            pollThenUncertain(result.message || 'الطلب قيد المعالجة.');
+            return;
+          }
+          if (result.code === 'REQUEST_UNCERTAIN' && recoverMeta && !reconcileReplayUsed) {
+            reconcileReplayUsed = true;
+            try {
+              if (window.UIC && UIC.toast) UIC.toast('جاري مطابقة نتيجة الحفظ واستكمالها بأمان…', 'info');
+            } catch (e) {}
+            send();
+            return;
+          }
+          if (result.code === 'REQUEST_UNCERTAIN' && recoverMeta) {
+            result.checkStatus = true;
+            result.requestId = recoverMeta.requestId;
+          }
+          try { if (intent && window.PERF && PERF.setOutcome) PERF.setOutcome(PERF.classifyError(result)); } catch (ePerfC) {}
+          API._requestGuard.finish(intent, null, result);
+          reject(result);
+        } else {
+          /* Server-confirmed business success. Only a guarded write counts as
+             save_confirmed: queueing, a pending poll or an uncertain envelope
+             must never become success. */
+          try {
+            if (intent && window.PERF && PERF.stage) {
+              PERF.stage('save_confirmed');
+              if (PERF.setOutcome) PERF.setOutcome('completed');
+            }
+          } catch (ePerfD) {}
+          API._requestGuard.finish(intent, result, null);
+          resolve(result);
+        }
+        })
+        .withFailureHandler(function (err) {
+        if (__perfProbe) __perfProbe.done(false);
+        /* transport: true is set inside uncertainFailure below: ONLY this
+         * failure handler marks a failure that never reached a handler, so
+         * the retry decision stays exact — a handler that rejected is never
+         * retried. The response can be lost AFTER commit; reuse the original
+         * request ID via the bounded status poll. */
+          try { if (intent && window.PERF && PERF.setOutcome) PERF.setOutcome('transport-uncertain'); } catch (ePerfE) {}
+          pollThenUncertain(intent ? 'انقطع الاتصال؛ قد يكون الطلب حُفظ. أعد المحاولة بنفس الطلب ولا تنشئ طلبًا بديلًا قبل التحقق.' : (err && err.message ? err.message : 'خطأ غير متوقع'));
+        })
+        .apiRouter(request);
+    }
+    send();
+  });
+  if (intent) intent.promise = wire;
+  wire.catch(function (err) {
+    if (err && !err.status) { err.transport = true; err.uncertain = !!intent; API._requestGuard.finish(intent, null, err); }
+  });
+  return wire;
+};
+
+/* ── [Phase F] API._coord — bounded request coordinator (default off) ───────
+ *
+ * Reachable ONLY when window.UIC.REQ_COORD_CORE_ === true, and only through
+ * the facade above. It wraps the RPC dispatch inside API.call; the dispatcher
+ * itself (API._dispatch) is unchanged.
+ *
+ * NO TIMER, OBSERVER OR POLLER is created here. The queue is pumped by two
+ * events only — a new submission, and a settled call — so an idle queue costs
+ * nothing. Already-dispatched calls cannot be cancelled; only entries still
+ * waiting in the queue may be reordered, coalesced or dropped.
+ *
+ * LANES, highest priority first:
+ *   foreground  user actions and authoritative checks — the default
+ *   background  Live refresh (get_page_versions)
+ *   prefetch    prefetch_refs and the like
+ * The lane comes from opts.lane when a caller states one, otherwise from the
+ * module_action, and an unrecognised action defaults to foreground: nothing
+ * is demoted to a low lane by accident.
+ *
+ * BUDGET: 6 concurrent calls (deliberately below the simultaneous-execution
+ * ceiling available to this app), with 2 of those slots reserved for
+ * foreground work. Background and prefetch may therefore use at most 4 at
+ * once, so a low-priority backlog can never occupy a slot a user action
+ * needs. The whole queue is capped; prefetch has its own tighter cap and is
+ * dropped outright while the tab is hidden — a prefetch is a bet on what the
+ * user will do next, and a hidden tab is not doing anything next.
+ *
+ * COALESCING: ONLY pending entries whose caller explicitly passed
+ * opts.coalesce === true, and only outside the foreground lane. Writes,
+ * saves and approvals are never coalesced, and a call already on the wire is
+ * never merged — it cannot be cancelled.
+ *
+ * BACKOFF: a transport or uncertain failure puts the LOW lanes on a jittered
+ * exponential cooldown; foreground work is never held back by it. Because
+ * there is no timer, an expired cooldown is observed at the next pump — and a
+ * pump always follows a settle, so a queue with work in it is never stranded. */
+API._coord = (function () {
+  'use strict';
+
+  var MAX_CONCURRENT = 6;            /* below the safe simultaneous-call budget */
+  var FOREGROUND_RESERVE = 2;        /* slots low-priority work may never take */
+  var MAX_PENDING = 24;              /* hard queue ceiling */
+  var MAX_PREFETCH_PENDING = 8;      /* prefetch is a bet, never a backlog */
+  var BACKOFF_BASE_MS = 8000;
+  var BACKOFF_MAX_MS = 120000;
+
+  var pending = [];
+  var active = 0;
+  var failures = 0;
+  var backoffUntil = 0;
+
+  var RANK = { foreground: 0, background: 1, prefetch: 2 };
+
+  function laneFor(action, payload, opts) {
+    var want = opts && opts.lane;
+    if (want === 'foreground' || want === 'background' || want === 'prefetch') return want;
+    var ma = String((payload && payload.module_action) || action || '');
+    if (/^prefetch_/.test(ma)) return 'prefetch';
+    if (ma === 'get_page_versions') return 'background';
+    return 'foreground';
+  }
+
+  function hidden() {
+    try { return document.visibilityState === 'hidden'; } catch (e) { return false; }
+  }
+
+  function rejectEntry(e, code, message) {
+    e.reject({ status: 'error', code: code, transport: false, message: message });
+  }
+
+  function coalesceKey(e) {
+    var body;
+    try { body = JSON.stringify(e.payload === undefined ? null : e.payload); }
+    catch (err) { return null; }         /* unstringifiable payloads never merge */
+    return e.action + '\u0000' + body;
+  }
+
+  function oldestPrefetchIndex() {
+    for (var i = 0; i < pending.length; i++) if (pending[i].lane === 'prefetch') return i;
+    return -1;
+  }
+
+  function notePerf(e, end, ok) {
+    try {
+      if (!(window.PERF && PERF.recordRpc)) return;
+      PERF.recordRpc({
+        action: String((e.payload && e.payload.module_action) || e.action || ''),
+        queueMs: Math.max(0, e.dispatchedAt - e.enqueuedAt),
+        roundtripMs: Math.max(0, end - e.dispatchedAt),
+        ok: ok !== false,
+        blocking: e.lane === 'foreground'
+      });
+    } catch (err) {}
+  }
+
+  function noteFailure(ok, err) {
+    if (ok) { failures = 0; backoffUntil = 0; return; }
+    if (!(err && (err.transport === true || err.uncertain === true || err.code === 'REQUEST_UNCERTAIN'))) return;
+    failures = Math.min(failures + 1, 6);
+    var wait = Math.min(BACKOFF_BASE_MS * Math.pow(2, failures - 1), BACKOFF_MAX_MS);
+    backoffUntil = Date.now() + Math.round(wait * (0.5 + Math.random() * 0.5));
+  }
+
+  function dispatch(e) {
+    e.dispatchedAt = Date.now();
+    active++;
+    var settled = false;
+    var timeout = null;
+    var done = function (ok, value, err) {
+      if (settled) return;
+      settled = true;
+      if (timeout) { clearTimeout(timeout); timeout = null; }
+      var end = Date.now();
+      active = Math.max(0, active - 1);
+      notePerf(e, end, ok);
+      noteFailure(ok, err);
+      if (ok) e.resolve(value); else e.reject(err);
+      pump();                              /* a slot just freed */
+    };
+    var p;
+    try {
+      p = e.dispatch(e.action, e.payload, e.sessionToken, { coord: true });
+    } catch (errSync) { done(false, null, errSync); return; }
+    if (e.timeoutMs > 0) {
+      timeout = setTimeout(function () {
+        done(false, null, {
+          status: 'error', code: 'RPC_TIMEOUT', transport: true,
+          message: 'انتهت مهلة انتظار استجابة الخادم لهذا الطلب.'
+        });
+      }, e.timeoutMs);
+    }
+    p.then(function (value) { done(true, value, null); },
+           function (err) { done(false, null, err); });
+  }
+
+  function pump() {
+    for (;;) {
+      var pick = -1;
+      for (var i = 0; i < pending.length; i++) {
+        /* a hidden tab is not about to use anything prefetched */
+        if (pending[i].lane === 'prefetch' && hidden()) {
+          var gone = pending.splice(i, 1)[0];
+          rejectEntry(gone, 'COORD_PREFETCH_HIDDEN', 'أُلغي التحميل المسبق أثناء إخفاء التبويب');
+          i = -1;
+          continue;
+        }
+        if (pick === -1 || RANK[pending[i].lane] < RANK[pending[pick].lane]) pick = i;
+      }
+      if (pick === -1) return;
+      var e = pending[pick];
+      var low = e.lane !== 'foreground';
+      if (low) {
+        /* reserve: low work stops two slots short of the ceiling */
+        if (Date.now() < backoffUntil) return;
+        if (active >= MAX_CONCURRENT - FOREGROUND_RESERVE) return;
+      } else if (active >= MAX_CONCURRENT) {
+        return;
+      }
+      pending.splice(pick, 1);
+      dispatch(e);                         /* foreground keeps FIFO order */
+    }
+  }
+
+  function submit(action, payload, sessionToken, opts, dispatcher) {
+    var lane = laneFor(action, payload, opts);
+    var e = {
+      lane: lane,
+      action: action,
+      payload: payload,
+      sessionToken: sessionToken,
+      dispatch: dispatcher,
+      enqueuedAt: Date.now(),
+      dispatchedAt: 0,
+      timeoutMs: Math.min(Math.max(Math.floor(Number(opts && opts.timeoutMs) || 0), 0), 120000),
+      coalesceKey: null,
+      resolve: null,
+      reject: null,
+      promise: null
+    };
+    e.promise = new Promise(function (resolve, reject) { e.resolve = resolve; e.reject = reject; });
+
+    if (lane === 'prefetch' && hidden()) {
+      rejectEntry(e, 'COORD_PREFETCH_HIDDEN', 'أُلغي التحميل المسبق أثناء إخفاء التبويب');
+      return e.promise;
+    }
+
+    /* Coalesce only explicitly-marked equivalent safe reads, never writes:
+       foreground entries are excluded because the foreground lane contains
+       every save and approval. Only PENDING entries are considered; a call
+       already on the wire cannot be cancelled. */
+    if (lane !== 'foreground' && opts && opts.coalesce === true) {
+      var key = coalesceKey(e);
+      if (key) {
+        for (var c = 0; c < pending.length; c++) {
+          if (pending[c].lane === lane && pending[c].coalesceKey === key) return pending[c].promise;
+        }
+        e.coalesceKey = key;
+      }
+    }
+
+    if (lane !== 'foreground') {
+      var oldest = oldestPrefetchIndex();
+      if (lane === 'prefetch') {
+        var pf = 0;
+        for (var p = 0; p < pending.length; p++) if (pending[p].lane === 'prefetch') pf++;
+        if (pf >= MAX_PREFETCH_PENDING) {
+          rejectEntry(e, 'COORD_QUEUE_FULL', 'تم رفض التحميل المسبق: طابور ممتلئ');
+          return e.promise;
+        }
+      }
+      if (pending.length >= MAX_PENDING) {
+        if (oldest !== -1) {
+          var victim = pending.splice(oldest, 1)[0];
+          rejectEntry(victim, 'COORD_QUEUE_FULL', 'أُسقط أقدم تحميل مسبق: طابور ممتلئ');
+        } else {
+          rejectEntry(e, 'COORD_QUEUE_FULL', 'تعذر جدولة الطلب: طابور ممتلئ');
+          return e.promise;
+        }
+      }
+    }
+    /* Foreground entries are never refused: a user action must reach the
+       wire, even at the queue ceiling. */
+
+    pending.push(e);
+    pump();
+    return e.promise;
+  }
+
+  return {
+    submit: submit,
+    _state: function () {
+      return { pending: pending.length, active: active, failures: failures, backoffUntil: backoffUntil };
+    }
+  };
+})();
+
+/* F-18: xlsx.full.min.js is ~900 KB and was a top-level <script> here, so all 83
+ * pages that include Client_Helpers paid for it on every navigation while only
+ * the Excel-export button ever uses it. It is now fetched on first export.
+ * Resolves immediately once loaded; concurrent callers share one request. */
+API._xlsxPromise = null;
+
+API.ensureXlsx = function () {
+  if (typeof XLSX !== 'undefined') return Promise.resolve();
+  if (API._xlsxPromise) return API._xlsxPromise;
+  API._xlsxPromise = new Promise(function (resolve, reject) {
+    var s = document.createElement('script');
+    s.src = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+    s.async = true;
+    s.onload = function () { resolve(); };
+    s.onerror = function () {
+      API._xlsxPromise = null;   // let a later click retry
+      reject(new Error('تعذر تحميل مكتبة Excel'));
+    };
+    document.head.appendChild(s);
+  });
+  return API._xlsxPromise;
+};
+
+/* ── [UI-9.3 / U-37] Chart.js, fetched on demand ──────────────────────────
+ *
+ * Chart.js is a blocking <script> in the <head> of 5 dashboard and KPI pages,
+ * so every visit to one of them waits for ~200 KB before the page can render —
+ * including the visits where the user is only reading the KPI tiles.
+ *
+ * This is the same shape as API.ensureXlsx directly above, deliberately: one
+ * lazy-loader pattern in this codebase rather than two. Concurrent callers
+ * share one request, and a failure clears the promise so a later attempt can
+ * retry rather than being stuck with a rejected one forever.
+ */
+API._chartPromise = null;
+
+API.ensureChart = function () {
+  if (typeof Chart !== 'undefined') return Promise.resolve();
+  if (API._chartPromise) return API._chartPromise;
+  API._chartPromise = new Promise(function (resolve, reject) {
+    var s = document.createElement('script');
+    s.src = 'https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js';
+    s.async = true;
+    s.onload = function () {
+      try { if (window.UIC && UIC.applyChartDefaults) UIC.applyChartDefaults(); } catch (e) {}
+      resolve();
+    };
+    s.onerror = function () {
+      API._chartPromise = null;   // let a later call retry
+      reject(new Error('تعذر تحميل مكتبة الرسوم البيانية'));
+    };
+    document.head.appendChild(s);
+  });
+  return API._chartPromise;
+};
+
+API.downloadXlsx = function (base64, filename) {
+  var bin = atob(base64);
+  var bytes = new Uint8Array(bin.length);
+  for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  var blob = new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url;
+  a.download = filename || 'report.xlsx';
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(function () { URL.revokeObjectURL(url); a.remove(); }, 1000);
+};
+
+API.getSession = function () {
+  try {
+    return JSON.parse(localStorage.getItem('erp_session') || 'null');
+  } catch (e) {
+    return null;
+  }
+};
+
+API.setSession = function (s) {
+  if (API._mysqlReads) API._mysqlReads.clear();
+  API._notifyCapabilityPickers('session');
+  localStorage.setItem('erp_session', JSON.stringify(s || null));
+};
+
+API.clearSession = function () {
+  if (API._mysqlReads) API._mysqlReads.clear();
+  API._notifyCapabilityPickers('session');
+  localStorage.removeItem('erp_session');
+};
+
+/* ── [UI-3.4 / U-24] One loading overlay, one notification path ──────────
+ *
+ * UI.showSpinner is called from 80 pages, so the NAME and the SIGNATURE are a
+ * public contract and do not change. The implementation moved: it is now a thin
+ * wrapper over UIC.showPageLoading, which is the single loading service.
+ *
+ * The rotating-message behaviour is preserved — passing an array still cycles
+ * the lines every 2.5 seconds — because several long saves rely on it. That
+ * loop now lives in UIC._loadMessage rather than being duplicated here.
+ *
+ * The overlay's markup and CSS are the ones that used to live in this file:
+ * they were the only ones of the four written against the token layer, so they
+ * became the canonical look rather than the one that was hardest to theme. */
+UI.showSpinner = function (message) {
+  try { UIC.showPageLoading(message); } catch (e) {}
+};
+
+UI.hideSpinner = function () {
+  try { UIC.hidePageLoading(); } catch (e) {}
+  /* [RT-3] A read that drew the progress hairline instead of the overlay is
+   * finished by the same call, so no call site had to learn a second name. */
+  try { UIC._clearReadProgress(); } catch (e) {}
+};
+
+/* [UI-3.4] UI.toast and UI.alert did not exist, and that was a real defect —
+ * found by tools/ui_check.js check C3 during the Phase 0 baseline and recorded
+ * as N-01 and N-02 in UI_BASELINE.md.
+ *
+ *   N-01  Company_ValleyFoods_MfgOrderView.html calls UI.toast 40 times, every
+ *         call guarded as `UI.toast && UI.toast(...)`. Nothing threw, and every
+ *         success and error message on the manufacturing order page was
+ *         silently discarded. A user saving a manufacturing order got no
+ *         confirmation and no error text at all.
+ *   N-02  DbLive_Viewer.html calls UI.alert 9 times, UNGUARDED, all on error
+ *         paths — so the page threw `UI.alert is not a function` at exactly the
+ *         moment it was trying to report a problem.
+ *
+ * Both are fixed additively: two new names on an existing namespace, delegating
+ * to components that already exist. Nothing is renamed or removed. */
+UI.toast = function (message, type) {
+  try { UIC.toast(message, type); }
+  catch (e) { try { console.warn('toast: ' + message); } catch (e2) {} }
+};
+
+/* [UI-5.2] Delegates to the styled UIC.alert rather than to a toast. Native
+ * alert() required an acknowledgement, and the 9 DbLive_Viewer call sites are
+ * all error reports — a toast that vanishes after three seconds can be missed
+ * entirely, which is the failure the original code was trying to avoid.
+ * Returns the promise so a caller can chain if it ever wants to. */
+UI.alert = function (message) {
+  try { return UIC.alert(message); }
+  catch (e) {
+    try { console.warn('alert: ' + message); } catch (e2) {}
+    return Promise.resolve(true);
+  }
+};
+
+/* Batch 10: guard a submit button against double-clicks / double-submits.
+ * Disables the button until `fn` (which may return a Promise) settles.
+ * Safe no-op if already in flight. Existing loading overlays still apply. */
+UI.submitOnce = function (btn, fn) {
+  if (!btn) { if (fn) fn(); return; }
+  if (btn.dataset && btn.dataset.vfSubmitting === '1') return;
+  if (btn.dataset) btn.dataset.vfSubmitting = '1';
+  var prev = btn.disabled;
+  btn.disabled = true;
+  var done = function () { btn.disabled = prev; if (btn.dataset) btn.dataset.vfSubmitting = ''; };
+  var p = fn ? fn() : undefined;
+  if (p && typeof p.then === 'function') p.then(done, done); else done();
+};
+
+(function initNavSpinner() {
+  document.addEventListener('click', function (e) {
+    var el = e.target;
+    var a = (el && el.closest) ? el.closest('a[href]') : null;
+    if (!a) return;
+    if (a.target && a.target !== '_self' && a.target !== '_top') return;
+    var href = a.getAttribute('href') || '';
+    if (href.indexOf('?action=') === -1) return;
+    try { UIC.readSkeleton(); } catch (err) {}
+  }, true);
+  window.addEventListener('pageshow', function () {
+    try { UI.hideSpinner(); } catch (err) {}
+  });
+})();
+
+FMT.currency = function (n, suffix) {
+  var num = Number(n) || 0;
+  var s = num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return s + (suffix ? ' ' + suffix : '');
+};
+
+FMT.date = function (d) {
+  if (!d) return '';
+  var dt = new Date(d);
+  if (isNaN(dt.getTime())) return String(d);
+  return dt.toLocaleDateString('en-GB');
+};
+
+FMT.datetime = function (d) {
+  if (!d) return '';
+  var dt = new Date(d);
+  if (isNaN(dt.getTime())) return String(d);
+  return dt.toLocaleString('en-GB');
+};
+
+/* As-stored wall-date helpers (no UTC shift). Date-only strings are opaque:
+ * 'yyyy-MM-dd...' is returned as-is without constructing a Date, so a
+ * server-canonical '2026-09-19' can never become '2026-09-18'. Anything else
+ * is rendered with LOCAL getters, which recover the script-timezone wall date
+ * from a UTC ISO string when client TZ matches script TZ. */
+FMT.dateOnly = function (v) {
+  if (v === null || v === undefined || v === '') return '';
+  if (Object.prototype.toString.call(v) === '[object Date]' && !isNaN(v.getTime())) {
+    var p0 = function (n) { return n < 10 ? '0' + n : '' + n; };
+    return v.getFullYear() + '-' + p0(v.getMonth() + 1) + '-' + p0(v.getDate());
+  }
+  var s = String(v).trim();
+  var m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (m) return m[1] + '-' + m[2] + '-' + m[3];
+  m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (m) {
+    var dd = ('0' + m[1]).slice(-2), mm = ('0' + m[2]).slice(-2);
+    return m[3] + '-' + mm + '-' + dd;
+  }
+  var d = new Date(s);
+  if (isNaN(d.getTime())) return s;
+  var p = function (n) { return n < 10 ? '0' + n : '' + n; };
+  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+};
+
+FMT.dateTimeLocal = function (v) {
+  if (v === null || v === undefined || v === '') return '';
+  var s = String(v instanceof Date ? '' : v).trim();
+  var m = s.match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})/);
+  if (m) return m[1] + '-' + m[2] + '-' + m[3] + ' ' + m[4] + ':' + m[5];
+  var d = (v instanceof Date) ? v : new Date(s || v);
+  if (isNaN(d.getTime())) return String(v);
+  var p = function (n) { return n < 10 ? '0' + n : '' + n; };
+  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+};
+
+FMT.timeOnly = function (v) {
+  if (v === null || v === undefined || v === '') return '';
+  var s = String(v instanceof Date ? '' : v).trim();
+  var m = s.match(/(\d{2}):(\d{2})/);
+  if (m && !(v instanceof Date)) return m[1] + ':' + m[2];
+  var d = (v instanceof Date) ? v : new Date(s || v);
+  if (isNaN(d.getTime())) return String(v);
+  var p = function (n) { return n < 10 ? '0' + n : '' + n; };
+  return p(d.getHours()) + ':' + p(d.getMinutes());
+};
+
+FMT.number = function (n) {
+  var num = Number(n) || 0;
+  return num.toLocaleString('en-US');
+};
+
+FMT.percent = function (n) {
+  var num = Number(n) || 0;
+  return (num * 100).toLocaleString('en-US', { maximumFractionDigits: 2 }) + '%';
+};
+
+FMT.phone = function (p) {
+  if (!p) return '';
+  return String(p).replace(/[^\d+]/g, '');
+};
+
+FMT.escape = function (v) {
+  if (v === undefined || v === null) return '';
+  return String(v)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+};
+
+(function () {
+  var css = `
+  /* ── Spinner overlay ─────────────────────────────────── */
+  /* [UI-3.4 / U-24] .spinner-overlay / .spinner-box / .spinner / .spinner-msg
+     moved to UI_Components.html with the implementation, so the one loading
+     service carries its own styles and every page gets them whether or not it
+     includes this file. */
+  @keyframes erp-spin { to { transform: rotate(360deg); } }
+
+  /* ── Mobile input zoom prevention ───────────────────── */
+  /* Chrome on Android zooms the page when an <input> has font-size < 16px.
+     Setting max(16px, 1rem) prevents this without affecting desktop layout. */
+  input, textarea, select {
+    font-size: max(16px, 1rem);
+  }
+
+  /* ── Universal minimum touch targets ────────────────── */
+  /* Every interactive element needs at least 48×48px hit area. */
+  button, [role="button"], select {
+    min-height: var(--tap-min, 48px);
+    cursor: pointer;
+  }
+  /* Anchors used as nav items get a minimum height via padding */
+  a.nav-item {
+    min-height: var(--tap-min, 48px);
+    display: inline-flex;
+    align-items: center;
+  }
+
+  /* ── Active-state feedback (mobile: no hover, use :active) ─ */
+  @media (hover: none) {
+    .btn:active          { opacity: 0.80; transform: scale(0.97); }
+    .nav-item:active     { opacity: 0.75; }
+    .company-tile:active { transform: scale(0.98); }
+    .module-tile:active  { transform: scale(0.98); }
+  }
+
+  /* ── Prevent accidental horizontal scroll on tables ─── */
+  .table-wrap {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-x: contain;
+  }
+  `;
+  var style = document.createElement('style');
+  style.textContent = css;
+  document.head.appendChild(style);
+})();
+
+/* ── Batch 11: session views / saved views / record history helpers ── */
+window.SESSION = window.SESSION || {};
+
+SESSION.getQueryParam = function (name) {
+  var m = new RegExp('[?&]' + name + '=([^&]*)').exec(window.location.search);
+  return m ? decodeURIComponent(m[1]) : '';
+};
+
+SESSION.token = function () {
+  return window.SESSION_TOKEN || SESSION.getQueryParam('sessionToken') || (API.getSession() && API.getSession().token) || '';
+};
+
+SESSION.ensure = function () {
+  var t = SESSION.token();
+  if (t) {
+    var s = API.getSession() || {};
+    s.token = t;
+    API.setSession(s);
+  }
+  return t;
+};
+
+SESSION.openPage = function (action, extra) {
+  var url = (window.scriptUrl || '/') + '?action=' + encodeURIComponent(action) + '&sessionToken=' + encodeURIComponent(SESSION.token());
+  if (extra) url += '&' + extra;
+  if (window.UIC && UIC.navTo) UIC.navTo(null, url); else window.location.href = url;
+};
+
+SESSION.openSessions = function () { SESSION.openPage('user_sessions'); };
+SESSION.openViews = function () { SESSION.openPage('user_views'); };
+
+SESSION.openHistory = function (sheetName, recordId) {
+  if (window.UIC && UIC.HistorySide) { UIC.HistorySide.open(sheetName, recordId); return; }
+  var url = (window.scriptUrl || '/') + '?action=record_history&sheet=' + encodeURIComponent(sheetName) +
+    '&record=' + encodeURIComponent(recordId) + '&sessionToken=' + encodeURIComponent(SESSION.token());
+  /* [iPhone run 2] Only the window.open fallback changes; the HistorySide
+     branch above is untouched. UIC.openTab makes the same call and lands in
+     this frame only when the tab is refused, so record_history stops being
+     unreachable when a pop-up is blocked. This file loads before
+     UI_Components on some pages, hence the guard. */
+  if (window.UIC && UIC.openTab) UIC.openTab(url); else window.open(url, '_blank');
+};
+
+SESSION.saveCurrentView = function (pageKey, definition, presetName) {
+  var name = presetName || prompt('اسم العرض المحفوظ:');
+  if (!name) return Promise.reject('cancelled');
+  var device = (function () {
+    try {
+      var ua = navigator.userAgent || '';
+      var type = /Mobi|Android|iPhone|iPad/i.test(ua) ? 'Mobile' : 'Desktop';
+      return type;
+    } catch (e) { return 'Unknown'; }
+  })();
+  return API.call('save_user_view', { page_key: pageKey, name: name, definition: definition || {}, device: device }, SESSION.token())
+    .then(function (r) { UIC.toast('تم حفظ العرض', 'success'); return r; });
+};
+
+SESSION.loadActiveView = function (pageKey) {
+  var viewId = SESSION.getQueryParam('applyView');
+  if (!viewId) return Promise.resolve(null);
+  return API.call('list_user_views', {}, SESSION.token())
+    .then(function (r) {
+      var views = (r && r.views) || [];
+      var v = views.find(function (x) { return String(x.view_id) === String(viewId); });
+      if (!v || !v.layout_json) return null;
+      try { return typeof v.layout_json === 'string' ? JSON.parse(v.layout_json) : v.layout_json; }
+      catch (e) { return null; }
+    })
+    .catch(function () { return null; });
+};
+
+SESSION.logout = function () {
+  var t = SESSION.token();
+  if (t) { try { API.call('logout', {}, t).catch(function () {}); } catch (e) {} }
+  API.clearSession();
+  var _lurl = (window.scriptUrl || '/') + '?action=login';
+  if (window.UIC && UIC.navTo) UIC.navTo(null, _lurl); else window.location.href = _lurl;
+};
+
+SESSION.revokeAll = function () {
+  if (!confirm('تسجيل الخروج من جميع الأجهزة؟')) return;
+  UI.showSpinner('جاري التنفيذ...');
+  API.call('revoke_all_sessions', {}, SESSION.token())
+    .then(function () { API.clearSession(); var _lurl = (window.scriptUrl || '/') + '?action=login'; if (window.UIC && UIC.navTo) UIC.navTo(null, _lurl); else window.location.href = _lurl; })
+    .catch(function (e) { UIC.toast(e.message || 'تعذر التنفيذ', 'error'); UI.hideSpinner(); });
+};
+
+function logout() {
+  API.clearSession();
+  window.location.href = (window.scriptUrl || '/') + '?action=login';
+}
+/* ── Phase 0b / [RT-2]: client-side timing ─────────────────────────────
+ * Inert unless window.PERF_LOG is true (the server injects it in doGet from the
+ * PERF_LOG_READS script property), so a closed measurement window costs zero
+ * round trips and zero sheet writes. Nothing below runs when it is off.
+ *
+ * What is reported, and why these four:
+ *
+ *   nav_server        responseStart - requestStart      what doGet cost
+ *   nav_transfer      responseEnd   - responseStart     the download
+ *   nav_parse         domContentLoadedEventEnd
+ *                                   - responseEnd       the ~317 KB parse tax
+ *   first_data_render pages mark this themselves        the data round trip
+ *
+ * The first three split a navigation into the three stages that can each be
+ * optimised by a different piece of work, which the old page_ready/page_load
+ * pair could not: a page that is slow because the shared bundle is 268 KB and a
+ * page that is slow because its sheet read scans 40,000 rows produced the same
+ * two numbers before, and the fix for one does nothing for the other.
+ *
+ * nav_transfer_bytes and nav_decoded_bytes come from the same navigation entry
+ * and make the gzip ratio a measurement rather than an assumption. They are
+ * byte counts travelling through a column named `ms`; the unit is in the metric
+ * name because ERP_Client_Perf's columns are not this run's to change.
+ *
+ * EVERYTHING IS BATCHED INTO ONE CALL. The old PERF.send fired a
+ * google.script.run per metric, and at four metrics per navigation across a
+ * live system the measurement would have become a meaningful share of the load
+ * it was measuring. Marks are queued, and the queue is flushed once — on a
+ * short debounce, and unconditionally when the page is hidden or unloaded so a
+ * navigation cannot swallow the numbers it just produced.                     */
+window.PERF = window.PERF || {};
+
+PERF.enabled = function () { return window.PERF_LOG === true; };
+
+PERF._queue = [];
+PERF._flushTimer = null;
+PERF._sent = false;
+
+/** Queue one metric. Never sends on its own — see PERF.flush. */
+PERF.push = function (metric, value) {
+  if (!PERF.enabled()) return;
+  PERF._queue.push({ metric: String(metric), ms: Math.round(Number(value) || 0) });
+  try { clearTimeout(PERF._flushTimer); } catch (e) {}
+  PERF._flushTimer = setTimeout(PERF.flush, 1500);
+};
+
+/* PERF.flush is defined by the Phase C facade below. It ships the legacy
+ * PERF_LOG mark queue AND the bounded RUM journey batch in ONE authenticated
+ * round trip. The old url/email fields are gone: the server ignores them, and
+ * a canonical page id plus sessionToken replace them. */
+
+/* Kept for callers outside this file: queue rather than send, so a page that
+ * still calls PERF.send gets the batching without being edited. */
+PERF.send = function (metric, ms) { PERF.push(metric, ms); };
+
+/* Pages call PERF.mark('first_data_render') once their first table body is
+ * painted. Fires at most once per metric per page. */
+PERF._marked = {};
+PERF.mark = function (metric) {
+  if (!PERF.enabled() || PERF._marked[metric]) return;
+  PERF._marked[metric] = true;
+  var t = 0;
+  try { t = performance.now(); } catch (e) {}
+  PERF.push(metric, t);
+};
+
+/* The four-part navigation timeline, read once from the Navigation Timing
+ * entry. Every field is guarded: the entry is absent on some embedded
+ * webviews, and transferSize reads 0 across an opaque cross-origin hop rather
+ * than throwing, so a 0 is dropped instead of being logged as a real zero. */
+PERF.navTimeline = function () {
+  if (!PERF.enabled() || PERF._marked.nav_server) return;
+  var e = null;
+  try { e = (performance.getEntriesByType('navigation') || [])[0] || null; } catch (err) {}
+  if (!e) return;
+  PERF._marked.nav_server = true;
+  function span(a, b) { return (a > 0 && b > 0 && a >= b) ? (a - b) : -1; }
+  var parts = [
+    ['nav_server', span(e.responseStart, e.requestStart)],
+    ['nav_transfer', span(e.responseEnd, e.responseStart)],
+    ['nav_parse', span(e.domContentLoadedEventEnd, e.responseEnd)],
+    ['nav_transfer_bytes', Number(e.transferSize) || 0],
+    ['nav_decoded_bytes', Number(e.decodedBodySize) || 0]
+  ];
+  parts.forEach(function (p) { if (p[1] > 0) PERF.push(p[0], p[1]); });
+};
+
+if (PERF.enabled()) {
+  document.addEventListener('DOMContentLoaded', function () { PERF.mark('page_ready'); });
+  window.addEventListener('load', function () {
+    PERF.mark('page_load');
+    /* domContentLoadedEventEnd is only settled after load, so the timeline is
+     * read here rather than on DOMContentLoaded where nav_parse would be 0. */
+    PERF.navTimeline();
+  });
+  /* A hard navigation is how this app moves between pages, so the debounce
+   * alone would lose the last flush on most page views. pagehide fires on the
+   * way out; visibilitychange covers the mobile case where it does not. */
+  window.addEventListener('pagehide', PERF.flush);
+  document.addEventListener('visibilitychange', function () {
+    if (document.visibilityState === 'hidden') PERF.flush();
+  });
+}
+
+/* ── [Phase C] Shared metric contract — the universal journey facade ───────
+ *
+ * Contract (UNIVERSAL_DAILY_PERFORMANCE_PLAN.md §6). A fresh navigation id is
+ * taken per route transition and a fresh journey id per form/dialog opening —
+ * never one page-global first-render flag.
+ *
+ *   page_usable_ms        entry/click -> required authorized content/controls
+ *                         ready after a rendering opportunity. The double
+ *                         animation frame is an APPROXIMATION of visible
+ *                         readiness, not a formal paint timestamp.
+ *   form_editable_ms      open/edit -> first mandatory control visible+enabled
+ *   form_options_ready_ms open/edit -> references required for submission resolved
+ *   lookup_ready_ms       query/selection -> options or dependent fields usable;
+ *                         meta.cache is 'hit' or 'fresh'
+ *   input_feedback_ms     first keystroke on a registered critical input -> feedback painted
+ *   save_feedback_ms      save action -> visible pending feedback
+ *   save_confirmed_ms     save action -> authoritative success reconciled; queueing,
+ *                         polling or an uncertain envelope never counts as success
+ *   task_wall_ms          journey start -> completion/cancellation/rejection/unresolved end
+ *   task_active_ms        visible, engaged time; hidden and idle gaps excluded
+ *   system_wait_ms        UNION of intervals where required system work blocks the
+ *                         user — overlaps merged once, never summed
+ *   rpc_queue_ms          per RPC aggregate + per-call: dispatch decision -> send
+ *   rpc_roundtrip_ms      per RPC aggregate + per-call: call -> callback
+ *   list_usable_ms        journey-scoped successor to first_data_render (empty
+ *                         valid state counts; a failed load never stages)
+ *   upload_ready_ms / print_ready_ms  start -> usable result, byte buckets only
+ *
+ * Outcomes: completed | validation | authorization | conflict |
+ * transport-uncertain | cancelled | timed-out | abandoned-unobserved | runtime-error.
+ * Durations use performance.now() and only finite non-negative values are sent;
+ * a missing value is omitted, never reported as 0. The payload carries a
+ * canonical page id and sessionToken only — never URL, email, field text or
+ * record ids. Sampling is ONE uniform draw at journey start (window.PERF_RUM,
+ * window.PERF_RUM_RATE); unsampled journeys are not retained, while the verbose
+ * PERF_LOG diagnostics keep their existing behaviour. Overhead: guarded property
+ * reads on hot paths, one bounded flush timer, at most one small visible-minute
+ * batch, no observers, no polling, no per-keystroke scans.
+ */
+PERF.rumEnabled = function () { return window.PERF_RUM === true; };
+
+(function (PERF) {
+  var TASK_IDLE_MS = 60000;          /* reported in every payload as idle_ms */
+  var SAMPLE_FALLBACK = 0.10;
+  var BATCH_INTERVAL_MS = 60000;     /* at most one small batch per visible minute */
+  var MAX_BATCH_EVENTS = 5;
+  var MAX_BATCH_BYTES = 7000;        /* server cap is 8192 serialized bytes */
+  var MAX_ACTIVE_JOURNEYS = 4;
+  var MAX_RPC_DETAIL = 8;
+  var MAX_INPUT_TRACKERS = 2;
+  var FORM_ONLY = {
+    editable: 1, options_ready: 1, lookup_ready: 1, input_feedback: 1,
+    save_feedback: 1, save_confirmed: 1
+  };
+  var PAGE_ONLY = { page_usable: 1, list_usable: 1 };
+  var OUTCOMES = {
+    completed: 1, validation: 1, authorization: 1, conflict: 1,
+    'transport-uncertain': 1, cancelled: 1, 'timed-out': 1,
+    'abandoned-unobserved': 1, 'runtime-error': 1
+  };
+  /* Metrics the current server ingestion allowlist stores. The full set still
+   * travels in payload.rum.events.m; this filter only avoids invalid_marks noise. */
+  var SERVER_METRICS = {
+    page_usable_ms: 1, form_editable_ms: 1, form_options_ready_ms: 1,
+    lookup_ready_ms: 1, input_feedback_ms: 1, save_feedback_ms: 1, save_confirmed_ms: 1
+  };
+  /* Canonical page ids: curated aliases plus the server-injected action token
+   * shape. A raw path, query, email or free text can never match. */
+  var PAGE_IDS = {
+    ERPDashboard: 'ERPDashboard', login: 'login', session_expired: 'session_expired',
+    perf_dashboard: 'perf_dashboard', user_sessions: 'user_sessions',
+    vf_sales: 'vf_sales', vf_purchases: 'vf_purchases', vf_warehouse_movement: 'vf_warehouse_movement',
+    vf_mfg_orders: 'vf_mfg_orders', vf_quality_dashboard: 'vf_quality_dashboard',
+    tc_products: 'tc_products', tc_purchasing: 'tc_purchasing', tc_budget_stock_balance: 'tc_budget_stock_balance',
+    tl_dashboard: 'tl_dashboard', tl_kpi: 'tl_kpi', tl_products: 'tl_products'
+  };
+  var NONBLOCKING = /^(prefetch_|get_page_versions)$/;
+
+  var journeys = [];
+  var pending = [];
+  var dropped = 0;
+  var lastRumFlush = 0;
+  var rumFlushTimer = null;
+  var lifecycleWired = false;
+  var activityWired = false;
+  var inputTrackers = [];
+
+  function now() {
+    try { return performance.now(); } catch (e) { return Date.now(); }
+  }
+  function epoch() { return Date.now(); }
+  function enabled() { return PERF.rumEnabled() || PERF.enabled(); }
+  function newId() {
+    try { if (window.crypto && window.crypto.randomUUID) return window.crypto.randomUUID(); } catch (e) {}
+    var s = '', i;
+    try {
+      if (window.crypto && window.crypto.getRandomValues) {
+        var a = new Uint32Array(2);
+        window.crypto.getRandomValues(a);
+        for (i = 0; i < a.length; i++) s += ('00000000' + a[i].toString(16)).slice(-8);
+        return s;
+      }
+    } catch (e2) {}
+    for (i = 0; i < 16; i++) s += Math.floor(Math.random() * 16).toString(16);
+    return s;
+  }
+  function sampleRate() {
+    if (PERF.enabled() && !PERF.rumEnabled()) return 1;   /* verbose window retains all */
+    var r = Number(window.PERF_RUM_RATE);
+    return (isFinite(r) && r >= 0 && r <= 1) ? r : SAMPLE_FALLBACK;
+  }
+  function sampled_() {
+    if (PERF.enabled()) return true;                  /* verbose diagnostics retain all */
+    if (!PERF.rumEnabled()) return false;
+    var r = sampleRate();
+    if (r <= 0) return false;
+    if (r >= 1) return true;
+    return Math.random() < r;                         /* ONE uniform draw at journey start */
+  }
+  function currentAction() {
+    try { return String(window.CURRENT_ACTION || ''); } catch (e) { return ''; }
+  }
+  function canonicalPage(raw) {
+    var s = String(raw == null ? '' : raw).trim();
+    if (!s || s.length > 60) return 'unknown';
+    if (PAGE_IDS[s]) return PAGE_IDS[s];
+    if (s === currentAction() && /^[A-Za-z][A-Za-z0-9_]{0,60}$/.test(s)) return s;
+    return 'unknown';
+  }
+  function sessionToken() {
+    try { if (window.SESSION && SESSION.token) return SESSION.token(); } catch (e) {}
+    try { return String(window.SESSION_TOKEN || ''); } catch (e2) { return ''; }
+  }
+  function classifyError(r) {
+    var code = '';
+    try { code = String((r && (r.code || r.errorCode)) || ''); } catch (e) {}
+    if (r && r.notApplied === true) return 'validation';
+    if (/NOT_AUTHORIZED|UNAUTHORIZED|AUTHORIZATION|SESSION_EXPIRED|SYSTEM_DISABLED|ACCOUNT_DISABLED|FORBIDDEN|LOGIN_REQUIRED|OWNER_MISMATCH/i.test(code)) return 'authorization';
+    if (/CONFLICT|IN_PROGRESS|DUPLICATE|LOCKED|LOCK|STALE|VERSION/i.test(code)) return 'conflict';
+    if (/TIMEOUT|TIMED/i.test(code)) return 'timed-out';
+    if (/UNCERTAIN|TRANSPORT/i.test(code)) return 'transport-uncertain';
+    if (/VALID|REQUIRED|INVALID|REJECT|MISSING|FORMAT|EMPTY/i.test(code)) return 'validation';
+    if (r && r.uncertain === true) return 'transport-uncertain';
+    return 'runtime-error';
+  }
+
+  /* ── task_active_ms: hidden/idle gaps excluded with no per-frame timer. One
+     passive-capture activity listener updates a single timestamp. ── */
+  function resumeActive(j) {
+    if (!j.sampled || j.finished) return;
+    var hidden = false;
+    try { hidden = document.visibilityState === 'hidden'; } catch (e) {}
+    if (hidden) return;
+    j.activeSince = now();
+    j.lastSeen = j.activeSince;
+  }
+  function accountActive(j, endT) {
+    if (j.activeSince == null) return;
+    var close = Math.min(endT, (j.lastSeen || j.activeSince) + TASK_IDLE_MS);
+    if (close > j.activeSince) j.activeAccum += (close - j.activeSince);
+    j.activeSince = null;
+  }
+  function onActivity() {
+    var t = now();
+    for (var i = 0; i < journeys.length; i++) {
+      var j = journeys[i];
+      if (j.finished || !j.sampled) continue;
+      if (j.activeSince == null) {
+        var hidden = false;
+        try { hidden = document.visibilityState === 'hidden'; } catch (e) {}
+        if (!hidden) { j.activeSince = t; j.lastSeen = t; }
+      } else {
+        if (j.lastSeen && (t - j.lastSeen) > TASK_IDLE_MS) {
+          var close = j.lastSeen + TASK_IDLE_MS;
+          if (close > j.activeSince) j.activeAccum += (close - j.activeSince);
+          j.activeSince = t;
+        }
+        j.lastSeen = t;
+      }
+    }
+  }
+  function onVisibility() {
+    var hidden = false;
+    try { hidden = document.visibilityState === 'hidden'; } catch (e) {}
+    for (var i = 0; i < journeys.length; i++) {
+      var j = journeys[i];
+      if (j.finished || !j.sampled) continue;
+      if (hidden) accountActive(j, now()); else resumeActive(j);
+    }
+    if (hidden) flush(true);          /* best-effort hidden flush */
+  }
+  function wireLifecycle() {
+    if (lifecycleWired) return;
+    lifecycleWired = true;
+    try {
+      document.addEventListener('visibilitychange', onVisibility, { passive: true });
+      window.addEventListener('pagehide', function () {
+        /* undefined outcome: finishOne derives it (usable page = completed, a
+           pending save = transport-uncertain, otherwise abandoned-unobserved). */
+        finishAll(undefined);
+        flush(true);
+      });
+    } catch (e) {
+      try { document.addEventListener('visibilitychange', onVisibility); } catch (e2) {}
+    }
+    if (!activityWired) {
+      activityWired = true;
+      try {
+        document.addEventListener('pointerdown', onActivity, { passive: true, capture: true });
+        document.addEventListener('keydown', onActivity, { passive: true, capture: true });
+        document.addEventListener('focusin', onActivity, { passive: true, capture: true });
+      } catch (e) {}
+    }
+  }
+  function releaseInputs() {
+    for (var i = 0; i < inputTrackers.length; i++) {
+      try { inputTrackers[i].el.removeEventListener('input', inputTrackers[i].fn); } catch (e) {}
+    }
+    inputTrackers = [];
+  }
+  function trackCriticalInput(el) {
+    if (!enabled() || !el || inputTrackers.length >= MAX_INPUT_TRACKERS) return;
+    var openForm = findJourney('form');
+    if (!openForm || !openForm.sampled) return;
+    for (var i = 0; i < inputTrackers.length; i++) if (inputTrackers[i].el === el) return;
+    var t0 = null;
+    var fn = function () {
+      if (t0 == null) {
+        t0 = now();
+        /* input_feedback_ms is first keystroke -> feedback painted, so the
+           stage carries its own span rather than the journey-start delta. */
+        var after = function () { stage('input_feedback', { ms: Math.max(0, now() - t0) }); };
+        try {
+          if (window.requestAnimationFrame) window.requestAnimationFrame(function () { window.requestAnimationFrame(after); });
+          else setTimeout(after, 32);
+        } catch (e) { setTimeout(after, 32); }
+      }
+      try { el.removeEventListener('input', fn); } catch (e2) {}
+    };
+    try { el.addEventListener('input', fn, { passive: true }); }
+    catch (e3) { try { el.addEventListener('input', fn); } catch (e4) { return; } }
+    inputTrackers.push({ el: el, fn: fn });
+  }
+
+  /* ── journey lifecycle ──────────────────────────────────────────────────── */
+  function beginJourney(kind, pageId, opts) {
+    if (!enabled()) return null;
+    kind = (kind === 'form') ? 'form' : 'page';
+    var o = opts || {};
+    var page = canonicalPage(pageId || PERF._page || currentAction());
+    if (kind === 'page') {
+      /* One page journey at a time. A second boot for the SAME page reuses the
+         open journey (the shell and the router both boot it); a different page
+         closes the previous one. */
+      for (var i = journeys.length - 1; i >= 0; i--) {
+        if (journeys[i].kind === 'page' && !journeys[i].finished) {
+          if (o.reuse !== false && journeys[i].pageId === page) return journeys[i];
+          finishOne(journeys[i], undefined);
+        }
+      }
+    }
+    var j = {
+      navId: newId(), journeyId: newId(), kind: kind, pageId: page,
+      startedAt: o.entryZero ? 0 : now(),   /* hard boots measure from time origin */
+      stages: {}, rpcs: [], waits: [],
+      outcome: null, sampled: sampled_(), modalId: String(o.modalId || ''),
+      saving: false, finished: false,
+      activeSince: null, activeAccum: 0, lastSeen: 0
+    };
+    if (j.sampled) { wireLifecycle(); resumeActive(j); }
+    if (journeys.length >= MAX_ACTIVE_JOURNEYS) journeys.shift();
+    journeys.push(j);
+    return j;
+  }
+  function findJourney(kind, modalId) {
+    for (var i = journeys.length - 1; i >= 0; i--) {
+      var j = journeys[i];
+      if (j.finished) continue;
+      if (kind && j.kind !== kind) continue;
+      if (modalId && j.modalId !== modalId) continue;
+      return j;
+    }
+    return null;
+  }
+  function targetJourney(name) {
+    return findJourney(FORM_ONLY[name] ? 'form' : (PAGE_ONLY[name] ? 'page' : ''), '');
+  }
+  function stage(name, meta) {
+    if (!enabled()) return;
+    name = String(name || '');
+    if (!name) return;
+    var j = targetJourney(name);
+    if (!j || j.finished || !j.sampled || j.stages[name]) return;  /* first wins */
+    j.stages[name] = { at: now(), meta: meta || null };
+    if (name === 'save_confirmed') j.outcome = 'completed';
+  }
+  function setOutcome(name) {
+    if (!enabled() || !OUTCOMES[name]) return;
+    var j = findJourney('');
+    if (j && j.sampled) j.outcome = name;
+  }
+  function markSaving(modalId) {
+    if (!enabled()) return;
+    var j = findJourney('form', modalId);
+    if (j) j.saving = true;
+  }
+  function endModal(modalId) {
+    if (!enabled()) return;
+    releaseInputs();
+    var j = findJourney('form', modalId);
+    if (!j || j.saving) return;    /* a save settles the journey, not the close */
+    finishOne(j, 'cancelled');     /* the user closed the dialog without saving */
+  }
+  function settleModal(modalId, outcome) {
+    if (!enabled()) return;
+    var j = findJourney('form', modalId);
+    if (!j) return;
+    j.saving = false;
+    finishOne(j, outcome);
+  }
+  function finishOne(j, outcome) {
+    if (!j || j.finished) return;
+    j.finished = true;
+    if (outcome && OUTCOMES[outcome]) j.outcome = outcome;
+    if (!j.outcome) {
+      /* A save was pending at the unresolved end: unload loss must not be
+         recorded as user abandonment. */
+      if (j.kind === 'form' && j.stages.save_feedback && !j.stages.save_confirmed) {
+        j.outcome = 'transport-uncertain';
+      } else {
+        j.outcome = j.stages.page_usable ? 'completed' : 'abandoned-unobserved';
+      }
+    }
+    var idx = journeys.indexOf(j);
+    if (idx !== -1) journeys.splice(idx, 1);
+    if (!j.sampled) return;
+    accountActive(j, now());
+    enqueue(buildEvent(j));
+  }
+  function finishJourney(outcome, kind) {
+    if (!enabled()) return;
+    finishOne(findJourney(kind || ''), outcome);
+  }
+  function finishAll(outcome) {
+    var open = journeys.slice();
+    for (var i = 0; i < open.length; i++) finishOne(open[i], outcome);
+  }
+  function armPageUsable() {
+    if (!enabled()) return;
+    /* Double animation frame = an APPROXIMATION of the first opportunity the
+       browser had to show ready content; it is not a formal paint timestamp. */
+    var fire = function () { stage('page_usable'); };
+    try {
+      if (window.requestAnimationFrame) window.requestAnimationFrame(function () { window.requestAnimationFrame(fire); });
+      else setTimeout(fire, 32);
+    } catch (e) { try { setTimeout(fire, 32); } catch (e2) {} }
+  }
+  function armFormReadiness(root) {
+    if (!enabled() || !root || !root.querySelectorAll) return;
+    var openForm = findJourney('form');
+    if (!openForm || !openForm.sampled) return;
+    var fire = function () {
+      if (!findJourney('form')) return;
+      var control = null, required = false, i;
+      try {
+        var all = root.querySelectorAll('input:not([disabled]):not([type="hidden"]):not([type="file"]), select:not([disabled]), textarea:not([disabled])');
+        for (i = 0; i < all.length; i++) {
+          var c = all[i];
+          var req = !!(c.hasAttribute && c.hasAttribute('required'));
+          if (!control || (req && !required)) { control = c; required = req; }
+          if (required) break;
+        }
+      } catch (e) {}
+      if (!control) return;
+      var visible = true;
+      try { visible = !!(control.offsetParent || (control.getClientRects && control.getClientRects().length)); } catch (e2) {}
+      if (!visible) return;
+      stage('editable', { focused: document.activeElement === control });
+      var tracked = 0;
+      try {
+        var inputs = root.querySelectorAll('input:not([disabled]):not([type="hidden"]):not([type="file"]):not([type="checkbox"]):not([type="radio"]), textarea:not([disabled])');
+        for (i = 0; i < inputs.length && tracked < MAX_INPUT_TRACKERS; i++) {
+          var v = true;
+          try { v = !!(inputs[i].offsetParent || (inputs[i].getClientRects && inputs[i].getClientRects().length)); } catch (e3) {}
+          if (!v) continue;
+          trackCriticalInput(inputs[i]);
+          tracked++;
+        }
+      } catch (e4) {}
+    };
+    try {
+      if (window.requestAnimationFrame) window.requestAnimationFrame(function () { window.requestAnimationFrame(fire); });
+      else setTimeout(fire, 32);
+    } catch (e) { try { setTimeout(fire, 32); } catch (e2) {} }
+  }
+
+  /* ── metrics on finish ──────────────────────────────────────────────────── */
+  function metricSince(j, name) {
+    var s = j.stages[name];
+    if (!s) return null;
+    if (s.meta && typeof s.meta.ms === 'number' && isFinite(s.meta.ms) && s.meta.ms >= 0) return s.meta.ms;
+    var d = s.at - j.startedAt;
+    return (isFinite(d) && d >= 0) ? d : null;
+  }
+  function spanBetween(j, a, b) {
+    var sa = j.stages[a], sb = j.stages[b];
+    if (!sa || !sb) return null;
+    var d = sb.at - sa.at;
+    return (isFinite(d) && d >= 0) ? d : null;
+  }
+  function stats(values) {
+    if (!values.length) return null;
+    var v = values.slice().sort(function (a, b) { return a - b; });
+    var sum = 0, i;
+    for (i = 0; i < v.length; i++) sum += v[i];
+    var pick = function (p) { return v[Math.min(v.length - 1, Math.floor((v.length - 1) * p))]; };
+    return { n: v.length, min: Math.round(v[0]), p50: Math.round(pick(0.5)), max: Math.round(v[v.length - 1]), sum: Math.round(sum) };
+  }
+  function unionMs(list) {
+    if (!list || !list.length) return null;
+    var arr = list.slice().sort(function (a, b) { return a[0] - b[0]; });
+    var total = 0, s = arr[0][0], e = arr[0][1];
+    for (var i = 1; i < arr.length; i++) {
+      if (arr[i][0] > e) { total += e - s; s = arr[i][0]; e = arr[i][1]; }
+      else if (arr[i][1] > e) { e = arr[i][1]; }
+    }
+    total += e - s;
+    return (isFinite(total) && total >= 0) ? total : null;
+  }
+  function buildEvent(j) {
+    var m = {};
+    function put(name, value) {
+      if (typeof value === 'number' && isFinite(value) && value >= 0) m[name] = Math.round(value);
+    }
+    put('page_usable_ms', metricSince(j, 'page_usable'));
+    put('form_editable_ms', metricSince(j, 'editable'));
+    put('form_options_ready_ms', metricSince(j, 'options_ready'));
+    put('lookup_ready_ms', metricSince(j, 'lookup_ready'));
+    put('input_feedback_ms', metricSince(j, 'input_feedback'));
+    put('save_feedback_ms', metricSince(j, 'save_feedback'));
+    put('save_confirmed_ms', metricSince(j, 'save_confirmed'));
+    put('list_usable_ms', metricSince(j, 'list_usable'));
+    put('upload_ready_ms', spanBetween(j, 'upload_started', 'upload_ready'));
+    put('print_ready_ms', spanBetween(j, 'print_started', 'print_ready'));
+    put('task_wall_ms', now() - j.startedAt);
+    put('task_active_ms', j.activeAccum);
+    put('system_wait_ms', unionMs(j.waits));
+    var ev = { n: j.navId, j: j.journeyId, k: j.kind, p: j.pageId, o: j.outcome, m: m };
+    var lookup = j.stages.lookup_ready;
+    if (lookup && lookup.meta) ev.lookup = { cache: lookup.meta.cache || 'unknown', discards: lookup.meta.discards || 0 };
+    var q = [], r = [], detail = [], i;
+    for (i = 0; i < j.rpcs.length; i++) {
+      var call = j.rpcs[i];
+      q.push(call.q);
+      if (call.r != null) r.push(call.r);
+      if (detail.length < MAX_RPC_DETAIL) {
+        detail.push({ a: call.a, q: Math.round(call.q), r: call.r == null ? null : Math.round(call.r), ok: call.ok });
+      }
+    }
+    var qs = stats(q), rs = stats(r);
+    if (qs || rs) {
+      ev.rpc = {};
+      if (qs) ev.rpc.q = qs;
+      if (rs) ev.rpc.r = rs;
+      if (detail.length) ev.rpc.calls = detail;
+    }
+    return ev;
+  }
+
+  /* ── RPC recording ──────────────────────────────────────────────────────── */
+  function addRpc(j, label, t0, t1, t2, ok, blocking) {
+    if (!j || j.finished || !j.sampled) return;
+    var q = t1 - t0, r = t2 - t1;
+    j.rpcs.push({ a: String(label || '').slice(0, 40), q: (q >= 0 ? q : 0), r: (r >= 0 ? r : 0), ok: ok !== false });
+    if (blocking) j.waits.push([t1, t2]);   /* required work: user cannot advance */
+  }
+  function probe(action, payload) {
+    if (!enabled()) return null;
+    var j = findJourney('');
+    if (!j || j.finished || !j.sampled) return null;
+    var moduleAction = String((payload && payload.module_action) || action || '');
+    var blocking = !NONBLOCKING.test(moduleAction);
+    var t0 = now(), t1 = null;
+    return {
+      sent: function () { if (t1 == null) t1 = now(); },
+      done: function (ok) {
+        if (t1 == null) return;             /* never dispatched */
+        addRpc(j, moduleAction, t0, t1, now(), ok, blocking);
+        t1 = null;
+      }
+    };
+  }
+  function recordRpc(info) {
+    if (!enabled()) return;
+    info = info || {};
+    var j = findJourney('');
+    if (!j || j.finished || !j.sampled) return;
+    var q = Number(info.queueMs), r = Number(info.roundtripMs);
+    q = (isFinite(q) && q >= 0) ? q : 0;
+    r = (isFinite(r) && r >= 0) ? r : 0;
+    j.rpcs.push({ a: String(info.action || '').slice(0, 40), q: q, r: r, ok: info.ok !== false });
+    if (info.blocking !== false) { var t2 = now(); j.waits.push([t2 - r, t2]); }
+  }
+  function addSystemWait(start, end) {
+    if (!enabled()) return;
+    var s = Number(start), e = Number(end);
+    if (!isFinite(s) || !isFinite(e) || e < s) return;
+    var j = findJourney('');
+    if (!j || j.finished || !j.sampled) return;
+    j.waits.push([s, e]);
+  }
+
+  /* ── bounded, authenticated, fail-open flush ────────────────────────────── */
+  function eventsToMarks(events) {
+    var marks = [];
+    if (!events) return marks;
+    for (var i = 0; i < events.length; i++) {
+      var m = events[i].m || {};
+      for (var k in m) {
+        if (!Object.prototype.hasOwnProperty.call(m, k) || !SERVER_METRICS[k]) continue;
+        if (marks.length >= 12) return marks;
+        marks.push({ metric: k, ms: m[k] });
+      }
+    }
+    return marks;
+  }
+  function enqueue(ev) {
+    if (!ev) return;
+    if (pending.length >= MAX_BATCH_EVENTS) { pending.shift(); dropped++; }
+    pending.push(ev);
+    scheduleFlush();
+  }
+  function scheduleFlush() {
+    if (rumFlushTimer) return;
+    var delay = BATCH_INTERVAL_MS - (epoch() - lastRumFlush);
+    if (!(delay > 0) || delay > BATCH_INTERVAL_MS) delay = BATCH_INTERVAL_MS;
+    try {
+      rumFlushTimer = setTimeout(function () {
+        rumFlushTimer = null;
+        var hidden = false;
+        try { hidden = document.visibilityState === 'hidden'; } catch (e) {}
+        if (hidden) { scheduleFlush(); return; }   /* hidden: hide/pagehide flush only */
+        flush(false);
+      }, delay);
+    } catch (e) { rumFlushTimer = null; }
+  }
+  function flush(force) {
+    /* A pagehide/visibility event object arrives as the first argument from the
+       legacy listener; treat any non-true argument as a forced flush. */
+    if (force !== undefined && force !== true) force = true;
+    var legacy = PERF._queue || [];
+    PERF._queue = [];
+    try { clearTimeout(PERF._flushTimer); } catch (e) {}
+    var events = null;
+    if (pending.length) {
+      if (force === true || (epoch() - lastRumFlush) >= BATCH_INTERVAL_MS) {
+        events = pending;
+        pending = [];
+        lastRumFlush = epoch();
+      } else if (!rumFlushTimer) {
+        scheduleFlush();
+      }
+    }
+    if (!legacy.length && !(events && events.length)) return;
+    var payload = { page: PERF._page || canonicalPage(currentAction()), marks: legacy.slice(0, 20) };
+    var extra = eventsToMarks(events);
+    for (var i = 0; i < extra.length && payload.marks.length < 20; i++) payload.marks.push(extra[i]);
+    if (events && events.length) {
+      payload.rum = {
+        v: 1, sample_rate: sampleRate(), idle_ms: TASK_IDLE_MS,
+        dropped: dropped, event_count: events.length, events: events
+      };
+    }
+    payload.event_count = events ? events.length : 0;
+    var encoded = '';
+    try { encoded = JSON.stringify(payload); } catch (eEnc) { return; }
+    if (encoded.length > MAX_BATCH_BYTES && payload.rum) {
+      var keep = payload.rum.events.length;
+      while (keep > 1 && encoded.length > MAX_BATCH_BYTES) {
+        keep--;
+        payload.rum.events = payload.rum.events.slice(0, keep);
+        payload.rum.event_count = keep;
+        payload.event_count = keep;
+        try { encoded = JSON.stringify(payload); } catch (e2) { return; }
+      }
+      if (encoded.length > MAX_BATCH_BYTES) {
+        delete payload.rum;
+        payload.event_count = 0;
+        try { encoded = JSON.stringify(payload); } catch (e3) { return; }
+      }
+    }
+    if (encoded.length > MAX_BATCH_BYTES) return;   /* never send an oversized batch */
+    payload.bytes = encoded.length;
+    try { encoded = JSON.stringify(payload); } catch (e4) { return; }
+    try {
+      google.script.run.apiRouter({
+        action: 'log_client_perf',
+        payload: payload,
+        sessionToken: sessionToken()
+      });
+      PERF._sent = true;
+    } catch (eSend) { /* silent, fail-open: telemetry never touches a business call */ }
+  }
+
+  PERF._page = PERF._page || '';
+  PERF.beginJourney = beginJourney;
+  PERF.stage = stage;
+  PERF.setOutcome = setOutcome;
+  PERF.finishJourney = finishJourney;
+  PERF.recordRpc = recordRpc;
+  PERF.setPage = function (id) { PERF._page = canonicalPage(id); return PERF._page; };
+  PERF.addSystemWait = addSystemWait;
+  PERF.flush = flush;
+  PERF.classifyError = classifyError;
+  PERF.now = now;
+  PERF.byteBucket = function (n) {
+    n = Number(n) || 0;
+    if (n < 65536) return '<64k';
+    if (n < 1048576) return '<1m';
+    if (n < 5242880) return '<5m';
+    return '<10m';
+  };
+  /* Internal entry points for the shared UI adapters (UI_Components.html). */
+  PERF._probe = probe;
+  PERF._armPageUsable = armPageUsable;
+  PERF._armFormReadiness = armFormReadiness;
+  PERF._markSaving = markSaving;
+  PERF._endModal = endModal;
+  PERF._settleModal = settleModal;
+  PERF._trackCriticalInput = trackCriticalInput;
+  PERF._releaseInputs = releaseInputs;
+})(window.PERF);
+
+/* ── [RT-7] Prefetch on intent (M4), replacing the fixed two-second timer ──
+ *
+ * schedulePrefetch fired a companyCall('prefetch_refs') two seconds after every
+ * page load, for every user, whether or not they were about to open a form. Two
+ * seconds is a guess: too early and it competes with the page's own first
+ * fetch; too late and the user has already clicked. And on a page nobody opens
+ * a form on, it is a request that buys nothing.
+ *
+ * Intent is a better signal than a timer, and the browser gives it away for
+ * free: hovering a link, touching it, or simply finishing the first paint with
+ * nothing else to do.
+ *
+ *   requestIdleCallback after first paint  → warm this page's references
+ *   mouseenter / touchstart on a nav link  → warm the page being considered
+ *   UIC.prefetchOnIntent(el, fn)           → anything a page wants, row-level
+ *
+ * Every path is deduplicated, capped at three in flight, and abandoned the
+ * moment the tab is hidden — a prefetch is a bet on what the user will do next,
+ * and a user who has switched tabs is not doing anything next.
+ *
+ * The exported name schedulePrefetch is unchanged: about forty call sites use
+ * it and none of them needed to learn a new one.
+ */
+var __prefetchDone = false;
+var __prefetchInFlight = 0;
+var __prefetchSeen = {};
+var __prefetchIdle = null;
+
+var PREFETCH_MAX_INFLIGHT = 3;
+
+function __prefetchHidden() {
+  try { return document.visibilityState === 'hidden'; } catch (e) { return false; }
+}
+
+/**
+ * Run `fn` once, if we are under the in-flight cap and the tab is visible.
+ * `token` deduplicates: the same intent signalled ten times costs one request.
+ */
+function prefetchOnce(token, fn) {
+  if (__prefetchHidden()) return;
+  if (__prefetchSeen[token]) return;
+  if (__prefetchInFlight >= PREFETCH_MAX_INFLIGHT) return;
+  __prefetchSeen[token] = true;
+  __prefetchInFlight++;
+  var done = function () { __prefetchInFlight = Math.max(0, __prefetchInFlight - 1); };
+  try {
+    var p = fn();
+    if (p && typeof p.then === 'function') p.then(done, function () { done(); delete __prefetchSeen[token]; });
+    else done();
+  } catch (e) { done(); delete __prefetchSeen[token]; }
+}
+
+/** The company's shared reference data — what the old timer fetched. */
+function prefetchRefs() {
+  prefetchOnce('refs', function () {
+    if (typeof companyCall !== 'function') return null;
+    return companyCall('prefetch_refs', {}).catch(function () {});
+  });
+}
+
+/**
+ * Kept for the ~40 existing callers. It no longer schedules on a timer: it
+ * asks the browser for a moment when nothing else is happening, and falls back
+ * to a short timeout where requestIdleCallback does not exist (Safari).
+ */
+function schedulePrefetch() {
+  if (__prefetchDone) return;
+  __prefetchDone = true;
+  var run = function () { prefetchRefs(); };
+  try {
+    if (typeof window.requestIdleCallback === 'function') {
+      __prefetchIdle = window.requestIdleCallback(run, { timeout: 3000 });
+      return;
+    }
+  } catch (e) {}
+  setTimeout(run, 1200);
+}
+
+/**
+ * Attach an intent listener. `fn` runs at most once for this token, on the
+ * first hover or touch — the two signals that reliably precede a click by
+ * enough time to matter and do not fire when the user is merely scrolling past.
+ */
+UIC.prefetchOnIntent = function (el, token, fn) {
+  var node = (typeof el === 'string') ? document.getElementById(el) : el;
+  if (!node || !node.addEventListener || typeof fn !== 'function') return;
+  var go = function () { prefetchOnce(token, fn); };
+  try {
+    node.addEventListener('mouseenter', go, { once: true, passive: true });
+    node.addEventListener('touchstart', go, { once: true, passive: true });
+  } catch (e) {
+    /* Older browsers: no options object. One listener each, still harmless
+       because prefetchOnce is idempotent per token. */
+    node.addEventListener('mouseenter', go);
+    node.addEventListener('touchstart', go);
+  }
+};
+
+/* Nav links are the one thing on every page worth wiring automatically:
+ * hovering one is as close to a declaration of intent as this app gets. */
+UIC.wireNavPrefetch = function () {
+  var links;
+  try { links = document.querySelectorAll('a.nav-item, a.nav-dropdown-item'); } catch (e) { return; }
+  if (!links) return;
+  Array.prototype.slice.call(links).forEach(function (a) {
+    var href = a.getAttribute && a.getAttribute('href');
+    if (!href || href === '#') return;
+    UIC.prefetchOnIntent(a, 'nav:' + href, function () {
+      /* The page being considered shares this company's reference data, so
+         warming it now is the part of that navigation that can be paid for
+         early. The page's own document still has to be fetched on click —
+         that is what the soft-navigation work addresses, not this. */
+      return (typeof companyCall === 'function') ? companyCall('prefetch_refs', {}).catch(function () {}) : null;
+    });
+  });
+};
+
+/* A hidden tab is not about to click anything. */
+try {
+  document.addEventListener('visibilitychange', function () {
+    if (!__prefetchHidden()) return;
+    if (__prefetchIdle && typeof window.cancelIdleCallback === 'function') {
+      try { window.cancelIdleCallback(__prefetchIdle); } catch (e) {}
+      __prefetchIdle = null;
+    }
+  });
+} catch (e) {}
+
+
+/* Injects a small session bar (sessions / views / logout) into containerId.
+ * Call from any page's header so users can manage devices and saved views. */
+SESSION.renderBar = function (containerId) {
+  var el = document.getElementById(containerId);
+  if (!el) return;
+  var bar = document.createElement('div');
+  bar.className = 'session-bar';
+  bar.innerHTML =
+    '<button class="btn btn-ghost" onclick="SESSION.openSessions()">جلساتي</button>' +
+    '<button class="btn btn-ghost" onclick="SESSION.openViews()">عروضي</button>' +
+    '<button class="btn btn-ghost btn-danger" onclick="SESSION.logout()">تسجيل الخروج</button>';
+  el.appendChild(bar);
+};
+
+/* Session-bar styles for explicit SESSION.renderBar(containerId) callers.
+ * NOTE: جلساتي / عروضي / logout now live in the topbar user-profile dropdown
+ * (UIC.appShell), so nothing is auto-injected into .topbar-nav anymore. */
+(function initSessionBar() {
+  SESSION.ensure();
+  var css = document.createElement('style');
+  css.textContent =
+    '.session-bar{display:inline-flex;gap:6px;margin-inline-start:auto;align-items:center;flex-wrap:wrap;}' +
+    '.btn-ghost{background:transparent;border:1px solid var(--border-color);border-radius:var(--radius-sm,8px);padding:6px 12px;font-size:13px;color:var(--text-muted);}' +
+    '.btn-danger{color:#c5221f;border-color:#c5221f;}';
+  document.head.appendChild(css);
+})();
+
+/* Email -> user display name (ERP_Users.name). window.USER_NAMES is injected
+ * server-side on every page render. Falls back to the raw value. */
+function uname_(email) {
+  var e = String(email == null ? '' : email).trim();
+  if (!e) return e;
+  try {
+    var map = window.USER_NAMES || {};
+    return map[e.toLowerCase()] || map[e] || e;
+  } catch (err) { return e; }
+}
+
+</script>

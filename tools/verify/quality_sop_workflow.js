@@ -296,8 +296,15 @@ function expectRefusal(label, fn) {
   check(W.writes.count === before, label + ' — zero writes before the refusal');
   return err;
 }
-function createSop(title, category) {
-  return H.saveQualitySop_({ title_ar: title || 'إجراء اختبار', title_en: 'Test SOP', category: category || 'PROC', applicability_dept: 'الجودة', applicability_role: 'مدير الجودة', owner_email: 'owner@vf.test' }, AUTHOR, DB);
+const TEST_CREATE_ROLES = ['مدير الجودة', 'مدير المصنع', 'مدير الإدارة', 'رئيس القسم', 'مشرف الوردية', 'مشرف الإنتاج', 'مهندس إنتاج', 'مراقب جودة', 'فني معمل', 'مسؤول سلامة الغذاء'];
+let nextTestCreateRole = 0;
+function createSop(title, category, over) {
+  var role = over && over.applicability_role;
+  if (!role) role = TEST_CREATE_ROLES[nextTestCreateRole++ % TEST_CREATE_ROLES.length];
+  return H.saveQualitySop_(Object.assign({
+    title_ar: title || 'إجراء اختبار', title_en: 'Test SOP', category: category || 'PROC',
+    applicability_dept: 'الجودة', applicability_role: role, owner_email: 'owner@vf.test'
+  }, over || {}), AUTHOR, DB);
 }
 function saveDraftContent(uid, html) {
   return H.saveQualitySopVersion_({ unique_id: uid, change_type: 'Major', content_html: html || '<h1>محتوى</h1><p>خطوة</p>', change_summary: 'مسودة أولى' }, AUTHOR, DB);
@@ -335,9 +342,22 @@ check(v1rows.length === 1 && Number(v1rows[0].version) === 1 && v1rows[0].status
 check(v1rows[0].unique_id && v1rows[0].id !== '', 'version row has uidV7_-style unique_id and an integer id');
 check(eventsOf(sop1).length === 1 && eventsOf(sop1)[0].event_type === 'Created', 'Created event written for the new SOP');
 
-const second = createSop('إجراء ثان', 'PROC');
-check(second.sop_code === 'PROC-QA-002', 'second SOP for the same category+department is PROC-QA-002');
-const otherCat = createSop('إجراء المخازن', 'WI');
+/* The canonical department catalog says «الجودة». Resolve the old equivalent
+   label «إدارة الجودة» to it before comparing assignment keys. */
+const deptCol = W.sheets[H.QUALITY_SOP_SHEET].__grid[0].indexOf('applicability_dept');
+W.sheets[H.QUALITY_SOP_SHEET].__grid[1][deptCol] = 'إدارة الجودة';
+const writesBeforeDuplicate = W.writes.count;
+const dupTitle = H.saveQualitySop_(sopHeader({ title_ar: 'عنوان مختلف', title_en: 'Different title', category: 'PROC', applicability_dept: 'الجودة', applicability_role: 'مدير الجودة' }), AUTHOR, DB);
+check(dupTitle.status === 'duplicate' && dupTitle.duplicate.unique_id === sop1 && dupTitle.duplicate.sop_code === created.sop_code && dupTitle.duplicate.lifecycle_state === 'Draft',
+  'an exact assignment with a different title returns the existing SOP identity and lifecycle state');
+check(W.writes.count === writesBeforeDuplicate, 'an exact assignment refusal performs zero writes and does not allocate a code');
+const dupOwner = H.saveQualitySop_(sopHeader({ title_ar: 'عنوان آخر', owner_email: 'author@vf.test', category: 'PROC', applicability_dept: 'الجودة', applicability_role: 'مدير الجودة' }), AUTHOR, DB);
+check(dupOwner.status === 'duplicate' && dupOwner.duplicate.unique_id === sop1 && W.writes.count === writesBeforeDuplicate,
+  'an exact assignment with a different owner is rejected without writes');
+
+const second = createSop('إجراء ثان', 'PROC', { applicability_role: 'مدير المصنع' });
+check(second.status === 'success' && second.sop_code === 'PROC-QA-002', 'a different applicable role is allowed and receives the next code');
+const otherCat = createSop('إجراء المخازن', 'WI', { applicability_role: 'مدير الجودة' });
 check(otherCat.sop_code === 'WI-QA-001', 'another CATEGORY restarts its own sequence (WI-QA-001)');
 /* نموذج is stored as FRM but its visible code prefix is APP (4.7.1). */
 const formCat = createSop('نموذج الجودة', 'FRM');
@@ -346,9 +366,43 @@ check(sopRow(formCat.unique_id).category === 'FRM', 'the stored category stays F
 /* A different DEPARTMENT gets its own sequence, not a continuation. */
 const prodDoc = H.saveQualitySop_({
   title_ar: 'إجراء الإنتاج', title_en: 'Prod SOP', category: 'PROC',
-  applicability_dept: 'الإنتاج', applicability_role: 'مشرف الإنتاج', owner_email: 'owner@vf.test'
+  applicability_dept: 'الإنتاج', applicability_role: 'مدير الجودة', owner_email: 'owner@vf.test'
 }, AUTHOR, DB);
 check(prodDoc.sop_code === 'PROC-PROD-001', 'a different department starts its own sequence (PROC-PROD-001)');
+
+const editMatched = H.saveQualitySop_(sopHeader({
+  unique_id: sop1, title_ar: 'إجراء الجودة المعدّل', expected_revision: '1',
+  category: 'PROC', applicability_dept: 'الجودة', applicability_role: 'مدير الجودة'
+}), AUTHOR, DB);
+check(editMatched.status === 'success' && editMatched.unique_id === sop1 && sopRow(sop1).sop_code === created.sop_code,
+  'editing the matched SOP is allowed and keeps its issued code');
+const matchedV1 = rows(H.QUALITY_SOP_VERSIONS_SHEET).filter(r => String(r.sop_id) === sop1)[0];
+saveDraftContent(matchedV1.unique_id, '<p>محتوى الإجراء الحالي</p>');
+submit(matchedV1.unique_id);
+approve(matchedV1.unique_id, APPROVER);
+makeEffective(matchedV1.unique_id, APPROVER);
+const matchedV2 = H.saveQualitySopVersion_({ sop_id: sop1, change_type: 'Minor', content_html: '<p>الإصدار التالي</p>', change_summary: 'تحديث' }, AUTHOR, DB);
+check(matchedV2.status === 'success' && matchedV2.version === 2 && matchedV2.row_status === 'Draft',
+  'the matched SOP can create its next version through the existing lifecycle');
+
+/* Two same-key contenders serialized by executeWithLock_ produce one parent,
+   one initial version and one creation event; the losing request cannot orphan
+   a row or consume another document code. */
+const contenderWorld = makeWorld();
+const HC = contenderWorld.ctx.__out;
+const contender1 = HC.saveQualitySop_({
+  title_ar: 'إجراء متزامن أول', title_en: 'Concurrent One', category: 'PROC',
+  applicability_dept: 'الجودة', applicability_role: 'مدير الجودة', owner_email: 'owner@vf.test', create_token: 'concurrent-a'
+}, AUTHOR, DB);
+const writesBeforeContender2 = contenderWorld.writes.count;
+const contender2 = HC.saveQualitySop_({
+  title_ar: 'إجراء متزامن ثان', title_en: 'Concurrent Two', category: 'PROC',
+  applicability_dept: 'الجودة', applicability_role: 'مدير الجودة', owner_email: 'author@vf.test', create_token: 'concurrent-b'
+}, AUTHOR, DB);
+check(contender1.status === 'success' && contender2.status === 'duplicate', 'serialized same-key creation attempts return one success and one duplicate refusal');
+const contenderRows = function (sheet) { return contenderWorld.ctx.getAllRecords_(DB, sheet); };
+check(contenderWorld.writes.count === writesBeforeContender2 && contenderRows(HC.QUALITY_SOP_SHEET).length === 1 && contenderRows(HC.QUALITY_SOP_VERSIONS_SHEET).length === 1 && contenderRows(HC.QUALITY_SOP_EVENTS_SHEET).length === 1,
+  'the losing creation adds no header, version, event or code allocation');
 
 /* ---- reference fields: department index + company users ---- */
 const readRefs = H.getQualitySops_({}, AUTHOR, DB);
@@ -370,7 +424,7 @@ const histWorld = makeWorld({ userDirectory: {
 } });
 const HH = histWorld.ctx.__out;
 const histA = HH.saveQualitySop_(sopHeader({ owner_email: 'owner@vf.test' }), AUTHOR, DB);
-const histB = HH.saveQualitySop_(sopHeader({ title_ar: 'إجراء ثانٍ', owner_email: 'owner@vf.test' }), AUTHOR, DB);
+const histB = HH.saveQualitySop_(sopHeader({ title_ar: 'إجراء ثانٍ', owner_email: 'owner@vf.test', applicability_role: 'مدير المصنع' }), AUTHOR, DB);
 const histGrid = histWorld.sheets[HH.QUALITY_SOP_SHEET].__grid;
 const ownerIdx = histGrid[0].indexOf('owner_email');
 histGrid.forEach(function (row, i) {
@@ -403,8 +457,8 @@ check(readRefs.roles.recommended.length === 21 && readRefs.roles.recommended.som
 /* 4.7.1 — the abbreviation registry is exposed as configuration, not code. */
 check(Array.isArray(readRefs.dept_abbr) && readRefs.dept_abbr.some(function (r) { return r.department === 'الجودة' && r.abbrev === 'QA'; }),
   'get_quality_sops returns the configured department abbreviations');
-check(readRefs.template && readRefs.template.id === 'vf-controlled-document-v1' && readRefs.template.bodyHeadings.length === 8,
-  'get_quality_sops serves the shared versioned template definition with its eight body headings');
+check(readRefs.template && readRefs.template.id === 'vf-controlled-document-v1' && readRefs.template.bodyHeadings.length === 11 && readRefs.template.bodyHeadings[5] === 'خطوات الإجراء',
+  'get_quality_sops serves the shared versioned template definition with its procedure sections');
 function sopHeader(over) {
   return Object.assign({
     title_ar: 'إجراء مرجعي', title_en: 'Ref SOP', category: 'PROC',

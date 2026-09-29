@@ -84,11 +84,11 @@ const EXPECTED_ACCESS = {
   close_quality_ncr: { page: 'vf_quality_ncr', access: 'full' }
 };
 const EXPECTED_TABLES = {
-  get_quality_ncr: [NCR_SHEET, CAPA_SHEET],
-  save_quality_ncr: [NCR_SHEET],
+  get_quality_ncr: [NCR_SHEET, CAPA_SHEET, 'valley_legal_customer_vendor'],
+  save_quality_ncr: [NCR_SHEET, 'valley_legal_customer_vendor'],
   save_quality_capa: [CAPA_SHEET, NCR_SHEET],
   change_quality_ncr_status: [NCR_SHEET, CAPA_SHEET],
-  close_quality_ncr: [NCR_SHEET]
+  close_quality_ncr: [NCR_SHEET, CAPA_SHEET]
 };
 Object.keys(EXPECTED_ACCESS).forEach(function (action) {
   const e = PAGE_ACCESS[action] || {};
@@ -298,7 +298,7 @@ function createNcr(extra) {
   return H.saveQualityNcr_(Object.assign({ description: 'وصف عدم مطابقة' }, extra || {}), WRITER, DB);
 }
 function createCapa(extra) {
-  return H.saveQualityCapa_(Object.assign({ action_type: 'Corrective', description: 'وصف إجراء تصحيحي' }, extra || {}), WRITER, DB);
+  return H.saveQualityCapa_(Object.assign({ action_type: 'Corrective', description: 'وصف إجراء تصحيحي', owner_email: 'qa@vf.test' }, extra || {}), WRITER, DB);
 }
 function ncrMove(uid, to, extra, user) {
   return H.changeQualityNcrStatus_(Object.assign({ unique_id: uid, to_status: to }, extra || {}), user || WRITER, DB);
@@ -313,6 +313,11 @@ function todayIso_(offset) {
   return x.getUTCFullYear() + '-' + ('0' + (x.getUTCMonth() + 1)).slice(-2) + '-' + ('0' + x.getUTCDate()).slice(-2);
 }
 const YEAR = String(new Date().getFullYear());
+function effectiveness(extra) {
+  return Object.assign({ effectiveness_check_date: todayIso_(0), effectiveness_criteria: 'مقارنة السجل المستهدف بالنتيجة',
+    monitoring_period: 'فترة الرصد المعتمدة من مالك العملية', effectiveness_outcome: 'Effective',
+    recurrence_result: 'No recurrence', effectiveness_evidence: 'نتائج الفحص موثقة' }, extra || {});
+}
 
 /* ---- constants and lazy table creation ---- */
 check(H.QUALITY_NCR_STATUSES.join('|') === 'Open|In Review|CAPA Assigned|Implemented|Verified|Closed|Cancelled|Rejected',
@@ -327,17 +332,21 @@ check(read0.status === 'success' && Array.isArray(read0.ncrs) && read0.ncrs.leng
 check(!!W.sheets[NCR_SHEET] && !!W.sheets[CAPA_SHEET], 'get_quality_ncr lazily creates both tables');
 const ncrHeaders = W.sheets[NCR_SHEET].__grid[0];
 const capaHeaders = W.sheets[CAPA_SHEET].__grid[0];
-check(ncrHeaders[0] === 'unique_id' && ncrHeaders[1] === 'id' && ncrHeaders[ncrHeaders.length - 1] === 'created_at' && ncrHeaders[ncrHeaders.length - 2] === 'user',
-  'NCR headers keep the base-column convention (unique_id,id first; user,created_at last)');
-check(capaHeaders[0] === 'unique_id' && capaHeaders[1] === 'id' && capaHeaders[capaHeaders.length - 1] === 'created_at' && capaHeaders[capaHeaders.length - 2] === 'user',
-  'CAPA headers keep the base-column convention');
+check(ncrHeaders[0] === 'unique_id' && ncrHeaders[1] === 'id' && ncrHeaders.indexOf('user') === 21 && ncrHeaders.indexOf('created_at') === 22,
+  'NCR additive fields remain after the original base columns');
+check(capaHeaders[0] === 'unique_id' && capaHeaders[1] === 'id' && capaHeaders.indexOf('user') === 16 && capaHeaders.indexOf('created_at') === 17,
+  'CAPA additive fields remain after the original base columns');
 check(['ncr_code', 'ncr_date', 'description', 'status', 'root_cause', 'disposition', 'capa_required', 'capa_justification', 'closed_by', 'closed_at', 'attachment', 'attachment_id'].every(h => ncrHeaders.indexOf(h) !== -1),
   'NCR headers carry every planned column');
 check(['capa_code', 'ncr_id', 'action_type', 'description', 'owner_email', 'due_date', 'effectiveness_check_date', 'status', 'implemented_at', 'verified_by', 'verified_at', 'effectiveness_notes', 'attachment', 'attachment_id'].every(h => capaHeaders.indexOf(h) !== -1),
   'CAPA headers carry every planned column');
+check(['affected_quantity', 'affected_unit', 'order_scope', 'inventory_affected', 'wip_affected', 'shipped_affected', 'hold_status', 'containment_action', 'final_disposition'].every(h => ncrHeaders.indexOf(h) !== -1),
+  'NCR has additive food traceability and separate containment/disposition fields');
+check(['implementation_evidence', 'effectiveness_criteria', 'monitoring_period', 'effectiveness_outcome', 'recurrence_result', 'effectiveness_evidence', 'reopen_rationale'].every(h => capaHeaders.indexOf(h) !== -1),
+  'CAPA separates implementation evidence from effectiveness verification data');
 
 /* ---- create: NCR-<YYYY>-NNN, Open defaults ---- */
-const ncr1 = createNcr({ severity: 'High', source: 'داخلي', department: 'الجودة', product_id: 'P-1', batch_code: 'B-1' });
+const ncr1 = createNcr({ severity: 'Major', source: 'داخلي', department: 'الجودة', product_id: 'P-1', batch_code: 'B-1' });
 check(ncr1.status === 'success' && ncr1.ncr_code === 'NCR-' + YEAR + '-001' && ncr1.row_status === 'Open',
   'create allocates NCR-<YYYY>-001 and starts Open');
 check(ncrRow(ncr1.unique_id).ncr_date === todayIso_(0) && ncrRow(ncr1.unique_id).detected_by === WRITER.email,
@@ -346,6 +355,9 @@ check(ncrRow(ncr1.unique_id).capa_required === 'FALSE' && ncrRow(ncr1.unique_id)
   'create stores explicit FALSE flag and empty justification');
 const ncr2 = createNcr({ description: 'عدم مطابقة ثانية' });
 check(ncr2.ncr_code === 'NCR-' + YEAR + '-002', 'second NCR in the year is -002');
+expectRefusal('invalid NCR date', () => createNcr({ ncr_date: '2026-02-30' }));
+expectRefusal('negative affected quantity', () => createNcr({ affected_quantity: -1, affected_unit: 'كجم' }));
+expectRefusal('affected quantity without a unit', () => createNcr({ affected_quantity: 2 }));
 const ncrCodes = rows(H.QUALITY_NCR_SHEET).map(r => r.ncr_code);
 check(new Set(ncrCodes).size === ncrCodes.length && ncrCodes.every(c => /^NCR-\d{4}-\d{3}$/.test(c)),
   'every ncr_code matches NCR-<YYYY>-NNN and stays unique');
@@ -366,8 +378,8 @@ expectRefusal('review without disposition', () => ncrMove(ncrMain.unique_id, 'In
 const reviewed = ncrMove(ncrMain.unique_id, 'In Review', { root_cause: 'تسرب زيت من الضاغط', disposition: 'عزل الدفعة وإيقاف الخط' });
 check(reviewed.row_status === 'In Review' && ncrRow(ncrMain.unique_id).status === 'In Review',
   'Open -> In Review is allowed');
-check(ncrRow(ncrMain.unique_id).root_cause === 'تسرب زيت من الضاغط' && ncrRow(ncrMain.unique_id).disposition === 'عزل الدفعة وإيقاف الخط',
-  'review stores root_cause and disposition');
+check(ncrRow(ncrMain.unique_id).root_cause === 'تسرب زيت من الضاغط' && ncrRow(ncrMain.unique_id).disposition === 'عزل الدفعة وإيقاف الخط' && ncrRow(ncrMain.unique_id).containment_action === 'عزل الدفعة وإيقاف الخط',
+  'review stores the root cause and explicit containment action while retaining the legacy field');
 expectRefusal('CAPA Assigned with capa_required false', () => ncrMove(ncrMain.unique_id, 'CAPA Assigned', { capa_required: false }));
 expectRefusal('CAPA Assigned with no linked CAPA', () => ncrMove(ncrMain.unique_id, 'CAPA Assigned', { capa_required: true }));
 const capa1 = createCapa({ ncr_id: ncrMain.unique_id, description: 'استبدال مانع التسرب', owner_email: 'maint@vf.test', due_date: todayIso_(3) });
@@ -392,20 +404,18 @@ const inProgress = capaMove(capa1.unique_id, 'In Progress');
 check(inProgress.row_status === 'In Progress' && capaRow(capa1.unique_id).status === 'In Progress',
   'CAPA Assigned -> In Progress is allowed');
 expectRefusal('CAPA In Progress -> Verified (write-only user)', () => capaMove(capa1.unique_id, 'Verified'));
-const done = capaMove(capa1.unique_id, 'Done');
+expectRefusal('CAPA In Progress -> Done without implementation evidence', () => capaMove(capa1.unique_id, 'Done'));
+const done = capaMove(capa1.unique_id, 'Done', { implementation_evidence: 'أمر صيانة موثق ونتيجة فحص' });
 check(done.row_status === 'Done' && String(capaRow(capa1.unique_id).implemented_at).trim() !== '',
-  'CAPA In Progress -> Done sets implemented_at when empty');
+  'CAPA In Progress -> Done requires implementation evidence and sets implemented_at');
 expectRefusal('CAPA Done -> Closed', () => capaMove(capa1.unique_id, 'Closed'));
 expectRefusal('edit CAPA header after Done', () => H.saveQualityCapa_({ unique_id: capa1.unique_id, description: 'تعديل متأخر' }, WRITER, DB));
 expectRefusal('CAPA verify without effectiveness fields', () => capaMove(capa1.unique_id, 'Verified', {}, FULLER));
-expectRefusal('CAPA Done -> Verified (write-only user)', () => capaMove(capa1.unique_id, 'Verified', { effectiveness_check_date: todayIso_(0), effectiveness_notes: 'ملاحظة' }, WRITER));
-const verified = capaMove(capa1.unique_id, 'Verified', { effectiveness_check_date: todayIso_(0), effectiveness_notes: 'لا تكرار خلال أسبوعين' }, FULLER);
+expectRefusal('CAPA Done -> Verified (write-only user)', () => capaMove(capa1.unique_id, 'Verified', effectiveness(), WRITER));
+const verified = capaMove(capa1.unique_id, 'Verified', effectiveness(), FULLER);
 check(verified.row_status === 'Verified' && capaRow(capa1.unique_id).verified_by === FULLER.email && String(capaRow(capa1.unique_id).verified_at).trim() !== '',
-  'CAPA Done -> Verified (full grant) stamps verified_by/verified_at');
+  'CAPA Done -> Verified (full grant) stores criteria, monitoring, outcome, evidence and verifier');
 expectRefusal('CAPA Verified -> Closed (write-only user)', () => capaMove(capa1.unique_id, 'Closed', {}, WRITER));
-const capaClosed = capaMove(capa1.unique_id, 'Closed', {}, FULLER);
-check(capaClosed.row_status === 'Closed' && capaRow(capa1.unique_id).status === 'Closed',
-  'CAPA Verified -> Closed (full grant) is allowed');
 
 const implemented = ncrMove(ncrMain.unique_id, 'Implemented');
 check(implemented.row_status === 'Implemented' && ncrRow(ncrMain.unique_id).status === 'Implemented',
@@ -417,11 +427,26 @@ check(ncrVerified.row_status === 'Verified', 'Implemented -> Verified is allowed
 expectRefusal('NCR Verified -> Implemented (backwards)', () => ncrMove(ncrMain.unique_id, 'Implemented'));
 expectRefusal('NCR Verified -> In Review (backwards)', () => ncrMove(ncrMain.unique_id, 'In Review', { root_cause: 'r', disposition: 'd' }));
 expectRefusal('close an NCR that is not Verified', () => H.closeQualityNcr_({ unique_id: ncr2.unique_id }, FULLER, DB));
+expectRefusal('close a required NCR while its CAPA is not closed', () => H.closeQualityNcr_({ unique_id: ncrMain.unique_id }, FULLER, DB));
+const capaClosed = capaMove(capa1.unique_id, 'Closed', {}, FULLER);
+check(capaClosed.row_status === 'Closed' && capaRow(capa1.unique_id).status === 'Closed',
+  'CAPA Verified -> Closed (full grant) is allowed before NCR closure');
 const closed = H.closeQualityNcr_({ unique_id: ncrMain.unique_id }, FULLER, DB);
 check(closed.status === 'success' && closed.row_status === 'Closed' && ncrRow(ncrMain.unique_id).status === 'Closed',
   'close_quality_ncr moves Verified -> Closed');
 check(ncrRow(ncrMain.unique_id).closed_by === FULLER.email && String(ncrRow(ncrMain.unique_id).closed_at).trim() !== '',
   'close stores closed_by and closed_at');
+const failedCapa = createCapa({ description: 'إجراء فشل اختبار الفعالية' });
+capaMove(failedCapa.unique_id, 'In Progress');
+capaMove(failedCapa.unique_id, 'Done', { implementation_evidence: 'تنفيذ مسجل' });
+const failedEffectiveness = capaMove(failedCapa.unique_id, 'Verified', effectiveness({
+  effectiveness_outcome: 'Ineffective', recurrence_result: 'Recurrence observed', effectiveness_evidence: 'تكرر العيب في العينة التالية',
+  reopen_rationale: 'يلزم تعديل الإجراء ومعالجة السبب الجذري'
+}), FULLER);
+check(failedEffectiveness.row_status === 'In Progress' && failedEffectiveness.effectiveness_failed === true &&
+  capaRow(failedCapa.unique_id).effectiveness_evidence === 'تكرر العيب في العينة التالية' &&
+  capaRow(failedCapa.unique_id).reopen_rationale === 'يلزم تعديل الإجراء ومعالجة السبب الجذري',
+  'failed effectiveness is retained with its evidence and rationale and returns the CAPA to In Progress');
 expectRefusal('NCR Closed -> Implemented', () => ncrMove(ncrMain.unique_id, 'Implemented'));
 expectRefusal('NCR Closed -> Cancelled', () => ncrMove(ncrMain.unique_id, 'Cancelled'));
 expectRefusal('NCR Closed -> Rejected', () => ncrMove(ncrMain.unique_id, 'Rejected'));
@@ -478,15 +503,15 @@ const capaOver = createCapa({ description: 'متأخر قيد التنفيذ', d
 capaMove(capaOver.unique_id, 'In Progress');
 const capaDoneOver = createCapa({ description: 'متأخر منجز', due_date: todayIso_(-2) });
 capaMove(capaDoneOver.unique_id, 'In Progress');
-capaMove(capaDoneOver.unique_id, 'Done');
+capaMove(capaDoneOver.unique_id, 'Done', { implementation_evidence: 'دليل تنفيذ موثق' });
 const capaVerifiedOver = createCapa({ description: 'متأخر تم التحقق', due_date: todayIso_(-1) });
 capaMove(capaVerifiedOver.unique_id, 'In Progress');
-capaMove(capaVerifiedOver.unique_id, 'Done');
-capaMove(capaVerifiedOver.unique_id, 'Verified', { effectiveness_check_date: todayIso_(0), effectiveness_notes: 'فعال' }, FULLER);
+capaMove(capaVerifiedOver.unique_id, 'Done', { implementation_evidence: 'دليل تنفيذ موثق' });
+capaMove(capaVerifiedOver.unique_id, 'Verified', effectiveness(), FULLER);
 const capaClosedOver = createCapa({ description: 'متأخر مغلق', due_date: todayIso_(-1) });
 capaMove(capaClosedOver.unique_id, 'In Progress');
-capaMove(capaClosedOver.unique_id, 'Done');
-capaMove(capaClosedOver.unique_id, 'Verified', { effectiveness_check_date: todayIso_(0), effectiveness_notes: 'فعال' }, FULLER);
+capaMove(capaClosedOver.unique_id, 'Done', { implementation_evidence: 'دليل تنفيذ موثق' });
+capaMove(capaClosedOver.unique_id, 'Verified', effectiveness(), FULLER);
 capaMove(capaClosedOver.unique_id, 'Closed', {}, FULLER);
 const capaToday = createCapa({ description: 'مستحق اليوم', due_date: todayIso_(0) });
 capaMove(capaToday.unique_id, 'In Progress');

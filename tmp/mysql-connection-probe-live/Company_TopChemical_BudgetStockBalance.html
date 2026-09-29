@@ -1,0 +1,762 @@
+﻿<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>رصيد أصناف الميزانية</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_TopChemical_Nav'); ?>
+  <?!= getCompanyThemeCSS_('3fe1b5cb67b7223e') ?>
+</head>
+<body>
+<div id="tc-root" dir="rtl"></div>
+<script>
+  var params = new URLSearchParams(window.location.search);
+  var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+  var scriptUrl = window.scriptUrl || '/';
+  var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+  var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('3fe1b5cb67b7223e') ?>';
+  var COMPANY_PAGES = <?!= companyPages ?>;
+  var CURRENT_ACTION = '<?!= currentAction ?>';
+  var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+  var CAN_WRITE = UIC.canAdd_(); var CAN_FULL = UIC.canFull_();
+  var FILTER = { category: '', view: 'all' };
+  var MONTHS = ['', 'يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو', 'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر'];
+  var BALANCE = { products: [], assetCodeOptions: [], unmatched: [], duplicates: [], systemOptions: [], systemOptionsError: false, systemQtyError: false, unmatchedCount: 0, duplicateNames: [] };
+
+  function companyCall(moduleAction, data) {
+    return API.call('company_action', {
+      target_system: '3fe1b5cb67b7223e',
+      module_action: moduleAction,
+      data: data || {}
+    }, SESSION_TOKEN);
+  }
+
+  function load() {
+    try {
+      UIC.appShell('tc-root', {
+        companyLogoUrl: COMPANY_LOGO_URL,
+        companyLogoHref: scriptUrl + '?action=tc_dashboard&sessionToken=' + SESSION_TOKEN,
+        companyLogoTitle: 'توب كيميكال',
+        breadcrumb: 'توب كيميكال / حسابات الميزانية / رصيد أصناف الميزانية',
+        contentId: 'stock-balance-content',
+        menuGroups: (window.TOPCHEMICAL_MENU || [])
+      });
+    } catch (eShell) {
+      /* A shell failure must not take the report down with it. */
+      var root = document.getElementById('tc-root');
+      if (root) root.innerHTML = '<div id="stock-balance-content"></div>';
+    }
+    fetchBalance();
+  }
+
+  function fetchBalance() {
+    /* The report must always have a host element to paint into, even if the
+     * application shell did not create it. */
+    if (!document.getElementById('stock-balance-content')) {
+      var rootEl = document.getElementById('tc-root');
+      if (rootEl) rootEl.innerHTML = '<div id="stock-balance-content"></div>';
+    }
+    UIC.readSkeleton('stock-balance-content');
+    companyCall('get_legal_stock_balance')
+      .then(function (r) {
+        BALANCE.products = (r && r.products) || [];
+        BALANCE.assetCodeOptions = (r && r.asset_code_options) || [];
+        BALANCE.systemQtyError = !!(r && r.system_qty_error);
+        BALANCE.unmatchedCount = Number(r && r.unmatched_count) || 0;
+        BALANCE.unmatched = (r && r.unmatched) || [];
+        BALANCE.duplicateNames = (r && r.duplicate_names) || [];
+        BALANCE.duplicates = (r && r.duplicates) || [];
+        renderBalance();
+        /* Warm the system-product picker in the background so opening the modal
+         * and resolving the column's names never wait on MySQL. Skipped when
+         * nothing is linked, so an unconfigured page pays no extra execution. */
+        if ((BALANCE.products || []).some(function (p) { return systemIdList_(p).length > 0; })) {
+          ensureSystemOptions_(function () { if (applySystemNamesToRows_()) renderBalance(); });
+        }
+      })
+      .catch(function (e) {
+        /* Never leave the read skeleton as the page: show the failure and a
+         * way back, so a single bad field cannot blank the whole report. */
+        var host = document.getElementById('stock-balance-content');
+        if (host) {
+          host.innerHTML = '<div style="padding:24px;text-align:center;">' +
+            '<div style="margin-bottom:12px;color:#b91c1c;">تعذر تحميل رصيد الأصناف — ' +
+            FMT.escape((e && e.message) || 'خطأ غير متوقع') + '</div>' +
+            '<button type="button" class="btn btn-primary" onclick="fetchBalance()">إعادة المحاولة</button></div>';
+        }
+        showError(e);
+      })
+      .finally(function () { UI.hideSpinner(); try{schedulePrefetch();}catch(e){} });
+  }
+
+  function hasSystemQty(p) {
+    return p.system_qty !== null && p.system_qty !== undefined && p.system_qty !== '';
+  }
+
+  function viewMatch(p) {
+    var qty = Number(p.current_qty) || 0;
+    if (FILTER.view === 'hide_zero') return qty !== 0;
+    if (FILTER.view === 'hide_no_system') return hasSystemQty(p);
+    if (FILTER.view === 'both') return qty !== 0 && hasSystemQty(p);
+    return true;
+  }
+
+  function numCell(v) {
+    if (v === null || v === undefined || v === '') return '-';
+    var n = Number(v) || 0;
+    return '<span data-num="' + n + '">' + FMT.number(n) + '</span>';
+  }
+
+  function diffCell(v) {
+    if (v === null || v === undefined || v === '') return '-';
+    var n = Number(v) || 0;
+    var color = n < 0 ? '#b91c1c' : (n > 0 ? '#166534' : '#4b5563');
+    return '<span data-num="' + n + '" style="font-weight:600;color:' + color + ';">' + FMT.number(n) + '</span>';
+  }
+
+  function noteChip(text, actionLabel, onclick) {
+    return '<div style="margin-bottom:10px;padding:8px 12px;border-radius:8px;background:#fef3c7;color:#92400e;font-size:13px;display:flex;flex-wrap:wrap;gap:8px;align-items:center;">' +
+      '<span>' + FMT.escape(text) + '</span>' +
+      (actionLabel
+        ? '<button type="button" class="btn btn-outline" style="padding:2px 10px;font-size:12px;" onclick="' + onclick + '">' + actionLabel + '</button>'
+        : '') +
+      '</div>';
+  }
+
+  function renderBalance() {
+    var list = BALANCE.products;
+    var cats = [];
+    list.forEach(function (p) { var c = String(p.category || '').trim(); if (c && cats.indexOf(c) === -1) cats.push(c); });
+    cats.sort();
+    var catOpts = cats.map(function (c) {
+      return '<option value="' + FMT.escape(c) + '"' + (FILTER.category === c ? ' selected' : '') + '>' + FMT.escape(c) + '</option>';
+    }).join('');
+
+    var rows = list.filter(function (p) {
+      if (FILTER.category && String(p.category || '').trim() !== FILTER.category) return false;
+      if (!viewMatch(p)) return false;
+      return true;
+    }).map(function (p) {
+      return {
+        id: FMT.escape(String(p.id == null ? '' : p.id)),
+        name_ar: FMT.escape(String(p.name_ar || '-')),
+        unit: FMT.escape(String(p.unit || '-')),
+        category: FMT.escape(String(p.category || '-')),
+        asset_code_name: FMT.escape(String(p.asset_code_name || p.asset_code || '-')),
+        system_products: systemProductsCell(p),
+        lines_count: Number(p.lines_count) || 0,
+        current_qty: numCell(p.current_qty),
+        total_cost_sign: Number(p.total_cost_sign) || 0,
+        system_qty: numCell(p.system_qty),
+        difference: diffCell(p.difference),
+        _key: String(p.id == null ? '' : p.id)
+      };
+    });
+
+    var notes = '';
+    if (BALANCE.systemQtyError) {
+      notes += noteChip('تعذر جلب رصيد السيستم من قاعدة البيانات — عمود رصيد السيستم فارغ حالياً.');
+    }
+    if (BALANCE.unmatchedCount > 0) {
+      notes += noteChip('يوجد ' + FMT.number(BALANCE.unmatchedCount) + ' حركة في legal_current_products لا تطابق اسم أي صنف قانوني.',
+        'عرض الأصناف', 'openUnmatchedModal()');
+    }
+    if (BALANCE.duplicateNames.length) {
+      notes += noteChip('أسماء أصناف مكررة في legal_products (' + BALANCE.duplicateNames.join('، ') + ') — الحركات محتسبة على الصنف صاحب الكود الأقل.',
+        'عرض المكرر', 'openDuplicatesModal()');
+    }
+
+    var headers = [
+      { key: 'id', label: 'كود الصنف' },
+      { key: 'name_ar', label: 'الصنف' },
+      { key: 'unit', label: 'الوحدة' },
+      { key: 'category', label: 'التصنيف' },
+      { key: 'asset_code_name', label: 'حساب الأصل (المستوى الخامس)' },
+      { key: 'system_products', label: 'أصناف النظام' },
+      { key: 'lines_count', label: 'عدد الحركات', numeric: true },
+      { key: 'current_qty', label: 'إجمالي الكمية الحالية', numeric: true },
+      { key: 'total_cost_sign', label: 'إجمالي قيمة التكلفة', money: true },
+      { key: 'system_qty', label: 'رصيد السيستم', numeric: true },
+      { key: 'difference', label: 'الفرق', numeric: true }
+    ];
+    document.getElementById('stock-balance-content').innerHTML =
+      '<div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:12px;">' +
+        '<select id="bal-category" class="input" style="width:auto;min-width:170px;" onchange="setCategory(this.value)">' +
+          '<option value="">كل التصنيفات</option>' + catOpts + '</select>' +
+        '<select id="bal-view" class="input" style="width:auto;min-width:190px;" onchange="setView(this.value)">' +
+          '<option value="all"' + (FILTER.view === 'all' ? ' selected' : '') + '>كل الأصناف</option>' +
+          '<option value="hide_zero"' + (FILTER.view === 'hide_zero' ? ' selected' : '') + '>إخفاء الأصناف الصفرية</option>' +
+          '<option value="hide_no_system"' + (FILTER.view === 'hide_no_system' ? ' selected' : '') + '>إخفاء بلا رصيد سيستم</option>' +
+          '<option value="both"' + (FILTER.view === 'both' ? ' selected' : '') + '>الاثنان معاً</option>' +
+        '</select>' +
+        '<span style="font-size:13px;color:#374151;">عدد الأصناف: <b>' + FMT.number(rows.length) + '</b></span>' +
+      '</div>' +
+      notes +
+      UIC.dataTable('stock-balance-table', {
+        title: 'رصيد أصناف الميزانية',
+        headers: headers,
+        rows: rows,
+        emptyText: 'لا توجد بيانات',
+        rowClick: function (rec) { if (rec && rec._key !== undefined) openProductModal(rec._key); }
+      });
+    UIC.initTableSort('stock-balance-table');
+  }
+
+  function setCategory(v) { FILTER.category = v; renderBalance(); }
+  function setView(v) { FILTER.view = v; renderBalance(); }
+
+  /* One legal product may be linked to several MySQL system products. The
+     column is stored as a comma list, but the page must also render a response
+     from a server that still sends a SINGLE `product_system_id` (or a scalar
+     where an array is expected): a missing field or a scalar must never throw
+     inside renderBalance and blank the table. */
+  function systemIdList_(p) {
+    var v = p ? p.product_system_ids : null;
+    if (Array.isArray(v)) {
+      return v.map(function (x) { return String(x == null ? '' : x).trim(); }).filter(Boolean);
+    }
+    if (v !== undefined && v !== null && v !== '') {
+      return String(v).split(/[,،;\s]+/).map(function (s) { return s.trim(); }).filter(Boolean);
+    }
+    var raw = p ? p.product_system_id : '';
+    if (raw !== undefined && raw !== null && raw !== '') {
+      return String(raw).split(/[,،;\s]+/).map(function (s) { return s.trim(); }).filter(Boolean);
+    }
+    return [];
+  }
+  function systemNameList_(p, ids) {
+    var v = p ? p.product_system_names : null;
+    if (Array.isArray(v)) return v.map(function (x) { return String(x == null ? '' : x); });
+    return (ids || []).map(String);
+  }
+  function systemMissingList_(p) {
+    var v = p ? p.system_ids_missing : null;
+    if (Array.isArray(v)) return v.map(function (x) { return String(x == null ? '' : x); });
+    if (v !== undefined && v !== null && v !== '') {
+      return String(v).split(/[,،;\s]+/).map(function (s) { return s.trim(); }).filter(Boolean);
+    }
+    return [];
+  }
+
+  /* One cell: the names the server resolved (or the client resolved from the
+     option cache), with any id the live view has no balance for flagged, so a
+     partial system balance is never read as a complete one. */
+  function systemProductsCell(p) {
+    var ids = systemIdList_(p);
+    var names = systemNameList_(p, ids);
+    if (!names.length && !ids.length) return '-';
+    var txt = FMT.escape((names.length ? names : ids).join('، '));
+    var missing = systemMissingList_(p);
+    if (missing.length) {
+      return txt + ' <span title="أصناف بلا رصيد في قاعدة البيانات" style="color:#92400e;">(' +
+        FMT.escape(missing.join('، ')) + ' بلا رصيد)</span>';
+    }
+    return txt;
+  }
+
+  /* ── نظام options: fetched at most once per page, shared by the prefetch,
+     the picker and the name column ─────────────────────────────────────── */
+  var SYSTEM_OPTIONS_PENDING_ = false;
+  var SYSTEM_OPTIONS_WAITERS_ = [];
+
+  function ensureSystemOptions_(cb) {
+    if ((BALANCE.systemOptions || []).length) { if (cb) cb(); return; }
+    if (SYSTEM_OPTIONS_PENDING_) { if (cb) SYSTEM_OPTIONS_WAITERS_.push(cb); return; }
+    SYSTEM_OPTIONS_PENDING_ = true;
+    if (cb) SYSTEM_OPTIONS_WAITERS_.push(cb);
+    companyCall('get_system_product_options')
+      .then(function (r) {
+        BALANCE.systemOptions = (r && r.options) || [];
+        BALANCE.systemOptionsError = !!(r && r.error);
+      })
+      .catch(function () {
+        BALANCE.systemOptions = [];
+        BALANCE.systemOptionsError = true;
+      })
+      .finally(function () {
+        SYSTEM_OPTIONS_PENDING_ = false;
+        var waiters = SYSTEM_OPTIONS_WAITERS_;
+        SYSTEM_OPTIONS_WAITERS_ = [];
+        waiters.forEach(function (fn) { try { fn(); } catch (e) {} });
+      });
+  }
+
+  function systemOptionLabels_() {
+    var map = Object.create(null);
+    (BALANCE.systemOptions || []).forEach(function (o) {
+      var k = String(o && o.value != null ? o.value : '').trim();
+      if (k) map[k] = String(o && o.label != null ? o.label : '') || k;
+    });
+    return map;
+  }
+
+  /* Fill the names the report deliberately did not fetch (it never opens a
+     MySQL connection for names), and report whether anything changed so the
+     caller can redraw once. */
+  function applySystemNamesToRows_() {
+    var map = systemOptionLabels_();
+    if (!Object.keys(map).length) return false;
+    var changed = false;
+    (BALANCE.products || []).forEach(function (p) {
+      var ids = systemIdList_(p);
+      if (!ids.length) return;
+      var before = systemNameList_(p, ids).join('|');
+      var after = ids.map(function (sid) { return map[String(sid)] || String(sid); });
+      p.product_system_names = after;
+      if (after.join('|') !== before) changed = true;
+    });
+    return changed;
+  }
+
+  /* ── The warning chips open the problem VALUES, not just a count. ── */
+  function openUnmatchedModal() {
+    var items = BALANCE.unmatched || [];
+    var rows = items.map(function (u) {
+      return {
+        product: u.product ? FMT.escape(u.product) : '<span style="color:#92400e;">(بدون اسم)</span>',
+        lines_count: Number(u.lines_count) || 0,
+        current_qty: numCell(u.current_qty),
+        total_cost_sign: Number(u.total_cost_sign) || 0,
+        total_sales_value: Number(u.total_sales_value) || 0
+      };
+    });
+    var body =
+      '<div style="font-size:13px;color:#374151;margin-bottom:10px;">هذه أسماء في legal_current_products لا تطابق أي name_ar في legal_products، لذلك لم تُحتسب في القائمة. صحّح الاسم في الجدول أو أضف الصنف القانوني.</div>' +
+      UIC.dataTable('bal-unmatched-table', {
+        title: 'حركات غير مرتبطة',
+        headers: [
+          { key: 'product', label: 'اسم الصنف في legal_current_products' },
+          { key: 'lines_count', label: 'عدد الحركات', numeric: true },
+          { key: 'current_qty', label: 'إجمالي الكمية', numeric: true },
+          { key: 'total_cost_sign', label: 'إجمالي قيمة التكلفة', money: true },
+          { key: 'total_sales_value', label: 'إجمالي قيمة المبيعات', money: true }
+        ],
+        rows: rows,
+        searchable: rows.length > 12,
+        exportXlsx: false,
+        printable: false,
+        emptyText: 'لا توجد حركات غير مرتبطة'
+      });
+    UIC.openModal('bal-unmatched-modal', {
+      size: 'xl',
+      title: 'حركات غير مرتبطة بأصناف قانونية (' + FMT.number(items.length) + ' اسم)',
+      body: body,
+      footer: '<button type="button" class="btn btn-outline" onclick="UIC.closeModal(\'bal-unmatched-modal\')">إغلاق</button>'
+    });
+    UIC.initTableSort('bal-unmatched-table');
+  }
+
+  function openDuplicatesModal() {
+    var items = BALANCE.duplicates || [];
+    var rows = items.map(function (d) {
+      return {
+        name: FMT.escape(String(d.name || '')),
+        ids: FMT.escape((d.ids || []).join('، ')),
+        claimed_id: FMT.escape(String(d.claimed_id == null ? '' : d.claimed_id)),
+        lines_count: Number(d.lines_count) || 0,
+        current_qty: numCell(d.current_qty),
+        total_cost_sign: Number(d.total_cost_sign) || 0
+      };
+    });
+    var body =
+      '<div style="font-size:13px;color:#374151;margin-bottom:10px;">الاسم نفسه موجود في أكثر من صف بـ legal_products. الحركات تُحتسب مرة واحدة على الكود الأقل («الكود المحتسب») حتى لا تتكرر الكميات؛ عدّل الاسم أو ادمج الصفوف في الجدول.</div>' +
+      UIC.dataTable('bal-duplicates-table', {
+        title: 'أسماء مكررة',
+        headers: [
+          { key: 'name', label: 'الاسم المكرر' },
+          { key: 'ids', label: 'الأكواد' },
+          { key: 'claimed_id', label: 'الكود المحتسب' },
+          { key: 'lines_count', label: 'عدد الحركات', numeric: true },
+          { key: 'current_qty', label: 'إجمالي الكمية', numeric: true },
+          { key: 'total_cost_sign', label: 'إجمالي قيمة التكلفة', money: true }
+        ],
+        rows: rows,
+        searchable: rows.length > 12,
+        exportXlsx: false,
+        printable: false,
+        emptyText: 'لا توجد أسماء مكررة'
+      });
+    UIC.openModal('bal-duplicates-modal', {
+      size: 'xl',
+      title: 'أسماء أصناف مكررة (' + FMT.number(items.length) + ')',
+      body: body,
+      footer: '<button type="button" class="btn btn-outline" onclick="UIC.closeModal(\'bal-duplicates-modal\')">إغلاق</button>'
+    });
+    UIC.initTableSort('bal-duplicates-table');
+  }
+
+  function openProductModal(key) {
+    var p = null;
+    (BALANCE.products || []).forEach(function (x) { if (String(x.id) === String(key)) p = x; });
+    if (!p) { UIC.toast('لم يتم العثور على الصنف — تم تحديث القائمة', 'error'); fetchBalance(); return; }
+    var lines = p.lines || [];
+    var lineHeaders = [
+      { key: 'transaction_code', label: 'كود المعاملة' },
+      { key: 'transaction_name', label: 'اسم المعاملة' },
+      { key: 'code', label: 'الكود' },
+      { key: 'unit', label: 'الوحدة' },
+      { key: 'current_qty', label: 'الكمية الحالية', numeric: true },
+      { key: 'total_cost_sign', label: 'قيمة التكلفة', money: true },
+      { key: 'total_sales_value', label: 'قيمة المبيعات', money: true },
+      { key: 'sales_per_qty', label: 'سعر البيع/الوحدة', money: true },
+      { key: 'product_target', label: 'التصنيف' }
+    ];
+    var lineRows = lines.map(function (l) {
+      return {
+        transaction_code: FMT.escape(String(l.transaction_code || '-')),
+        transaction_name: FMT.escape(String(l.transaction_name || '-')),
+        code: FMT.escape(String(l.code || '-')),
+        unit: FMT.escape(String(l.unit || '-')),
+        current_qty: Number(l.current_qty) || 0,
+        total_cost_sign: Number(l.total_cost_sign) || 0,
+        total_sales_value: Number(l.total_sales_value) || 0,
+        sales_per_qty: Number(l.sales_per_qty) || 0,
+        product_target: FMT.escape(String(l.product_target || '-'))
+      };
+    });
+    var body =
+      '<div style="display:flex;flex-wrap:wrap;gap:14px;margin-bottom:10px;font-size:13px;color:#374151;">' +
+        '<span>كود الصنف: <b>' + FMT.escape(String(p.id == null ? '' : p.id)) + '</b></span>' +
+        '<span>إجمالي الكمية: <b>' + FMT.number(Number(p.current_qty) || 0) + '</b></span>' +
+        '<span>إجمالي قيمة التكلفة: <b>' + FMT.currency(Number(p.total_cost_sign) || 0) + '</b></span>' +
+        '<span>رصيد السيستم: <b>' + (hasSystemQty(p) ? FMT.number(Number(p.system_qty)) : '—') + '</b></span>' +
+        '<span>عدد الحركات: <b>' + FMT.number(lines.length) + '</b></span>' +
+      '</div>' +
+      assetEditorHtml(p) +
+      systemEditorHtml(p) +
+      '<h4 style="margin:14px 0 8px;font-size:14px;color:var(--brand-primary);border-bottom:1px solid var(--border-color);padding-bottom:4px;">الحركات الحالية (legal_current_products)</h4>' +
+      UIC.dataTable('bal-lines-table', {
+        title: 'حركات الصنف',
+        headers: lineHeaders,
+        rows: lineRows,
+        searchable: lineRows.length > 12,
+        exportXlsx: false,
+        printable: false,
+        emptyText: 'لا توجد حركات مرتبطة بهذا الصنف'
+      }) +
+      '<h4 style="margin:18px 0 8px;font-size:14px;color:var(--brand-primary);border-bottom:1px solid var(--border-color);padding-bottom:4px;">حركة دفتر الجرد (legal_products_movement)</h4>' +
+      '<div id="bal-movement-area"><div style="font-size:13px;color:#6b7280;padding:8px 0;">جارٍ تحميل حركة الصنف...</div></div>';
+    window.__balModalProduct = p;
+    UIC.openModal('bal-lines-modal', {
+      size: 'xl',
+      title: FMT.escape(String(p.name_ar || '')) + ' — كود ' + FMT.escape(String(p.id == null ? '' : p.id)),
+      body: body,
+      footer: '<button type="button" class="btn btn-outline" onclick="UIC.closeModal(\'bal-lines-modal\')">إغلاق</button>'
+    });
+    UIC.initTableSort('bal-lines-table');
+    loadSystemOptions(p);
+    loadProductMovement(p);
+  }
+
+  /* asset_code is a reference into chart_of_accounts level-5: the stored value
+     is المستوى الخامس and the label is اسم المستوى الخامس. Writers get the
+     select; everyone else sees the resolved name. */
+  function assetEditorHtml(p) {
+    var current = String(p.asset_code == null ? '' : p.asset_code).trim();
+    if (!CAN_WRITE) {
+      return '<div style="font-size:13px;color:#374151;margin:12px 0 4px;">حساب الأصل (المستوى الخامس): <b>' +
+        FMT.escape(String(p.asset_code_name || current || '—')) + '</b>' +
+        (current && p.asset_code_name ? ' <span style="color:#6b7280;">(' + FMT.escape(current) + ')</span>' : '') + '</div>';
+    }
+    var opts = '<option value=""' + (current ? '' : ' selected') + '>بدون</option>' +
+      (BALANCE.assetCodeOptions || []).map(function (o) {
+        var v = String(o.value == null ? '' : o.value);
+        return '<option value="' + FMT.escape(v) + '"' + (v === current ? ' selected' : '') + '>' + FMT.escape(String(o.label || v)) + '</option>';
+      }).join('');
+    return '<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;margin:12px 0 4px;">' +
+        '<div style="flex:1;min-width:240px;max-width:460px;">' +
+          '<label for="bal-asset-code" style="font-size:12px;font-weight:700;color:var(--text-muted);display:block;margin-bottom:4px;">حساب الأصل — المستوى الخامس (من شجرة الحسابات)</label>' +
+          '<select id="bal-asset-code" class="input">' + opts + '</select>' +
+        '</div>' +
+        '<button type="button" class="btn btn-primary" onclick="saveProductAssetCode()">حفظ كود الأصل</button>' +
+      '</div>';
+  }
+
+  function saveProductAssetCode() {
+    var p = window.__balModalProduct;
+    var el = document.getElementById('bal-asset-code');
+    if (!p || !el) return;
+    var code = String(el.value || '').trim();
+    companyCall('update_legal_product', { id: p.id, asset_code: code })
+      .then(function () {
+        UIC.toast('تم تحديث كود الأصل', 'success');
+        UIC.closeModal('bal-lines-modal');
+        fetchBalance();
+      })
+      .catch(function (e) { UIC.toast((e && e.message) || 'تعذر حفظ كود الأصل', 'error'); });
+  }
+
+  /* ── أصناف النظام: multi-choice link to the live MySQL products table ──────
+     One legal product can be linked to several system products. The picker is
+     chips + a searchable checkbox list; saving sends the ids and the server
+     stores the canonical comma list and sums the balances. Read-only users see
+     the resolved names instead. */
+  var SYS_SEL = {};        /* id -> label, selection of the OPEN modal */
+  var SYS_FILTER = '';
+
+  function systemEditorHtml(p) {
+    var ids = systemIdList_(p);
+    var names = systemNameList_(p, ids);
+    if (!CAN_WRITE) {
+      var shown = names.length ? names : ids;
+      var missingRead = systemMissingList_(p);
+      return '<div style="font-size:13px;color:#374151;margin:12px 0 4px;">أصناف النظام: <b>' +
+        FMT.escape(shown.length ? shown.join('، ') : '—') + '</b>' +
+        (missingRead.length
+          ? ' <span style="color:#92400e;">(' + FMT.escape(missingRead.join('، ')) + ' بلا رصيد)</span>' : '') +
+        '</div>';
+    }
+    return '<div style="margin:12px 0 4px;">' +
+        '<label style="font-size:12px;font-weight:700;color:var(--text-muted);display:block;margin-bottom:4px;">أصناف النظام (يمكن اختيار أكثر من صنف — رصيد السيستم يُجمع)</label>' +
+        '<div id="bal-system-chips" style="display:flex;flex-wrap:wrap;gap:6px;min-height:30px;margin-bottom:6px;"></div>' +
+        '<input id="bal-system-search" class="input" type="search" placeholder="ابحث باسم الصنف أو رقمه..." onkeyup="filterSystemList(this.value)" style="margin-bottom:6px;">' +
+        '<div id="bal-system-list" style="max-height:220px;overflow:auto;border:1px solid var(--border-color, #e5e7eb);border-radius:8px;padding:6px;"></div>' +
+        '<div style="display:flex;justify-content:flex-end;margin-top:8px;">' +
+          '<button type="button" class="btn btn-primary" onclick="saveProductSystemIds()">حفظ أصناف النظام</button>' +
+        '</div>' +
+        '<div id="bal-system-note" style="font-size:12px;color:#6b7280;margin-top:6px;"></div>' +
+      '</div>';
+  }
+
+  function loadSystemOptions(p) {
+    if (!CAN_WRITE) return;
+    SYS_SEL = Object.create(null);
+    var ids = systemIdList_(p);
+    var names = systemNameList_(p, ids);
+    ids.forEach(function (id, i) { SYS_SEL[id] = names[i] || id; });
+    SYS_FILTER = '';
+    if ((BALANCE.systemOptions || []).length) { renderSystemEditor_(); return; }
+    /* Not warm yet: the note is inline in the modal, never a blocking dialog,
+     * and the fetch is shared with the page prefetch. */
+    var note = document.getElementById('bal-system-note');
+    if (note) note.textContent = 'جارٍ تحميل أصناف النظام...';
+    ensureSystemOptions_(function () {
+      renderSystemEditor_();
+      var n = document.getElementById('bal-system-note');
+      if (n && BALANCE.systemOptionsError) n.textContent = 'تعذر جلب أصناف النظام من قاعدة البيانات';
+    });
+  }
+
+  function renderSystemEditor_() {
+    var chips = document.getElementById('bal-system-chips');
+    var list = document.getElementById('bal-system-list');
+    var note = document.getElementById('bal-system-note');
+    if (!chips || !list) return;
+    var selected = Object.keys(SYS_SEL);
+    chips.innerHTML = selected.length
+      ? selected.map(function (id) {
+          return '<span style="display:inline-flex;align-items:center;gap:6px;background:var(--bg-subtle, #f3f4f6);border:1px solid var(--border-color, #e5e7eb);border-radius:999px;padding:3px 10px;font-size:12px;">' +
+            FMT.escape(SYS_SEL[id]) +
+            '<button type="button" title="إزالة" style="border:none;background:transparent;cursor:pointer;color:#b91c1c;font-weight:700;" onclick="removeSystemId(\'' + FMT.escape(id) + '\')">×</button></span>';
+        }).join('')
+      : '<span style="font-size:12px;color:#6b7280;">لم يتم اختيار أي صنف نظام</span>';
+    var opts = BALANCE.systemOptions || [];
+    var q = String(SYS_FILTER || '').toLowerCase();
+    var shown = opts.filter(function (o) {
+      if (!q) return true;
+      return String(o.label || '').toLowerCase().indexOf(q) !== -1 || String(o.value || '').toLowerCase().indexOf(q) !== -1;
+    });
+    list.innerHTML = shown.length
+      ? shown.slice(0, 400).map(function (o) {
+          var id = String(o.value);
+          return '<label style="display:flex;align-items:center;gap:8px;padding:4px 6px;font-size:13px;cursor:pointer;">' +
+            '<input type="checkbox"' + (SYS_SEL[id] ? ' checked' : '') + ' onclick="toggleSystemId(\'' + FMT.escape(id) + '\')">' +
+            '<span>' + FMT.escape(o.label || id) + ' <span style="color:#9ca3af;">#' + FMT.escape(id) + '</span></span></label>';
+        }).join('')
+      : '<div style="font-size:12px;color:#6b7280;padding:6px;">' +
+        (BALANCE.systemOptionsError ? 'تعذر جلب أصناف النظام من قاعدة البيانات' : (opts.length ? 'لا نتائج مطابقة' : 'لا توجد أصناف نظام')) + '</div>';
+    if (note) {
+      note.textContent = BALANCE.systemOptionsError
+        ? 'تعذر جلب أصناف النظام — لم يتم تغيير شيء'
+        : (shown.length > 400 ? 'يتم عرض أول 400 صنف — استخدم البحث' : '');
+    }
+  }
+
+  function toggleSystemId(id) {
+    id = String(id);
+    if (SYS_SEL[id]) { delete SYS_SEL[id]; }
+    else {
+      var label = id;
+      (BALANCE.systemOptions || []).forEach(function (o) { if (String(o.value) === id) label = o.label || id; });
+      SYS_SEL[id] = label;
+    }
+    renderSystemEditor_();
+  }
+  function removeSystemId(id) { delete SYS_SEL[String(id)]; renderSystemEditor_(); }
+  function filterSystemList(q) { SYS_FILTER = String(q || ''); renderSystemEditor_(); }
+
+  function saveProductSystemIds() {
+    var p = window.__balModalProduct;
+    if (!p) return;
+    var ids = Object.keys(SYS_SEL).map(Number).filter(function (n) { return Number.isInteger(n) && n > 0; });
+    companyCall('update_legal_product', { id: p.id, product_system_ids: ids })
+      .then(function (r) {
+        UIC.toast('تم تحديث أصناف النظام', 'success');
+        UIC.closeModal('bal-lines-modal');
+        /* Reconcile the single row in place. A full fetchBalance() here put the
+         * whole report behind a read skeleton for a one-cell change. */
+        if (!applyLocalSystemIds_(p.id, ids, (r && r.record) || null)) fetchBalance();
+        else renderBalance();
+      })
+      .catch(function (e) { UIC.toast((e && e.message) || 'تعذر حفظ أصناف النظام', 'error'); });
+  }
+
+  /* Reflect a saved system-id list on the in-memory row, preferring what the
+   * server actually stored. Returns false when the row is not in memory, so
+   * the caller can fall back to a refetch. */
+  function applyLocalSystemIds_(id, ids, rec) {
+    var row = null;
+    (BALANCE.products || []).forEach(function (x) { if (String(x.id) === String(id)) row = x; });
+    if (!row) return false;
+    var finalIds = (rec && Array.isArray(rec.product_system_ids)) ? rec.product_system_ids.map(String) : (ids || []).map(String);
+    var finalNames = (rec && Array.isArray(rec.product_system_names)) ? rec.product_system_names.map(String) : null;
+    var map = systemOptionLabels_();
+    row.product_system_ids = finalIds;
+    row.product_system_id = (rec && rec.product_system_id != null) ? rec.product_system_id : finalIds.join(',');
+    row.product_system_names = finalNames || finalIds.map(function (sid) { return map[String(sid)] || String(sid); });
+    row.system_ids_missing = [];
+    return true;
+  }
+
+  /* ── Movement ledger for one product — the report the retired
+     tc_budget_stock_movement page used to show, now a section of this modal.
+     Dates arrive pre-formatted as transaction_date_display, so a sheet date
+     cell never renders as its UTC ISO string. ── */
+  function loadProductMovement(p) {
+    var area = document.getElementById('bal-movement-area');
+    if (!area) return;
+    var name = String(p.name_ar || '').trim();
+    if (!name) {
+      area.innerHTML = '<div style="font-size:13px;color:#92400e;padding:8px 0;">لا يمكن جلب الحركة — الصنف بلا اسم مطابق في legal_products.</div>';
+      return;
+    }
+    area.innerHTML = '<div style="font-size:13px;color:#6b7280;padding:8px 0;">جارٍ تحميل حركة الصنف...</div>';
+    companyCall('get_legal_products_movement', { product: name, limit: 500 })
+      .then(function (r) {
+        var el = document.getElementById('bal-movement-area');
+        if (!el) return;
+        renderMovementSection(el, (r && r.items) || [], Number(r && r.total) || 0);
+      })
+      .catch(function (e) {
+        var el = document.getElementById('bal-movement-area');
+        if (!el) return;
+        el.innerHTML = '<div style="font-size:13px;color:#b91c1c;padding:8px 0;">تعذر جلب حركة الصنف — ' +
+          FMT.escape((e && e.message) || 'خطأ غير متوقع') + '</div>' +
+          '<button type="button" class="btn btn-outline" onclick="retryProductMovement()">إعادة المحاولة</button>';
+      });
+  }
+
+  function retryProductMovement() {
+    if (window.__balModalProduct) loadProductMovement(window.__balModalProduct);
+  }
+
+  function printProductMovement() {
+    var p = window.__balModalProduct;
+    if (!p) return;
+    var name = String(p.name_ar || '').trim();
+    if (!name) return;
+    UIC.openDownload(scriptUrl + '?download=budget_print&type=movement&id=' + encodeURIComponent(name) +
+      '&sessionToken=' + encodeURIComponent(SESSION_TOKEN), 'فتح التقرير');
+  }
+
+  function renderMovementSection(el, items, total) {
+    var headers = [
+      { key: 'transaction_code', label: 'كود المعاملة' },
+      { key: 'transaction_name', label: 'اسم المعاملة' },
+      { key: 'transaction_type', label: 'النوع' },
+      { key: 'transaction_date', label: 'التاريخ' },
+      { key: 'qty', label: 'الكمية', numeric: true },
+      { key: 'total_cost_sign', label: 'إجمالي التكلفة', money: true },
+      { key: 'total_sales_value', label: 'قيمة المبيعات', money: true },
+      { key: 'cost_per_qty', label: 'تكلفة/الوحدة', money: true },
+      { key: 'sales_per_qty', label: 'بيع/الوحدة', money: true },
+      { key: 'tax_type', label: 'الضريبة' },
+      { key: 'month', label: 'الشهر' },
+      { key: 'year', label: 'السنة' }
+    ];
+    var rows = items.map(function (m) {
+      return {
+        transaction_code: FMT.escape(String(m.transaction_code || '-')),
+        transaction_name: FMT.escape(String(m.transaction_name || '-')),
+        transaction_type: FMT.escape(String(m.transaction_type || '-')),
+        transaction_date: FMT.escape(String(m.transaction_date_display || m.transaction_date || '-')),
+        qty: Number(m.qty) || 0,
+        total_cost_sign: Number(m.total_cost_sign) || 0,
+        total_sales_value: Number(m.total_sales_value) || 0,
+        cost_per_qty: Number(m.cost_per_qty) || 0,
+        sales_per_qty: Number(m.sales_per_qty) || 0,
+        tax_type: FMT.escape(String(m.tax_type || '-')),
+        month: FMT.escape(String(MONTHS[Number(m.month)] || m.month || '-')),
+        year: FMT.escape(String(m.year || '-'))
+      };
+    });
+    var inQty = 0, outQty = 0;
+    items.forEach(function (m) {
+      var q = Math.abs(Number(m.qty) || 0);
+      var s = Number(m.transaction_sign);
+      if (s > 0) inQty += q; else if (s < 0) outQty += q;
+    });
+    var truncatedNote = total > items.length
+      ? '<div style="font-size:12px;color:#92400e;margin-bottom:6px;">يتم عرض أحدث ' + FMT.number(items.length) +
+        ' حركة من إجمالي ' + FMT.number(total) + ' — اطبع التقرير لعرض الكل.</div>'
+      : '';
+    el.innerHTML =
+      '<div style="display:flex;flex-wrap:wrap;gap:14px;align-items:center;justify-content:space-between;margin-bottom:8px;">' +
+        '<div style="display:flex;flex-wrap:wrap;gap:14px;font-size:13px;color:#374151;">' +
+          '<span>عدد الحركات: <b>' + FMT.number(total) + '</b></span>' +
+          '<span>إجمالي الوارد: <b style="color:#166534;">' + FMT.number(inQty) + '</b></span>' +
+          '<span>إجمالي الصادر: <b style="color:#b91c1c;">' + FMT.number(outQty) + '</b></span>' +
+        '</div>' +
+        '<button type="button" class="btn btn-outline" onclick="printProductMovement()">طباعة التقرير</button>' +
+      '</div>' +
+      truncatedNote +
+      UIC.dataTable('bal-movement-table', {
+        title: 'حركة دفتر الجرد',
+        headers: headers,
+        rows: rows,
+        searchable: rows.length > 12,
+        exportXlsx: false,
+        printable: false,
+        emptyText: 'لا توجد حركة مسجلة لهذا الصنف في دفتر الجرد'
+      });
+    UIC.initTableSort('bal-movement-table');
+  }
+
+  function showError(e) {
+    UIC.toast((e && e.message) || 'خطأ غير متوقع', 'error');
+  }
+
+  /* Phase B2: the shared refresh control for this report only. The loader is
+     the same read action the page already uses (it carries no schema repair on
+     the new mode path); the shared component restores search/sort/page/scroll
+     and blocks while the per-product editor modal is open. */
+  if (window.UIC && UIC.TableRefresh) {
+    UIC.TableRefresh.register('stock-balance-table', {
+      load: function () { return companyCall('get_legal_stock_balance'); },
+      apply: function (r) {
+        BALANCE.products = (r && r.products) || [];
+        BALANCE.assetCodeOptions = (r && r.asset_code_options) || [];
+        BALANCE.systemQtyError = !!(r && r.system_qty_error);
+        BALANCE.unmatchedCount = Number(r && r.unmatched_count) || 0;
+        BALANCE.unmatched = (r && r.unmatched) || [];
+        BALANCE.duplicateNames = (r && r.duplicate_names) || [];
+        BALANCE.duplicates = (r && r.duplicates) || [];
+        if (applySystemNamesToRows_()) { /* names resolved from the option cache */ }
+        renderBalance();
+      },
+      blocked: function () {
+        try {
+          if (document.querySelector('.modal-backdrop, .uic-modal, [data-modal-open="true"]')) return 'أغلق نافذة الصنف المفتوحة قبل تحديث الجدول';
+        } catch (e) {}
+        return null;
+      }
+    });
+  }
+
+  load();
+</script>
+</body>
+</html>

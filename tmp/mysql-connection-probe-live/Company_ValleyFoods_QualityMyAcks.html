@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Valley Foods — الجودة — إقراراتي</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_ValleyFoods_Nav'); ?>
+  <?!= getCompanyThemeCSS_('9940659bd83035d7') ?>
+  <style>
+    .vf-ack-note { padding: 10px 12px; border: 1px solid var(--border-color, #e5e7eb); border-radius: 8px; background: var(--bg-subtle, #f8fafc); font-size: 13px; line-height: 1.8; }
+    .vf-ack-hint { font-size: 12px; color: var(--text-muted, #6b7280); margin-top: 6px; }
+    .vf-ack-info { border: 1px solid var(--warning-border, #fcd34d); background: var(--warning-bg, #fffbeb); border-radius: 8px; padding: 12px 14px; font-size: 13px; line-height: 1.8; margin-bottom: 12px; }
+  </style>
+</head>
+<body>
+  <div id="vf-root"></div>
+
+  <script>
+    var params = new URLSearchParams(window.location.search);
+    var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+    var scriptUrl = window.scriptUrl || '/';
+    var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+    var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('9940659bd83035d7') ?>';
+    var COMPANY_PAGES = <?!= companyPages ?>;
+    var CURRENT_ACTION = '<?!= currentAction ?>';
+    var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+    var CAN_WRITE = UIC.canAdd_(); var CAN_FULL = UIC.canFull_();
+
+    function companyCall(moduleAction, data) {
+      return API.call('company_action', {
+        target_system: '9940659bd83035d7',
+        module_action: moduleAction,
+        data: data || {}
+      }, SESSION_TOKEN);
+    }
+    function esc(v) { return FMT.escape(v); }
+    function fmtDate(v) {
+      if (!v) return '—';
+      var d = (v instanceof Date) ? v : new Date(v);
+      if (isNaN(d.getTime())) return String(v);
+      var p = function (n) { return n < 10 ? '0' + n : '' + n; };
+      return p(d.getDate()) + '/' + p(d.getMonth() + 1) + '/' + d.getFullYear();
+    }
+    function fmtDateTime(v) {
+      if (!v) return '—';
+      var d = (v instanceof Date) ? v : new Date(v);
+      if (isNaN(d.getTime())) return String(v);
+      var p = function (n) { return n < 10 ? '0' + n : '' + n; };
+      return p(d.getDate()) + '/' + p(d.getMonth() + 1) + '/' + d.getFullYear() + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+    }
+    function fmtStamp(v) {
+      if (!v) return '—';
+      var raw = String(v);
+      if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return fmtDate(v);
+      return fmtDateTime(v);
+    }
+  </script>
+
+  <script>
+  (function () {
+    'use strict';
+
+    var STATE = { LINKED: false, MY: [], EMPLOYEES: [], SOPS: [] };
+    var CURRENT_SIGN_UID = null;
+
+    var STATUS_AR = { Pending: 'بالانتظار', Read: 'مقروء', Signed: 'موقّع', Superseded: 'ملغى' };
+    var STATUS_TONE = { Pending: 'warning', Read: 'neutral', Signed: 'success', Superseded: 'neutral' };
+
+    function getV(id) { var el = document.getElementById(id); return el ? String(el.value == null ? '' : el.value).trim() : ''; }
+    function statusLabel(s) { return STATUS_AR[s] || s || '—'; }
+    function statusPillOf(s) { return UIC.statusPill(statusLabel(s), STATUS_TONE[s] || 'neutral'); }
+    function actionBtn(label, onclick, primary) {
+      return '<button type="button" class="btn ' + (primary ? 'btn-primary' : 'btn-outline') + '" style="padding:8px 16px;" onclick="' + onclick + '">' + label + '</button>';
+    }
+    function findRow(uid) {
+      var want = String(uid == null ? '' : uid);
+      for (var i = 0; i < STATE.MY.length; i++) {
+        if (String(((STATE.MY[i] || {}).ack || {}).unique_id) === want) return STATE.MY[i];
+      }
+      return null;
+    }
+    function findSop(id) {
+      var want = String(id == null ? '' : id);
+      for (var i = 0; i < STATE.SOPS.length; i++) {
+        var s = STATE.SOPS[i];
+        if (String(s.unique_id) === want || String(s.id) === want) return s;
+      }
+      return null;
+    }
+    function sopsWithEffective() {
+      return STATE.SOPS.filter(function (s) { return s && s.current_effective_version != null && String(s.current_effective_version) !== ''; });
+    }
+    function empLabel(e) {
+      var bits = [e.name_ar || e.name || e.emp_id || ''];
+      if (e.section) bits.push('— ' + e.section);
+      if (e.emp_id) bits.push('(#' + e.emp_id + ')');
+      return bits.join(' ');
+    }
+    function sopLabel(s) {
+      return (s.sop_code ? s.sop_code + ' — ' : '') + (s.title_ar || '') + ' (الإصدار ' + s.current_effective_version + ')';
+    }
+
+    function renderApp() {
+      UIC.appShell('vf-root', {
+        companyLogoUrl: COMPANY_LOGO_URL,
+        companyLogoHref: scriptUrl + '?action=vf_dashboard&sessionToken=' + SESSION_TOKEN,
+        companyLogoTitle: 'Valley Foods',
+        breadcrumb: 'Valley Foods / الجودة / إقراراتي',
+        contentId: 'vf-quality-content',
+        menuGroups: (window.VALLEYFOODS_MENU || [])
+      });
+      document.getElementById('vf-quality-content').innerHTML =
+        '<div id="vf-acks-linked"></div>' +
+        '<div class="vf-card"><div class="vf-card-header"><h3>إقراراتي</h3>' +
+          '<button class="btn btn-outline" onclick="VF_QUALITY_ACKS_PAGE.refresh()">تحديث</button>' +
+        '</div><div class="vf-card-body">' +
+          '<div id="vf-acks-my-list"></div>' +
+        '</div></div>' +
+        '<div id="vf-acks-supervisor"></div>';
+      load();
+      UIC.Live.watchPage({
+        call: companyCall,
+        page: 'vf_quality_my_acks',
+        onChange: function () { UIC.Live.arrive(function () { load(true); }); }
+      });
+    }
+
+    function load(quiet) {
+      if (!quiet) UIC.readSkeleton('vf-acks-my-list');
+      return companyCall('get_quality_my_acks')
+        .then(function (res) {
+          res = res || {};
+          STATE.LINKED = res.linked === true;
+          STATE.MY = res.my || [];
+          STATE.EMPLOYEES = res.employees || [];
+          STATE.SOPS = res.sops || [];
+          renderAll();
+        })
+        .catch(function (e) { if (!quiet) UIC.toast((e && e.message) || 'خطأ في تحميل البيانات', 'error'); })
+        .finally(function () { if (!quiet) { try { UI.hideSpinner(); } catch (e) {} } });
+    }
+
+    function renderAll() {
+      renderLinked();
+      renderMy();
+      renderSupervisor();
+    }
+
+    function renderLinked() {
+      var host = document.getElementById('vf-acks-linked');
+      if (!host) return;
+      if (STATE.LINKED) { host.innerHTML = ''; return; }
+      host.innerHTML = '<div class="vf-ack-info">' +
+        'لا يوجد بريد إلكتروني مطابق لحسابك في بيانات الموظفين — استخدم التسجيل بواسطة المشرف.' +
+      '</div>';
+    }
+
+    function pdfCell(row) {
+      var ver = row.version || null;
+      if (ver && ver.pdf_ref) {
+        return '<button type="button" class="btn btn-outline" style="padding:4px 10px;font-size:12px;" data-ack="' + esc(((row.ack || {}).unique_id) || '') + '"' +
+          ' onclick="VF_QUALITY_ACKS_PAGE.openVersion(this.getAttribute(\'data-ack\'))">📄 عرض الإصدار (PDF)</button>';
+      }
+      return '<button type="button" class="btn btn-outline" style="padding:4px 10px;font-size:12px;" disabled title="لا يوجد ملف PDF لهذا الإصدار">📄 عرض الإصدار (PDF)</button>' +
+        '<div class="vf-ack-hint">لا يوجد ملف PDF لهذا الإصدار</div>';
+    }
+
+    function signCell(row) {
+      var ack = row.ack || {};
+      if (!STATE.LINKED) return '—';
+      if (ack.status === 'Pending' || ack.status === 'Read') {
+        return '<button type="button" class="btn btn-primary" style="padding:4px 10px;font-size:12px;" data-ack="' + esc(ack.unique_id || '') + '"' +
+          ' onclick="VF_QUALITY_ACKS_PAGE.openSign(this.getAttribute(\'data-ack\'))">✍ قرأت وأوقّع</button>';
+      }
+      if (ack.status === 'Signed') return '<span class="vf-ack-hint">تم التوقيع</span>';
+      return '—';
+    }
+
+    function renderMy() {
+      var container = document.getElementById('vf-acks-my-list');
+      if (!container) return;
+      var rows = STATE.MY.map(function (r) {
+        var ack = r.ack || {};
+        var sop = r.sop || null;
+        return [
+          '<b data-ack="' + esc(ack.unique_id || '') + '">' + esc(sop ? sop.sop_code : '—') + '</b>',
+          esc(sop ? sop.title_ar : '—'),
+          esc(ack.sop_version || '—'),
+          statusPillOf(ack.status),
+          esc(fmtStamp(ack.signed_at)),
+          pdfCell(r),
+          signCell(r)
+        ];
+      });
+      container.innerHTML = UIC.dataTable('vf-acks-table', {
+        emptyState: STATE.LINKED
+          ? { title: 'لا توجد إقرارات', body: 'لم يتم إطلاق إقرارات على حسابك بعد.' }
+          : { title: 'لا توجد إقرارات مرتبطة بحسابك', body: 'لا يوجد بريد إلكتروني مطابق لحسابك في بيانات الموظفين — استخدم التسجيل بواسطة المشرف.' },
+        headers: ['كود الإجراء', 'العنوان', 'الإصدار', 'الحالة', 'تاريخ التوقيع', 'المرفق', 'إجراءات'],
+        rows: rows,
+        rowClick: function (rec, tr) {
+          var el = (tr && tr.querySelector) ? tr.querySelector('[data-ack]') : null;
+          if (!el) return;
+          var uid = el.getAttribute('data-ack');
+          var row = findRow(uid);
+          if (!row) return;
+          var ack = row.ack || {};
+          if (STATE.LINKED && (ack.status === 'Pending' || ack.status === 'Read')) openSign(uid);
+          else if (row.version && row.version.pdf_ref) openVersion(uid);
+        }
+      });
+    }
+
+    function renderSupervisor() {
+      var host = document.getElementById('vf-acks-supervisor');
+      if (!host) return;
+      var emps = STATE.EMPLOYEES || [];
+      var sops = sopsWithEffective();
+      if (!emps.length || !sops.length) { host.innerHTML = ''; return; }
+      var empOptions = emps.map(function (e) { return { value: String(e.emp_id), label: empLabel(e) }; });
+      var sopOptions = sops.map(function (s) { return { value: String(s.unique_id || s.id), label: sopLabel(s) }; });
+      host.innerHTML = '<div class="vf-card"><div class="vf-card-header"><h3>تسجيل إقرار بواسطة المشرف</h3></div>' +
+        '<div class="vf-card-body">' +
+          '<form id="vf-ack-rec-form" class="form-grid">' +
+            UIC.field({ key: 'vf-ack-rec-emp', label: 'الموظف', type: 'select', combo: false, required: true, options: empOptions, value: '' }) +
+            UIC.field({ key: 'vf-ack-rec-sop', label: 'الإجراء', type: 'select', combo: false, required: true, options: sopOptions, value: '' }) +
+            UIC.field({ key: 'vf-ack-rec-note', label: 'ملاحظة (اختياري)', type: 'text', value: '' }) +
+          '</form>' +
+          '<div style="display:flex;justify-content:flex-end;gap:10px;margin-top:12px;">' +
+            actionBtn('تسجيل', 'VF_QUALITY_ACKS_PAGE.recordAck()', true) +
+          '</div>' +
+        '</div></div>';
+    }
+
+    function openVersion(uid) {
+      var row = findRow(uid);
+      var ver = row && row.version;
+      if (!ver || !ver.pdf_ref) { UIC.toast('لا يوجد ملف PDF لهذا الإصدار', 'error'); return; }
+      UIC.openDownload(scriptUrl + '?download=attachment&page=vf_quality_my_acks&ref=' + encodeURIComponent(ver.pdf_ref) + '&id=' + encodeURIComponent(ver.unique_id) + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN), 'فتح المرفق');
+    }
+
+    function openSign(uid) {
+      if (!STATE.LINKED) { UIC.toast('لا يوجد بريد إلكتروني مطابق لحسابك في بيانات الموظفين', 'error'); return; }
+      var row = findRow(uid);
+      if (!row) { UIC.toast('لم يتم العثور على الإقرار — تم تحديث القائمة', 'error'); load(true); return; }
+      var ack = row.ack || {};
+      if (ack.status !== 'Pending' && ack.status !== 'Read') { UIC.toast('لا يمكن توقيع هذا الإقرار في حالته الحالية', 'error'); return; }
+      CURRENT_SIGN_UID = String(ack.unique_id || '');
+      var sop = row.sop || {};
+      var note = '<div class="vf-ack-note">أقرّ بأنني قرأت وفهمت إجراء العمل <b>' + esc(sop.title_ar || '—') + '</b>' +
+        (sop.sop_code ? ' (' + esc(sop.sop_code) + ')' : '') +
+        ' — الإصدار <b>' + esc(ack.sop_version || '—') + '</b>، وألتزم بتطبيقه.</div>' +
+        '<div class="vf-ack-hint">يجب أن يطابق الاسم المكتوب اسم الموظف' + (ack.employee_name ? ': <b>' + esc(ack.employee_name) + '</b>' : '') + '</div>' +
+        '<div id="vf-ack-sign-alert"></div>';
+      UIC.openModal('vf-ack-sign-modal', {
+        size: 'sm',
+        title: 'توقيع الإقرار',
+        body: '<form id="vf-ack-sign-form">' + note +
+          UIC.field({ key: 'vf-ack-sign-name', label: 'الاسم الكامل', type: 'text', required: true, value: '', noCorrect: true }) +
+        '</form>',
+        onSave: 'VF_QUALITY_ACKS_PAGE.confirmSign()'
+      });
+    }
+
+    function confirmSign() {
+      if (!CURRENT_SIGN_UID) return Promise.resolve();
+      if (!UIC.validateForm('vf-ack-sign-form')) return Promise.resolve();
+      var typed = getV('vf-ack-sign-name');
+      if (!typed) { UIC.toast('يرجى كتابة الاسم الكامل', 'error'); return Promise.resolve(); }
+      UI.showSpinner();
+      return companyCall('sign_quality_ack', { unique_id: CURRENT_SIGN_UID, typed_name: typed })
+        .then(function () {
+          UIC.closeModal('vf-ack-sign-modal');
+          CURRENT_SIGN_UID = null;
+          UIC.toast('تم توقيع الإقرار', 'success');
+          return load(true);
+        })
+        .catch(function (e) {
+          var msg = (e && e.message) || 'فشل التوقيع';
+          var alertHost = document.getElementById('vf-ack-sign-alert');
+          if (alertHost) alertHost.innerHTML = '<div style="color:var(--danger-text, #b91c1c);font-size:13px;margin-top:8px;">' + esc(msg) + '</div>';
+          UIC.toast(msg, 'error');
+        })
+        .finally(function () { UI.hideSpinner(); });
+    }
+
+    function recordAck() {
+      if (!STATE.EMPLOYEES.length || !STATE.SOPS.length) return Promise.resolve();
+      if (!UIC.validateForm('vf-ack-rec-form')) return Promise.resolve();
+      var empId = getV('vf-ack-rec-emp');
+      var sopId = getV('vf-ack-rec-sop');
+      var note = getV('vf-ack-rec-note');
+      var sop = findSop(sopId);
+      if (!empId) { UIC.toast('اختر الموظف', 'error'); return Promise.resolve(); }
+      if (!sop || !sop.current_effective_version) { UIC.toast('اختر الإجراء', 'error'); return Promise.resolve(); }
+      UI.showSpinner();
+      return companyCall('record_quality_ack', { emp_id: empId, sop_id: sopId, sop_version: sop.current_effective_version, note: note })
+        .then(function () {
+          UIC.toast('تم تسجيل الإقرار', 'success');
+          return load(true);
+        })
+        .catch(function (e) { UIC.toast((e && e.message) || 'فشل التسجيل', 'error'); })
+        .finally(function () { UI.hideSpinner(); });
+    }
+
+    function refresh() { return load(true); }
+
+    window.VF_QUALITY_ACKS_PAGE = {
+      refresh: refresh,
+      openVersion: openVersion,
+      openSign: openSign,
+      confirmSign: confirmSign,
+      recordAck: recordAck
+    };
+
+    document.addEventListener('DOMContentLoaded', renderApp);
+  })();
+  </script>
+</body>
+</html>

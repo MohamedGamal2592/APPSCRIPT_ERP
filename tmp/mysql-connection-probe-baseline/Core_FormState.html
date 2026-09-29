@@ -1,0 +1,332 @@
+<script>
+/* ============================================================================
+ * Core_FormState.html — one retained form state for the pages that opt in.
+ *
+ * Stage B/C/F of Plan_Instant_Forms_Production_Safe.md. It owns state and only
+ * state: the last server-confirmed snapshot, current editable values, dirty
+ * tracking, stable local row identities, explicit deletion lists, an immutable
+ * pending submission, and an explicit UI state machine —
+ *
+ *     editing -> pending -> saved | rejected | uncertain
+ *
+ * WHAT IT DOES NOT DO
+ * It never calls the server, never mints a replacement request ID, never
+ * decides that a submission succeeded because a request was sent, and never
+ * treats a cached reference as authority. The page keeps its own companyCall;
+ * this file keeps the state the page draws from.
+ *
+ * FLAG
+ * FORM_STATE_CORE_ is the master switch and defaults to false. A page opts in
+ * by passing its own flag to UIC.FormState.enabled(flag); while either is
+ * false the page's existing code path runs untouched.
+ *
+ * RESPONSE RECONCILIATION (the part that makes "retained" honest)
+ * A submission is frozen at beginSubmit: its payload copy, request ID and the
+ * local edit generation at that moment cannot change afterwards. When the
+ * authoritative reply arrives, settle() applies a field only when the user has
+ * not edited that field since the submission; an edit made while the request
+ * was in flight is preserved and stays dirty. The next authoritative token
+ * replaces the snapshot only when the reply carries one.
+ * ==========================================================================*/
+var FORM_STATE_CORE_ = false;
+
+window.UIC = window.UIC || {};
+
+UIC.FormState = (function () {
+  'use strict';
+
+  function enabled(moduleFlag) {
+    return FORM_STATE_CORE_ === true && moduleFlag !== false;
+  }
+
+  function nowMs() { try { return Date.now(); } catch (e) { return 0; } }
+
+  var localSeq = 0;
+  function localKey() {
+    localSeq++;
+    return '__lk_' + nowMs().toString(36) + '_' + localSeq.toString(36);
+  }
+
+  /* Deep-copy only what a payload can contain: JSON-safe values. A Date is
+   * preserved as a Date, because the wire form is the page's business. */
+  function copyValue(v) {
+    if (v === null || v === undefined) return v;
+    if (v instanceof Date) return new Date(v.getTime());
+    if (Array.isArray(v)) return v.map(copyValue);
+    if (typeof v === 'object') {
+      var out = {};
+      Object.keys(v).forEach(function (k) { out[k] = copyValue(v[k]); });
+      return out;
+    }
+    return v;
+  }
+
+  function freezeDeep(v) {
+    if (v === null || typeof v !== 'object') return v;
+    Object.keys(v).forEach(function (k) { freezeDeep(v[k]); });
+    try { Object.freeze(v); } catch (e) {}
+    return v;
+  }
+
+  /**
+   * @param {object} opts
+   *   key          string   form identity, for debugging only
+   *   fields       array    header field names this form edits
+   *   sections     array    child section names, e.g. ['outputs']
+   *   rowKey       string   the persistent row identity field, default 'uid'
+   *   rows         object   optional { section: [rows] } initial rows
+   *   values       object   optional initial header values
+   *   token        string   optional initial edit token
+   */
+  function create(opts) {
+    var o = opts || {};
+    var rowKey = String(o.rowKey || 'uid');
+    var fields = (o.fields || []).slice();
+    var sections = (o.sections || []).slice();
+
+    var snapshot = { values: copyValue(o.values || {}), token: String(o.token || ''), generation: 0 };
+    var values = copyValue(o.values || {});
+    var rows = {};
+    sections.forEach(function (s) { rows[s] = (o.rows && o.rows[s]) ? copyValue(o.rows[s]) : []; });
+
+    var dirty = {};                 /* header fields edited since the snapshot */
+    var dirtyRows = {};             /* section -> { localKey: true } */
+    var deleted = {};               /* section -> [persistent uid] */
+    sections.forEach(function (s) { deleted[s] = []; });
+
+    var generation = 0;             /* increments on every local edit */
+    var state = 'editing';
+    var pending = null;             /* frozen submission */
+    var lastError = null;
+    var lastReply = null;
+
+    function isDirtyField(f) { return dirty[f] === true; }
+
+    function markEdited(field) {
+      generation++;
+      dirty[field] = true;
+    }
+
+    function setHeader(field, value) {
+      if (fields.length && fields.indexOf(field) === -1) return;
+      if (values[field] === value) return;
+      values[field] = value;
+      markEdited(field);
+      if (state === 'saved' || state === 'rejected') state = 'editing';
+    }
+
+    function setRow(section, key, field, value) {
+      var list = rows[section];
+      if (!list) return;
+      for (var i = 0; i < list.length; i++) {
+        if (String(list[i].__lk) === String(key)) {
+          if (list[i][field] === value) return;
+          list[i][field] = value;
+          dirtyRows[section] = dirtyRows[section] || {};
+          dirtyRows[section][String(key)] = true;
+          generation++;
+          return;
+        }
+      }
+    }
+
+    function addRow(section, row) {
+      if (!rows[section]) rows[section] = [];
+      var r = copyValue(row || {});
+      r.__lk = r.__lk || localKey();
+      rows[section].push(r);
+      generation++;
+      return r.__lk;
+    }
+
+    function removeRow(section, key) {
+      var list = rows[section] || [];
+      for (var i = 0; i < list.length; i++) {
+        if (String(list[i].__lk) === String(key)) {
+          var uid = String(list[i][rowKey] || '').trim();
+          if (uid && deleted[section].indexOf(uid) === -1) deleted[section].push(uid);
+          list.splice(i, 1);
+          generation++;
+          return true;
+        }
+      }
+      return false;
+    }
+
+    function rememberDeleted(section, uid) {
+      uid = String(uid || '').trim();
+      if (!uid) return;
+      if (!deleted[section]) deleted[section] = [];
+      if (deleted[section].indexOf(uid) === -1) deleted[section].push(uid);
+      generation++;
+    }
+
+    function isDirty() {
+      if (Object.keys(dirty).length) return true;
+      if (Object.keys(dirtyRows).length) return true;
+      for (var s in deleted) if (deleted[s].length) return true;
+      return false;
+    }
+
+    /**
+     * Freeze a submission. `build` receives the current values/rows and
+     * returns the wire payload. The payload, its request ID and the edit
+     * generation are captured ONCE; later edits cannot alter them.
+     * Refuses while a submission is already pending.
+     */
+    function beginSubmit(requestId, build) {
+      if (pending) throw { status: 'error', code: 'FORM_SUBMIT_IN_FLIGHT', message: 'هناك طلب حفظ قيد التنفيذ.' };
+      var payload = null;
+      if (typeof build === 'function') {
+        payload = build({
+          values: copyValue(values),
+          rows: copyValue(rows),
+          deleted: copyValue(deleted),
+          token: snapshot.token
+        });
+      } else {
+        payload = copyValue(build || {});
+      }
+      pending = freezeDeep({
+        requestId: String(requestId || (payload && payload.__request_id) || ''),
+        payload: payload,
+        generation: generation,
+        startedAt: nowMs()
+      });
+      /* The submission has captured the current dirty set. From here on,
+       * anything that becomes dirty is an edit made AFTER the submission, and
+       * settle() must preserve exactly those fields. */
+      dirty = {};
+      dirtyRows = {};
+      sections.forEach(function (s) { deleted[s] = []; });
+      state = 'pending';
+      lastError = null;
+      return pending;
+    }
+
+    function clearPending() { pending = null; }
+
+    /**
+     * Reconcile an authoritative reply.
+     *   response.saved    { field: value } values the server persisted
+     *   response.token    next edit token (optional)
+     *   response.mapped   { section: { localKey: persistentUid } }
+     *   response.removed  { section: [persistentUid] }
+     * Only fields the user has NOT edited since the submission are applied.
+     * Returns { applied: [...], preserved: [...], editsAfterSubmit: bool }.
+     */
+    function settle(submission, response) {
+      var sub = submission || pending;
+      var resp = response || {};
+      var applied = [], preserved = [];
+      if (sub && sub.generation === generation) {
+        var saved = resp.saved || {};
+        Object.keys(saved).forEach(function (f) {
+          if (dirty[f] === true) { preserved.push(f); return; }
+          values[f] = copyValue(saved[f]);
+          applied.push(f);
+        });
+      } else {
+        Object.keys(resp.saved || {}).forEach(function (f) { preserved.push(f); });
+      }
+      if (resp.token) snapshot = { values: copyValue(values), token: String(resp.token), generation: generation };
+      else snapshot = { values: copyValue(values), token: snapshot.token, generation: generation };
+      dirty = {};
+      dirtyRows = {};
+      sections.forEach(function (s) { deleted[s] = []; });
+      if (resp.mapped) {
+        sections.forEach(function (s) {
+          var map = resp.mapped[s] || {};
+          (rows[s] || []).forEach(function (r) {
+            var uid = map[String(r.__lk)];
+            if (uid) r[rowKey] = uid;
+          });
+        });
+      }
+      if (resp.removed) {
+        sections.forEach(function (s) {
+          var gone = (resp.removed[s] || []).map(String);
+          if (!gone.length) return;
+          rows[s] = (rows[s] || []).filter(function (r) { return gone.indexOf(String(r[rowKey] || '')) === -1; });
+        });
+      }
+      pending = null;
+      lastReply = resp;
+      state = 'saved';
+      return { applied: applied, preserved: preserved, editsAfterSubmit: sub ? sub.generation !== generation : false };
+    }
+
+    function markRejected(err) {
+      pending = null;
+      lastError = err || { message: 'رفض الخادم الطلب' };
+      state = 'rejected';
+      return state;
+    }
+
+    function markUncertain(err) {
+      pending = null;
+      lastError = err || { message: 'نتيجة الطلب غير مؤكدة' };
+      state = 'uncertain';
+      return state;
+    }
+
+    function markSaved() { pending = null; state = 'saved'; return state; }
+    function markEditing() { state = 'editing'; return state; }
+
+    function stateLabel() {
+      switch (state) {
+        case 'pending': return 'جاري الحفظ…';
+        case 'saved': return 'محفوظ';
+        case 'rejected': return 'مرفوض';
+        case 'uncertain': return 'نتيجة غير مؤكدة — راجع السجل';
+        default: return 'تعديل';
+      }
+    }
+
+    /* The simpler option the plan allows while concurrent-edit reconciliation
+     * is not established: disable the affected controls, keep the document
+     * visible. Nothing here claims durability. */
+    function setControlsEnabled(rootEl, on) {
+      try {
+        var root = (typeof rootEl === 'string') ? document.getElementById(rootEl) : rootEl;
+        if (!root || !root.querySelectorAll) return;
+        var nodes = root.querySelectorAll('input, select, textarea, button');
+        for (var i = 0; i < nodes.length; i++) {
+          if (!nodes[i].dataset || nodes[i].dataset.fsAlways !== '1') nodes[i].disabled = !on;
+        }
+      } catch (e) {}
+    }
+
+    return {
+      key: String(o.key || ''),
+      rowKey: rowKey,
+      values: values,
+      rows: rows,
+      deleted: deleted,
+      snapshot: snapshot,
+      setHeader: setHeader,
+      setRow: setRow,
+      addRow: addRow,
+      removeRow: removeRow,
+      rememberDeleted: rememberDeleted,
+      isDirty: isDirty,
+      dirtyFields: function () { return Object.keys(dirty); },
+      beginSubmit: beginSubmit,
+      clearPending: clearPending,
+      settle: settle,
+      markRejected: markRejected,
+      markUncertain: markUncertain,
+      markSaved: markSaved,
+      markEditing: markEditing,
+      pendingSubmission: function () { return pending; },
+      generation: function () { return generation; },
+      state: function () { return state; },
+      stateLabel: stateLabel,
+      lastError: function () { return lastError; },
+      setControlsEnabled: setControlsEnabled
+    };
+  }
+
+  return { enabled: enabled, create: create };
+})();
+</script>

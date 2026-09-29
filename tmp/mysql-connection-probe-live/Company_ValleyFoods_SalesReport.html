@@ -1,0 +1,505 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Valley Foods — تقرير المبيعات</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_ValleyFoods_Nav'); ?>
+  <?!= getCompanyThemeCSS_('9940659bd83035d7') ?>
+  <style>
+    @media print {
+      .no-print { display: none !important; }
+      body { background: #fff !important; }
+      .invoice { border: none !important; box-shadow: none !important; }
+    }
+    .invoice { max-width: 900px; margin: 14px auto; padding: 20px; background: var(--bg-surface, #fff); border: 1px solid var(--border-color, #e5e7eb); border-radius: 8px; }
+    .invoice-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; border-bottom: 2px solid var(--brand-primary, #16a34a); padding-bottom: 12px; }
+    .invoice-title { font-size: 18px; font-weight: 700; color: var(--brand-primary, #16a34a); }
+    .invoice-meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px 16px; margin-bottom: 14px; }
+    .meta-item { font-size: 13px; }
+    .meta-item strong { color: var(--text-muted, #6b7280); font-weight: 600; }
+    @media print, (min-width: 600px) {
+      .inv-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 14px; }
+      .inv-table th, .inv-table td { border: 1px solid var(--border-color, #e5e7eb); padding: 8px 10px; text-align: right; }
+      .inv-table th { background: var(--bg-subtle, #f8fafc); font-weight: 600; }
+    }
+    .inv-totals { margin-right: auto; width: min(320px, 100%); font-size: 14px; }
+    .inv-totals .row { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border-color, #e5e7eb); }
+    .inv-totals .row.total { font-weight: 700; font-size: 16px; color: var(--brand-primary, #16a34a); border-bottom: none; }
+    .rep-filters { display: flex; flex-wrap: wrap; gap: 0 12px; align-items: flex-end; }
+    .rep-filters > div { flex: 1; min-width: 220px; }
+  </style>
+</head>
+<body>
+  <div id="vf-root"></div>
+
+  <script>
+    var params = new URLSearchParams(window.location.search);
+    var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+    var scriptUrl = window.scriptUrl || '/';
+    /* [S23] Filter state comes from the server's copy of the query string:
+       window.location.search is empty inside the Apps Script iframe. */
+    var PAGE_PARAMS = <?!= pageParams ?>;
+    var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+    var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('9940659bd83035d7') ?>';
+    var COMPANY_PAGES = <?!= companyPages ?>;
+    var CURRENT_ACTION = '<?!= currentAction ?>';
+    var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+
+    function companyCall(moduleAction, data) {
+      return API.call('company_action', {
+        target_system: '9940659bd83035d7',
+        module_action: moduleAction,
+        data: data || {}
+      }, SESSION_TOKEN);
+    }
+    function esc(v) { return FMT.escape(v); }
+    function money(n) {
+      return Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    }
+    function fmtDate(v) {
+      if (!v) return '-';
+      var d = (v instanceof Date) ? v : new Date(v);
+      if (isNaN(d.getTime())) return String(v);
+      var p = function (n) { return n < 10 ? '0' + n : '' + n; };
+      return p(d.getDate()) + '/' + p(d.getMonth() + 1) + '/' + d.getFullYear();
+    }
+  </script>
+
+  <script>
+  (function () {
+    var DATA = null;
+    var OPTS = { customers: [], products: [] };
+    /* [S23] Initial filters from PAGE_PARAMS (server), never window.location. */
+    var DATE_FROM = pageParam_('from'), DATE_TO = pageParam_('to');
+    var CUSTOMER = pageParam_('customer'), PRODUCT = pageParam_('product');
+    var EXPANDED = {};
+    var LINES = {};
+    /* Pair-aware sort over DATA.rows (asc -> desc -> server order). Lines ride
+       by invoice uid, so a sort never orphans a detail row from its header. */
+    var SORT = { key: null, dir: null };
+    var LOAD_SEQ = 0;
+
+    function pageParam_(k) {
+      try {
+        var pp = (typeof PAGE_PARAMS !== 'undefined' && PAGE_PARAMS) || {};
+        var v = pp[k];
+        return (v === undefined || v === null) ? '' : String(v);
+      } catch (e) { return ''; }
+    }
+
+    function syncFilterUrl() {
+      try {
+        var q = new URLSearchParams(window.location.search);
+        [['from', DATE_FROM], ['to', DATE_TO], ['customer', CUSTOMER], ['product', PRODUCT]].forEach(function (pair) {
+          if (pair[1]) q.set(pair[0], pair[1]); else q.delete(pair[0]);
+        });
+        var next = window.location.pathname + (q.toString() ? '?' + q.toString() : '') + window.location.hash;
+        history.replaceState(history.state || {}, '', next);
+      } catch (e) {}
+    }
+
+    function resolveOption(options, value) {
+      var wanted = String(value || '').trim().toLowerCase();
+      if (!wanted) return '';
+      for (var i = 0; i < (options || []).length; i++) {
+        var o = options[i] || {};
+        var v = String(o.value == null ? '' : o.value).trim();
+        var l = String(o.label == null ? '' : o.label).trim();
+        if (v.toLowerCase() === wanted || l.toLowerCase() === wanted) return v;
+      }
+      return '';
+    }
+
+    function renderApp() {
+      UIC.appShell('vf-root', {
+        companyLogoUrl: COMPANY_LOGO_URL,
+        companyLogoHref: scriptUrl + '?action=vf_dashboard&sessionToken=' + SESSION_TOKEN,
+        companyLogoTitle: 'Valley Foods',
+        breadcrumb: 'Valley Foods / المالية / تقرير المبيعات',
+        contentId: 'vf-rep-content',
+        menuGroups: (window.VALLEYFOODS_MENU || [])
+      });
+      document.getElementById('vf-rep-content').innerHTML =
+        '<div class="vf-card">' +
+          '<div class="vf-card-header">' +
+            '<h3>تقرير المبيعات — فاتورة بفاتورة</h3>' +
+            '<div class="no-print" style="display:flex;gap:8px;align-items:center;">' +
+              '<button class="btn btn-outline" onclick="REP_PAGE.printReport()">🖨 طباعة</button>' +
+              '<button class="btn btn-outline" onclick="REP_PAGE.exportExcel()">⬇ تصدير</button>' +
+              '<a class="btn btn-outline" href="' + scriptUrl + '?action=vf_sales&sessionToken=' + SESSION_TOKEN + '" onclick="UIC.navTo(event, this.getAttribute(\'href\'))">↩ فواتير المبيعات</a>' +
+            '</div>' +
+          '</div>' +
+          '<div class="vf-card-body">' +
+            '<div id="rep-filter" class="no-print"></div>' +
+            '<div id="rep-body"><p class="vf-text-muted">جاري التحميل...</p></div>' +
+          '</div>' +
+        '</div>';
+      loadOpts().then(function () { renderFilter(); load(); });
+    }
+
+    function normOpts(list) {
+      return (list || []).map(function (p) {
+        if (p && typeof p === 'object') {
+          var v = (p.value != null && p.value !== '') ? p.value : (p.id != null ? p.id : '');
+          return { value: v, label: String(p.label || p.name_ar || p.name || v) };
+        }
+        return { value: p, label: String(p) };
+      }).filter(function (o) { return String(o.value).trim() !== ''; });
+    }
+
+    function loadOpts() {
+      return companyCall('get_valley_sales_bootstrap', {}).then(function (r) {
+        OPTS.customers = normOpts((r && r.parties) || []);
+        OPTS.products = normOpts((r && r.products) || []);
+        CUSTOMER = resolveOption(OPTS.customers, CUSTOMER);
+        PRODUCT = resolveOption(OPTS.products, PRODUCT);
+      }).catch(function () { OPTS = { customers: [], products: [] }; });
+    }
+
+    function renderFilter() {
+      var host = document.getElementById('rep-filter');
+      if (!host) return;
+      /* Replacing the bar while a filter control holds focus throws
+         NotFoundError in Chrome — drop focus first. */
+      if (host.contains(document.activeElement)) { try { document.activeElement.blur(); } catch (e) {} }
+      host.innerHTML = UIC.dateRangeBar('rep-date', {
+        label: 'بيانات الفترة',
+        from: DATE_FROM, to: DATE_TO,
+        onchange: 'REP_PAGE.applyDateFilter()',
+        onclear: 'REP_PAGE.clearDateFilter()'
+      }) +
+      '<div class="rep-filters">' +
+        '<div>' + UIC.combo({ key: 'rep-customer', label: 'العميل', options: OPTS.customers, value: CUSTOMER, placeholder: 'كل العملاء' }) + '</div>' +
+        '<div>' + UIC.combo({ key: 'rep-product', label: 'الصنف', options: OPTS.products, value: PRODUCT, placeholder: 'كل الأصناف' }) + '</div>' +
+        '<div style="flex:0 0 auto;padding-bottom:12px;"><button class="btn btn-outline" onclick="REP_PAGE.clearPartyFilters()">✕ مسح العميل/الصنف</button></div>' +
+      '</div>';
+      /* UIC.comboPick dispatches change on the hidden input when a choice is picked. */
+      ['rep-customer', 'rep-product'].forEach(function (id) {
+        var el = document.getElementById(id);
+        if (el) el.addEventListener('change', onPartyFilterChange);
+      });
+    }
+
+    function onPartyFilterChange() {
+      var c = document.getElementById('rep-customer');
+      var p = document.getElementById('rep-product');
+      var nc = c ? String(c.value || '') : '';
+      var np = p ? String(p.value || '') : '';
+      if (nc === CUSTOMER && np === PRODUCT) return;
+      CUSTOMER = nc; PRODUCT = np; EXPANDED = {};
+      syncFilterUrl();
+      load();
+    }
+
+    function applyDateFilter() {
+      var v = UIC.dateRangeValues('rep-date');
+      if (v.from && v.to && v.from > v.to) { UIC.toast('«من تاريخ» بعد «إلى تاريخ»', 'error'); return; }
+      DATE_FROM = v.from; DATE_TO = v.to;
+      syncFilterUrl();
+      renderFilter();
+      EXPANDED = {};
+      load();
+    }
+
+    function clearDateFilter() { DATE_FROM = ''; DATE_TO = ''; syncFilterUrl(); renderFilter(); EXPANDED = {}; load(); }
+
+    function clearPartyFilters() {
+      if (!CUSTOMER && !PRODUCT) return;
+      CUSTOMER = ''; PRODUCT = ''; EXPANDED = {};
+      syncFilterUrl();
+      renderFilter(); load();
+    }
+
+    /* quiet: refresh in the background with no blocking overlay, for a user who
+       has already seen the change and must not be interrupted to confirm it. */
+    function load(quiet) {
+      var requestId = ++LOAD_SEQ;
+      if (!quiet) UIC.readSkeleton('rep-body');
+      companyCall('get_valley_sales_report', { from: DATE_FROM, to: DATE_TO, customer: CUSTOMER, product: PRODUCT })
+        .then(function (r) {
+          if (requestId !== LOAD_SEQ) return;
+          DATA = r;
+          LINES = (r && r.linesByInvoice) || {};
+          /* Drop expansions whose invoice left the filtered set. */
+          var alive = {};
+          (DATA.rows || []).forEach(function (row) {
+            var u = String(row.invoice_unique_id || '');
+            if (u && EXPANDED[u]) alive[u] = true;
+          });
+          EXPANDED = alive;
+          renderReport();
+          try { schedulePrefetch(); } catch (e) {}
+        })
+        .catch(function (e) {
+          if (requestId !== LOAD_SEQ) return;
+          var b = document.getElementById('rep-body');
+          if (b) b.innerHTML = '<div class="empty-state"><span>' + esc((e && e.message) || 'خطأ') + '</span></div>';
+        })
+        .finally(function () { if (requestId === LOAD_SEQ && !quiet) UI.hideSpinner(); });
+    }
+
+    function metaItem(label, value) {
+      return '<div class="meta-item"><strong>' + label + ':</strong> ' + esc(value == null || value === '' ? '-' : value) + '</div>';
+    }
+
+    /* Gross + net per product, within the active filters (server-aggregated) —
+       both shown so the numbers can be revised against each other. */
+    function summaryHtml() {
+      var s = (DATA && DATA.productSummary) || [];
+      if (!s.length) return '';
+      var rows = s.map(function (e) {
+        return '<tr>' +
+          '<td data-label="الصنف">' + esc(e.product || '-') + '</td>' +
+          '<td class="num" data-label="إجمالي الكمية" data-num="' + (Number(e.gross_qty) || 0) + '">' + esc(String(e.gross_qty != null ? e.gross_qty : '-')) + '</td>' +
+          '<td class="num" data-label="صافي الكمية" data-num="' + (Number(e.net_qty) || 0) + '">' + esc(String(e.net_qty != null ? e.net_qty : '-')) + '</td>' +
+          '<td class="num" data-label="إجمالي القيمة" data-num="' + (Number(e.gross_value) || 0) + '">' + money(e.gross_value) + '</td>' +
+          '<td class="num" data-label="صافي القيمة" data-num="' + (Number(e.net_value) || 0) + '">' + money(e.net_value) + '</td>' +
+        '</tr>';
+      }).join('');
+      return '<div class="vf-card" style="margin-bottom:14px;"><div class="vf-card-header"><h3>ملخص الكميات بالأصناف (إجمالي / صافي بعد المرتجعات)</h3></div>' +
+        '<div class="vf-card-body"><div class="table-wrap"><table class="table"><thead><tr><th>الصنف</th><th>إجمالي الكمية</th><th>صافي الكمية</th><th>إجمالي القيمة</th><th>صافي القيمة</th></tr></thead>' +
+        '<tbody>' + rows + '</tbody></table></div></div></div>';
+    }
+
+    var MASTER_COLS = 11;
+
+    function sortArrow(k) {
+      if (!SORT.key || SORT.key !== k || !SORT.dir) return '';
+      return SORT.dir === 'asc' ? ' ▲' : ' ▼';
+    }
+
+    function orderedRows() {
+      var rows = ((DATA && DATA.rows) || []).slice();
+      if (!SORT.key || !SORT.dir) return rows;
+      var k = SORT.key, asc = SORT.dir === 'asc';
+      var val = function (r) {
+        if (k === 'invoice') return String(r['رقم الفاتورة'] || '');
+        if (k === 'customer') return String(r['اسم العميل'] || '');
+        if (k === 'date') { var d = r['تاريخ الفاتورة'] ? new Date(r['تاريخ الفاتورة']) : null; return (d && !isNaN(d.getTime())) ? d.getTime() : -1; }
+        if (k === 'net') return Number(r.net) || 0;
+        return '';
+      };
+      rows.sort(function (a, b) {
+        var av = val(a), bv = val(b), cmp;
+        if (typeof av === 'number' && typeof bv === 'number') cmp = av - bv;
+        else cmp = String(av).localeCompare(String(bv), 'ar');
+        if (cmp === 0) cmp = String(a.invoice_unique_id || '').localeCompare(String(b.invoice_unique_id || ''));
+        return asc ? cmp : -cmp;
+      });
+      return rows;
+    }
+
+    function sortBy(k) {
+      if (SORT.key !== k) SORT = { key: k, dir: 'asc' };
+      else if (SORT.dir === 'asc') SORT.dir = 'desc';
+      else SORT = { key: null, dir: null };
+      renderReport();
+    }
+
+    function masterHeadCell(skey, label) {
+      return '<th onclick="REP_PAGE.sort(\'' + skey + '\')" style="cursor:pointer;" tabindex="0">' + label + sortArrow(skey) + '</th>';
+    }
+
+    function invoiceCard(r) {
+      var uid = String(r.invoice_unique_id || '');
+      var items = LINES[uid] || [];
+      var lineRows = items.map(function (l) {
+        var lt = Math.round(((Number(l.product_qty) || 0) * (Number(l.product_price) || 0)) * 100) / 100;
+        return '<tr>' +
+          '<td data-label="الصنف">' + esc(l.product_name || '-') + '</td>' +
+          '<td data-label="الكمية">' + esc(String(l.product_qty != null ? l.product_qty : '-')) + '</td>' +
+          '<td data-label="السعر">' + money(l.product_price) + '</td>' +
+          '<td data-label="الضريبة">' + money(l.product_tax) + '</td>' +
+          '<td data-label="الخصم">' + money(l.product_discount) + '</td>' +
+          '<td data-label="الإجمالي">' + money(lt) + '</td>' +
+        '</tr>';
+      }).join('');
+      var sum = 0;
+      items.forEach(function (l) { sum = Math.round((sum + (Number(l.product_qty) || 0) * (Number(l.product_price) || 0)) * 100) / 100; });
+      return '<div class="invoice">' +
+        '<div class="invoice-head">' +
+          (COMPANY_LOGO_URL ? '<img src="' + COMPANY_LOGO_URL + '" style="height:42px;" alt="">' : '') +
+          '<div class="invoice-title">فاتورة مبيعات — ' + esc(r['رقم الفاتورة'] || '-') + '</div>' +
+        '</div>' +
+        '<div class="invoice-meta">' +
+          metaItem('العميل', r['اسم العميل'] || '-') +
+          metaItem('تاريخ الفاتورة', fmtDate(r['تاريخ الفاتورة'])) +
+          metaItem('الإجمالي', money(r.sales)) +
+          metaItem('الخصم', money(r.discount)) +
+          metaItem('المرتجعات', money(r.returns)) +
+          metaItem('الضرائب', money(r.taxes)) +
+          metaItem('الصافي', money(r.net)) +
+        '</div>' +
+        (items.length
+          ? '<table class="inv-table"><thead><tr><th>الصنف</th><th>الكمية</th><th>السعر</th><th>الضريبة</th><th>الخصم</th><th>الإجمالي</th></tr></thead>' +
+            '<tbody>' + lineRows + '</tbody></table>' +
+            '<div class="inv-totals"><div class="row total"><span>إجمالي البنود (' + items.length + ')</span><span>' + money(sum) + '</span></div></div>'
+          : '<p class="vf-text-muted">لا توجد بنود مطابقة لهذه الفاتورة.</p>') +
+      '</div>';
+    }
+
+    function renderReport() {
+      var b = document.getElementById('rep-body');
+      if (!b) return;
+      var rows = orderedRows();
+      var t = DATA.totals || { sales: 0, discount: 0, returns: 0, taxes: 0, net: 0 };
+
+      var kpis =
+        '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:14px;">' +
+          kpi('إجمالي المبيعات', money(t.sales)) +
+          kpi('إجمالي الخصم', money(t.discount)) +
+          kpi('إجمالي المرتجعات', money(t.returns)) +
+          kpi('إجمالي الضرائب', money(t.taxes)) +
+          kpi('الصافي بعد الكل', money(t.net)) +
+        '</div>';
+
+      var thead = '<thead><tr><th></th><th>مسلسل</th>' +
+        masterHeadCell('invoice', 'رقم الفاتورة') + masterHeadCell('customer', 'العميل') +
+        masterHeadCell('date', 'التاريخ') +
+        '<th>المبيعات</th><th>الخصم</th><th>المرتجعات</th><th>الضرائب</th>' +
+        masterHeadCell('net', 'الصافي') + '<th>الاعتماد</th></tr></thead>';
+
+      var tbody = rows.map(function (r) {
+        var uid = String(r.invoice_unique_id || '');
+        var open = !!EXPANDED[uid];
+        var h = '<tr>' +
+          '<td data-label="عرض"><button class="btn btn-outline no-print" data-uid="' + esc(uid) + '" onclick="REP_PAGE.toggleDetail(this)">' + (open ? '−' : '＋') + '</button></td>' +
+          '<td class="num" data-label="مسلسل" style="color:var(--text-muted, #64748b);white-space:nowrap;">' + (r['مسلسل'] || '-') + '</td>' +
+          '<td data-label="رقم الفاتورة"><b>' + esc(r['رقم الفاتورة'] || '-') + '</b></td>' +
+          '<td data-label="العميل">' + esc(r['اسم العميل'] || '-') + '</td>' +
+          '<td data-label="التاريخ">' + fmtDate(r['تاريخ الفاتورة']) + '</td>' +
+          '<td class="num" data-label="المبيعات" data-num="' + (Number(r.sales) || 0) + '">' + money(r.sales) + '</td>' +
+          '<td class="num" data-label="الخصم" data-num="' + (Number(r.discount) || 0) + '">' + money(r.discount) + '</td>' +
+          '<td class="num" data-label="المرتجعات" data-num="' + (Number(r.returns) || 0) + '">' + money(r.returns) + '</td>' +
+          '<td class="num" data-label="الضرائب" data-num="' + (Number(r.taxes) || 0) + '">' + money(r.taxes) + '</td>' +
+          '<td class="num" data-label="الصافي" data-num="' + (Number(r.net) || 0) + '" style="font-weight:700;color:#0e623b;">' + money(r.net) + '</td>' +
+          '<td data-label="الاعتماد">' + UIC.statusPill(r.approval_status === 'Approved' ? 'معتمد' : 'قيد الانتظار', r.approval_status === 'Approved' ? 'success' : 'neutral') + '</td>' +
+        '</tr>';
+        /* The invoice detail opens directly under its header row — never at the page end. */
+        if (open) h += '<tr class="rep-detail"><td colspan="' + MASTER_COLS + '" data-label="التفاصيل">' + invoiceCard(r) + '</td></tr>';
+        return h;
+      }).join('');
+
+      var totalsRow = rows.length
+        ? '<tr><td colspan="4" data-label=""></td>' +
+          '<td data-label="الإجمالي">الإجمالي</td>' +
+          '<td class="num" data-label="المبيعات" data-num="' + (Number(t.sales) || 0) + '">' + money(t.sales) + '</td>' +
+          '<td class="num" data-label="الخصم" data-num="' + (Number(t.discount) || 0) + '">' + money(t.discount) + '</td>' +
+          '<td class="num" data-label="المرتجعات" data-num="' + (Number(t.returns) || 0) + '">' + money(t.returns) + '</td>' +
+          '<td class="num" data-label="الضرائب" data-num="' + (Number(t.taxes) || 0) + '">' + money(t.taxes) + '</td>' +
+          '<td class="num" data-label="الصافي" data-num="' + (Number(t.net) || 0) + '">' + money(t.net) + '</td>' +
+          '<td data-label=""></td></tr>'
+        : '';
+
+      var emptyText = (DATE_FROM || DATE_TO || CUSTOMER || PRODUCT) ? 'لا توجد فواتير مطابقة' : 'لا توجد فواتير';
+      var master = rows.length
+        ? '<div class="table-wrap"><table class="table" id="rep-master">' + thead + '<tbody>' + tbody + totalsRow + '</tbody></table></div>'
+        : '<div class="empty-state"><span>' + esc(emptyText) + '</span></div>';
+
+      /* Hidden invoice-level dataTable: the Excel export source, so the exported
+         file is exactly what it always was. Toolbar off — it is never seen. */
+      var xbody = rows.map(function (r) {
+        return [
+          '<span class="num" style="color:var(--text-muted, #64748b);white-space:nowrap;">' + (r['مسلسل'] || '-') + '</span>',
+          '<b>' + esc(r['رقم الفاتورة'] || '-') + '</b>',
+          esc(r['اسم العميل'] || '-'),
+          fmtDate(r['تاريخ الفاتورة']),
+          '<span class="num">' + money(r.sales) + '</span>',
+          '<span class="num">' + money(r.discount) + '</span>',
+          '<span class="num">' + money(r.returns) + '</span>',
+          '<span class="num">' + money(r.taxes) + '</span>',
+          '<span class="num" style="font-weight:700;color:#0e623b;">' + money(r.net) + '</span>',
+          UIC.statusPill(r.approval_status === 'Approved' ? 'معتمد' : 'قيد الانتظار', r.approval_status === 'Approved' ? 'success' : 'neutral')
+        ];
+      });
+      var hidden = '<div style="display:none;">' + UIC.dataTable('rep-tbl', {
+        headers: [{ label: 'مسلسل', numeric: true }, 'رقم الفاتورة', { label: 'العميل', col: 'text' }, 'التاريخ',
+          { label: 'المبيعات', numeric: true }, { label: 'الخصم', numeric: true }, { label: 'المرتجعات', numeric: true },
+          { label: 'الضرائب', numeric: true }, { label: 'الصافي', numeric: true }, { label: 'الاعتماد', col: 'atom' }],
+        rows: xbody.concat(xbody.length ? [[
+          '', '', '', 'الإجمالي',
+          money(t.sales), money(t.discount), money(t.returns), money(t.taxes), money(t.net), ''
+        ]] : []),
+        emptyText: emptyText,
+        title: 'تقرير المبيعات',
+        autoPage: false, searchable: false, exportXlsx: false, printable: false
+      }) + '</div>';
+
+      b.innerHTML = kpis + summaryHtml() + master + hidden +
+        '<p class="vf-text-muted" style="margin-top:14px;font-size:12px;">' +
+          'المبيعات = إجمالي الفاتورة. الخصم = مجموع عمود product_discount ببنودها (0 حيث لا يوجد). ' +
+          'المرتجعات = قيمة المرتجعات المرتبطة بالفاتورة. الصافي = المبيعات − المرتجعات.' +
+        '</p>';
+    }
+
+    function toggleDetail(btn) {
+      var uid = btn ? String(btn.getAttribute('data-uid') || '') : '';
+      if (!uid) return;
+      if (EXPANDED[uid]) delete EXPANDED[uid];
+      else EXPANDED[uid] = true;
+      renderReport();
+    }
+
+    function expandAll() {
+      ((DATA && DATA.rows) || []).forEach(function (r) {
+        var u = String(r.invoice_unique_id || '');
+        if (u) EXPANDED[u] = true;
+      });
+      renderReport();
+    }
+
+    function printReport() {
+      expandAll();
+      setTimeout(function () { window.print(); }, 50);
+    }
+
+    function kpi(label, value) {
+      return '<div style="padding:12px 14px;border:1px solid var(--border-color,#e5e7eb);border-radius:10px;background:var(--bg-muted,#f8fafc);">' +
+        '<div style="font-size:12px;color:var(--text-muted);margin-bottom:4px;">' + label + '</div>' +
+        '<div style="font-size:20px;font-weight:800;direction:ltr;text-align:right;">' + value + '</div>' +
+      '</div>';
+    }
+
+    /* UIC.exportExcel reads the hidden table's store, so the sheet it writes
+       is exactly the invoice table — including the totals row. */
+    function exportExcel() {
+      var st = (window.__dtStore || {})['rep-tbl'];
+      if (!st || !(st.rows || []).length) { UIC.toast('لا توجد بيانات للتصدير', 'error'); return; }
+      UIC.exportExcel('rep-tbl');
+    }
+
+    window.REP_PAGE = {
+      applyDateFilter: applyDateFilter,
+      clearDateFilter: clearDateFilter,
+      clearPartyFilters: clearPartyFilters,
+      toggleDetail: toggleDetail,
+      sort: sortBy,
+      printReport: printReport,
+      exportExcel: exportExcel
+    };
+
+    /* Paper must show every invoice's inlines, not just the expanded ones. */
+    window.addEventListener('beforeprint', function () {
+      try { if (DATA && DATA.rows && DATA.rows.length) expandAll(); } catch (e) {}
+    });
+
+    /* Another device's change to the sales ledger arrives on its own. The poll
+       reads timestamps from cache, never a spreadsheet, and stands down while
+       the tab is hidden. */
+    document.addEventListener('DOMContentLoaded', function () {
+      UIC.Live.watchPage({
+        call: companyCall,
+        page: 'vf_sales',
+        onChange: function () { UIC.Live.arrive(function () { load(true); }); }
+      });
+    });
+
+    document.addEventListener('DOMContentLoaded', renderApp);
+  })();
+  </script>
+</body>
+</html>

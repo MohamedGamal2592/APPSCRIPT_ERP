@@ -87,9 +87,9 @@ const EXPECTED_ACCESS = {
 };
 const EXPECTED_TABLES = {
   get_quality_dashboard: ['valley_quality_sops', 'valley_quality_sop_versions', 'valley_quality_acknowledgements', 'valley_quality_ncrs', 'valley_quality_capas', AUDIT_SHEET, FINDING_SHEET],
-  get_quality_audits: AUDIT_TABLES,
-  save_quality_audit: [AUDIT_SHEET],
-  save_quality_finding: AUDIT_TABLES,
+  get_quality_audits: [AUDIT_SHEET, FINDING_SHEET, NCR_SHEET, 'valley_quality_capas', 'valley_legal_customer_vendor'],
+  save_quality_audit: [AUDIT_SHEET, 'valley_legal_customer_vendor'],
+  save_quality_finding: [AUDIT_SHEET, FINDING_SHEET, NCR_SHEET, 'valley_quality_capas'],
   escalate_finding_to_ncr: AUDIT_TABLES
 };
 Object.keys(EXPECTED_ACCESS).forEach(function (action) {
@@ -257,7 +257,7 @@ function makeWorld() {
     ' getQualityAudits_: getQualityAudits_, saveQualityAudit_: saveQualityAudit_, saveQualityFinding_: saveQualityFinding_,' +
     ' escalateFindingToNcr_: escalateFindingToNcr_, saveQualityNcr_: saveQualityNcr_,' +
     ' QUALITY_AUDIT_HEADERS: QUALITY_AUDIT_HEADERS, QUALITY_AUDIT_FINDING_HEADERS: QUALITY_AUDIT_FINDING_HEADERS,' +
-    ' QUALITY_AUDIT_TYPES: QUALITY_AUDIT_TYPES, QUALITY_AUDIT_STATUSES: QUALITY_AUDIT_STATUSES,' +
+    ' QUALITY_AUDIT_TYPES: QUALITY_AUDIT_TYPES, QUALITY_AUDIT_STATUSES: QUALITY_AUDIT_STATUSES, qAudTypeLabel_: qAudTypeLabel_,' +
     ' QUALITY_FINDING_TYPES: QUALITY_FINDING_TYPES, QUALITY_FINDING_STATUSES: QUALITY_FINDING_STATUSES,' +
     ' QUALITY_AUDIT_SHEET: QUALITY_AUDIT_SHEET, QUALITY_AUDIT_FINDING_SHEET: QUALITY_AUDIT_FINDING_SHEET,' +
     ' QUALITY_NCR_SHEET: QUALITY_NCR_SHEET };';
@@ -315,8 +315,8 @@ function moveAudit(uid, to) { return H.saveQualityAudit_({ unique_id: uid, statu
 
 /* ---- constants ---- */
 check(H.QUALITY_AUDIT_TYPES.map(t => t.code + ':' + t.label).join('|') ===
-  'Internal:تدقيق داخلي|Supplier:تدقيق موردين|Customer:شكوى عميل|Regulatory:جهة رقابية',
-  'audit types constant carries the four codes and Arabic labels');
+  'Internal:تدقيق داخلي|Supplier:تدقيق موردين|Regulatory:جهة رقابية' && H.qAudTypeLabel_('Customer').indexOf('تصنيف قديم') !== -1,
+  'new audit types exclude customer complaints while old Customer rows retain a labelled legacy path');
 check(H.QUALITY_AUDIT_STATUSES.join('|') === 'Planned|In Progress|Completed|Closed',
   'audit statuses constant matches the lifecycle');
 check(H.QUALITY_FINDING_TYPES.map(t => t.code).join('|') === 'Major|Minor|Observation',
@@ -332,22 +332,26 @@ check(!!W.sheets[AUDIT_SHEET] && !!W.sheets[FINDING_SHEET] && !!W.sheets[NCR_SHE
 check(JSON.stringify(read0.audit_types) === JSON.stringify(H.QUALITY_AUDIT_TYPES) &&
   JSON.stringify(read0.finding_types) === JSON.stringify(H.QUALITY_FINDING_TYPES),
   'the read returns both option lists');
+const supplierSheet = W.ctx.ensureSheet_(DB, 'valley_legal_customer_vendor', ['id', 'name', 'customer_direction', 'type']);
+supplierSheet.__grid.push(['51', 'مورد خام موثق', 'مورد', 'مورد - محلي']);
+supplierSheet.__grid.push(['52', 'عميل موثق', 'عميل', 'محلي - تجزأة']);
 const auditHeaders = W.sheets[AUDIT_SHEET].__grid[0];
 const findingHeaders = W.sheets[FINDING_SHEET].__grid[0];
 check(auditHeaders[0] === 'unique_id' && auditHeaders[1] === 'id' &&
-  auditHeaders[auditHeaders.length - 1] === 'created_at' && auditHeaders[auditHeaders.length - 2] === 'user',
-  'audit headers keep the base-column convention (unique_id,id first; user,created_at last)');
+  auditHeaders.indexOf('user') === 11 && auditHeaders.indexOf('created_at') === 12,
+  'audit additive fields remain after the original base columns');
 check(['audit_code', 'audit_date', 'audit_type', 'area', 'auditor_email', 'status', 'summary', 'attachment', 'attachment_id'].every(h => auditHeaders.indexOf(h) !== -1),
   'audit headers carry every planned column');
 check(findingHeaders[0] === 'unique_id' && findingHeaders[1] === 'id' &&
-  findingHeaders[findingHeaders.length - 1] === 'created_at' && findingHeaders[findingHeaders.length - 2] === 'user',
-  'finding headers keep the base-column convention');
+  findingHeaders.indexOf('user') === 10 && findingHeaders.indexOf('created_at') === 11,
+  'finding rationale is appended after the original base columns');
 check(['audit_id', 'finding_no', 'finding_type', 'description', 'clause_ref', 'ncr_id', 'capa_required', 'status'].every(h => findingHeaders.indexOf(h) !== -1),
   'finding headers carry every planned column');
 
 /* ---- audit create: refusals first ---- */
 expectRefusal('audit without a type', () => H.saveQualityAudit_({ area: 'الجودة' }, WRITER, DB));
 expectRefusal('audit with an invalid type', () => H.saveQualityAudit_({ audit_type: 'External' }, WRITER, DB));
+expectRefusal('new customer complaints do not use the audit record type', () => H.saveQualityAudit_({ audit_type: 'Customer' }, WRITER, DB));
 expectRefusal('audit created with a non-initial status', () => H.saveQualityAudit_({ audit_type: 'Internal', status: 'In Progress' }, WRITER, DB));
 expectThrow('audit attachment reference without a Drive id is refused',
   () => createAudit({ attachment: 'valley_quality_audits_Files_/report.pdf' }), /تثبيت معرف Drive/);
@@ -358,9 +362,10 @@ check(au1.status === 'success' && au1.audit_code === 'AUD-' + YEAR + '-001' && a
   'create allocates AUD-<YYYY>-001 and starts Planned');
 check(auditRow(au1.unique_id).audit_date === day(0) && auditRow(au1.unique_id).auditor_email === WRITER.email,
   'create defaults audit_date to today and auditor_email to the caller');
-const au2 = createAudit({ audit_type: 'Supplier', audit_date: '2026-02-03', area: 'المخازن' });
-check(au2.audit_code === 'AUD-' + YEAR + '-002' && auditRow(au2.unique_id).audit_date === '2026-02-03',
-  'second audit in the year is -002 and keeps an explicit audit_date');
+const au2 = createAudit({ audit_type: 'Supplier', audit_date: '2026-02-03', area: 'المخازن', supplier_id: '51' });
+check(au2.audit_code === 'AUD-' + YEAR + '-002' && auditRow(au2.unique_id).audit_date === '2026-02-03' && auditRow(au2.unique_id).supplier_name === 'مورد خام موثق',
+  'second audit in the year keeps its date and links to the existing supplier master row');
+expectRefusal('a customer party cannot be linked as a supplier', () => createAudit({ audit_type: 'Supplier', supplier_id: '52' }));
 const ATT_ID = 'AAAABBBBCCCCDDDDEEEEFFFF';
 const ATT_URL = 'https://drive.google.com/file/d/' + ATT_ID + '/view';
 const auAtt = createAudit({ audit_type: 'Regulatory', attachment: 'valley_quality_audits_Files_/report.pdf', attachment_id: ATT_URL });
@@ -423,7 +428,9 @@ check(findingRow(f1.unique_id).status === 'Open' && findingRow(f1.unique_id).cap
 const f2 = createFinding({ audit_id: au2.unique_id, finding_type: 'Observation', description: 'ملاحظة ثانية' });
 const f3 = createFinding({ audit_id: au2.unique_id, finding_type: 'Minor', description: 'عدم مطابقة ثانوية' });
 check(f2.finding_no === 2 && f3.finding_no === 3, 'finding_no increments 1, 2, 3 per audit');
-const editedF1 = H.saveQualityFinding_({ unique_id: f1.unique_id, description: 'وصف محدث', finding_type: 'Minor', clause_ref: '', capa_required: false }, WRITER, DB);
+expectRefusal('closing an audit with open findings', () => moveAudit(au2.unique_id, 'Closed'));
+expectRefusal('changing the CAPA decision without rationale', () => H.saveQualityFinding_({ unique_id: f1.unique_id, capa_required: false }, WRITER, DB));
+const editedF1 = H.saveQualityFinding_({ unique_id: f1.unique_id, description: 'وصف محدث', finding_type: 'Minor', clause_ref: '', capa_required: false, capa_decision_rationale: 'إعادة تقييم موثقة للمخاطر' }, WRITER, DB);
 check(editedF1.status === 'success' && editedF1.finding_no === 1, 'update keeps the finding number');
 check(findingRow(f1.unique_id).description === 'وصف محدث' && findingRow(f1.unique_id).finding_type === 'Minor' &&
   findingRow(f1.unique_id).clause_ref === '' && findingRow(f1.unique_id).capa_required === 'FALSE',
@@ -442,7 +449,7 @@ check(findingRow(f2.unique_id).status === 'Open', 'the no-op left the row Open')
 check(H.saveQualityFinding_({ unique_id: f2.unique_id, remove: true }, WRITER, DB).removed === true &&
   !findingRow(f2.unique_id),
   'an unlinked finding is removable');
-const f4 = createFinding({ audit_id: au2.unique_id, finding_type: 'Observation', description: 'وصف ملاحظة رابعة', clause_ref: '7.5.2' });
+const f4 = createFinding({ audit_id: au2.unique_id, finding_type: 'Observation', description: 'وصف ملاحظة رابعة', clause_ref: '7.5.2', capa_required: true });
 check(f4.finding_no === 4, 'after a removal the number is max existing + 1 (4)');
 check(H.saveQualityFinding_({ unique_id: f1.unique_id, remove: true }, WRITER, DB).removed === true && !findingRow(f1.unique_id),
   'a Closed but unlinked finding is removable too');
@@ -450,9 +457,10 @@ check(H.saveQualityFinding_({ unique_id: f3.unique_id, remove: true }, WRITER, D
   'removing the last unlinked finding leaves only the escalated candidate');
 
 /* ---- a Closed audit blocks finding work ---- */
-const au3 = createAudit({ audit_type: 'Customer', area: 'التوزيع' });
+const au3 = createAudit({ audit_type: 'Internal', area: 'التوزيع' });
 const fA = createFinding({ audit_id: au3.unique_id, finding_type: 'Major', description: 'ملاحظة تدقيق مغلق' });
 check(fA.finding_no === 1, 'numbering is per audit (a fresh audit starts at 1)');
+H.saveQualityFinding_({ unique_id: fA.unique_id, status: 'Closed' }, WRITER, DB);
 moveAudit(au3.unique_id, 'In Progress');
 moveAudit(au3.unique_id, 'Completed');
 moveAudit(au3.unique_id, 'Closed');
@@ -468,13 +476,14 @@ const esc1 = H.escalateFindingToNcr_({ unique_id: f4.unique_id }, WRITER, DB);
 check(esc1.status === 'success' && esc1.ncr_code === 'NCR-' + YEAR + '-001',
   'escalation allocates the first NCR of the year through the shared allocator');
 const ncr1 = ncrRow(esc1.ncr_unique_id);
-check(ncr1.source === 'Audit' && ncr1.severity === 'Minor' && ncr1.status === 'Open' && ncr1.capa_required === 'FALSE',
-  'the escalated NCR is source Audit, Observation -> Minor, Open, capa_required FALSE');
+check(ncr1.source === 'Audit' && ncr1.severity === 'Minor' && ncr1.status === 'Open' && ncr1.capa_required === 'TRUE',
+  'the escalated NCR is source Audit, Observation -> Minor, Open, and preserves the finding CAPA decision');
 check(ncr1.department === 'المخازن' && ncr1.detected_by === WRITER.email && ncr1.ncr_date === day(0),
   'department comes from the audit area, detected_by from the caller, ncr_date is today');
 check(ncr1.description === 'تدقيق AUD-' + YEAR + '-002 — بند 7.5.2: وصف ملاحظة رابعة',
   'the NCR description carries the audit code, the clause and the finding text');
 check(findingRow(f4.unique_id).ncr_id === esc1.ncr_unique_id, 'the finding stores the NCR back-link');
+expectRefusal('a CAPA-required finding cannot close while its linked NCR is open', () => H.saveQualityFinding_({ unique_id: f4.unique_id, status: 'Closed' }, WRITER, DB));
 check(W.history.some(h => h[1] === H.QUALITY_NCR_SHEET && h[5] === 'create' && h[0] === DB),
   'escalation logs the NCR create');
 check(W.history.some(h => h[1] === H.QUALITY_AUDIT_FINDING_SHEET && h[5] === 'update' &&
@@ -502,9 +511,18 @@ const manual = H.saveQualityNcr_({ description: 'عدم مطابقة يدوية'
 check(manual.ncr_code === 'NCR-' + YEAR + '-004',
   'a manual NCR continues the same annual sequence the escalations consumed');
 
+/* A completed audit can close only after its findings are closed. */
+const au4 = createAudit({ area: 'المعمل' });
+const f7 = createFinding({ audit_id: au4.unique_id, finding_type: 'Observation', description: 'ملاحظة قابلة للإغلاق' });
+moveAudit(au4.unique_id, 'In Progress');
+moveAudit(au4.unique_id, 'Completed');
+expectRefusal('audit closure waits for findings to close', () => moveAudit(au4.unique_id, 'Closed'));
+H.saveQualityFinding_({ unique_id: f7.unique_id, status: 'Closed' }, WRITER, DB);
+check(moveAudit(au4.unique_id, 'Closed').row_status === 'Closed', 'audit closes after its findings are resolved');
+
 /* ---- the populated read ---- */
 const read1 = H.getQualityAudits_({}, WRITER, DB);
-check(read1.audits.length === 4 && read1.findings.length === 4 && read1.ncrs.length === 4,
+check(read1.audits.length === 5 && read1.findings.length === 5 && read1.ncrs.length === 4,
   'the populated read returns every audit, finding and NCR');
 check(read1.ncrs.every(n => Object.keys(n).length === 3 && 'unique_id' in n && 'ncr_code' in n && 'status' in n),
   'the NCR list is the minimal {unique_id,ncr_code,status} projection');

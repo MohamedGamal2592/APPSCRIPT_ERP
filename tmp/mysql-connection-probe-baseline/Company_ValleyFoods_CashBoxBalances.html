@@ -1,0 +1,497 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Valley Foods — تقرير أرصدة الصناديق</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_ValleyFoods_Nav'); ?>
+  <?!= getCompanyThemeCSS_('9940659bd83035d7') ?>
+  <style>
+    .box-report-filters {
+      display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end;
+      margin-bottom: 16px; padding: 12px;
+      border: 1px solid var(--border-color, #e5e7eb);
+      border-radius: 10px; background: var(--bg-muted, #f8fafc);
+    }
+    .box-report-filters .form-field { margin: 0; min-width: 210px; }
+    .box-report-kpis {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+      gap: 12px; margin-bottom: 16px;
+    }
+    .box-report-kpi {
+      padding: 13px 14px; border: 1px solid var(--border-color, #e5e7eb);
+      border-radius: 10px; background: var(--bg-muted, #f8fafc);
+    }
+    .box-report-kpi-label { color: var(--text-muted, #64748b); font-size: 12px; margin-bottom: 4px; }
+    .box-report-kpi-value { direction: ltr; text-align: right; font-size: 20px; font-weight: 800; }
+    .box-report-positive { color: #0e623b; }
+    .box-report-negative { color: var(--danger, #dc2626); }
+    .box-report-note { margin: 12px 0 0; color: var(--text-muted, #64748b); font-size: 12px; }
+    @media print {
+      @page { size: A4 landscape; margin: 5mm; }
+      .topbar, .breadcrumb, .sidebar, .no-print { display: none !important; }
+      body { background: #fff !important; }
+      .vf-card { border: 0 !important; box-shadow: none !important; }
+      .table-wrap { overflow: visible !important; }
+      table { font-size: 9px !important; }
+      th, td { padding: 4px !important; }
+    }
+  </style>
+</head>
+<body>
+<div id="vf-root"></div>
+
+<script>
+  var params = new URLSearchParams(window.location.search);
+  var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+  var scriptUrl = window.scriptUrl || '/';
+  var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+  var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+  var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('9940659bd83035d7') ?>';
+  var COMPANY_PAGES = <?!= companyPages ?>;
+  var CURRENT_ACTION = '<?!= currentAction ?>';
+
+  function companyCall(moduleAction, data) {
+    return API.call('company_action', {
+      target_system: '9940659bd83035d7',
+      module_action: moduleAction,
+      data: data || {}
+    }, SESSION_TOKEN);
+  }
+  function esc(v) { return FMT.escape(v); }
+  function money(v) {
+    var n = Number(v || 0);
+    var formatted = Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    return n < 0 ? '(' + formatted + ')' : formatted;
+  }
+</script>
+
+<script>
+(function () {
+  var DATA = null;
+  var DATE_FROM = '';
+  var DATE_TO = '';
+  var RELATED_BOX = '';
+  var BOX_OPTIONS = [];
+
+  function renderApp() {
+    UIC.appShell('vf-root', {
+      companyLogoUrl: COMPANY_LOGO_URL,
+      companyLogoHref: scriptUrl + '?action=vf_dashboard&sessionToken=' + encodeURIComponent(SESSION_TOKEN),
+      companyLogoTitle: 'Valley Foods',
+      breadcrumb: 'Valley Foods / المالية / تقرير أرصدة الصناديق',
+      contentId: 'vf-box-report-content',
+      menuGroups: (window.VALLEYFOODS_MENU || [])
+    });
+    document.getElementById('vf-box-report-content').innerHTML =
+      '<div class="vf-card">' +
+        '<div class="vf-card-header">' +
+          '<h3>تقرير أرصدة الصناديق</h3>' +
+          '<div class="no-print" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">' +
+            '<button class="btn btn-outline" onclick="BOX_REPORT.printReport()">🖨 طباعة التقرير الكامل</button>' +
+            '<button class="btn btn-outline" onclick="BOX_REPORT.exportExcel()">⬇ تحميل Excel</button>' +
+            '<a class="btn btn-outline" href="' + scriptUrl + '?action=vf_cash&sessionToken=' +
+              encodeURIComponent(SESSION_TOKEN) + '">↩ حركة النقدية</a>' +
+          '</div>' +
+        '</div>' +
+        '<div class="vf-card-body">' +
+          '<div id="box-report-filter" class="no-print"></div>' +
+          '<div id="box-report-body"><p class="vf-text-muted">جاري التحميل...</p></div>' +
+        '</div>' +
+      '</div>';
+    renderFilter();
+    load();
+  }
+
+  function renderFilter() {
+    var host = document.getElementById('box-report-filter');
+    if (!host) return;
+    if (host.contains(document.activeElement)) { try { document.activeElement.blur(); } catch (e) {} }
+    var options = BOX_OPTIONS.map(function (b) {
+      var selected = String(b.value) === String(RELATED_BOX) ? ' selected' : '';
+      return '<option value="' + esc(b.value) + '"' + selected + '>' + esc(b.label) + '</option>';
+    }).join('');
+    host.innerHTML =
+      '<div class="box-report-filters">' +
+        UIC.dateRangeBar('box-report-date', {
+          from: DATE_FROM, to: DATE_TO,
+          onchange: 'BOX_REPORT.applyDateFilter()',
+          onclear: 'BOX_REPORT.clearDateFilter()'
+        }) +
+        '<div class="form-field">' +
+          '<label class="form-label" for="box-report-related">الصندوق / الحساب البنكي</label>' +
+          '<select id="box-report-related" class="input" onchange="BOX_REPORT.applyBoxFilter(this.value)">' +
+            '<option value="">كل الصناديق</option>' + options +
+          '</select>' +
+        '</div>' +
+        ((DATE_FROM || DATE_TO || RELATED_BOX)
+          ? '<button class="btn btn-outline" onclick="BOX_REPORT.clearAll()">✕ مسح كل الفلاتر</button>'
+          : '') +
+      '</div>';
+  }
+
+  function applyDateFilter() {
+    var values = UIC.dateRangeValues('box-report-date');
+    if (values.from && values.to && values.from > values.to) {
+      UIC.toast('«من تاريخ» بعد «إلى تاريخ»', 'error');
+      return;
+    }
+    DATE_FROM = values.from;
+    DATE_TO = values.to;
+    renderFilter();
+    load();
+  }
+
+  function clearDateFilter() {
+    DATE_FROM = '';
+    DATE_TO = '';
+    renderFilter();
+    load();
+  }
+
+  function applyBoxFilter(value) {
+    RELATED_BOX = String(value || '');
+    renderFilter();
+    load();
+  }
+
+  function clearAll() {
+    DATE_FROM = '';
+    DATE_TO = '';
+    RELATED_BOX = '';
+    renderFilter();
+    load();
+  }
+
+  function load(quiet) {
+    if (!quiet) UIC.readSkeleton('box-report-body', { message: [
+      'جاري حساب الرصيد الافتتاحي...',
+      'جاري ترتيب الحركات من الأقدم إلى الأحدث...',
+      'لحظة، جاري إعداد تقرير الصناديق...'
+    ] });
+    companyCall('get_valley_cash_box_balance_report', {
+      from: DATE_FROM,
+      to: DATE_TO,
+      related_box: RELATED_BOX
+    }).then(function (r) {
+      DATA = r || {};
+      BOX_OPTIONS = DATA.box_options || [];
+      RELATED_BOX = DATA.selected_box || RELATED_BOX;
+      renderFilter();
+      renderReport();
+      try { schedulePrefetch(); } catch (e) {}
+    }).catch(function (e) {
+      var body = document.getElementById('box-report-body');
+      if (body) body.innerHTML = '<div class="empty-state"><span>' +
+        esc((e && e.message) || 'تعذر تحميل التقرير') + '</span></div>';
+    }).finally(function () { if (!quiet) UI.hideSpinner(); });
+  }
+
+  function reportLabel() {
+    var selected = BOX_OPTIONS.filter(function (b) { return String(b.value) === String(RELATED_BOX); })[0];
+    var boxLabel = selected ? selected.label : 'كل الصناديق';
+    var range = DATA && DATA.range ? DATA.range : {};
+    var from = range.from || 'البداية';
+    var to = range.to || 'اليوم';
+    return boxLabel + ' — ' + from + ' إلى ' + to;
+  }
+
+  function kpi(label, value, className) {
+    return '<div class="box-report-kpi">' +
+      '<div class="box-report-kpi-label">' + esc(label) + '</div>' +
+      '<div class="box-report-kpi-value ' + (className || '') + '">' + money(value) + '</div>' +
+    '</div>';
+  }
+
+  function renderReport() {
+    var body = document.getElementById('box-report-body');
+    if (!body) return;
+    var totals = DATA.totals || {};
+    var rows = DATA.rows || [];
+    var boxes = DATA.boxes || [];
+
+    var kpis = '<div class="box-report-kpis">' +
+      kpi('الرصيد الافتتاحي', totals.opening_balance) +
+      kpi('إجمالي المدين', totals.debit, 'box-report-positive') +
+      kpi('إجمالي الدائن', totals.credit, 'box-report-negative') +
+      kpi('الرصيد المحسوب (مدين − دائن)', totals.calculated_balance,
+        Number(totals.calculated_balance || 0) < 0 ? 'box-report-negative' : 'box-report-positive') +
+      '<div class="box-report-kpi"><div class="box-report-kpi-label">عدد الحركات</div>' +
+        '<div class="box-report-kpi-value">' + Number(totals.movement_count || 0).toLocaleString('en-US') + '</div></div>' +
+    '</div>';
+
+    var summaryRows = boxes.map(function (b) {
+      return {
+        related_box: b.related_box,
+        box_name: b.box_name,
+        opening_balance: b.opening_balance,
+        debit: b.debit,
+        credit: b.credit,
+        calculated_balance: b.calculated_balance
+      };
+    });
+    var summary = UIC.dataTable('box-summary-tbl', {
+      title: 'ملخص أرصدة الصناديق',
+      headers: [
+        { key: 'related_box', label: 'كود الصندوق' },
+        { key: 'box_name', label: 'اسم الصندوق' },
+        { key: 'opening_balance', label: 'الرصيد الافتتاحي', money: true },
+        { key: 'debit', label: 'مدين', money: true },
+        { key: 'credit', label: 'دائن', money: true },
+        { key: 'calculated_balance', label: 'الرصيد المحسوب', money: true }
+      ],
+      rows: summaryRows,
+      emptyText: 'لا توجد صناديق',
+      autoPage: false
+    });
+
+    var movementRows = rows.map(function (r) {
+      return {
+        transaction_id: r.transaction_id,
+        transaction_date: r.transaction_date || '-',
+        related_box: r.related_box,
+        box_name: r.box_name || r.related_box || '-',
+        party_name: r.party_name || '-',
+        transaction_details: r.transaction_details || '-',
+        transaction_type: r.transaction_type || '-',
+        transaction_method: r.transaction_method || '-',
+        chart_name: r.chart_name || '-',
+        debit: r.debit,
+        credit: r.credit,
+        calculated_balance: r.calculated_balance,
+        approved: r.approved ? 'معتمد' : 'غير معتمد'
+      };
+    });
+    var movements = UIC.dataTable('box-movements-tbl', {
+      title: 'تقرير أرصدة الصناديق - ' + reportLabel(),
+      headers: [
+        { key: 'transaction_id', label: 'رقم الحركة', numeric: true, sortable: true },
+        { key: 'transaction_date', label: 'التاريخ', sortable: true },
+        { key: 'related_box', label: 'كود الصندوق', sortable: true },
+        { key: 'box_name', label: 'اسم الصندوق', sortable: true },
+        { key: 'party_name', label: 'الجهة المرتبطة', sortable: true },
+        { key: 'transaction_details', label: 'البيان', sortable: true },
+        { key: 'transaction_type', label: 'نوع الحركة', sortable: true },
+        { key: 'transaction_method', label: 'طريقة الدفع', sortable: true },
+        { key: 'chart_name', label: 'الحساب', sortable: true },
+        { key: 'debit', label: 'مدين', money: true, sortable: true },
+        { key: 'credit', label: 'دائن', money: true, sortable: true },
+        { key: 'calculated_balance', label: 'الرصيد في وقته', money: true, sortable: true },
+        { key: 'approved', label: 'الحالة', sortable: true }
+      ],
+      rows: movementRows,
+      emptyText: 'لا توجد حركات ضمن الفلاتر المحددة',
+      autoPage: false
+    });
+
+    var invalidNote = Number(DATA.invalid_date_count || 0)
+      ? '<p class="box-report-note box-report-negative">تنبيه: تم استبعاد ' +
+        Number(DATA.invalid_date_count).toLocaleString('en-US') +
+        ' حركة بتاريخ غير صالح من نطاق التاريخ المحدد.</p>'
+      : '';
+    body.innerHTML = kpis + summary + '<div style="height:16px"></div>' + movements +
+      '<p class="box-report-note">الحركات مرتبة افتراضياً حسب رقم الحركة من الأقدم إلى الأحدث. اضغط على رأس أي عمود لتغيير الترتيب. ' +
+        'الرصيد المحسوب لكل صف = الرصيد الافتتاحي للصندوق + المدين − الدائن حتى هذه الحركة.</p>' +
+      invalidNote;
+    UIC.initTableSort('box-summary-tbl');
+    UIC.initTableSort('box-movements-tbl');
+    var store = (window.__dtStore || {})['box-movements-tbl'];
+    if (store) {
+      store.dateFrom = DATE_FROM;
+      store.dateTo = DATE_TO;
+      store.fmtMoney = money;
+    }
+    var summaryStore = (window.__dtStore || {})['box-summary-tbl'];
+    if (summaryStore) summaryStore.fmtMoney = money;
+  }
+
+  function reportMatrices() {
+    var totals = (DATA && DATA.totals) || {};
+    var summaryHeaders = ['كود الصندوق', 'اسم الصندوق', 'الرصيد الافتتاحي', 'مدين', 'دائن', 'الرصيد المحسوب'];
+    var summaryRows = ((DATA && DATA.boxes) || []).map(function (b) {
+      return [b.related_box, b.box_name, Number(b.opening_balance || 0), Number(b.debit || 0),
+        Number(b.credit || 0), Number(b.calculated_balance || 0)];
+    });
+    var movementHeaders = ['رقم الحركة', 'التاريخ', 'كود الصندوق', 'اسم الصندوق', 'الجهة المرتبطة',
+      'البيان', 'نوع الحركة', 'طريقة الدفع', 'الحساب', 'مدين', 'دائن', 'الرصيد في وقته', 'الحالة'];
+    var movementRows = ((DATA && DATA.rows) || []).map(function (r) {
+      return [r.transaction_id, r.transaction_date || '', r.related_box, r.box_name || r.related_box || '',
+        r.party_name || '', r.transaction_details || '', r.transaction_type || '', r.transaction_method || '',
+        r.chart_name || '', Number(r.debit || 0), Number(r.credit || 0),
+        Number(r.calculated_balance || 0), r.approved ? 'معتمد' : 'غير معتمد'];
+    });
+    return {
+      totals: totals,
+      summaryHeaders: summaryHeaders,
+      summaryRows: summaryRows,
+      movementHeaders: movementHeaders,
+      movementRows: movementRows
+    };
+  }
+
+  function exportExcel() {
+    if (!DATA) { UIC.toast('لا توجد بيانات للتصدير', 'error'); return; }
+    var matrices = reportMatrices();
+    UIC.toast('جاري إعداد ملف Excel الكامل...', 'info');
+    API.ensureXlsx().then(function () {
+      var aoa = [
+        ['تقرير أرصدة الصناديق'],
+        [reportLabel()],
+        [],
+        ['الرصيد الافتتاحي', 'إجمالي المدين', 'إجمالي الدائن', 'الرصيد المحسوب', 'عدد الحركات'],
+        [Number(matrices.totals.opening_balance || 0), Number(matrices.totals.debit || 0),
+          Number(matrices.totals.credit || 0), Number(matrices.totals.calculated_balance || 0),
+          Number(matrices.totals.movement_count || 0)],
+        [],
+        ['ملخص أرصدة الصناديق'],
+        matrices.summaryHeaders
+      ].concat(matrices.summaryRows);
+      aoa.push([]);
+      aoa.push(['تفاصيل جميع الحركات — مرتبة من الأقدم إلى الأحدث']);
+      aoa.push(matrices.movementHeaders);
+      Array.prototype.push.apply(aoa, matrices.movementRows);
+
+      var ws = XLSX.utils.aoa_to_sheet(aoa);
+      var financialFormat = '#,##0.00;[Red](#,##0.00)';
+      var integerFormat = '#,##0';
+      function formatFinancialCell(rowIndex, columnIndex) {
+        var ref = XLSX.utils.encode_cell({ r: rowIndex, c: columnIndex });
+        if (ws[ref]) ws[ref].z = financialFormat;
+      }
+      [0, 1, 2, 3].forEach(function (columnIndex) { formatFinancialCell(4, columnIndex); });
+      for (var summaryIndex = 0; summaryIndex < matrices.summaryRows.length; summaryIndex++) {
+        [2, 3, 4, 5].forEach(function (columnIndex) {
+          formatFinancialCell(8 + summaryIndex, columnIndex);
+        });
+      }
+      var movementStart = 11 + matrices.summaryRows.length;
+      for (var movementIndex = 0; movementIndex < matrices.movementRows.length; movementIndex++) {
+        var idRef = XLSX.utils.encode_cell({ r: movementStart + movementIndex, c: 0 });
+        if (ws[idRef] && typeof ws[idRef].v === 'number') ws[idRef].z = integerFormat;
+        [9, 10, 11].forEach(function (columnIndex) {
+          formatFinancialCell(movementStart + movementIndex, columnIndex);
+        });
+      }
+      ws['!cols'] = [
+        { wch: 14 }, { wch: 15 }, { wch: 14 }, { wch: 24 }, { wch: 24 },
+        { wch: 38 }, { wch: 16 }, { wch: 18 }, { wch: 26 }, { wch: 15 },
+        { wch: 15 }, { wch: 20 }, { wch: 14 }
+      ];
+      ws['!merges'] = [
+        { s: { r: 0, c: 0 }, e: { r: 0, c: 12 } },
+        { s: { r: 1, c: 0 }, e: { r: 1, c: 12 } },
+        { s: { r: 6, c: 0 }, e: { r: 6, c: 12 } },
+        { s: { r: 9 + matrices.summaryRows.length, c: 0 }, e: { r: 9 + matrices.summaryRows.length, c: 12 } }
+      ];
+      var wb = XLSX.utils.book_new();
+      wb.Workbook = { Views: [{ RTL: true }] };
+      XLSX.utils.book_append_sheet(wb, ws, 'أرصدة الصناديق');
+      XLSX.writeFile(wb, 'تقرير أرصدة الصناديق.xlsx');
+    }).catch(function (e) {
+      UIC.toast((e && e.message) || 'تعذر إنشاء ملف Excel', 'error');
+    });
+  }
+
+  function printTableHtml(headers, rows, numericFrom, options) {
+    var opts = options || {};
+    var colgroup = (opts.widths || []).length
+      ? '<colgroup>' + opts.widths.map(function (width) {
+          return '<col style="width:' + Number(width) + '%">';
+        }).join('') + '</colgroup>'
+      : '';
+    var head = '<tr>' + headers.map(function (h) { return '<th>' + esc(h) + '</th>'; }).join('') + '</tr>';
+    var body = rows.map(function (row) {
+      return '<tr>' + row.map(function (value, index) {
+        var numeric = numericFrom && numericFrom.indexOf(index) !== -1;
+        var integer = opts.integerIndexes && opts.integerIndexes.indexOf(index) !== -1;
+        var text = numeric ? money(value) : integer
+          ? Number(value || 0).toLocaleString('en-US', { maximumFractionDigits: 0 })
+          : String(value == null || value === '' ? '-' : value);
+        return '<td' + (numeric || integer ? ' class="num"' : '') + '>' + esc(text) + '</td>';
+      }).join('') + '</tr>';
+    }).join('');
+    if (!body) body = '<tr><td colspan="' + headers.length + '">لا توجد بيانات</td></tr>';
+    return '<table class="' + esc(opts.className || '') + '">' + colgroup +
+      '<thead>' + head + '</thead><tbody>' + body + '</tbody></table>';
+  }
+
+  function printReport() {
+    if (!DATA) { UIC.toast('لا توجد بيانات للطباعة', 'error'); return; }
+    var matrices = reportMatrices();
+    var totals = matrices.totals;
+    var logo = COMPANY_LOGO_URL
+      ? '<div class="logo"><img src="' + esc(COMPANY_LOGO_URL) + '" alt="Valley Foods"></div>'
+      : '';
+    var totalsRows = [[
+      money(totals.opening_balance), money(totals.debit), money(totals.credit),
+      money(totals.calculated_balance), Number(totals.movement_count || 0).toLocaleString('en-US')
+    ]];
+    /* The screen and Excel keep the complete data contract. The A4 printout
+       intentionally omits six operational columns to leave a readable,
+       guaranteed slot for every financial value and the point-in-time balance. */
+    var printIndexes = [1, 4, 5, 8, 9, 10, 11];
+    var printMovementHeaders = printIndexes.map(function (index) {
+      return matrices.movementHeaders[index];
+    });
+    var printMovementRows = matrices.movementRows.map(function (row) {
+      return printIndexes.map(function (index) { return row[index]; });
+    });
+    var printSummaryHeaders = matrices.summaryHeaders.slice(1);
+    var printSummaryRows = matrices.summaryRows.map(function (row) { return row.slice(1); });
+    var html = '<!DOCTYPE html><html lang="ar" dir="rtl"><head><meta charset="utf-8">' +
+      '<meta name="viewport" content="width=device-width,initial-scale=1"><title>تقرير أرصدة الصناديق</title>' +
+      '<style>@page{size:A4 landscape;margin:5mm}*{box-sizing:border-box}html,body{width:100%;margin:0;padding:0}body{font-family:Cairo,Tahoma,Arial,sans-serif;color:#111;direction:rtl}' +
+      '.logo{text-align:center;margin-bottom:6px}.logo img{max-height:58px;max-width:180px}h1{text-align:center;font-size:20px;margin:4px 0}' +
+      '.subtitle{text-align:center;color:#555;font-size:12px;margin-bottom:12px}h2{font-size:15px;margin:16px 0 6px;border-bottom:2px solid #222;padding-bottom:4px}' +
+      'table{width:100%;max-width:100%;border-collapse:collapse;table-layout:auto;font-size:10px;line-height:1.35;margin-bottom:10px}thead{display:table-header-group}' +
+      'tfoot{display:table-footer-group}tr{break-inside:avoid;page-break-inside:avoid}th,td{border:1px solid #888;padding:5px 6px;text-align:right;vertical-align:top}' +
+      'th{background:#e9eef5;font-weight:700}.num{direction:ltr;text-align:right;white-space:nowrap}.totals th{background:#dbeafe}.totals td{font-size:12px;font-weight:800}' +
+      '.summary{page-break-after:auto}.movements{page-break-before:auto}.movement-table{table-layout:fixed;font-size:9px;line-height:1.35}' +
+      '.movement-table th{font-size:9.5px}.movement-table th,.movement-table td{padding:4px 3px;overflow-wrap:anywhere;word-break:break-word}' +
+      '.movement-table th:nth-child(5),.movement-table th:nth-child(6),.movement-table th:nth-child(7),' +
+      '.movement-table td:nth-child(5),.movement-table td:nth-child(6),.movement-table td:nth-child(7){white-space:nowrap;font-size:8.75px}' +
+      '@media print{body{-webkit-print-color-adjust:exact;print-color-adjust:exact}}</style>' +
+      '</head><body>' + logo + '<h1>تقرير أرصدة الصناديق</h1><div class="subtitle">' + esc(reportLabel()) + '</div>' +
+      '<table class="totals"><thead><tr><th>الرصيد الافتتاحي</th><th>إجمالي المدين</th><th>إجمالي الدائن</th><th>الرصيد المحسوب</th><th>عدد الحركات</th></tr></thead>' +
+      '<tbody><tr>' + totalsRows[0].map(function (v) { return '<td class="num">' + esc(v) + '</td>'; }).join('') + '</tr></tbody></table>' +
+      '<section class="summary"><h2>ملخص أرصدة الصناديق</h2>' +
+      printTableHtml(printSummaryHeaders, printSummaryRows, [1, 2, 3, 4]) + '</section>' +
+      '<section class="movements"><h2>تفاصيل جميع الحركات — من الأقدم إلى الأحدث</h2>' +
+      printTableHtml(printMovementHeaders, printMovementRows, [4, 5, 6], {
+        className: 'movement-table',
+        widths: [12, 18, 27, 17, 8, 8, 10]
+      }) + '</section>' +
+      '</body></html>';
+    UIC.printDoc(html, 'تقرير أرصدة الصناديق', {
+      then: function (w) {
+        setTimeout(function () { try { w.focus(); w.print(); } catch (e) {} }, 250);
+      }
+    });
+  }
+
+  window.BOX_REPORT = {
+    renderApp: renderApp,
+    load: load,
+    applyDateFilter: applyDateFilter,
+    clearDateFilter: clearDateFilter,
+    applyBoxFilter: applyBoxFilter,
+    clearAll: clearAll,
+    exportExcel: exportExcel,
+    printReport: printReport
+  };
+
+  document.addEventListener('DOMContentLoaded', function () {
+    UIC.Live.watchPage({
+      call: companyCall,
+      page: 'vf_cash',
+      onChange: function () { UIC.Live.arrive(function () { load(true); }); }
+    });
+  });
+  document.addEventListener('DOMContentLoaded', renderApp);
+})();
+</script>
+</body>
+</html>

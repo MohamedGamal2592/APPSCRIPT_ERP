@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>أداء النظام</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+</head>
+<body>
+<div id="perf-root" dir="rtl"></div>
+<script>
+  /* [RT-10] The weekly review, on one screen.
+   *
+   * ERP_Perf_Weekly is the table that is actually meant to be read; the raw
+   * ERP_Perf_Log is evidence. This shows the ten slowest actions this week
+   * against the same actions last week, with the direction of travel, because
+   * "what got slower since Thursday's release" is the only question this whole
+   * telemetry path exists to answer and a sheet nobody opens does not answer
+   * it.
+   *
+   * Super-admin only, and the SERVER enforces that — getPerfDashboard_ checks
+   * user.isSuperAdmin itself rather than trusting the page not to be opened. */
+  var params = new URLSearchParams(window.location.search);
+  var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+  var scriptUrl = window.scriptUrl || '/';
+  var CURRENT_ACTION = '<?!= currentAction ?>';
+  var COMPANY_PAGES = [];
+
+  function load() {
+    UIC.appShell('perf-root', {
+      breadcrumb: 'النظام / أداء النظام',
+      contentId: 'perf-content'
+    });
+    UIC.readSkeleton('perf-content');
+    API.call('get_perf_dashboard', {}, SESSION_TOKEN)
+      .then(render)
+      .catch(function (e) {
+        var el = document.getElementById('perf-content');
+        if (el) el.innerHTML = UIC.emptyState({ title: (e && e.message) || 'تعذر تحميل البيانات' });
+      })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function arrow(delta) {
+    if (delta === null || delta === undefined) return '<span class="perf-flat">جديد</span>';
+    if (delta > 20) return '<span class="perf-worse">▲ ' + FMT.number(delta) + '</span>';
+    if (delta < -20) return '<span class="perf-better">▼ ' + FMT.number(Math.abs(delta)) + '</span>';
+    return '<span class="perf-flat">—</span>';
+  }
+
+  function render(r) {
+    var el = document.getElementById('perf-content');
+    if (!el) return;
+    var rows = (r && r.rows) || [];
+    if (!rows.length) {
+      el.innerHTML = UIC.emptyState({
+        title: 'لا توجد بيانات أداء بعد',
+        text: 'يتم تجميع البيانات أسبوعياً بعد تثبيت المؤقتات.'
+      });
+      return;
+    }
+    var weeks = (r && r.weeks) || [];
+    el.innerHTML =
+      '<div class="perf-head">أسبوع ' + FMT.escape(weeks[0] || '') +
+      (weeks[1] ? ' — مقارنةً بأسبوع ' + FMT.escape(weeks[1]) : '') + '</div>' +
+      UIC.dataTable('perf-table', {
+        title: 'أبطأ عشرة إجراءات',
+        searchable: false,
+        exportXlsx: false,
+        headers: [
+          { key: 'action', label: 'الإجراء' },
+          { key: 'count', label: 'عدد الطلبات', numeric: true },
+          { key: 'p50', label: 'p50 (م.ث)', numeric: true },
+          { key: 'p90', label: 'p90 (م.ث)', numeric: true },
+          { key: 'p99', label: 'p99 (م.ث)', numeric: true },
+          { key: 'delta', label: 'التغير في p90' },
+          { key: 'reads', label: 'متوسط قراءات الجداول', numeric: true },
+          { key: 'errors', label: 'نسبة الأخطاء' }
+        ],
+        rows: rows.map(function (x) {
+          return {
+            action: FMT.escape(x.action),
+            count: FMT.number(x.count),
+            p50: FMT.number(x.p50),
+            p90: FMT.number(x.p90),
+            p99: FMT.number(x.p99),
+            delta: arrow(x.delta),
+            reads: FMT.number(x.mean_sheet_reads),
+            errors: (x.error_rate * 100).toFixed(1) + '%'
+          };
+        })
+      });
+  }
+
+  load();
+</script>
+<style>
+  .perf-head { padding: var(--space-3); font-weight: 700; color: var(--text-muted); }
+  .perf-worse { color: var(--danger); font-weight: 700; }
+  .perf-better { color: var(--success, #16a34a); font-weight: 700; }
+  .perf-flat { color: var(--text-muted); }
+</style>
+</body>
+</html>

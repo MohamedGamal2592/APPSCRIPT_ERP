@@ -1,0 +1,451 @@
+﻿<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>مقاسات الكراتين والعبوات</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Core_FormState'); ?>
+  <?!= include('Company_TopChemical_Nav'); ?>
+  <?!= getCompanyThemeCSS_('3fe1b5cb67b7223e') ?>
+</head>
+<body>
+<div id="tc-root" dir="rtl"></div>
+<script>
+  var params = new URLSearchParams(window.location.search);
+  var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+  var scriptUrl = window.scriptUrl || '/';
+  var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+  var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('3fe1b5cb67b7223e') ?>';
+  var COMPANY_PAGES = <?!= companyPages ?>;
+  var CURRENT_ACTION = '<?!= currentAction ?>';
+  var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+  var CAN_WRITE = UIC.canAdd_(); var CAN_FULL = UIC.canFull_();
+  var NEW_TYPE_OPTION = '__new__';
+
+  /* Stage C candidate (plan §6): retained form state for this pilot form.
+   * FALSE as shipped, and UIC.FormState.enabled() also requires the shared
+   * FORM_STATE_CORE_ master switch, so with either false this page runs its
+   * existing path exactly as before. */
+  var CARTON_FS_CANDIDATE_ = false;
+  var CARTON_FORM_ = null;
+
+  function cartonFormState_() {
+    if (!(window.UIC && UIC.FormState && UIC.FormState.enabled(CARTON_FS_CANDIDATE_))) return null;
+    if (!CARTON_FORM_) {
+      CARTON_FORM_ = UIC.FormState.create({
+        key: 'tc_carton_size_add',
+        fields: ['product', 'common_vendor', 'type', 'length', 'width', 'height', 'other_details', 'document']
+      });
+    }
+    return CARTON_FORM_;
+  }
+
+  function companyCall(moduleAction, data) {
+    return API.call('company_action', {
+      target_system: '3fe1b5cb67b7223e',
+      module_action: moduleAction,
+      data: data || {}
+    }, SESSION_TOKEN);
+  }
+
+  function esc(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  function fmtDate(v) {
+    if (v == null || v === '') return '';
+    var d = (v instanceof Date) ? v : new Date(v);
+    if (isNaN(d.getTime())) return String(v);
+    var p = function (n) { return ('0' + n).slice(-2); };
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+  }
+
+  function load() {
+    var contentId = 'carton-content';
+    UIC.appShell('tc-root', {
+      companyLogoUrl: COMPANY_LOGO_URL,
+      companyLogoHref: scriptUrl + '?action=tc_dashboard&sessionToken=' + SESSION_TOKEN,
+      companyLogoTitle: 'توب كيميكال',
+      breadcrumb: 'توب كيميكال / الاستيراد والمشتريات / مقاسات الكراتين والعبوات',
+      contentId: contentId,
+      menuGroups: (window.TOPCHEMICAL_MENU || [])
+    });
+    fetchSizes();
+  }
+
+  var LOADED_ALL = false;
+  function toggleLoadAll() { LOADED_ALL = !LOADED_ALL; fetchSizes(); }
+
+  function fetchSizes(quiet) {
+    if (!quiet) UI.showSpinner();
+    companyCall('get_carton_sizes', LOADED_ALL ? { loadAll: true } : {})
+      .then(function (r) {
+        window.__sizes = r.sizes || [];
+        window.__productOptions = r.product_options || [];
+        window.__vendorOptions = r.vendor_options || [];
+        window.__typeOptions = r.type_options || [];
+        renderSizes();
+      })
+      .catch(function (e) { showError(e); })
+      .finally(function () { if (!quiet) UI.hideSpinner(); try{schedulePrefetch();}catch(e){} });
+  }
+
+  function renderSizes() {
+    var list = window.__sizes;
+    var rows = list.map(function (s) {
+      return {
+        id: s.id,
+        product: esc(s.product_name || ('#' + s.product)),
+        vendor: esc(s.vendor_name || ('#' + s.common_vendor)),
+        type: esc(s.type || '-'),
+        length: s.length,
+        width: s.width,
+        height: s.height,
+        other_details: esc(s.other_details || '-'),
+        document: fileLinkCell(s.document, s.id),
+        actions: UIC.actionBtns([{ label: 'عرض', onclick: 'openDetail(' + window.__sizes.indexOf(s) + ')' }])
+      };
+    });
+    var headers = [
+      { key: 'id', label: '#', numeric: true },
+      { key: 'product', label: 'المنتج' },
+      { key: 'vendor', label: 'المورد المشترك' },
+      { key: 'type', label: 'النوع' },
+      { key: 'length', label: 'الطول', numeric: true },
+      { key: 'width', label: 'العرض', numeric: true },
+      { key: 'height', label: 'الارتفاع', numeric: true },
+      { key: 'other_details', label: 'تفاصيل أخرى' },
+      { key: 'document', label: 'المستند' },
+      { key: 'actions', label: 'إجراءات' }
+    ];
+    var body = document.getElementById('carton-content');
+    body.innerHTML = (CAN_WRITE
+      ? '<div style="display:flex;justify-content:flex-end;margin-bottom:12px;"><button class="btn btn-primary" onclick="openAddModal()">+ إضافة مقاس</button></div>'
+      : '') +
+      UIC.showAllBar({ loadedAll: LOADED_ALL, showAll: 'toggleLoadAll()', showLatest: 'toggleLoadAll()' }) +
+      UIC.dataTable('carton-table', {
+        /* [RT-1] The list endpoint caps at the newest rows unless `loadAll` is
+           passed, and the search box filters only what is in memory — so the
+           table says which records the box actually searches. */
+        truncated: !LOADED_ALL,
+        showAll: 'toggleLoadAll()',
+        title: 'مقاسات الكراتين والعبوات',
+        headers: headers,
+        rows: rows,
+        emptyText: 'لا توجد مقاسات'
+      });
+    UIC.initTableSort('carton-table');
+  }
+
+  function typeFieldHTML() {
+    var opts = (window.__typeOptions || []).map(function (t) {
+      return '<option value="' + esc(t.value) + '">' + esc(t.label) + '</option>';
+    }).join('');
+    return '<div class="form-field" data-field="type"><label class="form-label" for="size-type">النوع <span class="req">*</span></label>' +
+      '<select id="size-type" class="input" data-field-name="type">' +
+      '<option value="">اختر النوع...</option>' + opts +
+      '<option value="' + NEW_TYPE_OPTION + '">+ إضافة نوع جديد</option>' +
+      '</select>' +
+      '<div class="field-error" id="err-type"></div></div>' +
+      '<div class="form-field" data-field="new_type" id="new-type-row" style="display:none;">' +
+      '<label class="form-label" for="size-new-type">النوع الجديد <span class="req">*</span></label>' +
+      '<input id="size-new-type" class="input" type="text" placeholder="اكتب النوع الجديد...">' +
+      '</div>';
+  }
+
+  function openAddModal() {
+    var body =
+      '<form id="carton-size-form">' +
+      UIC.field({ key: 'product', label: 'المنتج', type: 'select', required: true,
+        options: window.__productOptions || [], placeholder: 'اختر المنتج...' }) +
+      UIC.field({ key: 'common_vendor', label: 'المورد المشترك', type: 'select', required: true,
+        options: window.__vendorOptions || [], placeholder: 'اختر المورد...' }) +
+      typeFieldHTML() +
+      UIC.field({ key: 'length', label: 'الطول', type: 'number', step: '0.01', min: '0', required: true, placeholder: 'مثال: 40.5' }) +
+      UIC.field({ key: 'width', label: 'العرض', type: 'number', step: '0.01', min: '0', required: true, placeholder: 'مثال: 30' }) +
+      UIC.field({ key: 'height', label: 'الارتفاع', type: 'number', step: '0.01', min: '0', required: true, placeholder: 'مثال: 20' }) +
+      '<div class="form-field" data-field="other_details"><label class="form-label" for="size-other-details">تفاصيل أخرى <span class="req">*</span></label>' +
+      '<textarea id="size-other-details" class="input" data-field-name="other_details" rows="3" placeholder="تفاصيل إضافية..."></textarea>' +
+      '<div class="field-error" id="err-other_details"></div></div>' +
+      '<div class="form-field" data-field="document"><label class="form-label" for="size-document">المستند (pdf, word, صورة)</label>' +
+      '<input id="size-document" data-field-name="document" data-uic-instant="1" data-uic-sheet="purchasing_support_data" data-uic-field="document" data-uic-form="carton-modal" class="input" type="file" accept=".pdf,.doc,.docx,.png,.jpg,.jpeg">' +
+      '<div class="uic-file-preview" data-uic-file-preview hidden aria-live="polite"></div>' +
+      '<div class="field-error" id="err-document"></div></div>' +
+      '</form>';
+    UIC.openModal('carton-modal', {
+      title: 'إضافة مقاس كرتون/عبوة',
+      body: body,
+      onSave: 'saveCartonSize()'
+    });
+    try { UIC.trackDirty('carton-size-form'); } catch (e) {}
+    /* Candidate only: refill a retained draft so a rejected or uncertain save
+       never silently discards what the user typed. With the switch off this
+       block does nothing and the modal opens exactly as before. */
+    var fs = cartonFormState_();
+    if (fs) {
+      try {
+        Object.keys(fs.values).forEach(function (k) {
+          if (k === 'new_type') return;
+          var el = document.querySelector('#carton-size-form [data-field-name="' + k + '"]') ||
+                   document.getElementById('size-' + String(k).replace(/_/g, '-'));
+          if (!el) return;
+          if (el.type === 'file') return;
+          var v = fs.values[k];
+          if (el.tagName === 'SELECT' && String(v) === NEW_TYPE_OPTION) return;
+          if (String(el.value) !== String(v == null ? '' : v)) el.value = v == null ? '' : v;
+        });
+      } catch (e) {}
+    }
+    var sel = document.getElementById('size-type');
+    if (sel) {
+      sel.addEventListener('change', function () {
+        document.getElementById('new-type-row').style.display = (sel.value === NEW_TYPE_OPTION) ? '' : 'none';
+      });
+    }
+  }
+
+  function saveCartonSize() {
+    /* Stage C candidate branch. Flag-off (either switch) runs the existing
+       UIC.Live.save path below unchanged. */
+    var fs = cartonFormState_();
+    if (fs) { saveCartonSizeRetained_(fs); return; }
+    var formEl = document.getElementById('carton-size-form');
+    var data = UIC.collectForm('carton-size-form');
+    if (data.type === NEW_TYPE_OPTION) {
+      var newType = (document.getElementById('size-new-type') || {}).value || '';
+      newType = String(newType).trim();
+      if (!newType) { UIC.toast('اكتب النوع الجديد', 'error'); return; }
+      data.type = newType;
+    }
+    if (!UIC.validateForm('carton-size-form')) return;
+    if (String(data.type).trim() === '') { UIC.toast('النوع مطلوب', 'error'); return; }
+    var doSave = function () {
+      /* Option A instant-upload: pre-bound ref (per-row status inline). */
+      try {
+        var fileInput = formEl ? formEl.querySelector('input[data-field-name="document"]') : null;
+        var bound = (fileInput && UIC.UploadSet) ? UIC.UploadSet.getBound(fileInput) : null;
+        if (bound && bound.ref) {
+          data.document = bound.ref;
+          if (bound.id) data.document_id = bound.id;
+        } else if (fileInput) {
+          var dr = fileInput.getAttribute('data-ref') || '';
+          if (dr) data.document = dr;
+        }
+      } catch (e) {}
+      UIC.Live.save({
+        call: companyCall,
+        action: 'add_carton_size',
+        data: data,
+        modal: 'carton-modal',
+        message: 'تم الحفظ',
+        queueable: false,
+        reload: function () { fetchSizes(true); },
+        onSuccess: function (r) {
+          var rec = (r && r.record) ? r.record : null;
+          if (!rec) { fetchSizes(true); return; }
+          window.__sizes = window.__sizes || [];
+          window.__sizes.unshift(rec);
+          if (window.__sizes.length>10) window.__sizes=window.__sizes.slice(0,10);
+          renderSizes();
+        }
+      }).catch(function () { /* UIC.Live has toasted */ });
+    };
+    try {
+      if (window.UIC && UIC.UploadSet && UIC.UploadSet.isBusy('carton-modal')) {
+        UIC.toast('جاري رفع الملف... يرجى الانتظار', 'warning');
+        UIC.UploadSet.awaitPending('carton-modal').then(doSave);
+        return;
+      }
+    } catch (e2) {}
+    doSave();
+  }
+
+  /* Candidate path: same payload, same action, same server contract. The
+     differences are the retained state and explicit pending/rejected/uncertain
+     states — "تم الحفظ" is shown only after the authoritative reply, never when
+     a request was merely sent. */
+  function saveCartonSizeRetained_(fs) {
+    var formEl = document.getElementById('carton-size-form');
+    var data = UIC.collectForm('carton-size-form');
+    if (data.type === NEW_TYPE_OPTION) {
+      var newType = (document.getElementById('size-new-type') || {}).value || '';
+      newType = String(newType).trim();
+      if (!newType) { UIC.toast('اكتب النوع الجديد', 'error'); return; }
+      data.type = newType;
+    }
+    if (!UIC.validateForm('carton-size-form')) return;
+    if (String(data.type).trim() === '') { UIC.toast('النوع مطلوب', 'error'); return; }
+
+    var doSave = function () {
+      try {
+        var fileInput = formEl ? formEl.querySelector('input[data-field-name="document"]') : null;
+        var bound = (fileInput && UIC.UploadSet) ? UIC.UploadSet.getBound(fileInput) : null;
+        if (bound && bound.ref) {
+          data.document = bound.ref;
+          if (bound.id) data.document_id = bound.id;
+        } else if (fileInput) {
+          var dr = fileInput.getAttribute('data-ref') || '';
+          if (dr) data.document = dr;
+        }
+      } catch (e) {}
+      Object.keys(data).forEach(function (k) { fs.setHeader(k, data[k]); });
+      var submission;
+      try {
+        submission = fs.beginSubmit('', { values: data, token: '' });
+      } catch (eSub) {
+        UIC.toast((eSub && eSub.message) || 'هناك طلب حفظ قيد التنفيذ', 'error');
+        return;
+      }
+      fs.setControlsEnabled('carton-modal', false);
+      companyCall('add_carton_size', data)
+        .then(function (r) {
+          var rec = (r && r.record) ? r.record : null;
+          fs.settle(submission, { saved: rec || {}, token: '' });
+          fs.setControlsEnabled('carton-modal', true);
+          try { UIC.closeModal('carton-modal'); } catch (eC) {}
+          UIC.toast((r && r.message) || 'تم الحفظ', 'success');
+          if (rec) {
+            window.__sizes = window.__sizes || [];
+            window.__sizes.unshift(rec);
+            if (window.__sizes.length > 10) window.__sizes = window.__sizes.slice(0, 10);
+            renderSizes();
+          } else {
+            fetchSizes(true);
+          }
+          CARTON_FORM_ = null;   /* a confirmed save starts a clean draft */
+        })
+        .catch(function (e) {
+          fs.setControlsEnabled('carton-modal', true);
+          if (e && e.uncertain) fs.markUncertain(e); else fs.markRejected(e);
+          UIC.toast((e && e.message) || 'تعذر الحفظ — لم يتم تسجيل التغيير', 'error');
+        });
+    };
+    try {
+      if (window.UIC && UIC.UploadSet && UIC.UploadSet.isBusy('carton-modal')) {
+        UIC.toast('جاري رفع الملف... يرجى الانتظار', 'warning');
+        UIC.UploadSet.awaitPending('carton-modal').then(doSave);
+        return;
+      }
+    } catch (e2) {}
+    doSave();
+  }
+
+  function uploadDocument(formEl, id) {
+    try {
+      if (window.UIC && UIC.UploadSet) {
+        var inp = formEl.querySelector('input[data-field-name="document"]');
+        var b = inp ? UIC.UploadSet.getBound(inp) : null;
+        if (b && b.ref) return Promise.resolve({ reference: b.ref, fileId: b.id || '' });
+        return Promise.resolve(null);
+      }
+    } catch (e) {}
+    var input = formEl.querySelector('input[data-field-name="document"]');
+    if (!input || !input.files || !input.files[0]) return Promise.resolve(null);
+    return new Promise(function (resolve, reject) {
+      var reader = new FileReader();
+      reader.onerror = function () { reject(new Error('خطأ في قراءة الملف')); };
+      reader.onload = function () {
+        var b64 = String(reader.result || '').split(',')[1] || '';
+        companyCall('add_upload_file', {
+          sheet: 'purchasing_support_data',
+          field: 'document',
+          id: id,
+          filename: input.files[0].name,
+          base64: b64
+        }).then(function (res) {
+          if (res && res.status === 'success') resolve({ reference: res.reference, fileId: res.fileId || '' });
+          else reject(new Error((res && res.message) || 'خطأ في رفع الملف'));
+        }).catch(function (e) {
+          reject(new Error((e && e.message) || 'خطأ في رفع الملف'));
+        });
+      };
+      reader.readAsDataURL(input.files[0]);
+    });
+  }
+
+  function downloadRef(ref, id) {
+    if (!ref && (id == null || String(id) === '')) return;
+    UIC.openDownload(scriptUrl + '?download=doc_file&company=3fe1b5cb67b7223e&ref=' + encodeURIComponent(ref || '') + ((id != null && String(id) !== '') ? '&id=' + encodeURIComponent(id) : '') + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN),
+      'فتح الملف');
+  }
+
+  function fileLinkCell(ref, id) {
+    return ref
+      ? '<button class="btn btn-outline" style="padding:4px 10px;" onclick="downloadRef(\'' + esc(ref) + '\',\'' + esc(id||'') + '\')">تحميل</button>'
+      : '-';
+  }
+
+  function openDetail(idx) {
+    var s = window.__sizes[idx];
+    if (!s) return;
+    var rows = [
+      ['#', s.id],
+      ['المنتج', s.product_name || ('#' + s.product)],
+      ['المورد المشترك', s.vendor_name || ('#' + s.common_vendor)],
+      ['النوع', s.type || '-'],
+      ['الطول', s.length],
+      ['العرض', s.width],
+      ['الارتفاع', s.height],
+      ['تفاصيل أخرى', s.other_details || '-'],
+      ['المستند', fileLinkCell(s.document, s.id)],
+      ['أضيف بواسطة', uname_(s.user) || '-'],
+      ['وقت الإضافة', s.created_at ? fmtDate(s.created_at) : '-']
+    ];
+    var body = rows.map(function (r) {
+      return '<div class="form-field"><label class="form-label">' + esc(r[0]) + '</label>' +
+        '<div style="padding:8px 12px;background:var(--bg-subtle);border-radius:var(--radius-sm);font-size:13px;">' + r[1] + '</div></div>';
+    }).join('');
+    UIC.openModal('carton-detail-modal', {
+      title: 'تفاصيل المقاس #' + s.id,
+      body: body,
+      footer: false
+    });
+  }
+
+  function showError(e) {
+    var body = document.getElementById('carton-content');
+    if (body) body.innerHTML = '<div class="empty-state"><span>' + esc(e.message || 'خطأ') + '</span></div>';
+  }
+
+  /* Another device's change arrives quietly. */
+  UIC.Live.watchPage({
+    call: companyCall,
+    page: 'tc_carton_sizes',
+    onChange: function () { UIC.Live.arrive(function () { fetchSizes(true); }); }
+  });
+
+  /* Phase B2: the shared refresh control for this list only. Re-fetches the
+     current view (newest-10 or the full list) and re-renders this table; the
+     shared component preserves search/sort/page/scroll. */
+  if (window.UIC && UIC.TableRefresh) {
+    UIC.TableRefresh.register('carton-table', {
+      load: function () {
+        return companyCall('get_carton_sizes', LOADED_ALL ? { loadAll: true } : {});
+      },
+      apply: function (r) {
+        window.__sizes = (r && r.sizes) || [];
+        window.__productOptions = (r && r.product_options) || [];
+        window.__vendorOptions = (r && r.vendor_options) || [];
+        window.__typeOptions = (r && r.type_options) || [];
+        renderSizes();
+      },
+      blocked: function () {
+        try {
+          if (document.querySelector('.modal-backdrop, .uic-modal, [data-modal-open="true"]')) return 'أغلق النموذج المفتوح قبل تحديث القائمة';
+          if (typeof UIC.Live !== 'undefined' && UIC.Live.busy && UIC.Live.busy()) return 'هناك حفظ قيد التنفيذ — انتظر ثم أعد المحاولة';
+        } catch (e) {}
+        return null;
+      }
+    });
+  }
+
+  load();
+</script>
+</body>
+</html>
+
+

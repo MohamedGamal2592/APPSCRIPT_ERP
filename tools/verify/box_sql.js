@@ -176,6 +176,25 @@ ok(BOX.indexOf("params.push('%' + person + '%')") !== -1,
 ok(!/'\s*\+\s*data\.[a-z_]+\s*\+\s*'/i.test(BOX),
   'no data.* value is concatenated into a statement');
 
+/* ── 6b. Bounded reads use the MySQL JSON bridge ───────────────────────────
+ * The page reads wide rows and analysis windows. Keeping the old JDBC
+ * getObject loop here would bring back the per-cell bridge cost this feature
+ * is intended to remove. Each JSON reader must also validate its row count and
+ * explicit rank before data reaches the existing page engine. */
+console.log('bounded box reads use validated JSON aggregates');
+['dbBoxList_', 'dbBoxAccountAggregates_', 'dbBoxItemHistory_', 'dbBoxAnalysisScan_'].forEach(function (name) {
+  const start = BOX.indexOf('function ' + name + '(');
+  const nextIdx = BOX.slice(start + 1).search(/\n\s*function \w/);
+  const body = nextIdx === -1 ? BOX.slice(start) : BOX.slice(start, start + 1 + nextIdx);
+  ok(body.indexOf('JSON_ARRAYAGG(JSON_OBJECT') !== -1, name + ' uses JSON_ARRAYAGG');
+  ok(body.indexOf('dbBoxParseRankedJson_') !== -1, name + ' validates the parsed JSON envelope');
+});
+const listBody = BOX.slice(BOX.indexOf('function dbBoxList_'), BOX.indexOf('function dbBoxAccountAggregates_'));
+ok(listBody.indexOf('where.params.concat(where.params)') !== -1,
+  'dbBoxList_ binds the count predicate and page predicate in SQL order');
+ok(BOX.indexOf('ROW_NUMBER() OVER (ORDER BY `page`.`transaction_date` DESC, `page`.`id` DESC)') !== -1,
+  'movement JSON payload carries an explicit stable rank');
+
 /* ── 7. credit is spend, and the two are never netted ─────────────────────── */
 console.log('credit = spend, debit = collected, never netted');
 const aggStart = BOX.indexOf('function dbBoxAccountAggregates_');

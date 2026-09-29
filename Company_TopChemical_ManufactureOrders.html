@@ -507,7 +507,8 @@
 
   /* ══════════════════ FOOTERS modal (view for all, edit for CAN_WRITE) ══════════════════
      The modal opens instantly with a loading note so the user understands the
-     lines are being withdrawn, then fills in when the server replies. */
+     lines are being withdrawn, then fills in when the server replies. The
+     server returns the complete footer set as one validated JSON aggregate. */
   var FOOTMOD = { hid: null, columns: [], rows: [], draft: null };
   var MO_EDITING = null;
 
@@ -653,7 +654,19 @@
     for (var i = 0; i < REFS.products_full.length; i++) {
       if (String(REFS.products_full[i].value) === String(pid)) return REFS.products_full[i];
     }
+    for (var j = 0; j < REFS.products.length; j++) {
+      if (String(REFS.products[j].value) === String(pid)) {
+        return { value: REFS.products[j].value, label: REFS.products[j].label, code: '', unit: '' };
+      }
+    }
     return null;
+  }
+
+  function refreshJoinedProductFields(row, pid) {
+    var ref = productRef(pid);
+    row.product_name_ar = ref ? ref.label : '';
+    row.product_code_ref = ref ? (ref.code || '') : '';
+    row.product_unit_ref = ref ? (ref.unit || '') : '';
   }
 
   /* changing the inline product auto-withdraws code/unit from products */
@@ -680,6 +693,9 @@
       .then(function () {
         UIC.toast('تم حفظ البند ✓', 'success');
         Object.keys(payload).forEach(function (k) { row[k] = payload[k]; });
+        if (Object.prototype.hasOwnProperty.call(payload, 'product_id')) {
+          refreshJoinedProductFields(row, payload.product_id);
+        }
         paintFootModal();
       })
       .catch(showError)
@@ -710,6 +726,7 @@
         UIC.toast('تمت إضافة البند ✓', 'success');
         var newRow = { id: (res && res.id) || null, manufacture_header_id: String(FOOTMOD.hid) };
         Object.keys(payload).forEach(function (k) { if (k !== 'manufacture_header_id') newRow[k] = payload[k]; });
+        refreshJoinedProductFields(newRow, newRow.product_id);
         FOOTMOD.rows.push(newRow);
         FOOTMOD.draft = null;
         paintFootModal();
@@ -817,6 +834,10 @@
         UIC.toast('تم الحفظ بنجاح ✓', 'success');
         UIC.closeModal('mo-edit-modal');
         Object.keys(payload).forEach(function (k) { row[k] = payload[k]; });
+        if (Object.prototype.hasOwnProperty.call(payload, 'product_id')) {
+          var headerProduct = productRef(payload.product_id);
+          row.product_label = headerProduct ? headerProduct.label : '';
+        }
         renderPage();
       })
       .catch(showError)
@@ -953,8 +974,8 @@
     var rows = H.rows.map(mapHeaderRow);
 
     host.innerHTML = UIC.dataTable('mo-table', {
-      /* Later server windows append in place; this table searches and pages
-         over the rows loaded so far. */
+      /* Later server windows append in place; each window is returned by the
+         server as one JSON aggregate and the table searches/pages locally. */
       truncated: false,
       title: 'أوامر التصنيع',
       headers: MO_HEADERS,

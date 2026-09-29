@@ -1,0 +1,51 @@
+<script>
+/** Valley Foods header dropdown groups. Items with a real page are { label, action }; plain strings are "قيد الإنشاء" placeholders. */
+window.VALLEYFOODS_MENU = [
+  { label: 'الادارة المالية', items: [
+    { label: 'الاصناف وتحركاتها', action: 'vf_products' },
+    { label: 'العملاء والموردون', action: 'vf_parties' },
+    { label: 'حركة النقدية والبنوك', action: 'vf_cash' },
+    { label: 'قائمة الدخل', action: 'vf_income_statement' },
+    { label: 'المبيعات', action: 'vf_sales' },
+    { label: 'مرتجعات المبيعات', action: 'vf_sales_returns' },
+    { label: 'المشتريات', action: 'vf_purchasing' },
+    { label: 'حركة المخزن', action: 'vf_warehouse_movement' }
+  ] },
+  { label: 'الموارد البشرية', items: [
+    { label: 'قائمة الموظفين', action: 'vf_hr_employees' }, { label: 'راتب الموظف', action: 'vf_hr_salary' },
+    { label: 'الغياب والخصومات', action: 'vf_hr_deductions' },
+    { label: 'العقود', action: 'vf_hr_contracts' },
+    { label: 'تخصيص الإجازات', action: 'vf_hr_vacation_alloc' },
+    { label: 'الإجازات', action: 'vf_hr_vacations' },
+    { label: 'العمل الإضافي', action: 'vf_hr_overtime' },
+    { label: 'الرواتب الشهرية', action: 'vf_hr_monthly_salaries' },
+    { label: 'الحضور والانصراف', action: 'vf_hr_attendance' },
+    { label: 'تحديد الورديات', action: 'vf_hr_shifts' },
+    { label: '— إعدادات العمل الإضافي', action: 'vf_hr_settings_overtime' },
+    { label: '— إعدادات الخصومات', action: 'vf_hr_settings_deduction' },
+    { label: '— إعدادات الإجازات', action: 'vf_hr_settings_vacations' },
+    { label: '— إعدادات الورديات', action: 'vf_hr_settings_shifts' }
+  ] },
+  { label: 'الانتاج', items: [
+    { label: 'وصفات التصنيع (BOM)', action: 'vf_mfg_recipes' },
+    { label: 'أوامر التصنيع', action: 'vf_mfg_orders' },
+    { label: 'خطوط الإنتاج', action: 'vf_workcenters' },
+    { label: 'الأصول والماكينات', action: 'vf_asset_technical' },
+    { label: 'أصول خطوط الإنتاج', action: 'vf_work_center_assets' }
+  ] },
+  /* الجودة — the ONLY place vf_quality_dashboard and vf_quality_general are
+     linked. UIC.appShell filters every child by UIC.pageAuthorized_(action)
+     and hides the whole group when no child survives, so each entry follows
+     its own permission and no department menu is affected. */
+  { label: 'الجودة', items: [
+    { label: 'لوحة الجودة', action: 'vf_quality_dashboard' },
+    { label: 'الجودة العامة', action: 'vf_quality_general' },
+    { label: 'السياسات والاجراءات SOPs', action: 'vf_quality_sops' },
+    /* إقراراتي (vf_quality_my_acks) hidden for now: the route and its actions
+       remain available by direct URL; only the nav entry is removed. */
+    { label: 'عدم المطابقة (NCR)', action: 'vf_quality_ncr' },
+    { label: 'التدقيق الداخلي', action: 'vf_quality_audits' }
+  ] }
+];
+</script>
+

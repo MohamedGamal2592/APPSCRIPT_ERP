@@ -290,10 +290,14 @@ function expectRefusal(W, label, fn) {
   check(W.writes.count === before, label + ' — zero writes before the refusal');
   return err;
 }
+const CODE_TEST_ROLES = ['مدير الجودة', 'مدير المصنع', 'مدير الإدارة', 'رئيس القسم', 'مشرف الوردية', 'مشرف الإنتاج', 'مهندس إنتاج', 'مراقب جودة', 'فني معمل', 'مسؤول سلامة الغذاء'];
+let codeTestRoleIndex = 0;
 function sop(over) {
+  over = Object.assign({}, over || {});
+  if (!over.applicability_role) over.applicability_role = CODE_TEST_ROLES[codeTestRoleIndex++ % CODE_TEST_ROLES.length];
   return Object.assign({
     title_ar: 'وثيقة اختبار', title_en: 'Test', category: 'POL',
-    applicability_dept: 'إدارة الصيانة', applicability_role: 'مدير الجودة', owner_email: 'owner@vf.test'
+    applicability_dept: 'إدارة الصيانة', owner_email: 'owner@vf.test'
   }, over || {});
 }
 
@@ -353,8 +357,8 @@ section('4.7.1 idempotency, immutability and the missing-abbreviation rule');
   const H = A.H, W = A.W;
 
   /* Initial-create idempotency: the same create_token must not create twice. */
-  const first = H.saveQualitySop_(sop({ create_token: 'tok-1', applicability_dept: 'الجودة' }), AUTHOR, DB);
-  const retry = H.saveQualitySop_(sop({ create_token: 'tok-1', applicability_dept: 'الجودة' }), AUTHOR, DB);
+  const first = H.saveQualitySop_(sop({ create_token: 'tok-1', applicability_dept: 'الجودة', applicability_role: 'مدير الجودة' }), AUTHOR, DB);
+  const retry = H.saveQualitySop_(sop({ create_token: 'tok-1', applicability_dept: 'الجودة', applicability_role: 'مدير الجودة' }), AUTHOR, DB);
   check(retry.idempotent === true && retry.unique_id === first.unique_id && retry.sop_code === first.sop_code,
     'a retried create with the SAME create_token returns the same document and code');
   check(rows(H, W, H.QUALITY_SOP_SHEET).length === 1, 'the retried create wrote no second SOP row');
@@ -532,7 +536,7 @@ section('4.7.2 الدور المعني is a validated server-owned enum');
   });
 
   /* __ALL_DEPT__ with a blank department is never an all-company shortcut. */
-  const noDept = H.saveQualitySop_(sop({ applicability_role: '__ALL_DEPT__', applicability_dept: 'الجودة', title_ar: 'بلا إدارة' }), AUTHOR, DB);
+  const noDept = H.saveQualitySop_(sop({ category: 'PROC', applicability_role: '__ALL_DEPT__', applicability_dept: 'الجودة', title_ar: 'بلا إدارة' }), AUTHOR, DB);
   const ndV = rows(H, W, H.QUALITY_SOP_VERSIONS_SHEET).filter(function (v) { return v.sop_id === noDept.unique_id; })[0];
   W.ctx.patchRowByCriteria_(W.sheets[H.QUALITY_SOP_VERSIONS_SHEET], 'unique_id', ndV.unique_id, { status: 'Effective' });
   W.ctx.patchRowByCriteria_(W.sheets[H.QUALITY_SOP_SHEET], 'unique_id', noDept.unique_id, { current_effective_version: '1', applicability_dept: '' });
@@ -702,8 +706,8 @@ section('5 shared template and export renderer');
   const H = A.H, W = A.W;
   const tpl = H.QUALITY_DOC_TEMPLATE;
   check(tpl.id === 'vf-controlled-document-v1' && tpl.version === 1, 'the shared template is versioned (vf-controlled-document-v1)');
-  check(tpl.bodyHeadings.length === 8 && tpl.bodyHeadings[0] === 'الغرض' && tpl.bodyHeadings[7] === 'الحفظ والتسجيل',
-    'the eight default Arabic body headings are in the specified order');
+  check(tpl.bodyHeadings.length === 11 && tpl.bodyHeadings[0] === 'الغرض' && tpl.bodyHeadings[5] === 'خطوات الإجراء',
+    'the default Arabic procedure sections follow the controlled procedure outline');
   check(tpl.paper.widthMm === 210 && tpl.paper.heightMm === 297, 'the paper is A4 portrait (210 x 297 mm)');
   check(!!tpl.labels.changeHistory && !!tpl.labels.copyNumber && !!tpl.labels.reviewResult,
     'field labels are centralised so authoring and export name a field once');

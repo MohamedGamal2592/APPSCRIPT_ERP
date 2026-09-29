@@ -398,7 +398,8 @@ check(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(String(r.generated_at)), 'gene
 const KPIS = {
   sops_total: 4, sops_effective: 3, sops_in_review: 2, sops_review_overdue: 1,
   acks_pending: 2, acks_read: 1, acks_signed: 5, acks_superseded: 3, acks_compliance_pct: 63,
-  ncrs_open: 7, ncrs_open_minor: 2, ncrs_open_major: 2, ncrs_open_critical: 1, ncrs_open_other: 2, ncrs_closed: 2,
+  ncrs_open: 7, ncrs_open_minor: 2, ncrs_open_major: 2, ncrs_open_critical: 1, ncrs_open_other: 2,
+  ncrs_verified_pending_close: 1, ncrs_closed: 2,
   capas_open: 7, capas_overdue: 4, capas_done: 4,
   audits_planned: 2, audits_in_progress: 1, audits_completed: 2, findings_open: 5
 };
@@ -406,6 +407,9 @@ Object.keys(KPIS).forEach(function (k) {
   check(r.kpis[k] === KPIS[k], 'KPI ' + k + ' = ' + KPIS[k] + ' (got ' + r.kpis[k] + ')');
 });
 check(Object.keys(r.kpis).length === Object.keys(KPIS).length, 'kpis carries exactly the declared keys');
+check(r.kpis.ncrs_verified_pending_close === 1, 'verified NCRs are counted separately while waiting for closure');
+check(r.integrity.total >= 3 && r.integrity.counts.orphan_capa === 1 && r.integrity.counts.capa_effectiveness_record_incomplete >= 2,
+  'read-only reconciliation reports orphan CAPAs and incomplete legacy effectiveness records');
 check(r.kpis.acks_compliance_pct === 63, 'compliance rounds 62.5 up to 63, not down to 62');
 
 /* ---- sops[]: effective versions only, per-version ack stats ---- */
@@ -478,6 +482,24 @@ check(Object.keys(er.kpis).every(k => (k === 'acks_compliance_pct' ? er.kpis[k] 
   'an empty world yields zero for every other KPI');
 check(er.sops.length === 0 && er.ncrs_recent.length === 0 && er.capas_overdue_list.length === 0 && er.audits_recent.length === 0,
   'an empty world yields empty lists');
+
+/* A dashboard read must not migrate a populated legacy quality sheet. */
+const LEG = makeWorld();
+const LH = LEG.ctx.__out;
+LEG.seed(NCR_SHEET, LH.QUALITY_NCR_HEADERS.slice(0, 23), []);
+LEG.seed(CAPA_SHEET, LH.QUALITY_CAPA_HEADERS.slice(0, 18), []);
+LEG.seed('valley_quality_audits', LH.QUALITY_AUDIT_HEADERS.slice(0, 13), []);
+LEG.seed('valley_quality_audit_findings', LH.QUALITY_AUDIT_FINDING_HEADERS.slice(0, 12), []);
+const legacyHeaderCounts = [23, 18, 13, 12];
+const legacyNames = [NCR_SHEET, CAPA_SHEET, 'valley_quality_audits', 'valley_quality_audit_findings'];
+const legacyWritesBefore = LEG.writes.count;
+const legacyRead = LH.getQualityDashboard_({}, READER, DB);
+check(legacyRead.status === 'success' && LEG.writes.count === legacyWritesBefore,
+  'a dashboard read on populated legacy quality sheets performs no migration writes');
+legacyNames.forEach(function (name, i) {
+  check(LEG.sheets[name].__grid[0].length === legacyHeaderCounts[i],
+    name + ' keeps its legacy columns unchanged during a dashboard read');
+});
 
 console.log(failed === 0
   ? 'quality_dashboard: PASS (every KPI exact, effective-version rows, recent ordering/limit, overdue list, cached via vfRefsCached_ with zero writes, write-registration ref-bust chain)'

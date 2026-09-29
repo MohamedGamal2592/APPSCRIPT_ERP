@@ -1,0 +1,26 @@
+{
+  "scriptId": "1cQVRHYv7PltoPKV7RgkrdvLjVQHtrDLlRiWbY5Nd9P5UrY0SFnPYCCZM",
+  "rootDir": "",
+  "scriptExtensions": [
+    ".js",
+    ".gs"
+  ],
+  "htmlExtensions": [
+    ".html"
+  ],
+  "jsonExtensions": [
+    ".json"
+  ],
+  "filePushOrder": [
+    "Code.js",
+    "Company_Assessment_Actions.js",
+    "Company_Assessment_Registry.js",
+    "Company_TopChemical_Actions.js",
+    "Company_TopChemical_Registry.js",
+    "Company_TopLight_Actions.js",
+    "Company_TopLight_Registry.js",
+    "Company_ValleyFoods_Actions.js",
+    "Company_ValleyFoods_Registry.js"
+  ],
+  "skipSubdirectories": true
+}

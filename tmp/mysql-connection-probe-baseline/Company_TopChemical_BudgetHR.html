@@ -1,0 +1,698 @@
+﻿<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>شؤون العاملين القانونية</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_TopChemical_Nav'); ?>
+  <?!= getCompanyThemeCSS_('3fe1b5cb67b7223e') ?>
+</head>
+<body>
+<div id="tc-root" dir="rtl"></div>
+<script>
+  var params = new URLSearchParams(window.location.search);
+  var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+  var scriptUrl = window.scriptUrl || '/';
+  var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+  var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('3fe1b5cb67b7223e') ?>';
+  var COMPANY_PAGES = <?!= companyPages ?>;
+  var CURRENT_ACTION = '<?!= currentAction ?>';
+  var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+  var CAN_WRITE = UIC.canAdd_(); var CAN_FULL = UIC.canFull_();
+  var MONTHS = ['', 'يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو', 'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر'];
+  var EMPLOYEES = [];
+  var SALARIES = [];
+  var SAL_MONTH_OPTIONS = [];
+  var SAL_TRANSACTION_OPTIONS = [
+    { value: 'salaries', label: 'salaries' },
+    { value: 'Bonus', label: 'Bonus' }
+  ];
+  var SAL_EMPLOYEE_OPTIONS = [];
+  var TAB = 'employees';
+  var SFILTER = { month: '', year: '' };
+  var TITLE_OPTIONS = [];
+  var EMP_STATUS_OPTIONS = [];
+  var EMP_VACATION_OPTIONS = [];
+  var EMP_MILITARY_OPTIONS = [];
+  var EMP_GENDER_OPTIONS = [];
+  var EMP_INSURANCE_OPTIONS = [];
+  var EMP_INSURANCE_PLACE_OPTIONS = [];
+
+  function companyCall(moduleAction, data) {
+    return API.call('company_action', {
+      target_system: '3fe1b5cb67b7223e',
+      module_action: moduleAction,
+      data: data || {}
+    }, SESSION_TOKEN);
+  }
+
+  function load() {
+    UIC.appShell('tc-root', {
+      companyLogoUrl: COMPANY_LOGO_URL,
+      companyLogoHref: scriptUrl + '?action=tc_dashboard&sessionToken=' + SESSION_TOKEN,
+      companyLogoTitle: 'توب كيميكال',
+      breadcrumb: 'توب كيميكال / حسابات الميزانية / شؤون العاملين القانونية',
+      contentId: 'budget-hr-content',
+      menuGroups: (window.TOPCHEMICAL_MENU || [])
+    });
+    fetchEmployees();
+  }
+
+  function fetchEmployees(quiet) {
+    if (!quiet) UIC.readSkeleton('budget-hr-content');
+    companyCall('get_legal_hr')
+      .then(function (r) {
+        EMPLOYEES = r.employees || [];
+        if (r.title_options) TITLE_OPTIONS = r.title_options;
+        if (r.status_options) EMP_STATUS_OPTIONS = r.status_options;
+        if (r.vacation_options) EMP_VACATION_OPTIONS = r.vacation_options;
+        if (r.military_options) EMP_MILITARY_OPTIONS = r.military_options;
+        if (r.gender_options) EMP_GENDER_OPTIONS = r.gender_options;
+        if (r.insurance_options) EMP_INSURANCE_OPTIONS = r.insurance_options;
+        if (r.insurance_place_options) EMP_INSURANCE_PLACE_OPTIONS = r.insurance_place_options;
+        render();
+        try { schedulePrefetch(); } catch (e) {}
+      })
+      .catch(function (e) { showError(e); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function fetchSalaries(quiet) {
+    if (!quiet) UIC.readSkeleton('budget-hr-content');
+    companyCall('get_legal_salaries', {
+      payroll_month: SFILTER.month ? Number(SFILTER.month) : '',
+      payroll_year: SFILTER.year ? Number(SFILTER.year) : ''
+    })
+      .then(function (r) {
+        if (!r) { showError({ message: 'لم يتم استلام بيانات المرتبات من الخادم' }); return; }
+        SALARIES = r.items || [];
+        if (r.month_options && r.month_options.length) SAL_MONTH_OPTIONS = r.month_options;
+        if (r.transaction_options && r.transaction_options.length) SAL_TRANSACTION_OPTIONS = r.transaction_options;
+        if (r.employee_options && r.employee_options.length) SAL_EMPLOYEE_OPTIONS = r.employee_options;
+        render();
+      })
+      .catch(function (e) { showError(e); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function render() {
+    var tabs =
+      '<div style="display:flex;gap:8px;margin-bottom:12px;">' +
+        '<button class="btn ' + (TAB === 'employees' ? 'btn-primary' : 'btn-outline') + '" onclick="switchTab(\'employees\')">بيانات الموظفين (' + EMPLOYEES.length + ')</button>' +
+        '<button class="btn ' + (TAB === 'salaries' ? 'btn-primary' : 'btn-outline') + '" onclick="switchTab(\'salaries\')">مرتبات الميزانية</button>' +
+      '</div>';
+    document.getElementById('budget-hr-content').innerHTML = tabs + '<div id="hr-table-area"></div>';
+    if (TAB === 'employees') renderEmployees();
+    else renderSalaries();
+  }
+
+  function switchTab(t) {
+    TAB = t;
+    if (t === 'salaries') fetchSalaries();
+    else render();
+  }
+
+  function fmtShortDate(v) {
+    if (!v || v === '-') return '-';
+    if (typeof v === 'string') {
+      var m = v.match(/^(\d{4})-(\d{2})-(\d{2})/);
+      if (m) return m[1] + '-' + m[2] + '-' + m[3];
+    }
+    var d = new Date(v);
+    if (isNaN(d.getTime())) return FMT.escape(String(v));
+    var yr = d.getFullYear();
+    var mo = (d.getMonth() + 1 < 10 ? '0' : '') + (d.getMonth() + 1);
+    var da = (d.getDate() < 10 ? '0' : '') + d.getDate();
+    return yr + '-' + mo + '-' + da;
+  }
+
+  function renderEmployees() {
+    var rows = EMPLOYEES.map(function (e) {
+      var isIns = (e.insurance_status === true || e.insurance_status === 'TRUE' || e.insurance_status === 'true' || e.insurance_status === 'مؤمن' || e.insurance_status === 1 || e.insurance_status === '1');
+      var genAr = (e.gender === 'Male' || e.gender === 'ذكر') ? 'ذكر' : ((e.gender === 'Female' || e.gender === 'أنثى') ? 'أنثى' : FMT.escape(e.gender || '-'));
+      return {
+        code: FMT.escape(e.employee_code),
+        name: FMT.escape(e.employee_name || '-'),
+        title: FMT.escape(e.title || '-'),
+        section: FMT.escape(e.section || '-'),
+        gross: Number(e.gross_salary) || 0,
+        allow: Number(e.allow) || 0,
+        hired: fmtShortDate(e.hiring_date),
+        nat: FMT.escape(e.national_id || '-'),
+        address: FMT.escape(e.address || '-'),
+        insurance: isIns ? 'مؤمن' : 'غير مؤمن',
+        gender: genAr,
+        status: FMT.escape(e.status || '-')
+      };
+    });
+    var headers = [
+      { key: 'code', label: 'الكود' },
+      { key: 'name', label: 'الاسم' },
+      { key: 'title', label: 'المسمى' },
+      { key: 'section', label: 'القسم' },
+      { key: 'gross', label: 'الراتب الأساسي', money: true },
+      { key: 'allow', label: 'البدلات', money: true },
+      { key: 'hired', label: 'تاريخ التعيين' },
+      { key: 'nat', label: 'الرقم القومي' },
+      { key: 'address', label: 'العنوان' },
+      { key: 'insurance', label: 'التأمين' },
+      { key: 'gender', label: 'النوع' },
+      { key: 'status', label: 'الحالة' }
+    ];
+    document.getElementById('hr-table-area').innerHTML =
+      (CAN_WRITE ? '<div style="display:flex;justify-content:flex-end;margin-bottom:12px;"><button class="btn btn-primary" onclick="openEmployeeModal()">+ إضافة موظف</button></div>' : '') +
+      UIC.dataTable('hr-employees-table', { title: 'بيانات الموظفين القانونية', headers: headers, rows: rows, emptyText: 'لا توجد بيانات' });
+    UIC.initTableSort('hr-employees-table');
+  }
+
+  function openEmployeeModal() {
+    var maxCode = 0;
+    EMPLOYEES.forEach(function (e) { var n = Number(e.employee_code); if (Number.isInteger(n) && n > maxCode) maxCode = n; });
+
+    var ipOpts = (EMP_INSURANCE_PLACE_OPTIONS && EMP_INSURANCE_PLACE_OPTIONS.length)
+      ? EMP_INSURANCE_PLACE_OPTIONS
+      : [];
+    var ipField = ipOpts.length
+      ? UIC.combo({ key: 'insurance_place', label: 'جهة التأمين', options: ipOpts, placeholder: 'اختر جهة التأمين...', required: true, allowNew: true })
+      : UIC.field({ key: 'insurance_place', label: 'جهة التأمين', required: true, placeholder: 'أدخل جهة التأمين' });
+
+    var chkField =
+      '<div class="form-field" data-field="Insurance_Status">' +
+        '<label class="form-label">حالة التأمين <span class="req">*</span></label>' +
+        '<div style="display:flex;align-items:center;gap:10px;height:38px;padding:0 12px;border:1px solid var(--border,#d1d5db);border-radius:6px;background:var(--surface,#fff);">' +
+          '<input type="checkbox" id="Insurance_Status_chk" checked onchange="var h=document.getElementById(\x27Insurance_Status\x27); if(h) h.value=this.checked?\x27TRUE\x27:\x27FALSE\x27; var lbl=document.getElementById(\x27Insurance_Status_lbl\x27); if(lbl) lbl.textContent=this.checked?\x27مؤمن (TRUE)\x27:\x27غير مؤمن (FALSE)\x27;" style="width:18px;height:18px;cursor:pointer;accent-color:var(--primary,#10b981);">' +
+          '<span id="Insurance_Status_lbl" style="font-weight:500;cursor:pointer;" onclick="document.getElementById(\x27Insurance_Status_chk\x27).click();">مؤمن (TRUE)</span>' +
+          '<input type="hidden" id="Insurance_Status" value="TRUE">' +
+        '</div>' +
+        '<div class="field-error" id="err-Insurance_Status"></div>' +
+      '</div>';
+
+    var body = '<form id="employee-form">' +
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">' +
+        UIC.field({ key: 'Employee_Code', label: 'كود الموظف', type: 'number', min: 1, required: true, value: maxCode + 1, readonly: true }) +
+        UIC.field({ key: 'Employee_name', label: 'اسم الموظف', required: true, placeholder: 'اسم الموظف بالكامل' }) +
+      '</div>' +
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">' +
+        UIC.combo({ key: 'title', label: 'المسمى الوظيفي', options: TITLE_OPTIONS || [], placeholder: 'اختر المسمى...', required: true }) +
+        UIC.field({ key: 'section', label: 'القسم', required: true, readonly: true, placeholder: 'يُملأ تلقائياً من المسمى' }) +
+      '</div>' +
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">' +
+        UIC.field({ key: 'gross_salary', label: 'الراتب الأساسي', type: 'number', step: '0.01', min: '0', required: true, placeholder: '0.00' }) +
+        UIC.field({ key: 'allow', label: 'البدلات', type: 'number', step: '0.01', min: '0', required: true, placeholder: '0.00' }) +
+      '</div>' +
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">' +
+        UIC.field({ key: 'Hiring_Date', label: 'تاريخ التعيين', type: 'date', required: true }) +
+        UIC.field({ key: 'National_ID', label: 'الرقم القومي (14 رقماً)', required: true, pattern: '^[0-9]{14}$', maxlength: '14', minlength: '14', placeholder: '14 رقماً' }) +
+      '</div>' +
+      UIC.field({ key: 'Address', label: 'العنوان', required: true, placeholder: 'محل الإقامة' }) +
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">' +
+        UIC.field({ key: 'Birth_Date', label: 'تاريخ الميلاد', type: 'date', required: true }) +
+        UIC.field({ key: 'age', label: 'العمر (محسوب)', type: 'number', step: '0.01', readonly: true, placeholder: 'يُحسب تلقائياً من تاريخ الميلاد' }) +
+      '</div>' +
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">' +
+        UIC.field({ key: 'Insusrance_number', label: 'رقم التأمين', type: 'number', step: '1', min: '1', required: true, placeholder: 'رقم صحيح' }) +
+        chkField +
+      '</div>' +
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">' +
+        UIC.combo({ key: 'Military_status', label: 'حالة التجنيد', options: [{ value: 'إعفاء', label: 'إعفاء' }, { value: 'أدى الخدمة', label: 'أدى الخدمة' }], placeholder: 'اختر...', required: true }) +
+        UIC.combo({ key: 'Gender', label: 'النوع', options: [{ value: 'ذكر', label: 'ذكر' }, { value: 'أنثى', label: 'أنثى' }], placeholder: 'اختر...', required: true }) +
+      '</div>' +
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">' +
+        UIC.field({ key: 'Vacation_Limit', label: 'رصيد الإجازات (أيام)', type: 'number', step: '1', min: '0', required: true, value: 21, placeholder: '21' }) +
+        UIC.combo({ key: 'status', label: 'الحالة', options: [{ value: 'يعمل بالشركة', label: 'يعمل بالشركة' }, { value: 'استقالة', label: 'استقالة' }, { value: 'الوفاة', label: 'الوفاة' }, { value: 'معاش', label: 'معاش' }], placeholder: 'اختر...', required: true, value: 'يعمل بالشركة' }) +
+      '</div>' +
+      ipField +
+      '</form>';
+
+    UIC.openModal('employee-modal', { title: 'إضافة موظف قانوني', size: 'lg', body: body, onSave: 'saveEmployee()' });
+
+    var secEl = document.getElementById('section');
+    if (secEl) { secEl.setAttribute('readonly', 'readonly'); secEl.style.background = 'var(--surface-2, #f3f4f6)'; }
+    var ageEl = document.getElementById('age');
+    if (ageEl) { ageEl.setAttribute('readonly', 'readonly'); ageEl.style.background = 'var(--surface-2, #f3f4f6)'; }
+    var codeEl = document.getElementById('Employee_Code');
+    if (codeEl) { codeEl.setAttribute('readonly', 'readonly'); codeEl.style.background = 'var(--surface-2, #f3f4f6)'; }
+
+    // Auto-fill section from chosen title
+    function updateSection() {
+      var tEl = document.getElementById('title');
+      var tDisp = document.getElementById('title_display');
+      var tVal = tEl ? tEl.value : '';
+      var dispVal = tDisp ? tDisp.value : '';
+      var hit = (TITLE_OPTIONS || []).find(function (o) {
+        return String(o.value) === String(tVal) || String(o.label) === String(dispVal);
+      });
+      if (secEl) secEl.value = (hit && hit.section) ? hit.section : '';
+    }
+    var titleEl = document.getElementById('title');
+    if (titleEl) titleEl.addEventListener('change', updateSection);
+    var titleDisp = document.getElementById('title_display');
+    if (titleDisp) titleDisp.addEventListener('input', updateSection);
+
+    // Auto-calculate age from Birth_Date
+    var birthEl = document.getElementById('Birth_Date');
+    function updateAge() {
+      var bVal = birthEl ? birthEl.value : '';
+      if (!ageEl) return;
+      if (bVal) {
+        var d = new Date(bVal);
+        if (!isNaN(d.getTime())) {
+          var today = new Date();
+          var diff = (today.getTime() - d.getTime()) / (365.25 * 24 * 3600 * 1000);
+          ageEl.value = Math.max(0, Math.round(diff * 100) / 100);
+        } else {
+          ageEl.value = '';
+        }
+      } else {
+        ageEl.value = '';
+      }
+    }
+    if (birthEl) {
+      birthEl.addEventListener('change', updateAge);
+      birthEl.addEventListener('input', updateAge);
+    }
+  }
+
+  function saveEmployee() {
+    if (!UIC.validateForm('employee-form')) return;
+    var data = UIC.collectForm('employee-form');
+
+    // Strict 14 digits check for National_ID
+    var nid = String(data.National_ID || '').trim();
+    if (!/^\d{14}$/.test(nid)) {
+      var nidErr = document.getElementById('err-National_ID');
+      if (nidErr) nidErr.textContent = 'الرقم القومي يجب أن يتكون من 14 رقماً بالضبط';
+      var nidFld = document.querySelector('[data-field="National_ID"]');
+      if (nidFld) nidFld.classList.add('has-error');
+      if (typeof UI !== 'undefined' && UI.toast) UI.toast('الرقم القومي يجب أن يتكون من 14 رقماً', 'warning');
+      return;
+    }
+
+    EMPLOYEES = EMPLOYEES || [];
+    var draft = {
+      employee_code: data.Employee_Code,
+      employee_name: data.Employee_name,
+      title: data.title,
+      section: data.section,
+      gross_salary: Number(data.gross_salary) || 0,
+      allow: Number(data.allow) || 0,
+      hiring_date: data.Hiring_Date,
+      national_id: data.National_ID,
+      address: data.Address,
+      birth_date: data.Birth_Date,
+      age: Number(data.age) || 0,
+      insusrance_number: data.Insusrance_number,
+      insurance_status: data.Insurance_Status,
+      military_status: data.Military_status,
+      gender: data.Gender,
+      vacation_limit: data.Vacation_Limit,
+      status: data.status,
+      insurance_place: data.insurance_place
+    };
+    UIC.Live.save({
+      call: companyCall,
+      action: 'add_legal_employee',
+      data: data,
+      list: EMPLOYEES,
+      key: 'employee_code',
+      draft: draft,
+      render: render,
+      modal: 'employee-modal',
+      message: 'تمت الإضافة',
+      queueable: false,
+      reload: function () { fetchEmployees(true); },
+      recordOf: function (resp) {
+        if (resp && resp.record && resp.record.employee_code != null && resp.record.employee_code !== '') return resp.record;
+        return Object.assign({}, draft);
+      }
+    }).catch(function () { /* UIC.Live has toasted and rolled back */ });
+  }
+
+  function renderSalaries() {
+    var monthOptionsList = (SAL_MONTH_OPTIONS && SAL_MONTH_OPTIONS.length)
+      ? SAL_MONTH_OPTIONS
+      : [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map(function (i) { return { value: i, label: MONTHS[i] }; });
+
+    var mOpts = '<option value="">كل الشهور</option>' + monthOptionsList.map(function (m) {
+      return '<option value="' + m.value + '"' + (String(SFILTER.month) === String(m.value) ? ' selected' : '') + '>' + m.label + '</option>';
+    }).join('');
+
+    var yOpts = '<option value="">كل السنوات</option>' + [2022, 2023, 2024, 2025, 2026].map(function (y) {
+      return '<option value="' + y + '"' + (String(SFILTER.year) === String(y) ? ' selected' : '') + '>' + y + '</option>';
+    }).join('');
+
+    var rows = SALARIES.map(function (s) {
+      return {
+        code: FMT.escape(s.employee_code),
+        name: FMT.escape(s.employee_name || '-'),
+        type: FMT.escape(s.transaction_type || 'salaries'),
+        gross: Number(s.gross_salary) || 0,
+        allow: Number(s.emp_allow != null ? s.emp_allow : s.allow) || 0,
+        comp_insurance: Number(s.comp_insurance) || 0,
+        emp_insurance: Number(s.emp_insurance) || 0,
+        loan: Number(s.emp_loan) || 0,
+        tax_pool: Number(s.tax_pool) || 0,
+        emp_tax: Number(s.emp_tax) || 0,
+        penalties: Number(s.emp_penalties) || 0,
+        others: Number(s.emp_others) || 0,
+        net: Number(s.emp_net_salary) || 0,
+        month: FMT.escape(s.month_arabic_name || MONTHS[Number(s.payroll_month)] || '-'),
+        date: FMT.escape(s.payroll_date || '-'),
+        dept: FMT.escape(s.employee_dept || '-'),
+        dept_class: FMT.escape(s.dept_classification || '-'),
+        tax_period: FMT.escape(s.tax_period || 'period 5')
+      };
+    });
+
+    var headers = [
+      { key: 'code', label: 'الكود' },
+      { key: 'name', label: 'الاسم' },
+      { key: 'type', label: 'النوع' },
+      { key: 'gross', label: 'الأساسي', money: true },
+      { key: 'allow', label: 'البدلات', money: true },
+      { key: 'comp_insurance', label: 'تأمين الشركة', money: true },
+      { key: 'emp_insurance', label: 'تأمين العامل', money: true },
+      { key: 'loan', label: 'سلف', money: true },
+      { key: 'tax_pool', label: 'وعاء الضريبة', money: true },
+      { key: 'emp_tax', label: 'الضرائب', money: true },
+      { key: 'penalties', label: 'جزاءات', money: true },
+      { key: 'others', label: 'أخرى', money: true },
+      { key: 'net', label: 'الصافي', money: true },
+      { key: 'month', label: 'الشهر' },
+      { key: 'date', label: 'تاريخ الصرف' },
+      { key: 'dept', label: 'القسم' },
+      { key: 'dept_class', label: 'تصنيف القسم' },
+      { key: 'tax_period', label: 'الفترة' }
+    ];
+
+    var totalGross = SALARIES.reduce(function (s, r) { return s + (Number(r.gross_salary) || 0); }, 0);
+    var totalComp = SALARIES.reduce(function (s, r) { return s + (Number(r.comp_insurance) || 0); }, 0);
+    var totalTax = SALARIES.reduce(function (s, r) { return s + (Number(r.emp_tax) || 0); }, 0);
+    var totalNet = SALARIES.reduce(function (s, r) { return s + (Number(r.emp_net_salary) || 0); }, 0);
+
+    document.getElementById('hr-table-area').innerHTML =
+      '<div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin-bottom:12px;">' +
+        '<select id="sal-fmonth" class="input" style="width:auto;" onchange="setSFilter(\'month\', this.value)">' + mOpts + '</select>' +
+        '<select id="sal-fyear" class="input" style="width:auto;" onchange="setSFilter(\'year\', this.value)">' + yOpts + '</select>' +
+        '<div style="display:flex;flex-wrap:wrap;gap:12px;font-size:13px;color:#374151;margin-right:auto;">' +
+          '<span>إجمالي الأساسي: <b>' + FMT.currency(totalGross) + '</b></span>' +
+          '<span>تأمين الشركة: <b>' + FMT.currency(totalComp) + '</b></span>' +
+          '<span>إجمالي الضرائب: <b>' + FMT.currency(totalTax) + '</b></span>' +
+          '<span>إجمالي الصافي: <b style="color:var(--brand-primary,#2563eb);">' + FMT.currency(totalNet) + '</b></span>' +
+        '</div>' +
+        (CAN_WRITE ? '<button class="btn btn-primary" onclick="openSalaryModal()">+ إضافة مرتب</button>' : '') +
+      '</div>' +
+      UIC.dataTable('hr-salaries-table', { title: 'مرتبات الميزانية', headers: headers, rows: rows, emptyText: 'لا توجد مرتّبات' });
+    UIC.initTableSort('hr-salaries-table');
+  }
+
+  function setSFilter(k, v) { SFILTER[k] = v; fetchSalaries(); }
+
+  function calcClientSalaryTax(pool) {
+    pool = Number(pool) || 0;
+    if (pool <= 0 || pool <= 30000) return 0;
+    if (pool <= 45000) return Math.round((pool - 30000) * 0.10 * 100) / 100;
+    if (pool <= 60000) return Math.round(((pool - 45000) * 0.15 + 1500) * 100) / 100;
+    if (pool <= 200000) return Math.round(((pool - 60000) * 0.20 + 3750) * 100) / 100;
+    if (pool <= 400000) return Math.round(((pool - 200000) * 0.225 + 31750) * 100) / 100;
+    if (pool <= 600000) return Math.round(((pool - 400000) * 0.25 + 76750) * 100) / 100;
+    if (pool <= 700000) return Math.round(((pool - 400000) * 0.25 + 77500) * 100) / 100;
+    if (pool <= 800000) return Math.round(((pool - 400000) * 0.25 + 79750) * 100) / 100;
+    if (pool <= 900000) return Math.round(((pool - 400000) * 0.25 + 82000) * 100) / 100;
+    if (pool <= 1200000) return Math.round(((pool - 400000) * 0.25 + 90000) * 100) / 100;
+    return Math.round(((pool - 1200000) * 0.275 + 300000) * 100) / 100;
+  }
+
+  function recomputeSalaryModal() {
+    var codeEl = document.getElementById('employee_code');
+    var code = codeEl ? codeEl.value : '';
+    var emp = (SAL_EMPLOYEE_OPTIONS || []).find(function (e) { return String(e.value || e.employee_code) === String(code); });
+    if (!emp && EMPLOYEES) {
+      emp = EMPLOYEES.find(function (e) { return String(e.employee_code) === String(code); });
+    }
+    emp = emp || {};
+
+    var name = emp.employee_name || '';
+    var gross = Number(emp.gross_salary) || 0;
+    var allow = Number(emp.emp_allow != null ? emp.emp_allow : (emp.allow != null ? emp.allow : 0));
+    var dept = emp.employee_dept || emp.section || '';
+    var classification = emp.dept_classification || '';
+
+    var typeEl = document.getElementById('transaction_type');
+    var type = typeEl ? typeEl.value : 'salaries';
+    if (type !== 'salaries' && type !== 'Bonus') type = 'salaries';
+
+    var insVal = emp.insurance_status != null ? emp.insurance_status : emp.Insurance_Status;
+    var isIns = (insVal === true || insVal === 'TRUE' || insVal === 'true' || insVal === 'مؤمن' || insVal === 1 || insVal === '1');
+    var age = Number(emp.age) || 0;
+
+    var compIns = 0;
+    var empIns = 0;
+    if (type === 'Bonus') {
+      compIns = 0;
+      empIns = 0;
+    } else if (isIns) {
+      if (age > 60) {
+        compIns = Math.round(gross * 0.0475 * 100) / 100;
+        empIns = Math.round(gross * 0.01 * 100) / 100;
+      } else {
+        compIns = Math.round(gross * 0.1875 * 100) / 100;
+        empIns = Math.round(gross * 0.11 * 100) / 100;
+      }
+    }
+
+    var loan = Number(document.getElementById('emp_loan') ? document.getElementById('emp_loan').value : 0) || 0;
+    var others = Number(document.getElementById('emp_others') ? document.getElementById('emp_others').value : 0) || 0;
+    var penalties = Number(document.getElementById('emp_penalties') ? document.getElementById('emp_penalties').value : 0) || 0;
+
+    var pool = Math.round((gross + allow - empIns - 1250) * 12 * 100) / 100;
+    var tax = calcClientSalaryTax(pool);
+    var net = Math.round((gross + allow - loan - empIns - tax - others - penalties) * 100) / 100;
+
+    var mEl = document.getElementById('payroll_month');
+    var mVal = mEl && mEl.value ? Number(mEl.value) : 1;
+    var yEl = document.getElementById('payroll_year');
+    var yVal = yEl && yEl.value ? Number(yEl.value) : new Date().getFullYear();
+
+    var mStr = mVal < 10 ? '0' + mVal : String(mVal);
+    var pDate = yVal + '-' + mStr + '-28';
+
+    var mName = '';
+    if (SAL_MONTH_OPTIONS && SAL_MONTH_OPTIONS.length) {
+      var foundM = SAL_MONTH_OPTIONS.find(function (o) { return Number(o.value) === mVal; });
+      if (foundM) mName = foundM.label;
+    }
+    if (!mName) mName = MONTHS[mVal] || '';
+
+    function setPreview(id, val) {
+      var el = document.getElementById(id);
+      if (el) el.textContent = val;
+    }
+    setPreview('prev_emp_name', name || '-');
+    setPreview('prev_dept', dept || '-');
+    setPreview('prev_classification', classification || '-');
+    setPreview('prev_gross', FMT.currency(gross));
+    setPreview('prev_allow', FMT.currency(allow));
+    setPreview('prev_comp_ins', FMT.currency(compIns));
+    setPreview('prev_emp_ins', FMT.currency(empIns));
+    setPreview('prev_tax_pool', FMT.currency(pool));
+    setPreview('prev_emp_tax', FMT.currency(tax));
+    setPreview('prev_net', FMT.currency(net));
+    setPreview('prev_month_ar', mName || '-');
+    setPreview('prev_payroll_date', pDate);
+    setPreview('prev_tax_period', 'period 5');
+  }
+
+  function openSalaryModal() {
+    var empOpts = (SAL_EMPLOYEE_OPTIONS && SAL_EMPLOYEE_OPTIONS.length)
+      ? SAL_EMPLOYEE_OPTIONS.map(function (e) { return { value: e.value, label: e.label }; })
+      : EMPLOYEES.map(function (e) {
+          return { value: e.employee_code, label: String(e.employee_code) + ' - ' + (e.employee_name || '') };
+        }).filter(function (o) { return o.value !== undefined && o.value !== null; });
+
+    var now = new Date();
+    var defMonth = now.getMonth();
+    if (defMonth === 0) defMonth = 12;
+    var defYear = (now.getMonth() === 0) ? now.getFullYear() - 1 : now.getFullYear();
+
+    var monthOpts = (SAL_MONTH_OPTIONS && SAL_MONTH_OPTIONS.length)
+      ? SAL_MONTH_OPTIONS
+      : [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map(function (i) { return { value: i, label: MONTHS[i] }; });
+
+    var transOpts = (SAL_TRANSACTION_OPTIONS && SAL_TRANSACTION_OPTIONS.length)
+      ? SAL_TRANSACTION_OPTIONS
+      : [{ value: 'salaries', label: 'salaries' }, { value: 'Bonus', label: 'Bonus' }];
+
+    var previewCard =
+      '<div style="background:var(--surface-sunken,#f9fafb);border:1px solid var(--border-subtle,#e5e7eb);border-radius:var(--radius-md,8px);padding:12px;margin-bottom:14px;">' +
+        '<div style="font-weight:600;font-size:13px;margin-bottom:8px;color:var(--text-main,#111827);">معاينة الحسابات التلقائية</div>' +
+        '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;font-size:12px;">' +
+          '<div><span style="color:#6b7280;">اسم الموظف:</span> <span id="prev_emp_name" style="font-weight:500;">-</span></div>' +
+          '<div><span style="color:#6b7280;">القسم:</span> <span id="prev_dept" style="font-weight:500;">-</span></div>' +
+          '<div><span style="color:#6b7280;">تصنيف القسم:</span> <span id="prev_classification" style="font-weight:500;">-</span></div>' +
+          '<div><span style="color:#6b7280;">الراتب الأساسي:</span> <span id="prev_gross" style="font-weight:500;">0.00</span></div>' +
+          '<div><span style="color:#6b7280;">البدلات:</span> <span id="prev_allow" style="font-weight:500;">0.00</span></div>' +
+          '<div><span style="color:#6b7280;">تأمين الشركة:</span> <span id="prev_comp_ins" style="font-weight:500;">0.00</span></div>' +
+          '<div><span style="color:#6b7280;">تأمين العامل:</span> <span id="prev_emp_ins" style="font-weight:500;">0.00</span></div>' +
+          '<div><span style="color:#6b7280;">وعاء الضريبة:</span> <span id="prev_tax_pool" style="font-weight:500;">0.00</span></div>' +
+          '<div><span style="color:#6b7280;">الضرائب:</span> <span id="prev_emp_tax" style="font-weight:500;">0.00</span></div>' +
+          '<div><span style="color:#6b7280;">شهر المرتب:</span> <span id="prev_month_ar" style="font-weight:500;">-</span></div>' +
+          '<div><span style="color:#6b7280;">تاريخ الصرف:</span> <span id="prev_payroll_date" style="font-weight:500;">-</span></div>' +
+          '<div><span style="color:#6b7280;">فترة الضريبة:</span> <span id="prev_tax_period" style="font-weight:500;">period 5</span></div>' +
+          '<div style="grid-column:1/-1;border-top:1px dashed #d1d5db;padding-top:6px;margin-top:2px;">' +
+            '<span style="color:#6b7280;font-size:13px;">الصافي التقديري:</span> ' +
+            '<span id="prev_net" style="font-weight:bold;font-size:15px;color:var(--brand-primary,#2563eb);">0.00</span>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+
+    var body = '<form id="salary-form">' +
+      previewCard +
+      UIC.combo({ key: 'employee_code', label: 'كود الموظف', required: true, options: empOpts, placeholder: 'اختر الموظف...' }) +
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">' +
+        UIC.combo({ key: 'payroll_month', label: 'شهر المرتب', required: true, options: monthOpts, value: defMonth }) +
+        UIC.field({ key: 'payroll_year', label: 'سنة المرتب', type: 'number', min: 2000, required: true, value: defYear }) +
+      '</div>' +
+      UIC.combo({ key: 'transaction_type', label: 'نوع المعاملة', required: true, options: transOpts, value: 'salaries' }) +
+      '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;">' +
+        UIC.field({ key: 'emp_loan', label: 'سلف / قروض', type: 'number', step: '0.01', min: 0, value: 0 }) +
+        UIC.field({ key: 'emp_penalties', label: 'جزاءات', type: 'number', step: '0.01', min: 0, value: 0 }) +
+        UIC.field({ key: 'emp_others', label: 'استقطاعات أخرى', type: 'number', step: '0.01', value: 0 }) +
+      '</div>' +
+      '</form>';
+
+    UIC.openModal('salary-modal', { title: 'إضافة مرتب ميزانية', body: body, onSave: 'saveSalary()' });
+
+    var form = document.getElementById('salary-form');
+    if (form) {
+      form.addEventListener('input', recomputeSalaryModal);
+      form.addEventListener('change', recomputeSalaryModal);
+    }
+    ['employee_code', 'payroll_month', 'transaction_type'].forEach(function (k) {
+      var el = document.getElementById(k);
+      if (el) el.addEventListener('change', recomputeSalaryModal);
+      var disp = document.getElementById(k + '_display');
+      if (disp) disp.addEventListener('input', recomputeSalaryModal);
+    });
+    setTimeout(recomputeSalaryModal, 50);
+  }
+
+  function saveSalary() {
+    if (!UIC.validateForm('salary-form')) return;
+    var data = UIC.collectForm('salary-form');
+    var code = Number(data.employee_code);
+    var month = Number(data.payroll_month);
+    var year = Number(data.payroll_year);
+    var type = String(data.transaction_type || 'salaries').trim();
+    if (type !== 'salaries' && type !== 'Bonus') type = 'salaries';
+    var loan = Number(data.emp_loan) || 0;
+    var others = Number(data.emp_others) || 0;
+    var penalties = Number(data.emp_penalties) || 0;
+
+    var payload = {
+      employee_code: code,
+      payroll_month: month,
+      payroll_year: year,
+      transaction_type: type,
+      emp_loan: loan,
+      emp_others: others,
+      emp_penalties: penalties
+    };
+
+    var emp = (SAL_EMPLOYEE_OPTIONS || []).find(function (e) { return Number(e.value || e.employee_code) === code; });
+    if (!emp && EMPLOYEES) emp = EMPLOYEES.find(function (e) { return Number(e.employee_code) === code; });
+    emp = emp || {};
+
+    var gross = Number(emp.gross_salary) || 0;
+    var allow = Number(emp.emp_allow != null ? emp.emp_allow : (emp.allow != null ? emp.allow : 0));
+    var insVal = emp.insurance_status != null ? emp.insurance_status : emp.Insurance_Status;
+    var isIns = (insVal === true || insVal === 'TRUE' || insVal === 'true' || insVal === 'مؤمن' || insVal === 1 || insVal === '1');
+    var age = Number(emp.age) || 0;
+
+    var compIns = 0;
+    var empIns = 0;
+    if (type !== 'Bonus' && isIns) {
+      compIns = age > 60 ? Math.round(gross * 0.0475 * 100) / 100 : Math.round(gross * 0.1875 * 100) / 100;
+      empIns = age > 60 ? Math.round(gross * 0.01 * 100) / 100 : Math.round(gross * 0.11 * 100) / 100;
+    }
+    var pool = Math.round((gross + allow - empIns - 1250) * 12 * 100) / 100;
+    var tax = calcClientSalaryTax(pool);
+    var net = Math.round((gross + allow - loan - empIns - tax - others - penalties) * 100) / 100;
+    var mStr = month < 10 ? '0' + month : String(month);
+    var pDate = year + '-' + mStr + '-28';
+    var mName = '';
+    if (SAL_MONTH_OPTIONS && SAL_MONTH_OPTIONS.length) {
+      var hitM = SAL_MONTH_OPTIONS.find(function (o) { return Number(o.value) === month; });
+      if (hitM) mName = hitM.label;
+    }
+    if (!mName) mName = MONTHS[month] || '';
+
+    var draft = {
+      employee_code: code,
+      employee_name: emp.employee_name || '',
+      gross_salary: gross,
+      comp_insurance: compIns,
+      emp_insurance: empIns,
+      emp_allow: allow,
+      emp_loan: loan,
+      tax_pool: pool,
+      emp_tax: tax,
+      emp_others: others,
+      emp_penalties: penalties,
+      emp_net_salary: net,
+      month_arabic_name: mName,
+      payroll_month: month,
+      payroll_year: year,
+      payroll_date: pDate,
+      employee_dept: emp.employee_dept || emp.section || '',
+      dept_classification: emp.dept_classification || '',
+      transaction_type: type,
+      tax_period: 'period 5',
+      __draft: 'tmp_' + Math.random().toString(36).slice(2, 10)
+    };
+
+    SALARIES = SALARIES || [];
+    UIC.Live.save({
+      call: companyCall,
+      action: 'add_legal_salary',
+      data: payload,
+      list: SALARIES,
+      key: '__draft',
+      draft: draft,
+      render: render,
+      modal: 'salary-modal',
+      message: 'تمت الإضافة',
+      queueable: false,
+      reload: function () { fetchSalaries(true); },
+      recordOf: function (resp) {
+        if (!(resp && resp.record)) return null;
+        var rec = Object.assign({}, resp.record);
+        rec.__draft = draft.__draft;
+        return rec;
+      },
+      onSuccess: function () {
+        render();
+      }
+    }).catch(function () { /* UIC.Live has toasted and rolled back */ });
+  }
+
+  function showError(e) {
+    UIC.toast((e && e.message) || 'خطأ غير متوقع', 'error');
+  }
+
+  /* Another device's change arrives quietly on the visible tab. */
+  function refreshQuiet() { if (TAB === 'salaries') fetchSalaries(true); else fetchEmployees(true); }
+  UIC.Live.watchPage({
+    call: companyCall,
+    page: 'tc_budget_hr',
+    onChange: function () { UIC.Live.arrive(refreshQuiet); }
+  });
+
+  load();
+</script>
+</body>
+</html>
+

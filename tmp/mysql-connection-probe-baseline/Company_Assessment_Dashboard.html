@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>مركز التقييم — لوحة التحكم</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_Assessment_Nav'); ?>
+  <?!= getCompanyThemeCSS_('32fafd256ccb7a1c') ?>
+  <style>
+    .ac-dash-wrap { display: flex; flex-direction: column; gap: var(--space-6); padding: 16px 20px 32px; }
+    .ac-dash-title { font-size: var(--text-2xl); font-weight: 800; color: var(--text-main); margin: 0; }
+    .ac-dash-sub { font-size: var(--text-base); font-weight: 800; color: var(--text-muted); margin: 0; }
+    /* Mobile-first: one KPI per row, two from tablet-p, four from tablet-l. */
+    .ac-kpi-row { display: grid; grid-template-columns: 1fr; gap: var(--space-3); }
+    .ac-module-grid { display: grid; grid-template-columns: 1fr; gap: var(--space-3); }
+    @media (min-width: 600px) {
+      .ac-kpi-row { grid-template-columns: 1fr 1fr; }
+      .ac-module-grid { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
+    }
+    @media (min-width: 900px) {
+      .ac-kpi-row { grid-template-columns: repeat(4, 1fr); }
+    }
+  </style>
+</head>
+<body>
+<div id="ac-root" dir="rtl"></div>
+<script>
+  var params = new URLSearchParams(window.location.search);
+  var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+  var scriptUrl = window.scriptUrl || '/';
+  var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('32fafd256ccb7a1c') ?>';
+  var COMPANY_PAGES = <?!= companyPages ?>;
+  var CURRENT_ACTION = '<?!= currentAction ?>';
+
+  function companyCall(moduleAction, data) {
+    return API.call('company_action', {
+      target_system: '32fafd256ccb7a1c',
+      module_action: moduleAction,
+      data: data || {}
+    }, SESSION_TOKEN);
+  }
+
+  function load() {
+    UIC.appShell('ac-root', {
+      companyLogoUrl: COMPANY_LOGO_URL,
+      companyLogoHref: scriptUrl + '?action=ac_dashboard&sessionToken=' + SESSION_TOKEN,
+      companyLogoTitle: 'مركز التقييم',
+      breadcrumb: 'مركز التقييم / لوحة التحكم',
+      contentId: 'ac-content',
+      menuGroups: (window.ASSESSMENT_MENU || [])
+    });
+
+    var inner = document.getElementById('ac-content');
+    if (!inner) return;
+
+    inner.innerHTML =
+      '<div class="ac-dash-wrap">' +
+        '<h1 class="ac-dash-title">مركز التقييم</h1>' +
+        '<div class="ac-kpi-row" id="ac-kpis">' +
+          kpiTile('active', 'تقييمات نشطة', 'file') +
+          kpiTile('open', 'دفعات مفتوحة', 'tag') +
+          kpiTile('progress', 'محاولات قيد التنفيذ', 'clock') +
+          kpiTile('review', 'بانتظار المراجعة', 'chart') +
+        '</div>' +
+        '<h2 class="ac-dash-sub">الوحدات</h2>' +
+        '<div class="ac-module-grid">' + moduleTiles() + '</div>' +
+      '</div>';
+
+    loadKpis();
+  }
+
+  /* A tile renders immediately with a placeholder, then fills in. One request
+     serves all four (get_ac_dashboard reads the three tabs once). */
+  function kpiTile(key, label, icon) {
+    return '<div class="stat-card" id="ac-kpi-' + key + '">' +
+      '<div class="stat-icon">' + UIC.icon(icon, { size: 24 }) + '</div>' +
+      '<div class="stat-body">' +
+        '<div class="stat-value" id="ac-kpi-' + key + '-v">—</div>' +
+        '<div class="stat-label">' + label + '</div>' +
+      '</div></div>';
+  }
+
+  function setKpi(key, value) {
+    var el = document.getElementById('ac-kpi-' + key + '-v');
+    if (el) el.textContent = (value == null) ? '—' : String(value);
+  }
+
+  function loadKpis() {
+    companyCall('get_ac_dashboard', {})
+      .then(function (r) {
+        var kpi = (r && r.kpi) || {};
+        setKpi('active', kpi.activeAssessments);
+        setKpi('open', kpi.openBatches);
+        setKpi('progress', kpi.inProgress);
+        setKpi('review', kpi.pendingReview);
+      })
+      .catch(function () {
+        setKpi('active', null); setKpi('open', null);
+        setKpi('progress', null); setKpi('review', null);
+      });
+  }
+
+  /* The module tiles come from COMPANY_PAGES, which the server already sends
+     and which is already filtered to what this user may open. */
+  function moduleTiles() {
+    var pages = (window.COMPANY_PAGES || []).filter(function (p) {
+      return p && p.action && p.action !== CURRENT_ACTION && UIC.pageAuthorized_(p.action);
+    });
+    if (!pages.length) {
+      return UIC.emptyState({
+        icon: 'lock',
+        title: 'لا توجد صفحات متاحة',
+        body: 'لم يتم منح حسابك صلاحية على أي صفحة في مركز التقييم. راجع مدير النظام.'
+      });
+    }
+    return pages.map(function (p) {
+      var href = scriptUrl + '?action=' + encodeURIComponent(p.action) + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN);
+      return UIC.moduleTile({
+        icon: UIC.icon(iconFor(p.action), { size: 26 }),
+        title: p.label || p.action,
+        subtitle: '',
+        onOpen: "UIC.navTo(event, '" + href + "')"
+      });
+    }).join('');
+  }
+
+  /* A rough mapping from page id to icon. An unknown page gets a neutral file
+     icon rather than nothing, so a new page added later still looks right. */
+  function iconFor(action) {
+    var a = String(action || '');
+    if (a.indexOf('assessment') !== -1) return 'file';
+    if (a.indexOf('batch') !== -1) return 'tag';
+    if (a.indexOf('result') !== -1) return 'chart';
+    if (a.indexOf('take') !== -1) return 'clock';
+    return 'file';
+  }
+
+  load();
+</script>
+</body>
+</html>

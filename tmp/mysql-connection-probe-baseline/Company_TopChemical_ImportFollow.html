@@ -1,0 +1,436 @@
+﻿<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>متابعة موافقات الاستيراد</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_TopChemical_Nav'); ?>
+  <?!= getCompanyThemeCSS_('3fe1b5cb67b7223e') ?>
+</head>
+<body>
+<div id="tc-root" dir="rtl"></div>
+<script>
+  var params = new URLSearchParams(window.location.search);
+  var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+  var scriptUrl = window.scriptUrl || '/';
+  var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+  var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('3fe1b5cb67b7223e') ?>';
+  var COMPANY_PAGES = <?!= companyPages ?>;
+  var CURRENT_ACTION = '<?!= currentAction ?>';
+  var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+  var CAN_WRITE = UIC.canAdd_(); var CAN_FULL = UIC.canFull_();
+  var FILE_FIELDS = [
+    { field: 'porforma_file', label: 'ملف الفاتورة المبدئية (pdf, word)', accept: '.pdf,.doc,.docx' },
+    { field: 'swift_file', label: 'ملف SWIFT (pdf, word)', accept: '.pdf,.doc,.docx' },
+    { field: 'approval_1', label: 'صورة الموافقة 1', accept: '.png,.jpg,.jpeg' },
+    { field: 'approval_2', label: 'صورة الموافقة 2', accept: '.png,.jpg,.jpeg' },
+    { field: 'approval_3', label: 'صورة الموافقة 3', accept: '.png,.jpg,.jpeg' }
+  ];
+
+  function companyCall(moduleAction, data) {
+    return API.call('company_action', {
+      target_system: '3fe1b5cb67b7223e',
+      module_action: moduleAction,
+      data: data || {}
+    }, SESSION_TOKEN);
+  }
+
+  function esc(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  function todayStr() {
+    var d = new Date();
+    var p = function (n) { return ('0' + n).slice(-2); };
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+  }
+
+  function fmtDate(v) {
+    if (v == null || v === '') return '';
+    var d = (v instanceof Date) ? v : new Date(v);
+    if (isNaN(d.getTime())) return String(v);
+    var p = function (n) { return ('0' + n).slice(-2); };
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+  }
+
+  function fileFieldCustom(key, label, accept) {
+    return '<div class="form-field" data-field="' + key + '">' +
+      '<label class="form-label" for="' + key + '">' + label + '</label>' +
+      '<input id="' + key + '" data-field-name="' + key + '" data-uic-instant="1" data-uic-sheet="legal_importation_follow" data-uic-field="' + key + '" data-uic-form="import-modal" class="input" type="file" accept="' + accept + '">' +
+      '<div class="uic-file-preview" data-uic-file-preview hidden aria-live="polite"></div>' +
+      '<div class="field-error" id="err-' + key + '"></div>' +
+      '</div>';
+  }
+
+  function load() {
+    var contentId = 'import-content';
+    UIC.appShell('tc-root', {
+      companyLogoUrl: COMPANY_LOGO_URL,
+      companyLogoHref: scriptUrl + '?action=tc_dashboard&sessionToken=' + SESSION_TOKEN,
+      companyLogoTitle: 'توب كيميكال',
+      breadcrumb: 'توب كيميكال / الاستيراد والمشتريات / متابعة موافقات الاستيراد',
+      contentId: contentId,
+      menuGroups: (window.TOPCHEMICAL_MENU || [])
+    });
+    fetchFollows();
+  }
+
+  var IMPORT_ALL = false;
+  function toggleImportAll() { IMPORT_ALL = !IMPORT_ALL; fetchFollows(); }
+
+  function fetchFollows(quiet) {
+    if (!quiet) UI.showSpinner();
+    companyCall('get_import_follow', IMPORT_ALL ? { loadAll: true } : {})
+      .then(function (r) {
+        window.__follows = r.follows || [];
+        window.__vendorOptions = r.vendor_options || [];
+        window.__productOptions = r.product_options || [];
+        renderFollows();
+      })
+      .catch(function (e) { showError(e); })
+      .finally(function () { if (!quiet) UI.hideSpinner(); try{schedulePrefetch();}catch(e){} });
+  }
+
+  function statusBadge(st) {
+    var s = String(st || '').trim();
+    if (s === 'Approve') return '<span class="badge" style="background:#f59e0b;color:#fff;">موافقة</span>';
+    if (s === 'Imported') return '<span class="badge" style="background:#3b82f6;color:#fff;">مستورد</span>';
+    if (s === 'Received') return '<span class="badge" style="background:#22c55e;color:#fff;">مستلم</span>';
+    return '<span class="badge" style="background:#9ca3af;color:#fff;">بدون حالة</span>';
+  }
+
+  function advanceStatus(id) {
+    if (!confirm('نقل السجل إلى الحالة التالية؟')) return;
+    /* Tier B status flip: the state machine (Approve → Imported → Received)
+       can refuse on a terminal row invisible in the button, so NO draft is
+       painted: canPatch stays false, only the quiet corner hint shows, and
+       the row is patched from the reply instead. A refusal toasts exactly as
+       before and never paints. Confirm unchanged. queueable:false: a status
+       precondition makes a later replay meaningless (I3), so a transport
+       failure rolls back loudly. */
+    UIC.Live.save({
+      call: companyCall,
+      action: 'update_import_follow_status',
+      data: { id: id },
+      message: 'تم النقل',
+      queueable: false,
+      reload: function () { fetchFollows(true); },
+      onSuccess: function (r) {
+        /* F-21: updateImportFollowStatus_ writes exactly one cell (status) on
+         * one row and cascades to nothing, and this is an update rather than an
+         * add or a delete, so the 20-row list limit is unaffected — the same twenty
+         * rows stay visible either way. renderFollows() derives the badge and
+         * the action buttons from f.status alone, so patching that one field
+         * reproduces exactly what a reload would draw. Falls back to the full
+         * fetch if the row or the new status is missing. */
+        var rec = (window.__follows || []).filter(function (f) { return Number(f.id) === Number(id); })[0];
+        if (rec && r && r.new_status) { rec.status = r.new_status; renderFollows(); }
+        else fetchFollows(true);
+      }
+    }).catch(function () { /* UIC.Live has toasted */ });
+  }
+
+  function openDetailById(id) {
+    var idx = -1;
+    (window.__follows || []).forEach(function (f, i) { if (Number(f.id) === Number(id)) idx = i; });
+    if (idx > -1) openDetail(idx);
+  }
+
+  function renderFollows() {
+    var list = window.__follows;
+    var filter = window.__productFilter || '';
+    var filtered = filter ? list.filter(function (f) { return (f.product_name || ('#' + f.product)) === filter; }) : list;
+    var groups = {};
+    filtered.forEach(function (f) {
+      var key = f.product_name || ('#' + f.product);
+      (groups[key] = groups[key] || []).push(f);
+    });
+    var keys = Object.keys(groups).sort(function (a, b) { return String(a).localeCompare(String(b), 'ar'); });
+    var headers = [
+      { key: 'id', label: '#', numeric: true },
+      { key: 'vendor', label: 'المورد' },
+      { key: 'approval_sent_date', label: 'تاريخ الإرسال', numeric: true },
+      { key: 'proforma_invoice_code', label: 'كود الفاتورة المبدئية' },
+      { key: 'acid', label: 'ACID' },
+      { key: 'proforma_invoice_date', label: 'تاريخ الفاتورة المبدئية', numeric: true },
+      { key: 'invoice_value', label: 'قيمة الفاتورة', numeric: true },
+      { key: 'product_amount', label: 'كمية المنتج', numeric: true },
+      { key: 'bank', label: 'البنك' },
+      { key: 'approval_number', label: 'رقم الموافقة', numeric: true },
+      { key: 'approval_date', label: 'تاريخ الموافقة', numeric: true },
+      { key: 'approval_expiry_date', label: 'تاريخ الانتهاء', numeric: true },
+      { key: 'status', label: 'الحالة' },
+      { key: 'actions', label: 'إجراءات' }
+    ];
+    var seen = {};
+    var names = [];
+    list.forEach(function (f) {
+      var k = f.product_name || ('#' + f.product);
+      if (!seen[k]) { seen[k] = true; names.push(k); }
+    });
+    names.sort(function (a, b) { return String(a).localeCompare(String(b), 'ar'); });
+    var productOptions = names.map(function (n) {
+      return '<option value="' + esc(n) + '">' + esc(n) + '</option>';
+    }).join('');
+
+    var html =
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px;">' +
+      (CAN_WRITE ? '<button class="btn btn-primary" onclick="openAddModal()">+ إضافة متابعة</button>' : '') +
+      '<label class="form-label" style="margin:0;">المنتج: ' +
+      '<select id="import-product-filter" class="input" style="width:auto;display:inline-block;margin-left:6px;">' +
+      '<option value="">جميع المنتجات</option>' + productOptions + '</select></label></div>' +
+      UIC.showAllBar({ loadedAll: IMPORT_ALL, showAll: 'toggleImportAll()', showLatest: 'toggleImportAll()' });
+
+    if (!keys.length) {
+      html += '<div class="empty-state"><span>لا توجد متابعات</span></div>';
+    } else {
+      keys.forEach(function (key, gi) {
+        var gRows = groups[key].map(function (f) {
+          return {
+            id: f.id,
+            vendor: esc(f.vendor || '-'),
+            approval_sent_date: fmtDate(f.approval_sent_date),
+            proforma_invoice_code: esc(f.proforma_invoice_code || '-'),
+            acid: esc(f.acid || '-'),
+            proforma_invoice_date: fmtDate(f.proforma_invoice_date),
+            invoice_value: f.invoice_value,
+            product_amount: f.product_amount,
+            bank: esc(f.bank || '-'),
+            approval_number: f.approval_number,
+            approval_date: fmtDate(f.approval_date),
+            approval_expiry_date: fmtDate(f.approval_expiry_date),
+            status: statusBadge(f.status),
+            actions: UIC.actionBtns((CAN_WRITE && String(f.status || '').trim() !== 'Received'
+              ? [{ label: 'التالي', onclick: 'advanceStatus(' + f.id + ')' }]
+              : []).concat([{ label: 'عرض', onclick: 'openDetailById(' + f.id + ')' }]))
+          };
+        });
+        html +=
+          '<div style="display:flex;justify-content:space-between;align-items:center;margin:18px 0 6px;">' +
+          '<h3 style="margin:0;font-size:15px;">' + esc(key) + '</h3>' +
+          '<span style="font-size:12px;color:var(--text-muted);">' + groups[key].length + ' سجل</span></div>' +
+          UIC.dataTable('import-table-' + gi, {
+            /* [RT-1] The list endpoint caps at the newest rows unless `loadAll` is
+               passed, and the search box filters only what is in memory — so the
+               table says which records the box actually searches. */
+            truncated: !IMPORT_ALL, showAll: 'toggleImportAll()', headers: headers, rows: gRows, emptyText: '' });
+        UIC.initTableSort('import-table-' + gi);
+      });
+    }
+    var body = document.getElementById('import-content');
+    body.innerHTML = html;
+    var pf = document.getElementById('import-product-filter');
+    if (pf) {
+      pf.value = filter || '';
+      pf.addEventListener('change', function () {
+        window.__productFilter = pf.value;
+        renderFollows();
+      });
+    }
+  }
+
+  function openAddModal() {
+    var body =
+      '<form id="import-follow-form">' +
+      UIC.field({ key: 'vendor', label: 'المورد', type: 'select', required: true,
+        options: window.__vendorOptions || [], placeholder: 'اختر المورد...' }) +
+      UIC.field({ key: 'product', label: 'المنتج', type: 'select', required: true,
+        options: window.__productOptions || [], placeholder: 'اختر المنتج...' }) +
+      UIC.field({ key: 'approval_sent_date', label: 'تاريخ الإرسال للموافقة', type: 'date', value: todayStr(), required: true }) +
+      UIC.field({ key: 'proforma_invoice_code', label: 'كود الفاتورة المبدئية', required: true, placeholder: 'مثال: CRS25K01533' }) +
+      UIC.field({ key: 'acid', label: 'رقم ACID (اختياري)', placeholder: 'رقم طويل (يُحفظ كنص للحفاظ على الدقة)' }) +
+      UIC.field({ key: 'proforma_invoice_date', label: 'تاريخ الفاتورة المبدئية', type: 'date', value: todayStr(), required: true }) +
+      UIC.field({ key: 'invoice_value', label: 'قيمة الفاتورة', type: 'number', step: '0.01', required: true, placeholder: 'مثال: 42400' }) +
+      UIC.field({ key: 'product_amount', label: 'كمية المنتج', type: 'number', step: '0.01', required: true, placeholder: 'مثال: 8000' }) +
+      UIC.field({ key: 'bank', label: 'البنك' }) +
+      UIC.field({ key: 'approval_number', label: 'رقم الموافقة', type: 'number', step: '1', placeholder: 'مثال: 2590' }) +
+      UIC.field({ key: 'approval_date', label: 'تاريخ الموافقة', type: 'date', placeholder: 'اختر التاريخ...' }) +
+      FILE_FIELDS.map(function (ff) { return fileFieldCustom(ff.field, ff.label, ff.accept); }).join('') +
+      '</form>';
+    UIC.openModal('import-modal', {
+      title: 'إضافة متابعة موافقة استيراد',
+      body: body,
+      onSave: 'saveImportFollow()'
+    });
+    try { UIC.trackDirty('import-follow-form'); } catch (e) {}
+  }
+
+  function saveImportFollow() {
+    var data = UIC.collectForm('import-follow-form');
+    if (!UIC.validateForm('import-follow-form')) return;
+    var formEl = document.getElementById('import-follow-form');
+    var doSave = function () {
+      /* Option A instant-upload: 5 files pre-bound on selection (per-row
+         status inline); save carries refs, no second files call. */
+      try {
+        FILE_FIELDS.forEach(function (ff) {
+          var input = formEl ? formEl.querySelector('input[data-field-name="' + ff.field + '"]') : null;
+          var bound = (input && UIC.UploadSet) ? UIC.UploadSet.getBound(input) : null;
+          if (bound && bound.ref) {
+            data[ff.field] = bound.ref;
+            if (bound.id) data[ff.field + '_id'] = bound.id;
+          } else if (input) {
+            var dr = input.getAttribute('data-ref') || '';
+            if (dr) data[ff.field] = dr;
+          }
+        });
+      } catch (e) {}
+      UIC.Live.save({
+        call: companyCall,
+        action: 'add_import_follow',
+        data: data,
+        modal: 'import-modal',
+        message: 'تم الحفظ',
+        queueable: false,
+        reload: function () { fetchFollows(true); },
+        onSuccess: function (r) {
+          var rec = (r && r.record) ? r.record : null;
+          if (!rec) { fetchFollows(true); return; }
+          window.__follows = window.__follows || [];
+          window.__follows.unshift(rec);
+          if (window.__follows.length>10) window.__follows=window.__follows.slice(0,10);
+          renderFollows();
+        }
+      }).catch(function () { /* UIC.Live has toasted */ });
+    };
+    try {
+      if (window.UIC && UIC.UploadSet && UIC.UploadSet.isBusy('import-modal')) {
+        UIC.toast('جاري رفع الملفات... يرجى الانتظار', 'warning');
+        UIC.UploadSet.awaitPending('import-modal').then(doSave);
+        return;
+      }
+    } catch (e2) {}
+    doSave();
+  }
+
+  function uploadFollowFiles(formEl, id) {
+    /* Legacy fallback: collect pre-bound refs when UploadSet present. */
+    try {
+      if (window.UIC && UIC.UploadSet) {
+        var refs = {};
+        FILE_FIELDS.forEach(function (ff) {
+          var input = formEl.querySelector('input[data-field-name="' + ff.field + '"]');
+          var b = input ? UIC.UploadSet.getBound(input) : null;
+          if (b && b.ref) {
+            refs[ff.field] = b.ref;
+            if (b.id) refs[ff.field + '_id'] = b.id;
+          }
+        });
+        return Promise.resolve(refs);
+      }
+    } catch (e) {}
+    var tasks = [];
+    FILE_FIELDS.forEach(function (ff) {
+      var input = formEl.querySelector('input[data-field-name="' + ff.field + '"]');
+      if (input && input.files && input.files[0]) {
+        tasks.push(readAndUpload(input.files[0], ff, id));
+      }
+    });
+    return Promise.all(tasks).then(function (results) {
+      var refs = {};
+      results.forEach(function (r) {
+        if (r && r.field) {
+          refs[r.field] = r.ref;
+          if (r.fileId) refs[r.field + '_id'] = r.fileId;
+        }
+      });
+      return refs;
+    });
+  }
+
+  function readAndUpload(file, ff, id) {
+    return new Promise(function (resolve, reject) {
+      var reader = new FileReader();
+      reader.onerror = function () { reject(new Error('خطأ في قراءة الملف')); };
+      reader.onload = function () {
+        var b64 = String(reader.result || '').split(',')[1] || '';
+        companyCall('add_upload_file', {
+          sheet: 'legal_importation_follow',
+          field: ff.field,
+          id: id,
+          filename: file.name,
+          base64: b64
+        }).then(function (res) {
+          if (res && res.status === 'success') resolve({ field: ff.field, ref: res.reference, fileId: res.fileId || '' });
+          else reject(new Error((res && res.message) || 'خطأ في رفع الملف'));
+        }).catch(function (e) {
+          reject(new Error((e && e.message) || 'خطأ في رفع الملف'));
+        });
+      };
+      reader.readAsDataURL(file);
+    });
+  }
+
+  function downloadRef(ref, id, field) {
+    if (!ref && (id == null || String(id) === '')) return;
+    UIC.openDownload(scriptUrl + '?download=doc_file&company=3fe1b5cb67b7223e&ref=' + encodeURIComponent(ref || '') + ((id != null && String(id) !== '') ? '&id=' + encodeURIComponent(id) : '') + (field ? '&field=' + encodeURIComponent(field) : '') + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN),
+      'فتح الملف');
+  }
+
+  function fileLinkCell(ref, id, field) {
+    return ref
+      ? '<button class="btn btn-outline" style="padding:4px 10px;" onclick="downloadRef(\'' + esc(ref) + '\',\'' + esc(id||'') + '\',\'' + esc(field||'') + '\')">تحميل</button>'
+      : '-';
+  }
+
+  function openDetail(idx) {
+    var f = window.__follows[idx];
+    if (!f) return;
+    var rows = [
+      ['#', f.id],
+      ['المورد', f.vendor || '-'],
+      ['المنتج', f.product_name || ('#' + f.product)],
+      ['تاريخ الإرسال للموافقة', fmtDate(f.approval_sent_date)],
+      ['كود الفاتورة المبدئية', f.proforma_invoice_code || '-'],
+      ['رقم ACID', f.acid || '-'],
+      ['تاريخ الفاتورة المبدئية', fmtDate(f.proforma_invoice_date)],
+      ['قيمة الفاتورة', f.invoice_value],
+      ['كمية المنتج', f.product_amount],
+      ['البنك', f.bank || '-'],
+      ['رقم الموافقة', f.approval_number],
+      ['تاريخ الموافقة', fmtDate(f.approval_date)],
+      ['تاريخ الانتهاء', fmtDate(f.approval_expiry_date)],
+      ['الحالة', statusBadge(f.status)],
+      ['ملف الفاتورة المبدئية', fileLinkCell(f.porforma_file, f.id, 'porforma_file')],
+      ['ملف SWIFT', fileLinkCell(f.swift_file, f.id, 'swift_file')],
+      ['صورة الموافقة 1', fileLinkCell(f.approval_1, f.id, 'approval_1')],
+      ['صورة الموافقة 2', fileLinkCell(f.approval_2, f.id, 'approval_2')],
+      ['صورة الموافقة 3', fileLinkCell(f.approval_3, f.id, 'approval_3')],
+      ['أضيف بواسطة', uname_(f.user) || '-'],
+      ['وقت الإضافة', f.created_at ? fmtDate(f.created_at) : '-']
+    ];
+    var body = rows.map(function (r) {
+      return '<div class="form-field"><label class="form-label">' + esc(r[0]) + '</label>' +
+        '<div style="padding:8px 12px;background:var(--bg-subtle);border-radius:var(--radius-sm);font-size:13px;">' + r[1] + '</div></div>';
+    }).join('');
+    UIC.openModal('import-detail-modal', {
+      title: 'تفاصيل متابعة الموافقة #' + f.id,
+      body: body,
+      footer: false
+    });
+  }
+
+  function showError(e) {
+    var body = document.getElementById('import-content');
+    if (body) body.innerHTML = '<div class="empty-state"><span>' + esc(e.message || 'خطأ') + '</span></div>';
+  }
+
+  /* Another device's change arrives quietly. */
+  UIC.Live.watchPage({
+    call: companyCall,
+    page: 'tc_import_follow',
+    onChange: function () { UIC.Live.arrive(function () { fetchFollows(true); }); }
+  });
+
+
+  load();
+</script>
+</body>
+</html>
+
+
+

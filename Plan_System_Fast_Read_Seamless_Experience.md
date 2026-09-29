@@ -283,13 +283,15 @@ Google Sheets does not guarantee a transaction across tabs. Keep the existing re
 
 ### 7.4 VF_MOs planned-save candidate
 
-The candidate behind `MFG_PLANNED_SAVE_` already declares a document context and batched mutation approach, but source comments say it has not been runtime executed or benchmarked. Before enabling it:
+The candidate behind `MFG_PLANNED_SAVE_` uses a document context and batched mutation plan. It is enabled as a local, flag-gated pilot after synthetic action-level checks; those checks do not replace a staging comparison or production latency measurements. Keep the remaining gates explicit:
 
 - capture legacy baselines for new order, header-only edit, output edit, consumption edit, child deletion, and retry after a simulated uncertain response;
 - verify the expected reads, writes, formulas, ID assignment, request replay, edit-token conflict, ownership, stock, audit, and recovery behavior;
 - compare persisted rows and user-visible results for each case;
 - measure handler, Sheet API, formula probe, write batch, and total browser RPC phases;
-- enable only under the existing per-module and master flags for a test build after parity is demonstrated.
+- keep it under the existing per-module and master flags; do not promote beyond the local pilot until the remaining comparisons and timing work are complete.
+
+Execution note — 2026-09-28: isolated synthetic Sheets fixtures now cover candidate create, one-context-read header-only edits with two changed cells (the edited field and user stamp), single-column child patches, work-op/by-product inserts, paired output/footer writes and deletes, stale-token refusal, mapped identities, date-serial token parity, and same-request replay. The VF_MOs planned-save switch and its two master dependencies are enabled for this local pilot. Production timing and staging comparison remain outstanding; no production workbook was used.
 
 ---
 

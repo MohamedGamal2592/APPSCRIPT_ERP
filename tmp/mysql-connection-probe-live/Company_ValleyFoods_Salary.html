@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Valley Foods — راتب الموظف</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_ValleyFoods_Nav'); ?>
+  <?!= getCompanyThemeCSS_('9940659bd83035d7') ?>
+</head>
+<body>
+  <div id="vf-sal-root"></div>
+
+  <script>
+    var params = new URLSearchParams(window.location.search);
+    var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+    var scriptUrl = window.scriptUrl || '/';
+    var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+    var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('9940659bd83035d7') ?>';
+    var COMPANY_PAGES = <?!= companyPages ?>;
+    var CURRENT_ACTION = '<?!= currentAction ?>';
+    var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+    var CAN_WRITE = UIC.canAdd_(); var CAN_FULL = UIC.canFull_();
+
+    function companyCall(moduleAction, data) {
+      return API.call('company_action', {
+        target_system: '9940659bd83035d7',
+        module_action: moduleAction,
+        data: data || {}
+      }, SESSION_TOKEN);
+    }
+
+    // ---- state (salary only — this page never receives any other HR dataset) ----
+    var SALARIES = [];
+    var ACTIVE_EMP_OPTIONS = [];
+    var EMP_MAP = {};
+    var LOADED_ALL = false;
+
+    function esc(v) {
+      return FMT.escape(v);
+    }
+    function todayStr() { return new Date().toISOString().slice(0, 10); }
+    function fmtDate(v) {
+      if (!v) return '';
+      var d = (v instanceof Date) ? v : new Date(v);
+      if (isNaN(d.getTime())) return String(v);
+      var pad = function (n) { return n < 10 ? '0' + n : '' + n; };
+      return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+    }
+    function rebuildMaps() {
+      EMP_MAP = {}; ACTIVE_EMP_OPTIONS.forEach(function (o) { EMP_MAP[o.value] = o.label; });
+    }
+
+    function load(quiet) {
+      UIC.appShell('vf-sal-root', {
+        companyLogoUrl: COMPANY_LOGO_URL,
+        companyLogoHref: scriptUrl + '?action=vf_dashboard&sessionToken=' + SESSION_TOKEN,
+        companyLogoTitle: 'Valley Foods',
+        breadcrumb: 'Valley Foods / الموارد البشرية / راتب الموظف',
+        contentId: 'vf-sal-content',
+        menuGroups: (window.VALLEYFOODS_MENU || [])
+      });
+      fetchSalaries(quiet);
+    }
+
+    function fetchSalaries(quiet, loadAll) {
+      if (loadAll !== undefined) LOADED_ALL = !!loadAll;
+      if (!quiet) UIC.readSkeleton('vf-sal-content');
+      companyCall('get_salary_data', LOADED_ALL ? { loadAll: true } : {})
+        .then(function (r) {
+          SALARIES = r.salaries || [];
+          ACTIVE_EMP_OPTIONS = r.employeeOptions || [];
+          rebuildMaps();
+          renderSalary();
+          try{schedulePrefetch();}catch(e){};
+        }).catch(function (e) {
+          UIC.toast('خطأ: ' + (e && e.message ? e.message : e), 'error');
+        }).finally(function () { if (!quiet) UI.hideSpinner(); });
+    }
+
+    /* The list endpoint caps at the newest 20 unless loadAll is passed, so the
+       search box must say which slice it searches (RT-1). */
+    function toggleLoadAll() { fetchSalaries(false, !LOADED_ALL); }
+
+    function addBtn(onClick, label) {
+      if (!CAN_WRITE) return '';
+      return '<div style="text-align:left;margin-bottom:12px;"><button class="btn btn-primary" onclick="' + onClick + '">' + label + '</button></div>';
+    }
+
+    // ===================== SALARY =====================
+    function renderSalary() {
+      var headers = [
+        { key: 'emp_id', label: 'الموظف' },
+        { key: 'name_ar', label: 'اسم الموظف' },
+        { key: 'salary_date', label: 'تاريخ الراتب' },
+        { key: 'main_salary', label: 'الراتب الأساسي', money: true },
+        { key: 'allow', label: 'البدلات', money: true },
+        { key: 'basic_salary', label: 'الراتب الأساسي (basic)', money: true },
+        { key: 'insurance_salary', label: 'راتب التأمين', money: true },
+        { key: 'insurance_allow', label: 'بدل التأمين', money: true },
+        { key: 'user', label: 'المستخدم' }
+      ];
+      var rows = SALARIES.map(function (r) {
+        return {
+          emp_id: esc(EMP_MAP[r.emp_id] || r.emp_id),
+          name_ar: esc(r.name_ar || EMP_MAP[r.emp_id] || ''),
+          salary_date: esc(fmtDate(r.salary_date)),
+          main_salary: Number(r.main_salary) || 0,
+          allow: Number(r.allow) || 0,
+          basic_salary: Number(r.basic_salary) || 0,
+          insurance_salary: Number(r.insurance_salary) || 0,
+          insurance_allow: Number(r.insurance_allow) || 0,
+          user: esc(uname_(r.user))
+        };
+      });
+      document.getElementById('vf-sal-content').innerHTML =
+        addBtn('openSalaryModal()', '+ إضافة راتب') +
+        UIC.showAllBar({ loadedAll: LOADED_ALL, total: SALARIES.length, showAll: 'toggleLoadAll()', showLatest: 'toggleLoadAll()' }) +
+        UIC.dataTable('salary-table', {
+          headers: headers, rows: rows, pageSize: 100, emptyText: 'لا توجد رواتب',
+          truncated: !LOADED_ALL, showAll: 'toggleLoadAll()'
+        });
+      UIC.initTableSort('salary-table');
+    }
+
+    function openSalaryModal() {
+      var body = '<form id="salary-form">' +
+        UIC.combo({ key: 'emp_id', label: 'الموظف', required: true, options: ACTIVE_EMP_OPTIONS }) +
+        UIC.field({ key: 'salary_date', label: 'تاريخ الراتب', type: 'date', required: true, value: todayStr() }) +
+        UIC.field({ key: 'main_salary', label: 'الراتب الأساسي', type: 'number', required: true, min: 0, step: 0.01 }) +
+        UIC.field({ key: 'allow', label: 'البدلات', type: 'number', required: true, min: 0, step: 0.01 }) +
+        UIC.field({ key: 'basic_salary', label: 'الراتب الأساسي (basic)', type: 'number', required: true, min: 0, step: 0.01 }) +
+        UIC.field({ key: 'insurance_salary', label: 'راتب التأمين', type: 'number', required: true, min: 0, step: 0.01 }) +
+        UIC.field({ key: 'insurance_allow', label: 'بدل التأمين', type: 'number', required: true, min: 0, step: 0.01 }) +
+      '</form>';
+      UIC.openModal('modal-salary', { title: 'إضافة راتب موظف', body: body, onSave: 'saveSalary()' });
+    }
+
+    function saveSalary() {
+      if (!UIC.validateForm('salary-form')) return false;
+      var d = UIC.collectForm('salary-form');
+      if (!d.emp_id) { UIC.toast('الموظف مطلوب', 'error'); return false; }
+      companyCall('add_employee_salary', d).then(function (r) {
+        if (r && r.status === 'success') { UIC.toast(r.message || 'تم الحفظ', 'success'); UIC.closeModal('modal-salary');
+          if (r.record) {
+            var RECENT_LIMIT = 10;
+            var idxSA = SALARIES.findIndex(function(x){ return String(x.unique_id)===String(r.record.unique_id); });
+            if (idxSA!==-1) SALARIES[idxSA]=r.record; else SALARIES.unshift(r.record);
+            if (SALARIES.length>RECENT_LIMIT) SALARIES.pop();
+            renderSalary();
+          } else { fetchSalaries(true); }
+        } else UIC.toast('تعذر الحفظ', 'error');
+      }).catch(function (e) { UIC.toast('خطأ: ' + (e && e.message ? e.message : e), 'error'); });
+      return true;
+    }
+  </script>
+
+  <script>
+    document.addEventListener('DOMContentLoaded', load);
+    /* This page watches only its own action. The employees/status/shift
+       screens keep their own watchers on their own page. */
+    UIC.Live.watchPage({
+      call: companyCall,
+      page: 'vf_hr_salary',
+      onChange: function () { UIC.Live.arrive(function () { fetchSalaries(true); }); }
+    });
+  </script>
+</body>
+</html>

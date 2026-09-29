@@ -1,0 +1,1438 @@
+<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="description" content="إدارة النظام وإعدادات الشركات والمستخدمين">
+  <title>إدارة النظام</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <style>
+    /* Matrix & Subpages Table Controls & Sizing */
+    #perm-matrix-table, #pages-matrix-table {
+      border-collapse: collapse;
+      width: 100%;
+    }
+    #perm-matrix-table th, #perm-matrix-table td,
+    #pages-matrix-table th, #pages-matrix-table td {
+      vertical-align: middle;
+      padding: 8px 12px;
+    }
+    .matrix-select,
+    #perm-matrix-table select.input,
+    #pages-matrix-table select.input {
+      min-width: 140px;
+      width: 100%;
+      min-height: 38px;
+      height: 38px;
+      padding: 6px 12px;
+      font-size: 14px;
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-sm);
+      background-color: var(--bg-surface);
+      color: var(--text-main);
+      box-sizing: border-box;
+      cursor: pointer;
+    }
+    .matrix-input,
+    #pages-matrix-table input.input {
+      min-width: 200px;
+      width: 100%;
+      min-height: 38px;
+      height: 38px;
+      padding: 6px 12px;
+      font-size: 14px;
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-sm);
+      background-color: var(--bg-surface);
+      color: var(--text-main);
+      box-sizing: border-box;
+    }
+    .matrix-select:focus,
+    .matrix-input:focus {
+      outline: none;
+      border-color: var(--brand-primary);
+      box-shadow: 0 0 0 2px var(--brand-subtle-bg, rgba(99,102,241,0.15));
+    }
+    .admin-perf { text-align:start; color:var(--text-main); }
+    .admin-perf-head, .admin-perf-filters { display:flex; flex-wrap:wrap; align-items:end; gap:var(--space-4); }
+    .admin-perf-head { justify-content:space-between; align-items:center; margin-bottom:var(--space-4); }
+    .admin-perf h3, .admin-perf h4 { margin:0 0 var(--space-2); }
+    .admin-perf p { margin:0 0 var(--space-3); }
+    .admin-perf-muted { color:var(--text-muted); font-size:13px; }
+    .admin-perf-filters { margin-bottom:var(--space-4); }
+    .admin-perf-filters label { display:grid; gap:var(--space-1); min-width:180px; }
+    .admin-perf-cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:var(--space-3); margin:var(--space-4) 0; }
+    .admin-perf-card, .admin-perf-section { background:var(--bg-surface); border:1px solid var(--border-color); border-radius:var(--radius-md); padding:var(--space-4); }
+    .admin-perf-card strong { display:block; font-size:26px; margin:var(--space-2) 0; font-variant-numeric:tabular-nums; }
+    .admin-perf-section { margin-top:var(--space-4); }
+    .admin-perf-note { padding:var(--space-3); border-inline-start:3px solid var(--brand-primary); background:var(--brand-subtle-bg); margin-bottom:var(--space-3); }
+    .admin-perf-scroll { overflow-x:auto; }
+    .admin-perf table { width:100%; border-collapse:collapse; font-size:13px; }
+    .admin-perf th, .admin-perf td { padding:10px 12px; text-align:start; border-bottom:1px solid var(--border-color); vertical-align:top; }
+    .admin-perf th { color:var(--text-muted); white-space:nowrap; }
+    .admin-perf code { overflow-wrap:anywhere; }
+    .admin-perf-bar { display:inline-block; height:6px; border-radius:var(--radius-sm); background:var(--brand-primary); max-width:120px; margin-inline-start:8px; vertical-align:middle; }
+    .admin-perf-health { display:flex; gap:var(--space-3); flex-wrap:wrap; align-items:center; }
+    .admin-perf-banner { display:flex; flex-wrap:wrap; align-items:center; gap:var(--space-2) var(--space-3); padding:var(--space-3); border:1px solid var(--border-color); border-radius:var(--radius-md); margin-bottom:var(--space-3); background:var(--bg-surface); }
+    .admin-perf-banner.ok { border-color:var(--success-border); background:var(--success-bg); }
+    .admin-perf-banner.warn { border-color:var(--warning-border); background:var(--warning-bg); }
+    .admin-perf-flag { display:inline-block; padding:2px 8px; border-radius:999px; font-size:12px; font-weight:600; border:1px solid var(--border-color); color:var(--text-muted); background:var(--bg-surface); }
+    .admin-perf-flag.ok { color:var(--success-text); background:var(--success-bg); border-color:var(--success-border); }
+    .admin-perf-flag.warn { color:var(--warning-text); background:var(--warning-bg); border-color:var(--warning-border); }
+    .admin-perf-flag.danger { color:var(--danger-text); background:var(--danger-bg); border-color:var(--danger-border); }
+    .admin-perf-banner strong .admin-perf-flag, .admin-perf-card strong .admin-perf-flag { font-size:12px; }
+    @media(max-width:600px) { .admin-perf-filters label { min-width:0; flex:1 1 140px; } .admin-perf th, .admin-perf td { padding:8px; } }
+  </style>
+</head>
+<body>
+<div id="admin-root" dir="rtl" class="app-content" style="max-width:1200px;margin:0 auto;padding:var(--space-4);"></div>
+<script>
+  var params = new URLSearchParams(window.location.search);
+  var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+  var scriptUrl = window.scriptUrl || '/';
+  var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+
+  var CURRENT_TAB = 'companies';
+  var ADMIN_READ_GEN = 0;
+  var PERFORMANCE = { days: 7, company: '', page: '', data: null, companies: [], loading: false, error: false, epoch: 0 };
+
+  function adminTabVisible_(tab) {
+    var area = document.getElementById('admin-tab-area');
+    return CURRENT_TAB === tab && !!area && area.style.display !== 'none' &&
+      !!document.getElementById('tab-body');
+  }
+  function adminReadCurrent_(tab, generation) {
+    return generation === ADMIN_READ_GEN && adminTabVisible_(tab);
+  }
+
+  function initAdmin() {
+    if (!SESSION_TOKEN) { window.location.href = scriptUrl + '?action=login'; return; }
+    renderHub();
+  }
+
+  function renderHub() {
+    ADMIN_READ_GEN++;
+    PERFORMANCE.epoch++;
+    var homeHref = scriptUrl + '?action=ERPDashboard&sessionToken=' + SESSION_TOKEN;
+    var logo = UIC.buildLogoMarkup(homeHref, null, null, null, false);
+    var html =
+      '<div style="display:flex;align-items:center;gap:12px;margin-bottom:8px;">' + logo + '<h2 style="margin:0;font-size:clamp(18px,4vw,24px);">إدارة النظام</h2></div>' +
+      '<p style="color:var(--text-muted);font-size:14px;margin-bottom:24px;">اختر القسم الذي تريد الإدارة عليه.</p>' +
+       '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,200px),1fr));gap:16px;margin-bottom:32px;">' +
+        UIC.moduleTile({ icon: '&#127970;', title: 'الشركات', subtitle: 'إدارة شركات النظام', onOpen: 'loadTab(\'companies\')' }) +
+        UIC.moduleTile({ icon: '&#128101;', title: 'المستخدمون', subtitle: 'إدارة حسابات المستخدمين', onOpen: 'loadTab(\'users\')' }) +
+        (IS_SUPER_ADMIN ? UIC.moduleTile({ icon: '&#128200;', title: perfText('الأداء', 'Performance'), subtitle: perfText('أداء الصفحات والطلبات يومياً', 'Daily page and request performance'), onOpen: 'loadTab(\'performance\')' }) : '') +
+        UIC.moduleTile({ icon: '&#128272;', title: 'صلاحيات الأدوار', subtitle: 'ضبط صلاحيات الوصول', onOpen: 'loadTab(\'matrix\')' }) +
+        UIC.moduleTile({ icon: '&#128196;', title: 'صفحات النظام', subtitle: 'إدارة صفحات النظام', onOpen: 'loadTab(\'pages\')' }) +
+        UIC.moduleTile({ icon: '&#128176;', title: 'العملات', subtitle: 'إدارة أسعار الصرف', onOpen: 'loadTab(\'currency\')' }) +
+        UIC.moduleTile({ icon: '&#128179;', title: 'فواتير الاشتراكات', subtitle: 'إصدار وطباعة فواتير النظام (ERP Invoices)', onOpen: 'loadTab(\'invoices\')' }) +
+        (IS_SUPER_ADMIN ? UIC.moduleTile({ icon: '&#9888;', title: 'مفتاح إيقاف النظام', subtitle: 'إيقاف/تشغيل النظام بالكامل', onOpen: 'loadTab(\'killswitch\')' }) : '') +
+        (IS_SUPER_ADMIN ? UIC.moduleTile({ icon: '&#128230;', title: 'النسخ الاحتياطي', subtitle: 'تنزيل أحدث نسخ قواعد البيانات', onOpen: 'loadTab(\'backups\')' }) : '') +
+       '</div>' +
+      '<div id="admin-tab-area" style="display:none;">' +
+      renderTabsHtml() +
+      '<div class="empty-state" id="tab-body" style="display:none;"></div>' +
+      '</div>';
+    document.getElementById('admin-root').innerHTML = html;
+  }
+
+  function renderTabsHtml() {
+    var tabs = [
+      { id: 'companies', label: 'الشركات' },
+      { id: 'users', label: 'المستخدمون' },
+      { id: 'matrix', label: 'صلاحيات الأدوار' },
+      { id: 'pages', label: 'صفحات النظام' },
+      { id: 'currency', label: 'العملات' },
+      { id: 'invoices', label: 'فواتير الاشتراكات' }
+    ];
+    if (IS_SUPER_ADMIN) tabs.splice(2, 0, { id: 'performance', label: perfText('الأداء', 'Performance') });
+    if (IS_SUPER_ADMIN) tabs.push({ id: 'killswitch', label: 'مفتاح إيقاف النظام' });
+    if (IS_SUPER_ADMIN) tabs.push({ id: 'backups', label: 'النسخ الاحتياطي' });
+    return '<div style="display:flex;gap:8px;margin-bottom:24px;flex-wrap:wrap;">' +
+      '<button class="btn btn-outline" onclick="renderHub()">← العودة</button>' +
+      tabs.map(function (t) {
+        return '<button class="btn ' + (CURRENT_TAB === t.id ? 'btn-primary' : 'btn-outline') + '" onclick="loadTab(\'' + t.id + '\')">' + t.label + '</button>';
+      }).join('') + '</div>';
+  }
+
+  function loadTab(tab) {
+    if (tab === 'performance' && !IS_SUPER_ADMIN) return;
+    ADMIN_READ_GEN++;
+    PERFORMANCE.epoch++;
+    CURRENT_TAB = tab;
+    var area = document.getElementById('admin-tab-area');
+    area.style.display = '';
+    var tabsContainer = area.querySelector('div');
+    if (tabsContainer) tabsContainer.outerHTML = renderTabsHtml();
+    var body = document.getElementById('tab-body');
+    body.style.display = '';
+    if (tab === 'companies') loadCompanies();
+    else if (tab === 'users') loadUsers();
+    else if (tab === 'matrix') loadMatrix();
+    else if (tab === 'pages') loadPages();
+    else if (tab === 'currency') loadCurrency();
+    else if (tab === 'invoices') loadInvoices();
+    else if (tab === 'killswitch') loadKillSwitch();
+    else if (tab === 'backups') loadBackups();
+    else if (tab === 'performance') loadPerformance();
+  }
+
+  /* ---------- PERFORMANCE (super admin only; loaded on demand) ---------- */
+  function perfText(ar, en) {
+    return window.I18N && I18N.lang && I18N.lang() === 'en' ? en : ar;
+  }
+
+  function perfNumber(value, suffix) {
+    if (value === null || value === undefined || !isFinite(Number(value))) return '—';
+    return FMT.escape(Number(value).toLocaleString(perfText('ar-EG', 'en-US'), { maximumFractionDigits: 1 })) + (suffix || '');
+  }
+
+  function perfTime(value) {
+    var date = new Date(value || '');
+    if (isNaN(date.getTime())) return perfText('غير متاح', 'Unavailable');
+    return FMT.escape(date.toLocaleString(perfText('ar-EG', 'en-GB'), { timeZone: 'Africa/Cairo' }));
+  }
+
+  function perfFiltersChanged() {
+    PERFORMANCE.days = Number(document.getElementById('perf-days').value);
+    PERFORMANCE.company = document.getElementById('perf-company').value;
+    PERFORMANCE.page = '';
+    loadPerformance();
+  }
+
+  /* The page filter is a client-side view over the action rows already returned;
+   * it never re-queries the server (a read-only refresh stays read-only). */
+  function perfPageChanged() {
+    var select = document.getElementById('perf-page');
+    PERFORMANCE.page = select ? select.value : '';
+    renderPerformance();
+  }
+
+  function loadPerformance() {
+    if (!IS_SUPER_ADMIN || CURRENT_TAB !== 'performance') return;
+    var epoch = ++PERFORMANCE.epoch, body = document.getElementById('tab-body');
+    PERFORMANCE.loading = true; PERFORMANCE.error = false; PERFORMANCE.data = null;
+    renderPerformance();
+    API.call('get_admin_performance', { days: PERFORMANCE.days, company: PERFORMANCE.company }, SESSION_TOKEN)
+      .then(function (r) {
+        if (epoch !== PERFORMANCE.epoch || CURRENT_TAB !== 'performance' || body !== document.getElementById('tab-body')) return;
+        if (!r || r.status !== 'success') throw new Error('PERFORMANCE_UNAVAILABLE');
+        PERFORMANCE.data = r; PERFORMANCE.companies = r.companies || [];
+        PERFORMANCE.loading = false; renderPerformance();
+      })
+      .catch(function () {
+        if (epoch !== PERFORMANCE.epoch || CURRENT_TAB !== 'performance' || body !== document.getElementById('tab-body')) return;
+        PERFORMANCE.loading = false; PERFORMANCE.error = true; renderPerformance();
+      });
+  }
+
+  function perfTable(headers, rows) {
+    return '<div class="admin-perf-scroll"><table><thead><tr>' + headers.map(function (h) {
+      return '<th scope="col">' + FMT.escape(h) + '</th>';
+    }).join('') + '</tr></thead><tbody>' + rows.map(function (row) {
+      return '<tr>' + row.map(function (cell) { return '<td>' + cell + '</td>'; }).join('') + '</tr>';
+    }).join('') + '</tbody></table></div>';
+  }
+
+  function perfMetricLabel(metric) {
+    var labels = {
+      page_ready: ['جاهزية المستند', 'Document ready'], page_load: ['اكتمال تحميل المستند', 'Document load'],
+      first_data_render: ['رسم أول بيانات', 'First data render'], nav_server: ['انتظار أول بايت', 'Time to first byte'],
+      nav_transfer: ['نقل المستند', 'Document transfer'], nav_parse: ['تهيئة المستند', 'Document initialization'],
+      page_usable_ms: ['صفحة قابلة للاستخدام', 'Usable page'], form_editable_ms: ['نموذج قابل للإدخال', 'Editable form'],
+      form_options_ready_ms: ['جاهزية خيارات النموذج', 'Form options ready'], lookup_ready_ms: ['جاهزية البحث', 'Lookup ready'],
+      save_feedback_ms: ['ظهور حالة الحفظ', 'Save feedback'], save_confirmed_ms: ['تأكيد الحفظ', 'Confirmed save'],
+      input_feedback_ms: ['استجابة الإدخال', 'Input feedback']
+    };
+    var label = labels[metric]; return FMT.escape(label ? perfText(label[0], label[1]) : metric);
+  }
+
+  /* ---------- Phase E: coverage, collection health and capability states ----------
+   * Every unknown is rendered as unknown/unavailable and never as a zero. The two
+   * observation gates below are display heuristics replicated for the UI badge;
+   * the server's own `insufficient`/`p95_min_obs` fields win when present. */
+  var PERF_P95_MIN_OBS = 100, PERF_P99_MIN_OBS = 1000;
+
+  function perfFlag(label, tone, title) {
+    return '<span class="admin-perf-flag ' + tone + '"' + (title ? ' title="' + FMT.escape(String(title)) + '"' : '') + '>' + FMT.escape(String(label)) + '</span>';
+  }
+
+  function perfGateNote() {
+    return perfText('عتبات العرض تقريبية وليست أهداف خدمة: p95 يتطلب ', 'Display gates are heuristics, not SLOs: p95 requires at least ') + perfNumber(PERF_P95_MIN_OBS) +
+      perfText(' مشاهدة على الأقل، وp99 يتطلب ', ' observations, and p99 requires ') + perfNumber(PERF_P99_MIN_OBS) + perfText('.', '.');
+  }
+
+  function perfSampleBadge(group) {
+    if (!group) return '';
+    var count = Number(group.count), gate = Number(group.p95_min_obs) || PERF_P95_MIN_OBS;
+    if (group.insufficient !== true && !(isFinite(count) && count < gate)) return '';
+    return ' ' + perfFlag(perfText('عينة منخفضة', 'Low sample'), 'warn', perfGateNote());
+  }
+
+  function perfStateText(state) {
+    if (state === 'partial') return perfText('جزئي', 'Partial');
+    if (state === 'unavailable') return perfText('غير متاح', 'Unavailable');
+    if (state === 'not_instrumented') return perfText('غير مُقاس', 'Not instrumented');
+    if (state === 'complete' || state === true) return perfText('كامل', 'Complete');
+    return perfText('غير معروف', 'Unknown');
+  }
+
+  function perfStateFlag(state) {
+    var tone = state === 'partial' ? 'warn' : ((state === 'complete' || state === true) ? 'ok' : 'unknown');
+    return perfFlag(perfStateText(state), tone, '');
+  }
+
+  function perfCapabilityCard(label, state, note) {
+    return '<div class="admin-perf-card"><span>' + label + '</span><strong>' + perfStateFlag(state) + '</strong><span class="admin-perf-muted">' + note + '</span></div>';
+  }
+
+  function perfUnknownNumber(value, suffix) {
+    if (value === null || value === undefined || value === '' || !isFinite(Number(value))) return perfText('غير معروف', 'Unknown');
+    return perfNumber(value, suffix);
+  }
+
+  function perfAge(value) {
+    var time = Date.parse(value || '');
+    if (!isFinite(time)) return perfText('غير معروف', 'Unknown');
+    var seconds = Math.max(0, Math.round((new Date().getTime() - time) / 1000));
+    if (seconds < 120) return perfNumber(seconds) + perfText(' ث', ' s');
+    if (seconds < 7200) return perfNumber(Math.round(seconds / 60)) + perfText(' د', ' min');
+    return perfNumber(Math.round(seconds / 360) / 10) + perfText(' س', ' h');
+  }
+
+  function perfCoverageFlag(coverage) {
+    if (!coverage) return perfFlag(perfText('غير معروفة', 'Unknown'), 'unknown', '');
+    return perfFlag(coverage.complete === true ? perfText('كاملة', 'Complete') : perfText('جزئية', 'Partial'), coverage.complete === true ? 'ok' : 'warn', '');
+  }
+
+  function perfCoverageBanner(r) {
+    var coverage = r.coverage;
+    if (!coverage) {
+      return '<div class="admin-perf-banner unknown"><strong>' + perfText('التغطية', 'Coverage') + '</strong>' + perfCoverageFlag(null) +
+        '<span class="admin-perf-muted">' + perfText('لم يُرجع الخادم كائن التغطية؛ لا يمكن إثبات اكتمال القراءة.', 'The server returned no coverage object; read completeness cannot be established.') + '</span></div>';
+    }
+    var complete = coverage.complete === true, tone = complete ? 'ok' : 'warn', parts = [];
+    parts.push('<strong>' + perfText('التغطية', 'Coverage') + '</strong>');
+    parts.push(perfCoverageFlag(coverage));
+    parts.push('<span>' + perfText('صفوف مفحوصة: ', 'Rows scanned: ') + perfUnknownNumber(coverage.scanned_rows) + '</span>');
+    parts.push('<span>' + perfText('تغطي حتى: ', 'Covered through: ') + (coverage.covered_through ? perfTime(coverage.covered_through) : perfText('غير معروف', 'Unknown')) + '</span>');
+    if (coverage.cursor_used) parts.push(perfFlag(perfText('استُأنفت من مؤشر محفوظ', 'Resumed from stored cursor'), 'warn',
+      perfText('بدأ فحص هذه النافذة من موضع سابق في سجل القياسات.', 'This window started from a stored position in the measurement log.')));
+    if (coverage.truncated) parts.push(perfFlag(perfText('مقطوعة عند حد الميزانية', 'Truncated at the budget'), 'warn',
+      perfText('لم تُفحص كل صفوف الفترة؛ كل الأرقام أدناه من العينة المقروءة فقط.', 'Not all rows in the period were scanned; every number below comes from the sample read only.')));
+    else if (!complete) parts.push(perfFlag(perfText('الاكتمال غير مؤكد', 'Completeness unconfirmed'), 'warn', ''));
+    return '<div class="admin-perf-banner ' + tone + '">' + parts.join('') + '</div>';
+  }
+
+  function perfHealthBlock(collection) {
+    var health = collection ? collection.health : null;
+    if (!health) {
+      return '<p class="admin-perf-muted">' + perfText('حالة الجمع: غير متاحة — لم تُرجع عدادات الجمع.', 'Collection health: unavailable — no collection counters were returned.') + '</p>';
+    }
+    var flags = [];
+    if (health.present !== true) {
+      flags.push(perfFlag(perfText('لا توجد عدادات جمع مسجلة بعد', 'No collection counters recorded yet'), 'unknown', ''));
+    } else {
+      flags.push(perfFlag(perfText('معدل العينة: ', 'Sample rate: ') + (isFinite(Number(health.sample_rate)) ? perfNumber(Number(health.sample_rate) * 100, '%') : perfText('غير معروف', 'Unknown')), 'unknown',
+        perfText('سياسة سحب موحّدة عند بداية الطلب (uniform_request_start) وليست عدّاداً.', 'A uniform request-start draw policy (uniform_request_start), not a counter.')));
+      flags.push(perfFlag(perfText('صفوف مصرَّفة: ', 'Drained rows: ') + perfUnknownNumber(health.drained_rows), 'unknown', ''));
+      flags.push(perfFlag(perfText('صفوف مخفَّضة: ', 'Dropped rows: ') +
+        perfUnknownNumber(Number(health.dropped_rows) + Number(health.dropped_lock) + Number(health.dropped_bytes)), 'unknown',
+        perfText('يشمل تجاوز سعة المخزن والقفل وحدّ البايت.', 'Includes buffer-capacity, lock and byte-limit drops.')));
+      flags.push(perfFlag(perfText('صفوف فشلت: ', 'Failed rows: ') + perfUnknownNumber(health.failed_rows), 'unknown', ''));
+      flags.push(perfFlag(perfText('آخر تصريف: منذ ', 'Last drain: ') + perfAge(health.last_drain_at), 'unknown', ''));
+      flags.push(perfFlag(perfText('عمر المخزن: ', 'Buffer age: ') + perfUnknownNumber(health.buffer_age_ms, perfText(' م.ث', ' ms')), 'unknown', ''));
+      if (health.last_drain_error) flags.push(perfFlag(perfText('خطأ في آخر تصريف', 'Last drain error'), 'warn', String(health.last_drain_error)));
+    }
+    flags.push(perfFlag(perfText('تغطية العدادات: غير معروفة', 'Counter coverage: unknown'), 'unknown',
+      perfText('لا يمكن إثبات إجمالي الفقد من نقل قائم على أخذ العينات؛ غياب العدادات يعني غير معروف وليس صفراً.', 'Total capture loss cannot be proven from a sampling transport; absent counters mean unknown, not zero.')));
+    return '<div class="admin-perf-health">' + flags.join('') + '</div>';
+  }
+
+  function renderPerformance() {
+    var body = document.getElementById('tab-body');
+    if (!body || CURRENT_TAB !== 'performance' || !IS_SUPER_ADMIN) return;
+    var p = PERFORMANCE, r = p.data, esc = FMT.escape, ms = perfText(' م.ث', ' ms');
+    var companies = p.companies.slice();
+    if (p.company && companies.indexOf(p.company) === -1) companies.push(p.company);
+    var pages = [];
+    if (r && r.actions) r.actions.forEach(function (a) { if (a.page && pages.indexOf(a.page) === -1) pages.push(a.page); });
+    pages.sort();
+    if (p.page && pages.indexOf(p.page) === -1) p.page = '';
+    var html = '<section class="admin-perf" dir="' + perfText('rtl', 'ltr') + '" aria-busy="' + p.loading + '">' +
+      '<div class="admin-perf-head"><div><h3>' + perfText('أداء النظام', 'System performance') + '</h3><p class="admin-perf-muted">' +
+      perfText('قياسات محفوظة عبر شركات النظام · توقيت القاهرة', 'Stored measurements across the application · Cairo time') + '</p></div>' +
+      '<button class="btn btn-outline" onclick="loadPerformance()"' + (p.loading ? ' disabled' : '') + '>' + perfText('تحديث', 'Refresh') + '</button></div>' +
+      '<div class="admin-perf-filters"><label for="perf-days">' + perfText('الفترة', 'Period') + '<select id="perf-days" class="input" onchange="perfFiltersChanged()">' +
+      [[1, perfText('اليوم', 'Today')], [7, perfText('آخر ٧ أيام', 'Last 7 days')], [30, perfText('آخر ٣٠ يوماً', 'Last 30 days')]].map(function (x) {
+        return '<option value="' + x[0] + '"' + (p.days === x[0] ? ' selected' : '') + '>' + x[1] + '</option>';
+      }).join('') + '</select></label><label for="perf-company">' + perfText('الشركة', 'Company') +
+      '<select id="perf-company" class="input" onchange="perfFiltersChanged()"><option value="">' + perfText('جميع الشركات', 'All companies') + '</option>' +
+      companies.map(function (co) { return '<option value="' + esc(co) + '"' + (p.company === co ? ' selected' : '') + '>' + esc(co) + '</option>'; }).join('') + '</select></label>' +
+      '<label for="perf-page">' + perfText('الصفحة', 'Page') + '<select id="perf-page" class="input" onchange="perfPageChanged()"' + (pages.length ? '' : ' disabled') + '>' +
+      (pages.length
+        ? '<option value="">' + perfText('كل الصفحات', 'All pages') + '</option>' + pages.map(function (pg) { return '<option value="' + esc(pg) + '"' + (p.page === pg ? ' selected' : '') + '>' + esc(pg) + '</option>'; }).join('')
+        : '<option value="">' + perfText('غير متاح', 'Unavailable') + '</option>') +
+      '</select></label><label for="perf-module">' + perfText('الوحدة', 'Module') + '<select id="perf-module" class="input" disabled title="' +
+      FMT.escape(perfText('الخادم لا يُرجع بُعد الوحدة؛ التنقل التفصيلي حسب الوحدة غير متاح.', 'The server does not return a module dimension; module drilldown is unavailable.')) + '">' +
+      '<option value="">' + perfText('غير متاح من الخادم', 'Unavailable from server') + '</option></select></label></div>' +
+      '<p class="admin-perf-muted">' + perfText('تصفية الصفحة تطبَّق على جدول أبطأ الإجراءات من الصفوف المعادة؛ لا يوجد تجميع صفحة/وحدة آخر من الخادم.',
+        'The page filter applies only to the slowest-actions table using rows already returned; the server provides no other page/module aggregation.') + '</p>';
+    if (p.loading) html += '<p role="status">' + perfText('جاري قراءة القياسات المحفوظة…', 'Reading stored measurements…') + '</p>';
+    else if (p.error) html += '<p role="alert">' + perfText('تعذر تحميل بيانات الأداء. تحقق من صلاحية الجلسة ثم أعد المحاولة.', 'Performance data could not be loaded. Check your session and retry.') + '</p>';
+    else if (r) {
+      html += perfCoverageBanner(r);
+      html += '<div class="admin-perf-note">' + perfText(
+        'تنبيه تاريخي: القياسات المسجلة قبل النافذة الحالية جُمعت بأخذ عينات متحيز (كل الطلبات البطيئة وجزء من القراءات السريعة)، لذا لا تمثل نسبها المئوية كل المستخدمين، ونتائج الفشل التاريخية غير مكتملة. النافذة الحالية موصوفة في شريط التغطية أعلاه.',
+        'Historical caveat: measurements recorded before the current window used biased sampling (all slow requests and only some fast reads), so their percentiles do not represent all users and historical failure outcomes are incomplete. The current window is described by the coverage banner above.') + '</div>';
+      var summary = r.summary || {}, server = (r.sources && r.sources.server) || {}, client = (r.sources && r.sources.client) || {}, caps = r.capabilities || {};
+      function card(label, value, note) { return '<div class="admin-perf-card"><span>' + label + '</span><strong>' + value + '</strong><span class="admin-perf-muted">' + note + '</span></div>'; }
+      html += '<div class="admin-perf-cards">' +
+        card(perfText('طلبات مسجلة', 'Recorded requests'), perfNumber(server.state === 'ready' ? summary.count : null), perfText('داخل الفترة والفلتر', 'Within period and filter')) +
+        card(perfText('الزمن الوسيط', 'Median duration'), perfNumber(summary.p50_ms, ms), perfText('p50 · تنفيذ الخادم', 'p50 · server execution')) +
+        card('p75', perfNumber(summary.p75_ms, ms), perfText('p75 · العينة المسجلة', 'p75 · recorded sample')) +
+        card(perfText('الطلبات الأبطأ', 'Slower requests'), perfNumber(summary.p95_ms, ms) + perfSampleBadge(summary), perfText('p95 · العينة المسجلة', 'p95 · recorded sample')) +
+        card(perfText('إخفاقات مسجلة', 'Recorded failures'), perfNumber(server.state === 'ready' ? summary.failures : null), summary.failure_rate === null || summary.failure_rate === undefined ? '—' : perfNumber(summary.failure_rate * 100, '%') + perfText(' من العينة', ' of sample')) + '</div>' +
+        '<p class="admin-perf-muted">' + perfGateNote() + '</p>';
+      html += '<div class="admin-perf-section"><h4>' + perfText('جاهزية القدرات', 'Capability readiness') + '</h4><div class="admin-perf-cards">' +
+        perfCapabilityCard(perfText('قياسات المتصفح', 'Browser metrics'), caps.browser_metrics,
+          caps.browser_metrics === 'partial'
+            ? perfText('جزئي: مدد من قائمة عرض مسموح بها فقط، بلا بُعد شركة (جميع الشركات فقط) وبلا مقاييس المهام المحذوفة. يلزم تعديل مخطط معتمد.', 'Partial: only allowlisted durations, with no company dimension (all companies only) and none of the dropped task metrics. An approved schema amendment is required.')
+            : perfText('لا تحتوي قائمة العرض على قياس متصفح قابل للعرض.', 'The display allowlist contains no browser metric to show.')) +
+        perfCapabilityCard(perfText('تأكيد الحفظ', 'Confirmed saves'), caps.confirmed_saves,
+          perfText('عدّ ونتائج تأكيد الحفظ غير مُقاسة؛ لا تُعرض قيمة بديلة ولا صفر مضلل.', 'Confirmed-save counts and outcomes are not instrumented; no substitute value and no misleading zero are shown.')) +
+        perfCapabilityCard(perfText('إكمال المهام', 'Task completion'), caps.task_completion,
+          perfText('إكمال المهام غير مُقاس؛ يحتاج عقد أحداث موسّعاً (نسخة المخطط، المسار، النتيجة، سياسة العينة).', 'Task completion is not instrumented; an extended event contract (schema version, journey, outcome, sample policy) is required.')) +
+        '</div></div>';
+      html += '<div class="admin-perf-section"><h4>' + perfText('حالة القياسات', 'Measurement status') + '</h4><div class="admin-perf-health">' +
+        '<span>' + perfText('تسجيل الخادم: ', 'Server collection: ') + (r.collection && r.collection.server_enabled ? perfText('مفعّل', 'Enabled') : perfText('متوقف', 'Off')) + '</span>' +
+        '<span>' + perfText('تسجيل المتصفح: ', 'Browser collection: ') + (r.collection && r.collection.client_enabled ? perfText('مفعّل', 'Enabled') : perfText('متوقف', 'Off')) + '</span>' +
+        '<span>' + perfText('تغطية النافذة: ', 'Window coverage: ') + perfStateText(r.coverage ? (r.coverage.complete === true ? 'complete' : (r.coverage.partial === true ? 'partial' : undefined)) : undefined) + '</span></div><p class="admin-perf-muted">' +
+        perfText('آخر قياس خادم في المصدر: ', 'Latest server measurement in source: ') + perfTime(server.latest_at) + '<br>' +
+        perfText('آخر قياس متصفح في المصدر: ', 'Latest browser measurement in source: ') + perfTime(client.latest_at) + '<br>' +
+        perfText('وقت قراءة التقرير: ', 'Report read at: ') + perfTime(r.generated_at) + '<br>' +
+        perfText('قد يعاد استخدام التقرير لمدة ٦٠ ثانية لتقليل الحمل.', 'Reports may be reused for 60 seconds to reduce load.') + '</p>' +
+        perfHealthBlock(r.collection);
+      [['server', server], ['client', client]].forEach(function (entry) {
+        var source = entry[1], name = entry[0] === 'server' ? perfText('الخادم', 'Server') : perfText('المتصفح', 'Browser');
+        if (source.state !== 'ready') html += '<p role="status">' + name + ': ' + (source.state === 'missing' ? perfText('لا يوجد سجل قياسات بعد.', 'No measurement log exists yet.') : perfText('مصدر القياسات غير متاح؛ لا يعني ذلك عدم وجود نشاط.', 'Measurement source unavailable; this does not mean no activity.')) + '</p>';
+        if (source.truncated === true) html += '<p>' + name + ': ' + perfText('التقرير جزئي؛ توقفت القراءة عند حد الميزانية بعد فحص ', 'Partial report; the read stopped at the budget after scanning ') + perfNumber(source.scanned) + perfText(' صف', ' rows') + (source.cursor_used ? perfText(' مع استئناف من مؤشر محفوظ.', ' with resumption from a stored cursor.') : '.') + '</p>';
+        else if (source.complete === true) html += '<p>' + name + ': ' + perfText('غطت القراءة الفترة المطلوبة بالكامل', 'The read covered the requested period completely') + (source.cursor_used ? perfText(' (باستئناف من مؤشر محفوظ)', ' (with resumption from a stored cursor)') : '') + '.</p>';
+        else if (source.complete === false) html += '<p>' + name + ': ' + perfText('اكتمال التغطية غير مؤكد؛ تعامل مع الأرقام كعينة غير مكتملة.', 'Coverage completeness is unconfirmed; treat the numbers as an incomplete sample.') + '</p>';
+        if (source.covered_through) html += '<p class="admin-perf-muted">' + name + ': ' + perfText('تغطي حتى ', 'Covered through ') + perfTime(source.covered_through) + '</p>';
+        if (source.capped && source.truncated === undefined) html += '<p>' + name + ': ' + perfText('التقرير جزئي؛ تم فحص آخر ', 'Partial report; inspected the latest ') + perfNumber(source.limit) + perfText(' سجل فقط (استجابة قديمة).', ' records only (legacy response).') + '</p>';
+        if (source.invalid_rows) html += '<p>' + name + ': ' + perfNumber(source.invalid_rows) + perfText(' قياسات غير صالحة مستبعدة.', ' invalid measurements excluded.') + '</p>';
+      });
+      html += '</div><div class="admin-perf-section"><h4>' + perfText('الأداء اليومي', 'Daily performance') + '</h4><p class="admin-perf-muted">' +
+        perfText('اليوم الحالي غير مكتمل. الشرطة تعني عدم وجود قياس؛ ولا تعني زمناً صفرياً. ', 'Today is incomplete. A dash means no measurement, not zero duration. ') + perfGateNote() + '</p>';
+      if (!summary.count) html += '<p>' + (server.state === 'ready' ? perfText('لا توجد طلبات مسجلة لهذه الفترة والفلتر.', 'No recorded requests for this period and filter.') : perfText('تعذر تحديد النشاط من مصدر القياسات.', 'Activity cannot be determined from the measurement source.')) + '</p>';
+      var peak = Math.max.apply(Math, (r.daily || []).map(function (d) { return d.p95_ms || 0; }).concat([1]));
+      html += perfTable([perfText('اليوم', 'Day'), perfText('العدد المسجل', 'Recorded count'), 'p50', 'p75', 'p95', perfText('إخفاقات', 'Failures')], (r.daily || []).map(function (d) {
+        return [esc(d.day) + (d.partial ? ' · ' + perfText('جزئي', 'Partial') : ''), perfNumber(server.state === 'ready' ? d.count : null) + perfSampleBadge(d), perfNumber(d.p50_ms, ms), perfNumber(d.p75_ms, ms),
+          perfNumber(d.p95_ms, ms) + (d.p95_ms === null || d.p95_ms === undefined ? '' : '<span class="admin-perf-bar" aria-hidden="true" style="width:' + Math.round(d.p95_ms / peak * 120) + 'px"></span>'), perfNumber(server.state === 'ready' ? d.failures : null)];
+      })) + '</div><div class="admin-perf-section"><h4>' + perfText('أبطأ الإجراءات المسجلة', 'Slowest recorded actions') + '</h4>';
+      var actionRows = (r.actions || []).filter(function (a) { return !p.page || a.page === p.page; });
+      if (p.page) html += '<p class="admin-perf-muted">' + perfText('مرشّح حسب الصفحة: ', 'Filtered by page: ') + esc(p.page) + '</p>';
+      html += actionRows.length ? perfTable([perfText('الشركة / الصفحة', 'Company / page'), perfText('الإجراء', 'Action'), perfText('العينة', 'Sample'), 'p50', 'p75', 'p95', perfText('إخفاقات', 'Failures')], actionRows.map(function (a) {
+        return [esc(a.company || '—') + '<br><code>' + esc(a.page || '—') + '</code>', '<code>' + esc(a.action) + '</code>', perfNumber(a.count) + perfSampleBadge(a), perfNumber(a.p50_ms, ms), perfNumber(a.p75_ms, ms), perfNumber(a.p95_ms, ms), perfNumber(a.failures)];
+      })) : '<p>' + (p.page ? perfText('لا توجد إجراءات مسجلة لهذه الصفحة.', 'No recorded actions for this page.') : perfText('لا توجد إجراءات مسجلة.', 'No recorded actions.')) + '</p>';
+      html += '</div><div class="admin-perf-section"><h4>' + perfText('فتح الصفحات وإدخال النماذج', 'Page opening and form entry') + '</h4><p class="admin-perf-muted">' +
+        perfText('تظهر القياسات التي تم جمعها فقط. توقيت اكتمال النماذج يحتاج إلى تطبيق خطة القياس الشاملة. ', 'Only collected metrics appear. Form-completion timing requires the universal measurement plan. ') + perfGateNote() + '</p>';
+      if (caps.browser_metrics === 'unavailable') html += '<p>' + perfText('قياسات المتصفح غير متاحة (قائمة العرض لا تحتوي على أي قياس قابل للعرض).', 'Browser metrics are unavailable (the display allowlist contains no metric).') + '</p>';
+      else if (p.company && r.browser_company_supported !== true) html += '<p>' + perfText('قياسات المتصفح جزئية: لا تحتوي على بُعد الشركة. اختر جميع الشركات لعرضها.', 'Browser metrics are partial: no company dimension. Select All companies to view them.') + '</p>';
+      else html += (r.browser || []).length ? perfTable([perfText('الصفحة', 'Page'), perfText('القياس', 'Metric'), perfText('العينة', 'Sample'), 'p50', 'p75', 'p95'], r.browser.map(function (b) {
+        return ['<code>' + esc(b.page || '—') + '</code>', perfMetricLabel(b.metric), perfNumber(b.count) + perfSampleBadge(b), perfNumber(b.p50_ms, ms), perfNumber(b.p75_ms, ms), perfNumber(b.p95_ms, ms)];
+      })) : '<p>' + perfText('لا توجد قياسات متصفح متاحة لهذه الفترة.', 'No browser measurements available for this period.') + '</p>';
+      html += '</div>';
+    }
+    body.innerHTML = html + '</section>';
+  }
+
+  if (window.I18N && I18N.onChange) I18N.onChange(function () {
+    var area = document.getElementById('admin-tab-area');
+    if (CURRENT_TAB === 'performance' && area && area.style.display !== 'none') {
+      var tabs = area.querySelector('div');
+      if (tabs) tabs.outerHTML = renderTabsHtml();
+      renderPerformance();
+    }
+  });
+
+  /* ---------- COMPANIES ---------- */
+  function loadCompanies() {
+    if (!adminTabVisible_('companies')) return;
+    var generation = ++ADMIN_READ_GEN;
+    UIC.readSkeleton('tab-body');
+    API.call('admin_list_companies', {}, SESSION_TOKEN)
+      .then(function (r) {
+        if (!adminReadCurrent_('companies', generation)) return;
+        renderCompanies(r.companies || []);
+      })
+      .catch(function (e) { if (adminReadCurrent_('companies', generation)) showError(e); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function renderCompanies(list) {
+    window.__companies = list;
+    var rows = list.filter(function (c) { return String(c.company_unique_id || '').trim(); }).map(function (c) {
+      return {
+        id: c.company_unique_id,
+        name_ar: c.company_name_ar,
+        name_en: c.company_name_en,
+        enabled: UIC.statusPill(String(c.enabled).toLowerCase() === 'true' ? 'مفعّل' : 'معطّل', String(c.enabled).toLowerCase() === 'true' ? 'success' : 'neutral'),
+        main_page: c.company_main_page || '-',
+        actions: UIC.actionBtns([
+          { label: 'تعديل', onclick: 'editCompany(\'' + FMT.escape(c.company_unique_id) + '\')' },
+          { label: 'حذف', onclick: 'deleteCompany(\'' + FMT.escape(c.company_unique_id) + '\')', color: '#dc2626' }
+        ])
+      };
+    });
+    var body = document.getElementById('tab-body');
+    body.innerHTML = '<div style="display:flex;justify-content:flex-end;margin-bottom:12px;">' +
+      '<button class="btn btn-primary" onclick="editCompany(\'\')">+ إضافة شركة</button></div>' +
+      UIC.dataTable('companies-table', {
+        title: 'الشركات',
+        headers: [
+          { key: 'id', label: 'المعرف' },
+          { key: 'name_ar', label: 'الاسم العربي' },
+          { key: 'name_en', label: 'الاسم الإنجليزي' },
+          { key: 'enabled', label: 'الحالة' },
+          { key: 'main_page', label: 'الصفحة الرئيسية' },
+          { key: 'actions', label: 'إجراءات' }
+        ],
+        rows: rows,
+        emptyText: 'لا توجد شركات'
+      });
+    UIC.initTableSort('companies-table');
+  }
+
+  function editCompany(uid) {
+    var existing = null;
+    if (uid) {
+      existing = (window.__companies || []).find(function (c) { return c.company_unique_id === uid; });
+    }
+    openCompanyModal(existing);
+  }
+
+  function openCompanyModal(company) {
+    var c = company || {};
+    window.__editingCompanyUid = c.company_unique_id || '';
+    var formId = 'company-form';
+    var body =
+      '<form id="' + formId + '">' +
+      UIC.field({ key: 'company_name_ar', label: 'الاسم العربي', value: c.company_name_ar, required: true }) +
+      UIC.field({ key: 'company_name_en', label: 'الاسم الإنجليزي', value: c.company_name_en }) +
+      UIC.field({ key: 'company_sheet_link', label: 'رابط جدول البيانات', value: c.company_sheet_link }) +
+      UIC.field({ key: 'company_colors', label: 'الألوان (مثال: yellow, black)', value: c.company_colors }) +
+      UIC.field({ key: 'company_logo', label: 'معرّف الشعار', value: c.company_logo }) +
+      UIC.field({ key: 'company_main_page', label: 'الصفحة الرئيسية', value: c.company_main_page }) +
+      '<div class="form-field"><label class="form-label">مفعّل</label><select id="enabled" class="input">' +
+      '<option value="TRUE" ' + (String(c.enabled).toLowerCase() === 'true' ? 'selected' : '') + '>مفعّل</option>' +
+      '<option value="FALSE" ' + (String(c.enabled).toLowerCase() !== 'true' ? 'selected' : '') + '>معطّل</option>' +
+      '</select></div>' +
+      '</form>';
+    UIC.openModal('company-modal', {
+      title: c.company_unique_id ? 'تعديل شركة' : 'إضافة شركة',
+      body: body,
+      onSave: 'saveCompany()'
+    });
+  }
+
+  function saveCompany() {
+    var data = UIC.collectForm('company-form');
+    data.enabled = document.getElementById('enabled').value;
+    if (window.__editingCompanyUid) data.company_unique_id = window.__editingCompanyUid;
+    if (!UIC.validateForm('company-form')) return;
+    UI.showSpinner('جاري الحفظ...');
+    API.call('admin_save_company', data, SESSION_TOKEN)
+      .then(function (r) {
+        UIC.closeModal('company-modal');
+        UIC.toast(r.message || 'تم الحفظ', 'success');
+        loadCompanies();
+      })
+      .catch(function (e) { UIC.toast(e.message || 'خطأ', 'error'); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function deleteCompany(uid) {
+    if (!confirm('هل تريد حذف بيانات هذه الشركة؟ سيتم تفريغ بيانات الصف.')) return;
+    UI.showSpinner('جاري الحذف...');
+    API.call('admin_delete_company', { company_unique_id: uid }, SESSION_TOKEN)
+      .then(function (r) { UIC.toast(r.message || 'تم الحذف', 'success'); loadCompanies(); })
+      .catch(function (e) { UIC.toast(e.message || 'خطأ', 'error'); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  /* ---------- USERS ---------- */
+  function loadUsers() {
+    if (!adminTabVisible_('users')) return;
+    var generation = ++ADMIN_READ_GEN;
+    UIC.readSkeleton('tab-body');
+    API.call('admin_list_users', {}, SESSION_TOKEN)
+      .then(function (r) {
+        if (!adminReadCurrent_('users', generation)) return;
+        window.__roleOptions = r.role_options || [];
+        window.__companyOptions = r.company_options || [];
+        renderUsers(r.users || []);
+      })
+      .catch(function (e) { if (adminReadCurrent_('users', generation)) showError(e); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function renderUsers(list) {
+    window.__users = list;
+    var rows = list.filter(function (u) { return String(u.email || '').trim(); }).map(function (u) {
+      var active = String(u.status).toLowerCase() === 'active';
+      return {
+        name: u.name,
+        email: u.email,
+        role: u.role,
+        company: u.company || '-',
+        status: UIC.statusPill(active ? 'نشط' : 'معطّل', active ? 'success' : 'danger'),
+        actions: UIC.actionBtns([
+          { label: 'تعديل', onclick: 'openUserModal(\'' + FMT.escape(u.email) + '\')' },
+          { label: 'حذف', onclick: 'deleteUser(\'' + FMT.escape(u.email) + '\')', color: '#dc2626' }
+        ])
+      };
+    });
+    var body = document.getElementById('tab-body');
+    body.innerHTML = '<div style="display:flex;justify-content:flex-end;margin-bottom:12px;">' +
+      '<button class="btn btn-primary" onclick="openUserModal(\'\')">+ إضافة مستخدم</button></div>' +
+      UIC.dataTable('users-table', {
+        title: 'المستخدمون',
+        headers: [
+          { key: 'name', label: 'الاسم' },
+          { key: 'email', label: 'البريد الإلكتروني' },
+          { key: 'role', label: 'الدور' },
+          { key: 'company', label: 'الشركة' },
+          { key: 'status', label: 'الحالة' },
+          { key: 'actions', label: 'إجراءات' }
+        ],
+        rows: rows,
+        emptyText: 'لا يوجد مستخدمون'
+      });
+    UIC.initTableSort('users-table');
+  }
+
+  function openUserModal(email) {
+    var u = (window.__users || []).find(function (x) { return x.email === email; });
+    var companyOptions = (window.__companyOptions || []).map(function (c) {
+      return { value: c.value, label: c.label };
+    });
+    var formId = 'user-form';
+    var body =
+      '<form id="' + formId + '">' +
+      UIC.field({ key: 'name', label: 'الاسم', value: u ? u.name : '', required: true }) +
+      UIC.field({ key: 'email', label: 'البريد الإلكتروني', value: u ? u.email : '', required: true }) +
+      UIC.enumSelect({ key: 'role', label: 'الدور', value: u ? u.role : '', options: window.__roleOptions || [], required: true, placeholder: 'اختر الدور...' }) +
+      UIC.field({ key: 'company', label: 'الشركة', type: 'select', required: true, options: companyOptions, placeholder: 'اختر الشركة...', value: u ? u.company : '' }) +
+      '<div class="form-field"><label class="form-label">الحالة</label><select id="user-status" class="input">' +
+      '<option value="Active" ' + (u && String(u.status).toLowerCase() === 'active' ? 'selected' : '') + '>نشط</option>' +
+      '<option value="InActive" ' + (u && String(u.status).toLowerCase() !== 'active' ? 'selected' : '') + '>معطّل</option>' +
+      '</select></div>' +
+      (u ? UIC.field({ key: 'resetPassword', label: 'كلمة مرور جديدة (اختياري)', type: 'password', placeholder: 'اتركه فارغاً لعدم التغيير' }) : '') +
+      '</form>' +
+      (!u ? '<p style="font-size:12px;color:var(--text-muted);">المستخدم الجديد يبدأ بدون كلمة مرور وسيقوم بتعيينها عند أول تسجيل دخول.</p>' : '');
+    UIC.openModal('user-modal', {
+      title: u ? 'تعديل مستخدم' : 'إضافة مستخدم',
+      body: body,
+      onSave: 'saveUser()'
+    });
+  }
+  function saveUser() {
+    var data = UIC.collectForm('user-form');
+    data.status = document.getElementById('user-status').value;
+    if (!UIC.validateForm('user-form')) return;
+    // Recover company if hidden blanked but display holds valid label (combo blur edge)
+    if ((!data.company || data.company === '') && data.company_display) {
+      var dispLower = String(data.company_display).trim().toLowerCase();
+      var found = (window.__companyOptions || []).find(function (c) {
+        return String(c.label || '').trim().toLowerCase() === dispLower || String(c.value || '').trim().toLowerCase() === dispLower;
+      });
+      if (found) data.company = String(found.value).trim();
+    }
+    data.company = String(data.company || '').trim();
+    delete data.company_display;
+    delete data.company_custom;
+    ['role'].forEach(function (k) {
+      if (data[k] === '__new__') data[k] = data[k + '_custom'] || '';
+      delete data[k + '_custom'];
+    });
+    UI.showSpinner('جاري الحفظ...');
+    API.call('admin_save_user', data, SESSION_TOKEN)
+      .then(function (r) {
+        UIC.closeModal('user-modal');
+        UIC.toast(r.message || 'تم الحفظ', 'success');
+        loadUsers();
+      })
+      .catch(function (e) { UIC.toast(e.message || 'خطأ', 'error'); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function deleteUser(email) {
+    if (!confirm('هل تريد حذف بيانات هذا المستخدم؟ سيتم تفريغ بيانات الصف.')) return;
+    UI.showSpinner('جاري الحذف...');
+    API.call('admin_delete_user', { email: email }, SESSION_TOKEN)
+      .then(function (r) { UIC.toast(r.message || 'تم الحذف', 'success'); loadUsers(); })
+      .catch(function (e) { UIC.toast(e.message || 'خطأ', 'error'); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  /* ---------- ROLES MATRIX ---------- */
+  function loadMatrix(keepFilters) {
+    if (!adminTabVisible_('matrix')) return;
+    var generation = ++ADMIN_READ_GEN;
+    UIC.readSkeleton('tab-body');
+    API.call('admin_list_matrix', {}, SESSION_TOKEN)
+      .then(function (r) {
+        if (!adminReadCurrent_('matrix', generation)) return;
+        window.__matrixData = r.matrix || [];
+        window.__matrixPages = r.pages || [];
+        window.__matrixRoles = r.roles || [];
+        window.__matrixUserRoles = r.user_roles || [];
+        window.__matrixCompanies = r.company_options || [];
+        window.__matrixModules = r.module_options || [];
+        if (!keepFilters) {
+          window.__selRole = '';
+          window.__selCompany = '';
+          window.__selModule = '';
+        }
+        renderMatrix();
+      })
+      .catch(function (e) { if (adminReadCurrent_('matrix', generation)) showError(e); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function getFilteredRoles(company) {
+    if (!company) return window.__matrixRoles || [];
+    var compStr = String(company).trim().toLowerCase();
+    var userRoles = window.__matrixUserRoles || [];
+    var allowed = {};
+    userRoles.forEach(function (u) {
+      var uComp = String(u.company || '').trim().toLowerCase();
+      if (!uComp || uComp === compStr) {
+        allowed[u.role] = true;
+      }
+    });
+    return (window.__matrixRoles || []).filter(function (r) {
+      return !!allowed[r];
+    });
+  }
+
+  function getModuleOptions() {
+    var list = window.__matrixModules ? window.__matrixModules.slice() : [];
+    var seen = {};
+    list.forEach(function (m) { seen[String(m).trim().toLowerCase()] = true; });
+    (window.__matrixPages || []).forEach(function (p) {
+      var m = String(p.page_module || '').trim();
+      if (m && m !== '-' && !seen[m.toLowerCase()]) {
+        seen[m.toLowerCase()] = true;
+        list.push(m);
+      }
+    });
+    return list;
+  }
+
+  function renderMatrix() {
+    var filteredRoles = getFilteredRoles(window.__selCompany || '');
+    var roleOpts = '<option value="">اختر الدور...</option>' + filteredRoles.map(function (r) {
+      return '<option value="' + FMT.escape(r) + '"' + (r === window.__selRole ? ' selected' : '') + '>' + FMT.escape(r) + '</option>';
+    }).join('');
+
+    var companyOpts = '<option value="">كل الشركات</option>' + (window.__matrixCompanies || []).map(function (c) {
+      return '<option value="' + FMT.escape(c.value) + '"' + (String(c.value) === String(window.__selCompany || '') ? ' selected' : '') + '>' + FMT.escape(c.label) + '</option>';
+    }).join('');
+
+    var modOpts = '<option value="">كل الوحدات</option>' + getModuleOptions().map(function (m) {
+      return '<option value="' + FMT.escape(m) + '"' + (String(m) === String(window.__selModule || '') ? ' selected' : '') + '>' + FMT.escape(m) + '</option>';
+    }).join('');
+
+    var body = document.getElementById('tab-body');
+    body.innerHTML =
+      '<div style="display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;margin-bottom:16px;">' +
+      '<div class="form-field" style="margin:0;min-width:180px;"><label class="form-label">الشركة (فلتر الصفحات والأدوار)</label>' +
+      '<select id="mx-company" class="input matrix-select" onchange="onMatrixCompanyChange(this.value)">' + companyOpts + '</select></div>' +
+      '<div class="form-field" style="margin:0;min-width:180px;"><label class="form-label">الدور</label>' +
+      '<select id="mx-role" class="input matrix-select" onchange="onMatrixRoleChange(this.value)">' + roleOpts + '</select></div>' +
+      '<div class="form-field" style="margin:0;min-width:180px;"><label class="form-label">الوحدة (فلتر الصفحات)</label>' +
+      '<select id="mx-module" class="input matrix-select" onchange="onMatrixModuleChange(this.value)">' + modOpts + '</select></div>' +
+      '</div>' +
+      '<div id="mx-grid"></div>';
+    renderMatrixGrid();
+  }
+
+  function onMatrixCompanyChange(v) {
+    window.__selCompany = v;
+    var filteredRoles = getFilteredRoles(v);
+    if (window.__selRole && filteredRoles.indexOf(window.__selRole) === -1) {
+      window.__selRole = '';
+    }
+    var roleEl = document.getElementById('mx-role');
+    if (roleEl) {
+      roleEl.innerHTML = '<option value="">اختر الدور...</option>' + filteredRoles.map(function (r) {
+        return '<option value="' + FMT.escape(r) + '"' + (r === window.__selRole ? ' selected' : '') + '>' + FMT.escape(r) + '</option>';
+      }).join('');
+      roleEl.value = window.__selRole;
+    }
+    renderMatrixGrid();
+  }
+
+  function onMatrixRoleChange(v) {
+    window.__selRole = v;
+    renderMatrixGrid();
+  }
+
+  function onMatrixModuleChange(v) {
+    window.__selModule = v;
+    renderMatrixGrid();
+  }
+
+  function renderMatrixGrid() {
+    var grid = document.getElementById('mx-grid');
+    if (!grid) return;
+    var role = window.__selRole || '';
+    if (!role) { grid.innerHTML = '<div class="empty-state"><span>اختر دوراً لعرض الصفحات</span></div>'; return; }
+    var company = window.__selCompany || '';
+    var module = window.__selModule || '';
+
+    var existing = {};
+    (window.__matrixData || []).forEach(function (m) {
+      if (!String(m.access_type || '').trim()) return;
+      if (String(m.role).toLowerCase() === role.toLowerCase()) existing[String(m.page_id)] = m;
+    });
+
+    var pages = (window.__matrixPages || []).filter(function (p) {
+      if (!String(p.page_id || '').trim()) return false;
+      if (company && String(p.page_company || '') !== String(company)) return false;
+      if (module && String(p.page_module || '').trim().toLowerCase() !== module.toLowerCase()) return false;
+      return true;
+    });
+    if (!pages.length) { grid.innerHTML = '<div class="empty-state"><span>لا توجد صفحات مطابقة للفلتر المحدد</span></div>'; return; }
+
+    var rows = pages.map(function (p) {
+      var m = existing[String(p.page_id)] || {};
+      var acc = m.access_type || 'Read';
+      var st = m.status || 'Active';
+      return '<tr>' +
+        '<td>' + FMT.escape(p.page_id) + '</td>' +
+        '<td>' + FMT.escape(p.page_name || p.page_id) + '</td>' +
+        '<td>' + FMT.escape(p.page_module || '-') + '</td>' +
+        '<td><select class="input matrix-select" style="min-width:140px;" data-page="' + FMT.escape(p.page_id) + '" data-field="access_type">' +
+        '<option value="Read"' + (acc === 'Read' ? ' selected' : '') + '>Read</option>' +
+        '<option value="Write"' + (acc === 'Write' ? ' selected' : '') + '>Write</option>' +
+        '<option value="Full"' + (acc === 'Full' ? ' selected' : '') + '>Full</option>' +
+        '</select></td>' +
+        '<td><select class="input matrix-select" style="min-width:140px;" data-page="' + FMT.escape(p.page_id) + '" data-field="status">' +
+        '<option value="Active"' + (st === 'Active' ? ' selected' : '') + '>Active</option>' +
+        '<option value="InActive"' + (st === 'InActive' ? ' selected' : '') + '>InActive</option>' +
+        '</select></td>' +
+        '<td>' + (existing[String(p.page_id)] ? '<button class="btn btn-ghost" style="padding:2px 8px;font-size:11px;" onclick="deleteMatrixRow(\'' + FMT.escape(role) + '\',\'' + FMT.escape(p.page_id) + '\')">✕</button>' : '') + '</td>' +
+        '</tr>';
+    }).join('');
+
+    grid.innerHTML =
+      '<div style="margin-bottom:8px;"><button class="btn btn-primary" onclick="UI.submitOnce(this, saveMatrix)">حفظ الصلاحيات</button></div>' +
+      '<div class="table-wrap"><table id="perm-matrix-table" class="table" style="min-width:860px;"><thead><tr>' +
+      '<th data-col="text" data-min="180px" style="min-width:180px;">الصفحة</th>' +
+      '<th data-col="prose" data-min="220px" style="min-width:220px;">الاسم</th>' +
+      '<th data-col="text" data-min="110px" style="min-width:110px;">الوحدة</th>' +
+      '<th data-col="text" data-min="140px" style="min-width:140px;width:150px;">نوع الوصول</th>' +
+      '<th data-col="text" data-min="140px" style="min-width:140px;width:150px;">الحالة</th>' +
+      '<th data-col="text" data-min="60px" style="min-width:60px;width:70px;">حذف</th>' +
+      '</tr></thead><tbody>' + rows + '</tbody></table></div>';
+    UIC.autoColumns('perm-matrix-table');
+  }
+
+  function saveMatrix() {
+    var role = window.__selRole || '';
+    if (!role) { UIC.toast('اختر الدور', 'error'); return; }
+    var map = {};
+    document.querySelectorAll('#mx-grid select[data-page]').forEach(function (sel) {
+      var page = sel.getAttribute('data-page');
+      var field = sel.getAttribute('data-field');
+      if (!map[page]) map[page] = { page_id: page, access_type: 'Read', status: 'Active' };
+      map[page][field] = sel.value;
+    });
+    var assignments = Object.keys(map).map(function (k) { return map[k]; });
+    if (!assignments.length) { UIC.toast('لا توجد صفحات', 'error'); return; }
+    UI.showSpinner('جاري الحفظ...');
+    API.call('admin_save_matrix', { role: role, assignments: assignments }, SESSION_TOKEN)
+      .then(function (r) { UIC.toast(r.message || 'تم الحفظ', 'success'); loadMatrix(); })
+      .catch(function (e) { UIC.toast(e.message || 'خطأ', 'error'); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function deleteMatrixRow(role, pageId) {
+    if (!confirm('هل تريد حذف صلاحية هذه الصفحة لهذا الدور؟ سيتم تفريغ بيانات الصف.')) return;
+    UI.showSpinner('جاري الحذف...');
+    API.call('admin_delete_matrix_row', { role: role, page_id: pageId }, SESSION_TOKEN)
+      .then(function (r) { UIC.toast(r.message || 'تم الحذف', 'success'); loadMatrix(true); })
+      .catch(function (e) { UIC.toast(e.message || 'خطأ', 'error'); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  /* ---------- SYSTEM PAGES ---------- */
+  function loadPages() {
+    if (!adminTabVisible_('pages')) return;
+    var generation = ++ADMIN_READ_GEN;
+    UIC.readSkeleton('tab-body');
+    API.call('admin_list_pages', {}, SESSION_TOKEN)
+      .then(function (r) {
+        if (!adminReadCurrent_('pages', generation)) return;
+        window.__systemPages = r.system_pages || [];
+        window.__allPages = r.all_pages || [];
+        window.__pageCompanies = r.company_options || [];
+        window.__pageModules = r.module_options || [];
+        renderPages();
+      })
+      .catch(function (e) { if (adminReadCurrent_('pages', generation)) showError(e); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function renderPages() {
+    var list = window.__systemPages || [];
+    var rows = list.filter(function (p) { return String(p.page_id || '').trim(); }).map(function (p) {
+      return {
+        page_id: p.page_id,
+        page_name: p.page_name || '-',
+        page_module: p.page_module || '-',
+        page_company: pageCompanyLabel(p.page_company),
+        actions: UIC.actionBtns([{ label: 'حذف', onclick: 'deletePage(\'' + FMT.escape(p.page_id) + '\')', color: '#dc2626' }])
+      };
+    });
+    var body = document.getElementById('tab-body');
+    body.innerHTML = '<div style="display:flex;justify-content:flex-end;margin-bottom:12px;">' +
+      '<button class="btn btn-primary" onclick="openPagesMatrix()">عرض جميع الصفحات</button></div>' +
+      UIC.dataTable('pages-table', {
+        title: 'صفحات النظام',
+        headers: [
+          { key: 'page_id', label: 'معرف الصفحة' },
+          { key: 'page_name', label: 'اسم الصفحة' },
+          { key: 'page_module', label: 'الوحدة' },
+          { key: 'page_company', label: 'الشركة' },
+          { key: 'actions', label: 'إجراءات' }
+        ],
+        rows: rows,
+        emptyText: 'لا توجد صفحات مسجلة'
+      });
+    UIC.initTableSort('pages-table');
+  }
+
+  function pageCompanyLabel(uid) {
+    var found = (window.__pageCompanies || []).find(function (c) { return String(c.value) === String(uid); });
+    return found ? found.label : (uid || '-');
+  }
+
+  function cssId(s) { return String(s).replace(/[^a-zA-Z0-9_]/g, '_'); }
+
+  function buildSelect(id, options, selected) {
+    var html = '<select id="' + id + '" class="input matrix-select" style="min-width:150px;">';
+    options.forEach(function (o) {
+      var v = (o && o.value !== undefined) ? o.value : o;
+      var l = (o && o.label !== undefined) ? o.label : o;
+      html += '<option value="' + FMT.escape(v) + '"' + (String(v) === String(selected || '') ? ' selected' : '') + '>' + FMT.escape(l) + '</option>';
+    });
+    html += '</select>';
+    return html;
+  }
+
+  function openPagesMatrix() {
+    var allPages = window.__allPages || [];
+    var sysMap = {};
+    (window.__systemPages || []).forEach(function (s) { sysMap[String(s.page_id)] = s; });
+
+    var moduleOpts = (window.__pageModules || []).map(function (m) { return { value: m, label: m }; });
+    var companyOpts = [{ value: '', label: '-' }].concat((window.__pageCompanies || []).map(function (c) { return { value: c.value, label: c.label }; }));
+
+    var rows = allPages.map(function (p) {
+      var s = sysMap[String(p.page_id)] || {};
+      var id = cssId(p.page_id);
+      var name = s.page_name || p.title || p.label || p.page_id;
+      return '<tr>' +
+        '<td>' + FMT.escape(p.page_id) + '</td>' +
+        '<td><input id="pn_' + id + '" class="input matrix-input" style="min-width:200px;" value="' + FMT.escape(name) + '"></td>' +
+        '<td>' + buildSelect('pm_' + id, moduleOpts, s.page_module) + '</td>' +
+        '<td>' + buildSelect('pc_' + id, companyOpts, s.page_company) + '</td>' +
+        '</tr>';
+    }).join('');
+
+    var body = '<div class="table-wrap">' +
+      '<table id="pages-matrix-table" class="table" style="min-width:880px;"><thead><tr>' +
+      '<th data-col="text" data-min="180px" style="min-width:180px;">معرف الصفحة</th>' +
+      '<th data-col="prose" data-min="220px" style="min-width:220px;">اسم الصفحة</th>' +
+      '<th data-col="text" data-min="150px" style="min-width:150px;width:160px;">الوحدة</th>' +
+      '<th data-col="text" data-min="170px" style="min-width:170px;width:180px;">الشركة</th>' +
+      '</tr></thead><tbody>' + rows + '</tbody></table></div>';
+
+    UIC.openModal('pages-matrix-modal', { title: 'جميع صفحات النظام', size: 'xl', body: body, onSave: 'savePagesMatrix()' });
+    UIC.autoColumns('pages-matrix-table');
+  }
+
+  function savePagesMatrix() {
+    var pages = (window.__allPages || []).map(function (p) {
+      var id = cssId(p.page_id);
+      return {
+        page_id: p.page_id,
+        page_name: document.getElementById('pn_' + id) ? document.getElementById('pn_' + id).value : '',
+        page_module: document.getElementById('pm_' + id) ? document.getElementById('pm_' + id).value : '',
+        page_company: document.getElementById('pc_' + id) ? document.getElementById('pc_' + id).value : ''
+      };
+    });
+    UI.showSpinner('جاري الحفظ...');
+    API.call('admin_save_pages', { pages: pages }, SESSION_TOKEN)
+      .then(function (r) { UIC.closeModal('pages-matrix-modal'); UIC.toast(r.message || 'تم الحفظ', 'success'); loadPages(); })
+      .catch(function (e) { UIC.toast(e.message || 'خطأ', 'error'); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function deletePage(pageId) {
+    if (!confirm('هل تريد حذف بيانات هذه الصفحة؟ ستعود الصفحة لإعداداتها الافتراضية.')) return;
+    UI.showSpinner('جاري الحذف...');
+    API.call('admin_delete_page', { page_id: pageId }, SESSION_TOKEN)
+      .then(function (r) { UIC.toast(r.message || 'تم الحذف', 'success'); loadPages(); })
+      .catch(function (e) { UIC.toast(e.message || 'خطأ', 'error'); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  /* ---------- CURRENCY ---------- */
+  var CURRENCY_CODES = ['EGP','USD','EUR','GBP','SAR','AED','KWD','QAR','BHD','OMR','JOD','CNY','JPY','INR','TRY','CAD','AUD','CHF'];
+
+  function loadCurrency() {
+    if (!adminTabVisible_('currency')) return;
+    var generation = ++ADMIN_READ_GEN;
+    UIC.readSkeleton('tab-body');
+    API.call('admin_list_currency', {}, SESSION_TOKEN)
+      .then(function (r) {
+        if (!adminReadCurrent_('currency', generation)) return;
+        window.__currencies = r.currencies || [];
+        renderCurrency();
+      })
+      .catch(function (e) { if (adminReadCurrent_('currency', generation)) showError(e); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function renderCurrency() {
+    var list = window.__currencies || [];
+    var rows = list.map(function (c) {
+      return {
+        id: c.id,
+        currency: c.currency,
+        rate: FMT.number(c.rate),
+        actions: UIC.actionBtns([{ label: 'حذف', onclick: 'deleteCurrency(' + c.id + ')' }])
+      };
+    });
+    var body = document.getElementById('tab-body');
+    body.innerHTML = '<div style="display:flex;justify-content:flex-end;margin-bottom:12px;">' +
+      '<button class="btn btn-primary" onclick="openCurrencyModal(\'\')">+ إضافة عملة</button></div>' +
+      UIC.dataTable('currency-table', {
+        title: 'العملات',
+        headers: [
+          { key: 'id', label: 'المعرف', numeric: true },
+          { key: 'currency', label: 'العملة' },
+          { key: 'rate', label: 'السعر (EGP)', numeric: true },
+          { key: 'actions', label: 'إجراءات' }
+        ],
+        rows: rows,
+        emptyText: 'لا توجد عملات'
+      });
+    UIC.initTableSort('currency-table');
+  }
+
+  function openCurrencyModal() {
+    var opts = CURRENCY_CODES.map(function (c) { return '<option value="' + c + '">' + c + '</option>'; }).join('');
+    var body = '<form id="currency-form">' +
+      '<div class="form-field"><label class="form-label" for="cur">العملة</label>' +
+      '<select id="cur" class="input">' + opts + '</select></div>' +
+      '<p style="font-size:12px;color:var(--text-muted);">يتم حساب السعر تلقائياً من Google Finance.</p>' +
+      '</form>';
+    UIC.openModal('currency-modal', { title: 'إضافة عملة', body: body, onSave: 'saveCurrency()' });
+  }
+
+  function saveCurrency() {
+    var currency = document.getElementById('cur') ? document.getElementById('cur').value : '';
+    if (!currency) { UIC.toast('اختر العملة', 'error'); return; }
+    UI.showSpinner('جاري الحفظ...');
+    API.call('admin_save_currency', { currency: currency }, SESSION_TOKEN)
+      .then(function (r) { UIC.closeModal('currency-modal'); UIC.toast(r.message || 'تم الحفظ', 'success'); loadCurrency(); })
+      .catch(function (e) { UIC.toast(e.message || 'خطأ', 'error'); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function deleteCurrency(id) {
+    if (!confirm('هل تريد حذف هذه العملة؟')) return;
+    UI.showSpinner('جاري الحذف...');
+    API.call('admin_delete_currency', { id: Number(id) }, SESSION_TOKEN)
+      .then(function (r) { UIC.toast(r.message || 'تم الحذف', 'success'); loadCurrency(); })
+      .catch(function (e) { UIC.toast(e.message || 'خطأ', 'error'); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  /* ---------- SYSTEM INVOICES ---------- */
+  function loadInvoices() {
+    if (!adminTabVisible_('invoices')) return;
+    var generation = ++ADMIN_READ_GEN;
+    UIC.readSkeleton('tab-body', { message: 'جاري جلب فواتير الاشتراكات...' });
+    API.call('admin_list_invoices', {}, SESSION_TOKEN)
+      .then(function (r) {
+        if (!adminReadCurrent_('invoices', generation)) return;
+        window.__invoices = r.invoices || [];
+        window.__invoiceCompanies = r.company_options || [];
+        renderInvoices(window.__invoices, window.__invoiceCompanies);
+      })
+      .catch(function (e) { if (adminReadCurrent_('invoices', generation)) showError(e); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function renderInvoices(list, companies) {
+    var compMap = {};
+    (companies || []).forEach(function (c) {
+      compMap[c.value] = c.name_en || c.name_ar || c.value;
+    });
+
+    var rows = list.map(function (inv) {
+      var uid = String(inv.unique_id || '').trim();
+      var noOfUsers = Number(inv.no_of_user) || 0;
+      var costPerUserUsd = Number(inv.cost_per_user_usd) || 0;
+      var maintCostUsd = Number(inv.maintenance_cost_usd) || 0;
+      var totalUsd = (noOfUsers * costPerUserUsd) + maintCostUsd;
+
+      var printBtn = { label: '🖨️ طباعة', onclick: 'printInvoiceDoc(\'' + FMT.escape(uid) + '\')' };
+      var editBtn = { label: '✏️ تعديل', onclick: 'openInvoiceModal(\'' + FMT.escape(uid) + '\')' };
+      var delBtn = { label: '🗑️', onclick: 'deleteInvoiceDoc(\'' + FMT.escape(uid) + '\')', color: '#dc2626' };
+
+      return {
+        id: inv.id || '-',
+        invoice_number: '<strong>' + FMT.escape(inv.invoice_number || '-') + '</strong>',
+        invoice_date: FMT.escape(formatDateShort(inv.invoice_date)),
+        company: FMT.escape(compMap[inv.company] || inv.company || '-'),
+        no_of_user: noOfUsers,
+        cost_usd: '$' + costPerUserUsd.toFixed(2),
+        rate: (Number(inv.current_exchange_rate) || 0).toFixed(2) + ' ج.م',
+        cost_egp: (Number(inv.cost_per_user_egp) || 0).toFixed(2) + ' ج.م',
+        maint_usd: '$' + maintCostUsd.toFixed(2),
+        maint_egp: (Number(inv.maintenance_cost_per_user_egp) || 0).toFixed(2) + ' ج.م',
+        total_usd: '<strong style="color:var(--brand-primary);">' + '$' + totalUsd.toFixed(2) + '</strong>',
+        actions: UIC.actionBtns([printBtn, editBtn, delBtn])
+      };
+    });
+
+    var body = document.getElementById('tab-body');
+    body.innerHTML =
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:10px;">' +
+        '<div style="font-size:13px;color:var(--text-muted);">إجمالي الفواتير الصادرة: <strong>' + list.length + '</strong></div>' +
+        '<button class="btn btn-primary" onclick="openInvoiceModal(\'\')">+ إصدار فاتورة جديدة</button>' +
+      '</div>' +
+      UIC.dataTable('invoices-table', {
+        title: 'فواتير اشتراكات النظام (ERP System Invoices)',
+        headers: [
+          { key: 'id', label: '#', numeric: true },
+          { key: 'invoice_number', label: 'رقم الفاتورة' },
+          { key: 'invoice_date', label: 'التاريخ' },
+          { key: 'company', label: 'الشركة (Bill To)' },
+          { key: 'no_of_user', label: 'المستخدمين', numeric: true },
+          { key: 'cost_usd', label: 'تكلفة المستخدم ($)', numeric: true },
+          { key: 'rate', label: 'سعر الصرف', numeric: true },
+          { key: 'cost_egp', label: 'تكلفة المستخدم (ج.م)', numeric: true },
+          { key: 'maint_usd', label: 'الصيانة ($)', numeric: true },
+          { key: 'maint_egp', label: 'الصيانة (ج.م)', numeric: true },
+          { key: 'total_usd', label: 'الإجمالي ($)', numeric: true },
+          { key: 'actions', label: 'إجراءات' }
+        ],
+        rows: rows,
+        emptyText: 'لا توجد فواتير صادرة حتى الآن'
+      });
+
+    UIC.initTableSort('invoices-table');
+  }
+
+  function openInvoiceModal(uniqueId) {
+    var inv = null;
+    if (uniqueId) {
+      inv = (window.__invoices || []).find(function (i) { return String(i.unique_id) === String(uniqueId); });
+    }
+
+    var isEdit = !!inv;
+    var title = isEdit ? ('تعديل الفاتورة: ' + (inv.invoice_number || '')) : 'إصدار فاتورة اشتراك جديدة';
+
+    var todayStr = new Date().toISOString().split('T')[0];
+    var invoiceNumber = inv ? (inv.invoice_number || '') : ('INV-' + new Date().getFullYear() + '-' + String(Math.floor(Math.random() * 900) + 100));
+    var invoiceDate = inv ? formatDateShort(inv.invoice_date) : todayStr;
+    var selectedCompany = inv ? (inv.company || '') : '';
+    var noOfUsers = inv ? (inv.no_of_user != null ? inv.no_of_user : 1) : 1;
+    var costPerUserUsd = inv ? (inv.cost_per_user_usd != null ? inv.cost_per_user_usd : 10) : 10;
+    var currentExchangeRate = inv ? (inv.current_exchange_rate != null ? inv.current_exchange_rate : 50) : 50;
+    var maintenanceCostUsd = inv ? (inv.maintenance_cost_usd != null ? inv.maintenance_cost_usd : 14) : 14;
+
+    var compOptions = (window.__invoiceCompanies || []).map(function (c) {
+      var isSel = String(c.value) === String(selectedCompany) ? ' selected' : '';
+      return '<option value="' + FMT.escape(c.value) + '"' + isSel + '>' + FMT.escape(c.name_en ? (c.name_en + ' (' + c.name_ar + ')') : c.name_ar) + '</option>';
+    }).join('');
+
+    var modalHtml =
+      '<form id="erp-invoice-form" onsubmit="event.preventDefault();">' +
+        '<input type="hidden" id="inv-uid" value="' + (isEdit ? FMT.escape(uniqueId) : '') + '">' +
+        
+        '<div class="form-grid">' +
+          '<div class="form-field">' +
+            '<label class="form-label" for="inv-num">رقم الفاتورة (Invoice Number) *</label>' +
+            '<input type="text" id="inv-num" class="input" value="' + FMT.escape(invoiceNumber) + '" required placeholder="مثال: INV-2026-001">' +
+          '</div>' +
+          '<div class="form-field">' +
+            '<label class="form-label" for="inv-date">تاريخ الفاتورة (Date) *</label>' +
+            '<input type="date" id="inv-date" class="input" value="' + FMT.escape(invoiceDate) + '" required>' +
+          '</div>' +
+        '</div>' +
+
+        '<div class="form-field">' +
+          '<label class="form-label" for="inv-company">الشركة (Company - Bill to) *</label>' +
+          '<select id="inv-company" class="input" required>' +
+            '<option value="">-- اختر الشركة --</option>' +
+            compOptions +
+          '</select>' +
+        '</div>' +
+
+        '<div class="form-grid">' +
+          '<div class="form-field">' +
+            '<label class="form-label" for="inv-users">عدد المستخدمين (No. of Users) *</label>' +
+            '<input type="number" id="inv-users" class="input" min="1" step="1" value="' + noOfUsers + '" required oninput="calcInvoiceModal()">' +
+          '</div>' +
+          '<div class="form-field">' +
+            '<label class="form-label" for="inv-rate">سعر الصرف (EGP Exchange Rate) *</label>' +
+            '<input type="number" id="inv-rate" class="input" min="0.01" step="0.01" value="' + currentExchangeRate + '" required oninput="calcInvoiceModal()">' +
+          '</div>' +
+        '</div>' +
+
+        '<div class="form-grid">' +
+          '<div class="form-field">' +
+            '<label class="form-label" for="inv-cost-usd">تكلفة المستخدم ($ USD) *</label>' +
+            '<input type="number" id="inv-cost-usd" class="input" min="0" step="0.01" value="' + costPerUserUsd + '" required oninput="calcInvoiceModal()">' +
+          '</div>' +
+          '<div class="form-field">' +
+            '<label class="form-label" for="inv-maint-usd">تكلفة الصيانة ($ USD) *</label>' +
+            '<input type="number" id="inv-maint-usd" class="input" min="0" step="0.01" value="' + maintenanceCostUsd + '" required oninput="calcInvoiceModal()">' +
+          '</div>' +
+        '</div>' +
+
+        // Live calculation summary box
+        '<div style="background:var(--bg-muted);border:1px solid var(--border-color);border-radius:var(--radius-md);padding:14px;margin-top:12px;">' +
+          '<div style="font-weight:700;font-size:13px;margin-bottom:8px;color:var(--text-main);">📊 الحسابات التلقائية المعتمدة:</div>' +
+          '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:12.5px;">' +
+            '<div>تكلفة المستخدم بالجنيه (+4%): <strong id="calc-cost-egp">0.00 ج.م</strong></div>' +
+            '<div>تكلفة الصيانة بالجنيه: <strong id="calc-maint-egp">0.00 ج.م</strong></div>' +
+            '<div>إجمالي الترخيص بالدولار: <strong id="calc-license-subtotal">$0.00</strong></div>' +
+            '<div>الإجمالي العام بالدولار: <strong id="calc-total-usd" style="color:var(--brand-primary);">$0.00</strong></div>' +
+          '</div>' +
+        '</div>' +
+      '</form>';
+
+    UIC.openModal('erp-invoice-modal', {
+      size: 'lg',
+      title: title,
+      body: modalHtml,
+      onSave: 'saveInvoiceDoc()'
+    });
+
+    // Run initial calculation
+    setTimeout(calcInvoiceModal, 50);
+  }
+
+  function calcInvoiceModal() {
+    var users = parseInt(document.getElementById('inv-users') ? document.getElementById('inv-users').value : 0, 10) || 0;
+    var rate = parseFloat(document.getElementById('inv-rate') ? document.getElementById('inv-rate').value : 0) || 0;
+    var costUsd = parseFloat(document.getElementById('inv-cost-usd') ? document.getElementById('inv-cost-usd').value : 0) || 0;
+    var maintUsd = parseFloat(document.getElementById('inv-maint-usd') ? document.getElementById('inv-maint-usd').value : 0) || 0;
+
+    // Formulas:
+    // cost_per_user_egp = cost_per_user_usd * current_exchange_rate * 1.04
+    // maintenance_cost_per_user_egp = maintenance_cost_usd * current_exchange_rate
+    var costEgp = costUsd * rate * 1.04;
+    var maintEgp = maintUsd * rate;
+    var licenseSubtotal = users * costUsd;
+    var totalUsd = licenseSubtotal + maintUsd;
+
+    var elCostEgp = document.getElementById('calc-cost-egp');
+    var elMaintEgp = document.getElementById('calc-maint-egp');
+    var elLicenseSub = document.getElementById('calc-license-subtotal');
+    var elTotalUsd = document.getElementById('calc-total-usd');
+
+    if (elCostEgp) elCostEgp.textContent = costEgp.toFixed(2) + ' ج.م';
+    if (elMaintEgp) elMaintEgp.textContent = maintEgp.toFixed(2) + ' ج.م';
+    if (elLicenseSub) elLicenseSub.textContent = '$' + licenseSubtotal.toFixed(2);
+    if (elTotalUsd) elTotalUsd.textContent = '$' + totalUsd.toFixed(2);
+  }
+
+  function saveInvoiceDoc() {
+    var uid = document.getElementById('inv-uid') ? document.getElementById('inv-uid').value.trim() : '';
+    var invNum = document.getElementById('inv-num') ? document.getElementById('inv-num').value.trim() : '';
+    var invDate = document.getElementById('inv-date') ? document.getElementById('inv-date').value.trim() : '';
+    var company = document.getElementById('inv-company') ? document.getElementById('inv-company').value.trim() : '';
+    var users = document.getElementById('inv-users') ? parseInt(document.getElementById('inv-users').value, 10) : 0;
+    var rate = document.getElementById('inv-rate') ? parseFloat(document.getElementById('inv-rate').value) : 0;
+    var costUsd = document.getElementById('inv-cost-usd') ? parseFloat(document.getElementById('inv-cost-usd').value) : 0;
+    var maintUsd = document.getElementById('inv-maint-usd') ? parseFloat(document.getElementById('inv-maint-usd').value) : 0;
+
+    if (!invNum) { UIC.toast('رقم الفاتورة مطلوب', 'error'); return; }
+    if (!invDate) { UIC.toast('تاريخ الفاتورة مطلوب', 'error'); return; }
+    if (!company) { UIC.toast('اختر الشركة', 'error'); return; }
+    if (isNaN(users) || users < 1) { UIC.toast('عدد المستخدمين يجب أن يكون 1 على الأقل', 'error'); return; }
+    if (isNaN(rate) || rate <= 0) { UIC.toast('سعر الصرف غير صحيح', 'error'); return; }
+    if (isNaN(costUsd) || costUsd < 0) { UIC.toast('تكلفة المستخدم غير صحيحة', 'error'); return; }
+    if (isNaN(maintUsd) || maintUsd < 0) { UIC.toast('تكلفة الصيانة غير صحيحة', 'error'); return; }
+
+    UI.showSpinner('جاري حفظ الفاتورة...');
+    API.call('admin_save_invoice', {
+      unique_id: uid,
+      invoice_number: invNum,
+      invoice_date: invDate,
+      company: company,
+      no_of_user: users,
+      cost_per_user_usd: costUsd,
+      current_exchange_rate: rate,
+      maintenance_cost_usd: maintUsd
+    }, SESSION_TOKEN)
+      .then(function (r) {
+        UIC.closeModal('erp-invoice-modal');
+        UIC.toast(r.message || 'تم حفظ الفاتورة بنجاح', 'success');
+        loadInvoices();
+      })
+      .catch(function (e) {
+        UIC.toast((e && e.message) || 'فشل حفظ الفاتورة', 'error');
+      })
+      .finally(function () {
+        UI.hideSpinner();
+      });
+  }
+
+  function deleteInvoiceDoc(uniqueId) {
+    if (!uniqueId) return;
+    if (!confirm('هل أنت متأكد من رغبتك في حذف هذه الفاتورة؟')) return;
+
+    UI.showSpinner('جاري حذف الفاتورة...');
+    API.call('admin_delete_invoice', { unique_id: uniqueId }, SESSION_TOKEN)
+      .then(function (r) {
+        UIC.toast(r.message || 'تم الحذف بنجاح', 'success');
+        loadInvoices();
+      })
+      .catch(function (e) {
+        UIC.toast((e && e.message) || 'فشل حذف الفاتورة', 'error');
+      })
+      .finally(function () {
+        UI.hideSpinner();
+      });
+  }
+
+  function printInvoiceDoc(uniqueId) {
+    if (!uniqueId) return;
+    UIC.openDownload(scriptUrl + '?download=erp_invoice&unique_id=' + encodeURIComponent(uniqueId) + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN),
+      'فتح الفاتورة');
+  }
+
+  function formatDateShort(val) {
+    if (!val) return '';
+    if (val instanceof Date && !isNaN(val.getTime())) {
+      var y = val.getFullYear();
+      var m = String(val.getMonth() + 1).padStart(2, '0');
+      var d = String(val.getDate()).padStart(2, '0');
+      return y + '-' + m + '-' + d;
+    }
+    var s = String(val).trim();
+    if (s.indexOf('T') !== -1) s = s.split('T')[0];
+    return s;
+  }
+
+  /* ---------- KILL SWITCH (super admin only) ---------- */
+  function loadKillSwitch() {
+    if (!adminTabVisible_('killswitch')) return;
+    var generation = ++ADMIN_READ_GEN;
+    UIC.readSkeleton('tab-body');
+    API.call('toggle_kill_switch', {}, SESSION_TOKEN)
+      .then(function (r) {
+        if (!adminReadCurrent_('killswitch', generation)) return;
+        renderKillSwitch(!!r.enabled);
+      })
+      .catch(function (e) { if (adminReadCurrent_('killswitch', generation)) showError(e); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function renderKillSwitch(enabled) {
+    var body = document.getElementById('tab-body');
+    if (!body) return;
+    var pill = UIC.statusPill(enabled ? 'النظام يعمل' : 'النظام متوقف', enabled ? 'success' : 'neutral');
+    body.innerHTML =
+      '<div style="max-width:520px;margin:0 auto;text-align:center;padding:24px;border:1px solid var(--border,var(--border-color, #e5e7eb));border-radius:12px;">' +
+        '<h3 style="margin-top:0;">مفتاح إيقاف النظام</h3>' +
+        '<p style="color:var(--text-muted,var(--text-muted, #666));font-size:13px;">إيقاف النظام يمنع جميع الصفحات وكل العمليات فوراً لكل المستخدمين — بما في ذلك مدير النظام — ويظهر لهم رسالة «عطل في السيستم». لإعادة التشغيل بعد الإيقاف: عدّل قيمة الخلية B2 في جدول <b>ERP_system_work</b> مباشرة من Google Sheets (1 = يعمل، 0 = متوقف).</p>' +
+        '<div style="margin:16px 0;">الحالة الحالية: ' + pill + '</div>' +
+        '<button class="btn ' + (enabled ? 'btn-outline' : 'btn-primary') + '" id="killswitch-btn" onclick="toggleKillSwitch(' + (!enabled) + ')">' +
+          (enabled ? '⛔ إيقاف النظام' : '✅ تشغيل النظام') +
+        '</button>' +
+      '</div>';
+  }
+
+  function toggleKillSwitch(on) {
+    if (!on && !confirm('سيتم إيقاف النظام بالكامل لجميع المستخدمين فوراً. متأكد؟')) return;
+    UI.showSpinner();
+    var btn = document.getElementById('killswitch-btn');
+    if (btn) btn.disabled = true;
+    API.call('toggle_kill_switch', { on: on }, SESSION_TOKEN)
+      .then(function (r) {
+        UIC.toast((r && r.message) || 'تم التنفيذ', 'success');
+        renderKillSwitch(!!r.enabled);
+      })
+      .catch(function (e) {
+        showError(e);
+        loadKillSwitch();
+      })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  /* ---------- BACKUPS (super admin only) ---------- */
+  function loadBackups() {
+    var body = document.getElementById('tab-body');
+    if (!body) return;
+    body.innerHTML =
+      '<div style="max-width:520px;margin:0 auto;text-align:center;padding:24px;border:1px solid var(--border,var(--border-color, #e5e7eb));border-radius:12px;">' +
+        '<h3 style="margin-top:0;">النسخ الاحتياطي اليومي</h3>' +
+        '<p style="color:var(--text-muted,var(--text-muted, #666));font-size:13px;">تنزيل أحدث نسخة محفوظة من كل قاعدة بيانات (TopChemical، TopLight، ValleyFoods، AssessmentCenter) في ملف zip واحد.</p>' +
+        '<button class="btn btn-primary" id="backups-btn" onclick="downloadBackups()">⬇ تنزيل النسخ (zip)</button>' +
+      '</div>';
+  }
+
+  function downloadBackups() {
+    UI.showSpinner('جاري تجهيز ملف النسخ...');
+    var btn = document.getElementById('backups-btn');
+    if (btn) btn.disabled = true;
+    API.call('sys_download_backups', {}, SESSION_TOKEN)
+      .then(function (r) {
+        if (!r || r.status === 'too_large') {
+          showError({ message: (r && r.message) || 'حجم النسخ يتجاوز حد التنزيل الواحد' });
+          return;
+        }
+        if (!r.base64) { showError({ message: 'استجابة غير صالحة من الخادم' }); return; }
+        var bin = atob(r.base64);
+        var bytes = new Uint8Array(bin.length);
+        for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        var blob = new Blob([bytes], { type: 'application/zip' });
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = r.filename || 'ERP_Backups.zip';
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(function () { URL.revokeObjectURL(url); a.remove(); }, 1000);
+        UIC.toast('تم تنزيل النسخ بنجاح', 'success');
+      })
+      .catch(function (e) { showError(e); })
+      .finally(function () { UI.hideSpinner(); if (btn) btn.disabled = false; });
+  }
+
+  function showError(e) {
+    var body = document.getElementById('tab-body');
+    if (body) body.innerHTML = '<div class="empty-state"><span>' + FMT.escape(e.message || 'خطأ') + '</span></div>';
+  }
+
+  initAdmin();
+</script>
+</body>
+</html>

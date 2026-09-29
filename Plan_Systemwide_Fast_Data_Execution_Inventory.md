@@ -162,7 +162,7 @@ The central `ROUTES` map requires authentication for these actions; handler-leve
 - TopLight's `tlDbList_` calls the shared full-record Sheets reader. An output JSON wrapper alone will not reduce scan cost.
 - Valley Foods uses Sheets-oriented action modules and has several candidate fast-read/save paths behind disabled flags. Multi-table writes remain on legacy paths.
 - The shared `Code.js` adapter has Firestore native query cursors. Its Sheets query adapter reads a full tab before filtering. Call sites must be classified rather than assuming either adapter is universal.
-- `FAST_READ_CORE_`, `FAST_SAVE_CORE_`, `FORM_CONTRACTS_CORE_`, `MFG_FAST_READ_`, `MFG_PLANNED_SAVE_`, and `PL_PROGRESSIVE_READ_` remain false.
+- `FAST_READ_CORE_`, `MFG_FAST_READ_`, and `PL_PROGRESSIVE_READ_` remain false. `FAST_SAVE_CORE_` and `FORM_CONTRACTS_CORE_` are true only to support the `MFG_PLANNED_SAVE_` VF_MOs pilot; the other batch-write module switches remain false. This pilot has isolated synthetic checks, while production latency measurements and a staging comparison remain outstanding.
 
 ## Priority queue and unresolved contracts
 

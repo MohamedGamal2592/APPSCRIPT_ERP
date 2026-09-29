@@ -1,0 +1,1803 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Valley Foods — الحضور والانصراف</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_ValleyFoods_Nav'); ?>
+  <?!= include('Client_AttendanceParser'); ?>
+  <?!= getCompanyThemeCSS_('9940659bd83035d7') ?>
+</head>
+<body>
+  <div id="vf-root"></div>
+
+  <script>
+    var params = new URLSearchParams(window.location.search);
+    var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+    var scriptUrl = window.scriptUrl || '/';
+    var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+    var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('9940659bd83035d7') ?>';
+    var COMPANY_PAGES = <?!= companyPages ?>;
+    var CURRENT_ACTION = '<?!= currentAction ?>';
+    var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+    var CAN_WRITE = UIC.canAdd_(); var CAN_FULL = UIC.canFull_();
+
+    function companyCall(moduleAction, data) {
+      return API.call('company_action', {
+        target_system: '9940659bd83035d7',
+        module_action: moduleAction,
+        data: data || {}
+      }, SESSION_TOKEN);
+    }
+
+    function esc(v) {
+      /* [UI-2.8 / U-36] Delegates to the shared formatter. This body used to
+         carry its own replace-chain behind a `typeof FMT !== 'undefined'`
+         guard, but Client_Helpers.html defines FMT in <head> before any page
+         script runs, so that fallback was unreachable and the duplicate was
+         pure drift risk. Output is identical for every input — proved in
+         tools/verify/ui2_formatters.js. */
+      return FMT.escape(v);
+    }
+    function todayStr() { return new Date().toISOString().slice(0, 10); }
+  </script>
+
+  <style>
+    /* The page is one toolbar over one calendar. The toolbar is a single row
+       that wraps; its three clusters are separated by hairlines that only
+       appear from tablet-p up — a wrapped row on a phone has nothing
+       meaningful to separate. Tap targets are already 44px via .btn. */
+    .vf-att-page    { display: grid; gap: 12px; }
+    .vf-att-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 12px; background: var(--bg-surface, #fff); border: 1px solid var(--border-color, #e5e7eb); border-radius: 8px; }
+    .vf-att-toolbar .vf-tb-group { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+    .vf-att-toolbar .vf-tb-sep   { display: none; width: 1px; align-self: stretch; background: var(--border-color, #e5e7eb); }
+    .vf-att-toolbar input[type=date] { width: 140px; }
+    #vf-more-toggle.btn.nav-dropdown-toggle {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-color);
+      color: var(--text-main);
+      border-radius: var(--radius-lg);
+      padding: 10px 20px;
+      box-shadow: var(--shadow-sm);
+      min-height: 48px;
+      font-weight: 600;
+    }
+    #vf-more-toggle.btn.nav-dropdown-toggle:hover,
+    #vf-more-toggle.btn.nav-dropdown-toggle.open {
+      background: var(--bg-subtle);
+      border-color: var(--brand-primary);
+      color: var(--brand-primary);
+      transform: translateY(-1px);
+    }
+    .vf-analysis-box { border: 2px solid var(--border-color, #e5e7eb); border-radius: 8px; padding: 14px; background: var(--bg-subtle, #f9fafb); }
+    .vf-analysis-box.confident { border-color: #10b981; background: var(--success-bg, #f0fdf4); }
+    .vf-analysis-box.ambiguous { border-color: #f59e0b; background: var(--warning-bg, #fffbeb); }
+    .vf-analysis-title { font-weight: 900; font-size: 14px; margin-bottom: 6px; }
+    .vf-analysis-sub { font-size: 12px; color: #4b5563; margin-bottom: 8px; }
+    .vf-badge { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 10px; font-weight: bold; }
+    .vf-badge.ok { background: #dcfce7; color: #166534; }
+    .vf-badge.warn { background: #fef3c7; color: #92400e; }
+    .vf-sample-list { font-size: 11px; direction: ltr; text-align: left; background: var(--bg-surface, #fff); border: 1px solid var(--border-color, #e5e7eb); border-radius: 6px; padding: 8px; max-height: 90px; overflow-y: auto; margin-bottom: 10px; font-family: monospace; }
+    .vf-radio-row { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; font-size: 13px; font-weight: bold; }
+    /* Consequence cards. Two readings of the same file, described by what they
+       MEAN rather than by which number is the day — nobody can answer the
+       second question about a file they did not write. */
+    .vf-choice-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; margin: 10px 0; }
+    .vf-choice-card { border: 2px solid var(--border-color, #e5e7eb); border-radius: 8px; padding: 12px; background: var(--bg-surface, #fff); }
+    .vf-choice-card.recommended { border-color: #10b981; }
+    .vf-choice-head { font-weight: 900; font-size: 13px; margin-bottom: 8px; }
+    .vf-choice-line { font-size: 12px; line-height: 1.9; }
+    .vf-choice-dead { font-size: 11px; color: #6b7280; background: var(--bg-subtle, #f3f4f6); border-radius: 6px; padding: 6px 10px; margin-top: 6px; }
+    /* Month navigator + calendar. The week starts on SATURDAY (Egypt). */
+    .vf-month-label { font-weight: 900; font-size: 15px; min-width: 130px; text-align: center; }
+    .vf-cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; }
+    .vf-cal-head { font-size: 11px; font-weight: 900; text-align: center; color: #4b5563; padding: 4px 0; }
+    .vf-cal-cell { min-height: 64px; border: 1px solid var(--border-color, #e5e7eb); border-radius: 6px; padding: 3px; background: var(--bg-subtle, #f9fafb); }
+    .vf-cal-cell.empty { border: none; background: transparent; }
+    .vf-cal-cell.has-data { background: var(--bg-surface, #fff); border-color: #10b981; cursor: pointer; }
+    .vf-cal-cell.has-data:hover { box-shadow: 0 2px 6px rgba(0,0,0,.12); }
+    .vf-cal-day { font-weight: 900; font-size: 13px; display: flex; justify-content: space-between; align-items: center; }
+    .vf-cal-warn { background: #fef3c7; color: #92400e; border-radius: 8px; font-size: 10px; padding: 1px 6px; font-weight: bold; }
+    .vf-cal-stat { font-size: 10px; color: #4b5563; line-height: 1.6; }
+    .vf-cal-none { font-size: 10px; color: #9ca3af; }
+    /* Mobile-first, on the shared five-tier scale: the compact grid is the
+       BASE and the roomier one is a min-width tier. A max-width query here
+       would be the only one in the project and ui2_breakpoints.js says so. */
+    @media (min-width: 600px) {
+      .vf-cal-cell { min-height: 74px; padding: 6px; }
+      .vf-cal-stat, .vf-cal-head { font-size: 11px; }
+      .vf-att-toolbar .vf-tb-sep { display: block; }
+    }
+    /* The calendar is the body of the page now, so from tablet-l up the cells
+       take the room the eight cards used to take. */
+    @media (min-width: 900px) {
+      .vf-cal-cell  { min-height: 96px; padding: 8px; }
+      .vf-cal-day   { font-size: 15px; }
+      .vf-cal-stat  { font-size: 12px; }
+    }
+    /* الناقص (exceptions) modal: XL+ wide/tall for the 8-col table + row
+       actions. Scoped to #vf-exc-modal so the other xl modals on this page
+       (review/report) keep the shared 1100px cap. NOTE (L-8): no max-width
+       *property* in <style> — the cap is lifted via inline style in
+       openExceptionsModal instead. */
+    #vf-exc-modal .modal { width: min(94vw, 1400px); }
+    #vf-exc-modal .modal-body { max-height: 85vh; min-height: 50vh; overflow-y: auto; }
+  </style>
+
+  <script>
+  (function () {
+    var SESSIONS = [];
+    var SESSIONS_TOTAL = 0;
+    var REPORT_DATA = null;
+    var BATCHES = [];
+    /* Which month the calendar is showing, and which day is open. */
+    var _now = new Date();
+    var VIEW_YEAR = _now.getFullYear();
+    var VIEW_MONTH = _now.getMonth();
+    var VIEW_MODE = 'calendar';
+    var TABLE_ALL = false;
+    var CURRENT_DAY = null;
+    /* The toolbar's من/إلى follows the month the calendar shows until the
+       user edits either field; after that it is theirs (D-2). */
+    var RANGE_TOUCHED = false;
+    /* The roster, fetched once (D-22) instead of riding on a punch read. */
+    var EMPLOYEES = null;
+    /* The two work queues. */
+    var REVIEW = [];
+    var REVIEW_STATUS = 'open';
+    var REVIEW_RESOLVABLE = false;
+    var EXCEPTIONS = [];
+    var REPORT_META = {};
+    var REPORT_RANGE = null;
+    var BATCHES_TOTAL = 0;
+    /* The parsed file, in the browser. It never becomes a string on the wire
+       again — only the rows do. */
+    var PARSED = null;
+    /* Session dates + employee codes, fetched once. What dbMatch corroborates
+       against, and what tells the preview which days already exist. */
+    var INDEX = null;
+    /* The import the result panel is currently describing, so ↩️ تراجع has
+       something concrete to point at. Undo also lives permanently in the
+       import-history modal (سجل عمليات الرفع). */
+    var lastBatch = null;
+
+    /* ================= SHELL ================= */
+    function renderApp() {
+      UIC.appShell('vf-root', {
+        companyLogoUrl: COMPANY_LOGO_URL,
+        companyLogoHref: scriptUrl + '?action=vf_dashboard&sessionToken=' + SESSION_TOKEN,
+        companyLogoTitle: 'Valley Foods',
+        breadcrumb: 'Valley Foods / الحضور والانصراف',
+        contentId: 'vf-att-content',
+        menuGroups: (window.VALLEYFOODS_MENU || [])
+      });
+      document.getElementById('vf-att-content').innerHTML = renderContent();
+      bindEvents();
+      syncRangeToMonth();
+      loadSessions();
+      loadReview();
+      /* One extra read per page open, for the الناقص badge (D-1). Flippable:
+         drop this line and the badge fills on the queue's first open. */
+      try { loadExceptions(true); } catch (e) {}
+      if (CAN_WRITE) loadBatches();
+    }
+
+    function renderContent() {
+      /* The toolbar, then the calendar, and nothing else. */
+      return '<div class="vf-att-page">' + renderToolbar() + renderCalendarSection() + '</div>';
+    }
+
+    /* ================= TOOLBAR ================= */
+    /* One row, three clusters, wraps on a phone. In DOM order (RTL: right to
+       left on screen): the month, the shared date range, the actions. Every
+       task the page offers is a button here; nothing renders in-page except
+       the calendar. The low-frequency items sit under المزيد ▾ so the row
+       stays short (D-4). */
+    function renderToolbar() {
+      var moreItems = '';
+      if (CAN_WRITE) {
+        moreItems +=
+          '<button type="button" class="nav-dropdown-item" id="vf-manual-add-btn">+ بصمة يدوية</button>' +
+          '<button type="button" class="nav-dropdown-item" id="vf-new-session-btn">+ يوم جديد</button>' +
+          '<button type="button" class="nav-dropdown-item" id="vf-open-batches">سجل عمليات الرفع</button>';
+      }
+      moreItems +=
+        '<button type="button" class="nav-dropdown-item" id="vf-print-forget-btn">🖨️ نموذج نسيان البصمة</button>' +
+        '<button type="button" class="nav-dropdown-item" id="vf-view-toggle">عرض كجدول</button>';
+
+      return '<div class="vf-att-toolbar">' +
+        /* .vf-month-bar has no CSS of its own any more; renderDays() still
+           finds the month controls by it to dim them in table mode. */
+        '<div class="vf-tb-group vf-month-bar">' +
+          '<button class="btn btn-outline" id="vf-month-prev">‹ الشهر السابق</button>' +
+          '<span id="vf-month-label" class="vf-month-label"></span>' +
+          '<button class="btn btn-outline" id="vf-month-next">الشهر التالي ›</button>' +
+          '<button class="btn btn-outline" id="vf-month-today">اليوم</button>' +
+        '</div>' +
+        '<span class="vf-tb-sep"></span>' +
+        '<div class="vf-tb-group">' +
+          '<label for="vf-range-start">من</label>' +
+          '<input type="date" id="vf-range-start" class="vf-input" value="' + esc(monthStartStr()) + '">' +
+          '<label for="vf-range-end">إلى</label>' +
+          '<input type="date" id="vf-range-end" class="vf-input" value="' + esc(todayStr()) + '">' +
+        '</div>' +
+        '<span class="vf-tb-sep"></span>' +
+        '<div class="vf-tb-group">' +
+          '<button class="btn btn-outline" id="vf-open-report">📊 التقرير</button>' +
+          '<button class="btn btn-outline" id="vf-open-exc">⚠️ الناقص' +
+            '<span class="vf-badge warn" id="vf-exc-badge" style="display:none;"></span></button>' +
+          '<button class="btn btn-outline" id="vf-open-review">🚩 المراجعة' +
+            '<span class="vf-badge warn" id="vf-review-badge" style="display:none;"></span></button>' +
+          (CAN_WRITE ? '<button class="btn btn-primary" id="vf-open-import">⬆️ رفع كشف</button>' : '') +
+          '<div class="nav-dropdown">' +
+            '<button type="button" class="btn btn-outline nav-dropdown-toggle" id="vf-more-toggle" ' +
+              'aria-haspopup="true" aria-expanded="false">المزيد <span class="nav-dropdown-caret" aria-hidden="true">▾</span></button>' +
+            '<div class="nav-dropdown-menu" id="vf-more-menu">' + moreItems + '</div>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+    }
+
+    /* The shared dropdown closes on tap-outside and on the next toggle, but
+       not on its own item — the nav items are links that navigate away. Ours
+       are actions on this page, so each one closes the menu itself. */
+    function moreItem(fn) {
+      return function (e) {
+        var menu = document.getElementById('vf-more-menu');
+        if (menu && menu.classList.contains('open')) UIC.toggleDropdown('vf-more-menu');
+        var moreToggle = document.getElementById('vf-more-toggle');
+        if (moreToggle) moreToggle.setAttribute('aria-expanded', 'false');
+        fn(e);
+      };
+    }
+
+    /* ================= DAYS: CALENDAR + TABLE ================= */
+    /* Day-centric, not session-centric (D-06, D-07). The old card showed the
+       last 10 rows in sheet-insertion order, so a day added by hand after an
+       import sorted as if it were the newest day of the month and everything
+       older than ten days was simply unreachable. */
+    function renderCalendarSection() {
+      /* No card frame and no heading: the toolbar is the calendar's header. */
+      return '<div id="vf-days-body"><p class="vf-text-muted">جاري التحميل...</p></div>';
+    }
+
+    var AR_MONTHS = ['يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو',
+      'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر'];
+    /* Egypt: the week starts on Saturday. JS getUTCDay() is 0=Sunday, so
+       Saturday (6) has to become column 0. */
+    var AR_WEEKDAYS = ['السبت', 'الأحد', 'الاثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة'];
+    function weekCol(jsDay) { return (jsDay + 1) % 7; }
+
+    function pad2_(n) { return n < 10 ? '0' + n : '' + n; }
+    function monthBounds(y, m) {
+      var last = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
+      return { from: y + '-' + pad2_(m + 1) + '-01', to: y + '-' + pad2_(m + 1) + '-' + pad2_(last), lastDay: last };
+    }
+
+    /* The report and the exceptions queue describe the month on screen —
+       what a filter above a calendar is expected to mean — unless the user
+       has set the range by hand. End = the earlier of month-end and today. */
+    function syncRangeToMonth() {
+      if (RANGE_TOUCHED) return;
+      var b = monthBounds(VIEW_YEAR, VIEW_MONTH);
+      var today = todayStr();
+      var start = document.getElementById('vf-range-start');
+      var end = document.getElementById('vf-range-end');
+      if (start) start.value = b.from;
+      if (end) end.value = (b.to < today) ? b.to : today;
+    }
+
+    function loadSessions() {
+      var b = monthBounds(VIEW_YEAR, VIEW_MONTH);
+      var payload = (VIEW_MODE === 'table') ? { loadAll: TABLE_ALL ? true : undefined, limit: TABLE_ALL ? undefined : 30 } : { from: b.from, to: b.to };
+      /* Returned so a caller can wait on it; the read itself raises no
+         overlay (RT-1). */
+      return companyCall('get_attendance_sessions', payload)
+        .then(function (resp) {
+          SESSIONS = (resp && resp.sessions) || [];
+          SESSIONS_TOTAL = (resp && resp.total) || SESSIONS.length;
+          renderDays();
+          try { schedulePrefetch(); } catch (e) {}
+        })
+        .catch(function () {
+          var c = document.getElementById('vf-days-body');
+          if (c) c.innerHTML = '<p class="vf-text-muted">تعذر تحميل الأيام.</p>';
+        });
+    }
+
+    /* Owner-requested: moving between months raises the shared blocking
+       overlay, naming the month, so the change is visibly in progress. Only
+       the three navigation handlers wrap the read; every other caller of
+       loadSessions (boot, the live poll, saves) stays overlay-free. */
+    function withMonthOverlay(run) {
+      UI.showSpinner('جاري تحميل ' + AR_MONTHS[VIEW_MONTH] + ' ' + VIEW_YEAR + '...');
+      return Promise.resolve().then(run).finally(function () { UI.hideSpinner(); });
+    }
+
+    function renderDays() {
+      var label = document.getElementById('vf-month-label');
+      if (label) label.innerHTML = esc(AR_MONTHS[VIEW_MONTH] + ' ' + VIEW_YEAR);
+      var toggle = document.getElementById('vf-view-toggle');
+      if (toggle) toggle.innerHTML = (VIEW_MODE === 'calendar') ? 'عرض كجدول' : 'عرض كتقويم';
+      var bar = document.querySelector('.vf-month-bar');
+      if (bar) bar.style.opacity = (VIEW_MODE === 'calendar') ? '1' : '0.55';
+      if (VIEW_MODE === 'calendar') renderCalendar(); else renderDaysTable();
+    }
+
+    function renderCalendar() {
+      var container = document.getElementById('vf-days-body');
+      if (!container) return;
+      var byDay = {};
+      SESSIONS.forEach(function (s) {
+        var m = String(s.session_date_key || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+        if (m) byDay[Number(m[3])] = s;
+      });
+
+      var b = monthBounds(VIEW_YEAR, VIEW_MONTH);
+      var firstCol = weekCol(new Date(Date.UTC(VIEW_YEAR, VIEW_MONTH, 1)).getUTCDay());
+
+      var html = '<div class="vf-cal-grid">';
+      AR_WEEKDAYS.forEach(function (w) { html += '<div class="vf-cal-head">' + w + '</div>'; });
+      for (var i = 0; i < firstCol; i++) html += '<div class="vf-cal-cell empty"></div>';
+      for (var day = 1; day <= b.lastDay; day++) {
+        var s = byDay[day];
+        if (!s) {
+          html += '<div class="vf-cal-cell"><div class="vf-cal-day">' + day + '</div>' +
+            '<div class="vf-cal-none">—</div></div>';
+          continue;
+        }
+        html += '<div class="vf-cal-cell has-data" role="button" tabindex="0" ' +
+          'onclick="ATT_PAGE.openSessionDetail(\'' + esc(s.session_id) + '\', \'' + esc(s.session_date_display) + '\')">' +
+          '<div class="vf-cal-day">' + day +
+            (s.exceptions ? '<span class="vf-cal-warn" title="موظفون ببصمات ناقصة">' + s.exceptions + '</span>' : '') +
+          '</div>' +
+          '<div class="vf-cal-stat"><b>' + s.punches + '</b> بصمة</div>' +
+          '<div class="vf-cal-stat">' + s.employees + ' موظف</div>' +
+        '</div>';
+      }
+      html += '</div>';
+      if (!SESSIONS.length) {
+        html += '<p class="vf-text-muted">لا توجد أيام مسجلة في هذا الشهر — ارفع كشف بصمة أو أضف يوماً.</p>';
+      }
+      container.innerHTML = html;
+    }
+
+    function renderDaysTable() {
+      var container = document.getElementById('vf-days-body');
+      if (!container) return;
+      if (!SESSIONS.length) {
+        container.innerHTML = '<p class="vf-text-muted">لا توجد أيام مسجلة.</p>';
+        return;
+      }
+      var headers = ['التاريخ', 'البصمات', 'الموظفون', 'ناقص', 'المستخدم', { key: 'actions', label: 'إجراءات' }];
+      var rows = SESSIONS.map(function (s) {
+        return [
+          '<b>' + esc(s.session_date_display) + '</b>',
+          s.punches, s.employees,
+          s.exceptions ? '<b style="color:#f59e0b;">' + s.exceptions + '</b>' : '-',
+          esc(uname_(s.user)),
+          UIC.actionBtns([
+            { label: 'عرض اليوم', onclick: 'ATT_PAGE.openSessionDetail(\'' + esc(s.session_id) + '\', \'' + esc(s.session_date_display) + '\')' }
+          ])
+        ];
+      });
+      var html = UIC.showAllBar({ loadedAll: TABLE_ALL, latestN: 30, total: SESSIONS_TOTAL, showAll: 'ATT_PAGE.loadAllDays()', showLatest: 'ATT_PAGE.showLatestDays()' }) +
+        UIC.dataTable('vf-sessions-table-id', { headers: headers, rows: rows, pageSize: 50 });
+      container.innerHTML = html;
+    }
+
+    function loadAllDays() { TABLE_ALL = true; loadSessions(); }
+    function showLatestDays() { TABLE_ALL = false; loadSessions(); }
+
+    function shiftMonth(delta) {
+      var m = VIEW_MONTH + delta;
+      VIEW_YEAR += Math.floor(m / 12);
+      VIEW_MONTH = ((m % 12) + 12) % 12;
+      syncRangeToMonth();
+      withMonthOverlay(loadSessions);
+    }
+
+    function toggleView() {
+      VIEW_MODE = (VIEW_MODE === 'calendar') ? 'table' : 'calendar';
+      TABLE_ALL = false;
+      loadSessions();
+    }
+
+    /* ---- Day detail ---- */
+    /* Never capped: a day is bounded by definition, and the count printed here
+       is the count of what was actually loaded (D-05). */
+    function openSessionDetail(sessionId, dateDisplay) {
+      CURRENT_DAY = { session_id: sessionId, display: dateDisplay };
+      UIC.openModal('vf-session-modal', {
+        title: 'يوم ' + (dateDisplay || ''),
+        body: '<div id="vf-session-detail" style="min-height:120px;text-align:center;color:#888;">جاري التحميل...</div>',
+        footer: false
+      });
+      companyCall('get_attendance_data', { session_id: sessionId })
+        .then(function (resp) { renderDayDetail(resp || {}, dateDisplay); })
+        .catch(function () {
+          var target = document.getElementById('vf-session-detail');
+          if (target) target.innerHTML = '<p style="color:red;">حدث خطأ أثناء تحميل البيانات</p>';
+        });
+    }
+
+    function renderDayDetail(resp, dateDisplay) {
+      var target = document.getElementById('vf-session-detail');
+      if (!target) return;
+      var rows = resp.rows || [];
+      var perEmp = resp.per_employee || [];
+
+      var html = '<div style="text-align:right;">';
+      if (CAN_WRITE) {
+        html += '<div style="margin-bottom:10px;"><button class="btn btn-primary" ' +
+          'onclick="ATT_PAGE.addPunchForDay()">+ إضافة بصمة</button></div>';
+      }
+      if (!rows.length) {
+        html += '<p class="vf-text-muted">لا توجد بصمات مسجلة في هذا اليوم.</p></div>';
+        target.innerHTML = html;
+        return;
+      }
+
+      var incomplete = perEmp.filter(function (p) { return p.status === 'incomplete'; });
+      html += '<div style="margin-bottom:8px;">عدد البصمات: <b>' + rows.length + '</b> · ' +
+        'عدد الموظفين: <b>' + perEmp.length + '</b>' +
+        (incomplete.length ? ' · <b style="color:#f59e0b;">' + incomplete.length + ' ببصمات ناقصة</b>' : '') +
+        '</div>';
+
+      /* Derived in/out per employee — computed on read, stored nowhere. */
+      html += '<div style="font-weight:900;font-size:13px;margin:10px 0 4px;">الحضور والانصراف</div>';
+      html += UIC.dataTable('vf-day-emp-table', {
+        headers: ['الكود', 'الاسم', 'دخول', 'خروج', 'بصمات', 'الحالة'],
+        rows: perEmp.map(function (p) {
+          return [
+            esc(p.emp_id), esc(p.employee_name),
+            esc(p.time_in_display || '-'), esc(p.time_out_display || '-'),
+            p.punches,
+            p.status === 'present' ? UIC.statusPill('مكتمل', 'success') : UIC.statusPill('ناقص', 'warning')
+          ];
+        }),
+        emptyText: 'لا توجد بيانات'
+      });
+
+      html += '<div style="font-weight:900;font-size:13px;margin:14px 0 4px;">كل البصمات</div>';
+      html += UIC.dataTable('vf-session-detail-table', {
+        headers: ['الكود', 'الاسم', 'التاريخ والوقت'],
+        rows: rows.map(function (r) {
+          return [esc(r.emp_id), esc(r.employee_name), esc(r.attendance_time_display)];
+        }),
+        emptyText: 'لا توجد سجلات'
+      });
+      html += '</div>';
+      target.innerHTML = html;
+    }
+
+    /** + إضافة بصمة from inside a day, prefilled with that day's date. */
+    function addPunchForDay() {
+      var iso = '';
+      var s = SESSIONS.filter(function (x) { return String(x.session_id) === String((CURRENT_DAY || {}).session_id); })[0];
+      if (s && s.session_date_key) iso = s.session_date_key;
+      UIC.closeModal('vf-session-modal');
+      showManualEntryModal({ date: iso });
+    }
+
+    /* ---- New day ---- */
+    function showNewSessionModal() {
+      UIC.openModal('vf-new-session-modal', {
+        title: 'يوم جديد',
+        body: '<form id="vf-session-form">' +
+          UIC.field({ key: 'vf-session-date', label: 'التاريخ', type: 'date', required: true, value: todayStr() }) +
+          '</form>',
+        onSave: 'ATT_PAGE.saveNewSession()'
+      });
+    }
+
+    function saveNewSession() {
+      if (!UIC.validateForm('vf-session-form')) return;
+      var date = document.getElementById('vf-session-date').value;
+      if (!date) { UIC.toast('التاريخ مطلوب', 'error'); return; }
+      UI.showSpinner();
+      companyCall('add_attendance_session', { session_date: date })
+        .then(function (resp) {
+          UIC.closeModal('vf-new-session-modal');
+          UIC.toast((resp && resp.message) || 'تم إنشاء اليوم', 'success');
+          INDEX = null;
+          loadSessions();
+        })
+        .catch(function (e) {
+          UIC.toast((e && e.message) || 'فشل إنشاء اليوم', 'error');
+        })
+        .finally(function () { UI.hideSpinner(); });
+    }
+
+    /* ================= IMPORT WIZARD ================= */
+    /* The file is read ONCE, here, and only parsed rows are posted. The two old
+       server actions (analyse, then upload) are gone, and with them the 5 MB
+       round trip that happened twice. */
+    /* The wizard's four ids live in this modal body and exist only while it
+       is open. Every write the wizard makes to them is null-guarded, so a
+       dialog closed mid-flow is harmless; and startCommit() runs under
+       UI.showSpinner(), whose overlay sits above the dialog, so it cannot be
+       closed mid-commit. The file input is created with the modal, so its
+       change listener is bound here, not in bindEvents. */
+    function openImportModal() {
+      UIC.openModal('vf-import-modal', {
+        title: 'رفع كشف البصمة',
+        size: 'lg',
+        body: '<div class="vf-form-group">' +
+          '<label>ملف كشف البصمة</label>' +
+          '<input type="file" id="vf-csv-input" accept=".csv,.txt,.dat,.tsv,.xls,.xlsx" class="vf-input">' +
+          '<div class="vf-analysis-sub" style="margin-top:6px;">' +
+            '<b>الأفضل:</b> صدّر الملف من الجهاز بصيغة Excel (‎.xlsx‎). ملف Excel يحمل التاريخ كرقم، ' +
+            'فلا يحتاج أي تخمين ولن يسألك النظام عن صيغة التاريخ إطلاقاً. ' +
+            'ملفات CSV و TXT مدعومة أيضاً، بالعربي وبترميز Windows-1256.' +
+          '</div>' +
+        '</div>' +
+        '<div id="vf-parse-status" class="vf-analysis-sub" style="display:none;"></div>' +
+        '<div id="vf-analysis-panel" style="display:none;margin-top:14px;"></div>' +
+        '<div id="vf-upload-result" style="display:none;margin-top:14px;"></div>',
+        footer: false
+      });
+      var csvInput = document.getElementById('vf-csv-input');
+      if (csvInput) csvInput.addEventListener('change', handleFileSelect);
+      resetUploadFlow();
+    }
+
+    function resetUploadFlow() {
+      PARSED = null;
+      lastBatch = null;
+      var input = document.getElementById('vf-csv-input');
+      if (input) input.value = '';
+      ['vf-analysis-panel', 'vf-upload-result', 'vf-parse-status'].forEach(function (id) {
+        var el = document.getElementById(id);
+        if (el) { el.style.display = 'none'; el.innerHTML = ''; }
+      });
+    }
+
+    function setParseStatus(text, isError) {
+      var el = document.getElementById('vf-parse-status');
+      if (!el) return;
+      el.innerHTML = esc(text);
+      el.style.color = isError ? 'var(--danger, #dc2626)' : '';
+      el.style.display = text ? 'block' : 'none';
+    }
+
+    /** Session dates + employee codes, fetched once and kept for the page. */
+    function loadIndex() {
+      if (INDEX) return Promise.resolve(INDEX);
+      return companyCall('get_attendance_index', {})
+        .then(function (r) {
+          INDEX = { session_dates: (r && r.session_dates) || [], emp_ids: (r && r.emp_ids) || [] };
+          return INDEX;
+        })
+        .catch(function () { INDEX = { session_dates: [], emp_ids: [] }; return INDEX; });
+    }
+
+    function readFileBuffer(file) {
+      return new Promise(function (resolve, reject) {
+        var reader = new FileReader();
+        reader.onload = function (ev) { resolve(ev.target.result); };
+        reader.onerror = function () { reject(new Error('تعذر قراءة الملف')); };
+        reader.readAsArrayBuffer(file);
+      });
+    }
+
+    function handleFileSelect(e) {
+      var file = e.target.files && e.target.files[0];
+      PARSED = null;
+      lastBatch = null;
+      ['vf-analysis-panel', 'vf-upload-result'].forEach(function (id) {
+        var el = document.getElementById(id);
+        if (el) { el.style.display = 'none'; el.innerHTML = ''; }
+      });
+      if (!file) { setParseStatus(''); return; }
+      setParseStatus('جاري قراءة الملف...');
+      UI.showSpinner();
+
+      var isExcel = /\.xlsx?$/i.test(file.name);
+      Promise.all([readFileBuffer(file), loadIndex()])
+        .then(function (both) {
+          var buf = both[0];
+          var index = both[1];
+          if (isExcel) {
+            /* An Excel export is unambiguous by construction — the cell holds a
+               number, not a rendering of one. cellDates:false keeps it that way. */
+            return API.ensureXlsx().then(function () {
+              var wb = XLSX.read(new Uint8Array(buf), { type: 'array', cellDates: false });
+              return ATT_PARSER.parseWorkbook(wb, { sessionDates: index.session_dates });
+            });
+          }
+          var dec = ATT_PARSER.decodeText(buf);
+          var out = ATT_PARSER.parseFile(dec.text, { sessionDates: index.session_dates });
+          out.encoding = dec.encoding;
+          /* Kept so a format the user picks from a consequence card can be
+             applied by RE-PARSING, rather than by patching serials in place. */
+          out.sourceText = dec.text;
+          return out;
+        })
+        .then(function (out) {
+          out.fileName = file.name;
+          out.fileSize = file.size;
+          PARSED = out;
+          setParseStatus('');
+          renderDecision();
+        })
+        .catch(function (err) {
+          setParseStatus((err && err.message) || 'تعذر قراءة الملف', true);
+        })
+        .finally(function () { UI.hideSpinner(); });
+    }
+
+    /* ---- the decision: certain / high / ambiguous ---- */
+    function renderDecision() {
+      var panel = document.getElementById('vf-analysis-panel');
+      if (!panel || !PARSED) return;
+      var inf = PARSED.inference || {};
+      var total = PARSED.rows.length + PARSED.flagged.length;
+
+      if (!total) {
+        panel.innerHTML = '<div class="vf-analysis-box ambiguous">' +
+          '<div class="vf-analysis-title">⚠️ لم يتم العثور على أي بصمات في هذا الملف</div>' +
+          '<div class="vf-analysis-sub">تأكد أن الملف هو تصدير جهاز البصمة، وأنه يحتوي على عمود للتاريخ والوقت.</div></div>';
+        panel.style.display = 'block';
+        return;
+      }
+
+      if (inf.confidence === 'ambiguous' && !PARSED.format) {
+        panel.innerHTML = renderConsequenceCards(inf);
+        panel.style.display = 'block';
+        return;
+      }
+      panel.innerHTML = renderPreview();
+      UIC.autoColumnsAll(panel);
+      panel.style.display = 'block';
+    }
+
+    /* ---- consequence cards (D-13) ---- */
+    /* Deliberately NOT radio buttons, and deliberately never the words "يوم"
+       or "شهر" as the choice itself: nobody can answer "is this DD/MM or
+       MM/DD?" about a file they did not write. Everybody can answer "is this
+       twelve days in September, or the 9th of twelve different months?" */
+    function renderConsequenceCards(inf) {
+      var alive = (inf.candidates || []).filter(function (c) { return !c.eliminated; });
+      var dead = (inf.candidates || []).filter(function (c) { return c.eliminated; });
+      var letters = ['أ', 'ب', 'ج'];
+
+      var html = '<div class="vf-analysis-box ambiguous">';
+      html += '<div class="vf-analysis-title">⚠️ الملف يحتمل أكثر من قراءة — أي فترة تصف ملفك؟</div>';
+      html += '<div class="vf-analysis-sub">اختر البطاقة التي تطابق الفترة التي رفعت عنها الكشف. ' +
+        'لا حاجة لمعرفة أي شيء عن صيغة التاريخ.</div>';
+
+      if (!alive.length) {
+        html += '<div class="vf-analysis-sub" style="color:var(--danger, #dc2626);font-weight:900;">' +
+          'لا توجد قراءة واحدة تصلح لكل صفوف هذا الملف — يبدو أن الملف مخلوط من أكثر من صيغة.</div>';
+      }
+
+      html += '<div class="vf-choice-grid">';
+      alive.forEach(function (c, i) {
+        var best = i === 0 && alive.length > 1 && c.score >= (alive[1].score || 0);
+        html += '<div class="vf-choice-card' + (best ? ' recommended' : '') + '">' +
+          '<div class="vf-choice-head">القراءة (' + letters[i] + ')' +
+            (best ? ' <span class="vf-badge ok">موصى بها</span>' : '') + '</div>' +
+          '<div class="vf-choice-line"><b>الفترة:</b> ' + esc(c.spanMinDisplay) + ' — ' + esc(c.spanMaxDisplay) + '</div>' +
+          '<div class="vf-choice-line">' + c.distinctDays + ' ' + dayWord(c.distinctDays) + ' ' +
+            (c.compact >= 0.8 ? 'متصلة' : 'متفرقة') + ' · ' + c.punches + ' بصمة</div>' +
+          '<div class="vf-choice-line">' + c.sessionsMatching + ' من ' + c.distinctDays + ' لها سجل قائم في النظام</div>' +
+          '<div style="margin-top:10px;"><button class="btn btn-primary" ' +
+            'onclick="ATT_PAGE.chooseFormat(\'' + esc(c.format) + '\')">اعتماد هذه القراءة</button></div>' +
+        '</div>';
+      });
+      html += '</div>';
+
+      dead.forEach(function (c) {
+        html += '<div class="vf-choice-dead">قراءة مستبعدة — ' + esc(c.reason) + '</div>';
+      });
+
+      html += renderSampleRows();
+      html += '<div style="margin-top:12px;"><button class="btn btn-outline" onclick="ATT_PAGE.resetUpload()">↩️ اختيار ملف آخر</button></div>';
+      html += '</div>';
+      return html;
+    }
+
+    function dayWord(n) { return n === 1 ? 'يوم' : (n === 2 ? 'يومان' : (n <= 10 ? 'أيام' : 'يوم')); }
+
+    /* 8 raw rows next to how each surviving reading would store them. */
+    function renderSampleRows() {
+      if (!PARSED || !PARSED.sample || !PARSED.sample.length) return '';
+      var alive = ((PARSED.inference || {}).candidates || []).filter(function (c) { return !c.eliminated; });
+      if (!alive.length) return '';
+      var html = '<div style="margin-top:12px;font-weight:900;font-size:12px;">عينة من صفوف الملف:</div>';
+      html += '<div class="vf-sample-list">';
+      PARSED.sample.forEach(function (s) {
+        var readings = alive.map(function (c) {
+          var day = c.format === 'MDY' ? s.token.b : s.token.a;
+          var month = c.format === 'MDY' ? s.token.a : s.token.b;
+          return c.format + ': ' + ATT_PARSER.serialArabicDate(ATT_PARSER.dateOnlyToSerial(day, month, s.token.y));
+        }).join('  |  ');
+        html += esc(s.raw) + '  →  ' + esc(readings) + '<br>';
+      });
+      html += '</div>';
+      return html;
+    }
+
+    function chooseFormat(fmt) {
+      if (!PARSED) return;
+      var index = INDEX || { session_dates: [] };
+      /* Re-parse with the choice forced, so the rows, the flags and the range
+         all come from the reading the user actually picked. */
+      var re = ATT_PARSER.parseFile(PARSED.text || PARSED.sourceText, { sessionDates: index.session_dates, forceFormat: fmt });
+      if (PARSED.sourceText) {
+        re.fileName = PARSED.fileName; re.fileSize = PARSED.fileSize;
+        re.encoding = PARSED.encoding; re.sourceText = PARSED.sourceText;
+        PARSED = re;
+      } else {
+        PARSED.format = fmt;
+      }
+      var panel = document.getElementById('vf-analysis-panel');
+      if (panel) { panel.innerHTML = renderPreview(); UIC.autoColumnsAll(panel); panel.style.display = 'block'; }
+    }
+
+    /* ---- dry-run preview (D-15) ---- */
+    /* The same per-date table the result panel renders, shown BEFORE the write
+       instead of after it, so the two can be compared at a glance. */
+    function buildPreviewStats() {
+      var sessionSet = {};
+      ((INDEX || {}).session_dates || []).forEach(function (k) { sessionSet[k] = true; });
+      var empSet = {};
+      ((INDEX || {}).emp_ids || []).forEach(function (e) { empSet[String(e)] = true; });
+
+      var stats = {};
+      var seen = {};
+      var unknownEmp = 0;
+      var dupInFile = 0;
+      function bump(key, field) {
+        if (!stats[key]) stats[key] = { imported: 0, duplicate: 0, flagged: 0, hasSession: false };
+        stats[key][field]++;
+      }
+      PARSED.rows.forEach(function (r) {
+        var daySerial = Math.floor(r[1]);
+        var key = ATT_PARSER.serialDateDisplay(daySerial);
+        var dedup = r[0] + '|' + Math.round(r[1] * 1440);
+        if (seen[dedup]) { bump(key, 'duplicate'); dupInFile++; }
+        else { seen[dedup] = true; bump(key, 'imported'); }
+        stats[key].hasSession = !!sessionSet[ATT_PARSER.serialDateKey(daySerial)];
+        if (!empSet[String(r[0])]) unknownEmp++;
+      });
+      PARSED.flagged.forEach(function () { bump('صفوف تحتاج مراجعة', 'flagged'); });
+      return { stats: stats, unknownEmp: unknownEmp, dupInFile: dupInFile };
+    }
+
+    function renderPreview() {
+      var inf = PARSED.inference || {};
+      var pv = buildPreviewStats();
+      var newRows = PARSED.rows.length - pv.dupInFile;
+
+      var html = '<div class="vf-analysis-box confident">';
+      html += '<div class="vf-analysis-title">مراجعة قبل الاستيراد — ' + esc(PARSED.fileName || '') + '</div>';
+
+      if (PARSED.format === 'XLSX') {
+        html += '<div class="vf-analysis-sub">✅ ملف Excel — التاريخ مقروء من الرقم مباشرة، لم يُطلب أي تخمين.</div>';
+      } else if (inf.confidence === 'certain') {
+        html += '<div class="vf-analysis-sub">✅ تم التعرف على التاريخ تلقائياً' +
+          (inf.reason ? ' — ' + esc(inf.reason) : '') + '</div>';
+      } else if (inf.confidence === 'high') {
+        html += '<div class="vf-analysis-sub">✅ تم التعرف على التاريخ تلقائياً — ' +
+          esc((inf.candidates.filter(function (c) { return c.format === PARSED.format; })[0] || {}).spanMinDisplay || '') +
+          ' إلى ' + esc((inf.candidates.filter(function (c) { return c.format === PARSED.format; })[0] || {}).spanMaxDisplay || '') +
+          ' <a href="#" onclick="ATT_PAGE.showAlternatives();return false;">تغيير طريقة القراءة</a></div>';
+      }
+      if (PARSED.encoding && PARSED.encoding !== 'utf-8') {
+        html += '<div class="vf-analysis-sub">ℹ️ تمت قراءة الملف بترميز ' + esc(PARSED.encoding) + '.</div>';
+      }
+
+      html += '<div style="margin-top:8px;background:var(--bg-subtle, #f9fafb);border:1px solid var(--border-color, #e5e7eb);border-radius:8px;padding:10px;line-height:1.9;">';
+      html += '<div>📥 <b style="color:#16a34a;">' + newRows + '</b> بصمة جاهزة للاستيراد</div>';
+      if (pv.dupInFile) html += '<div>♻️ <b style="color:#2563eb;">' + pv.dupInFile + '</b> بصمة مكررة داخل الملف نفسه (لن تُسجل مرتين)</div>';
+      if (PARSED.flagged.length) html += '<div>🚩 <b style="color:#f59e0b;">' + PARSED.flagged.length + '</b> صف يحتاج مراجعة</div>';
+      if (pv.unknownEmp) html += '<div>❓ <b style="color:#f59e0b;">' + pv.unknownEmp + '</b> بصمة لأكواد غير موجودة في قائمة الموظفين</div>';
+      html += '<div class="vf-analysis-sub" style="margin:6px 0 0;">البصمات المسجلة من قبل تُكتشف وتُستبعد لحظة الاستيراد.</div>';
+      html += '</div>';
+
+      html += renderDateTable(pv.stats, true);
+      html += '<div style="margin-top:12px;">' +
+        '<button class="btn btn-primary" onclick="ATT_PAGE.startCommit()">✅ تأكيد الاستيراد</button> ' +
+        '<button class="btn btn-outline" onclick="ATT_PAGE.resetUpload()">↩️ اختيار ملف آخر</button></div>';
+      html += '</div>';
+      return html;
+    }
+
+    function showAlternatives() {
+      var panel = document.getElementById('vf-analysis-panel');
+      if (!panel || !PARSED) return;
+      panel.innerHTML = renderConsequenceCards(PARSED.inference || {});
+      panel.style.display = 'block';
+    }
+
+    function sortDateKeys(keys) {
+      var normal = [], special = [];
+      keys.forEach(function (k) {
+        if (/^\d{2}\/\d{2}\/\d{4}$/.test(k)) normal.push(k); else special.push(k);
+      });
+      normal.sort(function (a, b) {
+        var pa = a.split('/'), pb = b.split('/');
+        return new Date(pa[2], pa[1] - 1, pa[0]) - new Date(pb[2], pb[1] - 1, pb[0]);
+      });
+      return normal.concat(special);
+    }
+
+    function renderDateTable(stats, isPreview) {
+      var keys = Object.keys(stats || {});
+      if (!keys.length) return '';
+      var html = '<div style="margin-top:12px;font-weight:900;">📋 تفصيل كل تاريخ:</div>';
+      html += '<div class="table-wrap"><table class="table" style="margin-top:6px;"><thead><tr><th>التاريخ</th>' +
+        '<th>✅ ' + (isPreview ? 'سيُسجل' : 'جديد') + '</th><th>♻️ مكرر</th><th>🚩 مراجعة</th>' +
+        (isPreview ? '<th>اليوم</th>' : '') + '</tr></thead><tbody>';
+      sortDateKeys(keys).forEach(function (dk) {
+        var st = stats[dk];
+        html += '<tr><td><b>' + esc(dk) + '</b></td>' +
+          '<td style="color:#16a34a;">' + (st.imported || '-') + '</td>' +
+          '<td style="color:#2563eb;">' + (st.duplicate || '-') + '</td>' +
+          '<td style="color:#f59e0b;">' + (st.flagged || '-') + '</td>' +
+          (isPreview ? '<td>' + (st.hasSession ? 'قائم' : 'جديد') + '</td>' : '') + '</tr>';
+      });
+      html += '</tbody></table></div>';
+      return html;
+    }
+
+    /* ---- the commit, in chunks of 5000 ---- */
+    var CHUNK_SIZE = 5000;
+
+    function startCommit() {
+      if (!PARSED || !PARSED.rows) { UIC.toast('لا يوجد ملف محدد', 'error'); return; }
+      var batchId = uuid4();
+      var inf = PARSED.inference || {};
+      var chunks = [];
+      for (var i = 0; i < PARSED.rows.length; i += CHUNK_SIZE) {
+        chunks.push(PARSED.rows.slice(i, i + CHUNK_SIZE));
+      }
+      if (!chunks.length) chunks.push([]);
+
+      lastBatch = { batch_id: batchId, file_name: PARSED.fileName || 'ملف', rows: PARSED.rows.length };
+      UI.showSpinner();
+
+      var totals = null;
+      var chain = Promise.resolve();
+      chunks.forEach(function (chunk, idx) {
+        chain = chain.then(function () {
+          setParseStatus('جاري الاستيراد... جزء ' + (idx + 1) + ' من ' + chunks.length);
+          return companyCall('commit_attendance_import', {
+            batch_id: batchId,
+            chunk_index: idx,
+            is_last: idx === chunks.length - 1,
+            file_name: PARSED.fileName || 'ملف',
+            file_rows: PARSED.rows.length + PARSED.flagged.length,
+            format: PARSED.format || '',
+            detected_format: inf.format || '',
+            confidence: inf.confidence || '',
+            /* Sent on EVERY chunk: the server rebuilds its duplicate key set
+               per chunk, filtered to this window. */
+            date_min: PARSED.dateMin,
+            date_max: PARSED.dateMax,
+            rows: chunk,
+            /* The review rows ride with the first chunk only. */
+            flagged: idx === 0 ? PARSED.flagged : []
+          }).then(function (res) { totals = (res && res.totals) || totals; return res; });
+        });
+      });
+
+      chain
+        .then(function (res) {
+          setParseStatus('');
+          renderUploadResult(totals || {}, res);
+          UIC.toast((res && res.message) || 'تم الاستيراد', (totals && totals.rows_flagged) ? 'warning' : 'success');
+          loadSessions();
+          loadBatches();
+          INDEX = null;
+        })
+        .catch(function (e) {
+          setParseStatus('');
+          /* A partly-written batch is an acceptable failure: the undo button is
+             already pointed at it. */
+          renderCommitFailure(e, batchId);
+        })
+        .finally(function () { UI.hideSpinner(); });
+    }
+
+    function uuid4() {
+      if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
+      return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
+        var r = Math.random() * 16 | 0;
+        return (c === 'x' ? r : ((r & 0x3) | 0x8)).toString(16);
+      });
+    }
+
+    function renderCommitFailure(err, batchId) {
+      var container = document.getElementById('vf-upload-result');
+      if (!container) return;
+      var html = '<div class="vf-analysis-box ambiguous">';
+      html += '<div class="vf-analysis-title" style="color:var(--danger, #dc2626);">⚠️ توقف الاستيراد قبل أن يكتمل</div>';
+      html += '<div class="vf-analysis-sub">' + esc((err && err.message) || 'خطأ غير معروف') + '</div>';
+      html += '<div class="vf-analysis-sub">قد يكون جزء من الملف قد سُجل بالفعل. يمكنك التراجع عن العملية كاملة والمحاولة من جديد.</div>';
+      html += '<div style="margin-top:12px;">';
+      if (CAN_FULL) html += '<button class="btn btn-danger" onclick="ATT_PAGE.undoBatch()">↩️ تراجع عن هذا الرفع</button> ';
+      html += '<button class="btn btn-outline" onclick="ATT_PAGE.resetUpload()">↩️ اختيار ملف آخر</button></div>';
+      html += '</div>';
+      container.innerHTML = html;
+      container.style.display = 'block';
+      var panel = document.getElementById('vf-analysis-panel');
+      if (panel) { panel.style.display = 'none'; panel.innerHTML = ''; }
+    }
+
+    function renderUploadResult(totals, res) {
+      var container = document.getElementById('vf-upload-result');
+      if (!container) return;
+      var imported = totals.rows_imported || 0;
+      var duplicate = totals.rows_duplicate || 0;
+      var flaggedN = totals.rows_flagged || 0;
+      var sessions = totals.sessions_created || 0;
+
+      var html = '<div class="vf-analysis-box confident">';
+      if (!(imported + duplicate + flaggedN)) {
+        html += '<div style="color:var(--danger, #dc2626);font-weight:900;">⚠️ لم يتم العثور على أي بصمات قابلة للقراءة في هذا الملف</div>';
+      } else {
+        html += '<div style="font-weight:900;font-size:15px;color:#166534;">نتيجة الاستيراد</div>';
+        html += '<div style="margin-top:8px;background:var(--bg-subtle, #f9fafb);border:1px solid var(--border-color, #e5e7eb);border-radius:8px;padding:10px;line-height:1.9;">';
+        html += '<div>📥 <b style="color:#16a34a;">' + imported + '</b> بصمة اتسجلت لأول مرة</div>';
+        html += '<div>♻️ <b style="color:#2563eb;">' + duplicate + '</b> بصمة مكررة (تم تجاهلها)</div>';
+        if (flaggedN > 0) html += '<div>🚩 <b style="color:#f59e0b;">' + flaggedN + '</b> صف محتاج مراجعة</div>';
+        if (sessions > 0) html += '<div>🗓️ <b style="color:#7c3aed;">' + sessions + '</b> يوم جديد اتفتح</div>';
+        html += '</div>';
+      }
+      if (res && res.has_batch_column === false) {
+        html += '<div class="vf-analysis-sub" style="color:#92400e;margin-top:8px;">ℹ️ عمود import_batch_id غير موجود في جدول البصمات، ' +
+          'لذلك لا يمكن التراجع عن هذا الرفع. أضف العمود لتفعيل زر التراجع.</div>';
+      }
+      html += '<div style="margin-top:12px;"><button class="btn btn-outline" onclick="ATT_PAGE.resetUpload()">↩️ رفع ملف آخر</button>';
+      /* Guarded twice: by the authority to delete rows, and by the server
+         actually having a batch that CAN be undone. */
+      if (CAN_FULL && lastBatch && lastBatch.batch_id && (!res || res.has_batch_column !== false)) {
+        html += ' <button class="btn btn-danger" onclick="ATT_PAGE.undoBatch()">↩️ تراجع عن هذا الرفع</button>';
+      }
+      html += '</div>';
+      html += '</div>';
+
+      container.innerHTML = html;
+      container.style.display = 'block';
+      var panel = document.getElementById('vf-analysis-panel');
+      if (panel) { panel.style.display = 'none'; panel.innerHTML = ''; }
+    }
+
+    /* Never a bare "are you sure": the file and the row count are what the user
+       is actually deciding about. */
+    function undoBatch(batchId, fileName, rowCount) {
+      var batch = batchId
+        ? { batch_id: batchId, file_name: fileName || '', rows: rowCount || 0 }
+        : lastBatch;
+      if (!batch || !batch.batch_id) { UIC.toast('لا توجد عملية رفع للتراجع عنها', 'error'); return; }
+      UIC.confirm({
+        title: 'تراجع عن الرفع',
+        message: 'سيتم حذف كل البصمات التي سجلها هذا الرفع، والأيام التي فتحها ولم تعد تحتوي على أي بصمة.',
+        record: batch.file_name + (batch.rows ? ' — ' + batch.rows + ' بصمة' : ''),
+        detail: 'البصمات المضافة يدوياً لن تُحذف.',
+        confirmText: 'تراجع وحذف',
+        danger: true
+      }).then(function (ok) {
+        if (!ok) return;
+        UI.showSpinner();
+        companyCall('revert_attendance_import', { batch_id: batch.batch_id })
+          .then(function (res) {
+            UIC.toast((res && res.message) || 'تم التراجع', 'success');
+            lastBatch = null;
+            INDEX = null;
+            resetUploadFlow();
+            loadSessions();
+            loadBatches();
+          })
+          .catch(function (e) { UIC.toast((e && e.message) || 'تعذر التراجع', 'error'); })
+          .finally(function () { UI.hideSpinner(); });
+      });
+    }
+
+    /* ================= IMPORT HISTORY ================= */
+    /* The permanent home of undo — not only the panel that happens to be on
+       screen right after an import. */
+    /* BATCHES is already loaded at boot for a write user, so the modal shows
+       rows at once and then refreshes. عرض الكل is the footer, created with
+       the modal and bound here. */
+    function openBatchesModal() {
+      UIC.openModal('vf-batches-modal', {
+        title: 'سجل عمليات الرفع',
+        size: 'lg',
+        body: '<div id="vf-batches-table"><p class="vf-text-muted">جاري التحميل...</p></div>',
+        footer: '<button id="vf-batches-all-btn" class="btn btn-outline">عرض الكل</button>'
+      });
+      var batchesAllBtn = document.getElementById('vf-batches-all-btn');
+      if (batchesAllBtn) batchesAllBtn.addEventListener('click', function () { toggleBatches(); });
+      BATCHES_ALL = false;
+      renderBatchesTable();
+      loadBatches();
+    }
+
+    var BATCHES_ALL = false;
+    function toggleBatches() { loadBatches(!BATCHES_ALL); }
+
+    function loadBatches(loadAll) {
+      if (loadAll !== undefined) BATCHES_ALL = !!loadAll;
+      companyCall('get_attendance_batches', BATCHES_ALL ? { loadAll: true } : { limit: 20 })
+        .then(function (resp) {
+          BATCHES = (resp && resp.batches) || [];
+          BATCHES_TOTAL = (resp && resp.total) || BATCHES.length;
+          renderBatchesTable();
+        })
+        .catch(function () {
+          var c = document.getElementById('vf-batches-table');
+          if (c) c.innerHTML = '<p class="vf-text-muted">لا يوجد سجل رفع بعد.</p>';
+        });
+    }
+
+    function renderBatchesTable() {
+      var container = document.getElementById('vf-batches-table');
+      if (!container) return;
+      if (!BATCHES.length) {
+        container.innerHTML = '<p class="vf-text-muted">لم يتم رفع أي ملف بعد.</p>';
+        return;
+      }
+      var headers = ['الملف', 'الفترة', '✅ جديد', '♻️ مكرر', '🚩 مراجعة', 'المستخدم', 'الحالة',
+        { key: 'actions', label: 'إجراءات' }];
+      var rows = BATCHES.map(function (b) {
+        var isActive = b.batch_status !== 'reverted';
+        var acts = [];
+        if (CAN_FULL && isActive) {
+          acts.push({
+            label: '↩️ تراجع',
+            onclick: 'ATT_PAGE.undoBatch(\'' + esc(b.batch_id) + '\', \'' + esc(String(b.file_name || '').replace(/'/g, '')) + '\', ' + (b.rows_imported || 0) + ')'
+          });
+        }
+        return [
+          esc(b.file_name || '-'),
+          esc((b.date_min_display || '?') + ' — ' + (b.date_max_display || '?')),
+          b.rows_imported, b.rows_duplicate, b.rows_flagged,
+          esc(uname_(b.uploaded_by)),
+          isActive ? UIC.statusPill('نشط', 'success') : UIC.statusPill('تم التراجع', 'neutral'),
+          acts.length ? UIC.actionBtns(acts) : ''
+        ];
+      });
+      container.innerHTML = UIC.showAllBar({ loadedAll: BATCHES_ALL, total: BATCHES_TOTAL, showAll: 'ATT_PAGE.toggleBatches()', showLatest: 'ATT_PAGE.toggleBatches()' }) +
+        UIC.dataTable('vf-batches-table-id', { headers: headers, rows: rows, pageSize: 50 });
+      var allBtn = document.getElementById('vf-batches-all-btn');
+      if (allBtn) {
+        allBtn.textContent = BATCHES_ALL ? '📄 عرض آخر 20 سجل فقط' : '📊 عرض الكل';
+        allBtn.onclick = function () { toggleBatches(); };
+      }
+    }
+
+    /* ================= MANUAL ENTRY ================= */
+    /* D-02 / D-22. No session dropdown. The punch datetime is what decides
+       which day the punch belongs to, and the server resolves that itself —
+       so there is nowhere left for the client to name the wrong day, and no
+       reason to read the whole punch table to populate a select. */
+    /** Employee options, fetched once and kept for the life of the page. */
+    function loadEmployees() {
+      if (EMPLOYEES) return Promise.resolve(EMPLOYEES);
+      return companyCall('get_attendance_employees', {})
+        .then(function (r) { EMPLOYEES = (r && r.employee_options) || []; return EMPLOYEES; });
+    }
+
+    function showManualEntryModal(prefill) {
+      prefill = prefill || {};
+      var dt = prefill.date ? (prefill.date + 'T08:00') : '';
+      UIC.openModal('vf-manual-entry-modal', {
+        title: 'إضافة بصمة',
+        body: '<form id="vf-manual-form">' +
+          '<div id="vf-manual-emp-wrap">' + UIC.combo({
+            key: 'vf-manual-emp-id', label: 'الموظف', required: true, options: EMPLOYEES || [],
+            value: prefill.empId || '',
+            placeholder: EMPLOYEES ? 'اختر موظفاً...' : 'جاري تحميل الموظفين...'
+          }) + '</div>' +
+          UIC.field({ key: 'vf-manual-datetime', label: 'تاريخ ووقت البصمة', type: 'datetime-local', required: true, value: dt }) +
+          '<div class="vf-form-row">' +
+            '<div class="vf-form-group">' + UIC.field({ key: 'vf-manual-time-in', label: 'وقت الدخول (اختياري)', type: 'time' }) + '</div>' +
+            '<div class="vf-form-group">' + UIC.field({ key: 'vf-manual-time-out', label: 'وقت الخروج (اختياري)', type: 'time' }) + '</div>' +
+          '</div>' +
+          '<div class="vf-form-row">' +
+            '<div class="vf-form-group">' + UIC.field({ key: 'vf-manual-excuse-in', label: 'عذر الدخول', type: 'text' }) + '</div>' +
+            '<div class="vf-form-group">' + UIC.field({ key: 'vf-manual-excuse-out', label: 'عذر الخروج', type: 'text' }) + '</div>' +
+          '</div>' +
+        '</form>',
+        onSave: 'ATT_PAGE.saveManualEntry()'
+      });
+
+      loadEmployees()
+        .then(function (opts) {
+          var wrap = document.getElementById('vf-manual-emp-wrap');
+          if (!wrap) return;
+          wrap.innerHTML = UIC.combo({
+            key: 'vf-manual-emp-id', label: 'الموظف', required: true, options: opts,
+            value: prefill.empId || '', placeholder: 'اختر موظفاً...'
+          });
+        })
+        .catch(function () { UIC.toast('تعذر تحميل قائمة الموظفين', 'error'); });
+    }
+
+    function saveManualEntry() {
+      if (!UIC.validateForm('vf-manual-form')) return;
+      var empHidden = document.getElementById('vf-manual-emp-id');
+      var data = {
+        /* No session_id. The server resolves the day from the datetime, which
+           is what closes D-02 by construction rather than by validation. */
+        emp_id: empHidden ? empHidden.value : '',
+        attendance_date_time: document.getElementById('vf-manual-datetime').value,
+        time_in: document.getElementById('vf-manual-time-in').value,
+        time_out: document.getElementById('vf-manual-time-out').value,
+        excuse_in: document.getElementById('vf-manual-excuse-in').value,
+        excuse_out: document.getElementById('vf-manual-excuse-out').value
+      };
+      if (!data.emp_id) { UIC.toast('الموظف مطلوب', 'error'); return; }
+      if (!data.attendance_date_time) { UIC.toast('تاريخ ووقت البصمة مطلوب', 'error'); return; }
+      UI.showSpinner();
+      companyCall('add_manual_attendance', data)
+        .then(function (resp) {
+          UIC.closeModal('vf-manual-entry-modal');
+          var created = resp && resp.data && resp.data.session_created;
+          UIC.toast(((resp && resp.message) || 'تم تسجيل البصمة') +
+            (created ? ' — وتم فتح اليوم' : ''), 'success');
+          INDEX = null;
+          loadSessions();
+        })
+        .catch(function (e) {
+          UIC.toast((e && e.message) || 'فشل الحفظ', 'error');
+        })
+        .finally(function () { UI.hideSpinner(); });
+    }
+
+    /* ================= WORK QUEUES ================= */
+    /* D-16. valley_attendance_needs_review has existed all along with no UI at
+       all — the old result panel told the user to go and open a raw sheet by
+       name. That sheet name does not appear anywhere in this interface. */
+    /* The queue is already in REVIEW from boot, so the modal shows rows at
+       once and then refreshes. The عرض المعالج أيضاً toggle is the footer;
+       it is created with the modal, so it is bound here, not in bindEvents.
+       Its label follows REVIEW_STATUS, which outlives the modal. */
+    function openReviewModal() {
+      UIC.openModal('vf-review-modal', {
+        title: 'صفوف تحتاج مراجعة',
+        size: 'xl',
+        body: '<div id="vf-review-body"><p class="vf-text-muted">جاري التحميل...</p></div>',
+        footer: '<button id="vf-review-all-btn" class="btn btn-outline">' +
+          ((REVIEW_STATUS === 'open') ? 'عرض المعالج أيضاً' : 'عرض المفتوح فقط') + '</button>'
+      });
+      var reviewAllBtn = document.getElementById('vf-review-all-btn');
+      if (reviewAllBtn) reviewAllBtn.addEventListener('click', function () {
+        REVIEW_STATUS = (REVIEW_STATUS === 'open') ? 'all' : 'open';
+        reviewAllBtn.innerHTML = (REVIEW_STATUS === 'open') ? 'عرض المعالج أيضاً' : 'عرض المفتوح فقط';
+        loadReview(REVIEW_STATUS);
+      });
+      renderReviewTable();
+      loadReview();
+    }
+
+    function loadReview(status) {
+      REVIEW_STATUS = status || REVIEW_STATUS || 'open';
+      companyCall('get_attendance_review', { status: REVIEW_STATUS, loadAll: true })
+        .then(function (r) {
+          REVIEW = (r && r.rows) || [];
+          REVIEW_RESOLVABLE = !!(r && r.resolvable);
+          var badge = document.getElementById('vf-review-badge');
+          if (badge) {
+            var n = (r && r.open_count) || 0;
+            badge.innerHTML = n ? String(n) : '';
+            badge.style.display = n ? 'inline-block' : 'none';
+          }
+          renderReviewTable();
+        })
+        .catch(function () {
+          var c = document.getElementById('vf-review-body');
+          if (c) c.innerHTML = '<p class="vf-text-muted">لا توجد صفوف تحتاج مراجعة.</p>';
+        });
+    }
+
+    function renderReviewTable() {
+      var container = document.getElementById('vf-review-body');
+      if (!container) return;
+      if (!REVIEW.length) {
+        container.innerHTML = '<p class="vf-text-muted">' +
+          (REVIEW_STATUS === 'open' ? 'لا توجد صفوف تحتاج مراجعة. 👍' : 'لا توجد صفوف بهذه الحالة.') + '</p>';
+        return;
+      }
+      var headers = ['الصف كما ورد', 'السبب', 'الكود المقترح', 'التاريخ المقترح', 'الحالة',
+        { key: 'actions', label: 'إجراءات' }];
+      var rows = REVIEW.map(function (r) {
+        var acts = [];
+        if (CAN_WRITE && REVIEW_RESOLVABLE && r.review_status === 'open') {
+          acts.push({ label: '✔️ تسجيل', onclick: 'ATT_PAGE.showReviewFix(\'' + esc(r.review_id) + '\')' });
+          acts.push({ label: '🗑️ استبعاد', onclick: 'ATT_PAGE.discardReview(\'' + esc(r.review_id) + '\')' });
+        }
+        return [
+          '<span style="font-family:monospace;font-size:11px;direction:ltr;display:inline-block;text-align:left;">' + esc(r.raw_row_text) + '</span>',
+          esc(r.reason),
+          esc(r.emp_id_guess || '-') + (r.employee_name_guess ? ' — ' + esc(r.employee_name_guess) : ''),
+          esc(r.datetime_guess_display || '-'),
+          r.review_status === 'open' ? UIC.statusPill('مفتوح', 'warning')
+            : (r.review_status === 'fixed' ? UIC.statusPill('تم التسجيل', 'success') : UIC.statusPill('مستبعد', 'neutral')),
+          acts.length ? UIC.actionBtns(acts) : ''
+        ];
+      });
+      var html = '';
+      if (!REVIEW_RESOLVABLE) {
+        html += '<div class="vf-analysis-sub" style="color:#92400e;">ℹ️ العمودان review_id و review_status غير موجودين، ' +
+          'لذلك تظهر الصفوف للاطلاع فقط. أضف العمودين لتفعيل التسجيل والاستبعاد.</div>';
+      }
+      container.innerHTML = html + UIC.dataTable('vf-review-table-id', { headers: headers, rows: rows, pageSize: 50 });
+    }
+
+    /* The fix modal is the manual-entry form with the guess prefilled: the same
+       validated path — lock, dedup, resolveSession_ — runs on the server. */
+    function showReviewFix(reviewId) {
+      var r = REVIEW.filter(function (x) { return String(x.review_id) === String(reviewId); })[0];
+      if (!r) return;
+      var dtValue = '';
+      if (r.datetime_guess != null) {
+        var d = ATT_PARSER.serialToDate(r.datetime_guess);
+        dtValue = d.getUTCFullYear() + '-' + pad2_(d.getUTCMonth() + 1) + '-' + pad2_(d.getUTCDate()) +
+          'T' + pad2_(d.getUTCHours()) + ':' + pad2_(d.getUTCMinutes());
+      }
+      UIC.openModal('vf-review-fix-modal', {
+        title: 'تسجيل صف بعد المراجعة',
+        body: '<form id="vf-review-form">' +
+          '<div class="vf-sample-list">' + esc(r.raw_row_text) + '</div>' +
+          '<div class="vf-analysis-sub">السبب: ' + esc(r.reason) + '</div>' +
+          '<input type="hidden" id="vf-review-id" value="' + esc(r.review_id) + '">' +
+          '<div id="vf-review-emp-wrap">' + UIC.combo({
+            key: 'vf-review-emp-id', label: 'الموظف', required: true,
+            options: EMPLOYEES || [], value: r.emp_id_guess || '',
+            placeholder: EMPLOYEES ? 'اختر موظفاً...' : 'جاري تحميل الموظفين...'
+          }) + '</div>' +
+          UIC.field({ key: 'vf-review-datetime', label: 'تاريخ ووقت البصمة', type: 'datetime-local', required: true, value: dtValue }) +
+        '</form>',
+        onSave: 'ATT_PAGE.saveReviewFix()'
+      });
+      loadEmployees().then(function (opts) {
+        var wrap = document.getElementById('vf-review-emp-wrap');
+        if (!wrap) return;
+        wrap.innerHTML = UIC.combo({
+          key: 'vf-review-emp-id', label: 'الموظف', required: true,
+          options: opts, value: r.emp_id_guess || '', placeholder: 'اختر موظفاً...'
+        });
+      }).catch(function () {});
+    }
+
+    function saveReviewFix() {
+      if (!UIC.validateForm('vf-review-form')) return;
+      var emp = document.getElementById('vf-review-emp-id');
+      var payload = {
+        review_id: document.getElementById('vf-review-id').value,
+        action: 'import',
+        emp_id: emp ? emp.value : '',
+        attendance_date_time: document.getElementById('vf-review-datetime').value
+      };
+      if (!payload.emp_id) { UIC.toast('الموظف مطلوب', 'error'); return; }
+      if (!payload.attendance_date_time) { UIC.toast('تاريخ ووقت البصمة مطلوب', 'error'); return; }
+      UI.showSpinner();
+      companyCall('resolve_attendance_review', payload)
+        .then(function (res) {
+          UIC.closeModal('vf-review-fix-modal');
+          UIC.toast((res && res.message) || 'تم التسجيل', 'success');
+          INDEX = null;
+          loadReview();
+          loadSessions();
+        })
+        .catch(function (e) { UIC.toast((e && e.message) || 'فشل التسجيل', 'error'); })
+        .finally(function () { UI.hideSpinner(); });
+    }
+
+    function discardReview(reviewId) {
+      var r = REVIEW.filter(function (x) { return String(x.review_id) === String(reviewId); })[0];
+      UIC.confirm({
+        title: 'استبعاد الصف',
+        message: 'لن يتم تسجيل هذا الصف كبصمة. الصف نفسه يبقى في جدول المراجعة بحالة "مستبعد" ولا يُحذف.',
+        record: r ? r.raw_row_text : '',
+        confirmText: 'استبعاد',
+        danger: true
+      }).then(function (ok) {
+        if (!ok) return;
+        UI.showSpinner();
+        companyCall('resolve_attendance_review', { review_id: reviewId, action: 'discard' })
+          .then(function (res) {
+            UIC.toast((res && res.message) || 'تم الاستبعاد', 'success');
+            loadReview();
+          })
+          .catch(function (e) { UIC.toast((e && e.message) || 'تعذر الاستبعاد', 'error'); })
+          .finally(function () { UI.hideSpinner(); });
+      });
+    }
+
+    /* ---- missing punches (D-26) ---- */
+    /* Opening IS the request: the range is the toolbar's, and the table
+       renders into the modal body. The loud load draws its skeleton into
+       #vf-exc-body, which exists only once this modal is open. */
+    function openExceptionsModal() {
+      var start = document.getElementById('vf-range-start');
+      var end = document.getElementById('vf-range-end');
+      UIC.openModal('vf-exc-modal', {
+        title: 'غياب وبصمات ناقصة · من ' + esc(start ? start.value : '') + ' إلى ' + esc(end ? end.value : ''),
+        size: 'xl',
+        body: '<div id="vf-exc-body"></div>',
+        footer: false
+      });
+      /* Lift the shared modal-xl 1100px cap for this dialog only (inline, so
+         the L-8 <style> lint stays green). */
+      var excDlg = document.querySelector('#vf-exc-modal .modal');
+      if (excDlg) excDlg.style.maxWidth = '1400px';
+      loadExceptions();
+    }
+
+    /* quiet: refresh in the background with no blocking overlay, for a
+       user who has already seen the change and must not be interrupted
+       to confirm it. */
+    function loadExceptions(quiet) {
+      var from = document.getElementById('vf-range-start').value;
+      var to = document.getElementById('vf-range-end').value;
+      if (!from || !to) { UIC.toast('اختر الفترة', 'error'); return; }
+      if (!quiet) UIC.readSkeleton('vf-exc-body');
+      companyCall('get_attendance_exceptions', { from: from, to: to, loadAll: true })
+        .then(function (r) {
+          EXCEPTIONS = (r && r.rows) || [];
+          setExcBadge(EXCEPTIONS.length);
+          renderExceptionsTable(r || {});
+        })
+        .catch(function (e) { UIC.toast((e && e.message) || 'تعذر تحميل البيانات', 'error'); })
+        .finally(function () { if (!quiet) UI.hideSpinner(); });
+    }
+
+    /* The count on the ⚠️ الناقص button — shown and hidden exactly the way
+       loadReview treats vf-review-badge. */
+    function setExcBadge(n) {
+      var badge = document.getElementById('vf-exc-badge');
+      if (!badge) return;
+      badge.innerHTML = n ? String(n) : '';
+      badge.style.display = n ? 'inline-block' : 'none';
+    }
+
+    function renderExceptionsTable(resp) {
+      var container = document.getElementById('vf-exc-body');
+      if (!container) return;
+      var counts = resp.counts || {};
+      var html = '<div class="vf-analysis-sub">أيام العمل في الفترة: <b>' + (resp.working_days || 0) + '</b> · ' +
+        'حضور مكتمل: <b style="color:#16a34a;">' + (counts.present || 0) + '</b> · ' +
+        'ناقص: <b style="color:#f59e0b;">' + (counts.incomplete || 0) + '</b> · ' +
+        'غياب: <b style="color:#dc2626;">' + (counts.absent || 0) + '</b></div>';
+      if (!EXCEPTIONS.length) {
+        container.innerHTML = html + '<p class="vf-text-muted">لا يوجد غياب أو بصمات ناقصة في هذه الفترة. 👍</p>';
+        return;
+      }
+      var headers = ['التاريخ', 'الكود', 'الاسم', 'البصمات', 'دخول', 'خروج', 'الحالة',
+        { key: 'actions', label: 'إجراءات' }];
+      var rows = EXCEPTIONS.map(function (r, i) {
+        var acts = [];
+        if (CAN_WRITE) {
+          acts.push({ label: '+ إضافة بصمة', onclick: 'ATT_PAGE.addPunchFromException(' + i + ')' });
+        }
+        acts.push({ label: '🖨️ نموذج نسيان', onclick: 'ATT_PAGE.printForgetFor(' + i + ')' });
+        return [
+          esc(r.session_date_display), esc(r.emp_id), esc(r.employee_name), r.punches,
+          esc(r.first_display || '-'), esc(r.last_display || '-'),
+          r.status === 'absent' ? UIC.statusPill('غياب', 'danger') : UIC.statusPill('ناقص', 'warning'),
+          UIC.actionBtns(acts)
+        ];
+      });
+      container.innerHTML = html + UIC.dataTable('vf-exc-table-id', { headers: headers, rows: rows, pageSize: 50 });
+    }
+
+    function addPunchFromException(i) {
+      var r = EXCEPTIONS[i];
+      if (!r) return;
+      showManualEntryModal({ date: r.session_date_key, empId: r.emp_id });
+    }
+
+    /** The form, prefilled from the row that says a punch is missing (D-26). */
+    function printForgetFor(i) {
+      var r = EXCEPTIONS[i];
+      if (!r) return;
+      UIC.printDoc(buildForgetFormHtml({
+        empName: r.employee_name,
+        empId: r.emp_id,
+        rows: [{
+          date: r.session_date_display,
+          direction: r.missing === 'both' ? 'both' : 'out',
+          expectedIn: r.first_display || '',
+          expectedOut: r.last_display || ''
+        }]
+      }), 'نموذج نسيان بصمة حضور', { features: 'width=800,height=600' });
+    }
+
+    function monthStartStr() {
+      var n = new Date();
+      return n.getFullYear() + '-' + pad2_(n.getMonth() + 1) + '-01';
+    }
+
+    /* ================= REPORT ================= */
+    /* Renamed: it reports حضور AND غياب, and it now actually can, because the
+       rows come from the roster rather than from the punches. */
+    /* Opening IS the request. renderReportTable and openReportDrill render
+       into the two ids below, which now live in the modal body. */
+    function openReportModal() {
+      var start = document.getElementById('vf-range-start');
+      var end = document.getElementById('vf-range-end');
+      UIC.openModal('vf-report-modal', {
+        title: 'تقرير الحضور والغياب · من ' + esc(start ? start.value : '') + ' إلى ' + esc(end ? end.value : ''),
+        size: 'xl',
+        body: '<div id="vf-report-table"></div><div id="vf-report-drill"></div>',
+        footer: false
+      });
+      loadReport();
+    }
+
+    function loadReport() {
+      var start = document.getElementById('vf-range-start').value;
+      var end = document.getElementById('vf-range-end').value;
+      if (!start || !end) { UIC.toast('اختر التاريخ', 'error'); return; }
+      REPORT_RANGE = { start: start, end: end };
+      UIC.readSkeleton('vf-report-drill');
+      companyCall('get_attendance_report', { start_date: start, end_date: end })
+        .then(function (resp) {
+          REPORT_DATA = (resp && resp.report) || [];
+          REPORT_META = resp || {};
+          var drill = document.getElementById('vf-report-drill');
+          if (drill) drill.innerHTML = '';
+          renderReportTable();
+        })
+        .catch(function (e) { UIC.toast((e && e.message) || 'حدث خطأ أثناء تحميل التقرير', 'error'); })
+        .finally(function () { UI.hideSpinner(); });
+    }
+
+    function renderReportTable() {
+      var container = document.getElementById('vf-report-table');
+      if (!container) return;
+      if (!REPORT_DATA.length) {
+        container.innerHTML = '<p class="vf-text-muted">لا يوجد موظفون على رأس العمل لعرضهم.</p>';
+        return;
+      }
+      var html = '<div class="vf-analysis-sub">أيام العمل في الفترة (' +
+        esc((REPORT_META.range || {}).start_display || '') + ' — ' +
+        esc((REPORT_META.range || {}).end_display || '') + '): <b>' +
+        (REPORT_META.working_days || 0) + '</b> يوم</div>';
+      var headers = ['الكود', 'الاسم', 'أيام العمل', 'أيام حضور', 'أيام غياب', 'أيام ناقصة',
+        'إجمالي الساعات', { key: 'actions', label: 'إجراءات' }];
+      var rows = REPORT_DATA.map(function (r) {
+        return [
+          esc(r.emp_id), esc(r.name_ar),
+          r.working_days,
+          '<b style="color:#16a34a;">' + r.present_days + '</b>',
+          r.absent_days ? '<b style="color:#dc2626;">' + r.absent_days + '</b>' : '0',
+          r.incomplete_days ? '<b style="color:#f59e0b;">' + r.incomplete_days + '</b>' : '0',
+          r.worked_hours,
+          UIC.actionBtns([
+            { label: 'تفاصيل الأيام', onclick: 'ATT_PAGE.openReportDrill(' + r.emp_id + ')' }
+          ])
+        ];
+      });
+      container.innerHTML = html + UIC.dataTable('vf-report-table-id', {
+        headers: headers, rows: rows, pageSize: 50, title: 'تقرير الحضور والغياب'
+      });
+    }
+
+    /** Per-employee drilldown: one row per working day. */
+    function openReportDrill(empId) {
+      if (!REPORT_RANGE) return;
+      UIC.readSkeleton('vf-report-drill');
+      companyCall('get_attendance_report', {
+        start_date: REPORT_RANGE.start, end_date: REPORT_RANGE.end, emp_id: empId
+      })
+        .then(function (resp) {
+          var drill = document.getElementById('vf-report-drill');
+          if (!drill) return;
+          var rowsIn = (resp && resp.drilldown) || [];
+          var who = ((resp && resp.report) || []).filter(function (r) { return String(r.emp_id) === String(empId); })[0];
+          if (!rowsIn.length) {
+            drill.innerHTML = '<p class="vf-text-muted">لا توجد أيام عمل في هذه الفترة.</p>';
+            return;
+          }
+          drill.innerHTML = '<div style="font-weight:900;margin:16px 0 6px;">تفاصيل أيام ' +
+            esc(who ? who.name_ar : empId) + '</div>' +
+            UIC.dataTable('vf-report-drill-table', {
+              headers: ['اليوم', 'دخول', 'خروج', 'بصمات', 'ساعات', 'الحالة'],
+              rows: rowsIn.map(function (r) {
+                return [
+                  esc(r.session_date_display),
+                  esc(r.time_in_display || '-'), esc(r.time_out_display || '-'),
+                  r.punches, r.worked_hours,
+                  r.status === 'present' ? UIC.statusPill('حضور', 'success')
+                    : (r.status === 'absent' ? UIC.statusPill('غياب', 'danger') : UIC.statusPill('ناقص', 'warning'))
+                ];
+              }),
+              pageSize: 50,
+              title: 'تفاصيل أيام ' + (who ? who.name_ar : empId)
+            });
+        })
+        .catch(function (e) { UIC.toast((e && e.message) || 'تعذر تحميل التفاصيل', 'error'); })
+        .finally(function () { UI.hideSpinner(); });
+    }
+
+    /* ================= FORGET FORM (print) ================= */
+    /* A bilingual (Arabic/English) form for approving a manual attendance
+       entry when a punch was forgotten — opens in its own window, A4-ready.
+       Reached from المزيد ▾ (blank) and from an exceptions row (prefilled). */
+    /**
+     * The printed نموذج نسيان البصمة (D-26).
+     *
+     * `opts` is OPTIONAL and every insertion point below collapses to the empty
+     * string without it, so buildForgetFormHtml() with no argument still prints
+     * the blank form byte for byte. That is a verify assertion, not a hope:
+     * s16 compares the no-argument output against the committed fixture.
+     *
+     * @param {object} [opts] { empName, empId, dept, jobTitle,
+     *   rows: [{ date, direction, expectedIn, expectedOut, notes }] }
+     */
+    function buildForgetFormHtml(opts) {
+      var o = opts || {};
+      /* Empty in, empty out — identical markup to the blank form. */
+      var val = function (x) { return (x === undefined || x === null || x === '') ? '' : esc(String(x)); };
+      var now = new Date();
+      var pad = function (n) { return n < 10 ? '0' + n : '' + n; };
+      var formattedDate = now.getFullYear() + '-' + pad(now.getMonth() + 1) + '-' + pad(now.getDate()) + ' ' + pad(now.getHours()) + ':' + pad(now.getMinutes());
+      var formId = 'ATT-' + now.getFullYear() + pad(now.getMonth() + 1) + pad(now.getDate()) + '-' + ('00' + Math.floor(Math.random() * 1000)).slice(-3);
+      var logoImg = COMPANY_LOGO_URL
+        ? '<img src="' + esc(COMPANY_LOGO_URL) + '" class="logo-img" onerror="this.style.display=\'none\'">'
+        : '';
+
+      var dayRow = function (withPlaceholders) {
+        return '<tr>' +
+          '<td><input type="text"' + (withPlaceholders ? ' placeholder="مثال: الأحد 2026/07/12"' : '') + '></td>' +
+          '<td><label><input type="checkbox"> دخول / In</label> <label><input type="checkbox"> خروج / Out</label></td>' +
+          '<td><input type="text"' + (withPlaceholders ? ' placeholder="08:00 ص"' : '') + '></td>' +
+          '<td><input type="text"' + (withPlaceholders ? ' placeholder="05:00 م"' : '') + '></td>' +
+          '<td><input type="text"></td>' +
+        '</tr>';
+      };
+      /* A filled row carries a value attribute; the placeholder row and the
+         four blanks are produced EXACTLY as before when there is no data. */
+      var filledRow = function (r) {
+        var chk = function (on) { return on ? ' checked' : ''; };
+        var wantIn = r.direction === 'in' || r.direction === 'both';
+        var wantOut = r.direction === 'out' || r.direction === 'both';
+        return '<tr>' +
+          '<td><input type="text" value="' + val(r.date) + '"></td>' +
+          '<td><label><input type="checkbox"' + chk(wantIn) + '> دخول / In</label> ' +
+              '<label><input type="checkbox"' + chk(wantOut) + '> خروج / Out</label></td>' +
+          '<td><input type="text" value="' + val(r.expectedIn) + '"></td>' +
+          '<td><input type="text" value="' + val(r.expectedOut) + '"></td>' +
+          '<td><input type="text" value="' + val(r.notes) + '"></td>' +
+        '</tr>';
+      };
+      var dayRows;
+      var oRows = o.rows || [];
+      if (!oRows.length) {
+        dayRows = dayRow(true);
+        for (var i = 0; i < 4; i++) dayRows += dayRow(false);
+      } else {
+        dayRows = '';
+        for (var j = 0; j < oRows.length; j++) dayRows += filledRow(oRows[j]);
+        for (var k = oRows.length; k < 5; k++) dayRows += dayRow(false);
+      }
+
+      return '<!DOCTYPE html><html lang="ar"><head><meta charset="UTF-8">' +
+      '<title>Valley Employee Attendance Forget Form</title>' +
+      '<style>' +
+      '*{margin:0;padding:0;box-sizing:border-box;font-family:"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif}' +
+      ':root{--green-main:#0f6227;--green-dark:#054719;--green-light:#defbe6;--green-border:#a7f0ba;--gray-bg:#f4f4f4;--gray-border:#e0e0e0;--gray-text:#525252;--highlight:#f1f8f3}' +
+      '@page{size:A4 portrait;margin:0}' +
+      'body{width:210mm;min-height:297mm;margin:20px auto;padding:10mm;background:var(--bg-surface, #fff);color:#1a1a1a}' +
+      '.action-bar{background:#f8f9fa;padding:15px;border:1px solid var(--gray-border);border-radius:8px;margin-bottom:25px;display:flex;justify-content:space-between;align-items:center;box-shadow:0 2px 4px rgba(0,0,0,.05)}' +
+      '.print-btn{background:var(--green-main);color:#fff;border:none;padding:10px 24px;font-size:15px;font-weight:bold;border-radius:5px;cursor:pointer;display:flex;align-items:center;gap:8px}' +
+      '.print-btn:hover{background:var(--green-dark)}' +
+      '.page-container{border:2px solid var(--green-border);border-radius:6px;background:var(--bg-surface, #fff);box-shadow:0 1px 6px rgba(0,0,0,.08)}' +
+      '.form-header{background:linear-gradient(135deg,var(--green-dark) 0%,var(--green-main) 100%);padding:15px 20px;border-radius:4px 4px 0 0;display:flex;align-items:center;justify-content:space-between;color:#fff}' +
+      '.logo-area{display:flex;align-items:center;gap:15px}' +
+      '.logo-img{width:64px;height:auto;max-height:58px;object-fit:contain;background:var(--bg-surface, #fff);border-radius:6px;padding:4px}' +
+      '.title-block h1{font-size:18px;font-weight:600;margin:0}' +
+      '.form-badge{background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.3);padding:6px 14px;border-radius:20px;font-size:12px;font-weight:bold;text-align:center}' +
+      '.meta-row{background:var(--gray-bg);padding:8px 20px;display:flex;justify-content:space-between;border-bottom:1px solid var(--gray-border);font-size:11px;color:var(--gray-text);direction:rtl}' +
+      '.form-content{padding:20px}' +
+      '.section-title{font-size:13px;font-weight:bold;color:var(--green-dark);border-bottom:2px solid var(--green-border);padding-bottom:4px;margin:18px 0 12px;display:flex;justify-content:space-between}' +
+      '.section-title:first-child{margin-top:0}' +
+      '.grid-2col{display:grid;grid-template-columns:1fr 1fr;gap:12px 20px;direction:rtl}' +
+      '.field-group{display:flex;flex-direction:column}' +
+      '.field-label{font-size:11px;font-weight:bold;color:var(--gray-text);margin-bottom:4px;display:flex;justify-content:space-between}' +
+      '.field-value{border-bottom:1.5px dashed var(--gray-border);padding:6px;min-height:32px;font-size:13px;background:var(--highlight);border-radius:2px}' +
+      '.field-value.large{min-height:60px;border:1px solid var(--gray-border);background:var(--bg-surface, #fff)}' +
+      '.ot-table{width:100%;border-collapse:collapse;margin-top:8px;font-size:12px;direction:rtl}' +
+      '.ot-table th,.ot-table td{border:1px solid var(--green-border);padding:8px 5px;text-align:center}' +
+      '.ot-table th{background-color:var(--green-light);color:var(--green-dark);font-weight:bold;font-size:11px}' +
+      '.ot-table td input[type=text]{width:100%;border:none;background:transparent;text-align:center;font-size:12px;outline:none}' +
+      '.ot-table td label{font-size:11px;display:inline-flex;align-items:center;gap:4px;cursor:pointer;margin:0 4px}' +
+      '.approval-section{margin-top:20px;border:1px solid var(--gray-border);border-radius:6px;overflow:hidden}' +
+      '.approval-header{background:var(--green-light);padding:8px 15px;font-weight:bold;color:var(--green-dark);font-size:12px;border-bottom:1px solid var(--green-border);display:flex;justify-content:space-between;direction:rtl}' +
+      '.approval-grid{display:grid;grid-template-columns:1fr 1fr 1fr}' +
+      '.approval-card{padding:12px;border-right:1px solid var(--gray-border);display:flex;flex-direction:column;align-items:center;text-align:center}' +
+      '.approval-card:last-child{border-right:none}' +
+      '.approver-role{font-size:11px;font-weight:bold;color:var(--green-main);background:var(--green-light);padding:3px 10px;border-radius:10px;margin-bottom:15px}' +
+      '.sign-line{width:85%;border-bottom:1.5px solid var(--gray-text);margin:10px 0 5px;height:20px}' +
+      '.sign-label{font-size:10px;color:var(--gray-text)}' +
+      '.form-footer{padding:10px 20px;background:var(--gray-bg);border-top:1px solid var(--gray-border);font-size:10px;color:var(--gray-text);display:flex;justify-content:space-between;direction:rtl}' +
+      '@media print{.action-bar{display:none!important}body{margin:0;padding:10mm;width:100%;min-height:auto;-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}.page-container{box-shadow:none;border:1px solid #000}}' +
+      '</style></head><body>' +
+
+      '<div class="action-bar">' +
+        '<div style="font-size:14px;color:#555;">ℹ️ يمكنك ملء البيانات أو طباعة النموذج فارغاً مباشرة للتوقيع اليدوي.</div>' +
+        '<button class="print-btn" onclick="window.print()">🖨️ طباعة النموذج / Print Form</button>' +
+      '</div>' +
+
+      '<div class="page-container">' +
+        '<div class="form-header">' +
+          '<div class="logo-area">' + logoImg +
+            '<div class="title-block"><h1>نموذج طلب اعتماد حضور (نسيان بصمة)</h1></div>' +
+          '</div>' +
+          '<div class="form-badge">طلب إدخال يدوي <br> Manual Entry Request</div>' +
+        '</div>' +
+        '<div class="meta-row">' +
+          '<span>📅 تاريخ الإنشاء / Generated: ' + formattedDate + '</span>' +
+          '<span>📋 رقم النموذج / Form ID: ' + formId + '</span>' +
+        '</div>' +
+        '<div class="form-content">' +
+          '<div class="section-title"><span>① بيانات الموظف</span><span>① Employee Details</span></div>' +
+          '<div class="grid-2col">' +
+            '<div class="field-group"><label class="field-label"><span>اسم الموظف</span><span>Employee Name</span></label><div class="field-value">' + val(o.empName) + '</div></div>' +
+            '<div class="field-group"><label class="field-label"><span>الرقم الوظيفي</span><span>Employee ID</span></label><div class="field-value">' + val(o.empId) + '</div></div>' +
+            '<div class="field-group"><label class="field-label"><span>القسم</span><span>Department</span></label><div class="field-value">' + val(o.dept) + '</div></div>' +
+            '<div class="field-group"><label class="field-label"><span>المسمى الوظيفي</span><span>Job Title</span></label><div class="field-value">' + val(o.jobTitle) + '</div></div>' +
+          '</div>' +
+          '<div class="section-title"><span>② تفاصيل الحضور المفقود (أيام متعددة)</span><span>② Missing Attendance Details (Multi-Day)</span></div>' +
+          '<table class="ot-table"><thead><tr>' +
+            '<th style="width:20%;">اليوم والتاريخ <br> Day & Date</th>' +
+            '<th style="width:22%;">نوع البصمة المنسية <br> Missed Check Type</th>' +
+            '<th style="width:19%;">وقت الحضور المفترض <br> Expected Check-in</th>' +
+            '<th style="width:19%;">وقت الانصراف المفترض <br> Expected Check-out</th>' +
+            '<th style="width:20%;">ملاحظات <br> Notes</th>' +
+          '</tr></thead><tbody>' + dayRows + '</tbody></table>' +
+          '<div class="section-title"><span>③ مبررات نسيان البصمة والإثبات</span><span>③ Justification & Proof of Presence</span></div>' +
+          '<div class="field-group" style="direction:rtl;margin-bottom:12px;"><label class="field-label"><span>السبب التفصيلي لنسيان تسجيل البصمة</span><span>Detailed Reason for Missing Fingerprint</span></label><div class="field-value large"></div></div>' +
+          '<div class="field-group" style="direction:rtl;"><label class="field-label"><span>الأدلة أو الشهود على تواجد الموظف (في حال وجوده)</span><span>Evidence or Witnesses (If applicable)</span></label><div class="field-value large"></div></div>' +
+          '<div class="approval-section">' +
+            '<div class="approval-header"><span>④ الاعتمادات (مطلوب توقيع يدوي لتعديل سجل الحضور)</span><span>④ Approvals (Manual Signature Required)</span></div>' +
+            '<div class="approval-grid">' +
+              '<div class="approval-card"><span class="approver-role">المدير المباشر <br> Direct Manager</span><div class="sign-line"></div><span class="sign-label">التوقيع / Signature</span><div class="sign-line"></div><span class="sign-label">الاسم / Printed Name</span><div style="margin-top:10px;font-size:11px;">التاريخ / Date: _________</div></div>' +
+              '<div class="approval-card"><span class="approver-role">موظف الموارد البشرية <br> HR Officer</span><div class="sign-line"></div><span class="sign-label">التوقيع / Signature</span><div class="sign-line"></div><span class="sign-label">الاسم / Printed Name</span><div style="margin-top:10px;font-size:11px;">التاريخ / Date: _________</div></div>' +
+              '<div class="approval-card"><span class="approver-role">مدير الإدارة (اختياري) <br> Dept. Head (Optional)</span><div class="sign-line"></div><span class="sign-label">التوقيع / Signature</span><div class="sign-line"></div><span class="sign-label">الاسم / Printed Name</span><div style="margin-top:10px;font-size:11px;">التاريخ / Date: _________</div></div>' +
+            '</div>' +
+          '</div>' +
+        '</div>' +
+        '<div class="form-footer">' +
+          '<span>شركة فالي فودز للحاصلات الزراعية - نموذج نسيان بصمة حضور - إصدار 2026</span>' +
+          '<span style="direction:ltr;">Uncontrolled document when printed</span>' +
+          '<span>نسخة إدارة الموارد البشرية</span>' +
+        '</div>' +
+      '</div></body></html>';
+    }
+
+    function printForgetForm() {
+      /* [iPhone run 2] Same window.open, including the same window features.
+         See UIC.printDoc. */
+      UIC.printDoc(buildForgetFormHtml(), 'نموذج نسيان بصمة حضور',
+        { features: 'width=800,height=600' });
+    }
+
+    /* ================= BINDINGS / INIT ================= */
+    /* Everything bound here exists from boot. Controls created with a modal
+       (vf-csv-input, vf-review-all-btn, vf-batches-all-btn) are bound in the
+       open*Modal function that creates them. */
+    function bindEvents() {
+      var newSessionBtn = document.getElementById('vf-new-session-btn');
+      if (newSessionBtn) newSessionBtn.addEventListener('click', moreItem(function () { showNewSessionModal(); }));
+
+      var prevBtn = document.getElementById('vf-month-prev');
+      if (prevBtn) prevBtn.addEventListener('click', function () { shiftMonth(-1); });
+      var nextBtn = document.getElementById('vf-month-next');
+      if (nextBtn) nextBtn.addEventListener('click', function () { shiftMonth(1); });
+      var todayBtn = document.getElementById('vf-month-today');
+      if (todayBtn) todayBtn.addEventListener('click', function () {
+        var n = new Date(); VIEW_YEAR = n.getFullYear(); VIEW_MONTH = n.getMonth();
+        syncRangeToMonth();
+        withMonthOverlay(loadSessions);
+      });
+      var rangeStart = document.getElementById('vf-range-start');
+      if (rangeStart) rangeStart.addEventListener('input', function () { RANGE_TOUCHED = true; });
+      var rangeEnd = document.getElementById('vf-range-end');
+      if (rangeEnd) rangeEnd.addEventListener('input', function () { RANGE_TOUCHED = true; });
+      var viewBtn = document.getElementById('vf-view-toggle');
+      if (viewBtn) viewBtn.addEventListener('click', moreItem(toggleView));
+
+      var openReportBtn = document.getElementById('vf-open-report');
+      if (openReportBtn) openReportBtn.addEventListener('click', openReportModal);
+      var openExcBtn = document.getElementById('vf-open-exc');
+      if (openExcBtn) openExcBtn.addEventListener('click', openExceptionsModal);
+      var openReviewBtn = document.getElementById('vf-open-review');
+      if (openReviewBtn) openReviewBtn.addEventListener('click', openReviewModal);
+      var openImportBtn = document.getElementById('vf-open-import');
+      if (openImportBtn) openImportBtn.addEventListener('click', openImportModal);
+      var moreToggle = document.getElementById('vf-more-toggle');
+      if (moreToggle) {
+        moreToggle.addEventListener('click', function (e) {
+          UIC.toggleDropdown('vf-more-menu', e);
+          var menu = document.getElementById('vf-more-menu');
+          var isOpen = !!(menu && menu.classList.contains('open'));
+          moreToggle.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+        });
+      }
+      document.addEventListener('click', function (e) {
+        var dd = e.target && e.target.closest ? e.target.closest('.nav-dropdown') : null;
+        if (!dd && moreToggle) {
+          moreToggle.setAttribute('aria-expanded', 'false');
+        }
+      });
+      document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape') {
+          var menu = document.getElementById('vf-more-menu');
+          if (menu && menu.classList.contains('open')) {
+            UIC.toggleDropdown('vf-more-menu');
+            if (moreToggle) moreToggle.setAttribute('aria-expanded', 'false');
+          }
+        }
+      });
+
+      var manualAddBtn = document.getElementById('vf-manual-add-btn');
+      if (manualAddBtn) manualAddBtn.addEventListener('click', moreItem(function () { showManualEntryModal(); }));
+
+      var openBatchesBtn = document.getElementById('vf-open-batches');
+      if (openBatchesBtn) openBatchesBtn.addEventListener('click', moreItem(openBatchesModal));
+
+      var printBtn = document.getElementById('vf-print-forget-btn');
+      if (printBtn) printBtn.addEventListener('click', moreItem(printForgetForm));
+    }
+
+    /* Another device's change to this page arrives on its own. The poll
+       reads timestamps from cache, never a spreadsheet, and stands down
+       while the tab is hidden or a save is in flight. */
+    document.addEventListener('DOMContentLoaded', function () {
+      UIC.Live.watchPage({
+        call: companyCall,
+        page: 'vf_hr_attendance',
+        onChange: function () {
+          UIC.Live.arrive(function () {
+            /* the day list is the page's spine; the two queues hang off it */
+            loadSessions();
+            try { loadExceptions(true); } catch (e) {}
+          });
+        }
+      });
+    });
+
+    document.addEventListener('DOMContentLoaded', renderApp);
+
+    window.ATT_PAGE = {
+      openSessionDetail: openSessionDetail,
+      saveNewSession: saveNewSession,
+      loadAllDays: loadAllDays,
+      showLatestDays: showLatestDays,
+      toggleBatches: toggleBatches,
+      addPunchForDay: addPunchForDay,
+      showReviewFix: showReviewFix,
+      saveReviewFix: saveReviewFix,
+      discardReview: discardReview,
+      addPunchFromException: addPunchFromException,
+      printForgetFor: printForgetFor,
+      openReportDrill: openReportDrill,
+      resetUpload: resetUploadFlow,
+      chooseFormat: chooseFormat,
+      showAlternatives: showAlternatives,
+      startCommit: startCommit,
+      undoBatch: undoBatch,
+      saveManualEntry: saveManualEntry,
+      openReportModal: openReportModal,
+      openExceptionsModal: openExceptionsModal,
+      openReviewModal: openReviewModal,
+      openImportModal: openImportModal,
+      openBatchesModal: openBatchesModal
+    };
+  })();
+  </script>
+</body>
+</html>
+
+

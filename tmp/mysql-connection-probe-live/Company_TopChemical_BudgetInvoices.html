@@ -1,0 +1,818 @@
+﻿<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="description" content="الفواتير الضريبية — توب كيميكال">
+  <title>الفواتير الضريبية</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_TopChemical_Nav'); ?>
+  <?!= getCompanyThemeCSS_('3fe1b5cb67b7223e') ?>
+  <style>
+    .filter-bar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+      margin-bottom: 16px;
+      background: var(--bg-surface);
+      padding: 14px 16px;
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-lg);
+      box-shadow: var(--shadow-sm);
+    }
+    .filter-item {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .filter-label {
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--text-muted);
+    }
+    /* Keep the invoice table readable; the shared table wrapper handles wide-screen scrolling. */
+    #budget-invoices-content { min-width: 0; max-width: 100%; }
+    #invoice-table-area { min-width: 0; max-width: 100%; }
+  </style>
+</head>
+<body>
+<div id="tc-root" dir="rtl"></div>
+<script>
+  var params = new URLSearchParams(window.location.search);
+  var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+  var scriptUrl = window.scriptUrl || '/';
+  var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+  var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('3fe1b5cb67b7223e') ?>';
+  var COMPANY_PAGES = <?!= companyPages ?>;
+  var CURRENT_ACTION = '<?!= currentAction ?>';
+  var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+  var CAN_WRITE = UIC.canAdd_(); var CAN_FULL = UIC.canFull_();
+  var MONTHS = ['', 'يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو', 'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر'];
+  
+  var FILTER = {
+    month: '',
+    year: '',
+    fromDate: '',
+    toDate: '',
+    search: '',
+    offset: 0,
+    limit: 200
+  };
+  var LAST = { total: 0, years: [], items: [] };
+  var REFS = null;
+  var SELECTED = {};
+
+  function companyCall(moduleAction, data) {
+    return API.call('company_action', {
+      target_system: '3fe1b5cb67b7223e',
+      module_action: moduleAction,
+      data: data || {}
+    }, SESSION_TOKEN);
+  }
+
+  function pad(n) { return n < 10 ? '0' + n : String(n); }
+  function todayStr() {
+    var d = new Date();
+    return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+  }
+
+  function normalizeDate(d) {
+    if (!d) return '';
+    if (d instanceof Date) {
+      return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+    }
+    var s = String(d).trim();
+    if (!s) return '';
+    var mIso = s.match(/^\d{4}[-\/](\d{1,2})[-\/](\d{1,2})$/);
+    if (mIso) {
+      return mIso[1] + '-' + pad(Number(mIso[2])) + '-' + pad(Number(mIso[3]));
+    }
+    var mDm = s.match(/^(\d{1,2})[-\/](\d{1,2})[-\/](\d{4})$/);
+    if (mDm) {
+      return mDm[3] + '-' + pad(Number(mDm[2])) + '-' + pad(Number(mDm[1]));
+    }
+    var dt = new Date(s);
+    if (!isNaN(dt.getTime())) {
+      return dt.getFullYear() + '-' + pad(dt.getMonth() + 1) + '-' + pad(dt.getDate());
+    }
+    return s;
+  }
+
+  function load() {
+    UIC.appShell('tc-root', {
+      companyLogoUrl: COMPANY_LOGO_URL,
+      companyLogoHref: scriptUrl + '?action=tc_dashboard&sessionToken=' + SESSION_TOKEN,
+      companyLogoTitle: 'توب كيميكال',
+      breadcrumb: 'توب كيميكال / حسابات الميزانية / الفواتير الضريبية',
+      contentId: 'budget-invoices-content',
+      menuGroups: (window.TOPCHEMICAL_MENU || [])
+    });
+    UIC.readSkeleton(null, { message: 'جاري تحميل البيانات...' });
+    companyCall('get_budget_refs')
+      .then(function (r) {
+        REFS = r.refs || {};
+        // Build hash index for repeated transaction_code lookups (Part 2 fix)
+        try {
+          REFS.current_products_by_code = {};
+          (REFS.current_products || []).forEach(function (c) {
+            REFS.current_products_by_code[String(c.transaction_code)] = c;
+          });
+          REFS.products_by_name = {};
+          (REFS.products || []).forEach(function (p) {
+            REFS.products_by_name[String(p.name_ar)] = p;
+          });
+        } catch(e){}
+        fetchInvoices();
+      })
+      .catch(function (e) {
+        UI.hideSpinner(); try{schedulePrefetch();}catch(e){}
+        showError(e);
+      });
+  }
+
+  function fetchInvoices(quiet) {
+    if (!quiet) UIC.readSkeleton('budget-invoices-content', { message: 'جاري جلب الفواتير...' });
+    Promise.all([
+      companyCall('get_legal_invoices', {
+        month: FILTER.month ? Number(FILTER.month) : '',
+        year: FILTER.year ? Number(FILTER.year) : '',
+        from_date: FILTER.fromDate,
+        to_date: FILTER.toDate,
+        search: FILTER.search,
+        offset: FILTER.offset,
+        limit: FILTER.limit
+      }),
+      companyCall('get_legal_cash', {
+        offset: 0,
+        limit: 10000
+      })
+    ])
+      .then(function (results) {
+        var invoicesResult = results[0];
+        var cashResult = results[1];
+        
+        LAST.total = invoicesResult.total || 0;
+        LAST.years = invoicesResult.years || [];
+        LAST.items = invoicesResult.items || [];
+        LAST.cashMovements = (cashResult.items || []).map(function(item) {
+          return String(item.invoice_id || '').trim();
+        });
+        
+        // Auto-select latest year on first load if no year is set and no date range is specified
+        if (!FILTER.year && !FILTER.fromDate && !FILTER.toDate && LAST.years.length) {
+          var maxY = 0;
+          LAST.years.forEach(function (y) {
+            var n = Number(y);
+            if (Number.isInteger(n) && n > maxY) maxY = n;
+          });
+          FILTER.year = maxY || LAST.years[LAST.years.length - 1];
+          FILTER.offset = 0;
+          fetchInvoices(quiet);
+          return;
+        }
+        renderInvoices(LAST.items, LAST.total);
+      })
+      .catch(function (e) { showError(e); })
+      .finally(function () { if (!quiet) UI.hideSpinner(); });
+  }
+
+  function taxClassLabel(v) {
+    if (v === '0.05' || v === 0.05) return '5%';
+    if (v === '0.14' || v === 0.14) return '14%';
+    if (v === '0' || v === 0) return '0%';
+    return String(v == null ? '-' : v);
+  }
+
+  var BULK_RUNNING = false;
+  var BULK_MODAL = 'bulk-collect-modal';
+  var BULK_CLOSE_ORIG = null;
+  var BULK_LAST_IDS = [];
+
+  function isCollected(invNo) {
+    var key = String(invNo || '').trim();
+    if (!key) return false;
+    return !!(LAST.cashMovements && LAST.cashMovements.some(function (c) { return String(c).trim() === key; }));
+  }
+
+  /* Hard duplicate rule: a collected invoice can never stay selected.
+     Pruned on every render, so a quiet refresh (another tab/device collecting
+     meanwhile) revokes it instead of letting it ride into the bulk request. */
+  function pruneSelection() {
+    if (!LAST.cashMovements) return;
+    Object.keys(SELECTED).forEach(function (k) {
+      if (isCollected(k)) delete SELECTED[k];
+    });
+  }
+
+  function renderInvoices(items, total) {
+    pruneSelection();
+    var mOpts = MONTHS.map(function (m, i) {
+      if (!i) return '<option value="">كل الشهور</option>';
+      return '<option value="' + i + '"' + (String(FILTER.month) === String(i) ? ' selected' : '') + '>' + m + '</option>';
+    }).join('');
+
+    var yOpts = '<option value="">كل السنوات</option>' + LAST.years.map(function (y) {
+      return '<option value="' + y + '"' + (String(FILTER.year) === String(y) ? ' selected' : '') + '>' + y + '</option>';
+    }).join('');
+
+    var rows = items.map(function (r) {
+      var invNo = String(r['رقم الفاتورة'] || '').trim();
+      var hasCollection = LAST.cashMovements && LAST.cashMovements.some(function(invoiceId) {
+        return String(invoiceId).trim() === invNo;
+      });
+      var actionBtns = [
+        { label: '🖨️ طباعة', onclick: 'printInvoice(\'' + FMT.escape(invNo) + '\')' }
+      ];
+      if (!hasCollection) {
+        actionBtns.push({ label: 'تحصيل', onclick: 'makeCollectionFromInvoice(\'' + FMT.escape(invNo) + '\')' });
+      }
+      var selHtml;
+      if (!invNo) {
+        selHtml = '';
+      } else if (hasCollection) {
+        selHtml = '<input type="checkbox" disabled checked title="تم تحصيله" style="width:16px;height:16px;cursor:not-allowed;">';
+      } else {
+        selHtml = '<input type="checkbox" ' + (SELECTED[invNo] ? 'checked' : '') + ' onchange="toggleSelect(\'' + FMT.escape(invNo) + '\', this.checked)" title="تحديد للتحصيل" style="width:16px;height:16px;cursor:pointer;">';
+      }
+
+      return {
+        sel: selHtml,
+        inv: FMT.escape(invNo || '-'),
+        customer: FMT.escape(r['اسم العميل'] || '-'),
+        customer_tax: FMT.escape(r['رقم التسجيل الضريبي للعميل'] || '-'),
+        date: FMT.escape(normalizeDate(r['تاريخ الفاتورة']) || '-'),
+        product: FMT.escape(r['إسم المنتج'] || '-'),
+        unit_price: Number(r['سعر الوحدة']) || 0,
+        tax_class: FMT.escape(taxClassLabel(r['فئة الضريبة (14%/5%)'])),
+        qty: Number(r['كمية المنتج']) || 0,
+        net: Number(r['المبلغ الصافي']) || 0,
+        tax_value: Number(r['قيمة الضريبة']) || 0,
+        total: Number(r['إجمالي']) || 0,
+        actions: UIC.actionBtns(actionBtns)
+      };
+    });
+
+    var selectableCount = items.filter(function (r) {
+      var v = String(r['رقم الفاتورة'] || '').trim();
+      return v && !(LAST.cashMovements && LAST.cashMovements.some(function (id) { return String(id).trim() === v; }));
+    }).length;
+    var allChecked = selectableCount > 0 && items.filter(function (r) {
+      var v = String(r['رقم الفاتورة'] || '').trim();
+      return v && !(LAST.cashMovements && LAST.cashMovements.some(function (id) { return String(id).trim() === v; })) && !SELECTED[v];
+    }).length === 0;
+
+    var headers = [
+      { key: 'sel', label: '<input type="checkbox" ' + (allChecked ? 'checked' : '') + ' onchange="toggleSelectAll(this.checked)" title="تحديد الكل" style="width:16px;height:16px;cursor:pointer;">' },
+      { key: 'inv', label: 'رقم الفاتورة' },
+      { key: 'customer', label: 'اسم العميل' },
+      { key: 'customer_tax', label: 'رقم التسجيل الضريبي للعميل' },
+      { key: 'date', label: 'تاريخ الفاتورة' },
+      { key: 'product', label: 'إسم المنتج' },
+      { key: 'unit_price', label: 'سعر الوحدة', money: true },
+      { key: 'tax_class', label: 'فئة الضريبة (14%/5%)' },
+      { key: 'qty', label: 'كمية المنتج', numeric: true },
+      { key: 'net', label: 'المبلغ الصافي', money: true },
+      { key: 'tax_value', label: 'قيمة الضريبة', money: true },
+      { key: 'total', label: 'إجمالي', money: true },
+      { key: 'actions', label: 'إجراءات' }
+    ];
+
+    var page = Math.floor(FILTER.offset / FILTER.limit) + 1;
+    var pages = Math.max(1, Math.ceil(total / FILTER.limit));
+
+    document.getElementById('budget-invoices-content').innerHTML =
+      '<div class="filter-bar">' +
+        '<div class="filter-item">' +
+          '<label class="filter-label" for="inv-from-date">من تاريخ:</label>' +
+          '<input id="inv-from-date" class="input" type="date" style="width:auto;min-height:36px;" onchange="setFilter(\'fromDate\', this.value)" value="' + escHtml(FILTER.fromDate) + '">' +
+        '</div>' +
+        '<div class="filter-item">' +
+          '<label class="filter-label" for="inv-to-date">إلى تاريخ:</label>' +
+          '<input id="inv-to-date" class="input" type="date" style="width:auto;min-height:36px;" onchange="setFilter(\'toDate\', this.value)" value="' + escHtml(FILTER.toDate) + '">' +
+        '</div>' +
+        '<div class="filter-item">' +
+          '<label class="filter-label" for="inv-month">الشهر:</label>' +
+          '<select id="inv-month" class="input" style="width:auto;min-height:36px;" onchange="setFilter(\'month\', this.value)">' + mOpts + '</select>' +
+        '</div>' +
+        '<div class="filter-item">' +
+          '<label class="filter-label" for="inv-year">السنة:</label>' +
+          '<select id="inv-year" class="input" style="width:auto;min-height:36px;" onchange="setFilter(\'year\', this.value)">' + yOpts + '</select>' +
+        '</div>' +
+        '<div class="filter-item" style="flex:1;min-width:180px;">' +
+          '<label class="filter-label" for="inv-search">بحث:</label>' +
+          '<input id="inv-search" class="input" style="width:100%;min-height:36px;" type="search" placeholder="بحث برقم الفاتورة، العميل، المنتج... (يدعم البحث الجزئي برقم الفاتورة)" onkeyup="setFilter(\'search\', this.value)" value="' + escHtml(FILTER.search) + '">' +
+        '</div>' +
+        '<div style="display:flex;gap:6px;align-items:flex-end;margin-top:auto;">' +
+          '<button class="btn btn-outline" style="min-height:36px;padding:6px 12px;font-size:13px;" onclick="resetFilters()" title="إعادة تعيين كافة الفلاتر">مسح الفلاتر</button>' +
+          '<button class="btn btn-outline" style="min-height:36px;padding:6px 14px;font-size:13px;background:var(--success-bg);color:var(--success-text);border-color:var(--success-border);" onclick="exportInvoicesToExcel()" title="تصدير الفواتير المفلترة إلى Excel">📊 تصدير Excel</button>' +
+          (CAN_WRITE ? '<button class="btn btn-primary" style="min-height:36px;padding:6px 14px;font-size:13px;" onclick="openInvoiceModal()">+ إضافة فاتورة</button>' : '') +
+        '</div>' +
+      '</div>' +
+      '<div id="bulk-collect-bar" style="display:flex;align-items:center;gap:10px;margin:10px 0;padding:10px 12px;background:var(--bg-surface);border:1px solid var(--border-color);border-radius:var(--radius-lg);"></div>' +
+      '<div id="invoice-table-area"></div>' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:14px;flex-wrap:wrap;gap:10px;">' +
+        '<div style="font-size:13px;color:var(--text-muted);">' +
+          'إجمالي الفواتير المطابقة: <strong>' + FMT.number(total) + '</strong> فاتورة' +
+        '</div>' +
+        '<div style="display:flex;align-items:center;gap:8px;">' +
+          '<button class="btn btn-outline" style="min-height:36px;padding:4px 12px;" ' + (FILTER.offset === 0 ? 'disabled' : '') + ' onclick="gotoPage(' + (page - 1) + ')">السابق</button>' +
+          '<span style="font-size:13px;color:var(--text-main);font-weight:600;">صفحة ' + page + ' من ' + pages + '</span>' +
+          '<button class="btn btn-outline" style="min-height:36px;padding:4px 12px;" ' + (page >= pages ? 'disabled' : '') + ' onclick="gotoPage(' + (page + 1) + ')">التالي</button>' +
+        '</div>' +
+      '</div>';
+
+    document.getElementById('invoice-table-area').innerHTML =
+      UIC.dataTable('invoice-table', { title: 'الفواتير الضريبية', headers: headers, rows: rows, emptyText: 'لا توجد فواتير مطابقة للفلاتر الحالية' });
+    UIC.initTableSort('invoice-table');
+    updateBulkBar();
+  }
+
+  function selectedIds() {
+    return Object.keys(SELECTED).filter(function (k) { return SELECTED[k]; });
+  }
+
+  function toggleSelect(invNo, on) {
+    if (BULK_RUNNING) return;
+    var key = String(invNo || '').trim();
+    if (!key) return;
+    if (isCollected(key)) return;
+    if (on) SELECTED[key] = true; else delete SELECTED[key];
+    updateBulkBar();
+  }
+
+  function toggleSelectAll(on) {
+    if (BULK_RUNNING) return;
+    (LAST.items || []).forEach(function (r) {
+      var v = String(r['رقم الفاتورة'] || '').trim();
+      if (!v) return;
+      if (isCollected(v)) return;
+      if (on) SELECTED[v] = true; else delete SELECTED[v];
+    });
+    renderInvoices(LAST.items, LAST.total);
+  }
+
+  function clearSelection() {
+    if (BULK_RUNNING) return;
+    SELECTED = {};
+    renderInvoices(LAST.items, LAST.total);
+  }
+
+  function updateBulkBar() {
+    var bar = document.getElementById('bulk-collect-bar');
+    if (!bar) return;
+    var ids = selectedIds();
+    var skipped = ids.filter(function (id) {
+      return LAST.cashMovements && LAST.cashMovements.some(function (c) { return String(c).trim() === String(id).trim(); });
+    });
+    var fresh = ids.length - skipped.length;
+    var html = '<span style="font-size:13px;color:var(--text-main);">المحدد: <strong>' + ids.length + '</strong>';
+    if (skipped.length) html += ' (منها محصلة مسبقاً: ' + skipped.length + ')';
+    html += '</span>';
+    if (CAN_FULL) {
+      html += '<button class="btn btn-primary" style="min-height:36px;padding:6px 14px;font-size:13px;" ' + ((fresh === 0 || BULK_RUNNING) ? 'disabled' : '') + ' onclick="makeCollectionsFromInvoices()">تحصيل المحدد (' + fresh + ')</button>';
+    }
+    html += '<button class="btn btn-outline" style="min-height:36px;padding:6px 12px;font-size:13px;" ' + ((ids.length === 0 || BULK_RUNNING) ? 'disabled' : '') + ' onclick="clearSelection()">مسح التحديد</button>';
+    html += '<span style="font-size:12px;color:var(--text-muted);">الفواتير المحصلة مسبقاً معطلة ولا يمكن اختيارها مرة أخرى</span>';
+    bar.innerHTML = html;
+  }
+
+  function makeCollectionsFromInvoices() {
+    if (BULK_RUNNING) return;
+    pruneSelection();
+    var ids = selectedIds().map(function (v) { return String(v).trim(); }).filter(Boolean);
+    if (!ids.length) { UIC.toast('اختر فاتورة واحدة على الأقل', 'warning'); return; }
+    var totalNet = 0;
+    (LAST.items || []).forEach(function (r) {
+      var v = String(r['رقم الفاتورة'] || '').trim();
+      if (v && ids.indexOf(v) !== -1) totalNet += Number(r['المبلغ الصافي']) || 0;
+    });
+    UIC.confirm({
+      title: 'تأكيد التحصيل الجماعي',
+      message: 'سيتم تحصيل ' + ids.length + ' فاتورة',
+      record: 'إجمالي المبلغ الصافي: ' + FMT.number(totalNet),
+      detail: 'الفواتير المحصلة مسبقاً مستبعدة ولا يمكن اختيارها مرة أخرى.',
+      confirmText: 'تأكيد التحصيل',
+      cancelText: 'إلغاء'
+    }).then(function (ok) {
+      if (!ok) return;
+      runBulkCollection(ids);
+    });
+  }
+
+  function setBulkModalBody(html) {
+    try {
+      var el = document.getElementById(BULK_MODAL);
+      if (el) {
+        var b = el.querySelector('.modal-body');
+        if (b) b.innerHTML = html;
+      }
+    } catch (e) {}
+  }
+
+  /* Blocking progress dialog: the X is removed and closeModal is guarded while
+     BULK_RUNNING, so the user must wait until the run settles. Dismissal paths
+     that remain (Escape, backdrop) all funnel through UIC.closeModal. */
+  function lockBulkModal() {
+    try {
+      var el = document.getElementById(BULK_MODAL);
+      if (el) {
+        var x = el.querySelector('.modal-header .btn-icon');
+        if (x) x.remove();
+      }
+    } catch (e) {}
+    if (!BULK_CLOSE_ORIG && UIC.closeModal) {
+      BULK_CLOSE_ORIG = UIC.closeModal;
+      UIC.closeModal = function (id) {
+        if (id === BULK_MODAL && BULK_RUNNING) {
+          try { UIC.toast('انتظر حتى اكتمال التحصيل...', 'warning'); } catch (e2) {}
+          return;
+        }
+        return BULK_CLOSE_ORIG(id);
+      };
+    }
+  }
+
+  function unlockBulkModal() {
+    if (BULK_CLOSE_ORIG) {
+      try { UIC.closeModal = BULK_CLOSE_ORIG; } catch (e) {}
+      BULK_CLOSE_ORIG = null;
+    }
+  }
+
+  function bulkReportHtml(d) {
+    var collected = (d && d.collected) || [];
+    var skipped = (d && d.skipped) || [];
+    var failed = (d && d.failed) || [];
+    var h = '<div style="font-size:13px;color:var(--text-main);margin-bottom:10px;">' +
+      'تم تحصيل <strong>' + collected.length + '</strong> فاتورة';
+    if (skipped.length) h += '، وتجاوز <strong>' + skipped.length + '</strong> محصلة مسبقاً';
+    if (failed.length) h += '، وفشل <strong>' + failed.length + '</strong>';
+    h += '.</div>';
+    if (failed.length) {
+      h += '<div style="font-size:12px;font-weight:700;color:var(--danger-text,#b91c1c);margin-bottom:4px;">تعذر تحصيل:</div>' +
+        '<ul style="font-size:12px;margin:0 0 12px;padding-right:18px;">' +
+        failed.map(function (f) {
+          return '<li>' + escHtml(f.id) + ' — ' + escHtml(f.reason || 'فشل الحفظ') + '</li>';
+        }).join('') + '</ul>';
+    }
+    h += '<div style="display:flex;gap:8px;justify-content:flex-start;">' +
+      '<button class="btn btn-outline" style="min-height:36px;padding:6px 14px;font-size:13px;" onclick="UIC.closeModal(\'' + BULK_MODAL + '\')">إغلاق</button>' +
+      '</div>';
+    return h;
+  }
+
+  function runBulkCollection(ids) {
+    if (BULK_RUNNING) return;
+    BULK_RUNNING = true;
+    BULK_LAST_IDS = ids.slice();
+    updateBulkBar();
+    UIC.openModal(BULK_MODAL, {
+      title: 'جاري التحصيل الجماعي',
+      body: '<div class="spinner-box" style="box-shadow:none;padding:8px 4px;">' +
+        '<div class="spinner"></div>' +
+        '<div class="spinner-msg">جاري تحصيل ' + ids.length + ' فاتورة...<br>لا تغلق الصفحة أو تحدثها حتى الاكتمال.</div></div>',
+      footer: false
+    });
+    lockBulkModal();
+    /* Kept on UIC.Live.save with queueable:false: the in-flight request keeps
+       UIC.Live.guardMessage() non-null, so the beforeunload tab-close guard,
+       the in-app nav guard and the arrive() refresh deferral all stay armed
+       until the run settles. A transport failure still rolls back loudly. */
+    UIC.Live.save({
+      call: companyCall,
+      action: 'make_collections_from_invoices',
+      data: { invoice_ids: ids },
+      message: 'تم إنشاء عمليات التحصيل بنجاح',
+      queueable: false,
+      reload: function () { fetchInvoices(true); },
+      onSuccess: function (r) {
+        var d = (r && (r.data || r)) || {};
+        var doneIds = d.collected || [];
+        var skippedIds = (d.skipped || []).map(function (s) { return s.id; });
+        LAST.cashMovements = LAST.cashMovements || [];
+        doneIds.concat(skippedIds).forEach(function (id) {
+          var key = String(id).trim();
+          if (key && LAST.cashMovements.indexOf(key) === -1) LAST.cashMovements.push(key);
+          delete SELECTED[key];
+        });
+        ids.forEach(function (id) { delete SELECTED[String(id).trim()]; });
+        BULK_RUNNING = false;
+        unlockBulkModal();
+        renderInvoices(LAST.items, LAST.total);
+        var failed = d.failed || [];
+        if (!failed.length) {
+          try { UIC.closeModal(BULK_MODAL); } catch (e) {}
+        } else {
+          setBulkModalBody(bulkReportHtml(d));
+        }
+      }
+    }).catch(function () {
+      /* UIC.Live has toasted the transport error; the modal stays with retry. */
+      BULK_RUNNING = false;
+      unlockBulkModal();
+      updateBulkBar();
+      setBulkModalBody(
+        '<div style="font-size:13px;color:var(--danger-text,#b91c1c);margin-bottom:12px;">تعذر إتمام التحصيل — تحقق من الاتصال ثم أعد المحاولة. لم يتم تسجيل أي تحصيل جديد.</div>' +
+        '<div style="display:flex;gap:8px;justify-content:flex-start;">' +
+        '<button class="btn btn-primary" style="min-height:36px;padding:6px 14px;font-size:13px;" onclick="retryBulkCollection()">إعادة المحاولة</button>' +
+        '<button class="btn btn-outline" style="min-height:36px;padding:6px 14px;font-size:13px;" onclick="UIC.closeModal(\'' + BULK_MODAL + '\')">إغلاق</button>' +
+        '</div>');
+    });
+  }
+
+  function retryBulkCollection() {
+    if (BULK_RUNNING) return;
+    try { UIC.closeModal(BULK_MODAL); } catch (e) {}
+    pruneSelection();
+    var ids = (BULK_LAST_IDS || []).map(function (v) { return String(v).trim(); }).filter(function (v) { return v && !isCollected(v); });
+    if (!ids.length) { UIC.toast('لا توجد فواتير صالحة لإعادة المحاولة', 'warning'); return; }
+    runBulkCollection(ids);
+  }
+
+  function escHtml(s) {
+    return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  function makeCollectionFromInvoice(invoiceId) {
+    if (!invoiceId) return;
+    if (BULK_RUNNING) { UIC.toast('انتظر حتى اكتمال التحصيل الجماعي...', 'warning'); return; }
+    /* Tier B: the collection writes the cash table while the list reads the
+       invoices table plus the cash movements — the handler can refuse for
+       reasons invisible in the button (missing invoice, zero net). So NO draft
+       is painted: canPatch stays false, only the quiet corner hint shows, and
+       the row is patched from intent instead. A refusal toasts exactly as
+       before and never paints. No validation is changed. queueable:false: I1
+       is unproven for make_collection_from_invoice, so a transport failure
+       rolls back loudly. */
+    UIC.Live.save({
+      call: companyCall,
+      action: 'make_collection_from_invoice',
+      data: { invoice_id: invoiceId },
+      message: 'تم إنشاء عملية التحصيل بنجاح',
+      queueable: false,
+      reload: function () { fetchInvoices(true); },
+      onSuccess: function () {
+        LAST.cashMovements = LAST.cashMovements || [];
+        var key = String(invoiceId).trim();
+        if (LAST.cashMovements.indexOf(key) === -1) LAST.cashMovements.push(key);
+        try { delete SELECTED[key]; } catch (e) {}
+        renderInvoices(LAST.items, LAST.total);
+      }
+    }).catch(function () { /* UIC.Live has toasted */ });
+  }
+
+  function printInvoice(id) {
+    UIC.openDownload(scriptUrl + '?download=budget_print&type=invoice&id=' + encodeURIComponent(id) + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN),
+      'فتح الفاتورة');
+  }
+
+  function setFilter(k, v) {
+    FILTER[k] = k === 'search' ? v.trim() : v;
+    FILTER.offset = 0;
+    fetchInvoices();
+  }
+
+  function resetFilters() {
+    FILTER.month = '';
+    FILTER.year = '';
+    FILTER.fromDate = '';
+    FILTER.toDate = '';
+    FILTER.search = '';
+    FILTER.offset = 0;
+    fetchInvoices();
+  }
+
+  function gotoPage(p) {
+    if (p < 1) return;
+    FILTER.offset = (p - 1) * FILTER.limit;
+    fetchInvoices();
+  }
+
+  function exportInvoicesToExcel() {
+    UI.showSpinner('جاري تجهيز وتصدير ملف Excel...');
+    
+    // Fetch ALL filtered records matching active filters (up to 10,000 items)
+    companyCall('get_legal_invoices', {
+      month: FILTER.month ? Number(FILTER.month) : '',
+      year: FILTER.year ? Number(FILTER.year) : '',
+      from_date: FILTER.fromDate,
+      to_date: FILTER.toDate,
+      offset: 0,
+      limit: 10000
+    })
+      .then(function (r) {
+        var items = r.items || [];
+        if (!items.length) {
+          UIC.toast('لا توجد فواتير لتصديرها وفق الفلاتر المحددة', 'warning');
+          return;
+        }
+
+        // Blacklist: Strictly exclude these headers as requested
+        var excludedKeys = ['كود المعاملة المباعة', 'الشهر', 'العام', 'user'];
+        var isExcluded = function (k) {
+          var lk = String(k || '').trim().toLowerCase();
+          return excludedKeys.some(function (ex) {
+            return lk === ex.toLowerCase() || lk.replace(/\s+/g, '') === ex.replace(/\s+/g, '');
+          });
+        };
+
+        // Exact header arrangement specified for VAT compliance
+        var specifiedHeaders = [
+          'ميزان حسابي - 26 - 1',
+          'نوع الضريبة (سلع عامة 1/سلع جدول 2)',
+          'نوع سلع الجدول (لايوجد 0/جدول أولا 1/جدول ثانيا 2)',
+          'رقم الفاتورة',
+          'اسم العميل',
+          'رقم التسجيل الضريبي للعميل',
+          'رقم الملف الضريبي للعميل',
+          'العنوان',
+          'الرقم القومي / رقم جواز السفر',
+          'رقم الموبيل',
+          'تاريخ الفاتورة',
+          'إسم المنتج',
+          'كود المنتج',
+          'نوع البيان (سلعة 3/خدمة 4/تسويات 5)',
+          'نوع السلعة (محلي 1/صادرات 2/آلات ومعدات 5/أجزاء آلات 6/إعفاءات 7 /  سلع الجدول  مراجعة الإرشادات )',
+          'وحدة قياس المنتج',
+          'سعر الوحدة',
+          'فئة الضريبة (14%/5%)',
+          'كمية المنتج',
+          'المبلغ الصافي',
+          'قيمة الضريبة',
+          'إجمالي'
+        ];
+
+        var exportHeaders = specifiedHeaders.slice();
+
+        // Generate CSV content with UTF-8 BOM so Arabic displays perfectly in Excel
+        var csvContent = '\uFEFF';
+        csvContent += exportHeaders.map(function (h) {
+          return '"' + String(h).replace(/"/g, '""') + '"';
+        }).join(',') + '\r\n';
+
+        items.forEach(function (row) {
+          var rowValues = exportHeaders.map(function (h) {
+            var val = row[h];
+            if (val === undefined || val === null) {
+              if (h === 'نوع سلع الجدول (لايوجد 0/جدول أولا 1/جدول ثانيا 2)') {
+                var taxF = row['فئة الضريبة (14%/5%)'];
+                val = (taxF === '0.05' || taxF === 0.05) ? 1 : 0;
+              } else {
+                val = '';
+              }
+            } else if (h === 'فئة الضريبة (14%/5%)') {
+              val = taxClassLabel(val);
+            } else if (h === 'تاريخ الفاتورة') {
+              val = normalizeDate(val);
+            } else if (typeof val === 'number') {
+              val = String(val);
+            } else if (val instanceof Date) {
+              val = normalizeDate(val);
+            } else {
+              val = String(val);
+            }
+            return '"' + val.replace(/"/g, '""') + '"';
+          });
+          csvContent += rowValues.join(',') + '\r\n';
+        });
+
+        var blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        var url = URL.createObjectURL(blob);
+        var link = document.createElement('a');
+        var fileName = 'الفواتير_الضريبية_' + (FILTER.fromDate ? ('من_' + FILTER.fromDate + '_') : '') + (FILTER.toDate ? ('إلى_' + FILTER.toDate + '_') : '') + todayStr() + '.csv';
+        link.setAttribute('href', url);
+        link.setAttribute('download', fileName);
+        document.body.appendChild(link);
+        link.click();
+        setTimeout(function () {
+          URL.revokeObjectURL(url);
+          link.remove();
+        }, 1000);
+        UIC.toast('تم تصدير ' + items.length + ' فاتورة بنجاح إلى ملف Excel', 'success');
+      })
+      .catch(function (e) { showError(e); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function invoiceProductPreview() {
+    var el = document.getElementById('كود المعاملة المباعة');
+    var pv = document.getElementById('inv-product-preview');
+    if (!el || !pv) return;
+    var code = el.value;
+    if (!code) { pv.innerHTML = ''; return; }
+    var cp = (REFS.current_products_by_code && REFS.current_products_by_code[String(code)]) || (REFS.current_products || []).find(function (c) { return String(c.transaction_code) === String(code); });
+    if (!cp) { pv.innerHTML = 'المنتج غير معروف'; return; }
+    var prod = (REFS.products_by_name && REFS.products_by_name[String(cp.product)]) || (REFS.products || []).find(function (p) { return String(p.name_ar) === String(cp.product); });
+    var gpc = prod ? prod.gpc : '';
+    var unit = prod ? prod.unit : '';
+    pv.innerHTML = 'اسم المنتج: <b>' + FMT.escape(cp.product) + '</b>' +
+      (gpc ? ' | كود المنتج: <b>' + FMT.escape(gpc) + '</b>' : '') +
+      (unit ? ' | وحدة القياس: <b>' + FMT.escape(unit) + '</b>' : '') +
+      ' | المتاح: <b>' + FMT.number(cp.current_qty) + '</b>';
+  }
+
+  function invoiceQtyCheck() {
+    var codeEl = document.getElementById('كود المعاملة المباعة');
+    var qtyEl = document.getElementById('كمية المنتج');
+    var warnEl = document.getElementById('inv-qty-warn');
+    if (!codeEl || !qtyEl || !warnEl) return;
+    var code = codeEl.value;
+    var qty = Number(qtyEl.value) || 0;
+    if (!code || !qty) { warnEl.innerHTML = ''; return; }
+    var cp = (REFS.current_products_by_code && REFS.current_products_by_code[String(code)]) || (REFS.current_products || []).find(function (c) { return String(c.transaction_code) === String(code); });
+    if (cp && qty > cp.current_qty) {
+      warnEl.innerHTML = '<span style="color:var(--danger-text, #b91c1c);font-size:12px;">الكمية أكبر من المتاح (' + FMT.number(cp.current_qty) + ')</span>';
+    } else {
+      warnEl.innerHTML = '';
+    }
+  }
+
+  function openInvoiceModal() {
+    var parties = (REFS && REFS.parties) || [];
+    var partyOpts = parties.map(function (p) { var n = (p.name || '').trim(); return n ? { value: n, label: n } : null; }).filter(Boolean);
+    var codeOpts = ((REFS && REFS.current_products) || []).map(function (c) {
+      return { value: c.transaction_code, label: c.product + ' (' + c.transaction_code + ')' };
+    });
+    var lastInv = '';
+    LAST.items.forEach(function (r) {
+      var v = String(r['رقم الفاتورة'] || '').trim();
+      if (v) lastInv = v;
+    });
+    var body = '<form id="invoice-form">' +
+      '<div id="inv-next-hint" style="font-size:13px;color:#374151;margin:0 0 10px;padding:8px 10px;background:var(--success-bg, #f0fdf4);border-radius:6px;">' +
+        (lastInv ? 'آخر رقم فاتورة: <b>' + FMT.escape(lastInv) + '</b> — ' : '') + 'سيتم ترقيم الفاتورة الجديدة تلقائياً بالتسلسل للسنة المحددة.</div>' +
+      UIC.combo({ key: 'كود المعاملة المباعة', label: 'كود المعاملة المباعة', required: true, options: codeOpts, placeholder: 'اختر الكود...' }) +
+      '<div id="inv-product-preview" style="font-size:13px;color:#14532d;margin:0 0 10px;"></div>' +
+      UIC.combo({ key: 'اسم العميل', label: 'اسم العميل', required: true, options: partyOpts, placeholder: 'اختر العميل...' }) +
+      UIC.field({ key: 'تاريخ الفاتورة', label: 'تاريخ الفاتورة', type: 'date', required: true, value: todayStr() }) +
+      UIC.field({ key: 'كمية المنتج', label: 'الكمية', type: 'number', step: '0.001', min: '0.001', required: true }) +
+      '<div id="inv-qty-warn" style="margin:0 0 4px;"></div>' +
+      UIC.combo({ key: 'فئة الضريبة (14%/5%)', label: 'فئة الضريبة', required: true, options: [{ value: '0', label: '0%' }, { value: '0.05', label: '5%' }, { value: '0.14', label: '14%' }], placeholder: 'اختر الفئة...' }) +
+      '</form>';
+    UIC.openModal('invoice-modal', { title: 'إضافة فاتورة ضريبية', body: body, onSave: 'saveInvoice()' });
+    var codeEl = document.getElementById('كود المعاملة المباعة');
+    if (codeEl) codeEl.addEventListener('change', invoiceProductPreview);
+    var qtyEl = document.getElementById('كمية المنتج');
+    if (qtyEl) qtyEl.addEventListener('input', invoiceQtyCheck);
+  }
+
+  function saveInvoice() {
+    if (!UIC.validateForm('invoice-form')) return;
+    var data = UIC.collectForm('invoice-form');
+    var code = data['كود المعاملة المباعة'];
+    var cp = (REFS.current_products_by_code && REFS.current_products_by_code[String(code)]) || (REFS.current_products || []).find(function (c) { return String(c.transaction_code) === String(code); });
+    var qty = Number(data['كمية المنتج']) || 0;
+    if (!(qty > 0)) { showError({ message: 'كمية المنتج يجب أن تكون أكبر من صفر' }); return; }
+    if (cp && qty > cp.current_qty) { showError({ message: 'الكمية (' + qty + ') أكبر من المتاح (' + cp.current_qty + ') لهذا الكود' }); return; }
+    var d = new Date(data['تاريخ الفاتورة']);
+    if (isNaN(d.getTime())) { showError({ message: 'تاريخ الفاتورة غير صحيح' }); return; }
+    data['العام'] = d.getFullYear();
+    /* Tier B: the stock-availability guard (live current_qty plus the client
+       availableQty check above) can refuse for reasons invisible in the form —
+       another device may have consumed the stock first. So NO draft is
+       painted: canPatch stays false, only the quiet corner hint shows, and the
+       row is patched from the reply instead. A refusal toasts exactly as
+       before and never paints a row. No validation is changed.
+       queueable:false: I1 is unproven for add_legal_invoice, so a transport
+       failure rolls back loudly. */
+    UIC.Live.save({
+      call: companyCall,
+      action: 'add_legal_invoice',
+      data: data,
+      modal: 'invoice-modal',
+      message: 'تمت الإضافة بنجاح',
+      queueable: false,
+      reload: function () { fetchInvoices(true); },
+      onSuccess: function (r) {
+        var rec = r.record || null;
+        if (rec) {
+          LAST.items = LAST.items || [];
+          LAST.items.unshift(rec);
+          LAST.total = (LAST.total||0)+1;
+          renderInvoices(LAST.items, LAST.total);
+        } else {
+          FILTER.offset = 0;
+          fetchInvoices(true);
+        }
+      }
+    }).catch(function () { /* UIC.Live has toasted */ });
+  }
+
+  function showError(e) {
+    UIC.toast((e && e.message) || 'خطأ غير متوقع', 'error');
+  }
+
+  /* Another device's change arrives quietly, keeping the current filter view. */
+  UIC.Live.watchPage({
+    call: companyCall,
+    page: 'tc_budget_invoices',
+    onChange: function () { UIC.Live.arrive(function () { fetchInvoices(true); }); }
+  });
+
+  load();
+</script>
+</body>
+</html>

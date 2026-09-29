@@ -1,0 +1,490 @@
+﻿<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Valley Foods — الغياب والخصومات</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_ValleyFoods_Nav'); ?>
+  <?!= getCompanyThemeCSS_('9940659bd83035d7') ?>
+</head>
+<body>
+  <div id="vf-root"></div>
+
+  <script>
+    var params = new URLSearchParams(window.location.search);
+    var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+    var scriptUrl = window.scriptUrl || '/';
+    var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+    var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('9940659bd83035d7') ?>';
+    var COMPANY_PAGES = <?!= companyPages ?>;
+    var CURRENT_ACTION = '<?!= currentAction ?>';
+    var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+    var CAN_WRITE = UIC.canAdd_(); var CAN_FULL = UIC.canFull_();
+
+    function companyCall(moduleAction, data) {
+      return API.call('company_action', {
+        target_system: '9940659bd83035d7',
+        module_action: moduleAction,
+        data: data || {}
+      }, SESSION_TOKEN);
+    }
+
+    function esc(v) {
+      /* [UI-2.8 / U-36] Delegates to the shared formatter. This body used to
+         carry its own replace-chain behind a `typeof FMT !== 'undefined'`
+         guard, but Client_Helpers.html defines FMT in <head> before any page
+         script runs, so that fallback was unreachable and the duplicate was
+         pure drift risk. Output is identical for every input — proved in
+         tools/verify/ui2_formatters.js. */
+      return FMT.escape(v);
+    }
+    function todayStr() { return new Date().toISOString().slice(0, 10); }
+    function fmtDate(v) {
+      if (!v) return '';
+      var d = (v instanceof Date) ? v : new Date(v);
+      if (isNaN(d.getTime())) return String(v);
+      var pad = function (n) { return n < 10 ? '0' + n : '' + n; };
+      return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+    }
+
+    var ROWS = [], EMP_OPTIONS = [], ROLE_OPTIONS = [];
+    var DED_SHOW_ALL = false, DED_TOTAL = 0, DED_TYPE_FILTER = '';
+
+    function toggleDedAll() { DED_SHOW_ALL = !DED_SHOW_ALL; fetchDeductions(); }
+
+    function load() {
+      UIC.appShell('vf-root', {
+        companyLogoUrl: COMPANY_LOGO_URL,
+        companyLogoHref: scriptUrl + '?action=vf_dashboard&sessionToken=' + SESSION_TOKEN,
+        companyLogoTitle: 'Valley Foods',
+        breadcrumb: 'Valley Foods / شؤون الموظفين / الغياب والخصومات',
+        contentId: 'vf-ded-content',
+        menuGroups: (window.VALLEYFOODS_MENU || [])
+      });
+      fetchDeductions();
+    }
+
+    /* quiet: refresh in the background with no blocking overlay, for a
+       user who has already seen the change and must not be interrupted
+       to confirm it. */
+    function fetchDeductions(quiet) {
+      if (!quiet) UIC.readSkeleton('vf-ded-content');
+      companyCall('get_deductions_data', DED_SHOW_ALL ? { loadAll: true } : {})
+        .then(function (r) {
+          ROWS = r.rows || [];
+          DED_TOTAL = (r && r.total != null) ? r.total : ROWS.length;
+          EMP_OPTIONS = r.employee_options || [];
+          ROLE_OPTIONS = r.role_options || [];
+          renderDeductions(); try{schedulePrefetch();}catch(e){};
+        })
+        .catch(function (e) { showError(e); })
+        .finally(function () { if (!quiet) UI.hideSpinner(); });
+    }
+
+    function deductionTypeFilterOptions() {
+      var byId = {};
+      ROLE_OPTIONS.forEach(function (r) {
+        if (r && r.value != null && String(r.value) !== '') byId[String(r.value)] = { label: String(r.label || r.value), category: r.category || '' };
+      });
+      ROWS.forEach(function (r) {
+        var id = String(r.deduction_type == null ? '' : r.deduction_type);
+        if (id && !byId[id]) byId[id] = { label: String(r.deduction_name || id), category: r.deduction_category || '' };
+      });
+      return Object.keys(byId).map(function (id) { return { value: id, label: byId[id].label, category: byId[id].category }; })
+        .sort(function (a, b) { return a.label.localeCompare(b.label, 'ar'); });
+    }
+
+    function deductionCategoryKind(category) {
+      var value = String(category || '').trim();
+      if (/تأخير|تاخير|حضور وانصراف/.test(value)) return 'delay';
+      if (/غياب/.test(value)) return 'absence';
+      if (/جزاء/.test(value)) return 'penalty';
+      if (/مالية مباشرة|مالي مباشر/.test(value)) return 'money';
+      return '';
+    }
+
+    function deductionCategoryForType(type, row) {
+      var role = ROLE_OPTIONS.find(function (r) { return String(r.value) === String(type); });
+      return (role && role.category) || (row && row.deduction_category) || '';
+    }
+
+    function setDeductionTypeFilter(value) {
+      DED_TYPE_FILTER = String(value || '');
+      renderDeductions();
+    }
+
+    function openFilteredDeductionModal() {
+      openAddModal({ type: DED_TYPE_FILTER });
+    }
+
+    function renderDeductions() {
+      var body = document.getElementById('vf-ded-content');
+      if (!body) return;
+      var options = deductionTypeFilterOptions();
+      var filterHtml = '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px;">' +
+        '<label for="vf-ded-type-filter" style="font-weight:700;">نوع الخصم:</label>' +
+        '<select id="vf-ded-type-filter" class="input" style="min-width:220px;max-width:100%;" onchange="setDeductionTypeFilter(this.value)">' +
+          '<option value="">كل الأنواع</option>' + options.map(function (o) {
+            return '<option value="' + esc(o.value) + '"' + (String(o.value) === DED_TYPE_FILTER ? ' selected' : '') + '>' + esc(o.label) + '</option>';
+          }).join('') +
+        '</select>' +
+        (CAN_WRITE ? '<button class="btn btn-primary" onclick="openFilteredDeductionModal()">+ تسجيل خصم</button>' : '') +
+      '</div>';
+      var visibleRows = ROWS.filter(function (r) {
+        return !DED_TYPE_FILTER || String(r.deduction_type || '') === DED_TYPE_FILTER;
+      });
+      var selectedKind = deductionCategoryKind(deductionCategoryForType(DED_TYPE_FILTER));
+      var headers = [
+        { key: 'unique_id', label: 'كود السجل' },
+        { key: 'emp_id', label: 'كود الموظف' },
+        { key: 'name_ar', label: 'الاسم' },
+        { key: 'deduction_name', label: 'نوع الخصم' },
+        { key: 'date', label: 'التاريخ' }
+      ];
+      if (selectedKind === 'absence') {
+        headers.push({ key: 'number_of_days', label: 'عدد الأيام', numeric: true },
+          { key: 'abscence_type_days', label: 'أيام الغياب', numeric: true });
+      } else if (selectedKind === 'penalty') {
+        headers.push({ key: 'number_of_days', label: 'عدد الأيام', numeric: true },
+          { key: 'penalty_type_days', label: 'أيام الجزاءات', numeric: true });
+      } else if (selectedKind === 'money') {
+        headers.push({ key: 'penalty_value', label: 'قيمة الخصم', numeric: true });
+      } else if (selectedKind === 'delay') {
+        headers.push({ key: 'delay_type_minutes', label: 'دقائق التأخير', numeric: true });
+      } else {
+        headers.push({ key: 'deduction_metrics', label: 'البيانات حسب النوع' });
+      }
+      headers.push({ key: 'details', label: 'تفاصيل' }, { key: 'attachment', label: 'المرفق' },
+        { key: 'actions', label: 'إجراءات / Actions' });
+      var rows = visibleRows.map(function (r) {
+        var uid = esc(r.unique_id || '').replace(/'/g, "\\'");
+        var dedAtt = r.deduction_attachement || '';
+        var dedAttArg = esc(dedAtt).replace(/'/g, "\\'");
+        var rowKind = deductionCategoryKind(deductionCategoryForType(r.deduction_type, r));
+        var metrics = '';
+        if (rowKind === 'absence') metrics = 'عدد الأيام: ' + (r.number_of_days == null ? '' : r.number_of_days) + ' — أيام الغياب: ' + (r.abscence_type_days == null ? '' : r.abscence_type_days);
+        else if (rowKind === 'penalty') metrics = 'عدد الأيام: ' + (r.number_of_days == null ? '' : r.number_of_days) + ' — أيام الجزاءات: ' + (r.penalty_type_days == null ? '' : r.penalty_type_days);
+        else if (rowKind === 'money') metrics = 'قيمة الخصم: ' + (r.penalty_value == null ? '' : r.penalty_value);
+        else if (rowKind === 'delay') metrics = 'دقائق التأخير: ' + (r.delay_type_minutes == null ? '' : r.delay_type_minutes);
+        else metrics = [r.number_of_days, r.penalty_value].filter(function (v) { return v != null && v !== ''; }).join(' — ');
+        var attCell = dedAtt
+          ? '<button class="btn btn-outline" style="padding:4px 10px;" onclick="viewAttachment(\'' + dedAttArg + '\',\'' + uid + '\')">📎 عرض / View</button>'
+          : '-';
+        var actions = UIC.actionBtns([
+          { label: '👁️ عرض / View', onclick: "viewDeduction('" + uid + "')" },
+          dedAtt ? { label: '📎 عرض المرفق / View Attachment', onclick: "viewAttachment('" + dedAttArg + "','" + uid + "')" } : null,
+          IS_SUPER_ADMIN ? { label: '✏️ تعديل / Edit', onclick: "openEditModal('" + uid + "')" } : null,
+          IS_SUPER_ADMIN ? { label: '🗑️ حذف / Delete', color: '#dc2626', onclick: "deleteDeduction('" + uid + "')" } : null
+        ].filter(Boolean));
+        return {
+          unique_id: esc(r.unique_id), emp_id: esc(r.emp_id), name_ar: esc(r.name_ar || '-'),
+          deduction_name: esc(r.deduction_name || r.deduction_type || 'أخرى'),
+          deduction_type_id: esc(r.deduction_type), date: esc(fmtDate(r.date)),
+          number_of_days: r.number_of_days != null ? r.number_of_days : '',
+          penalty_value: r.penalty_value != null ? r.penalty_value : '',
+          penalty_type_days: r.penalty_type_days != null ? r.penalty_type_days : '',
+          abscence_type_days: r.abscence_type_days != null ? r.abscence_type_days : '',
+          delay_type_minutes: r.delay_type_minutes != null ? r.delay_type_minutes : '',
+          deduction_metrics: esc(metrics),
+          details: esc(r.details || '-'), attachment: attCell, actions: actions
+        };
+      });
+      var html = filterHtml + UIC.showAllBar({ loadedAll: DED_SHOW_ALL, total: DED_TOTAL,
+        showAll: 'toggleDedAll()', showLatest: 'toggleDedAll()' }) +
+        UIC.dataTable('vf-deductions-table', {
+          headers: headers, rows: rows,
+          emptyText: DED_TYPE_FILTER ? 'لا توجد خصومات من هذا النوع' : 'لا توجد خصومات',
+          truncated: !DED_SHOW_ALL && DED_TOTAL > ROWS.length,
+          searchScopeNote: 'البحث العام في السجلات المعروضة فقط',
+          showAll: 'toggleDedAll()'
+        });
+      body.innerHTML = html;
+      UIC.initTableSort('vf-deductions-table');
+    }
+
+    function toggleDedGroup(id) {
+      var el = document.getElementById(id);
+      if (!el) return;
+      var arrow = document.getElementById(id.replace('vf-ded-body-', 'vf-ded-arrow-'));
+      if (el.style.display === 'none') {
+        el.style.display = 'block';
+        if (arrow) arrow.textContent = '▼';
+      } else {
+        el.style.display = 'none';
+        if (arrow) arrow.textContent = '▶';
+      }
+    }
+
+    /* Row-edit repair (Stage 4): explicit create/edit mode. DED_EDIT.uid holds
+       the edited unique_id, DED_EDIT.att the retained attachment pair,
+       DED_EDIT.roles the augmented role list; all null in Add mode. */
+    var DED_EDIT = { uid: null, att: null, roles: null };
+    function _dedRoles() { return (DED_EDIT.roles || ROLE_OPTIONS); }
+
+    function openAddModal(prefill, title) {
+      prefill = prefill || {};
+      DED_EDIT.uid = null;
+      DED_EDIT.att = null;
+      DED_EDIT.roles = null;
+      var empOpts = EMP_OPTIONS.slice();
+      if (prefill.emp_id && !empOpts.some(function (o) { return String(o.value) === String(prefill.emp_id); })) {
+        empOpts.push({ value: prefill.emp_id, label: (prefill.name_ar || prefill.emp_id) + ' (غير نشط)' });
+      }
+      var roles = (_dedRoles)().slice ? (_dedRoles)().slice() : ROLE_OPTIONS.slice();
+      if (prefill.deduction_type && !roles.some(function (o) { return String(o.value) === String(prefill.deduction_type); })) {
+        roles.push({ value: prefill.deduction_type, label: (prefill.deduction_name || prefill.deduction_type) + ' (غير نشط)', category: prefill.deduction_category || '', deductionValue: prefill.penalty_value != null ? prefill.penalty_value : null });
+      }
+      var body =
+        '<form id="vf-ded-form">' +
+        UIC.combo({ key: 'emp_id', label: 'الموظف', required: true,
+          options: empOpts, placeholder: 'اختر الموظف...', value: prefill.emp_id || '' }) +
+        UIC.field({ key: 'deduction_type', label: 'نوع الخصم', type: 'select', required: true,
+          options: roles, placeholder: 'اختر النوع...', value: prefill.deduction_type || prefill.type || '' }) +
+        UIC.field({ key: 'date', label: 'التاريخ', type: 'date', required: true, value: prefill.date || todayStr() }) +
+        '<div id="ded-number-wrap">' + UIC.field({ key: 'number_of_days', label: 'عدد الأيام', type: 'number', min: '0', step: '0.5', value: (prefill.number_of_days != null && prefill.number_of_days !== '' ? prefill.number_of_days : '') }) + '</div>' +
+        '<div id="ded-penalty-wrap">' + UIC.field({ key: 'penalty_value', label: 'قيمة الخصم / الجزاء', type: 'number', min: '0', step: '0.01', value: (prefill.penalty_value != null && prefill.penalty_value !== '' ? prefill.penalty_value : (prefill.deduction_value_other != null ? prefill.deduction_value_other : '')) }) + '</div>' +
+        '<div class="form-field" data-field="details"><label class="form-label" for="details">تفاصيل <span class="req">*</span></label>' +
+        '<textarea id="details" class="input" data-field-name="details" rows="2" placeholder="وصف الخصم..." required>' + esc(prefill.details || '') + '</textarea>' +
+        '<div class="field-error" id="err-details"></div></div>' +
+        UIC.fileField({ key: 'file', label: prefill._editMode ? 'استبدال المرفق (اختياري)' : 'المرفق', accept: '.pdf,.doc,.docx,.png,.jpg,.jpeg', instant: true, sheet: 'valley_emp_deductions', field: 'deduction_attachement', formModalId: 'vf-ded-modal' }) +
+        '</form>';
+      UIC.openModal('vf-ded-modal', {
+        title: title || 'تسجيل غياب / خصم',
+        body: body,
+        onSave: 'saveDeduction()'
+      });
+      try { UIC.trackDirty('vf-ded-form'); } catch (eT) {}
+      try {
+        if (prefill._editMode && prefill._attRef && UIC.UploadSet) {
+          var ar = DED_EDIT.att ? DED_EDIT.att.ref : prefill._attRef;
+          var ai = DED_EDIT.att ? DED_EDIT.att.id : '';
+          if (ar) UIC.UploadSet.setBound('file', ar, ai);
+        }
+      } catch (eB) {}
+      var sel = document.getElementById('deduction_type');
+      if (sel) sel.addEventListener('change', onDedTypeChange);
+      DED_EDIT.roles = roles;
+      onDedTypeChange();
+      if (prefill._editMode && prefill._attRef) {
+        try {
+          var fw = document.querySelector('#vf-ded-form [data-field="file"], #vf-ded-form .form-field:last-child');
+          var note = document.createElement('div');
+          note.style.cssText = 'font-size:12px;color:var(--text-muted);margin-top:4px;';
+          note.textContent = 'المرفق الحالي: ' + String(prefill._attRef).split('/').pop() + ' — اترك حقل الملف فارغاً للاحتفاظ به';
+          var host = document.getElementById('vf-ded-form');
+          if (host)           host.appendChild(note);
+        } catch (e) {}
+      }
+    }
+
+    function openEditModal(uid) {
+      if (!UIC.canFull_()) { UIC.toast('غير مصرح', 'error'); return; }
+      var r = ROWS.find(function (x) { return String(x.unique_id) === String(uid); });
+      if (!r) { UIC.toast('السجل غير موجود — تم تحديث القائمة', 'error'); fetchDeductions(true); return; }
+      DED_EDIT.uid = String(r.unique_id);
+      DED_EDIT.att = { ref: r.deduction_attachement || '', id: r.deduction_attachement_id || '' };
+      openAddModal({
+        _editMode: true,
+        _attRef: r.deduction_attachement || '',
+        emp_id: r.emp_id,
+        name_ar: r.name_ar,
+        deduction_type: r.deduction_type,
+        deduction_name: r.deduction_name,
+        deduction_category: r.deduction_category,
+        date: fmtDate(r.date),
+        number_of_days: r.number_of_days,
+        penalty_value: r.penalty_value,
+        deduction_value_other: r.deduction_value_other,
+        details: r.details || ''
+      }, 'تعديل خصم / غياب');
+    }
+
+    function clearFieldError(id) {
+      var e = document.getElementById(id);
+      if (e) e.textContent = '';
+    }
+
+    function setFieldError(input, errId, message) {
+      var e = document.getElementById(errId);
+      if (e) e.textContent = message;
+      var field = input.closest ? input.closest('.form-field') : null;
+      if (field) field.classList.add('has-error');
+    }
+
+    function onDedTypeChange() {
+      var sel = document.getElementById('deduction_type');
+      var days = document.getElementById('number_of_days');
+      var penalty = document.getElementById('penalty_value');
+      if (!sel || !days) return;
+      var selectedVal = sel.value;
+      var _rl2 = _dedRoles();
+      var role = null;
+      for (var i = 0; i < _rl2.length; i++) {
+        if (String(_rl2[i].value) === String(selectedVal)) { role = _rl2[i]; break; }
+      }
+      var kind = deductionCategoryKind(role && role.category);
+      if (!kind && role && role.deductionValue != null) kind = 'money';
+      var showDays = kind === 'absence' || kind === 'penalty';
+      var showPenalty = kind === 'money';
+      var daysWrap = document.getElementById('ded-number-wrap');
+      var penaltyWrap = document.getElementById('ded-penalty-wrap');
+      if (daysWrap) daysWrap.style.display = showDays ? '' : 'none';
+      if (penaltyWrap) penaltyWrap.style.display = showPenalty ? '' : 'none';
+      days.disabled = !showDays;
+      if (showDays) days.setAttribute('required', 'required');
+      else { days.removeAttribute('required'); days.value = ''; clearFieldError('err-number_of_days'); }
+      if (penalty) {
+        penalty.disabled = !showPenalty;
+        if (showPenalty) penalty.setAttribute('required', 'required');
+        else { penalty.removeAttribute('required'); penalty.value = ''; clearFieldError('err-penalty_value'); }
+      }
+    }
+
+    function saveDeduction() {
+      if (!UIC.validateForm('vf-ded-form')) return;
+      var selectedVal = document.getElementById('deduction_type').value;
+      var _rl3 = _dedRoles();
+      var role = null;
+      for (var i = 0; i < _rl3.length; i++) {
+        if (String(_rl3[i].value) === String(selectedVal)) { role = _rl3[i]; break; }
+      }
+      var kind = deductionCategoryKind(role && role.category);
+      if (!kind && role && role.deductionValue != null) kind = 'money';
+      if (kind === 'absence' || kind === 'penalty') {
+        var daysEl = document.getElementById('number_of_days');
+        if (daysEl && String(daysEl.value || '').trim() === '') {
+          setFieldError(daysEl, 'err-number_of_days', 'عدد الأيام مطلوب لهذا النوع');
+          return;
+        }
+      } else if (kind === 'money') {
+        var penaltyEl = document.getElementById('penalty_value');
+        if (penaltyEl && Number(penaltyEl.value) <= 0) {
+          setFieldError(penaltyEl, 'err-penalty_value', 'قيمة الجزاء مطلوبة لهذا النوع');
+          return;
+        }
+      }
+      var data = UIC.collectForm('vf-ded-form');
+      if (kind === 'absence' || kind === 'penalty') data.penalty_value = '';
+      else if (kind === 'money') data.number_of_days = '';
+      else { data.number_of_days = ''; data.penalty_value = ''; }
+      var formEl = document.getElementById('vf-ded-form');
+      var doSaveDed = function () {
+        /* Option A instant-upload: pre-bound ref from dataset/DED_EDIT. */
+        try {
+          var fileInput = formEl ? formEl.querySelector('input[type="file"]') : null;
+          var bound = (fileInput && UIC.UploadSet) ? UIC.UploadSet.getBound(fileInput) : null;
+          if (bound && bound.ref) {
+            data.deduction_attachement = bound.ref;
+            if (bound.id) data.deduction_attachement_id = bound.id;
+          } else if (DED_EDIT.uid && DED_EDIT.att) {
+            if (DED_EDIT.att.ref) data.deduction_attachement = DED_EDIT.att.ref;
+            if (DED_EDIT.att.id) data.deduction_attachement_id = DED_EDIT.att.id;
+          }
+        } catch (e) {}
+        /* Keyed refresh: the server record replaces the row with the same
+           unique_id, so an edit never duplicates; a missing record reloads. */
+        var afterDedSave = function (r) {
+            var rec = (r && r.record) || null;
+            if (rec) {
+              var RECENT_LIMIT = 10;
+              var idx = ROWS.findIndex(function(x){ return String(x.unique_id)===String(rec.unique_id); });
+              if (idx!==-1) ROWS[idx]=rec; else ROWS.unshift(rec);
+              if (ROWS.length>RECENT_LIMIT) ROWS.pop();
+              renderDeductions();
+            } else {
+              fetchDeductions(true);
+            }
+        };
+        if (DED_EDIT.uid) {
+          data.unique_id = DED_EDIT.uid;
+          return UIC.Live.save({
+            call: companyCall,
+            action: 'update_deduction',
+            data: data,
+            modal: 'vf-ded-modal',
+            message: 'تم تحديث الخصم',
+            queueable: false,
+            reload: function () { fetchDeductions(true); },
+            onSuccess: afterDedSave
+          }).catch(function () { /* UIC.Live has toasted */ });
+        }
+        /* Tier B: the 2-table handler (plus cross-row/period refuses invisible
+           in the form) can refuse for reasons the form cannot show — so NO
+           draft is painted: canPatch stays false, only the quiet corner hint
+           shows, and the row is patched from the reply instead. A refusal
+           toasts exactly as before and never paints a row. The file upload is
+           a real round trip and stays in front of the save. queueable:false:
+           I1 is unproven for add_deduction, so a transport failure rolls back
+           loudly. */
+        return UIC.Live.save({
+          call: companyCall,
+          action: 'add_deduction',
+          data: data,
+          modal: 'vf-ded-modal',
+          message: 'تم الحفظ',
+          queueable: false,
+          reload: function () { fetchDeductions(true); },
+          onSuccess: afterDedSave
+        }).catch(function () { /* UIC.Live has toasted */ });
+      };
+      try {
+        if (window.UIC && UIC.UploadSet && UIC.UploadSet.isBusy('vf-ded-modal')) {
+          UIC.toast('جاري رفع الملف... يرجى الانتظار', 'warning');
+          UIC.UploadSet.awaitPending('vf-ded-modal').then(doSaveDed);
+          return;
+        }
+      } catch (e2) {}
+      doSaveDed();
+    }
+
+    function viewAttachment(ref, id){
+      if(!ref && (id == null || String(id) === '')) return;
+      UIC.openDownload(scriptUrl + '?download=attachment&page=vf_hr_deductions&ref=' + encodeURIComponent(ref || '') + ((id != null && String(id) !== '') ? '&id=' + encodeURIComponent(id) : '') + '&sessionToken=' + encodeURIComponent(SESSION_TOKEN),
+        'فتح المرفق');
+    }
+    function viewDeduction(uid){
+      var r = ROWS.find(function(x){ return String(x.unique_id)===String(uid); });
+      if(!r) return;
+      var attBtn = r.deduction_attachement ? '<button class="btn btn-outline" style="padding:6px 12px;" onclick="viewAttachment(\'' + esc(r.deduction_attachement).replace(/\'/g, "\\\'") + '\',\'' + esc(r.unique_id).replace(/\'/g, "\\\'") + '\')">📎 عرض — ' + esc(String(r.deduction_attachement).split('/').pop()) + '</button>' : 'لا يوجد';
+      var body = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 16px;font-size:14px;">' +
+        '<div><b>الموظف:</b> ' + esc(r.name_ar||r.emp_id) + ' (#' + esc(r.emp_id)+')</div>' +
+        '<div><b>التاريخ:</b> ' + fmtDate(r.date) + '</div>' +
+        '<div><b>النوع:</b> ' + esc(r.deduction_name||r.deduction_type) + '</div>' +
+        '<div><b>الأيام:</b> ' + (r.number_of_days||'-') + '</div>' +
+        '<div style="grid-column:1/-1;"><b>التفاصيل:</b> ' + esc(r.details||'-') + '</div>' +
+        '<div style="grid-column:1/-1;display:flex;gap:10px;align-items:center;"><b>المرفق:</b> ' + attBtn + '</div></div>';
+      UIC.openModal('ded-view-modal', { title: 'عرض السجل / View Record', body: body });
+    }
+    function deleteDeduction(uid){
+      if(!UIC.canFull_()){ UIC.toast('غير مصرح', 'error'); return; }
+      if(!confirm('هل تريد حذف هذا السجل؟ / Delete this record?')) return;
+      UI.showSpinner();
+      companyCall('delete_deduction', { unique_id: uid }).then(function(res){ UIC.toast(res.message||'تم الحذف','success'); fetchDeductions(true); }).catch(function(e){ UIC.toast(e.message||'خطأ','error'); }).finally(function(){ UI.hideSpinner(); });
+    }
+    function showError(e) {
+      var body = document.getElementById('vf-ded-content');
+      if (body) body.innerHTML = '<div class="empty-state"><span>' + esc(e.message || 'خطأ') + '</span></div>';
+    }
+  </script>
+
+  <script>
+    /* Another device's change to this page arrives on its own. The poll
+       reads timestamps from cache, never a spreadsheet, and stands down
+       while the tab is hidden or a save is in flight. */
+    document.addEventListener('DOMContentLoaded', function () {
+      UIC.Live.watchPage({
+        call: companyCall,
+        page: 'vf_hr_deductions',
+        onChange: function () { UIC.Live.arrive(function () { fetchDeductions(true); }); }
+      });
+    });
+
+    document.addEventListener('DOMContentLoaded', load);
+  </script>
+</body>
+</html>
+
+

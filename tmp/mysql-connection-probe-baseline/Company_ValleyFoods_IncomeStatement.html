@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Valley Foods — قائمة الدخل</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_ValleyFoods_Nav'); ?>
+  <?!= getCompanyThemeCSS_('9940659bd83035d7') ?>
+  <style>
+    .is-toolbar{display:flex;flex-wrap:wrap;gap:12px;align-items:end;margin-bottom:18px}
+    .is-field{display:flex;flex-direction:column;gap:6px;min-width:145px;font-size:12px;font-weight:700}
+    .is-field input{padding:9px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;color:#172033}
+    .is-table{width:100%;border-collapse:collapse;font-size:13px}.is-table th,.is-table td{padding:11px 12px;border-bottom:1px solid #e2e8f0;text-align:right;vertical-align:top}
+    .is-table th{background:#f1f5f9;color:#475569}.is-table .num{direction:ltr;text-align:left;white-space:nowrap;font-variant-numeric:tabular-nums}
+    .is-table .subtotal td{font-weight:800;background:#f0fdfa;border-top:2px solid #99d9ce}.is-table .partial{background:#fffaf0}
+    .is-muted{color:#64748b;font-size:12px;line-height:1.8}.is-note{padding:10px 12px;border-radius:8px;background:#fff7ed;border-right:3px solid #eaa23b;margin-top:8px;font-size:12px;line-height:1.8}
+    .is-error{background:#fef2f2;color:#991b1b;border-color:#dc2626}
+    .is-amount{display:block;direction:ltr}.is-negative{color:#b91c1c}
+    .is-actions{display:flex;flex-wrap:wrap;gap:8px;margin:14px 0}.is-block{margin-top:24px}.is-scroll{overflow:auto}.is-section{background:#e2e8f0;font-weight:700}
+    @media(max-width:650px){.is-field{min-width:130px;flex:1}.is-table th,.is-table td{padding:9px 7px}.is-toolbar .btn{flex:1}}
+    @media print{.is-toolbar,.is-actions,.is-no-print,nav,aside,.app-sidebar,.app-topbar{display:none!important}.is-scroll{overflow:visible}.is-table{font-size:10px}.is-table tr{break-inside:avoid}.is-table thead{display:table-header-group}.vf-card{box-shadow:none!important;border:0!important}.app-content{margin:0!important;padding:0!important}body{background:white!important}}
+  </style>
+</head>
+<body>
+  <div id="vf-root"></div>
+  <script>
+    var params = new URLSearchParams(window.location.search);
+    var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+    var scriptUrl = window.scriptUrl || '/';
+    var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+    var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('9940659bd83035d7') ?>';
+    var COMPANY_PAGES = <?!= companyPages ?>;
+    var CURRENT_ACTION = '<?!= currentAction ?>';
+    var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+    function companyCall(moduleAction, data) { return API.call('company_action', { target_system: '9940659bd83035d7', module_action: moduleAction, data: data || {} }, SESSION_TOKEN); }
+    function esc(v) { return String(v == null ? '' : v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
+    function pad(n) { return ('0' + n).slice(-2); }
+    function day(d) { return d.getFullYear() + '-' + pad(d.getMonth()+1) + '-' + pad(d.getDate()); }
+  </script>
+  <script>
+  (function () {
+    var REQUEST = 0, LASTR = null;
+    function el(id) { return document.getElementById(id); }
+    function format(v) { return typeof v === 'number' && isFinite(v) ? v.toLocaleString('en-US', {minimumFractionDigits:2,maximumFractionDigits:2}) : 'غير متاح'; }
+    function amount(v) { return '<span class="is-amount '+(v<0?'is-negative':'')+'">'+format(v)+'</span>'; }
+    function boot() {
+      UIC.appShell('vf-root', { companyLogoUrl: COMPANY_LOGO_URL, companyLogoHref: scriptUrl + '?action=vf_dashboard&sessionToken=' + SESSION_TOKEN, companyLogoTitle: 'Valley Foods', breadcrumb: 'Valley Foods / الإدارة المالية / قائمة الدخل', contentId: 'vf-income-content', menuGroups: window.VALLEYFOODS_MENU || [] });
+      var now = new Date(), start = new Date(now.getFullYear(),now.getMonth(),1);
+      el('vf-income-content').innerHTML = '<div class="vf-card"><div class="vf-card-header"><h2>قائمة الدخل</h2><span class="is-muted">من السجلات الموجودة · قراءة فقط لبيانات الأعمال</span></div><div class="vf-card-body">' +
+        '<form id="is-form" class="is-toolbar"><label class="is-field">بداية الفترة<input required type="date" id="is-from" value="'+day(start)+'"></label><label class="is-field">نهاية الفترة<input required type="date" id="is-to" value="'+day(now)+'"></label><button class="btn btn-primary" type="submit" id="is-refresh">عرض / تحديث</button></form>' +
+        '<div class="is-actions"><button type="button" class="btn btn-outline" id="is-print">طباعة</button></div>' +
+        '<div id="is-output" aria-live="polite"></div></div></div>';
+      el('is-form').addEventListener('submit', function(e){e.preventDefault();load();});
+      el('is-print').addEventListener('click',printReport);
+      load();
+    }
+    function query() {
+      var q={start:el('is-from').value,end:el('is-to').value};
+      if(!q.start || !q.end || q.start>q.end) throw new Error('راجع نطاق الفترة.');
+      return q;
+    }
+    function load() {
+      var q; try {q=query();} catch(e) { UIC.toast(e.message,'warning');return; }
+      var request=++REQUEST;
+      el('is-output').innerHTML='<p class="is-muted">قراءة المصادر…</p>'; el('is-refresh').disabled=true;
+      companyCall('get_valley_income_statement',q).then(function(r){if(request!==REQUEST)return;if(!r || r.status==='error' || !r.revenue)throw new Error(r && r.message || 'تعذر تحميل التقرير');render(r);}).catch(function(e){if(request===REQUEST){el('is-output').innerHTML='<div class="is-note is-error">'+esc(e.message||e)+'</div>';}}).finally(function(){if(request===REQUEST)el('is-refresh').disabled=false;});
+    }
+    function printReport() {
+      var q; try {q=query();} catch(e) { UIC.toast(e.message,'warning');return; }
+      var request=++REQUEST;
+      el('is-output').innerHTML='<p class="is-muted">تحديث النسخة المطبوعة…</p>'; el('is-refresh').disabled=true; el('is-print').disabled=true;
+      companyCall('get_valley_income_statement',q).then(function(r){if(request!==REQUEST)return;if(!r || r.status==='error' || !r.revenue)throw new Error(r && r.message || 'تعذر تحديث الطباعة');render(r);window.requestAnimationFrame(function(){if(request===REQUEST)window.print();});}).catch(function(e){if(request===REQUEST){el('is-output').innerHTML='<div class="is-note is-error">'+esc(e.message||e)+'</div>';}}).finally(function(){if(request===REQUEST)el('is-refresh').disabled=false;el('is-print').disabled=false;});
+    }
+    function row(label, v, subtotal, attrs) {
+      function c(x) { return x == null ? '<span class="is-muted">—</span>' : amount(x); }
+      return '<tr'+(subtotal?' class="subtotal"':'')+(attrs?' '+attrs:'')+'><td>'+label+'</td><td class="num">'+c(v)+'</td></tr>';
+    }
+    function render(r) {
+      var html='<p class="is-muted"><b>الفترة:</b> '+esc(r.period.start)+' — '+esc(r.period.end)+'<br>وقت القراءة: <bdi>'+esc(r.generated_at)+'</bdi></p>';
+      var rev=r.revenue||{gross:0,returns:0,net:0,line_count:0,return_count:0};
+      var cg=r.cogs||{};
+      var costBlocked=cg.state==='restricted';
+      html+='<div class="is-scroll"><table class="is-table"><thead><tr><th>البند</th><th>القيمة</th></tr></thead><tbody>';
+      html+=row('إجمالي إيراد المبيعات',rev.gross);
+      html+=row('مردودات المبيعات',rev.returns);
+      html+=row('صافي الإيراد',rev.net,true);
+      html+=row('تكلفة المبيعات',costBlocked?null:cg.value,false,'id="is-cogs-row" style="cursor:pointer" title="اضغط لعرض تكلفة كل دفعة"');
+      html+=row('مجمل الربح',costBlocked?null:r.gross,true);
+      html+='</tbody></table></div>';
+      html+='<p class="is-muted">بنود البيع: '+esc(rev.line_count)+' · المرتجعات: '+esc(rev.return_count)+'</p>';
+      if(!rev.sources_ready)html+='<div class="is-note">مصادر الإيراد غير مكتملة؛ الرقم المعروض مجموع المتاح فقط.</div>';
+      if(costBlocked)html+='<div class="is-note">التكلفة ومجمل الربح محجوبان بالصلاحية.</div>';
+      else if(cg.unpriced_qty)html+='<div class="is-note">كمية بلا تكلفة دفعة محسوبة: '+esc(cg.unpriced_qty)+' — غير داخلة في التكلفة.</div>';
+      el('is-output').innerHTML=html;
+      LASTR=r;
+      var cr=el('is-cogs-row');
+      if(cr&&!costBlocked)cr.addEventListener('click',openStockModal);
+    }
+    var STOCK_ROWS = {};
+    function stockTable(title, st, cmap, which) {
+      STOCK_ROWS[which] = {};
+      var rows=(st&&st.lines)||[], h='<h4>'+title+'</h4><div class="is-scroll"><table class="is-table"><thead><tr><th>الدفعة</th><th>رقم التعريف</th><th>مخزون أول</th><th>مشتريات</th><th>مخزون آخر</th><th>تكلفة الوحدة</th><th>الكمية المباعة</th><th>إجمالي التكلفة</th></tr></thead><tbody>';
+      rows.forEach(function(l){
+        var c=(cmap&&cmap[l.batch])||null;
+        STOCK_ROWS[which][l.batch] = { line: l, cogs: c };
+        h+='<tr class="is-batch-row" data-batch="'+esc(l.batch)+'" data-which="'+which+'" style="cursor:pointer" title="اضغط لمراجعة بنود الدفعة"><td><bdi>'+esc(l.batch)+'</bdi></td><td><bdi>'+esc(l.ident||'—')+'</bdi></td><td class="num">'+format(l.start)+'</td><td class="num">'+format(l.purchasing)+'</td><td class="num">'+format(l.end)+'</td><td class="num">'+(c?format(c.unit_cost):'—')+'</td><td class="num">'+(c?format(c.qty):'—')+'</td><td class="num">'+(c?format(c.total):'—')+'</td></tr>';
+      });
+      if(!rows.length)h+='<tr><td colspan="8">لا توجد دفعات.</td></tr>';
+      h+='</tbody></table></div>';
+      if(st&&st.excluded_fixed)h+='<p class="is-muted">مشتريات أصول ثابتة مستبعدة من عمود المشتريات: '+format(st.excluded_fixed)+' — محسوبة ضمن مخزون آخر.</p>';
+      return h;
+    }
+    function cmapOf(cg) {
+      var m={};
+      ((cg&&cg.lines)||[]).forEach(function(l){m[l.batch]=l;});
+      return m;
+    }
+    function kv(label, q, v) {
+      return '<tr><td>'+label+'</td><td class="num">'+format(q)+'</td><td class="num">'+(v==null?'—':format(v))+'</td></tr>';
+    }
+    function openBatchModal(batch, which) {
+      var rec = (STOCK_ROWS[which]||{})[batch];
+      if(!rec)return;
+      var l = rec.line, c = rec.cogs, u = (c&&c.unit_cost!=null)?c.unit_cost:l.unit_cost;
+      var h='<p class="is-muted">الدفعة: <bdi>'+esc(l.batch)+'</bdi> · رقم التعريف: <bdi>'+esc(l.ident||'—')+'</bdi> · تكلفة الوحدة: '+(u==null?'—':format(u))+'</p>';
+      h+='<div class="is-scroll"><table class="is-table"><thead><tr><th>البند</th><th>الكمية</th><th>القيمة</th></tr></thead><tbody>';
+      h+=kv('رصيد مخزون أول المدة',l.start,l.start_v);
+      h+=kv('المشتريات',l.purchasing,l.purch_v);
+      h+=kv('وارد آخر (تصنيع/مرتجع/حركة)',l.in_other,u==null?null:l.in_other*u);
+      h+=kv('المباع',l.sold,u==null?null:l.sold*u);
+      h+=kv('منصرف آخر (استهلاك/حركة)',l.out_other,u==null?null:l.out_other*u);
+      if(l.excluded)h+=kv('أصول ثابتة مستبعدة من المشتريات',l.excluded,u==null?null:l.excluded*u);
+      h+=kv('<strong>رصيد آخر المدة</strong>',l.end,l.end_v);
+      h+='<tr class="subtotal"><td><strong>تكلفة المبيعات = المباع × التكلفة</strong></td><td class="num"><strong>'+format(l.sold)+' × '+(u==null?'—':format(u))+'</strong></td><td class="num"><strong>'+(l.cogs_v==null?'—':format(l.cogs_v))+'</strong></td></tr>';
+      h+='</tbody></table></div>';
+      h+='<p class="is-muted">تحقق: أول '+format(l.start)+' + مشتريات '+format(l.purchasing)+' + وارد '+format(l.in_other)+' − مباع '+format(l.sold)+' − منصرف '+format(l.out_other)+((l.excluded)?' + أصول ثابتة '+format(l.excluded):'')+' = آخر '+format(l.end)+'</p>';
+      UIC.openModal('is-batch-modal',{title:'مراجعة الدفعة',body:h,size:'lg'});
+    }
+    function openStockModal() {
+      if(!LASTR||!LASTR.stock||LASTR.stock.state==='restricted')return;
+      var h=stockTable('المخزون — الفترة',LASTR.stock,cmapOf(LASTR.cogs),'cur');
+      UIC.openModal('is-stock-modal',{title:'تفاصيل تكلفة المبيعات — المخزون',body:h,size:'lg'});
+      var modal=document.getElementById('is-stock-modal');
+      if(modal)modal.addEventListener('click',function(e){
+        var tr=e.target&&e.target.closest?e.target.closest('tr.is-batch-row'):null;
+        if(tr)openBatchModal(tr.getAttribute('data-batch'),tr.getAttribute('data-which'));
+      });
+    }
+    document.addEventListener('DOMContentLoaded',boot);
+  })();
+  </script>
+</body>
+</html>

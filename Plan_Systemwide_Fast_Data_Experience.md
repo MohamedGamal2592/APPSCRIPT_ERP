@@ -222,7 +222,7 @@ Suggested order:
 4. `VF_MOs` list, after separating header rows from recipe/products/categories/shifts/work-center/reference options. Its existing narrow scan still reads the full header set and computes options from full data.
 5. Multi-tab form saves (manufacture, sales/returns, purchasing, payroll/attendance) only after isolated contract and recovery verification.
 
-The current `MFG_FAST_READ_`, `MFG_PLANNED_SAVE_`, `MFG_BATCH_WRITES_`, fast-save, and form-contract flags remain disabled until their particular path has parity evidence. Never infer that a Sheets row window is a matched-result page.
+`MFG_FAST_READ_` and the unrelated `MFG_BATCH_WRITES_` switches remain disabled. The `MFG_PLANNED_SAVE_`, `FAST_SAVE_CORE_`, and `FORM_CONTRACTS_CORE_` switches are enabled only for the VF_MOs save pilot after isolated synthetic save, reconciliation, stale-token and recovery checks. Production latency measurements and a staging comparison remain outstanding. Never infer that a Sheets row window is a matched-result page.
 
 ### 7.4 Assessment Center
 

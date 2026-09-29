@@ -1,0 +1,67 @@
+<style>
+/* ERP_Flow — step-transition loader.
+ *
+ * [UI-3.4 / U-24] The overlay this partial used to draw is GONE. It was the
+ * third of four different loading overlays in the app, and on the three pages
+ * that include this file a single navigation fired two of them at once: this
+ * one, from the auto-wired click handler below, and UIC.showPageLoading, from
+ * UIC.navTo. Both now go to the one service in UI_Components.html.
+ *
+ * What remains here is the content ENTRANCE animation, which is this partial's
+ * own idea and belongs to nothing else. */
+.erp-flow-enter{animation:erpFlowEnter 180ms ease-out;}
+@keyframes erpFlowEnter{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+@media (prefers-reduced-motion: reduce){.erp-flow-enter{animation:none;}}
+</style>
+<script>
+window.ERPFlow = window.ERPFlow || (function(){
+  var refCount = 0, startAt = 0, minMs = (typeof ERP_FLOW_MIN_MS !== 'undefined' ? ERP_FLOW_MIN_MS : 600);
+  // allow server to inject numeric via template if needed; fallback to global CONFIG value
+  try { if (window.ERP_FLOW_MIN_MS) minMs = window.ERP_FLOW_MIN_MS; } catch(e){}
+
+  /* [UI-3.4] Delegates to the one loading service. ERPFlow keeps its OWN ref
+     count and its minimum-visible-time rule, because those are its behaviour —
+     it is what stops the overlay flashing on a fast transition — but it no
+     longer owns an overlay of its own. */
+  function start(labelAr){
+    refCount++;
+    if (refCount === 1) startAt = Date.now();
+    try { UIC.showPageLoading(labelAr || 'جاري التحميل...'); } catch(e){}
+    try { var c = document.getElementById('app-content') || document.querySelector('.app-content'); if (c) c.classList.remove('erp-flow-enter'); } catch(e){}
+  }
+
+  function finish(){
+    refCount = Math.max(0, refCount - 1);
+    if (refCount !== 0) return; // nested/parallel starts keep the overlay until the last finish
+    var elapsed = Date.now() - startAt;
+    var wait = Math.max(0, minMs - elapsed);
+    setTimeout(function(){
+      /* Forced: the auto-wire below can raise the shared service's count for a
+         navigation that then never calls finish(), and a stuck full-screen
+         overlay is worse than a spinner that leaves slightly early. */
+      try { UIC.hidePageLoading(true); } catch(e){}
+      try {
+        var c = document.getElementById('app-content') || document.querySelector('.app-content');
+        if (c) { void c.offsetWidth; c.classList.add('erp-flow-enter'); }
+      } catch(e){}
+    }, wait + 200);
+  }
+
+  /* Auto-wire navigation clicks. Kept, because not every in-app link goes
+     through UIC.navTo — page-authored anchors do not — and without this those
+     navigations would show nothing at all. It is now harmless alongside navTo:
+     both raise the same single overlay rather than stacking two. */
+  function wireNavLoader(){
+    document.addEventListener('click', function(e){
+      var a = e.target && e.target.closest ? e.target.closest('a[href*="?action="]') : null;
+      if (!a) return;
+      var href = a.getAttribute('href')||'';
+      if (href.indexOf('?action=') === -1) return;
+      try { start('جاري التحميل...'); } catch(e){}
+    }, true);
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', wireNavLoader);
+  else wireNavLoader();
+  return { start: start, finish: finish, _refCount: function(){return refCount;} };
+})();
+</script>

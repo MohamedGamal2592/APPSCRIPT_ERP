@@ -79,6 +79,8 @@ const TopChemical = (function () {
    */
   const PAGE_ACCESS = {
     'get_dashboard_data': { page: 'tc_dashboard', access: 'read' },
+    'get_executive_followup': { page: 'tc_executive_followup', access: 'read' },
+    'get_executive_followup_summary': { page: 'tc_executive_followup', access: 'read' },
     'get_clients_vendors': { page: 'tc_clients_vendors', access: 'read' },
     'add_client_vendor': { page: 'tc_clients_vendors', access: 'write' },
     'get_ar_ap': { page: 'tc_debts', access: 'read' },
@@ -127,6 +129,7 @@ const TopChemical = (function () {
     'add_carton_size_files': { page: 'tc_carton_sizes', access: 'write' },
     'get_employees': { page: 'tc_employee_reg', access: 'read' },
     'add_employee': { page: 'tc_employee_reg', access: 'write' },
+    'edit_employee': { page: 'tc_employee_reg', access: 'full' },
     'get_employee_status': { page: 'tc_employee_status', access: 'read' },
     'add_employee_status': { page: 'tc_employee_status', access: 'write' },
     'get_employee_salary': { page: 'tc_employee_salary', access: 'read' },
@@ -138,6 +141,7 @@ const TopChemical = (function () {
     'get_emp_overtime': { page: 'tc_emp_overtime', access: 'read' },
     'add_emp_overtime': { page: 'tc_emp_overtime', access: 'write' },
     'get_emp_salaries': { page: 'tc_emp_salaries', access: 'read' },
+    'get_emp_salary_comparison': { page: 'tc_emp_salaries', access: 'read' },
     'add_emp_salaries': { page: 'tc_emp_salaries', access: 'write' },
     'edit_emp_salary': { page: 'tc_emp_salaries', access: 'full' },
     'delete_emp_salary': { page: 'tc_emp_salaries', access: 'full' },
@@ -206,6 +210,7 @@ const TopChemical = (function () {
     'get_products_live':    { page: 'tc_products_live', access: 'read' },
     'get_product_live_warehouse_quantities': { page: 'tc_products_live', access: 'read' },
     'get_products_live_direct_test': { page: 'tc_products_live', access: 'read' },
+    'get_mysql_connection_probe': { page: 'tc_products_live', access: 'read' },
     'add_product_live':     { page: 'tc_products_live', access: 'write' },
     'get_production_capability_products': { page: 'tc_production_capability', access: 'read' },
     'get_production_capability_rows': { page: 'tc_production_capability', access: 'read' },
@@ -267,6 +272,8 @@ const TopChemical = (function () {
     'add_legal_salary': LEGAL_SALARIES_SHEET,
     'get_income_statement': LEGAL_INCOME_SHEET,
     'get_dashboard_data': '',
+    'get_executive_followup': 'mysql:COO_TEST',
+    'get_executive_followup_summary': 'mysql:COO_TEST,manufacture_headers,manufacture_footers,regular_box_movement,chart_of_accounts_main',
     'get_clients_vendors': CLIENTS_SHEET,
     'add_client_vendor': CLIENTS_SHEET,
     'edit_client_vendor': CLIENTS_SHEET,
@@ -308,6 +315,7 @@ const TopChemical = (function () {
     'add_carton_size_files': CARTON_SIZES_SHEET,
     'get_employees': EMPLOYEE_SHEET,
     'add_employee': EMPLOYEE_SHEET,
+    'edit_employee': EMPLOYEE_SHEET,
     'get_employee_status': EMP_STATUS_SHEET,
     'add_employee_status': EMP_STATUS_SHEET,
     'get_employee_salary': EMP_SALARY_SHEET,
@@ -319,6 +327,7 @@ const TopChemical = (function () {
     'get_emp_overtime': EMP_OVERTIME_SHEET,
     'add_emp_overtime': EMP_OVERTIME_SHEET,
     'get_emp_salaries': EMP_SALARIES_SHEET,
+    'get_emp_salary_comparison': EMP_SALARIES_SHEET,
     'add_emp_salaries': EMP_SALARIES_SHEET,
     'edit_emp_salary': EMP_SALARIES_SHEET,
     'delete_emp_salary': EMP_SALARIES_SHEET,
@@ -354,6 +363,7 @@ const TopChemical = (function () {
     'get_products_live':   'mysql:products',
     'get_product_live_warehouse_quantities': 'mysql:product_current_qty_warehouses',
     'get_products_live_direct_test': 'mysql:products',
+    'get_mysql_connection_probe': 'mysql:connection',
     'add_product_live':    'mysql:products',
     'get_production_capability_products': 'mysql:manuf_product_support_capability',
     'get_production_capability_rows': 'mysql:manuf_product_support_capability',
@@ -540,11 +550,13 @@ const TopChemical = (function () {
       dbTcFinancialProduction_: [0, 'product_id,name_ar,expected_quantity,deliver_quantity,total,offset,limit,has_more', 31],
       dbTcFinancialUsedMaterials_: [0, 'product_id,name_ar,unit,supposed_qty,used_qty,difference_qty,difference_ratio,total,offset,limit,has_more', 31],
       dbTcFinancialProductionSnapshot_: [120, 'product_id,name_ar,expected_quantity,deliver_quantity,total,snapshot', 2000],
-      dbTcFinancialUsedMaterialsSnapshot_: [120, 'product_id,name_ar,unit,supposed_qty,used_qty,difference_qty,difference_ratio,total,snapshot', 2000]
+      dbTcFinancialUsedMaterialsSnapshot_: [120, 'product_id,name_ar,unit,supposed_qty,used_qty,difference_qty,difference_ratio,total,snapshot', 2000],
+      dbExecutiveFollowup_: [120, 'COO_TEST decision rows as one JSON snapshot', 5000],
+      dbExecutiveSummary_: [120, 'COO manufacturing, purchasing, weekly expense and account chart JSON', 500]
     };
     var spec = specs[name];
     if (!spec) throw new Error('Unknown MySQL definition');
-    return { name: 'tc.' + name, version: name === 'dbCapabilityCatalog_' || name === 'dbStockScanCatalog_' || name === 'dbStockScanBalances_' ? 1 : name === 'dbProductsLiveList_' ? 7 : name === 'dbProductsLiveCount_' ? 3 : name === 'dbStockScanProducts_' ? 4 : name === 'dbProductionCapabilityRows_' ? 5 : name === 'dbSalesCapacityRows_' ? 5 : 2, ttl: spec[0], columns: spec[1], rowLimit: spec[2],
+    return { name: 'tc.' + name, version: name === 'dbExecutiveFollowup_' ? 1 : name === 'dbExecutiveSummary_' ? 7 : name === 'dbCapabilityCatalog_' || name === 'dbStockScanCatalog_' || name === 'dbStockScanBalances_' ? 1 : name === 'dbProductsLiveList_' ? 7 : name === 'dbProductsLiveCount_' ? 3 : name === 'dbStockScanProducts_' ? 4 : name === 'dbProductionCapabilityRows_' ? 5 : name === 'dbSalesCapacityRows_' ? 5 : 2, ttl: spec[0], columns: spec[1], rowLimit: spec[2],
       dependencies: ['mysql:*'], builder: name, mapping: name,
       normalize: function (data) {
         var p = mysqlParams_(data);
@@ -556,6 +568,14 @@ const TopChemical = (function () {
         }
         if (name === 'dbTcFinancialProduction_') return dbTcFinancialProductionParams_(p);
         if (name === 'dbTcFinancialUsedMaterials_') return dbTcFinancialUsedMaterialsParams_(p);
+        if (name === 'dbExecutiveFollowup_') {
+          var planYear = (p.year === undefined || p.year === null || p.year === '') ? 0 : Number(p.year);
+          if (!Number.isInteger(planYear) || (planYear !== 0 && (planYear < 2000 || planYear > 2100))) throw new Error('Invalid executive follow-up year');
+          return { year: planYear, refresh: p.refresh === true || p.refresh === 'true' || p.refresh === '1' };
+        }
+        if (name === 'dbExecutiveSummary_') {
+          return { refresh: p.refresh === true || p.refresh === 'true' || p.refresh === '1' };
+        }
         if (name === 'dbStockScanProducts_') {
           p.id = p.id == null || p.id === '' ? '' : String(p.id).trim();
           if (p.id && !/^[1-9]\d{0,19}$/.test(p.id)) throw new Error('Invalid product ID');
@@ -627,6 +647,8 @@ const TopChemical = (function () {
         if (name === 'dbTcFinancialProduction_') return Array.isArray(value.rows) && Number.isInteger(Number(value.total)) && Number.isInteger(Number(value.offset)) && Number.isInteger(Number(value.limit)) && typeof value.has_more === 'boolean';
         if (name === 'dbTcFinancialUsedMaterials_') return Array.isArray(value.rows) && Number.isInteger(Number(value.total)) && Number.isInteger(Number(value.offset)) && Number.isInteger(Number(value.limit)) && typeof value.has_more === 'boolean';
         if (name === 'dbTcFinancialProductionSnapshot_' || name === 'dbTcFinancialUsedMaterialsSnapshot_') return Array.isArray(value.rows) && Number.isInteger(Number(value.total)) && typeof value.truncated === 'boolean' && Number.isFinite(Number(value.snapshot_at));
+        if (name === 'dbExecutiveFollowup_') return Array.isArray(value.rows) && Number.isInteger(Number(value.total)) && typeof value.truncated === 'boolean' && value.schema_version === 1;
+        if (name === 'dbExecutiveSummary_') return value.schema_version === 2 && Array.isArray(value.manufacturing) && Array.isArray(value.purchasing) && Array.isArray(value.weekly_expenses) && Array.isArray(value.weekly_expense_accounts);
         if (name === 'dbProductsLiveCount_') return Number.isInteger(value.total) && value.total >= 0;
         if (name === 'dbProductsLiveList_') {
           if (!Array.isArray(value.columns) || !Array.isArray(value.rows) ||
@@ -1723,13 +1745,12 @@ const TopChemical = (function () {
       const t = String(r.document_type || '').trim();
       if (t) typeSet[t] = true;
     });
-    // Phase 12 — slice before mapping; see getImportFollow_.
-    var order = [];
-    for (var i = rows.length - 1; i >= 0; i--) order.push(i);
-    var limit = Number(data && data.limit) || 20;
-    if (!data || !data.loadAll) order = order.slice(0, limit);
-    var papers = order.map(function (idx) {
-        var r = rows[idx];
+    /* The registration-papers page uses a local JSON snapshot and the shared
+       table's universal search. Do not send a newest-20 window here: a local
+       search cannot be universal if the server has already discarded older
+       rows. Keep newest-first ordering, but include every record in the
+       snapshot. */
+    var papers = rows.map(function (r) {
         return {
           document_name_ar: r.document_name_ar,
           document_name_en: r.document_name_en,
@@ -1743,11 +1764,19 @@ const TopChemical = (function () {
           document_file_id: r.document_file_id || ''
         };
       });
-    return {
-      status: 'success',
-      papers: papers,
+    papers.reverse();
+    var snapshot = {
+      schema_version: 1,
+      table: REGISTRATION_SHEET,
+      rows: papers,
       document_types: Object.keys(typeSet).sort(function (a, b) { return String(a).localeCompare(String(b), 'ar'); }),
       product_options: products.options
+    };
+    return {
+      status: 'success',
+      data_json: JSON.stringify(snapshot),
+      loaded_all: true,
+      total: papers.length
     };
   }
 
@@ -2237,11 +2266,16 @@ const TopChemical = (function () {
     var sheet = getSheet_(STOCK_SHEET, dbId);
     var headers = getHeaders_(sheet);
     var lastRow = sheet.getLastRow();
-    var loadAll = !!(data && data.loadAll === true);
     var minimumDate = '2026-09-01';
     var dateColumn = headers.indexOf('date');
     var rows = [];
-    if (!headers.length || dateColumn < 0 || lastRow < 2) return { status: 'success', stock: rows, loadedAll: loadAll, from_date: minimumDate };
+    if (!headers.length || dateColumn < 0 || lastRow < 2) {
+      return {
+        status: 'success',
+        data_json: JSON.stringify({ schema_version: 1, table: STOCK_SHEET, rows: rows, from_date: minimumDate }),
+        loadedAll: true, total: 0, from_date: minimumDate
+      };
+    }
     function checkedDateKey(year, month, day) {
       var date = new Date(year, month - 1, day);
       if (date.getFullYear() !== year || date.getMonth() !== month - 1 || date.getDate() !== day) return '';
@@ -2258,26 +2292,29 @@ const TopChemical = (function () {
       if (dmy) return checkedDateKey(Number(dmy[3]), Number(dmy[2]), Number(dmy[1]));
       return '';
     }
-    var end = lastRow;
-    while (end >= 2 && (loadAll || rows.length < 20)) {
-      var start = loadAll ? 2 : Math.max(2, end - 49);
-      var values = sheet.getRange(start, 1, end - start + 1, headers.length).getValues();
-      for (var i = values.length - 1; i >= 0; i--) {
-        if (!values[i].some(function (v) { return String(v == null ? '' : v).trim() !== ''; })) continue;
-        var rowDate = dateKey(values[i][dateColumn]);
-        if (!rowDate || rowDate < minimumDate) continue;
-        var record = {};
-        headers.forEach(function (h, ci) { record[String(h).trim()] = values[i][ci] === undefined ? '' : values[i][ci]; });
-        /* Keep the actual sheet row: filtered/reversed history indexes are not
-           stable identities and cannot reconcile an optimistic save safely. */
-        record._sheetRow = start + i;
-        record.product_name = String(record.name_ar || '').trim() || ('#' + record.product);
-        rows.push(record);
-        if (!loadAll && rows.length === 20) break;
-      }
-      end = start - 1;
+    /* The scan history table now consumes one complete JSON snapshot. Read the
+       sheet once and let the browser table own search and pagination; a
+       newest-20 server window makes universal search miss older counts. */
+    var values = sheet.getRange(2, 1, lastRow - 1, headers.length).getValues();
+    for (var i = values.length - 1; i >= 0; i--) {
+      if (!values[i].some(function (v) { return String(v == null ? '' : v).trim() !== ''; })) continue;
+      var rowDate = dateKey(values[i][dateColumn]);
+      if (!rowDate || rowDate < minimumDate) continue;
+      var record = {};
+      headers.forEach(function (h, ci) { record[String(h).trim()] = values[i][ci] === undefined ? '' : values[i][ci]; });
+      /* Keep the actual sheet row: filtered/reversed history indexes are not
+         stable identities and cannot reconcile an optimistic save safely. */
+      record._sheetRow = i + 2;
+      record.product_name = String(record.name_ar || '').trim() || ('#' + record.product);
+      rows.push(record);
     }
-    return { status: 'success', stock: rows, loadedAll: loadAll, from_date: minimumDate };
+    return {
+      status: 'success',
+      data_json: JSON.stringify({ schema_version: 1, table: STOCK_SHEET, rows: rows, from_date: minimumDate }),
+      loadedAll: true,
+      total: rows.length,
+      from_date: minimumDate
+    };
   }
 
   /** Same semantics as the retired difference formula:
@@ -3324,9 +3361,10 @@ const TopChemical = (function () {
         emp_id: r.emp_id, name_ar: r.name_ar, main_salary: r.main_salary,
         allow: r.allow, national_id: r.national_id, hiring_date: r.hiring_date,
         title: r.title, section: r.section, category: r.category,
-        insurance: !!r.insurance,
+        insurance: hrBool_(r.insurance),
         status: statusMap[eid] || DEFAULT_EMPLOYEE_STATUS_,
-        basic_salary: r.basic_salary
+        basic_salary: r.basic_salary,
+        emp_id_1: r.emp_id_1
       };
     }).reverse();
     const titleOpts = titleOptions_(dbId);
@@ -3391,9 +3429,68 @@ const TopChemical = (function () {
         category: category,
         insurance: !!insurance,
         status: 'يعمل بالشركة',
-        basic_salary: 0
+        basic_salary: 0,
+        emp_id_1: empId
       };
       return { status: 'success', message: 'تم تسجيل الموظف', record: savedRecEmp, data: { assignedId: empId } };
+    });
+  }
+
+  function editEmployee_(data, user, dbId) {
+    const empId = hrRequireEmployee_(dbId, data.emp_id);
+    const nameAr = String(data.name_ar || '').trim();
+    if (!nameAr) throw new Error('اسم الموظف مطلوب');
+    const nationalId = String(data.national_id == null ? '' : data.national_id).trim();
+    if (!nationalId || Number(nationalId) <= 20000000000000) throw new Error('الرقم القومي مطلوب (14 رقم)');
+    const hiringDate = parseDate_(data.hiring_date);
+    if (!(hiringDate instanceof Date) || isNaN(hiringDate.getTime())) throw new Error('تاريخ التعيين مطلوب');
+    const title = String(data.title || '').trim();
+    if (!title) throw new Error('المسمى الوظيفي مطلوب');
+    const category = String(data.category || '').trim();
+    if (!category) throw new Error('التصنيف مطلوب');
+    const insurance = hrBool_(data.insurance);
+
+    return executeWithLock_(function () {
+      const rows = getAllRecords_(dbId, EMPLOYEE_SHEET);
+      const current = rows.find(function (r) { return String(r.emp_id) === String(empId); });
+      if (!current) throw new Error('الموظف غير موجود');
+      const sheet = getSheet_(EMPLOYEE_SHEET, dbId);
+      const updates = {
+        name_ar: nameAr,
+        national_id: nationalId,
+        hiring_date: hiringDate,
+        title: title,
+        category: category,
+        insurance: insurance
+      };
+      if (!patchRowByCriteria_(sheet, 'emp_id', empId, updates)) throw new Error('الموظف غير موجود');
+      var section = String(current.section || '');
+      try {
+        var titleRef = titleOptions_(dbId).find(function (x) { return String(x.value) === String(title); });
+        if (titleRef) section = String(titleRef.section || '');
+      } catch (e) {}
+      var statusMap = getCurrentEmployeeStatusMap_(dbId);
+      var savedRecord = {
+        emp_id: empId,
+        name_ar: nameAr,
+        main_salary: current.main_salary,
+        allow: current.allow,
+        national_id: nationalId,
+        hiring_date: hiringDate,
+        title: title,
+        section: section,
+        category: category,
+        insurance: insurance,
+        status: statusMap[empId] || DEFAULT_EMPLOYEE_STATUS_,
+        basic_salary: current.basic_salary,
+        emp_id_1: current.emp_id_1 || empId
+      };
+      try {
+        var auditRecord = Object.assign({}, current, updates, { section: section });
+        logHistory_(dbId, EMPLOYEE_SHEET, 'employee_info_' + empId, String(empId),
+          (user && user.email) || '', 'update', auditRecord, current);
+      } catch (e2) {}
+      return { status: 'success', message: 'تم تعديل بيانات الموظف', record: savedRecord };
     });
   }
 
@@ -3403,7 +3500,7 @@ const TopChemical = (function () {
   function getEmployeeStatus_(data, user, dbId) {
     const names = employeeRefs_(dbId).map;
     const rawRows = getAllRecords_(dbId, EMP_STATUS_SHEET);
-    const rows = rawRows.map(function (r) {
+    let rows = rawRows.map(function (r) {
       let empCode = '';
       let statusType = '';
       let statusDate = '';
@@ -3434,7 +3531,7 @@ const TopChemical = (function () {
       };
     }).filter(function (r) {
       return (r.employee_code !== '' && r.employee_code != null) || (r.status_type !== '' && r.status_type != null);
-    }).slice(-300).reverse();
+    }).reverse();
     var limit = Number(data && data.limit) || 20;
     if (!data || !data.loadAll) rows = rows.slice(0, limit);
     return {
@@ -3688,7 +3785,7 @@ const TopChemical = (function () {
       return {
         emp_id: r.emp_id, name_ar: names[Number(r.emp_id)] || r.name_ar,
         date: r.date, start_time: r.start_time, end_time: r.end_time, details: r.details,
-        total_time: r.total_time, approved: !!r.approved, overtime_type: r.overtime_type,
+        total_time: r.total_time, approved: hrBool_(r.approved), overtime_type: r.overtime_type,
         amount: r.amount, approved_amount: r.approved_amount,
         user: r.user, created_at: r.created_at
       };
@@ -3707,12 +3804,12 @@ const TopChemical = (function () {
     const empId = hrRequireEmployee_(dbId, data.emp_id);
     const date = parseDate_(data.date);
     if (!(date instanceof Date) || isNaN(date.getTime())) throw new Error('التاريخ مطلوب');
-    const start = timeFrac_(data.start_time);
-    const end = timeFrac_(data.end_time);
-    if (start === '') throw new Error('وقت البداية مطلوب');
-    if (end === '') throw new Error('وقت النهاية مطلوب');
     const type = String(data.overtime_type || '').trim();
     if (HR_OVERTIME_TYPES.indexOf(type) === -1) throw new Error('نوع العمل الإضافي مطلوب');
+    const start = type === 'عمل اضافي' ? timeFrac_(data.start_time) : '';
+    const end = type === 'عمل اضافي' ? timeFrac_(data.end_time) : '';
+    if (type === 'عمل اضافي' && start === '') throw new Error('وقت البداية مطلوب');
+    if (type === 'عمل اضافي' && end === '') throw new Error('وقت النهاية مطلوب');
     const amount = Number(data.amount) || 0;
     if (amount < 0) throw new Error('المبلغ غير صحيح');
     if (type !== 'عمل اضافي' && amount <= 0) throw new Error('المبلغ مطلوب لهذا النوع');
@@ -3846,6 +3943,168 @@ const TopChemical = (function () {
       employee_options: hrWorkingEmployeeOptions_(dbId),
       closed_months: closedMap,
       active_employees: activeEmployees
+    };
+  }
+
+  function getEmpSalaryComparison_(data, user, dbId) {
+    const month = Number(data && data.month);
+    const year = Number(data && data.year);
+    if (!Number.isInteger(month) || month < 1 || month > 12) throw new Error('الشهر مطلوب');
+    if (!Number.isInteger(year) || year < 2000) throw new Error('السنة مطلوبة');
+
+    const previousMonth = month === 1 ? 12 : month - 1;
+    const previousYear = month === 1 ? year - 1 : year;
+    const currentMap = {};
+    const previousMap = {};
+    getAllRecords_(dbId, EMP_SALARIES_SHEET).forEach(function (r) {
+      const empId = String(r.emp_id == null ? '' : r.emp_id).trim();
+      if (!empId) return;
+      const rowMonth = Number(r.month);
+      const rowYear = Number(r.year);
+      if (rowMonth === month && rowYear === year) currentMap[empId] = r;
+      if (rowMonth === previousMonth && rowYear === previousYear) previousMap[empId] = r;
+    });
+
+    const employeeNames = employeeRefs_(dbId).map;
+    const ids = {};
+    Object.keys(currentMap).forEach(function (id) { ids[id] = true; });
+    Object.keys(previousMap).forEach(function (id) { ids[id] = true; });
+
+    function amount_(value) {
+      const n = Number(value);
+      return Number.isFinite(n) ? n : 0;
+    }
+
+    function rounded_(value) {
+      return Math.round(amount_(value) * 100) / 100;
+    }
+
+    function metrics_(row) {
+      if (!row) return {
+        salary: 0, total_deductions: 0, total_overtime: 0,
+        basic_salary: 0, allow: 0, working_days: 0, working_days_value: 0,
+        deduction_day_value: 0, loans_other_deductions: 0, delay_deductions: 0,
+        overtime_days: 0, overtime_days_value: 0, other_addition: 0,
+        rounding_adjustment: 0
+      };
+      const net = amount_(row.net_salary);
+      const salary = row.net_salary_nearest !== '' && row.net_salary_nearest != null
+        ? amount_(row.net_salary_nearest) : net;
+      return {
+        salary: rounded_(salary),
+        total_deductions: rounded_(amount_(row.loans_other_deductions) + amount_(row.delay_deductions) + amount_(row.deduction_day_value)),
+        total_overtime: rounded_(amount_(row.overtime_days_value) + amount_(row.other_addition)),
+        basic_salary: rounded_(row.basic_salary),
+        allow: rounded_(row.allow),
+        working_days: rounded_(row.working_days),
+        working_days_value: rounded_(row.working_days_value),
+        deduction_day_value: rounded_(row.deduction_day_value),
+        loans_other_deductions: rounded_(row.loans_other_deductions),
+        delay_deductions: rounded_(row.delay_deductions),
+        overtime_days: rounded_(row.overtime_days),
+        overtime_days_value: rounded_(row.overtime_days_value),
+        other_addition: rounded_(row.other_addition),
+        rounding_adjustment: rounded_(salary - net)
+      };
+    }
+
+    function amountText_(value) {
+      return Math.abs(rounded_(value)).toFixed(2);
+    }
+
+    function changeText_(label, current, previous) {
+      const difference = rounded_(current - previous);
+      if (Math.abs(difference) < 0.005) return '';
+      return (difference > 0 ? 'زيادة ' : 'انخفاض ') + label + ' بمقدار ' + amountText_(difference);
+    }
+
+    function justification_(currentRow, previousRow, current, previous) {
+      if (!previousRow) return 'لا توجد بيانات للشهر السابق؛ الموظف جديد في الكشف أو لم يتم توليد راتبه سابقاً.';
+      if (!currentRow) return 'لا توجد بيانات للموظف في الشهر المختار، بينما كان له راتب في الشهر السابق.';
+      const parts = [];
+      if (Math.abs(current.basic_salary - previous.basic_salary) >= 0.005) {
+        parts.push('تغير الراتب الأساسي من ' + amountText_(previous.basic_salary) + ' إلى ' + amountText_(current.basic_salary));
+      }
+      if (Math.abs(current.allow - previous.allow) >= 0.005) {
+        parts.push('تغير البدلات من ' + amountText_(previous.allow) + ' إلى ' + amountText_(current.allow));
+      }
+      if (Math.abs(current.working_days - previous.working_days) >= 0.005) {
+        parts.push('تغيرت أيام العمل من ' + amountText_(previous.working_days) + ' إلى ' + amountText_(current.working_days));
+      }
+      if (Math.abs(current.overtime_days - previous.overtime_days) >= 0.005) {
+        parts.push('تغيرت أيام الإضافي من ' + amountText_(previous.overtime_days) + ' إلى ' + amountText_(current.overtime_days));
+      }
+      [
+        ['قيمة أيام العمل', current.working_days_value, previous.working_days_value],
+        ['قيمة العمل الإضافي', current.overtime_days_value, previous.overtime_days_value],
+        ['الإضافات الأخرى', current.other_addition, previous.other_addition],
+        ['خصم الغياب', current.deduction_day_value, previous.deduction_day_value],
+        ['خصومات السلف والجزاء والخصومات الأخرى', current.loans_other_deductions, previous.loans_other_deductions],
+        ['خصم التأخير', current.delay_deductions, previous.delay_deductions],
+        ['فرق التقريب', current.rounding_adjustment, previous.rounding_adjustment]
+      ].forEach(function (item) {
+        const text = changeText_(item[0], item[1], item[2]);
+        if (text) parts.push(text);
+      });
+      return parts.length ? parts.join('؛ ') + '.' : 'لا يوجد تغيير في مكونات الراتب.';
+    }
+
+    const rows = Object.keys(ids).sort(function (a, b) {
+      const na = Number(a); const nb = Number(b);
+      if (Number.isFinite(na) && Number.isFinite(nb)) return na - nb;
+      return a.localeCompare(b);
+    }).map(function (empId) {
+      const currentRow = currentMap[empId] || null;
+      const previousRow = previousMap[empId] || null;
+      const current = metrics_(currentRow);
+      const previous = metrics_(previousRow);
+      const name = (currentRow && currentRow.name_ar) || (previousRow && previousRow.name_ar) || employeeNames[Number(empId)] || ('#' + empId);
+      return {
+        emp_id: empId,
+        name_ar: name,
+        has_current: !!currentRow,
+        has_previous: !!previousRow,
+        current: current,
+        previous: previous,
+        difference: {
+          salary: rounded_(current.salary - previous.salary),
+          total_deductions: rounded_(current.total_deductions - previous.total_deductions),
+          total_overtime: rounded_(current.total_overtime - previous.total_overtime)
+        },
+        justification: justification_(currentRow, previousRow, current, previous)
+      };
+    });
+
+    function totals_(key) {
+      return rows.reduce(function (total, row) {
+        total.salary += row[key].salary;
+        total.total_deductions += row[key].total_deductions;
+        total.total_overtime += row[key].total_overtime;
+        return total;
+      }, { salary: 0, total_deductions: 0, total_overtime: 0 });
+    }
+
+    function monthLabel_(value) {
+      const found = HR_MONTHS.find(function (m) { return Number(m.value) === Number(value); });
+      return found ? found.label : String(value);
+    }
+
+    const currentTotals = totals_('current');
+    const previousTotals = totals_('previous');
+    return {
+      status: 'success',
+      selected_period: { month: month, year: year, label: monthLabel_(month) + ' ' + year },
+      previous_period: { month: previousMonth, year: previousYear, label: monthLabel_(previousMonth) + ' ' + previousYear },
+      rows: rows,
+      summary: {
+        current: currentTotals,
+        previous: previousTotals,
+        difference: {
+          salary: rounded_(currentTotals.salary - previousTotals.salary),
+          total_deductions: rounded_(currentTotals.total_deductions - previousTotals.total_deductions),
+          total_overtime: rounded_(currentTotals.total_overtime - previousTotals.total_overtime)
+        }
+      }
     };
   }
 
@@ -6503,6 +6762,7 @@ const valueMap = {};
   register('add_carton_size_files', addCartonSizeFiles_);
   register('get_employees', getEmployees_);
   register('add_employee', addEmployee_);
+  register('edit_employee', editEmployee_);
   register('get_employee_status', getEmployeeStatus_);
   register('add_employee_status', addEmployeeStatus_);
   register('get_employee_salary', getEmployeeSalary_);
@@ -6514,6 +6774,7 @@ const valueMap = {};
   register('get_emp_overtime', getEmpOvertime_);
   register('add_emp_overtime', addEmpOvertime_);
   register('get_emp_salaries', getEmpSalaries_);
+  register('get_emp_salary_comparison', getEmpSalaryComparison_);
   register('add_emp_salaries', addEmpSalaries_);
   register('edit_emp_salary', editEmpSalary_);
   register('delete_emp_salary', deleteEmpSalary_);
@@ -7149,6 +7410,77 @@ const valueMap = {};
     return dbProductLiveWarehouseQuantities_(data || {}, user);
   }
 
+  /* Super-admin-only, read-only connection probe. It deliberately bypasses
+   * every application cache and opens the same request-owned JDBC connection
+   * used by production reads. SELECT 1 isolates connection/authentication from
+   * business SQL; the session-status query proves whether this exact Apps
+   * Script connection negotiated TLS. */
+  function getMysqlConnectionProbe_(data, user) {
+    if (!user || !user.isSuperAdmin) throw new Error('اختبار اتصال MySQL متاح للمسؤول الأعلى فقط');
+    var started = Date.now(), tracker = _mysqlRequest_;
+    var before = tracker ? {
+      connection: tracker.connectionMs,
+      sql: tracker.sqlMs,
+      read: tracker.readMs,
+      rows: tracker.rows
+    } : null;
+    var conn, selectStmt, selectRs, tlsStmt, tlsRs;
+    var connectMs = 0, selectSqlMs = 0, selectReadMs = 0;
+    var tlsSqlMs = 0, tlsReadMs = 0, sslCipher = '';
+    try {
+      var phase = Date.now();
+      conn = dbGetConnection_();
+      connectMs = Date.now() - phase;
+
+      selectStmt = conn.prepareStatement('SELECT 1 AS `ok`');
+      phase = Date.now();
+      selectRs = selectStmt.executeQuery();
+      selectSqlMs = Date.now() - phase;
+      phase = Date.now();
+      if (!selectRs.next() || Number(selectRs.getInt('ok')) !== 1) throw new Error('MySQL SELECT 1 probe failed');
+      selectReadMs = Date.now() - phase;
+      selectRs.close(); selectRs = null;
+      selectStmt.close(); selectStmt = null;
+
+      tlsStmt = conn.createStatement();
+      phase = Date.now();
+      tlsRs = tlsStmt.executeQuery("SHOW SESSION STATUS LIKE 'Ssl_cipher'");
+      tlsSqlMs = Date.now() - phase;
+      phase = Date.now();
+      if (tlsRs.next()) sslCipher = String(tlsRs.getString(2) || '');
+      tlsReadMs = Date.now() - phase;
+
+      var serverTotalMs = Date.now() - started;
+      var trackedConnectionMs = tracker && before ? tracker.connectionMs - before.connection : connectMs;
+      var trackedSqlMs = tracker && before ? tracker.sqlMs - before.sql : selectSqlMs + tlsSqlMs;
+      var trackedReadMs = tracker && before ? tracker.readMs - before.read : selectReadMs + tlsReadMs;
+      return {
+        status: 'ok',
+        probe_id: Utilities.getUuid(),
+        tls_active: sslCipher !== '',
+        ssl_cipher: sslCipher,
+        timing_ms: {
+          server_total: serverTotalMs,
+          connection: trackedConnectionMs,
+          select_1_sql: selectSqlMs,
+          select_1_read: selectReadMs,
+          tls_check_sql: tlsSqlMs,
+          tls_check_read: tlsReadMs,
+          tracked_sql_total: trackedSqlMs,
+          tracked_read_total: trackedReadMs,
+          server_unaccounted: Math.max(0, serverTotalMs - trackedConnectionMs - trackedSqlMs - trackedReadMs)
+        },
+        rows_read: tracker && before ? tracker.rows - before.rows : 2
+      };
+    } finally {
+      if (tlsRs) tlsRs.close();
+      if (tlsStmt) tlsStmt.close();
+      if (selectRs) selectRs.close();
+      if (selectStmt) selectStmt.close();
+      if (conn) conn.close();
+    }
+  }
+
   // Isolated tc_products_live experiment: fetch the full products table once
   // as a compact JSON aggregate. MySQL does the row serialization so Apps
   // Script avoids the slow JDBC per-cell loop. The client derives its dropdown
@@ -7231,6 +7563,7 @@ const valueMap = {};
     }
   }
   register('get_products_live_direct_test', getProductsLiveDirectTest_);
+  register('get_mysql_connection_probe', getMysqlConnectionProbe_);
 
   // ─── read-only production-capability view ────────────────────────────────
   // Rows are returned as supplied by the view. The adapter deliberately does
@@ -7542,6 +7875,452 @@ const valueMap = {};
   register('get_sales_capacity_catalog', getSalesCapacityCatalog_);
   register('save_product_live', saveProductLive_);
   register('delete_product_live', deleteProductLive_);
+
+  // ─── COO executive daily follow-up (read-only MySQL JSON snapshot) ───────
+  // COO_TEST is the fast materialized view created by coo_supply_plan_materialized.sql.
+  // The query deliberately returns one JSON aggregate instead of walking every
+  // JDBC row in Apps Script. mysqlRead_ then keeps the parsed response in the
+  // existing versioned, chunked CacheService layer for 120 seconds.
+  var DB_EXECUTIVE_FOLLOWUP_LIMIT_ = 5000;
+  var DB_EXECUTIVE_FOLLOWUP_TTL_ = 120;
+  var DB_EXECUTIVE_FOLLOWUP_FIELDS_ = [
+    'supply_type', 'item_role', 'plan_year', 'item_id', 'item_name',
+    'category_id', 'category_name', 'is_raw_material', 'has_bom',
+    'sales_history_years', 'last_sales_year', 'weighted_sales_average_qty',
+    'forecast_this_year_qty', 'sales_actual_this_year_qty',
+    'forecast_next_year_qty', 'forecast_growth_next_year_pct',
+    'manufacture_history_years', 'last_manufacture_year',
+    'average_manufactured_qty', 'parent_product_count',
+    'average_unit_ratio_from_parent', 'direct_need_qty', 'dependent_need_qty',
+    'total_need_qty', 'current_stock_qty', 'safety_stock_qty',
+    'lead_time_demand_qty', 'stock_coverage_days',
+    'dependent_demand_share_pct', 'suggested_make_qty', 'suggested_buy_qty',
+    'uncovered_qty_before_action', 'abc_class', 'decision_confidence',
+    'decision_status', 'decision_explanation', 'next_plan_year',
+    'next_year_direct_need_qty', 'next_year_dependent_need_qty',
+    'next_year_total_need_qty', 'next_year_suggested_make_qty',
+    'next_year_suggested_buy_qty'
+  ];
+  var DB_EXECUTIVE_FOLLOWUP_NUMERIC_ = {};
+  [
+    'plan_year', 'item_id', 'category_id', 'is_raw_material', 'has_bom',
+    'sales_history_years', 'last_sales_year', 'weighted_sales_average_qty',
+    'forecast_this_year_qty', 'sales_actual_this_year_qty',
+    'forecast_next_year_qty', 'forecast_growth_next_year_pct',
+    'manufacture_history_years', 'last_manufacture_year',
+    'average_manufactured_qty', 'parent_product_count',
+    'average_unit_ratio_from_parent', 'direct_need_qty', 'dependent_need_qty',
+    'total_need_qty', 'current_stock_qty', 'safety_stock_qty',
+    'lead_time_demand_qty', 'stock_coverage_days',
+    'dependent_demand_share_pct', 'suggested_make_qty', 'suggested_buy_qty',
+    'uncovered_qty_before_action', 'next_plan_year',
+    'next_year_direct_need_qty', 'next_year_dependent_need_qty',
+    'next_year_total_need_qty', 'next_year_suggested_make_qty',
+    'next_year_suggested_buy_qty'
+  ].forEach(function (key) { DB_EXECUTIVE_FOLLOWUP_NUMERIC_[key] = true; });
+
+  function dbExecutiveFollowupParseJson_(raw, expectedRows) {
+    var started = Date.now();
+    var parsed = JSON.parse(String(raw || '[]'));
+    if (!Array.isArray(parsed) || parsed.length !== expectedRows || parsed.length > DB_EXECUTIVE_FOLLOWUP_LIMIT_) {
+      throw new Error('COO follow-up MySQL JSON aggregate is invalid');
+    }
+    parsed.sort(function (a, b) { return Number(a && a._row_num) - Number(b && b._row_num); });
+    for (var i = 0; i < parsed.length; i++) {
+      if (!parsed[i] || typeof parsed[i] !== 'object' || Array.isArray(parsed[i]) || Number(parsed[i]._row_num) !== i + 1) {
+        throw new Error('COO follow-up MySQL JSON order is invalid');
+      }
+      delete parsed[i]._row_num;
+    }
+    if (typeof _mysqlRequest_ !== 'undefined' && _mysqlRequest_) {
+      _mysqlRequest_.jsonParseMs = (_mysqlRequest_.jsonParseMs || 0) + Date.now() - started;
+    }
+    return parsed.map(function (row) {
+      var clean = {};
+      DB_EXECUTIVE_FOLLOWUP_FIELDS_.forEach(function (key) {
+        var value = row[key];
+        if (DB_EXECUTIVE_FOLLOWUP_NUMERIC_[key]) {
+          clean[key] = value === null || value === undefined || value === '' ? null : Number(value);
+          if (clean[key] !== null && !Number.isFinite(clean[key])) clean[key] = null;
+        } else {
+          clean[key] = value === null || value === undefined ? '' : String(value);
+        }
+      });
+      return clean;
+    });
+  }
+
+  function dbExecutiveFollowup_(data, user) {
+    if (typeof mysqlRead_ === 'function' && !mysqlReading_('tc.dbExecutiveFollowup_')) {
+      return mysqlRead_(mysqlTcDefinition_('dbExecutiveFollowup_'), data,
+        function (p) { return dbExecutiveFollowup_(p, user); });
+    }
+    var p = data || {};
+    var conn, stmt, rs;
+    var fieldsSql = DB_EXECUTIVE_FOLLOWUP_FIELDS_.map(function (key) { return '`' + key + '`'; }).join(', ');
+    var jsonArgs = ["'_row_num', `_row_num`"];
+    DB_EXECUTIVE_FOLLOWUP_FIELDS_.forEach(function (key) {
+      jsonArgs.push("'" + key + "', `" + key + "`");
+    });
+    var orderSql = "CASE WHEN `decision_status` = 'ACTION_REQUIRED' THEN 0 ELSE 1 END, COALESCE(`suggested_make_qty`, 0) DESC, COALESCE(`suggested_buy_qty`, 0) DESC, `item_id` ASC";
+    var whereSql = p.year ? ' WHERE `plan_year` = ?' : ' WHERE `plan_year` = YEAR(CURDATE())';
+    var bind = p.year ? [Number(p.year)] : [];
+    var sql = 'SELECT COUNT(*) AS `row_count`, COALESCE(MAX(`total_count`), 0) AS `total_count`,' +
+      " COALESCE(MAX(`cache_refreshed_at`), '') AS `source_refreshed_at`," +
+      ' COALESCE(JSON_ARRAYAGG(JSON_OBJECT(' + jsonArgs.join(', ') + ')), JSON_ARRAY()) AS `rows_json`' +
+      ' FROM (' +
+        'SELECT `coo_page`.*, ROW_NUMBER() OVER (ORDER BY ' + orderSql + ') AS `_row_num`' +
+        ' FROM (' +
+          'SELECT ' + fieldsSql + ', `cache_refreshed_at`, COUNT(*) OVER() AS `total_count`' +
+          ' FROM `COO_TEST`' + whereSql +
+          ' ORDER BY ' + orderSql +
+          ' LIMIT ' + DB_EXECUTIVE_FOLLOWUP_LIMIT_ +
+        ') AS `coo_page`' +
+      ') AS `coo_ranked`';
+    try {
+      conn = dbGetConnection_();
+      stmt = conn.prepareStatement(sql);
+      dbBindParams_(stmt, bind);
+      rs = stmt.executeQuery();
+      var rowCount = 0, total = 0, rowsJson = '[]', sourceRefreshedAt = '';
+      if (rs.next()) {
+        rowCount = Number(rs.getString('row_count') || 0);
+        total = Number(rs.getString('total_count') || 0);
+        sourceRefreshedAt = String(rs.getString('source_refreshed_at') || '');
+        rowsJson = String(rs.getString('rows_json') || '[]');
+      }
+      var rows = dbExecutiveFollowupParseJson_(rowsJson, rowCount);
+      var truncated = total > DB_EXECUTIVE_FOLLOWUP_LIMIT_ || rowCount > DB_EXECUTIVE_FOLLOWUP_LIMIT_;
+      if (truncated) rows = rows.slice(0, DB_EXECUTIVE_FOLLOWUP_LIMIT_);
+      return {
+        status: 'ok', schema_version: 1, rows: rows, total: total,
+        truncated: truncated, source: 'MySQL COO_TEST',
+        source_refreshed_at: sourceRefreshedAt, served_at: Date.now(),
+        snapshot_ttl: DB_EXECUTIVE_FOLLOWUP_TTL_
+      };
+    } finally {
+      if (rs) rs.close();
+      if (stmt) stmt.close();
+      if (conn) conn.close();
+    }
+  }
+
+  function getExecutiveFollowup_(data, user) {
+    return readDiagnosticsForUser_(dbExecutiveFollowup_(data || {}, user), user);
+  }
+  register('get_executive_followup', getExecutiveFollowup_);
+
+  // Compact COO landing payload. This is intentionally separate from the
+  // detailed follow-up reader above: the landing page should load three small
+  // decision datasets, not hundreds of rows that a COO does not need first.
+  function dbExecutiveSummaryParseRankedJson_(raw, expectedRows, maxRows, label) {
+    var started = Date.now();
+    var parsed = JSON.parse(String(raw || '[]'));
+    if (!Array.isArray(parsed) || parsed.length !== expectedRows || parsed.length > maxRows) {
+      throw new Error((label || 'COO summary') + ' MySQL JSON aggregate is invalid');
+    }
+    parsed.sort(function (a, b) { return Number(a && a._row_num) - Number(b && b._row_num); });
+    for (var i = 0; i < parsed.length; i++) {
+      if (!parsed[i] || typeof parsed[i] !== 'object' || Array.isArray(parsed[i]) || Number(parsed[i]._row_num) !== i + 1) {
+        throw new Error((label || 'COO summary') + ' MySQL JSON order is invalid');
+      }
+      delete parsed[i]._row_num;
+    }
+    if (typeof _mysqlRequest_ !== 'undefined' && _mysqlRequest_) {
+      _mysqlRequest_.jsonParseMs = (_mysqlRequest_.jsonParseMs || 0) + Date.now() - started;
+    }
+    return parsed;
+  }
+
+  function dbExecutiveSummaryAggregate_(conn, sql, params, maxRows, label) {
+    var stmt, rs;
+    try {
+      stmt = conn.prepareStatement(sql);
+      dbBindParams_(stmt, params || []);
+      try {
+        rs = stmt.executeQuery();
+      } catch (queryError) {
+        throw new Error((label || 'COO summary') + ' failed: ' + String(queryError && queryError.message || queryError));
+      }
+      var rowCount = 0, rowsJson = '[]', sourceRefreshedAt = '', weekTotal = 0;
+      if (rs.next()) {
+        rowCount = Number(rs.getString('row_count') || 0);
+        rowsJson = String(rs.getString('rows_json') || '[]');
+        try { sourceRefreshedAt = String(rs.getString('source_refreshed_at') || ''); } catch (ignoreSource) {}
+        try { weekTotal = Number(rs.getString('week_total') || 0); } catch (ignoreTotal) {}
+      }
+      return {
+        rows: dbExecutiveSummaryParseRankedJson_(rowsJson, rowCount, maxRows, label),
+        source_refreshed_at: sourceRefreshedAt,
+        week_total: weekTotal
+      };
+    } finally {
+      if (rs) rs.close();
+      if (stmt) stmt.close();
+    }
+  }
+
+  function dbExecutiveSummaryDecisionSql_(type, limit) {
+    var isMake = type === 'MAKE';
+    var quantity = isMake ? 'suggested_make_qty' : 'suggested_buy_qty';
+    var json = [
+      "'_row_num', `_row_num`", "'rank_no', `_row_num`", "'item_id', `item_id`", "'item_name', `item_name`",
+      "'suggested_qty', `suggested_qty`", "'total_need_qty', `total_need_qty`",
+      "'direct_need_qty', `direct_need_qty`", "'dependent_need_qty', `dependent_need_qty`",
+      "'current_stock_qty', `current_stock_qty`", "'safety_stock_qty', `safety_stock_qty`",
+      "'stock_coverage_days', `stock_coverage_days`", "'lead_time_demand_qty', `lead_time_demand_qty`",
+      "'weighted_sales_average_qty', `weighted_sales_average_qty`", "'forecast_this_year_qty', `forecast_this_year_qty`",
+      "'sales_actual_this_year_qty', `sales_actual_this_year_qty`",
+      "'sales_history_years', `sales_history_years`", "'last_sales_year', `last_sales_year`",
+      "'manufacture_history_years', `manufacture_history_years`", "'average_manufactured_qty', `average_manufactured_qty`",
+      "'decision_confidence', `decision_confidence`", "'decision_explanation', `decision_explanation`"
+    ];
+    return 'SELECT COUNT(*) AS `row_count`,' +
+      " COALESCE(MAX(`source_refreshed_at`), '') AS `source_refreshed_at`," +
+      ' COALESCE(JSON_ARRAYAGG(JSON_OBJECT(' + json.join(', ') + ')), JSON_ARRAY()) AS `rows_json`' +
+      ' FROM (' +
+        'SELECT `top_page`.*, ROW_NUMBER() OVER (ORDER BY `suggested_qty` DESC, `item_id` ASC) AS `_row_num`' +
+        ' FROM (' +
+          'SELECT `candidate`.* FROM (' +
+            'SELECT `c`.`item_id`, `c`.`item_name`, `c`.`' + quantity + '` AS `suggested_qty`,' +
+              ' `c`.`total_need_qty`, `c`.`direct_need_qty`, `c`.`dependent_need_qty`,' +
+              ' `c`.`current_stock_qty`, `c`.`safety_stock_qty`, `c`.`stock_coverage_days`, `c`.`lead_time_demand_qty`,' +
+              ' `c`.`weighted_sales_average_qty`, `c`.`forecast_this_year_qty`,' +
+              ' `c`.`sales_actual_this_year_qty`, `c`.`sales_history_years`, `c`.`last_sales_year`,' +
+              ' `c`.`manufacture_history_years`, `c`.`average_manufactured_qty`,' +
+              ' `c`.`decision_confidence`, `c`.`decision_explanation`,' +
+              ' `c`.`cache_refreshed_at` AS `source_refreshed_at`,' +
+              ' ROW_NUMBER() OVER (PARTITION BY `c`.`item_id` ORDER BY `c`.`' + quantity + '` DESC, `c`.`last_sales_year` DESC, `c`.`item_id` ASC) AS `item_rank`' +
+            ' FROM `COO_TEST` `c`' +
+            " WHERE `c`.`plan_year` = YEAR(CURDATE()) AND `c`.`supply_type` = '" + type + "'" +
+            " AND `c`.`decision_status` = 'ACTION_REQUIRED' AND COALESCE(`c`.`" + quantity + "`, 0) > 0" +
+          ') AS `candidate` WHERE `candidate`.`item_rank` = 1' +
+          ' ORDER BY `candidate`.`suggested_qty` DESC, `candidate`.`item_id` ASC LIMIT ' + limit +
+        ') AS `top_page`' +
+      ') AS `ranked`';
+  }
+
+  function dbExecutiveSummaryComponents_(conn, parents) {
+    if (!parents.length) return [];
+    var parentPlan = parents.map(function () { return 'SELECT ? AS `parent_id`, ? AS `suggested_qty`'; }).join(' UNION ALL ');
+    var inMarks = parents.map(function () { return '?'; }).join(', ');
+    var parentParams = [];
+    parents.forEach(function (parent) {
+      parentParams.push(String(parent.item_id), Number(parent.suggested_qty) || 0);
+    });
+    var inParams = parents.map(function (parent) { return String(parent.item_id); });
+    var json = [
+      "'_row_num', `_row_num`", "'parent_id', `parent_id`", "'component_id', `component_id`", "'component_name', `component_name`",
+      "'unit_ratio', `unit_ratio`", "'required_qty', `required_qty`", "'current_qty', `current_qty`",
+      "'component_rank', `component_rank`"
+    ];
+    var sql = 'WITH `parent_plan` AS (' + parentPlan + '),' +
+      ' `usage_ratio` AS (' +
+        'SELECT `mh`.`product_id` AS `parent_id`, `mf`.`product_id` AS `component_id`,' +
+          ' SUM(CAST(`mf`.`productQuantity` AS DECIMAL(24,6))) / NULLIF(SUM(CAST(`mh`.`deliver_quantity` AS DECIMAL(24,6))), 0) AS `unit_ratio`' +
+        ' FROM `manufacture_headers` `mh` JOIN `manufacture_footers` `mf`' +
+          ' ON `mh`.`id` = `mf`.`manufacture_header_id`' +
+        ' WHERE `mh`.`product_id` IN (' + inMarks + ')' +
+          ' AND `mh`.`deleted_at` IS NULL AND `mh`.`deliver_quantity` <> 0' +
+          ' AND `mf`.`productQuantity` <> 0' +
+          " AND `mh`.`updated_at` < STR_TO_DATE(CONCAT(YEAR(CURDATE()), '-01-01'), '%Y-%m-%d')" +
+        ' GROUP BY `mh`.`product_id`, `mf`.`product_id`' +
+      '),' +
+      ' `component_page` AS (' +
+        'SELECT `pp`.`parent_id`, `ur`.`component_id`,' +
+          " COALESCE(`p`.`name_ar`, CONCAT('#', `ur`.`component_id`)) AS `component_name`," +
+          ' `ur`.`unit_ratio`,' +
+          ' (`pp`.`suggested_qty` * `ur`.`unit_ratio`) AS `required_qty`,' +
+          ' COALESCE(`pc`.`current_qty`, 0) AS `current_qty`,' +
+          ' ROW_NUMBER() OVER (PARTITION BY `pp`.`parent_id` ORDER BY (`pp`.`suggested_qty` * `ur`.`unit_ratio`) DESC, `ur`.`component_id` ASC) AS `component_rank`' +
+        ' FROM `usage_ratio` `ur` JOIN `parent_plan` `pp` ON `pp`.`parent_id` = `ur`.`parent_id`' +
+        ' LEFT JOIN `products` `p` ON `p`.`id` = `ur`.`component_id`' +
+          ' LEFT JOIN `product_current_quantity` `pc` ON `pc`.`id` = `ur`.`component_id`' +
+      '),' +
+      ' `limited` AS (SELECT * FROM `component_page` WHERE `component_rank` <= 5)' +
+      ' SELECT COUNT(*) AS `row_count`, COALESCE(JSON_ARRAYAGG(JSON_OBJECT(' + json.join(', ') + ')), JSON_ARRAY()) AS `rows_json`' +
+      ' FROM (' +
+        'SELECT `limited`.*, ROW_NUMBER() OVER (ORDER BY `parent_id` ASC, `component_rank` ASC, `component_id` ASC) AS `_row_num`' +
+        ' FROM `limited`' +
+      ') AS `ranked`';
+    var result = dbExecutiveSummaryAggregate_(conn, sql, parentParams.concat(inParams), 250, 'COO component summary');
+    return result.rows.map(function (row) {
+      return {
+        parent_id: String(row.parent_id || ''),
+        component_id: row.component_id == null ? null : Number(row.component_id),
+        component_name: String(row.component_name || ''),
+        unit_ratio: Number(row.unit_ratio) || 0,
+        required_qty: Number(row.required_qty) || 0,
+        current_qty: Number(row.current_qty) || 0,
+        component_rank: Number(row.component_rank) || 0
+      };
+    });
+  }
+
+  function dbExecutiveSummaryExpensesSql_() {
+    return 'SELECT COUNT(*) AS `row_count`, COALESCE(SUM(`expense_day_amount`), 0) AS `week_total`,' +
+      ' COALESCE(JSON_ARRAYAGG(JSON_OBJECT(' +
+        "'_row_num', `_row_num`, 'day', `expense_day`, 'amount', `expense_day_amount`, 'moves', `move_count`" +
+      ')), JSON_ARRAY()) AS `rows_json`' +
+      ' FROM (' +
+        'SELECT `daily`.*, ROW_NUMBER() OVER (ORDER BY `expense_day` ASC) AS `_row_num`' +
+        ' FROM (' +
+          'SELECT DATE(`transaction_date`) AS `expense_day`,' +
+            ' SUM(CAST(COALESCE(`transaction_amount`, 0) AS DECIMAL(24,6))) AS `expense_day_amount`,' +
+            ' COUNT(*) AS `move_count`' +
+          ' FROM `regular_box_movement`' +
+          " WHERE `transaction_type` = 'credit'" +
+            ' AND `transaction_date` >= DATE_SUB(CURDATE(), INTERVAL WEEKDAY(CURDATE()) DAY)' +
+            ' AND `transaction_date` < DATE_ADD(CURDATE(), INTERVAL 1 DAY)' +
+          ' GROUP BY DATE(`transaction_date`)' +
+          ' ORDER BY `expense_day` ASC' +
+        ') AS `daily`' +
+      ') AS `ranked`';
+  }
+
+  function dbExecutiveSummaryExpenseAccountsSql_() {
+    return 'WITH `weekly_accounts` AS (' +
+        'SELECT TRIM(COALESCE(`chart_of_accounts`, \'\')) AS `account_code`,' +
+          ' SUM(CAST(COALESCE(`transaction_amount`, 0) AS DECIMAL(24,6))) AS `account_amount`,' +
+          ' COUNT(*) AS `move_count`' +
+        ' FROM `regular_box_movement`' +
+        " WHERE `transaction_type` = 'credit'" +
+          ' AND `transaction_date` >= DATE_SUB(CURDATE(), INTERVAL WEEKDAY(CURDATE()) DAY)' +
+          ' AND `transaction_date` < DATE_ADD(CURDATE(), INTERVAL 1 DAY)' +
+          ' AND TRIM(COALESCE(`chart_of_accounts`, \'\')) <> \'\'' +
+        ' GROUP BY TRIM(COALESCE(`chart_of_accounts`, \'\'))' +
+      '), `account_labels` AS (' +
+        'SELECT TRIM(CAST(`id_5` AS CHAR)) AS `account_code`,' +
+          ' MAX(NULLIF(TRIM(`account_5_name`), \'\')) AS `account_name`' +
+        ' FROM `chart_of_accounts_main` WHERE `id_5` IS NOT NULL' +
+        ' GROUP BY TRIM(CAST(`id_5` AS CHAR))' +
+      '), `account_page` AS (' +
+        'SELECT `w`.`account_code`,' +
+          ' COALESCE(`l`.`account_name`, CONCAT(\'Account \', `w`.`account_code`)) AS `account_name`,' +
+          ' `w`.`account_amount`, `w`.`move_count`,' +
+          ' CASE WHEN SUM(`w`.`account_amount`) OVER () = 0 THEN 0' +
+            ' ELSE (`w`.`account_amount` * 100.0 / SUM(`w`.`account_amount`) OVER ()) END AS `share_pct`' +
+        ' FROM `weekly_accounts` `w` LEFT JOIN `account_labels` `l`' +
+          ' ON `l`.`account_code` = `w`.`account_code`' +
+        ' ORDER BY `w`.`account_amount` DESC, `w`.`account_code` ASC LIMIT 12' +
+      ')' +
+      ' SELECT COUNT(*) AS `row_count`,' +
+        ' COALESCE(JSON_ARRAYAGG(JSON_OBJECT(' +
+          "'_row_num', `_row_num`, 'account_code', `account_code`, 'account_name', `account_name`," +
+          " 'amount', `account_amount`, 'moves', `move_count`, 'share_pct', `share_pct`" +
+        ')), JSON_ARRAY()) AS `rows_json`' +
+      ' FROM (' +
+        'SELECT `account_page`.*, ROW_NUMBER() OVER (ORDER BY `account_amount` DESC, `account_code` ASC) AS `_row_num`' +
+        ' FROM `account_page`' +
+      ') AS `ranked`';
+  }
+
+  function dbExecutiveSummary_(data, user) {
+    if (typeof mysqlRead_ === 'function' && !mysqlReading_('tc.dbExecutiveSummary_')) {
+      return mysqlRead_(mysqlTcDefinition_('dbExecutiveSummary_'), data,
+        function (p) { return dbExecutiveSummary_(p, user); });
+    }
+    var conn, makeAgg, buyAgg, expenseAgg, expenseAccountAgg, components;
+    try {
+      conn = dbGetConnection_();
+      makeAgg = dbExecutiveSummaryAggregate_(conn, dbExecutiveSummaryDecisionSql_('MAKE', 15), [], 15, 'COO manufacturing summary');
+      var manufacturing = makeAgg.rows.map(function (row) {
+        return {
+          rank: Number(row.rank_no) || 0,
+          item_id: row.item_id == null ? null : Number(row.item_id),
+          item_name: String(row.item_name || ''),
+          suggested_qty: Number(row.suggested_qty) || 0,
+          total_need_qty: Number(row.total_need_qty) || 0,
+          direct_need_qty: Number(row.direct_need_qty) || 0,
+          dependent_need_qty: Number(row.dependent_need_qty) || 0,
+          current_stock_qty: Number(row.current_stock_qty) || 0,
+          safety_stock_qty: Number(row.safety_stock_qty) || 0,
+          stock_coverage_days: row.stock_coverage_days == null ? null : Number(row.stock_coverage_days),
+          lead_time_demand_qty: Number(row.lead_time_demand_qty) || 0,
+          weighted_sales_average_qty: Number(row.weighted_sales_average_qty) || 0,
+          forecast_this_year_qty: Number(row.forecast_this_year_qty) || 0,
+          sales_actual_this_year_qty: Number(row.sales_actual_this_year_qty) || 0,
+          sales_history_years: Number(row.sales_history_years) || 0,
+          last_sales_year: Number(row.last_sales_year) || 0,
+          manufacture_history_years: Number(row.manufacture_history_years) || 0,
+          average_manufactured_qty: Number(row.average_manufactured_qty) || 0,
+          decision_confidence: String(row.decision_confidence || ''),
+          decision_explanation: String(row.decision_explanation || ''),
+          components: []
+        };
+      });
+      components = dbExecutiveSummaryComponents_(conn, manufacturing);
+      var componentsByParent = {};
+      components.forEach(function (component) {
+        (componentsByParent[component.parent_id] = componentsByParent[component.parent_id] || []).push(component);
+      });
+      manufacturing.forEach(function (parent) {
+        parent.components = componentsByParent[String(parent.item_id)] || [];
+      });
+
+      buyAgg = dbExecutiveSummaryAggregate_(conn, dbExecutiveSummaryDecisionSql_('BUY', 15), [], 15, 'COO purchasing summary');
+      var purchasing = buyAgg.rows.map(function (row) {
+        return {
+          rank: Number(row.rank_no) || 0,
+          item_id: row.item_id == null ? null : Number(row.item_id),
+          item_name: String(row.item_name || ''),
+          suggested_qty: Number(row.suggested_qty) || 0,
+          total_need_qty: Number(row.total_need_qty) || 0,
+          direct_need_qty: Number(row.direct_need_qty) || 0,
+          dependent_need_qty: Number(row.dependent_need_qty) || 0,
+          current_stock_qty: Number(row.current_stock_qty) || 0,
+          safety_stock_qty: Number(row.safety_stock_qty) || 0,
+          stock_coverage_days: row.stock_coverage_days == null ? null : Number(row.stock_coverage_days),
+          lead_time_demand_qty: Number(row.lead_time_demand_qty) || 0,
+          weighted_sales_average_qty: Number(row.weighted_sales_average_qty) || 0,
+          forecast_this_year_qty: Number(row.forecast_this_year_qty) || 0,
+          sales_actual_this_year_qty: Number(row.sales_actual_this_year_qty) || 0,
+          sales_history_years: Number(row.sales_history_years) || 0,
+          last_sales_year: Number(row.last_sales_year) || 0,
+          manufacture_history_years: Number(row.manufacture_history_years) || 0,
+          average_manufactured_qty: Number(row.average_manufactured_qty) || 0,
+          decision_confidence: String(row.decision_confidence || ''),
+          decision_explanation: String(row.decision_explanation || '')
+        };
+      });
+      expenseAgg = dbExecutiveSummaryAggregate_(conn, dbExecutiveSummaryExpensesSql_(), [], 7, 'COO weekly expense summary');
+      var weeklyExpenses = expenseAgg.rows.map(function (row) {
+        return {
+          day: String(row.day || ''),
+          amount: Number(row.amount) || 0,
+          moves: Number(row.moves) || 0
+        };
+      });
+      expenseAccountAgg = dbExecutiveSummaryAggregate_(conn, dbExecutiveSummaryExpenseAccountsSql_(), [], 12, 'COO weekly expense account summary');
+      var weeklyExpenseAccounts = expenseAccountAgg.rows.map(function (row) {
+        return {
+          account_code: String(row.account_code || ''),
+          account_name: String(row.account_name || ''),
+          amount: Number(row.amount) || 0,
+          moves: Number(row.moves) || 0,
+          share_pct: Number(row.share_pct) || 0
+        };
+      });
+      return {
+        status: 'ok', schema_version: 2,
+        source: 'MySQL COO_TEST + manufacture history + regular_box_movement + chart_of_accounts_main',
+        source_refreshed_at: makeAgg.source_refreshed_at || buyAgg.source_refreshed_at || '',
+        generated_at: Date.now(),
+        manufacturing: manufacturing,
+        purchasing: purchasing,
+        weekly_expenses: weeklyExpenses,
+        weekly_expense_accounts: weeklyExpenseAccounts,
+        weekly_expense_total: Number(expenseAgg.week_total) || 0
+      };
+    } finally {
+      if (conn) conn.close();
+    }
+  }
+
+  function getExecutiveFollowupSummary_(data, user) {
+    return readDiagnosticsForUser_(dbExecutiveSummary_(data || {}, user), user);
+  }
+  register('get_executive_followup_summary', getExecutiveFollowupSummary_);
 
   // Financial ratios page: shared selectable periods for sales, returns and
   // the income-statement view; every query below is read-only.
@@ -11805,6 +12584,66 @@ const valueMap = {};
   //   admin_approved_at, created_at, updated_at, deleted_at, is_revised.
   // manufacture_footers (9 cols): id, manufacture_header_id, product_id,
   //   product_code, productUnit, productQuantity, created_at, updated_at, warehouse_id.
+
+  var DB_MANUFACTURE_HEADER_COLUMNS = [
+    'id', 'user_id', 'user_type', 'name_ar', 'expected_quantity',
+    'deliver_quantity', 'is_product', 'product_id', 'status',
+    'manufacture_number', 'manufacture_delivery_number', 'admin_approved',
+    'admin_approved_at', 'created_at', 'updated_at', 'deleted_at', 'is_revised'
+  ];
+  var DB_MANUFACTURE_FOOTER_COLUMNS = [
+    'id', 'manufacture_header_id', 'product_id', 'product_code',
+    'productUnit', 'productQuantity', 'created_at', 'updated_at', 'warehouse_id'
+  ];
+  var DB_MANUFACTURE_FOOTER_JOIN_COLUMNS = [
+    'product_name_ar', 'product_code_ref', 'product_unit_ref'
+  ];
+
+  /* JSON_ARRAYAGG does not guarantee element order. Carry a row number inside
+     the JSON payload, validate the complete aggregate, then restore the same
+     order that the old JDBC loop returned. */
+  function dbManufactureParseRankedJson_(raw, expectedRows, maxRows, label) {
+    var started = Date.now();
+    var parsed = JSON.parse(String(raw || '[]'));
+    if (!Array.isArray(parsed) || parsed.length !== expectedRows || parsed.length > maxRows) {
+      throw new Error((label || 'Manufacture') + ' MySQL aggregate is invalid');
+    }
+    parsed.sort(function (a, b) { return Number(a && a._row_num) - Number(b && b._row_num); });
+    for (var i = 0; i < parsed.length; i++) {
+      if (!parsed[i] || typeof parsed[i] !== 'object' || Array.isArray(parsed[i]) || Number(parsed[i]._row_num) !== i + 1) {
+        throw new Error((label || 'Manufacture') + ' MySQL aggregate order is invalid');
+      }
+      delete parsed[i]._row_num;
+    }
+    if (typeof _mysqlRequest_ !== 'undefined' && _mysqlRequest_) {
+      _mysqlRequest_.jsonParseMs = (_mysqlRequest_.jsonParseMs || 0) + Date.now() - started;
+    }
+    return parsed;
+  }
+
+  function dbManufactureJsonField_(alias, column) {
+    var ident = dbSanitizeIdentifier_(alias) + '.' + dbSanitizeIdentifier_(column);
+    return 'CASE WHEN ' + ident + ' IS NULL THEN NULL ELSE CAST(' + ident + ' AS CHAR) END';
+  }
+
+  function dbManufactureJsonArgs_(alias, columns) {
+    var args = ["'_row_num', " + dbSanitizeIdentifier_(alias) + '._row_num'];
+    columns.forEach(function (column) {
+      args.push("'" + column.replace(/'/g, "''") + "'");
+      args.push(dbManufactureJsonField_(alias, column));
+    });
+    return args;
+  }
+
+  function dbManufactureReadJsonRows_(raw, expectedRows, maxRows, columns, label) {
+    return dbManufactureParseRankedJson_(raw, expectedRows, maxRows, label).map(function (item) {
+      var row = {};
+      columns.forEach(function (column) {
+        row[column] = item[column] == null ? null : String(item[column]);
+      });
+      return row;
+    });
+  }
   
   /**
    * Paginated / full list of manufacture_headers.
@@ -11819,35 +12658,39 @@ const valueMap = {};
     
     data = data || {};
     var loadAll = !!(data.loadAll === true || data.loadAll === 'true' || data.loadAll === '1' || data.loadAll === 1);
-    var limit  = loadAll ? 1000 : Math.min(Math.max(Number(data.limit)  || 20, 1), 1000);
-    var offset = Math.max(Number(data.offset) || 0, 0);
-    var conn, countStmt, countRs, stmt, rs;
+    var limit  = loadAll ? 1000 : Math.min(Math.max(Math.floor(Number(data.limit) || 20), 1), 1000);
+    var offset = Math.max(Math.floor(Number(data.offset) || 0), 0);
+    var headerArgs = dbManufactureJsonArgs_('ranked', DB_MANUFACTURE_HEADER_COLUMNS.concat(['product_label']));
+    var headerSelect = DB_MANUFACTURE_HEADER_COLUMNS.map(function (column) {
+      return '`h`.`' + column.replace(/`/g, '``') + '`';
+    }).join(', ') + ', `p`.`name_ar` AS `product_label`';
+    var aggregateSql =
+      'SELECT (SELECT COUNT(*) FROM `manufacture_headers` `hc` WHERE `hc`.`deleted_at` IS NULL) AS `total_count`,' +
+      ' COUNT(*) AS `row_count`,' +
+      ' COALESCE(JSON_ARRAYAGG(JSON_OBJECT(' + headerArgs.join(',') + ')), JSON_ARRAY()) AS `rows_json`' +
+      ' FROM (' +
+        ' SELECT `page`.*, ROW_NUMBER() OVER (ORDER BY `page`.`id` DESC) AS `_row_num`' +
+        ' FROM (' +
+          ' SELECT ' + headerSelect +
+          ' FROM `manufacture_headers` `h`' +
+          ' LEFT JOIN `products` `p` ON `p`.`id` = `h`.`product_id`' +
+          ' WHERE `h`.`deleted_at` IS NULL' +
+          ' ORDER BY `h`.`id` DESC LIMIT ' + limit + ' OFFSET ' + offset +
+        ' ) AS `page`' +
+      ' ) AS `ranked`';
+    var conn, stmt, rs;
     try {
       conn = dbGetConnection_();
-      countStmt = conn.prepareStatement(
-        'SELECT COUNT(*) AS cnt FROM `manufacture_headers` WHERE `deleted_at` IS NULL'
-      );
-      countRs = countStmt.executeQuery();
-      var total = countRs.next() ? countRs.getInt('cnt') : 0;
-      // product_label lets the page show products.name_ar next to the raw product_id
-      // so the user can understand which item the order is for.
-      stmt = conn.prepareStatement(
-        'SELECT `h`.*, `p`.`name_ar` AS `product_label` FROM `manufacture_headers` `h`' +
-        ' LEFT JOIN `products` `p` ON `p`.`id` = `h`.`product_id`' +
-        ' WHERE `h`.`deleted_at` IS NULL' +
-        ' ORDER BY `h`.`id` DESC LIMIT ' + limit + ' OFFSET ' + offset
-      );
+      stmt = conn.prepareStatement(aggregateSql);
       rs = stmt.executeQuery();
-      var md = rs.getMetaData();
-      var colCount = md.getColumnCount();
-      var columns = [];
-      for (var c = 1; c <= colCount; c++) { columns.push(md.getColumnLabel(c) || md.getColumnName(c)); }
-      var rows = [];
-      while (rs.next()) {
-        var row = {};
-        for (var i = 1; i <= colCount; i++) { var v = rs.getObject(i); row[columns[i-1]] = v !== null ? String(v) : null; }
-        rows.push(row);
+      var total = 0, rowCount = 0, rowsJson = '[]';
+      if (rs.next()) {
+        total = Number(rs.getString('total_count') || 0);
+        rowCount = Number(rs.getString('row_count') || 0);
+        rowsJson = String(rs.getString('rows_json') || '[]');
       }
+      var columns = DB_MANUFACTURE_HEADER_COLUMNS.concat(['product_label']);
+      var rows = dbManufactureReadJsonRows_(rowsJson, rowCount, limit, columns, 'Manufacture headers');
       return { status: 'ok', columns: columns, rows: rows, total: total, limit: limit, offset: offset, loadedAll: loadAll };
     } catch (err) {
       Logger.log('dbManufactureList_ MySQL adapter completed or failed; see named diagnostics');
@@ -11855,8 +12698,6 @@ const valueMap = {};
     } finally {
       if (rs) rs.close();
       if (stmt) stmt.close();
-      if (countRs) countRs.close();
-      if (countStmt) countStmt.close();
       if (conn) conn.close();
     }
   }
@@ -11874,32 +12715,40 @@ const valueMap = {};
     data = data || {};
     var hid = String(data.manufacture_header_id !== null && data.manufacture_header_id !== undefined ? data.manufacture_header_id : '').trim();
     if (!hid) throw new Error('manufacture_header_id is required');
+    var footerColumns = DB_MANUFACTURE_FOOTER_COLUMNS.concat(DB_MANUFACTURE_FOOTER_JOIN_COLUMNS);
+    var footerArgs = dbManufactureJsonArgs_('ranked', footerColumns);
+    var footerSelect = DB_MANUFACTURE_FOOTER_COLUMNS.map(function (column) {
+      return '`f`.`' + column.replace(/`/g, '``') + '`';
+    }).join(', ') +
+      ', `p`.`name_ar` AS `product_name_ar`,' +
+      ' `p`.`code` AS `product_code_ref`,' +
+      ' `p`.`unit` AS `product_unit_ref`';
+    var aggregateSql =
+      'SELECT COUNT(*) AS `row_count`,' +
+      ' COALESCE(JSON_ARRAYAGG(JSON_OBJECT(' + footerArgs.join(',') + ')), JSON_ARRAY()) AS `rows_json`' +
+      ' FROM (' +
+        ' SELECT `page`.*, ROW_NUMBER() OVER (ORDER BY `page`.`id` ASC) AS `_row_num`' +
+        ' FROM (' +
+          ' SELECT ' + footerSelect +
+          ' FROM `manufacture_footers` `f`' +
+          ' LEFT JOIN `products` `p` ON `p`.`id` = `f`.`product_id`' +
+          ' WHERE `f`.`manufacture_header_id` = ?' +
+          ' ORDER BY `f`.`id` ASC' +
+        ' ) AS `page`' +
+      ' ) AS `ranked`';
     var conn, stmt, rs;
     try {
       conn = dbGetConnection_();
-      // product_name_ar / product_code_ref / product_unit_ref come from the
-      // products master so every inline shows the Arabic name next to the id.
-      // (product_code / productUnit stay the stored snapshot on the footer row.)
-      stmt = conn.prepareStatement(
-        'SELECT `f`.*, `p`.`name_ar` AS `product_name_ar`,' +
-        ' `p`.`code` AS `product_code_ref`, `p`.`unit` AS `product_unit_ref`' +
-        ' FROM `manufacture_footers` `f`' +
-        ' LEFT JOIN `products` `p` ON `p`.`id` = `f`.`product_id`' +
-        ' WHERE `f`.`manufacture_header_id` = ? ORDER BY `f`.`id` ASC'
-      );
+      stmt = conn.prepareStatement(aggregateSql);
       stmt.setObject(1, hid);
       rs = stmt.executeQuery();
-      var md = rs.getMetaData();
-      var colCount = md.getColumnCount();
-      var columns = [];
-      for (var c = 1; c <= colCount; c++) { columns.push(md.getColumnLabel(c) || md.getColumnName(c)); }
-      var rows = [];
-      while (rs.next()) {
-        var row = {};
-        for (var i = 1; i <= colCount; i++) { var v = rs.getObject(i); row[columns[i-1]] = v !== null ? String(v) : null; }
-        rows.push(row);
+      var rowCount = 0, rowsJson = '[]';
+      if (rs.next()) {
+        rowCount = Number(rs.getString('row_count') || 0);
+        rowsJson = String(rs.getString('rows_json') || '[]');
       }
-      return { status: 'ok', columns: columns, rows: rows, manufacture_header_id: hid };
+      var rows = dbManufactureReadJsonRows_(rowsJson, rowCount, rowCount, footerColumns, 'Manufacture footers');
+      return { status: 'ok', columns: footerColumns, rows: rows, manufacture_header_id: hid };
     } catch (err) {
       Logger.log('dbManufactureGetFooters_ MySQL adapter completed or failed; see named diagnostics');
       throw err;
@@ -12488,8 +13337,9 @@ const valueMap = {};
     }
   }
   
-  /* All warehouse balances of one product in a single indexed read, so the
-   * count form can resolve every warehouse pair locally after one RPC.
+  /* All warehouse balances of one product in one bounded JSON read. The page
+   * starts this only after the operator chooses a warehouse; returning the
+   * compact array lets the selected pair be ready while count entry continues.
    * Absent warehouses stay missing (never zero); duplicate pairs are an
    * explicit integrity error, same as the single-pair read. */
   function dbStockScanBalances_(data, user) {
@@ -12503,22 +13353,43 @@ const valueMap = {};
     var conn, stmt, rs;
     try {
       conn = dbGetConnection_();
-      stmt = conn.prepareStatement('SELECT `warehouse_id`, `current_qty` FROM `product_current_qty_warehouses` WHERE `id` = ? LIMIT 501');
+      stmt = conn.prepareStatement(
+        'SELECT COUNT(*) AS `row_count`, COALESCE(JSON_ARRAYAGG(JSON_OBJECT(' +
+        "'warehouse_id', CASE WHEN `b`.`warehouse_id` IS NULL THEN NULL ELSE CAST(`b`.`warehouse_id` AS CHAR) END," +
+        "'current_qty', CASE WHEN `b`.`current_qty` IS NULL THEN NULL ELSE CAST(`b`.`current_qty` AS CHAR) END" +
+        ')), JSON_ARRAY()) AS `balances_json` FROM (' +
+        ' SELECT `warehouse_id`, `current_qty` FROM `product_current_qty_warehouses` WHERE `id` = ? LIMIT 501' +
+        ') `b`'
+      );
       dbBindParams_(stmt, [allProductId]);
       rs = stmt.executeQuery();
+      var rowCount = 0, balancesJson = '[]';
+      if (rs.next()) {
+        rowCount = Number(rs.getString('row_count') || 0);
+        balancesJson = String(rs.getString('balances_json') || '[]');
+      }
+      if (!Number.isFinite(rowCount) || rowCount > 500) throw new Error('عدد مخازن الصنف تجاوز الحد المسموح');
+      var parseStarted = Date.now();
+      var parsedBalances = JSON.parse(balancesJson);
+      if (!Array.isArray(parsedBalances) || parsedBalances.length !== rowCount) {
+        throw new Error('استجابة أرصدة الصنف غير صالحة');
+      }
+      if (typeof _mysqlRequest_ !== 'undefined' && _mysqlRequest_) {
+        _mysqlRequest_.jsonParseMs = (_mysqlRequest_.jsonParseMs || 0) + Date.now() - parseStarted;
+      }
       var seen = {}, balances = [];
-      while (rs.next()) {
-        var balWid = rs.getObject(1);
-        var balQty = rs.getObject(2);
-        if (balWid == null) continue;
+      parsedBalances.forEach(function (balance) {
+        var balWid = balance && balance.warehouse_id;
+        var balQty = balance && balance.current_qty;
+        if (balWid == null) return;
         var balWidStr = String(balWid);
         if (seen[balWidStr]) throw new Error('بيانات المخزون مكررة لهذا الصنف والمخزن — راجع مسؤول النظام');
         seen[balWidStr] = true;
-        if (balQty === null || balQty === undefined || String(balQty).trim() === '') continue;
+        if (balQty === null || balQty === undefined || String(balQty).trim() === '') return;
         var balN = Number(balQty);
         if (!Number.isFinite(balN)) throw new Error('رصيد السيستم غير صالح');
         balances.push({ warehouse_id: balWidStr, current_qty: balN });
-      }
+      });
       balances.sort(function (a, b) { return a.warehouse_id < b.warehouse_id ? -1 : (a.warehouse_id > b.warehouse_id ? 1 : 0); });
       return { status: 'ok', product_id: allProductId, balances: balances };
     } catch (err) {
@@ -12697,6 +13568,63 @@ const valueMap = {};
       is_revised: rs.getObject(14) !== null ? String(rs.getObject(14)) : '0'
     };
   }
+
+  /* MySQL JSON_ARRAYAGG does not promise element order. Keep the row number in
+     the payload, validate it on the Apps Script side, and restore the same
+     order the old JDBC loop returned. This is the box page's equivalent of
+     the proven fast-read JSON readers used by the other TopChemical pages. */
+  function dbBoxParseRankedJson_(raw, expectedRows, maxRows, label) {
+    var started = Date.now();
+    var parsed = JSON.parse(String(raw || '[]'));
+    if (!Array.isArray(parsed) || parsed.length !== expectedRows || parsed.length > maxRows) {
+      throw new Error((label || 'Box') + ' MySQL aggregate is invalid');
+    }
+    parsed.sort(function (a, b) { return Number(a && a._row_num) - Number(b && b._row_num); });
+    for (var i = 0; i < parsed.length; i++) {
+      if (!parsed[i] || typeof parsed[i] !== 'object' || Array.isArray(parsed[i]) || Number(parsed[i]._row_num) !== i + 1) {
+        throw new Error((label || 'Box') + ' MySQL aggregate order is invalid');
+      }
+      delete parsed[i]._row_num;
+    }
+    if (typeof _mysqlRequest_ !== 'undefined' && _mysqlRequest_) {
+      _mysqlRequest_.jsonParseMs = (_mysqlRequest_.jsonParseMs || 0) + Date.now() - started;
+    }
+    return parsed;
+  }
+
+  function dbBoxJsonField_(alias, column) {
+    var ident = dbSanitizeIdentifier_(alias) + '.' + dbSanitizeIdentifier_(column);
+    return 'CASE WHEN ' + ident + ' IS NULL THEN NULL ELSE CAST(' + ident + ' AS CHAR) END';
+  }
+
+  function dbBoxJsonArgs_(alias, columns) {
+    var args = ["'_row_num', " + dbSanitizeIdentifier_(alias) + '._row_num'];
+    columns.forEach(function (column) {
+      args.push("'" + column.replace(/'/g, "''") + "'");
+      args.push(dbBoxJsonField_(alias, column));
+    });
+    return args;
+  }
+
+  function dbBoxReadJsonRow_(row) {
+    function s(key) { return row[key] == null ? null : String(row[key]); }
+    return {
+      id: s('id'),
+      transaction_date: row.transaction_date == null ? null : String(row.transaction_date).slice(0, 10),
+      transaction_details: s('transaction_details'),
+      client_id: s('client_id'),
+      related_id: s('related_id'),
+      transaction_type: s('transaction_type'),
+      transaction_amount: s('transaction_amount'),
+      chart_of_accounts: s('chart_of_accounts'),
+      responsible_person: s('responsible_person'),
+      box_code: s('box_code'),
+      user_id: s('user_id'),
+      created_at: s('created_at'),
+      updated_at: s('updated_at'),
+      is_revised: row.is_revised == null ? '0' : String(row.is_revised)
+    };
+  }
   
   /**
    * Paginated list of movements.
@@ -12719,23 +13647,33 @@ const valueMap = {};
     var offset = Math.max(Number(data.offset) || 0, 0);
     var where = dbBoxWhere_(data);
     var cols = DB_BOX_COLUMNS.map(dbSanitizeIdentifier_).join(', ');
-    var conn, countStmt, countRs, stmt, rs;
+    var jsonArgs = dbBoxJsonArgs_('ranked', DB_BOX_COLUMNS);
+    var aggregateSql =
+      'SELECT (SELECT COUNT(*) FROM ' + DB_BOX_TABLE + where.sql + ') AS `total_count`,' +
+      ' COUNT(*) AS `row_count`,' +
+      ' COALESCE(JSON_ARRAYAGG(JSON_OBJECT(' + jsonArgs.join(',') + ')), JSON_ARRAY()) AS `rows_json`' +
+      ' FROM (' +
+        ' SELECT `page`.*, ROW_NUMBER() OVER (ORDER BY `page`.`transaction_date` DESC, `page`.`id` DESC) AS `_row_num`' +
+        ' FROM (' +
+          ' SELECT ' + cols + ' FROM ' + DB_BOX_TABLE + where.sql +
+          ' ORDER BY `transaction_date` DESC, `id` DESC' +
+          ' LIMIT ' + limit + ' OFFSET ' + offset +
+        ' ) AS `page`' +
+      ' ) AS `ranked`';
+    var conn, stmt, rs;
     try {
       conn = dbGetConnection_();
-      countStmt = conn.prepareStatement('SELECT COUNT(*) AS cnt FROM ' + DB_BOX_TABLE + where.sql);
-      dbBindParams_(countStmt, where.params);
-      countRs = countStmt.executeQuery();
-      var total = countRs.next() ? countRs.getInt('cnt') : 0;
-  
-      stmt = conn.prepareStatement(
-        'SELECT ' + cols + ' FROM ' + DB_BOX_TABLE + where.sql +
-        ' ORDER BY `transaction_date` DESC, `id` DESC' +
-        ' LIMIT ' + limit + ' OFFSET ' + offset);
-      dbBindParams_(stmt, where.params);
+      stmt = conn.prepareStatement(aggregateSql);
+      dbBindParams_(stmt, where.params.concat(where.params));
       rs = stmt.executeQuery();
-  
-      var rows = [];
-      while (rs.next()) rows.push(dbBoxReadRow_(rs));
+      var total = 0, rowCount = 0, rowsJson = '[]';
+      if (rs.next()) {
+        total = Number(rs.getString('total_count') || 0);
+        rowCount = Number(rs.getString('row_count') || 0);
+        rowsJson = String(rs.getString('rows_json') || '[]');
+      }
+      var rows = dbBoxParseRankedJson_(rowsJson, rowCount, limit, 'Box movement');
+      rows = rows.map(dbBoxReadJsonRow_);
       return { status: 'ok', columns: DB_BOX_COLUMNS.slice(), rows: rows, total: total, limit: limit, offset: offset };
     } catch (err) {
       Logger.log('dbBoxList_ MySQL adapter completed or failed; see named diagnostics');
@@ -12743,8 +13681,6 @@ const valueMap = {};
     } finally {
       if (rs) rs.close();
       if (stmt) stmt.close();
-      if (countRs) countRs.close();
-      if (countStmt) countStmt.close();
       if (conn) conn.close();
     }
   }
@@ -12835,27 +13771,48 @@ const valueMap = {};
       for (var pi = 0; pi < list.length; pi++) params.push(list[pi]);
     }
   
+    var metricKeys = [];
+    WINDOWS.forEach(function (x) { metricKeys.push('spend_' + x.key); });
+    WINDOWS.forEach(function (x) { metricKeys.push('collected_' + x.key); });
+    WINDOWS.forEach(function (x) { metricKeys.push('n_' + x.key); });
+    var aggregateArgs = ["'_row_num', `ranked`.`_row_num`", "'chart_of_accounts', " + dbBoxJsonField_('ranked', 'chart_of_accounts')];
+    metricKeys.forEach(function (key) {
+      aggregateArgs.push("'" + key + "'");
+      aggregateArgs.push('`ranked`.`' + key + '`');
+    });
+    var aggregateSql =
+      'SELECT COUNT(*) AS `row_count`,' +
+      ' COALESCE(JSON_ARRAYAGG(JSON_OBJECT(' + aggregateArgs.join(',') + ')), JSON_ARRAY()) AS `rows_json`' +
+      ' FROM (' +
+        ' SELECT `grouped`.*, ROW_NUMBER() OVER (ORDER BY `grouped`.`spend_ytd` DESC) AS `_row_num`' +
+        ' FROM (' +
+          ' SELECT `chart_of_accounts`, ' + selects.join(', ') +
+          ' FROM ' + DB_BOX_TABLE + whereSql +
+          ' GROUP BY `chart_of_accounts`' +
+          ' ORDER BY `spend_ytd` DESC' +
+          ' LIMIT ' + limit +
+        ' ) AS `grouped`' +
+      ' ) AS `ranked`';
+
     var conn, stmt, rs;
     try {
       conn = dbGetConnection_();
-      stmt = conn.prepareStatement(
-        'SELECT `chart_of_accounts`, ' + selects.join(', ') +
-        ' FROM ' + DB_BOX_TABLE + whereSql +
-        ' GROUP BY `chart_of_accounts`' +
-        ' ORDER BY `spend_ytd` DESC' +
-        ' LIMIT ' + limit);
+      stmt = conn.prepareStatement(aggregateSql);
       dbBindParams_(stmt, params);
       rs = stmt.executeQuery();
-  
-      var rows = [];
-      while (rs.next()) {
-        var row = { chart_of_accounts: rs.getObject(1) !== null ? String(rs.getObject(1)) : null };
-        var i = 2;
-        WINDOWS.forEach(function (x) { row['spend_' + x.key] = Number(rs.getObject(i++)) || 0; });
-        WINDOWS.forEach(function (x) { row['collected_' + x.key] = Number(rs.getObject(i++)) || 0; });
-        WINDOWS.forEach(function (x) { row['n_' + x.key] = Number(rs.getObject(i++)) || 0; });
-        rows.push(row);
+      var rowCount = 0, rowsJson = '[]';
+      if (rs.next()) {
+        rowCount = Number(rs.getString('row_count') || 0);
+        rowsJson = String(rs.getString('rows_json') || '[]');
       }
+      var parsed = dbBoxParseRankedJson_(rowsJson, rowCount, limit, 'Box account aggregate');
+      var rows = parsed.map(function (item) {
+        var row = { chart_of_accounts: item.chart_of_accounts == null ? null : String(item.chart_of_accounts) };
+        WINDOWS.forEach(function (x) { row['spend_' + x.key] = Number(item['spend_' + x.key]) || 0; });
+        WINDOWS.forEach(function (x) { row['collected_' + x.key] = Number(item['collected_' + x.key]) || 0; });
+        WINDOWS.forEach(function (x) { row['n_' + x.key] = Number(item['n_' + x.key]) || 0; });
+        return row;
+      });
       return { status: 'ok', ref_date: ref, windows: w, rows: rows, limit: limit };
     } catch (err) {
       Logger.log('dbBoxAccountAggregates_ MySQL adapter completed or failed; see named diagnostics');
@@ -12960,32 +13917,33 @@ const valueMap = {};
     var acct = dbBoxValidateAccount_(data.chart_of_accounts);
     if (acct) { whereSql += ' AND `chart_of_accounts` = ?'; params.push(acct); }
   
+    var historyColumns = ['id', 'transaction_date', 'transaction_details', 'transaction_amount',
+      'chart_of_accounts', 'responsible_person', 'box_code', 'created_at', 'is_revised'];
+    var historyArgs = dbBoxJsonArgs_('ranked', historyColumns);
+    var aggregateSql =
+      'SELECT COUNT(*) AS `row_count`,' +
+      ' COALESCE(JSON_ARRAYAGG(JSON_OBJECT(' + historyArgs.join(',') + ')), JSON_ARRAY()) AS `rows_json`' +
+      ' FROM (' +
+        ' SELECT `page`.*, ROW_NUMBER() OVER (ORDER BY `page`.`transaction_date` DESC, `page`.`id` DESC) AS `_row_num`' +
+        ' FROM (' +
+          ' SELECT ' + historyColumns.map(dbSanitizeIdentifier_).join(', ') +
+          ' FROM ' + DB_BOX_TABLE + whereSql +
+          ' ORDER BY `transaction_date` DESC, `id` DESC' +
+          ' LIMIT ' + limit +
+        ' ) AS `page`' +
+      ' ) AS `ranked`';
     var conn, stmt, rs;
     try {
       conn = dbGetConnection_();
-      stmt = conn.prepareStatement(
-        'SELECT `id`, `transaction_date`, `transaction_details`, `transaction_amount`,' +
-        ' `chart_of_accounts`, `responsible_person`, `box_code`, `created_at`, `is_revised`' +
-        ' FROM ' + DB_BOX_TABLE + whereSql +
-        ' ORDER BY `transaction_date` DESC, `id` DESC' +
-        ' LIMIT ' + limit);
+      stmt = conn.prepareStatement(aggregateSql);
       dbBindParams_(stmt, params);
       rs = stmt.executeQuery();
-  
-      var rows = [];
-      while (rs.next()) {
-        rows.push({
-          id: rs.getObject(1) !== null ? String(rs.getObject(1)) : null,
-          transaction_date: rs.getObject(2) !== null ? String(rs.getObject(2)).slice(0, 10) : null,
-          transaction_details: rs.getObject(3) !== null ? String(rs.getObject(3)) : null,
-          transaction_amount: rs.getObject(4) !== null ? String(rs.getObject(4)) : null,
-          chart_of_accounts: rs.getObject(5) !== null ? String(rs.getObject(5)) : null,
-          responsible_person: rs.getObject(6) !== null ? String(rs.getObject(6)) : null,
-          box_code: rs.getObject(7) !== null ? String(rs.getObject(7)) : null,
-          created_at: rs.getObject(8) !== null ? String(rs.getObject(8)) : null,
-          is_revised: rs.getObject(9) !== null ? String(rs.getObject(9)) : '0'
-        });
+      var rowCount = 0, rowsJson = '[]';
+      if (rs.next()) {
+        rowCount = Number(rs.getString('row_count') || 0);
+        rowsJson = String(rs.getString('rows_json') || '[]');
       }
+      var rows = dbBoxParseRankedJson_(rowsJson, rowCount, limit, 'Box item history');
       return {
         status: 'ok', rows: rows, from: fromIso, to: ref,
         months: months, limit: limit, truncated: rows.length >= limit
@@ -13180,19 +14138,32 @@ const valueMap = {};
     var person = String(data.responsible_person === undefined || data.responsible_person === null ? '' : data.responsible_person).trim();
     if (person) { conditions.push('`responsible_person` LIKE ?'); params.push('%' + person + '%'); }
   
-    var cols = DB_BOX_COLUMNS.map(dbSanitizeIdentifier_).join(', ');
+    var scanArgs = dbBoxJsonArgs_('ranked', DB_BOX_COLUMNS);
+    var aggregateSql =
+      'SELECT COUNT(*) AS `row_count`,' +
+      ' COALESCE(JSON_ARRAYAGG(JSON_OBJECT(' + scanArgs.join(',') + ')), JSON_ARRAY()) AS `rows_json`' +
+      ' FROM (' +
+        ' SELECT `page`.*, ROW_NUMBER() OVER (ORDER BY `page`.`transaction_date` DESC, `page`.`id` DESC) AS `_row_num`' +
+        ' FROM (' +
+          ' SELECT ' + DB_BOX_COLUMNS.map(dbSanitizeIdentifier_).join(', ') +
+          ' FROM ' + DB_BOX_TABLE +
+          ' WHERE ' + conditions.join(' AND ') +
+          ' ORDER BY `transaction_date` DESC, `id` DESC' +
+          ' LIMIT ' + limit +
+        ' ) AS `page`' +
+      ' ) AS `ranked`';
     var conn, stmt, rs;
     try {
       conn = dbGetConnection_();
-      stmt = conn.prepareStatement(
-        'SELECT ' + cols + ' FROM ' + DB_BOX_TABLE +
-        ' WHERE ' + conditions.join(' AND ') +
-        ' ORDER BY `transaction_date` DESC, `id` DESC' +
-        ' LIMIT ' + limit);
+      stmt = conn.prepareStatement(aggregateSql);
       dbBindParams_(stmt, params);
       rs = stmt.executeQuery();
-      var rows = [];
-      while (rs.next()) rows.push(dbBoxReadRow_(rs));
+      var rowCount = 0, rowsJson = '[]';
+      if (rs.next()) {
+        rowCount = Number(rs.getString('row_count') || 0);
+        rowsJson = String(rs.getString('rows_json') || '[]');
+      }
+      var rows = dbBoxParseRankedJson_(rowsJson, rowCount, limit, 'Box analysis scan').map(dbBoxReadJsonRow_);
       return {
         status: 'ok', rows: rows, from: fromIso, to: ref, months: months,
         limit: limit, truncated: rows.length >= limit

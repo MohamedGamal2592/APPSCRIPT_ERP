@@ -185,7 +185,8 @@ const TEMPLATE = {
   id: 'vf-controlled-document-v1', version: 1,
   paper: { widthMm: 210, heightMm: 297 },
   header: { metaPct: 30, titlePct: 34, logoPct: 36 },
-  bodyHeadings: ['الغرض', 'مجال التطبيق', 'المسؤولية', 'التعريفات', 'النماذج المستخدمة', 'الإجراءات', 'المراجع', 'الحفظ والتسجيل'],
+  bodyHeadings: ['الغرض', 'مجال التطبيق', 'المسؤوليات', 'المتطلبات السابقة', 'المواد والمعدات', 'خطوات الإجراء', 'النتائج المتوقعة ونقاط التحقق', 'السجلات', 'التعامل مع الانحرافات', 'التصعيد', 'المراجع'],
+  pxPerMm: 3.7795275591,
   labels: {
     docNumber: 'رقم الوثيقة', page: 'صفحة', issueDate: 'تاريخ الإصدار', version: 'رقم الإصدار',
     copyNumber: 'رقم النسخة', stamp: 'ختم الوثيقة', prepared: 'إعداد', reviewed: 'مراجعة',
@@ -277,6 +278,8 @@ console.log('\n-- 2. وثيقة جديدة: المحرر والقالب');
   const ws = sb.html('vfs-host');
   check(ws.indexOf('id="vfs-flow"') !== -1 && ws.indexOf('contenteditable="true"') !== -1,
     'a new document opens the actual editable workspace, not a metadata-only record');
+  check((ws.match(/contenteditable="true"/g) || []).length === 1 && ws.indexOf('id="vfs-edit-stage"') < ws.indexOf('id="vfs-page-layer"') && ws.indexOf('id="vfs-page-layer"') < ws.indexOf('id="vfs-flow"'),
+    'one editable document and its page layer share the same paper stage');
   check(ws.indexOf('class="vfs-toolbar"') !== -1, 'a formatting toolbar is present');
   check(ws.indexOf('title="عريض"') !== -1 && ws.indexOf('title="إدراج جدول"') !== -1 && ws.indexOf('title="تراجع"') !== -1,
     'the toolbar exposes bold, table and undo controls with Arabic labels');
@@ -297,14 +300,47 @@ console.log('\n-- 2. وثيقة جديدة: المحرر والقالب');
 
   const flow = sb.document.getElementById('vfs-flow');
   const body = String(flow && flow.innerHTML || '');
-  check(['الغرض', 'مجال التطبيق', 'المسؤولية', 'التعريفات', 'النماذج المستخدمة', 'الإجراءات', 'المراجع', 'الحفظ والتسجيل']
+  check(['الغرض', 'مجال التطبيق', 'المسؤوليات', 'المتطلبات السابقة', 'المواد والمعدات', 'خطوات الإجراء', 'النتائج المتوقعة ونقاط التحقق', 'السجلات', 'التعامل مع الانحرافات', 'التصعيد', 'المراجع']
     .every(function (h) { return body.indexOf(h) !== -1; }),
-    'the eight default body sections are laid out in the editor immediately');
+    'the new procedure body uses the category-appropriate structure inside the editor');
   check(body.indexOf('data-vfs-ph="1"') !== -1, 'the empty sections carry guidance placeholders, not document text');
   check(sb.VFDOC.substantive(body) === false, 'an untouched template is NOT substantive content');
+  check(sb.VFDOC.substantive('<h2>الغرض</h2><p class="vfs-placeholder">اكتب الهدف</p>') === false,
+    'section headings and their guidance placeholders alone cannot be submitted');
   check(body.indexOf('P/VFA/QA/011') === -1 && body.indexOf('22.09.2026') === -1,
     'no reference-document sample content is seeded into a new document');
   check(!/مدير المصنع|أحمد|محمد/.test(body), 'no sample people or dates are hard-coded into the template');
+  check(['POL', 'WI', 'FRM', 'REC'].every(function (cat) { return sb.VFDOC.bodyHeadingsFor(cat).length > 0; }) &&
+    sb.VFDOC.placeholderBody('POL').indexOf('بيانات السياسة') !== -1 &&
+    sb.VFDOC.placeholderBody('WI').indexOf('التحذيرات والاحتياطات') !== -1 &&
+    sb.VFDOC.placeholderBody('FRM').indexOf('تعليمات الاستكمال') !== -1,
+    'policy, work-instruction, form and record categories each expose tailored placeholders');
+  sb.document.getElementById('vfs-f-category').value = 'POL';
+  sb.VF_QUALITY_SOPS_PAGE.onMetaChange();
+  check(sb.html('vfs-flow').indexOf('بيانات السياسة') !== -1 && sb.html('vfs-flow').indexOf('خطوات الإجراء') === -1,
+    'choosing Policy switches an untouched new document to the Policy template');
+  const pages = sb.VFDOC.sheetLayerHtml(3, { template: TEMPLATE });
+  check(pages.indexOf('data-vfs-page="2" style="top:297mm"') !== -1 && pages.indexOf('data-vfs-page="3" style="top:594mm"') !== -1,
+    'page frame origins advance by the physical A4 height');
+
+  function layoutBlock(top, height, isBreak) {
+    const attrs = {};
+    return {
+      style: { marginTop: '' }, offsetTop: top, offsetHeight: height,
+      classList: { contains: function (name) { return !!isBreak && name === 'vfs-pagebreak'; } },
+      getAttribute: function (key) { return Object.prototype.hasOwnProperty.call(attrs, key) ? attrs[key] : null; },
+      setAttribute: function (key, value) { attrs[key] = value; },
+      removeAttribute: function (key) { delete attrs[key]; }
+    };
+  }
+  const nearBoundary = layoutBlock(1000, 80, false);
+  const measuredFlow = {
+    offsetWidth: 210 * TEMPLATE.pxPerMm, children: [nearBoundary],
+    getBoundingClientRect: function () { return { width: 210 * TEMPLATE.pxPerMm }; }
+  };
+  const measuredCount = sb.VFDOC.paginate(measuredFlow, { template: TEMPLATE, topMm: 52, bottomMm: 30 });
+  check(measuredCount === 2 && nearBoundary.style.marginTop.indexOf('calc(') === 0,
+    'a block near page one bottom moves to page two content bounds and increments the page count once');
 }
 
 /* ══ 3. validation and the combined save payload ════════════════════════ */
@@ -358,6 +394,40 @@ console.log('\n-- 3. التحقق والحفظ المشترك');
   check(sb.textOf('vfs-code-label').indexOf('POL-MAINT-009') !== -1, 'and shown in the top bar');
   check(sb.textOf('vfs-save-state').indexOf('تم الحفظ') !== -1, 'the save state reports «تم الحفظ»');
   check(!sb.document.body.children.some(function (el) { return el && el.id === 'vfs-save-wait-modal'; }), 'the authoritative success closes the urgent save modal');
+}
+
+/* A server duplicate is an actionable refusal: the attempted workspace and its
+   token/body stay live until the user chooses the separate open-existing
+   action. */
+{
+  const match = {
+    unique_id: 'sop-1', sop_code: 'PROC-QA-001', title_ar: 'إجراء موجود', title_en: 'Existing SOP',
+    category: 'PROC', applicability_dept: 'إدارة الصيانة', applicability_role: 'مدير الجودة', lifecycle_state: 'Draft'
+  };
+  const sb = boot('Company_ValleyFoods_QualitySops.html', {
+    call: function (a) { return a === 'get_quality_sops' ? sopListCall() : { status: 'duplicate', duplicate: match }; }
+  });
+  sb.__boot(); await flush(); await flush();
+  sb.VF_QUALITY_SOPS_PAGE.openNew();
+  sb.document.getElementById('vfs-f-title-ar').value = 'مسودتي الحالية';
+  sb.document.getElementById('vfs-f-title-en').value = 'My current draft';
+  sb.document.getElementById('vfs-f-category').value = 'PROC';
+  sb.document.getElementById('vfs-f-dept').value = 'إدارة الصيانة';
+  sb.document.getElementById('vfs-f-role').value = 'مدير الجودة';
+  sb.document.getElementById('vfs-f-owner').value = 'owner@vf.test';
+  const flow = sb.document.getElementById('vfs-flow');
+  flow.innerHTML = '<h2>الغرض</h2><p>مسودة عربية English draft</p>';
+  const originalDoc = sb.VF_QUALITY_SOPS_PAGE.__test.DOC();
+  const originalToken = originalDoc.createToken;
+  const originalBody = flow.innerHTML;
+  const refused = await sb.VF_QUALITY_SOPS_PAGE.__test.saveDraft({ manual: true });
+  check(refused && refused.status === 'duplicate', 'the duplicate response is returned to the editor');
+  check(sb.VF_QUALITY_SOPS_PAGE.__test.DOC() === originalDoc && sb.VF_QUALITY_SOPS_PAGE.__test.DOC().createToken === originalToken && flow.innerHTML === originalBody,
+    'duplicate refusal preserves the same draft object, create token and Arabic/English body');
+  check(sb.VF_QUALITY_SOPS_PAGE.__test.VIEW().mode === 'new' && sb.VF_QUALITY_SOPS_PAGE.__test.VIEW().sopId === '',
+    'the existing SOP is not opened automatically');
+  check(sb.html('vfs-meta-alert').indexOf('PROC-QA-001') !== -1 && sb.html('vfs-meta-alert').indexOf('openDuplicateMatch()') !== -1,
+    'the response identifies the matching SOP and offers a separate open action');
 }
 
 /* The domstub cannot hold a delayed network promise, so the remaining
@@ -473,8 +543,8 @@ console.log('\n-- 6. تطبيق القالب الرئيسي (قديم)');
   sb.VF_QUALITY_SOPS_PAGE.applyTemplate();
   const after = String(flow.innerHTML);
   check(after.indexOf('نص قديم مهم') !== -1, 'applying the template PRESERVES the original content');
-  check(after.indexOf('الغرض') !== -1 && after.indexOf('الحفظ والتسجيل') !== -1,
-    'and surrounds it with the eight controlled-document headings');
+  check(after.indexOf('الغرض') !== -1 && after.indexOf('بيانات السياسة') !== -1 && after.indexOf('المتابعة والقياس') !== -1,
+    'and surrounds it with the controlled policy sections');
   const hist = sb.VF_QUALITY_SOPS_PAGE.__test.getHistory();
   check(!!hist && hist.canUndo() === true, 'the template application is undoable');
   hist.undo();

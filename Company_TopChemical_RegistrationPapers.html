@@ -110,12 +110,10 @@
     fetchPapers();
   }
 
-  /* The list endpoint returns only the newest 20 papers unless `loadAll`
-     is passed. "عرض الكل" asks for the whole history; UIC.dataTable then
-     paginates on its own, so "all" never means one enormous table. Called with
-     no argument after a save or a delete, fetchPapers keeps whichever view the
-     user is in rather than silently dropping them back to the newest 20. */
-  var __loadedAll = false;
+  /* The endpoint returns one complete JSON snapshot. UIC.dataTable handles
+     display pagination locally, so universal search always searches the full
+     registration_papers dataset rather than a newest-20 server window. */
+  var __loadedAll = true;
 
   /* Client-side filters for tc_registration_papers. FILTER persists across
      renders; renderPapers() reapplies it to window.__papers without refetch. */
@@ -148,9 +146,6 @@
       '</div>';
   }
 
-  function showAllPapers() { fetchPapers(true); }
-  function showLatestPapers() { fetchPapers(false); }
-
   function applyPaperFilters() {
     var t = ((document.getElementById('papers-filter-type') || {}).value || '');
     var f = ((document.getElementById('papers-filter-from') || {}).value || '');
@@ -169,14 +164,29 @@
     renderPapers();
   }
 
-  function fetchPapers(loadAll) {
-    __loadedAll = arguments.length ? !!loadAll : __loadedAll;
+  function parseRegistrationPapers_(response) {
+    var payload = response && response.data_json;
+    if (typeof payload === 'string') {
+      try { payload = JSON.parse(payload); } catch (e) { throw new Error('بيانات التصاريح غير صالحة'); }
+    }
+    if (!payload || typeof payload !== 'object') payload = response || {};
+    var papers = Array.isArray(payload.rows) ? payload.rows : (Array.isArray(response && response.papers) ? response.papers : []);
+    return {
+      papers: papers,
+      document_types: payload.document_types || (response && response.document_types) || [],
+      product_options: payload.product_options || (response && response.product_options) || []
+    };
+  }
+
+  function fetchPapers() {
+    __loadedAll = true;
     UIC.readSkeleton();
-    companyCall('get_registration_papers', __loadedAll ? { loadAll: true } : {})
+    companyCall('get_registration_papers', { loadAll: true })
       .then(function (r) {
-        window.__docTypes = r.document_types || [];
-        window.__productOptions = r.product_options || [];
-        renderPapers(r.papers || []);
+        var snapshot = parseRegistrationPapers_(r);
+        window.__docTypes = snapshot.document_types;
+        window.__productOptions = snapshot.product_options;
+        renderPapers(snapshot.papers);
       })
       .catch(function (e) { showError(e); })
       .finally(function () { UI.hideSpinner(); try{schedulePrefetch();}catch(e){} });
@@ -225,7 +235,7 @@
         ? '<button class="btn btn-outline" style="padding:4px 10px;" onclick="viewAttachment(\'' + FMT.escape(p.document_file).replace(/\'/g, "\\\'") + '\',\'' + FMT.escape(p.document_number).replace(/\'/g, "\\\'") + '\')">📎 عرض / View</button>'
         : '-';
       var hasAtt = !!p.document_file;
-      return {
+      var row = {
         document_name_ar: p.document_name_ar || '-',
         document_name_en: p.document_name_en || '-',
         product: pending ? '—' : (p.product_name || (p.product_id ? '#' + p.product_id : '-')),
@@ -242,6 +252,16 @@
           IS_SUPER_ADMIN ? { label: '🗑️ حذف / Delete', color: '#dc2626', onclick: "deletePaper(" + idx + ")" } : null
         ].filter(Boolean))
       };
+      /* Keep the raw values in the JSON row as non-visible search fields. The
+         shared universal search serializes the whole row, so users can find a
+         paper by its product id, attachment reference or any unformatted date
+         even though those values are not separate visible columns. */
+      row.__search = [
+        p.document_name_ar, p.document_name_en, p.product_id, p.product_name,
+        p.document_number, p.document_type, p.document_start_date,
+        p.document_end_date, p.document_file, p.document_file_id
+      ].join(' ');
+      return row;
     });
     var headers = [
       { key: 'document_name_ar', label: 'اسم المستند (عربي)' },
@@ -267,16 +287,9 @@
       filterBar +
       '<div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap;">' +
         '<span style="color:var(--text-muted);font-size:12px;">' + countLabel + '</span>' +
-        (__loadedAll
-          ? '<button class="btn btn-outline" onclick="showLatestPapers()">📄 عرض آخر 20 مستند فقط</button>'
-          : '<button id="papers-show-all" class="btn btn-outline" onclick="showAllPapers()">📊 عرض الكل</button>') +
       '</div>' +
       UIC.dataTable('papers-table', {
-        /* [RT-1] The list endpoint caps at the newest rows unless `loadAll` is
-           passed, and the search box filters only what is in memory — so the
-           table says which records the box actually searches. */
-        truncated: !__loadedAll,
-        showAll: 'showAllPapers()',
+        searchable: true,
         title: 'تصاريح وتراخيص',
         headers: headers,
         rows: rows,
@@ -407,7 +420,6 @@
                 if (ix !== -1) window.__papers[ix] = Object.assign({}, window.__papers[ix], rec);
                 else fetchPapers();
               } else { fetchPapers(); }
-              if (!__loadedAll && window.__papers.length > 10) window.__papers = window.__papers.slice(0, 10);
               renderPapers(window.__papers);
             }
           }).catch(function () { /* UIC.Live has toasted and rolled back */ });
@@ -435,7 +447,6 @@
           },
           onSuccess: function () {
             /* Only the "newest 20" view keeps its cap; the full history keeps growing. */
-            if (!__loadedAll && window.__papers.length > 10) window.__papers = window.__papers.slice(0, 10);
             renderPapers(window.__papers);
           }
         }).catch(function () { /* UIC.Live has toasted and rolled back */ });
